@@ -18,7 +18,7 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h" // @manual
-#include "velox/dwio/parquet/RegisterParquetReader.h" // @manual
+//#include "velox/dwio/parquet/RegisterParquetReader.h" // @manual
 #include "velox/dwio/parquet/reader/PageReader.h" // @manual
 #include "velox/dwio/parquet/reader/ParquetReader.h" // @manual=//velox/connectors/hive:velox_hive_connector_parquet
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
@@ -44,7 +44,7 @@ class ParquetTableScanTest : public HiveConnectorTestBase {
 
   void SetUp() override {
     HiveConnectorTestBase::SetUp();
-    parquet::registerParquetReaderFactory();
+//    parquet::registerParquetReaderFactory();
   }
 
   void assertSelect(

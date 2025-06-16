@@ -14,22 +14,28 @@
  * limitations under the License.
  */
 
-#ifdef VELOX_ENABLE_PARQUET
+//#ifdef VELOX_ENABLE_PARQUET
 #include "velox/dwio/parquet/writer/Writer.h" // @manual
-#endif
+//#endif
 
 namespace facebook::velox::parquet {
 
+namespace {
+// Self‑register the Parquet writer factory at load time
+const bool kParquetWriterRegistered = []() {
+  facebook::velox::dwio::common::registerWriterFactory(
+      std::make_shared<facebook::velox::parquet::ParquetWriterFactory>());
+  VLOG(0) << "Registered Parquet writer";
+  return true;
+}();
+} // anonymous namespace
+
 void registerParquetWriterFactory() {
-#ifdef VELOX_ENABLE_PARQUET
   dwio::common::registerWriterFactory(std::make_shared<ParquetWriterFactory>());
-#endif
 }
 
 void unregisterParquetWriterFactory() {
-#ifdef VELOX_ENABLE_PARQUET
   dwio::common::unregisterWriterFactory(dwio::common::FileFormat::PARQUET);
-#endif
 }
 
 } // namespace facebook::velox::parquet

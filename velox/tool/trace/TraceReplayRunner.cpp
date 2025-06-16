@@ -30,8 +30,8 @@
 #include "velox/connectors/hive/storage_adapters/hdfs/RegisterHdfsFileSystem.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/RegisterS3FileSystem.h"
 #include "velox/core/PlanNode.h"
-#include "velox/dwio/dwrf/RegisterDwrfReader.h"
-#include "velox/dwio/dwrf/RegisterDwrfWriter.h"
+//#include "velox/dwio/dwrf/RegisterDwrfReader.h"
+//#include "velox/dwio/dwrf/RegisterDwrfWriter.h"
 #include "velox/exec/OperatorTraceReader.h"
 #include "velox/exec/PartitionFunction.h"
 #include "velox/exec/TaskTraceReader.h"
@@ -52,10 +52,10 @@
 #include "velox/tool/trace/UnnestReplayer.h"
 #include "velox/type/Type.h"
 
-#ifdef VELOX_ENABLE_PARQUET
-#include "velox/dwio/parquet/RegisterParquetReader.h"
-#include "velox/dwio/parquet/RegisterParquetWriter.h"
-#endif
+//#ifdef VELOX_ENABLE_PARQUET
+//#include "velox/dwio/parquet/RegisterParquetReader.h"
+//#include "velox/dwio/parquet/RegisterParquetWriter.h"
+//#endif
 
 DEFINE_string(
     root_dir,
@@ -262,13 +262,13 @@ void TraceReplayRunner::init() {
   filesystems::registerAbfsFileSystem();
 
   dwio::common::registerFileSinks();
-  dwrf::registerDwrfReaderFactory();
-  dwrf::registerDwrfWriterFactory();
+//  dwrf::registerDwrfReaderFactory();
+//  dwrf::registerDwrfWriterFactory();
 
-#ifdef VELOX_ENABLE_PARQUET
-  parquet::registerParquetReaderFactory();
-  parquet::registerParquetWriterFactory();
-#endif
+//#ifdef VELOX_ENABLE_PARQUET
+//  parquet::registerParquetReaderFactory();
+//  parquet::registerParquetWriterFactory();
+//#endif
 
   core::PlanNode::registerSerDe();
   velox::exec::trace::registerDummySourceSerDe();

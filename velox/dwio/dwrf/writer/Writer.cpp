@@ -962,6 +962,17 @@ void WriterOptions::processConfigs(
   config = dwrf::Config::fromMap(configs);
 }
 
+namespace {
+// Self‑register the Parquet reader factory at load time
+const bool kDwrfWriterRegistered = []() {
+  facebook::velox::dwio::common::registerWriterFactory(
+      std::make_shared<facebook::velox::dwrf::DwrfWriterFactory>());
+
+  VLOG(0) << "Registered DWRF writer";
+  return true;
+}();
+} // anonymous namespace
+
 void registerDwrfWriterFactory() {
   dwio::common::registerWriterFactory(std::make_shared<DwrfWriterFactory>());
 }

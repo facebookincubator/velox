@@ -17,8 +17,8 @@
 #include <boost/random/uniform_int_distribution.hpp>
 #include "velox/common/file/FileSystems.h"
 #include "velox/connectors/hive/HiveConnector.h"
-#include "velox/dwio/dwrf/RegisterDwrfReader.h"
-#include "velox/dwio/dwrf/RegisterDwrfWriter.h"
+//#include "velox/dwio/dwrf/RegisterDwrfReader.h"
+//#include "velox/dwio/dwrf/RegisterDwrfWriter.h"
 #include "velox/exec/HashJoinBridge.h"
 #include "velox/exec/Spill.h"
 #include "velox/exec/fuzzer/FuzzerUtil.h"
@@ -214,8 +214,8 @@ JoinFuzzer::JoinFuzzer(
               test::kHiveConnectorId,
               std::make_shared<config::ConfigBase>(std::move(hiveConfig)));
   connector::registerConnector(hiveConnector);
-  dwrf::registerDwrfReaderFactory();
-  dwrf::registerDwrfWriterFactory();
+//  dwrf::registerDwrfReaderFactory();
+//  dwrf::registerDwrfWriterFactory();
 
   seed(initialSeed);
 }

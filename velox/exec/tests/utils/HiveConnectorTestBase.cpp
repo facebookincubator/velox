@@ -20,8 +20,9 @@
 #include "velox/common/file/tests/FaultyFileSystem.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
-#include "velox/dwio/dwrf/RegisterDwrfReader.h"
-#include "velox/dwio/dwrf/RegisterDwrfWriter.h"
+//#include "velox/dwio/dwrf/RegisterDwrfReader.h"
+//#include "velox/dwio/dwrf/RegisterDwrfWriter.h"
+#include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/dwrf/writer/FlushPolicy.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
@@ -47,16 +48,16 @@ void HiveConnectorTestBase::SetUp() {
               ioExecutor_.get());
   connector::registerConnector(hiveConnector);
   dwio::common::registerFileSinks();
-  dwrf::registerDwrfReaderFactory();
-  dwrf::registerDwrfWriterFactory();
+//  dwrf::registerDwrfReaderFactory();
+//  dwrf::registerDwrfWriterFactory();
 }
 
 void HiveConnectorTestBase::TearDown() {
   // Make sure all pending loads are finished or cancelled before unregister
   // connector.
   ioExecutor_.reset();
-  dwrf::unregisterDwrfReaderFactory();
-  dwrf::unregisterDwrfWriterFactory();
+//  dwrf::unregisterDwrfReaderFactory();
+//  dwrf::unregisterDwrfWriterFactory();
   connector::unregisterConnector(kHiveConnectorId);
   connector::unregisterConnectorFactory(
       connector::hive::HiveConnectorFactory::kHiveConnectorName);
