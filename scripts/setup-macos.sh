@@ -12,7 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-# shellcheck source-path=SCRIPTDIR
+# shellcheck source-path=SCRIPT_DIR
 
 # This script documents setting up a macOS host for Velox
 # development.  Running it should make you ready to compile.

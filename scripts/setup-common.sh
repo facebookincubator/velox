@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # trigger reinstall
-# shellcheck source-path=SCRIPTDIR
+# shellcheck source-path=SCRIPT_DIR
 
 SCRIPT_DIR=$(dirname "${BASH_SOURCE[0]}")
 source "$SCRIPT_DIR"/setup-helper-functions.sh
