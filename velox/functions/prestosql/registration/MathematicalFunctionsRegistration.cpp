@@ -17,6 +17,7 @@
 #include "velox/functions/lib/RegistrationHelpers.h"
 #include "velox/functions/prestosql/Arithmetic.h"
 #include "velox/functions/prestosql/DecimalFunctions.h"
+#include "velox/functions/prestosql/DistanceFunctions.h"
 #include "velox/functions/prestosql/Rand.h"
 
 namespace facebook::velox::functions {
@@ -123,6 +124,8 @@ void registerMathFunctions(const std::string& prefix) {
       double,
       Array<double>,
       Array<double>>({prefix + "cosine_similarity"});
+  registerFunction<L2SqrFunctionArray, double, Array<double>, Array<double>>(
+      {prefix + "l2_squared"});
 }
 
 } // namespace

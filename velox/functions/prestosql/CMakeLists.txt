@@ -63,18 +63,24 @@ velox_add_library(
   Zip.cpp
   ZipWith.cpp)
 
-velox_link_libraries(
-  velox_functions_prestosql_impl
-  velox_common_hyperloglog
-  velox_functions_json
-  velox_functions_lib
-  velox_expression
-  velox_external_md5
-  velox_type_tz
-  velox_presto_types
-  velox_functions_util
-  Folly::folly
-  stemmer::stemmer)
+set(PRESTOSQL_IMPL_LIBS
+    velox_common_hyperloglog
+    velox_functions_json
+    velox_functions_lib
+    velox_expression
+    velox_external_md5
+    velox_type_tz
+    velox_presto_types
+    velox_functions_util
+    Folly::folly
+    stemmer::stemmer)
+
+if(VELOX_ENABLE_FAISS)
+  add_definitions(-DVELOX_ENABLE_FAISS)
+  list(APPEND PRESTOSQL_IMPL_LIBS FAISS::faiss)
+endif()
+
+velox_link_libraries(velox_functions_prestosql_impl ${PRESTOSQL_IMPL_LIBS})
 
 if(VELOX_ENABLE_GEO)
   add_subdirectory(geospatial)
