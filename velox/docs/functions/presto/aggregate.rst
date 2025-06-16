@@ -757,16 +757,22 @@ Noisy Aggregate Functions
     If provided, ``random_seed`` is used to seed the random number generator.
     Otherwise, noise is drawn from a secure random.
 
-.. function:: noisy_avg_gaussian(col, noise_scale) -> double
+.. function:: noisy_avg_gaussian(col, noise_scale[, random_seed]) -> double
 
     Calculates the average (arithmetic mean) of all the input values in col and then adds a
     normally distributed random double value with 0 mean and standard deviation of noise_scale.
 
-.. function:: noisy_avg_gaussian(col, noise_scale, lower, upper) -> double
+    If provided, random_seed is used to seed the random number generator.
+    Otherwise, noise is drawn from a secure random.
+
+.. function:: noisy_avg_gaussian(col, noise_scale, lower, upper[, random_seed]) -> double
     Calculates the average (arithmetic mean) of all the input values in ``col`` and then adds a
     normally distributed random double value with 0 mean and standard deviation of ``noise_scale``.
     Each value is clipped to the range of [``lower``, ``upper``] before averaging.
 
+    If provided, random_seed is used to seed the random number generator.
+    Otherwise, noise is drawn from a secure random.
+    
 Miscellaneous
 -------------
 
