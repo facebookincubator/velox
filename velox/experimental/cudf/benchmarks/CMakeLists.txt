@@ -12,11 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_subdirectory(exec)
-add_subdirectory(benchmarks)
-add_subdirectory(connectors)
-add_subdirectory(vector)
+add_executable(velox_cudf_tpch_benchmark CudfTpchBenchmark.cpp)
 
-if(VELOX_BUILD_TESTING)
-  add_subdirectory(tests)
-endif()
+target_link_libraries(
+  velox_cudf_tpch_benchmark velox_tpch_benchmark_lib)
