@@ -30,6 +30,8 @@
 #include <cudf/stream_compaction.hpp>
 #include <cudf/unary.hpp>
 
+#include <boost/algorithm/string.hpp>
+
 namespace {
 
 using namespace facebook::velox;
@@ -394,19 +396,19 @@ std::unique_ptr<cudf_velox::CudfHashAggregation::Aggregator> createAggregator(
     bool isGlobal) {
   // Companion function may be count_merge_extract or count_partial or others,
   // so use this to map
-  if (kind.rfind("sum", 0) == 0) {
+  if (boost::algorithm::ends_with(kind, "sum")) {
     return std::make_unique<SumAggregator>(
         step, inputIndex, constant, isGlobal);
-  } else if (kind.rfind("count", 0) == 0) {
+  } else if (boost::algorithm::ends_with(kind, "count")) {
     return std::make_unique<CountAggregator>(
         step, inputIndex, constant, isGlobal);
-  } else if (kind.rfind("min", 0) == 0) {
+  } else if (boost::algorithm::ends_with(kind, "min")) {
     return std::make_unique<MinAggregator>(
         step, inputIndex, constant, isGlobal);
-  } else if (kind.rfind("max", 0) == 0) {
+  } else if (boost::algorithm::ends_with(kind, "max")) {
     return std::make_unique<MaxAggregator>(
         step, inputIndex, constant, isGlobal);
-  } else if (kind.rfind("avg", 0) == 0) {
+  } else if (boost::algorithm::ends_with(kind, "avg")) {
     return std::make_unique<MeanAggregator>(
         step, inputIndex, constant, isGlobal);
   } else {
