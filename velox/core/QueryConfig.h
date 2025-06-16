@@ -263,6 +263,13 @@ class QueryConfig {
   static constexpr const char* kTopNRowNumberSpillEnabled =
       "topn_row_number_spill_enabled";
 
+  /// LocalMerge spilling flag, only applies if "spill_enabled" flag is set.
+  static constexpr const char* kLocalMergeSpillEnabled = "local_merge_enabled";
+
+  /// Specify the max number of local sources to merge at a time.
+  static constexpr const char* kLocalMergeMaxNumMergeSources =
+      "local_merge_max_num_merge_sources";
+
   /// The max row numbers to fill and spill for each spill run. This is used to
   /// cap the memory used for spilling. If it is zero, then there is no limit
   /// and spilling might run out of memory.
@@ -515,6 +522,17 @@ class QueryConfig {
   static constexpr const char* kDebugLambdaFunctionEvaluationBatchSize =
       "debug_lambda_function_evaluation_batch_size";
 
+  /// The UDF `bing_tile_children` generates the children of a Bing tile based
+  /// on a specified target zoom level. The number of children produced is
+  /// determined by the difference between the target zoom level and the zoom
+  /// level of the input tile. This configuration limits the number of children
+  /// by capping the maximum zoom level difference, with a default value set
+  /// to 5. This cap is necessary to prevent excessively large array outputs,
+  /// which can exceed the size limits of the elements vector in the Velox array
+  /// vector.
+  static constexpr const char* kDebugBingTileChildrenMaxZoomShift =
+      "debug_bing_tile_children_max_zoom_shift";
+
   /// Temporary flag to control whether selective Nimble reader should be used
   /// in this query or not.  Will be removed after the selective Nimble reader
   /// is fully rolled out.
@@ -630,6 +648,10 @@ class QueryConfig {
 
   int32_t debugLambdaFunctionEvaluationBatchSize() const {
     return get<int32_t>(kDebugLambdaFunctionEvaluationBatchSize, 10'000);
+  }
+
+  uint8_t debugBingTileChildrenMaxZoomShift() const {
+    return get<uint8_t>(kDebugBingTileChildrenMaxZoomShift, 5);
   }
 
   uint64_t queryMaxMemoryPerNode() const {
@@ -837,6 +859,17 @@ class QueryConfig {
 
   bool topNRowNumberSpillEnabled() const {
     return get<bool>(kTopNRowNumberSpillEnabled, true);
+  }
+
+  bool localMergeSpillEnabled() const {
+    return get<bool>(kLocalMergeSpillEnabled, false);
+  }
+
+  uint32_t localMergeMaxNumMergeSources() const {
+    const auto maxNumMergeSources = get<uint32_t>(
+        kLocalMergeMaxNumMergeSources, std::numeric_limits<uint32_t>::max());
+    VELOX_CHECK_GT(maxNumMergeSources, 0);
+    return maxNumMergeSources;
   }
 
   int32_t maxSpillLevel() const {

@@ -127,12 +127,15 @@ int main(int argc, char** argv) {
       "array_join(array(double),varchar,varchar) -> varchar",
       // https://github.com/facebookincubator/velox/issues/13047
       "inverse_poisson_cdf",
+      "map_subset", // https://github.com/facebookincubator/velox/issues/12654
       // Geometry functions don't yet have a ValuesGenerator
       "st_geometryfromtext",
       "st_geomfrombinary",
       "st_area",
       "st_astext",
       "st_asbinary",
+      "st_boundary",
+      "st_centroid",
       "st_relate",
       "st_contains",
       "st_crosses",
@@ -149,6 +152,10 @@ int main(int argc, char** argv) {
       "st_point",
       "st_x",
       "st_y",
+      "st_isvalid",
+      "st_issimple",
+      "geometry_invalid_reason",
+      "simplify_geometry",
   };
   size_t initialSeed = FLAGS_seed == 0 ? std::time(nullptr) : FLAGS_seed;
 
