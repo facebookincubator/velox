@@ -226,6 +226,11 @@ Expression Evaluation Configuration
      - integer
      - 10000
      - Some lambda functions over arrays and maps are evaluated in batches of the underlying elements that comprise the arrays/maps. This is done to make the batch size managable as array vectors can have thousands of elements each and hit scaling limits as implementations typically expect BaseVectors to a couple of thousand entries. This lets up tune those batch sizes. Setting this to zero is setting unlimited batch size.
+   * - debug_bing_tile_children_max_zoom_shift
+     - integer
+     - 5
+     - The UDF `bing_tile_children` generates the children of a Bing tile based on a specified target zoom level. The number of children produced is determined by the difference between the target zoom level and the zoom level of the input tile. This configuration limits the number of children by capping the maximum zoom level difference, with a default value set to 5. This cap is necessary to prevent excessively large array outputs, which can exceed the size limits of the elements vector in the Velox array vector.
+
 
 Memory Management
 -----------------
@@ -277,6 +282,10 @@ Spilling
      - boolean
      - true
      - When `spill_enabled` is true, determines whether HashBuild and HashProbe operators can spill to disk under memory pressure.
+   * - local_merge_enabled
+     - boolean
+     - false
+     - When `spill_enabled` is true, determines whether LocalMerge operators can spill to disk to cap memory usage.
    * - mixed_grouped_mode_hash_join_spill_enabled
      - boolean
      - false
@@ -521,6 +530,11 @@ Each query can override the config by setting corresponding query session proper
      - integer
      - 100
      - Maximum number of (bucketed) partitions per a single table writer instance.
+   * - hive.max-bucket-count
+     - hive.max_bucket_count
+     - integer
+     - 100000
+     - Maximum number of buckets that a table writer is allowed to write to.
    * - insert-existing-partitions-behavior
      - insert_existing_partitions_behavior
      - string
