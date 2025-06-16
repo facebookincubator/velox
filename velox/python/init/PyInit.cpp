@@ -27,6 +27,9 @@
 #include "velox/dwio/dwrf/RegisterDwrfReader.h"
 #include "velox/dwio/dwrf/RegisterDwrfWriter.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
+#include "velox/dwio/parquet/RegisterParquetReader.h"
+#include "velox/dwio/parquet/RegisterParquetWriter.h"
+#include "velox/dwio/parquet/writer/Writer.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/parse/TypeResolver.h"
@@ -41,6 +44,8 @@ void registerAllResourcesOnce() {
   // Register file readers and writers.
   velox::dwrf::registerDwrfWriterFactory();
   velox::dwrf::registerDwrfReaderFactory();
+  velox::parquet::registerParquetWriterFactory();
+  velox::parquet::registerParquetReaderFactory();
 
   velox::dwio::common::LocalFileSink::registerFactory();
 

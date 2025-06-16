@@ -30,6 +30,14 @@ void registerTpch(
     const std::string& connectorId,
     std::unordered_map<std::string, std::string> configs = {});
 
+/// Returns true if a connector with the specified ID has been registered,
+/// false otherwise.
+bool hasConnector(const std::string& connectorId);
+
+/// Returns true if a connector factory with the specified name has been
+/// registered, false otherwise.
+bool hasConnectorFactory(const std::string& connectorName);
+
 /// Unregister a connector.
 void unregister(const std::string& connectorId);
 

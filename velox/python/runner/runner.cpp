@@ -128,6 +128,28 @@ PYBIND11_MODULE(runner, m) {
         Args:
           connector_name: Name of the connector to unregister.",
       )"))
+      .def(
+          "has_connector",
+          &velox::py::hasConnector,
+          pybind11::arg("connector_name"),
+          py::doc(R"(
+        "Returns true if a connector with the specified ID has been registered,
+        false otherwise.
+
+        Args:
+          connector_name: Name of the connector to check.
+      )"))
+      .def(
+          "has_connector_factory",
+          &velox::py::hasConnectorFactory,
+          pybind11::arg("connector_name"),
+          py::doc(R"(
+        "Returns true if a connector factory with the specified name has been
+        registered, false otherwise.
+
+        Args:
+          connector_name: Name of the connector factory to check.
+      )"))
       .def("unregister_all", &velox::py::unregisterAll, py::doc(R"(
         "Unregister all registered connectors.)"));
 
