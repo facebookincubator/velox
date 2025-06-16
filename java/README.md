@@ -1,7 +1,7 @@
 # Velox4J: Java Bindings for Velox
 
-![badge](https://github.com/facebookincubator/velox/actions/workflows/java-ut-java.yml/badge.svg?branch=main)
-![badge](https://github.com/facebookincubator/velox/actions/workflows/java-ut-cpp.yml/badge.svg?branch=main)
+![badge](https://github.com/facebookincubator/velox/actions/workflows/java-build-java.yml/badge.svg?branch=main)
+![badge](https://github.com/facebookincubator/velox/actions/workflows/java-build-cpp.yml/badge.svg?branch=main)
 
 ## Introduction
 
