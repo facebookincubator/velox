@@ -19,6 +19,7 @@
 #include <string>
 #include <string_view>
 #include "folly/CPortability.h"
+#include "folly/FollyMemchr.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/SimdUtil.h"
 #include "velox/external/utf8proc/utf8procImpl.h"
@@ -324,6 +325,41 @@ cappedByteLengthUnicode(const char* input, size_t size, int64_t maxChars) {
   return utf8Position;
 }
 
+constexpr size_t longStringFind(
+    std::string_view str, const std::string_view substr, size_t start_pos
+) noexcept
+{
+    const size_t str_len = str.size();
+    const size_t substr_len = substr.size();
+    if (substr_len == 0)
+        return start_pos <= str_len ? start_pos : std::string_view::npos;
+
+    if (start_pos >= str_len)
+        return std::string_view::npos;
+
+    const char first_char = substr.data()[0];
+    const char* current = str.data() + start_pos;
+    const char* const end = str.data() + str_len;
+    size_t remaining = str_len - start_pos;
+
+    while (remaining >= substr_len)
+    {
+        // Use optimized memchr variant
+        current = static_cast<const char*>(folly::memchr_long(current, first_char, remaining - substr_len + 1));
+
+        if (!current)
+            return std::string_view::npos;
+
+        // Compare full substring
+        if (std::char_traits<char>::compare(current, substr.data(), substr_len) == 0)
+            return current - str.data();
+
+        current++;
+        remaining = end - current;
+    }
+    return std::string_view::npos;
+}
+
 /// Returns the start byte index of the Nth instance of subString in
 /// string. Search starts from startPosition. Positions start with 0. If not
 /// found, -1 is returned. To facilitate finding overlapping strings, the
@@ -339,7 +375,7 @@ static inline int64_t findNthInstanceByteIndexFromStart(
     return -1;
   }
 
-  auto byteIndex = string.find(subString, startPosition);
+  auto byteIndex = longStringFind(string, subString, startPosition);
   // Not found
   if (byteIndex == std::string_view::npos) {
     return -1;
