@@ -18,6 +18,8 @@
 #include "velox/exec/Task.h"
 #include "velox/expression/FieldReference.h"
 
+#include <iostream>
+
 namespace facebook::velox::exec {
 
 MergeJoin::MergeJoin(
@@ -90,10 +92,12 @@ void MergeJoin::initialize() {
     initializeFilter(joinNode_->filter(), leftType, rightType);
 
     if (joinNode_->isLeftJoin() || joinNode_->isAntiJoin() ||
-        joinNode_->isRightJoin() || joinNode_->isFullJoin()) {
+        joinNode_->isRightJoin() || joinNode_->isFullJoin() ||
+        joinNode_->isLeftSemiFilterJoin() ||
+        joinNode_->isRightSemiFilterJoin()) {
       joinTracker_ = JoinTracker(outputBatchSize_, pool());
     }
-  } else if (joinNode_->isAntiJoin()) {
+  } else if (joinNode_->isAntiJoin() || joinNode_->isFullJoin()) {
     // Anti join needs to track the left side rows that have no match on the
     // right.
     joinTracker_ = JoinTracker(outputBatchSize_, pool());
@@ -387,7 +391,8 @@ bool MergeJoin::tryAddOutputRow(
     const RowVectorPtr& leftBatch,
     vector_size_t leftRow,
     const RowVectorPtr& rightBatch,
-    vector_size_t rightRow) {
+    vector_size_t rightRow,
+    bool isRightJoinForFullOuter) {
   if (outputSize_ == outputBatchSize_) {
     return false;
   }
@@ -421,12 +426,16 @@ bool MergeJoin::tryAddOutputRow(
         filterRightInputProjections_);
 
     if (joinTracker_) {
-      if (isRightJoin(joinType_)) {
+      if (isRightJoin(joinType_) ||
+          (isFullJoin(joinType_) && isRightJoinForFullOuter) ||
+          isRightSemiFilterJoin(joinType_)) {
         // Record right-side row with a match on the left-side.
-        joinTracker_->addMatch(rightBatch, rightRow, outputSize_);
+        joinTracker_->addMatch(
+            rightBatch, rightRow, outputSize_, isRightJoinForFullOuter);
       } else {
         // Record left-side row with a match on the right-side.
-        joinTracker_->addMatch(leftBatch, leftRow, outputSize_);
+        joinTracker_->addMatch(
+            leftBatch, leftRow, outputSize_, isRightJoinForFullOuter);
       }
     }
   }
@@ -436,7 +445,8 @@ bool MergeJoin::tryAddOutputRow(
   if (isAntiJoin(joinType_)) {
     VELOX_CHECK(joinTracker_.has_value());
     // Record left-side row with a match on the right-side.
-    joinTracker_->addMatch(leftBatch, leftRow, outputSize_);
+    joinTracker_->addMatch(
+        leftBatch, leftRow, outputSize_, isRightJoinForFullOuter);
   }
 
   ++outputSize_;
@@ -455,7 +465,7 @@ bool MergeJoin::prepareOutput(
       return true;
     }
 
-    if (isRightJoin(joinType_) && right != currentRight_) {
+    if (right != currentRight_) {
       return true;
     }
 
@@ -463,6 +473,7 @@ bool MergeJoin::prepareOutput(
     if (!isRightFlattened_ && right && currentRight_ != right) {
       flattenRightProjections();
     }
+
     return false;
   }
 
@@ -485,11 +496,10 @@ bool MergeJoin::prepareOutput(
     }
   } else {
     for (const auto& projection : leftProjections_) {
+      auto column = left->childAt(projection.inputChannel);
+      column->clearContainingLazyAndWrapped();
       localColumns[projection.outputChannel] = BaseVector::wrapInDictionary(
-          {},
-          leftOutputIndices_,
-          outputBatchSize_,
-          left->childAt(projection.inputChannel));
+          {}, leftOutputIndices_, outputBatchSize_, column);
     }
   }
   currentLeft_ = left;
@@ -505,11 +515,10 @@ bool MergeJoin::prepareOutput(
     isRightFlattened_ = true;
   } else {
     for (const auto& projection : rightProjections_) {
+      auto column = right->childAt(projection.inputChannel);
+      column->clearContainingLazyAndWrapped();
       localColumns[projection.outputChannel] = BaseVector::wrapInDictionary(
-          {},
-          rightOutputIndices_,
-          outputBatchSize_,
-          right->childAt(projection.inputChannel));
+          {}, rightOutputIndices_, outputBatchSize_, column);
     }
     isRightFlattened_ = false;
   }
@@ -574,6 +583,39 @@ bool MergeJoin::prepareOutput(
 bool MergeJoin::addToOutput() {
   if (isRightJoin(joinType_) || isRightSemiFilterJoin(joinType_)) {
     return addToOutputForRightJoin();
+  } else if (isFullJoin(joinType_) && filter_) {
+    if (!leftForRightJoinMatch_) {
+      leftForRightJoinMatch_ = leftMatch_;
+      rightForRightJoinMatch_ = rightMatch_;
+    }
+
+    if (leftMatch_ && rightMatch_ && !leftJoinForFullFinished_) {
+      auto left = addToOutputForLeftJoin();
+      if (!leftMatch_) {
+        leftJoinForFullFinished_ = true;
+      }
+      if (left) {
+        if (!leftMatch_) {
+          leftMatch_ = leftForRightJoinMatch_;
+          rightMatch_ = rightForRightJoinMatch_;
+        }
+
+        return true;
+      }
+    }
+
+    if (!leftMatch_ && !rightJoinForFullFinished_) {
+      leftMatch_ = leftForRightJoinMatch_;
+      rightMatch_ = rightForRightJoinMatch_;
+      rightJoinForFullFinished_ = true;
+    }
+
+    auto right = addToOutputForRightJoin();
+
+    leftForRightJoinMatch_ = leftMatch_;
+    rightForRightJoinMatch_ = rightMatch_;
+
+    return right;
   } else {
     return addToOutputForLeftJoin();
   }
@@ -613,8 +655,9 @@ bool MergeJoin::addToOutputForLeftJoin() {
       // one match on the other side, we could explore specialized algorithms
       // or data structures that short-circuit the join process once a match
       // is found.
-      for (size_t r = isLeftSemiFilterJoin(joinType_) ? numRightBatches - 1
-                                                      : firstRightBatch;
+      for (size_t r = (isLeftSemiFilterJoin(joinType_) && !filter_)
+               ? numRightBatches - 1
+               : firstRightBatch;
            r < numRightBatches;
            ++r) {
         const auto rightBatch = rightMatch_->inputs[r];
@@ -622,7 +665,7 @@ bool MergeJoin::addToOutputForLeftJoin() {
         const auto rightEndRow = r == numRightBatches - 1
             ? rightMatch_->endRowIndex
             : rightBatch->size();
-        if (isLeftSemiFilterJoin(joinType_)) {
+        if (isLeftSemiFilterJoin(joinType_) && !filter_) {
           rightStartRow = rightEndRow - 1;
         }
         if (prepareOutput(leftBatch, rightBatch)) {
@@ -693,8 +736,9 @@ bool MergeJoin::addToOutputForRightJoin() {
       // one match on the other side, we could explore specialized algorithms
       // or data structures that short-circuit the join process once a match
       // is found.
-      for (size_t l = isRightSemiFilterJoin(joinType_) ? numLeftBatches - 1
-                                                       : firstLeftBatch;
+      for (size_t l = (isRightSemiFilterJoin(joinType_) && !filter_)
+               ? numLeftBatches - 1
+               : firstLeftBatch;
            l < numLeftBatches;
            ++l) {
         const auto leftBatch = leftMatch_->inputs[l];
@@ -702,7 +746,7 @@ bool MergeJoin::addToOutputForRightJoin() {
         const auto leftEndRow = l == numLeftBatches - 1
             ? leftMatch_->endRowIndex
             : leftBatch->size();
-        if (isRightSemiFilterJoin(joinType_)) {
+        if (isRightSemiFilterJoin(joinType_) && !filter_) {
           // RightSemiFilter produce each row from the right at most once.
           leftStartRow = leftEndRow - 1;
         }
@@ -720,7 +764,13 @@ bool MergeJoin::addToOutputForRightJoin() {
         }
 
         for (auto j = leftStartRow; j < leftEndRow; ++j) {
-          if (!tryAddOutputRow(leftBatch, j, rightBatch, i)) {
+          auto isRightJoinForFullOuter = false;
+          if (isFullJoin(joinType_)) {
+            isRightJoinForFullOuter = true;
+          }
+
+          if (!tryAddOutputRow(
+                  leftBatch, j, rightBatch, i, isRightJoinForFullOuter)) {
             // If we run out of space in the current output_, we will need to
             // produce a buffer and continue processing left later. In this
             // case, we cannot leave left as a lazy vector, since we cannot have
@@ -818,7 +868,7 @@ RowVectorPtr MergeJoin::getOutput() {
         continue;
       } else if (isAntiJoin(joinType_)) {
         output = filterOutputForAntiJoin(output);
-        if (output) {
+        if (output != nullptr && output->size() > 0) {
           return output;
         }
 
@@ -926,6 +976,8 @@ RowVectorPtr MergeJoin::doGetOutput() {
     // results from the current match.
     if (addToOutput()) {
       return std::move(output_);
+    } else {
+      previousLeftMatch_ = leftMatch_;
     }
   }
 
@@ -990,6 +1042,8 @@ RowVectorPtr MergeJoin::doGetOutput() {
 
     if (addToOutput()) {
       return std::move(output_);
+    } else {
+      previousLeftMatch_ = leftMatch_;
     }
   }
 
@@ -1134,7 +1188,7 @@ RowVectorPtr MergeJoin::doGetOutput() {
           isFullJoin(joinType_)) {
         // If output_ is currently wrapping a different buffer, return it
         // first.
-        if (prepareOutput(input_, nullptr)) {
+        if (prepareOutput(input_, rightInput_)) {
           output_->resize(outputSize_);
           return std::move(output_);
         }
@@ -1159,7 +1213,7 @@ RowVectorPtr MergeJoin::doGetOutput() {
       if (isRightJoin(joinType_) || isFullJoin(joinType_)) {
         // If output_ is currently wrapping a different buffer, return it
         // first.
-        if (prepareOutput(nullptr, rightInput_)) {
+        if (prepareOutput(input_, rightInput_)) {
           output_->resize(outputSize_);
           return std::move(output_);
         }
@@ -1211,6 +1265,8 @@ RowVectorPtr MergeJoin::doGetOutput() {
           endRightRow < rightInput_->size(),
           std::nullopt};
 
+      leftJoinForFullFinished_ = false;
+      rightJoinForFullFinished_ = false;
       if (!leftMatch_->complete || !rightMatch_->complete) {
         if (!leftMatch_->complete) {
           // Need to continue looking for the end of match.
@@ -1239,6 +1295,8 @@ RowVectorPtr MergeJoin::doGetOutput() {
 
       if (addToOutput()) {
         return std::move(output_);
+      } else {
+        previousLeftMatch_ = leftMatch_;
       }
 
       if (!rightInput_) {
@@ -1254,8 +1312,6 @@ RowVectorPtr MergeJoin::doGetOutput() {
 
 RowVectorPtr MergeJoin::applyFilter(const RowVectorPtr& output) {
   const auto numRows = output->size();
-
-  RowVectorPtr fullOuterOutput = nullptr;
 
   BufferPtr indices = allocateIndices(numRows, pool());
   auto* rawIndices = indices->asMutable<vector_size_t>();
@@ -1273,76 +1329,35 @@ RowVectorPtr MergeJoin::applyFilter(const RowVectorPtr& output) {
 
     // If all matches for a given left-side row fail the filter, add a row to
     // the output with nulls for the right-side columns.
-    const auto onMiss = [&](auto row) {
-      if (isAntiJoin(joinType_)) {
-        return;
+    auto onMiss = [&](auto row, bool flag) {
+      if (!isLeftSemiFilterJoin(joinType_) &&
+          !isRightSemiFilterJoin(joinType_)) {
+        rawIndices[numPassed++] = row;
+
+        if (!isRightJoin(joinType_)) {
+          if (isFullJoin(joinType_) && flag) {
+            for (auto& projection : leftProjections_) {
+              auto target = output->childAt(projection.outputChannel);
+              target->setNull(row, true);
+            }
+          } else {
+            for (auto& projection : rightProjections_) {
+              auto target = output->childAt(projection.outputChannel);
+              target->setNull(row, true);
+            }
+          }
+        } else {
+          for (auto& projection : leftProjections_) {
+            auto target = output->childAt(projection.outputChannel);
+            target->setNull(row, true);
+          }
+        }
       }
-      rawIndices[numPassed++] = row;
+    };
 
-      if (isFullJoin(joinType_)) {
-        // For filtered rows, it is necessary to insert additional data
-        // to ensure the result set is complete. Specifically, we
-        // need to generate two records: one record containing the
-        // columns from the left table along with nulls for the
-        // right table, and another record containing the columns
-        // from the right table along with nulls for the left table.
-        // For instance, the current output is filtered based on the condition
-        // t > 1.
-
-        // 1, 1
-        // 2, 2
-        // 3, 3
-
-        // In this scenario, we need to additionally insert a record 1, 1.
-        // Subsequently, we will set the values of the columns on the left to
-        // null and the values of the columns on the right to null as well. By
-        // doing so, we will obtain the final result set.
-
-        // 1,   null
-        // null,  1
-        // 2, 2
-        // 3, 3
-        fullOuterOutput = BaseVector::create<RowVector>(
-            output->type(), output->size() + 1, pool());
-
-        for (auto i = 0; i < row + 1; ++i) {
-          for (auto j = 0; j < output->type()->size(); ++j) {
-            fullOuterOutput->childAt(j)->copy(
-                output->childAt(j).get(), i, i, 1);
-          }
-        }
-
-        for (auto j = 0; j < output->type()->size(); ++j) {
-          fullOuterOutput->childAt(j)->copy(
-              output->childAt(j).get(), row + 1, row, 1);
-        }
-
-        for (auto i = row + 1; i < output->size(); ++i) {
-          for (auto j = 0; j < output->type()->size(); ++j) {
-            fullOuterOutput->childAt(j)->copy(
-                output->childAt(j).get(), i + 1, i, 1);
-          }
-        }
-
-        for (auto& projection : leftProjections_) {
-          auto& target = fullOuterOutput->childAt(projection.outputChannel);
-          target->setNull(row, true);
-        }
-
-        for (auto& projection : rightProjections_) {
-          auto& target = fullOuterOutput->childAt(projection.outputChannel);
-          target->setNull(row + 1, true);
-        }
-      } else if (!isRightJoin(joinType_)) {
-        for (auto& projection : rightProjections_) {
-          auto& target = output->childAt(projection.outputChannel);
-          target->setNull(row, true);
-        }
-      } else {
-        for (auto& projection : leftProjections_) {
-          auto& target = output->childAt(projection.outputChannel);
-          target->setNull(row, true);
-        }
+    auto onMatch = [&](auto row) {
+      if (isLeftSemiFilterJoin(joinType_) || isRightSemiFilterJoin(joinType_)) {
+        rawIndices[numPassed++] = row;
       }
     };
 
@@ -1351,14 +1366,11 @@ RowVectorPtr MergeJoin::applyFilter(const RowVectorPtr& output) {
         const bool passed = !decodedFilterResult_.isNullAt(i) &&
             decodedFilterResult_.valueAt<bool>(i);
 
-        joinTracker_->processFilterResult(i, passed, onMiss);
+        joinTracker_->processFilterResult(i, passed, onMiss, onMatch);
 
-        if (isAntiJoin(joinType_)) {
-          if (!passed) {
-            rawIndices[numPassed++] = i;
-          }
-        } else {
-          if (passed) {
+        if (!isAntiJoin(joinType_) && !isLeftSemiFilterJoin(joinType_) &&
+            !isRightSemiFilterJoin(joinType_)) {
+          if (passed && !joinTracker_->isRightJoinForFullOuter(i)) {
             rawIndices[numPassed++] = i;
           }
         }
@@ -1371,24 +1383,28 @@ RowVectorPtr MergeJoin::applyFilter(const RowVectorPtr& output) {
 
     // Every time we start a new left key match, `processFilterResult()` will
     // check if at least one row from the previous match passed the filter. If
-    // none did, it calls onMiss to add a record with null right projections to
-    // the output.
+    // none did, it calls onMiss to add a record with null right projections
+    // to the output.
     //
     // Before we leave the current buffer, since we may not have seen the next
-    // left key match yet, the last key match may still be pending to produce a
-    // row (because `processFilterResult()` was not called yet).
+    // left key match yet, the last key match may still be pending to produce
+    // a row (because `processFilterResult()` was not called yet).
     //
     // To handle this, we need to call `noMoreFilterResults()` unless the
-    // same current left key match may continue in the next buffer. So there are
-    // two cases to check:
+    // same current left key match may continue in the next buffer. So there
+    // are two cases to check:
     //
-    // 1. If leftMatch_ is nullopt, there for sure the next buffer will contain
-    // a different key match.
+    // 1. If leftMatch_ is nullopt, there for sure the next buffer will
+    // contain a different key match.
     //
     // 2. leftMatch_ may not be nullopt, but may be related to a different
     // (subsequent) left key. So we check if the last row in the batch has the
     // same left row number as the last key match.
     if (!leftMatch_ || !joinTracker_->isCurrentLeftMatch(numRows - 1)) {
+      joinTracker_->noMoreFilterResults(onMiss);
+    }
+
+    if (isAntiJoin(joinType_) && leftMatch_ && !previousLeftMatch_) {
       joinTracker_->noMoreFilterResults(onMiss);
     }
   } else {
@@ -1412,17 +1428,10 @@ RowVectorPtr MergeJoin::applyFilter(const RowVectorPtr& output) {
 
   if (numPassed == numRows) {
     // All rows passed.
-    if (fullOuterOutput) {
-      return fullOuterOutput;
-    }
     return output;
   }
 
   // Some, but not all rows passed.
-  if (fullOuterOutput) {
-    return wrap(numPassed, indices, fullOuterOutput);
-  }
-
   return wrap(numPassed, indices, output);
 }
 
