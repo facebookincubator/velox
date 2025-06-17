@@ -63,11 +63,3 @@ target_link_libraries(
   Folly::folly
   Folly::follybenchmark
   fmt::fmt)
-
-if(VELOX_ENABLE_CUDF)
-  target_compile_definitions(velox_query_benchmark PRIVATE VELOX_ENABLE_CUDF)
-  target_link_libraries(
-    velox_query_benchmark
-    velox_cudf_exec
-    velox_cudf_exec_test_lib)
-endif()
