@@ -623,9 +623,9 @@ class HiveIcebergTest : public HiveConnectorTestBase {
     return std::accumulate(
         deletePositionVector.begin() + 1,
         deletePositionVector.end(),
-        std::to_string(deletePositionVector[0]),
-        [](const std::string& a, int64_t b) {
-          return a + ", " + std::to_string(b);
+        to<std::string>(deletePositionVector[0]),
+        [](const std::string& a, const T& b) {
+          return a + ", " + to<std::string>(b);
         });
   }
 
@@ -659,11 +659,13 @@ class HiveIcebergTest : public HiveConnectorTestBase {
 
       auto lastIter = std::unique(deleteValues.begin(), deleteValues.end());
       auto numDistinctValues = lastIter - deleteValues.begin();
-      auto minValue = 1;
-      auto maxValue = *std::max_element(deleteValues.begin(), lastIter);
-      if (maxValue - minValue + 1 == numDistinctValues &&
-          maxValue == (rowCount - 1) / equalityFieldId) {
-        return "1 = 0";
+      if constexpr (std::is_arithmetic_v<T>) {
+        auto minValue = T(1);
+        auto maxValue = *std::max_element(deleteValues.begin(), lastIter);
+        if (maxValue - minValue + 1 == numDistinctValues &&
+            maxValue == (rowCount - 1) / equalityFieldId) {
+          return "1 = 0";
+        }
       }
     }
 
@@ -1307,4 +1309,49 @@ TEST_F(HiveIcebergTest, TestSubFieldEqualityDelete) {
   assertEqualityDeletes(
       icebergSplits.back(), ROW({"c_bigint"}, {BIGINT()}), duckDbSql);
 }
+
+TEST_F(HiveIcebergTest, equalityDeletesWithNegatedVarbinaryValues) {
+  folly::SingletonVault::singleton()->registrationComplete();
+
+  std::unordered_map<int8_t, std::vector<int32_t>> equalityFieldIdsMap;
+  std::unordered_map<int8_t, std::vector<std::vector<std::string>>>
+      equalityDeleteVectorMap;
+
+  equalityFieldIdsMap.insert({0, {1}});
+  equalityDeleteVectorMap.insert({0, {{"\x01\x02", "\x05\x06"}}});
+
+  std::vector<RowVectorPtr> dataVectors = {makeRowVector(
+      {"c0"},
+      {makeFlatVector<std::string_view>(
+          {"\x01\x02", "\x03\x04", "\x05\x06", "\x07\x08", "\x09\x0A"})})};
+
+  assertEqualityDeletes(
+      equalityDeleteVectorMap,
+      equalityFieldIdsMap,
+      "SELECT * FROM tmp WHERE hex(c0) NOT IN ('0102', '0506')",
+      dataVectors);
+}
+
+TEST_F(HiveIcebergTest, equalityDeletesWithNegatedVarbinaryStringValues) {
+  folly::SingletonVault::singleton()->registrationComplete();
+
+  std::unordered_map<int8_t, std::vector<int32_t>> equalityFieldIdsMap;
+  std::unordered_map<int8_t, std::vector<std::vector<std::string>>>
+      equalityDeleteVectorMap;
+
+  equalityFieldIdsMap.insert({0, {1}});
+  equalityDeleteVectorMap.insert({0, {{"apple", "cherry"}}});
+
+  std::vector<RowVectorPtr> dataVectors = {makeRowVector(
+      {"c0"},
+      {makeFlatVector<std::string>(
+          {"apple", "banana", "cherry", "date", "elderberry"})})};
+
+  assertEqualityDeletes(
+      equalityDeleteVectorMap,
+      equalityFieldIdsMap,
+      "SELECT * FROM tmp WHERE c0 NOT IN ('apple', 'cherry')",
+      dataVectors);
+}
+
 } // namespace facebook::velox::connector::hive::iceberg
