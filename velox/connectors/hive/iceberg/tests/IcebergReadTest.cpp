@@ -623,9 +623,9 @@ class HiveIcebergTest : public HiveConnectorTestBase {
     return std::accumulate(
         deletePositionVector.begin() + 1,
         deletePositionVector.end(),
-        std::to_string(deletePositionVector[0]),
-        [](const std::string& a, int64_t b) {
-          return a + ", " + std::to_string(b);
+        to<std::string>(deletePositionVector[0]),
+        [](const std::string& a, const T& b) {
+          return a + ", " + to<std::string>(b);
         });
   }
 
@@ -659,11 +659,13 @@ class HiveIcebergTest : public HiveConnectorTestBase {
 
       auto lastIter = std::unique(deleteValues.begin(), deleteValues.end());
       auto numDistinctValues = lastIter - deleteValues.begin();
-      auto minValue = 1;
-      auto maxValue = *std::max_element(deleteValues.begin(), lastIter);
-      if (maxValue - minValue + 1 == numDistinctValues &&
-          maxValue == (rowCount - 1) / equalityFieldId) {
-        return "1 = 0";
+      if constexpr (std::is_arithmetic_v<T>) {
+        auto minValue = T(1);
+        auto maxValue = *std::max_element(deleteValues.begin(), lastIter);
+        if (maxValue - minValue + 1 == numDistinctValues &&
+            maxValue == (rowCount - 1) / equalityFieldId) {
+          return "1 = 0";
+        }
       }
     }
 
@@ -1233,7 +1235,8 @@ TEST_F(HiveIcebergTest, equalityDeletesFloatAndDoubleThrowsError) {
   // Test for float (REAL)
   {
     std::unordered_map<int8_t, std::vector<int32_t>> equalityFieldIdsMap;
-    std::unordered_map<int8_t, std::vector<std::vector<float>>> equalityDeleteVectorMap;
+    std::unordered_map<int8_t, std::vector<std::vector<float>>>
+        equalityDeleteVectorMap;
     equalityFieldIdsMap.insert({{0, {1}}, {1, {2}}});
     equalityDeleteVectorMap.insert({{0, {{0, 1}}}, {1, {{2, 3}}}});
     VELOX_ASSERT_THROW(
@@ -1244,7 +1247,8 @@ TEST_F(HiveIcebergTest, equalityDeletesFloatAndDoubleThrowsError) {
   // Test for double (DOUBLE)
   {
     std::unordered_map<int8_t, std::vector<int32_t>> equalityFieldIdsMap;
-    std::unordered_map<int8_t, std::vector<std::vector<double>>> equalityDeleteVectorMap;
+    std::unordered_map<int8_t, std::vector<std::vector<double>>>
+        equalityDeleteVectorMap;
     equalityFieldIdsMap.insert({{0, {1}}, {1, {2}}});
     equalityDeleteVectorMap.insert({{0, {{0, 1}}}, {1, {{2, 3}}}});
     VELOX_ASSERT_THROW(
@@ -1302,4 +1306,322 @@ TEST_F(HiveIcebergTest, TestSubFieldEqualityDelete) {
   assertEqualityDeletes(
       icebergSplits.back(), ROW({"c_bigint"}, {BIGINT()}), duckDbSql);
 }
+
+TEST_F(HiveIcebergTest, equalityDeletesWithNegatedVarbinaryValues) {
+  folly::SingletonVault::singleton()->registrationComplete();
+
+  std::unordered_map<int8_t, std::vector<int32_t>> equalityFieldIdsMap;
+  std::unordered_map<int8_t, std::vector<std::vector<std::string>>>
+      equalityDeleteVectorMap;
+
+  equalityFieldIdsMap.insert({0, {1}});
+  equalityDeleteVectorMap.insert({0, {{"\x01\x02", "\x05\x06"}}});
+
+  std::vector<RowVectorPtr> dataVectors = {makeRowVector(
+      {"c0"},
+      {makeFlatVector<std::string_view>(
+          {"\x01\x02", "\x03\x04", "\x05\x06", "\x07\x08", "\x09\x0A"})})};
+
+  assertEqualityDeletes(
+      equalityDeleteVectorMap,
+      equalityFieldIdsMap,
+      "SELECT * FROM tmp WHERE hex(c0) NOT IN ('0102', '0506')",
+      dataVectors);
+}
+
+TEST_F(HiveIcebergTest, equalityDeletesWithNegatedVarbinaryStringValues) {
+  folly::SingletonVault::singleton()->registrationComplete();
+
+  std::unordered_map<int8_t, std::vector<int32_t>> equalityFieldIdsMap;
+  std::unordered_map<int8_t, std::vector<std::vector<std::string>>>
+      equalityDeleteVectorMap;
+
+  equalityFieldIdsMap.insert({0, {1}});
+  equalityDeleteVectorMap.insert({0, {{"apple", "cherry"}}});
+
+  std::vector<RowVectorPtr> dataVectors = {makeRowVector(
+      {"c0"},
+      {makeFlatVector<std::string>(
+          {"apple", "banana", "cherry", "date", "elderberry"})})};
+
+  assertEqualityDeletes(
+      equalityDeleteVectorMap,
+      equalityFieldIdsMap,
+      "SELECT * FROM tmp WHERE c0 NOT IN ('apple', 'cherry')",
+      dataVectors);
+}
+
+TEST_F(HiveIcebergTest, equalityDeletesStringSingleFileColumn1) {
+  folly::SingletonVault::singleton()->registrationComplete();
+
+  std::unordered_map<int8_t, std::vector<int32_t>> equalityFieldIdsMap;
+  std::unordered_map<int8_t, std::vector<std::vector<std::string>>>
+      equalityDeleteVectorMap;
+  equalityFieldIdsMap.insert({0, {1}});
+
+  // Delete "apple", "banana"
+  equalityDeleteVectorMap.insert({0, {{"apple", "banana"}}});
+  std::vector<RowVectorPtr> dataVectors = {makeRowVector(
+      {"c0"},
+      {makeFlatVector<std::string>(
+          {"apple", "banana", "cherry", "date", "elderberry"})})};
+  assertEqualityDeletes(
+      equalityDeleteVectorMap,
+      equalityFieldIdsMap,
+      "SELECT * FROM tmp WHERE c0 NOT IN ('apple', 'banana')",
+      dataVectors);
+
+  // Delete first and last
+  equalityDeleteVectorMap.clear();
+  equalityDeleteVectorMap.insert({0, {{"apple", "elderberry"}}});
+  assertEqualityDeletes(
+      equalityDeleteVectorMap,
+      equalityFieldIdsMap,
+      "SELECT * FROM tmp WHERE c0 NOT IN ('apple', 'elderberry')",
+      dataVectors);
+
+  // Delete non-existent
+  equalityDeleteVectorMap.clear();
+  equalityDeleteVectorMap.insert({0, {{"fig", "grape"}}});
+  assertEqualityDeletes(
+      equalityDeleteVectorMap,
+      equalityFieldIdsMap,
+      "SELECT * FROM tmp WHERE c0 NOT IN ('fig', 'grape')",
+      dataVectors);
+
+  // Delete all
+  equalityDeleteVectorMap.clear();
+  equalityDeleteVectorMap.insert(
+      {0, {{"apple", "banana", "cherry", "date", "elderberry"}}});
+  assertEqualityDeletes(
+      equalityDeleteVectorMap,
+      equalityFieldIdsMap,
+      "SELECT * FROM tmp WHERE 1 = 0",
+      dataVectors);
+
+  // Delete none
+  equalityDeleteVectorMap.clear();
+  equalityDeleteVectorMap.insert({0, {{}}});
+  assertEqualityDeletes(
+      equalityDeleteVectorMap,
+      equalityFieldIdsMap,
+      "SELECT * FROM tmp",
+      dataVectors);
+}
+
+TEST_F(HiveIcebergTest, equalityDeletesVarbinarySingleFileColumn1) {
+  folly::SingletonVault::singleton()->registrationComplete();
+
+  std::unordered_map<int8_t, std::vector<int32_t>> equalityFieldIdsMap;
+  std::unordered_map<int8_t, std::vector<std::vector<std::string>>>
+      equalityDeleteVectorMap;
+  equalityFieldIdsMap.insert({0, {1}});
+
+  // Delete "\x01\x02", "\x03\x04"
+  equalityDeleteVectorMap.insert({0, {{"\x01\x02", "\x03\x04"}}});
+  std::vector<RowVectorPtr> dataVectors = {makeRowVector(
+      {"c0"},
+      {makeFlatVector<std::string_view>(
+          {"\x01\x02", "\x03\x04", "\x05\x06", "\x07\x08", "\x09\x0A"})})};
+  assertEqualityDeletes(
+      equalityDeleteVectorMap,
+      equalityFieldIdsMap,
+      "SELECT * FROM tmp WHERE hex(c0) NOT IN ('0102', '0304')",
+      dataVectors);
+
+  // Delete all
+  equalityDeleteVectorMap.clear();
+  equalityDeleteVectorMap.insert(
+      {0, {{"\x01\x02", "\x03\x04", "\x05\x06", "\x07\x08", "\x09\x0A"}}});
+  assertEqualityDeletes(
+      equalityDeleteVectorMap,
+      equalityFieldIdsMap,
+      "SELECT * FROM tmp WHERE 1 = 0",
+      dataVectors);
+
+  // Delete none
+  equalityDeleteVectorMap.clear();
+  equalityDeleteVectorMap.insert({0, {{}}});
+  assertEqualityDeletes(
+      equalityDeleteVectorMap,
+      equalityFieldIdsMap,
+      "SELECT * FROM tmp",
+      dataVectors);
+}
+
+TEST_F(HiveIcebergTest, equalityDeletesStringSingleFileMultipleColumns) {
+  folly::SingletonVault::singleton()->registrationComplete();
+
+  std::unordered_map<int8_t, std::vector<int32_t>> equalityFieldIdsMap;
+  std::unordered_map<int8_t, std::vector<std::vector<std::string>>>
+      equalityDeleteVectorMap;
+  equalityFieldIdsMap.insert({0, {1, 2}});
+
+  // Delete ("apple", "banana"), ("cherry", "date")
+  equalityDeleteVectorMap.insert(
+      {0, {{"apple", "cherry"}, {"banana", "date"}}});
+  std::vector<RowVectorPtr> dataVectors = {makeRowVector(
+      {"c0", "c1"},
+      {makeFlatVector<std::string>({"apple", "cherry", "elderberry", "fig"}),
+       makeFlatVector<std::string>({"banana", "date", "grape", "honeydew"})})};
+  assertEqualityDeletes(
+      equalityDeleteVectorMap,
+      equalityFieldIdsMap,
+      "SELECT * FROM tmp WHERE ((c0 <> 'apple' OR c1 <> 'banana') AND (c0 <> 'cherry' OR c1 <> 'date'))",
+      dataVectors);
+
+  // Delete none
+  equalityDeleteVectorMap.clear();
+  equalityDeleteVectorMap.insert({0, {{}, {}}});
+  assertEqualityDeletes(
+      equalityDeleteVectorMap,
+      equalityFieldIdsMap,
+      "SELECT * FROM tmp",
+      dataVectors);
+
+  // Delete all
+  equalityDeleteVectorMap.clear();
+  equalityDeleteVectorMap.insert(
+      {0,
+       {{"apple", "cherry", "elderberry", "fig"},
+        {"banana", "date", "grape", "honeydew"}}});
+  assertEqualityDeletes(
+      equalityDeleteVectorMap,
+      equalityFieldIdsMap,
+      "SELECT * FROM tmp WHERE 1 = 0",
+      dataVectors);
+}
+
+TEST_F(HiveIcebergTest, equalityDeletesVarbinarySingleFileMultipleColumns) {
+  folly::SingletonVault::singleton()->registrationComplete();
+
+  std::unordered_map<int8_t, std::vector<int32_t>> equalityFieldIdsMap;
+  std::unordered_map<int8_t, std::vector<std::vector<std::string>>>
+      equalityDeleteVectorMap;
+  equalityFieldIdsMap.insert({0, {1, 2}});
+
+  // Delete (b"\x01\x02", b"\x05\x06"), (b"\x03\x04", b"\x07\x08")
+  equalityDeleteVectorMap.insert(
+      {0, {{"\x01\x02", "\x03\x04"}, {"\x05\x06", "\x07\x08"}}});
+  std::vector<RowVectorPtr> dataVectors = {makeRowVector(
+      {"c0", "c1"},
+      {makeFlatVector<std::string_view>({"\x01\x02", "\x03\x04", "\x09\x0A"}),
+       makeFlatVector<std::string_view>(
+           {"\x05\x06", "\x07\x08", "\x0B\x0C"})})};
+  assertEqualityDeletes(
+      equalityDeleteVectorMap,
+      equalityFieldIdsMap,
+      "SELECT * FROM tmp WHERE ((hex(c0) <> '0102' OR hex(c1) <> '0506') AND (hex(c0) <> '0304' OR hex(c1) <> '0708'))",
+      dataVectors);
+
+  // Delete none
+  equalityDeleteVectorMap.clear();
+  equalityDeleteVectorMap.insert({0, {{}, {}}});
+  assertEqualityDeletes(
+      equalityDeleteVectorMap,
+      equalityFieldIdsMap,
+      "SELECT * FROM tmp",
+      dataVectors);
+
+  // Delete all
+  equalityDeleteVectorMap.clear();
+  equalityDeleteVectorMap.insert(
+      {0,
+       {{"\x01\x02", "\x03\x04", "\x09\x0A"},
+        {"\x05\x06", "\x07\x08", "\x0B\x0C"}}});
+  assertEqualityDeletes(
+      equalityDeleteVectorMap,
+      equalityFieldIdsMap,
+      "SELECT * FROM tmp WHERE 1 = 0",
+      dataVectors);
+}
+
+TEST_F(HiveIcebergTest, equalityDeleteFileWithIntAndVarcharColumns) {
+  folly::SingletonVault::singleton()->registrationComplete();
+
+  std::unordered_map<int8_t, std::vector<int32_t>> equalityFieldIdsMap;
+  std::unordered_map<int8_t, std::vector<std::vector<std::string>>> equalityDeleteVectorMap;
+
+  equalityFieldIdsMap.insert({0, {1, 2}});
+
+  // Delete rows with (int: 2, varchar: "banana") and (int: 4, varchar: "date")
+  equalityDeleteVectorMap.insert({0, {{"2", "4"}, {"banana", "date"}}});
+  std::vector<RowVectorPtr> dataVectors = {makeRowVector(
+      {"c0", "c1"},
+      {makeFlatVector<std::string>({"1", "2", "3", "4", "5"}),
+       makeFlatVector<std::string>({"apple", "banana", "cherry", "date", "elderberry"})})};
+
+  assertEqualityDeletes(
+      equalityDeleteVectorMap,
+      equalityFieldIdsMap,
+      "SELECT * FROM tmp WHERE ((c0 <> '2' OR c1 <> 'banana') AND (c0 <> '4' OR c1 <> 'date'))",
+      dataVectors);
+
+  // Delete none
+  equalityDeleteVectorMap.clear();
+  equalityDeleteVectorMap.insert({0, {{}, {}}});
+  assertEqualityDeletes(
+      equalityDeleteVectorMap,
+      equalityFieldIdsMap,
+      "SELECT * FROM tmp",
+      dataVectors);
+
+  // Delete all rows
+  equalityDeleteVectorMap.clear();
+  equalityDeleteVectorMap.insert(
+      {0,
+       {{"1", "2", "3", "4", "5"},
+        {"apple", "banana", "cherry", "date", "elderberry"}}});
+  assertEqualityDeletes(
+      equalityDeleteVectorMap,
+      equalityFieldIdsMap,
+      "SELECT * FROM tmp WHERE 1 = 0",
+      dataVectors);
+}
+
+TEST_F(HiveIcebergTest, equalityDeleteFileWithIntAndVarbinaryColumns) {
+  folly::SingletonVault::singleton()->registrationComplete();
+
+  std::unordered_map<int8_t, std::vector<int32_t>> equalityFieldIdsMap;
+  std::unordered_map<int8_t, std::vector<std::vector<std::string>>> equalityDeleteVectorMap;
+
+  equalityFieldIdsMap.insert({0, {1, 2}});
+
+  // Delete rows with (int: 2, varbinary: "\x03\x04") and (int: 4, varbinary: "\x07\x08")
+  equalityDeleteVectorMap.insert({0, {{"2", "4"}, {"\x03\x04", "\x07\x08"}}});
+  std::vector<RowVectorPtr> dataVectors = {makeRowVector(
+      {"c0", "c1"},
+      {makeFlatVector<std::string>({"1", "2", "3", "4", "5"}),
+       makeFlatVector<std::string_view>({"\x01\x02", "\x03\x04", "\x05\x06", "\x07\x08", "\x09\x0A"})})};
+
+  assertEqualityDeletes(
+      equalityDeleteVectorMap,
+      equalityFieldIdsMap,
+      "SELECT * FROM tmp WHERE ((c0 <> '2' OR hex(c1) <> '0304') AND (c0 <> '4' OR hex(c1) <> '0708'))",
+      dataVectors);
+
+  // Delete none
+  equalityDeleteVectorMap.clear();
+  equalityDeleteVectorMap.insert({0, {{}, {}}});
+  assertEqualityDeletes(
+      equalityDeleteVectorMap,
+      equalityFieldIdsMap,
+      "SELECT * FROM tmp",
+      dataVectors);
+
+  // Delete all rows
+  equalityDeleteVectorMap.clear();
+  equalityDeleteVectorMap.insert(
+      {0,
+       {{"1", "2", "3", "4", "5"},
+        {"\x01\x02", "\x03\x04", "\x05\x06", "\x07\x08", "\x09\x0A"}}});
+  assertEqualityDeletes(
+      equalityDeleteVectorMap,
+      equalityFieldIdsMap,
+      "SELECT * FROM tmp WHERE 1 = 0",
+      dataVectors);
+}
+
 } // namespace facebook::velox::connector::hive::iceberg
+
+
