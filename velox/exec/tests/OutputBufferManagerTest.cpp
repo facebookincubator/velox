@@ -21,6 +21,7 @@
 #include "velox/exec/Task.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/SerializedPageUtil.h"
+#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/serializers/CompactRowSerializer.h"
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/serializers/UnsafeRowSerializer.h"
@@ -590,7 +591,7 @@ TEST_F(OutputBufferManagerTest, outputType) {
 TEST_P(OutputBufferManagerWithDifferentSerdeKindsTest, destinationBuffer) {
   {
     ArbitraryBuffer buffer;
-    DestinationBuffer destinationBuffer;
+    DestinationBuffer destinationBuffer(0);
     destinationBuffer.loadData(&buffer, 0);
     destinationBuffer.loadData(&buffer, 100);
     std::atomic<bool> notified{false};
@@ -626,7 +627,7 @@ TEST_P(OutputBufferManagerWithDifferentSerdeKindsTest, destinationBuffer) {
       expectedNumBytes += page->size();
       buffer.enqueue(std::move(page));
     }
-    DestinationBuffer destinationBuffer;
+    DestinationBuffer destinationBuffer(0);
     destinationBuffer.loadData(&buffer, 1);
     ASSERT_EQ(
         buffer.toString(), "[ARBITRARY_BUFFER PAGES[9] NO MORE DATA[false]]");
@@ -691,7 +692,7 @@ TEST_P(OutputBufferManagerWithDifferentSerdeKindsTest, destinationBuffer) {
     for (int i = 0; i < 10; ++i) {
       buffer.enqueue(makeSerializedPage(rowType_, 100));
     }
-    DestinationBuffer destinationBuffer;
+    DestinationBuffer destinationBuffer(0);
     destinationBuffer.loadData(&buffer, 1e9);
     ASSERT_TRUE(buffer.empty());
     int64_t sequence = 0;
@@ -766,7 +767,7 @@ TEST_P(OutputBufferManagerWithDifferentSerdeKindsTest, destinationBuffer) {
     for (int i = 0; i < 10; ++i) {
       buffer.enqueue(makeSerializedPage(rowType_, 100));
     }
-    DestinationBuffer destinationBuffer;
+    DestinationBuffer destinationBuffer(0);
     auto buffers =
         destinationBuffer.getData(1, 0, noNotify, [] { return true; }, &buffer);
     ASSERT_TRUE(buffers.immediate);
@@ -774,6 +775,87 @@ TEST_P(OutputBufferManagerWithDifferentSerdeKindsTest, destinationBuffer) {
     ASSERT_GT(buffers.data[0]->length(), 0);
     ASSERT_EQ(buffers.remainingBytes.size(), 9);
   }
+}
+
+TEST_P(OutputBufferManagerWithDifferentSerdeKindsTest, destinationBufferSpill) {
+  filesystems::registerLocalFileSystem();
+  const auto spillDirectory = exec::test::TempDirectoryPath::create();
+  const auto path = spillDirectory->getPath();
+  common::SpillConfig spillConfig;
+  spillConfig.writeBufferSize = 1 << 20;
+  spillConfig.readBufferSize = 1 << 20;
+  spillConfig.maxFileSize = 2 << 20;
+  spillConfig.getSpillDirPathCb = [&]() { return std::string_view(path); };
+  spillConfig.fileNamePrefix = "test";
+  spillConfig.updateAndCheckSpillLimitCb = [](uint64_t /*unused*/) {};
+
+  std::deque<std::unique_ptr<SerializedPage>> pages;
+  int64_t expectedNumBytes{0};
+  int64_t actualNumBytes{0};
+  int64_t deletedNumBytes{0};
+  for (int i = 0; i < 10; ++i) {
+    pages.push_back(makeSerializedPage(rowType_, 100));
+    expectedNumBytes += pages.back()->size();
+  }
+
+  DestinationBuffer destinationBuffer(0);
+  folly::Synchronized<common::SpillStats> spillStats;
+  VELOX_ASSERT_THROW(destinationBuffer.spill(), "");
+  destinationBuffer.setupSpiller(pool_.get(), &spillConfig, &spillStats);
+
+  for (auto i = 0; i < 5; ++i) {
+    destinationBuffer.enqueue(std::move(pages.front()));
+    pages.pop_front();
+  }
+
+  auto result = destinationBuffer.getData(1, 0, nullptr, nullptr);
+  ASSERT_TRUE(result.immediate);
+  ASSERT_FALSE(result.remainingBytes.empty());
+  ASSERT_FALSE(result.data.empty());
+  ASSERT_EQ(result.data.size(), 1);
+  actualNumBytes += result.data[0]->length();
+
+  auto ackPages = destinationBuffer.acknowledge(1, false);
+  ASSERT_EQ(ackPages.size(), 1);
+  deletedNumBytes += ackPages.back()->size();
+
+  destinationBuffer.spill();
+
+  for (auto i = 0; i < 5; ++i) {
+    destinationBuffer.enqueue(std::move(pages.front()));
+    pages.pop_front();
+  }
+
+  ackPages = destinationBuffer.acknowledge(2, false);
+  ASSERT_TRUE(ackPages.empty());
+  result = destinationBuffer.getData(1'000'000'000, 1, nullptr, nullptr);
+  ASSERT_FALSE(result.immediate);
+  ASSERT_TRUE(result.remainingBytes.empty());
+  ASSERT_TRUE(result.data.empty());
+
+  destinationBuffer.enqueue(nullptr);
+  result = destinationBuffer.getData(1'000'000'000, 1, nullptr, nullptr);
+  ASSERT_TRUE(result.immediate);
+  ASSERT_TRUE(result.remainingBytes.empty());
+  ASSERT_EQ(result.data.size(), 10);
+  for (const auto& iobuf : result.data) {
+    if (iobuf == nullptr) {
+      continue;
+    }
+    actualNumBytes += iobuf->length();
+  }
+  ASSERT_EQ(expectedNumBytes, actualNumBytes);
+
+  auto deletedPages = destinationBuffer.deleteResults();
+  ASSERT_EQ(deletedPages.size(), 9);
+  for (const auto& iobuf : result.data) {
+    if (iobuf == nullptr) {
+      continue;
+    }
+    deletedNumBytes += iobuf->length();
+  }
+  ASSERT_EQ(expectedNumBytes, deletedNumBytes);
+  destinationBuffer.finish();
 }
 
 TEST_P(OutputBufferManagerWithDifferentSerdeKindsTest, basicPartitioned) {
