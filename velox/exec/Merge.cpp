@@ -446,16 +446,22 @@ SpillMerger::SpillMerger(
         spillReadFilesGroup,
     const common::SpillConfig* spillConfig,
     velox::memory::MemoryPool* pool)
-    : sources_(createMergeSources(spillReadFilesGroup.size())),
+    : executor_(spillConfig->executor),
+      pool_(pool->shared_from_this()),
+      sources_(createMergeSources(spillReadFilesGroup.size())),
       batchStreams_(createBatchStreams(std::move(spillReadFilesGroup))),
       sourceMerger_(createSourceMerger(
           sortingKeys,
           type,
           outputBatchSize,
           sources_,
-          memory::memoryManager()->spillPool())),
-      executor_(spillConfig->executor),
-      pool_(memory::memoryManager()->spillPool()) {}
+          pool)) {}
+
+SpillMerger::~SpillMerger() {
+  sourceMerger_.reset();
+  batchStreams_.clear();
+  sources_.clear();
+}
 
 void SpillMerger::start() {
   VELOX_CHECK_NOT_NULL(

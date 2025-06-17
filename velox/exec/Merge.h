@@ -240,6 +240,8 @@ class SpillMerger : public std::enable_shared_from_this<SpillMerger> {
       const common::SpillConfig* spillConfig,
       velox::memory::MemoryPool* pool);
 
+  ~SpillMerger();
+
   void start();
 
   RowVectorPtr getOutput(
@@ -265,11 +267,12 @@ class SpillMerger : public std::enable_shared_from_this<SpillMerger> {
 
   void scheduleAsyncSpillFileStreamReads();
 
-  const std::vector<std::shared_ptr<MergeSource>> sources_;
-  const std::vector<std::unique_ptr<BatchStream>> batchStreams_;
-  const std::unique_ptr<SourceMerger> sourceMerger_;
   folly::Executor* const executor_;
-  velox::memory::MemoryPool* const pool_;
+  const std::shared_ptr<memory::MemoryPool> pool_;
+
+  std::vector<std::shared_ptr<MergeSource>> sources_;
+  std::vector<std::unique_ptr<BatchStream>> batchStreams_;
+  std::unique_ptr<SourceMerger> sourceMerger_;
 };
 
 // LocalMerge merges its source's output into a single stream of
