@@ -81,6 +81,7 @@ m4/lt~obsolete.m4
 #m4/
 build/
 _build/
+.cache/
 .ccache/
 ccache/
 #*.m4
@@ -310,7 +311,8 @@ third_party/imdb/data
 .last_format
 # Benchmarks
 .last_benchmarked_commit
-benchmark_results/
+benchmark_results*
+velox-tpch-*-data
 duckdb_unittest_tempdir/
 grammar.y.tmp
 src/amalgamation/

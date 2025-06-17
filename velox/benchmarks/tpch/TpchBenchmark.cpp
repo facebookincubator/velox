@@ -58,9 +58,64 @@ DEFINE_int32(
     "are scanned");
 
 void TpchBenchmark::initQueryBuilder() {
-  queryBuilder =
+  queryBuilder_ =
       std::make_shared<TpchQueryBuilder>(toFileFormat(FLAGS_data_format));
-  queryBuilder->initialize(FLAGS_data_path);
+  queryBuilder_->initialize(FLAGS_data_path);
+}
+
+void TpchBenchmark::initialize() {
+  QueryBenchmarkBase::initialize();
+  initQueryBuilder();
+}
+
+void TpchBenchmark::shutdown() {
+  QueryBenchmarkBase::shutdown();
+  queryBuilder_.reset();
+}
+
+void TpchBenchmark::runMain(
+    std::ostream& out,
+    facebook::velox::RunStats& runStats) {
+  if (FLAGS_run_query_verbose == -1 && FLAGS_io_meter_column_pct == 0) {
+    folly::runBenchmarks();
+  } else {
+    const auto queryPlan = FLAGS_io_meter_column_pct > 0
+        ? queryBuilder_->getIoMeterPlan(FLAGS_io_meter_column_pct)
+        : queryBuilder_->getQueryPlan(FLAGS_run_query_verbose);
+    auto [cursor, actualResults] = run(queryPlan, queryConfigs_);
+    if (!cursor) {
+      LOG(ERROR) << "Query terminated with error. Exiting";
+      exit(1);
+    }
+    auto task = cursor->task();
+    ensureTaskCompletion(task.get());
+    if (FLAGS_include_results) {
+      printResults(actualResults, out);
+      out << std::endl;
+    }
+    const auto stats = task->taskStats();
+    int64_t rawInputBytes = 0;
+    for (auto& pipeline : stats.pipelineStats) {
+      auto& first = pipeline.operatorStats[0];
+      if (first.operatorType == "TableScan") {
+        rawInputBytes += first.rawInputBytes;
+      }
+    }
+    runStats.rawInputBytes = rawInputBytes;
+    out << fmt::format(
+               "Execution time: {}",
+               facebook::velox::succinctMillis(
+                   stats.executionEndTimeMs - stats.executionStartTimeMs))
+        << std::endl;
+    out << fmt::format(
+               "Splits total: {}, finished: {}",
+               stats.numTotalSplits,
+               stats.numFinishedSplits)
+        << std::endl;
+    out << printPlanWithStats(
+               *queryPlan.plan, stats, FLAGS_include_custom_stats)
+        << std::endl;
+  }
 }
 
 std::unique_ptr<TpchBenchmark> benchmark;

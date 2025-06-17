@@ -315,7 +315,6 @@ core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
   if (!tableHandle_) {
     tableHandle_ = [&]() -> std::shared_ptr<connector::ConnectorTableHandle> {
 #ifdef VELOX_ENABLE_CUDF
-      // if cudfIsRegistered, then use cudftableScan tableHandle_ here.
       if (facebook::velox::cudf_velox::cudfIsRegistered() &&
           facebook::velox::connector::getAllConnectors().count(
               cudf_velox::exec::test::kParquetConnectorId) > 0 &&
