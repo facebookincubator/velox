@@ -137,6 +137,9 @@ int main(int argc, char** argv) {
       "max_data_size_for_stats",
       "any_value",
       // Skip non-deterministic functions.
+      "noisy_count_gaussian",
+      // https://github.com/facebookincubator/velox/issues/13795
+      "noisy_count_if_gaussian",
       // https://github.com/facebookincubator/velox/issues/13547
       "merge",
   };
