@@ -234,8 +234,9 @@ class HiveIcebergTest : public HiveConnectorTestBase {
     ASSERT_TRUE(it->second.peakMemoryBytes > 0);
   }
 
+  template <typename T>
   void assertEqualityDeletes(
-      const std::unordered_map<int8_t, std::vector<std::vector<int64_t>>>&
+      const std::unordered_map<int8_t, std::vector<std::vector<T>>>&
           equalityDeleteVectorMap,
       const std::unordered_map<int8_t, std::vector<int32_t>>&
           equalityFieldIdsMap,
@@ -496,9 +497,10 @@ class HiveIcebergTest : public HiveConnectorTestBase {
     return deleteFilePaths;
   }
 
+  template<typename T>
   std::vector<RowVectorPtr> makeVectors(
-      std::vector<int64_t> vectorSizes,
-      int64_t& startingValue) {
+      std::vector<T> vectorSizes,
+      T& startingValue) {
     std::vector<RowVectorPtr> vectors;
     vectors.reserve(vectorSizes.size());
 
@@ -506,7 +508,7 @@ class HiveIcebergTest : public HiveConnectorTestBase {
     for (int j = 0; j < vectorSizes.size(); j++) {
       auto data = makeContinuousIncreasingValues(
           startingValue, startingValue + vectorSizes[j]);
-      VectorPtr c0 = makeFlatVector<int64_t>(data);
+      VectorPtr c0 = makeFlatVector<T>(data);
       vectors.push_back(makeRowVector({"c0"}, {c0}));
       startingValue += vectorSizes[j];
     }
@@ -613,7 +615,8 @@ class HiveIcebergTest : public HiveConnectorTestBase {
     return deletePositionVector;
   }
 
-  std::string makeNotInList(const std::vector<int64_t>& deletePositionVector) {
+  template <typename T>
+  std::string makeNotInList(const std::vector<T>& deletePositionVector) {
     if (deletePositionVector.empty()) {
       return "";
     }
@@ -631,8 +634,9 @@ class HiveIcebergTest : public HiveConnectorTestBase {
     return PlanBuilder(pool_.get()).tableScan(outputRowType).planNode();
   }
 
+  template <typename T>
   std::string makePredicates(
-      const std::vector<std::vector<int64_t>>& equalityDeleteVector,
+      const std::vector<std::vector<T>>& equalityDeleteVector,
       const std::vector<int32_t>& equalityFieldIds) {
     std::string predicates("");
     int32_t numDataColumns =
@@ -666,8 +670,11 @@ class HiveIcebergTest : public HiveConnectorTestBase {
 
     if (equalityDeleteVector.size() == 1) {
       std::string name = fmt::format("c{}", equalityFieldIds[0] - 1);
+      const auto& values = equalityDeleteVector[0];
       predicates = fmt::format(
-          "{} NOT IN ({})", name, makeNotInList({equalityDeleteVector[0]}));
+          "{} NOT IN ({})",
+          name,
+          makeNotInList(std::vector<T>(values.begin(), values.end())));
     } else {
       for (int i = 0; i < numDeletedValues; i++) {
         std::string oneRow("");
@@ -697,13 +704,14 @@ class HiveIcebergTest : public HiveConnectorTestBase {
   RowTypePtr rowType_{ROW({"c0"}, {BIGINT()})};
   dwio::common::FileFormat fileFormat_{dwio::common::FileFormat::DWRF};
 
+  template <typename T>
   std::shared_ptr<TempFilePath> writeEqualityDeleteFile(
-      const std::vector<std::vector<int64_t>>& equalityDeleteVector) {
+      const std::vector<std::vector<T>>& equalityDeleteVector) {
     std::vector<std::string> names;
     std::vector<VectorPtr> vectors;
     for (int i = 0; i < equalityDeleteVector.size(); i++) {
       names.push_back(fmt::format("c{}", i));
-      vectors.push_back(makeFlatVector<int64_t>(equalityDeleteVector[i]));
+      vectors.push_back(makeFlatVector<T>(equalityDeleteVector[i]));
     }
 
     RowVectorPtr deleteFileVectors = makeRowVector(names, vectors);
