@@ -155,4 +155,34 @@ void HdfsFileSystem::remove(std::string_view path) {
   VELOX_UNSUPPORTED("Does not support removing files from hdfs");
 }
 
+std::vector<std::string> HdfsFileSystem::list(std::string_view path) {
+  // Only remove the schema for hdfs path.
+  if (path.find(kScheme) == 0) {
+    path.remove_prefix(kScheme.length());
+    if (auto index = path.find('/')) {
+      path.remove_prefix(index);
+    }
+  }
+
+  std::vector<std::string> result;
+  int numEntries;
+
+  auto fileInfo = impl_->hdfsShim()->ListDirectory(
+      impl_->hdfsClient(), std::string(path).c_str(), &numEntries);
+
+  VELOX_CHECK_NOT_NULL(
+      fileInfo,
+      "Unable to list the files in {} path. got error: {}",
+      path,
+      impl_->hdfsShim()->GetLastExceptionRootCause());
+
+  for (auto i = 0; i < numEntries; i++) {
+    result.emplace_back(fileInfo[i].mName);
+  }
+
+  impl_->hdfsShim()->FreeFileInfo(fileInfo, numEntries);
+
+  return result;
+}
+
 } // namespace facebook::velox::filesystems

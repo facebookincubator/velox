@@ -465,3 +465,15 @@ TEST_F(HdfsFileSystemTest, readFailures) {
       std::string(miniCluster->nameNodePort()));
   verifyFailures(driver, hdfs);
 }
+
+TEST_F(HdfsFileSystemTest, list) {
+  auto config = std::make_shared<const config::ConfigBase>(
+      std::unordered_map<std::string, std::string>(configurationValues));
+  auto hdfsFileSystem =
+      filesystems::getFileSystem(fullDestinationPath_, config);
+
+  auto result = hdfsFileSystem->list(fullDestinationPath_);
+
+  ASSERT_EQ(result.size(), 1);
+  ASSERT_TRUE(result[0].find(kDestinationPath) != std::string::npos);
+}
