@@ -34,6 +34,7 @@ namespace facebook::velox {
 namespace filesystems {
 using namespace connector::hive;
 namespace gcs = ::google::cloud::storage;
+namespace gc = ::google::cloud;
 
 auto constexpr kGcsInvalidPath = "File {} is not a valid gcs file";
 

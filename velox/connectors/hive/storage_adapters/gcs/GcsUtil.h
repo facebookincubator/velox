@@ -20,8 +20,6 @@
 
 namespace facebook::velox {
 
-namespace gc = ::google::cloud;
-
 // Reference: https://github.com/apache/arrow/issues/29916
 // Change the default upload buffer size. In general, sending larger buffers is
 // more efficient with GCS, as each buffer requires a roundtrip to the service.
@@ -71,7 +69,7 @@ inline std::string gcsPath(const std::string_view& path) {
 }
 
 void checkGcsStatus(
-    const gc::Status outcome,
+    const google::cloud::Status outcome,
     const std::string_view& errorMsgPrefix,
     const std::string& bucket,
     const std::string& key);

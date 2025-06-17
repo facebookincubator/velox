@@ -35,7 +35,7 @@ std::string getErrorStringFromGcsError(const google::cloud::StatusCode& code) {
 }
 
 void checkGcsStatus(
-    const gc::Status outcome,
+    const google::cloud::Status outcome,
     const std::string_view& errorMsgPrefix,
     const std::string& bucket,
     const std::string& key) {
@@ -47,7 +47,7 @@ void checkGcsStatus(
         outcome.error_info().domain(),
         getErrorStringFromGcsError(outcome.code()),
         outcome.message());
-    if (outcome.code() == gc::StatusCode::kNotFound) {
+    if (outcome.code() == google::cloud::StatusCode::kNotFound) {
       VELOX_FILE_NOT_FOUND_ERROR(errMsg);
     }
     VELOX_FAIL(errMsg);
