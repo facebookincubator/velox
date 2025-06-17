@@ -5,7 +5,7 @@
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
-#   http://www.apache.org/licenses/LICENSE-2.0
+#    http://www.apache.org/licenses/LICENSE-2.0
 #
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
@@ -39,21 +39,23 @@ for query_number in ${queries}; do
   printf -v query_number '%02d' "${query_number}"
   for device in ${devices}; do
     case "${device}" in
-      "cpu")
-        num_drivers=${NUM_DRIVERS:-32}
-        BENCHMARK_EXECUTABLE=./_build/release/velox/benchmarks/tpch/velox_tpch_benchmark
-        CUDF_FLAGS=""
-        VELOX_CUDF_ENABLED=false;;
-      "gpu")
-        num_drivers=${NUM_DRIVERS:-4}
-        BENCHMARK_EXECUTABLE=./_build/release/velox/experimental/cudf/benchmarks/velox_cudf_tpch_benchmark
-        CUDF_FLAGS="--cudf_chunk_read_limit=${cudf_chunk_read_limit} --cudf_pass_read_limit=${cudf_pass_read_limit}"
-        VELOX_CUDF_ENABLED=true;;
+    "cpu")
+      num_drivers=${NUM_DRIVERS:-32}
+      BENCHMARK_EXECUTABLE=./_build/release/velox/benchmarks/tpch/velox_tpch_benchmark
+      CUDF_FLAGS=""
+      VELOX_CUDF_ENABLED=false
+      ;;
+    "gpu")
+      num_drivers=${NUM_DRIVERS:-4}
+      BENCHMARK_EXECUTABLE=./_build/release/velox/experimental/cudf/benchmarks/velox_cudf_tpch_benchmark
+      CUDF_FLAGS="--cudf_chunk_read_limit=${cudf_chunk_read_limit} --cudf_pass_read_limit=${cudf_pass_read_limit}"
+      VELOX_CUDF_ENABLED=true
+      ;;
     esac
     echo "Running query ${query_number} on ${device} with ${num_drivers} drivers."
     # The benchmarks segfault after reporting results, so we disable errors
     PROFILE_CMD=""
-    if [[ "${profile}" == "true" ]]; then
+    if [[ ${profile} == "true" ]]; then
       PROFILE_CMD="nsys profile -t nvtx,cuda,osrt -f true --cuda-memory-usage=true --cuda-um-cpu-page-faults=true --cuda-um-gpu-page-faults=true --output=benchmark_results/q${query_number}_${device}_${num_drivers}_drivers.nsys-rep"
       # Enable GPU metrics if supported (Ampere or newer)
       if [[ "$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader -i 0 | cut -d '.' -f 1)" -gt 7 ]]; then
@@ -64,7 +66,7 @@ for query_number in ${queries}; do
 
     set +e -x
     ${PROFILE_CMD} \
-    ${BENCHMARK_EXECUTABLE} \
+      ${BENCHMARK_EXECUTABLE} \
       --data_path=velox-tpch-sf10-data \
       --data_format=parquet \
       --run_query_verbose=${query_number} \
@@ -73,9 +75,9 @@ for query_number in ${queries}; do
       --velox_cudf_memory_resource=${VELOX_CUDF_MEMORY_RESOURCE} \
       --num_drivers=${num_drivers} \
       --preferred_output_batch_rows=${output_batch_rows} \
-      --max_output_batch_rows=${output_batch_rows} 2>&1 \
-      ${CUDF_FLAGS} \
-      | tee benchmark_results/q${query_number}_${device}_${num_drivers}_drivers
-    { set -e +x; } &> /dev/null
+      --max_output_batch_rows=${output_batch_rows} \
+      ${CUDF_FLAGS} 2>&1 |
+      tee benchmark_results/q${query_number}_${device}_${num_drivers}_drivers
+    { set -e +x; } &>/dev/null
   done
 done
