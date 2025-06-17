@@ -493,20 +493,19 @@ bool hasFinalAggs(
 
 auto toAggregators(
     core::AggregationNode const& aggregationNode,
-    exec::OperatorCtx const& operatorCtx,
-    const RowTypePtr& outputType) {
+    exec::OperatorCtx const& operatorCtx) {
   auto const step = aggregationNode.step();
   bool const isGlobal = aggregationNode.groupingKeys().empty();
   auto const& inputRowSchema = aggregationNode.sources()[0]->outputType();
+  const auto numKeys = aggregationNode.groupingKeys().size();
+  const auto outputType = aggregationNode.outputType();
 
   std::vector<std::unique_ptr<cudf_velox::CudfHashAggregation::Aggregator>>
       aggregators;
   for (auto const& aggregate : aggregationNode.aggregates()) {
     std::vector<column_index_t> aggInputs;
     std::vector<VectorPtr> aggConstants;
-    std::vector<TypePtr> argumentTypes;
     for (auto const& arg : aggregate.call->inputs()) {
-      argumentTypes.push_back(arg->type());
       if (auto const field =
               dynamic_cast<core::FieldAccessTypedExpr const*>(arg.get())) {
         aggInputs.push_back(inputRowSchema->getChildIdx(field->name()));
@@ -536,10 +535,10 @@ auto toAggregators(
     auto const companionStep = getCompanionStep(kind, step);
     const auto originalName = getOriginalName(kind);
     const auto resultType = exec::isPartialOutput(companionStep)
-        ? exec::Aggregate::intermediateType(originalName, argumentTypes)
-        : outputType->childAt(i);
+        ? exec::Aggregate::intermediateType(
+              originalName, aggregate.rawInputTypes)
+        : outputType->childAt(numKeys + i);
 
-    // const auto resultType = outputType->childAt(i);
     aggregators.push_back(createAggregator(
         companionStep, kind, inputIndex, constant, isGlobal, resultType));
   }
@@ -548,8 +547,7 @@ auto toAggregators(
 
 auto toIntermediateAggregators(
     core::AggregationNode const& aggregationNode,
-    exec::OperatorCtx const& operatorCtx,
-    const RowTypePtr& outputType) {
+    exec::OperatorCtx const& operatorCtx) {
   auto const step = core::AggregationNode::Step::kIntermediate;
   bool const isGlobal = aggregationNode.groupingKeys().empty();
   auto const& inputRowSchema = aggregationNode.outputType();
@@ -563,15 +561,11 @@ auto toIntermediateAggregators(
     auto const inputIndex = aggregationNode.groupingKeys().size() + i;
     auto const kind = aggregate.call->name();
     auto const constant = nullptr;
-    std::vector<TypePtr> argumentTypes;
-    for (auto const& arg : aggregate.call->inputs()) {
-      argumentTypes.push_back(arg->type());
-    }
     const auto originalName = getOriginalName(kind);
     auto const companionStep = getCompanionStep(kind, step);
     if (exec::isPartialOutput(companionStep)) {
-      const auto resultType =
-          exec::Aggregate::intermediateType(originalName, argumentTypes);
+      const auto resultType = exec::Aggregate::intermediateType(
+          originalName, aggregate.rawInputTypes);
       aggregators.push_back(createAggregator(
           step, kind, inputIndex, constant, isGlobal, resultType));
     } else {
@@ -629,9 +623,9 @@ void CudfHashAggregation::initialize() {
   // We're postponing this for now.
 
   numAggregates_ = aggregationNode_->aggregates().size();
-  aggregators_ = toAggregators(*aggregationNode_, *operatorCtx_, outputType_);
+  aggregators_ = toAggregators(*aggregationNode_, *operatorCtx_);
   intermediateAggregators_ =
-      toIntermediateAggregators(*aggregationNode_, *operatorCtx_, outputType_);
+      toIntermediateAggregators(*aggregationNode_, *operatorCtx_);
 
   // Check that aggregate result type match the output type.
   // TODO: This is output schema validation. In velox CPU, it's done using
