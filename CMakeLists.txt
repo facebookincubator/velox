@@ -142,6 +142,7 @@ option(VELOX_ENABLE_S3 "Build S3 Connector" OFF)
 option(VELOX_ENABLE_GCS "Build GCS Connector" OFF)
 option(VELOX_ENABLE_ABFS "Build Abfs Connector" OFF)
 option(VELOX_ENABLE_HDFS "Build Hdfs Connector" OFF)
+#option(VELOX_ENABLE_DWRF "Enable Dwrf support" ON)
 option(VELOX_ENABLE_PARQUET "Enable Parquet support" ON)
 option(VELOX_ENABLE_ARROW "Enable Arrow support" OFF)
 option(VELOX_ENABLE_GEO "Enable Geospatial support" ON)
@@ -305,6 +306,10 @@ if(VELOX_ENABLE_PARQUET)
   # are included in Arrow.
   set(VELOX_ENABLE_ARROW ON)
 endif()
+#
+#if(VELOX_ENABLE_DWRF)
+#  add_definitions(-DVELOX_ENABLE_DWRF)
+#endif()
 
 # make buildPartitionBounds_ a vector int64 instead of int32 to avoid integer
 # overflow

@@ -21,7 +21,7 @@ elseif(${VELOX_BUILD_TEST_UTILS})
   add_subdirectory(tests/utils)
 endif()
 
-velox_add_library(
+add_library(
   velox_dwio_common
   BitConcatenation.cpp
   BitPackDecoder.cpp
@@ -63,10 +63,27 @@ velox_add_library(
   Writer.cpp
   WriterFactory.cpp)
 
-velox_include_directories(velox_dwio_common PRIVATE ${Protobuf_INCLUDE_DIRS})
+# Pull in format-specific reader/writer libraries so that downstream
+# targets linking only against velox_dwio_common get parquet/dwrf automatically.
+target_link_libraries(velox_dwio_common
+          PUBLIC
+          velox_dwio_dwrf_reader
+          velox_dwio_dwrf_writer
+  )
 
-velox_link_libraries(
+if(VELOX_ENABLE_PARQUET)
+  target_link_libraries(velox_dwio_common
+          PUBLIC
+          velox_dwio_parquet_reader
+          velox_dwio_parquet_writer
+  )
+endif()
+
+target_include_directories(velox_dwio_common PRIVATE ${Protobuf_INCLUDE_DIRS})
+
+target_link_libraries(
   velox_dwio_common
+  PRIVATE
   velox_buffer
   velox_caching
   velox_common_io
