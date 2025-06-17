@@ -1228,6 +1228,32 @@ TEST_F(HiveIcebergTest, equalityDeletesMultipleFiles) {
       "SELECT * FROM tmp WHERE 1 = 0");
 }
 
+TEST_F(HiveIcebergTest, equalityDeletesFloatAndDoubleThrowsError) {
+  folly::SingletonVault::singleton()->registrationComplete();
+
+  // Test for float (REAL)
+  {
+    std::unordered_map<int8_t, std::vector<int32_t>> equalityFieldIdsMap;
+    std::unordered_map<int8_t, std::vector<std::vector<float>>> equalityDeleteVectorMap;
+    equalityFieldIdsMap.insert({{0, {1}}, {1, {2}}});
+    equalityDeleteVectorMap.insert({{0, {{0, 1}}}, {1, {{2, 3}}}});
+    VELOX_ASSERT_THROW(
+        assertEqualityDeletes(equalityDeleteVectorMap, equalityFieldIdsMap),
+        "Iceberg does not allow DOUBLE or REAL columns as the equality delete columns: c1 : REAL");
+  }
+
+  // Test for double (DOUBLE)
+  {
+    std::unordered_map<int8_t, std::vector<int32_t>> equalityFieldIdsMap;
+    std::unordered_map<int8_t, std::vector<std::vector<double>>> equalityDeleteVectorMap;
+    equalityFieldIdsMap.insert({{0, {1}}, {1, {2}}});
+    equalityDeleteVectorMap.insert({{0, {{0, 1}}}, {1, {{2, 3}}}});
+    VELOX_ASSERT_THROW(
+        assertEqualityDeletes(equalityDeleteVectorMap, equalityFieldIdsMap),
+        "Iceberg does not allow DOUBLE or REAL columns as the equality delete columns: c1 : DOUBLE");
+  }
+}
+
 TEST_F(HiveIcebergTest, TestSubFieldEqualityDelete) {
   folly::SingletonVault::singleton()->registrationComplete();
 
