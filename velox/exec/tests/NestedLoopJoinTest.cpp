@@ -588,7 +588,7 @@ TEST_F(NestedLoopJoinTest, outputOrder) {
   });
   assertEqualVectors(expectedInner, results);
 
-  // Left.
+  // Left with single batch.
   results = AssertQueryBuilder(createPlan1(core::JoinType::kLeft))
                 .copyResults(pool());
   auto expectedLeft = makeRowVector({
@@ -600,6 +600,18 @@ TEST_F(NestedLoopJoinTest, outputOrder) {
           {4, 6, 10, 6, 10, 10, std::nullopt, 10, 6, 10, 6}),
       makeNullableFlatVector<StringView>(
           {"z", "x", "z", "u", "z", "z", std::nullopt, "z", "x", "z", "u"}),
+  });
+  assertEqualVectors(expectedLeft, results);
+
+  // Left with single row.
+  results = AssertQueryBuilder(createPlan2(core::JoinType::kLeft))
+                .copyResults(pool());
+  expectedLeft = makeRowVector({
+      makeNullableFlatVector<int64_t>({1, 8, 6, std::nullopt, 7, 4}),
+      makeFlatVector<StringView>({"a", "b", "c", "d", "e", "f"}),
+      makeNullableFlatVector<int64_t>({8, std::nullopt, 8, std::nullopt, 8, 8}),
+      makeNullableFlatVector<StringView>(
+          {"c", std::nullopt, "c", std::nullopt, "c", "c"}),
   });
   assertEqualVectors(expectedLeft, results);
 }

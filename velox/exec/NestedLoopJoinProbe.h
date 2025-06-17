@@ -197,10 +197,11 @@ class NestedLoopJoinProbe : public Operator {
   // `copyBuildValues()`.
   void addOutputRow();
 
-  // Checks if it is required to add a probe mismatch row, and does it if
-  // needed. The caller needs to ensure there is available space in `output_`
-  // for the new record, which has nulled out build projections.
-  void checkProbeMismatchRow();
+  // Checks if it is required to add a probe mismatch row, does it and return
+  // true if needed, else return false. The caller needs to ensure there is
+  // available space in `output_` for the new record, which has nulled out build
+  // projections.
+  bool checkProbeMismatchRow();
 
   // Add a probe mismatch (only for left/full outer joins). The record is based
   // on the current probeRow and vector (input_) and build projections are null.
@@ -236,15 +237,15 @@ class NestedLoopJoinProbe : public Operator {
     return (buildIndex_ >= buildVectors_.value().size());
   }
 
+  // Whether processing last batch of build data or processed all build data for
+  // the current probe row (based on buildIndex_'s value).
+  bool isLastBuildIndex() const {
+    return buildIndex_ + 1 >= buildVectors_.value().size();
+  }
+
   // Cross joins are translated into NLJ's without a join conditition.
   bool isCrossJoin() const {
     return joinCondition_ == nullptr && !isLeftSemiProjectJoin(joinType_);
-  }
-
-  // TODO: For now we only enable the build optimizations in cross-joins and
-  // inner-joins, but we should allow it for other join types as well.
-  bool supportSingleBuild() const {
-    return isCrossJoin() || isInnerJoin(joinType_);
   }
 
   // If build has a single vector, we can wrap probe and build batches into
