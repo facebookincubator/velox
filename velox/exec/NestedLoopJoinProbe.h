@@ -368,7 +368,7 @@ class NestedLoopJoinProbe : public Operator {
   // Row being currently processed from `decodedFilterResult_`.
   vector_size_t filterResultRow_{0};
 
-  // Row being currently processed from `buildVector`.
+  // Row being currently processed from `buildVector_[buildIndex_]`.
   vector_size_t buildRow_{0};
 
   // Keep track of the build rows that had matches (only used for right or full
