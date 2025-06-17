@@ -569,11 +569,15 @@ auto toIntermediateAggregators(
     }
     const auto originalName = getOriginalName(kind);
     auto const companionStep = getCompanionStep(kind, step);
-    const auto resultType = exec::isPartialOutput(companionStep)
-        ? exec::Aggregate::intermediateType(originalName, argumentTypes)
-        : outputType->childAt(i);
-    aggregators.push_back(createAggregator(
-        step, kind, inputIndex, constant, isGlobal, resultType));
+    if (exec::isPartialOutput(companionStep)) {
+      const auto resultType =
+          exec::Aggregate::intermediateType(originalName, argumentTypes);
+      aggregators.push_back(createAggregator(
+          step, kind, inputIndex, constant, isGlobal, resultType));
+    } else {
+      // Final step aggregator will not use the intermediate aggregator.
+      aggregators.push_back(nullptr);
+    }
   }
   return aggregators;
 }
