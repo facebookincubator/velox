@@ -586,7 +586,7 @@ DEBUG_ONLY_TEST_F(MergeTest, localMergeAbort) {
               blocked = false;
               callWaitFlag = false;
               callWait.notifyAll();
-              throw std::runtime_error("Abort merge");
+              VELOX_USER_FAIL("Abort merge");
             }
           }));
 
@@ -613,6 +613,8 @@ DEBUG_ONLY_TEST_F(MergeTest, localMergeAbort) {
           .config(core::QueryConfig::kPreferredOutputBatchRows, 10)
           .copyResults(pool()),
       "Abort merge");
+  std::dynamic_pointer_cast<folly::CPUThreadPoolExecutor>(spillExecutor_)
+      ->join();
 }
 
 TEST_F(MergeTest, localMerge) {

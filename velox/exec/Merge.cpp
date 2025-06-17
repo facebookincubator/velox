@@ -453,9 +453,9 @@ SpillMerger::SpillMerger(
           type,
           outputBatchSize,
           sources_,
-          pool)),
+          memory::memoryManager()->spillPool())),
       executor_(spillConfig->executor),
-      pool_(pool) {}
+      pool_(memory::memoryManager()->spillPool()) {}
 
 void SpillMerger::start() {
   VELOX_CHECK_NOT_NULL(
