@@ -549,6 +549,41 @@ for the cumulative probability (p): P(N &lt; n). The numerator and denominator d
 The probability <code class="docutils literal notranslate"><span class="pre">p</span></code> must lie on the interval [0, 1].</p>
 </dd></dl>
 
+<dl class="py function">
+<dt class="sig sig-object py" id="id3">
+<span class="sig-name descname"><span class="pre">inverse_normal_cdf</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">mean</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sd</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">p</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#id3" title="Link to this definition">¶</a></dt>
+<dd><p>Compute the inverse of the Normal cdf with given mean and standard
+deviation (sd) for the cumulative probability (p): P(N &lt; n). The mean must be
+a real value and the standard deviation must be a real and positive value (both of type DOUBLE).
+The probability p must lie on the interval (0, 1).</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="inverse_gamma_cdf">
+<span class="sig-name descname"><span class="pre">inverse_gamma_cdf</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">shape</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">scale</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">p</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#inverse_gamma_cdf" title="Link to this definition">¶</a></dt>
+<dd><p>Compute the inverse of the Gamma cdf with given shape and scale parameters for the cumulative
+probability (p): P(N &lt; n). The shape and scale parameters must be positive real values.
+The probability p must lie on the interval [0, 1].</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="inverse_binomial_cdf">
+<span class="sig-name descname"><span class="pre">inverse_binomial_cdf</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">numberOfTrials</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">successProbability</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">p</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">int</span></span></span><a class="headerlink" href="#inverse_binomial_cdf" title="Link to this definition">¶</a></dt>
+<dd><p>Compute the inverse of the Binomial cdf with given numberOfTrials and successProbability (of a single trial) the
+cumulative probability (p):  P(N &lt;= n).
+The successProbability and p must be real values in [0, 1] and the numberOfTrials must be
+a positive integer.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="inverse_poisson_cdf">
+<span class="sig-name descname"><span class="pre">inverse_poisson_cdf</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">lambda</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">p</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#inverse_poisson_cdf" title="Link to this definition">¶</a></dt>
+<dd><p>Compute the inverse of the Poisson cdf with given lambda (mean) parameter for the cumulative
+probability (p). It returns the value of n so that: P(N &lt;= n; lambda) = p.
+The lambda parameter must be a positive real number (of type DOUBLE).
+The probability p must lie on the interval [0, 1).</p>
+</dd></dl>
+
 </section>
 <section id="statistical-functions">
 <h1>Statistical Functions<a class="headerlink" href="#statistical-functions" title="Link to this heading">¶</a></h1>
@@ -657,6 +692,10 @@ at a confidence specified by the z-score z.</p>
 <li><a class="reference internal" href="#inverse_cauchy_cdf"><code class="docutils literal notranslate"><span class="pre">inverse_cauchy_cdf()</span></code></a></li>
 <li><a class="reference internal" href="#inverse_laplace_cdf"><code class="docutils literal notranslate"><span class="pre">inverse_laplace_cdf()</span></code></a></li>
 <li><a class="reference internal" href="#inverse_f_cdf"><code class="docutils literal notranslate"><span class="pre">inverse_f_cdf()</span></code></a></li>
+<li><a class="reference internal" href="#id3"><code class="docutils literal notranslate"><span class="pre">inverse_normal_cdf()</span></code></a></li>
+<li><a class="reference internal" href="#inverse_gamma_cdf"><code class="docutils literal notranslate"><span class="pre">inverse_gamma_cdf()</span></code></a></li>
+<li><a class="reference internal" href="#inverse_binomial_cdf"><code class="docutils literal notranslate"><span class="pre">inverse_binomial_cdf()</span></code></a></li>
+<li><a class="reference internal" href="#inverse_poisson_cdf"><code class="docutils literal notranslate"><span class="pre">inverse_poisson_cdf()</span></code></a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#statistical-functions">Statistical Functions</a><ul>
