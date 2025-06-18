@@ -371,15 +371,12 @@ bool NestedLoopJoinProbe::addToOutput() {
     // Iterate over the filter results. For each match, add an output record.
     for (size_t i = filterResultRow_; i < decodedFilterResult_.size(); ++i) {
       // If reach currentBuild->size(), indicates that next probeRow_ has
-      // arrived, reset probeRow_, buildRow_ and probeRowHasMatch_.
+      // arrived, reset buildRow_ and probeRowHasMatch_.
       if (buildRow_ == currentBuild->size()) {
         buildRow_ = 0;
         ++probeRow_;
         probeRowHasMatch_ = false;
       }
-
-      // TODO: only for test, need delete.
-      assert(buildRow_ == i % currentBuild->size());
 
       if (!isJoinConditionMatch(i)) {
         ++buildRow_;
