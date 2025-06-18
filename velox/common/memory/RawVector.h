@@ -36,10 +36,22 @@ class raw_vector {
   static_assert(
       std::is_trivially_destructible_v<T> && std::is_trivially_copyable_v<T>);
 
-  explicit raw_vector(memory::MemoryPool* pool = nullptr) : pool_(pool) {}
+  explicit raw_vector() {}
 
-  explicit raw_vector(int64_t size, memory::MemoryPool* pool = nullptr)
-      : pool_(pool) {
+  explicit raw_vector(int64_t size) {
+    resize(size);
+  }
+
+  explicit raw_vector(memory::MemoryPool* pool) : pool_(pool) {
+    VELOX_CHECK_NOT_NULL(
+        pool,
+        "Initializing raw_vector with memorypool failed: Memory pool is null");
+  }
+
+  explicit raw_vector(int64_t size, memory::MemoryPool* pool) : pool_(pool) {
+    VELOX_CHECK_NOT_NULL(
+        pool,
+        "Initializing raw_vector with size and memorypool failed: Memory pool is null");
     resize(size);
   }
 

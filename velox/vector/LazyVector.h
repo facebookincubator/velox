@@ -199,7 +199,8 @@ class VectorLoader {
       const SelectivityVector& rows,
       ValueHook* hook,
       vector_size_t resultSize,
-      VectorPtr* result);
+      VectorPtr* result,
+      memory::MemoryPool* pool);
 
  protected:
   virtual void loadInternal(
