@@ -461,9 +461,14 @@ class QueryConfig {
   /// Base dir of a query to store tracing data.
   static constexpr const char* kQueryTraceDir = "query_trace_dir";
 
-  /// A comma-separated list of plan node ids whose input data will be traced.
+  /// @Deprecated. Do not use. Remove once existing call sites are updated.
+  /// The plan node id whose input data will be traced.
   /// Empty string if only want to trace the query metadata.
-  static constexpr const char* kQueryTraceNodeIds = "query_trace_node_ids";
+  static constexpr const char* kQueryTraceNodeIds = "query_trace_node_id";
+
+  /// The plan node id whose input data will be traced.
+  /// Empty string if only want to trace the query metadata.
+  static constexpr const char* kQueryTraceNodeId = "query_trace_node_id";
 
   /// The max trace bytes limit. Tracing is disabled if zero.
   static constexpr const char* kQueryTraceMaxBytes = "query_trace_max_bytes";
@@ -472,6 +477,10 @@ class QueryConfig {
   /// matches.
   static constexpr const char* kQueryTraceTaskRegExp =
       "query_trace_task_reg_exp";
+
+  /// If true, we only collect the input trace for a given operator but without
+  /// the actual execution.
+  static constexpr const char* kQueryTraceDryRun = "query_trace_dry_run";
 
   /// Config used to create operator trace directory. This config is provided to
   /// underlying file system and the config is free form. The form should be
@@ -616,6 +625,18 @@ class QueryConfig {
   /// as json element names when casting a row to json.
   static constexpr const char* kFieldNamesInJsonCastEnabled =
       "field_names_in_json_cast_enabled";
+
+  /// If this is true, then operators that evaluate expressions will track their
+  /// stats and return them as part of their operator stats. Tracking these
+  /// stats can be expensive (especially if operator stats are retrieved
+  /// frequently) and this allows the user to explicitly enable it.
+  static constexpr const char* kOperatorTrackExpressionStats =
+      "operator_track_expression_stats";
+
+  /// If this is true, then the unnest operator might split output for each
+  /// input batch based on the output batch size control. Otherwise, it produces
+  /// a single output for each input batch.
+  static constexpr const char* kUnnestSplitOutput = "unnest_split_output";
 
   bool selectiveNimbleReaderEnabled() const {
     return get<bool>(kSelectiveNimbleReaderEnabled, false);
@@ -938,9 +959,15 @@ class QueryConfig {
     return get<std::string>(kQueryTraceDir, "");
   }
 
+  /// @Deprecated. Do not use. Remove once existing call sites are updated.
   std::string queryTraceNodeIds() const {
-    // The default query trace nodes, empty by default.
-    return get<std::string>(kQueryTraceNodeIds, "");
+    // Use the new config kQueryTraceNodeId.
+    return get<std::string>(kQueryTraceNodeId, "");
+  }
+
+  std::string queryTraceNodeId() const {
+    // The default query trace node ID, empty by default.
+    return get<std::string>(kQueryTraceNodeId, "");
   }
 
   uint64_t queryTraceMaxBytes() const {
@@ -950,6 +977,10 @@ class QueryConfig {
   std::string queryTraceTaskRegExp() const {
     // The default query trace task regexp, empty by default.
     return get<std::string>(kQueryTraceTaskRegExp, "");
+  }
+
+  bool queryTraceDryRun() const {
+    return get<bool>(kQueryTraceDryRun, false);
   }
 
   std::string opTraceDirectoryCreateConfig() const {
@@ -1121,6 +1152,14 @@ class QueryConfig {
 
   bool isFieldNamesInJsonCastEnabled() const {
     return get<bool>(kFieldNamesInJsonCastEnabled, false);
+  }
+
+  bool operatorTrackExpressionStats() const {
+    return get<bool>(kOperatorTrackExpressionStats, false);
+  }
+
+  bool unnestSplitOutput() const {
+    return get<bool>(kUnnestSplitOutput, true);
   }
 
   template <typename T>

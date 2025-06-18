@@ -188,6 +188,15 @@ Accessors
     Returns the point value that is the mathematical centroid of ``geometry``.
     Empty geometry inputs result in empty output.
 
+.. function:: ST_Distance(geometry1: Geometry, geometry2: Geometry) -> distance: double
+
+    Returns the 2-dimensional cartesian minimum distance (based on spatial ref)
+    between two geometries in projected units. Empty geometries result in null output.
+
+.. function:: ST_GeometryType(geometry: Geometry) -> type: varchar
+
+    Returns the type of the geometry.
+
 .. function:: ST_X(geometry: Geometry) -> x: double
 
     Returns the ``x`` coordinate of the geometry if it is a Point.  Returns
@@ -199,6 +208,26 @@ Accessors
     Returns the ``y`` coordinate of the geometry if it is a Point.  Returns
     ``null`` if the geometry is empty.  Raises an error if the geometry is
     not a Point and not empty.
+
+.. function:: ST_XMin(geometry: Geometry) -> x: double
+
+    Returns the minimum ``x`` coordinate of the geometries bounding box.
+    Returns ``null`` if the geometry is empty.
+
+.. function:: ST_YMin(geometry: Geometry) -> y: double
+
+    Returns the minimum ``y`` coordinate of the geometries bounding box.
+    Returns ``null`` if the geometry is empty.
+
+.. function:: ST_XMax(geometry: Geometry) -> x: double
+
+    Returns the maximum ``x`` coordinate of the geometries bounding box.
+    Returns ``null`` if the geometry is empty.
+
+.. function:: ST_YMax(geometry: Geometry) -> y: double
+
+    Returns the maximum ``y`` coordinate of the geometries bounding box.
+    Returns ``null`` if the geometry is empty.
 
 .. function:: simplify_geometry(geometry: Geometry, tolerance: double) -> output: Geometry
 
