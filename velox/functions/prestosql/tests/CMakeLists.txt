@@ -110,6 +110,7 @@ add_executable(
   TypeOfTest.cpp
   TDigestCastTest.cpp
   QDigestCastTest.cpp
+  QDigestFunctionsTest.cpp
   URLFunctionsTest.cpp
   UuidFunctionsTest.cpp
   WidthBucketArrayTest.cpp
