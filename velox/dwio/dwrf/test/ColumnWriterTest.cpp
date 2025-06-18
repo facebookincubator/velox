@@ -355,12 +355,13 @@ void testDataTypeWriter(
 
   for (auto stripeI = 0; stripeI < stripeCount; ++stripeI) {
     proto::StripeFooter sf;
+    auto sfw = StripeFooterWriteWrapper(&sf);
     for (auto strideI = 0; strideI < strideCount; ++strideI) {
       writer->write(batch, common::Ranges::of(0, size));
       writer->createIndexEntry();
     }
-    writer->flush([&sf](uint32_t /* unused */) -> proto::ColumnEncoding& {
-      return *sf.add_encoding();
+    writer->flush([&sfw](uint32_t /* unused */) -> ColumnEncodingWriteWrapper {
+      return sfw.addEncoding();
     });
 
     TestStripeStreams streams(context, sf, rowType, pool.get());
@@ -1008,6 +1009,7 @@ void testMapWriter(
     }
 
     proto::StripeFooter sf;
+    auto sfw = StripeFooterWriteWrapper(&sf);
     std::vector<VectorPtr> writtenBatches;
 
     // Write map/row
@@ -1025,8 +1027,8 @@ void testMapWriter(
       writtenBatches.push_back(toWrite);
     }
 
-    writer->flush([&sf](uint32_t /* unused */) -> proto::ColumnEncoding& {
-      return *sf.add_encoding();
+    writer->flush([&sfw](uint32_t /* unused */) -> ColumnEncodingWriteWrapper {
+      return sfw.addEncoding();
     });
 
     auto validate = [&](bool returnFlatVector = false) {
@@ -1150,6 +1152,7 @@ void testMapWriterRow(
     }
 
     proto::StripeFooter sf;
+    auto sfw = StripeFooterWriteWrapper(&sf);
     std::vector<VectorPtr> writtenBatches;
 
     // Write map/row
@@ -1161,8 +1164,8 @@ void testMapWriterRow(
     writer->createIndexEntry();
     writtenBatches.push_back(toWrite);
 
-    writer->flush([&sf](uint32_t /* unused */) -> proto::ColumnEncoding& {
-      return *sf.add_encoding();
+    writer->flush([&sfw](uint32_t /* unused */) -> ColumnEncodingWriteWrapper {
+      return sfw.addEncoding();
     });
 
     auto validate = [&](bool returnFlatVector = false) {
@@ -2179,6 +2182,7 @@ struct IntegerColumnWriterTypedTestCase {
 
     for (size_t i = 0; i != flushCount; ++i) {
       proto::StripeFooter stripeFooter;
+      auto sfw = StripeFooterWriteWrapper(&stripeFooter);
       for (size_t j = 0; j != repetitionCount; ++j) {
         columnWriter->write(batch, common::Ranges::of(0, batch->size()));
         postProcess(*columnWriter, i, j);
@@ -2186,8 +2190,8 @@ struct IntegerColumnWriterTypedTestCase {
       }
       // We only flush once per stripe.
       columnWriter->flush(
-          [&stripeFooter](uint32_t /* unused */) -> proto::ColumnEncoding& {
-            return *stripeFooter.add_encoding();
+          [&sfw](uint32_t /* unused */) -> ColumnEncodingWriteWrapper {
+            return sfw.addEncoding();
           });
 
       // Read and verify.
@@ -3413,6 +3417,7 @@ struct StringColumnWriterTestCase {
 
     for (size_t i = 0; i != flushCount; ++i) {
       proto::StripeFooter stripeFooter;
+      auto sfw = StripeFooterWriteWrapper(&stripeFooter);
       // Write Stride
       for (size_t j = 0; j != repetitionCount; ++j) {
         // TODO: break the batch into multiple strides.
@@ -3423,8 +3428,8 @@ struct StringColumnWriterTestCase {
 
       // Flush when all strides are written (once per stripe).
       columnWriter->flush(
-          [&stripeFooter](uint32_t /* unused */) -> proto::ColumnEncoding& {
-            return *stripeFooter.add_encoding();
+          [&sfw](uint32_t /* unused */) -> ColumnEncodingWriteWrapper {
+            return sfw.addEncoding();
           });
 
       // Read and verify.
@@ -4253,8 +4258,9 @@ TEST_F(ColumnWriterTest, IntDictWriterDirectValueOverflow) {
   writer->write(vector, common::Ranges::of(0, size));
   writer->createIndexEntry();
   proto::StripeFooter sf;
-  writer->flush([&sf](auto /* unused */) -> proto::ColumnEncoding& {
-    return *sf.add_encoding();
+  auto sfw = StripeFooterWriteWrapper(&sf);
+  writer->flush([&sfw](auto /* unused */) -> ColumnEncodingWriteWrapper {
+    return sfw.addEncoding();
   });
   auto& enc = sf.encoding(0);
   ASSERT_EQ(enc.kind(), proto::ColumnEncoding_Kind_DICTIONARY);
@@ -4298,8 +4304,9 @@ TEST_F(ColumnWriterTest, ShortDictWriterDictValueOverflow) {
   writer->write(vector, common::Ranges::of(0, size));
   writer->createIndexEntry();
   proto::StripeFooter sf;
-  writer->flush([&sf](auto /* unused */) -> proto::ColumnEncoding& {
-    return *sf.add_encoding();
+  auto sfw = StripeFooterWriteWrapper(&sf);
+  writer->flush([&sfw](uint32_t /* unused */) -> ColumnEncodingWriteWrapper {
+    return sfw.addEncoding();
   });
   auto& enc = sf.encoding(0);
   ASSERT_EQ(enc.kind(), proto::ColumnEncoding_Kind_DICTIONARY);
@@ -4339,8 +4346,9 @@ TEST_F(ColumnWriterTest, RemovePresentStream) {
   writer->write(vector, common::Ranges::of(0, size));
   writer->createIndexEntry();
   proto::StripeFooter sf;
-  writer->flush([&sf](auto /* unused */) -> proto::ColumnEncoding& {
-    return *sf.add_encoding();
+  auto sfw = StripeFooterWriteWrapper(&sf);
+  writer->flush([&sfw](uint32_t /* unused */) -> ColumnEncodingWriteWrapper {
+    return sfw.addEncoding();
   });
 
   // get data stream
@@ -4377,8 +4385,9 @@ TEST_F(ColumnWriterTest, ColumnIdInStream) {
   writer->write(vector, common::Ranges::of(0, size));
   writer->createIndexEntry();
   proto::StripeFooter sf;
-  writer->flush([&sf](auto /* unused */) -> proto::ColumnEncoding& {
-    return *sf.add_encoding();
+  auto sfw = StripeFooterWriteWrapper(&sf);
+  writer->flush([&sfw](uint32_t /* unused */) -> ColumnEncodingWriteWrapper {
+    return sfw.addEncoding();
   });
 
   // get data stream
@@ -4506,8 +4515,9 @@ struct DictColumnWriterTestCase {
     writer->createIndexEntry();
 
     proto::StripeFooter sf;
-    writer->flush([&sf](uint32_t /* unused */) -> proto::ColumnEncoding& {
-      return *sf.add_encoding();
+    auto sfw = StripeFooterWriteWrapper(&sf);
+    writer->flush([&sfw](uint32_t /* unused */) -> ColumnEncodingWriteWrapper {
+      return sfw.addEncoding();
     });
 
     // Reading the vector out
