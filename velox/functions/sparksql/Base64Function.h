@@ -17,10 +17,11 @@
 
 #include "velox/common/encode/Base64.h"
 #include "velox/functions/Macros.h"
+
 namespace facebook::velox::functions::sparksql {
 
-// Encodes the input binary data into a Base64-encoded string using MIME
-// encoding.
+/// Encodes the input binary data into a Base64-encoded string using MIME
+/// encoding.
 template <typename T>
 struct Base64Function {
   VELOX_DEFINE_FUNCTION_TYPES(T);

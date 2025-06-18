@@ -20,10 +20,10 @@
 
 namespace facebook::velox::functions::sparksql {
 
-// UnBase64Function decodes a base64-encoded input string into its original
-// binary form. It uses the Base64 MIME decoding functions provided by
-// velox::encoding. Returns a Status indicating success or error during
-// decoding.
+/// UnBase64Function decodes a base64-encoded input string into its original
+/// binary form. It uses the Base64 MIME decoding functions provided by
+/// velox::encoding. Returns a Status indicating success or error during
+/// decoding.
 template <typename T>
 struct UnBase64Function {
   VELOX_DEFINE_FUNCTION_TYPES(T);
