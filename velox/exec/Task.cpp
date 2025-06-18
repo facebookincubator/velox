@@ -3245,6 +3245,7 @@ StopReason Task::leaveSuspended(ThreadState& state) {
       auto leaveGuard = folly::makeGuard([&]() {
         VELOX_CHECK_GE(numThreads_, 0);
         if (--state.numSuspensions == 0) {
+          LOG(WARNING) << "============== --state.numSuspensions == 0";
           // Only the last suspension leave needs to update the running driver
           // thread counter in the task
           ++numThreads_;
