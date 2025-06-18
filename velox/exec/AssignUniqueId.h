@@ -28,7 +28,7 @@ class AssignUniqueId : public Operator {
       int32_t uniqueTaskId,
       std::shared_ptr<std::atomic_int64_t> rowIdPool);
 
-  bool isFilter() const override {
+  bool canHaveLazyOutputVectors() const override {
     return true;
   }
 
