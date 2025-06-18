@@ -378,6 +378,9 @@ bool NestedLoopJoinProbe::addToOutput() {
         probeRowHasMatch_ = false;
       }
 
+      // TODO: only for test, need delete.
+      assert(buildRow_ == i % currentBuild->size());
+
       if (!isJoinConditionMatch(i)) {
         ++buildRow_;
         // Check if the current probed row needs to be added as a mismatch (for
