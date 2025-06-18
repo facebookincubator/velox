@@ -16,8 +16,8 @@
 
 #pragma once
 
+#include <cstdint>
 #include <string>
-
 #include "velox/core/PlanNode.h"
 #include "velox/exec/fuzzer/ResultVerifier.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
@@ -26,7 +26,7 @@
 
 namespace facebook::velox::exec::test {
 
-class NoisyCountIfResultVerifier : public ResultVerifier {
+class NoisySumResultVerifier : public ResultVerifier {
  public:
   bool supportsCompare() override {
     return false;
@@ -44,11 +44,11 @@ class NoisyCountIfResultVerifier : public ResultVerifier {
       const std::string& aggregateName) override {
     VELOX_CHECK(!input.empty());
     // Extract the noise scale from the function call.
-    extractNoiseScale(input[0]);
 
     // Extract the column name to aggregate on
     const auto& args = aggregate.call->inputs();
-    VELOX_CHECK_GE(args.size(), 1);
+    extractNoiseScaleAndBound(input[0], args);
+
     auto field = core::TypedExprs::asFieldAccess(args[0]);
     VELOX_CHECK_NOT_NULL(field);
     aggregateColumn_ = field->name();
@@ -56,21 +56,39 @@ class NoisyCountIfResultVerifier : public ResultVerifier {
     groupingKeys_ = groupingKeys;
     name_ = aggregateName;
 
-    // Create a function to get the expected result without noise.
-    auto countIfCall =
-        fmt::format("noisy_count_if_gaussian({}, 0.0)", aggregateColumn_);
+    std::ostringstream call;
+    call << "noisy_sum_gaussian(" << aggregateColumn_ << ", " << "0.0";
+    if (lowerBound_.has_value() && upperBound_.has_value()) {
+      call << ", " << lowerBound_.value();
+      call << ", " << upperBound_.value();
+    }
+    call << ")";
+    auto sumCall = call.str();
 
-    // Add filter if distinct mask exists
+    // Add filter mask if exists.
+    std::vector<std::string> mask;
     if (aggregate.mask != nullptr) {
-      countIfCall += fmt::format(" filter (where {})", aggregate.mask->name());
+      mask.push_back(aggregate.mask->name());
     }
 
-    // Execute plan to get expected result without noise
-    auto plan = PlanBuilder()
-                    .values(input)
-                    .projectExpressions(projections)
-                    .singleAggregation(groupingKeys, {countIfCall})
-                    .planNode();
+    core::PlanNodePtr plan;
+    // Handle distinct case.
+    // Aggregation mask should be specified only once
+    // (either explicitly or using FILTER clause)
+    if (aggregate.distinct) {
+      mask.emplace_back("distinct");
+      plan = PlanBuilder()
+                 .values(input)
+                 .markDistinct("distinct", {aggregateColumn_})
+                 .singleAggregation(groupingKeys, {sumCall}, mask)
+                 .planNode();
+    } else {
+      plan = PlanBuilder()
+                 .values(input)
+                 .projectExpressions(projections)
+                 .singleAggregation(groupingKeys, {sumCall}, mask)
+                 .planNode();
+    }
 
     expectedNoNoise_ = AssertQueryBuilder(plan).copyResults(input[0]->pool());
   }
@@ -105,8 +123,8 @@ class NoisyCountIfResultVerifier : public ResultVerifier {
     auto combined = AssertQueryBuilder(plan).copyResults(result->pool());
 
     // Extract actual and expected values
-    auto* actual = combined->childAt(0)->as<SimpleVector<int64_t>>();
-    auto* expected = combined->childAt(1)->as<SimpleVector<int64_t>>();
+    auto* actual = combined->childAt(0)->as<SimpleVector<double>>();
+    auto* expected = combined->childAt(1)->as<SimpleVector<double>>();
 
     const auto numGroups = result->size();
     VELOX_CHECK_EQ(numGroups, combined->size());
@@ -114,8 +132,7 @@ class NoisyCountIfResultVerifier : public ResultVerifier {
     // Calculate allowed difference based on noise scale
     const int64_t deviationMultiple = 50;
     const double allowedFailureRate = 0.001;
-    const auto allowedDifference =
-        static_cast<int64_t>(deviationMultiple * noiseScale_);
+    const auto allowedDifference = deviationMultiple * noiseScale_;
     const auto lowerBound = -allowedDifference;
     const auto upperBound = allowedDifference;
 
@@ -134,7 +151,7 @@ class NoisyCountIfResultVerifier : public ResultVerifier {
       // Check if actual value is within expected +/- allowedDifference
       if (difference < lowerBound || difference > upperBound) {
         LOG(ERROR) << fmt::format(
-            "noisy_count_if_gaussian result is outside the expected range.\n"
+            "noisy_sum_gaussian result is outside the expected range.\n"
             "  Group: {}\n"
             "  Actual: {}\n"
             "  Expected: {}\n"
@@ -171,26 +188,49 @@ class NoisyCountIfResultVerifier : public ResultVerifier {
 
   void reset() override {
     noiseScale_ = 0.0;
+    lowerBound_.reset();
+    upperBound_.reset();
     name_.clear();
     groupingKeys_.clear();
     aggregateColumn_.clear();
     expectedNoNoise_.reset();
   }
 
- protected:
-  void extractNoiseScale(const RowVectorPtr& input) {
+ private:
+  void extractNoiseScaleAndBound(
+      const RowVectorPtr& input,
+      const std::vector<core::TypedExprPtr>& args) {
     auto secondArg = input->childAt(1);
     if (secondArg->type()->isDouble()) {
       noiseScale_ = secondArg->as<SimpleVector<double>>()->valueAt(0);
-      return;
     } else if (secondArg->type()->isBigint()) {
       noiseScale_ = static_cast<double>(
           secondArg->as<SimpleVector<int64_t>>()->valueAt(0));
-      return;
+    }
+
+    // Extract lower and upper bound if they exist
+    if (args.size() > 3) {
+      auto thirdArg = input->childAt(2);
+      if (thirdArg->type()->isDouble()) {
+        lowerBound_ = thirdArg->as<SimpleVector<double>>()->valueAt(0);
+      } else if (thirdArg->type()->isBigint()) {
+        lowerBound_ = static_cast<double>(
+            thirdArg->as<SimpleVector<int64_t>>()->valueAt(0));
+      }
+
+      auto fourthArg = input->childAt(3);
+      if (fourthArg->type()->isDouble()) {
+        upperBound_ = fourthArg->as<SimpleVector<double>>()->valueAt(0);
+      } else if (fourthArg->type()->isBigint()) {
+        upperBound_ = static_cast<double>(
+            fourthArg->as<SimpleVector<int64_t>>()->valueAt(0));
+      }
     }
   }
 
   double noiseScale_{0.0};
+  std::optional<double> lowerBound_;
+  std::optional<double> upperBound_;
   std::string name_;
   std::vector<std::string> groupingKeys_;
   std::string aggregateColumn_;
