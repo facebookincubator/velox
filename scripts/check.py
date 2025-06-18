@@ -189,7 +189,7 @@ def get_commit(files):
     if files == "commit":
         return "HEAD^"
 
-    if files == "main" or files == "master":
+    if files == "main" or files == "master" or files == "presto-0.293-clp-connector":
         return util.run(f"git merge-base origin/{files} HEAD")[1]
 
     return ""
@@ -243,6 +243,7 @@ def add_options(parser):
 
     branch_parser = add_check_options(files, "main")
     branch_parser = add_check_options(files, "master")
+    branch_parser = add_check_options(files, "presto-0.293-clp-connector")
     commit_parser = add_check_options(files, "commit")
 
 
