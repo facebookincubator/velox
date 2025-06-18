@@ -499,15 +499,24 @@ class HiveIcebergTest : public HiveConnectorTestBase {
 
   std::vector<RowVectorPtr> makeVectors(
       std::vector<int64_t> vectorSizes,
-      int64_t& startingValue) {
+      int64_t& startingValue,
+      bool withNulls = false) {
     std::vector<RowVectorPtr> vectors;
     vectors.reserve(vectorSizes.size());
 
-    vectors.reserve(vectorSizes.size());
+    std::mt19937 gen{0};
     for (int j = 0; j < vectorSizes.size(); j++) {
       auto data = makeContinuousIncreasingValues(
           startingValue, startingValue + vectorSizes[j]);
       VectorPtr c0 = makeFlatVector<int64_t>(data);
+
+      if (withNulls && !data.empty()) {
+        setNulls(c0, [&](vector_size_t row) {
+          // Set about 10% of values to null.
+          return folly::Random::rand32(0, 10, gen) == 0;
+        });
+      }
+
       vectors.push_back(makeRowVector({"c0"}, {c0}));
       startingValue += vectorSizes[j];
     }
@@ -707,12 +716,24 @@ class HiveIcebergTest : public HiveConnectorTestBase {
 
   template <typename T>
   std::shared_ptr<TempFilePath> writeEqualityDeleteFile(
-      const std::vector<std::vector<T>>& equalityDeleteVector) {
+      const std::vector<std::vector<T>>& equalityDeleteVector,
+      bool withNulls = false) {
     std::vector<std::string> names;
     std::vector<VectorPtr> vectors;
+    std::mt19937 gen{0};
+
     for (int i = 0; i < equalityDeleteVector.size(); i++) {
       names.push_back(fmt::format("c{}", i));
-      vectors.push_back(makeFlatVector<T>(equalityDeleteVector[i]));
+      VectorPtr columnVector = makeFlatVector<T>(equalityDeleteVector[i]);
+
+      if (withNulls && !equalityDeleteVector[i].empty()) {
+        setNulls(columnVector, [&](vector_size_t row) {
+          // Set about 10% of values to null.
+          return folly::Random::rand32(0, 10, gen) == 0;
+        });
+      }
+
+      vectors.push_back(columnVector);
     }
 
     RowVectorPtr deleteFileVectors = makeRowVector(names, vectors);
@@ -744,8 +765,11 @@ class HiveIcebergTest : public HiveConnectorTestBase {
     return dataFilePaths;
   }
 
-  std::vector<RowVectorPtr>
-  makeVectors(int32_t count, int32_t rowsPerVector, int32_t numColumns = 1) {
+  std::vector<RowVectorPtr> makeVectors(
+      int32_t count,
+      int32_t rowsPerVector,
+      int32_t numColumns = 1,
+      bool withNulls = false) {
     std::vector<TypePtr> types(numColumns, BIGINT());
     std::vector<std::string> names;
     for (int j = 0; j < numColumns; j++) {
@@ -753,6 +777,7 @@ class HiveIcebergTest : public HiveConnectorTestBase {
     }
 
     std::vector<RowVectorPtr> rowVectors;
+    std::mt19937 gen{0};
     for (int i = 0; i < count; i++) {
       std::vector<VectorPtr> vectors;
 
@@ -771,7 +796,16 @@ class HiveIcebergTest : public HiveConnectorTestBase {
       // increasing and each value repeats once. And so on.
       for (int j = 0; j < numColumns; j++) {
         auto data = makeSequenceValues(rowsPerVector, j + 1);
-        vectors.push_back(vectorMaker_.flatVector<int64_t>(data));
+        VectorPtr columnVector = vectorMaker_.flatVector<int64_t>(data);
+
+        if (withNulls && !data.empty()) {
+          setNulls(columnVector, [&](vector_size_t row) {
+            // Set about 10% of values to null.
+            return folly::Random::rand32(0, 10, gen) == 0;
+          });
+        }
+
+        vectors.push_back(columnVector);
       }
 
       rowVectors.push_back(makeRowVector(names, vectors));
