@@ -42,8 +42,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: ["linux-amd64-cpu8"]
-        type: ["debug", "release"]
+        runner: [linux-amd64-cpu8]
+        type: [debug, release]
         link-type: ["shared", "static"]
     defaults:
       run:
