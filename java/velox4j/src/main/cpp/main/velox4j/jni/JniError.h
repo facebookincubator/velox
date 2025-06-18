@@ -17,12 +17,12 @@
 
 #include <stdexcept>
 
-#include "JniCommon.h"
+#include "velox4j/jni/JniCommon.h"
 
 namespace facebook::velox4j {
 
-// A state structure that provides utility APIs in relation
-// to the Java exception types used by Velox4J.
+/// A state structure that provides utility APIs in relation
+/// to the Java exception types used by Velox4J.
 class JniErrorState {
  public:
   virtual ~JniErrorState() = default;

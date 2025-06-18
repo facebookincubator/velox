@@ -40,8 +40,8 @@ Evaluator::Evaluator(
     MemoryManager* memoryManager,
     const std::shared_ptr<const Evaluation>& evaluation)
     : evaluation_(evaluation) {
-  static std::atomic<uint32_t> executionId{0};
-  const uint32_t eid = executionId++;
+  static std::atomic<uint32_t> nextExecutionId{0};
+  const uint32_t executionId = nextExecutionId++;
   queryCtx_ = core::QueryCtx::create(
       nullptr,
       core::QueryConfig{evaluation_->queryConfig()->toMap()},
@@ -50,16 +50,19 @@ Evaluator::Evaluator(
       memoryManager
           ->getVeloxPool(
               fmt::format(
-                  "Evaluator Memory Pool - EID {}", std::to_string(eid)),
+                  "Evaluator Memory Pool - Execution ID {}",
+                  std::to_string(executionId)),
               memory::MemoryPool::Kind::kAggregate)
           ->shared_from_this(),
       nullptr,
-      fmt::format("Evaluator Context - EID {}", std::to_string(eid)));
+      fmt::format(
+          "Evaluator Context - Execution ID {}", std::to_string(executionId)));
   expressionEvaluator_ = std::make_unique<exec::SimpleExpressionEvaluator>(
       queryCtx_.get(),
       memoryManager->getVeloxPool(
           fmt::format(
-              "Evaluator Leaf Memory Pool - EID {}", std::to_string(eid)),
+              "Evaluator Leaf Memory Pool - Execution ID {}",
+              std::to_string(executionId)),
           memory::MemoryPool::Kind::kLeaf));
   exprSet_ = expressionEvaluator_->compile(evaluation_->expr());
 }

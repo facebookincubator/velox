@@ -17,6 +17,7 @@
 
 #include <ClassRegistry.h>
 #include <JavaString.h>
+#include <JniTypes.h>
 #include <fmt/core.h>
 #include <folly/json/json.h>
 #include <jni_md.h>
@@ -41,15 +42,14 @@
 #include <utility>
 #include <vector>
 
-#include "JniCommon.h"
-#include "JniError.h"
-#include "JniTypes.h"
 #include "velox4j/arrow/Arrow.h"
 #include "velox4j/connector/ExternalStream.h"
 #include "velox4j/eval/Evaluator.h"
 #include "velox4j/iterator/BlockingQueue.h"
 #include "velox4j/iterator/DownIterator.h"
 #include "velox4j/iterator/UpIterator.h"
+#include "velox4j/jni/JniCommon.h"
+#include "velox4j/jni/JniError.h"
 #include "velox4j/lifecycle/ObjectStore.h"
 #include "velox4j/lifecycle/Session.h"
 #include "velox4j/memory/MemoryManager.h"
@@ -94,12 +94,12 @@ jlong evaluatorEval(
     jobject javaThis,
     jlong evaluatorId,
     jlong selectivityVectorId,
-    jlong rvId) {
+    jlong rowVectorId) {
   JNI_METHOD_START
   auto evaluator = ObjectStore::retrieve<Evaluator>(evaluatorId);
   auto selectivityVector =
       ObjectStore::retrieve<SelectivityVector>(selectivityVectorId);
-  auto input = ObjectStore::retrieve<RowVector>(rvId);
+  auto input = ObjectStore::retrieve<RowVector>(rowVectorId);
   return sessionOf(env, javaThis)
       ->objectStore()
       ->save(evaluator->eval(*selectivityVector, *input));
@@ -158,7 +158,6 @@ jlong createBlockingQueue(JNIEnv* env, jobject javaThis) {
 
 jlong createEmptyBaseVector(JNIEnv* env, jobject javaThis, jstring typeJson) {
   JNI_METHOD_START
-  // TODO Session memory pool.
   auto session = sessionOf(env, javaThis);
   auto serdePool = session->memoryManager()->getVeloxPool(
       "Serde Memory Pool", memory::MemoryPool::Kind::kLeaf);
@@ -178,7 +177,6 @@ jlong arrowToBaseVector(
     jlong cSchema,
     jlong cArray) {
   JNI_METHOD_START
-  // TODO Session memory pool.
   auto session = sessionOf(env, javaThis);
   auto pool = session->memoryManager()->getVeloxPool(
       "Arrow Import Memory Pool", memory::MemoryPool::Kind::kLeaf);
@@ -199,15 +197,15 @@ baseVectorDeserialize(JNIEnv* env, jobject javaThis, jstring serialized) {
   std::istringstream dataStream(decoded);
   auto pool = session->memoryManager()->getVeloxPool(
       "Decoding Memory Pool", memory::MemoryPool::Kind::kLeaf);
-  std::vector<ObjectHandle> vids{};
+  std::vector<ObjectHandle> vectorIds{};
   while (dataStream.tellg() < decoded.size()) {
     const VectorPtr& vector = restoreVector(dataStream, pool);
-    const ObjectHandle vid = session->objectStore()->save(vector);
-    vids.push_back(vid);
+    const ObjectHandle vectorId = session->objectStore()->save(vector);
+    vectorIds.push_back(vectorId);
   }
-  const jsize& len = static_cast<jsize>(vids.size());
+  const jsize& len = static_cast<jsize>(vectorIds.size());
   const jlongArray& out = env->NewLongArray(len);
-  env->SetLongArrayRegion(out, 0, len, vids.data());
+  env->SetLongArrayRegion(out, 0, len, vectorIds.data());
   return out;
   JNI_METHOD_END(nullptr)
 }
@@ -215,11 +213,11 @@ baseVectorDeserialize(JNIEnv* env, jobject javaThis, jstring serialized) {
 jlong baseVectorWrapInConstant(
     JNIEnv* env,
     jobject javaThis,
-    jlong vid,
+    jlong vectorId,
     jint length,
     jint index) {
   JNI_METHOD_START
-  auto vector = ObjectStore::retrieve<BaseVector>(vid);
+  auto vector = ObjectStore::retrieve<BaseVector>(vectorId);
   auto constVector = BaseVector::wrapInConstant(length, index, vector);
   return sessionOf(env, javaThis)->objectStore()->save(constVector);
   JNI_METHOD_END(-1)
@@ -228,19 +226,19 @@ jlong baseVectorWrapInConstant(
 jlong baseVectorSlice(
     JNIEnv* env,
     jobject javaThis,
-    jlong vid,
+    jlong vectorId,
     jint offset,
     jint length) {
   JNI_METHOD_START
-  auto vector = ObjectStore::retrieve<BaseVector>(vid);
+  auto vector = ObjectStore::retrieve<BaseVector>(vectorId);
   auto slicedVector = vector->slice(offset, length);
   return sessionOf(env, javaThis)->objectStore()->save(slicedVector);
   JNI_METHOD_END(-1)
 }
 
-jlong baseVectorLoadedVector(JNIEnv* env, jobject javaThis, jlong vid) {
+jlong baseVectorLoadedVector(JNIEnv* env, jobject javaThis, jlong vectorId) {
   JNI_METHOD_START
-  auto vector = ObjectStore::retrieve<BaseVector>(vid);
+  auto vector = ObjectStore::retrieve<BaseVector>(vectorId);
   auto loadedVector = BaseVector::loadedVectorShared(vector);
   return sessionOf(env, javaThis)->objectStore()->save(loadedVector);
   JNI_METHOD_END(-1)
@@ -351,7 +349,9 @@ jlong createUpIteratorWithExternalStream(
 }
 } // namespace
 
-void JniWrapper::mapFields() {}
+void JniWrapper::mapFields() {
+  // No fields to map.
+}
 
 const char* JniWrapper::getCanonicalName() const {
   return kClassName;
