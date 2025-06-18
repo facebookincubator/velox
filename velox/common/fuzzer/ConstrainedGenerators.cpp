@@ -267,12 +267,12 @@ variant TDigestInputGenerator::generate() {
     return variant::null(type_->kind());
   }
   velox::functions::TDigest<> digest;
-  double compression = rand<double>(rng_, 10.0, 100.0);
+  double compression = rand<double>(rng_, 10.0, 1000.0);
   digest.setCompression(compression);
   std::vector<int16_t> positions;
-  for (int i = 0; i < 10; i++) {
-    double value = rand<double>(rng_, 0.0, 100.0);
-    int64_t weight = rand<int64_t>(rng_, 1, 100);
+  for (int i = 0; i < 100; i++) {
+    double value = rand<double>(rng_, 0.0, 1000.0);
+    int64_t weight = rand<int64_t>(rng_, 1, 1000);
     digest.add(positions, value, weight);
   }
   digest.compress(positions);
