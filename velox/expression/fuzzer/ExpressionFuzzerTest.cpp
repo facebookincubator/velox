@@ -190,6 +190,8 @@ int main(int argc, char** argv) {
           {"value_at_quantile",
            std::make_shared<UnifiedDigestArgValuesGenerator>(
                "value_at_quantile")},
+          {"values_at_quantiles",
+           std::make_shared<TDigestArgValuesGenerator>("values_at_quantiles")},
           {"scale_tdigest",
            std::make_shared<TDigestArgValuesGenerator>("scale_tdigest")},
           {"quantile_at_value",
