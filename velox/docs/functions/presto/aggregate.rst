@@ -742,6 +742,7 @@ Noisy Aggregate Functions
     The noisy count is post-processed to be non-negative and rounded to bigint.
 
     ::
+
         SELECT noisy_count_gaussian(orderkey, 20.0) FROM tpch.tiny.lineitem; -- 60181 (1 row)
         SELECT noisy_count_gaussian(orderkey, 20.0) FROM tpch.tiny.lineitem WHERE false; -- NULL (1 row)
 
