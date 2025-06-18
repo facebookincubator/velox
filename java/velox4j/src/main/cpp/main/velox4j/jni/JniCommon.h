@@ -29,13 +29,13 @@
 #endif
 
 #ifndef JNI_METHOD_END
-#define JNI_METHOD_END(fallback_expr)                                 \
+#define JNI_METHOD_END(fallbackExpr)                                  \
   }                                                                   \
   catch (std::exception & e) {                                        \
     env->ThrowNew(                                                    \
         facebook::velox4j::getJniErrorState()->veloxExceptionClass(), \
         e.what());                                                    \
-    return fallback_expr;                                             \
+    return fallbackExpr;                                              \
   }
 // macro ended
 #endif
@@ -56,9 +56,9 @@ JNIEnv* getLocalJNIEnv();
 
 spotify::jni::ClassRegistry* jniClassRegistry();
 
-// Code for implementing safe version of JNI
-// {Get|Release}<PrimitiveType>ArrayElements routines. SafeNativeArray would
-// release the managed array elements automatically during destruction.
+/// Code for implementing safe version of JNI
+/// {Get|Release}<PrimitiveType>ArrayElements routines. SafeNativeArray would
+/// release the managed array elements automatically during destruction.
 
 #define CONCATENATE(t1, t2, t3) t1##t2##t3
 
@@ -105,7 +105,7 @@ DEFINE_PRIMITIVE_ARRAY(kLong, jlongArray, jlong*, int64_t*, Long)
 DEFINE_PRIMITIVE_ARRAY(kFloat, jfloatArray, jfloat*, float_t*, Float)
 DEFINE_PRIMITIVE_ARRAY(kDouble, jdoubleArray, jdouble*, double_t*, Double)
 
-/// A safe native array that handles JNI array releasing in the RAII style.
+// A safe native array that handles JNI array releasing in the RAII style.
 template <JniPrimitiveArrayType TYPE>
 class SafeNativeArray {
   using PrimitiveArray = JniPrimitiveArray<TYPE>;

@@ -35,7 +35,9 @@ class Query : public facebook::velox::ISerializable {
       const std::shared_ptr<const ConnectorConfigArray>& connectorConfig);
 
   const std::shared_ptr<const facebook::velox::core::PlanNode>& plan() const;
+
   const std::shared_ptr<const ConfigArray>& queryConfig() const;
+
   const std::shared_ptr<const ConnectorConfigArray>& connectorConfig() const;
 
   folly::dynamic serialize() const override;
@@ -50,7 +52,9 @@ class Query : public facebook::velox::ISerializable {
 
  private:
   const std::shared_ptr<const facebook::velox::core::PlanNode> plan_;
+
   const std::shared_ptr<const ConfigArray> queryConfig_;
+
   const std::shared_ptr<const ConnectorConfigArray> connectorConfig_;
 };
 } // namespace facebook::velox4j

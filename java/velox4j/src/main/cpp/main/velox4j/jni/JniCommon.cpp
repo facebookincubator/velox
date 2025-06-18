@@ -32,10 +32,9 @@ namespace facebook::velox4j {
 const jint kJniVersion = JNI_VERSION_1_8;
 
 std::string jStringToCString(JNIEnv* env, jstring string) {
-  int32_t jlen, clen;
-  clen = env->GetStringUTFLength(string);
-  jlen = env->GetStringLength(string);
-  std::string buffer;
+  const int32_t clen = env->GetStringUTFLength(string);
+  const int32_t jlen = env->GetStringLength(string);
+  std::string buffer{};
   buffer.resize(clen);
   env->GetStringUTFRegion(string, 0, jlen, &buffer[0]);
   return buffer;
@@ -43,7 +42,8 @@ std::string jStringToCString(JNIEnv* env, jstring string) {
 
 void checkException(JNIEnv* env) {
   if (env->ExceptionCheck()) {
-    jthrowable t = env->ExceptionOccurred();
+    // An exception was thrown from Java. Rethrow it as a C++ exception.
+    jthrowable throwable = env->ExceptionOccurred();
     env->ExceptionClear();
     jclass describerClass =
         env->FindClass("com/facebook/velox4j/exception/ExceptionDescriber");
@@ -54,11 +54,16 @@ void checkException(JNIEnv* env) {
     std::string description = jStringToCString(
         env,
         (jstring)env->CallStaticObjectMethod(
-            describerClass, describeMethod, t));
+            describerClass, describeMethod, throwable));
     if (env->ExceptionCheck()) {
+      /// A new exception was thrown when trying to call Java API to
+      /// describe the previous exception. We just log this exception,
+      /// but do not throw it to let the previous exception be reported as the
+      /// root cause.
       LOG(WARNING) << "Fatal: Uncaught Java exception during calling the Java "
                       "exception describer method! ";
     }
+    // Throws the C++ exception.
     VELOX_FAIL(
         "Error during calling Java code from native code: " + description);
   }
@@ -74,8 +79,9 @@ jclass createGlobalClassReference(JNIEnv* env, const char* className) {
 jclass createGlobalClassReferenceOrError(JNIEnv* env, const char* className) {
   jclass globalClass = createGlobalClassReference(env, className);
   if (globalClass == nullptr) {
-    std::string errorMessage = "Unable to create a global class reference for" +
-        std::string(className);
+    std::string errorMessage =
+                    "Unable to create a global class reference for {} ",
+                std::string(className);
     VELOX_FAIL(errorMessage);
   }
   return globalClass;

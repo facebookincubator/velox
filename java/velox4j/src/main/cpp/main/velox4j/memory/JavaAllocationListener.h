@@ -48,7 +48,9 @@ class JavaAllocationListener : public AllocationListener {
   ~JavaAllocationListener() override;
 
   void allocationChanged(int64_t diff) override;
+
   const int64_t currentBytes() const override;
+
   const int64_t peakBytes() const override;
 
  private:

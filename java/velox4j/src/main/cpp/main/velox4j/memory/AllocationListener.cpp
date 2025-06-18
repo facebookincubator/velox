@@ -40,9 +40,6 @@ void BlockAllocationListener::allocationChanged(int64_t diff) {
     return;
   }
   int64_t granted = reserve(diff);
-  if (granted == 0) {
-    return;
-  }
   delegated_->allocationChanged(granted);
 }
 

@@ -16,7 +16,8 @@
 #pragma once
 
 #include <map>
-#include "ResourceMap.h"
+
+#include "velox4j/lifecycle/ResourceMap.h"
 
 namespace facebook::velox4j {
 
@@ -43,14 +44,7 @@ class ObjectStore {
 
   static std::unique_ptr<ObjectStore> create();
 
-  static void release(ObjectHandle handle) {
-    const ResourceHandle storeId =
-        safeCast<ResourceHandle>(handle >> (sizeof(ResourceHandle) * 8));
-    const ResourceHandle resourceId = safeCast<ResourceHandle>(
-        handle & std::numeric_limits<ResourceHandle>::max());
-    auto store = stores().lookup(storeId);
-    store->releaseInternal(resourceId);
-  }
+  static void release(ObjectHandle handle);
 
   template <typename T>
   static std::shared_ptr<T> retrieve(ObjectHandle handle) {
@@ -80,19 +74,14 @@ class ObjectStore {
  private:
   static ResourceMap<ObjectStore*>& stores();
 
-  ObjectHandle toObjHandle(ResourceHandle rh) const {
-    const ObjectHandle prefix = static_cast<ObjectHandle>(storeId_)
-        << (sizeof(ResourceHandle) * 8);
-    const ObjectHandle objHandle = prefix + rh;
-    return objHandle;
-  }
+  ObjectHandle toObjHandle(ResourceHandle rh) const;
 
   template <typename T>
   std::shared_ptr<T> retrieveInternal(ResourceHandle handle) const {
     const std::lock_guard<std::mutex> lock(mtx_);
     std::shared_ptr<void> object = store_.lookup(handle);
-    // Programming carefully. This will lead to ub if wrong typename T was
-    // passed in.
+    // Programming carefully. This will lead to undefined behavior if wrong
+    // typename T was passed in.
     auto casted = std::static_pointer_cast<T>(object);
     return casted;
   }
@@ -100,6 +89,7 @@ class ObjectStore {
   void releaseInternal(ResourceHandle handle);
 
   explicit ObjectStore(StoreHandle storeId) : storeId_(storeId){};
+
   StoreHandle storeId_;
   ResourceMap<std::shared_ptr<void>> store_;
   // Preserves handles of objects in the store in order, with the text

@@ -23,9 +23,9 @@
 #include <memory>
 #include <vector>
 
-#include "Query.h"
 #include "velox4j/iterator/UpIterator.h"
 #include "velox4j/memory/MemoryManager.h"
+#include "velox4j/query/Query.h"
 
 namespace facebook::velox4j {
 
@@ -66,7 +66,7 @@ class SerialTask : public UpIterator {
   std::unique_ptr<SerialTaskStats> collectStats();
 
  private:
-  State advance0(bool wait);
+  State initializeInternal(bool wait);
 
   void saveDrivers();
 
