@@ -869,6 +869,8 @@ class Task : public std::enable_shared_from_this<Task> {
   // Invoked to initialize the memory pool for this task on creation.
   void initTaskPool();
 
+  void initDriverFactory();
+
   // Creates a scaled scan controller for a given table scan node.
   void addScaledScanControllerLocked(
       uint32_t splitGroupId,
@@ -976,7 +978,7 @@ class Task : public std::enable_shared_from_this<Task> {
   std::shared_ptr<TBridgeType> getJoinBridgeInternalLocked(
       uint32_t splitGroupId,
       const core::PlanNodeId& planNodeId,
-      MemberType SplitGroupState::*bridges_member);
+      MemberType SplitGroupState::* bridges_member);
 
   std::shared_ptr<JoinBridge> getCustomJoinBridgeInternal(
       uint32_t splitGroupId,

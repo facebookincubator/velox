@@ -1055,7 +1055,7 @@ DEBUG_ONLY_TEST_P(
 }
 
 DEBUG_ONLY_TEST_P(SharedArbitrationTestWithThreadingModes, runtimeStats) {
-  const uint64_t memoryCapacity = 128 * MB;
+  const uint64_t memoryCapacity = isSerialExecutionMode_ ? 148 * MB : 128 * MB;
   setupMemory(memoryCapacity);
   fuzzerOpts_.vectorSize = 1000;
   fuzzerOpts_.stringLength = 1024;
@@ -1124,7 +1124,12 @@ DEBUG_ONLY_TEST_P(SharedArbitrationTestWithThreadingModes, runtimeStats) {
     // - Values Operator's memory allocation triggers TableWrite's memory
     // reclaim, which triggers data flush.
     // - TableWrite Operator's close would trigger flush.
-    ASSERT_EQ(stats[1].runtimeStats["stripeSize"].count, 2);
+    // SerialExecutionMode allocates memory in task creation.
+    if (isSerialExecutionMode_) {
+      ASSERT_EQ(stats[1].runtimeStats["stripeSize"].count, 1);
+    } else {
+      ASSERT_EQ(stats[1].runtimeStats["stripeSize"].count, 2);
+    }
     // Values Operator won't be set stripeSize in its runtimeStats.
     ASSERT_EQ(stats[0].runtimeStats["stripeSize"].count, 0);
   }

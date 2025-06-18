@@ -187,8 +187,9 @@ bool CompileState::compile() {
     auto id = oper->operatorId();
     if (previousOperatorIsNotGpu and acceptsGpuInput(oper)) {
       auto planNode = getPlanNode(oper->planNodeId());
-      replaceOp.push_back(std::make_unique<CudfFromVelox>(
-          id, planNode->outputType(), ctx, planNode->id() + "-from-velox"));
+      replaceOp.push_back(
+          std::make_unique<CudfFromVelox>(
+              id, planNode->outputType(), ctx, planNode->id() + "-from-velox"));
       replaceOp.back()->initialize();
     }
 
@@ -244,8 +245,9 @@ bool CompileState::compile() {
       // If filter only, filter node only exists.
       // If project only, or filter and project, project node only exists.
       VELOX_CHECK(projectPlanNode != nullptr or filterPlanNode != nullptr);
-      replaceOp.push_back(std::make_unique<CudfFilterProject>(
-          id, ctx, info, idProjections, filterPlanNode, projectPlanNode));
+      replaceOp.push_back(
+          std::make_unique<CudfFilterProject>(
+              id, ctx, info, idProjections, filterPlanNode, projectPlanNode));
       replaceOp.back()->initialize();
     } else if (auto limitOp = dynamic_cast<exec::Limit*>(oper)) {
       auto planNode = std::dynamic_pointer_cast<const core::LimitNode>(
@@ -269,8 +271,9 @@ bool CompileState::compile() {
     if (producesGpuOutput(oper) and
         (nextOperatorIsNotGpu or isLastOperatorOfTask)) {
       auto planNode = getPlanNode(oper->planNodeId());
-      replaceOp.push_back(std::make_unique<CudfToVelox>(
-          id, planNode->outputType(), ctx, planNode->id() + "-to-velox"));
+      replaceOp.push_back(
+          std::make_unique<CudfToVelox>(
+              id, planNode->outputType(), ctx, planNode->id() + "-to-velox"));
       replaceOp.back()->initialize();
     }
 
@@ -365,6 +368,10 @@ bool cudfDebugEnabled() {
 
 bool cudfTableScanEnabled() {
   return CudfOptions::getInstance().cudfTableScan;
+}
+
+bool isCudfOperator(const exec::Operator* op) {
+  return isAnyOf<NvtxHelper>(op);
 }
 
 } // namespace facebook::velox::cudf_velox

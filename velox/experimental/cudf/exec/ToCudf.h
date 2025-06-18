@@ -101,4 +101,6 @@ bool cudfDebugEnabled();
  */
 bool cudfTableScanEnabled();
 
+/// Returns true if the operator is cudf operator.
+bool isCudfOperator(const exec::Operator* op);
 } // namespace facebook::velox::cudf_velox
