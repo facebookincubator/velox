@@ -22,7 +22,7 @@
 #include <memory>
 #include <string>
 
-#include "AllocationListener.h"
+#include "velox4j/memory/AllocationListener.h"
 
 namespace facebook::velox4j {
 
@@ -32,13 +32,22 @@ class MemoryAllocator {
  public:
   virtual ~MemoryAllocator() = default;
 
+  // Allocates a memory region of size bytes.
   virtual bool allocate(int64_t size, void** out) = 0;
+
+  /// Allocates a memory region of size bytes. The region should be
+  /// initialized with zeros.
   virtual bool allocateZeroFilled(int64_t nmemb, int64_t size, void** out) = 0;
+
+  // Allocates a memory region of size bytes with specific alignment.
   virtual bool
   allocateAligned(uint64_t alignment, int64_t size, void** out) = 0;
 
+  // Reallocates a memory region of size bytes.
   virtual bool
   reallocate(void* p, int64_t size, int64_t newSize, void** out) = 0;
+
+  // Reallocates a memory region of size bytes with specific alignment.
   virtual bool reallocateAligned(
       void* p,
       uint64_t alignment,
@@ -46,10 +55,13 @@ class MemoryAllocator {
       int64_t newSize,
       void** out) = 0;
 
+  // Free the memory region.
   virtual bool free(void* p, int64_t size) = 0;
 
-  virtual int64_t getBytes() const = 0;
+  // Returns the number of bytes this allocator currently uses.
+  virtual int64_t usedBytes() const = 0;
 
+  // Returns the number of bytes this allocator mostly used.
   virtual int64_t peakBytes() const = 0;
 };
 
@@ -62,7 +74,6 @@ class ListenableMemoryAllocator final : public MemoryAllocator {
       AllocationListener* listener)
       : delegated_(delegated), listener_(listener) {}
 
- public:
   bool allocate(int64_t size, void** out) override;
 
   bool allocateZeroFilled(int64_t nmemb, int64_t size, void** out) override;
@@ -80,12 +91,13 @@ class ListenableMemoryAllocator final : public MemoryAllocator {
 
   bool free(void* p, int64_t size) override;
 
-  int64_t getBytes() const override;
+  int64_t usedBytes() const override;
 
   int64_t peakBytes() const override;
 
  private:
   void updateUsage(int64_t size);
+
   MemoryAllocator* const delegated_;
   AllocationListener* const listener_;
   std::atomic_int64_t usedBytes_{0L};
@@ -112,7 +124,7 @@ class StdMemoryAllocator final : public MemoryAllocator {
 
   bool free(void* p, int64_t size) override;
 
-  int64_t getBytes() const override;
+  int64_t usedBytes() const override;
 
   int64_t peakBytes() const override;
 

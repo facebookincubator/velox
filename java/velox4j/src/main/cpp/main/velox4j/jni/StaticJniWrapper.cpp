@@ -55,7 +55,7 @@ using namespace facebook::velox;
 namespace {
 const char* kClassName = "com/facebook/velox4j/jni/StaticJniWrapper";
 
-void initialize0(JNIEnv* env, jobject javaThis, jstring globalConfJson) {
+void initializeInternal(JNIEnv* env, jobject javaThis, jstring globalConfJson) {
   JNI_METHOD_START
   spotify::jni::JavaString jGlobalConfJson{env, globalConfJson};
   auto dynamic = folly::parseJson(jGlobalConfJson.get());
@@ -104,11 +104,11 @@ void blockingQueuePut(
     JNIEnv* env,
     jobject javaThis,
     jlong queueId,
-    jlong rvId) {
+    jlong rowVectorId) {
   JNI_METHOD_START
   auto queue = ObjectStore::retrieve<BlockingQueue>(queueId);
-  auto rv = ObjectStore::retrieve<RowVector>(rvId);
-  queue->put(rv);
+  auto rowVector = ObjectStore::retrieve<RowVector>(rowVectorId);
+  queue->put(rowVector);
   JNI_METHOD_END()
 }
 
@@ -122,12 +122,12 @@ void blockingQueueNoMoreInput(JNIEnv* env, jobject javaThis, jlong queueId) {
 void serialTaskAddSplit(
     JNIEnv* env,
     jobject javaThis,
-    jlong stId,
+    jlong serialTaskId,
     jstring planNodeId,
     jint groupId,
     jstring connectorSplitJson) {
   JNI_METHOD_START
-  auto serialTask = ObjectStore::retrieve<SerialTask>(stId);
+  auto serialTask = ObjectStore::retrieve<SerialTask>(serialTaskId);
   spotify::jni::JavaString jPlanNodeId{env, planNodeId};
   spotify::jni::JavaString jConnectorSplitJson{env, connectorSplitJson};
   auto jConnectorSplitDynamic = folly::parseJson(jConnectorSplitJson.get());
@@ -141,18 +141,19 @@ void serialTaskAddSplit(
 void serialTaskNoMoreSplits(
     JNIEnv* env,
     jobject javaThis,
-    jlong stId,
+    jlong serialTaskId,
     jstring planNodeId) {
   JNI_METHOD_START
-  auto serialTask = ObjectStore::retrieve<SerialTask>(stId);
+  auto serialTask = ObjectStore::retrieve<SerialTask>(serialTaskId);
   spotify::jni::JavaString jPlanNodeId{env, planNodeId};
   serialTask->noMoreSplits(jPlanNodeId.get());
   JNI_METHOD_END()
 }
 
-jstring serialTaskCollectStats(JNIEnv* env, jobject javaThis, jlong stId) {
+jstring
+serialTaskCollectStats(JNIEnv* env, jobject javaThis, jlong serialTaskId) {
   JNI_METHOD_START
-  auto serialTask = ObjectStore::retrieve<SerialTask>(stId);
+  auto serialTask = ObjectStore::retrieve<SerialTask>(serialTaskId);
   const auto stats = serialTask->collectStats();
   const auto statsDynamic = stats->toJson();
   const auto statsJson = folly::toPrettyJson(statsDynamic);
@@ -175,11 +176,11 @@ jstring variantInferType(JNIEnv* env, jobject javaThis, jstring json) {
 void baseVectorToArrow(
     JNIEnv* env,
     jobject javaThis,
-    jlong vid,
+    jlong vectorId,
     jlong cSchema,
     jlong cArray) {
   JNI_METHOD_START
-  auto vector = ObjectStore::retrieve<BaseVector>(vid);
+  auto vector = ObjectStore::retrieve<BaseVector>(vectorId);
   fromBaseVectorToArrow(
       vector,
       reinterpret_cast<struct ArrowSchema*>(cSchema),
@@ -187,13 +188,14 @@ void baseVectorToArrow(
   JNI_METHOD_END()
 }
 
-jstring baseVectorSerialize(JNIEnv* env, jobject javaThis, jlongArray vids) {
+jstring
+baseVectorSerialize(JNIEnv* env, jobject javaThis, jlongArray vectorIds) {
   JNI_METHOD_START
   std::ostringstream out;
-  auto safeArray = getLongArrayElementsSafe(env, vids);
+  auto safeArray = getLongArrayElementsSafe(env, vectorIds);
   for (int i = 0; i < safeArray.length(); ++i) {
-    const jlong& vid = safeArray.elems()[i];
-    auto vector = ObjectStore::retrieve<BaseVector>(vid);
+    const jlong& vectorId = safeArray.elems()[i];
+    auto vector = ObjectStore::retrieve<BaseVector>(vectorId);
     saveVector(*vector, out);
   }
   auto serializedData = out.str();
@@ -203,25 +205,25 @@ jstring baseVectorSerialize(JNIEnv* env, jobject javaThis, jlongArray vids) {
   JNI_METHOD_END(nullptr)
 }
 
-jstring baseVectorGetType(JNIEnv* env, jobject javaThis, jlong vid) {
+jstring baseVectorGetType(JNIEnv* env, jobject javaThis, jlong vectorId) {
   JNI_METHOD_START
-  auto vector = ObjectStore::retrieve<BaseVector>(vid);
+  auto vector = ObjectStore::retrieve<BaseVector>(vectorId);
   auto serializedDynamic = vector->type()->serialize();
   auto serializeJson = folly::toPrettyJson(serializedDynamic);
   return env->NewStringUTF(serializeJson.data());
   JNI_METHOD_END(nullptr)
 }
 
-jint baseVectorGetSize(JNIEnv* env, jobject javaThis, jlong vid) {
+jint baseVectorGetSize(JNIEnv* env, jobject javaThis, jlong vectorId) {
   JNI_METHOD_START
-  auto vector = ObjectStore::retrieve<BaseVector>(vid);
+  auto vector = ObjectStore::retrieve<BaseVector>(vectorId);
   return static_cast<jint>(vector->size());
   JNI_METHOD_END(-1)
 }
 
-jstring baseVectorGetEncoding(JNIEnv* env, jobject javaThis, jlong vid) {
+jstring baseVectorGetEncoding(JNIEnv* env, jobject javaThis, jlong vectorId) {
   JNI_METHOD_START
-  auto vector = ObjectStore::retrieve<BaseVector>(vid);
+  auto vector = ObjectStore::retrieve<BaseVector>(vectorId);
   auto name = VectorEncoding::mapSimpleToName(vector->encoding());
   return env->NewStringUTF(name.data());
   JNI_METHOD_END(nullptr)
@@ -230,19 +232,22 @@ jstring baseVectorGetEncoding(JNIEnv* env, jobject javaThis, jlong vid) {
 void baseVectorAppend(
     JNIEnv* env,
     jobject javaThis,
-    jlong vid,
-    jlong toAppendVid) {
+    jlong vectorId,
+    jlong toAppendVectorId) {
   JNI_METHOD_START
-  auto vector = ObjectStore::retrieve<BaseVector>(vid);
-  auto toAppend = ObjectStore::retrieve<BaseVector>(toAppendVid);
+  auto vector = ObjectStore::retrieve<BaseVector>(vectorId);
+  auto toAppend = ObjectStore::retrieve<BaseVector>(toAppendVectorId);
   vector->append(toAppend.get());
   JNI_METHOD_END()
 }
 
-jboolean
-selectivityVectorIsValid(JNIEnv* env, jobject javaThis, jlong svId, jint idx) {
+jboolean selectivityVectorIsValid(
+    JNIEnv* env,
+    jobject javaThis,
+    jlong selectivityVectorId,
+    jint idx) {
   JNI_METHOD_START
-  auto vector = ObjectStore::retrieve<SelectivityVector>(svId);
+  auto vector = ObjectStore::retrieve<SelectivityVector>(selectivityVectorId);
   auto valid = vector->isValid(static_cast<vector_size_t>(idx));
   return static_cast<jboolean>(valid);
   JNI_METHOD_END(false)
@@ -261,18 +266,6 @@ jstring variantAsJava(JNIEnv* env, jobject javaThis, jlong id) {
   JNI_METHOD_START
   auto v = ObjectStore::retrieve<variant>(id);
   auto serializedDynamic = v->serialize();
-  auto serializeJson = folly::toPrettyJson(serializedDynamic);
-  return env->NewStringUTF(serializeJson.data());
-  JNI_METHOD_END(nullptr)
-}
-
-jstring
-deserializeAndSerializeVariant(JNIEnv* env, jobject javaThis, jstring json) {
-  JNI_METHOD_START
-  spotify::jni::JavaString jJson{env, json};
-  auto dynamic = folly::parseJson(jJson.get());
-  auto deserialized = variant::create(dynamic);
-  auto serializedDynamic = deserialized.serialize();
   auto serializeJson = folly::toPrettyJson(serializedDynamic);
   return env->NewStringUTF(serializeJson.data());
   JNI_METHOD_END(nullptr)
@@ -297,7 +290,7 @@ void StaticJniWrapper::initialize(JNIEnv* env) {
   JavaClass::setClass(env);
 
   addNativeMethod(
-      "initialize", (void*)initialize0, kTypeVoid, kTypeString, nullptr);
+      "initialize", (void*)initializeInternal, kTypeVoid, kTypeString, nullptr);
   addNativeMethod(
       "createMemoryManager",
       (void*)createMemoryManager,
@@ -424,5 +417,7 @@ void StaticJniWrapper::initialize(JNIEnv* env) {
   registerNativeMethods(env);
 }
 
-void StaticJniWrapper::mapFields() {}
+void StaticJniWrapper::mapFields() {
+  // No fields to map.
+}
 } // namespace facebook::velox4j

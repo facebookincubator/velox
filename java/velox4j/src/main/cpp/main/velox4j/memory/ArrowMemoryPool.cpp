@@ -29,6 +29,7 @@ namespace {
 } // namespace
 
 bool ListenableMemoryAllocator::allocate(int64_t size, void** out) {
+  VELOX_CHECK_GE(size, 0, "size is less than 0");
   updateUsage(size);
   bool succeed = delegated_->allocate(size, out);
   if (!succeed) {
@@ -41,6 +42,8 @@ bool ListenableMemoryAllocator::allocateZeroFilled(
     int64_t nmemb,
     int64_t size,
     void** out) {
+  VELOX_CHECK_GE(nmemb, 0, "nmemb is less than 0");
+  VELOX_CHECK_GE(size, 0, "size is less than 0");
   updateUsage(size * nmemb);
   bool succeed = delegated_->allocateZeroFilled(nmemb, size, out);
   if (!succeed) {
@@ -53,6 +56,7 @@ bool ListenableMemoryAllocator::allocateAligned(
     uint64_t alignment,
     int64_t size,
     void** out) {
+  VELOX_CHECK_GE(size, 0, "size is less than 0");
   updateUsage(size);
   bool succeed = delegated_->allocateAligned(alignment, size, out);
   if (!succeed) {
@@ -66,6 +70,8 @@ bool ListenableMemoryAllocator::reallocate(
     int64_t size,
     int64_t newSize,
     void** out) {
+  VELOX_CHECK_GE(size, 0, "size is less than 0");
+  VELOX_CHECK_GE(newSize, 0, "new size is less than 0");
   int64_t diff = newSize - size;
   if (diff >= 0) {
     updateUsage(diff);
@@ -74,13 +80,12 @@ bool ListenableMemoryAllocator::reallocate(
       updateUsage(-diff);
     }
     return succeed;
-  } else {
-    bool succeed = delegated_->reallocate(p, size, newSize, out);
-    if (succeed) {
-      updateUsage(diff);
-    }
-    return succeed;
   }
+  bool succeed = delegated_->reallocate(p, size, newSize, out);
+  if (succeed) {
+    updateUsage(diff);
+  }
+  return succeed;
 }
 
 bool ListenableMemoryAllocator::reallocateAligned(
@@ -89,6 +94,9 @@ bool ListenableMemoryAllocator::reallocateAligned(
     int64_t size,
     int64_t newSize,
     void** out) {
+  VELOX_CHECK_NOT_NULL(p, "reallocate with nullptr");
+  VELOX_CHECK_GE(size, 0, "size is less than 0");
+  VELOX_CHECK_GE(newSize, 0, "new size is less than 0");
   int64_t diff = newSize - size;
   if (diff >= 0) {
     updateUsage(diff);
@@ -109,6 +117,8 @@ bool ListenableMemoryAllocator::reallocateAligned(
 }
 
 bool ListenableMemoryAllocator::free(void* p, int64_t size) {
+  VELOX_CHECK_NOT_NULL(p, "free with nullptr");
+  VELOX_CHECK_GE(size, 0, "size is less than 0");
   bool succeed = delegated_->free(p, size);
   if (succeed) {
     updateUsage(-size);
@@ -116,7 +126,7 @@ bool ListenableMemoryAllocator::free(void* p, int64_t size) {
   return succeed;
 }
 
-int64_t ListenableMemoryAllocator::getBytes() const {
+int64_t ListenableMemoryAllocator::usedBytes() const {
   return usedBytes_;
 }
 
@@ -140,7 +150,7 @@ void ListenableMemoryAllocator::updateUsage(int64_t size) {
 }
 
 bool StdMemoryAllocator::allocate(int64_t size, void** out) {
-  VELOX_CHECK(size >= 0, "size is less than 0");
+  VELOX_CHECK_GE(size, 0, "size is less than 0");
   *out = std::malloc(size);
   if (*out == nullptr) {
     return false;
@@ -153,8 +163,8 @@ bool StdMemoryAllocator::allocateZeroFilled(
     int64_t nmemb,
     int64_t size,
     void** out) {
-  VELOX_CHECK(nmemb >= 0, "nmemb is less than 0");
-  VELOX_CHECK(size >= 0, "size is less than 0");
+  VELOX_CHECK_GE(nmemb, 0, "nmemb is less than 0");
+  VELOX_CHECK_GE(size, 0, "size is less than 0");
   *out = std::calloc(nmemb, size);
   if (*out == nullptr) {
     return false;
@@ -167,7 +177,7 @@ bool StdMemoryAllocator::allocateAligned(
     uint64_t alignment,
     int64_t size,
     void** out) {
-  VELOX_CHECK(size >= 0, "size is less than 0");
+  VELOX_CHECK_GE(size, 0, "size is less than 0");
   *out = aligned_alloc(alignment, size);
   if (*out == nullptr) {
     return false;
@@ -181,6 +191,8 @@ bool StdMemoryAllocator::reallocate(
     int64_t size,
     int64_t newSize,
     void** out) {
+  VELOX_CHECK_GE(size, 0, "size is less than 0");
+  VELOX_CHECK_GE(newSize, 0, "size is less than 0");
   *out = std::realloc(p, newSize);
   if (*out == nullptr) {
     return false;
@@ -195,7 +207,9 @@ bool StdMemoryAllocator::reallocateAligned(
     int64_t size,
     int64_t newSize,
     void** out) {
-  VELOX_CHECK(p != nullptr, "reallocate with nullptr");
+  VELOX_CHECK_NOT_NULL(p, "reallocate with nullptr");
+  VELOX_CHECK_GE(size, 0, "size is less than 0");
+  VELOX_CHECK_GE(newSize, 0, "new size is less than 0");
   if (newSize <= 0) {
     return false;
   }
@@ -206,25 +220,26 @@ bool StdMemoryAllocator::reallocateAligned(
       return reallocate(p, size, aligned, out);
     }
   }
-  void* reallocatedP = std::aligned_alloc(alignment, newSize);
-  if (reallocatedP == nullptr) {
+  void* reallocatedPtr = std::aligned_alloc(alignment, newSize);
+  if (reallocatedPtr == nullptr) {
     return false;
   }
-  memcpy(reallocatedP, p, std::min(size, newSize));
+  memcpy(reallocatedPtr, p, std::min(size, newSize));
   std::free(p);
-  *out = reallocatedP;
+  *out = reallocatedPtr;
   bytes_ += (newSize - size);
   return true;
 }
 
 bool StdMemoryAllocator::free(void* p, int64_t size) {
-  VELOX_CHECK(p != nullptr, "free with nullptr");
+  VELOX_CHECK_NOT_NULL(p, "free with nullptr");
+  VELOX_CHECK_GE(size, 0, "size is less than 0");
   std::free(p);
   bytes_ -= size;
   return true;
 }
 
-int64_t StdMemoryAllocator::getBytes() const {
+int64_t StdMemoryAllocator::usedBytes() const {
   return bytes_;
 }
 
@@ -262,8 +277,8 @@ void ArrowMemoryPool::Free(uint8_t* buffer, int64_t size, int64_t alignment) {
 }
 
 int64_t ArrowMemoryPool::bytes_allocated() const {
-  // fixme use self accountant
-  return allocator_->getBytes();
+  // FIXME: Use self accountant to avoid wrong calculation from allocator.
+  return allocator_->usedBytes();
 }
 
 int64_t ArrowMemoryPool::total_bytes_allocated() const {
