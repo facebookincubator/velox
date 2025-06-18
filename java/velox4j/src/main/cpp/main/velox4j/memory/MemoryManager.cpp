@@ -34,8 +34,8 @@
 #include <string_view>
 #include <utility>
 
-#include "ArrowMemoryPool.h"
 #include "velox4j/memory/AllocationListener.h"
+#include "velox4j/memory/ArrowMemoryPool.h"
 
 namespace facebook::velox4j {
 using namespace facebook;
@@ -92,6 +92,7 @@ class ListenableArbitrator : public velox::memory::MemoryArbitrator {
                     kMemoryReclaimMaxWaitMs,
                     std::string(kDefaultMemoryReclaimMaxWaitMs))))
                 .count()) {}
+
   std::string kind() const override {
     return kind_;
   }
@@ -214,7 +215,8 @@ class ListenableArbitrator : public velox::memory::MemoryArbitrator {
     return freeBytes;
   }
 
-  const uint64_t memoryPoolInitialCapacity_; // FIXME: Unused.
+  // TODO: This variable is Unused.
+  const uint64_t memoryPoolInitialCapacity_;
   const uint64_t memoryPoolTransferCapacity_;
   const uint64_t memoryReclaimMaxWaitMs_;
   AllocationListener* listener_{nullptr};
@@ -227,6 +229,8 @@ class ListenableArbitrator : public velox::memory::MemoryArbitrator {
       candidates_;
 };
 
+/// A helper class to allow the memory manager find the listenable
+/// arbitrator to be assigned to the Velox memory manager.
 class ArbitratorFactoryRegister {
  public:
   explicit ArbitratorFactoryRegister(AllocationListener* listener)
@@ -260,14 +264,14 @@ MemoryManager::MemoryManager(std::unique_ptr<AllocationListener> listener)
   arrowAllocator_ = std::make_unique<ListenableMemoryAllocator>(
       defaultMemoryAllocator().get(), listener_.get());
   std::unordered_map<std::string, std::string> extraArbitratorConfigs;
-  ArbitratorFactoryRegister afr(listener_.get());
+  ArbitratorFactoryRegister arbitratorFactoryRegister(listener_.get());
   velox::memory::MemoryManagerOptions mmOptions{
       .alignment = velox::memory::MemoryAllocator::kMaxAlignment,
       .trackDefaultUsage = true, // memory usage tracking
       .checkUsageLeak = true, // leak check
       .coreOnAllocationFailureEnabled = false,
       .allocatorCapacity = velox::memory::kMaxMemory,
-      .arbitratorKind = afr.getKind(),
+      .arbitratorKind = arbitratorFactoryRegister.getKind(),
       .extraArbitratorConfigs = extraArbitratorConfigs};
   veloxMemoryManager_ =
       std::make_unique<velox::memory::MemoryManager>(mmOptions);
@@ -278,7 +282,10 @@ MemoryManager::MemoryManager(std::unique_ptr<AllocationListener> listener)
 }
 
 namespace {
-void logErrorOnLeak(const velox::memory::MemoryPool* pool, bool& leakFound) {
+
+void detectAndLogMemoryLeak(
+    const velox::memory::MemoryPool* pool,
+    bool& leakFound) {
   if (pool->usedBytes() != 0) {
     LOG(ERROR)
         << "[Velox4J MemoryManager DTOR] "
@@ -288,7 +295,8 @@ void logErrorOnLeak(const velox::memory::MemoryPool* pool, bool& leakFound) {
     leakFound = true;
   }
 }
-void logErrorOnLeak(const arrow::MemoryPool* pool, bool& leakFound) {
+
+void detectAndLogMemoryLeak(const arrow::MemoryPool* pool, bool& leakFound) {
   if (pool->bytes_allocated() != 0) {
     LOG(ERROR)
         << "[Velox4J MemoryManager DTOR] "
@@ -298,6 +306,7 @@ void logErrorOnLeak(const arrow::MemoryPool* pool, bool& leakFound) {
     leakFound = true;
   }
 }
+
 } // namespace
 
 bool MemoryManager::tryDestruct() {
@@ -306,9 +315,9 @@ bool MemoryManager::tryDestruct() {
   for (const auto& pair : veloxPoolRefs_) {
     const auto& veloxPool = pair.second;
     VELOX_CHECK_NOT_NULL(veloxPool);
-    logErrorOnLeak(veloxPool.get(), leakFound);
+    detectAndLogMemoryLeak(veloxPool.get(), leakFound);
   }
-  logErrorOnLeak(veloxRootPool_.get(), leakFound);
+  detectAndLogMemoryLeak(veloxRootPool_.get(), leakFound);
   veloxPoolRefs_.clear();
   veloxRootPool_.reset();
 
@@ -359,7 +368,7 @@ bool MemoryManager::tryDestruct() {
   for (const auto& pair : arrowPoolRefs_) {
     const auto& arrowPool = pair.second;
     VELOX_CHECK_NOT_NULL(arrowPool);
-    logErrorOnLeak(arrowPool.get(), leakFound);
+    detectAndLogMemoryLeak(arrowPool.get(), leakFound);
   }
   arrowPoolRefs_.clear();
   return !leakFound;
@@ -409,7 +418,7 @@ velox::memory::MemoryPool* MemoryManager::getVeloxPool(
       VELOX_FAIL("Unexpected memory pool kind");
     }
   }
-  VELOX_FAIL("Unreachable code");
+  VELOX_UNREACHABLE();
 }
 
 arrow::MemoryPool* MemoryManager::getArrowPool(const std::string& name) {

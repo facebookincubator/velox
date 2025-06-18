@@ -22,8 +22,11 @@
 namespace facebook::velox4j {
 
 namespace {
+
 const char* kClassName = "com/facebook/velox4j/memory/AllocationListener";
-}
+
+} // namespace
+
 const char* JavaAllocationListenerJniWrapper::getCanonicalName() const {
   return kClassName;
 }
@@ -36,7 +39,9 @@ void JavaAllocationListenerJniWrapper::initialize(JNIEnv* env) {
   registerNativeMethods(env);
 }
 
-void JavaAllocationListenerJniWrapper::mapFields() {}
+void JavaAllocationListenerJniWrapper::mapFields() {
+  // No fields to map.
+}
 
 JavaAllocationListener::JavaAllocationListener(JNIEnv* env, jobject ref) {
   ref_ = env->NewGlobalRef(ref);

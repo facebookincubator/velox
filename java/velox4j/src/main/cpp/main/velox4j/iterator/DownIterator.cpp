@@ -40,7 +40,9 @@ namespace {
 const char* kClassName = "com/facebook/velox4j/iterator/DownIterator";
 } // namespace
 
-void DownIteratorJniWrapper::mapFields() {}
+void DownIteratorJniWrapper::mapFields() {
+  // No fields to map.
+}
 
 const char* DownIteratorJniWrapper::getCanonicalName() const {
   return kClassName;
