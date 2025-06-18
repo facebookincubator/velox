@@ -1344,6 +1344,30 @@ TEST_F(ParquetTableScanTest, shortAndLongDecimalReadWithLargerPrecision) {
   assertEqualVectors(expectedDecimalVectors->childAt(1), rows->childAt(1));
 }
 
+TEST_F(ParquetTableScanTest, duplicateFieldProject) {
+  auto vectors = {makeRowVector(
+      {"id", "name"},
+      {
+          makeFlatVector<int32_t>({1, 2}),
+          makeFlatVector<std::string>({"Alice", "John"}),
+      })};
+
+  auto file = TempFilePath::create();
+  WriterOptions options;
+  writeToParquetFile(file->getPath(), vectors, options);
+  createDuckDbTable(vectors);
+
+  auto plan = PlanBuilder()
+                  .tableScan(ROW({"id", "name"}, {INTEGER(), VARCHAR()}))
+                  .filter("name is not null and name = 'John'")
+                  .project({"id AS t0", "id AS t1"})
+                  .planNode();
+
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .split(makeSplit(file->getPath()))
+      .assertResults("SELECT id, id FROM tmp where name = 'John'");
+}
+
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);
   folly::Init init{&argc, &argv, false};
