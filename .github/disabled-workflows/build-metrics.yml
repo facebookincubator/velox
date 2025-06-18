@@ -44,7 +44,7 @@ jobs:
       matrix:
         runner: [linux-amd64-cpu8]
         type: [debug, release]
-        link-type: ["shared", "static"]
+        link-type: [shared, static]
     defaults:
       run:
         shell: bash
