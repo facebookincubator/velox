@@ -242,7 +242,14 @@ If true, throws exception when duplicate keys are found. This configuration is n
 <td><p>Specifies the max number of input batches to prefetch to do index lookup ahead. If it is zero,
 then process one input batch at a time.</p></td>
 </tr>
-<tr class="row-even"><td><p>unnest_split_output_batch</p></td>
+<tr class="row-even"><td><p>index_lookup_join_split_output</p></td>
+<td><p>bool</p></td>
+<td><p>true</p></td>
+<td><p>If this is true, then the index join operator might split output for each input batch based
+on the output batch size control. Otherwise, it tries to produce a single output for each input
+batch.</p></td>
+</tr>
+<tr class="row-odd"><td><p>unnest_split_output_batch</p></td>
 <td><p>bool</p></td>
 <td><p>true</p></td>
 <td><p>If this is true, then the unnest operator might split output for each input batch based on the
@@ -598,6 +605,13 @@ value is 3, meaning we only support up to 8-way spill partitioning.ing.</p></td>
 <td><p>In streaming aggregation, wait until we have enough number of output rows
 to produce a batch of size specified by this. If set to 0, then
 Operator::outputBatchRows will be used as the min output batch rows.</p></td>
+</tr>
+<tr class="row-odd"><td><p>streaming_aggregation_try_split_output_at_input_boundary</p></td>
+<td><p>bool</p></td>
+<td><p>false</p></td>
+<td><p>If true, the streaming aggregation accumulates at least two batch inputs and
+produce all the groups created from the previous input batch except the last
+group.</p></td>
 </tr>
 </tbody>
 </table>
