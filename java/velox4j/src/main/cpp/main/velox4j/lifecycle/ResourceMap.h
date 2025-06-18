@@ -26,21 +26,20 @@ namespace facebook::velox4j {
 using ResourceHandle = uint32_t;
 static_assert(std::numeric_limits<ResourceHandle>::min() == 0);
 
+/// Safely casts a value from type F to type T with bounds checking.
+/// E.g., from uint64_t to uint32_t. If the number to cast doesn't fit
+/// into uint32_t, an error will be thrown.
 template <typename T, typename F>
-T safeCast(F f) {
-  VELOX_CHECK(sizeof(T) <= sizeof(F), "Vain safe casting");
+T safeCast(F from) {
   F min = 0;
   F max = static_cast<F>(std::numeric_limits<T>::max());
-  VELOX_CHECK(f >= min, "Safe casting a negative number");
-  VELOX_CHECK(f <= max, "Number overflow");
-  return static_cast<T>(f);
+  VELOX_CHECK_GE(from, min, "Safe casting a negative number");
+  VELOX_CHECK_LE(from, max, "Number overflow");
+  return static_cast<T>(from);
 }
 
-/**
- * A utility class that map resource handle to its shared pointers.
- * Not thread-safe.
- * @tparam TResource class of the object to hold.
- */
+/// A utility class that maps resource objects to their shared pointers.
+/// @tparam TResource class of the object to hold.
 template <typename TResource>
 class ResourceMap {
  public:
@@ -55,8 +54,9 @@ class ResourceMap {
 
   void erase(ResourceHandle moduleId) {
     const std::lock_guard<std::mutex> lock(mtx_);
-    VELOX_CHECK(
-        map_.erase(moduleId) == 1,
+    VELOX_CHECK_EQ(
+        map_.erase(moduleId),
+        1,
         "ResourceHandle not found in resource map when trying to erase: " +
             std::to_string(moduleId));
   }
@@ -64,8 +64,9 @@ class ResourceMap {
   TResource lookup(ResourceHandle moduleId) const {
     const std::lock_guard<std::mutex> lock(mtx_);
     auto it = map_.find(moduleId);
-    VELOX_CHECK(
-        it != map_.end(),
+    VELOX_CHECK_NE(
+        it,
+        map_.end(),
         "ResourceHandle not found in resource map when trying to lookup: " +
             std::to_string(moduleId));
     return it->second;

@@ -58,9 +58,9 @@ SerialTask::SerialTask(
     MemoryManager* memoryManager,
     std::shared_ptr<const Query> query)
     : memoryManager_(memoryManager), query_(std::move(query)) {
-  static std::atomic<uint32_t> executionId{
+  static std::atomic<uint32_t> nextExecutionId{
       0}; // Velox query ID, same with taskId.
-  const uint32_t eid = executionId++;
+  const uint32_t executionId = nextExecutionId++;
   core::PlanFragment planFragment{
       query_->plan(), core::ExecutionStrategy::kUngrouped, 1, {}};
   std::shared_ptr<core::QueryCtx> queryCtx = core::QueryCtx::create(
@@ -70,14 +70,17 @@ SerialTask::SerialTask(
       cache::AsyncDataCache::getInstance(),
       memoryManager_
           ->getVeloxPool(
-              fmt::format("Query Memory Pool - EID {}", std::to_string(eid)),
+              fmt::format(
+                  "Query Memory Pool - Execution ID {}",
+                  std::to_string(executionId)),
               memory::MemoryPool::Kind::kAggregate)
           ->shared_from_this(),
       nullptr,
-      fmt::format("Query Context - EID {}", std::to_string(eid)));
+      fmt::format(
+          "Query Context - Execution ID {}", std::to_string(executionId)));
 
   auto task = exec::Task::create(
-      fmt::format("Task - EID {}", std::to_string(eid)),
+      fmt::format("Task - Execution ID {}", std::to_string(executionId)),
       std::move(planFragment),
       0,
       std::move(queryCtx),
@@ -85,15 +88,14 @@ SerialTask::SerialTask(
 
   task_ = task;
 
-  if (!task_->supportSerialExecutionMode()) {
-    VELOX_FAIL(
-        "Task doesn't support single threaded execution: " + task->toString());
-  }
+  VELOX_CHECK(
+      task_->supportSerialExecutionMode(),
+      "Task doesn't support single threaded execution: " + task->toString());
 }
 
 SerialTask::~SerialTask() {
   if (task_ != nullptr && task_->isRunning()) {
-    // FIXME: Calling .wait() may take no effect in single thread execution
+    // TODO: Calling .wait() may take no effect in single thread execution
     //  mode.
     task_->requestCancel().wait();
   }
@@ -105,13 +107,13 @@ UpIterator::State SerialTask::advance() {
     return pendingState_;
   }
   VELOX_CHECK_NULL(pending_);
-  return advance0(false);
+  return initializeInternal(false);
 }
 
 void SerialTask::wait() {
   VELOX_CHECK(!hasPendingState_);
   VELOX_CHECK_NULL(pending_);
-  pendingState_ = advance0(true);
+  pendingState_ = initializeInternal(true);
   hasPendingState_ = true;
 }
 
@@ -143,7 +145,7 @@ std::unique_ptr<SerialTaskStats> SerialTask::collectStats() {
   return std::make_unique<SerialTaskStats>(stats);
 }
 
-UpIterator::State SerialTask::advance0(bool wait) {
+UpIterator::State SerialTask::initializeInternal(bool wait) {
   while (true) {
     auto future = ContinueFuture::makeEmpty();
     auto out = task_->next(&future);

@@ -35,9 +35,25 @@ std::unique_ptr<ObjectStore> ObjectStore::create() {
   return store;
 }
 
+void ObjectStore::release(ObjectHandle handle) {
+  const ResourceHandle storeId =
+      safeCast<ResourceHandle>(handle >> (sizeof(ResourceHandle) * 8));
+  const ResourceHandle resourceId = safeCast<ResourceHandle>(
+      handle & std::numeric_limits<ResourceHandle>::max());
+  auto store = stores().lookup(storeId);
+  store->releaseInternal(resourceId);
+}
+
 ResourceMap<ObjectStore*>& ObjectStore::stores() {
   static ResourceMap<ObjectStore*> stores;
   return stores;
+}
+
+ObjectHandle ObjectStore::toObjHandle(ResourceHandle rh) const {
+  const ObjectHandle prefix = static_cast<ObjectHandle>(storeId_)
+      << (sizeof(ResourceHandle) * 8);
+  const ObjectHandle objHandle = prefix + rh;
+  return objHandle;
 }
 
 ObjectStore::~ObjectStore() {
