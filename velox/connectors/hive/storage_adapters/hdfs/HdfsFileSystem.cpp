@@ -91,7 +91,7 @@ std::string HdfsFileSystem::name() const {
 std::unique_ptr<ReadFile> HdfsFileSystem::openFileForRead(
     std::string_view path,
     const FileOptions& /*unused*/) {
-  // Only remove the schema for hdfs path.
+  // Only remove the scheme for hdfs path.
   if (path.find(kScheme) == 0) {
     path.remove_prefix(kScheme.length());
     if (auto index = path.find('/')) {
@@ -156,7 +156,7 @@ void HdfsFileSystem::remove(std::string_view path) {
 }
 
 std::vector<std::string> HdfsFileSystem::list(std::string_view path) {
-  // Only remove the schema for hdfs path.
+  // Only remove the scheme for hdfs path.
   if (path.find(kScheme) == 0) {
     path.remove_prefix(kScheme.length());
     if (auto index = path.find('/')) {
