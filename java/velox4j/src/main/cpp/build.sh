@@ -30,10 +30,8 @@ cmake --build "$BUILD_DIR" --target velox4j -j "$NUM_THREADS"
 cmake --install "$BUILD_DIR" --component velox4j
 
 # Do a check to exclude the case that CMake installation incorrectly installed symbolic links.
-for file in "$INSTALL_DESTINATION"/*
-do
-  if [ -L "$file" ]
-  then
+for file in "$INSTALL_DESTINATION"/*; do
+  if [ -L "$file" ]; then
     echo "CMake installation just created a symbolic link $file in the installation directory, this is not expected, aborting..."
     exit 1
   fi
@@ -41,22 +39,19 @@ done
 
 # Force '$ORIGIN' runpaths for all so libraries to make the build portable.
 # 1. Remove any already set RUNPATH sections.
-for file in "$INSTALL_DESTINATION"/*
-do
+for file in "$INSTALL_DESTINATION"/*; do
   echo "Removing RUNPATH on file: $file ..."
   patchelf --remove-rpath "$file"
 done
 
 # 2. Add new RUNPATH sections with '$ORIGIN'.
-for file in "$INSTALL_DESTINATION"/*
-do
+for file in "$INSTALL_DESTINATION"/*; do
   echo "Adding RUNPATH on file: $file ..."
   patchelf --set-rpath '$ORIGIN' "$file"
 done
 
 # 3. Print new ELF headers.
-for file in "$INSTALL_DESTINATION"/*
-do
+for file in "$INSTALL_DESTINATION"/*; do
   echo "Checking ELF header on file: $file ..."
   readelf -d "$file"
 done
