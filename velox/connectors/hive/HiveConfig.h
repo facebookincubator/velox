@@ -187,6 +187,11 @@ class HiveConfig {
   static constexpr const char* kLocalDataPath = "hive_local_data_path";
   static constexpr const char* kLocalFileFormat = "hive_local_file_format";
 
+  static constexpr const char* kEnableRequestedTypeCheck =
+      "enable-requested-type-check";
+  static constexpr const char* kEnableRequestedTypeCheckSession =
+      "enable_requested_type_check";
+
   InsertExistingPartitionsBehavior insertExistingPartitionsBehavior(
       const config::ConfigBase* session) const;
 
@@ -257,6 +262,10 @@ class HiveConfig {
   /// Returns true if the stats based filter reorder for read is disabled.
   bool readStatsBasedFilterReorderDisabled(
       const config::ConfigBase* session) const;
+
+  /// Whether to enable requested type check in the ReaderBase::convertType.
+  /// Returns true by default.
+  bool isRequestedTypeCheckEnabled(const config::ConfigBase* session) const;
 
   /// Returns the file system path containing local data. If non-empty,
   /// initializes LocalHiveConnectorMetadata to provide metadata for the tables
