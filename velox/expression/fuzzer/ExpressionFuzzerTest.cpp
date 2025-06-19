@@ -136,6 +136,8 @@ int main(int argc, char** argv) {
       "st_asbinary",
       "st_boundary",
       "st_centroid",
+      "st_distance",
+      "st_geometrytype",
       "st_relate",
       "st_contains",
       "st_crosses",
@@ -152,6 +154,10 @@ int main(int argc, char** argv) {
       "st_point",
       "st_x",
       "st_y",
+      "st_xmin",
+      "st_ymin",
+      "st_xmax",
+      "st_ymax",
       "st_isvalid",
       "st_issimple",
       "geometry_invalid_reason",
@@ -264,6 +270,7 @@ int main(int argc, char** argv) {
         "inverse_gamma_cdf", // https://github.com/facebookincubator/velox/issues/12918
         "inverse_binomial_cdf", // https://github.com/facebookincubator/velox/issues/12981
         "inverse_poisson_cdf", // https://github.com/facebookincubator/velox/issues/12982
+        "inverse_f_cdf", // https://github.com/facebookincubator/velox/issues/13715
     });
 
     referenceQueryRunner = std::make_shared<PrestoQueryRunner>(
