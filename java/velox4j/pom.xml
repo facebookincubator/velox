@@ -40,6 +40,7 @@
     <guava.version>33.4.0-jre</guava.version>
     <commons-io.version>2.18.0</commons-io.version>
     <jackson.version>2.18.0</jackson.version>
+    <commons-compress.version>1.27.1</commons-compress.version>
   </properties>
 
   <dependencies>
@@ -119,6 +120,12 @@
       <groupId>junit</groupId>
       <artifactId>junit</artifactId>
       <version>${junit.version}</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.commons</groupId>
+      <artifactId>commons-compress</artifactId>
+      <version>${commons-compress.version}</version>
       <scope>test</scope>
     </dependency>
   </dependencies>
