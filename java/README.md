@@ -65,7 +65,7 @@ The minimum toolchain versions for building Velox4J:
 
 ```shell
 cd java/velox4j/
-mvn clean install -Dgpg.skip
+mvn clean install
 ```
 
 ## Get Started
