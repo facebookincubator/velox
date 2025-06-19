@@ -95,8 +95,8 @@ JSON Functions
 
     Converts a Json object (ROW, ARRAY or MAP) into a JSON string. ::
 
-        SELECT to_json(ROW({'c0', 'c1'}, 1, 'a')); -- {"c0":1,"c1":"a"}
-        SELECT to_json(ARRAY[1, 2, 3]); -- [1,2,3]
+        SELECT to_json(named_struct('c0', 1, 'c1', 'a')); -- {"c0":1,"c1":"a"}
+        SELECT to_json(ARRAY(1, 2, 3)); -- [1,2,3]
         SELECT to_json(MAP('x', 1, 'y', 2)); -- {"x":1,"y":2}
 
     The current implementation has following limitations.
