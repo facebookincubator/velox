@@ -2184,9 +2184,10 @@ Expected<std::shared_ptr<DateTimeFormatter>> buildTeradataDateTimeFormatter(
             if (threadSkipErrorDetails()) {
               return folly::makeUnexpected(Status::UserError());
             }
-            return folly::makeUnexpected(Status::UserError(
-                "Specifier {} is not supported or number of digits is not supported.",
-                *startTokenPtr));
+            return folly::makeUnexpected(
+                Status::UserError(
+                    "Specifier {} is not supported or number of digits is not supported.",
+                    *startTokenPtr));
           } else {
             builder.appendLiteral(startTokenPtr, 1);
           }

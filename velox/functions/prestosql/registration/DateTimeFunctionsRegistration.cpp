@@ -261,7 +261,7 @@ void registerSimpleFunctions(const std::string& prefix) {
   registerFunction<
       TeradataDateToCharFunction,
       Varchar,
-      TimestampWithTimezone ,
+      TimestampWithTimezone,
       Varchar>({prefix + "to_char"});
   registerFunction<
       ParseDateTimeFunction,

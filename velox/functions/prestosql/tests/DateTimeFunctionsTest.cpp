@@ -3886,9 +3886,8 @@ TEST_F(DateTimeFunctionsTest, formatDateTime) {
 
 TEST_F(DateTimeFunctionsTest, teradataDateToChar) {
   const auto toChar = [&](std::optional<Timestamp> timestamp,
-                                  std::optional<std::string> format) {
-    return evaluateOnce<std::string>(
-        "to_char(c0, c1)", timestamp, format);
+                          std::optional<std::string> format) {
+    return evaluateOnce<std::string>("to_char(c0, c1)", timestamp, format);
   };
 
   // Day of month test cases - 'dd'
@@ -3898,9 +3897,7 @@ TEST_F(DateTimeFunctionsTest, teradataDateToChar) {
   for (int i = 0; i < 24; i++) {
     std::string buildString = "2022-01-01 " + padNumber(i) + ":00:00";
     StringView date(buildString);
-    EXPECT_EQ(
-        padNumber((i + 11) % 12 + 1),
-        toChar(parseTimestamp(date), "hh"));
+    EXPECT_EQ(padNumber((i + 11) % 12 + 1), toChar(parseTimestamp(date), "hh"));
   }
 
   // Hour of day test cases - 'hh24'
@@ -3921,9 +3918,7 @@ TEST_F(DateTimeFunctionsTest, teradataDateToChar) {
   for (int i = 0; i < 12; i++) {
     auto month = i + 1;
     std::string date("2022-" + std::to_string(month) + "-01");
-    EXPECT_EQ(
-        padNumber(month),
-        toChar(parseTimestamp(StringView{date}), "mm"));
+    EXPECT_EQ(padNumber(month), toChar(parseTimestamp(StringView{date}), "mm"));
   }
 
   // Second of minute test cases - 's'
@@ -3938,15 +3933,19 @@ TEST_F(DateTimeFunctionsTest, teradataDateToChar) {
   EXPECT_EQ("2022", toChar(parseTimestamp("2022-06-20"), "yyyy"));
 
   // General test cases
-  EXPECT_EQ("2022-01-01", toChar(parseTimestamp("2022-01-01 00:00:00"), "yyyy-mm-dd"));
-  EXPECT_EQ("2022-01-01 00:00:00", toChar(parseTimestamp("2022-01-01 00:00:00"), "yyyy-mm-dd hh24:mi:ss"));
-  EXPECT_EQ("2022-01-01 12:00:00", toChar(parseTimestamp("2022-01-01 00:00:00"), "yyyy-mm-dd hh:mi:ss"));
+  EXPECT_EQ(
+      "2022-01-01",
+      toChar(parseTimestamp("2022-01-01 00:00:00"), "yyyy-mm-dd"));
+  EXPECT_EQ(
+      "2022-01-01 00:00:00",
+      toChar(parseTimestamp("2022-01-01 00:00:00"), "yyyy-mm-dd hh24:mi:ss"));
+  EXPECT_EQ(
+      "2022-01-01 12:00:00",
+      toChar(parseTimestamp("2022-01-01 00:00:00"), "yyyy-mm-dd hh:mi:ss"));
 
   // User format errors or unsupported errors.
-  EXPECT_THROW(
-      toChar(parseTimestamp("1970-01-01"), "q"), VeloxUserError);
-  EXPECT_THROW(
-      toChar(parseTimestamp("1970-01-01"), "'abcd"), VeloxUserError);
+  EXPECT_THROW(toChar(parseTimestamp("1970-01-01"), "q"), VeloxUserError);
+  EXPECT_THROW(toChar(parseTimestamp("1970-01-01"), "'abcd"), VeloxUserError);
   EXPECT_THROW(
       toChar(parseTimestamp("1970-01-01"), "yyyy-MM-dd"), VeloxUserError);
   EXPECT_THROW(
