@@ -147,6 +147,7 @@ template <
     typename Generator,
     typename Properties = void,
     typename Statistics = void,
+    typename Context = void,
     typename Sizer = DefaultSizer<Value>,
     typename Comparator = std::equal_to<Key>,
     typename Hash = std::hash<Key>>
@@ -180,7 +181,8 @@ class CachedFactory {
   CachedPtr<Key, Value, Comparator, Hash> generate(
       const Key& key,
       const Properties* properties = nullptr,
-      Statistics* stats = nullptr);
+      Statistics* stats = nullptr,
+      const Context* ctx = nullptr);
 
   /// Looks up the cache entry of the given key if it exists, otherwise returns
   /// null.
@@ -361,6 +363,7 @@ template <
     typename Generator,
     typename Properties,
     typename Statistics,
+    typename Context,
     typename Sizer,
     typename Comparator,
     typename Hash>
@@ -370,15 +373,20 @@ CachedPtr<Key, Value, Comparator, Hash> CachedFactory<
     Generator,
     Properties,
     Statistics,
+    Context,
     Sizer,
     Comparator,
     Hash>::
-    generate(const Key& key, const Properties* properties, Statistics* stats) {
+    generate(
+        const Key& key,
+        const Properties* properties,
+        Statistics* stats,
+        const Context* ctx) {
   process::TraceContext trace("CachedFactory::generate");
   if (cache_ == nullptr) {
     return CachedPtr<Key, Value, Comparator, Hash>{
         /*fromCache=*/false,
-        (*generator_)(key, properties, stats).release(),
+        (*generator_)(key, properties, stats, ctx).release(),
         nullptr,
         std::make_unique<Key>(key)};
   }
@@ -407,7 +415,7 @@ CachedPtr<Key, Value, Comparator, Hash> CachedFactory<
     }
     pendingLock.unlock();
     // Regenerates in the edge case.
-    return generate(key, properties, stats);
+    return generate(key, properties, stats, ctx);
   }
 
   pending_.insert(key);
@@ -418,7 +426,8 @@ CachedPtr<Key, Value, Comparator, Hash> CachedFactory<
     pendingCv_.notify_all();
   };
 
-  std::unique_ptr<Value> generatedValue = (*generator_)(key, properties, stats);
+  std::unique_ptr<Value> generatedValue =
+      (*generator_)(key, properties, stats, ctx);
   const uint64_t valueSize = Sizer()(*generatedValue);
   Value* rawValue = generatedValue.release();
   const bool inserted = addCache(key, rawValue, valueSize);
@@ -444,6 +453,7 @@ template <
     typename Generator,
     typename Properties,
     typename Statistics,
+    typename Context,
     typename Sizer,
     typename Comparator,
     typename Hash>
@@ -453,6 +463,7 @@ CachedPtr<Key, Value, Comparator, Hash> CachedFactory<
     Generator,
     Properties,
     Statistics,
+    Context,
     Sizer,
     Comparator,
     Hash>::get(const Key& key) {
@@ -478,6 +489,7 @@ template <
     typename Generator,
     typename Properties,
     typename Statistics,
+    typename Context,
     typename Sizer,
     typename Comparator,
     typename Hash>
@@ -487,6 +499,7 @@ void CachedFactory<
     Generator,
     Properties,
     Statistics,
+    Context,
     Sizer,
     Comparator,
     Hash>::

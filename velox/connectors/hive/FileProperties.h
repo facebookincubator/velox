@@ -25,15 +25,20 @@
 
 #pragma once
 
-#include <cstdint>
+#include <memory>
+#include <optional>
 
 namespace facebook::velox {
+namespace config {
+class ConfigBase;
+}
 
 struct FileProperties {
   std::optional<int64_t> fileSize;
   std::optional<int64_t> modificationTime;
   std::optional<int64_t> readRangeHint{std::nullopt};
   std::shared_ptr<std::string> extraFileInfo{nullptr};
+  const config::ConfigBase* sessionProperties{nullptr};
 };
 
 } // namespace facebook::velox
