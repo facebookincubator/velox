@@ -82,9 +82,9 @@ const std::shared_ptr<const TypeWithId>& TextReader::typeWithId() const {
 
 std::unique_ptr<RowReader> TextReader::createRowReader(
     const RowReaderOptions& options) const {
-  auto rowReader = reader_->createRowReader(options);
+  auto rowReaderImpl = reader_->createRowReader(options);
   return std::make_unique<TextRowReader>(
-      std::move(rowReader), options_.memoryPool(), options.scanSpec());
+      std::move(rowReaderImpl), options_.memoryPool(), options.scanSpec());
 }
 
 std::unique_ptr<Reader> TextReaderFactory::createReader(
