@@ -64,9 +64,8 @@ class ResourceMap {
   TResource lookup(ResourceHandle moduleId) const {
     const std::lock_guard<std::mutex> lock(mtx_);
     auto it = map_.find(moduleId);
-    VELOX_CHECK_NE(
-        it,
-        map_.end(),
+    VELOX_CHECK(
+        it != map_.end(),
         "ResourceHandle not found in resource map when trying to lookup: " +
             std::to_string(moduleId));
     return it->second;

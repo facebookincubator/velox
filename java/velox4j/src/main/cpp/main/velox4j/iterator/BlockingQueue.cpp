@@ -81,8 +81,7 @@ std::optional<RowVectorPtr> BlockingQueue::read(ContinueFuture& future) {
     switch (state_) {
       case OPEN: {
         VELOX_CHECK(!queue_.empty());
-      }
-      [[fallthrough]]
+      } // Falls through.
       case FINISHED: {
         VELOX_CHECK(promises_.size() == 1);
         for (auto& p : promises_) {
