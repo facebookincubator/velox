@@ -71,7 +71,7 @@ target_link_libraries(
 # pyvelox.vector library:
 add_library(velox_py_vector_lib vector/PyVector.cpp)
 target_link_libraries(
-  velox_py_vector_lib velox_vector pybind11::module)
+  velox_py_vector_lib velox_vector velox_py_init pybind11::module)
 
 pyvelox_add_module(vector MODULE vector/vector.cpp)
 target_link_libraries(
@@ -99,6 +99,8 @@ target_link_libraries(
   velox_dwio_dwrf_reader
   velox_dwio_dwrf_common
   velox_dwio_dwrf_writer
+  velox_dwio_parquet_reader
+  velox_dwio_parquet_writer
   Folly::folly
   pybind11::module)
 
@@ -125,6 +127,8 @@ target_link_libraries(
   velox_dwio_dwrf_reader
   velox_dwio_dwrf_common
   velox_dwio_dwrf_writer
+  velox_dwio_parquet_reader
+  velox_dwio_parquet_writer
   pybind11::module)
 
 pyvelox_add_module(runner MODULE runner/runner.cpp)
