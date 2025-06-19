@@ -71,6 +71,9 @@ class RleBpDataDecoder : public facebook::velox::parquet::RleBpDecoder {
             skip<false>(toSkip, current, nullptr);
           }
           if (atEnd) {
+            if constexpr (Visitor::kHasHook) {
+              visitor.setNumValues(visitor.numRows());
+            }
             return;
           }
         }
@@ -93,6 +96,9 @@ class RleBpDataDecoder : public facebook::velox::parquet::RleBpDecoder {
         current += toSkip;
       }
       if (atEnd) {
+        if constexpr (Visitor::kHasHook) {
+          visitor.setNumValues(visitor.numRows());
+        }
         return;
       }
     }
