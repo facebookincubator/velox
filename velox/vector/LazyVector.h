@@ -370,6 +370,13 @@ class LazyVector : public BaseVector {
     return loadedVector()->testingCopyPreserveEncodings(pool);
   }
 
+  void transferOrCopyTo(velox::memory::MemoryPool* pool) override {
+    BaseVector::transferOrCopyTo(pool);
+    if (vector_) {
+      vector_->transferOrCopyTo(pool);
+    }
+  }
+
  private:
   static void ensureLoadedRowsImpl(
       const VectorPtr& vector,

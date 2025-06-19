@@ -182,6 +182,16 @@ class RowVector : public BaseVector {
         nullCount_);
   }
 
+  void transferOrCopyTo(velox::memory::MemoryPool* pool) override {
+    BaseVector::transferOrCopyTo(pool);
+    for (auto& child : children_) {
+      child->transferOrCopyTo(pool);
+    }
+    if (rawVectorForBatchReader_) {
+      rawVectorForBatchReader_->transferOrCopyTo(pool);
+    }
+  }
+
   uint64_t retainedSize() const override {
     auto size = BaseVector::retainedSize();
     for (auto& child : children_) {
@@ -363,6 +373,18 @@ struct ArrayVectorBase : BaseVector {
     sizes_->asMutable<vector_size_t>()[i] = size;
   }
 
+  void transferOrCopyTo(velox::memory::MemoryPool* pool) override {
+    BaseVector::transferOrCopyTo(pool);
+    if (!offsets_->transferTo(pool)) {
+      offsets_ = AlignedBuffer::copy<vector_size_t>(pool, offsets_);
+      rawOffsets_ = offsets_->as<vector_size_t>();
+    }
+    if (!sizes_->transferTo(pool)) {
+      sizes_ = AlignedBuffer::copy<vector_size_t>(pool, sizes_);
+      rawSizes_ = sizes_->as<vector_size_t>();
+    }
+  }
+
   /// Check if there is any overlapping [offset, size] ranges.
   bool hasOverlappingRanges() const {
     std::vector<vector_size_t> indices;
@@ -512,6 +534,11 @@ class ArrayVector : public ArrayVectorBase {
         nullCount_);
   }
 
+  void transferOrCopyTo(velox::memory::MemoryPool* pool) override {
+    ArrayVectorBase::transferOrCopyTo(pool);
+    elements_->transferOrCopyTo(pool);
+  }
+
   uint64_t retainedSize() const override {
     return BaseVector::retainedSize() + offsets_->capacity() +
         sizes_->capacity() + elements_->retainedSize();
@@ -655,6 +682,12 @@ class MapVector : public ArrayVectorBase {
         values_->testingCopyPreserveEncodings(pool),
         nullCount_,
         sortedKeys_);
+  }
+
+  void transferOrCopyTo(velox::memory::MemoryPool* pool) override {
+    ArrayVectorBase::transferOrCopyTo(pool);
+    keys_->transferOrCopyTo(pool);
+    values_->transferOrCopyTo(pool);
   }
 
   uint64_t retainedSize() const override {
