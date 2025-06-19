@@ -46,6 +46,9 @@ import com.facebook.velox4j.serde.Serde;
 import com.facebook.velox4j.session.Session;
 import com.facebook.velox4j.sort.SortOrder;
 import com.facebook.velox4j.test.*;
+import com.facebook.velox4j.test.dataset.TestDataFile;
+import com.facebook.velox4j.test.dataset.tpch.TpchDatasets;
+import com.facebook.velox4j.test.dataset.tpch.TpchTableName;
 import com.facebook.velox4j.type.BigIntType;
 import com.facebook.velox4j.type.BooleanType;
 import com.facebook.velox4j.type.RowType;
@@ -56,7 +59,9 @@ import com.facebook.velox4j.variant.BooleanValue;
 import com.facebook.velox4j.write.TableWriteTraits;
 
 public class QueryTest {
-  public static final String HIVE_CONNECTOR_ID = "connector-hive";
+  private static final String HIVE_CONNECTOR_ID = "connector-hive";
+  private static TestDataFile NATION_FILE;
+  private static TestDataFile REGION_FILE;
   private static MemoryManager memoryManager;
   private static Session session;
 
@@ -64,6 +69,8 @@ public class QueryTest {
   public static void beforeClass() throws Exception {
     Velox4jTests.ensureInitialized();
     memoryManager = MemoryManager.create(AllocationListener.NOOP);
+    NATION_FILE = TpchDatasets.get().get(TpchTableName.NATION);
+    REGION_FILE = TpchDatasets.get().get(TpchTableName.REGION);
   }
 
   @AfterClass
@@ -102,8 +109,8 @@ public class QueryTest {
 
   @Test
   public void testTableScan1() {
-    final File file = TpchTests.Table.NATION.file();
-    final RowType outputType = TpchTests.Table.NATION.schema();
+    final File file = NATION_FILE.file();
+    final RowType outputType = NATION_FILE.schema();
     final TableScanNode scanNode = newSampleTableScanNode("id-1", outputType);
     final ConnectorSplit split = newSampleSplit(file);
     final Query query = new Query(scanNode, Config.empty(), ConnectorConfig.empty());
@@ -119,8 +126,8 @@ public class QueryTest {
 
   @Test
   public void testTableScan2() {
-    final File file = TpchTests.Table.REGION.file();
-    final RowType outputType = TpchTests.Table.REGION.schema();
+    final File file = REGION_FILE.file();
+    final RowType outputType = REGION_FILE.schema();
     final TableScanNode scanNode = newSampleTableScanNode("id-1", outputType);
     final ConnectorSplit split = newSampleSplit(file);
     final Query query = new Query(scanNode, Config.empty(), ConnectorConfig.empty());
@@ -136,8 +143,8 @@ public class QueryTest {
 
   @Test
   public void testTableScanCollectMultipleRowVectorsLoadInline() {
-    final File file = TpchTests.Table.NATION.file();
-    final RowType outputType = TpchTests.Table.NATION.schema();
+    final File file = NATION_FILE.file();
+    final RowType outputType = NATION_FILE.schema();
     final TableScanNode scanNode = newSampleTableScanNode("id-1", outputType);
     final ConnectorSplit split = newSampleSplit(file);
     final int maxOutputBatchRows = 7;
@@ -169,8 +176,8 @@ public class QueryTest {
 
   @Test
   public void testTableScanCollectMultipleRowVectorsLoadLast() {
-    final File file = TpchTests.Table.NATION.file();
-    final RowType outputType = TpchTests.Table.NATION.schema();
+    final File file = NATION_FILE.file();
+    final RowType outputType = NATION_FILE.schema();
     final TableScanNode scanNode = newSampleTableScanNode("id-1", outputType);
     final ConnectorSplit split = newSampleSplit(file);
     final int maxOutputBatchRows = 7;
@@ -200,8 +207,8 @@ public class QueryTest {
 
   @Test
   public void testAggregate() {
-    final File file = TpchTests.Table.NATION.file();
-    final RowType outputType = TpchTests.Table.NATION.schema();
+    final File file = NATION_FILE.file();
+    final RowType outputType = NATION_FILE.schema();
     final TableScanNode scanNode = newSampleTableScanNode("id-1", outputType);
     ;
     final ConnectorSplit split = newSampleSplit(file);
@@ -220,8 +227,8 @@ public class QueryTest {
 
   @Test
   public void testAggregateStats() {
-    final File file = TpchTests.Table.NATION.file();
-    final RowType outputType = TpchTests.Table.NATION.schema();
+    final File file = NATION_FILE.file();
+    final RowType outputType = NATION_FILE.schema();
     final TableScanNode scanNode = newSampleTableScanNode("id-1", outputType);
     ;
     final ConnectorSplit split = newSampleSplit(file);
@@ -625,8 +632,8 @@ public class QueryTest {
 
   @Test
   public void testProject() {
-    final File file = TpchTests.Table.NATION.file();
-    final RowType outputType = TpchTests.Table.NATION.schema();
+    final File file = NATION_FILE.file();
+    final RowType outputType = NATION_FILE.schema();
     final TableScanNode scanNode = newSampleTableScanNode("id-1", outputType);
     final ConnectorSplit split = newSampleSplit(file);
     final ProjectNode projectNode =
@@ -650,8 +657,8 @@ public class QueryTest {
 
   @Test
   public void testFilter() {
-    final File file = TpchTests.Table.NATION.file();
-    final RowType outputType = TpchTests.Table.NATION.schema();
+    final File file = NATION_FILE.file();
+    final RowType outputType = NATION_FILE.schema();
     final TableScanNode scanNode = newSampleTableScanNode("id-1", outputType);
     final ConnectorSplit split = newSampleSplit(file);
     final FilterNode filterNode =
@@ -677,10 +684,10 @@ public class QueryTest {
 
   @Test
   public void testHashJoin() {
-    final File nationFile = TpchTests.Table.NATION.file();
-    final RowType nationOutputType = TpchTests.Table.NATION.schema();
-    final File regionFile = TpchTests.Table.REGION.file();
-    final RowType regionOutputType = TpchTests.Table.REGION.schema();
+    final File nationFile = NATION_FILE.file();
+    final RowType nationOutputType = NATION_FILE.schema();
+    final File regionFile = REGION_FILE.file();
+    final RowType regionOutputType = REGION_FILE.schema();
     final TableScanNode nationScanNode = newSampleTableScanNode("id-1", nationOutputType);
     final TableScanNode regionScanNode = newSampleTableScanNode("id-2", regionOutputType);
     final ConnectorSplit nationSplit = newSampleSplit(nationFile);
@@ -713,8 +720,8 @@ public class QueryTest {
 
   @Test
   public void testOrderBy() {
-    final File file = TpchTests.Table.NATION.file();
-    final RowType outputType = TpchTests.Table.NATION.schema();
+    final File file = NATION_FILE.file();
+    final RowType outputType = NATION_FILE.schema();
     final TableScanNode scanNode = newSampleTableScanNode("id-1", outputType);
     final ConnectorSplit split = newSampleSplit(file);
     final OrderByNode orderByNode =
@@ -739,8 +746,8 @@ public class QueryTest {
 
   @Test
   public void testLimit() {
-    final File file = TpchTests.Table.NATION.file();
-    final RowType outputType = TpchTests.Table.NATION.schema();
+    final File file = NATION_FILE.file();
+    final RowType outputType = NATION_FILE.schema();
     final TableScanNode scanNode = newSampleTableScanNode("id-1", outputType);
     final ConnectorSplit split = newSampleSplit(file);
     final LimitNode limitNode = new LimitNode("id-2", List.of(scanNode), 5, 3, false);
@@ -759,8 +766,8 @@ public class QueryTest {
   public void testTableWrite() throws IOException {
     final File folder = JniWorkspace.getDefault().getSubDir("test");
     final String fileName = String.format("test-write-%s.tmp", UUID.randomUUID());
-    final File file = TpchTests.Table.NATION.file();
-    final RowType schema = TpchTests.Table.NATION.schema();
+    final File file = NATION_FILE.file();
+    final RowType schema = NATION_FILE.schema();
     final TableScanNode scanNode = newSampleTableScanNode("id-1", schema);
     final ConnectorSplit split = newSampleSplit(file);
     final TableWriteNode tableWriteNode =
@@ -782,10 +789,10 @@ public class QueryTest {
   public void testTableWriteRoundTrip() throws IOException {
     final File folder = JniWorkspace.getDefault().getSubDir("test");
     final String fileName = String.format("test-write-%s.tmp", UUID.randomUUID());
-    final RowType schema = TpchTests.Table.NATION.schema();
+    final RowType schema = NATION_FILE.schema();
 
     // Read the sample nation file.
-    final File file = TpchTests.Table.NATION.file();
+    final File file = NATION_FILE.file();
     final TableScanNode scanNode1 = newSampleTableScanNode("id-1", schema);
     final ConnectorSplit split1 = newSampleSplit(file);
     final TableWriteNode tableWriteNode =
