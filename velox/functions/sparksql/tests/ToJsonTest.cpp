@@ -14,12 +14,13 @@
  * limitations under the License.
  */
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/functions/sparksql/tests/JsonTest.h"
+#include "velox/functions/sparksql/tests/JsonTestUtil.h"
 
 using namespace facebook::velox::test;
 
 namespace facebook::velox::functions::sparksql::test {
 namespace {
+
 class ToJsonTest : public SparkFunctionBaseTest {
  protected:
   void testToJson(const VectorPtr& input, const VectorPtr& expected) {
@@ -287,7 +288,7 @@ TEST_F(ToJsonTest, unsupportedType) {
   // ROW(HUGEINT)
   auto input = fuzzer.fuzzDictionary(fuzzer.fuzzFlat(ROW({"a"}, {HUGEINT()})));
   VELOX_ASSERT_THROW(
-      testToJson(input, nullptr), "HUGEINT must be a decimal type.");
+      testToJson(input, nullptr), "HUGEINT is not supported in to_json.");
 
   // MAP(MAP)
   input = fuzzer.fuzzDictionary(

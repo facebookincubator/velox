@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/functions/sparksql/tests/JsonTest.h"
+#include "velox/functions/sparksql/tests/JsonTestUtil.h"
 
 using namespace facebook::velox::test;
 

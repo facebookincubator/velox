@@ -15,11 +15,11 @@
  */
 #pragma once
 
-#include <functions/sparksql/tests/SparkFunctionBaseTest.h>
+#include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 
 using namespace facebook::velox::test;
 
-namespace facebook::velox::functions::sparksql {
+namespace facebook::velox::functions::sparksql::test {
 
 constexpr float kNaNFloat = std::numeric_limits<float>::quiet_NaN();
 constexpr float kInfFloat = std::numeric_limits<float>::infinity();
@@ -46,4 +46,4 @@ inline core::CallTypedExprPtr createToJson(
   return std::make_shared<const core::CallTypedExpr>(
       VARCHAR(), std::move(inputs), "to_json");
 }
-} // namespace facebook::velox::functions::sparksql
+} // namespace facebook::velox::functions::sparksql::test

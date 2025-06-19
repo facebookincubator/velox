@@ -13,12 +13,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/functions/sparksql/tests/JsonTest.h"
+#include "velox/functions/sparksql/tests/JsonTestUtil.h"
 
 using namespace facebook::velox::test;
 
 namespace facebook::velox::functions::sparksql::test {
 namespace {
+
 class FromToJsonRoundTripTest : public SparkFunctionBaseTest {
  protected:
   // Performs a round-trip test: original -> from_json -> to_json -> final, and

@@ -17,6 +17,7 @@
 #include <expression/ComplexViewTypes.h>
 #include <functions/lib/DateTimeFormatter.h>
 #include <functions/lib/TimeUtils.h>
+
 #include "velox/type/DecimalUtil.h"
 
 namespace facebook::velox::functions::sparksql {
@@ -145,20 +146,6 @@ void toJson<TypeKind::BIGINT>(
 }
 
 template <>
-void toJson<TypeKind::HUGEINT>(
-    const exec::GenericView& input,
-    std::string& result,
-    const JsonOptions& /*options*/,
-    bool /*isMapKey*/) {
-  VELOX_CHECK(input.type()->isDecimal(), "HUGEINT must be a decimal type.");
-  auto value = input.castTo<int128_t>();
-  const size_t maxSize = folly::detail::digitsEnough<uint128_t>() + 1;
-  char buffer[maxSize];
-  size_t len = DecimalUtil::castToString(value, 0, maxSize, buffer);
-  result.append(buffer, len);
-}
-
-template <>
 void toJson<TypeKind::REAL>(
     const exec::GenericView& input,
     std::string& result,
@@ -188,6 +175,9 @@ void toJson<TypeKind::VARCHAR>(
   if (!isMapKey) {
     folly::json::escapeString(value, result, {});
   } else {
+    // toJson<TypeKind::MAP> wraps the key with double quotes.
+    // To avoid duplicate quotes, we strip the surrounding quotes after
+    // escaping.
     std::string quotedString;
     folly::json::escapeString(value, quotedString, {});
     result.append(quotedString.substr(1, quotedString.size() - 2));
