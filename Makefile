@@ -185,48 +185,6 @@ fuzzertest: debug
 			--logtostderr=1 \
 			--minloglevel=0
 
-format-fix: 			#: Fix formatting issues
-ifneq ("$(wildcard ${PYTHON_VENV}/pyvenv.cfg)","")
-	source ${PYTHON_VENV}/bin/activate; scripts/check.py format presto-0.293-clp-connector --fix
-else
-	scripts/check.py format presto-0.293-clp-connector --fix
-endif
-
-format-check: 			#: Check for formatting issues
-	clang-format --version
-ifneq ("$(wildcard ${PYTHON_VENV}/pyvenv.cfg)","")
-	source ${PYTHON_VENV}/bin/activate; scripts/check.py format presto-0.293-clp-connector
-else
-	scripts/check.py format presto-0.293-clp-connector
-endif
-
-header-fix:			#: Fix license header issues in the current branch
-ifneq ("$(wildcard ${PYTHON_VENV}/pyvenv.cfg)","")
-	source ${PYTHON_VENV}/bin/activate; scripts/check.py header presto-0.293-clp-connector --fix
-else
-	scripts/check.py header presto-0.293-clp-connector --fix
-endif
-
-header-check:			#: Check for license header issues
-ifneq ("$(wildcard ${PYTHON_VENV}/pyvenv.cfg)","")
-	source ${PYTHON_VENV}/bin/activate; scripts/check.py header presto-0.293-clp-connector
-else
-	scripts/check.py header presto-0.293-clp-connector
-endif
-
-circleci-container:			#: Build the linux container for CircleCi
-	$(MAKE) linux-container CONTAINER_NAME=circleci
-
-check-container:
-	$(MAKE) linux-container CONTAINER_NAME=check
-
-linux-container:
-	rm -rf /tmp/docker && \
-	mkdir -p /tmp/docker && \
-	cp scripts/setup-helper-functions.sh scripts/setup-$(CONTAINER_NAME).sh scripts/$(CONTAINER_NAME)-container.dockfile /tmp/docker && \
-	cd /tmp/docker && \
-	docker build --build-arg cpu_target=$(CPU_TARGET) --tag "prestocpp/velox-$(CPU_TARGET)-$(CONTAINER_NAME):${USER}-$(shell date +%Y%m%d)" -f $(CONTAINER_NAME)-container.dockfile .
-
 help:					#: Show the help messages
 	@cat $(firstword $(MAKEFILE_LIST)) | \
 	awk '/^[-a-z]+:/' | \
