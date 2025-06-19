@@ -17,8 +17,8 @@
 
 #include "velox/common/file/FileSystems.h"
 #include "velox/connectors/hive/HiveConnector.h"
-#include "velox/dwio/dwrf/RegisterDwrfReader.h"
-#include "velox/dwio/dwrf/RegisterDwrfWriter.h"
+//#include "velox/dwio/dwrf/RegisterDwrfReader.h"
+//#include "velox/dwio/dwrf/RegisterDwrfWriter.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/Split.h"
 #include "velox/exec/fuzzer/FuzzerUtil.h"
@@ -84,8 +84,8 @@ class AggregationFuzzerBase {
     connector::registerConnectorFactory(
         std::make_shared<connector::hive::HiveConnectorFactory>());
     registerHiveConnector(hiveConfigs);
-    dwrf::registerDwrfReaderFactory();
-    dwrf::registerDwrfWriterFactory();
+//    dwrf::registerDwrfReaderFactory();
+//    dwrf::registerDwrfWriterFactory();
 
     for (const auto& type : referenceQueryRunner_->supportedScalarTypes()) {
       if (!type->isReal() && !type->isDouble()) {
