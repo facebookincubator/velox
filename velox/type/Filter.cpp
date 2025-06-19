@@ -1129,7 +1129,7 @@ bool NegatedBigintValuesUsingHashTable::testInt64Range(
   // of things between min and max
   // if distance is any less, then we are missing an element => something
   // in the range is accepted
-  return (std::distance(lo, hi) != max - min);
+  return std::distance(lo, hi) != static_cast<int128_t>(max) - min;
 }
 
 namespace {
@@ -1483,6 +1483,15 @@ bool MultiRange::testDouble(double value) const {
 bool MultiRange::testFloat(float value) const {
   for (const auto& filter : filters_) {
     if (filter->testFloat(value)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool MultiRange::testInt128(const int128_t& value) const {
+  for (const auto& filter : filters_) {
+    if (filter->testInt128(value)) {
       return true;
     }
   }

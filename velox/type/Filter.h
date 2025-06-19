@@ -89,6 +89,10 @@ class Filter : public velox::ISerializable {
     return kind_;
   }
 
+  bool nullAllowed() const {
+    return nullAllowed_;
+  }
+
   /// Return a copy of this filter. If nullAllowed is set, modified the
   /// nullAllowed flag in the copy to match.
   virtual std::unique_ptr<Filter> clone(
@@ -1086,6 +1090,18 @@ class HugeintValuesUsingHashTable final : public Filter {
 
   bool testingEquals(const Filter& other) const final;
 
+  int128_t min() const {
+    return min_;
+  }
+
+  int128_t max() const {
+    return max_;
+  }
+
+  const folly::F14FastSet<int128_t>& values() const {
+    return values_;
+  }
+
  private:
   const int128_t min_;
   const int128_t max_;
@@ -1138,6 +1154,14 @@ class BigintValuesUsingBitmask final : public Filter {
   std::unique_ptr<Filter> mergeWith(const Filter* other) const final;
 
   bool testingEquals(const Filter& other) const final;
+
+  int64_t min() const {
+    return min_;
+  }
+
+  int64_t max() const {
+    return max_;
+  }
 
  private:
   std::unique_ptr<Filter>
@@ -1275,6 +1299,14 @@ class NegatedBigintValuesUsingBitmask final : public Filter {
   std::unique_ptr<Filter> mergeWith(const Filter* other) const final;
 
   bool testingEquals(const Filter& other) const final;
+
+  int64_t min() const {
+    return min_;
+  }
+
+  int64_t max() const {
+    return max_;
+  }
 
  private:
   std::unique_ptr<Filter>
@@ -1723,6 +1755,14 @@ class BytesRange final : public AbstractRange {
     return lowerUnbounded_;
   }
 
+  bool isUpperExclusive() const {
+    return upperExclusive_;
+  }
+
+  bool isLowerExclusive() const {
+    return lowerExclusive_;
+  }
+
   const std::string& lower() const {
     return lower_;
   }
@@ -1819,6 +1859,14 @@ class NegatedBytesRange final : public Filter {
     return nonNegated_->isLowerUnbounded();
   }
 
+  bool isUpperExclusive() const {
+    return nonNegated_->isUpperExclusive();
+  }
+
+  bool isLowerExclusive() const {
+    return nonNegated_->isLowerExclusive();
+  }
+
   const std::string& lower() const {
     return nonNegated_->lower();
   }
@@ -1909,10 +1957,6 @@ class TimestampRange : public Filter {
 
   const Timestamp upper() const {
     return upper_;
-  }
-
-  bool nullAllowed() const {
-    return nullAllowed_;
   }
 
   bool testingEquals(const Filter& other) const final;
@@ -2120,6 +2164,8 @@ class MultiRange final : public Filter {
   bool testDouble(double value) const final;
 
   bool testFloat(float value) const final;
+
+  bool testInt128(const int128_t& value) const final;
 
   bool testBytes(const char* value, int32_t length) const final;
 

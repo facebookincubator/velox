@@ -100,13 +100,28 @@ function install_cuda {
       ;;
   esac
   # See https://developer.nvidia.com/cuda-downloads
-  dnf config-manager --add-repo https://developer.download.nvidia.com/compute/cuda/repos/rhel9/${CUDA_ARCH}/cuda-rhel9.repo
+  local arch=$(uname -m)
+  local repo_url
+
+  if [[ "$arch" == "x86_64" ]]; then
+    repo_url="https://developer.download.nvidia.com/compute/cuda/repos/rhel9/x86_64/cuda-rhel9.repo"
+  elif [[ "$arch" == "aarch64" ]]; then
+    # Using SBSA (Server Base System Architecture) repository for ARM64 servers
+    repo_url="https://developer.download.nvidia.com/compute/cuda/repos/rhel9/sbsa/cuda-rhel9.repo"
+  else
+    echo "Unsupported architecture: $arch" >&2
+    return 1
+  fi
+
+  dnf config-manager --add-repo "$repo_url"
   local dashed="$(echo $1 | tr '.' '-')"
   dnf install -y \
     cuda-compat-$dashed \
     cuda-driver-devel-$dashed \
     cuda-minimal-build-$dashed \
-    cuda-nvrtc-devel-$dashed
+    cuda-nvrtc-devel-$dashed \
+    libcufile-devel-$dashed \
+    numactl-libs
 }
 
 function install_s3 {
@@ -146,7 +161,6 @@ function install_velox_deps {
   run_and_time install_conda
   run_and_time install_gflags
   run_and_time install_glog
-  run_and_time install_lzo
   run_and_time install_snappy
   run_and_time install_boost
   run_and_time install_protobuf
@@ -208,4 +222,3 @@ function install_velox_deps {
     dnf clean all
   fi
 )
-

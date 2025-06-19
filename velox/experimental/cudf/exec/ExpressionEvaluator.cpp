@@ -433,7 +433,7 @@ cudf::ast::expression const& AstContext::pushExprToTree(
       result = &treeNode;
     }
     return *result;
-  } else if (name == "cast") {
+  } else if (name == "cast" || name == "try_cast") {
     VELOX_CHECK_EQ(len, 1);
     auto const& op1 = pushExprToTree(expr->inputs()[0]);
     if (expr->type()->kind() == TypeKind::INTEGER) {

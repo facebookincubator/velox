@@ -17,10 +17,12 @@
 #pragma once
 
 #include <geos/geom/Coordinate.h>
+#include <geos/geom/Envelope.h>
 #include <geos/io/WKBReader.h>
 #include <geos/io/WKBWriter.h>
 #include <geos/io/WKTReader.h>
 #include <geos/io/WKTWriter.h>
+#include <geos/simplify/TopologyPreservingSimplifier.h>
 #include <geos/util/AssertionFailedException.h>
 #include <geos/util/UnsupportedOperationException.h>
 #include <cmath>
@@ -115,6 +117,10 @@ struct StAsBinaryFunction {
 
 template <typename T>
 struct StPointFunction {
+  StPointFunction() {
+    factory_ = geos::geom::GeometryFactory::create();
+  }
+
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE Status call(
@@ -127,16 +133,16 @@ struct StPointFunction {
     }
     GEOS_TRY(
         {
-          geos::geom::GeometryFactory::Ptr factory =
-              geos::geom::GeometryFactory::create();
-          geos::geom::Point* point =
-              factory->createPoint(geos::geom::Coordinate(x, y));
+          auto point = std::unique_ptr<geos::geom::Point>(
+              factory_->createPoint(geos::geom::Coordinate(x, y)));
           result = geospatial::serializeGeometry(*point);
-          factory->destroyGeometry(point);
         },
         "Failed to create point geometry");
     return Status::OK();
   }
+
+ private:
+  geos::geom::GeometryFactory::Ptr factory_;
 };
 
 // Predicates
@@ -348,6 +354,25 @@ struct StDifferenceFunction {
 };
 
 template <typename T>
+struct StBoundaryFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE Status
+  call(out_type<Geometry>& result, const arg_type<Geometry>& input) {
+    std::unique_ptr<geos::geom::Geometry> geosGeometry =
+        geospatial::deserializeGeometry(input);
+
+    std::unique_ptr<geos::geom::Geometry> outputGeometry;
+
+    GEOS_TRY(
+        result = geospatial::serializeGeometry(*geosGeometry->getBoundary());
+        , "Failed to compute geometry boundary");
+
+    return Status::OK();
+  }
+};
+
+template <typename T>
 struct StIntersectionFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
@@ -424,6 +449,58 @@ struct StUnionFunction {
 // Accessors
 
 template <typename T>
+struct StIsValidFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE Status
+  call(out_type<bool>& result, const arg_type<Geometry>& input) {
+    std::unique_ptr<geos::geom::Geometry> geosGeometry =
+        geospatial::deserializeGeometry(input);
+
+    GEOS_TRY(result = geosGeometry->isValid();
+             , "Failed to check geometry isValid");
+
+    return Status::OK();
+  }
+};
+
+template <typename T>
+struct StIsSimpleFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE Status
+  call(out_type<bool>& result, const arg_type<Geometry>& input) {
+    std::unique_ptr<geos::geom::Geometry> geosGeometry =
+        geospatial::deserializeGeometry(input);
+
+    GEOS_TRY(result = geosGeometry->isSimple();
+             , "Failed to check geometry isSimple");
+
+    return Status::OK();
+  }
+};
+
+template <typename T>
+struct GeometryInvalidReasonFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<Varchar>& result,
+      const arg_type<Geometry>& input) {
+    std::unique_ptr<geos::geom::Geometry> geosGeometry =
+        geospatial::deserializeGeometry(input);
+
+    std::optional<std::string> messageOpt =
+        geospatial::geometryInvalidReason(geosGeometry.get());
+
+    if (messageOpt.has_value()) {
+      result = messageOpt.value();
+    }
+    return messageOpt.has_value();
+  }
+};
+
+template <typename T>
 struct StAreaFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
@@ -442,6 +519,53 @@ struct StAreaFunction {
 };
 
 template <typename T>
+struct StCentroidFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE Status
+  call(out_type<Geometry>& result, const arg_type<Geometry>& input) {
+    std::unique_ptr<geos::geom::Geometry> geosGeometry =
+        geospatial::deserializeGeometry(input);
+
+    auto validate = facebook::velox::functions::geospatial::validateType(
+        *geosGeometry,
+        {geos::geom::GeometryTypeId::GEOS_POINT,
+         geos::geom::GeometryTypeId::GEOS_MULTIPOINT,
+         geos::geom::GeometryTypeId::GEOS_LINESTRING,
+         geos::geom::GeometryTypeId::GEOS_MULTILINESTRING,
+         geos::geom::GeometryTypeId::GEOS_POLYGON,
+         geos::geom::GeometryTypeId::GEOS_MULTIPOLYGON},
+        "ST_Centroid");
+
+    if (!validate.ok()) {
+      return validate;
+    }
+
+    geos::geom::GeometryTypeId type = geosGeometry->getGeometryTypeId();
+    if (type == geos::geom::GeometryTypeId::GEOS_POINT) {
+      result = input;
+      return Status::OK();
+    }
+
+    if (geosGeometry->getNumPoints() == 0) {
+      GEOS_TRY(
+          {
+            geos::geom::GeometryFactory::Ptr factory =
+                geos::geom::GeometryFactory::create();
+            std::unique_ptr<geos::geom::Point> point = factory->createPoint();
+            result = geospatial::serializeGeometry(*point);
+            factory->destroyGeometry(point.release());
+          },
+          "Failed to create point geometry");
+      return Status::OK();
+    }
+
+    result = geospatial::serializeGeometry(*(geosGeometry->getCentroid()));
+    return Status::OK();
+  }
+};
+
+template <typename T>
 struct StXFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
@@ -452,7 +576,7 @@ struct StXFunction {
         geospatial::deserializeGeometry(geometry);
     if (geosGeometry->getGeometryTypeId() !=
         geos::geom::GeometryTypeId::GEOS_POINT) {
-      throw Status::UserError(fmt::format(
+      VELOX_USER_FAIL(fmt::format(
           "ST_X requires a Point geometry, found {}",
           geosGeometry->getGeometryType()));
     }
@@ -476,7 +600,7 @@ struct StYFunction {
         geospatial::deserializeGeometry(geometry);
     if (geosGeometry->getGeometryTypeId() !=
         geos::geom::GeometryTypeId::GEOS_POINT) {
-      throw Status::UserError(fmt::format(
+      VELOX_USER_FAIL(fmt::format(
           "ST_Y requires a Point geometry, found {}",
           geosGeometry->getGeometryType()));
     }
@@ -485,6 +609,151 @@ struct StYFunction {
     }
     auto coordinate = geosGeometry->getCoordinate();
     result = coordinate->y;
+    return true;
+  }
+};
+
+template <typename T>
+struct StXMinFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  bool call(out_type<double>& result, const arg_type<Geometry>& geometry) {
+    const std::unique_ptr<geos::geom::Envelope> env =
+        geospatial::getEnvelopeFromGeometry(geometry);
+    if (env->isNull()) {
+      return false;
+    }
+    result = env->getMinX();
+    return true;
+  }
+};
+
+template <typename T>
+struct StYMinFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  bool call(out_type<double>& result, const arg_type<Geometry>& geometry) {
+    const std::unique_ptr<geos::geom::Envelope> env =
+        geospatial::getEnvelopeFromGeometry(geometry);
+    if (env->isNull()) {
+      return false;
+    }
+    result = env->getMinY();
+    return true;
+  }
+};
+
+template <typename T>
+struct StXMaxFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  bool call(out_type<double>& result, const arg_type<Geometry>& geometry) {
+    const std::unique_ptr<geos::geom::Envelope> env =
+        geospatial::getEnvelopeFromGeometry(geometry);
+    if (env->isNull()) {
+      return false;
+    }
+    result = env->getMaxX();
+    return true;
+  }
+};
+
+template <typename T>
+struct StYMaxFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  bool call(out_type<double>& result, const arg_type<Geometry>& geometry) {
+    const std::unique_ptr<geos::geom::Envelope> env =
+        geospatial::getEnvelopeFromGeometry(geometry);
+    if (env->isNull()) {
+      return false;
+    }
+    result = env->getMaxY();
+    return true;
+  }
+};
+
+template <typename T>
+struct SimplifyGeometryFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE Status call(
+      out_type<Geometry>& result,
+      const arg_type<Geometry>& geometry,
+      const arg_type<double>& tolerance) {
+    if (!std::isfinite(tolerance) || tolerance < 0) {
+      return Status::UserError(
+          "simplification tolerance must be a non-negative finite number");
+    }
+    if (tolerance == 0) {
+      result = geometry;
+      return Status::OK();
+    }
+
+    std::unique_ptr<geos::geom::Geometry> geosGeometry =
+        geospatial::deserializeGeometry(geometry);
+
+    if (geosGeometry->isEmpty()) {
+      result = geometry;
+      return Status::OK();
+    }
+
+    std::unique_ptr<geos::geom::Geometry> outputGeometry;
+    GEOS_TRY(
+        {
+          outputGeometry =
+              geos::simplify::TopologyPreservingSimplifier::simplify(
+                  geosGeometry.get(), tolerance);
+        },
+        "Failed to compute simplified geometry");
+
+    result = geospatial::serializeGeometry(*outputGeometry);
+    return Status::OK();
+  }
+};
+
+template <typename T>
+struct StGeometryTypeFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE Status
+  call(out_type<Varchar>& result, const arg_type<Geometry>& input) {
+    std::unique_ptr<geos::geom::Geometry> geosGeometry =
+        geospatial::deserializeGeometry(input);
+
+    result = geosGeometry->getGeometryType();
+
+    return Status::OK();
+  }
+};
+
+template <typename T>
+struct StDistanceFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<double>& result,
+      const arg_type<Geometry>& geometry1,
+      const arg_type<Geometry>& geometry2) {
+    std::unique_ptr<geos::geom::Geometry> geosGeometry1 =
+        geospatial::deserializeGeometry(geometry1);
+    std::unique_ptr<geos::geom::Geometry> geosGeometry2 =
+        geospatial::deserializeGeometry(geometry2);
+
+    if (geosGeometry1->getSRID() != geosGeometry2->getSRID()) {
+      VELOX_USER_FAIL(fmt::format(
+          "Input geometries must have the same spatial reference, found {} and {}",
+          geosGeometry1->getSRID(),
+          geosGeometry2->getSRID()));
+    }
+
+    if (geosGeometry1->isEmpty() || geosGeometry2->isEmpty()) {
+      return false;
+    }
+
+    GEOS_RETHROW(result = geosGeometry1->distance(geosGeometry2.get());
+                 , "Failed to calculate geometry distance");
+
     return true;
   }
 };

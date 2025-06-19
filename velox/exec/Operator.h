@@ -283,6 +283,12 @@ class Operator : public BaseRuntimeStatWriter {
   /// build side is empty.
   virtual bool isFinished() = 0;
 
+  /// True if the operator is in dry run mode which is only used by input
+  /// trace collection for crash debugging.
+  bool dryRun() const {
+    return dryRun_;
+  }
+
   /// Traces input batch of the operator.
   virtual void traceInput(const RowVectorPtr&);
 
@@ -632,6 +638,8 @@ class Operator : public BaseRuntimeStatWriter {
   /// the fs dir path to store spill files), otherwise null.
   const std::optional<common::SpillConfig> spillConfig_;
 
+  const bool dryRun_;
+
   bool initialized_{false};
 
   folly::Synchronized<OperatorStats> stats_;
@@ -698,13 +706,15 @@ class SourceOperator : public Operator {
       RowTypePtr outputType,
       int32_t operatorId,
       const std::string& planNodeId,
-      const std::string& operatorType)
+      const std::string& operatorType,
+      const std::optional<common::SpillConfig>& spillConfig = std::nullopt)
       : Operator(
             driverCtx,
             std::move(outputType),
             operatorId,
             planNodeId,
-            operatorType) {}
+            operatorType,
+            spillConfig) {}
 
   bool needsInput() const override {
     return false;

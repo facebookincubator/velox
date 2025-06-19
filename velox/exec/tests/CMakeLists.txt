@@ -61,6 +61,7 @@ add_executable(
   MemoryReclaimerTest.cpp
   MergeJoinTest.cpp
   MergeTest.cpp
+  MergerTest.cpp
   MultiFragmentTest.cpp
   NestedLoopJoinTest.cpp
   OrderByTest.cpp
@@ -83,6 +84,7 @@ add_executable(
   SortBufferTest.cpp
   SpillerTest.cpp
   SpillTest.cpp
+  SplitListenerTest.cpp
   SplitTest.cpp
   SqlTest.cpp
   StreamingAggregationTest.cpp
@@ -216,14 +218,6 @@ target_link_libraries(
   velox_exec_test_lib
   velox_tpch_connector
   velox_memory)
-
-# Arbitration Fuzzer.
-add_executable(velox_memory_arbitration_fuzzer_test
-               MemoryArbitrationFuzzerTest.cpp)
-
-target_link_libraries(
-  velox_memory_arbitration_fuzzer_test velox_memory_arbitration_fuzzer
-  GTest::gtest GTest::gtest_main)
 
 add_executable(velox_table_evolution_fuzzer_test TableEvolutionFuzzerTest.cpp
                                                  TableEvolutionFuzzer.cpp)
