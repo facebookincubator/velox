@@ -24,5 +24,6 @@ int main(int argc, char** argv) {
       "This program benchmarks TPC-H queries. Run 'velox_tpch_benchmark -helpon=TpchBenchmark' for available options.\n");
   gflags::SetUsageMessage(kUsage);
   folly::Init init{&argc, &argv, false};
+  benchmark = std::make_unique<TpchBenchmark>();
   tpchBenchmarkMain();
 }
