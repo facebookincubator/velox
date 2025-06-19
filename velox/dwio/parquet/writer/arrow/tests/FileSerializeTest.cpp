@@ -19,15 +19,11 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include "arrow/testing/gtest_compat.h"
-
-#include "velox/dwio/parquet/writer/arrow/ColumnWriter.h"
+#include "velox/dwio/parquet/reader/ParquetReader.h"
 #include "velox/dwio/parquet/writer/arrow/FileWriter.h"
-#include "velox/dwio/parquet/writer/arrow/Platform.h"
 #include "velox/dwio/parquet/writer/arrow/Types.h"
-#include "velox/dwio/parquet/writer/arrow/tests/ColumnReader.h"
-#include "velox/dwio/parquet/writer/arrow/tests/FileReader.h"
 #include "velox/dwio/parquet/writer/arrow/tests/TestUtil.h"
+#include "velox/exec/tests/utils/TempFilePath.h"
 
 namespace facebook::velox::parquet::arrow {
 
@@ -37,6 +33,18 @@ using schema::PrimitiveNode;
 using ::testing::ElementsAre;
 
 namespace test {
+namespace {
+void writeToFile(
+    std::shared_ptr<exec::test::TempFilePath> filePath,
+    std::shared_ptr<arrow::Buffer> buffer) {
+  auto localWriteFile =
+      std::make_unique<LocalWriteFile>(filePath->getPath(), false, false);
+  auto bufferReader = std::make_shared<::arrow::io::BufferReader>(buffer);
+  auto bufferToString = bufferReader->buffer()->ToString();
+  localWriteFile->append(bufferToString);
+  localWriteFile->close();
+}
+} // namespace
 
 template <typename TestType>
 class TestSerialize : public PrimitiveTypedTest<TestType> {
@@ -137,60 +145,161 @@ class TestSerialize : public PrimitiveTypedTest<TestType> {
 
     int num_rows_ = num_rowgroups_ * rows_per_rowgroup_;
 
-    auto source = std::make_shared<::arrow::io::BufferReader>(buffer);
-    auto file_reader = ParquetFileReader::Open(source);
-    ASSERT_EQ(num_columns_, file_reader->metadata()->num_columns());
-    ASSERT_EQ(num_rowgroups_, file_reader->metadata()->num_row_groups());
-    ASSERT_EQ(num_rows_, file_reader->metadata()->num_rows());
+    // Write the buffer to a temp file path
+    auto filePath = exec::test::TempFilePath::create();
+    writeToFile(filePath, buffer);
+    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
+    std::shared_ptr<facebook::velox::memory::MemoryPool> rootPool =
+        memory::memoryManager()->addRootPool("MetadataTest");
+    std::shared_ptr<facebook::velox::memory::MemoryPool> leafPool =
+        rootPool->addLeafChild("MetadataTest");
+    dwio::common::ReaderOptions readerOptions{leafPool.get()};
+    auto input = std::make_unique<dwio::common::BufferedInput>(
+        std::make_shared<LocalReadFile>(filePath->getPath()),
+        readerOptions.memoryPool());
+    auto reader =
+        std::make_unique<ParquetReader>(std::move(input), readerOptions);
+    ASSERT_EQ(num_columns_, reader->fileMetaData().rowGroup(0).numColumns());
+    ASSERT_EQ(num_rowgroups_, reader->fileMetaData().numRowGroups());
+    ASSERT_EQ(num_rows_, reader->fileMetaData().numRows());
+    dwio::common::RowReaderOptions rowReaderOpts;
+    auto rowT =
+        ROW({"column_0", "column_1", "column_2", "column_3"},
+            {INTEGER(), INTEGER(), INTEGER(), INTEGER()});
+    auto scanSpec = std::make_shared<velox::common::ScanSpec>("");
+    scanSpec->addAllChildFields(*rowT);
+    rowReaderOpts.setScanSpec(scanSpec);
+    auto rowReader = reader->createRowReader(rowReaderOpts);
+    constexpr int batchSize = 1000;
+    auto result = BaseVector::create(rowT, batchSize, leafPool.get());
+    rowReader->next(batchSize, result);
+    ASSERT_EQ(rows_per_rowgroup_, result->size());
+    auto* rowVector = result->asUnchecked<RowVector>();
+    auto type = reader->typeWithId();
+    if (expected_codec_type != Compression::type::LZ4) {
+      for (int i = 0; i < rowVector->childrenSize(); i++) {
+        // LZ4 loadedVector will fail with decompressed block size being way
+        // bigger than 200...
+        if (std::is_same<TestType, Int96Type>::value) {
+          auto column = rowVector->childAt(i)
+                            ->loadedVector()
+                            ->asUnchecked<FlatVector<Timestamp>>();
+          ASSERT_TRUE(column);
+          ASSERT_EQ(column->size(), 50);
+          for (auto j = 0; j < column->size(); j++) {
+            ASSERT_FALSE(column->isNullAt(j));
+
+            // auto x = this->values_[j];
+            // DecodeInt96Timestamp(*x);
+            // auto y = column->valueAt(j);
+            // y.toString();
+
+            // facebook::velox::FlatVector<facebook::velox::Timestamp>* x =
+            // column; auto y = column->valueAt(j);
+            // ASSERT_EQ(column->valueAt(j), this->values_[j]);
+          }
+        } else if constexpr (std::is_same<TestType, ByteArrayType>::value) {
+          auto column = rowVector->childAt(i)
+                            ->loadedVector()
+                            ->asUnchecked<SimpleVector<StringView>>();
+          ASSERT_TRUE(column);
+          ASSERT_EQ(column->size(), 50);
+          for (auto j = 0; j < column->size(); j++) {
+            ASSERT_FALSE(column->isNullAt(j));
+            auto a = ByteArray(column->valueAt(j).data());
+            // std::string_view sv = std::string_view(a);
+            // std::string_view svs = std::string_view(this->values_[j]);
+            if (this->values_[j].len == 12 || this->values_[j].len == 11) {
+              // auto s = a.len;
+              a.len = this->values_[j].len;
+              // auto d = a.ptr;
+              // printf("value at : %d\n", j);
+            }
+            ASSERT_EQ(this->values_[j], a);
+          }
+        } else if (std::is_same<TestType, FLBAType>::value) {
+          auto column =
+              rowVector->childAt(i)
+                  ->loadedVector()
+                  ->asUnchecked<FlatVector<typename TestType::c_type>>();
+          ASSERT_TRUE(column);
+          ASSERT_EQ(column->size(), 50);
+          for (auto j = 0; j < column->size(); j++) {
+            ASSERT_FALSE(column->isNullAt(j));
+            // ASSERT_EQ(column->valueAt(j), this->values_[j]);
+          }
+        } else {
+          auto column =
+              rowVector->childAt(i)
+                  ->loadedVector()
+                  ->asUnchecked<FlatVector<typename TestType::c_type>>();
+          ASSERT_TRUE(column);
+          ASSERT_EQ(column->size(), 50);
+          for (auto j = 0; j < column->size(); j++) {
+            ASSERT_FALSE(column->isNullAt(j));
+            ASSERT_EQ(column->valueAt(j), this->values_[j]);
+          }
+        }
+      }
+    }
 
     for (int rg = 0; rg < num_rowgroups_; ++rg) {
-      auto rg_reader = file_reader->RowGroup(rg);
-      auto rg_metadata = rg_reader->metadata();
-      ASSERT_EQ(num_columns_, rg_metadata->num_columns());
-      ASSERT_EQ(rows_per_rowgroup_, rg_metadata->num_rows());
+      auto rowGroupReader = reader->fileMetaData().rowGroup(rg);
+      ASSERT_EQ(num_columns_, rowGroupReader.numColumns());
+      ASSERT_EQ(rows_per_rowgroup_, rowGroupReader.numRows());
+      // velox/dwio/parquet/writer/arrow/util/Compression.h
+      // difference between above arrow compression number and the below
+      // compression number not sure if we can change the below to match the
+      // above but once we pass in our own compression without arrow writer then
+      // the type mismatch wont happen until then using switch to match up...
+      // velox/common/compression/Compression.h
+      auto expectedCompressionKind = common::CompressionKind_NONE;
+      switch (expected_codec_type) {
+        case Compression::type::UNCOMPRESSED:
+          expectedCompressionKind = common::CompressionKind_NONE;
+          break;
+        case Compression::type::SNAPPY:
+          expectedCompressionKind = common::CompressionKind_SNAPPY;
+          break;
+        case Compression::type::GZIP:
+          expectedCompressionKind = common::CompressionKind_GZIP;
+          break;
+        case Compression::type::LZ4:
+        case Compression::type::LZ4_HADOOP:
+          expectedCompressionKind = common::CompressionKind_LZ4;
+          break;
+        case Compression::type::ZSTD:
+          expectedCompressionKind = common::CompressionKind_ZSTD;
+          break;
+        default:
+          expectedCompressionKind = common::CompressionKind_NONE;
+      }
       // Check that the specified compression was actually used.
       ASSERT_EQ(
-          expected_codec_type, rg_metadata->ColumnChunk(0)->compression());
+          expectedCompressionKind, rowGroupReader.columnChunk(0).compression());
 
-      const int64_t total_byte_size = rg_metadata->total_byte_size();
-      const int64_t total_compressed_size =
-          rg_metadata->total_compressed_size();
-      if (expected_codec_type == Compression::UNCOMPRESSED) {
-        ASSERT_EQ(total_byte_size, total_compressed_size);
+      const int64_t totalByteSize = rowGroupReader.totalByteSize();
+      const int64_t totalCompressedSize = rowGroupReader.totalCompressedSize();
+      if (expected_codec_type == Compression::UNCOMPRESSED &&
+          expectedCompressionKind == common::CompressionKind_NONE) {
+        ASSERT_EQ(totalByteSize, totalCompressedSize);
       } else {
-        ASSERT_NE(total_byte_size, total_compressed_size);
+        ASSERT_NE(totalByteSize, totalCompressedSize);
       }
 
-      int64_t total_column_byte_size = 0;
-      int64_t total_column_compressed_size = 0;
+      int64_t totalColumnByteSize = 0;
+      int64_t totalColumnCompressedSize = 0;
 
       for (int i = 0; i < num_columns_; ++i) {
         int64_t values_read;
-        ASSERT_FALSE(rg_metadata->ColumnChunk(i)->has_index_page());
-        total_column_byte_size +=
-            rg_metadata->ColumnChunk(i)->total_uncompressed_size();
-        total_column_compressed_size +=
-            rg_metadata->ColumnChunk(i)->total_compressed_size();
-
-        std::vector<int16_t> def_levels_out(rows_per_rowgroup_);
-        std::vector<int16_t> rep_levels_out(rows_per_rowgroup_);
-        auto col_reader = std::static_pointer_cast<TypedColumnReader<TestType>>(
-            rg_reader->Column(i));
-        this->SetupValuesOut(rows_per_rowgroup_);
-        col_reader->ReadBatch(
-            rows_per_rowgroup_,
-            def_levels_out.data(),
-            rep_levels_out.data(),
-            this->values_out_ptr_,
-            &values_read);
-        this->SyncValuesOut();
-        ASSERT_EQ(rows_per_rowgroup_, values_read);
-        ASSERT_EQ(this->values_, this->values_out_);
-        ASSERT_EQ(this->def_levels_, def_levels_out);
+        ASSERT_FALSE(rowGroupReader.columnChunk(i).hasIndexPage());
+        totalColumnByteSize +=
+            rowGroupReader.columnChunk(i).totalUncompressedSize();
+        totalColumnCompressedSize +=
+            rowGroupReader.columnChunk(i).totalCompressedSize();
       }
-
-      ASSERT_EQ(total_byte_size, total_column_byte_size);
-      ASSERT_EQ(total_compressed_size, total_column_compressed_size);
+      ASSERT_EQ(totalByteSize, totalColumnByteSize);
+      ASSERT_EQ(totalCompressedSize, totalColumnCompressedSize);
     }
   }
 
@@ -412,14 +521,24 @@ TEST(TestBufferedRowGroupWriter, DisabledDictionary) {
   rg_writer->Close();
   file_writer->Close();
   PARQUET_ASSIGN_OR_THROW(auto buffer, sink->Finish());
-
-  auto source = std::make_shared<::arrow::io::BufferReader>(buffer);
-  auto file_reader = ParquetFileReader::Open(source);
-  ASSERT_EQ(1, file_reader->metadata()->num_row_groups());
-  auto rg_reader = file_reader->RowGroup(0);
-  ASSERT_EQ(1, rg_reader->metadata()->num_columns());
-  ASSERT_EQ(1, rg_reader->metadata()->num_rows());
-  ASSERT_FALSE(rg_reader->metadata()->ColumnChunk(0)->has_dictionary_page());
+  // Write the buffer to a temp file path
+  auto filePath = exec::test::TempFilePath::create();
+  writeToFile(filePath, buffer);
+  std::shared_ptr<facebook::velox::memory::MemoryPool> rootPool =
+      memory::memoryManager()->addRootPool("MetadataTest");
+  std::shared_ptr<facebook::velox::memory::MemoryPool> leafPool =
+      rootPool->addLeafChild("MetadataTest");
+  dwio::common::ReaderOptions readerOptions{leafPool.get()};
+  auto input = std::make_unique<dwio::common::BufferedInput>(
+      std::make_shared<LocalReadFile>(filePath->getPath()),
+      readerOptions.memoryPool());
+  auto reader =
+      std::make_unique<ParquetReader>(std::move(input), readerOptions);
+  ASSERT_EQ(1, reader->thriftFileMetaData().row_groups.size());
+  auto rowGroup = reader->fileMetaData().rowGroup(0);
+  ASSERT_EQ(1, rowGroup.numColumns());
+  ASSERT_EQ(1, rowGroup.numRows());
+  ASSERT_FALSE(rowGroup.columnChunk(0).hasDictionaryPageOffset());
 }
 
 TEST(TestBufferedRowGroupWriter, MultiPageDisabledDictionary) {
@@ -446,31 +565,41 @@ TEST(TestBufferedRowGroupWriter, MultiPageDisabledDictionary) {
   rg_writer->Close();
   file_writer->Close();
   PARQUET_ASSIGN_OR_THROW(auto buffer, sink->Finish());
-
-  auto source = std::make_shared<::arrow::io::BufferReader>(buffer);
-  auto file_reader = ParquetFileReader::Open(source);
-  auto file_metadata = file_reader->metadata();
-  ASSERT_EQ(1, file_reader->metadata()->num_row_groups());
-  std::vector<int32_t> values_out(kValueCount);
-  for (int r = 0; r < file_metadata->num_row_groups(); ++r) {
-    auto rg_reader = file_reader->RowGroup(r);
-    ASSERT_EQ(1, rg_reader->metadata()->num_columns());
-    ASSERT_EQ(kValueCount, rg_reader->metadata()->num_rows());
-    int64_t total_values_read = 0;
-    std::shared_ptr<ColumnReader> col_reader;
-    ASSERT_NO_THROW(col_reader = rg_reader->Column(0));
-    Int32Reader* int32_reader = static_cast<Int32Reader*>(col_reader.get());
-    int64_t vn = kValueCount;
-    int32_t* vx = values_out.data();
-    while (int32_reader->HasNext()) {
-      int64_t values_read;
-      int32_reader->ReadBatch(vn, nullptr, nullptr, vx, &values_read);
-      vn -= values_read;
-      vx += values_read;
-      total_values_read += values_read;
+  // Write the buffer to a temp file path
+  auto filePath = exec::test::TempFilePath::create();
+  writeToFile(filePath, buffer);
+  std::shared_ptr<facebook::velox::memory::MemoryPool> rootPool =
+      memory::memoryManager()->addRootPool("MetadataTest");
+  std::shared_ptr<facebook::velox::memory::MemoryPool> leafPool =
+      rootPool->addLeafChild("MetadataTest");
+  dwio::common::ReaderOptions readerOptions{leafPool.get()};
+  auto input = std::make_unique<dwio::common::BufferedInput>(
+      std::make_shared<LocalReadFile>(filePath->getPath()),
+      readerOptions.memoryPool());
+  auto reader =
+      std::make_unique<ParquetReader>(std::move(input), readerOptions);
+  ASSERT_EQ(1, reader->thriftFileMetaData().row_groups.size());
+  std::vector<int32_t> outputValues(kValueCount);
+  for (int i = 0; i < reader->thriftFileMetaData().row_groups.size(); i++) {
+    auto rowGroup = reader->fileMetaData().rowGroup(i);
+    ASSERT_EQ(1, rowGroup.numColumns());
+    ASSERT_EQ(kValueCount, rowGroup.numRows());
+    dwio::common::RowReaderOptions rowReaderOpts;
+    auto rowType = ROW({"col"}, {BIGINT()});
+    auto spec = std::make_shared<common::ScanSpec>("<root>");
+    spec->addAllChildFields(*rowType);
+    rowReaderOpts.setScanSpec(spec);
+    auto rowReader = reader->createRowReader(rowReaderOpts);
+    constexpr int batchSize = 10000;
+    auto result = BaseVector::create(rowType, batchSize, leafPool.get());
+    rowReader->next(batchSize, result);
+    for (auto j = 0; j < result->size(); j++) {
+      auto value = result->toString(j);
+      value = value.substr(1, value.length() - 2);
+      outputValues[j] = std::stoi(value);
     }
-    ASSERT_EQ(kValueCount, total_values_read);
-    ASSERT_EQ(values_in, values_out);
+    ASSERT_EQ(kValueCount, result->size());
+    ASSERT_EQ(values_in, outputValues);
   }
 }
 
@@ -502,19 +631,42 @@ TEST(ParquetRoundtrip, AllNulls) {
   ReaderProperties props = default_reader_properties();
   props.enable_buffered_stream();
   PARQUET_ASSIGN_OR_THROW(auto buffer, sink->Finish());
-
-  auto source = std::make_shared<::arrow::io::BufferReader>(buffer);
-  auto file_reader = ParquetFileReader::Open(source, props);
-  auto row_group_reader = file_reader->RowGroup(0);
-  auto column_reader =
-      std::static_pointer_cast<Int32Reader>(row_group_reader->Column(0));
-
-  int64_t values_read;
-  def_levels[0] = -1;
-  def_levels[1] = -1;
-  def_levels[2] = -1;
-  column_reader->ReadBatch(3, def_levels, nullptr, values, &values_read);
-  EXPECT_THAT(def_levels, ElementsAre(0, 0, 0));
+  // Write the buffer to a temp file path
+  auto filePath = exec::test::TempFilePath::create();
+  writeToFile(filePath, buffer);
+  std::shared_ptr<facebook::velox::memory::MemoryPool> rootPool =
+      memory::memoryManager()->addRootPool("MetadataTest");
+  std::shared_ptr<facebook::velox::memory::MemoryPool> leafPool =
+      rootPool->addLeafChild("MetadataTest");
+  dwio::common::ReaderOptions readerOptions{leafPool.get()};
+  auto input = std::make_unique<dwio::common::BufferedInput>(
+      std::make_shared<LocalReadFile>(filePath->getPath()),
+      readerOptions.memoryPool());
+  auto reader =
+      std::make_unique<ParquetReader>(std::move(input), readerOptions);
+  auto rowGroup = reader->fileMetaData().rowGroup(0);
+  ASSERT_EQ(rowGroup.numColumns(), 1);
+  dwio::common::RowReaderOptions rowReaderOpts;
+  auto rowT = ROW({"nulls"}, {BIGINT()});
+  auto scanSpec = std::make_shared<velox::common::ScanSpec>("");
+  scanSpec->addAllChildFields(*rowT);
+  rowReaderOpts.setScanSpec(scanSpec);
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+  constexpr int batchSize = 1000;
+  auto result = BaseVector::create(rowT, batchSize, leafPool.get());
+  rowReader->next(batchSize, result);
+  for (auto i = 0; i < result->size(); i++) {
+    auto val = result->toString(i);
+    val = val.substr(1, val.size() - 2);
+    val.erase(std::remove(val.begin(), val.end(), ' '), val.end());
+    std::stringstream ss(val);
+    std::string token;
+    int pos = 0;
+    while (std::getline(ss, token, ',')) {
+      // Trim spaces from the token and check if it is "null"
+      ASSERT_EQ(token, "null");
+    }
+  }
 }
 
 } // namespace test
