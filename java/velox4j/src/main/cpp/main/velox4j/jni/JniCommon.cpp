@@ -79,9 +79,9 @@ jclass createGlobalClassReference(JNIEnv* env, const char* className) {
 jclass createGlobalClassReferenceOrError(JNIEnv* env, const char* className) {
   jclass globalClass = createGlobalClassReference(env, className);
   if (globalClass == nullptr) {
-    std::string errorMessage =
-                    "Unable to create a global class reference for {} ",
-                std::string(className);
+    std::string errorMessage = fmt::format(
+        "Unable to create a global class reference for {} ",
+        std::string(className));
     VELOX_FAIL(errorMessage);
   }
   return globalClass;
