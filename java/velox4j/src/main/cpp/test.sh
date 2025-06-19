@@ -25,7 +25,7 @@ BUILD_TEST_DIR=$BUILD_DIR/test
 
 # Build C++ so libraries.
 cmake -DCMAKE_BUILD_TYPE=Release -DVELOX4J_ENABLE_CCACHE=ON -DVELOX4J_BUILD_TESTING=ON -S "$SOURCE_DIR" -B "$BUILD_DIR"
-cmake --build "$BUILD_DIR"  -j "$NUM_THREADS"
+cmake --build "$BUILD_DIR" -j "$NUM_THREADS"
 
 # Run tests.
 cd "$BUILD_TEST_DIR"
