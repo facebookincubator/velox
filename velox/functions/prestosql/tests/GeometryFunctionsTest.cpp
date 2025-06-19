@@ -99,6 +99,28 @@ class GeometryFunctionsTest : public FunctionBaseTest {
   }
 };
 
+TEST_F(GeometryFunctionsTest, errorStGeometryFromText) {
+  const auto assertGeom = [&](const std::optional<std::string>& a) {
+    return evaluateOnce<std::string>("ST_GeometryFromText(c0)", a);
+  };
+
+  VELOX_ASSERT_USER_THROW(
+      assertGeom("xyz"),
+      "Failed to parse WKT: ParseException: Unknown type: 'XYZ'");
+  VELOX_ASSERT_USER_THROW(
+      assertGeom("LINESTRING (-71.3839245 42.3128124)"),
+      "Failed to parse WKT: IllegalArgumentException: point array must contain 0 or >1 elements");
+  VELOX_ASSERT_USER_THROW(
+      assertGeom("POLYGON ((-13.637339 9.617113, -13.637339 9.617113))"),
+      "Failed to parse WKT: IllegalArgumentException: Invalid number of points in LinearRing found 2 - must be 0 or >= 4");
+  VELOX_ASSERT_USER_THROW(
+      assertGeom("POLYGON(0 0)"),
+      "Failed to parse WKT: ParseException: Expected word but encountered number: '0'");
+  VELOX_ASSERT_USER_THROW(
+      assertGeom("POLYGON((0 0))"),
+      "Failed to parse WKT: IllegalArgumentException: point array must contain 0 or >1 elements");
+}
+
 TEST_F(GeometryFunctionsTest, wktAndWkb) {
   const auto wktRoundTrip = [&](const std::optional<std::string>& a) {
     return evaluateOnce<std::string>("ST_AsText(ST_GeometryFromText(c0))", a);
