@@ -100,16 +100,6 @@ function install_glog {
   cmake_install_dir glog -DBUILD_SHARED_LIBS=ON
 }
 
-function install_lzo {
-  wget_and_untar http://www.oberhumer.com/opensource/lzo/download/lzo-2.10.tar.gz lzo
-  (
-    cd ${DEPENDENCY_DIR}/lzo
-    ./configure --prefix=${INSTALL_PREFIX} --enable-shared --disable-static --docdir=/usr/share/doc/lzo-2.10
-    make "-j${NPROC}"
-    make install
-  )
-}
-
 function install_boost {
   wget_and_untar https://github.com/boostorg/boost/releases/download/${BOOST_VERSION}/${BOOST_VERSION}.tar.gz boost
   (
@@ -262,7 +252,20 @@ function install_arrow {
 
 function install_cuda {
   # See https://developer.nvidia.com/cuda-downloads
-  dnf config-manager --add-repo https://developer.download.nvidia.com/compute/cuda/repos/rhel9/x86_64/cuda-rhel9.repo
+  local arch=$(uname -m)
+  local repo_url
+
+  if [[ "$arch" == "x86_64" ]]; then
+    repo_url="https://developer.download.nvidia.com/compute/cuda/repos/rhel8/x86_64/cuda-rhel8.repo"
+  elif [[ "$arch" == "aarch64" ]]; then
+    # Using SBSA (Server Base System Architecture) repository for ARM64 servers
+    repo_url="https://developer.download.nvidia.com/compute/cuda/repos/rhel8/sbsa/cuda-rhel8.repo"
+  else
+    echo "Unsupported architecture: $arch" >&2
+    return 1
+  fi
+
+  dnf config-manager --add-repo "$repo_url"
   local dashed="$(echo $1 | tr '.' '-')"
   dnf install -y cuda-nvcc-$dashed cuda-cudart-devel-$dashed cuda-nvrtc-devel-$dashed cuda-driver-devel-$dashed
 }
@@ -271,7 +274,6 @@ function install_velox_deps {
   run_and_time install_velox_deps_from_dnf
   run_and_time install_gflags
   run_and_time install_glog
-  run_and_time install_lzo
   run_and_time install_snappy
   run_and_time install_boost
   run_and_time install_protobuf

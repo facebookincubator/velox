@@ -16,6 +16,7 @@
 
 #include <gtest/gtest.h>
 #include <array>
+#include "velox/common/base/Status.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 
@@ -413,7 +414,7 @@ TEST_F(GeometryFunctionsTest, testStContains) {
           "MULTIPOLYGON ( ((0 0, 0 2, 2 2, 2 0, 0 0)), ((1 1, 1 3, 3 3, 3 1, 1 1)) )",
           "POINT (1 1)",
           false),
-      "Failed to check geometry contains: TopologyException: side location conflict at 1 2. This can occur if the input geometry is invalid.");
+      "TopologyException: side location conflict at 1 2. This can occur if the input geometry is invalid.");
 }
 
 TEST_F(GeometryFunctionsTest, testStCrosses) {
@@ -478,7 +479,7 @@ TEST_F(GeometryFunctionsTest, testStCrosses) {
           "MULTIPOLYGON ( ((0 0, 0 2, 2 2, 2 0, 0 0)), ((1 1, 1 3, 3 3, 3 1, 1 1)) )",
           "POINT (1 1)",
           false),
-      "Failed to check geometry crosses: TopologyException: side location conflict at 1 2. This can occur if the input geometry is invalid.");
+      "TopologyException: side location conflict at 1 2. This can occur if the input geometry is invalid.");
 }
 
 TEST_F(GeometryFunctionsTest, testStDisjoint) {
@@ -514,7 +515,7 @@ TEST_F(GeometryFunctionsTest, testStDisjoint) {
           "MULTIPOLYGON ( ((0 0, 0 2, 2 2, 2 0, 0 0)), ((1 1, 1 3, 3 3, 3 1, 1 1)) )",
           "POINT (1 1)",
           false),
-      "Failed to check geometry disjoint: TopologyException: side location conflict at 1 2. This can occur if the input geometry is invalid.");
+      "TopologyException: side location conflict at 1 2. This can occur if the input geometry is invalid.");
 }
 
 TEST_F(GeometryFunctionsTest, testStEquals) {
@@ -604,7 +605,7 @@ TEST_F(GeometryFunctionsTest, testStIntersects) {
           "MULTIPOLYGON ( ((0 0, 0 2, 2 2, 2 0, 0 0)), ((1 1, 1 3, 3 3, 3 1, 1 1)) )",
           "POINT (1 1)",
           false),
-      "Failed to check geometry intersects: TopologyException: side location conflict at 1 2. This can occur if the input geometry is invalid.");
+      "TopologyException: side location conflict at 1 2. This can occur if the input geometry is invalid.");
 }
 
 TEST_F(GeometryFunctionsTest, testStOverlaps) {
@@ -658,7 +659,7 @@ TEST_F(GeometryFunctionsTest, testStOverlaps) {
           "MULTIPOLYGON ( ((0 0, 0 2, 2 2, 2 0, 0 0)), ((1 1, 1 3, 3 3, 3 1, 1 1)) )",
           "POINT (1 1)",
           false),
-      "Failed to check geometry overlaps: TopologyException: side location conflict at 1 2. This can occur if the input geometry is invalid.");
+      "TopologyException: side location conflict at 1 2. This can occur if the input geometry is invalid.");
 }
 
 TEST_F(GeometryFunctionsTest, testStTouches) {
@@ -729,7 +730,7 @@ TEST_F(GeometryFunctionsTest, testStTouches) {
           "MULTIPOLYGON ( ((0 0, 0 2, 2 2, 2 0, 0 0)), ((1 1, 1 3, 3 3, 3 1, 1 1)) )",
           "POINT (1 1)",
           false),
-      "Failed to check geometry touches: TopologyException: side location conflict at 1 2. This can occur if the input geometry is invalid.");
+      "TopologyException: side location conflict at 1 2. This can occur if the input geometry is invalid.");
 }
 
 TEST_F(GeometryFunctionsTest, testStWithin) {
@@ -804,7 +805,7 @@ TEST_F(GeometryFunctionsTest, testStWithin) {
           "POINT (0 0)",
           "MULTIPOLYGON ( ((0 0, 0 2, 2 2, 2 0, 0 0)), ((1 1, 1 3, 3 3, 3 1, 1 1)) )",
           false),
-      "Failed to check geometry within: TopologyException: side location conflict at 1 2. This can occur if the input geometry is invalid.");
+      "TopologyException: side location conflict at 1 2. This can occur if the input geometry is invalid.");
 }
 
 // Overlay operations
@@ -839,13 +840,13 @@ TEST_F(GeometryFunctionsTest, testStDifference) {
       "POLYGON ((0 1, 3 1, 3 3, 0 3, 0 1))",
       "POLYGON ((0 1, 1 1, 1 0, 0 0, 0 1))");
 
-  VELOX_ASSERT_USER_THROW(
+  ASSERT_THROW(
       assertOverlay(
           "ST_Difference",
           "LINESTRING (0 0, 1 1, 1 0, 0 1)",
           "MULTIPOLYGON ( ((0 0, 0 2, 2 2, 2 0, 0 0)), ((1 1, 1 3, 3 3, 3 1, 1 1)) )",
           "POINT EMPTY"),
-      "Failed to compute geometry difference: TopologyException: Input geom 1 is invalid: Self-intersection at 1 2");
+      facebook::velox::VeloxUserError);
 }
 
 TEST_F(GeometryFunctionsTest, testStIntersection) {
@@ -888,13 +889,13 @@ TEST_F(GeometryFunctionsTest, testStIntersection) {
       "LINESTRING (0 0, 1 -1, 1 2)",
       "GEOMETRYCOLLECTION (LINESTRING (1 1, 1 0), POINT (0 0))");
 
-  VELOX_ASSERT_USER_THROW(
+  ASSERT_THROW(
       assertOverlay(
           "ST_Intersection",
           "LINESTRING (0 0, 1 1, 1 0, 0 1)",
           "MULTIPOLYGON ( ((0 0, 0 2, 2 2, 2 0, 0 0)), ((1 1, 1 3, 3 3, 3 1, 1 1)) )",
           "POINT EMPTY"),
-      "Failed to compute geometry intersection: TopologyException: Input geom 1 is invalid: Self-intersection at 1 2");
+      facebook::velox::VeloxUserError);
 }
 
 TEST_F(GeometryFunctionsTest, testStSymDifference) {
@@ -930,13 +931,13 @@ TEST_F(GeometryFunctionsTest, testStSymDifference) {
       "POLYGON ((0 0, 0 3, 3 3, 3 0, 0 0))",
       "MULTIPOLYGON (((0 2, 0 3, 2 3, 2 2, 0 2)), ((2 2, 3 2, 3 0, 2 0, 2 2)), ((2 4, 4 4, 4 2, 3 2, 3 3, 2 3, 2 4)))");
 
-  VELOX_ASSERT_USER_THROW(
+  ASSERT_THROW(
       assertOverlay(
           "ST_SymDifference",
           "LINESTRING (0 0, 1 1, 1 0, 0 1)",
           "MULTIPOLYGON ( ((0 0, 0 2, 2 2, 2 0, 0 0)), ((1 1, 1 3, 3 3, 3 1, 1 1)) )",
           "POINT EMPTY"),
-      "Failed to compute geometry symdifference: TopologyException: Input geom 1 is invalid: Self-intersection at 1 2");
+      facebook::velox::VeloxUserError);
 }
 
 TEST_F(GeometryFunctionsTest, testStUnion) {
@@ -1067,13 +1068,13 @@ TEST_F(GeometryFunctionsTest, testStUnion) {
       "GEOMETRYCOLLECTION (POLYGON ((2 2, 4 2, 4 4, 2 4, 2 2)), LINESTRING (2 1, 4 1))",
       "GEOMETRYCOLLECTION (LINESTRING (3 1, 4 1), POLYGON ((1 1, 1 3, 2 3, 2 4, 4 4, 4 2, 3 2, 3 1, 2 1, 1 1)))");
 
-  VELOX_ASSERT_USER_THROW(
+  ASSERT_THROW(
       assertOverlay(
           "ST_Union",
           "LINESTRING (0 0, 1 1, 1 0, 0 1)",
           "MULTIPOLYGON ( ((0 0, 0 2, 2 2, 2 0, 0 0)), ((1 1, 1 3, 3 3, 3 1, 1 1)) )",
           "POINT EMPTY"),
-      "Failed to compute geometry union: TopologyException: Input geom 1 is invalid: Self-intersection at 1 2");
+      facebook::velox::VeloxUserError);
 }
 
 // Accessors
@@ -1432,4 +1433,208 @@ TEST_F(GeometryFunctionsTest, testStCentroid) {
           "GEOMETRYCOLLECTION (POLYGON ((0 0, 2 0, 2 2, 0 2, 0 0)), POLYGON ((1 1, 3 1, 3 3, 1 3, 1 1)), GEOMETRYCOLLECTION (POINT (8 8), LINESTRING (5 5, 6 6), POLYGON ((1 1, 3 1, 3 4, 1 4, 1 1))))",
           std::nullopt),
       "ST_Centroid only applies to Point or MultiPoint or LineString or MultiLineString or Polygon or MultiPolygon. Input type is: GeometryCollection");
+}
+
+TEST_F(GeometryFunctionsTest, testSTMin) {
+  const auto assertPointMin = [&](const std::optional<std::string>& wkt,
+                                  const std::optional<double> expectedXMin,
+                                  const std::optional<double> expectedYMin) {
+    std::optional<double> xMin =
+        evaluateOnce<double>("ST_XMin(ST_GeometryFromText(c0))", wkt);
+    std::optional<double> yMin =
+        evaluateOnce<double>("ST_YMin(ST_GeometryFromText(c0))", wkt);
+    if (expectedXMin.has_value() && expectedYMin.has_value()) {
+      EXPECT_TRUE(xMin.has_value());
+      EXPECT_TRUE(yMin.has_value());
+      EXPECT_EQ(expectedXMin.value(), xMin.value());
+      EXPECT_EQ(expectedYMin.value(), yMin.value());
+    } else {
+      EXPECT_FALSE(xMin.has_value());
+      EXPECT_FALSE(yMin.has_value());
+    }
+  };
+
+  assertPointMin("POINT (1.5 2.5)", 1.5, 2.5);
+  assertPointMin("MULTIPOINT (1 2, 2 4, 3 6, 4 8)", 1.0, 2.0);
+  assertPointMin("LINESTRING (8 4, 5 7)", 5.0, 4.0);
+  assertPointMin("MULTILINESTRING ((1 1, 5 1), (2 4, 4 4))", 1.0, 1.0);
+  assertPointMin("POLYGON ((2 0, 2 1, 3 1, 2 0))", 2.0, 0.0);
+  assertPointMin(
+      "MULTIPOLYGON (((1 10, 1 3, 3 3, 3 10, 1 10)), ((2 4, 2 6, 6 6, 6 4, 2 4)))",
+      1.0,
+      3.0);
+  assertPointMin(
+      "GEOMETRYCOLLECTION (POINT (5 1), LINESTRING (3 4, 4 4))", 3.0, 1.0);
+  assertPointMin(std::nullopt, std::nullopt, std::nullopt);
+  assertPointMin("POLYGON EMPTY", std::nullopt, std::nullopt);
+}
+
+TEST_F(GeometryFunctionsTest, testSTMax) {
+  const auto assertPointMax = [&](const std::optional<std::string>& wkt,
+                                  const std::optional<double> expectedXMax,
+                                  const std::optional<double> expectedYMax) {
+    std::optional<double> xMax =
+        evaluateOnce<double>("ST_XMax(ST_GeometryFromText(c0))", wkt);
+    std::optional<double> yMax =
+        evaluateOnce<double>("ST_YMax(ST_GeometryFromText(c0))", wkt);
+    if (expectedXMax.has_value() && expectedYMax.has_value()) {
+      EXPECT_TRUE(xMax.has_value());
+      EXPECT_TRUE(yMax.has_value());
+      EXPECT_EQ(expectedXMax.value(), xMax.value());
+      EXPECT_EQ(expectedYMax.value(), yMax.value());
+    } else {
+      EXPECT_FALSE(xMax.has_value());
+      EXPECT_FALSE(yMax.has_value());
+    }
+  };
+
+  assertPointMax("POINT (1.5 2.5)", 1.5, 2.5);
+  assertPointMax("MULTIPOINT (1 2, 2 4, 3 6, 4 8)", 4.0, 8.0);
+  assertPointMax("LINESTRING (8 4, 5 7)", 8.0, 7.0);
+  assertPointMax("MULTILINESTRING ((1 1, 5 1), (2 4, 4 4))", 5.0, 4.0);
+  assertPointMax("POLYGON ((2 0, 2 1, 3 1, 2 0))", 3.0, 1.0);
+  assertPointMax(
+      "MULTIPOLYGON (((1 10, 1 3, 3 3, 3 10, 1 10)), ((2 4, 2 6, 6 6, 6 4, 2 4)))",
+      6.0,
+      10.0);
+  assertPointMax(
+      "GEOMETRYCOLLECTION (POINT (5 1), LINESTRING (3 4, 4 4))", 5.0, 4.0);
+  assertPointMax(std::nullopt, std::nullopt, std::nullopt);
+  assertPointMax("POLYGON EMPTY", std::nullopt, std::nullopt);
+}
+
+TEST_F(GeometryFunctionsTest, testStGeometryType) {
+  const auto testStGeometryTypeFunc =
+      [&](const std::optional<std::string>& wkt,
+          const std::optional<std::string>& expected) {
+        std::optional<std::string> result = evaluateOnce<std::string>(
+            "ST_GeometryType(ST_GeometryFromText(c0))", wkt);
+
+        if (wkt.has_value()) {
+          ASSERT_TRUE(result.has_value());
+          ASSERT_TRUE(expected.has_value());
+          ASSERT_EQ(result.value(), expected.value());
+        } else {
+          ASSERT_FALSE(result.has_value());
+        }
+      };
+
+  testStGeometryTypeFunc("POINT EMPTY", "Point");
+  testStGeometryTypeFunc("POINT (3 5)", "Point");
+  testStGeometryTypeFunc("LINESTRING EMPTY", "LineString");
+  testStGeometryTypeFunc("LINESTRING (1 1, 2 2, 3 3)", "LineString");
+  testStGeometryTypeFunc("LINEARRING EMPTY", "LineString");
+  testStGeometryTypeFunc("POLYGON EMPTY", "Polygon");
+  testStGeometryTypeFunc("POLYGON ((1 1, 4 1, 1 4, 1 1))", "Polygon");
+  testStGeometryTypeFunc("MULTIPOINT EMPTY", "MultiPoint");
+  testStGeometryTypeFunc("MULTIPOINT (1 2, 2 4, 3 6, 4 8)", "MultiPoint");
+  testStGeometryTypeFunc("MULTILINESTRING EMPTY", "MultiLineString");
+  testStGeometryTypeFunc(
+      "MULTILINESTRING ((1 1, 5 1), (2 4, 4 4))", "MultiLineString");
+  testStGeometryTypeFunc("MULTIPOLYGON EMPTY", "MultiPolygon");
+  testStGeometryTypeFunc(
+      "MULTIPOLYGON (((1 1, 1 3, 3 3, 3 1, 1 1)), ((2 4, 2 6, 6 6, 6 4, 2 4)))",
+      "MultiPolygon");
+  testStGeometryTypeFunc("GEOMETRYCOLLECTION EMPTY", "GeometryCollection");
+  testStGeometryTypeFunc(
+      "GEOMETRYCOLLECTION (POLYGON ((0 0, 2 0, 2 2, 0 2, 0 0)), POLYGON ((1 1, 3 1, 3 3, 1 3, 1 1)), GEOMETRYCOLLECTION (POINT (8 8), LINESTRING (5 5, 6 6), POLYGON ((1 1, 3 1, 3 4, 1 4, 1 1))))",
+      "GeometryCollection");
+}
+
+TEST_F(GeometryFunctionsTest, testStDistance) {
+  const auto testStDistanceFunc = [&](const std::optional<std::string>& wkt1,
+                                      const std::optional<std::string>& wkt2,
+                                      const std::optional<double>& expected =
+                                          std::nullopt) {
+    std::optional<double> result = evaluateOnce<double>(
+        "ST_Distance(ST_GeometryFromText(c0), ST_GeometryFromText(c1))",
+        wkt1,
+        wkt2);
+
+    if (wkt1.has_value() && wkt2.has_value()) {
+      if (expected.has_value()) {
+        ASSERT_TRUE(result.has_value());
+        ASSERT_EQ(result.value(), expected.value());
+      } else {
+        ASSERT_FALSE(result.has_value());
+      }
+    } else {
+      ASSERT_FALSE(expected.has_value());
+      ASSERT_FALSE(result.has_value());
+    }
+  };
+
+  testStDistanceFunc("POINT (50 100)", "POINT (150 150)", 111.80339887498948);
+  testStDistanceFunc("MULTIPOINT (50 100, 50 200)", "POINT (50 100)", 0.0);
+  testStDistanceFunc(
+      "LINESTRING (50 100, 50 200)",
+      "LINESTRING (10 10, 20 20)",
+      85.44003745317531);
+  testStDistanceFunc(
+      "MULTILINESTRING ((1 1, 5 1), (2 4, 4 4))",
+      "LINESTRING (10 20, 20 50)'))",
+      17.08800749063506);
+  testStDistanceFunc(
+      "POLYGON ((1 1, 1 3, 3 3, 3 1, 1 1))",
+      "POLYGON ((4 4, 4 5, 5 5, 5 4, 4 4))",
+      1.4142135623730951);
+  testStDistanceFunc(
+      "MULTIPOLYGON (((1 1, 1 3, 3 3, 3 1, 1 1)), ((0 0, 0 2, 2 2, 2 0, 0 0)))",
+      "POLYGON ((10 100, 30 10, 30 100, 10 100))",
+      27.892651361962706);
+
+  testStDistanceFunc("POINT EMPTY", "POINT (150 150)");
+  testStDistanceFunc("MULTIPOINT EMPTY", "POINT (50 100)");
+  testStDistanceFunc("LINESTRING EMPTY", "LINESTRING (10 10, 20 20)");
+  testStDistanceFunc("MULTILINESTRING EMPTY", "LINESTRING (10 20, 20 50)'))");
+  testStDistanceFunc("POLYGON EMPTY", "POLYGON ((4 4, 4 5, 5 5, 5 4, 4 4))");
+  testStDistanceFunc(
+      "MULTIPOLYGON EMPTY", "POLYGON ((10 100, 30 10, 30 100, 10 100))");
+  testStDistanceFunc(std::nullopt, "POINT (50 100)");
+}
+
+TEST_F(GeometryFunctionsTest, testStXY) {
+  const auto testStX = [&](const std::optional<std::string>& wkt,
+                           const std::optional<double>& expectedX =
+                               std::nullopt) {
+    std::optional<double> resultX =
+        evaluateOnce<double>("ST_X(ST_GeometryFromText(c0))", wkt);
+
+    if (expectedX.has_value()) {
+      ASSERT_TRUE(resultX.has_value());
+      ASSERT_EQ(expectedX.value(), resultX.value());
+    } else {
+      ASSERT_FALSE(resultX.has_value());
+    }
+  };
+  const auto testStY = [&](const std::optional<std::string>& wkt,
+                           const std::optional<double>& expectedY =
+                               std::nullopt) {
+    std::optional<double> resultY =
+        evaluateOnce<double>("ST_Y(ST_GeometryFromText(c0))", wkt);
+
+    if (expectedY.has_value()) {
+      ASSERT_TRUE(resultY.has_value());
+      ASSERT_EQ(expectedY.value(), resultY.value());
+    } else {
+      ASSERT_FALSE(resultY.has_value());
+    }
+  };
+
+  testStX("POINT (1 2)", 1.0);
+  testStY("POINT (1 2)", 2.0);
+  testStX("POINT EMPTY", std::nullopt);
+  testStY("POINT EMPTY", std::nullopt);
+  VELOX_ASSERT_USER_THROW(
+      testStX("GEOMETRYCOLLECTION EMPTY"),
+      "ST_X requires a Point geometry, found GeometryCollection");
+  VELOX_ASSERT_USER_THROW(
+      testStY("GEOMETRYCOLLECTION EMPTY"),
+      "ST_Y requires a Point geometry, found GeometryCollection");
+  VELOX_ASSERT_USER_THROW(
+      testStX("POLYGON ((1 1, 1 3, 3 3, 3 1, 1 1))"),
+      "ST_X requires a Point geometry, found Polygon");
+  VELOX_ASSERT_USER_THROW(
+      testStY("POLYGON ((1 1, 1 3, 3 3, 3 1, 1 1))"),
+      "ST_Y requires a Point geometry, found Polygon");
 }
