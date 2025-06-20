@@ -388,6 +388,17 @@ class VectorFuzzer {
     opaqueTypeGenerators_[std::type_index(typeid(Class))] = generator;
   }
 
+  // Maximum values allowed either by explicit validation (in the case of
+  // INTERVAL YEAR TO MONTH) or implicitly by supported precision (in the case
+  // of INTERVAL DAY TO SECOND). For the former, Presto will fail for values
+  // with more than seven digits. For the latter, functions that input this type
+  // won't fail explicitly, but do not accept micro or nano seconds and will
+  // lack precision during validation. Until we support this level of precision
+  // in Presto Java, or begin comparing with Prestissimo, we should hard cap
+  // these values during fuzzing.
+  static const int64_t kMaxAllowedIntervalDayTime = 999999999999999;
+  static const int32_t kMaxAllowedIntervalYearMonth = 999999;
+
  private:
   // Generates a flat vector for primitive types.
   VectorPtr fuzzFlatPrimitive(const TypePtr& type, vector_size_t size);
