@@ -744,6 +744,7 @@ Noisy Aggregate Functions
     If provided, ``random_seed`` is used to seed the random number generator. Otherwise, noise is drawn from a secure random.
 
     ::
+
         SELECT noisy_count_gaussian(orderkey, 20.0) FROM tpch.tiny.lineitem; -- 60181 (1 row)
         SELECT noisy_count_gaussian(orderkey, 20.0) FROM tpch.tiny.lineitem WHERE false; -- NULL (1 row)
 
