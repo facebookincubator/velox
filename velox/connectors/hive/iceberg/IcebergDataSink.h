@@ -17,46 +17,9 @@
 #pragma once
 
 #include "velox/connectors/hive/HiveDataSink.h"
+#include "velox/connectors/hive/iceberg/PartitionSpec.h"
 
 namespace facebook::velox::connector::hive::iceberg {
-
-struct IcebergPartitionSpec {
-  enum class TransformType {
-    kIdentity,
-    kYear,
-    kMonth,
-    kDay,
-    kHour,
-    kBucket,
-    kTruncate
-  };
-
-  struct Field {
-    // The column name of this partition field as it appears in the partition
-    // spec.
-    std::string name;
-
-    // The transform type applied to the source field (e.g., kIdentity, kBucket,
-    // kTruncate, etc.).
-    TransformType transform;
-
-    // Optional parameter for transforms that require configuration
-    // (e.g., bucket count or truncate width).
-    std::optional<int32_t> parameter;
-
-    Field(
-        const std::string& _name,
-        TransformType _transform,
-        std::optional<int32_t> _parameter)
-        : name(_name), transform(_transform), parameter(_parameter) {}
-  };
-
-  const int32_t specId;
-  const std::vector<Field> fields;
-
-  IcebergPartitionSpec(int32_t _specId, const std::vector<Field>& _fields)
-      : specId(_specId), fields(_fields) {}
-};
 
 // Represents a request for Iceberg write.
 class IcebergInsertTableHandle final : public HiveInsertTableHandle {
@@ -98,6 +61,8 @@ class IcebergDataSink : public HiveDataSink {
       CommitStrategy commitStrategy,
       const std::shared_ptr<const HiveConfig>& hiveConfig);
 
+  void appendData(RowVectorPtr input) override;
+
  private:
   IcebergDataSink(
       RowTypePtr inputType,
@@ -114,6 +79,8 @@ class IcebergDataSink : public HiveDataSink {
   std::string makePartitionDirectory(
       const std::string& tableDirectory,
       const std::optional<std::string>& partitionSubdirectory) const override;
+
+  void computePartitionAndBucketIds(const RowVectorPtr& input) override;
 
   HiveWriterId getIcebergWriterId(size_t row) const;
 

@@ -49,10 +49,12 @@ class IcebergTestBase : public exec::test::HiveConnectorTestBase {
   std::vector<std::shared_ptr<ConnectorSplit>> createSplitsForDirectory(
       const std::string& directory);
 
- private:
   std::shared_ptr<IcebergPartitionSpec> createPartitionSpec(
-      const std::vector<std::string>& transformSpecs);
+      const std::shared_ptr<IcebergPartitionSpec::Schema>& schema,
+      const std::vector<std::string>& transformSpecs,
+      memory::MemoryPool* memoryPool);
 
+ private:
   std::shared_ptr<IcebergInsertTableHandle> createIcebergInsertTableHandle(
       const RowTypePtr& rowType,
       const std::string& outputDirectoryPath,
@@ -68,11 +70,11 @@ class IcebergTestBase : public exec::test::HiveConnectorTestBase {
  protected:
   dwio::common::FileFormat fileFormat_;
   RowTypePtr rowType_;
+  std::shared_ptr<memory::MemoryPool> opPool_;
 
  private:
   static constexpr const char* kHiveConnectorId = "test-hive";
   std::shared_ptr<memory::MemoryPool> root_;
-  std::shared_ptr<memory::MemoryPool> opPool_;
   std::shared_ptr<memory::MemoryPool> connectorPool_;
   std::shared_ptr<config::ConfigBase> connectorSessionProperties_;
   std::shared_ptr<HiveConfig> connectorConfig_;

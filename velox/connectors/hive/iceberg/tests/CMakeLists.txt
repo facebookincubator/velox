@@ -40,8 +40,13 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
 
   add_executable(
     velox_hive_iceberg_test
-    IcebergReadTest.cpp IcebergSplitReaderBenchmarkTest.cpp IcebergTestBase.cpp
-    IcebergInsertTest.cpp)
+    IcebergReadTest.cpp
+    IcebergSplitReaderBenchmarkTest.cpp
+    IcebergInsertTest.cpp
+    IcebergTestBase.cpp
+    Murmur3Test.cpp
+    IcebergTransformUnitTest.cpp
+    IcebergTransformE2ETest.cpp)
   add_test(velox_hive_iceberg_test velox_hive_iceberg_test)
 
   target_link_libraries(
