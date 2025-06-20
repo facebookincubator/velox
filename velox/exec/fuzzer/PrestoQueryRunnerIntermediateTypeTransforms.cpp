@@ -15,6 +15,7 @@
  */
 
 #include "velox/exec/fuzzer/PrestoQueryRunnerIntermediateTypeTransforms.h"
+#include "velox/exec/fuzzer/PrestoQueryRunnerIntervalTransform.h"
 #include "velox/exec/fuzzer/PrestoQueryRunnerJsonTransform.h"
 #include "velox/exec/fuzzer/PrestoQueryRunnerTimestampWithTimeZoneTransform.h"
 #include "velox/expression/Expr.h"
@@ -33,6 +34,14 @@ const std::unordered_map<TypePtr, std::shared_ptr<IntermediateTypeTransform>>&
 intermediateTypeTransforms() {
   static std::unordered_map<TypePtr, std::shared_ptr<IntermediateTypeTransform>>
       intermediateTypeTransforms{
+          // Note: INTERVAL DAY TO SECOND is included in the below because its
+          // transform is defined and properly tested; however, due to Presto
+          // Java imprecision in functions parse_duration and to_milliseconds,
+          // it will be temporarily excluded from fuzzer runs until Presto Java
+          // fixes said imprecision or when we compare with Prestissimo
+          // directly. Please track below:
+          // https://github.com/prestodb/presto/issues/25275
+          // https://github.com/prestodb/presto/issues/25340
           {TIMESTAMP_WITH_TIME_ZONE(),
            std::make_shared<TimestampWithTimeZoneTransform>()},
           {HYPERLOGLOG(),
@@ -50,7 +59,9 @@ intermediateTypeTransforms() {
           {QDIGEST(REAL()),
            std::make_shared<IntermediateTypeTransformUsingCast>(
                QDIGEST(REAL()), VARBINARY())},
-          {JSON(), std::make_shared<JsonTransform>()}};
+          {JSON(), std::make_shared<JsonTransform>()},
+          {INTERVAL_DAY_TIME(), std::make_shared<IntervalDayTimeTransform>()},
+      };
   return intermediateTypeTransforms;
 }
 
