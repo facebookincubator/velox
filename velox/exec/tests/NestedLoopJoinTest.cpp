@@ -558,6 +558,7 @@ TEST_F(NestedLoopJoinTest, outputOrder) {
   // Left.
   results =
       AssertQueryBuilder(createPlan(core::JoinType::kLeft)).copyResults(pool());
+
   auto expectedLeft = makeRowVector({
       makeNullableFlatVector<int64_t>(
           {1, 1, 1, 1, 8, 6, std::nullopt, 7, 4, 4, 4}),
@@ -726,6 +727,119 @@ TEST_F(NestedLoopJoinTest, mergeBuildVectorsOverflow) {
   // Expect the 2 vectors are not merged together since they are
   // over the limit.
   ASSERT_EQ(mergeResult.size(), 2);
+}
+
+TEST_F(NestedLoopJoinTest, outerJoinWithConditionOneRow) {
+  auto probeVectors = {
+      makeRowVector({sequence<int32_t>(10)}),
+      makeRowVector({sequence<int32_t>(20, 90)}),
+  };
+
+  auto buildVectors = {
+      makeRowVector({sequence<int32_t>(1, 101)}),
+  };
+
+  createDuckDbTable("t", {probeVectors});
+  createDuckDbTable("u", {buildVectors});
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  CursorParameters params;
+  params.maxDrivers = 4;
+  params.planNode = PlanBuilder(planNodeIdGenerator)
+                        .values({probeVectors})
+                        .nestedLoopJoin(
+                            PlanBuilder(planNodeIdGenerator)
+                                .values({buildVectors})
+                                .project({"c0 AS u_c0"})
+                                .planNode(),
+                            "c0 > u_c0",
+                            {"c0", "u_c0"},
+                            core::JoinType::kLeft)
+                        .planNode();
+
+  params.queryConfigs[core::QueryConfig::kPreferredNLJOutputProbeOrder] =
+      "false";
+
+  assertQuery(
+      params,
+      fmt::format(
+          "SELECT t.c0, u.c0 as u_c0 FROM t {} join u on t.c0 > u.c0",
+          core::joinTypeName(core::JoinType::kLeft)));
+}
+
+TEST_F(NestedLoopJoinTest, outerJoinWithConditionOneVector) {
+  auto probeVectors = {
+      makeRowVector({sequence<int32_t>(10)}),
+      makeRowVector({sequence<int32_t>(20, 90)}),
+  };
+
+  auto buildVectors = {
+      makeRowVector({sequence<int32_t>(2, 101)}),
+  };
+
+  createDuckDbTable("t", {probeVectors});
+  createDuckDbTable("u", {buildVectors});
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  CursorParameters params;
+  params.maxDrivers = 4;
+  params.planNode = PlanBuilder(planNodeIdGenerator)
+                        .values({probeVectors})
+                        .nestedLoopJoin(
+                            PlanBuilder(planNodeIdGenerator)
+                                .values({buildVectors})
+                                .project({"c0 AS u_c0"})
+                                .planNode(),
+                            "c0 > u_c0",
+                            {"c0", "u_c0"},
+                            core::JoinType::kLeft)
+                        .planNode();
+  params.queryConfigs[core::QueryConfig::kPreferredNLJOutputProbeOrder] =
+      "false";
+
+  assertQuery(
+      params,
+      fmt::format(
+          "SELECT t.c0, u.c0 as u_c0 FROM t {} join u on t.c0 > u.c0",
+          core::joinTypeName(core::JoinType::kLeft)));
+}
+
+TEST_F(NestedLoopJoinTest, outerJoinWithConditionMultiVector) {
+  auto probeVectors = {
+      makeRowVector({sequence<int32_t>(10)}),
+      makeRowVector({sequence<int32_t>(20, 90)}),
+  };
+
+  auto buildVectors = {
+      makeRowVector({sequence<int32_t>(1, 101)}),
+      makeRowVector({sequence<int32_t>(1, 101)}),
+  };
+
+  createDuckDbTable("t", {probeVectors});
+  createDuckDbTable("u", {buildVectors});
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  CursorParameters params;
+  params.maxDrivers = 4;
+  params.planNode = PlanBuilder(planNodeIdGenerator)
+                        .values({probeVectors})
+                        .nestedLoopJoin(
+                            PlanBuilder(planNodeIdGenerator)
+                                .values({buildVectors})
+                                .project({"c0 AS u_c0"})
+                                .planNode(),
+                            "c0 > u_c0",
+                            {"c0", "u_c0"},
+                            core::JoinType::kLeft)
+                        .planNode();
+  params.queryConfigs[core::QueryConfig::kPreferredNLJOutputProbeOrder] =
+      "false";
+
+  assertQuery(
+      params,
+      fmt::format(
+          "SELECT t.c0, u.c0 as u_c0 FROM t {} join u on t.c0 > u.c0",
+          core::joinTypeName(core::JoinType::kLeft)));
 }
 
 } // namespace
