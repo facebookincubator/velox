@@ -89,12 +89,8 @@ RowVectorPtr Limit::getOutput() {
     return output;
   }
 
-  auto output = std::make_shared<RowVector>(
-      input_->pool(),
-      input_->type(),
-      input_->nulls(),
-      remainingLimit_,
-      input_->children());
+  auto output =
+      std::dynamic_pointer_cast<RowVector>(input_->slice(0, remainingLimit_));
   input_.reset();
   remainingLimit_ = 0;
   return output;
