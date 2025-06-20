@@ -170,6 +170,7 @@ void Merge::setupSpillMerger() {
       outputBatchSize_,
       std::move(spillReadFilesGroups),
       &spillConfig_.value(),
+      spillStats_,
       pool());
   spillMerger_->start();
 }
@@ -445,8 +446,10 @@ SpillMerger::SpillMerger(
     std::vector<std::vector<std::unique_ptr<SpillReadFile>>>
         spillReadFilesGroup,
     const common::SpillConfig* spillConfig,
+    const std::shared_ptr<folly::Synchronized<common::SpillStats>>& spillStats,
     velox::memory::MemoryPool* pool)
     : executor_(spillConfig->executor),
+      spillStats_(spillStats),
       pool_(pool->shared_from_this()),
       sources_(createMergeSources(spillReadFilesGroup.size())),
       batchStreams_(createBatchStreams(std::move(spillReadFilesGroup))),

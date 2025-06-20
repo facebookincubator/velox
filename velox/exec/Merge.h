@@ -238,6 +238,8 @@ class SpillMerger : public std::enable_shared_from_this<SpillMerger> {
       std::vector<std::vector<std::unique_ptr<SpillReadFile>>>
           spillReadFilesGroup,
       const common::SpillConfig* spillConfig,
+      const std::shared_ptr<folly::Synchronized<common::SpillStats>>&
+          spillStats,
       velox::memory::MemoryPool* pool);
 
   ~SpillMerger();
@@ -268,6 +270,7 @@ class SpillMerger : public std::enable_shared_from_this<SpillMerger> {
   void scheduleAsyncSpillFileStreamReads();
 
   folly::Executor* const executor_;
+  const std::shared_ptr<folly::Synchronized<common::SpillStats>> spillStats_;
   const std::shared_ptr<memory::MemoryPool> pool_;
 
   std::vector<std::shared_ptr<MergeSource>> sources_;

@@ -75,7 +75,7 @@ class MergerTest : public OperatorTestBase {
         HashBitRange{},
         sortingKeys_,
         &spillConfig_,
-        &spillStats_);
+        spillStats_.get());
     for (const auto& vector : sortedVectors) {
       spiller->spill(SpillPartitionId(0), vector);
     }
@@ -101,7 +101,10 @@ class MergerTest : public OperatorTestBase {
       spillReadFiles.reserve(spillFiles.size());
       for (const auto& spillFile : spillFiles) {
         spillReadFiles.emplace_back(SpillReadFile::create(
-            spillFile, spillConfig_.readBufferSize, pool_.get(), &spillStats_));
+            spillFile,
+            spillConfig_.readBufferSize,
+            pool_.get(),
+            spillStats_.get()));
       }
       spillReadFilesGroups.emplace_back(std::move(spillReadFiles));
     }
@@ -229,6 +232,7 @@ class MergerTest : public OperatorTestBase {
         outputBatchSize,
         std::move(spillReadFilesGroups),
         &spillConfig_,
+        spillStats_,
         pool());
   }
 
@@ -304,7 +308,8 @@ class MergerTest : public OperatorTestBase {
       "none",
       std::nullopt};
 
-  folly::Synchronized<common::SpillStats> spillStats_;
+  std::shared_ptr<folly::Synchronized<common::SpillStats>> spillStats_ =
+      std::make_shared<folly::Synchronized<common::SpillStats>>();
   tsan_atomic<bool> nonReclaimableSection_{false};
 };
 } // namespace facebook::velox::exec::test
