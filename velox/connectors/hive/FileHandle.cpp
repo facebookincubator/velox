@@ -42,7 +42,8 @@ std::string groupName(const std::string& filename) {
 std::unique_ptr<FileHandle> FileHandleGenerator::operator()(
     const std::string& filename,
     const FileProperties* properties,
-    filesystems::File::IoStats* stats) {
+    filesystems::File::IoStats* stats,
+    const config::ConfigBase* sessionProperties) {
   // We have seen cases where drivers are stuck when creating file handles.
   // Adding a trace here to spot this more easily in future.
   process::TraceContext trace("FileHandleGenerator::operator()");
@@ -53,6 +54,7 @@ std::unique_ptr<FileHandle> FileHandleGenerator::operator()(
     fileHandle = std::make_unique<FileHandle>();
     filesystems::FileOptions options;
     options.stats = stats;
+    options.sessionProperties = sessionProperties;
     if (properties) {
       options.fileSize = properties->fileSize;
       options.readRangeHint = properties->readRangeHint;
