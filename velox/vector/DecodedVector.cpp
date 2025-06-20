@@ -83,6 +83,7 @@ VectorPtr DecodedVector::decodeImpl(
     case VectorEncoding::Simple::BIASED:
     case VectorEncoding::Simple::ROW:
     case VectorEncoding::Simple::ARRAY:
+    case VectorEncoding::Simple::FLAT_MAP:
     case VectorEncoding::Simple::MAP:
     case VectorEncoding::Simple::LAZY:
       isIdentityMapping_ = true;
@@ -367,6 +368,7 @@ void DecodedVector::setBaseData(
       break;
     case VectorEncoding::Simple::ROW:
     case VectorEncoding::Simple::ARRAY:
+    case VectorEncoding::Simple::FLAT_MAP:
     case VectorEncoding::Simple::MAP:
       setFlatNulls(*vector, rows);
       break;
