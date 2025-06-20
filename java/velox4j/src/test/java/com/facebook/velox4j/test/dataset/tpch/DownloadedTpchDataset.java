@@ -81,7 +81,7 @@ class DownloadedTpchDataset implements TpchDataset {
       System.out.println(
           "Downloading TPC-H Parquet data (this could take a few minutes to finish for the first time)...");
       downloadFile(DOWNLOAD_LINK, archivePath);
-      verifySHA256(archivePath, SHA256);
+      verifySha256(archivePath, SHA256);
       System.out.println("Extracting archive...");
       extractTarGz(archivePath, tempDir);
     } catch (IOException e) {
@@ -101,7 +101,7 @@ class DownloadedTpchDataset implements TpchDataset {
     }
   }
 
-  private void verifySHA256(Path file, String expectedHash) {
+  private void verifySha256(Path file, String expectedHash) {
     try (InputStream fis = Files.newInputStream(file)) {
       final MessageDigest digest = MessageDigest.getInstance("SHA-256");
       final byte[] buf = new byte[8192];
