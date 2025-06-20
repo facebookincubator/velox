@@ -17,24 +17,25 @@ named *velox_functions_remote_client_test*.
 
 ## Investigation
 We immediately put on our *gdb* gloves and looked at the stack traces. This issue was reproducible in a debug build as well.
-The SEGFAULT was due to invoking a destructor of a certain handler.
+The SEGFAULT occurred in the ThriftServer of fbthrift during intialization of the ThriftServer but the offending call was invoking a destructor of a certain handler.
 However, the corresponding source code was pointing to an invocation of a different function. And this code was present inside a fbthrift
 header called *AsyncProcessor.h*
 This handler(*RemoteServer*) was implemented in Velox as a thrift definition. Velox compiled this thrift file using fbthrift and the generated code
-was using the *ServerInterface* class in fbthrift. This *ServerInterface* class was further extended from the *AsyncProcessorFactory* and
+was using the *ServerInterface* class in fbthrift. This *ServerInterface* class was further extended from both the *AsyncProcessorFactory* and
 *ServiceHandlerBase* interfaces in fbthrift.
-One of the culprits in the past was the conflict due to the usage of Apache thrift and fbthrift. However, this was not root cause this time as we were
-able to reproduce this issue by just building the test without the Apache thrift dependency installed.
+One of the culprits resulting in SEGFAULTS in the past was the conflict due to the usage of Apache thrift and fbthrift.
+However, this was not the root cause this time because we were able to reproduce this issue by just building the test without the Apache thrift dependency installed.
 We were entering a new teritorry to investigate and we were not sure where to start.
 
-We then compiled an example called *EchoService* in fbthrift that was very similar to the *RemoteServer* and it worked. Then we copied the *RemoveServer*
-to fbthrift and that worked too! So the cuplrit was likely in the compilation flags which likely differed between fbthrift and Velox.
-We enabled the verbose logging for both the builds and were able to spot one difference. We saw *-fcoroutines* being used in the fbthrift build.
+We then compiled an example called *EchoService* in fbthrift that was very similar to the *RemoteServer* and it worked. Then we copied and compiled the Velox *RemoveServer*
+in fbthrift and that worked too! So the cuplrit was likely in the compilation flags which likely differed between fbthrift and Velox.
+We enabled the verbose logging for both builds and were able to spot one difference. We saw the GCC *-fcoroutines* flag being used in the fbthrift build.
 
 We were also very curious about the invocation of the destructor instead of the actual function. We wore the gdb gloves again and dumped the entire
 vtable for the RemoteServer class and its base classes. The vtables were different when it was built in Velox vs fbthrift.
+Specfically, the list of functions inherited from *ServiceHandlerBase* was different.
 
-vtable in the Velox build had the following entires:
+The vtable for the *RemoteServer* handler in the Velox build had the following entires:
 
 ```
 folly::SemiFuture<folly::Unit> semifuture_onStartServing()
@@ -43,7 +44,7 @@ Thunk ServiceHandlerBase::~ServiceHandlerBase
 Thunk ServiceHandlerBase::~ServiceHandlerBase
 ```
 
-vtable in the fbthrift build had the following entires:
+The vtable for the *RemoteServer* handler in the fbthrift build had the following entires:
 
 ```
 folly::coro::Task<void> co_onStartServing()
@@ -54,7 +55,7 @@ Thunk ServiceHandlerBase::~ServiceHandlerBase
 Thunk ServiceHandlerBase::~ServiceHandlerBase
 ```
 
-Tying up both the pieces of evidence, we could conclude that Velox was seeing a different vtable structure compared to what fbthrift was built with.
+Tying up both the pieces of evidence, we could conclude that Velox generated a different vtable structure compared to what fbthrift (and thus ThriftServer) was built with.
 Looking around further, we noticed that the *ServiceHandlerBase* was conditionally adding functions based on the *-fcoroutines* flag.
 
 ```
@@ -77,4 +78,5 @@ class ServiceHandlerBase {
   }
 ```
 
-We recompiled fbthrift in Velox with coroutines disabled and the test passed.
+As a result the ThriftServer would access an incorrect function, the destructor instead of the expected initialization function, because the functions at the offset used were different, thus resulting the SEGFAULT.
+We recompiled the fbthrift dependency for Velox with coroutines disabled and the test passed.
