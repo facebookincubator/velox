@@ -168,11 +168,11 @@ std::vector<std::string> HdfsFileSystem::list(std::string_view path) {
   int numEntries;
 
   auto fileInfo = impl_->hdfsShim()->ListDirectory(
-      impl_->hdfsClient(), std::string(path).c_str(), &numEntries);
+      impl_->hdfsClient(), path.data(), &numEntries);
 
   VELOX_CHECK_NOT_NULL(
       fileInfo,
-      "Unable to list the files in {} path. got error: {}",
+      "Unable to list the files in path {}. got error: {}",
       path,
       impl_->hdfsShim()->GetLastExceptionRootCause());
 

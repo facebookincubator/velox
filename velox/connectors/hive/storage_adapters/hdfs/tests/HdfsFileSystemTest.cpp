@@ -457,15 +457,6 @@ TEST_F(HdfsFileSystemTest, writeWithParentDirNotExist) {
   ASSERT_EQ(writeFile->size(), data.size() * 3);
 }
 
-TEST_F(HdfsFileSystemTest, readFailures) {
-  filesystems::arrow::io::internal::LibHdfsShim* driver;
-  auto hdfs = connectHdfsDriver(
-      &driver,
-      std::string(miniCluster->host()),
-      std::string(miniCluster->nameNodePort()));
-  verifyFailures(driver, hdfs);
-}
-
 TEST_F(HdfsFileSystemTest, list) {
   auto config = std::make_shared<const config::ConfigBase>(
       std::unordered_map<std::string, std::string>(configurationValues));
@@ -476,4 +467,13 @@ TEST_F(HdfsFileSystemTest, list) {
 
   ASSERT_EQ(result.size(), 1);
   ASSERT_TRUE(result[0].find(kDestinationPath) != std::string::npos);
+}
+
+TEST_F(HdfsFileSystemTest, readFailures) {
+  filesystems::arrow::io::internal::LibHdfsShim* driver;
+  auto hdfs = connectHdfsDriver(
+      &driver,
+      std::string(miniCluster->host()),
+      std::string(miniCluster->nameNodePort()));
+  verifyFailures(driver, hdfs);
 }
