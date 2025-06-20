@@ -1274,9 +1274,6 @@ RowVectorPtr MergeJoin::applyFilter(const RowVectorPtr& output) {
     // If all matches for a given left-side row fail the filter, add a row to
     // the output with nulls for the right-side columns.
     const auto onMiss = [&](auto row) {
-      if (isAntiJoin(joinType_)) {
-        return;
-      }
       rawIndices[numPassed++] = row;
 
       if (isFullJoin(joinType_)) {
@@ -1353,11 +1350,7 @@ RowVectorPtr MergeJoin::applyFilter(const RowVectorPtr& output) {
 
         joinTracker_->processFilterResult(i, passed, onMiss);
 
-        if (isAntiJoin(joinType_)) {
-          if (!passed) {
-            rawIndices[numPassed++] = i;
-          }
-        } else {
+        if (!isAntiJoin(joinType_)) {
           if (passed) {
             rawIndices[numPassed++] = i;
           }
@@ -1371,19 +1364,19 @@ RowVectorPtr MergeJoin::applyFilter(const RowVectorPtr& output) {
 
     // Every time we start a new left key match, `processFilterResult()` will
     // check if at least one row from the previous match passed the filter. If
-    // none did, it calls onMiss to add a record with null right projections to
-    // the output.
+    // none did, it calls onMiss to add a record with null right projections
+    // to the output.
     //
     // Before we leave the current buffer, since we may not have seen the next
-    // left key match yet, the last key match may still be pending to produce a
-    // row (because `processFilterResult()` was not called yet).
+    // left key match yet, the last key match may still be pending to produce
+    // a row (because `processFilterResult()` was not called yet).
     //
     // To handle this, we need to call `noMoreFilterResults()` unless the
-    // same current left key match may continue in the next buffer. So there are
-    // two cases to check:
+    // same current left key match may continue in the next buffer. So there
+    // are two cases to check:
     //
-    // 1. If leftMatch_ is nullopt, there for sure the next buffer will contain
-    // a different key match.
+    // 1. If leftMatch_ is nullopt, there for sure the next buffer will
+    // contain a different key match.
     //
     // 2. leftMatch_ may not be nullopt, but may be related to a different
     // (subsequent) left key. So we check if the last row in the batch has the
