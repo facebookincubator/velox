@@ -243,7 +243,8 @@ void CastExpr::applyCastKernel(
     vector_size_t row,
     EvalCtx& context,
     const SimpleVector<typename TypeTraits<FromKind>::NativeType>* input,
-    FlatVector<typename TypeTraits<ToKind>::NativeType>* result) {
+    FlatVector<typename TypeTraits<ToKind>::NativeType>* result,
+    const TypePtr& toType) {
   bool wrapException = true;
   auto setError = [&](const std::string& details) INLINE_LAMBDA {
     if (setNullInResultAtError()) {
@@ -373,7 +374,12 @@ void CastExpr::applyCastKernel(
         ToKind == TypeKind::VARCHAR || ToKind == TypeKind::VARBINARY) {
       // Write the result output to the output vector
       auto writer = exec::StringWriter(result, row);
-      writer.copy_from(output);
+      auto maxWriteLength = getVaryingLengthScalarTypeLength(*toType);
+      if (output.size() > maxWriteLength) {
+        writer.copy_from(output.substr(0, maxWriteLength));
+      } else {
+        writer.copy_from(output);
+      }
       writer.finalize();
     } else {
       result->set(row, output);
@@ -618,9 +624,10 @@ VectorPtr CastExpr::applyDecimalToVarcharCast(
     const SelectivityVector& rows,
     const BaseVector& input,
     exec::EvalCtx& context,
-    const TypePtr& fromType) {
+    const TypePtr& fromType,
+    const TypePtr& toType) {
   VectorPtr result;
-  context.ensureWritable(rows, VARCHAR(), result);
+  context.ensureWritable(rows, toType, result);
   (*result).clearNulls(rows);
   const auto simpleInput = input.as<SimpleVector<FromNativeType>>();
   int precision = getDecimalPrecisionScale(*fromType).first;
@@ -697,7 +704,8 @@ void CastExpr::applyCastPrimitives(
     const SelectivityVector& rows,
     exec::EvalCtx& context,
     const BaseVector& input,
-    VectorPtr& result) {
+    VectorPtr& result,
+    const TypePtr& toType) {
   using To = typename TypeTraits<ToKind>::NativeType;
   using From = typename TypeTraits<FromKind>::NativeType;
   auto* resultFlatVector = result->as<FlatVector<To>>();
@@ -707,19 +715,19 @@ void CastExpr::applyCastPrimitives(
     case LegacyCastPolicy:
       applyToSelectedNoThrowLocal(context, rows, result, [&](int row) {
         applyCastKernel<ToKind, FromKind, util::LegacyCastPolicy>(
-            row, context, inputSimpleVector, resultFlatVector);
+            row, context, inputSimpleVector, resultFlatVector, toType);
       });
       break;
     case PrestoCastPolicy:
       applyToSelectedNoThrowLocal(context, rows, result, [&](int row) {
         applyCastKernel<ToKind, FromKind, util::PrestoCastPolicy>(
-            row, context, inputSimpleVector, resultFlatVector);
+            row, context, inputSimpleVector, resultFlatVector, toType);
       });
       break;
     case SparkCastPolicy:
       applyToSelectedNoThrowLocal(context, rows, result, [&](int row) {
         applyCastKernel<ToKind, FromKind, util::SparkCastPolicy>(
-            row, context, inputSimpleVector, resultFlatVector);
+            row, context, inputSimpleVector, resultFlatVector, toType);
       });
       break;
 
@@ -746,7 +754,8 @@ void CastExpr::applyCastPrimitivesDispatch(
       rows,
       context,
       input,
-      result);
+      result,
+      toType);
 }
 
 } // namespace facebook::velox::exec
