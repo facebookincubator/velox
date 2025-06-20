@@ -525,14 +525,10 @@ class HiveDataSink : public DataSink {
       CommitStrategy commitStrategy,
       const std::shared_ptr<const HiveConfig>& hiveConfig);
 
-  HiveDataSink(
-      RowTypePtr inputType,
-      std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
-      const ConnectorQueryCtx* connectorQueryCtx,
-      CommitStrategy commitStrategy,
-      const std::shared_ptr<const HiveConfig>& hiveConfig,
-      uint32_t bucketCount,
-      std::unique_ptr<core::PartitionFunction> bucketFunction);
+  static uint32_t maxBucketCount() {
+    static const uint32_t kMaxBucketCount = 100'000;
+    return kMaxBucketCount;
+  }
 
   void appendData(RowVectorPtr input) override;
 
@@ -546,10 +542,42 @@ class HiveDataSink : public DataSink {
 
   bool canReclaim() const;
 
+ protected:
+  HiveDataSink(
+      RowTypePtr inputType,
+      std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
+      const ConnectorQueryCtx* connectorQueryCtx,
+      CommitStrategy commitStrategy,
+      const std::shared_ptr<const HiveConfig>& hiveConfig,
+      uint32_t bucketCount,
+      std::unique_ptr<core::PartitionFunction> bucketFunction,
+      const std::vector<column_index_t>& dataChannels);
+
+  void setState(State newState);
+
+  void closeInternal();
+
+  // Returns true if the table is partitioned.
+  FOLLY_ALWAYS_INLINE bool isPartitioned() const {
+    return partitionIdGenerator_ != nullptr;
+  }
+
+  // Get the hive writer id corresponding to the row
+  // from partitionIds and bucketIds.
+  HiveWriterId getWriterId(size_t row) const;
+
+  // Makes sure the writer is created for the given writer id. The function
+  // returns the corresponding index in 'writers_'.
+  uint32_t ensureWriter(const HiveWriterId& id);
+
+  void
+  updatePartitionRows(uint32_t index, vector_size_t numRows, vector_size_t row);
+
+  virtual void extendBuffersForPartitionedTables();
+
  private:
   // Validates the state transition from 'oldState' to 'newState'.
   void checkStateTransition(State oldState, State newState);
-  void setState(State newState);
 
   class WriterReclaimer : public exec::MemoryReclaimer {
    public:
@@ -591,11 +619,6 @@ class HiveDataSink : public DataSink {
     return !sortColumnIndices_.empty();
   }
 
-  // Returns true if the table is partitioned.
-  FOLLY_ALWAYS_INLINE bool isPartitioned() const {
-    return partitionIdGenerator_ != nullptr;
-  }
-
   // Returns true if the table is bucketed.
   FOLLY_ALWAYS_INLINE bool isBucketed() const {
     return bucketCount_ != 0;
@@ -615,19 +638,11 @@ class HiveDataSink : public DataSink {
   // Compute the partition id and bucket id for each row in 'input'.
   void computePartitionAndBucketIds(const RowVectorPtr& input);
 
-  // Get the HiveWriter corresponding to the row
-  // from partitionIds and bucketIds.
-  FOLLY_ALWAYS_INLINE HiveWriterId getWriterId(size_t row) const;
-
   // Computes the number of input rows as well as the actual input row indices
   // to each corresponding (bucketed) partition based on the partition and
   // bucket ids calculated by 'computePartitionAndBucketIds'. The function also
   // ensures that there is a writer created for each (bucketed) partition.
-  void splitInputRowsAndEnsureWriters();
-
-  // Makes sure to create one writer for the given writer id. The function
-  // returns the corresponding index in 'writers_'.
-  uint32_t ensureWriter(const HiveWriterId& id);
+  virtual void splitInputRowsAndEnsureWriters(RowVectorPtr input);
 
   // Appends a new writer for the given 'id'. The function returns the index of
   // the newly created writer in 'writers_'.
@@ -636,6 +651,10 @@ class HiveDataSink : public DataSink {
   std::unique_ptr<facebook::velox::dwio::common::Writer>
   maybeCreateBucketSortWriter(
       std::unique_ptr<facebook::velox::dwio::common::Writer> writer);
+
+  virtual std::string makePartitionDirectory(
+      const std::string& tableDirectory,
+      const std::optional<std::string>& partitionSubdirectory) const;
 
   HiveWriterParameters getWriterParameters(
       const std::optional<std::string>& partition,
@@ -660,19 +679,23 @@ class HiveDataSink : public DataSink {
   // Invoked to write 'input' to the specified file writer.
   void write(size_t index, RowVectorPtr input);
 
-  void closeInternal();
-
+ protected:
   const RowTypePtr inputType_;
   const std::shared_ptr<const HiveInsertTableHandle> insertTableHandle_;
+  const std::vector<column_index_t> partitionChannels_;
+  // Indices of dataChannel are stored in ascending order.
+  const std::vector<column_index_t> dataChannels_;
+  // Below are structures for partitions from all inputs. writerInfo_ and
+  // writers_ are both indexed by partitionId.
+  std::vector<std::shared_ptr<HiveWriterInfo>> writerInfo_;
+  // IO statistics collected for each writer.
+  std::vector<std::shared_ptr<io::IoStatistics>> ioStats_;
+
+ private:
   const ConnectorQueryCtx* const connectorQueryCtx_;
   const CommitStrategy commitStrategy_;
   const std::shared_ptr<const HiveConfig> hiveConfig_;
   const HiveWriterParameters::UpdateMode updateMode_;
-  const uint32_t maxOpenWriters_;
-  const std::vector<column_index_t> partitionChannels_;
-  const std::unique_ptr<PartitionIdGenerator> partitionIdGenerator_;
-  // Indices of dataChannel are stored in ascending order
-  const std::vector<column_index_t> dataChannels_;
   const int32_t bucketCount_{0};
   const std::unique_ptr<core::PartitionFunction> bucketFunction_;
   const std::shared_ptr<dwio::common::WriterFactory> writerFactory_;
@@ -690,13 +713,13 @@ class HiveDataSink : public DataSink {
   folly::F14FastMap<HiveWriterId, uint32_t, HiveWriterIdHasher, HiveWriterIdEq>
       writerIndexMap_;
 
-  // Below are structures for partitions from all inputs. writerInfo_ and
-  // writers_ are both indexed by partitionId.
-  std::vector<std::shared_ptr<HiveWriterInfo>> writerInfo_;
   std::vector<std::unique_ptr<dwio::common::Writer>> writers_;
-  // IO statistics collected for each writer.
-  std::vector<std::shared_ptr<io::IoStatistics>> ioStats_;
 
+  // Reusable buffers for bucket id calculations.
+  std::vector<uint32_t> bucketIds_;
+
+ protected:
+  const uint32_t maxOpenWriters_;
   // Below are structures updated when processing current input. partitionIds_
   // are indexed by the row of input_. partitionRows_, rawPartitionRows_ and
   // partitionSizes_ are indexed by partitionId.
@@ -705,11 +728,11 @@ class HiveDataSink : public DataSink {
   std::vector<vector_size_t*> rawPartitionRows_;
   std::vector<vector_size_t> partitionSizes_;
 
-  // Reusable buffers for bucket id calculations.
-  std::vector<uint32_t> bucketIds_;
-
   // Strategy for naming writer files
   std::shared_ptr<const FileNameGenerator> fileNameGenerator_;
+
+ private:
+  const std::unique_ptr<PartitionIdGenerator> partitionIdGenerator_;
 };
 
 FOLLY_ALWAYS_INLINE std::ostream& operator<<(
