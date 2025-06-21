@@ -612,13 +612,6 @@ value is 3, meaning we only support up to 8-way spill partitioning.ing.</p></td>
 to produce a batch of size specified by this. If set to 0, then
 Operator::outputBatchRows will be used as the min output batch rows.</p></td>
 </tr>
-<tr class="row-odd"><td><p>streaming_aggregation_try_split_output_at_input_boundary</p></td>
-<td><p>bool</p></td>
-<td><p>false</p></td>
-<td><p>If true, the streaming aggregation accumulates at least two batch inputs and
-produce all the groups created from the previous input batch except the last
-group.</p></td>
-</tr>
 </tbody>
 </table>
 </section>
