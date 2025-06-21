@@ -187,4 +187,9 @@ void ConnectorTableHandle::registerSerDe() {
   auto& registry = DeserializationWithContextRegistryForSharedPtr();
   registry.Register("ConnectorTableHandle", create);
 }
+
+// Allow the compiler to emit vtable and typeinfo for ConnectorLocationHandle at
+// a single point instead of every translation unit.
+ConnectorLocationHandle::~ConnectorLocationHandle() = default;
+
 } // namespace facebook::velox::connector
