@@ -48,8 +48,8 @@ target_link_libraries(
   velox_parse_parser
   velox_duckdb_conversion
   velox_dwio_common
-  velox_dwio_dwrf_reader
-  velox_dwio_dwrf_writer
+#  velox_dwio_dwrf_reader
+#  velox_dwio_dwrf_writer
   velox_dwio_common_test_utils
   velox_file_test_utils
   velox_type_fbhive

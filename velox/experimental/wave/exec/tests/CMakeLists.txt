@@ -30,8 +30,8 @@ target_link_libraries(
   velox_dwio_common
   velox_dwio_common_exception
   velox_dwio_common_test_utils
-  velox_dwio_parquet_reader
-  velox_dwio_parquet_writer
+#  velox_dwio_parquet_reader
+#  velox_dwio_parquet_writer
   velox_exec
   velox_exec_test_lib
   velox_functions_json
@@ -69,8 +69,8 @@ if(${VELOX_ENABLE_BENCHMARKS})
     velox_dwio_common
     velox_dwio_common_exception
     velox_dwio_common_test_utils
-    velox_dwio_parquet_reader
-    velox_dwio_parquet_writer
+#    velox_dwio_parquet_reader
+#    velox_dwio_parquet_writer
     velox_exec
     velox_exec_test_lib
     velox_functions_json

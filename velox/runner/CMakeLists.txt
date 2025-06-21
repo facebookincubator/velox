@@ -28,6 +28,6 @@ velox_link_libraries(
   velox_memory
   velox_hive_connector
   velox_dwio_common
-  velox_dwio_dwrf_writer
+#  velox_dwio_dwrf_writer
   velox_exec
   velox_cursor)
