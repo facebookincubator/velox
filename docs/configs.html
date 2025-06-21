@@ -255,6 +255,12 @@ batch.</p></td>
 <td><p>If this is true, then the unnest operator might split output for each input batch based on the
 output batch size control. Otherwise, it produces a single output for each input batch.</p></td>
 </tr>
+<tr class="row-even"><td><p>max_num_splits_listened_to</p></td>
+<td><p>integer</p></td>
+<td><p>0</p></td>
+<td><p>Specifies The max number of input splits to listen to by SplitListener per table scan node per
+worker. It’s up to the SplitListener implementation to respect this config.</p></td>
+</tr>
 </tbody>
 </table>
 </section>
