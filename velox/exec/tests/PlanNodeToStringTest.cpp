@@ -927,37 +927,54 @@ TEST_F(PlanNodeToStringTest, rowNumber) {
       plan->toString(true, false));
 }
 
+#define TOPN_PLANNODE_TO_STRING_TEST(nodename, functionname)                                                           \
+  auto rowType = ROW({"a", "b"}, {BIGINT(), VARCHAR()});                                                               \
+  auto plan = PlanBuilder()                                                                                            \
+                  .tableScan(rowType)                                                                                  \
+                  .nodename({}, {"a DESC"}, 10, false)                                                                 \
+                  .planNode();                                                                                         \
+                                                                                                                       \
+  ASSERT_EQ("-- TopNRowNumber[1]\n", plan->toString());                                                                \
+  ASSERT_EQ(                                                                                                           \
+      fmt::format(                                                                                                     \
+          "-- TopNRowNumber[1][{} order by (a DESC NULLS LAST) limit 10] -> a:BIGINT, b:VARCHAR\n",                    \
+          functionname),                                                                                               \
+      plan->toString(true, false));                                                                                    \
+                                                                                                                       \
+  plan = PlanBuilder()                                                                                                 \
+             .tableScan(rowType)                                                                                       \
+             .nodename({}, {"a DESC"}, 10, true)                                                                       \
+             .planNode();                                                                                              \
+                                                                                                                       \
+  ASSERT_EQ("-- TopNRowNumber[1]\n", plan->toString());                                                                \
+  ASSERT_EQ(                                                                                                           \
+      fmt::format(                                                                                                     \
+          "-- TopNRowNumber[1][{} order by (a DESC NULLS LAST) limit 10] -> a:BIGINT, b:VARCHAR, row_number:BIGINT\n", \
+          functionname),                                                                                               \
+      plan->toString(true, false));                                                                                    \
+                                                                                                                       \
+  plan = PlanBuilder()                                                                                                 \
+             .tableScan(rowType)                                                                                       \
+             .nodename({"a"}, {"b"}, 10, false)                                                                        \
+             .planNode();                                                                                              \
+                                                                                                                       \
+  ASSERT_EQ("-- TopNRowNumber[1]\n", plan->toString());                                                                \
+  ASSERT_EQ(                                                                                                           \
+      fmt::format(                                                                                                     \
+          "-- TopNRowNumber[1][{} partition by (a) order by (b ASC NULLS LAST) limit 10] -> a:BIGINT, b:VARCHAR\n",    \
+          functionname),                                                                                               \
+      plan->toString(true, false));
+
 TEST_F(PlanNodeToStringTest, topNRowNumber) {
-  auto rowType = ROW({"a", "b"}, {BIGINT(), VARCHAR()});
-  auto plan = PlanBuilder()
-                  .tableScan(rowType)
-                  .topNRowNumber({}, {"a DESC"}, 10, false)
-                  .planNode();
+  TOPN_PLANNODE_TO_STRING_TEST(topNRowNumber, "row_number");
+}
 
-  ASSERT_EQ("-- TopNRowNumber[1]\n", plan->toString());
-  ASSERT_EQ(
-      "-- TopNRowNumber[1][order by (a DESC NULLS LAST) limit 10] -> a:BIGINT, b:VARCHAR\n",
-      plan->toString(true, false));
+TEST_F(PlanNodeToStringTest, topNRank) {
+  TOPN_PLANNODE_TO_STRING_TEST(topNRank, "rank");
+}
 
-  plan = PlanBuilder()
-             .tableScan(rowType)
-             .topNRowNumber({}, {"a DESC"}, 10, true)
-             .planNode();
-
-  ASSERT_EQ("-- TopNRowNumber[1]\n", plan->toString());
-  ASSERT_EQ(
-      "-- TopNRowNumber[1][order by (a DESC NULLS LAST) limit 10] -> a:BIGINT, b:VARCHAR, row_number:BIGINT\n",
-      plan->toString(true, false));
-
-  plan = PlanBuilder()
-             .tableScan(rowType)
-             .topNRowNumber({"a"}, {"b"}, 10, false)
-             .planNode();
-
-  ASSERT_EQ("-- TopNRowNumber[1]\n", plan->toString());
-  ASSERT_EQ(
-      "-- TopNRowNumber[1][partition by (a) order by (b ASC NULLS LAST) limit 10] -> a:BIGINT, b:VARCHAR\n",
-      plan->toString(true, false));
+TEST_F(PlanNodeToStringTest, topNDenseRank) {
+  TOPN_PLANNODE_TO_STRING_TEST(topNDenseRank, "dense_rank");
 }
 
 TEST_F(PlanNodeToStringTest, markDistinct) {
