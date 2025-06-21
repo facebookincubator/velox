@@ -50,13 +50,20 @@ BiasVectorPtr<EvalType<T>> VectorMaker::biasVector(
     TEvalType min = *stats.min;
     TEvalType max = *stats.max;
 
-    // This ensures the math conversions when getting a delta on signed
-    // values at opposite ends of the int64 range do not overflow a
-    // temporary signed value.
-    uint64_t delta = max < 0 ? max - min
-        : min < 0
-        ? static_cast<uint64_t>(max) + static_cast<uint64_t>(std::abs(min))
-        : max - min;
+    // Calculate delta safely without potential overflow from std::abs(min)
+    uint64_t delta;
+    if (max < 0) {
+      // Both are negative, simple subtraction is safe
+      delta = max - min;
+    } else if (min < 0) {
+      // max is positive, min is negative
+      // Convert both to unsigned to avoid overflow
+      delta = static_cast<uint64_t>(max) +
+          (static_cast<uint64_t>(1) + ~static_cast<uint64_t>(min));
+    } else {
+      // Both are positive
+      delta = max - min;
+    }
 
     VELOX_CHECK(deltaAllowsBias<TEvalType>(delta));
 
