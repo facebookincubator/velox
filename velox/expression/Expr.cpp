@@ -2046,12 +2046,17 @@ VectorPtr tryEvaluateConstantExpression(
 
   // The construction of ExprSet involves compiling and constant folding the
   // expression. If constant folding succeeded, then we get a ConstantExpr.
+  // Return the constant vector value.
+  if (exprSet.expr(0)->is<ConstantExpr>()) {
+    return exprSet.expr(0)->as<ConstantExpr>()->value();
+  }
+
   // Constant folding may fail because expression is not constant-foldable or if
   // an error happened during evaluation (5 / 0 fails with "division by zero").
   // If constant folding didn't succeed, but suppressEvaluationFailures is
   // false, we need to re-evaluate the expression to propagate the failure.
-  const bool doEvaluate = exprSet.expr(0)->is<ConstantExpr>() ||
-      (!suppressEvaluationFailures && exprSet.expr(0)->isConstant());
+  const bool doEvaluate =
+      !suppressEvaluationFailures && exprSet.expr(0)->isConstant();
 
   if (doEvaluate) {
     auto data = BaseVector::create<RowVector>(ROW({}), 1, pool);

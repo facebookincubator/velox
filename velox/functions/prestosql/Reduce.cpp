@@ -431,7 +431,12 @@ VELOX_DECLARE_VECTOR_FUNCTION_WITH_METADATA(
 
 void registerReduceRewrites(const std::string& prefix) {
   exec::registerExpressionRewrite(
-      [prefix](const auto& expr) { return rewriteReduce(prefix, expr); });
+      [prefix](
+          const core::TypedExprPtr& expr,
+          const std::shared_ptr<core::QueryCtx>& /*queryCtx*/,
+          memory::MemoryPool* /*pool*/) {
+        return rewriteReduce(prefix, expr);
+      });
 }
 
 } // namespace facebook::velox::functions

@@ -188,9 +188,13 @@ void registerSplitToMap(const std::string& prefix) {
       Varchar,
       Varchar,
       bool>({"$internal$split_to_map"});
-  exec::registerExpressionRewrite([prefix](const auto& expr) {
-    return rewriteSplitToMapCall(prefix, expr);
-  });
+  exec::registerExpressionRewrite(
+      [prefix](
+          const core::TypedExprPtr& expr,
+          const std::shared_ptr<core::QueryCtx>& /*queryCtx*/,
+          memory::MemoryPool* /*pool*/) {
+        return rewriteSplitToMapCall(prefix, expr);
+      });
 }
 } // namespace
 
