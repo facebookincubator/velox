@@ -169,4 +169,8 @@ folly::dynamic ConnectorTableHandle::serialize() const {
   return serializeBase("ConnectorTableHandle");
 }
 
+// Allow the compiler to emit vtable and typeinfo for ConnectorLocationHandle at
+// a single point instead of every translation unit.
+ConnectorLocationHandle::~ConnectorLocationHandle() = default;
+
 } // namespace facebook::velox::connector
