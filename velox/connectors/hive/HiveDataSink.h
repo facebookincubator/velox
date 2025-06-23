@@ -17,6 +17,7 @@
 
 #include "velox/common/compression/Compression.h"
 #include "velox/connectors/Connector.h"
+#include "velox/connectors/ConnectorNames.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/PartitionIdGenerator.h"
 #include "velox/connectors/hive/TableHandle.h"
@@ -31,24 +32,18 @@ class LocationHandle;
 using LocationHandlePtr = std::shared_ptr<const LocationHandle>;
 
 /// Location related properties of the Hive table to be written.
-class LocationHandle : public ISerializable {
+class LocationHandle : public ConnectorLocationHandle {
  public:
-  enum class TableType {
-    /// Write to a new table to be created.
-    kNew,
-    /// Write to an existing table.
-    kExisting,
-  };
-
   LocationHandle(
       std::string targetPath,
       std::string writePath,
       TableType tableType,
-      std::string targetFileName = "")
-      : targetPath_(std::move(targetPath)),
+      std::string targetFileName = "",
+      const std::string& connectorId = kHiveConnectorName)
+      : ConnectorLocationHandle(connectorId, tableType),
+        targetPath_(std::move(targetPath)),
         targetFileName_(std::move(targetFileName)),
-        writePath_(std::move(writePath)),
-        tableType_(tableType) {}
+        writePath_(std::move(writePath)) {}
 
   const std::string& targetPath() const {
     return targetPath_;
@@ -62,15 +57,11 @@ class LocationHandle : public ISerializable {
     return writePath_;
   }
 
-  TableType tableType() const {
-    return tableType_;
-  }
-
-  std::string toString() const;
-
-  static void registerSerDe();
+  std::string toString() const override;
 
   folly::dynamic serialize() const override;
+
+  static void registerSerDe();
 
   static LocationHandlePtr create(const folly::dynamic& obj);
 
@@ -85,8 +76,6 @@ class LocationHandle : public ISerializable {
   const std::string targetFileName_;
   // Staging directory path.
   const std::string writePath_;
-  // Whether the table to be written is new, already existing or temporary.
-  const TableType tableType_;
 };
 
 class HiveSortingColumn : public ISerializable {
