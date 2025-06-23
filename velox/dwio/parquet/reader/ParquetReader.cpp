@@ -37,6 +37,31 @@ bool isParquetReservedKeyword(
       ? true
       : false;
 }
+
+// Checks if the input type is or contains an array type.
+bool containsArrayType(const TypePtr& type) {
+  if (type->kind() == TypeKind::ARRAY) {
+    return true;
+  }
+
+  if (type->kind() == TypeKind::MAP) {
+    const auto& mapType = std::dynamic_pointer_cast<const MapType>(type);
+    return containsArrayType(mapType->keyType()) ||
+        containsArrayType(mapType->valueType());
+  }
+
+  if (type->kind() == TypeKind::ROW) {
+    const auto& rowType = std::dynamic_pointer_cast<const RowType>(type);
+    for (const auto& child : rowType->children()) {
+      if (containsArrayType(child)) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
 } // namespace
 
 /// Metadata and options for reading Parquet.
@@ -722,6 +747,12 @@ TypePtr ReaderBase::convertType(
 
   static std::string_view kTypeMappingErrorFmtStr =
       "Converted type {} is not allowed for requested type {}";
+  // If 'requestedType' is or contains an array type, skip the check of element
+  // type against the requested type to be compatible with unannotated array. An
+  // unannotated array in Parquet is a repeated field that is not explicitly
+  // marked as a LIST logical type, and it depends on the reader to decide
+  // whether the data should be interpreted as scalar values or array.
+  const bool skipCheck = !requestedType || containsArrayType(requestedType);
   if (schemaElement.__isset.converted_type) {
     switch (schemaElement.converted_type) {
       case thrift::ConvertedType::INT_8:
@@ -732,7 +763,7 @@ TypePtr ReaderBase::convertType(
             "{} converted type can only be set for value of thrift::Type::INT32",
             schemaElement.converted_type);
         VELOX_CHECK(
-            !requestedType || requestedType->kind() == TypeKind::TINYINT ||
+            skipCheck || requestedType->kind() == TypeKind::TINYINT ||
                 requestedType->kind() == TypeKind::SMALLINT ||
                 requestedType->kind() == TypeKind::INTEGER ||
                 requestedType->kind() == TypeKind::BIGINT,
@@ -749,7 +780,7 @@ TypePtr ReaderBase::convertType(
             "{} converted type can only be set for value of thrift::Type::INT32",
             schemaElement.converted_type);
         VELOX_CHECK(
-            !requestedType || requestedType->kind() == TypeKind::SMALLINT ||
+            skipCheck || requestedType->kind() == TypeKind::SMALLINT ||
                 requestedType->kind() == TypeKind::INTEGER ||
                 requestedType->kind() == TypeKind::BIGINT,
             kTypeMappingErrorFmtStr,
@@ -765,7 +796,7 @@ TypePtr ReaderBase::convertType(
             "{} converted type can only be set for value of thrift::Type::INT32",
             schemaElement.converted_type);
         VELOX_CHECK(
-            !requestedType || requestedType->kind() == TypeKind::INTEGER ||
+            skipCheck || requestedType->kind() == TypeKind::INTEGER ||
                 requestedType->kind() == TypeKind::BIGINT,
             kTypeMappingErrorFmtStr,
             "INTEGER",
@@ -780,7 +811,7 @@ TypePtr ReaderBase::convertType(
             "{} converted type can only be set for value of thrift::Type::INT32",
             schemaElement.converted_type);
         VELOX_CHECK(
-            !requestedType || requestedType->kind() == TypeKind::BIGINT,
+            skipCheck || requestedType->kind() == TypeKind::BIGINT,
             kTypeMappingErrorFmtStr,
             "BIGINT",
             requestedType->toString());
@@ -792,7 +823,7 @@ TypePtr ReaderBase::convertType(
             thrift::Type::INT32,
             "DATE converted type can only be set for value of thrift::Type::INT32");
         VELOX_CHECK(
-            !requestedType || requestedType->isDate(),
+            skipCheck || requestedType->isDate(),
             kTypeMappingErrorFmtStr,
             "DATE",
             requestedType->toString());
@@ -805,7 +836,7 @@ TypePtr ReaderBase::convertType(
             thrift::Type::INT64,
             "TIMESTAMP_MICROS or TIMESTAMP_MILLIS converted type can only be set for value of thrift::Type::INT64");
         VELOX_CHECK(
-            !requestedType || requestedType->kind() == TypeKind::TIMESTAMP,
+            skipCheck || requestedType->kind() == TypeKind::TIMESTAMP,
             kTypeMappingErrorFmtStr,
             "TIMESTAMP",
             requestedType->toString());
@@ -859,7 +890,7 @@ TypePtr ReaderBase::convertType(
           case thrift::Type::BYTE_ARRAY:
           case thrift::Type::FIXED_LEN_BYTE_ARRAY:
             VELOX_CHECK(
-                !requestedType || requestedType->kind() == TypeKind::VARCHAR,
+                skipCheck || requestedType->kind() == TypeKind::VARCHAR,
                 kTypeMappingErrorFmtStr,
                 "VARCHAR",
                 requestedType->toString());
@@ -874,7 +905,7 @@ TypePtr ReaderBase::convertType(
             thrift::Type::BYTE_ARRAY,
             "ENUM converted type can only be set for value of thrift::Type::BYTE_ARRAY");
         VELOX_CHECK(
-            !requestedType || requestedType->kind() == TypeKind::VARCHAR,
+            skipCheck || requestedType->kind() == TypeKind::VARCHAR,
             kTypeMappingErrorFmtStr,
             "VARCHAR",
             requestedType->toString());
@@ -897,14 +928,14 @@ TypePtr ReaderBase::convertType(
     switch (schemaElement.type) {
       case thrift::Type::type::BOOLEAN:
         VELOX_CHECK(
-            !requestedType || requestedType->kind() == TypeKind::BOOLEAN,
+            skipCheck || requestedType->kind() == TypeKind::BOOLEAN,
             kTypeMappingErrorFmtStr,
             "BOOLEAN",
             requestedType->toString());
         return BOOLEAN();
       case thrift::Type::type::INT32:
         VELOX_CHECK(
-            !requestedType || requestedType->kind() == TypeKind::INTEGER ||
+            skipCheck || requestedType->kind() == TypeKind::INTEGER ||
                 requestedType->kind() == TypeKind::BIGINT,
             kTypeMappingErrorFmtStr,
             "INTEGER",
@@ -915,28 +946,28 @@ TypePtr ReaderBase::convertType(
         if (schemaElement.__isset.logicalType &&
             schemaElement.logicalType.__isset.TIMESTAMP) {
           VELOX_CHECK(
-              !requestedType || requestedType->kind() == TypeKind::TIMESTAMP,
+              skipCheck || requestedType->kind() == TypeKind::TIMESTAMP,
               kTypeMappingErrorFmtStr,
               "TIMESTAMP",
               requestedType->toString());
           return TIMESTAMP();
         }
         VELOX_CHECK(
-            !requestedType || requestedType->kind() == TypeKind::BIGINT,
+            skipCheck || requestedType->kind() == TypeKind::BIGINT,
             kTypeMappingErrorFmtStr,
             "BIGINT",
             requestedType->toString());
         return BIGINT();
       case thrift::Type::type::INT96:
         VELOX_CHECK(
-            !requestedType || requestedType->kind() == TypeKind::TIMESTAMP,
+            skipCheck || requestedType->kind() == TypeKind::TIMESTAMP,
             kTypeMappingErrorFmtStr,
             "TIMESTAMP",
             requestedType->toString());
         return TIMESTAMP(); // INT96 only maps to a timestamp
       case thrift::Type::type::FLOAT:
         VELOX_CHECK(
-            !requestedType || requestedType->kind() == TypeKind::REAL ||
+            skipCheck || requestedType->kind() == TypeKind::REAL ||
                 requestedType->kind() == TypeKind::DOUBLE,
             kTypeMappingErrorFmtStr,
             "REAL",
@@ -944,7 +975,7 @@ TypePtr ReaderBase::convertType(
         return REAL();
       case thrift::Type::type::DOUBLE:
         VELOX_CHECK(
-            !requestedType || requestedType->kind() == TypeKind::DOUBLE,
+            skipCheck || requestedType->kind() == TypeKind::DOUBLE,
             kTypeMappingErrorFmtStr,
             "DOUBLE",
             requestedType->toString());
@@ -955,7 +986,7 @@ TypePtr ReaderBase::convertType(
           return VARCHAR();
         } else {
           VELOX_CHECK(
-              !requestedType || requestedType->isVarbinary(),
+              skipCheck || requestedType->isVarbinary(),
               kTypeMappingErrorFmtStr,
               "VARBINARY",
               requestedType->toString());

@@ -544,6 +544,69 @@ TEST_F(ParquetTableScanTest, array) {
 
   assertSelectWithFilter(
       {"repeatedInt"}, {}, "", "SELECT UNNEST(array[array[1,2,3]])");
+
+  // Requested type does not match the element type.
+  auto rowType = ROW({"repeatedInt"}, {ARRAY(INTEGER())});
+  parse::ParseOptions options;
+  auto plan = PlanBuilder(pool_.get())
+                  .setParseOptions(options)
+                  .tableScan(rowType, {}, "", rowType, {})
+                  .planNode();
+
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .splits({makeSplit(getExampleFilePath("old_repeated_int.parquet"))})
+      .assertResults("SELECT UNNEST(array[array[1,2,3]])");
+
+  rowType = ROW({"mystring"}, {ARRAY(VARCHAR())});
+  plan = PlanBuilder(pool_.get())
+             .setParseOptions(options)
+             .tableScan(rowType, {}, "", rowType, {})
+             .planNode();
+
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .splits({makeSplit(getExampleFilePath("proto_repeated_string.parquet"))})
+      .assertResults(
+          "SELECT UNNEST(array[array['hello', 'world'], array['good','bye'], array['one', 'two', 'three']])");
+
+  rowType =
+      ROW({"primitive", "myComplex"},
+          {INTEGER(),
+           ARRAY(
+               ROW({"id", "repeatedMessage"},
+                   {INTEGER(), ARRAY(ROW({"someId"}, {INTEGER()}))}))});
+  plan = PlanBuilder(pool_.get())
+             .setParseOptions(options)
+             .tableScan(rowType, {}, "", rowType, {})
+             .planNode();
+
+  // Construct the expected vector.
+  auto someIdVector = makeArrayOfRowVector(
+      ROW({"someId"}, {INTEGER()}),
+      {
+          {variant::row({3})},
+          {variant::row({6})},
+          {variant::row({9})},
+      });
+  auto rowVector = makeRowVector(
+      {"id", "repeatedMessage"},
+      {
+          makeFlatVector<int32_t>({1, 4, 7}),
+          someIdVector,
+      });
+  auto expected = makeRowVector(
+      {"primitive", "myComplex"},
+      {
+          makeFlatVector<int32_t>({2, 5, 8}),
+          makeArrayVector({0, 1, 2}, rowVector),
+      });
+
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .connectorSessionProperty(
+          kHiveConnectorId,
+          connector::hive::HiveConfig::kParquetUseColumnNamesSession,
+          "true")
+      .splits({makeSplit(getExampleFilePath("nested_array_struct.parquet"))})
+      .assertResults(expected);
 }
 
 // Optional array with required elements.
