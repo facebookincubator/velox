@@ -41,7 +41,48 @@
             
   <section id="conversion-functions">
 <h1>Conversion Functions<a class="headerlink" href="#conversion-functions" title="Link to this heading">¶</a></h1>
+<dl class="spark function">
+<dt class="sig sig-object spark" id="cast">
+<span class="sig-name descname"><span class="pre">cast</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">value</span> <span class="pre">AS</span> <span class="pre">type</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">type</span></span></span><a class="headerlink" href="#cast" title="Link to this definition">¶</a></dt>
+<dd><p>Explicitly cast a <code class="docutils literal notranslate"><span class="pre">value</span></code> to a specified <code class="docutils literal notranslate"><span class="pre">type</span></code>.
+Follows the behavior when Spark ANSI mode is disabled, and does not support
+the behavior when ANSI is turned on:</p>
+<ul>
+<li><p>If the <code class="docutils literal notranslate"><span class="pre">value</span></code> exceeds the range of the <code class="docutils literal notranslate"><span class="pre">type</span></code>, no error is raised.
+Instead, the <code class="docutils literal notranslate"><span class="pre">value</span></code> is “wrapped” around.</p></li>
+<li><p>If the <code class="docutils literal notranslate"><span class="pre">value</span></code> has an invalid format or contains characters incompatible
+with the target <code class="docutils literal notranslate"><span class="pre">type</span></code>, the cast function returns NULL.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="mi">128</span> <span class="k">as</span> <span class="n">tinyint</span><span class="p">);</span> <span class="o">--</span> <span class="o">-</span><span class="mi">128</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;2012-Oct-23&#39;</span> <span class="k">as</span> <span class="n">date</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span>
+</pre></div>
+</div>
+</li>
+</ul>
+</dd></dl>
+
+<dl class="spark function">
+<dt class="sig sig-object spark" id="try_cast">
+<span class="sig-name descname"><span class="pre">try_cast</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">value</span> <span class="pre">AS</span> <span class="pre">type</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">type</span></span></span><a class="headerlink" href="#try_cast" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the <code class="docutils literal notranslate"><span class="pre">value</span></code> cast to <code class="docutils literal notranslate"><span class="pre">type</span></code> if possible, or NULL if not possible.
+Its behavior is independent of the ANSI mode setting, and it acts identically
+to cast with ANSI mode enabled but returns NULL rather than throwing errors
+for failure to cast.
+<code class="docutils literal notranslate"><span class="pre">try_cast</span></code> differs from <code class="docutils literal notranslate"><span class="pre">cast</span></code> function with ANSI mode disabled in following case:</p>
+<ul>
+<li><p>If the <code class="docutils literal notranslate"><span class="pre">value</span></code> cannot fit within the domain of <code class="docutils literal notranslate"><span class="pre">type</span></code>, the result is NULL.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">try_cast</span><span class="p">(</span><span class="mi">128</span> <span class="k">as</span> <span class="n">tinyint</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span>
+<span class="n">SELECT</span> <span class="n">try_cast</span><span class="p">(</span><span class="n">cast</span><span class="p">(</span><span class="mf">550000.0</span> <span class="k">as</span> <span class="n">DECIMAL</span><span class="p">(</span><span class="mi">8</span><span class="p">,</span> <span class="mi">1</span><span class="p">))</span> <span class="k">as</span> <span class="n">smallint</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span>
+<span class="n">SELECT</span> <span class="n">try_cast</span><span class="p">(</span><span class="mf">1e12</span> <span class="k">as</span> <span class="nb">int</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span>
+</pre></div>
+</div>
+</li>
+</ul>
+</dd></dl>
+
+<section id="cast-from-unknown-type">
+<h2>Cast from UNKNOWN Type<a class="headerlink" href="#cast-from-unknown-type" title="Link to this heading">¶</a></h2>
 <p>Casting from UNKNOWN type to all other scalar types is supported, e.g., cast(NULL as int).</p>
+</section>
 <section id="cast-to-integral-types">
 <h2>Cast to Integral Types<a class="headerlink" href="#cast-to-integral-types" title="Link to this heading">¶</a></h2>
 <p>Integral types include bigint, integer, smallint, and tinyint.</p>
@@ -97,13 +138,13 @@ Casting from invalid input values throws.</p>
 </pre></div>
 </div>
 <p>Invalid examples</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1234567&#39;</span> <span class="k">as</span> <span class="n">tinyint</span><span class="p">);</span> <span class="o">--</span> <span class="n">Out</span> <span class="n">of</span> <span class="nb">range</span>
-<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1a&#39;</span> <span class="k">as</span> <span class="n">tinyint</span><span class="p">);</span> <span class="o">--</span> <span class="n">Invalid</span> <span class="n">argument</span>
-<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;&#39;</span> <span class="k">as</span> <span class="n">tinyint</span><span class="p">);</span> <span class="o">--</span> <span class="n">Invalid</span> <span class="n">argument</span>
-<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1,234,567&#39;</span> <span class="k">as</span> <span class="n">bigint</span><span class="p">);</span> <span class="o">--</span> <span class="n">Invalid</span> <span class="n">argument</span>
-<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1&#39;</span><span class="mi">234</span><span class="s1">&#39;567&#39;</span> <span class="k">as</span> <span class="n">bigint</span><span class="p">);</span> <span class="o">--</span> <span class="n">Invalid</span> <span class="n">argument</span>
-<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;nan&#39;</span> <span class="k">as</span> <span class="n">bigint</span><span class="p">);</span> <span class="o">--</span> <span class="n">Invalid</span> <span class="n">argument</span>
-<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;infinity&#39;</span> <span class="k">as</span> <span class="n">bigint</span><span class="p">);</span> <span class="o">--</span> <span class="n">Invalid</span> <span class="n">argument</span>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1234567&#39;</span> <span class="k">as</span> <span class="n">tinyint</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span> <span class="o">//</span> <span class="n">Reason</span><span class="p">:</span> <span class="n">Out</span> <span class="n">of</span> <span class="nb">range</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1a&#39;</span> <span class="k">as</span> <span class="n">tinyint</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span> <span class="o">//</span> <span class="n">Invalid</span> <span class="n">argument</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;&#39;</span> <span class="k">as</span> <span class="n">tinyint</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span> <span class="o">//</span> <span class="n">Invalid</span> <span class="n">argument</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1,234,567&#39;</span> <span class="k">as</span> <span class="n">bigint</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span> <span class="o">//</span> <span class="n">Invalid</span> <span class="n">argument</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1&#39;</span><span class="mi">234</span><span class="s1">&#39;567&#39;</span> <span class="k">as</span> <span class="n">bigint</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span> <span class="o">//</span> <span class="n">Invalid</span> <span class="n">argument</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;nan&#39;</span> <span class="k">as</span> <span class="n">bigint</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span> <span class="o">//</span> <span class="n">Invalid</span> <span class="n">argument</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;infinity&#39;</span> <span class="k">as</span> <span class="n">bigint</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span> <span class="o">//</span> <span class="n">Invalid</span> <span class="n">argument</span>
 </pre></div>
 </div>
 </section>
@@ -157,13 +198,13 @@ Casting from other strings to boolean throws.</p>
 </pre></div>
 </div>
 <p>Invalid examples</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1.7E308&#39;</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">Invalid</span> <span class="n">argument</span>
-<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;nan&#39;</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">Invalid</span> <span class="n">argument</span>
-<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;infinity&#39;</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">Invalid</span> <span class="n">argument</span>
-<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;12&#39;</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">Invalid</span> <span class="n">argument</span>
-<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;-1&#39;</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">Invalid</span> <span class="n">argument</span>
-<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;tr&#39;</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">Invalid</span> <span class="n">argument</span>
-<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;tru&#39;</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">Invalid</span> <span class="n">argument</span>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1.7E308&#39;</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span> <span class="o">//</span> <span class="n">Invalid</span> <span class="n">argument</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;nan&#39;</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span> <span class="o">//</span> <span class="n">Invalid</span> <span class="n">argument</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;infinity&#39;</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span> <span class="o">//</span> <span class="n">Invalid</span> <span class="n">argument</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;12&#39;</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span> <span class="o">//</span> <span class="n">Invalid</span> <span class="n">argument</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;-1&#39;</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span> <span class="o">//</span> <span class="n">Invalid</span> <span class="n">argument</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;tr&#39;</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span> <span class="o">//</span> <span class="n">Invalid</span> <span class="n">argument</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;tru&#39;</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span> <span class="o">//</span> <span class="n">Invalid</span> <span class="n">argument</span>
 </pre></div>
 </div>
 </section>
@@ -223,9 +264,9 @@ Casting from invalid input values throws.</p>
 </pre></div>
 </div>
 <p>Invalid examples</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;2012-Oct-23&#39;</span> <span class="k">as</span> <span class="n">date</span><span class="p">);</span> <span class="o">--</span> <span class="n">Invalid</span> <span class="n">argument</span>
-<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;2012/10/23&#39;</span> <span class="k">as</span> <span class="n">date</span><span class="p">);</span> <span class="o">--</span> <span class="n">Invalid</span> <span class="n">argument</span>
-<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;2012.10.23&#39;</span> <span class="k">as</span> <span class="n">date</span><span class="p">);</span> <span class="o">--</span> <span class="n">Invalid</span> <span class="n">argument</span>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;2012-Oct-23&#39;</span> <span class="k">as</span> <span class="n">date</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span> <span class="o">//</span> <span class="n">Invalid</span> <span class="n">argument</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;2012/10/23&#39;</span> <span class="k">as</span> <span class="n">date</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span> <span class="o">//</span> <span class="n">Invalid</span> <span class="n">argument</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;2012.10.23&#39;</span> <span class="k">as</span> <span class="n">date</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span> <span class="o">//</span> <span class="n">Invalid</span> <span class="n">argument</span>
 </pre></div>
 </div>
 </section>
@@ -321,6 +362,9 @@ The input value is treated as the number of seconds since the epoch (1970-01-01 
     <h3><a href="../../index.html">Table of Contents</a></h3>
     <ul>
 <li><a class="reference internal" href="#">Conversion Functions</a><ul>
+<li><a class="reference internal" href="#cast"><code class="docutils literal notranslate"><span class="pre">cast()</span></code></a></li>
+<li><a class="reference internal" href="#try_cast"><code class="docutils literal notranslate"><span class="pre">try_cast()</span></code></a></li>
+<li><a class="reference internal" href="#cast-from-unknown-type">Cast from UNKNOWN Type</a></li>
 <li><a class="reference internal" href="#cast-to-integral-types">Cast to Integral Types</a><ul>
 <li><a class="reference internal" href="#from-integral-types">From integral types</a></li>
 <li><a class="reference internal" href="#from-floating-point-types">From floating-point types</a></li>
