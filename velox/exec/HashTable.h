@@ -102,8 +102,20 @@ struct HashLookup {
   /// If using valueIds, list of concatenated valueIds. 1:1 with 'hashes'.
   /// Populated by groupProbe and joinProbe.
   raw_vector<uint64_t> normalizedKeys;
+
+  /// Bits left to check in hash match. 1:1 with 'hashes'. The match
+  /// must be >= bits[i' to be looked at. 255 means we know there are
+  /// no more possible tag matches.
+  raw_vector<uint8_t> nthBit;
+  
+  bool makeDenseHits{false};
+
+  /// Probe vector row number for each hit if 'makeDenseHits' is true.
+  raw_vector<vector_size_t> hitRows;
 };
 
+struct ProbeBatchState;
+  
 struct HashTableStats {
   int64_t capacity{0};
   int64_t numRehashes{0};
@@ -137,6 +149,11 @@ class BaseHashTable {
   enum class HashMode { kHash, kArray, kNormalizedKey };
 
   static constexpr int8_t kNoSpillInputStartPartitionBit = -1;
+
+  static constexpr uint8_t kPointerSignificantBits = 48;
+  static constexpr uint64_t kPointerMask =
+    bits::lowMask(kPointerSignificantBits);
+  static constexpr int32_t kPointerSize = kPointerSignificantBits / 8;
 
   /// The name of the runtime stats collected and reported by operators that use
   /// the HashTable (HashBuild, HashAggregation).
@@ -487,7 +504,7 @@ class HashTable : public BaseHashTable {
       uint32_t minTableSizeForParallelJoinBuild,
       memory::MemoryPool* pool);
 
-  ~HashTable() override = default;
+  ~HashTable() override;
 
   static std::unique_ptr<HashTable> createForAggregation(
       std::vector<std::unique_ptr<VectorHasher>>&& hashers,
@@ -744,9 +761,7 @@ class HashTable : public BaseHashTable {
   }
 
   // Returns the number of entries after which the table gets rehashed.
-  static uint64_t rehashSize(int64_t size) {
-    return size * kHashTableLoadFactor;
-  }
+  static uint64_t rehashSize(int64_t size);
 
   // Returns the number of entries with 'numNew' and existing 'numDistincts'
   // distincts to create a new hash table.
@@ -850,6 +865,12 @@ class HashTable : public BaseHashTable {
       int32_t numGroups,
       TableInsertPartitionInfo* partitionInfo);
 
+  void insertForJoinSingles(
+    char** groups,
+    uint64_t* hashes,
+    int32_t numGroups,
+    TableInsertPartitionInfo* partitionInfo);
+  
   // Inserts 'numGroups' entries into 'this'. 'groups' point to
   // contents in a RowContainer owned by 'this'. 'hashes' are the hash
   // numbers or array indices (if kArray mode) for each
@@ -919,6 +940,24 @@ class HashTable : public BaseHashTable {
   // Shortcut for probe with normalized keys.
   void joinNormalizedKeyProbe(HashLookup& lookup);
 
+  void joinProbe2(HashLookup& lookup);
+
+  void preprobeTags(HashLookup& lookup, int32_t begin, int32_t end);
+  
+  void probeBatchTags(HashLookup& lookup, int32_t begin, int32_t end);
+
+  void preprobeSingles(HashLookup& lookup, int32_t begin, int32_t end);
+  
+  void probeBatchSingles(HashLookup& lookup, int32_t begin, int32_t end);
+
+    void probeBatchSinglesSimd(HashLookup& lookup, int32_t begin, int32_t end);
+
+
+  
+  void compareAllKeys(
+    HashLookup& lookup,
+    ProbeBatchState& state);
+  
   // Returns the total size of the variable size 'columns' in 'row'.
   // NOTE: No checks are done in the method for performance considerations.
   // Caller needs to make sure only variable size columns are inside of
@@ -926,7 +965,9 @@ class HashTable : public BaseHashTable {
   inline uint64_t joinProjectedVarColumnsSize(
       const std::vector<vector_size_t>& columns,
       const char* row) const;
-
+  void incrementHashTags(uint64_t& h);
+  uint64_t incrementHashSingle(uint64_t& h, int32_t n = 1);
+  
   // Adds a row to a hash join table in kArray hash mode. Returns true
   // if a new entry was made and false if the row was added to an
   // existing set of rows with the same key.
@@ -1023,6 +1064,25 @@ class HashTable : public BaseHashTable {
     }
   }
 
+  uint64_t&itemAt(uint64_t offset) {
+    return *reinterpret_cast<uint64_t*>(reinterpret_cast<char*>(table_) + offset);
+  }
+
+  // True if 16 high bits match.
+  bool tagMatch(uint64_t x, uint64_t y) {
+    return ((x ^ y) & ~kPointerMask) == 0;
+  }
+
+  template <typename T>
+  uint64_t pointerAndTag(uint64_t hash, const T* ptr) {
+    return (hash & ~kPointerMask) | reinterpret_cast<uint64_t>(ptr);
+  }
+
+  template<typename T>
+  T itemAs(uint64_t item) {
+    return reinterpret_cast<T>(item & kPointerMask);
+  }
+  
   // We don't want any overlap in the bit ranges used by bucket index and those
   // used by spill partitioning; otherwise because we receive data from only one
   // partition, the overlapped bits would be the same and only a fraction of the
@@ -1103,6 +1163,12 @@ class HashTable : public BaseHashTable {
   // If true, avoids using VectorHasher value ranges with kArray hash mode.
   bool disableRangeArrayHash_{false};
 
+  // Size mask when treating the table as an array of 64 bit entries.
+  uint64_t singleSizeMask_{0}; 
+
+  // Size mask when treating the table as a set of simd vectors of 4 64 bit entries.
+  uint64_t single4SizeMask_{0};
+    
   friend class ProbeState;
   friend test::HashTableTestHelper<ignoreNullKeys>;
 };

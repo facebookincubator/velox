@@ -61,7 +61,8 @@ class DictionaryVector : public SimpleVector<T> {
       std::optional<vector_size_t> nullCount = std::nullopt,
       std::optional<bool> isSorted = std::nullopt,
       std::optional<ByteCount> representedBytes = std::nullopt,
-      std::optional<ByteCount> storageByteCount = std::nullopt);
+      std::optional<ByteCount> storageByteCount = std::nullopt,
+      bool ascendingUnique = false);
 
   virtual ~DictionaryVector() override {
     dictionaryValues_->clearContainingLazyAndWrapped();
@@ -271,6 +272,7 @@ class DictionaryVector : public SimpleVector<T> {
   // Indicates whether internal state has been set. Can also be false if there
   // is an unloaded lazy vector under the encoding layers.
   bool initialized_{false};
+  const bool ascendingUnique_;
 };
 
 template <typename T>

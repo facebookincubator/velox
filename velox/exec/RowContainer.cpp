@@ -22,6 +22,8 @@
 #include "velox/exec/Operator.h"
 #include "velox/type/FloatingPointUtil.h"
 
+DECLARE_bool(crc_hash);
+
 namespace facebook::velox::exec {
 namespace {
 template <TypeKind Kind>
@@ -880,6 +882,21 @@ int32_t RowContainer::compareComplexType(
   return compareComplexType(left, right, type, offset, offset, flags);
 }
 
+template <typename T>
+uint64_t crcHashWrapper(T x) {
+  VELOX_UNREACHABLE();
+}
+
+template <>
+uint64_t crcHashWrapper(int64_t x) {
+  return simd::crcHash64(x);
+}
+
+template <>
+uint64_t crcHashWrapper(int32_t x) {
+  return simd::crcHash64(x);
+}
+
 template <bool typeProvidesCustomComparison, TypeKind Kind>
 void RowContainer::hashTyped(
     const Type* type,
@@ -916,7 +933,12 @@ void RowContainer::hashTyped(
       } else if constexpr (std::is_floating_point_v<T>) {
         hash = util::floating_point::NaNAwareHash<T>()(valueAt<T>(row, offset));
       } else {
-        hash = folly::hasher<T>()(valueAt<T>(row, offset));
+        if ((Kind == TypeKind::INTEGER || Kind == TypeKind::BIGINT) &&
+            FLAGS_crc_hash) {
+          hash = crcHashWrapper<T>(valueAt<T>(row, offset));
+        } else {
+          hash = folly::hasher<T>()(valueAt<T>(row, offset));
+        }
       }
       result[i] = mix ? bits::hashMix(result[i], hash) : hash;
     }

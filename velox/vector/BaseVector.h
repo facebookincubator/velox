@@ -618,7 +618,8 @@ class BaseVector {
       BufferPtr indices,
       vector_size_t size,
       VectorPtr vector,
-      bool flattenIfRedundant = false);
+      bool flattenIfRedundant = false,
+				    bool ascendingUnique = false);
 
   static VectorPtr
   wrapInSequence(BufferPtr lengths, vector_size_t size, VectorPtr vector);

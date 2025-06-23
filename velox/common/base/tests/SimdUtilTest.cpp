@@ -239,42 +239,83 @@ TEST_F(SimdUtilTest, gatherBits) {
   }
 }
 
+
+template <typename TData, typename TIndex, typename A = xsimd::default_arch>
+inline void transposeScalar(
+    const TData* input,
+    folly::Range<const TIndex*> indices,
+    TData* output) {
+  int32_t cnt = indices.size();
+  for (auto i = 0; i < cnt; ++i) {
+    output[i] = input[indices[i]];
+  }
+}
+  
 TEST_F(SimdUtilTest, transpose) {
-  constexpr int32_t kMaxSize = 100;
+  constexpr int32_t kMaxSize = 10000;
   std::vector<int32_t> data32(kMaxSize);
   std::vector<int64_t> data64(kMaxSize);
   raw_vector<int32_t> indices(kMaxSize);
   constexpr int64_t kMagic = 0x4fe12LU;
   // indices are scattered over 0..kMaxSize - 1.
-  for (auto i = 0; i < kMaxSize; ++i) {
+  for (auto i = 0; i < kMaxSize; i += 11) {
     indices[i] = ((i * kMagic) & 0xffffff) % indices.size();
     data32[i] = i;
     data64[i] = static_cast<int64_t>(i) << 32;
   }
+    uint64_t si32 = 0;
+    uint64_t sc32 = 0;
+    uint64_t si64 = 0;
+    uint64_t sc64 = 0;
+
   for (auto size = 1; size < kMaxSize; ++size) {
     std::vector<int32_t> result32(kMaxSize + 1, -1);
-    simd::transpose(
-        data32.data(),
-        folly::Range<const int32_t*>(indices.data(), size),
-        result32.data());
-    for (auto i = 0; i < size; ++i) {
+    {
+      ClockTimer t(si32);
+      simd::transpose(
+		      data32.data(),
+		      folly::Range<const int32_t*>(indices.data(), size),
+		      result32.data());
+    }
+      for (auto i = 0; i < size; ++i) {
       EXPECT_EQ(data32[indices[i]], result32[i]);
     }
     // See that there is no write past 'size'.
     EXPECT_EQ(-1, result32[size]);
+    {
+      ClockTimer t(sc32);
+      transposeScalar(
+		      data32.data(),
+		      folly::Range<const int32_t*>(indices.data(), size),
+		      result32.data());
+    }
 
+    
     std::vector<int64_t> result64(kMaxSize + 1, -1);
-    simd::transpose(
-        data64.data(),
-        folly::Range<const int32_t*>(indices.data(), size),
-        result64.data());
+    {
+
+      ClockTimer t(sc64);
+      simd::transpose(
+		      data64.data(),
+		      folly::Range<const int32_t*>(indices.data(), size),
+		      result64.data());
+    }
     for (auto i = 0; i < size; ++i) {
       EXPECT_EQ(data64[indices[i]], result64[i]);
     }
     // See that there is no write past 'size'.
     EXPECT_EQ(-1, result64[size]);
+
+    {
+      ClockTimer t(si64);
+      transposeScalar(
+        data64.data(),
+        folly::Range<const int32_t*>(indices.data(), size),
+        result64.data());
+    }
   }
-}
+  std::cout << fmt::format("si32 {} sc32 {} si64 {} sc64 {}\n", si32, sc32, si64, sc64);
+  }
 
 namespace {
 
