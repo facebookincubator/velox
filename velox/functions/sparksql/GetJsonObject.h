@@ -35,7 +35,7 @@ struct GetJsonObjectFunction {
       const arg_type<Varchar>* /*json*/,
       const arg_type<Varchar>* jsonPath) {
     if (jsonPath != nullptr && checkJsonPath(*jsonPath)) {
-      jsonPath_ = removeSingleQuotes(*jsonPath);
+      jsonPath_ = normalizeJsonPath(*jsonPath);
     }
   }
 
@@ -59,7 +59,7 @@ struct GetJsonObjectFunction {
     }
     const auto formattedJsonPath = jsonPath_.has_value()
         ? jsonPath_.value()
-        : removeSingleQuotes(jsonPath);
+        : normalizeJsonPath(jsonPath);
     try {
       // Can return error result or throw exception possibly.
       auto rawResult = jsonDoc.at_path(formattedJsonPath);
@@ -112,6 +112,30 @@ struct GetJsonObjectFunction {
       result.erase(pairEnd - 1, 1);
       result.erase(pairBegin + 1, 1);
       pairEnd -= 2;
+    }
+    return result;
+  }
+
+  // Normalizes the JSON path to be Spark-compatible:
+  // - Removes single quotes in bracket notation
+  // - Removes spaces after dots (e.g., "$. a" -> "$.a")
+  std::string normalizeJsonPath(StringView jsonPath) {
+    // First, remove single quotes for bracket notation
+    std::string path = removeSingleQuotes(jsonPath);
+    // Then, remove spaces after dots
+    std::string result;
+    bool afterDot = false;
+    for (char c : path) {
+      if (c == '.') {
+        result += c;
+        afterDot = true;
+      } else if (afterDot && c == ' ') {
+        // skip space after dot
+        continue;
+      } else {
+        result += c;
+        afterDot = false;
+      }
     }
     return result;
   }
