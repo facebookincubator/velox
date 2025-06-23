@@ -19,7 +19,7 @@ from __future__ import annotations
 import ast
 import re
 from inspect import Parameter
-from typing import Any, NamedTuple
+from typing import NamedTuple
 
 from docutils import nodes
 from docutils.nodes import Element, Node
@@ -104,8 +104,9 @@ def type_to_xref(
     """Convert a type string to a cross reference node."""
     if env:
         kwargs = {
-            function_module
-            + ":module": env.ref_context.get(function_module + ":module"),
+            function_module + ":module": env.ref_context.get(
+                function_module + ":module"
+            ),
             function_module + ":class": env.ref_context.get(function_module + ":class"),
         }
     else:
