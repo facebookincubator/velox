@@ -27,6 +27,7 @@
 #include "velox/common/file/TokenProvider.h"
 #include "velox/common/future/VeloxPromise.h"
 #include "velox/core/ExpressionEvaluator.h"
+#include "velox/core/PartitionFunction.h"
 #include "velox/type/Filter.h"
 #include "velox/vector/ComplexVector.h"
 
@@ -93,6 +94,8 @@ struct ConnectorSplit : public ISerializable {
 
 class ColumnHandle : public ISerializable {
  public:
+  enum class ColumnType { kPartitionKey, kRegular, kSynthesized };
+
   virtual ~ColumnHandle() = default;
 
   virtual const std::string& name() const = 0;
@@ -163,6 +166,33 @@ class ConnectorInsertTableHandle : public ISerializable {
   folly::dynamic serialize() const override {
     VELOX_NYI();
   }
+};
+
+class ConnectorLocationHandle : public ISerializable {
+ public:
+  enum class TableType { kNew, kExisting, kTemp };
+
+  ConnectorLocationHandle(const std::string& connectorId, TableType tableType)
+      : connectorId_{connectorId}, tableType_{tableType} {}
+
+  virtual ~ConnectorLocationHandle();
+
+  const std::string& connectorId() const {
+    return connectorId_;
+  }
+
+  /// New vs existing vs temp.
+  TableType tableType() const {
+    return tableType_;
+  }
+
+  virtual std::string toString() const = 0;
+
+  virtual folly::dynamic serialize() const = 0;
+
+ private:
+  const std::string connectorId_;
+  const TableType tableType_;
 };
 
 using ConnectorInsertTableHandlePtr =
@@ -687,6 +717,59 @@ class ConnectorFactory {
       std::shared_ptr<const config::ConfigBase> config,
       folly::Executor* ioExecutor = nullptr,
       folly::Executor* cpuExecutor = nullptr) = 0;
+
+  virtual std::shared_ptr<ConnectorSplit> makeConnectorSplit(
+      const std::string& connectorId,
+      const std::string& filePath,
+      uint64_t start,
+      uint64_t length,
+      const folly::dynamic& options = {}) const {
+    VELOX_UNSUPPORTED("ConnectorSplit not supported by connector", connectorId);
+  }
+
+  virtual std::shared_ptr<connector::ColumnHandle> makeColumnHandle(
+      const std::string& connectorId,
+      const std::string& name,
+      const TypePtr& type,
+      const folly::dynamic& options = {}) const {
+    VELOX_UNSUPPORTED(
+        "connector::ColumnHandle not supported by connector", connectorId);
+  }
+
+  virtual std::shared_ptr<ConnectorTableHandle> makeTableHandle(
+      const std::string& connectorId,
+      const std::string& tableName,
+      std::vector<std::shared_ptr<const connector::ColumnHandle>> columnHandles,
+      const folly::dynamic& options) const {
+    VELOX_UNSUPPORTED(
+        "ConnectorTableHandle not supported by connector", connectorId);
+  }
+
+  virtual std::shared_ptr<ConnectorInsertTableHandle> makeInsertTableHandle(
+      const std::string& connectorId,
+      std::vector<std::shared_ptr<const connector::ColumnHandle>> inputColumns,
+      std::shared_ptr<const ConnectorLocationHandle> locationHandle,
+      const folly::dynamic& options = {}) const {
+    VELOX_UNSUPPORTED(
+        "ConnectorInsertTableHandle not supported by connector", connectorId);
+  }
+
+  virtual std::shared_ptr<ConnectorLocationHandle> makeLocationHandle(
+      const std::string& connectorId,
+      ConnectorLocationHandle::TableType tableType =
+          ConnectorLocationHandle::TableType::kNew,
+      const folly::dynamic& options = {}) const {
+    VELOX_UNSUPPORTED(
+        "ConnectorLocationHandle not supported by connector", connectorId);
+  }
+
+  virtual std::shared_ptr<const core::PartitionFunctionSpec>
+  makePartitionFunctionSpec(
+      const std::string& connectorId,
+      const folly::dynamic& options = {}) const {
+    VELOX_UNSUPPORTED(
+        "PartitionFunctionSpec not supported by connector: {}", connectorId);
+  }
 
  private:
   const std::string name_;

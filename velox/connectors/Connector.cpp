@@ -58,8 +58,8 @@ bool hasConnectorFactory(const std::string& connectorName) {
 }
 
 bool unregisterConnectorFactory(const std::string& connectorName) {
-  auto count = connectorFactories().erase(connectorName);
-  return count == 1;
+  auto factoryCount = connectorFactories().erase(connectorName);
+  return factoryCount == 1;
 }
 
 std::shared_ptr<ConnectorFactory> getConnectorFactory(
@@ -168,5 +168,7 @@ folly::dynamic ConnectorTableHandle::serializeBase(
 folly::dynamic ConnectorTableHandle::serialize() const {
   return serializeBase("ConnectorTableHandle");
 }
+
+ConnectorLocationHandle::~ConnectorLocationHandle() = default;
 
 } // namespace facebook::velox::connector

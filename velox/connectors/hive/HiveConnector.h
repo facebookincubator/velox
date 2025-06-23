@@ -19,6 +19,7 @@
 #include "velox/connectors/hive/FileHandle.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/core/PlanNode.h"
+#include "velox/dwio/common/Options.h"
 
 namespace facebook::velox::dwio::common {
 class DataSink;
@@ -98,6 +99,47 @@ class HiveConnectorFactory : public ConnectorFactory {
       folly::Executor* cpuExecutor = nullptr) override {
     return std::make_shared<HiveConnector>(id, config, ioExecutor);
   }
+
+  std::shared_ptr<connector::ConnectorSplit> makeConnectorSplit(
+      const std::string& connectorId,
+      const std::string& filePath,
+      uint64_t start,
+      uint64_t length,
+      const folly::dynamic& options = {}) const override;
+
+  std::shared_ptr<connector::ColumnHandle> makeColumnHandle(
+      const std::string& connectorId,
+      const std::string& name,
+      const TypePtr& type,
+      const folly::dynamic& options = {}) const override;
+
+  std::shared_ptr<ConnectorTableHandle> makeTableHandle(
+      const std::string& connectorId,
+      const std::string& tableName,
+      std::vector<std::shared_ptr<const connector::ColumnHandle>> columnHandles,
+      const folly::dynamic& options) const override;
+
+  std::shared_ptr<ConnectorInsertTableHandle> makeInsertTableHandle(
+      const std::string& connectorId,
+      std::vector<std::shared_ptr<const connector::ColumnHandle>> inputColumns,
+      std::shared_ptr<const ConnectorLocationHandle> locationHandle,
+      const folly::dynamic& options = {}) const override;
+
+  std::shared_ptr<connector::ConnectorLocationHandle> makeLocationHandle(
+      const std::string& connectorId,
+      connector::ConnectorLocationHandle::TableType tableType =
+          connector::ConnectorLocationHandle::TableType::kNew,
+      const folly::dynamic& options = {}) const override;
+
+  core::PartitionFunctionSpecPtr makePartitionFunctionSpec(
+      const std::string& connectorId,
+      const folly::dynamic& options = {}) const override;
+
+ private:
+  std::shared_ptr<memory::MemoryPool> pool_{
+      memory::memoryManager()->addLeafPool()};
+  dwio::common::FileFormat defaultFileFormat_{
+      dwio::common::FileFormat::PARQUET};
 };
 
 class HivePartitionFunctionSpec : public core::PartitionFunctionSpec {
