@@ -16,7 +16,7 @@
 
 from __future__ import annotations
 
-from function import *
+from function import function_sig_re, parse_arglist, pseudo_parse_arglist, parse_annotation, ObjectEntry, ModuleEntry
 from typing import Any, Iterable, Iterator, Tuple, cast
 
 from docutils import nodes

@@ -16,7 +16,7 @@
 
 from __future__ import annotations
 
-from function import *
+from function import function_sig_re, parse_arglist, pseudo_parse_arglist, parse_annotation, ObjectEntry, ModuleEntry
 from typing import Any, Iterable, Iterator, Tuple, cast
 
 from docutils import nodes
@@ -150,12 +150,12 @@ class IcebergObject(ObjectDescription[Tuple[str, str]]):
             except SyntaxError:
                 # fallback to parse arglist original parser.
                 # it supports to represent optional arguments (ex. "func(foo [, bar])")
-                pseudoparse_arglist(signode, arglist)
+                pseudo_parse_arglist(signode, arglist)
             except NotImplementedError as exc:
                 logger.warning(
                     "could not parse arglist (%r): %s", arglist, exc, location=signode
                 )
-                pseudoparse_arglist(signode, arglist)
+                pseudo_parse_arglist(signode, arglist)
         else:
             if self.needs_arglist():
                 # for callables, add an empty parameter list

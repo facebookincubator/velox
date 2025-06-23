@@ -299,7 +299,7 @@ def parse_arglist(
             node += addnodes.desc_sig_name("", param.name)
 
         if param.annotation is not param.empty:
-            children = _parse_annotation(function_module, param.annotation, env)
+            children = parse_annotation(function_module, param.annotation, env)
             node += addnodes.desc_sig_punctuation("", ":")
             node += addnodes.desc_sig_space()
             node += addnodes.desc_sig_name("", "", *children)  # type: ignore
