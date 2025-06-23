@@ -30,7 +30,7 @@ class TpchColumnHandle : public ColumnHandle {
  public:
   explicit TpchColumnHandle(const std::string& name) : name_(name) {}
 
-  const std::string& name() const {
+  const std::string& name() const override {
     return name_;
   }
 

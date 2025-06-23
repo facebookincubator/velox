@@ -19,6 +19,7 @@ add_executable(
   HiveConnectorTest.cpp
   HiveConnectorUtilTest.cpp
   HiveConnectorSerDeTest.cpp
+  HiveObjectFactoryTest.cpp
   HivePartitionFunctionTest.cpp
   HivePartitionUtilTest.cpp
   HiveSplitTest.cpp
