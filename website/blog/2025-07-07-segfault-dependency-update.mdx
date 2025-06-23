@@ -22,13 +22,13 @@ header called *AsyncProcessor.h*.
 This handler(*RemoteServer*) was implemented in Velox as a Thrift definition. Velox compiled this thrift file using fbthrif, and the generated code
 was using the *ServerInterface* class in Facebook Thrift. This *ServerInterface* class was further extended from both the *AsyncProcessorFactory* and
 *ServiceHandlerBase* interfaces in Facebook Thrift.
-One of the culprits resulting in SEGFAULTS in the past was the conflict due to the usage of Apache Thrift and Facebook Thrift.
+One of the culprits resulting in SEGFAULTs in the past was the conflict due to the usage of Apache Thrift and Facebook Thrift.
 However, this was not the root cause this time because we were able to reproduce this issue by just building the test without the Apache Thrift dependency installed.
 We were entering a new territory to investigate, and we were not sure where to start.
 
 We then compiled an example called *EchoService* in Facebook Thrift that was very similar to the *RemoteServer*, and it worked. Then we copied and compiled the Velox *RemoveServer*
 in Facebook Thrift and that worked too! So the culprit was likely in the compilation flags, which likely differed between Facebook Thrift and Velox.
-We enabled the verbose logging for both builds and were able to spot one difference. We saw the GCC *-fcoroutines* flag being used in the Facebook Thrift build.
+We enabled the verbose logging for both builds and were able to spot one difference. We saw the GCC *coroutines* flag being used in the Facebook Thrift build.
 
 We were also very curious about the invocation of the destructor instead of the actual function. We wore the gdb gloves again and dumped the entire
 vtable for the RemoteServer class and its base classes. The vtables were different when it was built in Velox vs. Facebook Thrift.
@@ -78,4 +78,4 @@ class ServiceHandlerBase {
 ```
 
 As a result, the ThriftServer would access an incorrect function, the destructor instead of the expected initialization function, because the functions at the offset used were different, thus resulting in a SEGFAULT.
-We recompiled the Facebook Thrift dependency for Velox with coroutines disabled, and the test passed.
+We recompiled the Facebook Thrift dependency for Velox with the *coroutines* flag disabled, and the test passed.
