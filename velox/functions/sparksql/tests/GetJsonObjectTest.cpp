@@ -66,11 +66,10 @@ TEST_F(GetJsonObjectTest, basic) {
 
   // Json object with space in key.
   EXPECT_EQ(
-      getJsonObject(R"({"a b": "1"})", "$.a b"), "1");
-  EXPECT_EQ(
-      getJsonObject(R"({"a b": "1"})", "$.a b.c"), "1");
-  EXPECT_EQ(
-      getJsonObject(R"({"a b": "1"})", "$.a b.c.d"), "1");
+      getJsonObject(
+          R"({"a b": "1"})", "$.a b"), "1");
+  EXPECT_EQ(getJsonObject(
+          R"({"a": "1"})", "$. a"), "1");
 
   // Json object as result.
   EXPECT_EQ(
