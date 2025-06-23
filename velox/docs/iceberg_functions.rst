@@ -2,14 +2,10 @@
 Iceberg Functions
 ***********************
 
-.. toctree::
-    :maxdepth: 1
-
-    functions/iceberg/functions
-
 Here is a list of all scalar Iceberg functions available in Velox.
-Function names link to function descriptions. Check out coverage maps
+Function names link to function description. Check out coverage maps
 for :doc:`all <functions/iceberg/coverage>` functions.
+Check out function detailed :doc:`description <functions/iceberg/functions>`.
 
 .. raw:: html
 
