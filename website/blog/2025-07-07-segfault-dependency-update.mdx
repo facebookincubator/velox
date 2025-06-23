@@ -19,7 +19,7 @@ We immediately put on our *gdb* gloves and looked at the stack traces. This issu
 The SEGFAULT occurred in the ThriftServer of Facebook Thrift during initialization of the ThriftServer, but the offending call was invoking a destructor of a certain handler.
 However, the corresponding source code was pointing to an invocation of a different function. And this code was present inside a Facebook Thrift
 header called *AsyncProcessor.h*.
-This handler(*RemoteServer*) was implemented in Velox as a Thrift definition. Velox compiled this thrift file using fbthrif, and the generated code
+This handler(*RemoteServer*) was implemented in Velox as a Thrift definition. Velox compiled this thrift file using Facebook Thrift, and the generated code
 was using the *ServerInterface* class in Facebook Thrift. This *ServerInterface* class was further extended from both the *AsyncProcessorFactory* and
 *ServiceHandlerBase* interfaces in Facebook Thrift.
 One of the culprits resulting in SEGFAULTs in the past was the conflict due to the usage of Apache Thrift and Facebook Thrift.
@@ -30,7 +30,7 @@ We then compiled an example called *EchoService* in Facebook Thrift that was ver
 in Facebook Thrift and that worked too! So the culprit was likely in the compilation flags, which likely differed between Facebook Thrift and Velox.
 We enabled the verbose logging for both builds and were able to spot one difference. We saw the GCC *coroutines* flag being used in the Facebook Thrift build.
 
-We were also very curious about the invocation of the destructor instead of the actual function. We wore the gdb gloves again and dumped the entire
+We were also curious about the invocation of the destructor instead of the actual function. We wore our gdb gloves again and dumped the entire
 vtable for the RemoteServer class and its base classes. The vtables were different when it was built in Velox vs. Facebook Thrift.
 Specifically, the list of functions inherited from *ServiceHandlerBase* was different.
 
