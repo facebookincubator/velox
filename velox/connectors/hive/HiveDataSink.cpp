@@ -291,6 +291,25 @@ HiveBucketProperty::HiveBucketProperty(
   validate();
 }
 
+HiveBucketProperty::HiveBucketProperty(
+    Kind kind,
+    int32_t bucketCount,
+    const std::vector<std::string>& bucketedBy,
+    const std::vector<TypePtr>& bucketTypes,
+    const std::vector<std::string>& sortColumns,
+    const std::vector<core::SortOrder>& sortOrders)
+    : kind_(kind),
+      bucketCount_(bucketCount),
+      bucketedBy_(bucketedBy),
+      bucketTypes_(bucketTypes) {
+  VELOX_CHECK_EQ(sortColumns.size(), sortOrders.size());
+  for (size_t i = 0; i < sortColumns.size(); ++i) {
+    sortedBy_.push_back(
+        std::make_shared<HiveSortingColumn>(sortColumns[i], sortOrders[i]));
+  }
+  validate();
+}
+
 void HiveBucketProperty::validate() const {
   VELOX_USER_CHECK_GT(bucketCount_, 0, "Hive bucket count can't be zero");
   VELOX_USER_CHECK(!bucketedBy_.empty(), "Hive bucket columns must be set");
@@ -332,9 +351,22 @@ std::shared_ptr<HiveBucketProperty> HiveBucketProperty::deserialize(
       ISerializable::deserialize<std::vector<std::string>>(obj["bucketedBy"]);
   const auto bucketedTypes = ISerializable::deserialize<std::vector<Type>>(
       obj["bucketedTypes"], context);
-  const auto sortedBy =
-      ISerializable::deserialize<std::vector<HiveSortingColumn>>(
-          obj["sortedBy"], context);
+
+  std::vector<std::shared_ptr<const HiveSortingColumn>> sortedBy;
+  if (auto sb = obj.get_ptr("sortedBy")) {
+    sortedBy = ISerializable::deserialize<std::vector<HiveSortingColumn>>(*sb);
+  } else if (auto sc = obj.get_ptr("sortColumns")) {
+    auto sortColumns =
+        ISerializable::deserialize<std::vector<std::string>>(*sc);
+    if (auto so = obj.get_ptr("sortOrders")) {
+      VELOX_CHECK_EQ(sortColumns.size(), so->size());
+      for (int i = 0; i < so->size(); i++) {
+        auto sortOrder = core::SortOrder::deserialize((*so)[i]);
+        sortedBy.emplace_back(std::make_shared<const HiveSortingColumn>(
+            sortColumns[i], sortOrder));
+      }
+    }
+  }
   return std::make_shared<HiveBucketProperty>(
       kind, bucketCount, buckectedBy, bucketedTypes, sortedBy);
 }
@@ -1201,7 +1233,7 @@ std::string LocationHandle::toString() const {
       "LocationHandle [targetPath: {}, writePath: {}, tableType: {}, tableFileName: {}]",
       targetPath_,
       writePath_,
-      tableTypeName(tableType_),
+      tableTypeName(tableType()),
       targetFileName_);
 }
 
@@ -1215,7 +1247,7 @@ folly::dynamic LocationHandle::serialize() const {
   obj["name"] = "LocationHandle";
   obj["targetPath"] = targetPath_;
   obj["writePath"] = writePath_;
-  obj["tableType"] = tableTypeName(tableType_);
+  obj["tableType"] = tableTypeName(tableType());
   obj["targetFileName"] = targetFileName_;
   return obj;
 }

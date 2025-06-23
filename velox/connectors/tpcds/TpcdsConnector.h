@@ -179,6 +179,8 @@ class TpcdsConnectorFactory : public ConnectorFactory {
       folly::Executor* cpuExecutor = nullptr) override {
     return std::make_shared<TpcdsConnector>(id, config, ioExecutor);
   }
+
+  // TODO: Add object makers like makeTableHandle, makeColumnHandle, etc.
 };
 
 } // namespace facebook::velox::connector::tpcds
