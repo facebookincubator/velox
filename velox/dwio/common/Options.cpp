@@ -15,6 +15,7 @@
  */
 
 #include "velox/dwio/common/Options.h"
+#include "velox/common/compression/Compression.h"
 
 namespace facebook::velox::dwio::common {
 
@@ -76,5 +77,89 @@ ColumnReaderOptions makeColumnReaderOptions(const ReaderOptions& options) {
       options.useColumnNamesForColumnMapping();
   return columnReaderOptions;
 }
+
+folly::dynamic WriterOptions::serialize() const {
+  folly::dynamic obj = folly::dynamic::object;
+
+  // 1) Schema
+  if (schema) {
+    obj["schema"] = schema->serialize();
+  }
+
+  // 2) compressionKind
+  if (compressionKind) {
+    obj["compressionKind"] = static_cast<int>(*compressionKind);
+  }
+
+  // 3) serdeParameters
+  if (!serdeParameters.empty()) {
+    folly::dynamic mapObj = folly::dynamic::object;
+    for (auto& [k, v] : serdeParameters) {
+      mapObj[k] = v;
+    }
+    obj["serdeParameters"] = std::move(mapObj);
+  }
+
+  // 4) sessionTimezoneName
+  if (!sessionTimezoneName.empty()) {
+    obj["sessionTimezoneName"] = sessionTimezoneName;
+  }
+
+  // 5) adjustTimestampToTimezone
+  obj["adjustTimestampToTimezone"] = adjustTimestampToTimezone;
+
+  // (We do *not* serialize pool, spillConfig, nonReclaimableSection,
+  //  or the factory functions—they must be re‐injected by the host.)
+
+  return obj;
+}
+
+std::shared_ptr<WriterOptions> WriterOptions::deserialize(
+    const folly::dynamic& obj) {
+  auto opts = std::make_shared<WriterOptions>();
+
+  // 1) schema
+  if (auto p = obj.get_ptr("schema")) {
+    opts->schema = ISerializable::deserialize<velox::Type>(*p, nullptr);
+  }
+
+  // 2) compressionKind
+  if (auto p = obj.get_ptr("compressionKind")) {
+    opts->compressionKind =
+        static_cast<velox::common::CompressionKind>(p->asInt());
+  }
+
+  // 3) serdeParameters
+  if (auto p = obj.get_ptr("serdeParameters")) {
+    opts->serdeParameters.clear();
+    for (auto& kv : p->items()) {
+      opts->serdeParameters.emplace(kv.first.asString(), kv.second.asString());
+    }
+  }
+
+  // 4) sessionTimezoneName
+  if (auto p = obj.get_ptr("sessionTimezoneName")) {
+    opts->sessionTimezoneName = p->asString();
+  }
+
+  // 5) adjustTimestampToTimezone
+  if (auto p = obj.get_ptr("adjustTimestampToTimezone")) {
+    opts->adjustTimestampToTimezone = p->asBool();
+  }
+
+  // pool, spillConfig, nonReclaimableSection, factories remain at default
+  return opts;
+}
+
+void WriterOptions::registerSerDe() {
+  auto& registry = DeserializationRegistryForSharedPtr();
+  registry.Register("WriterOptions", WriterOptions::deserialize);
+}
+
+// force registration at load‐time
+static bool _writerOptionsSerdeRegistered = []() {
+  WriterOptions::registerSerDe();
+  return true;
+}();
 
 } // namespace facebook::velox::dwio::common
