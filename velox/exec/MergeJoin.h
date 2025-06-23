@@ -398,8 +398,8 @@ class MergeJoin : public Operator {
     void processFilterResult(
         vector_size_t outputIndex,
         bool passed,
-        TOnMiss onMiss,
-        TOnMatch onMatch) {
+        const TOnMiss& onMiss,
+        const TOnMatch& onMatch) {
       const auto rowNumber = rawLeftRowNumbers_[outputIndex];
       if (currentLeftRowNumber_ != rowNumber) {
         if (currentRow_ != -1 && !currentRowPassed_) {
@@ -416,10 +416,7 @@ class MergeJoin : public Operator {
       if (passed) {
         currentRowPassed_ = true;
 
-        if (!firstMatched_) {
-          onMatch(outputIndex);
-          firstMatched_ = true;
-        }
+        onMatch(outputIndex, firstMatched_);
       }
     }
 

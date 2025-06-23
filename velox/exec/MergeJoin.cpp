@@ -1351,9 +1351,12 @@ RowVectorPtr MergeJoin::applyFilter(const RowVectorPtr& output) {
       }
     };
 
-    auto onMatch = [&](auto row) {
-      if (isLeftSemiFilterJoin(joinType_) || isRightSemiFilterJoin(joinType_)) {
+    auto onMatch = [&](auto row, bool& firstMatched_) {
+      if ((isLeftSemiFilterJoin(joinType_) ||
+           isRightSemiFilterJoin(joinType_)) &&
+          !firstMatched_) {
         rawIndices[numPassed++] = row;
+        firstMatched_ = true;
       }
     };
 
@@ -1404,7 +1407,6 @@ RowVectorPtr MergeJoin::applyFilter(const RowVectorPtr& output) {
     if (!leftMatch_ || !joinTracker_->isCurrentLeftMatch(numRows - 1)) {
       joinTracker_->noMoreFilterResults(onMiss);
     }
-
   } else {
     filterRows_.resize(numRows);
     filterRows_.setAll();
