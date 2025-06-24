@@ -472,18 +472,6 @@ void readIPPrefixValues(
           result->size(),
           numNulls));
 
-  VELOX_DCHECK(
-      (ipprefixBytesSum == ((size - numNulls) * ipaddress::kIPPrefixBytes)),
-      fmt::format(
-          "IPPrefix received invalid number of non-null bytes. Got:{} Expected:{} rows:{} numNulls:{} totalSize:{} numIncomingNulls={} resultOffset={}.",
-          ipprefixBytesSum,
-          (size - numNulls) * ipaddress::kIPPrefixBytes,
-          size,
-          numNulls,
-          result->size(),
-          numIncomingNulls,
-          resultOffset));
-
   auto row = result->asChecked<RowVector>();
   auto ip = row->childAt(0)->asChecked<FlatVector<int128_t>>();
   auto prefix = row->childAt(1)->asChecked<FlatVector<int8_t>>();

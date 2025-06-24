@@ -18,6 +18,8 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/fuzzer/PrestoSql.h"
+#include "velox/functions/prestosql/types/IPAddressType.h"
+#include "velox/functions/prestosql/types/IPPrefixType.h"
 #include "velox/functions/prestosql/types/JsonType.h"
 #include "velox/functions/prestosql/types/QDigestType.h"
 #include "velox/functions/prestosql/types/TDigestType.h"
@@ -53,6 +55,8 @@ TEST(PrestoSqlTest, toTypeSql) {
           ROW({{"a_", BOOLEAN()}, {"b$", INTEGER()}, {"c d", INTEGER()}})),
       "ROW(a_ BOOLEAN, b$ INTEGER, c d INTEGER)");
   EXPECT_EQ(toTypeSql(JSON()), "JSON");
+  EXPECT_EQ(toTypeSql(IPADDRESS()), "IPADDRESS");
+  EXPECT_EQ(toTypeSql(IPPREFIX()), "IPPREFIX");
   EXPECT_EQ(toTypeSql(UNKNOWN()), "UNKNOWN");
   VELOX_ASSERT_THROW(
       toTypeSql(FUNCTION({INTEGER()}, INTEGER())),

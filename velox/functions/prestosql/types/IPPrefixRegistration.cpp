@@ -200,7 +200,7 @@ class IPPrefixTypeFactories : public CustomTypeFactories {
     fields[0] = std::make_unique<fuzzer::RangeConstrainedGenerator<int128_t>>(
         config.seed_, IPADDRESS(), 0, 0, std::numeric_limits<int128_t>::max());
     fields[1] = std::make_unique<fuzzer::RangeConstrainedGenerator<int8_t>>(
-        config.seed_, TINYINT(), 0, 0, 127);
+        config.seed_, TINYINT(), 0, 3, 127);
     return std::make_shared<fuzzer::RandomInputGenerator<RowType>>(
         config.seed_, IPPREFIX(), std::move(fields), config.nullRatio_);
   }

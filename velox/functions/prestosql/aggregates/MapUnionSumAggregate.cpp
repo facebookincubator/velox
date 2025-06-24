@@ -19,6 +19,8 @@
 #include "velox/exec/Strings.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/functions/prestosql/aggregates/AggregateNames.h"
+#include "velox/functions/prestosql/types/IPAddressType.h"
+#include "velox/functions/prestosql/types/IPPrefixType.h"
 #include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::aggregate::prestosql {
@@ -561,6 +563,9 @@ void registerMapUnionSumAggregate(
             if (mapType.keyType()->isDecimal()) {
               return createMapUnionSumAggregate<int128_t>(
                   valueTypeKind, resultType);
+            } else if (isIPAddressType(mapType.keyType())) {
+              VELOX_USER_FAIL(
+                  "Key type {} is not supported", mapType.keyType());
             }
             VELOX_UNREACHABLE(
                 "Unexpected key type {}", mapTypeKindToName(keyTypeKind));
