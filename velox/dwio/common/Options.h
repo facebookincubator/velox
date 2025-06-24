@@ -416,7 +416,7 @@ class RowReaderOptions {
 
   // Whether to generate FlatMapVectors when reading flat maps from the file. By
   // default, converts flat maps in the file to MapVectors.
-  bool preserveFlatMapsInMemory_ = false;
+  bool preserveFlatMapsInMemory_ = true;
 
   // Optional executors to enable internal reader parallelism.
   // 'decodingExecutor' allow parallelising the vector decoding process.
