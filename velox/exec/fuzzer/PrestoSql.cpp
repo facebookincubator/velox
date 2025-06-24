@@ -18,6 +18,7 @@
 
 #include "velox/exec/fuzzer/PrestoQueryRunner.h"
 #include "velox/exec/fuzzer/ReferenceQueryRunner.h"
+#include "velox/functions/prestosql/types/IPPrefixType.h"
 #include "velox/functions/prestosql/types/JsonType.h"
 
 namespace facebook::velox::exec::test {
@@ -81,6 +82,9 @@ std::string toTypeSql(const TypePtr& type) {
           toTypeSql(type->childAt(0)),
           toTypeSql(type->childAt(1)));
     case TypeKind::ROW: {
+      if (isIPPrefixType(type)) {
+        return "IPPREFIX";
+      }
       const auto& rowType = type->asRow();
       std::stringstream sql;
       sql << "ROW(";
