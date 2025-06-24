@@ -132,6 +132,15 @@ class ParquetDataSource : public DataSource, public NvtxHelper {
 
   dwio::common::RuntimeStatistics runtimeStats_;
   std::atomic<uint64_t> totalRemainingFilterTime_{0};
+
+  // Create callback data for total scan timing calculation 
+  struct totalScanTimeCallbackData {
+    uint64_t startTimeUs;
+    std::shared_ptr<io::IoStatistics> ioStats;
+  };
+
+  // Host callback function to calculate total scan time
+  static void totalScanTimeCalculator(void* userData);
 };
 
 } // namespace facebook::velox::cudf_velox::connector::parquet
