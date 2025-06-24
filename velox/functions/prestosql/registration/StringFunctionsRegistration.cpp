@@ -21,6 +21,7 @@
 #include "velox/functions/prestosql/SplitToMultiMap.h"
 #include "velox/functions/prestosql/StringFunctions.h"
 #include "velox/functions/prestosql/WordStem.h"
+#include "velox/functions/prestosql/RegexFunctions.h"
 
 namespace facebook::velox::functions {
 

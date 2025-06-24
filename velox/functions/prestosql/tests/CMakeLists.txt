@@ -91,6 +91,7 @@ add_executable(
   ProbabilityTest.cpp
   RandTest.cpp
   ReduceTest.cpp
+  RegexFunctionsTest.cpp
   RegexpReplaceTest.cpp
   ReverseTest.cpp
   RoundTest.cpp
