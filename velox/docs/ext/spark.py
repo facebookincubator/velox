@@ -16,7 +16,14 @@
 
 from __future__ import annotations
 
-from function import function_sig_re, parse_arglist, pseudo_parse_arglist, parse_annotation, ObjectEntry, ModuleEntry
+from function import (
+    function_sig_re,
+    parse_arglist,
+    pseudo_parse_arglist,
+    parse_annotation,
+    ObjectEntry,
+    ModuleEntry,
+)
 from typing import Any, Iterable, Iterator, Tuple, cast
 
 from docutils import nodes
@@ -315,12 +322,8 @@ class SparkFunction(SparkObject):
             node_id = signode["ids"][0]
 
             name, cls = name_cls
-            if modname:
-                text = _("%s() (in module %s)") % (name, modname)
-                self.indexnode["entries"].append(("single", text, node_id, "", None))
-            else:
-                text = f"{pairindextypes['builtin']}; {name}()"
-                self.indexnode["entries"].append(("pair", text, node_id, "", None))
+            text = _("%s() (in module %s)") % (name, modname)
+            self.indexnode["entries"].append(("single", text, node_id, "", None))
 
     def get_index_text(self, modname: str, name_cls: tuple[str, str]) -> str | None:
         # add index in own add_target_and_index() instead.
