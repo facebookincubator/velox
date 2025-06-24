@@ -413,7 +413,7 @@ class MergeJoin : public Operator {
       }
 
       if (passed) {
-        onMatch(outputIndex, !currentRowPassed_);
+        onMatch(outputIndex, /*firstMatch=*/!currentRowPassed_);
         currentRowPassed_ = true;
       }
     }

@@ -20,6 +20,25 @@
 
 namespace facebook::velox::exec {
 
+namespace {
+void copyRow(
+    const RowVectorPtr& source,
+    vector_size_t sourceIndex,
+    const RowVectorPtr& target,
+    vector_size_t targetIndex,
+    const std::vector<IdentityProjection>& projections) {
+  for (const auto& projection : projections) {
+    const auto& sourceChild = source->childAt(projection.inputChannel);
+    const auto& targetChild = target->childAt(projection.outputChannel);
+    targetChild->copy(sourceChild.get(), targetIndex, sourceIndex, 1);
+  }
+}
+
+bool isSemiFilterJoin(core::JoinType joinType) {
+  return isLeftSemiFilterJoin(joinType) || isRightSemiFilterJoin(joinType);
+}
+} // namespace
+
 MergeJoin::MergeJoin(
     int32_t operatorId,
     DriverCtx* driverCtx,
@@ -91,8 +110,7 @@ void MergeJoin::initialize() {
 
     if (joinNode_->isLeftJoin() || joinNode_->isAntiJoin() ||
         joinNode_->isRightJoin() || joinNode_->isFullJoin() ||
-        joinNode_->isLeftSemiFilterJoin() ||
-        joinNode_->isRightSemiFilterJoin()) {
+        isSemiFilterJoin(joinType_)) {
       joinTracker_ = JoinTracker(outputBatchSize_, pool());
     }
   } else if (joinNode_->isAntiJoin()) {
@@ -275,25 +293,6 @@ bool MergeJoin::findEndOfMatch(
   match.complete = true;
   return true;
 }
-
-namespace {
-void copyRow(
-    const RowVectorPtr& source,
-    vector_size_t sourceIndex,
-    const RowVectorPtr& target,
-    vector_size_t targetIndex,
-    const std::vector<IdentityProjection>& projections) {
-  for (const auto& projection : projections) {
-    const auto& sourceChild = source->childAt(projection.inputChannel);
-    const auto& targetChild = target->childAt(projection.outputChannel);
-    targetChild->copy(sourceChild.get(), targetIndex, sourceIndex, 1);
-  }
-}
-
-bool isSemiFilterJoin(core::JoinType joinType) {
-  return isLeftSemiFilterJoin(joinType) || isRightSemiFilterJoin(joinType);
-}
-} // namespace
 
 inline void addNull(
     VectorPtr& target,
@@ -1354,11 +1353,11 @@ RowVectorPtr MergeJoin::applyFilter(const RowVectorPtr& output) {
       }
     };
 
-    auto onMatch = [&](auto row, bool hasMatched_) {
+    auto onMatch = [&](auto row, bool firstMatch) {
       const bool isNonSemiAntiJoin =
           !isSemiFilterJoin(joinType_) && !isAntiJoin(joinType_);
 
-      if ((isSemiFilterJoin(joinType_) && hasMatched_) || isNonSemiAntiJoin) {
+      if ((isSemiFilterJoin(joinType_) && firstMatch) || isNonSemiAntiJoin) {
         rawIndices[numPassed++] = row;
       }
     };
