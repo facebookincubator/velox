@@ -101,10 +101,10 @@ void registerSimpleFunctions(const std::string& prefix) {
   registerFunction<RTrimFunction, Varchar, Varchar, Varchar>(
       {prefix + "rtrim"});
 
-  registerFunction<LPadFunction, VarcharN<>, VarcharN<>, int64_t, VarcharN<>>(
-        {prefix + "lpad"});
-  //registerFunction<LPadFunction, Varchar, Varchar, int64_t, Varchar>(
-  //    {prefix + "lpad"});
+  //registerFunction<LPadFunction, Varchar, VarcharN<L1>, int64_t, VarcharN<L2>>(
+  //      {prefix + "lpad"});
+  registerFunction<LPadFunction, Varchar, Varchar, int64_t, Varchar>(
+      {prefix + "lpad"});
   registerFunction<RPadFunction, Varchar, Varchar, int64_t, Varchar>(
       {prefix + "rpad"});
 

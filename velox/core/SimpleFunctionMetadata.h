@@ -291,6 +291,18 @@ struct TypeAnalysis<LongDecimal<P, S>> {
 // TODO we can template the varchar struct to keep the same name
 // but it changes all function signatures due to the template arguments.
 // Therefore, keeping it separate for now.
+template <>
+struct TypeAnalysis<Varchar> {
+  void run(TypeAnalysisResults& results) {
+    results.stats.concreteCount++;
+    const std::string kName = "maxLength";
+    results.out << fmt::format("varchar({})", std::to_string(std::numeric_limits<size_t>::max()));
+    results.addVariable(exec::SignatureVariable(
+        kName, std::nullopt, exec::ParameterType::kIntegerParameter));
+    results.physicalType = VARCHAR();
+  }
+};
+
 template <typename L>
 struct TypeAnalysis<VarcharN<L>> {
   void run(TypeAnalysisResults& results) {
