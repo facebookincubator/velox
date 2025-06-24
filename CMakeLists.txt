@@ -426,8 +426,6 @@ if(VELOX_ENABLE_WAVE OR VELOX_ENABLE_CUDF)
   endif()
 endif()
 
-set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fuse-ld=lld")
-
 # Set after the test of the CUDA compiler. Otherwise, the test fails with
 # -latomic not found because it is added right after the compiler exe.
 if("${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang"
