@@ -415,8 +415,8 @@ class MergeJoin : public Operator {
 
       if (passed) {
         currentRowPassed_ = true;
-
         onMatch(outputIndex, firstMatched_);
+        firstMatched_ = true;
       }
     }
 
