@@ -74,6 +74,7 @@ uint64_t SpillWriteFile::write(std::unique_ptr<folly::IOBuf> iobuf) {
 
 SpillWriterBase::SpillWriterBase(
     uint64_t writeBufferSize,
+    uint32_t writeBatchSize,
     uint64_t targetFileSize,
     const std::string& pathPrefix,
     const std::string& fileCreateConfig,
@@ -85,6 +86,7 @@ SpillWriterBase::SpillWriterBase(
       updateAndCheckSpillLimitCb_(updateAndCheckSpillLimitCb),
       fileCreateConfig_(fileCreateConfig),
       pathPrefix_(pathPrefix),
+      writeBatchSize_(writeBatchSize),
       writeBufferSize_(writeBufferSize),
       targetFileSize_(targetFileSize) {}
 
@@ -154,8 +156,9 @@ uint64_t SpillWriterBase::writeWithBufferControl(
     rowsWritten = writeCb();
   }
   updateAppendStats(rowsWritten, timeNs);
+  currentBatchSize_ += rowsWritten;
 
-  if (bufferSize() < writeBufferSize_) {
+  if (bufferSize() < writeBufferSize_ && currentBatchSize_ < writeBatchSize_) {
     return 0;
   }
   return flush();
@@ -196,12 +199,14 @@ SpillWriter::SpillWriter(
     const std::string& pathPrefix,
     uint64_t targetFileSize,
     uint64_t writeBufferSize,
+    uint32_t writeBatchSize,
     const std::string& fileCreateConfig,
     common::UpdateAndCheckSpillLimitCB& updateAndCheckSpillLimitCb,
     memory::MemoryPool* pool,
     folly::Synchronized<common::SpillStats>* stats)
     : SpillWriterBase(
           writeBufferSize,
+          writeBatchSize,
           targetFileSize,
           pathPrefix,
           fileCreateConfig,
@@ -225,6 +230,7 @@ void SpillWriter::flushBuffer(
     batch_->flush(&out);
   }
   batch_.reset();
+  currentBatchSize_ = 0;
 
   auto iobuf = out.getIOBuf();
   {

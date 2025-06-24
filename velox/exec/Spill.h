@@ -559,6 +559,7 @@ class SpillState {
       const std::vector<SpillSortKey>& sortingKeys,
       uint64_t targetFileSize,
       uint64_t writeBufferSize,
+      uint32_t writeBatchSize,
       common::CompressionKind compressionKind,
       const std::optional<common::PrefixSortConfig>& prefixSortConfig,
       memory::MemoryPool* pool,
@@ -663,6 +664,7 @@ class SpillState {
   const std::vector<SpillSortKey> sortingKeys_;
   const uint64_t targetFileSize_;
   const uint64_t writeBufferSize_;
+  const uint32_t writeBatchSize_;
   const common::CompressionKind compressionKind_;
   const std::optional<common::PrefixSortConfig> prefixSortConfig_;
   const std::string fileCreateConfig_;

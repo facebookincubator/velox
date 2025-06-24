@@ -105,6 +105,7 @@ class SpillWriterBase {
 
   SpillWriterBase(
       uint64_t writeBufferSize,
+      uint32_t writeBatchSize,
       uint64_t targetFileSize,
       const std::string& pathPrefix,
       const std::string& fileCreateConfig,
@@ -159,6 +160,8 @@ class SpillWriterBase {
 
   SpillFiles finishedFiles_;
 
+  uint32_t currentBatchSize_;
+
  private:
   // Returns an open spill file for write. If there is no open spill file, then
   // the function creates a new one. If the current open spill file exceeds the
@@ -191,6 +194,8 @@ class SpillWriterBase {
 
   const uint64_t writeBufferSize_;
 
+  const uint32_t writeBatchSize_;
+
   const uint64_t targetFileSize_;
 
   uint64_t nextFileId_{0};
@@ -220,6 +225,7 @@ class SpillWriter : public SpillWriterBase {
       const std::string& pathPrefix,
       uint64_t targetFileSize,
       uint64_t writeBufferSize,
+      uint32_t writeBatchSize,
       const std::string& fileCreateConfig,
       common::UpdateAndCheckSpillLimitCB& updateAndCheckSpillLimitCb,
       memory::MemoryPool* pool,

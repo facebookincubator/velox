@@ -61,6 +61,7 @@ struct SpillConfig {
       std::string _filePath,
       uint64_t _maxFileSize,
       uint64_t _writeBufferSize,
+      uint32_t _writeBatchSize,
       uint64_t _readBufferSize,
       folly::Executor* _executor,
       int32_t _minSpillableReservationPct,
@@ -108,6 +109,8 @@ struct SpillConfig {
   /// Specifies the size to buffer the serialized spill data before write to
   /// storage system for io efficiency.
   uint64_t writeBufferSize;
+
+  uint64_t writeBatchSize;
 
   /// Specifies the buffer size to read from one spilled file. If the underlying
   /// filesystem supports async read, we do read-ahead with double buffering,

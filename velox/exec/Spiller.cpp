@@ -60,6 +60,7 @@ SpillerBase::SpillerBase(
           sortingKeys,
           targetFileSize,
           spillConfig->writeBufferSize,
+          spillConfig->writeBatchSize,
           spillConfig->compressionKind,
           spillConfig->prefixSortConfig,
           memory::spillMemoryPool(),

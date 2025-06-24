@@ -37,6 +37,7 @@ class SerializedPageSpiller : public SpillWriterBase {
 
   SerializedPageSpiller(
       uint64_t writeBufferSize,
+      uint32_t writeBatchSize,
       uint64_t targetFileSize,
       const std::string& pathPrefix,
       const std::string& fileCreateConfig,
@@ -45,6 +46,7 @@ class SerializedPageSpiller : public SpillWriterBase {
       folly::Synchronized<common::SpillStats>* stats)
       : SpillWriterBase(
             writeBufferSize,
+            writeBatchSize
             targetFileSize,
             pathPrefix,
             fileCreateConfig,
