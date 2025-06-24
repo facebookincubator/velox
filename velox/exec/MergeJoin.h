@@ -408,15 +408,13 @@ class MergeJoin : public Operator {
         currentRow_ = outputIndex;
         currentLeftRowNumber_ = rowNumber;
         currentRowPassed_ = false;
-        firstMatched_ = false;
       } else {
         currentRow_ = outputIndex;
       }
 
       if (passed) {
+        onMatch(outputIndex, !currentRowPassed_);
         currentRowPassed_ = true;
-        onMatch(outputIndex, firstMatched_);
-        firstMatched_ = true;
       }
     }
 
@@ -438,7 +436,6 @@ class MergeJoin : public Operator {
 
       currentRow_ = -1;
       currentRowPassed_ = false;
-      firstMatched_ = false;
     }
 
     void reset();
@@ -475,10 +472,6 @@ class MergeJoin : public Operator {
     // True if at least one row in a block of output rows corresponding a single
     // left-side row identified by 'currentRowNumber' passed the filter.
     bool currentRowPassed_{false};
-
-    // Retains only the first matching record for a semi join in scenarios
-    // involving filters.
-    bool firstMatched_{false};
   };
 
   /// Used to record both left and right join.

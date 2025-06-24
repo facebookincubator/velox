@@ -289,6 +289,10 @@ void copyRow(
     targetChild->copy(sourceChild.get(), targetIndex, sourceIndex, 1);
   }
 }
+
+bool isSemiFilterJoin(core::JoinType joinType) {
+  return isLeftSemiFilterJoin(joinType) || isRightSemiFilterJoin(joinType);
+}
 } // namespace
 
 inline void addNull(
@@ -1278,8 +1282,7 @@ RowVectorPtr MergeJoin::applyFilter(const RowVectorPtr& output) {
     // If all matches for a given left-side row fail the filter, add a row to
     // the output with nulls for the right-side columns.
     const auto onMiss = [&](auto row) {
-      if (isAntiJoin(joinType_) || isLeftSemiFilterJoin(joinType_) ||
-          isRightSemiFilterJoin(joinType_)) {
+      if (isAntiJoin(joinType_) || isSemiFilterJoin(joinType_)) {
         return;
       }
       rawIndices[numPassed++] = row;
@@ -1351,12 +1354,11 @@ RowVectorPtr MergeJoin::applyFilter(const RowVectorPtr& output) {
       }
     };
 
-    auto onMatch = [&](auto row, bool firstMatched_) {
-      bool isSemiJoin =
-          isLeftSemiFilterJoin(joinType_) || isRightSemiFilterJoin(joinType_);
-      bool isNonSemiAntiJoin = !isSemiJoin && !isAntiJoin(joinType_);
+    auto onMatch = [&](auto row, bool hasMatched_) {
+      const bool isNonSemiAntiJoin =
+          !isSemiFilterJoin(joinType_) && !isAntiJoin(joinType_);
 
-      if ((isSemiJoin && !firstMatched_) || isNonSemiAntiJoin) {
+      if ((isSemiFilterJoin(joinType_) && hasMatched_) || isNonSemiAntiJoin) {
         rawIndices[numPassed++] = row;
       }
     };
