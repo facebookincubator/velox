@@ -110,6 +110,8 @@ struct SpillConfig {
   /// storage system for io efficiency.
   uint64_t writeBufferSize;
 
+  /// Specifies the batch rows size to buffer the serialized spill data before
+  /// write to storage system
   uint64_t writeBatchSize;
 
   /// Specifies the buffer size to read from one spilled file. If the underlying

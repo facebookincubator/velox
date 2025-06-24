@@ -86,8 +86,8 @@ SpillWriterBase::SpillWriterBase(
       updateAndCheckSpillLimitCb_(updateAndCheckSpillLimitCb),
       fileCreateConfig_(fileCreateConfig),
       pathPrefix_(pathPrefix),
-      writeBatchSize_(writeBatchSize),
       writeBufferSize_(writeBufferSize),
+      writeBatchSize_(writeBatchSize),
       targetFileSize_(targetFileSize) {}
 
 SpillFiles SpillWriterBase::finish() {

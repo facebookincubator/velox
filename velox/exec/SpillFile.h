@@ -160,7 +160,7 @@ class SpillWriterBase {
 
   SpillFiles finishedFiles_;
 
-  uint32_t currentBatchSize_;
+  uint32_t currentBatchSize_{0};
 
  private:
   // Returns an open spill file for write. If there is no open spill file, then
