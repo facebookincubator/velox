@@ -22,11 +22,13 @@
 
 namespace facebook::velox::common {
 namespace {
+
 constexpr int32_t kZstdDefaultCompressionLevel = 1;
 
 Status zstdError(const char* prefixMessage, size_t errorCode) {
   return Status::IOError(prefixMessage, ZSTD_getErrorName(errorCode));
 }
+
 } // namespace
 
 class ZstdCodec : public Codec {
@@ -78,7 +80,7 @@ class ZstdCodec : public Codec {
   std::string_view name() const override;
 
  private:
-  int32_t compressionLevel_;
+  const int32_t compressionLevel_;
 };
 
 class ZstdCompressor : public StreamingCompressor {
@@ -101,7 +103,7 @@ class ZstdCompressor : public StreamingCompressor {
 
  private:
   ZSTD_CStream* stream_;
-  int32_t compressionLevel_;
+  const int32_t compressionLevel_;
 };
 
 class ZstdDecompressor : public StreamingDecompressor {
@@ -242,7 +244,7 @@ Expected<uint64_t> ZstdCodec::compress(
   VELOX_CHECK_NOT_NULL(input);
   VELOX_CHECK_NOT_NULL(output);
 
-  auto compressedSize = ZSTD_compress(
+  const auto compressedSize = ZSTD_compress(
       output, outputLength, input, inputLength, compressionLevel_);
   VELOX_RETURN_UNEXPECTED_IF(
       ZSTD_isError(compressedSize),
@@ -258,7 +260,7 @@ Expected<uint64_t> ZstdCodec::decompress(
   VELOX_CHECK_NOT_NULL(input);
   VELOX_CHECK_NOT_NULL(output);
 
-  auto decompressedSize =
+  const auto decompressedSize =
       ZSTD_decompress(output, outputLength, input, inputLength);
   VELOX_RETURN_UNEXPECTED_IF(
       ZSTD_isError(decompressedSize),
@@ -274,7 +276,7 @@ Expected<uint64_t> ZstdCodec::compressFixedLength(
   VELOX_CHECK_NOT_NULL(input);
   VELOX_CHECK_NOT_NULL(output);
 
-  auto compressedSize = ZSTD_compress(
+  const auto compressedSize = ZSTD_compress(
       output, outputLength, input, inputLength, compressionLevel_);
   if (ZSTD_isError(compressedSize)) {
     // It's fine to hit dest size too small.
@@ -332,11 +334,10 @@ Expected<uint64_t> ZstdCodec::getUncompressedLength(
   VELOX_CHECK_NOT_NULL(input);
 
   // Read decompressed size from the frame if available in input.
-  auto decompressedSize = ZSTD_getFrameContentSize(input, inputLength);
+  const auto decompressedSize = ZSTD_getFrameContentSize(input, inputLength);
   if (decompressedSize == ZSTD_CONTENTSIZE_UNKNOWN ||
       decompressedSize == ZSTD_CONTENTSIZE_ERROR) {
-    return folly::makeUnexpected(
-        Status::IOError("Invalid ZSTD compressed data."));
+    return folly::makeUnexpected(Status::IOError("Invalid compressed data."));
   }
   return decompressedSize;
 }
