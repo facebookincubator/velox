@@ -187,7 +187,7 @@ TEST_F(VectorHasherTest, flat) {
     } else if (i % 5 == 0) {
       EXPECT_EQ(hashes[i], exec::VectorHasher::kNullHash) << "at " << i;
     } else {
-      EXPECT_EQ(hashes[i], folly::hasher<int64_t>()(i)) << "at " << i;
+      EXPECT_EQ(hashes[i], velox::hasher<int64_t>()(i)) << "at " << i;
     }
   }
 
@@ -197,7 +197,7 @@ TEST_F(VectorHasherTest, flat) {
     if (i % 5 == 0) {
       EXPECT_EQ(hashes[i], exec::VectorHasher::kNullHash) << "at " << i;
     } else {
-      EXPECT_EQ(hashes[i], folly::hasher<int64_t>()(i)) << "at " << i;
+      EXPECT_EQ(hashes[i], velox::hasher<int64_t>()(i)) << "at " << i;
     }
   }
 
@@ -212,7 +212,7 @@ TEST_F(VectorHasherTest, flat) {
   flatVector->set(0, 7);
   hasher->precompute(*vector);
   hasher->hashPrecomputed(allRows_, false, hashes);
-  auto expected = folly::hasher<int64_t>()(7);
+  auto expected = velox::hasher<int64_t>()(7);
   for (int32_t i = 0; i < 100; i++) {
     EXPECT_EQ(expected, hashes[i]);
   }
@@ -221,7 +221,7 @@ TEST_F(VectorHasherTest, flat) {
   flatVector->set(0, 55);
   hasher->precompute(*vector);
   hasher->hashPrecomputed(allRows_, true, hashes);
-  expected = bits::hashMix(expected, folly::hasher<int64_t>()(55));
+  expected = bits::hashMix(expected, velox::hasher<int64_t>()(55));
   for (int32_t i = 0; i < 100; i++) {
     EXPECT_EQ(expected, hashes[i]);
   }
@@ -232,7 +232,7 @@ TEST_F(VectorHasherTest, nans) {
   // considered equal and therefore should have the same hash.
   static const auto kNaN = std::numeric_limits<double>::quiet_NaN();
   static const auto kSNaN = std::numeric_limits<double>::signaling_NaN();
-  folly::hasher<double> hasher;
+  velox::hasher<double> hasher;
   static const auto kNaNHash = hasher(kNaN);
   auto vectorHasher = exec::VectorHasher::create(DOUBLE(), 1);
   ASSERT_EQ(vectorHasher->channel(), 1);
@@ -263,7 +263,7 @@ TEST_F(VectorHasherTest, nonNullConstant) {
   auto hasher = exec::VectorHasher::create(INTEGER(), 1);
   auto vector = BaseVector::createConstant(INTEGER(), 123, 100, pool());
 
-  auto hash = folly::hasher<int32_t>()(123);
+  auto hash = velox::hasher<int32_t>()(123);
 
   raw_vector<uint64_t> hashes(100);
   std::fill(hashes.begin(), hashes.end(), 0);
@@ -356,14 +356,14 @@ TEST_F(VectorHasherTest, dictionary) {
     if (i % 2 == 0) {
       EXPECT_EQ(hashes[i], 0) << "at " << i;
     } else {
-      EXPECT_EQ(hashes[i], folly::hasher<int64_t>()(i % 10 + 3)) << "at " << i;
+      EXPECT_EQ(hashes[i], velox::hasher<int64_t>()(i % 10 + 3)) << "at " << i;
     }
   }
 
   hasher->decode(*dictionaryVector, allRows_);
   hasher->hash(allRows_, false, hashes);
   for (int32_t i = 0; i < 100; i++) {
-    EXPECT_EQ(hashes[i], folly::hasher<int64_t>()(i % 10 + 3)) << "at " << i;
+    EXPECT_EQ(hashes[i], velox::hasher<int64_t>()(i % 10 + 3)) << "at " << i;
   }
 }
 

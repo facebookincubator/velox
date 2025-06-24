@@ -22,6 +22,7 @@
 
 #include <folly/container/F14Map.h>
 #include <folly/container/F14Set.h>
+#include "velox/common/base/Hash.h"
 
 namespace facebook::velox {
 
@@ -99,12 +100,7 @@ template <
     std::enable_if_t<std::is_floating_point<FLOAT>::value, bool> = true>
 struct NaNAwareHash {
   std::size_t operator()(const FLOAT& val) const noexcept {
-    static const std::size_t kNanHash =
-        folly::hasher<FLOAT>{}(std::numeric_limits<FLOAT>::quiet_NaN());
-    if (std::isnan(val)) {
-      return kNanHash;
-    }
-    return folly::hasher<FLOAT>{}(val);
+    return velox::hasher<FLOAT>{}(val);
   }
 };
 

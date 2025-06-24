@@ -48,7 +48,7 @@ class BigintTypeWithCustomComparison : public BigintType {
   }
 
   uint64_t hash(const int64_t& value) const override {
-    return folly::hasher<int64_t>()(value & 0xff);
+    return velox::hasher<int64_t>()(value & 0xff);
   }
 
   const char* name() const override {
@@ -148,7 +148,7 @@ class VarcharTypeWithCustomComparison : public VarcharType {
   }
 
   uint64_t hash(const StringView& value) const override {
-    return folly::hasher<StringView>()(value);
+    return velox::hasher<StringView>()(value);
   }
 
   const char* name() const override {

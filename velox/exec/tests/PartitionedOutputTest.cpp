@@ -102,7 +102,7 @@ TEST_P(PartitionedOutputTest, flush) {
   //  partition doesn't trigger flush for another one)
   auto input = makeRowVector(
       {"p1", "v1"},
-      {makeFlatVector<int32_t>({0, 1}),
+      {makeFlatVector<int32_t>({1, 2}),
        makeFlatVector<std::string>({
            // twice as large to make sure it is always flushed (even if
            // PartitionedOutput#setTargetSizePct rolls 120%)

@@ -424,7 +424,7 @@ constexpr int32_t kPrefetchSize = 64;
 // up to make a tag byte and down so that non-lowest bits of
 // normalized key affect the hash table index.
 inline uint64_t mixNormalizedKey(uint64_t k, uint8_t bits) {
-  return folly::hasher<uint64_t>()(k);
+  return velox::hasher<uint64_t>()(k);
 }
 
 void populateNormalizedKeys(HashLookup& lookup, int8_t sizeBits) {
