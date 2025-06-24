@@ -106,11 +106,11 @@ void checkCodecRoundtrip(
   std::vector<uint8_t> decompressed(data.size() == 0 ? 1 : data.size());
 
   // Compress with codec c1.
-  auto compressionLength =
+  auto compressedLength =
       c1->compress(
             data.data(), data.size(), compressed.data(), maxCompressedLen)
           .thenOrThrow(folly::identity, throwsNotOk);
-  compressed.resize(compressionLength);
+  compressed.resize(compressedLength);
 
   // Decompress with codec c2.
   auto decompressedLength = c2->decompress(
@@ -122,6 +122,19 @@ void checkCodecRoundtrip(
   decompressed.resize(data.size());
   ASSERT_EQ(data, decompressed);
   ASSERT_EQ(data.size(), decompressedLength);
+
+  // Decompress corrupted data.
+  std::vector<uint8_t> corruptedData = compressed;
+  corruptedData.resize(compressed.size() + 1);
+  VELOX_ASSERT_ERROR_STATUS(
+      c2->decompress(
+            corruptedData.data(),
+            corruptedData.size(),
+            decompressed.data(),
+            decompressed.size())
+          .error(),
+      StatusCode::kIOError,
+      "decompression failed");
 }
 
 // Use same codec for both compression and decompression.
@@ -427,6 +440,13 @@ TEST_P(CodecTest, getUncompressedLength) {
         codec->getUncompressedLength(compressed.data(), compressedLength)
             .thenOrThrow(folly::identity, throwsNotOk);
     ASSERT_EQ(uncompressedLength, inputLength);
+
+    // Test corrupted data by removing the first byte.
+    VELOX_ASSERT_ERROR_STATUS(
+        codec->getUncompressedLength(compressed.data() + 1, compressedLength)
+            .error(),
+        StatusCode::kIOError,
+        "Invalid compressed data.");
   } else {
     VELOX_ASSERT_ERROR_STATUS(
         codec->getUncompressedLength(compressed.data(), compressedLength)
@@ -436,9 +456,6 @@ TEST_P(CodecTest, getUncompressedLength) {
             "getUncompressedLength is unsupported with {} format.",
             codec->name()));
   }
-
-  // TODO: For codecs that support getUncompressedLength(), verify the error
-  // message for corrupted data.
 }
 
 TEST_P(CodecTest, codecRoundtrip) {

@@ -113,7 +113,7 @@ Status Codec::init() {
 bool Codec::supportsGetUncompressedLength(CompressionKind kind) {
   switch (kind) {
 #ifdef VELOX_ENABLE_COMPRESSION_ZSTD
-    case CompressionKind::CompressionKind_ZSTD:
+    case CompressionKind_ZSTD:
       return true;
 #endif
     default:
@@ -124,7 +124,7 @@ bool Codec::supportsGetUncompressedLength(CompressionKind kind) {
 bool Codec::supportsCompressFixedLength(CompressionKind kind) {
   switch (kind) {
 #ifdef VELOX_ENABLE_COMPRESSION_ZSTD
-    case CompressionKind::CompressionKind_ZSTD:
+    case CompressionKind_ZSTD:
       return true;
 #endif
     default:
@@ -166,7 +166,7 @@ Expected<std::unique_ptr<Codec>> Codec::create(
     } break;
 #endif
 #ifdef VELOX_ENABLE_COMPRESSION_ZSTD
-    case CompressionKind::CompressionKind_ZSTD:
+    case CompressionKind_ZSTD:
       codec = makeZstdCodec(compressionLevel);
       break;
 #endif
@@ -197,7 +197,7 @@ bool Codec::isAvailable(CompressionKind kind) {
       return true;
 #endif
 #ifdef VELOX_ENABLE_COMPRESSION_ZSTD
-    case CompressionKind::CompressionKind_ZSTD:
+    case CompressionKind_ZSTD:
       return true;
 #endif
     default:
