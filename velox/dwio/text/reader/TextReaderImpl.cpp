@@ -500,7 +500,7 @@ T TextRowReaderImpl::getInteger(
   int64_t v = 0;
   uint64_t scanPos = 0;
   errno = 0;
-  auto scanCount = sscanf(s.data(), "%" SCNd64 "%" SCNu64, &v, &scanPos);
+  auto scanCount = sscanf(s.data(), "%" SCNd64 "%lln", &v, &scanPos);
   if (scanCount != 1 || errno == ERANGE) {
     isNull = true;
     return 0;
@@ -618,7 +618,7 @@ float TextRowReaderImpl::getFloat(
   uint64_t scanPos = 0;
   // We ignore ERANGE, since denormalized floats and
   // infinities are acceptable.
-  auto scanCount = sscanf(str.data(), "%f%" SCNu64, &v, &scanPos);
+  auto scanCount = sscanf(str.data(), "%f%lln", &v, &scanPos);
   if (scanCount != 1 || scanPos < str.size()) {
     isNull = true;
     return 0.0;
@@ -656,7 +656,7 @@ double TextRowReaderImpl::getDouble(
   uint64_t scanPos = 0;
   // We ignore ERANGE, since denormalized doubles and
   // infinities are acceptable.
-  auto scanCount = sscanf(str.data(), "%lf%" SCNu64, &v, &scanPos);
+  auto scanCount = sscanf(str.data(), "%lf%lln", &v, &scanPos);
   if (scanCount != 1 || scanPos < str.size()) {
     isNull = true;
     return 0.0;
