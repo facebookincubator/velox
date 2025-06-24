@@ -79,9 +79,10 @@ void TpchBenchmark::runMain(
   if (FLAGS_run_query_verbose == -1 && FLAGS_io_meter_column_pct == 0) {
     folly::runBenchmarks();
   } else {
-    const auto queryPlan = FLAGS_io_meter_column_pct > 0
+    auto queryPlan = FLAGS_io_meter_column_pct > 0
         ? queryBuilder_->getIoMeterPlan(FLAGS_io_meter_column_pct)
         : queryBuilder_->getQueryPlan(FLAGS_run_query_verbose);
+    queryPlan = editQueryPlan(std::move(queryPlan));
     auto [cursor, actualResults] = run(queryPlan, queryConfigs_);
     if (!cursor) {
       LOG(ERROR) << "Query terminated with error. Exiting";
