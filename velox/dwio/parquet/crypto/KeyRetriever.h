@@ -13,14 +13,18 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 #pragma once
+
+#include <string>
 
 namespace facebook::velox::parquet {
 
-void registerParquetReaderFactory();
-void registerParquetReaderFactory(bool clacEnabled);
-
-void unregisterParquetReaderFactory();
+class DecryptionKeyRetriever {
+ public:
+  virtual std::string getKey(
+      const std::string& keyMetadata,
+      const std::string& doAs) = 0;
+  virtual ~DecryptionKeyRetriever() = default;
+};
 
 } // namespace facebook::velox::parquet
