@@ -33,7 +33,7 @@ in Facebook Thrift and that worked too! So the culprit was likely in the compila
 We enabled the verbose logging for both builds and were able to spot one difference. We saw the GCC *coroutines* flag being used in the Facebook Thrift build.
 
 We were also curious about the invocation of the destructor instead of the actual function. We put our gdb gloves back on and dumped the entire
-vtable for the RemoteServer class and its base classes. The vtables were different when it was built in Velox vs. Facebook Thrift.
+[vtable](https://en.wikipedia.org/wiki/Virtual_method_table) for the RemoteServer class and its base classes. The vtables were different when it was built in Velox vs. Facebook Thrift.
 Specifically, the list of functions inherited from *ServiceHandlerBase* was different.
 
 The vtable for the *RemoteServer* handler in the Velox build had the following entries:
