@@ -38,6 +38,8 @@ target_link_libraries(
   PRIVATE
     velox_caching
     velox_common_base
+    velox_dwio_registered_readers
+    velox_dwio_registered_writers
     velox_exception
     velox_exec
     velox_exec_test_lib

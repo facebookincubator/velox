@@ -19,12 +19,11 @@
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/file/tests/FaultyFileSystem.h"
 #include "velox/connectors/hive/HiveConnector.h"
+#include "velox/dwio/RegisterReaders.h"
+#include "velox/dwio/RegisterWriters.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
-#include "velox/dwio/dwrf/RegisterDwrfReader.h"
-#include "velox/dwio/dwrf/RegisterDwrfWriter.h"
 #include "velox/dwio/dwrf/writer/FlushPolicy.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
-#include "velox/dwio/text/RegisterTextReader.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 
 namespace facebook::velox::exec::test {
@@ -44,19 +43,17 @@ void HiveConnectorTestBase::SetUp() {
       ioExecutor_.get());
   connector::registerConnector(hiveConnector);
   dwio::common::registerFileSinks();
-  dwrf::registerDwrfReaderFactory();
-  dwrf::registerDwrfWriterFactory();
-  text::registerTextReaderFactory();
+  dwio::registerReaderFactories();
+  dwio::registerWriterFactories();
 }
 
 void HiveConnectorTestBase::TearDown() {
   // Make sure all pending loads are finished or cancelled before unregister
   // connector.
   ioExecutor_.reset();
-  dwrf::unregisterDwrfReaderFactory();
-  dwrf::unregisterDwrfWriterFactory();
+  dwio::unregisterReaderFactories();
+  dwio::unregisterWriterFactories();
   connector::unregisterConnector(kHiveConnectorId);
-  text::unregisterTextReaderFactory();
   OperatorTestBase::TearDown();
 }
 
