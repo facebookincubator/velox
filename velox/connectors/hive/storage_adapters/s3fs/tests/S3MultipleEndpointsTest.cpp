@@ -21,8 +21,8 @@
 #include "velox/connectors/hive/storage_adapters/s3fs/RegisterS3FileSystem.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/S3Util.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/tests/S3Test.h"
-#include "velox/dwio/parquet/RegisterParquetReader.h"
-#include "velox/dwio/parquet/RegisterParquetWriter.h"
+#include "velox/dwio/RegisterReaders.h"
+#include "velox/dwio/RegisterWriters.h"
 #include "velox/exec/TableWriter.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -53,8 +53,8 @@ class S3MultipleEndpoints : public S3Test, public ::test::VectorTestBase {
     minioSecondServer_->addBucket(kBucketName.data());
 
     filesystems::registerS3FileSystem();
-    parquet::registerParquetReaderFactory();
-    parquet::registerParquetWriterFactory();
+    dwio::registerReaderFactories();
+    dwio::registerWriterFactories();
   }
 
   void registerConnectors(
@@ -76,8 +76,8 @@ class S3MultipleEndpoints : public S3Test, public ::test::VectorTestBase {
   }
 
   void TearDown() override {
-    parquet::unregisterParquetReaderFactory();
-    parquet::unregisterParquetWriterFactory();
+    dwio::unregisterReaderFactories();
+    dwio::unregisterWriterFactories();
     S3Test::TearDown();
   }
 

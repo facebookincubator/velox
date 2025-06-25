@@ -88,9 +88,8 @@ target_link_libraries(
   velox_parse_expression
   velox_exec_test_lib
   velox_tpch_connector
-  velox_dwio_dwrf_reader
-  velox_dwio_dwrf_common
-  velox_dwio_dwrf_writer
+  velox_dwio_registered_readers
+  velox_dwio_registered_writers
   Folly::folly
   pybind11::module
 )
@@ -114,9 +113,8 @@ target_link_libraries(
   velox_cursor
   velox_hive_connector
   velox_exec_test_lib
-  velox_dwio_dwrf_reader
-  velox_dwio_dwrf_common
-  velox_dwio_dwrf_writer
+  velox_dwio_registered_readers
+  velox_dwio_registered_writers
   pybind11::module
 )
 

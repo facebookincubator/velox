@@ -20,8 +20,8 @@
 #include "velox/common/file/FileSystems.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/tpch/TpchConnector.h"
-#include "velox/dwio/parquet/RegisterParquetReader.h"
-#include "velox/dwio/parquet/RegisterParquetWriter.h"
+#include "velox/dwio/RegisterReaders.h"
+#include "velox/dwio/RegisterWriters.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -52,8 +52,8 @@ class ParquetTpchTest : public testing::Test {
     filesystems::registerLocalFileSystem();
     dwio::common::registerFileSinks();
 
-    parquet::registerParquetReaderFactory();
-    parquet::registerParquetWriterFactory();
+    dwio::registerReaderFactories();
+    dwio::registerWriterFactories();
 
     connector::hive::HiveConnectorFactory hiveFactory;
     auto hiveConnector = hiveFactory.newConnector(
@@ -76,8 +76,8 @@ class ParquetTpchTest : public testing::Test {
   static void TearDownTestSuite() {
     connector::unregisterConnector(kHiveConnectorId);
     connector::unregisterConnector(kTpchConnectorId);
-    parquet::unregisterParquetReaderFactory();
-    parquet::unregisterParquetWriterFactory();
+    dwio::unregisterReaderFactories();
+    dwio::unregisterWriterFactories();
   }
 
   static void saveTpchTablesAsParquet() {

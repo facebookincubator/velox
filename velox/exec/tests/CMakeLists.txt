@@ -143,11 +143,10 @@ add_test(
 target_link_libraries(
   velox_exec_test
   velox_aggregates
-  velox_dwio_common
   velox_dwio_common_exception
   velox_dwio_common_test_utils
-  velox_dwio_parquet_reader
-  velox_dwio_parquet_writer
+  velox_dwio_registered_readers
+  velox_dwio_registered_writers
   velox_exec
   velox_exec_test_lib
   velox_file_test_utils
@@ -184,9 +183,9 @@ target_link_libraries(
 
 target_link_libraries(
   velox_exec_infra_test
-  velox_dwio_common
   velox_dwio_common_exception
   velox_dwio_common_test_utils
+  velox_dwio_registered_writers
   velox_exec
   velox_exec_test_lib
   velox_fuzzer_util
@@ -202,7 +201,6 @@ target_link_libraries(
   velox_vector
   velox_vector_fuzzer
   velox_presto_serializer
-  velox_dwio_dwrf_writer
   Boost::atomic
   Boost::context
   Boost::date_time
@@ -273,6 +271,8 @@ target_link_libraries(
   velox_constrained_input_generators
   velox_fuzzer_util
   velox_functions_prestosql
+  velox_dwio_registered_readers
+  velox_dwio_registered_writers
   velox_exec_test_lib
   velox_temp_path
   velox_vector_fuzzer

@@ -44,9 +44,8 @@ if(${VELOX_BUILD_TEST_UTILS})
     velox_connector
     velox_exec
     velox_exec_test_lib
-    velox_dwio_common
+    velox_dwio_registered_readers
     velox_dwio_common_exception
-    velox_dwio_parquet_reader
     velox_dwio_common_test_utils
     velox_exception
     velox_memory

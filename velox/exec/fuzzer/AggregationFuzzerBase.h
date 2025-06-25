@@ -17,8 +17,8 @@
 
 #include "velox/common/file/FileSystems.h"
 #include "velox/connectors/hive/HiveConnector.h"
-#include "velox/dwio/dwrf/RegisterDwrfReader.h"
-#include "velox/dwio/dwrf/RegisterDwrfWriter.h"
+#include "velox/dwio/RegisterReaders.h"
+#include "velox/dwio/RegisterWriters.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/Split.h"
 #include "velox/exec/fuzzer/FuzzerUtil.h"
@@ -82,8 +82,8 @@ class AggregationFuzzerBase {
             pool_.get()} {
     filesystems::registerLocalFileSystem();
     registerHiveConnector(hiveConfigs);
-    dwrf::registerDwrfReaderFactory();
-    dwrf::registerDwrfWriterFactory();
+    dwio::registerReaderFactories();
+    dwio::registerWriterFactories();
 
     for (const auto& type : referenceQueryRunner_->supportedScalarTypes()) {
       if (!type->isReal() && !type->isDouble()) {

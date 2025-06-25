@@ -35,5 +35,29 @@ add_subdirectory(common)
 add_subdirectory(catalog)
 add_subdirectory(dwrf)
 add_subdirectory(orc)
-add_subdirectory(parquet)
 add_subdirectory(text)
+
+if(VELOX_ENABLE_PARQUET)
+  add_subdirectory(parquet)
+endif()
+
+add_library(velox_dwio_registered_readers STATIC RegisterReaders.cpp)
+target_link_libraries(
+  velox_dwio_registered_readers
+  PUBLIC
+    velox_dwio_dwrf_reader
+    velox_dwio_orc_reader
+    velox_dwio_text_reader_register
+    $<$<BOOL:${VELOX_ENABLE_PARQUET}>:velox_dwio_parquet_reader>
+    velox_dwio_common
+)
+
+velox_add_library(velox_dwio_registered_writers STATIC RegisterWriters.cpp)
+velox_link_libraries(
+  velox_dwio_registered_writers
+  PUBLIC
+    velox_dwio_dwrf_writer
+    velox_dwio_text_writer_register
+    $<$<BOOL:${VELOX_ENABLE_PARQUET}>:velox_dwio_parquet_writer>
+    velox_dwio_common
+)

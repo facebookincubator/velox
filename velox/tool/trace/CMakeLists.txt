@@ -35,8 +35,8 @@ target_link_libraries(
   velox_vector_test_lib
   velox_exec
   velox_exec_test_lib
-  velox_dwio_parquet_reader
-  velox_dwio_parquet_writer
+  velox_dwio_registered_readers
+  velox_dwio_registered_writers
   velox_hive_connector
   velox_tpch_connector
   velox_memory

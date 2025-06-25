@@ -18,7 +18,7 @@
 #include <gtest/gtest.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/dwio/parquet/RegisterParquetWriter.h"
+#include "velox/dwio/RegisterWriters.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
@@ -40,7 +40,7 @@ class SparkQueryRunnerTest : public ::testing::Test,
  protected:
   static void SetUpTestCase() {
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
-    parquet::registerParquetWriterFactory();
+    dwio::registerWriterFactories();
   }
 
   void SetUp() override {

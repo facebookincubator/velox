@@ -19,8 +19,7 @@
 #include "velox/common/base/SuccinctPrinter.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/connectors/hive/HiveConnector.h"
-#include "velox/dwio/dwrf/RegisterDwrfReader.h"
-#include "velox/dwio/parquet/RegisterParquetReader.h"
+#include "velox/dwio/RegisterReaders.h"
 #include "velox/exec/Split.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
@@ -219,8 +218,7 @@ void QueryBenchmarkBase::initialize() {
   auto hiveConnector =
       factory.newConnector(kHiveConnectorId, properties, ioExecutor_.get());
   connector::registerConnector(hiveConnector);
-  parquet::registerParquetReaderFactory();
-  dwrf::registerDwrfReaderFactory();
+  dwio::registerReaderFactories();
 }
 
 std::vector<std::shared_ptr<connector::ConnectorSplit>>

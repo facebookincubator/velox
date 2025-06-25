@@ -19,7 +19,7 @@
 #include <gtest/gtest.h>
 #include <unordered_set>
 
-#include "velox/dwio/parquet/RegisterParquetWriter.h"
+#include "velox/dwio/RegisterWriters.h"
 #include "velox/exec/fuzzer/AggregationFuzzerOptions.h"
 #include "velox/exec/fuzzer/AggregationFuzzerRunner.h"
 #include "velox/exec/fuzzer/TransformResultVerifier.h"
@@ -46,7 +46,7 @@ DEFINE_string(
 int main(int argc, char** argv) {
   facebook::velox::functions::aggregate::sparksql::registerAggregateFunctions(
       "", false);
-  facebook::velox::parquet::registerParquetWriterFactory();
+  facebook::velox::dwio::registerWriterFactories();
 
   ::testing::InitGoogleTest(&argc, argv);
 
