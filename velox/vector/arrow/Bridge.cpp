@@ -23,7 +23,6 @@
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/DictionaryVector.h"
 #include "velox/vector/FlatVector.h"
-#include "velox/vector/VectorTypeUtils.h"
 #include "velox/vector/arrow/Abi.h"
 
 namespace facebook::velox {
