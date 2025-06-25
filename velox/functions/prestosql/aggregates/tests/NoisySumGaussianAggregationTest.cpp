@@ -352,4 +352,75 @@ TEST_F(NoisySumGaussianAggregationTest, boundsTestWithNoise) {
         {expectedResult});
   }
 }
+
+TEST_F(NoisySumGaussianAggregationTest, fuzzerTestNoNoise) {
+  // This test randomly picks input vectors, noise_scale, bounds, and
+  // random_seed. It runs the aggregation function on the input vectors and
+  // compare the result with DuckDB.
+  std::vector<RowTypePtr> rowTypes = {
+      doubleRowType_,
+      bigintRowType_,
+      realRowType_,
+      integerRowType_,
+      smallintRowType_,
+      tinyintRowType_,
+      decimalRowType_};
+
+  std::vector<std::string> aggregationFunctions = {
+      "noisy_sum_gaussian(c2, 0.0)",
+      "noisy_sum_gaussian(c2, 0.0, 12345)",
+      "noisy_sum_gaussian(c2, 0.0, 1.0, 10.0)",
+      "noisy_sum_gaussian(c2, 0.0, 1, 10)",
+      "noisy_sum_gaussian(c2, 0.0, 1.0, 10)",
+      "noisy_sum_gaussian(c2, 0.0, 1, 10.0)",
+      "noisy_sum_gaussian(c2, 0.0, 1.0, 10.0, 12345)",
+      "noisy_sum_gaussian(c2, 0.0, 1, 10, 12345)",
+      "noisy_sum_gaussian(c2, 0.0, 1.0, 10, 12345)",
+      "noisy_sum_gaussian(c2, 0.0, 1, 10.0, 12345)"};
+
+  std::vector<std::string> groupByKeys = {"c0", "c1"};
+
+  int numRuns = 10;
+  for (int i = 0; i < numRuns; i++) {
+    auto rowType = rowTypes[folly::Random::rand32() % rowTypes.size()];
+    auto vectors = makeVectors(rowType, 5, 3);
+    createDuckDbTable(vectors);
+
+    auto aggregationFunctionIndex =
+        folly::Random::rand32() % aggregationFunctions.size();
+    auto aggregationFunction = aggregationFunctions[aggregationFunctionIndex];
+
+    auto groupByKeysSize = folly::Random::rand32() % groupByKeys.size();
+    std::vector<std::string> groupByKeysVector;
+    groupByKeysVector.reserve(groupByKeysSize);
+    for (int j = 0; j < groupByKeysSize; j++) {
+      groupByKeysVector.push_back(
+          groupByKeys[folly::Random::rand32() % groupByKeys.size()]);
+    }
+
+    std::string duckDBQuery = "SELECT ";
+    for (int j = 0; j < groupByKeysVector.size(); j++) {
+      duckDBQuery += groupByKeysVector[j];
+      duckDBQuery += ", ";
+    }
+    if (aggregationFunctionIndex < 2) {
+      duckDBQuery += "SUM(c2) FROM tmp ";
+    } else {
+      duckDBQuery +=
+          "SUM(CASE WHEN c2 IS NOT NULL THEN GREATEST(LEAST(c2, 10), 1) END) FROM tmp ";
+    }
+    for (int j = 0; j < groupByKeysVector.size(); j++) {
+      if (j == 0) {
+        duckDBQuery += "GROUP BY ";
+      }
+
+      duckDBQuery += groupByKeysVector[j];
+      if (j != groupByKeysVector.size() - 1) {
+        duckDBQuery += ", ";
+      }
+    }
+    testAggregations(
+        vectors, groupByKeysVector, {aggregationFunction}, duckDBQuery);
+  }
+}
 } // namespace facebook::velox::aggregate::test
