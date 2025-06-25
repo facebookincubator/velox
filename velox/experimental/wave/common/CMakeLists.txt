@@ -34,7 +34,10 @@ target_link_libraries(
   CUDA::cudart
   breeze_cuda)
 
-target_compile_definitions(velox_wave_common PRIVATE VELOX_OSS_BUILD=1)
+target_compile_definitions(
+  velox_wave_common
+  PRIVATE VELOX_OSS_BUILD=1
+          VELOX_WAVE_NVRTC_INCLUDE_PATH=${VELOX_WAVE_NVRTC_INCLUDE_PATH})
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
