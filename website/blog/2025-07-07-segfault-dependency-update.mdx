@@ -55,7 +55,7 @@ Thunk ServiceHandlerBase::~ServiceHandlerBase
 ```
 
 Tying up both pieces of evidence, we could conclude that Velox generated a different vtable structure compared to what Facebook Thrift (and thus ThriftServer) was built with.
-Looking around further, we noticed that the *ServiceHandlerBase* was conditionally adding functions based on the *-fcoroutines* flag.
+Looking around further, we noticed that the ServiceHandlerBase was conditionally adding functions based on the fcoroutines flag that influences the FOLLY_HAS_COROUTINES macro from the portability header.
 
 ```
 class ServiceHandlerBase {
