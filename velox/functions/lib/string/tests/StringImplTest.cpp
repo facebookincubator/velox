@@ -112,19 +112,46 @@ class StringImplTest : public testing::Test {
         {"\u1E8E", "\u1E8F"}};
   }
 
-  static std::vector<std::tuple<std::string, std::string>>
+  static std::vector<std::pair<std::string, std::string>>
   getInitcapUnicodeAnySpaceTestData() {
     return {
         {u8"foo\u0020bar", u8"Foo\u0020Bar"},
         {u8"foo\u0009bar", u8"Foo\u0009Bar"},
         {u8"foo\u000Abar", u8"Foo\u000ABar"},
+        {u8"foo\u000Dbar", u8"Foo\u000DBar"},
+        {u8"foo\u000Bbar", u8"Foo\u000BBar"},
+        {u8"foo\u000Cbar", u8"Foo\u000CBar"},
+        {u8"foo\u0009\u000A\u000D\u000B\u000Cbar",
+         u8"Foo\u0009\u000A\u000D\u000B\u000CBar"},
         {u8"foo\u0020\u0009\u000Abar", u8"Foo\u0020\u0009\u000ABar"},
+        {u8"foo\u0085bar", u8"Foo\u0085Bar"},
         {u8"foo\u00A0bar", u8"Foo\u00A0Bar"},
+        {u8"foo\u1680bar", u8"Foo\u1680Bar"},
+        {u8"foo\u2000bar", u8"Foo\u2000Bar"},
+        {u8"foo\u2001bar", u8"Foo\u2001Bar"},
+        {u8"foo\u2002bar", u8"Foo\u2002Bar"},
+        {u8"foo\u2003bar", u8"Foo\u2003Bar"},
+        {u8"foo\u2004bar", u8"Foo\u2004Bar"},
+        {u8"foo\u2005bar", u8"Foo\u2005Bar"},
+        {u8"foo\u2006bar", u8"Foo\u2006Bar"},
+        {u8"foo\u2007bar", u8"Foo\u2007Bar"},
+        {u8"foo\u2008bar", u8"Foo\u2008Bar"},
+        {u8"foo\u2009bar", u8"Foo\u2009Bar"},
+        {u8"foo\u200Abar", u8"Foo\u200ABar"},
+        {u8"foo\u2028bar", u8"Foo\u2028Bar"},
+        {u8"foo\u2029bar", u8"Foo\u2029Bar"},
+        {u8"foo\u202Fbar", u8"Foo\u202FBar"},
+        {u8"foo\u205Fbar", u8"Foo\u205FBar"},
+        {u8"foo\u3000bar", u8"Foo\u3000Bar"},
+        {u8"foo\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200Abar",
+         u8"Foo\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200ABar"},
+        {u8"foo\u0009\u000A\u000B\u000C\u000D\u0020\u0085\u00A0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200A\u2028\u2029\u202F\u205F\u3000bar",
+         u8"Foo\u0009\u000A\u000B\u000C\u000D\u0020\u0085\u00A0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200A\u2028\u2029\u202F\u205F\u3000Bar"},
         {u8"\u00E9l\u00E8ve\u000Atr\u00E8s-intelligent",
          u8"\u00C9l\u00E8ve\u000ATr\u00E8s-intelligent"}};
   }
 
-  static std::vector<std::tuple<std::string, std::string>>
+  static std::vector<std::pair<std::string, std::string>>
   getInitcapAsciiAnySpaceTestData() {
     return {
         {"foo bar", "Foo Bar"},
@@ -132,7 +159,7 @@ class StringImplTest : public testing::Test {
         {"foo \t\nbar", "Foo \t\nBar"}};
   }
 
-  static std::vector<std::tuple<std::string, std::string>>
+  static std::vector<std::pair<std::string, std::string>>
   getInitcapUnicodeOnlyWhitespaceTestData() {
     return {
         {"àáâãäåæçèéêëìíîïðñòóôõöøùúûüýþ", "Àáâãäåæçèéêëìíîïðñòóôõöøùúûüýþ"},
@@ -152,10 +179,11 @@ class StringImplTest : public testing::Test {
         {"тест@пример.рф", "Тест@пример.рф"}};
   }
 
-  static std::vector<std::tuple<std::string, std::string>>
+  static std::vector<std::pair<std::string, std::string>>
   getInitcapAsciiOnlyWhitespaceTestData() {
     return {
         {"abcdefg", "Abcdefg"},
+        {" abcdefg", " Abcdefg"},
         {"ABCDEFG", "Abcdefg"},
         {"a B c D e F g", "A B C D E F G"},
         {"hello world", "Hello World"},
@@ -956,44 +984,34 @@ TEST_F(StringImplTest, isAscii) {
 }
 
 TEST_F(StringImplTest, initcapUnicodeAnySpace) {
-  for (const auto& testCase : getInitcapUnicodeAnySpaceTestData()) {
-    auto input = StringView(std::get<0>(testCase));
-    auto& expectedInitcap = std::get<1>(testCase);
-
-    std::string initcapOutput;
-    initcap<false, false>(initcapOutput, input);
-    ASSERT_EQ(initcapOutput, expectedInitcap);
+  for (const auto& [input, expected] : getInitcapUnicodeAnySpaceTestData()) {
+    std::string output;
+    initcap<false, false>(output, input);
+    ASSERT_EQ(output, expected);
   }
 }
 
 TEST_F(StringImplTest, initcapAsciiAnySpace) {
-  for (const auto& testCase : getInitcapAsciiAnySpaceTestData()) {
-    auto input = StringView(std::get<0>(testCase));
-    auto& expectedInitCap = std::get<1>(testCase);
-
-    std::string initcapOutput;
-    initcap<false, true>(initcapOutput, input);
-    ASSERT_EQ(initcapOutput, expectedInitCap);
+  for (const auto& [input, expected] : getInitcapAsciiAnySpaceTestData()) {
+    std::string output;
+    initcap<false, true>(output, input);
+    ASSERT_EQ(output, expected);
   }
 }
 TEST_F(StringImplTest, initcapUnicodeOnlyWhitespace) {
-  for (const auto& testCase : getInitcapUnicodeOnlyWhitespaceTestData()) {
-    auto input = StringView(std::get<0>(testCase));
-    auto& expectedInitcap = std::get<1>(testCase);
-
-    std::string initcapOutput;
-    initcap<true, false>(initcapOutput, input);
-    ASSERT_EQ(initcapOutput, expectedInitcap);
+  for (const auto& [input, expected] :
+       getInitcapUnicodeOnlyWhitespaceTestData()) {
+    std::string output;
+    initcap<true, false>(output, input);
+    ASSERT_EQ(output, expected);
   }
 }
 
 TEST_F(StringImplTest, initcapAsciiOnlyWhitespace) {
-  for (const auto& testCase : getInitcapAsciiOnlyWhitespaceTestData()) {
-    auto input = StringView(std::get<0>(testCase));
-    auto& expectedInitCap = std::get<1>(testCase);
-
-    std::string initcapOutput;
-    initcap<true, true>(initcapOutput, input);
-    ASSERT_EQ(initcapOutput, expectedInitCap);
+  for (const auto& [input, expected] :
+       getInitcapAsciiOnlyWhitespaceTestData()) {
+    std::string output;
+    initcap<true, true>(output, input);
+    ASSERT_EQ(output, expected);
   }
 }

@@ -14,7 +14,7 @@
 velox_add_library(velox_functions_string INTERFACE)
 
 velox_link_libraries(velox_functions_string INTERFACE velox_common_base
-                                                      Folly::folly)
+                                                      Folly::folly ICU::uc)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)

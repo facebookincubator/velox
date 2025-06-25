@@ -19,13 +19,14 @@
 #include <fmt/format.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <unicode/uchar.h>
+#include <utf8proc/utf8proc.h>
 #include <cstdint>
 #include <cstring>
 #include <string_view>
 #include <vector>
 #include "folly/CPortability.h"
 #include "folly/Likely.h"
-#include "utf8proc/utf8proc.h"
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/external/md5/md5.h"
@@ -354,22 +355,6 @@ FOLLY_ALWAYS_INLINE std::array<int64_t, 2> unicodeWhitespaceCodes() {
   return bitMask;
 }
 
-inline bool isSpaceUtf8(utf8proc_int32_t cp) {
-  switch (cp) {
-    case 0x09:
-    case 0x0A:
-    case 0x0B:
-    case 0x0C:
-    case 0x0D:
-      return true;
-    default:
-      auto category = utf8proc_category(cp);
-      return (
-          category >= UTF8PROC_CATEGORY_ZS && category <= UTF8PROC_CATEGORY_ZP);
-  }
-  return utf8proc_category(cp) == UTF8PROC_CATEGORY_ZS;
-}
-
 template <bool onlySpaceDelimiter>
 inline bool isDelimiterAscii(unsigned char ch) {
   if constexpr (onlySpaceDelimiter) {
@@ -384,11 +369,11 @@ inline bool isDelimiterUtf8(utf8proc_int32_t cp) {
   if constexpr (onlySpaceDelimiter) {
     return cp == 0x20;
   } else {
-    return isSpaceUtf8(cp);
+    return u_isUWhiteSpace(static_cast<UChar32>(cp));
   }
 }
 
-// ASCII InitCap Implementation
+// ASCII InitCap Implementation.
 template <bool onlySpaceDelimiter, typename TOutString, typename TInString>
 FOLLY_ALWAYS_INLINE bool initcapAsciiImpl(
     TOutString& output,
@@ -414,15 +399,17 @@ FOLLY_ALWAYS_INLINE bool initcapAsciiImpl(
   return true;
 }
 
-// UTF-8 InitCap Implementation
+// UTF-8 InitCap Implementation.
 template <bool onlySpaceDelimiter, typename TOutString, typename TInString>
 FOLLY_ALWAYS_INLINE bool initcapUtf8Impl(
     TOutString& output,
     const TInString& input) {
   const uint8_t* inputBytes = reinterpret_cast<const uint8_t*>(input.data());
   const uint8_t* inputEnd = inputBytes + input.size();
-  output.resize(input.size() * 4); // Max size for UTF-8 characters
-  uint8_t* outputBytes = reinterpret_cast<uint8_t*>(output.data());
+
+  output.resize(input.size() * 4);
+  uint8_t* outputStart = reinterpret_cast<uint8_t*>(output.data());
+  uint8_t* outputBytes = outputStart;
 
   bool isStartOfWord = true;
 
@@ -434,24 +421,30 @@ FOLLY_ALWAYS_INLINE bool initcapUtf8Impl(
       return false;
     }
 
-    utf8proc_int32_t capitalizedCodepoint;
+    utf8proc_int32_t processedCodepoint = originalCodepoint;
+
     if (isDelimiterUtf8<onlySpaceDelimiter>(originalCodepoint)) {
-      capitalizedCodepoint = originalCodepoint;
       isStartOfWord = true;
-    } else if (isStartOfWord) {
-      capitalizedCodepoint = utf8proc_toupper(originalCodepoint);
-      isStartOfWord = false;
     } else {
-      capitalizedCodepoint = utf8proc_tolower(originalCodepoint);
+      if (isStartOfWord) {
+        processedCodepoint = utf8proc_toupper(originalCodepoint);
+        if (processedCodepoint < 0)
+          processedCodepoint = originalCodepoint;
+        isStartOfWord = false;
+      } else {
+        processedCodepoint = utf8proc_tolower(originalCodepoint);
+        if (processedCodepoint < 0)
+          processedCodepoint = originalCodepoint;
+      }
     }
 
     auto numBytesWritten =
-        utf8proc_encode_char(capitalizedCodepoint, outputBytes);
+        utf8proc_encode_char(processedCodepoint, outputBytes);
     outputBytes += numBytesWritten;
     inputBytes += numBytesRead;
   }
 
-  output.resize(reinterpret_cast<char*>(outputBytes) - output.data());
+  output.resize(outputBytes - outputStart);
   return true;
 }
 } // namespace
