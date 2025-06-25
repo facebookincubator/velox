@@ -16,12 +16,12 @@
 #include "velox/functions/Registerer.h"
 #include "velox/functions/lib/Re2Functions.h"
 #include "velox/functions/prestosql/RegexpReplace.h"
+#include "velox/functions/prestosql/RegexpSplit.h"
 #include "velox/functions/prestosql/SplitPart.h"
 #include "velox/functions/prestosql/SplitToMap.h"
 #include "velox/functions/prestosql/SplitToMultiMap.h"
 #include "velox/functions/prestosql/StringFunctions.h"
 #include "velox/functions/prestosql/WordStem.h"
-#include "velox/functions/prestosql/RegexFunctions.h"
 
 namespace facebook::velox::functions {
 

@@ -21,9 +21,9 @@ namespace facebook::velox {
 
 namespace {
 
-class RegexFunctionTest : public functions::test::FunctionBaseTest {};
+class RegexpSplitTest : public functions::test::FunctionBaseTest {};
 
-TEST_F(RegexFunctionTest, split) {
+TEST_F(RegexpSplitTest, split) {
   auto input = makeRowVector({
       makeFlatVector<std::string>({
           "1a 2b 14m",
