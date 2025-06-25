@@ -14,15 +14,92 @@
  * limitations under the License.
  */
 
+#include "connectors/hive/storage_adapters/abfs/RegisterAbfsFileSystem.h"
+#include "deps-download/azure-sdk-for-cpp/sdk/storage/azure-storage-blobs/inc/azure/storage/blobs/blob_sas_builder.hpp"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/config/Config.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsConfig.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsUtil.h"
 
+#include <chrono>
 #include "gtest/gtest.h"
 
 using namespace facebook::velox::filesystems;
 using namespace facebook::velox;
+
+namespace {
+
+class MyFixedAbfsSasTokenProvider : public AbfsSasTokenProvider {
+ public:
+  void initialize(
+      const config::ConfigBase& conf,
+      const std::string& accountNameWithSuffix) override {
+    const auto firstDot = accountNameWithSuffix.find_first_of(".");
+    ASSERT_NE(firstDot, std::string::npos);
+    account_ = accountNameWithSuffix.substr(0, firstDot);
+  }
+
+  std::string getSasToken(
+      const std::string& fileSystem,
+      const std::string& path,
+      const std::string& operation) override {
+    return fmt::format("sas={}_sas_token", account_);
+  }
+
+ private:
+  std::string account_;
+};
+
+class MyDynamicAbfsSasTokenProvider : public AbfsSasTokenProvider {
+ public:
+  MyDynamicAbfsSasTokenProvider(int64_t expiration)
+      : expirationSeconds_(expiration) {}
+
+  void initialize(
+      const config::ConfigBase& conf,
+      const std::string& accountNameWithSuffix) override {
+    const auto firstDot = accountNameWithSuffix.find_first_of(".");
+    ASSERT_NE(firstDot, std::string::npos);
+    account_ = accountNameWithSuffix.substr(0, firstDot);
+  }
+
+  std::string getSasToken(
+      const std::string& fileSystem,
+      const std::string& path,
+      const std::string& operation) override {
+    const auto lastSlash = path.find_last_of("/");
+    const auto containerName = path.substr(0, lastSlash);
+    const auto blobName = path.substr(lastSlash + 1);
+
+    Azure::Storage::Sas::BlobSasBuilder sasBuilder;
+    sasBuilder.ExpiresOn = Azure::DateTime::clock::now() +
+        std::chrono::seconds(expirationSeconds_);
+    sasBuilder.BlobContainerName = containerName;
+    sasBuilder.BlobName = blobName;
+    sasBuilder.Resource = Azure::Storage::Sas::BlobSasResource::Blob;
+    sasBuilder.SetPermissions(
+        Azure::Storage::Sas::BlobSasPermissions::Read &
+        Azure::Storage::Sas::BlobSasPermissions::Write);
+
+    std::string sasToken =
+        sasBuilder.GenerateSasToken(Azure::Storage::StorageSharedKeyCredential(
+            "test",
+            "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw=="));
+
+    // Remove the leading '?' from the SAS token.
+    if (sasToken[0] == '?') {
+      sasToken = sasToken.substr(1);
+    }
+
+    return sasToken;
+  }
+
+ private:
+  int64_t expirationSeconds_;
+  std::string account_;
+};
+
+} // namespace
 
 TEST(AbfsUtilsTest, isAbfsFile) {
   EXPECT_FALSE(isAbfsFile("abfs:"));
@@ -110,6 +187,90 @@ TEST(AbfsConfigTest, sasToken) {
   EXPECT_EQ(
       writeClient->getUrl(),
       "http://bar.blob.core.windows.net/abc/file?sas=test");
+
+  // Honor the registered SAS token provider.
+  registerAbfsSasTokenProvider(
+      "efg", [] { return std::make_unique<MyFixedAbfsSasTokenProvider>(); });
+  abfsConfig = AbfsConfig("abfs://abc@efg.dfs.core.windows.net/file", config);
+  readClient = abfsConfig.getReadFileClient();
+  EXPECT_EQ(
+      readClient->GetUrl(),
+      "http://efg.blob.core.windows.net/abc/file?sas=efg_sas_token");
+  writeClient = abfsConfig.getWriteFileClient();
+  EXPECT_EQ(
+      writeClient->getUrl(),
+      "http://efg.blob.core.windows.net/abc/file?sas=efg_sas_token");
+
+  VELOX_ASSERT_USER_THROW(
+      registerAbfsSasTokenProvider(
+          "efg",
+          [] { return std::make_unique<MyFixedAbfsSasTokenProvider>(); }),
+      "SAS key generator for efg already registered");
+}
+
+TEST(AbfsConfigTest, dynamicSasToken) {
+  {
+    const std::string account = "account1";
+    const config::ConfigBase config(
+        {{"fs.azure.account.auth.type.account1.dfs.core.windows.net", "SAS"},
+         {"fs.azure.sas.token.renew.period.for.streams", "1"}},
+        false);
+    registerAbfsSasTokenProvider(account, [] {
+      return std::make_unique<MyDynamicAbfsSasTokenProvider>(3);
+    });
+
+    auto abfsConfig = AbfsConfig(
+        fmt::format("abfs://abc@{}.dfs.core.windows.net/file", account),
+        config);
+    auto readClient = abfsConfig.getReadFileClient();
+    auto writeClient = abfsConfig.getWriteFileClient();
+
+    auto readUrl = readClient->GetUrl();
+    auto writeUrl = writeClient->getUrl();
+
+    // Let the current time pass 3 seconds to ensure the SAS token is expired.
+    std::this_thread::sleep_for(std::chrono::seconds(3)); // NOLINT
+
+    auto newReadUrl = readClient->GetUrl();
+    ASSERT_NE(readUrl, newReadUrl);
+    // The SAS token should be reused.
+    ASSERT_EQ(newReadUrl, readClient->GetUrl());
+
+    auto newWriteUrl = writeClient->getUrl();
+    ASSERT_NE(writeUrl, newWriteUrl);
+    // The SAS token should be reused.
+    ASSERT_EQ(newWriteUrl, writeClient->getUrl());
+  }
+
+  {
+    // SAS token expired by setting the renewal period to 120 seconds.
+    const std::string account = "account2";
+    const config::ConfigBase config(
+        {{"fs.azure.account.auth.type.account2.dfs.core.windows.net", "SAS"},
+         {"fs.azure.sas.token.renew.period.for.streams", "120"}},
+        false);
+    registerAbfsSasTokenProvider(account, [] {
+      return std::make_unique<MyDynamicAbfsSasTokenProvider>(60);
+    });
+
+    auto abfsConfig = AbfsConfig(
+        fmt::format("abfs://abc@{}.dfs.core.windows.net/file", account),
+        config);
+    auto readClient = abfsConfig.getReadFileClient();
+    auto writeClient = abfsConfig.getWriteFileClient();
+
+    auto readUrl = readClient->GetUrl();
+    auto writeUrl = writeClient->getUrl();
+
+    // Let the current time pass 3 seconds to ensure the timestamp in the SAS
+    // token is updated.
+    std::this_thread::sleep_for(std::chrono::seconds(3)); // NOLINT
+
+    // Sas token should be renewed because the time left is less than the
+    // renewal period.
+    ASSERT_NE(readUrl, readClient->GetUrl());
+    ASSERT_NE(writeUrl, writeClient->getUrl());
+  }
 }
 
 TEST(AbfsConfigTest, sharedKey) {

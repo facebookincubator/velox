@@ -149,7 +149,7 @@ class AbfsReadFile::Impl {
   }
 
   std::string filePath_;
-  std::unique_ptr<BlobClient> fileClient_;
+  std::unique_ptr<AzureBlobClient> fileClient_;
   int64_t length_ = -1;
 };
 
