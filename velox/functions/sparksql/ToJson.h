@@ -15,9 +15,9 @@
  */
 
 #include <expression/ComplexViewTypes.h>
-#include <functions/lib/DateTimeFormatter.h>
-#include <functions/lib/TimeUtils.h>
 
+#include "velox/functions/lib/DateTimeFormatter.h"
+#include "velox/functions/lib/TimeUtils.h"
 #include "velox/type/DecimalUtil.h"
 
 namespace facebook::velox::functions::sparksql {
