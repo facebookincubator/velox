@@ -16,7 +16,7 @@ named *velox_functions_remote_client_test*.
 
 ## Investigation
 We immediately put on our `gdb`-gloves and looked at the stack traces. This issue was also reproducible in a debug build.
-The SEGFAULT occurred in the ThriftServer of Facebook Thrift during initialization of the ThriftServer, but the offending call was invoking a destructor of a certain handler.
+The SEGFAULT occurred in Facebook Thrift's *ThriftServer* Class during it's initialization but the offending call was invoking a destructor of a certain handler.
 However, the corresponding source code was pointing to an invocation of a different function. And this code was present inside a Facebook Thrift
 header called *AsyncProcessor.h*.
 This handler(*RemoteServer*) was implemented in Velox as a Thrift definition. Velox compiled this thrift file using Facebook Thrift, and the generated code
