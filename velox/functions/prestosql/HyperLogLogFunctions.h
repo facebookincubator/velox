@@ -81,4 +81,84 @@ struct EmptyApproxSetWithMaxErrorFunction {
     return true;
   }
 };
+
+template <typename T>
+struct MergeHllFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<HyperLogLog>& result,
+      const arg_type<Array<HyperLogLog>>& input) {
+    using common::hll::DenseHll;
+    using common::hll::SparseHll;
+
+    // Create a memory pool and allocator for this call
+    auto pool = memory::memoryManager()->addLeafPool();
+    HashStringAllocator allocator(pool.get());
+
+    // Create a sparse HLL accumulator to merge into
+    SparseHll sparseHll(&allocator);
+    DenseHll denseHll(&allocator);
+    bool isSparse = true;
+    int8_t indexBitLength = -1;
+    bool hasValidInput = false;
+    // Merge HLLs
+    for (auto i = 0; i < input.size(); i++) {
+      if (!input[i].has_value()) {
+        continue;
+      }
+      hasValidInput = true;
+      const auto& hll = input[i].value();
+      auto inputData = hll.data();
+      if (SparseHll::canDeserialize(inputData)) {
+        if (isSparse) {
+          sparseHll.mergeWith(inputData);
+          if (indexBitLength < 0) {
+            indexBitLength = DenseHll::deserializeIndexBitLength(inputData);
+            sparseHll.setSoftMemoryLimit(
+                DenseHll::estimateInMemorySize(indexBitLength));
+          }
+          if (sparseHll.overLimit()) {
+            // Convert to dense
+            isSparse = false;
+            denseHll.initialize(indexBitLength);
+            sparseHll.toDense(denseHll);
+            sparseHll.reset();
+          }
+        } else {
+          SparseHll other(inputData, &allocator);
+          other.toDense(denseHll);
+        }
+      } else if (DenseHll::canDeserialize(inputData)) {
+        if (isSparse) {
+          if (indexBitLength < 0) {
+            indexBitLength = DenseHll::deserializeIndexBitLength(inputData);
+            sparseHll.setSoftMemoryLimit(
+                DenseHll::estimateInMemorySize(indexBitLength));
+          }
+          isSparse = false;
+          denseHll.initialize(indexBitLength);
+          sparseHll.toDense(denseHll);
+          sparseHll.reset();
+        }
+        denseHll.mergeWith(inputData);
+      } else {
+        VELOX_USER_FAIL("Unexpected type of HLL");
+      }
+    }
+
+    if (!hasValidInput) {
+      return false;
+    }
+    int32_t size =
+        isSparse ? sparseHll.serializedSize() : denseHll.serializedSize();
+    result.resize(size);
+    if (isSparse) {
+      sparseHll.serialize(indexBitLength, result.data());
+    } else {
+      denseHll.serialize(result.data());
+    }
+    return true;
+  }
+};
 } // namespace facebook::velox::functions
