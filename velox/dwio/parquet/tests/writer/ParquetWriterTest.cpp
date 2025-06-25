@@ -23,7 +23,7 @@
 #include "velox/connectors/hive/HiveConnector.h" // @manual
 #include "velox/core/QueryCtx.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
-#include "velox/dwio/parquet/RegisterParquetWriter.h" // @manual
+#include "velox/dwio/parquet/RegisterParquetWriter.h"
 #include "velox/dwio/parquet/reader/PageReader.h"
 #include "velox/dwio/parquet/tests/ParquetTestBase.h"
 #include "velox/exec/Cursor.h"

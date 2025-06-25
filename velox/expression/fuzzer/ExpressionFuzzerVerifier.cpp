@@ -23,7 +23,7 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/connectors/hive/HiveConnector.h"
-#include "velox/dwio/dwrf/RegisterDwrfWriter.h"
+#include "velox/dwio/RegisterWriters.h"
 #include "velox/exec/fuzzer/FuzzerUtil.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/FunctionSignature.h"
@@ -87,7 +87,7 @@ ExpressionFuzzerVerifier::ExpressionFuzzerVerifier(
   parse::registerTypeResolver();
   filesystems::registerLocalFileSystem();
   exec::test::registerHiveConnector({});
-  dwrf::registerDwrfWriterFactory();
+  dwio::registerWriterFactories();
 
   seed(initialSeed);
 
