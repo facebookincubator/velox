@@ -276,7 +276,8 @@ struct AstContext {
       const std::shared_ptr<velox::exec::Expr>& expr);
   cudf::ast::expression const& addPrecomputeInstruction(
       std::string const& name,
-      std::string const& instruction);
+      std::string const& instruction,
+      std::string const& fieldName = {});
   cudf::ast::expression const& multipleInputsToPairWise(
       const std::shared_ptr<velox::exec::Expr>& expr);
   static bool canBeEvaluated(const std::shared_ptr<velox::exec::Expr>& expr);
@@ -310,17 +311,40 @@ cudf::ast::expression const& createAstTree(
   return context.pushExprToTree(expr);
 }
 
+// get nested column indices
+std::vector<int> getNestedColumnIndices(
+    const TypePtr& rowType,
+    const std::string& fieldName) {
+  std::vector<int> indices;
+  auto rowTypePtr = asRowType(rowType);
+  if (rowTypePtr->containsChild(fieldName)) {
+    auto columnIndex = rowTypePtr->getChildIdx(fieldName);
+    indices.push_back(columnIndex);
+  }
+  return indices;
+}
+
 cudf::ast::expression const& AstContext::addPrecomputeInstruction(
     std::string const& name,
-    std::string const& instruction) {
+    std::string const& instruction,
+    std::string const& fieldName) {
   for (size_t sideIdx = 0; sideIdx < inputRowSchema.size(); ++sideIdx) {
     if (inputRowSchema[sideIdx].get()->containsChild(name)) {
       auto columnIndex = inputRowSchema[sideIdx].get()->getChildIdx(name);
       auto newColumnIndex = inputRowSchema[sideIdx].get()->size() +
           precomputeInstructions[sideIdx].get().size();
-      // This custom op should be added to input columns.
-      precomputeInstructions[sideIdx].get().emplace_back(
-          columnIndex, instruction, newColumnIndex);
+      if (fieldName.empty()) {
+        // This custom op should be added to input columns.
+        precomputeInstructions[sideIdx].get().emplace_back(
+            columnIndex, instruction, newColumnIndex);
+      } else {
+        auto nestedIndices = getNestedColumnIndices(
+            inputRowSchema[sideIdx].get()->childAt(columnIndex), fieldName);
+        if (nestedIndices.empty())
+          continue;
+        precomputeInstructions[sideIdx].get().emplace_back(
+            columnIndex, instruction, newColumnIndex, nestedIndices);
+      }
       auto side = static_cast<cudf::ast::table_reference>(sideIdx);
       return tree.push(cudf::ast::column_reference(newColumnIndex, side));
     }
@@ -528,12 +552,21 @@ cudf::ast::expression const& AstContext::pushExprToTree(
     return addPrecomputeInstruction(fieldExpr->name(), likeExpr);
   } else if (auto fieldExpr = std::dynamic_pointer_cast<FieldReference>(expr)) {
     // Refer to the appropriate side
+    const auto fieldName =
+        fieldExpr->inputs().empty() ? name : fieldExpr->inputs()[0]->name();
     for (size_t sideIdx = 0; sideIdx < inputRowSchema.size(); ++sideIdx) {
       auto& schema = inputRowSchema[sideIdx];
-      if (schema.get()->containsChild(name)) {
-        auto columnIndex = schema.get()->getChildIdx(name);
+      if (schema.get()->containsChild(fieldName)) {
+        auto columnIndex = schema.get()->getChildIdx(fieldName);
+        // This column may be complex data type like ROW, we need to get the
+        // name from row. Push fieldName.name to the tree.
         auto side = static_cast<cudf::ast::table_reference>(sideIdx);
-        return tree.push(cudf::ast::column_reference(columnIndex, side));
+        if (fieldExpr->field() == fieldName) {
+          return tree.push(cudf::ast::column_reference(columnIndex, side));
+        } else {
+          return addPrecomputeInstruction(
+              fieldName, "nested_column", fieldExpr->field());
+        }
       }
     }
     VELOX_FAIL("Field not found, " + name);
@@ -549,7 +582,11 @@ void addPrecomputedColumns(
     const std::vector<std::unique_ptr<cudf::scalar>>& scalars,
     rmm::cuda_stream_view stream) {
   for (const auto& instruction : precompute_instructions) {
-    auto [dependent_column_index, ins_name, new_column_index] = instruction;
+    auto
+        [dependent_column_index,
+         ins_name,
+         new_column_index,
+         nested_dependent_column_indices] = instruction;
     if (ins_name == "year") {
       auto newColumn = cudf::datetime::extract_datetime_component(
           input_table_columns[dependent_column_index]->view(),
@@ -594,6 +631,13 @@ void addPrecomputedColumns(
           *static_cast<cudf::string_scalar*>(scalars[scalarIndex].get()),
           cudf::string_scalar(
               "", true, stream, cudf::get_current_device_resource_ref()),
+          stream,
+          cudf::get_current_device_resource_ref());
+      input_table_columns.emplace_back(std::move(newColumn));
+    } else if (ins_name == "nested_column") {
+      auto newColumn = std::make_unique<cudf::column>(
+          input_table_columns[dependent_column_index]->view().child(
+              nested_dependent_column_indices[0]),
           stream,
           cudf::get_current_device_resource_ref());
       input_table_columns.emplace_back(std::move(newColumn));
