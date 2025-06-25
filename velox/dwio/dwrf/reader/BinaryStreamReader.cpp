@@ -15,7 +15,6 @@
  */
 
 #include "velox/dwio/dwrf/reader/BinaryStreamReader.h"
-#include "velox/dwio/common/exception/Exception.h"
 
 namespace facebook::velox::dwrf::detail {
 
