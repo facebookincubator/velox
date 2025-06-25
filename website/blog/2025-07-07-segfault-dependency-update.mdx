@@ -8,14 +8,14 @@ tags: [tech-blog, build]
 ## Background
 Velox depends on several [libraries](https://github.com/facebookincubator/velox/blob/main/CMake/resolve_dependency_modules/README.md).
 Some of these dependencies include open-source libraries from Meta, including [Folly](https://github.com/facebook/folly) and
-[Facebook Thrift](https://github.com/facebook/fbthrift). These libraries are in active development. These libraries also depend on each other, and hence they all have to be updated to the same version at the same time.
+[Facebook Thrift](https://github.com/facebook/fbthrift). These libraries are in active development and also depend on each other, so they all have to be updated to the same version at the same time.
 
 Updating these dependencies typically involves modifying the Velox code to align with any public API or semantic changes in these dependencies.
 However, a recent upgrade of Folly and Facebook Thrift to version *v2025.04.28.00* caused a *SEGFAULT* only in one unit test in Velox
 named *velox_functions_remote_client_test*.
 
 ## Investigation
-We immediately put on our *gdb* gloves and looked at the stack traces. This issue was also reproducible in a debug build.
+We immediately put on our `gdb`-gloves and looked at the stack traces. This issue was also reproducible in a debug build.
 The SEGFAULT occurred in the ThriftServer of Facebook Thrift during initialization of the ThriftServer, but the offending call was invoking a destructor of a certain handler.
 However, the corresponding source code was pointing to an invocation of a different function. And this code was present inside a Facebook Thrift
 header called *AsyncProcessor.h*.
@@ -26,11 +26,11 @@ One of the culprits resulting in SEGFAULTs in the past was the conflict due to t
 However, this was not the root cause this time because we were able to reproduce this issue by just building the test without the Apache Thrift dependency installed.
 We were entering a new territory to investigate, and we were not sure where to start.
 
-We then compiled an example called *EchoService* in Facebook Thrift that was very similar to the *RemoteServer*, and it worked. Then we copied and compiled the Velox *RemoveServer*
+We then compiled an example called *EchoService* in Facebook Thrift that was very similar to the *RemoteServer*, and it worked. Then we copied and compiled the Velox *RemoteServer*
 in Facebook Thrift and that worked too! So the culprit was likely in the compilation flags, which likely differed between Facebook Thrift and Velox.
 We enabled the verbose logging for both builds and were able to spot one difference. We saw the GCC *coroutines* flag being used in the Facebook Thrift build.
 
-We were also curious about the invocation of the destructor instead of the actual function. We wore our gdb gloves again and dumped the entire
+We were also curious about the invocation of the destructor instead of the actual function. We put our gdb gloves back on and dumped the entire
 vtable for the RemoteServer class and its base classes. The vtables were different when it was built in Velox vs. Facebook Thrift.
 Specifically, the list of functions inherited from *ServiceHandlerBase* was different.
 
@@ -54,7 +54,7 @@ Thunk ServiceHandlerBase::~ServiceHandlerBase
 Thunk ServiceHandlerBase::~ServiceHandlerBase
 ```
 
-Tying up both the pieces of evidence, we could conclude that Velox generated a different vtable structure compared to what Facebook Thrift (and thus ThriftServer) was built with.
+Tying up both pieces of evidence, we could conclude that Velox generated a different vtable structure compared to what Facebook Thrift (and thus ThriftServer) was built with.
 Looking around further, we noticed that the *ServiceHandlerBase* was conditionally adding functions based on the *-fcoroutines* flag.
 
 ```
