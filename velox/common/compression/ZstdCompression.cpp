@@ -29,8 +29,6 @@ Status zstdError(const char* prefixMessage, size_t errorCode) {
   return Status::IOError(prefixMessage, ZSTD_getErrorName(errorCode));
 }
 
-} // namespace
-
 class ZstdCodec : public Codec {
  public:
   explicit ZstdCodec(int32_t compressionLevel);
@@ -345,6 +343,8 @@ Expected<uint64_t> ZstdCodec::getUncompressedLength(
 std::string_view ZstdCodec::name() const {
   return "zstd";
 }
+
+} // namespace
 
 std::unique_ptr<Codec> makeZstdCodec(int32_t compressionLevel) {
   return std::make_unique<ZstdCodec>(compressionLevel);
