@@ -1410,6 +1410,45 @@ TEST_F(MergeJoinTest, fullOuterJoin) {
           "SELECT * FROM t FULL OUTER JOIN u ON t.t0 = u.u0 AND t.t0 > 2");
 }
 
+TEST_F(MergeJoinTest, fullOuterJoinWithDuplicateMatch) {
+  // Each row on the left side has at most one match on the right side.
+  auto left = makeRowVector(
+      {"a", "b"},
+      {
+          makeNullableFlatVector<int32_t>({1, 2, 2, 2, 3, 5, 6, std::nullopt}),
+          makeNullableFlatVector<double>(
+              {2.0, 100.0, 1.0, 1.0, 3.0, 1.0, 6.0, std::nullopt}),
+      });
+
+  auto right = makeRowVector(
+      {"c", "d"},
+      {
+          makeNullableFlatVector<int32_t>(
+              {0, 2, 2, 2, 2, 3, 4, 5, 7, std::nullopt}),
+          makeNullableFlatVector<double>(
+              {0.0, 3.0, -1.0, -1.0, 3.0, 2.0, 1.0, 3.0, 7.0, std::nullopt}),
+      });
+
+  createDuckDbTable("t", {left});
+  createDuckDbTable("u", {right});
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+
+  auto rightPlan =
+      PlanBuilder(planNodeIdGenerator)
+          .values({left})
+          .mergeJoin(
+              {"a"},
+              {"c"},
+              PlanBuilder(planNodeIdGenerator).values({right}).planNode(),
+              "b < d",
+              {"a", "b", "c", "d"},
+              core::JoinType::kFull)
+          .planNode();
+  AssertQueryBuilder(rightPlan, duckDbQueryRunner_)
+      .assertResults("SELECT * from t FULL OUTER JOIN u ON a = c AND b < d");
+}
+
 TEST_F(MergeJoinTest, fullOuterJoinNoFilter) {
   auto left = makeRowVector(
       {"t0", "t1", "t2", "t3"},
