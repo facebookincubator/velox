@@ -74,7 +74,7 @@ option(
 option(
   VELOX_BUILD_MINIMAL
   "Build a minimal set of components only. This will override other build options."
-  OFF)
+  ON)
 option(
   VELOX_BUILD_MINIMAL_WITH_DWIO
   "Build a minimal set of components, including DWIO (file format readers/writers).
@@ -129,6 +129,7 @@ option(VELOX_ENABLE_EXEC "Build exec." ON)
 option(VELOX_ENABLE_AGGREGATES "Build aggregates." ON)
 option(VELOX_ENABLE_HIVE_CONNECTOR "Build Hive connector." ON)
 option(VELOX_ENABLE_TPCH_CONNECTOR "Build TPC-H connector." ON)
+option(VELOX_ENABLE_TPCDS_CONNECTOR "Build TPC-DS connector." ON)
 option(VELOX_ENABLE_PRESTO_FUNCTIONS "Build Presto SQL functions." ON)
 option(VELOX_ENABLE_SPARK_FUNCTIONS "Build Spark SQL functions." ON)
 option(VELOX_ENABLE_EXPRESSION "Build expression." ON)
@@ -177,6 +178,7 @@ if(${VELOX_BUILD_MINIMAL} OR ${VELOX_BUILD_MINIMAL_WITH_DWIO})
   set(VELOX_ENABLE_AGGREGATES OFF)
   set(VELOX_ENABLE_HIVE_CONNECTOR OFF)
   set(VELOX_ENABLE_TPCH_CONNECTOR OFF)
+  set(VELOX_ENABLE_TPCDS_CONNECTOR ON)
   set(VELOX_ENABLE_SPARK_FUNCTIONS OFF)
   set(VELOX_ENABLE_EXAMPLES OFF)
   set(VELOX_ENABLE_S3 OFF)
