@@ -35,10 +35,6 @@ namespace {
 
 using namespace facebook::velox;
 
-bool isFloatingPointType(const TypePtr& type) {
-  return type->kind() != TypeKind::REAL && type->kind() != TypeKind::DOUBLE;
-}
-
 #define DEFINE_SIMPLE_AGGREGATOR(Name, name, KIND)                            \
   struct Name##Aggregator : cudf_velox::CudfHashAggregation::Aggregator {     \
     Name##Aggregator(                                                         \
@@ -74,7 +70,7 @@ bool isFloatingPointType(const TypePtr& type) {
       auto col = std::move(results[output_idx].results[0]);                   \
       const auto cudfType =                                                   \
           cudf::data_type(cudf_velox::veloxToCudfTypeId(resultType));         \
-      if (col->type() != cudfType && !isFloatingPointType(resultType)) {      \
+      if (col->type() != cudfType) {                                          \
         col = cudf::cast(*col, cudfType, stream);                             \
       }                                                                       \
       return col;                                                             \
@@ -833,9 +829,8 @@ CudfVectorPtr CudfHashAggregation::doGlobalAggregation(
   std::vector<std::unique_ptr<cudf::column>> resultColumns;
   resultColumns.reserve(aggregators_.size());
   for (auto i = 0; i < aggregators_.size(); i++) {
-    resultColumns.push_back(
-        aggregators_[i]->doReduce(
-            tbl->view(), outputType_->childAt(i), stream));
+    resultColumns.push_back(aggregators_[i]->doReduce(
+      tbl->view(), outputType_->childAt(i), stream));
   }
 
   return std::make_shared<cudf_velox::CudfVector>(
