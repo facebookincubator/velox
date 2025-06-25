@@ -33,29 +33,23 @@ target_link_libraries(
   GTest::gtest_main)
 
 add_executable(
-  velox_exec_test
-  AddressableNonNullValueListTest.cpp
+  velox_exec_operator_test
   AggregationTest.cpp
-  AggregateFunctionRegistryTest.cpp
   ArrowStreamTest.cpp
   AssignUniqueIdTest.cpp
   AsyncConnectorTest.cpp
-  ConcatFilesSpillMergeStreamTest.cpp
-  ContainerRowSerdeTest.cpp
   CustomJoinTest.cpp
   EnforceSingleRowTest.cpp
+  FilterProjectTest.cpp
   ExchangeClientTest.cpp
   ExpandTest.cpp
-  FilterProjectTest.cpp
-  FunctionResolutionTest.cpp
   HashBitRangeTest.cpp
   HashJoinBridgeTest.cpp
   HashJoinTest.cpp
-  HashPartitionFunctionTest.cpp
   HashTableTest.cpp
   IndexLookupJoinTest.cpp
-  LimitTest.cpp
   LocalPartitionTest.cpp
+  LimitTest.cpp
   Main.cpp
   MarkDistinctTest.cpp
   MemoryReclaimerTest.cpp
@@ -66,39 +60,83 @@ add_executable(
   NestedLoopJoinTest.cpp
   OrderByTest.cpp
   OperatorTraceTest.cpp
-  OutputBufferManagerTest.cpp
   PartitionedOutputTest.cpp
+  PrefixSortTest.cpp
+  ProbeOperatorStateTest.cpp
+  RowNumberTest.cpp
+  ScaledScanControllerTest.cpp
+  TopNRowNumberTest.cpp
+  TopNTest.cpp
+  ValuesTest.cpp
+  WindowTest.cpp)
+
+add_test(
+  NAME velox_exec_operator_test
+  COMMAND velox_exec_operator_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+
+target_link_libraries(
+  velox_exec_operator_test
+  velox_aggregates
+  velox_exec
+  velox_exec_test_lib
+  velox_memory
+  velox_test_util
+  velox_window
+  GTest::gtest
+  GTest::gtest_main
+  GTest::gmock)
+
+add_executable(
+  velox_exec_spill_and_write_test
+  ConcatFilesSpillMergeStreamTest.cpp
+  Main.cpp
+  SpillerTest.cpp
+  SpillTest.cpp
+  TableWriterTest.cpp)
+
+add_test(
+  NAME velox_exec_spill_and_write_test
+  COMMAND velox_exec_spill_and_write_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+
+target_link_libraries(
+  velox_exec_spill_and_write_test
+  velox_exec
+  velox_exec_test_lib
+  velox_test_util
+  GTest::gtest
+  GTest::gtest_main)
+
+add_executable(
+  velox_exec_test
+  AddressableNonNullValueListTest.cpp
+  AggregateFunctionRegistryTest.cpp
+  ContainerRowSerdeTest.cpp
+  FunctionResolutionTest.cpp
+  HashPartitionFunctionTest.cpp
+  Main.cpp
+  OutputBufferManagerTest.cpp
   PlanNodeSerdeTest.cpp
   PlanNodeToStringTest.cpp
   PlanNodeToSummaryStringTest.cpp
-  PrefixSortTest.cpp
   PrintPlanWithStatsTest.cpp
-  ProbeOperatorStateTest.cpp
   TraceUtilTest.cpp
   RoundRobinPartitionFunctionTest.cpp
   RowContainerTest.cpp
-  RowNumberTest.cpp
-  ScaledScanControllerTest.cpp
   ScaleWriterLocalPartitionTest.cpp
   SortBufferTest.cpp
-  SpillerTest.cpp
-  SpillTest.cpp
   SplitListenerTest.cpp
   SplitTest.cpp
   SqlTest.cpp
   StreamingAggregationTest.cpp
   TableScanTest.cpp
-  TableWriterTest.cpp
   TaskListenerTest.cpp
   ThreadDebugInfoTest.cpp
-  TopNRowNumberTest.cpp
-  TopNTest.cpp
   UnnestTest.cpp
   UnorderedStreamReaderTest.cpp
-  ValuesTest.cpp
   VectorHasherTest.cpp
   WindowFunctionRegistryTest.cpp
-  WindowTest.cpp
   WriterFuzzerUtilTest.cpp)
 
 add_executable(
@@ -120,9 +158,7 @@ add_test(
   COMMAND velox_exec_test
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 
-# TODO: Revert back to 3000 once is fixed.
-# https://github.com/facebookincubator/velox/issues/13879
-set_tests_properties(velox_exec_test PROPERTIES TIMEOUT 6000)
+set_tests_properties(velox_exec_test PROPERTIES TIMEOUT 3000)
 
 add_test(
   NAME velox_exec_infra_test
