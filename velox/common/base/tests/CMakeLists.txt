@@ -79,5 +79,10 @@ target_link_libraries(
     velox_common_base
     velox_exception
     velox_time
+    velox_functions_test_lib
+    velox_presto_types_test_lib
+    velox_vector_test_lib
     Folly::folly
-    gflags::gflags)
+    gflags::gflags
+    GTest::gtest
+    GTest::gmock)
