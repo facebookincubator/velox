@@ -89,7 +89,10 @@ Status detail::parseDecimalComponents(
   // Optional exponent.
   if (s[pos] == 'e' || s[pos] == 'E') {
     ++pos;
-    bool withSign = pos < size && (s[pos] == '+' || s[pos] == '-');
+    if (pos == size) {
+      return Status::UserError("The exponent part is empty.");
+    }
+    bool withSign = s[pos] == '+' || s[pos] == '-';
     if (withSign && pos == size - 1) {
       return Status::UserError("The exponent part only contains sign.");
     }
@@ -98,17 +101,13 @@ Status detail::parseDecimalComponents(
     for (auto i = static_cast<size_t>(withSign); i < size - pos; ++i) {
       if (!std::isdigit(s[pos + i])) {
         return Status::UserError(
-            "Non-digit character '{}' is not allowed in the exponent part.",
-            s[pos + i]);
+            "Non-digit character is not allowed in the exponent part.");
       }
     }
     out.exponent = folly::to<int32_t>(folly::StringPiece(s + pos, size - pos));
     return Status::OK();
   }
-  return pos == size
-      ? Status::OK()
-      : Status::UserError(
-            "Chars '{}' are invalid.", std::string(s + pos, size - pos));
+  return pos == size ? Status::OK() : Status::UserError("Chars are invalid.");
 }
 
 Status detail::parseHugeInt(
