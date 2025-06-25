@@ -21,8 +21,8 @@
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/RegisterS3FileSystem.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/tests/S3Test.h"
+#include "velox/dwio/RegisterReaders.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h"
-#include "velox/dwio/parquet/RegisterParquetReader.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
@@ -47,11 +47,11 @@ class S3ReadTest : public S3Test, public ::test::VectorTestBase {
             connector::hive::HiveConnectorFactory::kHiveConnectorName)
             ->newConnector(kHiveConnectorId, minioServer_->hiveConfig());
     connector::registerConnector(hiveConnector);
-    parquet::registerParquetReaderFactory();
+    dwio::registerReaderFactories();
   }
 
   void TearDown() override {
-    parquet::unregisterParquetReaderFactory();
+    dwio::unregisterReaderFactories();
     filesystems::finalizeS3FileSystem();
     connector::unregisterConnectorFactory(
         connector::hive::HiveConnectorFactory::kHiveConnectorName);

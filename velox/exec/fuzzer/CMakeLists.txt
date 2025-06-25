@@ -39,7 +39,7 @@ target_link_libraries(
   velox_type_parser
   Folly::folly
   velox_hive_connector
-  velox_dwio_dwrf_writer
+  velox_dwio_registered_writers
   velox_dwio_catalog_fbhive
   velox_dwio_faulty_file_sink)
 
@@ -52,8 +52,8 @@ target_link_libraries(
   velox_common_base
   velox_file
   velox_hive_connector
-  velox_dwio_dwrf_reader
-  velox_dwio_dwrf_writer
+  velox_dwio_registered_readers
+  velox_dwio_registered_writers
   velox_type
   velox_vector_fuzzer
   velox_fuzzer_util
@@ -88,7 +88,7 @@ add_library(velox_row_number_fuzzer_base_lib RowNumberFuzzerBase.cpp)
 
 target_link_libraries(
   velox_row_number_fuzzer_base_lib
-  velox_dwio_dwrf_reader
+  velox_dwio_registered_readers
   velox_fuzzer_util
   velox_vector_fuzzer
   velox_exec_test_lib)
