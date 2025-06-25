@@ -36,3 +36,23 @@ add_subdirectory(dwrf)
 add_subdirectory(orc)
 add_subdirectory(parquet)
 add_subdirectory(text)
+
+# Users shall link with this library before velox_dwio_common if both are needed
+add_library(velox_dwio_all_readers INTERFACE)
+target_link_libraries(velox_dwio_all_readers
+        INTERFACE
+        velox_dwio_dwrf_reader
+        velox_dwio_dwrf_common
+        velox_dwio_native_parquet_reader
+        velox_dwio_parquet_common
+)
+
+# Users shall link with this library before velox_dwio_common if both are needed
+add_library(velox_dwio_all_writers INTERFACE)
+target_link_libraries(velox_dwio_all_writers
+        INTERFACE
+        velox_dwio_dwrf_writer
+        velox_dwio_dwrf_common
+        velox_dwio_arrow_parquet_writer
+        velox_dwio_parquet_common
+)

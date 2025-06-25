@@ -21,7 +21,7 @@ elseif(${VELOX_BUILD_TEST_UTILS})
   add_subdirectory(tests/utils)
 endif()
 
-velox_add_library(
+add_library(
   velox_dwio_common
   BitConcatenation.cpp
   BitPackDecoder.cpp
@@ -63,9 +63,9 @@ velox_add_library(
   Writer.cpp
   WriterFactory.cpp)
 
-velox_include_directories(velox_dwio_common PRIVATE ${Protobuf_INCLUDE_DIRS})
+target_include_directories(velox_dwio_common PRIVATE ${Protobuf_INCLUDE_DIRS})
 
-velox_link_libraries(
+target_link_libraries(
   velox_dwio_common
   velox_buffer
   velox_caching

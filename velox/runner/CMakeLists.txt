@@ -27,7 +27,8 @@ velox_link_libraries(
   velox_common_base
   velox_memory
   velox_hive_connector
+  velox_dwio_all_writers
   velox_dwio_common
-  velox_dwio_dwrf_writer
+#  velox_dwio_dwrf_writer
   velox_exec
   velox_cursor)
