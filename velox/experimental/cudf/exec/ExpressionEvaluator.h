@@ -41,7 +41,11 @@ struct PrecomputeInstruction {
       : dependent_column_index(depIndex),
         ins_name(name),
         new_column_index(newIndex) {}
-  PrecomputeInstruction(int depIndex, const std::string& name, int newIndex, const std::vector<int>& nestedIndices)
+  PrecomputeInstruction(
+      int depIndex,
+      const std::string& name,
+      int newIndex,
+      const std::vector<int>& nestedIndices)
       : dependent_column_index(depIndex),
         ins_name(name),
         new_column_index(newIndex),

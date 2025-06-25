@@ -17,8 +17,8 @@ name: Linux Build using GCC
 on:
   push:
     branches:
-      - "velox-cudf"
-      - "pull-request/[0-9]+"
+      - velox-cudf
+      - pull-request/[0-9]+
 
 permissions:
   contents: read
@@ -43,10 +43,12 @@ jobs:
       xsimd_SOURCE: BUNDLED
       Arrow_SOURCE: BUNDLED
       Thrift_SOURCE: BUNDLED
-      cudf_SOURCE:  BUNDLED
+      cudf_SOURCE: BUNDLED
       CUDA_VERSION: "12.8"
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Fix git permissions
         # Usually actions/checkout does this but as we run in a container
@@ -65,22 +67,22 @@ jobs:
           # TODO: Install a newer cmake here until we update the images upstream
           pip install cmake==3.30.4
 
-      - uses: assignUser/stash/restore@v1
+      - uses: apache/infrastructure-actions/stash/restore@3354c1565d4b0e335b78a76aedd82153a9e144d4
         with:
           path: '${{ env.CCACHE_DIR }}'
           key: ccache-linux-adapters
 
-      - name: "Zero Ccache Statistics"
+      - name: Zero Ccache Statistics
         run: |
           ccache -sz
 
       - name: Make Release Build
         env:
-          MAKEFLAGS: 'TREAT_WARNINGS_AS_ERRORS=0 NUM_THREADS=16 MAX_HIGH_MEM_JOBS=4'
+          MAKEFLAGS: TREAT_WARNINGS_AS_ERRORS=0 NUM_THREADS=16 MAX_HIGH_MEM_JOBS=4
           CUDA_ARCHITECTURES: 70
           CUDA_COMPILER: /usr/local/cuda-${CUDA_VERSION}/bin/nvcc
           # Set compiler to GCC 12
-          CUDA_FLAGS: "-ccbin /opt/rh/gcc-toolset-12/root/usr/bin"
+          CUDA_FLAGS: -ccbin /opt/rh/gcc-toolset-12/root/usr/bin
         run: |
           EXTRA_CMAKE_FLAGS=(
             "-DVELOX_ENABLE_BENCHMARKS=ON"
@@ -100,7 +102,7 @@ jobs:
       - name: Ccache after
         run: ccache -s
 
-      - uses: assignUser/stash/save@v1
+      - uses: apache/infrastructure-actions/stash/save@3354c1565d4b0e335b78a76aedd82153a9e144d4
         with:
           path: '${{ env.CCACHE_DIR }}'
           key: ccache-linux-adapters
@@ -127,7 +129,7 @@ jobs:
 #   steps:
 
 #     - name: Get Ccache Stash
-#       uses: assignUser/stash/restore@v1
+#     - uses: apache/infrastructure-actions/stash/restore@3354c1565d4b0e335b78a76aedd82153a9e144d4
 #       with:
 #         path: '${{ env.CCACHE_DIR }}'
 #         key: ccache-ubuntu-debug-default
@@ -161,7 +163,7 @@ jobs:
 #       run: |
 #         ccache -vs
 
-#     - uses: assignUser/stash/save@v1
+#     - uses: apache/infrastructure-actions/stash/save@3354c1565d4b0e335b78a76aedd82153a9e144d4
 #       with:
 #         path: '${{ env.CCACHE_DIR }}'
 #         key: ccache-ubuntu-debug-default
