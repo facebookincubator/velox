@@ -312,12 +312,11 @@ class QueryConfig {
       "spill_write_buffer_size";
 
   /// Specifies the maximum number of rows to buffer before flushing spill data
-  /// to storage. The spiller will flush the buffer if either the total serialized
-  /// data size reaches 'spill_write_buffer_size' bytes or the number of buffered
-  /// rows reaches this threshold, whichever comes first. If set to zero, then spill write
-  /// buffering is disabled.
-  static constexpr const char* kSpillWriteBatchSize =
-      "spill_write_batch_size";
+  /// to storage. The spiller will flush the buffer if either the total
+  /// serialized data size reaches 'spill_write_buffer_size' bytes or the number
+  /// of buffered rows reaches this threshold, whichever comes first. If set to
+  /// zero, then spill write buffering is disabled.
+  static constexpr const char* kSpillWriteBatchSize = "spill_write_batch_size";
 
   /// Specifies the buffer size in bytes to read from one spilled file. If the
   /// underlying filesystem supports async read, we do read-ahead with double
