@@ -961,22 +961,21 @@ struct TimestampDiffFunction {
       const arg_type<Varchar>* unitString,
       const arg_type<Timestamp>* /*timestamp1*/,
       const arg_type<Timestamp>* /*timestamp2*/) {
-    if (unitString != nullptr) {
-      unit_ = fromDateTimeUnitString(
-          *unitString, /*throwIfInvalid=*/false, /*allowMicro=*/true);
-    }
-
+    unit_ = fromDateTimeUnitString(
+        *unitString, /*throwIfInvalid=*/true, /*allowMicro=*/true);
     sessionTimeZone_ = getTimeZoneFromConfig(config);
   }
 
-  FOLLY_ALWAYS_INLINE bool call(
+  FOLLY_ALWAYS_INLINE void call(
       int64_t& result,
       const arg_type<Varchar>& unitString,
       const arg_type<Timestamp>& timestamp1,
       const arg_type<Timestamp>& timestamp2) {
-    if (!unit_.has_value()) {
-      return false;
-    }
+    const auto unitOption = unit_.has_value() ? unit_
+                                              : fromDateTimeUnitString(
+                                                    unitString,
+                                                    /*throwIfInvalid=*/false,
+                                                    /*allowMicro=*/true);
     const auto unit = unit_.value();
     if (LIKELY(sessionTimeZone_ != nullptr)) {
       // sessionTimeZone not null means that the config
@@ -998,7 +997,6 @@ struct TimestampDiffFunction {
     } else {
       result = diffTimestamp(unit, timestamp1, timestamp2);
     }
-    return true;
   }
 
  private:

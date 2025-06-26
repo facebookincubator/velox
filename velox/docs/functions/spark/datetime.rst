@@ -274,7 +274,7 @@ These functions support TIMESTAMP and DATE input types.
 .. spark:function:: timestampdiff(unit, timestamp1, timestamp2) -> bigint
 
     Returns ``timestamp2`` - ``timestamp1`` expressed in terms of ``unit``.
-    Returns NULL if ``unit`` is invalid.
+    Throws exception if ``unit`` is invalid.
     ``unit`` is case insensitive and must be one of the following:
     ``YEAR``, ``QUARTER``, ``MONTH``, ``WEEK``, ``DAY``, ``HOUR``, ``MINUTE``, ``SECOND``,
     ``MILLISECOND``, ``MICROSECOND``. ::
@@ -283,7 +283,6 @@ These functions support TIMESTAMP and DATE input types.
         SELECT timestampdiff(DAY, '2019-01-30 10:00:00.500', '2020-02-29 10:00:00.500'); -- 395
         SELECT timestampdiff(SECOND, '2019-02-28 10:00:00.500', '2019-03-01 10:00:00.500'); -- 86400
         SELECT timestampdiff(MICROSECOND, '2019-02-28 10:00:00.000000', '2019-02-28 10:01:00.500999'); -- 60500999
-        SELECT timestampdiff('', '2019-02-28 10:00:00.500', '2019-03-01 10:00:00.500'); -- NULL
 
 .. spark:function:: timestamp_micros(x) -> timestamp
 

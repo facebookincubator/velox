@@ -1305,9 +1305,9 @@ TEST_F(DateTimeFunctionsTest, timestampdiff) {
       std::nullopt, timestampDiff("month", std::nullopt, Timestamp(0, 0)));
 
   // Check invalid units.
-  EXPECT_EQ(
-      std::nullopt,
-      timestampDiff("invalid_unit", Timestamp(1, 0), Timestamp(0, 0)));
+  VELOX_ASSERT_THROW(
+      timestampDiff("invalid_unit", Timestamp(1, 0), Timestamp(0, 0)),
+      "Unsupported datetime unit: invalid_unit");
 
   // Simple tests.
   EXPECT_EQ(
