@@ -59,7 +59,7 @@ public class BaseVectorTest {
   @Test
   public void testCreateEmpty1() {
     final Type type = new RealType();
-    final BaseVector vector = session.baseVectorOps().createEmpty(type);
+    final BaseVector vector = session.baseVectorOperations().createEmpty(type);
     Assert.assertEquals(Serde.toPrettyJson(type), Serde.toPrettyJson(vector.getType()));
     Assert.assertEquals(0, vector.getSize());
   }
@@ -68,7 +68,7 @@ public class BaseVectorTest {
   public void testCreateEmpty2() {
     final Type type =
         new RowType(List.of("foo2", "bar2"), List.of(new IntegerType(), new IntegerType()));
-    final BaseVector vector = session.baseVectorOps().createEmpty(type);
+    final BaseVector vector = session.baseVectorOperations().createEmpty(type);
     Assert.assertEquals(Serde.toPrettyJson(type), Serde.toPrettyJson(vector.getType()));
     Assert.assertEquals(0, vector.getSize());
   }

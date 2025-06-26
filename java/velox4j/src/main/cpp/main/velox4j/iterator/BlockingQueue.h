@@ -30,8 +30,8 @@
 
 namespace facebook::velox4j {
 
-// An ExternalStream implementation that is backed by
-// a concurrent blocking queue.
+/// An ExternalStream implementation that is backed by
+/// a concurrent blocking queue.
 class BlockingQueue : public ExternalStream {
  public:
   enum State { OPEN = 0, FINISHED = 1, CLOSED = 2 };

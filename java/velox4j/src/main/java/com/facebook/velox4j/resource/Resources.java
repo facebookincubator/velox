@@ -114,14 +114,12 @@ public class Resources {
     final ZipFile zf;
     try {
       zf = new ZipFile(jarFile);
-    } catch (final ZipException e) {
-      throw new RuntimeException(e);
     } catch (final IOException e) {
       throw new RuntimeException(e);
     }
-    final Enumeration<? extends ZipEntry> e = zf.entries();
-    while (e.hasMoreElements()) {
-      final ZipEntry ze = e.nextElement();
+    final Enumeration<? extends ZipEntry> entry = zf.entries();
+    while (entry.hasMoreElements()) {
+      final ZipEntry ze = entry.nextElement();
       final String fileName = ze.getName();
       if (!fileName.startsWith(dir)) {
         continue;
@@ -135,8 +133,8 @@ public class Resources {
     }
     try {
       zf.close();
-    } catch (final IOException e1) {
-      throw new RuntimeException(e1);
+    } catch (final IOException e) {
+      throw new RuntimeException(e);
     }
   }
 
@@ -146,7 +144,7 @@ public class Resources {
       final File directory,
       final Pattern pattern,
       final List<ResourceFile> buffer) {
-    final File[] fileList = directory.listFiles();
+    final File[] fileList = Preconditions.checkNotNull(directory.listFiles());
     for (final File file : fileList) {
       if (file.isDirectory()) {
         getResourcesFromDirectory(container, root, file, pattern, buffer);
