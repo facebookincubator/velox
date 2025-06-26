@@ -65,8 +65,8 @@ public class Velox4j {
   }
 
   /**
-   * Initializes Verlox4J. Should be called once and only once before any Velox4J functionalities are
-   * actually invoked.
+   * Initializes Verlox4J. Should be called once and only once before any Velox4J functionalities
+   * are actually invoked.
    */
   public static void initialize() {
     if (!initialized.compareAndSet(false, true)) {
