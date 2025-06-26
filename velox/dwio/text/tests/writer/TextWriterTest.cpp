@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+/// TODO: use TextReader
+
 #include "velox/dwio/text/writer/TextWriter.h"
 #include <gtest/gtest.h>
 #include "velox/common/file/FileSystems.h"
@@ -21,8 +23,10 @@
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
+#include <gtest/gtest.h>
+
 namespace facebook::velox::text {
-// TODO: add fuzzer test once text reader is move in OSS
+/// TODO: add fuzzer test once text reader is move in OSS
 class TextWriterTest : public testing::Test,
                        public velox::test::VectorTestBase {
  public:
@@ -142,6 +146,315 @@ TEST_F(TextWriterTest, write) {
   EXPECT_EQ(result[2][9], "Y3Bw");
 }
 
+TEST_F(TextWriterTest, complexTypes) {
+  const vector_size_t length = 13;
+  const auto keyVector = makeFlatVector<int64_t>(
+      {1,   111,  22, 22222, 333, 33, 44,    5,   555, 66, 7777,     7,
+       777, 8888, 88, 9,     99,  10, 10000, 111, 1,   11, 11122222, 123142});
+  const auto valueVector = makeFlatVector<bool>(
+      {false, true, true,  false, false, true,  false, true,
+       false, true, false, true,  false, false, true,  true,
+       false, true, false, true,  false, true,  true,  true});
+  BufferPtr sizes = facebook::velox::allocateOffsets(length, pool());
+  BufferPtr offsets = facebook::velox::allocateOffsets(length, pool());
+  auto rawSizes = sizes->asMutable<vector_size_t>();
+  auto rawOffsets = offsets->asMutable<vector_size_t>();
+  rawSizes[0] = 2;
+  rawSizes[1] = 2;
+  rawSizes[2] = 2;
+  rawSizes[3] = 1;
+  rawSizes[4] = 2;
+  rawSizes[5] = 1;
+  rawSizes[6] = 3;
+  rawSizes[7] = 2;
+  rawSizes[8] = 2;
+  rawSizes[9] = 2;
+  rawSizes[10] = 3;
+  rawSizes[11] = 1;
+  rawSizes[12] = 1;
+  for (int i = 1; i < length; i++) {
+    rawOffsets[i] = rawOffsets[i - 1] + rawSizes[i - 1];
+  }
+
+  const auto data = makeRowVector(
+      {makeArrayVector<int64_t>(
+           {{1, 11, 111},
+            {22, 22222},
+            {333, 33},
+            {4444, 44},
+            {5, 555},
+            {666, 66, 66},
+            {7777, 7, 777},
+            {8888, 88},
+            {9, 99},
+            {10, 10000},
+            {111, 1, 111},
+            {12, 11122222, 222},
+            {13, 11133333, 333}}),
+       makeArrayVector<double>(
+           {{1.123, 1.3123},
+            {2.333, -5512, 1.23},
+            {-6.1, 65.777},
+            {4.2, 24, 324.11},
+            {47.2, 213.23},
+            {79.5, -44.11},
+            {3.1415926, 441.124},
+            {-221.145, 878.43, -11},
+            {93.12, 632},
+            {-4123.11, -177.1},
+            {950.2, -4412},
+            {43.66, 33121.43},
+            {-42.11, -123.43}}),
+       std::make_shared<MapVector>(
+           pool(),
+           MAP(keyVector->type(), valueVector->type()),
+           nullptr,
+           length,
+           offsets,
+           sizes,
+           keyVector,
+           valueVector)});
+
+  const auto schema = ROW(
+      {{"col_bigint_arr", ARRAY(BIGINT())},
+       {"col_double_arr", ARRAY(DOUBLE())},
+       {"col_map", MAP(BIGINT(), BOOLEAN())}});
+
+  WriterOptions writerOptions;
+  writerOptions.memoryPool = rootPool_.get();
+  auto filePath =
+      fs::path(fmt::format("{}/test_text_writer.txt", tempPath_->getPath()));
+  auto sink = std::make_unique<dwio::common::LocalFileSink>(
+      filePath, dwio::common::FileSink::Options{.pool = leafPool_.get()});
+
+  // use traits to specify delimiters when it is not nested
+  const auto serDeOptions = dwio::common::SerDeOptions('\x01', '|', '#');
+  auto writer = std::make_unique<TextWriter>(
+      schema,
+      std::move(sink),
+      std::make_shared<text::WriterOptions>(writerOptions),
+      serDeOptions);
+  writer->write(data);
+  writer->close();
+
+  std::vector<std::vector<std::string>> result = parseTextFile(filePath);
+  EXPECT_EQ(result.size(), 13);
+  EXPECT_EQ(result[0].size(), 3);
+
+  // Row 0: [1,11,111], [1.123,1.3123], {1:false,111:true}
+  EXPECT_EQ(result[0][0], "1|11|111");
+  EXPECT_EQ(result[0][1], "1.123000|1.312300");
+  EXPECT_EQ(result[0][2], "1#false|111#true");
+
+  // Row 1: [22,22222], [2.333,-5512,1.23], {22:true,22222:false}
+  EXPECT_EQ(result[1][0], "22|22222");
+  EXPECT_EQ(result[1][1], "2.333000|-5512.000000|1.230000");
+  EXPECT_EQ(result[1][2], "22#true|22222#false");
+
+  // Row 2: [333,33], [-6.1,65.777], {333:false,33:true}
+  EXPECT_EQ(result[2][0], "333|33");
+  EXPECT_EQ(result[2][1], "-6.100000|65.777000");
+  EXPECT_EQ(result[2][2], "333#false|33#true");
+
+  // Row 3: [4444,44], [4.2,24,324.11], {44:false}
+  EXPECT_EQ(result[3][0], "4444|44");
+  EXPECT_EQ(result[3][1], "4.200000|24.000000|324.110000");
+  EXPECT_EQ(result[3][2], "44#false");
+
+  // Row 4: [5,555], [47.2,213.23], {5:true,555:false}
+  EXPECT_EQ(result[4][0], "5|555");
+  EXPECT_EQ(result[4][1], "47.200000|213.230000");
+  EXPECT_EQ(result[4][2], "5#true|555#false");
+
+  // Row 5: [666,66,66], [79.5,-44.11], {66:true}
+  EXPECT_EQ(result[5][0], "666|66|66");
+  EXPECT_EQ(result[5][1], "79.500000|-44.110000");
+  EXPECT_EQ(result[5][2], "66#true");
+
+  // Row 6: [7777,7,777], [3.1415926,441.124], {7777:false,7:true,777:false}
+  EXPECT_EQ(result[6][0], "7777|7|777");
+  EXPECT_EQ(result[6][1], "3.141593|441.124000");
+  EXPECT_EQ(result[6][2], "7777#false|7#true|777#false");
+
+  // Row 7: [8888,88], [-221.145,878.43,-11], {8888:false,88:true}
+  EXPECT_EQ(result[7][0], "8888|88");
+  EXPECT_EQ(result[7][1], "-221.145000|878.430000|-11.000000");
+  EXPECT_EQ(result[7][2], "8888#false|88#true");
+
+  // Row 8: [9,99], [93.12,632], {9:true,99:false}
+  EXPECT_EQ(result[8][0], "9|99");
+  EXPECT_EQ(result[8][1], "93.120000|632.000000");
+  EXPECT_EQ(result[8][2], "9#true|99#false");
+
+  // Row 9: [10,10000], [-4123.11,-177.1], {10:true,10000:false}
+  EXPECT_EQ(result[9][0], "10|10000");
+  EXPECT_EQ(result[9][1], "-4123.110000|-177.100000");
+  EXPECT_EQ(result[9][2], "10#true|10000#false");
+
+  // Row 10: [111,1,111], [950.2,-4412], {111:true,1:false,11:true}
+  EXPECT_EQ(result[10][0], "111|1|111");
+  EXPECT_EQ(result[10][1], "950.200000|-4412.000000");
+  EXPECT_EQ(result[10][2], "111#true|1#false|11#true");
+
+  // Row 11: [12,11122222,222], [43.66,33121.43], {11122222:true}
+  EXPECT_EQ(result[11][0], "12|11122222|222");
+  EXPECT_EQ(result[11][1], "43.660000|33121.430000");
+  EXPECT_EQ(result[11][2], "11122222#true");
+
+  // Row 12: [13,11133333,333], [-42.11,-123.43], {123142:true}
+  EXPECT_EQ(result[12][0], "13|11133333|333");
+  EXPECT_EQ(result[12][1], "-42.110000|-123.430000");
+  EXPECT_EQ(result[12][2], "123142#true");
+}
+
+/// TODO: Enable this test after reader support depth > 3
+TEST_F(TextWriterTest, DISABLED_deeplyNestedComplexTypes) {
+  // Inner maps for the arrays
+  const auto innerMapKeys1 = makeFlatVector<int64_t>({1, 11, 22});
+  const auto innerMapValues1 = makeFlatVector<bool>({true, false, true});
+  const auto innerMapKeys2 = makeFlatVector<int64_t>({33, 44});
+  const auto innerMapValues2 = makeFlatVector<bool>({false, true});
+  const auto innerMapKeys3 = makeFlatVector<int64_t>({55, 66, 77, 88});
+  const auto innerMapValues3 = makeFlatVector<bool>({true, true, false, true});
+  const auto innerMapKeys4 = makeFlatVector<int64_t>(std::vector<int64_t>{99});
+  const auto innerMapValues4 = makeFlatVector<bool>(std::vector<bool>{false});
+  const auto innerMapKeys5 = makeFlatVector<int64_t>({100, 200});
+  const auto innerMapValues5 = makeFlatVector<bool>({true, false});
+  const auto innerMapKeys6 = makeFlatVector<int64_t>({300, 400, 500});
+  const auto innerMapValues6 = makeFlatVector<bool>({false, false, true});
+
+  // Combine all inner map keys and values
+  const auto allInnerMapKeys = makeFlatVector<int64_t>(
+      {1, 11, 22, 33, 44, 55, 66, 77, 88, 99, 100, 200, 300, 400, 500});
+  const auto allInnerMapValues = makeFlatVector<bool>(
+      {true,
+       false,
+       true,
+       false,
+       true,
+       true,
+       true,
+       false,
+       true,
+       false,
+       true,
+       false,
+       false,
+       false,
+       true});
+
+  // Create inner maps with proper offsets and sizes
+  BufferPtr innerMapSizes = allocateOffsets(6, pool());
+  BufferPtr innerMapOffsets = allocateOffsets(6, pool());
+  auto rawInnerMapSizes = innerMapSizes->asMutable<vector_size_t>();
+  auto rawInnerMapOffsets = innerMapOffsets->asMutable<vector_size_t>();
+
+  rawInnerMapSizes[0] = 3; // {1:true, 11:false, 22:true}
+  rawInnerMapSizes[1] = 2; // {33:false, 44:true}
+  rawInnerMapSizes[2] = 4; // {55:true, 66:true, 77:false, 88:true}
+  rawInnerMapSizes[3] = 1; // {99:false}
+  rawInnerMapSizes[4] = 2; // {100:true, 200:false}
+  rawInnerMapSizes[5] = 3; // {300:false, 400:false, 500:true}
+
+  rawInnerMapOffsets[0] = 0;
+  for (int i = 1; i < 6; i++) {
+    rawInnerMapOffsets[i] = rawInnerMapOffsets[i - 1] + rawInnerMapSizes[i - 1];
+  }
+
+  auto innerMapsVector = std::make_shared<MapVector>(
+      pool(),
+      MAP(BIGINT(), BOOLEAN()),
+      nullptr,
+      6,
+      innerMapOffsets,
+      innerMapSizes,
+      allInnerMapKeys,
+      allInnerMapValues);
+
+  // Create arrays containing the inner maps
+  // Array 1: [innerMap0, innerMap1] (maps at indices 0, 1)
+  // Array 2: [innerMap2, innerMap3, innerMap4] (maps at indices 2, 3, 4)
+  // Array 3: [innerMap5] (map at index 5)
+  auto arrayVector = makeArrayVector({0, 2, 5, 6}, innerMapsVector);
+
+  // Create the outer map keys
+  const auto outerMapKeys = makeFlatVector<int64_t>({10, 20, 30});
+
+  // Create the final data structure
+  auto outerMapOffsets = allocateOffsets(3, pool());
+  auto outerMapSizes = allocateOffsets(3, pool());
+  auto rawOuterMapOffsets = outerMapOffsets->asMutable<vector_size_t>();
+  auto rawOuterMapSizes = outerMapSizes->asMutable<vector_size_t>();
+
+  // Set offsets: [0, 1, 2]
+  rawOuterMapOffsets[0] = 0;
+  rawOuterMapOffsets[1] = 1;
+  rawOuterMapOffsets[2] = 2;
+
+  // Set sizes: [1, 1, 1] (each outer map entry contains 1 array)
+  rawOuterMapSizes[0] = 1;
+  rawOuterMapSizes[1] = 1;
+  rawOuterMapSizes[2] = 1;
+
+  const auto data = makeRowVector({std::make_shared<MapVector>(
+      pool(),
+      MAP(BIGINT(), ARRAY(MAP(BIGINT(), BOOLEAN()))),
+      nullptr,
+      3,
+      outerMapOffsets,
+      outerMapSizes,
+      outerMapKeys,
+      arrayVector)});
+
+  const auto schema =
+      ROW({{"col_nested_map", MAP(BIGINT(), ARRAY(MAP(BIGINT(), BOOLEAN())))}});
+
+  WriterOptions writerOptions;
+  writerOptions.memoryPool = rootPool_.get();
+
+  auto filePath =
+      fs::path(fmt::format("{}/test_text_writer.txt", tempPath_->getPath()));
+  auto sink = std::make_unique<dwio::common::LocalFileSink>(
+      filePath, dwio::common::FileSink::Options{.pool = leafPool_.get()});
+  auto writer = std::make_unique<TextWriter>(
+      schema,
+      std::move(sink),
+      std::make_shared<text::WriterOptions>(writerOptions));
+
+  // Define hierarchical delimiters for nested data structures:
+  // '\x01' - field separator (between columns)
+  // '|' - nesting level 1
+  // '#' - nesting level 2
+  // '!', '@', '$', '%', '^' - separators for deeper nesting levels
+  // This creates a delimiter hierarchy to properly serialize complex nested
+  // types
+  const std::vector<char> delimiters = {
+      '\x01', '|', '#', '!', '@', '$', '%', '^'};
+  writer->setDelimiters(delimiters);
+
+  writer->write(data);
+  writer->close();
+
+  std::vector<std::vector<std::string>> result = parseTextFile(filePath);
+
+  EXPECT_EQ(result.size(), 3);
+  EXPECT_EQ(result[0].size(), 1);
+  EXPECT_EQ(result[1].size(), 1);
+  EXPECT_EQ(result[2].size(), 1);
+
+  // Row 0: {10: [{1:true, 11:false, 22:true}, {33:false, 44:true}]}
+  EXPECT_EQ(result[0][0], "10#1@true!11@false!22@true#33@false!44@true");
+
+  // Row 1: {20: [{55:true, 66:true, 77:false, 88:true}, {99:false}, {100:true,
+  // 200:false}]}
+  EXPECT_EQ(
+      result[1][0],
+      "20#55@true!66@true!77@false!88@true#99@false#100@true!200@false");
+
+  // Row 2: {30: [{300:false, 400:false, 500:true}]}
+  EXPECT_EQ(result[2][0], "30#300@false!400@false!500@true");
+}
+
 TEST_F(TextWriterTest, abort) {
   auto schema = ROW({"c0", "c1"}, {BIGINT(), BOOLEAN()});
   auto data = makeRowVector(
@@ -174,4 +487,102 @@ TEST_F(TextWriterTest, abort) {
   // 3^A
   EXPECT_EQ(result.size(), 14);
 }
+
+TEST_F(TextWriterTest, tripleNestedArraysWithCustomDelimiters) {
+  // Create expected triple nested array structure
+  // Row 1: [[[1,2], [3,4]], [[5,6,7], [8,9]], [[10,11,12,13], [14,15]]]
+  // Row 2: [[[20,21], [22,23,24]], [[25,26]], [[27,28,29], [30,31,32]]]
+  // Row 3: [[[100,101,102]], [[200,201], [300,301,302,303]], [[400,401,402],
+  // [500,501]]]
+
+  // Create the innermost arrays (level 3)
+  auto innermostArrays = makeArrayVector<int64_t>({
+      {1, 2},
+      {3, 4}, // Row 1, outer array 0
+      {5, 6, 7},
+      {8, 9}, // Row 1, outer array 1
+      {10, 11, 12, 13},
+      {14, 15}, // Row 1, outer array 2
+      {20, 21},
+      {22, 23, 24}, // Row 2, outer array 0
+      {25, 26}, // Row 2, outer array 1
+      {27, 28, 29},
+      {30, 31, 32}, // Row 2, outer array 2
+      {100, 101, 102}, // Row 3, outer array 0
+      {200, 201},
+      {300, 301, 302, 303}, // Row 3, outer array 1
+      {400, 401, 402},
+      {500, 501} // Row 3, outer array 2
+  });
+
+  // Create middle level arrays (level 2) - each contains innermost arrays
+  auto middleArrays = makeArrayVector(
+      {
+          0, // Row 1, outer array 0: contains innermost arrays [0,1]
+          2, // Row 1, outer array 1: contains innermost arrays [2,3]
+          4, // Row 1, outer array 2: contains innermost arrays [4,5]
+          6, // Row 2, outer array 0: contains innermost arrays [6,7]
+          8, // Row 2, outer array 1: contains innermost arrays [8]
+          9, // Row 2, outer array 2: contains innermost arrays [9,10]
+          11, // Row 3, outer array 0: contains innermost arrays [11]
+          12, // Row 3, outer array 1: contains innermost arrays [12,13]
+          14, // Row 3, outer array 2: contains innermost arrays [14,15]
+          //   16 // End marker
+      },
+      innermostArrays);
+
+  // Create outermost arrays (level 1) - each row contains middle arrays
+  auto outerArray = makeArrayVector(
+      {
+          0, 3, 6
+          //   , 9 // Row boundaries: Row 1 [0-2], Row 2 [3-5], Row 3 [6-8]
+      },
+      middleArrays);
+
+  const auto data = makeRowVector({outerArray});
+
+  const auto schema =
+      ROW({{"col_triple_nested_array", ARRAY(ARRAY(ARRAY(BIGINT())))}});
+
+  WriterOptions writerOptions;
+  writerOptions.memoryPool = rootPool_.get();
+
+  auto filePath =
+      fs::path(fmt::format("{}/test_text_writer.txt", tempPath_->getPath()));
+  auto sink = std::make_unique<dwio::common::LocalFileSink>(
+      filePath, dwio::common::FileSink::Options{.pool = leafPool_.get()});
+  auto writer = std::make_unique<TextWriter>(
+      schema,
+      std::move(sink),
+      std::make_shared<text::WriterOptions>(writerOptions));
+
+  const std::vector<char> delimiters = {
+      '\x01', '|', ',', '#', '@', '$', '%', '^'};
+  writer->setDelimiters(delimiters);
+
+  writer->write(data);
+  writer->close();
+
+  std::vector<std::vector<std::string>> result = parseTextFile(filePath);
+
+  EXPECT_EQ(result.size(), 3);
+  EXPECT_EQ(result[0].size(), 1);
+  EXPECT_EQ(result[1].size(), 1);
+  EXPECT_EQ(result[2].size(), 1);
+
+  // Row 0: [[[1,2], [3,4]], [[5,6,7], [8,9]], [[10,11,12,13], [14,15]]]
+  // Expected format: 1#2,3#4|5#6#7,8#9|10#11#12#13,14#15
+  EXPECT_EQ(result[0][0], "1#2,3#4|5#6#7,8#9|10#11#12#13,14#15");
+
+  // Row 1: [[[20,21], [22,23,24]], [[25,26]], [[27,28,29], [30,31,32]]]
+  // Expected format: 20#21,22#23#24|25#26|27#28#29,30#31#32
+  EXPECT_EQ(result[1][0], "20#21,22#23#24|25#26|27#28#29,30#31#32");
+
+  // Row 2: [[[100,101,102]], [[200,201], [300,301,302,303]], [[400,401,402],
+  // [500,501]]] Expected format:
+  // 100#101#102|200#201,300#301#302#303|400#401#402,500#501
+  EXPECT_EQ(
+      result[2][0], "100#101#102|200#201,300#301#302#303|400#401#402,500#501");
+}
+
 } // namespace facebook::velox::text
