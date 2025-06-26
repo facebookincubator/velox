@@ -480,7 +480,8 @@ std::string S3FileSystem::name() const {
 }
 
 std::vector<std::string> S3FileSystem::list(std::string_view path) {
-  std::string bucket, key;
+  std::string bucket;
+  std::string key;
   getBucketAndKeyFromPath(getPath(path), bucket, key);
 
   Aws::S3::Model::ListObjectsRequest request;
