@@ -26,25 +26,25 @@ import com.google.common.base.Preconditions;
 import com.facebook.velox4j.type.Type;
 
 public class CastTypedExpr extends TypedExpr {
-  private final boolean nullOnFailure;
+  private final boolean isTryCast;
 
   @JsonCreator
   private CastTypedExpr(
       @JsonProperty("type") Type returnType,
       @JsonProperty("inputs") List<TypedExpr> inputs,
-      @JsonProperty("nullOnFailure") boolean nullOnFailure) {
+      @JsonProperty("nullOnFailure") boolean isTryCast) {
     super(returnType, inputs);
     Preconditions.checkArgument(
         inputs.size() == 1, "CastTypedExpr should have 1 input, but has %s", inputs.size());
-    this.nullOnFailure = nullOnFailure;
+    this.isTryCast = isTryCast;
   }
 
-  public static CastTypedExpr create(Type returnType, TypedExpr input, boolean nullOnFailure) {
-    return new CastTypedExpr(returnType, Collections.singletonList(input), nullOnFailure);
+  public static CastTypedExpr create(Type returnType, TypedExpr input, boolean isTryCast) {
+    return new CastTypedExpr(returnType, Collections.singletonList(input), isTryCast);
   }
 
-  @JsonGetter("nullOnFailure")
-  public boolean isNullOnFailure() {
-    return nullOnFailure;
+  @JsonGetter("isTryCast")
+  public boolean isTryCast() {
+    return isTryCast;
   }
 }
