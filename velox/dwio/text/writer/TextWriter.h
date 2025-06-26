@@ -16,38 +16,26 @@
 
 #pragma once
 
-#include "velox/common/compression/Compression.h"
-#include "velox/common/config/Config.h"
-#include "velox/dwio/common/DataBuffer.h"
 #include "velox/dwio/common/FileSink.h"
-#include "velox/dwio/common/FlushPolicy.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/Writer.h"
 #include "velox/dwio/common/WriterFactory.h"
 #include "velox/dwio/text/writer/BufferedWriterSink.h"
-#include "velox/vector/ComplexVector.h"
+
+#include <unordered_map>
 
 namespace facebook::velox::text {
+
+using dwio::common::SerDeOptions;
 
 struct WriterOptions : public dwio::common::WriterOptions {
   int64_t defaultFlushCount = 10 << 10;
 };
 
-// TODO: move to a separate file to be shared with text reader once it is in oss
-class TextFileTraits {
- public:
-  //// The following constants define the delimiters used by TextFile format.
-  /// Each row is separated by 'kNewLine'.
-  /// Each column is separated by 'kSOH' within each row.
-
-  /// String for null data.
-  static inline const std::string kNullData = "\\N";
-
-  /// Delimiter between columns.
-  static const char kSOH = '\x01';
-
-  /// Delimiter between rows.
-  static const char kNewLine = '\n';
+struct DecodedVectorInfo {
+  uint8_t depth;
+  std::shared_ptr<DecodedVector> decVecPtr;
+  const TypePtr type;
 };
 
 /// Encodes Velox vectors in TextFormat and writes into a FileSink.
@@ -58,10 +46,12 @@ class TextWriter : public dwio::common::Writer {
   /// non-null.
   /// @param sink output sink
   /// @param options writer options
+  /// @param serDeOptions specifies the serialization options
   TextWriter(
       RowTypePtr schema,
       std::unique_ptr<dwio::common::FileSink> sink,
-      const std::shared_ptr<text::WriterOptions>& options);
+      const std::shared_ptr<text::WriterOptions>& options,
+      SerDeOptions serDeOptions = SerDeOptions());
 
   ~TextWriter() override = default;
 
@@ -78,14 +68,31 @@ class TextWriter : public dwio::common::Writer {
 
   void abort() override;
 
+  void setDelimiters(const std::vector<char>& delimiters);
+
  private:
-  void writeCellValue(
+  char getDelimiterForDepth(uint8_t depth) const;
+
+  char getCurrentCollectionDelim(const BaseVector* vector) const;
+
+  void writePrimitiveCellValue(
       const std::shared_ptr<DecodedVector>& decodedColumnVector,
       const TypePtr& type,
       vector_size_t row);
 
+  void writeCellValueRecursively(
+      const BaseVector* decodedColumnVectorPtr,
+      vector_size_t rowToWrite);
+
+  void createDecodedVector(uint8_t depth, const BaseVector* vecPtr);
+  DecodedVectorInfo getDecodedVectorInfo(const BaseVector* vector) const;
+
   const RowTypePtr schema_;
   const std::unique_ptr<BufferedWriterSink> bufferedWriterSink_;
+
+  uint8_t depth_;
+  SerDeOptions serDeOptions_;
+  std::unordered_map<const BaseVector*, DecodedVectorInfo> decodedVectorMap_;
 };
 
 class TextWriterFactory : public dwio::common::WriterFactory {
