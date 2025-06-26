@@ -27,11 +27,12 @@
 #include "velox4j/iterator/BlockingQueue.h"
 #include "velox4j/test/Init.h"
 
-namespace facebook::velox4j {
+namespace facebook::velox4j::test {
 using namespace facebook::velox;
 using namespace facebook::velox::exec::test;
 
-class BlockingQueueTest : public testing::Test, public test::VectorTestBase {
+class BlockingQueueTest : public testing::Test,
+                          public velox::test::VectorTestBase {
  protected:
   static void SetUpTestCase() {
     testingEnsureInitializedForSpark();
@@ -128,4 +129,4 @@ TEST_F(BlockingQueueTest, concurrentPutAndRead) {
   consumer.join();
   ASSERT_TRUE(queue.empty());
 }
-} // namespace facebook::velox4j
+} // namespace facebook::velox4j::test

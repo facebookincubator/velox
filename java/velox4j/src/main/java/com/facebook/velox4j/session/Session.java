@@ -18,7 +18,6 @@ package com.facebook.velox4j.session;
 import com.facebook.velox4j.arrow.Arrow;
 import com.facebook.velox4j.connector.ExternalStreams;
 import com.facebook.velox4j.data.BaseVectors;
-import com.facebook.velox4j.data.RowVectors;
 import com.facebook.velox4j.data.SelectivityVectors;
 import com.facebook.velox4j.eval.Evaluations;
 import com.facebook.velox4j.jni.CppObject;
@@ -36,37 +35,34 @@ import com.facebook.velox4j.write.TableWriteTraits;
  */
 public interface Session extends CppObject {
   /** APIs in relation to {@link com.facebook.velox4j.eval.Evaluation}. */
-  Evaluations evaluationOps();
+  Evaluations evaluationOperations();
 
   /** APIs in relation to {@link com.facebook.velox4j.query.Query}. */
-  Queries queryOps();
+  Queries queryOperations();
 
   /** APIs in relation to {@link com.facebook.velox4j.connector.ExternalStream}. */
-  ExternalStreams externalStreamOps();
+  ExternalStreams externalStreamOperations();
 
   /** APIs in relation to {@link com.facebook.velox4j.data.BaseVector}. */
-  BaseVectors baseVectorOps();
-
-  /** APIs in relation to {@link com.facebook.velox4j.data.RowVector}. */
-  RowVectors rowVectorOps();
+  BaseVectors baseVectorOperations();
 
   /** APIs in relation to {@link com.facebook.velox4j.data.SelectivityVector}. */
-  SelectivityVectors selectivityVectorOps();
+  SelectivityVectors selectivityVectorOperations();
 
   /**
    * Arrow APIs for vectors. This includes interchange functionalities between Velox native vector
    * format and Arrow-Java format.
    */
-  Arrow arrowOps();
+  Arrow arrowOperations();
 
   /**
    * An API for creating certain required information for building a {@link TableWriteNode} in Java.
    */
-  TableWriteTraits tableWriteTraitsOps();
+  TableWriteTraits tableWriteTraitsOperations();
 
   /** APIs in relation to {@link com.facebook.velox4j.serializable.ISerializable}. */
-  ISerializables iSerializableOps();
+  ISerializables iSerializableOperations();
 
   /** APIs in relation to {@link com.facebook.velox4j.variant.Variant}. */
-  Variants variantOps();
+  Variants variantOperations();
 }

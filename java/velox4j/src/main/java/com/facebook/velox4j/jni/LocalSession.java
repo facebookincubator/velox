@@ -18,7 +18,6 @@ package com.facebook.velox4j.jni;
 import com.facebook.velox4j.arrow.Arrow;
 import com.facebook.velox4j.connector.ExternalStreams;
 import com.facebook.velox4j.data.BaseVectors;
-import com.facebook.velox4j.data.RowVectors;
 import com.facebook.velox4j.data.SelectivityVectors;
 import com.facebook.velox4j.eval.Evaluations;
 import com.facebook.velox4j.query.Queries;
@@ -45,52 +44,47 @@ public class LocalSession implements Session {
   }
 
   @Override
-  public Evaluations evaluationOps() {
+  public Evaluations evaluationOperations() {
     return new Evaluations(jniApi());
   }
 
   @Override
-  public Queries queryOps() {
+  public Queries queryOperations() {
     return new Queries(jniApi());
   }
 
   @Override
-  public ExternalStreams externalStreamOps() {
+  public ExternalStreams externalStreamOperations() {
     return new ExternalStreams(jniApi());
   }
 
   @Override
-  public BaseVectors baseVectorOps() {
+  public BaseVectors baseVectorOperations() {
     return new BaseVectors(jniApi());
   }
 
   @Override
-  public RowVectors rowVectorOps() {
-    return new RowVectors(jniApi());
-  }
-
-  @Override
-  public SelectivityVectors selectivityVectorOps() {
+  public SelectivityVectors selectivityVectorOperations() {
     return new SelectivityVectors(jniApi());
   }
 
   @Override
-  public Arrow arrowOps() {
+  public Arrow arrowOperations() {
     return new Arrow(jniApi());
   }
 
   @Override
-  public TableWriteTraits tableWriteTraitsOps() {
+  public TableWriteTraits tableWriteTraitsOperations() {
     return new TableWriteTraits(jniApi());
   }
 
   @Override
-  public ISerializables iSerializableOps() {
+  public ISerializables iSerializableOperations() {
     return new ISerializables(jniApi());
   }
 
   @Override
-  public Variants variantOps() {
+  public Variants variantOperations() {
     return new Variants(jniApi());
   }
 }

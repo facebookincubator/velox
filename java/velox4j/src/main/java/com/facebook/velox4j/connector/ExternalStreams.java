@@ -20,7 +20,7 @@ import com.facebook.velox4j.iterator.DownIterator;
 import com.facebook.velox4j.jni.JniApi;
 import com.facebook.velox4j.jni.StaticJniApi;
 
-/** A factory for creaing {@link ExternalStream} instances. */
+/** A factory for creating {@link ExternalStream} instances. */
 public class ExternalStreams {
   private final JniApi jniApi;
 

@@ -31,10 +31,11 @@
 #include "velox4j/query/QueryExecutor.h"
 #include "velox4j/test/Init.h"
 
-namespace facebook::velox4j {
+namespace facebook::velox4j::test {
 using namespace facebook::velox;
 using namespace facebook::velox::exec::test;
-class QueryTest : public testing::Test, public test::VectorTestBase {
+
+class QueryTest : public testing::Test, public velox::test::VectorTestBase {
  protected:
   const std::string kFuzzerConnectorId = "test-fuzzer";
 
@@ -151,4 +152,4 @@ TEST_F(QueryTest, fuzzer) {
   }
   ASSERT_EQ(actualRows, rowsPerSplit * numSplits);
 }
-} // namespace facebook::velox4j
+} // namespace facebook::velox4j::test

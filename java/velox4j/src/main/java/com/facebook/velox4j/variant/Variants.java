@@ -26,7 +26,7 @@ public class Variants {
     this.jniApi = jniApi;
   }
 
-  public VariantCo asCpp(Variant variant) {
+  public VariantCpp asCpp(Variant variant) {
     return jniApi.variantAsCpp(variant);
   }
 

@@ -50,7 +50,7 @@ public final class BaseVectorTests {
     final IntVector arrowVector = new IntVector("foo", alloc);
     arrowVector.setValueCount(1);
     arrowVector.set(0, 15);
-    final BaseVector baseVector = session.arrowOps().fromArrowVector(alloc, arrowVector);
+    final BaseVector baseVector = session.arrowOperations().fromArrowVector(alloc, arrowVector);
     arrowVector.close();
     return baseVector;
   }
@@ -58,7 +58,7 @@ public final class BaseVectorTests {
   public static RowVector newSampleRowVector(Session session) {
     final String serialized =
         ResourceTests.readResourceAsString("vector/rowvector-1.b64").stripTrailing();
-    final BaseVector deserialized = session.baseVectorOps().deserializeOne(serialized);
+    final BaseVector deserialized = session.baseVectorOperations().deserializeOne(serialized);
     return deserialized.asRowVector();
   }
 }

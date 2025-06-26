@@ -51,7 +51,7 @@ public class SelectivityVectorTest {
   @Test
   public void testIsValid() {
     final int length = 10;
-    final SelectivityVector sv = session.selectivityVectorOps().create(length);
+    final SelectivityVector sv = session.selectivityVectorOperations().create(length);
     for (int i = 0; i < length; i++) {
       Assert.assertTrue(sv.isValid(i));
     }
