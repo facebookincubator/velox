@@ -56,10 +56,10 @@ void checkException(JNIEnv* env) {
         (jstring)env->CallStaticObjectMethod(
             describerClass, describeMethod, throwable));
     if (env->ExceptionCheck()) {
-      /// A new exception was thrown when trying to call Java API to
-      /// describe the previous exception. We just log this exception,
-      /// but do not throw it to let the previous exception be reported as the
-      /// root cause.
+      // A new exception was thrown when trying to call Java API to
+      // describe the previous exception. We just log this exception,
+      // but do not throw it to let the previous exception be reported as the
+      // root cause.
       LOG(WARNING) << "Fatal: Uncaught Java exception during calling the Java "
                       "exception describer method! ";
     }

@@ -73,13 +73,13 @@ class DownIterator : public ExternalStream {
   // Gets the next state.
   State advance();
 
-  /// Called once `advance` returns `BLOCKED` state to wait until
-  /// the state gets refreshed, either by the next row-vector
-  /// is ready for reading or by end of stream.
+  // Called once `advance` returns `BLOCKED` state to wait until
+  // the state gets refreshed, either by the next row-vector
+  // is ready for reading or by end of stream.
   void wait();
 
-  /// Called once `advance` returns `AVAILABLE` state to get
-  /// the next row-vector from the stream.
+  // Called once `advance` returns `AVAILABLE` state to get
+  // the next row-vector from the stream.
   facebook::velox::RowVectorPtr get();
 
   // Called to close the iterator.
