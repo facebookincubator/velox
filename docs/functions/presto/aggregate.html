@@ -886,11 +886,17 @@ The noisy count is post-processed to be non-negative and rounded to bigint.</p>
 value with 0 mean and standard deviation of <code class="docutils literal notranslate"><span class="pre">noise_scale</span></code> to the true count.
 The noisy count is post-processed to be non-negative and rounded to bigint.</p>
 <p>If provided, <code class="docutils literal notranslate"><span class="pre">random_seed</span></code> is used to seed the random number generator. Otherwise, noise is drawn from a secure random.</p>
-<dl class="simple">
-<dt>::</dt><dd><p>SELECT noisy_count_gaussian(orderkey, 20.0) FROM tpch.tiny.lineitem; – 60181 (1 row)
-SELECT noisy_count_gaussian(orderkey, 20.0) FROM tpch.tiny.lineitem WHERE false; – NULL (1 row)</p>
-</dd>
-</dl>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">noisy_count_gaussian</span><span class="p">(</span><span class="n">orderkey</span><span class="p">,</span> <span class="mf">20.0</span><span class="p">)</span> <span class="n">FROM</span> <span class="n">tpch</span><span class="o">.</span><span class="n">tiny</span><span class="o">.</span><span class="n">lineitem</span><span class="p">;</span> <span class="o">--</span> <span class="mi">60181</span> <span class="p">(</span><span class="mi">1</span> <span class="n">row</span><span class="p">)</span>
+<span class="n">SELECT</span> <span class="n">noisy_count_gaussian</span><span class="p">(</span><span class="n">orderkey</span><span class="p">,</span> <span class="mf">20.0</span><span class="p">)</span> <span class="n">FROM</span> <span class="n">tpch</span><span class="o">.</span><span class="n">tiny</span><span class="o">.</span><span class="n">lineitem</span> <span class="n">WHERE</span> <span class="n">false</span><span class="p">;</span> <span class="o">--</span> <span class="n">NULL</span> <span class="p">(</span><span class="mi">1</span> <span class="n">row</span><span class="p">)</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="noisy_sum_gaussian">
+<span class="sig-name descname"><span class="pre">noisy_sum_gaussian</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">col</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">noise_scale</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#noisy_sum_gaussian" title="Link to this definition">¶</a></dt>
+<dd><p>Calculates the sum over the input values in <code class="docutils literal notranslate"><span class="pre">col</span></code> and then adds a normally distributed
+random double value with 0 mean and standard deviation of <code class="docutils literal notranslate"><span class="pre">noise_scale</span></code>.</p>
 </dd></dl>
 
 </section>
@@ -1003,6 +1009,7 @@ SELECT noisy_count_gaussian(orderkey, 20.0) FROM tpch.tiny.lineitem WHERE false;
 <li><a class="reference internal" href="#noisy-aggregate-functions">Noisy Aggregate Functions</a><ul>
 <li><a class="reference internal" href="#noisy_count_if_gaussian"><code class="docutils literal notranslate"><span class="pre">noisy_count_if_gaussian()</span></code></a></li>
 <li><a class="reference internal" href="#noisy_count_gaussian"><code class="docutils literal notranslate"><span class="pre">noisy_count_gaussian()</span></code></a></li>
+<li><a class="reference internal" href="#noisy_sum_gaussian"><code class="docutils literal notranslate"><span class="pre">noisy_sum_gaussian()</span></code></a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#miscellaneous">Miscellaneous</a><ul>
