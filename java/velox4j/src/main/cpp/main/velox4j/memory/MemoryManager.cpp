@@ -229,8 +229,8 @@ class ListenableArbitrator : public velox::memory::MemoryArbitrator {
       candidates_;
 };
 
-/// A helper class to allow the memory manager find the listenable
-/// arbitrator to be assigned to the Velox memory manager.
+// A helper class to allow the memory manager find the listenable
+// arbitrator to be assigned to the Velox memory manager.
 class ArbitratorFactoryRegister {
  public:
   explicit ArbitratorFactoryRegister(AllocationListener* listener)

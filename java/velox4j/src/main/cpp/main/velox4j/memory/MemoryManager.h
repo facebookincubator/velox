@@ -48,10 +48,10 @@ class MemoryManager {
   arrow::MemoryPool* getArrowPool(const std::string& name);
 
  private:
-  /// Destructs the members in this memory manager with a leakage-check
-  /// conducted.
-  /// If there are outstanding memory allocations (which means memory is leaked)
-  /// , returns false. Returns true otherwise.
+  // Destructs the members in this memory manager with a leakage-check
+  // conducted.
+  // If there are outstanding memory allocations (which means memory is leaked)
+  // , returns false. Returns true otherwise.
   bool tryDestruct();
 
   const std::unique_ptr<AllocationListener> listener_;
