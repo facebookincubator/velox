@@ -256,7 +256,8 @@ public class QueryTest {
   @Test
   public void testExternalStreamFromJavaIterator() {
     final String json = SampleQueryTests.readQueryJson();
-    final UpIterator sampleIn = session.queryOperations().execute(Serde.fromJson(json, Query.class));
+    final UpIterator sampleIn =
+        session.queryOperations().execute(Serde.fromJson(json, Query.class));
     final DownIterator down = DownIterators.fromJavaIterator(UpIterators.asJavaIterator(sampleIn));
     final ExternalStream es = session.externalStreamOperations().bind(down);
     final TableScanNode scanNode =
@@ -277,7 +278,8 @@ public class QueryTest {
 
   @Test
   public void testBlockingQueue() throws InterruptedException {
-    final ExternalStreams.BlockingQueue queue = session.externalStreamOperations().newBlockingQueue();
+    final ExternalStreams.BlockingQueue queue =
+        session.externalStreamOperations().newBlockingQueue();
     final TableScanNode scanNode =
         new TableScanNode(
             "id-1",
@@ -326,7 +328,8 @@ public class QueryTest {
 
   @Test
   public void testBlockingQueueNoMoreInput() throws InterruptedException {
-    final ExternalStreams.BlockingQueue queue = session.externalStreamOperations().newBlockingQueue();
+    final ExternalStreams.BlockingQueue queue =
+        session.externalStreamOperations().newBlockingQueue();
     final TableScanNode scanNode =
         new TableScanNode(
             "id-1",
@@ -369,7 +372,8 @@ public class QueryTest {
 
   @Test
   public void testBlockingQueueNoMoreInputTwoThreads() throws InterruptedException {
-    final ExternalStreams.BlockingQueue queue = session.externalStreamOperations().newBlockingQueue();
+    final ExternalStreams.BlockingQueue queue =
+        session.externalStreamOperations().newBlockingQueue();
     final TableScanNode scanNode =
         new TableScanNode(
             "id-1",
@@ -406,7 +410,8 @@ public class QueryTest {
 
   @Test
   public void testBlockingQueueWithInfiniteIteratorOut() throws Exception {
-    final ExternalStreams.BlockingQueue queue = session.externalStreamOperations().newBlockingQueue();
+    final ExternalStreams.BlockingQueue queue =
+        session.externalStreamOperations().newBlockingQueue();
     final TableScanNode scanNode =
         new TableScanNode(
             "id-1",
@@ -482,7 +487,8 @@ public class QueryTest {
 
   @Test
   public void testBlockingQueueTwoThreads() throws InterruptedException {
-    final ExternalStreams.BlockingQueue queue = session.externalStreamOperations().newBlockingQueue();
+    final ExternalStreams.BlockingQueue queue =
+        session.externalStreamOperations().newBlockingQueue();
     final TableScanNode scanNode =
         new TableScanNode(
             "id-1",
@@ -593,7 +599,8 @@ public class QueryTest {
 
   @Test
   public void testBlockingQueueWithInputFiltered() throws InterruptedException {
-    final ExternalStreams.BlockingQueue queue = session.externalStreamOperations().newBlockingQueue();
+    final ExternalStreams.BlockingQueue queue =
+        session.externalStreamOperations().newBlockingQueue();
     final TableScanNode scanNode =
         new TableScanNode(
             "id-1",
