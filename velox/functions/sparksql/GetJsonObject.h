@@ -95,7 +95,7 @@ struct GetJsonObjectFunction {
   // specified in "[]". But simdjson lib requires not. This method just removes
   // such single quotes to adapt to simdjson lib, e.g., converts "['a']['b']" to
   // "[a][b]".
-  std::string removeSingleQuotes(StringView jsonPath) {
+  std::string removeSingleQuotes(const StringView& jsonPath) {
     // Skip the initial "$".
     std::string result(jsonPath.data() + 1, jsonPath.size() - 1);
     size_t pairEnd = 0;
@@ -119,9 +119,12 @@ struct GetJsonObjectFunction {
   // Normalizes the JSON path to be Spark-compatible:
   // - Removes single quotes in bracket notation
   // - Removes spaces after dots (e.g., "$. a" -> "$.a")
-  std::string normalizeJsonPath(StringView jsonPath) {
+  std::string normalizeJsonPath(const StringView& jsonPath) {
     // First, remove single quotes for bracket notation
     std::string path = removeSingleQuotes(jsonPath);
+    if (path == "-1") {
+      return path;
+    }
     // Then, remove spaces after dots
     std::string result;
     bool afterDot = false;
@@ -130,7 +133,7 @@ struct GetJsonObjectFunction {
         result += c;
         afterDot = true;
       } else if (afterDot && c == ' ') {
-        // skip space after dot
+        // Skip space after dot.
         continue;
       } else {
         result += c;
