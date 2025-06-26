@@ -46,7 +46,7 @@ class SerializedPageSpiller : public SpillWriterBase {
       folly::Synchronized<common::SpillStats>* stats)
       : SpillWriterBase(
             writeBufferSize,
-            writeBatchSize
+            writeBatchSize,
             targetFileSize,
             pathPrefix,
             fileCreateConfig,
