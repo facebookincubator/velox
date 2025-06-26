@@ -67,11 +67,11 @@ class BlockAllocationListener final : public AllocationListener {
   }
 
  private:
-  /// Reserves bytes with amount "diff". "diff" can either
-  /// Be positive or negative. The returned value is the amount
-  /// of byte difference granted by the ceiling algorithm, which rounds
-  /// up the input bytes + current reserved bytes into the multiples
-  /// of block size.
+  // Reserves bytes with amount "diff". "diff" can either
+  // Be positive or negative. The returned value is the amount
+  // of byte difference granted by the ceiling algorithm, which rounds
+  // up the input bytes + current reserved bytes into the multiples
+  // of block size.
   inline int64_t reserve(int64_t diff);
 
   const std::unique_ptr<AllocationListener> delegated_;
