@@ -77,6 +77,9 @@ class DirectDecoder : public IntDecoder<isSigned> {
             this->template skip<false>(toSkip, current, nullptr);
           }
           if (atEnd) {
+            if constexpr (Visitor::kHasHook) {
+              visitor.setNumValues(visitor.numRows());
+            }
             return;
           }
         } else {
@@ -105,6 +108,9 @@ class DirectDecoder : public IntDecoder<isSigned> {
         current += toSkip;
       }
       if (atEnd) {
+        if constexpr (Visitor::kHasHook) {
+          visitor.setNumValues(visitor.numRows());
+        }
         return;
       }
     }
