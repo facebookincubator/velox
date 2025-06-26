@@ -34,11 +34,11 @@ import com.facebook.velox4j.query.SerialTask;
 import com.facebook.velox4j.query.SerialTaskStats;
 import com.facebook.velox4j.serde.Serde;
 import com.facebook.velox4j.serializable.ISerializable;
-import com.facebook.velox4j.serializable.ISerializableCo;
+import com.facebook.velox4j.serializable.ISerializableCpp;
 import com.facebook.velox4j.type.RowType;
 import com.facebook.velox4j.type.Type;
 import com.facebook.velox4j.variant.Variant;
-import com.facebook.velox4j.variant.VariantCo;
+import com.facebook.velox4j.variant.VariantCpp;
 
 /** The higher-level JNI-based API over {@link StaticJniWrapper}. */
 public class StaticJniApi {
@@ -140,13 +140,13 @@ public class StaticJniApi {
     return type;
   }
 
-  public ISerializable iSerializableAsJava(ISerializableCo co) {
-    final String json = jni.iSerializableAsJava(co.id());
+  public ISerializable iSerializableAsJava(ISerializableCpp iSerializableCpp) {
+    final String json = jni.iSerializableAsJava(iSerializableCpp.id());
     return Serde.fromJson(json, ISerializable.class);
   }
 
-  public Variant variantAsJava(VariantCo co) {
-    final String json = jni.variantAsJava(co.id());
+  public Variant variantAsJava(VariantCpp variantCpp) {
+    final String json = jni.variantAsJava(variantCpp.id());
     return Serde.fromJson(json, Variant.class);
   }
 }

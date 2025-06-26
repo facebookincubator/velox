@@ -185,7 +185,7 @@ public class JniApiTest {
     final RowVector vector = UpIteratorTests.collectSingleVector(itr);
     final BufferAllocator alloc = new RootAllocator(Long.MAX_VALUE);
     final FieldVector arrowVector = Arrow.toArrowVector(alloc, vector);
-    final BaseVector imported = session.arrowOps().fromArrowVector(alloc, arrowVector);
+    final BaseVector imported = session.arrowOperations().fromArrowVector(alloc, arrowVector);
     BaseVectorTests.assertEquals(vector, imported);
     arrowVector.close();
     session.close();

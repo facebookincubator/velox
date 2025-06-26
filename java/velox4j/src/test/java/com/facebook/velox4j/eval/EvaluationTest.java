@@ -64,13 +64,13 @@ public class EvaluationTest {
   public void testFieldAccess() {
     final RowVector input = BaseVectorTests.newSampleRowVector(session);
     final int size = input.getSize();
-    final SelectivityVector sv = session.selectivityVectorOps().create(size);
+    final SelectivityVector sv = session.selectivityVectorOperations().create(size);
     final Evaluation expr =
         new Evaluation(
             FieldAccessTypedExpr.create(new BigIntType(), "c0"),
             Config.empty(),
             ConnectorConfig.empty());
-    final Evaluator evaluator = session.evaluationOps().createEvaluator(expr);
+    final Evaluator evaluator = session.evaluationOperations().createEvaluator(expr);
     final BaseVector out = evaluator.eval(sv, input);
     final String outString = out.toString();
     Assert.assertEquals(
@@ -82,13 +82,13 @@ public class EvaluationTest {
   public void testMultipleEvalCalls() {
     final RowVector input = BaseVectorTests.newSampleRowVector(session);
     final int size = input.getSize();
-    final SelectivityVector sv = session.selectivityVectorOps().create(size);
+    final SelectivityVector sv = session.selectivityVectorOperations().create(size);
     final Evaluation expr =
         new Evaluation(
             FieldAccessTypedExpr.create(new BigIntType(), "c0"),
             Config.empty(),
             ConnectorConfig.empty());
-    final Evaluator evaluator = session.evaluationOps().createEvaluator(expr);
+    final Evaluator evaluator = session.evaluationOperations().createEvaluator(expr);
     final String expected = ResourceTests.readResourceAsString("eval-output/field-access-1.arrow");
     for (int i = 0; i < 10; i++) {
       final BaseVector out = evaluator.eval(sv, input);
@@ -101,7 +101,7 @@ public class EvaluationTest {
   public void testMultiply() {
     final RowVector input = BaseVectorTests.newSampleRowVector(session);
     final int size = input.getSize();
-    final SelectivityVector sv = session.selectivityVectorOps().create(size);
+    final SelectivityVector sv = session.selectivityVectorOperations().create(size);
     final Evaluation expr =
         new Evaluation(
             new CallTypedExpr(
@@ -112,7 +112,7 @@ public class EvaluationTest {
                 "multiply"),
             Config.empty(),
             ConnectorConfig.empty());
-    final Evaluator evaluator = session.evaluationOps().createEvaluator(expr);
+    final Evaluator evaluator = session.evaluationOperations().createEvaluator(expr);
     final BaseVector out = evaluator.eval(sv, input);
     final String outString = out.toString();
     Assert.assertEquals(

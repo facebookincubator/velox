@@ -40,11 +40,11 @@ import com.facebook.velox4j.query.QueryExecutor;
 import com.facebook.velox4j.query.SerialTask;
 import com.facebook.velox4j.serde.Serde;
 import com.facebook.velox4j.serializable.ISerializable;
-import com.facebook.velox4j.serializable.ISerializableCo;
+import com.facebook.velox4j.serializable.ISerializableCpp;
 import com.facebook.velox4j.type.RowType;
 import com.facebook.velox4j.type.Type;
 import com.facebook.velox4j.variant.Variant;
-import com.facebook.velox4j.variant.VariantCo;
+import com.facebook.velox4j.variant.VariantCpp;
 
 /**
  * The higher-level JNI-based API over {@link JniWrapper}. The API hides details like native
@@ -131,14 +131,14 @@ public final class JniApi {
     return type;
   }
 
-  public ISerializableCo iSerializableAsCpp(ISerializable iSerializable) {
+  public ISerializableCpp iSerializableAsCpp(ISerializable iSerializable) {
     final String json = Serde.toPrettyJson(iSerializable);
-    return new ISerializableCo(jni.iSerializableAsCpp(json));
+    return new ISerializableCpp(jni.iSerializableAsCpp(json));
   }
 
-  public VariantCo variantAsCpp(Variant variant) {
+  public VariantCpp variantAsCpp(Variant variant) {
     final String json = Serde.toPrettyJson(variant);
-    return new VariantCo(jni.variantAsCpp(json));
+    return new VariantCpp(jni.variantAsCpp(json));
   }
 
   @VisibleForTesting

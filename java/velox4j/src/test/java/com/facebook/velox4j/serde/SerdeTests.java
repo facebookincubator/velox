@@ -38,7 +38,7 @@ import com.facebook.velox4j.plan.AggregationNode;
 import com.facebook.velox4j.plan.PlanNode;
 import com.facebook.velox4j.plan.TableScanNode;
 import com.facebook.velox4j.serializable.ISerializable;
-import com.facebook.velox4j.serializable.ISerializableCo;
+import com.facebook.velox4j.serializable.ISerializableCpp;
 import com.facebook.velox4j.sort.SortOrder;
 import com.facebook.velox4j.type.ArrayType;
 import com.facebook.velox4j.type.BigIntType;
@@ -49,7 +49,7 @@ import com.facebook.velox4j.type.RowType;
 import com.facebook.velox4j.type.Type;
 import com.facebook.velox4j.type.VarCharType;
 import com.facebook.velox4j.variant.Variant;
-import com.facebook.velox4j.variant.VariantCo;
+import com.facebook.velox4j.variant.VariantCpp;
 
 public final class SerdeTests {
   private static void assertJsonEquals(String expected, String actual) {
@@ -72,7 +72,7 @@ public final class SerdeTests {
         assertJsonEquals(inJson, javaOutJson);
       }
 
-      try (final ISerializableCo inObjCo = session.iSerializableOps().asCpp(inObj)) {
+      try (final ISerializableCpp inObjCo = session.iSerializableOperations().asCpp(inObj)) {
         final ISerializable cppOutObj = inObjCo.asJava();
         final String cppOutJson = Serde.toPrettyJson(cppOutObj);
         assertJsonEquals(inJson, cppOutJson);
@@ -98,7 +98,7 @@ public final class SerdeTests {
         assertJsonEquals(inJson, javaOutJson);
       }
 
-      try (final VariantCo inObjCo = session.variantOps().asCpp(inObj)) {
+      try (final VariantCpp inObjCo = session.variantOperations().asCpp(inObj)) {
         final Variant cppOutObj = inObjCo.asJava();
         final String cppOutJson = Serde.toPrettyJson(cppOutObj);
         Assert.assertEquals(inObj, cppOutObj);

@@ -65,14 +65,14 @@ public class Velox4j {
   }
 
   /**
-   * Initializes Velox4J. Should be called once and only once before any Velox4J functionalities are
+   * Initializes Verlox4J. Should be called once and only once before any Velox4J functionalities are
    * actually invoked.
    */
   public static void initialize() {
     if (!initialized.compareAndSet(false, true)) {
       throw new VeloxException("Velox4J has already been initialized");
     }
-    initialize0();
+    initializeInternal();
   }
 
   /** Creates a new Velox4J session. */
@@ -80,7 +80,7 @@ public class Velox4j {
     return StaticJniApi.get().createSession(memoryManager);
   }
 
-  private static void initialize0() {
+  private static void initializeInternal() {
     synchronized (globalConfMap) {
       final Config globalConf = Config.create(globalConfMap);
       JniLibLoader.loadAll(JniWorkspace.getDefault().getSubDir("lib"));

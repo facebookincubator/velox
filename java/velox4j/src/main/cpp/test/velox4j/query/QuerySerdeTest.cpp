@@ -29,11 +29,12 @@
 #include "velox4j/query/Query.h"
 #include "velox4j/test/Init.h"
 
-namespace facebook::velox4j {
+namespace facebook::velox4j::test {
 using namespace facebook::velox;
 using namespace facebook::velox::exec::test;
 
-class QuerySerdeTest : public testing::Test, public test::VectorTestBase {
+class QuerySerdeTest : public testing::Test,
+                       public velox::test::VectorTestBase {
  protected:
   static void SetUpTestCase() {
     testingEnsureInitializedForSpark();
@@ -71,4 +72,4 @@ TEST_F(QuerySerdeTest, sanity) {
               std::pair<std::string, std::shared_ptr<const ConfigArray>>>({})));
   testSerde(query.get());
 }
-} // namespace facebook::velox4j
+} // namespace facebook::velox4j::test

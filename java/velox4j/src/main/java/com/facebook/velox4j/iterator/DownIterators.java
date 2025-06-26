@@ -33,7 +33,7 @@ public final class DownIterators {
     }
 
     @Override
-    public State advance0() {
+    public State advanceInternal() {
       if (!itr.hasNext()) {
         return State.FINISHED;
       }
@@ -46,7 +46,7 @@ public final class DownIterators {
     }
 
     @Override
-    public RowVector get0() {
+    public RowVector getInternal() {
       return itr.next();
     }
 
@@ -59,16 +59,16 @@ public final class DownIterators {
 
     @Override
     public final int advance() {
-      return advance0().getId();
+      return advanceInternal().getId();
     }
 
     @Override
     public final long get() {
-      return get0().id();
+      return getInternal().id();
     }
 
-    protected abstract DownIterator.State advance0();
+    protected abstract DownIterator.State advanceInternal();
 
-    protected abstract RowVector get0();
+    protected abstract RowVector getInternal();
   }
 }
