@@ -64,7 +64,7 @@ public class TableWriteTraitsTest {
   public void testOutputTypeWithAggregationNode() {
     final RowType type =
         session
-            .tableWriteTraitsOps()
+            .tableWriteTraitsOperations()
             .outputType(SerdeTests.newSampleAggregationNode("id-2", "id-1"));
     Assert.assertEquals(
         ResourceTests.readResourceAsString(

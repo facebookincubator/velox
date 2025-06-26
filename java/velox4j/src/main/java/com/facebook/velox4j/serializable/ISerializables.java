@@ -24,7 +24,7 @@ public class ISerializables {
     this.jniApi = jniApi;
   }
 
-  public ISerializableCo asCpp(ISerializable iSerializable) {
+  public ISerializableCpp asCpp(ISerializable iSerializable) {
     return jniApi.iSerializableAsCpp(iSerializable);
   }
 }

@@ -19,10 +19,10 @@ import com.facebook.velox4j.jni.CppObject;
 import com.facebook.velox4j.jni.StaticJniApi;
 
 /** Binds a CPP variant object. */
-public class VariantCo implements CppObject {
+public class VariantCpp implements CppObject {
   private final long id;
 
-  public VariantCo(long id) {
+  public VariantCpp(long id) {
     this.id = id;
   }
 

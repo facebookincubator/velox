@@ -13,14 +13,25 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package com.facebook.velox4j.data;
+package com.facebook.velox4j.serializable;
 
-import com.facebook.velox4j.jni.JniApi;
+import com.facebook.velox4j.jni.CppObject;
+import com.facebook.velox4j.jni.StaticJniApi;
 
-public class RowVectors {
-  private final JniApi jniApi;
+/** Binds a CPP ISerializable object. */
+public class ISerializableCpp implements CppObject {
+  private final long id;
 
-  public RowVectors(JniApi jniApi) {
-    this.jniApi = jniApi;
+  public ISerializableCpp(long id) {
+    this.id = id;
+  }
+
+  @Override
+  public long id() {
+    return id;
+  }
+
+  public ISerializable asJava() {
+    return StaticJniApi.get().iSerializableAsJava(this);
   }
 }

@@ -56,8 +56,9 @@ namespace facebook::velox4j {
 using namespace facebook::velox;
 
 namespace {
-/// A utility function to ensure the initialization code body, i.e., f(),
-/// is called once and only once when initialize(...) is being invoked.
+
+// A utility function to ensure the initialization code body, i.e., f(),
+// is called once and only once when initialize(...) is being invoked.
 void init(const std::function<void()>& f) {
   static std::atomic<bool> initialized{false};
   bool expected = false;
