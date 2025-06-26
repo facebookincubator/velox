@@ -311,6 +311,11 @@ class QueryConfig {
   static constexpr const char* kSpillWriteBufferSize =
       "spill_write_buffer_size";
 
+  /// Specifies the maximum number of rows to buffer before flushing spill data
+  /// to storage. The spiller will flush the buffer if either the total serialized
+  /// data size reaches 'spill_write_buffer_size' bytes or the number of buffered
+  /// rows reaches this threshold, whichever comes first. If set to zero, then spill write
+  /// buffering is disabled.
   static constexpr const char* kSpillWriteBatchSize =
       "spill_write_batch_size";
 

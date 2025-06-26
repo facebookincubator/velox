@@ -393,6 +393,12 @@ Spilling
      - 4MB
      - The maximum size in bytes to buffer the serialized spill data before write to disk for IO efficiency.
        If set to zero, buffering is disabled.
+   * - spill_write_batch_size
+     - integer
+     - 4096
+     - The maximum number of rows to buffer before writing spill data to disk. The spill buffer will be flushed when
+       either the total serialized size reaches spill_write_buffer_size or the number of buffered rows reaches this threshold,
+       whichever comes first. If set to zero, buffering is disabled.
    * - spill_read_buffer_size
      - integer
      - 1MB
