@@ -175,23 +175,18 @@ FOLLY_ALWAYS_INLINE int64_t diffTimestamp(
 
   const int8_t sign = fromTimestamp < toTimestamp ? 1 : -1;
 
-  // fromTimepoint is less than or equal to toTimepoint.
-  const std::chrono::time_point<std::chrono::system_clock> fromTimepoint(
-      std::chrono::microseconds(
-          std::min(fromTimestamp, toTimestamp).toMicros()));
-  const std::chrono::time_point<std::chrono::system_clock> toTimepoint(
-      std::chrono::microseconds(
-          std::max(fromTimestamp, toTimestamp).toMicros()));
+  // fromTimepoint is less than or equal to toTimepoint
+  const std::chrono::
+      time_point<std::chrono::system_clock, std::chrono::milliseconds>
+          fromTimepoint(std::chrono::milliseconds(
+              std::min(fromTimestamp, toTimestamp).toMillis()));
+  const std::chrono::
+      time_point<std::chrono::system_clock, std::chrono::milliseconds>
+          toTimepoint(std::chrono::milliseconds(
+              std::max(fromTimestamp, toTimestamp).toMillis()));
 
-  // Microsecond, millisecond, second, minute, hour and day have fixed
-  // conversion ratio.
+  // Millisecond, second, minute, hour and day have fixed conversion ratio
   switch (unit) {
-    case DateTimeUnit::kMicrosecond: {
-      return sign *
-          std::chrono::duration_cast<std::chrono::microseconds>(
-              toTimepoint - fromTimepoint)
-              .count();
-    }
     case DateTimeUnit::kMillisecond: {
       return sign *
           std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -229,6 +224,20 @@ FOLLY_ALWAYS_INLINE int64_t diffTimestamp(
     }
     default:
       break;
+  }
+
+  // Spark support microsecond unit.
+  if (unit == DateTimeUnit::kMicrosecond) {
+    const std::chrono::time_point<std::chrono::system_clock>
+        fromMicrosecondpoint(std::chrono::microseconds(
+            std::min(fromTimestamp, toTimestamp).toMicros()));
+    const std::chrono::time_point<std::chrono::system_clock> toMicrosecondpoint(
+        std::chrono::microseconds(
+            std::max(fromTimestamp, toTimestamp).toMicros()));
+    return sign *
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            toMicrosecondpoint - fromMicrosecondpoint)
+            .count();
   }
 
   // Month, quarter and year do not have fixed conversion ratio. Ex. a month can
