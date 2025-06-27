@@ -210,6 +210,10 @@ class SequenceVector : public SimpleVector<T> {
         BaseVector::storageByteCount_);
   }
 
+  void transferOrCopyTo(velox::memory::MemoryPool* pool) override {
+    VELOX_UNSUPPORTED("transferTo not defined for SequenceVector");
+  }
+
  private:
   // Prepares for use after construction.
   void setInternalState();

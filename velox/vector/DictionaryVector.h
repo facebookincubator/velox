@@ -250,6 +250,15 @@ class DictionaryVector : public SimpleVector<T> {
         BaseVector::storageByteCount_);
   }
 
+  void transferOrCopyTo(velox::memory::MemoryPool* pool) override {
+    BaseVector::transferOrCopyTo(pool);
+    dictionaryValues_->transferOrCopyTo(pool);
+    if (!indices_->transferTo(pool)) {
+      indices_ = AlignedBuffer::copy<vector_size_t>(pool, indices_);
+      rawIndices_ = indices_->as<vector_size_t>();
+    }
+  }
+
  private:
   // return the dictionary index for the specified vector index.
   inline vector_size_t getDictionaryIndex(vector_size_t idx) const {

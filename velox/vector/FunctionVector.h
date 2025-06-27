@@ -202,6 +202,10 @@ class FunctionVector : public BaseVector {
         "testingCopyPreserveEncodings not defined for FunctionVector");
   }
 
+  void transferOrCopyTo(velox::memory::MemoryPool* pool) override {
+    VELOX_UNSUPPORTED("transferTo not defined for FunctionVector");
+  }
+
  private:
   std::vector<std::shared_ptr<Callable>> functions_;
   std::vector<SelectivityVector> rowSets_;

@@ -289,6 +289,19 @@ class FlatVector final : public SimpleVector<T> {
         BaseVector::storageByteCount_);
   }
 
+  void transferOrCopyTo(velox::memory::MemoryPool* pool) override {
+    BaseVector::transferOrCopyTo(pool);
+    if (values_ && !values_->transferTo(pool)) {
+      values_ = AlignedBuffer::copy<T>(pool, values_);
+      rawValues_ = const_cast<T*>(values_->as<T>());
+    }
+    for (auto& buffer : stringBuffers_) {
+      if (!buffer->transferTo(pool)) {
+        buffer = AlignedBuffer::copy<char>(pool, buffer);
+      }
+    }
+  }
+
   void resize(vector_size_t newSize, bool setNotNull = true) override;
 
   VectorPtr slice(vector_size_t offset, vector_size_t length) const override;

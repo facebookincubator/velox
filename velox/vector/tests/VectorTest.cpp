@@ -4164,5 +4164,84 @@ TEST_F(VectorTest, estimateFlatSize) {
   arrayVector->prepareForReuse();
 }
 
+TEST_F(VectorTest, transferOrCopyTo) {
+  auto rootPool = memory::memoryManager()->addRootPool("long-living");
+  auto pool = rootPool->addLeafChild("long-living leaf");
+
+  VectorPtr vector;
+  VectorPtr expected;
+
+  const int kNumIterations = 500;
+  for (auto i = 0; i < kNumIterations; ++i) {
+    {
+      auto localRootPool = memory::memoryManager()->addRootPool("short-living");
+      auto localPool = localRootPool->addLeafChild("short-living leaf");
+
+      VectorFuzzer fuzzer{VectorFuzzer::Options{}, localPool.get(), 123};
+      auto type = fuzzer.randType();
+      vector = fuzzer.fuzz(type);
+      expected = BaseVector::copy(*vector, pool.get());
+      vector->transferOrCopyTo(pool.get());
+    }
+    ASSERT_EQ(vector->pool(), pool.get());
+    test::assertEqualVectors(expected, vector);
+  }
+
+  // Test complex-typed vectors with buffers from different pools.
+  VectorFuzzer fuzzer{VectorFuzzer::Options{}, pool.get(), 123};
+  for (auto i = 0; i < kNumIterations; ++i) {
+    {
+      auto localRootPool = memory::memoryManager()->addRootPool("short-living");
+      auto localPool = localRootPool->addLeafChild("short-living leaf");
+      VectorFuzzer localFuzzer{VectorFuzzer::Options{}, localPool.get(), 123};
+
+      auto type = fuzzer.randType();
+      auto elements = localFuzzer.fuzz(type);
+      auto arrays = fuzzer.fuzzArray(elements, 70);
+      auto keys = fuzzer.fuzz(BIGINT());
+      auto maps = localFuzzer.fuzzMap(keys, arrays, 50);
+      vector = localFuzzer.fuzzRow({maps}, 50);
+
+      expected = BaseVector::copy(*vector, pool.get());
+      vector->transferOrCopyTo(pool.get());
+    }
+    ASSERT_EQ(vector->pool(), pool.get());
+    test::assertEqualVectors(expected, vector);
+  }
+
+  // Test memory pool with different allocator.
+  {
+    memory::MemoryManager anotherManager{memory::MemoryManager::Options{}};
+    auto anotherRootPool = anotherManager.addRootPool("another root pool");
+    auto anotherPool = anotherRootPool->addLeafChild("another leaf pool");
+    VectorFuzzer localFuzzer{VectorFuzzer::Options{}, anotherPool.get(), 789};
+
+    auto type = fuzzer.randType();
+    vector = fuzzer.fuzz(type);
+    expected = BaseVector::copy(*vector, pool.get());
+    vector->transferOrCopyTo(pool.get());
+  }
+  ASSERT_EQ(vector->pool(), pool.get());
+  test::assertEqualVectors(expected, vector);
+
+  // Test opaque vector.
+  {
+    auto localRootPool = memory::memoryManager()->addRootPool("short-living");
+    auto localPool = localRootPool->addLeafChild("short-living leaf");
+
+    auto type = OPAQUE<NonPOD>();
+    auto size = 100;
+    vector = BaseVector::create(type, size, localPool.get());
+    auto opaqueObj = std::make_shared<NonPOD>();
+    for (auto i = 0; i < size; ++i) {
+      vector->as<FlatVector<std::shared_ptr<void>>>()->set(i, opaqueObj);
+    }
+    expected = BaseVector::copy(*vector, pool.get());
+    vector->transferOrCopyTo(pool.get());
+  }
+  ASSERT_EQ(vector->pool(), pool.get());
+  test::assertEqualVectors(expected, vector);
+}
+
 } // namespace
 } // namespace facebook::velox
