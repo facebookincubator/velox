@@ -271,7 +271,8 @@ std::unique_ptr<Throttler::ThrottleSignal>
 Throttler::ThrottleSignalGenerator::operator()(
     const std::string& /*unused*/,
     const void* /*unused*/,
-    void* /*unused*/) {
+    void* /*unused*/,
+    const void* /*unused*/) {
   return std::unique_ptr<ThrottleSignal>(new ThrottleSignal{1});
 }
 

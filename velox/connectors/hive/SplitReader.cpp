@@ -294,7 +294,8 @@ void SplitReader::createReader() {
     fileHandleCachePtr = fileHandleFactory_->generate(
         hiveSplit_->filePath,
         hiveSplit_->properties.has_value() ? &*hiveSplit_->properties : nullptr,
-        fsStats_ ? fsStats_.get() : nullptr);
+        fsStats_ ? fsStats_.get() : nullptr,
+        connectorQueryCtx_->sessionProperties());
     VELOX_CHECK_NOT_NULL(fileHandleCachePtr.get());
   } catch (const VeloxRuntimeError& e) {
     if (e.errorCode() == error_code::kFileNotFound &&
