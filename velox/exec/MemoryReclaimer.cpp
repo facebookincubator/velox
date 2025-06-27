@@ -34,6 +34,8 @@ void MemoryReclaimer::enterArbitration() {
   if (FOLLY_UNLIKELY(driverThreadCtx == nullptr)) {
     // Skips the driver suspension handling if this memory arbitration
     // request is not issued from a driver thread.
+    LOG(WARNING)
+        << "======================== driverThreadCtx == nullptr -- Memory arbitration is not issued from a driver thread";
     return;
   }
 
@@ -43,6 +45,7 @@ void MemoryReclaimer::enterArbitration() {
     // terminated.
     VELOX_FAIL("Terminate detected when entering suspension");
   }
+  LOG(WARNING) << "======================== driver suspended";
 }
 
 void MemoryReclaimer::leaveArbitration() noexcept {
@@ -53,6 +56,7 @@ void MemoryReclaimer::leaveArbitration() noexcept {
     return;
   }
   Driver* const driver = driverThreadCtx->driverCtx()->driver;
+  LOG(WARNING) << "======================== driver leaving suspension";
   driver->task()->leaveSuspended(driver->state());
 }
 
