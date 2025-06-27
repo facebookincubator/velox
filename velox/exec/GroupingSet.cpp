@@ -294,7 +294,8 @@ void GroupingSet::addInputForActiveRows(
     // vector has changed after groups generation, we might want to revisit
     // this.
     const bool canPushdown = (&rows == &activeRows_) && mayPushdown &&
-        mayPushdown_[i] && areAllLazyNotLoaded(tempVectors_);
+        mayPushdown_[i] && areAllLazyNotLoaded(tempVectors_) &&
+        !dictIndicesMayHaveDuplicates(rows);
     if (isRawInput_) {
       function->addRawInput(groups, rows, tempVectors_, canPushdown);
     } else {
@@ -719,6 +720,31 @@ void GroupingSet::populateTempVectors(
       tempVectors_[i] = input->childAt(channels[i]);
     }
   }
+}
+
+bool GroupingSet::dictIndicesMayHaveDuplicates(const SelectivityVector& rows) {
+  if (tempVectors_.size() != 1) {
+    return true;
+  }
+
+  const auto& vector = tempVectors_[0];
+  if (vector->encoding() != VectorEncoding::Simple::DICTIONARY) {
+    // We do not need to check the distinctness of non-dictionary vectors.
+    return false;
+  }
+
+  DecodedVector decoded(*vector, rows, false);
+  auto indices = decoded.indices();
+  vector_size_t prevRow = 0, curRow = 0;
+  SelectivityIterator rowsIter(rows);
+  rowsIter.next(prevRow);
+  while (rowsIter.next(curRow)) {
+    if (indices[curRow] <= indices[prevRow]) {
+      return true;
+    }
+    prevRow = curRow;
+  }
+  return false;
 }
 
 const SelectivityVector& GroupingSet::getSelectivityVector(
