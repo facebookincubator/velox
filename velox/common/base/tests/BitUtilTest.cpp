@@ -27,7 +27,13 @@
 #include <gflags/gflags.h>
 #include <gtest/gtest.h>
 
+#include <cmath>
+#include <iostream>
+#include "velox/common/base/SimdUtil.h"
+
 DECLARE_bool(bmi2); // NOLINT
+DEFINE_int32(hash_range, 1 << 19, "range of hash samples");
+DEFINE_int32(hash_samples, 14 << 19, "Number of hash samples");
 
 namespace facebook {
 namespace velox {
@@ -931,6 +937,90 @@ TEST_F(BitUtilTest, divRoundUp) {
         bits::divRoundUp(testData.value, testData.factor), testData.expected);
   }
 }
+
+void printFrequencies(
+    const std::string& title,
+    const std::vector<int> samples) {
+  int32_t mx = 0;
+  std::unordered_map<int, int> freqs;
+  for (auto i = 0; i < samples.size(); ++i) {
+    int n = ++freqs[samples[i]];
+    mx = std::max(samples[i], mx);
+  }
+  std::cout << title << ":" << std::endl;
+  int32_t over15 = 0;
+  for (auto n = 0; n <= mx; ++n) {
+    auto f = freqs[n];
+    if (n > 15) {
+      over15 += f;
+    }
+    if (f > 0) {
+      std::cout << n << " = " << f << std::endl;
+    }
+  }
+  std::cout << "Over 15 = " << over15 << std::endl;
+}
+
+/**
+ * Knuth's spectrum test for evaluating hash function quality.
+ *
+ * @param hashFunction The hash function to be evaluated.
+ * @param numSamples The number of samples to use for the test.
+ * @param hashRange The range of possible hash values.
+ * @return A score indicating the quality of the hash function (lower is
+ * better).
+ */
+double knuthSpectrumTest(
+    uint32_t (*hashFunction)(int),
+    int numSamples,
+    int hashRange) {
+  // Initialize an array to store the frequency of each hash value
+  std::vector<int> frequencies(hashRange, 0);
+  std::vector<int> randFrequencies(hashRange, 0);
+
+  // Generate random inputs and count the frequency of each hash value
+  for (int i = 0; i < numSamples; ++i) {
+    uint32_t input = rand() % hashRange;
+    ++randFrequencies[input];
+    uint32_t hashValue = hashFunction(input) % hashRange;
+    frequencies[hashValue]++;
+  }
+
+  // Calculate the expected frequency under a uniform distribution
+  double expectedFrequency = static_cast<double>(numSamples) / hashRange;
+
+  // Calculate the chi-squared statistic
+  double chiSquared = 0.0;
+  for (int frequency : frequencies) {
+    double deviation = frequency - expectedFrequency;
+
+    chiSquared += (deviation * deviation) / expectedFrequency;
+  }
+
+  // Return the chi-squared statistic as the score (lower is better)
+  printFrequencies("random", randFrequencies);
+  printFrequencies("hash", frequencies);
+  return chiSquared;
+}
+
+// Example usage:
+uint32_t simpleHashFunction(int x) {
+  uint64_t h = simd::crc32U64(19, x);
+  return h;
+  return (h | static_cast<uint64_t>(simd::crc32U64(h, x >> 15)) << 32);
+
+  // return folly::hasher<uint64_t>()(x);
+}
+
+TEST(Bits, hashes) {
+  srand(time(0)); // Seed the random number generator
+  int numSamples = FLAGS_hash_samples;
+  ;
+  int hashRange = FLAGS_hash_range;
+  double score = knuthSpectrumTest(simpleHashFunction, numSamples, hashRange);
+  std::cout << "Score: " << score << std::endl;
+}
+
 } // namespace bits
 } // namespace velox
 } // namespace facebook
