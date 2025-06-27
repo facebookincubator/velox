@@ -14,22 +14,31 @@
  * limitations under the License.
  */
 
-#ifdef VELOX_ENABLE_PARQUET
+//#ifdef VELOX_ENABLE_PARQUET
 #include "velox/dwio/parquet/reader/ParquetReader.h" // @manual
-#endif
+//#endif
 
 namespace facebook::velox::parquet {
 
+namespace {
+// Self‑register the Parquet reader factory at load time
+const bool kParquetReaderRegistered = []() {
+  facebook::velox::dwio::common::registerReaderFactory(
+      std::make_shared<facebook::velox::parquet::ParquetReaderFactory>());
+
+  VLOG(0) << "Registered Parquet reader";
+  return true;
+}();
+} // anonymous namespace
+
 void registerParquetReaderFactory() {
-#ifdef VELOX_ENABLE_PARQUET
+  // In case manual registration is ever needed
   dwio::common::registerReaderFactory(std::make_shared<ParquetReaderFactory>());
-#endif
 }
 
 void unregisterParquetReaderFactory() {
-#ifdef VELOX_ENABLE_PARQUET
+  // In case manual de-registration is ever needed
   dwio::common::unregisterReaderFactory(dwio::common::FileFormat::PARQUET);
-#endif
 }
 
 } // namespace facebook::velox::parquet
