@@ -111,7 +111,8 @@ T* initBuffer(BufferPtr& buffer, vector_size_t size, memory::MemoryPool* pool) {
 HashProbe::HashProbe(
     int32_t operatorId,
     DriverCtx* driverCtx,
-    const std::shared_ptr<const core::HashJoinNode>& joinNode)
+    const std::shared_ptr<const core::HashJoinNode>& joinNode,
+		     bool preserveInputOrder)
     : Operator(
           driverCtx,
           joinNode->outputType(),
@@ -130,7 +131,8 @@ HashProbe::HashProbe(
           operatorCtx_->driverCtx()->splitGroupId,
           planNodeId())),
       filterResult_(1),
-      outputTableRowsCapacity_(outputBatchSize_) {
+      outputTableRowsCapacity_(outputBatchSize_),
+      preserveInputOrder_(preserveInputOrder) {
   VELOX_CHECK_NOT_NULL(joinBridge_);
 }
 

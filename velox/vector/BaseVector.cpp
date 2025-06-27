@@ -127,11 +127,13 @@ static VectorPtr addDictionary(
     BufferPtr nulls,
     BufferPtr indices,
     size_t size,
-    VectorPtr vector) {
+    VectorPtr vector,
+    bool ascendingUnique) {
   auto pool = vector->pool();
+  using T = typename KindToFlatVector<kind>::WrapperType;
   return std::make_shared<
-      DictionaryVector<typename KindToFlatVector<kind>::WrapperType>>(
-      pool, std::move(nulls), size, std::move(vector), std::move(indices));
+    DictionaryVector<T>>(
+								      pool, std::move(nulls), size, std::move(vector), std::move(indices), SimpleVectorStats<T>(), std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, ascendingUnique);
 }
 
 // static
@@ -140,7 +142,8 @@ VectorPtr BaseVector::wrapInDictionary(
     BufferPtr indices,
     vector_size_t size,
     VectorPtr vector,
-    bool flattenIfRedundant) {
+    bool flattenIfRedundant,
+				       bool ascendingUnique) {
   // Dictionary that doesn't add nulls over constant is same as constant. Just
   // make sure to adjust the size.
   if (vector->encoding() == VectorEncoding::Simple::CONSTANT && !nulls) {
@@ -166,7 +169,8 @@ VectorPtr BaseVector::wrapInDictionary(
       std::move(nulls),
       std::move(indices),
       size,
-      std::move(vector));
+      std::move(vector),
+						ascendingUnique);
 
   if (shouldFlatten) {
     BaseVector::flattenVector(result);

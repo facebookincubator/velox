@@ -355,6 +355,8 @@ uint32_t crc32U64(uint32_t checksum, uint64_t value, const A& arch = {}) {
   return detail::Crc32<uint64_t, A>::apply(checksum, value, arch);
 }
 
+  inline   uint64_t crcHash64(uint64_t k);
+  
 // Return a vector consisting {0, 1, ..., n} where 'n' is the number
 // of lanes.
 template <typename T, typename A = xsimd::default_arch>

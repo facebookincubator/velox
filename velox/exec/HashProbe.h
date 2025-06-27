@@ -30,7 +30,8 @@ class HashProbe : public Operator {
   HashProbe(
       int32_t operatorId,
       DriverCtx* driverCtx,
-      const std::shared_ptr<const core::HashJoinNode>& hashJoinNode);
+      const std::shared_ptr<const core::HashJoinNode>& hashJoinNode,
+      bool preserveInputOrder = true);
 
   void initialize() override;
 
@@ -729,6 +730,8 @@ class HashProbe : public Operator {
 
   // Input vector used for listing rows with null keys.
   VectorPtr nullKeyProbeInput_;
+
+  const bool preserveInputOrder_;
 };
 
 inline std::ostream& operator<<(std::ostream& os, ProbeOperatorState state) {

@@ -1144,6 +1144,12 @@ struct Crc32<uint64_t, A> {
 
 } // namespace detail
 
+inline   uint64_t crcHash64(uint64_t k) {
+  uint64_t h = simd::crc32U64(19, k);
+  return (h | static_cast<uint64_t>(simd::crc32U64(h, k >> 32)) << 32);
+}
+
+  
 template <typename T, typename A>
 xsimd::batch<T, A> iota(const A&) {
   static const auto kMemo = ({

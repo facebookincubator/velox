@@ -68,8 +68,8 @@ BENCHMARK_RELATIVE(simdSparse) {
 }
 
 int32_t main(int32_t argc, char* argv[]) {
-  constexpr int32_t kNumValues = 1000000;
-  constexpr int32_t kFilterValues = 1000;
+  constexpr int32_t kNumValues = 100000000;
+  constexpr int32_t kFilterValues = 1000000;
   folly::Init init{&argc, &argv};
 
   std::vector<int64_t> filterValues;
@@ -82,8 +82,8 @@ int32_t main(int32_t argc, char* argv[]) {
   denseValues.resize(kNumValues);
   sparseValues.resize(kNumValues);
   for (auto i = 0; i < kNumValues; ++i) {
-    denseValues[i] = (folly::Random::rand32() % 3000) * 1000;
-    sparseValues[i] = (folly::Random::rand32() % 100000) * 1000;
+    denseValues[i] = (folly::Random::rand32() % 3000) * 1000LL;
+    sparseValues[i] = (folly::Random::rand32() % 1000000) * 1000LL;
   }
 
   VELOX_CHECK_EQ(run1x64(denseValues), run4x64(denseValues));

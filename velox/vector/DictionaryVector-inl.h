@@ -72,7 +72,8 @@ DictionaryVector<T>::DictionaryVector(
     std::optional<vector_size_t> nullCount,
     std::optional<bool> isSorted,
     std::optional<ByteCount> representedBytes,
-    std::optional<ByteCount> storageByteCount)
+    std::optional<ByteCount> storageByteCount,
+				      bool ascendingUnique)
     : SimpleVector<T>(
           pool,
           dictionaryValues->type(),
@@ -84,7 +85,8 @@ DictionaryVector<T>::DictionaryVector(
           nullCount,
           isSorted,
           representedBytes,
-          storageByteCount) {
+          storageByteCount),
+      ascendingUnique_(ascendingUnique) {
   VELOX_CHECK(dictionaryValues != nullptr, "dictionaryValues must not be null");
   VELOX_CHECK(
       dictionaryIndices != nullptr, "dictionaryIndices must not be null");

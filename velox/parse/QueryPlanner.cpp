@@ -82,6 +82,7 @@ std::string mapScalarFunctionName(const std::string& name) {
       {"*", "multiply"},
       {"/", "divide"},
       {"%", "mod"},
+      {"&", "bitwise_and"},
       {"~~", "like"},
       {"!~~", "not_like"},
       {"list_value", "array_constructor"},
