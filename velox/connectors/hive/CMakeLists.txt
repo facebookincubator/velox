@@ -42,8 +42,6 @@ velox_add_library(velox_hive_partition_function HivePartitionFunction.cpp)
 
 velox_link_libraries(velox_hive_partition_function velox_core velox_exec)
 
-add_subdirectory(storage_adapters)
-
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()

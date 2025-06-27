@@ -17,10 +17,10 @@
 #include "velox/benchmarks/filesystem/ReadBenchmark.h"
 
 #include "velox/common/config/Config.h"
-#include "velox/connectors/hive/storage_adapters/abfs/RegisterAbfsFileSystem.h"
-#include "velox/connectors/hive/storage_adapters/gcs/RegisterGcsFileSystem.h"
-#include "velox/connectors/hive/storage_adapters/hdfs/RegisterHdfsFileSystem.h"
-#include "velox/connectors/hive/storage_adapters/s3fs/RegisterS3FileSystem.h"
+#include "velox/storage_adapters/abfs/RegisterAbfsFileSystem.h"
+#include "velox/storage_adapters/gcs/RegisterGcsFileSystem.h"
+#include "velox/storage_adapters/hdfs/RegisterHdfsFileSystem.h"
+#include "velox/storage_adapters/s3fs/RegisterS3FileSystem.h"
 
 DEFINE_string(path, "", "Path of the input file");
 DEFINE_int64(
