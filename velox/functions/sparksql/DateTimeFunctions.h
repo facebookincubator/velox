@@ -973,26 +973,7 @@ struct TimestampDiffFunction {
       const arg_type<Timestamp>& timestamp1,
       const arg_type<Timestamp>& timestamp2) {
     const auto unit = unit_.value();
-    if (LIKELY(sessionTimeZone_ != nullptr)) {
-      // sessionTimeZone not null means that the config
-      // adjust_timestamp_to_timezone is on.
-      Timestamp fromZonedTimestamp = timestamp1;
-      fromZonedTimestamp.toTimezone(*sessionTimeZone_);
-
-      Timestamp toZonedTimestamp = timestamp2;
-      if (isTimeUnit(unit)) {
-        const int64_t offset = static_cast<Timestamp>(timestamp1).getSeconds() -
-            fromZonedTimestamp.getSeconds();
-        toZonedTimestamp = Timestamp(
-            toZonedTimestamp.getSeconds() - offset,
-            toZonedTimestamp.getNanos());
-      } else {
-        toZonedTimestamp.toTimezone(*sessionTimeZone_);
-      }
-      result = diffTimestamp(unit, fromZonedTimestamp, toZonedTimestamp);
-    } else {
-      result = diffTimestamp(unit, timestamp1, timestamp2);
-    }
+    result = diffTimestamp(unit, timestamp1, timestamp2, sessionTimeZone_);
   }
 
  private:

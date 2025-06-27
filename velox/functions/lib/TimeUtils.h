@@ -31,6 +31,12 @@ inline constexpr int64_t kSecondsInDay = 86'400;
 inline constexpr int64_t kDaysInWeek = 7;
 extern const folly::F14FastMap<std::string, int8_t> kDayOfWeekNames;
 
+FOLLY_ALWAYS_INLINE bool isTimeUnit(const DateTimeUnit unit) {
+  return unit == DateTimeUnit::kMillisecond || unit == DateTimeUnit::kSecond ||
+      unit == DateTimeUnit::kMinute || unit == DateTimeUnit::kHour ||
+      unit == DateTimeUnit::kMicrosecond;
+}
+
 FOLLY_ALWAYS_INLINE const tz::TimeZone* getTimeZoneFromConfig(
     const core::QueryConfig& config) {
   if (config.adjustTimestampToTimezone()) {
@@ -175,7 +181,22 @@ FOLLY_ALWAYS_INLINE int64_t diffTimestamp(
 
   const int8_t sign = fromTimestamp < toTimestamp ? 1 : -1;
 
-  // fromTimepoint is less than or equal to toTimepoint
+  // Spark support microsecond unit, treat it separately because it needs
+  // toMicros().
+  if (unit == DateTimeUnit::kMicrosecond) {
+    const std::chrono::time_point<std::chrono::system_clock>
+        fromMicrosecondpoint(std::chrono::microseconds(
+            std::min(fromTimestamp, toTimestamp).toMicros()));
+    const std::chrono::time_point<std::chrono::system_clock> toMicrosecondpoint(
+        std::chrono::microseconds(
+            std::max(fromTimestamp, toTimestamp).toMicros()));
+    return sign *
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            toMicrosecondpoint - fromMicrosecondpoint)
+            .count();
+  }
+
+  // fromTimepoint is less than or equal to toTimepoint.
   const std::chrono::
       time_point<std::chrono::system_clock, std::chrono::milliseconds>
           fromTimepoint(std::chrono::milliseconds(
@@ -185,7 +206,7 @@ FOLLY_ALWAYS_INLINE int64_t diffTimestamp(
           toTimepoint(std::chrono::milliseconds(
               std::max(fromTimestamp, toTimestamp).toMillis()));
 
-  // Millisecond, second, minute, hour and day have fixed conversion ratio
+  // Millisecond, second, minute, hour and day have fixed conversion ratio.
   switch (unit) {
     case DateTimeUnit::kMillisecond: {
       return sign *
@@ -224,20 +245,6 @@ FOLLY_ALWAYS_INLINE int64_t diffTimestamp(
     }
     default:
       break;
-  }
-
-  // Spark support microsecond unit.
-  if (unit == DateTimeUnit::kMicrosecond) {
-    const std::chrono::time_point<std::chrono::system_clock>
-        fromMicrosecondpoint(std::chrono::microseconds(
-            std::min(fromTimestamp, toTimestamp).toMicros()));
-    const std::chrono::time_point<std::chrono::system_clock> toMicrosecondpoint(
-        std::chrono::microseconds(
-            std::max(fromTimestamp, toTimestamp).toMicros()));
-    return sign *
-        std::chrono::duration_cast<std::chrono::microseconds>(
-            toMicrosecondpoint - fromMicrosecondpoint)
-            .count();
   }
 
   // Month, quarter and year do not have fixed conversion ratio. Ex. a month can
@@ -310,9 +317,29 @@ FOLLY_ALWAYS_INLINE int64_t diffTimestamp(
   VELOX_UNREACHABLE("Unsupported datetime unit");
 }
 
-inline bool isTimeUnit(const DateTimeUnit unit) {
-  return unit == DateTimeUnit::kMillisecond || unit == DateTimeUnit::kSecond ||
-      unit == DateTimeUnit::kMinute || unit == DateTimeUnit::kHour ||
-      unit == DateTimeUnit::kMicrosecond;
+FOLLY_ALWAYS_INLINE int64_t diffTimestamp(
+    const DateTimeUnit unit,
+    const Timestamp& fromTimestamp,
+    const Timestamp& toTimestamp,
+    const tz::TimeZone* timeZone) {
+  if (LIKELY(timeZone != nullptr)) {
+    // sessionTimeZone not null means that the config
+    // adjust_timestamp_to_timezone is on.
+    Timestamp fromZonedTimestamp = fromTimestamp;
+    fromZonedTimestamp.toTimezone(*timeZone);
+
+    Timestamp toZonedTimestamp = toTimestamp;
+    if (isTimeUnit(unit)) {
+      const int64_t offset =
+          static_cast<Timestamp>(fromTimestamp).getSeconds() -
+          fromZonedTimestamp.getSeconds();
+      toZonedTimestamp = Timestamp(
+          toZonedTimestamp.getSeconds() - offset, toZonedTimestamp.getNanos());
+    } else {
+      toZonedTimestamp.toTimezone(*timeZone);
+    }
+    return diffTimestamp(unit, fromZonedTimestamp, toZonedTimestamp);
+  }
+  return diffTimestamp(unit, fromTimestamp, toTimestamp);
 }
 } // namespace facebook::velox::functions
