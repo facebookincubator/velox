@@ -77,7 +77,7 @@ SpillWriterBase::SpillWriterBase(
     uint64_t targetFileSize,
     const std::string& pathPrefix,
     const std::string& fileCreateConfig,
-    common::UpdateAndCheckSpillLimitCB& updateAndCheckSpillLimitCb,
+    const common::UpdateAndCheckSpillLimitCB& updateAndCheckSpillLimitCb,
     memory::MemoryPool* pool,
     folly::Synchronized<common::SpillStats>* stats)
     : pool_(pool),
