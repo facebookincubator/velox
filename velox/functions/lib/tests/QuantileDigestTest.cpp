@@ -81,6 +81,63 @@ class QuantileDigestTest : public QuantileDigestTestBase {
   }
 
   template <typename T>
+  void testQuantileAtValue() {
+    constexpr double kAccuracy = 0.05;
+    constexpr double kTolerance = 0.05;
+
+    {
+      QuantileDigest<T> digest{StlAllocator<T>(allocator()), kAccuracy};
+      for (int i = 1; i <= 100; ++i) {
+        digest.add(static_cast<T>(i), 1.0);
+      }
+
+      EXPECT_NEAR(*digest.quantileAtValue(static_cast<T>(1)), 0.01, kTolerance);
+      EXPECT_NEAR(
+          *digest.quantileAtValue(static_cast<T>(50)), 0.50, kTolerance);
+      EXPECT_NEAR(
+          *digest.quantileAtValue(static_cast<T>(100)), 1.0, kTolerance);
+      EXPECT_FALSE(digest.quantileAtValue(static_cast<T>(0)).has_value());
+      EXPECT_FALSE(digest.quantileAtValue(static_cast<T>(101)).has_value());
+    }
+
+    {
+      QuantileDigest<T> digest{StlAllocator<T>(allocator()), kAccuracy};
+      digest.add(static_cast<T>(1), 1.0);
+      digest.add(static_cast<T>(2), 2.0);
+      digest.add(static_cast<T>(3), 3.0);
+      digest.add(static_cast<T>(4), 4.0);
+      // Total weight: 10.0
+      EXPECT_NEAR(*digest.quantileAtValue(static_cast<T>(1)), 0.1, kTolerance);
+      EXPECT_NEAR(*digest.quantileAtValue(static_cast<T>(2)), 0.3, kTolerance);
+      EXPECT_NEAR(*digest.quantileAtValue(static_cast<T>(3)), 0.6, kTolerance);
+      EXPECT_NEAR(*digest.quantileAtValue(static_cast<T>(4)), 1.0, kTolerance);
+    }
+
+    // Test empty digest
+    {
+      QuantileDigest<T> digest{StlAllocator<T>(allocator()), kAccuracy};
+      EXPECT_FALSE(digest.quantileAtValue(static_cast<T>(1)).has_value());
+    }
+
+    // Test inverse relationship with estimateQuantile
+    if constexpr (std::is_floating_point_v<T>) {
+      QuantileDigest<T> digest{StlAllocator<T>(allocator()), kAccuracy};
+      for (int i = 1; i <= 1000; ++i) {
+        digest.add(static_cast<T>(i), 1.0);
+      }
+
+      std::vector<double> quantiles = {
+          0.01, 0.0011, 0.02, 0.25, 0.5, 0.75, 0.9, 0.98, 0.99, 1.0};
+      for (double q : quantiles) {
+        T value = digest.estimateQuantile(q);
+        auto inverseQ = digest.quantileAtValue(value);
+        EXPECT_TRUE(inverseQ.has_value());
+        EXPECT_NEAR(*inverseQ, q, kTolerance);
+      }
+    }
+  }
+
+  template <typename T>
   void testLargeInputSize() {
     constexpr int N = 1e5;
     constexpr double kAccuracy = 0.8;
@@ -552,6 +609,12 @@ TEST_F(QuantileDigestTest, hugeWeight) {
       testHugeWeight<double>(), "Weighted count in digest is too large");
   VELOX_ASSERT_THROW(
       testHugeWeight<float>(), "Weighted count in digest is too large");
+}
+
+TEST_F(QuantileDigestTest, quantileAtValue) {
+  testQuantileAtValue<int64_t>();
+  testQuantileAtValue<double>();
+  testQuantileAtValue<float>();
 }
 
 } // namespace facebook::velox::functions
