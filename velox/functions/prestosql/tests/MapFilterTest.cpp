@@ -251,6 +251,54 @@ TEST_F(MapFilterTest, lambdaSelectivityVector) {
   assertEqualVectors(expected, result[0]);
 }
 
+TEST_F(MapFilterTest, fromFlatMapEncodings) {
+  auto input = makeRowVector({
+      makeFlatMapVectorFromJson<int64_t, int32_t>({
+          "{1:10, 2:20, 3:null, 4:40, 5:50, 6:null}",
+          "{1:10, 2:null, 4:40, 5:null}",
+          "{}",
+          "{2:20, 4:null, 6:null}",
+      }),
+  });
+  auto expected = makeFlatMapVectorFromJson<int64_t, int32_t>({
+      "{1:10, 2:20, 4:40, 5:50}",
+      "{1:10, 4:40}",
+      "{}",
+      "{2:20}",
+  });
+  auto result = evaluate("map_filter(c0, (k, v) -> (v IS NOT NULL))", input);
+  assertEqualVectors(expected, result);
+
+  expected = makeFlatMapVectorFromJson<int64_t, int32_t>({
+      "{4:40, 5:50}",
+      "{4:40}",
+      "{}",
+      "{}",
+  });
+  result = evaluate("map_filter(c0, (k, v) -> (v > 30))", input);
+  assertEqualVectors(expected, result);
+
+  expected = makeFlatMapVectorFromJson<int64_t, int32_t>({
+      "{4:40, 5:50, 6:null}",
+      "{4:40, 5:null}",
+      "{}",
+      "{4:null, 6:null}",
+  });
+  result = evaluate("map_filter(c0, (k, v) -> (k > 3))", input);
+  assertEqualVectors(expected, result);
+
+  input = makeRowVector({
+      makeFlatMapVectorFromJson<int64_t, int32_t>({
+          "{1:10, 2:20, 3:null, 4:40, 5:50, 6:60}",
+      }),
+  });
+  expected = makeFlatMapVectorFromJson<int64_t, int32_t>({
+      "{1:10, 2:20, 4:40, 5:50, 6:60}",
+  });
+  result = evaluate("map_filter(c0, (k, v) -> (v IS NOT NULL))", input);
+  assertEqualVectors(expected, result);
+}
+
 TEST_F(MapFilterTest, try) {
   auto data = makeRowVector({
       makeMapVector<int64_t, int64_t>({
