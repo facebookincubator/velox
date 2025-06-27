@@ -86,6 +86,8 @@ class QuantileDigest {
   // on 'serialized'.
   void testingMerge(const QuantileDigest& other);
 
+  std::optional<double> quantileAtValue(T value) const;
+
  private:
   using U = std::conditional_t<sizeof(T) == sizeof(int64_t), int64_t, int32_t>;
 
@@ -1264,6 +1266,57 @@ int64_t QuantileDigest<T, Allocator>::serialize(char* out) {
       rights_);
   VELOX_CHECK_EQ(out - outStart, serializedByteSize());
   return out - outStart;
+}
+
+template <typename T, typename Allocator>
+std::optional<double> QuantileDigest<T, Allocator>::quantileAtValue(
+    T value) const {
+  if (weightedCount_ == 0 || root_ == -1) {
+    return std::nullopt;
+  }
+
+  auto sortableValue = preprocessByType(value);
+  if (sortableValue > max_ || sortableValue < min_) {
+    return std::nullopt;
+  }
+  double cumulativeCount = 0.0;
+
+  postOrderTraverse(
+      root_,
+      [this, sortableValue, &cumulativeCount](int32_t node) {
+        const auto nodeCount = counts_[node];
+        if (nodeCount == 0) {
+          return true;
+        }
+
+        const auto nodeValue = values_[node];
+        const auto nodeLevel = levels_[node];
+
+        const auto nodeLowerBound = upperBound(node);
+        const auto nodeUpperBound = lowerBound(node);
+
+        if (nodeUpperBound <= sortableValue) {
+          cumulativeCount += nodeCount;
+        } else if (
+            nodeLowerBound <= sortableValue &&
+            sortableValue <= nodeUpperBound) {
+          if (nodeLevel == 0) {
+            if (nodeValue <= sortableValue) {
+              cumulativeCount += nodeCount;
+            }
+          } else {
+            double fraction =
+                static_cast<double>(sortableValue - nodeLowerBound + 1) /
+                static_cast<double>(nodeUpperBound - nodeLowerBound + 1);
+            cumulativeCount += nodeCount * fraction;
+          }
+        }
+        return true;
+      },
+      lefts_,
+      rights_);
+
+  return cumulativeCount / weightedCount_;
 }
 
 } // namespace qdigest

@@ -198,7 +198,8 @@ int main(int argc, char** argv) {
           {"scale_tdigest",
            std::make_shared<TDigestArgValuesGenerator>("scale_tdigest")},
           {"quantile_at_value",
-           std::make_shared<TDigestArgValuesGenerator>("quantile_at_value")},
+           std::make_shared<UnifiedDigestArgValuesGenerator>(
+               "quantile_at_value")},
           {"destructure_tdigest",
            std::make_shared<TDigestArgValuesGenerator>("destructure_tdigest")},
           {"trimmed_mean",
