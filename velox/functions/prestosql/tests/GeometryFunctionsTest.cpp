@@ -1630,3 +1630,99 @@ TEST_F(GeometryFunctionsTest, testStXY) {
       testStY("POLYGON ((1 1, 1 3, 3 3, 3 1, 1 1))"),
       "ST_Y requires a Point geometry, found Polygon");
 }
+
+TEST_F(GeometryFunctionsTest, testStPolygon) {
+  const auto testStPolygonFunc =
+      [&](const std::optional<std::string>& wkt,
+          const std::optional<std::string>& expected) {
+        std::optional<std::string> result =
+            evaluateOnce<std::string>("ST_AsText(ST_Polygon(c0))", wkt);
+
+        if (wkt.has_value()) {
+          ASSERT_TRUE(result.has_value());
+          ASSERT_EQ(result.value(), expected.value());
+        } else {
+          ASSERT_FALSE(result.has_value());
+        }
+      };
+
+  testStPolygonFunc("POLYGON EMPTY", "POLYGON EMPTY");
+  testStPolygonFunc(
+      "POLYGON ((1 1, 1 4, 4 4, 4 1, 1 1))'))",
+      "POLYGON ((1 1, 1 4, 4 4, 4 1, 1 1))");
+
+  VELOX_ASSERT_USER_THROW(
+      testStPolygonFunc("LINESTRING (1 1, 2 2, 1 3)", std::nullopt),
+      "ST_Polygon only applies to Polygon. Input type is: LineString");
+
+  VELOX_ASSERT_USER_THROW(
+      testStPolygonFunc("POLYGON((-1 1, 1 -1))", std::nullopt),
+      "Failed to parse WKT: IllegalArgumentException: Points of LinearRing do not form a closed linestring");
+}
+
+TEST_F(GeometryFunctionsTest, testStIsClosed) {
+  const auto testStIsClosedFunc = [&](const std::optional<std::string>& wkt,
+                                      const std::optional<bool>& expected) {
+    std::optional<bool> result =
+        evaluateOnce<bool>("ST_IsClosed(ST_GeometryFromText(c0))", wkt);
+
+    if (wkt.has_value()) {
+      ASSERT_TRUE(result.has_value());
+      ASSERT_EQ(result.value(), expected.value());
+    } else {
+      ASSERT_FALSE(result.has_value());
+    }
+  };
+
+  testStIsClosedFunc("LINESTRING (1 1, 2 2, 1 3, 1 1)", true);
+  testStIsClosedFunc("LINESTRING (1 1, 2 2, 1 3)", false);
+  testStIsClosedFunc(
+      "MULTILINESTRING ((1 1, 2 2, 1 3, 1 1), (4 4, 5 5))", false);
+  testStIsClosedFunc(
+      "MULTILINESTRING ((1 1, 2 2, 1 3, 1 1), (4 4, 5 4, 5 5, 4 5, 4 4))",
+      true);
+
+  VELOX_ASSERT_USER_THROW(
+      testStIsClosedFunc("POLYGON ((1 1, 1 4, 4 4, 4 1, 1 1))", std::nullopt),
+      "ST_IsClosed only applies to LineString or MultiLineString. Input type is: Polygon");
+}
+
+TEST_F(GeometryFunctionsTest, testStIsEmpty) {
+  const auto testStIsClosedFunc = [&](const std::optional<std::string>& wkt,
+                                      const std::optional<bool>& expected) {
+    std::optional<bool> result =
+        evaluateOnce<bool>("ST_IsEmpty(ST_GeometryFromText(c0))", wkt);
+
+    if (wkt.has_value()) {
+      ASSERT_TRUE(result.has_value());
+      ASSERT_EQ(result.value(), expected.value());
+    } else {
+      ASSERT_FALSE(result.has_value());
+    }
+  };
+
+  testStIsClosedFunc("POINT (1.5 2.5)", false);
+  testStIsClosedFunc("POLYGON EMPTY", true);
+}
+
+TEST_F(GeometryFunctionsTest, testStIsRing) {
+  const auto testStIsRingFunc = [&](const std::optional<std::string>& wkt,
+                                    const std::optional<bool>& expected) {
+    std::optional<bool> result =
+        evaluateOnce<bool>("ST_IsRing(ST_GeometryFromText(c0))", wkt);
+
+    if (wkt.has_value()) {
+      ASSERT_TRUE(result.has_value());
+      ASSERT_EQ(result.value(), expected.value());
+    } else {
+      ASSERT_FALSE(result.has_value());
+    }
+  };
+
+  testStIsRingFunc("LINESTRING (8 4, 4 8)", false);
+  testStIsRingFunc("LINESTRING (0 0, 1 1, 0 2, 0 0)", true);
+
+  VELOX_ASSERT_USER_THROW(
+      testStIsRingFunc("POLYGON ((2 0, 2 1, 3 1, 2 0))", true),
+      "ST_IsRing only applies to LineString. Input type is: Polygon");
+}
