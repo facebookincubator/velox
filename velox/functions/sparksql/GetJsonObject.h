@@ -14,6 +14,9 @@
  * limitations under the License.
  */
 
+#pragma once
+
+#include <boost/regex.hpp>
 #include "velox/functions/Macros.h"
 #include "velox/functions/prestosql/json/SIMDJsonUtil.h"
 
@@ -124,22 +127,11 @@ struct GetJsonObjectFunction {
     if (path == "-1") {
       return path;
     }
-    // Then, remove spaces after dots
-    std::string result;
-    bool afterDot = false;
-    for (char c : path) {
-      if (c == '.') {
-        result += c;
-        afterDot = true;
-      } else if (afterDot && c == ' ') {
-        // Skip space after dot.
-        continue;
-      } else {
-        result += c;
-        afterDot = false;
-      }
-    }
-    return result;
+
+    // Use Boost regex to find and remove spaces after dots
+    // Pattern: "dot + one or more spaces" -> "dot"
+    static const boost::regex dotSpaceRegex("\\.\\s+");
+    return boost::regex_replace(path, dotSpaceRegex, ".");
   }
 
   // Extracts a string representation from a simdjson result. Handles various
