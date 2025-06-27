@@ -961,6 +961,7 @@ struct TimestampDiffFunction {
       const arg_type<Varchar>* unitString,
       const arg_type<Timestamp>* /*timestamp1*/,
       const arg_type<Timestamp>* /*timestamp2*/) {
+    VELOX_USER_CHECK_NOT_NULL(unitString);
     unit_ = fromDateTimeUnitString(
         *unitString, /*throwIfInvalid=*/true, /*allowMicro=*/true);
     sessionTimeZone_ = getTimeZoneFromConfig(config);
@@ -968,14 +969,9 @@ struct TimestampDiffFunction {
 
   FOLLY_ALWAYS_INLINE void call(
       int64_t& result,
-      const arg_type<Varchar>& unitString,
+      const arg_type<Varchar>& /*unitString*/,
       const arg_type<Timestamp>& timestamp1,
       const arg_type<Timestamp>& timestamp2) {
-    const auto unitOption = unit_.has_value() ? unit_
-                                              : fromDateTimeUnitString(
-                                                    unitString,
-                                                    /*throwIfInvalid=*/false,
-                                                    /*allowMicro=*/true);
     const auto unit = unit_.value();
     if (LIKELY(sessionTimeZone_ != nullptr)) {
       // sessionTimeZone not null means that the config
