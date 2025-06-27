@@ -37,6 +37,7 @@ bool isParquetReservedKeyword(
       ? true
       : false;
 }
+
 } // namespace
 
 /// Metadata and options for reading Parquet.
@@ -46,7 +47,13 @@ class ReaderBase {
       std::unique_ptr<dwio::common::BufferedInput>,
       const dwio::common::ReaderOptions& options);
 
-  virtual ~ReaderBase() = default;
+  virtual ~ReaderBase() {
+    if (thriftSize_ > 0) {
+      if (thriftMemoryTracked_) {
+        pool_.reportFree(thriftSize_);
+      }
+    }
+  }
 
   memory::MemoryPool& getMemoryPool() const {
     return pool_;
@@ -108,6 +115,9 @@ class ReaderBase {
   /// Checks whether the specific row group has been loaded and
   /// the data still exists in the buffered inputs.
   bool isRowGroupBuffered(int32_t rowGroupIndex) const;
+  bool thriftMemoryTracked_ = false;
+
+  size_t thriftSize_ = 0;
 
  private:
   // Reads and parses file footer.
@@ -221,6 +231,10 @@ void ReaderBase::loadFileMetaData() {
       thriftTransport);
   fileMetaData_ = std::make_unique<thrift::FileMetaData>();
   fileMetaData_->read(thriftProtocol.get());
+  if (footerLength > options().parquetFooterTrackThriftMemoryThreshold()) {
+    thriftSize_ = analyzeFileMetadata(
+        *fileMetaData_, input_->getReadFile()->getName(), footerLength);
+  }
 }
 
 void ReaderBase::initializeSchema() {
@@ -1097,6 +1111,8 @@ class ParquetRowReader::Impl {
     }
 
     uint64_t rowNumber = 0;
+    size_t totalColumnsSize = 0;
+    size_t totalClearedColumns = 0;
     for (auto i = 0; i < rowGroups_.size(); i++) {
       VELOX_CHECK_GT(rowGroups_[i].columns.size(), 0);
       auto fileOffset = rowGroups_[i].__isset.file_offset
@@ -1123,6 +1139,12 @@ class ParquetRowReader::Impl {
           // reduce the memory consumption. ColumnChunks consume the most
           // memory. Skip the 0th RowGroup as it is used by estimatedRowSize().
           rowGroups_[i].columns.clear();
+          if (readerBase_->thriftSize_ > 0) {
+            for (const auto& column : rowGroups_[i].columns) {
+              totalColumnsSize += calculateColumnMetadataSize(column);
+              totalClearedColumns++;
+            }
+          }
         }
         if (rowGroupInRange) {
           skippedStrides_++;
@@ -1130,6 +1152,12 @@ class ParquetRowReader::Impl {
       }
 
       rowNumber += rowGroups_[i].num_rows;
+    }
+
+    if (totalClearedColumns > 0 && readerBase_->thriftSize_ > 0) {
+      readerBase_->thriftSize_ -= totalColumnsSize;
+      pool_.reportAllocation(readerBase_->thriftSize_);
+      readerBase_->thriftMemoryTracked_ = true;
     }
   }
 
