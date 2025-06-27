@@ -1029,7 +1029,7 @@ TEST_P(MultiFragmentTest, noHashPartitionSkew) {
 
   // This is computed based offline and shouldn't change across runs.
   const std::vector<int> expectedValues{
-      1'189, 1'266, 1'274, 1'228, 1'250, 1'225, 1'308, 1'260};
+      1'219, 1'252, 1'240, 1'307, 1'258, 1'249, 1'312, 1'163};
 
   const int numConsumerDriverThreads{4};
   const auto runConsumer = [&](int partition) {
@@ -1754,7 +1754,8 @@ TEST_P(MultiFragmentTest, earlyCompletion) {
       .config(
           core::QueryConfig::kShuffleCompressionKind,
           common::compressionKindToString(GetParam().compressionKind))
-      .assertResults("SELECT UNNEST([3, 3, 3, 3, 4, 4, 4, 4])");
+      .assertResults(
+          "SELECT UNNEST([2, 2, 2, 2, 4, 4, 4, 4, 5, 5, 5, 5, 6, 6, 6, 6])");
 
   for (auto& task : tasks) {
     ASSERT_TRUE(waitForTaskCompletion(task.get())) << task->taskId();
@@ -1913,7 +1914,8 @@ TEST_P(MultiFragmentTest, earlyCompletionMerge) {
       .config(
           core::QueryConfig::kShuffleCompressionKind,
           common::compressionKindToString(GetParam().compressionKind))
-      .assertResults("SELECT UNNEST([3, 3, 3, 3, 4, 4, 4, 4])");
+      .assertResults(
+          "SELECT UNNEST([2, 2, 2, 2, 4, 4, 4, 4, 5, 5, 5, 5, 6, 6, 6, 6])");
 
   for (auto& task : tasks) {
     ASSERT_TRUE(waitForTaskCompletion(task.get())) << task->taskId();

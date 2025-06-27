@@ -1700,17 +1700,17 @@ TEST_F(AggregationTest, outputBatchSizeCheckWithSpill) {
           expectedNumOutputVectors);
     }
   } testSettings[] = {
-      {true, 1000, 1000'000, 1},
-      {true, 10, 1000'000, 10},
+      {true, 1000, 1000'000, 8},
+      {true, 10, 1000'000, 14},
       {true, 1, 1000'000, 100},
       {true, 1, 1, 100},
       {true, 10, 1, 100},
       {true, 100, 1, 100},
       {true, 1000, 1, 100},
       {false, 1000, 1, 100},
-      {false, 1000, 1000'000'000, 1},
-      {false, 100, 1000'000'000, 1},
-      {false, 10, 1000'000'000, 10},
+      {false, 1000, 1000'000'000, 8},
+      {false, 100, 1000'000'000, 8},
+      {false, 10, 1000'000'000, 14},
       {false, 1, 1000'000'000, 100},
       {false, 1, 1, 100}};
 
@@ -1782,7 +1782,7 @@ TEST_F(AggregationTest, outputBatchSizeCheckWithSpillForOrderedAggr) {
   } testSettings[] = {
       {1, std::numeric_limits<uint32_t>::max(), 5},
       {std::numeric_limits<vector_size_t>::max(), 15L << 20, 5},
-      {std::numeric_limits<vector_size_t>::max(), 35L << 20, 3}};
+      {std::numeric_limits<vector_size_t>::max(), 35L << 20, 4}};
 
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());

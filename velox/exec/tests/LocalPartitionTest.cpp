@@ -331,10 +331,10 @@ TEST_F(LocalPartitionTest, partitionBuffering) {
 
 TEST_F(LocalPartitionTest, partitionBufferingPreserveEncoding) {
   std::vector<RowVectorPtr> vectors = {
-      makeRowVector({"c0"}, {makeConstant<int32_t>(0, 100)}),
-      makeRowVector({"c0"}, {makeConstant<int32_t>(0, 100)}),
       makeRowVector({"c0"}, {makeConstant<int32_t>(1, 100)}),
       makeRowVector({"c0"}, {makeConstant<int32_t>(1, 100)}),
+      makeRowVector({"c0"}, {makeConstant<int32_t>(2, 100)}),
+      makeRowVector({"c0"}, {makeConstant<int32_t>(2, 100)}),
   };
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();

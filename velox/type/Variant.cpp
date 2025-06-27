@@ -17,10 +17,12 @@
 #include "velox/type/Variant.h"
 #include <cfloat>
 #include "folly/json.h"
+#include "velox/common/base/Hash.h"
 #include "velox/common/encode/Base64.h"
 #include "velox/type/DecimalUtil.h"
 #include "velox/type/FloatingPointUtil.h"
 #include "velox/type/HugeInt.h"
+#include "velox/type/StringView.h"
 
 namespace facebook::velox {
 
@@ -799,6 +801,15 @@ bool variant::equals(const variant& other) const {
   return VELOX_DYNAMIC_TYPE_DISPATCH_ALL(equals, kind_, other);
 }
 
+// For opaque values, we hash the shared_ptr<void> which will hash the
+// underlying pointer.
+template <>
+struct hasher<facebook::velox::detail::OpaqueCapsule> {
+  uint64_t operator()(const facebook::velox::detail::OpaqueCapsule& key) const {
+    return hasher<std::shared_ptr<void>>{}(key.obj);
+  }
+};
+
 template <TypeKind KIND>
 uint64_t variant::hash() const {
   using namespace facebook::velox::util::floating_point;
@@ -810,17 +821,13 @@ uint64_t variant::hash() const {
     }
   }
 
-  if constexpr (std::is_floating_point_v<T>) {
-    return NaNAwareHash<T>{}(value<KIND>());
-  }
-
-  return folly::Hash{}(value<KIND>());
+  return velox::Hash{}(value<KIND>());
 }
 
 template <>
 uint64_t variant::hash<TypeKind::ARRAY>() const {
   auto& arrayVariant = value<TypeKind::ARRAY>();
-  auto hasher = folly::Hash{};
+  auto hasher = velox::Hash{};
   uint64_t hash = 0;
   for (int32_t i = 0; i < arrayVariant.size(); i++) {
     hash =
@@ -831,7 +838,7 @@ uint64_t variant::hash<TypeKind::ARRAY>() const {
 
 template <>
 uint64_t variant::hash<TypeKind::ROW>() const {
-  auto hasher = folly::Hash{};
+  auto hasher = velox::Hash{};
   uint64_t hash = 0;
   auto& rowVariant = value<TypeKind::ROW>();
   for (int32_t i = 0; i < rowVariant.size(); i++) {
@@ -844,12 +851,12 @@ uint64_t variant::hash<TypeKind::ROW>() const {
 template <>
 uint64_t variant::hash<TypeKind::TIMESTAMP>() const {
   auto timestampValue = value<TypeKind::TIMESTAMP>();
-  return folly::Hash{}(timestampValue.getSeconds(), timestampValue.getNanos());
+  return velox::Hash{}(timestampValue.getSeconds(), timestampValue.getNanos());
 }
 
 template <>
 uint64_t variant::hash<TypeKind::MAP>() const {
-  auto hasher = folly::Hash{};
+  auto hasher = velox::Hash{};
   auto& mapVariant = value<TypeKind::MAP>();
   uint64_t combinedKeyHash = 0, combinedValueHash = 0;
   uint64_t singleKeyHash = 0, singleValueHash = 0;
@@ -863,12 +870,12 @@ uint64_t variant::hash<TypeKind::MAP>() const {
   }
 
   return folly::hash::hash_combine_generic(
-      folly::Hash{}, combinedKeyHash, combinedValueHash);
+      velox::Hash{}, combinedKeyHash, combinedValueHash);
 }
 
 uint64_t variant::hash() const {
   if (isNull()) {
-    return folly::Hash{}(static_cast<int32_t>(kind_));
+    return velox::Hash{}(static_cast<int32_t>(kind_));
   }
 
   return VELOX_DYNAMIC_TYPE_DISPATCH_ALL(hash, kind_);
@@ -1032,16 +1039,3 @@ void variant::verifyArrayElements(const std::vector<variant>& inputs) {
 }
 
 } // namespace facebook::velox
-
-namespace folly {
-
-// For opaque values, we hash the shared_ptr<void> which will hash the
-// underlying pointer.
-template <>
-struct hasher<facebook::velox::detail::OpaqueCapsule> {
-  size_t operator()(const facebook::velox::detail::OpaqueCapsule& key) const {
-    return Hash()(key.obj);
-  }
-};
-
-} // namespace folly
