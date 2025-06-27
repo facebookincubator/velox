@@ -114,12 +114,21 @@ class GeometrySerializer {
     }
   }
 
+  template <typename StringWriter>
+  static void serialize(
+      const geos::geom::Envelope& envelope,
+      StringWriter& stringWriter) {
+    VarbinaryWriter writer(stringWriter);
+    writer.write(static_cast<uint8_t>(GeometrySerializationType::ENVELOPE));
+    writeEnvelope(envelope, writer);
+  }
+
  private:
   template <typename T>
   static void writeEnvelope(
-      const geos::geom::Geometry& geometry,
+      const geos::geom::Envelope& envelope,
       VarbinaryWriter<T>& writer) {
-    if (geometry.isEmpty()) {
+    if (envelope.isNull()) {
       writer.write(std::numeric_limits<double>::quiet_NaN());
       writer.write(std::numeric_limits<double>::quiet_NaN());
       writer.write(std::numeric_limits<double>::quiet_NaN());
@@ -127,11 +136,22 @@ class GeometrySerializer {
       return;
     }
 
-    auto envelope = geometry.getEnvelopeInternal();
-    writer.write(envelope->getMinX());
-    writer.write(envelope->getMinY());
-    writer.write(envelope->getMaxX());
-    writer.write(envelope->getMaxY());
+    writer.write(envelope.getMinX());
+    writer.write(envelope.getMinY());
+    writer.write(envelope.getMaxX());
+    writer.write(envelope.getMaxY());
+  }
+
+  template <typename T>
+  static void writeEnvelope(
+      const geos::geom::Geometry& geometry,
+      VarbinaryWriter<T>& writer) {
+    if (geometry.isEmpty()) {
+      writeEnvelope(geos::geom::Envelope(), writer);
+      return;
+    }
+
+    writeEnvelope(*geometry.getEnvelopeInternal(), writer);
   }
 
   template <typename T>
@@ -311,6 +331,12 @@ class GeometryDeserializer {
     return deserialize(inputStream, geometryString.size());
   }
 
+  static const std::unique_ptr<geos::geom::Envelope> deserializeEnvelope(
+      const StringView& geometry);
+
+  static const GeometrySerializationType deserializeType(
+      const StringView& geometry);
+
  private:
   static std::unique_ptr<geos::geom::Geometry> deserialize(
       velox::common::InputByteStream& stream,
@@ -327,6 +353,9 @@ class GeometryDeserializer {
   static void skipEnvelope(velox::common::InputByteStream& input) {
     input.read<double>(4); // Envelopes are 4 doubles (minX, minY, maxX, maxY)
   }
+
+  static std::unique_ptr<geos::geom::Envelope> deserializeEnvelope(
+      velox::common::InputByteStream& input);
 
   static geos::geom::Coordinate readCoordinate(
       velox::common::InputByteStream& input);
@@ -356,9 +385,5 @@ class GeometryDeserializer {
       velox::common::InputByteStream& input,
       size_t size);
 };
-
-/// Deserialize Velox's internal format to a geometry and get the Envelope.
-const std::unique_ptr<geos::geom::Envelope> getEnvelopeFromGeometry(
-    const StringView& geometry);
 
 } // namespace facebook::velox::functions::geospatial
