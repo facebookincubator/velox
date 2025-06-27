@@ -32,12 +32,6 @@ extern void registerArrayConcatFunctions(const std::string& prefix);
 extern void registerArrayNGramsFunctions(const std::string& prefix);
 
 template <typename T>
-inline void registerArrayMinMaxFunctions(const std::string& prefix) {
-  registerFunction<ArrayMinFunction, T, Array<T>>({prefix + "array_min"});
-  registerFunction<ArrayMaxFunction, T, Array<T>>({prefix + "array_max"});
-}
-
-template <typename T>
 inline void registerArrayJoinFunctions(const std::string& prefix) {
   registerFunction<
       ParameterBinder<ArrayJoinFunction, T>,
@@ -179,18 +173,10 @@ void registerArrayFunctions(const std::string& prefix) {
       widthBucketArraySignature(),
       makeWidthBucketArray);
 
-  registerArrayMinMaxFunctions<int8_t>(prefix);
-  registerArrayMinMaxFunctions<int16_t>(prefix);
-  registerArrayMinMaxFunctions<int32_t>(prefix);
-  registerArrayMinMaxFunctions<int64_t>(prefix);
-  registerArrayMinMaxFunctions<int128_t>(prefix);
-  registerArrayMinMaxFunctions<float>(prefix);
-  registerArrayMinMaxFunctions<double>(prefix);
-  registerArrayMinMaxFunctions<bool>(prefix);
-  registerArrayMinMaxFunctions<Varchar>(prefix);
-  registerArrayMinMaxFunctions<Timestamp>(prefix);
-  registerArrayMinMaxFunctions<Date>(prefix);
-  registerArrayMinMaxFunctions<Orderable<T1>>(prefix);
+  registerFunction<ArrayMinFunction, Orderable<T1>, Array<Orderable<T1>>>(
+      {prefix + "array_min"});
+  registerFunction<ArrayMaxFunction, Orderable<T1>, Array<Orderable<T1>>>(
+      {prefix + "array_max"});
 
   registerArrayJoinFunctions<int8_t>(prefix);
   registerArrayJoinFunctions<int16_t>(prefix);
