@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#ifdef VELOX_ENABLE_GEO
 #include <gtest/gtest.h>
 #include <array>
 #include "velox/common/base/Status.h"
@@ -1630,3 +1631,4 @@ TEST_F(GeometryFunctionsTest, testStXY) {
       testStY("POLYGON ((1 1, 1 3, 3 3, 3 1, 1 1))"),
       "ST_Y requires a Point geometry, found Polygon");
 }
+#endif
