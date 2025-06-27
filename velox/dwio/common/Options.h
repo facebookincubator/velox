@@ -600,6 +600,10 @@ class ReaderOptions : public io::ReaderOptions {
     return randomSkip_;
   }
 
+  bool enableRequestedTypeCheck() const {
+    return enableRequestedTypeCheck_;
+  }
+
   void setRandomSkip(std::shared_ptr<random::RandomSkipTracker> randomSkip) {
     randomSkip_ = std::move(randomSkip);
   }
@@ -636,6 +640,10 @@ class ReaderOptions : public io::ReaderOptions {
     allowEmptyFile_ = value;
   }
 
+  void setEnableRequestedTypeCheck(bool enableRequestedTypeCheck) {
+    enableRequestedTypeCheck_ = enableRequestedTypeCheck;
+  }
+
  private:
   uint64_t tailLocation_;
   FileFormat fileFormat_;
@@ -653,6 +661,7 @@ class ReaderOptions : public io::ReaderOptions {
   bool adjustTimestampToTimezone_{false};
   bool selectiveNimbleReaderEnabled_{false};
   bool allowEmptyFile_{false};
+  bool enableRequestedTypeCheck_{true};
 };
 
 struct WriterOptions {

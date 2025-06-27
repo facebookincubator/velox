@@ -608,6 +608,8 @@ void configureReaderOptions(
     }
 
     readerOptions.setFileFormat(hiveSplit->fileFormat);
+    readerOptions.setEnableRequestedTypeCheck(
+        hiveConfig->isRequestedTypeCheckEnabled(sessionProperties));
   }
 }
 
