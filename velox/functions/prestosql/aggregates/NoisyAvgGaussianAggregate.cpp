@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/functions/prestosql/aggregates/NoisyAvgGaussianAggregate.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/functions/lib/aggregates/noisy_aggregation/NoisyCountSumAvgAccumulator.h"
@@ -21,17 +22,19 @@
 #include "velox/functions/prestosql/aggregates/NoisyHelperFunctionFactory.h"
 #include "velox/vector/FlatVector.h"
 
-using namespace facebook::velox::functions::aggregate;
-
 namespace facebook::velox::aggregate::prestosql {
 
 namespace {
-class NoisySumGaussianAggregate : public exec::Aggregate {
+class NoisyAvgGaussianAggregate : public exec::Aggregate {
  public:
-  explicit NoisySumGaussianAggregate(TypePtr resultType)
-      : exec::Aggregate(resultType) {}
+  explicit NoisyAvgGaussianAggregate(TypePtr resultType)
+      : exec::Aggregate(std::move(resultType)) {}
 
   using AccumulatorType = functions::aggregate::NoisyCountSumAvgAccumulator;
+
+  bool isFixedSize() const override {
+    return true;
+  }
 
   int32_t accumulatorFixedWidthSize() const override {
     return static_cast<int32_t>(sizeof(AccumulatorType));
@@ -50,11 +53,12 @@ class NoisySumGaussianAggregate : public exec::Aggregate {
         decodedRandomSeed_,
         rows,
         args);
-    bool hasRandomSeed = NoisyHelperFunctionFactory::checkRandomSeed(args);
     bool hasBounds = NoisyHelperFunctionFactory::checkBounds(args);
+    bool hasRandomSeed = NoisyHelperFunctionFactory::checkRandomSeed(args);
 
+    // Process the args data and update the accumulator for each group.
     rows.applyToSelected([&](vector_size_t i) {
-      auto* accumulator = exec::Aggregate::value<AccumulatorType>(groups[i]);
+      auto accumulator = value<AccumulatorType>(groups[i]);
       NoisyHelperFunctionFactory::updateAccumulatorFromInput(
           decodedValue_,
           decodedNoiseScale_,
@@ -82,9 +86,10 @@ class NoisySumGaussianAggregate : public exec::Aggregate {
         decodedRandomSeed_,
         rows,
         args);
-    bool hasRandomSeed = NoisyHelperFunctionFactory::checkRandomSeed(args);
     bool hasBounds = NoisyHelperFunctionFactory::checkBounds(args);
-    auto* accumulator = exec::Aggregate::value<AccumulatorType>(group);
+    bool hasRandomSeed = NoisyHelperFunctionFactory::checkRandomSeed(args);
+
+    auto accumulator = exec::Aggregate::value<AccumulatorType>(group);
 
     rows.applyToSelected([&](vector_size_t i) {
       NoisyHelperFunctionFactory::updateAccumulatorFromInput(
@@ -98,6 +103,34 @@ class NoisySumGaussianAggregate : public exec::Aggregate {
           i,
           hasBounds,
           hasRandomSeed);
+    });
+  }
+
+  void addIntermediateResults(
+      char** groups,
+      const SelectivityVector& rows,
+      const std::vector<VectorPtr>& args,
+      [[maybe_unused]] bool mayPushdown) override {
+    DecodedVector decodedVector(*args[0], rows);
+
+    rows.applyToSelected([&](vector_size_t i) {
+      auto* accumulator = exec::Aggregate::value<AccumulatorType>(groups[i]);
+      NoisyHelperFunctionFactory::updateAccumulatorFromIntermediateResult(
+          *accumulator, decodedVector, i);
+    });
+  }
+
+  void addSingleGroupIntermediateResults(
+      char* group,
+      const SelectivityVector& rows,
+      const std::vector<VectorPtr>& args,
+      [[maybe_unused]] bool mayPushdown) override {
+    DecodedVector decodedVector(*args[0], rows);
+    auto* accumulator = exec::Aggregate::value<AccumulatorType>(group);
+
+    rows.applyToSelected([&](vector_size_t i) {
+      NoisyHelperFunctionFactory::updateAccumulatorFromIntermediateResult(
+          *accumulator, decodedVector, i);
     });
   }
 
@@ -153,42 +186,18 @@ class NoisySumGaussianAggregate : public exec::Aggregate {
         vector->setNull(i, true);
         continue;
       }
+
+      uint64_t trueCount = accumulator->getCount();
+      double trueSum = accumulator->getSum();
+      VELOX_CHECK_LE(trueCount, std::numeric_limits<double>::max());
+      double trueAvg = trueSum / static_cast<double>(trueCount);
       double noise = gen.nextNoise();
 
-      // Check the sign of noisy sum is consistent with the bounds.
-      double nosiySum = accumulator->getSum() + noise;
-      auto finalResult = NoisyHelperFunctionFactory::postProcessNoisyValue(
-          nosiySum, *accumulator);
+      double noisyAvg = trueAvg + noise;
+      double finalResult = NoisyHelperFunctionFactory::postProcessNoisyValue(
+          noisyAvg, *accumulator);
       vector->set(i, finalResult);
     }
-  }
-
-  void addIntermediateResults(
-      char** groups,
-      const SelectivityVector& rows,
-      const std::vector<VectorPtr>& args,
-      [[maybe_unused]] bool mayPushdown) override {
-    DecodedVector decoded(*args[0], rows);
-
-    rows.applyToSelected([&](vector_size_t i) {
-      auto* accumulator = exec::Aggregate::value<AccumulatorType>(groups[i]);
-      NoisyHelperFunctionFactory::updateAccumulatorFromIntermediateResult(
-          *accumulator, decoded, i);
-    });
-  }
-
-  void addSingleGroupIntermediateResults(
-      char* group,
-      const SelectivityVector& rows,
-      const std::vector<VectorPtr>& args,
-      [[maybe_unused]] bool mayPushdown) override {
-    DecodedVector decoded(*args[0], rows);
-
-    auto* accumulator = exec::Aggregate::value<AccumulatorType>(group);
-    rows.applyToSelected([&](vector_size_t i) {
-      NoisyHelperFunctionFactory::updateAccumulatorFromIntermediateResult(
-          *accumulator, decoded, i);
-    });
   }
 
  protected:
@@ -210,7 +219,7 @@ class NoisySumGaussianAggregate : public exec::Aggregate {
 };
 } // namespace
 
-void registerNoisySumGaussianAggregate(
+void registerNoisyAvgGaussianAggregate(
     const std::string& prefix,
     bool withCompanionFunctions,
     bool overwrite) {
@@ -218,7 +227,7 @@ void registerNoisySumGaussianAggregate(
   // intermediate types
   auto createBuilder = []() {
     return exec::AggregateFunctionSignatureBuilder()
-        .returnType("double") // noisy_sum_guassian always returns double
+        .returnType("double")
         .intermediateType("varbinary");
   };
 
@@ -226,8 +235,8 @@ void registerNoisySumGaussianAggregate(
   const std::vector<std::string> simpleDataTypes = {
       "tinyint", "smallint", "integer", "bigint", "real", "double"};
   const std::vector<std::string> noiseScaleTypes = {"double", "bigint"};
-  const std::string randomSeedType = "bigint";
   const std::vector<std::string> boundTypes = {"double", "bigint"};
+  const std::string randomSeedType = "bigint";
 
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
 
@@ -319,27 +328,24 @@ void registerNoisySumGaussianAggregate(
     }
   }
 
-  auto name = prefix + kNoisySumGaussian;
+  auto name = prefix + kNoisyAvgGaussian;
   exec::registerAggregateFunction(
       name,
       signatures,
       [name](
           core::AggregationNode::Step step,
           const std::vector<TypePtr>& argTypes,
-          [[maybe_unused]] const TypePtr& resultType,
-          [[maybe_unused]] const core::QueryConfig&)
+          const TypePtr& /*resultType*/,
+          const core::QueryConfig& /*config*/)
           -> std::unique_ptr<exec::Aggregate> {
         VELOX_CHECK_GE(
             argTypes.size(), 2, "{} takes at least 2 arguments", name);
-        VELOX_CHECK_LE(
-            argTypes.size(), 5, "{} takes at most 5 arguments", name);
 
         if (exec::isPartialOutput(step)) {
-          return std::make_unique<NoisySumGaussianAggregate>(VARBINARY());
+          return std::make_unique<NoisyAvgGaussianAggregate>(VARBINARY());
         }
-        return std::make_unique<NoisySumGaussianAggregate>(DOUBLE());
+        return std::make_unique<NoisyAvgGaussianAggregate>(DOUBLE());
       },
-      {false /*orderSensitive*/, false /*companionFunction*/},
       withCompanionFunctions,
       overwrite);
 }
