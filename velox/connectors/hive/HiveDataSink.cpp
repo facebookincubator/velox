@@ -1187,7 +1187,7 @@ std::string LocationHandle::toString() const {
       "LocationHandle [targetPath: {}, writePath: {}, tableType: {}, tableFileName: {}]",
       targetPath_,
       writePath_,
-      tableTypeName(tableType_),
+      tableTypeName(tableType()),
       targetFileName_);
 }
 
@@ -1201,7 +1201,7 @@ folly::dynamic LocationHandle::serialize() const {
   obj["name"] = "LocationHandle";
   obj["targetPath"] = targetPath_;
   obj["writePath"] = writePath_;
-  obj["tableType"] = tableTypeName(tableType_);
+  obj["tableType"] = tableTypeName(tableType());
   obj["targetFileName"] = targetFileName_;
   return obj;
 }

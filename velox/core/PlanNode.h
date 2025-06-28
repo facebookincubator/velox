@@ -35,6 +35,7 @@ using PlanNodeId = std::string;
 
 /// Generic representation of InsertTable
 struct InsertTableHandle {
+  // TODO: Merge into connectors/Connector.h
  public:
   InsertTableHandle(
       const std::string& connectorId,
