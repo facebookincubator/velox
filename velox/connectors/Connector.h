@@ -23,6 +23,7 @@
 #include "velox/common/base/SpillStats.h"
 #include "velox/common/caching/AsyncDataCache.h"
 #include "velox/common/caching/ScanTracker.h"
+#include "velox/common/file/TokenProvider.h"
 #include "velox/common/future/VeloxPromise.h"
 #include "velox/core/ExpressionEvaluator.h"
 #include "velox/type/Filter.h"
@@ -408,7 +409,8 @@ class ConnectorQueryCtx {
       int driverId,
       const std::string& sessionTimezone,
       bool adjustTimestampToTimezone = false,
-      folly::CancellationToken cancellationToken = {})
+      folly::CancellationToken cancellationToken = {},
+      std::shared_ptr<filesystems::TokenProvider> tokenProvider = {})
       : operatorPool_(operatorPool),
         connectorPool_(connectorPool),
         sessionProperties_(sessionProperties),
@@ -423,7 +425,8 @@ class ConnectorQueryCtx {
         planNodeId_(planNodeId),
         sessionTimezone_(sessionTimezone),
         adjustTimestampToTimezone_(adjustTimestampToTimezone),
-        cancellationToken_(std::move(cancellationToken)) {
+        cancellationToken_(std::move(cancellationToken)),
+        tokenProvider_(std::move(tokenProvider)) {
     VELOX_CHECK_NOT_NULL(sessionProperties);
   }
 
@@ -511,6 +514,10 @@ class ConnectorQueryCtx {
     selectiveNimbleReaderEnabled_ = value;
   }
 
+  std::shared_ptr<filesystems::TokenProvider> tokenProvider() const {
+    return tokenProvider_;
+  }
+
  private:
   memory::MemoryPool* const operatorPool_;
   memory::MemoryPool* const connectorPool_;
@@ -528,6 +535,7 @@ class ConnectorQueryCtx {
   const bool adjustTimestampToTimezone_;
   const folly::CancellationToken cancellationToken_;
   bool selectiveNimbleReaderEnabled_{false};
+  const std::shared_ptr<filesystems::TokenProvider> tokenProvider_;
 };
 
 class ConnectorMetadata;
