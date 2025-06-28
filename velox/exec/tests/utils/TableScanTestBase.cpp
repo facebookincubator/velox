@@ -159,7 +159,7 @@ void TableScanTestBase::testPartitionedTableImpl(
                    .build();
   auto outputType =
       ROW({"pkey", "c0", "c1"}, {partitionType, BIGINT(), DOUBLE()});
-  ColumnHandleMap assignments = {
+  connector::ColumnHandleMap assignments = {
       {"pkey", partitionKey("pkey", partitionType)},
       {"c0", regularColumn("c0", BIGINT())},
       {"c1", regularColumn("c1", DOUBLE())}};

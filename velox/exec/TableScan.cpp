@@ -30,10 +30,9 @@ std::unique_ptr<connector::DataSource> createDataSource(
     folly::Synchronized<PushdownFilters>& pushdownFilters,
     connector::Connector& connector,
     const RowTypePtr& outputType,
-    const std::shared_ptr<connector::ConnectorTableHandle>& tableHandle,
-    const std::unordered_map<
-        std::string,
-        std::shared_ptr<connector::ColumnHandle>>& columnHandles,
+    const connector::ConnectorTableHandlePtr& tableHandle,
+    const std::unordered_map<std::string, connector::ColumnHandlePtr>&
+        columnHandles,
     connector::ConnectorQueryCtx* connectorQueryCtx) {
   auto dataSource = connector.createDataSource(
       outputType, tableHandle, columnHandles, connectorQueryCtx);

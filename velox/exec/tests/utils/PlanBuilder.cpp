@@ -72,9 +72,7 @@ PlanBuilder& PlanBuilder::tableScan(
     const std::vector<std::string>& subfieldFilters,
     const std::string& remainingFilter,
     const RowTypePtr& dataColumns,
-    const std::unordered_map<
-        std::string,
-        std::shared_ptr<connector::ColumnHandle>>& assignments) {
+    const connector::ColumnHandleMap& assignments) {
   return TableScanBuilder(*this)
       .filtersAsNode(filtersAsNode_ ? planNodeIdGenerator_ : nullptr)
       .outputType(outputType)
@@ -92,9 +90,8 @@ PlanBuilder& PlanBuilder::tableScan(
     const std::vector<std::string>& subfieldFilters,
     const std::string& remainingFilter,
     const RowTypePtr& dataColumns,
-    const std::unordered_map<
-        std::string,
-        std::shared_ptr<connector::ColumnHandle>>& assignments) {
+    const std::unordered_map<std::string, connector::ColumnHandlePtr>&
+        assignments) {
   return TableScanBuilder(*this)
       .filtersAsNode(filtersAsNode_ ? planNodeIdGenerator_ : nullptr)
       .tableName(tableName)
@@ -112,9 +109,8 @@ PlanBuilder& PlanBuilder::tableScanWithPushDown(
     const PushdownConfig& pushdownConfig,
     const std::string& remainingFilter,
     const RowTypePtr& dataColumns,
-    const std::unordered_map<
-        std::string,
-        std::shared_ptr<connector::ColumnHandle>>& assignments) {
+    const std::unordered_map<std::string, connector::ColumnHandlePtr>&
+        assignments) {
   return TableScanBuilder(*this)
       .filtersAsNode(filtersAsNode_ ? planNodeIdGenerator_ : nullptr)
       .outputType(outputType)
@@ -130,8 +126,7 @@ PlanBuilder& PlanBuilder::tpchTableScan(
     std::vector<std::string> columnNames,
     double scaleFactor,
     std::string_view connectorId) {
-  std::unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>
-      assignmentsMap;
+  std::unordered_map<std::string, connector::ColumnHandlePtr> assignmentsMap;
   std::vector<TypePtr> outputTypes;
 
   assignmentsMap.reserve(columnNames.size());
