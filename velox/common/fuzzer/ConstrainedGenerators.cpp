@@ -20,6 +20,7 @@
 #include "velox/common/fuzzer/ConstrainedGenerators.h"
 #include "velox/common/fuzzer/Utils.h"
 #include "velox/functions/lib/TDigest.h"
+#include "velox/functions/prestosql/types/BingTileType.h"
 
 namespace facebook::velox::fuzzer {
 
@@ -48,13 +49,21 @@ folly::json::serialization_opts getSerializationOptions(
   folly::json::serialization_opts opts;
   opts.allow_non_string_keys = true;
   opts.allow_nan_inf = true;
+  opts.sort_keys = true;
   if (makeRandomVariation) {
     opts.convert_int_keys = rand<bool>(rng);
     opts.pretty_formatting = rand<bool>(rng);
     opts.pretty_formatting_indent_width = rand<uint32_t>(rng, 0, 4);
     opts.encode_non_ascii = rand<bool>(rng);
-    opts.sort_keys = rand<bool>(rng);
     opts.skip_invalid_utf8 = rand<bool>(rng);
+
+    // With 50% chance, sort object keys in reverse order.
+    if (rand<bool>(rng)) {
+      opts.sort_keys_by = [](folly::dynamic const& left,
+                             folly::dynamic const& right) {
+        return right < left;
+      };
+    }
   }
   return opts;
 }
@@ -274,6 +283,32 @@ variant TDigestInputGenerator::generate() {
   digest.serialize(&serializedDigest[0]);
   StringView serializedView(serializedDigest.data(), serializedDigest.size());
   return variant::create<TypeKind::VARBINARY>(serializedDigest);
+}
+
+// BingTileInputGenerator
+
+BingTileInputGenerator::BingTileInputGenerator(
+    size_t seed,
+    const TypePtr& type,
+    double nullRatio)
+    : AbstractInputGenerator(seed, type, nullptr, nullRatio) {}
+
+BingTileInputGenerator::~BingTileInputGenerator() = default;
+
+variant BingTileInputGenerator::generate() {
+  if (coinToss(rng_, nullRatio_)) {
+    return variant::null(type_->kind());
+  }
+  int64_t tileInt = generateImpl();
+  return variant(tileInt);
+}
+
+int64_t BingTileInputGenerator::generateImpl() {
+  uint8_t zoom = rand<uint32_t>(rng_, 0, 23);
+  uint32_t maxCoordinate = (1 << zoom) - 1;
+  uint32_t x = rand<uint32_t>(rng_, 0, maxCoordinate);
+  uint32_t y = rand<uint32_t>(rng_, 0, maxCoordinate);
+  return static_cast<int64_t>(BingTileType::bingTileCoordsToInt(x, y, zoom));
 }
 
 // Utility functions

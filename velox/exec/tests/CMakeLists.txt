@@ -40,6 +40,7 @@ add_executable(
   ArrowStreamTest.cpp
   AssignUniqueIdTest.cpp
   AsyncConnectorTest.cpp
+  ConcatFilesSpillMergeStreamTest.cpp
   ContainerRowSerdeTest.cpp
   CustomJoinTest.cpp
   EnforceSingleRowTest.cpp
@@ -60,6 +61,7 @@ add_executable(
   MemoryReclaimerTest.cpp
   MergeJoinTest.cpp
   MergeTest.cpp
+  MergerTest.cpp
   MultiFragmentTest.cpp
   NestedLoopJoinTest.cpp
   OrderByTest.cpp
@@ -82,11 +84,12 @@ add_executable(
   SortBufferTest.cpp
   SpillerTest.cpp
   SpillTest.cpp
-  SplitToStringTest.cpp
+  SplitListenerTest.cpp
+  SplitTest.cpp
   SqlTest.cpp
   StreamingAggregationTest.cpp
   TableScanTest.cpp
-  TableWriteTest.cpp
+  TableWriterTest.cpp
   TaskListenerTest.cpp
   ThreadDebugInfoTest.cpp
   TopNRowNumberTest.cpp
@@ -216,15 +219,8 @@ target_link_libraries(
   velox_tpch_connector
   velox_memory)
 
-# Arbitration Fuzzer.
-add_executable(velox_memory_arbitration_fuzzer_test
-               MemoryArbitrationFuzzerTest.cpp)
-
-target_link_libraries(
-  velox_memory_arbitration_fuzzer_test velox_memory_arbitration_fuzzer
-  GTest::gtest GTest::gtest_main)
-
-add_executable(velox_table_evolution_fuzzer_test TableEvolutionFuzzerTest.cpp)
+add_executable(velox_table_evolution_fuzzer_test TableEvolutionFuzzerTest.cpp
+                                                 TableEvolutionFuzzer.cpp)
 
 target_link_libraries(
   velox_table_evolution_fuzzer_test
@@ -318,7 +314,7 @@ add_test(
 target_link_libraries(
   cpr_http_client_test cpr::cpr GTest::gtest GTest::gtest_main)
 
-add_executable(velox_driver_test OperatorReplacement.cpp Main.cpp)
+add_executable(velox_driver_test OperatorReplacementTest.cpp Main.cpp)
 add_test(
   NAME velox_driver_test
   COMMAND velox_driver_test

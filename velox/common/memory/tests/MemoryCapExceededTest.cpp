@@ -120,7 +120,7 @@ TEST_P(MemoryCapExceededTest, singleDriver) {
   params.queryCtx = queryCtx;
   params.maxDrivers = 1;
   try {
-    readCursor(params, [](Task*) {});
+    readCursor(params);
     FAIL() << "Expected a MEM_CAP_EXCEEDED RuntimeException.";
   } catch (const VeloxException& e) {
     const auto errorMessage = e.message();
@@ -180,7 +180,7 @@ TEST_P(MemoryCapExceededTest, multipleDrivers) {
   params.queryCtx = queryCtx;
   params.maxDrivers = numDrivers;
   try {
-    readCursor(params, [](Task*) {});
+    readCursor(params);
     FAIL() << "Expected a MEM_CAP_EXCEEDED RuntimeException.";
   } catch (const VeloxException& e) {
     const auto errorMessage = e.message();
@@ -208,21 +208,22 @@ TEST_P(MemoryCapExceededTest, allocatorCapacityExceededError) {
        false,
        std::vector<std::string>{
            "allocateContiguous failed with .* pages",
-           "max capacity 128.00MB unlimited capacity used .* available .*",
+           "max capacity 128.00MB capacity 128.00MB used .* available .*",
            ".* reservation .used .*MB, reserved .*MB, min 0B. counters",
            "allocs .*, frees .*, reserves .*, releases .*, collisions .*"}},
       {64LL << 20,
        true,
        std::vector<std::string>{
            "allocateContiguous failed with .* pages",
-           "max capacity 128.00MB unlimited capacity used .* available .*",
+           "max capacity 128.00MB capacity 128.00MB used .* available .*",
            ".* reservation .used .*MB, reserved .*MB, min .*B. counters",
            ".*, frees .*, reserves .*, releases .*, collisions .*"}}};
   for (const auto& testData : testSettings) {
-    memory::MemoryManager manager(
-        {.allocatorCapacity = (int64_t)testData.allocatorCapacity,
-         .useMmapAllocator = testData.useMmap,
-         .arbitratorCapacity = (int64_t)testData.allocatorCapacity});
+    memory::MemoryManager::Options options;
+    options.allocatorCapacity = (int64_t)testData.allocatorCapacity;
+    options.useMmapAllocator = testData.useMmap;
+    options.arbitratorCapacity = (int64_t)testData.allocatorCapacity;
+    memory::MemoryManager manager(options);
 
     vector_size_t size = 1'024;
     // This limit ensures that only the Aggregation Operator fails.
@@ -253,7 +254,7 @@ TEST_P(MemoryCapExceededTest, allocatorCapacityExceededError) {
     params.queryCtx = queryCtx;
     params.maxDrivers = 1;
     try {
-      readCursor(params, [](Task*) {});
+      readCursor(params);
       FAIL() << "Expected a MEM_CAP_EXCEEDED RuntimeException.";
     } catch (const VeloxException& e) {
       const auto errorMessage = e.message();

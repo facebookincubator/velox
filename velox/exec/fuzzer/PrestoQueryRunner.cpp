@@ -32,6 +32,7 @@
 #include "velox/exec/fuzzer/PrestoQueryRunnerToSqlPlanNodeVisitor.h"
 #include "velox/exec/fuzzer/PrestoSql.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
+#include "velox/functions/prestosql/types/GeometryType.h"
 #include "velox/functions/prestosql/types/IPAddressType.h"
 #include "velox/functions/prestosql/types/IPPrefixType.h"
 #include "velox/functions/prestosql/types/JsonType.h"
@@ -191,7 +192,8 @@ const std::vector<TypePtr>& PrestoQueryRunner::supportedScalarTypes() const {
 
 // static
 bool PrestoQueryRunner::isSupportedDwrfType(const TypePtr& type) {
-  if (type->isDate() || type->isIntervalDayTime() || type->isUnKnown()) {
+  if (type->isDate() || type->isIntervalDayTime() || type->isUnKnown() ||
+      isGeometryType(type)) {
     return false;
   }
 
@@ -222,10 +224,10 @@ PrestoQueryRunner::inputProjections(
     // unchanged and the projection is just an identity mapping.
     if (isIntermediateOnlyType(childType)) {
       for (int batchIndex = 0; batchIndex < input.size(); batchIndex++) {
-        children[batchIndex].push_back(transformIntermediateOnlyType(
-            input[batchIndex]->childAt(childIndex)));
+        children[batchIndex].push_back(
+            transformIntermediateTypes(input[batchIndex]->childAt(childIndex)));
       }
-      projections.push_back(getIntermediateOnlyTypeProjectionExpr(
+      projections.push_back(getProjectionsToIntermediateTypes(
           childType,
           std::make_shared<core::FieldAccessExpr>(
               names[childIndex], names[childIndex]),
@@ -300,7 +302,8 @@ bool PrestoQueryRunner::isConstantExprSupported(
     auto& type = expr->type();
     return type->isPrimitiveType() && !type->isTimestamp() &&
         !isJsonType(type) && !type->isIntervalDayTime() &&
-        !isIPAddressType(type) && !isIPPrefixType(type) && !isUuidType(type);
+        !isIPAddressType(type) && !isIPPrefixType(type) && !isUuidType(type) &&
+        !isTimestampWithTimeZoneType(type);
   }
   return true;
 }

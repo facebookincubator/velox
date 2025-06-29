@@ -167,6 +167,11 @@ Generic Configuration
      - 0
      - Specifies the max number of input batches to prefetch to do index lookup ahead. If it is zero,
        then process one input batch at a time.
+   * - unnest_split_output_batch
+     - bool
+     - true
+     - If this is true, then the unnest operator might split output for each input batch based on the
+       output batch size control. Otherwise, it produces a single output for each input batch.
 
 .. _expression-evaluation-conf:
 
@@ -226,6 +231,11 @@ Expression Evaluation Configuration
      - integer
      - 10000
      - Some lambda functions over arrays and maps are evaluated in batches of the underlying elements that comprise the arrays/maps. This is done to make the batch size managable as array vectors can have thousands of elements each and hit scaling limits as implementations typically expect BaseVectors to a couple of thousand entries. This lets up tune those batch sizes. Setting this to zero is setting unlimited batch size.
+   * - debug_bing_tile_children_max_zoom_shift
+     - integer
+     - 5
+     - The UDF `bing_tile_children` generates the children of a Bing tile based on a specified target zoom level. The number of children produced is determined by the difference between the target zoom level and the zoom level of the input tile. This configuration limits the number of children by capping the maximum zoom level difference, with a default value set to 5. This cap is necessary to prevent excessively large array outputs, which can exceed the size limits of the elements vector in the Velox array vector.
+
 
 Memory Management
 -----------------
@@ -277,6 +287,14 @@ Spilling
      - boolean
      - true
      - When `spill_enabled` is true, determines whether HashBuild and HashProbe operators can spill to disk under memory pressure.
+   * - local_merge_enabled
+     - boolean
+     - false
+     - When `spill_enabled` is true, determines whether LocalMerge operators can spill to disk to cap memory usage.
+   * - mixed_grouped_mode_hash_join_spill_enabled
+     - boolean
+     - false
+     - When both `spill_enabled` and `join_spill_enabled` are true, determines if HashProbe and HashBuild are able to spill under mixed grouped execution mode.
    * - order_by_spill_enabled
      - boolean
      - true
@@ -341,11 +359,9 @@ Spilling
      - 12582912
      - The max number of rows to fill and spill for each spill run. This is used to cap the memory used for spilling.
        If it is zero, then there is no limit and spilling might run out of memory. Based on offline test results, the
-       default value is set to 12 million rows which uses ~128MB memory when to fill a spill run.
+       default value is set to 12 million rows which uses ``~128MB`` memory when to fill a spill run.
        Relation between spill rows and memory usage are as follows:
-         * ``12 million rows: 128 MB``
-         * ``30 million rows: 256 MB``
-         * ``60 million rows: 512 MB``
+       12 million rows: ``128 MB``, 30 million rows: ``256 MB``, 60 million rows: ``512 MB``
    * - max_spill_file_size
      - integer
      - 0
@@ -417,15 +433,12 @@ Aggregation
      - integer
      - 80
      - Abandons partial aggregation if number of groups equals or exceeds this percentage of the number of input rows.
-   * - streaming_aggregation_eager_flush
-     - bool
-     - false
-     - If this is false (the default), in streaming aggregation, wait until we
-       have enough number of output rows to produce a batch of size specified by
-       Operator::outputBatchRows.  If this is true, we put the rows in output
-       batch, as soon as the corresponding groups are fully aggregated.  This is
-       useful for reducing memory consumption, if the downstream operators are
-       not sensitive to small batch size.
+   * - streaming_aggregation_min_output_batch_rows
+     - integer
+     - 0
+     - In streaming aggregation, wait until we have enough number of output rows
+       to produce a batch of size specified by this. If set to 0, then
+       Operator::outputBatchRows will be used as the min output batch rows.
 
 Table Scan
 ------------
@@ -522,6 +535,11 @@ Each query can override the config by setting corresponding query session proper
      - integer
      - 100
      - Maximum number of (bucketed) partitions per a single table writer instance.
+   * - hive.max-bucket-count
+     - hive.max_bucket_count
+     - integer
+     - 100000
+     - Maximum number of buckets that a table writer is allowed to write to.
    * - insert-existing-partitions-behavior
      - insert_existing_partitions_behavior
      - string
@@ -721,6 +739,11 @@ Each query can override the config by setting corresponding query session proper
      - integer
      - 1024
      - Batch size used when writing into Parquet through Arrow bridge.
+   * - hive.parquet.writer.created-by
+     -
+     - string
+     - parquet-cpp-velox version 0.0.0
+     - Created-by value used when writing to Parquet.
 
 ``Amazon S3 Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -958,8 +981,7 @@ Spark-specific Configuration
      - bool
      - false
      - If true, Spark statistical aggregation functions including skewness, kurtosis, stddev, stddev_samp, variance,
-       var_samp will return NaN instead of NULL when dividing by zero during expression evaluation. Please note that
-       Spark statistical aggregation functions including covar_samp and corr should be supported to respect this configuration.
+       var_samp, covar_samp and corr will return NaN instead of NULL when dividing by zero during expression evaluation.
 
 Tracing
 --------
@@ -979,10 +1001,10 @@ Tracing
      - string
      -
      - The root directory to store the tracing data and metadata for a query.
-   * - query_trace_node_ids
+   * - query_trace_node_id
      - string
      -
-     - A comma-separated list of plan node ids whose input data will be trace. If it is empty, then we only trace the
+     - The plan node id whose input data will be trace. If it is empty, then we only trace the
        query metadata which includes the query plan and configs etc.
    * - query_trace_task_reg_exp
      - string
@@ -992,3 +1014,8 @@ Tracing
      - integer
      - 0
      - The max trace bytes limit. Tracing is disabled if zero.
+   * - query_trace_dry_run
+     - boolean
+     - false
+     - If true, we only collect the input trace for a given operator but without the actual
+       execution. This is used for crash debugging.

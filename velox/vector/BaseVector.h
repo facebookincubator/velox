@@ -335,9 +335,10 @@ class BaseVector {
   /// When CompareFlags is ASCENDING, returns < 0 if 'this' at 'index' is less
   /// than 'other' at 'otherIndex', 0 if equal and > 0 otherwise.
   /// When CompareFlags is DESCENDING, returns < 0 if 'this' at 'index' is
-  /// larger than 'other' at 'otherIndex', 0 if equal and < 0 otherwise. If
-  /// flags.nullHandlingMode is not NullAsValue, the function may returns
-  /// std::nullopt if null encountered.
+  /// larger than 'other' at 'otherIndex', 0 if equal and < 0 otherwise.
+  ///
+  /// If flags.nullHandlingMode is not NullAsValue, the function may return
+  /// std::nullopt if nulls are encountered.
   virtual std::optional<int32_t> compare(
       const BaseVector* other,
       vector_size_t index,
@@ -543,7 +544,7 @@ class BaseVector {
 
   /// This makes a deep copy of the Vector allocating new child Vectors and
   /// Buffers recursively.  Unlike copy, this preserves encodings recursively.
-  virtual VectorPtr copyPreserveEncodings(
+  virtual VectorPtr testingCopyPreserveEncodings(
       velox::memory::MemoryPool* pool = nullptr) const = 0;
 
   /// Construct a zero-copy slice of the vector with the indicated offset and

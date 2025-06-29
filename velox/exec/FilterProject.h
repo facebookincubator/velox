@@ -49,6 +49,11 @@ class FilterProject : public Operator {
     return BlockingReason::kNotBlocked;
   }
 
+  bool startDrain() override {
+    // No need to drain for project/filter operator.
+    return false;
+  }
+
   bool isFinished() override;
 
   void close() override {
@@ -72,6 +77,10 @@ class FilterProject : public Operator {
   }
 
   void initialize() override;
+
+  /// Ensures that expression stats are added to the operator stats if their
+  /// tracking is enabled via query config.
+  OperatorStats stats(bool clear) override;
 
  private:
   // Tests if 'numProcessedRows_' equals to the length of input_ and clears

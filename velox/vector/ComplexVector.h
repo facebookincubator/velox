@@ -164,12 +164,12 @@ class RowVector : public BaseVector {
       const BaseVector* source,
       const folly::Range<const CopyRange*>& ranges) override;
 
-  VectorPtr copyPreserveEncodings(
+  VectorPtr testingCopyPreserveEncodings(
       velox::memory::MemoryPool* pool = nullptr) const override {
     std::vector<VectorPtr> copiedChildren(children_.size());
 
     for (auto i = 0; i < children_.size(); ++i) {
-      copiedChildren[i] = children_[i]->copyPreserveEncodings(pool);
+      copiedChildren[i] = children_[i]->testingCopyPreserveEncodings(pool);
     }
 
     auto selfPool = pool ? pool : pool_;
@@ -178,7 +178,7 @@ class RowVector : public BaseVector {
         type_,
         AlignedBuffer::copy(selfPool, nulls_),
         length_,
-        copiedChildren,
+        std::move(copiedChildren),
         nullCount_);
   }
 
@@ -382,6 +382,11 @@ struct ArrayVectorBase : BaseVector {
       const vector_size_t* sizes,
       std::vector<vector_size_t>& indices);
 
+  /// Ensure the offsets and sizes of null rows are all 0.  It's caller's
+  /// responsibility to make sure the vector as well as offsets and sizes
+  /// buffers are mutable (e.g. singly referenced).
+  void ensureNullRowsEmpty();
+
  protected:
   ArrayVectorBase(
       velox::memory::MemoryPool* pool,
@@ -493,7 +498,7 @@ class ArrayVector : public ArrayVectorBase {
       const BaseVector* source,
       const folly::Range<const CopyRange*>& ranges) override;
 
-  VectorPtr copyPreserveEncodings(
+  VectorPtr testingCopyPreserveEncodings(
       velox::memory::MemoryPool* pool = nullptr) const override {
     auto selfPool = pool ? pool : pool_;
     return std::make_shared<ArrayVector>(
@@ -503,7 +508,7 @@ class ArrayVector : public ArrayVectorBase {
         length_,
         AlignedBuffer::copy(selfPool, offsets_),
         AlignedBuffer::copy(selfPool, sizes_),
-        elements_->copyPreserveEncodings(pool),
+        elements_->testingCopyPreserveEncodings(pool),
         nullCount_);
   }
 
@@ -636,7 +641,7 @@ class MapVector : public ArrayVectorBase {
       const BaseVector* source,
       const folly::Range<const CopyRange*>& ranges) override;
 
-  VectorPtr copyPreserveEncodings(
+  VectorPtr testingCopyPreserveEncodings(
       velox::memory::MemoryPool* pool = nullptr) const override {
     auto selfPool = pool ? pool : pool_;
     return std::make_shared<MapVector>(
@@ -646,8 +651,8 @@ class MapVector : public ArrayVectorBase {
         length_,
         AlignedBuffer::copy(selfPool, offsets_),
         AlignedBuffer::copy(selfPool, sizes_),
-        keys_->copyPreserveEncodings(pool),
-        values_->copyPreserveEncodings(pool),
+        keys_->testingCopyPreserveEncodings(pool),
+        values_->testingCopyPreserveEncodings(pool),
         nullCount_,
         sortedKeys_);
   }

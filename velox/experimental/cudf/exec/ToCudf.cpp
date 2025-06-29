@@ -118,6 +118,11 @@ bool CompileState::compile() {
     if (!CudfHashJoinProbe::isSupportedJoinType(planNode->joinType())) {
       return false;
     }
+    // disabling null-aware anti join with filter until we implement it right
+    if (planNode->joinType() == core::JoinType::kAnti and
+        planNode->isNullAware() and planNode->filter()) {
+      return false;
+    }
     return true;
   };
 
@@ -256,6 +261,9 @@ bool CompileState::compile() {
       replaceOp.push_back(
           std::make_unique<CudfLocalPartition>(id, ctx, planNode));
       replaceOp.back()->initialize();
+    } else if (
+        auto localExchangeOp = dynamic_cast<exec::LocalExchange*>(oper)) {
+      keepOperator = 1;
     }
 
     if (producesGpuOutput(oper) and

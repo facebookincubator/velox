@@ -553,13 +553,19 @@ void AggregationFuzzerBase::testPlan(
     const std::vector<std::shared_ptr<ResultVerifier>>& customVerifiers,
     const velox::fuzzer::ResultOrError& expected,
     int32_t maxDrivers) {
-  auto actual = execute(
-      planWithSplits.plan,
-      planWithSplits.splits,
-      injectSpill,
-      abandonPartial,
-      maxDrivers);
-  compare(actual, customVerification, customVerifiers, expected);
+  try {
+    auto actual = execute(
+        planWithSplits.plan,
+        planWithSplits.splits,
+        injectSpill,
+        abandonPartial,
+        maxDrivers);
+    compare(actual, customVerification, customVerifiers, expected);
+  } catch (...) {
+    LOG(ERROR) << "Failed while testing plan: "
+               << planWithSplits.plan->toString(true, true);
+    throw;
+  }
 }
 
 void AggregationFuzzerBase::compare(
@@ -606,10 +612,12 @@ void AggregationFuzzerBase::compare(
       VELOX_CHECK(
           verifier->compare(expected.result, actual.result),
           "Logically equivalent plans produced different results");
+      LOG(INFO) << "Verified through custom verifier.";
     } else if (verifier->supportsVerify()) {
       VELOX_CHECK(
           verifier->verify(actual.result),
           "Result of a logically equivalent plan failed custom verification");
+      LOG(INFO) << "Verified through custom verifier.";
     } else {
       VELOX_UNREACHABLE(
           "Custom verifier must support either 'compare' or 'verify' API.");

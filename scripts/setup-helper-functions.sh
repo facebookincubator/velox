@@ -17,7 +17,8 @@
 # specified repo, checking out the requested version.
 
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)/deps-download}
-OS_CXXFLAGS=""
+OS_CXXFLAGS=${OS_CXXFLAGS:-""}
+EXTRA_PKG_CXXFLAGS=${EXTRA_PKG_CXXFLAGS:-""}
 NPROC=${BUILD_THREADS:-$(getconf _NPROCESSORS_ONLN)}
 
 CURL_OPTIONS=${CURL_OPTIONS:-""}
@@ -149,7 +150,16 @@ function get_cxx_flags {
         elif [ "$ARM_CPU_PRODUCT" = "$Neoverse_V1" ]; then
           echo -n "-mcpu=neoverse-v1 "
         elif [ "$ARM_CPU_PRODUCT" = "$Neoverse_V2" ]; then
-          echo -n "-mcpu=neoverse-v2 "
+          # Read the JEDEC JEP-106 manufacturer ID to distinguish different Neoverse V2 cores
+          # https://developer.arm.com/documentation/ka001301/latest/
+          SOC_ID_FILE="/sys/devices/soc0/soc_id"
+          GRACE_SOC_ID="jep106:036b:0241"
+          # Check for NVIDIA Grace which has various extensions
+          if [ -f "$SOC_ID_FILE" ] && [ "$(cat $SOC_ID_FILE)" = "$GRACE_SOC_ID" ]; then
+            echo -n "-mcpu=neoverse-v2+crypto+sha3+sm4+sve2-aes+sve2-sha3+sve2-sm4"
+          else
+            echo -n "-mcpu=neoverse-v2 "
+          fi
         else
           echo -n "-march=armv8-a+crc+crypto "
         fi
@@ -209,6 +219,7 @@ function cmake_install {
   COMPILER_FLAGS=$(get_cxx_flags)
   # Add platform specific CXX flags if any
   COMPILER_FLAGS+=${OS_CXXFLAGS}
+  COMPILER_FLAGS+=${EXTRA_PKG_CXXFLAGS}
 
   # CMAKE_POSITION_INDEPENDENT_CODE is required so that Velox can be built into dynamic libraries \
   cmake -Wno-dev ${CMAKE_OPTIONS} -B"${BINARY_DIR}" \
@@ -223,4 +234,3 @@ function cmake_install {
   cmake --build "${BINARY_DIR}" "-j ${NPROC}" || { echo 'build failed' ; exit 1; }
   ${SUDO} cmake --install "${BINARY_DIR}"
 }
-

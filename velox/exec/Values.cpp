@@ -15,7 +15,6 @@
  */
 #include "velox/exec/Values.h"
 #include "velox/common/testutil/TestValue.h"
-
 using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::exec {
@@ -42,12 +41,12 @@ void Values::initialize() {
   values_.reserve(valueNodes_->values().size());
   for (auto& vector : valueNodes_->values()) {
     if (vector->size() > 0) {
-      if (valueNodes_->isParallelizable()) {
+      if (valueNodes_->testingIsParallelizable()) {
         // If this is parallelizable, copy the values to prevent Vectors from
         // being shared across threads.  Note that the contract in ValuesNode is
         // that this should only be enabled for testing.
         values_.emplace_back(std::static_pointer_cast<RowVector>(
-            vector->copyPreserveEncodings()));
+            vector->testingCopyPreserveEncodings()));
       } else {
         values_.emplace_back(vector);
       }

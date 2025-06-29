@@ -46,6 +46,7 @@ add_executable(
   JsonArrayLengthTest.cpp
   JsonObjectKeysTest.cpp
   LeastGreatestTest.cpp
+  LuhnCheckTest.cpp
   MakeDecimalTest.cpp
   MakeTimestampTest.cpp
   MapConcatTest.cpp
@@ -64,8 +65,11 @@ add_executable(
   SplitTest.cpp
   StringTest.cpp
   StringToMapTest.cpp
+  UnBase64Test.cpp
   UnscaledValueFunctionTest.cpp
+  UpperLowerTest.cpp
   UuidTest.cpp
+  VarcharTypeWriteSideCheckTest.cpp
   XxHash64Test.cpp)
 
 add_test(velox_functions_spark_test velox_functions_spark_test)

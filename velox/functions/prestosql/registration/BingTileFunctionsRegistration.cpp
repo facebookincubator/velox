@@ -19,7 +19,6 @@
 #include "velox/functions/prestosql/BingTileFunctions.h"
 #include "velox/functions/prestosql/types/BingTileRegistration.h"
 #include "velox/functions/prestosql/types/BingTileType.h"
-#include "velox/functions/prestosql/types/GeometryRegistration.h"
 #include "velox/type/SimpleFunctionApi.h"
 
 namespace facebook::velox::functions {
@@ -45,21 +44,35 @@ void registerSimpleBingTileFunctions(const std::string& prefix) {
       {prefix + "bing_tile_parent"});
   registerFunction<BingTileParentFunction, BingTile, BingTile, int8_t>(
       {prefix + "bing_tile_parent"});
+  registerFunction<BingTileParentFunction, BingTile, BingTile, int32_t>(
+      {prefix + "bing_tile_parent"});
   registerFunction<BingTileChildrenFunction, Array<BingTile>, BingTile>(
       {prefix + "bing_tile_children"});
   registerFunction<BingTileChildrenFunction, Array<BingTile>, BingTile, int8_t>(
       {prefix + "bing_tile_children"});
   registerFunction<BingTileToQuadKeyFunction, Varchar, BingTile>(
       {prefix + "bing_tile_quadkey"});
+  registerFunction<BingTileAtFunction, BingTile, double, double, int8_t>(
+      {prefix + "bing_tile_at"});
+  registerFunction<
+      BingTilesAroundFunction,
+      Array<BingTile>,
+      double,
+      double,
+      int8_t>({prefix + "bing_tiles_around"});
+  registerFunction<
+      BingTilesAroundFunction,
+      Array<BingTile>,
+      double,
+      double,
+      int8_t,
+      double>({prefix + "bing_tiles_around"});
 }
 
 } // namespace
 
 void registerBingTileFunctions(const std::string& prefix) {
   registerBingTileType();
-
-  // TODO: Remove this once we have GeometryFunctionsRegistration
-  registerGeometryType();
 
   registerSimpleBingTileFunctions(prefix);
 }

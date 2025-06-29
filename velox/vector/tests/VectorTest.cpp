@@ -111,7 +111,7 @@ int NonPOD::alive = 0;
 class VectorTest : public testing::Test, public velox::test::VectorTestBase {
  protected:
   static void SetUpTestCase() {
-    memory::MemoryManager::testingSetInstance({});
+    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
   }
 
   void SetUp() override {
@@ -3883,6 +3883,27 @@ TEST_F(VectorTest, mapUpdateDictionary) {
   test::assertEqualVectors(expected, actual);
 }
 
+TEST_F(VectorTest, ensureNullRowsEmpty) {
+  constexpr int kSize = 10;
+  ArrayVector vector(
+      pool(),
+      ARRAY(BIGINT()),
+      makeNulls(kSize, nullEvery(3)),
+      kSize,
+      makeIndices(kSize, [](auto i) { return i; }),
+      makeIndices(kSize, [](auto) { return 1; }),
+      makeFlatVector<int64_t>(kSize, [](auto i) { return i; }));
+  ASSERT_EQ(vector.sizeAt(3), 1);
+  ASSERT_EQ(vector.offsetAt(3), 3);
+  vector.ensureNullRowsEmpty();
+  for (int i = 0; i < kSize; ++i) {
+    if (vector.isNullAt(i)) {
+      ASSERT_EQ(vector.sizeAt(i), 0);
+      ASSERT_EQ(vector.offsetAt(i), 0);
+    }
+  }
+}
+
 TEST_F(VectorTest, pushDictionaryToRowVectorLeaves) {
   auto iota = makeFlatVector<int64_t>(10, folly::identity);
   auto output = RowVector::pushDictionaryToRowVectorLeaves(iota);
@@ -3973,6 +3994,50 @@ TEST_F(VectorTest, pushDictionaryToRowVectorLeaves) {
     ASSERT_EQ(c0c0->encoding(), VectorEncoding::Simple::DICTIONARY);
     auto& c0c1 = c0->childAt(1);
     ASSERT_EQ(c0c1->encoding(), VectorEncoding::Simple::DICTIONARY);
+  }
+  {
+    SCOPED_TRACE("Constant");
+    input = makeRowVector({
+        // c0: Constant primitive.
+        makeConstant<int64_t>(42, 10),
+        // c1: Constant ROW
+        BaseVector::wrapInConstant(
+            10,
+            0,
+            makeRowVector(
+                {makeFlatVector<int64_t>(1, [](auto) { return 43; })})),
+        // c2: Dictionary over constant
+        wrapInDictionary(
+            makeIndicesInReverse(10),
+            makeRowVector({
+                BaseVector::wrapInConstant(
+                    10,
+                    0,
+                    makeRowVector(
+                        {makeFlatVector<int64_t>(1, [](auto) { return 44; })})),
+            })),
+        // c3: Constant over dictionary
+        BaseVector::wrapInConstant(
+            10,
+            5,
+            makeRowVector({
+                wrapInDictionary(
+                    makeIndicesInReverse(10), makeRowVector({iota})),
+            })),
+    });
+    output = RowVector::pushDictionaryToRowVectorLeaves(input);
+    test::assertEqualVectors(input, output);
+    auto* outputRow = output->asChecked<RowVector>();
+    auto& c0 = outputRow->childAt(0);
+    ASSERT_EQ(c0->encoding(), VectorEncoding::Simple::CONSTANT);
+    auto* c1 = outputRow->childAt(1)->asChecked<RowVector>();
+    ASSERT_EQ(c1->childAt(0)->encoding(), VectorEncoding::Simple::DICTIONARY);
+    auto* c2 = outputRow->childAt(2)->asChecked<RowVector>();
+    auto* c2c0 = c2->childAt(0)->asChecked<RowVector>();
+    ASSERT_EQ(c2c0->childAt(0)->encoding(), VectorEncoding::Simple::DICTIONARY);
+    auto* c3 = outputRow->childAt(3)->asChecked<RowVector>();
+    auto* c3c0 = c3->childAt(0)->asChecked<RowVector>();
+    ASSERT_EQ(c3c0->childAt(0)->encoding(), VectorEncoding::Simple::DICTIONARY);
   }
 }
 

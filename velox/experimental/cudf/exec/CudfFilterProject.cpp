@@ -16,6 +16,7 @@
 
 #include "velox/experimental/cudf/exec/CudfFilterProject.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include "velox/expression/Expr.h"
@@ -23,6 +24,7 @@
 #include <cudf/aggregation.hpp>
 #include <cudf/reduction.hpp>
 #include <cudf/stream_compaction.hpp>
+#include <cudf/unary.hpp>
 
 #include <unordered_map>
 
@@ -133,18 +135,23 @@ void CudfFilterProject::filter(
   auto filterColumns = filterEvaluator_.compute(
       inputTableColumns, stream, cudf::get_current_device_resource_ref());
   auto filterColumn = filterColumns[0]->view();
-  // is all true in filter_column
-  auto isAllTrue = cudf::reduce(
-      filterColumn,
-      *cudf::make_all_aggregation<cudf::reduce_aggregation>(),
-      cudf::data_type(cudf::type_id::BOOL8),
-      stream,
-      cudf::get_current_device_resource_ref());
-  using ScalarType = cudf::scalar_type_t<bool>;
-  auto result = static_cast<ScalarType*>(isAllTrue.get());
-  // If filter is not all true, apply the filter
-  if (!(result->is_valid(stream) && result->value(stream))) {
-    // Apply the Filter
+  bool shouldApplyFilter = [&]() {
+    if (filterColumn.has_nulls()) {
+      return true;
+    }
+    // check if all values in filterColumn are true
+    auto isAllTrue = cudf::reduce(
+        filterColumn,
+        *cudf::make_all_aggregation<cudf::reduce_aggregation>(),
+        cudf::data_type(cudf::type_id::BOOL8),
+        stream,
+        cudf::get_current_device_resource_ref());
+    using ScalarType = cudf::scalar_type_t<bool>;
+    auto result = static_cast<ScalarType*>(isAllTrue.get());
+    // If filter is not all true, apply the filter
+    return !(result->is_valid(stream) && result->value(stream));
+  }();
+  if (shouldApplyFilter) {
     auto filterTable =
         std::make_unique<cudf::table>(std::move(inputTableColumns));
     auto filteredTable =
@@ -190,6 +197,16 @@ std::vector<std::unique_ptr<cudf::column>> CudfFilterProject::project(
     }
     VELOX_CHECK_GT(inputChannelCount[identity.inputChannel], 0);
     inputChannelCount[identity.inputChannel]--;
+  }
+
+  for (auto i = 0; i < outputColumns.size(); ++i) {
+    const auto cudfOutputType =
+        cudf::data_type(cudf_velox::veloxToCudfTypeId(outputType_->childAt(i)));
+
+    if (outputColumns[i]->type() != cudfOutputType) {
+      outputColumns[i] =
+          cudf::cast(*(outputColumns[i]), cudfOutputType, stream);
+    }
   }
 
   return outputColumns;
