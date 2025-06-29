@@ -576,4 +576,21 @@ inline void IntDecoder<true>::bulkReadRows(
   VELOX_UNREACHABLE();
 }
 
+template <>
+template <>
+inline void IntDecoder<false>::bulkRead(
+    uint64_t /*size*/,
+    int* /*result*/) {
+  VELOX_UNREACHABLE();
+}
+
+template <>
+template <>
+inline void IntDecoder<false>::bulkReadRows(
+    RowSet /*rows*/,
+    int* /*result*/,
+    int32_t /*initialRow*/) {
+  VELOX_UNREACHABLE();
+}
+
 } // namespace facebook::velox::dwio::common
