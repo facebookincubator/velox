@@ -223,8 +223,7 @@ class TableWriter : public Operator {
 
   const DriverCtx* const driverCtx_;
   memory::MemoryPool* const connectorPool_;
-  const std::shared_ptr<connector::ConnectorInsertTableHandle>
-      insertTableHandle_;
+  const connector::ConnectorInsertTableHandlePtr insertTableHandle_;
   const connector::CommitStrategy commitStrategy_;
   // Records the writer operator creation time in ns. This is used to record
   // the running wall time of a writer operator. This can helps to detect the
