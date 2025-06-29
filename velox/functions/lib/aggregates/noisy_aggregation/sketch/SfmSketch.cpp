@@ -18,6 +18,7 @@
 #include <cmath>
 #include "folly/hash/MurmurHash.h"
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/base/IOUtils.h"
 #include "velox/functions/lib/aggregates/noisy_aggregation/sketch/MersenneTwisterRandomizationStrategy.h"
 
 namespace facebook::velox::functions::aggregate {
@@ -111,6 +112,29 @@ uint64_t SfmSketch::cardinality() const {
   // when casting negative values to unsigned types
   double clampedGuess = std::max(0.0, guess);
   return static_cast<uint64_t>(std::round(clampedGuess));
+}
+
+size_t SfmSketch::serializedSize() const {
+  return sizeof(indexBitLength_) + sizeof(precision_) +
+      sizeof(randomizedResponseProbability_) + getBitMap().serializedSize();
+}
+
+void SfmSketch::serialize(char* out) const {
+  common::OutputByteStream stream(out);
+  stream.appendOne(indexBitLength_);
+  stream.appendOne(precision_);
+  stream.appendOne(randomizedResponseProbability_);
+  getBitMap().serialize(out + stream.offset());
+}
+
+SfmSketch SfmSketch::deserialize(const char* in) {
+  common::InputByteStream stream(in);
+  uint32_t indexBitLength = stream.read<uint32_t>();
+  uint32_t precision = stream.read<uint32_t>();
+  double randomizedResponseProbability = stream.read<double>();
+  BitMap bitMap = BitMap::deserialize(in + stream.offset());
+  return SfmSketch(
+      bitMap, indexBitLength, precision, randomizedResponseProbability);
 }
 
 void SfmSketch::validateEpsilon(double epsilon) {

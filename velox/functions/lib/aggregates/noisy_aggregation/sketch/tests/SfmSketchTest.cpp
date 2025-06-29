@@ -401,4 +401,38 @@ TEST_F(SfmSketchTest, enablePrivacyTest) {
   ASSERT_NEAR(cardinalityAfter, cardinalityBefore, cardinalityBefore * 0.1);
 }
 
+TEST_F(SfmSketchTest, serializationRoundTripTest) {
+  SfmSketch sketch = SfmSketch::create(numberOfBuckets_, precision_);
+  for (int32_t i = 0; i < 100000; i++) {
+    sketch.add(i);
+  }
+  sketch.enablePrivacy(4, TestingSeededRandomizationStrategy(1));
+  auto originalBitMap = sketch.getBitMap();
+  auto originalIndexBitLength = sketch.getIndexBitLength();
+  auto originalPrecision = sketch.getPrecision();
+  auto originalRandomizedResponseProbability =
+      sketch.getRandomizedResponseProbability();
+
+  // Allocate buffer for serialization
+  size_t serializedSize = sketch.serializedSize();
+  std::vector<char> buffer(serializedSize);
+  char* out = buffer.data();
+
+  sketch.serialize(out);
+  auto deserialized = SfmSketch::deserialize(out);
+
+  // Test that the deserialized sketch is the same as the original
+  ASSERT_EQ(deserialized.getIndexBitLength(), originalIndexBitLength);
+  ASSERT_EQ(deserialized.getPrecision(), originalPrecision);
+  ASSERT_EQ(
+      deserialized.getRandomizedResponseProbability(),
+      originalRandomizedResponseProbability);
+
+  // Test that the bitmaps are the same
+  ASSERT_EQ(deserialized.getBitMap().length(), originalBitMap.length());
+  for (int i = 0; i < originalBitMap.length(); i++) {
+    ASSERT_EQ(deserialized.getBitMap().getBit(i), originalBitMap.getBit(i));
+  }
+}
+
 } // namespace facebook::velox::functions::aggregate
