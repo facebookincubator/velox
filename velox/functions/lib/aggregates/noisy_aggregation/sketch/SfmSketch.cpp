@@ -18,6 +18,7 @@
 #include <cmath>
 #include "folly/hash/MurmurHash.h"
 #include "velox/common/base/Exceptions.h"
+#include "velox/functions/lib/aggregates/noisy_aggregation/sketch/MersenneTwisterRandomizationStrategy.h"
 
 namespace facebook::velox::functions::aggregate {
 
@@ -86,6 +87,32 @@ void SfmSketch::addIndexAndZeros(uint32_t bucketIndex, uint32_t zeros) {
   flipBitOn(bucketIndex, zeros);
 }
 
+// Estimates cardinality via maximum psuedolikelihood (Newton's method).
+uint64_t SfmSketch::cardinality() const {
+  // Handle empty sketch case to avoid NaN in updating guess, where denominator
+  // will be 0.
+  if (bitMap_.bitCount() == 0) {
+    return 0;
+  }
+
+  double guess = 1.0;
+  double changeInGuess = std::numeric_limits<double>::infinity();
+  int32_t iterations = 0;
+
+  while (std::abs(changeInGuess) > 0.1 &&
+         iterations < MAX_ESTIMATION_ITERATIONS) {
+    changeInGuess = -logLikelihoodFirstDerivative(guess) /
+        logLikelihoodSecondDerivative(guess);
+    guess += changeInGuess;
+    iterations++;
+  }
+  VELOX_CHECK_LE(guess, std::numeric_limits<uint64_t>::max());
+  // Clamp negative values to 0 before rounding to avoid undefined behavior
+  // when casting negative values to unsigned types
+  double clampedGuess = std::max(0.0, guess);
+  return static_cast<uint64_t>(std::round(clampedGuess));
+}
+
 void SfmSketch::validateEpsilon(double epsilon) {
   VELOX_CHECK(
       epsilon > 0,
@@ -114,6 +141,61 @@ double SfmSketch::observationProbability(uint32_t level) const {
   // Probability of observing a run of zeros of length level in any single
   // bucket
   return std::pow(2.0, -(level + 1.0)) / numberOfBuckets(indexBitLength_);
+}
+
+void SfmSketch::mergeWith(SfmSketch& other) {
+  mergeWith(other, MersenneTwisterRandomizationStrategy());
+}
+
+double SfmSketch::logLikelihoodFirstDerivative(double n) const {
+  double result = 0.0;
+  for (uint32_t level = 0; level < precision_; level++) {
+    double termOn = logLikelihoodTermFirstDerivative(level, true, n);
+    double termOff = logLikelihoodTermFirstDerivative(level, false, n);
+    for (uint32_t bucket = 0; bucket < numberOfBuckets(indexBitLength_);
+         bucket++) {
+      uint32_t bitPosition = level * numberOfBuckets(indexBitLength_) + bucket;
+      result += bitMap_.getBit(bitPosition) ? termOn : termOff;
+    }
+  }
+  return result;
+}
+
+double SfmSketch::logLikelihoodTermFirstDerivative(
+    uint32_t level,
+    bool on,
+    double n) const {
+  double p = observationProbability(level);
+  int32_t sign = on ? -1 : 1;
+  double c1 = on ? getOnProbability() : 1 - getOnProbability();
+  double c2 = getOnProbability() - getRandomizedResponseProbability();
+  return std::log1p(-p) * (1 - c1 / (c1 + sign * c2 * std::pow(1 - p, n)));
+}
+
+double SfmSketch::logLikelihoodSecondDerivative(double n) const {
+  double result = 0.0;
+  for (uint32_t level = 0; level < precision_; level++) {
+    double termOn = logLikelihoodTermSecondDerivative(level, true, n);
+    double termOff = logLikelihoodTermSecondDerivative(level, false, n);
+    for (uint32_t bucket = 0; bucket < numberOfBuckets(indexBitLength_);
+         bucket++) {
+      uint32_t bitPosition = level * numberOfBuckets(indexBitLength_) + bucket;
+      result += bitMap_.getBit(bitPosition) ? termOn : termOff;
+    }
+  }
+  return result;
+}
+
+double SfmSketch::logLikelihoodTermSecondDerivative(
+    uint32_t level,
+    bool on,
+    double n) const {
+  double p = observationProbability(level);
+  int32_t sign = on ? -1 : 1;
+  double c1 = on ? getOnProbability() : 1 - getOnProbability();
+  double c2 = getOnProbability() - getRandomizedResponseProbability();
+  return sign * c1 * c2 * std::pow(std::log1p(-p), 2) * std::pow(1 - p, n) *
+      std::pow(c1 + sign * c2 * std::pow(1 - p, n), -2);
 }
 
 void SfmSketch::flipBitOn(uint32_t bucketIndex, uint32_t zeros) {

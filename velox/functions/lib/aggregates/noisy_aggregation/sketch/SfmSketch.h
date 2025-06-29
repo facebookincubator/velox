@@ -26,11 +26,10 @@ namespace facebook::velox::functions::aggregate {
 /// <a href="https://arxiv.org/pdf/2302.02056.pdf">Sketch-Flip-Merge: Mergeable
 /// Sketches for Private Distinct Counting</a>.
 class SfmSketch {
+ public:
   static constexpr double NON_PRIVATE_EPSILON =
       std::numeric_limits<double>::infinity();
   static constexpr int32_t MAX_ESTIMATION_ITERATIONS = 1000;
-
- public:
   // Create a non-private sketch.
   static SfmSketch create(uint32_t numberOfBuckets, uint32_t precision);
   static uint32_t numberOfTrailingZeros(uint64_t hash, uint32_t indexBitLength);
@@ -38,6 +37,76 @@ class SfmSketch {
   void add(int64_t value);
   void addHash(uint64_t hash);
   void addIndexAndZeros(uint32_t bucketIndex, uint32_t zeros);
+  void mergeWith(SfmSketch& other);
+  uint64_t cardinality() const;
+
+  template <typename RandomizationStrategy>
+  void mergeWith(
+      SfmSketch& other,
+      RandomizationStrategy randomizationStrategy) {
+    VELOX_CHECK_EQ(
+        precision_,
+        other.precision_,
+        "Cannot merge two SFM sketches with different precision: {} vs. {}",
+        precision_,
+        other.precision_);
+    VELOX_CHECK_EQ(
+        indexBitLength_,
+        other.indexBitLength_,
+        "Cannot merge two SFM sketches with different indexBitLength: {} vs. {}",
+        indexBitLength_,
+        other.indexBitLength_);
+
+    if (!privacyEnabled() && !other.privacyEnabled()) {
+      // If neither sketch is private, we just take the OR of the sketches
+      bitMap_.bitwiseOr(other.getBitMap());
+    } else {
+      // If either sketch is private, we combine using a randomized merge
+      double p1 = randomizedResponseProbability_;
+      double p2 = other.randomizedResponseProbability_;
+      double p = mergeRandomizedResponseProbabilities(p1, p2);
+      double normalizer = (1 - 2 * p) / ((1 - 2 * p1) * (1 - 2 * p2));
+
+      for (uint32_t i = 0; i < bitMap_.length(); i++) {
+        double bit1 = bitMap_.getBit(i) ? 1.0 : 0.0;
+        double bit2 = other.bitMap_.getBit(i) ? 1.0 : 0.0;
+        double x = 1 - 2 * p - normalizer * (1 - p1 - bit1) * (1 - p2 - bit2);
+        double probability = p + normalizer * x;
+        probability = std::min(1.0, std::max(0.0, probability));
+        bitMap_.setBit(i, randomizationStrategy.nextBoolean(probability));
+      }
+    }
+
+    randomizedResponseProbability_ = mergeRandomizedResponseProbabilities(
+        randomizedResponseProbability_, other.randomizedResponseProbability_);
+  }
+
+  void enablePrivacy(double epsilon) {
+    enablePrivacy(epsilon, getDefaultRandomizationStrategy());
+  }
+
+  static SecureRandomizationStrategy getDefaultRandomizationStrategy() {
+    return SecureRandomizationStrategy();
+  }
+
+  template <typename RandomizationStrategy>
+  void enablePrivacy(
+      double epsilon,
+      RandomizationStrategy randomizationStrategy) {
+    VELOX_CHECK_NOT_NULL(
+        &randomizationStrategy, "randomizationStrategy can't be null.");
+    VELOX_CHECK(!privacyEnabled(), "privacy is already enabled.");
+    validateEpsilon(epsilon);
+    randomizedResponseProbability_ =
+        calculateRandomizedResponseProbability(epsilon);
+    bitMap_.flipAll(randomizedResponseProbability_, randomizationStrategy);
+  }
+
+  // For math details, see Theorem 4.8, <a
+  // href="https://arxiv.org/pdf/2302.02056.pdf">arXiv:2302.02056</a>.
+  static double mergeRandomizedResponseProbabilities(double p1, double p2) {
+    return (p1 + p2 - 3 * p1 * p2) / (1 - 2 * p1 * p2);
+  }
 
   static uint32_t computeIndex(uint64_t hash, uint32_t indexBitLength) {
     VELOX_CHECK(indexBitLength < 32, "indexBitLength must be less than 32.");
@@ -106,6 +175,12 @@ class SfmSketch {
   static void validateRandomizedResponseProbability(double p);
   double observationProbability(uint32_t level) const;
   void flipBitOn(uint32_t bucketIndex, uint32_t zeros);
+  double logLikelihoodFirstDerivative(double n) const;
+  double logLikelihoodTermFirstDerivative(uint32_t level, bool on, double n)
+      const;
+  double logLikelihoodSecondDerivative(double n) const;
+  double logLikelihoodTermSecondDerivative(uint32_t level, bool on, double n)
+      const;
 
   const uint32_t indexBitLength_;
   const uint32_t precision_;
