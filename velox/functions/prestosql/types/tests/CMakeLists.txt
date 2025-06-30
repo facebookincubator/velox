@@ -15,7 +15,6 @@
 add_executable(
   velox_presto_types_test
   BingTileTypeTest.cpp
-  GeometryTypeTest.cpp
   HyperLogLogTypeTest.cpp
   JsonTypeTest.cpp
   TimestampWithTimeZoneTypeTest.cpp
@@ -25,6 +24,14 @@ add_executable(
   UuidTypeTest.cpp
   IPAddressTypeTest.cpp
   IPPrefixTypeTest.cpp)
+
+message(STATUS "VELOX_ENABLE_GEO ${VELOX_ENABLE_GEO}")
+if(VELOX_ENABLE_GEO)
+    velox_sources(
+    velox_presto_types_test
+    PRIVATE
+    GeometryTypeTest.cpp)
+endif()
 
 add_test(velox_presto_types_test velox_presto_types_test)
 

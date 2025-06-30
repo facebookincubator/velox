@@ -11,7 +11,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
 velox_add_library(
   velox_functions_prestosql
   ArrayConcatRegistration.cpp
@@ -25,7 +24,6 @@ velox_add_library(
   DateTimeFunctionsRegistration.cpp
   DataSizeFunctionsRegistration.cpp
   GeneralFunctionsRegistration.cpp
-  GeometryFunctionsRegistration.cpp
   HyperLogFunctionsRegistration.cpp
   IntegerFunctionsRegistration.cpp
   FloatingPointFunctionsRegistration.cpp
@@ -39,6 +37,13 @@ velox_add_library(
   TDigestFunctionsRegistration.cpp
   QDigestFunctionsRegistration.cpp
   URLFunctionsRegistration.cpp)
+
+if(VELOX_ENABLE_GEO)
+  velox_sources(
+  velox_functions_prestosql
+  PRIVATE
+  GeometryFunctionsRegistration.cpp)
+endif()
 
 if(VELOX_ENABLE_FAISS)
   set_source_files_properties(MathematicalFunctionsRegistration.cpp
