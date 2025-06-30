@@ -141,6 +141,18 @@ void testCastFromString(
   EXPECT_EQ(expectedUnscaleValue, decimalValue);
 }
 
+template <typename T>
+void testCastFromString(
+    const std::string& input,
+    int toPrecision,
+    int toScale,
+    const Status expectedError) {
+  T decimalValue;
+  auto status = DecimalUtil::toDecimalValue<T>(
+      StringView(input), toPrecision, toScale, decimalValue);
+  EXPECT_EQ(status, expectedError);
+}
+
 std::string zeros(uint32_t numZeros) {
   return std::string(numZeros, '0');
 }
@@ -586,12 +598,11 @@ TEST(DecimalTest, castToString) {
 
 TEST(DecimalTest, castFromString) {
   testCastFromString<int64_t>("12", 10, 0, 12);
-  testCastFromString<int64_t>("1.2", 10, 1, 12);
-  testCastFromString<int64_t>("0.012", 10, 3, 12);
-  testCastFromString<int64_t>("-0.012", 10, 3, -12);
-  testCastFromString<int64_t>("0.00012", 5, 5, 12);
-  testCastFromString<int64_t>("-0.00012", 5, 5, -12);
-  testCastFromString<int64_t>("-0.00012", 5, 5, -12);
+  testCastFromString<int64_t>("1.3", 10, 1, 13);
+  testCastFromString<int64_t>("0.014", 10, 3, 14);
+  testCastFromString<int64_t>("-0.014", 10, 3, -14);
+  testCastFromString<int64_t>("0.00015", 5, 5, 15);
+  testCastFromString<int64_t>("-0.00015", 5, 5, -15);
   testCastFromString<int64_t>(
       std::string(18, '9'), 18, 0, DecimalUtil::kShortDecimalMax);
   testCastFromString<int64_t>(
@@ -612,6 +623,32 @@ TEST(DecimalTest, castFromString) {
       std::string(38, '9'), 38, 0, DecimalUtil::kLongDecimalMax);
   testCastFromString<int128_t>(
       "-" + std::string(38, '9'), 38, 0, DecimalUtil::kLongDecimalMin);
+}
+
+TEST(DecimalTest, castFromStringError) {
+  testCastFromString<int64_t>("", 10, 0, Status::UserError("Input is empty."));
+  testCastFromString<int64_t>(
+      "12.3.4", 10, 0, Status::UserError("Chars '.4' are invalid."));
+  testCastFromString<int64_t>(
+      "99999999999999999", 10, 0, Status::UserError("Value too large."));
+  testCastFromString<int128_t>(
+      "9999999999999999999999999999999999",
+      29,
+      19,
+      Status::UserError("Value too large."));
+  testCastFromString<int64_t>(
+      "99e+",
+      10,
+      0,
+      Status::UserError("The exponent part only contains sign."));
+  testCastFromString<int64_t>(
+      "e5", 10, 0, Status::UserError("Extracted digits are empty."));
+  testCastFromString<int64_t>(
+      "99ea",
+      10,
+      0,
+      Status::UserError(
+          "Non-digit character 'a' is not allowed in the exponent part."));
 }
 } // namespace
 } // namespace facebook::velox
