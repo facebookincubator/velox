@@ -441,6 +441,17 @@ void WindowFuzzer::go() {
     std::vector<TypePtr> argTypes = signature.args;
     std::vector<std::string> argNames = makeNames(argTypes.size());
 
+    // Test constant input for lead/lag.
+    if (signature.name == "lead" || signature.name == "lag") {
+      if (randInt(0, 10) == 0) {
+        if (randInt(0, 1) == 0) {
+          argNames[0] = "NULL::" + argTypes[0]->toString();
+        } else {
+          argNames[0] = "0::" + argTypes[0]->toString();
+        }
+      }
+    }
+
     const bool ignoreNulls =
         supportIgnoreNulls(signature.name) && vectorFuzzer_.coinToss(0.5);
     const auto call =
