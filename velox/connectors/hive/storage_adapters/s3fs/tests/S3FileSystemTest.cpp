@@ -290,6 +290,12 @@ TEST_F(S3FileSystemTest, writeFileAndRead) {
   }
   // Verify the last chunk.
   ASSERT_EQ(readFile->pread(contentSize * 250'000, contentSize), dataContent);
+
+  // Verify the S3 list function.
+  auto result = s3fs.list(s3File);
+
+  ASSERT_EQ(result.size(), 1);
+  ASSERT_TRUE(result[0] == file);
 }
 
 TEST_F(S3FileSystemTest, invalidConnectionSettings) {
@@ -341,32 +347,4 @@ TEST_F(S3FileSystemTest, registerCredentialProviderFactories) {
       "CredentialsProviderFactory 'my-credentials-provider' already registered");
 }
 
-TEST_F(S3FileSystemTest, list) {
-  const auto bucketName = "writedatatestlist";
-  const auto file = "test.txt";
-  const auto s3File = s3URI(bucketName, file);
-  minioServer_->addBucket(bucketName);
-
-  auto hiveConfig = minioServer_->hiveConfig();
-  filesystems::S3FileSystem s3fs(bucketName, hiveConfig);
-  auto pool = memory::memoryManager()->addLeafPool("S3FileSystemTest");
-  auto writeFile =
-      s3fs.openFileForWrite(s3File, {{}, pool.get(), std::nullopt});
-  auto s3WriteFile = dynamic_cast<filesystems::S3WriteFile*>(writeFile.get());
-  std::string dataContent =
-      "Dance me to your beauty with a burning violin"
-      "Dance me through the panic till I'm gathered safely in"
-      "Lift me like an olive branch and be my homeward dove"
-      "Dance me to the end of love";
-
-  // Append and flush a small batch of data.
-  writeFile->append(dataContent.substr(0, 10));
-  writeFile->flush();
-  writeFile->close();
-
-  auto result = s3fs.list(s3File);
-
-  ASSERT_EQ(result.size(), 1);
-  ASSERT_TRUE(result[0] == file);
-}
 } // namespace facebook::velox::filesystems
