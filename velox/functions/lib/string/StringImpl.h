@@ -354,99 +354,6 @@ FOLLY_ALWAYS_INLINE std::array<int64_t, 2> unicodeWhitespaceCodes() {
   }
   return bitMask;
 }
-
-template <bool onlySpaceDelimiter>
-inline bool isDelimiterAscii(unsigned char ch) {
-  if constexpr (onlySpaceDelimiter) {
-    return ch == ' ';
-  } else {
-    return std::isspace(ch);
-  }
-}
-
-template <bool onlySpaceDelimiter>
-inline bool isDelimiterUtf8(utf8proc_int32_t cp) {
-  if constexpr (onlySpaceDelimiter) {
-    return cp == 0x20;
-  } else {
-    return u_isUWhiteSpace(static_cast<UChar32>(cp));
-  }
-}
-
-// ASCII InitCap Implementation.
-template <bool onlySpaceDelimiter, typename TOutString, typename TInString>
-FOLLY_ALWAYS_INLINE bool initcapAsciiImpl(
-    TOutString& output,
-    const TInString& input) {
-  output.resize(input.size());
-  const char* inputChars = input.data();
-  char* outputChars = output.data();
-
-  bool isStartOfWord = true;
-  for (size_t i = 0; i < input.size(); ++i) {
-    unsigned char currentChar = static_cast<unsigned char>(inputChars[i]);
-
-    if (isDelimiterAscii<onlySpaceDelimiter>(currentChar)) {
-      isStartOfWord = true;
-      outputChars[i] = currentChar;
-    } else if (isStartOfWord) {
-      outputChars[i] = std::toupper(currentChar);
-      isStartOfWord = false;
-    } else {
-      outputChars[i] = std::tolower(currentChar);
-    }
-  }
-  return true;
-}
-
-// UTF-8 InitCap Implementation.
-template <bool onlySpaceDelimiter, typename TOutString, typename TInString>
-FOLLY_ALWAYS_INLINE bool initcapUtf8Impl(
-    TOutString& output,
-    const TInString& input) {
-  const uint8_t* inputBytes = reinterpret_cast<const uint8_t*>(input.data());
-  const uint8_t* inputEnd = inputBytes + input.size();
-
-  output.resize(input.size() * 4);
-  uint8_t* outputStart = reinterpret_cast<uint8_t*>(output.data());
-  uint8_t* outputBytes = outputStart;
-
-  bool isStartOfWord = true;
-
-  while (inputBytes < inputEnd) {
-    utf8proc_int32_t originalCodepoint;
-    auto numBytesRead =
-        utf8proc_iterate(inputBytes, inputEnd - inputBytes, &originalCodepoint);
-    if (numBytesRead < 0) {
-      return false;
-    }
-
-    utf8proc_int32_t processedCodepoint = originalCodepoint;
-
-    if (isDelimiterUtf8<onlySpaceDelimiter>(originalCodepoint)) {
-      isStartOfWord = true;
-    } else {
-      if (isStartOfWord) {
-        processedCodepoint = utf8proc_toupper(originalCodepoint);
-        if (processedCodepoint < 0)
-          processedCodepoint = originalCodepoint;
-        isStartOfWord = false;
-      } else {
-        processedCodepoint = utf8proc_tolower(originalCodepoint);
-        if (processedCodepoint < 0)
-          processedCodepoint = originalCodepoint;
-      }
-    }
-
-    auto numBytesWritten =
-        utf8proc_encode_char(processedCodepoint, outputBytes);
-    outputBytes += numBytesWritten;
-    inputBytes += numBytesRead;
-  }
-
-  output.resize(outputBytes - outputStart);
-  return true;
-}
 } // namespace
 
 /// Unicode codepoints recognized as whitespace in Presto:
@@ -783,6 +690,101 @@ FOLLY_ALWAYS_INLINE void pad(
       padString.data(),
       padPrefixByteLength);
 }
+
+namespace {
+template <bool onlySpaceDelimiter>
+inline bool isDelimiterAscii(unsigned char ch) {
+  if constexpr (onlySpaceDelimiter) {
+    return ch == ' ';
+  } else {
+    return std::isspace(ch);
+  }
+}
+
+template <bool onlySpaceDelimiter>
+inline bool isDelimiterUtf8(utf8proc_int32_t cp) {
+  if constexpr (onlySpaceDelimiter) {
+    return cp == 0x20;
+  } else {
+    return isUnicodeWhiteSpace(cp);
+  }
+}
+
+// ASCII InitCap Implementation.
+template <bool onlySpaceDelimiter, typename TOutString, typename TInString>
+FOLLY_ALWAYS_INLINE bool initcapAsciiImpl(
+    TOutString& output,
+    const TInString& input) {
+  output.resize(input.size());
+  const char* inputChars = input.data();
+  char* outputChars = output.data();
+
+  bool isStartOfWord = true;
+  for (size_t i = 0; i < input.size(); ++i) {
+    unsigned char currentChar = static_cast<unsigned char>(inputChars[i]);
+
+    if (isDelimiterAscii<onlySpaceDelimiter>(currentChar)) {
+      isStartOfWord = true;
+      outputChars[i] = currentChar;
+    } else if (isStartOfWord) {
+      outputChars[i] = std::toupper(currentChar);
+      isStartOfWord = false;
+    } else {
+      outputChars[i] = std::tolower(currentChar);
+    }
+  }
+  return true;
+}
+
+// UTF-8 InitCap Implementation.
+template <bool onlySpaceDelimiter, typename TOutString, typename TInString>
+FOLLY_ALWAYS_INLINE bool initcapUtf8Impl(
+    TOutString& output,
+    const TInString& input) {
+  const uint8_t* inputBytes = reinterpret_cast<const uint8_t*>(input.data());
+  const uint8_t* inputEnd = inputBytes + input.size();
+
+  output.resize(input.size() * 4);
+  uint8_t* outputStart = reinterpret_cast<uint8_t*>(output.data());
+  uint8_t* outputBytes = outputStart;
+
+  bool isStartOfWord = true;
+
+  while (inputBytes < inputEnd) {
+    utf8proc_int32_t originalCodepoint;
+    auto numBytesRead =
+        utf8proc_iterate(inputBytes, inputEnd - inputBytes, &originalCodepoint);
+    if (numBytesRead < 0) {
+      return false;
+    }
+
+    utf8proc_int32_t processedCodepoint = originalCodepoint;
+
+    if (isDelimiterUtf8<onlySpaceDelimiter>(originalCodepoint)) {
+      isStartOfWord = true;
+    } else {
+      if (isStartOfWord) {
+        processedCodepoint = utf8proc_toupper(originalCodepoint);
+        if (processedCodepoint < 0)
+          processedCodepoint = originalCodepoint;
+        isStartOfWord = false;
+      } else {
+        processedCodepoint = utf8proc_tolower(originalCodepoint);
+        if (processedCodepoint < 0)
+          processedCodepoint = originalCodepoint;
+      }
+    }
+
+    auto numBytesWritten =
+        utf8proc_encode_char(processedCodepoint, outputBytes);
+    outputBytes += numBytesWritten;
+    inputBytes += numBytesRead;
+  }
+
+  output.resize(outputBytes - outputStart);
+  return true;
+}
+} // namespace
 
 template <
     bool onlySpaceDelimiter,
