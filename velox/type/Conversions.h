@@ -266,66 +266,26 @@ struct Converter<
   }
 
   static Expected<T> convertStringToInt(const folly::StringPiece v) {
-    // Handling integer target cases
-    T result = 0;
-    int index = 0;
-    int len = v.size();
-    if (len == 0) {
+    const auto result = detail::callFollyTo<T>(v);
+    if(!result.hasError()) {
+      return result.value();
+    }
+    int pos = v.rfind('.');
+    if(pos == folly::StringPiece::npos || pos == v.size() - 1) {
+      if (threadSkipErrorDetails()) {
+        return folly::makeUnexpected(Status::UserError());
+      }
       return folly::makeUnexpected(Status::UserError(
-          "Cannot cast an empty string to an integral value."));
-    }
+          "{}", folly::makeConversionError(result.error(), "").what()));
+    } // Error was not invoked by '.'
 
-    // Setting negative flag
-    bool negative = false;
-    // Setting decimalPoint flag
-    bool decimalPoint = false;
-    if (v[0] == '-' || v[0] == '+') {
-      if (len == 1) {
-        return folly::makeUnexpected(Status::UserError(
-            "Cannot cast an '{}' string to an integral value.", v[0]));
-      }
-      negative = v[0] == '-';
-      index = 1;
-    }
-    if (negative) {
-      for (; index < len; index++) {
-        // Truncate the decimal
-        if (!decimalPoint && v[index] == '.') {
-          decimalPoint = true;
-          if (++index == len) {
-            break;
-          }
-        }
-        if (!std::isdigit(v[index])) {
-          return folly::makeUnexpected(
-              Status::UserError("Encountered a non-digit character"));
-        }
-        if (!decimalPoint) {
-          result = checkedMultiply<T>(result, 10, CppToType<T>::name);
-          result = checkedMinus<T>(result, v[index] - '0', CppToType<T>::name);
-        }
-      }
-    } else {
-      for (; index < len; index++) {
-        // Truncate the decimal
-        if (!decimalPoint && v[index] == '.') {
-          decimalPoint = true;
-          if (++index == len) {
-            break;
-          }
-        }
-        if (!std::isdigit(v[index])) {
-          return folly::makeUnexpected(
-              Status::UserError("Encountered a non-digit character"));
-        }
-        if (!decimalPoint) {
-          result = checkedMultiply<T>(result, 10, CppToType<T>::name);
-          result = checkedPlus<T>(result, v[index] - '0', CppToType<T>::name);
-        }
+    for(int i = len - 1; i > pos; --i) {
+      if(!std::isdigit(v[i])) {
+        return folly::makeUnexpected(
+            Status::UserError("Encountered a non-digit character"));
       }
     }
-    // Final result
-    return result;
+    return detail::callFollyTo<T>(v.subpiece(0, pos));
   }
 
   static Expected<T> tryCast(folly::StringPiece v) {
