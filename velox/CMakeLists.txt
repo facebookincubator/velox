@@ -26,6 +26,7 @@ add_subdirectory(external/date)
 add_subdirectory(external/tzdb)
 add_subdirectory(external/md5)
 add_subdirectory(external/hdfs)
+add_subdirectory(external/theta)
 #
 
 # examples depend on expression
