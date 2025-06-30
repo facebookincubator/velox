@@ -16,7 +16,6 @@
 
 #include "velox/dwio/text/writer/TextWriter.h"
 #include <gtest/gtest.h>
-#include "velox/common/base/Fs.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/dwio/text/tests/writer/FileReaderUtil.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
