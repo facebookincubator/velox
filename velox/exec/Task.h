@@ -851,6 +851,8 @@ class Task : public std::enable_shared_from_this<Task> {
   // Invoked to initialize the memory pool for this task on creation.
   void initTaskPool();
 
+  void initDriverFactory();
+
   // Creates a scaled scan controller for a given table scan node.
   void addScaledScanControllerLocked(
       uint32_t splitGroupId,
