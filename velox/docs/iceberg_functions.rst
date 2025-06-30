@@ -1,6 +1,6 @@
-***********************
+*****************
 Iceberg Functions
-***********************
+*****************
 
 Here is a list of all scalar Iceberg functions available in Velox.
 Function names link to function description. Check out coverage maps

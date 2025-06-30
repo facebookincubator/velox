@@ -1,3 +1,9 @@
+=================
+Function Coverage
+=================
+
+Here is a list of all scalar functions from Iceberg, with functions that are available in Velox highlighted.
+
 .. raw:: html
 
     <style>
