@@ -15,6 +15,7 @@
  */
 
 #include "velox/dwio/text/reader/TextReader.h"
+#include "velox/common/encode/Base64.h"
 #include "velox/dwio/common/exception/Exceptions.h"
 #include "velox/type/fbhive/HiveTypeParser.h"
 
@@ -963,7 +964,35 @@ void TextRowReader::readElement(
       }
       break;
 
-    case TypeKind::VARBINARY:
+    case TypeKind::VARBINARY: {
+      const auto& strView = getStringView(*this, isNull, delim);
+      const auto& flatVector =
+          data ? data->asChecked<FlatVector<StringView>>() : nullptr;
+      if (!flatVector) {
+        VELOX_FAIL(
+            "Vector for column type does not match: expected FlatVector<StringView>, got {}",
+            data ? data->type()->toString() : "null");
+        return;
+      }
+
+      if ((atEOF_ && atSOL_) || (flatVector == nullptr)) {
+        break;
+      }
+
+      const auto& decodedStr = encoding::Base64::decode(
+          folly::StringPiece(strView.data(), strView.size()));
+
+      const auto& ownedDecodedStr = stringViewBuffer_.getOwnedValue(
+          StringView(decodedStr.data(), decodedStr.size()));
+
+      flatVector->set(insertionRow, ownedDecodedStr);
+
+      if (isNull) {
+        flatVector->setNull(insertionRow, true);
+      }
+
+      break;
+    }
     case TypeKind::VARCHAR: {
       const auto& strView = getStringView(*this, isNull, delim);
       const auto& flatVector =
