@@ -516,95 +516,20 @@ class DecimalUtil {
       int toPrecision,
       int toScale,
       T& decimalValue) {
-    DecimalComponents decimalComponents;
-    if (auto status =
-            parseDecimalComponents(s.data(), s.size(), decimalComponents);
-        !status.ok()) {
-      return Status::UserError("Value is not a number. " + status.message());
-    }
-
-    // Count number of significant digits (without leading zeros).
-    const size_t firstNonZero =
-        decimalComponents.wholeDigits.find_first_not_of('0');
-    size_t significantDigits = decimalComponents.fractionalDigits.size();
-    if (firstNonZero != std::string::npos) {
-      significantDigits += decimalComponents.wholeDigits.size() - firstNonZero;
-    }
-    int32_t parsedPrecision = static_cast<int32_t>(significantDigits);
-
+    int32_t parsedPrecision = 0;
     int32_t parsedScale = 0;
-    bool roundUp = false;
-    const int32_t fractionSize = decimalComponents.fractionalDigits.size();
-    if (!decimalComponents.exponent.has_value()) {
-      if (fractionSize > toScale) {
-        if (decimalComponents.fractionalDigits[toScale] >= '5') {
-          roundUp = true;
-        }
-        parsedScale = toScale;
-        decimalComponents.fractionalDigits = std::string_view(
-            decimalComponents.fractionalDigits.data(), toScale);
-      } else {
-        parsedScale = fractionSize;
-      }
-    } else {
-      const auto exponent = decimalComponents.exponent.value();
-      parsedScale = -exponent + fractionSize;
-      // Truncate the fractionalDigits.
-      if (parsedScale > toScale) {
-        if (-exponent >= toScale) {
-          // The fractional digits could be dropped.
-          if (fractionSize > 0 &&
-              decimalComponents.fractionalDigits[0] >= '5') {
-            roundUp = true;
-          }
-          decimalComponents.fractionalDigits = "";
-          parsedScale -= fractionSize;
-        } else {
-          const auto reduceDigits = exponent + toScale;
-          if (fractionSize > reduceDigits &&
-              decimalComponents.fractionalDigits[reduceDigits] >= '5') {
-            roundUp = true;
-          }
-          decimalComponents.fractionalDigits = std::string_view(
-              decimalComponents.fractionalDigits.data(),
-              std::min(reduceDigits, fractionSize));
-          parsedScale -=
-              fractionSize - decimalComponents.fractionalDigits.size();
-        }
-      }
-    }
-
     int128_t out = 0;
-    if (auto status = parseHugeInt(decimalComponents, out); !status.ok()) {
+    if (auto status = parseStringToDecimalComponents(
+            s, toScale, parsedPrecision, parsedScale, out);
+        !status.ok()) {
       return status;
     }
 
-    if (roundUp) {
-      bool overflow = __builtin_add_overflow(out, 1, &out);
-      if (UNLIKELY(overflow)) {
-        return Status::UserError("Value too large.");
-      }
-    }
-    out *= decimalComponents.sign;
-
-    if (parsedScale < 0) {
-      /// Force the scale to be zero, to avoid negative scales (due to
-      /// compatibility issues with external systems such as databases).
-      if (-parsedScale + toScale > LongDecimalType::kMaxPrecision) {
-        return Status::UserError("Value too large.");
-      }
-
-      bool overflow = __builtin_mul_overflow(
-          out, kPowersOfTen[-parsedScale + toScale], &out);
-      if (UNLIKELY(overflow)) {
-        return Status::UserError("Value too large.");
-      }
-      parsedPrecision -= parsedScale;
-      parsedScale = toScale;
-    }
     const auto status = rescaleWithRoundUp<int128_t, T>(
         out,
-        std::min((uint8_t)parsedPrecision, LongDecimalType::kMaxPrecision),
+        std::min(
+            static_cast<uint8_t>(parsedPrecision),
+            LongDecimalType::kMaxPrecision),
         parsedScale,
         toPrecision,
         toScale,
@@ -618,37 +543,11 @@ class DecimalUtil {
   static constexpr __uint128_t kOverflowMultiplier = ((__uint128_t)1 << 127);
 
  private:
-  // Represent the varchar fragment.
-  //
-  // For example:
-  // | value | wholeDigits | fractionalDigits | exponent | sign |
-  // | 9999999999.99 | 9999999999 | 99 | nullopt | 1 |
-  // | 15 | 15 |  | nullopt | 1 |
-  // | 1.5 | 1 | 5 | nullopt | 1 |
-  // | -1.5 | 1 | 5 | nullopt | -1 |
-  // | 31.523e-2 | 31 | 523 | -2 | 1 |
-  struct DecimalComponents {
-    std::string_view wholeDigits;
-    std::string_view fractionalDigits;
-    std::optional<int32_t> exponent = std::nullopt;
-    int8_t sign = 1;
-  };
-
-  // Extract a string view of continuous digits.
-  static std::string_view
-  extractDigits(const char* s, size_t start, size_t size);
-
-  // Parse decimal components, including whole digits, fractional digits,
-  // exponent and sign, from input chars. Returns error status if input chars
-  // do not represent a valid value.
-  static Status
-  parseDecimalComponents(const char* s, size_t size, DecimalComponents& out);
-
-  // Parse huge int from decimal components. The fractional part is scaled up by
-  // required power of 10, and added with the whole part. Returns error status
-  // if overflows.
-  static Status parseHugeInt(
-      const DecimalComponents& decimalComponents,
+  static Status parseStringToDecimalComponents(
+      const StringView& s,
+      int toScale,
+      int32_t& parsedPrecision,
+      int32_t& parsedScale,
       int128_t& out);
 }; // DecimalUtil
 } // namespace facebook::velox
