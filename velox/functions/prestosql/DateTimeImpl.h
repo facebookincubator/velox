@@ -21,7 +21,7 @@
 #include "velox/common/base/Doubles.h"
 #include "velox/external/date/date.h"
 #include "velox/functions/lib/DateTimeFormatter.h"
-#include "velox/functions/lib/TimeUtils.h"
+#include "velox/functions/lib/DateTimeImpl.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/Timestamp.h"
 #include "velox/type/TimestampConversion.h"
