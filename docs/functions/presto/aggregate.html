@@ -894,9 +894,10 @@ The noisy count is post-processed to be non-negative and rounded to bigint.</p>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="noisy_sum_gaussian">
-<span class="sig-name descname"><span class="pre">noisy_sum_gaussian</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">col</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">noise_scale</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#noisy_sum_gaussian" title="Link to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">noisy_sum_gaussian</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">col</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">noise_scale</span></span></em><span class="optional">[</span>, <em class="sig-param"><span class="n"><span class="pre">random_seed</span></span></em><span class="optional">]</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#noisy_sum_gaussian" title="Link to this definition">¶</a></dt>
 <dd><p>Calculates the sum over the input values in <code class="docutils literal notranslate"><span class="pre">col</span></code> and then adds a normally distributed
 random double value with 0 mean and standard deviation of <code class="docutils literal notranslate"><span class="pre">noise_scale</span></code>.</p>
+<p>If provided, <code class="docutils literal notranslate"><span class="pre">random_seed</span></code> is used to seed the random number generator. Otherwise, noise is drawn from a secure random.</p>
 </dd></dl>
 
 </section>
