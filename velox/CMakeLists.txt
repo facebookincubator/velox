@@ -56,6 +56,7 @@ endif()
 
 add_subdirectory(functions) # depends on md5 (postgresql)
 add_subdirectory(connectors)
+add_subdirectory(storage_adapters)
 
 if(${VELOX_ENABLE_EXEC})
   add_subdirectory(exec)
