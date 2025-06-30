@@ -21,7 +21,6 @@
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/file/tests/FaultyFileSystem.h"
 #include "velox/common/fuzzer/Utils.h"
-#include "velox/common/memory/SharedArbitrator.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/dwio/dwrf/RegisterDwrfReader.h" // @manual
 #include "velox/dwio/dwrf/RegisterDwrfWriter.h" // @manual
@@ -256,6 +255,10 @@ class MemoryArbitrationFuzzer {
 
 MemoryArbitrationFuzzer::MemoryArbitrationFuzzer(size_t initialSeed)
     : vectorFuzzer_{getFuzzerOptions(), pool_.get()} {
+  // Set timestamp precision as milliseconds, as timestamp may be used as
+  // paritition key, and presto doesn't supports nanosecond precision.
+  vectorFuzzer_.getMutableOptions().timestampPrecision =
+      fuzzer::FuzzerTimestampPrecision::kMilliSeconds;
   if (!isRegisteredNamedVectorSerde(VectorSerde::Kind::kPresto)) {
     serializer::presto::PrestoVectorSerde::registerNamedVectorSerde();
   }
