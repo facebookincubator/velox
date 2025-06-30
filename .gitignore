@@ -296,6 +296,9 @@ cmake_build
 cmake-build-debug
 cmake-build-release
 
+# Maven
+target/
+
 # tests
 test/test.sql
 
