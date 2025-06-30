@@ -36,6 +36,7 @@
 #include <aws/core/client/DefaultRetryStrategy.h>
 #include <aws/identity-management/auth/STSAssumeRoleCredentialsProvider.h>
 #include <aws/s3/S3Client.h>
+#include <aws/s3/model/HeadObjectRequest.h>
 
 namespace facebook::velox::filesystems {
 namespace {
@@ -478,4 +479,15 @@ std::string S3FileSystem::name() const {
   return "S3";
 }
 
+bool S3FileSystem::exists(std::string_view path) {
+  std::string bucket;
+  std::string key;
+  getBucketAndKeyFromPath(getPath(path), bucket, key);
+
+  Aws::S3::Model::HeadObjectRequest request;
+  request.SetBucket(awsString(bucket));
+  request.SetKey(awsString(key));
+
+  return impl_->s3Client()->HeadObject(request).IsSuccess();
+}
 } // namespace facebook::velox::filesystems
