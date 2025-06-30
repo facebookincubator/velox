@@ -47,24 +47,31 @@ struct CovarSampResultAccessor {
 template <bool nullOnDivideByZero>
 struct CorrResultAccessor {
   static bool hasResult(const CorrAccumulator& accumulator) {
+    bool hasNaN = std::isnan(accumulator.m2Y()) ||
+        std::isnan(accumulator.m2X()) || std::isnan(accumulator.c2());
+    bool notZero = accumulator.m2Y() != 0 && accumulator.m2X() != 0;
     if constexpr (nullOnDivideByZero) {
       if (accumulator.count() == 1) {
         return false;
       }
-      return accumulator.m2X() != 0 && accumulator.m2Y() != 0;
     } else {
       if (accumulator.count() == 1) {
         return true;
       }
-      return accumulator.m2X() != 0 && accumulator.m2Y() != 0;
     }
+    return hasNaN || notZero;
   }
 
   static double result(const CorrAccumulator& accumulator) {
     if (accumulator.count() == 1) {
       VELOX_CHECK(
           !nullOnDivideByZero,
-          "NaN is returned only when m2 is 0 and nullOnDivideByZero is false.");
+          "NaN is returned when m2 is 0 and nullOnDivideByZero is false.");
+      return std::numeric_limits<double>::quiet_NaN();
+    }
+    if (FOLLY_UNLIKELY(
+            std::isnan(accumulator.m2Y()) || std::isnan(accumulator.m2X()) ||
+            std::isnan(accumulator.c2()))) {
       return std::numeric_limits<double>::quiet_NaN();
     }
     double stddevX = std::sqrt(accumulator.m2X());
