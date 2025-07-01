@@ -529,7 +529,9 @@ class HiveDataSink : public DataSink {
       const std::shared_ptr<const HiveConfig>& hiveConfig,
       uint32_t bucketCount,
       std::unique_ptr<core::PartitionFunction> bucketFunction,
-      const std::vector<column_index_t>& dataChannels);
+      const std::vector<column_index_t>& partitionChannels,
+      const std::vector<column_index_t>& dataChannels,
+      std::unique_ptr<PartitionIdGenerator> partitionIdGenerator);
 
   void appendData(RowVectorPtr input) override;
 
@@ -634,6 +636,9 @@ class HiveDataSink : public DataSink {
   // Appends a new writer for the given 'id'. The function returns the index of
   // the newly created writer in 'writers_'.
   uint32_t appendWriter(const HiveWriterId& id);
+
+  virtual std::shared_ptr<dwio::common::WriterOptions> createWriterOptions()
+      const;
 
   virtual std::optional<std::string> getPartitionName(
       const HiveWriterId& id) const;

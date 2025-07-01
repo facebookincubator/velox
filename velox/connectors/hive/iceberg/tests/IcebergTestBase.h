@@ -30,6 +30,12 @@
 
 namespace facebook::velox::connector::hive::iceberg::test {
 
+struct PartitionField {
+  int32_t id; // Index of column in RowType, start from 0.
+  TransformType type;
+  std::optional<int32_t> parameter; // Optional parameter of transform.
+};
+
 class IcebergTestBase : public exec::test::HiveConnectorTestBase {
  protected:
   void SetUp() override;
@@ -44,21 +50,22 @@ class IcebergTestBase : public exec::test::HiveConnectorTestBase {
   std::shared_ptr<IcebergDataSink> createIcebergDataSink(
       const RowTypePtr& rowType,
       const std::string& outputDirectoryPath,
-      const std::vector<std::string>& partitionTransforms = {});
+      const std::vector<PartitionField>& partitionTransforms = {});
 
   std::vector<std::shared_ptr<ConnectorSplit>> createSplitsForDirectory(
       const std::string& directory);
 
   std::vector<std::string> listFiles(const std::string& dirPath);
 
- private:
   std::shared_ptr<IcebergPartitionSpec> createPartitionSpec(
-      const std::vector<std::string>& transformSpecs);
+      const std::vector<PartitionField>& transformSpecs,
+      const RowTypePtr& rowType);
 
+ private:
   std::shared_ptr<IcebergInsertTableHandle> createIcebergInsertTableHandle(
       const RowTypePtr& rowType,
       const std::string& outputDirectoryPath,
-      const std::vector<std::string>& partitionTransforms = {});
+      const std::vector<PartitionField>& partitionTransforms = {});
 
   std::vector<std::string> listPartitionDirectories(
       const std::string& dataPath);
@@ -67,6 +74,7 @@ class IcebergTestBase : public exec::test::HiveConnectorTestBase {
 
  protected:
   RowTypePtr rowType_;
+  std::shared_ptr<memory::MemoryPool> opPool_;
 
  private:
   static constexpr const char* kHiveConnectorId = "test-hive";
@@ -75,7 +83,6 @@ class IcebergTestBase : public exec::test::HiveConnectorTestBase {
   dwio::common::FileFormat fileFormat_ = dwio::common::FileFormat::PARQUET;
 
   std::shared_ptr<memory::MemoryPool> root_;
-  std::shared_ptr<memory::MemoryPool> opPool_;
   std::shared_ptr<memory::MemoryPool> connectorPool_;
   std::shared_ptr<config::ConfigBase> connectorSessionProperties_;
   std::shared_ptr<HiveConfig> connectorConfig_;
