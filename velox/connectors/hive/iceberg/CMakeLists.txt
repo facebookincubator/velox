@@ -17,7 +17,11 @@ velox_add_library(
   IcebergSplitReader.cpp
   IcebergSplit.cpp
   PositionalDeleteFileReader.cpp
-  IcebergDataSink.cpp)
+  IcebergDataSink.cpp
+  IcebergPartitionIdGenerator.cpp
+  Transforms.cpp
+  TransformFactory.cpp
+  Murmur3.cpp)
 
 velox_link_libraries(velox_hive_iceberg_connector velox_connector Folly::folly)
 

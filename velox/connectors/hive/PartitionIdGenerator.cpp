@@ -60,6 +60,17 @@ PartitionIdGenerator::PartitionIdGenerator(
   }
 }
 
+PartitionIdGenerator::PartitionIdGenerator(
+    std::vector<column_index_t> partitionChannels,
+    uint32_t maxPartitions,
+    bool partitionPathAsLowerCase)
+    : partitionChannels_(std::move(partitionChannels)),
+      maxPartitions_(maxPartitions),
+      partitionPathAsLowerCase_(partitionPathAsLowerCase) {
+  VELOX_USER_CHECK(
+      !partitionChannels_.empty(), "There must be at least one partition key.");
+}
+
 void PartitionIdGenerator::run(
     const RowVectorPtr& input,
     raw_vector<uint64_t>& result) {

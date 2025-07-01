@@ -60,45 +60,11 @@ TEST_F(IcebergInsertTest, testIcebergTableWrite) {
 TEST_F(IcebergInsertTest, testSingleColumnAsPartition) {
   for (auto colIndex = 0; colIndex < rowType_->size() - 1; colIndex++) {
     const auto& colName = rowType_->nameOf(colIndex);
-    const auto colType = rowType_->childAt(colIndex);
-
-    const bool isDecimal = colType->isDecimal();
-    const bool isVarbinary = colType->isVarbinary();
+    const auto outputDirectory = exec::test::TempDirectoryPath::create();
+    const auto dataPath = fmt::format("{}", outputDirectory->getPath());
     constexpr int32_t numBatches = 2;
     constexpr int32_t vectorSize = 50;
-    const auto outputDirectory = exec::test::TempDirectoryPath::create();
 
-    if (isDecimal || isVarbinary) {
-      const auto vectors = createTestData(numBatches, vectorSize, 0.5);
-      std::vector<std::string> partitionTransforms = {colName};
-      if (isDecimal) {
-        EXPECT_THROW(
-            {
-              auto dataSink = createIcebergDataSink(
-                  rowType_, outputDirectory->getPath(), partitionTransforms);
-
-              for (const auto& vector : vectors) {
-                dataSink->appendData(vector);
-              }
-            },
-            VeloxRuntimeError)
-            << "Expected exception when using DECIMAL column as partition column";
-      } else if (isVarbinary) {
-        EXPECT_THROW(
-            {
-              auto dataSink = createIcebergDataSink(
-                  rowType_, outputDirectory->getPath(), partitionTransforms);
-
-              for (const auto& vector : vectors) {
-                dataSink->appendData(vector);
-              }
-            },
-            VeloxRuntimeError)
-            << "Expected exception when using VARBINARY column as partition column";
-      }
-      continue;
-    }
-    const auto dataPath = fmt::format("{}", outputDirectory->getPath());
     const auto vectors = createTestData(numBatches, vectorSize, 0.5);
     std::vector<std::string> partitionTransforms = {colName};
     auto dataSink = createIcebergDataSink(
@@ -161,39 +127,6 @@ TEST_F(IcebergInsertTest, testPartitionNullColumn) {
     const auto dataPath = fmt::format("{}", outputDirectory->getPath());
     constexpr int32_t numBatches = 2;
     constexpr int32_t vectorSize = 100;
-    const bool isDecimal = colType->isDecimal();
-    const bool isVarbinary = colType->isVarbinary();
-
-    if (isDecimal || isVarbinary) {
-      const auto vectors = createTestData(numBatches, vectorSize, 0.5);
-      std::vector<std::string> partitionTransforms = {colName};
-      if (isDecimal) {
-        EXPECT_THROW(
-            {
-              auto dataSink = createIcebergDataSink(
-                  rowType_, outputDirectory->getPath(), partitionTransforms);
-
-              for (const auto& vector : vectors) {
-                dataSink->appendData(vector);
-              }
-            },
-            VeloxRuntimeError)
-            << "Expected exception when using DECIMAL column as partition column";
-      } else if (isVarbinary) {
-        EXPECT_THROW(
-            {
-              auto dataSink = createIcebergDataSink(
-                  rowType_, outputDirectory->getPath(), partitionTransforms);
-
-              for (const auto& vector : vectors) {
-                dataSink->appendData(vector);
-              }
-            },
-            VeloxRuntimeError)
-            << "Expected exception when using VARBINARY column as partition column";
-      }
-      continue;
-    }
 
     const auto vectors = createTestData(numBatches, vectorSize, 1.0);
     std::vector<std::string> partitionTransforms = {colName};
@@ -234,7 +167,7 @@ TEST_F(IcebergInsertTest, testColumnCombinationsAsPartition) {
   std::vector<std::vector<int32_t>> columnCombinations = {
       {0, 1}, // BIGINT, INTEGER.
       {2, 1}, // SMALLINT, INTEGER.
-      {2, 0}, // SMALLINT, BIGINT.
+      {2, 3}, // SMALLINT, DECIMAL.
       {0, 2, 1} // BIGINT, SMALLINT, INTEGER.
   };
 

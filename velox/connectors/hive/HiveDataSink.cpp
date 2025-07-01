@@ -374,7 +374,18 @@ HiveDataSink::HiveDataSink(
                     *insertTableHandle->bucketProperty(),
                     inputType)
               : nullptr,
-          getNonPartitionChannels(insertTableHandle)) {}
+          getPartitionChannels(insertTableHandle),
+          getNonPartitionChannels(insertTableHandle),
+          !getPartitionChannels(insertTableHandle).empty()
+              ? std::make_unique<PartitionIdGenerator>(
+                    inputType,
+                    getPartitionChannels(insertTableHandle),
+                    hiveConfig->maxPartitionsPerWriters(
+                        connectorQueryCtx->sessionProperties()),
+                    connectorQueryCtx->memoryPool(),
+                    hiveConfig->isPartitionPathAsLowerCase(
+                        connectorQueryCtx->sessionProperties()))
+              : nullptr) {}
 
 HiveDataSink::HiveDataSink(
     RowTypePtr inputType,
@@ -384,7 +395,9 @@ HiveDataSink::HiveDataSink(
     const std::shared_ptr<const HiveConfig>& hiveConfig,
     uint32_t bucketCount,
     std::unique_ptr<core::PartitionFunction> bucketFunction,
-    const std::vector<column_index_t>& dataChannels)
+    const std::vector<column_index_t>& partitionChannels,
+    const std::vector<column_index_t>& dataChannels,
+    std::unique_ptr<PartitionIdGenerator> partitionIdGenerator)
     : inputType_(std::move(inputType)),
       insertTableHandle_(std::move(insertTableHandle)),
       connectorQueryCtx_(connectorQueryCtx),
@@ -393,17 +406,8 @@ HiveDataSink::HiveDataSink(
       updateMode_(getUpdateMode()),
       maxOpenWriters_(hiveConfig_->maxPartitionsPerWriters(
           connectorQueryCtx->sessionProperties())),
-      partitionChannels_(getPartitionChannels(insertTableHandle_)),
-      partitionIdGenerator_(
-          !partitionChannels_.empty()
-              ? std::make_unique<PartitionIdGenerator>(
-                    inputType_,
-                    partitionChannels_,
-                    maxOpenWriters_,
-                    connectorQueryCtx_->memoryPool(),
-                    hiveConfig_->isPartitionPathAsLowerCase(
-                        connectorQueryCtx->sessionProperties()))
-              : nullptr),
+      partitionChannels_(partitionChannels),
+      partitionIdGenerator_(std::move(partitionIdGenerator)),
       dataChannels_(dataChannels),
       bucketCount_(static_cast<int32_t>(bucketCount)),
       bucketFunction_(std::move(bucketFunction)),

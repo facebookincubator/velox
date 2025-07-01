@@ -104,27 +104,83 @@ std::vector<RowVectorPtr> IcebergTestBase::createTestData(
 }
 
 std::shared_ptr<IcebergPartitionSpec> IcebergTestBase::createPartitionSpec(
-    const std::vector<std::string>& transformSpecs) {
+    const std::vector<std::string>& transformSpecs,
+    const RowTypePtr& rowType) {
   std::vector<IcebergPartitionSpec::Field> fields;
-  static const std::regex identityRegex(R"(([a-z_][a-z0-9_]*))");
+
+  static const std::regex bucketRegex(R"(bucket\(([^,]+),\s*(\d+)\))");
+  static const std::regex truncateRegex(R"(truncate\(([^,]+),\s*(\d+)\))");
+  static const std::regex timeRegex(R"((year|month|day|hour)\(([^)]+)\))");
+  static const std::regex identityRegex(
+      R"(([a-z_][a-z0-9_]*(?:\.[a-z_][a-z0-9_]*)*))");
 
   for (const auto& spec : transformSpecs) {
-    TransformType transformType = TransformType::kIdentity;
+    auto transformType = TransformType::kIdentity;
+    std::optional<int32_t> parameter = std::nullopt;
     std::string name;
     std::smatch matches;
 
-    if (std::regex_match(spec, matches, identityRegex)) {
+    if (std::regex_match(spec, matches, bucketRegex)) {
+      transformType = TransformType::kBucket;
+      name = matches[1];
+      parameter = std::stoi(matches[2]);
+    } else if (std::regex_match(spec, matches, truncateRegex)) {
+      transformType = TransformType::kTruncate;
+      name = matches[1];
+      parameter = std::stoi(matches[2]);
+    } else if (std::regex_match(spec, matches, timeRegex)) {
+      std::string transformName = matches[1];
+      name = matches[2];
+
+      if (transformName == "year") {
+        transformType = TransformType::kYear;
+      } else if (transformName == "month") {
+        transformType = TransformType::kMonth;
+      } else if (transformName == "day") {
+        transformType = TransformType::kDay;
+      } else if (transformName == "hour") {
+        transformType = TransformType::kHour;
+      }
+    } else if (std::regex_match(spec, matches, identityRegex)) {
       transformType = TransformType::kIdentity;
       name = matches[1];
     } else {
       VELOX_FAIL("Unsupported transform specification: {}", spec);
     }
 
-    fields.push_back(
-        IcebergPartitionSpec::Field(name, transformType, std::nullopt));
+    fields.push_back(IcebergPartitionSpec::Field(
+        name, findChildTypeKind(rowType, name), transformType, parameter));
   }
 
   return std::make_shared<IcebergPartitionSpec>(1, fields);
+}
+
+void addColumnHandles(
+    const RowTypePtr& rowType,
+    const std::string& prefix,
+    const std::unordered_set<std::string>& partitionColumns,
+    std::vector<std::shared_ptr<const HiveColumnHandle>>& columnHandles) {
+  for (auto i = 0; i < rowType->size(); ++i) {
+    auto columnName = rowType->nameOf(i);
+    auto fullColumnName =
+        prefix.empty() ? columnName : prefix + "." + columnName;
+    auto type = rowType->childAt(i);
+
+    columnHandles.push_back(std::make_shared<HiveColumnHandle>(
+        fullColumnName,
+        partitionColumns.count(fullColumnName) > 0
+            ? HiveColumnHandle::ColumnType::kPartitionKey
+            : HiveColumnHandle::ColumnType::kRegular,
+        type,
+        type));
+
+    // Recursively process nested row types.
+    if (type->isRow()) {
+      auto nestedRowType = asRowType(type);
+      addColumnHandles(
+          nestedRowType, fullColumnName, partitionColumns, columnHandles);
+    }
+  }
 }
 
 std::shared_ptr<IcebergInsertTableHandle>
@@ -132,31 +188,46 @@ IcebergTestBase::createIcebergInsertTableHandle(
     const RowTypePtr& rowType,
     const std::string& outputDirectoryPath,
     const std::vector<std::string>& partitionTransforms) {
-  std::vector<std::shared_ptr<const HiveColumnHandle>> columnHandles;
-  for (auto i = 0; i < rowType->size(); ++i) {
-    auto columnName = rowType->nameOf(i);
-    auto columnType = HiveColumnHandle::ColumnType::kRegular;
-    for (auto transform : partitionTransforms) {
-      if (columnName == transform) {
-        columnType = HiveColumnHandle::ColumnType::kPartitionKey;
-        break;
+  std::unordered_set<std::string> partitionColumns;
+  for (const auto& transform : partitionTransforms) {
+    std::string columnName;
+    if (transform.find('(') != std::string::npos) {
+      const size_t openParen = transform.find('(');
+      auto comma = 0;
+      // For transforms like "truncate(c_int, 10)" or "bucket(c_varchar, 4)".
+      if (transform.find(',') != std::string::npos) {
+        comma = transform.find(',');
       }
+      // year, month, day.
+      else {
+        comma = transform.find(')');
+      }
+      columnName = transform.substr(openParen + 1, comma - openParen - 1);
+    } else {
+      // identity.
+      columnName = transform;
     }
-    columnHandles.push_back(std::make_shared<HiveColumnHandle>(
-        columnName, columnType, rowType->childAt(i), rowType->childAt(i)));
+
+    columnName.erase(0, columnName.find_first_not_of(" \t"));
+    columnName.erase(columnName.find_last_not_of(" \t") + 1);
+    partitionColumns.insert(columnName);
   }
+
+  std::vector<std::shared_ptr<const HiveColumnHandle>> columnHandles;
+  addColumnHandles(rowType, "", partitionColumns, columnHandles);
 
   auto locationHandle = std::make_shared<LocationHandle>(
       outputDirectoryPath,
       outputDirectoryPath,
       LocationHandle::TableType::kNew);
 
-  auto partitionSpec = createPartitionSpec(partitionTransforms);
+  auto partitionSpec = createPartitionSpec(partitionTransforms, rowType);
 
   return std::make_shared<IcebergInsertTableHandle>(
       columnHandles,
       locationHandle,
       partitionSpec,
+      opPool_.get(),
       fileFormat_,
       nullptr,
       common::CompressionKind::CompressionKind_ZSTD);
@@ -232,7 +303,7 @@ IcebergTestBase::createSplitsForDirectory(const std::string& directory) {
         std::nullopt,
         customSplitInfo,
         nullptr,
-        /*cacheable=*/true,
+        true,
         std::vector<IcebergDeleteFile>()));
   }
 

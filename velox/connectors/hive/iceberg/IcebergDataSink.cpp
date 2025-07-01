@@ -15,8 +15,11 @@
  */
 
 #include "velox/connectors/hive/iceberg/IcebergDataSink.h"
+
 #include "velox/common/base/Fs.h"
 #include "velox/connectors/hive/HiveConnectorUtil.h"
+#include "velox/connectors/hive/iceberg/IcebergPartitionIdGenerator.h"
+#include "velox/exec/OperatorUtils.h"
 
 namespace facebook::velox::connector::hive::iceberg {
 
@@ -51,7 +54,7 @@ template <>
 folly::dynamic extractPartitionValue<TypeKind::VARBINARY>(
     const DecodedVector* block,
     vector_size_t row) {
-  VELOX_NYI("Partition on varbinary column is not supported yet.");
+  return block->toString(row);
 }
 
 } // namespace
@@ -81,7 +84,7 @@ std::string IcebergInsertFileNameGenerator::toString() const {
 
 IcebergDataSink::IcebergDataSink(
     facebook::velox::RowTypePtr inputType,
-    std::shared_ptr<const IcebergInsertTableHandle> insertTableHandle,
+    const std::shared_ptr<const IcebergInsertTableHandle>& insertTableHandle,
     const facebook::velox::connector::ConnectorQueryCtx* connectorQueryCtx,
     facebook::velox::connector::CommitStrategy commitStrategy,
     const std::shared_ptr<const HiveConfig>& hiveConfig)
@@ -92,6 +95,17 @@ IcebergDataSink::IcebergDataSink(
           commitStrategy,
           hiveConfig,
           [&insertTableHandle]() {
+            std::vector<column_index_t> channels;
+            for (column_index_t i = 0;
+                 i < insertTableHandle->inputColumns().size();
+                 i++) {
+              if (insertTableHandle->inputColumns()[i]->isPartitionKey()) {
+                channels.push_back(i);
+              }
+            }
+            return channels;
+          }(),
+          [&insertTableHandle]() {
             std::vector<column_index_t> channels(
                 insertTableHandle->inputColumns().size());
             std::iota(channels.begin(), channels.end(), 0);
@@ -100,10 +114,11 @@ IcebergDataSink::IcebergDataSink(
 
 IcebergDataSink::IcebergDataSink(
     RowTypePtr inputType,
-    std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
+    const std::shared_ptr<const IcebergInsertTableHandle>& insertTableHandle,
     const ConnectorQueryCtx* connectorQueryCtx,
     CommitStrategy commitStrategy,
     const std::shared_ptr<const HiveConfig>& hiveConfig,
+    const std::vector<column_index_t>& partitionChannels,
     const std::vector<column_index_t>& dataChannels)
     : HiveDataSink(
           inputType,
@@ -113,7 +128,18 @@ IcebergDataSink::IcebergDataSink(
           hiveConfig,
           0,
           nullptr,
-          dataChannels) {
+          partitionChannels,
+          dataChannels,
+          !partitionChannels.empty()
+              ? std::make_unique<IcebergPartitionIdGenerator>(
+                    partitionChannels,
+                    hiveConfig->maxPartitionsPerWriters(
+                        connectorQueryCtx->sessionProperties()),
+                    connectorQueryCtx->memoryPool(),
+                    insertTableHandle->columnTransforms(),
+                    hiveConfig->isPartitionPathAsLowerCase(
+                        connectorQueryCtx->sessionProperties()))
+              : nullptr) {
   if (isPartitioned()) {
     partitionData_.resize(maxOpenWriters_);
   }
@@ -173,15 +199,18 @@ void IcebergDataSink::splitInputRowsAndEnsureWriters(RowVectorPtr input) {
     }
 
     std::vector<folly::dynamic> partitionValues(partitionChannels_.size());
-
+    const RowVectorPtr transformedValues =
+        partitionIdGenerator_->partitionValues();
     for (auto i = 0; i < partitionChannels_.size(); ++i) {
-      auto block = input->childAt(partitionChannels_[i]);
-      if (block->type()->isDecimal()) {
-        VELOX_NYI("Partition on decimal column is not supported yet.");
+      auto block = transformedValues->childAt(i);
+      if (block->isNullAt(row)) {
+        partitionValues[i] = nullptr;
+      } else {
+        DecodedVector decoded(*block);
+        const vector_size_t partitionId = partitionIds_[row];
+        partitionValues[i] = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+            extractPartitionValue, block->typeKind(), &decoded, partitionId);
       }
-      DecodedVector decoded(*block);
-      partitionValues[i] = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-          extractPartitionValue, block->typeKind(), &decoded, row);
     }
 
     partitionData_[index] = partitionValues;
@@ -192,6 +221,32 @@ void IcebergDataSink::splitInputRowsAndEnsureWriters(RowVectorPtr input) {
       VELOX_CHECK_NOT_NULL(partitionRows_[i]);
       partitionRows_[i]->setSize(partitionSizes_[i] * sizeof(vector_size_t));
     }
+  }
+}
+
+void IcebergDataSink::appendData(RowVectorPtr input) {
+  checkRunning();
+  if (!isPartitioned() || partitionIdGenerator_->numPartitions() == 1) {
+    const auto index = ensureWriter(HiveWriterId::unpartitionedId());
+    write(index, input);
+    return;
+  }
+
+  // Compute partition and bucket numbers.
+  computePartitionAndBucketIds(input);
+
+  splitInputRowsAndEnsureWriters(input);
+
+  for (auto index = 0; index < writers_.size(); ++index) {
+    const vector_size_t partitionSize = partitionSizes_[index];
+    if (partitionSize == 0) {
+      continue;
+    }
+
+    const RowVectorPtr writerInput = partitionSize == input->size()
+        ? input
+        : exec::wrap(partitionSize, partitionRows_[index], input);
+    write(index, writerInput);
   }
 }
 
