@@ -265,20 +265,28 @@ struct Converter<
     return folly::makeUnexpected(Status::UserError(kErrorMessage));
   }
 
-  static Expected<T> convertStringToInt(const folly::StringPiece v) {
-    const auto test_err = folly::tryTo<T>(v);
+  inline static Expected<T> convertStringToInt(const folly::StringPiece vv) {
+    const auto test_err = folly::tryTo<T>(vv);
     if(!test_err.hasError()) {
       return test_err.value();
     }
-    if(v[0] == '.') {
+    const auto v = folly::ltrimWhitespace(vv);
+    int pos = v.rfind('.');
+    if (pos == folly::StringPiece::npos) { 
       return folly::makeUnexpected(Status::UserError("Invalid number format"));
     }
-    const auto result = folly::tryTo<double>(v);
-    if(result.hasError()) {
-      return folly::makeUnexpected(Status::UserError("Invalid number format"));
+    else { 
+      if(pos == v.size() - 1) //1234.         .
+        return detail::callFollyTo<T>(v.subpiece(0, pos));
+      folly::StringPiece after_dot_sp = v.subpiece(pos + 1);
+      std::string_view after_dot(after_dot_sp.data(), after_dot_sp.size());
+      if(after_dot.find_first_not_of("0123456789") != std::string_view::npos){
+        return folly::makeUnexpected(Status::UserError("Invalid number format"));
+      }
+      if(pos == 0) //" .1234"
+        return static_cast<T>(0);
+      return detail::callFollyTo<T>(v.subpiece(0, pos));
     }
-    int res = static_cast<T>(result.value());
-    return res;
   }
 
   static Expected<T> tryCast(folly::StringPiece v) {
