@@ -25,6 +25,7 @@
 #include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/common/Reader.h"
 #include "velox/dwio/common/TypeWithId.h"
+#include "velox/dwio/common/compression/Compression.h"
 
 namespace facebook::velox::dwio::common {
 
@@ -41,9 +42,11 @@ struct FileContents {
 
   std::unique_ptr<BufferedInput> input;
   std::unique_ptr<SeekableInputStream> inputStream;
+  std::unique_ptr<SeekableInputStream> decompressedInputStream;
   MemoryPool& pool;
   uint64_t fileLength;
   CompressionKind compression;
+  compression::CompressionOptions compressionOptions;
   SerDeOptions serDeOptions;
   std::array<bool, 128> needsEscape;
 };
@@ -125,7 +128,7 @@ class TextRowReader : public RowReader {
 
   uint64_t getLength();
 
-  uint64_t getStreamLength();
+  uint64_t getStreamLength() const;
 
   void setEOF();
 
@@ -207,8 +210,10 @@ class TextRowReader : public RowReader {
   bool atEOL_;
   bool atEOF_;
   bool atSOL_;
+  bool atPhysicalEOF_;
   uint8_t depth_;
   std::string unreadData_;
+  std::string preLoadedUnreadData_;
   int unreadIdx_;
   uint64_t limit_; // lowest offset not in the range
   uint64_t fileLength_;
