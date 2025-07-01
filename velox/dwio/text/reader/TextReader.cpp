@@ -117,6 +117,7 @@ TextRowReader::TextRowReader(
       atEOL_{false},
       atEOF_{false},
       atSOL_{false},
+      atPhysicalEOF_{false},
       depth_{0},
       unreadData_{""},
       unreadIdx_{0},
@@ -234,13 +235,13 @@ uint64_t TextRowReader::next(
       }
     }
     (void)skipLine();
+
+    if (atPhysicalEOF_) {
+      break;
+    }
+
     ++currentRow_;
     ++rowsRead;
-
-    if (pos_ >= getLength()) {
-      // disable further chunk reads but parse the remainder of the line
-      atEOF_ = true;
-    }
 
     // handle empty file
     if (initialPos == pos_ && atEOF_) {
@@ -594,11 +595,14 @@ char TextRowReader::getByteUncheckedOptimized(DelimType& delim) {
       int length;
       const void* buffer;
       if (!contents_->inputStream->Next(&buffer, &length)) {
+        atPhysicalEOF_ = true;
         setEOF();
         delim = DelimTypeEOR;
         return '\0';
       }
-
+      if (length == 0) {
+        return '\0';
+      }
       unreadData_ = std::string(reinterpret_cast<const char*>(buffer), length);
       unreadIdx_ = 0;
     }
