@@ -235,6 +235,7 @@ void DecodedVector::combineWrappers(
       case VectorEncoding::Simple::ROW:
       case VectorEncoding::Simple::ARRAY:
       case VectorEncoding::Simple::MAP:
+      case VectorEncoding::Simple::FLAT_MAP:
         setBaseData(values, rows, sharedBase);
         return;
       case VectorEncoding::Simple::DICTIONARY:
@@ -368,6 +369,7 @@ void DecodedVector::setBaseData(
     case VectorEncoding::Simple::ROW:
     case VectorEncoding::Simple::ARRAY:
     case VectorEncoding::Simple::MAP:
+    case VectorEncoding::Simple::FLAT_MAP:
       setFlatNulls(*vector, rows);
       break;
     case VectorEncoding::Simple::CONSTANT:

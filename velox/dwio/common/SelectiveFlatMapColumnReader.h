@@ -87,7 +87,7 @@ class SelectiveFlatMapColumnReader : public SelectiveStructColumnReaderBase {
         const auto& inMapBuffer =
             children_[i]->formatData().template as<FormatData>().inMapBuffer();
         if (inMapBuffer) {
-          resultFlatMap->inMapsAt(i, true) = inMapBuffer;
+          resultFlatMap->inMapsAt(i) = inMapBuffer;
         }
       }
     }
