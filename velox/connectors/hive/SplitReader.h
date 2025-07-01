@@ -160,17 +160,17 @@ class SplitReader {
       VectorPtr& output,
       const std::vector<BaseVector::CopyRange>& ranges);
 
- private:
-  /// Different table formats may have different meatadata columns.
-  /// This function will be used to update the scanSpec for these columns.
-  std::vector<TypePtr> adaptColumns(
-      const RowTypePtr& fileType,
-      const std::shared_ptr<const velox::RowType>& tableSchema) const;
-
   void setPartitionValue(
       common::ScanSpec* spec,
       const std::string& partitionKey,
       const std::optional<std::string>& value) const;
+
+ private:
+  /// Different table formats may have different meatadata columns.
+  /// This function will be used to update the scanSpec for these columns.
+  virtual std::vector<TypePtr> adaptColumns(
+      const RowTypePtr& fileType,
+      const std::shared_ptr<const velox::RowType>& tableSchema) const;
 
  protected:
   std::shared_ptr<const HiveConnectorSplit> hiveSplit_;
