@@ -17,24 +17,10 @@
 #pragma once
 
 #include "velox/connectors/hive/HiveDataSink.h"
-#include "velox/connectors/hive/iceberg/PartitionSpec.h"
+#include "velox/connectors/hive/iceberg/TransformFactory.h"
+#include "velox/connectors/hive/iceberg/Transforms.h"
 
 namespace facebook::velox::connector::hive::iceberg {
-
-class IcebergInsertFileNameGenerator : public FileNameGenerator {
- public:
-  IcebergInsertFileNameGenerator() {}
-
-  std::pair<std::string, std::string> gen(
-      std::optional<uint32_t> bucketId,
-      const std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
-      const ConnectorQueryCtx& connectorQueryCtx,
-      bool commitRequired) const override;
-
-  folly::dynamic serialize() const override;
-
-  std::string toString() const override;
-};
 
 // Represents a request for Iceberg write.
 class IcebergInsertTableHandle final : public HiveInsertTableHandle {
@@ -43,22 +29,12 @@ class IcebergInsertTableHandle final : public HiveInsertTableHandle {
       std::vector<std::shared_ptr<const HiveColumnHandle>> inputColumns,
       std::shared_ptr<const LocationHandle> locationHandle,
       std::shared_ptr<const IcebergPartitionSpec> partitionSpec,
+      memory::MemoryPool* pool,
       dwio::common::FileFormat tableStorageFormat =
           dwio::common::FileFormat::PARQUET,
       std::shared_ptr<HiveBucketProperty> bucketProperty = nullptr,
       std::optional<common::CompressionKind> compressionKind = {},
-      const std::unordered_map<std::string, std::string>& serdeParameters = {})
-      : HiveInsertTableHandle(
-            std::move(inputColumns),
-            std::move(locationHandle),
-            tableStorageFormat,
-            std::move(bucketProperty),
-            compressionKind,
-            serdeParameters,
-            nullptr,
-            false,
-            std::make_shared<const IcebergInsertFileNameGenerator>()),
-        partitionSpec_(std::move(partitionSpec)) {}
+      const std::unordered_map<std::string, std::string>& serdeParameters = {});
 
   ~IcebergInsertTableHandle() = default;
 
@@ -66,26 +42,34 @@ class IcebergInsertTableHandle final : public HiveInsertTableHandle {
     return partitionSpec_;
   }
 
+  const std::vector<std::shared_ptr<Transform>>& columnTransforms() const {
+    return columnTransforms_;
+  }
+
  private:
-  std::shared_ptr<const IcebergPartitionSpec> partitionSpec_;
+  const std::shared_ptr<const IcebergPartitionSpec> partitionSpec_;
+  const std::vector<std::shared_ptr<Transform>> columnTransforms_;
 };
 
 class IcebergDataSink : public HiveDataSink {
  public:
   IcebergDataSink(
       RowTypePtr inputType,
-      std::shared_ptr<const IcebergInsertTableHandle> insertTableHandle,
+      const std::shared_ptr<const IcebergInsertTableHandle>& insertTableHandle,
       const ConnectorQueryCtx* connectorQueryCtx,
       CommitStrategy commitStrategy,
       const std::shared_ptr<const HiveConfig>& hiveConfig);
 
+  void appendData(RowVectorPtr input) override;
+
  private:
   IcebergDataSink(
       RowTypePtr inputType,
-      std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
+      const std::shared_ptr<const IcebergInsertTableHandle>& insertTableHandle,
       const ConnectorQueryCtx* connectorQueryCtx,
       CommitStrategy commitStrategy,
       const std::shared_ptr<const HiveConfig>& hiveConfig,
+      const std::vector<column_index_t>& partitionChannels,
       const std::vector<column_index_t>& dataChannels);
 
   void splitInputRowsAndEnsureWriters(RowVectorPtr input) override;

@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <exec/tests/utils/AssertQueryBuilder.h>
 #include <folly/init/Init.h>
 
 #include "velox/connectors/hive/iceberg/tests/IcebergTestBase.h"
@@ -60,45 +61,11 @@ TEST_F(IcebergInsertTest, testIcebergTableWrite) {
 TEST_F(IcebergInsertTest, testSingleColumnAsPartition) {
   for (auto colIndex = 0; colIndex < rowType_->size() - 1; colIndex++) {
     const auto& colName = rowType_->nameOf(colIndex);
-    const auto colType = rowType_->childAt(colIndex);
-
-    const bool isDecimal = colType->isDecimal();
-    const bool isVarbinary = colType->isVarbinary();
+    const auto outputDirectory = exec::test::TempDirectoryPath::create();
+    const auto dataPath = fmt::format("{}", outputDirectory->getPath());
     constexpr int32_t numBatches = 2;
     constexpr int32_t vectorSize = 50;
-    const auto outputDirectory = exec::test::TempDirectoryPath::create();
 
-    if (isDecimal || isVarbinary) {
-      const auto vectors = createTestData(numBatches, vectorSize, 0.5);
-      std::vector<std::string> partitionTransforms = {colName};
-      if (isDecimal) {
-        EXPECT_THROW(
-            {
-              auto dataSink = createIcebergDataSink(
-                  rowType_, outputDirectory->getPath(), partitionTransforms);
-
-              for (const auto& vector : vectors) {
-                dataSink->appendData(vector);
-              }
-            },
-            VeloxRuntimeError)
-            << "Expected exception when using DECIMAL column as partition column";
-      } else if (isVarbinary) {
-        EXPECT_THROW(
-            {
-              auto dataSink = createIcebergDataSink(
-                  rowType_, outputDirectory->getPath(), partitionTransforms);
-
-              for (const auto& vector : vectors) {
-                dataSink->appendData(vector);
-              }
-            },
-            VeloxRuntimeError)
-            << "Expected exception when using VARBINARY column as partition column";
-      }
-      continue;
-    }
-    const auto dataPath = fmt::format("{}", outputDirectory->getPath());
     const auto vectors = createTestData(numBatches, vectorSize, 0.5);
     std::vector<std::string> partitionTransforms = {colName};
     auto dataSink = createIcebergDataSink(
@@ -161,39 +128,6 @@ TEST_F(IcebergInsertTest, testPartitionNullColumn) {
     const auto dataPath = fmt::format("{}", outputDirectory->getPath());
     constexpr int32_t numBatches = 2;
     constexpr int32_t vectorSize = 100;
-    const bool isDecimal = colType->isDecimal();
-    const bool isVarbinary = colType->isVarbinary();
-
-    if (isDecimal || isVarbinary) {
-      const auto vectors = createTestData(numBatches, vectorSize, 0.5);
-      std::vector<std::string> partitionTransforms = {colName};
-      if (isDecimal) {
-        EXPECT_THROW(
-            {
-              auto dataSink = createIcebergDataSink(
-                  rowType_, outputDirectory->getPath(), partitionTransforms);
-
-              for (const auto& vector : vectors) {
-                dataSink->appendData(vector);
-              }
-            },
-            VeloxRuntimeError)
-            << "Expected exception when using DECIMAL column as partition column";
-      } else if (isVarbinary) {
-        EXPECT_THROW(
-            {
-              auto dataSink = createIcebergDataSink(
-                  rowType_, outputDirectory->getPath(), partitionTransforms);
-
-              for (const auto& vector : vectors) {
-                dataSink->appendData(vector);
-              }
-            },
-            VeloxRuntimeError)
-            << "Expected exception when using VARBINARY column as partition column";
-      }
-      continue;
-    }
 
     const auto vectors = createTestData(numBatches, vectorSize, 1.0);
     std::vector<std::string> partitionTransforms = {colName};
@@ -206,6 +140,15 @@ TEST_F(IcebergInsertTest, testPartitionNullColumn) {
 
     ASSERT_TRUE(dataSink->finish());
     const auto commitTasks = dataSink->close();
+    ASSERT_EQ(1, commitTasks.size());
+    auto taskJson = folly::parseJson(commitTasks.at(0));
+    ASSERT_EQ(1, taskJson.count("partitionDataJson"));
+    auto partitionDataStr = taskJson["partitionDataJson"].asString();
+    auto partitionData = folly::parseJson(partitionDataStr);
+    ASSERT_EQ(1, partitionData.count("partitionValues"));
+    auto partitionValues = partitionData["partitionValues"];
+    ASSERT_TRUE(partitionValues.isArray());
+    ASSERT_TRUE(partitionValues[0].isNull());
 
     auto files = listFiles(dataPath);
     ASSERT_EQ(files.size(), 1);
@@ -234,7 +177,7 @@ TEST_F(IcebergInsertTest, testColumnCombinationsAsPartition) {
   std::vector<std::vector<int32_t>> columnCombinations = {
       {0, 1}, // BIGINT, INTEGER.
       {2, 1}, // SMALLINT, INTEGER.
-      {2, 0}, // SMALLINT, BIGINT.
+      {2, 3}, // SMALLINT, DECIMAL.
       {0, 2, 1} // BIGINT, SMALLINT, INTEGER.
   };
 
@@ -286,6 +229,39 @@ TEST_F(IcebergInsertTest, testColumnCombinationsAsPartition) {
 
     assertQuery(plan, splits, fmt::format("SELECT * FROM tmp"));
   }
+}
+
+TEST_F(IcebergInsertTest, testWriteWithSpecialColumnName) {
+  rowType_ =
+      ROW({"c$int", "c bigint", "`my/data`"}, {INTEGER(), BIGINT(), VARCHAR()});
+  const auto outputDirectory = exec::test::TempDirectoryPath::create();
+  const auto dataPath = fmt::format("{}", outputDirectory->getPath());
+  constexpr int32_t numBatches = 10;
+  constexpr int32_t vectorSize = 5'000;
+  const auto vectors = createTestData(numBatches, vectorSize, 0.0);
+  auto dataSink =
+      createIcebergDataSink(rowType_, outputDirectory->getPath(), {});
+
+  for (const auto& vector : vectors) {
+    dataSink->appendData(vector);
+  }
+
+  ASSERT_TRUE(dataSink->finish());
+  const auto commitTasks = dataSink->close();
+  auto splits = createSplitsForDirectory(dataPath);
+  const auto countPlan = exec::test::PlanBuilder()
+                             .tableScan(rowType_)
+                             .singleAggregation({}, {"count(1)"})
+                             .planNode();
+
+  const auto countResult =
+      exec::test::AssertQueryBuilder(countPlan).splits(splits).copyResults(
+          opPool_.get());
+
+  ASSERT_EQ(countResult->size(), 1);
+  const auto actualRowCount =
+      countResult->childAt(0)->asFlatVector<int64_t>()->valueAt(0);
+  ASSERT_EQ(actualRowCount, vectorSize * numBatches);
 }
 
 } // namespace facebook::velox::connector::hive::iceberg::test
