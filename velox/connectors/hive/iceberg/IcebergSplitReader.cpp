@@ -141,4 +141,33 @@ uint64_t IcebergSplitReader::next(uint64_t size, VectorPtr& output) {
   return rowsScanned;
 }
 
+std::vector<TypePtr> IcebergSplitReader::adaptColumns(
+    const RowTypePtr& fileType,
+    const std::shared_ptr<const velox::RowType>& tableSchema) const {
+  // Keep track of schema types for columns in file, used by ColumnSelector.
+  std::vector<TypePtr> columnTypes = fileType->children();
+  auto& childrenSpecs = scanSpec_->children();
+  // Iceberg table stores all column's data in data file.
+  for (size_t i = 0; i < childrenSpecs.size(); ++i) {
+    auto* childSpec = childrenSpecs[i].get();
+    const std::string& fieldName = childSpec->fieldName();
+    auto fileTypeIdx = fileType->getChildIdxIfExists(fieldName);
+    auto outputTypeIdx = readerOutputType_->getChildIdxIfExists(fieldName);
+    if (outputTypeIdx.has_value() && fileTypeIdx.has_value()) {
+      childSpec->setConstantValue(nullptr);
+      auto& outputType = readerOutputType_->childAt(*outputTypeIdx);
+      columnTypes[*fileTypeIdx] = outputType;
+    } else if (!fileTypeIdx.has_value()) {
+      childSpec->setConstantValue(BaseVector::createNullConstant(
+          tableSchema->findChild(fieldName),
+          1,
+          connectorQueryCtx_->memoryPool()));
+    }
+  }
+
+  scanSpec_->resetCachedValues(false);
+
+  return columnTypes;
+}
+
 } // namespace facebook::velox::connector::hive::iceberg

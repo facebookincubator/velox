@@ -15,12 +15,13 @@
  */
 #pragma once
 
-#include "velox/vector/ComplexVector.h"
+#include "velox/connectors/hive/iceberg/PartitionSpec.h"
+#include "velox/connectors/hive/iceberg/Transforms.h"
 
-namespace facebook::velox::connector::hive {
+namespace facebook::velox::connector::hive::iceberg {
 
-std::vector<std::pair<std::string, std::string>> extractPartitionKeyValues(
-    const RowVectorPtr& partitionsVector,
-    vector_size_t row);
+std::vector<std::shared_ptr<Transform>> parsePartitionTransformSpecs(
+    const std::vector<IcebergPartitionSpec::Field>& fields,
+    memory::MemoryPool* pool);
 
-} // namespace facebook::velox::connector::hive
+} // namespace facebook::velox::connector::hive::iceberg
