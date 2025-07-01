@@ -35,6 +35,8 @@ velox_add_library(
   ConjunctExpr.cpp
   ConstantExpr.cpp
   EvalCtx.cpp
+  ExprUtils.cpp
+  ExprOptimizer.cpp
   Expr.cpp
   ExprCompiler.cpp
   ExprToSubfieldFilter.cpp
