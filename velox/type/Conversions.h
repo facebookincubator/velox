@@ -266,26 +266,19 @@ struct Converter<
   }
 
   static Expected<T> convertStringToInt(const folly::StringPiece v) {
-    const auto result = detail::callFollyTo<T>(v);
-    if(!result.hasError()) {
-      return result.value();
+    const auto test_err = folly::tryTo<T>(v);
+    if(!test_err.hasError()) {
+      return test_err.value();
     }
-    int pos = v.rfind('.');
-    if(pos == folly::StringPiece::npos || pos == v.size() - 1) {
-      if (threadSkipErrorDetails()) {
-        return folly::makeUnexpected(Status::UserError());
-      }
-      return folly::makeUnexpected(Status::UserError(
-          "{}", folly::makeConversionError(result.error(), "").what()));
-    } // Error was not invoked by '.'
-
-    for(int i = len - 1; i > pos; --i) {
-      if(!std::isdigit(v[i])) {
-        return folly::makeUnexpected(
-            Status::UserError("Encountered a non-digit character"));
-      }
+    if(v[0] == '.') {
+      return folly::makeUnexpected(Status::UserError("Invalid number format"));
     }
-    return detail::callFollyTo<T>(v.subpiece(0, pos));
+    const auto result = folly::tryTo<double>(v);
+    if(result.hasError()) {
+      return folly::makeUnexpected(Status::UserError("Invalid number format"));
+    }
+    int res = static_cast<T>(result.value());
+    return res;
   }
 
   static Expected<T> tryCast(folly::StringPiece v) {
