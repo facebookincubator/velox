@@ -63,6 +63,30 @@ TEST_F(BloomFilterTest, serialize) {
   EXPECT_EQ(bloom.serializedSize(), deserialized.serializedSize());
 }
 
+TEST_F(BloomFilterTest, staticMayContain) {
+  constexpr int32_t kSize = 1024;
+  std::string data;
+  {
+    BloomFilter bloom;
+    bloom.reset(kSize);
+    for (auto i = 0; i < kSize; ++i) {
+      bloom.insert(folly::hasher<int32_t>()(i));
+    }
+    data.resize(bloom.serializedSize());
+    bloom.serialize(data.data());
+  }
+  int32_t numFalsePositives = 0;
+  for (auto i = 0; i < kSize; ++i) {
+    EXPECT_TRUE(
+        BloomFilter<>::mayContain(data.data(), folly::hasher<int32_t>()(i)));
+    numFalsePositives += BloomFilter<>::mayContain(
+        data.data(), folly::hasher<int32_t>()(i + kSize));
+    numFalsePositives += BloomFilter<>::mayContain(
+        data.data(), folly::hasher<int32_t>()((i + kSize) * 123451));
+  }
+  EXPECT_GT(2, 100 * numFalsePositives / kSize);
+}
+
 TEST_F(BloomFilterTest, merge) {
   constexpr int32_t kSize = 10;
   BloomFilter bloom;
