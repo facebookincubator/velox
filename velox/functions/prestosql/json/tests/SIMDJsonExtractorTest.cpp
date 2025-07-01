@@ -19,7 +19,7 @@
 #include <optional>
 #include <string>
 
-#include "folly/json.h"
+#include "folly/json/json.h"
 #include "gtest/gtest.h"
 #include "velox/common/base/VeloxException.h"
 
