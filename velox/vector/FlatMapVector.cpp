@@ -313,80 +313,144 @@ std::optional<int32_t> FlatMapVector::compare(
   // Validate we have compatible map types for comparison.
   auto otherValue = other->wrappedVector();
   auto wrappedOtherIndex = other->wrappedIndex(otherIndex);
-  VELOX_CHECK_EQ(
-      VectorEncoding::Simple::FLAT_MAP,
-      otherValue->encoding(),
-      "Compare of FLAT_MAP and non-FLAT_MAP: {} and {}",
-      BaseVector::toString(),
-      otherValue->BaseVector::toString());
-  auto otherFlatMap = otherValue->as<FlatMapVector>();
 
-  if (keyType()->kind() != otherFlatMap->keyType()->kind() ||
-      valueType()->kind() != otherFlatMap->valueType()->kind()) {
-    VELOX_FAIL(
-        "Compare of maps of different key/value types: {} and {}",
-        BaseVector::toString(),
-        otherFlatMap->BaseVector::toString());
-  }
+  if (otherValue->encoding() == VectorEncoding::Simple::FLAT_MAP) {
+    auto otherFlatMap = otherValue->as<FlatMapVector>();
 
-  // We first get sorted key indices for both maps.
-  auto leftIndices = sortedKeyIndices(index);
-  auto rightIndices = otherFlatMap->sortedKeyIndices(wrappedOtherIndex);
-
-  // If equalsOnly and maps have different sizes, we can bail fast.
-  if (flags.equalsOnly && leftIndices.size() != rightIndices.size()) {
-    int result = leftIndices.size() - rightIndices.size();
-    return flags.ascending ? result : result * -1;
-  }
-
-  // Compare each key value pair, using the sorted key order.
-  auto compareSize = std::min(leftIndices.size(), rightIndices.size());
-  bool resultIsIndeterminate = false;
-
-  for (auto i = 0; i < compareSize; ++i) {
-    // First compare the keys.
-    auto result = distinctKeys_->compare(
-        otherFlatMap->distinctKeys_.get(),
-        leftIndices[i],
-        rightIndices[i],
-        flags);
-
-    // Key mismatch; comparison can stop.
-    if (result == kIndeterminate) {
-      VELOX_DCHECK(
-          flags.equalsOnly,
-          "Compare should have thrown when null is encountered in child.");
-      resultIsIndeterminate = true;
-    } else if (result.value() != 0) {
-      return result;
+    if (keyType()->kind() != otherFlatMap->keyType()->kind() ||
+        valueType()->kind() != otherFlatMap->valueType()->kind()) {
+      VELOX_FAIL(
+          "Compare of maps of different key/value types: {} and {}",
+          BaseVector::toString(),
+          otherFlatMap->BaseVector::toString());
     }
-    // If keys are same, compare values.
-    else {
-      auto valueResult = mapValues_[leftIndices[i]]->compare(
-          otherFlatMap->mapValues_[rightIndices[i]].get(),
-          index,
-          wrappedOtherIndex,
+
+    // We first get sorted key indices for both maps.
+    auto leftIndices = sortedKeyIndices(index);
+    auto rightIndices = otherFlatMap->sortedKeyIndices(wrappedOtherIndex);
+
+    // If equalsOnly and maps have different sizes, we can bail fast.
+    if (flags.equalsOnly && leftIndices.size() != rightIndices.size()) {
+      int result = leftIndices.size() - rightIndices.size();
+      return flags.ascending ? result : result * -1;
+    }
+
+    // Compare each key value pair, using the sorted key order.
+    auto compareSize = std::min(leftIndices.size(), rightIndices.size());
+
+    for (auto i = 0; i < compareSize; ++i) {
+      // First compare the keys.
+      auto result = distinctKeys_->compare(
+          otherFlatMap->distinctKeys_.get(),
+          leftIndices[i],
+          rightIndices[i],
           flags);
 
-      // If value mismatch, comparison can also stop.
-      if (valueResult == kIndeterminate) {
+      // Key mismatch; comparison can stop.
+      if (result == kIndeterminate) {
         VELOX_DCHECK(
             flags.equalsOnly,
             "Compare should have thrown when null is encountered in child.");
-        resultIsIndeterminate = true;
-      } else if (valueResult.value() != 0) {
-        return valueResult;
+        return kIndeterminate;
+      } else if (result.value() != 0) {
+        return result;
+      }
+      // If keys are same, compare values.
+      else {
+        auto valueResult = mapValues_[leftIndices[i]]->compare(
+            otherFlatMap->mapValues_[rightIndices[i]].get(),
+            index,
+            wrappedOtherIndex,
+            flags);
+
+        // If value mismatch, comparison can also stop.
+        if (valueResult == kIndeterminate) {
+          VELOX_DCHECK(
+              flags.equalsOnly,
+              "Compare should have thrown when null is encountered in child.");
+          return kIndeterminate;
+        } else if (valueResult.value() != 0) {
+          return valueResult;
+        }
       }
     }
-  }
 
-  if (resultIsIndeterminate) {
-    return kIndeterminate;
-  }
+    // If one map was smaller than the other.
+    int result = leftIndices.size() - rightIndices.size();
+    return flags.ascending ? result : result * -1;
+  } else if (otherValue->encoding() == VectorEncoding::Simple::MAP) {
+    auto otherMap = otherValue->as<MapVector>();
 
-  // If one map was smaller than the other.
-  int result = leftIndices.size() - rightIndices.size();
-  return flags.ascending ? result : result * -1;
+    if (keyType()->kind() != otherMap->mapKeys()->typeKind() ||
+        valueType()->kind() != otherMap->mapValues()->typeKind()) {
+      VELOX_FAIL(
+          "Compare of maps of different key/value types: {} and {}",
+          BaseVector::toString(),
+          otherMap->BaseVector::toString());
+    }
+
+    // We first get sorted key indices for both maps.
+    auto leftIndices = sortedKeyIndices(index);
+    auto rightIndices = otherMap->sortedKeyIndices(wrappedOtherIndex);
+
+    // If equalsOnly and maps have different sizes, we can bail fast.
+    if (flags.equalsOnly && leftIndices.size() != rightIndices.size()) {
+      int result = leftIndices.size() - rightIndices.size();
+      LOG(ERROR) << "Compare of maps of different sizes: " << leftIndices.size()
+                 << " " << rightIndices.size();
+      for (int index : leftIndices) {
+        LOG(ERROR) << distinctKeys_->toString(index);
+      }
+
+      for (int index : rightIndices) {
+        LOG(ERROR) << otherMap->mapKeys()->toString(index);
+      }
+      return flags.ascending ? result : result * -1;
+    }
+
+    // Compare each key value pair, using the sorted key order.
+    auto compareSize = std::min(leftIndices.size(), rightIndices.size());
+
+    for (auto i = 0; i < compareSize; ++i) {
+      // First compare the keys.
+      auto result = distinctKeys_->compare(
+          otherMap->mapKeys().get(), leftIndices[i], rightIndices[i], flags);
+
+      // Key mismatch; comparison can stop.
+      if (result == kIndeterminate) {
+        VELOX_DCHECK(
+            flags.equalsOnly,
+            "Compare should have thrown when null is encountered in child.");
+        return kIndeterminate;
+      } else if (result.value() != 0) {
+        return result;
+      }
+      // If keys are same, compare values.
+      else {
+        auto valueResult = mapValues_[leftIndices[i]]->compare(
+            otherMap->mapValues().get(), index, rightIndices[i], flags);
+
+        // If value mismatch, comparison can also stop.
+        if (valueResult == kIndeterminate) {
+          VELOX_DCHECK(
+              flags.equalsOnly,
+              "Compare should have thrown when null is encountered in child.");
+          return kIndeterminate;
+        } else if (valueResult.value() != 0) {
+          return valueResult;
+        }
+      }
+    }
+
+    // If one map was smaller than the other.
+    int result = leftIndices.size() - rightIndices.size();
+    return flags.ascending ? result : result * -1;
+  } else {
+    VELOX_FAIL(
+        "Compare of FLAT_MAP and non-MAP: {} and {}",
+        BaseVector::toString(),
+        otherValue->BaseVector::toString());
+  }
 }
 
 // This function will copy map value elements from the individual mapValues_
