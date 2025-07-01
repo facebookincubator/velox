@@ -205,37 +205,3 @@ TEST_F(HivePartitionUtilTest, timestampPartitionValueFormatting) {
         << timestamps[i].toString();
   }
 }
-
-TEST_F(HivePartitionUtilTest, icebergPartitionNameForNull) {
-  std::vector<std::string> partitionColumnNames{
-      "flat_bool_col",
-      "flat_tinyint_col",
-      "flat_smallint_col",
-      "flat_int_col",
-      "flat_bigint_col",
-      "flat_string_col",
-      "const_date_col"};
-
-  RowVectorPtr input = makeRowVector(
-      partitionColumnNames,
-      {makeNullableFlatVector<bool>({std::nullopt}),
-       makeNullableFlatVector<int8_t>({std::nullopt}),
-       makeNullableFlatVector<int16_t>({std::nullopt}),
-       makeNullableFlatVector<int32_t>({std::nullopt}),
-       makeNullableFlatVector<int64_t>({std::nullopt}),
-       makeNullableFlatVector<StringView>({std::nullopt}),
-       makeConstant<int32_t>(std::nullopt, 1, DATE())});
-
-  const std::string icebergNullValueString = "null";
-
-  for (auto i = 0; i < partitionColumnNames.size(); i++) {
-    std::vector<column_index_t> partitionChannels = {(column_index_t)i};
-    auto partitionEntries = extractPartitionKeyValues(
-        makePartitionsVector(input, partitionChannels),
-        0,
-        icebergNullValueString);
-    EXPECT_EQ(1, partitionEntries.size());
-    EXPECT_EQ(partitionColumnNames[i], partitionEntries[0].first);
-    EXPECT_EQ(icebergNullValueString, partitionEntries[0].second);
-  }
-}

@@ -50,6 +50,10 @@ class IcebergSplitReader : public SplitReader {
 
   uint64_t next(uint64_t size, VectorPtr& output) override;
 
+  std::vector<TypePtr> adaptColumns(
+      const RowTypePtr& fileType,
+      const std::shared_ptr<const velox::RowType>& tableSchema) const override;
+
   std::shared_ptr<const dwio::common::TypeWithId> baseFileSchema();
 
  private:
