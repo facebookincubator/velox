@@ -167,11 +167,22 @@ Generic Configuration
      - 0
      - Specifies the max number of input batches to prefetch to do index lookup ahead. If it is zero,
        then process one input batch at a time.
+   * - index_lookup_join_split_output
+     - bool
+     - true
+     - If this is true, then the index join operator might split output for each input batch based
+       on the output batch size control. Otherwise, it tries to produce a single output for each input
+       batch.
    * - unnest_split_output_batch
      - bool
      - true
      - If this is true, then the unnest operator might split output for each input batch based on the
        output batch size control. Otherwise, it produces a single output for each input batch.
+   * - max_num_splits_listened_to
+     - integer
+     - 0
+     - Specifies The max number of input splits to listen to by SplitListener per table scan node per
+       worker. It's up to the SplitListener implementation to respect this config.
 
 .. _expression-evaluation-conf:
 

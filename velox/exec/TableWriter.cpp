@@ -16,7 +16,7 @@
 
 #include "velox/exec/TableWriter.h"
 
-#include "HashAggregation.h"
+#include "velox/exec/HashAggregation.h"
 #include "velox/exec/Task.h"
 
 namespace facebook::velox::exec {
@@ -24,7 +24,7 @@ namespace facebook::velox::exec {
 TableWriter::TableWriter(
     int32_t operatorId,
     DriverCtx* driverCtx,
-    const std::shared_ptr<const core::TableWriteNode>& tableWriteNode)
+    const core::TableWriteNodePtr& tableWriteNode)
     : Operator(
           driverCtx,
           tableWriteNode->outputType(),
@@ -68,7 +68,7 @@ TableWriter::TableWriter(
 }
 
 void TableWriter::setTypeMappings(
-    const std::shared_ptr<const core::TableWriteNode>& tableWriteNode) {
+    const core::TableWriteNodePtr& tableWriteNode) {
   auto outputNames = tableWriteNode->columnNames();
   auto outputTypes = tableWriteNode->columns()->children();
 
@@ -315,7 +315,7 @@ void TableWriter::updateStats(const connector::DataSink::Stats& stats) {
             currentTimeNs - createTimeUs_, RuntimeCounter::Unit::kNanos));
   }
   if (!stats.spillStats.empty()) {
-    *spillStats_.wlock() += stats.spillStats;
+    *spillStats_->wlock() += stats.spillStats;
   }
 }
 
@@ -473,7 +473,7 @@ const TypePtr& TableWriteTraits::contextColumnType() {
 }
 
 const RowTypePtr TableWriteTraits::outputType(
-    const std::shared_ptr<core::AggregationNode>& aggregationNode) {
+    const core::AggregationNodePtr& aggregationNode) {
   static const auto kOutputTypeWithoutStats =
       ROW({rowCountColumnName(), fragmentColumnName(), contextColumnName()},
           {rowCountColumnType(), fragmentColumnType(), contextColumnType()});

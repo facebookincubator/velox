@@ -221,6 +221,18 @@ TEST_F(HdfsFileSystemTest, viaFileSystem) {
   readData(readFile.get());
 }
 
+TEST_F(HdfsFileSystemTest, exists) {
+  auto config = std::make_shared<const config::ConfigBase>(
+      std::unordered_map<std::string, std::string>(configurationValues));
+  auto hdfsFileSystem =
+      filesystems::getFileSystem(fullDestinationPath_, config);
+  ASSERT_TRUE(hdfsFileSystem->exists(fullDestinationPath_));
+
+  const std::string_view notExistFilePath =
+      "hdfs://localhost:7777//path/that/does/not/exist";
+  ASSERT_FALSE(hdfsFileSystem->exists(notExistFilePath));
+}
+
 TEST_F(HdfsFileSystemTest, initializeFsWithEndpointInfoInFilePath) {
   // Without host/port configured.
   auto config = std::make_shared<config::ConfigBase>(
@@ -455,6 +467,18 @@ TEST_F(HdfsFileSystemTest, writeWithParentDirNotExist) {
   writeFile->flush();
   writeFile->close();
   ASSERT_EQ(writeFile->size(), data.size() * 3);
+}
+
+TEST_F(HdfsFileSystemTest, list) {
+  auto config = std::make_shared<const config::ConfigBase>(
+      std::unordered_map<std::string, std::string>(configurationValues));
+  auto hdfsFileSystem =
+      filesystems::getFileSystem(fullDestinationPath_, config);
+
+  auto result = hdfsFileSystem->list(fullDestinationPath_);
+
+  ASSERT_EQ(result.size(), 1);
+  ASSERT_TRUE(result[0].find(kDestinationPath) != std::string::npos);
 }
 
 TEST_F(HdfsFileSystemTest, readFailures) {

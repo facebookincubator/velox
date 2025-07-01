@@ -29,6 +29,8 @@
 #include "velox/functions/prestosql/fuzzer/MinMaxInputGenerator.h"
 #include "velox/functions/prestosql/fuzzer/QDigestAggInputGenerator.h"
 #include "velox/functions/prestosql/fuzzer/QDigestAggResultVerifier.h"
+#include "velox/functions/prestosql/fuzzer/TDigestAggregateInputGenerator.h"
+#include "velox/functions/prestosql/fuzzer/TDigestAggregateResultVerifier.h"
 #include "velox/functions/prestosql/fuzzer/WindowOffsetInputGenerator.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/functions/prestosql/window/WindowFunctionsRegistration.h"
@@ -75,6 +77,7 @@ getCustomInputGenerators() {
       {"approx_distinct", std::make_shared<ApproxDistinctInputGenerator>()},
       {"approx_set", std::make_shared<ApproxDistinctInputGenerator>()},
       {"approx_percentile", std::make_shared<ApproxPercentileInputGenerator>()},
+      {"tdigest_agg", std::make_shared<TDigestAggregateInputGenerator>()},
       {"qdigest_agg", std::make_shared<QDigestAggInputGenerator>()},
       {"lead", std::make_shared<WindowOffsetInputGenerator>(1)},
       {"lag", std::make_shared<WindowOffsetInputGenerator>(1)},
@@ -121,7 +124,10 @@ int main(int argc, char** argv) {
       // array_agg requires a flag controlling whether to ignore nulls.
       "array_agg",
       // Skip non-deterministic functions.
+      "noisy_avg_gaussian",
       "noisy_count_if_gaussian",
+      "noisy_count_gaussian",
+      "noisy_sum_gaussian",
       // https://github.com/facebookincubator/velox/issues/13547
       "merge",
   };
@@ -143,6 +149,7 @@ int main(int argc, char** argv) {
   using facebook::velox::exec::test::ApproxPercentileResultVerifier;
   using facebook::velox::exec::test::AverageResultVerifier;
   using facebook::velox::exec::test::QDigestAggResultVerifier;
+  using facebook::velox::exec::test::TDigestAggregateResultVerifier;
 
   static const std::unordered_map<
       std::string,
@@ -154,6 +161,7 @@ int main(int argc, char** argv) {
           {"approx_percentile",
            std::make_shared<ApproxPercentileResultVerifier>()},
           {"approx_most_frequent", nullptr},
+          {"tdigest_agg", std::make_shared<TDigestAggregateResultVerifier>()},
           {"qdigest_agg", std::make_shared<QDigestAggResultVerifier>()},
           {"merge", nullptr},
           // Semantically inconsistent functions
@@ -191,6 +199,7 @@ int main(int argc, char** argv) {
       "max_by",
       "min_by",
       "multimap_agg",
+      "tdigest_agg",
       "qdigest_agg",
   };
 
