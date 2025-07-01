@@ -13,15 +13,3 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#pragma once
-
-#include "velox/vector/ComplexVector.h"
-
-namespace facebook::velox::connector::hive {
-
-std::vector<std::pair<std::string, std::string>> extractPartitionKeyValues(
-    const RowVectorPtr& partitionsVector,
-    vector_size_t row,
-    bool useNullString = false);
-
-} // namespace facebook::velox::connector::hive

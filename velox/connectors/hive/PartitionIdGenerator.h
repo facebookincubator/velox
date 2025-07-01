@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "iceberg/PartitionSpec.h"
 #include "velox/exec/VectorHasher.h"
 
 namespace facebook::velox::connector::hive {
@@ -29,6 +30,7 @@ class PartitionIdGenerator {
   /// @param maxPartitions The max number of distinct partitions.
   /// @param pool Memory pool. Used to allocate memory for storing unique
   /// partition key values.
+  /// @param insertTableHandle Used to get the Iceberg table partition spec .
   /// @param partitionPathAsLowerCase Used to control whether the partition path
   /// need to convert to lower case.
   PartitionIdGenerator(
@@ -36,6 +38,8 @@ class PartitionIdGenerator {
       std::vector<column_index_t> partitionChannels,
       uint32_t maxPartitions,
       memory::MemoryPool* pool,
+      const std::shared_ptr<const ConnectorInsertTableHandle>&
+          insertTableHandle,
       bool partitionPathAsLowerCase);
 
   /// Generate sequential partition IDs for input vector.
@@ -52,7 +56,12 @@ class PartitionIdGenerator {
   /// style. It is derived from the partitionValues_ at index partitionId.
   /// Partition keys appear in the order of partition columns in the table
   /// schema.
-  std::string partitionName(uint64_t partitionId, bool isIceberg = false) const;
+  std::string partitionName(uint32_t partitionId, bool isIceberg = false) const;
+
+  /// Return the partition values for all partitions.
+  RowVectorPtr partitionValues() const {
+    return partitionValues_;
+  }
 
  private:
   static constexpr const int32_t kHasherReservePct = 20;
@@ -75,6 +84,11 @@ class PartitionIdGenerator {
       const RowVectorPtr& input,
       vector_size_t row);
 
+  void saveIcebergPartitionTransformResult(
+      uint64_t partitionId,
+      const RowVectorPtr& input,
+      vector_size_t row) const;
+
   const std::vector<column_index_t> partitionChannels_;
 
   const uint32_t maxPartitions_;
@@ -93,6 +107,8 @@ class PartitionIdGenerator {
 
   // All rows are set valid to compute partition IDs for all input rows.
   SelectivityVector allRows_;
-};
 
+  memory::MemoryPool* pool_;
+  const std::shared_ptr<const ConnectorInsertTableHandle> insertTableHandle_;
+};
 } // namespace facebook::velox::connector::hive

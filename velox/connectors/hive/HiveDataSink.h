@@ -549,7 +549,7 @@ class HiveDataSink : public DataSink {
 
   void setState(State newState);
 
-  virtual std::vector<std::string> generateMetadata() const;
+  virtual std::vector<std::string> commitMessage() const;
 
   class WriterReclaimer : public exec::MemoryReclaimer {
    public:
@@ -613,7 +613,7 @@ class HiveDataSink : public DataSink {
       io::IoStatistics* ioStats);
 
   // Compute the partition id and bucket id for each row in 'input'.
-  void computePartitionAndBucketIds(const RowVectorPtr& input);
+  virtual void computePartitionAndBucketIds(const RowVectorPtr& input);
 
   // Get the hive writer id corresponding to the row
   // from partitionIds and bucketIds.

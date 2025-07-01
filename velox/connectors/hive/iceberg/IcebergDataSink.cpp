@@ -16,13 +16,15 @@
 
 #include "velox/connectors/hive/iceberg/IcebergDataSink.h"
 
+#include <exec/OperatorUtils.h>
+
 #include "velox/common/base/Fs.h"
 
 namespace facebook::velox::connector::hive::iceberg {
 
 namespace {
 
-std::string toJson(const std::vector<std::string>& partitionValues) {
+std::string toJson(const std::vector<folly::dynamic>& partitionValues) {
   folly::dynamic jsonObject = folly::dynamic::object();
   folly::dynamic valuesArray = folly::dynamic::array();
   for (const auto& value : partitionValues) {
@@ -74,7 +76,7 @@ IcebergDataSink::IcebergDataSink(
   }
 }
 
-std::vector<std::string> IcebergDataSink::generateMetadata() const {
+std::vector<std::string> IcebergDataSink::commitMessage() const {
   auto icebergInsertTableHandle =
       std::dynamic_pointer_cast<const IcebergInsertTableHandle>(
           insertTableHandle_);
@@ -100,7 +102,7 @@ std::vector<std::string> IcebergDataSink::generateMetadata() const {
         )
         ("fileSizeInBytes", ioStats_.at(i)->rawBytesWritten())
         ("metrics", folly::dynamic::object("recordCount", info->numWrittenRows))
-        ("partitionSpecId", icebergInsertTableHandle->partitionSpec()->specId)
+        ("partitionSpecJson", icebergInsertTableHandle->partitionSpec()->specId)
         ("partitionDataJson", partitionData_.empty() || partitionData_[i].empty() ? "" : toJson(partitionData_[i]))
         ("fileFormat", fileFormat)
         ("content", "DATA")
@@ -123,22 +125,47 @@ void IcebergDataSink::splitInputRowsAndEnsureWriters(RowVectorPtr input) {
 
     updatePartitionRows(index, numRows, row);
 
-    VELOX_CHECK_LT(
-        index,
-        partitionData_.size(),
-        "Writer index {} out of partition bounds:{}.",
-        index,
-        partitionData_.size());
-
     if (!partitionData_[index].empty()) {
       continue;
     }
 
-    std::vector<std::string> partitionValues(partitionChannels_.size());
-
+    std::vector<folly::dynamic> partitionValues(partitionChannels_.size());
+    const RowVectorPtr transformedValues =
+        partitionIdGenerator_->partitionValues();
     for (auto i = 0; i < partitionChannels_.size(); ++i) {
-      auto block = input->childAt(partitionChannels_[i]);
-      partitionValues[i] = block->toString(row);
+      auto block = transformedValues->childAt(i);
+      if (block->isNullAt(row)) {
+        partitionValues[i] = nullptr;
+      } else {
+        const vector_size_t partitionId = partitionIds_[row];
+        switch (block->typeKind()) {
+          case TypeKind::INTEGER: {
+            partitionValues[i] =
+                block->asFlatVector<int32_t>()->valueAt(partitionId);
+            break;
+          }
+          case TypeKind::BIGINT: {
+            partitionValues[i] =
+                block->asFlatVector<int64_t>()->valueAt(partitionId);
+            break;
+          }
+          case TypeKind::HUGEINT: {
+            partitionValues[i] =
+                block->asFlatVector<int128_t>()->valueAt(partitionId);
+            break;
+          }
+          case TypeKind::VARCHAR:
+          case TypeKind::VARBINARY: {
+            partitionValues[i] =
+                block->asFlatVector<StringView>()->valueAt(partitionId);
+            break;
+          }
+          default: {
+            partitionValues[i] = block->toString(partitionId);
+            break;
+          }
+        }
+      }
     }
 
     partitionData_[index] = partitionValues;
@@ -152,6 +179,11 @@ void IcebergDataSink::splitInputRowsAndEnsureWriters(RowVectorPtr input) {
   }
 }
 
+void IcebergDataSink::computePartitionAndBucketIds(const RowVectorPtr& input) {
+  VELOX_CHECK(isPartitioned());
+  partitionIdGenerator_->runIceberg(input, partitionIds_);
+}
+
 std::string IcebergDataSink::makePartitionDirectory(
     const std::string& tableDirectory,
     const std::optional<std::string>& partitionSubdirectory) const {
@@ -160,6 +192,32 @@ std::string IcebergDataSink::makePartitionDirectory(
     return fs::path(tableLocation) / partitionSubdirectory.value();
   }
   return tableLocation;
+}
+
+void IcebergDataSink::appendData(RowVectorPtr input) {
+  checkRunning();
+  if (!isPartitioned() || partitionIdGenerator_->numPartitions() == 1) {
+    const auto index = ensureWriter(HiveWriterId::unpartitionedId());
+    write(index, input);
+    return;
+  }
+
+  // Compute partition and bucket numbers.
+  computePartitionAndBucketIds(input);
+
+  splitInputRowsAndEnsureWriters(input);
+
+  for (auto index = 0; index < writers_.size(); ++index) {
+    const vector_size_t partitionSize = partitionSizes_[index];
+    if (partitionSize == 0) {
+      continue;
+    }
+
+    const RowVectorPtr writerInput = partitionSize == input->size()
+        ? input
+        : exec::wrap(partitionSize, partitionRows_[index], input);
+    write(index, writerInput);
+  }
 }
 
 HiveWriterId IcebergDataSink::getIcebergWriterId(size_t row) const {

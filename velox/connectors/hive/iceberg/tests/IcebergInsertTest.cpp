@@ -87,9 +87,7 @@ TEST_F(IcebergInsertTest, testSingleColumnAsPartition) {
       ASSERT_TRUE(taskJson.count("partitionDataJson") > 0);
       ASSERT_FALSE(taskJson["partitionDataJson"].empty());
     }
-
-    std::unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>
-        assignments;
+    connector::ColumnHandleMap assignments;
     for (auto i = 0; i < rowType_->size(); i++) {
       const auto& name = rowType_->nameOf(i);
       if (i != colIndex) {
@@ -154,8 +152,7 @@ TEST_F(IcebergInsertTest, testColumnCombinationsAsPartition) {
     ASSERT_GT(commitTasks.size(), 0);
     ASSERT_EQ(splits.size(), commitTasks.size());
 
-    std::unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>
-        assignments;
+    connector::ColumnHandleMap assignments;
     std::unordered_set<int32_t> partitionColumns(
         combination.begin(), combination.end());
 

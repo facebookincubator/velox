@@ -33,7 +33,8 @@ class PartitionIdGeneratorTest : public ::testing::Test,
 TEST_F(PartitionIdGeneratorTest, consecutiveIdsSingleKey) {
   auto numPartitions = 100;
 
-  PartitionIdGenerator idGenerator(ROW({VARCHAR()}), {0}, 100, pool(), true);
+  PartitionIdGenerator idGenerator(
+      ROW({VARCHAR()}), {0}, 100, pool(), nullptr, true);
 
   auto input = makeRowVector(
       {makeFlatVector<StringView>(numPartitions * 3, [&](auto row) {
@@ -55,7 +56,7 @@ TEST_F(PartitionIdGeneratorTest, consecutiveIdsSingleKey) {
 
 TEST_F(PartitionIdGeneratorTest, consecutiveIdsMultipleKeys) {
   PartitionIdGenerator idGenerator(
-      ROW({VARCHAR(), INTEGER()}), {0, 1}, 100, pool(), true);
+      ROW({VARCHAR(), INTEGER()}), {0, 1}, 100, pool(), nullptr, true);
 
   auto input = makeRowVector({
       makeFlatVector<StringView>(
@@ -82,7 +83,7 @@ TEST_F(PartitionIdGeneratorTest, consecutiveIdsMultipleKeys) {
 
 TEST_F(PartitionIdGeneratorTest, multipleBoolKeys) {
   PartitionIdGenerator idGenerator(
-      ROW({BOOLEAN(), BOOLEAN()}), {0, 1}, 100, pool(), true);
+      ROW({BOOLEAN(), BOOLEAN()}), {0, 1}, 100, pool(), nullptr, true);
 
   auto input = makeRowVector({
       makeFlatVector<bool>(
@@ -108,7 +109,8 @@ TEST_F(PartitionIdGeneratorTest, multipleBoolKeys) {
 }
 
 TEST_F(PartitionIdGeneratorTest, stableIdsSingleKey) {
-  PartitionIdGenerator idGenerator(ROW({BIGINT()}), {0}, 100, pool(), true);
+  PartitionIdGenerator idGenerator(
+      ROW({BIGINT()}), {0}, 100, pool(), nullptr, true);
 
   auto numPartitions = 40;
   auto input = makeRowVector({
@@ -135,7 +137,12 @@ TEST_F(PartitionIdGeneratorTest, stableIdsSingleKey) {
 
 TEST_F(PartitionIdGeneratorTest, stableIdsMultipleKeys) {
   PartitionIdGenerator idGenerator(
-      ROW({BIGINT(), VARCHAR(), INTEGER()}), {1, 2}, 100, pool(), true);
+      ROW({BIGINT(), VARCHAR(), INTEGER()}),
+      {1, 2},
+      100,
+      pool(),
+      nullptr,
+      true);
 
   const vector_size_t size = 1'000;
   auto input = makeRowVector({
@@ -174,7 +181,12 @@ TEST_F(PartitionIdGeneratorTest, stableIdsMultipleKeys) {
 
 TEST_F(PartitionIdGeneratorTest, partitionKeysCaseSensitive) {
   PartitionIdGenerator idGenerator(
-      ROW({"cc0", "Cc1"}, {BIGINT(), VARCHAR()}), {1}, 100, pool(), false);
+      ROW({"cc0", "Cc1"}, {BIGINT(), VARCHAR()}),
+      {1},
+      100,
+      pool(),
+      nullptr,
+      false);
 
   auto input = makeRowVector({
       makeFlatVector<int64_t>({1, 2, 3}),
@@ -188,7 +200,8 @@ TEST_F(PartitionIdGeneratorTest, partitionKeysCaseSensitive) {
 }
 
 TEST_F(PartitionIdGeneratorTest, numPartitions) {
-  PartitionIdGenerator idGenerator(ROW({BIGINT()}), {0}, 100, pool(), true);
+  PartitionIdGenerator idGenerator(
+      ROW({BIGINT()}), {0}, 100, pool(), nullptr, true);
 
   // First run to process partition 0,..,9. Total num of partitions processed by
   // far is 10.
@@ -223,7 +236,7 @@ TEST_F(PartitionIdGeneratorTest, limitOfPartitionNumber) {
   auto maxPartitions = 100;
 
   PartitionIdGenerator idGenerator(
-      ROW({INTEGER()}), {0}, maxPartitions, pool(), true);
+      ROW({INTEGER()}), {0}, maxPartitions, pool(), nullptr, true);
 
   auto input = makeRowVector({
       makeFlatVector<int32_t>(maxPartitions + 1, [](auto row) { return row; }),
@@ -252,6 +265,7 @@ TEST_F(PartitionIdGeneratorTest, supportedPartitionKeyTypes) {
         {0, 1, 2, 3, 4, 5, 6},
         100,
         pool(),
+        nullptr,
         true);
 
     auto input = makeRowVector({
@@ -287,7 +301,7 @@ TEST_F(PartitionIdGeneratorTest, supportedPartitionKeyTypes) {
     for (column_index_t i = 1; i < input->childrenSize(); i++) {
       VELOX_ASSERT_THROW(
           PartitionIdGenerator(
-              asRowType(input->type()), {i}, 100, pool(), true),
+              asRowType(input->type()), {i}, 100, pool(), nullptr, true),
           fmt::format(
               "Unsupported partition type: {}.",
               input->childAt(i)->type()->toString()));

@@ -91,7 +91,7 @@ std::unique_ptr<DataSink> HiveConnector::createDataSink(
     ConnectorQueryCtx* connectorQueryCtx,
     CommitStrategy commitStrategy) {
   if (auto icebergInsertHandle =
-          std::dynamic_pointer_cast<iceberg::IcebergInsertTableHandle>(
+          std::dynamic_pointer_cast<const iceberg::IcebergInsertTableHandle>(
               connectorInsertTableHandle)) {
     return std::make_unique<iceberg::IcebergDataSink>(
         inputType,
@@ -100,8 +100,9 @@ std::unique_ptr<DataSink> HiveConnector::createDataSink(
         commitStrategy,
         hiveConfig_);
   } else {
-    auto hiveInsertHandle = std::dynamic_pointer_cast<HiveInsertTableHandle>(
-        connectorInsertTableHandle);
+    auto hiveInsertHandle =
+        std::dynamic_pointer_cast<const HiveInsertTableHandle>(
+            connectorInsertTableHandle);
 
     VELOX_CHECK_NOT_NULL(
         hiveInsertHandle, "Hive connector expecting hive write handle!");

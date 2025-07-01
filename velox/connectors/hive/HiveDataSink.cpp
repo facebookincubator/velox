@@ -51,9 +51,44 @@ RowTypePtr getNonPartitionTypes(
   const auto& dataSize = dataCols.size();
   childNames.reserve(dataSize);
   childTypes.reserve(dataSize);
+
+  std::function<std::pair<std::string, TypePtr>(const RowTypePtr&, int&, int)>
+      findColumnByFlattenedIndex;
+
+  findColumnByFlattenedIndex =
+      [&findColumnByFlattenedIndex](
+          const RowTypePtr& rowType,
+          int& currentIndex,
+          int targetIndex) -> std::pair<std::string, TypePtr> {
+    for (int i = 0; i < rowType->size(); ++i) {
+      auto childType = rowType->childAt(i);
+
+      if (currentIndex == targetIndex) {
+        return {rowType->nameOf(i), childType};
+      }
+
+      currentIndex++;
+
+      if (childType->isRow()) {
+        auto nestedRowType = asRowType(childType);
+        int nestedSize = nestedRowType->size();
+        if (currentIndex + nestedSize - 1 >= targetIndex) {
+          auto [nestedName, nestedType] = findColumnByFlattenedIndex(
+              nestedRowType, currentIndex, targetIndex);
+          return {rowType->nameOf(i) + "." + nestedName, nestedType};
+        } else {
+          currentIndex += nestedSize - 1;
+        }
+      }
+    }
+  };
+
   for (int dataCol : dataCols) {
-    childNames.push_back(inputType->nameOf(dataCol));
-    childTypes.push_back(inputType->childAt(dataCol));
+    int currentIndex = 0;
+    auto [name, type] =
+        findColumnByFlattenedIndex(inputType, currentIndex, dataCol);
+    childNames.push_back(name);
+    childTypes.push_back(type);
   }
 
   return ROW(std::move(childNames), std::move(childTypes));
@@ -409,6 +444,7 @@ HiveDataSink::HiveDataSink(
                     partitionChannels_,
                     maxOpenWriters_,
                     connectorQueryCtx_->memoryPool(),
+                    insertTableHandle_,
                     hiveConfig_->isPartitionPathAsLowerCase(
                         connectorQueryCtx->sessionProperties()))
               : nullptr),
@@ -669,10 +705,10 @@ bool HiveDataSink::finish() {
 std::vector<std::string> HiveDataSink::close() {
   setState(State::kClosed);
   closeInternal();
-  return generateMetadata();
+  return commitMessage();
 }
 
-std::vector<std::string> HiveDataSink::generateMetadata() const {
+std::vector<std::string> HiveDataSink::commitMessage() const {
   std::vector<std::string> partitionUpdates;
   partitionUpdates.reserve(writerInfo_.size());
   for (int i = 0; i < writerInfo_.size(); ++i) {
