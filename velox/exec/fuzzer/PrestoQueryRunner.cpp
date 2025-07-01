@@ -410,12 +410,7 @@ PrestoQueryRunner::executeAndReturnVector(const core::PlanNodePtr& plan) {
         writeToFile(filePath, input, writerPool.get());
       }
 
-      // Run the query. If successful, delete the table.
       auto result = execute(*sql);
-      for (const auto& [tableName, _] : inputMap) {
-        cleanUp(tableName);
-      }
-
       return std::make_pair(result, ReferenceQueryErrorCode::kSuccess);
     } catch (const VeloxRuntimeError& e) {
       // Throw if connection to Presto server is unsuccessful.
