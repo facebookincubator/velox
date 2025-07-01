@@ -14,8 +14,7 @@
  * limitations under the License.
  */
 
-#include <expression/ComplexViewTypes.h>
-
+#include "velox/expression/ComplexViewTypes.h"
 #include "velox/functions/lib/DateTimeFormatter.h"
 #include "velox/functions/lib/TimeUtils.h"
 #include "velox/type/DecimalUtil.h"
@@ -156,7 +155,7 @@ void toJson<TypeKind::HUGEINT>(
     std::string& result,
     const JsonOptions& /*options*/,
     bool /*isMapKey*/) {
-  VELOX_CHECK(input.type()->isDecimal(), "HUGEINT must be a decimal type.");
+  VELOX_DCHECK(input.type()->isDecimal(), "HUGEINT must be a decimal type.");
   auto value = input.castTo<int128_t>();
   appendDecimal(value, *input.type(), result);
 }
