@@ -187,6 +187,33 @@ TEST_F(ToJsonTest, basicDecimal) {
   testToJson(input, expected);
 }
 
+TEST_F(ToJsonTest, longDecimal) {
+  using facebook::velox::HugeInt;
+  auto data = makeNullableFlatVector<int128_t>(
+      {HugeInt::build(0, 0x112210F47DE98115), // 123456789.0123456789
+       HugeInt::build(0, 0), // 0.0000000000
+       -HugeInt::build(
+           0x35,
+           0x8A750438F380F524), // -98765432109.8765432100
+       HugeInt::build(
+           0x4B3B4CA85A86C47A,
+           0x098A223FFFFFFFFF), // max decimal(38, 10)
+       -HugeInt::build(
+           0x4B3B4CA85A86C47A,
+           0x098A223FFFFFFFFF), // min decimal(38, 10)
+       std::nullopt},
+      DECIMAL(38, 10));
+  auto input = makeRowVector({"a"}, {data});
+  auto expected = makeFlatVector<std::string>(
+      {R"({"a":123456789.0123456789})",
+       R"({"a":0.0000000000})",
+       R"({"a":-98765432109.8765432100})",
+       R"({"a":9999999999999999999999999999.9999999999})",
+       R"({"a":-9999999999999999999999999999.9999999999})",
+       R"({})"});
+  testToJson(input, expected);
+}
+
 TEST_F(ToJsonTest, basicTimestamp) {
   auto data = makeNullableFlatVector<Timestamp>(
       {Timestamp(0, 0),
@@ -288,7 +315,7 @@ TEST_F(ToJsonTest, unsupportedType) {
   // ROW(HUGEINT)
   auto input = fuzzer.fuzzDictionary(fuzzer.fuzzFlat(ROW({"a"}, {HUGEINT()})));
   VELOX_ASSERT_THROW(
-      testToJson(input, nullptr), "HUGEINT is not supported in to_json.");
+      testToJson(input, nullptr), "HUGEINT must be a decimal type.");
 
   // MAP(MAP)
   input = fuzzer.fuzzDictionary(

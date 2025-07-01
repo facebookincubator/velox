@@ -41,6 +41,15 @@ append(T value, std::string& result, bool isMapKey) {
   }
 }
 
+template <typename T>
+void appendDecimal(T value, const Type& type, std::string& result) {
+  auto [precision, scale] = getDecimalPrecisionScale(type);
+  const size_t maxSize = DecimalUtil::maxStringViewSize(precision, scale);
+  char buffer[maxSize];
+  size_t len = DecimalUtil::castToString(value, scale, maxSize, buffer);
+  result.append(buffer, len);
+}
+
 // Forward declarations for explicit specializations.
 template <TypeKind kind>
 void toJson(
@@ -135,14 +144,21 @@ void toJson<TypeKind::BIGINT>(
     bool /*isMapKey*/) {
   auto value = input.castTo<int64_t>();
   if (input.type()->isDecimal()) {
-    auto [precision, scale] = getDecimalPrecisionScale(*input.type());
-    const size_t maxSize = DecimalUtil::maxStringViewSize(precision, scale);
-    char buffer[maxSize];
-    size_t len = DecimalUtil::castToString(value, scale, maxSize, buffer);
-    result.append(buffer, len);
+    appendDecimal(value, *input.type(), result);
   } else {
     folly::toAppend<std::string, int64_t>(value, &result);
   }
+}
+
+template <>
+void toJson<TypeKind::HUGEINT>(
+    const exec::GenericView& input,
+    std::string& result,
+    const JsonOptions& /*options*/,
+    bool /*isMapKey*/) {
+  VELOX_CHECK(input.type()->isDecimal(), "HUGEINT must be a decimal type.");
+  auto value = input.castTo<int128_t>();
+  appendDecimal(value, *input.type(), result);
 }
 
 template <>
