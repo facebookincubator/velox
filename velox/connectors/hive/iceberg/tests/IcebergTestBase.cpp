@@ -102,59 +102,63 @@ std::vector<RowVectorPtr> IcebergTestBase::createTestData(
 }
 
 std::shared_ptr<IcebergPartitionSpec> IcebergTestBase::createPartitionSpec(
-    const std::vector<std::string>& transformSpecs) {
+    const std::vector<PartitionField>& partitionFields,
+    const RowTypePtr& rowType) {
   std::vector<IcebergPartitionSpec::Field> fields;
-  static const std::regex identityRegex(R"(([a-z_][a-z0-9_]*))");
-
-  for (const auto& spec : transformSpecs) {
-    TransformType transformType = TransformType::kIdentity;
-    std::string name;
-    std::smatch matches;
-
-    if (std::regex_match(spec, matches, identityRegex)) {
-      transformType = TransformType::kIdentity;
-      name = matches[1];
-    } else {
-      VELOX_FAIL("Unsupported transform specification: {}", spec);
-    }
-
-    fields.push_back(
-        IcebergPartitionSpec::Field(name, transformType, std::nullopt));
+  for (const auto& partitionField : partitionFields) {
+    fields.push_back(IcebergPartitionSpec::Field{
+        rowType->nameOf(partitionField.id),
+        rowType->childAt(partitionField.id),
+        partitionField.type,
+        partitionField.parameter});
   }
 
   return std::make_shared<IcebergPartitionSpec>(1, fields);
+}
+
+void addColumnHandles(
+    const RowTypePtr& rowType,
+    const std::vector<PartitionField>& partitionFields,
+    std::vector<std::shared_ptr<const HiveColumnHandle>>& columnHandles) {
+  std::unordered_set<int32_t> partitionColumnIds;
+  for (const auto& field : partitionFields) {
+    partitionColumnIds.insert(field.id);
+  }
+
+  columnHandles.reserve(rowType->size());
+  for (auto i = 0; i < rowType->size(); ++i) {
+    const auto columnType = partitionColumnIds.count(i) > 0
+        ? HiveColumnHandle::ColumnType::kPartitionKey
+        : HiveColumnHandle::ColumnType::kRegular;
+
+    columnHandles.push_back(std::make_shared<HiveColumnHandle>(
+        rowType->nameOf(i),
+        columnType,
+        rowType->childAt(i),
+        rowType->childAt(i)));
+  }
 }
 
 std::shared_ptr<IcebergInsertTableHandle>
 IcebergTestBase::createIcebergInsertTableHandle(
     const RowTypePtr& rowType,
     const std::string& outputDirectoryPath,
-    const std::vector<std::string>& partitionTransforms) {
+    const std::vector<PartitionField>& partitionFields) {
   std::vector<std::shared_ptr<const HiveColumnHandle>> columnHandles;
-  for (auto i = 0; i < rowType->size(); ++i) {
-    auto columnName = rowType->nameOf(i);
-    auto columnType = HiveColumnHandle::ColumnType::kRegular;
-    for (auto transform : partitionTransforms) {
-      if (columnName == transform) {
-        columnType = HiveColumnHandle::ColumnType::kPartitionKey;
-        break;
-      }
-    }
-    columnHandles.push_back(std::make_shared<HiveColumnHandle>(
-        columnName, columnType, rowType->childAt(i), rowType->childAt(i)));
-  }
+  addColumnHandles(rowType, partitionFields, columnHandles);
 
   auto locationHandle = std::make_shared<LocationHandle>(
       outputDirectoryPath,
       outputDirectoryPath,
       LocationHandle::TableType::kNew);
 
-  auto partitionSpec = createPartitionSpec(partitionTransforms);
+  auto partitionSpec = createPartitionSpec(partitionFields, rowType);
 
   return std::make_shared<IcebergInsertTableHandle>(
       columnHandles,
       locationHandle,
       partitionSpec,
+      opPool_.get(),
       fileFormat_,
       nullptr,
       common::CompressionKind::CompressionKind_ZSTD);
@@ -163,9 +167,9 @@ IcebergTestBase::createIcebergInsertTableHandle(
 std::shared_ptr<IcebergDataSink> IcebergTestBase::createIcebergDataSink(
     const RowTypePtr& rowType,
     const std::string& outputDirectoryPath,
-    const std::vector<std::string>& partitionTransforms) {
+    const std::vector<PartitionField>& partitionFields) {
   auto tableHandle = createIcebergInsertTableHandle(
-      rowType, outputDirectoryPath, partitionTransforms);
+      rowType, outputDirectoryPath, partitionFields);
   return std::make_shared<IcebergDataSink>(
       rowType,
       tableHandle,
@@ -230,7 +234,7 @@ IcebergTestBase::createSplitsForDirectory(const std::string& directory) {
         std::nullopt,
         customSplitInfo,
         nullptr,
-        /*cacheable=*/true,
+        true,
         std::vector<IcebergDeleteFile>()));
   }
 
