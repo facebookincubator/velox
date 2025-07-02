@@ -106,6 +106,7 @@ function(velox_add_library TARGET)
         set(_type SHARED)
       endif()
       # Create the target if this is the first invocation.
+      message(STATUS "Creating velox library target: ${TARGET} with _type ${_type} ARGN ${ARGN}")
       add_library(velox ${_type} ${ARGN})
       set_target_properties(velox PROPERTIES LIBRARY_OUTPUT_DIRECTORY
                                              ${PROJECT_BINARY_DIR}/lib)
@@ -132,7 +133,7 @@ function(velox_link_libraries TARGET)
     # aliases to velox when building the mono lib and need to be linked
     # explicitly (this is a hack)
     set(explicit_targets
-        velox_exec_test_lib
+#        velox_exec_test_lib
         # see velox/experimental/wave/README.md
         velox_wave_common
         velox_wave_decode
