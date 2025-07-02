@@ -37,7 +37,7 @@ using namespace stringCore;
 /// Perform upper for a UTF8 string
 template <
     bool ascii,
-    bool forSpark = false,
+    bool turkishCasing = false,
     typename TOutString,
     typename TInString>
 FOLLY_ALWAYS_INLINE bool upper(TOutString& output, const TInString& input) {
@@ -56,7 +56,7 @@ FOLLY_ALWAYS_INLINE bool upper(TOutString& output, const TInString& input) {
 /// Perform lower for a UTF8 string
 template <
     bool ascii,
-    bool forSpark = false,
+    bool turkishCasing = false,
     typename TOutString,
     typename TInString>
 FOLLY_ALWAYS_INLINE bool lower(TOutString& output, const TInString& input) {
@@ -65,7 +65,7 @@ FOLLY_ALWAYS_INLINE bool lower(TOutString& output, const TInString& input) {
     lowerAscii(output.data(), input.data(), input.size());
   } else {
     output.resize(input.size() * 4);
-    auto size = lowerUnicode<forSpark>(
+    auto size = lowerUnicode<turkishCasing>(
         output.data(), output.size(), input.data(), input.size());
     output.resize(size);
   }
