@@ -498,7 +498,8 @@ auto toAggregators(
 
   std::vector<std::unique_ptr<cudf_velox::CudfHashAggregation::Aggregator>>
       aggregators;
-  for (auto const& aggregate : aggregationNode.aggregates()) {
+  for (auto i = 0; i < aggregationNode.aggregates().size(); ++i) {
+    auto const& aggregate = aggregationNode.aggregates()[i];
     std::vector<column_index_t> aggInputs;
     std::vector<VectorPtr> aggConstants;
     for (auto const& arg : aggregate.call->inputs()) {
@@ -829,8 +830,9 @@ CudfVectorPtr CudfHashAggregation::doGlobalAggregation(
   std::vector<std::unique_ptr<cudf::column>> resultColumns;
   resultColumns.reserve(aggregators_.size());
   for (auto i = 0; i < aggregators_.size(); i++) {
-    resultColumns.push_back(aggregators_[i]->doReduce(
-      tbl->view(), outputType_->childAt(i), stream));
+    resultColumns.push_back(
+        aggregators_[i]->doReduce(
+            tbl->view(), outputType_->childAt(i), stream));
   }
 
   return std::make_shared<cudf_velox::CudfVector>(
