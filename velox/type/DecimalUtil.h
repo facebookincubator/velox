@@ -512,7 +512,7 @@ class DecimalUtil {
   /// status for the outcome of computing.
   template <typename T>
   static Status toDecimalValue(
-      const StringView s,
+      const StringView& s,
       int toPrecision,
       int toScale,
       T& decimalValue) {
