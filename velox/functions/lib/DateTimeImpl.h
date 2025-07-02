@@ -15,20 +15,22 @@
  */
 #pragma once
 
-#include <velox/type/Timestamp.h>
 #include "velox/external/date/date.h"
 #include "velox/functions/lib/DateTimeFormatter.h"
 #include "velox/functions/lib/DateTimeImpl.h"
 #include "velox/functions/lib/TimeUtils.h"
+#include "velox/type/Timestamp.h"
 
 namespace facebook::velox::functions {
 
-// Returns toTimestamp - fromTimestamp expressed in terms of unit.
+// Returns toTimestamp - fromTimestamp expressed in terms of unit. Unlike
+// Presto, Spark does not respect the last day of a year-month.
 FOLLY_ALWAYS_INLINE int64_t diffTimestamp(
     const DateTimeUnit unit,
     const Timestamp& fromTimestamp,
-    const Timestamp& toTimestamp) {
-  // TODO(gaoge): Handle overflow and underflow with 64-bit representation
+    const Timestamp& toTimestamp,
+    const bool respectLastDay = true) {
+  // TODO(gaoge): Handle overflow and underflow with 64-bit representation.
   if (fromTimestamp == toTimestamp) {
     return 0;
   }
@@ -146,7 +148,7 @@ FOLLY_ALWAYS_INLINE int64_t diffTimestamp(
         (int64_t(toCalDate.year()) - int64_t(fromCalDate.year())) * 12 +
         int(toMonth) - int(fromMonth);
 
-    if ((toDay != toLastYearMonthDay && fromDay > toDay) ||
+    if (((!respectLastDay || toDay != toLastYearMonthDay) && fromDay > toDay) ||
         (fromDay == toDay && fromTimeInstantOfDay > toTimeInstantOfDay)) {
       diff--;
     }
@@ -160,7 +162,7 @@ FOLLY_ALWAYS_INLINE int64_t diffTimestamp(
 
     if (fromMonth > toMonth ||
         (fromMonth == toMonth && fromDay > toDay &&
-         toDay != toLastYearMonthDay) ||
+         (!respectLastDay || toDay != toLastYearMonthDay)) ||
         (fromMonth == toMonth && fromDay == toDay &&
          fromTimeInstantOfDay > toTimeInstantOfDay)) {
       diff--;
@@ -175,7 +177,8 @@ FOLLY_ALWAYS_INLINE int64_t diffTimestamp(
     const DateTimeUnit unit,
     const Timestamp& fromTimestamp,
     const Timestamp& toTimestamp,
-    const tz::TimeZone* timeZone) {
+    const tz::TimeZone* timeZone,
+    const bool respectLastDay = true) {
   if (LIKELY(timeZone != nullptr)) {
     // sessionTimeZone not null means that the config
     // adjust_timestamp_to_timezone is on.
@@ -192,8 +195,10 @@ FOLLY_ALWAYS_INLINE int64_t diffTimestamp(
     } else {
       toZonedTimestamp.toTimezone(*timeZone);
     }
-    return diffTimestamp(unit, fromZonedTimestamp, toZonedTimestamp);
+    return diffTimestamp(
+        unit, fromZonedTimestamp, toZonedTimestamp, respectLastDay);
   }
-  return diffTimestamp(unit, fromTimestamp, toTimestamp);
+  return diffTimestamp(unit, fromTimestamp, toTimestamp, respectLastDay);
 }
+
 } // namespace facebook::velox::functions
