@@ -155,7 +155,7 @@ add_executable(
 
 add_test(
   NAME velox_exec_test
-  COMMAND velox_exec_test
+  COMMAND velox_exec_test --logtostdout --minloglevel=0
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 
 set_tests_properties(velox_exec_test PROPERTIES TIMEOUT 3000)
