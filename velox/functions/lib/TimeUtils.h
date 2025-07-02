@@ -31,12 +31,6 @@ inline constexpr int64_t kSecondsInDay = 86'400;
 inline constexpr int64_t kDaysInWeek = 7;
 extern const folly::F14FastMap<std::string, int8_t> kDayOfWeekNames;
 
-FOLLY_ALWAYS_INLINE bool isTimeUnit(const DateTimeUnit unit) {
-  return unit == DateTimeUnit::kMillisecond || unit == DateTimeUnit::kSecond ||
-      unit == DateTimeUnit::kMinute || unit == DateTimeUnit::kHour ||
-      unit == DateTimeUnit::kMicrosecond;
-}
-
 FOLLY_ALWAYS_INLINE const tz::TimeZone* getTimeZoneFromConfig(
     const core::QueryConfig& config) {
   if (config.adjustTimestampToTimezone()) {

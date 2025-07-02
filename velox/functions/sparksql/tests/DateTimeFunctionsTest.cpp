@@ -1297,7 +1297,12 @@ TEST_F(DateTimeFunctionsTest, timestampdiff) {
         timestamp1,
         timestamp2);
   };
-
+  EXPECT_EQ(
+      9,
+      timestampDiff(
+          "year",
+          parseTimestamp("2020-02-28 10:00:00.500"),
+          parseTimestamp("2030-02-27 10:00:00.500")));
   // Check null behaviors.
   EXPECT_EQ(
       std::nullopt, timestampDiff("second", Timestamp(1, 0), std::nullopt));
@@ -1483,27 +1488,21 @@ TEST_F(DateTimeFunctionsTest, timestampdiff) {
           parseTimestamp("2021-03-14 09:00:00.000"),
           parseTimestamp("2022-03-14 09:00:00.000")));
 
-  // Test for respecting the last day of a year-month.
+  // Test for not respecting the last day of a year-month.
   EXPECT_EQ(
-      365 + 30,
-      timestampDiff(
-          "day",
-          parseTimestamp("2019-01-30 10:00:00.500"),
-          parseTimestamp("2020-02-29 10:00:00.500")));
-  EXPECT_EQ(
-      12 + 1,
+      12,
       timestampDiff(
           "month",
           parseTimestamp("2019-01-30 10:00:00.500"),
           parseTimestamp("2020-02-29 10:00:00.500")));
   EXPECT_EQ(
-      1,
+      0,
       timestampDiff(
           "quarter",
           parseTimestamp("2019-11-30 10:00:00.500"),
           parseTimestamp("2020-02-29 10:00:00.500")));
   EXPECT_EQ(
-      10,
+      9,
       timestampDiff(
           "year",
           parseTimestamp("2020-02-29 10:00:00.500"),
