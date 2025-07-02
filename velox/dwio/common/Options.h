@@ -72,10 +72,13 @@ enum class SerDeSeparator {
 
 class SerDeOptions {
  public:
+  /// Defines the delimiters. Each row is separated by 'newLine', and each
+  /// column at level i within each row is separated by separators[i].
   std::array<uint8_t, 8> separators;
   std::string nullString;
   bool lastColumnTakesRest;
   uint8_t escapeChar;
+  uint8_t newLine;
   bool isEscaped;
 
   inline static const std::string kFieldDelim{"field.delim"};
@@ -88,11 +91,13 @@ class SerDeOptions {
       uint8_t collectionDelim = '\2',
       uint8_t mapKeyDelim = '\3',
       uint8_t escape = '\\',
-      bool isEscapedFlag = false)
+      bool isEscapedFlag = false,
+      uint8_t newLine = '\n')
       : separators{{fieldDelim, collectionDelim, mapKeyDelim, 4, 5, 6, 7, 8}},
         nullString("\\N"),
         lastColumnTakesRest(false),
         escapeChar(escape),
+        newLine(newLine),
         isEscaped(isEscapedFlag) {}
   ~SerDeOptions() = default;
 };
