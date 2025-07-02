@@ -93,7 +93,6 @@ struct RowRange {
 /// selection and manipulation.
 class RowRanges {
  public:
-  static const RowRanges EMPTY;
   RowRanges() = default;
 
   explicit RowRanges(const RowRange& range) {
@@ -105,7 +104,7 @@ class RowRanges {
   static RowRanges createSingle(int64_t rowCount) {
     VELOX_CHECK_GE(rowCount, 0);
     if (rowCount == 0) {
-      return EMPTY;
+      return RowRanges();
     }
     return RowRanges(RowRange(0, rowCount - 1));
   }
@@ -213,6 +212,4 @@ class RowRanges {
  private:
   std::vector<RowRange> ranges_;
 };
-
-const RowRanges RowRanges::EMPTY = RowRanges();
 } // namespace facebook::velox::parquet
