@@ -24,9 +24,9 @@ namespace facebook::velox::functions {
 /// Function to convert string to upper or lower case. Ascii and unicode
 /// conversion are supported.
 /// @tparam isLower Instantiate for upper or lower.
-/// @tparam forSpark When true, Spark's specific behavior is considered, e.g.
-/// for 'İ' Spark's lower case is 'i̇' and Presto's is 'i'.
-template <bool isLower, bool forSpark>
+/// @tparam turkishCasing When true, Spark's specific behavior on Turkish casing
+/// is considered. For 'İ' Spark's lower case is 'i̇' and Presto's is 'i'.
+template <bool isLower, bool turkishCasing>
 class UpperLowerTemplateFunction : public exec::VectorFunction {
  private:
   // String encoding wrappable function.
@@ -39,10 +39,10 @@ class UpperLowerTemplateFunction : public exec::VectorFunction {
       rows.applyToSelected([&](auto row) {
         auto proxy = exec::StringWriter(results, row);
         if constexpr (isLower) {
-          stringImpl::lower<isAscii, forSpark>(
+          stringImpl::lower<isAscii, turkishCasing>(
               proxy, decodedInput->valueAt<StringView>(row));
         } else {
-          stringImpl::upper<isAscii, forSpark>(
+          stringImpl::upper<isAscii, turkishCasing>(
               proxy, decodedInput->valueAt<StringView>(row));
         }
         proxy.finalize();

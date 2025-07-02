@@ -19,9 +19,9 @@
 namespace facebook::velox::functions {
 
 using PrestoUpperFunction =
-    UpperLowerTemplateFunction</*isLower=*/false, /*forSpark=*/false>;
+    UpperLowerTemplateFunction</*isLower=*/false, /*turkishCasing=*/false>;
 using PrestoLowerFunction =
-    UpperLowerTemplateFunction</*isLower=*/true, /*forSpark=*/false>;
+    UpperLowerTemplateFunction</*isLower=*/true, /*turkishCasing=*/false>;
 
 VELOX_DECLARE_VECTOR_FUNCTION(
     udf_upper,

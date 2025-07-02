@@ -154,9 +154,9 @@ void registerStringFunctions(const std::string& prefix) {
   registerFunction<LuhnCheckFunction, bool, Varchar>({prefix + "luhn_check"});
 
   using SparkUpperFunction =
-      UpperLowerTemplateFunction</*isLower=*/false, /*forSpark=*/true>;
+      UpperLowerTemplateFunction</*isLower=*/false, /*turkishCasing=*/true>;
   using SparkLowerFunction =
-      UpperLowerTemplateFunction</*isLower=*/true, /*forSpark=*/true>;
+      UpperLowerTemplateFunction</*isLower=*/true, /*turkishCasing=*/true>;
   exec::registerVectorFunction(
       prefix + "upper",
       SparkUpperFunction::signatures(),

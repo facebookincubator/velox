@@ -991,7 +991,8 @@ TEST_F(StringImplTest, isAscii) {
 TEST_F(StringImplTest, initcapUnicodePresto) {
   for (const auto& [input, expected] : getInitcapUnicodePrestoTestData()) {
     std::string output;
-    initcap<false, false>(output, input);
+    initcap</*strictSpace=*/false, /*isAscii=*/false, /*turkishCasing=*/false>(
+        output, input);
     ASSERT_EQ(output, expected);
   }
 }
@@ -999,14 +1000,16 @@ TEST_F(StringImplTest, initcapUnicodePresto) {
 TEST_F(StringImplTest, initcapAsciiPresto) {
   for (const auto& [input, expected] : getInitcapAsciiPrestoTestData()) {
     std::string output;
-    initcap<false, true>(output, input);
+    initcap</*strictSpace=*/false, /*isAscii=*/true, /*turkishCasing=*/false>(
+        output, input);
     ASSERT_EQ(output, expected);
   }
 }
 TEST_F(StringImplTest, initcapUnicodeSpark) {
   for (const auto& [input, expected] : getInitcapUnicodeSparkTestData()) {
     std::string output;
-    initcap<true, false>(output, input);
+    initcap</*strictSpace=*/true, /*isAscii=*/false, /*turkishCasing=*/true>(
+        output, input);
     ASSERT_EQ(output, expected);
   }
 }
@@ -1014,7 +1017,8 @@ TEST_F(StringImplTest, initcapUnicodeSpark) {
 TEST_F(StringImplTest, initcapAsciiSpark) {
   for (const auto& [input, expected] : getInitcapAsciiSparkTestData()) {
     std::string output;
-    initcap<true, true>(output, input);
+    initcap</*strictSpace=*/true, /*isAscii=*/true, /*turkishCasing=*/true>(
+        output, input);
     ASSERT_EQ(output, expected);
   }
 }
