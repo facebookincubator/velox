@@ -61,6 +61,7 @@ add_executable(
   ParquetReaderTest.cpp
   ParquetReaderBenchmarkTest.cpp
   BloomFilterTest.cpp
+  RowRangesTest.cpp
 )
 add_test(
   NAME velox_dwio_parquet_reader_test
