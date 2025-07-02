@@ -519,11 +519,8 @@ class DecimalUtil {
     int32_t parsedPrecision = 0;
     int32_t parsedScale = 0;
     int128_t out = 0;
-    if (auto status = parseStringToDecimalComponents(
-            s, toScale, parsedPrecision, parsedScale, out);
-        !status.ok()) {
-      return status;
-    }
+    VELOX_RETURN_NOT_OK(parseStringToDecimalComponents(
+        s, toScale, parsedPrecision, parsedScale, out));
 
     const auto status = rescaleWithRoundUp<int128_t, T>(
         out,

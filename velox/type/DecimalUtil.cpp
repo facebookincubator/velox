@@ -277,7 +277,7 @@ Status DecimalUtil::parseStringToDecimalComponents(
   if (auto status =
           parseDecimalComponents(s.data(), s.size(), decimalComponents);
       !status.ok()) {
-    return status;
+    return Status::UserError("Value is not a number. " + status.message());
   }
 
   // Count number of significant digits (without leading zeros).
@@ -329,9 +329,7 @@ Status DecimalUtil::parseStringToDecimalComponents(
     }
   }
 
-  if (auto status = parseHugeInt(decimalComponents, out); !status.ok()) {
-    return status;
-  }
+  VELOX_RETURN_NOT_OK(parseHugeInt(decimalComponents, out));
 
   if (roundUp) {
     bool overflow = __builtin_add_overflow(out, 1, &out);
