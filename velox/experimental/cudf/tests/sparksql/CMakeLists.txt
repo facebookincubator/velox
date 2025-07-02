@@ -12,13 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_executable(
-  velox_cudf_spark_aggregates_test
-  AggregationTest.cpp
-  Main.cpp)
+add_executable(velox_cudf_spark_aggregates_test AggregationTest.cpp Main.cpp)
 
-add_test(velox_cudf_spark_aggregates_test
-         velox_cudf_spark_aggregates_test)
+add_test(velox_cudf_spark_aggregates_test velox_cudf_spark_aggregates_test)
 
 target_link_libraries(
   velox_cudf_spark_aggregates_test

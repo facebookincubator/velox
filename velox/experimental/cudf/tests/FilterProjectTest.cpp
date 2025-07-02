@@ -776,8 +776,8 @@ TEST_F(CudfFilterProjectTest, filterWithEmptyResult) {
 }
 
 TEST_F(CudfFilterProjectTest, dereference) {
-  auto rowType = ROW({"c0", "c1", "c2", "c3"},
-          {BIGINT(), INTEGER(), SMALLINT(), DOUBLE()});
+  auto rowType = ROW(
+      {"c0", "c1", "c2", "c3"}, {BIGINT(), INTEGER(), SMALLINT(), DOUBLE()});
   auto vectors = makeVectors(rowType, 10, 100);
   createDuckDbTable(vectors);
 
