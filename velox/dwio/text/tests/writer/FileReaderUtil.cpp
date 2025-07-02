@@ -18,6 +18,8 @@
 
 namespace facebook::velox::text {
 
+using dwio::common::SerDeOptions;
+
 std::string readFile(const std::string& name) {
   std::ifstream file(name);
   std::string line;
@@ -29,13 +31,16 @@ std::string readFile(const std::string& name) {
   return ss.str();
 }
 
-std::vector<std::vector<std::string>> parseTextFile(const std::string& name) {
+std::vector<std::vector<std::string>> parseTextFile(
+    const std::string& name,
+    SerDeOptions serDeOptions) {
   std::ifstream file(name);
   std::string line;
   std::vector<std::vector<std::string>> table;
 
   while (std::getline(file, line)) {
-    std::vector<std::string> row = splitTextLine(line, TextFileTraits::kSOH);
+    std::vector<std::string> row =
+        splitTextLine(line, serDeOptions.separators[0]);
     table.push_back(row);
   }
   return table;
