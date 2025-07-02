@@ -38,7 +38,7 @@ jobs:
     name: Linux ${{ matrix.link-type }} - ${{ matrix.type }} with adapters
     if: ${{ github.repository == 'facebookincubator/velox' }}
     runs-on: ${{ matrix.runner }}
-    container: ghcr.io/facebookincubator/velox-dev:adapters
+    container: ghcr.io/assignuser/velox-dev:adapters
     strategy:
       fail-fast: false
       matrix:

@@ -1,5 +1,5 @@
 variable "tag" {
-  default = "ghcr.io/facebookincubator/velox-dev"
+  default = "ghcr.io/assignuser/velox-dev"
 }
 
 # Variable to control cache pushing
