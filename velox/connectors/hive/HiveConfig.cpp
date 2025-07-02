@@ -230,6 +230,13 @@ bool HiveConfig::readStatsBasedFilterReorderDisabled(
       config_->get<bool>(kReadStatsBasedFilterReorderDisabled, false));
 }
 
+bool HiveConfig::isRequestedTypeCheckEnabled(
+    const config::ConfigBase* session) const {
+  return session->get<bool>(
+      kEnableRequestedTypeCheckSession,
+      config_->get<bool>(kEnableRequestedTypeCheck, true));
+}
+
 std::string HiveConfig::hiveLocalDataPath() const {
   return config_->get<std::string>(kLocalDataPath, "");
 }
