@@ -14,8 +14,6 @@
 
 add_executable(velox_cudf_spark_aggregates_test AggregationTest.cpp Main.cpp)
 
-add_test(velox_cudf_spark_aggregates_test velox_cudf_spark_aggregates_test)
-
 add_test(
   NAME velox_cudf_spark_aggregates_test
   COMMAND velox_cudf_spark_aggregates_test
