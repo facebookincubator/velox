@@ -290,6 +290,8 @@ TEST_F(S3FileSystemTest, writeFileAndRead) {
   }
   // Verify the last chunk.
   ASSERT_EQ(readFile->pread(contentSize * 250'000, contentSize), dataContent);
+
+  ASSERT_TRUE(s3fs.exists(s3File));
 }
 
 TEST_F(S3FileSystemTest, invalidConnectionSettings) {
