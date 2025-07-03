@@ -2274,7 +2274,8 @@ PlanBuilder& PlanBuilder::rowNumber(
   return *this;
 }
 
-PlanBuilder& PlanBuilder::topNRowNumber(
+PlanBuilder& PlanBuilder::topNRank(
+    std::string_view function,
     const std::vector<std::string>& partitionKeys,
     const std::vector<std::string>& sortingKeys,
     int32_t limit,
@@ -2288,6 +2289,7 @@ PlanBuilder& PlanBuilder::topNRowNumber(
   }
   planNode_ = std::make_shared<core::TopNRowNumberNode>(
       nextPlanNodeId(),
+      core::TopNRowNumberNode::rankFunctionFromName(function),
       fields(partitionKeys),
       sortingFields,
       sortingOrders,
@@ -2296,6 +2298,15 @@ PlanBuilder& PlanBuilder::topNRowNumber(
       planNode_);
   VELOX_CHECK(!planNode_->supportsBarrier());
   return *this;
+}
+
+PlanBuilder& PlanBuilder::topNRowNumber(
+    const std::vector<std::string>& partitionKeys,
+    const std::vector<std::string>& sortingKeys,
+    int32_t limit,
+    bool generateRowNumber) {
+  return topNRank(
+      "row_number", partitionKeys, sortingKeys, limit, generateRowNumber);
 }
 
 PlanBuilder& PlanBuilder::markDistinct(
