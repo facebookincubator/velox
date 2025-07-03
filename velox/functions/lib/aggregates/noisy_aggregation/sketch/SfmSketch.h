@@ -55,6 +55,9 @@ class SfmSketch {
   void addIndexAndZeros(uint32_t bucketIndex, uint32_t zeros);
   void mergeWith(SfmSketch& other);
   uint64_t cardinality() const;
+  size_t serializedSize() const;
+  void serialize(char* out) const;
+  static SfmSketch deserialize(const char* in, HashStringAllocator* allocator);
 
   template <typename RandomizationStrategy>
   void mergeWith(

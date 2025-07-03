@@ -17,10 +17,12 @@
 #include "velox/functions/lib/aggregates/noisy_aggregation/sketch/SfmSketch.h"
 #include <cmath>
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/base/IOUtils.h"
 #include "velox/common/memory/HashStringAllocator.h"
 #include "velox/functions/lib/aggregates/noisy_aggregation/sketch/MersenneTwisterRandomizationStrategy.h"
 
 namespace facebook::velox::functions::aggregate {
+const int8_t FORMAT_TAG = 7;
 
 SfmSketch::SfmSketch(
     BitMap& bitMap,
@@ -108,6 +110,64 @@ uint64_t SfmSketch::cardinality() const {
   // when casting negative values to unsigned types
   double clampedGuess = std::max(0.0, guess);
   return static_cast<uint64_t>(std::round(clampedGuess));
+}
+
+size_t SfmSketch::serializedSize() const {
+  // Java-compatible format: FORMAT_TAG + indexBitLength + precision +
+  // randomizedResponseProbability + bitmapByteLength + bitmap bytes
+  auto bitmapBytes = getBitMap().toCompactIntVector();
+  return sizeof(int8_t) + sizeof(uint32_t) + sizeof(uint32_t) + sizeof(double) +
+      sizeof(uint32_t) + bitmapBytes.size();
+}
+
+void SfmSketch::serialize(char* out) const {
+  common::OutputByteStream stream(out);
+  stream.appendOne(FORMAT_TAG);
+  stream.appendOne(indexBitLength_);
+  stream.appendOne(precision_);
+  stream.appendOne(randomizedResponseProbability_);
+
+  // Get bitmap bytes in Java-compatible format (truncated trailing zeros)
+  auto bitmapBytes = getBitMap().toCompactIntVector();
+  stream.appendOne(static_cast<uint32_t>(bitmapBytes.size()));
+  stream.append(
+      reinterpret_cast<const char*>(bitmapBytes.data()), bitmapBytes.size());
+}
+
+SfmSketch SfmSketch::deserialize(
+    const char* in,
+    HashStringAllocator* allocator) {
+  common::InputByteStream stream(in);
+  auto formatTag = stream.read<int8_t>(); // FORMAT_TAG
+  auto indexBitLength = stream.read<uint32_t>();
+  auto precision = stream.read<uint32_t>();
+  auto randomizedResponseProbability = stream.read<double>();
+  auto bitmapByteLength =
+      stream.read<uint32_t>(); // Java stores bitmap byte length
+
+  // Validate format tag
+  VELOX_CHECK_EQ(
+      formatTag,
+      FORMAT_TAG,
+      "Invalid format tag: expected {}, got {}",
+      FORMAT_TAG,
+      formatTag);
+
+  // Validate indexBitLength before calling numberOfBuckets
+  VELOX_CHECK(
+      indexBitLength >= 1 && indexBitLength < 32,
+      "indexBitLength {} is out of range [1, 32)",
+      indexBitLength);
+
+  // Calculate the expected bitmap length (total bits)
+  uint32_t expectedBitmapLength = numberOfBuckets(indexBitLength) * precision;
+
+  // Create BitMap from Java-compatible format
+  auto bitMap = BitMap::deserialize(
+      in + stream.offset(), bitmapByteLength, expectedBitmapLength, allocator);
+
+  return SfmSketch(
+      bitMap, indexBitLength, precision, randomizedResponseProbability);
 }
 
 void SfmSketch::validateEpsilon(double epsilon) {
