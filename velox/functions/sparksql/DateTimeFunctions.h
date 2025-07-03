@@ -973,8 +973,12 @@ struct TimestampDiffFunction {
       const arg_type<Timestamp>& timestamp1,
       const arg_type<Timestamp>& timestamp2) {
     const auto unit = unit_.value();
-    result =
-        diffTimestamp(unit, timestamp1, timestamp2, sessionTimeZone_, false);
+    result = diffTimestamp(
+        unit,
+        timestamp1,
+        timestamp2,
+        sessionTimeZone_,
+        /*respectLastDay=*/false);
   }
 
  private:

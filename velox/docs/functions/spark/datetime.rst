@@ -273,7 +273,8 @@ These functions support TIMESTAMP and DATE input types.
 
 .. spark:function:: timestampdiff(unit, timestamp1, timestamp2) -> bigint
 
-    Returns ``timestamp2`` - ``timestamp1`` expressed in terms of ``unit``.
+    Returns ``timestamp2`` - ``timestamp1`` expressed in terms of ``unit``, the fraction
+    part is truncated.
     Throws exception if ``unit`` is invalid.
     ``unit`` is case insensitive and must be one of the following:
     ``YEAR``, ``QUARTER``, ``MONTH``, ``WEEK``, ``DAY``, ``HOUR``, ``MINUTE``, ``SECOND``,
