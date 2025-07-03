@@ -19,8 +19,8 @@ add_test(
   COMMAND velox_cudf_spark_aggregates_test
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 
-set_tests_properties(velox_cudf_spark_aggregates_test PROPERTIES LABELS cuda_driver
-                                                                 TIMEOUT 3000)
+set_tests_properties(velox_cudf_spark_aggregates_test
+                     PROPERTIES LABELS cuda_driver TIMEOUT 3000)
 
 target_link_libraries(
   velox_cudf_spark_aggregates_test
