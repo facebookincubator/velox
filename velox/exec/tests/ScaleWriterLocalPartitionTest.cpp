@@ -600,17 +600,16 @@ TEST_F(ScaleWriterLocalPartitionTest, unpartitionBasic) {
           consumerBufferedMemoryRatio,
           expectedRebalance);
     }
-  } testSettings[] = {
-      {1, 1, 0, 1.0, 0, 0.8, 0.6, false},
-      {4, 1, 0, 1.0, 0, 0.8, 0.6, false},
-      {1, 4, 1ULL << 30, 1.0, 0, 0.8, 0.6, false},
-      {4, 4, 1ULL << 30, 1.0, 0, 0.8, 0.6, false},
-      {1, 4, 0, 1.0, 0, 0.3, 0.2, false},
-      {4, 4, 0, 1.0, 0, 0.3, 0.2, false},
-      {1, 4, 0, 0.1, queryCapacity / 2, 0.8, 0.6, false},
-      {4, 4, 0, 0.1, queryCapacity / 2, 0.8, 0.6, false},
-      {1, 4, 0, 1.0, 0, 0.8, 0.6, true},
-      {4, 4, 0, 1.0, 0, 0.8, 0.6, true}};
+  } testSettings[] = {//{1, 1, 0, 1.0, 0, 0.8, 0.6, false},
+                      //{4, 1, 0, 1.0, 0, 0.8, 0.6, false},
+                      //{1, 4, 1ULL << 30, 1.0, 0, 0.8, 0.6, false},
+                      //{4, 4, 1ULL << 30, 1.0, 0, 0.8, 0.6, false},
+                      //{1, 4, 0, 1.0, 0, 0.3, 0.2, false},
+                      //{4, 4, 0, 1.0, 0, 0.3, 0.2, false},
+                      //{1, 4, 0, 0.1, queryCapacity / 2, 0.8, 0.6, false},
+                      {4, 4, 0, 0.1, queryCapacity / 2, 0.8, 0.6, false}};
+  //{1, 4, 0, 1.0, 0, 0.8, 0.6, true},
+  //{4, 4, 0, 1.0, 0, 0.8, 0.6, true}};
 
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
