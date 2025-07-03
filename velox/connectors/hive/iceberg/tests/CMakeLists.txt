@@ -40,6 +40,7 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
 
   add_executable(
     velox_hive_iceberg_test
+    Main.cpp
     IcebergInsertTest.cpp
     IcebergTestBase.cpp
     Murmur3Test.cpp

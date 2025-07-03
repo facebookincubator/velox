@@ -18,6 +18,7 @@ velox_add_library(
   IcebergSplit.cpp
   PositionalDeleteFileReader.cpp
   IcebergDataSink.cpp
+  IcebergPartitionIdGenerator.cpp
   Transforms.cpp
   TransformFactory.cpp
   Murmur3.cpp)

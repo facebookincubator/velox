@@ -65,7 +65,7 @@ class IcebergDataSink : public HiveDataSink {
  public:
   IcebergDataSink(
       RowTypePtr inputType,
-      std::shared_ptr<const IcebergInsertTableHandle> insertTableHandle,
+      const std::shared_ptr<const IcebergInsertTableHandle>& insertTableHandle,
       const ConnectorQueryCtx* connectorQueryCtx,
       CommitStrategy commitStrategy,
       const std::shared_ptr<const HiveConfig>& hiveConfig);
@@ -75,10 +75,11 @@ class IcebergDataSink : public HiveDataSink {
  private:
   IcebergDataSink(
       RowTypePtr inputType,
-      std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
+      const std::shared_ptr<const IcebergInsertTableHandle>& insertTableHandle,
       const ConnectorQueryCtx* connectorQueryCtx,
       CommitStrategy commitStrategy,
       const std::shared_ptr<const HiveConfig>& hiveConfig,
+      const std::vector<column_index_t>& partitionChannels,
       const std::vector<column_index_t>& dataChannels);
 
   void splitInputRowsAndEnsureWriters(RowVectorPtr input) override;

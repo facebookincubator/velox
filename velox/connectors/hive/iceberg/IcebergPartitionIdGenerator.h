@@ -17,6 +17,7 @@
 #pragma once
 
 #include "velox/connectors/hive/PartitionIdGenerator.h"
+#include "velox/connectors/hive/iceberg/IcebergDataSink.h"
 
 namespace facebook::velox::connector::hive::iceberg {
 class IcebergPartitionIdGenerator : public PartitionIdGenerator {
@@ -26,20 +27,22 @@ class IcebergPartitionIdGenerator : public PartitionIdGenerator {
       std::vector<column_index_t> partitionChannels,
       uint32_t maxPartitions,
       memory::MemoryPool* pool,
-      ConnectorInsertTableHandlePtr insertTableHandle,
-      bool partitionPathAsLowerCase)
-      : PartitionIdGenerator(
-            inputType,
-            partitionChannels,
-            maxPartitions,
-            pool,
-            insertTableHandle,
-            partitionPathAsLowerCase) {}
+      const std::shared_ptr<const IcebergInsertTableHandle>& insertTableHandle,
+      bool partitionPathAsLowerCase);
 
   /// Generate sequential partition IDs for input vector.
   /// @param input Input RowVector.
   /// @param result Generated integer IDs indexed by input row number.
-  void runIceberg(const RowVectorPtr& input, raw_vector<uint64_t>& result);
+  void run(const RowVectorPtr& input, raw_vector<uint64_t>& result) override;
+
+ private:
+  void savePartitionValues(
+      uint64_t partitionId,
+      const RowVectorPtr& input,
+      vector_size_t row) override;
+
+  memory::MemoryPool* pool_;
+  const std::shared_ptr<const IcebergInsertTableHandle> insertTableHandle_;
 };
 
 } // namespace facebook::velox::connector::hive::iceberg

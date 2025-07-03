@@ -529,7 +529,9 @@ class HiveDataSink : public DataSink {
       const std::shared_ptr<const HiveConfig>& hiveConfig,
       uint32_t bucketCount,
       std::unique_ptr<core::PartitionFunction> bucketFunction,
-      const std::vector<column_index_t>& dataChannels);
+      const std::vector<column_index_t>& partitionChannels,
+      const std::vector<column_index_t>& dataChannels,
+      std::unique_ptr<PartitionIdGenerator> partitionIdGenerator);
 
   void appendData(RowVectorPtr input) override;
 

@@ -19,6 +19,7 @@
 #include <exec/OperatorUtils.h>
 
 #include "velox/common/base/Fs.h"
+#include "velox/connectors/hive/iceberg/IcebergPartitionIdGenerator.h"
 
 namespace facebook::velox::connector::hive::iceberg {
 
@@ -38,7 +39,7 @@ std::string toJson(const std::vector<folly::dynamic>& partitionValues) {
 
 IcebergDataSink::IcebergDataSink(
     facebook::velox::RowTypePtr inputType,
-    std::shared_ptr<const IcebergInsertTableHandle> insertTableHandle,
+    const std::shared_ptr<const IcebergInsertTableHandle>& insertTableHandle,
     const facebook::velox::connector::ConnectorQueryCtx* connectorQueryCtx,
     facebook::velox::connector::CommitStrategy commitStrategy,
     const std::shared_ptr<const HiveConfig>& hiveConfig)
@@ -49,6 +50,17 @@ IcebergDataSink::IcebergDataSink(
           commitStrategy,
           hiveConfig,
           [&insertTableHandle]() {
+            std::vector<column_index_t> channels;
+            for (column_index_t i = 0;
+                 i < insertTableHandle->inputColumns().size();
+                 i++) {
+              if (insertTableHandle->inputColumns()[i]->isPartitionKey()) {
+                channels.push_back(i);
+              }
+            }
+            return channels;
+          }(),
+          [&insertTableHandle]() {
             std::vector<column_index_t> channels(
                 insertTableHandle->inputColumns().size());
             std::iota(channels.begin(), channels.end(), 0);
@@ -57,10 +69,11 @@ IcebergDataSink::IcebergDataSink(
 
 IcebergDataSink::IcebergDataSink(
     RowTypePtr inputType,
-    std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
+    const std::shared_ptr<const IcebergInsertTableHandle>& insertTableHandle,
     const ConnectorQueryCtx* connectorQueryCtx,
     CommitStrategy commitStrategy,
     const std::shared_ptr<const HiveConfig>& hiveConfig,
+    const std::vector<column_index_t>& partitionChannels,
     const std::vector<column_index_t>& dataChannels)
     : HiveDataSink(
           inputType,
@@ -70,7 +83,19 @@ IcebergDataSink::IcebergDataSink(
           hiveConfig,
           0,
           nullptr,
-          dataChannels) {
+          partitionChannels,
+          dataChannels,
+          !partitionChannels.empty()
+              ? std::make_unique<IcebergPartitionIdGenerator>(
+                    inputType,
+                    partitionChannels,
+                    hiveConfig->maxPartitionsPerWriters(
+                        connectorQueryCtx->sessionProperties()),
+                    connectorQueryCtx->memoryPool(),
+                    insertTableHandle,
+                    hiveConfig->isPartitionPathAsLowerCase(
+                        connectorQueryCtx->sessionProperties()))
+              : nullptr) {
   if (isPartitioned()) {
     partitionData_.resize(maxOpenWriters_);
   }
@@ -181,7 +206,7 @@ void IcebergDataSink::splitInputRowsAndEnsureWriters(RowVectorPtr input) {
 
 void IcebergDataSink::computePartitionAndBucketIds(const RowVectorPtr& input) {
   VELOX_CHECK(isPartitioned());
-  partitionIdGenerator_->runIceberg(input, partitionIds_);
+  partitionIdGenerator_->run(input, partitionIds_);
 }
 
 std::string IcebergDataSink::makePartitionDirectory(

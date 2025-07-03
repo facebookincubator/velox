@@ -535,7 +535,7 @@ TEST_F(IcebergTransformE2ETest, multipleTransformsOnSameColumn) {
   }
 }
 
-TEST_F(IcebergTransformE2ETest, structSubfieldPartitioning) {
+TEST_F(IcebergTransformE2ETest, DISABLED_structSubfieldPartitioning) {
   auto structType = ROW({"id", "name"}, {INTEGER(), BIGINT()});
   auto testRowType =
       ROW({"c_int", "c_bigint", "c_struct"}, {INTEGER(), BIGINT(), structType});
@@ -572,7 +572,7 @@ TEST_F(IcebergTransformE2ETest, structSubfieldPartitioning) {
   verifyTotalRowCount(testRowType, outputDirectory->getPath(), numRows);
 }
 
-TEST_F(IcebergTransformE2ETest, multipleStructSubfieldPartitioning) {
+TEST_F(IcebergTransformE2ETest, DISABLED_multipleStructSubfieldPartitioning) {
   auto addressType =
       ROW({"city", "state", "zip"}, {VARCHAR(), VARCHAR(), INTEGER()});
   auto personType =

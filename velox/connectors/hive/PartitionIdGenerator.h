@@ -30,7 +30,6 @@ class PartitionIdGenerator {
   /// @param maxPartitions The max number of distinct partitions.
   /// @param pool Memory pool. Used to allocate memory for storing unique
   /// partition key values.
-  /// @param insertTableHandle Used to get the Iceberg table partition spec .
   /// @param partitionPathAsLowerCase Used to control whether the partition path
   /// need to convert to lower case.
   PartitionIdGenerator(
@@ -38,14 +37,14 @@ class PartitionIdGenerator {
       std::vector<column_index_t> partitionChannels,
       uint32_t maxPartitions,
       memory::MemoryPool* pool,
-      const std::shared_ptr<const ConnectorInsertTableHandle>&
-          insertTableHandle,
       bool partitionPathAsLowerCase);
+
+  virtual ~PartitionIdGenerator() = default;
 
   /// Generate sequential partition IDs for input vector.
   /// @param input Input RowVector.
   /// @param result Generated integer IDs indexed by input row number.
-  void run(const RowVectorPtr& input, raw_vector<uint64_t>& result);
+  virtual void run(const RowVectorPtr& input, raw_vector<uint64_t>& result);
 
   /// Return the total number of distinct partitions processed so far.
   uint64_t numPartitions() const {
@@ -63,13 +62,32 @@ class PartitionIdGenerator {
     return partitionValues_;
   }
 
- private:
-  static constexpr const int32_t kHasherReservePct = 20;
+ protected:
+  PartitionIdGenerator(
+      std::vector<column_index_t> partitionChannels,
+      uint32_t maxPartitions,
+      bool partitionPathAsLowerCase);
+
+  const std::vector<column_index_t> partitionChannels_;
+
+  std::vector<std::unique_ptr<exec::VectorHasher>> hashers_;
+
+  // A vector holding unique partition key values. One row per partition. Row
+  // numbers match partition IDs.
+  RowVectorPtr partitionValues_;
+
+  const uint32_t maxPartitions_;
+
+  // A mapping from value ID produced by VectorHashers to a partition ID.
+  std::unordered_map<uint64_t, uint64_t> partitionIds_;
 
   // Computes value IDs using VectorHashers for all rows in 'input'.
   void computeValueIds(
       const RowVectorPtr& input,
       raw_vector<uint64_t>& valueIds);
+
+ private:
+  static constexpr const int32_t kHasherReservePct = 20;
 
   // In case of rehash (when value IDs produced by VectorHashers change), we
   // update value id for pre-existing partitions while keeping partition ids.
@@ -79,36 +97,17 @@ class PartitionIdGenerator {
 
   // Copies partition values of 'row' from 'input' into 'partitionId' row in
   // 'partitionValues_'.
-  void savePartitionValues(
+  virtual void savePartitionValues(
       uint64_t partitionId,
       const RowVectorPtr& input,
       vector_size_t row);
 
-  void saveIcebergPartitionTransformResult(
-      uint64_t partitionId,
-      const RowVectorPtr& input,
-      vector_size_t row) const;
-
-  const std::vector<column_index_t> partitionChannels_;
-
-  const uint32_t maxPartitions_;
-
   const bool partitionPathAsLowerCase_;
 
-  std::vector<std::unique_ptr<exec::VectorHasher>> hashers_;
   bool hasMultiplierSet_ = false;
-
-  // A mapping from value ID produced by VectorHashers to a partition ID.
-  std::unordered_map<uint64_t, uint64_t> partitionIds_;
-
-  // A vector holding unique partition key values. One row per partition. Row
-  // numbers match partition IDs.
-  RowVectorPtr partitionValues_;
 
   // All rows are set valid to compute partition IDs for all input rows.
   SelectivityVector allRows_;
-
-  memory::MemoryPool* pool_;
-  const std::shared_ptr<const ConnectorInsertTableHandle> insertTableHandle_;
 };
+
 } // namespace facebook::velox::connector::hive
