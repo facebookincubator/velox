@@ -23,6 +23,7 @@
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
 DEFINE_int64(fuzzer_seed, 99887766, "Seed for random input dataset generator");
+DEFINE_int64(vector_size, 10000, "Size of vectors to benchmark");
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
@@ -48,6 +49,20 @@ class DecodedVectorBenchmark : public functions::test::FunctionBenchmarkBase {
     for (size_t i = 0; i < 5; ++i) {
       dictionaryNestedVector_ = fuzzer.fuzzDictionary(dictionaryNestedVector_);
     }
+
+    std::vector<std::string> names;
+    std::vector<TypePtr> types;
+    for (size_t i = 0; i < vectorSize_; ++i) {
+      names.push_back(fmt::format("field{}", i));
+      if (i % 2 == 0) {
+        types.push_back(BIGINT());
+      } else {
+        types.push_back(VARCHAR());
+      }
+    }
+    auto rowType = ROW(std::move(names), std::move(types));
+
+    decodedRowVector_ = fuzzer.fuzzRow(rowType, vectorSize_);
   }
 
   // Runs a fast path over a flat vector (no decoding).
@@ -118,6 +133,27 @@ class DecodedVectorBenchmark : public functions::test::FunctionBenchmarkBase {
     DecodedVector decodedVector(*dictionaryNestedVector_, rows_);
   }
 
+  // Measure time to estimate flat size for different vector types
+  void estimateFlatSizeFlat() {
+    flatVector_->estimateFlatSize();
+  }
+
+  void estimateFlatSizeConstant() {
+    constantVector_->estimateFlatSize();
+  }
+
+  void estimateFlatSizeDict() {
+    dictionaryVector_->estimateFlatSize();
+  }
+
+  void estimateFlatSizeDict5Nested() {
+    dictionaryNestedVector_->estimateFlatSize();
+  }
+
+  void estimateFlatSizeRowVector() {
+    decodedRowVector_->estimateFlatSize();
+  }
+
  private:
   void decodedRun(const DecodedVector& decodedVector) {
     size_t sum = 0;
@@ -133,6 +169,7 @@ class DecodedVectorBenchmark : public functions::test::FunctionBenchmarkBase {
   VectorPtr constantVector_;
   VectorPtr dictionaryVector_;
   VectorPtr dictionaryNestedVector_;
+  VectorPtr decodedRowVector_;
 
   SelectivityVector rows_;
 };
@@ -185,13 +222,36 @@ BENCHMARK(decodeDictionary5Nested) {
   run([&] { benchmark->decodeDictionary5Nested(); });
 }
 
+BENCHMARK_DRAW_LINE();
+
+// Benchmarks for estimateFlatSize on different vector types
+BENCHMARK(estimateFlatSizeFlat) {
+  run([&] { benchmark->estimateFlatSizeFlat(); });
+}
+
+BENCHMARK(estimateFlatSizeConstant) {
+  run([&] { benchmark->estimateFlatSizeConstant(); });
+}
+
+BENCHMARK(estimateFlatSizeDict) {
+  run([&] { benchmark->estimateFlatSizeDict(); });
+}
+
+BENCHMARK(estimateFlatSizeDict5Nested) {
+  run([&] { benchmark->estimateFlatSizeDict5Nested(); });
+}
+
+BENCHMARK(estimateFlatSizeRowVector) {
+  run([&] { benchmark->estimateFlatSizeRowVector(); });
+}
+
 } // namespace
 
 int main(int argc, char* argv[]) {
   folly::Init init{&argc, &argv};
   ::gflags::ParseCommandLineFlags(&argc, &argv, true);
   memory::MemoryManager::initialize(memory::MemoryManager::Options{});
-  benchmark = std::make_unique<DecodedVectorBenchmark>(10'000);
+  benchmark = std::make_unique<DecodedVectorBenchmark>(FLAGS_vector_size);
   folly::runBenchmarks();
   benchmark.reset();
   return 0;
