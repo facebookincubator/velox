@@ -32,17 +32,16 @@ struct BucketDecimalFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   template <typename TInput>
-  FOLLY_ALWAYS_INLINE Status
+  FOLLY_ALWAYS_INLINE void
   call(int32_t& out, const int32_t& numBuckets, const TInput& input) {
     VELOX_RETURN_IF(
         numBuckets <= 0,
         Status::UserError(
             "Invalid numer of buckets: {} (must be > 0)", numBuckets));
-    char bytes[sizeof(TInput)];
-    DecimalUtil::toByteArray(input, bytes);
+    char bytes[sizeof(int128_t)];
+    const auto length = DecimalUtil::toByteArray(input, bytes);
     const auto hash = util::Murmur3Hash::hashBytes(bytes, length);
     out = apply(numBuckets, hash);
-    return Status::OK();
   }
 };
 
