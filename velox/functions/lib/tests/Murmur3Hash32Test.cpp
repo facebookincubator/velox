@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/functions/Hash.h"
+#include "velox/functions/lib/Hash.h"
 
 #include <gtest/gtest.h>
 #include "velox/common/base/tests/GTestUtils.h"
