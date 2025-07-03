@@ -575,11 +575,13 @@ StopReason Driver::runInternal(
                   kOpMethodGetOutput);
               if (intermediateResult) {
                 validateOperatorOutputResult(intermediateResult, *op);
-                resultBytes = intermediateResult->estimateFlatSize();
-                {
-                  auto lockedStats = op->stats().wlock();
-                  lockedStats->addOutputVector(
-                      resultBytes, intermediateResult->size());
+                if (ctx_->queryConfig().enableEstimateFlatSize()) {
+                  resultBytes = intermediateResult->estimateFlatSize();
+                  {
+                    auto lockedStats = op->stats().wlock();
+                    lockedStats->addOutputVector(
+                        resultBytes, intermediateResult->size());
+                  }
                 }
               }
             });
@@ -665,7 +667,7 @@ StopReason Driver::runInternal(
             if (result) {
               validateOperatorOutputResult(result, *op);
 
-              {
+              if (ctx_->queryConfig().enableEstimateFlatSize()) {
                 auto lockedStats = op->stats().wlock();
                 lockedStats->addOutputVector(
                     result->estimateFlatSize(), result->size());
