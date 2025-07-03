@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Copyright (c) Facebook, Inc. and its affiliates.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -15,6 +16,11 @@
 add_subdirectory(util)
 
 velox_add_library(velox_functions_iceberg BucketFunction.cpp Register.cpp)
+=======
+add_subdirectory(util)
+
+velox_add_library(velox_functions_iceberg Truncate.cpp Register.cpp)
+>>>>>>> 09fed412e2 (add common class)
 
 velox_link_libraries(velox_functions_iceberg velox_functions_iceberg_util
                      velox_functions_lib Folly::folly)
@@ -26,4 +32,8 @@ endif()
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
+<<<<<<< HEAD
 endif()
+=======
+endif()
+>>>>>>> 09fed412e2 (add common class)

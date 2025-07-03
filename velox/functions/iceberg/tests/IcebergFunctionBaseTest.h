@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 /*
  * Copyright (c) Facebook, Inc. and its affiliates.
  *
@@ -13,6 +14,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+=======
+>>>>>>> 09fed412e2 (add common class)
 #pragma once
 
 #include "velox/functions/iceberg/Register.h"
@@ -27,8 +30,16 @@ class IcebergFunctionBaseTest
   static void SetUpTestCase() {
     parse::registerTypeResolver();
     registerFunctions("");
+<<<<<<< HEAD
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
   }
 };
 
 } // namespace facebook::velox::functions::iceberg::test
+=======
+    memory::MemoryManager::testingSetInstance({});
+  }
+};
+
+} // namespace facebook::velox::functions::iceberg::test
+>>>>>>> 09fed412e2 (add common class)
