@@ -13,7 +13,7 @@ Refer to `Iceberg documenation <https://iceberg.apache.org/spec/#partition-trans
    Returns an integer between 0 and ``numBuckets - 1`` representing the bucket assignment.
    Bucket partition transforms use a 32-bit hash of the source value. The 32-bit hash implementation is the 32-bit Murmur3 hash, x86 variant, seeded with 0.
    The hash mod N must produce a positive value by first discarding the sign bit of the hash value.
-   
+
    In pseudo-code, the function is showing as following. ::
 
        def bucket_N(x) = (murmur3_x86_32_hash(x) & Integer.MAX_VALUE) % N
