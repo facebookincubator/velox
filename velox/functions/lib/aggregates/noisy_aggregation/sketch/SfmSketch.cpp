@@ -1,0 +1,127 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#include "velox/functions/lib/aggregates/noisy_aggregation/sketch/SfmSketch.h"
+#include <cmath>
+#include "velox/common/base/Exceptions.h"
+#include "velox/common/memory/HashStringAllocator.h"
+
+namespace facebook::velox::functions::aggregate {
+
+SfmSketch::SfmSketch(
+    BitMap& bitMap,
+    uint32_t indexBitLength,
+    uint32_t precision,
+    double randomizedResponseProbability)
+    : indexBitLength_(indexBitLength),
+      precision_(precision),
+      randomizedResponseProbability_(randomizedResponseProbability),
+      bitMap_(bitMap) {
+  validatePrefixLength(indexBitLength);
+  validatePrecision(precision, indexBitLength);
+  validateRandomizedResponseProbability(randomizedResponseProbability);
+}
+
+SfmSketch SfmSketch::create(
+    uint32_t numberOfBuckets,
+    uint32_t precision,
+    HashStringAllocator* allocator) {
+  double randomizedResponseProbability =
+      calculateRandomizedResponseProbability(NON_PRIVATE_EPSILON);
+  uint32_t indexBitLength = SfmSketch::indexBitLength(numberOfBuckets);
+
+  auto bitMap = BitMap(numberOfBuckets * precision, allocator);
+  return SfmSketch(
+      bitMap, indexBitLength, precision, randomizedResponseProbability);
+}
+
+uint32_t SfmSketch::numberOfTrailingZeros(
+    uint64_t hash,
+    uint32_t indexBitLength) {
+  // Set the lowest bit in the prefix to ensure value is non-zero
+  constexpr uint32_t kBitWidth = sizeof(uint64_t) * 8;
+  uint64_t value = hash | (1ULL << (kBitWidth - indexBitLength));
+
+  // Safe because value is guaranteed non-zero
+  return static_cast<uint32_t>(__builtin_ctzll(value));
+}
+
+void SfmSketch::addHash(uint64_t hash) {
+  auto bucketIndex = computeIndex(hash, indexBitLength_);
+  // Cap the number of trailing zeros to precision - 1, to avoid out of
+  // bound.
+  auto zeros =
+      std::min(precision_ - 1, numberOfTrailingZeros(hash, indexBitLength_));
+  flipBitOn(bucketIndex, zeros);
+}
+
+void SfmSketch::addIndexAndZeros(uint32_t bucketIndex, uint32_t zeros) {
+  auto numOfbuckets = numberOfBuckets(indexBitLength_);
+  VELOX_CHECK(
+      bucketIndex >= 0 && bucketIndex < numOfbuckets,
+      "Bucket index {} must be between zero (inclusive) and the number of buckets-1 {}",
+      bucketIndex,
+      numOfbuckets - 1);
+  VELOX_CHECK(
+      zeros >= 0 && zeros <= 64, "Zeros {} must be between 0 and 64", zeros);
+
+  // count of zeros in range [0, precision - 1]
+  zeros = std::min(precision_ - 1, zeros);
+  flipBitOn(bucketIndex, zeros);
+}
+
+void SfmSketch::validateEpsilon(double epsilon) {
+  VELOX_CHECK(
+      epsilon > 0,
+      "Epsilon must be greater than zero or equal to NON_PRIVATE_EPSILON");
+}
+
+void SfmSketch::validatePrecision(uint32_t precision, uint32_t indexBitLength) {
+  VELOX_CHECK(
+      precision + indexBitLength <= 64,
+      "Precision + indexBitLength cannot exceed 64");
+}
+
+void SfmSketch::validatePrefixLength(uint32_t indexBitLength) {
+  VELOX_CHECK(
+      indexBitLength >= 1 && indexBitLength <= MAX_INDEX_BIT_LENGTH,
+      "IndexBitLength is out of range, should be in the interval [1, 16]");
+}
+
+void SfmSketch::validateRandomizedResponseProbability(double p) {
+  VELOX_CHECK(
+      p >= 0 && p <= 0.5,
+      "RandomizedResponseProbability should be in the interval [0, 0.5]");
+}
+
+double SfmSketch::observationProbability(uint32_t level) const {
+  // Probability of observing a run of zeros of length level in any single
+  // bucket
+  return std::pow(2.0, -(level + 1.0)) / numberOfBuckets(indexBitLength_);
+}
+
+void SfmSketch::flipBitOn(uint32_t bucketIndex, uint32_t zeros) {
+  VELOX_CHECK(!privacyEnabled(), "private sketch is immutable.");
+  // It's more likely to have a hash with less zeros than more zeros.
+  // we keep the bitmap in the form of a bit matrix, where each row is a zero
+  // level instead of a bucket.
+  // In this way, we can save space by dropping the trailing zeros in
+  // serialization.
+  auto bitPosition = zeros * numberOfBuckets(indexBitLength_) + bucketIndex;
+  bitMap_.setBit(bitPosition, true);
+}
+
+} // namespace facebook::velox::functions::aggregate
