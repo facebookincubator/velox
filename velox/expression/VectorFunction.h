@@ -276,7 +276,10 @@ bool registerStatefulVectorFunction(
 
 /// An expression re-writer that takes an expression and returns an equivalent
 /// expression or nullptr if re-write is not possible.
-using ExpressionRewrite = std::function<core::TypedExprPtr(core::TypedExprPtr)>;
+using ExpressionRewrite = std::function<core::TypedExprPtr(
+    const core::TypedExprPtr,
+    const std::shared_ptr<core::QueryCtx>&,
+    memory::MemoryPool*)>;
 
 /// Returns a list of registered re-writes.
 std::vector<ExpressionRewrite>& expressionRewrites();
@@ -289,6 +292,9 @@ std::vector<ExpressionRewrite>& expressionRewrites();
 /// applied in the order they were registered. The first rewrite that returns
 /// non-null result terminates the re-write for this particular expression.
 void registerExpressionRewrite(ExpressionRewrite rewrite);
+
+/// Clears all registered expression re-writes.
+void unregisterExpressionRewrites();
 
 } // namespace facebook::velox::exec
 

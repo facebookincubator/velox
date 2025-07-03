@@ -26,7 +26,50 @@
 #include "velox/expression/SwitchExpr.h"
 #include "velox/expression/TryExpr.h"
 
+// Forward declaration of the internal optimization functions to avoid
+// declaring them in the public API (ExprOptimizer.h) header.
+namespace facebook::velox::expression {
+core::TypedExprPtr optimizeCoalesceExpression(
+    const core::TypedExprPtr& input,
+    const std::shared_ptr<core::QueryCtx>& queryCtx,
+    memory::MemoryPool* pool);
+core::TypedExprPtr optimizeIfExpression(
+    const core::TypedExprPtr& input,
+    const std::shared_ptr<core::QueryCtx>& queryCtx,
+    memory::MemoryPool* pool);
+core::TypedExprPtr optimizeSwitchExpression(
+    const core::TypedExprPtr& input,
+    const std::shared_ptr<core::QueryCtx>& queryCtx,
+    memory::MemoryPool* pool);
+core::TypedExprPtr optimizeInExpression(
+    const core::TypedExprPtr& input,
+    const std::shared_ptr<core::QueryCtx>& queryCtx,
+    memory::MemoryPool* pool);
+core::TypedExprPtr optimizeConjunctExpression(
+    const core::TypedExprPtr& input,
+    const std::shared_ptr<core::QueryCtx>& queryCtx,
+    memory::MemoryPool* pool);
+} // end namespace facebook::velox::expression
+
 namespace facebook::velox::exec {
+
+#define VELOX_REGISTER_EXPRESSION_REWRITE(name)            \
+  registerExpressionRewrite(                               \
+      [&](const core::TypedExprPtr& expr,                  \
+          const std::shared_ptr<core::QueryCtx>& queryCtx, \
+          memory::MemoryPool* pool) { return name(expr, queryCtx, pool); })
+
+// Register expression optimizations for AND, OR, IF, COALESCE, SWITCH, IN.
+void registerSpecialFormExpressionRewrites() {
+  VELOX_REGISTER_EXPRESSION_REWRITE(expression::optimizeCoalesceExpression);
+  VELOX_REGISTER_EXPRESSION_REWRITE(expression::optimizeIfExpression);
+  VELOX_REGISTER_EXPRESSION_REWRITE(expression::optimizeSwitchExpression);
+  VELOX_REGISTER_EXPRESSION_REWRITE(expression::optimizeInExpression);
+  VELOX_REGISTER_EXPRESSION_REWRITE(expression::optimizeConjunctExpression);
+}
+
+#undef VELOX_REGISTER_EXPRESSION_REWRITE
+
 void registerFunctionCallToSpecialForms() {
   registerFunctionCallToSpecialForm(
       kAnd, std::make_unique<ConjunctCallToSpecialForm>(true /* isAnd */));
@@ -47,5 +90,6 @@ void registerFunctionCallToSpecialForms() {
   registerFunctionCallToSpecialForm(
       RowConstructorCallToSpecialForm::kRowConstructor,
       std::make_unique<RowConstructorCallToSpecialForm>());
+  registerSpecialFormExpressionRewrites();
 }
 } // namespace facebook::velox::exec
