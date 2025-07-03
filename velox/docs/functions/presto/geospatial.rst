@@ -69,6 +69,10 @@ Geometry Constructors
     Returns the Point geometry at the given coordinates.  This will raise an
     error if ``x`` or ``y`` is ``NaN`` or ``infinity``.
 
+.. function:: ST_Polygon(wkt: varchar) -> polygon: Geometry
+
+    Returns a geometry type polygon object from WKT representation.
+
 Spatial Predicates
 ------------------
 
@@ -169,6 +173,21 @@ Accessors
     Returns if ``geometry`` is simple, according to `SQL/MM Part 3: Spatial`_.
     Examples of non-simple geometries include LineStrings with self-intersections,
     Polygons with empty rings for holes, and more.
+
+.. function:: ST_IsClosed(geometry: Geometry) -> closed: bool
+
+    Returns true if the LineString’s start and end points are coincident. Will
+    return an error if the input geometry is not a LineString or MultiLineString.
+
+.. function:: ST_IsRing(geometry: Geometry) -> ring: bool
+
+   Returns true if and only if the line is closed and simple. Will return an error
+   if input geometry is not a LineString.
+
+.. function:: ST_IsEmpty(geometry: Geometry) -> empty: bool
+
+   Returns true if and only if this Geometry is an empty GeometryCollection, Polygon,
+   Point etc.
 
 .. function:: geometry_invalid_reason(geometry: Geometry) -> reason: varchar
 
