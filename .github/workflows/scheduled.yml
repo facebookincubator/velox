@@ -206,6 +206,7 @@ jobs:
           EXTRA_CMAKE_FLAGS: >
             -DVELOX_ENABLE_ARROW=ON \
             -DVELOX_MONO_LIBRARY=ON \
+            -DVELOX_ENABLE_GEO=ON \
             -DVELOX_BUILD_PYTHON_PACKAGE=ON \
             -DVELOX_PYTHON_LEGACY_ONLY=ON \
             ${{ inputs.extraCMakeFlags }}
