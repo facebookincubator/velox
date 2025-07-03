@@ -62,7 +62,7 @@ DEFINE_bool(
 
 DEFINE_double(
     filter_ratio,
-    0,
+    0.5,
     "The chance of testing plans with filters enabled.");
 
 namespace facebook::velox::exec {
