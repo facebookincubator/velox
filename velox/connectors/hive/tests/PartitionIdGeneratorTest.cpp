@@ -240,15 +240,15 @@ TEST_F(PartitionIdGeneratorTest, supportedPartitionKeyTypes) {
   // Test on supported key types.
   {
     PartitionIdGenerator idGenerator(
-        ROW({
-            VARCHAR(),
-            BOOLEAN(),
-            VARBINARY(),
-            TINYINT(),
-            SMALLINT(),
-            INTEGER(),
-            BIGINT(),
-        }),
+        ROW(
+            {VARCHAR(),
+             BOOLEAN(),
+             VARBINARY(),
+             TINYINT(),
+             SMALLINT(),
+             INTEGER(),
+             BIGINT(),
+             DECIMAL(20, 2)}),
         {0, 1, 2, 3, 4, 5, 6},
         100,
         pool(),
@@ -264,6 +264,8 @@ TEST_F(PartitionIdGeneratorTest, supportedPartitionKeyTypes) {
         makeNullableFlatVector<int16_t>({1, 2, std::nullopt}),
         makeNullableFlatVector<int32_t>({1, std::nullopt, 2}),
         makeNullableFlatVector<int64_t>({std::nullopt, 1, 2}),
+        makeNullableFlatVector<int128_t>(
+            {std::nullopt, 1, DecimalUtil::kLongDecimalMin}),
     });
 
     raw_vector<uint64_t> ids;
