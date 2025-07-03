@@ -174,6 +174,10 @@ UUID                      HUGEINT
 IPADDRESS                 HUGEINT
 IPPREFIX                  ROW(HUGEINT,TINYINT)
 GEOMETRY                  VARBINARY
+TDIGEST(DOUBLE)           VARBINARY
+QDIGEST(BIGINT)           VARBINARY
+QDIGEST(REAL)             VARBINARY
+QDIGEST(DOUBLE)           VARBINARY
 ========================  =====================
 
 TIMESTAMP WITH TIME ZONE represents a time point in milliseconds precision
