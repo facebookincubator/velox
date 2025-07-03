@@ -56,6 +56,13 @@ class WriterFactory {
   virtual std::unique_ptr<dwio::common::WriterOptions>
   createWriterOptions() = 0;
 
+  static void registerFactory(std::shared_ptr<WriterFactory> factory);
+  static WriterFactory* getFactory(FileFormat format);
+  static std::unique_ptr<Writer> createWriter(
+      FileFormat format,
+      std::unique_ptr<dwio::common::FileSink> sink,
+      const WriterOptions& options);
+
  private:
   const FileFormat format_;
 };

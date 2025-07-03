@@ -14,32 +14,27 @@
  * limitations under the License.
  */
 
-#include <gtest/gtest.h>
-#include "velox/common/caching/AsyncDataCache.h"
-#include "velox/exec/tests/utils/HiveConnectorTestBase.h"
-
 #include <folly/init/Init.h>
+#include <gtest/gtest.h>
 #include <re2/re2.h>
+
 #include "velox/common/base/Fs.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/hive/HiveConnector.h"
+#include "velox/common/caching/AsyncDataCache.h"
 #include "velox/dwio/common/BufferedInput.h"
-#include "velox/dwio/common/Options.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
-#include "velox/dwio/dwrf/writer/FlushPolicy.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
+#include "velox/exec/tests/utils/HiveConnectorTestBase.h"
+#include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/TempDirectoryPath.h"
 
+// TODO: Remove file specific headers
 #ifdef VELOX_ENABLE_PARQUET
-#include "velox/dwio/parquet/RegisterParquetReader.h"
-#include "velox/dwio/parquet/RegisterParquetWriter.h"
 #include "velox/dwio/parquet/reader/ParquetReader.h"
 #include "velox/dwio/parquet/writer/Writer.h"
 #endif
-
-#include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
-#include "velox/vector/fuzzer/VectorFuzzer.h"
 
 namespace facebook::velox::connector::hive {
 namespace {
@@ -52,10 +47,10 @@ class HiveDataSinkTest : public exec::test::HiveConnectorTestBase {
  protected:
   void SetUp() override {
     HiveConnectorTestBase::SetUp();
-#ifdef VELOX_ENABLE_PARQUET
-    parquet::registerParquetReaderFactory();
-    parquet::registerParquetWriterFactory();
-#endif
+//#ifdef VELOX_ENABLE_PARQUET
+//    parquet::registerParquetReaderFactory();
+//    parquet::registerParquetWriterFactory();
+//#endif
     Type::registerSerDe();
     HiveSortingColumn::registerSerDe();
     HiveBucketProperty::registerSerDe();

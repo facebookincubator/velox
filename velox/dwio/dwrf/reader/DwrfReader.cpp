@@ -1042,6 +1042,17 @@ std::unique_ptr<DwrfReader> DwrfReader::create(
   return std::make_unique<DwrfReader>(options, std::move(input));
 }
 
+namespace {
+// Self‑register the Parquet reader factory at load time
+const bool kDwrfReaderRegistered = []() {
+  facebook::velox::dwio::common::registerReaderFactory(
+      std::make_shared<facebook::velox::dwrf::DwrfReaderFactory>());
+
+  VLOG(0) << "Registered DWRF reader";
+  return true;
+}();
+} // anonymous namespace
+
 void registerDwrfReaderFactory() {
   dwio::common::registerReaderFactory(std::make_shared<DwrfReaderFactory>());
 }

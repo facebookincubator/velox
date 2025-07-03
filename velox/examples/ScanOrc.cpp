@@ -42,7 +42,7 @@ int main(int argc, char** argv) {
   // To be able to read local files, we need to register the local file
   // filesystem. We also need to register the dwrf reader factory:
   filesystems::registerLocalFileSystem();
-  dwrf::registerDwrfReaderFactory();
+//  dwrf::registerDwrfReaderFactory();
   facebook::velox::memory::MemoryManager::initialize(
       facebook::velox::memory::MemoryManager::Options{});
   auto pool = facebook::velox::memory::memoryManager()->addLeafPool();
