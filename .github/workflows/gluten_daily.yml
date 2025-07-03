@@ -1,0 +1,74 @@
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: Gluten Daily Build
+
+on:
+  push:
+    branches:
+      - 'main'
+
+concurrency:
+  group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+
+  gluten-cpp-build:
+    name: gluten cpp build
+    # prevent errors when forks ff their main branch
+    if: ${{ github.repository == 'IBM/velox' }}
+    runs-on: ubuntu-22.04
+    env:
+      CCACHE_DIR: "${{ github.workspace }}/.ccache"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Get Ccache
+        uses: actions/cache/restore@v4
+        with:
+          path: '${{ env.CCACHE_DIR }}'
+          key: ccache-centos7-release-default-${{github.sha}}
+          restore-keys: |
+            ccache-centos7-release-default
+      - name: Setup Gluten
+        run: |
+          git clone --depth 1 https://github.com/apache/incubator-gluten gluten && cd gluten
+          BRANCH=$(echo ${GITHUB_REF#refs/heads/})
+          sed -i 's/oap-project/IBM/g' ep/build-velox/src/get_velox.sh
+          #sed -i 's/VELOX_BRANCH=2025.*/VELOX_BRANCH=main/g' ep/build-velox/src/get_velox.sh
+      - name: Build Gluten native libraries
+        run: |
+          docker pull apache/gluten:vcpkg-centos-7
+          docker run -v $GITHUB_WORKSPACE:/work -w /work apache/gluten:vcpkg-centos-7 bash -c "
+            git config --global --add safe.directory /work
+            set -e
+            df -a
+            cd /work/gluten
+            export CCACHE_DIR=/work/.ccache
+            mkdir -p /work/.ccache
+            source /opt/rh/devtoolset-11/enable
+            export NUM_THREADS=4
+            ccache -sz
+            ./dev/builddeps-veloxbe.sh --enable_vcpkg=ON --build_arrow=OFF --build_tests=OFF --build_benchmarks=OFF \
+                           --build_examples=OFF --enable_s3=ON --enable_gcs=ON --enable_hdfs=ON --enable_abfs=ON --velox_home=/work
+            ccache -s
+            mkdir -p /work/.m2/repository/org/apache/arrow/
+            cp -r /root/.m2/repository/org/apache/arrow/* /work/.m2/repository/org/apache/arrow/
+          "
+      - name: Save ccache
+        uses: actions/cache/save@v4
+        id: ccache
+        with:
+          path: '${{ env.CCACHE_DIR }}'
+          key: ccache-centos7-release-default-${{github.sha}}
