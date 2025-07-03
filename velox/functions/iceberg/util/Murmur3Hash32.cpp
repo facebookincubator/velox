@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#include "velox/common/base/BitUtil.h"
 #include "velox/functions/iceberg/util/Murmur3Hash32.h"
+#include "velox/common/base/BitUtil.h"
 
 namespace facebook::velox::functions::iceberg::util {
 
@@ -35,7 +35,7 @@ int32_t Murmur3Hash::hashBytes(const char* const input, uint32_t len) {
   uint32_t h1 = kSeed;
 
   // Process 4-byte chunks.
-  for (int32_t i = 0; i < nblocks; i++) {
+  for (auto i = 0; i < nblocks; i++) {
     uint32_t k1 = *reinterpret_cast<const uint32_t*>(data + i * 4);
     k1 = mixK1(k1);
     h1 = mixH1(h1, k1);
