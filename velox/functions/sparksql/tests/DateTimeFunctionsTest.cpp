@@ -1383,9 +1383,9 @@ TEST_F(DateTimeFunctionsTest, timestampdiff) {
           parseTimestamp("2019-02-28 10:00:00.500"),
           parseTimestamp("2020-02-28 10:00:00.500")));
 
-  /// Test for daylight saving. Daylight saving in US starts at 2021-03-14
-  /// 02:00:00 PST.
-  /// When adjust_timestamp_to_timezone is off, Daylight saving occurs in UTC.
+  // Test for daylight saving. Daylight saving in US starts at 2021-03-14
+  // 02:00:00 PST.
+  // When adjust_timestamp_to_timezone is off, Daylight saving occurs in UTC.
   EXPECT_EQ(
       1000 * 60 * 60 * 24,
       timestampDiff(

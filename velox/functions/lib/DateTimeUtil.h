@@ -17,28 +17,31 @@
 
 #include "velox/external/date/date.h"
 #include "velox/functions/lib/DateTimeFormatter.h"
-#include "velox/functions/lib/DateTimeImpl.h"
-#include "velox/functions/lib/TimeUtils.h"
 #include "velox/type/Timestamp.h"
 
 namespace facebook::velox::functions {
 
-// Returns toTimestamp - fromTimestamp expressed in terms of unit. Unlike
-// Presto, Spark does not respect the last day of a year-month.
+/// Returns toTimestamp - fromTimestamp expressed in terms of unit.
+/// @param respectLastDay If true, the last day of a year-month is respected.
+/// For example, the difference between '2020-01-31' and '2020-02-01' is 1 day.
+/// If false, the last day of a year-month is not respected. For example, the
+/// difference between '2020-01-31' and '2020-02-01' is 0 day.
+/// This is useful for Spark compatibility, as Spark does not respect the last
+/// day of a year-month.
 FOLLY_ALWAYS_INLINE int64_t diffTimestamp(
-    const DateTimeUnit unit,
+    DateTimeUnit unit,
     const Timestamp& fromTimestamp,
     const Timestamp& toTimestamp,
-    const bool respectLastDay = true) {
-  // TODO(gaoge): Handle overflow and underflow with 64-bit representation.
+    bool respectLastDay = true) {
+  // TODO: Handle overflow and underflow with 64-bit representation.
   if (fromTimestamp == toTimestamp) {
     return 0;
   }
 
   const int8_t sign = fromTimestamp < toTimestamp ? 1 : -1;
 
-  // Spark support microsecond unit, if convert by .toMicros() for all the
-  // unit, may cause overflow, so treat it dependently.
+  // The microsecond unit is handled independently to prevent overflow while
+  // converting all timestamps to microseconds for each unit.
   if (unit == DateTimeUnit::kMicrosecond) {
     const std::chrono::time_point<std::chrono::system_clock>
         fromMicrosecondpoint(std::chrono::microseconds(
@@ -170,15 +173,15 @@ FOLLY_ALWAYS_INLINE int64_t diffTimestamp(
     return sign * diff;
   }
 
-  VELOX_UNREACHABLE("Unsupported datetime unit");
+  VELOX_UNREACHABLE();
 }
 
 FOLLY_ALWAYS_INLINE int64_t diffTimestamp(
-    const DateTimeUnit unit,
+    DateTimeUnit unit,
     const Timestamp& fromTimestamp,
     const Timestamp& toTimestamp,
     const tz::TimeZone* timeZone,
-    const bool respectLastDay = true) {
+    bool respectLastDay = true) {
   if (LIKELY(timeZone != nullptr)) {
     // sessionTimeZone not null means that the config
     // adjust_timestamp_to_timezone is on.
