@@ -17,7 +17,7 @@
 #include "velox/functions/iceberg/util/Murmur3Hash32.h"
 #include "velox/common/base/BitUtil.h"
 
-namespace facebook::velox::functions::iceberg::util {
+namespace facebook::velox::functions::iceberg {
 
 namespace {
 
@@ -25,7 +25,7 @@ constexpr int kSeed = 0;
 } // namespace
 
 int Murmur3Hash::hashInt64(uint64_t input) {
-  return hashInt64(input, kSeed);
+  return Murmur3Hash32::hashInt64(input, kSeed);
 }
 
 int32_t Murmur3Hash::hashBytes(const char* const input, uint32_t len) {
@@ -59,4 +59,4 @@ int32_t Murmur3Hash::hashBytes(const char* const input, uint32_t len) {
   return fmix(h1, len);
 }
 
-} // namespace facebook::velox::functions::iceberg::util
+} // namespace facebook::velox::functions::iceberg

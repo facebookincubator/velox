@@ -15,6 +15,7 @@
  */
 
 #include "velox/functions/iceberg/BucketFunction.h"
+#include "velox/common/base/Status.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/Registerer.h"
 #include "velox/functions/iceberg/util/Murmur3Hash32.h"
@@ -40,7 +41,7 @@ struct BucketDecimalFunction {
             "Invalid number of buckets: {} (must be > 0)", numBuckets));
     char bytes[sizeof(int128_t)];
     const auto length = DecimalUtil::toByteArray(input, bytes);
-    const auto hash = util::Murmur3Hash::hashBytes(bytes, length);
+    const auto hash = Murmur3Hash::hashBytes(bytes, length);
     out = apply(numBuckets, hash);
     return Status::OK();
   }
@@ -57,7 +58,7 @@ struct BucketFunction {
         numBuckets <= 0,
         Status::UserError(
             "Invalid number of buckets: {} (must be > 0)", numBuckets));
-    const auto hash = util::Murmur3Hash::hashInt64(input);
+    const auto hash = Murmur3Hash::hashInt64(input);
     out = apply(numBuckets, hash);
     return Status::OK();
   }
@@ -70,7 +71,7 @@ struct BucketFunction {
         numBuckets <= 0,
         Status::UserError(
             "Invalid number of buckets: {} (must be > 0)", numBuckets));
-    const auto hash = util::Murmur3Hash::hashBytes(input.data(), input.size());
+    const auto hash = Murmur3Hash::hashBytes(input.data(), input.size());
     out = apply(numBuckets, hash);
     return Status::OK();
   }
@@ -83,7 +84,7 @@ struct BucketFunction {
         numBuckets <= 0,
         Status::UserError(
             "Invalid number of buckets: {} (must be > 0)", numBuckets));
-    const auto hash = util::Murmur3Hash::hashInt64(input.toMicros());
+    const auto hash = Murmur3Hash::hashInt64(input.toMicros());
     out = apply(numBuckets, hash);
     return Status::OK();
   }
