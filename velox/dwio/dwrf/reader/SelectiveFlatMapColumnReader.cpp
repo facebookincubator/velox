@@ -164,6 +164,12 @@ std::vector<KeyNode<T>> getKeyNodes(
       return x.sequence < y.sequence;
     });
   }
+
+  if (asStruct) {
+    VELOX_CHECK(
+        !keyNodes.empty() || streams == 0,
+        "For struct encoding, keys to project must be configured");
+  }
   return keyNodes;
 }
 
@@ -188,9 +194,6 @@ class SelectiveFlatMapAsStructReader : public SelectiveStructColumnReaderBase {
             params,
             scanSpec,
             true)) {
-    VELOX_CHECK(
-        !keyNodes_.empty(),
-        "For struct encoding, keys to project must be configured");
     children_.resize(keyNodes_.size());
     for (auto& childSpec : scanSpec.children()) {
       childSpec->setSubscript(kConstantChildSpecSubscript);
