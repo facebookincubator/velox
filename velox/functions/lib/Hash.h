@@ -21,10 +21,10 @@
 
 namespace facebook::velox::functions {
 /// Murmur3 aligns with Austin Appleby
-///  https://github.com/aappleby/smhasher/blob/master/src/MurmurHash3.cpp
+/// https://github.com/aappleby/smhasher/blob/master/src/MurmurHash3.cpp
 ///
-///  Signed integer types have been remapped to unsigned types (as in the
-///  original) to avoid undefined signed integer overflow and sign extension.
+/// Signed integer types have been remapped to unsigned types (as in the
+/// original) to avoid undefined signed integer overflow and sign extension.
 class Murmur3Hash32 {
  public:
   /// Hash the lower int , is a fast path of hashBytes.
