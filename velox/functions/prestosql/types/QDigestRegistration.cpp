@@ -16,6 +16,7 @@
 
 #include "velox/functions/prestosql/types/QDigestRegistration.h"
 
+#include "velox/common/fuzzer/ConstrainedGenerators.h"
 #include "velox/functions/prestosql/types/QDigestType.h"
 
 namespace facebook::velox {
@@ -34,8 +35,19 @@ class QDigestTypeFactories : public CustomTypeFactories {
   }
 
   AbstractInputGeneratorPtr getInputGenerator(
-      const InputGeneratorConfig& /*config*/) const override {
-    return nullptr;
+      const InputGeneratorConfig& config) const override {
+    // QDigest supports three types: BIGINT, REAL, and DOUBLE
+    static const std::vector<TypePtr> kQDigestTypes{
+        BIGINT(),
+        REAL(),
+        DOUBLE(),
+    };
+    fuzzer::FuzzerGenerator rng(config.seed_);
+    auto index = boost::random::uniform_int_distribution<size_t>(
+        0, kQDigestTypes.size() - 1)(rng);
+    auto& paramType = kQDigestTypes[index];
+    return std::make_shared<fuzzer::QDigestInputGenerator>(
+        config.seed_, QDIGEST(paramType), config.nullRatio_, paramType);
   }
 };
 } // namespace
