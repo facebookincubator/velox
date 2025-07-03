@@ -220,6 +220,42 @@ struct Varchar {
   Varchar() {}
 };
 
+template <size_t id, size_t value>
+struct ConstantIntegerVariable {
+  static size_t getId() {
+    return id;
+  }
+
+  static std::string name() {
+    return fmt::format("c{}", id);
+  }
+
+  static size_t getValue() {
+    return value;
+  }
+};
+
+using C1 = ConstantIntegerVariable<1, std::numeric_limits<int>::max()>;
+using L1 = IntegerVariable<1>;
+using L2 = IntegerVariable<2>;
+using L3 = IntegerVariable<3>;
+
+template <typename L>
+struct VarcharN {
+ private:
+  VarcharN() {}
+};
+
+template <typename>
+struct is_specialization_of_varcharn : public std::false_type {};
+
+template <typename L>
+struct is_specialization_of_varcharn<VarcharN<L>> : public std::true_type {};
+
+template <typename T>
+inline constexpr auto is_specialization_of_varcharn_v =
+    is_specialization_of_varcharn<T>::value;
+
 template <typename T>
 struct Constant {};
 
@@ -253,6 +289,9 @@ struct ConstantChecker {
 
 template <>
 struct CppToType<Varchar> : public CppToTypeBase<TypeKind::VARCHAR> {};
+
+template <typename L>
+struct CppToType<VarcharN<L>> : public CppToTypeBase<TypeKind::VARCHAR> {};
 
 template <>
 struct CppToType<Varbinary> : public CppToTypeBase<TypeKind::VARBINARY> {};
@@ -311,6 +350,9 @@ struct SimpleTypeTrait<LongDecimal<P, S>>
 
 template <>
 struct SimpleTypeTrait<Varchar> : public TypeTraits<TypeKind::VARCHAR> {};
+
+template <typename L>
+struct SimpleTypeTrait<VarcharN<L>> : public SimpleTypeTrait<Varchar> {};
 
 template <>
 struct SimpleTypeTrait<Varbinary> : public TypeTraits<TypeKind::VARBINARY> {};
