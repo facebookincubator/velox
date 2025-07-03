@@ -54,7 +54,13 @@ FOLLY_ALWAYS_INLINE bool isAscii(const char* str, size_t length) {
   for (; i + mask.size <= length; i += mask.size) {
     auto batch =
         xsimd::load_unaligned(reinterpret_cast<const uint8_t*>(str) + i);
-#if XSIMD_WITH_AVX
+#if XSIMD_WITH_AVX512F
+    // `_mm512_test_epi32_mask` returns a bitwise-AND mask for `batch` and
+    // `mask` vectors. So, if there's any bit set (meaning there are `0x80`
+    // bytes in the `batch`, indicating it's a non-ASCII character), the mask
+    // will be non-zero.
+    if (_mm512_test_epi32_mask(batch, mask)) {
+#elif XSIMD_WITH_AVX
     // 1 instruction instead of 2 on AVX.
     if (!_mm256_testz_si256(batch, mask)) {
 #else
