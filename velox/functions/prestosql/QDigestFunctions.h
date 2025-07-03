@@ -114,4 +114,67 @@ struct ValuesAtQuantilesFunction {
   }
 };
 
+template <typename TExec>
+struct ScaleQDigestDoubleFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<SimpleQDigest<double>>& result,
+      const arg_type<SimpleQDigest<double>>& input,
+      const arg_type<double>& scaleFactor) {
+    VELOX_USER_CHECK(scaleFactor > 0, "Scale factor should be positive.");
+
+    std::allocator<double> allocator;
+    qdigest::QuantileDigest<double, std::allocator<double>> digest(
+        allocator, input.data());
+    digest.scale(scaleFactor);
+
+    int64_t size = digest.serializedByteSize();
+    result.resize(size);
+    digest.serialize(result.data());
+  }
+};
+
+template <typename TExec>
+struct ScaleQDigestBigintFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<SimpleQDigest<int64_t>>& result,
+      const arg_type<SimpleQDigest<int64_t>>& input,
+      const arg_type<double>& scaleFactor) {
+    VELOX_USER_CHECK(scaleFactor > 0, "Scale factor should be positive.");
+
+    std::allocator<int64_t> allocator;
+    qdigest::QuantileDigest<int64_t, std::allocator<int64_t>> digest(
+        allocator, input.data());
+    digest.scale(scaleFactor);
+
+    int64_t size = digest.serializedByteSize();
+    result.resize(size);
+    digest.serialize(result.data());
+  }
+};
+
+template <typename TExec>
+struct ScaleQDigestRealFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<SimpleQDigest<float>>& result,
+      const arg_type<SimpleQDigest<float>>& input,
+      const arg_type<double>& scaleFactor) {
+    VELOX_USER_CHECK(scaleFactor > 0, "Scale factor should be positive.");
+
+    std::allocator<float> allocator;
+    qdigest::QuantileDigest<float, std::allocator<float>> digest(
+        allocator, input.data());
+    digest.scale(scaleFactor);
+
+    int64_t size = digest.serializedByteSize();
+    result.resize(size);
+    digest.serialize(result.data());
+  }
+};
+
 } // namespace facebook::velox::functions
