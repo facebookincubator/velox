@@ -143,6 +143,30 @@ struct StPointFunction {
   geos::geom::GeometryFactory::Ptr factory_;
 };
 
+template <typename T>
+struct StPolygonFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE Status
+  call(out_type<Geometry>& result, const arg_type<Varchar>& wkt) {
+    std::unique_ptr<geos::geom::Geometry> geosGeometry;
+    GEOS_TRY(
+        {
+          geos::io::WKTReader reader;
+          geosGeometry = reader.read(wkt);
+        },
+        "Failed to parse WKT");
+    auto validate = geospatial::validateType(
+        *geosGeometry,
+        {geos::geom::GeometryTypeId::GEOS_POLYGON},
+        "ST_Polygon");
+
+    geospatial::GeometrySerializer::serialize(*geosGeometry, result);
+
+    return validate;
+  }
+};
+
 // Predicates
 
 template <typename T>
@@ -753,6 +777,271 @@ struct StDistanceFunction {
     GEOS_RETHROW(result = geosGeometry1->distance(geosGeometry2.get());
                  , "Failed to calculate geometry distance");
 
+    return true;
+  }
+};
+
+template <typename T>
+struct StIsClosedFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE Status
+  call(out_type<bool>& result, const arg_type<Geometry>& geometry) {
+    std::unique_ptr<geos::geom::Geometry> geosGeometry =
+        geospatial::GeometryDeserializer::deserialize(geometry);
+
+    auto validate = geospatial::validateType(
+        *geosGeometry,
+        {geos::geom::GeometryTypeId::GEOS_LINESTRING,
+         geos::geom::GeometryTypeId::GEOS_MULTILINESTRING},
+        "ST_IsClosed");
+
+    if (!validate.ok()) {
+      return validate;
+    };
+
+    if (geos::geom::LineString* lineString =
+            dynamic_cast<geos::geom::LineString*>(geosGeometry.get())) {
+      result = lineString->isClosed();
+      return validate;
+    }
+    if (geos::geom::MultiLineString* multiLineString =
+            dynamic_cast<geos::geom::MultiLineString*>(geosGeometry.get())) {
+      result = multiLineString->isClosed();
+      return validate;
+    }
+
+    VELOX_FAIL(
+        "Validation passed but type not recognized as LineString or MultiLineString");
+  }
+};
+
+template <typename T>
+struct StIsEmptyFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE Status
+  call(out_type<bool>& result, const arg_type<Geometry>& geometry) {
+    GEOS_TRY(result = geospatial::getEnvelopeFromGeometry(geometry)->isNull();
+             , "Failed to get envelope from geometry");
+    return Status::OK();
+  }
+};
+
+template <typename T>
+struct StIsRingFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE Status
+  call(out_type<bool>& result, const arg_type<Geometry>& geometry) {
+    std::unique_ptr<geos::geom::Geometry> geosGeometry =
+        geospatial::GeometryDeserializer::deserialize(geometry);
+
+    auto validate = geospatial::validateType(
+        *geosGeometry,
+        {geos::geom::GeometryTypeId::GEOS_LINESTRING},
+        "ST_IsRing");
+
+    if (!validate.ok()) {
+      return validate;
+    };
+
+    if (geos::geom::LineString* lineString =
+            dynamic_cast<geos::geom::LineString*>(geosGeometry.get())) {
+      result = lineString->isRing();
+      return validate;
+    }
+
+    VELOX_FAIL("Validation passed but type not recognized as LineString");
+  }
+};
+
+template <typename T>
+struct StLengthFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE Status
+  call(out_type<double>& result, const arg_type<Geometry>& geometry) {
+    std::unique_ptr<geos::geom::Geometry> geosGeometry =
+        geospatial::GeometryDeserializer::deserialize(geometry);
+
+    auto validate = geospatial::validateType(
+        *geosGeometry,
+        {geos::geom::GeometryTypeId::GEOS_LINESTRING,
+         geos::geom::GeometryTypeId::GEOS_MULTILINESTRING},
+        "ST_Length");
+
+    if (!validate.ok()) {
+      return validate;
+    };
+
+    if (geos::geom::LineString* lineString =
+            dynamic_cast<geos::geom::LineString*>(geosGeometry.get())) {
+      result = lineString->getLength();
+      return validate;
+    }
+    if (geos::geom::MultiLineString* multiLineString =
+            dynamic_cast<geos::geom::MultiLineString*>(geosGeometry.get())) {
+      result = multiLineString->getLength();
+      return validate;
+    }
+
+    VELOX_FAIL(
+        "Validation passed but type not recognized as LineString or MultiLineString");
+  }
+};
+
+template <typename T>
+struct StPointNFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<Geometry>& result,
+      const arg_type<Geometry>& geometry,
+      const arg_type<int32_t>& index) {
+    std::unique_ptr<geos::geom::Geometry> geosGeometry =
+        geospatial::GeometryDeserializer::deserialize(geometry);
+
+    auto validate = geospatial::validateType(
+        *geosGeometry,
+        {geos::geom::GeometryTypeId::GEOS_LINESTRING},
+        "ST_PointN");
+
+    if (!validate.ok()) {
+      VELOX_USER_FAIL(validate.message());
+    };
+
+    if (geos::geom::LineString* lineString =
+            dynamic_cast<geos::geom::LineString*>(geosGeometry.get())) {
+      if (index < 1 || index > lineString->getNumPoints()) {
+        return false;
+      }
+      geospatial::GeometrySerializer::serialize(
+          *lineString->getPointN(index - 1), result);
+      return true;
+    }
+
+    VELOX_FAIL(
+        "Validation passed but type not recognized as LineString or MultiLineString");
+  }
+};
+
+template <typename T>
+struct StStartPointFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE Status
+  call(out_type<Geometry>& result, const arg_type<Geometry>& geometry) {
+    std::unique_ptr<geos::geom::Geometry> geosGeometry =
+        geospatial::GeometryDeserializer::deserialize(geometry);
+
+    auto validate = geospatial::validateType(
+        *geosGeometry,
+        {geos::geom::GeometryTypeId::GEOS_LINESTRING},
+        "ST_StartPoint");
+
+    if (!validate.ok()) {
+      return validate;
+    }
+    geos::geom::LineString* lineString =
+        static_cast<geos::geom::LineString*>(geosGeometry.get());
+    geospatial::GeometrySerializer::serialize(
+        *lineString->getStartPoint(), result);
+
+    return Status::OK();
+  }
+};
+
+template <typename T>
+struct StEndPointFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE Status
+  call(out_type<Geometry>& result, const arg_type<Geometry>& geometry) {
+    std::unique_ptr<geos::geom::Geometry> geosGeometry =
+        geospatial::GeometryDeserializer::deserialize(geometry);
+
+    auto validate = geospatial::validateType(
+        *geosGeometry,
+        {geos::geom::GeometryTypeId::GEOS_LINESTRING},
+        "ST_EndPoint");
+
+    if (!validate.ok()) {
+      return validate;
+    }
+    geos::geom::LineString* lineString =
+        static_cast<geos::geom::LineString*>(geosGeometry.get());
+    geospatial::GeometrySerializer::serialize(
+        *lineString->getEndPoint(), result);
+
+    return Status::OK();
+  }
+};
+
+template <typename T>
+struct StGeometryNFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<Geometry>& result,
+      const arg_type<Geometry>& geometry,
+      const arg_type<int32_t>& index) {
+    std::unique_ptr<geos::geom::Geometry> geosGeometry =
+        geospatial::GeometryDeserializer::deserialize(geometry);
+
+    if (geosGeometry->isEmpty()) {
+      return false;
+    }
+
+    if (!geospatial::isMultiType(*geosGeometry)) {
+      if (index == 1) {
+        geospatial::GeometrySerializer::serialize(*geosGeometry, result);
+        return true;
+      }
+      return false;
+    }
+
+    if (geos::geom::GeometryCollection* geomCollection =
+            dynamic_cast<geos::geom::GeometryCollection*>(geosGeometry.get())) {
+      if (index < 1 || index > geomCollection->getNumGeometries()) {
+        return false;
+      }
+      geospatial::GeometrySerializer::serialize(
+          *(geosGeometry->getGeometryN(index - 1)), result);
+      return true;
+    }
+
+    return false;
+  }
+};
+
+template <typename T>
+struct StInteriorRingNFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<Geometry>& result,
+      const arg_type<Geometry>& geometry,
+      const arg_type<int32_t>& index) {
+    std::unique_ptr<geos::geom::Geometry> geosGeometry =
+        geospatial::GeometryDeserializer::deserialize(geometry);
+
+    auto validate = geospatial::validateType(
+        *geosGeometry,
+        {geos::geom::GeometryTypeId::GEOS_POLYGON},
+        "ST_InteriorRingN");
+
+    if (!validate.ok()) {
+      VELOX_USER_FAIL(validate.message());
+    }
+
+    geos::geom::Polygon* polygon =
+        static_cast<geos::geom::Polygon*>(geosGeometry.get());
+    if (index < 1 || index > polygon->getNumInteriorRing()) {
+      return false;
+    }
+    geospatial::GeometrySerializer::serialize(
+        *(polygon->getInteriorRingN(index - 1)), result);
     return true;
   }
 };
