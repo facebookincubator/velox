@@ -23,9 +23,9 @@ namespace {
 
 TEST(Murmur3Hash32Test, bigint) {
   Murmur3Hash32 func;
-  EXPECT_EQ(func.hashBigint(10), -289985220);
-  EXPECT_EQ(func.hashBigint(0), 1669671676);
-  EXPECT_EQ(func.hashBigint(-5), 1222806974);
+  EXPECT_EQ(func.hashInt64(10), -289985220);
+  EXPECT_EQ(func.hashInt64(0), 1669671676);
+  EXPECT_EQ(func.hashInt64(-5), 1222806974);
 }
 
 TEST(Murmur3Hash32Test, string) {

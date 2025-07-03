@@ -27,36 +27,37 @@ FOLLY_ALWAYS_INLINE int apply(int numBuckets, int hashedValue) {
   return (hashedValue & INT_MAX) % numBuckets;
 }
 
-template <typename T>
+template <typename TExec>
 struct BucketDecimalFunction {
-  VELOX_DEFINE_FUNCTION_TYPES(T);
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
 
-  template <typename TInput>
-  FOLLY_ALWAYS_INLINE void
-  call(int32_t& out, const int32_t& numBuckets, const TInput& input) {
+  template <typename T>
+  FOLLY_ALWAYS_INLINE Status
+  call(int32_t& out, const int32_t& numBuckets, const T& input) {
     VELOX_RETURN_IF(
         numBuckets <= 0,
         Status::UserError(
-            "Invalid numer of buckets: {} (must be > 0)", numBuckets));
+            "Invalid number of buckets: {} (must be > 0)", numBuckets));
     char bytes[sizeof(int128_t)];
     const auto length = DecimalUtil::toByteArray(input, bytes);
     const auto hash = util::Murmur3Hash::hashBytes(bytes, length);
     out = apply(numBuckets, hash);
+    return Status::OK();
   }
 };
 
-template <typename T>
+template <typename TExec>
 struct BucketFunction {
-  VELOX_DEFINE_FUNCTION_TYPES(T);
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
 
-  template <typename TInput>
+  template <typename T>
   FOLLY_ALWAYS_INLINE Status
-  call(int32_t& out, const int32_t& numBuckets, const TInput& input) {
+  call(int32_t& out, const int32_t& numBuckets, const T& input) {
     VELOX_RETURN_IF(
         numBuckets <= 0,
         Status::UserError(
-            "Invalid numer of buckets: {} (must be > 0)", numBuckets));
-    const auto hash = util::Murmur3Hash::hashBigint(input);
+            "Invalid number of buckets: {} (must be > 0)", numBuckets));
+    const auto hash = util::Murmur3Hash::hashInt64(input);
     out = apply(numBuckets, hash);
     return Status::OK();
   }
@@ -68,7 +69,7 @@ struct BucketFunction {
     VELOX_RETURN_IF(
         numBuckets <= 0,
         Status::UserError(
-            "Invalid numer of buckets: {} (must be > 0)", numBuckets));
+            "Invalid number of buckets: {} (must be > 0)", numBuckets));
     const auto hash = util::Murmur3Hash::hashBytes(input.data(), input.size());
     out = apply(numBuckets, hash);
     return Status::OK();
@@ -81,8 +82,8 @@ struct BucketFunction {
     VELOX_RETURN_IF(
         numBuckets <= 0,
         Status::UserError(
-            "Invalid numer of buckets: {} (must be > 0)", numBuckets));
-    const auto hash = util::Murmur3Hash::hashBigint(input.toMicros());
+            "Invalid number of buckets: {} (must be > 0)", numBuckets));
+    const auto hash = util::Murmur3Hash::hashInt64(input.toMicros());
     out = apply(numBuckets, hash);
     return Status::OK();
   }
