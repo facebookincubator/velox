@@ -14,4 +14,12 @@
  * limitations under the License.
  */
 
- #pragma once
+#pragma once
+
+#include <string>
+
+namespace facebook::velox::functions::iceberg {
+
+void registerTruncateFunctions(const std::string& prefix);
+
+} // namespace facebook::velox::functions::iceberg

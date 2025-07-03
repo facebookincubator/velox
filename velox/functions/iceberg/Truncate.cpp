@@ -45,7 +45,7 @@ struct TruncateFunction {
 
   template <typename TInput>
   FOLLY_ALWAYS_INLINE Status
-  call(int32_t& out, const int32_t& length, const TInput& input) {
+  call(TInput& out, const int32_t& length, const TInput& input) {
     VELOX_RETURN_IF(
         length <= 0,
         Status::UserError("Invalid truncate width: {} (must be > 0)", length));
@@ -53,8 +53,10 @@ struct TruncateFunction {
     return Status::OK();
   }
 
-  FOLLY_ALWAYS_INLINE Status
-  call(int32_t& out, const int32_t& length, const arg_type<Varchar>& input) {
+  FOLLY_ALWAYS_INLINE Status call(
+      arg_type<Varchar>& out,
+      const int32_t& length,
+      const arg_type<Varchar>& input) {
     VELOX_RETURN_IF(
         length <= 0,
         Status::UserError("Invalid truncate width: {} (must be > 0)", length));
@@ -66,7 +68,7 @@ struct TruncateFunction {
   }
 
   FOLLY_ALWAYS_INLINE Status callAscii(
-      int32_t& out,
+      arg_type<Varchar>& out,
       const int32_t& length,
       const arg_type<Varchar>& input) {
     VELOX_RETURN_IF(
@@ -83,19 +85,19 @@ struct TruncateFunction {
 } // namespace
 
 void registerTruncateFunctions(const std::string& prefix) {
-  registerFunction<TruncateFunction, int32_t, int32_t, int8_t>(
+  registerFunction<TruncateFunction, int8_t, int32_t, int8_t>(
       {prefix + "truncate"});
-  registerFunction<TruncateFunction, int32_t, int32_t, int16_t>(
+  registerFunction<TruncateFunction, int16_t, int32_t, int16_t>(
       {prefix + "truncate"});
   registerFunction<TruncateFunction, int32_t, int32_t, int32_t>(
       {prefix + "truncate"});
-  registerFunction<TruncateFunction, int32_t, int32_t, int64_t>(
+  registerFunction<TruncateFunction, int64_t, int32_t, int64_t>(
       {prefix + "truncate"});
-  registerFunction<TruncateFunction, int32_t, int32_t, int128_t>(
+  registerFunction<TruncateFunction, int128_t, int32_t, int128_t>(
       {prefix + "truncate"});
-  registerFunction<TruncateFunction, int32_t, int32_t, Varchar>(
+  registerFunction<TruncateFunction, Varchar, int32_t, Varchar>(
       {prefix + "truncate"});
-  registerFunction<TruncateFunction, int32_t, int32_t, Varbinary>(
+  registerFunction<TruncateFunction, Varbinary, int32_t, Varbinary>(
       {prefix + "truncate"});
 }
 

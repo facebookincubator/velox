@@ -13,3 +13,151 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/functions/iceberg/Truncate.h"
+#include "velox/common/base/tests/GTestUtils.h"
+#include "velox/functions/iceberg/tests/IcebergFunctionBaseTest.h"
+
+#include <gtest/gtest.h>
+
+using namespace facebook::velox;
+using namespace facebook::velox::exec;
+using namespace facebook::velox::functions::iceberg;
+using namespace facebook::velox::functions::iceberg::test;
+
+namespace {
+class TruncateTest : public IcebergFunctionBaseTest {
+ public:
+  TruncateTest() {
+    options_.parseDecimalAsDouble = false;
+  }
+
+ protected:
+  template <typename T>
+  std::optional<T> truncate(
+      std::optional<int32_t> length,
+      std::optional<T> value) {
+    return evaluateOnce<T>("truncate(c0, c1)", length, value);
+  }
+
+  void truncateExpr(
+      const VectorPtr& expected,
+      const std::vector<VectorPtr>& input) {
+    auto result = evaluate<SimpleVector<int32_t>>(
+        "truncate(c0, c1)", makeRowVector(input));
+    velox::test::assertEqualVectors(expected, result);
+  }
+};
+
+TEST(TruncateTest, tinyInt) {
+  EXPECT_EQ(truncate<int8_t>(10, 0), 0);
+  EXPECT_EQ(truncate<int8_t>(10, 1), 0);
+  EXPECT_EQ(truncate<int8_t>(10, 5), 0);
+  EXPECT_EQ(truncate<int8_t>(10, 9), 0);
+  EXPECT_EQ(truncate<int8_t>(10, 10), 10);
+  EXPECT_EQ(truncate<int8_t>(10, 11), 10);
+  EXPECT_EQ(truncate<int8_t>(10, -1), -10);
+  EXPECT_EQ(truncate<int8_t>(10, -5), -10);
+  EXPECT_EQ(truncate<int8_t>(10, -10), -10);
+  EXPECT_EQ(truncate<int8_t>(10, -11), -20);
+
+  // Different widths.
+  EXPECT_EQ(truncate<int8_t>(2, -1), -2);
+
+  // Null handling.
+  EXPECT_EQ(truncate<int8_t>(10, std::nullopt), std::nullopt);
+}
+
+TEST(TruncateTest, smallInt) {
+  EXPECT_EQ(truncate<int16_t>(10, 0), 0);
+  EXPECT_EQ(truncate<int16_t>(10, 1), 0);
+  EXPECT_EQ(truncate<int16_t>(10, 5), 0);
+  EXPECT_EQ(truncate<int16_t>(10, 9), 0);
+  EXPECT_EQ(truncate<int16_t>(10, 10), 10);
+  EXPECT_EQ(truncate<int16_t>(10, 11), 10);
+  EXPECT_EQ(truncate<int16_t>(10, -1), -10);
+  EXPECT_EQ(truncate<int16_t>(10, -5), -10);
+  EXPECT_EQ(truncate<int16_t>(10, -10), -10);
+  EXPECT_EQ(truncate<int16_t>(10, -11), -20);
+
+  EXPECT_EQ(truncate<int16_t>(2, -1), -2);
+  EXPECT_EQ(truncate<int16_t>(10, std::nullopt), std::nullopt);
+}
+
+TEST(TruncateTest, integer) {
+  EXPECT_EQ(truncate<int32_t>(10, 0), 0);
+  EXPECT_EQ(truncate<int32_t>(10, 1), 0);
+  EXPECT_EQ(truncate<int32_t>(10, 5), 0);
+  EXPECT_EQ(truncate<int32_t>(10, 9), 0);
+  EXPECT_EQ(truncate<int32_t>(10, 10), 10);
+  EXPECT_EQ(truncate<int32_t>(10, 11), 10);
+  EXPECT_EQ(truncate<int32_t>(10, -1), -10);
+  EXPECT_EQ(truncate<int32_t>(10, -5), -10);
+  EXPECT_EQ(truncate<int32_t>(10, -10), -10);
+  EXPECT_EQ(truncate<int32_t>(10, -11), -20);
+
+  // Different widths.
+  EXPECT_EQ(truncate<int32_t>(2, -1), -2);
+  EXPECT_EQ(truncate<int32_t>(300, 1), 0);
+
+  EXPECT_EQ(truncate<int32_t>(10, std::nullopt), std::nullopt);
+}
+
+TEST(TruncateTest, bigint) {
+  EXPECT_EQ(truncate<int64_t>(10, 0), 0);
+  EXPECT_EQ(truncate<int64_t>(10, 1), 0);
+  EXPECT_EQ(truncate<int64_t>(10, 5), 0);
+  EXPECT_EQ(truncate<int64_t>(10, 9), 0);
+  EXPECT_EQ(truncate<int64_t>(10, 10), 10);
+  EXPECT_EQ(truncate<int64_t>(10, 11), 10);
+  EXPECT_EQ(truncate<int64_t>(10, -1), -10);
+  EXPECT_EQ(truncate<int64_t>(10, -5), -10);
+  EXPECT_EQ(truncate<int64_t>(10, -10), -10);
+  EXPECT_EQ(truncate<int64_t>(10, -11), -20);
+
+  EXPECT_EQ(truncate<int64_t>(2, -1), -2);
+  EXPECT_EQ(truncate<int64_t>(10, std::nullopt), std::nullopt);
+  VELOX_ASSERT_THROW(
+      truncate<int64_t>(0, 34), "Invalid truncate width: 0 (must be > 0)");
+  VELOX_ASSERT_THROW(
+      truncate<int64_t>(-3, 34), "Invalid truncate width: -3 (must be > 0)");
+}
+
+TEST(TruncateTest, string) {
+  // Basic truncation cases.
+  EXPECT_EQ(truncate<std::string>(5, "abcdefg"), "abcde");
+  EXPECT_EQ(truncate<std::string>(5, "abc"), "abc");
+  EXPECT_EQ(truncate<std::string>(5, "abcde"), "abcde");
+
+  // Empty string handling.
+  EXPECT_EQ(truncate<std::string>(10, ""), "");
+
+  // Unicode handling (4-byte characters).
+  std::string twoFourByteChars = u8"\U00010000\U00010000"; // Two 𐀀 characters
+  EXPECT_EQ(truncate<std::string>(1, twoFourByteChars), u8"\U00010000");
+
+  // Mixed character sizes.
+  EXPECT_EQ(truncate<std::string>(4, u8"测试raul试测"), u8"测试ra");
+
+  // Explicit varchar/char types (treated same as string).
+  EXPECT_EQ(truncate<std::string>(4, "测试raul试测"), u8"测试ra");
+}
+
+TEST(TruncateTest, unicodeBoundaries) {
+  // Japanese characters (3-byte UTF-8).
+  std::string japanese = u8"イロハニホヘト";
+  EXPECT_EQ(truncate<std::string>(2, japanese), u8"イロ");
+  EXPECT_EQ(truncate<std::string>(3, japanese), u8"イロハ");
+  EXPECT_EQ(truncate<std::string>(7, japanese), japanese);
+
+  // Chinese characters (3-byte UTF-8).
+  EXPECT_EQ(truncate<std::string>(1, u8"测试"), u8"测");
+}
+
+TEST_F(TruncateTest, binary) {
+  truncateExpr(
+      makeFlatVector<StringView>({"abc\0\0", "abc", "abc", "测试"}),
+      {makeFlatVector<int32_t>({10, 3, 3, 6}),
+       makeFlatVector<StringView>(
+           {"abc\0\0", "abcdefg", "abc", "测试_"}, VARBINARY())});
+}
+} // namespace
