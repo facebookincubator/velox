@@ -926,4 +926,56 @@ struct StPointNFunction {
   }
 };
 
+template <typename T>
+struct StStartPointFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE Status
+  call(out_type<Geometry>& result, const arg_type<Geometry>& geometry) {
+    std::unique_ptr<geos::geom::Geometry> geosGeometry =
+        geospatial::GeometryDeserializer::deserialize(geometry);
+
+    auto validate = geospatial::validateType(
+        *geosGeometry,
+        {geos::geom::GeometryTypeId::GEOS_LINESTRING},
+        "ST_StartPoint");
+
+    if (!validate.ok()) {
+      return validate;
+    }
+    geos::geom::LineString* lineString =
+        static_cast<geos::geom::LineString*>(geosGeometry.get());
+    geospatial::GeometrySerializer::serialize(
+        *lineString->getStartPoint(), result);
+
+    return Status::OK();
+  }
+};
+
+template <typename T>
+struct StEndPointFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE Status
+  call(out_type<Geometry>& result, const arg_type<Geometry>& geometry) {
+    std::unique_ptr<geos::geom::Geometry> geosGeometry =
+        geospatial::GeometryDeserializer::deserialize(geometry);
+
+    auto validate = geospatial::validateType(
+        *geosGeometry,
+        {geos::geom::GeometryTypeId::GEOS_LINESTRING},
+        "ST_EndPoint");
+
+    if (!validate.ok()) {
+      return validate;
+    }
+    geos::geom::LineString* lineString =
+        static_cast<geos::geom::LineString*>(geosGeometry.get());
+    geospatial::GeometrySerializer::serialize(
+        *lineString->getEndPoint(), result);
+
+    return Status::OK();
+  }
+};
+
 } // namespace facebook::velox::functions

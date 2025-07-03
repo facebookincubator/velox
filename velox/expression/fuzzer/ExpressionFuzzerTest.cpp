@@ -167,6 +167,8 @@ int main(int argc, char** argv) {
       "st_ymax",
       "st_isvalid",
       "st_issimple",
+      "st_startpoint",
+      "st_endpoint",
       "geometry_invalid_reason",
       "simplify_geometry",
   };
