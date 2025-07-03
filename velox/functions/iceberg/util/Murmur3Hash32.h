@@ -30,7 +30,8 @@ class Murmur3Hash : Murmur3Hash32 {
  public:
   /// Value of type INTEGER and BIGINT is treated as unsigned type.
   /// For the schema evolution, promote int to int64, treat int32 as uint64.
-  static int32_t hashBigint(uint64_t input);
+  static int32_t hashInt64(uint64_t input);
+
   /// Hash the bytes every 4 bytes, XOR on remaining bytes. Processing for the
   /// remaining bytes is different with Spark murmur3 which combine with the
   /// remaining bytes.

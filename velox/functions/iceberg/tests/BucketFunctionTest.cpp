@@ -60,9 +60,9 @@ TEST_F(BucketFunctionTest, integerTypes) {
   EXPECT_EQ(bucket<int64_t>(100, -34), 97);
   EXPECT_EQ(bucket<int64_t>(2, -1), 0);
   VELOX_ASSERT_THROW(
-      bucket<int64_t>(0, 34), "Invalid numer of buckets: 0 (must be > 0)");
+      bucket<int64_t>(0, 34), "Invalid number of buckets: 0 (must be > 0)");
   VELOX_ASSERT_THROW(
-      bucket<int64_t>(-3, 34), "Invalid numer of buckets: -3 (must be > 0)");
+      bucket<int64_t>(-3, 34), "Invalid number of buckets: -3 (must be > 0)");
 }
 
 TEST_F(BucketFunctionTest, string) {
@@ -77,10 +77,10 @@ TEST_F(BucketFunctionTest, string) {
   EXPECT_EQ(bucket<std::string>(120, "😀"), 58);
   VELOX_ASSERT_THROW(
       bucket<std::string>(0, "abc"),
-      "Invalid numer of buckets: 0 (must be > 0)");
+      "Invalid number of buckets: 0 (must be > 0)");
   VELOX_ASSERT_THROW(
       bucket<std::string>(-3, "abc"),
-      "Invalid numer of buckets: -3 (must be > 0)");
+      "Invalid number of buckets: -3 (must be > 0)");
 }
 
 TEST_F(BucketFunctionTest, binary) {
@@ -96,10 +96,10 @@ TEST_F(BucketFunctionTest, timestamp) {
   EXPECT_EQ(bucket<Timestamp>(20, Timestamp(-62167219200, 0)), 5);
   VELOX_ASSERT_THROW(
       bucket<Timestamp>(0, Timestamp(-62167219200, 0)),
-      "Invalid numer of buckets: 0 (must be > 0)");
+      "Invalid number of buckets: 0 (must be > 0)");
   VELOX_ASSERT_THROW(
       bucket<Timestamp>(-3, Timestamp(-62167219200, 0)),
-      "Invalid numer of buckets: -3 (must be > 0)");
+      "Invalid number of buckets: -3 (must be > 0)");
 }
 
 TEST_F(BucketFunctionTest, date) {

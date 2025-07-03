@@ -24,7 +24,7 @@ namespace {
 constexpr int kSeed = 0;
 } // namespace
 
-int Murmur3Hash::hashBigint(uint64_t input) {
+int Murmur3Hash::hashInt64(uint64_t input) {
   return hashInt64(input, kSeed);
 }
 
