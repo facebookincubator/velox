@@ -15,8 +15,6 @@
  */
 #pragma once
 
-#include <type/HugeInt.h>
-#include <type/Timestamp.h>
 #include <cstdint>
 
 namespace facebook::velox::functions {

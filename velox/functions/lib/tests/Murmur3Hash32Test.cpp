@@ -19,18 +19,18 @@
 #include <gtest/gtest.h>
 #include "velox/common/base/tests/GTestUtils.h"
 
-using namespace facebook::velox::common;
 namespace {
 TEST(Murmur3Hash32Test, bigint) {
   auto hash = [](uint64_t input, uint32_t seed) {
-    return Murmur3Hash32::hashInt64(input, seed);
+    return facebook::velox::functions::Murmur3Hash32::hashInt64(input, seed);
   };
   EXPECT_EQ(hash(10, 0), -289985220);
   EXPECT_EQ(hash(0, 0), 1669671676);
   EXPECT_EQ(hash(-5, 0), 1222806974);
-  EXPECT_EQ(hash(-5, 0), 1222806974);
-  EXPECT_EQ(hash(-5, 0), 1222806974);
-  EXPECT_EQ(hash(-5, 0), 1222806974);
+  EXPECT_EQ(hash(-42, 0), -846261623);
+  EXPECT_EQ(hash(42, 0), 1871679806);
+  EXPECT_EQ(hash(INT64_MAX, 0), -2106506049);
+  EXPECT_EQ(hash(INT64_MIN, 0), 1366273829);
 
   EXPECT_EQ(hash(0xcafecafedeadbeef, 42), -256235155);
   EXPECT_EQ(hash(0xdeadbeefcafecafe, 42), 673261790);

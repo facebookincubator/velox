@@ -27,7 +27,7 @@ class IcebergFunctionBaseTest
   static void SetUpTestCase() {
     parse::registerTypeResolver();
     registerFunctions("");
-    memory::MemoryManager::testingSetInstance({});
+    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
   }
 };
 

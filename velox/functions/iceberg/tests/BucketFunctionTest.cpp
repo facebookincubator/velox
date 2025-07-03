@@ -22,10 +22,10 @@
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::functions::iceberg;
-using namespace facebook::velox::functions::iceberg::test;
 
 namespace {
-class BucketFunctionTest : public IcebergFunctionBaseTest {
+class BucketFunctionTest
+    : public functions::iceberg::test::IcebergFunctionBaseTest {
  public:
   BucketFunctionTest() {
     options_.parseDecimalAsDouble = false;
@@ -44,7 +44,7 @@ class BucketFunctionTest : public IcebergFunctionBaseTest {
       const std::vector<VectorPtr>& input) {
     auto result =
         evaluate<SimpleVector<int32_t>>("bucket(c0, c1)", makeRowVector(input));
-    velox::test::assertEqualVectors(expected, result);
+    facebook::velox::test::assertEqualVectors(expected, result);
   }
 };
 } // namespace
