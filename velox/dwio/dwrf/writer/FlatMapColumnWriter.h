@@ -160,6 +160,24 @@ class ValueWriter {
     if (values) {
       return columnWriter_->write(values, nonNullRanges);
     }
+
+    return 0;
+  }
+
+  // used for flat map encoding writer
+  uint64_t writeBuffers(
+      const common::Ranges& valuesRanges,
+      const VectorPtr& values,
+      const common::Ranges& inMapRanges,
+      const uint64_t* inMapBuffer) {
+    if (inMapRanges.size()) {
+      inMap_->addBits(inMapBuffer, inMapRanges, nullptr, false);
+    }
+
+    if (valuesRanges.size()) {
+      return columnWriter_->write(values, valuesRanges);
+    }
+
     return 0;
   }
 
@@ -283,8 +301,10 @@ class FlatMapColumnWriter : public BaseColumnWriter {
 
   ValueWriter& getValueWriter(KeyType key, uint32_t inMapSize);
 
-  // write() calls writeMap() or writeRow() depending on input type
+  // write() calls writeMap(), writeFlatMap(), or writeRow() depending on input
+  // type and encoding
   uint64_t writeMap(const VectorPtr& slice, const common::Ranges& ranges);
+  uint64_t writeFlatMap(const VectorPtr& slice, const common::Ranges& ranges);
   uint64_t writeRow(const VectorPtr& slice, const common::Ranges& ranges);
 
   void clearNodes();

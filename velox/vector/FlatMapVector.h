@@ -119,6 +119,7 @@ class FlatMapVector : public BaseVector {
         "Wrong number of map value vectors.");
     VELOX_CHECK_LE(
         inMaps_.size(), numDistinctKeys(), "Wrong number of in map buffers.");
+    inMaps_.resize(numDistinctKeys());
   }
 
   virtual ~FlatMapVector() override {}
@@ -243,19 +244,13 @@ class FlatMapVector : public BaseVector {
     return inMaps_[index];
   }
 
-  /// Get the in map buffer reference for a given map key channel. If `resize`
-  /// is true, may resize up to `numDistinctKeys()` to ensure that the inMaps
-  /// vector has the appropriate length.
-  BufferPtr& inMapsAt(column_index_t index, bool resize = false) {
-    if (index < inMaps_.size()) {
-      return inMaps_[index];
-    } else if (!resize || index >= numDistinctKeys()) {
-      VELOX_CHECK_LT(
-          index,
-          inMaps_.size(),
-          "Trying to access non-existing key channel in FlatMapVector.");
-    }
-    inMaps_.resize(index + 1);
+  /// Get the in map buffer for a given a map key channel. Throws if in maps
+  /// does not exist for this channel.
+  BufferPtr& inMapsAt(column_index_t index) {
+    VELOX_CHECK_LT(
+        index,
+        inMaps_.size(),
+        "Trying to access non-existing key channel in FlatMapVector.");
     return inMaps_[index];
   }
 
@@ -271,8 +266,8 @@ class FlatMapVector : public BaseVector {
   VectorPtr testingCopyPreserveEncodings(
       velox::memory::MemoryPool* pool = nullptr) const override;
 
-  /// Returns true if the map is null, or either one of the key or value of its
-  /// entries are null.
+  /// Returns true if the map is null, or either one of the key or value of
+  /// its entries are null.
   bool containsNullAt(vector_size_t index) const override;
 
   /// Returns indices into the map at 'index' such

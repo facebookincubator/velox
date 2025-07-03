@@ -555,7 +555,7 @@ inline std::optional<int32_t> SimpleVector<ComplexType>::compare(
   other = other->loadedVector();
   auto wrapped = wrappedVector();
   auto otherWrapped = other->wrappedVector();
-  DCHECK(wrapped->encoding() == otherWrapped->encoding())
+  DCHECK(wrapped->typeKind() == otherWrapped->typeKind())
       << "Attempting to compare vectors not of the same type";
 
   bool otherNull = other->isNullAt(otherIndex);
