@@ -160,4 +160,36 @@ TEST_F(TruncateTest, binary) {
        makeFlatVector<StringView>(
            {"abc\0\0", "abcdefg", "abc", "测试_"}, VARBINARY())});
 }
+
+TEST_F(TruncateTest, decimal) {
+  truncateExpr(
+      makeFlatVector<int64_t>({1230, 1230, 0, -10}, DECIMAL(9, 2)),
+      {makeFlatVector<int32_t>({10, 10, 10, 10}),
+       makeFlatVector<int64_t>({1234, 1230, 5, -5}, DECIMAL(9, 2))});
+
+  truncateExpr(
+      makeConstant<int64_t>(12290, 1, DECIMAL(9, 3)),
+      {makeConstant<int32_t>(10, 1),
+       makeConstant<int64_t>(12299, 1, DECIMAL(9, 3))});
+
+  truncateExpr(
+      makeConstant<int64_t>(3, 1, DECIMAL(5, 2)),
+      {makeConstant<int32_t>(3, 1),
+       makeConstant<int64_t>(5, 1, DECIMAL(5, 2))});
+
+  truncateExpr(
+      makeConstant<int64_t>(123453480, 1, DECIMAL(10, 4)),
+      {makeConstant<int32_t>(10, 1),
+       makeConstant<int64_t>(123453482, 1, DECIMAL(10, 4))});
+
+  truncateExpr(
+      makeConstant<int64_t>(-500, 1, DECIMAL(6, 4)),
+      {makeConstant<int32_t>(10, 1),
+       makeConstant<int64_t>(-500, 1, DECIMAL(6, 4))});
+
+  truncateExpr(
+      makeFlatVector<int128_t>({0, -10}, DECIMAL(38, 2)),
+      {makeConstant<int32_t>(10, 2),
+       makeFlatVector<int128_t>({5, -5}, DECIMAL(38, 2))});
+}
 } // namespace
