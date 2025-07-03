@@ -171,6 +171,8 @@ int main(int argc, char** argv) {
       "st_endpoint",
       "st_geometryn",
       "st_interiorringn",
+      "st_numinteriorring",
+      "st_numgeometries",
       "geometry_invalid_reason",
       "simplify_geometry",
   };
