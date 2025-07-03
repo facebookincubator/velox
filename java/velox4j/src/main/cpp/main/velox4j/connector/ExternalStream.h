@@ -119,8 +119,7 @@ class ExternalStreamTableHandle
 class ExternalStreamDataSource : public facebook::velox::connector::DataSource {
  public:
   explicit ExternalStreamDataSource(
-      const std::shared_ptr<facebook::velox::connector::ConnectorTableHandle>&
-          tableHandle);
+      const facebook::velox::connector::ConnectorTableHandlePtr& tableHandle);
 
   void addSplit(std::shared_ptr<facebook::velox::connector::ConnectorSplit>
                     split) override;
@@ -155,7 +154,7 @@ class ExternalStreamDataSource : public facebook::velox::connector::DataSource {
   void cancel() override;
 
  private:
-  std::shared_ptr<ExternalStreamTableHandle> tableHandle_;
+  std::shared_ptr<const ExternalStreamTableHandle> tableHandle_;
   std::queue<std::shared_ptr<ExternalStream>> streams_{};
   std::shared_ptr<ExternalStream> current_{nullptr};
 };
@@ -169,19 +168,14 @@ class ExternalStreamConnector : public facebook::velox::connector::Connector {
 
   std::unique_ptr<facebook::velox::connector::DataSource> createDataSource(
       const facebook::velox::RowTypePtr& outputType,
-      const std::shared_ptr<facebook::velox::connector::ConnectorTableHandle>&
-          tableHandle,
-      const std::unordered_map<
-          std::string,
-          std::shared_ptr<facebook::velox::connector::ColumnHandle>>&
-          columnHandles,
+      const facebook::velox::connector::ConnectorTableHandlePtr&,
+      const facebook::velox::connector::ColumnHandleMap& columnHandles,
       facebook::velox::connector::ConnectorQueryCtx* connectorQueryCtx)
       override;
 
   std::unique_ptr<facebook::velox::connector::DataSink> createDataSink(
       facebook::velox::RowTypePtr inputType,
-      std::shared_ptr<facebook::velox::connector::ConnectorInsertTableHandle>
-          connectorInsertTableHandle,
+      const facebook::velox::connector::ConnectorInsertTableHandlePtr,
       facebook::velox::connector::ConnectorQueryCtx* connectorQueryCtx,
       facebook::velox::connector::CommitStrategy commitStrategy) override {
     VELOX_NYI();

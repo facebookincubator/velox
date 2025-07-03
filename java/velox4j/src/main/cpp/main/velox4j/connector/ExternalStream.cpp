@@ -102,10 +102,10 @@ connector::ConnectorTableHandlePtr ExternalStreamTableHandle::create(
 }
 
 ExternalStreamDataSource::ExternalStreamDataSource(
-    const std::shared_ptr<connector::ConnectorTableHandle>& tableHandle)
+    const facebook::velox::connector::ConnectorTableHandlePtr& tableHandle)
     : DataSource() {
   tableHandle_ =
-      std::dynamic_pointer_cast<ExternalStreamTableHandle>(tableHandle);
+      std::dynamic_pointer_cast<const ExternalStreamTableHandle>(tableHandle);
 }
 
 void ExternalStreamDataSource::addSplit(
@@ -183,10 +183,8 @@ ExternalStreamConnector::ExternalStreamConnector(
 std::unique_ptr<connector::DataSource>
 ExternalStreamConnector::createDataSource(
     const RowTypePtr& outputType,
-    const std::shared_ptr<connector::ConnectorTableHandle>& tableHandle,
-    const std::unordered_map<
-        std::string,
-        std::shared_ptr<connector::ColumnHandle>>& columnHandles,
+    const connector::ConnectorTableHandlePtr& tableHandle,
+    const connector::ColumnHandleMap& columnHandles,
     connector::ConnectorQueryCtx* connectorQueryCtx) {
   VELOX_CHECK(
       columnHandles.empty(),
