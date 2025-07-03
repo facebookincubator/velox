@@ -25,7 +25,6 @@ velox_add_library(
   DateTimeFunctionsRegistration.cpp
   DataSizeFunctionsRegistration.cpp
   GeneralFunctionsRegistration.cpp
-  GeometryFunctionsRegistration.cpp
   HyperLogFunctionsRegistration.cpp
   IntegerFunctionsRegistration.cpp
   FloatingPointFunctionsRegistration.cpp
@@ -39,6 +38,12 @@ velox_add_library(
   TDigestFunctionsRegistration.cpp
   QDigestFunctionsRegistration.cpp
   URLFunctionsRegistration.cpp)
+
+if(VELOX_ENABLE_GEO)
+  velox_compile_definitions(velox_functions_prestosql PRIVATE VELOX_ENABLE_GEO)
+  velox_sources(velox_functions_prestosql PRIVATE
+                GeometryFunctionsRegistration.cpp)
+endif()
 
 if(VELOX_ENABLE_FAISS)
   set_source_files_properties(MathematicalFunctionsRegistration.cpp
