@@ -40,7 +40,6 @@
 #include "arrow/util/bitmap_ops.h"
 #include "arrow/util/bitmap_writer.h"
 #include "arrow/util/checked_cast.h"
-#include "arrow/util/logging.h"
 #include "arrow/util/ubsan.h"
 #include "arrow/visit_data_inline.h"
 
@@ -1316,7 +1315,7 @@ int PlainBooleanDecoder::DecodeArrow(
       null_count,
       [&]() {
         bool value;
-        ARROW_IGNORE_EXPR(bit_reader_->GetValue(1, &value));
+        ((void)(bit_reader_->GetValue(1, &value)));
         builder->UnsafeAppend(value);
       },
       [&]() { builder->UnsafeAppendNull(); });
