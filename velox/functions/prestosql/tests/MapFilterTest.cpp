@@ -251,6 +251,130 @@ TEST_F(MapFilterTest, lambdaSelectivityVector) {
   assertEqualVectors(expected, result[0]);
 }
 
+TEST_F(MapFilterTest, fromFlatMapEncodings) {
+  auto input = makeRowVector({
+      makeFlatMapVectorFromJson<int64_t, int32_t>({
+          "{1:10, 2:20, 3:null, 4:40, 5:50, 6:null}",
+          "{1:10, 2:null, 4:40, 5:null}",
+          "{}",
+          "{2:20, 4:null, 6:null}",
+      }),
+  });
+  auto expected = makeFlatMapVectorFromJson<int64_t, int32_t>({
+      "{1:10, 2:20, 4:40, 5:50}",
+      "{1:10, 4:40}",
+      "{}",
+      "{2:20}",
+  });
+  auto result = evaluate("map_filter(c0, (k, v) -> (v IS NOT NULL))", input);
+  assertEqualVectors(expected, result);
+
+  expected = makeFlatMapVectorFromJson<int64_t, int32_t>({
+      "{4:40, 5:50}",
+      "{4:40}",
+      "{}",
+      "{}",
+  });
+  result = evaluate("map_filter(c0, (k, v) -> (v > 30))", input);
+  assertEqualVectors(expected, result);
+
+  expected = makeFlatMapVectorFromJson<int64_t, int32_t>({
+      "{4:40, 5:50, 6:null}",
+      "{4:40, 5:null}",
+      "{}",
+      "{4:null, 6:null}",
+  });
+  result = evaluate("map_filter(c0, (k, v) -> (k > 3))", input);
+  assertEqualVectors(expected, result);
+
+  input = makeRowVector({
+      makeFlatMapVectorFromJson<int64_t, int32_t>({
+          "{1:10, 2:20, 3:null, 4:40, 5:50, 6:60}",
+      }),
+  });
+  expected = makeFlatMapVectorFromJson<int64_t, int32_t>({
+      "{1:10, 2:20, 4:40, 5:50, 6:60}",
+  });
+  result = evaluate("map_filter(c0, (k, v) -> (v IS NOT NULL))", input);
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(MapFilterTest, fromFlatMapEncodingsWrappedInDictionary) {
+  auto flatMapVector = makeFlatMapVectorFromJson<int64_t, int32_t>({
+      "{1:10, 2:20, 3:null, 4:40, 5:50}",
+      "{1:10, 2:20, 3:null, 4:40, 5:50}",
+      "{1:10, 2:null, 4:40, 5:null}",
+      "{}",
+      "{2:20, 4:null, 5:null}",
+      "{2:20, 4:null, 5:50}",
+      "{1:10, 4:null, 5:null}",
+      "{2:20, 3:30, 5:null}",
+      "{}",
+      "{1:10, 2:20, 3:30, 4:40, 5:50}",
+  });
+  auto expected = makeFlatMapVectorFromJson<int64_t, int32_t>({
+      "{1:10, 2:20, 4:40, 5:50}",
+      "{1:10, 2:20, 4:40, 5:50}",
+      "{1:10, 4:40}",
+      "{}",
+      "{2:20}",
+      "{2:20, 5:50}",
+      "{1:10}",
+      "{2:20, 3:30}",
+      "{}",
+      "{1:10, 2:20, 3:30, 4:40, 5:50}",
+  });
+
+  assertEqualVectors(
+      expected,
+      evaluate(
+          "map_filter(c0, (k, v) -> (v IS NOT NULL))",
+          makeRowVector({BaseVector::wrapInDictionary(
+              nullptr,
+              makeIndices(flatMapVector->size(), [](auto row) { return row; }),
+              flatMapVector->size(),
+              flatMapVector)})));
+}
+
+TEST_F(MapFilterTest, fromFlatMapEncodingsWrappedInConstant) {
+  auto flatMapVector = makeFlatMapVectorFromJson<int64_t, int32_t>({
+      "{1:10, 2:20, 3:null, 4:40, 5:50}",
+      "{1:10, 2:20, 3:null, 4:40, 5:50}",
+      "{1:10, 2:null, 4:40, 5:null}",
+      "{}",
+      "{2:20, 4:null, 5:null}",
+      "{2:20, 4:null, 5:50}",
+      "{1:10, 4:null, 5:null}",
+      "{2:20, 3:30, 5:null}",
+      "{}",
+      "{1:10, 2:20, 3:30, 4:40, 5:50}",
+  });
+  auto expected = makeFlatMapVectorFromJson<int64_t, int32_t>({
+      "{1:10, 2:20, 4:40, 5:50}",
+      "{1:10, 2:20, 4:40, 5:50}",
+      "{1:10, 2:20, 4:40, 5:50}",
+      "{1:10, 2:20, 4:40, 5:50}",
+      "{1:10, 2:20, 4:40, 5:50}",
+      "{1:10, 2:20, 4:40, 5:50}",
+      "{1:10, 2:20, 4:40, 5:50}",
+      "{1:10, 2:20, 4:40, 5:50}",
+      "{1:10, 2:20, 4:40, 5:50}",
+      "{1:10, 2:20, 4:40, 5:50}",
+  });
+
+  assertEqualVectors(
+      expected,
+      evaluate(
+          "map_filter(c0, (k, v) -> (v IS NOT NULL))",
+          makeRowVector({BaseVector::wrapInConstant(10, 0, flatMapVector)})));
+  assertEqualVectors(
+      expected,
+      evaluate(
+          "map_filter(c0, (k, v) -> (v IS NOT NULL))",
+          makeRowVector({std::make_shared<ConstantVector<int64_t>>(
+              pool_.get(), 10, 0, flatMapVector)})));
+}
+
 TEST_F(MapFilterTest, try) {
   auto data = makeRowVector({
       makeMapVector<int64_t, int64_t>({
