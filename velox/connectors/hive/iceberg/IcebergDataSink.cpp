@@ -114,7 +114,7 @@ IcebergDataSink::IcebergDataSink(
                     hiveConfig->maxPartitionsPerWriters(
                         connectorQueryCtx->sessionProperties()),
                     connectorQueryCtx->memoryPool(),
-                    insertTableHandle,
+                    insertTableHandle->columnTransforms(),
                     hiveConfig->isPartitionPathAsLowerCase(
                         connectorQueryCtx->sessionProperties()))
               : nullptr) {

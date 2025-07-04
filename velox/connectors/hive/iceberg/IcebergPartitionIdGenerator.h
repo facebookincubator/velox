@@ -27,7 +27,7 @@ class IcebergPartitionIdGenerator : public PartitionIdGenerator {
       std::vector<column_index_t> partitionChannels,
       uint32_t maxPartitions,
       memory::MemoryPool* pool,
-      const std::shared_ptr<const IcebergInsertTableHandle>& insertTableHandle,
+      const std::vector<ColumnTransform>& columnTransforms,
       bool partitionPathAsLowerCase);
 
   /// Generate sequential partition IDs for input vector.
@@ -42,7 +42,7 @@ class IcebergPartitionIdGenerator : public PartitionIdGenerator {
       vector_size_t row) override;
 
   memory::MemoryPool* pool_;
-  const std::shared_ptr<const IcebergInsertTableHandle> insertTableHandle_;
+  const std::vector<ColumnTransform> columnTransforms_;
 };
 
 } // namespace facebook::velox::connector::hive::iceberg

@@ -24,32 +24,34 @@ IcebergPartitionIdGenerator::IcebergPartitionIdGenerator(
     std::vector<column_index_t> partitionChannels,
     uint32_t maxPartitions,
     memory::MemoryPool* pool,
-    const std::shared_ptr<const IcebergInsertTableHandle>& insertTableHandle,
+    const std::vector<ColumnTransform>& columnTransforms,
     bool partitionPathAsLowerCase)
     : PartitionIdGenerator(
           partitionChannels,
           maxPartitions,
           partitionPathAsLowerCase),
       pool_(pool),
-      insertTableHandle_(insertTableHandle) {
-  VELOX_USER_CHECK(pool, "Memory pool cannot be null");
-  VELOX_USER_CHECK(insertTableHandle, "insertTableHandle cannot be null");
+      columnTransforms_(columnTransforms) {
+  VELOX_USER_CHECK_GT(
+      columnTransforms_.size(), 0, "columnTransforms_ cannot be null");
   std::vector<TypePtr> partitionKeyTypes;
   std::vector<std::string> partitionKeyNames;
   column_index_t i{0};
-  for (auto& columnTransform : insertTableHandle->columnTransforms()) {
+  for (const auto& columnTransform : columnTransforms_) {
     hashers_.emplace_back(
         exec::VectorHasher::create(columnTransform.resultType(), i++));
-    std::string key = columnTransform.columnName();
     VELOX_USER_CHECK(
         exec::VectorHasher::typeKindSupportsValueIds(
             columnTransform.resultType()->kind()),
         "Unsupported partition type: {}.",
         columnTransform.resultType()->toString());
     partitionKeyTypes.emplace_back(columnTransform.resultType());
-    if (columnTransform.transformName() != "identity") {
-      key += "_" + columnTransform.transformName();
-    }
+    std::string key = columnTransform.transformName() == "identity"
+        ? columnTransform.columnName()
+        : fmt::format(
+              "{}_{}",
+              columnTransform.columnName(),
+              columnTransform.transformName());
     partitionKeyNames.emplace_back(std::move(key));
   }
   partitionValues_ = BaseVector::create<RowVector>(
@@ -79,11 +81,11 @@ void IcebergPartitionIdGenerator::run(
   std::vector<VectorPtr> columns;
   std::vector<std::string> names;
   std::vector<TypePtr> types;
-  const int32_t transformCount = insertTableHandle_->columnTransforms().size();
+  const int32_t transformCount = columnTransforms_.size();
   columns.reserve(transformCount);
   names.reserve(transformCount);
   types.reserve(transformCount);
-  for (auto& columnTransform : insertTableHandle_->columnTransforms()) {
+  for (const auto& columnTransform : columnTransforms_) {
     names.emplace_back(columnTransform.columnName());
     types.emplace_back(columnTransform.resultType());
     columns.emplace_back(columnTransform.transform(input));

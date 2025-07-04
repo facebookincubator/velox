@@ -52,13 +52,13 @@ class IcebergInsertTableHandle final : public HiveInsertTableHandle {
     return partitionSpec_;
   }
 
-  std::vector<ColumnTransform> columnTransforms() const {
+  const std::vector<ColumnTransform>& columnTransforms() const {
     return columnTransforms_;
   }
 
  private:
-  std::shared_ptr<const IcebergPartitionSpec> partitionSpec_;
-  std::vector<ColumnTransform> columnTransforms_;
+  const std::shared_ptr<const IcebergPartitionSpec> partitionSpec_;
+  const std::vector<ColumnTransform> columnTransforms_;
 };
 
 class IcebergDataSink : public HiveDataSink {
