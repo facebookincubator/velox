@@ -17,8 +17,10 @@
 #pragma once
 
 #include "velox/dwio/common/BufferUtil.h"
+#include "velox/dwio/parquet/reader/ColumnPageIndex.h"
 #include "velox/dwio/parquet/reader/Metadata.h"
 #include "velox/dwio/parquet/reader/PageReader.h"
+#include "velox/dwio/parquet/reader/RowRanges.h"
 
 namespace facebook::velox::common {
 class ScanSpec;
@@ -64,7 +66,8 @@ class ParquetData : public dwio::common::FormatData {
       const FileMetaDataPtr fileMetadataPtr,
       memory::MemoryPool& pool,
       dwio::common::ColumnReaderStatistics& stats,
-      const tz::TimeZone* sessionTimezone)
+      const tz::TimeZone* sessionTimezone,
+      const velox::common::ScanSpec& scanSpec)
       : pool_(pool),
         type_(std::static_pointer_cast<const ParquetTypeWithId>(type)),
         fileMetaDataPtr_(fileMetadataPtr),
@@ -72,10 +75,14 @@ class ParquetData : public dwio::common::FormatData {
         maxRepeat_(type_->maxRepeat_),
         rowsInRowGroup_(-1),
         stats_(stats),
-        sessionTimezone_(sessionTimezone) {}
+        sessionTimezone_(sessionTimezone),
+        scanSpec_(scanSpec) {}
 
   /// Prepares to read data for 'index'th row group.
-  void enqueueRowGroup(uint32_t index, dwio::common::BufferedInput& input);
+  void enqueueRowGroup(
+      uint32_t index,
+      dwio::common::BufferedInput& input,
+      const RowRanges& rowRanges);
 
   /// Positions 'this' at 'index'th row group. loadRowGroup must be called
   /// first. The returned PositionProvider is empty and should not be used.
@@ -206,6 +213,13 @@ class ParquetData : public dwio::common::FormatData {
 
   // Returns the <offset, length> of the row group.
   std::pair<int64_t, int64_t> getRowGroupRegion(uint32_t index) const;
+  void collectIndexPageInfoMap(uint32_t index, PageIndexInfoMap& map);
+
+  void filterDataPages(
+      uint32_t index,
+      folly::F14FastMap<uint32_t, std::unique_ptr<ColumnPageIndex>>&
+          pageIndices,
+      RowRanges& range);
 
  private:
   /// True if 'filter' may have hits for the column of 'this' according to the
@@ -235,6 +249,10 @@ class ParquetData : public dwio::common::FormatData {
 
   // Count of leading skipped positions in 'presetNulls_'
   int32_t presetNullsConsumed_{0};
+
+  std::vector<std::unique_ptr<ColumnPageIndex>> pageIndices_;
+
+  const common::ScanSpec& scanSpec_;
 };
 
 } // namespace facebook::velox::parquet

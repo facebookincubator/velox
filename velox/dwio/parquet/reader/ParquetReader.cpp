@@ -18,7 +18,9 @@
 
 #include <thrift/protocol/TCompactProtocol.h> //@manual
 
+#include "velox/dwio/parquet/reader/ColumnPageIndex.h"
 #include "velox/dwio/parquet/reader/ParquetColumnReader.h"
+#include "velox/dwio/parquet/reader/RowRanges.h"
 #include "velox/dwio/parquet/reader/StructColumnReader.h"
 #include "velox/dwio/parquet/thrift/ThriftTransport.h"
 #include "velox/functions/lib/string/StringImpl.h"
@@ -115,7 +117,9 @@ class ReaderBase {
   void scheduleRowGroups(
       const std::vector<uint32_t>& groups,
       int32_t currentGroup,
-      StructColumnReader& reader);
+      StructColumnReader& reader,
+      std::vector<RowRanges>& rowRanges,
+      bool shouldLoadPageIndex);
 
   /// Returns the uncompressed size for columns in 'type' and its children in
   /// row group.
@@ -1135,14 +1139,74 @@ std::shared_ptr<const RowType> ReaderBase::createRowType(
 void ReaderBase::scheduleRowGroups(
     const std::vector<uint32_t>& rowGroupIds,
     int32_t currentGroup,
-    StructColumnReader& reader) {
+    StructColumnReader& reader,
+    std::vector<RowRanges>& rowRanges,
+    bool shouldLoadPageIndex) {
   auto numRowGroupsToLoad = std::min(
       options_.prefetchRowGroups() + 1,
       static_cast<int64_t>(rowGroupIds.size() - currentGroup));
   for (auto i = 0; i < numRowGroupsToLoad; i++) {
     auto thisGroup = rowGroupIds[currentGroup + i];
     if (!inputs_[thisGroup]) {
-      inputs_[thisGroup] = reader.loadRowGroup(thisGroup, input_);
+      if (shouldLoadPageIndex) {
+        PageIndexInfoMap map;
+        reader.collectIndexPageInfoMap(thisGroup, map);
+        if (!map.empty()) {
+          using StreamMap = folly::F14FastMap<
+              uint32_t,
+              std::unique_ptr<dwio::common::SeekableInputStream>>;
+          StreamMap offSetStreamMap, columnStreamMap;
+          folly::F14FastMap<uint32_t, std::unique_ptr<ColumnPageIndex>>
+              pageIndices;
+
+          // Helper lambda to read and deserialize a Thrift object from a
+          // stream.
+          auto readThriftObject = [](auto* stream,
+                                     size_t length,
+                                     auto& thriftObj) {
+            const char* bufferStart = nullptr;
+            const char* bufferEnd = nullptr;
+            std::vector<char> data(length);
+            dwio::common::readBytes(
+                length, stream, data.data(), bufferStart, bufferEnd);
+            auto transport = std::make_shared<thrift::ThriftBufferedTransport>(
+                data.data(), length);
+            auto protocol =
+                std::make_unique<apache::thrift::protocol::TCompactProtocolT<
+                    thrift::ThriftTransport>>(transport);
+            thriftObj.read(protocol.get());
+          };
+
+          for (const auto& entry : map) {
+            offSetStreamMap[entry.first] = input_->enqueue(
+                {static_cast<uint64_t>(entry.second.offsetIndexOffset),
+                 static_cast<uint64_t>(entry.second.offsetIndexLength)});
+            columnStreamMap[entry.first] = input_->enqueue(
+                {static_cast<uint64_t>(entry.second.columnIndexOffset),
+                 static_cast<uint64_t>(entry.second.columnIndexLength)});
+          }
+          input_->load(dwio::common::LogType::STRIPE);
+
+          for (const auto& entry : map) {
+            thrift::ColumnIndex colIdx;
+            thrift::OffsetIndex offIdx;
+            readThriftObject(
+                columnStreamMap[entry.first].get(),
+                entry.second.columnIndexLength,
+                colIdx);
+            readThriftObject(
+                offSetStreamMap[entry.first].get(),
+                entry.second.offsetIndexLength,
+                offIdx);
+            pageIndices[entry.first] = std::make_unique<ColumnPageIndex>(
+                colIdx, offIdx, fileMetaData_->row_groups[thisGroup].num_rows);
+          }
+          reader.filterDataPages(
+              thisGroup, pageIndices, rowRanges.at(currentGroup + i));
+        }
+      }
+      inputs_[thisGroup] = reader.loadRowGroup(
+          thisGroup, input_, rowRanges.at(currentGroup + i));
     }
   }
 
@@ -1218,7 +1282,7 @@ class ParquetRowReader::Impl {
         params,
         *options_.scanSpec());
     columnReader_->setIsTopLevel();
-
+    shouldLoadPageIndex_ = shouldLoadPageIndex(*options_.scanSpec());
     filterRowGroups();
     if (!rowGroupIds_.empty()) {
       // schedule prefetch of first row group right after reading the metadata.
@@ -1231,9 +1295,25 @@ class ParquetRowReader::Impl {
         dwio::common::makeColumnReaderOptions(readerBase_->options());
   }
 
+  bool shouldLoadPageIndex(velox::common::ScanSpec& scanSpec) const {
+    bool result = false;
+    if (scanSpec.readFromFile()) {
+      result = scanSpec.filter() || scanSpec.numMetadataFilters() > 0;
+    }
+    if (!result) {
+      auto& childSpecs = scanSpec.stableChildren();
+      for (auto i = 0; i < childSpecs.size(); ++i) {
+        result |= shouldLoadPageIndex(*childSpecs[i]);
+      }
+    }
+
+    return result;
+  }
+
   void filterRowGroups() {
     rowGroupIds_.reserve(rowGroups_.size());
     firstRowOfRowGroup_.reserve(rowGroups_.size());
+    rowRanges_.reserve(rowGroups_.size());
 
     ParquetData::FilterRowGroupsResult res;
     columnReader_->filterRowGroups(0, parquetStatsContext_, res);
@@ -1262,6 +1342,7 @@ class ParquetRowReader::Impl {
       if (rowGroupInRange && !isExcluded && !isEmpty) {
         rowGroupIds_.push_back(i);
         firstRowOfRowGroup_.push_back(rowNumber);
+        rowRanges_.push_back(RowRanges::createSingle(rowGroups_[i].num_rows));
       } else {
         if (i != 0) {
           // Clear the metadata of row groups that are not read. This helps
@@ -1358,7 +1439,9 @@ class ParquetRowReader::Impl {
     readerBase_->scheduleRowGroups(
         rowGroupIds_,
         nextRowGroupIdsIdx_,
-        static_cast<StructColumnReader&>(*columnReader_));
+        static_cast<StructColumnReader&>(*columnReader_),
+        rowRanges_,
+        shouldLoadPageIndex_);
     currentRowGroupPtr_ = &rowGroups_[rowGroupIds_[nextRowGroupIdsIdx_]];
     rowsInCurrentRowGroup_ = currentRowGroupPtr_->num_rows;
     currentRowInGroup_ = 0;
@@ -1377,6 +1460,7 @@ class ParquetRowReader::Impl {
   // Indices of row groups where stats match filters.
   std::vector<uint32_t> rowGroupIds_;
   std::vector<uint64_t> firstRowOfRowGroup_;
+  std::vector<RowRanges> rowRanges_;
   uint32_t nextRowGroupIdsIdx_;
   const thrift::RowGroup* currentRowGroupPtr_{nullptr};
   uint64_t rowsInCurrentRowGroup_;
@@ -1392,6 +1476,8 @@ class ParquetRowReader::Impl {
 
   mutable std::optional<size_t> estimatedRowSize_;
   mutable int32_t lastRowGroupWithRowEstimate_{-1};
+
+  bool shouldLoadPageIndex_{false};
 };
 
 ParquetRowReader::ParquetRowReader(

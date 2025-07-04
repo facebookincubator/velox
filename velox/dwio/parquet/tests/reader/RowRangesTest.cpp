@@ -37,11 +37,11 @@ TEST(RowRangesTest, rowRange) {
   auto ru2 = RowRange::TryUnion(RowRange(1, 5), RowRange(7, 8));
   EXPECT_FALSE(ru2.has_value());
 
-  auto ri = RowRange::Intersection(RowRange(2, 6), RowRange(4, 10));
+  auto ri = RowRange::intersection(RowRange(2, 6), RowRange(4, 10));
   ASSERT_TRUE(ri.has_value());
   EXPECT_EQ(ri->toString(), "[4, 6]");
 
-  auto ri2 = RowRange::Intersection(RowRange(1, 3), RowRange(4, 5));
+  auto ri2 = RowRange::intersection(RowRange(1, 3), RowRange(4, 5));
   EXPECT_FALSE(ri2.has_value());
 }
 
@@ -83,11 +83,11 @@ TEST(RowRangesTest, union) {
 TEST(RowRangesTest, intersection) {
   RowRanges a(RowRange(113, 241));
   RowRanges b(RowRange(221, 340));
-  EXPECT_EQ(RowRanges::Intersection(a, b).toString(), "[[221, 241]]");
+  EXPECT_EQ(RowRanges::intersection(a, b).toString(), "[[221, 241]]");
 
   RowRanges c(RowRange(113, 230));
   RowRanges d(RowRange(231, 340));
-  EXPECT_EQ(RowRanges::Intersection(c, d).toString(), "[]");
+  EXPECT_EQ(RowRanges::intersection(c, d).toString(), "[]");
 
   RowRanges x;
   x.add(RowRange(0, 100));
@@ -95,7 +95,7 @@ TEST(RowRangesTest, intersection) {
   RowRanges y;
   y.add(RowRange(50, 250));
   EXPECT_EQ(
-      RowRanges::Intersection(x, y).toString(), "[[50, 100], [200, 250]]");
+      RowRanges::intersection(x, y).toString(), "[[50, 100], [200, 250]]");
 }
 
 TEST(RowRangesTest, overlapAndCount) {
@@ -148,7 +148,7 @@ TEST(RowRangesTest, unionInterleaved) {
 TEST(RowRangesTest, intersectionTouchingEdge) {
   RowRanges a(RowRange(100, 200));
   RowRanges b(RowRange(200, 300));
-  auto inter = RowRanges::Intersection(a, b);
+  auto inter = RowRanges::intersection(a, b);
   EXPECT_EQ(inter.toString(), "[[200, 200]]");
   EXPECT_EQ(inter.rowCount(), 1);
 }
@@ -156,7 +156,7 @@ TEST(RowRangesTest, intersectionTouchingEdge) {
 TEST(RowRangesTest, intersectionSinglePoint) {
   RowRanges a(RowRange(50, 50));
   RowRanges b(RowRange(0, 100));
-  auto inter = RowRanges::Intersection(a, b);
+  auto inter = RowRanges::intersection(a, b);
   EXPECT_EQ(inter.toString(), "[[50, 50]]");
   EXPECT_EQ(inter.rowCount(), 1);
 }
@@ -164,9 +164,9 @@ TEST(RowRangesTest, intersectionSinglePoint) {
 TEST(RowRangesTest, intersectionContainment) {
   RowRanges a(RowRange(0, 100));
   RowRanges b(RowRange(20, 30));
-  EXPECT_EQ(RowRanges::Intersection(a, b).toString(), "[[20, 30]]");
+  EXPECT_EQ(RowRanges::intersection(a, b).toString(), "[[20, 30]]");
   RowRanges c(RowRange(101, 110));
-  EXPECT_EQ(RowRanges::Intersection(a, c).toString(), "[]");
+  EXPECT_EQ(RowRanges::intersection(a, c).toString(), "[]");
 }
 
 TEST(RowRangesTest, overlapExactAndGap) {

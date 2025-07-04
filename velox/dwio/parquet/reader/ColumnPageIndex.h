@@ -21,7 +21,22 @@
 #include "velox/dwio/parquet/thrift/ParquetThriftTypes.h"
 #include "velox/type/Type.h"
 
+#include <folly/container/F14Map.h>
+
 namespace facebook::velox::parquet {
+
+struct ColumnPageIndexInformation {
+  int64_t offsetIndexOffset{0};
+
+  int32_t offsetIndexLength{0};
+
+  int64_t columnIndexOffset{0};
+
+  int32_t columnIndexLength{0};
+};
+
+using PageIndexInfoMap =
+    folly::F14FastMap<uint32_t, ColumnPageIndexInformation>;
 
 /// Encapsulates the Parquet ColumnIndex and OffsetIndex for a single column,
 /// and allows querying per-page metadata as well as marking pages to skip

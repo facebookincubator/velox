@@ -19,6 +19,8 @@
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/SelectiveStructColumnReader.h"
 #include "velox/dwio/parquet/common/LevelConversion.h"
+#include "velox/dwio/parquet/reader/ColumnPageIndex.h"
+#include "velox/dwio/parquet/reader/RowRanges.h"
 
 namespace facebook::velox::dwio::common {
 class BufferedInput;
@@ -49,7 +51,8 @@ class StructColumnReader : public dwio::common::SelectiveStructColumnReader {
   /// the streams in a new input and loads.
   std::shared_ptr<dwio::common::BufferedInput> loadRowGroup(
       uint32_t index,
-      const std::shared_ptr<dwio::common::BufferedInput>& input);
+      const std::shared_ptr<dwio::common::BufferedInput>& input,
+      const RowRanges& rowRanges);
 
   // No-op in Parquet. All readers switch row groups at the same time, there is
   // no on-demand skipping to a new row group.
@@ -77,10 +80,21 @@ class StructColumnReader : public dwio::common::SelectiveStructColumnReader {
       const dwio::common::StatsContext&,
       dwio::common::FormatData::FilterRowGroupsResult&) const override;
 
+  void collectIndexPageInfoMap(uint32_t index, PageIndexInfoMap& map);
+
+  void filterDataPages(
+      uint32_t index,
+      folly::F14FastMap<uint32_t, std::unique_ptr<ColumnPageIndex>>&
+          pageIndices,
+      RowRanges& range);
+
  private:
   dwio::common::SelectiveColumnReader* findBestLeaf();
 
-  void enqueueRowGroup(uint32_t index, dwio::common::BufferedInput& input);
+  void enqueueRowGroup(
+      uint32_t index,
+      dwio::common::BufferedInput& input,
+      const RowRanges& rowRanges);
 
   bool isRowGroupBuffered(uint32_t index, dwio::common::BufferedInput& input);
 

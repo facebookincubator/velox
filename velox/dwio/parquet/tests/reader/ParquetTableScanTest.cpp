@@ -389,6 +389,56 @@ TEST_F(ParquetTableScanTest, basic) {
       "SELECT max(b), a FROM tmp WHERE a < 3 GROUP BY a");
 }
 
+TEST_F(ParquetTableScanTest, columnIndex) {
+  loadData(
+      getExampleFilePath("column_index.parquet"),
+      ROW({"_1", "_2"}, {BIGINT(), DOUBLE()}),
+      makeRowVector(
+          {"_1", "_2"},
+          {
+              makeFlatVector<int64_t>(20, [](auto row) { return row; }),
+              makeFlatVector<double>(20, [](auto row) { return row; }),
+          }));
+
+  // Plain select.
+  // assertSelect({"a"}, "SELECT a FROM tmp");
+  // assertSelect({"b"}, "SELECT b FROM tmp");
+  // assertSelect({"a", "b"}, "SELECT a, b FROM tmp");
+  // assertSelect({"b", "a"}, "SELECT b, a FROM tmp");
+
+  // With filters.
+  assertSelectWithFilter(
+      {"_1"}, {"_1 < 20"}, "", "SELECT _1 FROM tmp WHERE _1 < 20");
+  // assertSelectWithFilter(
+  //     {"_1", "_2"}, {"_1 < 20"}, "", "SELECT _1, _2 FROM tmp WHERE _1 < 20");
+  // assertSelectWithFilter(
+  //     {"_2", "_1"}, {"a < 20"}, "", "SELECT _2, _1 FROM tmp WHERE _1 < 20");
+  /*
+
+    // With filter and aggregation.
+    assertSelectWithFilterAndAgg(
+        {"a"}, {"a < 3"}, {"sum(a)"}, {}, "SELECT sum(a) FROM tmp WHERE a < 3");
+    assertSelectWithFilterAndAgg(
+        {"a", "b"},
+        {"a < 3"},
+        {"sum(b)"},
+        {},
+        "SELECT sum(b) FROM tmp WHERE a < 3");
+    assertSelectWithFilterAndAgg(
+        {"a", "b"},
+        {"a < 3"},
+        {"min(a)", "max(b)"},
+        {},
+        "SELECT min(a), max(b) FROM tmp WHERE a < 3");
+    assertSelectWithFilterAndAgg(
+        {"b", "a"},
+        {"a < 3"},
+        {"max(b)"},
+        {"a"},
+        "SELECT max(b), a FROM tmp WHERE a < 3 GROUP BY a");
+  */
+}
+
 TEST_F(ParquetTableScanTest, lazy) {
   auto filePath = getExampleFilePath("sample.parquet");
   auto schema = ROW({"a", "b"}, {BIGINT(), DOUBLE()});

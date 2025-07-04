@@ -67,7 +67,7 @@ struct RowRange {
     return std::nullopt;
   }
 
-  static std::optional<RowRange> Intersection(
+  static std::optional<RowRange> intersection(
       const RowRange& left,
       const RowRange& right) {
     if (left.from_ <= right.from_) {
@@ -124,7 +124,7 @@ class RowRanges {
   }
 
   /// Computes the intersection of two RowRanges objects.
-  static RowRanges Intersection(const RowRanges& left, const RowRanges& right) {
+  static RowRanges intersection(const RowRanges& left, const RowRanges& right) {
     RowRanges result;
     size_t i = 0, j = 0;
     const auto& A = left.ranges_;
@@ -137,7 +137,7 @@ class RowRanges {
       } else if (b.isAfter(a)) {
         i++;
       } else {
-        auto inter = RowRange::Intersection(a, b);
+        auto inter = RowRange::intersection(a, b);
         if (inter.has_value()) {
           result.add(*inter);
         }
