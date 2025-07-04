@@ -28,6 +28,7 @@ namespace facebook::velox::connector::hive {
       case TypeKind::BIGINT:                                                \
       case TypeKind::VARCHAR:                                               \
       case TypeKind::VARBINARY:                                             \
+      case TypeKind::TIMESTAMP:                                             \
         return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(                          \
             TEMPLATE_FUNC, typeKind, __VA_ARGS__);                          \
       default:                                                              \
@@ -45,6 +46,15 @@ inline std::string makePartitionValueString(T value) {
 template <>
 inline std::string makePartitionValueString(bool value) {
   return value ? "true" : "false";
+}
+
+template <>
+inline std::string makePartitionValueString(Timestamp value) {
+  value.toTimezone(Timestamp::defaultTimezone());
+  TimestampToStringOptions options;
+  options.dateTimeSeparator = ' ';
+  options.precision = TimestampPrecision::kNanoseconds;
+  return value.toString(options);
 }
 
 template <TypeKind Kind>
