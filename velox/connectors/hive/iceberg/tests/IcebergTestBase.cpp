@@ -103,8 +103,7 @@ std::vector<RowVectorPtr> IcebergTestBase::createTestData(
 
 std::shared_ptr<IcebergPartitionSpec> IcebergTestBase::createPartitionSpec(
     const std::vector<std::string>& transformSpecs,
-    const RowTypePtr& rowType,
-    memory::MemoryPool* memoryPool) {
+    const RowTypePtr& rowType) {
   std::vector<IcebergPartitionSpec::Field> fields;
 
   static const std::regex bucketRegex(R"(bucket\(([^,]+),\s*(\d+)\))");
@@ -151,7 +150,7 @@ std::shared_ptr<IcebergPartitionSpec> IcebergTestBase::createPartitionSpec(
         name, findChildTypeKind(rowType, name), transformType, parameter));
   }
 
-  return std::make_shared<IcebergPartitionSpec>(1, fields, memoryPool);
+  return std::make_shared<IcebergPartitionSpec>(1, fields);
 }
 
 void addColumnHandles(
@@ -221,13 +220,13 @@ IcebergTestBase::createIcebergInsertTableHandle(
       outputDirectoryPath,
       LocationHandle::TableType::kNew);
 
-  auto partitionSpec =
-      createPartitionSpec(partitionTransforms, rowType, opPool_.get());
+  auto partitionSpec = createPartitionSpec(partitionTransforms, rowType);
 
   return std::make_shared<IcebergInsertTableHandle>(
       columnHandles,
       locationHandle,
       partitionSpec,
+      opPool_.get(),
       fileFormat_,
       nullptr,
       common::CompressionKind::CompressionKind_ZSTD);

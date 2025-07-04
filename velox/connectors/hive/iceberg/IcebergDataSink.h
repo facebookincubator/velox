@@ -29,6 +29,7 @@ class IcebergInsertTableHandle final : public HiveInsertTableHandle {
       std::vector<std::shared_ptr<const HiveColumnHandle>> inputColumns,
       std::shared_ptr<const LocationHandle> locationHandle,
       std::shared_ptr<const IcebergPartitionSpec> partitionSpec,
+      memory::MemoryPool* pool,
       dwio::common::FileFormat tableStorageFormat =
           dwio::common::FileFormat::PARQUET,
       std::shared_ptr<HiveBucketProperty> bucketProperty = nullptr,
@@ -42,9 +43,8 @@ class IcebergInsertTableHandle final : public HiveInsertTableHandle {
             compressionKind,
             serdeParameters),
         partitionSpec_(std::move(partitionSpec)),
-        columnTransforms_(parsePartitionTransformSpecs(
-            partitionSpec_->fields,
-            partitionSpec_->pool)) {}
+        columnTransforms_(
+            parsePartitionTransformSpecs(partitionSpec_->fields, pool)) {}
 
   ~IcebergInsertTableHandle() = default;
 

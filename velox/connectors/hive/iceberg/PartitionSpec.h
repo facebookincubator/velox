@@ -81,13 +81,9 @@ struct IcebergPartitionSpec {
 
   const int32_t specId;
   const std::vector<Field> fields;
-  memory::MemoryPool* pool;
 
-  IcebergPartitionSpec(
-      int32_t _specId,
-      const std::vector<Field>& _fields,
-      memory::MemoryPool* _pool)
-      : specId(_specId), fields(_fields), pool(_pool) {}
+  IcebergPartitionSpec(int32_t _specId, const std::vector<Field>& _fields)
+      : specId(_specId), fields(_fields) {}
 };
 
 } // namespace facebook::velox::connector::hive::iceberg

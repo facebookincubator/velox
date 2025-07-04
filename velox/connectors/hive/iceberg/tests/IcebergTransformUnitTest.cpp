@@ -21,12 +21,6 @@ namespace facebook::velox::connector::hive::iceberg::test {
 
 class IcebergTransformUnitTest : public IcebergTestBase {
  protected:
-  struct SchemaField {
-    int32_t id;
-    std::string name;
-    TypePtr type;
-  };
-
   template <typename TIN, typename TOUT>
   void testTransform(
       const IcebergPartitionSpec::Field& field,
@@ -82,15 +76,31 @@ class IcebergTransformUnitTest : public IcebergTestBase {
 };
 
 TEST_F(IcebergTransformUnitTest, testIdentityTransform) {
-  rowType_ = ROW(
-      {"c_int", "c_bigint", "c_varchar", "c_date", "c_varbinary", "c_decimal"},
-      {INTEGER(), BIGINT(), VARCHAR(), DATE(), VARBINARY(), DECIMAL(18, 3)});
+  rowType_ =
+      ROW({"c_int",
+           "c_bigint",
+           "c_varchar",
+           "c_date",
+           "c_varbinary",
+           "c_decimal",
+           "c_timestamp"},
+          {INTEGER(),
+           BIGINT(),
+           VARCHAR(),
+           DATE(),
+           VARBINARY(),
+           DECIMAL(18, 3),
+           TIMESTAMP()});
 
   // Create partition spec with identity transforms.
   const auto partitionSpec = createPartitionSpec(
-      {"c_int", "c_bigint", "c_varchar", "c_varbinary", "c_decimal"},
-      rowType_,
-      opPool_.get());
+      {"c_int",
+       "c_bigint",
+       "c_varchar",
+       "c_varbinary",
+       "c_decimal",
+       "c_timestamp"},
+      rowType_);
 
   auto& intTransform = partitionSpec->fields[0];
   EXPECT_EQ(intTransform.transformType, TransformType::kIdentity);
@@ -151,6 +161,26 @@ TEST_F(IcebergTransformUnitTest, testIdentityTransform) {
           StringView("\xFF\xFE\xFD\xFC", 4),
       },
       VARBINARY());
+
+  auto& timestampTransform = partitionSpec->fields[5];
+  EXPECT_EQ(timestampTransform.transformType, TransformType::kIdentity);
+  EXPECT_EQ(timestampTransform.type->kind(), TypeKind::TIMESTAMP);
+  testTransform<Timestamp, Timestamp>(
+      timestampTransform,
+      {
+          Timestamp(0, 0),
+          Timestamp(1609459200, 0),
+          Timestamp(1640995200, 0),
+          Timestamp(1672531200, 0),
+          Timestamp(9223372036854775, 999999999),
+      },
+      {
+          Timestamp(0, 0),
+          Timestamp(1609459200, 0),
+          Timestamp(1640995200, 0),
+          Timestamp(1672531200, 0),
+          Timestamp(9223372036854775, 999999999),
+      });
 }
 
 TEST_F(IcebergTransformUnitTest, testTruncateTransform) {
@@ -163,8 +193,7 @@ TEST_F(IcebergTransformUnitTest, testTruncateTransform) {
        "truncate(c_decimal, 10)",
        "truncate(c_varchar, 2)",
        "truncate(c_varbinary, 3)"},
-      rowType_,
-      opPool_.get());
+      rowType_);
 
   auto& intTruncateTransform = partitionSpec->fields[0];
   testTransform<int32_t, int32_t>(
@@ -348,8 +377,7 @@ TEST_F(IcebergTransformUnitTest, testBucketTransform) {
        "bucket(c_bigint, 8)",
        "bucket(c_varchar, 16)",
        "bucket(c_varbinary, 32)"},
-      rowType_,
-      opPool_.get());
+      rowType_);
 
   auto& intBucketTransform = partitionSpec->fields[0];
   EXPECT_EQ(intBucketTransform.transformType, TransformType::kBucket);
@@ -418,9 +446,7 @@ TEST_F(IcebergTransformUnitTest, testTemporalTransforms) {
   rowType_ = ROW({"c_date"}, {DATE()});
 
   const auto partitionSpec = createPartitionSpec(
-      {"year(c_date)", "month(c_date)", "day(c_date)"},
-      rowType_,
-      opPool_.get());
+      {"year(c_date)", "month(c_date)", "day(c_date)"}, rowType_);
 
   auto& yearTransform = partitionSpec->fields[0];
   EXPECT_EQ(yearTransform.transformType, TransformType::kYear);
@@ -466,8 +492,7 @@ TEST_F(IcebergTransformUnitTest, testTransformsWithNulls) {
        "year(c_date)",
        "month(c_date)",
        "day(c_date)"},
-      rowType_,
-      opPool_.get());
+      rowType_);
 
   auto& identityTransform = partitionSpec->fields[0];
   EXPECT_EQ(identityTransform.transformType, TransformType::kIdentity);
@@ -566,7 +591,7 @@ TEST_F(IcebergTransformUnitTest, testTransformsWithNulls) {
 
   rowType_ = ROW({"c_varchar"}, {VARCHAR()});
   auto varcharIdentityTransform =
-      createPartitionSpec({"c_varchar"}, rowType_, opPool_.get())->fields[0];
+      createPartitionSpec({"c_varchar"}, rowType_)->fields[0];
 
   transforms =
       parsePartitionTransformSpecs({varcharIdentityTransform}, opPool_.get());
@@ -595,7 +620,7 @@ TEST_F(IcebergTransformUnitTest, testTransformsWithNulls) {
 
   rowType_ = ROW({"c_varbinary"}, {VARBINARY()});
   auto varbinaryIdentityTransform =
-      createPartitionSpec({"c_varbinary"}, rowType_, opPool_.get())->fields[0];
+      createPartitionSpec({"c_varbinary"}, rowType_)->fields[0];
 
   transforms =
       parsePartitionTransformSpecs({varbinaryIdentityTransform}, opPool_.get());

@@ -51,8 +51,7 @@ class IcebergTestBase : public exec::test::HiveConnectorTestBase {
 
   std::shared_ptr<IcebergPartitionSpec> createPartitionSpec(
       const std::vector<std::string>& transformSpecs,
-      const RowTypePtr& rowType,
-      memory::MemoryPool* memoryPool);
+      const RowTypePtr& rowType);
 
  private:
   std::shared_ptr<IcebergInsertTableHandle> createIcebergInsertTableHandle(
