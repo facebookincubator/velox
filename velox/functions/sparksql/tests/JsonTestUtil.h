@@ -17,8 +17,6 @@
 
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 
-using namespace facebook::velox::test;
-
 namespace facebook::velox::functions::sparksql::test {
 
 constexpr float kNaNFloat = std::numeric_limits<float>::quiet_NaN();

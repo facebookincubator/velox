@@ -312,13 +312,16 @@ TEST_F(ToJsonTest, unsupportedType) {
 
   VectorFuzzer fuzzer(opts, pool_.get());
 
+#ifndef NDEBUG
   // ROW(HUGEINT)
-  auto input = fuzzer.fuzzDictionary(fuzzer.fuzzFlat(ROW({"a"}, {HUGEINT()})));
+  auto hugeIntInput =
+      fuzzer.fuzzDictionary(fuzzer.fuzzFlat(ROW({"a"}, {HUGEINT()})));
   VELOX_ASSERT_THROW(
-      testToJson(input, nullptr), "HUGEINT must be a decimal type.");
+      testToJson(hugeIntInput, nullptr), "HUGEINT must be a decimal type.");
+#endif
 
   // MAP(MAP)
-  input = fuzzer.fuzzDictionary(
+  auto input = fuzzer.fuzzDictionary(
       fuzzer.fuzzFlat(MAP(MAP(BIGINT(), BIGINT()), INTEGER())));
   VELOX_ASSERT_THROW(
       testToJson(input, nullptr),
