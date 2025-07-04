@@ -35,6 +35,28 @@ std::string toJson(const std::vector<folly::dynamic>& partitionValues) {
   return folly::toJson(jsonObject);
 }
 
+template <TypeKind Kind>
+folly::dynamic extractPartitionValue(
+    const VectorPtr& block,
+    vector_size_t index) {
+  using T = typename TypeTraits<Kind>::NativeType;
+  return block->asFlatVector<T>()->valueAt(index);
+}
+
+template <>
+folly::dynamic extractPartitionValue<TypeKind::VARCHAR>(
+    const VectorPtr& block,
+    vector_size_t index) {
+  return block->asFlatVector<StringView>()->valueAt(index);
+}
+
+template <>
+folly::dynamic extractPartitionValue<TypeKind::VARBINARY>(
+    const VectorPtr& block,
+    vector_size_t index) {
+  return block->asFlatVector<StringView>()->valueAt(index);
+}
+
 } // namespace
 
 IcebergDataSink::IcebergDataSink(
@@ -163,33 +185,8 @@ void IcebergDataSink::splitInputRowsAndEnsureWriters(RowVectorPtr input) {
         partitionValues[i] = nullptr;
       } else {
         const vector_size_t partitionId = partitionIds_[row];
-        switch (block->typeKind()) {
-          case TypeKind::INTEGER: {
-            partitionValues[i] =
-                block->asFlatVector<int32_t>()->valueAt(partitionId);
-            break;
-          }
-          case TypeKind::BIGINT: {
-            partitionValues[i] =
-                block->asFlatVector<int64_t>()->valueAt(partitionId);
-            break;
-          }
-          case TypeKind::HUGEINT: {
-            partitionValues[i] =
-                block->asFlatVector<int128_t>()->valueAt(partitionId);
-            break;
-          }
-          case TypeKind::VARCHAR:
-          case TypeKind::VARBINARY: {
-            partitionValues[i] =
-                block->asFlatVector<StringView>()->valueAt(partitionId);
-            break;
-          }
-          default: {
-            partitionValues[i] = block->toString(partitionId);
-            break;
-          }
-        }
+        partitionValues[i] = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+            extractPartitionValue, block->typeKind(), block, partitionId);
       }
     }
 
