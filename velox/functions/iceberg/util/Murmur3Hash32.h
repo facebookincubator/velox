@@ -28,8 +28,8 @@ namespace facebook::velox::functions::iceberg {
 /// different and can not read with Iceberg java.
 class Murmur3Hash : Murmur3Hash32 {
  public:
-  /// Value of type INTEGER and BIGINT is treated as unsigned type.
-  /// For the schema evolution, promote int to int64, treat int32 as uint64.
+  /// This is a fast path for int64, similar to hashBytes(int64_bytes, 8),
+  /// process lower 4 bytes and higher 4 bites and the combine them.
   static int32_t hashInt64(uint64_t input);
 
   /// Hash the bytes every 4 bytes, XOR on remaining bytes. Processing for the

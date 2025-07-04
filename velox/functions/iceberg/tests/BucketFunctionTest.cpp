@@ -24,6 +24,7 @@ using namespace facebook::velox::exec;
 using namespace facebook::velox::functions::iceberg;
 
 namespace {
+
 class BucketFunctionTest
     : public functions::iceberg::test::IcebergFunctionBaseTest {
  public:
@@ -39,7 +40,7 @@ class BucketFunctionTest
     return evaluateOnce<int32_t>("bucket(c0, c1)", numBuckets, value);
   }
 
-  void bucketExpr(
+  void assertBucket(
       const VectorPtr& expected,
       const std::vector<VectorPtr>& input) {
     auto result =
@@ -47,6 +48,7 @@ class BucketFunctionTest
     facebook::velox::test::assertEqualVectors(expected, result);
   }
 };
+
 } // namespace
 
 TEST_F(BucketFunctionTest, integerTypes) {
@@ -84,7 +86,7 @@ TEST_F(BucketFunctionTest, string) {
 }
 
 TEST_F(BucketFunctionTest, binary) {
-  bucketExpr(
+  assertBucket(
       makeFlatVector<int32_t>({122, 4}),
       {makeFlatVector<int32_t>({128, 5}),
        makeFlatVector<StringView>({"abc", "abcdefg"}, VARBINARY())});
@@ -103,17 +105,17 @@ TEST_F(BucketFunctionTest, timestamp) {
 }
 
 TEST_F(BucketFunctionTest, date) {
-  bucketExpr(
+  assertBucket(
       makeFlatVector<int32_t>({3, 6}),
       {makeConstant<int32_t>(10, 2), makeFlatVector<int32_t>({8, 42}, DATE())});
 }
 
 TEST_F(BucketFunctionTest, decimal) {
-  bucketExpr(
+  assertBucket(
       makeFlatVector<int32_t>({56, 13, 2, 85, 3}),
       {makeFlatVector<int32_t>({64, 18, 16, 128, 18}),
        makeFlatVector<int64_t>({1234, 1230, 12999, 5, 5, 5}, DECIMAL(9, 2))});
-  bucketExpr(
+  assertBucket(
       makeFlatVector<int32_t>({7, 7, 6, 4}),
       {makeConstant<int32_t>(10, 4),
        makeFlatVector<int128_t>(

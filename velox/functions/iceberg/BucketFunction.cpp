@@ -28,13 +28,15 @@ FOLLY_ALWAYS_INLINE int apply(int numBuckets, int hashedValue) {
   return (hashedValue & INT_MAX) % numBuckets;
 }
 
+// bucket(numBuckets, decimal) -> bucketIndex
+// Hash the minimal bytes of the decimal unscaled value, then MOD numBuckets to
+// get the bucket index.
 template <typename TExec>
 struct BucketDecimalFunction {
   VELOX_DEFINE_FUNCTION_TYPES(TExec);
 
   template <typename T>
-  FOLLY_ALWAYS_INLINE Status
-  call(int32_t& out, const int32_t& numBuckets, const T& input) {
+  FOLLY_ALWAYS_INLINE Status call(int32_t& out, int32_t numBuckets, T input) {
     VELOX_RETURN_IF(
         numBuckets <= 0,
         Status::UserError(
@@ -47,13 +49,17 @@ struct BucketDecimalFunction {
   }
 };
 
+// bucket(numBuckets, input) -> bucketIndex
+// Bucket all other Iceberg supported types including the integral type,
+// varchar, varbinary, date and timestamp type.
 template <typename TExec>
 struct BucketFunction {
   VELOX_DEFINE_FUNCTION_TYPES(TExec);
 
+  /// Value of type INTEGER and BIGINT is treated as unsigned type.
+  /// For the schema evolution, may promote int to int64, treat int32 as uint64.
   template <typename T>
-  FOLLY_ALWAYS_INLINE Status
-  call(int32_t& out, const int32_t& numBuckets, const T& input) {
+  FOLLY_ALWAYS_INLINE Status call(int32_t& out, int32_t numBuckets, T input) {
     VELOX_RETURN_IF(
         numBuckets <= 0,
         Status::UserError(
@@ -63,10 +69,8 @@ struct BucketFunction {
     return Status::OK();
   }
 
-  FOLLY_ALWAYS_INLINE Status call(
-      int32_t& out,
-      const int32_t& numBuckets,
-      const arg_type<Varchar>& input) {
+  FOLLY_ALWAYS_INLINE Status
+  call(int32_t& out, int32_t numBuckets, const arg_type<Varchar>& input) {
     VELOX_RETURN_IF(
         numBuckets <= 0,
         Status::UserError(
@@ -76,10 +80,8 @@ struct BucketFunction {
     return Status::OK();
   }
 
-  FOLLY_ALWAYS_INLINE Status call(
-      int32_t& out,
-      const int32_t& numBuckets,
-      const arg_type<Timestamp>& input) {
+  FOLLY_ALWAYS_INLINE Status
+  call(int32_t& out, int32_t numBuckets, const arg_type<Timestamp>& input) {
     VELOX_RETURN_IF(
         numBuckets <= 0,
         Status::UserError(
@@ -89,6 +91,7 @@ struct BucketFunction {
     return Status::OK();
   }
 };
+
 } // namespace
 
 void registerBucketFunctions(const std::string& prefix) {
