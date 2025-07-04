@@ -17,6 +17,7 @@
 #include "velox/connectors/hive/PartitionIdGenerator.h"
 
 #include "velox/connectors/hive/HivePartitionUtil.h"
+#include "velox/connectors/hive/iceberg/IcebergDataSink.h"
 #include "velox/dwio/catalog/fbhive/FileUtils.h"
 
 using namespace facebook::velox::dwio::catalog::fbhive;
@@ -29,26 +30,24 @@ PartitionIdGenerator::PartitionIdGenerator(
     uint32_t maxPartitions,
     memory::MemoryPool* pool,
     bool partitionPathAsLowerCase)
-    : partitionChannels_(std::move(partitionChannels)),
-      maxPartitions_(maxPartitions),
-      partitionPathAsLowerCase_(partitionPathAsLowerCase) {
-  VELOX_USER_CHECK(
-      !partitionChannels_.empty(), "There must be at least one partition key.");
-  for (auto channel : partitionChannels_) {
-    hashers_.emplace_back(
-        exec::VectorHasher::create(inputType->childAt(channel), channel));
-  }
-
+    : PartitionIdGenerator(
+          partitionChannels,
+          maxPartitions,
+          partitionPathAsLowerCase) {
+  VELOX_USER_CHECK(pool, "Memory pool cannot be null");
   std::vector<TypePtr> partitionKeyTypes;
   std::vector<std::string> partitionKeyNames;
-  for (auto channel : partitionChannels_) {
+
+  for (const auto channel : partitionChannels_) {
     VELOX_USER_CHECK(
         exec::VectorHasher::typeKindSupportsValueIds(
             inputType->childAt(channel)->kind()),
         "Unsupported partition type: {}.",
         inputType->childAt(channel)->toString());
-    partitionKeyTypes.push_back(inputType->childAt(channel));
-    partitionKeyNames.push_back(inputType->nameOf(channel));
+    hashers_.emplace_back(
+        exec::VectorHasher::create(inputType->childAt(channel), channel));
+    partitionKeyTypes.emplace_back(inputType->childAt(channel));
+    partitionKeyNames.emplace_back(inputType->nameOf(channel));
   }
 
   partitionValues_ = BaseVector::create<RowVector>(
@@ -58,6 +57,17 @@ PartitionIdGenerator::PartitionIdGenerator(
   for (auto& key : partitionValues_->children()) {
     key->resize(maxPartitions_);
   }
+}
+
+PartitionIdGenerator::PartitionIdGenerator(
+    std::vector<column_index_t> partitionChannels,
+    uint32_t maxPartitions,
+    bool partitionPathAsLowerCase)
+    : partitionChannels_(std::move(partitionChannels)),
+      maxPartitions_(maxPartitions),
+      partitionPathAsLowerCase_(partitionPathAsLowerCase) {
+  VELOX_USER_CHECK(
+      !partitionChannels_.empty(), "There must be at least one partition key.");
 }
 
 void PartitionIdGenerator::run(
@@ -96,9 +106,11 @@ void PartitionIdGenerator::run(
   }
 }
 
-std::string PartitionIdGenerator::partitionName(uint64_t partitionId) const {
+std::string PartitionIdGenerator::partitionName(
+    uint32_t partitionId,
+    bool useNullString) const {
   return FileUtils::makePartName(
-      extractPartitionKeyValues(partitionValues_, partitionId),
+      extractPartitionKeyValues(partitionValues_, partitionId, useNullString),
       partitionPathAsLowerCase_);
 }
 
