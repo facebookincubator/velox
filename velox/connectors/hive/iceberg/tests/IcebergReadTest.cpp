@@ -1540,7 +1540,8 @@ TEST_F(HiveIcebergTest, equalityDeleteFileWithIntAndVarcharColumns) {
   folly::SingletonVault::singleton()->registrationComplete();
 
   std::unordered_map<int8_t, std::vector<int32_t>> equalityFieldIdsMap;
-  std::unordered_map<int8_t, std::vector<std::vector<std::string>>> equalityDeleteVectorMap;
+  std::unordered_map<int8_t, std::vector<std::vector<std::string>>>
+      equalityDeleteVectorMap;
 
   equalityFieldIdsMap.insert({0, {1, 2}});
 
@@ -1549,7 +1550,8 @@ TEST_F(HiveIcebergTest, equalityDeleteFileWithIntAndVarcharColumns) {
   std::vector<RowVectorPtr> dataVectors = {makeRowVector(
       {"c0", "c1"},
       {makeFlatVector<std::string>({"1", "2", "3", "4", "5"}),
-       makeFlatVector<std::string>({"apple", "banana", "cherry", "date", "elderberry"})})};
+       makeFlatVector<std::string>(
+           {"apple", "banana", "cherry", "date", "elderberry"})})};
 
   assertEqualityDeletes(
       equalityDeleteVectorMap,
@@ -1583,16 +1585,19 @@ TEST_F(HiveIcebergTest, equalityDeleteFileWithIntAndVarbinaryColumns) {
   folly::SingletonVault::singleton()->registrationComplete();
 
   std::unordered_map<int8_t, std::vector<int32_t>> equalityFieldIdsMap;
-  std::unordered_map<int8_t, std::vector<std::vector<std::string>>> equalityDeleteVectorMap;
+  std::unordered_map<int8_t, std::vector<std::vector<std::string>>>
+      equalityDeleteVectorMap;
 
   equalityFieldIdsMap.insert({0, {1, 2}});
 
-  // Delete rows with (int: 2, varbinary: "\x03\x04") and (int: 4, varbinary: "\x07\x08")
+  // Delete rows with (int: 2, varbinary: "\x03\x04") and (int: 4, varbinary:
+  // "\x07\x08")
   equalityDeleteVectorMap.insert({0, {{"2", "4"}, {"\x03\x04", "\x07\x08"}}});
   std::vector<RowVectorPtr> dataVectors = {makeRowVector(
       {"c0", "c1"},
       {makeFlatVector<std::string>({"1", "2", "3", "4", "5"}),
-       makeFlatVector<std::string_view>({"\x01\x02", "\x03\x04", "\x05\x06", "\x07\x08", "\x09\x0A"})})};
+       makeFlatVector<std::string_view>(
+           {"\x01\x02", "\x03\x04", "\x05\x06", "\x07\x08", "\x09\x0A"})})};
 
   assertEqualityDeletes(
       equalityDeleteVectorMap,
@@ -1623,5 +1628,3 @@ TEST_F(HiveIcebergTest, equalityDeleteFileWithIntAndVarbinaryColumns) {
 }
 
 } // namespace facebook::velox::connector::hive::iceberg
-
-
