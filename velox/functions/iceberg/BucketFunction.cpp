@@ -24,7 +24,7 @@
 namespace facebook::velox::functions::iceberg {
 namespace {
 
-FOLLY_ALWAYS_INLINE int apply(int numBuckets, int hashedValue) {
+FOLLY_ALWAYS_INLINE int getBucketIndex(int numBuckets, int hashedValue) {
   return (hashedValue & INT_MAX) % numBuckets;
 }
 
@@ -42,7 +42,7 @@ struct BucketDecimalFunction {
     char bytes[sizeof(int128_t)];
     const auto length = DecimalUtil::toByteArray(input, bytes);
     const auto hash = Murmur3Hash::hashBytes(bytes, length);
-    out = apply(numBuckets, hash);
+    out = getBucketIndex(numBuckets, hash);
     return Status::OK();
   }
 };
@@ -59,7 +59,7 @@ struct BucketFunction {
         Status::UserError(
             "Invalid number of buckets: {} (must be > 0)", numBuckets));
     const auto hash = Murmur3Hash::hashInt64(input);
-    out = apply(numBuckets, hash);
+    out = getBucketIndex(numBuckets, hash);
     return Status::OK();
   }
 
@@ -72,7 +72,7 @@ struct BucketFunction {
         Status::UserError(
             "Invalid number of buckets: {} (must be > 0)", numBuckets));
     const auto hash = Murmur3Hash::hashBytes(input.data(), input.size());
-    out = apply(numBuckets, hash);
+    out = getBucketIndex(numBuckets, hash);
     return Status::OK();
   }
 
@@ -85,7 +85,7 @@ struct BucketFunction {
         Status::UserError(
             "Invalid number of buckets: {} (must be > 0)", numBuckets));
     const auto hash = Murmur3Hash::hashInt64(input.toMicros());
-    out = apply(numBuckets, hash);
+    out = getBucketIndex(numBuckets, hash);
     return Status::OK();
   }
 };
