@@ -80,4 +80,6 @@ target_link_libraries(
     velox_exception
     velox_time
     Folly::folly
-    gflags::gflags)
+    gflags::gflags
+    GTest::gtest
+    GTest::gmock)
