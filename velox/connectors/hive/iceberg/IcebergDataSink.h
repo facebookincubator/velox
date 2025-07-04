@@ -90,8 +90,6 @@ class IcebergDataSink : public HiveDataSink {
       const std::string& tableDirectory,
       const std::optional<std::string>& partitionSubdirectory) const override;
 
-  void computePartitionAndBucketIds(const RowVectorPtr& input) override;
-
   HiveWriterId getIcebergWriterId(size_t row) const;
 
   std::optional<std::string> getPartitionName(

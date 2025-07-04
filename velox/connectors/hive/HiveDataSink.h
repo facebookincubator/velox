@@ -615,7 +615,7 @@ class HiveDataSink : public DataSink {
       io::IoStatistics* ioStats);
 
   // Compute the partition id and bucket id for each row in 'input'.
-  virtual void computePartitionAndBucketIds(const RowVectorPtr& input);
+  void computePartitionAndBucketIds(const RowVectorPtr& input);
 
   // Get the hive writer id corresponding to the row
   // from partitionIds and bucketIds.

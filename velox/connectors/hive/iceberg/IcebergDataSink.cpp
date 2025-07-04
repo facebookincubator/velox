@@ -201,11 +201,6 @@ void IcebergDataSink::splitInputRowsAndEnsureWriters(RowVectorPtr input) {
   }
 }
 
-void IcebergDataSink::computePartitionAndBucketIds(const RowVectorPtr& input) {
-  VELOX_CHECK(isPartitioned());
-  partitionIdGenerator_->run(input, partitionIds_);
-}
-
 std::string IcebergDataSink::makePartitionDirectory(
     const std::string& tableDirectory,
     const std::optional<std::string>& partitionSubdirectory) const {
