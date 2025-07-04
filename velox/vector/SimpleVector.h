@@ -24,9 +24,9 @@
 #include <folly/String.h>
 #include <folly/Synchronized.h>
 #include <folly/container/F14Map.h>
-#include <folly/hash/Hash.h>
 #include <glog/logging.h>
 
+#include "velox/common/base/Hash.h"
 #include "velox/functions/lib/string/StringCore.h"
 #include "velox/type/DecimalUtil.h"
 #include "velox/type/FloatingPointUtil.h"
@@ -209,11 +209,7 @@ class SimpleVector : public BaseVector {
           hashValueAt, type_->kind(), valueAt(index));
     }
 
-    if constexpr (std::is_floating_point_v<T>) {
-      return util::floating_point::NaNAwareHash<T>{}(valueAt(index));
-    } else {
-      return folly::hasher<T>{}(valueAt(index));
-    }
+    return velox::hasher<T>{}(valueAt(index));
   }
 
   std::optional<bool> isSorted() const {
