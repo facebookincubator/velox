@@ -134,11 +134,27 @@ void FilterProject::initialize() {
       auto fieldIndex = inputType->getChildIdx(field->name());
       distinctFieldIndices.insert(fieldIndex);
     }
+
+    // Collect indices of fields that are multiply referenced in identity
+    // projections. These are fields that are referenced in both expressions and
+    // identity projections, or are referenced multiple times in the identity
+    // projections themselves.
+    std::unordered_set<uint32_t> multiplyReferencedFieldIndices;
+    std::unordered_map<column_index_t, uint32_t> identityCounts;
     for (auto identityField : identityProjections_) {
+      identityCounts[identityField.inputChannel]++;
       if (distinctFieldIndices.find(identityField.inputChannel) !=
           distinctFieldIndices.end()) {
-        multiplyReferencedFieldIndices_.push_back(identityField.inputChannel);
+        multiplyReferencedFieldIndices.insert(identityField.inputChannel);
       }
+    }
+    for (const auto& [inputChannel, count] : identityCounts) {
+      if (count > 1) {
+        multiplyReferencedFieldIndices.insert(inputChannel);
+      }
+    }
+    for (auto fieldIndex : multiplyReferencedFieldIndices) {
+      multiplyReferencedFieldIndices_.push_back(fieldIndex);
     }
   }
   filter_.reset();
@@ -177,8 +193,8 @@ RowVectorPtr FilterProject::getOutput() {
   rows->setAll();
   EvalCtx evalCtx(operatorCtx_->execCtx(), exprs_.get(), input_.get());
 
-  // Pre-load lazy vectors which are referenced by both expressions and identity
-  // projections.
+  // Pre-load lazy vectors which are multiply referenced by expressions and
+  // identity projections.
   for (auto fieldIdx : multiplyReferencedFieldIndices_) {
     evalCtx.ensureFieldLoaded(fieldIdx, *rows);
   }
