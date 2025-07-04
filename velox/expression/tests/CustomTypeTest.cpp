@@ -221,39 +221,30 @@ TEST_F(CustomTypeTest, customType) {
 }
 
 TEST_F(CustomTypeTest, getCustomTypeNames) {
+  auto expectedTypes = std::unordered_set<std::string>{
+      "JSON",
+      "HYPERLOGLOG",
+      "TIMESTAMP WITH TIME ZONE",
+      "UUID",
+      "IPADDRESS",
+      "IPPREFIX",
+      "BINGTILE",
+      "TDIGEST",
+      "QDIGEST"};
+
+#ifdef VELOX_ENABLE_GEO
+  expectedTypes.insert("GEOMETRY");
+#endif
+
   auto names = getCustomTypeNames();
-  ASSERT_EQ(
-      (std::unordered_set<std::string>{
-          "JSON",
-          "HYPERLOGLOG",
-          "TIMESTAMP WITH TIME ZONE",
-          "UUID",
-          "IPADDRESS",
-          "IPPREFIX",
-          "BINGTILE",
-          "TDIGEST",
-          "QDIGEST",
-          "GEOMETRY"}),
-      names);
+  ASSERT_EQ(expectedTypes, names);
 
   ASSERT_TRUE(registerCustomType(
       "fancy_int", std::make_unique<FancyIntTypeFactories>()));
+  expectedTypes.insert("FANCY_INT");
 
   names = getCustomTypeNames();
-  ASSERT_EQ(
-      (std::unordered_set<std::string>{
-          "JSON",
-          "HYPERLOGLOG",
-          "TIMESTAMP WITH TIME ZONE",
-          "UUID",
-          "IPADDRESS",
-          "IPPREFIX",
-          "BINGTILE",
-          "FANCY_INT",
-          "TDIGEST",
-          "QDIGEST",
-          "GEOMETRY"}),
-      names);
+  ASSERT_EQ(expectedTypes, names);
 
   ASSERT_TRUE(unregisterCustomType("fancy_int"));
 }
