@@ -15,6 +15,7 @@
  */
 #include "velox/core/Expressions.h"
 #include "velox/common/encode/Base64.h"
+#include "velox/vector/SimpleVector.h"
 #include "velox/vector/VectorSaver.h"
 
 namespace facebook::velox::core {
@@ -123,6 +124,125 @@ TypedExprPtr ConstantTypedExpr::create(
   auto* pool = static_cast<memory::MemoryPool*>(context);
 
   return std::make_shared<ConstantTypedExpr>(restoreVector(dataStream, pool));
+}
+
+namespace {
+template <TypeKind Kind>
+std::string toStringImpl(const TypePtr& type, const Variant& value) {
+  using T = typename TypeTraits<Kind>::NativeType;
+
+  return SimpleVector<T>::valueToString(type, T(value.value<T>()));
+}
+
+} // namespace
+
+std::string ConstantTypedExpr::toString() const {
+  if (hasValueVector()) {
+    return valueVector_->toString(0);
+  }
+
+  if (value_.isNull()) {
+    return std::string(BaseVector::kNullValueString);
+  }
+
+  return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+      toStringImpl, type()->kind(), type(), value_);
+}
+
+namespace {
+
+template <TypeKind KIND>
+bool equalsNoNulls(const VectorPtr& vector, const Variant& value) {
+  using T = typename TypeTraits<KIND>::NativeType;
+
+  const auto thisValue = vector->as<SimpleVector<T>>()->valueAt(0);
+  const auto otherValue = T(value.value<T>());
+
+  const auto& type = vector->type();
+
+  auto result = type->providesCustomComparison()
+      ? SimpleVector<T>::comparePrimitiveAscWithCustomComparison(
+            type.get(), thisValue, otherValue)
+      : SimpleVector<T>::comparePrimitiveAsc(thisValue, otherValue);
+  return result == 0;
+}
+
+bool equalsImpl(const VectorPtr& vector, const Variant& value) {
+  static constexpr CompareFlags kEqualValueAtFlags =
+      CompareFlags::equality(CompareFlags::NullHandlingMode::kNullAsValue);
+
+  bool thisNull = vector->isNullAt(0);
+  bool otherNull = value.isNull();
+
+  if (otherNull || thisNull) {
+    return BaseVector::compareNulls(thisNull, otherNull, kEqualValueAtFlags)
+        .value();
+  }
+
+  return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+      equalsNoNulls, vector->typeKind(), vector, value);
+}
+} // namespace
+
+bool ConstantTypedExpr::equals(const ITypedExpr& other) const {
+  const auto* casted = dynamic_cast<const ConstantTypedExpr*>(&other);
+  if (!casted) {
+    return false;
+  }
+
+  if (*this->type() != *casted->type()) {
+    return false;
+  }
+
+  if (this->hasValueVector() != casted->hasValueVector()) {
+    if (this->hasValueVector()) {
+      return equalsImpl(this->valueVector_, casted->value_);
+    } else {
+      return equalsImpl(casted->valueVector_, this->value_);
+    }
+  }
+
+  if (this->hasValueVector()) {
+    return this->valueVector_->equalValueAt(casted->valueVector_.get(), 0, 0);
+  }
+
+  return this->value_ == casted->value_;
+}
+
+namespace {
+template <TypeKind KIND>
+uint64_t hashImpl(const TypePtr& type, const Variant& value) {
+  using T = typename TypeTraits<KIND>::NativeType;
+
+  const auto& v = value.value<KIND>();
+
+  if (type->providesCustomComparison()) {
+    return SimpleVector<T>::hashValueAtWithCustomType(type, T(v));
+  }
+
+  if constexpr (std::is_floating_point_v<T>) {
+    return util::floating_point::NaNAwareHash<T>{}(T(v));
+  } else {
+    return folly::hasher<T>{}(T(v));
+  }
+}
+} // namespace
+
+size_t ConstantTypedExpr::localHash() const {
+  static const size_t kBaseHash = std::hash<const char*>()("ConstantTypedExpr");
+
+  uint64_t hash;
+
+  if (hasValueVector()) {
+    hash = valueVector_->hashValueAt(0);
+  } else if (value_.isNull()) {
+    hash = BaseVector::kNullHash;
+  } else {
+    hash = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+        hashImpl, type()->kind(), type(), value_);
+  }
+
+  return bits::hashMix(kBaseHash, hash);
 }
 
 void CallTypedExpr::accept(

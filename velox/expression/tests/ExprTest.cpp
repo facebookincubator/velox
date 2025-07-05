@@ -2593,6 +2593,38 @@ TEST_P(ParameterizedExprTest, constantToString) {
       exprSet.exprs()[2]->toString());
 }
 
+TEST_F(ExprTest, constantToStringConsistency) {
+  auto testValue = [&](const TypePtr& type, const Variant& value) {
+    SCOPED_TRACE(fmt::format(
+        "Type: {}, Value: {}", type->toString(), value.toJson(type)));
+
+    auto a = std::make_shared<core::ConstantTypedExpr>(type, value);
+
+    auto b = std::make_shared<core::ConstantTypedExpr>(
+        BaseVector::createConstant(type, value, 1, pool()));
+
+    EXPECT_EQ(a->toString(), b->toString());
+
+    EXPECT_TRUE(a->equals(*b));
+    EXPECT_TRUE(b->equals(*a));
+
+    EXPECT_EQ(a->hash(), b->hash());
+  };
+
+  testValue(TINYINT(), Variant::create<TypeKind::TINYINT>(1));
+  testValue(SMALLINT(), Variant::create<TypeKind::SMALLINT>(123));
+  testValue(INTEGER(), 12345);
+  testValue(BIGINT(), -12345678LL);
+
+  testValue(BOOLEAN(), true);
+  testValue(BOOLEAN(), false);
+
+  testValue(VARCHAR(), "test");
+
+  // TODO Make this work
+  // testValue(ARRAY(INTEGER()), Variant::array({1, 2, 3}));
+}
+
 TEST_P(ParameterizedExprTest, fieldAccessToString) {
   auto rowType =
       ROW({"a", "b"},
