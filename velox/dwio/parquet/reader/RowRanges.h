@@ -82,6 +82,29 @@ struct RowRange {
     return std::nullopt;
   }
 
+  // Difference of two RowRanges: left \ right
+  // Returns at most two disjoint ranges
+  static std::vector<RowRange> difference(
+      const RowRange& left,
+      const RowRange& right) {
+    std::vector<RowRange> result;
+    auto inter = intersection(left, right);
+    if (!inter) {
+      // No overlap, entire left remains
+      result.push_back(left);
+    } else {
+      // Before intersection
+      if (left.from_ < inter->from_) {
+        result.emplace_back(left.from_, inter->from_ - 1);
+      }
+      // After intersection
+      if (inter->to_ < left.to_) {
+        result.emplace_back(inter->to_ + 1, left.to_);
+      }
+    }
+    return result;
+  }
+
   std::string toString() const {
     std::ostringstream os;
     os << "[" << from_ << ", " << to_ << "]";
@@ -177,10 +200,10 @@ class RowRanges {
     return cnt;
   }
 
-  /// Check if the given interval [from_, to_] overlaps with any existing
+  /// Check if the given interval [from, to] overlaps with any existing
   /// interval.
-  bool isOverlapping(int64_t from_, int64_t to_) const {
-    RowRange query(from_, to_);
+  bool isOverlapping(int64_t from, int64_t to) const {
+    RowRange query(from, to);
     for (const auto& r : ranges_) {
       if (query.isBefore(r)) {
         break;
@@ -207,6 +230,17 @@ class RowRanges {
 
   const std::vector<RowRange>& getRanges() const {
     return ranges_;
+  }
+
+  /// Computes the intersection of this RowRanges with a single RowRange.
+  /// Returns std::optional<RowRange> of the intersected range if any overlap.
+  std::optional<RowRange> intersectOne(const RowRange& r) const {
+    for (const auto& existing : ranges_) {
+      if (auto inter = RowRange::intersection(existing, r)) {
+        return inter;
+      }
+    }
+    return std::nullopt;
   }
 
  private:

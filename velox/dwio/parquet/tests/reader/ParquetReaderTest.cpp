@@ -948,7 +948,7 @@ TEST_F(ParquetReaderTest, readSampleEqualFilter) {
 
 TEST_F(ParquetReaderTest, dataPageSkipping) {
   FilterMap filters;
-  filters.insert({"_1", exec::lessThan(5)});
+  filters.insert({"_1", exec::lessThan(99)});
   auto expected = makeRowVector({
       makeFlatVector<int64_t>({0, 1, 2, 3, 4}),
       makeFlatVector<std::string>({"0", "1", "2", "3", "4"}),
