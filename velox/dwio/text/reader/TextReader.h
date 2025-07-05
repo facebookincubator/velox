@@ -207,6 +207,7 @@ class TextRowReader : public RowReader {
   bool atEOL_;
   bool atEOF_;
   bool atSOL_;
+  bool atPhysicalEOF_;
   uint8_t depth_;
   std::string unreadData_;
   int unreadIdx_;
