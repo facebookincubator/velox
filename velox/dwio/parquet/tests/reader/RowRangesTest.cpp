@@ -31,14 +31,14 @@ TEST(RowRangesTest, rowRange) {
   EXPECT_EQ(r.count(), 6); // 10 - 5 + 1
   EXPECT_EQ(r.toString(), "[5, 10]");
   auto ru1 = RowRange::TryUnion(RowRange(1, 5), RowRange(6, 8));
-  ASSERT_TRUE(ru1.has_value());
+  EXPECT_TRUE(ru1.has_value());
   EXPECT_EQ(ru1->toString(), "[1, 8]");
 
   auto ru2 = RowRange::TryUnion(RowRange(1, 5), RowRange(7, 8));
   EXPECT_FALSE(ru2.has_value());
 
   auto ri = RowRange::intersection(RowRange(2, 6), RowRange(4, 10));
-  ASSERT_TRUE(ri.has_value());
+  EXPECT_TRUE(ri.has_value());
   EXPECT_EQ(ri->toString(), "[4, 6]");
 
   auto ri2 = RowRange::intersection(RowRange(1, 3), RowRange(4, 5));
@@ -185,4 +185,57 @@ TEST(RowRangesTest, overlapAcrossSegments) {
   EXPECT_FALSE(r.isOverlapping(11, 19));
   EXPECT_TRUE(r.isOverlapping(5, 15));
   EXPECT_TRUE(r.isOverlapping(15, 25));
+}
+
+TEST(RowRangeTest, differenceNoOverlap) {
+  auto v = RowRange::difference({0, 5}, {10, 15});
+  EXPECT_EQ(v.size(), 1);
+  EXPECT_EQ(v[0].from_, 0);
+  EXPECT_EQ(v[0].to_, 5);
+}
+
+TEST(RowRangeTest, differenceFullOverlap) {
+  auto v = RowRange::difference({0, 5}, {0, 5});
+  EXPECT_TRUE(v.empty());
+}
+
+TEST(RowRangeTest, differenceOverlapStart) {
+  auto v = RowRange::difference({0, 5}, {0, 2});
+  EXPECT_EQ(v.size(), 1);
+  EXPECT_EQ(v[0].from_, 3);
+  EXPECT_EQ(v[0].to_, 5);
+}
+
+TEST(RowRangeTest, differenceOverlapEnd) {
+  auto v = RowRange::difference({0, 5}, {3, 5});
+  EXPECT_EQ(v.size(), 1);
+  EXPECT_EQ(v[0].from_, 0);
+  EXPECT_EQ(v[0].to_, 2);
+}
+
+TEST(RowRangeTest, differenceOverlapMiddle) {
+  auto v = RowRange::difference({0, 10}, {3, 7});
+  EXPECT_EQ(v.size(), 2);
+  EXPECT_EQ(v[0].from_, 0);
+  EXPECT_EQ(v[0].to_, 2);
+  EXPECT_EQ(v[1].from_, 8);
+  EXPECT_EQ(v[1].to_, 10);
+}
+
+TEST(RowRangesTest, intersectOneOverlap) {
+  RowRanges rr;
+  rr = RowRanges::createSingle(6); // [0,5]
+  rr = RowRanges::Union(rr, RowRanges({10, 15}));
+  auto i = rr.intersectOne({3, 12});
+  EXPECT_TRUE(i.has_value());
+  EXPECT_EQ(i->from_, 3);
+  EXPECT_EQ(i->to_, 5);
+}
+
+TEST(RowRangesTest, intersectOneNoOverlap) {
+  RowRanges rr;
+  rr = RowRanges::createSingle(6); // [0,5]
+  rr = RowRanges::Union(rr, RowRanges({10, 15}));
+  auto i = rr.intersectOne({6, 9});
+  EXPECT_FALSE(i.has_value());
 }
