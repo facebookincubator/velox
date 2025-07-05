@@ -15,13 +15,21 @@
  */
 
 #ifdef VELOX_ENABLE_PARQUET
+#include "velox/dwio/parquet/crypto/CryptoFactory.h"
 #include "velox/dwio/parquet/reader/ParquetReader.h" // @manual
 #endif
 
 namespace facebook::velox::parquet {
 
 void registerParquetReaderFactory() {
+  registerParquetReaderFactory(false);
+}
+
+void registerParquetReaderFactory(bool clacEnabled) {
 #ifdef VELOX_ENABLE_PARQUET
+  // Note, when adopting CLAC for decrypting encrypted parquet files,
+  // please provide and pass your own KMS client implementation
+  CryptoFactory::initialize(nullptr, clacEnabled);
   dwio::common::registerReaderFactory(std::make_shared<ParquetReaderFactory>());
 #endif
 }
