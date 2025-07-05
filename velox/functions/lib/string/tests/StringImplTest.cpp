@@ -111,6 +111,103 @@ class StringImplTest : public testing::Test {
         {"\u1E8A", "\u1E8B"},
         {"\u1E8E", "\u1E8F"}};
   }
+
+  static std::vector<std::pair<std::string, std::string>>
+  getInitcapUnicodePrestoTestData() {
+    return {
+        {"BİLGİ", "Bilgi"},
+        {"\u0130\u0130", "\u0130\u0069"},
+        {u8"foo\u0020bar", u8"Foo\u0020Bar"},
+        {u8"foo\u0009bar", u8"Foo\u0009Bar"},
+        {u8"foo\u000Abar", u8"Foo\u000ABar"},
+        {u8"foo\u000Dbar", u8"Foo\u000DBar"},
+        {u8"foo\u000Bbar", u8"Foo\u000BBar"},
+        {u8"foo\u000Cbar", u8"Foo\u000CBar"},
+        {u8"foo\u0009\u000A\u000D\u000B\u000Cbar",
+         u8"Foo\u0009\u000A\u000D\u000B\u000CBar"},
+        {u8"foo\u0020\u0009\u000Abar", u8"Foo\u0020\u0009\u000ABar"},
+        {u8"foo\u1680bar", u8"Foo\u1680Bar"},
+        {u8"foo\u2000bar", u8"Foo\u2000Bar"},
+        {u8"foo\u2001bar", u8"Foo\u2001Bar"},
+        {u8"foo\u2002bar", u8"Foo\u2002Bar"},
+        {u8"foo\u2003bar", u8"Foo\u2003Bar"},
+        {u8"foo\u2004bar", u8"Foo\u2004Bar"},
+        {u8"foo\u2005bar", u8"Foo\u2005Bar"},
+        {u8"foo\u2006bar", u8"Foo\u2006Bar"},
+        {u8"foo\u2008bar", u8"Foo\u2008Bar"},
+        {u8"foo\u2009bar", u8"Foo\u2009Bar"},
+        {u8"foo\u200Abar", u8"Foo\u200ABar"},
+        {u8"foo\u2028bar", u8"Foo\u2028Bar"},
+        {u8"foo\u2029bar", u8"Foo\u2029Bar"},
+        {u8"foo\u205Fbar", u8"Foo\u205FBar"},
+        {u8"foo\u3000bar", u8"Foo\u3000Bar"},
+        {u8"foo\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2008\u2009\u200Abar",
+         u8"Foo\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2008\u2009\u200ABar"},
+        {u8"\u00E9l\u00E8ve\u000Atr\u00E8s-intelligent",
+         u8"\u00C9l\u00E8ve\u000ATr\u00E8s-intelligent"},
+        // Below whitespaces are not considered as whitespace in presto
+        {u8"foo\u0085Bar", u8"Foo\u0085bar"},
+        {u8"foo\u00A0Bar", u8"Foo\u00A0bar"},
+        {u8"foo\u2007Bar", u8"Foo\u2007bar"},
+        {u8"foo\u202FBar", u8"Foo\u202Fbar"}};
+  }
+
+  static std::vector<std::pair<std::string, std::string>>
+  getInitcapAsciiPrestoTestData() {
+    return {
+        {"foo bar", "Foo Bar"},
+        {"foo\nbar", "Foo\nBar"},
+        {"foo \t\nbar", "Foo \t\nBar"}};
+  }
+
+  static std::vector<std::pair<std::string, std::string>>
+  getInitcapUnicodeSparkTestData() {
+    return {
+        {"àáâãäåæçèéêëìíîïðñòóôõöøùúûüýþ", "Àáâãäåæçèéêëìíîïðñòóôõöøùúûüýþ"},
+        {"αβγδεζηθικλμνξοπρςστυφχψ", "Αβγδεζηθικλμνξοπρςστυφχψ"},
+        {"абвгдежзийклмнопрстуфхцчшщъыьэюя",
+         "Абвгдежзийклмнопрстуфхцчшщъыьэюя"},
+        {"hello world", "Hello World"},
+        {"HELLO WORLD", "Hello World"},
+        {"1234", "1234"},
+        {"1234", "1234"},
+        {"", ""},
+        {"élève très-intelligent", "Élève Très-intelligent"},
+        {"mañana-por_la_tarde!", "Mañana-por_la_tarde!"},
+        {"добро-пожаловать.тест", "Добро-пожаловать.тест"},
+        {"çalışkan öğrenci@üniversite.tr", "Çalışkan Öğrenci@üniversite.tr"},
+        {"emoji😊test🚀case", "Emoji😊test🚀case"},
+        {"тест@пример.рф", "Тест@пример.рф"},
+        {"BİLGİ", "Bi̇lgi̇"},
+        {"\u0130\u0130", "\u0130\u0069\u0307"},
+        {"İstanbul", "İstanbul"}};
+  }
+
+  static std::vector<std::pair<std::string, std::string>>
+  getInitcapAsciiSparkTestData() {
+    return {
+        {"abcdefg", "Abcdefg"},
+        {" abcdefg", " Abcdefg"},
+        {" abc defg", " Abc Defg"},
+        {"ABCDEFG", "Abcdefg"},
+        {"a B c D e F g", "A B C D E F G"},
+        {"hello world", "Hello World"},
+        {"HELLO WORLD", "Hello World"},
+        {"1234", "1234"},
+        {"", ""},
+        {"urna.Ut@egetdictumplacerat.edu", "Urna.ut@egetdictumplacerat.edu"},
+        {"nibh.enim@egestas.ca", "Nibh.enim@egestas.ca"},
+        {"in@Donecat.ca", "In@donecat.ca"},
+        {"sodales@blanditviverraDonec.ca", "Sodales@blanditviverradonec.ca"},
+        {"sociis.natoque.penatibus@vitae.org",
+         "Sociis.natoque.penatibus@vitae.org"},
+        {"john_doe-123@example-site.com", "John_doe-123@example-site.com"},
+        {"MIXED.case-EMAIL_42@domain.NET", "Mixed.case-email_42@domain.net"},
+        {"...weird..case@@", "...weird..case@@"},
+        {"user-name+filter@sub.mail.org", "User-name+filter@sub.mail.org"},
+        {"CAPS_LOCK@DOMAIN.COM", "Caps_lock@domain.com"},
+        {"__init__.py@example.dev", "__init__.py@example.dev"}};
+  }
 };
 
 TEST_F(StringImplTest, upperAscii) {
@@ -889,4 +986,35 @@ TEST_F(StringImplTest, isAscii) {
   memcpy(&s[0], alpha, strlen(alpha));
   ASSERT_FALSE(isAscii(s.data(), strlen(alpha)));
   ASSERT_FALSE(isAscii(s.data(), s.size()));
+}
+
+TEST_F(StringImplTest, initcapUnicodePresto) {
+  for (const auto& [input, expected] : getInitcapUnicodePrestoTestData()) {
+    std::string output;
+    initcap<false, false>(output, input);
+    ASSERT_EQ(output, expected);
+  }
+}
+
+TEST_F(StringImplTest, initcapAsciiPresto) {
+  for (const auto& [input, expected] : getInitcapAsciiPrestoTestData()) {
+    std::string output;
+    initcap<false, true>(output, input);
+    ASSERT_EQ(output, expected);
+  }
+}
+TEST_F(StringImplTest, initcapUnicodeSpark) {
+  for (const auto& [input, expected] : getInitcapUnicodeSparkTestData()) {
+    std::string output;
+    initcap<true, false>(output, input);
+    ASSERT_EQ(output, expected);
+  }
+}
+
+TEST_F(StringImplTest, initcapAsciiSpark) {
+  for (const auto& [input, expected] : getInitcapAsciiSparkTestData()) {
+    std::string output;
+    initcap<true, true>(output, input);
+    ASSERT_EQ(output, expected);
+  }
 }
