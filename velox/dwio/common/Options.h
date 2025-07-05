@@ -72,7 +72,27 @@ enum class SerDeSeparator {
 
 class SerDeOptions {
  public:
+  /// The following members control how data is separated TEXT file:
+  ///
+  /// - 'separators': An array of separator characters used to delimit columns
+  ///   and nested data.
+  ///     - 'separators[0]' separates top-level columns.
+  ///     - 'separators[depth_]' separates nested ComplexType columns.
+  /// - 'newLine': The character used to separate rows in the file.
+  ///
+  /// Suppose we have a schema: ROW(MAP(VARCHAR(), ARRAY(BIGINT())))
+  /// With the following configuration:
+  ///   - separators = [',', ':', ';']
+  ///   - newLine = '\n'
+  ///   - nullString = "NULL"
+  ///
+  /// A sample text file would look like this:
+  /// key1:varchar1;bigint2,bigint3\n
+  /// key2:varchar4;bigint5,NULL\n
   std::array<uint8_t, 8> separators;
+  uint8_t newLine;
+
+  /// Null values are represented by 'nullString'
   std::string nullString;
   bool lastColumnTakesRest;
   uint8_t escapeChar;
@@ -88,11 +108,13 @@ class SerDeOptions {
       uint8_t collectionDelim = '\2',
       uint8_t mapKeyDelim = '\3',
       uint8_t escape = '\\',
-      bool isEscapedFlag = false)
+      bool isEscapedFlag = false,
+      uint8_t newLine = '\n')
       : separators{{fieldDelim, collectionDelim, mapKeyDelim, 4, 5, 6, 7, 8}},
         nullString("\\N"),
         lastColumnTakesRest(false),
         escapeChar(escape),
+        newLine(newLine),
         isEscaped(isEscapedFlag) {}
   ~SerDeOptions() = default;
 };
