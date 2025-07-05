@@ -57,7 +57,7 @@ class TextReaderTest : public testing::Test,
   std::shared_ptr<LocalReadFile> readFile_;
 };
 
-TEST_F(TextReaderTest, DISABLED_basic) {
+TEST_F(TextReaderTest, basic) {
   auto expected = makeRowVector({
       makeFlatVector<std::string>(
           {"FOO",
@@ -674,7 +674,7 @@ TEST_F(TextReaderTest, DISABLED_compressedProjectNone) {
   ASSERT_EQ(rowReader->next(10, result), 0);
 }
 
-TEST_F(TextReaderTest, DISABLED_compressedFilter) {
+TEST_F(TextReaderTest, compressedFilter) {
   auto type = ROW(
       {{"col_string", VARCHAR()},
        {"col_int", INTEGER()},
@@ -807,7 +807,7 @@ TEST_F(TextReaderTest, DISABLED_shrinkBatch) {
   ASSERT_EQ(rowReader->next(4, result), 0);
 }
 
-TEST_F(TextReaderTest, DISABLED_emptyFile) {
+TEST_F(TextReaderTest, emptyFile) {
   auto type = ROW({
       {"transaction_id", VARCHAR()},
       {"serial_number", VARCHAR()},
