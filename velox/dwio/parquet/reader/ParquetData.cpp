@@ -178,7 +178,8 @@ void ParquetData::enqueueRowGroup(
     // "update skip pages:" << rowRanges.toString() << std::endl;
     pageIndices_[index]->updateSkippedPages(rowRanges);
     for (int i = 0; i < pageIndices_[index]->numPages(); ++i) {
-      if (pageIndices_[index]->isPageSkipped(i))
+      if (pageIndices_[index]->isPageSkipped(i)) {
+      }
       // std::cout <<"row group " << index << " page " << i << " is skipped"<<
       // std::endl;
     }
