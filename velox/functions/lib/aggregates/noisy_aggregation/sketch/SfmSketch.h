@@ -18,7 +18,9 @@
 
 #include <cstdint>
 #include "folly/hash/MurmurHash.h"
+#include "velox/common/base/BitUtil.h"
 #include "velox/common/memory/HashStringAllocator.h"
+#include "velox/functions/lib/aggregates/noisy_aggregation/sketch/SecureRandomizationStrategy.h"
 
 namespace facebook::velox::functions::aggregate {
 
@@ -26,12 +28,12 @@ namespace facebook::velox::functions::aggregate {
 /// <a href="https://arxiv.org/pdf/2302.02056.pdf">Sketch-Flip-Merge: Mergeable
 /// Sketches for Private Distinct Counting</a>.
 class SfmSketch {
+ public:
   static constexpr double kNonPrivateEpsilon =
       std::numeric_limits<double>::infinity();
   static constexpr int32_t kMaxIteration = 1000;
   static constexpr uint32_t kMaxIndexBitLength = 16;
 
- public:
   // Constructor to create a non-private sketch.
   SfmSketch(HashStringAllocator* allocator);
 
@@ -60,6 +62,13 @@ class SfmSketch {
   // 'bucketIndex' and 'zeros' position.
   void addIndexAndZeros(uint32_t bucketIndex, uint32_t zeros);
 
+  // Calculate the RandomizedResponseProbabilities for merged sketches.
+  // For math details, see Theorem 4.8,
+  // <a>href="https://arxiv.org/pdf/2302.02056.pdf">arXiv:2302.02056</a>.
+  static double mergeRandomizedResponseProbabilities(double p1, double p2) {
+    return (p1 + p2 - 3 * p1 * p2) / (1 - 2 * p1 * p2);
+  }
+
   // Compute the bit index with the given hash and indexBitLength.
   static uint32_t computeIndex(uint64_t hash, uint32_t indexBitLength);
 
@@ -71,6 +80,92 @@ class SfmSketch {
 
   // Calculate the randomized response probability given epsilon.
   static double calculateRandomizedResponseProbability(double epsilon);
+
+  // Merge another sketch into the current sketch.
+  void mergeWith(const SfmSketch& other);
+
+  // Merge another sketch into the current sketch with a randomization strategy.
+  template <typename RandomizationStrategy>
+  void mergeWith(
+      const SfmSketch& other,
+      RandomizationStrategy randomizationStrategy) {
+    VELOX_CHECK_EQ(
+        precision_,
+        other.precision_,
+        "Cannot merge two SFM sketches with different precision: {} vs. {}",
+        precision_,
+        other.precision_);
+    VELOX_CHECK_EQ(
+        indexBitLength_,
+        other.indexBitLength_,
+        "Cannot merge two SFM sketches with different indexBitLength: {} vs. {}",
+        indexBitLength_,
+        other.indexBitLength_);
+
+    uint64_t* target = reinterpret_cast<uint64_t*>(bits_.data());
+    const uint64_t* source =
+        reinterpret_cast<const uint64_t*>(other.bits_.data());
+
+    // If neither sketch is private, we just take the OR of the sketches.
+    if (!privacyEnabled() && !other.privacyEnabled()) {
+      velox::bits::orBits(
+          target, source, 0, static_cast<int32_t>(getNumberOfBits()));
+    } else {
+      // If either sketch is private, we combine using a randomized merge
+      double p1 = randomizedResponseProbability_;
+      double p2 = other.randomizedResponseProbability_;
+      double p = mergeRandomizedResponseProbabilities(p1, p2);
+      double normalizer = (1 - 2 * p) / ((1 - 2 * p1) * (1 - 2 * p2));
+
+      for (uint32_t i = 0; i < getNumberOfBits(); i++) {
+        double bit1 = velox::bits::isBitSet(target, i) ? 1.0 : 0.0;
+        double bit2 = velox::bits::isBitSet(source, i) ? 1.0 : 0.0;
+        double x = 1 - 2 * p - normalizer * (1 - p1 - bit1) * (1 - p2 - bit2);
+        double probability = p + normalizer * x;
+        probability = std::min(1.0, std::max(0.0, probability));
+        velox::bits::setBit(
+            target, i, randomizationStrategy.nextBoolean(probability));
+      }
+    }
+
+    randomizedResponseProbability_ = mergeRandomizedResponseProbabilities(
+        randomizedResponseProbability_, other.randomizedResponseProbability_);
+  }
+
+  // Make a non-private sketch private.
+  void enablePrivacy(double epsilon);
+
+  // Get a default randomization strategy.
+  static SecureRandomizationStrategy getDefaultRandomizationStrategy() {
+    return SecureRandomizationStrategy();
+  }
+
+  // Make a non-private sketch private with a randomization strategy.
+  template <typename RandomizationStrategy>
+  void enablePrivacy(
+      double epsilon,
+      RandomizationStrategy randomizationStrategy) {
+    VELOX_CHECK_NOT_NULL(
+        &randomizationStrategy, "randomizationStrategy can't be null.");
+    VELOX_CHECK(!privacyEnabled(), "privacy is already enabled.");
+    validateEpsilon(epsilon);
+    randomizedResponseProbability_ =
+        calculateRandomizedResponseProbability(epsilon);
+
+    // Toggle each bit with a securely generated probability.
+    for (uint32_t i = 0; i < getNumberOfBits(); ++i) {
+      if (randomizationStrategy.nextBoolean(randomizedResponseProbability_)) {
+        velox::bits::negateBit(bits_.data(), static_cast<uint64_t>(i));
+      }
+    }
+  }
+
+  // Get the number of bits that are set to 1.
+  int32_t countBits() const;
+
+  // Estimate the cardinality of the sketch via maximum psuedolikelihood
+  // (Newton's method).
+  uint64_t cardinality() const;
 
   // Probability of a 1-bit remaining a 1-bit under randomized response.
   double getOnProbability() const {
@@ -103,11 +198,26 @@ class SfmSketch {
   static void validatePrefixLength(uint32_t indexBitLength);
   static void validateRandomizedResponseProbability(double p);
 
+  friend class SfmSketchTest;
+  // Private getter to get the bitset and modify it. Only used in unit tests.
+  std::vector<int8_t, facebook::velox::StlAllocator<int8_t>>& getBitSet() {
+    return bits_;
+  }
+
+  // Four helper functions to estimate the cardinality of the sketch using
+  // Newton's method.
+  double logLikelihoodFirstDerivative(double n) const;
+  double logLikelihoodTermFirstDerivative(uint32_t level, bool on, double n)
+      const;
+  double logLikelihoodSecondDerivative(double n) const;
+  double logLikelihoodTermSecondDerivative(uint32_t level, bool on, double n)
+      const;
+
   // Probability of observing a run of zeros of length level in any single
   // bucket
   double observationProbability(uint32_t level) const;
 
-  // Flip the bit at given bucketIndex and zeros position.
+  // Set the bit at given bucketIndex and zeros position.
   void setBitTrue(uint32_t bucketIndex, uint32_t zeros);
 
   // Number of bits to represent the index of a bucket.
