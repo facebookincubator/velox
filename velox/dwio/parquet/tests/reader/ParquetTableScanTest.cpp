@@ -392,51 +392,64 @@ TEST_F(ParquetTableScanTest, basic) {
 TEST_F(ParquetTableScanTest, columnIndex) {
   loadData(
       getExampleFilePath("column_index.parquet"),
-      ROW({"_1", "_2"}, {BIGINT(), DOUBLE()}),
+      ROW({"_1", "_5"}, {BIGINT(), BIGINT()}),
       makeRowVector(
-          {"_1", "_2"},
+          {"_1", "_5"},
           {
-              makeFlatVector<int64_t>(20, [](auto row) { return row; }),
-              makeFlatVector<double>(20, [](auto row) { return row; }),
+              makeFlatVector<int64_t>(2000, [](auto row) { return row; }),
+              makeFlatVector<int64_t>(2000, [](auto row) { return row; }),
           }));
-
-  // Plain select.
-  // assertSelect({"a"}, "SELECT a FROM tmp");
-  // assertSelect({"b"}, "SELECT b FROM tmp");
-  // assertSelect({"a", "b"}, "SELECT a, b FROM tmp");
-  // assertSelect({"b", "a"}, "SELECT b, a FROM tmp");
 
   // With filters.
   assertSelectWithFilter(
       {"_1"}, {"_1 < 20"}, "", "SELECT _1 FROM tmp WHERE _1 < 20");
-  // assertSelectWithFilter(
-  //     {"_1", "_2"}, {"_1 < 20"}, "", "SELECT _1, _2 FROM tmp WHERE _1 < 20");
-  // assertSelectWithFilter(
-  //     {"_2", "_1"}, {"a < 20"}, "", "SELECT _2, _1 FROM tmp WHERE _1 < 20");
-  /*
+  assertSelectWithFilter(
+      {"_1"}, {"_1 > 300"}, "", "SELECT _1 FROM tmp WHERE _1 > 300");
+  assertSelectWithFilter(
+      {"_1", "_5"}, {"_1 < 20"}, "", "SELECT _1, _5 FROM tmp WHERE _1 < 20");
+  assertSelectWithFilter(
+      {"_5", "_1"}, {"_1 < 100"}, "", "SELECT _5, _1 FROM tmp WHERE _1 < 100");
+  assertSelectWithFilter(
+      {"_1", "_5"},
+      {"_1 > 20", "_5 > 300"},
+      "",
+      "SELECT _1, _5 FROM tmp WHERE _1 > 20 and _5 > 300");
+  assertSelectWithFilter(
+      {"_1", "_5"},
+      {"_1 < 300", "_5 < 600"},
+      "",
+      "SELECT _1, _5 FROM tmp WHERE _1 < 300 and _5 < 600");
+  assertSelectWithFilter(
+      {"_1", "_5"},
+      {"_1 > 200", "_5 < 500"},
+      "",
+      "SELECT _1, _5 FROM tmp WHERE _1 > 200 and _5 < 500");
 
-    // With filter and aggregation.
-    assertSelectWithFilterAndAgg(
-        {"a"}, {"a < 3"}, {"sum(a)"}, {}, "SELECT sum(a) FROM tmp WHERE a < 3");
-    assertSelectWithFilterAndAgg(
-        {"a", "b"},
-        {"a < 3"},
-        {"sum(b)"},
-        {},
-        "SELECT sum(b) FROM tmp WHERE a < 3");
-    assertSelectWithFilterAndAgg(
-        {"a", "b"},
-        {"a < 3"},
-        {"min(a)", "max(b)"},
-        {},
-        "SELECT min(a), max(b) FROM tmp WHERE a < 3");
-    assertSelectWithFilterAndAgg(
-        {"b", "a"},
-        {"a < 3"},
-        {"max(b)"},
-        {"a"},
-        "SELECT max(b), a FROM tmp WHERE a < 3 GROUP BY a");
-  */
+  // With filter and aggregation.
+  assertSelectWithFilterAndAgg(
+      {"_1"},
+      {"_1 < 30"},
+      {"sum(_1)"},
+      {},
+      "SELECT sum(_1) FROM tmp WHERE _1 < 30");
+  assertSelectWithFilterAndAgg(
+      {"_1", "_5"},
+      {"_1 > 200"},
+      {"sum(_5)"},
+      {},
+      "SELECT sum(_5) FROM tmp WHERE _1 > 200");
+  assertSelectWithFilterAndAgg(
+      {"_1", "_5"},
+      {"_1 < 700"},
+      {"min(_1)", "max(_5)"},
+      {},
+      "SELECT min(_1), max(_5) FROM tmp WHERE _1 < 700");
+  assertSelectWithFilterAndAgg(
+      {"_5", "_1"},
+      {"_1 < 3"},
+      {"max(_5)"},
+      {"_1"},
+      "SELECT max(_5), _1 FROM tmp WHERE _1 < 3 GROUP BY _1");
 }
 
 TEST_F(ParquetTableScanTest, lazy) {
