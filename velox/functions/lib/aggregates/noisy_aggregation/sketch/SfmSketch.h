@@ -167,6 +167,15 @@ class SfmSketch {
   // (Newton's method).
   uint64_t cardinality() const;
 
+  // Size of the sketch in bytes
+  size_t serializedSize() const;
+
+  // Serialize the sketch into a char array.
+  void serialize(char* out) const;
+
+  // Deserialize the sketch from a char array.
+  static SfmSketch deserialize(const char* in, HashStringAllocator* allocator);
+
   // Probability of a 1-bit remaining a 1-bit under randomized response.
   double getOnProbability() const {
     return 1 - randomizedResponseProbability_;
@@ -203,6 +212,13 @@ class SfmSketch {
   std::vector<int8_t, facebook::velox::StlAllocator<int8_t>>& getBitSet() {
     return bits_;
   }
+
+  // Return the size of the bitset in bytes after droping the trailing zeros.
+  size_t compactBitSize() const;
+
+  // Drop the trailing zeros in the bitset and return a compact vector of bits.
+  const std::vector<int8_t, facebook::velox::StlAllocator<int8_t>>
+  toCompactIntVector() const;
 
   // Four helper functions to estimate the cardinality of the sketch using
   // Newton's method.

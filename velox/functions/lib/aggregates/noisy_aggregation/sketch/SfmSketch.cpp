@@ -17,10 +17,12 @@
 #include "velox/functions/lib/aggregates/noisy_aggregation/sketch/SfmSketch.h"
 #include <cmath>
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/base/IOUtils.h"
 #include "velox/common/memory/HashStringAllocator.h"
 #include "velox/functions/lib/aggregates/noisy_aggregation/sketch/MersenneTwisterRandomizationStrategy.h"
 
 namespace facebook::velox::functions::aggregate {
+const int8_t kFormatTag = 7;
 
 using Allocator = facebook::velox::StlAllocator<int8_t>;
 
@@ -143,6 +145,74 @@ uint64_t SfmSketch::cardinality() const {
   return static_cast<uint64_t>(std::round(clampedGuess));
 }
 
+size_t SfmSketch::serializedSize() const {
+  // Java-compatible format: FORMAT_TAG + indexBitLength + precision +
+  // randomizedResponseProbability + bitsetByteLength + bitset_data
+  return sizeof(int8_t) + sizeof(uint32_t) + sizeof(uint32_t) + sizeof(double) +
+      sizeof(uint32_t) + compactBitSize();
+}
+
+void SfmSketch::serialize(char* out) const {
+  common::OutputByteStream stream(out);
+  stream.appendOne(kFormatTag);
+  stream.appendOne(indexBitLength_);
+  stream.appendOne(precision_);
+  stream.appendOne(randomizedResponseProbability_);
+
+  // Get bitset bytes in Java-compatible format (truncated trailing zeros)
+  auto bitSetBytes = toCompactIntVector();
+  stream.appendOne(static_cast<uint32_t>(bitSetBytes.size()));
+
+  // Only append data if the vector is not empty to avoid null pointer issues
+  if (!bitSetBytes.empty()) {
+    stream.append(
+        reinterpret_cast<const char*>(bitSetBytes.data()),
+        static_cast<int32_t>(bitSetBytes.size()));
+  }
+}
+
+SfmSketch SfmSketch::deserialize(
+    const char* in,
+    HashStringAllocator* allocator) {
+  common::InputByteStream stream(in);
+  auto formatTag = stream.read<int8_t>(); // FORMAT_TAG
+  auto indexBitLength = stream.read<uint32_t>();
+  auto precision = stream.read<uint32_t>();
+  auto randomizedResponseProbability = stream.read<double>();
+  auto bitSetBytesLength =
+      stream.read<uint32_t>(); // Java stores bitset byte length
+
+  // Validate format tag
+  VELOX_CHECK_EQ(
+      formatTag,
+      kFormatTag,
+      "Invalid format tag: expected {}, got {}",
+      kFormatTag,
+      formatTag);
+
+  // Validate indexBitLength before calling numberOfBuckets
+  VELOX_CHECK(
+      indexBitLength >= 1 && indexBitLength <= 16,
+      "indexBitLength {} is out of range [1, 16]",
+      indexBitLength);
+
+  // Create the sketch - constructor already sizes bits_ to the expected length
+  SfmSketch sketch(allocator);
+  sketch.setSketchSize(numberOfBuckets(indexBitLength), precision);
+
+  // Set the randomized response probability
+  sketch.randomizedResponseProbability_ = randomizedResponseProbability;
+
+  // Read the serialized bitmap data directly into the sketch's bitset
+  // The sketch's bitset is already the correct size and zero-initialized
+  // We just need to copy the serialized data (which may be truncated)
+  for (uint32_t i = 0; i < bitSetBytesLength && i < sketch.bits_.size(); ++i) {
+    sketch.bits_[i] = stream.read<int8_t>();
+  }
+
+  return sketch;
+}
+
 void SfmSketch::validateEpsilon(double epsilon) {
   VELOX_CHECK(
       epsilon > 0,
@@ -169,6 +239,33 @@ void SfmSketch::validateRandomizedResponseProbability(double p) {
 
 double SfmSketch::observationProbability(uint32_t level) const {
   return std::pow(2.0, -(level + 1.0)) / numberOfBuckets(indexBitLength_);
+}
+
+size_t SfmSketch::compactBitSize() const {
+  // Find the last non-zero byte.
+  const uint64_t* wordBits = reinterpret_cast<const uint64_t*>(bits_.data());
+  int32_t lastSetBit =
+      bits::findLastBit(wordBits, 0, static_cast<int32_t>(getNumberOfBits()));
+
+  if (lastSetBit < 0) {
+    // No bits are set
+    return 0;
+  }
+  return static_cast<size_t>(lastSetBit / 8) + 1;
+}
+
+const std::vector<int8_t, facebook::velox::StlAllocator<int8_t>>
+SfmSketch::toCompactIntVector() const {
+  if (bits_.empty()) {
+    return std::vector<int8_t, Allocator>(Allocator(bits_.get_allocator()));
+  }
+
+  auto compactBitSize = this->compactBitSize();
+
+  return std::vector<int8_t, Allocator>(
+      bits_.begin(),
+      bits_.begin() + static_cast<int64_t>(compactBitSize),
+      Allocator(bits_.get_allocator()));
 }
 
 double SfmSketch::logLikelihoodFirstDerivative(double n) const {

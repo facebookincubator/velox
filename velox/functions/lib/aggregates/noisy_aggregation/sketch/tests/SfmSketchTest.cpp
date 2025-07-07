@@ -16,6 +16,7 @@
 
 #include "velox/functions/lib/aggregates/noisy_aggregation/sketch/SfmSketch.h"
 #include "gtest/gtest.h"
+#include "velox/common/encode/Base64.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/functions/lib/aggregates/noisy_aggregation/sketch/RandomizationStrategy.h"
 
@@ -460,6 +461,68 @@ TEST_F(SfmSketchTest, enablePrivacyTest) {
 
   // Cardinality should remain approximately the same
   ASSERT_NEAR(cardinalityAfter, cardinalityBefore, cardinalityBefore * 0.1);
+}
+
+TEST_F(SfmSketchTest, serializationRoundTripTest) {
+  SfmSketch sketch = SfmSketch(&allocator_);
+  sketch.setSketchSize(numberOfBuckets_, precision_);
+  for (int32_t i = 0; i < 100000; i++) {
+    sketch.add(i);
+  }
+  sketch.enablePrivacy(4, TestingSeededRandomizationStrategy(1));
+  auto originalBitMap = getBitSet(sketch);
+  auto originalIndexBitLength = sketch.getIndexBitLength();
+  auto originalPrecision = sketch.getPrecision();
+  auto originalRandomizedResponseProbability =
+      sketch.getRandomizedResponseProbability();
+
+  // Allocate buffer for serialization
+  size_t serializedSize = sketch.serializedSize();
+  std::vector<char> buffer(serializedSize);
+  char* out = buffer.data();
+
+  sketch.serialize(out);
+  auto deserialized = SfmSketch::deserialize(out, &allocator_);
+
+  // Test that the deserialized sketch is the same as the original
+  ASSERT_EQ(deserialized.getIndexBitLength(), originalIndexBitLength);
+  ASSERT_EQ(deserialized.getPrecision(), originalPrecision);
+  ASSERT_EQ(
+      deserialized.getRandomizedResponseProbability(),
+      originalRandomizedResponseProbability);
+
+  // Test that the bitmaps are the same
+  ASSERT_EQ(deserialized.getNumberOfBits(), originalBitMap.size() * 8);
+  for (int i = 0; i < deserialized.getNumberOfBits(); i++) {
+    ASSERT_EQ(
+        bits::isBitSet(getBitSet(deserialized).data(), i),
+        bits::isBitSet(originalBitMap.data(), i));
+  }
+}
+
+TEST_F(SfmSketchTest, javaSerializationCompatibilityTest) {
+  // This test is to ensure that the C++ serialization format is compatible with
+  // the Java serialization format. The Java serialization format is used in
+  // production, so we need to ensure that the C++ implementation can read and
+  // write the same format.
+  // The Java serialization format is as follows:
+  // 1. 1 bytes for the FORMAT_TAG
+  // 2. 4 bytes for the indexBitLength
+  // 3. 4 bytes for the precision
+  // 4. 8 bytes for the randomized response probability
+  // 5. 4 bytes for the actual number of bits in the serialized bitmap
+  // 6. The bitmap data
+
+  // The string is from a Java sketch serialized with the Java SfmSketch
+  std::string base64_data =
+      "BwgAAAAQAAAAw8JDHvpqkj//AQAA77//////////////v///////////3////7//////////////3/////////////////////////////////v//+/+ff/////////f///v//+//////////////////////7//////3////v//////3////v/f/////////3////v///////v/f///////////////////////////////f///////v/////////f///////7////+////9///////////////v//////////////////////////////////////f////////////3//////////////7////+////////////////////3///////////////////////9///33///v///3////f//f//9//+//////r/3//////9//Dfz/e/++vvfV3W//qtq33z//a7///+/m3/fz7/1///1v5hmo/ayTcv3l3VvXmnMr+t/B72YloTNgmBy7+IKv+mIBmaBwSO4GwxBMCwWChIoYSVFTAAIIhLylIEjmJLamBAAooMYLQgikgBAUACEAQYJUAmxMGAhDAoBJGgRgAkBCCCAABAAkIIAAAAAEQAYEECAQYACgAACEAAQEBAACCAgAAAAQgAAAAAKgAoERABAMAAQbABAAgADEAAQIABQ==";
+
+  // Decode base64 to binary data
+  std::string decoded = encoding::Base64::decode(base64_data);
+
+  auto sketch = SfmSketch::deserialize(decoded.c_str(), &allocator_);
+  // Test that the deserialized sketch is the same as the original
+  ASSERT_EQ(sketch.cardinality(), 927499);
 }
 
 } // namespace facebook::velox::functions::aggregate
