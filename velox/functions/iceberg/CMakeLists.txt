@@ -15,7 +15,7 @@
 velox_add_library(velox_functions_iceberg_util Murmur3Hash32.cpp)
 
 velox_link_libraries(velox_functions_iceberg_util velox_common_base
-                     velox_functions_util Folly::folly)
+                     velox_functions_util)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
