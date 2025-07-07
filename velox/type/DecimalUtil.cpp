@@ -269,7 +269,7 @@ Status parseHugeInt(const DecimalComponents& decimalComponents, int128_t& out) {
 
 Status DecimalUtil::parseStringToDecimalComponents(
     const StringView& s,
-    int toScale,
+    int32_t toScale,
     int32_t& parsedPrecision,
     int32_t& parsedScale,
     int128_t& out) {

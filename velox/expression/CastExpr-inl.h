@@ -354,7 +354,7 @@ void CastExpr::applyVarcharToDecimalCastKernel(
 
   rows.applyToSelected([&](auto row) {
     T decimalValue;
-    const auto status = DecimalUtil::toDecimalValue<T>(
+    const auto status = DecimalUtil::castFromString<T>(
         hooks_->removeWhiteSpaces(sourceVector->valueAt(row)),
         toPrecisionScale.first,
         toPrecisionScale.second,

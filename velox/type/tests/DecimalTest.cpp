@@ -141,7 +141,7 @@ void testCastFromString(
         inputs[i],
         expectedUnscaleValues[i]));
     T decimalValue;
-    auto status = DecimalUtil::toDecimalValue<T>(
+    auto status = DecimalUtil::castFromString<T>(
         StringView(inputs[i]), toPrecision, toScale, decimalValue);
     EXPECT_TRUE(status.ok());
     EXPECT_EQ(expectedUnscaleValues[i], decimalValue);
@@ -155,7 +155,7 @@ void testCastFromString(
     int toScale,
     const std::string& expectedError) {
   T decimalValue;
-  auto status = DecimalUtil::toDecimalValue<T>(
+  auto status = DecimalUtil::castFromString<T>(
       StringView(input), toPrecision, toScale, decimalValue);
   EXPECT_EQ(status, Status::UserError(expectedError));
 }
