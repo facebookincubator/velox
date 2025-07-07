@@ -181,6 +181,11 @@ class ArithmeticTest : public functions::test::FunctionBaseTest {
     assertExpression("c0 * c1", op1, doubleOp, expected);
     assertExpression("c1 * c0", op1, doubleOp, expected);
   }
+
+  template <typename T>
+  std::optional<T> evaluateAbs(const T& input) {
+    return evaluateOnce<T>("abs(c0)", std::make_optional<T>(input));
+  }
 };
 
 TEST_F(ArithmeticTest, plus) {
@@ -1040,6 +1045,36 @@ TEST_F(ArithmeticTest, wilsonIntervalUpper) {
   VELOX_ASSERT_THROW(
       wilsonIntervalUpper(1, 3, -kInf), "z-score must not be negative");
   EXPECT_DOUBLE_EQ(wilsonIntervalUpper(1, 3, kInf).value(), 1.0);
+}
+
+TEST_F(ArithmeticTest, abs) {
+  ASSERT_EQ(
+      evaluateAbs(std::numeric_limits<int8_t>::min() + 1),
+      std::numeric_limits<int8_t>::max());
+  VELOX_ASSERT_THROW(
+      evaluateAbs(std::numeric_limits<int8_t>::min()),
+      "Out of range integer input to abs: -128.");
+
+  ASSERT_EQ(
+      evaluateAbs(std::numeric_limits<int16_t>::min() + 1),
+      std::numeric_limits<int16_t>::max());
+  VELOX_ASSERT_THROW(
+      evaluateAbs(std::numeric_limits<int16_t>::min()),
+      "Out of range integer input to abs: -32768.");
+
+  ASSERT_EQ(
+      evaluateAbs(std::numeric_limits<int32_t>::min() + 1),
+      std::numeric_limits<int32_t>::max());
+  VELOX_ASSERT_THROW(
+      evaluateAbs(std::numeric_limits<int32_t>::min()),
+      "Out of range integer input to abs: -2147483648.");
+
+  ASSERT_EQ(
+      evaluateAbs(std::numeric_limits<int64_t>::min() + 1),
+      std::numeric_limits<int64_t>::max());
+  VELOX_ASSERT_THROW(
+      evaluateAbs(std::numeric_limits<int64_t>::min()),
+      "Out of range integer input to abs: -9223372036854775808.");
 }
 
 } // namespace

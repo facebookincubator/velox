@@ -156,12 +156,6 @@ T negate(const T& arg) {
 }
 
 template <typename T>
-T abs(const T& arg) {
-  T results = std::abs(arg);
-  return results;
-}
-
-template <typename T>
 T floor(const T& arg) {
   T results = std::floor(arg);
   return results;

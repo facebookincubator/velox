@@ -218,8 +218,14 @@ struct FloorFunction {
 template <typename TExec>
 struct AbsFunction {
   template <typename T>
-  FOLLY_ALWAYS_INLINE void call(T& result, const T& a) {
-    result = abs(a);
+  FOLLY_ALWAYS_INLINE Status call(T& result, const T& a) {
+    if constexpr (std::is_integral_v<T>) {
+      if (a == std::numeric_limits<T>::min()) {
+        return Status::UserError("Out of range integer input to abs: {}.", a);
+      }
+    }
+    result = std::abs(a);
+    return Status::OK();
   }
 };
 
