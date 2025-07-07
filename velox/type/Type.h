@@ -34,6 +34,7 @@
 
 #include "velox/common/base/ClassName.h"
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/base/Hash.h"
 #include "velox/common/serialization/Serializable.h"
 #include "velox/type/HugeInt.h"
 #include "velox/type/StringView.h"
@@ -2264,6 +2265,13 @@ class DeserializedTypeCache {
 };
 
 DeserializedTypeCache& deserializedTypeCache();
+
+template <>
+struct hasher<::facebook::velox::UnknownValue> {
+  uint64_t operator()(::facebook::velox::UnknownValue /* value */) const {
+    return 0;
+  }
+};
 
 } // namespace facebook::velox
 

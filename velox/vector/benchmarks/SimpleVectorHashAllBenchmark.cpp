@@ -65,7 +65,7 @@ void BM_StdVector_hashAll(
     }
     suspender.dismiss();
 
-    folly::hasher<int64_t> hasher;
+    velox::hasher<int64_t> hasher;
     auto hashes = std::make_unique<std::vector<size_t>>();
     hashes->reserve(numRows);
     for (size_t i = 0; i < numRows; ++i) {

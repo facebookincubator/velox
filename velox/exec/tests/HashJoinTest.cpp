@@ -6298,34 +6298,42 @@ DEBUG_ONLY_TEST_F(HashJoinTest, exceededMaxSpillLevel) {
         Operator::ReclaimableSectionGuard guard(hashBuild);
         testingRunArbitration(hashBuild->pool());
       })));
+
+  const int32_t maxLevel = 1;
+  const int32_t partitionBits = 2;
+  const int32_t partitionsPerLevel = 1 << partitionBits;
+  const int32_t nextLevelPartitions = partitionsPerLevel << (maxLevel + 1);
+
   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .numDrivers(1)
       .planNode(plan)
       // Always trigger spilling.
       .injectSpill(false)
-      .maxSpillLevel(0)
+      .maxSpillLevel(maxLevel)
       .spillDirectory(tempDirectory->getPath())
       .referenceQuery(
           "SELECT t_k1, t_k2, t_v1, u_k1, u_k2, u_v1 FROM t, u WHERE t.t_k1 = u.u_k1")
-      .config(core::QueryConfig::kSpillStartPartitionBit, "29")
+      .config(
+          core::QueryConfig::kSpillNumPartitionBits,
+          std::to_string(partitionBits))
       .verifier([&](const std::shared_ptr<Task>& task, bool /*unused*/) {
         auto opStats = toOperatorStats(task->taskStats());
-        ASSERT_EQ(
+        EXPECT_EQ(
             opStats.at("HashProbe")
                 .runtimeStats[Operator::kExceededMaxSpillLevel]
                 .sum,
-            8);
-        ASSERT_EQ(
+            nextLevelPartitions);
+        EXPECT_EQ(
             opStats.at("HashProbe")
                 .runtimeStats[Operator::kExceededMaxSpillLevel]
                 .count,
             1);
-        ASSERT_EQ(
+        EXPECT_EQ(
             opStats.at("HashBuild")
                 .runtimeStats[Operator::kExceededMaxSpillLevel]
                 .sum,
-            8);
-        ASSERT_EQ(
+            nextLevelPartitions);
+        EXPECT_EQ(
             opStats.at("HashBuild")
                 .runtimeStats[Operator::kExceededMaxSpillLevel]
                 .count,
@@ -6334,7 +6342,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, exceededMaxSpillLevel) {
       .run();
   ASSERT_EQ(
       common::globalSpillStats().spillMaxLevelExceededCount,
-      exceededMaxSpillLevelCount + 16);
+      exceededMaxSpillLevelCount + nextLevelPartitions * 2);
 }
 
 TEST_F(HashJoinTest, maxSpillBytes) {
@@ -6866,6 +6874,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, arbitrationTriggeredByEnsureJoinTableFit) {
   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .numDrivers(numDrivers_)
       .injectSpill(false)
+      .maxSpillLevel(2)
       .spillDirectory(tempDirectory->getPath())
       .keyTypes({BIGINT()})
       .probeVectors(1600, 5)
@@ -7459,7 +7468,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, hashProbeSpillExceedLimit) {
         .probeVectors(std::move(probeVectors))
         .buildKeys({"u_k1"})
         .buildVectors(std::move(buildVectors))
-        .config(core::QueryConfig::kMaxSpillLevel, "1")
+        .maxSpillLevel(1)
         .config(core::QueryConfig::kSpillNumPartitionBits, "1")
         .config(core::QueryConfig::kJoinSpillEnabled, "true")
         // Set small write buffer size to have small vectors to read from
