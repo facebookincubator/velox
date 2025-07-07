@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/functions/iceberg/util/Murmur3Hash32.h"
+#include "velox/functions/iceberg/Murmur3Hash32.h"
 #include "velox/common/base/BitUtil.h"
 
 namespace facebook::velox::functions::iceberg {
