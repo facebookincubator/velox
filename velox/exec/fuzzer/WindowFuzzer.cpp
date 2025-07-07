@@ -748,6 +748,8 @@ bool WindowFuzzer::verifyWindow(
                   .capturePlanNodeId(windowNodeId)
                   .planNode();
 
+  LOG(INFO) << "Testing plan: " << plan->toString(true, true);
+
   if (persistAndRunOnce_) {
     persistReproInfo({{plan, {}}}, reproPersistPath_);
   }
