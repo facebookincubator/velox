@@ -19,6 +19,7 @@
 
 #include "velox/common/base/BitUtil.h"
 #include "velox/expression/DecodedArgs.h"
+#include "velox/functions/lib/Hash.h"
 #include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::functions::sparksql {
@@ -397,7 +398,7 @@ void applyWithType(
 // Signed integer types have been remapped to unsigned types (as in the
 // original) to avoid undefined signed integer overflow and sign extension.
 
-class Murmur3Hash final {
+class Murmur3Hash final : public Murmur3Hash32 {
  public:
   using SeedType = int32_t;
   using ReturnType = int32_t;
@@ -406,19 +407,6 @@ class Murmur3Hash final {
     uint32_t k1 = mixK1(input);
     uint32_t h1 = mixH1(seed, k1);
     return fmix(h1, 4);
-  }
-
-  static uint32_t hashInt64(uint64_t input, uint32_t seed) {
-    uint32_t low = input;
-    uint32_t high = input >> 32;
-
-    uint32_t k1 = mixK1(low);
-    uint32_t h1 = mixH1(seed, k1);
-
-    k1 = mixK1(high);
-    h1 = mixH1(h1, k1);
-
-    return fmix(h1, 8);
   }
 
   // Floating point numbers are hashed as if they are integers, with
