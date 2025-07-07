@@ -18,6 +18,8 @@
 
 #include "velox/common/base/Exceptions.h"
 
+namespace facebook::velox::parquet {
+
 /// Represents a closed interval of row indices [from_, to_].
 ///
 /// RowRange is used to describe a contiguous range of row indices, inclusive of
@@ -30,8 +32,6 @@
 ///
 /// Example:
 ///   RowRange r(10, 20); // Represents rows 10 through 20, inclusive.
-namespace facebook::velox::parquet {
-
 struct RowRange {
   uint64_t from_;
   uint64_t to_;
@@ -241,6 +241,34 @@ class RowRanges {
       }
     }
     return std::nullopt;
+  }
+
+  static std::pair<RowRange, bool> firstSplitByIntersection(
+      const RowRange& r,
+      const RowRanges& rs) {
+    const auto& ranges = rs.getRanges();
+    uint64_t cursor = r.from_;
+    uint64_t end = r.to_;
+
+    for (const auto& valid : ranges) {
+      if (valid.to_ < cursor) {
+        continue; // This valid range is entirely before `r`.
+      }
+      if (valid.from_ > end) {
+        break; // No more overlap possible.
+      }
+
+      if (cursor < valid.from_) {
+        // Non-overlapping prefix before the valid range.
+        return {RowRange(cursor, std::min(valid.from_ - 1, end)), false};
+      }
+
+      // Overlapping segment.
+      return {RowRange(cursor, std::min(valid.to_, end)), true};
+    }
+
+    // No overlap at all.
+    return {RowRange(cursor, end), false};
   }
 
  private:
