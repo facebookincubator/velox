@@ -239,3 +239,125 @@ TEST(RowRangesTest, intersectOneNoOverlap) {
   auto i = rr.intersectOne({6, 9});
   EXPECT_FALSE(i.has_value());
 }
+
+TEST(RowRangesTest, noOverlapBefore) {
+  RowRanges rs;
+  rs.add(RowRange(20, 30));
+
+  auto [chunk, overlap] = RowRanges::firstSplitByIntersection({10, 19}, rs);
+  EXPECT_EQ(chunk.from_, 10);
+  EXPECT_EQ(chunk.to_, 19);
+  EXPECT_FALSE(overlap);
+}
+
+TEST(RowRangesTest, noOverlapAfter) {
+  RowRanges rs;
+  rs.add(RowRange(5, 10));
+
+  auto [chunk, overlap] = RowRanges::firstSplitByIntersection({15, 20}, rs);
+  EXPECT_EQ(chunk.from_, 15);
+  EXPECT_EQ(chunk.to_, 20);
+  EXPECT_FALSE(overlap);
+}
+
+TEST(RowRangesTest, overlapInMiddle) {
+  RowRanges rs;
+  rs.add(RowRange(15, 18));
+
+  auto [chunk, overlap] = RowRanges::firstSplitByIntersection({12, 20}, rs);
+  EXPECT_EQ(chunk.from_, 12);
+  EXPECT_EQ(chunk.to_, 14);
+  EXPECT_FALSE(overlap);
+}
+
+TEST(RowRangesTest, overlapStartInsideValidRange) {
+  RowRanges rs;
+  rs.add(RowRange(10, 20));
+
+  auto [chunk, overlap] = RowRanges::firstSplitByIntersection({15, 25}, rs);
+  EXPECT_EQ(chunk.from_, 15);
+  EXPECT_EQ(chunk.to_, 20);
+  EXPECT_TRUE(overlap);
+}
+
+TEST(RowRangesTest, overlapExact) {
+  RowRanges rs;
+  rs.add(RowRange(10, 20));
+
+  auto [chunk, overlap] = RowRanges::firstSplitByIntersection({10, 20}, rs);
+  EXPECT_EQ(chunk.from_, 10);
+  EXPECT_EQ(chunk.to_, 20);
+  EXPECT_TRUE(overlap);
+}
+
+TEST(RowRangesTest, overlapPartialEnd) {
+  RowRanges rs;
+  rs.add(RowRange(15, 18));
+
+  auto [chunk, overlap] = RowRanges::firstSplitByIntersection({15, 25}, rs);
+  EXPECT_EQ(chunk.from_, 15);
+  EXPECT_EQ(chunk.to_, 18);
+  EXPECT_TRUE(overlap);
+}
+
+TEST(RowRangesTest, emptyRanges) {
+  RowRanges rs;
+
+  auto [chunk, overlap] = RowRanges::firstSplitByIntersection({5, 10}, rs);
+  EXPECT_EQ(chunk.from_, 5);
+  EXPECT_EQ(chunk.to_, 10);
+  EXPECT_FALSE(overlap);
+}
+
+TEST(RowRangesTest, multipleValidRanges) {
+  RowRanges rs;
+  rs.add(RowRange(8, 9));
+  rs.add(RowRange(12, 14));
+  rs.add(RowRange(20, 25));
+
+  auto [chunk, overlap] = RowRanges::firstSplitByIntersection({10, 22}, rs);
+  EXPECT_EQ(chunk.from_, 10);
+  EXPECT_EQ(chunk.to_, 11);
+  EXPECT_FALSE(overlap);
+}
+
+TEST(RowRangesTest, startInsideGap) {
+  RowRanges rs;
+  rs.add(RowRange(5, 9));
+  rs.add(RowRange(15, 20));
+
+  auto [chunk, overlap] = RowRanges::firstSplitByIntersection({12, 18}, rs);
+  EXPECT_EQ(chunk.from_, 12);
+  EXPECT_EQ(chunk.to_, 14);
+  EXPECT_FALSE(overlap);
+}
+
+TEST(RowRangesTest, exactBoundaryNonOverlap) {
+  RowRanges rs;
+  rs.add(RowRange(10, 15));
+
+  auto [chunk, overlap] = RowRanges::firstSplitByIntersection({16, 20}, rs);
+  EXPECT_EQ(chunk.from_, 16);
+  EXPECT_EQ(chunk.to_, 20);
+  EXPECT_FALSE(overlap);
+}
+
+TEST(RowRangesTest, exactBoundaryOverlap) {
+  RowRanges rs;
+  rs.add(RowRange(10, 15));
+
+  auto [chunk, overlap] = RowRanges::firstSplitByIntersection({15, 18}, rs);
+  EXPECT_EQ(chunk.from_, 15);
+  EXPECT_EQ(chunk.to_, 15);
+  EXPECT_TRUE(overlap);
+}
+
+TEST(RowRangesTest, onePointOverlap) {
+  RowRanges rs;
+  rs.add(RowRange(8, 8));
+
+  auto [chunk, overlap] = RowRanges::firstSplitByIntersection({8, 10}, rs);
+  EXPECT_EQ(chunk.from_, 8);
+  EXPECT_EQ(chunk.to_, 8);
+  EXPECT_TRUE(overlap);
+}
