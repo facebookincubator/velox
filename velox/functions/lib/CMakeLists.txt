@@ -31,6 +31,7 @@ velox_add_library(
   ArrayShuffle.cpp
   CheckDuplicateKeys.cpp
   CheckNestedNulls.cpp
+  Hash.cpp
   KllSketch.cpp
   MapConcat.cpp
   Re2Functions.cpp
