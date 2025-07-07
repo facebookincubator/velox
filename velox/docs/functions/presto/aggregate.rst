@@ -809,6 +809,31 @@ Counts, Sums, and Averages
     If provided, random_seed is used to seed the random number generator.
     Otherwise, noise is drawn from a secure random.
 
+SfmSketch Functions
+~~~~~~~~~~~~~~~~~~~
+
+Data Structures
+^^^^^^^^^^^^^^^
+SfmSketch is a sketch for distinct counting, very similar to HyperLogLog.
+This sketch is introduced as the Sketch-Flip-Merge (SFM) summary in the paper
+`Sketch-Flip-Merge: Mergeable Sketches for Private Distinct Counting <https://arxiv.org/pdf/2302.02056.pdf>`_.
+
+The primary differences between SfmSketch and HyperLogLog are that
+ (a) SfmSketch supports differential privacy.
+ (b) HyperLogLog tracks only max observed bucket values, SfmSketch tracks all bucket values observed.
+
+This means that SfmSketch is a larger sketch than HyperLogLog, but offers the ability to store completely
+DP sketches with a fixed, public hash function while maintaining accurate cardinality estimates.
+
+SfmSketch is created in a non-private mode. Privacy must be enabled through the ``enablePrivacy()`` function.
+Once made private, the sketch becomes immutable. Privacy is quantified by the parameter ``epsilon``.
+
+When ``epsilon > 0``, the sketch is epsilon-DP, and bits are randomized to preserve privacy.
+When ``epsilon == kNonPrivateEpsilon``, the sketch is not private, and bits are set deterministically.
+
+The best accuracy comes with ``kNonPrivateEpsilon``. For private epsilons, larger gives more accuracy,
+while smaller gives more privacy.
+
 Limitations
 ~~~~~~~~~~~
 
