@@ -11,15 +11,15 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-add_executable(velox_functions_iceberg_util_test Murmur3Hash32Test.cpp)
+add_executable(velox_functions_iceberg_test Murmur3Hash32Test.cpp)
 
 add_test(
-  NAME velox_functions_iceberg_util_test
-  COMMAND velox_functions_iceberg_util_test
+  NAME velox_functions_iceberg_test
+  COMMAND velox_functions_iceberg_test
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 
 target_link_libraries(
-  velox_functions_iceberg_util_test
+  velox_functions_iceberg_test
   velox_functions_iceberg_util
   GTest::gtest
   GTest::gtest_main

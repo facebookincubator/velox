@@ -19,6 +19,7 @@
 #include "functions/lib/Hash.h"
 
 namespace facebook::velox::functions::iceberg {
+
 /// This implementation should align with Iceberg bucket transform hash
 /// algorithm which uses Guava hash
 /// https://github.com/google/guava/blob/master/guava/src/com/google/common/hash/Murmur3_32HashFunction.java,
@@ -37,4 +38,5 @@ class Murmur3Hash : Murmur3Hash32 {
   /// remaining bytes.
   static int32_t hashBytes(const char* const input, uint32_t len);
 };
+
 } // namespace facebook::velox::functions::iceberg

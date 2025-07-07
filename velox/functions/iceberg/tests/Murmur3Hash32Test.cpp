@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/functions/iceberg/util/Murmur3Hash32.h"
+#include "velox/functions/iceberg/Murmur3Hash32.h"
 
 #include <gtest/gtest.h>
 
