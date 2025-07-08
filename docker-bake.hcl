@@ -93,17 +93,25 @@ target "ubuntu-amd64" {
 }
 
 group "ubuntu-arm64" {
-  # We don't actually want to build ubunt arm image, this is a trick to simplify CI
+  # We don't actually want to build the ubuntu arm image, this is a trick to simplify CI
   # Empty targets don't fail the build.
   targets = []
 }
 
+group "java" {
+  # The main work is in the well cached download steps and the shared base stage,
+  # so these can easily be run on the same node in ci
+  targets = ["spark-server", "presto-java"]
+}
+
 target "spark-server" {
+  target     = "spark-server"
   cache-to   = cache-to-arch("spark-server", "amd64")
   cache-from = cache-from-arch("spark-server", "amd64")
 }
 
 target "presto-java" {
+  target     = "presto-java"
   cache-to   = cache-to-arch("presto-java", "amd64")
   cache-from = cache-from-arch("presto-java", "amd64")
 }
