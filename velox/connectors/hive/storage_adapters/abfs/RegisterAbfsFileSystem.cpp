@@ -14,8 +14,9 @@
  * limitations under the License.
  */
 
-#ifdef VELOX_ENABLE_ABFS
 #include "velox/connectors/hive/storage_adapters/abfs/RegisterAbfsFileSystem.h" // @manual
+
+#ifdef VELOX_ENABLE_ABFS
 #include "velox/common/config/Config.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsConfig.h" // @manual
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsFileSystem.h" // @manual
