@@ -348,3 +348,31 @@ TEST_F(FunctionSignatureBuilderTest, allowVariablesForIntermediateType) {
           .returnType("DECIMAL(a_precision, a_scale)")
           .build());
 }
+
+TEST_F(FunctionSignatureBuilderTest, nonDecimalNumericType) {
+  auto signature = exec::AggregateFunctionSignatureBuilder()
+                       .typeVariable("T")
+                       .returnType("T")
+                       .intermediateType("T")
+                       .argumentType("T")
+                       .build();
+  ASSERT_FALSE(signature->variables().at("T").nonDecimalNumericTypeOnly());
+
+  signature = exec::AggregateFunctionSignatureBuilder()
+                  .nonDecimalNumericTypeVariable("T")
+                  .returnType("T")
+                  .intermediateType("T")
+                  .argumentType("T")
+                  .build();
+  ASSERT_TRUE(signature->variables().at("T").nonDecimalNumericTypeOnly());
+
+  VELOX_ASSERT_THROW(
+      exec::AggregateFunctionSignatureBuilder()
+          .comparableTypeVariable("T")
+          .nonDecimalNumericTypeVariable("T")
+          .returnType("T")
+          .intermediateType("T")
+          .argumentType("T")
+          .build(),
+      "Variable T declared twice");
+}

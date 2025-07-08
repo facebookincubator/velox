@@ -491,20 +491,14 @@ void registerMapUnionSumAggregate(
     const std::string& prefix,
     bool withCompanionFunctions,
     bool overwrite) {
-  const std::vector<std::string> valueTypes = {
-      "tinyint", "smallint", "integer", "bigint", "double", "real"};
-
-  // Add all allowed signatures.
-  std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
-  for (auto valueType : valueTypes) {
-    signatures.push_back(
-        exec::AggregateFunctionSignatureBuilder()
-            .typeVariable("K")
-            .returnType(fmt::format("map(K,{})", valueType))
-            .intermediateType(fmt::format("map(K,{})", valueType))
-            .argumentType(fmt::format("map(K,{})", valueType))
-            .build());
-  }
+  std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures = {
+      exec::AggregateFunctionSignatureBuilder()
+          .comparableTypeVariable("K")
+          .nonDecimalNumericTypeVariable("V")
+          .returnType("map(K,V)")
+          .intermediateType("map(K,V)")
+          .argumentType("map(K,V)")
+          .build()};
 
   auto name = prefix + kMapUnionSum;
   exec::registerAggregateFunction(
