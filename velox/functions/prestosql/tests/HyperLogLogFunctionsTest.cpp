@@ -110,5 +110,79 @@ TEST_F(HyperLogLogFunctionsTest, emptyApproxSet) {
           "cardinality(empty_approx_set(0.1))", makeRowVector(ROW({}), 1)));
 }
 
+TEST_F(HyperLogLogFunctionsTest, mergeHll) {
+  // Create HLLs with different values but same index bit length
+  const int8_t indexBitLength = 12;
+  const int numHlls = 3;
+  const int uniqueElementsPerHll = 10000;
+  const int totalUniqueElements = uniqueElementsPerHll * numHlls;
+  const double errorRate = 0.05;
+
+  SparseHll sparseHll1{&allocator_};
+  for (int i = 0; i < uniqueElementsPerHll; i++) {
+    sparseHll1.insertHash(hashOne(i));
+  }
+  auto serialized1 = serialize(indexBitLength, sparseHll1);
+  SparseHll sparseHll2{&allocator_};
+  for (int i = uniqueElementsPerHll; i < 2 * uniqueElementsPerHll; i++) {
+    sparseHll2.insertHash(hashOne(i));
+  }
+  auto serialized2 = serialize(indexBitLength, sparseHll2);
+  DenseHll denseHll{indexBitLength, &allocator_};
+  for (int i = 2 * uniqueElementsPerHll; i < 3 * uniqueElementsPerHll; i++) {
+    denseHll.insertHash(hashOne(i));
+  }
+  auto serialized3 = serialize(denseHll);
+  auto arrayVector = makeNullableArrayVector<std::string>(
+      {{serialized1, serialized2, serialized3}}, ARRAY(HYPERLOGLOG()));
+  auto cardinalityValue = evaluateOnce<int64_t>(
+      "cardinality(merge_hll(c0))", makeRowVector({arrayVector}));
+  int64_t allowedError = static_cast<int64_t>(totalUniqueElements * errorRate);
+
+  EXPECT_GE(cardinalityValue, totalUniqueElements - allowedError);
+  EXPECT_LE(cardinalityValue, totalUniqueElements + allowedError);
+}
+
+TEST_F(HyperLogLogFunctionsTest, mergeHllWithNull) {
+  const int8_t indexBitLength = 12;
+  SparseHll sparseHll{&allocator_};
+  for (int i = 0; i < 100; i++) {
+    sparseHll.insertHash(hashOne(i));
+  }
+  auto serialized = serialize(indexBitLength, sparseHll);
+  auto arrayVector = makeNullableArrayVector<std::string>(
+      {{serialized, std::nullopt, serialized}}, ARRAY(HYPERLOGLOG()));
+
+  auto result = evaluate("merge_hll(c0)", makeRowVector({arrayVector}));
+  auto cardinalityResult = evaluate("cardinality(c0)", makeRowVector({result}));
+  auto cardinalityValue =
+      cardinalityResult->as<FlatVector<int64_t>>()->valueAt(0);
+  EXPECT_GE(cardinalityValue, 95);
+  EXPECT_LE(cardinalityValue, 105);
+}
+
+TEST_F(HyperLogLogFunctionsTest, mergeHllEmpty) {
+  auto arrayVector =
+      makeArrayVectorFromJson<std::string>({"[]"}, ARRAY(HYPERLOGLOG()));
+  auto result = evaluate("merge_hll(c0)", makeRowVector({arrayVector}));
+  ASSERT_TRUE(result->isNullAt(0));
+}
+
+TEST_F(HyperLogLogFunctionsTest, mergeHllNullArray) {
+  auto nullArrayVector =
+      makeArrayVectorFromJson<std::string>({"null"}, ARRAY(HYPERLOGLOG()));
+  auto expected =
+      makeNullableFlatVector<std::string>({std::nullopt}, HYPERLOGLOG());
+  auto result = evaluate("merge_hll(c0)", makeRowVector({nullArrayVector}));
+  test::assertEqualVectors(expected, result);
+}
+
+TEST_F(HyperLogLogFunctionsTest, mergeHllAllNulls) {
+  auto allNullsVector = makeArrayVectorFromJson<std::string>(
+      {"[null, null, null]"}, ARRAY(HYPERLOGLOG()));
+  auto result = evaluate("merge_hll(c0)", makeRowVector({allNullsVector}));
+  ASSERT_TRUE(result->isNullAt(0));
+}
+
 } // namespace
 } // namespace facebook::velox
