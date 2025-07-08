@@ -69,6 +69,11 @@ class PartitionIdGenerator {
       uint32_t maxPartitions,
       bool partitionPathAsLowerCase);
 
+  // Computes value IDs using VectorHashers for all rows in 'input'.
+  void computeValueIds(
+      const RowVectorPtr& input,
+      raw_vector<uint64_t>& valueIds);
+
   const std::vector<column_index_t> partitionChannels_;
 
   std::vector<std::unique_ptr<exec::VectorHasher>> hashers_;
@@ -82,10 +87,7 @@ class PartitionIdGenerator {
   // A mapping from value ID produced by VectorHashers to a partition ID.
   std::unordered_map<uint64_t, uint64_t> partitionIds_;
 
-  // Computes value IDs using VectorHashers for all rows in 'input'.
-  void computeValueIds(
-      const RowVectorPtr& input,
-      raw_vector<uint64_t>& valueIds);
+  const bool partitionPathAsLowerCase_;
 
  private:
   static constexpr const int32_t kHasherReservePct = 20;
@@ -102,8 +104,6 @@ class PartitionIdGenerator {
       uint64_t partitionId,
       const RowVectorPtr& input,
       vector_size_t row);
-
-  const bool partitionPathAsLowerCase_;
 
   bool hasMultiplierSet_ = false;
 

@@ -40,7 +40,7 @@ class IcebergPartitionIdGenerator : public PartitionIdGenerator {
   /// schema.
   std::string partitionName(
       uint64_t partitionId,
-      const std::string& nullValueName = "") const;
+      const std::string& nullValueName = "") const override;
 
  private:
   void savePartitionValues(

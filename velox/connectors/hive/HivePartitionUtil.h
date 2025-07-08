@@ -21,7 +21,6 @@ namespace facebook::velox::connector::hive {
 
 std::vector<std::pair<std::string, std::string>> extractPartitionKeyValues(
     const RowVectorPtr& partitionsVector,
-    vector_size_t row,
-    const std::string& nullValueName = "");
+    vector_size_t row);
 
 } // namespace facebook::velox::connector::hive

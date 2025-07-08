@@ -16,12 +16,45 @@
 
 #include "velox/connectors/hive/iceberg/IcebergPartitionIdGenerator.h"
 
-#include <connectors/hive/HivePartitionUtil.h>
-#include <dwio/catalog/fbhive/FileUtils.h>
-
+#include "velox/connectors/hive/HivePartitionUtil.h"
 #include "velox/connectors/hive/iceberg/Transforms.h"
 
 namespace facebook::velox::connector::hive::iceberg {
+
+namespace {
+
+// Iceberg spec requires URL encoding in the partition path.
+std::string UrlEncode(const std::string& data) {
+  std::string ret;
+  ret.reserve(data.size() * 3);
+
+  for (unsigned char c : data) {
+    if (std::isalnum(c) || c == '-' || c == '_' || c == '.' || c == '*') {
+      // These characters are not encoded in Java's URLEncoder.
+      ret += c;
+    } else if (c == ' ') {
+      // Space is converted to '+' in Java's URLEncoder.
+      ret += '+';
+    } else {
+      // All other characters are percent-encoded.
+      ret += fmt::format("%{:02X}", c);
+    }
+  }
+
+  return ret;
+}
+
+std::string toLower(const std::string& data) {
+  std::string ret;
+  ret.reserve(data.size());
+  std::transform(
+      data.begin(), data.end(), std::back_inserter(ret), [](auto& c) {
+        return std::tolower(c);
+      });
+  return ret;
+}
+
+} // namespace
 
 IcebergPartitionIdGenerator::IcebergPartitionIdGenerator(
     std::vector<column_index_t> partitionChannels,
@@ -127,9 +160,25 @@ void IcebergPartitionIdGenerator::run(
 std::string IcebergPartitionIdGenerator::partitionName(
     uint64_t partitionId,
     const std::string& nullValueName) const {
-  return dwio::catalog::fbhive::FileUtils::makePartName(
-      extractPartitionKeyValues(partitionValues_, partitionId, nullValueName),
-      partitionPathAsLowerCase_);
+  auto pairs = extractPartitionKeyValues(partitionValues_, partitionId);
+  std::string ret;
+  std::for_each(pairs.begin(), pairs.end(), [&](auto& pair) {
+    if (ret.size() > 0) {
+      ret += "/";
+    }
+    if (partitionPathAsLowerCase_) {
+      ret += UrlEncode(toLower(pair.first));
+    } else {
+      ret += UrlEncode(pair.first);
+    }
+    ret += "=";
+    if (pair.second.empty()) {
+      ret += nullValueName;
+    } else {
+      ret += UrlEncode(pair.second);
+    }
+  });
+  return ret;
 }
 
 } // namespace facebook::velox::connector::hive::iceberg
