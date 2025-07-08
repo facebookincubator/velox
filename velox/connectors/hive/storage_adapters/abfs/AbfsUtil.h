@@ -35,7 +35,7 @@ inline std::string throwStorageExceptionWithOperationDetails(
     std::string path,
     Azure::Storage::StorageException& error) {
   const auto errMsg = fmt::format(
-      "Operation '{}' to path '{}' encountered azure storage exception, Details: '{}'.\n{}",
+      "Operation '{}' to path '{}' encountered azure storage exception, Details: '{}'.",
       operation,
       path,
       error.what());
