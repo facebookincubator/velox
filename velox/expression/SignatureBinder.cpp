@@ -94,6 +94,12 @@ bool checkNamedRowField(
   return true;
 }
 
+bool isNonDecimalNumericType(const TypePtr& type) {
+  return (type == BIGINT() || type == INTEGER() || type == SMALLINT() ||
+          type == TINYINT()) ||
+      (type == REAL() || type == DOUBLE());
+}
+
 } // namespace
 
 bool SignatureBinder::tryBind() {
@@ -189,6 +195,11 @@ bool SignatureBinderBase::tryBind(
     }
 
     if (variable.comparableTypesOnly() && !actualType->isComparable()) {
+      return false;
+    }
+
+    if (variable.nonDecimalNumericTypeOnly() &&
+        !isNonDecimalNumericType(actualType)) {
       return false;
     }
 
