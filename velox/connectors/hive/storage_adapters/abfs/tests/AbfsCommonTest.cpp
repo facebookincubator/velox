@@ -15,11 +15,12 @@
  */
 
 #include "connectors/hive/storage_adapters/abfs/RegisterAbfsFileSystem.h"
-#include "deps-download/azure-sdk-for-cpp/sdk/storage/azure-storage-blobs/inc/azure/storage/blobs/blob_sas_builder.hpp"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/config/Config.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsConfig.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsUtil.h"
+
+#include <azure/storage/blobs/blob_sas_builder.hpp>
 
 #include <chrono>
 #include "gtest/gtest.h"
