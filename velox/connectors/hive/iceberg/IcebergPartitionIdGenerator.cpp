@@ -161,23 +161,44 @@ std::string IcebergPartitionIdGenerator::partitionName(
     uint64_t partitionId,
     const std::string& nullValueName) const {
   auto pairs = extractPartitionKeyValues(partitionValues_, partitionId);
+
+  size_t estimatedSize = 0;
+  for (const auto& pair : pairs) {
+    estimatedSize += pair.first.size() + pair.second.size() + 2;
+  }
+
   std::string ret;
-  std::for_each(pairs.begin(), pairs.end(), [&](auto& pair) {
-    if (ret.size() > 0) {
-      ret += "/";
+  ret.reserve(estimatedSize * 1.5);
+
+  for (const auto& pair : pairs) {
+    if (!ret.empty()) {
+      ret.push_back('/');
     }
-    if (partitionPathAsLowerCase_) {
-      ret += UrlEncode(toLower(pair.first));
-    } else {
-      ret += UrlEncode(pair.first);
-    }
-    ret += "=";
+    ret += partitionPathAsLowerCase_ ? UrlEncode(toLower(pair.first))
+                                     : UrlEncode(pair.first);
+    ret.push_back('=');
     if (pair.second.empty()) {
       ret += nullValueName;
     } else {
-      ret += UrlEncode(pair.second);
+      TypePtr type = nullptr;
+      for (const auto& columnTransform : columnTransforms_) {
+        if (columnTransform.columnName() == pair.first ||
+            (columnTransform.transformName() == "trunc" &&
+             fmt::format("{}_{}", columnTransform.columnName(), "trunc") ==
+                 pair.first)) {
+          type = columnTransform.resultType();
+          break;
+        }
+      }
+
+      if (type && type->isDecimal()) {
+        ret += DecimalUtil::toString(HugeInt::parse(pair.second), type);
+      } else {
+        ret += UrlEncode(pair.second);
+      }
     }
-  });
+  }
+
   return ret;
 }
 
