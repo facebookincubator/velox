@@ -727,7 +727,7 @@ TEST(DecimalTest, castFromStringError) {
   testCastFromString<int128_t>(fractionRoundUp, 38, 38, "Value too large.");
 
   testCastFromString<int128_t>(
-      "0.0444a", 38, 0, "Value is not a number. Chars 'a' are invalid.");
+      "0.0444a", 38, 0, "Value is not a number. Chars are invalid.");
 
   testCastFromString<int128_t>(
       "", 38, 0, "Value is not a number. Input is empty.");
@@ -746,23 +746,23 @@ TEST(DecimalTest, castFromStringError) {
       "23e-5d",
       38,
       0,
-      "Value is not a number. Non-digit character 'd' is not allowed in the exponent part.");
+      "Value is not a number. Non-digit character is not allowed in the exponent part.");
 
   // Whitespaces.
   testCastFromString<int128_t>(
-      "1. 23", 38, 0, "Value is not a number. Chars ' 23' are invalid.");
+      "1. 23", 38, 0, "Value is not a number. Chars are invalid.");
   testCastFromString<int128_t>(
       "-3E+ 2",
       12,
       2,
-      "Value is not a number. Non-digit character ' ' is not allowed in the exponent part.");
+      "Value is not a number. Non-digit character is not allowed in the exponent part.");
   testCastFromString<int128_t>(
-      "1.23 ", 38, 0, "Value is not a number. Chars ' ' are invalid.");
+      "1.23 ", 38, 0, "Value is not a number. Chars are invalid.");
   testCastFromString<int64_t>(
       "-3E+2 ",
       12,
       2,
-      "Value is not a number. Non-digit character ' ' is not allowed in the exponent part.");
+      "Value is not a number. Non-digit character is not allowed in the exponent part.");
   testCastFromString<int128_t>(
       " 1.23", 38, 0, "Value is not a number. Extracted digits are empty.");
   testCastFromString<int64_t>(
@@ -772,7 +772,7 @@ TEST(DecimalTest, castFromStringError) {
       "-3E+2.1",
       12,
       2,
-      "Value is not a number. Non-digit character '.' is not allowed in the exponent part.");
+      "Value is not a number. Non-digit character is not allowed in the exponent part.");
 
   testCastFromString<int64_t>(
       "-3E+",
@@ -785,6 +785,10 @@ TEST(DecimalTest, castFromStringError) {
       12,
       2,
       "Value is not a number. The exponent part only contains sign.");
+  testCastFromString<int64_t>(
+      "9e", 12, 2, "Value is not a number. The exponent part is empty.");
+  testCastFromString<int64_t>(
+      "09{xi+yD", 12, 2, "Value is not a number. Chars are invalid.");
 }
 } // namespace
 } // namespace facebook::velox
