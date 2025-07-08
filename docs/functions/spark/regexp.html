@@ -69,10 +69,10 @@ require compilation of regular expressions. Patterns ‘hello’, ‘hello%’, 
 contains only regular characters and ‘_’ wildcards are evaluated without
 using regular expressions. Only those patterns that require the compilation of
 regular expressions are counted towards the limit.</p>
-<blockquote>
-<div><p>SELECT like(‘abc’, ‘%b%’); – true
-SELECT like(‘a_c’, ‘%#_%’, ‘#’); – true</p>
-</div></blockquote>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">like</span><span class="p">(</span><span class="s1">&#39;abc&#39;</span><span class="p">,</span> <span class="s1">&#39;%b%&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">true</span>
+<span class="n">SELECT</span> <span class="n">like</span><span class="p">(</span><span class="s1">&#39;a_c&#39;</span><span class="p">,</span> <span class="s1">&#39;%#_%&#39;</span><span class="p">,</span> <span class="s1">&#39;#&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">true</span>
+</pre></div>
+</div>
 </dd></dl>
 
 <dl class="spark function">
@@ -90,15 +90,13 @@ Patterns must be constant values.</p>
 <dl class="spark function">
 <dt class="sig sig-object spark">
 <span class="sig-name descname"><span class="pre">regexp_extract</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pattern</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">group</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span></dt>
-<dd><blockquote>
-<div><p>Finds the first occurrence of the regular expression <code class="docutils literal notranslate"><span class="pre">pattern</span></code> in
+<dd><p>Finds the first occurrence of the regular expression <code class="docutils literal notranslate"><span class="pre">pattern</span></code> in
 <code class="docutils literal notranslate"><span class="pre">string</span></code> and returns the capturing group number <code class="docutils literal notranslate"><span class="pre">group</span></code>.</p>
 <p>regexp_extract does not support column references for the <code class="docutils literal notranslate"><span class="pre">pattern</span></code> argument.
 Patterns must be constant values.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">regexp_extract</span><span class="p">(</span><span class="s1">&#39;1a 2b 14m&#39;</span><span class="p">,</span> <span class="s1">&#39;(\d+)([a-z]+)&#39;</span><span class="p">,</span> <span class="mi">2</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;a&#39;</span>
 </pre></div>
 </div>
-</div></blockquote>
 </dd></dl>
 
 <dl class="spark function">

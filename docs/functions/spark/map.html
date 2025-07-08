@@ -140,15 +140,13 @@ For keys only presented in one map, NULL will be passed as the value for the mis
 <dl class="spark function">
 <dt class="sig sig-object spark">
 <span class="sig-name descname"><span class="pre">size</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">map(K</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">V)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">legacySizeOfNull</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span></dt>
-<dd><blockquote>
-<div><p>Returns the size of the input map. Returns null for null input if <code class="docutils literal notranslate"><span class="pre">legacySizeOfNull</span></code>
+<dd><p>Returns the size of the input map. Returns null for null input if <code class="docutils literal notranslate"><span class="pre">legacySizeOfNull</span></code>
 is set to false. Otherwise, returns -1 for null input.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">size</span><span class="p">(</span><span class="nb">map</span><span class="p">(</span><span class="n">array</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span> <span class="n">array</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">)),</span> <span class="n">true</span><span class="p">);</span> <span class="o">--</span> <span class="mi">2</span>
 <span class="n">SELECT</span> <span class="n">size</span><span class="p">(</span><span class="n">NULL</span><span class="p">,</span> <span class="n">true</span><span class="p">);</span> <span class="o">--</span> <span class="o">-</span><span class="mi">1</span>
 <span class="n">SELECT</span> <span class="n">size</span><span class="p">(</span><span class="n">NULL</span><span class="p">,</span> <span class="n">false</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span>
 </pre></div>
 </div>
-</div></blockquote>
 </dd></dl>
 
 </section>

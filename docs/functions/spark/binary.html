@@ -62,20 +62,6 @@ multiple arguments, their types can be different.</p>
 </dd></dl>
 
 <dl class="spark function">
-<dt class="sig sig-object spark" id="xxhash64">
-<span class="sig-name descname"><span class="pre">xxhash64</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">...</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#xxhash64" title="Link to this definition">¶</a></dt>
-<dd><p>Computes the xxhash64 of one or more input values using seed value of 42.
-For multiple arguments, their types can be different.</p>
-</dd></dl>
-
-<dl class="spark function">
-<dt class="sig sig-object spark" id="xxhash64_with_seed">
-<span class="sig-name descname"><span class="pre">xxhash64_with_seed</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">seed</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">...</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#xxhash64_with_seed" title="Link to this definition">¶</a></dt>
-<dd><p>Computes the xxhash64 of one or more input values using specified seed. For
-multiple arguments, their types can be different.</p>
-</dd></dl>
-
-<dl class="spark function">
 <dt class="sig sig-object spark" id="md5">
 <span class="sig-name descname"><span class="pre">md5</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varbinary</span></span></span><a class="headerlink" href="#md5" title="Link to this definition">¶</a></dt>
 <dd><p>Computes the md5 of x.</p>
@@ -107,6 +93,20 @@ for an unsupported bitLength, the return value is NULL.
 Note: x can only be varbinary type.</p>
 </dd></dl>
 
+<dl class="spark function">
+<dt class="sig sig-object spark" id="xxhash64">
+<span class="sig-name descname"><span class="pre">xxhash64</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">...</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#xxhash64" title="Link to this definition">¶</a></dt>
+<dd><p>Computes the xxhash64 of one or more input values using seed value of 42.
+For multiple arguments, their types can be different.</p>
+</dd></dl>
+
+<dl class="spark function">
+<dt class="sig sig-object spark" id="xxhash64_with_seed">
+<span class="sig-name descname"><span class="pre">xxhash64_with_seed</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">seed</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">...</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#xxhash64_with_seed" title="Link to this definition">¶</a></dt>
+<dd><p>Computes the xxhash64 of one or more input values using specified seed. For
+multiple arguments, their types can be different.</p>
+</dd></dl>
+
 </section>
 
 
@@ -123,12 +123,12 @@ Note: x can only be varbinary type.</p>
 <li><a class="reference internal" href="#crc32"><code class="docutils literal notranslate"><span class="pre">crc32()</span></code></a></li>
 <li><a class="reference internal" href="#hash"><code class="docutils literal notranslate"><span class="pre">hash()</span></code></a></li>
 <li><a class="reference internal" href="#hash_with_seed"><code class="docutils literal notranslate"><span class="pre">hash_with_seed()</span></code></a></li>
-<li><a class="reference internal" href="#xxhash64"><code class="docutils literal notranslate"><span class="pre">xxhash64()</span></code></a></li>
-<li><a class="reference internal" href="#xxhash64_with_seed"><code class="docutils literal notranslate"><span class="pre">xxhash64_with_seed()</span></code></a></li>
 <li><a class="reference internal" href="#md5"><code class="docutils literal notranslate"><span class="pre">md5()</span></code></a></li>
 <li><a class="reference internal" href="#might_contain"><code class="docutils literal notranslate"><span class="pre">might_contain()</span></code></a></li>
 <li><a class="reference internal" href="#sha1"><code class="docutils literal notranslate"><span class="pre">sha1()</span></code></a></li>
 <li><a class="reference internal" href="#sha2"><code class="docutils literal notranslate"><span class="pre">sha2()</span></code></a></li>
+<li><a class="reference internal" href="#xxhash64"><code class="docutils literal notranslate"><span class="pre">xxhash64()</span></code></a></li>
+<li><a class="reference internal" href="#xxhash64_with_seed"><code class="docutils literal notranslate"><span class="pre">xxhash64_with_seed()</span></code></a></li>
 </ul>
 </li>
 </ul>

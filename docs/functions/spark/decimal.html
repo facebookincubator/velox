@@ -137,6 +137,48 @@ The below formula shows how the precision and scale are adjusted for decimal add
 </dd></dl>
 
 <dl class="spark function">
+<dt class="sig sig-object spark" id="decimal_equalto">
+<span class="sig-name descname"><span class="pre">decimal_equalto</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#decimal_equalto" title="Link to this definition">¶</a></dt>
+<dd><p>Returns true if x is equal to y. Supports decimal types with different precisions and scales.
+Corresponds to Spark’s operator <code class="docutils literal notranslate"><span class="pre">==</span></code>.</p>
+</dd></dl>
+
+<dl class="spark function">
+<dt class="sig sig-object spark" id="decimal_greaterthan">
+<span class="sig-name descname"><span class="pre">decimal_greaterthan</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#decimal_greaterthan" title="Link to this definition">¶</a></dt>
+<dd><p>Returns true if x is greater than y. Supports decimal types with different precisions and scales.
+Corresponds to Spark’s operator <code class="docutils literal notranslate"><span class="pre">&gt;</span></code>.</p>
+</dd></dl>
+
+<dl class="spark function">
+<dt class="sig sig-object spark" id="decimal_greaterthanorequal">
+<span class="sig-name descname"><span class="pre">decimal_greaterthanorequal</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#decimal_greaterthanorequal" title="Link to this definition">¶</a></dt>
+<dd><p>Returns true if x is greater than y or x is equal to y. Supports decimal types with different precisions and scales.
+Corresponds to Spark’s operator <code class="docutils literal notranslate"><span class="pre">&gt;=</span></code>.</p>
+</dd></dl>
+
+<dl class="spark function">
+<dt class="sig sig-object spark" id="decimal_lessthan">
+<span class="sig-name descname"><span class="pre">decimal_lessthan</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#decimal_lessthan" title="Link to this definition">¶</a></dt>
+<dd><p>Returns true if x is less than y. Supports decimal types with different precisions and scales.
+Corresponds to Spark’s operator <code class="docutils literal notranslate"><span class="pre">&lt;</span></code>.</p>
+</dd></dl>
+
+<dl class="spark function">
+<dt class="sig sig-object spark" id="decimal_lessthanorequal">
+<span class="sig-name descname"><span class="pre">decimal_lessthanorequal</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#decimal_lessthanorequal" title="Link to this definition">¶</a></dt>
+<dd><p>Returns true if x is less than y or x is equal to y. Supports decimal types with different precisions and scales.
+Corresponds to Spark’s operator <code class="docutils literal notranslate"><span class="pre">&lt;=</span></code>.</p>
+</dd></dl>
+
+<dl class="spark function">
+<dt class="sig sig-object spark" id="decimal_notequalto">
+<span class="sig-name descname"><span class="pre">decimal_notequalto</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#decimal_notequalto" title="Link to this definition">¶</a></dt>
+<dd><p>Returns true if x is not equal to y. Supports decimal types with different precisions and scales.
+Corresponds to Spark’s operator <code class="docutils literal notranslate"><span class="pre">!=</span></code>.</p>
+</dd></dl>
+
+<dl class="spark function">
 <dt class="sig sig-object spark" id="floor">
 <span class="sig-name descname"><span class="pre">floor</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x:</span> <span class="pre">decimal(p</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s))</span> <span class="pre">-&gt;</span> <span class="pre">r:</span> <span class="pre">decimal(pr</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">0</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#floor" title="Link to this definition">¶</a></dt>
 <dd><p>Returns <code class="docutils literal notranslate"><span class="pre">x</span></code> rounded down to the type <code class="docutils literal notranslate"><span class="pre">decimal(min(38,</span> <span class="pre">p</span> <span class="pre">-</span> <span class="pre">s</span> <span class="pre">+</span> <span class="pre">min(1,</span> <span class="pre">s)),</span> <span class="pre">0)</span></code>.</p>
@@ -170,14 +212,6 @@ Supported type is: SHORT_DECIMAL.</p>
 </section>
 <section id="decimal-special-forms">
 <h2>Decimal Special Forms<a class="headerlink" href="#decimal-special-forms" title="Link to this heading">¶</a></h2>
-<dl class="spark function">
-<dt class="sig sig-object spark" id="make_decimal">
-<span class="sig-name descname"><span class="pre">make_decimal</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="optional">[</span>, <em class="sig-param"><span class="n"><span class="pre">nullOnOverflow</span></span></em><span class="optional">]</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">decimal</span></span></span><a class="headerlink" href="#make_decimal" title="Link to this definition">¶</a></dt>
-<dd><p>Create <code class="docutils literal notranslate"><span class="pre">decimal</span></code> of requsted precision and scale from an unscaled bigint value <code class="docutils literal notranslate"><span class="pre">x</span></code>.
-By default, the value of <code class="docutils literal notranslate"><span class="pre">nullOnOverflow</span></code> is true, and null will be returned when <code class="docutils literal notranslate"><span class="pre">x</span></code> is too large for the result precision.
-Otherwise, exception will be thrown when <code class="docutils literal notranslate"><span class="pre">x</span></code> overflows.</p>
-</dd></dl>
-
 <dl class="spark function">
 <dt class="sig sig-object spark" id="decimal_round">
 <span class="sig-name descname"><span class="pre">decimal_round</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">decimal</span></span></em><span class="optional">[</span>, <em class="sig-param"><span class="n"><span class="pre">scale</span></span></em><span class="optional">]</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="p"><span class="pre">[</span></span><span class="pre">decimal</span><span class="p"><span class="pre">]</span></span></span></span><a class="headerlink" href="#decimal_round" title="Link to this definition">¶</a></dt>
@@ -213,6 +247,14 @@ The result precision is decided with the number of integral digits and the resul
 </div>
 </dd></dl>
 
+<dl class="spark function">
+<dt class="sig sig-object spark" id="make_decimal">
+<span class="sig-name descname"><span class="pre">make_decimal</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="optional">[</span>, <em class="sig-param"><span class="n"><span class="pre">nullOnOverflow</span></span></em><span class="optional">]</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">decimal</span></span></span><a class="headerlink" href="#make_decimal" title="Link to this definition">¶</a></dt>
+<dd><p>Create <code class="docutils literal notranslate"><span class="pre">decimal</span></code> of requsted precision and scale from an unscaled bigint value <code class="docutils literal notranslate"><span class="pre">x</span></code>.
+By default, the value of <code class="docutils literal notranslate"><span class="pre">nullOnOverflow</span></code> is true, and null will be returned when <code class="docutils literal notranslate"><span class="pre">x</span></code> is too large for the result precision.
+Otherwise, exception will be thrown when <code class="docutils literal notranslate"><span class="pre">x</span></code> overflows.</p>
+</dd></dl>
+
 </section>
 </section>
 
@@ -236,6 +278,12 @@ The result precision is decided with the number of integral digits and the resul
 <li><a class="reference internal" href="#decimal-precision-and-scale-adjustment">Decimal Precision and Scale Adjustment</a></li>
 <li><a class="reference internal" href="#decimal-functions">Decimal Functions</a><ul>
 <li><a class="reference internal" href="#ceil"><code class="docutils literal notranslate"><span class="pre">ceil()</span></code></a></li>
+<li><a class="reference internal" href="#decimal_equalto"><code class="docutils literal notranslate"><span class="pre">decimal_equalto()</span></code></a></li>
+<li><a class="reference internal" href="#decimal_greaterthan"><code class="docutils literal notranslate"><span class="pre">decimal_greaterthan()</span></code></a></li>
+<li><a class="reference internal" href="#decimal_greaterthanorequal"><code class="docutils literal notranslate"><span class="pre">decimal_greaterthanorequal()</span></code></a></li>
+<li><a class="reference internal" href="#decimal_lessthan"><code class="docutils literal notranslate"><span class="pre">decimal_lessthan()</span></code></a></li>
+<li><a class="reference internal" href="#decimal_lessthanorequal"><code class="docutils literal notranslate"><span class="pre">decimal_lessthanorequal()</span></code></a></li>
+<li><a class="reference internal" href="#decimal_notequalto"><code class="docutils literal notranslate"><span class="pre">decimal_notequalto()</span></code></a></li>
 <li><a class="reference internal" href="#floor"><code class="docutils literal notranslate"><span class="pre">floor()</span></code></a></li>
 <li><a class="reference internal" href="#in"><code class="docutils literal notranslate"><span class="pre">in()</span></code></a></li>
 <li><a class="reference internal" href="#unaryminus"><code class="docutils literal notranslate"><span class="pre">unaryminus()</span></code></a></li>
@@ -243,8 +291,8 @@ The result precision is decided with the number of integral digits and the resul
 </ul>
 </li>
 <li><a class="reference internal" href="#decimal-special-forms">Decimal Special Forms</a><ul>
-<li><a class="reference internal" href="#make_decimal"><code class="docutils literal notranslate"><span class="pre">make_decimal()</span></code></a></li>
 <li><a class="reference internal" href="#decimal_round"><code class="docutils literal notranslate"><span class="pre">decimal_round()</span></code></a></li>
+<li><a class="reference internal" href="#make_decimal"><code class="docutils literal notranslate"><span class="pre">make_decimal()</span></code></a></li>
 </ul>
 </li>
 </ul>
