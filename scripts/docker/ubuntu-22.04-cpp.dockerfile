@@ -14,8 +14,6 @@
 ARG base=ubuntu:22.04
 FROM ${base}
 
-SHELL ["/bin/bash", "-o", "pipefail", "-c"]
-
 RUN apt update && \
       apt install -y sudo \
             lsb-release \
@@ -35,6 +33,6 @@ ARG DEBIAN_FRONTEND="noninteractive"
 # Set a default timezone, can be overriden via ARG
 ARG tz="Etc/UTC"
 ENV TZ=${tz}
-RUN /velox/scripts/setup-ubuntu.sh
+RUN /bin/bash -o pipefail /velox/scripts/setup-ubuntu.sh
 
 WORKDIR /velox
