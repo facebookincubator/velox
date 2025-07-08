@@ -157,6 +157,21 @@ class IcebergTransformE2ETest : public IcebergTestBase {
     return partitionDirs;
   }
 
+  std::vector<std::string> listDirectoriesRecursively(const std::string& path) {
+    std::vector<std::string> allDirs;
+    auto firstLevelDirs = listFirstLevelDirectories(path);
+    allDirs.insert(allDirs.end(), firstLevelDirs.begin(), firstLevelDirs.end());
+
+    for (const auto& dir : firstLevelDirs) {
+      if (std::filesystem::is_directory(dir)) {
+        auto subDirs = listDirectoriesRecursively(dir);
+        allDirs.insert(allDirs.end(), subDirs.begin(), subDirs.end());
+      }
+    }
+
+    return allDirs;
+  }
+
   // Verify the number of partitions and their naming convention.
   void verifyPartitionCount(
       const std::string& outputPath,
@@ -893,6 +908,122 @@ TEST_F(IcebergTransformE2ETest, timestampHourPartitioning) {
 
     verifyPartitionData(rowType_, dir, filter, 0, true);
   }
+}
+
+TEST_F(IcebergTransformE2ETest, partitionFolderNamingConventions) {
+  auto intVector = makeFlatVector<int32_t>(1, [](auto) { return 42; });
+  auto bigintVector =
+      makeFlatVector<int64_t>(1, [](auto) { return 9876543210; });
+  auto varcharVector =
+      BaseVector::create<FlatVector<StringView>>(VARCHAR(), 1, opPool_.get());
+  varcharVector->set(0, StringView("test string"));
+
+  auto varcharVector2 =
+      BaseVector::create<FlatVector<StringView>>(VARCHAR(), 1, opPool_.get());
+  varcharVector2->setNull(0, true);
+
+  auto decimalVector =
+      BaseVector::create<FlatVector<int64_t>>(DECIMAL(18, 3), 1, opPool_.get());
+  decimalVector->set(0, 1234567890);
+
+  auto varbinaryVector =
+      BaseVector::create<FlatVector<StringView>>(VARBINARY(), 1, opPool_.get());
+  std::string binaryData = "binary\0data\1\2\3";
+  varbinaryVector->set(0, StringView(binaryData));
+
+  auto rowVector = makeRowVector(
+      {"c_int",
+       "c_bigint",
+       "c_varchar",
+       "c_varchar2",
+       "c_decimal",
+       "c_varbinary"},
+      {intVector,
+       bigintVector,
+       varcharVector,
+       varcharVector2,
+       decimalVector,
+       varbinaryVector});
+  auto outputDirectory = TempDirectoryPath::create();
+  auto dataSink = createIcebergDataSink(
+      asRowType(rowVector->type()),
+      outputDirectory->getPath(),
+      {"c_int",
+       "c_bigint",
+       "c_varchar",
+       "c_decimal",
+       "c_varbinary",
+       "c_varchar2"});
+
+  dataSink->appendData(rowVector);
+  ASSERT_TRUE(dataSink->finish());
+  dataSink->close();
+
+  verifyTotalRowCount(
+      asRowType(rowVector->type()), outputDirectory->getPath(), 1);
+  auto dataPath = fmt::format("{}", outputDirectory->getPath());
+  auto partitionDirs = listDirectoriesRecursively(dataPath);
+
+  const std::string expectedIntFolder = "c_int=42";
+  const std::string expectedBigintFolder = "c_bigint=9876543210";
+  const std::string expectedVarcharFolder = "c_varchar=test+string";
+  const std::string expectedVarcharFolder2 = "c_varchar2=null";
+  const std::string expectedDecimalFolder = "c_decimal=1234567.890";
+  const std::string expectedVarbinary = "c_varbinary=" +
+      encoding::Base64::encode(binaryData.data(), binaryData.size());
+
+  bool foundIntPartition = false;
+  bool foundBigintPartition = false;
+  bool foundVarcharPartition = false;
+  bool foundVarcharPartition2 = false;
+  bool foundDecimalPartition = false;
+  bool foundVarbinaryPartition = false;
+
+  for (const auto& dir : partitionDirs) {
+    const auto dirName = std::filesystem::path(dir).filename().string();
+
+    if (dirName == expectedIntFolder) {
+      foundIntPartition = true;
+      verifyPartitionData(asRowType(rowVector->type()), dir, "c_int = 42", 1);
+    } else if (dirName == expectedBigintFolder) {
+      foundBigintPartition = true;
+      verifyPartitionData(
+          asRowType(rowVector->type()), dir, "c_bigint = 9876543210", 1);
+    } else if (dirName == expectedVarcharFolder) {
+      foundVarcharPartition = true;
+      verifyPartitionData(
+          asRowType(rowVector->type()), dir, "c_varchar = 'test string'", 1);
+    } else if (dirName == expectedVarcharFolder2) {
+      foundVarcharPartition2 = true;
+      verifyPartitionData(
+          asRowType(rowVector->type()), dir, "c_varchar2 IS NULL", 1);
+    } else if (dirName == expectedDecimalFolder) {
+      foundDecimalPartition = true;
+      verifyPartitionData(
+          asRowType(rowVector->type()),
+          dir,
+          "c_decimal = DECIMAL '1234567.890'",
+          1);
+    } else if (dirName.find(expectedVarbinary) == 0) {
+      foundVarbinaryPartition = true;
+      verifyPartitionData(
+          asRowType(rowVector->type()), dir, "c_varbinary IS NOT NULL", 1);
+    }
+  }
+
+  ASSERT_TRUE(foundIntPartition)
+      << "Integer partition folder not found: " << expectedIntFolder;
+  ASSERT_TRUE(foundBigintPartition)
+      << "Bigint partition folder not found: " << expectedBigintFolder;
+  ASSERT_TRUE(foundVarcharPartition)
+      << "Varchar partition folder not found: " << expectedVarcharFolder;
+  ASSERT_TRUE(foundVarcharPartition2)
+      << "Varchar2 partition folder not found: " << expectedVarcharFolder2;
+  ASSERT_TRUE(foundDecimalPartition)
+      << "Decimal partition folder not found: " << expectedDecimalFolder;
+  ASSERT_TRUE(foundVarbinaryPartition)
+      << "Varbinary partition folder not found with prefix: "
+      << expectedVarbinary;
 }
 
 } // namespace facebook::velox::connector::hive::iceberg::test
