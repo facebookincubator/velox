@@ -13,6 +13,8 @@
 # limitations under the License.
 velox_add_library(
   velox_presto_types
+  BigintEnumRegistration.cpp
+  BigintEnumType.cpp
   BingTileRegistration.cpp
   BingTileType.cpp
   GeometryRegistration.cpp

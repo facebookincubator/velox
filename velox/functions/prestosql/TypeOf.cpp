@@ -29,6 +29,7 @@ namespace facebook::velox::functions {
 namespace {
 
 std::string typeName(const TypePtr& type) {
+  std::string stringName;
   switch (type->kind()) {
     case TypeKind::BOOLEAN:
       return "boolean";
@@ -59,7 +60,16 @@ std::string typeName(const TypePtr& type) {
       if (isBingTileType(type)) {
         return "bingtile";
       }
-      return "bigint";
+      // Remaining types are bigint and bigintenum, and BigintEnum types have
+      // variable names
+      stringName = type->name();
+      std::transform(
+          stringName.begin(),
+          stringName.end(),
+          stringName.begin(),
+          [](unsigned char c) { return std::tolower(c); });
+      return stringName;
+
     case TypeKind::HUGEINT: {
       if (isUuidType(type)) {
         return "uuid";
