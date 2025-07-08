@@ -137,6 +137,7 @@ int32_t DecimalUtil::maxStringViewSize(int precision, int scale) {
 }
 
 namespace {
+
 // Represent the varchar fragment.
 //
 // For example:
@@ -340,8 +341,8 @@ Status DecimalUtil::parseStringToDecimalComponents(
   out *= decimalComponents.sign;
 
   if (parsedScale < 0) {
-    /// Force the scale to be zero, to avoid negative scales (due to
-    /// compatibility issues with external systems such as databases).
+    // Force the scale to be zero, to avoid negative scales (due to
+    // compatibility issues with external systems such as databases).
     if (-parsedScale + toScale > LongDecimalType::kMaxPrecision) {
       return Status::UserError("Value too large.");
     }
