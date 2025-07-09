@@ -21,7 +21,6 @@
 #include "velox/dwio/common/DecoderUtil.h"
 #include "velox/dwio/common/SelectiveColumnReader.h"
 #include "velox/dwio/common/TypeUtil.h"
-#include <iostream>
 namespace facebook::velox::dwio::common {
 
 // structs for extractValues in ColumnVisitor.
