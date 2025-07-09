@@ -102,6 +102,7 @@ jobs:
       MAX_LINK_JOBS: ${{ inputs.maxLinkJobs || 4 }}
       SKBUILD_BUILD_DIR: _build/debug
       PYVELOX_LEGACY_ONLY: 'ON'
+      CMAKE_POLICY_VERSION_MINIMUM: "3.5"
 
     defaults:
       run:
