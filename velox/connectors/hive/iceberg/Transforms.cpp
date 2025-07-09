@@ -84,12 +84,21 @@ VectorPtr BucketTransform<T>::apply(const VectorPtr& block) const {
   if (block->mayHaveNulls()) {
     result->setNulls(block->nulls());
   }
-
   DecodedVector decoded(*block);
-  folly::F14FastMap<vector_size_t, int32_t> hashedValues;
-  Murmur3_32::hash<T>(hashedValues, &decoded, sourceType_, parameter_.value());
-  for (auto [k, v] : hashedValues) {
-    result->set(k, v);
+  auto buckets = parameter_.value();
+  for (auto i = 0; i < decoded.size(); ++i) {
+    if (!decoded.isNullAt(i)) {
+      T value = decoded.valueAt<T>(i);
+      if constexpr (std::is_same_v<T, int64_t> || std::is_same_v<T, int128_t>) {
+        if (sourceType_->isDecimal()) {
+          result->set(i, Murmur3_32::hashDecimal(value) & 0x7FFFFFFF % buckets);
+        } else {
+          result->set(i, Murmur3_32::hash(value) & 0x7FFFFFFF % buckets);
+        }
+      } else {
+        result->set(i, Murmur3_32::hash(value) & 0x7FFFFFFF % buckets);
+      }
+    }
   }
   return result;
 }
@@ -112,6 +121,9 @@ VectorPtr TruncateTransform<T>::apply(const VectorPtr& block) const {
     if (sourceType_->isVarchar()) {
       rawBuffer =
           flatResult->getRawStringBufferWithSpace(block->size() * width);
+    } else {
+      rawBuffer = flatResult->getRawStringBufferWithSpace(
+          block->size() * encoding::Base64::calculateEncodedSize(width));
     }
   }
 
@@ -136,10 +148,13 @@ VectorPtr TruncateTransform<T>::apply(const VectorPtr& block) const {
         } else if (sourceType_->isVarbinary()) {
           std::string encoded = encoding::Base64::encode(
               value.data(), width > value.size() ? value.size() : width);
-          if (StringView::isInline(encoded.length())) {
+          auto length = encoded.length();
+          if (StringView::isInline(length)) {
             flatResult->set(i, StringView(encoded));
           } else {
-            flatResult->set(i, StringView(encoded));
+            memcpy(rawBuffer, encoded.data(), length);
+            flatResult->setNoCopy(i, StringView(rawBuffer, length));
+            rawBuffer += length;
           }
         }
       }
@@ -162,9 +177,7 @@ VectorPtr TemporalTransform<T>::apply(const VectorPtr& block) const {
 
   auto flatResult = result->template as<FlatVector<int32_t>>();
   for (auto i = 0; i < block->size(); ++i) {
-    if (block->mayHaveNulls() && decoded.isNullAt(i)) {
-      result->setNull(i, true);
-    } else {
+    if (!decoded.isNullAt(i)) {
       T value = decoded.valueAt<T>(i);
       flatResult->set(i, epochFunc_(value));
     }
