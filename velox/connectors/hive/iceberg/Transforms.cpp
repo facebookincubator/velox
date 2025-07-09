@@ -54,15 +54,17 @@ VectorPtr IdentityTransform<T>::apply(const VectorPtr& block) const {
   } else {
     return block;
   }
+
   auto result =
       BaseVector::create<FlatVector<T>>(sourceType_, block->size(), pool_);
-  result->mutableNulls(block->size());
+  if (block->mayHaveNulls()) {
+    result->setNulls(block->nulls());
+  }
+
   DecodedVector decoded(*block);
 
   for (auto i = 0; i < block->size(); ++i) {
-    if (block->mayHaveNulls() && decoded.isNullAt(i)) {
-      result->setNull(i, true);
-    } else {
+    if (!decoded.isNullAt(i)) {
       if constexpr (std::is_same_v<T, StringView>) {
         T value = decoded.valueAt<T>(i);
         std::string encodedValue =
@@ -79,14 +81,15 @@ template <typename T>
 VectorPtr BucketTransform<T>::apply(const VectorPtr& block) const {
   auto result =
       BaseVector::create<FlatVector<int32_t>>(INTEGER(), block->size(), pool_);
-  result->mutableNulls(block->size());
+  if (block->mayHaveNulls()) {
+    result->setNulls(block->nulls());
+  }
+
   auto flatResult = result->template as<FlatVector<int32_t>>();
   DecodedVector decoded(*block);
 
   for (auto i = 0; i < block->size(); ++i) {
-    if (block->mayHaveNulls() && decoded.isNullAt(i)) {
-      flatResult->setNull(i, true);
-    } else {
+    if (!decoded.isNullAt(i)) {
       T value = decoded.valueAt<T>(i);
       uint32_t hashValue;
       if constexpr (std::is_same_v<T, int64_t> || std::is_same_v<T, int128_t>) {
@@ -110,7 +113,10 @@ template <typename T>
 VectorPtr TruncateTransform<T>::apply(const VectorPtr& block) const {
   auto result =
       BaseVector::create<FlatVector<T>>(sourceType_, block->size(), pool_);
-  result->mutableNulls(block->size());
+  if (block->mayHaveNulls()) {
+    result->setNulls(block->nulls());
+  }
+
   DecodedVector decoded(*block);
 
   auto flatResult = result->template as<FlatVector<T>>();
@@ -125,9 +131,7 @@ VectorPtr TruncateTransform<T>::apply(const VectorPtr& block) const {
   }
 
   for (auto i = 0; i < block->size(); ++i) {
-    if (block->mayHaveNulls() && decoded.isNullAt(i)) {
-      result->setNull(i, true);
-    } else {
+    if (!decoded.isNullAt(i)) {
       T value = decoded.valueAt<T>(i);
       if constexpr (
           std::is_same_v<T, int32_t> || std::is_same_v<T, int64_t> ||
@@ -164,7 +168,10 @@ template <typename T>
 VectorPtr TemporalTransform<T>::apply(const VectorPtr& block) const {
   auto result =
       BaseVector::create<FlatVector<int32_t>>(INTEGER(), block->size(), pool_);
-  result->mutableNulls(block->size());
+
+  if (block->mayHaveNulls()) {
+    result->setNulls(block->nulls());
+  }
 
   DecodedVector decoded(*block);
 
