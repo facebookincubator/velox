@@ -146,7 +146,7 @@ class AlwaysFailingVectorFunction final : public VectorFunction {
   std::exception_ptr exceptionPtr_;
 };
 
-// This functions is used when we know a function will never be called because
+// This function is used when we know a function will never be called because
 // it is default null with a literal null input value. For example like(c0,
 // null).
 class ApplyNeverCalled final : public VectorFunction {
@@ -214,7 +214,7 @@ getVectorFunctionWithMetadata(
 
 /// Registers stateless VectorFunction. The same instance will be used for all
 /// expressions.
-/// Returns true iff an new function is inserted
+/// Returns true iff a new function is inserted
 bool registerVectorFunction(
     const std::string& name,
     std::vector<FunctionSignaturePtr> signatures,
