@@ -49,21 +49,21 @@ struct PlanNodeStats {
 
   /// Sum of input rows for all corresponding operators. Useful primarily for
   /// leaf plan nodes or plan nodes that correspond to a single operator type.
-  uint64_t inputRows{0};
+  double inputRows{0};
 
   /// Sum of input batches for all corresponding operators.
-  vector_size_t inputVectors{0};
+  double inputVectors{0};
 
   /// Sum of input bytes for all corresponding operators.
-  uint64_t inputBytes{0};
+  double inputBytes{0};
 
   /// Sum of raw input rows for all corresponding operators. Applies primarily
   /// to TableScan operator which reports rows before pushed down filter as raw
   /// input.
-  uint64_t rawInputRows{0};
+  double rawInputRows{0};
 
   /// Sum of raw input bytes for all corresponding operators.
-  uint64_t rawInputBytes{0};
+  double rawInputBytes{0};
 
   /// Contains the dynamic filters stats if applied.
   DynamicFilterStats dynamicFilterStats;
@@ -71,13 +71,13 @@ struct PlanNodeStats {
   /// Sum of output rows for all corresponding operators. When
   /// plan node corresponds to multiple operator types, operators of only one of
   /// these types report non-zero output rows.
-  uint64_t outputRows{0};
+  double outputRows{0};
 
   /// Sum of output batches for all corresponding operators.
-  vector_size_t outputVectors{0};
+  double outputVectors{0};
 
   /// Sum of output bytes for all corresponding operators.
-  uint64_t outputBytes{0};
+  double outputBytes{0};
 
   // Sum of CPU, scheduled and wall times for isBLocked call for all
   // corresponding operators.
@@ -106,15 +106,15 @@ struct PlanNodeStats {
   CpuWallTiming backgroundTiming;
 
   /// Sum of blocked wall time for all corresponding operators.
-  uint64_t blockedWallNanos{0};
+  double blockedWallNanos{0};
 
   /// Max of peak memory usage for all corresponding operators. Assumes that all
   /// operator instances were running concurrently.
-  uint64_t peakMemoryBytes{0};
+  double peakMemoryBytes{0};
 
-  uint64_t numMemoryAllocations{0};
+  double numMemoryAllocations{0};
 
-  uint64_t physicalWrittenBytes{0};
+  double physicalWrittenBytes{0};
 
   /// Operator-specific counters.
   std::unordered_map<std::string, RuntimeMetric> customStats;
@@ -129,19 +129,19 @@ struct PlanNodeStats {
   int numSplits{0};
 
   /// Total bytes in memory for spilling
-  uint64_t spilledInputBytes{0};
+  double spilledInputBytes{0};
 
   /// Total bytes written for spilling.
-  uint64_t spilledBytes{0};
+  double spilledBytes{0};
 
   /// Total rows written for spilling.
-  uint64_t spilledRows{0};
+  double spilledRows{0};
 
   /// Total spilled partitions.
-  uint32_t spilledPartitions{0};
+  double spilledPartitions{0};
 
   /// Total spilled files.
-  uint32_t spilledFiles{0};
+  double spilledFiles{0};
 
   /// A map of expression name to its respective stats.
   std::unordered_map<std::string, ExprStats> expressionStats;
