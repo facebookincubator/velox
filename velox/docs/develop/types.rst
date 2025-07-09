@@ -174,6 +174,7 @@ UUID                      HUGEINT
 IPADDRESS                 HUGEINT
 IPPREFIX                  ROW(HUGEINT,TINYINT)
 GEOMETRY                  VARBINARY
+BIGINTENUM                BIGINT
 ========================  =====================
 
 TIMESTAMP WITH TIME ZONE represents a time point in milliseconds precision
@@ -208,6 +209,14 @@ As a result the IPPREFIX object stores *FFFF:FFFF::* and the length 32 for both 
 
    IPPREFIX 'FFFF:FFFF:FFFF:FFFF:FFFF:FFFF:FFFF:FFFF/32' -- IPPREFIX 'FFFF:FFFF:0000:0000:0000:0000:0000:0000/32'
    IPPREFIX 'FFFF:FFFF:4455:6677:8899:AABB:CCDD:EEFF/32' -- IPPREFIX 'FFFF:FFFF:0000:0000:0000:0000:0000:0000/32'
+
+The BIGINT_ENUM type represents an enumerated value where the physical type is BIGINT.
+Each BIGINT_ENUM type carries a mapping of string keys to BIGINT values. Each BIGINTENUM type
+has a unique name, ensuring that it can be distinctly identified within the system. Casting is
+permitted between the same enum types or between an enum type and its base type (BIGINT).
+Casting between different enum types is not permitted.
+Comparison operations are only allowed between values of the same enum type.
+
 
 Spark Types
 ~~~~~~~~~~~~

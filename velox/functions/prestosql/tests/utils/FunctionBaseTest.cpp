@@ -16,6 +16,7 @@
 #include "FunctionBaseTest.h"
 #include "velox/functions/FunctionRegistry.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
+#include "velox/functions/prestosql/types/BigintEnumRegistration.h"
 #include "velox/functions/prestosql/types/QDigestRegistration.h"
 #include "velox/parse/TypeResolver.h"
 
@@ -26,6 +27,13 @@ void FunctionBaseTest::SetUpTestCase() {
   // TODO: remove the registraiton of QDigest here once it is registered through
   // registerAllScalarFunctions().
   registerQDigestType();
+  // Register a couple enum types for testing
+  std::string enumMoodString =
+      "test.enum.mood:BigintEnum(test.enum.mood{“CURIOUS”:-2, “HAPPY”:0})";
+  std::string otherEnumString =
+      "someEnumType:BigintEnum(someEnumType{“CURIOUS”:-2, “HAPPY”:0})";
+  registerBigintEnumType(enumMoodString);
+  registerBigintEnumType(otherEnumString);
   functions::prestosql::registerAllScalarFunctions();
   memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
 }

@@ -15,6 +15,7 @@
  */
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/types/BigintEnumType.h"
 #include "velox/functions/prestosql/types/BingTileType.h"
 #include "velox/functions/prestosql/types/GeometryType.h"
 #include "velox/functions/prestosql/types/HyperLogLogType.h"
@@ -68,6 +69,10 @@ TEST_F(TypeOfTest, basic) {
   EXPECT_EQ("qdigest(bigint)", typeOf(QDIGEST(BIGINT())));
   EXPECT_EQ("qdigest(real)", typeOf(QDIGEST(REAL())));
   EXPECT_EQ("qdigest(double)", typeOf(QDIGEST(DOUBLE())));
+
+  // These two particular types are registered in FunctionBaseTest
+  EXPECT_EQ("test.enum.mood", typeOf(BIGINT_ENUM("TEST.ENUM.MOOD")));
+  EXPECT_EQ("someenumtype", typeOf(BIGINT_ENUM("SOMEENUMTYPE")));
 
   EXPECT_EQ("unknown", typeOf(UNKNOWN()));
 
