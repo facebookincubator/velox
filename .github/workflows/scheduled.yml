@@ -102,6 +102,7 @@ jobs:
       MAX_LINK_JOBS: ${{ inputs.maxLinkJobs || 4 }}
       SKBUILD_BUILD_DIR: _build/debug
       PYVELOX_LEGACY_ONLY: 'ON'
+      CMAKE_POLICY_VERSION_MINIMUM: "3.5"
 
     defaults:
       run:
@@ -206,10 +207,10 @@ jobs:
       - name: Build
         env:
           EXTRA_CMAKE_FLAGS: >
-            -DVELOX_ENABLE_ARROW=ON \
-            -DVELOX_MONO_LIBRARY=ON \
-            -DVELOX_BUILD_PYTHON_PACKAGE=ON \
-            -DVELOX_PYTHON_LEGACY_ONLY=ON \
+            -DVELOX_ENABLE_ARROW=ON
+            -DVELOX_MONO_LIBRARY=ON
+            -DVELOX_BUILD_PYTHON_PACKAGE=ON
+            -DVELOX_PYTHON_LEGACY_ONLY=ON
             ${{ inputs.extraCMakeFlags }}
         run: |
           make python-venv
