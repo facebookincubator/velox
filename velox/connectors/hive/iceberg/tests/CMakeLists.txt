@@ -42,6 +42,7 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     velox_hive_iceberg_test
     ColumnTransformTest.cpp
     IcebergInsertTest.cpp
+    IcebergPartitionIdGeneratorTest.cpp
     IcebergReadTest.cpp
     IcebergSplitReaderBenchmarkTest.cpp
     IcebergTestBase.cpp
