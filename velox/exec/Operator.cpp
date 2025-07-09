@@ -88,6 +88,9 @@ Operator::Operator(
           operatorType)),
       outputType_(std::move(outputType)),
       spillConfig_(std::move(spillConfig)),
+      dryRun_(
+          operatorCtx_->driverCtx()->traceConfig().has_value() &&
+          operatorCtx_->driverCtx()->traceConfig()->dryRun),
       stats_(OperatorStats{
           operatorId,
           driverCtx->pipelineId,
@@ -111,7 +114,7 @@ void Operator::maybeSetTracer() {
   }
 
   const auto nodeId = planNodeId();
-  if (traceConfig->queryNodes.count(nodeId) == 0) {
+  if (traceConfig->queryNodeId.empty() || traceConfig->queryNodeId != nodeId) {
     return;
   }
 
@@ -387,7 +390,7 @@ void Operator::recordBlockingTime(uint64_t start, BlockingReason reason) {
 }
 
 void Operator::recordSpillStats() {
-  const auto lockedSpillStats = spillStats_.wlock();
+  const auto lockedSpillStats = spillStats_->wlock();
   auto lockedStats = stats_.wlock();
   lockedStats->spilledInputBytes += lockedSpillStats->spilledInputBytes;
   lockedStats->spilledBytes += lockedSpillStats->spilledBytes;
@@ -589,6 +592,14 @@ void OperatorStats::add(const OperatorStats& other) {
     }
   }
 
+  for (const auto& [name, exprStats] : other.expressionStats) {
+    if (UNLIKELY(expressionStats.count(name) == 0)) {
+      expressionStats.insert(std::make_pair(name, exprStats));
+    } else {
+      expressionStats.at(name).add(exprStats);
+    }
+  }
+
   numDrivers += other.numDrivers;
   spilledInputBytes += other.spilledInputBytes;
   spilledBytes += other.spilledBytes;
@@ -625,6 +636,7 @@ void OperatorStats::clear() {
   memoryStats.clear();
 
   runtimeStats.clear();
+  expressionStats.clear();
 
   numDrivers = 0;
   spilledInputBytes = 0;

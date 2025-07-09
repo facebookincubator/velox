@@ -59,7 +59,7 @@ class RowVector : public BaseVector {
 
     // Check child vector types.
     // This can be an expensive operation, so it's only done at debug time.
-    for (auto i = 0; i < children_.size(); i++) {
+    for (size_t i = 0; i < children_.size(); i++) {
       const auto& child = children_[i];
       if (child) {
         VELOX_DCHECK(
@@ -168,7 +168,7 @@ class RowVector : public BaseVector {
       velox::memory::MemoryPool* pool = nullptr) const override {
     std::vector<VectorPtr> copiedChildren(children_.size());
 
-    for (auto i = 0; i < children_.size(); ++i) {
+    for (size_t i = 0; i < children_.size(); ++i) {
       copiedChildren[i] = children_[i]->testingCopyPreserveEncodings(pool);
     }
 
@@ -312,6 +312,7 @@ class RowVector : public BaseVector {
 /// 'sizes' data and provide manipulations on them.
 struct ArrayVectorBase : BaseVector {
   ArrayVectorBase(const ArrayVectorBase&) = delete;
+
   const BufferPtr& offsets() const {
     return offsets_;
   }
@@ -381,6 +382,24 @@ struct ArrayVectorBase : BaseVector {
       const vector_size_t* offsets,
       const vector_size_t* sizes,
       std::vector<vector_size_t>& indices);
+
+  /// Ensure the offsets and sizes of null rows are all 0.  It's caller's
+  /// responsibility to make sure the vector as well as offsets and sizes
+  /// buffers are mutable (e.g. singly referenced).
+  void ensureNullRowsEmpty();
+
+  /// Return a string representation of a limited number of elements at the
+  /// start of the array or map.
+  ///
+  /// @param size Total number of elements.
+  /// @param stringifyElement Function to call to append individual elements.
+  /// Will be called up to 'limit' times.
+  /// @param limit Maximum number of elements to include in the result.
+  static std::string stringifyTruncatedElementList(
+      vector_size_t size,
+      const std::function<void(std::stringstream&, vector_size_t)>&
+          stringifyElement,
+      vector_size_t limit = 5);
 
  protected:
   ArrayVectorBase(

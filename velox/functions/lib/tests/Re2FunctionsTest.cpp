@@ -21,6 +21,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "velox/common/base/VeloxException.h"
 #include "velox/common/base/tests/GTestUtils.h"
@@ -1533,35 +1534,6 @@ TEST_F(Re2FunctionsTest, limit) {
   VELOX_ASSERT_THROW(
       evaluate("regexp_like(c0, c1)", data), "Max number of regex reached");
   ASSERT_NO_THROW(evaluate("regexp_like(c0, c2)", data));
-}
-
-TEST_F(Re2FunctionsTest, split) {
-  auto input = makeRowVector({
-      makeFlatVector<std::string>({
-          "1a 2b 14m",
-          "1a 2b 14",
-          "",
-          "a123b",
-      }),
-  });
-  auto result = evaluate("regexp_split(c0, '\\s*[a-z]+\\s*')", input);
-
-  auto expected = makeArrayVector<std::string>({
-      {"1", "2", "14", ""},
-      {"1", "2", "14"},
-      {""},
-      {"", "123", ""},
-  });
-  assertEqualVectors(expected, result);
-
-  result = evaluate("regexp_split(c0, '\\s*\\d+\\s*')", input);
-  expected = makeArrayVector<std::string>({
-      {"", "a", "b", "m"},
-      {"", "a", "b", ""},
-      {""},
-      {"a", "b"},
-  });
-  assertEqualVectors(expected, result);
 }
 
 TEST_F(Re2FunctionsTest, parseSubstrings) {

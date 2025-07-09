@@ -15,9 +15,6 @@
  */
 #pragma once
 
-#include <set>
-#include "velox/core/PlanNode.h"
-#include "velox/core/QueryCtx.h"
 #include "velox/parse/IExpr.h"
 
 namespace facebook::velox::parse {
@@ -34,14 +31,17 @@ struct ParseOptions {
   std::string functionPrefix;
 };
 
-std::shared_ptr<const core::IExpr> parseExpr(
-    const std::string& expr,
-    const ParseOptions& options);
+core::ExprPtr parseExpr(const std::string& expr, const ParseOptions& options);
 
-std::pair<std::shared_ptr<const core::IExpr>, core::SortOrder> parseOrderByExpr(
-    const std::string& expr);
+struct OrderByClause {
+  core::ExprPtr expr;
+  bool ascending;
+  bool nullsFirst;
+};
 
-std::vector<std::shared_ptr<const core::IExpr>> parseMultipleExpressions(
+OrderByClause parseOrderByExpr(const std::string& expr);
+
+std::vector<core::ExprPtr> parseMultipleExpressions(
     const std::string& expr,
     const ParseOptions& options);
 

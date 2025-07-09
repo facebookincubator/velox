@@ -20,10 +20,11 @@ add_library(
   PrestoQueryRunner.cpp
   PrestoQueryRunnerIntermediateTypeTransforms.cpp
   PrestoQueryRunnerTimestampWithTimeZoneTransform.cpp
+  PrestoQueryRunnerJsonTransform.cpp
+  PrestoQueryRunnerIntervalTransform.cpp
   PrestoQueryRunnerToSqlPlanNodeVisitor.cpp
   FuzzerUtil.cpp
-  PrestoSql.cpp
-  PrestoQueryRunnerIntermediateTypeTransforms.cpp)
+  PrestoSql.cpp)
 
 target_link_libraries(
   velox_fuzzer_util
@@ -142,7 +143,9 @@ target_link_libraries(
   velox_dwio_faulty_file_sink
   velox_file_test_utils)
 
-add_library(velox_memory_arbitration_fuzzer MemoryArbitrationFuzzer.cpp)
+# Arbitration Fuzzer.
+add_executable(velox_memory_arbitration_fuzzer MemoryArbitrationFuzzerRunner.cpp
+                                               MemoryArbitrationFuzzer.cpp)
 
 target_link_libraries(
   velox_memory_arbitration_fuzzer

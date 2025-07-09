@@ -16,6 +16,7 @@
 #pragma once
 
 #include "velox/common/base/Status.h"
+#include "velox/core/QueryConfig.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/prestosql/types/BingTileType.h"
 
@@ -148,6 +149,12 @@ struct BingTileParentFunction {
       out_type<BingTile>& result,
       const arg_type<BingTile>& tile,
       const arg_type<int32_t>& parentZoom) {
+    if (FOLLY_UNLIKELY(parentZoom > BingTileType::kBingTileMaxZoomLevel)) {
+      return Status::UserError(fmt::format(
+          "newZoom {} is greater than max zoom {}",
+          parentZoom,
+          BingTileType::kBingTileMaxZoomLevel));
+    }
     return call(result, tile, static_cast<int8_t>(parentZoom));
   }
 };
@@ -155,6 +162,17 @@ struct BingTileParentFunction {
 template <typename T>
 struct BingTileChildrenFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  uint8_t maxZoomShift = 5;
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& inputTypes,
+      const core::QueryConfig& config,
+      const arg_type<BingTile>* /* tile */,
+      const arg_type<int8_t>* /* childZoom */) {
+    maxZoomShift =
+        std::max<uint8_t>(config.debugBingTileChildrenMaxZoomShift(), 1);
+  }
 
   FOLLY_ALWAYS_INLINE Status
   call(out_type<Array<BingTile>>& result, const arg_type<BingTile>& tile) {
@@ -165,7 +183,8 @@ struct BingTileChildrenFunction {
       return Status::UserError(
           fmt::format("Cannot call bing_tile_children on zoom 23 tile"));
     }
-    auto childrenRes = BingTileType::bingTileChildren(tileInt, tileZoom + 1);
+    auto childrenRes =
+        BingTileType::bingTileChildren(tileInt, tileZoom + 1, maxZoomShift);
     if (FOLLY_UNLIKELY(childrenRes.hasError())) {
       return Status::UserError(childrenRes.error());
     }
@@ -185,7 +204,8 @@ struct BingTileChildrenFunction {
       return Status::UserError(
           fmt::format("Cannot call bing_tile_children with negative zoom"));
     }
-    auto childrenRes = BingTileType::bingTileChildren(tileInt, childZoom);
+    auto childrenRes =
+        BingTileType::bingTileChildren(tileInt, childZoom, maxZoomShift);
     if (FOLLY_UNLIKELY(childrenRes.hasError())) {
       return Status::UserError(childrenRes.error());
     }

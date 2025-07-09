@@ -1,7 +1,20 @@
-// (c) Meta Platforms, Inc. and affiliates. Confidential and proprietary.
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 
 #include "velox/exec/tests/utils/TableScanTestBase.h"
-
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -145,7 +158,7 @@ void TableScanTestBase::testPartitionedTableImpl(
                    .build();
   auto outputType =
       ROW({"pkey", "c0", "c1"}, {partitionType, BIGINT(), DOUBLE()});
-  ColumnHandleMap assignments = {
+  connector::ColumnHandleMap assignments = {
       {"pkey", partitionKey("pkey", partitionType)},
       {"c0", regularColumn("c0", BIGINT())},
       {"c1", regularColumn("c1", DOUBLE())}};

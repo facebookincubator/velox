@@ -90,7 +90,8 @@ class BingTileFunctionsTest : public functions::test::FunctionBaseTest {
     uint64_t tileInt = BingTileType::bingTileCoordsToInt(x, y, tileZoom);
     // Making children is tested in BingTileTypeTest; this test is for whether
     // we call it correctly.
-    auto childrenRes = BingTileType::bingTileChildren(tileInt, childZoom);
+    auto childrenRes = BingTileType::bingTileChildren(
+        tileInt, childZoom, childZoom - tileZoom);
     if (childrenRes.hasError()) {
       return folly::makeUnexpected(childrenRes.error());
     }
@@ -362,6 +363,14 @@ TEST_F(BingTileFunctionsTest, bingTileParentZoom) {
       testBingTileParent(0, 0, 0, 1), "Parent zoom 1 must be <= tile zoom 0");
   VELOX_ASSERT_USER_THROW(
       testBingTileParent(5, 17, 5, 8), "Parent zoom 8 must be <= tile zoom 5");
+  VELOX_ASSERT_USER_THROW(
+      evaluateOnce<int64_t>(
+          "CAST(bing_tile_parent(bing_tile(c0, c1, c2), c3) AS BIGINT)",
+          std::optional<int32_t>(0),
+          std::optional<int32_t>(0),
+          std::optional<int8_t>(0),
+          std::optional<int32_t>(99)),
+      "newZoom 99 is greater than max zoom 23");
 }
 
 TEST_F(BingTileFunctionsTest, bingTileChildren) {
@@ -446,6 +455,23 @@ TEST_F(BingTileFunctionsTest, bingTileChildrenZoom) {
       "Cannot call bing_tile_children with negative zoom");
   VELOX_ASSERT_USER_THROW(
       testBingTileChildren(0, 0, 2, 1), "Child zoom 1 must be >= tile zoom 2");
+  VELOX_ASSERT_USER_THROW(
+      testBingTileChildren(0, 0, 1, 7),
+      "Difference between parent zoom (1) and child zoom (7) must be <= 5");
+
+  {
+    RowVectorPtr input = makeSingleXYZoomZoomRow(0, 0, 1, 7);
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{core::QueryConfig::kDebugBingTileChildrenMaxZoomShift, "10"}});
+    evaluate("bing_tile_children(bing_tile(c0, c1, c2), c3)", input);
+
+    input = makeSingleXYZoomZoomRow(0, 0, 1, 15);
+    VELOX_ASSERT_USER_THROW(
+        evaluate("bing_tile_children(bing_tile(c0, c1, c2), c3)", input),
+        "Difference between parent zoom (1) and child zoom (15) must be <= 10");
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{core::QueryConfig::kDebugBingTileChildrenMaxZoomShift, "5"}});
+  }
 }
 
 TEST_F(BingTileFunctionsTest, bingTileAt) {

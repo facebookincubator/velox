@@ -97,6 +97,11 @@ struct BinomialCDFFunction {
       return;
     }
 
+    if (value >= numOfTrials) {
+      result = 1.0;
+      return;
+    }
+
     boost::math::binomial_distribution<> dist(numOfTrials, successProb);
     result = boost::math::cdf(dist, value);
   }
@@ -404,6 +409,62 @@ struct InversePoissonCDFFunction {
     } else {
       result = static_cast<int32_t>(quantile);
     }
+  }
+};
+
+template <typename T>
+struct InverseFCDFFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void
+  call(double& result, double df1, double df2, double p) {
+    static constexpr double kInf = std::numeric_limits<double>::infinity();
+
+    VELOX_USER_CHECK(
+        p >= 0 && p <= 1 && p != kInf,
+        "inverseFCdf Function: p must be in the interval [0, 1]");
+    VELOX_USER_CHECK(
+        df1 > 0 && df1 != kInf,
+        "inverseFCdf Function: numerator df must be greater than 0");
+    VELOX_USER_CHECK(
+        df2 > 0 && df2 != kInf,
+        "inverseFCdf Function: denominator df must be greater than 0");
+
+    if (p == 0.0) {
+      result = 0.0;
+      return;
+    } else if (p == 1.0) {
+      result = std::numeric_limits<double>::infinity();
+      return;
+    }
+    boost::math::fisher_f_distribution<> dist(df1, df2);
+    result = boost::math::quantile(dist, p);
+  }
+};
+
+template <typename T>
+struct InverseChiSquaredCdf {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(double& result, double df, double p) {
+    static constexpr double kInf = std::numeric_limits<double>::infinity();
+
+    VELOX_USER_CHECK(
+        p >= 0 && p <= 1 && p != kInf,
+        "inverseChiSquaredCdf Function: p must be in the interval [0, 1]");
+    VELOX_USER_CHECK(
+        df > 0 && df != kInf,
+        "inverseChiSquaredCdf Function: df must be greater than 0");
+
+    if (p == 0.0) {
+      result = 0.0;
+      return;
+    } else if (p == 1.0) {
+      result = std::numeric_limits<double>::infinity();
+      return;
+    }
+    boost::math::chi_squared_distribution<> dist(df);
+    result = boost::math::quantile(dist, p);
   }
 };
 
