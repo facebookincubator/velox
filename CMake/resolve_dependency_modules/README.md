@@ -18,7 +18,6 @@ by Velox. See details on bundling below.
 | libsodium         | default         | No       |
 | lz4               | default         | No       |
 | snappy            | default         | No       |
-| lzo               | default         | No       |
 | xz                | default         | No       |
 | zstd              | default         | No       |
 | openssl           | default         | No       |
@@ -32,6 +31,7 @@ by Velox. See details on bundling below.
 | re2               | 2021-04-01      | Yes      |
 | fmt               | 10.1.1          | Yes      |
 | simdjson          | 3.9.3           | Yes      |
+| faiss             | 1.11.0          | Yes      |
 | folly             | v2025.04.28.00  | Yes      |
 | fizz              | v2025.04.28.00  | No       |
 | wangle            | v2025.04.28.00  | No       |

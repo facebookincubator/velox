@@ -28,6 +28,7 @@
 #include "velox/functions/prestosql/fuzzer/ModulusArgTypesGenerator.h"
 #include "velox/functions/prestosql/fuzzer/MultiplyArgTypesGenerator.h"
 #include "velox/functions/prestosql/fuzzer/PlusMinusArgTypesGenerator.h"
+
 #include "velox/functions/prestosql/fuzzer/SortArrayTransformer.h"
 #include "velox/functions/prestosql/fuzzer/TruncateArgTypesGenerator.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
@@ -60,7 +61,9 @@ using facebook::velox::fuzzer::ExpressionFuzzer;
 using facebook::velox::fuzzer::FuzzerRunner;
 using facebook::velox::fuzzer::JsonExtractArgValuesGenerator;
 using facebook::velox::fuzzer::JsonParseArgValuesGenerator;
+using facebook::velox::fuzzer::QDigestArgValuesGenerator;
 using facebook::velox::fuzzer::TDigestArgValuesGenerator;
+using facebook::velox::fuzzer::UnifiedDigestArgValuesGenerator;
 using facebook::velox::test::ReferenceQueryRunner;
 
 int main(int argc, char** argv) {
@@ -82,20 +85,18 @@ int main(int argc, char** argv) {
   // Use function name to exclude all signatures of a given function from
   // testing. Use function signature to exclude only a specific signature.
   std::unordered_set<std::string> skipFunctions = {
-      // Fuzzer and the underlying engine are confused about cardinality(HLL)
-      // (since HLL is a user defined type), and end up trying to use
-      // cardinality passing a VARBINARY (since HLL's implementation uses an
-      // alias to VARBINARY).
-      "cardinality",
       "element_at",
       "width_bucket",
       // Fuzzer and the underlying engine are confused about TDigest output
       // (since TDigest is a user defined type), and tries to pass a
       // VARBINARY (since TDigest's implementation uses an
       // alias to VARBINARY).
-      "values_at_quantiles",
       "merge_tdigest",
       "construct_tdigest",
+      "quantiles_at_values",
+      "values_at_quantiles", // Skip until
+                             // https://github.com/prestodb/presto/pull/25291 is
+                             // released
       // Fuzzer cannot generate valid 'comparator' lambda.
       "array_sort(array(T),constant function(T,T,bigint)) -> array(T)",
       "split_to_map(varchar,varchar,varchar,function(varchar,varchar,varchar,varchar)) -> map(varchar,varchar)",
@@ -138,6 +139,7 @@ int main(int argc, char** argv) {
       "st_centroid",
       "st_distance",
       "st_geometrytype",
+      "st_polygon",
       "st_relate",
       "st_contains",
       "st_crosses",
@@ -189,7 +191,11 @@ int main(int argc, char** argv) {
           {"json_parse", std::make_shared<JsonParseArgValuesGenerator>()},
           {"json_extract", std::make_shared<JsonExtractArgValuesGenerator>()},
           {"value_at_quantile",
-           std::make_shared<TDigestArgValuesGenerator>("value_at_quantile")},
+           std::make_shared<UnifiedDigestArgValuesGenerator>(
+               "value_at_quantile")},
+          {"values_at_quantiles",
+           std::make_shared<UnifiedDigestArgValuesGenerator>(
+               "values_at_quantiles")},
           {"scale_tdigest",
            std::make_shared<TDigestArgValuesGenerator>("scale_tdigest")},
           {"quantile_at_value",
@@ -271,6 +277,9 @@ int main(int argc, char** argv) {
         "inverse_binomial_cdf", // https://github.com/facebookincubator/velox/issues/12981
         "inverse_poisson_cdf", // https://github.com/facebookincubator/velox/issues/12982
         "inverse_f_cdf", // https://github.com/facebookincubator/velox/issues/13715
+        "inverse_chi_squared_cdf", // https://github.com/facebookincubator/velox/issues/13788
+        "bing_tile_children", // Velox limits the max zoom shift
+                              // https://github.com/facebookincubator/velox/pull/13604
     });
 
     referenceQueryRunner = std::make_shared<PrestoQueryRunner>(

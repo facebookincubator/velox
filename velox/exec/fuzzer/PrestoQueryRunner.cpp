@@ -32,10 +32,14 @@
 #include "velox/exec/fuzzer/PrestoQueryRunnerToSqlPlanNodeVisitor.h"
 #include "velox/exec/fuzzer/PrestoSql.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
+#include "velox/functions/prestosql/types/BingTileType.h"
 #include "velox/functions/prestosql/types/GeometryType.h"
+#include "velox/functions/prestosql/types/HyperLogLogType.h"
 #include "velox/functions/prestosql/types/IPAddressType.h"
 #include "velox/functions/prestosql/types/IPPrefixType.h"
 #include "velox/functions/prestosql/types/JsonType.h"
+#include "velox/functions/prestosql/types/QDigestType.h"
+#include "velox/functions/prestosql/types/TDigestType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/functions/prestosql/types/UuidType.h"
 #include "velox/serializers/PrestoSerializer.h"
@@ -303,7 +307,9 @@ bool PrestoQueryRunner::isConstantExprSupported(
     return type->isPrimitiveType() && !type->isTimestamp() &&
         !isJsonType(type) && !type->isIntervalDayTime() &&
         !isIPAddressType(type) && !isIPPrefixType(type) && !isUuidType(type) &&
-        !isTimestampWithTimeZoneType(type);
+        !isTimestampWithTimeZoneType(type) && !isHyperLogLogType(type) &&
+        !isTDigestType(type) && !isQDigestType(type) && !isBingTileType(type);
+    ;
   }
   return true;
 }
@@ -318,12 +324,8 @@ bool PrestoQueryRunner::isSupported(const exec::FunctionSignature& signature) {
   // special handling, because Presto requires literals of these types to be
   // valid, and doesn't allow creating HIVE columns of these types.
   return !(
-      usesTypeName(signature, "bingtile") ||
       usesTypeName(signature, "interval year to month") ||
       usesTypeName(signature, "hugeint") ||
-      usesTypeName(signature, "hyperloglog") ||
-      usesTypeName(signature, "tdigest") ||
-      usesInputTypeName(signature, "json") ||
       usesInputTypeName(signature, "ipaddress") ||
       usesInputTypeName(signature, "ipprefix") ||
       usesInputTypeName(signature, "uuid"));
@@ -375,6 +377,10 @@ std::string PrestoQueryRunner::createTable(
   return tableDirectoryPath;
 }
 
+void PrestoQueryRunner::cleanUp(const std::string& name) {
+  execute(fmt::format("DROP TABLE IF EXISTS {}", name));
+}
+
 std::pair<
     std::optional<std::vector<velox::RowVectorPtr>>,
     ReferenceQueryErrorCode>
@@ -404,8 +410,13 @@ PrestoQueryRunner::executeAndReturnVector(const core::PlanNodePtr& plan) {
         writeToFile(filePath, input, writerPool.get());
       }
 
-      // Run the query.
-      return std::make_pair(execute(*sql), ReferenceQueryErrorCode::kSuccess);
+      // Run the query. If successful, delete the table.
+      auto result = execute(*sql);
+      for (const auto& [tableName, _] : inputMap) {
+        cleanUp(tableName);
+      }
+
+      return std::make_pair(result, ReferenceQueryErrorCode::kSuccess);
     } catch (const VeloxRuntimeError& e) {
       // Throw if connection to Presto server is unsuccessful.
       if (e.message().find("Couldn't connect to server") != std::string::npos) {

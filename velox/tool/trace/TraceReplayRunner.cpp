@@ -246,7 +246,6 @@ TraceReplayRunner::TraceReplayRunner()
 
 void TraceReplayRunner::init() {
   VELOX_USER_CHECK(!FLAGS_root_dir.empty(), "--root_dir must be provided");
-  VELOX_USER_CHECK(!FLAGS_query_id.empty(), "--query_id must be provided");
   VELOX_USER_CHECK(!FLAGS_node_id.empty(), "--node_id must be provided");
 
   if (!memory::MemoryManager::testInstance()) {
@@ -362,11 +361,13 @@ TraceReplayRunner::createReplayer() const {
   } else if (traceNodeName == "TableScan") {
     const auto connectorId =
         taskTraceMetadataReader_->connectorId(FLAGS_node_id);
+    VELOX_CHECK(connectorId.has_value());
+
     if (const auto& collectors = connector::getAllConnectors();
-        collectors.find(connectorId) == collectors.end()) {
+        collectors.find(connectorId.value()) == collectors.end()) {
       const auto hiveConnector =
           connector::getConnectorFactory("hive")->newConnector(
-              connectorId,
+              connectorId.value(),
               std::make_shared<config::ConfigBase>(
                   std::unordered_map<std::string, std::string>()),
               ioExecutor_.get());

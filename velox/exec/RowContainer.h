@@ -1102,7 +1102,7 @@ class RowContainer {
 
     BufferPtr& nullBuffer = result->mutableNulls(maxRows, true);
     auto nulls = nullBuffer->asMutable<uint64_t>();
-    BufferPtr valuesBuffer = result->mutableValues(maxRows);
+    BufferPtr valuesBuffer = result->mutableValues();
     [[maybe_unused]] auto values = valuesBuffer->asMutableRange<T>();
     for (int32_t i = 0; i < numRows; ++i) {
       const char* row;
@@ -1134,9 +1134,9 @@ class RowContainer {
       int32_t offset,
       int32_t resultOffset,
       FlatVector<T>* result) {
-    auto maxRows = numRows + resultOffset;
+    [[maybe_unused]] auto maxRows = numRows + resultOffset;
     VELOX_DCHECK_LE(maxRows, result->size());
-    BufferPtr valuesBuffer = result->mutableValues(maxRows);
+    BufferPtr valuesBuffer = result->mutableValues();
     [[maybe_unused]] auto values = valuesBuffer->asMutableRange<T>();
     for (int32_t i = 0; i < numRows; ++i) {
       const char* row;
@@ -1873,11 +1873,21 @@ class RowComparator {
   /// Returns true if lhs < rhs, false otherwise.
   bool operator()(const char* lhs, const char* rhs);
 
-  /// Returns true if decodeVectors[index] < rhs, false otherwise.
+  /// Returns 0 for equal, < 0 for lhs < rhs, > 0 otherwise.
+  int compare(const char* lhs, const char* rhs);
+
+  /// Returns true if decodedVectors[index] < other, false otherwise.
   bool operator()(
       const std::vector<DecodedVector>& decodedVectors,
       vector_size_t index,
-      const char* rhs);
+      const char* other);
+
+  /// Returns 0 for equal, < 0 for decodedVectors[index] < other,
+  /// > 0 otherwise.
+  int32_t compare(
+      const std::vector<DecodedVector>& decodedVectors,
+      vector_size_t index,
+      const char* other);
 
  private:
   std::vector<std::pair<column_index_t, core::SortOrder>> keyInfo_;

@@ -247,6 +247,8 @@ void Driver::init(
     std::vector<std::unique_ptr<Operator>> operators) {
   VELOX_CHECK_NULL(ctx_);
   ctx_ = std::move(ctx);
+  enableOperatorBatchSizeStats_ =
+      ctx_->queryConfig().enableOperatorBatchSizeStats();
   cpuSliceMs_ = task()->driverCpuTimeSliceLimitMs();
   VELOX_CHECK(operators_.empty());
   operators_ = std::move(operators);
@@ -262,55 +264,6 @@ void Driver::initializeOperators() {
   for (auto& op : operators_) {
     op->initialize();
   }
-}
-
-void Driver::pushdownFilters(int operatorIndex) {
-  auto* op = operators_[operatorIndex].get();
-  const auto& filters = op->getDynamicFilters();
-  if (filters.empty()) {
-    return;
-  }
-  const auto& planNodeId = op->planNodeId();
-
-  op->addRuntimeStat("dynamicFiltersProduced", RuntimeCounter(filters.size()));
-
-  // Walk operator list upstream and find a place to install the filters.
-  for (const auto& entry : filters) {
-    auto channel = entry.first;
-    for (auto i = operatorIndex - 1; i >= 0; --i) {
-      auto prevOp = operators_[i].get();
-
-      if (i == 0) {
-        // Source operator.
-        VELOX_CHECK(
-            prevOp->canAddDynamicFilter(),
-            "Cannot push down dynamic filters produced by {}",
-            op->toString());
-        prevOp->addDynamicFilter(planNodeId, channel, entry.second);
-        prevOp->addRuntimeStat("dynamicFiltersAccepted", RuntimeCounter(1));
-        break;
-      }
-
-      const auto& identityProjections = prevOp->identityProjections();
-      const auto inputChannel =
-          getIdentityProjection(identityProjections, channel);
-      if (!inputChannel.has_value()) {
-        // Filter channel is not an identity projection.
-        VELOX_CHECK(
-            prevOp->canAddDynamicFilter(),
-            "Cannot push down dynamic filters produced by {}",
-            op->toString());
-        prevOp->addDynamicFilter(planNodeId, channel, entry.second);
-        prevOp->addRuntimeStat("dynamicFiltersAccepted", RuntimeCounter(1));
-        break;
-      }
-
-      // Continue walking upstream.
-      channel = inputChannel.value();
-    }
-  }
-
-  op->clearDynamicFilters();
 }
 
 RowVectorPtr Driver::next(
@@ -624,15 +577,14 @@ StopReason Driver::runInternal(
                   kOpMethodGetOutput);
               if (intermediateResult) {
                 validateOperatorOutputResult(intermediateResult, *op);
-                resultBytes = intermediateResult->estimateFlatSize();
-                {
-                  auto lockedStats = op->stats().wlock();
-                  lockedStats->addOutputVector(
-                      resultBytes, intermediateResult->size());
+                if (enableOperatorBatchSizeStats()) {
+                  resultBytes = intermediateResult->estimateFlatSize();
                 }
+                auto lockedStats = op->stats().wlock();
+                lockedStats->addOutputVector(
+                    resultBytes, intermediateResult->size());
               }
             });
-            pushdownFilters(i);
             if (intermediateResult) {
               withDeltaCpuWallTimer(
                   nextOp, &OperatorStats::addInputTiming, [&]() {
@@ -714,12 +666,12 @@ StopReason Driver::runInternal(
                 getOutput(op, result), op, curOperatorId_, kOpMethodGetOutput);
             if (result) {
               validateOperatorOutputResult(result, *op);
-
-              {
-                auto lockedStats = op->stats().wlock();
-                lockedStats->addOutputVector(
-                    result->estimateFlatSize(), result->size());
+              vector_size_t resultByteSize{0};
+              if (enableOperatorBatchSizeStats()) {
+                resultByteSize = result->estimateFlatSize();
               }
+              auto lockedStats = op->stats().wlock();
+              lockedStats->addOutputVector(resultByteSize, result->size());
             }
           });
 
@@ -743,7 +695,6 @@ StopReason Driver::runInternal(
             close();
             return StopReason::kAtEnd;
           }
-          pushdownFilters(i);
           continue;
         }
       }
@@ -974,22 +925,23 @@ bool Driver::mayPushdownAggregation(Operator* aggregation) const {
       aggregation->toString());
 }
 
-std::unordered_set<column_index_t> Driver::canPushdownFilters(
-    const Operator* filterSource,
-    const std::vector<column_index_t>& channels) const {
-  int filterSourceIndex = -1;
+int Driver::operatorIndex(const Operator* op) const {
+  int index = -1;
   for (auto i = 0; i < operators_.size(); ++i) {
-    auto op = operators_[i].get();
-    if (filterSource == op) {
-      filterSourceIndex = i;
+    if (op == operators_[i].get()) {
+      index = i;
       break;
     }
   }
   VELOX_CHECK_GE(
-      filterSourceIndex,
-      0,
-      "Operator not found in its Driver: {}",
-      filterSource->toString());
+      index, 0, "Operator not found in its Driver: {}", op->toString());
+  return index;
+}
+
+std::unordered_set<column_index_t> Driver::canPushdownFilters(
+    const Operator* filterSource,
+    const std::vector<column_index_t>& channels) const {
+  const int filterSourceIndex = operatorIndex(filterSource);
 
   std::unordered_set<column_index_t> supportedChannels;
   for (auto i = 0; i < channels.size(); ++i) {
@@ -1022,6 +974,73 @@ std::unordered_set<column_index_t> Driver::canPushdownFilters(
   }
 
   return supportedChannels;
+}
+
+int Driver::pushdownFilters(
+    Operator* filterSource,
+    const std::vector<column_index_t>& channels,
+    const std::function<bool(column_index_t, common::FilterPtr&)>& makeFilter) {
+  const int filterSourceIndex = operatorIndex(filterSource);
+  int numFiltersProduced = 0;
+  std::vector<int> numFiltersAccepted(filterSourceIndex);
+  for (auto i = 0; i < channels.size(); ++i) {
+    auto channel = channels[i];
+    int j = -1;
+    for (j = filterSourceIndex - 1; j >= 0; --j) {
+      auto* prevOp = operators_[j].get();
+      if (j == 0) {
+        // Source operator.
+        break;
+      }
+      const auto& identityProjections = prevOp->identityProjections();
+      const auto inputChannel =
+          getIdentityProjection(identityProjections, channel);
+      if (!inputChannel.has_value()) {
+        // Filter channel is not an identity projection.
+        break;
+      }
+      // Continue walking upstream.
+      channel = inputChannel.value();
+    }
+    if (!(j >= 0 && operators_[j]->canAddDynamicFilter())) {
+      continue;
+    }
+    common::FilterPtr filter;
+    auto lkSource = pushdownFilters_->at(filterSourceIndex).wlock();
+    if (makeFilter(i, filter)) {
+      if (filter) {
+        // A new filter is generated.
+        auto lkTarget = pushdownFilters_->at(j).wlock();
+        common::Filter::merge(filter, lkTarget->filters[channel]);
+        lkTarget->dynamicFilteredColumns.insert(channel);
+      } else {
+        // Same filter is already generated by another operator on the same
+        // node.  Just do some sanity check here.
+        auto lkTarget = pushdownFilters_->at(j).rlock();
+        VELOX_CHECK(
+            lkTarget->filters.at(channel) &&
+            lkTarget->dynamicFilteredColumns.contains(channel));
+      }
+      ++numFiltersProduced;
+      ++numFiltersAccepted[j];
+    }
+  }
+  for (int j = 0; j < filterSourceIndex; ++j) {
+    if (numFiltersAccepted[j] == 0) {
+      continue;
+    }
+    {
+      auto lk = pushdownFilters_->at(j).rlock();
+      operators_[j]->addDynamicFilterLocked(filterSource->planNodeId(), *lk);
+    }
+    operators_[j]->addRuntimeStat(
+        "dynamicFiltersAccepted", RuntimeCounter(numFiltersAccepted[j]));
+  }
+  if (numFiltersProduced > 0) {
+    filterSource->addRuntimeStat(
+        "dynamicFiltersProduced", RuntimeCounter(numFiltersProduced));
+  }
+  return numFiltersProduced;
 }
 
 Operator* Driver::findOperator(std::string_view planNodeId) const {

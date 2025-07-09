@@ -220,9 +220,9 @@ class Expr {
 
   void clearMemo() {
     baseOfDictionaryRepeats_ = 0;
-    baseOfDictionary_.reset();
-    baseOfDictionaryWeakPtr_.reset();
     baseOfDictionaryRawPtr_ = nullptr;
+    baseOfDictionaryWeakPtr_.reset();
+    baseOfDictionary_.reset();
     dictionaryCache_ = nullptr;
     cachedDictionaryIndices_ = nullptr;
   }
@@ -750,8 +750,9 @@ class ExprSet {
   /// name. If a function or a special form occurs in the expression
   /// multiple times, the statistics will be aggregated across all calls.
   /// Statistics will be missing for functions and special forms that didn't get
-  /// evaluated.
-  std::unordered_map<std::string, exec::ExprStats> stats() const;
+  /// evaluated. If 'excludeSpecialForm' is true, special forms are excluded.
+  std::unordered_map<std::string, exec::ExprStats> stats(
+      bool excludeSpecialForm = false) const;
 
  protected:
   void clearSharedSubexprs();
@@ -816,6 +817,7 @@ std::unique_ptr<ExprSet> makeExprSetFromFlag(
 VectorPtr tryEvaluateConstantExpression(
     const core::TypedExprPtr& expr,
     memory::MemoryPool* pool,
+    const std::shared_ptr<core::QueryCtx>& queryCtx,
     bool suppressEvaluationFailures = false);
 
 /// Returns a string representation of the expression trees annotated with
