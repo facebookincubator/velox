@@ -68,9 +68,12 @@ inline uint64_t hashOne<StringView, true>(StringView value) {
   return common::hll::Murmur3Hash128::hash64(value.data(), value.size(), 0);
 }
 
-template <typename T, bool HllAsFinalResult>
+template <
+    typename T,
+    bool HllAsFinalResult,
+    typename Allocator = HashStringAllocator>
 struct HllAccumulator {
-  explicit HllAccumulator(HashStringAllocator* allocator)
+  explicit HllAccumulator(Allocator* allocator)
       : sparseHll_{allocator}, denseHll_{allocator} {}
 
   void setIndexBitLength(int8_t indexBitLength) {
@@ -95,7 +98,7 @@ struct HllAccumulator {
     return isSparse_ ? sparseHll_.cardinality() : denseHll_.cardinality();
   }
 
-  void mergeWith(StringView serialized, HashStringAllocator* allocator) {
+  void mergeWith(StringView serialized, Allocator* allocator) {
     auto input = serialized.data();
     if (SparseHll::canDeserialize(input)) {
       if (isSparse_) {

@@ -19,6 +19,7 @@
 #include "velox/common/hyperloglog/HllUtils.h"
 #include "velox/common/hyperloglog/SparseHll.h"
 #include "velox/functions/Macros.h"
+#include "velox/functions/prestosql/aggregates/HyperLogLogAggregate.h"
 #include "velox/functions/prestosql/types/HyperLogLogType.h"
 
 namespace facebook::velox::functions {
@@ -78,6 +79,48 @@ struct EmptyApproxSetWithMaxErrorFunction {
       double /*maxStandardError*/) {
     result.resize(serialized_.size());
     memcpy(result.data(), serialized_.data(), serialized_.size());
+    return true;
+  }
+};
+
+template <typename T>
+struct MergeHllFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<HyperLogLog>& result,
+      const arg_type<Array<HyperLogLog>>& input) {
+    if (input.size() == 0) {
+      return false;
+    }
+
+    auto functionPool = memory::memoryManager()->addLeafPool();
+    HashStringAllocator functionAllocator(functionPool.get());
+
+    // Use HllAccumulator with function-scoped memory and allocator
+    aggregate::prestosql::HllAccumulator<int64_t, true> accumulator(
+        &functionAllocator);
+
+    bool hasValidInput = false;
+
+    // Merge all HLLs
+    for (auto i = 0; i < input.size(); i++) {
+      if (!input[i].has_value()) {
+        continue;
+      }
+      hasValidInput = true;
+      const auto& hll = input[i].value();
+      StringView serialized(hll.data(), hll.size());
+      accumulator.mergeWith(serialized, &functionAllocator);
+    }
+
+    if (!hasValidInput) {
+      return false;
+    }
+
+    int32_t size = accumulator.serializedSize();
+    result.resize(size);
+    accumulator.serialize(result.data());
     return true;
   }
 };
