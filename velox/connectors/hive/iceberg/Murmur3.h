@@ -18,6 +18,7 @@
 
 #include "velox/type/HugeInt.h"
 #include "velox/type/StringView.h"
+#include "velox/vector/DecodedVector.h"
 
 namespace facebook::velox::connector::hive::iceberg {
 constexpr uint32_t kDefaultSeed = 0;
@@ -33,6 +34,13 @@ class Murmur3_32 final {
   static int32_t hash(const char* const data, size_t length);
 
   static int32_t hashDecimal(int128_t value);
+
+  template <typename T>
+  static void hash(
+      folly::F14FastMap<vector_size_t, int32_t>& result,
+      DecodedVector* decoded,
+      TypePtr type,
+      int32_t parameter);
 
  private:
   FOLLY_ALWAYS_INLINE static uint32_t mixK1(uint32_t k1) {

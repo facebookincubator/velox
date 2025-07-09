@@ -15,8 +15,7 @@
  */
 
 #include "velox/connectors/hive/iceberg/Murmur3.h"
-
-#include "type/DecimalUtil.h"
+#include "velox/type/DecimalUtil.h"
 #include "velox/type/HugeInt.h"
 
 namespace facebook::velox::connector::hive::iceberg {
@@ -79,5 +78,57 @@ int32_t Murmur3_32::hashDecimal(int128_t value) {
   DecimalUtil::toByteArray(value, bytes);
   return hash(bytes, length);
 }
+
+template <typename T>
+void Murmur3_32::hash(
+    folly::F14FastMap<vector_size_t, int32_t>& result,
+    DecodedVector* decoded,
+    TypePtr type,
+    int32_t parameter) {
+  for (auto i = 0; i < decoded->size(); ++i) {
+    if (!decoded->isNullAt(i)) {
+      T value = decoded->valueAt<T>(i);
+      if constexpr (std::is_same_v<T, int64_t> || std::is_same_v<T, int128_t>) {
+        if (type->isDecimal()) {
+          result[i] = Murmur3_32::hashDecimal(value) & 0x7FFFFFFF % parameter;
+        } else {
+          result[i] = Murmur3_32::hash(value) & 0x7FFFFFFF % parameter;
+        }
+      } else {
+        result[i] = Murmur3_32::hash(value) & 0x7FFFFFFF % parameter;
+      }
+    }
+  }
+}
+
+template void Murmur3_32::hash<StringView>(
+    folly::F14FastMap<vector_size_t, int32_t>& result,
+    DecodedVector* decoded,
+    TypePtr type,
+    int32_t parameter);
+
+template void Murmur3_32::hash<Timestamp>(
+    folly::F14FastMap<vector_size_t, int32_t>& result,
+    DecodedVector* decoded,
+    TypePtr type,
+    int32_t parameter);
+
+template void Murmur3_32::hash<int32_t>(
+    folly::F14FastMap<vector_size_t, int32_t>& result,
+    DecodedVector* decoded,
+    TypePtr type,
+    int32_t parameter);
+
+template void Murmur3_32::hash<int64_t>(
+    folly::F14FastMap<vector_size_t, int32_t>& result,
+    DecodedVector* decoded,
+    TypePtr type,
+    int32_t parameter);
+
+template void Murmur3_32::hash<int128_t>(
+    folly::F14FastMap<vector_size_t, int32_t>& result,
+    DecodedVector* decoded,
+    TypePtr type,
+    int32_t parameter);
 
 } // namespace facebook::velox::connector::hive::iceberg

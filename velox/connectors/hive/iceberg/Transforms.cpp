@@ -85,27 +85,12 @@ VectorPtr BucketTransform<T>::apply(const VectorPtr& block) const {
     result->setNulls(block->nulls());
   }
 
-  auto flatResult = result->template as<FlatVector<int32_t>>();
   DecodedVector decoded(*block);
-
-  for (auto i = 0; i < block->size(); ++i) {
-    if (!decoded.isNullAt(i)) {
-      T value = decoded.valueAt<T>(i);
-      uint32_t hashValue;
-      if constexpr (std::is_same_v<T, int64_t> || std::is_same_v<T, int128_t>) {
-        if (sourceType_->isDecimal()) {
-          hashValue = Murmur3_32::hashDecimal(value);
-        } else {
-          hashValue = Murmur3_32::hash(value);
-        }
-      } else {
-        hashValue = Murmur3_32::hash(value);
-      }
-
-      flatResult->set(i, (hashValue & 0x7FFFFFFF) % parameter_.value());
-    }
+  folly::F14FastMap<vector_size_t, int32_t> hashedValues;
+  Murmur3_32::hash<T>(hashedValues, &decoded, sourceType_, parameter_.value());
+  for (auto [k, v] : hashedValues) {
+    result->set(k, v);
   }
-
   return result;
 }
 
