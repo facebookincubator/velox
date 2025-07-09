@@ -181,6 +181,22 @@ Returns 0, if the string was not found or if the given string <code class="docut
 </dd></dl>
 
 <dl class="spark function">
+<dt class="sig sig-object spark" id="initcap">
+<span class="sig-name descname"><span class="pre">initcap</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#initcap" title="Link to this definition">¶</a></dt>
+<dd><p>The <code class="docutils literal notranslate"><span class="pre">initcap</span></code> function converts the first character of each word to uppercase
+and all other characters in the word to lowercase. It supports UTF-8 multibyte
+characters, up to four bytes per character.</p>
+<p>A <em>word</em> is defined as a sequence of characters separated by whitespace.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>SELECT initcap(&#39;spark sql&#39;); -- Spark Sql
+SELECT initcap(&#39;spARK sQL&#39;); -- Spark Sql
+SELECT initcap(&#39;123abc DEF!ghi&#39;); -- 123abc Def!ghi
+SELECT initcap(&#39;élan vital für alle&#39;); -- Élan Vital Für Alle
+SELECT initcap(&#39;hello-world test_case&#39;); -- Hello-world Test_case
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="spark function">
 <dt class="sig sig-object spark" id="instr">
 <span class="sig-name descname"><span class="pre">instr</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">substring</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#instr" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the starting position of the first instance of <code class="docutils literal notranslate"><span class="pre">substring</span></code> in
@@ -641,6 +657,7 @@ Note: This function is not directly callable in Spark SQL, but internally used f
 <li><a class="reference internal" href="#empty2null"><code class="docutils literal notranslate"><span class="pre">empty2null()</span></code></a></li>
 <li><a class="reference internal" href="#endswith"><code class="docutils literal notranslate"><span class="pre">endswith()</span></code></a></li>
 <li><a class="reference internal" href="#find_in_set"><code class="docutils literal notranslate"><span class="pre">find_in_set()</span></code></a></li>
+<li><a class="reference internal" href="#initcap"><code class="docutils literal notranslate"><span class="pre">initcap()</span></code></a></li>
 <li><a class="reference internal" href="#instr"><code class="docutils literal notranslate"><span class="pre">instr()</span></code></a></li>
 <li><a class="reference internal" href="#left"><code class="docutils literal notranslate"><span class="pre">left()</span></code></a></li>
 <li><a class="reference internal" href="#length"><code class="docutils literal notranslate"><span class="pre">length()</span></code></a></li>
