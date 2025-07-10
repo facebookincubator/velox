@@ -59,14 +59,12 @@ void ParquetData::filterRowGroups(
   if (scanSpec.filter() || scanSpec.numMetadataFilters() > 0) {
     for (auto i = 0; i < fileMetaDataPtr_.numRowGroups(); ++i) {
       if (scanSpec.filter() && !rowGroupMatches(i, scanSpec.filter())) {
-        // std::cout << "row group " << i << " is filtered" << std::endl;
         bits::setBit(result.filterResult.data(), i);
         continue;
       }
       for (int j = 0; j < scanSpec.numMetadataFilters(); ++j) {
         auto* metadataFilter = scanSpec.metadataFilterAt(j);
         if (!rowGroupMatches(i, metadataFilter)) {
-          // std::cout << "row group " << i << " is filtered" << std::endl;
           bits::setBit(
               result.metadataFilterResults[metadataFiltersStartIndex + j]
                   .second.data(),
@@ -101,7 +99,8 @@ bool ParquetData::rowGroupMatches(
 void ParquetData::collectIndexPageInfoMap(
     uint32_t index,
     PageIndexInfoMap& map) {
-  auto chunk = fileMetaDataPtr_.rowGroup(index).columnChunk(type_->column());
+  const auto& chunk =
+      fileMetaDataPtr_.rowGroup(index).columnChunk(type_->column());
   if (chunk.hasColumnAndOffsetIndexOffset()) {
     map[type_->column()] = {
         chunk.offsetIndexOffset(),
@@ -123,73 +122,59 @@ void ParquetData::filterDataPages(
     pageIndices_[index].reset();
   }
 
-  if (pageIndices_[index] != nullptr) {
-    RowRanges temp;
-    auto numPages = pageIndices_[index]->numPages();
-    auto type = type_->type();
-    // std::cout <<"row group " << index << " column" << type_->column() <<
-    // "page index filter:" << numPages << std::endl;
-    for (auto i = 0; i < numPages; ++i) {
-      auto numRows = pageIndices_[index]->pageRowCount(i);
-      auto firstRowIndex = pageIndices_[index]->pageFirstRowIndex(i);
-      // std::cout <<"row group " << index << " column" << type_->column();
-      auto stats = pageIndices_[index]->buildColumnStatisticsForPage(i, *type);
-
-      if (scanSpec_.filter() &&
-          !testFilter(scanSpec_.filter(), stats.get(), numRows, type)) {
-        // std::cout <<"row group " << index << " column" << type_->column() <<
-        // " page " << i<< "filter done" << std::endl;
-        continue;
-      }
-      bool shouldSkip = false;
-      for (int j = 0; j < scanSpec_.numMetadataFilters(); ++j) {
-        auto* metadataFilter = scanSpec_.metadataFilterAt(j);
-        if (metadataFilter &&
-            !testFilter(metadataFilter, stats.get(), numRows, type)) {
-          // std::cout <<"row group " << index << " column" << type_->column()
-          // << " page " << i << "metadata filter done" << std::endl;
-          shouldSkip = true;
-          continue;
-        }
-      }
-      if (shouldSkip) {
-        continue;
-      }
-      RowRange r(firstRowIndex, firstRowIndex + numRows - 1);
-      // std::cout <<"row group " << index << " column" << type_->column() <<
-      // "page " << i <<  " add " << firstRowIndex << " " << firstRowIndex +
-      // numRows - 1 << std::endl;
-      temp.add(r);
-    }
-    // std::cout <<"row group " << index << " column" << type_->column() <<
-    // "intersection:" << range.toString() << " " << temp.toString() <<
-    // std::endl;
-    range = RowRanges::intersection(range, temp);
-    // std::cout <<"row group " << index << " column" << type_->column() <<
-    // "end filterDataPages:" << range.toString() << std::endl;
+  if (!pageIndices_[index]) {
+    return;
   }
+
+  RowRanges filteredPages;
+  auto* pageIndex = pageIndices_[index].get();
+  auto numPages = pageIndex->numPages();
+  auto type = type_->type();
+
+  for (auto i = 0; i < numPages; ++i) {
+    auto numRows = pageIndex->pageRowCount(i);
+    auto firstRowIndex = pageIndex->pageFirstRowIndex(i);
+    auto stats = pageIndex->buildColumnStatisticsForPage(i, *type);
+
+    // Skip page if main filter does not match.
+    if (scanSpec_.filter() &&
+        !testFilter(scanSpec_.filter(), stats.get(), numRows, type)) {
+      continue;
+    }
+
+    // Skip page if any metadata filter does not match.
+    bool skip = false;
+    for (int j = 0; j < scanSpec_.numMetadataFilters(); ++j) {
+      auto* metadataFilter = scanSpec_.metadataFilterAt(j);
+      if (metadataFilter &&
+          !testFilter(metadataFilter, stats.get(), numRows, type)) {
+        skip = true;
+        break;
+      }
+    }
+    if (skip) {
+      continue;
+    }
+
+    filteredPages.add(RowRange(firstRowIndex, firstRowIndex + numRows - 1));
+  }
+
+  range = RowRanges::intersection(range, filteredPages);
 }
+
 void ParquetData::enqueueRowGroup(
     uint32_t index,
     dwio::common::BufferedInput& input,
     const RowRanges& rowRanges) {
-  if (pageIndices_.size() > index && pageIndices_[index] != nullptr) {
-    // std::cout <<"row group " << index << " column" << type_->column() <<
-    // "update skip pages:" << rowRanges.toString() << std::endl;
-    pageIndices_[index]->updateSkippedPages(rowRanges);
-    for (int i = 0; i < pageIndices_[index]->numPages(); ++i) {
-      if (pageIndices_[index]->isPageSkipped(i)) {
-      }
-      // std::cout <<"row group " << index << " page " << i << " is skipped"<<
-      // std::endl;
-    }
-  }
   auto chunk = fileMetaDataPtr_.rowGroup(index).columnChunk(type_->column());
   streams_.resize(fileMetaDataPtr_.numRowGroups());
+  pagesStreams_.resize(fileMetaDataPtr_.numRowGroups());
+  pageIndices_.resize(fileMetaDataPtr_.numRowGroups());
   VELOX_CHECK(
       chunk.hasMetadata(),
       "ColumnMetaData does not exist for schema Id ",
       type_->column());
+
   uint64_t chunkReadOffset = chunk.dataPageOffset();
   if (chunk.hasDictionaryPageOffset() && chunk.dictionaryPageOffset() >= 4) {
     // this assumes the data pages follow the dict pages directly.
@@ -200,6 +185,60 @@ void ParquetData::enqueueRowGroup(
       (chunk.compression() == common::CompressionKind::CompressionKind_NONE)
       ? chunk.totalUncompressedSize()
       : chunk.totalCompressedSize();
+  // Check if the required chunk is already buffered.
+  if (!input.isBuffered(chunkReadOffset, readSize)) {
+    // Determine if page skipping should be applied based on parent type.
+    bool applyPageSkipping = true;
+    for (auto* parent = type_.get(); parent != nullptr;
+         parent = parent->parquetParent()) {
+      if (parent->parquetParent() &&
+          (parent->type()->kind() == TypeKind::ARRAY ||
+           parent->type()->kind() == TypeKind::MAP ||
+           parent->type()->kind() == TypeKind::ROW)) {
+        applyPageSkipping = false;
+        break;
+      }
+    }
+
+    // Update skipped pages if applicable.
+    if (pageIndices_[index] && applyPageSkipping) {
+      pageIndices_[index]->updateSkippedPages(rowRanges);
+    }
+
+    // If there are skipped pages, enqueue only the required streams.
+    if (pageIndices_[index] && pageIndices_[index]->hasSkippedPages()) {
+      auto numPages = pageIndices_[index]->numPages();
+      pagesStreams_[index].resize(1 + numPages);
+
+      // Handle dictionary page if present.
+      uint64_t dictOffset =
+          chunk.hasDictionaryPageOffset() && chunk.dictionaryPageOffset() >= 4
+          ? chunk.dictionaryPageOffset()
+          : 0;
+      if (dictOffset) {
+        readSize = chunk.dataPageOffset() - dictOffset;
+        auto id = dwio::common::StreamIdentifier(type_->column());
+        pagesStreams_[index][0] = input.enqueue({dictOffset, readSize}, &id);
+      } else {
+        pagesStreams_[index][0] = nullptr;
+      }
+
+      // Enqueue streams for each page, skipping as needed.
+      for (size_t i = 0; i < numPages; ++i) {
+        if (pageIndices_[index]->isPageSkipped(i)) {
+          pagesStreams_[index][i + 1] = nullptr;
+        } else {
+          uint64_t pageOffset = pageIndices_[index]->pageOffset(i);
+          uint64_t pageSize = pageIndices_[index]->compressedPageSize(i);
+          auto id =
+              dwio::common::StreamIdentifier(type_->column() * numPages + i);
+          pagesStreams_[index][i + 1] =
+              input.enqueue({pageOffset, pageSize}, &id);
+        }
+      }
+      return;
+    }
+  }
 
   auto id = dwio::common::StreamIdentifier(type_->column());
   streams_[index] = input.enqueue({chunkReadOffset, readSize}, &id);
@@ -208,16 +247,29 @@ void ParquetData::enqueueRowGroup(
 dwio::common::PositionProvider ParquetData::seekToRowGroup(int64_t index) {
   static std::vector<uint64_t> empty;
   VELOX_CHECK_LT(index, streams_.size());
-  VELOX_CHECK(streams_[index], "Stream not enqueued for column");
   auto metadata = fileMetaDataPtr_.rowGroup(index).columnChunk(type_->column());
-  reader_ = std::make_unique<PageReader>(
-      std::move(streams_[index]),
-      pool_,
-      type_,
-      metadata.compression(),
-      metadata.totalCompressedSize(),
-      stats_,
-      sessionTimezone_);
+  if (pageIndices_[index] != nullptr &&
+      pageIndices_[index]->hasSkippedPages()) {
+    reader_ = std::make_unique<PageReader>(
+        std::move(pagesStreams_[index]),
+        pool_,
+        type_,
+        metadata.compression(),
+        metadata.totalCompressedSize(),
+        stats_,
+        sessionTimezone_,
+        std::move(pageIndices_[index]));
+  } else {
+    VELOX_CHECK(streams_[index], "Stream not enqueued for column");
+    reader_ = std::make_unique<PageReader>(
+        std::move(streams_[index]),
+        pool_,
+        type_,
+        metadata.compression(),
+        metadata.totalCompressedSize(),
+        stats_,
+        sessionTimezone_);
+  }
   return dwio::common::PositionProvider(empty);
 }
 

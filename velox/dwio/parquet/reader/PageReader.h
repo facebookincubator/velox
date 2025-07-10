@@ -23,6 +23,7 @@
 #include "velox/dwio/common/compression/Compression.h"
 #include "velox/dwio/parquet/common/RleEncodingInternal.h"
 #include "velox/dwio/parquet/reader/BooleanDecoder.h"
+#include "velox/dwio/parquet/reader/ColumnPageIndex.h"
 #include "velox/dwio/parquet/reader/DeltaBpDecoder.h"
 #include "velox/dwio/parquet/reader/DeltaByteArrayDecoder.h"
 #include "velox/dwio/parquet/reader/ParquetTypeWithId.h"
@@ -55,6 +56,31 @@ class PageReader {
         nullConcatenation_(pool_),
         stats_(stats),
         sessionTimezone_(sessionTimezone) {
+    type_->makeLevelInfo(leafInfo_);
+  }
+
+  PageReader(
+      std::vector<std::unique_ptr<dwio::common::SeekableInputStream>>&&
+          pageStreams,
+      memory::MemoryPool& pool,
+      ParquetTypeWithIdPtr fileType,
+      common::CompressionKind codec,
+      int64_t chunkSize,
+      dwio::common::ColumnReaderStatistics& stats,
+      const tz::TimeZone* sessionTimezone,
+      std::unique_ptr<ColumnPageIndex> pageIndex)
+      : pool_(pool),
+        pageStreams_(std::move(pageStreams)),
+        type_(std::move(fileType)),
+        maxRepeat_(type_->maxRepeat_),
+        maxDefine_(type_->maxDefine_),
+        isTopLevel_(maxRepeat_ == 0 && maxDefine_ <= 1),
+        codec_(codec),
+        chunkSize_(chunkSize),
+        nullConcatenation_(pool_),
+        stats_(stats),
+        sessionTimezone_(sessionTimezone),
+        columnPageIndex_(std::move(pageIndex)) {
     type_->makeLevelInfo(leafInfo_);
   }
 
@@ -379,6 +405,7 @@ class PageReader {
   memory::MemoryPool& pool_;
 
   std::unique_ptr<dwio::common::SeekableInputStream> inputStream_;
+  std::vector<std::unique_ptr<dwio::common::SeekableInputStream>> pageStreams_;
   ParquetTypeWithIdPtr type_;
   const int32_t maxRepeat_;
   const int32_t maxDefine_;
@@ -522,6 +549,9 @@ class PageReader {
   std::unique_ptr<DeltaByteArrayDecoder> deltaByteArrDecoder_;
   std::unique_ptr<RleBpDataDecoder> rleBooleanDecoder_;
   // Add decoders for other encodings here.
+
+  std::unique_ptr<ColumnPageIndex> columnPageIndex_{nullptr};
+  size_t columnPageIndexPosition_{0};
 };
 
 FOLLY_ALWAYS_INLINE dwio::common::compression::CompressionOptions

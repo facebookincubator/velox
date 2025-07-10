@@ -97,6 +97,11 @@ class ColumnPageIndex {
     return isPageSkipped_.at(i);
   }
 
+  /// @returns whether any page in this column chunk has been marked to skip.
+  bool hasSkippedPages() const {
+    return hasSkippedPages_;
+  }
+
   /// Update skip flags for all pages based on the given RowRanges.
   /// Any page whose [firstRow, firstRow+rowCount-1] does not overlap
   /// any range in `ranges` will be marked skipped.
@@ -107,6 +112,7 @@ class ColumnPageIndex {
       int64_t end = start + pageRowCount(i) - 1;
       bool overlap = ranges.isOverlapping(start, end);
       isPageSkipped_[i] = !overlap;
+      hasSkippedPages_ |= isPageSkipped_[i];
     }
   }
 
@@ -235,6 +241,7 @@ class ColumnPageIndex {
 
   std::vector<bool> isPageSkipped_;
   std::vector<uint64_t> pageRowCount_;
+  bool hasSkippedPages_{false};
 };
 
 } // namespace facebook::velox::parquet

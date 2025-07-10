@@ -50,30 +50,49 @@ void PageReader::seekToPage(int64_t row) {
       numRowsInPage_ = 0;
       break;
     }
-    PageHeader pageHeader = readPageHeader();
-    pageStart_ = pageDataStart_ + pageHeader.compressed_page_size;
-
-    switch (pageHeader.type) {
-      case thrift::PageType::DATA_PAGE:
-        prepareDataPageV1(pageHeader, row);
-        break;
-      case thrift::PageType::DATA_PAGE_V2:
-        prepareDataPageV2(pageHeader, row);
-        break;
-      case thrift::PageType::DICTIONARY_PAGE:
-        if (row == kRepDefOnly) {
-          skipBytes(
-              pageHeader.compressed_page_size,
-              inputStream_.get(),
-              bufferStart_,
-              bufferEnd_);
-          continue;
-        }
-        prepareDictionary(pageHeader);
-        continue;
-      default:
-        break; // ignore INDEX page type and any other custom extensions
+    bool pageSkipped = false;
+    size_t pageIndex = columnPageIndexPosition_++;
+    if (columnPageIndex_) {
+      if (pageIndex == 0 && pageStreams_[pageIndex] == nullptr) {
+        pageIndex = columnPageIndexPosition_++;
+      }
+      if (pageStreams_[pageIndex] != nullptr) {
+        inputStream_ = std::move(pageStreams_[pageIndex]);
+      } else {
+        pageSkipped = true;
+      }
     }
+    if (pageSkipped) {
+      pageStart_ =
+          pageStart_ + columnPageIndex_->compressedPageSize(pageIndex - 1);
+      numRowsInPage_ = columnPageIndex_->pageRowCount(pageIndex - 1);
+    } else {
+      PageHeader pageHeader = readPageHeader();
+      pageStart_ = pageDataStart_ + pageHeader.compressed_page_size;
+
+      switch (pageHeader.type) {
+        case thrift::PageType::DATA_PAGE:
+          prepareDataPageV1(pageHeader, row);
+          break;
+        case thrift::PageType::DATA_PAGE_V2:
+          prepareDataPageV2(pageHeader, row);
+          break;
+        case thrift::PageType::DICTIONARY_PAGE:
+          if (row == kRepDefOnly) {
+            skipBytes(
+                pageHeader.compressed_page_size,
+                inputStream_.get(),
+                bufferStart_,
+                bufferEnd_);
+            continue;
+          }
+          prepareDictionary(pageHeader);
+          continue;
+        default:
+          break; // ignore INDEX page type and any other custom extensions
+      }
+    }
+
     if (row == kRepDefOnly || row < rowOfPage_ + numRowsInPage_) {
       break;
     }
