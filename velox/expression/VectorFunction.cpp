@@ -204,4 +204,8 @@ void registerExpressionRewrite(ExpressionRewrite rewrite) {
   expressionRewrites().emplace_back(rewrite);
 }
 
+void unregisterExpressionRewrites() {
+  expressionRewrites().clear();
+}
+
 } // namespace facebook::velox::exec
