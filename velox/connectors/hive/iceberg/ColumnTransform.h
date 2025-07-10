@@ -78,6 +78,15 @@ class ColumnTransform {
     return transform_->apply(currentVector);
   }
 
+  /// Convert iceberg partition values to human-readable string.
+  /// @param value The partition value that has been applied the partition
+  /// transform.
+  /// @return The converted string.
+  template <typename T>
+  std::string toHumanString(const T& value) const {
+    return transform_->toHumanString(value);
+  }
+
  private:
   std::string columnName_;
   std::shared_ptr<Transform> transform_;
