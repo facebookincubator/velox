@@ -288,6 +288,44 @@ struct TypeAnalysis<LongDecimal<P, S>> {
   }
 };
 
+template <>
+struct TypeAnalysis<Varbinary> {
+  void run(TypeAnalysisResults& results) {
+    results.stats.concreteCount++;
+    const std::string kName = VaryingTypeMaximumLength::name();
+    results.out << fmt::format(
+        "varbinary({})", VaryingTypeMaximumLength::value());
+    results.addVariable(exec::SignatureVariable(
+        kName, std::nullopt, exec::ParameterType::kIntegerParameter));
+    results.physicalType = VARBINARY();
+  }
+};
+
+template <>
+struct TypeAnalysis<Varchar> {
+  void run(TypeAnalysisResults& results) {
+    results.stats.concreteCount++;
+    const std::string kName = VaryingTypeMaximumLength::name();
+    results.out << fmt::format(
+        "varchar({})", VaryingTypeMaximumLength::value());
+    results.addVariable(exec::SignatureVariable(
+        kName, std::nullopt, exec::ParameterType::kIntegerParameter));
+    results.physicalType = VARCHAR();
+  }
+};
+
+template <typename L>
+struct TypeAnalysis<VarcharN<L>> {
+  void run(TypeAnalysisResults& results) {
+    results.stats.concreteCount++;
+    const auto l = L::name();
+    results.out << fmt::format("varchar({})", l);
+    results.addVariable(exec::SignatureVariable(
+        l, std::nullopt, exec::ParameterType::kIntegerParameter));
+    results.physicalType = VARCHAR();
+  }
+};
+
 template <typename K, typename V>
 struct TypeAnalysis<Map<K, V>> {
   void run(TypeAnalysisResults& results) {

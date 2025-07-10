@@ -28,7 +28,7 @@ bool isAny(const TypeSignature& typeSignature) {
 }
 
 /// Returns true only if 'str' contains digits.
-bool isPositiveInteger(const std::string& str) {
+bool isPositiveInteger(std::string_view str) {
   return !str.empty() &&
       std::find_if(str.begin(), str.end(), [](unsigned char c) {
         return !std::isdigit(c);
@@ -92,6 +92,16 @@ bool checkNamedRowField(
     return false;
   }
   return true;
+}
+
+bool isUnboundedVarcharSignature(
+    std::string_view typeName,
+    std::string_view parameterName) {
+  if (isVarcharName(typeName) && isPositiveInteger(parameterName) &&
+      parameterName == VarcharType::kUnboundedLengthStr) {
+    return true;
+  }
+  return false;
 }
 
 } // namespace
@@ -215,6 +225,10 @@ bool SignatureBinderBase::tryBind(
     const auto& actualParameter = actualType->parameters()[i];
     switch (actualParameter.kind) {
       case TypeParameterKind::kLongLiteral:
+        // Always accept binding VARCHAR(X) to VARCHAR.
+        if (isUnboundedVarcharSignature(typeName, params[i].baseName())) {
+          continue;
+        }
         if (!checkOrSetIntegerParameter(
                 params[i].baseName(), actualParameter.longLiteral.value())) {
           return false;
