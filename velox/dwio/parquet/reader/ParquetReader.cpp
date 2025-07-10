@@ -1241,14 +1241,10 @@ class ParquetRowReader::Impl {
     VELOX_DCHECK_GT(rowsToRead, 0);
 
     RowRange readRange(currentRowInGroup_, currentRowInGroup_ + rowsToRead - 1);
-    // std::cout << "rowRanges_:" << rowRanges_[nextRowGroupIdsIdx_ -
-    // 1].toString() << " read range:" << readRange.toString() << std::endl;
     auto [chunk, overlap] = RowRanges::firstSplitByIntersection(
         readRange, rowRanges_[nextRowGroupIdsIdx_ - 1]);
     if (!overlap) {
       auto rowsToSkip = chunk.count();
-      // std::cout << "skip "<< rowsToSkip << " rows and return empty result:"
-      // << result->type()->toString() << std::endl;
       columnReader_->skip(rowsToSkip);
       columnReader_->setReadOffset(columnReader_->readOffset() + rowsToSkip);
       result = RowVector::createEmpty(result->type(), &pool_);
@@ -1256,8 +1252,6 @@ class ParquetRowReader::Impl {
       return rowsToSkip;
     } else {
       if (rowsToRead != chunk.count()) {
-        // std::cout << "read with small size: " << chunk.count() << "
-        // oringinal:" << rowsToRead << std::endl;
         rowsToRead = chunk.count();
       }
     }
