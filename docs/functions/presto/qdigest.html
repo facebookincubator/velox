@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>Quantile Digest Functions &#8212; Velox  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=8f2a1f02" />
+    <link rel="stylesheet" type="text/css" href="../../_static/nature.css?v=0f882399" />
+    <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../../_static/doctools.js?v=9a2dae69"></script>
+    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="Geospatial Operators" href="geospatial.html" />
+    <link rel="prev" title="T-Digest Functions" href="tdigest.html" /> 
+  </head><body>
+    <div class="related" role="navigation" aria-label="Related">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../../genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="geospatial.html" title="Geospatial Operators"
+             accesskey="N">next</a> |</li>
+        <li class="right" >
+          <a href="tdigest.html" title="T-Digest Functions"
+             accesskey="P">previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../../functions.html" accesskey="U">Presto Functions</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Quantile Digest Functions</a></li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <section id="quantile-digest-functions">
+<h1>Quantile Digest Functions<a class="headerlink" href="#quantile-digest-functions" title="Link to this heading">¶</a></h1>
+<p>Quantile digest and <a class="reference external" href="https://doi.org/10.1016/j.simpa.2020.100049">T-digest</a> are two
+older algorithms for estimating rank-based metrics. While T-digest generally has <a class="reference external" href="https://arxiv.org/abs/1902.04023">better
+performance</a> and better accuracy at the tails,
+quantile digest supports more numeric types (<code class="docutils literal notranslate"><span class="pre">bigint</span></code>, <code class="docutils literal notranslate"><span class="pre">double</span></code>, <code class="docutils literal notranslate"><span class="pre">real</span></code>) and
+provides a maximum rank error guarantee, which ensures relative uniformity of precision
+along the quantiles. Quantile digests are also formally proven to support lossless merges,
+while T-digest is not (though it does empirically demonstrate lossless merges).</p>
+<p>Velox uses the modern KLL sketch algorithm for the <code class="docutils literal notranslate"><span class="pre">approx_percentile</span></code> function, which
+provides stronger accuracy guarantees than both quantile digest and T-digest.
+The quantile digest functions documented here exist primarily to support
+pre-existing workloads that have data stored using the <a class="reference external" href="http://dx.doi.org/10.1145/347090.347195">quantile
+digest</a> format for backward compatibility.</p>
+<section id="data-structures">
+<h2>Data Structures<a class="headerlink" href="#data-structures" title="Link to this heading">¶</a></h2>
+<p>A quantile digest is a data sketch which stores approximate percentile
+information. The Velox type for this data structure is called <code class="docutils literal notranslate"><span class="pre">qdigest</span></code>,
+and it takes a parameter which must be one of <code class="docutils literal notranslate"><span class="pre">bigint</span></code>, <code class="docutils literal notranslate"><span class="pre">double</span></code> or
+<code class="docutils literal notranslate"><span class="pre">real</span></code> which represent the set of numbers that may be ingested by the
+<code class="docutils literal notranslate"><span class="pre">qdigest</span></code>. They may be merged without losing precision, and for storage
+and retrieval they may be cast to/from <code class="docutils literal notranslate"><span class="pre">VARBINARY</span></code>.</p>
+<p>In the function signatures below, <code class="docutils literal notranslate"><span class="pre">T</span></code> represents the parameterized type of the qdigest,
+which can be <code class="docutils literal notranslate"><span class="pre">bigint</span></code>, <code class="docutils literal notranslate"><span class="pre">double</span></code>, or <code class="docutils literal notranslate"><span class="pre">real</span></code>.</p>
+</section>
+<section id="functions">
+<h2>Functions<a class="headerlink" href="#functions" title="Link to this heading">¶</a></h2>
+<dl class="py function">
+<dt class="sig sig-object py" id="merge">
+<span class="sig-name descname"><span class="pre">merge</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">qdigest&lt;T&gt;</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">qdigest&lt;T&gt;</span></span></span><a class="headerlink" href="#merge" title="Link to this definition">¶</a></dt>
+<dd><p>Merges all input <code class="docutils literal notranslate"><span class="pre">qdigest</span></code>s into a single <code class="docutils literal notranslate"><span class="pre">qdigest</span></code>.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="qdigest_agg">
+<span class="sig-name descname"><span class="pre">qdigest_agg</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">T</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">qdigest&lt;T&gt;</span></span></span><a class="headerlink" href="#qdigest_agg" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the <code class="docutils literal notranslate"><span class="pre">qdigest</span></code> which summarizes the approximate distribution of all input values of <code class="docutils literal notranslate"><span class="pre">x</span></code>.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">qdigest_agg</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">T</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">w</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bigint</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">qdigest&lt;T&gt;</span></span></span></dt>
+<dd><blockquote>
+<div><p>Returns the <code class="docutils literal notranslate"><span class="pre">qdigest</span></code> which summarizes the approximate distribution of all input values of <code class="docutils literal notranslate"><span class="pre">x</span></code> using
+the per-item weight <code class="docutils literal notranslate"><span class="pre">w</span></code>.</p>
+</div></blockquote>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">qdigest_agg</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">T</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">w</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bigint</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">accuracy</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">double</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">qdigest&lt;T&gt;</span></span></span></dt>
+<dd><blockquote>
+<div><p>Returns the <code class="docutils literal notranslate"><span class="pre">qdigest</span></code> which summarizes the approximate distribution of all input values of <code class="docutils literal notranslate"><span class="pre">x</span></code> using
+the per-item weight <code class="docutils literal notranslate"><span class="pre">w</span></code> and maximum error of <code class="docutils literal notranslate"><span class="pre">accuracy</span></code>. <code class="docutils literal notranslate"><span class="pre">accuracy</span></code>
+must be a value greater than zero and less than one, and it must be constant
+for all input rows.</p>
+</div></blockquote>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="value_at_quantile">
+<span class="sig-name descname"><span class="pre">value_at_quantile</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">digest:</span> <span class="pre">qdigest&lt;T&gt;</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">quantile:</span> <span class="pre">double</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">T</span></span></span><a class="headerlink" href="#value_at_quantile" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the approximate percentile values from the quantile digest <code class="docutils literal notranslate"><span class="pre">digest</span></code> given the <code class="docutils literal notranslate"><span class="pre">quantile</span></code>.
+The <code class="docutils literal notranslate"><span class="pre">quantile</span></code> must be between zero and one (inclusive).</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="values_at_quantiles">
+<span class="sig-name descname"><span class="pre">values_at_quantiles</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">digest:</span> <span class="pre">qdigest&lt;T&gt;</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">quantiles:</span> <span class="pre">array&lt;double&gt;</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">array&lt;T&gt;</span></span></span><a class="headerlink" href="#values_at_quantiles" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the approximate percentile values as an array from the quantile digest <code class="docutils literal notranslate"><span class="pre">digest</span></code> at each of the specified quantiles given in the <code class="docutils literal notranslate"><span class="pre">quantiles</span></code> array.
+All quantile values must be between zero and one (inclusive).</p>
+</dd></dl>
+
+</section>
+</section>
+
+
+            <div class="clearer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="Main">
+        <div class="sphinxsidebarwrapper">
+  <div>
+    <h3><a href="../../index.html">Table of Contents</a></h3>
+    <ul>
+<li><a class="reference internal" href="#">Quantile Digest Functions</a><ul>
+<li><a class="reference internal" href="#data-structures">Data Structures</a></li>
+<li><a class="reference internal" href="#functions">Functions</a><ul>
+<li><a class="reference internal" href="#merge"><code class="docutils literal notranslate"><span class="pre">merge()</span></code></a></li>
+<li><a class="reference internal" href="#qdigest_agg"><code class="docutils literal notranslate"><span class="pre">qdigest_agg()</span></code></a></li>
+<li><a class="reference internal" href="#value_at_quantile"><code class="docutils literal notranslate"><span class="pre">value_at_quantile()</span></code></a></li>
+<li><a class="reference internal" href="#values_at_quantiles"><code class="docutils literal notranslate"><span class="pre">values_at_quantiles()</span></code></a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+  </div>
+  <div>
+    <h4>Previous topic</h4>
+    <p class="topless"><a href="tdigest.html"
+                          title="previous chapter">T-Digest Functions</a></p>
+  </div>
+  <div>
+    <h4>Next topic</h4>
+    <p class="topless"><a href="geospatial.html"
+                          title="next chapter">Geospatial Operators</a></p>
+  </div>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../../_sources/functions/presto/qdigest.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<search id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</search>
+<script>document.getElementById('searchbox').style.display = "block"</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="Related">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../../genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="geospatial.html" title="Geospatial Operators"
+             >next</a> |</li>
+        <li class="right" >
+          <a href="tdigest.html" title="T-Digest Functions"
+             >previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../../functions.html" >Presto Functions</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Quantile Digest Functions</a></li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+    &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.4.7.
+    </div>
+  </body>
+</html>

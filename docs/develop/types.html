@@ -275,6 +275,12 @@ The table below shows the supported Presto types.</p>
 <tr class="row-even"><td><p>GEOMETRY</p></td>
 <td><p>VARBINARY</p></td>
 </tr>
+<tr class="row-odd"><td><p>TDIGEST</p></td>
+<td><p>VARBINARY</p></td>
+</tr>
+<tr class="row-even"><td><p>QDIGEST</p></td>
+<td><p>VARBINARY</p></td>
+</tr>
 </tbody>
 </table>
 <p>TIMESTAMP WITH TIME ZONE represents a time point in milliseconds precision
@@ -304,6 +310,16 @@ As a result the IPPREFIX object stores <em>FFFF:FFFF::</em> and the length 32 fo
 <span class="n">IPPREFIX</span> <span class="s1">&#39;FFFF:FFFF:4455:6677:8899:AABB:CCDD:EEFF/32&#39;</span> <span class="o">--</span> <span class="n">IPPREFIX</span> <span class="s1">&#39;FFFF:FFFF:0000:0000:0000:0000:0000:0000/32&#39;</span>
 </pre></div>
 </div>
+<p>TDIGEST(DOUBLE) is a data sketch for estimating rank-based metrics.
+T-digests may be merged without losing precision, and for storage and retrieval
+they may be cast to/from VARBINARY. The T-digest accepts a parameter of type
+DOUBLE which represents the set of numbers to be ingested by the T-digest.</p>
+<p>QDIGEST(BIGINT), QDIGEST(REAL), QDIGEST(DOUBLE) are data sketches for
+estimating rank-based metrics. A quantile digest captures the approximate distribution of
+data for a given input set, and can be queried to retrieve approximate quantile values from the
+distribution. They may be merged without losing precision, and for storage and retrieval they may
+be cast to/from VARBINARY. The parameter type (BIGINT, REAL, or DOUBLE) represents
+the set of numbers that may be ingested by the quantile digest.</p>
 </section>
 <section id="spark-types">
 <h2>Spark Types<a class="headerlink" href="#spark-types" title="Link to this heading">¶</a></h2>

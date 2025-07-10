@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>T-Digest Functions &#8212; Velox  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=8f2a1f02" />
+    <link rel="stylesheet" type="text/css" href="../../_static/nature.css?v=0f882399" />
+    <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../../_static/doctools.js?v=9a2dae69"></script>
+    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="Quantile Digest Functions" href="qdigest.html" />
+    <link rel="prev" title="HyperLogLog Functions" href="hyperloglog.html" /> 
+  </head><body>
+    <div class="related" role="navigation" aria-label="Related">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../../genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="qdigest.html" title="Quantile Digest Functions"
+             accesskey="N">next</a> |</li>
+        <li class="right" >
+          <a href="hyperloglog.html" title="HyperLogLog Functions"
+             accesskey="P">previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../../functions.html" accesskey="U">Presto Functions</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">T-Digest Functions</a></li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <section id="t-digest-functions">
+<h1>T-Digest Functions<a class="headerlink" href="#t-digest-functions" title="Link to this heading">¶</a></h1>
+<p>T-digest and <a class="reference external" href="http://dx.doi.org/10.1145/347090.347195">quantile digest</a> are two
+older algorithms for estimating rank-based metrics. T-digest generally has <a class="reference external" href="https://arxiv.org/abs/1902.04023">better
+performance</a> than quantile digest and better accuracy
+at the tails (often dramatically better), but may have worse accuracy at the median
+depending on the compression factor used. In comparison, quantile digest supports more
+numeric types and provides a maximum rank error guarantee, which ensures relative uniformity
+of precision along the quantiles. Quantile digests are also formally proven to support
+lossless merges, while T-digest is not (though it does empirically demonstrate lossless merges).</p>
+<p>T-digest was developed by Ted Dunning and is more restrictive in its type support,
+accepting only <code class="docutils literal notranslate"><span class="pre">double</span></code> type parameters. This contrasts with quantile digest, which
+supports a broader range of numeric types including <code class="docutils literal notranslate"><span class="pre">bigint</span></code>, <code class="docutils literal notranslate"><span class="pre">double</span></code>, and <code class="docutils literal notranslate"><span class="pre">real</span></code>,
+making quantile digest more versatile for different data types.</p>
+<p>Velox uses the modern KLL sketch algorithm for the <code class="docutils literal notranslate"><span class="pre">approx_percentile</span></code> function, which
+provides stronger accuracy guarantees than both T-digest and quantile digest.
+The T-digest functions documented here exist primarily to support
+pre-existing workloads that have data stored using the <a class="reference external" href="https://doi.org/10.1016/j.simpa.2020.100049">T-digest</a> format for backward compatibility.</p>
+<section id="data-structures">
+<h2>Data Structures<a class="headerlink" href="#data-structures" title="Link to this heading">¶</a></h2>
+<p>A T-digest is a data sketch which stores approximate percentile information.
+The Velox type for this data structure is called <code class="docutils literal notranslate"><span class="pre">tdigest</span></code>,
+and it accepts a parameter of type <code class="docutils literal notranslate"><span class="pre">double</span></code> which represents the set of
+numbers to be ingested by the <code class="docutils literal notranslate"><span class="pre">tdigest</span></code>.</p>
+<p>T-digests may be merged without losing precision, and for storage and retrieval
+they may be cast to/from <code class="docutils literal notranslate"><span class="pre">VARBINARY</span></code>.</p>
+</section>
+<section id="functions">
+<h2>Functions<a class="headerlink" href="#functions" title="Link to this heading">¶</a></h2>
+<dl class="py function">
+<dt class="sig sig-object py" id="construct_tdigest">
+<span class="sig-name descname"><span class="pre">construct_tdigest</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">means:</span> <span class="pre">array&lt;double&gt;</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">counts:</span> <span class="pre">array&lt;integer&gt;</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">compression:</span> <span class="pre">double</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">min:</span> <span class="pre">double</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">max:</span> <span class="pre">double</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sum:</span> <span class="pre">double</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">count:</span> <span class="pre">bigint</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">tdigest&lt;double&gt;</span></span></span><a class="headerlink" href="#construct_tdigest" title="Link to this definition">¶</a></dt>
+<dd><p>Constructs a T-digest from the given parameters:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">means</span></code> - array of centroid means</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">counts</span></code> - array of centroid counts (weights)</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">compression</span></code> - compression factor</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">min</span></code> - minimum value</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">max</span></code> - maximum value</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">sum</span></code> - sum of all values</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">count</span></code> - total count of values</p></li>
+</ul>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="destructure_tdigest">
+<span class="sig-name descname"><span class="pre">destructure_tdigest</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">digest:</span> <span class="pre">tdigest&lt;double&gt;)</span> <span class="pre">-&gt;</span> <span class="pre">row(means</span> <span class="pre">array&lt;double&gt;</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">counts</span> <span class="pre">array&lt;integer&gt;</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">compression</span> <span class="pre">double</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">min</span> <span class="pre">double</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">max</span> <span class="pre">double</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sum</span> <span class="pre">double</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">count</span> <span class="pre">bigint</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#destructure_tdigest" title="Link to this definition">¶</a></dt>
+<dd><p>Destructures a T-digest into its component parts, returning a row containing:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">means</span></code> - array of centroid means</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">counts</span></code> - array of centroid counts</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">compression</span></code> - compression factor</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">min</span></code> - minimum value</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">max</span></code> - maximum value</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">sum</span></code> - sum of all values</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">count</span></code> - total count of values</p></li>
+</ul>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="merge">
+<span class="sig-name descname"><span class="pre">merge</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">tdigest&lt;double&gt;</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">tdigest&lt;double&gt;</span></span></span><a class="headerlink" href="#merge" title="Link to this definition">¶</a></dt>
+<dd><p>Merges all input <code class="docutils literal notranslate"><span class="pre">tdigest</span></code>s into a single <code class="docutils literal notranslate"><span class="pre">tdigest</span></code>.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="merge_tdigest">
+<span class="sig-name descname"><span class="pre">merge_tdigest</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">digests:</span> <span class="pre">array&lt;tdigest&lt;double&gt;&gt;</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">tdigest&lt;double&gt;</span></span></span><a class="headerlink" href="#merge_tdigest" title="Link to this definition">¶</a></dt>
+<dd><p>Merges an array of T-digests into a single T-digest.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="quantile_at_value">
+<span class="sig-name descname"><span class="pre">quantile_at_value</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">digest:</span> <span class="pre">tdigest&lt;double&gt;</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">value:</span> <span class="pre">double</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#quantile_at_value" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the approximate quantile (percentile) of the given <code class="docutils literal notranslate"><span class="pre">value</span></code> based on the T-digest <code class="docutils literal notranslate"><span class="pre">digest</span></code>.
+The result will be between zero and one (inclusive).</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="quantiles_at_values">
+<span class="sig-name descname"><span class="pre">quantiles_at_values</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">digest:</span> <span class="pre">tdigest&lt;double&gt;</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">values:</span> <span class="pre">array&lt;double&gt;</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">array&lt;double&gt;</span></span></span><a class="headerlink" href="#quantiles_at_values" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the approximate quantiles (percentiles) as an array for each of the given <code class="docutils literal notranslate"><span class="pre">values</span></code> based on the T-digest <code class="docutils literal notranslate"><span class="pre">digest</span></code>.
+All results will be between zero and one (inclusive).</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="scale_tdigest">
+<span class="sig-name descname"><span class="pre">scale_tdigest</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">digest:</span> <span class="pre">tdigest&lt;double&gt;</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">scale:</span> <span class="pre">double</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">tdigest&lt;double&gt;</span></span></span><a class="headerlink" href="#scale_tdigest" title="Link to this definition">¶</a></dt>
+<dd><p>Scales the T-digest <code class="docutils literal notranslate"><span class="pre">digest</span></code> by the given <code class="docutils literal notranslate"><span class="pre">scale</span></code> factor.
+This multiplies all the centroid values in the T-digest by the scale factor.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="tdigest_agg">
+<span class="sig-name descname"><span class="pre">tdigest_agg</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">double</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">tdigest&lt;double&gt;</span></span></span><a class="headerlink" href="#tdigest_agg" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the <code class="docutils literal notranslate"><span class="pre">tdigest</span></code> which summarizes the approximate distribution of all input values of <code class="docutils literal notranslate"><span class="pre">x</span></code>.
+The default compression factor is <code class="docutils literal notranslate"><span class="pre">100</span></code>.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">tdigest_agg</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">double</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">w</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">double</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">tdigest&lt;double&gt;</span></span></span></dt>
+<dd><blockquote>
+<div><p>Returns the <code class="docutils literal notranslate"><span class="pre">tdigest</span></code> which summarizes the approximate distribution of all input values of <code class="docutils literal notranslate"><span class="pre">x</span></code> using per-item weight <code class="docutils literal notranslate"><span class="pre">w</span></code>.
+The default compression factor is <code class="docutils literal notranslate"><span class="pre">100</span></code>.</p>
+</div></blockquote>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">tdigest_agg</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">double</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">w</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">double</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">compression</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">double</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">tdigest&lt;double&gt;</span></span></span></dt>
+<dd><blockquote>
+<div><p>Returns the <code class="docutils literal notranslate"><span class="pre">tdigest</span></code> which summarizes the approximate distribution of all input values of <code class="docutils literal notranslate"><span class="pre">x</span></code> using per-item weight <code class="docutils literal notranslate"><span class="pre">w</span></code> and the specified compression factor.
+<code class="docutils literal notranslate"><span class="pre">compression</span></code> must be a positive constant for all input rows. The default is <code class="docutils literal notranslate"><span class="pre">100</span></code>, maximum is <code class="docutils literal notranslate"><span class="pre">1000</span></code>, and values lower than <code class="docutils literal notranslate"><span class="pre">10</span></code> are rounded to <code class="docutils literal notranslate"><span class="pre">10</span></code>. Higher compression means more accuracy at the cost of more memory.</p>
+</div></blockquote>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="trimmed_mean">
+<span class="sig-name descname"><span class="pre">trimmed_mean</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">digest:</span> <span class="pre">tdigest&lt;double&gt;</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">low_quantile:</span> <span class="pre">double</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">high_quantile:</span> <span class="pre">double</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#trimmed_mean" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the mean of values between <code class="docutils literal notranslate"><span class="pre">low_quantile</span></code> and <code class="docutils literal notranslate"><span class="pre">high_quantile</span></code> (inclusive) from the T-digest <code class="docutils literal notranslate"><span class="pre">digest</span></code>.
+Both quantile values must be between zero and one (inclusive), and <code class="docutils literal notranslate"><span class="pre">low_quantile</span></code> must be less than or equal to <code class="docutils literal notranslate"><span class="pre">high_quantile</span></code>.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="value_at_quantile">
+<span class="sig-name descname"><span class="pre">value_at_quantile</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">digest:</span> <span class="pre">tdigest&lt;double&gt;</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">quantile:</span> <span class="pre">double</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#value_at_quantile" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the approximate percentile value from the T-digest <code class="docutils literal notranslate"><span class="pre">digest</span></code> at the given <code class="docutils literal notranslate"><span class="pre">quantile</span></code>.
+The <code class="docutils literal notranslate"><span class="pre">quantile</span></code> must be between zero and one (inclusive).</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="values_at_quantiles">
+<span class="sig-name descname"><span class="pre">values_at_quantiles</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">digest:</span> <span class="pre">tdigest&lt;double&gt;</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">quantiles:</span> <span class="pre">array&lt;double&gt;</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">array&lt;double&gt;</span></span></span><a class="headerlink" href="#values_at_quantiles" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the approximate percentile values as an array from the T-digest <code class="docutils literal notranslate"><span class="pre">digest</span></code> at each of the specified quantiles given in the <code class="docutils literal notranslate"><span class="pre">quantiles</span></code> array.
+All quantile values must be between zero and one (inclusive).</p>
+</dd></dl>
+
+</section>
+</section>
+
+
+            <div class="clearer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="Main">
+        <div class="sphinxsidebarwrapper">
+  <div>
+    <h3><a href="../../index.html">Table of Contents</a></h3>
+    <ul>
+<li><a class="reference internal" href="#">T-Digest Functions</a><ul>
+<li><a class="reference internal" href="#data-structures">Data Structures</a></li>
+<li><a class="reference internal" href="#functions">Functions</a><ul>
+<li><a class="reference internal" href="#construct_tdigest"><code class="docutils literal notranslate"><span class="pre">construct_tdigest()</span></code></a></li>
+<li><a class="reference internal" href="#destructure_tdigest"><code class="docutils literal notranslate"><span class="pre">destructure_tdigest()</span></code></a></li>
+<li><a class="reference internal" href="#merge"><code class="docutils literal notranslate"><span class="pre">merge()</span></code></a></li>
+<li><a class="reference internal" href="#merge_tdigest"><code class="docutils literal notranslate"><span class="pre">merge_tdigest()</span></code></a></li>
+<li><a class="reference internal" href="#quantile_at_value"><code class="docutils literal notranslate"><span class="pre">quantile_at_value()</span></code></a></li>
+<li><a class="reference internal" href="#quantiles_at_values"><code class="docutils literal notranslate"><span class="pre">quantiles_at_values()</span></code></a></li>
+<li><a class="reference internal" href="#scale_tdigest"><code class="docutils literal notranslate"><span class="pre">scale_tdigest()</span></code></a></li>
+<li><a class="reference internal" href="#tdigest_agg"><code class="docutils literal notranslate"><span class="pre">tdigest_agg()</span></code></a></li>
+<li><a class="reference internal" href="#trimmed_mean"><code class="docutils literal notranslate"><span class="pre">trimmed_mean()</span></code></a></li>
+<li><a class="reference internal" href="#value_at_quantile"><code class="docutils literal notranslate"><span class="pre">value_at_quantile()</span></code></a></li>
+<li><a class="reference internal" href="#values_at_quantiles"><code class="docutils literal notranslate"><span class="pre">values_at_quantiles()</span></code></a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+  </div>
+  <div>
+    <h4>Previous topic</h4>
+    <p class="topless"><a href="hyperloglog.html"
+                          title="previous chapter">HyperLogLog Functions</a></p>
+  </div>
+  <div>
+    <h4>Next topic</h4>
+    <p class="topless"><a href="qdigest.html"
+                          title="next chapter">Quantile Digest Functions</a></p>
+  </div>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../../_sources/functions/presto/tdigest.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<search id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</search>
+<script>document.getElementById('searchbox').style.display = "block"</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="Related">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../../genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="qdigest.html" title="Quantile Digest Functions"
+             >next</a> |</li>
+        <li class="right" >
+          <a href="hyperloglog.html" title="HyperLogLog Functions"
+             >previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../../functions.html" >Presto Functions</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">T-Digest Functions</a></li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+    &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.4.7.
+    </div>
+  </body>
+</html>
