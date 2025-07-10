@@ -15,6 +15,7 @@
  */
 
 #include "velox/dwio/text/writer/BufferedWriterSink.h"
+#include "velox/dwio/common/Options.h"
 
 namespace facebook::velox::text {
 
@@ -40,7 +41,40 @@ void BufferedWriterSink::write(char value) {
   write(&value, 1);
 }
 
-void BufferedWriterSink::write(const char* data, uint64_t size) {
+void BufferedWriterSink::writeToSinkWithEscapeChar(
+    const std::string& data,
+    dwio::common::SerDeOptions serDeOptions,
+    uint8_t depth) {
+  std::string result;
+
+  // Reserve additional space for escape characters
+  result.reserve(data.length() * 2);
+
+  for (size_t i = 0; i < data.length(); ++i) {
+    // Break out of the loop earlier if we count down
+    // instead of up.
+    for (int j = depth - 1; j >= 0; --j) {
+      if (data[i] == serDeOptions.separators[j]) {
+        result += serDeOptions.escapeChar;
+        break;
+      }
+    }
+    result += data[i];
+  }
+
+  write(result.data(), result.length());
+}
+
+void BufferedWriterSink::write(
+    const char* data,
+    uint64_t size,
+    dwio::common::SerDeOptions serDeOptions,
+    uint8_t depth) {
+  if (serDeOptions.isEscaped) {
+    writeToSinkWithEscapeChar(std::string(data, size), serDeOptions, depth);
+    return;
+  }
+
   // TODO Add logic for when size is larger than flushCount_
   VELOX_CHECK_GE(
       flushBufferSize_,
