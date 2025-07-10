@@ -23,27 +23,6 @@ namespace facebook::velox::connector::hive::iceberg {
 
 namespace {
 
-// Iceberg spec requires URL encoding in the partition path.
-std::string UrlEncode(const std::string& data) {
-  std::string ret;
-  ret.reserve(data.size() * 3);
-
-  for (unsigned char c : data) {
-    if (std::isalnum(c) || c == '-' || c == '_' || c == '.' || c == '*') {
-      // These characters are not encoded in Java's URLEncoder.
-      ret += c;
-    } else if (c == ' ') {
-      // Space is converted to '+' in Java's URLEncoder.
-      ret += '+';
-    } else {
-      // All other characters are percent-encoded.
-      ret += fmt::format("%{:02X}", c);
-    }
-  }
-
-  return ret;
-}
-
 std::string toLower(const std::string& data) {
   std::string ret;
   ret.reserve(data.size());
@@ -52,6 +31,23 @@ std::string toLower(const std::string& data) {
         return std::tolower(c);
       });
   return ret;
+}
+
+template <TypeKind Kind>
+std::pair<std::string, std::string> makePartitionKeyValueString(
+    const BaseVector* partitionVector,
+    vector_size_t row,
+    const std::string& name,
+    const ColumnTransform& columnTransform) {
+  using T = typename TypeTraits<Kind>::NativeType;
+  if (partitionVector->as<SimpleVector<T>>()->isNullAt(row)) {
+    return std::make_pair(name, "null");
+  }
+
+  return std::make_pair(
+      name,
+      columnTransform.toHumanString(
+          partitionVector->as<SimpleVector<T>>()->valueAt(row)));
 }
 
 } // namespace
@@ -157,6 +153,27 @@ void IcebergPartitionIdGenerator::run(
   }
 }
 
+std::vector<std::pair<std::string, std::string>>
+IcebergPartitionIdGenerator::extractPartitionKeyValues(
+    const RowVectorPtr& partitionsVector,
+    vector_size_t row) const {
+  std::vector<std::pair<std::string, std::string>> partitionKeyValues;
+  VELOX_DCHECK_EQ(
+      partitionsVector->childrenSize(),
+      columnTransforms_.size(),
+      "Partition values and partition transform doe not match.");
+  for (auto i = 0; i < partitionsVector->childrenSize(); i++) {
+    partitionKeyValues.push_back(VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+        makePartitionKeyValueString,
+        partitionsVector->childAt(i)->typeKind(),
+        partitionsVector->childAt(i)->loadedVector(),
+        row,
+        asRowType(partitionsVector->type())->nameOf(i),
+        columnTransforms_[i]));
+  }
+  return partitionKeyValues;
+}
+
 std::string IcebergPartitionIdGenerator::partitionName(
     uint64_t partitionId,
     const std::string& nullValueName) const {
@@ -168,35 +185,16 @@ std::string IcebergPartitionIdGenerator::partitionName(
   }
 
   std::string ret;
-  ret.reserve(estimatedSize * 1.5);
+  ret.reserve(estimatedSize * 1.1);
 
   for (const auto& pair : pairs) {
     if (!ret.empty()) {
       ret.push_back('/');
     }
-    ret += partitionPathAsLowerCase_ ? UrlEncode(toLower(pair.first))
-                                     : UrlEncode(pair.first);
+    ret += partitionPathAsLowerCase_ ? UrlEncode(toLower(pair.first).data())
+                                     : UrlEncode(pair.first.data());
     ret.push_back('=');
-    if (pair.second.empty()) {
-      ret += nullValueName;
-    } else {
-      TypePtr type = nullptr;
-      for (const auto& columnTransform : columnTransforms_) {
-        if (columnTransform.columnName() == pair.first ||
-            (columnTransform.transformName() == "trunc" &&
-             fmt::format("{}_{}", columnTransform.columnName(), "trunc") ==
-                 pair.first)) {
-          type = columnTransform.resultType();
-          break;
-        }
-      }
-
-      if (type && type->isDecimal()) {
-        ret += DecimalUtil::toString(HugeInt::parse(pair.second), type);
-      } else {
-        ret += UrlEncode(pair.second);
-      }
-    }
+    ret += pair.second;
   }
 
   return ret;

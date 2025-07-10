@@ -48,6 +48,10 @@ class IcebergPartitionIdGenerator : public PartitionIdGenerator {
       const RowVectorPtr& input,
       vector_size_t row) override;
 
+  std::vector<std::pair<std::string, std::string>> extractPartitionKeyValues(
+      const RowVectorPtr& partitionsVector,
+      vector_size_t row) const;
+
   memory::MemoryPool* pool_;
   const std::vector<ColumnTransform> columnTransforms_;
 };
