@@ -207,7 +207,9 @@ void plan(
     driverFactories->push_back(std::make_unique<DriverFactory>());
     currentPlanNodes = &driverFactories->back()->planNodes;
     driverFactories->back()->operatorSupplier = std::move(operatorSupplier);
-    driverFactories->back()->consumerNode = consumerNode;
+    if (consumerNode.use_count() > 0) {
+      driverFactories->back()->consumerNode = consumerNode;
+    }
   }
 
   const auto& sources = planNode->sources();
