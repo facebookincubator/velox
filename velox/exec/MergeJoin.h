@@ -16,6 +16,7 @@
 #pragma once
 #include <folly/container/F14Map.h>
 
+#include <set>
 #include "velox/exec/MergeSource.h"
 #include "velox/exec/Operator.h"
 
@@ -200,6 +201,12 @@ class MergeJoin : public Operator {
     }
   };
 
+  struct RightRowsMapping {
+    size_t rightInputIndex;
+
+    std::unordered_map<int32_t, std::set<int32_t>> matchedRowNumbers;
+  };
+
   // Given a partial set of rows with matching keys (match) finds all rows from
   // the start of the 'input' batch that also have matching keys. Updates
   // 'match' to include the newly identified rows. Returns true if found the
@@ -340,6 +347,14 @@ class MergeJoin : public Operator {
         : matchingRows_{numRows, false} {
       leftRowNumbers_ = AlignedBuffer::allocate<vector_size_t>(numRows, pool);
       rawLeftRowNumbers_ = leftRowNumbers_->asMutable<vector_size_t>();
+
+      isRightRow_ = AlignedBuffer::allocate<uint64_t>(numRows, pool);
+      rawIsRightRow_ = isRightRow_->asMutable<uint64_t>();
+      std::fill(rawIsRightRow_, rawIsRightRow_ + numRows, false);
+
+      leftRowPassed_ = AlignedBuffer::allocate<uint64_t>(numRows, pool);
+      rawLeftRowPassed_ = leftRowPassed_->asMutable<uint64_t>();
+      std::fill(rawLeftRowPassed_, rawLeftRowPassed_ + numRows, false);
     }
 
     // Records a row of output that corresponds to a match between a left-side
@@ -363,6 +378,14 @@ class MergeJoin : public Operator {
       rawLeftRowNumbers_[outputIndex] = lastLeftRowNumber_;
     }
 
+    void addMatchedRowsForRightSide(
+        vector_size_t outputIndex,
+        std::set<vector_size_t> rows) {
+      std::set<vector_size_t> rowIndices(rows.begin(), rows.end());
+      rightMatchedRowNumbers_[outputIndex] = std::move(rowIndices);
+      rawIsRightRow_[outputIndex] = true;
+    }
+
     // Returns a subset of "match" rows in [0, numRows) range that were
     // recorded by addMatch.
     const SelectivityVector& matchingRows(vector_size_t numRows) {
@@ -378,6 +401,9 @@ class MergeJoin : public Operator {
     void addMiss(vector_size_t outputIndex) {
       matchingRows_.setValid(outputIndex, false);
       resetLastVector();
+      // The variable rawIsRightRow_ is reused, and we need to set it to false
+      // when it is missed.
+      rawIsRightRow_[outputIndex] = false;
     }
 
     // Clear the left-side vector and index of the last added output row. The
@@ -416,6 +442,30 @@ class MergeJoin : public Operator {
         onMatch(outputIndex, /*firstMatch=*/!currentRowPassed_);
         currentRowPassed_ = true;
       }
+
+      rawLeftRowPassed_[outputIndex] = passed;
+    }
+
+    bool isRightRow(vector_size_t outputIndex) {
+      return rawIsRightRow_[outputIndex];
+    }
+
+    bool needAddRightRow(vector_size_t outputIndex) {
+      if (!isRightRow(outputIndex)) {
+        return false;
+      }
+
+      auto& rowSet = rightMatchedRowNumbers_[outputIndex];
+      for (auto it = rowSet.begin(); it != rowSet.end(); ++it) {
+        vector_size_t index = *it;
+        if (rawLeftRowPassed_[index]) {
+          return false;
+        }
+      }
+
+      return true;
+
+      return true;
     }
 
     // Returns whether `row` corresponds to the same left key as the last
@@ -458,6 +508,12 @@ class MergeJoin : public Operator {
     // not defined.
     BufferPtr leftRowNumbers_;
     vector_size_t* rawLeftRowNumbers_;
+
+    std::unordered_map<int32_t, std::set<int32_t>> rightMatchedRowNumbers_;
+    BufferPtr isRightRow_;
+    uint64_t* rawIsRightRow_;
+    BufferPtr leftRowPassed_;
+    uint64_t* rawLeftRowPassed_;
 
     // Synthetic number assigned to the last added "match" row or zero if no row
     // has been added yet.
@@ -556,6 +612,8 @@ class MergeJoin : public Operator {
 
   // A set of rows with matching keys on the right side.
   std::optional<Match> rightMatch_;
+
+  std::vector<RightRowsMapping> rightRowsMapping_;
 
   RowVectorPtr output_;
 
