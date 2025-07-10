@@ -234,6 +234,9 @@ class ParquetData : public dwio::common::FormatData {
   // ahead of first use, not at construction.
   std::vector<std::unique_ptr<dwio::common::SeekableInputStream>> streams_;
 
+  std::vector<std::vector<std::unique_ptr<dwio::common::SeekableInputStream>>>
+      pagesStreams_;
+
   const uint32_t maxDefine_;
   const uint32_t maxRepeat_;
   int64_t rowsInRowGroup_;
