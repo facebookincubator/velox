@@ -32,7 +32,9 @@ USE_CLANG="${USE_CLANG:-false}"
 
 MACHINE=$(uname -m)
 
-WGET_OPTIONS=${WGET_OPTIONS:-""}
+# Read WGET_OPTIONS into an array which can be expanded to nothing
+# using a normal variable expands into an empty string causing wget to exit 1
+read -r -a WGET_OPTS <<<"${WGET_OPTIONS:-}"
 
 mkdir -p "${DEPENDENCY_DIR}"
 
@@ -284,7 +286,7 @@ function install_minio {
     echo "Unsupported Minio platform"
   fi
 
-  wget "${WGET_OPTIONS}" https://dl.min.io/server/minio/release/"${MINIO_OS}"-${MINIO_ARCH}/archive/minio.RELEASE."${MINIO_VERSION}" -O "${MINIO_BINARY_NAME}"
+  wget "${WGET_OPTS[@]}" https://dl.min.io/server/minio/release/"${MINIO_OS}"-${MINIO_ARCH}/archive/minio.RELEASE."${MINIO_VERSION}" -O "${MINIO_BINARY_NAME}"
   chmod +x ./"${MINIO_BINARY_NAME}"
   mkdir -p "$INSTALL_PREFIX"/bin/
   ${SUDO} mv ./"${MINIO_BINARY_NAME}" "$INSTALL_PREFIX"/bin/
@@ -387,7 +389,7 @@ function install_hdfs_deps {
   # Dependencies for Hadoop testing
   wget_and_untar https://archive.apache.org/dist/hadoop/common/hadoop-"${HADOOP_VERSION}"/hadoop-"${HADOOP_VERSION}".tar.gz hadoop
   cp -a "${DEPENDENCY_DIR}"/hadoop "$INSTALL_PREFIX"
-  wget "${WGET_OPTIONS}" -P "$INSTALL_PREFIX"/hadoop/share/hadoop/common/lib/ https://repo1.maven.org/maven2/junit/junit/4.11/junit-4.11.jar
+  wget "${WGET_OPTS[@]}" -P "$INSTALL_PREFIX"/hadoop/share/hadoop/common/lib/ https://repo1.maven.org/maven2/junit/junit/4.11/junit-4.11.jar
 }
 
 function install_uv {
