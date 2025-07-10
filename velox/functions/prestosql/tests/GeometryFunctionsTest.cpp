@@ -1776,3 +1776,250 @@ TEST_F(GeometryFunctionsTest, testStPointN) {
       testStPointNFunc("POINT (1 2)", -1, std::nullopt),
       "ST_PointN only applies to LineString. Input type is: Point");
 }
+
+TEST_F(GeometryFunctionsTest, testStStartPoint) {
+  const auto testStStartPointFunc =
+      [&](const std::optional<std::string>& wkt,
+          const std::optional<std::string>& expected) {
+        std::optional<std::string> result = evaluateOnce<std::string>(
+            "ST_AsText(ST_StartPoint(ST_GeometryFromText(c0)))", wkt);
+
+        if (expected.has_value()) {
+          ASSERT_TRUE(result.has_value());
+          ASSERT_EQ(result.value(), expected.value());
+        } else {
+          ASSERT_FALSE(result.has_value());
+        }
+      };
+
+  testStStartPointFunc("LINESTRING (8 4, 4 8, 5 6)", "POINT (8 4)");
+  testStStartPointFunc("LINESTRING (8 2, 4 12, 0 0)", "POINT (8 2)");
+  testStStartPointFunc("LINESTRING (0 0, 4 12, 2 2)", "POINT (0 0)");
+  testStStartPointFunc("LINESTRING EMPTY", std::nullopt);
+
+  VELOX_ASSERT_USER_THROW(
+      testStStartPointFunc("POINT (1 2)", std::nullopt),
+      "ST_StartPoint only applies to LineString. Input type is: Point");
+}
+
+TEST_F(GeometryFunctionsTest, testStEndPoint) {
+  const auto testStEndPointFunc =
+      [&](const std::optional<std::string>& wkt,
+          const std::optional<std::string>& expected) {
+        std::optional<std::string> result = evaluateOnce<std::string>(
+            "ST_AsText(ST_EndPoint(ST_GeometryFromText(c0)))", wkt);
+
+        if (expected.has_value()) {
+          ASSERT_TRUE(result.has_value());
+          ASSERT_EQ(result.value(), expected.value());
+        } else {
+          ASSERT_FALSE(result.has_value());
+        }
+      };
+
+  testStEndPointFunc("LINESTRING (8 4, 4 8, 5 6)", "POINT (5 6)");
+  testStEndPointFunc("LINESTRING (8 2, 4 12, 0 0)", "POINT (0 0)");
+  testStEndPointFunc("LINESTRING (0 0, 4 12, 2 2)", "POINT (2 2)");
+  testStEndPointFunc("LINESTRING EMPTY", std::nullopt);
+
+  VELOX_ASSERT_USER_THROW(
+      testStEndPointFunc("POINT (1 2)", std::nullopt),
+      "ST_EndPoint only applies to LineString. Input type is: Point");
+}
+
+TEST_F(GeometryFunctionsTest, testStGeometryN) {
+  const auto testStGeometryNFunc =
+      [&](const std::optional<std::string>& wkt,
+          const std::optional<int32_t>& index,
+          const std::optional<std::string>& expected) {
+        std::optional<std::string> result = evaluateOnce<std::string>(
+            "ST_AsText(ST_GeometryN(ST_GeometryFromText(c0), c1))", wkt, index);
+
+        if (expected.has_value()) {
+          ASSERT_TRUE(result.has_value());
+          ASSERT_EQ(result.value(), expected.value());
+        } else {
+          ASSERT_FALSE(result.has_value());
+        }
+      };
+
+  testStGeometryNFunc("POINT EMPTY", 1, std::nullopt);
+  testStGeometryNFunc("LINESTRING EMPTY", 1, std::nullopt);
+  testStGeometryNFunc(
+      "LINESTRING(77.29 29.07, 77.42 29.26, 77.27 29.31, 77.29 29.07)",
+      1,
+      "LINESTRING (77.29 29.07, 77.42 29.26, 77.27 29.31, 77.29 29.07)");
+
+  testStGeometryNFunc(
+      "LINESTRING(77.29 29.07, 77.42 29.26, 77.27 29.31, 77.29 29.07)",
+      2,
+      std::nullopt);
+  testStGeometryNFunc(
+      "LINESTRING(77.29 29.07, 77.42 29.26, 77.27 29.31, 77.29 29.07)",
+      -1,
+      std::nullopt);
+  testStGeometryNFunc(
+      "POLYGON ((0 0, 0 1, 1 1, 1 0, 0 0))",
+      1,
+      "POLYGON ((0 0, 0 1, 1 1, 1 0, 0 0))");
+  testStGeometryNFunc("POLYGON ((0 0, 0 1, 1 1, 1 0, 0 0))", 2, std::nullopt);
+  testStGeometryNFunc("POLYGON ((0 0, 0 1, 1 1, 1 0, 0 0))", -1, std::nullopt);
+  testStGeometryNFunc("POLYGON EMPTY", 0, std::nullopt);
+  testStGeometryNFunc("POLYGON EMPTY", 2, std::nullopt);
+  testStGeometryNFunc("MULTIPOINT (1 2, 2 4, 3 6, 4 8)", 1, "POINT (1 2)");
+  testStGeometryNFunc("MULTIPOINT (1 2, 2 4, 3 6, 4 8)", 2, "POINT (2 4)");
+  testStGeometryNFunc("MULTIPOINT (1 2, 2 4, 3 6, 4 8)", 0, std::nullopt);
+  testStGeometryNFunc("MULTIPOINT (1 2, 2 4, 3 6, 4 8)", 5, std::nullopt);
+  testStGeometryNFunc("MULTIPOINT (1 2, 2 4, 3 6, 4 8)", -1, std::nullopt);
+  testStGeometryNFunc(
+      "MULTILINESTRING ((1 1, 5 1), (2 4, 4 4))", 1, "LINESTRING (1 1, 5 1)");
+  testStGeometryNFunc(
+      "MULTILINESTRING ((1 1, 5 1), (2 4, 4 4))", 2, "LINESTRING (2 4, 4 4)");
+  testStGeometryNFunc(
+      "MULTILINESTRING ((1 1, 5 1), (2 4, 4 4))", 0, std::nullopt);
+  testStGeometryNFunc(
+      "MULTILINESTRING ((1 1, 5 1), (2 4, 4 4))", 3, std::nullopt);
+  testStGeometryNFunc(
+      "MULTILINESTRING ((1 1, 5 1), (2 4, 4 4))", -1, std::nullopt);
+  testStGeometryNFunc(
+      "MULTIPOLYGON (((1 1, 1 3, 3 3, 3 1, 1 1)), ((2 4, 2 6, 6 6, 6 4, 2 4)))",
+      1,
+      "POLYGON ((1 1, 1 3, 3 3, 3 1, 1 1))");
+  testStGeometryNFunc(
+      "MULTIPOLYGON (((1 1, 1 3, 3 3, 3 1, 1 1)), ((2 4, 2 6, 6 6, 6 4, 2 4)))",
+      2,
+      "POLYGON ((2 4, 2 6, 6 6, 6 4, 2 4))");
+  testStGeometryNFunc(
+      "MULTIPOLYGON (((1 1, 1 3, 3 3, 3 1, 1 1)), ((2 4, 2 6, 6 6, 6 4, 2 4)))",
+      0,
+      std::nullopt);
+  testStGeometryNFunc(
+      "MULTIPOLYGON (((1 1, 1 3, 3 3, 3 1, 1 1)), ((2 4, 2 6, 6 6, 6 4, 2 4)))",
+      3,
+      std::nullopt);
+  testStGeometryNFunc(
+      "MULTIPOLYGON (((1 1, 1 3, 3 3, 3 1, 1 1)), ((2 4, 2 6, 6 6, 6 4, 2 4)))",
+      -1,
+      std::nullopt);
+  testStGeometryNFunc(
+      "GEOMETRYCOLLECTION(POINT(2 3), LINESTRING (2 3, 3 4))",
+      1,
+      "POINT (2 3)");
+  testStGeometryNFunc(
+      "GEOMETRYCOLLECTION(POINT(2 3), LINESTRING (2 3, 3 4))",
+      2,
+      "LINESTRING (2 3, 3 4)");
+  testStGeometryNFunc(
+      "GEOMETRYCOLLECTION(POINT(2 3), LINESTRING (2 3, 3 4))", 3, std::nullopt);
+  testStGeometryNFunc(
+      "GEOMETRYCOLLECTION(POINT(2 3), LINESTRING (2 3, 3 4))", 0, std::nullopt);
+  testStGeometryNFunc(
+      "GEOMETRYCOLLECTION(POINT(2 3), LINESTRING (2 3, 3 4))",
+      -1,
+      std::nullopt);
+}
+
+TEST_F(GeometryFunctionsTest, testStInteriorRingN) {
+  const auto testStInteriorRingNFunc =
+      [&](const std::optional<std::string>& wkt,
+          const std::optional<int32_t>& index,
+          const std::optional<std::string>& expected) {
+        std::optional<std::string> result = evaluateOnce<std::string>(
+            "ST_AsText(ST_InteriorRingN(ST_GeometryFromText(c0), c1))",
+            wkt,
+            index);
+
+        if (expected.has_value()) {
+          ASSERT_TRUE(result.has_value());
+          ASSERT_EQ(result.value(), expected.value());
+        } else {
+          ASSERT_FALSE(result.has_value());
+        }
+      };
+
+  testStInteriorRingNFunc(
+      "POLYGON ((0 0, 0 1, 1 1, 1 0, 0 0))", 1, std::nullopt);
+
+  testStInteriorRingNFunc(
+      "POLYGON ((0 0, 0 1, 1 1, 1 0, 0 0))", 2, std::nullopt);
+  testStInteriorRingNFunc(
+      "POLYGON ((0 0, 0 1, 1 1, 1 0, 0 0))", -1, std::nullopt);
+  testStInteriorRingNFunc(
+      "POLYGON ((0 0, 0 1, 1 1, 1 0, 0 0))", 0, std::nullopt);
+  testStInteriorRingNFunc("POLYGON EMPTY", 1, std::nullopt);
+  testStInteriorRingNFunc(
+      "POLYGON ((0 0, 0 3, 3 3, 3 0, 0 0), (1 1, 2 1, 2 2, 1 2, 1 1))",
+      1,
+      "LINESTRING (1 1, 2 1, 2 2, 1 2, 1 1)");
+  testStInteriorRingNFunc(
+      "POLYGON ((0 0, 0 5, 5 5, 5 0, 0 0), (1 1, 2 1, 2 2, 1 2, 1 1), (3 3, 4 3, 4 4, 3 4, 3 3))",
+      2,
+      "LINESTRING (3 3, 4 3, 4 4, 3 4, 3 3)");
+
+  VELOX_ASSERT_USER_THROW(
+      testStInteriorRingNFunc("POINT EMPTY", 0, std::nullopt),
+      "ST_InteriorRingN only applies to Polygon. Input type is: Point");
+}
+
+TEST_F(GeometryFunctionsTest, testStNumInteriorRing) {
+  const auto testStNumInteriorRingFunc =
+      [&](const std::optional<std::string>& wkt,
+          const std::optional<int32_t>& expected) {
+        std::optional<int32_t> result = evaluateOnce<int32_t>(
+            "ST_NumInteriorRing(ST_GeometryFromText(c0))", wkt);
+
+        if (expected.has_value()) {
+          ASSERT_TRUE(result.has_value());
+          ASSERT_EQ(result.value(), expected.value());
+        } else {
+          ASSERT_FALSE(result.has_value());
+        }
+      };
+
+  testStNumInteriorRingFunc("POLYGON ((0 0, 0 5, 5 5, 5 0, 0 0))", 0);
+  testStNumInteriorRingFunc(
+      "POLYGON ((0 0, 8 0, 0 8, 0 0), (1 1, 1 5, 5 1, 1 1))", 1);
+  testStNumInteriorRingFunc("POLYGON EMPTY", std::nullopt);
+
+  VELOX_ASSERT_USER_THROW(
+      testStNumInteriorRingFunc("LINESTRING (8 4, 5 7)", std::nullopt),
+      "ST_NumInteriorRing only applies to Polygon. Input type is: LineString");
+}
+
+TEST_F(GeometryFunctionsTest, testStNumGeometries) {
+  const auto testStNumGeometriesFunc =
+      [&](const std::optional<std::string>& wkt,
+          const std::optional<int32_t>& expected) {
+        std::optional<int32_t> result = evaluateOnce<int32_t>(
+            "ST_NumGeometries(ST_GeometryFromText(c0))", wkt);
+
+        if (expected.has_value()) {
+          ASSERT_TRUE(result.has_value());
+          ASSERT_EQ(result.value(), expected.value());
+        } else {
+          ASSERT_FALSE(result.has_value());
+        }
+      };
+
+  // GeometryCollections with only empty geometries always return 0
+  testStNumGeometriesFunc("GEOMETRYCOLLECTION (POINT EMPTY, POINT EMPTY)", 0);
+  testStNumGeometriesFunc("GEOMETRYCOLLECTION (POINT EMPTY)", 0);
+  // GeometryCollections with at least 1 non-empty geometry return the number of
+  // geometries
+  testStNumGeometriesFunc("GEOMETRYCOLLECTION(POINT EMPTY, POINT (1 2))", 2);
+
+  testStNumGeometriesFunc("POINT EMPTY", 0);
+  testStNumGeometriesFunc("GEOMETRYCOLLECTION EMPTY", 0);
+  testStNumGeometriesFunc("MULTIPOLYGON EMPTY", 0);
+  testStNumGeometriesFunc("POINT (1 2)", 1);
+  testStNumGeometriesFunc(
+      "LINESTRING(77.29 29.07,77.42 29.26,77.27 29.31,77.29 29.07)", 1);
+  testStNumGeometriesFunc("POLYGON ((0 0, 0 1, 1 1, 1 0, 0 0))", 1);
+  testStNumGeometriesFunc("MULTIPOINT (1 2, 2 4, 3 6, 4 8)", 4);
+  testStNumGeometriesFunc("MULTILINESTRING ((1 1, 5 1), (2 4, 4 4))", 2);
+  testStNumGeometriesFunc(
+      "MULTIPOLYGON (((1 1, 1 3, 3 3, 3 1, 1 1)), ((2 4, 2 6, 6 6, 6 4, 2 4)))",
+      2);
+  testStNumGeometriesFunc(
+      "GEOMETRYCOLLECTION(POINT(2 3), LINESTRING (2 3, 3 4))", 2);
+}
