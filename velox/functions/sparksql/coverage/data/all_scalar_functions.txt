@@ -308,6 +308,8 @@ trim
 trunc
 try_add
 try_divide
+try_multiply
+try_subtract
 typeof
 ucase
 unbase64

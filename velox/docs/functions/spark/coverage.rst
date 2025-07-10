@@ -1,9 +1,3 @@
-=================
-Function Coverage
-=================
-
-Here is a list of all scalar, aggregate, and window functions from Spark, with functions that are available in Velox highlighted.
-
 .. raw:: html
 
     <style>
@@ -106,6 +100,7 @@ Here is a list of all scalar, aggregate, and window functions from Spark, with f
     table.coverage tr:nth-child(32) td:nth-child(4) {background-color: #6BA81E;}
     table.coverage tr:nth-child(32) td:nth-child(5) {background-color: #6BA81E;}
     table.coverage tr:nth-child(32) td:nth-child(7) {background-color: #6BA81E;}
+    table.coverage tr:nth-child(33) td:nth-child(1) {background-color: #6BA81E;}
     table.coverage tr:nth-child(33) td:nth-child(3) {background-color: #6BA81E;}
     table.coverage tr:nth-child(33) td:nth-child(4) {background-color: #6BA81E;}
     table.coverage tr:nth-child(34) td:nth-child(1) {background-color: #6BA81E;}
@@ -118,9 +113,7 @@ Here is a list of all scalar, aggregate, and window functions from Spark, with f
     table.coverage tr:nth-child(36) td:nth-child(3) {background-color: #6BA81E;}
     table.coverage tr:nth-child(37) td:nth-child(2) {background-color: #6BA81E;}
     table.coverage tr:nth-child(37) td:nth-child(4) {background-color: #6BA81E;}
-    table.coverage tr:nth-child(37) td:nth-child(5) {background-color: #6BA81E;}
     table.coverage tr:nth-child(38) td:nth-child(4) {background-color: #6BA81E;}
-    table.coverage tr:nth-child(38) td:nth-child(5) {background-color: #6BA81E;}
     table.coverage tr:nth-child(39) td:nth-child(1) {background-color: #6BA81E;}
     table.coverage tr:nth-child(39) td:nth-child(3) {background-color: #6BA81E;}
     table.coverage tr:nth-child(39) td:nth-child(4) {background-color: #6BA81E;}
@@ -150,25 +143,27 @@ Here is a list of all scalar, aggregate, and window functions from Spark, with f
     table.coverage tr:nth-child(45) td:nth-child(4) {background-color: #6BA81E;}
     table.coverage tr:nth-child(45) td:nth-child(5) {background-color: #6BA81E;}
     table.coverage tr:nth-child(45) td:nth-child(7) {background-color: #6BA81E;}
+    table.coverage tr:nth-child(46) td:nth-child(5) {background-color: #6BA81E;}
     table.coverage tr:nth-child(47) td:nth-child(2) {background-color: #6BA81E;}
     table.coverage tr:nth-child(47) td:nth-child(3) {background-color: #6BA81E;}
+    table.coverage tr:nth-child(47) td:nth-child(5) {background-color: #6BA81E;}
     table.coverage tr:nth-child(48) td:nth-child(3) {background-color: #6BA81E;}
     table.coverage tr:nth-child(49) td:nth-child(2) {background-color: #6BA81E;}
     table.coverage tr:nth-child(49) td:nth-child(3) {background-color: #6BA81E;}
     table.coverage tr:nth-child(49) td:nth-child(7) {background-color: #6BA81E;}
     table.coverage tr:nth-child(50) td:nth-child(2) {background-color: #6BA81E;}
     table.coverage tr:nth-child(50) td:nth-child(4) {background-color: #6BA81E;}
-    table.coverage tr:nth-child(50) td:nth-child(5) {background-color: #6BA81E;}
     table.coverage tr:nth-child(50) td:nth-child(7) {background-color: #6BA81E;}
     table.coverage tr:nth-child(51) td:nth-child(4) {background-color: #6BA81E;}
     table.coverage tr:nth-child(52) td:nth-child(1) {background-color: #6BA81E;}
     table.coverage tr:nth-child(52) td:nth-child(3) {background-color: #6BA81E;}
     table.coverage tr:nth-child(52) td:nth-child(4) {background-color: #6BA81E;}
+    table.coverage tr:nth-child(52) td:nth-child(5) {background-color: #6BA81E;}
     table.coverage tr:nth-child(53) td:nth-child(1) {background-color: #6BA81E;}
     table.coverage tr:nth-child(53) td:nth-child(4) {background-color: #6BA81E;}
-    table.coverage tr:nth-child(53) td:nth-child(5) {background-color: #6BA81E;}
     table.coverage tr:nth-child(55) td:nth-child(2) {background-color: #6BA81E;}
     table.coverage tr:nth-child(55) td:nth-child(4) {background-color: #6BA81E;}
+    table.coverage tr:nth-child(55) td:nth-child(5) {background-color: #6BA81E;}
     table.coverage tr:nth-child(56) td:nth-child(2) {background-color: #6BA81E;}
     table.coverage tr:nth-child(56) td:nth-child(3) {background-color: #6BA81E;}
     table.coverage tr:nth-child(56) td:nth-child(4) {background-color: #6BA81E;}
@@ -186,18 +181,19 @@ Here is a list of all scalar, aggregate, and window functions from Spark, with f
     table.coverage tr:nth-child(64) td:nth-child(1) {background-color: #6BA81E;}
     table.coverage tr:nth-child(64) td:nth-child(2) {background-color: #6BA81E;}
     table.coverage tr:nth-child(64) td:nth-child(3) {background-color: #6BA81E;}
-    table.coverage tr:nth-child(64) td:nth-child(5) {background-color: #6BA81E;}
     table.coverage tr:nth-child(65) td:nth-child(2) {background-color: #6BA81E;}
     table.coverage tr:nth-child(65) td:nth-child(3) {background-color: #6BA81E;}
     table.coverage tr:nth-child(65) td:nth-child(4) {background-color: #6BA81E;}
-    table.coverage tr:nth-child(65) td:nth-child(5) {background-color: #6BA81E;}
     table.coverage tr:nth-child(66) td:nth-child(1) {background-color: #6BA81E;}
     table.coverage tr:nth-child(66) td:nth-child(4) {background-color: #6BA81E;}
     table.coverage tr:nth-child(66) td:nth-child(5) {background-color: #6BA81E;}
     table.coverage tr:nth-child(67) td:nth-child(1) {background-color: #6BA81E;}
+    table.coverage tr:nth-child(67) td:nth-child(5) {background-color: #6BA81E;}
     table.coverage tr:nth-child(68) td:nth-child(1) {background-color: #6BA81E;}
     table.coverage tr:nth-child(68) td:nth-child(2) {background-color: #6BA81E;}
     table.coverage tr:nth-child(68) td:nth-child(4) {background-color: #6BA81E;}
+    table.coverage tr:nth-child(68) td:nth-child(5) {background-color: #6BA81E;}
+    table.coverage tr:nth-child(69) td:nth-child(2) {background-color: #6BA81E;}
     table.coverage tr:nth-child(69) td:nth-child(4) {background-color: #6BA81E;}
     </style>
 
@@ -240,41 +236,41 @@ Here is a list of all scalar, aggregate, and window functions from Spark, with f
     :spark:func:`atan2`                        double                                     :spark:func:`log10`                        :spark:func:`regexp_extract_all`           :spark:func:`translate`                        mean
     :spark:func:`atanh`                        e                                          :spark:func:`log1p`                        regexp_like                                :spark:func:`trim`                             :spark:func:`min`
     avg                                        :spark:func:`element_at`                   :spark:func:`log2`                         :spark:func:`regexp_replace`               :spark:func:`trunc`                            :spark:func:`min_by`
-    base64                                     elt                                        :spark:func:`lower`                        :spark:func:`repeat`                       try_add                                        percentile
+    :spark:func:`base64`                       elt                                        :spark:func:`lower`                        :spark:func:`repeat`                       try_add                                        percentile
     :spark:func:`between`                      encode                                     :spark:func:`lpad`                         :spark:func:`replace`                      try_divide                                     percentile_approx
-    bigint                                     every                                      :spark:func:`ltrim`                        :spark:func:`reverse`                      typeof                                         regr_avgx
-    :spark:func:`bin`                          :spark:func:`exists`                       :spark:func:`make_date`                    right                                      ucase                                          regr_avgy
-    binary                                     :spark:func:`exp`                          make_dt_interval                           :spark:func:`rint`                         :spark:func:`unbase64`                         regr_count
-    bit_and                                    explode                                    make_interval                              :spark:func:`rlike`                        :spark:func:`unhex`                            regr_r2
-    :spark:func:`bit_count`                    explode_outer                              :spark:func:`make_timestamp`               :spark:func:`round`                        :spark:func:`unix_date`                        :spark:func:`skewness`
-    :spark:func:`bit_get`                      :spark:func:`expm1`                        :spark:func:`make_ym_interval`             row_number                                 :spark:func:`unix_micros`                      some
-    :spark:func:`bit_length`                   extract                                    :spark:func:`map`                          :spark:func:`rpad`                         :spark:func:`unix_millis`                      std
-    bit_or                                     :spark:func:`factorial`                    :spark:func:`map_concat`                   :spark:func:`rtrim`                        :spark:func:`unix_seconds`                     :spark:func:`stddev`
-    bit_xor                                    :spark:func:`filter`                       :spark:func:`map_entries`                  schema_of_csv                              :spark:func:`unix_timestamp`                   stddev_pop
-    bool_and                                   :spark:func:`find_in_set`                  :spark:func:`map_filter`                   schema_of_json                             :spark:func:`upper`                            :spark:func:`stddev_samp`
-    bool_or                                    first                                      :spark:func:`map_from_arrays`              :spark:func:`second`                       :spark:func:`uuid`                             :spark:func:`sum`
-    boolean                                    first_value                                map_from_entries                           sentences                                  var_pop                                        try_avg
-    bround                                     :spark:func:`flatten`                      :spark:func:`map_keys`                     sequence                                   var_samp                                       try_sum
-    btrim                                      float                                      :spark:func:`map_values`                   session_window                             variance                                       var_pop
-    cardinality                                :spark:func:`floor`                        :spark:func:`map_zip_with`                 sha                                        version                                        :spark:func:`var_samp`
-    case                                       :spark:func:`forall`                       max                                        :spark:func:`sha1`                         :spark:func:`weekday`                          :spark:func:`variance`
-    cast                                       format_number                              max_by                                     :spark:func:`sha2`                         weekofyear
-    :spark:func:`cbrt`                         format_string                              :spark:func:`md5`                          :spark:func:`shiftleft`                    when
-    :spark:func:`ceil`                         from_csv                                   mean                                       :spark:func:`shiftright`                   :spark:func:`width_bucket`
-    ceiling                                    from_json                                  min                                        shiftrightunsigned                         window
-    char                                       :spark:func:`from_unixtime`                min_by                                     :spark:func:`shuffle`                      xpath
-    char_length                                :spark:func:`from_utc_timestamp`           :spark:func:`minute`                       :spark:func:`sign`                         xpath_boolean
-    character_length                           :spark:func:`get_json_object`              mod                                        signum                                     xpath_double
-    :spark:func:`chr`                          getbit                                     :spark:func:`monotonically_increasing_id`  sin                                        xpath_float
-    coalesce                                   :spark:func:`greatest`                     :spark:func:`month`                        :spark:func:`sinh`                         xpath_int
-    collect_list                               grouping                                   months_between                             :spark:func:`size`                         xpath_long
-    collect_set                                grouping_id                                named_struct                               skewness                                   xpath_number
-    :spark:func:`concat`                       :spark:func:`hash`                         nanvl                                      :spark:func:`slice`                        xpath_short
-    concat_ws                                  :spark:func:`hex`                          negative                                   smallint                                   xpath_string
-    :spark:func:`conv`                         :spark:func:`hour`                         :spark:func:`next_day`                     some                                       :spark:func:`xxhash64`
-    corr                                       :spark:func:`hypot`                        :spark:func:`not`                          :spark:func:`sort_array`                   :spark:func:`year`
-    :spark:func:`cos`                          if                                         now                                        :spark:func:`soundex`                      :spark:func:`zip_with`
-    :spark:func:`cosh`                         ifnull                                     nth_value                                  space
-    :spark:func:`cot`                          :spark:func:`in`                           ntile                                      :spark:func:`spark_partition_id`
-    count                                      initcap                                    nullif                                     :spark:func:`split`
+    bigint                                     every                                      :spark:func:`ltrim`                        :spark:func:`reverse`                      try_multiply                                   regr_avgx
+    :spark:func:`bin`                          :spark:func:`exists`                       :spark:func:`make_date`                    right                                      try_subtract                                   regr_avgy
+    binary                                     :spark:func:`exp`                          make_dt_interval                           :spark:func:`rint`                         typeof                                         regr_count
+    bit_and                                    explode                                    make_interval                              :spark:func:`rlike`                        ucase                                          regr_r2
+    :spark:func:`bit_count`                    explode_outer                              :spark:func:`make_timestamp`               :spark:func:`round`                        :spark:func:`unbase64`                         :spark:func:`skewness`
+    :spark:func:`bit_get`                      :spark:func:`expm1`                        :spark:func:`make_ym_interval`             row_number                                 :spark:func:`unhex`                            some
+    :spark:func:`bit_length`                   extract                                    :spark:func:`map`                          :spark:func:`rpad`                         :spark:func:`unix_date`                        std
+    bit_or                                     :spark:func:`factorial`                    :spark:func:`map_concat`                   :spark:func:`rtrim`                        :spark:func:`unix_micros`                      :spark:func:`stddev`
+    bit_xor                                    :spark:func:`filter`                       :spark:func:`map_entries`                  schema_of_csv                              :spark:func:`unix_millis`                      stddev_pop
+    bool_and                                   :spark:func:`find_in_set`                  :spark:func:`map_filter`                   schema_of_json                             :spark:func:`unix_seconds`                     :spark:func:`stddev_samp`
+    bool_or                                    first                                      :spark:func:`map_from_arrays`              :spark:func:`second`                       :spark:func:`unix_timestamp`                   :spark:func:`sum`
+    boolean                                    first_value                                map_from_entries                           sentences                                  :spark:func:`upper`                            try_avg
+    bround                                     :spark:func:`flatten`                      :spark:func:`map_keys`                     sequence                                   :spark:func:`uuid`                             try_sum
+    btrim                                      float                                      :spark:func:`map_values`                   session_window                             var_pop                                        var_pop
+    cardinality                                :spark:func:`floor`                        :spark:func:`map_zip_with`                 sha                                        var_samp                                       :spark:func:`var_samp`
+    case                                       :spark:func:`forall`                       max                                        :spark:func:`sha1`                         variance                                       :spark:func:`variance`
+    cast                                       format_number                              max_by                                     :spark:func:`sha2`                         version
+    :spark:func:`cbrt`                         format_string                              :spark:func:`md5`                          :spark:func:`shiftleft`                    :spark:func:`weekday`
+    :spark:func:`ceil`                         from_csv                                   mean                                       :spark:func:`shiftright`                   weekofyear
+    ceiling                                    from_json                                  min                                        shiftrightunsigned                         when
+    char                                       :spark:func:`from_unixtime`                min_by                                     :spark:func:`shuffle`                      :spark:func:`width_bucket`
+    char_length                                :spark:func:`from_utc_timestamp`           :spark:func:`minute`                       :spark:func:`sign`                         window
+    character_length                           :spark:func:`get_json_object`              mod                                        signum                                     xpath
+    :spark:func:`chr`                          getbit                                     :spark:func:`monotonically_increasing_id`  sin                                        xpath_boolean
+    coalesce                                   :spark:func:`greatest`                     :spark:func:`month`                        :spark:func:`sinh`                         xpath_double
+    collect_list                               grouping                                   months_between                             :spark:func:`size`                         xpath_float
+    collect_set                                grouping_id                                named_struct                               skewness                                   xpath_int
+    :spark:func:`concat`                       :spark:func:`hash`                         nanvl                                      :spark:func:`slice`                        xpath_long
+    concat_ws                                  :spark:func:`hex`                          negative                                   smallint                                   xpath_number
+    :spark:func:`conv`                         :spark:func:`hour`                         :spark:func:`next_day`                     some                                       xpath_short
+    corr                                       :spark:func:`hypot`                        :spark:func:`not`                          :spark:func:`sort_array`                   xpath_string
+    :spark:func:`cos`                          if                                         now                                        :spark:func:`soundex`                      :spark:func:`xxhash64`
+    :spark:func:`cosh`                         ifnull                                     nth_value                                  space                                      :spark:func:`year`
+    :spark:func:`cot`                          :spark:func:`in`                           ntile                                      :spark:func:`spark_partition_id`           :spark:func:`zip_with`
+    count                                      :spark:func:`initcap`                      nullif                                     :spark:func:`split`
     =========================================  =========================================  =========================================  =========================================  =========================================  ==  =========================================  ==  =========================================
