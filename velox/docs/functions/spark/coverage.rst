@@ -280,4 +280,3 @@ Here is a list of all scalar, aggregate, and window functions from Spark, with f
     :spark:func:`cot`                          :spark:func:`in`                           ntile                                      :spark:func:`spark_partition_id`           :spark:func:`zip_with`
     count                                      :spark:func:`initcap`                      nullif                                     :spark:func:`split`
     =========================================  =========================================  =========================================  =========================================  =========================================  ==  =========================================  ==  =========================================
-    
