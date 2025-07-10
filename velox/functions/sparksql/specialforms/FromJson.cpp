@@ -209,10 +209,8 @@ struct ExtractJsonTypeImpl {
         const folly::
             F14FastMap<int64_t, JsonRowSchemaInfo>& /*jsonRowSchemaInfo*/,
         column_index_t /*nodeIndex*/) {
-      if (writer.type()->isLongDecimal()) {
-        return castJsonToDecimal<int128_t>(value, writer);
-      }
-      return simdjson::INCORRECT_TYPE;
+      VELOX_CHECK(writer.type()->isLongDecimal());
+      return castJsonToDecimal<int128_t>(value, writer);
     }
   };
 
