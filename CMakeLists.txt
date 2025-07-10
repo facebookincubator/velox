@@ -127,6 +127,7 @@ set(VELOX_GFLAGS_TYPE
 )
 option(VELOX_ENABLE_EXEC "Build exec." ON)
 option(VELOX_ENABLE_AGGREGATES "Build aggregates." ON)
+option(VELOX_ENABLE_CLP_CONNECTOR "Build CLP connector." ON)
 option(VELOX_ENABLE_HIVE_CONNECTOR "Build Hive connector." ON)
 option(VELOX_ENABLE_TPCH_CONNECTOR "Build TPC-H connector." ON)
 option(VELOX_ENABLE_PRESTO_FUNCTIONS "Build Presto SQL functions." ON)
@@ -174,6 +175,7 @@ if(${VELOX_BUILD_MINIMAL} OR ${VELOX_BUILD_MINIMAL_WITH_DWIO})
   set(VELOX_ENABLE_EXPRESSION ON)
   set(VELOX_ENABLE_EXEC OFF)
   set(VELOX_ENABLE_AGGREGATES OFF)
+  set(VELOX_ENABLE_CLP_CONNECTOR OFF)
   set(VELOX_ENABLE_HIVE_CONNECTOR OFF)
   set(VELOX_ENABLE_TPCH_CONNECTOR OFF)
   set(VELOX_ENABLE_SPARK_FUNCTIONS OFF)
@@ -459,9 +461,11 @@ set(BOOST_INCLUDE_LIBRARIES
     context
     date_time
     filesystem
+    iostreams
     program_options
     regex
     system
+    url
     thread)
 
 velox_set_source(Boost)
@@ -517,6 +521,35 @@ endif()
 
 velox_set_source(re2)
 velox_resolve_dependency(re2)
+
+if(${VELOX_ENABLE_CLP_CONNECTOR})
+  velox_set_source(absl)
+  velox_resolve_dependency(absl)
+
+  velox_set_source(antlr4-runtime)
+  velox_resolve_dependency(antlr4-runtime)
+
+  velox_set_source(date)
+  velox_resolve_dependency(date)
+
+  velox_set_source(msgpack-cxx)
+  velox_resolve_dependency(msgpack-cxx)
+
+  velox_set_source(nlohmann_json)
+  velox_resolve_dependency(nlohmann_json)
+
+  velox_set_source(simdjson)
+  velox_resolve_dependency(simdjson)
+
+  velox_set_source(spdlog)
+  velox_resolve_dependency(spdlog)
+
+  set(ystdlib_cpp_SOURCE BUNDLED)
+  velox_resolve_dependency(ystdlib_cpp)
+
+  set(clp_SOURCE BUNDLED)
+  velox_resolve_dependency(clp)
+endif()
 
 if(${VELOX_BUILD_PYTHON_PACKAGE})
   find_package(

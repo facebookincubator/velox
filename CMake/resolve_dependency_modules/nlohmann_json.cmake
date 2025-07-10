@@ -13,25 +13,25 @@
 # limitations under the License.
 include_guard(GLOBAL)
 
-set(VELOX_SIMDJSON_VERSION 3.9.3)
-set(VELOX_SIMDJSON_BUILD_SHA256_CHECKSUM
-    2e3d10abcde543d3dd8eba9297522cafdcebdd1db4f51b28f3bc95bf1d6ad23c)
-set(VELOX_SIMDJSON_SOURCE_URL
-    "https://github.com/simdjson/simdjson/archive/refs/tags/v${VELOX_SIMDJSON_VERSION}.tar.gz"
+set(VELOX_NLOHMANN_JSON_BUILD_VERSION 3.11.3)
+set(VELOX_NLOHMANN_JSON_BUILD_SHA256_CHECKSUM
+    0d8ef5af7f9794e3263480193c491549b2ba6cc74bb018906202ada498a79406)
+set(VELOX_NLOHMANN_JSON_SOURCE_URL
+    "https://github.com/nlohmann/json/archive/refs/tags/v${VELOX_NLOHMANN_JSON_BUILD_VERSION}.tar.gz"
 )
 
-velox_resolve_dependency_url(SIMDJSON)
+velox_resolve_dependency_url(NLOHMANN_JSON)
 
-message(STATUS "Building simdjson from source")
+message(STATUS "Building nlohmann_json from source")
 
 FetchContent_Declare(
-  simdjson
-  URL ${VELOX_SIMDJSON_SOURCE_URL}
-  URL_HASH ${VELOX_SIMDJSON_BUILD_SHA256_CHECKSUM}
+  nlohmann_json
+  URL ${VELOX_NLOHMANN_JSON_SOURCE_URL}
+  URL_HASH ${VELOX_NLOHMANN_JSON_BUILD_SHA256_CHECKSUM}
   OVERRIDE_FIND_PACKAGE)
 
-if(${VELOX_SIMDJSON_SKIPUTF8VALIDATION})
-  set(SIMDJSON_SKIPUTF8VALIDATION ON)
-endif()
+set(JSON_BuildTests
+    OFF
+    CACHE INTERNAL "")
 
-FetchContent_MakeAvailable(simdjson)
+FetchContent_MakeAvailable(nlohmann_json)

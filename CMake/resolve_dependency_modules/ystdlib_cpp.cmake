@@ -13,25 +13,11 @@
 # limitations under the License.
 include_guard(GLOBAL)
 
-set(VELOX_SIMDJSON_VERSION 3.9.3)
-set(VELOX_SIMDJSON_BUILD_SHA256_CHECKSUM
-    2e3d10abcde543d3dd8eba9297522cafdcebdd1db4f51b28f3bc95bf1d6ad23c)
-set(VELOX_SIMDJSON_SOURCE_URL
-    "https://github.com/simdjson/simdjson/archive/refs/tags/v${VELOX_SIMDJSON_VERSION}.tar.gz"
-)
-
-velox_resolve_dependency_url(SIMDJSON)
-
-message(STATUS "Building simdjson from source")
-
 FetchContent_Declare(
-  simdjson
-  URL ${VELOX_SIMDJSON_SOURCE_URL}
-  URL_HASH ${VELOX_SIMDJSON_BUILD_SHA256_CHECKSUM}
-  OVERRIDE_FIND_PACKAGE)
+  ystdlib_cpp
+  GIT_REPOSITORY https://github.com/y-scope/ystdlib-cpp.git
+  GIT_TAG 0ae886c6a7ee706a3c6e1950262b63d72f71fe63)
 
-if(${VELOX_SIMDJSON_SKIPUTF8VALIDATION})
-  set(SIMDJSON_SKIPUTF8VALIDATION ON)
-endif()
+FetchContent_Populate(ystdlib_cpp)
 
-FetchContent_MakeAvailable(simdjson)
+set(CLP_YSTDLIB_SOURCE_DIRECTORY "${ystdlib_cpp_SOURCE_DIR}")

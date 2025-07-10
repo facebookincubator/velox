@@ -52,6 +52,7 @@ jobs:
       - name: Build Artifact
         env:
           VELOX_DEPENDENCY_SOURCE: BUNDLED
+          Boost_SOURCE: SYSTEM
           ICU_SOURCE: SYSTEM
           MAKEFLAGS: MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=3
         run: |

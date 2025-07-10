@@ -13,25 +13,22 @@
 # limitations under the License.
 include_guard(GLOBAL)
 
-set(VELOX_SIMDJSON_VERSION 3.9.3)
-set(VELOX_SIMDJSON_BUILD_SHA256_CHECKSUM
-    2e3d10abcde543d3dd8eba9297522cafdcebdd1db4f51b28f3bc95bf1d6ad23c)
-set(VELOX_SIMDJSON_SOURCE_URL
-    "https://github.com/simdjson/simdjson/archive/refs/tags/v${VELOX_SIMDJSON_VERSION}.tar.gz"
+set(VELOX_SPDLOG_BUILD_VERSION 1.12.0)
+set(VELOX_SPDLOG_BUILD_SHA256_CHECKSUM
+    4dccf2d10f410c1e2feaff89966bfc49a1abb29ef6f08246335b110e001e09a9)
+set(VELOX_SPDLOG_SOURCE_URL
+    "https://github.com/gabime/spdlog/archive/refs/tags/v${VELOX_SPDLOG_BUILD_VERSION}.tar.gz"
 )
 
-velox_resolve_dependency_url(SIMDJSON)
+velox_resolve_dependency_url(SPDLOG)
 
-message(STATUS "Building simdjson from source")
+message(STATUS "Building spdlog from source")
 
 FetchContent_Declare(
-  simdjson
-  URL ${VELOX_SIMDJSON_SOURCE_URL}
-  URL_HASH ${VELOX_SIMDJSON_BUILD_SHA256_CHECKSUM}
-  OVERRIDE_FIND_PACKAGE)
+  spdlog
+  URL ${VELOX_SPDLOG_SOURCE_URL}
+  URL_HASH ${VELOX_SPDLOG_BUILD_SHA256_CHECKSUM}
+  OVERRIDE_FIND_PACKAGE EXCLUDE_FROM_ALL SYSTEM)
 
-if(${VELOX_SIMDJSON_SKIPUTF8VALIDATION})
-  set(SIMDJSON_SKIPUTF8VALIDATION ON)
-endif()
-
-FetchContent_MakeAvailable(simdjson)
+set(SPDLOG_FMT_EXTERNAL ON)
+FetchContent_MakeAvailable(spdlog)
