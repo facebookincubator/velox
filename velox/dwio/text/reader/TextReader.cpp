@@ -19,11 +19,16 @@
 #include "velox/dwio/common/exception/Exceptions.h"
 #include "velox/type/fbhive/HiveTypeParser.h"
 
+#include <folly/Conv.h>
+#include <folly/Expected.h>
+
 #include <string>
 
 namespace facebook::velox::dwio::common {
 
 using common::CompressionKind;
+using folly::AsciiCaseInsensitive;
+using folly::StringPiece;
 
 const std::string TEXTFILE_CODEC = "org.apache.hadoop.io.compress.GzipCodec";
 const std::string TEXTFILE_COMPRESSION_EXTENSION = ".gz";
@@ -113,11 +118,9 @@ TextRowReader::TextRowReader(
       atEOF_{false},
       atSOL_{false},
       depth_{0},
-      unreadData_{""},
       unreadIdx_{0},
       limit_{opts.limit()},
       fileLength_{getStreamLength()},
-      ownedString_{""},
       stringViewBuffer_{StringViewBufferHolder(&contents_->pool)},
       varBinBuf_{std::make_shared<DataBuffer<char>>(contents_->pool)} {
   // Seek to first line at or after the specified region.
@@ -241,6 +244,7 @@ uint64_t TextRowReader::next(
     // handle empty file
     if (initialPos == pos_ && atEOF_) {
       currentRow_ = 0;
+      rowsRead = 0;
     }
   }
 
@@ -779,14 +783,12 @@ bool TextRowReader::getBoolean(
   const auto& strRef = s.data();
   switch (s.size()) {
     case 4:
-      if (folly::StringPiece(strRef).equals(
-              "TRUE", folly::AsciiCaseInsensitive())) {
+      if (StringPiece(strRef).equals("TRUE", AsciiCaseInsensitive())) {
         return true;
       }
       break;
     case 5:
-      if (folly::StringPiece(strRef).equals(
-              "FALSE", folly::AsciiCaseInsensitive())) {
+      if (StringPiece(strRef).equals("FALSE", AsciiCaseInsensitive())) {
         return false;
       }
       break;
@@ -802,29 +804,32 @@ namespace {
 
 static const StringView NaNStringView = StringView{"NaN"};
 static const StringView InfinityStringView = StringView{"Infinity"};
+static const StringView ShortInfinityStringView = StringView{"Inf"};
 static const StringView NegInfinityStringView = StringView{"-Infinity"};
+static const StringView ShortNegInfinityStringView = StringView{"-Inf"};
 
 bool unacceptableFloatingPoint(StringView& s) {
-  bool seenPeriod = false;
   for (int i = 0; i < s.size(); ++i) {
     char c = s.data()[i];
-    if (c == '.') {
-      if (seenPeriod) {
-        return false;
-      } else {
-        seenPeriod = true;
-      }
-      continue;
-    }
-
     if (!(std::isalpha(c) || c == '-')) {
       return false;
     }
   }
 
-  return (
-      s != NaNStringView && s != InfinityStringView &&
-      s != NegInfinityStringView);
+  bool isNaN =
+      StringPiece(s).equals(StringPiece(NaNStringView), AsciiCaseInsensitive());
+
+  bool isInf = StringPiece(s).equals(
+      StringPiece(InfinityStringView), AsciiCaseInsensitive());
+  bool isShortInf = StringPiece(s).equals(
+      StringPiece(ShortInfinityStringView), AsciiCaseInsensitive());
+
+  bool isNegInf = StringPiece(s).equals(
+      StringPiece(NegInfinityStringView), AsciiCaseInsensitive());
+  bool isShortNegInf = StringPiece(s).equals(
+      StringPiece(ShortNegInfinityStringView), AsciiCaseInsensitive());
+
+  return (!isNaN && !isInf && !isShortInf && !isNegInf && !isShortNegInf);
 }
 
 StringView trimStringView(StringView& s) {
@@ -865,21 +870,24 @@ float TextRowReader::getFloat(
   }
 
   strView = trimStringView(strView);
+
+  if (strView.data()[0] == '.') {
+    th.ownedString_.insert(th.ownedString_.begin(), '0');
+    strView = th.stringViewBuffer_.getOwnedValue(th.ownedString_);
+  }
+
   if (unacceptableFloatingPoint(strView)) {
     isNull = true;
     return 0.0;
   }
 
-  float v = 0.0;
-  unsigned long long scanPos = 0;
-  // We ignore ERANGE, since denormalized floats and
-  // infinities are acceptable.
-  auto scanCount = sscanf(strView.data(), "%f%lln", &v, &scanPos);
-  if (scanCount != 1 || scanPos < strView.size()) {
+  const auto result = folly::tryTo<float>(strView);
+  if (result.hasError()) {
     isNull = true;
     return 0.0;
   }
-  return v;
+
+  return result.value();
 }
 
 double
@@ -888,11 +896,18 @@ TextRowReader::getDouble(TextRowReader& th, bool& isNull, DelimType& delim) {
   if (strView.empty()) {
     isNull = true;
   }
+
   if (isNull) {
-    return 0;
+    return 0.0;
   }
 
   strView = trimStringView(strView);
+
+  if (strView.data()[0] == '.') {
+    th.ownedString_.insert(th.ownedString_.begin(), '0');
+    strView = th.stringViewBuffer_.getOwnedValue(th.ownedString_);
+  }
+
   // Filter out values from non-warehouse sources which
   // other readers translate to null. Warehouse
   // readers require upper-case values.
@@ -900,16 +915,14 @@ TextRowReader::getDouble(TextRowReader& th, bool& isNull, DelimType& delim) {
     isNull = true;
     return 0.0;
   }
-  double v = 0.0;
-  unsigned long long scanPos = 0;
-  // We ignore ERANGE, since denormalized doubles and
-  // infinities are acceptable.
-  auto scanCount = sscanf(strView.data(), "%lf%lln", &v, &scanPos);
-  if (scanCount != 1 || scanPos < strView.size()) {
+
+  const auto result = folly::tryTo<double>(strView);
+  if (result.hasError()) {
     isNull = true;
     return 0.0;
   }
-  return v;
+
+  return result.value();
 }
 
 /// TODO: Reconsider error handling strategy for malformed data
@@ -1346,6 +1359,8 @@ void TextRowReader::readElement(
     default:
       VELOX_NYI("readElement unhandled type (kind code {})", t->kind());
   }
+
+  ownedString_.clear();
 }
 
 uint64_t maxStreamsForType(const std::shared_ptr<const Type>& type) {
@@ -1396,12 +1411,13 @@ void TextRowReader::putValue(
     return;
   }
 
-  flatVector->set(insertionRow, v);
-
   // Handle null property.
   if (isNull) {
     flatVector->setNull(insertionRow, isNull);
+    return;
   }
+
+  flatVector->set(insertionRow, v);
 }
 
 const std::shared_ptr<const RowType>& TextRowReader::getType() const {
