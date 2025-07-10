@@ -547,6 +547,8 @@ class BaseVector {
   virtual VectorPtr testingCopyPreserveEncodings(
       velox::memory::MemoryPool* pool = nullptr) const = 0;
 
+  virtual void transferOrCopyTo(velox::memory::MemoryPool* pool);
+
   /// Construct a zero-copy slice of the vector with the indicated offset and
   /// length.
   virtual VectorPtr slice(vector_size_t offset, vector_size_t length) const = 0;
