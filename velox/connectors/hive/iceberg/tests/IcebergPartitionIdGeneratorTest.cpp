@@ -135,16 +135,45 @@ TEST_F(IcebergPartitionIdGeneratorTest, partitionNameWithMixedTransforms) {
   auto bigintVector =
       makeFlatVector<int64_t>(1, [](auto) { return 9'876'543'210; });
   auto varcharVector = makeFlatVector<StringView>({"test string"});
-  auto timestampVector = makeFlatVector<Timestamp>(
+  auto yearVector = makeFlatVector<Timestamp>(
       1, [](auto) { return Timestamp(1'577'836'800, 0); });
+  auto monthVector = makeFlatVector<Timestamp>(
+      1, [](auto) { return Timestamp(1'578'836'800, 0); });
+  auto dayVector = makeFlatVector<Timestamp>(
+      1, [](auto) { return Timestamp(1'579'836'800, 0); });
+  auto hourVector = makeFlatVector<Timestamp>(
+      1, [](auto) { return Timestamp(1'57'936'800, 0); });
+  auto boolVector = makeFlatVector<bool>(1, [](auto) { return true; });
 
   std::vector<std::string> columnNames = {
-      "c_int", "c_bigint", "c_varchar", "c_timestamp"};
+      "c_int",
+      "c_bigint",
+      "c_varchar",
+      "c_year",
+      "c_month",
+      "c_day",
+      "c_hour",
+      "c_bool"};
 
   std::vector<VectorPtr> columns = {
-      intVector, bigintVector, varcharVector, timestampVector};
+      intVector,
+      bigintVector,
+      varcharVector,
+      yearVector,
+      monthVector,
+      dayVector,
+      hourVector,
+      boolVector};
 
-  std::vector<TypePtr> types = {INTEGER(), BIGINT(), VARCHAR(), TIMESTAMP()};
+  std::vector<TypePtr> types = {
+      INTEGER(),
+      BIGINT(),
+      VARCHAR(),
+      TIMESTAMP(),
+      TIMESTAMP(),
+      TIMESTAMP(),
+      TIMESTAMP(),
+      BOOLEAN()};
 
   auto rowVector = createRowVector(columnNames, columns);
 
@@ -152,7 +181,11 @@ TEST_F(IcebergPartitionIdGeneratorTest, partitionNameWithMixedTransforms) {
       TransformType::kBucket,
       TransformType::kTruncate,
       TransformType::kTruncate,
-      TransformType::kYear};
+      TransformType::kYear,
+      TransformType::kMonth,
+      TransformType::kDay,
+      TransformType::kHour,
+      TransformType::kIdentity};
 
   std::vector<std::optional<int32_t>> parameters = {4, 1'000, 5, std::nullopt};
   auto transforms =
@@ -167,7 +200,11 @@ TEST_F(IcebergPartitionIdGeneratorTest, partitionNameWithMixedTransforms) {
       "c_int_bucket=2",
       "c_bigint_trunc=9876543000",
       "c_varchar_trunc=test+",
-      "c_timestamp_year=50"};
+      "c_year_year=2020",
+      "c_month_month=2020-01",
+      "c_day_day=2020-01-24",
+      "c_hour_hour=1975-01-02-23",
+      "c_bool=true"};
   verifyPartitionComponents(partitionName, expectedComponents);
 }
 

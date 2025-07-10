@@ -424,11 +424,9 @@ TEST_F(IcebergTransformE2ETest, yearPartitioning) {
 
   auto dataPath = fmt::format("{}", outputDirectory->getPath());
   auto partitionDirs = listFirstLevelDirectories(dataPath);
-  std::unordered_map<int32_t, int32_t> yearToYearsSince1970 = {
-      {2020, 50}, {2021, 51}, {2022, 52}, {2023, 53}, {2024, 54}, {2025, 55}};
 
-  for (const auto& [year, yearsSince1970] : yearToYearsSince1970) {
-    const auto expectedDirName = fmt::format("c_date_year={}", yearsSince1970);
+  for (int32_t year = 2020; year <= 2025; year++) {
+    const auto expectedDirName = fmt::format("c_date_year={}", year);
     bool foundPartition = false;
     auto yearFilter = [](const int32_t year) -> std::string {
       return fmt::format(
@@ -436,6 +434,7 @@ TEST_F(IcebergTransformE2ETest, yearPartitioning) {
           std::to_string(year),
           std::to_string(year));
     };
+
     for (const auto& dir : partitionDirs) {
       const auto dirName = std::filesystem::path(dir).filename().string();
       if (dirName == expectedDirName) {
@@ -791,10 +790,9 @@ TEST_F(IcebergTransformE2ETest, timestampYearPartitioning) {
   for (const auto& dir : partitionDirs) {
     const auto dirName = std::filesystem::path(dir).filename().string();
     auto [c, v] = buildFilter(dirName);
-    auto yearsSince1970 = std::stoi(v);
-    auto year = 1970 + yearsSince1970;
+    auto year = std::stoi(v);
     std::string filter = fmt::format("YEAR(c_timestamp) = {}", year);
-    auto expectedRowCount = yearToExpectedCount[year];
+    auto expectedRowCount = yearToExpectedCount.at(year);
     verifyPartitionData(rowType_, dir, filter, expectedRowCount);
   }
 }
@@ -820,28 +818,44 @@ TEST_F(IcebergTransformE2ETest, timestampMonthPartitioning) {
 
   auto dataPath = fmt::format("{}", outputDirectory->getPath());
   auto partitionDirs = listFirstLevelDirectories(dataPath);
+  std::unordered_map<std::string, int32_t> monthToExpectedCount;
+
+  for (const auto& batch : batches) {
+    auto timestampVector = batch->childAt(6)->as<SimpleVector<Timestamp>>();
+    for (vector_size_t i = 0; i < batch->size(); i++) {
+      if (!timestampVector->isNullAt(i)) {
+        Timestamp ts = timestampVector->valueAt(i);
+        std::tm tm;
+        if (Timestamp::epochToCalendarUtc(ts.getSeconds(), tm)) {
+          int32_t year = tm.tm_year + 1900;
+          int32_t month = tm.tm_mon + 1;
+          std::string monthKey = fmt::format("{:04d}-{:02d}", year, month);
+          monthToExpectedCount[monthKey]++;
+        }
+      }
+    }
+  }
+
   for (const auto& dir : partitionDirs) {
     const auto dirName = std::filesystem::path(dir).filename().string();
     auto [c, v] = buildFilter(dirName);
-    auto monthsSince1970 = std::stoi(v);
-    auto yearsSince1970 = monthsSince1970 / 12;
-    auto monthOfYear = (monthsSince1970 % 12) + 1;
-    auto year = 1970 + yearsSince1970;
-    std::string filter = fmt::format(
-        "YEAR(c_timestamp) = {} AND MONTH(c_timestamp) = {}",
-        year,
-        monthOfYear);
+    size_t dashPos = v.find('-');
+    ASSERT_NE(dashPos, std::string::npos) << "Invalid month format: " << v;
 
-    verifyPartitionData(rowType_, dir, filter, 0, true);
+    int32_t year = std::stoi(v.substr(0, dashPos));
+    int32_t month = std::stoi(v.substr(dashPos + 1));
+    std::string filter = fmt::format(
+        "YEAR(c_timestamp) = {} AND MONTH(c_timestamp) = {}", year, month);
+    std::string monthKey = fmt::format("{:04d}-{:02d}", year, month);
+    auto expectedCount = monthToExpectedCount[monthKey];
+    verifyPartitionData(rowType_, dir, filter, expectedCount);
   }
 }
 
 TEST_F(IcebergTransformE2ETest, timestampDayPartitioning) {
   constexpr auto numBatches = 2;
   constexpr auto rowsPerBatch = 100;
-
   auto batches = createTestData(numBatches, rowsPerBatch);
-
   auto outputDirectory = TempDirectoryPath::create();
   auto dataSink = createIcebergDataSink(
       rowType_, outputDirectory->getPath(), {"day(c_timestamp)"});
@@ -858,27 +872,55 @@ TEST_F(IcebergTransformE2ETest, timestampDayPartitioning) {
 
   auto dataPath = fmt::format("{}", outputDirectory->getPath());
   auto partitionDirs = listFirstLevelDirectories(dataPath);
+  std::unordered_map<std::string, int32_t> dayToExpectedCount;
+  for (const auto& batch : batches) {
+    auto timestampVector = batch->childAt(6)->as<SimpleVector<Timestamp>>();
+    for (vector_size_t i = 0; i < batch->size(); i++) {
+      if (!timestampVector->isNullAt(i)) {
+        Timestamp ts = timestampVector->valueAt(i);
+        std::tm tm;
+        if (Timestamp::epochToCalendarUtc(ts.getSeconds(), tm)) {
+          int32_t year = tm.tm_year + 1900;
+          int32_t month = tm.tm_mon + 1;
+          int32_t day = tm.tm_mday;
+          std::string dayKey =
+              fmt::format("{:04d}-{:02d}-{:02d}", year, month, day);
+          dayToExpectedCount[dayKey]++;
+        }
+      }
+    }
+  }
+
   for (const auto& dir : partitionDirs) {
     const auto dirName = std::filesystem::path(dir).filename().string();
     auto [c, v] = buildFilter(dirName);
-    auto daysSince1970 = std::stoi(v);
+    std::vector<std::string> dateParts;
+    folly::split('-', v, dateParts);
+    ASSERT_EQ(dateParts.size(), 3) << "Invalid day format: " << v;
+
+    int32_t year = std::stoi(dateParts[0]);
+    int32_t month = std::stoi(dateParts[1]);
+    int32_t day = std::stoi(dateParts[2]);
 
     std::string filter = fmt::format(
-        "c_timestamp >= TIMESTAMP '1970-01-01' + INTERVAL {} DAY AND "
-        "c_timestamp < TIMESTAMP '1970-01-01' + INTERVAL {} DAY",
-        daysSince1970,
-        daysSince1970 + 1);
+        "YEAR(c_timestamp) = {} AND MONTH(c_timestamp) = {} AND DAY(c_timestamp) = {}",
+        year,
+        month,
+        day);
 
-    verifyPartitionData(rowType_, dir, filter, 0, true);
+    // Get expected count for this day
+    std::string dayKey = fmt::format("{:04d}-{:02d}-{:02d}", year, month, day);
+    auto expectedCount = dayToExpectedCount[dayKey];
+
+    // Verify partition data with actual row count check
+    verifyPartitionData(rowType_, dir, filter, expectedCount);
   }
 }
 
 TEST_F(IcebergTransformE2ETest, timestampHourPartitioning) {
   constexpr auto numBatches = 2;
   constexpr auto rowsPerBatch = 100;
-
   auto batches = createTestData(numBatches, rowsPerBatch);
-
   auto outputDirectory = TempDirectoryPath::create();
   auto dataSink = createIcebergDataSink(
       rowType_, outputDirectory->getPath(), {"hour(c_timestamp)"});
@@ -895,18 +937,50 @@ TEST_F(IcebergTransformE2ETest, timestampHourPartitioning) {
 
   auto dataPath = fmt::format("{}", outputDirectory->getPath());
   auto partitionDirs = listFirstLevelDirectories(dataPath);
+  std::unordered_map<std::string, int32_t> hourToExpectedCount;
+
+  for (const auto& batch : batches) {
+    auto timestampVector = batch->childAt(6)->as<SimpleVector<Timestamp>>();
+    for (vector_size_t i = 0; i < batch->size(); i++) {
+      if (!timestampVector->isNullAt(i)) {
+        Timestamp ts = timestampVector->valueAt(i);
+        std::tm tm;
+        if (Timestamp::epochToCalendarUtc(ts.getSeconds(), tm)) {
+          int32_t year = tm.tm_year + 1900;
+          int32_t month = tm.tm_mon + 1;
+          int32_t day = tm.tm_mday;
+          int32_t hour = tm.tm_hour;
+          std::string hourKey = fmt::format(
+              "{:04d}-{:02d}-{:02d}-{:02d}", year, month, day, hour);
+          hourToExpectedCount[hourKey]++;
+        }
+      }
+    }
+  }
 
   for (const auto& dir : partitionDirs) {
     const auto dirName = std::filesystem::path(dir).filename().string();
     auto [c, v] = buildFilter(dirName);
-    auto hoursSince1970 = std::stoi(v);
-    std::string filter = fmt::format(
-        "c_timestamp >= TIMESTAMP '1970-01-01' + INTERVAL {} HOUR AND "
-        "c_timestamp < TIMESTAMP '1970-01-01' + INTERVAL {} HOUR",
-        hoursSince1970,
-        hoursSince1970 + 1);
+    std::vector<std::string> dateParts;
+    folly::split('-', v, dateParts);
+    ASSERT_EQ(dateParts.size(), 4) << "Invalid hour format: " << v;
 
-    verifyPartitionData(rowType_, dir, filter, 0, true);
+    int32_t year = std::stoi(dateParts[0]);
+    int32_t month = std::stoi(dateParts[1]);
+    int32_t day = std::stoi(dateParts[2]);
+    int32_t hour = std::stoi(dateParts[3]);
+
+    std::string filter = fmt::format(
+        "YEAR(c_timestamp) = {} AND MONTH(c_timestamp) = {} AND "
+        "DAY(c_timestamp) = {} AND HOUR(c_timestamp) = {}",
+        year,
+        month,
+        day,
+        hour);
+    std::string hourKey =
+        fmt::format("{:04d}-{:02d}-{:02d}-{:02d}", year, month, day, hour);
+    auto expectedCount = hourToExpectedCount[hourKey];
+    verifyPartitionData(rowType_, dir, filter, expectedCount);
   }
 }
 

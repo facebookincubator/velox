@@ -153,8 +153,16 @@ TEST_F(IcebergTransformUnitTest, testIdentityTransform) {
   EXPECT_EQ(varcharTransform.type->kind(), TypeKind::VARCHAR);
   testTransform<StringView, StringView>(
       varcharTransform,
-      {StringView("a"), StringView(""), StringView("velox")},
-      {StringView("a"), StringView(""), StringView("velox")});
+      {StringView("a"),
+       StringView(""),
+       StringView("velox"),
+       StringView(
+           "Velox is a composable execution engine distributed as an open source C++ library. It provides reusable, extensible, and high-performance data processing components that can be (re-)used to build data management systems focused on different analytical workloads, including batch, interactive, stream processing, and AI/ML. Velox was created by Meta and it is currently developed in partnership with IBM/Ahana, Intel, Voltron Data, Microsoft, ByteDance and many other companies.")},
+      {StringView("a"),
+       StringView(""),
+       StringView("velox"),
+       StringView(
+           "Velox is a composable execution engine distributed as an open source C++ library. It provides reusable, extensible, and high-performance data processing components that can be (re-)used to build data management systems focused on different analytical workloads, including batch, interactive, stream processing, and AI/ML. Velox was created by Meta and it is currently developed in partnership with IBM/Ahana, Intel, Voltron Data, Microsoft, ByteDance and many other companies.")});
 
   auto& varbinaryTransform = partitionSpec->fields[3];
   EXPECT_EQ(varbinaryTransform.transformType, TransformType::kIdentity);
