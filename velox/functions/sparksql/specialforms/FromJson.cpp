@@ -202,7 +202,7 @@ struct ExtractJsonTypeImpl {
 
   template <typename Dummy>
   struct KindDispatcher<TypeKind::HUGEINT, Dummy> {
-   static simdjson::error_code apply(
+    static simdjson::error_code apply(
         Input value,
         exec::GenericWriter& writer,
         bool /*isRoot*/,
@@ -544,7 +544,7 @@ struct ExtractJsonTypeImpl {
     return simdjson::SUCCESS;
   }
 
-    template <typename T>
+  template <typename T>
   static simdjson::error_code castJsonToDecimal(
       Input value,
       exec::GenericWriter& writer) {
