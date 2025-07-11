@@ -122,6 +122,11 @@ jobs:
           LIBHDFS3_CONF: ${{ github.workspace }}/scripts/ci/hdfs-client.xml
         working-directory: _build/release
         run: |
+          # Can be removed after images are rebuild
+          if ! command -v uv > /dev/null 2>&1; then
+            python3 -m pip install https://github.com/googleapis/storage-testbench/archive/refs/tags/v0.36.0.tar.gz
+          fi
+
           export CLASSPATH=`/usr/local/hadoop/bin/hdfs classpath --glob`
           ctest -j 8 --label-exclude cuda_driver --output-on-failure --no-tests=error
 
