@@ -1462,6 +1462,7 @@ int32_t HashProbe::evalFilter(int32_t numRows) {
     return numRows;
   }
 
+  filterResult_.clear();
   const bool filterPropagateNulls = filter_->expr(0)->propagatesNulls();
   auto* rawOutputProbeRowMapping =
       outputRowMapping_->asMutable<vector_size_t>();
