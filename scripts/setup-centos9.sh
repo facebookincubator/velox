@@ -88,66 +88,6 @@ function install_gflags {
   cmake_install_dir gflags -DBUILD_SHARED_LIBS=ON -DBUILD_STATIC_LIBS=ON -DBUILD_gflags_LIB=ON -DLIB_SUFFIX=64
 }
 
-function install_cuda {
-  # See https://developer.nvidia.com/cuda-downloads
-  local arch
-  arch="$(uname -m)"
-  local repo_url
-
-  if [[ $arch == "x86_64" ]]; then
-    repo_url="https://developer.download.nvidia.com/compute/cuda/repos/rhel9/x86_64/cuda-rhel9.repo"
-  elif [[ $arch == "aarch64" ]]; then
-    # Using SBSA (Server Base System Architecture) repository for ARM64 servers
-    repo_url="https://developer.download.nvidia.com/compute/cuda/repos/rhel9/sbsa/cuda-rhel9.repo"
-  else
-    echo "Unsupported architecture: $arch" >&2
-    return 1
-  fi
-
-  dnf config-manager --add-repo "$repo_url"
-  local dashed
-  dashed="$(echo "$1" | tr '.' '-')"
-  dnf_install \
-    cuda-compat-"$dashed" \
-    cuda-driver-devel-"$dashed" \
-    cuda-minimal-build-"$dashed" \
-    cuda-nvrtc-devel-"$dashed" \
-    libcufile-devel-"$dashed" \
-    numactl-libs
-}
-
-function install_s3 {
-  install_aws_deps
-
-  local MINIO_OS="linux"
-  install_minio ${MINIO_OS}
-}
-
-function install_gcs {
-  # Dependencies of GCS, probably a workaround until the docker image is rebuilt
-  dnf_install npm curl-devel c-ares-devel
-  install_gcs-sdk-cpp
-}
-
-function install_abfs {
-  # Dependencies of Azure Storage Blob cpp
-  dnf_install perl-IPC-Cmd openssl libxml2-devel
-  install_azure-storage-sdk-cpp
-}
-
-function install_hdfs {
-  dnf_install libxml2-devel libgsasl-devel libuuid-devel krb5-devel
-  install_hdfs_deps
-  dnf_install java-1.8.0-openjdk-devel
-}
-
-function install_adapters {
-  run_and_time install_s3
-  run_and_time install_gcs
-  run_and_time install_abfs
-  run_and_time install_hdfs
-}
-
 function install_faiss_deps {
   dnf_install openblas-devel libomp
 }
