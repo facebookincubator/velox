@@ -220,6 +220,8 @@ void HdfsFileSystem::rename(
     std::string_view path,
     std::string_view newPath,
     bool overWrite) {
+  VELOX_CHECK_EQ(
+      overWrite, false, "HdfsFileSystem::rename doesn't support overwrite");
   // Only remove the scheme for hdfs path.
   if (path.find(kScheme) == 0) {
     path.remove_prefix(kScheme.length());
