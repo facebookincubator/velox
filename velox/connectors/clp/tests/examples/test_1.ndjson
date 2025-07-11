@@ -1,0 +1,10 @@
+{"timestamp": "2025-04-30T08:45:00Z", "requestId": "req-100", "userId": "user201", "method": "GET", "path": "/api/users/1", "responseTimeMs": 25, "status": 200}
+{"timestamp": "2025-04-30T08:45:05Z", "requestId": "req-101", "userId": "user202", "method": "POST", "path": "/api/orders", "responseTimeMs": 110, "status": 201}
+{"timestamp": "2025-04-30T08:45:10Z", "requestId": "req-102", "userId": null, "method": "GET", "path": "/public/products", "responseTimeMs": 18, "status": 200}
+{"timestamp": "2025-04-30T08:45:15Z", "requestId": "req-103", "userId": "user203", "method": "PUT", "path": "/api/items/5", "responseTimeMs": 95, "status": 200}
+{"timestamp": "2025-04-30T08:45:20Z", "requestId": "req-104", "userId": "user201", "method": "DELETE", "path": "/api/notifications/3", "responseTimeMs": 32, "status": 204}
+{"timestamp": "2025-04-30T08:45:25Z", "requestId": "req-105", "userId": "user204", "method": "GET", "path": "/api/dashboard", "responseTimeMs": 155, "status": 200}
+{"timestamp": "2025-04-30T08:45:30Z", "requestId": "req-106", "userId": null, "method": "POST", "path": "/auth/login", "responseTimeMs": 68, "status": 200}
+{"timestamp": "2025-04-30T08:45:35Z", "requestId": "req-107", "userId": "user202", "method": "GET", "path": "/api/users/2/details", "responseTimeMs": 41, "status": 200}
+{"timestamp": "2025-04-30T08:45:40Z", "requestId": "req-108", "userId": "user205", "method": "PATCH", "path": "/api/settings", "responseTimeMs": 128, "status": 200}
+{"timestamp": "2025-04-30T08:45:45Z", "requestId": "req-109", "userId": "user203", "method": "GET", "path": "/api/products?category=books", "responseTimeMs": 88, "status": 200}
