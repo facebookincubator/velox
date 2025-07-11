@@ -67,9 +67,7 @@ jobs:
             # install basic deps
             bash /setup-centos9.sh
 
-            source /setup-centos9.sh
-            install_adapters
-            install_cuda $CUDA_VERSION
+            bash /setup-centos-adapters.sh
 
             cd /
             rm -rf /tmp/build # cleanup to avoid issues with disk space
