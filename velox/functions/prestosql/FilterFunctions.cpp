@@ -18,6 +18,7 @@
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/lib/LambdaFunctionUtil.h"
 #include "velox/functions/lib/RowsTranslationUtil.h"
+#include "velox/vector/FlatMapVector.h"
 #include "velox/vector/FunctionVector.h"
 
 namespace facebook::velox::functions {
@@ -34,7 +35,7 @@ class FilterFunctionBase : public exec::VectorFunction {
   static vector_size_t doApply(
       const SelectivityVector& rows,
       const std::shared_ptr<T>& input,
-      const VectorPtr& lambdas,
+      const VectorPtr& lambda,
       const std::vector<VectorPtr>& lambdaArgs,
       exec::EvalCtx& context,
       BufferPtr& resultOffsets,
@@ -60,7 +61,7 @@ class FilterFunctionBase : public exec::VectorFunction {
         getElementToTopLevelRows(numElements, rows, input.get(), pool);
 
     exec::LocalDecodedVector bitsDecoder(context);
-    auto iter = lambdas->asUnchecked<FunctionVector>()->iterator(&rows);
+    auto iter = lambda->asUnchecked<FunctionVector>()->iterator(&rows);
     while (auto entry = iter.next()) {
       auto elementRows =
           toElementRows<T>(numElements, *entry.rows, input.get());
@@ -173,27 +174,125 @@ class ArrayFilterFunction : public FilterFunctionBase {
 //    - https://prestodb.io/docs/current/functions/lambda.html
 //    - https://prestodb.io/blog/2020/03/02/presto-lambda
 class MapFilterFunction : public FilterFunctionBase {
- public:
-  void apply(
+ private:
+  // Apply filter function to vector of encoding FlatMapVector. Because the
+  // entirety of the map values are stored in in a list of vectors (one vector
+  // per key), we will need to apply the filter function on each vector and
+  // associated inMap buffer. Additionally, we will have to reduce the number of
+  // distinct keys stored in the FlatMapVector if they key list changes.
+  void applyFlatMapVector(
+      DecodedVector& map,
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
       const TypePtr& outputType,
       exec::EvalCtx& context,
-      VectorPtr& result) const override {
-    VELOX_CHECK_EQ(args.size(), 2);
-    exec::LocalDecodedVector mapDecoder(context, *args[0], rows);
-    auto& decodedMap = *mapDecoder.get();
+      VectorPtr& result) const {
+    // Current map and fields
+    const FlatMapVector& flatMap = *(map.base())->template as<FlatMapVector>();
+    auto distinctKeys = flatMap.distinctKeys();
+    auto mapValues = flatMap.mapValues();
+    auto numRows = rows.size();
+    BufferPtr decodedIndices =
+        AlignedBuffer::allocate<vector_size_t>(numRows, flatMap.pool());
+    auto mutableIndices = decodedIndices->asMutable<vector_size_t>();
+    for (int i = 0; i < map.size(); i++) {
+      mutableIndices[i] = map.indices()[i];
+    }
 
-    auto flatMap = flattenMap(rows, args[0], decodedMap);
+    // Result map fields
+    auto filteredKeysIndices =
+        AlignedBuffer::allocate<vector_size_t>(numRows, context.pool());
+    std::vector<VectorPtr> filteredMapValues;
+    std::vector<BufferPtr> filteredInMaps;
+    uint64_t* filteredInMap;
+    auto numDistinct = 0;
+    auto rawIndices = filteredKeysIndices->asMutable<vector_size_t>();
 
-    VectorPtr keys = flatMap->mapKeys();
-    VectorPtr values = flatMap->mapValues();
+    // Lambda function
+    auto iter = args[1]->asUnchecked<FunctionVector>()->iterator(&rows);
+    exec::LocalDecodedVector bitsDecoder(context);
+
+    while (auto entry = iter.next()) {
+      for (int i = 0; i < mapValues.size(); ++i) {
+        SelectivityVector elementRows(flatMap.size());
+
+        VectorPtr bits;
+        entry.callable->apply(
+            elementRows,
+            nullptr,
+            nullptr,
+            &context,
+            {BaseVector::wrapInConstant(flatMap.size(), i, distinctKeys),
+             mapValues[i]},
+            decodedIndices,
+            &bits);
+
+        bitsDecoder.get()->decode(*bits, elementRows);
+
+        bool isFilteredIn = false;
+        entry.rows->applyToSelected([&](vector_size_t row) {
+          row = mutableIndices[row];
+          if (!bitsDecoder.get()->isNullAt(row) &&
+              bitsDecoder.get()->valueAt<bool>(row) &&
+              flatMap.isInMap(i, row)) {
+            // First time seeing this key; let's copy over its associated values
+            // vector and define a new filtered inMap buffer. Let's also note
+            // the index of this key for key filtering.
+            if (!isFilteredIn) {
+              filteredMapValues.push_back(BaseVector::copy(*mapValues[i]));
+              filteredInMaps.push_back(
+                  AlignedBuffer::allocate<bool>(numRows, context.pool(), 0));
+              filteredInMap = filteredInMaps.back()->asMutable<uint64_t>();
+              rawIndices[numDistinct++] = i;
+              isFilteredIn = true;
+            }
+            bits::setBit(filteredInMap, row);
+          }
+        });
+      }
+    }
+
+    // Resize filtered distinct keys indices in order to wrap in dictionary and
+    // create our result filtered flat map vector
+    filteredKeysIndices->setSize(numDistinct * sizeof(vector_size_t));
+    auto localResult = std::make_shared<FlatMapVector>(
+        context.pool(),
+        outputType,
+        nullptr,
+        flatMap.size(),
+        BaseVector::wrapInDictionary(
+            BufferPtr(nullptr), filteredKeysIndices, numDistinct, distinctKeys),
+        std::move(filteredMapValues),
+        std::move(filteredInMaps));
+
+    // Handle wrapped encoding if necessary
+    if (map.isIdentityMapping())
+      context.moveOrCopyResult(localResult, rows, result);
+    else {
+      context.moveOrCopyResult(
+          BaseVector::wrapInDictionary(
+              nullptr, decodedIndices, map.size(), localResult),
+          rows,
+          result);
+    }
+  }
+
+  // Applies filter function on traditional map vector.
+  void applyMapVector(
+      MapVectorPtr& mapVector,
+      const SelectivityVector& rows,
+      std::vector<VectorPtr>& args,
+      const TypePtr& outputType,
+      exec::EvalCtx& context,
+      VectorPtr& result) const {
+    VectorPtr keys = mapVector->mapKeys();
+    VectorPtr values = mapVector->mapValues();
     BufferPtr resultSizes;
     BufferPtr resultOffsets;
     BufferPtr selectedIndices;
     auto numSelected = doApply(
         rows,
-        flatMap,
+        mapVector,
         args[1],
         {keys, values},
         context,
@@ -220,9 +319,9 @@ class MapFilterFunction : public FilterFunctionBase {
                                            true /*flattenIfRedundant*/)
                                      : nullptr;
     // Set nulls for rows not present in 'rows'.
-    BufferPtr newNulls = addNullsForUnselectedRows(flatMap, rows);
+    BufferPtr newNulls = addNullsForUnselectedRows(mapVector, rows);
     auto localResult = std::make_shared<MapVector>(
-        flatMap->pool(),
+        mapVector->pool(),
         outputType,
         std::move(newNulls),
         rows.end(),
@@ -231,6 +330,36 @@ class MapFilterFunction : public FilterFunctionBase {
         wrappedKeys,
         wrappedValues);
     context.moveOrCopyResult(localResult, rows, result);
+  }
+
+ public:
+  void apply(
+      const SelectivityVector& rows,
+      std::vector<VectorPtr>& args,
+      const TypePtr& outputType,
+      exec::EvalCtx& context,
+      VectorPtr& result) const override {
+    VELOX_CHECK_EQ(args.size(), 2);
+    exec::LocalDecodedVector mapDecoder(context, *args[0], rows);
+    auto& decodedMap = *mapDecoder.get();
+
+    // Get encoding or underlying encoding if wrapped.
+    auto encoding =
+        (args[0]->encoding() == VectorEncoding::Simple::DICTIONARY ||
+         args[0]->encoding() == VectorEncoding::Simple::CONSTANT)
+        ? decodedMap.base()->encoding()
+        : args[0]->encoding();
+
+    // Flattening input maps will peel if possible, but may simply cast if the
+    // vector is an identify mapping.
+    if (encoding == VectorEncoding::Simple::FLAT_MAP) {
+      applyFlatMapVector(decodedMap, rows, args, outputType, context, result);
+    } else if (encoding == VectorEncoding::Simple::MAP) {
+      auto flattenedMap = flattenMap(rows, args[0], decodedMap);
+      applyMapVector(flattenedMap, rows, args, outputType, context, result);
+    } else {
+      VELOX_UNSUPPORTED("map_filter not supported for encoding: {}", encoding);
+    }
   }
 
   static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
