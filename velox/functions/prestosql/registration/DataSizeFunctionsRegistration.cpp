@@ -20,16 +20,36 @@
 namespace facebook::velox::functions {
 namespace {
 
+template <size_t id>
+struct IntegerVariable {
+  static size_t getId() {
+    return id;
+  }
+
+  static std::string name() {
+    return fmt::format("{}", id);
+  }
+};
+
+// Expression fuzzer cannot bind integer variable of the return type directly,
+// so we use LongDecimal with the names being precision and scale.
+// 'tryResolveLongLiteral' will resolve the variable to the corresponding
+// integer value.
+using P = IntegerVariable<38>;
+using S = IntegerVariable<0>;
+
 void registerSimpleFunctions(const std::string& prefix) {
   std::vector<exec::SignatureVariable> constraints = {
       exec::SignatureVariable(
-          P1::name(), "38", exec::ParameterType::kIntegerParameter),
+          P::name(), "38", exec::ParameterType::kIntegerParameter),
       exec::SignatureVariable(
-          S1::name(), "0", exec::ParameterType::kIntegerParameter),
+          S::name(), "0", exec::ParameterType::kIntegerParameter),
   };
-  registerFunction<ParsePrestoDataSizeFunction, LongDecimal<P1, S1>, Varchar>(
+
+  registerFunction<ParsePrestoDataSizeFunction, LongDecimal<P, S>, Varchar>(
       {prefix + "parse_presto_data_size"}, constraints);
 }
+
 } // namespace
 
 void registerDataSizeFunctions(const std::string& prefix) {
