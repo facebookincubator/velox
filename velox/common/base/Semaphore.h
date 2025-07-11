@@ -63,8 +63,8 @@ class Semaphore {
  private:
   std::mutex mutex_;
   std::condition_variable cv_;
-  volatile int32_t count_;
-  volatile int32_t numWaiting_{0};
+  std::atomic<int32_t> count_;
+  std::atomic<int32_t> numWaiting_{0};
 };
 
 } // namespace facebook::velox
