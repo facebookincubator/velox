@@ -374,6 +374,44 @@ Returns <code class="docutils literal notranslate"><span class="pre">null</span>
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="ST_StartPoint">
+<span class="sig-name descname"><span class="pre">ST_StartPoint</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">point:</span> <span class="pre">Geometry</span></span></span><a class="headerlink" href="#ST_StartPoint" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the first point of a LineString geometry as a Point.
+This is a shortcut for <code class="docutils literal notranslate"><span class="pre">ST_PointN(geometry,</span> <span class="pre">1)</span></code>. Empty
+input will return <code class="docutils literal notranslate"><span class="pre">null</span></code>.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="ST_EndPoint">
+<span class="sig-name descname"><span class="pre">ST_EndPoint</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">point:</span> <span class="pre">Geometry</span></span></span><a class="headerlink" href="#ST_EndPoint" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the last point of a LineString geometry as a Point.
+This is a shortcut for <code class="docutils literal notranslate"><span class="pre">ST_PointN(geometry,</span> <span class="pre">ST_NumPoints(geometry))</span></code>.
+Empty input will return <code class="docutils literal notranslate"><span class="pre">null</span></code>.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="ST_GeometryN">
+<span class="sig-name descname"><span class="pre">ST_GeometryN</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">index</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">integer</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">geometry:</span> <span class="pre">Geometry</span></span></span><a class="headerlink" href="#ST_GeometryN" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the <code class="docutils literal notranslate"><span class="pre">geometry</span></code> element at a given index (indices start at 1).
+If the <code class="docutils literal notranslate"><span class="pre">geometry</span></code> is a collection of geometries (e.g., GeometryCollection or
+Multi*), returns the <code class="docutils literal notranslate"><span class="pre">geometry</span></code> at a given index. If the given index is less
+than 1 or greater than the total number of elements in the collection, returns
+NULL. Use <code class="docutils literal notranslate"><span class="pre">:func:ST_NumGeometries</span></code> to find out the total number of elements.
+Singular geometries (e.g., Point, LineString, Polygon), are treated as
+collections of one element. Empty geometries are treated as empty collections.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="ST_InteriorRingN">
+<span class="sig-name descname"><span class="pre">ST_InteriorRingN</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">index</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">integer</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">geometry:</span> <span class="pre">Geometry</span></span></span><a class="headerlink" href="#ST_InteriorRingN" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the interior ring element at the specified index (indices start at 1).
+If the given index is less than 1 or greater than the total number of interior
+rings in the input <code class="docutils literal notranslate"><span class="pre">geometry</span></code>, returns NULL. Throws an error if the input geometry
+is not a polygon. Use <code class="docutils literal notranslate"><span class="pre">:func:ST_NumInteriorRing</span></code> to find out the total number of
+elements.</p>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="simplify_geometry">
 <span class="sig-name descname"><span class="pre">simplify_geometry</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">tolerance</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">double</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">output:</span> <span class="pre">Geometry</span></span></span><a class="headerlink" href="#simplify_geometry" title="Link to this definition">¶</a></dt>
 <dd><p>Returns a “simplified” version of the input geometry using the
@@ -529,6 +567,10 @@ specified.</p>
 <li><a class="reference internal" href="#ST_YMin"><code class="docutils literal notranslate"><span class="pre">ST_YMin()</span></code></a></li>
 <li><a class="reference internal" href="#ST_XMax"><code class="docutils literal notranslate"><span class="pre">ST_XMax()</span></code></a></li>
 <li><a class="reference internal" href="#ST_YMax"><code class="docutils literal notranslate"><span class="pre">ST_YMax()</span></code></a></li>
+<li><a class="reference internal" href="#ST_StartPoint"><code class="docutils literal notranslate"><span class="pre">ST_StartPoint()</span></code></a></li>
+<li><a class="reference internal" href="#ST_EndPoint"><code class="docutils literal notranslate"><span class="pre">ST_EndPoint()</span></code></a></li>
+<li><a class="reference internal" href="#ST_GeometryN"><code class="docutils literal notranslate"><span class="pre">ST_GeometryN()</span></code></a></li>
+<li><a class="reference internal" href="#ST_InteriorRingN"><code class="docutils literal notranslate"><span class="pre">ST_InteriorRingN()</span></code></a></li>
 <li><a class="reference internal" href="#simplify_geometry"><code class="docutils literal notranslate"><span class="pre">simplify_geometry()</span></code></a></li>
 </ul>
 </li>
