@@ -809,6 +809,30 @@ Counts, Sums, and Averages
     If provided, random_seed is used to seed the random number generator.
     Otherwise, noise is drawn from a secure random.
 
+SfmSketch Functions
+~~~~~~~~~~~~~~~~~~~
+
+Data Structures
+^^^^^^^^^^^^^^^
+The SFM summary is a sketch for distinct counting, similar to HyperLogLog.
+This sketch is introduced in the paper
+`Sketch-Flip-Merge: Mergeable Sketches for Private Distinct Counting <https://arxiv.org/pdf/2302.02056.pdf>`_.
+
+The primary differences between SFM and HyperLogLog are that
+ (a) SFM supports noise addition.
+ (b) SFM tracks a larger number of hash statistics (and is therefore larger).
+
+The ``SfmSketch`` data structure is initially created without noise.
+Noise is added by randomizing the bits of the sketch via the ``enablePrivacy()`` function.
+Once noise has been added, further items cannot be added to the sketch.
+However, two or more noisy sketches may be merged together.
+
+The noise level is quantified by the parameter ``epsilon``, a positive real number.
+A smaller value of ``epsilon`` corresponds to a more noisy sketch.
+An ``epsilon`` of 0 would yield a summary that is entirely noise, while an ``epsilon`` that is infinite yields no noise.
+The estimated cardinality becomes less accurate with the addition of more noise (i.e., smaller ``epsilon`` yield less accurate results).
+
+
 Limitations
 ~~~~~~~~~~~
 
