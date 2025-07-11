@@ -16,21 +16,33 @@
 #pragma once
 
 #include "velox/core/Expressions.h"
+#include "velox/functions/lib/ArraySort.h"
+#include "velox/functions/lib/SimpleComparisonMatcher.h"
 
 namespace facebook::velox::functions {
 
-/// Analyzes array_sort(array, lambda) call to determine whether it can be
-/// re-written into a simpler call that specifies sort-by expression.
-///
-/// For example, rewrites
-///     array_sort(a, (x, y) -> if(length(x) < length(y), -1, if(length(x) >
-///     length(y), 1, 0))
-/// into
-///     array_sort(a, x -> length(x))
-///
-/// Returns new expression or nullptr if rewrite is not possible.
-core::TypedExprPtr rewriteArraySortCall(
-    const std::string& prefix,
-    const core::TypedExprPtr& expr);
+std::shared_ptr<exec::VectorFunction> makeArraySortAsc(
+    const std::string& name,
+    const std::vector<exec::VectorFunctionArg>& inputArgs,
+    const core::QueryConfig& config) {
+  if (inputArgs.size() == 2) {
+    return makeArraySortLambdaFunction(name, inputArgs, config, true, true);
+  }
+
+  VELOX_CHECK_EQ(inputArgs.size(), 1);
+  return makeArraySort(name, inputArgs, config, true, false, true);
+}
+
+std::shared_ptr<exec::VectorFunction> makeArraySortDesc(
+    const std::string& name,
+    const std::vector<exec::VectorFunctionArg>& inputArgs,
+    const core::QueryConfig& config) {
+  if (inputArgs.size() == 2) {
+    return makeArraySortLambdaFunction(name, inputArgs, config, false, true);
+  }
+
+  VELOX_CHECK_EQ(inputArgs.size(), 1);
+  return makeArraySort(name, inputArgs, config, false, false, true);
+}
 
 } // namespace facebook::velox::functions
