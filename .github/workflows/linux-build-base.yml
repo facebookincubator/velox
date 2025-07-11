@@ -53,6 +53,7 @@ jobs:
         run: git config --global --add safe.directory ${GITHUB_WORKSPACE}
 
       - name: Install Dependencies
+        if: false
         env:
           VELOX_BUILD_SHARED: "ON"
         run: |
