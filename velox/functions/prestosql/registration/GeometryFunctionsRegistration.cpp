@@ -105,6 +105,26 @@ void registerAccessors(const std::string& prefix) {
       {{prefix + "ST_Length"}});
   registerFunction<StPointNFunction, Geometry, Geometry, int32_t>(
       {{prefix + "ST_PointN"}});
+  registerFunction<StStartPointFunction, Geometry, Geometry>(
+      {{prefix + "ST_StartPoint"}});
+  registerFunction<StEndPointFunction, Geometry, Geometry>(
+      {{prefix + "ST_EndPoint"}});
+  registerFunction<StGeometryNFunction, Geometry, Geometry, int32_t>(
+      {{prefix + "ST_GeometryN"}});
+  registerFunction<StInteriorRingNFunction, Geometry, Geometry, int32_t>(
+      {{prefix + "ST_InteriorRingN"}});
+  registerFunction<StNumGeometriesFunction, int32_t, Geometry>(
+      {{prefix + "ST_NumGeometries"}});
+  registerFunction<StNumInteriorRingFunction, int32_t, Geometry>(
+      {{prefix + "ST_NumInteriorRing"}});
+  registerFunction<StConvexHullFunction, Geometry, Geometry>(
+      {{prefix + "ST_ConvexHull"}});
+  registerFunction<StDimensionFunction, int8_t, Geometry>(
+      {{prefix + "ST_Dimension"}});
+  registerFunction<StExteriorRingFunction, Geometry, Geometry>(
+      {{prefix + "ST_ExteriorRing"}});
+  registerFunction<StEnvelopeFunction, Geometry, Geometry>(
+      {{prefix + "ST_Envelope"}});
 }
 
 } // namespace
