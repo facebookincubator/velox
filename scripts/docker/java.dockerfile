@@ -47,7 +47,7 @@ RUN tar -xzf presto-server.tar.gz
 #########################
 # Stage: Java Base      #
 #########################
-FROM ghcr.io/assignuser/velox-dev:centos9 AS java-base
+FROM ghcr.io/facebookincubator/velox-dev:centos9 AS java-base
 
 RUN dnf install -y -q --setopt=install_weak_deps=False java-11-openjdk less procps tzdata
 

@@ -36,7 +36,7 @@ jobs:
   build_docs:
     name: Build and Push
     runs-on: 8-core-ubuntu
-    container: ghcr.io/assignuser/velox-dev:centos9
+    container: ghcr.io/facebookincubator/velox-dev:centos9
     env:
       CCACHE_DIR: /tmp/ccache
     steps:

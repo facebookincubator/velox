@@ -36,7 +36,7 @@ permissions:
   contents: read
 
 env:
-  BASE_NAME: ghcr.io/assignuser
+  BASE_NAME: ghcr.io/facebookincubator
 
 jobs:
   multi-arch-base:
