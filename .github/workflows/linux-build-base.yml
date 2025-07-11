@@ -66,7 +66,7 @@ jobs:
             # install basic deps
             bash /setup-centos9.sh
 
-            bash /setup-centos9-adapters.sh
+            bash /setup-centos-adapters.sh
 
             cd /
             rm -rf /tmp/build # cleanup to avoid issues with disk space
