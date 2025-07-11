@@ -26,6 +26,8 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/type/Timestamp.h"
+#include "velox/type/Type.h"
 
 namespace {
 
@@ -33,6 +35,10 @@ using namespace facebook::velox;
 using namespace facebook::velox::connector::clp;
 
 using facebook::velox::exec::test::PlanBuilder;
+
+// Epoch seconds and nanoseconds for the timestamp "2025-04-30T08:50:05Z"
+constexpr int64_t kTestTimestampSeconds{1746003005};
+constexpr uint64_t kTestTimestampNanoseconds{0ULL};
 
 class ClpConnectorTest : public exec::test::OperatorTestBase {
  public:
@@ -165,7 +171,7 @@ TEST_F(ClpConnectorTest, test2NoPushdown) {
           .startTableScan()
           .outputType(
               ROW({"timestamp", "event"},
-                  {VARCHAR(),
+                  {TIMESTAMP(),
                    ROW({"type", "subtype", "severity"},
                        {VARCHAR(), VARCHAR(), VARCHAR()})}))
           .tableHandle(std::make_shared<ClpTableHandle>(
@@ -173,7 +179,7 @@ TEST_F(ClpConnectorTest, test2NoPushdown) {
           .assignments(
               {{"timestamp",
                 std::make_shared<ClpColumnHandle>(
-                    "timestamp", "timestamp", VARCHAR(), true)},
+                    "timestamp", "timestamp", TIMESTAMP(), true)},
                {"event",
                 std::make_shared<ClpColumnHandle>(
                     "event",
@@ -192,7 +198,8 @@ TEST_F(ClpConnectorTest, test2NoPushdown) {
       getResults(plan, {makeClpSplit(getExampleFilePath("test_2.clps"))});
   auto expected =
       makeRowVector({// timestamp
-                     makeFlatVector<StringView>({"2025-04-30T08:50:05Z"}),
+                     makeFlatVector<Timestamp>({Timestamp(
+                         kTestTimestampSeconds, kTestTimestampNanoseconds)}),
                      // event
                      makeRowVector({
                          // event.type
@@ -211,7 +218,7 @@ TEST_F(ClpConnectorTest, test2Pushdown) {
           .startTableScan()
           .outputType(
               ROW({"timestamp", "event"},
-                  {VARCHAR(),
+                  {TIMESTAMP(),
                    ROW({"type", "subtype", "severity"},
                        {VARCHAR(), VARCHAR(), VARCHAR()})}))
           .tableHandle(std::make_shared<ClpTableHandle>(
@@ -224,7 +231,7 @@ TEST_F(ClpConnectorTest, test2Pushdown) {
           .assignments(
               {{"timestamp",
                 std::make_shared<ClpColumnHandle>(
-                    "timestamp", "timestamp", VARCHAR(), true)},
+                    "timestamp", "timestamp", TIMESTAMP(), true)},
                {"event",
                 std::make_shared<ClpColumnHandle>(
                     "event",
@@ -239,7 +246,8 @@ TEST_F(ClpConnectorTest, test2Pushdown) {
       getResults(plan, {makeClpSplit(getExampleFilePath("test_2.clps"))});
   auto expected =
       makeRowVector({// timestamp
-                     makeFlatVector<StringView>({"2025-04-30T08:50:05Z"}),
+                     makeFlatVector<Timestamp>({Timestamp(
+                         kTestTimestampSeconds, kTestTimestampNanoseconds)}),
                      // event
                      makeRowVector({
                          // event.type
@@ -258,7 +266,7 @@ TEST_F(ClpConnectorTest, test2Hybrid) {
           .startTableScan()
           .outputType(
               ROW({"timestamp", "event"},
-                  {VARCHAR(),
+                  {TIMESTAMP(),
                    ROW({"type", "subtype", "severity", "tags"},
                        {VARCHAR(), VARCHAR(), VARCHAR(), ARRAY(VARCHAR())})}))
           .tableHandle(std::make_shared<ClpTableHandle>(
@@ -270,7 +278,7 @@ TEST_F(ClpConnectorTest, test2Hybrid) {
           .assignments(
               {{"timestamp",
                 std::make_shared<ClpColumnHandle>(
-                    "timestamp", "timestamp", VARCHAR(), true)},
+                    "timestamp", "timestamp", TIMESTAMP(), true)},
                {"event",
                 std::make_shared<ClpColumnHandle>(
                     "event",
@@ -286,7 +294,8 @@ TEST_F(ClpConnectorTest, test2Hybrid) {
       getResults(plan, {makeClpSplit(getExampleFilePath("test_2.clps"))});
   auto expected = makeRowVector(
       {// timestamp
-       makeFlatVector<StringView>({"2025-04-30T08:50:05Z"}),
+       makeFlatVector<Timestamp>(
+           {Timestamp(kTestTimestampSeconds, kTestTimestampNanoseconds)}),
        // event
        makeRowVector({// event.type
                       makeFlatVector<StringView>({"storage"}),
@@ -299,6 +308,32 @@ TEST_F(ClpConnectorTest, test2Hybrid) {
                           {{"\"filesystem\"", "\"monitoring\""}})})
 
       });
+  test::assertEqualVectors(expected, output);
+}
+
+TEST_F(ClpConnectorTest, test3TimestampMarshalling) {
+  auto plan = PlanBuilder(pool_.get())
+                  .startTableScan()
+                  .outputType(ROW({"timestamp"}, {TIMESTAMP()}))
+                  .tableHandle(std::make_shared<ClpTableHandle>(
+                      kClpConnectorId, "test_3", nullptr))
+                  .assignments(
+                      {{"timestamp",
+                        std::make_shared<ClpColumnHandle>(
+                            "timestamp", "timestamp", TIMESTAMP(), true)}})
+                  .endTableScan()
+                  .planNode();
+
+  auto output =
+      getResults(plan, {makeClpSplit(getExampleFilePath("test_3.clps"))});
+  auto expected = makeRowVector({
+      // timestamp
+      makeFlatVector<Timestamp>(
+          {Timestamp(kTestTimestampSeconds, kTestTimestampNanoseconds),
+           Timestamp(kTestTimestampSeconds, kTestTimestampNanoseconds),
+           Timestamp(kTestTimestampSeconds, kTestTimestampNanoseconds),
+           Timestamp(kTestTimestampSeconds, kTestTimestampNanoseconds)}),
+  });
   test::assertEqualVectors(expected, output);
 }
 
