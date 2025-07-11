@@ -29,13 +29,15 @@ class SelectiveStructColumnReaderBase
       const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
       DwrfParams& params,
       common::ScanSpec& scanSpec,
-      bool isRoot = false)
+      bool isRoot = false,
+      bool generateLazyChildren = true)
       : dwio::common::SelectiveStructColumnReaderBase(
             requestedType,
             fileType,
             params,
             scanSpec,
-            isRoot),
+            isRoot,
+            generateLazyChildren),
         rowsPerRowGroup_(formatData_->rowsPerRowGroup().value()) {
     VELOX_CHECK_EQ(fileType_->id(), fileType->id(), "working on the same node");
   }
