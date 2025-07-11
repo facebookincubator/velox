@@ -29,7 +29,7 @@ services:
 
   ubuntu-cpp:
     extends: base-block
-    image: ghcr.io/assignuser/velox-dev:ubuntu-22.04
+    image: ghcr.io/facebookincubator/velox-dev:ubuntu-22.04
     build:
       dockerfile: scripts/docker/ubuntu-22.04-cpp.dockerfile
     environment:
@@ -37,7 +37,7 @@ services:
 
   centos-cpp:
     extends: base-block
-    image: ghcr.io/assignuser/velox-dev:centos9
+    image: ghcr.io/facebookincubator/velox-dev:centos9
     build:
       dockerfile: scripts/docker/centos-multi.dockerfile
       target: centos9
@@ -47,7 +47,7 @@ services:
 
   adapters-cpp:
     extends: centos-cpp
-    image: ghcr.io/assignuser/velox-dev:adapters
+    image: ghcr.io/facebookincubator/velox-dev:adapters
     environment:
       EXTRA_CMAKE_FLAGS: >
         -DVELOX_ENABLE_PARQUET=ON
@@ -68,7 +68,7 @@ services:
 
   presto-java:
     extends: base-block
-    image: ghcr.io/assignuser/velox-dev:presto-java
+    image: ghcr.io/facebookincubator/velox-dev:presto-java
     build:
       args:
         - PRESTO_VERSION=0.293
@@ -76,7 +76,7 @@ services:
 
   spark-server:
     extends: base-block
-    image: ghcr.io/assignuser/velox-dev:spark-server
+    image: ghcr.io/facebookincubator/velox-dev:spark-server
     build:
       args:
         - SPARK_VERSION=3.5.1
