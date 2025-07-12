@@ -21,7 +21,7 @@
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/common/Reader.h"
 #include "velox/dwio/common/ReaderFactory.h"
-#include "velox/dwio/dwrf/RegisterDwrfReader.h"
+#include "velox/dwio/common/RegisterReaderWriters.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/vector/BaseVector.h"
 
@@ -42,7 +42,7 @@ int main(int argc, char** argv) {
   // To be able to read local files, we need to register the local file
   // filesystem. We also need to register the dwrf reader factory:
   filesystems::registerLocalFileSystem();
-  dwrf::registerDwrfReaderFactory();
+  dwio::common::registerReaderFactories();
   facebook::velox::memory::MemoryManager::initialize(
       facebook::velox::memory::MemoryManager::Options{});
   auto pool = facebook::velox::memory::memoryManager()->addLeafPool();

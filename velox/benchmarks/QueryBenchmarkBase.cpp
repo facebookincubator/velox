@@ -194,8 +194,7 @@ void QueryBenchmarkBase::initialize() {
           connector::hive::HiveConnectorFactory::kHiveConnectorName)
           ->newConnector(kHiveConnectorId, properties, ioExecutor_.get());
   connector::registerConnector(hiveConnector);
-  parquet::registerParquetReaderFactory();
-  dwrf::registerDwrfReaderFactory();
+  dwio::common::registerReaderFactories();
 }
 
 std::vector<std::shared_ptr<connector::ConnectorSplit>>

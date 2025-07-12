@@ -49,6 +49,7 @@ velox_add_library(
   Range.cpp
   Reader.cpp
   ReaderFactory.cpp
+  RegisterReaderWriters.cpp
   ScanSpec.cpp
   SeekableInputStream.cpp
   SelectiveByteRleColumnReader.cpp

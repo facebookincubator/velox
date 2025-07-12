@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/dwio/orc/reader/OrcReader.h"
+#include "velox/dwio/common/RegisterReaderWriters.h"
 
 namespace facebook::velox::orc {
 void registerOrcReaderFactory() {

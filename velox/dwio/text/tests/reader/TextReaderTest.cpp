@@ -15,7 +15,7 @@
  */
 
 #include "velox/dwio/common/tests/utils/DataFiles.h"
-#include "velox/dwio/text/RegisterTextReader.h"
+#include "velox/dwio/common/RegisterReaderWriters.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 extern int daylight;
@@ -36,11 +36,11 @@ class TextReaderTest : public testing::Test,
   }
 
   void SetUp() override {
-    dwio::common::registerTextReaderFactory();
+    dwio::common::registerReaderFactories();
   }
 
   void TearDown() override {
-    dwio::common::unregisterTextReaderFactory();
+    dwio::common::dwio::common::unregisterReaderFactories();
   }
 
   memory::MemoryPool& poolRef() {
