@@ -28,6 +28,7 @@ using dwio::common::SerDeOptions;
 
 struct WriterOptions : public dwio::common::WriterOptions {
   int64_t defaultFlushCount = 10 << 10;
+  bool writeHeader = false;
 };
 
 /// Encodes Velox vectors in TextFormat and writes into a FileSink.
@@ -70,9 +71,12 @@ class TextWriter : public dwio::common::Writer {
       uint8_t depth,
       std::optional<uint8_t> delimiter);
 
+  void writeToSinkWithEscapeChar(const std::string& data);
+
   const RowTypePtr schema_;
   const std::unique_ptr<BufferedWriterSink> bufferedWriterSink_;
 
+  bool writeHeader_;
   SerDeOptions serDeOptions_;
 };
 
