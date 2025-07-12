@@ -40,20 +40,54 @@ if(VELOX_ENABLE_PARQUET)
   add_subdirectory(parquet)
 endif()
 
-add_library(velox_dwio_registered_readers INTERFACE)
+## Use plain add_library instead of velox_add_library to avoid adding the reader
+## and writers twice to the monolithic velox library.
+#add_library(velox_dwio_registered_readers_impl STATIC RegisterReaders.cpp)
+#target_link_libraries(velox_dwio_registered_readers_impl
+#  PRIVATE
+#    velox_dwio_dwrf_reader
+#    velox_dwio_orc_reader
+#    velox_dwio_text_reader
+#    $<$<BOOL:${VELOX_ENABLE_PARQUET}>:velox_dwio_parquet_reader>
+#    velox_dwio_common)
+#
+#add_library(velox_dwio_registered_writers_impl STATIC RegisterWriters.cpp)
+#target_link_libraries(velox_dwio_registered_writers_impl
+#  PRIVATE
+#    velox_dwio_dwrf_writer
+#    velox_dwio_text_writer
+#    $<$<BOOL:${VELOX_ENABLE_PARQUET}>:velox_dwio_parquet_writer>
+#    velox_dwio_common
+#)
+#
+## Create interface libraries for registered readers and writers. The users, e.g. tests,
+## can link to these targets to get access to all registered readers and writers
+#velox_add_library(velox_dwio_registered_readers INTERFACE)
+#velox_link_libraries(
+#        velox_dwio_registered_readers
+#        INTERFACE
+#        velox_dwio_registered_readers_impl)
+#
+#velox_add_library(velox_dwio_registered_writers INTERFACE)
+#velox_link_libraries(
+#        velox_dwio_registered_writers
+#        INTERFACE
+#        velox_dwio_registered_writers_impl)
+
+add_library(velox_dwio_registered_readers STATIC RegisterReaders.cpp)
 target_link_libraries(
   velox_dwio_registered_readers
-  INTERFACE
+  PUBLIC
     velox_dwio_dwrf_reader
     velox_dwio_orc_reader
-    velox_dwio_text_reader
+    velox_dwio_text_reader_register
     $<$<BOOL:${VELOX_ENABLE_PARQUET}>:velox_dwio_parquet_reader>
     velox_dwio_common)
 
-add_library(velox_dwio_registered_writers INTERFACE)
+add_library(velox_dwio_registered_writers STATIC RegisterWriters.cpp)
 target_link_libraries(
   velox_dwio_registered_writers
-  INTERFACE
-    velox_dwio_dwrf_writer velox_dwio_text_writer
+  PUBLIC
+    velox_dwio_dwrf_writer velox_dwio_text_writer_register
     $<$<BOOL:${VELOX_ENABLE_PARQUET}>:velox_dwio_parquet_writer>
     velox_dwio_common)

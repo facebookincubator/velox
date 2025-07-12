@@ -31,6 +31,8 @@ target_link_libraries(
   velox_hive_connector
   velox_hive_partition_function
   velox_dwio_common_exception
+  velox_dwio_registered_readers
+  velox_dwio_registered_writers
   velox_vector_fuzzer
   velox_vector_test_lib
   velox_exec
