@@ -30,8 +30,7 @@
 #include "velox/connectors/hive/storage_adapters/hdfs/RegisterHdfsFileSystem.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/RegisterS3FileSystem.h"
 #include "velox/core/PlanNode.h"
-#include "velox/dwio/dwrf/RegisterDwrfReader.h"
-#include "velox/dwio/dwrf/RegisterDwrfWriter.h"
+#include "velox/dwio/common/RegisterReaderWriters.h"
 #include "velox/exec/OperatorTraceReader.h"
 #include "velox/exec/PartitionFunction.h"
 #include "velox/exec/TaskTraceReader.h"
@@ -51,11 +50,6 @@
 #include "velox/tool/trace/TableWriterReplayer.h"
 #include "velox/tool/trace/UnnestReplayer.h"
 #include "velox/type/Type.h"
-
-#ifdef VELOX_ENABLE_PARQUET
-#include "velox/dwio/parquet/RegisterParquetReader.h"
-#include "velox/dwio/parquet/RegisterParquetWriter.h"
-#endif
 
 DEFINE_string(
     root_dir,
@@ -233,16 +227,18 @@ void printSummary(
 } // namespace
 
 TraceReplayRunner::TraceReplayRunner()
-    : cpuExecutor_(std::make_unique<folly::CPUThreadPoolExecutor>(
-          std::thread::hardware_concurrency() *
-              FLAGS_driver_cpu_executor_hw_multiplier,
-          std::make_shared<folly::NamedThreadFactory>(
-              "TraceReplayCpuConnector"))),
-      ioExecutor_(std::make_unique<folly::IOThreadPoolExecutor>(
-          std::thread::hardware_concurrency() *
-              FLAGS_hive_connector_executor_hw_multiplier,
-          std::make_shared<folly::NamedThreadFactory>(
-              "TraceReplayIoConnector"))) {}
+    : cpuExecutor_(
+          std::make_unique<folly::CPUThreadPoolExecutor>(
+              std::thread::hardware_concurrency() *
+                  FLAGS_driver_cpu_executor_hw_multiplier,
+              std::make_shared<folly::NamedThreadFactory>(
+                  "TraceReplayCpuConnector"))),
+      ioExecutor_(
+          std::make_unique<folly::IOThreadPoolExecutor>(
+              std::thread::hardware_concurrency() *
+                  FLAGS_hive_connector_executor_hw_multiplier,
+              std::make_shared<folly::NamedThreadFactory>(
+                  "TraceReplayIoConnector"))) {}
 
 void TraceReplayRunner::init() {
   VELOX_USER_CHECK(!FLAGS_root_dir.empty(), "--root_dir must be provided");
@@ -262,13 +258,8 @@ void TraceReplayRunner::init() {
   filesystems::registerAbfsFileSystem();
 
   dwio::common::registerFileSinks();
-  dwrf::registerDwrfReaderFactory();
-  dwrf::registerDwrfWriterFactory();
-
-#ifdef VELOX_ENABLE_PARQUET
-  parquet::registerParquetReaderFactory();
-  parquet::registerParquetWriterFactory();
-#endif
+  dwio::common::registerReaderFactories();
+  dwio::common::registerWriterFactories();
 
   core::PlanNode::registerSerDe();
   velox::exec::trace::registerDummySourceSerDe();

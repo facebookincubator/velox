@@ -17,8 +17,7 @@
 #include "velox/dwio/text/writer/TextWriter.h"
 #include "velox/buffer/Buffer.h"
 #include "velox/common/file/FileSystems.h"
-#include "velox/dwio/text/RegisterTextReader.h"
-#include "velox/dwio/text/RegisterTextWriter.h"
+#include "velox/dwio/common/RegisterReaderWriters.h"
 #include "velox/dwio/text/tests/writer/FileReaderUtil.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
@@ -34,16 +33,16 @@ class TextWriterTest : public testing::Test,
   void SetUp() override {
     velox::filesystems::registerLocalFileSystem();
     registerTextWriterFactory();
-    dwio::common::registerTextReaderFactory();
+    dwio::common::registerReaderFactories();
     rootPool_ = memory::memoryManager()->addRootPool("TextWriterTests");
     leafPool_ = rootPool_->addLeafChild("TextWriterTests");
     tempPath_ = exec::test::TempDirectoryPath::create();
   }
 
   void TearDown() override {
-    dwio::common::unregisterTextReaderFactory();
+    dwio::common::dwio::common::unregisterReaderFactories();
     unregisterTextWriterFactory();
-    dwio::common::unregisterTextReaderFactory();
+    dwio::common::dwio::common::unregisterReaderFactories();
   }
 
  protected:

@@ -20,8 +20,7 @@
 #include "velox/common/file/FileSystems.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/tpch/TpchConnector.h"
-#include "velox/dwio/parquet/RegisterParquetReader.h"
-#include "velox/dwio/parquet/RegisterParquetWriter.h"
+#include "velox/dwio/common/RegisterReaderWriters.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -52,8 +51,8 @@ class ParquetTpchTest : public testing::Test {
     filesystems::registerLocalFileSystem();
     dwio::common::registerFileSinks();
 
-    parquet::registerParquetReaderFactory();
-    parquet::registerParquetWriterFactory();
+    dwio::common::registerReaderFactories();
+    dwio::common::registerWriterFactories();
 
     connector::registerConnectorFactory(
         std::make_shared<connector::hive::HiveConnectorFactory>());
@@ -88,8 +87,8 @@ class ParquetTpchTest : public testing::Test {
         connector::tpch::TpchConnectorFactory::kTpchConnectorName);
     connector::unregisterConnector(kHiveConnectorId);
     connector::unregisterConnector(kTpchConnectorId);
-    parquet::unregisterParquetReaderFactory();
-    parquet::unregisterParquetWriterFactory();
+    dwio::common::unregisterReaderFactories();
+    dwio::common::unregisterWriterFactories();
   }
 
   static void saveTpchTablesAsParquet() {

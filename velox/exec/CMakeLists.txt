@@ -118,9 +118,8 @@ velox_link_libraries(
   velox_core
   velox_exception
   velox_expression
-  velox_dwio_common
-  velox_dwio_dwrf_reader
-  velox_dwio_dwrf_writer
+  velox_dwio_registered_readers
+  velox_dwio_registered_writers
   velox_type_fbhive
   velox_presto_serializer
   velox_functions_prestosql
