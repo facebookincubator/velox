@@ -40,20 +40,47 @@ if(VELOX_ENABLE_PARQUET)
   add_subdirectory(parquet)
 endif()
 
-add_library(velox_dwio_registered_readers INTERFACE)
-target_link_libraries(
+velox_add_library(velox_dwio_registered_readers INTERFACE)
+velox_add_library(velox_dwio_registered_readers_impl STATIC RegisterReaders.cpp)
+velox_link_libraries(
   velox_dwio_registered_readers
   INTERFACE
+    velox_dwio_registered_readers_impl)
+velox_link_libraries(velox_dwio_registered_readers_impl
+  PRIVATE
     velox_dwio_dwrf_reader
     velox_dwio_orc_reader
     velox_dwio_text_reader
     $<$<BOOL:${VELOX_ENABLE_PARQUET}>:velox_dwio_parquet_reader>
     velox_dwio_common)
 
-add_library(velox_dwio_registered_writers INTERFACE)
-target_link_libraries(
+velox_add_library(velox_dwio_registered_writers INTERFACE)
+velox_add_library(velox_dwio_registered_writers_impl STATIC RegisterWriters.cpp)
+velox_link_libraries(
   velox_dwio_registered_writers
   INTERFACE
-    velox_dwio_dwrf_writer velox_dwio_text_writer
+    velox_dwio_registered_writers_impl)
+velox_link_libraries(velox_dwio_registered_writers_impl
+  PRIVATE
+    velox_dwio_dwrf_writer
+    velox_dwio_text_writer
     $<$<BOOL:${VELOX_ENABLE_PARQUET}>:velox_dwio_parquet_writer>
-    velox_dwio_common)
+    velox_dwio_common
+)
+
+#target_link_libraries(
+#  velox_dwio_registered_readers
+#  INTERFACE
+#    velox_dwio_dwrf_reader
+#    velox_dwio_orc_reader
+#    velox_dwio_text_reader
+#    $<$<BOOL:${VELOX_ENABLE_PARQUET}>:velox_dwio_parquet_reader>
+#    velox_dwio_common)
+#
+#
+#target_link_libraries(
+#  velox_dwio_registered_writers
+#  INTERFACE
+#    velox_dwio_dwrf_writer velox_dwio_text_writer
+#    $<$<BOOL:${VELOX_ENABLE_PARQUET}>:velox_dwio_parquet_writer>
+#    velox_dwio_common)

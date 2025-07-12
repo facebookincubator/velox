@@ -24,8 +24,7 @@
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/connectors/tpch/TpchConnectorSplit.h"
 #include "velox/core/PlanNode.h"
-#include "velox/dwio/dwrf/RegisterDwrfReader.h"
-#include "velox/dwio/dwrf/RegisterDwrfWriter.h"
+#include "velox/dwio/RegisterReaders.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
@@ -39,8 +38,8 @@ void registerAllResourcesOnce() {
   velox::filesystems::registerLocalFileSystem();
 
   // Register file readers and writers.
-  velox::dwrf::registerDwrfWriterFactory();
-  velox::dwrf::registerDwrfReaderFactory();
+  velox::dwio::registerWriterFactories();
+  velox::dwio::registerReaderFactories();
 
   velox::dwio::common::LocalFileSink::registerFactory();
 

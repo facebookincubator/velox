@@ -15,11 +15,11 @@
  */
 #pragma once
 
+#include "velox/dwio/RegisterReaders.h"
 #include "velox/dwio/common/FileSink.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/Statistics.h"
 #include "velox/dwio/common/tests/utils/DataSetBuilder.h"
-#include "velox/dwio/parquet/RegisterParquetReader.h"
 #include "velox/dwio/parquet/reader/ParquetReader.h"
 #include "velox/dwio/parquet/writer/Writer.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"

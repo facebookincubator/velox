@@ -28,7 +28,7 @@ void registerParquetWriterFactory() {
 
 void unregisterParquetWriterFactory() {
 #ifdef VELOX_ENABLE_PARQUET
-  dwio::common::unregisterWriterFactory(dwio::common::FileFormat::PARQUET);
+  dwio::unregisterWriterFactory(dwio::common::FileFormat::PARQUET);
 #endif
 }
 
