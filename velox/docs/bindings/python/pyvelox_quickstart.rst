@@ -22,16 +22,15 @@ Managing Files
 
 On a high-level, PyVelox allows users to define and execute local query plans. Query plans often start by reading data from a set of files. Let’s look at a simple example first. 
 
-Velox supports file formats like Dwrf, Nimble, Parquet, ORC, Json, CSV, and others. You can define files to be read and written using pyvelox.file:
+Velox supports file formats like Dwrf, Parquet, ORC, Json, CSV, and others. You can define files to be read and written using pyvelox.file:
 
 .. code-block:: python
 
       // Register input files to PyVelox
 
-      from velox.py.file import NIMBLE, PARQUET
+      from velox.py.file import PARQUET
 
       parquet_file = PARQUET("/tmp/my_file.parquet")
-      nimble_file = NIMBLE("/tmp/my_efficient_file.nimble")
 
 By default, these files are read from the local filesystem. Files can also be read from remote storage systems like S3, ABFS, GCS, and others by registering the filesystem and using the proper path.
 
@@ -67,7 +66,7 @@ Alternatively, a file schema can be inspected by using the following API:
 
       // Read input file schema
 
-      from pyvelox.file import NIMBLE, PARQUET
+      from pyvelox.file import PARQUET
 
       dwrf_file = DWRF("ws://ws.dw.ftw0dw0/namespace/...")
       row_type = dwrf_file.get_schema()
@@ -118,17 +117,6 @@ Once a query plan is constructed using PlanBuilder, it can be locally executed b
        print(runner.print_plan_with_stats())
 
 execute() returns an iterable object that returns data produced by the plan in the form of Velox Vectors.
-
-
-Query Configs
-^^^^^^^^^^^^^
-Query configs can be added using the add_query_config() runner method:
-
-.. code-block:: python
-
-      // Add query configs
-
-      runner.add_query_config("selective_nimble_reader_enabled", "true")
 
 
 Manipulating Vectors
