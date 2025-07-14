@@ -885,6 +885,7 @@ void MemoryPoolImpl::growCapacity(MemoryPool* requestor, uint64_t size) {
   VELOX_CHECK(requestor->isLeaf());
   ++numCapacityGrowths_;
 
+  LOG(WARNING) << "============= growing capacity of " << name();
   {
     MemoryPoolArbitrationSection arbitrationSection(requestor);
     arbitrator_->growCapacity(this, size);
@@ -1084,12 +1085,18 @@ uint64_t MemoryPoolImpl::reclaim(
 void MemoryPoolImpl::enterArbitration() {
   if (reclaimer() != nullptr) {
     reclaimer()->enterArbitration();
+  } else {
+    LOG(WARNING) << "============ Memory pool " << name()
+                 << " has no reclaimer to enter ";
   }
 }
 
 void MemoryPoolImpl::leaveArbitration() noexcept {
   if (reclaimer() != nullptr) {
     reclaimer()->leaveArbitration();
+  } else {
+    LOG(WARNING) << "============ Memory pool " << name()
+                 << " has no reclaimer to leave ";
   }
 }
 
