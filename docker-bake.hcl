@@ -44,9 +44,25 @@ group "default" {
   targets = []
 }
 
+target "base" {
+  output = [
+    DOCKER_UPLOAD_CACHE ? {
+      type           = "registry"
+      compression    = "zstd"
+      oci-mediatypes = true
+      } : {
+      # For local builds with the docker driver the image will be loaded
+      # even without explicitly adding the `docker` exporter
+      type = "cacheonly"
+    }
+
+  ]
+}
+
 target "pyvelox" {
-  name       = "pyvelox-${arch}"
+  inherits   = ["base"]
   context    = "."
+  name       = "pyvelox-${arch}"
   dockerfile = "scripts/docker/centos-multi.dockerfile"
   target     = "pyvelox"
   args = {
@@ -63,7 +79,7 @@ target "pyvelox" {
 }
 
 target "adapters" {
-  inherits = ["adapters-cpp"]
+  inherits = ["base","adapters-cpp"]
   name     = "adapters-${arch}"
   matrix = {
     arch = ["amd64", "arm64"]
@@ -75,7 +91,7 @@ target "adapters" {
 }
 
 target "centos9" {
-  inherits = ["centos-cpp"]
+  inherits = ["base","centos-cpp"]
   name     = "centos9-${arch}"
   matrix = {
     arch = ["amd64", "arm64"]
@@ -87,7 +103,7 @@ target "centos9" {
 }
 
 target "ubuntu-amd64" {
-  inherits   = ["ubuntu-cpp"]
+  inherits   = ["base","ubuntu-cpp"]
   cache-to   = cache-to-arch("ubuntu", "amd64")
   cache-from = cache-from-arch("ubuntu", "amd64")
 }
@@ -105,12 +121,14 @@ group "java" {
 }
 
 target "spark-server" {
+  inherits = ["base"]
   target     = "spark-server"
   cache-to   = cache-to-arch("spark-server", "amd64")
   cache-from = cache-from-arch("spark-server", "amd64")
 }
 
 target "presto-java" {
+  inherits = ["base"]
   target     = "presto-java"
   cache-to   = cache-to-arch("presto-java", "amd64")
   cache-from = cache-from-arch("presto-java", "amd64")
