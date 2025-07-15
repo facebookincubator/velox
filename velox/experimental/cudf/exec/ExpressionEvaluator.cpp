@@ -699,7 +699,7 @@ void addPrecomputedColumns(
       // presto means length as the length of the substring
       auto endScalar = cudf::numeric_scalar<cudf::size_type>(
           beginValue + length,
-          true,
+          numberOfParameters == 1 ? false : true,
           stream,
           cudf::get_current_device_resource_ref());
       auto stepScalar = cudf::numeric_scalar<cudf::size_type>(
