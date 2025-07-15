@@ -34,7 +34,6 @@ std::vector<exec::Split> listAllSplits(std::shared_ptr<SplitSource> source) {
     for (auto& split : splits) {
       if (split.split == nullptr) {
         return result;
-        break;
       }
       result.push_back(exec::Split(std::move(split.split)));
     }
