@@ -90,13 +90,11 @@ bool CompileState::compile() {
     return driverFactory_.consumerNode;
   };
 
-  const bool isParquetConnectorRegistered =
-      facebook::velox::connector::getAllConnectors().count("test-parquet") > 0;
-  auto isTableScanSupported =
-      [isParquetConnectorRegistered](const exec::Operator* op) {
-        return isAnyOf<exec::TableScan>(op) && isParquetConnectorRegistered &&
-            cudfTableScanEnabled();
-      };
+  auto isTableScanSupported = [](const exec::Operator* op) {
+    return isAnyOf<exec::TableScan>(op) &&
+        CudfOptions::getInstance().isParquetConnectorRegistered() &&
+        CudfOptions::getInstance().cudfTableScan;
+  };
 
   auto isFilterProjectSupported = [](const exec::Operator* op) {
     if (auto filterProjectOp = dynamic_cast<const exec::FilterProject*>(op)) {
@@ -348,10 +346,6 @@ bool cudfIsRegistered() {
 
 bool cudfDebugEnabled() {
   return FLAGS_velox_cudf_debug;
-}
-
-bool cudfTableScanEnabled() {
-  return CudfOptions::getInstance().cudfTableScan;
 }
 
 } // namespace facebook::velox::cudf_velox
