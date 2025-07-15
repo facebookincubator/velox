@@ -25,9 +25,7 @@ velox_add_library(
   QDigestRegistration.cpp
   TimestampWithTimeZoneRegistration.cpp
   UuidRegistration.cpp)
-
 if(VELOX_ENABLE_GEO)
-  velox_compile_definitions(velox_presto_types PRIVATE VELOX_ENABLE_GEO)
   velox_sources(velox_presto_types PRIVATE GeometryRegistration.cpp)
 endif()
 
