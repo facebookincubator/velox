@@ -12,10 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-if(VELOX_ENABLE_GEO)
-  add_definitions(-DVELOX_ENABLE_GEO)
-endif()
-
 add_executable(
   velox_expression_test
   ArrayViewTest.cpp
@@ -52,6 +48,9 @@ add_executable(
   TryExprTest.cpp
   VariadicViewTest.cpp
   VectorReaderTest.cpp)
+if(VELOX_ENABLE_GEO)
+  target_compile_definitions(velox_expression_test PRIVATE VELOX_ENABLE_GEO)
+endif()
 
 add_test(
   NAME velox_expression_test
@@ -83,10 +82,6 @@ target_link_libraries(
   gflags::gflags
   glog::glog
   fmt::fmt)
-
-if(VELOX_ENABLE_GEO)
-  remove_definitions(-DVELOX_ENABLE_GEO)
-endif()
 
 add_library(velox_expression_verifier ExpressionVerifier.cpp)
 

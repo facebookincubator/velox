@@ -27,7 +27,7 @@ velox_add_library(
   UuidRegistration.cpp)
 
 if(VELOX_ENABLE_GEO)
-  velox_compile_definitions(velox_functions_prestosql PRIVATE VELOX_ENABLE_GEO)
+  velox_compile_definitions(velox_presto_types PRIVATE VELOX_ENABLE_GEO)
   velox_sources(velox_presto_types PRIVATE GeometryRegistration.cpp)
 endif()
 
