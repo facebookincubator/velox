@@ -25,9 +25,12 @@
 #include "velox/vector/VectorTypeUtils.h"
 
 #include <cudf/datetime.hpp>
+#include <cudf/lists/count_elements.hpp>
 #include <cudf/strings/attributes.hpp>
+#include <cudf/strings/case.hpp>
 #include <cudf/strings/contains.hpp>
 #include <cudf/strings/slice.hpp>
+#include <cudf/strings/split/split.hpp>
 #include <cudf/table/table.hpp>
 #include <cudf/transform.hpp>
 
@@ -254,7 +257,10 @@ const std::unordered_set<std::string> supportedOps = {
     "year",
     "length",
     "substr",
-    "like"};
+    "like",
+    "cardinality",
+    "split",
+    "lower"};
 
 namespace detail {
 
@@ -460,8 +466,10 @@ cudf::ast::expression const& AstContext::pushExprToTree(
     // then simplify as typecast bool to int
     auto c1 = dynamic_cast<ConstantExpr*>(expr->inputs()[1].get());
     auto c2 = dynamic_cast<ConstantExpr*>(expr->inputs()[2].get());
-    if (c1 and c1->toString() == "1:BIGINT" and c2 and
-        c2->toString() == "0:BIGINT") {
+    if ((c1 and c1->toString() == "1:BIGINT" and c2 and
+         c2->toString() == "0:BIGINT") ||
+        (c1 and c1->toString() == "1:INTEGER" and c2 and
+         c2->toString() == "0:INTEGER")) {
       auto const& op1 = pushExprToTree(expr->inputs()[0]);
       return tree.push(Operation{Op::CAST_TO_INT64, op1});
     } else if (c2 and c2->toString() == "0:DOUBLE") {
@@ -492,20 +500,31 @@ cudf::ast::expression const& AstContext::pushExprToTree(
     auto const& colRef = addPrecomputeInstruction(fieldExpr->name(), "length");
 
     return tree.push(Operation{Op::CAST_TO_INT64, colRef});
+  } else if (name == "lower") {
+    VELOX_CHECK_EQ(len, 1);
+
+    auto fieldExpr =
+        std::dynamic_pointer_cast<FieldReference>(expr->inputs()[0]);
+    VELOX_CHECK_NOT_NULL(fieldExpr, "Expression is not a field");
+    return addPrecomputeInstruction(fieldExpr->name(), "lower");
   } else if (name == "substr") {
     // Extract the start and length parameters from the substr function call
     // and create a precomputed column with the substring operation.
     // This will be handled during AST evaluation with special column reference.
-    VELOX_CHECK_EQ(len, 3);
+    VELOX_CHECK_GE(len, 2);
+    VELOX_CHECK_LE(len, 3);
     auto fieldExpr =
         std::dynamic_pointer_cast<FieldReference>(expr->inputs()[0]);
     VELOX_CHECK_NOT_NULL(fieldExpr, "Expression is not a field");
 
     auto c1 = dynamic_cast<ConstantExpr*>(expr->inputs()[1].get());
-    auto c2 = dynamic_cast<ConstantExpr*>(expr->inputs()[2].get());
     std::string substrExpr =
-        "substr " + c1->value()->toString(0) + " " + c2->value()->toString(0);
+        "substr " + std::to_string(len - 1) + " " + c1->value()->toString(0);
 
+    if (len > 2) {
+      auto c2 = dynamic_cast<ConstantExpr*>(expr->inputs()[2].get());
+      substrExpr += " " + c2->value()->toString(0);
+    }
     return addPrecomputeInstruction(fieldExpr->name(), substrExpr);
   } else if (name == "like") {
     VELOX_CHECK_EQ(len, 2);
@@ -522,6 +541,34 @@ cudf::ast::expression const& AstContext::pushExprToTree(
     std::string likeExpr = "like " + std::to_string(scalars.size() - 1);
 
     return addPrecomputeInstruction(fieldExpr->name(), likeExpr);
+  } else if (name == "cardinality") {
+    VELOX_CHECK_EQ(len, 1);
+
+    auto fieldExpr =
+        std::dynamic_pointer_cast<FieldReference>(expr->inputs()[0]);
+    VELOX_CHECK_NOT_NULL(fieldExpr, "Expression is not a field");
+
+    auto const& colRef =
+        addPrecomputeInstruction(fieldExpr->name(), "cardinality");
+
+    return tree.push(Operation{Op::CAST_TO_INT64, colRef});
+  } else if (name == "split") {
+    VELOX_CHECK_EQ(len, 3);
+    auto fieldExpr =
+        std::dynamic_pointer_cast<FieldReference>(expr->inputs()[0]);
+    VELOX_CHECK_NOT_NULL(fieldExpr, "Expression is not a field");
+
+    auto splitLiteralExpr =
+        std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[1]);
+    VELOX_CHECK_NOT_NULL(splitLiteralExpr, "Expression is not a literal");
+
+    createLiteral(splitLiteralExpr->value(), scalars);
+
+    auto maxsplitLiteral =
+        std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[2]);
+    std::string splitExpr = "split " + std::to_string(scalars.size() - 1) +
+        " " + maxsplitLiteral->value()->toString(0);
+    return addPrecomputeInstruction(fieldExpr->name(), splitExpr);
   } else if (auto fieldExpr = std::dynamic_pointer_cast<FieldReference>(expr)) {
     // Refer to the appropriate side
     for (size_t sideIdx = 0; sideIdx < inputRowSchema.size(); ++sideIdx) {
@@ -534,7 +581,6 @@ cudf::ast::expression const& AstContext::pushExprToTree(
     }
     VELOX_FAIL("Field not found, " + name);
   } else {
-    std::cerr << "Unsupported expression: " << expr->toString() << std::endl;
     VELOX_FAIL("Unsupported expression: " + name);
   }
 }
@@ -559,18 +605,29 @@ void addPrecomputedColumns(
           stream,
           cudf::get_current_device_resource_ref());
       input_table_columns.emplace_back(std::move(newColumn));
-    } else if (ins_name.rfind("substr", 0) == 0) {
-      std::istringstream iss(ins_name.substr(6));
-      int beginValue, length;
-      iss >> beginValue >> length;
-      auto beginScalar = cudf::numeric_scalar<cudf::size_type>(
-          beginValue - 1,
-          true,
+    } else if (ins_name == "lower") {
+      auto newColumn = cudf::strings::to_lower(
+          input_table_columns[dependent_column_index]->view(),
           stream,
           cudf::get_current_device_resource_ref());
+      input_table_columns.emplace_back(std::move(newColumn));
+    } else if (ins_name.rfind("substr", 0) == 0) {
+      std::istringstream iss(ins_name.substr(6));
+      int numberOfParameters, beginValue, length;
+      iss >> numberOfParameters >> beginValue >> length;
+      if (beginValue >= 1) {
+        // cuDF indexing starts at 0
+        // presto indexing starts at 1
+        // if we are doing a positive index, we need to substract 1
+        beginValue = beginValue - 1;
+      }
+      auto beginScalar = cudf::numeric_scalar<cudf::size_type>(
+          beginValue, true, stream, cudf::get_current_device_resource_ref());
+      // cuDF does [start,end)
+      // presto means length as the length of the substring
       auto endScalar = cudf::numeric_scalar<cudf::size_type>(
-          beginValue - 1 + length,
-          true,
+          beginValue + length,
+          numberOfParameters == 1 ? false : true,
           stream,
           cudf::get_current_device_resource_ref());
       auto stepScalar = cudf::numeric_scalar<cudf::size_type>(
@@ -590,6 +647,27 @@ void addPrecomputedColumns(
           *static_cast<cudf::string_scalar*>(scalars[scalarIndex].get()),
           cudf::string_scalar(
               "", true, stream, cudf::get_current_device_resource_ref()),
+          stream,
+          cudf::get_current_device_resource_ref());
+      input_table_columns.emplace_back(std::move(newColumn));
+    } else if (ins_name == "cardinality") {
+      auto newColumn = cudf::lists::count_elements(
+          input_table_columns[dependent_column_index]->view(),
+          stream,
+          cudf::get_current_device_resource_ref());
+      input_table_columns.emplace_back(std::move(newColumn));
+    } else if (ins_name.rfind("split", 0) == 0) {
+      std::istringstream iss(ins_name.substr(5));
+      int scalarIndex, maxSplitCount;
+      iss >> scalarIndex >> maxSplitCount;
+      // presto specifies maxSplitCount as the maximum size of the returned
+      // array while cuDF understands the parameter as how many splits can it
+      // perform
+      maxSplitCount = maxSplitCount - 1;
+      auto newColumn = cudf::strings::split_record(
+          input_table_columns[dependent_column_index]->view(),
+          *static_cast<cudf::string_scalar*>(scalars[scalarIndex].get()),
+          maxSplitCount,
           stream,
           cudf::get_current_device_resource_ref());
       input_table_columns.emplace_back(std::move(newColumn));
