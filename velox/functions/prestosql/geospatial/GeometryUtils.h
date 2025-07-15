@@ -61,8 +61,7 @@ geos::geom::GeometryFactory* getGeometryFactory();
 FOLLY_ALWAYS_INLINE const
     std::unordered_map<geos::geom::GeometryTypeId, std::string>&
     getGeosTypeToStringIdentifier() {
-  static const geos::geom::GeometryFactory::Ptr factory =
-      geos::geom::GeometryFactory::create();
+  geos::geom::GeometryFactory* factory = getGeometryFactory();
 
   static const std::unordered_map<geos::geom::GeometryTypeId, std::string>
       geosTypeToStringIdentifier{
