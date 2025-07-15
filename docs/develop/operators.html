@@ -797,8 +797,12 @@ specified number of rows and drops the rest.</p>
 expanded into a single column, and maps are expanded into two columns
 (key, value). Can be used to expand multiple columns. In this case produces as
 many rows as the highest cardinality array or map (the other columns are padded
-with nulls). Optionally can produce an ordinality column that specifies the row
-number starting with 1.</p>
+with nulls). Optionally, it can include an ordinality column to indicate the row
+number starting from 1, and an emptyUnnestValue column to indicate whether an
+output row has empty unnest value or not. If the ordinality column is specified
+along with the emptyUnnestValue column, the ordinality for the output row with
+empty unnest values is set to zero. If the emptyUnnestValue column is not specified,
+output rows with empty unnest values are not produced.</p>
 <table class="docutils align-left">
 <colgroup>
 <col style="width: 25.0%" />
@@ -821,6 +825,9 @@ number starting with 1.</p>
 </tr>
 <tr class="row-odd"><td><p>ordinalityName</p></td>
 <td><p>Optional name for the ordinality column.</p></td>
+</tr>
+<tr class="row-even"><td><p>emptyUnnestValueName</p></td>
+<td><p>Optional name for the emptyUnnestValue column.</p></td>
 </tr>
 </tbody>
 </table>
