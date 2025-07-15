@@ -947,37 +947,6 @@ TEST_F(CudfFilterProjectTest, negativeSubstr) {
   });
   facebook::velox::test::assertEqualVectors(
       negativeSubstrResults, calculatedNegativeSubstrResults);
-
-  auto negativeSubstrWithLengthPlan = PlanBuilder()
-                                          .values({data})
-                                          .project({"substr(c0, -6, 3) AS c0"})
-                                          .planNode();
-  auto negativeSubstrWithLengthResults =
-      AssertQueryBuilder(negativeSubstrWithLengthPlan).copyResults(pool());
-
-  auto calculatedNegativeSubstrWithLengthResults = makeRowVector({
-      makeFlatVector<std::string>({
-          "ghe",
-          "str",
-      }),
-  });
-  facebook::velox::test::assertEqualVectors(
-      negativeSubstrWithLengthResults,
-      calculatedNegativeSubstrWithLengthResults);
-  auto SubstrPlan = PlanBuilder()
-                        .values({data})
-                        .project({"substr(c0, 1, 3) AS c0"})
-                        .planNode();
-  auto SubstrResults = AssertQueryBuilder(SubstrPlan).copyResults(pool());
-
-  auto calculatedSubstrResults = makeRowVector({
-      makeFlatVector<std::string>({
-          "hel",
-          "sec",
-      }),
-  });
-  facebook::velox::test::assertEqualVectors(
-      SubstrResults, calculatedSubstrResults);
 }
 
 TEST_F(CudfFilterProjectTest, negativeSubstrWithLength) {
