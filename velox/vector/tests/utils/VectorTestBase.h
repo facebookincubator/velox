@@ -133,16 +133,18 @@ class VectorTestBase {
 
   RowVectorPtr makeRowVector(
       const RowTypePtr& type,
-      const VectorFuzzer::Options& fuzzerOpts) {
-    VectorFuzzer fuzzer(fuzzerOpts, pool());
+      const VectorFuzzer::Options& fuzzerOpts,
+      size_t seed = 123456) {
+    VectorFuzzer fuzzer(fuzzerOpts, pool(), seed);
     return fuzzer.fuzzRow(type);
   }
 
   std::vector<RowVectorPtr> createVectors(
       const RowTypePtr& type,
       uint64_t byteSize,
-      const VectorFuzzer::Options& fuzzerOpts) {
-    VectorFuzzer fuzzer(fuzzerOpts, pool());
+      const VectorFuzzer::Options& fuzzerOpts,
+      size_t seed = 123456) {
+    VectorFuzzer fuzzer(fuzzerOpts, pool(), seed);
     uint64_t totalSize{0};
     std::vector<RowVectorPtr> vectors;
     while (totalSize < byteSize) {
@@ -160,8 +162,9 @@ class VectorTestBase {
   std::vector<RowVectorPtr> createVectors(
       uint32_t numVectors,
       const RowTypePtr& type,
-      const VectorFuzzer::Options& fuzzerOpts = {}) {
-    VectorFuzzer fuzzer(fuzzerOpts, pool());
+      const VectorFuzzer::Options& fuzzerOpts = {},
+      size_t seed = 123456) {
+    VectorFuzzer fuzzer(fuzzerOpts, pool(), seed);
     std::vector<RowVectorPtr> vectors;
     vectors.reserve(numVectors);
     for (int i = 0; i < numVectors; ++i) {
