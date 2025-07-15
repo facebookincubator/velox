@@ -123,7 +123,10 @@ jobs:
         working-directory: _build/release
         run: |
           # Can be removed after images are rebuild
-          python3 -m pip install https://github.com/googleapis/storage-testbench/archive/refs/tags/v0.36.0.tar.gz
+          if [ -f "/opt/miniforge/etc/profile.d/conda.sh" ]; then
+            source "/opt/miniforge/etc/profile.d/conda.sh"
+            conda activate adapters
+          fi
 
           export CLASSPATH=`/usr/local/hadoop/bin/hdfs classpath --glob`
           ctest -j 8 --label-exclude cuda_driver --output-on-failure --no-tests=error
