@@ -86,6 +86,33 @@ void registerAccessors(const std::string& prefix) {
       {{prefix + "ST_Centroid"}});
   registerFunction<StXFunction, double, Geometry>({{prefix + "ST_X"}});
   registerFunction<StYFunction, double, Geometry>({{prefix + "ST_Y"}});
+  registerFunction<StXMinFunction, double, Geometry>({{prefix + "ST_XMin"}});
+  registerFunction<StYMinFunction, double, Geometry>({{prefix + "ST_YMin"}});
+  registerFunction<StXMaxFunction, double, Geometry>({{prefix + "ST_XMax"}});
+  registerFunction<StYMaxFunction, double, Geometry>({{prefix + "ST_YMax"}});
+  registerFunction<StGeometryTypeFunction, Varchar, Geometry>(
+      {{prefix + "ST_GeometryType"}});
+  registerFunction<StDistanceFunction, double, Geometry, Geometry>(
+      {{prefix + "ST_Distance"}});
+  registerFunction<StPolygonFunction, Geometry, Varchar>(
+      {{prefix + "ST_Polygon"}});
+  registerFunction<StIsClosedFunction, bool, Geometry>(
+      {{prefix + "ST_IsClosed"}});
+  registerFunction<StIsEmptyFunction, bool, Geometry>(
+      {{prefix + "ST_IsEmpty"}});
+  registerFunction<StIsRingFunction, bool, Geometry>({{prefix + "ST_IsRing"}});
+  registerFunction<StLengthFunction, double, Geometry>(
+      {{prefix + "ST_Length"}});
+  registerFunction<StPointNFunction, Geometry, Geometry, int32_t>(
+      {{prefix + "ST_PointN"}});
+  registerFunction<StStartPointFunction, Geometry, Geometry>(
+      {{prefix + "ST_StartPoint"}});
+  registerFunction<StEndPointFunction, Geometry, Geometry>(
+      {{prefix + "ST_EndPoint"}});
+  registerFunction<StGeometryNFunction, Geometry, Geometry, int32_t>(
+      {{prefix + "ST_GeometryN"}});
+  registerFunction<StInteriorRingNFunction, Geometry, Geometry, int32_t>(
+      {{prefix + "ST_InteriorRingN"}});
 }
 
 } // namespace

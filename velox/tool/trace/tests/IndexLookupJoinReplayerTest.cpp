@@ -23,6 +23,7 @@
 
 #include "velox/common/file/tests/FaultyFileSystem.h"
 #include "velox/exec/PartitionFunction.h"
+#include "velox/exec/TraceUtil.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -62,21 +63,14 @@ class IndexLookupJoinReplayerTest : public HiveConnectorTestBase {
     connector::hive::HiveInsertFileNameGenerator::registerSerDe();
     connector::hive::HiveConnectorSplit::registerSerDe();
     core::PlanNode::registerSerDe();
+    velox::exec::trace::registerDummySourceSerDe();
     core::ITypedExpr::registerSerDe();
     registerPartitionFunctionSerDe();
-    connector::registerConnectorFactory(
-        std::make_shared<TestIndexConnectorFactory>());
     auto connectorCpuExecutor =
         std::make_unique<folly::CPUThreadPoolExecutor>(128);
-    std::shared_ptr<connector::Connector> connector =
-        connector::getConnectorFactory(kTestIndexConnectorName)
-            ->newConnector(
-                kTestIndexConnectorName,
-                {},
-                nullptr,
-                connectorCpuExecutor.get());
-    connector::registerConnector(connector);
+    TestIndexConnectorFactory::registerConnector(connectorCpuExecutor.get());
     TestIndexTableHandle::registerSerDe();
+    TestIndexColumnHandle::registerSerDe();
   }
 
   void TearDown() override {
@@ -157,11 +151,10 @@ class IndexLookupJoinReplayerTest : public HiveConnectorTestBase {
 
   // Makes index table handle with the specified index table and async lookup
   // flag.
-  std::shared_ptr<TestIndexTableHandle> makeIndexTableHandle(
-      const std::shared_ptr<TestIndexTable>& indexTable,
-      bool asyncLookup) {
+  static std::shared_ptr<TestIndexTableHandle> makeIndexTableHandle(
+      const std::shared_ptr<TestIndexTable>& indexTable) {
     return std::make_shared<TestIndexTableHandle>(
-        kTestIndexConnectorName, indexTable, asyncLookup);
+        kTestIndexConnectorName, indexTable, /*asyncLookup*/ false);
   }
 
   struct PlanWithSplits {
@@ -254,18 +247,12 @@ TEST_F(IndexLookupJoinReplayerTest, test) {
            makeFlatVector<StringView>({"x", "y", "z"})}));
 
   // Create a TestIndexTableHandle with the TestIndexTable
-  auto indexTableHandle = std::make_shared<TestIndexTableHandle>(
-      kTestIndexConnectorName, indexTable, /*asyncLookup=*/false);
+  auto indexTableHandle = makeIndexTableHandle(indexTable);
 
   // Create a table scan node with the TestIndexTableHandle
-  std::unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>
-      columnHandles;
+  connector::ColumnHandleMap columnHandles;
   for (const auto& name : indexType_->names()) {
-    columnHandles[name] = std::make_shared<HiveColumnHandle>(
-        name,
-        HiveColumnHandle::ColumnType::kRegular,
-        indexType_->findChild(name),
-        indexType_->findChild(name));
+    columnHandles[name] = std::make_shared<TestIndexColumnHandle>(name);
   }
 
   auto indexScan = std::make_shared<core::TableScanNode>(
@@ -301,7 +288,7 @@ TEST_F(IndexLookupJoinReplayerTest, test) {
           .config(core::QueryConfig::kQueryTraceDir, traceRoot)
           .config(core::QueryConfig::kQueryTraceMaxBytes, 100UL << 30)
           .config(core::QueryConfig::kQueryTraceTaskRegExp, ".*")
-          .config(core::QueryConfig::kQueryTraceNodeIds, traceNodeId_)
+          .config(core::QueryConfig::kQueryTraceNodeId, traceNodeId_)
           .splits(
               probeScanId,
               {Split(makeHiveConnectorSplit(sourceFilePath->getPath()))})

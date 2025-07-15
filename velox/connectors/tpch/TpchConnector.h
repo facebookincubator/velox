@@ -47,13 +47,18 @@ class TpchTableHandle : public ConnectorTableHandle {
       double scaleFactor = 1.0)
       : ConnectorTableHandle(std::move(connectorId)),
         table_(table),
-        scaleFactor_(scaleFactor) {
+        scaleFactor_(scaleFactor),
+        name_(velox::tpch::toTableName(table)) {
     VELOX_CHECK_GE(scaleFactor, 0, "Tpch scale factor must be non-negative");
   }
 
   ~TpchTableHandle() override {}
 
   std::string toString() const override;
+
+  const std::string& name() const override {
+    return name_;
+  }
 
   velox::tpch::Table getTable() const {
     return table_;
@@ -66,16 +71,15 @@ class TpchTableHandle : public ConnectorTableHandle {
  private:
   const velox::tpch::Table table_;
   double scaleFactor_;
+  std::string name_;
 };
 
 class TpchDataSource : public DataSource {
  public:
   TpchDataSource(
-      const std::shared_ptr<const RowType>& outputType,
-      const std::shared_ptr<connector::ConnectorTableHandle>& tableHandle,
-      const std::unordered_map<
-          std::string,
-          std::shared_ptr<connector::ColumnHandle>>& columnHandles,
+      const RowTypePtr& outputType,
+      const connector::ConnectorTableHandlePtr& tableHandle,
+      const connector::ColumnHandleMap& columnHandles,
       velox::memory::MemoryPool* pool);
 
   void addSplit(std::shared_ptr<ConnectorSplit> split) override;
@@ -134,15 +138,12 @@ class TpchConnector final : public Connector {
   TpchConnector(
       const std::string& id,
       std::shared_ptr<const config::ConfigBase> config,
-      folly::Executor* /*executor*/)
-      : Connector(id) {}
+      folly::Executor* /*executor*/);
 
   std::unique_ptr<DataSource> createDataSource(
-      const std::shared_ptr<const RowType>& outputType,
-      const std::shared_ptr<ConnectorTableHandle>& tableHandle,
-      const std::unordered_map<
-          std::string,
-          std::shared_ptr<connector::ColumnHandle>>& columnHandles,
+      const RowTypePtr& outputType,
+      const ConnectorTableHandlePtr& tableHandle,
+      const connector::ColumnHandleMap& columnHandles,
       ConnectorQueryCtx* connectorQueryCtx) override final {
     return std::make_unique<TpchDataSource>(
         outputType,
@@ -153,12 +154,19 @@ class TpchConnector final : public Connector {
 
   std::unique_ptr<DataSink> createDataSink(
       RowTypePtr /*inputType*/,
-      std::shared_ptr<
-          ConnectorInsertTableHandle> /*connectorInsertTableHandle*/,
+      ConnectorInsertTableHandlePtr /*connectorInsertTableHandle*/,
       ConnectorQueryCtx* /*connectorQueryCtx*/,
       CommitStrategy /*commitStrategy*/) override final {
     VELOX_NYI("TpchConnector does not support data sink.");
   }
+
+  ConnectorMetadata* metadata() const override {
+    VELOX_CHECK_NOT_NULL(metadata_);
+    return metadata_.get();
+  }
+
+ private:
+  std::shared_ptr<ConnectorMetadata> metadata_;
 };
 
 class TpchConnectorFactory : public ConnectorFactory {
@@ -178,5 +186,16 @@ class TpchConnectorFactory : public ConnectorFactory {
     return std::make_shared<TpchConnector>(id, config, ioExecutor);
   }
 };
+
+class TpchConnectorMetadataFactory {
+ public:
+  virtual std::shared_ptr<ConnectorMetadata> create(
+      TpchConnector* connector) = 0;
+
+  virtual ~TpchConnectorMetadataFactory() = default;
+};
+
+bool registerTpchConnectorMetadataFactory(
+    std::unique_ptr<TpchConnectorMetadataFactory>);
 
 } // namespace facebook::velox::connector::tpch

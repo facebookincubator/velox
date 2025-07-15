@@ -55,6 +55,7 @@ velox_add_library(
   TransformKeys.cpp
   TransformValues.cpp
   TypeOf.cpp
+  UpperLower.cpp
   URIParser.cpp
   URLFunctions.cpp
   VectorArithmetic.cpp
@@ -74,6 +75,12 @@ velox_link_libraries(
   velox_functions_util
   Folly::folly
   stemmer::stemmer)
+
+if(VELOX_ENABLE_FAISS)
+  velox_link_libraries(velox_functions_prestosql_impl FAISS::faiss)
+  velox_compile_definitions(velox_functions_prestosql_impl
+                            PRIVATE VELOX_ENABLE_FAISS)
+endif()
 
 if(VELOX_ENABLE_GEO)
   add_subdirectory(geospatial)

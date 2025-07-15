@@ -281,7 +281,7 @@ bool AggregationNode::canSpill(const QueryConfig& queryConfig) const {
 }
 
 void AggregationNode::addDetails(std::stringstream& stream) const {
-  stream << stepName(step_) << " ";
+  stream << toName(step_) << " ";
 
   if (isPreGrouped()) {
     stream << "STREAMING ";
@@ -322,7 +322,7 @@ void AggregationNode::addDetails(std::stringstream& stream) const {
 }
 
 namespace {
-std::unordered_map<AggregationNode::Step, std::string> stepNames() {
+folly::F14FastMap<AggregationNode::Step, std::string> stepNames() {
   return {
       {AggregationNode::Step::kPartial, "PARTIAL"},
       {AggregationNode::Step::kFinal, "FINAL"},
@@ -331,35 +331,13 @@ std::unordered_map<AggregationNode::Step, std::string> stepNames() {
   };
 }
 
-template <typename K, typename V>
-std::unordered_map<V, K> invertMap(const std::unordered_map<K, V>& mapping) {
-  std::unordered_map<V, K> inverted;
-  for (const auto& [key, value] : mapping) {
-    inverted.emplace(value, key);
-  }
-  return inverted;
-}
 } // namespace
 
-// static
-const char* AggregationNode::stepName(AggregationNode::Step step) {
-  static const auto kSteps = stepNames();
-  auto it = kSteps.find(step);
-  VELOX_CHECK(it != kSteps.end(), "Invalid step {}", static_cast<int>(step));
-  return it->second.c_str();
-}
-
-// static
-AggregationNode::Step AggregationNode::stepFromName(const std::string& name) {
-  static const auto kSteps = invertMap(stepNames());
-  auto it = kSteps.find(name);
-  VELOX_CHECK(it != kSteps.end(), "Invalid step " + name);
-  return it->second;
-}
+VELOX_DEFINE_EMBEDDED_ENUM_NAME(AggregationNode, Step, stepNames)
 
 folly::dynamic AggregationNode::serialize() const {
   auto obj = PlanNode::serialize();
-  obj["step"] = stepName(step_);
+  obj["step"] = toName(step_);
   obj["groupingKeys"] = ISerializable::serialize(groupingKeys_);
   obj["preGroupedKeys"] = ISerializable::serialize(preGroupedKeys_);
   obj["aggregateNames"] = ISerializable::serialize(aggregateNames_);
@@ -439,12 +417,13 @@ folly::dynamic AggregationNode::Aggregate::serialize() const {
 AggregationNode::Aggregate AggregationNode::Aggregate::deserialize(
     const folly::dynamic& obj,
     void* context) {
-  auto call = ISerializable::deserialize<CallTypedExpr>(obj["call"]);
+  auto call = ISerializable::deserialize<CallTypedExpr>(obj["call"], context);
   auto rawInputTypes =
       ISerializable::deserialize<std::vector<Type>>(obj["rawInputTypes"]);
   FieldAccessTypedExprPtr mask;
   if (obj.count("mask")) {
-    mask = ISerializable::deserialize<FieldAccessTypedExpr>(obj["mask"]);
+    mask =
+        ISerializable::deserialize<FieldAccessTypedExpr>(obj["mask"], context);
   }
   auto sortingKeys = deserializeFields(obj["sortingKeys"], context);
   auto sortingOrders = deserializeSortingOrders(obj["sortingOrders"]);
@@ -484,7 +463,7 @@ PlanNodePtr AggregationNode::create(const folly::dynamic& obj, void* context) {
 
   return std::make_shared<AggregationNode>(
       deserializePlanNodeId(obj),
-      stepFromName(obj["step"].asString()),
+      toStep(obj["step"].asString()),
       groupingKeys,
       preGroupedKeys,
       aggregateNames,
@@ -701,7 +680,8 @@ PlanNodePtr GroupIdNode::create(const folly::dynamic& obj, void* context) {
   for (const auto& info : obj["groupingKeyInfos"]) {
     groupingKeyInfos.push_back(
         {info["output"].asString(),
-         ISerializable::deserialize<FieldAccessTypedExpr>(info["input"])});
+         ISerializable::deserialize<FieldAccessTypedExpr>(
+             info["input"], context)});
   }
 
   auto groupingSets =
@@ -1111,18 +1091,16 @@ folly::dynamic TableScanNode::serialize() const {
 PlanNodePtr TableScanNode::create(const folly::dynamic& obj, void* context) {
   auto planNodeId = obj["id"].asString();
   auto outputType = deserializeRowType(obj["outputType"]);
-  auto tableHandle = std::const_pointer_cast<connector::ConnectorTableHandle>(
+  auto tableHandle =
       ISerializable::deserialize<connector::ConnectorTableHandle>(
-          obj["tableHandle"], context));
+          obj["tableHandle"], context);
 
-  std::unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>
-      assignments;
+  connector::ColumnHandleMap assignments;
   for (const auto& pair : obj["assignments"]) {
     auto assign = pair["assign"].asString();
     auto columnHandle = ISerializable::deserialize<connector::ColumnHandle>(
-        pair["columnHandle"]);
-    assignments[assign] =
-        std::const_pointer_cast<connector::ColumnHandle>(columnHandle);
+        pair["columnHandle"], context);
+    assignments[assign] = std::move(columnHandle);
   }
 
   return std::make_shared<const TableScanNode>(
@@ -1287,14 +1265,14 @@ AbstractJoinNode::AbstractJoinNode(
       rightKeys_.size(),
       "JoinNode requires same number of join keys on left and right sides");
   auto leftType = sources_[0]->outputType();
-  for (auto key : leftKeys_) {
+  for (const auto& key : leftKeys_) {
     VELOX_CHECK(
         leftType->containsChild(key->name()),
         "Left side join key not found in left side output: {}",
         key->name());
   }
   auto rightType = sources_[1]->outputType();
-  for (auto key : rightKeys_) {
+  for (const auto& key : rightKeys_) {
     VELOX_CHECK(
         rightType->containsChild(key->name()),
         "Right side join key not found in right side output: {}",
@@ -1307,16 +1285,16 @@ AbstractJoinNode::AbstractJoinNode(
         "Join key types on the left and right sides must match");
   }
 
-  auto numOutputColumms = outputType_->size();
+  auto numOutputColumns = outputType_->size();
   if (core::isLeftSemiProjectJoin(joinType) ||
       core::isRightSemiProjectJoin(joinType)) {
     // Last output column must be a boolean 'match'.
-    --numOutputColumms;
-    VELOX_CHECK_EQ(outputType_->childAt(numOutputColumms), BOOLEAN());
+    --numOutputColumns;
+    VELOX_CHECK_EQ(outputType_->childAt(numOutputColumns), BOOLEAN());
 
     // Verify that 'match' column name doesn't match any column from left or
     // right source.
-    const auto& name = outputType_->nameOf(numOutputColumms);
+    const auto& name = outputType_->nameOf(numOutputColumns);
     VELOX_CHECK(!leftType->containsChild(name));
     VELOX_CHECK(!rightType->containsChild(name));
   }
@@ -1332,7 +1310,7 @@ AbstractJoinNode::AbstractJoinNode(
       !(core::isLeftSemiFilterJoin(joinType) ||
         core::isLeftSemiProjectJoin(joinType) || core::isAntiJoin(joinType));
 
-  for (auto i = 0; i < numOutputColumms; ++i) {
+  for (auto i = 0; i < numOutputColumns; ++i) {
     auto name = outputType_->nameOf(i);
     if (outputMayIncludeLeftColumns && leftType->containsChild(name)) {
       VELOX_CHECK(
@@ -1353,7 +1331,7 @@ AbstractJoinNode::AbstractJoinNode(
 }
 
 void AbstractJoinNode::addDetails(std::stringstream& stream) const {
-  stream << joinTypeName(joinType_) << " ";
+  stream << JoinTypeName::toName(joinType_) << " ";
 
   for (auto i = 0; i < leftKeys_.size(); ++i) {
     if (i > 0) {
@@ -1369,7 +1347,7 @@ void AbstractJoinNode::addDetails(std::stringstream& stream) const {
 
 folly::dynamic AbstractJoinNode::serializeBase() const {
   auto obj = PlanNode::serialize();
-  obj["joinType"] = joinTypeName(joinType_);
+  obj["joinType"] = JoinTypeName::toName(joinType_);
   obj["leftKeys"] = ISerializable::serialize(leftKeys_);
   obj["rightKeys"] = ISerializable::serialize(rightKeys_);
   if (filter_) {
@@ -1380,7 +1358,7 @@ folly::dynamic AbstractJoinNode::serializeBase() const {
 }
 
 namespace {
-std::unordered_map<JoinType, std::string> joinTypeNames() {
+folly::F14FastMap<JoinType, std::string> joinTypeNames() {
   return {
       {JoinType::kInner, "INNER"},
       {JoinType::kLeft, "LEFT"},
@@ -1395,22 +1373,7 @@ std::unordered_map<JoinType, std::string> joinTypeNames() {
 }
 } // namespace
 
-const char* joinTypeName(JoinType joinType) {
-  static const auto kJoinTypes = joinTypeNames();
-  auto it = kJoinTypes.find(joinType);
-  VELOX_CHECK(
-      it != kJoinTypes.end(),
-      "Invalid join type {}",
-      static_cast<int>(joinType));
-  return it->second.c_str();
-}
-
-JoinType joinTypeFromName(const std::string& name) {
-  static const auto kJoinTypes = invertMap(joinTypeNames());
-  auto it = kJoinTypes.find(name);
-  VELOX_CHECK(it != kJoinTypes.end(), "Invalid join type " + name);
-  return it->second;
-}
+VELOX_DEFINE_ENUM_NAME(JoinType, joinTypeNames)
 
 void HashJoinNode::addDetails(std::stringstream& stream) const {
   AbstractJoinNode::addDetails(stream);
@@ -1442,14 +1405,14 @@ PlanNodePtr HashJoinNode::create(const folly::dynamic& obj, void* context) {
 
   TypedExprPtr filter;
   if (obj.count("filter")) {
-    filter = ISerializable::deserialize<ITypedExpr>(obj["filter"]);
+    filter = ISerializable::deserialize<ITypedExpr>(obj["filter"], context);
   }
 
   auto outputType = deserializeRowType(obj["outputType"]);
 
   return std::make_shared<HashJoinNode>(
       deserializePlanNodeId(obj),
-      joinTypeFromName(obj["joinType"].asString()),
+      JoinTypeName::toJoinType(obj["joinType"].asString()),
       nullAware,
       std::move(leftKeys),
       std::move(rightKeys),
@@ -1479,8 +1442,8 @@ MergeJoinNode::MergeJoinNode(
           std::move(outputType)) {
   VELOX_USER_CHECK(
       isSupported(joinType_),
-      "The join type is not supported by merge join: ",
-      joinTypeName(joinType_));
+      "The join type is not supported by merge join: {}",
+      JoinTypeName::toName(joinType_));
 }
 
 folly::dynamic MergeJoinNode::serialize() const {
@@ -1520,14 +1483,14 @@ PlanNodePtr MergeJoinNode::create(const folly::dynamic& obj, void* context) {
 
   TypedExprPtr filter;
   if (obj.count("filter")) {
-    filter = ISerializable::deserialize<ITypedExpr>(obj["filter"]);
+    filter = ISerializable::deserialize<ITypedExpr>(obj["filter"], context);
   }
 
   auto outputType = deserializeRowType(obj["outputType"]);
 
   return std::make_shared<MergeJoinNode>(
       deserializePlanNodeId(obj),
-      joinTypeFromName(obj["joinType"].asString()),
+      JoinTypeName::toJoinType(obj["joinType"].asString()),
       std::move(leftKeys),
       std::move(rightKeys),
       filter,
@@ -1556,7 +1519,7 @@ PlanNodePtr IndexLookupJoinNode::create(
 
   return std::make_shared<IndexLookupJoinNode>(
       deserializePlanNodeId(obj),
-      joinTypeFromName(obj["joinType"].asString()),
+      JoinTypeName::toJoinType(obj["joinType"].asString()),
       std::move(leftKeys),
       std::move(rightKeys),
       std::move(joinConditions),
@@ -1635,8 +1598,8 @@ NestedLoopJoinNode::NestedLoopJoinNode(
       outputType_(std::move(outputType)) {
   VELOX_USER_CHECK(
       isSupported(joinType_),
-      "The join type is not supported by nested loop join: ",
-      joinTypeName(joinType_));
+      "The join type is not supported by nested loop join: {}",
+      JoinTypeName::toName(joinType_));
 
   auto leftType = sources_[0]->outputType();
   auto rightType = sources_[1]->outputType();
@@ -1699,7 +1662,7 @@ bool NestedLoopJoinNode::isSupported(core::JoinType joinType) {
 }
 
 void NestedLoopJoinNode::addDetails(std::stringstream& stream) const {
-  stream << joinTypeName(joinType_);
+  stream << JoinTypeName::toName(joinType_);
   if (joinCondition_) {
     stream << ", joinCondition: " << joinCondition_->toString();
   }
@@ -1707,7 +1670,7 @@ void NestedLoopJoinNode::addDetails(std::stringstream& stream) const {
 
 folly::dynamic NestedLoopJoinNode::serialize() const {
   auto obj = PlanNode::serialize();
-  obj["joinType"] = joinTypeName(joinType_);
+  obj["joinType"] = JoinTypeName::toName(joinType_);
   if (joinCondition_) {
     obj["joinCondition"] = joinCondition_->serialize();
   }
@@ -1737,7 +1700,7 @@ PlanNodePtr NestedLoopJoinNode::create(
 
   return std::make_shared<NestedLoopJoinNode>(
       deserializePlanNodeId(obj),
-      joinTypeFromName(obj["joinType"].asString()),
+      JoinTypeName::toJoinType(obj["joinType"].asString()),
       joinCondition,
       sources[0],
       sources[1],
@@ -1824,17 +1787,17 @@ void addWindowFunction(
     VELOX_USER_FAIL("Window frame end cannot be UNBOUNDED PRECEDING");
   }
 
-  stream << WindowNode::windowTypeName(frame.type) << " between ";
+  stream << WindowNode::toName(frame.type) << " between ";
   if (frame.startValue) {
     addKeys(stream, {frame.startValue});
     stream << " ";
   }
-  stream << WindowNode::boundTypeName(frame.startType) << " and ";
+  stream << WindowNode::toName(frame.startType) << " and ";
   if (frame.endValue) {
     addKeys(stream, {frame.endValue});
     stream << " ";
   }
-  stream << WindowNode::boundTypeName(frame.endType);
+  stream << WindowNode::toName(frame.endType);
 }
 
 } // namespace
@@ -1926,7 +1889,7 @@ void WindowNode::addDetails(std::stringstream& stream) const {
 }
 
 namespace {
-std::unordered_map<WindowNode::BoundType, std::string> boundTypeNames() {
+folly::F14FastMap<WindowNode::BoundType, std::string> boundTypeNames() {
   return {
       {WindowNode::BoundType::kCurrentRow, "CURRENT ROW"},
       {WindowNode::BoundType::kPreceding, "PRECEDING"},
@@ -1937,27 +1900,10 @@ std::unordered_map<WindowNode::BoundType, std::string> boundTypeNames() {
 }
 } // namespace
 
-// static
-const char* WindowNode::boundTypeName(WindowNode::BoundType type) {
-  static const auto kTypes = boundTypeNames();
-  auto it = kTypes.find(type);
-  VELOX_CHECK(
-      it != kTypes.end(),
-      "Invalid window bound type {}",
-      static_cast<int>(type));
-  return it->second.c_str();
-}
-
-// static
-WindowNode::BoundType WindowNode::boundTypeFromName(const std::string& name) {
-  static const auto kTypes = invertMap(boundTypeNames());
-  auto it = kTypes.find(name);
-  VELOX_CHECK(it != kTypes.end(), "Invalid window bound type " + name);
-  return it->second;
-}
+VELOX_DEFINE_EMBEDDED_ENUM_NAME(WindowNode, BoundType, boundTypeNames)
 
 namespace {
-std::unordered_map<WindowNode::WindowType, std::string> windowTypeNames() {
+folly::F14FastMap<WindowNode::WindowType, std::string> windowTypeNames() {
   return {
       {WindowNode::WindowType::kRows, "ROWS"},
       {WindowNode::WindowType::kRange, "RANGE"},
@@ -1965,31 +1911,16 @@ std::unordered_map<WindowNode::WindowType, std::string> windowTypeNames() {
 }
 } // namespace
 
-// static
-const char* WindowNode::windowTypeName(WindowNode::WindowType type) {
-  static const auto kTypes = windowTypeNames();
-  auto it = kTypes.find(type);
-  VELOX_CHECK(
-      it != kTypes.end(), "Invalid window type {}", static_cast<int>(type));
-  return it->second.c_str();
-}
-
-// static
-WindowNode::WindowType WindowNode::windowTypeFromName(const std::string& name) {
-  static const auto kTypes = invertMap(windowTypeNames());
-  auto it = kTypes.find(name);
-  VELOX_CHECK(it != kTypes.end(), "Invalid window type " + name);
-  return it->second;
-}
+VELOX_DEFINE_EMBEDDED_ENUM_NAME(WindowNode, WindowType, windowTypeNames)
 
 folly::dynamic WindowNode::Frame::serialize() const {
   folly::dynamic obj = folly::dynamic::object();
-  obj["type"] = windowTypeName(type);
-  obj["startType"] = boundTypeName(startType);
+  obj["type"] = toName(type);
+  obj["startType"] = toName(startType);
   if (startValue) {
     obj["startValue"] = startValue->serialize();
   }
-  obj["endType"] = boundTypeName(endType);
+  obj["endType"] = toName(endType);
   if (endValue) {
     obj["endValue"] = endValue->serialize();
   }
@@ -2009,10 +1940,10 @@ WindowNode::Frame WindowNode::Frame::deserialize(const folly::dynamic& obj) {
   }
 
   return {
-      windowTypeFromName(obj["type"].asString()),
-      boundTypeFromName(obj["startType"].asString()),
+      toWindowType(obj["type"].asString()),
+      toBoundType(obj["startType"].asString()),
       startValue,
-      boundTypeFromName(obj["endType"].asString()),
+      toBoundType(obj["endType"].asString()),
       endValue};
 }
 
@@ -2392,17 +2323,15 @@ PlanNodePtr TableWriteNode::create(const folly::dynamic& obj, void* context) {
   auto columns = deserializeRowType(obj["columns"]);
   auto columnNames =
       ISerializable::deserialize<std::vector<std::string>>(obj["columnNames"]);
-  std::shared_ptr<AggregationNode> aggregationNode;
+  AggregationNodePtr aggregationNode;
   if (obj.count("aggregationNode") != 0) {
-    aggregationNode = std::const_pointer_cast<AggregationNode>(
-        ISerializable::deserialize<AggregationNode>(
-            obj["aggregationNode"], context));
+    aggregationNode = ISerializable::deserialize<AggregationNode>(
+        obj["aggregationNode"], context);
   }
   auto connectorId = obj["connectorId"].asString();
   auto connectorInsertTableHandle =
-      std::const_pointer_cast<connector::ConnectorInsertTableHandle>(
-          ISerializable::deserialize<connector::ConnectorInsertTableHandle>(
-              obj["connectorInsertTableHandle"]));
+      ISerializable::deserialize<connector::ConnectorInsertTableHandle>(
+          obj["connectorInsertTableHandle"]);
   const bool hasPartitioningScheme = obj["hasPartitioningScheme"].asBool();
   auto outputType = deserializeRowType(obj["outputType"]);
   auto commitStrategy =
@@ -2445,10 +2374,10 @@ PlanNodePtr TableWriteMergeNode::create(
     void* context) {
   auto id = obj["id"].asString();
   auto outputType = deserializeRowType(obj["outputType"]);
-  std::shared_ptr<AggregationNode> aggregationNode;
+  AggregationNodePtr aggregationNode;
   if (obj.count("aggregationNode") != 0) {
-    aggregationNode = std::const_pointer_cast<AggregationNode>(
-        ISerializable::deserialize<AggregationNode>(obj["aggregationNode"]));
+    aggregationNode = ISerializable::deserialize<AggregationNode>(
+        obj["aggregationNode"], context);
   }
   return std::make_shared<TableWriteMergeNode>(
       id, outputType, aggregationNode, deserializeSingleSource(obj, context));
@@ -2502,7 +2431,7 @@ PlanNodePtr MergeExchangeNode::create(
 }
 
 void LocalPartitionNode::addDetails(std::stringstream& stream) const {
-  stream << typeName(type_);
+  stream << toName(type_);
   if (type_ != Type::kGather) {
     stream << " " << partitionFunctionSpec_->toString();
   }
@@ -2513,7 +2442,7 @@ void LocalPartitionNode::addDetails(std::stringstream& stream) const {
 
 folly::dynamic LocalPartitionNode::serialize() const {
   auto obj = PlanNode::serialize();
-  obj["type"] = typeName(type_);
+  obj["type"] = toName(type_);
   obj["scaleWriter"] = scaleWriter_;
   obj["partitionFunctionSpec"] = partitionFunctionSpec_->serialize();
   return obj;
@@ -2531,15 +2460,15 @@ PlanNodePtr LocalPartitionNode::create(
     void* context) {
   return std::make_shared<LocalPartitionNode>(
       deserializePlanNodeId(obj),
-      typeFromName(obj["type"].asString()),
+      toType(obj["type"].asString()),
       obj["scaleWriter"].asBool(),
       ISerializable::deserialize<PartitionFunctionSpec>(
-          obj["partitionFunctionSpec"]),
+          obj["partitionFunctionSpec"], context),
       deserializeSources(obj, context));
 }
 
 namespace {
-std::unordered_map<LocalPartitionNode::Type, std::string>
+folly::F14FastMap<LocalPartitionNode::Type, std::string>
 localPartitionTypeNames() {
   return {
       {LocalPartitionNode::Type::kGather, "GATHER"},
@@ -2548,25 +2477,10 @@ localPartitionTypeNames() {
 }
 } // namespace
 
-// static
-const char* LocalPartitionNode::typeName(Type type) {
-  static const auto kTypes = localPartitionTypeNames();
-  auto it = kTypes.find(type);
-  VELOX_CHECK(
-      it != kTypes.end(),
-      "Invalid LocalPartitionNode type {}",
-      static_cast<int>(type));
-  return it->second.c_str();
-}
-
-// static
-LocalPartitionNode::Type LocalPartitionNode::typeFromName(
-    const std::string& name) {
-  static const auto kTypes = invertMap(localPartitionTypeNames());
-  auto it = kTypes.find(name);
-  VELOX_CHECK(it != kTypes.end(), "Invalid LocalPartitionNode type " + name);
-  return it->second;
-}
+VELOX_DEFINE_EMBEDDED_ENUM_NAME(
+    LocalPartitionNode,
+    Type,
+    localPartitionTypeNames)
 
 PartitionedOutputNode::PartitionedOutputNode(
     const PlanNodeId& id,
@@ -2592,12 +2506,16 @@ PartitionedOutputNode::PartitionedOutputNode(
     VELOX_USER_CHECK(
         keys_.empty(),
         "Non-empty partitioning keys require more than one partition");
+  } else {
+    VELOX_USER_CHECK_NOT_NULL(
+        partitionFunctionSpec_,
+        "Partition function spec must be specified when the number of destinations is more than 1.");
   }
   if (!isPartitioned()) {
     VELOX_USER_CHECK(
         keys_.empty(),
         "{} partitioning doesn't allow for partitioning keys",
-        kindString(kind_));
+        toName(kind_));
   }
 }
 
@@ -2682,7 +2600,7 @@ PlanNodePtr EnforceSingleRowNode::create(
 }
 
 namespace {
-std::unordered_map<PartitionedOutputNode::Kind, std::string>
+folly::F14FastMap<PartitionedOutputNode::Kind, std::string>
 partitionKindNames() {
   return {
       {PartitionedOutputNode::Kind::kPartitioned, "PARTITIONED"},
@@ -2693,25 +2611,7 @@ partitionKindNames() {
 
 } // namespace
 
-// static
-std::string PartitionedOutputNode::kindString(Kind kind) {
-  static const auto kPartitionNames = partitionKindNames();
-  auto it = kPartitionNames.find(kind);
-  VELOX_CHECK(
-      it != kPartitionNames.end(),
-      "Invalid Output Kind {}",
-      static_cast<int>(kind));
-  return it->second;
-}
-
-// static
-PartitionedOutputNode::Kind PartitionedOutputNode::stringToKind(
-    const std::string& name) {
-  static const auto kPartitionKinds = invertMap(partitionKindNames());
-  auto it = kPartitionKinds.find(name);
-  VELOX_CHECK(it != kPartitionKinds.end(), "Invalid Output Kind " + name);
-  return it->second;
-}
+VELOX_DEFINE_EMBEDDED_ENUM_NAME(PartitionedOutputNode, Kind, partitionKindNames)
 
 void PartitionedOutputNode::addDetails(std::stringstream& stream) const {
   if (kind_ == Kind::kBroadcast) {
@@ -2739,7 +2639,7 @@ void PartitionedOutputNode::addDetails(std::stringstream& stream) const {
 
 folly::dynamic PartitionedOutputNode::serialize() const {
   auto obj = PlanNode::serialize();
-  obj["kind"] = kindString(kind_);
+  obj["kind"] = toName(kind_);
   obj["numPartitions"] = numPartitions_;
   obj["keys"] = ISerializable::serialize(keys_);
   obj["replicateNullsAndAny"] = replicateNullsAndAny_;
@@ -2761,7 +2661,7 @@ PlanNodePtr PartitionedOutputNode::create(
     void* context) {
   return std::make_shared<PartitionedOutputNode>(
       deserializePlanNodeId(obj),
-      stringToKind(obj["kind"].asString()),
+      toKind(obj["kind"].asString()),
       ISerializable::deserialize<std::vector<ITypedExpr>>(obj["keys"], context),
       obj["numPartitions"].asInt(),
       obj["replicateNullsAndAny"].asBool(),
@@ -2999,9 +2899,9 @@ void PlanNode::toSummaryString(
 
   stream << indentation << "-- " << name() << "[" << id()
          << "]: " << summarizeOutputType(outputType(), options) << std::endl;
-
-  addSummaryDetails(indentation + "      ", options, stream);
-
+  if (!options.nodeHeaderOnly) {
+    addSummaryDetails(indentation + "      ", options, stream);
+  }
   for (auto& source : sources()) {
     source->toSummaryString(options, stream, indentationSize + 2);
   }
@@ -3165,7 +3065,7 @@ void AggregationNode::addSummaryDetails(
 PlanNodePtr FilterNode::create(const folly::dynamic& obj, void* context) {
   auto source = deserializeSingleSource(obj, context);
 
-  auto filter = ISerializable::deserialize<ITypedExpr>(obj["filter"]);
+  auto filter = ISerializable::deserialize<ITypedExpr>(obj["filter"], context);
   return std::make_shared<FilterNode>(
       deserializePlanNodeId(obj), filter, std::move(source));
 }

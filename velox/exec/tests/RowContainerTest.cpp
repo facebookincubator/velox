@@ -1989,10 +1989,10 @@ TEST_F(RowContainerTest, toString) {
 
   EXPECT_EQ(
       rowContainer->toString(rows[0]),
-      "{1, summer, 11, 0.10000000149011612, 3 elements starting at 0 {1, 2, 3}}");
+      "{1, summer, 11, 0.10000000149011612, {1, 2, 3}}");
   EXPECT_EQ(
       rowContainer->toString(rows[1]),
-      "{2, fall, 0, 2.3399999141693115, 2 elements starting at 0 {4, 5}}");
+      "{2, fall, 0, 2.3399999141693115, {4, 5}}");
   EXPECT_EQ(
       rowContainer->toString(rows[2]),
       "{3, winter, 12, 123.00299835205078, null}");
@@ -2707,6 +2707,43 @@ TEST_F(RowContainerTest, storeAndCollectColumnStats) {
   for (int i = 0; i < rowContainer->columnTypes().size(); ++i) {
     EXPECT_EQ(rowContainer->columnStats(i).value().numCells(), 0);
   }
+}
+
+TEST_F(RowContainerTest, setAllNull) {
+  std::vector<TypePtr> keyTypes = {INTEGER()};
+  std::vector<Accumulator> accumulators{Accumulator(
+      true, 8, false, 8, INTEGER(), [](auto, auto) {}, [](auto) {})};
+
+  auto rowContainer = std::make_unique<RowContainer>(
+      keyTypes,
+      true,
+      accumulators,
+      std::vector<TypePtr>{},
+      false,
+      true,
+      false,
+      false,
+      pool_.get());
+
+  auto row = rowContainer->newRow();
+
+  auto keyColumn = rowContainer->columnAt(0);
+  auto accColumn = rowContainer->columnAt(1);
+  ASSERT_FALSE(
+      RowContainer::isNullAt(row, keyColumn.nullByte(), keyColumn.nullMask()));
+  ASSERT_FALSE(
+      RowContainer::isNullAt(row, accColumn.nullByte(), accColumn.nullMask()));
+  ASSERT_EQ(
+      (row[accColumn.initializedByte()] & accColumn.initializedMask()), 0);
+
+  rowContainer->setAllNull(row);
+
+  ASSERT_TRUE(
+      RowContainer::isNullAt(row, keyColumn.nullByte(), keyColumn.nullMask()));
+  ASSERT_TRUE(
+      RowContainer::isNullAt(row, accColumn.nullByte(), accColumn.nullMask()));
+  ASSERT_EQ(
+      (row[accColumn.initializedByte()] & accColumn.initializedMask()), 0);
 }
 
 } // namespace facebook::velox::exec::test

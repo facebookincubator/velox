@@ -22,6 +22,33 @@ namespace facebook::velox::connector::tpch {
 using facebook::velox::tpch::Table;
 
 namespace {
+std::vector<std::unique_ptr<TpchConnectorMetadataFactory>>&
+tpchConnectorMetadataFactories() {
+  static std::vector<std::unique_ptr<TpchConnectorMetadataFactory>> factories;
+  return factories;
+}
+} // namespace
+
+TpchConnector::TpchConnector(
+    const std::string& id,
+    std::shared_ptr<const config::ConfigBase> config,
+    folly::Executor* /*executor*/)
+    : Connector(id) {
+  for (auto& factory : tpchConnectorMetadataFactories()) {
+    metadata_ = factory->create(this);
+    if (metadata_ != nullptr) {
+      break;
+    }
+  }
+}
+
+bool registerTpchConnectorMetadataFactory(
+    std::unique_ptr<TpchConnectorMetadataFactory> factory) {
+  tpchConnectorMetadataFactories().push_back(std::move(factory));
+  return true;
+}
+
+namespace {
 
 RowVectorPtr getTpchData(
     Table table,
@@ -58,15 +85,13 @@ std::string TpchTableHandle::toString() const {
 }
 
 TpchDataSource::TpchDataSource(
-    const std::shared_ptr<const RowType>& outputType,
-    const std::shared_ptr<connector::ConnectorTableHandle>& tableHandle,
-    const std::unordered_map<
-        std::string,
-        std::shared_ptr<connector::ColumnHandle>>& columnHandles,
+    const RowTypePtr& outputType,
+    const connector::ConnectorTableHandlePtr& tableHandle,
+    const connector::ColumnHandleMap& columnHandles,
     velox::memory::MemoryPool* pool)
     : pool_(pool) {
   auto tpchTableHandle =
-      std::dynamic_pointer_cast<TpchTableHandle>(tableHandle);
+      std::dynamic_pointer_cast<const TpchTableHandle>(tableHandle);
   VELOX_CHECK_NOT_NULL(
       tpchTableHandle, "TableHandle must be an instance of TpchTableHandle");
   tpchTable_ = tpchTableHandle->getTable();
@@ -86,7 +111,7 @@ TpchDataSource::TpchDataSource(
         outputName,
         toTableName(tpchTable_));
 
-    auto handle = std::dynamic_pointer_cast<TpchColumnHandle>(it->second);
+    auto handle = std::dynamic_pointer_cast<const TpchColumnHandle>(it->second);
     VELOX_CHECK_NOT_NULL(
         handle,
         "ColumnHandle must be an instance of TpchColumnHandle "

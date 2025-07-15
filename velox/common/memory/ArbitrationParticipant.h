@@ -119,17 +119,6 @@ class ArbitrationParticipant
     uint64_t minReclaimBytes;
     double minReclaimPct;
 
-    /// Specifies the starting memory capacity limit for global arbitration to
-    /// search for victim participant to reclaim used memory by abort. For
-    /// participants with capacity larger than the limit, the global arbitration
-    /// choose to abort the youngest participant which has the largest
-    /// participant id. This helps to let the old queries to run to completion.
-    /// The abort capacity limit is reduced by half if couldn't find a victim
-    /// participant until reaches to zero.
-    ///
-    /// NOTE: the limit must be zero or a power of 2.
-    uint64_t abortCapacityLimit;
-
     Config(
         uint64_t _initCapacity,
         uint64_t _minCapacity,
@@ -138,8 +127,7 @@ class ArbitrationParticipant
         uint64_t _minFreeCapacity,
         double _minFreeCapacityRatio,
         uint64_t _minReclaimBytes,
-        double _minReclaimPct,
-        uint64_t _abortCapacityLimit);
+        double _minReclaimPct);
 
     std::string toString() const;
   };
@@ -171,11 +159,6 @@ class ArbitrationParticipant
   /// Returns the min capacity of the underlying query memory pool.
   uint64_t minCapacity() const {
     return config_->minCapacity;
-  }
-
-  /// Returns the priority of the underlying query memory pool.
-  uint32_t poolPriority() const {
-    return poolPriority_;
   }
 
   /// Returns the duration of this arbitration participant since its creation.
@@ -349,7 +332,6 @@ class ArbitrationParticipant
   const Config* const config_;
   const uint64_t maxCapacity_;
   const uint64_t createTimeNs_;
-  const uint32_t poolPriority_;
 
   mutable std::mutex stateLock_;
   bool aborted_{false};

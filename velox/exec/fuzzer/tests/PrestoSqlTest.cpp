@@ -19,6 +19,8 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/fuzzer/PrestoSql.h"
 #include "velox/functions/prestosql/types/JsonType.h"
+#include "velox/functions/prestosql/types/QDigestType.h"
+#include "velox/functions/prestosql/types/TDigestType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 
 namespace facebook::velox::exec::test {
@@ -34,7 +36,11 @@ TEST(PrestoSqlTest, toTypeSql) {
   EXPECT_EQ(toTypeSql(DOUBLE()), "DOUBLE");
   EXPECT_EQ(toTypeSql(VARCHAR()), "VARCHAR");
   EXPECT_EQ(toTypeSql(VARBINARY()), "VARBINARY");
+  EXPECT_EQ(toTypeSql(TDIGEST(DOUBLE())), "TDIGEST(DOUBLE)");
   EXPECT_EQ(toTypeSql(TIMESTAMP()), "TIMESTAMP");
+  EXPECT_EQ(toTypeSql(QDIGEST(DOUBLE())), "QDIGEST(DOUBLE)");
+  EXPECT_EQ(toTypeSql(QDIGEST(BIGINT())), "QDIGEST(BIGINT)");
+  EXPECT_EQ(toTypeSql(QDIGEST(REAL())), "QDIGEST(REAL)");
   EXPECT_EQ(toTypeSql(DATE()), "DATE");
   EXPECT_EQ(toTypeSql(TIMESTAMP_WITH_TIME_ZONE()), "TIMESTAMP WITH TIME ZONE");
   EXPECT_EQ(toTypeSql(ARRAY(BOOLEAN())), "ARRAY(BOOLEAN)");
@@ -403,6 +409,15 @@ TEST(PrestoSqlTest, toCallInputsSql) {
 
   toCallInputsSql({expression}, sql);
   EXPECT_EQ(sql.str(), "c0.field0");
+}
+
+TEST(PrestoSqlTest, toConstantSql) {
+  EXPECT_EQ(
+      toConstantSql(core::ConstantTypedExpr(INTERVAL_YEAR_MONTH(), 123)),
+      "INTERVAL '123' YEAR TO MONTH");
+  EXPECT_EQ(
+      toConstantSql(core::ConstantTypedExpr(INTERVAL_DAY_TIME(), int64_t(123))),
+      "INTERVAL '123' DAY TO SECOND");
 }
 
 } // namespace

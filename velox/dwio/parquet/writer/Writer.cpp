@@ -164,6 +164,9 @@ std::shared_ptr<WriterProperties> getArrowParquetWriterOptions(
     properties =
         properties->data_page_version(arrow::ParquetDataPageVersion::V1);
   }
+  if (options.createdBy.has_value()) {
+    properties = properties->created_by(options.createdBy.value());
+  }
   return properties->build();
 }
 
@@ -306,6 +309,15 @@ std::optional<int64_t> getParquetBatchSize(
   return std::nullopt;
 }
 
+std::optional<std::string> getParquetCreatedBy(
+    const config::ConfigBase& config,
+    const char* configKey) {
+  if (config.get<std::string>(configKey).has_value()) {
+    return config.get<std::string>(configKey).value();
+  }
+  return std::nullopt;
+}
+
 } // namespace
 
 Writer::Writer(
@@ -415,10 +427,15 @@ void Writer::write(const VectorPtr& data) {
       data->type()->equivalent(*schema_),
       "The file schema type should be equal with the input rowvector type.");
 
+  VectorPtr exportData = data;
+  if (needFlatten(exportData)) {
+    BaseVector::flattenVector(exportData);
+  }
+
   ArrowArray array;
   ArrowSchema schema;
-  exportToArrow(data, array, generalPool_.get(), options_);
-  exportToArrow(data, schema, options_);
+  exportToArrow(exportData, array, generalPool_.get(), options_);
+  exportToArrow(exportData, schema, options_);
 
   // Convert the arrow schema to Schema and then update the column names based
   // on schema_.
@@ -502,6 +519,22 @@ void Writer::setMemoryReclaimers() {
   generalPool_->setReclaimer(exec::MemoryReclaimer::create());
 }
 
+bool Writer::needFlatten(const VectorPtr& data) const {
+  auto rowVector = std::dynamic_pointer_cast<RowVector>(data);
+  VELOX_CHECK_NOT_NULL(
+      rowVector, "Arrow export expects a RowVector as input data.");
+
+  const auto& children = rowVector->children();
+  return std::any_of(children.begin(), children.end(), [](const auto& child) {
+    bool isNestedWrapped =
+        (child->encoding() == VectorEncoding::Simple::DICTIONARY ||
+         child->encoding() == VectorEncoding::Simple::CONSTANT) &&
+        child->valueVector() && !child->wrappedVector()->isFlatEncoding();
+    bool isComplex = !child->isScalar();
+    return isNestedWrapped || isComplex;
+  });
+}
+
 std::unique_ptr<dwio::common::Writer> ParquetWriterFactory::createWriter(
     std::unique_ptr<dwio::common::FileSink> sink,
     const std::shared_ptr<dwio::common::WriterOptions>& options) {
@@ -577,6 +610,11 @@ void WriterOptions::processConfigs(
         ? getParquetBatchSize(session, kParquetSessionWriteBatchSize)
         : getParquetBatchSize(
               connectorConfig, kParquetHiveConnectorWriteBatchSize);
+  }
+
+  if (!createdBy) {
+    createdBy =
+        getParquetCreatedBy(connectorConfig, kParquetHiveConnectorCreatedBy);
   }
 }
 

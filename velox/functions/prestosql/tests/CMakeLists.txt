@@ -58,6 +58,7 @@ add_executable(
   ComparisonsTest.cpp
   DateTimeFunctionsTest.cpp
   DecimalArithmeticTest.cpp
+  DistanceFunctionsTest.cpp
   ElementAtTest.cpp
   FailTest.cpp
   FindFirstTest.cpp
@@ -91,6 +92,7 @@ add_executable(
   ProbabilityTest.cpp
   RandTest.cpp
   ReduceTest.cpp
+  RegexpSplitTest.cpp
   RegexpReplaceTest.cpp
   ReverseTest.cpp
   RoundTest.cpp
@@ -110,12 +112,18 @@ add_executable(
   TypeOfTest.cpp
   TDigestCastTest.cpp
   QDigestCastTest.cpp
+  QDigestFunctionsTest.cpp
   URLFunctionsTest.cpp
   UuidFunctionsTest.cpp
   WidthBucketArrayTest.cpp
   WordStemTest.cpp
   ZipTest.cpp
   ZipWithTest.cpp)
+
+if(VELOX_ENABLE_FAISS)
+  set_source_files_properties(DistanceFunctionsTest.cpp
+                              PROPERTIES COMPILE_DEFINITIONS VELOX_ENABLE_FAISS)
+endif()
 
 add_test(velox_functions_test velox_functions_test)
 

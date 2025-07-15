@@ -37,6 +37,11 @@ MATCHER(IsInf, "is Infinity") {
   return arg && std::isinf(*arg);
 }
 
+auto roundToPrecision(double num, int precision) {
+  double factor = pow(10.0, precision);
+  return round(num * factor) / factor;
+};
+
 class ProbabilityTest : public functions::test::FunctionBaseTest {
  protected:
   template <typename ValueType>
@@ -102,6 +107,7 @@ class ProbabilityTest : public functions::test::FunctionBaseTest {
         0.0);
     EXPECT_EQ(binomialCDF<ValueType>(10, 0.1, -2), 0.0);
     EXPECT_EQ(binomialCDF<ValueType>(25, 0.5, -100), 0.0);
+    EXPECT_EQ(binomialCDF<ValueType>(2, 0.1, 3), 1.0);
 
     // Invalid inputs
     VELOX_ASSERT_THROW(
@@ -613,11 +619,6 @@ TEST_F(ProbabilityTest, invGammaCDF) {
         "inverse_gamma_cdf(c0, c1, c2)", shape, scale, p);
   };
 
-  const auto roundToPrecision = [&](double num, int precision) {
-    double factor = pow(10.0, precision);
-    return round(num * factor) / factor;
-  };
-
   EXPECT_EQ(0, invGammaCDF(3, 3.6, 0.0));
   EXPECT_EQ(33.624, roundToPrecision(invGammaCDF(3, 4, 0.99).value(), 3));
   EXPECT_EQ(10.696, roundToPrecision(invGammaCDF(3, 4, 0.50).value(), 3));
@@ -770,6 +771,86 @@ TEST_F(ProbabilityTest, invPoissonCDF) {
   VELOX_ASSERT_THROW(
       invPoissonCDF(3, -0.1),
       "inversePoissonCdf Function: p must be in the interval [0, 1)");
+}
+
+TEST_F(ProbabilityTest, inverseFCDF) {
+  const auto inverseFCDF = [&](std::optional<double> df1,
+                               std::optional<double> df2,
+                               std::optional<double> p) {
+    return evaluateOnce<double>("inverse_f_cdf(c0, c1, c2)", df1, df2, p);
+  };
+
+  EXPECT_EQ(0, inverseFCDF(2.0, 5.0, 0.0));
+  EXPECT_EQ(0.7988, roundToPrecision((inverseFCDF(2.0, 5.0, 0.5)).value(), 4));
+  EXPECT_EQ(3.7797, roundToPrecision((inverseFCDF(2.0, 5.0, 0.9)).value(), 4));
+
+  VELOX_ASSERT_THROW(
+      inverseFCDF(0, 3, 0.5),
+      "inverseFCdf Function: numerator df must be greater than 0");
+  VELOX_ASSERT_THROW(
+      inverseFCDF(3, 0, 0.5),
+      "inverseFCdf Function: denominator df must be greater than 0");
+  VELOX_ASSERT_THROW(
+      inverseFCDF(3, 5, -0.1),
+      "inverseFCdf Function: p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      inverseFCDF(3, 5, 1.1),
+      "inverseFCdf Function: p must be in the interval [0, 1]");
+
+  VELOX_ASSERT_THROW(
+      inverseFCDF(kNan, 1, 0.5),
+      "inverseFCdf Function: numerator df must be greater than 0");
+  VELOX_ASSERT_THROW(
+      inverseFCDF(kInf, 1, 0.5),
+      "inverseFCdf Function: numerator df must be greater than 0");
+  VELOX_ASSERT_THROW(
+      inverseFCDF(1, kNan, 0.5),
+      "inverseFCdf Function: denominator df must be greater than 0");
+  VELOX_ASSERT_THROW(
+      inverseFCDF(1, kInf, 0.5),
+      "inverseFCdf Function: denominator df must be greater than 0");
+  VELOX_ASSERT_THROW(
+      inverseFCDF(1, 1, kNan),
+      "inverseFCdf Function: p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      inverseFCDF(1, 1, kInf),
+      "inverseFCdf Function: p must be in the interval [0, 1]");
+}
+
+TEST_F(ProbabilityTest, inverseChiSquaredCdf) {
+  const auto inverseChiSquaredCdf = [&](std::optional<double> df,
+                                        std::optional<double> p) {
+    return evaluateOnce<double>("inverse_chi_squared_cdf(c0, c1)", df, p);
+  };
+
+  EXPECT_EQ(0, inverseChiSquaredCdf(3, 0.0));
+  EXPECT_EQ(
+      11.3449, roundToPrecision(inverseChiSquaredCdf(3, 0.99).value(), 4));
+  EXPECT_EQ(1.42, roundToPrecision(inverseChiSquaredCdf(3, 0.3).value(), 2));
+  EXPECT_EQ(7.81, roundToPrecision(inverseChiSquaredCdf(3, 0.95).value(), 2));
+
+  VELOX_ASSERT_THROW(
+      inverseChiSquaredCdf(-3, 0.3),
+      "inverseChiSquaredCdf Function: df must be greater than 0");
+  VELOX_ASSERT_THROW(
+      inverseChiSquaredCdf(3, -0.1),
+      "inverseChiSquaredCdf Function: p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      inverseChiSquaredCdf(3, 1.1),
+      "inverseChiSquaredCdf Function: p must be in the interval [0, 1]");
+
+  VELOX_ASSERT_THROW(
+      inverseChiSquaredCdf(kNan, 0.5),
+      "inverseChiSquaredCdf Function: df must be greater than 0");
+  VELOX_ASSERT_THROW(
+      inverseChiSquaredCdf(kInf, 0.5),
+      "inverseChiSquaredCdf Function: df must be greater than 0");
+  VELOX_ASSERT_THROW(
+      inverseChiSquaredCdf(1, kNan),
+      "inverseChiSquaredCdf Function: p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      inverseChiSquaredCdf(1, kInf),
+      "inverseChiSquaredCdf Function: p must be in the interval [0, 1]");
 }
 
 } // namespace

@@ -873,7 +873,7 @@ TEST_F(MergeJoinTest, lazyVectors) {
         .assertResults(fmt::format(
             "SELECT c0, rc0, c1, rc1, c2, c3 FROM t {} JOIN u "
             "ON t.c0 = u.rc0 AND c1 + rc1 < 30",
-            joinTypeName(joinType)));
+            core::JoinTypeName::toName(joinType)));
   }
 }
 
@@ -1014,6 +1014,110 @@ TEST_F(MergeJoinTest, semiJoinWithMultipleMatchVectors) {
       "SELECT t0 FROM t where t0 IN (SELECT u0 from u) and t0 > 1",
       {"t0"},
       core::JoinType::kLeftSemiFilter);
+}
+
+TEST_F(MergeJoinTest, semiJoinWithMultiMatchedRowsWithFilter) {
+  auto left = makeRowVector(
+      {"t0", "t1"},
+      {makeNullableFlatVector<int64_t>({2, 2, 2, 2, 2}),
+       makeNullableFlatVector<int64_t>({3, 2, 3, 2, 2})});
+
+  auto right = makeRowVector(
+      {"u0", "u1"},
+      {makeNullableFlatVector<int64_t>({2, 2, 2, 2, 2, 2}),
+       makeNullableFlatVector<int64_t>({2, 2, 2, 2, 2, 4})});
+
+  createDuckDbTable("t", {left});
+  createDuckDbTable("u", {right});
+
+  auto testSemiJoin = [&](const std::string& filter,
+                          const std::string& sql,
+                          const std::vector<std::string>& outputLayout,
+                          core::JoinType joinType) {
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    auto plan = PlanBuilder(planNodeIdGenerator)
+                    .values(split(left, 2))
+                    .mergeJoin(
+                        {"t0"},
+                        {"u0"},
+                        PlanBuilder(planNodeIdGenerator)
+                            .values(split(right, 2))
+                            .planNode(),
+                        filter,
+                        outputLayout,
+                        joinType)
+                    .planNode();
+    AssertQueryBuilder(plan, duckDbQueryRunner_)
+        .config(core::QueryConfig::kPreferredOutputBatchRows, "2")
+        .config(core::QueryConfig::kMaxOutputBatchRows, "2")
+        .assertResults(sql);
+  };
+
+  // Left Semi join With filter
+  testSemiJoin(
+      "t1 > u1",
+      "SELECT t0, t1 FROM t where t0 IN (SELECT u0 from u where t1 > u1)",
+      {"t0", "t1"},
+      core::JoinType::kLeftSemiFilter);
+
+  // Right Semi join With filter
+  testSemiJoin(
+      "u1 > t1",
+      "SELECT u0, u1 FROM u where u0 IN (SELECT t0 from t where u1 > t1)",
+      {"u0", "u1"},
+      core::JoinType::kRightSemiFilter);
+}
+
+TEST_F(MergeJoinTest, semiJoinWithOneMatchedRowWithFilter) {
+  auto left = makeRowVector(
+      {"t0", "t1"},
+      {makeNullableFlatVector<int64_t>({2, 2}),
+       makeNullableFlatVector<int64_t>({3, 5})});
+
+  auto right = makeRowVector(
+      {"u0", "u1"},
+      {makeNullableFlatVector<int64_t>({2, 2}),
+       makeNullableFlatVector<int64_t>({1, 4})});
+
+  createDuckDbTable("t", {left});
+  createDuckDbTable("u", {right});
+
+  auto testSemiJoin = [&](const std::string& filter,
+                          const std::string& sql,
+                          const std::vector<std::string>& outputLayout,
+                          core::JoinType joinType) {
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    auto plan = PlanBuilder(planNodeIdGenerator)
+                    .values(split(left, 2))
+                    .mergeJoin(
+                        {"t0"},
+                        {"u0"},
+                        PlanBuilder(planNodeIdGenerator)
+                            .values(split(right, 2))
+                            .planNode(),
+                        filter,
+                        outputLayout,
+                        joinType)
+                    .planNode();
+    AssertQueryBuilder(plan, duckDbQueryRunner_)
+        .config(core::QueryConfig::kPreferredOutputBatchRows, "2")
+        .config(core::QueryConfig::kMaxOutputBatchRows, "2")
+        .assertResults(sql);
+  };
+
+  // Left Semi join With filter
+  testSemiJoin(
+      "t1 > u1",
+      "SELECT t0, t1 FROM t where t0 IN (SELECT u0 from u where t1 > u1)",
+      {"t0", "t1"},
+      core::JoinType::kLeftSemiFilter);
+
+  // Right Semi join With filter
+  testSemiJoin(
+      "u1 > t1",
+      "SELECT u0, u1 FROM u where u0 IN (SELECT t0 from t where u1 > t1)",
+      {"u0", "u1"},
+      core::JoinType::kRightSemiFilter);
 }
 
 TEST_F(MergeJoinTest, rightJoin) {
@@ -1810,4 +1914,66 @@ TEST_F(MergeJoinTest, barrier) {
       ASSERT_EQ(task->taskStats().numFinishedSplits, hasBarrier ? 2 : 1);
     }
   }
+}
+
+TEST_F(MergeJoinTest, antiJoinWithFilterWithMultiMatchedRows) {
+  auto left = makeRowVector({"t0"}, {makeNullableFlatVector<int64_t>({1, 2})});
+
+  auto right =
+      makeRowVector({"u0"}, {makeNullableFlatVector<int64_t>({1, 2, 2, 2})});
+
+  createDuckDbTable("t", {left});
+  createDuckDbTable("u", {right});
+
+  // Anti join.
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .values({left})
+          .mergeJoin(
+              {"t0"},
+              {"u0"},
+              PlanBuilder(planNodeIdGenerator).values({right}).planNode(),
+              "t0 > 2",
+              {"t0"},
+              core::JoinType::kAnti)
+          .planNode();
+
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .assertResults(
+          "SELECT t0 FROM t WHERE NOT exists (select 1 from u where t0 = u0 AND t.t0 > 2 ) ");
+}
+
+TEST_F(MergeJoinTest, antiJoinWithTwoJoinKeysInDifferentBatch) {
+  auto left = makeRowVector(
+      {"a", "b"},
+      {makeNullableFlatVector<int32_t>({1, 1, 1, 1}),
+       makeNullableFlatVector<double>({3.0, 3.0, 3.0, 3.0})});
+
+  auto right = makeRowVector(
+      {"c", "d"},
+      {makeNullableFlatVector<int32_t>({1, 1, 1}),
+       makeNullableFlatVector<double>({2.0, 2.0, 4.0})});
+
+  createDuckDbTable("t", {left});
+  createDuckDbTable("u", {right});
+
+  // Anti join.
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .values({split(left, 2)})
+                  .mergeJoin(
+                      {"a"},
+                      {"c"},
+                      PlanBuilder(planNodeIdGenerator)
+                          .values({split(right, 2)})
+                          .planNode(),
+                      "b < d",
+                      {"a", "b"},
+                      core::JoinType::kAnti)
+                  .planNode();
+
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .assertResults(
+          "SELECT * FROM t WHERE NOT exists (select * from u where t.a = u.c and t.b < u.d)");
 }

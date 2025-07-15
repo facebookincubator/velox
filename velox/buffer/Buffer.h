@@ -367,6 +367,7 @@ class AlignedBuffer : public Buffer {
     }
 
     void* memory = pool->allocate(preferredSize);
+    VELOX_CHECK_NOT_NULL(memory);
     auto* buffer = new (memory) ImplClass<T>(pool, preferredSize - kPaddedSize);
     // set size explicitly instead of setSize because `fillNewMemory` already
     // called the constructors
@@ -650,10 +651,12 @@ class NonPODAlignedBuffer : public Buffer {
     int oldNum = oldBytes / sizeof(T);
     int newNum = newBytes / sizeof(T);
     auto data = asMutable<T>();
-    for (int i = oldNum; i < newNum; ++i) {
-      if (initValue) {
+    if (initValue) {
+      for (int i = oldNum; i < newNum; ++i) {
         new (data + i) T(*initValue);
-      } else {
+      }
+    } else {
+      for (int i = oldNum; i < newNum; ++i) {
         new (data + i) T();
       }
     }
@@ -681,6 +684,13 @@ class BufferView : public Buffer {
     BufferView<Releaser>* view = new BufferView(data, size, releaser, podType);
     BufferPtr result(view);
     return result;
+  }
+
+  // Helper method to create a buffer view referencing another existing Buffer.
+  static BufferPtr
+  create(BufferPtr innerBuffer, Releaser releaser, bool podType = true) {
+    return create(
+        innerBuffer->as<uint8_t>(), innerBuffer->size(), releaser, podType);
   }
 
   ~BufferView() override {

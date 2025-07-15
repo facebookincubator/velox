@@ -49,6 +49,7 @@
 #include "velox/tool/trace/PartitionedOutputReplayer.h"
 #include "velox/tool/trace/TableScanReplayer.h"
 #include "velox/tool/trace/TableWriterReplayer.h"
+#include "velox/tool/trace/UnnestReplayer.h"
 #include "velox/type/Type.h"
 
 #ifdef VELOX_ENABLE_PARQUET
@@ -245,7 +246,6 @@ TraceReplayRunner::TraceReplayRunner()
 
 void TraceReplayRunner::init() {
   VELOX_USER_CHECK(!FLAGS_root_dir.empty(), "--root_dir must be provided");
-  VELOX_USER_CHECK(!FLAGS_query_id.empty(), "--query_id must be provided");
   VELOX_USER_CHECK(!FLAGS_node_id.empty(), "--node_id must be provided");
 
   if (!memory::MemoryManager::testInstance()) {
@@ -271,6 +271,7 @@ void TraceReplayRunner::init() {
 #endif
 
   core::PlanNode::registerSerDe();
+  velox::exec::trace::registerDummySourceSerDe();
   core::ITypedExpr::registerSerDe();
   common::Filter::registerSerDe();
   Type::registerSerDe();
@@ -287,6 +288,8 @@ void TraceReplayRunner::init() {
   if (!isRegisteredNamedVectorSerde(VectorSerde::Kind::kUnsafeRow)) {
     serializer::spark::UnsafeRowVectorSerde::registerNamedVectorSerde();
   }
+
+  connector::ConnectorTableHandle::registerSerDe();
   connector::hive::HiveTableHandle::registerSerDe();
   connector::hive::LocationHandle::registerSerDe();
   connector::hive::HiveColumnHandle::registerSerDe();
@@ -358,11 +361,13 @@ TraceReplayRunner::createReplayer() const {
   } else if (traceNodeName == "TableScan") {
     const auto connectorId =
         taskTraceMetadataReader_->connectorId(FLAGS_node_id);
+    VELOX_CHECK(connectorId.has_value());
+
     if (const auto& collectors = connector::getAllConnectors();
-        collectors.find(connectorId) == collectors.end()) {
+        collectors.find(connectorId.value()) == collectors.end()) {
       const auto hiveConnector =
           connector::getConnectorFactory("hive")->newConnector(
-              connectorId,
+              connectorId.value(),
               std::make_shared<config::ConfigBase>(
                   std::unordered_map<std::string, std::string>()),
               ioExecutor_.get());
@@ -399,6 +404,16 @@ TraceReplayRunner::createReplayer() const {
         cpuExecutor_.get());
   } else if (traceNodeName == "IndexLookupJoin") {
     replayer = std::make_unique<tool::trace::IndexLookupJoinReplayer>(
+        FLAGS_root_dir,
+        FLAGS_query_id,
+        FLAGS_task_id,
+        FLAGS_node_id,
+        traceNodeName,
+        FLAGS_driver_ids,
+        queryCapacityBytes,
+        cpuExecutor_.get());
+  } else if (traceNodeName == "Unnest") {
+    replayer = std::make_unique<tool::trace::UnnestReplayer>(
         FLAGS_root_dir,
         FLAGS_query_id,
         FLAGS_task_id,
