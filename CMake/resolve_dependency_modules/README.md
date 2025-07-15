@@ -40,7 +40,7 @@ by Velox. See details on bundling below.
 | libstemmer        | 2.2.0           | Yes      |
 | DuckDB (testing)  | 0.8.1           | Yes      |
 | cpr (testing)     | 1.10.15         | Yes      |
-| arrow             | 15.0.0          | Yes      |
+| arrow             | 20.0.0          | Yes      |
 | geos              | 3.10.7          | Yes      |
 | fast_float        | v8.0.2          | Yes      |
 | xxhash            | default         | No       |

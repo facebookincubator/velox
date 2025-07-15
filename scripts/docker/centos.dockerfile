@@ -19,11 +19,9 @@ COPY scripts/setup-helper-functions.sh /
 COPY scripts/setup-versions.sh /
 COPY scripts/setup-common.sh /
 COPY scripts/setup-centos9.sh /
-COPY CMake/resolve_dependency_modules/arrow/cmake-compatibility.patch /
 
 # Building libvelox.so requires folly and gflags to be built shared as well for now
-ENV VELOX_BUILD_SHARED=ON \
-    VELOX_ARROW_CMAKE_PATCH=/cmake-compatibility.patch
+ENV VELOX_BUILD_SHARED=ON
 
 # The removal of the build dir has to happen in the same layer as the build
 # to minimize the image size. gh & jq are required for CI
