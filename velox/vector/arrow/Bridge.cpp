@@ -906,8 +906,10 @@ void exportFlat(
     case TypeKind::REAL:
     case TypeKind::DOUBLE:
     case TypeKind::TIMESTAMP:
-    case TypeKind::UNKNOWN:
       exportValues(vec, rows, options, out, pool, holder);
+      break;
+    case TypeKind::UNKNOWN:
+      // Keep out.n_children = 0 for UNKNOWN type.
       break;
     case TypeKind::VARCHAR:
     case TypeKind::VARBINARY:
