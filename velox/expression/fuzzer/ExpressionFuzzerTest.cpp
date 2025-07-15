@@ -70,6 +70,7 @@ int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
 
   facebook::velox::functions::prestosql::registerAllScalarFunctions();
+  facebook::velox::functions::prestosql::registerInternalFunctions();
 
   // Calls common init functions in the necessary order, initializing
   // singletons, installing proper signal handlers for better debugging
@@ -364,6 +365,8 @@ int main(int argc, char** argv) {
                               // https://github.com/facebookincubator/velox/pull/13604
         // Not registered
         "array_sum_propagate_element_null",
+        "$internal$canonicalize",
+        "$internal$contains",
     });
 
     referenceQueryRunner = std::make_shared<PrestoQueryRunner>(
