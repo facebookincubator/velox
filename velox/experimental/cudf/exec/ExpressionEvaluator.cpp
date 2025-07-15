@@ -28,6 +28,7 @@
 #include <cudf/datetime.hpp>
 #include <cudf/lists/count_elements.hpp>
 #include <cudf/strings/attributes.hpp>
+#include <cudf/strings/case.hpp>
 #include <cudf/strings/contains.hpp>
 #include <cudf/strings/slice.hpp>
 #include <cudf/strings/split/split.hpp>
@@ -259,7 +260,8 @@ const std::unordered_set<std::string> supportedOps = {
     "substr",
     "like",
     "cardinality",
-    "split"};
+    "split",
+    "lower"};
 
 namespace detail {
 
@@ -557,6 +559,13 @@ cudf::ast::expression const& AstContext::pushExprToTree(
     auto const& colRef = addPrecomputeInstruction(fieldExpr->name(), "length");
 
     return tree.push(Operation{Op::CAST_TO_INT64, colRef});
+  } else if (name == "lower") {
+    VELOX_CHECK_EQ(len, 1);
+
+    auto fieldExpr =
+        std::dynamic_pointer_cast<FieldReference>(expr->inputs()[0]);
+    VELOX_CHECK_NOT_NULL(fieldExpr, "Expression is not a field");
+    return addPrecomputeInstruction(fieldExpr->name(), "lower");
   } else if (name == "substr") {
     // Extract the start and length parameters from the substr function call
     // and create a precomputed column with the substring operation.
@@ -664,6 +673,12 @@ void addPrecomputedColumns(
       input_table_columns.emplace_back(std::move(newColumn));
     } else if (ins_name == "length") {
       auto newColumn = cudf::strings::count_characters(
+          input_table_columns[dependent_column_index]->view(),
+          stream,
+          cudf::get_current_device_resource_ref());
+      input_table_columns.emplace_back(std::move(newColumn));
+    } else if (ins_name == "lower") {
+      auto newColumn = cudf::strings::to_lower(
           input_table_columns[dependent_column_index]->view(),
           stream,
           cudf::get_current_device_resource_ref());
