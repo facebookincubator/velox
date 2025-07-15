@@ -412,6 +412,39 @@ elements.</p>
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="ST_NumGeometries">
+<span class="sig-name descname"><span class="pre">ST_NumGeometries</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">output:</span> <span class="pre">integer</span></span></span><a class="headerlink" href="#ST_NumGeometries" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the number of geometries in the collection. If the geometry is a
+collection of geometries (e.g., GeometryCollection or Multi*),
+returns the number of geometries, for single geometries returns 1,
+for empty geometries returns 0. Note that empty geometries inside of a
+GeometryCollection will count as a geometry if and only if there is at
+least 1 non-empty geometry in the collection. e.g.
+<code class="docutils literal notranslate"><span class="pre">ST_NumGeometries(ST_GeometryFromText('GEOMETRYCOLLECTION(POINT</span> <span class="pre">EMPTY)'))</span></code>
+will evaluate to 0, but
+<code class="docutils literal notranslate"><span class="pre">ST_NumGeometries(ST_GeometryFromText('GEOMETRYCOLLECTION(POINT</span> <span class="pre">EMPTY,</span> <span class="pre">POINT</span> <span class="pre">(1</span> <span class="pre">2))'))</span></code>
+will evaluate to 1.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="ST_NumInteriorRing">
+<span class="sig-name descname"><span class="pre">ST_NumInteriorRing</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">output:</span> <span class="pre">integer</span></span></span><a class="headerlink" href="#ST_NumInteriorRing" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the cardinality of the collection of interior rings of a polygon.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="ST_ConvexHull">
+<span class="sig-name descname"><span class="pre">ST_ConvexHull</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">output:</span> <span class="pre">Geometry</span></span></span><a class="headerlink" href="#ST_ConvexHull" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the minimum convex geometry that encloses all input geometries.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="ST_Dimension">
+<span class="sig-name descname"><span class="pre">ST_Dimension</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">output:</span> <span class="pre">tinyint</span></span></span><a class="headerlink" href="#ST_Dimension" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the inherent dimension of this geometry object, which must be less than or equal to the coordinate dimension.</p>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="simplify_geometry">
 <span class="sig-name descname"><span class="pre">simplify_geometry</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">tolerance</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">double</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">output:</span> <span class="pre">Geometry</span></span></span><a class="headerlink" href="#simplify_geometry" title="Link to this definition">¶</a></dt>
 <dd><p>Returns a “simplified” version of the input geometry using the
@@ -571,6 +604,10 @@ specified.</p>
 <li><a class="reference internal" href="#ST_EndPoint"><code class="docutils literal notranslate"><span class="pre">ST_EndPoint()</span></code></a></li>
 <li><a class="reference internal" href="#ST_GeometryN"><code class="docutils literal notranslate"><span class="pre">ST_GeometryN()</span></code></a></li>
 <li><a class="reference internal" href="#ST_InteriorRingN"><code class="docutils literal notranslate"><span class="pre">ST_InteriorRingN()</span></code></a></li>
+<li><a class="reference internal" href="#ST_NumGeometries"><code class="docutils literal notranslate"><span class="pre">ST_NumGeometries()</span></code></a></li>
+<li><a class="reference internal" href="#ST_NumInteriorRing"><code class="docutils literal notranslate"><span class="pre">ST_NumInteriorRing()</span></code></a></li>
+<li><a class="reference internal" href="#ST_ConvexHull"><code class="docutils literal notranslate"><span class="pre">ST_ConvexHull()</span></code></a></li>
+<li><a class="reference internal" href="#ST_Dimension"><code class="docutils literal notranslate"><span class="pre">ST_Dimension()</span></code></a></li>
 <li><a class="reference internal" href="#simplify_geometry"><code class="docutils literal notranslate"><span class="pre">simplify_geometry()</span></code></a></li>
 </ul>
 </li>
