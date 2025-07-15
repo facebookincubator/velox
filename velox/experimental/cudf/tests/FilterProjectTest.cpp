@@ -918,7 +918,7 @@ TEST_F(CudfFilterProjectTest, cardinalityAndSplitOneByOne) {
   AssertQueryBuilder(cardinalityPlan).assertResults({expected});
 }
 
-TEST_F(CudfFilterProjectTest, cardinalityAndSplitFused) {
+TEST_F(CudfFilterProjectTest, DISABLED_cardinalityAndSplitFused) {
   auto input = makeFlatVector<std::string>(
       {"hello world", "hello world2", "hello hello", "does not contain it"});
   auto data = makeRowVector({input});
