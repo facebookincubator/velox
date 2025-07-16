@@ -57,6 +57,7 @@ VectorPtr newConstantFromString(
   if constexpr (std::is_same_v<T, int64_t> || std::is_same_v<T, int128_t>) {
     if (type->isDecimal()) {
       auto [precision, scale] = getDecimalPrecisionScale(*type);
+      T result;
       const auto status = DecimalUtil::castFromString<T>(
           StringView(value.value()), precision, scale, result);
       VELOX_USER_CHECK(status.ok(), status.message);
