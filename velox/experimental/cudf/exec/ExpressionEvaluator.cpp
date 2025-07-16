@@ -16,7 +16,6 @@
 #include "velox/experimental/cudf/exec/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 
-#include "cudf/column/column_factories.hpp"
 #include "velox/expression/ConstantExpr.h"
 #include "velox/expression/FieldReference.h"
 #include "velox/type/Type.h"
@@ -25,6 +24,7 @@
 #include "velox/vector/ConstantVector.h"
 #include "velox/vector/VectorTypeUtils.h"
 
+#include <cudf/column/column_factories.hpp>
 #include <cudf/datetime.hpp>
 #include <cudf/strings/attributes.hpp>
 #include <cudf/strings/contains.hpp>
