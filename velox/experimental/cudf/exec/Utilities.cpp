@@ -45,7 +45,7 @@ namespace {
 
 [[nodiscard]] auto makePoolMr(int percent) {
   return rmm::mr::make_owning_wrapper<rmm::mr::pool_memory_resource>(
-      makeCudaMr(), rmm::percent_of_free_device_memory(50));
+      makeCudaMr(), rmm::percent_of_free_device_memory(percent));
 }
 
 [[nodiscard]] auto makeAsyncMr(int percent) {
