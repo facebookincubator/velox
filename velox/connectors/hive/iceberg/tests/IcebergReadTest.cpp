@@ -221,8 +221,8 @@ class HiveIcebergTest : public HiveConnectorTestBase {
       splits.insert(splits.end(), icebergSplits.begin(), icebergSplits.end());
     }
 
-    std::string duckdbSql =
-        getDuckDBQuery<TypeKind::BIGINT>(rowGroupSizesForFiles, deleteFilesForBaseDatafiles);
+    std::string duckdbSql = getDuckDBQuery<TypeKind::BIGINT>(
+        rowGroupSizesForFiles, deleteFilesForBaseDatafiles);
     auto plan = tableScanNode(rowType_);
     auto task = HiveConnectorTestBase::assertQuery(
         plan, splits, duckdbSql, numPrefetchSplits);
@@ -505,7 +505,7 @@ class HiveIcebergTest : public HiveConnectorTestBase {
     return deleteFilePaths;
   }
 
-  template<typename T>
+  template <typename T>
   std::vector<RowVectorPtr> makeVectors(
       std::vector<T> vectorSizes,
       T& startingValue) {
@@ -721,9 +721,9 @@ class HiveIcebergTest : public HiveConnectorTestBase {
   }
 
   template <TypeKind KIND>
-    std::string makeTypedPredicate(
-        const std::string& columnName,
-        const typename TypeTraits<KIND>::NativeType& value) {
+  std::string makeTypedPredicate(
+      const std::string& columnName,
+      const typename TypeTraits<KIND>::NativeType& value) {
     if constexpr (KIND == TypeKind::VARCHAR) {
       return fmt::format("({} <> '{}')", columnName, value);
     } else if constexpr (KIND == TypeKind::VARBINARY) {
@@ -830,7 +830,7 @@ class HiveIcebergTest : public HiveConnectorTestBase {
     std::vector<VectorPtr> vectors;
     for (int i = 0; i < equalityDeleteVector.size(); i++) {
       names.push_back(fmt::format("c{}", i));
-        vectors.push_back(makeFlatVector<T>(equalityDeleteVector[i]));
+      vectors.push_back(makeFlatVector<T>(equalityDeleteVector[i]));
     }
 
     RowVectorPtr const deleteFileVectors = makeRowVector(names, vectors);
@@ -842,11 +842,11 @@ class HiveIcebergTest : public HiveConnectorTestBase {
   }
 
   template <TypeKind KIND>
-      std::vector<std::shared_ptr<TempFilePath>> writeDataFiles(
-          uint64_t numRows,
-          int32_t numColumns = 1,
-          int32_t splitCount = 1,
-          std::vector<RowVectorPtr> dataVectors = {}) {
+  std::vector<std::shared_ptr<TempFilePath>> writeDataFiles(
+      uint64_t numRows,
+      int32_t numColumns = 1,
+      int32_t splitCount = 1,
+      std::vector<RowVectorPtr> dataVectors = {}) {
     if (dataVectors.empty()) {
       dataVectors = makeVectors<KIND>(splitCount, numRows, numColumns);
     }
@@ -1267,36 +1267,43 @@ TEST_F(HiveIcebergTest, equalityDeletesSingleFileColumn1) {
 
   // Delete row 0, 1, 2, 3 from the first batch out of two.
   equalityDeleteVectorMap.insert({0, {{0, 1, 2, 3}}});
-  assertEqualityDeletes<TypeKind::BIGINT>(equalityDeleteVectorMap, equalityFieldIdsMap);
+  assertEqualityDeletes<TypeKind::BIGINT>(
+      equalityDeleteVectorMap, equalityFieldIdsMap);
 
   // Delete the first and last row in each batch (10000 rows per batch)
   equalityDeleteVectorMap.clear();
   equalityDeleteVectorMap.insert({0, {{0, 9999, 10000, 19999}}});
-  assertEqualityDeletes<TypeKind::BIGINT>(equalityDeleteVectorMap, equalityFieldIdsMap);;
+  assertEqualityDeletes<TypeKind::BIGINT>(
+      equalityDeleteVectorMap, equalityFieldIdsMap);
 
   // Delete several rows in the second batch (10000 rows per batch)
   equalityDeleteVectorMap.clear();
   equalityDeleteVectorMap.insert({0, {{10000, 10002, 19999}}});
-  assertEqualityDeletes<TypeKind::BIGINT>(equalityDeleteVectorMap, equalityFieldIdsMap);;
+  assertEqualityDeletes<TypeKind::BIGINT>(
+      equalityDeleteVectorMap, equalityFieldIdsMap);
 
   // Delete random rows
   equalityDeleteVectorMap.clear();
   equalityDeleteVectorMap.insert({0, {makeRandomDeleteValues(rowCount)}});
-  assertEqualityDeletes<TypeKind::BIGINT>(equalityDeleteVectorMap, equalityFieldIdsMap);;
+  assertEqualityDeletes<TypeKind::BIGINT>(
+      equalityDeleteVectorMap, equalityFieldIdsMap);
 
   // Delete 0 rows
   equalityDeleteVectorMap.clear();
   equalityDeleteVectorMap.insert({0, {{}}});
-  assertEqualityDeletes<TypeKind::BIGINT>(equalityDeleteVectorMap, equalityFieldIdsMap);;
+  assertEqualityDeletes<TypeKind::BIGINT>(
+      equalityDeleteVectorMap, equalityFieldIdsMap);
 
   // Delete all rows
   equalityDeleteVectorMap.insert({0, {makeSequenceValues<int64_t>(rowCount)}});
-  assertEqualityDeletes<TypeKind::BIGINT>(equalityDeleteVectorMap, equalityFieldIdsMap);;
+  assertEqualityDeletes<TypeKind::BIGINT>(
+      equalityDeleteVectorMap, equalityFieldIdsMap);
 
   // Delete rows that don't exist
   equalityDeleteVectorMap.clear();
   equalityDeleteVectorMap.insert({0, {{20000, 29999}}});
-  assertEqualityDeletes<TypeKind::BIGINT>(equalityDeleteVectorMap, equalityFieldIdsMap);;
+  assertEqualityDeletes<TypeKind::BIGINT>(
+      equalityDeleteVectorMap, equalityFieldIdsMap);
 }
 
 // Delete values from the second column in a 2-column file
@@ -1319,33 +1326,40 @@ TEST_F(HiveIcebergTest, equalityDeletesSingleFileColumn2) {
 
   // Delete values 0, 1, 2, 3 from the second column
   equalityDeleteVectorMap.insert({0, {{0, 1, 2, 3}}});
-  assertEqualityDeletes<TypeKind::BIGINT>(equalityDeleteVectorMap, equalityFieldIdsMap);;
+  assertEqualityDeletes<TypeKind::BIGINT>(
+      equalityDeleteVectorMap, equalityFieldIdsMap);
 
   // Delete the smallest value 0 and the largest value 9999 from the second
   // column, which has the range [0, 9999]
   equalityDeleteVectorMap.clear();
   equalityDeleteVectorMap.insert({0, {{0, 9999}}});
-  assertEqualityDeletes<TypeKind::BIGINT>(equalityDeleteVectorMap, equalityFieldIdsMap);;
+  assertEqualityDeletes<TypeKind::BIGINT>(
+      equalityDeleteVectorMap, equalityFieldIdsMap);
 
   // Delete non-existent values from the second column
   equalityDeleteVectorMap.clear();
   equalityDeleteVectorMap.insert({0, {{10000, 10002, 19999}}});
-  assertEqualityDeletes<TypeKind::BIGINT>(equalityDeleteVectorMap, equalityFieldIdsMap);;
+  assertEqualityDeletes<TypeKind::BIGINT>(
+      equalityDeleteVectorMap, equalityFieldIdsMap);
 
   // Delete random rows from the second column
   equalityDeleteVectorMap.clear();
   equalityDeleteVectorMap.insert({0, {makeSequenceValues<int64_t>(rowCount)}});
-  assertEqualityDeletes<TypeKind::BIGINT>(equalityDeleteVectorMap, equalityFieldIdsMap);;
+  assertEqualityDeletes<TypeKind::BIGINT>(
+      equalityDeleteVectorMap, equalityFieldIdsMap);
 
   //     Delete 0 values
   equalityDeleteVectorMap.clear();
   equalityDeleteVectorMap.insert({0, {{}}});
-  assertEqualityDeletes<TypeKind::BIGINT>(equalityDeleteVectorMap, equalityFieldIdsMap);;
+  assertEqualityDeletes<TypeKind::BIGINT>(
+      equalityDeleteVectorMap, equalityFieldIdsMap);
 
   // Delete all values
   equalityDeleteVectorMap.clear();
-  equalityDeleteVectorMap.insert({0, {makeSequenceValues<int64_t>(rowCount / 2)}});
-  assertEqualityDeletes<TypeKind::BIGINT>(equalityDeleteVectorMap, equalityFieldIdsMap);;
+  equalityDeleteVectorMap.insert(
+      {0, {makeSequenceValues<int64_t>(rowCount / 2)}});
+  assertEqualityDeletes<TypeKind::BIGINT>(
+      equalityDeleteVectorMap, equalityFieldIdsMap);
 }
 
 // Delete values from 2 columns with the following data:
@@ -1368,32 +1382,39 @@ TEST_F(HiveIcebergTest, equalityDeletesSingleFileMultipleColumns) {
 
   // Delete rows 0, 1
   equalityDeleteVectorMap.insert({0, {{0, 1}, {0, 0}}});
-  assertEqualityDeletes<TypeKind::BIGINT>(equalityDeleteVectorMap, equalityFieldIdsMap);;
+  assertEqualityDeletes<TypeKind::BIGINT>(
+      equalityDeleteVectorMap, equalityFieldIdsMap);
 
   // Delete rows 0, 2, 4, 6
   equalityDeleteVectorMap.clear();
   equalityDeleteVectorMap.insert({0, {{0, 2, 4, 6}, {0, 1, 2, 3}}});
-  assertEqualityDeletes<TypeKind::BIGINT>(equalityDeleteVectorMap, equalityFieldIdsMap);;
+  assertEqualityDeletes<TypeKind::BIGINT>(
+      equalityDeleteVectorMap, equalityFieldIdsMap);
 
   //   Delete the last row
   equalityDeleteVectorMap.clear();
   equalityDeleteVectorMap.insert({0, {{19999}, {9999}}});
-  assertEqualityDeletes<TypeKind::BIGINT>(equalityDeleteVectorMap, equalityFieldIdsMap);;
+  assertEqualityDeletes<TypeKind::BIGINT>(
+      equalityDeleteVectorMap, equalityFieldIdsMap);
 
   // Delete non-existent values
   equalityDeleteVectorMap.clear();
   equalityDeleteVectorMap.insert({0, {{20000, 30000}, {10000, 1500}}});
-  assertEqualityDeletes<TypeKind::BIGINT>(equalityDeleteVectorMap, equalityFieldIdsMap);
+  assertEqualityDeletes<TypeKind::BIGINT>(
+      equalityDeleteVectorMap, equalityFieldIdsMap);
 
   // Delete 0 values
   equalityDeleteVectorMap.clear();
   equalityDeleteVectorMap.insert({0, {{}, {}}});
-  assertEqualityDeletes<TypeKind::BIGINT>(equalityDeleteVectorMap, equalityFieldIdsMap);;
+  assertEqualityDeletes<TypeKind::BIGINT>(
+      equalityDeleteVectorMap, equalityFieldIdsMap);
 
   // Delete all values
   equalityDeleteVectorMap.clear();
   equalityDeleteVectorMap.insert(
-      {0, {makeSequenceValues<int64_t>(rowCount), makeSequenceValues<int64_t>(rowCount, 2)}});
+      {0,
+       {makeSequenceValues<int64_t>(rowCount),
+        makeSequenceValues<int64_t>(rowCount, 2)}});
   assertEqualityDeletes<TypeKind::BIGINT>(
       equalityDeleteVectorMap,
       equalityFieldIdsMap,
@@ -1410,17 +1431,20 @@ TEST_F(HiveIcebergTest, equalityDeletesMultipleFiles) {
 
   // Delete rows {0, 1} from c0, {2, 3} from c1, with two equality delete files
   equalityDeleteVectorMap.insert({{0, {{0, 1}}}, {1, {{2, 3}}}});
-  assertEqualityDeletes<TypeKind::BIGINT>(equalityDeleteVectorMap, equalityFieldIdsMap);;
+  assertEqualityDeletes<TypeKind::BIGINT>(
+      equalityDeleteVectorMap, equalityFieldIdsMap);
 
   // Delete using 3 equality delete files
   equalityFieldIdsMap.insert({{2, {3}}});
   equalityDeleteVectorMap.insert({{0, {{0, 1}}}, {1, {{2, 3}}}, {2, {{4, 5}}}});
-  assertEqualityDeletes<TypeKind::BIGINT>(equalityDeleteVectorMap, equalityFieldIdsMap);;
+  assertEqualityDeletes<TypeKind::BIGINT>(
+      equalityDeleteVectorMap, equalityFieldIdsMap);
 
   // Delete 0 values
   equalityDeleteVectorMap.clear();
   equalityDeleteVectorMap.insert({{0, {{}}}, {1, {{}}}, {2, {{}}}});
-  assertEqualityDeletes<TypeKind::BIGINT>(equalityDeleteVectorMap, equalityFieldIdsMap);;
+  assertEqualityDeletes<TypeKind::BIGINT>(
+      equalityDeleteVectorMap, equalityFieldIdsMap);
 
   // Delete all values
   equalityDeleteVectorMap.clear();
@@ -1445,7 +1469,8 @@ TEST_F(HiveIcebergTest, equalityDeletesFloatAndDoubleThrowsError) {
     equalityFieldIdsMap.insert({{0, {1}}, {1, {2}}});
     equalityDeleteVectorMap.insert({{0, {{0, 1}}}, {1, {{2, 3}}}});
     VELOX_ASSERT_THROW(
-        assertEqualityDeletes<TypeKind::REAL>(equalityDeleteVectorMap, equalityFieldIdsMap),
+        assertEqualityDeletes<TypeKind::REAL>(
+            equalityDeleteVectorMap, equalityFieldIdsMap),
         "Iceberg does not allow DOUBLE or REAL columns as the equality delete columns: c1 : REAL");
   }
 
@@ -1457,7 +1482,8 @@ TEST_F(HiveIcebergTest, equalityDeletesFloatAndDoubleThrowsError) {
     equalityFieldIdsMap.insert({{0, {1}}, {1, {2}}});
     equalityDeleteVectorMap.insert({{0, {{0, 1}}}, {1, {{2, 3}}}});
     VELOX_ASSERT_THROW(
-        assertEqualityDeletes<TypeKind::DOUBLE>(equalityDeleteVectorMap, equalityFieldIdsMap),
+        assertEqualityDeletes<TypeKind::DOUBLE>(
+            equalityDeleteVectorMap, equalityFieldIdsMap),
         "Iceberg does not allow DOUBLE or REAL columns as the equality delete columns: c1 : DOUBLE");
   }
 }
@@ -1476,7 +1502,8 @@ TEST_F(HiveIcebergTest, TestSubFieldEqualityDelete) {
             makeFlatVector<int64_t>(20, [](auto row) { return row + 1; }),
             makeFlatVector<int64_t>(20, [](auto row) { return row + 1; })})})};
   int32_t numDataColumns = 1;
-  dataFilePath = writeDataFiles<TypeKind::BIGINT>(rowCount, numDataColumns, 1, dataVectors)[0];
+  dataFilePath = writeDataFiles<TypeKind::BIGINT>(
+      rowCount, numDataColumns, 1, dataVectors)[0];
 
   // Write the delete file. Equality delete field is c_row.c1
   std::vector<IcebergDeleteFile> deleteFiles;
@@ -1711,8 +1738,7 @@ TEST_F(HiveIcebergTest, equalityDeletesVarbinarySingleFileMultipleColumns) {
   std::vector<RowVectorPtr> dataVectors = {makeRowVector(
       {"c0", "c1"},
       {makeFlatVector<StringView>({"\x01\x02", "\x03\x04", "\x09\x0A"}),
-       makeFlatVector<StringView>(
-           {"\x05\x06", "\x07\x08", "\x0B\x0C"})})};
+       makeFlatVector<StringView>({"\x05\x06", "\x07\x08", "\x0B\x0C"})})};
   assertEqualityDeletes<TypeKind::VARBINARY>(
       equalityDeleteVectorMap,
       equalityFieldIdsMap,
@@ -1930,7 +1956,8 @@ TEST_F(HiveIcebergTest, equalityDeletesLongDecimal) {
 // // Single column parameterized test class
 // class HiveIcebergSingleColumnEqualityDeletesTest
 //     : public HiveIcebergTest,
-//       public testing::WithParamInterface<std::tuple<TestScenario, TypeKind>> {
+//       public testing::WithParamInterface<std::tuple<TestScenario, TypeKind>>
+//       {
 //  public:
 //   void SetUp() override {
 //     HiveIcebergTest::SetUp();
@@ -1997,7 +2024,8 @@ TEST_F(HiveIcebergTest, equalityDeletesLongDecimal) {
 //         break;
 //     }
 //
-//     executeSingleColumnTest<T>(fieldId, deleteValues, dataValues, expectedSql);
+//     executeSingleColumnTest<T>(fieldId, deleteValues, dataValues,
+//     expectedSql);
 //   }
 //
 //   void testVarbinaryEqualityDeletes(
@@ -2129,7 +2157,8 @@ TEST_F(HiveIcebergTest, equalityDeletesLongDecimal) {
 //         makeRowVector({"c0"}, {makeFlatVector<T>(dataValues)})};
 //
 //     assertEqualityDeletes(
-//         equalityDeleteVectorMap, equalityFieldIdsMap, expectedSql, dataVectors);
+//         equalityDeleteVectorMap, equalityFieldIdsMap, expectedSql,
+//         dataVectors);
 //   }
 //
 //   void executeVarbinaryTest(
@@ -2151,7 +2180,8 @@ TEST_F(HiveIcebergTest, equalityDeletesLongDecimal) {
 //         })})};
 //
 //     assertEqualityDeletes(
-//         equalityDeleteVectorMap, equalityFieldIdsMap, expectedSql, dataVectors);
+//         equalityDeleteVectorMap, equalityFieldIdsMap, expectedSql,
+//         dataVectors);
 //   }
 // };
 //
@@ -2278,7 +2308,8 @@ TEST_F(HiveIcebergTest, equalityDeletesLongDecimal) {
 //         {"c0"}, {makeFlatVector<int64_t>(dataValues, decimalType)})};
 //
 //     assertEqualityDeletes(
-//         equalityDeleteVectorMap, equalityFieldIdsMap, expectedSql, dataVectors);
+//         equalityDeleteVectorMap, equalityFieldIdsMap, expectedSql,
+//         dataVectors);
 //   }
 // };
 //
