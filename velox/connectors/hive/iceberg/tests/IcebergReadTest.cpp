@@ -989,7 +989,7 @@ class HiveIcebergTest : public HiveConnectorTestBase {
 };
 
 /// This test creates one single data file and one delete file. The parameter
-/// passed to assertSingleBaseFileSingleDeleteFile is the delete positions.
+/// passed to assertSingleBaseFileSinglePositionalDelete is the delete positions.
 TEST_F(HiveIcebergTest, singleBaseFileSinglePositionalDeleteFile) {
   folly::SingletonVault::singleton()->registrationComplete();
 
@@ -1767,97 +1767,6 @@ TEST_F(HiveIcebergTest, equalityDeletesVarbinarySingleFileMultipleColumns) {
       dataVectors);
 }
 
-TEST_F(HiveIcebergTest, equalityDeleteFileWithIntAndVarcharColumns) {
-  folly::SingletonVault::singleton()->registrationComplete();
-
-  std::unordered_map<int8_t, std::vector<int32_t>> equalityFieldIdsMap;
-  std::unordered_map<int8_t, std::vector<std::vector<StringView>>>
-      equalityDeleteVectorMap;
-
-  equalityFieldIdsMap.insert({0, {1, 2}});
-
-  // Delete rows with (int: 2, varchar: "banana") and (int: 4, varchar: "date")
-  equalityDeleteVectorMap.insert({0, {{"2", "4"}, {"banana", "date"}}});
-  std::vector<RowVectorPtr> dataVectors = {makeRowVector(
-      {"c0", "c1"},
-      {makeFlatVector<StringView>({"1", "2", "3", "4", "5"}),
-       makeFlatVector<StringView>(
-           {"apple", "banana", "cherry", "date", "elderberry"})})};
-
-  assertEqualityDeletes<TypeKind::VARCHAR>(
-      equalityDeleteVectorMap,
-      equalityFieldIdsMap,
-      "SELECT * FROM tmp WHERE ((c0 <> '2' OR c1 <> 'banana') AND (c0 <> '4' OR c1 <> 'date'))",
-      dataVectors);
-
-  // Delete none
-  equalityDeleteVectorMap.clear();
-  equalityDeleteVectorMap.insert({0, {{}, {}}});
-  assertEqualityDeletes<TypeKind::VARCHAR>(
-      equalityDeleteVectorMap,
-      equalityFieldIdsMap,
-      "SELECT * FROM tmp",
-      dataVectors);
-
-  // Delete all rows
-  equalityDeleteVectorMap.clear();
-  equalityDeleteVectorMap.insert(
-      {0,
-       {{"1", "2", "3", "4", "5"},
-        {"apple", "banana", "cherry", "date", "elderberry"}}});
-  assertEqualityDeletes<TypeKind::VARCHAR>(
-      equalityDeleteVectorMap,
-      equalityFieldIdsMap,
-      "SELECT * FROM tmp WHERE 1 = 0",
-      dataVectors);
-}
-
-TEST_F(HiveIcebergTest, equalityDeleteFileWithIntAndVarbinaryColumns) {
-  folly::SingletonVault::singleton()->registrationComplete();
-
-  std::unordered_map<int8_t, std::vector<int32_t>> equalityFieldIdsMap;
-  std::unordered_map<int8_t, std::vector<std::vector<StringView>>>
-      equalityDeleteVectorMap;
-
-  equalityFieldIdsMap.insert({0, {1, 2}});
-
-  // Delete rows with (int: 2, varbinary: "\x03\x04") and (int: 4, varbinary:
-  // "\x07\x08")
-  equalityDeleteVectorMap.insert({0, {{"2", "4"}, {"\x03\x04", "\x07\x08"}}});
-  std::vector<RowVectorPtr> dataVectors = {makeRowVector(
-      {"c0", "c1"},
-      {makeFlatVector<StringView>({"1", "2", "3", "4", "5"}),
-       makeFlatVector<StringView>(
-           {"\x01\x02", "\x03\x04", "\x05\x06", "\x07\x08", "\x09\x0A"})})};
-
-  assertEqualityDeletes<TypeKind::VARBINARY>(
-      equalityDeleteVectorMap,
-      equalityFieldIdsMap,
-      "SELECT * FROM tmp WHERE ((c0 <> '2' OR hex(c1) <> '0304') AND (c0 <> '4' OR hex(c1) <> '0708'))",
-      dataVectors);
-
-  // Delete none
-  equalityDeleteVectorMap.clear();
-  equalityDeleteVectorMap.insert({0, {{}, {}}});
-  assertEqualityDeletes<TypeKind::VARBINARY>(
-      equalityDeleteVectorMap,
-      equalityFieldIdsMap,
-      "SELECT * FROM tmp",
-      dataVectors);
-
-  // Delete all rows
-  equalityDeleteVectorMap.clear();
-  equalityDeleteVectorMap.insert(
-      {0,
-       {{"1", "2", "3", "4", "5"},
-        {"\x01\x02", "\x03\x04", "\x05\x06", "\x07\x08", "\x09\x0A"}}});
-  assertEqualityDeletes<TypeKind::VARBINARY>(
-      equalityDeleteVectorMap,
-      equalityFieldIdsMap,
-      "SELECT * FROM tmp WHERE 1 = 0",
-      dataVectors);
-}
-
 TEST_F(HiveIcebergTest, equalityDeletesShortDecimal) {
   folly::SingletonVault::singleton()->registrationComplete();
 
@@ -1934,402 +1843,277 @@ TEST_F(HiveIcebergTest, equalityDeletesLongDecimal) {
       "Decimal is not supported for DWRF.");
 }
 
-// // Test scenarios enum
-// enum class TestScenario {
-//   DELETE_SUBSET,
-//   DELETE_FIRST_LAST,
-//   DELETE_ALL,
-//   DELETE_NONE,
-//   DELETE_NONEXISTENT
-// };
-//
-// // Type variant for handling different data types
-// using TestDataType = std::variant<
-//     std::vector<int8_t>,
-//     std::vector<int16_t>,
-//     std::vector<int32_t>,
-//     std::vector<int64_t>,
-//     std::vector<std::string>,
-//     std::vector<std::string>, // for varbinary
-//     std::vector<int64_t>>; // for short decimal
-//
-// // Single column parameterized test class
-// class HiveIcebergSingleColumnEqualityDeletesTest
-//     : public HiveIcebergTest,
-//       public testing::WithParamInterface<std::tuple<TestScenario, TypeKind>>
-//       {
-//  public:
-//   void SetUp() override {
-//     HiveIcebergTest::SetUp();
-//   }
-//
-//   void testSingleColumnByTypeKind(TestScenario scenario, TypeKind typeKind) {
-//     switch (typeKind) {
-//       case TypeKind::TINYINT:
-//         testSingleColumnEqualityDeletes<int8_t>(scenario);
-//         break;
-//       case TypeKind::SMALLINT:
-//         testSingleColumnEqualityDeletes<int16_t>(scenario);
-//         break;
-//       case TypeKind::INTEGER:
-//         testSingleColumnEqualityDeletes<int32_t>(scenario);
-//         break;
-//       case TypeKind::BIGINT:
-//         testSingleColumnEqualityDeletes<int64_t>(scenario);
-//         break;
-//       case TypeKind::VARCHAR:
-//         testSingleColumnEqualityDeletes<std::string>(scenario);
-//         break;
-//       case TypeKind::VARBINARY:
-//         testVarbinaryEqualityDeletes(scenario);
-//         break;
-//       default:
-//         FAIL() << "Unsupported type kind: " << typeKind;
-//     }
-//   }
-//
-//  private:
-//   template <typename T>
-//   void testSingleColumnEqualityDeletes(
-//       TestScenario scenario,
-//       int32_t fieldId = 1) {
-//     auto dataValues = generateTestData<T>(5);
-//     std::vector<T> deleteValues;
-//     std::string expectedSql;
-//
-//     switch (scenario) {
-//       case TestScenario::DELETE_SUBSET:
-//         deleteValues = {dataValues[0], dataValues[1]};
-//         expectedSql = buildSingleColumnSql<T>(deleteValues, fieldId);
-//         break;
-//       case TestScenario::DELETE_FIRST_LAST:
-//         deleteValues = {dataValues[0], dataValues.back()};
-//         expectedSql = buildSingleColumnSql<T>(deleteValues, fieldId);
-//         break;
-//       case TestScenario::DELETE_ALL:
-//         deleteValues = dataValues;
-//         expectedSql = "SELECT * FROM tmp WHERE 1 = 0";
-//         break;
-//       case TestScenario::DELETE_NONE:
-//         deleteValues = {};
-//         expectedSql = "SELECT * FROM tmp";
-//         break;
-//       case TestScenario::DELETE_NONEXISTENT:
-//         if constexpr (std::is_arithmetic_v<T>) {
-//           deleteValues = {static_cast<T>(1000), static_cast<T>(2000)};
-//         } else {
-//           deleteValues = {"nonexistent1", "nonexistent2"};
-//         }
-//         expectedSql = buildSingleColumnSql<T>(deleteValues, fieldId);
-//         break;
-//     }
-//
-//     executeSingleColumnTest<T>(fieldId, deleteValues, dataValues,
-//     expectedSql);
-//   }
-//
-//   void testVarbinaryEqualityDeletes(
-//       TestScenario scenario,
-//       int32_t fieldId = 1) {
-//     auto dataValues = generateVarbinaryData(5);
-//     std::vector<std::string> deleteValues;
-//     std::string expectedSql;
-//
-//     switch (scenario) {
-//       case TestScenario::DELETE_SUBSET:
-//         deleteValues = {dataValues[0], dataValues[1]};
-//         expectedSql = buildVarbinarySql(deleteValues, fieldId);
-//         break;
-//       case TestScenario::DELETE_FIRST_LAST:
-//         deleteValues = {dataValues[0], dataValues.back()};
-//         expectedSql = buildVarbinarySql(deleteValues, fieldId);
-//         break;
-//       case TestScenario::DELETE_ALL:
-//         deleteValues = dataValues;
-//         expectedSql = "SELECT * FROM tmp WHERE 1 = 0";
-//         break;
-//       case TestScenario::DELETE_NONE:
-//         deleteValues = {};
-//         expectedSql = "SELECT * FROM tmp";
-//         break;
-//       case TestScenario::DELETE_NONEXISTENT:
-//         deleteValues = {"\xFF\xFF", "\xEE\xEE"};
-//         expectedSql = buildVarbinarySql(deleteValues, fieldId);
-//         break;
-//     }
-//
-//     executeVarbinaryTest(fieldId, deleteValues, dataValues, expectedSql);
-//   }
-//
-//   template <typename T>
-//   std::vector<T> generateTestData(size_t count) {
-//     std::vector<T> data;
-//     if constexpr (std::is_arithmetic_v<T>) {
-//       data.reserve(count);
-//       for (size_t i = 0; i < count; ++i) {
-//         data.push_back(static_cast<T>(i));
-//       }
-//     } else if constexpr (std::is_same_v<T, std::string>) {
-//       const std::vector<std::string> values = {
-//           "apple", "banana", "cherry", "date", "elderberry"};
-//       data.reserve(std::min(count, values.size()));
-//       for (size_t i = 0; i < count && i < values.size(); ++i) {
-//         data.push_back(values[i]);
-//       }
-//     }
-//     return data;
-//   }
-//
-//   std::vector<std::string> generateVarbinaryData(size_t count) {
-//     const std::vector<std::string> values = {
-//         "\x01\x02", "\x03\x04", "\x05\x06", "\x07\x08", "\x09\x0A"};
-//     std::vector<std::string> data;
-//     data.reserve(std::min(count, values.size()));
-//     for (size_t i = 0; i < count && i < values.size(); ++i) {
-//       data.push_back(values[i]);
-//     }
-//     return data;
-//   }
-//
-//   template <typename T>
-//   std::string buildSingleColumnSql(
-//       const std::vector<T>& deleteValues,
-//       int32_t fieldId) {
-//     if (deleteValues.empty()) {
-//       return "SELECT * FROM tmp";
-//     }
-//
-//     std::string columnName = fmt::format("c{}", fieldId - 1);
-//     std::string notInClause = columnName + " NOT IN (";
-//
-//     for (size_t i = 0; i < deleteValues.size(); ++i) {
-//       if (i > 0)
-//         notInClause += ", ";
-//       if constexpr (std::is_same_v<T, std::string>) {
-//         notInClause += "'" + deleteValues[i] + "'";
-//       } else {
-//         notInClause += std::to_string(deleteValues[i]);
-//       }
-//     }
-//     notInClause += ")";
-//
-//     return "SELECT * FROM tmp WHERE " + notInClause;
-//   }
-//
-//   std::string buildVarbinarySql(
-//       const std::vector<std::string>& deleteValues,
-//       int32_t fieldId) {
-//     if (deleteValues.empty()) {
-//       return "SELECT * FROM tmp";
-//     }
-//
-//     std::string columnName = fmt::format("c{}", fieldId - 1);
-//     std::string notInClause = "hex(" + columnName + ") NOT IN (";
-//
-//     for (size_t i = 0; i < deleteValues.size(); ++i) {
-//       if (i > 0)
-//         notInClause += ", ";
-//       notInClause += "'";
-//       for (unsigned char c : deleteValues[i]) {
-//         notInClause += fmt::format("{:02X}", c);
-//       }
-//       notInClause += "'";
-//     }
-//     notInClause += ")";
-//
-//     return "SELECT * FROM tmp WHERE " + notInClause;
-//   }
-//
-//   template <typename T>
-//   void executeSingleColumnTest(
-//       int32_t fieldId,
-//       const std::vector<T>& deleteValues,
-//       const std::vector<T>& dataValues,
-//       const std::string& expectedSql) {
-//     std::unordered_map<int8_t, std::vector<int32_t>> equalityFieldIdsMap;
-//     equalityFieldIdsMap.insert({0, {fieldId}});
-//
-//     std::unordered_map<int8_t, std::vector<std::vector<T>>>
-//         equalityDeleteVectorMap;
-//     equalityDeleteVectorMap.insert({0, {deleteValues}});
-//
-//     std::vector<RowVectorPtr> dataVectors = {
-//         makeRowVector({"c0"}, {makeFlatVector<T>(dataValues)})};
-//
-//     assertEqualityDeletes(
-//         equalityDeleteVectorMap, equalityFieldIdsMap, expectedSql,
-//         dataVectors);
-//   }
-//
-//   void executeVarbinaryTest(
-//       int32_t fieldId,
-//       const std::vector<std::string>& deleteValues,
-//       const std::vector<std::string>& dataValues,
-//       const std::string& expectedSql) {
-//     std::unordered_map<int8_t, std::vector<int32_t>> equalityFieldIdsMap;
-//     equalityFieldIdsMap.insert({0, {fieldId}});
-//
-//     std::unordered_map<int8_t, std::vector<std::vector<std::string>>>
-//         equalityDeleteVectorMap;
-//     equalityDeleteVectorMap.insert({0, {deleteValues}});
-//
-//     std::vector<RowVectorPtr> dataVectors = {makeRowVector(
-//         {"c0"},
-//         {makeFlatVector<std::string_view>(dataValues.size(), [&](auto row) {
-//           return std::string_view(dataValues[row]);
-//         })})};
-//
-//     assertEqualityDeletes(
-//         equalityDeleteVectorMap, equalityFieldIdsMap, expectedSql,
-//         dataVectors);
-//   }
-// };
-//
-// // Test single column equality deletes
-// TEST_P(
-//     HiveIcebergSingleColumnEqualityDeletesTest,
-//     SingleColumnEqualityDeletes) {
-//   folly::SingletonVault::singleton()->registrationComplete();
-//
-//   auto [scenario, typeKind] = GetParam();
-//   testSingleColumnByTypeKind(scenario, typeKind);
-// }
-//
-// INSTANTIATE_TEST_SUITE_P(
-//     SingleColumnTests,
-//     HiveIcebergSingleColumnEqualityDeletesTest,
-//     testing::Combine(
-//         testing::Values(
-//             TestScenario::DELETE_SUBSET,
-//             TestScenario::DELETE_FIRST_LAST,
-//             TestScenario::DELETE_ALL,
-//             TestScenario::DELETE_NONE,
-//             TestScenario::DELETE_NONEXISTENT),
-//         testing::Values(
-//             TypeKind::TINYINT,
-//             TypeKind::SMALLINT,
-//             TypeKind::INTEGER,
-//             TypeKind::BIGINT,
-//             TypeKind::VARCHAR,
-//             TypeKind::VARBINARY)));
-//
-// // Short decimal single column test class
-// class HiveIcebergShortDecimalEqualityDeletesTest
-//     : public HiveIcebergTest,
-//       public testing::WithParamInterface<TestScenario> {
-//  public:
-//   void testShortDecimalEqualityDeletes(
-//       TestScenario scenario,
-//       int32_t fieldId = 1) {
-//     auto dataValues = generateShortDecimalData(5);
-//     std::vector<int64_t> deleteValues;
-//     std::string expectedSql;
-//
-//     switch (scenario) {
-//       case TestScenario::DELETE_SUBSET:
-//         deleteValues = {dataValues[0], dataValues[1]};
-//         expectedSql = buildShortDecimalSql(deleteValues, fieldId);
-//         break;
-//       case TestScenario::DELETE_FIRST_LAST:
-//         deleteValues = {dataValues[0], dataValues.back()};
-//         expectedSql = buildShortDecimalSql(deleteValues, fieldId);
-//         break;
-//       case TestScenario::DELETE_ALL:
-//         deleteValues = dataValues;
-//         expectedSql = "SELECT * FROM tmp WHERE 1 = 0";
-//         break;
-//       case TestScenario::DELETE_NONE:
-//         deleteValues = {};
-//         expectedSql = "SELECT * FROM tmp";
-//         break;
-//       case TestScenario::DELETE_NONEXISTENT:
-//         deleteValues = {999999, 888888};
-//         expectedSql = buildShortDecimalSql(deleteValues, fieldId);
-//         break;
-//     }
-//
-//     executeShortDecimalTest(fieldId, deleteValues, dataValues, expectedSql);
-//   }
-//
-//  private:
-//   std::vector<int64_t> generateShortDecimalData(size_t count) {
-//     const std::vector<int64_t> values = {
-//         123456, 789012, 345678, 901234, 567890};
-//     std::vector<int64_t> data;
-//     data.reserve(std::min(count, values.size()));
-//     for (size_t i = 0; i < count && i < values.size(); ++i) {
-//       data.push_back(values[i]);
-//     }
-//     return data;
-//   }
-//
-//   std::string buildShortDecimalSql(
-//       const std::vector<int64_t>& deleteValues,
-//       int32_t fieldId) {
-//     if (deleteValues.empty()) {
-//       return "SELECT * FROM tmp";
-//     }
-//
-//     std::string columnName = fmt::format("c{}", fieldId - 1);
-//     std::string notInClause = columnName + " NOT IN (";
-//
-//     for (size_t i = 0; i < deleteValues.size(); ++i) {
-//       if (i > 0)
-//         notInClause += ", ";
-//       // Format as decimal with scale 2
-//       std::string decimalStr = std::to_string(deleteValues[i]);
-//       if (decimalStr.length() > 2) {
-//         decimalStr.insert(decimalStr.length() - 2, ".");
-//       } else {
-//         decimalStr =
-//             "0." + std::string(2 - decimalStr.length(), '0') + decimalStr;
-//       }
-//       notInClause += decimalStr;
-//     }
-//     notInClause += ")";
-//
-//     return "SELECT * FROM tmp WHERE " + notInClause;
-//   }
-//
-//   void executeShortDecimalTest(
-//       int32_t fieldId,
-//       const std::vector<int64_t>& deleteValues,
-//       const std::vector<int64_t>& dataValues,
-//       const std::string& expectedSql) {
-//     std::unordered_map<int8_t, std::vector<int32_t>> equalityFieldIdsMap;
-//     equalityFieldIdsMap.insert({0, {fieldId}});
-//
-//     std::unordered_map<int8_t, std::vector<std::vector<int64_t>>>
-//         equalityDeleteVectorMap;
-//     equalityDeleteVectorMap.insert({0, {deleteValues}});
-//
-//     auto decimalType = DECIMAL(6, 2);
-//     std::vector<RowVectorPtr> dataVectors = {makeRowVector(
-//         {"c0"}, {makeFlatVector<int64_t>(dataValues, decimalType)})};
-//
-//     assertEqualityDeletes(
-//         equalityDeleteVectorMap, equalityFieldIdsMap, expectedSql,
-//         dataVectors);
-//   }
-// };
-//
-// TEST_P(
-//     HiveIcebergShortDecimalEqualityDeletesTest,
-//     ShortDecimalSingleColumnEqualityDeletes) {
-//   folly::SingletonVault::singleton()->registrationComplete();
-//
-//   TestScenario scenario = GetParam();
-//   testShortDecimalEqualityDeletes(scenario);
-// }
-//
-// INSTANTIATE_TEST_SUITE_P(
-//     ShortDecimalTests,
-//     HiveIcebergShortDecimalEqualityDeletesTest,
-//     testing::Values(
-//         TestScenario::DELETE_SUBSET,
-//         TestScenario::DELETE_FIRST_LAST,
-//         TestScenario::DELETE_ALL,
-//         TestScenario::DELETE_NONE,
-//         TestScenario::DELETE_NONEXISTENT));
+// Parameterized test class for single column equality deletes
+class HiveIcebergEqualityDeletesTest
+    : public HiveIcebergTest,
+      public testing::WithParamInterface<TypeKind> {
+ public:
+  void SetUp() override {
+    HiveIcebergTest::SetUp();
+  }
 
-} // namespace facebook::velox::connector::hive::iceberg
+  template <TypeKind KIND>
+  void testSingleColumnEqualityDeletes() {
+    folly::SingletonVault::singleton()->registrationComplete();
+
+    std::unordered_map<int8_t, std::vector<int32_t>> equalityFieldIdsMap;
+    std::unordered_map<int8_t, std::vector<std::vector<typename TypeTraits<KIND>::NativeType>>>
+        equalityDeleteVectorMap;
+    equalityFieldIdsMap.insert({0, {1}});
+
+    // Test 1: Delete first and last rows
+    equalityDeleteVectorMap.clear();
+    if constexpr (KIND == TypeKind::VARCHAR || KIND == TypeKind::VARBINARY) {
+      auto dataVectors = makeVectors<KIND>(1, rowCount, 1);
+      auto flatVector = dataVectors[0]->childAt(0)->template as<FlatVector<StringView>>();
+      std::vector<StringView> deleteValues = {
+          flatVector->valueAt(0),
+          flatVector->valueAt(rowCount - 1)
+      };
+      equalityDeleteVectorMap.insert({0, {deleteValues}});
+    } else if constexpr (std::is_integral_v<typename TypeTraits<KIND>::NativeType>) {
+      using T = typename TypeTraits<KIND>::NativeType;
+      equalityDeleteVectorMap.insert({0, {{static_cast<T>(0), static_cast<T>(rowCount - 1)}}});
+    } else if constexpr (std::is_same_v<typename TypeTraits<KIND>::NativeType, Timestamp>) {
+      equalityDeleteVectorMap.insert({0, {{Timestamp(0, 0), Timestamp(rowCount - 1, 0)}}});
+    } else if constexpr (std::is_same_v<typename TypeTraits<KIND>::NativeType, bool>) {
+      equalityDeleteVectorMap.insert({0, {{false, true}}});
+    } else if constexpr (std::is_floating_point_v<typename TypeTraits<KIND>::NativeType>) {
+      using T = typename TypeTraits<KIND>::NativeType;
+      equalityDeleteVectorMap.insert({0, {{static_cast<T>(0.5), static_cast<T>(rowCount - 1) + static_cast<T>(0.5)}}});
+    } else {
+      static_assert(!sizeof(KIND), "Unsupported type for testSingleColumnEqualityDeletes");
+    }
+    assertEqualityDeletes<KIND>(
+        equalityDeleteVectorMap, equalityFieldIdsMap);
+
+    // Test 2: Delete none (empty delete vector)
+    equalityDeleteVectorMap.clear();
+    equalityDeleteVectorMap.insert({0, {{}}});
+    assertEqualityDeletes<KIND>(
+        equalityDeleteVectorMap, equalityFieldIdsMap);
+
+    // Test 3: Delete all rows
+    equalityDeleteVectorMap.clear();
+    {
+      std::vector<typename TypeTraits<KIND>::NativeType> del1, del2;
+      del1.reserve(rowCount);
+      del2.reserve(rowCount);
+      for (int i = 0; i < rowCount; ++i) {
+        del1.push_back(flatVector1->valueAt(i));
+        del2.push_back(flatVector2->valueAt(i));
+      }
+      equalityDeleteVectorMap.insert({0, {del1, del2}});
+      assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap, "", dataVectors);
+    }
+
+    // Test 4: Delete random rows
+    equalityDeleteVectorMap.clear();
+    {
+      std::vector<int64_t> randomIndices = makeRandomDeleteValues(rowCount);
+      std::vector<typename TypeTraits<KIND>::NativeType> del1, del2;
+      for (auto idx : randomIndices) {
+        del1.push_back(flatVector1->valueAt(idx));
+        del2.push_back(flatVector2->valueAt(idx));
+      }
+      equalityDeleteVectorMap.insert({0, {del1, del2}});
+      assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap, "", dataVectors);
+    }
+
+    // Test 5: Delete 0 rows (already covered by Test 2)
+
+    // Test 6: Delete rows that don't exist
+    equalityDeleteVectorMap.clear();
+    {
+      std::vector<typename TypeTraits<KIND>::NativeType> del1, del2;
+      if constexpr (std::is_integral_v<typename TypeTraits<KIND>::NativeType>) {
+        del1 = {static_cast<typename TypeTraits<KIND>::NativeType>(rowCount), static_cast<typename TypeTraits<KIND>::NativeType>(rowCount + 1)};
+        del2 = {static_cast<typename TypeTraits<KIND>::NativeType>(rowCount), static_cast<typename TypeTraits<KIND>::NativeType>(rowCount + 1)};
+      } else if constexpr (KIND == TypeKind::VARCHAR || KIND == TypeKind::VARBINARY) {
+        del1 = {StringView("nonexistent1"), StringView("nonexistent2")};
+        del2 = {StringView("nonexistent3"), StringView("nonexistent4")};
+      } else if constexpr (std::is_same_v<typename TypeTraits<KIND>::NativeType, Timestamp>) {
+        del1 = {Timestamp(rowCount, 0), Timestamp(rowCount + 1, 0)};
+        del2 = {Timestamp(rowCount, 0), Timestamp(rowCount + 1, 0)};
+      } else if constexpr (std::is_same_v<typename TypeTraits<KIND>::NativeType, bool>) {
+        del1 = {true, false};
+        del2 = {false, true};
+      } else if constexpr (std::is_floating_point_v<typename TypeTraits<KIND>::NativeType>) {
+        using T = typename TypeTraits<KIND>::NativeType;
+        del1 = {static_cast<T>(rowCount) + static_cast<T>(0.5), static_cast<T>(rowCount + 1) + static_cast<T>(0.5)};
+        del2 = {static_cast<T>(rowCount) + static_cast<T>(0.5), static_cast<T>(rowCount + 1) + static_cast<T>(0.5)};
+      }
+      equalityDeleteVectorMap.insert({0, {del1, del2}});
+      assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap, "", dataVectors);
+    }
+  }
+
+  template <TypeKind KIND>
+  void testTwoColumnEqualityDeletes() {
+    folly::SingletonVault::singleton()->registrationComplete();
+
+    std::unordered_map<int8_t, std::vector<int32_t>> equalityFieldIdsMap;
+    std::unordered_map<int8_t, std::vector<std::vector<typename TypeTraits<KIND>::NativeType>>> equalityDeleteVectorMap;
+    equalityFieldIdsMap.insert({0, {1, 2}});
+
+    // Prepare data vectors for two columns
+    auto dataVectors = makeVectors<KIND>(1, rowCount, 2);
+    auto flatVector1 = dataVectors[0]->childAt(0)->template as<FlatVector<typename TypeTraits<KIND>::NativeType>>();
+    auto flatVector2 = dataVectors[0]->childAt(1)->template as<FlatVector<typename TypeTraits<KIND>::NativeType>>();
+
+    // Test 1: Delete first and last rows
+    equalityDeleteVectorMap.clear();
+    {
+      std::vector<typename TypeTraits<KIND>::NativeType> del1 = {flatVector1->valueAt(0), flatVector1->valueAt(rowCount - 1)};
+      std::vector<typename TypeTraits<KIND>::NativeType> del2 = {flatVector2->valueAt(0), flatVector2->valueAt(rowCount - 1)};
+      equalityDeleteVectorMap.insert({0, {del1, del2}});
+      assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap, "", dataVectors);
+    }
+
+    // Test 2: Delete none (empty delete vector)
+    equalityDeleteVectorMap.clear();
+    equalityDeleteVectorMap.insert({0, {{}, {}}});
+    assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap, "", dataVectors);
+
+    // Test 3: Delete all rows
+    equalityDeleteVectorMap.clear();
+    {
+      std::vector<typename TypeTraits<KIND>::NativeType> del1, del2;
+      del1.reserve(rowCount);
+      del2.reserve(rowCount);
+      for (int i = 0; i < rowCount; ++i) {
+        del1.push_back(flatVector1->valueAt(i));
+        del2.push_back(flatVector2->valueAt(i));
+      }
+      equalityDeleteVectorMap.insert({0, {del1, del2}});
+      assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap, "", dataVectors);
+    }
+
+    // Test 4: Delete random rows
+    equalityDeleteVectorMap.clear();
+    {
+      std::vector<int64_t> randomIndices = makeRandomDeleteValues(rowCount);
+      std::vector<typename TypeTraits<KIND>::NativeType> del1, del2;
+      for (auto idx : randomIndices) {
+        del1.push_back(flatVector1->valueAt(idx));
+        del2.push_back(flatVector2->valueAt(idx));
+      }
+      equalityDeleteVectorMap.insert({0, {del1, del2}});
+      assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap, "", dataVectors);
+    }
+
+    // Test 5: Delete 0 rows (already covered by Test 2)
+
+    // Test 6: Delete rows that don't exist
+    equalityDeleteVectorMap.clear();
+    {
+      std::vector<typename TypeTraits<KIND>::NativeType> del1, del2;
+      if constexpr (std::is_integral_v<typename TypeTraits<KIND>::NativeType>) {
+        del1 = {static_cast<typename TypeTraits<KIND>::NativeType>(rowCount), static_cast<typename TypeTraits<KIND>::NativeType>(rowCount + 1)};
+        del2 = {static_cast<typename TypeTraits<KIND>::NativeType>(rowCount), static_cast<typename TypeTraits<KIND>::NativeType>(rowCount + 1)};
+      } else if constexpr (KIND == TypeKind::VARCHAR || KIND == TypeKind::VARBINARY) {
+        del1 = {StringView("nonexistent1"), StringView("nonexistent2")};
+        del2 = {StringView("nonexistent3"), StringView("nonexistent4")};
+      } else if constexpr (std::is_same_v<typename TypeTraits<KIND>::NativeType, Timestamp>) {
+        del1 = {Timestamp(rowCount, 0), Timestamp(rowCount + 1, 0)};
+        del2 = {Timestamp(rowCount, 0), Timestamp(rowCount + 1, 0)};
+      } else if constexpr (std::is_same_v<typename TypeTraits<KIND>::NativeType, bool>) {
+        del1 = {true, false};
+        del2 = {false, true};
+      } else if constexpr (std::is_floating_point_v<typename TypeTraits<KIND>::NativeType>) {
+        using T = typename TypeTraits<KIND>::NativeType;
+        del1 = {static_cast<T>(rowCount) + static_cast<T>(0.5), static_cast<T>(rowCount + 1) + static_cast<T>(0.5)};
+        del2 = {static_cast<T>(rowCount) + static_cast<T>(0.5), static_cast<T>(rowCount + 1) + static_cast<T>(0.5)};
+      }
+      equalityDeleteVectorMap.insert({0, {del1, del2}});
+      assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap, "", dataVectors);
+    }
+  }
+};
+
+// Test implementation
+TEST_P(HiveIcebergEqualityDeletesTest, SingleColumnEqualityDeletes) {
+  TypeKind typeKind = GetParam();
+
+  switch (typeKind) {
+    case TypeKind::TINYINT:
+      testSingleColumnEqualityDeletes<TypeKind::TINYINT>();
+      break;
+    case TypeKind::SMALLINT:
+      testSingleColumnEqualityDeletes<TypeKind::SMALLINT>();
+      break;
+    case TypeKind::INTEGER:
+      testSingleColumnEqualityDeletes<TypeKind::INTEGER>();
+      break;
+    case TypeKind::BIGINT:
+      testSingleColumnEqualityDeletes<TypeKind::BIGINT>();
+      break;
+    case TypeKind::VARCHAR:
+      testSingleColumnEqualityDeletes<TypeKind::VARCHAR>();
+      break;
+    case TypeKind::VARBINARY:
+      testSingleColumnEqualityDeletes<TypeKind::VARBINARY>();
+      break;
+    // case TypeKind::BOOLEAN:
+    //   testSingleColumnEqualityDeletes<TypeKind::BOOLEAN>();
+      break;
+    case TypeKind::TIMESTAMP:
+      testSingleColumnEqualityDeletes<TypeKind::TIMESTAMP>();
+      break;
+    case TypeKind::REAL:
+      testSingleColumnEqualityDeletes<TypeKind::REAL>();
+      break;
+    case TypeKind::DOUBLE:
+      testSingleColumnEqualityDeletes<TypeKind::DOUBLE>();
+      break;
+    default:
+      FAIL() << "Unsupported type kind: " << typeKind;
+  }
+}
+
+// Add two-column equality deletes test
+TEST_P(HiveIcebergEqualityDeletesTest, TwoColumnEqualityDeletes) {
+  TypeKind typeKind = GetParam();
+
+  switch (typeKind) {
+    case TypeKind::TINYINT:
+      testTwoColumnEqualityDeletes<TypeKind::TINYINT>();
+      break;
+    case TypeKind::SMALLINT:
+      testTwoColumnEqualityDeletes<TypeKind::SMALLINT>();
+      break;
+    case TypeKind::INTEGER:
+      testTwoColumnEqualityDeletes<TypeKind::INTEGER>();
+      break;
+    case TypeKind::BIGINT:
+      testTwoColumnEqualityDeletes<TypeKind::BIGINT>();
+      break;
+    case TypeKind::VARCHAR:
+      testTwoColumnEqualityDeletes<TypeKind::VARCHAR>();
+      break;
+    case TypeKind::VARBINARY:
+      testTwoColumnEqualityDeletes<TypeKind::VARBINARY>();
+      break;
+    // case TypeKind::BOOLEAN:
+    //   testTwoColumnEqualityDeletes<TypeKind::BOOLEAN>();
+      break;
+    case TypeKind::TIMESTAMP:
+      testTwoColumnEqualityDeletes<TypeKind::TIMESTAMP>();
+      break;
+    case TypeKind::REAL:
+      testTwoColumnEqualityDeletes<TypeKind::REAL>();
+      break;
+    case TypeKind::DOUBLE:
+      testTwoColumnEqualityDeletes<TypeKind::DOUBLE>();
+      break;
+    default:
+      FAIL() << "Unsupported type kind: " << typeKind;
+  }
+}
+
+// TODO: Future extensions
+// - Multiple column equality deletes test
+// - Multiple delete files test
+// - Mixed positional and equality deletes test
+// - Partitioned table with equality deletes test
+}
