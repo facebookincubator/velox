@@ -210,15 +210,58 @@ struct Date {
   Date() {}
 };
 
-struct Varbinary {
- private:
-  Varbinary() {}
+template <size_t v>
+struct ConstantVariable {
+  static std::string name() {
+    return value();
+  }
+
+  static std::string value() {
+    return fmt::format("{}", v);
+  }
 };
 
-struct Varchar {
+using VaryingTypeMaximumLength = ConstantVariable<2147483647>;
+using L1 = IntegerVariable<1>;
+using L2 = IntegerVariable<2>;
+using L3 = IntegerVariable<3>;
+
+template <typename L>
+struct VarcharN {
  private:
-  Varchar() {}
+  VarcharN() {}
 };
+using Varchar = VarcharN<VaryingTypeMaximumLength>;
+
+template <typename>
+struct is_specialization_of_varcharn : public std::false_type {};
+
+template <typename L>
+struct is_specialization_of_varcharn<VarcharN<L>> : public std::true_type {};
+
+template <typename T>
+inline constexpr auto is_specialization_of_varcharn_v =
+    is_specialization_of_varcharn<T>::value;
+
+template <typename L>
+struct VarbinaryN {
+ private:
+  VarbinaryN() {}
+};
+using Varbinary = VarbinaryN<VaryingTypeMaximumLength>;
+
+/*
+template <typename>
+struct is_specialization_of_varbinaryn : public std::false_type {};
+
+template <typename L>
+struct is_specialization_of_varbinaryn<VarbinaryN<L>> : public std::true_type
+{};
+
+template <typename T>
+inline constexpr auto is_specialization_of_varbinaryn_v =
+    is_specialization_of_varbinaryn<T>::value;
+*/
 
 template <typename T>
 struct Constant {};
@@ -253,6 +296,9 @@ struct ConstantChecker {
 
 template <>
 struct CppToType<Varchar> : public CppToTypeBase<TypeKind::VARCHAR> {};
+
+template <typename L>
+struct CppToType<VarcharN<L>> : public CppToTypeBase<TypeKind::VARCHAR> {};
 
 template <>
 struct CppToType<Varbinary> : public CppToTypeBase<TypeKind::VARBINARY> {};
@@ -311,6 +357,9 @@ struct SimpleTypeTrait<LongDecimal<P, S>>
 
 template <>
 struct SimpleTypeTrait<Varchar> : public TypeTraits<TypeKind::VARCHAR> {};
+
+template <typename L>
+struct SimpleTypeTrait<VarcharN<L>> : public SimpleTypeTrait<Varchar> {};
 
 template <>
 struct SimpleTypeTrait<Varbinary> : public TypeTraits<TypeKind::VARBINARY> {};

@@ -258,6 +258,7 @@ class VectorTest : public testing::Test, public velox::test::VectorTestBase {
     EXPECT_EQ(flat->size(), size);
     EXPECT_GE(flat->values()->size(), BaseVector::byteSize<T>(size));
     EXPECT_EQ(flat->nulls(), nullptr);
+    EXPECT_EQ(flat->type(), type);
 
     flat->resize(size * 2);
     EXPECT_EQ(flat->size(), size * 2);
@@ -935,6 +936,7 @@ class VectorTest : public testing::Test, public velox::test::VectorTestBase {
 
   size_t vectorSize_{100};
   size_t numIterations_{3};
+  const size_t kMaxStringViewBufferSize_{1000};
 };
 
 template <>
@@ -944,8 +946,8 @@ int128_t VectorTest::testValue<int128_t>(int32_t i, BufferPtr& /*space*/) {
 
 template <>
 StringView VectorTest::testValue(int32_t n, BufferPtr& buffer) {
-  if (!buffer || buffer->capacity() < 1000) {
-    buffer = AlignedBuffer::allocate<char>(1000, pool());
+  if (!buffer || buffer->capacity() < kMaxStringViewBufferSize_) {
+    buffer = AlignedBuffer::allocate<char>(kMaxStringViewBufferSize_, pool());
   }
   std::stringstream out;
   out << n;
@@ -1032,6 +1034,17 @@ TEST_F(VectorTest, createDouble) {
 TEST_F(VectorTest, createStr) {
   testFlat<TypeKind::VARCHAR>(VARCHAR(), vectorSize_);
   testFlat<TypeKind::VARBINARY>(VARBINARY(), vectorSize_);
+  testFlat<TypeKind::VARCHAR>(VARCHAR(kMaxStringViewBufferSize_), vectorSize_);
+  testFlat<TypeKind::VARBINARY>(
+      VARBINARY(kMaxStringViewBufferSize_), vectorSize_);
+  // The values in the vector get created larger and larger eventually exceeding
+  // the specified type length.
+  VELOX_ASSERT_THROW(
+      testFlat<TypeKind::VARCHAR>(VARCHAR(20), vectorSize_),
+      "Value exceeds allowed vector type length.");
+  VELOX_ASSERT_THROW(
+      testFlat<TypeKind::VARBINARY>(VARBINARY(20), vectorSize_),
+      "Value exceeds allowed vector type length.");
 }
 
 TEST_F(VectorTest, createOther) {
@@ -1057,6 +1070,7 @@ TEST_F(VectorTest, getOrCreateEmpty) {
   EXPECT_NE(empty, nullptr);
   EXPECT_EQ(empty->size(), 0);
   EXPECT_EQ(empty->type(), VARCHAR());
+  EXPECT_NE(empty->type(), VARCHAR(20));
 }
 
 TEST_F(VectorTest, row) {
@@ -2031,7 +2045,10 @@ TEST_F(VectorCreateConstantTest, null) {
   testNullConstant<TypeKind::BIGINT>(INTERVAL_DAY_TIME());
 
   testNullConstant<TypeKind::VARCHAR>(VARCHAR());
+  testNullConstant<TypeKind::VARCHAR>(VARCHAR(10));
+  testNullConstant<TypeKind::VARCHAR>(VARCHAR(20));
   testNullConstant<TypeKind::VARBINARY>(VARBINARY());
+  testNullConstant<TypeKind::VARBINARY>(VARBINARY(30));
 
   testNullConstant<TypeKind::ROW>(ROW({BIGINT(), REAL()}));
   testNullConstant<TypeKind::ARRAY>(ARRAY(DOUBLE()));

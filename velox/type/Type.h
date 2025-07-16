@@ -109,6 +109,10 @@ std::ostream& operator<<(std::ostream& os, const TypeKind& kind);
 
 template <TypeKind KIND>
 class ScalarType;
+template <TypeKind KIND>
+class VaryingLengthScalarType;
+using VarcharType = VaryingLengthScalarType<TypeKind::VARCHAR>;
+using VarbinaryType = VaryingLengthScalarType<TypeKind::VARBINARY>;
 class ShortDecimalType;
 class LongDecimalType;
 class ArrayType;
@@ -247,7 +251,7 @@ struct TypeTraits<TypeKind::DOUBLE> {
 
 template <>
 struct TypeTraits<TypeKind::VARCHAR> {
-  using ImplType = ScalarType<TypeKind::VARCHAR>;
+  using ImplType = VarcharType;
   using NativeType = velox::StringView;
   using DeepCopiedType = std::string;
   static constexpr uint32_t minSubTypes = 0;
@@ -289,7 +293,7 @@ struct TypeTraits<TypeKind::HUGEINT> {
 
 template <>
 struct TypeTraits<TypeKind::VARBINARY> {
-  using ImplType = ScalarType<TypeKind::VARBINARY>;
+  using ImplType = VarbinaryType;
   using NativeType = velox::StringView;
   using DeepCopiedType = std::string;
   static constexpr uint32_t minSubTypes = 0;
@@ -571,8 +575,6 @@ class Type : public Tree<const TypePtr>, public velox::ISerializable {
   VELOX_FLUENT_CAST(Hugeint, HUGEINT)
   VELOX_FLUENT_CAST(Real, REAL)
   VELOX_FLUENT_CAST(Double, DOUBLE)
-  VELOX_FLUENT_CAST(Varchar, VARCHAR)
-  VELOX_FLUENT_CAST(Varbinary, VARBINARY)
   VELOX_FLUENT_CAST(Timestamp, TIMESTAMP)
   VELOX_FLUENT_CAST(Array, ARRAY)
   VELOX_FLUENT_CAST(Map, MAP)
@@ -581,8 +583,12 @@ class Type : public Tree<const TypePtr>, public velox::ISerializable {
   VELOX_FLUENT_CAST(UnKnown, UNKNOWN)
   VELOX_FLUENT_CAST(Function, FUNCTION)
 
+  const VarcharType& asVarchar() const;
+  const VarbinaryType& asVarbinary() const;
   const ShortDecimalType& asShortDecimal() const;
   const LongDecimalType& asLongDecimal() const;
+  bool isVarchar() const;
+  bool isVarbinary() const;
   bool isShortDecimal() const;
   bool isLongDecimal() const;
   bool isDecimal() const;
@@ -905,6 +911,118 @@ class UnknownType : public CanProvideCustomComparisonType<TypeKind::UNKNOWN> {
     return obj;
   }
 };
+
+static const uint32_t kVaryingLengthScalarTypeUnboundedLength =
+    std::numeric_limits<int32_t>::max();
+static const std::string kVaryingLengthScalarTypeUnboundedLengthStr =
+    std::to_string(kVaryingLengthScalarTypeUnboundedLength);
+
+// TODO try to check if type is of kind varchar or varbinary in the template.
+template <TypeKind KIND>
+class VaryingLengthScalarType : public ScalarType<KIND> {
+ public:
+  explicit VaryingLengthScalarType(
+      const std::optional<uint32_t> length = std::nullopt) {
+    if (length.has_value()) {
+      if (length.value() != kVaryingLengthScalarTypeUnboundedLength) {
+        VELOX_CHECK_GT(
+            length.value(),
+            0,
+            "Maximum length of varchar type must be greater than 0");
+      }
+      parameters_.emplace_back(TypeParameter(length.value()));
+    } else {
+      parameters_.emplace_back(
+          TypeParameter(kVaryingLengthScalarTypeUnboundedLength));
+    }
+  }
+
+  FOLLY_NOINLINE static const std::shared_ptr<
+      const VaryingLengthScalarType<KIND>>
+  create();
+
+  FOLLY_NOINLINE static const std::shared_ptr<
+      const VaryingLengthScalarType<KIND>>
+  create(uint32_t length);
+
+  inline uint32_t length() const {
+    return parameters_[0].longLiteral.value();
+  }
+
+  inline bool equivalent(const Type& other) const override {
+    if (!Type::hasSameTypeId(other)) {
+      return false;
+    }
+    const auto& otherType =
+        static_cast<const VaryingLengthScalarType<KIND>&>(other);
+    // Allow equivalent if this or the other type was an unbounded
+    // Varchar.
+    return (otherType.length() == length());
+  }
+
+  const char* name() const override {
+    return TypeTraits<KIND>::name;
+  }
+
+  std::string toString() const override {
+    if (length() == kVaryingLengthScalarTypeUnboundedLength) {
+      return std::string(name());
+    }
+    return fmt::format("{}({})", name(), length());
+  }
+
+  folly::dynamic serialize() const override {
+    auto obj = ScalarType<KIND>::serialize();
+    obj["type"] = name();
+    obj["length"] = length();
+    return obj;
+  }
+
+  const std::vector<TypeParameter>& parameters() const override {
+    return parameters_;
+  }
+
+ private:
+  std::vector<TypeParameter> parameters_;
+};
+
+uint32_t getVaryingLengthScalarTypeLength(const Type& type);
+
+FOLLY_ALWAYS_INLINE bool isVaryingLengthScalarType(const TypePtr& type) {
+  VELOX_CHECK_NOT_NULL(type);
+  return (
+      type->kind() == TypeKind::VARCHAR || type->kind() == TypeKind::VARBINARY);
+}
+
+// Functions for Varchar.
+FOLLY_ALWAYS_INLINE const VarcharType& Type::asVarchar() const {
+  return dynamic_cast<const VarcharType&>(*this);
+}
+
+FOLLY_ALWAYS_INLINE bool Type::isVarchar() const {
+  return dynamic_cast<const VarcharType*>(this) != nullptr;
+}
+
+FOLLY_ALWAYS_INLINE bool isVarcharName(std::string_view name) {
+  return (name == "VARCHAR");
+}
+
+uint32_t getVarcharLength(const Type& type);
+
+// Functions for Varbinary.
+FOLLY_ALWAYS_INLINE const VarbinaryType& Type::asVarbinary() const {
+  return dynamic_cast<const VarbinaryType&>(*this);
+}
+
+FOLLY_ALWAYS_INLINE bool Type::isVarbinary() const {
+  return dynamic_cast<const VarbinaryType*>(this) != nullptr;
+}
+
+FOLLY_ALWAYS_INLINE bool isVarbinaryName(const std::string& name) {
+  return (name == "VARBINARY");
+}
+
+uint32_t getVarbinaryLength(const Type& type);
 
 class ArrayType : public TypeBase<TypeKind::ARRAY> {
  public:
@@ -1285,8 +1403,6 @@ using HugeintType = ScalarType<TypeKind::HUGEINT>;
 using RealType = ScalarType<TypeKind::REAL>;
 using DoubleType = ScalarType<TypeKind::DOUBLE>;
 using TimestampType = ScalarType<TypeKind::TIMESTAMP>;
-using VarcharType = ScalarType<TypeKind::VARCHAR>;
-using VarbinaryType = ScalarType<TypeKind::VARBINARY>;
 
 constexpr long kMillisInSecond = 1000;
 constexpr long kMillisInMinute = 60 * kMillisInSecond;
@@ -1895,8 +2011,12 @@ VELOX_SCALAR_ACCESSOR(HUGEINT);
 VELOX_SCALAR_ACCESSOR(REAL);
 VELOX_SCALAR_ACCESSOR(DOUBLE);
 VELOX_SCALAR_ACCESSOR(TIMESTAMP);
-VELOX_SCALAR_ACCESSOR(VARCHAR);
-VELOX_SCALAR_ACCESSOR(VARBINARY);
+
+TypePtr VARCHAR();
+TypePtr VARCHAR(uint32_t length);
+
+TypePtr VARBINARY();
+TypePtr VARBINARY(uint32_t length);
 
 TypePtr UNKNOWN();
 
@@ -1904,6 +2024,12 @@ template <TypeKind KIND>
 TypePtr createScalarType() {
   return ScalarType<KIND>::create();
 }
+
+template <>
+TypePtr createScalarType<TypeKind::VARCHAR>();
+
+template <>
+TypePtr createScalarType<TypeKind::VARBINARY>();
 
 TypePtr createScalarType(TypeKind kind);
 
@@ -1928,6 +2054,14 @@ TypePtr createType(std::vector<TypePtr>&& children) {
   static_assert(TypeTraits<KIND>::isPrimitiveType);
   return ScalarType<KIND>::create();
 }
+
+template <>
+std::shared_ptr<const Type> createType<TypeKind::VARCHAR>(
+    std::vector<std::shared_ptr<const Type>>&& children);
+
+template <>
+std::shared_ptr<const Type> createType<TypeKind::VARBINARY>(
+    std::vector<std::shared_ptr<const Type>>&& children);
 
 template <>
 TypePtr createType<TypeKind::ROW>(std::vector<TypePtr>&& children);
