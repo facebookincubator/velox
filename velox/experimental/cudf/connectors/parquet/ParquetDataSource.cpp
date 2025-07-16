@@ -162,7 +162,7 @@ std::optional<RowVectorPtr> ParquetDataSource::next(
   
  
   
-  auto* callbackData = new totalScanTimeCallbackData{startTimeUs, ioStats_};
+  TotalScanTimeCallbackData* callbackData = new TotalScanTimeCallbackData{startTimeUs, ioStats_};
   
   // Launch host callback to calculate timing when scan completes
   cudaLaunchHostFunc(stream_.value(), &ParquetDataSource::totalScanTimeCalculator, callbackData);
@@ -230,7 +230,7 @@ std::optional<RowVectorPtr> ParquetDataSource::next(
 }
 
 void ParquetDataSource::totalScanTimeCalculator(void* userData) {
-  auto* data = static_cast<totalScanTimeCallbackData*>(userData);
+  TotalScanTimeCallbackData* data = static_cast<TotalScanTimeCallbackData*>(userData);
   
   // Record end time in callback
   auto endTimeUs = getCurrentTimeMicro();
