@@ -26,6 +26,7 @@
 #include "velox/common/file/tests/FaultyFileSystem.h"
 #include "velox/common/memory/MemoryArbitrator.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/exec/Exchange.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/TableScan.h"
@@ -40,6 +41,7 @@
 #include <fmt/ranges.h>
 
 using namespace facebook::velox;
+using namespace facebook::velox::connector;
 using namespace facebook::velox::core;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
@@ -179,6 +181,50 @@ TEST_F(TableScanTest, allColumns) {
 
   // A quick sanity check for memory usage reporting. Check that peak total
   // memory usage for the project node is > 0.
+  auto planStats = toPlanStats(task->taskStats());
+  auto scanNodeId = plan->id();
+  auto it = planStats.find(scanNodeId);
+  ASSERT_TRUE(it != planStats.end());
+  ASSERT_TRUE(it->second.peakMemoryBytes > 0);
+
+  //  Verifies there is no dynamic filter stats.
+  ASSERT_TRUE(it->second.dynamicFilterStats.empty());
+
+  // TODO: We are not writing any customStats yet so disable this check
+  // ASSERT_LT(0, it->second.customStats.at("ioWaitWallNanos").sum);
+}
+
+TEST_F(TableScanTest, convertHiveConnectorSplitAndScanAllColumns) {
+  auto vectors = makeVectors(10, 1'000);
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), vectors, "c");
+
+  createDuckDbTable(vectors);
+  auto plan = tableScanNode();
+
+  // Lambda to create HiveConnectorSplits from file paths.
+  auto makeHiveConnectorSplits =
+      [&](const std::vector<std::shared_ptr<
+              facebook::velox::exec::test::TempFilePath>>& filePaths) {
+        std::vector<std::shared_ptr<facebook::velox::connector::ConnectorSplit>>
+            splits;
+        for (const auto& filePath : filePaths) {
+          splits.push_back(
+              hive::HiveConnectorSplitBuilder(filePath->getPath())
+                  .connectorId(kParquetConnectorId)
+                  .fileFormat(dwio::common::FileFormat::PARQUET)
+                  .build());
+        }
+        return splits;
+      };
+
+  auto task = AssertQueryBuilder(duckDbQueryRunner_)
+                  .plan(plan)
+                  .splits(makeHiveConnectorSplits({filePath}))
+                  .assertResults("SELECT * FROM tmp");
+
+  // A quick sanity check for memory usage reporting. Check that peak
+  // total memory usage for the project node is > 0.
   auto planStats = toPlanStats(task->taskStats());
   auto scanNodeId = plan->id();
   auto it = planStats.find(scanNodeId);
