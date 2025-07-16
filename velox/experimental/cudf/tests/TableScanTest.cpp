@@ -206,7 +206,8 @@ TEST_F(TableScanTest, allColumns) {
 
   // Test scan all columns with ParquetConnectorSplits
   {
-    testScanAllColumns(makeParquetConnectorSplits({filePath}));
+    auto splits = makeParquetConnectorSplits({filePath});
+    testScanAllColumns(splits);
   }
 
   // Test scan all columns with HiveConnectorSplits
@@ -228,7 +229,8 @@ TEST_F(TableScanTest, allColumns) {
           return splits;
         };
 
-    testScanAllColumns(makeHiveConnectorSplits({filePath}));
+    auto splits = makeHiveConnectorSplits({filePath});
+    testScanAllColumns(splits);
   }
 }
 
