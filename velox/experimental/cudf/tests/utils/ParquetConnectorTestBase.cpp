@@ -239,7 +239,12 @@ ParquetConnectorTestBase::makeParquetConnectorSplits(
   std::vector<std::shared_ptr<facebook::velox::connector::ConnectorSplit>>
       splits;
   for (const auto& filePath : filePaths) {
-    splits.push_back(makeParquetConnectorSplit(filePath->getPath()));
+    splits.push_back(makeParquetConnectorSplit(
+        filePath->getPath(),
+        filePath->fileSize(),
+        filePath->fileModifiedTime(),
+        0,
+        std::numeric_limits<uint64_t>::max()));
   }
   return splits;
 }
@@ -247,7 +252,9 @@ ParquetConnectorTestBase::makeParquetConnectorSplits(
 std::vector<std::shared_ptr<connector::parquet::ParquetConnectorSplit>>
 ParquetConnectorTestBase::makeParquetConnectorSplits(
     const std::string& filePath,
-    uint32_t splitCount) {
+    uint32_t splitCount,
+    const std::optional<std::unordered_map<std::string, std::string>>&
+        infoColumns) {
   auto file =
       filesystems::getFileSystem(filePath, nullptr)->openFileForRead(filePath);
   const int64_t fileSize = file->size();
@@ -257,10 +264,34 @@ ParquetConnectorTestBase::makeParquetConnectorSplits(
       splits;
   // Add all the splits.
   for (int i = 0; i < splitCount; i++) {
-    auto split = ParquetConnectorSplitBuilder(filePath).build();
+    auto splitBuilder = ParquetConnectorSplitBuilder(filePath)
+                            .start(i * splitSize)
+                            .length(splitSize);
+    if (infoColumns.has_value()) {
+      for (auto infoColumn : infoColumns.value()) {
+        splitBuilder.infoColumn(infoColumn.first, infoColumn.second);
+      }
+    }
+    auto split = splitBuilder.build();
     splits.push_back(std::move(split));
   }
   return splits;
+}
+
+std::shared_ptr<
+    facebook::velox::cudf_velox::connector::parquet::ParquetConnectorSplit>
+ParquetConnectorTestBase::makeParquetConnectorSplit(
+    const std::string& filePath,
+    int64_t fileSize,
+    int64_t fileModifiedTime,
+    uint64_t start,
+    uint64_t length) {
+  return ParquetConnectorSplitBuilder(filePath)
+      .infoColumn("$file_size", fmt::format("{}", fileSize))
+      .infoColumn("$file_modified_time", fmt::format("{}", fileModifiedTime))
+      .start(start)
+      .length(length)
+      .build();
 }
 
 std::shared_ptr<connector::parquet::ParquetConnectorSplit>
@@ -270,9 +301,9 @@ ParquetConnectorTestBase::makeParquetConnectorSplit(
     uint64_t length,
     int64_t splitWeight) {
   return ParquetConnectorSplitBuilder(filePath)
-      .splitWeight(splitWeight)
       .start(start)
       .length(length)
+      .splitWeight(splitWeight)
       .build();
 }
 
