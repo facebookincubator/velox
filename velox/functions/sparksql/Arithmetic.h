@@ -28,6 +28,18 @@
 
 namespace facebook::velox::functions::sparksql {
 
+/// The abs implementation is used for primitive types except for decimal type.
+/// It is compatible with Spark's ANSI off mode. When the input is negative
+/// minimum value, it returns the same value as input instead of throwing an
+/// error.
+template <typename TExec>
+struct AbsFunction {
+  template <typename T>
+  FOLLY_ALWAYS_INLINE void call(T& result, const T& a) {
+    result = std::abs(a);
+  }
+};
+
 template <typename T>
 struct RemainderFunction {
   template <
