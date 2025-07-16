@@ -363,7 +363,7 @@ int main(int argc, char** argv) {
         // https://github.com/facebookincubator/velox/issues/13767
         "array_max(array(__user_T1)) -> __user_T1",
         "array_min(array(__user_T1)) -> __user_T1",
-        "inverse_chi_squared_cdf", // https://github.com/facebookincubator/velox/issues/13788
+        // "inverse_chi_squared_cdf", // https://github.com/facebookincubator/velox/issues/13788
         "bing_tile_children", // Velox limits the max zoom shift
                               // https://github.com/facebookincubator/velox/pull/13604
         // Not registered
