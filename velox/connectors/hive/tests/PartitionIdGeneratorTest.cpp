@@ -343,8 +343,8 @@ TEST_F(PartitionIdGeneratorTest, supportedPartitionKeyTypes) {
              {std::nullopt,
               Timestamp::fromMillis(1639426440001),
               Timestamp::fromMillis(1639426440002)}),
-              makeNullableFlatVector<int128_t>(
-                {std::nullopt, 1, DecimalUtil::kLongDecimalMin})});
+         makeNullableFlatVector<int128_t>(
+             {std::nullopt, 1, DecimalUtil::kLongDecimalMin})});
 
     raw_vector<uint64_t> ids;
     idGenerator.run(input, ids);

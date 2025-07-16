@@ -75,7 +75,7 @@ TEST_F(HivePartitionUtilTest, partitionName) {
          "dict_string_col",
          "const_date_col",
          "flat_timestamp_col",
-        "short_decimal_col",
+         "short_decimal_col",
          "long_decimal_col"},
         {makeFlatVector<bool>(std::vector<bool>{false}),
          makeFlatVector<int8_t>(std::vector<int8_t>{10}),
@@ -88,7 +88,7 @@ TEST_F(HivePartitionUtilTest, partitionName) {
              std::vector<Timestamp>{Timestamp::fromMillis(1577836800000)}),
          makeConstant<int64_t>(10000, 1, DECIMAL(12, 2)),
          makeConstant<int128_t>(
-            DecimalUtil::kLongDecimalMin / 100, 1, DECIMAL(38, 2))});
+             DecimalUtil::kLongDecimalMin / 100, 1, DECIMAL(38, 2))});
 
     std::vector<std::string> expectedPartitionKeyValues{
         "flat_bool_col=false",
