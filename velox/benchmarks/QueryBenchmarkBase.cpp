@@ -285,6 +285,10 @@ QueryBenchmarkBase::listCudfSplits(
     const std::string& path,
     int32_t /*numSplitsPerFile*/,
     const exec::test::TpchPlan& plan) {
+  VELOX_CHECK_EQ(
+      plan.dataFileFormat,
+      dwio::common::FileFormat::PARQUET,
+      "cuDF splits can only be constructed for Parquet files");
   std::vector<std::shared_ptr<connector::ConnectorSplit>> result;
   auto temp = cudf_velox::exec::test::ParquetConnectorTestBase::
       makeParquetConnectorSplits(path, 1);
@@ -333,13 +337,18 @@ QueryBenchmarkBase::run(const TpchPlan& tpchPlan) {
         if (!taskCursor->noMoreSplits()) {
           for (const auto& entry : tpchPlan.dataFiles) {
             for (const auto& path : entry.second) {
-              auto splits = facebook::velox::cudf_velox::cudfIsRegistered() &&
-                      facebook::velox::connector::getAllConnectors().count(
-                          cudf_velox::exec::test::kParquetConnectorId) > 0 &&
-                      facebook::velox::cudf_velox::cudfTableScanEnabled()
-                  ? listCudfSplits(
-                        path, 1 /* numSplitsPerFile = 1 for cudf */, tpchPlan)
-                  : listSplits(path, numSplitsPerFile, tpchPlan);
+              auto splits = [&]() {
+                // Check if we need cuDF splits
+                if (cudf_velox::cudfIsRegistered() &&
+                    connector::getAllConnectors().count(
+                        cudf_velox::exec::test::kParquetConnectorId) > 0 &&
+                    cudf_velox::cudfTableScanEnabled()) {
+                  return listCudfSplits(
+                      path, 1 /* numSplitsPerFile = 1 for cudf */, tpchPlan);
+                } else {
+                  return listSplits(path, numSplitsPerFile, tpchPlan);
+                }
+              }();
               for (auto split : splits) {
                 task->addSplit(entry.first, exec::Split(std::move(split)));
               }
