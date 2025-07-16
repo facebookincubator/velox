@@ -54,6 +54,17 @@ VectorPtr newConstantFromString(
         pool, size, false, type, std::move(days));
   }
 
+  if constexpr (std::is_same_v<T, int64_t> || std::is_same_v<T, int128_t>) {
+    if (type->isDecimal()) {
+      auto [precision, scale] = getDecimalPrecisionScale(*type);
+      const auto status = DecimalUtil::castFromString<T>(
+          StringView(value.value()), precision, scale, result);
+      VELOX_USER_CHECK(status.ok(), status.message);
+      return std::make_shared<ConstantVector<T>>(
+          pool, size, false, type, result);
+    }
+  }
+
   if constexpr (std::is_same_v<T, StringView>) {
     return std::make_shared<ConstantVector<StringView>>(
         pool, size, false, type, StringView(value.value()));
