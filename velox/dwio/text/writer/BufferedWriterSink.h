@@ -17,6 +17,7 @@
 #pragma once
 
 #include "velox/dwio/common/FileSink.h"
+#include "velox/dwio/common/Options.h"
 
 namespace facebook::velox::text {
 
@@ -33,7 +34,13 @@ class BufferedWriterSink {
   ~BufferedWriterSink();
 
   void write(char value);
-  void write(const char* data, uint64_t size);
+  void write(
+      const char* data,
+      uint64_t size,
+      const dwio::common::SerDeOptions& serDeOptions =
+          dwio::common::SerDeOptions(),
+      uint8_t depth = 0);
+
   void flush();
   /// Discard the data in buffer and close the buffer and fileSink.
   void abort();

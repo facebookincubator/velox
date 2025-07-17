@@ -15,6 +15,7 @@
  */
 
 #include "velox/dwio/text/writer/BufferedWriterSink.h"
+#include "velox/dwio/common/Options.h"
 
 namespace facebook::velox::text {
 
@@ -40,16 +41,21 @@ void BufferedWriterSink::write(char value) {
   write(&value, 1);
 }
 
-void BufferedWriterSink::write(const char* data, uint64_t size) {
-  // TODO Add logic for when size is larger than flushCount_
-  VELOX_CHECK_GE(
-      flushBufferSize_,
-      size,
-      "write data size exceeds flush buffer size limit");
-
+void BufferedWriterSink::write(
+    const char* data,
+    uint64_t size,
+    const dwio::common::SerDeOptions& serDeOptions,
+    uint8_t depth) {
   if (buf_->size() + size > flushBufferSize_) {
     flush();
   }
+
+  if (size > flushBufferSize_) {
+    write(data, size / 2, serDeOptions, depth);
+    write(data + size / 2, size - size / 2, serDeOptions, depth);
+    return;
+  }
+
   buf_->append(buf_->size(), data, size);
 }
 

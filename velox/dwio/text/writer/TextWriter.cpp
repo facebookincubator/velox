@@ -77,7 +77,10 @@ TextWriter::TextWriter(
               options->memoryPool->name(),
               folly::to<std::string>(folly::Random::rand64()))),
           options->defaultFlushCount)),
-      serDeOptions_(serDeOptions) {}
+      headerLineCount_(options->headerLineCount),
+      serDeOptions_(serDeOptions) {
+  VELOX_CHECK_LE(headerLineCount_, 1, "Header line count must be <= 1");
+}
 
 uint8_t TextWriter::getDelimiterForDepth(uint8_t depth) const {
   VELOX_CHECK_LT(
@@ -97,6 +100,23 @@ void TextWriter::write(const VectorPtr& data) {
   VELOX_CHECK(
       data->type()->equivalent(*schema_),
       "The file schema type should be equal with the input row vector type.");
+
+  // write 1 row of header
+  if (headerLineCount_ == 1) {
+    const auto numCols = schema_->size();
+    for (column_index_t col = 0; col < numCols; ++col) {
+      if (col != 0) {
+        bufferedWriterSink_->write((char)serDeOptions_.separators[0]);
+      }
+
+      bufferedWriterSink_->write(
+          schema_->nameOf(col).data(),
+          schema_->nameOf(col).length(),
+          serDeOptions_);
+    }
+
+    bufferedWriterSink_->write((char)serDeOptions_.newLine);
+  }
 
   const RowVector* dataRowVector = data->as<RowVector>();
 
@@ -149,65 +169,96 @@ void TextWriter::writeCellValue(
 
   if (decodedColumnVector->isNullAt(row)) {
     bufferedWriterSink_->write(
-        serDeOptions_.nullString.data(), serDeOptions_.nullString.length());
+        serDeOptions_.nullString.data(),
+        serDeOptions_.nullString.length(),
+        serDeOptions_);
     return;
   }
 
   ++depth;
+
+  /// TODO: Increase supported depth in future
+  VELOX_CHECK_LE(depth, 4, "Depth {} exceeds maximum supported depth", 4);
+
   switch (type) {
     case TypeKind::BOOLEAN: {
       auto dataStr =
           toTextStr(folly::to<bool>(decodedColumnVector->valueAt<bool>(row)));
       bufferedWriterSink_->write(
-          dataStr.value().data(), dataStr.value().length());
+          dataStr.value().data(),
+          dataStr.value().length(),
+          serDeOptions_,
+          depth);
       return;
     }
     case TypeKind::TINYINT: {
       auto dataStr = toTextStr(decodedColumnVector->valueAt<int8_t>(row));
       bufferedWriterSink_->write(
-          dataStr.value().data(), dataStr.value().length());
+          dataStr.value().data(),
+          dataStr.value().length(),
+          serDeOptions_,
+          depth);
       return;
     }
     case TypeKind::SMALLINT: {
       auto dataStr = toTextStr(decodedColumnVector->valueAt<int16_t>(row));
       bufferedWriterSink_->write(
-          dataStr.value().data(), dataStr.value().length());
+          dataStr.value().data(),
+          dataStr.value().length(),
+          serDeOptions_,
+          depth);
       return;
     }
     case TypeKind::INTEGER: {
       auto dataStr = toTextStr(decodedColumnVector->valueAt<int32_t>(row));
       bufferedWriterSink_->write(
-          dataStr.value().data(), dataStr.value().length());
+          dataStr.value().data(),
+          dataStr.value().length(),
+          serDeOptions_,
+          depth);
       return;
     }
     case TypeKind::BIGINT: {
       auto dataStr = toTextStr(decodedColumnVector->valueAt<int64_t>(row));
       bufferedWriterSink_->write(
-          dataStr.value().data(), dataStr.value().length());
+          dataStr.value().data(),
+          dataStr.value().length(),
+          serDeOptions_,
+          depth);
       return;
     }
     case TypeKind::REAL: {
       auto dataStr = toTextStr(decodedColumnVector->valueAt<float>(row));
       bufferedWriterSink_->write(
-          dataStr.value().data(), dataStr.value().length());
+          dataStr.value().data(),
+          dataStr.value().length(),
+          serDeOptions_,
+          depth);
       return;
     }
     case TypeKind::DOUBLE: {
       auto dataStr = toTextStr(decodedColumnVector->valueAt<double>(row));
       bufferedWriterSink_->write(
-          dataStr.value().data(), dataStr.value().length());
+          dataStr.value().data(),
+          dataStr.value().length(),
+          serDeOptions_,
+          depth);
       return;
     }
     case TypeKind::TIMESTAMP: {
       auto dataStr = toTextStr(decodedColumnVector->valueAt<Timestamp>(row));
       bufferedWriterSink_->write(
-          dataStr.value().data(), dataStr.value().length());
+          dataStr.value().data(),
+          dataStr.value().length(),
+          serDeOptions_,
+          depth);
       return;
     }
     case TypeKind::VARCHAR: {
       auto dataSV =
           std::optional(decodedColumnVector->valueAt<StringView>(row));
-      bufferedWriterSink_->write(dataSV.value().data(), dataSV.value().size());
+      bufferedWriterSink_->write(
+          dataSV.value().data(), dataSV.value().size(), serDeOptions_, depth);
       return;
     }
     case TypeKind::VARBINARY: {
@@ -215,7 +266,10 @@ void TextWriter::writeCellValue(
       auto dataStr =
           std::optional(encoding::Base64::encode(data.data(), data.size()));
       bufferedWriterSink_->write(
-          dataStr.value().data(), dataStr.value().length());
+          dataStr.value().data(),
+          dataStr.value().length(),
+          serDeOptions_,
+          depth);
       return;
     }
     case TypeKind::ARRAY: {
@@ -314,7 +368,8 @@ void TextWriter::writeCellValue(
     case TypeKind::INVALID:
       [[fallthrough]];
     default:
-      VELOX_NYI("{} is not supported yet in TextWriter", type);
+      VELOX_NYI(
+          "Text writer does not support type {}", mapTypeKindToName(type));
   }
 }
 
