@@ -23,6 +23,7 @@
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
+#include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/expression/FieldReference.h"
 
 #include <cudf/io/parquet.hpp>
