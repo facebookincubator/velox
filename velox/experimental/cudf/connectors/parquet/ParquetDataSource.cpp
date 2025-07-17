@@ -266,10 +266,6 @@ void ParquetDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
       return ParquetConnectorSplitBuilder(hiveSplit->filePath)
           .connectorId(hiveSplit->connectorId)
           .splitWeight(hiveSplit->splitWeight)
-          // TODO: Uncomment once https://github.com/rapidsai/velox/pull/18
-          // merges
-          //.start(hiveSplit->start)
-          //.length(hiveSplit->length)
           .build();
     } else {
       VELOX_FAIL("Unsupported split type: {}", split->toString());
