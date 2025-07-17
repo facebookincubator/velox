@@ -45,6 +45,7 @@ add_executable(
   NoisyCountGaussianAggregationTest.cpp
   NoisyCountIfGaussianAggregationTest.cpp
   NoisySumGaussianAggregationTest.cpp
+  NoisyApproxSfmAggregationTest.cpp
   PrestoHasherTest.cpp
   QDigestAggTest.cpp
   ReduceAggTest.cpp
@@ -78,6 +79,7 @@ target_link_libraries(
   velox_type
   velox_vector_fuzzer
   velox_temp_path
+  xxhash
   gflags::gflags
   GTest::gtest
   GTest::gtest_main)
