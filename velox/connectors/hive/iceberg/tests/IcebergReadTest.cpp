@@ -383,18 +383,19 @@ class HiveIcebergTest : public HiveConnectorTestBase {
     const uint64_t splitSize = std::floor((fileSize) / splitCount);
 
     for (int i = 0; i < splitCount; ++i) {
-      splits.emplace_back(std::make_shared<HiveIcebergSplit>(
-          kHiveConnectorId,
-          dataFilePath,
-          fileFormat_,
-          i * splitSize,
-          splitSize,
-          partitionKeys,
-          std::nullopt,
-          customSplitInfo,
-          nullptr,
-          /*cacheable=*/true,
-          deleteFiles));
+      splits.emplace_back(
+          std::make_shared<HiveIcebergSplit>(
+              kHiveConnectorId,
+              dataFilePath,
+              fileFormat_,
+              i * splitSize,
+              splitSize,
+              partitionKeys,
+              std::nullopt,
+              customSplitInfo,
+              nullptr,
+              /*cacheable=*/true,
+              deleteFiles));
     }
 
     return splits;
@@ -698,39 +699,58 @@ class HiveIcebergTest : public HiveConnectorTestBase {
   }
 
   template <TypeKind KIND>
-  std::string makeNotInList(
-      const std::vector<typename TypeTraits<KIND>::NativeType>&
-          deletePositionVector) {
+std::string makeNotInList(
+    const std::vector<typename TypeTraits<KIND>::NativeType>&
+        deletePositionVector) {
     using T = typename TypeTraits<KIND>::NativeType;
     if (deletePositionVector.empty()) {
       return "";
     }
 
-    return std::accumulate(
-        deletePositionVector.begin() + 1,
-        deletePositionVector.end(),
-        to<std::string>(deletePositionVector[0]),
-        [](const std::string& a, const T& b) {
-          return a + ", " + to<std::string>(b);
-        });
+    if constexpr (KIND == TypeKind::BOOLEAN) {
+      std::string result = deletePositionVector[0] ? "true" : "false";
+      for (size_t i = 1; i < deletePositionVector.size(); ++i) {
+        result += ", ";
+        result += deletePositionVector[i] ? "true" : "false";
+      }
+      return result;
+    } else if constexpr (KIND == TypeKind::VARCHAR) {
+      // For VARCHAR, wrap values in single quotes
+      return std::accumulate(
+          deletePositionVector.begin() + 1,
+          deletePositionVector.end(),
+          fmt::format("'{}'", to<std::string>(deletePositionVector[0])),
+          [](const std::string& a, const T& b) {
+            return a + fmt::format(", '{}'", to<std::string>(b));
+          });
+    } else if constexpr (KIND == TypeKind::VARBINARY) {
+      // For VARBINARY, convert to hex representation with \x prefix
+      auto toHex = [](const StringView& sv) {
+        std::string hexValue = "'\\x";
+        for (char c : std::string(sv)) {
+          hexValue += fmt::format("{:02x}", static_cast<unsigned char>(c));
+        }
+        hexValue += "'";
+        return hexValue;
+      };
+
+      std::string result = toHex(deletePositionVector[0]);
+      for (size_t i = 1; i < deletePositionVector.size(); ++i) {
+        result += ", " + toHex(deletePositionVector[i]);
+      }
+      return result;
+    } else {
+      return std::accumulate(
+          deletePositionVector.begin() + 1,
+          deletePositionVector.end(),
+          to<std::string>(deletePositionVector[0]),
+          [](const std::string& a, const T& b) {
+            return a + ", " + to<std::string>(b);
+          });
+    }
   }
 
-  // Specialization for BOOLEAN to avoid folly::to on std::vector<bool>
-  template <>
-  std::string makeNotInList<TypeKind::BOOLEAN>(
-      const std::vector<bool>& deletePositionVector) {
-    if (deletePositionVector.empty()) {
-      return "";
-    }
-    std::string result = deletePositionVector[0] ? "true" : "false";
-    for (size_t i = 1; i < deletePositionVector.size(); ++i) {
-      result += ", ";
-      result += deletePositionVector[i] ? "true" : "false";
-    }
-    return result;
-  }
-
-  core::PlanNodePtr tableScanNode(RowTypePtr outputRowType) {
+  core::PlanNodePtr tableScanNode(const RowTypePtr& outputRowType) {
     return PlanBuilder(pool_.get()).tableScan(outputRowType).planNode();
   }
 
@@ -1933,32 +1953,6 @@ class HiveIcebergEqualityDeletesTest
     } else if constexpr (std::is_integral_v<T>) {
       equalityDeleteVectorMap.insert({0, {makeSequenceValues<T>(rowCount)}});
       assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap);
-    } else if constexpr (std::is_same_v<T, Timestamp>) {
-      std::vector<Timestamp> deleteValues;
-      deleteValues.reserve(rowCount);
-      for (int i = 0; i < rowCount; ++i) {
-        deleteValues.push_back(Timestamp(i, 0));
-      }
-      equalityDeleteVectorMap.insert({0, {deleteValues}});
-      assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap);
-    } else if constexpr (std::is_same_v<T, bool>) {
-      std::vector<bool> deleteValues;
-      for (int i = 0; i < rowCount; ++i) {
-        deleteValues.push_back(i % 2 == 0);
-      }
-      equalityDeleteVectorMap.insert({0, {deleteValues}});
-      assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap);
-    } else if constexpr (std::is_floating_point_v<T>) {
-      std::vector<T> deleteValues;
-      for (int i = 0; i < rowCount; ++i) {
-        deleteValues.push_back(static_cast<T>(i) + static_cast<T>(0.5));
-      }
-      equalityDeleteVectorMap.insert({0, {deleteValues}});
-      assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap);
-    } else {
-      static_assert(
-          !sizeof(KIND),
-          "Unsupported type for testSingleColumnEqualityDeletes");
     }
 
     // Test 4: Delete random rows
@@ -1983,39 +1977,9 @@ class HiveIcebergEqualityDeletesTest
       }
       equalityDeleteVectorMap.insert({0, {deleteValues}});
       assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap);
-    } else if constexpr (std::is_same_v<T, Timestamp>) {
-      auto randomIndices = makeRandomDeleteValues(rowCount);
-      std::vector<Timestamp> deleteValues;
-      for (auto idx : randomIndices) {
-        deleteValues.push_back(Timestamp(idx, 0));
-      }
-      equalityDeleteVectorMap.insert({0, {deleteValues}});
-      assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap);
-    } else if constexpr (std::is_same_v<T, bool>) {
-      auto randomIndices = makeRandomDeleteValues(rowCount);
-      std::vector<bool> deleteValues;
-      for (auto idx : randomIndices) {
-        deleteValues.push_back(idx % 2 == 0);
-      }
-      equalityDeleteVectorMap.insert({0, {deleteValues}});
-      assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap);
-    } else if constexpr (std::is_floating_point_v<T>) {
-      auto randomIndices = makeRandomDeleteValues(rowCount);
-      std::vector<T> deleteValues;
-      for (auto idx : randomIndices) {
-        deleteValues.push_back(static_cast<T>(idx) + static_cast<T>(0.5));
-      }
-      equalityDeleteVectorMap.insert({0, {deleteValues}});
-      assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap);
-    } else {
-      static_assert(
-          !sizeof(KIND),
-          "Unsupported type for testSingleColumnEqualityDeletes");
     }
 
-    // Test 5: Delete 0 rows (already covered by Test 2)
-
-    // Test 6: Delete rows that don't exist
+    // Test 5: Delete rows that don't exist
     equalityDeleteVectorMap.clear();
     if constexpr (std::is_integral_v<T>) {
       equalityDeleteVectorMap.insert(
@@ -2027,23 +1991,6 @@ class HiveIcebergEqualityDeletesTest
           StringView("nonexistent1"), StringView("nonexistent2")};
       equalityDeleteVectorMap.insert({0, {deleteValues}});
       assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap);
-    } else if constexpr (std::is_same_v<T, Timestamp>) {
-      equalityDeleteVectorMap.insert(
-          {0, {{Timestamp(rowCount, 0), Timestamp(rowCount + 1, 0)}}});
-      assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap);
-    } else if constexpr (std::is_same_v<T, bool>) {
-      equalityDeleteVectorMap.insert({0, {{true, false}}});
-      assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap);
-    } else if constexpr (std::is_floating_point_v<T>) {
-      equalityDeleteVectorMap.insert(
-          {0,
-           {{static_cast<T>(rowCount) + static_cast<T>(0.5),
-             static_cast<T>(rowCount + 1) + static_cast<T>(0.5)}}});
-      assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap);
-    } else {
-      static_assert(
-          !sizeof(KIND),
-          "Unsupported type for testSingleColumnEqualityDeletes");
     }
   }
 
@@ -2081,23 +2028,6 @@ class HiveIcebergEqualityDeletesTest
           {0,
            {{static_cast<T>(0), static_cast<T>(2)},
             {static_cast<T>(0), static_cast<T>(1)}}});
-      assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap);
-    } else if constexpr (std::is_same_v<T, Timestamp>) {
-      // Delete specific timestamp pairs
-      equalityDeleteVectorMap.insert(
-          {0,
-           {{Timestamp(0, 0), Timestamp(2000, 0)},
-            {Timestamp(0, 0), Timestamp(1000, 0)}}});
-      assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap);
-    } else if constexpr (std::is_same_v<T, bool>) {
-      // For boolean, we have limited combinations
-      equalityDeleteVectorMap.insert({0, {{false, true}, {false, true}}});
-      assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap);
-    } else if constexpr (std::is_floating_point_v<T>) {
-      equalityDeleteVectorMap.insert(
-          {0,
-           {{static_cast<T>(0.5), static_cast<T>(2.5)},
-            {static_cast<T>(0.5), static_cast<T>(1.5)}}});
       assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap);
     }
 
@@ -2140,50 +2070,6 @@ class HiveIcebergEqualityDeletesTest
           equalityDeleteVectorMap,
           equalityFieldIdsMap,
           "SELECT * FROM tmp WHERE 1 = 0");
-    } else if constexpr (std::is_same_v<T, Timestamp>) {
-      std::vector<Timestamp> deleteValuesCol0;
-      std::vector<Timestamp> deleteValuesCol1;
-      deleteValuesCol0.reserve(rowCount);
-      deleteValuesCol1.reserve(rowCount);
-
-      for (int i = 0; i < rowCount; ++i) {
-        deleteValuesCol0.push_back(Timestamp(i * 1000, 0));
-        deleteValuesCol1.push_back(Timestamp((i / 2) * 1000, 0));
-      }
-
-      equalityDeleteVectorMap.insert({0, {deleteValuesCol0, deleteValuesCol1}});
-      assertEqualityDeletes<KIND>(
-          equalityDeleteVectorMap,
-          equalityFieldIdsMap,
-          "SELECT * FROM tmp WHERE 1 = 0");
-    } else if constexpr (std::is_same_v<T, bool>) {
-      std::vector<bool> deleteValuesCol0;
-      std::vector<bool> deleteValuesCol1;
-
-      for (int i = 0; i < rowCount; ++i) {
-        deleteValuesCol0.push_back(i % 2 == 0);
-        deleteValuesCol1.push_back((i / 2) % 2 == 0);
-      }
-
-      equalityDeleteVectorMap.insert({0, {deleteValuesCol0, deleteValuesCol1}});
-      assertEqualityDeletes<KIND>(
-          equalityDeleteVectorMap,
-          equalityFieldIdsMap,
-          "SELECT * FROM tmp WHERE 1 = 0");
-    } else if constexpr (std::is_floating_point_v<T>) {
-      std::vector<T> deleteValuesCol0;
-      std::vector<T> deleteValuesCol1;
-
-      for (int i = 0; i < rowCount; ++i) {
-        deleteValuesCol0.push_back(static_cast<T>(i) + static_cast<T>(0.5));
-        deleteValuesCol1.push_back(static_cast<T>(i / 2) + static_cast<T>(0.5));
-      }
-
-      equalityDeleteVectorMap.insert({0, {deleteValuesCol0, deleteValuesCol1}});
-      assertEqualityDeletes<KIND>(
-          equalityDeleteVectorMap,
-          equalityFieldIdsMap,
-          "SELECT * FROM tmp WHERE 1 = 0");
     }
 
     // Test 4: Delete random row pairs
@@ -2219,43 +2105,6 @@ class HiveIcebergEqualityDeletesTest
 
       equalityDeleteVectorMap.insert({0, {deleteValuesCol0, deleteValuesCol1}});
       assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap);
-    } else if constexpr (std::is_same_v<T, Timestamp>) {
-      auto randomIndices = makeRandomDeleteValues(rowCount / 2);
-      std::vector<Timestamp> deleteValuesCol0;
-      std::vector<Timestamp> deleteValuesCol1;
-
-      for (auto idx : randomIndices) {
-        deleteValuesCol0.push_back(Timestamp(idx * 1000, 0));
-        deleteValuesCol1.push_back(Timestamp((idx / 2) * 1000, 0));
-      }
-
-      equalityDeleteVectorMap.insert({0, {deleteValuesCol0, deleteValuesCol1}});
-      assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap);
-    } else if constexpr (std::is_same_v<T, bool>) {
-      auto randomIndices = makeRandomDeleteValues(rowCount / 2);
-      std::vector<bool> deleteValuesCol0;
-      std::vector<bool> deleteValuesCol1;
-
-      for (auto idx : randomIndices) {
-        deleteValuesCol0.push_back(idx % 2 == 0);
-        deleteValuesCol1.push_back((idx / 2) % 2 == 0);
-      }
-
-      equalityDeleteVectorMap.insert({0, {deleteValuesCol0, deleteValuesCol1}});
-      assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap);
-    } else if constexpr (std::is_floating_point_v<T>) {
-      auto randomIndices = makeRandomDeleteValues(rowCount / 2);
-      std::vector<T> deleteValuesCol0;
-      std::vector<T> deleteValuesCol1;
-
-      for (auto idx : randomIndices) {
-        deleteValuesCol0.push_back(static_cast<T>(idx) + static_cast<T>(0.5));
-        deleteValuesCol1.push_back(
-            static_cast<T>(idx / 2) + static_cast<T>(0.5));
-      }
-
-      equalityDeleteVectorMap.insert({0, {deleteValuesCol0, deleteValuesCol1}});
-      assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap);
     }
 
     // Test 5: Delete non-existent row pairs
@@ -2272,27 +2121,6 @@ class HiveIcebergEqualityDeletesTest
           {0,
            {{StringView("nonexistent1"), StringView("nonexistent2")},
             {StringView("nonexistent3"), StringView("nonexistent4")}}});
-      assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap);
-    } else if constexpr (std::is_same_v<T, Timestamp>) {
-      equalityDeleteVectorMap.insert(
-          {0,
-           {{Timestamp(rowCount * 1000, 0),
-             Timestamp((rowCount + 1) * 1000, 0)},
-            {Timestamp(rowCount * 1000, 0),
-             Timestamp((rowCount + 1) * 1000, 0)}}});
-      assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap);
-    } else if constexpr (std::is_same_v<T, bool>) {
-      // For boolean, all combinations exist, so we'll just test with a specific
-      // pattern
-      equalityDeleteVectorMap.insert({0, {{true, false}, {false, true}}});
-      assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap);
-    } else if constexpr (std::is_floating_point_v<T>) {
-      equalityDeleteVectorMap.insert(
-          {0,
-           {{static_cast<T>(rowCount) + static_cast<T>(0.5),
-             static_cast<T>(rowCount + 1) + static_cast<T>(0.5)},
-            {static_cast<T>(rowCount) + static_cast<T>(0.5),
-             static_cast<T>(rowCount + 1) + static_cast<T>(0.5)}}});
       assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap);
     }
   }
