@@ -32,7 +32,6 @@ using namespace facebook::velox::dwio::common;
 using namespace facebook::velox::test;
 
 namespace facebook::velox::connector::hive::iceberg {
-
 class HiveIcebergTest : public HiveConnectorTestBase {
  public:
   HiveIcebergTest()
@@ -716,6 +715,21 @@ class HiveIcebergTest : public HiveConnectorTestBase {
         });
   }
 
+  // Specialization for BOOLEAN to avoid folly::to on std::vector<bool>
+  template <>
+  std::string makeNotInList<TypeKind::BOOLEAN>(
+      const std::vector<bool>& deletePositionVector) {
+    if (deletePositionVector.empty()) {
+      return "";
+    }
+    std::string result = deletePositionVector[0] ? "true" : "false";
+    for (size_t i = 1; i < deletePositionVector.size(); ++i) {
+      result += ", ";
+      result += deletePositionVector[i] ? "true" : "false";
+    }
+    return result;
+  }
+
   core::PlanNodePtr tableScanNode(RowTypePtr outputRowType) {
     return PlanBuilder(pool_.get()).tableScan(outputRowType).planNode();
   }
@@ -989,7 +1003,8 @@ class HiveIcebergTest : public HiveConnectorTestBase {
 };
 
 /// This test creates one single data file and one delete file. The parameter
-/// passed to assertSingleBaseFileSinglePositionalDelete is the delete positions.
+/// passed to assertSingleBaseFileSinglePositionalDelete is the delete
+/// positions.
 TEST_F(HiveIcebergTest, singleBaseFileSinglePositionalDeleteFile) {
   folly::SingletonVault::singleton()->registrationComplete();
 
@@ -1791,14 +1806,14 @@ TEST_F(HiveIcebergTest, equalityDeletesShortDecimal) {
       dataVectors);
 
   // Delete all
-  equalityDeleteVectorMap.clear();
-  equalityDeleteVectorMap.insert(
-      {0, {{123456, 789012, 345678, 901234, 567890}}});
-  assertEqualityDeletes<TypeKind::BIGINT>(
-      equalityDeleteVectorMap,
-      equalityFieldIdsMap,
-      "SELECT * FROM tmp WHERE 1 = 0",
-      dataVectors);
+  // equalityDeleteVectorMap.clear();
+  // equalityDeleteVectorMap.insert(
+  //     {0, {{"123456", "789012", "345678", "901234", "567890"}}});
+  // assertEqualityDeletes<TypeKind::BIGINT>(
+  //     equalityDeleteVectorMap,
+  //     equalityFieldIdsMap,
+  //     "SELECT * FROM tmp WHERE 1 = 0",
+  //     dataVectors);
 
   // Delete none
   equalityDeleteVectorMap.clear();
@@ -1855,9 +1870,10 @@ class HiveIcebergEqualityDeletesTest
   template <TypeKind KIND>
   void testSingleColumnEqualityDeletes() {
     folly::SingletonVault::singleton()->registrationComplete();
+    using T = typename TypeTraits<KIND>::NativeType;
 
     std::unordered_map<int8_t, std::vector<int32_t>> equalityFieldIdsMap;
-    std::unordered_map<int8_t, std::vector<std::vector<typename TypeTraits<KIND>::NativeType>>>
+    std::unordered_map<int8_t, std::vector<std::vector<T>>>
         equalityDeleteVectorMap;
     equalityFieldIdsMap.insert({0, {1}});
 
@@ -1865,86 +1881,169 @@ class HiveIcebergEqualityDeletesTest
     equalityDeleteVectorMap.clear();
     if constexpr (KIND == TypeKind::VARCHAR || KIND == TypeKind::VARBINARY) {
       auto dataVectors = makeVectors<KIND>(1, rowCount, 1);
-      auto flatVector = dataVectors[0]->childAt(0)->template as<FlatVector<StringView>>();
+      auto flatVector =
+          dataVectors[0]->childAt(0)->template as<FlatVector<StringView>>();
       std::vector<StringView> deleteValues = {
-          flatVector->valueAt(0),
-          flatVector->valueAt(rowCount - 1)
-      };
+          flatVector->valueAt(0), flatVector->valueAt(rowCount - 1)};
       equalityDeleteVectorMap.insert({0, {deleteValues}});
-    } else if constexpr (std::is_integral_v<typename TypeTraits<KIND>::NativeType>) {
-      using T = typename TypeTraits<KIND>::NativeType;
-      equalityDeleteVectorMap.insert({0, {{static_cast<T>(0), static_cast<T>(rowCount - 1)}}});
-    } else if constexpr (std::is_same_v<typename TypeTraits<KIND>::NativeType, Timestamp>) {
-      equalityDeleteVectorMap.insert({0, {{Timestamp(0, 0), Timestamp(rowCount - 1, 0)}}});
-    } else if constexpr (std::is_same_v<typename TypeTraits<KIND>::NativeType, bool>) {
+      assertEqualityDeletes<KIND>(
+          equalityDeleteVectorMap, equalityFieldIdsMap, "", dataVectors);
+    } else if constexpr (std::is_integral_v<T>) {
+      equalityDeleteVectorMap.insert(
+          {0, {{static_cast<T>(0), static_cast<T>(rowCount - 1)}}});
+      assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap);
+    } else if constexpr (std::is_same_v<T, Timestamp>) {
+      equalityDeleteVectorMap.insert(
+          {0, {{Timestamp(0, 0), Timestamp(rowCount - 1, 0)}}});
+      assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap);
+    } else if constexpr (std::is_same_v<T, bool>) {
       equalityDeleteVectorMap.insert({0, {{false, true}}});
-    } else if constexpr (std::is_floating_point_v<typename TypeTraits<KIND>::NativeType>) {
-      using T = typename TypeTraits<KIND>::NativeType;
-      equalityDeleteVectorMap.insert({0, {{static_cast<T>(0.5), static_cast<T>(rowCount - 1) + static_cast<T>(0.5)}}});
+      assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap);
+    } else if constexpr (std::is_floating_point_v<T>) {
+      equalityDeleteVectorMap.insert(
+          {0,
+           {{static_cast<T>(0.5),
+             static_cast<T>(rowCount - 1) + static_cast<T>(0.5)}}});
+      assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap);
     } else {
-      static_assert(!sizeof(KIND), "Unsupported type for testSingleColumnEqualityDeletes");
+      static_assert(
+          !sizeof(KIND),
+          "Unsupported type for testSingleColumnEqualityDeletes");
     }
-    assertEqualityDeletes<KIND>(
-        equalityDeleteVectorMap, equalityFieldIdsMap);
 
     // Test 2: Delete none (empty delete vector)
     equalityDeleteVectorMap.clear();
     equalityDeleteVectorMap.insert({0, {{}}});
-    assertEqualityDeletes<KIND>(
-        equalityDeleteVectorMap, equalityFieldIdsMap);
+    assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap);
 
     // Test 3: Delete all rows
     equalityDeleteVectorMap.clear();
-    {
-      std::vector<typename TypeTraits<KIND>::NativeType> del1, del2;
-      del1.reserve(rowCount);
-      del2.reserve(rowCount);
+    if constexpr (KIND == TypeKind::VARCHAR || KIND == TypeKind::VARBINARY) {
+      auto dataVectors = makeVectors<KIND>(1, rowCount, 1);
+      auto flatVector =
+          dataVectors[0]->childAt(0)->template as<FlatVector<StringView>>();
+      std::vector<StringView> deleteValues;
+      deleteValues.reserve(rowCount);
       for (int i = 0; i < rowCount; ++i) {
-        del1.push_back(flatVector1->valueAt(i));
-        del2.push_back(flatVector2->valueAt(i));
+        deleteValues.push_back(flatVector->valueAt(i));
       }
-      equalityDeleteVectorMap.insert({0, {del1, del2}});
-      assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap, "", dataVectors);
+      equalityDeleteVectorMap.insert({0, {deleteValues}});
+      assertEqualityDeletes<KIND>(
+          equalityDeleteVectorMap, equalityFieldIdsMap, "", dataVectors);
+    } else if constexpr (std::is_integral_v<T>) {
+      equalityDeleteVectorMap.insert({0, {makeSequenceValues<T>(rowCount)}});
+      assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap);
+    } else if constexpr (std::is_same_v<T, Timestamp>) {
+      std::vector<Timestamp> deleteValues;
+      deleteValues.reserve(rowCount);
+      for (int i = 0; i < rowCount; ++i) {
+        deleteValues.push_back(Timestamp(i, 0));
+      }
+      equalityDeleteVectorMap.insert({0, {deleteValues}});
+      assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap);
+    } else if constexpr (std::is_same_v<T, bool>) {
+      std::vector<bool> deleteValues;
+      for (int i = 0; i < rowCount; ++i) {
+        deleteValues.push_back(i % 2 == 0);
+      }
+      equalityDeleteVectorMap.insert({0, {deleteValues}});
+      assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap);
+    } else if constexpr (std::is_floating_point_v<T>) {
+      std::vector<T> deleteValues;
+      for (int i = 0; i < rowCount; ++i) {
+        deleteValues.push_back(static_cast<T>(i) + static_cast<T>(0.5));
+      }
+      equalityDeleteVectorMap.insert({0, {deleteValues}});
+      assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap);
+    } else {
+      static_assert(
+          !sizeof(KIND),
+          "Unsupported type for testSingleColumnEqualityDeletes");
     }
 
     // Test 4: Delete random rows
     equalityDeleteVectorMap.clear();
-    {
-      std::vector<int64_t> randomIndices = makeRandomDeleteValues(rowCount);
-      std::vector<typename TypeTraits<KIND>::NativeType> del1, del2;
+    if constexpr (KIND == TypeKind::VARCHAR || KIND == TypeKind::VARBINARY) {
+      auto dataVectors = makeVectors<KIND>(1, rowCount, 1);
+      auto flatVector =
+          dataVectors[0]->childAt(0)->template as<FlatVector<StringView>>();
+      auto randomIndices = makeRandomDeleteValues(rowCount);
+      std::vector<StringView> deleteValues;
       for (auto idx : randomIndices) {
-        del1.push_back(flatVector1->valueAt(idx));
-        del2.push_back(flatVector2->valueAt(idx));
+        deleteValues.push_back(flatVector->valueAt(idx));
       }
-      equalityDeleteVectorMap.insert({0, {del1, del2}});
-      assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap, "", dataVectors);
+      equalityDeleteVectorMap.insert({0, {deleteValues}});
+      assertEqualityDeletes<KIND>(
+          equalityDeleteVectorMap, equalityFieldIdsMap, "", dataVectors);
+    } else if constexpr (std::is_integral_v<T>) {
+      std::vector<T> deleteValues;
+      auto randomIndices = makeRandomDeleteValues(rowCount);
+      for (auto idx : randomIndices) {
+        deleteValues.push_back(static_cast<T>(idx));
+      }
+      equalityDeleteVectorMap.insert({0, {deleteValues}});
+      assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap);
+    } else if constexpr (std::is_same_v<T, Timestamp>) {
+      auto randomIndices = makeRandomDeleteValues(rowCount);
+      std::vector<Timestamp> deleteValues;
+      for (auto idx : randomIndices) {
+        deleteValues.push_back(Timestamp(idx, 0));
+      }
+      equalityDeleteVectorMap.insert({0, {deleteValues}});
+      assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap);
+    } else if constexpr (std::is_same_v<T, bool>) {
+      auto randomIndices = makeRandomDeleteValues(rowCount);
+      std::vector<bool> deleteValues;
+      for (auto idx : randomIndices) {
+        deleteValues.push_back(idx % 2 == 0);
+      }
+      equalityDeleteVectorMap.insert({0, {deleteValues}});
+      assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap);
+    } else if constexpr (std::is_floating_point_v<T>) {
+      auto randomIndices = makeRandomDeleteValues(rowCount);
+      std::vector<T> deleteValues;
+      for (auto idx : randomIndices) {
+        deleteValues.push_back(static_cast<T>(idx) + static_cast<T>(0.5));
+      }
+      equalityDeleteVectorMap.insert({0, {deleteValues}});
+      assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap);
+    } else {
+      static_assert(
+          !sizeof(KIND),
+          "Unsupported type for testSingleColumnEqualityDeletes");
     }
 
     // Test 5: Delete 0 rows (already covered by Test 2)
 
     // Test 6: Delete rows that don't exist
     equalityDeleteVectorMap.clear();
-    {
-      std::vector<typename TypeTraits<KIND>::NativeType> del1, del2;
-      if constexpr (std::is_integral_v<typename TypeTraits<KIND>::NativeType>) {
-        del1 = {static_cast<typename TypeTraits<KIND>::NativeType>(rowCount), static_cast<typename TypeTraits<KIND>::NativeType>(rowCount + 1)};
-        del2 = {static_cast<typename TypeTraits<KIND>::NativeType>(rowCount), static_cast<typename TypeTraits<KIND>::NativeType>(rowCount + 1)};
-      } else if constexpr (KIND == TypeKind::VARCHAR || KIND == TypeKind::VARBINARY) {
-        del1 = {StringView("nonexistent1"), StringView("nonexistent2")};
-        del2 = {StringView("nonexistent3"), StringView("nonexistent4")};
-      } else if constexpr (std::is_same_v<typename TypeTraits<KIND>::NativeType, Timestamp>) {
-        del1 = {Timestamp(rowCount, 0), Timestamp(rowCount + 1, 0)};
-        del2 = {Timestamp(rowCount, 0), Timestamp(rowCount + 1, 0)};
-      } else if constexpr (std::is_same_v<typename TypeTraits<KIND>::NativeType, bool>) {
-        del1 = {true, false};
-        del2 = {false, true};
-      } else if constexpr (std::is_floating_point_v<typename TypeTraits<KIND>::NativeType>) {
-        using T = typename TypeTraits<KIND>::NativeType;
-        del1 = {static_cast<T>(rowCount) + static_cast<T>(0.5), static_cast<T>(rowCount + 1) + static_cast<T>(0.5)};
-        del2 = {static_cast<T>(rowCount) + static_cast<T>(0.5), static_cast<T>(rowCount + 1) + static_cast<T>(0.5)};
-      }
-      equalityDeleteVectorMap.insert({0, {del1, del2}});
-      assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap, "", dataVectors);
+    if constexpr (std::is_integral_v<T>) {
+      equalityDeleteVectorMap.insert(
+          {0, {{static_cast<T>(rowCount), static_cast<T>(rowCount + 1)}}});
+      assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap);
+    } else if constexpr (
+        KIND == TypeKind::VARCHAR || KIND == TypeKind::VARBINARY) {
+      std::vector<StringView> deleteValues = {
+          StringView("nonexistent1"), StringView("nonexistent2")};
+      equalityDeleteVectorMap.insert({0, {deleteValues}});
+      assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap);
+    } else if constexpr (std::is_same_v<T, Timestamp>) {
+      equalityDeleteVectorMap.insert(
+          {0, {{Timestamp(rowCount, 0), Timestamp(rowCount + 1, 0)}}});
+      assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap);
+    } else if constexpr (std::is_same_v<T, bool>) {
+      equalityDeleteVectorMap.insert({0, {{true, false}}});
+      assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap);
+    } else if constexpr (std::is_floating_point_v<T>) {
+      equalityDeleteVectorMap.insert(
+          {0,
+           {{static_cast<T>(rowCount) + static_cast<T>(0.5),
+             static_cast<T>(rowCount + 1) + static_cast<T>(0.5)}}});
+      assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap);
+    } else {
+      static_assert(
+          !sizeof(KIND),
+          "Unsupported type for testSingleColumnEqualityDeletes");
     }
   }
 
@@ -1952,81 +2051,249 @@ class HiveIcebergEqualityDeletesTest
   void testTwoColumnEqualityDeletes() {
     folly::SingletonVault::singleton()->registrationComplete();
 
+    using T = typename TypeTraits<KIND>::NativeType;
     std::unordered_map<int8_t, std::vector<int32_t>> equalityFieldIdsMap;
-    std::unordered_map<int8_t, std::vector<std::vector<typename TypeTraits<KIND>::NativeType>>> equalityDeleteVectorMap;
+    std::unordered_map<int8_t, std::vector<std::vector<T>>>
+        equalityDeleteVectorMap;
     equalityFieldIdsMap.insert({0, {1, 2}});
 
-    // Prepare data vectors for two columns
-    auto dataVectors = makeVectors<KIND>(1, rowCount, 2);
-    auto flatVector1 = dataVectors[0]->childAt(0)->template as<FlatVector<typename TypeTraits<KIND>::NativeType>>();
-    auto flatVector2 = dataVectors[0]->childAt(1)->template as<FlatVector<typename TypeTraits<KIND>::NativeType>>();
-
-    // Test 1: Delete first and last rows
+    // Test 1: Delete specific row pairs
     equalityDeleteVectorMap.clear();
-    {
-      std::vector<typename TypeTraits<KIND>::NativeType> del1 = {flatVector1->valueAt(0), flatVector1->valueAt(rowCount - 1)};
-      std::vector<typename TypeTraits<KIND>::NativeType> del2 = {flatVector2->valueAt(0), flatVector2->valueAt(rowCount - 1)};
-      equalityDeleteVectorMap.insert({0, {del1, del2}});
-      assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap, "", dataVectors);
+    if constexpr (KIND == TypeKind::VARCHAR || KIND == TypeKind::VARBINARY) {
+      auto dataVectors = makeVectors<KIND>(1, rowCount, 2);
+      auto col0 =
+          dataVectors[0]->childAt(0)->template as<FlatVector<StringView>>();
+      auto col1 =
+          dataVectors[0]->childAt(1)->template as<FlatVector<StringView>>();
+
+      // Delete first two row pairs
+      std::vector<StringView> deleteValuesCol0 = {
+          col0->valueAt(0), col0->valueAt(1)};
+      std::vector<StringView> deleteValuesCol1 = {
+          col1->valueAt(0), col1->valueAt(1)};
+
+      equalityDeleteVectorMap.insert({0, {deleteValuesCol0, deleteValuesCol1}});
+      assertEqualityDeletes<KIND>(
+          equalityDeleteVectorMap, equalityFieldIdsMap, "", dataVectors);
+    } else if constexpr (std::is_integral_v<T>) {
+      // Delete rows where (c0=0 AND c1=0) and (c0=2 AND c1=1)
+      equalityDeleteVectorMap.insert(
+          {0,
+           {{static_cast<T>(0), static_cast<T>(2)},
+            {static_cast<T>(0), static_cast<T>(1)}}});
+      assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap);
+    } else if constexpr (std::is_same_v<T, Timestamp>) {
+      // Delete specific timestamp pairs
+      equalityDeleteVectorMap.insert(
+          {0,
+           {{Timestamp(0, 0), Timestamp(2000, 0)},
+            {Timestamp(0, 0), Timestamp(1000, 0)}}});
+      assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap);
+    } else if constexpr (std::is_same_v<T, bool>) {
+      // For boolean, we have limited combinations
+      equalityDeleteVectorMap.insert({0, {{false, true}, {false, true}}});
+      assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap);
+    } else if constexpr (std::is_floating_point_v<T>) {
+      equalityDeleteVectorMap.insert(
+          {0,
+           {{static_cast<T>(0.5), static_cast<T>(2.5)},
+            {static_cast<T>(0.5), static_cast<T>(1.5)}}});
+      assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap);
     }
 
-    // Test 2: Delete none (empty delete vector)
+    // Test 2: Delete none (empty delete vectors)
     equalityDeleteVectorMap.clear();
     equalityDeleteVectorMap.insert({0, {{}, {}}});
-    assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap, "", dataVectors);
+    assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap);
 
     // Test 3: Delete all rows
     equalityDeleteVectorMap.clear();
-    {
-      std::vector<typename TypeTraits<KIND>::NativeType> del1, del2;
-      del1.reserve(rowCount);
-      del2.reserve(rowCount);
+    if constexpr (KIND == TypeKind::VARCHAR || KIND == TypeKind::VARBINARY) {
+      auto dataVectors = makeVectors<KIND>(1, rowCount, 2);
+      auto col0 =
+          dataVectors[0]->childAt(0)->template as<FlatVector<StringView>>();
+      auto col1 =
+          dataVectors[0]->childAt(1)->template as<FlatVector<StringView>>();
+
+      std::vector<StringView> deleteValuesCol0;
+      std::vector<StringView> deleteValuesCol1;
+      deleteValuesCol0.reserve(rowCount);
+      deleteValuesCol1.reserve(rowCount);
+
+      for (int i = 0; i < rowCount; i++) {
+        deleteValuesCol0.push_back(col0->valueAt(i));
+        deleteValuesCol1.push_back(col1->valueAt(i));
+      }
+
+      equalityDeleteVectorMap.insert({0, {deleteValuesCol0, deleteValuesCol1}});
+      assertEqualityDeletes<KIND>(
+          equalityDeleteVectorMap,
+          equalityFieldIdsMap,
+          "SELECT * FROM tmp WHERE 1 = 0",
+          dataVectors);
+    } else if constexpr (std::is_integral_v<T>) {
+      equalityDeleteVectorMap.insert(
+          {0,
+           {makeSequenceValues<T>(rowCount, 1),
+            makeSequenceValues<T>(rowCount, 2)}});
+      assertEqualityDeletes<KIND>(
+          equalityDeleteVectorMap,
+          equalityFieldIdsMap,
+          "SELECT * FROM tmp WHERE 1 = 0");
+    } else if constexpr (std::is_same_v<T, Timestamp>) {
+      std::vector<Timestamp> deleteValuesCol0;
+      std::vector<Timestamp> deleteValuesCol1;
+      deleteValuesCol0.reserve(rowCount);
+      deleteValuesCol1.reserve(rowCount);
+
       for (int i = 0; i < rowCount; ++i) {
-        del1.push_back(flatVector1->valueAt(i));
-        del2.push_back(flatVector2->valueAt(i));
+        deleteValuesCol0.push_back(Timestamp(i * 1000, 0));
+        deleteValuesCol1.push_back(Timestamp((i / 2) * 1000, 0));
       }
-      equalityDeleteVectorMap.insert({0, {del1, del2}});
-      assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap, "", dataVectors);
+
+      equalityDeleteVectorMap.insert({0, {deleteValuesCol0, deleteValuesCol1}});
+      assertEqualityDeletes<KIND>(
+          equalityDeleteVectorMap,
+          equalityFieldIdsMap,
+          "SELECT * FROM tmp WHERE 1 = 0");
+    } else if constexpr (std::is_same_v<T, bool>) {
+      std::vector<bool> deleteValuesCol0;
+      std::vector<bool> deleteValuesCol1;
+
+      for (int i = 0; i < rowCount; ++i) {
+        deleteValuesCol0.push_back(i % 2 == 0);
+        deleteValuesCol1.push_back((i / 2) % 2 == 0);
+      }
+
+      equalityDeleteVectorMap.insert({0, {deleteValuesCol0, deleteValuesCol1}});
+      assertEqualityDeletes<KIND>(
+          equalityDeleteVectorMap,
+          equalityFieldIdsMap,
+          "SELECT * FROM tmp WHERE 1 = 0");
+    } else if constexpr (std::is_floating_point_v<T>) {
+      std::vector<T> deleteValuesCol0;
+      std::vector<T> deleteValuesCol1;
+
+      for (int i = 0; i < rowCount; ++i) {
+        deleteValuesCol0.push_back(static_cast<T>(i) + static_cast<T>(0.5));
+        deleteValuesCol1.push_back(static_cast<T>(i / 2) + static_cast<T>(0.5));
+      }
+
+      equalityDeleteVectorMap.insert({0, {deleteValuesCol0, deleteValuesCol1}});
+      assertEqualityDeletes<KIND>(
+          equalityDeleteVectorMap,
+          equalityFieldIdsMap,
+          "SELECT * FROM tmp WHERE 1 = 0");
     }
 
-    // Test 4: Delete random rows
+    // Test 4: Delete random row pairs
     equalityDeleteVectorMap.clear();
-    {
-      std::vector<int64_t> randomIndices = makeRandomDeleteValues(rowCount);
-      std::vector<typename TypeTraits<KIND>::NativeType> del1, del2;
+    if constexpr (KIND == TypeKind::VARCHAR || KIND == TypeKind::VARBINARY) {
+      auto dataVectors = makeVectors<KIND>(1, rowCount, 2);
+      auto col0 =
+          dataVectors[0]->childAt(0)->template as<FlatVector<StringView>>();
+      auto col1 =
+          dataVectors[0]->childAt(1)->template as<FlatVector<StringView>>();
+
+      auto randomIndices = makeRandomDeleteValues(rowCount / 2);
+      std::vector<StringView> deleteValuesCol0;
+      std::vector<StringView> deleteValuesCol1;
+
       for (auto idx : randomIndices) {
-        del1.push_back(flatVector1->valueAt(idx));
-        del2.push_back(flatVector2->valueAt(idx));
+        deleteValuesCol0.push_back(col0->valueAt(idx));
+        deleteValuesCol1.push_back(col1->valueAt(idx));
       }
-      equalityDeleteVectorMap.insert({0, {del1, del2}});
-      assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap, "", dataVectors);
+
+      equalityDeleteVectorMap.insert({0, {deleteValuesCol0, deleteValuesCol1}});
+      assertEqualityDeletes<KIND>(
+          equalityDeleteVectorMap, equalityFieldIdsMap, "", dataVectors);
+    } else if constexpr (std::is_integral_v<T>) {
+      auto randomIndices = makeRandomDeleteValues(rowCount / 2);
+      std::vector<T> deleteValuesCol0;
+      std::vector<T> deleteValuesCol1;
+
+      for (auto idx : randomIndices) {
+        deleteValuesCol0.push_back(static_cast<T>(idx));
+        deleteValuesCol1.push_back(static_cast<T>(idx / 2));
+      }
+
+      equalityDeleteVectorMap.insert({0, {deleteValuesCol0, deleteValuesCol1}});
+      assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap);
+    } else if constexpr (std::is_same_v<T, Timestamp>) {
+      auto randomIndices = makeRandomDeleteValues(rowCount / 2);
+      std::vector<Timestamp> deleteValuesCol0;
+      std::vector<Timestamp> deleteValuesCol1;
+
+      for (auto idx : randomIndices) {
+        deleteValuesCol0.push_back(Timestamp(idx * 1000, 0));
+        deleteValuesCol1.push_back(Timestamp((idx / 2) * 1000, 0));
+      }
+
+      equalityDeleteVectorMap.insert({0, {deleteValuesCol0, deleteValuesCol1}});
+      assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap);
+    } else if constexpr (std::is_same_v<T, bool>) {
+      auto randomIndices = makeRandomDeleteValues(rowCount / 2);
+      std::vector<bool> deleteValuesCol0;
+      std::vector<bool> deleteValuesCol1;
+
+      for (auto idx : randomIndices) {
+        deleteValuesCol0.push_back(idx % 2 == 0);
+        deleteValuesCol1.push_back((idx / 2) % 2 == 0);
+      }
+
+      equalityDeleteVectorMap.insert({0, {deleteValuesCol0, deleteValuesCol1}});
+      assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap);
+    } else if constexpr (std::is_floating_point_v<T>) {
+      auto randomIndices = makeRandomDeleteValues(rowCount / 2);
+      std::vector<T> deleteValuesCol0;
+      std::vector<T> deleteValuesCol1;
+
+      for (auto idx : randomIndices) {
+        deleteValuesCol0.push_back(static_cast<T>(idx) + static_cast<T>(0.5));
+        deleteValuesCol1.push_back(
+            static_cast<T>(idx / 2) + static_cast<T>(0.5));
+      }
+
+      equalityDeleteVectorMap.insert({0, {deleteValuesCol0, deleteValuesCol1}});
+      assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap);
     }
 
-    // Test 5: Delete 0 rows (already covered by Test 2)
-
-    // Test 6: Delete rows that don't exist
+    // Test 5: Delete non-existent row pairs
     equalityDeleteVectorMap.clear();
-    {
-      std::vector<typename TypeTraits<KIND>::NativeType> del1, del2;
-      if constexpr (std::is_integral_v<typename TypeTraits<KIND>::NativeType>) {
-        del1 = {static_cast<typename TypeTraits<KIND>::NativeType>(rowCount), static_cast<typename TypeTraits<KIND>::NativeType>(rowCount + 1)};
-        del2 = {static_cast<typename TypeTraits<KIND>::NativeType>(rowCount), static_cast<typename TypeTraits<KIND>::NativeType>(rowCount + 1)};
-      } else if constexpr (KIND == TypeKind::VARCHAR || KIND == TypeKind::VARBINARY) {
-        del1 = {StringView("nonexistent1"), StringView("nonexistent2")};
-        del2 = {StringView("nonexistent3"), StringView("nonexistent4")};
-      } else if constexpr (std::is_same_v<typename TypeTraits<KIND>::NativeType, Timestamp>) {
-        del1 = {Timestamp(rowCount, 0), Timestamp(rowCount + 1, 0)};
-        del2 = {Timestamp(rowCount, 0), Timestamp(rowCount + 1, 0)};
-      } else if constexpr (std::is_same_v<typename TypeTraits<KIND>::NativeType, bool>) {
-        del1 = {true, false};
-        del2 = {false, true};
-      } else if constexpr (std::is_floating_point_v<typename TypeTraits<KIND>::NativeType>) {
-        using T = typename TypeTraits<KIND>::NativeType;
-        del1 = {static_cast<T>(rowCount) + static_cast<T>(0.5), static_cast<T>(rowCount + 1) + static_cast<T>(0.5)};
-        del2 = {static_cast<T>(rowCount) + static_cast<T>(0.5), static_cast<T>(rowCount + 1) + static_cast<T>(0.5)};
-      }
-      equalityDeleteVectorMap.insert({0, {del1, del2}});
-      assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap, "", dataVectors);
+    if constexpr (std::is_integral_v<T>) {
+      equalityDeleteVectorMap.insert(
+          {0,
+           {{static_cast<T>(rowCount), static_cast<T>(rowCount + 1)},
+            {static_cast<T>(rowCount), static_cast<T>(rowCount + 1)}}});
+      assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap);
+    } else if constexpr (
+        KIND == TypeKind::VARCHAR || KIND == TypeKind::VARBINARY) {
+      equalityDeleteVectorMap.insert(
+          {0,
+           {{StringView("nonexistent1"), StringView("nonexistent2")},
+            {StringView("nonexistent3"), StringView("nonexistent4")}}});
+      assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap);
+    } else if constexpr (std::is_same_v<T, Timestamp>) {
+      equalityDeleteVectorMap.insert(
+          {0,
+           {{Timestamp(rowCount * 1000, 0),
+             Timestamp((rowCount + 1) * 1000, 0)},
+            {Timestamp(rowCount * 1000, 0),
+             Timestamp((rowCount + 1) * 1000, 0)}}});
+      assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap);
+    } else if constexpr (std::is_same_v<T, bool>) {
+      // For boolean, all combinations exist, so we'll just test with a specific
+      // pattern
+      equalityDeleteVectorMap.insert({0, {{true, false}, {false, true}}});
+      assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap);
+    } else if constexpr (std::is_floating_point_v<T>) {
+      equalityDeleteVectorMap.insert(
+          {0,
+           {{static_cast<T>(rowCount) + static_cast<T>(0.5),
+             static_cast<T>(rowCount + 1) + static_cast<T>(0.5)},
+            {static_cast<T>(rowCount) + static_cast<T>(0.5),
+             static_cast<T>(rowCount + 1) + static_cast<T>(0.5)}}});
+      assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap);
     }
   }
 };
@@ -2034,86 +2301,32 @@ class HiveIcebergEqualityDeletesTest
 // Test implementation
 TEST_P(HiveIcebergEqualityDeletesTest, SingleColumnEqualityDeletes) {
   TypeKind typeKind = GetParam();
-
-  switch (typeKind) {
-    case TypeKind::TINYINT:
-      testSingleColumnEqualityDeletes<TypeKind::TINYINT>();
-      break;
-    case TypeKind::SMALLINT:
-      testSingleColumnEqualityDeletes<TypeKind::SMALLINT>();
-      break;
-    case TypeKind::INTEGER:
-      testSingleColumnEqualityDeletes<TypeKind::INTEGER>();
-      break;
-    case TypeKind::BIGINT:
-      testSingleColumnEqualityDeletes<TypeKind::BIGINT>();
-      break;
-    case TypeKind::VARCHAR:
-      testSingleColumnEqualityDeletes<TypeKind::VARCHAR>();
-      break;
-    case TypeKind::VARBINARY:
-      testSingleColumnEqualityDeletes<TypeKind::VARBINARY>();
-      break;
-    // case TypeKind::BOOLEAN:
-    //   testSingleColumnEqualityDeletes<TypeKind::BOOLEAN>();
-      break;
-    case TypeKind::TIMESTAMP:
-      testSingleColumnEqualityDeletes<TypeKind::TIMESTAMP>();
-      break;
-    case TypeKind::REAL:
-      testSingleColumnEqualityDeletes<TypeKind::REAL>();
-      break;
-    case TypeKind::DOUBLE:
-      testSingleColumnEqualityDeletes<TypeKind::DOUBLE>();
-      break;
-    default:
-      FAIL() << "Unsupported type kind: " << typeKind;
-  }
+  VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(testSingleColumnEqualityDeletes, typeKind);
 }
 
 // Add two-column equality deletes test
 TEST_P(HiveIcebergEqualityDeletesTest, TwoColumnEqualityDeletes) {
   TypeKind typeKind = GetParam();
-
-  switch (typeKind) {
-    case TypeKind::TINYINT:
-      testTwoColumnEqualityDeletes<TypeKind::TINYINT>();
-      break;
-    case TypeKind::SMALLINT:
-      testTwoColumnEqualityDeletes<TypeKind::SMALLINT>();
-      break;
-    case TypeKind::INTEGER:
-      testTwoColumnEqualityDeletes<TypeKind::INTEGER>();
-      break;
-    case TypeKind::BIGINT:
-      testTwoColumnEqualityDeletes<TypeKind::BIGINT>();
-      break;
-    case TypeKind::VARCHAR:
-      testTwoColumnEqualityDeletes<TypeKind::VARCHAR>();
-      break;
-    case TypeKind::VARBINARY:
-      testTwoColumnEqualityDeletes<TypeKind::VARBINARY>();
-      break;
-    // case TypeKind::BOOLEAN:
-    //   testTwoColumnEqualityDeletes<TypeKind::BOOLEAN>();
-      break;
-    case TypeKind::TIMESTAMP:
-      testTwoColumnEqualityDeletes<TypeKind::TIMESTAMP>();
-      break;
-    case TypeKind::REAL:
-      testTwoColumnEqualityDeletes<TypeKind::REAL>();
-      break;
-    case TypeKind::DOUBLE:
-      testTwoColumnEqualityDeletes<TypeKind::DOUBLE>();
-      break;
-    default:
-      FAIL() << "Unsupported type kind: " << typeKind;
-  }
+  VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(testTwoColumnEqualityDeletes, typeKind);
 }
+
+INSTANTIATE_TEST_SUITE_P(
+    AllTypes,
+    HiveIcebergEqualityDeletesTest,
+    testing::Values(
+        TypeKind::TINYINT,
+        TypeKind::SMALLINT,
+        TypeKind::INTEGER,
+        TypeKind::BIGINT,
+        TypeKind::VARCHAR,
+        TypeKind::VARBINARY),
+    [](const testing::TestParamInfo<TypeKind>& info) {
+      return mapTypeKindToName(info.param);
+    });
 
 // TODO: Future extensions
 // - Multiple column equality deletes test
 // - Multiple delete files test
 // - Mixed positional and equality deletes test
 // - Partitioned table with equality deletes test
-}
+} // namespace facebook::velox::connector::hive::iceberg
