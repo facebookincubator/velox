@@ -15,17 +15,30 @@
  */
 
 #include "velox/dwio/text/writer/BufferedWriterSink.h"
+#include "velox/dwio/common/BufferUtil.h"
+#include "velox/dwio/common/Options.h"
 
 namespace facebook::velox::text {
 
 BufferedWriterSink::BufferedWriterSink(
     std::unique_ptr<dwio::common::FileSink> sink,
     std::shared_ptr<memory::MemoryPool> pool,
-    uint64_t flushBufferSize)
+    uint64_t flushBufferSize,
+    const std::shared_ptr<dwio::common::WriterOptions>& options)
     : sink_(std::move(sink)),
       pool_(std::move(pool)),
       flushBufferSize_(flushBufferSize),
-      buf_(std::make_unique<dwio::common::DataBuffer<char>>(*pool_)) {
+      buf_(std::make_unique<dwio::common::DataBuffer<char>>(*pool_)),
+      compressedBuf_(std::make_unique<dwio::common::DataBuffer<char>>(*pool_)),
+      options_(options) {
+  if (options_ && options_->compressionKind.has_value()) {
+    compressor_ = dwio::common::compression::createCompressor(
+        options_->compressionKind.value(),
+        getTextCompressionOptions(options_->compressionKind.value()));
+  } else {
+    compressor_ = nullptr;
+  }
+
   reserveBuffer();
 }
 
@@ -34,14 +47,59 @@ BufferedWriterSink::~BufferedWriterSink() {
       buf_->size(),
       0,
       "Unexpected buffer data on BufferedWriterSink destruction");
+  VELOX_CHECK_EQ(
+      compressedBuf_->size(),
+      0,
+      "Unexpected buffer data on BufferedWriterSink destruction");
 }
 
 void BufferedWriterSink::write(char value) {
-  write(&value, 1);
+  write(&value, 1, dwio::common::SerDeOptions(), 0);
 }
 
-void BufferedWriterSink::write(const char* data, uint64_t size) {
-  // TODO Add logic for when size is larger than flushCount_
+void BufferedWriterSink::writeToSinkWithEscapeChar(
+    const char* data,
+    const uint64_t size,
+    const dwio::common::SerDeOptions& serDeOptions,
+    uint8_t depth) {
+  std::string result;
+
+  // Reserve additional space for escape characters
+  result.reserve(size * 2);
+
+  for (size_t i = 0; i < size; ++i) {
+    // Check separators from deepest to shallowest nesting level.
+    // This optimizes for the common case where matches occur at deeper levels,
+    // allowing early exit from the inner loop.
+    for (int j = depth - 1; j >= 0; --j) {
+      if (data[i] == serDeOptions.separators[j]) {
+        result += (char)serDeOptions.escapeChar;
+        break;
+      }
+    }
+    result += data[i];
+  }
+
+  write(result.data(), result.length(), dwio::common::SerDeOptions(), 0);
+}
+
+void BufferedWriterSink::write(
+    const char* data,
+    uint64_t size,
+    const dwio::common::SerDeOptions& serDeOptions,
+    uint8_t depth) {
+  // Recursive call to write data in chunks of flushBufferSize_
+  if (size > flushBufferSize_) {
+    write(data, size / 2, serDeOptions, depth);
+    write(data + size / 2, size - size / 2, serDeOptions, depth);
+    return;
+  }
+
+  if (serDeOptions.isEscaped) {
+    writeToSinkWithEscapeChar(data, size, serDeOptions, depth);
+    return;
+  }
+
   VELOX_CHECK_GE(
       flushBufferSize_,
       size,
@@ -58,8 +116,25 @@ void BufferedWriterSink::flush() {
     return;
   }
 
-  sink_->write(std::move(*buf_));
+  if (!options_ || !options_->compressionKind.has_value() ||
+      options_->compressionKind.value() == common::CompressionKind_NONE) {
+    sink_->write(std::move(*buf_));
+    reserveBuffer();
+    return;
+  }
+
+  dwio::common::ensureCapacity<char>(
+      compressionBufferPtr_, buf_->size(), pool_.get(), false, false);
+  char* dest = compressionBufferPtr_->asMutable<char>();
+  const auto compressedSize =
+      compressor_->compress(buf_->data(), dest, buf_->size());
+  compressedBuf_->append(compressedBuf_->size(), dest, compressedSize);
+
+  sink_->write(std::move(*compressedBuf_));
+
+  buf_->clear();
   reserveBuffer();
+  reserveCompressedBuffer();
 }
 
 void BufferedWriterSink::abort() {
@@ -80,6 +155,13 @@ void BufferedWriterSink::reserveBuffer() {
   VELOX_CHECK_EQ(buf_->size(), 0);
   VELOX_CHECK_EQ(buf_->capacity(), 0);
   buf_->reserve(flushBufferSize_);
+}
+
+void BufferedWriterSink::reserveCompressedBuffer() {
+  VELOX_CHECK_NOT_NULL(compressedBuf_);
+  VELOX_CHECK_EQ(compressedBuf_->size(), 0);
+  VELOX_CHECK_EQ(compressedBuf_->capacity(), 0);
+  compressedBuf_->reserve(flushBufferSize_);
 }
 
 } // namespace facebook::velox::text

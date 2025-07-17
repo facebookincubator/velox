@@ -42,7 +42,7 @@ class TextWriter : public dwio::common::Writer {
   TextWriter(
       RowTypePtr schema,
       std::unique_ptr<dwio::common::FileSink> sink,
-      const std::shared_ptr<text::WriterOptions>& options,
+      const std::shared_ptr<WriterOptions>& options,
       const SerDeOptions& serDeOptions = SerDeOptions());
 
   ~TextWriter() override = default;
@@ -72,6 +72,7 @@ class TextWriter : public dwio::common::Writer {
 
   const RowTypePtr schema_;
   const std::unique_ptr<BufferedWriterSink> bufferedWriterSink_;
+  const std::shared_ptr<WriterOptions> options_;
 
   SerDeOptions serDeOptions_;
 };
