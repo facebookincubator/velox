@@ -1529,6 +1529,29 @@ struct CurrentDateFunction {
 };
 
 template <typename T>
+struct CurrentTimestampFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  int64_t result_{0};
+  const tz::TimeZone* timeZone_ = nullptr;
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /* type */,
+      const core::QueryConfig& config) {
+    Timestamp ts = Timestamp::now();
+    timeZone_ = getTimeZoneFromConfig(config);
+    if (timeZone_ != nullptr) {
+      result_ = pack(ts, timeZone_->id());
+      return;
+    }
+    result_ = pack(ts, Timestamp::defaultTimezone().id());
+  }
+
+  FOLLY_ALWAYS_INLINE void call(out_type<TimestampWithTimezone>& result) {
+    result = result_;
+};
+
+template <typename T>
 struct TimeZoneHourFunction : public TimestampWithTimezoneSupport<T> {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
