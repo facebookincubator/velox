@@ -237,6 +237,13 @@ is not congtained in <code class="docutils literal notranslate"><span class="pre
 or <code class="docutils literal notranslate"><span class="pre">geometry2</span></code>.</p>
 </dd></dl>
 
+<dl class="py function">
+<dt class="sig sig-object py" id="ST_Envelope">
+<span class="sig-name descname"><span class="pre">ST_Envelope</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">envelope:</span> <span class="pre">Geometry</span></span></span><a class="headerlink" href="#ST_Envelope" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the bounding rectangular polygon of a <code class="docutils literal notranslate"><span class="pre">geometry</span></code>. Empty input will
+result in empty output.</p>
+</dd></dl>
+
 </section>
 <section id="accessors">
 <h2>Accessors<a class="headerlink" href="#accessors" title="Link to this heading">¶</a></h2>
@@ -445,6 +452,12 @@ will evaluate to 1.</p>
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="ST_ExteriorRing">
+<span class="sig-name descname"><span class="pre">ST_ExteriorRing</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">output:</span> <span class="pre">Geometry</span></span></span><a class="headerlink" href="#ST_ExteriorRing" title="Link to this definition">¶</a></dt>
+<dd><p>Returns a line string representing the exterior ring of the input polygon.</p>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="simplify_geometry">
 <span class="sig-name descname"><span class="pre">simplify_geometry</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">tolerance</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">double</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">output:</span> <span class="pre">Geometry</span></span></span><a class="headerlink" href="#simplify_geometry" title="Link to this definition">¶</a></dt>
 <dd><p>Returns a “simplified” version of the input geometry using the
@@ -579,6 +592,7 @@ specified.</p>
 <li><a class="reference internal" href="#ST_Intersection"><code class="docutils literal notranslate"><span class="pre">ST_Intersection()</span></code></a></li>
 <li><a class="reference internal" href="#ST_SymDifference"><code class="docutils literal notranslate"><span class="pre">ST_SymDifference()</span></code></a></li>
 <li><a class="reference internal" href="#ST_Union"><code class="docutils literal notranslate"><span class="pre">ST_Union()</span></code></a></li>
+<li><a class="reference internal" href="#ST_Envelope"><code class="docutils literal notranslate"><span class="pre">ST_Envelope()</span></code></a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#accessors">Accessors</a><ul>
@@ -608,6 +622,7 @@ specified.</p>
 <li><a class="reference internal" href="#ST_NumInteriorRing"><code class="docutils literal notranslate"><span class="pre">ST_NumInteriorRing()</span></code></a></li>
 <li><a class="reference internal" href="#ST_ConvexHull"><code class="docutils literal notranslate"><span class="pre">ST_ConvexHull()</span></code></a></li>
 <li><a class="reference internal" href="#ST_Dimension"><code class="docutils literal notranslate"><span class="pre">ST_Dimension()</span></code></a></li>
+<li><a class="reference internal" href="#ST_ExteriorRing"><code class="docutils literal notranslate"><span class="pre">ST_ExteriorRing()</span></code></a></li>
 <li><a class="reference internal" href="#simplify_geometry"><code class="docutils literal notranslate"><span class="pre">simplify_geometry()</span></code></a></li>
 </ul>
 </li>
