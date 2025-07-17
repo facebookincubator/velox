@@ -24,6 +24,7 @@
 #include <optional>
 
 #include "velox/common/base/Status.h"
+#include "velox/type/StringView.h"
 
 namespace facebook::velox::functions::geospatial {
 
@@ -57,6 +58,17 @@ namespace facebook::velox::functions::geospatial {
   }
 
 geos::geom::GeometryFactory* getGeometryFactory();
+
+enum class EnvelopeOp {
+  Contains,
+  Equals,
+  Intersects,
+};
+
+bool checkEnvelopePredicate(
+    const StringView& leftGeometry,
+    const StringView& rightGeometry,
+    EnvelopeOp op);
 
 FOLLY_ALWAYS_INLINE const
     std::unordered_map<geos::geom::GeometryTypeId, std::string>&
