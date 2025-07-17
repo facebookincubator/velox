@@ -14,22 +14,20 @@
  * limitations under the License.
  */
 
-#include "velox/exec/tests/TableEvolutionFuzzer.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/dwio/dwrf/RegisterDwrfReader.h"
 #include "velox/dwio/dwrf/RegisterDwrfWriter.h"
+#include "velox/exec/tests/TableEvolutionFuzzer.h"
 
 #include <folly/init/Init.h>
 #include <gflags/gflags.h>
-#include <gtest/gtest.h>
 
 DEFINE_uint32(seed, 0, "");
 DEFINE_int32(duration_sec, 30, "");
 DEFINE_int32(column_count, 5, "");
 DEFINE_int32(evolution_count, 5, "");
 
-namespace facebook::velox::exec::test {
-
+namespace facebook::velox::exec {
 namespace {
 
 void registerFactories(folly::Executor* ioExecutor) {
@@ -49,8 +47,20 @@ void registerFactories(folly::Executor* ioExecutor) {
   dwrf::registerDwrfReaderFactory();
   dwrf::registerDwrfWriterFactory();
 }
+} // namespace
+} // namespace facebook::velox::exec
 
-TEST(TableEvolutionFuzzerTest, run) {
+int main(int argc, char** argv) {
+  testing::InitGoogleTest(&argc, argv);
+  folly::Init init(&argc, &argv);
+  if (gflags::GetCommandLineFlagInfoOrDie("seed").is_default) {
+    FLAGS_seed = std::random_device{}();
+    LOG(INFO) << "Use generated random seed " << FLAGS_seed;
+  }
+  facebook::velox::memory::MemoryManager::initialize(
+      facebook::velox::memory::MemoryManager::Options{});
+  auto ioExecutor = folly::getGlobalIOExecutor();
+  facebook::velox::exec::test::registerFactories(ioExecutor.get());
   auto pool = memory::memoryManager()->addLeafPool("TableEvolutionFuzzer");
   exec::test::TableEvolutionFuzzer::Config config;
   config.pool = pool.get();
@@ -67,22 +77,4 @@ TEST(TableEvolutionFuzzerTest, run) {
     fuzzer.run();
     fuzzer.reSeed();
   }
-}
-
-} // namespace
-
-} // namespace facebook::velox::exec::test
-
-int main(int argc, char** argv) {
-  testing::InitGoogleTest(&argc, argv);
-  folly::Init init(&argc, &argv);
-  if (gflags::GetCommandLineFlagInfoOrDie("seed").is_default) {
-    FLAGS_seed = std::random_device{}();
-    LOG(INFO) << "Use generated random seed " << FLAGS_seed;
-  }
-  facebook::velox::memory::MemoryManager::initialize(
-      facebook::velox::memory::MemoryManager::Options{});
-  auto ioExecutor = folly::getGlobalIOExecutor();
-  facebook::velox::exec::test::registerFactories(ioExecutor.get());
-  return RUN_ALL_TESTS();
 }

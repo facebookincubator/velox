@@ -180,6 +180,12 @@ target_link_libraries(
   velox_vector_test_lib
   velox_vector_fuzzer)
 
+add_executable(velox_table_evolution_fuzzer TableEvolutionFuzzerRunner.cpp)
+
+target_link_libraries(
+  velox_table_evolution_fuzzer velox_exec_test_lib velox_temp_path
+  velox_vector_fuzzer)
+
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()

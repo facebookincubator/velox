@@ -22,7 +22,7 @@
 #include <gflags/gflags.h>
 #include <gtest/gtest.h>
 
-namespace facebook::velox::exec::test {
+namespace facebook::velox::exec {
 
 class TableEvolutionFuzzer {
  public:
@@ -113,4 +113,4 @@ class TableEvolutionFuzzer {
   int64_t sequenceNumber_ = 0;
 };
 
-} // namespace facebook::velox::exec::test
+} // namespace facebook::velox::exec

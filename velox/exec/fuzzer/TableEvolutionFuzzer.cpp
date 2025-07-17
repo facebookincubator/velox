@@ -43,7 +43,7 @@ DEFINE_bool(
     "up after failures. Therefore, results are not compared when this is "
     "enabled. Note that this option only works in debug builds.");
 
-namespace facebook::velox::exec::test {
+namespace facebook::velox::exec {
 
 std::ostream& operator<<(
     std::ostream& out,
@@ -676,4 +676,4 @@ std::unique_ptr<TaskCursor> TableEvolutionFuzzer::makeScanTask(
   return cursor;
 }
 
-} // namespace facebook::velox::exec::test
+} // namespace facebook::velox::exec
