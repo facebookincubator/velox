@@ -59,10 +59,10 @@ VectorPtr newConstantFromString(
       auto [precision, scale] = getDecimalPrecisionScale(*type);
       T result;
       const auto status = DecimalUtil::castFromString<T>(
-          StringView(value.value()), precision, scale, std::move(result));
+          StringView(value.value()), precision, scale, result);
       VELOX_USER_CHECK(status.ok(), status.message());
       return std::make_shared<ConstantVector<T>>(
-          pool, size, false, type, result);
+          pool, size, false, type, std::move(result));
     }
   }
 
