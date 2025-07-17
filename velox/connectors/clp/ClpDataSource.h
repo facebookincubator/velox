@@ -92,7 +92,6 @@ class ClpDataSource : public DataSource {
       size_t& readerIndex);
 
   ClpConfig::StorageType storageType_;
-  std::string kqlQuery_;
   velox::memory::MemoryPool* pool_;
   RowTypePtr outputType_;
   std::set<std::string> columnUntypedNames_;

@@ -37,11 +37,6 @@ ClpDataSource::ClpDataSource(
     : pool_(pool), outputType_(outputType) {
   auto clpTableHandle = std::dynamic_pointer_cast<ClpTableHandle>(tableHandle);
   storageType_ = clpConfig->storageType();
-  if (auto query = clpTableHandle->kqlQuery(); query && !query->empty()) {
-    kqlQuery_ = *query;
-  } else {
-    kqlQuery_ = "*";
-  }
 
   for (const auto& outputName : outputType->names()) {
     auto columnHandle = columnHandles.find(outputName);
@@ -114,7 +109,12 @@ void ClpDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
         clp_s::InputSource::Network, clpSplit->path_);
   }
 
-  cursor_->executeQuery(kqlQuery_, fields_);
+  auto pushDownQuery = clpSplit->kqlQuery_;
+  if (pushDownQuery && !pushDownQuery->empty()) {
+    cursor_->executeQuery(*pushDownQuery, fields_);
+  } else {
+    cursor_->executeQuery("*", fields_);
+  }
 }
 
 VectorPtr ClpDataSource::createVector(
