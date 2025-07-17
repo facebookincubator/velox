@@ -243,18 +243,14 @@ ParquetDataSource::createSplitReader() {
   // Reader options
   auto readerOptions =
       cudf::io::parquet_reader_options::builder(split_->getCudfSourceInfo())
-          .skip_rows(parquetConfig_->skipRows())
+          .skip_rows(static_cast<int64_t>(split_->getSkipRows()))
+          .num_rows(static_cast<cudf::size_type>(split_->getNumRows()))
           .use_pandas_metadata(parquetConfig_->isUsePandasMetadata())
           .use_arrow_schema(parquetConfig_->isUseArrowSchema())
           .allow_mismatched_pq_schemas(
               parquetConfig_->isAllowMismatchedParquetSchemas())
           .timestamp_type(parquetConfig_->timestampType())
           .build();
-
-  // Set num_rows only if available
-  if (parquetConfig_->numRows().has_value()) {
-    readerOptions.set_num_rows(parquetConfig_->numRows().value());
-  }
 
   if (subfieldFilterExprSet_) {
     auto subfieldFilterExpr = subfieldFilterExprSet_->expr(0);

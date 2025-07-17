@@ -28,23 +28,46 @@ namespace facebook::velox::cudf_velox::connector::parquet {
 struct ParquetConnectorSplit
     : public facebook::velox::connector::ConnectorSplit {
   const std::string filePath;
-  const facebook::velox::dwio::common::FileFormat fileFormat{
-      facebook::velox::dwio::common::FileFormat::PARQUET};
+  const dwio::common::FileFormat fileFormat{dwio::common::FileFormat::PARQUET};
+  const uint64_t start;
+  const uint64_t length;
   const cudf::io::source_info cudfSourceInfo;
 
   ParquetConnectorSplit(
       const std::string& connectorId,
       const std::string& _filePath,
+      uint64_t _start = 0,
+      uint64_t _length =
+          static_cast<uint64_t>(std::numeric_limits<cudf::size_type>::max()),
       int64_t _splitWeight = 0)
       : facebook::velox::connector::ConnectorSplit(connectorId, _splitWeight),
         filePath(_filePath),
-        cudfSourceInfo({filePath}) {}
+        start(_start),
+        length(_length),
+        cudfSourceInfo({filePath}) {
+    VELOX_CHECK(
+        start <=
+            static_cast<uint64_t>(std::numeric_limits<cudf::size_type>::max()),
+        "ParquetConnectorSplit `start` must be less than or equal to 2^31");
+    VELOX_CHECK(
+        length <=
+            static_cast<uint64_t>(std::numeric_limits<cudf::size_type>::max()),
+        "ParquetConnectorSplit `length` must be less than or equal to 2^31");
+  }
 
   std::string toString() const override;
   std::string getFileName() const;
 
   const cudf::io::source_info& getCudfSourceInfo() const {
     return cudfSourceInfo;
+  }
+
+  uint64_t getNumRows() const {
+    return length;
+  }
+
+  uint64_t getSkipRows() const {
+    return start;
   }
 
   static std::shared_ptr<ParquetConnectorSplit> create(
@@ -66,14 +89,34 @@ class ParquetConnectorSplitBuilder {
     return *this;
   }
 
+  ParquetConnectorSplitBuilder& start(uint64_t start) {
+    VELOX_CHECK(
+        start <=
+            static_cast<uint64_t>(std::numeric_limits<cudf::size_type>::max()),
+        "ParquetConnectorSplit `start` must be less than or equal to 2^31");
+    start_ = start;
+    return *this;
+  }
+
+  ParquetConnectorSplitBuilder& length(uint64_t length) {
+    VELOX_CHECK(
+        length <=
+            static_cast<uint64_t>(std::numeric_limits<cudf::size_type>::max()),
+        "ParquetConnectorSplit `length` must be less than or equal to 2^31");
+    length_ = length;
+    return *this;
+  }
+
   std::shared_ptr<ParquetConnectorSplit> build() const {
     return std::make_shared<ParquetConnectorSplit>(
-        connectorId_, filePath_, splitWeight_);
+        connectorId_, filePath_, start_, length_, splitWeight_);
   }
 
  private:
   const std::string filePath_;
   std::string connectorId_;
+  uint64_t start_{0};
+  uint64_t length_{std::numeric_limits<cudf::size_type>::max()};
   int64_t splitWeight_{0};
 };
 

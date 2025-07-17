@@ -33,11 +33,13 @@ std::string ParquetConnectorSplit::getFileName() const {
 std::shared_ptr<ParquetConnectorSplit> ParquetConnectorSplit::create(
     const folly::dynamic& obj) {
   const auto connectorId = obj["connectorId"].asString();
-  const auto splitWeight = obj["splitWeight"].asInt();
   const auto filePath = obj["filePath"].asString();
+  const auto start = static_cast<uint64_t>(obj["start"].asInt());
+  const auto length = static_cast<uint64_t>(obj["length"].asInt());
+  const auto splitWeight = obj["splitWeight"].asInt();
 
   return std::make_shared<ParquetConnectorSplit>(
-      connectorId, filePath, splitWeight);
+      connectorId, filePath, start, length, splitWeight);
 }
 
 } // namespace facebook::velox::cudf_velox::connector::parquet

@@ -85,6 +85,9 @@ class ParquetConnectorTestBase
       facebook::velox::cudf_velox::connector::parquet::ParquetConnectorSplit>
   makeParquetConnectorSplit(
       const std::string& filePath,
+      uint64_t start = 0,
+      uint64_t length =
+          static_cast<uint64_t>(std::numeric_limits<cudf::size_type>::max()),
       int64_t splitWeight = 0);
 
   static std::vector<

@@ -25,17 +25,6 @@
 
 namespace facebook::velox::cudf_velox::connector::parquet {
 
-int64_t ParquetConfig::skipRows() const {
-  return config_->get<int64_t>(kSkipRows, 0);
-}
-
-std::optional<cudf::size_type> ParquetConfig::numRows() const {
-  auto numRows = config_->get<cudf::size_type>(kNumRows);
-  return numRows.has_value()
-      ? std::make_optional<cudf::size_type>(numRows.value())
-      : std::nullopt;
-}
-
 std::size_t ParquetConfig::maxChunkReadLimit() const {
   // chunk read limit = 0 means no limit
   return config_->get<std::size_t>(kMaxChunkReadLimit, 0);

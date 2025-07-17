@@ -266,9 +266,13 @@ ParquetConnectorTestBase::makeParquetConnectorSplits(
 std::shared_ptr<connector::parquet::ParquetConnectorSplit>
 ParquetConnectorTestBase::makeParquetConnectorSplit(
     const std::string& filePath,
+    uint64_t start,
+    uint64_t length,
     int64_t splitWeight) {
   return ParquetConnectorSplitBuilder(filePath)
       .splitWeight(splitWeight)
+      .start(start)
+      .length(length)
       .build();
 }
 
