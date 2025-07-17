@@ -17,7 +17,7 @@
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/dwio/dwrf/RegisterDwrfReader.h"
 #include "velox/dwio/dwrf/RegisterDwrfWriter.h"
-#include "velox/exec/tests/TableEvolutionFuzzer.h"
+#include "velox/exec/fuzzer/TableEvolutionFuzzer.h"
 
 #include <folly/init/Init.h>
 #include <gflags/gflags.h>
@@ -50,6 +50,8 @@ void registerFactories(folly::Executor* ioExecutor) {
 } // namespace
 } // namespace facebook::velox::exec
 
+using namespace facebook::velox::exec;
+
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);
   folly::Init init(&argc, &argv);
@@ -60,15 +62,16 @@ int main(int argc, char** argv) {
   facebook::velox::memory::MemoryManager::initialize(
       facebook::velox::memory::MemoryManager::Options{});
   auto ioExecutor = folly::getGlobalIOExecutor();
-  facebook::velox::exec::test::registerFactories(ioExecutor.get());
-  auto pool = memory::memoryManager()->addLeafPool("TableEvolutionFuzzer");
-  exec::test::TableEvolutionFuzzer::Config config;
+  registerFactories(ioExecutor.get());
+  auto pool = facebook::velox::memory::memoryManager()->addLeafPool(
+      "TableEvolutionFuzzer");
+  TableEvolutionFuzzer::Config config;
   config.pool = pool.get();
   config.columnCount = FLAGS_column_count;
   config.evolutionCount = FLAGS_evolution_count;
   config.formats = TableEvolutionFuzzer::parseFileFormats("dwrf");
   LOG(INFO) << "Running TableEvolutionFuzzer with seed " << FLAGS_seed;
-  exec::test::TableEvolutionFuzzer fuzzer(config);
+  TableEvolutionFuzzer fuzzer(config);
   fuzzer.setSeed(FLAGS_seed);
   const auto startTime = std::chrono::system_clock::now();
   const auto deadline = startTime + std::chrono::seconds(FLAGS_duration_sec);

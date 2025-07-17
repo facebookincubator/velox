@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/exec/tests/TableEvolutionFuzzer.h"
+#include "velox/exec/fuzzer/TableEvolutionFuzzer.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/dwio/common/tests/utils/FilterGenerator.h"
 #include "velox/exec/Cursor.h"
@@ -74,7 +74,8 @@ TableEvolutionFuzzer::TableEvolutionFuzzer(const Config& config)
 }
 
 const std::string& TableEvolutionFuzzer::connectorId() {
-  static const std::string connectorId(PlanBuilder::kHiveDefaultConnectorId);
+  static const std::string connectorId(
+      test::PlanBuilder::kHiveDefaultConnectorId);
   return connectorId;
 }
 
@@ -133,7 +134,7 @@ std::vector<std::vector<RowVectorPtr>> runTaskCursors(
       } catch (VeloxRuntimeError& e) {
         if (FLAGS_enable_oom_injection_write_path &&
             e.errorCode() == facebook::velox::error_code::kMemCapExceeded &&
-            e.message() == ScopedOOMInjector::kErrorMessage) {
+            e.message() == test::ScopedOOMInjector::kErrorMessage) {
           // If we enabled OOM injection we expect the exception thrown by the
           // ScopedOOMInjector.
           LOG(INFO) << "OOM injection triggered in write path: " << e.what();
@@ -141,7 +142,7 @@ std::vector<std::vector<RowVectorPtr>> runTaskCursors(
         } else if (
             FLAGS_enable_oom_injection_read_path &&
             e.errorCode() == facebook::velox::error_code::kMemCapExceeded &&
-            e.message() == ScopedOOMInjector::kErrorMessage) {
+            e.message() == test::ScopedOOMInjector::kErrorMessage) {
           // If we enabled OOM injection we expect the exception thrown by the
           // ScopedOOMInjector.
           LOG(INFO) << "OOM injection triggered in read path: " << e.what();
@@ -377,7 +378,7 @@ VectorPtr TableEvolutionFuzzer::liftToType(
 }
 
 void TableEvolutionFuzzer::run() {
-  ScopedOOMInjector oomInjectorWritePath(
+  test::ScopedOOMInjector oomInjectorWritePath(
       []() -> bool { return folly::Random::oneIn(10); },
       10); // Check the condition every 10 ms.
   if (FLAGS_enable_oom_injection_write_path) {
@@ -392,7 +393,7 @@ void TableEvolutionFuzzer::run() {
   VLOG(1) << "bucketColumnIndices: [" << folly::join(", ", bucketColumnIndices)
           << "]";
   auto testSetups = makeSetups(bucketColumnIndices);
-  auto tableOutputRootDir = TempDirectoryPath::create();
+  auto tableOutputRootDir = test::TempDirectoryPath::create();
   std::vector<std::shared_ptr<TaskCursor>> writeTasks(
       2 * config_.evolutionCount - 1);
   RowVectorPtr finalExpectedData;
@@ -460,7 +461,7 @@ void TableEvolutionFuzzer::run() {
 
   auto rowType = testSetups.back().schema;
 
-  PushdownConfig subfieldFilterConfig;
+  test::PushdownConfig subfieldFilterConfig;
 
   subfieldFilterConfig.subfieldFiltersMap =
       generateSubfieldFilters(rowType, finalExpectedData);
@@ -472,7 +473,7 @@ void TableEvolutionFuzzer::run() {
   scanTasks[1] = makeScanTask(
       rowType, std::move(expectedSplits), subfieldFilterConfig, true);
 
-  ScopedOOMInjector oomInjectorReadPath(
+  test::ScopedOOMInjector oomInjectorReadPath(
       []() -> bool { return folly::Random::oneIn(10); },
       10); // Check the condition every 10 ms.
   if (FLAGS_enable_oom_injection_read_path) {
@@ -610,7 +611,7 @@ std::unique_ptr<TaskCursor> TableEvolutionFuzzer::makeWriteTask(
     const RowVectorPtr& data,
     const std::string& outputDir,
     const std::vector<column_index_t>& bucketColumnIndices) {
-  auto builder = PlanBuilder().values({data});
+  auto builder = test::PlanBuilder().values({data});
   if (bucketColumnIndices.empty()) {
     builder.tableWrite(outputDir, setup.fileFormat);
   } else {
@@ -654,12 +655,12 @@ VectorPtr TableEvolutionFuzzer::liftToPrimitiveType(
 std::unique_ptr<TaskCursor> TableEvolutionFuzzer::makeScanTask(
     const RowTypePtr& tableSchema,
     std::vector<Split> splits,
-    const PushdownConfig& pushdownConfig,
+    const test::PushdownConfig& pushdownConfig,
     bool useFiltersAsNode) {
   CursorParameters params;
   params.serialExecution = true;
   // TODO: Mix in filter and aggregate pushdowns.
-  params.planNode = PlanBuilder()
+  params.planNode = test::PlanBuilder()
                         .filtersAsNode(useFiltersAsNode)
                         .tableScanWithPushDown(
                             tableSchema,
