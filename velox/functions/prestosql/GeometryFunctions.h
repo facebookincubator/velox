@@ -822,8 +822,10 @@ struct StIsEmptyFunction {
 
   FOLLY_ALWAYS_INLINE Status
   call(out_type<bool>& result, const arg_type<Geometry>& geometry) {
-    GEOS_TRY(result = geospatial::getEnvelopeFromGeometry(geometry)->isNull();
-             , "Failed to get envelope from geometry");
+    GEOS_TRY(
+        result = geospatial::GeometryDeserializer::deserializeEnvelope(geometry)
+                     ->isNull();
+        , "Failed to get envelope from geometry");
     return Status::OK();
   }
 };
