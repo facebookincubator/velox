@@ -41,11 +41,42 @@ void BufferedWriterSink::write(char value) {
   write(&value, 1);
 }
 
+void BufferedWriterSink::writeToSinkWithEscapeChar(
+    const std::string& data,
+    dwio::common::SerDeOptions serDeOptions,
+    uint8_t depth) {
+  VELOX_CHECK_GE(serDeOptions.separators.size(), depth);
+
+  std::string result;
+
+  // Reserve additional space for escape characters
+  result.reserve(data.length() * 2);
+
+  for (size_t i = 0; i < data.length(); ++i) {
+    // Break out of the loop earlier if we count down
+    // instead of up.
+    for (int j = depth - 1; j >= 0; --j) {
+      if (data[i] == serDeOptions.separators[j]) {
+        result += static_cast<char>(serDeOptions.escapeChar);
+        break;
+      }
+    }
+    result += data[i];
+  }
+
+  write(result.data(), result.length());
+}
+
 void BufferedWriterSink::write(
     const char* data,
     uint64_t size,
     const dwio::common::SerDeOptions& serDeOptions,
     uint8_t depth) {
+  if (serDeOptions.isEscaped) {
+    writeToSinkWithEscapeChar(std::string(data, size), serDeOptions, depth);
+    return;
+  }
+
   if (buf_->size() + size > flushBufferSize_) {
     flush();
   }

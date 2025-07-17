@@ -33,6 +33,11 @@ class BufferedWriterSink {
 
   ~BufferedWriterSink();
 
+  void writeToSinkWithEscapeChar(
+      const std::string& data,
+      dwio::common::SerDeOptions serDeOptions,
+      uint8_t depth);
+
   void write(char value);
   void write(
       const char* data,

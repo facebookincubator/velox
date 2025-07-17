@@ -72,6 +72,8 @@ class TextWriter : public dwio::common::Writer {
       uint8_t depth,
       std::optional<uint8_t> delimiter);
 
+  void writeToSinkWithEscapeChar(const std::string& data);
+
   const RowTypePtr schema_;
   const std::unique_ptr<BufferedWriterSink> bufferedWriterSink_;
 
