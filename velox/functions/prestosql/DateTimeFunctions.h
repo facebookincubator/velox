@@ -1538,7 +1538,7 @@ struct CurrentTimestampFunction {
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /* type */,
       const core::QueryConfig& config) {
-    Timestamp ts = Timestamp::now();
+    Timestamp ts = Timestamp::fromMillis(config.sessionStartTimeMs());
     timeZone_ = getTimeZoneFromConfig(config);
     if (timeZone_ != nullptr) {
       result_ = pack(ts, timeZone_->id());
