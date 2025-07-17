@@ -60,7 +60,7 @@ VectorPtr newConstantFromString(
       T result;
       const auto status = DecimalUtil::castFromString<T>(
           StringView(value.value()), precision, scale, result);
-      VELOX_USER_CHECK(status.ok(), status.message);
+      VELOX_USER_CHECK(status.ok(), status.message());
       return std::make_shared<ConstantVector<T>>(
           pool, size, false, type, result);
     }
