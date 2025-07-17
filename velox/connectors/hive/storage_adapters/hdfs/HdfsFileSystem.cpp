@@ -91,7 +91,7 @@ std::string HdfsFileSystem::name() const {
 std::unique_ptr<ReadFile> HdfsFileSystem::openFileForRead(
     std::string_view path,
     const FileOptions& /*unused*/) {
-  // Only remove the schema for hdfs path.
+  // Only remove the scheme for hdfs path.
   if (path.find(kScheme) == 0) {
     path.remove_prefix(kScheme.length());
     if (auto index = path.find('/')) {
@@ -153,6 +153,99 @@ HdfsServiceEndpoint HdfsFileSystem::getServiceEndpoint(
 
 void HdfsFileSystem::remove(std::string_view path) {
   VELOX_UNSUPPORTED("Does not support removing files from hdfs");
+}
+
+std::vector<std::string> HdfsFileSystem::list(std::string_view path) {
+  // Only remove the scheme for hdfs path.
+  if (path.find(kScheme) == 0) {
+    path.remove_prefix(kScheme.length());
+    if (auto index = path.find('/')) {
+      path.remove_prefix(index);
+    }
+  }
+
+  std::vector<std::string> result;
+  int numEntries;
+
+  auto fileInfo = impl_->hdfsShim()->ListDirectory(
+      impl_->hdfsClient(), path.data(), &numEntries);
+
+  VELOX_CHECK_NOT_NULL(
+      fileInfo,
+      "Unable to list the files in path {}. got error: {}",
+      path,
+      impl_->hdfsShim()->GetLastExceptionRootCause());
+
+  for (auto i = 0; i < numEntries; i++) {
+    result.emplace_back(fileInfo[i].mName);
+  }
+
+  impl_->hdfsShim()->FreeFileInfo(fileInfo, numEntries);
+
+  return result;
+}
+
+bool HdfsFileSystem::exists(std::string_view path) {
+  // Only remove the scheme for hdfs path.
+  if (path.find(kScheme) == 0) {
+    path.remove_prefix(kScheme.length());
+    if (auto index = path.find('/')) {
+      path.remove_prefix(index);
+    }
+  }
+
+  return impl_->hdfsShim()->Exists(impl_->hdfsClient(), path.data()) == 0;
+}
+
+void HdfsFileSystem::mkdir(
+    std::string_view path,
+    const DirectoryOptions& options) {
+  // Only remove the scheme for hdfs path.
+  if (path.find(kScheme) == 0) {
+    path.remove_prefix(kScheme.length());
+    if (auto index = path.find('/')) {
+      path.remove_prefix(index);
+    }
+  }
+
+  VELOX_CHECK_EQ(
+      impl_->hdfsShim()->MakeDirectory(impl_->hdfsClient(), path.data()),
+      0,
+      "Cannot mkdir {} in HDFS, error is : {}",
+      path,
+      impl_->hdfsShim()->GetLastExceptionRootCause());
+}
+
+void HdfsFileSystem::rename(
+    std::string_view path,
+    std::string_view newPath,
+    bool overWrite) {
+  VELOX_CHECK_EQ(
+      overWrite, false, "HdfsFileSystem::rename doesn't support overwrite");
+  // Only remove the scheme for hdfs path.
+  if (path.find(kScheme) == 0) {
+    path.remove_prefix(kScheme.length());
+    if (auto index = path.find('/')) {
+      path.remove_prefix(index);
+    }
+  }
+
+  // Only remove the scheme for hdfs path.
+  if (newPath.find(kScheme) == 0) {
+    newPath.remove_prefix(kScheme.length());
+    if (auto index = newPath.find('/')) {
+      newPath.remove_prefix(index);
+    }
+  }
+
+  VELOX_CHECK_EQ(
+      impl_->hdfsShim()->Rename(
+          impl_->hdfsClient(), path.data(), newPath.data()),
+      0,
+      "Cannot rename file from {} to {} in HDFS, error is : {}",
+      path,
+      newPath,
+      impl_->hdfsShim()->GetLastExceptionRootCause());
 }
 
 } // namespace facebook::velox::filesystems

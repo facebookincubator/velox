@@ -249,7 +249,7 @@ void HashProbe::maybeSetupInputSpiller(
       restoringPartitionId_,
       HashBitRange(bitOffset, bitOffset + spillConfig()->numPartitionBits),
       spillConfig(),
-      &spillStats_);
+      spillStats_.get());
 
   // Set the spill partitions to the corresponding ones at the build side. We
   // only spill the seen partitions from the build side. For the ones not seen
@@ -288,7 +288,7 @@ void HashProbe::maybeSetupSpillInputReader(
   VELOX_CHECK_EQ(partition->id(), restoredPartitionId.value());
   restoringPartitionId_ = restoredPartitionId;
   spillInputReader_ = partition->createUnorderedReader(
-      spillConfig_->readBufferSize, pool(), &spillStats_);
+      spillConfig_->readBufferSize, pool(), spillStats_.get());
   inputSpillPartitionSet_.erase(iter);
 }
 
@@ -373,6 +373,36 @@ void HashProbe::initializeResultIter() {
       rowSizeEstimation);
 }
 
+void HashProbe::pushdownDynamicFilters() {
+  auto* driver = operatorCtx_->driverCtx()->driver;
+  auto numFilters = driver->pushdownFilters(
+      this,
+      keyChannels_,
+      [&](column_index_t sourceChannel,
+          std::shared_ptr<common::Filter>& filter) {
+        if (dynamicFiltersProducedOnChannels_.contains(sourceChannel)) {
+          return true;
+        }
+        filter = table_->hashers()[sourceChannel]->getFilter(false);
+        if (!filter) {
+          return false;
+        }
+        for (auto* peer : findPeerOperators()) {
+          peer->dynamicFiltersProducedOnChannels_.insert(sourceChannel);
+        }
+        return true;
+      });
+  // The join can be completely replaced with a pushed down filter when the
+  // following conditions are met:
+  //  * hash table has a single key with unique values,
+  //  * build side has no dependent columns.
+  if (keyChannels_.size() == 1 && !table_->hasDuplicateKeys() &&
+      tableOutputProjections_.empty() && !filter_ && numFilters > 0 &&
+      !isRightJoin(joinType_)) {
+    canReplaceWithDynamicFilter_ = true;
+  }
+}
+
 void HashProbe::asyncWaitForHashTable() {
   checkRunning();
   VELOX_CHECK_NULL(table_);
@@ -438,18 +468,7 @@ void HashProbe::asyncWaitForHashTable() {
     // probe input is read from spilled data and there is no upstream operators
     // involved; (2) if there is spill data to restore, then we can't filter
     // probe inputs solely based on the current table's join keys.
-    const auto& buildHashers = table_->hashers();
-    const auto channels = operatorCtx_->driverCtx()->driver->canPushdownFilters(
-        this, keyChannels_);
-
-    for (auto i = 0; i < keyChannels_.size(); ++i) {
-      if (channels.find(keyChannels_[i]) != channels.end()) {
-        if (auto filter = buildHashers[i]->getFilter(/*nullAllowed=*/false)) {
-          dynamicFilters_.emplace(keyChannels_[i], std::move(filter));
-        }
-      }
-    }
-    hasGeneratedDynamicFilters_ = !dynamicFilters_.empty();
+    pushdownDynamicFilters();
   }
 }
 
@@ -631,20 +650,6 @@ BlockingReason HashProbe::isBlocked(ContinueFuture* future) {
     *future = std::move(future_);
   }
   return fromStateToBlockingReason(state_);
-}
-
-void HashProbe::clearDynamicFilters() {
-  // The join can be completely replaced with a pushed down filter when the
-  // following conditions are met:
-  //  * hash table has a single key with unique values,
-  //  * build side has no dependent columns.
-  if (keyChannels_.size() == 1 && !table_->hasDuplicateKeys() &&
-      tableOutputProjections_.empty() && !filter_ && !dynamicFilters_.empty() &&
-      !isRightJoin(joinType_)) {
-    canReplaceWithDynamicFilter_ = true;
-  }
-
-  Operator::clearDynamicFilters();
 }
 
 void HashProbe::decodeAndDetectNonNullKeys() {
@@ -1694,7 +1699,7 @@ void HashProbe::noMoreInputInternal() {
         spillInputPartitionIds_.size(),
         inputSpiller_->state().spilledPartitionIdSet().size());
     inputSpiller_->finishSpill(inputSpillPartitionSet_);
-    VELOX_CHECK_EQ(spillStats_.rlock()->spillSortTimeNanos, 0);
+    VELOX_CHECK_EQ(spillStats_->rlock()->spillSortTimeNanos, 0);
   }
 
   const bool hasSpillEnabled = canSpill();
@@ -1888,7 +1893,7 @@ void HashProbe::reclaim(
         tableSpillHashBits_,
         joinNode_,
         spillConfig(),
-        &spillStats_);
+        spillStats_.get());
     VELOX_CHECK(!spillPartitionSet.empty());
   }
   const auto spillPartitionIdSet = toSpillPartitionIdSet(spillPartitionSet);
@@ -1970,7 +1975,11 @@ void HashProbe::spillOutput() {
   }
   // We spill all the outputs produced from 'input_' into a single partition.
   auto outputSpiller = std::make_unique<NoRowContainerSpiller>(
-      outputType_, std::nullopt, HashBitRange{}, spillConfig(), &spillStats_);
+      outputType_,
+      std::nullopt,
+      HashBitRange{},
+      spillConfig(),
+      spillStats_.get());
   outputSpiller->setPartitionsSpilled({SpillPartitionId(0)});
 
   RowVectorPtr output{nullptr};
@@ -2012,7 +2021,7 @@ void HashProbe::maybeSetupSpillOutputReader() {
 
   spillOutputReader_ =
       spillOutputPartitionSet_.begin()->second->createUnorderedReader(
-          spillConfig_->readBufferSize, pool(), &spillStats_);
+          spillConfig_->readBufferSize, pool(), spillStats_.get());
   spillOutputPartitionSet_.clear();
 }
 
@@ -2038,7 +2047,7 @@ void HashProbe::checkMaxSpillLevel(
           << "Exceeded spill level limit: " << config->maxSpillLevel
           << ", and disable spilling for memory pool: " << pool()->name();
       exceededMaxSpillLevelLimit_ = true;
-      ++spillStats_.wlock()->spillMaxLevelExceededCount;
+      ++spillStats_->wlock()->spillMaxLevelExceededCount;
       return;
     }
   }

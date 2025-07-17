@@ -101,10 +101,7 @@ TEST(DuckParserTest, functions) {
 }
 
 namespace {
-std::string toString(
-    const std::vector<
-        std::pair<std::shared_ptr<const core::IExpr>, core::SortOrder>>&
-        orderBy) {
+std::string toString(const std::vector<OrderByClause>& orderBy) {
   std::stringstream out;
   if (!orderBy.empty()) {
     out << "ORDER BY ";
@@ -112,8 +109,7 @@ std::string toString(
       if (i > 0) {
         out << ", ";
       }
-      out << orderBy[i].first->toString() << " "
-          << orderBy[i].second.toString();
+      out << orderBy[i].toString();
     }
   }
 
@@ -509,9 +505,7 @@ TEST(DuckParserTest, count) {
 
 TEST(DuckParserTest, orderBy) {
   auto parse = [](const auto& expr) {
-    auto orderBy = parseOrderByExpr(expr);
-    return fmt::format(
-        "{} {}", orderBy.first->toString(), orderBy.second.toString());
+    return parseOrderByExpr(expr).toString();
   };
 
   EXPECT_EQ("\"c1\" ASC NULLS LAST", parse("c1"));
@@ -645,8 +639,8 @@ TEST(DuckParserTest, windowWithIntegerConstant) {
       std::dynamic_pointer_cast<const core::CallExpr>(windowExpr.functionCall);
   ASSERT_TRUE(func != nullptr)
       << windowExpr.functionCall->toString() << " is not a call expr";
-  EXPECT_EQ(func->getInputs().size(), 2);
-  auto param = func->getInputs()[1];
+  EXPECT_EQ(func->inputs().size(), 2);
+  auto param = func->inputs()[1];
   auto constant = std::dynamic_pointer_cast<const core::ConstantExpr>(param);
   ASSERT_TRUE(constant != nullptr) << param->toString() << " is not a constant";
   EXPECT_EQ(*constant->type(), *INTEGER());

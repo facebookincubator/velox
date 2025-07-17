@@ -13,12 +13,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/connectors/hive/HiveConnector.h"
 #include "velox/exec/PartitionFunction.h"
-#include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/parse/TypeResolver.h"
+#include "velox/vector/tests/utils/VectorTestBase.h"
 
 #include <gtest/gtest.h>
 
@@ -52,6 +53,11 @@ class PlanNodeSerdeTest : public testing::Test,
         makeFlatVector<int64_t>({1, 2, 3}),
         makeFlatVector<int32_t>({10, 20, 30}),
         makeConstant(true, 3),
+        makeArrayVector<int32_t>({
+            {1, 2},
+            {3, 4, 5},
+            {},
+        }),
     })};
   }
 
@@ -92,6 +98,14 @@ TEST_F(PlanNodeSerdeTest, aggregation) {
                   .partialAggregation({"c0"}, {"count(1)", "sum(c1)"})
                   .finalAggregation()
                   .planNode();
+
+  testSerde(plan);
+
+  plan = PlanBuilder(pool_.get())
+             .values({data_})
+             .partialAggregation({"c0"}, {"count(ARRAY[1, 2])"})
+             .finalAggregation()
+             .planNode();
 
   testSerde(plan);
 
@@ -210,6 +224,12 @@ TEST_F(PlanNodeSerdeTest, exchange) {
 TEST_F(PlanNodeSerdeTest, filter) {
   auto plan = PlanBuilder().values({data_}).filter("c0 > 100").planNode();
   testSerde(plan);
+
+  plan = PlanBuilder(pool_.get())
+             .values({data_})
+             .filter("c3 = ARRAY[1,2,3]")
+             .planNode();
+  testSerde(plan);
 }
 
 TEST_F(PlanNodeSerdeTest, groupId) {
@@ -305,11 +325,16 @@ TEST_F(PlanNodeSerdeTest, localMerge) {
 
 TEST_F(PlanNodeSerdeTest, mergeJoin) {
   auto probe = makeRowVector(
-      {"t0", "t1", "t2"},
+      {"t0", "t1", "t2", "t3"},
       {
           makeFlatVector<int32_t>({1, 2, 3}),
           makeFlatVector<int64_t>({10, 20, 30}),
           makeFlatVector<bool>({true, true, false}),
+          makeArrayVector<int32_t>({
+              {1, 2},
+              {3, 4, 5},
+              {},
+          }),
       });
 
   auto build = makeRowVector(
@@ -332,6 +357,19 @@ TEST_F(PlanNodeSerdeTest, mergeJoin) {
               {"t0", "t1", "u2", "t2"},
               core::JoinType::kInner)
           .planNode();
+
+  testSerde(plan);
+
+  plan = PlanBuilder(planNodeIdGenerator, pool_.get())
+             .values({probe})
+             .mergeJoin(
+                 {"t0"},
+                 {"u0"},
+                 PlanBuilder(planNodeIdGenerator).values({build}).planNode(),
+                 "t3 = ARRAY[1,2,3]",
+                 {"t0", "t1", "u2", "t2"},
+                 core::JoinType::kInner)
+             .planNode();
 
   testSerde(plan);
 
@@ -403,11 +441,16 @@ TEST_F(PlanNodeSerdeTest, project) {
 
 TEST_F(PlanNodeSerdeTest, hashJoin) {
   auto probe = makeRowVector(
-      {"t0", "t1", "t2"},
+      {"t0", "t1", "t2", "t3"},
       {
           makeFlatVector<int32_t>({1, 2, 3}),
           makeFlatVector<int64_t>({10, 20, 30}),
           makeFlatVector<bool>({true, true, false}),
+          makeArrayVector<int32_t>({
+              {1, 2},
+              {3, 4, 5},
+              {},
+          }),
       });
 
   auto build = makeRowVector(
@@ -430,6 +473,19 @@ TEST_F(PlanNodeSerdeTest, hashJoin) {
               {"t0", "t1", "u2", "t2"},
               core::JoinType::kInner)
           .planNode();
+
+  testSerde(plan);
+
+  plan = PlanBuilder(planNodeIdGenerator, pool_.get())
+             .values({probe})
+             .hashJoin(
+                 {"t0"},
+                 {"u0"},
+                 PlanBuilder(planNodeIdGenerator).values({build}).planNode(),
+                 "t3 = ARRAY[1,2,3]",
+                 {"t0", "t1", "u2", "t2"},
+                 core::JoinType::kInner)
+             .planNode();
 
   testSerde(plan);
 
@@ -481,6 +537,12 @@ TEST_F(PlanNodeSerdeTest, unnest) {
 
   plan =
       PlanBuilder().values({data}).unnest({"c0"}, {"c1"}, "ordinal").planNode();
+  testSerde(plan);
+
+  plan = PlanBuilder()
+             .values({data})
+             .unnest({"c0"}, {"c1"}, "ordinal", "emptyUnnestValue")
+             .planNode();
   testSerde(plan);
 }
 
@@ -620,6 +682,22 @@ TEST_F(PlanNodeSerdeTest, tableWriteMerge) {
              .tableWrite("targetDirectory")
              .localPartition(std::vector<std::string>{})
              .tableWriteMerge()
+             .planNode();
+  testSerde(plan);
+
+  const auto aggregationNode =
+      std::dynamic_pointer_cast<const core::AggregationNode>(
+          PlanBuilder(pool_.get())
+              .values({data_})
+              .partialAggregation({"c0"}, {"count(ARRAY[1,2])"})
+              .finalAggregation()
+              .planNode());
+
+  plan = PlanBuilder(pool_.get())
+             .values(data_)
+             .tableWrite("targetDirectory")
+             .localPartition(std::vector<std::string>{})
+             .tableWriteMerge(aggregationNode)
              .planNode();
   testSerde(plan);
 }

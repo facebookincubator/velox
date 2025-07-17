@@ -25,15 +25,89 @@
 
 using facebook::velox::common::testutil::TestValue;
 namespace facebook::velox::exec::test {
+
+// static
+std::shared_ptr<TestIndexTable> TestIndexTable::create(
+    size_t numEqualJoinKeys,
+    const RowVectorPtr& keyData,
+    const RowVectorPtr& valueData,
+    velox::memory::MemoryPool& pool) {
+  VELOX_CHECK_GE(numEqualJoinKeys, 1);
+  VELOX_CHECK_NOT_NULL(keyData);
+  VELOX_CHECK_NOT_NULL(valueData);
+
+  auto keyType = asRowType(keyData->type());
+  VELOX_CHECK_GE(keyType->size(), numEqualJoinKeys);
+
+  auto valueType = asRowType(valueData->type());
+  VELOX_CHECK_GE(valueType->size(), 1);
+
+  const auto numRows = keyData->size();
+  VELOX_CHECK_EQ(numRows, valueData->size());
+
+  std::vector<std::unique_ptr<VectorHasher>> hashers;
+  hashers.reserve(numEqualJoinKeys);
+  std::vector<VectorPtr> keyVectors;
+  keyVectors.reserve(numEqualJoinKeys);
+  for (auto i = 0; i < numEqualJoinKeys; ++i) {
+    hashers.push_back(std::make_unique<VectorHasher>(keyType->childAt(i), i));
+    keyVectors.push_back(keyData->childAt(i));
+  }
+
+  std::vector<TypePtr> dependentTypes;
+  std::vector<VectorPtr> dependentVectors;
+  for (auto i = numEqualJoinKeys; i < keyType->size(); ++i) {
+    dependentTypes.push_back(keyType->childAt(i));
+    dependentVectors.push_back(keyData->childAt(i));
+  }
+
+  for (auto i = 0; i < valueType->size(); ++i) {
+    dependentTypes.push_back(valueType->childAt(i));
+    dependentVectors.push_back(valueData->childAt(i));
+  }
+
+  // Create the table.
+  auto table = HashTable<false>::createForJoin(
+      std::move(hashers),
+      /*dependentTypes=*/dependentTypes,
+      /*allowDuplicates=*/true,
+      /*hasProbedFlag=*/false,
+      /*minTableSizeForParallelJoinBuild=*/1,
+      &pool);
+
+  // Insert data into the row container.
+  auto* rowContainer = table->rows();
+  std::vector<DecodedVector> decodedVectors;
+  for (auto& vector : keyData->children()) {
+    decodedVectors.emplace_back(*vector);
+  }
+  for (auto& vector : valueData->children()) {
+    decodedVectors.emplace_back(*vector);
+  }
+
+  const auto nextOffset = rowContainer->nextOffset();
+  VELOX_CHECK_GT(nextOffset, 0);
+  for (auto row = 0; row < numRows; ++row) {
+    auto* newRow = rowContainer->newRow();
+    *reinterpret_cast<char**>(newRow + nextOffset) = nullptr;
+    for (auto col = 0; col < decodedVectors.size(); ++col) {
+      rowContainer->store(decodedVectors[col], row, newRow, col);
+    }
+  }
+
+  // Build the table index.
+  table->prepareJoinTable({}, BaseHashTable::kNoSpillInputStartPartitionBit);
+  return std::make_shared<TestIndexTable>(
+      std::move(keyType), std::move(valueType), std::move(table));
+}
+
 namespace {
 core::TypedExprPtr toJoinConditionExpr(
     const std::vector<std::shared_ptr<core::IndexLookupCondition>>&
         joinConditions,
     const std::shared_ptr<TestIndexTable>& indexTable,
     const RowTypePtr& inputType,
-    const std::unordered_map<
-        std::string,
-        std::shared_ptr<connector::ColumnHandle>>& columnHandles) {
+    const connector::ColumnHandleMap& columnHandles) {
   if (joinConditions.empty()) {
     return nullptr;
   }
@@ -101,7 +175,9 @@ TestIndexSource::TestIndexSource(
     const RowTypePtr& outputType,
     size_t numEqualJoinKeys,
     const core::TypedExprPtr& joinConditionExpr,
-    const std::shared_ptr<TestIndexTableHandle>& tableHandle,
+    const TestIndexTableHandlePtr& tableHandle,
+    const std::unordered_map<std::string, TestIndexColumnHandlePtr>&
+        columnHandles,
     connector::ConnectorQueryCtx* connectorQueryCtx,
     folly::Executor* executor)
     : tableHandle_(tableHandle),
@@ -118,7 +194,9 @@ TestIndexSource::TestIndexSource(
               : nullptr),
       pool_(connectorQueryCtx_->memoryPool()->shared_from_this()),
       executor_(executor) {
-  VELOX_CHECK_NOT_NULL(executor_);
+  if (tableHandle_->asyncLookup()) {
+    VELOX_CHECK_NOT_NULL(executor_);
+  }
   VELOX_CHECK_LE(outputType_->size(), valueType_->size() + keyType_->size());
   VELOX_CHECK_LE(numEqualJoinKeys_, keyType_->size());
   for (int i = 0; i < numEqualJoinKeys_; ++i) {
@@ -128,7 +206,7 @@ TestIndexSource::TestIndexSource(
         keyType_->toString(),
         inputType_->toString());
   }
-  initOutputProjections();
+  initOutputProjections(columnHandles);
   initConditionProjections();
 }
 
@@ -186,20 +264,24 @@ void TestIndexSource::initConditionProjections() {
   conditionInputType_ = ROW(std::move(names), std::move(types));
 }
 
-void TestIndexSource::initOutputProjections() {
+void TestIndexSource::initOutputProjections(
+    const std::unordered_map<std::string, TestIndexColumnHandlePtr>&
+        columnHandles) {
   VELOX_CHECK(lookupOutputProjections_.empty());
+
   lookupOutputProjections_.reserve(outputType_->size());
   for (auto outputChannel = 0; outputChannel < outputType_->size();
        ++outputChannel) {
     const auto outputName = outputType_->nameOf(outputChannel);
-    if (valueType_->containsChild(outputName)) {
-      const auto tableValueChannel = valueType_->getChildIdx(outputName);
+    const auto columnName = columnHandles.at(outputName)->name();
+    if (valueType_->containsChild(columnName)) {
+      const auto tableValueChannel = valueType_->getChildIdx(columnName);
       // The hash table layout is: index columns, value columns.
       lookupOutputProjections_.emplace_back(
           keyType_->size() + tableValueChannel, outputChannel);
       continue;
     }
-    const auto tableKeyChannel = keyType_->getChildIdx(outputName);
+    const auto tableKeyChannel = keyType_->getChildIdx(columnName);
     lookupOutputProjections_.emplace_back(tableKeyChannel, outputChannel);
   }
   VELOX_CHECK_EQ(lookupOutputProjections_.size(), outputType_->size());
@@ -254,6 +336,7 @@ std::optional<std::unique_ptr<connector::IndexSource::LookupResult>>
 TestIndexSource::ResultIterator::next(
     vector_size_t size,
     ContinueFuture& future) {
+  const auto lookupSize = std::min(size, kMaxLookupSize);
   source_->checkNotFailed();
 
   if (hasPendingRequest_.exchange(true)) {
@@ -261,7 +344,7 @@ TestIndexSource::ResultIterator::next(
   }
 
   if (executor_ && !asyncResult_.has_value()) {
-    asyncLookup(size, future);
+    asyncLookup(lookupSize, future);
     return std::nullopt;
   }
 
@@ -274,7 +357,7 @@ TestIndexSource::ResultIterator::next(
     asyncResult_.reset();
     return result;
   }
-  return syncLookup(size);
+  return syncLookup(lookupSize);
 }
 
 void TestIndexSource::ResultIterator::extractLookupColumns(
@@ -460,24 +543,33 @@ std::shared_ptr<connector::IndexSource> TestIndexConnector::createIndexSource(
     size_t numJoinKeys,
     const std::vector<core::IndexLookupConditionPtr>& joinConditions,
     const RowTypePtr& outputType,
-    const std::shared_ptr<connector::ConnectorTableHandle>& tableHandle,
-    const std::unordered_map<
-        std::string,
-        std::shared_ptr<connector::ColumnHandle>>& columnHandles,
+    const connector::ConnectorTableHandlePtr& tableHandle,
+    const connector::ColumnHandleMap& columnHandles,
     connector::ConnectorQueryCtx* connectorQueryCtx) {
   VELOX_CHECK_GE(inputType->size(), numJoinKeys + joinConditions.size());
   auto testIndexTableHandle =
-      std::dynamic_pointer_cast<TestIndexTableHandle>(tableHandle);
+      std::dynamic_pointer_cast<const TestIndexTableHandle>(tableHandle);
   VELOX_CHECK_NOT_NULL(testIndexTableHandle);
   const auto& indexTable = testIndexTableHandle->indexTable();
   auto joinConditionExpr =
       toJoinConditionExpr(joinConditions, indexTable, inputType, columnHandles);
+
+  std::unordered_map<std::string, TestIndexColumnHandlePtr> testColumnHandles;
+  for (const auto& [name, handle] : columnHandles) {
+    auto testColumnHandle =
+        std::dynamic_pointer_cast<const TestIndexColumnHandle>(handle);
+    VELOX_CHECK_NOT_NULL(testColumnHandle);
+
+    testColumnHandles.emplace(name, testColumnHandle);
+  }
+
   return std::make_shared<TestIndexSource>(
       inputType,
       outputType,
       numJoinKeys,
-      std::move(joinConditionExpr),
-      std::move(testIndexTableHandle),
+      joinConditionExpr,
+      testIndexTableHandle,
+      testColumnHandles,
       connectorQueryCtx,
       executor_);
 }

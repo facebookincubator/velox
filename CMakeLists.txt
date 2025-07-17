@@ -135,7 +135,6 @@ option(VELOX_ENABLE_EXPRESSION "Build expression." ON)
 option(
   VELOX_ENABLE_EXAMPLES
   "Build examples. This will enable VELOX_ENABLE_EXPRESSION automatically." OFF)
-option(VELOX_ENABLE_SUBSTRAIT "Build Substrait-to-Velox converter." OFF)
 option(VELOX_ENABLE_BENCHMARKS "Enable Velox top level benchmarks." OFF)
 option(VELOX_ENABLE_BENCHMARKS_BASIC "Enable Velox basic benchmarks." OFF)
 option(VELOX_ENABLE_S3 "Build S3 Connector" OFF)
@@ -160,6 +159,7 @@ option(
   OFF)
 option(VELOX_SIMDJSON_SKIPUTF8VALIDATION
        "Skip simdjson utf8 validation in JSON parsing" OFF)
+option(VELOX_ENABLE_FAISS "Build faiss vector search support" OFF)
 
 # Explicitly force compilers to generate colored output. Compilers usually do
 # this by default if they detect the output is a terminal, but this assumption
@@ -181,7 +181,6 @@ if(${VELOX_BUILD_MINIMAL} OR ${VELOX_BUILD_MINIMAL_WITH_DWIO})
   set(VELOX_ENABLE_S3 OFF)
   set(VELOX_ENABLE_GCS OFF)
   set(VELOX_ENABLE_ABFS OFF)
-  set(VELOX_ENABLE_SUBSTRAIT OFF)
 endif()
 
 if(${VELOX_ENABLE_BENCHMARKS})
@@ -227,6 +226,11 @@ endif()
 if(${VELOX_ENABLE_DUCKDB})
   velox_set_source(DuckDB)
   velox_resolve_dependency(DuckDB)
+endif()
+
+if(VELOX_ENABLE_FAISS)
+  velox_set_source(faiss)
+  velox_resolve_dependency(faiss)
 endif()
 
 if(DEFINED ENV{INSTALL_PREFIX})
@@ -527,10 +531,9 @@ if(${VELOX_BUILD_PYTHON_PACKAGE})
   velox_resolve_dependency(pybind11 2.10.0)
 endif()
 
-# DWIO (ORC/DWRF) and Substrait depend on protobuf.
+# DWIO (ORC/DWRF) depends on protobuf.
 if(${VELOX_BUILD_MINIMAL_WITH_DWIO}
    OR ${VELOX_ENABLE_HIVE_CONNECTOR}
-   OR ${VELOX_ENABLE_SUBSTRAIT}
    OR VELOX_ENABLE_GCS)
 
   # Locate or build protobuf.

@@ -94,6 +94,33 @@ void registerAccessors(const std::string& prefix) {
       {{prefix + "ST_GeometryType"}});
   registerFunction<StDistanceFunction, double, Geometry, Geometry>(
       {{prefix + "ST_Distance"}});
+  registerFunction<StPolygonFunction, Geometry, Varchar>(
+      {{prefix + "ST_Polygon"}});
+  registerFunction<StIsClosedFunction, bool, Geometry>(
+      {{prefix + "ST_IsClosed"}});
+  registerFunction<StIsEmptyFunction, bool, Geometry>(
+      {{prefix + "ST_IsEmpty"}});
+  registerFunction<StIsRingFunction, bool, Geometry>({{prefix + "ST_IsRing"}});
+  registerFunction<StLengthFunction, double, Geometry>(
+      {{prefix + "ST_Length"}});
+  registerFunction<StPointNFunction, Geometry, Geometry, int32_t>(
+      {{prefix + "ST_PointN"}});
+  registerFunction<StStartPointFunction, Geometry, Geometry>(
+      {{prefix + "ST_StartPoint"}});
+  registerFunction<StEndPointFunction, Geometry, Geometry>(
+      {{prefix + "ST_EndPoint"}});
+  registerFunction<StGeometryNFunction, Geometry, Geometry, int32_t>(
+      {{prefix + "ST_GeometryN"}});
+  registerFunction<StInteriorRingNFunction, Geometry, Geometry, int32_t>(
+      {{prefix + "ST_InteriorRingN"}});
+  registerFunction<StNumGeometriesFunction, int32_t, Geometry>(
+      {{prefix + "ST_NumGeometries"}});
+  registerFunction<StNumInteriorRingFunction, int32_t, Geometry>(
+      {{prefix + "ST_NumInteriorRing"}});
+  registerFunction<StConvexHullFunction, Geometry, Geometry>(
+      {{prefix + "ST_ConvexHull"}});
+  registerFunction<StDimensionFunction, int8_t, Geometry>(
+      {{prefix + "ST_Dimension"}});
 }
 
 } // namespace

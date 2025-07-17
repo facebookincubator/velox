@@ -65,6 +65,10 @@ class TestingLoader : public VectorLoader {
     return rowCounter_;
   }
 
+  bool supportsHook() const override {
+    return true;
+  }
+
  private:
   template <TypeKind Kind>
   void applyHook(RowSet rows, ValueHook* hook) {
@@ -2053,6 +2057,7 @@ class TestingHook : public ValueHook {
       }
     }
   }
+
   int32_t errors() const {
     return errors_;
   }
@@ -3270,26 +3275,19 @@ TEST_F(VectorTest, mutableValues) {
   auto vector = makeFlatVector<int64_t>(1'000, [](auto row) { return row; });
 
   auto* rawValues = vector->rawValues();
-  vector->mutableValues(1'001);
+  vector->mutableValues();
   ASSERT_EQ(rawValues, vector->rawValues());
   for (auto i = 0; i < 1'000; ++i) {
     EXPECT_EQ(rawValues[i], i);
   }
 
-  vector->mutableValues(10'000);
-  ASSERT_NE(rawValues, vector->rawValues());
-  rawValues = vector->rawValues();
-  for (auto i = 0; i < 1'000; ++i) {
-    EXPECT_EQ(rawValues[i], i);
-  }
-
-  auto values = vector->mutableValues(2'000);
+  auto values = vector->mutableValues();
   ASSERT_EQ(rawValues, vector->rawValues());
   for (auto i = 0; i < 1'000; ++i) {
     EXPECT_EQ(rawValues[i], i);
   }
 
-  vector->mutableValues(500);
+  vector->mutableValues();
   ASSERT_NE(rawValues, vector->rawValues());
   rawValues = vector->rawValues();
   for (auto i = 0; i < 500; ++i) {
@@ -3643,6 +3641,44 @@ TEST_F(VectorTest, flatAllNulls) {
   }
 }
 
+TEST_F(VectorTest, hashValueAtArray) {
+  auto data = makeArrayVectorFromJson<int32_t>({
+      "[1, 2, 3]",
+      "[2, 1, 3]",
+      "[3, 2, 1]",
+      "[1, 2, 3, 4]",
+      "[1, null, 3]",
+      "[1, 2, 3]",
+  });
+
+  std::unordered_set<uint64_t> hashes;
+  for (auto i = 0; i < 5; ++i) {
+    EXPECT_TRUE(hashes.insert(data->hashValueAt(i)).second);
+  }
+  EXPECT_EQ(5, hashes.size());
+
+  EXPECT_EQ(data->hashValueAt(0), data->hashValueAt(5));
+}
+
+TEST_F(VectorTest, hashValueAtMap) {
+  auto data = makeMapVectorFromJson<int32_t, int32_t>({
+      "{1: 10, 2: 20}",
+      "{1: 20, 2: 10}",
+      "{10: 1, 20: 2}",
+      "{1: 2, 3: 4}",
+      "{1: 2, 3: 4, 5: 6}",
+      "{2: 20, 1: 10}",
+  });
+
+  std::unordered_set<uint64_t> hashes;
+  for (auto i = 0; i < 5; ++i) {
+    EXPECT_TRUE(hashes.insert(data->hashValueAt(i)).second);
+  }
+  EXPECT_EQ(5, hashes.size());
+
+  EXPECT_EQ(data->hashValueAt(0), data->hashValueAt(5));
+}
+
 TEST_F(VectorTest, hashAll) {
   auto data = makeFlatVector<int32_t>({1, 2, 3});
   ASSERT_TRUE(data->getNullCount().has_value());
@@ -3726,20 +3762,45 @@ TEST_F(VectorTest, getLargeStringBuffer) {
 }
 
 TEST_F(VectorTest, mapUpdate) {
-  auto base = makeNullableMapVector<int64_t, int64_t>({
+  auto verifyUpdate =
+      [](MapVectorPtr& base, MapVectorPtr& update, MapVectorPtr& expected) {
+        auto actual = base->update({update});
+        ASSERT_EQ(actual->size(), expected->size());
+        for (int i = 0; i < actual->size(); ++i) {
+          ASSERT_TRUE(actual->equalValueAt(expected.get(), i, i));
+        }
+      };
+
+  auto baseNoNulls = makeMapVector<int64_t, int64_t>({
+      {{{1, 1}, {2, 1}}},
+      common::testutil::Empty,
+      {{{3, 1}}},
+      {{{4, 1}}},
+      {{{4, 1}}},
+  });
+  auto updateNoNulls = makeMapVector<int64_t, int64_t>({
+      {{{2, 2}, {3, 2}}},
+      {{{4, 2}}},
+      common::testutil::Empty,
+      {{{5, 2}}},
+      {{{4, 1}}},
+  });
+  auto baseWithNulls = makeNullableMapVector<int64_t, int64_t>({
       {{{1, 1}, {2, 1}}},
       common::testutil::optionalEmpty,
       {{{3, 1}}},
       std::nullopt,
       {{{4, 1}}},
   });
-  auto update = makeNullableMapVector<int64_t, int64_t>({
+  auto updateWithNulls = makeNullableMapVector<int64_t, int64_t>({
       {{{2, 2}, {3, 2}}},
       {{{4, 2}}},
       common::testutil::optionalEmpty,
       {{{5, 2}}},
       std::nullopt,
   });
+
+  // Case 1: Both base and update have nulls
   auto expected = makeNullableMapVector<int64_t, int64_t>({
       {{{2, 2}, {3, 2}, {1, 1}}},
       {{{4, 2}}},
@@ -3747,11 +3808,35 @@ TEST_F(VectorTest, mapUpdate) {
       std::nullopt,
       std::nullopt,
   });
-  auto actual = base->update({update});
-  ASSERT_EQ(actual->size(), expected->size());
-  for (int i = 0; i < actual->size(); ++i) {
-    ASSERT_TRUE(actual->equalValueAt(expected.get(), i, i));
-  }
+  verifyUpdate(baseWithNulls, updateWithNulls, expected);
+
+  // Case 2: Only base has nulls
+  expected = makeNullableMapVector<int64_t, int64_t>({
+      {{{2, 2}, {3, 2}, {1, 1}}},
+      {{{4, 2}}},
+      {{{3, 1}}},
+      std::nullopt,
+      {{{4, 1}}},
+  });
+  verifyUpdate(baseWithNulls, updateNoNulls, expected);
+  // Case 3: Only update has nulls
+  expected = makeNullableMapVector<int64_t, int64_t>({
+      {{{2, 2}, {3, 2}, {1, 1}}},
+      {{{4, 2}}},
+      {{{3, 1}}},
+      {{{4, 1}, {5, 2}}},
+      std::nullopt,
+  });
+  verifyUpdate(baseNoNulls, updateWithNulls, expected);
+  // Case 4: Both base and update do not have nulls
+  expected = makeNullableMapVector<int64_t, int64_t>({
+      {{{2, 2}, {3, 2}, {1, 1}}},
+      {{{4, 2}}},
+      {{{3, 1}}},
+      {{{4, 1}, {5, 2}}},
+      {{{4, 1}}},
+  });
+  verifyUpdate(baseNoNulls, updateNoNulls, expected);
 }
 
 TEST_F(VectorTest, mapUpdateRowKeyType) {
