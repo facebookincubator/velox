@@ -87,7 +87,7 @@ void enqueueChildren(
     dwio::common::SelectiveColumnReader* reader,
     uint32_t index,
     dwio::common::BufferedInput& input,
-    const RowRanges& rowRanges) {
+    const dwio::common::RowRanges& rowRanges) {
   auto children = reader->children();
   if (children.empty()) {
     return reader->formatData().as<ParquetData>().enqueueRowGroup(
@@ -145,7 +145,7 @@ MapColumnReader::MapColumnReader(
 void MapColumnReader::enqueueRowGroup(
     uint32_t index,
     dwio::common::BufferedInput& input,
-    const RowRanges& rowRanges) {
+    const dwio::common::RowRanges& rowRanges) {
   enqueueChildren(this, index, input, rowRanges);
 }
 
@@ -237,7 +237,10 @@ void MapColumnReader::collectIndexPageInfoMap(
 void MapColumnReader::filterDataPages(
     uint32_t index,
     folly::F14FastMap<uint32_t, std::unique_ptr<ColumnPageIndex>>& pageIndices,
-    RowRanges& range) {}
+    dwio::common::RowRanges& range,
+    std::vector<std::pair<
+        const velox::common::MetadataFilter::LeafNode*,
+        dwio::common::RowRanges>>& metadataFilterResults) {}
 
 ListColumnReader::ListColumnReader(
     const dwio::common::ColumnReaderOptions& columnReaderOptions,
@@ -265,7 +268,7 @@ ListColumnReader::ListColumnReader(
 void ListColumnReader::enqueueRowGroup(
     uint32_t index,
     dwio::common::BufferedInput& input,
-    const RowRanges& rowRanges) {
+    const dwio::common::RowRanges& rowRanges) {
   enqueueChildren(this, index, input, rowRanges);
 }
 
@@ -354,6 +357,9 @@ void ListColumnReader::collectIndexPageInfoMap(
 void ListColumnReader::filterDataPages(
     uint32_t index,
     folly::F14FastMap<uint32_t, std::unique_ptr<ColumnPageIndex>>& pageIndices,
-    RowRanges& range) {}
+    dwio::common::RowRanges& range,
+    std::vector<std::pair<
+        const velox::common::MetadataFilter::LeafNode*,
+        dwio::common::RowRanges>>& metadataFilterResults) {}
 
 } // namespace facebook::velox::parquet
