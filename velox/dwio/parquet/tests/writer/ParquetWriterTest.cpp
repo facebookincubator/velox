@@ -92,10 +92,8 @@ class ArrowMemoryPool final : public ::arrow::MemoryPool {
   ::arrow::Status Allocate(int64_t size, int64_t alignment, uint8_t** out)
       override {
     *out = reinterpret_cast<uint8_t*>(malloc(size));
-    common::testutil::TestValue::adjust("ArrowMemoryPool::Allocate", *out);
-    if (!*out) {
-      return ::arrow::Status::OutOfMemory("Failed to allocate memory");
-    }
+    VELOX_CHECK_NOT_NULL(*out, "Failed to allocate memory in ArrowMemoryPool.");
+
     allocated_ += size;
     return ::arrow::Status::OK();
   }
@@ -106,9 +104,9 @@ class ArrowMemoryPool final : public ::arrow::MemoryPool {
       int64_t alignment,
       uint8_t** ptr) override {
     uint8_t* newBuffer = reinterpret_cast<uint8_t*>(realloc(*ptr, newSize));
-    if (!newBuffer) {
-      return ::arrow::Status::OutOfMemory("Failed to reallocate memory");
-    }
+    VELOX_CHECK_NOT_NULL(
+        newBuffer, "Failed to reallocate memory in ArrowMemoryPool.");
+
     *ptr = newBuffer;
     allocated_ = allocated_ - oldSize + newSize;
     return ::arrow::Status::OK();
@@ -810,11 +808,6 @@ DEBUG_ONLY_TEST_F(ParquetWriterTest, parquetWriteTimestampTimeZoneWithDefault) {
 };
 
 DEBUG_ONLY_TEST_F(ParquetWriterTest, parquetWriteWithArrowMemoryPool) {
-  SCOPED_TESTVALUE_SET(
-      "ArrowMemoryPool::Allocate",
-      std::function<void(const uint8_t*)>(
-          [&](const uint8_t* buffer) { ASSERT_TRUE(buffer != nullptr); }));
-
   const auto data = makeRowVector({makeFlatVector<Timestamp>(
       10'000, [](auto row) { return Timestamp(row, row); })});
   parquet::WriterOptions writerOptions;
