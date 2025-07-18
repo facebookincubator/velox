@@ -35,6 +35,7 @@ velox_add_library(
   MathematicalOperatorsRegistration.cpp
   ProbabilityTrigonometricFunctionsRegistration.cpp
   RegistrationFunctions.cpp
+  SfmSketchFunctionsRegistration.cpp
   StringFunctionsRegistration.cpp
   TDigestFunctionsRegistration.cpp
   QDigestFunctionsRegistration.cpp

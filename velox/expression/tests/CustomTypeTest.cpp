@@ -233,7 +233,8 @@ TEST_F(CustomTypeTest, getCustomTypeNames) {
           "BINGTILE",
           "TDIGEST",
           "QDIGEST",
-          "GEOMETRY"}),
+          "GEOMETRY",
+          "SFMSKETCH"}),
       names);
 
   ASSERT_TRUE(registerCustomType(
@@ -252,7 +253,8 @@ TEST_F(CustomTypeTest, getCustomTypeNames) {
           "FANCY_INT",
           "TDIGEST",
           "QDIGEST",
-          "GEOMETRY"}),
+          "GEOMETRY",
+          "SFMSKETCH"}),
       names);
 
   ASSERT_TRUE(unregisterCustomType("fancy_int"));
