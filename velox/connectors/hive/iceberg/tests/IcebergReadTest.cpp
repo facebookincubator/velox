@@ -383,18 +383,19 @@ class HiveIcebergTest : public HiveConnectorTestBase {
     const uint64_t splitSize = std::floor((fileSize) / splitCount);
 
     for (int i = 0; i < splitCount; ++i) {
-      splits.emplace_back(std::make_shared<HiveIcebergSplit>(
-          kHiveConnectorId,
-          dataFilePath,
-          fileFormat_,
-          i * splitSize,
-          splitSize,
-          partitionKeys,
-          std::nullopt,
-          customSplitInfo,
-          nullptr,
-          /*cacheable=*/true,
-          deleteFiles));
+      splits.emplace_back(
+          std::make_shared<HiveIcebergSplit>(
+              kHiveConnectorId,
+              dataFilePath,
+              fileFormat_,
+              i * splitSize,
+              splitSize,
+              partitionKeys,
+              std::nullopt,
+              customSplitInfo,
+              nullptr,
+              /*cacheable=*/true,
+              deleteFiles));
     }
 
     return splits;
@@ -1491,6 +1492,71 @@ TEST_F(HiveIcebergTest, equalityDeletesMultipleFiles) {
       equalityDeleteVectorMap,
       equalityFieldIdsMap,
       "SELECT * FROM tmp WHERE 1 = 0");
+}
+
+TEST_F(HiveIcebergTest, equalityDeletesFloatAndDoubleThrowsError) {
+  folly::SingletonVault::singleton()->registrationComplete();
+
+  // Test for float (REAL)
+  {
+    std::unordered_map<int8_t, std::vector<int32_t>> equalityFieldIdsMap;
+    std::unordered_map<int8_t, std::vector<std::vector<float>>>
+        equalityDeleteVectorMap;
+    equalityFieldIdsMap.insert({{0, {1}}, {1, {2}}});
+    equalityDeleteVectorMap.insert({{0, {{0, 1}}}, {1, {{2, 3}}}});
+    VELOX_ASSERT_THROW(
+        assertEqualityDeletes<TypeKind::REAL>(
+            equalityDeleteVectorMap, equalityFieldIdsMap),
+        "Iceberg does not allow DOUBLE or REAL columns as the equality delete columns: c1 : REAL");
+  }
+
+  // Test for float (REAL) - Delete all
+  {
+    std::unordered_map<int8_t, std::vector<int32_t>> equalityFieldIdsMap;
+    std::unordered_map<int8_t, std::vector<std::vector<float>>>
+        equalityDeleteVectorMap;
+    equalityFieldIdsMap.insert({0, {1}});
+    std::vector<float> allValues;
+    for (int i = 0; i < rowCount; ++i) {
+      allValues.push_back(static_cast<double>(i));
+    }
+    equalityDeleteVectorMap.insert({0, {allValues}});
+    VELOX_ASSERT_THROW(
+        assertEqualityDeletes<TypeKind::REAL>(
+            equalityDeleteVectorMap, equalityFieldIdsMap),
+        "Iceberg does not allow DOUBLE or REAL columns as the equality delete columns: c0 : REAL");
+  }
+
+
+  // Test for double (DOUBLE)
+  {
+    std::unordered_map<int8_t, std::vector<int32_t>> equalityFieldIdsMap;
+    std::unordered_map<int8_t, std::vector<std::vector<double>>>
+        equalityDeleteVectorMap;
+    equalityFieldIdsMap.insert({{0, {1}}, {1, {2}}});
+    equalityDeleteVectorMap.insert({{0, {{0, 1}}}, {1, {{2, 3}}}});
+    VELOX_ASSERT_THROW(
+        assertEqualityDeletes<TypeKind::DOUBLE>(
+            equalityDeleteVectorMap, equalityFieldIdsMap),
+        "Iceberg does not allow DOUBLE or REAL columns as the equality delete columns: c1 : DOUBLE");
+  }
+
+  // Test for double (DOUBLE) - Delete all
+  {
+    std::unordered_map<int8_t, std::vector<int32_t>> equalityFieldIdsMap;
+    std::unordered_map<int8_t, std::vector<std::vector<double>>>
+        equalityDeleteVectorMap;
+    equalityFieldIdsMap.insert({0, {1}});
+    std::vector<double> allValues;
+    for (int i = 0; i < rowCount; ++i) {
+      allValues.push_back(static_cast<double>(i));
+    }
+    equalityDeleteVectorMap.insert({0, {allValues}});
+    VELOX_ASSERT_THROW(
+        assertEqualityDeletes<TypeKind::DOUBLE>(
+            equalityDeleteVectorMap, equalityFieldIdsMap),
+        "Iceberg does not allow DOUBLE or REAL columns as the equality delete columns: c0 : DOUBLE");
+  }
 }
 
 TEST_F(HiveIcebergTest, TestSubFieldEqualityDelete) {
