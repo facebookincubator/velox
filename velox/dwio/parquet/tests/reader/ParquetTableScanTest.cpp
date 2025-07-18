@@ -442,6 +442,12 @@ TEST_F(ParquetTableScanTest, columnIndex) {
 
   assertSelectWithFilter(
       {"_1", "_5"},
+      {"_1 < 200 OR _1 >= 700"},
+      "",
+      "SELECT _1, _5 FROM tmp WHERE _1 < 200 OR _1 >= 700");
+
+  assertSelectWithFilter(
+      {"_1", "_5"},
       {"_1 > 222", "_5 > 333"},
       "",
       "SELECT _1, _5 FROM tmp WHERE _1 > 222 and _5 > 333");

@@ -58,12 +58,16 @@ endif()
 
 add_executable(
   velox_dwio_parquet_reader_test
+<<<<<<< HEAD
   ColumnPageIndexTest.cpp
   ParquetReaderTest.cpp
   ParquetReaderBenchmarkTest.cpp
   BloomFilterTest.cpp
-  RowRangesTest.cpp
 )
+=======
+  ColumnPageIndexTest.cpp ParquetReaderTest.cpp ParquetReaderBenchmarkTest.cpp
+  BloomFilterTest.cpp)
+>>>>>>> 50a26569c (fix metadata filter)
 add_test(
   NAME velox_dwio_parquet_reader_test
   COMMAND velox_dwio_parquet_reader_test
