@@ -306,6 +306,7 @@ class MergerTest : public OperatorTestBase {
       0,
       0,
       "none",
+      0,
       std::nullopt};
 
   std::shared_ptr<folly::Synchronized<common::SpillStats>> spillStats_ =
