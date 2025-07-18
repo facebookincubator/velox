@@ -462,8 +462,14 @@ void TopNRowNumber::noMoreInput() {
     SpillPartitionSet spillPartitionSet;
     spiller_->finishSpill(spillPartitionSet);
     VELOX_CHECK_EQ(spillPartitionSet.size(), 1);
-    merge_ = spillPartitionSet.begin()->second->createOrderedReader(
-        spillConfig_->readBufferSize, pool(), spillStats_.get());
+    merge_ = spillPartitionSet.begin()->second->createOrderedReaderWithPreMerge(
+        spillConfig_->numMaxMergeWays,
+        spillConfig_->readBufferSize,
+        spillConfig_->writeBufferSize,
+        spillConfig_->updateAndCheckSpillLimitCb,
+        pool(),
+        spillStats_.get(),
+        spillConfig_->fileCreateConfig);
   } else {
     outputRows_.resize(outputBatchSize_);
   }

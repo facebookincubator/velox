@@ -714,12 +714,24 @@ class SpillerTest : public exec::test::RowContainerTestBase {
       auto* spillPartition = spillPartitionEntry.second.get();
       // We make a merge reader that merges the spill files and the rows that
       // are still in the RowContainer.
-      auto merge = spillPartition->createOrderedReader(
-          spillConfig_.readBufferSize, pool(), &spillStats_);
+      auto merge = spillPartition->createOrderedReaderWithPreMerge(
+          spillConfig_.numMaxMergeWays,
+          spillConfig_.readBufferSize,
+          spillConfig_.writeBufferSize,
+          spillConfig_.updateAndCheckSpillLimitCb,
+          pool(),
+          &spillStats_,
+          spillConfig_.fileCreateConfig);
       ASSERT_TRUE(merge != nullptr);
       ASSERT_TRUE(
-          spillPartition->createOrderedReader(
-              spillConfig_.readBufferSize, pool(), &spillStats_) == nullptr);
+          spillPartition->createOrderedReaderWithPreMerge(
+              spillConfig_.numMaxMergeWays,
+              spillConfig_.readBufferSize,
+              spillConfig_.writeBufferSize,
+              spillConfig_.updateAndCheckSpillLimitCb,
+              pool(),
+              &spillStats_,
+              spillConfig_.fileCreateConfig) == nullptr);
 
       // We read the spilled data back and check that it matches the sorted
       // order of the partition.

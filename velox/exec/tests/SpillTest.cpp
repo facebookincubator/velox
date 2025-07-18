@@ -394,6 +394,27 @@ class SpillTest : public ::testing::TestWithParam<uint32_t>,
     ASSERT_EQ(numFinishedFiles, expectedFiles);
   }
 
+  void hybridSpillStateTest(
+      int64_t targetFileSize,
+      int numPartitions,
+      int numBatches,
+      int numDuplicates,
+      const std::vector<CompareFlags>& compareFlags,
+      uint64_t expectedNumSpilledFiles) {
+    int mergeWayThresholdBegin = 1;
+    int mergeWayThresholdEnd = 4;
+    for (int i = mergeWayThresholdBegin; i < mergeWayThresholdEnd; i++) {
+      spillStateTest(
+          targetFileSize,
+          numPartitions,
+          numBatches,
+          numDuplicates,
+          compareFlags,
+          expectedNumSpilledFiles,
+          i);
+    }
+  }
+
   // 'numDuplicates' specifies the number of duplicates generated for each
   // distinct sort key value in test.
   void spillStateTest(
@@ -402,7 +423,8 @@ class SpillTest : public ::testing::TestWithParam<uint32_t>,
       int numBatches,
       int numDuplicates,
       const std::vector<CompareFlags>& compareFlags,
-      uint64_t expectedNumSpilledFiles) {
+      uint64_t expectedNumSpilledFiles,
+      int mergeWayThreshold) {
     const int numRowsPerBatch = 1'000;
     SCOPED_TRACE(
         fmt::format(
@@ -489,13 +511,21 @@ class SpillTest : public ::testing::TestWithParam<uint32_t>,
     ASSERT_EQ(stats.spilledBytes, totalFileBytes);
     ASSERT_EQ(prevGStats.spilledBytes + totalFileBytes, newGStats.spilledBytes);
 
+    common::UpdateAndCheckSpillLimitCB cb = [](int64_t) {};
+    bool usePreMerge = mergeWayThreshold >= 2;
     for (const auto& partitionId : partitionIds) {
       auto spillFiles = state_->finish(partitionId);
       ASSERT_EQ(state_->numFinishedFiles(partitionId), 0);
       auto spillPartition =
           SpillPartition(SpillPartitionId(partitionId), std::move(spillFiles));
-      auto merge =
-          spillPartition.createOrderedReader(1 << 20, pool(), &spillStats_);
+      std::unique_ptr<TreeOfLosers<SpillMergeStream>> merge;
+      if (!usePreMerge) {
+        merge =
+            spillPartition.createOrderedReader(1 << 20, pool(), &spillStats_);
+      } else {
+        merge = spillPartition.createOrderedReaderWithPreMerge(
+            2, 1 << 20, 1 << 20, cb, pool(), &spillStats_, "");
+      }
       int numReadBatches = 0;
       // We expect all the rows in dense increasing order.
       for (auto i = 0; i < numBatches * numRowsPerBatch; ++i) {
@@ -528,8 +558,10 @@ class SpillTest : public ::testing::TestWithParam<uint32_t>,
         }
       }
       ASSERT_EQ(nullptr, merge->next());
-      // We do two append writes per each input batch.
-      ASSERT_EQ(numBatches, numReadBatches);
+      if (!usePreMerge) {
+        // We do two append writes per each input batch.
+        ASSERT_EQ(numBatches, numReadBatches);
+      }
     }
 
     const auto finalStats = spillStats_.copy();
@@ -568,7 +600,11 @@ class SpillTest : public ::testing::TestWithParam<uint32_t>,
       ASSERT_TRUE(fs->exists(spilledFile));
     }
     // Verify stats.
-    ASSERT_EQ(runtimeStats_["spillFileSize"].count, spilledFiles.size());
+    if (!usePreMerge) {
+      ASSERT_EQ(runtimeStats_["spillFileSize"].count, spilledFiles.size());
+    } else {
+      ASSERT_GE(runtimeStats_["spillFileSize"].count, spilledFiles.size());
+    }
   }
 
   folly::Random::DefaultGenerator rng_;
@@ -592,18 +628,18 @@ TEST_P(SpillTest, spillState) {
   // triggered by batch write.
 
   // Test with distinct sort keys.
-  spillStateTest(kGB, 2, 8, 1, {CompareFlags{true, true}}, 8);
-  spillStateTest(kGB, 2, 8, 1, {CompareFlags{true, false}}, 8);
-  spillStateTest(kGB, 2, 8, 1, {CompareFlags{false, true}}, 8);
-  spillStateTest(kGB, 2, 8, 1, {CompareFlags{false, false}}, 8);
-  spillStateTest(kGB, 2, 8, 1, {}, 8);
+  hybridSpillStateTest(kGB, 2, 8, 1, {CompareFlags{true, true}}, 8);
+  hybridSpillStateTest(kGB, 2, 8, 1, {CompareFlags{true, false}}, 8);
+  hybridSpillStateTest(kGB, 2, 8, 1, {CompareFlags{false, true}}, 8);
+  hybridSpillStateTest(kGB, 2, 8, 1, {CompareFlags{false, false}}, 8);
+  hybridSpillStateTest(kGB, 2, 8, 1, {}, 8);
 
   // Test with duplicate sort keys.
-  spillStateTest(kGB, 2, 8, 8, {CompareFlags{true, true}}, 8);
-  spillStateTest(kGB, 2, 8, 8, {CompareFlags{true, false}}, 8);
-  spillStateTest(kGB, 2, 8, 8, {CompareFlags{false, true}}, 8);
-  spillStateTest(kGB, 2, 8, 8, {CompareFlags{false, false}}, 8);
-  spillStateTest(kGB, 2, 8, 8, {}, 8);
+  hybridSpillStateTest(kGB, 2, 8, 8, {CompareFlags{true, true}}, 8);
+  hybridSpillStateTest(kGB, 2, 8, 8, {CompareFlags{true, false}}, 8);
+  hybridSpillStateTest(kGB, 2, 8, 8, {CompareFlags{false, true}}, 8);
+  hybridSpillStateTest(kGB, 2, 8, 8, {CompareFlags{false, false}}, 8);
+  hybridSpillStateTest(kGB, 2, 8, 8, {}, 8);
 }
 
 TEST_P(SpillTest, spillTimestamp) {
@@ -669,18 +705,18 @@ TEST_P(SpillTest, spillStateWithSmallTargetFileSize) {
   // write.
 
   // Test with distinct sort keys.
-  spillStateTest(1, 2, 8, 1, {CompareFlags{true, true}}, 8 * 2);
-  spillStateTest(1, 2, 8, 1, {CompareFlags{true, false}}, 8 * 2);
-  spillStateTest(1, 2, 8, 1, {CompareFlags{false, true}}, 8 * 2);
-  spillStateTest(1, 2, 8, 1, {CompareFlags{false, false}}, 8 * 2);
-  spillStateTest(1, 2, 8, 1, {}, 8 * 2);
+  hybridSpillStateTest(1, 2, 8, 1, {CompareFlags{true, true}}, 8 * 2);
+  hybridSpillStateTest(1, 2, 8, 1, {CompareFlags{true, false}}, 8 * 2);
+  hybridSpillStateTest(1, 2, 8, 1, {CompareFlags{false, true}}, 8 * 2);
+  hybridSpillStateTest(1, 2, 8, 1, {CompareFlags{false, false}}, 8 * 2);
+  hybridSpillStateTest(1, 2, 8, 1, {}, 8 * 2);
 
   // Test with duplicated sort keys.
-  spillStateTest(1, 2, 8, 8, {CompareFlags{true, false}}, 8 * 2);
-  spillStateTest(1, 2, 8, 8, {CompareFlags{true, true}}, 8 * 2);
-  spillStateTest(1, 2, 8, 8, {CompareFlags{false, false}}, 8 * 2);
-  spillStateTest(1, 2, 8, 8, {CompareFlags{false, true}}, 8 * 2);
-  spillStateTest(1, 2, 8, 8, {}, 8 * 2);
+  hybridSpillStateTest(1, 2, 8, 8, {CompareFlags{true, false}}, 8 * 2);
+  hybridSpillStateTest(1, 2, 8, 8, {CompareFlags{true, true}}, 8 * 2);
+  hybridSpillStateTest(1, 2, 8, 8, {CompareFlags{false, false}}, 8 * 2);
+  hybridSpillStateTest(1, 2, 8, 8, {CompareFlags{false, true}}, 8 * 2);
+  hybridSpillStateTest(1, 2, 8, 8, {}, 8 * 2);
 }
 
 TEST_P(SpillTest, spillPartitionId) {
