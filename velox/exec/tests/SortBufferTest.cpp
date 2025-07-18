@@ -89,6 +89,7 @@ class SortBufferTest : public OperatorTestBase,
         0,
         0,
         "none",
+        0,
         spillPrefixSortConfig);
   }
 
@@ -401,6 +402,7 @@ TEST_P(SortBufferTest, batchOutput) {
         0,
         0,
         "none",
+        0,
         prefixSortConfig_);
     folly::Synchronized<common::SpillStats> spillStats;
     auto sortBuffer = std::make_unique<SortBuffer>(
@@ -498,6 +500,7 @@ TEST_P(SortBufferTest, spill) {
         0,
         0,
         "none",
+        0,
         prefixSortConfig_);
     folly::Synchronized<common::SpillStats> spillStats;
     auto sortBuffer = std::make_unique<SortBuffer>(
