@@ -383,19 +383,18 @@ class HiveIcebergTest : public HiveConnectorTestBase {
     const uint64_t splitSize = std::floor((fileSize) / splitCount);
 
     for (int i = 0; i < splitCount; ++i) {
-      splits.emplace_back(
-          std::make_shared<HiveIcebergSplit>(
-              kHiveConnectorId,
-              dataFilePath,
-              fileFormat_,
-              i * splitSize,
-              splitSize,
-              partitionKeys,
-              std::nullopt,
-              customSplitInfo,
-              nullptr,
-              /*cacheable=*/true,
-              deleteFiles));
+      splits.emplace_back(std::make_shared<HiveIcebergSplit>(
+          kHiveConnectorId,
+          dataFilePath,
+          fileFormat_,
+          i * splitSize,
+          splitSize,
+          partitionKeys,
+          std::nullopt,
+          customSplitInfo,
+          nullptr,
+          /*cacheable=*/true,
+          deleteFiles));
     }
 
     return splits;
@@ -1494,6 +1493,467 @@ TEST_F(HiveIcebergTest, equalityDeletesMultipleFiles) {
       "SELECT * FROM tmp WHERE 1 = 0");
 }
 
+// Add these test cases to HiveIcebergTest class in IcebergReadTest.cpp
+
+TEST_F(HiveIcebergTest, equalityDeletesMixedTypesInt64Varchar) {
+  folly::SingletonVault::singleton()->registrationComplete();
+
+  std::unordered_map<int8_t, std::vector<int32_t>> equalityFieldIdsMap;
+  equalityFieldIdsMap.insert({0, {1, 2}});
+
+  // Create data vectors with int64_t and varchar columns
+  std::vector<RowVectorPtr> dataVectors = {makeRowVector(
+      {"c0", "c1"},
+      {makeFlatVector<int64_t>({0, 1, 2, 3, 4, 5, 6, 7, 8, 9}),
+       makeFlatVector<StringView>(
+           {"apple",
+            "banana",
+            "cherry",
+            "date",
+            "elderberry",
+            "fig",
+            "grape",
+            "honeydew",
+            "kiwi",
+            "lemon"})})};
+
+  // Test 1: Delete first and last rows
+  {
+    std::unordered_map<int8_t, std::vector<std::vector<int64_t>>> intDeleteMap;
+    std::unordered_map<int8_t, std::vector<std::vector<StringView>>>
+        stringDeleteMap;
+
+    intDeleteMap.insert({0, {{0, 9}}});
+    stringDeleteMap.insert({1, {{"apple", "lemon"}}});
+
+    // Write int64_t delete file
+    auto intDeleteFilePath = TempFilePath::create();
+    RowVectorPtr intDeleteVector =
+        makeRowVector({"c0"}, {makeFlatVector<int64_t>(intDeleteMap.at(0)[0])});
+    writeToFile(intDeleteFilePath->getPath(), intDeleteVector);
+
+    // Write varchar delete file
+    auto stringDeleteFilePath = TempFilePath::create();
+    RowVectorPtr stringDeleteVector = makeRowVector(
+        {"c1"}, {makeFlatVector<StringView>(stringDeleteMap.at(1)[0])});
+    writeToFile(stringDeleteFilePath->getPath(), stringDeleteVector);
+
+    std::vector<IcebergDeleteFile> deleteFiles;
+    deleteFiles.push_back(IcebergDeleteFile(
+        FileContent::kEqualityDeletes,
+        intDeleteFilePath->getPath(),
+        fileFormat_,
+        2,
+        testing::internal::GetFileSize(
+            std::fopen(intDeleteFilePath->getPath().c_str(), "r")),
+        {1}));
+    deleteFiles.push_back(IcebergDeleteFile(
+        FileContent::kEqualityDeletes,
+        stringDeleteFilePath->getPath(),
+        fileFormat_,
+        2,
+        testing::internal::GetFileSize(
+            std::fopen(stringDeleteFilePath->getPath().c_str(), "r")),
+        {2}));
+
+    auto dataFilePath = TempFilePath::create();
+    writeToFile(dataFilePath->getPath(), dataVectors);
+    auto icebergSplits =
+        makeIcebergSplits(dataFilePath->getPath(), deleteFiles);
+
+    createDuckDbTable(dataVectors);
+    std::string duckDbSql =
+        "SELECT * FROM tmp WHERE c0 NOT IN (0, 9) AND c1 NOT IN ('apple', 'lemon')";
+    assertEqualityDeletes(
+        icebergSplits.back(), asRowType(dataVectors[0]->type()), duckDbSql);
+  }
+
+  // Test 2: Delete random rows
+  {
+    std::unordered_map<int8_t, std::vector<std::vector<int64_t>>> intDeleteMap;
+    std::unordered_map<int8_t, std::vector<std::vector<StringView>>>
+        stringDeleteMap;
+
+    intDeleteMap.insert({0, {{1, 3, 5, 7}}});
+    stringDeleteMap.insert({1, {{"banana", "date", "fig", "honeydew"}}});
+
+    auto intDeleteFilePath = TempFilePath::create();
+    RowVectorPtr intDeleteVector =
+        makeRowVector({"c0"}, {makeFlatVector<int64_t>(intDeleteMap.at(0)[0])});
+    writeToFile(intDeleteFilePath->getPath(), intDeleteVector);
+
+    auto stringDeleteFilePath = TempFilePath::create();
+    RowVectorPtr stringDeleteVector = makeRowVector(
+        {"c1"}, {makeFlatVector<StringView>(stringDeleteMap.at(1)[0])});
+    writeToFile(stringDeleteFilePath->getPath(), stringDeleteVector);
+
+    std::vector<IcebergDeleteFile> deleteFiles;
+    deleteFiles.push_back(IcebergDeleteFile(
+        FileContent::kEqualityDeletes,
+        intDeleteFilePath->getPath(),
+        fileFormat_,
+        4,
+        testing::internal::GetFileSize(
+            std::fopen(intDeleteFilePath->getPath().c_str(), "r")),
+        {1}));
+    deleteFiles.push_back(IcebergDeleteFile(
+        FileContent::kEqualityDeletes,
+        stringDeleteFilePath->getPath(),
+        fileFormat_,
+        4,
+        testing::internal::GetFileSize(
+            std::fopen(stringDeleteFilePath->getPath().c_str(), "r")),
+        {2}));
+
+    auto dataFilePath = TempFilePath::create();
+    writeToFile(dataFilePath->getPath(), dataVectors);
+    auto icebergSplits =
+        makeIcebergSplits(dataFilePath->getPath(), deleteFiles);
+
+    createDuckDbTable(dataVectors);
+    std::string duckDbSql =
+        "SELECT * FROM tmp WHERE c0 NOT IN (1, 3, 5, 7) AND c1 NOT IN ('banana', 'date', 'fig', 'honeydew')";
+    assertEqualityDeletes(
+        icebergSplits.back(), asRowType(dataVectors[0]->type()), duckDbSql);
+  }
+
+  // Test 3: Delete all rows
+  {
+    std::unordered_map<int8_t, std::vector<std::vector<int64_t>>> intDeleteMap;
+    std::unordered_map<int8_t, std::vector<std::vector<StringView>>>
+        stringDeleteMap;
+
+    intDeleteMap.insert({0, {{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}}});
+    stringDeleteMap.insert(
+        {1,
+         {{"apple",
+           "banana",
+           "cherry",
+           "date",
+           "elderberry",
+           "fig",
+           "grape",
+           "honeydew",
+           "kiwi",
+           "lemon"}}});
+
+    auto intDeleteFilePath = TempFilePath::create();
+    RowVectorPtr intDeleteVector =
+        makeRowVector({"c0"}, {makeFlatVector<int64_t>(intDeleteMap.at(0)[0])});
+    writeToFile(intDeleteFilePath->getPath(), intDeleteVector);
+
+    auto stringDeleteFilePath = TempFilePath::create();
+    RowVectorPtr stringDeleteVector = makeRowVector(
+        {"c1"}, {makeFlatVector<StringView>(stringDeleteMap.at(1)[0])});
+    writeToFile(stringDeleteFilePath->getPath(), stringDeleteVector);
+
+    std::vector<IcebergDeleteFile> deleteFiles;
+    deleteFiles.push_back(IcebergDeleteFile(
+        FileContent::kEqualityDeletes,
+        intDeleteFilePath->getPath(),
+        fileFormat_,
+        10,
+        testing::internal::GetFileSize(
+            std::fopen(intDeleteFilePath->getPath().c_str(), "r")),
+        {1}));
+    deleteFiles.push_back(IcebergDeleteFile(
+        FileContent::kEqualityDeletes,
+        stringDeleteFilePath->getPath(),
+        fileFormat_,
+        10,
+        testing::internal::GetFileSize(
+            std::fopen(stringDeleteFilePath->getPath().c_str(), "r")),
+        {2}));
+
+    auto dataFilePath = TempFilePath::create();
+    writeToFile(dataFilePath->getPath(), dataVectors);
+    auto icebergSplits =
+        makeIcebergSplits(dataFilePath->getPath(), deleteFiles);
+
+    createDuckDbTable(dataVectors);
+    std::string duckDbSql = "SELECT * FROM tmp WHERE 1 = 0";
+    assertEqualityDeletes(
+        icebergSplits.back(), asRowType(dataVectors[0]->type()), duckDbSql);
+  }
+
+  // Test 4: Delete none
+  {
+    std::unordered_map<int8_t, std::vector<std::vector<int64_t>>> intDeleteMap;
+    std::unordered_map<int8_t, std::vector<std::vector<StringView>>>
+        stringDeleteMap;
+
+    intDeleteMap.insert({0, {{}}});
+    stringDeleteMap.insert({1, {{}}});
+
+    auto intDeleteFilePath = TempFilePath::create();
+    RowVectorPtr intDeleteVector =
+        makeRowVector({"c0"}, {makeFlatVector<int64_t>(intDeleteMap.at(0)[0])});
+    writeToFile(intDeleteFilePath->getPath(), intDeleteVector);
+
+    auto stringDeleteFilePath = TempFilePath::create();
+    RowVectorPtr stringDeleteVector = makeRowVector(
+        {"c1"}, {makeFlatVector<StringView>(stringDeleteMap.at(1)[0])});
+    writeToFile(stringDeleteFilePath->getPath(), stringDeleteVector);
+
+    std::vector<IcebergDeleteFile> deleteFiles;
+    deleteFiles.push_back(IcebergDeleteFile(
+        FileContent::kEqualityDeletes,
+        intDeleteFilePath->getPath(),
+        fileFormat_,
+        0,
+        testing::internal::GetFileSize(
+            std::fopen(intDeleteFilePath->getPath().c_str(), "r")),
+        {1}));
+    deleteFiles.push_back(IcebergDeleteFile(
+        FileContent::kEqualityDeletes,
+        stringDeleteFilePath->getPath(),
+        fileFormat_,
+        0,
+        testing::internal::GetFileSize(
+            std::fopen(stringDeleteFilePath->getPath().c_str(), "r")),
+        {2}));
+
+    auto dataFilePath = TempFilePath::create();
+    writeToFile(dataFilePath->getPath(), dataVectors);
+    auto icebergSplits =
+        makeIcebergSplits(dataFilePath->getPath(), deleteFiles);
+
+    createDuckDbTable(dataVectors);
+    std::string duckDbSql = "SELECT * FROM tmp";
+    assertEqualityDeletes(
+        icebergSplits.back(), asRowType(dataVectors[0]->type()), duckDbSql);
+  }
+}
+
+TEST_F(HiveIcebergTest, equalityDeletesMixedTypesTinyintVarbinary) {
+  folly::SingletonVault::singleton()->registrationComplete();
+
+  std::unordered_map<int8_t, std::vector<int32_t>> equalityFieldIdsMap;
+  equalityFieldIdsMap.insert({0, {1, 2}});
+
+  // Create data vectors with int8_t and varbinary columns
+  std::vector<RowVectorPtr> dataVectors = {makeRowVector(
+      {"c0", "c1"},
+      {makeFlatVector<int8_t>({0, 1, 2, 3, 4, 5, 6, 7, 8, 9}),
+       makeFlatVector<StringView>(
+           {"\x01\x02",
+            "\x03\x04",
+            "\x05\x06",
+            "\x07\x08",
+            "\x09\x0A",
+            "\x0B\x0C",
+            "\x0D\x0E",
+            "\x0F\x10",
+            "\x11\x12",
+            "\x13\x14"})})};
+
+  // Test 1: Delete first and last rows
+  {
+    std::unordered_map<int8_t, std::vector<std::vector<int8_t>>> intDeleteMap;
+    std::unordered_map<int8_t, std::vector<std::vector<StringView>>>
+        binaryDeleteMap;
+
+    intDeleteMap.insert({0, {{0, 9}}});
+    binaryDeleteMap.insert({1, {{"\x01\x02", "\x13\x14"}}});
+
+    auto intDeleteFilePath = TempFilePath::create();
+    RowVectorPtr intDeleteVector =
+        makeRowVector({"c0"}, {makeFlatVector<int8_t>(intDeleteMap.at(0)[0])});
+    writeToFile(intDeleteFilePath->getPath(), intDeleteVector);
+
+    auto binaryDeleteFilePath = TempFilePath::create();
+    RowVectorPtr binaryDeleteVector = makeRowVector(
+        {"c1"}, {makeFlatVector<StringView>(binaryDeleteMap.at(1)[0])});
+    writeToFile(binaryDeleteFilePath->getPath(), binaryDeleteVector);
+
+    std::vector<IcebergDeleteFile> deleteFiles;
+    deleteFiles.push_back(IcebergDeleteFile(
+        FileContent::kEqualityDeletes,
+        intDeleteFilePath->getPath(),
+        fileFormat_,
+        2,
+        testing::internal::GetFileSize(
+            std::fopen(intDeleteFilePath->getPath().c_str(), "r")),
+        {1}));
+    deleteFiles.push_back(IcebergDeleteFile(
+        FileContent::kEqualityDeletes,
+        binaryDeleteFilePath->getPath(),
+        fileFormat_,
+        2,
+        testing::internal::GetFileSize(
+            std::fopen(binaryDeleteFilePath->getPath().c_str(), "r")),
+        {2}));
+
+    auto dataFilePath = TempFilePath::create();
+    writeToFile(dataFilePath->getPath(), dataVectors);
+    auto icebergSplits =
+        makeIcebergSplits(dataFilePath->getPath(), deleteFiles);
+
+    createDuckDbTable(dataVectors);
+    std::string duckDbSql =
+        "SELECT * FROM tmp WHERE c0 NOT IN (0, 9) AND hex(c1) NOT IN ('0102', '1314')";
+    assertEqualityDeletes(
+        icebergSplits.back(), asRowType(dataVectors[0]->type()), duckDbSql);
+  }
+
+  // Test 2: Delete random rows
+  {
+    std::unordered_map<int8_t, std::vector<std::vector<int8_t>>> intDeleteMap;
+    std::unordered_map<int8_t, std::vector<std::vector<StringView>>>
+        binaryDeleteMap;
+
+    intDeleteMap.insert({0, {{1, 3, 5, 7}}});
+    binaryDeleteMap.insert(
+        {1, {{"\x03\x04", "\x07\x08", "\x0B\x0C", "\x0F\x10"}}});
+
+    auto intDeleteFilePath = TempFilePath::create();
+    RowVectorPtr intDeleteVector =
+        makeRowVector({"c0"}, {makeFlatVector<int8_t>(intDeleteMap.at(0)[0])});
+    writeToFile(intDeleteFilePath->getPath(), intDeleteVector);
+
+    auto binaryDeleteFilePath = TempFilePath::create();
+    RowVectorPtr binaryDeleteVector = makeRowVector(
+        {"c1"}, {makeFlatVector<StringView>(binaryDeleteMap.at(1)[0])});
+    writeToFile(binaryDeleteFilePath->getPath(), binaryDeleteVector);
+
+    std::vector<IcebergDeleteFile> deleteFiles;
+    deleteFiles.push_back(IcebergDeleteFile(
+        FileContent::kEqualityDeletes,
+        intDeleteFilePath->getPath(),
+        fileFormat_,
+        4,
+        testing::internal::GetFileSize(
+            std::fopen(intDeleteFilePath->getPath().c_str(), "r")),
+        {1}));
+    deleteFiles.push_back(IcebergDeleteFile(
+        FileContent::kEqualityDeletes,
+        binaryDeleteFilePath->getPath(),
+        fileFormat_,
+        4,
+        testing::internal::GetFileSize(
+            std::fopen(binaryDeleteFilePath->getPath().c_str(), "r")),
+        {2}));
+
+    auto dataFilePath = TempFilePath::create();
+    writeToFile(dataFilePath->getPath(), dataVectors);
+    auto icebergSplits =
+        makeIcebergSplits(dataFilePath->getPath(), deleteFiles);
+
+    createDuckDbTable(dataVectors);
+    std::string duckDbSql =
+        "SELECT * FROM tmp WHERE c0 NOT IN (1, 3, 5, 7) AND hex(c1) NOT IN ('0304', '0708', '0B0C', '0F10')";
+    assertEqualityDeletes(
+        icebergSplits.back(), asRowType(dataVectors[0]->type()), duckDbSql);
+  }
+
+  // Test 3: Delete all rows
+  {
+    std::unordered_map<int8_t, std::vector<std::vector<int8_t>>> intDeleteMap;
+    std::unordered_map<int8_t, std::vector<std::vector<StringView>>>
+        binaryDeleteMap;
+
+    intDeleteMap.insert({0, {{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}}});
+    binaryDeleteMap.insert(
+        {1,
+         {{"\x01\x02",
+           "\x03\x04",
+           "\x05\x06",
+           "\x07\x08",
+           "\x09\x0A",
+           "\x0B\x0C",
+           "\x0D\x0E",
+           "\x0F\x10",
+           "\x11\x12",
+           "\x13\x14"}}});
+
+    auto intDeleteFilePath = TempFilePath::create();
+    RowVectorPtr intDeleteVector =
+        makeRowVector({"c0"}, {makeFlatVector<int8_t>(intDeleteMap.at(0)[0])});
+    writeToFile(intDeleteFilePath->getPath(), intDeleteVector);
+
+    auto binaryDeleteFilePath = TempFilePath::create();
+    RowVectorPtr binaryDeleteVector = makeRowVector(
+        {"c1"}, {makeFlatVector<StringView>(binaryDeleteMap.at(1)[0])});
+    writeToFile(binaryDeleteFilePath->getPath(), binaryDeleteVector);
+
+    std::vector<IcebergDeleteFile> deleteFiles;
+    deleteFiles.push_back(IcebergDeleteFile(
+        FileContent::kEqualityDeletes,
+        intDeleteFilePath->getPath(),
+        fileFormat_,
+        10,
+        testing::internal::GetFileSize(
+            std::fopen(intDeleteFilePath->getPath().c_str(), "r")),
+        {1}));
+    deleteFiles.push_back(IcebergDeleteFile(
+        FileContent::kEqualityDeletes,
+        binaryDeleteFilePath->getPath(),
+        fileFormat_,
+        10,
+        testing::internal::GetFileSize(
+            std::fopen(binaryDeleteFilePath->getPath().c_str(), "r")),
+        {2}));
+
+    auto dataFilePath = TempFilePath::create();
+    writeToFile(dataFilePath->getPath(), dataVectors);
+    auto icebergSplits =
+        makeIcebergSplits(dataFilePath->getPath(), deleteFiles);
+
+    createDuckDbTable(dataVectors);
+    std::string duckDbSql = "SELECT * FROM tmp WHERE 1 = 0";
+    assertEqualityDeletes(
+        icebergSplits.back(), asRowType(dataVectors[0]->type()), duckDbSql);
+  }
+
+  // Test 4: Delete none
+  {
+    std::unordered_map<int8_t, std::vector<std::vector<int8_t>>> intDeleteMap;
+    std::unordered_map<int8_t, std::vector<std::vector<StringView>>>
+        binaryDeleteMap;
+
+    intDeleteMap.insert({0, {{}}});
+    binaryDeleteMap.insert({1, {{}}});
+
+    auto intDeleteFilePath = TempFilePath::create();
+    RowVectorPtr intDeleteVector =
+        makeRowVector({"c0"}, {makeFlatVector<int8_t>(intDeleteMap.at(0)[0])});
+    writeToFile(intDeleteFilePath->getPath(), intDeleteVector);
+
+    auto binaryDeleteFilePath = TempFilePath::create();
+    RowVectorPtr binaryDeleteVector = makeRowVector(
+        {"c1"}, {makeFlatVector<StringView>(binaryDeleteMap.at(1)[0])});
+    writeToFile(binaryDeleteFilePath->getPath(), binaryDeleteVector);
+
+    std::vector<IcebergDeleteFile> deleteFiles;
+    deleteFiles.push_back(IcebergDeleteFile(
+        FileContent::kEqualityDeletes,
+        intDeleteFilePath->getPath(),
+        fileFormat_,
+        0,
+        testing::internal::GetFileSize(
+            std::fopen(intDeleteFilePath->getPath().c_str(), "r")),
+        {1}));
+    deleteFiles.push_back(IcebergDeleteFile(
+        FileContent::kEqualityDeletes,
+        binaryDeleteFilePath->getPath(),
+        fileFormat_,
+        0,
+        testing::internal::GetFileSize(
+            std::fopen(binaryDeleteFilePath->getPath().c_str(), "r")),
+        {2}));
+
+    auto dataFilePath = TempFilePath::create();
+    writeToFile(dataFilePath->getPath(), dataVectors);
+    auto icebergSplits =
+        makeIcebergSplits(dataFilePath->getPath(), deleteFiles);
+
+    createDuckDbTable(dataVectors);
+    std::string duckDbSql = "SELECT * FROM tmp";
+    assertEqualityDeletes(
+        icebergSplits.back(), asRowType(dataVectors[0]->type()), duckDbSql);
+  }
+}
+
 TEST_F(HiveIcebergTest, equalityDeletesFloatAndDoubleThrowsError) {
   folly::SingletonVault::singleton()->registrationComplete();
 
@@ -1526,7 +1986,6 @@ TEST_F(HiveIcebergTest, equalityDeletesFloatAndDoubleThrowsError) {
             equalityDeleteVectorMap, equalityFieldIdsMap),
         "Iceberg does not allow DOUBLE or REAL columns as the equality delete columns: c0 : REAL");
   }
-
 
   // Test for double (DOUBLE)
   {
