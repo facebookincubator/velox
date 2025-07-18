@@ -20,9 +20,12 @@
 #include <arrow/table.h>
 #include "velox/common/base/Pointers.h"
 #include "velox/common/config/Config.h"
+#include "velox/common/encode/Base64.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/core/QueryConfig.h"
+#include "velox/dwio/parquet/writer/arrow/Metadata.h"
 #include "velox/dwio/parquet/writer/arrow/Properties.h"
+#include "velox/dwio/parquet/writer/arrow/Statistics.h"
 #include "velox/dwio/parquet/writer/arrow/Writer.h"
 #include "velox/exec/MemoryReclaimer.h"
 
@@ -350,6 +353,8 @@ Writer::Writer(
       getArrowParquetWriterOptions(options, flushPolicy_);
   setMemoryReclaimers();
   writeInt96AsTimestamp_ = options.writeInt96AsTimestamp;
+  icebergDataFileStats_ =
+      std::make_shared<dwio::common::IcebergDataFileStatistics>();
 }
 
 Writer::Writer(
@@ -490,6 +495,7 @@ void Writer::close() {
 
   if (arrowContext_->writer) {
     PARQUET_THROW_NOT_OK(arrowContext_->writer->Close());
+    collectIcebergDataFileStats(arrowContext_->writer->metadata());
     arrowContext_->writer.reset();
   }
   PARQUET_THROW_NOT_OK(stream_->Close());
@@ -500,6 +506,62 @@ void Writer::close() {
 void Writer::abort() {
   stream_->abort();
   arrowContext_.reset();
+}
+
+void Writer::collectIcebergDataFileStats(
+    const std::shared_ptr<arrow::FileMetaData>& fileMetadata) {
+  VELOX_CHECK_NOT_NULL(fileMetadata);
+  icebergDataFileStats_->numRecords = fileMetadata->num_rows();
+
+  std::unique_ptr<arrow::RowGroupMetaData> rgm =
+      arrowContext_->writer->metadata()->RowGroup(0);
+  std::vector<std::shared_ptr<arrow::Statistics>> globalMinStats;
+  std::vector<std::shared_ptr<arrow::Statistics>> globalMaxStats;
+  globalMinStats.reserve(rgm->num_columns());
+  globalMaxStats.reserve(rgm->num_columns());
+  std::vector<bool> hasMinMax(rgm->num_columns(), false);
+
+  const auto numRowGroups = fileMetadata->num_row_groups();
+  for (auto i = 0; i < numRowGroups; ++i) {
+    rgm = arrowContext_->writer->metadata()->RowGroup(i);
+    std::vector<std::shared_ptr<arrow::Statistics>> columnStats;
+    for (auto j = 0; j < rgm->num_columns(); ++j) {
+      const auto numValues = rgm->ColumnChunk(j)->num_values();
+      icebergDataFileStats_->valueCounts[j + 1] += numValues;
+      icebergDataFileStats_->columnsSizes[j + 1] +=
+          rgm->ColumnChunk(j)->total_compressed_size();
+      auto columnChunkStats = rgm->ColumnChunk(j)->statistics();
+      if (columnChunkStats->nan_count() > 0) {
+        icebergDataFileStats_->nanValueCounts[j + 1] +=
+            columnChunkStats->nan_count();
+      }
+      icebergDataFileStats_->nullValueCounts[j + 1] +=
+          columnChunkStats->null_count();
+
+      if (columnChunkStats->HasMinMax()) {
+        if (!hasMinMax[j]) {
+          hasMinMax[j] = true;
+          globalMinStats[j] = columnChunkStats;
+          globalMaxStats[j] = columnChunkStats;
+        } else {
+          globalMaxStats[j] = arrow::Statistics::CompareAndGetMax(
+              globalMaxStats[j], columnChunkStats);
+          globalMinStats[j] = arrow::Statistics::CompareAndGetMin(
+              globalMinStats[j], columnChunkStats);
+        }
+      }
+    }
+  }
+  for (auto j = 0; j < rgm->num_columns(); ++j) {
+    if (hasMinMax[j]) {
+      const auto lowerBound = globalMinStats[j]->MinValue();
+      icebergDataFileStats_->lowerBounds[j + 1] =
+          encoding::Base64::encode(lowerBound.data(), lowerBound.size());
+      const auto upperBound = globalMaxStats[j]->MaxValue();
+      icebergDataFileStats_->upperBounds[j + 1] =
+          encoding::Base64::encode(upperBound.data(), upperBound.size());
+    }
+  }
 }
 
 void Writer::setMemoryReclaimers() {

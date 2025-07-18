@@ -18,6 +18,7 @@
 
 #include <folly/Hash.h>
 #include <folly/container/F14Map.h>
+#include <folly/json/dynamic.h>
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/RuntimeMetrics.h"
@@ -593,6 +594,61 @@ struct RuntimeStatistics {
           RuntimeCounter(columnReaderStatistics.flattenStringDictionaryValues));
     }
     return result;
+  }
+};
+
+struct IcebergDataFileStatistics {
+  int64_t numRecords;
+  std::unordered_map<int32_t, int64_t> columnsSizes;
+  std::unordered_map<int32_t, int64_t> valueCounts;
+  std::unordered_map<int32_t, int64_t> nullValueCounts;
+  std::unordered_map<int32_t, int64_t> nanValueCounts;
+  std::unordered_map<int32_t, std::string> lowerBounds;
+  std::unordered_map<int32_t, std::string> upperBounds;
+
+  IcebergDataFileStatistics() : numRecords(0) {}
+
+  folly::dynamic toJson() const {
+    folly::dynamic json = folly::dynamic::object;
+    json["recordCount"] = numRecords;
+
+    folly::dynamic sizeJson = folly::dynamic::object;
+    for (const auto& pair : columnsSizes) {
+      sizeJson[folly::to<std::string>(pair.first)] = pair.second;
+    }
+    json["columnSizes"] = std::move(sizeJson);
+
+    folly::dynamic valueCountJson = folly::dynamic::object;
+    for (const auto& pair : valueCounts) {
+      valueCountJson[folly::to<std::string>(pair.first)] = pair.second;
+    }
+    json["valueCounts"] = std::move(valueCountJson);
+
+    folly::dynamic nullCountJson = folly::dynamic::object;
+    for (const auto& pair : nullValueCounts) {
+      nullCountJson[folly::to<std::string>(pair.first)] = pair.second;
+    }
+    json["nullValueCounts"] = std::move(nullCountJson);
+
+    folly::dynamic nanCountJson = folly::dynamic::object;
+    for (const auto& pair : nanValueCounts) {
+      nanCountJson[folly::to<std::string>(pair.first)] = pair.second;
+    }
+    json["nanValueCounts"] = std::move(nanCountJson);
+
+    folly::dynamic lowerBoundJson = folly::dynamic::object;
+    for (const auto& pair : lowerBounds) {
+      lowerBoundJson[folly::to<std::string>(pair.first)] = pair.second;
+    }
+    json["lowerBounds"] = std::move(lowerBoundJson);
+
+    folly::dynamic upperBoundJson = folly::dynamic::object;
+    for (const auto& pair : upperBounds) {
+      upperBoundJson[folly::to<std::string>(pair.first)] = pair.second;
+    }
+    json["upperBounds"] = std::move(upperBoundJson);
+
+    return json;
   }
 };
 

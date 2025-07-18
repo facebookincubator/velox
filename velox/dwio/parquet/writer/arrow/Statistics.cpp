@@ -35,6 +35,7 @@
 #include "arrow/visit_data_inline.h"
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/dwio/parquet/common/UnicodeUtil.h"
 #include "velox/dwio/parquet/writer/arrow/Encoding.h"
 #include "velox/dwio/parquet/writer/arrow/Exception.h"
 #include "velox/dwio/parquet/writer/arrow/Platform.h"
@@ -590,9 +591,11 @@ class TypedStatisticsImpl : public TypedStatistics<DType> {
       int64_t num_values,
       int64_t null_count,
       int64_t distinct_count,
+      int64_t nan_count,
       bool has_min_max,
       bool has_null_count,
       bool has_distinct_count,
+      bool has_nan_count,
       MemoryPool* pool)
       : TypedStatisticsImpl(descr, pool) {
     TypedStatisticsImpl::IncrementNumValues(num_values);
@@ -607,6 +610,12 @@ class TypedStatisticsImpl : public TypedStatistics<DType> {
       has_distinct_count_ = false;
     }
 
+    if (has_nan_count) {
+      IncrementNaNValues(nan_count);
+    } else {
+      has_nan_count_ = false;
+    }
+
     if (!encoded_min.empty()) {
       PlainDecode(encoded_min, &min_);
     }
@@ -619,6 +628,11 @@ class TypedStatisticsImpl : public TypedStatistics<DType> {
   bool HasDistinctCount() const override {
     return has_distinct_count_;
   };
+
+  bool HasNaNCount() const override {
+    return has_nan_count_;
+  };
+
   bool HasMinMax() const override {
     return has_min_max_;
   }
@@ -628,6 +642,7 @@ class TypedStatisticsImpl : public TypedStatistics<DType> {
 
   void IncrementNullCount(int64_t n) override {
     statistics_.null_count += n;
+    num_nulls_ += n;
     has_null_count_ = true;
   }
 
@@ -635,6 +650,12 @@ class TypedStatisticsImpl : public TypedStatistics<DType> {
     num_values_ += n;
   }
 
+  void IncrementNaNValues(int64_t n) override {
+    if (n > 0) {
+      statistics_.nan_count += n;
+      has_nan_count_ = true;
+    }
+  }
   bool Equals(const Statistics& raw_other) const override {
     if (physical_type() != raw_other.physical_type())
       return false;
@@ -672,6 +693,10 @@ class TypedStatisticsImpl : public TypedStatistics<DType> {
       this->statistics_.null_count += other.null_count();
     } else {
       this->has_null_count_ = false;
+    }
+    if (other.HasNaNCount()) {
+      this->statistics_.nan_count += other.nan_count();
+      this->has_nan_count_ = true;
     }
     if (has_distinct_count_ && other.HasDistinctCount() &&
         (distinct_count() == 0 || other.distinct_count() == 0)) {
@@ -742,6 +767,60 @@ class TypedStatisticsImpl : public TypedStatistics<DType> {
     return s;
   }
 
+  std::string MinValue() const override {
+    if constexpr (std::is_same_v<T, int64_t>) {
+      if (descr_->logical_type()->is_decimal()) {
+        int64_t minValue = min_;
+        uint8_t buffer[sizeof(int64_t)];
+        // Convert to big-endian.
+        *reinterpret_cast<int64_t*>(buffer) =
+            ::arrow::bit_util::ToBigEndian(minValue);
+        return std::string(
+            reinterpret_cast<const char*>(buffer), sizeof(int64_t));
+      }
+    }
+    if constexpr (std::is_same_v<T, ByteArray>) {
+      std::string minStr(reinterpret_cast<const char*>(min_.ptr), min_.len);
+      const auto truncatedMin =
+          UnicodeUtil::truncateStringMin(minStr, 16).value();
+      std::string s;
+      this->PlainEncode(
+          ByteArray(
+              truncatedMin.size(),
+              reinterpret_cast<const uint8_t*>(truncatedMin.data())),
+          &s);
+      return s;
+    }
+    return EncodeMin();
+  }
+
+  std::string MaxValue() const override {
+    if constexpr (std::is_same_v<T, int64_t>) {
+      if (descr_->logical_type()->is_decimal()) {
+        int64_t maxValue = max_;
+        uint8_t buffer[sizeof(int64_t)];
+        // Convert to big-endian.
+        *reinterpret_cast<int64_t*>(buffer) =
+            ::arrow::bit_util::ToBigEndian(maxValue);
+        return std::string(
+            reinterpret_cast<const char*>(buffer), sizeof(int64_t));
+      }
+    }
+    if constexpr (std::is_same_v<T, ByteArray>) {
+      std::string maxStr(reinterpret_cast<const char*>(max_.ptr), max_.len);
+      const auto truncatedMax =
+          UnicodeUtil::truncateStringMax(maxStr, 16).value();
+      std::string s;
+      this->PlainEncode(
+          ByteArray(
+              truncatedMax.size(),
+              reinterpret_cast<const uint8_t*>(truncatedMax.data())),
+          &s);
+      return s;
+    }
+    return EncodeMax();
+  }
+
   EncodedStatistics Encode() override {
     EncodedStatistics s;
     if (HasMinMax()) {
@@ -756,6 +835,9 @@ class TypedStatisticsImpl : public TypedStatistics<DType> {
     if (HasDistinctCount()) {
       s.set_distinct_count(this->distinct_count());
     }
+    if (has_nan_count_) {
+      s.set_nan_count(this->nan_count());
+    }
     return s;
   }
 
@@ -768,12 +850,28 @@ class TypedStatisticsImpl : public TypedStatistics<DType> {
   int64_t num_values() const override {
     return num_values_;
   }
+  int64_t nan_count() const override {
+    return statistics_.nan_count;
+  }
+
+  bool CompareMax(const Statistics& other) const override {
+    auto typedStats = dynamic_cast<const TypedStatisticsImpl<DType>*>(&other);
+    // Compare max values.
+    return comparator_->Compare(max_, typedStats->max_) ? false : true;
+  }
+
+  bool CompareMin(const Statistics& other) const override {
+    auto typedStats = dynamic_cast<const TypedStatisticsImpl<DType>*>(&other);
+    // Compare min values.
+    return comparator_->Compare(min_, typedStats->min_) ? true : false;
+  }
 
  private:
   const ColumnDescriptor* descr_;
   bool has_min_max_ = false;
   bool has_null_count_ = false;
   bool has_distinct_count_ = false;
+  bool has_nan_count_ = false;
   T min_;
   T max_;
   ::arrow::MemoryPool* pool_;
@@ -783,6 +881,7 @@ class TypedStatisticsImpl : public TypedStatistics<DType> {
   // a statistics thrift message which doesn't have the optional null_count,
   // `num_values_` may include null values.
   int64_t num_values_ = 0;
+  int64_t num_nulls_ = 0;
   EncodedStatistics statistics_;
   std::shared_ptr<TypedComparator<DType>> comparator_;
   std::shared_ptr<ResizableBuffer> min_buffer_, max_buffer_;
@@ -803,6 +902,7 @@ class TypedStatisticsImpl : public TypedStatistics<DType> {
   void ResetCounts() {
     this->statistics_.null_count = 0;
     this->statistics_.distinct_count = 0;
+    this->statistics_.nan_count = 0;
     this->num_values_ = 0;
   }
 
@@ -815,6 +915,7 @@ class TypedStatisticsImpl : public TypedStatistics<DType> {
     this->has_distinct_count_ = false;
     // Null count calculation is cheap and enabled by default.
     this->has_null_count_ = true;
+    this->has_nan_count_ = false;
   }
 
   void SetMinMaxPair(std::pair<T, T> min_max) {
@@ -839,6 +940,46 @@ class TypedStatisticsImpl : public TypedStatistics<DType> {
           comparator_->Compare(max_, max) ? max : max_,
           &max_,
           max_buffer_.get());
+    }
+  }
+
+  int64_t CountNaN(const T* values, const int64_t length) {
+    if constexpr (!std::is_floating_point_v<T>) {
+      return 0;
+    } else {
+      int64_t count = 0;
+      for (int64_t i = 0; i < length; i++) {
+        const auto val = SafeLoad(values + i);
+        if (std::isnan(val)) {
+          count++;
+        }
+      }
+      return count;
+    }
+  }
+
+  int64_t CountNaNSpaced(
+      const T* values,
+      const int64_t length,
+      const uint8_t* valid_bits,
+      const int64_t valid_bits_offset) {
+    if constexpr (!std::is_floating_point_v<T>) {
+      return 0;
+    } else {
+      int64_t count = 0;
+      ::arrow::internal::VisitSetBitRunsVoid(
+          valid_bits,
+          valid_bits_offset,
+          length,
+          [&](int64_t position, const int64_t run_length) {
+            for (int64_t i = 0; i < run_length; i++) {
+              const auto val = SafeLoad(values + i + position);
+              if (std::isnan(val)) {
+                count++;
+              }
+            }
+          });
+      return count;
     }
   }
 };
@@ -896,6 +1037,7 @@ void TypedStatisticsImpl<DType>::Update(
   if (num_values == 0)
     return;
   SetMinMaxPair(comparator_->GetMinMax(values, num_values));
+  IncrementNaNValues(CountNaN(values, num_values));
 }
 
 template <typename DType>
@@ -916,6 +1058,8 @@ void TypedStatisticsImpl<DType>::UpdateSpaced(
     return;
   SetMinMaxPair(comparator_->GetMinMaxSpaced(
       values, num_spaced_values, valid_bits, valid_bits_offset));
+  IncrementNaNValues(
+      CountNaNSpaced(values, num_spaced_values, valid_bits, valid_bits_offset));
 }
 
 template <typename DType>
@@ -1080,9 +1224,11 @@ std::shared_ptr<Statistics> Statistics::Make(
       num_values,
       encoded_stats->null_count,
       encoded_stats->distinct_count,
+      encoded_stats->nan_count,
       encoded_stats->has_min && encoded_stats->has_max,
       encoded_stats->has_null_count,
       encoded_stats->has_distinct_count,
+      encoded_stats->has_nan_count,
       pool);
 }
 
@@ -1093,9 +1239,11 @@ std::shared_ptr<Statistics> Statistics::Make(
     int64_t num_values,
     int64_t null_count,
     int64_t distinct_count,
+    int64_t nan_count,
     bool has_min_max,
     bool has_null_count,
     bool has_distinct_count,
+    bool has_nan_count,
     ::arrow::MemoryPool* pool) {
 #define MAKE_STATS(CAP_TYPE, KLASS)                      \
   case Type::CAP_TYPE:                                   \
@@ -1106,9 +1254,11 @@ std::shared_ptr<Statistics> Statistics::Make(
         num_values,                                      \
         null_count,                                      \
         distinct_count,                                  \
+        nan_count,                                       \
         has_min_max,                                     \
         has_null_count,                                  \
         has_distinct_count,                              \
+        has_nan_count,                                   \
         pool)
 
   switch (descr->physical_type()) {
