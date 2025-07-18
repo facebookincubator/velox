@@ -16,23 +16,19 @@
 
 #pragma once
 
-#include <functional>
-#include <memory>
-#include <string>
+#include <azure/storage/blobs/blob_client.hpp>
 
 namespace facebook::velox::filesystems {
+class AzureBlobClient {
+ public:
+  virtual ~AzureBlobClient() {}
 
-class AbfsSasTokenProvider;
+  virtual Azure::Response<Azure::Storage::Blobs::Models::BlobProperties>
+  GetProperties() = 0;
 
-using AbfsSasTokenProviderFactory =
-    std::function<std::unique_ptr<AbfsSasTokenProvider>()>;
+  virtual Azure::Response<Azure::Storage::Blobs::Models::DownloadBlobResult>
+  Download(const Azure::Storage::Blobs::DownloadBlobOptions& options) = 0;
 
-// Register the ABFS filesystem.
-void registerAbfsFileSystem();
-
-// Register a SAS key generator for ABFS.
-void registerAbfsSasTokenProvider(
-    const std::string& accountName,
-    const AbfsSasTokenProviderFactory& generator);
-
+  virtual std::string GetUrl() = 0;
+};
 } // namespace facebook::velox::filesystems

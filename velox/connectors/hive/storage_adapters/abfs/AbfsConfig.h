@@ -21,6 +21,9 @@
 #include <azure/storage/files/datalake.hpp>
 #include <folly/hash/Hash.h>
 #include <string>
+
+#include "velox/connectors/hive/storage_adapters/abfs/AbfsSasTokenProvider.h"
+#include "velox/connectors/hive/storage_adapters/abfs/AzureBlobClient.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AzureDataLakeFileClient.h"
 
 using namespace Azure::Storage::Blobs;
@@ -31,6 +34,16 @@ class ConfigBase;
 }
 
 namespace facebook::velox::filesystems {
+
+using AbfsSasTokenProviderFactory =
+    std::function<std::unique_ptr<AbfsSasTokenProvider>()>;
+
+std::unique_ptr<AbfsSasTokenProvider> getSasTokenProvider(
+    const std::string& accountName);
+
+void registerSasTokenProvider(
+    const std::string& accountName,
+    const AbfsSasTokenProviderFactory& factory);
 
 // This is used to specify the Azurite endpoint in testing.
 static constexpr const char* kAzureBlobEndpoint{"fs.azure.blob-endpoint"};
@@ -61,11 +74,16 @@ static constexpr const char* kAzureOAuthAuthType = "OAuth";
 
 static constexpr const char* kAzureSASAuthType = "SAS";
 
+// For performance, re-use SAS tokens until the expiry is within this number of
+// seconds
+static constexpr const char* kAzureSasTokenRenewPeriod =
+    "fs.azure.sas.token.renew.period.for.streams";
+
 class AbfsConfig {
  public:
   explicit AbfsConfig(std::string_view path, const config::ConfigBase& config);
 
-  std::unique_ptr<BlobClient> getReadFileClient();
+  std::unique_ptr<AzureBlobClient> getReadFileClient();
 
   std::unique_ptr<AzureDataLakeFileClient> getWriteFileClient();
 
@@ -116,8 +134,11 @@ class AbfsConfig {
 
   bool isHttps_;
   std::string accountNameWithSuffix_;
+  std::string accountName_;
 
   std::string sas_;
+  std::shared_ptr<AbfsSasTokenProvider> sasTokenProvider_;
+  int64_t sasTokenRenewPeriod_;
 
   std::string tenentId_;
   std::string authorityHost_;
