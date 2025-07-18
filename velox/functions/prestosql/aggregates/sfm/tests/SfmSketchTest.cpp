@@ -13,13 +13,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#define XXH_INLINE_ALL
+#include <xxhash.h> // @manual=third-party//xxHash:xxhash
 
-#include "velox/functions/prestosql/aggregates/sfm/SfmSketch.h"
-#include <xxhash.h>
 #include "gtest/gtest.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/encode/Base64.h"
 #include "velox/common/memory/Memory.h"
+#include "velox/functions/prestosql/aggregates/sfm/SfmSketch.h"
 
 namespace facebook::velox::functions::aggregate {
 
