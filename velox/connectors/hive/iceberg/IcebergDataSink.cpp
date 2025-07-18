@@ -65,6 +65,21 @@ folly::dynamic extractPartitionValue<TypeKind::TIMESTAMP>(
   return timestamp.toMicros();
 }
 
+class IcebergInsertFileNameGenerator : public FileNameGenerator {
+ public:
+  IcebergInsertFileNameGenerator() {}
+
+  std::pair<std::string, std::string> gen(
+      std::optional<uint32_t> bucketId,
+      const std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
+      const ConnectorQueryCtx& connectorQueryCtx,
+      bool commitRequired) const override;
+
+  folly::dynamic serialize() const override;
+
+  std::string toString() const override;
+};
+
 } // namespace
 
 std::pair<std::string, std::string> IcebergInsertFileNameGenerator::gen(

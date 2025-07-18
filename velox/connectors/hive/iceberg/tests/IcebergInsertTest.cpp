@@ -139,6 +139,15 @@ TEST_F(IcebergInsertTest, testPartitionNullColumn) {
 
     ASSERT_TRUE(dataSink->finish());
     const auto commitTasks = dataSink->close();
+    ASSERT_EQ(1, commitTasks.size());
+    auto taskJson = folly::parseJson(commitTasks.at(0));
+    ASSERT_EQ(1, taskJson.count("partitionDataJson"));
+    auto partitionDataStr = taskJson["partitionDataJson"].asString();
+    auto partitionData = folly::parseJson(partitionDataStr);
+    ASSERT_EQ(1, partitionData.count("partitionValues"));
+    auto partitionValues = partitionData["partitionValues"];
+    ASSERT_TRUE(partitionValues.isArray());
+    ASSERT_TRUE(partitionValues[0].isNull());
 
     auto files = listFiles(dataPath);
     ASSERT_EQ(files.size(), 1);

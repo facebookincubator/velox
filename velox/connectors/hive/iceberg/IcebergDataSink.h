@@ -22,21 +22,6 @@
 
 namespace facebook::velox::connector::hive::iceberg {
 
-class IcebergInsertFileNameGenerator : public FileNameGenerator {
- public:
-  IcebergInsertFileNameGenerator() {}
-
-  std::pair<std::string, std::string> gen(
-      std::optional<uint32_t> bucketId,
-      const std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
-      const ConnectorQueryCtx& connectorQueryCtx,
-      bool commitRequired) const override;
-
-  folly::dynamic serialize() const override;
-
-  std::string toString() const override;
-};
-
 // Represents a request for Iceberg write.
 class IcebergInsertTableHandle final : public HiveInsertTableHandle {
  public:

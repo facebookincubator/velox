@@ -23,16 +23,6 @@ namespace facebook::velox::connector::hive::iceberg {
 
 namespace {
 
-std::string toLower(const std::string& data) {
-  std::string ret;
-  ret.reserve(data.size());
-  std::transform(
-      data.begin(), data.end(), std::back_inserter(ret), [](auto& c) {
-        return std::tolower(c);
-      });
-  return ret;
-}
-
 template <TypeKind Kind>
 std::pair<std::string, std::string> makePartitionKeyValueString(
     const BaseVector* partitionVector,
