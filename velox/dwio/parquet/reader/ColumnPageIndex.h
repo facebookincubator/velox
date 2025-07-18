@@ -16,8 +16,8 @@
 
 #pragma once
 
+#include "velox/dwio/common/RowRanges.h"
 #include "velox/dwio/common/Statistics.h"
-#include "velox/dwio/parquet/reader/RowRanges.h"
 #include "velox/dwio/parquet/thrift/ParquetThriftTypes.h"
 #include "velox/type/Type.h"
 
@@ -105,7 +105,7 @@ class ColumnPageIndex {
   /// Update skip flags for all pages based on the given RowRanges.
   /// Any page whose [firstRow, firstRow+rowCount-1] does not overlap
   /// any range in `ranges` will be marked skipped.
-  void updateSkippedPages(const RowRanges& ranges) {
+  void updateSkippedPages(const dwio::common::RowRanges& ranges) {
     size_t n = numPages();
     for (size_t i = 0; i < n; ++i) {
       int64_t start = pageFirstRowIndex(i);

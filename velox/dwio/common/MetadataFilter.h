@@ -18,6 +18,7 @@
 
 #include "velox/core/ExpressionEvaluator.h"
 #include "velox/core/ITypedExpr.h"
+#include "velox/dwio/common/RowRanges.h"
 
 namespace facebook::velox::common {
 
@@ -45,6 +46,11 @@ class MetadataFilter {
       std::vector<std::pair<const LeafNode*, std::vector<uint64_t>>>&
           leafNodeResults,
       std::vector<uint64_t>& finalResult);
+
+  void eval(
+      std::vector<std::pair<const LeafNode*, dwio::common::RowRanges>>&
+          leafNodeResults,
+      dwio::common::RowRanges& finalResult);
 
   std::string toString() const;
 
