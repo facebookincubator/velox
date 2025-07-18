@@ -19,7 +19,9 @@
 
 #include "velox/core/PlanNode.h"
 #include "velox/exec/fuzzer/FuzzerUtil.h"
+#include "velox/exec/fuzzer/ResultVerifier.h"
 #include "velox/vector/ComplexVector.h"
+#include "velox/exec/tests/utils/QueryAssertions.h"
 
 namespace facebook::velox::exec::test {
 
@@ -65,10 +67,14 @@ class ScalarResultVerifier : public ResultVerifier {
   ///
   /// 'initialize' must be called first. 'compare' may be called multiple times
   /// after single 'initialize' call.
-  bool compare(
-      const RowVectorPtr& result,
-      const RowVectorPtr& otherResult) override {
-    VELOX_NYI();
+  bool compare(const RowVectorPtr& result, const RowVectorPtr& altResult)
+      override {
+    // if (projections_.empty()) {
+    //   return assertEqualResults({result}, {altResult});
+    // } else {
+    //   return assertEqualResults({transform(result)}, {transform(altResult)});
+    // }
+    return assertEqualResults({result}, {altResult});
   }
 
   /// Verifies results of a Velox plan or reference DB query.
@@ -84,6 +90,36 @@ class ScalarResultVerifier : public ResultVerifier {
   /// 'compare' or 'verify' again.
   void reset() override {
     VELOX_NYI();
+  }
+
+  // Compare two arrays of doubles for relative equality within epsilon.
+  bool arraysRelativelyEqual(
+      const VectorPtr& left,
+      const VectorPtr& right,
+      vector_size_t size,
+      double epsilon) {
+    auto leftFlat = left->as<RowVector<double>>();
+    auto rightFlat = right->as<RowVector<double>>();
+    for (vector_size_t i = 0; i < size; ++i) {
+      if (leftFlat->containsNullAt(i) || rightFlat->containsNullAt(i)) {
+        // Optionally, handle nulls as needed (skip or require both null).
+        if (leftFlat->containsNullAt(i) && rightFlat->containsNullAt(i)) {
+          return false;
+        }
+      }
+      double l = leftFlat->valueAt(i);
+      double r = rightFlat->valueAt(i);
+      double diff = std::abs(l - r);
+      double denom = std::max(std::abs(l), std::abs(r));
+      if (denom == 0.0) {
+        if (diff > epsilon) {
+          return false;
+        }
+      } else if (diff / denom > epsilon) {
+        return false;
+      }
+    }
+    return true;
   };
 };
 

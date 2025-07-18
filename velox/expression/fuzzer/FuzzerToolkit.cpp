@@ -15,6 +15,7 @@
  */
 #include "velox/expression/fuzzer/FuzzerToolkit.h"
 #include "velox/vector/VectorSaver.h"
+#include "velox/functions/prestosql/fuzzer/ScalarResultVerifier.h"
 
 namespace facebook::velox::fuzzer {
 
@@ -145,9 +146,11 @@ void compareVectors(
   });
   VLOG(1) << "===================";
 
+  auto verifier = std::unique_ptr<ScalarResultVerifier>();
   rows.applyToSelected([&](vector_size_t row) {
     VELOX_CHECK(
-        left->equalValueAt(right.get(), row, row),
+        verifier.compare(left.get(), right.get()),
+        // left->equalValueAt(right.get(), row, row),
         "Different values at idx '{}': '{}' vs. '{}'",
         row,
         left->toString(row),

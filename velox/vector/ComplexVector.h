@@ -24,6 +24,7 @@
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/LazyVector.h"
 #include "velox/vector/TypeAliases.h"
+#include "velox/functions/prestosql/fuzzer/ScalarResultVerifier.h"
 
 namespace facebook::velox {
 
@@ -261,6 +262,21 @@ class RowVector : public BaseVector {
 
   VectorPtr& rawVectorForBatchReader() {
     return rawVectorForBatchReader_;
+  }
+
+  /// @return true if this vector has the same value at the given index as the
+  /// other vector at the other vector's index (including if both are null),
+  /// false otherwise
+  /// @throws if the type_ of other doesn't match the type_ of this
+  bool scalarEqualValueAt(
+      const BaseVector* other,
+      vector_size_t index,
+      vector_size_t otherIndex) const {
+    static constexpr CompareFlags kEqualValueAtFlags =
+        CompareFlags::equality(CompareFlags::NullHandlingMode::kNullAsValue);
+
+    // Will always have value because nullHandlingMode is NullAsValue.
+    return compare(other, index, otherIndex, kEqualValueAtFlags).value() == 0;
   }
 
  private:
