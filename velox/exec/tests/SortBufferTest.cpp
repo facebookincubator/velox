@@ -61,6 +61,7 @@ class SortBufferTest : public OperatorTestBase,
   }
 
   void TearDown() override {
+    setThreadLocalRunTimeStatWriter(nullptr);
     pool_.reset();
     rootPool_.reset();
     OperatorTestBase::TearDown();
