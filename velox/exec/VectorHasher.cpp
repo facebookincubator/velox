@@ -739,9 +739,10 @@ void extendRange(
       extendRange<int32_t>(reserve, min, max);
       break;
     case TypeKind::BIGINT:
+    case TypeKind::HUGEINT:
     case TypeKind::VARCHAR:
     case TypeKind::VARBINARY:
-    case TypeKind::TIMESTAMP:
+    case TypeKind::TIMESTAMP:  
       extendRange<int64_t>(reserve, min, max);
       break;
 
