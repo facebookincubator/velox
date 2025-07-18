@@ -1772,6 +1772,68 @@ TEST_F(HiveIcebergTest, equalityDeletesShortDecimal) {
       dataVectors);
 }
 
+TEST_F(HiveIcebergTest, equalityDeletesLongDecimal) {
+  folly::SingletonVault::singleton()->registrationComplete();
+
+  // Use DECIMAL(25, 5) for long decimal (precision 25, scale 5)
+  auto decimalType = DECIMAL(25, 5);
+  std::unordered_map<int8_t, std::vector<int32_t>> equalityFieldIdsMap;
+  std::unordered_map<int8_t, std::vector<std::vector<int128_t>>>
+      equalityDeleteVectorMap;
+  equalityFieldIdsMap.insert({0, {1}});
+
+  // Values: 123456789012345 (represents 1234567.89012), 987654321098765
+  // (represents 9876543.21098)
+  equalityDeleteVectorMap.insert(
+      {0, {{int128_t(123456789012345), int128_t(987654321098765)}}});
+  std::vector<RowVectorPtr> dataVectors = {makeRowVector(
+      {"c0"},
+      {makeFlatVector<int128_t>(
+          {(123456789012345),
+           (987654321098765),
+           (111111111111111),
+           (222222222222222),
+           (333333333333333)},
+          decimalType)})};
+
+  VELOX_ASSERT_THROW(
+      assertEqualityDeletes<TypeKind::HUGEINT>(
+          equalityDeleteVectorMap,
+          equalityFieldIdsMap,
+          "SELECT * FROM tmp WHERE c0 NOT IN (123456789012345, 987654321098765)",
+          dataVectors),
+      "Decimal is not supported for DWRF.");
+
+  // Delete all
+  equalityDeleteVectorMap.clear();
+  equalityDeleteVectorMap.insert(
+      {0,
+       {{123456789012345,
+         987654321098765,
+         111111111111111,
+         222222222222222,
+         333333333333333}}});
+
+  VELOX_ASSERT_THROW(
+      assertEqualityDeletes<TypeKind::HUGEINT>(
+          equalityDeleteVectorMap,
+          equalityFieldIdsMap,
+          "SELECT * FROM tmp WHERE 1 = 0",
+          dataVectors),
+      "Decimal is not supported for DWRF.");
+
+  // Delete none
+  equalityDeleteVectorMap.clear();
+  equalityDeleteVectorMap.insert({0, {{}}});
+  VELOX_ASSERT_THROW(
+      assertEqualityDeletes<TypeKind::HUGEINT>(
+          equalityDeleteVectorMap,
+          equalityFieldIdsMap,
+          "SELECT * FROM tmp",
+          dataVectors),
+      "Decimal is not supported for DWRF.");
+}
+
 class HiveIcebergEqualityDeletesTest
     : public HiveIcebergTest,
       public testing::WithParamInterface<TypeKind> {
