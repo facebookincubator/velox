@@ -18,7 +18,7 @@
 
 #include "velox/common/base/Exceptions.h"
 
-namespace facebook::velox::parquet {
+namespace facebook::velox::dwio::common {
 
 /// Represents a closed interval of row indices [from_, to_].
 ///
@@ -132,8 +132,25 @@ class RowRanges {
     return RowRanges(RowRange(0, rowCount - 1));
   }
 
-  /// Computes the union of two RowRanges objects.
-  static RowRanges Union(const RowRanges& left, const RowRanges& right) {
+  /// Computes the complement of the given RowRanges within the range [0,
+  /// maxRow). The complement includes all rows not covered by the input ranges.
+  static RowRanges complement(const RowRanges& src, int64_t maxRow) {
+    RowRanges result;
+    int64_t cursor = 0;
+    for (auto& r : src.getRanges()) {
+      if (cursor < r.from_) {
+        result.add(RowRange(cursor, r.from_ - 1));
+      }
+      cursor = r.to_ + 1;
+    }
+    if (cursor < maxRow) {
+      result.add(RowRange(cursor, maxRow - 1));
+    }
+    return result;
+  }
+
+  /// Computes the unionWith of two RowRanges objects.
+  static RowRanges unionWith(const RowRanges& left, const RowRanges& right) {
     std::vector<RowRange> all = left.ranges_;
     all.insert(all.end(), right.ranges_.begin(), right.ranges_.end());
     std::sort(all.begin(), all.end(), [](const RowRange& a, const RowRange& b) {
@@ -172,6 +189,16 @@ class RowRanges {
       }
     }
     return result;
+  }
+
+  /// Computes the unionWith of this RowRanges with another RowRanges.
+  void unionWith(const RowRanges& other) {
+    *this = unionWith(*this, other);
+  }
+
+  /// Computes the intersection of this RowRanges with another RowRanges.
+  void intersectWith(const RowRanges& other) {
+    *this = intersection(*this, other);
   }
 
   /// Add an interval to the end, and merge with the previous one if possible.
@@ -274,4 +301,4 @@ class RowRanges {
  private:
   std::vector<RowRange> ranges_;
 };
-} // namespace facebook::velox::parquet
+} // namespace facebook::velox::dwio::common

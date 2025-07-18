@@ -17,10 +17,10 @@
 #pragma once
 
 #include "velox/dwio/common/BufferUtil.h"
+#include "velox/dwio/common/RowRanges.h"
 #include "velox/dwio/parquet/reader/ColumnPageIndex.h"
 #include "velox/dwio/parquet/reader/Metadata.h"
 #include "velox/dwio/parquet/reader/PageReader.h"
-#include "velox/dwio/parquet/reader/RowRanges.h"
 
 namespace facebook::velox::common {
 class ScanSpec;
@@ -82,7 +82,7 @@ class ParquetData : public dwio::common::FormatData {
   void enqueueRowGroup(
       uint32_t index,
       dwio::common::BufferedInput& input,
-      const RowRanges& rowRanges);
+      const dwio::common::RowRanges& rowRanges);
 
   /// Positions 'this' at 'index'th row group. loadRowGroup must be called
   /// first. The returned PositionProvider is empty and should not be used.
@@ -219,7 +219,10 @@ class ParquetData : public dwio::common::FormatData {
       uint32_t index,
       folly::F14FastMap<uint32_t, std::unique_ptr<ColumnPageIndex>>&
           pageIndices,
-      RowRanges& range);
+      dwio::common::RowRanges& range,
+      std::vector<std::pair<
+          const velox::common::MetadataFilter::LeafNode*,
+          dwio::common::RowRanges>>& metadataFilterResults);
 
  private:
   /// True if 'filter' may have hits for the column of 'this' according to the

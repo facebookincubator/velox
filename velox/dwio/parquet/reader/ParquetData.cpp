@@ -113,7 +113,10 @@ void ParquetData::collectIndexPageInfoMap(
 void ParquetData::filterDataPages(
     uint32_t index,
     folly::F14FastMap<uint32_t, std::unique_ptr<ColumnPageIndex>>& pageIndices,
-    RowRanges& range) {
+    dwio::common::RowRanges& range,
+    std::vector<std::pair<
+        const velox::common::MetadataFilter::LeafNode*,
+        dwio::common::RowRanges>>& metadataFilterResults) {
   pageIndices_.resize(fileMetaDataPtr_.numRowGroups());
   auto it = pageIndices.find(type_->column());
   if (it != pageIndices.end()) {
@@ -126,10 +129,16 @@ void ParquetData::filterDataPages(
     return;
   }
 
-  RowRanges filteredPages;
+  dwio::common::RowRanges filteredPages;
   auto* pageIndex = pageIndices_[index].get();
   auto numPages = pageIndex->numPages();
   auto type = type_->type();
+
+  auto metadataFiltersStartIndex = metadataFilterResults.size();
+  for (int i = 0; i < scanSpec_.numMetadataFilters(); ++i) {
+    metadataFilterResults.emplace_back(
+        scanSpec_.metadataFilterNodeAt(i), dwio::common::RowRanges());
+  }
 
   for (auto i = 0; i < numPages; ++i) {
     auto numRows = pageIndex->pageRowCount(i);
@@ -139,33 +148,28 @@ void ParquetData::filterDataPages(
     // Skip page if main filter does not match.
     if (scanSpec_.filter() &&
         !testFilter(scanSpec_.filter(), stats.get(), numRows, type)) {
+      filteredPages.add(
+          dwio::common::RowRange(firstRowIndex, firstRowIndex + numRows - 1));
       continue;
     }
 
-    // Skip page if any metadata filter does not match.
-    bool skip = false;
     for (int j = 0; j < scanSpec_.numMetadataFilters(); ++j) {
       auto* metadataFilter = scanSpec_.metadataFilterAt(j);
       if (metadataFilter &&
           !testFilter(metadataFilter, stats.get(), numRows, type)) {
-        skip = true;
-        break;
+        metadataFilterResults[metadataFiltersStartIndex + j].second.add(
+            dwio::common::RowRange(firstRowIndex, firstRowIndex + numRows - 1));
       }
     }
-    if (skip) {
-      continue;
-    }
-
-    filteredPages.add(RowRange(firstRowIndex, firstRowIndex + numRows - 1));
   }
 
-  range = RowRanges::intersection(range, filteredPages);
+  range = dwio::common::RowRanges::unionWith(range, filteredPages);
 }
 
 void ParquetData::enqueueRowGroup(
     uint32_t index,
     dwio::common::BufferedInput& input,
-    const RowRanges& rowRanges) {
+    const dwio::common::RowRanges& rowRanges) {
   auto chunk = fileMetaDataPtr_.rowGroup(index).columnChunk(type_->column());
   streams_.resize(fileMetaDataPtr_.numRowGroups());
   pagesStreams_.resize(fileMetaDataPtr_.numRowGroups());

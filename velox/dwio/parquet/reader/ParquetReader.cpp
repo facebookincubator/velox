@@ -18,9 +18,9 @@
 
 #include <thrift/protocol/TCompactProtocol.h> //@manual
 
+#include "velox/dwio/common/RowRanges.h"
 #include "velox/dwio/parquet/reader/ColumnPageIndex.h"
 #include "velox/dwio/parquet/reader/ParquetColumnReader.h"
-#include "velox/dwio/parquet/reader/RowRanges.h"
 #include "velox/dwio/parquet/reader/StructColumnReader.h"
 #include "velox/dwio/parquet/thrift/ThriftTransport.h"
 #include "velox/functions/lib/string/StringImpl.h"
@@ -118,8 +118,9 @@ class ReaderBase {
       const std::vector<uint32_t>& groups,
       int32_t currentGroup,
       StructColumnReader& reader,
-      std::vector<RowRanges>& rowRanges,
-      bool shouldLoadPageIndex);
+      std::vector<dwio::common::RowRanges>& rowRanges,
+      bool shouldLoadPageIndex,
+      const std::shared_ptr<velox::common::MetadataFilter>& metadataFilter);
 
   /// Returns the uncompressed size for columns in 'type' and its children in
   /// row group.
@@ -1140,8 +1141,9 @@ void ReaderBase::scheduleRowGroups(
     const std::vector<uint32_t>& rowGroupIds,
     int32_t currentGroup,
     StructColumnReader& reader,
-    std::vector<RowRanges>& rowRanges,
-    bool shouldLoadPageIndex) {
+    std::vector<dwio::common::RowRanges>& rowRanges,
+    bool shouldLoadPageIndex,
+    const std::shared_ptr<velox::common::MetadataFilter>& metadataFilter) {
   auto numRowGroupsToLoad = std::min(
       options_.prefetchRowGroups() + 1,
       static_cast<int64_t>(rowGroupIds.size() - currentGroup));
@@ -1201,10 +1203,28 @@ void ReaderBase::scheduleRowGroups(
             pageIndices[entry.first] = std::make_unique<ColumnPageIndex>(
                 colIdx, offIdx, fileMetaData_->row_groups[thisGroup].num_rows);
           }
+          dwio::common::RowRanges filterResult;
+          std::vector<std::pair<
+              const velox::common::MetadataFilter::LeafNode*,
+              dwio::common::RowRanges>>
+              metadataFilterResults;
           reader.filterDataPages(
-              thisGroup, pageIndices, rowRanges.at(currentGroup + i));
+              thisGroup, pageIndices, filterResult, metadataFilterResults);
+          if (metadataFilter) {
+            metadataFilter->eval(metadataFilterResults, filterResult);
+          }
+          rowRanges.at(currentGroup + i) =
+              dwio::common::RowRanges::intersection(
+                  rowRanges.at(currentGroup + i),
+                  dwio::common::RowRanges::complement(
+                      filterResult,
+                      fileMetaData_->row_groups[thisGroup].num_rows));
         }
       }
+      std::vector<std::pair<
+          const velox::common::MetadataFilter::LeafNode*,
+          std::vector<uint64_t>>>
+          metadataFilterResults;
       inputs_[thisGroup] = reader.loadRowGroup(
           thisGroup, input_, rowRanges.at(currentGroup + i));
     }
@@ -1342,7 +1362,8 @@ class ParquetRowReader::Impl {
       if (rowGroupInRange && !isExcluded && !isEmpty) {
         rowGroupIds_.push_back(i);
         firstRowOfRowGroup_.push_back(rowNumber);
-        rowRanges_.push_back(RowRanges::createSingle(rowGroups_[i].num_rows));
+        rowRanges_.push_back(
+            dwio::common::RowRanges::createSingle(rowGroups_[i].num_rows));
       } else {
         if (i != 0) {
           // Clear the metadata of row groups that are not read. This helps
@@ -1385,8 +1406,9 @@ class ParquetRowReader::Impl {
     }
     VELOX_DCHECK_GT(rowsToRead, 0);
 
-    RowRange readRange(currentRowInGroup_, currentRowInGroup_ + rowsToRead - 1);
-    auto [chunk, overlap] = RowRanges::firstSplitByIntersection(
+    dwio::common::RowRange readRange(
+        currentRowInGroup_, currentRowInGroup_ + rowsToRead - 1);
+    auto [chunk, overlap] = dwio::common::RowRanges::firstSplitByIntersection(
         readRange, rowRanges_[nextRowGroupIdsIdx_ - 1]);
     if (!overlap) {
       auto rowsToSkip = chunk.count();
@@ -1457,7 +1479,8 @@ class ParquetRowReader::Impl {
         nextRowGroupIdsIdx_,
         static_cast<StructColumnReader&>(*columnReader_),
         rowRanges_,
-        shouldLoadPageIndex_);
+        shouldLoadPageIndex_,
+        options_.metadataFilter());
     currentRowGroupPtr_ = &rowGroups_[rowGroupIds_[nextRowGroupIdsIdx_]];
     rowsInCurrentRowGroup_ = currentRowGroupPtr_->num_rows;
     currentRowInGroup_ = 0;
@@ -1476,7 +1499,7 @@ class ParquetRowReader::Impl {
   // Indices of row groups where stats match filters.
   std::vector<uint32_t> rowGroupIds_;
   std::vector<uint64_t> firstRowOfRowGroup_;
-  std::vector<RowRanges> rowRanges_;
+  std::vector<dwio::common::RowRanges> rowRanges_;
   uint32_t nextRowGroupIdsIdx_;
   const thrift::RowGroup* currentRowGroupPtr_{nullptr};
   uint64_t rowsInCurrentRowGroup_;

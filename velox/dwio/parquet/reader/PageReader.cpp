@@ -63,10 +63,12 @@ void PageReader::seekToPage(int64_t row) {
       }
     }
     if (pageSkipped) {
+      dataPageSkipped_ = true;
       pageStart_ =
           pageStart_ + columnPageIndex_->compressedPageSize(pageIndex - 1);
       numRowsInPage_ = columnPageIndex_->pageRowCount(pageIndex - 1);
     } else {
+      dataPageSkipped_ = false;
       PageHeader pageHeader = readPageHeader();
       pageStart_ = pageDataStart_ + pageHeader.compressed_page_size;
 
@@ -821,6 +823,9 @@ void PageReader::skip(int64_t numRows) {
   }
   firstUnvisited_ += numRows;
 
+  if (dataPageSkipped_) {
+    return;
+  }
   if (toSkip == 0) {
     return;
   }

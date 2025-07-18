@@ -117,7 +117,7 @@ void StructColumnReader::read(
 std::shared_ptr<dwio::common::BufferedInput> StructColumnReader::loadRowGroup(
     uint32_t index,
     const std::shared_ptr<dwio::common::BufferedInput>& input,
-    const RowRanges& rowRanges) {
+    const dwio::common::RowRanges& rowRanges) {
   if (isRowGroupBuffered(index, *input)) {
     enqueueRowGroup(index, *input, rowRanges);
     return input;
@@ -139,7 +139,7 @@ bool StructColumnReader::isRowGroupBuffered(
 void StructColumnReader::enqueueRowGroup(
     uint32_t index,
     dwio::common::BufferedInput& input,
-    const RowRanges& rowRanges) {
+    const dwio::common::RowRanges& rowRanges) {
   for (auto& child : children_) {
     if (auto structChild = dynamic_cast<StructColumnReader*>(child)) {
       structChild->enqueueRowGroup(index, input, rowRanges);
@@ -173,17 +173,23 @@ void StructColumnReader::collectIndexPageInfoMap(
 void StructColumnReader::filterDataPages(
     uint32_t index,
     folly::F14FastMap<uint32_t, std::unique_ptr<ColumnPageIndex>>& pageIndices,
-    RowRanges& range) {
+    dwio::common::RowRanges& range,
+    std::vector<std::pair<
+        const velox::common::MetadataFilter::LeafNode*,
+        dwio::common::RowRanges>>& metadataFilterResults) {
   for (auto& child : children_) {
     if (auto structChild = dynamic_cast<StructColumnReader*>(child)) {
-      structChild->filterDataPages(index, pageIndices, range);
+      structChild->filterDataPages(
+          index, pageIndices, range, metadataFilterResults);
     } else if (auto listChild = dynamic_cast<ListColumnReader*>(child)) {
-      listChild->filterDataPages(index, pageIndices, range);
+      listChild->filterDataPages(
+          index, pageIndices, range, metadataFilterResults);
     } else if (auto mapChild = dynamic_cast<MapColumnReader*>(child)) {
-      mapChild->filterDataPages(index, pageIndices, range);
+      mapChild->filterDataPages(
+          index, pageIndices, range, metadataFilterResults);
     } else {
       child->formatData().as<ParquetData>().filterDataPages(
-          index, pageIndices, range);
+          index, pageIndices, range, metadataFilterResults);
     }
   }
 }

@@ -467,6 +467,9 @@ class PageReader {
   // Number of rows in current page.
   int32_t numRowsInPage_{0};
 
+  // True if the current page is skipped.
+  bool dataPageSkipped_{false};
+
   // Number of repdefs in page. Not the same as number of rows for a non-top
   // level column.
   int32_t numRepDefsInPage_{0};
