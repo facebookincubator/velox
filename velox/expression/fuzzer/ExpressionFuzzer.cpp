@@ -265,6 +265,20 @@ uint32_t levelOfNesting(const TypePtr& type) {
   }
 }
 
+bool isSameVarcharTypeAndTypeInSignature(
+    const TypePtr& type,
+    const exec::TypeSignature& typeSignature) {
+  VELOX_CHECK_NOT_NULL(type);
+  if (typeSignature.baseName() == "varchar" &&
+      typeSignature.parameters()[0].baseName() ==
+          kVaryingLengthScalarTypeUnboundedLengthStr &&
+      getVaryingLengthScalarTypeLength(*type) ==
+          kVaryingLengthScalarTypeUnboundedLength) {
+    return true;
+  }
+  return false;
+}
+
 } // namespace
 
 ExpressionFuzzer::ExpressionFuzzer(
@@ -311,7 +325,8 @@ ExpressionFuzzer::ExpressionFuzzer(
         continue;
       }
       if (!(signature->variables().empty() || options_.enableComplexTypes ||
-            options_.enableDecimalType)) {
+            options_.enableDecimalType ||
+            containsLengthParameterizedTypeInSignature(*signature))) {
         LOG(WARNING) << "Skipping unsupported signature: " << function.first
                      << signature->toString();
         continue;
@@ -463,6 +478,15 @@ bool ExpressionFuzzer::isSupportedSignature(
   }
 
   return true;
+}
+
+bool ExpressionFuzzer::containsLengthParameterizedTypeInSignature(
+    const exec::FunctionSignature& signature) {
+  if (usesTypeName(signature, "varchar") ||
+      usesTypeName(signature, "varbinary")) {
+    return true;
+  }
+  return false;
 }
 
 void ExpressionFuzzer::getTicketsForFunctions() {
@@ -813,7 +837,8 @@ core::TypedExprPtr ExpressionFuzzer::generateExpression(
         expression = generateExpressionFromConcreteSignatures(
             returnType, chosenFunctionName);
         if (!expression &&
-            (options_.enableComplexTypes || options_.enableDecimalType)) {
+            (options_.enableComplexTypes || options_.enableDecimalType ||
+             isVaryingLengthScalarType(returnType))) {
           expression = generateExpressionFromSignatureTemplate(
               returnType, chosenFunctionName);
         }
@@ -980,6 +1005,17 @@ const SignatureTemplate* ExpressionFuzzer::chooseRandomSignatureTemplate(
     exec::ReverseSignatureBinder binder{
         *signatureTemplate->signature, returnType};
     if (binder.tryBind()) {
+      // A bounded varchar fuzzed return type may bind to a function
+      // that has an unbounded return type in the signature. We need to skip
+      // this signature. While this would work, the expression compiler
+      // recognizes that the return types are not the same. The binder allows
+      // this reverse mapping because for arguments the bounded varchar to
+      // unbounded varchar binding is allowed.
+      if (returnType->isVarchar() &&
+          !isSameVarcharTypeAndTypeInSignature(
+              returnType, signatureTemplate->signature->returnType())) {
+        continue;
+      }
       eligible.push_back(signatureTemplate);
     }
   }
@@ -1038,8 +1074,14 @@ core::TypedExprPtr ExpressionFuzzer::generateExpressionFromSignatureTemplate(
   }
 
   auto chosenSignature = *chosen->signature;
+  ArgumentTypeFuzzer::Options argFuzzerOptions;
+  argFuzzerOptions.maxVarcharTypeLength = options_.maxVarcharTypeLength;
   ArgumentTypeFuzzer fuzzer{
-      chosenSignature, returnType, rng_, supportedScalarTypes_};
+      chosenSignature,
+      returnType,
+      rng_,
+      supportedScalarTypes_,
+      argFuzzerOptions};
 
   std::vector<TypePtr> argumentTypes;
   if (fuzzer.fuzzArgumentTypes(options_.maxNumVarArgs)) {
