@@ -5494,3 +5494,38 @@ TEST_F(DateTimeFunctionsTest, xxHash64FunctionTimestamp) {
   EXPECT_EQ(
       7585368295023641328, xxhash64(parseTimestamp("1900-01-01 00:00:00.000")));
 }
+
+TEST_F(DateTimeFunctionsTest, currentTimestamp) {
+  const auto evaluate = [&](const std::string& expression) {
+    return evaluateOnce<int64_t>(expression);
+  };
+
+  Timestamp lowerBound = Timestamp::now();
+  std::optional<int64_t> result1 = evaluate("current_timestamp");
+  std::optional<int64_t> result2 = evaluate("now()");
+  Timestamp upperBound = Timestamp::now();
+
+  ASSERT_TRUE(result1.has_value());
+  ASSERT_TRUE(result2.has_value());
+
+  const auto unpackMillisUtc = [](int64_t packed) {
+    constexpr int32_t kMillisShift = 12;
+    return packed >> kMillisShift;
+  };
+
+  int64_t resultMillis1 = unpackMillisUtc(result1.value());
+  int64_t resultMillis2 = unpackMillisUtc(result2.value());
+
+  int64_t lowerMillis = lowerBound.toMillis();
+  int64_t upperMillis = upperBound.toMillis();
+
+  EXPECT_EQ(resultMillis1, resultMillis2);
+
+  EXPECT_GE(resultMillis1, lowerMillis);
+  EXPECT_LE(resultMillis1, upperMillis);
+
+  // Re-evaluate again to ensure that timestamp doesn't change in session.
+  auto result3 = evaluate("current_timestamp()");
+  int64_t resultMillis3 = unpackMillisUtc(result3.value());
+  EXPECT_EQ(resultMillis1, resultMillis3);
+}
