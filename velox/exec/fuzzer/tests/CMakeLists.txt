@@ -17,3 +17,9 @@ add_test(presto_sql_test presto_sql_test)
 
 target_link_libraries(
   presto_sql_test velox_fuzzer_util velox_presto_types)
+
+add_executable(velox_exec_fuzzer_test WriterFuzzerUtilTest.cpp)
+add_test(velox_exec_fuzzer_test velox_exec_fuzzer_test)
+
+target_link_libraries(
+  velox_exec_fuzzer_test velox_writer_fuzzer)
