@@ -130,6 +130,8 @@ int main(int argc, char** argv) {
       "noisy_sum_gaussian",
       "noisy_approx_set_sfm",
       "noisy_approx_distinct_sfm",
+      "noisy_empty_approx_set_sfm",
+      "merge_sfm",
       // https://github.com/facebookincubator/velox/issues/13547
       "merge",
   };
