@@ -200,12 +200,13 @@ RowVectorPtr StreamingAggregation::createOutput(size_t numGroups) {
   return output;
 }
 
-void StreamingAggregation::assignGroups() {
+bool StreamingAggregation::assignGroups() {
   const auto numInput = input_->size();
   VELOX_CHECK_GT(numInput, 0);
 
   inputGroups_.resize(numInput);
 
+  bool prevGroupAssigned{false};
   // Look for the end of the last group.
   vector_size_t index = 0;
   if (prevInput_ != nullptr) {
@@ -213,6 +214,7 @@ void StreamingAggregation::assignGroups() {
     auto* prevGroup = groups_[numGroups_ - 1];
     for (; index < numInput; ++index) {
       if (equalKeys(groupingKeys_, prevInput_, prevIndex, input_, index)) {
+        prevGroupAssigned = true;
         inputGroups_[index] = prevGroup;
       } else {
         break;
@@ -246,6 +248,7 @@ void StreamingAggregation::assignGroups() {
     }
   }
   groupBoundaries_.push_back(numInput);
+  return prevGroupAssigned;
 }
 
 const SelectivityVector& StreamingAggregation::getSelectivityVector(
@@ -280,7 +283,8 @@ void StreamingAggregation::evaluateAggregates() {
     std::vector<VectorPtr> args;
     for (auto j = 0; j < inputs.size(); ++j) {
       if (inputs[j] == kConstantChannel) {
-        args.push_back(constantInputs[j]);
+        args.push_back(
+            BaseVector::wrapInConstant(input_->size(), 0, constantInputs[j]));
       } else {
         args.push_back(input_->childAt(inputs[j]));
       }
@@ -326,13 +330,21 @@ bool StreamingAggregation::isFinished() {
 
 RowVectorPtr StreamingAggregation::getOutput() {
   if (!input_) {
+    SCOPE_EXIT {
+      outputFirstGroup_ = false;
+    };
     if ((noMoreInput_ || isDraining()) && numGroups_ > 0) {
       return createOutput(
           std::min(numGroups_, static_cast<size_t>(maxOutputBatchSize_)));
     }
+    if (outputFirstGroup_) {
+      VELOX_CHECK_GT(numGroups_, 1);
+      return createOutput(1);
+    }
     maybeFinishDrain();
     return nullptr;
   }
+  VELOX_CHECK(!outputFirstGroup_);
 
   const auto numInput = input_->size();
   inputRows_.resize(numInput);
@@ -341,15 +353,26 @@ RowVectorPtr StreamingAggregation::getOutput() {
   masks_->addInput(input_, inputRows_);
 
   const auto numPrevGroups = numGroups_;
-
-  assignGroups();
+  const bool prevGroupAssigned = assignGroups();
   initializeNewGroups(numPrevGroups);
   evaluateAggregates();
 
   RowVectorPtr output;
-  if (numGroups_ > minOutputBatchSize_) {
-    output = createOutput(
-        std::min(numGroups_ - 1, static_cast<size_t>(maxOutputBatchSize_)));
+
+  if ((numPrevGroups != 0) && (numGroups_ > minOutputBatchSize_)) {
+    size_t numOutputGroups{0};
+    // NOTE: we only want to apply the single group output optimization if
+    // 'minOutputBatchSize_' is set to one for eagerly streaming output
+    // producing.
+    if (!prevGroupAssigned || numPrevGroups == 1 || minOutputBatchSize_ != 1) {
+      numOutputGroups = std::min(numGroups_ - 1, numPrevGroups);
+    } else {
+      numOutputGroups = std::min(numGroups_ - 1, numPrevGroups - 1);
+      outputFirstGroup_ = (numGroups_ - numOutputGroups) > 1;
+    }
+    numOutputGroups = std::min<size_t>(numOutputGroups, maxOutputBatchSize_);
+    VELOX_CHECK_GT(numOutputGroups, 0);
+    output = createOutput(numOutputGroups);
   }
   prevInput_ = input_;
   input_ = nullptr;

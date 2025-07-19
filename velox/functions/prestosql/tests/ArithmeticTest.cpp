@@ -181,6 +181,12 @@ class ArithmeticTest : public functions::test::FunctionBaseTest {
     assertExpression("c0 * c1", op1, doubleOp, expected);
     assertExpression("c1 * c0", op1, doubleOp, expected);
   }
+
+  template <typename T>
+  std::optional<T> getAbs(const T& input) {
+    const auto a = std::make_optional<T>(input);
+    return evaluateOnce<T>("abs(c0)", a);
+  }
 };
 
 TEST_F(ArithmeticTest, plus) {
@@ -1042,77 +1048,23 @@ TEST_F(ArithmeticTest, wilsonIntervalUpper) {
   EXPECT_DOUBLE_EQ(wilsonIntervalUpper(1, 3, kInf).value(), 1.0);
 }
 
-TEST_F(ArithmeticTest, cosineSimilarity) {
-  const auto cosineSimilarity =
-      [&](const std::vector<std::pair<std::string, std::optional<double>>>&
-              left,
-          const std::vector<std::pair<std::string, std::optional<double>>>&
-              right) {
-        auto leftMap = makeMapVector<std::string, double>({left});
-        auto rightMap = makeMapVector<std::string, double>({right});
-        return evaluateOnce<double>(
-                   "cosine_similarity(c0,c1)",
-                   makeRowVector({leftMap, rightMap}))
-            .value();
-      };
-
-  EXPECT_DOUBLE_EQ(
-      (2.0 * 3.0) / (std::sqrt(5.0) * std::sqrt(10.0)),
-      cosineSimilarity({{"a", 1}, {"b", 2}}, {{"c", 1}, {"b", 3}}));
-
-  EXPECT_DOUBLE_EQ(
-      (2.0 * 3.0 + (-1) * 1) / (std::sqrt(1 + 4 + 1) * std::sqrt(1 + 9)),
-      cosineSimilarity({{"a", 1}, {"b", 2}, {"c", -1}}, {{"c", 1}, {"b", 3}}));
-
-  EXPECT_DOUBLE_EQ(
-      (2.0 * 3.0 + (-1) * 1) / (std::sqrt(1 + 4 + 1) * std::sqrt(1 + 9)),
-      cosineSimilarity({{"a", 1}, {"b", 2}, {"c", -1}}, {{"c", 1}, {"b", 3}}));
-
-  EXPECT_DOUBLE_EQ(
-      0.0,
-      cosineSimilarity({{"a", 1}, {"b", 2}, {"c", -1}}, {{"d", 1}, {"e", 3}}));
-
-  EXPECT_TRUE(std::isnan(cosineSimilarity({}, {})));
-  EXPECT_TRUE(std::isnan(cosineSimilarity({{"d", 1}, {"e", 3}}, {})));
-  EXPECT_TRUE(
-      std::isnan(cosineSimilarity({{"a", 1}, {"b", 3}}, {{"a", 0}, {"b", 0}})));
-
-  auto nullableLeftMap = makeNullableMapVector<StringView, double>(
-      {{{{"a"_sv, 1}, {"b"_sv, std::nullopt}}}});
-  auto rightMap =
-      makeMapVector<StringView, double>({{{{"c"_sv, 1}, {"b"_sv, 3}}}});
-
-  EXPECT_FALSE(evaluateOnce<double>(
-                   "cosine_similarity(c0,c1)",
-                   makeRowVector({nullableLeftMap, rightMap}))
-                   .has_value());
-}
-
-TEST_F(ArithmeticTest, cosineSimilarityArray) {
-  const auto cosineSimilarity = [&](const std::vector<double>& left,
-                                    const std::vector<double>& right) {
-    auto leftMap = makeArrayVector<double>({left});
-    auto rightMap = makeArrayVector<double>({right});
-    return evaluateOnce<double>(
-               "cosine_similarity(c0,c1)", makeRowVector({leftMap, rightMap}))
-        .value();
-  };
-
-  EXPECT_DOUBLE_EQ(
-      (1 * 1 * 1 + 2 * 3) / (std::sqrt(5.0) * std::sqrt(10.0)),
-      cosineSimilarity({{1, 2}}, {{1, 3}}));
-
-  EXPECT_DOUBLE_EQ(
-      (1 * 1 + 2 * 3 + (-1) * 5) /
-          (std::sqrt(1 + 4 + 1) * std::sqrt(1 + 9 + 25)),
-      cosineSimilarity({{1, 2, -1}}, {{1, 3, 5}}));
-
-  EXPECT_TRUE(std::isnan(cosineSimilarity({}, {})));
+TEST_F(ArithmeticTest, abs) {
+  ASSERT_EQ(getAbs<int8_t>(-127), 127);
   VELOX_ASSERT_THROW(
-      cosineSimilarity({1, 3}, {}), "Both arrays need to have identical size");
-  EXPECT_TRUE(std::isnan(cosineSimilarity({1, 3}, {0, 0})));
-  EXPECT_TRUE(std::isnan(cosineSimilarity({1, 3}, {kNan, 1})));
-  EXPECT_TRUE(std::isnan(cosineSimilarity({1, 3}, {kInf, 1})));
+      getAbs<int8_t>(std::numeric_limits<int8_t>::min()),
+      "Value -128 is out of range for abs(TINYINT)");
+  ASSERT_EQ(getAbs<int16_t>(-32767), 32767);
+  VELOX_ASSERT_THROW(
+      getAbs<int16_t>(std::numeric_limits<int16_t>::min()),
+      "Value -32768 is out of range for abs(SMALLINT)");
+  ASSERT_EQ(getAbs<int32_t>(-2147483647), 2147483647);
+  VELOX_ASSERT_THROW(
+      getAbs<int32_t>(std::numeric_limits<int32_t>::min()),
+      "Value -2147483648 is out of range for abs(INTEGER)");
+  ASSERT_EQ(getAbs<int64_t>(-9223372036854775807), 9223372036854775807);
+  VELOX_ASSERT_THROW(
+      getAbs<int64_t>(std::numeric_limits<int64_t>::min()),
+      "Value -9223372036854775808 is out of range for abs(BIGINT)");
 }
 
 } // namespace

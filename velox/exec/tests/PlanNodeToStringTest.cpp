@@ -14,20 +14,20 @@
  * limitations under the License.
  */
 
+#include "velox/connectors/hive/HiveConnector.h"
 #include "velox/exec/WindowFunction.h"
-#include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/parse/TypeResolver.h"
+#include "velox/vector/tests/utils/VectorTestBase.h"
 
 #include <gtest/gtest.h>
 
-using namespace facebook;
-using namespace facebook::velox;
-using namespace facebook::velox::common::test;
-
 using facebook::velox::exec::test::PlanBuilder;
+
+namespace facebook::velox::exec {
+namespace {
 
 class PlanNodeToStringTest : public testing::Test,
                              public velox::test::VectorTestBase {
@@ -755,7 +755,7 @@ TEST_F(PlanNodeToStringTest, tableScan) {
         "range filters: [(discount, DoubleRange: [0.050000, 0.070000] no nulls), "
         "(quantity, DoubleRange: (-inf, 24.000000) no nulls), "
         "(shipdate, BytesRange: [1994-01-01, 1994-12-31] no nulls)], "
-        "remaining filter: (not(like(ROW[\"comment\"],\"%special%request%\")))] "
+        "remaining filter: (not(like(ROW[\"comment\"],%special%request%)))] "
         "-> discount:DOUBLE, quantity:DOUBLE, shipdate:VARCHAR, comment:VARCHAR\n";
     ASSERT_EQ(output, plan->toString(true, false));
   }
@@ -766,7 +766,7 @@ TEST_F(PlanNodeToStringTest, tableScan) {
             .planNode();
 
     ASSERT_EQ(
-        "-- TableScan[0][table: hive_table, remaining filter: (not(like(ROW[\"comment\"],\"%special%request%\")))] "
+        "-- TableScan[0][table: hive_table, remaining filter: (not(like(ROW[\"comment\"],%special%request%)))] "
         "-> discount:DOUBLE, quantity:DOUBLE, shipdate:VARCHAR, comment:VARCHAR\n",
         plan->toString(true, false));
   }
@@ -927,37 +927,57 @@ TEST_F(PlanNodeToStringTest, rowNumber) {
       plan->toString(true, false));
 }
 
-TEST_F(PlanNodeToStringTest, topNRowNumber) {
+namespace {
+void topNRankPlanNodeToStringTest(std::string_view function) {
   auto rowType = ROW({"a", "b"}, {BIGINT(), VARCHAR()});
   auto plan = PlanBuilder()
                   .tableScan(rowType)
-                  .topNRowNumber({}, {"a DESC"}, 10, false)
+                  .topNRank(function, {}, {"a DESC"}, 10, false)
                   .planNode();
 
   ASSERT_EQ("-- TopNRowNumber[1]\n", plan->toString());
   ASSERT_EQ(
-      "-- TopNRowNumber[1][order by (a DESC NULLS LAST) limit 10] -> a:BIGINT, b:VARCHAR\n",
+      fmt::format(
+          "-- TopNRowNumber[1][{} order by (a DESC NULLS LAST) limit 10] -> a:BIGINT, b:VARCHAR\n",
+          function),
       plan->toString(true, false));
 
   plan = PlanBuilder()
              .tableScan(rowType)
-             .topNRowNumber({}, {"a DESC"}, 10, true)
+             .topNRank(function, {}, {"a DESC"}, 10, true)
              .planNode();
 
   ASSERT_EQ("-- TopNRowNumber[1]\n", plan->toString());
   ASSERT_EQ(
-      "-- TopNRowNumber[1][order by (a DESC NULLS LAST) limit 10] -> a:BIGINT, b:VARCHAR, row_number:BIGINT\n",
+      fmt::format(
+          "-- TopNRowNumber[1][{} order by (a DESC NULLS LAST) limit 10] -> a:BIGINT, b:VARCHAR, row_number:BIGINT\n",
+          function),
       plan->toString(true, false));
 
   plan = PlanBuilder()
              .tableScan(rowType)
-             .topNRowNumber({"a"}, {"b"}, 10, false)
+             .topNRank(function, {"a"}, {"b"}, 10, false)
              .planNode();
 
   ASSERT_EQ("-- TopNRowNumber[1]\n", plan->toString());
   ASSERT_EQ(
-      "-- TopNRowNumber[1][partition by (a) order by (b ASC NULLS LAST) limit 10] -> a:BIGINT, b:VARCHAR\n",
+      fmt::format(
+          "-- TopNRowNumber[1][{} partition by (a) order by (b ASC NULLS LAST) limit 10] -> a:BIGINT, b:VARCHAR\n",
+          function),
       plan->toString(true, false));
+}
+} // namespace
+
+TEST_F(PlanNodeToStringTest, topNRowNumber) {
+  topNRankPlanNodeToStringTest("row_number");
+}
+
+TEST_F(PlanNodeToStringTest, topNRank) {
+  topNRankPlanNodeToStringTest("rank");
+}
+
+TEST_F(PlanNodeToStringTest, topNDenseRank) {
+  topNRankPlanNodeToStringTest("dense_rank");
 }
 
 TEST_F(PlanNodeToStringTest, markDistinct) {
@@ -971,3 +991,6 @@ TEST_F(PlanNodeToStringTest, markDistinct) {
       "-- MarkDistinct[1][a, b] -> a:VARCHAR, b:BIGINT, c:BIGINT, marker:BOOLEAN\n",
       op->toString(true, false));
 }
+
+} // namespace
+} // namespace facebook::velox::exec

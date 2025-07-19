@@ -94,7 +94,7 @@ std::string toTypeSql(const TypePtr& type) {
     }
     default:
       if (type->isPrimitiveType()) {
-        return type->name();
+        return type->toString();
       }
       VELOX_UNSUPPORTED("Type is not supported: {}", type->toString());
   }
@@ -339,7 +339,7 @@ std::string toCallSql(const core::CallTypedExprPtr& call) {
 
 std::string toCastSql(const core::CastTypedExpr& cast) {
   std::stringstream sql;
-  if (cast.nullOnFailure()) {
+  if (cast.isTryCast()) {
     sql << "try_cast(";
   } else {
     sql << "cast(";
@@ -393,6 +393,10 @@ std::string toConstantSql(const core::ConstantTypedExpr& constant) {
       sql << typeSql << " ";
     }
     sql << std::quoted(getConstantValue<std::string>(constant), '\'', '\'');
+  } else if (type->isIntervalYearMonth()) {
+    sql << fmt::format("INTERVAL '{}' YEAR TO MONTH", constant.toString());
+  } else if (type->isIntervalDayTime()) {
+    sql << fmt::format("INTERVAL '{}' DAY TO SECOND", constant.toString());
   } else if (type->isBigint()) {
     sql << getConstantValue<int64_t>(constant);
   } else if (type->isPrimitiveType()) {

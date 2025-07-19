@@ -61,6 +61,184 @@ class HashJoinTest : public HashJoinTestBase {
     cudf_velox::unregisterCudf();
     HashJoinTestBase::TearDown();
   }
+
+  // Make splits with each plan node having a number of source files.
+  SplitInput makeSpiltInput(
+      const std::vector<core::PlanNodeId>& nodeIds,
+      const std::vector<std::vector<std::shared_ptr<TempFilePath>>>& files) {
+    VELOX_CHECK_EQ(nodeIds.size(), files.size());
+    SplitInput splitInput;
+    for (int i = 0; i < nodeIds.size(); ++i) {
+      std::vector<exec::Split> splits;
+      splits.reserve(files[i].size());
+      for (const auto& file : files[i]) {
+        splits.push_back(exec::Split(makeHiveConnectorSplit(file->getPath())));
+      }
+      splitInput.emplace(nodeIds[i], std::move(splits));
+    }
+    return splitInput;
+  }
+
+  void testLazyVectorsWithFilter(
+      const core::JoinType joinType,
+      const std::string& filter,
+      const std::vector<std::string>& outputLayout,
+      const std::string& referenceQuery) {
+    const vector_size_t vectorSize = 1'000;
+    auto probeVectors = makeBatches(1, [&](int32_t /*unused*/) {
+      return makeRowVector(
+          {makeFlatVector<int32_t>(vectorSize, folly::identity),
+           makeFlatVector<int64_t>(
+               vectorSize, [](auto row) { return row % 23; }),
+           makeFlatVector<int32_t>(
+               vectorSize, [](auto row) { return row % 31; })});
+    });
+
+    std::vector<RowVectorPtr> buildVectors =
+        makeBatches(1, [&](int32_t /*unused*/) {
+          return makeRowVector({makeFlatVector<int32_t>(
+              vectorSize, [](auto row) { return row * 3; })});
+        });
+
+    std::shared_ptr<TempFilePath> probeFile = TempFilePath::create();
+    writeToFile(probeFile->getPath(), probeVectors);
+
+    std::shared_ptr<TempFilePath> buildFile = TempFilePath::create();
+    writeToFile(buildFile->getPath(), buildVectors);
+
+    createDuckDbTable("t", probeVectors);
+    createDuckDbTable("u", buildVectors);
+
+    // Lazy vector is part of the filter but never gets loaded.
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    core::PlanNodeId probeScanId;
+    core::PlanNodeId buildScanId;
+    auto op = PlanBuilder(planNodeIdGenerator)
+                  .tableScan(asRowType(probeVectors[0]->type()))
+                  .capturePlanNodeId(probeScanId)
+                  .hashJoin(
+                      {"c0"},
+                      {"c0"},
+                      PlanBuilder(planNodeIdGenerator)
+                          .tableScan(asRowType(buildVectors[0]->type()))
+                          .capturePlanNodeId(buildScanId)
+                          .planNode(),
+                      filter,
+                      outputLayout,
+                      joinType)
+                  .planNode();
+    SplitInput splitInput = {
+        {probeScanId,
+         {exec::Split(makeHiveConnectorSplit(probeFile->getPath()))}},
+        {buildScanId,
+         {exec::Split(makeHiveConnectorSplit(buildFile->getPath()))}},
+    };
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        .planNode(std::move(op))
+        .inputSplits(splitInput)
+        .checkSpillStats(false)
+        .referenceQuery(referenceQuery)
+        .run();
+  }
+
+  static uint64_t getInputPositions(
+      const std::shared_ptr<Task>& task,
+      int operatorIndex) {
+    auto stats = task->taskStats().pipelineStats.front().operatorStats;
+    return stats[operatorIndex].inputPositions;
+  }
+
+  static uint64_t getOutputPositions(
+      const std::shared_ptr<Task>& task,
+      const std::string& operatorType) {
+    uint64_t count = 0;
+    for (const auto& pipelineStat : task->taskStats().pipelineStats) {
+      for (const auto& operatorStat : pipelineStat.operatorStats) {
+        if (operatorStat.operatorType == operatorType) {
+          count += operatorStat.outputPositions;
+        }
+      }
+    }
+    return count;
+  }
+
+  static RuntimeMetric getFiltersProduced(
+      const std::shared_ptr<Task>& task,
+      int operatorIndex) {
+    return getOperatorRuntimeStats(
+        task, operatorIndex, "dynamicFiltersProduced");
+  }
+
+  static RuntimeMetric getFiltersAccepted(
+      const std::shared_ptr<Task>& task,
+      int operatorIndex) {
+    return getOperatorRuntimeStats(
+        task, operatorIndex, "dynamicFiltersAccepted");
+  }
+
+  static RuntimeMetric getReplacedWithFilterRows(
+      const std::shared_ptr<Task>& task,
+      int operatorIndex) {
+    return getOperatorRuntimeStats(
+        task, operatorIndex, "replacedWithDynamicFilterRows");
+  }
+
+  static RuntimeMetric getOperatorRuntimeStats(
+      const std::shared_ptr<Task>& task,
+      int32_t operatorIndex,
+      const std::string& statsName) {
+    auto stats = task->taskStats().pipelineStats.front().operatorStats;
+    return stats[operatorIndex].runtimeStats[statsName];
+  }
+
+  static core::JoinType flipJoinType(core::JoinType joinType) {
+    switch (joinType) {
+      case core::JoinType::kInner:
+        return joinType;
+      case core::JoinType::kLeft:
+        return core::JoinType::kRight;
+      case core::JoinType::kRight:
+        return core::JoinType::kLeft;
+      case core::JoinType::kFull:
+        return joinType;
+      case core::JoinType::kLeftSemiFilter:
+        return core::JoinType::kRightSemiFilter;
+      case core::JoinType::kLeftSemiProject:
+        return core::JoinType::kRightSemiProject;
+      case core::JoinType::kRightSemiFilter:
+        return core::JoinType::kLeftSemiFilter;
+      case core::JoinType::kRightSemiProject:
+        return core::JoinType::kLeftSemiProject;
+      default:
+        VELOX_FAIL(
+            "Cannot flip join type: {}", core::JoinTypeName::toName(joinType));
+    }
+  }
+
+  static core::PlanNodePtr flipJoinSides(const core::PlanNodePtr& plan) {
+    auto joinNode = std::dynamic_pointer_cast<const core::HashJoinNode>(plan);
+    VELOX_CHECK_NOT_NULL(joinNode);
+    return std::make_shared<core::HashJoinNode>(
+        joinNode->id(),
+        flipJoinType(joinNode->joinType()),
+        joinNode->isNullAware(),
+        joinNode->rightKeys(),
+        joinNode->leftKeys(),
+        joinNode->filter(),
+        joinNode->sources()[1],
+        joinNode->sources()[0],
+        joinNode->outputType());
+  }
+
+  const int32_t numDrivers_;
+
+  // The default left and right table types used for test.
+  RowTypePtr probeType_;
+  RowTypePtr buildType_;
+  VectorFuzzer::Options fuzzerOpts_;
+
+  memory::MemoryReclaimer::Stats reclaimerStats_;
+  friend class HashJoinBuilder;
 };
 
 class MultiThreadedHashJoinTest

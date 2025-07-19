@@ -60,6 +60,11 @@ Generic Configuration
      - true
      - Whether to track CPU usage for stages of individual operators. Can be expensive when processing small batches,
        e.g. < 10K rows.
+   * - operator_batch_size_stats_enabled
+     - bool
+     - true
+     - If true, the driver will collect the operator's input/output batch size through vector flat size estimation, otherwise not.
+     - We might turn this off in use cases which have very wide column width and batch size estimation has non-trivial cpu cost.
    * - hash_adaptivity_enabled
      - bool
      - true
@@ -167,11 +172,29 @@ Generic Configuration
      - 0
      - Specifies the max number of input batches to prefetch to do index lookup ahead. If it is zero,
        then process one input batch at a time.
+   * - index_lookup_join_split_output
+     - bool
+     - true
+     - If this is true, then the index join operator might split output for each input batch based
+       on the output batch size control. Otherwise, it tries to produce a single output for each input
+       batch.
    * - unnest_split_output_batch
      - bool
      - true
      - If this is true, then the unnest operator might split output for each input batch based on the
        output batch size control. Otherwise, it produces a single output for each input batch.
+   * - max_num_splits_listened_to
+     - integer
+     - 0
+     - Specifies The max number of input splits to listen to by SplitListener per table scan node per
+       worker. It's up to the SplitListener implementation to respect this config.
+   * - operator_track_expression_stats
+     - bool
+     - false
+     - If this is true, then operators that evaluate expressions will track stats for expressions that
+       are not special forms and return them as part of their operator stats. Tracking these stats can
+       be expensive (especially if operator stats are retrieved frequently) and this allows the user to
+       explicitly enable it.
 
 .. _expression-evaluation-conf:
 
@@ -264,6 +287,11 @@ Memory Management
        memory limit for partial aggregation is automatically doubled up to `max_extended_partial_aggregation_memory`.
        This adaptation is disabled by default, since the value of `max_extended_partial_aggregation_memory` equals the
        value of `max_partial_aggregation_memory`. Specify higher value for `max_extended_partial_aggregation_memory` to enable.
+   * - query_memory_reclaimer_priority
+     - integer
+     - 2147483647
+     - Priority of the query in the memory pool reclaimer. Lower value means higher priority. This is used in
+       global arbitration victim selection.
 
 Spilling
 --------
@@ -404,7 +432,7 @@ Spilling
    * - spiller_start_partition_bit
      - integer
      - 29
-     - The start partition bit which is used with `spiller_partition_bits` together to calculate the spilling partition number.
+     - The start partition bit which is used with `spiller_num_partition_bits` together to calculate the spilling partition number.
    * - spiller_num_partition_bits
      - integer
      - 3
