@@ -468,7 +468,7 @@ TEST_P(TableScanTest, scanDict) {
         makeNumbers(row->childAt(row->childrenSize() - 1), 1000000000, counter);
         for (auto i = 0; i < row->childrenSize() - 1; ++i) {
           auto child = row->childAt(i);
-          for (auto i = 0; i < card; ++i) {
+          for (auto idx = 0; idx < card; ++idx) {
           }
           for (auto j = card; j < child->size(); ++j) {
             child->copy(child.get(), j, (j * 121) % card, 1);
