@@ -110,6 +110,10 @@ class ExpressionFuzzer {
     // This can be used to control the size of the input of the fuzzer
     // expression.
     std::optional<int32_t> maxInputsThreshold = std::nullopt;
+
+    // Enabling the expression optimizer will apply logical rewrites to each
+    // fuzzer generated expression and constant fold its subtrees.
+    bool enableExpressionOptimizer = false;
   };
 
   ExpressionFuzzer(
