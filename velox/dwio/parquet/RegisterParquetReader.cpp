@@ -28,7 +28,7 @@ void registerParquetReaderFactory() {
 
 void unregisterParquetReaderFactory() {
 #ifdef VELOX_ENABLE_PARQUET
-  dwio::common::unregisterReaderFactory(dwio::common::FileFormat::PARQUET);
+  dwio::unregisterReaderFactory(dwio::common::FileFormat::PARQUET);
 #endif
 }
 

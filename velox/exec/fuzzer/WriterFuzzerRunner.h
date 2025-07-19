@@ -25,10 +25,9 @@
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/file/tests/FaultyFileSystem.h"
 #include "velox/connectors/hive/HiveConnector.h"
+#include "velox/dwio/RegisterReaders.h"
 #include "velox/dwio/common/FileSink.h"
 #include "velox/dwio/common/tests/FaultyFileSink.h"
-#include "velox/dwio/dwrf/RegisterDwrfReader.h"
-#include "velox/dwio/dwrf/RegisterDwrfWriter.h"
 #include "velox/exec/fuzzer/FuzzerUtil.h"
 #include "velox/exec/fuzzer/WriterFuzzer.h"
 #include "velox/expression/fuzzer/FuzzerToolkit.h"
@@ -87,8 +86,8 @@ class WriterFuzzerRunner {
                 std::make_shared<config::ConfigBase>(
                     std::unordered_map<std::string, std::string>()));
     connector::registerConnector(hiveConnector);
-    dwrf::registerDwrfReaderFactory();
-    dwrf::registerDwrfWriterFactory();
+    dwio::registerReaderFactories();
+    dwio::registerWriterFactories();
     dwio::common::registerFileSinks();
     dwio::common::registerFaultyFileSinks();
     facebook::velox::exec::test::writerFuzzer(

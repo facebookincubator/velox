@@ -22,6 +22,6 @@ void registerOrcReaderFactory() {
 }
 
 void unregisterOrcReaderFactory() {
-  dwio::common::unregisterReaderFactory(dwio::common::FileFormat::ORC);
+  dwio::unregisterReaderFactory(dwio::common::FileFormat::ORC);
 }
 } // namespace facebook::velox::orc

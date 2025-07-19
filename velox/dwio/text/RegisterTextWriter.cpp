@@ -23,7 +23,7 @@ void registerTextWriterFactory() {
 }
 
 void unregisterTextWriterFactory() {
-  dwio::common::unregisterWriterFactory(dwio::common::FileFormat::TEXT);
+  dwio::unregisterWriterFactory(dwio::common::FileFormat::TEXT);
 }
 
 } // namespace facebook::velox::text

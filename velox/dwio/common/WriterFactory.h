@@ -82,4 +82,8 @@ std::shared_ptr<WriterFactory> getWriterFactory(FileFormat format);
 /// @return true
 bool hasWriterFactory(FileFormat format);
 
+void registerWriterFactories();
+
+void unregisterWriterFactories();
+
 } // namespace facebook::velox::dwio::common

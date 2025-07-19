@@ -97,6 +97,7 @@ function(velox_add_library TARGET)
   if(VELOX_MONO_LIBRARY)
     if(TARGET velox)
       # Target already exists, append sources to it.
+      message(STATUS "Appending sources to existing velox target. TARGET ${TARGET} ARGN ${ARGN}")
       target_sources(velox PRIVATE ${ARGN})
       install(TARGETS velox LIBRARY DESTINATION pyvelox
                                     COMPONENT pyvelox_libraries)
@@ -106,6 +107,7 @@ function(velox_add_library TARGET)
         set(_type SHARED)
       endif()
       # Create the target if this is the first invocation.
+      message(STATUS "Creating velox target. TARGET ${TARGET} _type ${_type} ARGN ${ARGN}")
       add_library(velox ${_type} ${ARGN})
       set_target_properties(velox PROPERTIES LIBRARY_OUTPUT_DIRECTORY
                                              ${PROJECT_BINARY_DIR}/lib)

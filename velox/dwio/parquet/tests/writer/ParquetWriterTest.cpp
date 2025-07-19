@@ -22,8 +22,9 @@
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/hive/HiveConnector.h" // @manual
 #include "velox/core/QueryCtx.h"
+#include "velox/dwio/RegisterReaders.h"
+#include "velox/dwio/RegisterWriters.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
-#include "velox/dwio/parquet/RegisterParquetWriter.h" // @manual
 #include "velox/dwio/parquet/reader/PageReader.h"
 #include "velox/dwio/parquet/tests/ParquetTestBase.h"
 #include "velox/exec/Cursor.h"
@@ -56,7 +57,7 @@ class ParquetWriterTest : public ParquetTestBase {
                 std::make_shared<config::ConfigBase>(
                     std::unordered_map<std::string, std::string>()));
     connector::registerConnector(hiveConnector);
-    parquet::registerParquetWriterFactory();
+    dwio::registerWriterFactories();
   }
 
   std::unique_ptr<RowReader> createRowReaderWithSchema(

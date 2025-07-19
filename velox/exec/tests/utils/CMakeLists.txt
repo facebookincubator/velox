@@ -47,9 +47,8 @@ target_link_libraries(
   velox_expression
   velox_parse_parser
   velox_duckdb_conversion
-  velox_dwio_common
-  velox_dwio_dwrf_reader
-  velox_dwio_dwrf_writer
+  velox_dwio_registered_readers
+  velox_dwio_registered_writers
   velox_dwio_text_reader_register
   velox_dwio_common_test_utils
   velox_file_test_utils

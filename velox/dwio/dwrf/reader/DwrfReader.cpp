@@ -1047,7 +1047,7 @@ void registerDwrfReaderFactory() {
 }
 
 void unregisterDwrfReaderFactory() {
-  dwio::common::unregisterReaderFactory(dwio::common::FileFormat::DWRF);
+  dwio::unregisterReaderFactory(dwio::common::FileFormat::DWRF);
 }
 
 } // namespace facebook::velox::dwrf
