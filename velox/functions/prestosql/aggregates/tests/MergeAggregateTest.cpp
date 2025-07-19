@@ -14,14 +14,16 @@
  * limitations under the License.
  */
 #include <folly/base64.h>
-
 #include "velox/core/Expressions.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/lib/QuantileDigest.h"
 #include "velox/functions/lib/TDigest.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
+#include "velox/functions/prestosql/aggregates/sfm/SfmSketch.h"
 #include "velox/functions/prestosql/types/QDigestRegistration.h"
 #include "velox/functions/prestosql/types/QDigestType.h"
+#include "velox/functions/prestosql/types/SfmSketchRegistration.h"
+#include "velox/functions/prestosql/types/SfmSketchType.h"
 #include "velox/functions/prestosql/types/TDigestRegistration.h"
 #include "velox/functions/prestosql/types/TDigestType.h"
 
@@ -29,6 +31,7 @@ using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::functions::aggregate::test;
 using namespace facebook::velox::functions::qdigest;
+using SfmSketchIn = facebook::velox::functions::aggregate::SfmSketch;
 
 namespace facebook::velox::aggregate::test {
 namespace {
@@ -334,6 +337,42 @@ TEST_F(MergeAggregateTest, mergeQDigestOneNullMatchJava) {
   // original QDigest
   ASSERT_TRUE(
       qdigestEquals<float>(result.value<TypeKind::VARCHAR>(), kQDigest1));
+}
+
+TEST_F(MergeAggregateTest, mergeSfmSketch) {
+  registerSfmSketchType();
+  using SfmSketch = functions::aggregate::SfmSketch;
+  HashStringAllocator allocator_{pool_.get()};
+
+  // non-private sketch1: values [1, 2, 3]
+  const std::string s1 =
+      "BwkAAAAIAAAAAAAAAAAAAAA7AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAg";
+  // non-private sketch2: values [4, 5, 6, 7, 8]
+  const std::string s2 =
+      "BwkAAAAIAAAAAAAAAAAAAAB9AAAAAAABAAAAAAAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAAAAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACA=";
+  const auto s1Binary = folly::base64Decode(s1);
+  const auto s2Binary = folly::base64Decode(s2);
+
+  auto vectors = makeRowVector({makeFlatVector<StringView>(
+      {StringView(s1Binary), StringView(s2Binary)}, SFMSKETCH())});
+
+  auto result = AssertQueryBuilder(PlanBuilder()
+                                       .values({vectors})
+                                       .singleAggregation({}, {"merge(c0)"}, {})
+                                       .planNode())
+                    .copyResults(pool());
+  const std::string expectedMerge =
+      "BwkAAAAIAAAAAAAAAAAAAAA7AQAAAAABAAAAAAAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAgAAAAgQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAg";
+  const auto expectedMergeBinary = folly::base64Decode(expectedMerge);
+  ASSERT_EQ(result->size(), 1);
+
+  auto resultBinary =
+      result->childAt(0)->asFlatVector<StringView>()->valueAt(0);
+
+  ASSERT_EQ(resultBinary, StringView(expectedMergeBinary));
+  ASSERT_EQ(
+      SfmSketch::deserialize(resultBinary.data(), &allocator_).cardinality(),
+      8);
 }
 } // namespace
 } // namespace facebook::velox::aggregate::test
