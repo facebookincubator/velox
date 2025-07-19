@@ -23,7 +23,7 @@
 
 namespace facebook::velox::aggregate::prestosql {
 
-template <bool sketchAsFinalResult>
+template <bool sketchAsFinalResult, bool indexAsInput>
 class SfmSketchAggregate : public exec::Aggregate {
   using SfmSketchAccumulator =
       facebook::velox::functions::aggregate::SfmSketchAccumulator;
@@ -142,6 +142,8 @@ class SfmSketchAggregate : public exec::Aggregate {
 
  protected:
   DecodedVector decodedValue_;
+  DecodedVector decodedIndex_;
+  DecodedVector decodedZeros_;
   DecodedVector decodedEpsilon_;
   DecodedVector decodedBuckets_;
   DecodedVector decodedPrecision_;
@@ -215,37 +217,73 @@ class SfmSketchAggregate : public exec::Aggregate {
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args) {
     numArgs_ = args.size();
+    // This is for function noisy_approx_set_sfm_from_index_and_zeros.
+    if constexpr (indexAsInput) {
+      VELOX_CHECK_GE(numArgs_, 4);
+      decodedIndex_.decode(*args[0], rows);
+      decodedZeros_.decode(*args[1], rows);
+      decodedEpsilon_.decode(*args[2], rows);
+      decodedBuckets_.decode(*args[3], rows);
+      if (numArgs_ > 4) {
+        decodedPrecision_.decode(*args[4], rows);
+      }
+      return;
+    }
+
     VELOX_CHECK_GE(numArgs_, 2);
     decodedValue_.decode(*args[0], rows);
     decodedEpsilon_.decode(*args[1], rows);
-    if (args.size() > 2) {
+    if (numArgs_ > 2) {
       decodedBuckets_.decode(*args[2], rows);
     }
-    if (args.size() > 3) {
+    if (numArgs_ > 3) {
       decodedPrecision_.decode(*args[3], rows);
     }
   }
 
   void updateFromInput(char* group, vector_size_t i) {
-    if (!decodedValue_.isNullAt(i)) {
-      auto tracker = trackRowSize(group);
-      auto* accumulator = value<SfmSketchAccumulator>(group);
-      clearNull(group);
-      std::optional<int32_t> buckets =
-          (numArgs_ > 2 && !decodedBuckets_.isNullAt(i))
+    bool shouldProcess = indexAsInput
+        ? (!decodedIndex_.isNullAt(i) && !decodedZeros_.isNullAt(i))
+        : !decodedValue_.isNullAt(i);
+
+    if (!shouldProcess) {
+      return;
+    }
+    auto tracker = trackRowSize(group);
+    auto* accumulator = value<SfmSketchAccumulator>(group);
+    clearNull(group);
+
+    std::optional<int32_t> buckets;
+    std::optional<int32_t> precision;
+
+    if constexpr (indexAsInput) {
+      // For index input: args[3] = buckets, args[4] = precision
+      buckets = (numArgs_ > 3 && !decodedBuckets_.isNullAt(i))
           ? std::optional<int32_t>(decodedBuckets_.valueAt<int64_t>(i))
           : std::nullopt;
-      std::optional<int32_t> precision =
-          (numArgs_ > 3 && !decodedPrecision_.isNullAt(i))
+      precision = (numArgs_ > 4 && !decodedPrecision_.isNullAt(i))
           ? std::optional<int32_t>(decodedPrecision_.valueAt<int64_t>(i))
           : std::nullopt;
+    } else {
+      // For value input: args[2] = buckets, args[3] = precision
+      buckets = (numArgs_ > 2 && !decodedBuckets_.isNullAt(i))
+          ? std::optional<int32_t>(decodedBuckets_.valueAt<int64_t>(i))
+          : std::nullopt;
+      precision = (numArgs_ > 3 && !decodedPrecision_.isNullAt(i))
+          ? std::optional<int32_t>(decodedPrecision_.valueAt<int64_t>(i))
+          : std::nullopt;
+    }
 
-      if (!accumulator->isInitialized()) {
-        accumulator->initialize(buckets, precision);
-      }
-
+    if (!accumulator->isInitialized()) {
+      accumulator->initialize(buckets, precision);
       accumulator->setEpsilon(decodedEpsilon_.valueAt<double>(i));
+    }
 
+    if constexpr (indexAsInput) {
+      auto index = decodedIndex_.valueAt<int64_t>(i);
+      auto zeros = decodedZeros_.valueAt<int64_t>(i);
+      accumulator->addIndexAndZeros(index, zeros);
+    } else {
       // Handle different input types.
       auto inputType = decodedValue_.base()->type();
       switch (inputType->kind()) {
