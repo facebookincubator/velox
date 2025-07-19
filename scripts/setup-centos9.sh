@@ -87,19 +87,6 @@ function install_gflags {
 
 function install_cuda {
   dnf install -y patch
-  ARCH=$(uname -m)
-  case "$ARCH" in
-    x86_64)
-      CUDA_ARCH="x86_64"
-      ;;
-    aarch64)
-      CUDA_ARCH="sbsa"
-      ;;
-    *)
-      echo "Error: unsupported architecture $ARCH" >&2
-      exit 1
-      ;;
-  esac
   # See https://developer.nvidia.com/cuda-downloads
   local arch
   arch="$(uname -m)"
