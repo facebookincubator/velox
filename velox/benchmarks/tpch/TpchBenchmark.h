@@ -15,4 +15,46 @@
  */
 #pragma once
 
+#include <gflags/gflags.h>
+
+#include "velox/benchmarks/QueryBenchmarkBase.h"
+#include "velox/exec/tests/utils/TpchQueryBuilder.h"
+
+DECLARE_int32(run_query_verbose);
+DECLARE_int32(io_meter_column_pct);
+
+class TpchBenchmark : public facebook::velox::QueryBenchmarkBase {
+ public:
+  void initialize() override;
+
+  void shutdown() override;
+
+  void runMain(std::ostream& out, facebook::velox::RunStats& runStats) override;
+
+  void runQuery(int32_t queryId) {
+    auto planContext = queryBuilder_->getQueryPlan(queryId);
+    planContext = editQueryPlan(std::move(planContext));
+    run(planContext, queryConfigs_);
+  }
+
+ protected:
+  /// Virtual function to edit query plans if needed.
+  /// The default implementation returns the plan as-is.
+  /// Derived classes can override this to modify plans, e.g., for CUDF
+  /// processing.
+  virtual facebook::velox::exec::test::TpchPlan editQueryPlan(
+      facebook::velox::exec::test::TpchPlan planContext) {
+    return planContext;
+  }
+
+  std::unordered_map<std::string, std::string> queryConfigs_;
+
+ private:
+  void initQueryBuilder();
+
+  std::shared_ptr<facebook::velox::exec::test::TpchQueryBuilder> queryBuilder_;
+};
+
+extern std::unique_ptr<TpchBenchmark> benchmark;
+
 void tpchBenchmarkMain();
