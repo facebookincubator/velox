@@ -807,7 +807,7 @@ DEBUG_ONLY_TEST_F(ParquetWriterTest, parquetWriteTimestampTimeZoneWithDefault) {
   writer->close();
 };
 
-DEBUG_ONLY_TEST_F(ParquetWriterTest, parquetWriteWithArrowMemoryPool) {
+TEST_F(ParquetWriterTest, parquetWriteWithArrowMemoryPool) {
   const auto data = makeRowVector({makeFlatVector<Timestamp>(
       10'000, [](auto row) { return Timestamp(row, row); })});
   parquet::WriterOptions writerOptions;
