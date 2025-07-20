@@ -420,6 +420,16 @@ TEST_F(ParquetTableScanTest, columnIndex) {
   assertSelectWithFilter(
       {"_1", "_2"}, {"_1 > 345"}, "", "SELECT _1, _2 FROM tmp WHERE _1 > 345");
   assertSelectWithFilter(
+      {"_1", "_2"},
+      {"_1 > 345", "_2 <= '901'"},
+      "",
+      "SELECT _1, _2 FROM tmp WHERE _1 > 345 and _2 <= '901'");
+  assertSelectWithFilter(
+      {"_1", "_3"},
+      {"_1 > 345", "_3 == '4'"},
+      "",
+      "SELECT _1, _2 FROM tmp WHERE _1 > 345 and _3 == '4'");
+  assertSelectWithFilter(
       {"_1", "_3"},
       {"_1 > 1500"},
       "",
