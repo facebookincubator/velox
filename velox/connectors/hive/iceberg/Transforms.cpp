@@ -23,6 +23,13 @@
 
 namespace facebook::velox::connector::hive::iceberg {
 
+#define SET_NULLS_BUFFER                 \
+  if (block->mayHaveNulls()) {           \
+    block->mutableNulls(block->size());  \
+    result->mutableNulls(block->size()); \
+    result->setNulls(block->nulls());    \
+  }
+
 const TypePtr findChildTypeKind(
     const RowTypePtr& inputType,
     const std::string& fullName) {
@@ -57,9 +64,8 @@ VectorPtr IdentityTransform<T>::apply(const VectorPtr& block) const {
 
   auto result =
       BaseVector::create<FlatVector<T>>(sourceType_, block->size(), pool_);
-  if (block->mayHaveNulls()) {
-    result->setNulls(block->nulls());
-  }
+
+  SET_NULLS_BUFFER
 
   DecodedVector decoded(*block);
 
@@ -81,9 +87,8 @@ template <typename T>
 VectorPtr BucketTransform<T>::apply(const VectorPtr& block) const {
   auto result =
       BaseVector::create<FlatVector<int32_t>>(INTEGER(), block->size(), pool_);
-  if (block->mayHaveNulls()) {
-    result->setNulls(block->nulls());
-  }
+  SET_NULLS_BUFFER
+
   DecodedVector decoded(*block);
   for (auto i = 0; i < decoded.size(); ++i) {
     if (!decoded.isNullAt(i)) {
@@ -110,9 +115,7 @@ template <typename T>
 VectorPtr TruncateTransform<T>::apply(const VectorPtr& block) const {
   auto result =
       BaseVector::create<FlatVector<T>>(sourceType_, block->size(), pool_);
-  if (block->mayHaveNulls()) {
-    result->setNulls(block->nulls());
-  }
+  SET_NULLS_BUFFER
 
   DecodedVector decoded(*block);
 
@@ -180,9 +183,7 @@ VectorPtr TemporalTransform<T>::apply(const VectorPtr& block) const {
   auto result =
       BaseVector::create<FlatVector<int32_t>>(INTEGER(), block->size(), pool_);
 
-  if (block->mayHaveNulls()) {
-    result->setNulls(block->nulls());
-  }
+  SET_NULLS_BUFFER
 
   DecodedVector decoded(*block);
 
@@ -222,5 +223,7 @@ template class TruncateTransform<StringView>;
 template class TemporalTransform<int32_t>;
 template class TemporalTransform<int64_t>;
 template class TemporalTransform<Timestamp>;
+
+#undef SET_NULLS_BUFFER
 
 } // namespace facebook::velox::connector::hive::iceberg
