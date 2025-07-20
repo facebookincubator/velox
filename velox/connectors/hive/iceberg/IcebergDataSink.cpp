@@ -128,7 +128,8 @@ IcebergInsertTableHandle::IcebergInsertTableHandle(
           std::make_shared<const IcebergInsertFileNameGenerator>()),
       partitionSpec_(std::move(partitionSpec)),
       columnTransforms_(
-          parsePartitionTransformSpecs(partitionSpec_->fields, pool)) {}
+          parsePartitionTransformSpecs(partitionSpec_->fields, pool)),
+      sortedBy_(sortedBy) {}
 
 IcebergDataSink::IcebergDataSink(
     facebook::velox::RowTypePtr inputType,
