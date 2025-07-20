@@ -40,6 +40,26 @@ std::pair<std::string, std::string> makePartitionKeyValueString(
           partitionVector->as<SimpleVector<T>>()->valueAt(row)));
 }
 
+// Iceberg spec requires URL encoding in the partition path.
+// This function matches java.net.URLEncoder.encode(string, "UTF-8").
+std::string urlEncode(const StringView& data) {
+  std::ostringstream ret;
+
+  for (unsigned char c : data) {
+    // These characters are not encoded in Java's URLEncoder.
+    if (std::isalnum(c) || c == '-' || c == '_' || c == '.' || c == '*') {
+      ret << c;
+    } else if (c == ' ') {
+      ret << '+';
+    } else {
+      // All other characters are percent-encoded.
+      ret << fmt::format("%{:02X}", c);
+    }
+  }
+
+  return ret.str();
+}
+
 } // namespace
 
 IcebergPartitionIdGenerator::IcebergPartitionIdGenerator(
@@ -178,7 +198,7 @@ std::string IcebergPartitionIdGenerator::partitionName(
     if (partitionPathAsLowerCase_) {
       folly::toLowerAscii(key);
     }
-    ret << fmt::format("{}={}", urlEncode(key.data()), value);
+    ret << fmt::format("{}={}", urlEncode(key.data()), urlEncode(value.data()));
   }
 
   return ret.str();

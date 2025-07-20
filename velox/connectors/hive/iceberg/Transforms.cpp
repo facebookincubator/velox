@@ -45,26 +45,6 @@ const TypePtr findChildTypeKind(
   return currentType;
 }
 
-// Iceberg spec requires URL encoding in the partition path.
-// This function matches java.net.URLEncoder.encode(string, "UTF-8").
-std::string urlEncode(const StringView& data) {
-  std::ostringstream ret;
-
-  for (unsigned char c : data) {
-    // These characters are not encoded in Java's URLEncoder.
-    if (std::isalnum(c) || c == '-' || c == '_' || c == '.' || c == '*') {
-      ret << c;
-    } else if (c == ' ') {
-      ret << '+';
-    } else {
-      // All other characters are percent-encoded.
-      ret << fmt::format("%{:02X}", c);
-    }
-  }
-
-  return ret.str();
-}
-
 template <typename T>
 VectorPtr IdentityTransform<T>::apply(const VectorPtr& block) const {
   if constexpr (std::is_same_v<T, StringView>) {

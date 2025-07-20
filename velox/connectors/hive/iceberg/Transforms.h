@@ -29,8 +29,6 @@ const TypePtr findChildTypeKind(
     const RowTypePtr& inputType,
     const std::string& fullName);
 
-std::string urlEncode(const StringView& data);
-
 class Transform {
  public:
   Transform(TypePtr type, TransformType transformType, memory::MemoryPool* pool)
@@ -63,10 +61,6 @@ class Transform {
     return decimalToHumanString(value);
   }
 
-  std::string toHumanString(const StringView& value) const {
-    return urlEncode(value);
-  }
-
   std::string toHumanString(bool value) const {
     return value ? "true" : "false";
   }
@@ -80,7 +74,7 @@ class Transform {
     options.skipTrailingZeros = true;
     options.leadingPositiveSign = true;
     options.skipTrailingZeroSeconds = true;
-    return urlEncode(value.toString(options).data());
+    return value.toString(options);
   }
 
   std::string name() const {
