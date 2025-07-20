@@ -22,6 +22,7 @@
 #include "velox/type/Type.h"
 
 #include <folly/container/F14Map.h>
+#include <cstdint>
 
 namespace facebook::velox::parquet {
 
@@ -58,13 +59,16 @@ class ColumnPageIndex {
     // Precompute row counts for each page using OffsetIndex.first_row_index
     size_t n = offsetIndex_.page_locations.size();
     pageRowCount_.reserve(n);
+    pageToStreamIdx.reserve(n + 1);
     for (size_t i = 0; i < n; ++i) {
       int64_t start = offsetIndex_.page_locations[i].first_row_index;
       int64_t end =
           (i + 1 < n ? offsetIndex_.page_locations[i + 1].first_row_index
                      : totalRows_);
       pageRowCount_.push_back(end - start);
+      pageToStreamIdx.push_back(-1);
     }
+    pageToStreamIdx.push_back(-1);
   }
 
   /// @returns the number of pages in this column chunk.
@@ -203,6 +207,28 @@ class ColumnPageIndex {
     }
   }
 
+  void setPageStreamIndex(size_t pageIndex, int32_t streamIndex) {
+    if (pageIndex < pageToStreamIdx.size()) {
+      pageToStreamIdx[pageIndex] = streamIndex;
+    } else {
+      VELOX_FAIL(
+          "Page index {} out of bounds for pageToStreamIdx {}",
+          pageIndex,
+          pageToStreamIdx.size());
+    }
+  }
+
+  int32_t getPageStreamIndex(size_t pageIndex) const {
+    if (pageIndex < pageToStreamIdx.size()) {
+      return pageToStreamIdx[pageIndex];
+    } else {
+      VELOX_FAIL(
+          "Page index {} out of bounds for pageToStreamIdx {}",
+          pageIndex,
+          pageToStreamIdx.size());
+    }
+  }
+
  private:
   template <typename T>
   inline const T load(const char* ptr) {
@@ -242,6 +268,8 @@ class ColumnPageIndex {
   std::vector<bool> isPageSkipped_;
   std::vector<uint64_t> pageRowCount_;
   bool hasSkippedPages_{false};
+
+  std::vector<int32_t> pageToStreamIdx;
 };
 
 } // namespace facebook::velox::parquet
