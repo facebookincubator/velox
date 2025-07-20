@@ -38,14 +38,14 @@ class IcebergSortOrderTest : public IcebergTestBase {
   }
 
   /// Verify that data in the file is sorted according to the specified sort
-  /// columns
+  /// columns.
   void verifySortOrder(
       const std::string& dataPath,
       const std::vector<std::string>& sortColumns) {
     auto splits = createSplitsForDirectory(dataPath);
     ASSERT_FALSE(splits.empty()) << "No data files found in " << dataPath;
 
-    // Create a projection that selects all columns
+    // Create a projection that selects all columns.
     std::vector<std::string> allColumns;
     for (int32_t i = 0; i < rowType_->size(); ++i) {
       allColumns.push_back(rowType_->nameOf(i));
@@ -58,7 +58,7 @@ class IcebergSortOrderTest : public IcebergTestBase {
 
     ASSERT_GT(result->size(), 0) << "No rows found in the data file";
 
-    // For each sort column, verify the data is sorted
+    // For each sort column, verify the data is sorted.
     for (const auto& sortExpr : sortColumns) {
       std::string columnName;
       bool isAscending = true;
@@ -127,12 +127,12 @@ class IcebergSortOrderTest : public IcebergTestBase {
       decoded.decode(*columnVector, rows);
 
       for (vector_size_t i = 1; i < columnVector->size(); ++i) {
-        // Skip if either current or previous is null
+        // Skip if either current or previous is null.
         if (columnVector->isNullAt(i) || columnVector->isNullAt(i - 1)) {
           continue;
         }
 
-        // Compare values based on type
+        // Compare values based on type.
         int32_t comparison = 0;
         switch (auto kind = rowType_->childAt(columnIndex)->kind()) {
           case TypeKind::INTEGER: {
@@ -182,7 +182,7 @@ class IcebergSortOrderTest : public IcebergTestBase {
               << " for column " << columnName;
         }
 
-        // If values are equal, continue to next row
+        // If values are equal, continue to next row.
         if (comparison == 0) {
           continue;
         }
@@ -191,7 +191,7 @@ class IcebergSortOrderTest : public IcebergTestBase {
     }
   }
 
-  /// Verify that data is sorted according to multiple sort columns
+  /// Verify that data is sorted according to multiple sort columns.
   void verifyMultiColumnSortOrder(
       const std::string& dataPath,
       const std::vector<std::string>& sortColumns) {
@@ -255,9 +255,9 @@ class IcebergSortOrderTest : public IcebergTestBase {
       columnIndices.push_back(columnIndex);
     }
 
-    // Verify the sort order row by row
+    // Verify the sort order row by row.
     for (vector_size_t i = 1; i < result->size(); ++i) {
-      // Compare row i-1 with row i using all sort columns in order
+      // Compare row i-1 with row i using all sort columns in order.
       for (size_t colIdx = 0; colIdx < columnIndices.size(); ++colIdx) {
         int32_t columnIndex = columnIndices[colIdx];
         auto columnVector = result->childAt(columnIndex);
@@ -267,23 +267,23 @@ class IcebergSortOrderTest : public IcebergTestBase {
         bool currIsNull = columnVector->isNullAt(i);
 
         if (prevIsNull && currIsNull) {
-          // Both null, continue to next column
+          // Both null, continue to next column.
           continue;
         } else if (prevIsNull) {
-          // Previous is null, current is not
+          // Previous is null, current is not.
           ASSERT_TRUE(nullsFirst)
               << "NULL values should come last at row " << (i - 1)
               << " for column " << columnNames[colIdx] << " in " << dataPath;
           break;
         } else if (currIsNull) {
-          // Current is null, previous is not
+          // Current is null, previous is not.
           ASSERT_FALSE(nullsFirst)
               << "NULL values should come first at row " << i << " for column "
               << columnNames[colIdx] << " in " << dataPath;
           break;
         }
 
-        // Both values are non-null, compare them
+        // Both values are non-null, compare them.
         DecodedVector decoded;
         SelectivityVector rows(columnVector->size());
         decoded.decode(*columnVector, rows);
@@ -341,12 +341,12 @@ class IcebergSortOrderTest : public IcebergTestBase {
                 << ". Previous value: " << columnVector->toString(i - 1)
                 << ", Current value: " << columnVector->toString(i);
           }
-          // Found definitive ordering, no need to check further columns
+          // Found definitive ordering, no need to check further columns.
           break;
         }
-        // If values are equal, continue to next column
+        // If values are equal, continue to next column.
       }
-      // Rows can be equal across all sort columns
+      // Rows can be equal across all sort columns.
     }
   }
 
@@ -360,7 +360,7 @@ class IcebergSortOrderTest : public IcebergTestBase {
       const std::vector<std::string>& sortExpressions,
       double nullRatio = 0.0) {
     std::vector<RowVectorPtr> vectors =
-        createTestData(numBatches, rowsPerBatch, true, nullRatio);
+        createTestData(numBatches, rowsPerBatch, nullRatio);
     auto outputDirectory = TempDirectoryPath::create();
 
     auto dataSink = createIcebergDataSink(
@@ -372,21 +372,20 @@ class IcebergSortOrderTest : public IcebergTestBase {
 
     ASSERT_TRUE(dataSink->finish());
     dataSink->close();
-    auto dataPath = fmt::format("{}/data", outputDirectory->getPath());
     if (sortExpressions.size() == 1) {
-      verifySortOrder(dataPath, sortExpressions);
+      verifySortOrder(outputDirectory->getPath(), sortExpressions);
     } else {
-      verifyMultiColumnSortOrder(dataPath, sortExpressions);
+      verifyMultiColumnSortOrder(outputDirectory->getPath(), sortExpressions);
     }
   }
 
-  // Test function for sorting with partitioning
+  // Test function for sorting with partitioning.
   void testSortingWithPartitioning(
       const std::vector<std::string>& partitionTransforms,
       const std::vector<std::string>& sortExpressions,
       const double nullRatio = 0.0) {
     std::vector<RowVectorPtr> vectors =
-        createTestData(numBatches, rowsPerBatch, true, nullRatio);
+        createTestData(numBatches, rowsPerBatch, nullRatio);
     const auto outputDirectory = TempDirectoryPath::create();
 
     auto dataSink = createIcebergDataSink(
@@ -402,9 +401,8 @@ class IcebergSortOrderTest : public IcebergTestBase {
     ASSERT_TRUE(dataSink->finish());
     dataSink->close();
 
-    // For partitioned data, we need to find all partition directories
+    // For partitioned data, we need to find all partition directories.
     std::vector<std::string> partitionDirs;
-    const auto dataPath = fmt::format("{}/data", outputDirectory->getPath());
     std::function<void(const std::string&)> findLeafDataDirs =
         [&partitionDirs, &findLeafDataDirs](const std::string& dir) {
           bool hasSubDirs = false;
@@ -420,15 +418,15 @@ class IcebergSortOrderTest : public IcebergTestBase {
           }
         };
 
-    // Start the recursive search from the data directory
-    if (std::filesystem::exists(dataPath)) {
-      findLeafDataDirs(dataPath);
+    // Start the recursive search from the data directory.
+    if (std::filesystem::exists(outputDirectory->getPath())) {
+      findLeafDataDirs(outputDirectory->getPath());
     }
     if (partitionDirs.empty()) {
-      partitionDirs.push_back(dataPath);
+      partitionDirs.push_back(outputDirectory->getPath());
     }
 
-    // Verify each partition directory has properly sorted data
+    // Verify each partition directory has properly sorted data.
     ASSERT_FALSE(partitionDirs.empty()) << "No partition directories found";
     for (const auto& partitionDir : partitionDirs) {
       if (sortExpressions.size() == 1) {
@@ -556,11 +554,11 @@ TEST_F(IcebergSortOrderTest, sortWithSinglePartitioning) {
 
 TEST_F(IcebergSortOrderTest, sortWithMultiPartitioning) {
   testSortingWithPartitioning(
-      {"bucket(c_date, 4)", "bucket(c_varchar,4)"},
+      {"bucket(c_date, 3)", "bucket(c_varchar,4)"},
       {"c_int ASC", "c_bigint DESC"});
 
   testSortingWithPartitioning(
-      {"truncate(c_date, 1000)"}, {"c_int ASC", "c_bigint DESC"});
+      {"truncate(c_date, 10000)"}, {"c_int ASC", "c_bigint DESC"});
 }
 
 TEST_F(IcebergSortOrderTest, sortWithPartitioningAndNulls) {

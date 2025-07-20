@@ -16,10 +16,10 @@
 
 #include "velox/connectors/hive/iceberg/IcebergDataSink.h"
 
-#include "dwio/common/SortingWriter.h"
 #include "velox/common/base/Fs.h"
 #include "velox/connectors/hive/HiveConnectorUtil.h"
 #include "velox/connectors/hive/iceberg/IcebergPartitionIdGenerator.h"
+#include "velox/dwio/common/SortingWriter.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/SortBuffer.h"
 
