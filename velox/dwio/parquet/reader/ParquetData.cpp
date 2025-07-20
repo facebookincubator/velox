@@ -212,34 +212,64 @@ void ParquetData::enqueueRowGroup(
     // If there are skipped pages, enqueue only the required streams.
     if (pageIndices_[index] && pageIndices_[index]->hasSkippedPages()) {
       auto numPages = pageIndices_[index]->numPages();
-      pagesStreams_[index].resize(1 + numPages);
+      pagesStreams_[index].clear();
 
-      // Handle dictionary page if present.
-      uint64_t dictOffset =
-          chunk.hasDictionaryPageOffset() && chunk.dictionaryPageOffset() >= 4
-          ? chunk.dictionaryPageOffset()
-          : 0;
-      if (dictOffset) {
-        readSize = chunk.dataPageOffset() - dictOffset;
-        auto id = dwio::common::StreamIdentifier(type_->column());
-        pagesStreams_[index][0] = input.enqueue({dictOffset, readSize}, &id);
-      } else {
-        pagesStreams_[index][0] = nullptr;
+      // Collect all runs: dictionary page (if present) and data pages.
+      int32_t runStart = -1;
+      uint64_t runOffset = 0;
+      uint64_t runLength = 0;
+      std::vector<int32_t> runPages;
+
+      // Helper to flush a run of contiguous pages.
+      auto flushRun = [&]() {
+        if (runStart < 0) {
+          return;
+        }
+        auto id = dwio::common::StreamIdentifier(
+            type_->column() * (numPages + 1) + pagesStreams_[index].size());
+        auto streamPtr = input.enqueue({runOffset, runLength}, &id);
+        pagesStreams_[index].push_back(std::move(streamPtr));
+        int32_t streamIdx = pagesStreams_[index].size() - 1;
+        for (int32_t page : runPages) {
+          pageIndices_[index]->setPageStreamIndex(page, streamIdx);
+        }
+        runStart = -1;
+        runPages.clear();
+      };
+
+      auto addPageToRun = [&](int32_t page, uint64_t offset, uint64_t length) {
+        if (runStart < 0) {
+          runStart = page;
+          runOffset = offset;
+          runLength = length;
+          runPages = {page};
+        } else {
+          runLength += length;
+          runPages.push_back(page);
+        }
+      };
+
+      // Dictionary page.
+      if (chunk.hasDictionaryPageOffset() &&
+          chunk.dictionaryPageOffset() >= 4) {
+        uint64_t dictOffset = chunk.dictionaryPageOffset();
+        uint64_t dictLen = chunk.dataPageOffset() - dictOffset;
+        addPageToRun(0, dictOffset, dictLen);
       }
 
-      // Enqueue streams for each page, skipping as needed.
-      for (size_t i = 0; i < numPages; ++i) {
-        if (pageIndices_[index]->isPageSkipped(i)) {
-          pagesStreams_[index][i + 1] = nullptr;
+      // Data pages.
+      for (int32_t i = 0; i < numPages; ++i) {
+        if (!pageIndices_[index]->isPageSkipped(i)) {
+          uint64_t off = pageIndices_[index]->pageOffset(i);
+          uint64_t len = pageIndices_[index]->compressedPageSize(i);
+          addPageToRun(i + 1, off, len);
         } else {
-          uint64_t pageOffset = pageIndices_[index]->pageOffset(i);
-          uint64_t pageSize = pageIndices_[index]->compressedPageSize(i);
-          auto id =
-              dwio::common::StreamIdentifier(type_->column() * numPages + i);
-          pagesStreams_[index][i + 1] =
-              input.enqueue({pageOffset, pageSize}, &id);
+          flushRun();
         }
       }
+      // Ensure the last run is flushed if it exists.
+      flushRun();
+      streams_[index] = nullptr;
       return;
     }
   }
@@ -252,8 +282,7 @@ dwio::common::PositionProvider ParquetData::seekToRowGroup(int64_t index) {
   static std::vector<uint64_t> empty;
   VELOX_CHECK_LT(index, streams_.size());
   auto metadata = fileMetaDataPtr_.rowGroup(index).columnChunk(type_->column());
-  if (pageIndices_[index] != nullptr &&
-      pageIndices_[index]->hasSkippedPages()) {
+  if (streams_[index] == nullptr) {
     reader_ = std::make_unique<PageReader>(
         std::move(pagesStreams_[index]),
         pool_,

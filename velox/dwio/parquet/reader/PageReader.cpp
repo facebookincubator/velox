@@ -53,11 +53,19 @@ void PageReader::seekToPage(int64_t row) {
     bool pageSkipped = false;
     size_t pageIndex = columnPageIndexPosition_++;
     if (columnPageIndex_) {
-      if (pageIndex == 0 && pageStreams_[pageIndex] == nullptr) {
+      auto streamIndex = columnPageIndex_->getPageStreamIndex(pageIndex);
+      if (pageIndex == 0 && streamIndex == -1) {
         pageIndex = columnPageIndexPosition_++;
+        streamIndex = columnPageIndex_->getPageStreamIndex(pageIndex);
       }
-      if (pageStreams_[pageIndex] != nullptr) {
-        inputStream_ = std::move(pageStreams_[pageIndex]);
+      if (streamIndex != -1) {
+        // If this is the first page or the stream index changed, update
+        // inputStream_.
+        if (pageIndex == 0 ||
+            streamIndex !=
+                columnPageIndex_->getPageStreamIndex(pageIndex - 1)) {
+          inputStream_ = std::move(pageStreams_[streamIndex]);
+        }
       } else {
         pageSkipped = true;
       }
