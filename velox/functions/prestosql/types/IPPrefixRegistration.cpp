@@ -190,7 +190,9 @@ class IPPrefixTypeFactories : public CustomTypeFactories {
     return IPPrefixType::get();
   }
 
-  exec::CastOperatorPtr getCastOperator() const override {
+  exec::CastOperatorPtr getCastOperator(
+      const std::vector<TypeParameter>& parameters) const override {
+    VELOX_CHECK(parameters.empty());
     return std::make_shared<IPPrefixCastOperator>();
   }
 

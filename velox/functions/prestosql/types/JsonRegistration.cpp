@@ -32,7 +32,9 @@ class JsonTypeFactories : public CustomTypeFactories {
     return JSON();
   }
 
-  exec::CastOperatorPtr getCastOperator() const override {
+  exec::CastOperatorPtr getCastOperator(
+      const std::vector<TypeParameter>& parameters) const override {
+    VELOX_CHECK(parameters.empty());
     return std::make_shared<JsonCastOperator>();
   }
 

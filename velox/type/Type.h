@@ -410,6 +410,8 @@ enum class TypeParameterKind {
   kType,
   /// Integer. For example, precision in a decimal type.
   kLongLiteral,
+
+  kStringLiteral,
 };
 
 struct TypeParameter {
@@ -423,6 +425,8 @@ struct TypeParameter {
   /// or unset.
   const std::optional<int64_t> longLiteral;
 
+  const std::optional<std::string> stringLiteral;
+
   /// If this parameter is a child of another parent row type, it can optionally
   /// have a name, e.g, "id" for `row(id bigint)`. Only set when kind is kType
   const std::optional<std::string> rowFieldName;
@@ -434,6 +438,8 @@ struct TypeParameter {
       : kind{TypeParameterKind::kType},
         type{std::move(_type)},
         longLiteral{std::nullopt},
+        stringLiteral{std::nullopt},
+
         rowFieldName(std::move(_rowFieldName)) {}
 
   /// Creates kLongLiteral parameter.
@@ -441,6 +447,15 @@ struct TypeParameter {
       : kind{TypeParameterKind::kLongLiteral},
         type{nullptr},
         longLiteral{_longLiteral},
+        stringLiteral{std::nullopt},
+        rowFieldName{std::nullopt} {}
+
+  /// Creates kStringLiteral parameter.
+  explicit TypeParameter(std::string _stringLiteral)
+      : kind{TypeParameterKind::kStringLiteral},
+        type{nullptr},
+        longLiteral{std::nullopt},
+        stringLiteral{_stringLiteral},
         rowFieldName{std::nullopt} {}
 };
 
@@ -2068,7 +2083,8 @@ class CustomTypeFactories {
   /// should be treated as its underlying native type during type castings,
   /// return a nullptr. If a custom type does not support castings, throw an
   /// exception.
-  virtual exec::CastOperatorPtr getCastOperator() const = 0;
+  virtual exec::CastOperatorPtr getCastOperator(
+      const std::vector<TypeParameter>& parameters = {}) const = 0;
 
   virtual AbstractInputGeneratorPtr getInputGenerator(
       const InputGeneratorConfig& config) const = 0;
@@ -2167,7 +2183,9 @@ bool unregisterCustomType(const std::string& name);
 /// Returns the custom cast operator for the custom type with the specified
 /// name. Returns nullptr if a type with the specified name does not exist or
 /// does not have a dedicated custom cast operator.
-exec::CastOperatorPtr getCustomTypeCastOperator(const std::string& name);
+exec::CastOperatorPtr getCustomTypeCastOperator(
+    const std::string& name,
+    const std::vector<TypeParameter>& parameters = {});
 
 /// Returns the input generator for the custom type with the specified name.
 AbstractInputGeneratorPtr getCustomTypeInputGenerator(

@@ -65,4 +65,18 @@ std::pair<std::string, std::shared_ptr<const Type>> inferTypeWithSpaces(
       fieldName, typeFromString(allWords.substr(fieldName.size() + 1)));
 }
 
+TypePtr getEnumType(
+    std::string enumType,
+    const std::string& name,
+    const std::string& map) {
+  std::vector<TypeParameter> params;
+  params.emplace_back(TypeParameter(name));
+  params.emplace_back(TypeParameter(map));
+  if (enumType == "BigintEnum") {
+    enumType = "BIGINT_ENUM";
+  }
+  auto type = getType(enumType, params);
+
+  return type;
+}
 } // namespace facebook::velox

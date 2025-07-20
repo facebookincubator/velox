@@ -60,7 +60,8 @@ class FancyIntTypeFactories : public CustomTypeFactories {
     return FancyIntType::get();
   }
 
-  exec::CastOperatorPtr getCastOperator() const override {
+  exec::CastOperatorPtr getCastOperator(
+      const std::vector<TypeParameter>& parameters) const override {
     VELOX_UNSUPPORTED();
   }
 
@@ -151,7 +152,8 @@ class AlwaysFailingTypeFactories : public CustomTypeFactories {
     VELOX_UNSUPPORTED();
   }
 
-  exec::CastOperatorPtr getCastOperator() const override {
+  exec::CastOperatorPtr getCastOperator(
+      const std::vector<TypeParameter>& parameters) const override {
     VELOX_UNSUPPORTED();
   }
 
@@ -233,7 +235,8 @@ TEST_F(CustomTypeTest, getCustomTypeNames) {
           "BINGTILE",
           "TDIGEST",
           "QDIGEST",
-          "GEOMETRY"}),
+          "GEOMETRY",
+          "BIGINT_ENUM"}),
       names);
 
   ASSERT_TRUE(registerCustomType(
@@ -252,7 +255,8 @@ TEST_F(CustomTypeTest, getCustomTypeNames) {
           "FANCY_INT",
           "TDIGEST",
           "QDIGEST",
-          "GEOMETRY"}),
+          "GEOMETRY",
+          "BIGINT_ENUM"}),
       names);
 
   ASSERT_TRUE(unregisterCustomType("fancy_int"));
@@ -284,6 +288,12 @@ TEST_F(CustomTypeTest, nullConstant) {
         checkNullConstant(
             type, fmt::format("QDIGEST({})", parameter->toString()));
       }
+    } else if (name == "BIGINT_ENUM") {
+      auto enumName = "test.enum.mood";
+      auto enumMap = "\"CURIOUSs\": -2, \"HAPPY\": 0";
+      auto typeParameters = {TypeParameter(enumName), TypeParameter(enumMap)};
+      auto type = getCustomType(name, typeParameters);
+      checkNullConstant(type, type->toString());
     } else {
       auto type = getCustomType(name, {});
       checkNullConstant(type, type->toString());
