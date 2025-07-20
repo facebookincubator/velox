@@ -211,8 +211,8 @@ std::vector<std::string> IcebergDataSink::commitMessage() const {
     // plan, will collect full iceberg metrics in following PR.
     // clang-format off
     folly::dynamic commitData = folly::dynamic::object(
-        "path", info->writerParameters.writeDirectory() + "/" +
-        info->writerParameters.writeFileName())
+    "path", (fs::path(info->writerParameters.writeDirectory()) /
+    info->writerParameters.writeFileName()).string())
     ("fileSizeInBytes", ioStats_.at(i)->rawBytesWritten())
     ("metrics", folly::dynamic::object("recordCount", info->numWrittenRows))
     ("partitionSpecJson", icebergInsertTableHandle->partitionSpec()->specId)
