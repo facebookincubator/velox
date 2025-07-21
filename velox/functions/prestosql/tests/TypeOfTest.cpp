@@ -15,6 +15,7 @@
  */
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/types/BigintEnumType.h"
 #include "velox/functions/prestosql/types/BingTileType.h"
 #include "velox/functions/prestosql/types/GeometryType.h"
 #include "velox/functions/prestosql/types/HyperLogLogType.h"
@@ -68,6 +69,16 @@ TEST_F(TypeOfTest, basic) {
   EXPECT_EQ("qdigest(bigint)", typeOf(QDIGEST(BIGINT())));
   EXPECT_EQ("qdigest(real)", typeOf(QDIGEST(REAL())));
   EXPECT_EQ("qdigest(double)", typeOf(QDIGEST(DOUBLE())));
+
+  std::string enumName = "test.enum.mood";
+  std::string enumName2 = "someEnumType";
+  std::string enumMap = "\"CURIOUSs\": -2, \"HAPPY\": 0";
+  const std::vector<TypeParameter>& typeParameters = {
+      TypeParameter(enumName), TypeParameter(enumMap)};
+  const std::vector<TypeParameter>& typeParameters2 = {
+      TypeParameter(enumName2), TypeParameter(enumMap)};
+  EXPECT_EQ("test.enum.mood", typeOf(BIGINT_ENUM(typeParameters)));
+  EXPECT_EQ("someEnumType", typeOf(BIGINT_ENUM(typeParameters2)));
 
   EXPECT_EQ("unknown", typeOf(UNKNOWN()));
 

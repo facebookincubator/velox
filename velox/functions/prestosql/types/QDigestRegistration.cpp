@@ -29,7 +29,8 @@ class QDigestTypeFactories : public CustomTypeFactories {
   }
 
   // QDigest should be treated as Varbinary during type castings.
-  exec::CastOperatorPtr getCastOperator() const override {
+  exec::CastOperatorPtr getCastOperator(
+      const std::vector<TypeParameter>& /*parameters*/) const override {
     return nullptr;
   }
 

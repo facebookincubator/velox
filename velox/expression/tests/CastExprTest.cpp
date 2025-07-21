@@ -2874,7 +2874,8 @@ class BigintTypeWithCustomComparisonTypeFactories : public CustomTypeFactories {
   }
 
   // Type casting from and to TimestampWithTimezone is not supported yet.
-  exec::CastOperatorPtr getCastOperator() const override {
+  exec::CastOperatorPtr getCastOperator(
+      const std::vector<TypeParameter>& parameters) const override {
     return BigintTypeWithCustomComparisonCastOperator::get();
   }
 

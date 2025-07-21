@@ -261,6 +261,8 @@ bool SignatureBinderBase::tryBind(
           return false;
         }
         break;
+      case TypeParameterKind::kStringLiteral:
+        break;
       case TypeParameterKind::kType:
         if (!checkNamedRowField(params[i], actualType, i)) {
           return false;

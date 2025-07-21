@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+// #include <functions/prestosql/types/BigintEnumType.h>
 #include <velox/type/Type.h>
 
 #include <boost/algorithm/string.hpp>
@@ -108,6 +109,16 @@ namespace {
 std::vector<TypePtr> deserializeChildTypes(const folly::dynamic& obj) {
   return velox::ISerializable::deserialize<std::vector<Type>>(obj["cTypes"]);
 }
+
+std::vector<TypeParameter> deserializeStringParams(const folly::dynamic& obj) {
+  VELOX_CHECK(obj.isArray());
+  std::vector<TypeParameter> result;
+  result.reserve(obj.size());
+  for (const auto& item : obj) {
+    result.push_back(TypeParameter(item.asString()));
+  }
+  return result;
+}
 } // namespace
 
 TypePtr Type::create(const folly::dynamic& obj) {
@@ -125,12 +136,17 @@ TypePtr Type::create(const folly::dynamic& obj) {
   if (isDecimalName(typeName)) {
     return DECIMAL(obj["precision"].asInt(), obj["scale"].asInt());
   }
+
   // Checks if 'typeName' specifies a custom type.
   if (customTypeExists(typeName)) {
     std::vector<TypeParameter> params;
-    params.reserve(childTypes.size());
-    for (auto& child : childTypes) {
-      params.emplace_back(child);
+    if (obj.find("stringParams") != obj.items().end()) {
+      params = deserializeStringParams(obj["stringParams"]);
+    } else {
+      params.reserve(childTypes.size());
+      for (auto& child : childTypes) {
+        params.emplace_back(child);
+      }
     }
     return getCustomType(typeName, params);
   }
@@ -1033,10 +1049,12 @@ TypePtr getCustomType(
   return nullptr;
 }
 
-exec::CastOperatorPtr getCustomTypeCastOperator(const std::string& name) {
+exec::CastOperatorPtr getCustomTypeCastOperator(
+    const std::string& name,
+    const std::vector<TypeParameter>& parameters) {
   auto factories = getTypeFactories(name);
   if (factories) {
-    return factories->getCastOperator();
+    return factories->getCastOperator(parameters);
   }
 
   return nullptr;

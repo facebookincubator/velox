@@ -97,7 +97,9 @@ class OpaqueCustomTypeRegister {
       return singletonTypePtr();
     }
 
-    exec::CastOperatorPtr getCastOperator() const override {
+    exec::CastOperatorPtr getCastOperator(
+        const std::vector<TypeParameter>& parameters) const override {
+      VELOX_CHECK(parameters.empty());
       VELOX_UNSUPPORTED();
     }
 

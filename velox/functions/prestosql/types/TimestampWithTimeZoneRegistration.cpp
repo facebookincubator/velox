@@ -283,7 +283,9 @@ class TimestampWithTimeZoneTypeFactories : public CustomTypeFactories {
   }
 
   // Type casting from and to TimestampWithTimezone is not supported yet.
-  exec::CastOperatorPtr getCastOperator() const override {
+  exec::CastOperatorPtr getCastOperator(
+      const std::vector<TypeParameter>& parameters) const override {
+    VELOX_CHECK(parameters.empty());
     return TimestampWithTimeZoneCastOperator::get();
   }
 

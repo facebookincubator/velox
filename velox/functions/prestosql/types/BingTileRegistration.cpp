@@ -126,7 +126,9 @@ class BingTileTypeFactories : public CustomTypeFactories {
     return BINGTILE();
   }
 
-  exec::CastOperatorPtr getCastOperator() const override {
+  exec::CastOperatorPtr getCastOperator(
+      const std::vector<TypeParameter>& parameters) const override {
+    VELOX_CHECK(parameters.empty());
     return BingTileCastOperator::get();
   }
 

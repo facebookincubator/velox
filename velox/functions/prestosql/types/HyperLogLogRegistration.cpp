@@ -30,7 +30,9 @@ class HyperLogLogTypeFactories : public CustomTypeFactories {
   }
 
   // HyperLogLog should be treated as Varbinary during type castings.
-  exec::CastOperatorPtr getCastOperator() const override {
+  exec::CastOperatorPtr getCastOperator(
+      const std::vector<TypeParameter>& parameters) const override {
+    VELOX_CHECK(parameters.empty());
     return nullptr;
   }
 
