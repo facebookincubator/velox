@@ -79,6 +79,11 @@ ParquetDataSource::ParquetDataSource(
   // Create empty IOStats for later use
   ioStats_ = std::make_shared<io::IoStatistics>();
 
+  // Copy subfield filters
+  for (const auto& [k, v] : tableHandle_->subfieldFilters()) {
+    subfieldFilters_.emplace(k.clone(), v->clone());
+  }
+
   // Create subfield filter
   auto subfieldFilter = tableHandle_->subfieldFilterExpr();
   if (subfieldFilter) {
@@ -289,6 +294,29 @@ ParquetDataSource::createSplitReader() {
         precomputeInstructions);
     VELOX_CHECK_EQ(precomputeInstructions.size(), 0);
     readerOptions.set_filter(subfieldTree_.back());
+  } else if (subfieldFilters_.size()) {
+    // Convert subfield filters to cudf AST
+    for (const auto& [subfield, filter] : subfieldFilters_) {
+      auto const& filterExpr = createAstFromSubfieldFilter(
+          subfield, *filter, subfieldTree_, subfieldScalars_, outputType_);
+      subfieldFilterExprs_.push_back(&filterExpr);
+    }
+
+    // Combine multiple filters with AND
+    if (subfieldFilterExprs_.size() == 1) {
+      readerOptions.set_filter(subfieldTree_.back());
+    } else if (subfieldFilterExprs_.size() > 1) {
+      // AND all filter expressions together
+      auto* result = subfieldFilterExprs_[0];
+      for (size_t i = 1; i < subfieldFilterExprs_.size(); i++) {
+        auto const& andExpr = subfieldTree_.push(cudf::ast::operation{
+            cudf::ast::ast_operator::NULL_LOGICAL_AND,
+            *result,
+            *subfieldFilterExprs_[i]});
+        result = &andExpr;
+      }
+      readerOptions.set_filter(*result);
+    }
   }
 
   // Set column projection if needed
