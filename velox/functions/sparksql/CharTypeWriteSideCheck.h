@@ -76,4 +76,3 @@ struct CharTypeWriteSideCheckFunction {
 };
 
 } // namespace facebook::velox::functions::sparksql
-

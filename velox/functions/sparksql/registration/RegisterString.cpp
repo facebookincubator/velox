@@ -172,11 +172,8 @@ void registerStringFunctions(const std::string& prefix) {
       Varchar,
       int32_t>({prefix + "varchar_type_write_side_check"});
 
-  registerFunction<
-      CharTypeWriteSideCheckFunction,
-      Varchar,
-      Varchar,
-      int32_t>({prefix + "char_type_write_side_check"});
+  registerFunction<CharTypeWriteSideCheckFunction, Varchar, Varchar, int32_t>(
+      {prefix + "char_type_write_side_check"});
 
   registerFunction<Base64Function, Varchar, Varbinary>({prefix + "base64"});
   registerFunction<UnBase64Function, Varbinary, Varchar>({prefix + "unbase64"});

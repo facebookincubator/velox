@@ -76,4 +76,3 @@ TEST_F(CharTypeWriteSideCheckTest, charTypeWriteSideCheck) {
 
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test
-
