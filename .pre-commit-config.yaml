@@ -127,3 +127,9 @@ repos:
     rev: 2f8be1d2066eb3687496a156d00b4f1b3ea7b028
     hooks:
       - id: action-validator
+
+  - repo: https://github.com/assignUser/ast-grep-cmake-precommit
+    rev: v0.0.2
+    hooks:
+      - id: cmake-lint
+        args: [--rule-dirs, ./scripts/ci/cmake-rules, --, --report-style, short]
