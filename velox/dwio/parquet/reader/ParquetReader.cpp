@@ -119,7 +119,6 @@ class ReaderBase {
       int32_t currentGroup,
       StructColumnReader& reader,
       std::vector<dwio::common::RowRanges>& rowRanges,
-      bool shouldLoadPageIndex,
       const std::shared_ptr<velox::common::MetadataFilter>& metadataFilter);
 
   /// Returns the uncompressed size for columns in 'type' and its children in
@@ -160,6 +159,20 @@ class ReaderBase {
       const std::vector<T>& children,
       bool fileColumnNamesReadAsLowerCase);
 
+  bool shouldUsePageIndexFiltering(velox::common::ScanSpec& scanSpec) const;
+
+  bool getPageIndexesRangeIfContiguous(
+      int64_t& pageIndexStartOffset,
+      int64_t& totalLength) const;
+
+  void applyPageIndexFiltering(
+      int32_t currentGroup,
+      uint32_t thisGroup,
+      StructColumnReader& reader,
+      std::vector<dwio::common::RowRanges>& rowRanges,
+      const std::shared_ptr<velox::common::MetadataFilter>& metadataFilter)
+      const;
+
   memory::MemoryPool& pool_;
   const uint64_t footerEstimatedSize_;
   const uint64_t filePreloadThreshold_;
@@ -176,6 +189,9 @@ class ReaderBase {
   // Map from row group index to pre-created loading BufferedInput.
   std::unordered_map<uint32_t, std::shared_ptr<dwio::common::BufferedInput>>
       inputs_;
+  bool shouldUsePageIndexFiltering_{false};
+  std::vector<char> pageIndexBuffer_;
+  int64_t pageIndexStartOffset_{-1};
 };
 
 ReaderBase::ReaderBase(
@@ -189,6 +205,13 @@ ReaderBase::ReaderBase(
       fileLength_{input_->getReadFile()->size()} {
   VELOX_CHECK_GT(fileLength_, 0, "Parquet file is empty");
   VELOX_CHECK_GE(fileLength_, 12, "Parquet file is too small");
+
+  // If a pushdown filter is present, load the page index to enable page
+  // pruning.
+  if (options_.scanSpec()) {
+    shouldUsePageIndexFiltering_ =
+        shouldUsePageIndexFiltering(*options_.scanSpec());
+  }
 
   loadFileMetaData();
   initializeSchema();
@@ -244,6 +267,33 @@ void ReaderBase::loadFileMetaData() {
       thriftTransport);
   fileMetaData_ = std::make_unique<thrift::FileMetaData>();
   fileMetaData_->read(thriftProtocol.get());
+  if (shouldUsePageIndexFiltering_) {
+    // Calculate the page index buffer base offset and size.
+    int64_t indexPagesTotalLength = 0;
+    if (getPageIndexesRangeIfContiguous(
+            pageIndexStartOffset_, indexPagesTotalLength)) {
+      pageIndexBuffer_.resize(indexPagesTotalLength);
+      if (preloadFile) {
+        std::memcpy(
+            pageIndexBuffer_.data(),
+            copy.data() + pageIndexStartOffset_,
+            indexPagesTotalLength);
+      } else {
+        stream = input_->read(
+            pageIndexStartOffset_,
+            indexPagesTotalLength,
+            dwio::common::LogType::FOOTER);
+        bufferStart = nullptr;
+        bufferEnd = nullptr;
+        dwio::common::readBytes(
+            indexPagesTotalLength,
+            stream.get(),
+            pageIndexBuffer_.data(),
+            bufferStart,
+            bufferEnd);
+      }
+    }
+  }
 }
 
 void ReaderBase::initializeSchema() {
@@ -1137,12 +1187,178 @@ std::shared_ptr<const RowType> ReaderBase::createRowType(
       std::move(childNames), std::move(childTypes));
 }
 
+bool ReaderBase::shouldUsePageIndexFiltering(
+    velox::common::ScanSpec& scanSpec) const {
+  bool result = false;
+  if (scanSpec.readFromFile()) {
+    result = scanSpec.filter() || scanSpec.numMetadataFilters() > 0;
+  }
+  if (!result) {
+    auto& childSpecs = scanSpec.stableChildren();
+    for (auto i = 0; i < childSpecs.size(); ++i) {
+      result |= shouldUsePageIndexFiltering(*childSpecs[i]);
+    }
+  }
+
+  return result;
+}
+
+bool ReaderBase::getPageIndexesRangeIfContiguous(
+    int64_t& pageIndexStartOffset,
+    int64_t& totalLength) const {
+  std::vector<std::pair<int64_t, int32_t>> indexOffsets;
+
+  int numRowGroups = fileMetaData_->row_groups.size();
+
+  for (int rg = 0; rg < numRowGroups; ++rg) {
+    const auto& rowGroup = fileMetaData_->row_groups[rg];
+    int numCols = rowGroup.columns.size();
+
+    for (int col = 0; col < numCols; ++col) {
+      const auto& chunk = rowGroup.columns[col];
+
+      if (chunk.__isset.column_index_offset &&
+          chunk.__isset.column_index_length) {
+        indexOffsets.emplace_back(
+            chunk.column_index_offset, chunk.column_index_length);
+      }
+      if (chunk.__isset.offset_index_offset &&
+          chunk.__isset.offset_index_length) {
+        indexOffsets.emplace_back(
+            chunk.offset_index_offset, chunk.offset_index_length);
+      }
+    }
+  }
+
+  if (indexOffsets.empty()) {
+    return false; // No indexes to read.
+  }
+
+  // Sort by offset.
+  std::sort(indexOffsets.begin(), indexOffsets.end());
+
+  // Check if all index blocks are contiguous.
+  for (size_t i = 1; i < indexOffsets.size(); ++i) {
+    int64_t prevEnd = indexOffsets[i - 1].first + indexOffsets[i - 1].second;
+    if (indexOffsets[i].first != prevEnd) {
+      return false; // Not contiguous.
+    }
+  }
+
+  // All index blocks are contiguous.
+  pageIndexStartOffset = indexOffsets.front().first;
+  totalLength = indexOffsets.back().first + indexOffsets.back().second -
+      pageIndexStartOffset;
+
+  return true;
+}
+
+void ReaderBase::applyPageIndexFiltering(
+    int32_t currentGroup,
+    uint32_t thisGroup,
+    StructColumnReader& reader,
+    std::vector<dwio::common::RowRanges>& rowRanges,
+    const std::shared_ptr<velox::common::MetadataFilter>& metadataFilter)
+    const {
+  PageIndexInfoMap map;
+  reader.collectIndexPageInfoMap(thisGroup, map);
+  if (!map.empty()) {
+    folly::F14FastMap<uint32_t, std::unique_ptr<ColumnPageIndex>> pageIndices;
+    if (pageIndexStartOffset_ > 0) {
+      auto readThriftObject = [&](size_t offset,
+                                  size_t length,
+                                  auto& thriftObj) {
+        auto transport = std::make_shared<thrift::ThriftBufferedTransport>(
+            pageIndexBuffer_.data() + (offset - pageIndexStartOffset_), length);
+        auto protocol =
+            std::make_unique<apache::thrift::protocol::TCompactProtocolT<
+                thrift::ThriftTransport>>(transport);
+        thriftObj.read(protocol.get());
+      };
+      for (const auto& entry : map) {
+        thrift::ColumnIndex colIdx;
+        thrift::OffsetIndex offIdx;
+        readThriftObject(
+            entry.second.columnIndexOffset,
+            entry.second.columnIndexLength,
+            colIdx);
+        readThriftObject(
+            entry.second.offsetIndexOffset,
+            entry.second.offsetIndexLength,
+            offIdx);
+        pageIndices[entry.first] = std::make_unique<ColumnPageIndex>(
+            colIdx, offIdx, fileMetaData_->row_groups[thisGroup].num_rows);
+      }
+    } else {
+      using StreamMap = folly::F14FastMap<
+          uint32_t,
+          std::unique_ptr<dwio::common::SeekableInputStream>>;
+      StreamMap offSetStreamMap, columnStreamMap;
+
+      // Helper lambda to read and deserialize a Thrift object from a
+      // stream.
+      auto readThriftObject = [](auto* stream, size_t length, auto& thriftObj) {
+        const char* bufferStart = nullptr;
+        const char* bufferEnd = nullptr;
+        std::vector<char> data(length);
+        dwio::common::readBytes(
+            length, stream, data.data(), bufferStart, bufferEnd);
+        auto transport = std::make_shared<thrift::ThriftBufferedTransport>(
+            data.data(), length);
+        auto protocol =
+            std::make_unique<apache::thrift::protocol::TCompactProtocolT<
+                thrift::ThriftTransport>>(transport);
+        thriftObj.read(protocol.get());
+      };
+
+      for (const auto& entry : map) {
+        offSetStreamMap[entry.first] = input_->enqueue(
+            {static_cast<uint64_t>(entry.second.offsetIndexOffset),
+             static_cast<uint64_t>(entry.second.offsetIndexLength)});
+        columnStreamMap[entry.first] = input_->enqueue(
+            {static_cast<uint64_t>(entry.second.columnIndexOffset),
+             static_cast<uint64_t>(entry.second.columnIndexLength)});
+      }
+      input_->load(dwio::common::LogType::STRIPE);
+
+      for (const auto& entry : map) {
+        thrift::ColumnIndex colIdx;
+        thrift::OffsetIndex offIdx;
+        readThriftObject(
+            columnStreamMap[entry.first].get(),
+            entry.second.columnIndexLength,
+            colIdx);
+        readThriftObject(
+            offSetStreamMap[entry.first].get(),
+            entry.second.offsetIndexLength,
+            offIdx);
+        pageIndices[entry.first] = std::make_unique<ColumnPageIndex>(
+            colIdx, offIdx, fileMetaData_->row_groups[thisGroup].num_rows);
+      }
+    }
+
+    dwio::common::RowRanges filterResult;
+    std::vector<std::pair<
+        const velox::common::MetadataFilter::LeafNode*,
+        dwio::common::RowRanges>>
+        metadataFilterResults;
+    reader.filterDataPages(
+        thisGroup, pageIndices, filterResult, metadataFilterResults);
+    if (metadataFilter) {
+      metadataFilter->eval(metadataFilterResults, filterResult);
+    }
+    rowRanges.at(currentGroup) = dwio::common::RowRanges::intersection(
+        rowRanges.at(currentGroup),
+        dwio::common::RowRanges::complement(
+            filterResult, fileMetaData_->row_groups[thisGroup].num_rows));
+  }
+}
+
 void ReaderBase::scheduleRowGroups(
     const std::vector<uint32_t>& rowGroupIds,
     int32_t currentGroup,
     StructColumnReader& reader,
     std::vector<dwio::common::RowRanges>& rowRanges,
-    bool shouldLoadPageIndex,
     const std::shared_ptr<velox::common::MetadataFilter>& metadataFilter) {
   auto numRowGroupsToLoad = std::min(
       options_.prefetchRowGroups() + 1,
@@ -1150,81 +1366,10 @@ void ReaderBase::scheduleRowGroups(
   for (auto i = 0; i < numRowGroupsToLoad; i++) {
     auto thisGroup = rowGroupIds[currentGroup + i];
     if (!inputs_[thisGroup]) {
-      if (shouldLoadPageIndex) {
-        PageIndexInfoMap map;
-        reader.collectIndexPageInfoMap(thisGroup, map);
-        if (!map.empty()) {
-          using StreamMap = folly::F14FastMap<
-              uint32_t,
-              std::unique_ptr<dwio::common::SeekableInputStream>>;
-          StreamMap offSetStreamMap, columnStreamMap;
-          folly::F14FastMap<uint32_t, std::unique_ptr<ColumnPageIndex>>
-              pageIndices;
-
-          // Helper lambda to read and deserialize a Thrift object from a
-          // stream.
-          auto readThriftObject = [](auto* stream,
-                                     size_t length,
-                                     auto& thriftObj) {
-            const char* bufferStart = nullptr;
-            const char* bufferEnd = nullptr;
-            std::vector<char> data(length);
-            dwio::common::readBytes(
-                length, stream, data.data(), bufferStart, bufferEnd);
-            auto transport = std::make_shared<thrift::ThriftBufferedTransport>(
-                data.data(), length);
-            auto protocol =
-                std::make_unique<apache::thrift::protocol::TCompactProtocolT<
-                    thrift::ThriftTransport>>(transport);
-            thriftObj.read(protocol.get());
-          };
-
-          for (const auto& entry : map) {
-            offSetStreamMap[entry.first] = input_->enqueue(
-                {static_cast<uint64_t>(entry.second.offsetIndexOffset),
-                 static_cast<uint64_t>(entry.second.offsetIndexLength)});
-            columnStreamMap[entry.first] = input_->enqueue(
-                {static_cast<uint64_t>(entry.second.columnIndexOffset),
-                 static_cast<uint64_t>(entry.second.columnIndexLength)});
-          }
-          input_->load(dwio::common::LogType::STRIPE);
-
-          for (const auto& entry : map) {
-            thrift::ColumnIndex colIdx;
-            thrift::OffsetIndex offIdx;
-            readThriftObject(
-                columnStreamMap[entry.first].get(),
-                entry.second.columnIndexLength,
-                colIdx);
-            readThriftObject(
-                offSetStreamMap[entry.first].get(),
-                entry.second.offsetIndexLength,
-                offIdx);
-            pageIndices[entry.first] = std::make_unique<ColumnPageIndex>(
-                colIdx, offIdx, fileMetaData_->row_groups[thisGroup].num_rows);
-          }
-          dwio::common::RowRanges filterResult;
-          std::vector<std::pair<
-              const velox::common::MetadataFilter::LeafNode*,
-              dwio::common::RowRanges>>
-              metadataFilterResults;
-          reader.filterDataPages(
-              thisGroup, pageIndices, filterResult, metadataFilterResults);
-          if (metadataFilter) {
-            metadataFilter->eval(metadataFilterResults, filterResult);
-          }
-          rowRanges.at(currentGroup + i) =
-              dwio::common::RowRanges::intersection(
-                  rowRanges.at(currentGroup + i),
-                  dwio::common::RowRanges::complement(
-                      filterResult,
-                      fileMetaData_->row_groups[thisGroup].num_rows));
-        }
+      if (shouldUsePageIndexFiltering_) {
+        applyPageIndexFiltering(
+            currentGroup + i, thisGroup, reader, rowRanges, metadataFilter);
       }
-      std::vector<std::pair<
-          const velox::common::MetadataFilter::LeafNode*,
-          std::vector<uint64_t>>>
-          metadataFilterResults;
       inputs_[thisGroup] = reader.loadRowGroup(
           thisGroup, input_, rowRanges.at(currentGroup + i));
     }
@@ -1302,7 +1447,6 @@ class ParquetRowReader::Impl {
         params,
         *options_.scanSpec());
     columnReader_->setIsTopLevel();
-    shouldLoadPageIndex_ = shouldLoadPageIndex(*options_.scanSpec());
     filterRowGroups();
     if (!rowGroupIds_.empty()) {
       // schedule prefetch of first row group right after reading the metadata.
@@ -1313,21 +1457,6 @@ class ParquetRowReader::Impl {
 
     columnReaderOptions_ =
         dwio::common::makeColumnReaderOptions(readerBase_->options());
-  }
-
-  bool shouldLoadPageIndex(velox::common::ScanSpec& scanSpec) const {
-    bool result = false;
-    if (scanSpec.readFromFile()) {
-      result = scanSpec.filter() || scanSpec.numMetadataFilters() > 0;
-    }
-    if (!result) {
-      auto& childSpecs = scanSpec.stableChildren();
-      for (auto i = 0; i < childSpecs.size(); ++i) {
-        result |= shouldLoadPageIndex(*childSpecs[i]);
-      }
-    }
-
-    return result;
   }
 
   void filterRowGroups() {
@@ -1479,7 +1608,6 @@ class ParquetRowReader::Impl {
         nextRowGroupIdsIdx_,
         static_cast<StructColumnReader&>(*columnReader_),
         rowRanges_,
-        shouldLoadPageIndex_,
         options_.metadataFilter());
     currentRowGroupPtr_ = &rowGroups_[rowGroupIds_[nextRowGroupIdsIdx_]];
     rowsInCurrentRowGroup_ = currentRowGroupPtr_->num_rows;
