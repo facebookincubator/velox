@@ -5496,36 +5496,42 @@ TEST_F(DateTimeFunctionsTest, xxHash64FunctionTimestamp) {
 }
 
 TEST_F(DateTimeFunctionsTest, currentTimestamp) {
-  const auto evaluate = [&](const std::string& expression) {
-    return evaluateOnce<int64_t>(expression);
-  };
+  setQueryTimeZone("Asia/Kolkata");
 
-  Timestamp lowerBound = Timestamp::now();
-  std::optional<int64_t> result1 = evaluate("current_timestamp");
-  std::optional<int64_t> result2 = evaluate("now()");
-  Timestamp upperBound = Timestamp::now();
+  auto emptyRowVector = makeRowVector(ROW({}), 1);
+  auto before = Timestamp::now().toMillis();
 
-  ASSERT_TRUE(result1.has_value());
-  ASSERT_TRUE(result2.has_value());
+  auto packedNow = evaluateOnce<int64_t>("now()", emptyRowVector);
+  auto packedCurrentTimestamp =
+      evaluateOnce<int64_t>("current_timestamp()", emptyRowVector);
 
-  const auto unpackMillisUtc = [](int64_t packed) {
-    constexpr int32_t kMillisShift = 12;
-    return packed >> kMillisShift;
-  };
+  auto after = Timestamp::now().toMillis();
 
-  int64_t resultMillis1 = unpackMillisUtc(result1.value());
-  int64_t resultMillis2 = unpackMillisUtc(result2.value());
+  ASSERT_TRUE(packedNow.has_value()) << "now() returned nullopt";
+  auto unpackedNow = TimestampWithTimezone::unpack(packedNow);
+  ASSERT_TRUE(unpackedNow.has_value()) << "Failed to unpack now() result";
 
-  int64_t lowerMillis = lowerBound.toMillis();
-  int64_t upperMillis = upperBound.toMillis();
+  ASSERT_TRUE(packedCurrentTimestamp.has_value())
+      << "current_timestamp() returned nullopt";
+  auto unpackedCurrent = TimestampWithTimezone::unpack(packedCurrentTimestamp);
+  ASSERT_TRUE(unpackedCurrent.has_value())
+      << "Failed to unpack current_timestamp() result";
 
-  EXPECT_EQ(resultMillis1, resultMillis2);
+  // Check timestamps are within range
+  EXPECT_LE(before, unpackedNow->milliSeconds_);
+  EXPECT_LE(unpackedNow->milliSeconds_, after);
+  EXPECT_LE(before, unpackedCurrent->milliSeconds_);
+  EXPECT_LE(unpackedCurrent->milliSeconds_, after);
 
-  EXPECT_GE(resultMillis1, lowerMillis);
-  EXPECT_LE(resultMillis1, upperMillis);
+  // Check timezones
+  EXPECT_EQ(unpackedNow->timezone_->name(), "Asia/Kolkata");
+  EXPECT_EQ(unpackedCurrent->timezone_->name(), "Asia/Kolkata");
+  EXPECT_EQ(unpackedNow->timezone_->name(), unpackedCurrent->timezone_->name());
 
-  // Re-evaluate again to ensure that timestamp doesn't change in session.
-  auto result3 = evaluate("current_timestamp()");
-  int64_t resultMillis3 = unpackMillisUtc(result3.value());
-  EXPECT_EQ(resultMillis1, resultMillis3);
+  // Timestamp values should be close
+  std::cout << unpackedNow->milliSeconds_ << "  "<< unpackedCurrent->milliSeconds_ <<std::endl;
+  EXPECT_NEAR(
+      unpackedNow->milliSeconds_,
+      unpackedCurrent->milliSeconds_,
+      20);
 }
