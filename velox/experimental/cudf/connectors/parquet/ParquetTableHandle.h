@@ -19,6 +19,7 @@
 #include "velox/connectors/Connector.h"
 #include "velox/core/Expressions.h"
 #include "velox/expression/Expr.h"
+#include "velox/type/Filter.h"
 #include "velox/type/Type.h"
 
 #include <cudf/types.hpp>
@@ -79,6 +80,18 @@ class ParquetTableHandle : public ConnectorTableHandle {
       const core::TypedExprPtr& remainingFilter = nullptr,
       const RowTypePtr& dataColumns = nullptr);
 
+  ParquetTableHandle(
+      std::string connectorId,
+      const std::string& tableName,
+      bool filterPushdownEnabled,
+      common::SubfieldFilters subfieldFilters,
+      const core::TypedExprPtr& remainingFilter,
+      const RowTypePtr& dataColumns = nullptr
+      // TODO (dm): What's this?
+      // const std::unordered_map<std::string, std::string>& tableParameters =
+      // {}
+  );
+
   const std::string& name() const override {
     return tableName_;
   }
@@ -89,6 +102,10 @@ class ParquetTableHandle : public ConnectorTableHandle {
 
   const core::TypedExprPtr& subfieldFilterExpr() const {
     return subfieldFilterExpr_;
+  }
+
+  const common::SubfieldFilters& subfieldFilters() const {
+    return subfieldFilters_;
   }
 
   const core::TypedExprPtr& remainingFilter() const {
@@ -111,6 +128,7 @@ class ParquetTableHandle : public ConnectorTableHandle {
   const bool filterPushdownEnabled_;
   // This expression is used for predicate pushdown.
   const core::TypedExprPtr subfieldFilterExpr_;
+  const common::SubfieldFilters subfieldFilters_;
   // This expression is used for post-scan filtering.
   const core::TypedExprPtr remainingFilter_;
   const RowTypePtr dataColumns_;

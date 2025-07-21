@@ -46,6 +46,20 @@ ParquetTableHandle::ParquetTableHandle(
       remainingFilter_(remainingFilter),
       dataColumns_(dataColumns) {}
 
+ParquetTableHandle::ParquetTableHandle(
+    std::string connectorId,
+    const std::string& tableName,
+    bool filterPushdownEnabled,
+    common::SubfieldFilters subfieldFilters,
+    const core::TypedExprPtr& remainingFilter,
+    const RowTypePtr& dataColumns)
+    : ConnectorTableHandle(std::move(connectorId)),
+      tableName_(tableName),
+      filterPushdownEnabled_(filterPushdownEnabled),
+      subfieldFilters_(std::move(subfieldFilters)),
+      remainingFilter_(remainingFilter),
+      dataColumns_(dataColumns) {}
+
 std::string ParquetTableHandle::toString() const {
   std::stringstream out;
   out << "table: " << tableName_;

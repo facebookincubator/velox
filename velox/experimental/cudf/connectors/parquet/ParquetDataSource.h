@@ -45,6 +45,10 @@ class ParquetDataSource : public DataSource, public NvtxHelper {
       const ConnectorQueryCtx* connectorQueryCtx,
       const std::shared_ptr<ParquetConfig>& ParquetConfig);
 
+  ~ParquetDataSource() {
+    std::cout << "ParquetDataSource destructor" << std::endl;
+  };
+
   void addSplit(std::shared_ptr<ConnectorSplit> split) override;
 
   void addDynamicFilter(
@@ -129,8 +133,10 @@ class ParquetDataSource : public DataSource, public NvtxHelper {
 
   // Expression evaluator for subfield filter.
   std::vector<std::unique_ptr<cudf::scalar>> subfieldScalars_;
+  std::vector<const cudf::ast::expression*> subfieldFilterExprs_;
   cudf::ast::tree subfieldTree_;
   std::unique_ptr<exec::ExprSet> subfieldFilterExprSet_;
+  common::SubfieldFilters subfieldFilters_;
 
   dwio::common::RuntimeStatistics runtimeStats_;
 };

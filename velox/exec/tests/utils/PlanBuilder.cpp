@@ -32,7 +32,7 @@
 #include "velox/parse/Expressions.h"
 #include "velox/parse/TypeResolver.h"
 
-#ifdef VELOX_ENABLE_CUDF
+#ifdef VELOX_ENABLE_CUDF2
 #include "velox/experimental/cudf/connectors/parquet/ParquetTableHandle.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/tests/utils/ParquetConnectorTestBase.h"
@@ -226,7 +226,7 @@ core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
 
   const RowTypePtr& parseType = dataColumns_ ? dataColumns_ : outputType_;
 
-#ifdef VELOX_ENABLE_CUDF
+#ifdef VELOX_ENABLE_CUDF2
   std::vector<core::TypedExprPtr> subfieldExprs;
 #endif
   core::TypedExprPtr filterNodeExpr;
@@ -257,7 +257,7 @@ core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
             "Duplicate subfield: {}",
             subfield.toString());
 
-#ifdef VELOX_ENABLE_CUDF
+#ifdef VELOX_ENABLE_CUDF2
         subfieldExprs.push_back(std::move(filterExpr));
 #endif
         filters[std::move(subfield)] = std::move(subfieldFilter);
@@ -269,7 +269,7 @@ core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
     VELOX_CHECK(filters.empty());
   }
 
-#ifdef VELOX_ENABLE_CUDF
+#ifdef VELOX_ENABLE_CUDF2
   // Create AND tree of subfieldExprs as combined_subfield_filter.
   // replace every 2 subfieldExpr with a single AND node, until we have a single
   // node.
@@ -307,7 +307,7 @@ core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
 
   if (!tableHandle_) {
     tableHandle_ = [&]() -> std::shared_ptr<connector::ConnectorTableHandle> {
-#ifdef VELOX_ENABLE_CUDF
+#ifdef VELOX_ENABLE_CUDF2
       if (facebook::velox::cudf_velox::cudfIsRegistered() &&
           facebook::velox::connector::getAllConnectors().count(
               cudf_velox::exec::test::kParquetConnectorId) > 0 &&

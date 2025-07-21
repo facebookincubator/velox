@@ -104,13 +104,27 @@ class CudfTpchBenchmark : public TpchBenchmark {
           // Convert to parquet handle
           // Get remaining filters
           auto remainingFilter = hiveHandle->remainingFilter();
-          // Convert to parquet handle
+
+          // subfieldFilters() returns a const reference. We need a modifiable
+          // copy that we can move into the ParquetTableHandle without invoking
+          // a copy constructor on the Subfield keys (which are not
+          // copy-constructible). Perform a deep copy using Subfield::clone().
+
+          const auto& subfieldFilters = hiveHandle->subfieldFilters();
+
+          common::SubfieldFilters parquetSubfieldFilters;
+          parquetSubfieldFilters.reserve(subfieldFilters.size());
+          for (const auto& [k, v] : subfieldFilters) {
+            parquetSubfieldFilters.emplace(k.clone(), v);
+          }
+
+          // Create ParquetTableHandle using the movable copy of filters.
           auto parquetHandle = std::make_shared<
               cudf_velox::connector::parquet::ParquetTableHandle>(
               cudf_velox::exec::test::kParquetConnectorId,
               hiveHandle->tableName(),
-              false,
-              nullptr,
+              true,
+              std::move(parquetSubfieldFilters),
               remainingFilter,
               hiveHandle->dataColumns());
           // Create new TableScanNode with parquet handle
