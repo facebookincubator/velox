@@ -181,16 +181,12 @@ target_link_libraries(
   velox_vector_fuzzer)
 
 # Table Evolution Fuzzer
-add_library(velox_table_evolution_fuzzer_lib TableEvolutionFuzzer.cpp)
+add_executable(velox_table_evolution_fuzzer TableEvolutionFuzzer.cpp
+                                            TableEvolutionFuzzerRunner.cpp)
 
 target_link_libraries(
-  velox_table_evolution_fuzzer_lib velox_exec_test_lib velox_temp_path
+  velox_table_evolution_fuzzer velox_exec_test_lib velox_temp_path
   velox_vector_fuzzer)
-
-add_executable(velox_table_evolution_fuzzer TableEvolutionFuzzerRunner.cpp)
-
-target_link_libraries(
-  velox_table_evolution_fuzzer velox_table_evolution_fuzzer_lib)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
