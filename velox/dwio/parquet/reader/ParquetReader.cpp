@@ -219,9 +219,19 @@ ReaderBase::ReaderBase(
 }
 
 void ReaderBase::loadFileMetaData() {
+  auto estimatedSize = footerEstimatedSize_;
+  if (shouldUsePageIndexFiltering_) {
+    auto tempEstimatedSize = 2048 +
+        fileLength_ / (128.0 * 1024 * 1024) * 300 *
+            options_.scanSpec()->stableChildren().size();
+    if (tempEstimatedSize > estimatedSize) {
+      estimatedSize = tempEstimatedSize;
+    }
+    estimatedSize += fileLength_ / (128.0 * 1024 * 1024) * 6144;
+  }
   bool preloadFile =
-      fileLength_ <= std::max(filePreloadThreshold_, footerEstimatedSize_);
-  uint64_t readSize = preloadFile ? fileLength_ : footerEstimatedSize_;
+      fileLength_ <= std::max(filePreloadThreshold_, estimatedSize);
+  uint64_t readSize = preloadFile ? fileLength_ : estimatedSize;
 
   std::unique_ptr<dwio::common::SeekableInputStream> stream;
   if (preloadFile) {
@@ -273,10 +283,10 @@ void ReaderBase::loadFileMetaData() {
     if (getPageIndexesRangeIfContiguous(
             pageIndexStartOffset_, indexPagesTotalLength)) {
       pageIndexBuffer_.resize(indexPagesTotalLength);
-      if (preloadFile) {
+      if (readSize >= fileLength_ - pageIndexStartOffset_) {
         std::memcpy(
             pageIndexBuffer_.data(),
-            copy.data() + pageIndexStartOffset_,
+            copy.data() + readSize - (fileLength_ - pageIndexStartOffset_),
             indexPagesTotalLength);
       } else {
         stream = input_->read(
