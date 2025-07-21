@@ -1,0 +1,293 @@
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+id: avoid-directory-wide-functions
+valid:
+  # Good practices that should NOT trigger the rule
+
+  # Target-specific compile definitions
+  - |
+    add_library(mylib SHARED src/mylib.cpp)
+    target_compile_definitions(mylib PRIVATE FOO BAR=value)
+  - |
+    add_executable(myapp src/main.cpp)
+    target_compile_definitions(myapp PRIVATE DEBUG_MODE)
+  - |
+    # Target-specific definitions with scopes
+    target_compile_definitions(lib1 PRIVATE LIB1_INTERNAL)
+    target_compile_definitions(lib2 PUBLIC LIB2_API)
+    target_compile_definitions(lib3 INTERFACE LIB3_HEADER_ONLY)
+  - |
+    # Using generator expressions
+    target_compile_definitions(mylib PRIVATE
+        $<$<CONFIG:Debug>:DEBUG_BUILD>
+        $<$<CONFIG:Release>:RELEASE_BUILD>
+    )
+
+  # Target-specific compile options
+  - |
+    add_library(mylib SHARED src/mylib.cpp)
+    target_compile_options(mylib PRIVATE -Wall -Wextra)
+  - |
+    add_executable(myapp src/main.cpp)
+    target_compile_options(myapp PRIVATE -O2)
+  - |
+    # Target-specific options with different scopes
+    target_compile_options(lib1 PRIVATE -fPIC)
+    target_compile_options(lib2 PUBLIC -std=c++17)
+    target_compile_options(lib3 INTERFACE -pthread)
+  - |
+    # Using generator expressions for compiler-specific options
+    target_compile_options(mylib PRIVATE
+        $<$<COMPILE_LANGUAGE:CXX>:-std=c++17>
+        $<$<CXX_COMPILER_ID:GNU>:-Wall>
+        $<$<CXX_COMPILER_ID:MSVC>:/W4>
+    )
+  - |
+    # Conditional options
+    if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+        target_compile_options(mylib PRIVATE -g -O0)
+    endif()
+
+  # Target-specific link options
+  - |
+    add_library(mylib SHARED src/mylib.cpp)
+    target_link_options(mylib PRIVATE -Wl,--as-needed)
+  - |
+    add_executable(myapp src/main.cpp)
+    target_link_options(myapp PRIVATE -static)
+  - |
+    # Target-specific options with different scopes
+    target_link_options(lib1 PRIVATE -fPIC)
+    target_link_options(lib2 PUBLIC -pthread)
+    target_link_options(lib3 INTERFACE -Wl,--export-dynamic)
+  - |
+    # Using generator expressions
+    target_link_options(mylib PRIVATE
+        $<$<CONFIG:Debug>:-Wl,--debug>
+        $<$<CONFIG:Release>:-Wl,--strip-all>
+    )
+  - |
+    # Platform-specific options
+    if(UNIX)
+        target_link_options(mylib PRIVATE -Wl,--as-needed)
+    elseif(WIN32)
+        target_link_options(mylib PRIVATE /SUBSYSTEM:CONSOLE)
+    endif()
+  - |
+    # Multiple options
+    target_link_options(mylib PRIVATE
+        -Wl,--as-needed
+        -Wl,--no-undefined
+        -pthread
+    )
+
+  # Target-specific include directories
+  - |
+    add_library(mylib SHARED src/mylib.cpp)
+    target_include_directories(mylib PRIVATE include/)
+  - |
+    add_executable(myapp src/main.cpp)
+    target_include_directories(myapp PRIVATE include/ external/header-only/)
+  - |
+    # Target-specific includes with different scopes
+    target_include_directories(lib1 PRIVATE src/internal/)
+    target_include_directories(lib2 PUBLIC include/public/)
+    target_include_directories(lib3 INTERFACE include/interface/)
+  - |
+    # Using generator expressions
+    target_include_directories(mylib PRIVATE
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<INSTALL_INTERFACE:include>
+    )
+  - |
+    # System includes
+    target_include_directories(mylib SYSTEM PRIVATE /usr/local/include)
+  - |
+    # Multiple directories
+    target_include_directories(mylib PRIVATE
+        include/
+        src/internal/
+        ${CMAKE_BINARY_DIR}/generated/
+    )
+
+  # Comments should not trigger
+  - |
+    # This is just a comment about add_compile_definitions
+    target_compile_definitions(mylib PRIVATE SOME_DEF)
+  - |
+    # This is just a comment about add_compile_options
+    target_compile_options(mylib PRIVATE -Wpedantic)
+  - |
+    # This is just a comment about add_definitions
+    target_compile_definitions(mylib PRIVATE COMPILE_DEF)
+  - |
+    # This is just a comment about add_link_options
+    target_link_options(mylib PRIVATE -Wl,--strip-all)
+  - |
+    # This is just a comment about include_directories
+    target_include_directories(mylib PRIVATE include/)
+
+invalid:
+  # These should trigger the rule - directory-wide usage
+
+  # add_compile_definitions violations
+  - add_compile_definitions(FOO)
+  - |
+    add_compile_definitions(FOO BAR=value)
+  - |
+    add_compile_definitions(
+        DEBUG_MODE
+        VERSION=1.2.3
+    )
+  - |
+    cmake_minimum_required(VERSION 3.12)
+    project(TestProject)
+    add_compile_definitions(PROJECT_GLOBAL)
+  - |
+    # Multiple definitions
+    add_compile_definitions(DEBUG TESTING VERSION=2.0)
+  - |
+    # Using variables
+    set(MY_DEFS DEBUG PROFILE)
+    add_compile_definitions(${MY_DEFS})
+  - |
+    # Mixed with target definitions - still should trigger
+    add_library(mylib src/lib.cpp)
+    add_compile_definitions(GLOBAL_DEFINE)
+    target_compile_definitions(mylib PRIVATE LOCAL_DEFINE)
+
+  # add_compile_options violations
+  - add_compile_options(-Wall)
+  - |
+    add_compile_options(-Wall -Wextra -Wpedantic)
+  - |
+    add_compile_options(
+        -Wall
+        -Wextra
+        -O2
+    )
+  - |
+    cmake_minimum_required(VERSION 3.10)
+    project(TestProject)
+    add_compile_options(-std=c++17)
+  - |
+    # MSVC style options
+    add_compile_options(/W4 /O2)
+  - |
+    # Using variables
+    set(WARNING_FLAGS -Wall -Wextra)
+    add_compile_options(${WARNING_FLAGS})
+  - |
+    # Conditional directory-wide options - still should trigger
+    if(MSVC)
+        add_compile_options(/W4)
+    else()
+        add_compile_options(-Wall -Wextra)
+    endif()
+  - |
+    # Mixed usage - still should trigger
+    add_library(mylib src/lib.cpp)
+    add_compile_options(-fPIC)
+    target_compile_options(mylib PRIVATE -Wall)
+
+  # add_definitions violations
+  - add_definitions(-DFOO)
+  - |
+    add_definitions(-DFOO -DBAR)
+  - |
+    add_definitions(
+        -DFOO
+        -DBAR=value
+    )
+  - |
+    cmake_minimum_required(VERSION 3.10)
+    project(TestProject)
+    add_definitions(-DPROJECT_BUILD)
+  - |
+    # Multiple definitions
+    add_definitions(-DDEBUG -DVERSION=1.0)
+  - |
+    # Using variables
+    set(MY_DEFS -DFOO -DBAR)
+    add_definitions(${MY_DEFS})
+  - |
+    # Mixed usage - this should still trigger
+    add_library(mylib src/lib.cpp)
+    add_definitions(-DGLOBAL_DEF)
+    target_compile_definitions(mylib PRIVATE LOCAL_DEF)
+
+  # add_link_options violations
+  - add_link_options(-pthread)
+  - |
+    add_link_options(-Wl,--as-needed -Wl,--no-undefined)
+  - |
+    add_link_options(
+        -pthread
+        -Wl,--as-needed
+        -static-libgcc
+    )
+  - |
+    cmake_minimum_required(VERSION 3.13)
+    project(TestProject)
+    add_link_options(-fPIC)
+  - |
+    # Windows style options
+    add_link_options(/SUBSYSTEM:CONSOLE /DEBUG)
+  - |
+    # Using variables
+    set(LINK_FLAGS -pthread -Wl,--as-needed)
+    add_link_options(${LINK_FLAGS})
+  - |
+    # Conditional directory-wide options - still should trigger
+    if(UNIX)
+        add_link_options(-pthread)
+    elseif(WIN32)
+        add_link_options(/DEBUG)
+    endif()
+  - |
+    # Mixed usage - still should trigger
+    add_executable(myapp src/main.cpp)
+    add_link_options(-static)
+    target_link_options(myapp PRIVATE -Wl,--strip-all)
+
+  # include_directories violations
+  - include_directories(include/)
+  - |
+    include_directories(include/ src/)
+  - |
+    include_directories(
+        include/
+        external/
+        ${CMAKE_SOURCE_DIR}/third_party/
+    )
+  - |
+    cmake_minimum_required(VERSION 3.10)
+    project(TestProject)
+    include_directories(include/)
+  - |
+    # SYSTEM includes
+    include_directories(SYSTEM /usr/local/include)
+  - |
+    # BEFORE/AFTER options
+    include_directories(BEFORE include/)
+    include_directories(AFTER external/)
+  - |
+    # Using variables
+    set(INC_DIRS include/ src/)
+    include_directories(${INC_DIRS})
+  - |
+    # Mixed usage - still should trigger
+    add_library(mylib src/lib.cpp)
+    include_directories(include/)
+    target_include_directories(mylib PRIVATE src/)

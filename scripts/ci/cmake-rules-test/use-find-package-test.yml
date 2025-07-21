@@ -1,0 +1,68 @@
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+id: use-find-package
+valid:
+  # Good practices that should NOT trigger the rule
+  - |
+    find_package(Boost 1.70 REQUIRED COMPONENTS system filesystem)
+    target_link_libraries(myapp PRIVATE Boost::system Boost::filesystem)
+  - |
+    find_package(OpenSSL REQUIRED)
+    target_link_libraries(myapp PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+  - |
+    # Using find_package with optional components
+    find_package(Qt5 COMPONENTS Core Widgets REQUIRED)
+    target_link_libraries(myapp PRIVATE Qt5::Core Qt5::Widgets)
+  - |
+    # Comments about find_path or find_library should not trigger
+    # find_path and find_library are deprecated approaches
+    find_package(SomeLib REQUIRED)
+  - |
+    # Modern CMake with imported targets
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(LIBXML2 REQUIRED libxml-2.0)
+    target_link_libraries(myapp PRIVATE ${LIBXML2_LIBRARIES})
+invalid:
+  # These should trigger the rule - manual library finding
+  - |
+    find_path(BOOST_INCLUDE_DIR boost/version.hpp)
+  - |
+    find_library(BOOST_SYSTEM_LIB boost_system)
+  - |
+    find_path(BOOST_INCLUDE_DIR boost/version.hpp)
+    find_library(BOOST_SYSTEM_LIB boost_system)
+    find_library(BOOST_FILESYSTEM_LIB boost_filesystem)
+
+    target_include_directories(myapp PRIVATE ${BOOST_INCLUDE_DIR})
+    target_link_libraries(myapp PRIVATE ${BOOST_SYSTEM_LIB} ${BOOST_FILESYSTEM_LIB})
+  - |
+    # Manual OpenSSL finding
+    find_path(OPENSSL_INCLUDE_DIR openssl/ssl.h)
+    find_library(OPENSSL_SSL_LIB ssl)
+    find_library(OPENSSL_CRYPTO_LIB crypto)
+  - |
+    find_library(MATH_LIB m)
+    target_link_libraries(calculator PRIVATE ${MATH_LIB})
+  - |
+    # Complex manual finding with multiple paths
+    find_path(FOO_INCLUDE_DIR
+        foo.h
+        PATHS /usr/include /usr/local/include
+        PATH_SUFFIXES foo
+    )
+    find_library(FOO_LIB
+        foo
+        PATHS /usr/lib /usr/local/lib
+        PATH_SUFFIXES foo
+    )

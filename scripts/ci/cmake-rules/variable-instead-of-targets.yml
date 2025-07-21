@@ -1,0 +1,78 @@
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# yaml-language-server: $schema=https://raw.githubusercontent.com/ast-grep/ast-grep/main/schemas/rule.json
+# yamllint disable rule:quoted-strings
+id: variable-instead-of-targets
+message: Don't use variables in place of targets. Use target names directly.
+severity: warning
+language: cmake
+utils:
+  is-cmake-builtin-var: &is-cmake-builtin-var
+    has:
+      regex: '\$\{CMAKE_[^}]*\}'
+  is-project-builtin-var: &is-project-builtin-var
+    has:
+      regex: '\$\{PROJECT_[^}]*\}'
+  is-library-variable-suffix: &is-library-variable-suffix
+    has:
+      regex: '\$\{[^}]*_LIBRAR(Y|IES)\}'
+  is-generator-expression: &is-generator-expression
+    has:
+      regex: '\$<[^>]*>'
+  contains-path-separators: &contains-path-separators
+    has:
+      regex: '[/\\]'
+rule:
+  any:
+    # target_link_libraries with variables
+    - all:
+        - pattern: target_link_libraries($$$)
+        - has:
+            regex: '\$\{[^}]+\}'
+        # Exclude path-like expressions (containing / or \ anywhere in the argument)
+        - not: *contains-path-separators
+        # Exclude CMAKE built-in variables
+        - not: *is-cmake-builtin-var
+        # Exclude PROJECT built-in variables
+        - not: *is-project-builtin-var
+        # Exclude common find_library variable suffixes (but be conservative)
+        - not: *is-library-variable-suffix
+        # Exclude generator expressions
+        - not: *is-generator-expression
+
+    # add_dependencies with variables in dependency arguments
+    - all:
+        - pattern: add_dependencies($$$)
+        - has:
+            regex: '\$\{[^}]+\}'
+        # Apply same exclusions
+        - not: *contains-path-separators
+        - not: *is-cmake-builtin-var
+        - not: *is-project-builtin-var
+        - not: *is-library-variable-suffix
+        - not: *is-generator-expression
+
+    # set_target_properties with variables - specifically target positions before PROPERTIES
+    - all:
+        - pattern: set_target_properties($$$)
+        # Use precise regex to identify variables before PROPERTIES keyword
+        # This regex matches variables that appear before the word PROPERTIES
+        - has:
+            regex: '\$\{[^}]+\}.*PROPERTIES'
+        # Apply same exclusions
+        - not: *contains-path-separators
+        - not: *is-cmake-builtin-var
+        - not: *is-project-builtin-var
+        - not: *is-library-variable-suffix
+        - not: *is-generator-expression

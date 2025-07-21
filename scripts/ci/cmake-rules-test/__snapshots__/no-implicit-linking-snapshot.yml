@@ -1,0 +1,81 @@
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+id: no-implicit-linking
+snapshots:
+  ? |
+    add_library(mylib STATIC src.cpp)
+    target_link_libraries(mylib dependency_lib)
+  : fixed: |
+      add_library(mylib STATIC src.cpp)
+      target_link_libraries(mylib PUBLIC dependency_lib)
+    labels:
+      - source: target_link_libraries(mylib dependency_lib)
+        style: primary
+        start: 34
+        end: 77
+  ? |
+    target_link_libraries(myapp
+        math_utils
+        string_utils
+    )
+  : fixed: |
+      target_link_libraries(myapp PUBLIC math_utils
+      string_utils)
+    labels:
+      - source: |-
+          target_link_libraries(myapp
+              math_utils
+              string_utils
+          )
+        style: primary
+        start: 0
+        end: 61
+  ? |
+    target_link_libraries(myapp somelib)
+  : fixed: |
+      target_link_libraries(myapp PUBLIC somelib)
+    labels:
+      - source: target_link_libraries(myapp somelib)
+        style: primary
+        start: 0
+        end: 36
+  ? |
+    target_link_libraries(myexe
+        lib1
+        lib2
+        lib3
+    )
+  : fixed: |
+      target_link_libraries(myexe PUBLIC lib1
+      lib2
+      lib3)
+    labels:
+      - source: |-
+          target_link_libraries(myexe
+              lib1
+              lib2
+              lib3
+          )
+        style: primary
+        start: 0
+        end: 56
+  ? |
+    target_link_libraries(mylibrary external_lib)
+  : fixed: |
+      target_link_libraries(mylibrary PUBLIC external_lib)
+    labels:
+      - source: target_link_libraries(mylibrary external_lib)
+        style: primary
+        start: 0
+        end: 45

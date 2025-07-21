@@ -1,0 +1,97 @@
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# yaml-language-server: $schema=https://raw.githubusercontent.com/ast-grep/ast-grep/main/schemas/rule.json
+# yamllint disable rule:quoted-strings
+id: no-hardcoded-absolute-paths
+message: Hard-coded absolute paths are not portable between operating systems or machines. Use relative paths or CMake variables like CMAKE_SOURCE_DIR, CMAKE_BINARY_DIR, CMAKE_INSTALL_PREFIX instead.
+severity: error
+language: cmake
+utils:
+  unix-absolute-path: &unix-absolute-path
+    has:
+      regex: "(^|\\s|\\(|\")\\/[^\\s\"]*"
+  windows-absolute-path: &windows-absolute-path
+    has:
+      regex: "[A-Za-z]:[/\\\\]"
+  variable-in-path-context: &variable-in-path-context
+    has:
+      regex: "\\$\\{[^}]+\\}/"
+rule:
+  any:
+    - pattern: velox_link_libraries($$$)
+      any:
+        - all:
+            - *unix-absolute-path
+            - not: *variable-in-path-context
+        - *windows-absolute-path
+    - pattern: velox_include_directories($$$)
+      any:
+        - all:
+            - *unix-absolute-path
+            - not: *variable-in-path-context
+        - *windows-absolute-path
+    - pattern: target_link_libraries($$$)
+      any:
+        - all:
+            - *unix-absolute-path
+            - not: *variable-in-path-context
+        - *windows-absolute-path
+    - pattern: target_include_directories($$$)
+      any:
+        - all:
+            - *unix-absolute-path
+            - not: *variable-in-path-context
+        - *windows-absolute-path
+    - pattern: find_library($$$)
+      any:
+        - all:
+            - *unix-absolute-path
+            - not: *variable-in-path-context
+        - *windows-absolute-path
+    - pattern: find_path($$$)
+      any:
+        - all:
+            - *unix-absolute-path
+            - not: *variable-in-path-context
+        - *windows-absolute-path
+    - pattern: install($$$)
+      any:
+        - all:
+            - *unix-absolute-path
+            - not: *variable-in-path-context
+        - *windows-absolute-path
+    - pattern: file($$$)
+      any:
+        - all:
+            - *unix-absolute-path
+            - not: *variable-in-path-context
+        - *windows-absolute-path
+    - pattern: add_custom_command($$$)
+      any:
+        - all:
+            - *unix-absolute-path
+            - not: *variable-in-path-context
+        - *windows-absolute-path
+    - pattern: execute_process($$$)
+      any:
+        - all:
+            - *unix-absolute-path
+            - not: *variable-in-path-context
+        - *windows-absolute-path
+    - pattern: set_target_properties($$$)
+      any:
+        - all:
+            - *unix-absolute-path
+            - not: *variable-in-path-context
+        - *windows-absolute-path

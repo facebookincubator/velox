@@ -35,6 +35,7 @@ FetchContent_MakeAvailable(fastfloat)
 # caches the FASTFLOAT_INCLUDE_DIR variable so when folly re-runs find_path it
 # will already have located the bundled header.
 FetchContent_GetProperties(fastfloat SOURCE_DIR FASTFLOAT_SOURCE_DIR)
+# ast-grep-ignore
 find_path(
   FASTFLOAT_INCLUDE_DIR
   NAMES fast_float/fast_float.h

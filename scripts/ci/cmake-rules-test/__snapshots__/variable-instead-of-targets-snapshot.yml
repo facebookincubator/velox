@@ -1,0 +1,177 @@
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+id: variable-instead-of-targets
+snapshots:
+  ? |
+    find_library(FOO_LIB foo PATHS /usr/local/lib)
+    target_link_libraries(myapp PRIVATE ${FOO_LIB})
+  : labels:
+      - source: target_link_libraries(myapp PRIVATE ${FOO_LIB})
+        style: primary
+        start: 47
+        end: 94
+      - source: myapp PRIVATE ${FOO_LIB}
+        style: secondary
+        start: 69
+        end: 93
+  ? |
+    set(ALL_LIBS math_utils string_utils)
+    target_link_libraries(myapp INTERFACE ${ALL_LIBS})
+  : labels:
+      - source: target_link_libraries(myapp INTERFACE ${ALL_LIBS})
+        style: primary
+        start: 38
+        end: 88
+      - source: myapp INTERFACE ${ALL_LIBS}
+        style: secondary
+        start: 60
+        end: 87
+  ? |
+    set(ALL_TARGETS target1 target2 target3)
+    set_target_properties(${ALL_TARGETS} PROPERTIES POSITION_INDEPENDENT_CODE ON)
+  : labels:
+      - source: set_target_properties(${ALL_TARGETS} PROPERTIES POSITION_INDEPENDENT_CODE ON)
+        style: primary
+        start: 41
+        end: 118
+      - source: ${ALL_TARGETS} PROPERTIES POSITION_INDEPENDENT_CODE ON
+        style: secondary
+        start: 63
+        end: 117
+  ? |
+    set(BUILD_DEP build_target)
+    set(TEST_DEP test_target)
+    add_dependencies(myapp ${BUILD_DEP} ${TEST_DEP})
+  : labels:
+      - source: add_dependencies(myapp ${BUILD_DEP} ${TEST_DEP})
+        style: primary
+        start: 54
+        end: 102
+      - source: myapp ${BUILD_DEP} ${TEST_DEP}
+        style: secondary
+        start: 71
+        end: 101
+  ? |
+    set(DEP_TARGET my_dependency)
+    add_dependencies(myapp ${DEP_TARGET})
+  : labels:
+      - source: add_dependencies(myapp ${DEP_TARGET})
+        style: primary
+        start: 30
+        end: 67
+      - source: myapp ${DEP_TARGET}
+        style: secondary
+        start: 47
+        end: 66
+  ? |
+    set(LIB1 library1)
+    set(LIB2 library2)
+    set_target_properties(${LIB1} ${LIB2} PROPERTIES CXX_STANDARD 17)
+  : labels:
+      - source: set_target_properties(${LIB1} ${LIB2} PROPERTIES CXX_STANDARD 17)
+        style: primary
+        start: 38
+        end: 103
+      - source: ${LIB1} ${LIB2} PROPERTIES CXX_STANDARD 17
+        style: secondary
+        start: 60
+        end: 102
+  ? |
+    set(MATH_LIB math_utils)
+    set(STRING_LIB string_utils)
+    set(ALL_LIBS ${MATH_LIB} ${STRING_LIB})
+
+    add_executable(myapp src/main.cpp)
+    target_link_libraries(myapp PRIVATE ${ALL_LIBS})
+  : labels:
+      - source: target_link_libraries(myapp PRIVATE ${ALL_LIBS})
+        style: primary
+        start: 130
+        end: 178
+      - source: myapp PRIVATE ${ALL_LIBS}
+        style: secondary
+        start: 152
+        end: 177
+  ? |
+    set(MATH_LIB math_utils)
+    target_link_libraries(myapp PRIVATE ${MATH_LIB})
+  : labels:
+      - source: target_link_libraries(myapp PRIVATE ${MATH_LIB})
+        style: primary
+        start: 25
+        end: 73
+      - source: myapp PRIVATE ${MATH_LIB}
+        style: secondary
+        start: 47
+        end: 72
+  ? |
+    set(MULTIPLE_DEPS dep1 dep2 dep3)
+    add_dependencies(myapp ${MULTIPLE_DEPS})
+  : labels:
+      - source: add_dependencies(myapp ${MULTIPLE_DEPS})
+        style: primary
+        start: 34
+        end: 74
+      - source: myapp ${MULTIPLE_DEPS}
+        style: secondary
+        start: 51
+        end: 73
+  ? |
+    set(MYLIB some_target)
+    target_link_libraries(myapp ${MYLIB})
+  : labels:
+      - source: target_link_libraries(myapp ${MYLIB})
+        style: primary
+        start: 23
+        end: 60
+      - source: myapp ${MYLIB}
+        style: secondary
+        start: 45
+        end: 59
+  ? |
+    set(STRING_LIB string_utils)
+    target_link_libraries(myapp PUBLIC ${STRING_LIB})
+  : labels:
+      - source: target_link_libraries(myapp PUBLIC ${STRING_LIB})
+        style: primary
+        start: 29
+        end: 78
+      - source: myapp PUBLIC ${STRING_LIB}
+        style: secondary
+        start: 51
+        end: 77
+  ? |
+    set(TARGET_NAME my_target)
+    set_target_properties(${TARGET_NAME} PROPERTIES OUTPUT_NAME "renamed")
+  : labels:
+      - source: set_target_properties(${TARGET_NAME} PROPERTIES OUTPUT_NAME "renamed")
+        style: primary
+        start: 27
+        end: 97
+      - source: ${TARGET_NAME} PROPERTIES OUTPUT_NAME "renamed"
+        style: secondary
+        start: 49
+        end: 96
+  ? |
+    set(TARGET_NAME my_target)
+    target_link_libraries(myapp PRIVATE ${TARGET_NAME})
+  : labels:
+      - source: target_link_libraries(myapp PRIVATE ${TARGET_NAME})
+        style: primary
+        start: 27
+        end: 78
+      - source: myapp PRIVATE ${TARGET_NAME}
+        style: secondary
+        start: 49
+        end: 77
