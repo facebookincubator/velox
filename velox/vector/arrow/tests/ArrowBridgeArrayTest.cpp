@@ -113,7 +113,7 @@ class ArrowBridgeArrayExportTest : public testing::Test {
       const ArrowArray& arrowArray) {
     const bool isString =
         std::is_same_v<T, StringView> or std::is_same_v<T, std::string>;
-    const bool isNullType = std::is_same_v<T, UnknownValue>;
+    const bool isUnknownType = std::is_same_v<T, UnknownValue>;
 
     EXPECT_EQ(inputData.size(), arrowArray.length);
     EXPECT_EQ(0, arrowArray.offset);
@@ -128,7 +128,7 @@ class ArrowBridgeArrayExportTest : public testing::Test {
     // Validate array contents.
     if constexpr (isString) {
       validateStringArray(inputData, arrowArray);
-    } else if constexpr (isNullType) {
+    } else if constexpr (isUnknownType) {
       validateNullArray(arrowArray);
     } else {
       validateNumericalArray(inputData, arrowArray);
@@ -238,7 +238,7 @@ class ArrowBridgeArrayExportTest : public testing::Test {
       const ArrowArray& arrowArray) {
     const bool isString =
         std::is_same_v<T, StringView> or std::is_same_v<T, std::string>;
-    const bool isNullType = std::is_same_v<T, UnknownValue>;
+    const bool isUnknownType = std::is_same_v<T, UnknownValue>;
 
     EXPECT_EQ(inputData.size(), arrowArray.length);
     EXPECT_EQ(0, arrowArray.offset);
@@ -274,7 +274,7 @@ class ArrowBridgeArrayExportTest : public testing::Test {
 
     if constexpr (isString) {
       validateStringArray(flattenedData, *childArray);
-    } else if constexpr (isNullType) {
+    } else if constexpr (isUnknownType) {
       validateNullArray(*childArray);
     } else {
       validateNumericalArray(flattenedData, *childArray);
