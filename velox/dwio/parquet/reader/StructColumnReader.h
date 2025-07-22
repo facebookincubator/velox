@@ -52,7 +52,7 @@ class StructColumnReader : public dwio::common::SelectiveStructColumnReader {
   std::shared_ptr<dwio::common::BufferedInput> loadRowGroup(
       uint32_t index,
       const std::shared_ptr<dwio::common::BufferedInput>& input,
-      const dwio::common::RowRanges& rowRanges);
+      dwio::common::RowRanges& rowRanges);
 
   // No-op in Parquet. All readers switch row groups at the same time, there is
   // no on-demand skipping to a new row group.
@@ -97,7 +97,7 @@ class StructColumnReader : public dwio::common::SelectiveStructColumnReader {
   void enqueueRowGroup(
       uint32_t index,
       dwio::common::BufferedInput& input,
-      const dwio::common::RowRanges& rowRanges);
+      dwio::common::RowRanges& rowRanges);
 
   bool isRowGroupBuffered(uint32_t index, dwio::common::BufferedInput& input);
 

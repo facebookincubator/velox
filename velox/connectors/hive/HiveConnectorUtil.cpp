@@ -588,7 +588,8 @@ void configureReaderOptions(
       connectorQueryCtx->adjustTimestampToTimezone());
   readerOptions.setSelectiveNimbleReaderEnabled(
       connectorQueryCtx->selectiveNimbleReaderEnabled());
-
+  readerOptions.setParquetFilterColumnIndexEnabled(
+      hiveConfig->parquetFilterColumnIndexEnabled(sessionProperties));
   if (readerOptions.fileFormat() != dwio::common::FileFormat::UNKNOWN) {
     VELOX_CHECK(
         readerOptions.fileFormat() == hiveSplit->fileFormat,

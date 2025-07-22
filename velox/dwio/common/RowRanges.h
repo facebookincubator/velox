@@ -298,7 +298,25 @@ class RowRanges {
     return {RowRange(cursor, end), false};
   }
 
+  void updateAffectedPages(int64_t affectedPages) {
+    affectedPages_ += affectedPages;
+  }
+
+  int64_t affectedPages() const {
+    return affectedPages_;
+  }
+
+  void updateCoveredPages(int64_t coveredPages) {
+    coveredPages_ += coveredPages;
+  }
+
+  int64_t coveredPages() const {
+    return coveredPages_;
+  }
+
  private:
   std::vector<RowRange> ranges_;
+  int64_t affectedPages_{0}; // Number of pages affected by this RowRanges.
+  int64_t coveredPages_{0}; // Number of pages covered by this RowRanges.
 };
 } // namespace facebook::velox::dwio::common

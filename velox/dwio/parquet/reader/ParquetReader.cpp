@@ -131,6 +131,14 @@ class ReaderBase {
   /// the data still exists in the buffered inputs.
   bool isRowGroupBuffered(int32_t rowGroupIndex) const;
 
+  int64_t skippedPages() const {
+    return skippedPages_;
+  }
+
+  int64_t processedPages() const {
+    return processedPages_;
+  }
+
  private:
   // Reads and parses file footer.
   void loadFileMetaData();
@@ -159,12 +167,11 @@ class ReaderBase {
       const std::vector<T>& children,
       bool fileColumnNamesReadAsLowerCase);
 
+  // Returns true if page index filtering should be used based on the scan spec.
+  // This is determined by checking if the scan spec has a filter.
   bool shouldUsePageIndexFiltering(velox::common::ScanSpec& scanSpec) const;
 
-  bool getPageIndexesRangeIfContiguous(
-      int64_t& pageIndexStartOffset,
-      int64_t& totalLength) const;
-
+  // Applies page index filtering for the current row group.
   void applyPageIndexFiltering(
       int32_t currentGroup,
       uint32_t thisGroup,
@@ -189,9 +196,12 @@ class ReaderBase {
   // Map from row group index to pre-created loading BufferedInput.
   std::unordered_map<uint32_t, std::shared_ptr<dwio::common::BufferedInput>>
       inputs_;
+
   bool shouldUsePageIndexFiltering_{false};
-  std::vector<char> pageIndexBuffer_;
-  int64_t pageIndexStartOffset_{-1};
+  // Total number of skipped pages across all row groups.
+  int64_t skippedPages_{0};
+  // Total number of processed pages across all row groups.
+  int64_t processedPages_{0};
 };
 
 ReaderBase::ReaderBase(
@@ -209,7 +219,7 @@ ReaderBase::ReaderBase(
   // If a pushdown filter is present, load the page index to enable page
   // pruning.
   if (options_.scanSpec()) {
-    shouldUsePageIndexFiltering_ =
+    shouldUsePageIndexFiltering_ = options_.parquetFilterColumnIndexEnabled() &&
         shouldUsePageIndexFiltering(*options_.scanSpec());
   }
 
@@ -219,19 +229,9 @@ ReaderBase::ReaderBase(
 }
 
 void ReaderBase::loadFileMetaData() {
-  auto estimatedSize = footerEstimatedSize_;
-  if (shouldUsePageIndexFiltering_) {
-    auto tempEstimatedSize = 2048 +
-        fileLength_ / (128.0 * 1024 * 1024) * 300 *
-            options_.scanSpec()->stableChildren().size();
-    if (tempEstimatedSize > estimatedSize) {
-      estimatedSize = tempEstimatedSize;
-    }
-    estimatedSize += fileLength_ / (128.0 * 1024 * 1024) * 6144;
-  }
   bool preloadFile =
-      fileLength_ <= std::max(filePreloadThreshold_, estimatedSize);
-  uint64_t readSize = preloadFile ? fileLength_ : estimatedSize;
+      fileLength_ <= std::max(filePreloadThreshold_, footerEstimatedSize_);
+  uint64_t readSize = preloadFile ? fileLength_ : footerEstimatedSize_;
 
   std::unique_ptr<dwio::common::SeekableInputStream> stream;
   if (preloadFile) {
@@ -277,33 +277,6 @@ void ReaderBase::loadFileMetaData() {
       thriftTransport);
   fileMetaData_ = std::make_unique<thrift::FileMetaData>();
   fileMetaData_->read(thriftProtocol.get());
-  if (shouldUsePageIndexFiltering_) {
-    // Calculate the page index buffer base offset and size.
-    int64_t indexPagesTotalLength = 0;
-    if (getPageIndexesRangeIfContiguous(
-            pageIndexStartOffset_, indexPagesTotalLength)) {
-      pageIndexBuffer_.resize(indexPagesTotalLength);
-      if (readSize >= fileLength_ - pageIndexStartOffset_) {
-        std::memcpy(
-            pageIndexBuffer_.data(),
-            copy.data() + readSize - (fileLength_ - pageIndexStartOffset_),
-            indexPagesTotalLength);
-      } else {
-        stream = input_->read(
-            pageIndexStartOffset_,
-            indexPagesTotalLength,
-            dwio::common::LogType::FOOTER);
-        bufferStart = nullptr;
-        bufferEnd = nullptr;
-        dwio::common::readBytes(
-            indexPagesTotalLength,
-            stream.get(),
-            pageIndexBuffer_.data(),
-            bufferStart,
-            bufferEnd);
-      }
-    }
-  }
 }
 
 void ReaderBase::initializeSchema() {
@@ -1213,56 +1186,6 @@ bool ReaderBase::shouldUsePageIndexFiltering(
   return result;
 }
 
-bool ReaderBase::getPageIndexesRangeIfContiguous(
-    int64_t& pageIndexStartOffset,
-    int64_t& totalLength) const {
-  std::vector<std::pair<int64_t, int32_t>> indexOffsets;
-
-  int numRowGroups = fileMetaData_->row_groups.size();
-
-  for (int rg = 0; rg < numRowGroups; ++rg) {
-    const auto& rowGroup = fileMetaData_->row_groups[rg];
-    int numCols = rowGroup.columns.size();
-
-    for (int col = 0; col < numCols; ++col) {
-      const auto& chunk = rowGroup.columns[col];
-
-      if (chunk.__isset.column_index_offset &&
-          chunk.__isset.column_index_length) {
-        indexOffsets.emplace_back(
-            chunk.column_index_offset, chunk.column_index_length);
-      }
-      if (chunk.__isset.offset_index_offset &&
-          chunk.__isset.offset_index_length) {
-        indexOffsets.emplace_back(
-            chunk.offset_index_offset, chunk.offset_index_length);
-      }
-    }
-  }
-
-  if (indexOffsets.empty()) {
-    return false; // No indexes to read.
-  }
-
-  // Sort by offset.
-  std::sort(indexOffsets.begin(), indexOffsets.end());
-
-  // Check if all index blocks are contiguous.
-  for (size_t i = 1; i < indexOffsets.size(); ++i) {
-    int64_t prevEnd = indexOffsets[i - 1].first + indexOffsets[i - 1].second;
-    if (indexOffsets[i].first != prevEnd) {
-      return false; // Not contiguous.
-    }
-  }
-
-  // All index blocks are contiguous.
-  pageIndexStartOffset = indexOffsets.front().first;
-  totalLength = indexOffsets.back().first + indexOffsets.back().second -
-      pageIndexStartOffset;
-
-  return true;
-}
-
 void ReaderBase::applyPageIndexFiltering(
     int32_t currentGroup,
     uint32_t thisGroup,
@@ -1274,89 +1197,72 @@ void ReaderBase::applyPageIndexFiltering(
   reader.collectIndexPageInfoMap(thisGroup, map);
   if (!map.empty()) {
     folly::F14FastMap<uint32_t, std::unique_ptr<ColumnPageIndex>> pageIndices;
-    if (pageIndexStartOffset_ > 0) {
-      auto readThriftObject = [&](size_t offset,
-                                  size_t length,
-                                  auto& thriftObj) {
-        auto transport = std::make_shared<thrift::ThriftBufferedTransport>(
-            pageIndexBuffer_.data() + (offset - pageIndexStartOffset_), length);
-        auto protocol =
-            std::make_unique<apache::thrift::protocol::TCompactProtocolT<
-                thrift::ThriftTransport>>(transport);
-        thriftObj.read(protocol.get());
-      };
-      for (const auto& entry : map) {
-        thrift::ColumnIndex colIdx;
-        thrift::OffsetIndex offIdx;
-        readThriftObject(
-            entry.second.columnIndexOffset,
-            entry.second.columnIndexLength,
-            colIdx);
-        readThriftObject(
-            entry.second.offsetIndexOffset,
-            entry.second.offsetIndexLength,
-            offIdx);
-        pageIndices[entry.first] = std::make_unique<ColumnPageIndex>(
-            colIdx, offIdx, fileMetaData_->row_groups[thisGroup].num_rows);
-      }
-    } else {
-      using StreamMap = folly::F14FastMap<
-          uint32_t,
-          std::unique_ptr<dwio::common::SeekableInputStream>>;
-      StreamMap offSetStreamMap, columnStreamMap;
+    using StreamMap = folly::F14FastMap<
+        uint32_t,
+        std::unique_ptr<dwio::common::SeekableInputStream>>;
+    StreamMap offSetStreamMap, columnStreamMap;
 
-      // Helper lambda to read and deserialize a Thrift object from a
-      // stream.
-      auto readThriftObject = [](auto* stream, size_t length, auto& thriftObj) {
-        const char* bufferStart = nullptr;
-        const char* bufferEnd = nullptr;
-        std::vector<char> data(length);
-        dwio::common::readBytes(
-            length, stream, data.data(), bufferStart, bufferEnd);
-        auto transport = std::make_shared<thrift::ThriftBufferedTransport>(
-            data.data(), length);
-        auto protocol =
-            std::make_unique<apache::thrift::protocol::TCompactProtocolT<
-                thrift::ThriftTransport>>(transport);
-        thriftObj.read(protocol.get());
-      };
+    // Helper lambda to read and deserialize a Thrift object from a
+    // stream.
+    auto readThriftObject = [](auto* stream, size_t length, auto& thriftObj) {
+      const char* bufferStart = nullptr;
+      const char* bufferEnd = nullptr;
+      std::vector<char> data(length);
+      dwio::common::readBytes(
+          length, stream, data.data(), bufferStart, bufferEnd);
+      auto transport = std::make_shared<thrift::ThriftBufferedTransport>(
+          data.data(), length);
+      auto protocol = std::make_unique<
+          apache::thrift::protocol::TCompactProtocolT<thrift::ThriftTransport>>(
+          transport);
+      thriftObj.read(protocol.get());
+    };
 
-      for (const auto& entry : map) {
-        offSetStreamMap[entry.first] = input_->enqueue(
-            {static_cast<uint64_t>(entry.second.offsetIndexOffset),
-             static_cast<uint64_t>(entry.second.offsetIndexLength)});
-        columnStreamMap[entry.first] = input_->enqueue(
-            {static_cast<uint64_t>(entry.second.columnIndexOffset),
-             static_cast<uint64_t>(entry.second.columnIndexLength)});
-      }
-      input_->load(dwio::common::LogType::STRIPE);
+    // Enqueue streams for column and offset index pages.
+    for (const auto& entry : map) {
+      columnStreamMap[entry.first] = input_->enqueue(
+          {static_cast<uint64_t>(entry.second.columnIndexOffset),
+           static_cast<uint64_t>(entry.second.columnIndexLength)});
+    }
+    for (const auto& entry : map) {
+      offSetStreamMap[entry.first] = input_->enqueue(
+          {static_cast<uint64_t>(entry.second.offsetIndexOffset),
+           static_cast<uint64_t>(entry.second.offsetIndexLength)});
+    }
+    input_->load(dwio::common::LogType::STRIPE);
 
-      for (const auto& entry : map) {
-        thrift::ColumnIndex colIdx;
-        thrift::OffsetIndex offIdx;
-        readThriftObject(
-            columnStreamMap[entry.first].get(),
-            entry.second.columnIndexLength,
-            colIdx);
-        readThriftObject(
-            offSetStreamMap[entry.first].get(),
-            entry.second.offsetIndexLength,
-            offIdx);
-        pageIndices[entry.first] = std::make_unique<ColumnPageIndex>(
-            colIdx, offIdx, fileMetaData_->row_groups[thisGroup].num_rows);
-      }
+    for (const auto& entry : map) {
+      thrift::ColumnIndex colIdx;
+      thrift::OffsetIndex offIdx;
+      readThriftObject(
+          columnStreamMap[entry.first].get(),
+          entry.second.columnIndexLength,
+          colIdx);
+      readThriftObject(
+          offSetStreamMap[entry.first].get(),
+          entry.second.offsetIndexLength,
+          offIdx);
+      pageIndices[entry.first] = std::make_unique<ColumnPageIndex>(
+          colIdx, offIdx, fileMetaData_->row_groups[thisGroup].num_rows);
     }
 
+    // Filter data pages using the page indices.
     dwio::common::RowRanges filterResult;
     std::vector<std::pair<
         const velox::common::MetadataFilter::LeafNode*,
         dwio::common::RowRanges>>
         metadataFilterResults;
+    // Filter data pages for the current row group using the collected page
+    // indices. Combine these results with any metadata filter results to
+    // produce the final filter. The resulting filter is used to update the row
+    // ranges for the current row group, which are then applied to each column
+    // reader to generate the final skip pages.
     reader.filterDataPages(
         thisGroup, pageIndices, filterResult, metadataFilterResults);
     if (metadataFilter) {
       metadataFilter->eval(metadataFilterResults, filterResult);
     }
+    // Apply the filter result to the row ranges for the current group.
     rowRanges.at(currentGroup) = dwio::common::RowRanges::intersection(
         rowRanges.at(currentGroup),
         dwio::common::RowRanges::complement(
@@ -1382,6 +1288,8 @@ void ReaderBase::scheduleRowGroups(
       }
       inputs_[thisGroup] = reader.loadRowGroup(
           thisGroup, input_, rowRanges.at(currentGroup + i));
+      skippedPages_ += rowRanges.at(currentGroup + i).affectedPages();
+      processedPages_ += rowRanges.at(currentGroup + i).coveredPages();
     }
   }
 
@@ -1596,6 +1504,8 @@ class ParquetRowReader::Impl {
     stats.processedStrides += rowGroupIds_.size();
     stats.columnReaderStatistics.pageLoadTimeNs.merge(
         columnReaderStats_.pageLoadTimeNs);
+    stats.skippedPages += readerBase_->skippedPages();
+    stats.processedPages += readerBase_->processedPages();
   }
 
   void resetFilterCaches() {

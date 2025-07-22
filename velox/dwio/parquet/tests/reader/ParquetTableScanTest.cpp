@@ -78,7 +78,7 @@ class ParquetTableScanTest : public HiveConnectorTestBase {
     assertQuery(plan, splits_, sql);
   }
 
-  void assertSelectWithFilter(
+  std::shared_ptr<Task> assertSelectWithFilter(
       std::vector<std::string>&& outputColumnNames,
       const std::vector<std::string>& subfieldFilters,
       const std::string& remainingFilter,
@@ -95,11 +95,15 @@ class ParquetTableScanTest : public HiveConnectorTestBase {
                 rowType, subfieldFilters, remainingFilter, nullptr, assignments)
             .planNode();
 
-    AssertQueryBuilder(plan, duckDbQueryRunner_)
+    return AssertQueryBuilder(plan, duckDbQueryRunner_)
         .connectorSessionProperty(
             kHiveConnectorId,
             HiveConfig::kReadTimestampUnitSession,
             std::to_string(static_cast<int>(timestampPrecision_)))
+        .connectorSessionProperty(
+            kHiveConnectorId,
+            HiveConfig::kParquetFilterColumnIndexEnabledSession,
+            "true")
         .splits(splits_)
         .assertResults(sql);
   }
@@ -132,7 +136,13 @@ class ParquetTableScanTest : public HiveConnectorTestBase {
                     .singleAggregation(groupingKeys, aggregates)
                     .planNode();
 
-    assertQuery(plan, splits_, sql);
+    AssertQueryBuilder(plan, duckDbQueryRunner_)
+        .connectorSessionProperty(
+            kHiveConnectorId,
+            HiveConfig::kParquetFilterColumnIndexEnabledSession,
+            "true")
+        .splits(splits_)
+        .assertResults(sql);
   }
 
   void assertSelectWithTimezone(
@@ -389,7 +399,10 @@ TEST_F(ParquetTableScanTest, basic) {
       "SELECT max(b), a FROM tmp WHERE a < 3 GROUP BY a");
 }
 
-TEST_F(ParquetTableScanTest, columnIndex) {
+TEST_F(ParquetTableScanTest, pageIndex) {
+  // The file column_index.parquet contains two row groups. The first row group
+  // has 19 data pages, and the file includes the page index. The following test
+  // cases verify the correctness of results when page index is used.
   loadData(
       getExampleFilePath("column_index.parquet"),
       ROW({"_1", "_2", "_3", "_5"}, {BIGINT(), VARCHAR(), VARCHAR(), BIGINT()}),
@@ -509,6 +522,35 @@ TEST_F(ParquetTableScanTest, columnIndex) {
       {"count(_3)"},
       {},
       "SELECT count(_3) FROM tmp WHERE _1 > 200");
+}
+
+TEST_F(ParquetTableScanTest, pageIndexWithStats) {
+  loadData(
+      getExampleFilePath("column_index.parquet"),
+      ROW({"_1"}, {BIGINT()}),
+      makeRowVector(
+          {"_1"},
+          {
+              makeFlatVector<int64_t>(2000, [](auto row) { return row; }),
+          }));
+
+  // With filters.
+  auto task = assertSelectWithFilter(
+      {"_1"}, {"_1 < 20"}, "", "SELECT _1 FROM tmp WHERE _1 < 20");
+  ASSERT_EQ(
+      task->taskStats()
+          .pipelineStats[0]
+          .operatorStats[0]
+          .runtimeStats["skippedPages"]
+          .sum,
+      18);
+  ASSERT_EQ(
+      task->taskStats()
+          .pipelineStats[0]
+          .operatorStats[0]
+          .runtimeStats["processedPages"]
+          .sum,
+      1);
 }
 
 TEST_F(ParquetTableScanTest, lazy) {

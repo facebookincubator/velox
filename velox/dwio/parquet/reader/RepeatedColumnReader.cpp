@@ -87,7 +87,7 @@ void enqueueChildren(
     dwio::common::SelectiveColumnReader* reader,
     uint32_t index,
     dwio::common::BufferedInput& input,
-    const dwio::common::RowRanges& rowRanges) {
+    dwio::common::RowRanges& rowRanges) {
   auto children = reader->children();
   if (children.empty()) {
     return reader->formatData().as<ParquetData>().enqueueRowGroup(
@@ -145,7 +145,7 @@ MapColumnReader::MapColumnReader(
 void MapColumnReader::enqueueRowGroup(
     uint32_t index,
     dwio::common::BufferedInput& input,
-    const dwio::common::RowRanges& rowRanges) {
+    dwio::common::RowRanges& rowRanges) {
   enqueueChildren(this, index, input, rowRanges);
 }
 
@@ -268,7 +268,7 @@ ListColumnReader::ListColumnReader(
 void ListColumnReader::enqueueRowGroup(
     uint32_t index,
     dwio::common::BufferedInput& input,
-    const dwio::common::RowRanges& rowRanges) {
+    dwio::common::RowRanges& rowRanges) {
   enqueueChildren(this, index, input, rowRanges);
 }
 

@@ -169,7 +169,7 @@ void ParquetData::filterDataPages(
 void ParquetData::enqueueRowGroup(
     uint32_t index,
     dwio::common::BufferedInput& input,
-    const dwio::common::RowRanges& rowRanges) {
+    dwio::common::RowRanges& rowRanges) {
   auto chunk = fileMetaDataPtr_.rowGroup(index).columnChunk(type_->column());
   streams_.resize(fileMetaDataPtr_.numRowGroups());
   pagesStreams_.resize(fileMetaDataPtr_.numRowGroups());
@@ -189,8 +189,25 @@ void ParquetData::enqueueRowGroup(
       (chunk.compression() == common::CompressionKind::CompressionKind_NONE)
       ? chunk.totalUncompressedSize()
       : chunk.totalCompressedSize();
+
+  if (handlePageSkipping(index, input, rowRanges, chunkReadOffset, readSize) >
+      0) {
+    return;
+  }
+
+  auto id = dwio::common::StreamIdentifier(type_->column());
+  streams_[index] = input.enqueue({chunkReadOffset, readSize}, &id);
+}
+
+int64_t ParquetData::handlePageSkipping(
+    uint32_t index,
+    dwio::common::BufferedInput& input,
+    dwio::common::RowRanges& rowRanges,
+    uint64_t chunkReadOffset,
+    uint64_t chunkReadSize) {
+  int64_t skippedPages = 0;
   // Check if the required chunk is already buffered.
-  if (!input.isBuffered(chunkReadOffset, readSize)) {
+  if (!input.isBuffered(chunkReadOffset, chunkReadSize)) {
     // Determine if page skipping should be applied based on parent type.
     bool applyPageSkipping = true;
     for (auto* parent = type_.get(); parent != nullptr;
@@ -206,15 +223,20 @@ void ParquetData::enqueueRowGroup(
 
     // Update skipped pages if applicable.
     if (pageIndices_[index] && applyPageSkipping) {
-      pageIndices_[index]->updateSkippedPages(rowRanges);
+      skippedPages = pageIndices_[index]->updateSkippedPages(rowRanges);
+      rowRanges.updateAffectedPages(skippedPages);
+      rowRanges.updateCoveredPages(
+          pageIndices_[index]->numPages() - skippedPages);
     }
 
-    // If there are skipped pages, enqueue only the required streams.
+    // If there are skipped pages, enqueue only the required pages.
     if (pageIndices_[index] && pageIndices_[index]->hasSkippedPages()) {
       auto numPages = pageIndices_[index]->numPages();
       pagesStreams_[index].clear();
 
-      // Collect all runs: dictionary page (if present) and data pages.
+      // Combine contiguous pages into runs to reduce the number of streams.
+      // This is done to optimize the number of streams and reduce overhead.
+      // Each run will be a contiguous set of pages that can be read together.
       int32_t runStart = -1;
       uint64_t runOffset = 0;
       uint64_t runLength = 0;
@@ -250,6 +272,8 @@ void ParquetData::enqueueRowGroup(
       };
 
       // Dictionary page.
+      auto chunk =
+          fileMetaDataPtr_.rowGroup(index).columnChunk(type_->column());
       if (chunk.hasDictionaryPageOffset() &&
           chunk.dictionaryPageOffset() >= 4) {
         uint64_t dictOffset = chunk.dictionaryPageOffset();
@@ -270,12 +294,9 @@ void ParquetData::enqueueRowGroup(
       // Ensure the last run is flushed if it exists.
       flushRun();
       streams_[index] = nullptr;
-      return;
     }
   }
-
-  auto id = dwio::common::StreamIdentifier(type_->column());
-  streams_[index] = input.enqueue({chunkReadOffset, readSize}, &id);
+  return skippedPages;
 }
 
 dwio::common::PositionProvider ParquetData::seekToRowGroup(int64_t index) {
