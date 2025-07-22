@@ -120,6 +120,12 @@ class TopNRowNumber : public Operator {
   // partitions left.
   TopRows* nextPartition();
 
+  // Computes the rank for the next row to be output
+  // (all output rows in memory).
+  void computeNextRankInMemory(
+      const TopRows& partition,
+      vector_size_t rowIndex);
+
   // Appends numRows of the output partition the output. Note: The rows are
   // popped in reverse order of the row_number.
   // NOTE: This function erases the yielded output rows from the partition
@@ -150,17 +156,32 @@ class TopNRowNumber : public Operator {
   bool isNewPartition(
       const RowVectorPtr& output,
       vector_size_t index,
-      SpillMergeStream* next);
+      const SpillMergeStream* next);
 
-  // Sets nextRowNumber_ to rowNumber. Checks if next row in 'merge_' belongs to
-  // a different partition than last row in 'output' and if so updates
-  // nextRowNumber_ to 0. Also, checks current partition reached the limit on
-  // number of rows and if so advances 'merge_' to the first row on the next
-  // partition and sets nextRowNumber_ to 0.
+  // Utility method to compare values from startColumn to endColumn for
+  // 'next' row from SpillMergeStream with current row of output (at index).
+  bool compareSpillRowColumns(
+      const RowVectorPtr& output,
+      vector_size_t index,
+      const SpillMergeStream* next,
+      vector_size_t startColumn,
+      vector_size_t endColumn);
+
+  // Computes next rank value for spill output.
+  void computeNextRankInSpill(
+      const RowVectorPtr& output,
+      vector_size_t index,
+      const SpillMergeStream* next);
+
+  // Checks if next row in 'merge_' belongs to a different partition than last
+  // row in 'output' and if so updates nextRank_ to 1.
+  // Also, checks current partition reached the limit on number of rows and
+  // if so advances 'merge_' to the first row on the next
+  // partition and sets nextRank_ to 1.
   //
   // @post 'merge_->next()' is either at end or points to a row that should be
-  // included in the next output batch using 'nextRowNumber_'.
-  void setupNextOutput(const RowVectorPtr& output, int32_t rowNumber);
+  // included in the next output batch using 'nextRank_'.
+  void setupNextOutput(const RowVectorPtr& output);
 
   // Called in noMoreInput() and spill().
   void updateEstimatedOutputRowSize();
@@ -260,7 +281,8 @@ class TopNRowNumber : public Operator {
   // Used to sort-merge spilled data.
   std::unique_ptr<TreeOfLosers<SpillMergeStream>> merge_;
 
-  // Row number for the first row in the next output batch from the spiller.
-  int32_t nextRowNumber_{0};
+  // Row number (or rank or dense_rank in the future) for the next row being
+  // output from memory or the spiller.
+  vector_size_t nextRank_{1};
 };
 } // namespace facebook::velox::exec
