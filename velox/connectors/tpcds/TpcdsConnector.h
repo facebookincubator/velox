@@ -71,12 +71,9 @@ class TpcdsTableHandle : public ConnectorTableHandle {
 class TpcdsDataSource : public velox::connector::DataSource {
  public:
   TpcdsDataSource(
-      const std::shared_ptr<const RowType>& outputType,
-      const std::shared_ptr<velox::connector::ConnectorTableHandle>&
-          tableHandle,
-      const std::unordered_map<
-          std::string,
-          std::shared_ptr<velox::connector::ColumnHandle>>& columnHandles,
+      const RowTypePtr& outputType,
+      const connector::ConnectorTableHandlePtr& tableHandle,
+      const connector::ColumnHandleMap& columnHandles,
       velox::memory::MemoryPool* FOLLY_NONNULL pool);
 
   void addSplit(std::shared_ptr<ConnectorSplit> split) override;
@@ -136,11 +133,9 @@ class TpcdsConnector final : public velox::connector::Connector {
       : Connector(id) {}
 
   std::unique_ptr<DataSource> createDataSource(
-      const std::shared_ptr<const RowType>& outputType,
-      const std::shared_ptr<ConnectorTableHandle>& tableHandle,
-      const std::unordered_map<
-          std::string,
-          std::shared_ptr<velox::connector::ColumnHandle>>& columnHandles,
+      const RowTypePtr& outputType,
+      const ConnectorTableHandlePtr& tableHandle,
+      const connector::ColumnHandleMap& columnHandles,
       ConnectorQueryCtx* FOLLY_NONNULL connectorQueryCtx) override final {
     return std::make_unique<TpcdsDataSource>(
         outputType,
@@ -151,8 +146,7 @@ class TpcdsConnector final : public velox::connector::Connector {
 
   std::unique_ptr<DataSink> createDataSink(
       RowTypePtr /*inputType*/,
-      std::shared_ptr<
-          ConnectorInsertTableHandle> /*connectorInsertTableHandle*/,
+      ConnectorInsertTableHandlePtr /*connectorInsertTableHandle*/,
       ConnectorQueryCtx* /*connectorQueryCtx*/,
       CommitStrategy /*commitStrategy*/) override final {
     VELOX_NYI("TpcdsConnector does not support data sink.");

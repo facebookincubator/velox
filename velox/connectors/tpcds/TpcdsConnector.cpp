@@ -29,15 +29,13 @@ std::string TpcdsTableHandle::toString() const {
 }
 
 TpcdsDataSource::TpcdsDataSource(
-    const std::shared_ptr<const RowType>& outputType,
-    const std::shared_ptr<velox::connector::ConnectorTableHandle>& tableHandle,
-    const std::unordered_map<
-        std::string,
-        std::shared_ptr<velox::connector::ColumnHandle>>& columnHandles,
+    const RowTypePtr& outputType,
+    const connector::ConnectorTableHandlePtr& tableHandle,
+    const connector::ColumnHandleMap& columnHandles,
     velox::memory::MemoryPool* FOLLY_NONNULL pool)
     : pool_(pool) {
   auto tpcdsTableHandle =
-      std::dynamic_pointer_cast<TpcdsTableHandle>(tableHandle);
+      std::dynamic_pointer_cast<const TpcdsTableHandle>(tableHandle);
   VELOX_CHECK_NOT_NULL(
       tpcdsTableHandle, "TableHandle must be an instance of TpcdsTableHandle");
   table_ = tpcdsTableHandle->getTpcdsTable();
@@ -58,7 +56,8 @@ TpcdsDataSource::TpcdsDataSource(
         outputName,
         toTableName(table_));
 
-    auto handle = std::dynamic_pointer_cast<TpcdsColumnHandle>(it->second);
+    auto handle =
+        std::dynamic_pointer_cast<const TpcdsColumnHandle>(it->second);
     VELOX_CHECK_NOT_NULL(
         handle,
         "ColumnHandle must be an instance of TpcdsColumnHandle "
