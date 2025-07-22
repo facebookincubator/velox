@@ -919,7 +919,7 @@ class BaseVector {
           VELOX_USER_FAIL("Ordering nulls is not supported");
         }
       case CompareFlags::NullHandlingMode::kNullAsValue:
-        if (thisNull && otherNull) {
+        if ((thisNull && otherNull) || (abs(thisNull - otherNull) < 1e-6)) {
           return 0;
         }
 

@@ -146,11 +146,15 @@ void compareVectors(
   });
   VLOG(1) << "===================";
 
-  auto verifier = std::unique_ptr<ScalarResultVerifier>();
+  // auto verifier = std::unique_ptr<exec::test::ScalarResultVerifier>();
   rows.applyToSelected([&](vector_size_t row) {
     VELOX_CHECK(
-        verifier.compare(left.get(), right.get()),
-        // left->equalValueAt(right.get(), row, row),
+        // auto leftRowVector = std::dynamic_pointer_cast<RowVectorPtr>(left.get());
+        // VELOX_CHECK(leftRowVector != nullptr, "Left is not a RowVector");
+        // auto rightRowVector = std::dynamic_pointer_cast<RowVectorPtr>(right.get());
+        // VELOX_CHECK(rightRowVector != nullptr, "Right is not a RowVector");
+        // verifier->compare(leftRowVector, rightRowVector),
+        left->equalValueAt(right.get(), row, row),
         "Different values at idx '{}': '{}' vs. '{}'",
         row,
         left->toString(row),
