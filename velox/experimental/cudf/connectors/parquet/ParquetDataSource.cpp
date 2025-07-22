@@ -160,8 +160,6 @@ std::optional<RowVectorPtr> ParquetDataSource::next(
     }
   }
   
- 
-  
   TotalScanTimeCallbackData* callbackData = new TotalScanTimeCallbackData{startTimeUs, ioStats_};
   
   // Launch host callback to calculate timing when scan completes
@@ -195,7 +193,6 @@ std::optional<RowVectorPtr> ParquetDataSource::next(
   }
   totalRemainingFilterTime_.fetch_add(filterTimeUs * 1000, std::memory_order_relaxed);
   
-
   // Output RowVectorPtr
   const auto nRows = cudfTable->num_rows();
 
