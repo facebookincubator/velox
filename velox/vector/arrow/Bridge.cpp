@@ -1153,7 +1153,7 @@ void exportConstantValue(
         ? sizeof(StringView)
         : vec.type()->cppSizeInBytes();
 
-    valuesVector = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+    valuesVector = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
         createFlatVector,
         vec.typeKind(),
         pool,
