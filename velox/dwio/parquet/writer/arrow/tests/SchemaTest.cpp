@@ -1055,7 +1055,7 @@ TEST(TestSchemaPrinter, Examples) {
       Repetition::REQUIRED,
       DecimalLogicalType::Make(10, 5),
       Type::INT64,
-      /*length=*/-1,
+      /*primitive_length=*/-1,
       7));
 
   NodePtr schema = GroupNode::Make(

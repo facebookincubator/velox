@@ -761,7 +761,7 @@ TEST_F(OperatorTraceTest, traceSplitRoundTrip) {
   for (int i = 0; i < 3; ++i) {
     const auto opTraceDir = getOpTraceDirectory(
         taskTraceDir,
-        /*planNodeId=*/"0",
+        /*nodeId=*/"0",
         /*pipelineId=*/0,
         /*driverId=*/i);
     const auto summaryFilePath = getOpTraceSummaryFilePath(opTraceDir);
@@ -827,7 +827,7 @@ TEST_F(OperatorTraceTest, traceSplitPartial) {
   for (int i = 0; i < 3; ++i) {
     const auto opTraceDir = getOpTraceDirectory(
         taskTraceDir,
-        /*planNodeId=*/"0",
+        /*nodeId=*/"0",
         /*pipelineId=*/0,
         /*driverId=*/i);
     const auto summaryFilePath = getOpTraceSummaryFilePath(opTraceDir);
@@ -916,7 +916,7 @@ TEST_F(OperatorTraceTest, traceSplitCorrupted) {
   for (int i = 0; i < 3; ++i) {
     const auto opTraceDir = getOpTraceDirectory(
         taskTraceDir,
-        /*planNodeId=*/"0",
+        /*nodeId=*/"0",
         /*pipelineId=*/0,
         /*driverId=*/i);
     const auto summaryFilePath = getOpTraceSummaryFilePath(opTraceDir);

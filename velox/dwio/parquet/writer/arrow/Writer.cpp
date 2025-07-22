@@ -331,7 +331,7 @@ class FileWriterImpl : public FileWriter {
   Status Init() {
     return SchemaManifest::Make(
         writer_->schema(),
-        /*schema_metadata=*/nullptr,
+        /*metadata=*/nullptr,
         default_arrow_reader_properties(),
         &schema_manifest_);
   }
