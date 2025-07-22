@@ -77,7 +77,7 @@ class MapColumnReader : public dwio::common::SelectiveMapColumnReader {
   void enqueueRowGroup(
       uint32_t index,
       dwio::common::BufferedInput& input,
-      const dwio::common::RowRanges& rowRanges);
+      dwio::common::RowRanges& rowRanges);
 
   void read(
       int64_t offset,
@@ -148,7 +148,7 @@ class ListColumnReader : public dwio::common::SelectiveListColumnReader {
   void enqueueRowGroup(
       uint32_t index,
       dwio::common::BufferedInput& input,
-      const dwio::common::RowRanges& rowRanges);
+      dwio::common::RowRanges& rowRanges);
 
   void read(
       int64_t offset,
