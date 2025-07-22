@@ -178,7 +178,6 @@ class NonNumericArbitrary : public exec::Aggregate {
       override {
     VELOX_CHECK_NOT_NULL(result);
     (*result)->resize(numGroups);
-
     if (clusteredInput_) {
       bool singleSource{true};
       VectorPtr* currentSource = nullptr;
@@ -207,7 +206,7 @@ class NonNumericArbitrary : public exec::Aggregate {
         if (!singleSource) {
           result->get()->copyRanges(currentSource->get(), copyRanges_);
         } else {
-          if (copyRanges_.size() == 1) {
+          if (copyRanges_.size() == 1 && copyRanges_[0].count == numGroups) {
             *result = currentSource->get()->slice(
                 copyRanges_[0].sourceIndex, copyRanges_[0].count);
           } else {
@@ -407,7 +406,7 @@ class NonNumericArbitrary : public exec::Aggregate {
 
   // Reusable buffers.
   BufferPtr groupIndices_;
-  vector_size_t* rawGroupIndices_;
+  vector_size_t* rawGroupIndices_{};
 };
 
 } // namespace

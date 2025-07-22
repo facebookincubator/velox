@@ -120,7 +120,9 @@ add_test(
   COMMAND velox_exec_test
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 
-set_tests_properties(velox_exec_test PROPERTIES TIMEOUT 3000)
+# TODO: Revert back to 3000 once is fixed.
+# https://github.com/facebookincubator/velox/issues/13879
+set_tests_properties(velox_exec_test PROPERTIES TIMEOUT 6000)
 
 add_test(
   NAME velox_exec_infra_test
@@ -213,6 +215,7 @@ add_executable(
   PrestoQueryRunnerTDigestTransformTest.cpp
   PrestoQueryRunnerQDigestTransformTest.cpp
   PrestoQueryRunnerJsonTransformTest.cpp
+  PrestoQueryRunnerIntervalTransformTest.cpp
   PrestoQueryRunnerTimestampWithTimeZoneTransformTest.cpp)
 
 add_test(velox_exec_util_test velox_exec_util_test)

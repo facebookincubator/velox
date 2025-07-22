@@ -17,8 +17,6 @@
 #include "velox/expression/EvalCtx.h"
 #include <exception>
 #include "velox/common/testutil/TestValue.h"
-#include "velox/core/QueryConfig.h"
-#include "velox/expression/Expr.h"
 #include "velox/expression/PeeledEncoding.h"
 
 using facebook::velox::common::testutil::TestValue;
@@ -333,7 +331,7 @@ VectorPtr extendSizeByWrappingInDictionary(
   VELOX_DCHECK(
       !vector->type()->isPrimitiveType(), "Only used for complex types.");
   BufferPtr indices = allocateIndices(targetSize, context.pool());
-  auto rawIndices = indices->asMutable<vector_size_t>();
+  auto* rawIndices = indices->asMutable<vector_size_t>();
   // Only fill in indices for existing rows in the vector.
   std::iota(rawIndices, rawIndices + currentSize, 0);
   // A nulls buffer is required otherwise wrapInDictionary() can return a

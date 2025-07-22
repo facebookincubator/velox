@@ -240,7 +240,7 @@ class MemoryArbitrationFuzzer {
           memory::kMaxMemory,
           memory::MemoryReclaimer::create())};
   std::shared_ptr<memory::MemoryPool> pool_{
-      memory::memoryManager()->testingDefaultRoot().addLeafChild(
+      memory::memoryManager()->deprecatedSysRootPool().addLeafChild(
           "memoryArbitrationFuzzerLeaf",
           true)};
   std::shared_ptr<memory::MemoryPool> writerPool_{rootPool_->addAggregateChild(
@@ -256,6 +256,10 @@ class MemoryArbitrationFuzzer {
 
 MemoryArbitrationFuzzer::MemoryArbitrationFuzzer(size_t initialSeed)
     : vectorFuzzer_{getFuzzerOptions(), pool_.get()} {
+  // Set timestamp precision as milliseconds, as timestamp may be used as
+  // paritition key, and presto doesn't supports nanosecond precision.
+  vectorFuzzer_.getMutableOptions().timestampPrecision =
+      fuzzer::FuzzerTimestampPrecision::kMilliSeconds;
   if (!isRegisteredNamedVectorSerde(VectorSerde::Kind::kPresto)) {
     serializer::presto::PrestoVectorSerde::registerNamedVectorSerde();
   }

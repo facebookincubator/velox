@@ -16,8 +16,6 @@
 
 #pragma once
 
-#include <type_traits>
-
 #include <folly/container/F14Map.h>
 #include <folly/hash/Hash.h>
 #include <glog/logging.h>
@@ -198,6 +196,12 @@ class RowVector : public BaseVector {
 
   std::string toString(vector_size_t index) const override;
 
+  /// For backwards compatibility.
+  /// TODO Remove after updating callsites.
+  [[deprecated]]
+  std::string deprecatedToString(vector_size_t index, vector_size_t limit)
+      const;
+
   void ensureWritable(const SelectivityVector& rows) override;
 
   bool isWritable() const override;
@@ -312,6 +316,7 @@ class RowVector : public BaseVector {
 /// 'sizes' data and provide manipulations on them.
 struct ArrayVectorBase : BaseVector {
   ArrayVectorBase(const ArrayVectorBase&) = delete;
+
   const BufferPtr& offsets() const {
     return offsets_;
   }
@@ -386,6 +391,19 @@ struct ArrayVectorBase : BaseVector {
   /// responsibility to make sure the vector as well as offsets and sizes
   /// buffers are mutable (e.g. singly referenced).
   void ensureNullRowsEmpty();
+
+  /// Return a string representation of a limited number of elements at the
+  /// start of the array or map.
+  ///
+  /// @param size Total number of elements.
+  /// @param stringifyElement Function to call to append individual elements.
+  /// Will be called up to 'limit' times.
+  /// @param limit Maximum number of elements to include in the result.
+  static std::string stringifyTruncatedElementList(
+      vector_size_t size,
+      const std::function<void(std::stringstream&, vector_size_t)>&
+          stringifyElement,
+      vector_size_t limit = 5);
 
  protected:
   ArrayVectorBase(

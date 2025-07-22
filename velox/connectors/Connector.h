@@ -23,10 +23,10 @@
 #include "velox/common/base/SpillStats.h"
 #include "velox/common/caching/AsyncDataCache.h"
 #include "velox/common/caching/ScanTracker.h"
+#include "velox/common/file/TokenProvider.h"
 #include "velox/common/future/VeloxPromise.h"
 #include "velox/core/ExpressionEvaluator.h"
 #include "velox/type/Filter.h"
-#include "velox/type/Subfield.h"
 #include "velox/vector/ComplexVector.h"
 
 #include <folly/Synchronized.h>
@@ -102,6 +102,9 @@ class ColumnHandle : public ISerializable {
 
 using ColumnHandlePtr = std::shared_ptr<const ColumnHandle>;
 
+using ColumnHandleMap =
+    std::unordered_map<std::string, connector::ColumnHandlePtr>;
+
 class ConnectorTableHandle;
 using ConnectorTableHandlePtr = std::shared_ptr<const ConnectorTableHandle>;
 
@@ -164,6 +167,9 @@ class ConnectorInsertTableHandle : public ISerializable {
     VELOX_NYI();
   }
 };
+
+using ConnectorInsertTableHandlePtr =
+    std::shared_ptr<const ConnectorInsertTableHandle>;
 
 /// Represents the commit strategy for writing to connector.
 enum class CommitStrategy {
@@ -408,7 +414,8 @@ class ConnectorQueryCtx {
       int driverId,
       const std::string& sessionTimezone,
       bool adjustTimestampToTimezone = false,
-      folly::CancellationToken cancellationToken = {})
+      folly::CancellationToken cancellationToken = {},
+      std::shared_ptr<filesystems::TokenProvider> tokenProvider = {})
       : operatorPool_(operatorPool),
         connectorPool_(connectorPool),
         sessionProperties_(sessionProperties),
@@ -423,7 +430,8 @@ class ConnectorQueryCtx {
         planNodeId_(planNodeId),
         sessionTimezone_(sessionTimezone),
         adjustTimestampToTimezone_(adjustTimestampToTimezone),
-        cancellationToken_(std::move(cancellationToken)) {
+        cancellationToken_(std::move(cancellationToken)),
+        fsTokenProvider_(std::move(tokenProvider)) {
     VELOX_CHECK_NOT_NULL(sessionProperties);
   }
 
@@ -511,6 +519,10 @@ class ConnectorQueryCtx {
     selectiveNimbleReaderEnabled_ = value;
   }
 
+  std::shared_ptr<filesystems::TokenProvider> fsTokenProvider() const {
+    return fsTokenProvider_;
+  }
+
  private:
   memory::MemoryPool* const operatorPool_;
   memory::MemoryPool* const connectorPool_;
@@ -527,6 +539,7 @@ class ConnectorQueryCtx {
   const std::string sessionTimezone_;
   const bool adjustTimestampToTimezone_;
   const folly::CancellationToken cancellationToken_;
+  const std::shared_ptr<filesystems::TokenProvider> fsTokenProvider_;
   bool selectiveNimbleReaderEnabled_{false};
 };
 
@@ -561,10 +574,8 @@ class Connector {
 
   virtual std::unique_ptr<DataSource> createDataSource(
       const RowTypePtr& outputType,
-      const std::shared_ptr<ConnectorTableHandle>& tableHandle,
-      const std::unordered_map<
-          std::string,
-          std::shared_ptr<connector::ColumnHandle>>& columnHandles,
+      const ConnectorTableHandlePtr& tableHandle,
+      const connector::ColumnHandleMap& columnHandles,
       ConnectorQueryCtx* connectorQueryCtx) = 0;
 
   /// Returns true if addSplit of DataSource can use 'dataSource' from
@@ -622,10 +633,8 @@ class Connector {
       const std::vector<std::shared_ptr<core::IndexLookupCondition>>&
           joinConditions,
       const RowTypePtr& outputType,
-      const std::shared_ptr<ConnectorTableHandle>& tableHandle,
-      const std::unordered_map<
-          std::string,
-          std::shared_ptr<connector::ColumnHandle>>& columnHandles,
+      const ConnectorTableHandlePtr& tableHandle,
+      const connector::ColumnHandleMap& columnHandles,
       ConnectorQueryCtx* connectorQueryCtx) {
     VELOX_UNSUPPORTED(
         "Connector {} does not support index source", connectorId());
@@ -633,7 +642,7 @@ class Connector {
 
   virtual std::unique_ptr<DataSink> createDataSink(
       RowTypePtr inputType,
-      std::shared_ptr<ConnectorInsertTableHandle> connectorInsertTableHandle,
+      ConnectorInsertTableHandlePtr connectorInsertTableHandle,
       ConnectorQueryCtx* connectorQueryCtx,
       CommitStrategy commitStrategy) = 0;
 

@@ -16,6 +16,7 @@
 #include "folly/experimental/EventCount.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/Exchange.h"
@@ -1603,6 +1604,56 @@ TEST_P(MultiFragmentTest, mergeExchangeOverEmptySources) {
           core::QueryConfig::kShuffleCompressionKind,
           common::compressionKindToString(GetParam().compressionKind))
       .assertResults("");
+
+  for (auto& task : tasks) {
+    ASSERT_TRUE(waitForTaskCompletion(task.get())) << task->taskId();
+  }
+}
+
+DEBUG_ONLY_TEST_P(MultiFragmentTest, mergeExchangeFailureOnStart) {
+  std::vector<std::shared_ptr<Task>> tasks;
+  std::vector<std::string> leafTaskIds;
+
+  const auto injectErrorMsg{"injectError"};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::ExchangeQueue::dequeueLocked",
+      std::function<void(ExchangeQueue*)>(
+          ([&](ExchangeQueue* /*unused*/) { VELOX_FAIL(injectErrorMsg); })));
+
+  auto data = makeRowVector(rowType_, 0);
+
+  for (int i = 0; i < 2; ++i) {
+    auto taskId = makeTaskId("leaf-", i);
+    leafTaskIds.push_back(taskId);
+    auto plan =
+        PlanBuilder()
+            .values({data})
+            .partitionedOutput({}, 1, /*outputLayout=*/{}, GetParam().serdeKind)
+            .planNode();
+
+    auto task = makeTask(taskId, plan, tasks.size());
+    tasks.push_back(task);
+    task->start(4);
+  }
+
+  auto exchangeTaskId = makeTaskId("exchange-", 0);
+  auto plan = PlanBuilder()
+                  .mergeExchange(rowType_, {"c0"}, GetParam().serdeKind)
+                  .singleAggregation({"c0"}, {"count(1)"})
+                  .planNode();
+
+  std::vector<Split> leafTaskSplits;
+  for (auto leafTaskId : leafTaskIds) {
+    leafTaskSplits.emplace_back(remoteSplit(leafTaskId));
+  }
+  VELOX_ASSERT_THROW(
+      test::AssertQueryBuilder(plan, duckDbQueryRunner_)
+          .splits(std::move(leafTaskSplits))
+          .config(
+              core::QueryConfig::kShuffleCompressionKind,
+              common::compressionKindToString(GetParam().compressionKind))
+          .assertResults(""),
+      injectErrorMsg);
 
   for (auto& task : tasks) {
     ASSERT_TRUE(waitForTaskCompletion(task.get())) << task->taskId();

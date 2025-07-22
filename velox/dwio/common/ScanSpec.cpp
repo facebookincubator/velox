@@ -21,6 +21,21 @@
 
 namespace facebook::velox::common {
 
+// static
+std::string_view ScanSpec::columnTypeString(ScanSpec::ColumnType columnType) {
+  switch (columnType) {
+    case ScanSpec::ColumnType::kRegular:
+      return "REGULAR";
+    case ScanSpec::ColumnType::kRowIndex:
+      return "ROW_INDEX";
+    case ScanSpec::ColumnType::kComposite:
+      return "COMPOSITE";
+    default:
+      VELOX_UNREACHABLE(
+          "Unrecognized ColumnType: {}", static_cast<int8_t>(columnType));
+  }
+}
+
 ScanSpec* ScanSpec::getOrCreateChild(const std::string& name) {
   if (auto it = this->childByFieldName_.find(name);
       it != this->childByFieldName_.end()) {
@@ -528,6 +543,7 @@ void filterRows(
     const Filter& filter,
     vector_size_t size,
     uint64_t* result) {
+  VELOX_CHECK_LE(size, vector.size());
   switch (vector.typeKind()) {
     case TypeKind::ARRAY:
     case TypeKind::MAP:
@@ -558,9 +574,12 @@ void filterRows(
 
 } // namespace
 
-void ScanSpec::applyFilter(const BaseVector& vector, uint64_t* result) const {
+void ScanSpec::applyFilter(
+    const BaseVector& vector,
+    vector_size_t size,
+    uint64_t* result) const {
   if (filter_) {
-    filterRows(vector, *filter_, vector.size(), result);
+    filterRows(vector, *filter_, size, result);
   }
   if (!vector.type()->isRow()) {
     // Filter on MAP or ARRAY children are pruning, and won't affect correctness
@@ -571,7 +590,7 @@ void ScanSpec::applyFilter(const BaseVector& vector, uint64_t* result) const {
   auto* rowVector = vector.asChecked<RowVector>();
   for (int i = 0; i < rowType.size(); ++i) {
     if (auto* child = childByName(rowType.nameOf(i))) {
-      child->applyFilter(*rowVector->childAt(i), result);
+      child->applyFilter(*rowVector->childAt(i), size, result);
     }
   }
 }

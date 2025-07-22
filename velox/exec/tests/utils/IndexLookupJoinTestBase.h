@@ -16,7 +16,6 @@
 
 #include "velox/connectors/Connector.h"
 #include "velox/core/PlanNode.h"
-#include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/parse/PlanNodeIdGenerator.h"
 
@@ -50,6 +49,7 @@ class IndexLookupJoinTestBase
   /// @param tableData: contains the sequence table data including key vectors
   /// and min/max key values.
   /// @param probeJoinKeys: the prefix key colums used for equality joins.
+  /// @param hasNullKeys: whether the probe input has null keys.
   /// @param inColumns: the ordered list of in conditions.
   /// @param betweenColumns: the ordered list of between conditions.
   /// @param equalMatchPct: percentage of rows in the probe input that matches
@@ -65,7 +65,8 @@ class IndexLookupJoinTestBase
       SequenceTableData& tableData,
       std::shared_ptr<facebook::velox::memory::MemoryPool>& pool,
       const std::vector<std::string>& probeJoinKeys,
-      const std::vector<std::string> inColumns = {},
+      bool hasNullKeys = false,
+      const std::vector<std::string>& inColumns = {},
       const std::vector<std::pair<std::string, std::string>>& betweenColumns =
           {},
       std::optional<int> equalMatchPct = std::nullopt,
@@ -122,13 +123,10 @@ class IndexLookupJoinTestBase
   facebook::velox::core::TableScanNodePtr makeIndexScanNode(
       const std::shared_ptr<facebook::velox::core::PlanNodeIdGenerator>&
           planNodeIdGenerator,
-      const std::shared_ptr<facebook::velox::connector::ConnectorTableHandle>
+      const facebook::velox::connector::ConnectorTableHandlePtr&
           indexTableHandle,
       const facebook::velox::RowTypePtr& outputType,
-      const std::unordered_map<
-          std::string,
-          std::shared_ptr<facebook::velox::connector::ColumnHandle>>&
-          assignments);
+      const facebook::velox::connector::ColumnHandleMap& assignments);
 
   /// Generate sequence storage table which will be persisted by mock zippydb
   /// client for testing.

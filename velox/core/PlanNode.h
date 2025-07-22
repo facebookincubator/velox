@@ -19,6 +19,7 @@
 
 #include <utility>
 
+#include "velox/common/Enums.h"
 #include "velox/connectors/Connector.h"
 #include "velox/core/Expressions.h"
 #include "velox/core/QueryConfig.h"
@@ -38,7 +39,7 @@ struct InsertTableHandle {
  public:
   InsertTableHandle(
       const std::string& connectorId,
-      const std::shared_ptr<connector::ConnectorInsertTableHandle>&
+      const connector::ConnectorInsertTableHandlePtr&
           connectorInsertTableHandle)
       : connectorId_(connectorId),
         connectorInsertTableHandle_(connectorInsertTableHandle) {}
@@ -47,8 +48,8 @@ struct InsertTableHandle {
     return connectorId_;
   }
 
-  const std::shared_ptr<connector::ConnectorInsertTableHandle>&
-  connectorInsertTableHandle() const {
+  const connector::ConnectorInsertTableHandlePtr& connectorInsertTableHandle()
+      const {
     return connectorInsertTableHandle_;
   }
 
@@ -57,8 +58,7 @@ struct InsertTableHandle {
   const std::string connectorId_;
 
   // Write request to a DataSink of that connector type
-  const std::shared_ptr<connector::ConnectorInsertTableHandle>
-      connectorInsertTableHandle_;
+  const connector::ConnectorInsertTableHandlePtr connectorInsertTableHandle_;
 };
 
 class SortOrder {
@@ -144,6 +144,11 @@ struct PlanSummaryOptions {
   /// summary.
   size_t maxLength = 50;
 
+  /// To provide a simplified, skeleton view of the query plan by removing
+  /// additional details from node summaries. If true, the output contains just
+  /// one line per plan node.
+  bool nodeHeaderOnly = false;
+
   /// Options that apply specifically to AGGREGATION nodes.
   struct AggregateOptions {
     /// For a given AGGREGATION node, maximum number of aggregate expressions
@@ -157,7 +162,7 @@ struct PlanSummaryOptions {
 
 class PlanNode : public ISerializable {
  public:
-  explicit PlanNode(const PlanNodeId& id) : id_{id} {}
+  explicit PlanNode(PlanNodeId id) : id_{std::move(id)} {}
 
   virtual ~PlanNode() {}
 
@@ -817,6 +822,7 @@ class AbstractProjectNode : public PlanNode {
       const std::vector<std::string>& names,
       const std::vector<TypedExprPtr>& projections) {
     std::vector<TypePtr> types;
+    types.reserve(projections.size());
     for (auto& projection : projections) {
       types.push_back(projection->type());
     }
@@ -889,10 +895,8 @@ class TableScanNode : public PlanNode {
   TableScanNode(
       const PlanNodeId& id,
       RowTypePtr outputType,
-      const std::shared_ptr<connector::ConnectorTableHandle>& tableHandle,
-      const std::unordered_map<
-          std::string,
-          std::shared_ptr<connector::ColumnHandle>>& assignments)
+      const connector::ConnectorTableHandlePtr& tableHandle,
+      const connector::ColumnHandleMap& assignments)
       : PlanNode(id),
         outputType_(std::move(outputType)),
         tableHandle_(tableHandle),
@@ -919,16 +923,12 @@ class TableScanNode : public PlanNode {
       return *this;
     }
 
-    Builder& tableHandle(
-        std::shared_ptr<connector::ConnectorTableHandle> tableHandle) {
+    Builder& tableHandle(connector::ConnectorTableHandlePtr tableHandle) {
       tableHandle_ = std::move(tableHandle);
       return *this;
     }
 
-    Builder& assignments(
-        std::unordered_map<
-            std::string,
-            std::shared_ptr<connector::ColumnHandle>> assignments) {
+    Builder& assignments(connector::ColumnHandleMap assignments) {
       assignments_ = std::move(assignments);
       return *this;
     }
@@ -952,12 +952,8 @@ class TableScanNode : public PlanNode {
    private:
     std::optional<PlanNodeId> id_;
     std::optional<RowTypePtr> outputType_;
-    std::optional<std::shared_ptr<connector::ConnectorTableHandle>>
-        tableHandle_;
-    std::optional<std::unordered_map<
-        std::string,
-        std::shared_ptr<connector::ColumnHandle>>>
-        assignments_;
+    std::optional<connector::ConnectorTableHandlePtr> tableHandle_;
+    std::optional<connector::ColumnHandleMap> assignments_;
   };
 
   bool supportsBarrier() const override {
@@ -977,13 +973,11 @@ class TableScanNode : public PlanNode {
     return true;
   }
 
-  const std::shared_ptr<connector::ConnectorTableHandle>& tableHandle() const {
+  const connector::ConnectorTableHandlePtr& tableHandle() const {
     return tableHandle_;
   }
 
-  const std::
-      unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>&
-      assignments() const {
+  const connector::ColumnHandleMap& assignments() const {
     return assignments_;
   }
 
@@ -999,10 +993,8 @@ class TableScanNode : public PlanNode {
   void addDetails(std::stringstream& stream) const override;
 
   const RowTypePtr outputType_;
-  const std::shared_ptr<connector::ConnectorTableHandle> tableHandle_;
-  const std::
-      unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>
-          assignments_;
+  const connector::ConnectorTableHandlePtr tableHandle_;
+  const connector::ColumnHandleMap assignments_;
 };
 
 using TableScanNodePtr = std::shared_ptr<const TableScanNode>;
@@ -1020,9 +1012,7 @@ class AggregationNode : public PlanNode {
     kSingle
   };
 
-  static const char* stepName(Step step);
-
-  static Step stepFromName(const std::string& name);
+  VELOX_DECLARE_EMBEDDED_ENUM_NAME(Step);
 
   /// Aggregate function call.
   struct Aggregate {
@@ -1333,7 +1323,7 @@ class TableWriteNode : public PlanNode {
       const RowTypePtr& columns,
       const std::vector<std::string>& columnNames,
       AggregationNodePtr aggregationNode,
-      std::shared_ptr<InsertTableHandle> insertTableHandle,
+      std::shared_ptr<const InsertTableHandle> insertTableHandle,
       bool hasPartitioningScheme,
       RowTypePtr outputType,
       connector::CommitStrategy commitStrategy,
@@ -1460,7 +1450,7 @@ class TableWriteNode : public PlanNode {
     std::optional<RowTypePtr> columns_;
     std::optional<std::vector<std::string>> columnNames_;
     std::optional<AggregationNodePtr> aggregationNode_;
-    std::optional<std::shared_ptr<InsertTableHandle>> insertTableHandle_;
+    std::optional<std::shared_ptr<const InsertTableHandle>> insertTableHandle_;
     std::optional<bool> hasPartitioningScheme_;
     std::optional<RowTypePtr> outputType_;
     std::optional<connector::CommitStrategy> commitStrategy_;
@@ -1490,7 +1480,7 @@ class TableWriteNode : public PlanNode {
     return columnNames_;
   }
 
-  const std::shared_ptr<InsertTableHandle>& insertTableHandle() const {
+  const std::shared_ptr<const InsertTableHandle>& insertTableHandle() const {
     return insertTableHandle_;
   }
 
@@ -1531,7 +1521,7 @@ class TableWriteNode : public PlanNode {
   const RowTypePtr columns_;
   const std::vector<std::string> columnNames_;
   const AggregationNodePtr aggregationNode_;
-  const std::shared_ptr<InsertTableHandle> insertTableHandle_;
+  const std::shared_ptr<const InsertTableHandle> insertTableHandle_;
   const bool hasPartitioningScheme_;
   const RowTypePtr outputType_;
   const connector::CommitStrategy commitStrategy_;
@@ -2286,9 +2276,7 @@ class LocalPartitionNode : public PlanNode {
     kRepartition,
   };
 
-  static const char* typeName(Type type);
-
-  static Type typeFromName(const std::string& name);
+  VELOX_DECLARE_EMBEDDED_ENUM_NAME(Type);
 
   /// If 'scaleWriter' is true, the local partition is used to scale the table
   /// writer prcessing.
@@ -2449,8 +2437,8 @@ class PartitionedOutputNode : public PlanNode {
     kBroadcast,
     kArbitrary,
   };
-  static std::string kindString(Kind kind);
-  static Kind stringToKind(const std::string& str);
+
+  VELOX_DECLARE_EMBEDDED_ENUM_NAME(Kind)
 
   PartitionedOutputNode(
       const PlanNodeId& id,
@@ -2647,6 +2635,7 @@ class PartitionedOutputNode : public PlanNode {
   }
 
   const PartitionFunctionSpec& partitionFunctionSpec() const {
+    VELOX_CHECK_NOT_NULL(partitionFunctionSpec_);
     return *partitionFunctionSpec_;
   }
 
@@ -2676,7 +2665,7 @@ using PartitionedOutputNodePtr = std::shared_ptr<const PartitionedOutputNode>;
 FOLLY_ALWAYS_INLINE std::ostream& operator<<(
     std::ostream& out,
     const PartitionedOutputNode::Kind kind) {
-  out << PartitionedOutputNode::kindString(kind);
+  out << PartitionedOutputNode::toName(kind);
   return out;
 }
 
@@ -2684,81 +2673,75 @@ enum class JoinType {
   // For each row on the left, find all matching rows on the right and return
   // all combinations.
   kInner = 0,
+
   // For each row on the left, find all matching rows on the right and return
   // all combinations. In addition, return all rows from the left that have no
   // match on the right with right-side columns filled with nulls.
   kLeft = 1,
+
   // Opposite of kLeft. For each row on the right, find all matching rows on
-  // the
-  // left and return all combinations. In addition, return all rows from the
+  // the left and return all combinations. In addition, return all rows from the
   // right that have no match on the left with left-side columns filled with
   // nulls.
   kRight = 2,
+
   // A "union" of kLeft and kRight. For each row on the left, find all
-  // matching
-  // rows on the right and return all combinations. In addition, return all
-  // rows
-  // from the left that have no
-  // match on the right with right-side columns filled with nulls. Also,
-  // return
-  // all rows from the
-  // right that have no match on the left with left-side columns filled with
-  // nulls.
+  // matching rows on the right and return all combinations. In addition, return
+  // all rows from the left that have no match on the right with right-side
+  // columns filled with nulls. Also, return all rows from the right that have
+  // no match on the left with left-side columns filled with nulls.
   kFull = 3,
+
   // Return a subset of rows from the left side which have a match on the
-  // right
-  // side. For this join type, cardinality of the output is less than or equal
-  // to the cardinality of the left side.
+  // right side. For this join type, cardinality of the output is less than or
+  // equal to the cardinality of the left side.
   kLeftSemiFilter = 4,
+
   // Return each row from the left side with a boolean flag indicating whether
   // there exists a match on the right side. For this join type, cardinality
-  // of
-  // the output equals the cardinality of the left side.
+  // of the output equals the cardinality of the left side.
   //
   // The handling of the rows with nulls in the join key depends on the
   // 'nullAware' boolean specified separately.
   //
-  // Null-aware join follows IN semantic. Regular join follows EXISTS
-  // semantic.
+  // Null-aware join follows IN semantic. Regular join follows EXISTS semantic.
   kLeftSemiProject = 5,
+
   // Opposite of kLeftSemiFilter. Return a subset of rows from the right side
   // which have a match on the left side. For this join type, cardinality of
-  // the
-  // output is less than or equal to the cardinality of the right side.
+  // the output is less than or equal to the cardinality of the right side.
   kRightSemiFilter = 6,
+
   // Opposite of kLeftSemiProject. Return each row from the right side with a
   // boolean flag indicating whether there exists a match on the left side.
-  // For
-  // this join type, cardinality of the output equals the cardinality of the
+  // For this join type, cardinality of the output equals the cardinality of the
   // right side.
   //
   // The handling of the rows with nulls in the join key depends on the
   // 'nullAware' boolean specified separately.
   //
-  // Null-aware join follows IN semantic. Regular join follows EXISTS
-  // semantic.
+  // Null-aware join follows IN semantic. Regular join follows EXISTS semantic.
   kRightSemiProject = 7,
+
   // Return each row from the left side which has no match on the right side.
   // The handling of the rows with nulls in the join key depends on the
   // 'nullAware' boolean specified separately.
   //
   // Null-aware join follows NOT IN semantic:
-  // (1) return empty result if the right side contains a record with a null
-  // in
+  // (1) return empty result if the right side contains a record with a null in
   // the join key;
-  // (2) return left-side row with null in the join key only when
-  // the right side is empty.
+  // (2) return left-side row with null in the join key only when the right side
+  // is empty.
   //
   // Regular anti join follows NOT EXISTS semantic:
   // (1) ignore right-side rows with nulls in the join keys;
   // (2) unconditionally return left side rows with nulls in the join keys.
   kAnti = 8,
+
   kNumJoinTypes = 9,
 };
 
-const char* joinTypeName(JoinType joinType);
-
-JoinType joinTypeFromName(const std::string& name);
+VELOX_DECLARE_ENUM_NAME(JoinType);
 
 inline bool isInnerJoin(JoinType joinType) {
   return joinType == JoinType::kInner;
@@ -3323,7 +3306,7 @@ class IndexLookupJoinNode : public AbstractJoinNode {
     VELOX_USER_CHECK(
         isSupported(joinType_),
         "Unsupported index lookup join type {}",
-        joinTypeName(joinType_));
+        JoinTypeName::toName(joinType_));
   }
 
   class Builder
@@ -3971,12 +3954,17 @@ class UnnestNode : public PlanNode {
   /// names must appear in the same order as unnestVariables.
   /// @param ordinalityName Optional name for the ordinality columns. If not
   /// present, ordinality column is not produced.
+  /// @param emptyUnnestValueName Optional name for column which indicates an
+  /// output row has empty unnest value or not. If not present, emptyUnnestValue
+  /// column is not provided and the unnest operator also skips producing output
+  /// rows with empty unnest value.
   UnnestNode(
       const PlanNodeId& id,
       std::vector<FieldAccessTypedExprPtr> replicateVariables,
       std::vector<FieldAccessTypedExprPtr> unnestVariables,
       std::vector<std::string> unnestNames,
       std::optional<std::string> ordinalityName,
+      std::optional<std::string> emptyUnnestValueName,
       const PlanNodePtr& source);
 
   class Builder {
@@ -4025,6 +4013,12 @@ class UnnestNode : public PlanNode {
       return *this;
     }
 
+    Builder& emptyUnnestValueName(
+        std::optional<std::string> emptyUnnestValueName) {
+      emptyUnnestValueName_ = std::move(emptyUnnestValueName);
+      return *this;
+    }
+
     std::shared_ptr<UnnestNode> build() const {
       VELOX_USER_CHECK(id_.has_value(), "UnnestNode id is not set");
       VELOX_USER_CHECK(
@@ -4043,6 +4037,7 @@ class UnnestNode : public PlanNode {
           unnestVariables_.value(),
           unnestNames_.value(),
           ordinalityName_,
+          emptyUnnestValueName_,
           source_.value());
     }
 
@@ -4052,6 +4047,7 @@ class UnnestNode : public PlanNode {
     std::optional<std::vector<FieldAccessTypedExprPtr>> unnestVariables_;
     std::optional<std::vector<std::string>> unnestNames_;
     std::optional<std::string> ordinalityName_;
+    std::optional<std::string> emptyUnnestValueName_;
     std::optional<PlanNodePtr> source_;
   };
 
@@ -4089,8 +4085,16 @@ class UnnestNode : public PlanNode {
     return ordinalityName_;
   }
 
-  bool withOrdinality() const {
+  bool hasOrdinality() const {
     return ordinalityName_.has_value();
+  }
+
+  const std::optional<std::string>& emptyUnnestValueName() const {
+    return emptyUnnestValueName_;
+  }
+
+  bool hasEmptyUnnestValue() const {
+    return emptyUnnestValueName_.has_value();
   }
 
   std::string_view name() const override {
@@ -4108,6 +4112,7 @@ class UnnestNode : public PlanNode {
   const std::vector<FieldAccessTypedExprPtr> unnestVariables_;
   const std::vector<std::string> unnestNames_;
   const std::optional<std::string> ordinalityName_;
+  const std::optional<std::string> emptyUnnestValueName_;
   const std::vector<PlanNodePtr> sources_;
   RowTypePtr outputType_;
 };
@@ -4312,9 +4317,7 @@ class WindowNode : public PlanNode {
  public:
   enum class WindowType { kRange, kRows };
 
-  static const char* windowTypeName(WindowType type);
-
-  static WindowType windowTypeFromName(const std::string& name);
+  VELOX_DECLARE_EMBEDDED_ENUM_NAME(WindowType)
 
   enum class BoundType {
     kUnboundedPreceding,
@@ -4324,9 +4327,7 @@ class WindowNode : public PlanNode {
     kUnboundedFollowing
   };
 
-  static const char* boundTypeName(BoundType type);
-
-  static BoundType boundTypeFromName(const std::string& name);
+  VELOX_DECLARE_EMBEDDED_ENUM_NAME(BoundType)
 
   /// Window frames can be ROW or RANGE type.
   /// Frame bounds can be CURRENT ROW, UNBOUNDED PRECEDING(FOLLOWING)
@@ -4790,19 +4791,55 @@ class MarkDistinctNode : public PlanNode {
 
 using MarkDistinctNodePtr = std::shared_ptr<const MarkDistinctNode>;
 
-/// Optimized version of a WindowNode for a single row_number function with a
-/// limit over sorted partitions.
-/// The output of this node contains all input columns followed by an optional
+/// Optimized version of a WindowNode for a single row_number, rank or
+/// dense_rank function with a limit over sorted partitions. The output of this
+/// node contains all input columns followed by an optional
 /// 'rowNumberColumnName' BIGINT column.
+/// TODO: This node will be renamed to TopNRank or TopNRowNode once all the
+/// support for handling rank and dense_rank is committed to Velox.
 class TopNRowNumberNode : public PlanNode {
  public:
+  enum class RankFunction {
+    kRowNumber,
+    kRank,
+    kDenseRank,
+  };
+
+  static const char* rankFunctionName(RankFunction function);
+
+  static RankFunction rankFunctionFromName(std::string_view name);
+
+  /// @param rankFunction RanksFunction (row_number, rank, dense_rank) for TopN.
   /// @param partitionKeys Partitioning keys. May be empty.
   /// @param sortingKeys Sorting keys. May not be empty and may not intersect
   /// with 'partitionKeys'.
   /// @param sortingOrders Sorting orders, one per sorting key.
   /// @param rowNumberColumnName Optional name of the column containing row
-  /// numbers. If not specified, the output doesn't include 'row number'
-  /// column. This is used when computing partial results.
+  /// numbers or rank or dense_rank. If not specified, the output doesn't
+  /// include 'row_number' column. This is used when computing partial results.
+  /// @param limit Per-partition limit. The number of
+  /// rows produced by this node will not exceed this value for any given
+  /// partition. Extra rows will be dropped.
+  TopNRowNumberNode(
+      PlanNodeId id,
+      RankFunction function,
+      std::vector<FieldAccessTypedExprPtr> partitionKeys,
+      std::vector<FieldAccessTypedExprPtr> sortingKeys,
+      std::vector<SortOrder> sortingOrders,
+      const std::optional<std::string>& rowNumberColumnName,
+      int32_t limit,
+      PlanNodePtr source);
+
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+  /// Note : This constructor is for backwards compatibility. Remove it after
+  /// migrating Prestissimo to use the new constructor.
+  /// @param partitionKeys Partitioning keys. May be empty.
+  /// @param sortingKeys Sorting keys. May not be empty and may not intersect
+  /// with 'partitionKeys'.
+  /// @param sortingOrders Sorting orders, one per sorting key.
+  /// @param rowNumberColumnName Optional name of the column containing row
+  /// numbers (or rank and dense_rank). If not specified, the output doesn't
+  /// include 'row number' column. This is used when computing partial results.
   /// @param limit Per-partition limit. The number of
   /// rows produced by this node will not exceed this value for any given
   /// partition. Extra rows will be dropped.
@@ -4813,7 +4850,17 @@ class TopNRowNumberNode : public PlanNode {
       std::vector<SortOrder> sortingOrders,
       const std::optional<std::string>& rowNumberColumnName,
       int32_t limit,
-      PlanNodePtr source);
+      PlanNodePtr source)
+      : TopNRowNumberNode(
+            id,
+            RankFunction::kRowNumber,
+            partitionKeys,
+            sortingKeys,
+            sortingOrders,
+            rowNumberColumnName,
+            limit,
+            source) {}
+#endif
 
   class Builder {
    public:
@@ -4830,10 +4877,16 @@ class TopNRowNumberNode : public PlanNode {
       limit_ = other.limit();
       VELOX_CHECK_EQ(other.sources().size(), 1);
       source_ = other.sources()[0];
+      function_ = other.rankFunction();
     }
 
     Builder& id(PlanNodeId id) {
       id_ = std::move(id);
+      return *this;
+    }
+
+    Builder& function(RankFunction function) {
+      function_ = function;
       return *this;
     }
 
@@ -4888,6 +4941,7 @@ class TopNRowNumberNode : public PlanNode {
 
       return std::make_shared<TopNRowNumberNode>(
           id_.value(),
+          function_.has_value() ? function_.value() : RankFunction::kRowNumber,
           partitionKeys_.value(),
           sortingKeys_.value(),
           sortingOrders_.value(),
@@ -4898,6 +4952,7 @@ class TopNRowNumberNode : public PlanNode {
 
    private:
     std::optional<PlanNodeId> id_;
+    std::optional<RankFunction> function_;
     std::optional<std::vector<FieldAccessTypedExprPtr>> partitionKeys_;
     std::optional<std::vector<FieldAccessTypedExprPtr>> sortingKeys_;
     std::optional<std::vector<SortOrder>> sortingOrders_;
@@ -4941,6 +4996,10 @@ class TopNRowNumberNode : public PlanNode {
     return limit_;
   }
 
+  RankFunction rankFunction() const {
+    return function_;
+  }
+
   bool generateRowNumber() const {
     return outputType_->size() > sources_[0]->outputType()->size();
   }
@@ -4955,6 +5014,8 @@ class TopNRowNumberNode : public PlanNode {
 
  private:
   void addDetails(std::stringstream& stream) const override;
+
+  const RankFunction function_;
 
   const std::vector<FieldAccessTypedExprPtr> partitionKeys_;
 
@@ -5092,12 +5153,12 @@ class PlanNodeVisitor {
 
 template <>
 struct fmt::formatter<facebook::velox::core::PartitionedOutputNode::Kind>
-    : formatter<std::string> {
+    : formatter<std::string_view> {
   auto format(
       facebook::velox::core::PartitionedOutputNode::Kind s,
       format_context& ctx) const {
-    return formatter<std::string>::format(
-        facebook::velox::core::PartitionedOutputNode::kindString(s), ctx);
+    return formatter<std::string_view>::format(
+        facebook::velox::core::PartitionedOutputNode::toName(s), ctx);
   }
 };
 
@@ -5105,5 +5166,16 @@ template <>
 struct fmt::formatter<facebook::velox::core::JoinType> : formatter<int> {
   auto format(facebook::velox::core::JoinType s, format_context& ctx) const {
     return formatter<int>::format(static_cast<int>(s), ctx);
+  }
+};
+
+template <>
+struct fmt::formatter<facebook::velox::core::TopNRowNumberNode::RankFunction>
+    : formatter<std::string> {
+  auto format(
+      facebook::velox::core::TopNRowNumberNode::RankFunction f,
+      format_context& ctx) const {
+    return formatter<std::string>::format(
+        facebook::velox::core::TopNRowNumberNode::rankFunctionName(f), ctx);
   }
 };

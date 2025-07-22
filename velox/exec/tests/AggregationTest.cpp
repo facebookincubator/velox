@@ -1304,7 +1304,7 @@ TEST_F(AggregationTest, memoryAllocations) {
   // hash table, 1 for the RowContainer holding accumulators, 2 for results (1
   // for values of the grouping key column, 1 for sum column).
   planStats = toPlanStats(task->taskStats());
-  ASSERT_EQ(7, planStats.at(aggNodeId).numMemoryAllocations);
+  ASSERT_EQ(8, planStats.at(aggNodeId).numMemoryAllocations);
 }
 
 TEST_F(AggregationTest, groupingSets) {
@@ -4028,6 +4028,64 @@ TEST_F(AggregationTest, destroyAfterPartialInitialization) {
   rows.clear();
 
   ASSERT_TRUE(agg.destroyCalled);
+}
+
+DEBUG_ONLY_TEST_F(
+    AggregationTest,
+    uninitializedDistinctAggrWithExternalMemAggrDuringAbort) {
+  const auto createInput =
+      [&](int32_t startKey, uint32_t numGroups, uint32_t numElementsPerGroup) {
+        return makeRowVector({
+            makeFlatVector<int32_t>([&]() {
+              std::vector<int32_t> keys;
+              for (auto i = 0; i < numGroups; ++i) {
+                for (auto j = 0; j < numElementsPerGroup; ++j) {
+                  keys.push_back(startKey + i);
+                }
+              }
+              return keys;
+            }()),
+            makeFlatVector<int32_t>(
+                numGroups * numElementsPerGroup,
+                [&](auto row) { return startKey; }),
+        });
+      };
+
+  std::vector<RowVectorPtr> inputs;
+  inputs.emplace_back(createInput(0, 10000, 10));
+  createDuckDbTable(inputs);
+
+  GroupingSet* groupingSet{nullptr};
+
+  std::atomic_bool groupingSetExtracted{false};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::GroupingSet::addInputForActiveRows",
+      std::function<void(GroupingSet*)>([&](GroupingSet* _groupingSet) {
+        if (!groupingSetExtracted.exchange(true)) {
+          groupingSet = _groupingSet;
+        }
+      }));
+
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::memory::MemoryPoolImpl::reserveThreadSafe",
+      std::function<void(void*)>([&](void* /*unused*/) {
+        if (groupingSet == nullptr) {
+          return;
+        }
+        if (groupingSet->numRows() > 0) {
+          VELOX_FAIL("Inject allocation failure.");
+        }
+      }));
+
+  auto plan = PlanBuilder()
+                  .values(inputs)
+                  .singleAggregation({"c0"}, {"array_agg(distinct c1)"})
+                  .planNode();
+
+  VELOX_ASSERT_THROW(
+      assertQuery(
+          plan, "SELECT c0, array_agg(distinct c1) FROM tmp GROUP BY c0"),
+      "Inject allocation failure.");
 }
 
 TEST_F(AggregationTest, nanKeys) {

@@ -160,7 +160,7 @@ OperatorSupplier makeOperatorSupplier(
         VELOX_UNSUPPORTED(
             "Hash join currently does not support mixed grouped execution for join "
             "type {}",
-            core::joinTypeName(join->joinType()));
+            core::JoinTypeName::toName(join->joinType()));
       }
       return std::make_unique<HashBuild>(operatorId, ctx, join);
     };
@@ -204,10 +204,11 @@ void plan(
     OperatorSupplier operatorSupplier,
     std::vector<std::unique_ptr<DriverFactory>>* driverFactories) {
   if (!currentPlanNodes) {
-    driverFactories->push_back(std::make_unique<DriverFactory>());
-    currentPlanNodes = &driverFactories->back()->planNodes;
-    driverFactories->back()->operatorSupplier = std::move(operatorSupplier);
-    driverFactories->back()->consumerNode = consumerNode;
+    auto driverFactory = std::make_unique<DriverFactory>();
+    currentPlanNodes = &driverFactory->planNodes;
+    driverFactory->operatorSupplier = std::move(operatorSupplier);
+    driverFactory->consumerNode = consumerNode;
+    driverFactories->push_back(std::move(driverFactory));
   }
 
   const auto& sources = planNode->sources();
