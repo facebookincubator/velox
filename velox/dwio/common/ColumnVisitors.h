@@ -920,19 +920,19 @@ class DictionaryColumnVisitor
           dictMask,
           reinterpret_cast<const int32_t*>(filterCache() - 3),
           indices);
-
-      #ifdef SVE_BITS
-        auto unknowns = simd::toBitMask(
-            simd::reinterpretBatch<uint32_t>((cache & (kUnknown << 24)) << 1) != xsimd::batch<uint32_t>(0));
-        auto passed = simd::toBitMask(
-            (simd::reinterpretBatch<uint32_t>(cache) & xsimd::batch<uint32_t>(1)) != xsimd::batch<uint32_t>(0));
-      #else
-        auto unknowns = simd::toBitMask(
-            xsimd::batch_bool<int32_t>(simd::reinterpretBatch<uint32_t>((cache & (kUnknown << 24)) << 1)));
-        auto passed = simd::toBitMask(
-            xsimd::batch_bool<int32_t>(simd::reinterpretBatch<uint32_t>(cache)));
-      #endif
-
+#ifdef SVE_BITS
+      auto unknowns = simd::toBitMask(
+          simd::reinterpretBatch<uint32_t>((cache & (kUnknown << 24)) << 1) !=
+          xsimd::batch<uint32_t>(0));
+      auto passed = simd::toBitMask(
+          (simd::reinterpretBatch<uint32_t>(cache) &
+           xsimd::batch<uint32_t>(1)) != xsimd::batch<uint32_t>(0));
+#else
+      auto unknowns = simd::toBitMask(xsimd::batch_bool<int32_t>(
+          simd::reinterpretBatch<uint32_t>((cache & (kUnknown << 24)) << 1)));
+      auto passed = simd::toBitMask(
+          xsimd::batch_bool<int32_t>(simd::reinterpretBatch<uint32_t>(cache)));
+#endif
       if (UNLIKELY(unknowns)) {
         uint16_t bits = unknowns;
         // Ranges only over inputs that are in dictionary, the not in dictionary
@@ -1321,19 +1321,19 @@ class StringDictionaryColumnVisitor
       } else {
         cache = simd::gather<int32_t, int32_t, 1>(base, indices);
       }
-
-      #ifdef SVE_BITS
-        auto unknowns = simd::toBitMask(
-            simd::reinterpretBatch<uint32_t>((cache & (kUnknown << 24)) << 1) != xsimd::batch<uint32_t>(0));
-        auto passed = simd::toBitMask(
-            (simd::reinterpretBatch<uint32_t>(cache) & xsimd::batch<uint32_t>(1)) != xsimd::batch<uint32_t>(0));
-      #else
-        auto unknowns = simd::toBitMask(
-            xsimd::batch_bool<int32_t>(simd::reinterpretBatch<uint32_t>((cache & (kUnknown << 24)) << 1)));
-        auto passed = simd::toBitMask(
-            xsimd::batch_bool<int32_t>(simd::reinterpretBatch<uint32_t>(cache)));
-      #endif
-
+#ifdef SVE_BITS
+      auto unknowns = simd::toBitMask(
+          simd::reinterpretBatch<uint32_t>((cache & (kUnknown << 24)) << 1) !=
+          xsimd::batch<uint32_t>(0));
+      auto passed = simd::toBitMask(
+          (simd::reinterpretBatch<uint32_t>(cache) &
+           xsimd::batch<uint32_t>(1)) != xsimd::batch<uint32_t>(0));
+#else
+      auto unknowns = simd::toBitMask(xsimd::batch_bool<int32_t>(
+          simd::reinterpretBatch<uint32_t>((cache & (kUnknown << 24)) << 1)));
+      auto passed = simd::toBitMask(
+          xsimd::batch_bool<int32_t>(simd::reinterpretBatch<uint32_t>(cache)));
+#endif
       if (UNLIKELY(unknowns)) {
         uint16_t bits = unknowns;
         while (bits) {
@@ -1644,4 +1644,3 @@ class StringColumnReadWithVisitorHelper {
 };
 
 } // namespace facebook::velox::dwio::common
-
