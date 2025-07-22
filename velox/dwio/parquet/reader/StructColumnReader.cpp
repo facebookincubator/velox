@@ -116,7 +116,7 @@ void StructColumnReader::read(
 std::shared_ptr<dwio::common::BufferedInput> StructColumnReader::loadRowGroup(
     uint32_t index,
     const std::shared_ptr<dwio::common::BufferedInput>& input,
-    const dwio::common::RowRanges& rowRanges) {
+    dwio::common::RowRanges& rowRanges) {
   if (isRowGroupBuffered(index, *input)) {
     enqueueRowGroup(index, *input, rowRanges);
     return input;
@@ -138,7 +138,7 @@ bool StructColumnReader::isRowGroupBuffered(
 void StructColumnReader::enqueueRowGroup(
     uint32_t index,
     dwio::common::BufferedInput& input,
-    const dwio::common::RowRanges& rowRanges) {
+    dwio::common::RowRanges& rowRanges) {
   for (auto& child : children_) {
     if (auto structChild = dynamic_cast<StructColumnReader*>(child)) {
       structChild->enqueueRowGroup(index, input, rowRanges);
