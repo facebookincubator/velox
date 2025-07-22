@@ -109,7 +109,8 @@ class ColumnPageIndex {
   /// Update skip flags for all pages based on the given RowRanges.
   /// Any page whose [firstRow, firstRow+rowCount-1] does not overlap
   /// any range in `ranges` will be marked skipped.
-  void updateSkippedPages(const dwio::common::RowRanges& ranges) {
+  int32_t updateSkippedPages(const dwio::common::RowRanges& ranges) {
+    int32_t skippedPages = 0;
     size_t n = numPages();
     for (size_t i = 0; i < n; ++i) {
       int64_t start = pageFirstRowIndex(i);
@@ -117,7 +118,11 @@ class ColumnPageIndex {
       bool overlap = ranges.isOverlapping(start, end);
       isPageSkipped_[i] = !overlap;
       hasSkippedPages_ |= isPageSkipped_[i];
+      if (isPageSkipped_[i]) {
+        skippedPages++;
+      }
     }
+    return skippedPages;
   }
 
   /// Builds column statistics for a specific page in a Parquet column chunk..
