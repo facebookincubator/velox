@@ -1593,7 +1593,6 @@ struct CurrentTimestampFunction {
     timeZoneKey_ =
         tz::getTimeZoneID(config.sessionTimezone(), /*failOnError=*/true);
     ts_ = Timestamp::now();
-
   }
 
   FOLLY_ALWAYS_INLINE void call(out_type<TimestampWithTimezone>& result) {
