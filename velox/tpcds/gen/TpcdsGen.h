@@ -90,7 +90,7 @@ std::string toTableName(Table table);
 /// Returns the schema (RowType) for a particular TPC-DS table.
 const velox::RowTypePtr getTableSchema(Table table);
 
-Table fromTableName(const std::string_view& tableName);
+Table fromTableName(const std::string& tableName);
 
 /// Returns a row vector containing at most `maxRows` rows of the `table`,
 /// starting at `offset`, with the given `scaleFactor`. DSDGen allows data

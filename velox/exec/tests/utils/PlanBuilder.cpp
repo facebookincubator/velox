@@ -169,8 +169,7 @@ PlanBuilder& PlanBuilder::tpcdsTableScan(
     std::vector<std::string> columnNames,
     double scaleFactor,
     std::string_view connectorId) {
-  std::unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>
-      assignmentsMap;
+  connector::ColumnHandleMap assignmentsMap;
   std::vector<TypePtr> outputTypes;
 
   assignmentsMap.reserve(columnNames.size());
