@@ -141,4 +141,41 @@ uint64_t IcebergSplitReader::next(uint64_t size, VectorPtr& output) {
   return rowsScanned;
 }
 
+std::vector<TypePtr> IcebergSplitReader::adaptColumns(
+    const RowTypePtr& fileType,
+    const std::shared_ptr<const velox::RowType>& tableSchema) const {
+  // Keep track of schema types for columns in file, used by ColumnSelector.
+  std::vector<TypePtr> columnTypes = fileType->children();
+  auto& childrenSpecs = scanSpec_->children();
+  // Iceberg table stores all column's data in data file.
+  for (size_t i = 0; i < childrenSpecs.size(); ++i) {
+    auto* childSpec = childrenSpecs[i].get();
+    const std::string& fieldName = childSpec->fieldName();
+    auto fileTypeIdx = fileType->getChildIdxIfExists(fieldName);
+    if (!fileTypeIdx.has_value()) {
+      // Column is missing. Most likely due to schema evolution.
+      VELOX_CHECK(tableSchema, "Unable to resolve column '{}'", fieldName);
+      childSpec->setConstantValue(BaseVector::createNullConstant(
+          tableSchema->findChild(fieldName),
+          1,
+          connectorQueryCtx_->memoryPool()));
+    } else {
+      // Column no longer missing, reset constant value set on the spec.
+      childSpec->setConstantValue(nullptr);
+      auto outputTypeIdx = readerOutputType_->getChildIdxIfExists(fieldName);
+      if (outputTypeIdx.has_value()) {
+        auto& outputType = readerOutputType_->childAt(*outputTypeIdx);
+        auto& columnType = columnTypes[*fileTypeIdx];
+        // We know the fieldName exists in the file, make the type at that
+        // position match what we expect in the output.
+        columnType = outputType;
+      }
+    }
+  }
+
+  scanSpec_->resetCachedValues(false);
+
+  return columnTypes;
+}
+
 } // namespace facebook::velox::connector::hive::iceberg
