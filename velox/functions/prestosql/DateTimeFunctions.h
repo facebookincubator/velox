@@ -1590,26 +1590,14 @@ struct CurrentTimestampFunction {
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>&,
       const core::QueryConfig& config) {
-    try {
-      timeZoneKey_ =
-          tz::getTimeZoneID(config.sessionTimezone(), /*failOnError=*/true);
-      ts_ = Timestamp::now();
-    } catch (const VeloxException& e) {
-      VELOX_USER_FAIL("Invalid session time zone: {}", e.what());
-    } catch (const std::exception& e) {
-      VELOX_FAIL(
-          "Unexpected error initializing current_timestamp: {}", e.what());
-    }
+    timeZoneKey_ =
+        tz::getTimeZoneID(config.sessionTimezone(), /*failOnError=*/true);
+    ts_ = Timestamp::now();
+
   }
 
   FOLLY_ALWAYS_INLINE void call(out_type<TimestampWithTimezone>& result) {
-    try {
-      result = pack(ts_, timeZoneKey_);
-    } catch (const VeloxException& e) {
-      VELOX_USER_FAIL("Failed to compute current_timestamp: {}", e.what());
-    } catch (const std::exception& e) {
-      VELOX_FAIL("Unexpected error in current_timestamp: {}", e.what());
-    }
+    result = pack(ts_, timeZoneKey_);
   }
 };
 
