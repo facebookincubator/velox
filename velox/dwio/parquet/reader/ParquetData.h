@@ -82,7 +82,7 @@ class ParquetData : public dwio::common::FormatData {
   void enqueueRowGroup(
       uint32_t index,
       dwio::common::BufferedInput& input,
-      const dwio::common::RowRanges& rowRanges);
+      dwio::common::RowRanges& rowRanges);
 
   /// Positions 'this' at 'index'th row group. loadRowGroup must be called
   /// first. The returned PositionProvider is empty and should not be used.
@@ -229,6 +229,15 @@ class ParquetData : public dwio::common::FormatData {
   /// stats in 'rowGroup'.
   bool rowGroupMatches(uint32_t rowGroupId, const common::Filter* filter);
 
+  /// Returns the number of pages skipped in the column chunk of 'index' due to
+  /// page skipping.
+  int64_t handlePageSkipping(
+      uint32_t index,
+      dwio::common::BufferedInput& input,
+      dwio::common::RowRanges& rowRanges,
+      uint64_t chunkReadOffset,
+      uint64_t chunkReadSize);
+
  protected:
   memory::MemoryPool& pool_;
   std::shared_ptr<const ParquetTypeWithId> type_;
@@ -236,9 +245,6 @@ class ParquetData : public dwio::common::FormatData {
   // Streams for this column in each of 'rowGroups_'. Will be created on or
   // ahead of first use, not at construction.
   std::vector<std::unique_ptr<dwio::common::SeekableInputStream>> streams_;
-
-  std::vector<std::vector<std::unique_ptr<dwio::common::SeekableInputStream>>>
-      pagesStreams_;
 
   const uint32_t maxDefine_;
   const uint32_t maxRepeat_;
@@ -256,7 +262,12 @@ class ParquetData : public dwio::common::FormatData {
   // Count of leading skipped positions in 'presetNulls_'
   int32_t presetNullsConsumed_{0};
 
+  // The page indices for the row groups.
   std::vector<std::unique_ptr<ColumnPageIndex>> pageIndices_;
+
+  // Streams for the pages after page purning.
+  std::vector<std::vector<std::unique_ptr<dwio::common::SeekableInputStream>>>
+      pagesStreams_;
 
   const common::ScanSpec& scanSpec_;
 };
