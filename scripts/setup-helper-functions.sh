@@ -195,7 +195,7 @@ detect_sve_flags() {
           return 0;
       }
 EOF
-    ./detect_sve_vector 2>/dev/null
+      ./detect_sve_vector 2>/dev/null
     )
 
     if [ "$SVE_VECTOR_BITS" ]; then
