@@ -1059,7 +1059,7 @@ TEST_F(ArrowBridgeArrayExportTest, dictionaryNested) {
   EXPECT_EQ(values.Value(2), 3);
 }
 
-TEST_F(ArrowBridgeArrayExportTest, nullType) {
+TEST_F(ArrowBridgeArrayExportTest, unknownType) {
   VectorPtr vector =
       BaseVector::createNullConstant(UNKNOWN(), 2048, pool_.get());
   testConstantVector<true, UnknownValue>(
