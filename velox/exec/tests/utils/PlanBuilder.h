@@ -1228,10 +1228,16 @@ class PlanBuilder {
   /// @param ordinalColumn An optional name for the 'ordinal' column to produce.
   /// This column contains the index of the element of the unnested array or
   /// map. If not specified, the output will not contain this column.
+  /// @param emptyUnnestValueName An optional name for the
+  /// 'emptyUnnestValue' column to produce. This column contains a boolean
+  /// indicating if the output row has empty unnest value or not. If not
+  /// specified, the output will not contain this column and the unnest operator
+  /// also skips producing output rows with empty unnest value.
   PlanBuilder& unnest(
       const std::vector<std::string>& replicateColumns,
       const std::vector<std::string>& unnestColumns,
-      const std::optional<std::string>& ordinalColumn = std::nullopt);
+      const std::optional<std::string>& ordinalColumn = std::nullopt,
+      const std::optional<std::string>& emptyUnnestValueName = std::nullopt);
 
   /// Add a WindowNode to compute one or more windowFunctions.
   /// @param windowFunctions A list of one or more window function SQL like
@@ -1267,9 +1273,18 @@ class PlanBuilder {
       std::optional<int32_t> limit = std::nullopt,
       bool generateRowNumber = true);
 
-  /// Add a TopNRowNumberNode to compute single row_number window function with
-  /// a limit applied to sorted partitions.
+  /// Add a TopNRowNumberNode to compute row_number
+  /// function with a limit applied to sorted partitions.
   PlanBuilder& topNRowNumber(
+      const std::vector<std::string>& partitionKeys,
+      const std::vector<std::string>& sortingKeys,
+      int32_t limit,
+      bool generateRowNumber);
+
+  /// Add a TopNRowNumberNode to compute row_number, rank or dense_rank window
+  /// function with a limit applied to sorted partitions.
+  PlanBuilder& topNRank(
+      std::string_view function,
       const std::vector<std::string>& partitionKeys,
       const std::vector<std::string>& sortingKeys,
       int32_t limit,

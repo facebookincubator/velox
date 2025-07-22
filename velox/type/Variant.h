@@ -23,7 +23,6 @@
 
 #include "folly/dynamic.h"
 #include "velox/common/base/Exceptions.h"
-#include "velox/common/base/VeloxException.h"
 #include "velox/type/Conversions.h"
 #include "velox/type/CppToType.h"
 #include "velox/type/Type.h"
@@ -38,26 +37,6 @@ constexpr double kEpsilon{0.00001};
 // todo(youknowjack): make this class not completely suck
 
 class Variant;
-
-template <TypeKind KIND>
-struct VariantEquality;
-
-template <>
-struct VariantEquality<TypeKind::TIMESTAMP>;
-
-template <>
-struct VariantEquality<TypeKind::ARRAY>;
-
-template <>
-struct VariantEquality<TypeKind::ROW>;
-
-template <>
-struct VariantEquality<TypeKind::MAP>;
-
-bool dispatchDynamicVariantEquality(
-    const Variant& a,
-    const Variant& b,
-    const bool& enableNullEqualsNull);
 
 namespace detail {
 template <typename T, TypeKind KIND, bool usesCustomComparison>
@@ -432,12 +411,7 @@ class Variant {
 
   bool equals(const Variant& other) const;
 
-  bool equalsWithNullEqualsNull(const Variant& other) const {
-    if (other.kind_ != this->kind_) {
-      return false;
-    }
-    return dispatchDynamicVariantEquality(*this, other, true);
-  }
+  bool equalsWithNullEqualsNull(const Variant& other) const;
 
   Variant(Variant&& other) noexcept
       : ptr_{other.ptr_},
@@ -460,13 +434,12 @@ class Variant {
     return toJsonUnsafe();
   }
 
-  /// Returns a string of the Variant value. Currently only supports scalar
-  /// types.
+  /// Returns a string of the Variant value.
   std::string toString(const TypePtr& type) const;
 
   folly::dynamic serialize() const;
 
-  static Variant create(const folly::dynamic&);
+  static Variant create(const folly::dynamic& obj);
 
   bool hasValue() const {
     return !isNull();
@@ -578,55 +551,12 @@ class Variant {
     return nullptr;
   }
 
-  TypePtr inferType() const {
-    switch (kind_) {
-      case TypeKind::MAP: {
-        TypePtr keyType;
-        TypePtr valueType;
-        auto& m = map();
-        for (auto& pair : m) {
-          if (keyType == nullptr && !pair.first.isNull()) {
-            keyType = pair.first.inferType();
-          }
-          if (valueType == nullptr && !pair.second.isNull()) {
-            valueType = pair.second.inferType();
-          }
-          if (keyType && valueType) {
-            break;
-          }
-        }
-        return MAP(
-            keyType ? keyType : UNKNOWN(), valueType ? valueType : UNKNOWN());
-      }
-      case TypeKind::ROW: {
-        auto& r = row();
-        std::vector<TypePtr> children{};
-        children.reserve(r.size());
-        for (auto& v : r) {
-          children.push_back(v.inferType());
-        }
-        return ROW(std::move(children));
-      }
-      case TypeKind::ARRAY: {
-        TypePtr elementType = UNKNOWN();
-        if (!isNull()) {
-          auto& a = array();
-          if (!a.empty()) {
-            elementType = a.at(0).inferType();
-          }
-        }
-        return ARRAY(elementType);
-      }
-      case TypeKind::OPAQUE: {
-        return value<TypeKind::OPAQUE>().type;
-      }
-      case TypeKind::UNKNOWN: {
-        return UNKNOWN();
-      }
-      default:
-        return createScalarType(kind_);
-    }
-  }
+  TypePtr inferType() const;
+
+  /// Returns true if the type of this Variant is compatible with the specified
+  /// type. Similar to inferType()->kindEquals(type), but treats
+  /// TypeKind::UNKNOWN equal to any other TypeKind.
+  bool isTypeCompatible(const TypePtr& type) const;
 
   friend std::ostream& operator<<(std::ostream& stream, const Variant& k) {
     const auto type = k.inferType();

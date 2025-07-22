@@ -161,6 +161,11 @@ Spatial Operations
     Returns the geometry that represents the all points in either ``geometry1``
     or ``geometry2``.
 
+.. function:: ST_Envelope(geometry: Geometry) -> envelope: Geometry
+
+    Returns the bounding rectangular polygon of a ``geometry``. Empty input will
+    result in empty output.
+
 Accessors
 ---------
 .. function:: ST_IsValid(geometry: Geometry) -> valid: bool
@@ -289,6 +294,35 @@ Accessors
     rings in the input ``geometry``, returns NULL. Throws an error if the input geometry
     is not a polygon. Use ``:func:ST_NumInteriorRing`` to find out the total number of
     elements.
+
+.. function:: ST_NumGeometries(geometry: Geometry) -> output: integer
+
+    Returns the number of geometries in the collection. If the geometry is a
+    collection of geometries (e.g., GeometryCollection or Multi*),
+    returns the number of geometries, for single geometries returns 1,
+    for empty geometries returns 0. Note that empty geometries inside of a
+    GeometryCollection will count as a geometry if and only if there is at
+    least 1 non-empty geometry in the collection. e.g.
+    ``ST_NumGeometries(ST_GeometryFromText('GEOMETRYCOLLECTION(POINT EMPTY)'))``
+    will evaluate to 0, but
+    ``ST_NumGeometries(ST_GeometryFromText('GEOMETRYCOLLECTION(POINT EMPTY, POINT (1 2))'))``
+    will evaluate to 1.
+
+.. function:: ST_NumInteriorRing(geometry: Geometry) -> output: integer
+
+    Returns the cardinality of the collection of interior rings of a polygon.
+
+.. function:: ST_ConvexHull(geometry: Geometry) -> output: Geometry
+
+    Returns the minimum convex geometry that encloses all input geometries.
+
+.. function:: ST_Dimension(geometry: Geometry) -> output: tinyint
+
+    Returns the inherent dimension of this geometry object, which must be less than or equal to the coordinate dimension.
+
+.. function:: ST_ExteriorRing(geometry: Geometry) -> output: Geometry
+
+    Returns a line string representing the exterior ring of the input polygon.
 
 .. function:: simplify_geometry(geometry: Geometry, tolerance: double) -> output: Geometry
 

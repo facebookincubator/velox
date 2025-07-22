@@ -42,7 +42,11 @@ class ColumnReader {
             fileType_,
             scanSpec,
             operand ? operand->id : kNoOperand)),
-        scanSpec_(&scanSpec) {}
+        scanSpec_(&scanSpec) {
+    if (operand) {
+      operand->notNull = !formatData_->hasNulls();
+    }
+  }
 
   virtual ~ColumnReader() = default;
 
@@ -187,6 +191,8 @@ class ReadStream : public Executable {
   // single column. This may loose if it were better to take the
   // launch cost but run all non-filter columns in their own TBs.
   bool decodenonFiltersInFiltersKernel();
+
+  void initializeResultNulls(Stream& stream);
 
   StructColumnReader* reader_;
   std::vector<AbstractOperand*> abstractOperands_;
