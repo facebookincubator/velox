@@ -558,6 +558,10 @@ struct RuntimeStatistics {
 
   int64_t numStripes{0};
 
+  int64_t skippedPages{0};
+
+  int64_t processedPages{0};
+
   ColumnReaderStatistics columnReaderStatistics;
 
   std::unordered_map<std::string, RuntimeCounter> toMap() {
@@ -591,6 +595,12 @@ struct RuntimeStatistics {
       result.emplace(
           "flattenStringDictionaryValues",
           RuntimeCounter(columnReaderStatistics.flattenStringDictionaryValues));
+    }
+    if (skippedPages > 0) {
+      result.emplace("skippedPages", RuntimeCounter(skippedPages));
+    }
+    if (processedPages > 0) {
+      result.emplace("processedPages", RuntimeCounter(processedPages));
     }
     return result;
   }
