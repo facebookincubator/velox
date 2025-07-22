@@ -15,6 +15,7 @@
  */
 
 #include "velox/exec/tests/utils/IndexLookupJoinTestBase.h"
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
 namespace fecebook::velox::exec::test {
@@ -45,7 +46,8 @@ IndexLookupJoinTestBase::generateProbeInput(
     SequenceTableData& tableData,
     std::shared_ptr<facebook::velox::memory::MemoryPool>& pool,
     const std::vector<std::string>& probeJoinKeys,
-    const std::vector<std::string> inColumns,
+    bool hasNullKeys,
+    const std::vector<std::string>& inColumns,
     const std::vector<std::pair<std::string, std::string>>& betweenColumns,
     std::optional<int> equalMatchPct,
     std::optional<int> inMatchPct,
@@ -59,10 +61,27 @@ IndexLookupJoinTestBase::generateProbeInput(
   opts.vectorSize = batchSize * numDuplicateProbeRows;
   opts.allowSlice = false;
   // TODO: add nullable handling later.
-  opts.nullRatio = 0.0;
+  opts.nullRatio = hasNullKeys ? 0.1 : 0.0;
   facebook::velox::VectorFuzzer fuzzer(opts, pool.get());
   for (int i = 0; i < numBatches; ++i) {
     probeInputs.push_back(fuzzer.fuzzInputRow(probeType_));
+    // NOTE: index connector doesn't expect in condition column rray elements to
+    // be null.
+    if ((!inMatchPct.has_value() || tableData.keyData->size() == 0) &&
+        hasNullKeys) {
+      for (int i = 0; i < probeType_->size(); ++i) {
+        const auto columnType = probeType_->childAt(i);
+        if (columnType->isArray()) {
+          opts.nullRatio = 0.0;
+          facebook::velox::VectorFuzzer vectorFuzzer(opts, pool.get());
+          probeInputs.back()->childAt(i) = vectorFuzzer.fuzz(columnType);
+          VELOX_CHECK(!probeInputs.back()->childAt(i)->mayHaveNulls());
+          VELOX_CHECK_EQ(
+              probeInputs.back()->childAt(i)->size(),
+              probeInputs.back()->size());
+        }
+      }
+    }
   }
 
   if (tableData.keyData->size() == 0) {
@@ -98,6 +117,9 @@ IndexLookupJoinTestBase::generateProbeInput(
           const auto matchKeyRow = folly::Random::rand64(numTableRows);
           for (int j = 0; j < probeJoinKeys.size(); ++j) {
             for (int k = 0; k < numDuplicateProbeRows; ++k) {
+              if (probeKeyVectors[j]->isNullAt(row + k)) {
+                continue;
+              }
               probeKeyVectors[j]->set(
                   row + k, tableKeyVectors[j]->valueAt(matchKeyRow));
             }
@@ -106,6 +128,9 @@ IndexLookupJoinTestBase::generateProbeInput(
           for (int j = 0; j < probeJoinKeys.size(); ++j) {
             const auto randomValue = folly::Random::rand32() % 4096;
             for (int k = 0; k < numDuplicateProbeRows; ++k) {
+              if (probeKeyVectors[j]->isNullAt(row + k)) {
+                continue;
+              }
               probeKeyVectors[j]->set(
                   row + k, tableData.maxKeys[j] + 1 + randomValue);
             }
@@ -147,7 +172,10 @@ IndexLookupJoinTestBase::generateProbeInput(
             [&](auto row) -> facebook::velox::vector_size_t {
               return maxValue - minValue + 1;
             },
-            [&](auto /*unused*/, auto index) { return minValue + index; });
+            [&](auto /*unused*/, auto index) { return minValue + index; },
+            [&](auto row) {
+              return probeInputs[i]->childAt(inColumnChannel)->isNullAt(row);
+            });
       }
     }
   }
@@ -177,15 +205,22 @@ IndexLookupJoinTestBase::generateProbeInput(
         if (lowerBoundChannel.has_value()) {
           probeInputs[i]->childAt(lowerBoundChannel.value()) =
               makeFlatVector<int64_t>(
-                  probeInputs[i]->size(), [&](auto /*unused*/) {
+                  probeInputs[i]->size(),
+                  [&](auto /*unused*/) {
                     return tableData.minKeys[tableKeyChannel];
+                  },
+                  [&](auto row) {
+                    return probeInputs[i]
+                        ->childAt(lowerBoundChannel.value())
+                        ->isNullAt(row);
                   });
         }
         const auto upperBoundColumn = betweenColumn.second;
         if (upperBoundChannel.has_value()) {
           probeInputs[i]->childAt(upperBoundChannel.value()) =
               makeFlatVector<int64_t>(
-                  probeInputs[i]->size(), [&](auto /*unused*/) -> int64_t {
+                  probeInputs[i]->size(),
+                  [&](auto /*unused*/) -> int64_t {
                     if (betweenMatchPct.value() == 0) {
                       return tableData.minKeys[tableKeyChannel] - 1;
                     } else {
@@ -194,6 +229,11 @@ IndexLookupJoinTestBase::generateProbeInput(
                            tableData.minKeys[tableKeyChannel]) *
                           betweenMatchPct.value() / 100;
                     }
+                  },
+                  [&](auto row) {
+                    return probeInputs[i]
+                        ->childAt(upperBoundChannel.value())
+                        ->isNullAt(row);
                   });
         }
       }
@@ -280,13 +320,9 @@ facebook::velox::core::TableScanNodePtr
 IndexLookupJoinTestBase::makeIndexScanNode(
     const std::shared_ptr<facebook::velox::core::PlanNodeIdGenerator>&
         planNodeIdGenerator,
-    const std::shared_ptr<facebook::velox::connector::ConnectorTableHandle>
-        indexTableHandle,
+    const facebook::velox::connector::ConnectorTableHandlePtr& indexTableHandle,
     const facebook::velox::RowTypePtr& outputType,
-    const std::unordered_map<
-        std::string,
-        std::shared_ptr<facebook::velox::connector::ColumnHandle>>&
-        assignments) {
+    const facebook::velox::connector::ColumnHandleMap& assignments) {
   auto planBuilder = facebook::velox::exec::test::PlanBuilder(
       planNodeIdGenerator, pool_.get());
   auto indexTableScan =

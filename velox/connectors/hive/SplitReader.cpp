@@ -22,9 +22,7 @@
 #include "velox/connectors/hive/HiveConnectorUtil.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergSplitReader.h"
-#include "velox/dwio/common/CachedBufferedInput.h"
 #include "velox/dwio/common/ReaderFactory.h"
-#include "velox/type/TimestampConversion.h"
 
 namespace facebook::velox::connector::hive {
 namespace {
@@ -77,9 +75,8 @@ VectorPtr newConstantFromString(
 
 std::unique_ptr<SplitReader> SplitReader::create(
     const std::shared_ptr<hive::HiveConnectorSplit>& hiveSplit,
-    const std::shared_ptr<const HiveTableHandle>& hiveTableHandle,
-    const std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>*
-        partitionKeys,
+    const HiveTableHandlePtr& hiveTableHandle,
+    const std::unordered_map<std::string, HiveColumnHandlePtr>* partitionKeys,
     const ConnectorQueryCtx* connectorQueryCtx,
     const std::shared_ptr<const HiveConfig>& hiveConfig,
     const RowTypePtr& readerOutputType,
@@ -121,9 +118,8 @@ std::unique_ptr<SplitReader> SplitReader::create(
 
 SplitReader::SplitReader(
     const std::shared_ptr<const hive::HiveConnectorSplit>& hiveSplit,
-    const std::shared_ptr<const HiveTableHandle>& hiveTableHandle,
-    const std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>*
-        partitionKeys,
+    const HiveTableHandlePtr& hiveTableHandle,
+    const std::unordered_map<std::string, HiveColumnHandlePtr>* partitionKeys,
     const ConnectorQueryCtx* connectorQueryCtx,
     const std::shared_ptr<const HiveConfig>& hiveConfig,
     const RowTypePtr& readerOutputType,
@@ -290,9 +286,12 @@ void SplitReader::createReader() {
       baseReaderOpts_.fileFormat(), dwio::common::FileFormat::UNKNOWN);
 
   FileHandleCachedPtr fileHandleCachePtr;
+  FileHandleKey fileHandleKey{
+      .filename = hiveSplit_->filePath,
+      .tokenProvider = connectorQueryCtx_->fsTokenProvider()};
   try {
     fileHandleCachePtr = fileHandleFactory_->generate(
-        hiveSplit_->filePath,
+        fileHandleKey,
         hiveSplit_->properties.has_value() ? &*hiveSplit_->properties : nullptr,
         fsStats_ ? fsStats_.get() : nullptr);
     VELOX_CHECK_NOT_NULL(fileHandleCachePtr.get());
