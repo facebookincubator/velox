@@ -625,8 +625,10 @@ cudf::ast::expression const& AstContext::pushExprToTree(
 
     auto maxsplitLiteral =
         std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[2]);
-    std::string splitExpr = "split " + std::to_string(scalars.size() - 1) +
-        " " + maxsplitLiteral->value()->toString(0);
+    auto splitExpr = fmt::format(
+        "split {} {}",
+        scalars.size() - 1,
+        maxsplitLiteral->value()->toString(0));
     return addPrecomputeInstruction(fieldExpr->name(), splitExpr);
   } else if (auto fieldExpr = std::dynamic_pointer_cast<FieldReference>(expr)) {
     // Refer to the appropriate side
@@ -688,18 +690,19 @@ void addPrecomputedColumns(
       int numberOfParameters, beginValue, length;
       iss >> numberOfParameters >> beginValue >> length;
       if (beginValue >= 1) {
-        // cuDF indexing starts at 0
-        // presto indexing starts at 1
-        // if we are doing a positive index, we need to substract 1
-        beginValue = beginValue - 1;
+        // cuDF indexing starts at 0.
+        // Presto indexing starts at 1.
+        // Positive indices need to substract 1.
+        beginValue -= 1;
       }
       auto beginScalar = cudf::numeric_scalar<cudf::size_type>(
           beginValue, true, stream, cudf::get_current_device_resource_ref());
-      // cuDF does [start,end)
-      // presto means length as the length of the substring
+      // cuDF uses indices [begin, end).
+      // Presto uses length as the length of the substring.
+      // We compute the end as beginValue + length.
       auto endScalar = cudf::numeric_scalar<cudf::size_type>(
           beginValue + length,
-          numberOfParameters == 1 ? false : true,
+          numberOfParameters != 1,
           stream,
           cudf::get_current_device_resource_ref());
       auto stepScalar = cudf::numeric_scalar<cudf::size_type>(
@@ -735,6 +738,9 @@ void addPrecomputedColumns(
       auto newColumn = std::make_unique<cudf::column>(
           input_table_columns[dependent_column_index]->view().child(
               nested_dependent_column_indices[0]),
+          stream,
+          cudf::get_current_device_resource_ref());
+      input_table_columns.emplace_back(std::move(newColumn));
     } else if (ins_name == "cardinality") {
       auto newColumn = cudf::lists::count_elements(
           input_table_columns[dependent_column_index]->view(),
@@ -742,13 +748,15 @@ void addPrecomputedColumns(
           cudf::get_current_device_resource_ref());
       input_table_columns.emplace_back(std::move(newColumn));
     } else if (ins_name.rfind("split", 0) == 0) {
+      VELOX_CHECK_GT(ins_name.length(), 5);
       std::istringstream iss(ins_name.substr(5));
       int scalarIndex, maxSplitCount;
       iss >> scalarIndex >> maxSplitCount;
-      // presto specifies maxSplitCount as the maximum size of the returned
+      VELOX_CHECK(!iss.fail(), "Unable to parse scalarIndex and maxSplitCount");
+      // Presto specifies maxSplitCount as the maximum size of the returned
       // array while cuDF understands the parameter as how many splits can it
-      // perform
-      maxSplitCount = maxSplitCount - 1;
+      // perform.
+      maxSplitCount -= 1;
       auto newColumn = cudf::strings::split_record(
           input_table_columns[dependent_column_index]->view(),
           *static_cast<cudf::string_scalar*>(scalars[scalarIndex].get()),
