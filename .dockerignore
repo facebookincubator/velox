@@ -11,12 +11,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-<<<<<<<< HEAD:.github/zizmor.yml
-rules:
-  use-trusted-publishing:
-    ignore:
-      - build_pyvelox.yml
-========
 
 _build/
 
@@ -24,4 +18,3 @@ _build/
 .venv/
 dist/
 wheelhouse/
->>>>>>>> xwei/main:.dockerignore
