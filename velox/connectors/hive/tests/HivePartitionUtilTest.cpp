@@ -29,6 +29,10 @@ using namespace facebook::velox::dwio::catalog::fbhive;
 class HivePartitionUtilTest : public ::testing::Test,
                               public velox::test::VectorTestBase {
  protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
+  }
+
   template <typename T>
   VectorPtr makeDictionary(const std::vector<T>& data) {
     auto base = makeFlatVector(data);
@@ -69,14 +73,17 @@ TEST_F(HivePartitionUtilTest, partitionName) {
          "flat_int_col",
          "flat_bigint_col",
          "dict_string_col",
-         "const_date_col"},
+         "const_date_col",
+         "flat_timestamp_col"},
         {makeFlatVector<bool>(std::vector<bool>{false}),
          makeFlatVector<int8_t>(std::vector<int8_t>{10}),
          makeFlatVector<int16_t>(std::vector<int16_t>{100}),
          makeFlatVector<int32_t>(std::vector<int32_t>{1000}),
          makeFlatVector<int64_t>(std::vector<int64_t>{10000}),
          makeDictionary<StringView>(std::vector<StringView>{"str1000"}),
-         makeConstant<int32_t>(10000, 1, DATE())});
+         makeConstant<int32_t>(10000, 1, DATE()),
+         makeFlatVector<Timestamp>(
+             std::vector<Timestamp>{Timestamp::fromMillis(1577836800000)})});
 
     std::vector<std::string> expectedPartitionKeyValues{
         "flat_bool_col=false",
@@ -85,7 +92,8 @@ TEST_F(HivePartitionUtilTest, partitionName) {
         "flat_int_col=1000",
         "flat_bigint_col=10000",
         "dict_string_col=str1000",
-        "const_date_col=1997-05-19"};
+        "const_date_col=1997-05-19",
+        "flat_timestamp_col=2019-12-31 16%3A00%3A00.0"};
 
     std::vector<column_index_t> partitionChannels;
     for (auto i = 1; i <= expectedPartitionKeyValues.size(); i++) {
@@ -131,7 +139,8 @@ TEST_F(HivePartitionUtilTest, partitionNameForNull) {
       "flat_int_col",
       "flat_bigint_col",
       "flat_string_col",
-      "const_date_col"};
+      "const_date_col",
+      "flat_timestamp_col"};
 
   RowVectorPtr input = makeRowVector(
       partitionColumnNames,
@@ -141,7 +150,8 @@ TEST_F(HivePartitionUtilTest, partitionNameForNull) {
        makeNullableFlatVector<int32_t>({std::nullopt}),
        makeNullableFlatVector<int64_t>({std::nullopt}),
        makeNullableFlatVector<StringView>({std::nullopt}),
-       makeConstant<int32_t>(std::nullopt, 1, DATE())});
+       makeConstant<int32_t>(std::nullopt, 1, DATE()),
+       makeNullableFlatVector<Timestamp>({std::nullopt})});
 
   for (auto i = 0; i < partitionColumnNames.size(); i++) {
     std::vector<column_index_t> partitionChannels = {(column_index_t)i};
@@ -150,5 +160,48 @@ TEST_F(HivePartitionUtilTest, partitionNameForNull) {
     EXPECT_EQ(1, partitionEntries.size());
     EXPECT_EQ(partitionColumnNames[i], partitionEntries[0].first);
     EXPECT_EQ("", partitionEntries[0].second);
+  }
+}
+
+TEST_F(HivePartitionUtilTest, timestampPartitionValueFormatting) {
+  // Test timestamp partition value formatting to match Presto's
+  // java.sql.Timestamp.toString() behavior: removes trailing zeros but keeps at
+  // least one decimal place
+  std::vector<Timestamp> timestamps = {
+      // Test case 1: All zeros in fractional seconds -> should become ".0"
+      Timestamp(
+          0, 0), // 1970-01-01 00:00:00.000 UTC -> 1969-12-31 16:00:00.0 PST
+
+      // Test case 2: Trailing zeros should be removed
+      Timestamp(0, 980000000), // 1970-01-01 00:00:00.980 UTC -> 1969-12-31
+      // 16:00:00.98 PST
+
+      // Test case 3: No trailing zeros, should remain unchanged
+      Timestamp(0, 123000000), // 1970-01-01 00:00:00.123 UTC -> 1969-12-31
+      // 16:00:00.123 PST
+  };
+
+  // Expected values account for timezone conversion to PST (UTC-8)
+  std::vector<std::string> expectedValues = {
+      "1969-12-31 16:00:00.0", // .000 -> .0 (converted to PST)
+      "1969-12-31 16:00:00.98", // .980 -> .98 (converted to PST)
+      "1969-12-31 16:00:00.123", // .123 -> .123 (converted to PST)
+  };
+
+  RowVectorPtr input =
+      makeRowVector({"timestamp_col"}, {makeFlatVector<Timestamp>(timestamps)});
+
+  std::vector<column_index_t> partitionChannels{0};
+  auto partitionsVector = makePartitionsVector(input, partitionChannels);
+
+  for (size_t i = 0; i < timestamps.size(); i++) {
+    auto partitionEntries = extractPartitionKeyValues(
+        partitionsVector, static_cast<vector_size_t>(i));
+
+    EXPECT_EQ(1, partitionEntries.size());
+    EXPECT_EQ("timestamp_col", partitionEntries[0].first);
+    EXPECT_EQ(expectedValues[i], partitionEntries[0].second)
+        << "Failed for timestamp index " << i << " with value "
+        << timestamps[i].toString();
   }
 }

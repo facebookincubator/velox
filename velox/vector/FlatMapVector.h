@@ -211,6 +211,9 @@ class FlatMapVector : public BaseVector {
   vector_size_t sizeAt(vector_size_t index) const;
 
   bool isInMap(column_index_t keyChannel, vector_size_t index) const {
+    if (inMaps_.size() <= keyChannel) {
+      return true;
+    }
     auto* inMap = inMapsAt(keyChannel)->asMutable<uint64_t>();
     return inMap ? bits::isBitSet(inMap, index) : true;
   }
@@ -233,13 +236,39 @@ class FlatMapVector : public BaseVector {
     return mapValues_[index];
   }
 
-  /// Get the in map buffer for a given a map key channel.
+  /// Get the in map buffer for a given a map key channel. Throws if in maps
+  /// does not exist for this channel.
   const BufferPtr& inMapsAt(column_index_t index) const {
     VELOX_CHECK_LT(
         index,
         inMaps_.size(),
         "Trying to access non-existing key channel in FlatMapVector.");
     return inMaps_[index];
+  }
+
+  /// Get the in map buffer reference for a given map key channel. If `resize`
+  /// is true, may resize up to `numDistinctKeys()` to ensure that the inMaps
+  /// vector has the appropriate length.
+  BufferPtr& inMapsAt(column_index_t index, bool resize = false) {
+    if (index < inMaps_.size()) {
+      return inMaps_[index];
+    } else if (!resize || index >= numDistinctKeys()) {
+      VELOX_CHECK_LT(
+          index,
+          inMaps_.size(),
+          "Trying to access non-existing key channel in FlatMapVector.");
+    }
+    inMaps_.resize(index + 1);
+    return inMaps_[index];
+  }
+
+  const uint64_t* rawInMapsAt(column_index_t index) const {
+    return inMaps_.size() > index ? inMaps_[index]->as<uint64_t>() : nullptr;
+  }
+
+  uint64_t* mutableRawInMapsAt(column_index_t index) {
+    return inMaps_.size() > index ? inMaps_[index]->asMutable<uint64_t>()
+                                  : nullptr;
   }
 
   using BaseVector::toString;
@@ -268,6 +297,17 @@ class FlatMapVector : public BaseVector {
       vector_size_t index,
       vector_size_t otherIndex,
       CompareFlags flags) const override;
+
+  /// Copy the ranges defined by `ranges` from source into `this`.
+  void copyRanges(
+      const BaseVector* source,
+      const folly::Range<const CopyRange*>& ranges) override;
+
+  void ensureWritable(const SelectivityVector& rows) override;
+
+  bool isWritable() const override {
+    return true;
+  }
 
   /// Returns the hash of the value at the given index in this vector.
   uint64_t hashValueAt(vector_size_t index) const override;
@@ -299,6 +339,35 @@ class FlatMapVector : public BaseVector {
       keyToChannel_.insert({distinctKeys->hashValueAt(i), i});
     }
   }
+
+  /// Appends a new distinct key to the flat map specified by `sourceChannel` on
+  /// `sourceDistinctKeys`.
+  void appendDistinctKey(
+      const VectorPtr& sourceDistinctKeys,
+      column_index_t sourceChannel) {
+    column_index_t targetChannel = distinctKeys_->size();
+
+    distinctKeys_->resize(targetChannel + 1);
+    distinctKeys_->copy(
+        sourceDistinctKeys.get(), targetChannel, sourceChannel, 1);
+    mapValues_.resize(distinctKeys_->size());
+
+    keyToChannel_.insert(
+        {distinctKeys_->hashValueAt(targetChannel), targetChannel});
+    sortedKeys_ = false;
+  }
+
+  /// Updates the in map buffer from the key defined by `targetChannel` based on
+  /// values from `sourceInMaps`. Updates based on the ranges defined in
+  /// `ranges`.
+  ///
+  /// In case neither targetChannel nor sourceInMaps have in map buffers
+  /// allocated, returns early since this means that key is specified
+  /// everywhere (no update needed).
+  void copyInMapRanges(
+      column_index_t targetChannel,
+      const uint64_t* sourceInMaps,
+      const folly::Range<const BaseVector::CopyRange*>& ranges);
 
   // Vector containing the distinct map keys.
   VectorPtr distinctKeys_;

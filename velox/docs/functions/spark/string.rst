@@ -1,6 +1,6 @@
-====================================
+================
 String Functions
-====================================
+================
 
 .. note::
 
@@ -12,6 +12,12 @@ String Functions
 .. spark:function:: ascii(string) -> integer
 
     Returns unicode code point of the first character of ``string``. Returns 0 if ``string`` is empty.
+
+.. spark:function:: base64(expr) -> varchar
+
+    Converts ``expr`` to a base 64 string using RFC2045 Base64 transfer encoding for MIME. ::
+
+        SELECT base64('Spark SQL'); -- 'U3BhcmsgU1FM'
 
 .. spark:function:: bit_length(string/binary) -> integer
 
@@ -108,6 +114,20 @@ String Functions
         SELECT find_in_set(NULL, ',123'); -- NULL
         SELECT find_in_set("abc", NULL); -- NULL
 
+.. spark:function:: initcap(string) -> varchar
+
+   The ``initcap`` function converts the first character of each word to uppercase
+   and all other characters in the word to lowercase. It supports UTF-8 multibyte
+   characters, up to four bytes per character.
+
+   A *word* is defined as a sequence of characters separated by whitespace. ::
+
+        SELECT initcap('spark sql'); -- Spark Sql
+        SELECT initcap('spARK sQL'); -- Spark Sql
+        SELECT initcap('123abc DEF!ghi'); -- 123abc Def!ghi
+        SELECT initcap('élan vital für alle'); -- Élan Vital Für Alle
+        SELECT initcap('hello-world test_case'); -- Hello-world Test_case
+
 .. spark:function:: instr(string, substring) -> integer
 
     Returns the starting position of the first instance of ``substring`` in
@@ -184,7 +204,7 @@ String Functions
         SELECT ltrim('  data  '); -- "data  "
 
 .. spark:function:: ltrim(trimCharacters, string) -> varchar
-   :noindex:
+    :noindex:
 
     Removes specified leading characters from ``string``. The specified character
     is any character contained in ``trimCharacters``.
@@ -294,7 +314,7 @@ String Functions
         SELECT rtrim('  data  '); -- "  data"
 
 .. spark:function:: rtrim(trimCharacters, string) -> varchar
-   :noindex:
+    :noindex:
 
     Removes specified trailing characters from ``string``. The specified character
     is any character contained in ``trimCharacters``.
@@ -360,7 +380,7 @@ String Functions
     the meaning is to refer to the first character.Type of 'start' must be an INTEGER.
 
 .. spark:function:: substring(string, start, length) -> varchar
-   :noindex:
+    :noindex:
 
     Returns a substring from ``string`` of length ``length`` from the starting
     position ``start``. Positions start with ``1``. A negative starting
@@ -425,7 +445,7 @@ String Functions
         SELECT trim('  data  '); -- "data"
 
 .. spark:function:: trim(trimCharacters, string) -> varchar
-   :noindex:
+    :noindex:
 
     Removes specified leading and trailing characters from ``string``.
     The specified character is any character contained in ``trimCharacters``.
@@ -433,13 +453,17 @@ String Functions
 
         SELECT trim('sprk', 'spark'); -- "a"
 
+.. spark:function:: unbase64(expr) -> varbinary
+
+    Returns a decoded base64 string as binary. ::
+
+        SELECT cast(unbase64('U3BhcmsgU1FM') AS STRING); -- 'Spark SQL'
+
 .. spark:function:: upper(string) -> string
 
     Returns string with all characters changed to uppercase. ::
 
         SELECT upper('SparkSql'); -- SPARKSQL
-<<<<<<< HEAD
-=======
 
 .. spark:function:: varchar_type_write_side_check(string, limit) -> varchar
 
@@ -456,4 +480,3 @@ String Functions
         varchar_type_write_side_check("中文中国", 3) -- VeloxUserError: "Exceeds allowed length limitation: '3'"
         varchar_type_write_side_check("   ", 0) -- VeloxUserError: "The length limit must be greater than 0."
         varchar_type_write_side_check("", 3) -- ""
->>>>>>> 7c73c1106 (misc: Use pre-commit for quality checks (#13361))

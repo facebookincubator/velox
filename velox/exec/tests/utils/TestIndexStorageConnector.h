@@ -16,7 +16,6 @@
 #pragma once
 
 #include "velox/exec/HashTable.h"
-#include "velox/exec/OperatorUtils.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox::exec::test {
@@ -38,6 +37,13 @@ struct TestIndexTable {
       : keyType(std::move(_keyType)),
         dataType(std::move(_dataType)),
         table(std::move(_table)) {}
+
+  // Create index table with the given key and value inputs.
+  static std::shared_ptr<TestIndexTable> create(
+      size_t numEqualJoinKeys,
+      const RowVectorPtr& keyData,
+      const RowVectorPtr& valueData,
+      velox::memory::MemoryPool& pool);
 };
 
 // The index table handle which provides the index table for index lookup.
@@ -74,16 +80,23 @@ class TestIndexTableHandle : public connector::ConnectorTableHandle {
     obj["name"] = name();
     obj["connectorId"] = connectorId();
     obj["asyncLookup"] = asyncLookup_;
+    // For testing purpose only, we serialize the index table pointer as an
+    // long integer.
+    obj["indexTable"] = reinterpret_cast<int64_t>(indexTable_.get());
     return obj;
   }
 
-  static std::shared_ptr<TestIndexTableHandle> create(
+  static std::shared_ptr<const TestIndexTableHandle> create(
       const folly::dynamic& obj,
       void* context) {
     // NOTE: this is only for testing purpose so we don't support to serialize
     // the table.
+    auto ptr = obj["indexTable"].asInt();
+    auto indexTablePtr = reinterpret_cast<TestIndexTable*>(ptr);
     return std::make_shared<TestIndexTableHandle>(
-        obj["connectorId"].getString(), nullptr, obj["asyncLookup"].asBool());
+        obj["connectorId"].getString(),
+        std::shared_ptr<TestIndexTable>(indexTablePtr, [](TestIndexTable*) {}),
+        obj["asyncLookup"].asBool());
   }
 
   static void registerSerDe() {
@@ -105,6 +118,39 @@ class TestIndexTableHandle : public connector::ConnectorTableHandle {
   const bool asyncLookup_;
 };
 
+using TestIndexTableHandlePtr = std::shared_ptr<const TestIndexTableHandle>;
+
+class TestIndexColumnHandle : public connector::ColumnHandle {
+ public:
+  explicit TestIndexColumnHandle(std::string name) : name_{std::move(name)} {}
+
+  const std::string& name() const override {
+    return name_;
+  }
+
+  folly::dynamic serialize() const override {
+    auto obj = serializeBase("TestIndexColumnHandle");
+    obj["columnName"] = name_;
+    return obj;
+  }
+
+  static connector::ColumnHandlePtr create(const folly::dynamic& obj) {
+    auto name = obj["columnName"].asString();
+
+    return std::make_shared<TestIndexColumnHandle>(name);
+  }
+
+  static void registerSerDe() {
+    auto& registry = DeserializationRegistryForSharedPtr();
+    registry.Register("TestIndexColumnHandle", TestIndexColumnHandle::create);
+  }
+
+ private:
+  const std::string name_;
+};
+
+using TestIndexColumnHandlePtr = std::shared_ptr<const TestIndexColumnHandle>;
+
 class TestIndexSource : public connector::IndexSource,
                         public std::enable_shared_from_this<TestIndexSource> {
  public:
@@ -113,7 +159,9 @@ class TestIndexSource : public connector::IndexSource,
       const RowTypePtr& outputType,
       size_t numEqualJoinKeys,
       const core::TypedExprPtr& joinConditionExpr,
-      const std::shared_ptr<TestIndexTableHandle>& tableHandle,
+      const TestIndexTableHandlePtr& tableHandle,
+      const std::unordered_map<std::string, TestIndexColumnHandlePtr>&
+          columnHandles,
       connector::ConnectorQueryCtx* connectorQueryCtx,
       folly::Executor* executor);
 
@@ -151,6 +199,8 @@ class TestIndexSource : public connector::IndexSource,
         ContinueFuture& future) override;
 
    private:
+    static constexpr vector_size_t kMaxLookupSize = 8192;
+
     // Initializes the buffer used to store row pointers or indices for output
     // match result processing.
     template <typename T>
@@ -224,14 +274,16 @@ class TestIndexSource : public connector::IndexSource,
   void checkNotFailed();
 
   // Initialize the output projections for lookup result processing.
-  void initOutputProjections();
+  void initOutputProjections(
+      const std::unordered_map<std::string, TestIndexColumnHandlePtr>&
+          columnHandles);
 
   // Initialize the condition filter input type and projections if configured.
   void initConditionProjections();
 
   void recordCpuTiming(const CpuWallTiming& timing);
 
-  const std::shared_ptr<TestIndexTableHandle> tableHandle_;
+  const TestIndexTableHandlePtr tableHandle_;
   const RowTypePtr inputType_;
   const RowTypePtr outputType_;
   const RowTypePtr keyType_;
@@ -274,9 +326,8 @@ class TestIndexConnector : public connector::Connector {
 
   std::unique_ptr<connector::DataSource> createDataSource(
       const RowTypePtr&,
-      const std::shared_ptr<connector::ConnectorTableHandle>&,
-      const std::
-          unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>&,
+      const connector::ConnectorTableHandlePtr&,
+      const connector::ColumnHandleMap&,
       connector::ConnectorQueryCtx*) override {
     VELOX_UNSUPPORTED("{} not implemented", __FUNCTION__);
   }
@@ -286,15 +337,13 @@ class TestIndexConnector : public connector::Connector {
       size_t numJoinKeys,
       const std::vector<core::IndexLookupConditionPtr>& joinConditions,
       const RowTypePtr& outputType,
-      const std::shared_ptr<connector::ConnectorTableHandle>& tableHandle,
-      const std::unordered_map<
-          std::string,
-          std::shared_ptr<connector::ColumnHandle>>& columnHandles,
+      const connector::ConnectorTableHandlePtr& tableHandle,
+      const connector::ColumnHandleMap& columnHandles,
       connector::ConnectorQueryCtx* connectorQueryCtx) override;
 
   std::unique_ptr<connector::DataSink> createDataSink(
       RowTypePtr,
-      std::shared_ptr<connector::ConnectorInsertTableHandle>,
+      connector::ConnectorInsertTableHandlePtr,
       connector::ConnectorQueryCtx*,
       connector::CommitStrategy) override {
     VELOX_UNSUPPORTED("{} not implemented", __FUNCTION__);
@@ -315,6 +364,15 @@ class TestIndexConnectorFactory : public connector::ConnectorFactory {
       folly::Executor* /*unused*/,
       folly::Executor* cpuExecutor) override {
     return std::make_shared<TestIndexConnector>(id, properties, cpuExecutor);
+  }
+
+  static void registerConnector(folly::CPUThreadPoolExecutor* cpuExecutor) {
+    connector::registerConnectorFactory(
+        std::make_shared<TestIndexConnectorFactory>());
+    std::shared_ptr<connector::Connector> connector =
+        connector::getConnectorFactory(kTestIndexConnectorName)
+            ->newConnector(kTestIndexConnectorName, {}, nullptr, cpuExecutor);
+    connector::registerConnector(connector);
   }
 };
 } // namespace facebook::velox::exec::test

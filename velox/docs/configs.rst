@@ -60,6 +60,11 @@ Generic Configuration
      - true
      - Whether to track CPU usage for stages of individual operators. Can be expensive when processing small batches,
        e.g. < 10K rows.
+   * - operator_batch_size_stats_enabled
+     - bool
+     - true
+     - If true, the driver will collect the operator's input/output batch size through vector flat size estimation, otherwise not.
+     - We might turn this off in use cases which have very wide column width and batch size estimation has non-trivial cpu cost.
    * - hash_adaptivity_enabled
      - bool
      - true
@@ -167,6 +172,29 @@ Generic Configuration
      - 0
      - Specifies the max number of input batches to prefetch to do index lookup ahead. If it is zero,
        then process one input batch at a time.
+   * - index_lookup_join_split_output
+     - bool
+     - true
+     - If this is true, then the index join operator might split output for each input batch based
+       on the output batch size control. Otherwise, it tries to produce a single output for each input
+       batch.
+   * - unnest_split_output_batch
+     - bool
+     - true
+     - If this is true, then the unnest operator might split output for each input batch based on the
+       output batch size control. Otherwise, it produces a single output for each input batch.
+   * - max_num_splits_listened_to
+     - integer
+     - 0
+     - Specifies The max number of input splits to listen to by SplitListener per table scan node per
+       worker. It's up to the SplitListener implementation to respect this config.
+   * - operator_track_expression_stats
+     - bool
+     - false
+     - If this is true, then operators that evaluate expressions will track stats for expressions that
+       are not special forms and return them as part of their operator stats. Tracking these stats can
+       be expensive (especially if operator stats are retrieved frequently) and this allows the user to
+       explicitly enable it.
 
 .. _expression-evaluation-conf:
 
@@ -226,6 +254,11 @@ Expression Evaluation Configuration
      - integer
      - 10000
      - Some lambda functions over arrays and maps are evaluated in batches of the underlying elements that comprise the arrays/maps. This is done to make the batch size managable as array vectors can have thousands of elements each and hit scaling limits as implementations typically expect BaseVectors to a couple of thousand entries. This lets up tune those batch sizes. Setting this to zero is setting unlimited batch size.
+   * - debug_bing_tile_children_max_zoom_shift
+     - integer
+     - 5
+     - The UDF `bing_tile_children` generates the children of a Bing tile based on a specified target zoom level. The number of children produced is determined by the difference between the target zoom level and the zoom level of the input tile. This configuration limits the number of children by capping the maximum zoom level difference, with a default value set to 5. This cap is necessary to prevent excessively large array outputs, which can exceed the size limits of the elements vector in the Velox array vector.
+
 
 Memory Management
 -----------------
@@ -254,6 +287,11 @@ Memory Management
        memory limit for partial aggregation is automatically doubled up to `max_extended_partial_aggregation_memory`.
        This adaptation is disabled by default, since the value of `max_extended_partial_aggregation_memory` equals the
        value of `max_partial_aggregation_memory`. Specify higher value for `max_extended_partial_aggregation_memory` to enable.
+   * - query_memory_reclaimer_priority
+     - integer
+     - 2147483647
+     - Priority of the query in the memory pool reclaimer. Lower value means higher priority. This is used in
+       global arbitration victim selection.
 
 Spilling
 --------
@@ -277,6 +315,10 @@ Spilling
      - boolean
      - true
      - When `spill_enabled` is true, determines whether HashBuild and HashProbe operators can spill to disk under memory pressure.
+   * - local_merge_enabled
+     - boolean
+     - false
+     - When `spill_enabled` is true, determines whether LocalMerge operators can spill to disk to cap memory usage.
    * - mixed_grouped_mode_hash_join_spill_enabled
      - boolean
      - false
@@ -390,7 +432,7 @@ Spilling
    * - spiller_start_partition_bit
      - integer
      - 29
-     - The start partition bit which is used with `spiller_partition_bits` together to calculate the spilling partition number.
+     - The start partition bit which is used with `spiller_num_partition_bits` together to calculate the spilling partition number.
    * - spiller_num_partition_bits
      - integer
      - 3
@@ -521,6 +563,11 @@ Each query can override the config by setting corresponding query session proper
      - integer
      - 100
      - Maximum number of (bucketed) partitions per a single table writer instance.
+   * - hive.max-bucket-count
+     - hive.max_bucket_count
+     - integer
+     - 100000
+     - Maximum number of buckets that a table writer is allowed to write to.
    * - insert-existing-partitions-behavior
      - insert_existing_partitions_behavior
      - string
@@ -720,6 +767,11 @@ Each query can override the config by setting corresponding query session proper
      - integer
      - 1024
      - Batch size used when writing into Parquet through Arrow bridge.
+   * - hive.parquet.writer.created-by
+     -
+     - string
+     - parquet-cpp-velox version 0.0.0
+     - Created-by value used when writing to Parquet.
 
 ``Amazon S3 Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -992,10 +1044,10 @@ Tracing
      - string
      -
      - The root directory to store the tracing data and metadata for a query.
-   * - query_trace_node_ids
+   * - query_trace_node_id
      - string
      -
-     - A comma-separated list of plan node ids whose input data will be trace. If it is empty, then we only trace the
+     - The plan node id whose input data will be trace. If it is empty, then we only trace the
        query metadata which includes the query plan and configs etc.
    * - query_trace_task_reg_exp
      - string
@@ -1005,3 +1057,8 @@ Tracing
      - integer
      - 0
      - The max trace bytes limit. Tracing is disabled if zero.
+   * - query_trace_dry_run
+     - boolean
+     - false
+     - If true, we only collect the input trace for a given operator but without the actual
+       execution. This is used for crash debugging.

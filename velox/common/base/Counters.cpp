@@ -75,6 +75,14 @@ void registerVeloxMetrics() {
   DEFINE_METRIC(
       kMetricMemoryAllocatorMappedBytes, facebook::velox::StatType::AVG);
 
+  // Number of bytes allocated and explicitly mmap'd by the application via
+  // allocateContiguous, outside of 'sizeClasses'. These pages are counted in
+  // 'kMetricMemoryAllocatorAllocatedBytes' and
+  // 'kMetricMemoryAllocatorMappedBytes'.
+  DEFINE_METRIC(
+      kMetricMemoryAllocatorExternalMappedBytes,
+      facebook::velox::StatType::AVG);
+
   // Number of bytes currently allocated (used) from MemoryAllocator in the form
   // of 'Allocation' or 'ContiguousAllocation'.
   DEFINE_METRIC(
@@ -83,13 +91,6 @@ void registerVeloxMetrics() {
   // Total number of bytes currently allocated from MemoryAllocator.
   DEFINE_METRIC(
       kMetricMemoryAllocatorTotalUsedBytes, facebook::velox::StatType::AVG);
-
-  // Number of bytes currently mapped in MmapAllocator, in the form of
-  // 'ContiguousAllocation'.
-  //
-  // NOTE: This applies only to MmapAllocator
-  DEFINE_METRIC(
-      kMetricMmapAllocatorExternalMappedBytes, facebook::velox::StatType::AVG);
 
   // Number of bytes currently allocated from MmapAllocator directly from raw
   // allocateBytes() interface, and internally allocated by malloc. Only small
@@ -644,15 +645,12 @@ void registerVeloxMetrics() {
       kMetricIndexLookupBlockedWaitTimeMs, 32, 0, 16L << 10, 50, 90, 99, 100);
 
   /// ================== Table Scan Counters =================
-  // The time distribution of table scan batch processing time in range of [0,
-  // 16s] with 512 buckets and reports P50, P90, P99, and P100.
-  DEFINE_HISTOGRAM_METRIC(
-      kMetricTableScanBatchProcessTimeMs, 32, 0, 16L << 10, 50, 90, 99, 100);
+  // Tracks the averaged table scan batch processing time in milliseconds.
+  DEFINE_METRIC(
+      kMetricTableScanBatchProcessTimeMs, facebook::velox::StatType::AVG);
 
-  // The size distribution of table scan output batch in range of [0, 512MB]
-  // with 512 buckets and reports P50, P90, P99, and P100
-  DEFINE_HISTOGRAM_METRIC(
-      kMetricTableScanBatchBytes, 1L << 20, 0, 512L << 20, 50, 90, 99, 100);
+  // Tracks the averaged table scan output batch size in bytes.
+  DEFINE_METRIC(kMetricTableScanBatchBytes, facebook::velox::StatType::AVG);
 
   /// ================== Storage Counters =================
 

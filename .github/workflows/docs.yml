@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-name: Build Documentation
+name: Update Documentation
 
 on:
   push:
@@ -26,19 +26,21 @@ on:
       - .github/workflows/docs.yml
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.repository }}-${{ github.head_ref || github.sha }}
-  cancel-in-progress: ${{github.ref != 'refs/heads/presto-0.293-clp-connector'}}
+  cancel-in-progress: true
 
 jobs:
   build_docs:
-    name: Build
-    runs-on: ubuntu-latest
+    name: Build and Push
+    runs-on: 8-core-ubuntu
+    container: ghcr.io/facebookincubator/velox-dev:centos9
     env:
       CCACHE_DIR: /tmp/ccache
     steps:
+
       - name: Restore ccache
         if: false
         uses: apache/infrastructure-actions/stash/restore@3354c1565d4b0e335b78a76aedd82153a9e144d4
@@ -55,8 +57,10 @@ jobs:
 
       - name: Install System Dependencies
         run: |
-          sudo apt install -y pipx
+          dnf install -y --setopt=install_weak_deps=False pandoc
+          pip3 install pipx
           pipx install --force uv cmake==3.31
+          echo "PATH=$PATH:/github/home/.local/bin" >> $GITHUB_ENV
 
       - name: Install Python Dependencies
         run: |
@@ -64,6 +68,9 @@ jobs:
           make python-venv
           which uv
           uv pip install -r scripts/docs-requirements.txt
+
+          # Install pyvelox to generate it's docs
+          make python-build
 
       - name: Save ccache
         uses: apache/infrastructure-actions/stash/save@3354c1565d4b0e335b78a76aedd82153a9e144d4
@@ -76,4 +83,34 @@ jobs:
           source .venv/bin/activate
           cd velox/docs
           make clean
+          # pyvelox
+          mkdir -p bindings/python
+          pandoc ../../python/README.md --from markdown --to rst -s -o bindings/python/README_generated_pyvelox.rst
+          # velox
           make html
+
+      - name: Setup Git User
+        run: |
+          git config --global user.email "velox@users.noreply.github.com"
+          git config --global user.name "velox"
+          git config --global --add safe.directory ${GITHUB_WORKSPACE}
+
+      - name: Push Documentation
+        if: ${{ github.event_name == 'push' && github.repository == 'facebookincubator/velox'}}
+        run: |
+          git checkout gh-pages
+          cp -R velox/docs/_build/html/* docs
+          git add docs
+
+          if [ -n "$(git status --porcelain --untracked-files=no)" ]
+          then
+            git commit -m "Update documentation"
+            git push
+          fi
+
+      - name: Upload Documentation
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@5d5d22a31266ced268874388b861e4b58bb5c2f3 # v4.3.1
+        with:
+          path: velox/docs/_build/html
+          retention-days: 3

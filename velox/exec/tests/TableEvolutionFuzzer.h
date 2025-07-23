@@ -102,7 +102,9 @@ class TableEvolutionFuzzer {
 
   std::unique_ptr<TaskCursor> makeScanTask(
       const RowTypePtr& tableSchema,
-      std::vector<Split> splits);
+      std::vector<Split> splits,
+      const PushdownConfig& pushdownConfig,
+      bool useFiltersAsNode);
 
   const Config config_;
   VectorFuzzer vectorFuzzer_;

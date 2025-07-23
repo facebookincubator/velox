@@ -20,7 +20,6 @@
 #include <velox/core/ITypedExpr.h>
 #include <velox/core/PlanFragment.h>
 #include <velox/core/PlanNode.h>
-#include "velox/common/memory/Memory.h"
 #include "velox/connectors/hive/HiveDataSink.h"
 #include "velox/parse/ExpressionsParser.h"
 #include "velox/parse/IExpr.h"
@@ -31,6 +30,10 @@ enum class Table : uint8_t;
 }
 
 namespace facebook::velox::exec::test {
+
+struct PushdownConfig {
+  common::SubfieldFilters subfieldFiltersMap;
+};
 
 /// A builder class with fluent API for building query plans. Plans are built
 /// bottom up starting with the source node (table scan or similar). Expressions
@@ -136,9 +139,7 @@ class PlanBuilder {
       const std::vector<std::string>& subfieldFilters = {},
       const std::string& remainingFilter = "",
       const RowTypePtr& dataColumns = nullptr,
-      const std::unordered_map<
-          std::string,
-          std::shared_ptr<connector::ColumnHandle>>& assignments = {});
+      const connector::ColumnHandleMap& assignments = {});
 
   /// Add a TableScanNode to scan a Hive table.
   ///
@@ -168,9 +169,22 @@ class PlanBuilder {
       const std::vector<std::string>& subfieldFilters = {},
       const std::string& remainingFilter = "",
       const RowTypePtr& dataColumns = nullptr,
-      const std::unordered_map<
-          std::string,
-          std::shared_ptr<connector::ColumnHandle>>& assignments = {});
+      const connector::ColumnHandleMap& assignments = {});
+
+  /// Add a TableScanNode to scan a Hive table with direct SubfieldFilters.
+  ///
+  /// @param outputType List of column names and types to read from the table.
+  /// @param PushdownConfig Contains pushdown configs for the table scan.
+  /// @param remainingFilter SQL expression for the additional conjunct.
+  /// @param dataColumns Optional data columns that may differ from outputType.
+  /// @param assignments Optional ColumnHandles.
+
+  PlanBuilder& tableScanWithPushDown(
+      const RowTypePtr& outputType,
+      const PushdownConfig& pushdownConfig,
+      const std::string& remainingFilter = "",
+      const RowTypePtr& dataColumns = nullptr,
+      const connector::ColumnHandleMap& assignments = {});
 
   /// Add a TableScanNode to scan a TPC-H table.
   ///
@@ -179,11 +193,14 @@ class PlanBuilder {
   /// @param columnNames The columns to be returned from that table.
   /// @param scaleFactor The TPC-H scale factor.
   /// @param connectorId The TPC-H connector id.
+  /// @param filter Optional SQL expression to filter the data at the connector
+  /// level.
   PlanBuilder& tpchTableScan(
       tpch::Table table,
       std::vector<std::string> columnNames,
       double scaleFactor = 1,
-      std::string_view connectorId = kTpchDefaultConnectorId);
+      std::string_view connectorId = kTpchDefaultConnectorId,
+      const std::string& filter = "");
 
   /// Helper class to build a custom TableScanNode.
   /// Uses a planBuilder instance to get the next plan id, memory pool, and
@@ -239,6 +256,10 @@ class PlanBuilder {
     /// >  column >= v2
     TableScanBuilder& subfieldFilters(std::vector<std::string> subfieldFilters);
 
+    // @param subfieldFiltersMap A map of Subfield to Filters.
+    TableScanBuilder& subfieldFiltersMap(
+        const common::SubfieldFilters& filtersMap);
+
     /// @param subfieldFilter A single SQL expression to be applied to an
     /// individual column.
     TableScanBuilder& subfieldFilter(std::string subfieldFilter) {
@@ -272,7 +293,7 @@ class PlanBuilder {
     /// @param tableHandle Optional tableHandle. Other builder arguments such as
     /// the `subfieldFilters` and `remainingFilter` will be ignored.
     TableScanBuilder& tableHandle(
-        std::shared_ptr<connector::ConnectorTableHandle> tableHandle) {
+        connector::ConnectorTableHandlePtr tableHandle) {
       tableHandle_ = std::move(tableHandle);
       return *this;
     }
@@ -281,10 +302,7 @@ class PlanBuilder {
     /// outputType names should match the keys in the 'assignments' map. The
     /// 'assignments' map may contain more columns than 'outputType' if some
     /// columns are only used by pushed-down filters.
-    TableScanBuilder& assignments(
-        std::unordered_map<
-            std::string,
-            std::shared_ptr<connector::ColumnHandle>> assignments) {
+    TableScanBuilder& assignments(connector::ColumnHandleMap assignments) {
       assignments_ = std::move(assignments);
       return *this;
     }
@@ -307,15 +325,17 @@ class PlanBuilder {
     core::ExprPtr remainingFilter_;
     RowTypePtr dataColumns_;
     std::unordered_map<std::string, std::string> columnAliases_;
-    std::shared_ptr<connector::ConnectorTableHandle> tableHandle_;
-    std::unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>
-        assignments_;
+    connector::ConnectorTableHandlePtr tableHandle_;
+    connector::ColumnHandleMap assignments_;
 
     // produce filters as a FilterNode instead of pushdown.
     bool filtersAsNode_{false};
 
     // Generates the id of a FilterNode if 'filtersAsNode_'.
     std::shared_ptr<core::PlanNodeIdGenerator> planNodeIdGenerator_;
+
+    // SubfieldFilters object containing filters to apply.
+    common::SubfieldFilters subfieldFiltersMap_;
   };
 
   /// Start a TableScanBuilder.
@@ -442,6 +462,15 @@ class PlanBuilder {
       return *this;
     }
 
+    /// Specifies commitStrategy for writing to the connector.
+    /// @param commitStrategy The commit strategy to use for the table write
+    /// operation.
+    TableWriterBuilder& commitStrategy(
+        connector::CommitStrategy commitStrategy) {
+      commitStrategy_ = commitStrategy;
+      return *this;
+    }
+
     /// Stop the TableWriterBuilder.
     PlanBuilder& endTableWriter() {
       planBuilder_.planNode_ = build(planBuilder_.nextPlanNodeId());
@@ -473,6 +502,8 @@ class PlanBuilder {
     common::CompressionKind compressionKind_{common::CompressionKind_NONE};
 
     bool ensureFiles_{false};
+    connector::CommitStrategy commitStrategy_{
+        connector::CommitStrategy::kNoCommit};
   };
 
   /// Start a TableWriterBuilder.
@@ -691,11 +722,13 @@ class PlanBuilder {
       const std::string& outputFileName = "",
       const common::CompressionKind = common::CompressionKind_NONE,
       const RowTypePtr& schema = nullptr,
-      const bool ensureFiles = false);
+      const bool ensureFiles = false,
+      const connector::CommitStrategy commitStrategy =
+          connector::CommitStrategy::kNoCommit);
 
   /// Add a TableWriteMergeNode.
   PlanBuilder& tableWriteMerge(
-      const std::shared_ptr<core::AggregationNode>& aggregationNode = nullptr);
+      const core::AggregationNodePtr& aggregationNode = nullptr);
 
   /// Add an AggregationNode representing partial aggregation with the
   /// specified grouping keys, aggregates and optional masks.
@@ -1198,10 +1231,16 @@ class PlanBuilder {
   /// @param ordinalColumn An optional name for the 'ordinal' column to produce.
   /// This column contains the index of the element of the unnested array or
   /// map. If not specified, the output will not contain this column.
+  /// @param emptyUnnestValueName An optional name for the
+  /// 'emptyUnnestValue' column to produce. This column contains a boolean
+  /// indicating if the output row has empty unnest value or not. If not
+  /// specified, the output will not contain this column and the unnest operator
+  /// also skips producing output rows with empty unnest value.
   PlanBuilder& unnest(
       const std::vector<std::string>& replicateColumns,
       const std::vector<std::string>& unnestColumns,
-      const std::optional<std::string>& ordinalColumn = std::nullopt);
+      const std::optional<std::string>& ordinalColumn = std::nullopt,
+      const std::optional<std::string>& emptyUnnestValueName = std::nullopt);
 
   /// Add a WindowNode to compute one or more windowFunctions.
   /// @param windowFunctions A list of one or more window function SQL like
@@ -1237,9 +1276,18 @@ class PlanBuilder {
       std::optional<int32_t> limit = std::nullopt,
       bool generateRowNumber = true);
 
-  /// Add a TopNRowNumberNode to compute single row_number window function with
-  /// a limit applied to sorted partitions.
+  /// Add a TopNRowNumberNode to compute row_number
+  /// function with a limit applied to sorted partitions.
   PlanBuilder& topNRowNumber(
+      const std::vector<std::string>& partitionKeys,
+      const std::vector<std::string>& sortingKeys,
+      int32_t limit,
+      bool generateRowNumber);
+
+  /// Add a TopNRowNumberNode to compute row_number, rank or dense_rank window
+  /// function with a limit applied to sorted partitions.
+  PlanBuilder& topNRank(
+      std::string_view function,
       const std::vector<std::string>& partitionKeys,
       const std::vector<std::string>& sortingKeys,
       int32_t limit,

@@ -89,6 +89,13 @@ folly::Synchronized<std::vector<std::shared_ptr<TaskListener>>>& listeners() {
   return kListeners;
 }
 
+folly::Synchronized<std::vector<std::shared_ptr<SplitListenerFactory>>>&
+splitListenerFactories() {
+  static folly::Synchronized<std::vector<std::shared_ptr<SplitListenerFactory>>>
+      kListenerFactories;
+  return kListenerFactories;
+}
+
 std::string errorMessageImpl(const std::exception_ptr& exception) {
   if (!exception) {
     return "";
@@ -239,6 +246,34 @@ bool unregisterTaskListener(const std::shared_ptr<TaskListener>& listener) {
   });
 }
 
+bool registerSplitListenerFactory(
+    const std::shared_ptr<SplitListenerFactory>& factory) {
+  return splitListenerFactories().withWLock([&](auto& factories) {
+    for (const auto& existingFactory : factories) {
+      if (existingFactory == factory) {
+        // Listener already registered. Do not register again.
+        return false;
+      }
+    }
+    factories.emplace_back(factory);
+    return true;
+  });
+}
+
+bool unregisterSplitListenerFactory(
+    const std::shared_ptr<SplitListenerFactory>& factory) {
+  return splitListenerFactories().withWLock([&](auto& factories) {
+    for (auto it = factories.begin(); it != factories.end(); ++it) {
+      if ((*it) == factory) {
+        factories.erase(it);
+        return true;
+      }
+    }
+    // Listener not found.
+    return false;
+  });
+}
+
 // static
 std::shared_ptr<Task> Task::create(
     const std::string& taskId,
@@ -319,6 +354,19 @@ Task::Task(
         dynamic_cast<const folly::InlineLikeExecutor*>(queryCtx_->executor()));
   }
   maybeInitTrace();
+
+  initSplitListeners();
+}
+
+void Task::initSplitListeners() {
+  splitListenerFactories().withRLock([&](const auto& factories) {
+    for (const auto& factory : factories) {
+      auto listener = factory->create(taskId_, uuid_, queryCtx_->queryConfig());
+      if (listener != nullptr) {
+        splitListeners_.emplace_back(std::move(listener));
+      }
+    }
+  });
 }
 
 Task::~Task() {
@@ -1196,6 +1244,7 @@ std::vector<std::shared_ptr<Driver>> Task::createDriversLocked(
     // execution, from the split group id.
     const uint32_t driverIdOffset =
         factory->numDrivers * (groupedExecutionDrivers ? splitGroupId : 0);
+    auto filters = std::make_shared<PipelinePushdownFilters>();
     for (uint32_t partitionId = 0; partitionId < factory->numDrivers;
          ++partitionId) {
       drivers.emplace_back(factory->createDriver(
@@ -1206,6 +1255,7 @@ std::vector<std::shared_ptr<Driver>> Task::createDriversLocked(
               splitGroupId,
               partitionId),
           getExchangeClientLocked(pipeline),
+          filters,
           [self](size_t i) {
             return i < self->driverFactories_.size()
                 ? self->driverFactories_[i]->numTotalDrivers
@@ -1358,6 +1408,14 @@ void Task::setMaxSplitSequenceId(
   }
 }
 
+void Task::onAddSplit(
+    const core::PlanNodeId& planNodeId,
+    const exec::Split& split) {
+  for (auto& listener : splitListeners_) {
+    listener->onAddSplit(planNodeId, split);
+  }
+}
+
 bool Task::addSplitWithSequence(
     const core::PlanNodeId& planNodeId,
     exec::Split&& split,
@@ -1366,6 +1424,7 @@ bool Task::addSplitWithSequence(
   std::unique_ptr<ContinuePromise> promise;
   bool added = false;
   bool isTaskRunning;
+  bool shouldLogSplit = false;
   {
     std::lock_guard<std::timed_mutex> l(mutex_);
     isTaskRunning = isRunningLocked();
@@ -1375,7 +1434,8 @@ bool Task::addSplitWithSequence(
       // duplicate splits would be ignored.
       auto& splitsState = getPlanNodeSplitsStateLocked(planNodeId);
       if (sequenceId > splitsState.maxSequenceId) {
-        promise = addSplitLocked(splitsState, std::move(split));
+        shouldLogSplit = true;
+        promise = addSplitLocked(splitsState, split);
         added = true;
       }
     }
@@ -1391,19 +1451,24 @@ bool Task::addSplitWithSequence(
     addRemoteSplit(planNodeId, split);
   }
 
+  if (shouldLogSplit) {
+    onAddSplit(planNodeId, split);
+  }
+
   return added;
 }
 
 void Task::addSplit(const core::PlanNodeId& planNodeId, exec::Split&& split) {
   RECORD_METRIC_VALUE(kMetricTaskSplitsCount, 1);
   bool isTaskRunning;
+  bool shouldLogSplit = false;
   std::unique_ptr<ContinuePromise> promise;
   {
     std::lock_guard<std::timed_mutex> l(mutex_);
     isTaskRunning = isRunningLocked();
     if (isTaskRunning) {
-      promise = addSplitLocked(
-          getPlanNodeSplitsStateLocked(planNodeId), std::move(split));
+      shouldLogSplit = true;
+      promise = addSplitLocked(getPlanNodeSplitsStateLocked(planNodeId), split);
     }
   }
 
@@ -1415,6 +1480,10 @@ void Task::addSplit(const core::PlanNodeId& planNodeId, exec::Split&& split) {
     // Safe because 'split' is moved away above only if 'isTaskRunning'.
     // @lint-ignore CLANGTIDY bugprone-use-after-move
     addRemoteSplit(planNodeId, split);
+  }
+
+  if (shouldLogSplit) {
+    onAddSplit(planNodeId, split);
   }
 }
 
@@ -1434,13 +1503,13 @@ void Task::addRemoteSplit(
 
 std::unique_ptr<ContinuePromise> Task::addSplitLocked(
     SplitsState& splitsState,
-    exec::Split&& split) {
+    const exec::Split& split) {
   if (split.isBarrier()) {
     VELOX_CHECK(supportBarrier_);
     VELOX_CHECK(splitsState.sourceIsTableScan);
     VELOX_CHECK(!splitsState.noMoreSplits);
     return addSplitToStoreLocked(
-        splitsState.groupSplitsStores[kUngroupedGroupId], std::move(split));
+        splitsState.groupSplitsStores[kUngroupedGroupId], split);
   }
   VELOX_CHECK(
       !barrierRequested_, "Can't add new split under barrier processing");
@@ -1459,7 +1528,7 @@ std::unique_ptr<ContinuePromise> Task::addSplitLocked(
 
   if (!split.hasGroup()) {
     return addSplitToStoreLocked(
-        splitsState.groupSplitsStores[kUngroupedGroupId], std::move(split));
+        splitsState.groupSplitsStores[kUngroupedGroupId], split);
   }
 
   const auto splitGroupId = split.groupId;
@@ -1472,12 +1541,12 @@ std::unique_ptr<ContinuePromise> Task::addSplitLocked(
     ensureSplitGroupsAreBeingProcessedLocked();
   }
   return addSplitToStoreLocked(
-      splitsState.groupSplitsStores[splitGroupId], std::move(split));
+      splitsState.groupSplitsStores[splitGroupId], split);
 }
 
 std::unique_ptr<ContinuePromise> Task::addSplitToStoreLocked(
     SplitsStore& splitsStore,
-    exec::Split&& split) {
+    const exec::Split& split) {
   splitsStore.splits.push_back(split);
   if (splitsStore.splitPromises.empty()) {
     return nullptr;
@@ -2691,6 +2760,10 @@ void Task::onTaskCompletion() {
           exchangeClientByPlanNode_);
     }
   });
+
+  for (auto& listener : splitListeners_) {
+    listener->onTaskCompletion();
+  }
 }
 
 ContinueFuture Task::stateChangeFuture(uint64_t maxWaitMicros) {
@@ -3339,40 +3412,23 @@ std::optional<TraceConfig> Task::maybeMakeTraceConfig() const {
     return std::nullopt;
   }
 
-  const auto traceNodes = queryConfig.queryTraceNodeIds();
-  VELOX_USER_CHECK(!traceNodes.empty(), "Query trace nodes are not set");
+  const auto traceNodeId = queryConfig.queryTraceNodeId();
+  VELOX_USER_CHECK(!traceNodeId.empty(), "Query trace node ID are not set");
 
   const auto traceDir = trace::getTaskTraceDirectory(
       queryConfig.queryTraceDir(), queryCtx_->queryId(), taskId_);
 
-  std::vector<std::string> traceNodeIds;
-  folly::split(',', traceNodes, traceNodeIds);
-  std::unordered_set<std::string> traceNodeIdSet(
-      traceNodeIds.begin(), traceNodeIds.end());
-  VELOX_USER_CHECK_EQ(
-      traceNodeIdSet.size(),
-      traceNodeIds.size(),
-      "Duplicate trace nodes found: {}",
-      folly::join(", ", traceNodeIds));
+  VELOX_USER_CHECK_NOT_NULL(
+      core::PlanNode::findFirstNode(
+          planFragment_.planNode.get(),
+          [traceNodeId](const core::PlanNode* node) -> bool {
+            return node->id() == traceNodeId;
+          }),
+      "Trace plan node ID = {} not found from task {}",
+      traceNodeId,
+      taskId_);
 
-  bool foundTraceNode{false};
-  for (const auto& traceNodeId : traceNodeIds) {
-    if (core::PlanNode::findFirstNode(
-            planFragment_.planNode.get(),
-            [traceNodeId](const core::PlanNode* node) -> bool {
-              return node->id() == traceNodeId;
-            })) {
-      foundTraceNode = true;
-      break;
-    }
-  }
-  VELOX_USER_CHECK(
-      foundTraceNode,
-      "Trace plan nodes not found from task {}: {}",
-      taskId_,
-      folly::join(",", traceNodeIdSet));
-
-  LOG(INFO) << "Trace input for plan nodes " << traceNodes << " from task "
+  LOG(INFO) << "Trace input for plan nodes " << traceNodeId << " from task "
             << taskId_;
 
   UpdateAndCheckTraceLimitCB updateAndCheckTraceLimitCB =
@@ -3380,10 +3436,11 @@ std::optional<TraceConfig> Task::maybeMakeTraceConfig() const {
         queryCtx_->updateTracedBytesAndCheckLimit(bytes);
       };
   return TraceConfig(
-      std::move(traceNodeIdSet),
+      traceNodeId,
       traceDir,
       std::move(updateAndCheckTraceLimitCB),
-      queryConfig.queryTraceTaskRegExp());
+      queryConfig.queryTraceTaskRegExp(),
+      queryConfig.queryTraceDryRun());
 }
 
 void Task::maybeInitTrace() {
@@ -3394,7 +3451,9 @@ void Task::maybeInitTrace() {
   trace::createTraceDirectory(traceConfig_->queryTraceDir);
   const auto metadataWriter = std::make_unique<trace::TaskTraceMetadataWriter>(
       traceConfig_->queryTraceDir, memory::traceMemoryPool());
-  metadataWriter->write(queryCtx_, planFragment_.planNode);
+  auto traceNode =
+      trace::getTraceNode(planFragment_.planNode, traceConfig_->queryNodeId);
+  metadataWriter->write(queryCtx_, traceNode);
 }
 
 void Task::testingVisitDrivers(const std::function<void(Driver*)>& callback) {

@@ -12,6 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+# shellcheck source-path=SCRIPT_DIR
 
 # This script documents setting up a Centos9 host for Velox
 # development.  Running it should make you ready to compile.
@@ -28,10 +29,10 @@
 set -efx -o pipefail
 # Some of the packages must be build with the same compiler flags
 # so that some low level types are the same size. Also, disable warnings.
-SCRIPTDIR=$(dirname "${BASH_SOURCE[0]}")
-source $SCRIPTDIR/setup-common.sh
-export CXXFLAGS=$(get_cxx_flags) # Used by boost.
-export CFLAGS=${CXXFLAGS//"-std=c++17"/} # Used by LZO.
+SCRIPT_DIR=$(dirname "${BASH_SOURCE[0]}")
+source "$SCRIPT_DIR"/setup-common.sh
+CXXFLAGS=$(get_cxx_flags) # Used by boost.
+export CXXFLAGS
 export COMPILER_FLAGS=${CXXFLAGS}
 SUDO="${SUDO:-""}"
 USE_CLANG="${USE_CLANG:-false}"
@@ -80,19 +81,36 @@ function install_conda {
 function install_gflags {
   # Remove an older version if present.
   dnf remove -y gflags
-  wget_and_untar https://github.com/gflags/gflags/archive/${GFLAGS_VERSION}.tar.gz gflags
+  wget_and_untar https://github.com/gflags/gflags/archive/"${GFLAGS_VERSION}".tar.gz gflags
   cmake_install_dir gflags -DBUILD_SHARED_LIBS=ON -DBUILD_STATIC_LIBS=ON -DBUILD_gflags_LIB=ON -DLIB_SUFFIX=64
 }
 
 function install_cuda {
   # See https://developer.nvidia.com/cuda-downloads
-  dnf config-manager --add-repo https://developer.download.nvidia.com/compute/cuda/repos/rhel9/x86_64/cuda-rhel9.repo
-  local dashed="$(echo $1 | tr '.' '-')"
-  dnf install -y \
-    cuda-compat-$dashed \
-    cuda-driver-devel-$dashed \
-    cuda-minimal-build-$dashed \
-    cuda-nvrtc-devel-$dashed
+  local arch
+  arch="$(uname -m)"
+  local repo_url
+
+  if [[ $arch == "x86_64" ]]; then
+    repo_url="https://developer.download.nvidia.com/compute/cuda/repos/rhel9/x86_64/cuda-rhel9.repo"
+  elif [[ $arch == "aarch64" ]]; then
+    # Using SBSA (Server Base System Architecture) repository for ARM64 servers
+    repo_url="https://developer.download.nvidia.com/compute/cuda/repos/rhel9/sbsa/cuda-rhel9.repo"
+  else
+    echo "Unsupported architecture: $arch" >&2
+    return 1
+  fi
+
+  dnf config-manager --add-repo "$repo_url"
+  local dashed
+  dashed="$(echo "$1" | tr '.' '-')"
+  dnf_install \
+    cuda-compat-"$dashed" \
+    cuda-driver-devel-"$dashed" \
+    cuda-minimal-build-"$dashed" \
+    cuda-nvrtc-devel-"$dashed" \
+    libcufile-devel-"$dashed" \
+    numactl-libs
 }
 
 function install_s3 {
@@ -104,20 +122,20 @@ function install_s3 {
 
 function install_gcs {
   # Dependencies of GCS, probably a workaround until the docker image is rebuilt
-  dnf -y install npm curl-devel c-ares-devel
+  dnf_install npm curl-devel c-ares-devel
   install_gcs-sdk-cpp
 }
 
 function install_abfs {
   # Dependencies of Azure Storage Blob cpp
-  dnf -y install perl-IPC-Cmd openssl libxml2-devel
+  dnf_install perl-IPC-Cmd openssl libxml2-devel
   install_azure-storage-sdk-cpp
 }
 
 function install_hdfs {
-  dnf -y install libxml2-devel libgsasl-devel libuuid-devel krb5-devel
+  dnf_install libxml2-devel libgsasl-devel libuuid-devel krb5-devel
   install_hdfs_deps
-  yum install -y java-1.8.0-openjdk-devel
+  dnf_install java-1.8.0-openjdk-devel
 }
 
 function install_adapters {
@@ -127,12 +145,15 @@ function install_adapters {
   run_and_time install_hdfs
 }
 
+function install_faiss_deps {
+  dnf_install openblas-devel libomp
+}
+
 function install_velox_deps {
   run_and_time install_velox_deps_from_dnf
   run_and_time install_conda
   run_and_time install_gflags
   run_and_time install_glog
-  run_and_time install_lzo
   run_and_time install_snappy
   run_and_time install_boost
   run_and_time install_protobuf
@@ -150,9 +171,10 @@ function install_velox_deps {
   run_and_time install_xsimd
   run_and_time install_simdjson
   run_and_time install_geos
+  run_and_time install_faiss
 }
 
-(return 2> /dev/null) && return # If script was sourced, don't run commands.
+(return 2>/dev/null) && return # If script was sourced, don't run commands.
 
 (
   if [[ $# -ne 0 ]]; then

@@ -337,8 +337,7 @@ class MemoryManager {
       int64_t maxCapacity = kMaxMemory,
       std::unique_ptr<MemoryReclaimer> reclaimer = nullptr,
       const std::optional<MemoryPool::DebugOptions>& poolDebugOpts =
-          std::nullopt,
-      uint32_t poolPriority = 0);
+          std::nullopt);
 
   /// Creates a leaf memory pool for direct memory allocation use with specified
   /// 'name'. If 'name' is missing, the memory manager generates a default name
@@ -390,8 +389,8 @@ class MemoryManager {
   std::string toString(bool detail = false) const;
 
   /// Returns the memory manger's internal default root memory pool for testing
-  /// purpose.
-  MemoryPool& testingDefaultRoot() const {
+  /// purpose and legacy use cases.
+  MemoryPool& deprecatedSysRootPool() const {
     return *sysRoot_;
   }
 
@@ -485,6 +484,9 @@ std::shared_ptr<MemoryPool> deprecatedAddDefaultLeafMemoryPool(
 /// TODO: deprecate this API after all the use cases are able to manage the
 /// lifecycle of the allocated memory pools properly.
 MemoryPool& deprecatedSharedLeafPool();
+
+/// Returns the sys root memory pool from the default memory manager.
+MemoryPool& deprecatedRootPool();
 
 /// Returns the system-wide memory pool for spilling memory usage.
 memory::MemoryPool* spillMemoryPool();

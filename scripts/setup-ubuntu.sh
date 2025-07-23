@@ -12,6 +12,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+# shellcheck source-path=SCRIPT_DIR
+# shellcheck disable=SC2076
 
 # This script documents setting up a Ubuntu host for Velox
 # development.  Running it should make you ready to compile.
@@ -27,15 +29,15 @@
 
 # Minimal setup for Ubuntu 22.04.
 set -eufx -o pipefail
-SCRIPTDIR=$(dirname "${BASH_SOURCE[0]}")
-source $SCRIPTDIR/setup-common.sh
+SCRIPT_DIR=$(dirname "${BASH_SOURCE[0]}")
+source "$SCRIPT_DIR"/setup-common.sh
 
 SUDO="${SUDO:-"sudo --preserve-env"}"
 USE_CLANG="${USE_CLANG:-false}"
 export INSTALL_PREFIX=${INSTALL_PREFIX:-"/usr/local"}
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)/deps-download}
 VERSION=$(cat /etc/os-release | grep VERSION_ID)
-PYTHON_VENV=${PYTHON_VENV:-"${SCRIPTDIR}/../.venv"}
+PYTHON_VENV=${PYTHON_VENV:-"${SCRIPT_DIR}/../.venv"}
 
 # On Ubuntu 20.04 dependencies need to be built using gcc11.
 # On Ubuntu 22.04 gcc11 is already the system gcc installed.
@@ -52,7 +54,7 @@ function install_clang15 {
   if [[ ${VERSION} =~ "22.04" ]]; then
     CLANG_PACKAGE_LIST="${CLANG_PACKAGE_LIST} gcc-12 g++-12 libc++-12-dev"
   fi
-  ${SUDO} apt install ${CLANG_PACKAGE_LIST} -y
+  ${SUDO} apt install "${CLANG_PACKAGE_LIST}" -y
 }
 
 # For Ubuntu 20.04 we need add the toolchain PPA to get access to gcc11.
@@ -82,11 +84,11 @@ function install_build_prerequisites {
     libtool \
     wget
 
-  if [ ! -f ${PYTHON_VENV}/pyvenv.cfg ]; then
+  if [ ! -f "${PYTHON_VENV}"/pyvenv.cfg ]; then
     echo "Creating Python Virtual Environment at ${PYTHON_VENV}"
-    python3 -m venv ${PYTHON_VENV}
+    python3 -m venv "${PYTHON_VENV}"
   fi
-  source ${PYTHON_VENV}/bin/activate;
+  source "${PYTHON_VENV}"/bin/activate
   # Install to /usr/local to make it available to all users.
   ${SUDO} pip3 install cmake==3.28.3
 
@@ -126,7 +128,6 @@ function install_velox_deps_from_apt {
     libre2-dev \
     libsnappy-dev \
     libsodium-dev \
-    liblzo2-dev \
     libelf-dev \
     libdwarf-dev \
     bison \
@@ -138,7 +139,7 @@ function install_velox_deps_from_apt {
 
 function install_conda {
   MINICONDA_PATH="${HOME:-/opt}/miniconda-for-velox"
-  if [ -e ${MINICONDA_PATH} ]; then
+  if [ -e "${MINICONDA_PATH}" ]; then
     echo "File or directory already exists: ${MINICONDA_PATH}"
     return
   fi
@@ -149,25 +150,55 @@ function install_conda {
   fi
   (
     mkdir -p conda && cd conda
-    wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-$ARCH.sh -O Miniconda3-latest-Linux-$ARCH.sh
-    bash Miniconda3-latest-Linux-$ARCH.sh -b -p $MINICONDA_PATH
+    wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-"$ARCH".sh -O Miniconda3-latest-Linux-"$ARCH".sh
+    bash Miniconda3-latest-Linux-"$ARCH".sh -b -p "$MINICONDA_PATH"
   )
 }
 
 function install_cuda {
   # See https://developer.nvidia.com/cuda-downloads
+  local arch
+  arch=$(uname -m)
+  local os_ver
+
+  if [[ ${VERSION} =~ "24.04" ]]; then
+    os_ver="ubuntu2404"
+  elif [[ ${VERSION} =~ "22.04" ]]; then
+    os_ver="ubuntu2204"
+  elif [[ ${VERSION} =~ "20.04" ]]; then
+    os_ver="ubuntu2004"
+  else
+    echo "Unsupported Ubuntu version: ${VERSION}" >&2
+    return 1
+  fi
+
+  local cuda_repo
+  if [[ $arch == "x86_64" ]]; then
+    cuda_repo="${os_ver}/x86_64"
+  elif [[ $arch == "aarch64" ]]; then
+    cuda_repo="${os_ver}/sbsa"
+  else
+    echo "Unsupported architecture: $arch" >&2
+    return 1
+  fi
+
   if ! dpkg -l cuda-keyring 1>/dev/null; then
-    wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
+    wget https://developer.download.nvidia.com/compute/cuda/repos/${cuda_repo}/cuda-keyring_1.1-1_all.deb
     $SUDO dpkg -i cuda-keyring_1.1-1_all.deb
     rm cuda-keyring_1.1-1_all.deb
     $SUDO apt update
   fi
-  local dashed="$(echo $1 | tr '.' '-')"
+
+  local dashed
+  dashed="$(echo "$1" | tr '.' '-')"
+
   $SUDO apt install -y \
-    cuda-compat-$dashed \
-    cuda-driver-dev-$dashed \
-    cuda-minimal-build-$dashed \
-    cuda-nvrtc-dev-$dashed
+    cuda-compat-"$dashed" \
+    cuda-driver-dev-"$dashed" \
+    cuda-minimal-build-"$dashed" \
+    cuda-nvrtc-dev-"$dashed" \
+    libcufile-dev-"$dashed" \
+    libnuma1
 }
 
 function install_s3 {
@@ -201,6 +232,10 @@ function install_adapters {
   run_and_time install_hdfs
 }
 
+function install_faiss_deps {
+  sudo apt-get install -y libopenblas-dev libomp-dev
+}
+
 function install_velox_deps {
   run_and_time install_velox_deps_from_apt
   run_and_time install_fmt
@@ -220,6 +255,7 @@ function install_velox_deps {
   run_and_time install_xsimd
   run_and_time install_simdjson
   run_and_time install_geos
+  run_and_time install_faiss
 }
 
 function install_apt_deps {
@@ -228,7 +264,7 @@ function install_apt_deps {
   install_velox_deps_from_apt
 }
 
-(return 2> /dev/null) && return # If script was sourced, don't run commands.
+(return 2>/dev/null) && return # If script was sourced, don't run commands.
 
 (
   if [[ ${USE_CLANG} != "false" ]]; then

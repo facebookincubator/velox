@@ -20,6 +20,7 @@
 #include "velox/functions/Macros.h"
 #include "velox/functions/Registerer.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/types/SfmSketchRegistration.h"
 #include "velox/type/OpaqueCustomTypes.h"
 
 namespace facebook::velox::test {
@@ -221,6 +222,10 @@ TEST_F(CustomTypeTest, customType) {
 }
 
 TEST_F(CustomTypeTest, getCustomTypeNames) {
+  // SFMSKETCH is a newly registered custom type, unlike others,
+  // registerSfmSketchType() is not called in the constructor of CustomTypeTest,
+  // so we explicitly call it here.
+  registerSfmSketchType();
   auto names = getCustomTypeNames();
   ASSERT_EQ(
       (std::unordered_set<std::string>{
@@ -232,7 +237,10 @@ TEST_F(CustomTypeTest, getCustomTypeNames) {
           "IPPREFIX",
           "BINGTILE",
           "TDIGEST",
-          "GEOMETRY"}),
+          "QDIGEST",
+          "GEOMETRY",
+          "SFMSKETCH",
+      }),
       names);
 
   ASSERT_TRUE(registerCustomType(
@@ -250,7 +258,10 @@ TEST_F(CustomTypeTest, getCustomTypeNames) {
           "BINGTILE",
           "FANCY_INT",
           "TDIGEST",
-          "GEOMETRY"}),
+          "QDIGEST",
+          "GEOMETRY",
+          "SFMSKETCH",
+      }),
       names);
 
   ASSERT_TRUE(unregisterCustomType("fancy_int"));
@@ -275,6 +286,13 @@ TEST_F(CustomTypeTest, nullConstant) {
     if (name == "TDIGEST") {
       auto type = getCustomType(name, {TypeParameter(DOUBLE())});
       checkNullConstant(type, "TDIGEST(DOUBLE)");
+    } else if (name == "QDIGEST") {
+      for (const auto& parameter :
+           std::vector<TypePtr>{BIGINT(), DOUBLE(), REAL()}) {
+        auto type = getCustomType(name, {TypeParameter(parameter)});
+        checkNullConstant(
+            type, fmt::format("QDIGEST({})", parameter->toString()));
+      }
     } else {
       auto type = getCustomType(name, {});
       checkNullConstant(type, type->toString());

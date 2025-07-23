@@ -36,6 +36,7 @@ class OutputBufferManager;
 
 class HashJoinBridge;
 class NestedLoopJoinBridge;
+class SplitListener;
 
 using ConnectorSplitPreloadFunc =
     std::function<void(const std::shared_ptr<connector::ConnectorSplit>&)>;
@@ -1015,17 +1016,19 @@ class Task : public std::enable_shared_from_this<Task> {
   // Notifies listeners that the task is now complete.
   void onTaskCompletion();
 
+  void onAddSplit(const core::PlanNodeId& planNodeId, const exec::Split& split);
+
   // Returns true if all splits are finished processing and there are no more
   // splits coming for the task.
   bool isAllSplitsFinishedLocked();
 
   std::unique_ptr<ContinuePromise> addSplitLocked(
       SplitsState& splitsState,
-      exec::Split&& split);
+      const exec::Split& split);
 
   std::unique_ptr<ContinuePromise> addSplitToStoreLocked(
       SplitsStore& splitsStore,
-      exec::Split&& split);
+      const exec::Split& split);
 
   // Invoked when all the driver threads are off thread. The function returns
   // 'threadFinishPromises_' to fulfill.
@@ -1119,6 +1122,8 @@ class Task : public std::enable_shared_from_this<Task> {
   // under serial execution mode.
   void recordBatchStartTime();
   void recordBatchEndTime();
+
+  void initSplitListeners();
 
   // Universally unique identifier of the task. Used to identify the task when
   // calling TaskListener.
@@ -1391,6 +1396,8 @@ class Task : public std::enable_shared_from_this<Task> {
       preloadingSplits_;
 
   folly::CancellationSource cancellationSource_;
+
+  std::vector<std::unique_ptr<SplitListener>> splitListeners_;
 };
 
 /// Listener invoked on task completion.
@@ -1430,6 +1437,50 @@ bool registerTaskListener(std::shared_ptr<TaskListener> listener);
 /// Unregister a listener registered earlier. Returns true if listener was
 /// unregistered successfuly, false if listener was not found.
 bool unregisterTaskListener(const std::shared_ptr<TaskListener>& listener);
+
+/// Listener invoked when splits are added to Task.
+class SplitListener {
+ public:
+  SplitListener(const std::string& taskId, const std::string& taskUuid)
+      : taskId_(taskId), taskUuid_(taskUuid) {}
+
+  virtual ~SplitListener() = default;
+
+  // Called when a split is added to a task for a given plan node.
+  virtual void onAddSplit(
+      const core::PlanNodeId& planNodeId,
+      const exec::Split& split) = 0;
+
+  /// Called on task completion. Provides the information about success or
+  /// failure as well as runtime statistics about task execution.
+  virtual void onTaskCompletion() = 0;
+
+ protected:
+  const std::string taskId_;
+  const std::string taskUuid_;
+};
+
+class SplitListenerFactory {
+ public:
+  virtual ~SplitListenerFactory() = default;
+
+  /// Create and return an std::unique_ptr<SplitListener> to be used by a Task
+  /// of the given taskId, taskUuid and config. The Task constructor calls this
+  /// method and holds the SplitListener. The SplitListener is destroyed when
+  /// the Task is destructed. This method can return a nullptr, e.g., if taskId
+  /// doesn't satisfy certain criteria or if config.maxNumSplitsListenedTo() is
+  /// 0. In this situation, the Task doesn't hold this SplitListener.
+  virtual std::unique_ptr<SplitListener> create(
+      const std::string& taskId,
+      const std::string& taskUuid,
+      const core::QueryConfig& config) = 0;
+};
+
+bool registerSplitListenerFactory(
+    const std::shared_ptr<SplitListenerFactory>& factory);
+
+bool unregisterSplitListenerFactory(
+    const std::shared_ptr<SplitListenerFactory>& factory);
 
 std::string executionModeString(Task::ExecutionMode mode);
 

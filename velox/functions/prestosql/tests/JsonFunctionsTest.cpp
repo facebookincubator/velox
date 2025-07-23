@@ -17,6 +17,7 @@
 #include "folly/Unicode.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/OptionalEmpty.h"
+#include "velox/core/Expressions.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/functions/prestosql/types/JsonType.h"
 
@@ -1018,6 +1019,23 @@ TEST_F(JsonFunctionsTest, jsonExtract) {
 
   EXPECT_EQ(std::nullopt, jsonExtract("INVALID_JSON", "$"));
   VELOX_ASSERT_THROW(jsonExtract("{\"\":\"\"}", ""), "Invalid JSON path");
+  // This is a special case where the input is only identified as invalid once
+  // jsonExtract starts to traverse the path.
+  EXPECT_EQ(
+      std::nullopt,
+      jsonExtract(
+          R"({3436654998315577471:-768009352,3684989847712002091:-317930923,5235625120989803984:1278962211,6359026774420146638:651644866,6614027999037539496:528067092})",
+          "$.*"));
+  EXPECT_EQ(
+      std::nullopt,
+      jsonExtract(R"({"a" : 1, "b" : {4422863654280672950:43}})", "$..*"));
+  EXPECT_EQ(
+      std::nullopt,
+      jsonExtract(R"([6849,26,"a",{4422863654280672950:43},26,"a"])", "$.*"));
+  EXPECT_EQ(
+      std::nullopt,
+      jsonExtract(
+          R"([6849,26,"a",[{4422863654280672950:43}],26,"a"])", "$..*"));
 
   EXPECT_EQ(
       "[\"0-553-21311-3\",\"0-395-19395-8\"]",

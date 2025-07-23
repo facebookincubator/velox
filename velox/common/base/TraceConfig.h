@@ -39,17 +39,22 @@ using UpdateAndCheckTraceLimitCB = std::function<void(uint64_t)>;
 
 struct TraceConfig {
   /// Target query trace nodes.
-  std::unordered_set<std::string> queryNodes;
+  std::string queryNodeId;
   /// Base dir of query trace.
   std::string queryTraceDir;
   UpdateAndCheckTraceLimitCB updateAndCheckTraceLimitCB;
   /// The trace task regexp.
   std::string taskRegExp;
+  /// If true, we only collect operator input trace without the actual
+  /// execution. This is used by crash debugging so that we can collect the
+  /// input that triggers the crash.
+  bool dryRun{false};
 
   TraceConfig(
-      std::unordered_set<std::string> _queryNodeIds,
-      std::string _queryTraceDir,
-      UpdateAndCheckTraceLimitCB _updateAndCheckTraceLimitCB,
-      std::string _taskRegExp);
+      std::string queryNodeIds,
+      std::string queryTraceDir,
+      UpdateAndCheckTraceLimitCB updateAndCheckTraceLimitCB,
+      std::string taskRegExp,
+      bool dryRun);
 };
 } // namespace facebook::velox

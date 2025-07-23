@@ -35,7 +35,7 @@ class LambdaExpr : public SpecialForm {
       std::shared_ptr<Expr>&& body,
       bool trackCpuUsage);
 
-  bool isConstant() const override {
+  bool isConstantExpr() const override {
     return false;
   }
 
@@ -48,6 +48,10 @@ class LambdaExpr : public SpecialForm {
       const SelectivityVector& rows,
       EvalCtx& context,
       VectorPtr& result) override;
+
+  const ExprPtr& body() const {
+    return body_;
+  }
 
  protected:
   void computeDistinctFields() override;

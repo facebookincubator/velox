@@ -31,11 +31,20 @@ General Aggregate Functions
     inputs if :doc:`presto.array_agg.ignore_nulls <../../configs>` is set
     to false.
 
-.. function:: avg(x) -> double|real
+.. function:: avg(x) -> double|real|decimal
 
     Returns the average (arithmetic mean) of all non-null input values.
     When x is of type REAL, the result type is REAL.
-    For all other input types, the result type is DOUBLE.
+    When x is an integer or a DOUBLE, the result is DOUBLE.
+    When x is of type DECIMAL(p, s), the result type is DECIMAL(p, s).
+    Note: For the overflow cases, Velox returns a result when Presto throws "Decimal overflow". ::
+        SELECT AVG(col)
+        FROM ( VALUES
+        	  (CAST(9999999999999999999999999999999.9999999 AS DECIMAL(38,7))),
+              (CAST(9999999999999999999999999999999.9999999 AS DECIMAL(38,7)))
+             ) AS t(col);
+        -- Velox: 9999999999999999999999999999999.9999999
+        -- Presto: Decimal overflow
 
 .. function:: bool_and(boolean) -> boolean
 
@@ -709,20 +718,162 @@ Statistical Aggregate Functions
 Noisy Aggregate Functions
 -------------------------
 
-.. function:: noisy_count_if_gaussian(col, noise_scale) -> bigint
+Overview
+~~~~~~~~
+
+Noisy aggregate functions provide random, noisy approximations of common
+aggregations like ``sum()``, ``count()``, and ``approx_distinct()`` as well as sketches like
+``approx_set()``. By injecting random noise into results, noisy aggregation functions make it
+more difficult to determine or confirm the exact data that was aggregated.
+
+While many of these functions resemble `differential privacy <https://en.wikipedia.org/wiki/Differential_privacy>`_
+mechanisms, neither the values returned by these functions nor the query results that incorporate
+these functions are differentially private in general. See Limitations_ below for more details.
+Users who wish to support a strong privacy guarantee should discuss with a suitable technical
+expert first.
+
+Counts, Sums, and Averages
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. function:: noisy_count_if_gaussian(col, noise_scale[, random_seed]) -> bigint
 
     Counts the ``TRUE`` values in ``col`` and then adds a normally distributed random double
     value with 0 mean and standard deviation of ``noise_scale`` to the true count.
     The noisy count is post-processed to be non-negative and rounded to bigint.
 
+    If provided, ``random_seed`` is used to seed the random number generator.
+    Otherwise, noise is drawn from a secure random. (*Note: ``random_seed`` is a constant and shared across all groups in a query.
+    It is kept in each accmulator to ensure the ``random_seed`` is accessible in the final aggregation step.*)
+
     ::
 
-        SELECT noisy_count_if_gaussian(orderkey > 10000, 20.0) FROM tpch.tiny.lineitem; -- 50180 (1 row)
-        SELECT noisy_count_if_gaussian(orderkey > 10000, 20.0) FROM tpch.tiny.lineitem WHERE false; -- NULL (1 row)
+        SELECT noisy_count_if_gaussian(orderkey > 10000, 20.0) FROM lineitem; -- 50180 (1 row)
+        SELECT noisy_count_if_gaussian(orderkey > 10000, 20.0) FROM lineitem WHERE false; -- NULL (1 row)
 
     .. note::
 
-        Unlike :func:`!count_if`, this function returns ``NULL`` when the (true) count is 0.
+        Unlike :func:`count_if`, this function returns ``NULL`` when the (true) count is 0.
+
+.. function:: noisy_count_gaussian(col, noise_scale[, random_seed]) -> bigint
+
+    Counts the non-null values in ``col`` and then adds a normally distributed random double
+    value with 0 mean and standard deviation of ``noise_scale`` to the true count.
+    The noisy count is post-processed to be non-negative and rounded to bigint.
+
+    If provided, ``random_seed`` is used to seed the random number generator.
+    Otherwise, noise is drawn from a secure random.
+
+    ::
+
+        SELECT noisy_count_gaussian(orderkey, 20.0) FROM lineitem; -- 60181 (1 row)
+        SELECT noisy_count_gaussian(orderkey, 20.0) FROM lineitem WHERE false; -- NULL (1 row)
+
+    .. note::
+
+        Unlike :func:`!count`, this function returns ``NULL`` when the (true) count is 0.
+
+    Distinct counting can be performed using :func:`noisy_count_gaussian` ``(DISTINCT col, ...)``, or with ``noisy_approx_distinct_sfm()``.
+    Generally speaking, :func:`noisy_count_gaussian` returns more accurate results but at a larger computational cost.
+
+.. function:: noisy_sum_gaussian(col, noise_scale[, random_seed]) -> double
+
+    Calculates the sum over the input values in ``col`` and then adds a normally distributed
+    random double value with 0 mean and standard deviation of ``noise_scale``.
+
+    If provided, ``random_seed`` is used to seed the random number generator.
+    Otherwise, noise is drawn from a secure random.
+
+.. function:: noisy_sum_gaussian(col, noise_scale, lower, upper[, random_seed]) -> double
+
+    Calculates the sum over the input values in ``col`` and then adds a normally distributed
+    random double value with 0 mean and standard deviation of ``noise_scale``.
+    Each value is clipped to the range of [``lower``, ``upper``] before adding to the sum.
+
+    If provided, ``random_seed`` is used to seed the random number generator.
+    Otherwise, noise is drawn from a secure random.
+
+.. function:: noisy_avg_gaussian(col, noise_scale[, random_seed]) -> double
+
+    Calculates the average (arithmetic mean) of all the input values in col and then adds a
+    normally distributed random double value with 0 mean and standard deviation of noise_scale.
+
+    If provided, random_seed is used to seed the random number generator.
+    Otherwise, noise is drawn from a secure random.
+
+.. function:: noisy_avg_gaussian(col, noise_scale, lower, upper[, random_seed]) -> double
+
+    Calculates the average (arithmetic mean) of all the input values in ``col`` and then adds a
+    normally distributed random double value with 0 mean and standard deviation of ``noise_scale``.
+    Each value is clipped to the range of [``lower``, ``upper``] before averaging.
+
+    If provided, random_seed is used to seed the random number generator.
+    Otherwise, noise is drawn from a secure random.
+
+.. function:: noisy_approx_set_sfm(col, epsilon[, buckets[, precision]]) -> SfmSketch
+
+    Returns an SFM sketch of the input values in ``col``. This is analogous to the ``approx_set()`` function,
+    which returns a (deterministic) HyperLogLog sketch.
+
+    * ``col`` currently supports types: "bigint", "double", "string", "varbinary".
+    * ``epsilon`` (double) is a positive number that controls the level of noise in the sketch, as described in [Hehir2023]_.
+      Smaller values of epsilon correspond to noisier sketches.
+    * ``buckets`` (int) defaults to 4096.
+    * ``precision`` (int) defaults to 24.
+
+    .. note::
+
+        Unlike ``approx_set()``, this function returns ``NULL`` when ``col`` is empty.
+        If this behavior is undesirable, use ``coalesce()`` with :func:`noisy_empty_approx_set_sfm`.
+
+.. function:: noisy_approx_distinct_sfm(col, epsilon[, buckets[, precision]]) -> bigint
+
+    Equivalent to ``cardinality(noisy_approx_set_sfm(col, epsilon, buckets, precision))``,
+    this returns the approximate cardinality (distinct count) of the column col.
+    This is analogous to the (deterministic) :func:`approx_distinct` function.
+
+    .. note::
+
+        Unlike :func:`approx_distinct`, this function returns NULL when col is empty.
+
+Limitations
+~~~~~~~~~~~
+
+While these functions resemble differential privacy mechanisms, the values returned by these
+functions are not differentially private in general. There are several important limitations
+to keep in mind if using these functions for privacy-preserving purposes, including:
+
+* All noisy aggregate functions return ``NULL`` when aggregating empty sets. This means a ``NULL``
+  return value noiselessly indicates the absence of data.
+
+* ``GROUP BY`` clauses used in combination with noisy aggregation functions reveal non-noisy
+  information: the presence or absence of a group noiselessly indicates the presence or
+  absence of data. See, e.g., [Wilkins2024]_.
+
+* Functions relying on floating-point noise may be susceptible to inference attacks such as
+  those identified in [Mironov2012]_ and [Casacuberta2022]_.
+
+References
+~~~~~~~~~~
+
+.. [Casacuberta2022] Casacuberta, S., Shoemate, M., Vadhan, S., & Wagaman, C. (2022).
+   `Widespread Underestimation of Sensitivity in Differentially Private Libraries and How to Fix It <https://arxiv.org/pdf/2207.10635>`_.
+   In Proceedings of the 2022 ACM SIGSAC Conference on Computer and Communications Security (pp. 471-484).
+
+.. [Hehir2023] Hehir, J., Ting, D., & Cormode, G. (2023).
+   `Sketch-Flip-Merge: Mergeable Sketches for Private Distinct Counting <https://proceedings.mlr.press/v202/hehir23a/hehir23a.pdf>`_.
+   In Proceedings of the 40th International Conference on Machine Learning (Vol. 202).
+
+.. [Mironov2012] Mironov, I. (2012).
+   `On significance of the least significant bits for differential privacy <https://www.microsoft.com/en-us/research/wp-content/uploads/2012/10/lsbs.pdf>`_.
+   In Proceedings of the 2012 ACM Conference on Computer and Communications Security (pp. 650-661).
+
+.. [Wilkins2024] Wilkins, A., Kifer, D., Zhang, D., & Karrer, B. (2024).
+   `Exact Privacy Analysis of the Gaussian Sparse Histogram Mechanism <https://journalprivacyconfidentiality.org/index.php/jpc/article/view/823/755>`_.
+   Journal of Privacy and Confidentiality, 14 (1).
+
+.. [FlajoletMartin1985] Flajolet, P, Martin, G. N. (1985).
+   `Probabilistic Counting Algorithms for Data Base Applications <https://algo.inria.fr/flajolet/Publications/src/FlMa85.pdf>`_.
+   In Journal of Computer and System Sciences, 31:182-209, 1985
 
 Miscellaneous
 -------------

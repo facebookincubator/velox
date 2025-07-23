@@ -243,15 +243,14 @@ Memory Management
        the bytes that are either currently being allocated or were in the past
        allocated, not yet been returned back to the operating system, in the
        form of 'Allocation' or 'ContiguousAllocation'.
-   * - memory_allocator_alloc_bytes
+   * - memory_allocator_allocated_bytes
      - Avg
      - Number of bytes currently allocated (used) from MemoryAllocator in the form
        of 'Allocation' or 'ContiguousAllocation'.
-   * - mmap_allocator_external_mapped_bytes
+   * - memory_allocator_external_mapped_bytes
      - Avg
-     - Number of bytes currently mapped in MmapAllocator, in the form of
+     - Number of bytes currently mapped in MemoryAllocator, in the form of
        'ContiguousAllocation'.
-       NOTE: This applies only to MmapAllocator
    * - mmap_allocator_delegated_alloc_bytes
      - Avg
      - Number of bytes currently allocated from MmapAllocator directly from raw
@@ -612,12 +611,11 @@ Table Scan
      - Type
      - Description
    * - table_scan_batch_process_time_ms
-     - Histogram
-     - The time distribution of table scan batch processing time in range of [0,
-       16s] with 512 buckets and reports P50, P90, P99, and P100.
+     - Average
+     - Tracks the averaged table scan batch processing time in milliseconds.
    * - table_scan_batch_bytes
-     - Histogram
-     - The size distribution of table scan output batch in range of [0, 512MB]
+     - Average
+     - Tracks the averaged table scan output batch size in bytes.
        with 512 buckets and reports P50, P90, P99, and P100
 
 S3 FileSystem

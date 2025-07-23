@@ -1,0 +1,195 @@
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: Collect Build Metrics
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/build-metrics.yml
+      - scripts/ci/bm-report/*
+
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: ref to check
+        required: true
+
+  schedule:
+    # Run every day at 04:05
+    - cron: 5 4 * * *
+
+permissions:
+  contents: read
+
+jobs:
+  metrics:
+    name: Linux ${{ matrix.link-type }} - ${{ matrix.type }} with adapters
+    if: ${{ github.repository == 'facebookincubator/velox' }}
+    runs-on: ${{ matrix.runner }}
+    container: ghcr.io/facebookincubator/velox-dev:adapters
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [16-core-ubuntu]
+        type: [debug, release]
+        link-type: [shared, static]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+
+      - name: Fix git permissions
+        # Usually actions/checkout does this but as we run in a container
+        # it doesn't work
+        run: git config --global --add safe.directory ${GITHUB_WORKSPACE}
+
+      - name: Make  ${{ matrix.link-type }} - ${{ matrix.type }} Build
+        env:
+          MAKEFLAGS: MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=4
+        run: |
+          EXTRA_CMAKE_FLAGS=(
+            "-DVELOX_ENABLE_BENCHMARKS=ON"
+            "-DVELOX_ENABLE_ARROW=ON"
+            "-DVELOX_ENABLE_PARQUET=ON"
+            "-DVELOX_ENABLE_HDFS=ON"
+            "-DVELOX_ENABLE_S3=ON"
+            "-DVELOX_ENABLE_GCS=ON"
+            "-DVELOX_ENABLE_ABFS=ON"
+            "-DVELOX_ENABLE_REMOTE_FUNCTIONS=ON"
+            "-DVELOX_MONO_LIBRARY=ON"
+            "-DVELOX_BUILD_SHARED=${{ matrix.link-type == 'shared' && 'ON' || 'OFF' }}"
+          )
+
+          echo "CMake Flags: ${EXTRA_CMAKE_FLAGS[*]}"
+          make '${{ matrix.type }}' EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS[*]}"
+
+      - name: Log binary sizes
+        run: |
+          mkdir -p /tmp/metrics
+          sizes_file=/tmp/metrics/object_sizes
+          echo "sizes_file=$sizes_file" >> $GITHUB_ENV
+
+          pushd '_build/${{ matrix.type }}'
+
+          # . to also check in lib for mono build
+          find . -type f \( -name 'libvelox*.so' -o -name 'libvelox*.a' \) -exec ls -l -BB {} \; |
+            awk '{print $5, $9; total += $5} END {print total," total_lib_size"}' > $sizes_file
+
+          find velox -type f -name '*.o' -exec ls -l -BB {} \;  |
+            awk '{print $5, $9; total += $5} END {print total," total_obj_size"}' >> $sizes_file
+
+          find velox -type f -name 'velox_*' -exec ls -l -BB {} \; |
+            awk '{print $5, $9; total += $5} END {print total," total_exec_size"}' >> $sizes_file
+
+          echo "::group::Size file for ${{ matrix.link-type }} - ${{ matrix.type }}"
+          cat $sizes_file
+          echo "::endgroup::"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          path: ${{ env.sizes_file }}
+          name: ${{ matrix.type }}-${{ matrix.link-type }}-sizes
+
+      - name: Copy ninja_log
+        run: cp _build/${{ matrix.type }}/.ninja_log /tmp/metrics/.ninja_log
+
+      - name: Install dependencies
+        run: |
+          python3 -m pip install setuptools
+          python3 -m pip install -r scripts/ci/benchmark-requirements.txt
+
+      - name: Upload Metrics
+        # This disables the upload and report generation on fork PRs but allows it for forks from within the main repo.
+        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'facebookincubator/velox' }}
+        env:
+          CONBENCH_URL: https://velox-conbench.voltrondata.run/
+          CONBENCH_MACHINE_INFO_NAME: GitHub-runner-${{ matrix.runner }}
+          CONBENCH_EMAIL: ${{ secrets.CONBENCH_EMAIL }}
+          CONBENCH_PASSWORD: ${{ secrets.CONBENCH_PASSWORD }}
+          # These don't actually work https://github.com/conbench/conbench/issues/1484
+          # but have to be there to work regardless??
+          CONBENCH_PROJECT_REPOSITORY: ${{ github.repository }}
+          CONBENCH_PROJECT_COMMIT: ${{ inputs.ref || github.sha }}
+          REF: ${{ inputs.ref || github.sha }}
+        run: |
+          ./scripts/ci/bm-report/build-metrics.py upload \
+            --build_type "${{ matrix.link-type }}-${{ matrix.type }}" \
+            --run_id "BM-${{ matrix.link-type }}-${{ matrix.type }}-${{ github.run_id }}-${{ github.run_attempt }}" \
+            --pr_number "${{ github.event.number }}" \
+            --sha "$REF" \
+            "/tmp/metrics"
+
+  upload-report:
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    name: Generate and Upload Build Metric Report
+    needs: metrics
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Setup Git User
+        run: |
+          git config --global user.email "velox@users.noreply.github.com"
+          git config --global user.name "velox"
+
+      - uses: cachix/install-nix-action@08dcb3a5e62fa31e2da3d490afc4176ef55ecd72 # v30
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+
+      - name: Build Environment
+        run: |
+          cd scripts/ci/bm-report
+          nix-build
+
+      - name: Build Documentation
+        env:
+          CONBENCH_URL: https://velox-conbench.voltrondata.run/
+          CONBENCH_EMAIL: ${{ secrets.CONBENCH_EMAIL }}
+          CONBENCH_PASSWORD: ${{ secrets.CONBENCH_PASSWORD }}
+        run: |
+          cd scripts/ci/bm-report
+          nix-shell --run "quarto render report.qmd"
+
+      - name: Upload Report Artifact
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: report
+          path: scripts/ci/bm-report/report.html
+          retention-days: 5
+
+      - name: Push Report
+        # The report only uses conbench data from 'main'
+        # so any data generated in a PR won't be included
+        if: ${{ github.event_name != 'pull_request' && github.repository == 'facebookincubator/velox'}}
+        run: |
+          git checkout gh-pages
+          mkdir -p docs/bm-report
+          cp -R scripts/ci/bm-report/report.html docs/bm-report/index.html
+          git add docs
+
+          if [ -n "$(git status --porcelain --untracked-files=no)" ]
+          then
+            git commit -m "Update build metrics"
+            git push
+          fi

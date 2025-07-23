@@ -32,6 +32,7 @@ SwitchExpr::SwitchExpr(
     const std::vector<ExprPtr>& inputs,
     bool inputsSupportFlatNoNullsFastPath)
     : SpecialForm(
+          SpecialFormKind::kSwitch,
           std::move(type),
           inputs,
           "switch",
@@ -51,7 +52,7 @@ SwitchExpr::SwitchExpr(
   auto typeExpected = resolveType(inputTypes);
   VELOX_CHECK(
       *typeExpected == *this->type(),
-      "Switch expression type different than then clause. Expected {} but got Actual {}.",
+      "Switch expression type different than then clause. Expected {}, but got {}.",
       typeExpected->toString(),
       this->type()->toString());
 }
@@ -165,7 +166,8 @@ void SwitchExpr::evalSpecialForm(
   }
   // TODO: Fix evaluate lambda expression return vector of size 0 issue #6270.
   if (type()->kind() != TypeKind::FUNCTION) {
-    VELOX_CHECK(localResult && localResult->size() >= rows.end());
+    VELOX_CHECK_NOT_NULL(localResult);
+    VELOX_CHECK_GE(localResult->size(), rows.end());
   }
 
   context.moveOrCopyResult(localResult, rows, finalResult);

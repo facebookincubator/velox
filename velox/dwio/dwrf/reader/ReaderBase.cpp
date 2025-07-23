@@ -21,6 +21,7 @@
 #include "velox/common/process/TraceContext.h"
 #include "velox/dwio/common/Mutation.h"
 #include "velox/dwio/common/exception/Exception.h"
+#include "velox/functions/lib/string/StringImpl.h"
 
 namespace facebook::velox::dwrf {
 
@@ -329,7 +330,7 @@ std::shared_ptr<const Type> ReaderBase::convertType(
     const FooterWrapper& footer,
     uint32_t index,
     bool fileColumnNamesReadAsLowerCase) {
-  VELOX_CHECK_LT(
+  VELOX_USER_CHECK_LT(
       index,
       folly::to<uint32_t>(footer.typesSize()),
       "Corrupted file, invalid types");
@@ -385,7 +386,7 @@ std::shared_ptr<const Type> ReaderBase::convertType(
             footer, type.subtypes(i), fileColumnNamesReadAsLowerCase);
         auto childName = type.fieldNames(i);
         if (fileColumnNamesReadAsLowerCase) {
-          folly::toLowerAscii(childName);
+          childName = functions::stringImpl::utf8StrToLowerCopy(childName);
         }
         names.push_back(std::move(childName));
         types.push_back(std::move(childType));

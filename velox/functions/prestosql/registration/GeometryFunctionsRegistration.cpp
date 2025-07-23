@@ -59,6 +59,8 @@ void registerRelationPredicates(const std::string& prefix) {
 }
 
 void registerOverlayOperations(const std::string& prefix) {
+  registerFunction<StBoundaryFunction, Geometry, Geometry>(
+      {{prefix + "St_Boundary"}});
   registerFunction<StDifferenceFunction, Geometry, Geometry, Geometry>(
       {{prefix + "ST_Difference"}});
   registerFunction<StIntersectionFunction, Geometry, Geometry, Geometry>(
@@ -70,9 +72,59 @@ void registerOverlayOperations(const std::string& prefix) {
 }
 
 void registerAccessors(const std::string& prefix) {
+  registerFunction<StIsValidFunction, bool, Geometry>(
+      {{prefix + "ST_IsValid"}});
+  registerFunction<StIsSimpleFunction, bool, Geometry>(
+      {{prefix + "ST_IsSimple"}});
+  registerFunction<GeometryInvalidReasonFunction, Varchar, Geometry>(
+      {{prefix + "geometry_invalid_reason"}});
+  registerFunction<SimplifyGeometryFunction, Geometry, Geometry, double>(
+      {{prefix + "simplify_geometry"}});
+
   registerFunction<StAreaFunction, double, Geometry>({{prefix + "ST_Area"}});
+  registerFunction<StCentroidFunction, Geometry, Geometry>(
+      {{prefix + "ST_Centroid"}});
   registerFunction<StXFunction, double, Geometry>({{prefix + "ST_X"}});
   registerFunction<StYFunction, double, Geometry>({{prefix + "ST_Y"}});
+  registerFunction<StXMinFunction, double, Geometry>({{prefix + "ST_XMin"}});
+  registerFunction<StYMinFunction, double, Geometry>({{prefix + "ST_YMin"}});
+  registerFunction<StXMaxFunction, double, Geometry>({{prefix + "ST_XMax"}});
+  registerFunction<StYMaxFunction, double, Geometry>({{prefix + "ST_YMax"}});
+  registerFunction<StGeometryTypeFunction, Varchar, Geometry>(
+      {{prefix + "ST_GeometryType"}});
+  registerFunction<StDistanceFunction, double, Geometry, Geometry>(
+      {{prefix + "ST_Distance"}});
+  registerFunction<StPolygonFunction, Geometry, Varchar>(
+      {{prefix + "ST_Polygon"}});
+  registerFunction<StIsClosedFunction, bool, Geometry>(
+      {{prefix + "ST_IsClosed"}});
+  registerFunction<StIsEmptyFunction, bool, Geometry>(
+      {{prefix + "ST_IsEmpty"}});
+  registerFunction<StIsRingFunction, bool, Geometry>({{prefix + "ST_IsRing"}});
+  registerFunction<StLengthFunction, double, Geometry>(
+      {{prefix + "ST_Length"}});
+  registerFunction<StPointNFunction, Geometry, Geometry, int32_t>(
+      {{prefix + "ST_PointN"}});
+  registerFunction<StStartPointFunction, Geometry, Geometry>(
+      {{prefix + "ST_StartPoint"}});
+  registerFunction<StEndPointFunction, Geometry, Geometry>(
+      {{prefix + "ST_EndPoint"}});
+  registerFunction<StGeometryNFunction, Geometry, Geometry, int32_t>(
+      {{prefix + "ST_GeometryN"}});
+  registerFunction<StInteriorRingNFunction, Geometry, Geometry, int32_t>(
+      {{prefix + "ST_InteriorRingN"}});
+  registerFunction<StNumGeometriesFunction, int32_t, Geometry>(
+      {{prefix + "ST_NumGeometries"}});
+  registerFunction<StNumInteriorRingFunction, int32_t, Geometry>(
+      {{prefix + "ST_NumInteriorRing"}});
+  registerFunction<StConvexHullFunction, Geometry, Geometry>(
+      {{prefix + "ST_ConvexHull"}});
+  registerFunction<StDimensionFunction, int8_t, Geometry>(
+      {{prefix + "ST_Dimension"}});
+  registerFunction<StExteriorRingFunction, Geometry, Geometry>(
+      {{prefix + "ST_ExteriorRing"}});
+  registerFunction<StEnvelopeFunction, Geometry, Geometry>(
+      {{prefix + "ST_Envelope"}});
 }
 
 } // namespace

@@ -16,19 +16,18 @@
 #include <boost/lexical_cast.hpp>
 #include <boost/uuid/uuid_generators.hpp>
 #include <boost/uuid/uuid_io.hpp>
-#include <fstream>
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/Fs.h"
 #include "velox/common/base/SuccinctPrinter.h"
 #include "velox/common/process/ThreadDebugInfo.h"
 #include "velox/common/testutil/TestValue.h"
-#include "velox/core/Expressions.h"
 #include "velox/expression/CastExpr.h"
 #include "velox/expression/ConstantExpr.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/ExprCompiler.h"
 #include "velox/expression/FieldReference.h"
+#include "velox/expression/LambdaExpr.h"
 #include "velox/expression/PeeledEncoding.h"
 #include "velox/expression/ScopedVarSetter.h"
 #include "velox/expression/VectorFunction.h"
@@ -41,6 +40,28 @@ DECLARE_bool(force_eval_simplified);
 DECLARE_bool(velox_experimental_save_input_on_fatal_signal);
 
 namespace facebook::velox::exec {
+
+namespace {
+folly::F14FastMap<SpecialFormKind, std::string> specialFormNames() {
+  static const folly::F14FastMap<SpecialFormKind, std::string> kNames = {
+      {SpecialFormKind::kFieldAccess, "FIELD"},
+      {SpecialFormKind::kConstant, "CONSTANT"},
+      {SpecialFormKind::kCast, "CAST"},
+      {SpecialFormKind::kCoalesce, "COALESCE"},
+      {SpecialFormKind::kSwitch, "SWITCH"},
+      {SpecialFormKind::kLambda, "LAMBDA"},
+      {SpecialFormKind::kTry, "TRY"},
+      {SpecialFormKind::kAnd, "AND"},
+      {SpecialFormKind::kOr, "OR"},
+      {SpecialFormKind::kCustom, "CUSTOM"},
+  };
+
+  return kNames;
+}
+} // namespace
+
+VELOX_DEFINE_ENUM_NAME(SpecialFormKind, specialFormNames);
+
 folly::Synchronized<std::vector<std::shared_ptr<ExprSetListener>>>&
 exprSetListeners() {
   static folly::Synchronized<std::vector<std::shared_ptr<ExprSetListener>>>
@@ -121,7 +142,7 @@ Expr::Expr(
       name_(std::move(name)),
       vectorFunction_(std::move(vectorFunction)),
       vectorFunctionMetadata_{std::move(metadata)},
-      specialForm_{false},
+      specialFormKind_{std::nullopt},
       supportsFlatNoNullsFastPath_{
           vectorFunction_->supportsFlatNoNullsFastPath() &&
           type_->isPrimitiveType() && type_->isFixedWidth() &&
@@ -234,7 +255,11 @@ void Expr::computeMetadata() {
   // a special form, and all its inputs are also deterministic.
   deterministic_ = isCurrentFunctionDeterministic();
   for (auto& input : inputs_) {
-    deterministic_ &= input->deterministic_;
+    if (auto* lambda = input->as<LambdaExpr>()) {
+      deterministic_ &= lambda->body()->isDeterministic();
+    } else {
+      deterministic_ &= input->deterministic_;
+    }
   }
 
   // (2) Compute distinctFields_ and multiplyReferencedFields_.
@@ -1192,20 +1217,36 @@ void Expr::evalWithMemo(
   VectorPtr base;
   distinctFields_[0]->evalSpecialForm(rows, context, base);
 
+  // evalWithNulls may throw an exception. If this happens during constant
+  // folding, the exception is suppressed and the Expr object may be reused.
+  // Hence, it is important to update state in way that ensure "valid" state in
+  // case of exceptions.
+  //
+  // Also, note that the same expression running on same data may pass or may
+  // fail depending on whether it runs under TRY or not.
+  //
+  // An example expression that triggers these edge cases:
+  //
+  //    try(coalesce(array_min_by(array[1, 2, 3], x -> x / 0), 0::INTEGER))
+
   if (base.get() != baseOfDictionaryRawPtr_ ||
       baseOfDictionaryWeakPtr_.expired()) {
     baseOfDictionaryRepeats_ = 0;
-    baseOfDictionaryWeakPtr_ = base;
-    baseOfDictionaryRawPtr_ = base.get();
+    baseOfDictionaryWeakPtr_.reset();
+    baseOfDictionaryRawPtr_ = nullptr;
     context.releaseVector(baseOfDictionary_);
     context.releaseVector(dictionaryCache_);
+
     evalWithNulls(rows, context, result);
+    baseOfDictionaryWeakPtr_ = base;
+    baseOfDictionaryRawPtr_ = base.get();
     return;
   }
-  ++baseOfDictionaryRepeats_;
 
-  if (baseOfDictionaryRepeats_ == 1) {
+  if (baseOfDictionaryRepeats_ == 0) {
     evalWithNulls(rows, context, result);
+
+    ++baseOfDictionaryRepeats_;
     baseOfDictionary_ = base;
     dictionaryCache_ = result;
     if (!cachedDictionaryIndices_) {
@@ -1216,6 +1257,8 @@ void Expr::evalWithMemo(
     context.deselectErrors(*cachedDictionaryIndices_);
     return;
   }
+
+  ++baseOfDictionaryRepeats_;
 
   if (cachedDictionaryIndices_) {
     LocalSelectivityVector cachedHolder(context, rows);
@@ -1242,31 +1285,34 @@ void Expr::evalWithMemo(
 
     evalWithNulls(*uncached, context, result);
     context.deselectErrors(*uncached);
-    context.exprSet()->addToMemo(this);
-    auto newCacheSize = uncached->end();
 
-    // dictionaryCache_ is valid only for cachedDictionaryIndices_. Hence, a
-    // safe call to BaseVector::ensureWritable must include all the rows not
-    // covered by cachedDictionaryIndices_. If BaseVector::ensureWritable is
-    // called only for a subset of rows not covered by
-    // cachedDictionaryIndices_, it will attempt to copy rows that are not
-    // valid leading to a crash.
-    LocalSelectivityVector allUncached(context, dictionaryCache_->size());
-    allUncached.get()->setAll();
-    allUncached.get()->deselect(*cachedDictionaryIndices_);
-    context.ensureWritable(*allUncached.get(), type(), dictionaryCache_);
+    if (uncached->hasSelections()) {
+      context.exprSet()->addToMemo(this);
+      auto newCacheSize = uncached->end();
 
-    if (cachedDictionaryIndices_->size() < newCacheSize) {
-      cachedDictionaryIndices_->resize(newCacheSize, false);
+      // dictionaryCache_ is valid only for cachedDictionaryIndices_. Hence, a
+      // safe call to BaseVector::ensureWritable must include all the rows not
+      // covered by cachedDictionaryIndices_. If BaseVector::ensureWritable is
+      // called only for a subset of rows not covered by
+      // cachedDictionaryIndices_, it will attempt to copy rows that are not
+      // valid leading to a crash.
+      LocalSelectivityVector allUncached(context, dictionaryCache_->size());
+      allUncached.get()->setAll();
+      allUncached.get()->deselect(*cachedDictionaryIndices_);
+      context.ensureWritable(*allUncached.get(), type(), dictionaryCache_);
+
+      if (cachedDictionaryIndices_->size() < newCacheSize) {
+        cachedDictionaryIndices_->resize(newCacheSize, false);
+      }
+
+      cachedDictionaryIndices_->select(*uncached);
+
+      // Resize the dictionaryCache_ to accommodate all the necessary rows.
+      if (dictionaryCache_->size() < uncached->end()) {
+        dictionaryCache_->resize(uncached->end());
+      }
+      dictionaryCache_->copy(result.get(), *uncached, nullptr);
     }
-
-    cachedDictionaryIndices_->select(*uncached);
-
-    // Resize the dictionaryCache_ to accommodate all the necessary rows.
-    if (dictionaryCache_->size() < uncached->end()) {
-      dictionaryCache_->resize(uncached->end());
-    }
-    dictionaryCache_->copy(result.get(), *uncached, nullptr);
   }
   context.releaseVector(base);
 }
@@ -1656,16 +1702,8 @@ void Expr::appendInputsSql(
   }
 }
 
-bool Expr::isConstant() const {
-  if (!isDeterministic()) {
-    return false;
-  }
-  for (auto& input : inputs_) {
-    if (!input->is<ConstantExpr>()) {
-      return false;
-    }
-  }
-  return true;
+bool Expr::isConstantExpr() const {
+  return isDeterministic() && distinctFields_.empty();
 }
 
 namespace {
@@ -1773,7 +1811,8 @@ namespace {
 void addStats(
     const exec::Expr& expr,
     std::unordered_map<std::string, exec::ExprStats>& stats,
-    std::unordered_set<const exec::Expr*>& uniqueExprs) {
+    std::unordered_set<const exec::Expr*>& uniqueExprs,
+    bool excludeSpecialForm) {
   auto it = uniqueExprs.find(&expr);
   if (it != uniqueExprs.end()) {
     // Common sub-expression. Skip to avoid double counting.
@@ -1782,13 +1821,16 @@ void addStats(
 
   uniqueExprs.insert(&expr);
 
+  bool excludeSplFormExpr = excludeSpecialForm && expr.isSpecialForm();
   // Do not aggregate empty stats.
-  if (expr.stats().numProcessedRows || expr.stats().defaultNullRowsSkipped) {
+  bool emptyStats =
+      !expr.stats().numProcessedRows && !expr.stats().defaultNullRowsSkipped;
+  if (!emptyStats && !excludeSplFormExpr) {
     stats[expr.name()].add(expr.stats());
   }
 
   for (const auto& input : expr.inputs()) {
-    addStats(*input, stats, uniqueExprs);
+    addStats(*input, stats, uniqueExprs, excludeSpecialForm);
   }
 }
 
@@ -1797,11 +1839,12 @@ std::string makeUuid() {
 }
 } // namespace
 
-std::unordered_map<std::string, exec::ExprStats> ExprSet::stats() const {
+std::unordered_map<std::string, exec::ExprStats> ExprSet::stats(
+    bool excludeSpecialForm) const {
   std::unordered_map<std::string, exec::ExprStats> stats;
   std::unordered_set<const exec::Expr*> uniqueExprs;
   for (const auto& expr : exprs()) {
-    addStats(*expr, stats, uniqueExprs);
+    addStats(*expr, stats, uniqueExprs, excludeSpecialForm);
   }
 
   return stats;
@@ -1952,8 +1995,7 @@ void ExprSet::clear() {
   for (auto* memo : memoizingExprs_) {
     memo->clearMemo();
   }
-  distinctFields_.clear();
-  multiplyReferencedFields_.clear();
+  memoizingExprs_.clear();
 }
 
 void ExprSet::clearCache() {
@@ -2012,6 +2054,15 @@ void SimpleExpressionEvaluator::evaluate(
   result = results[0];
 }
 
+void SimpleExpressionEvaluator::evaluate(
+    exec::ExprSet* exprSet,
+    const SelectivityVector& rows,
+    const RowVector& input,
+    std::vector<VectorPtr>& results) {
+  EvalCtx context(ensureExecCtx(), exprSet, &input);
+  exprSet->eval(0, exprSet->size(), true, rows, context, results);
+}
+
 core::ExecCtx* SimpleExpressionEvaluator::ensureExecCtx() {
   if (!execCtx_) {
     execCtx_ = std::make_unique<core::ExecCtx>(pool_, queryCtx_);
@@ -2019,20 +2070,33 @@ core::ExecCtx* SimpleExpressionEvaluator::ensureExecCtx() {
   return execCtx_.get();
 }
 
-VectorPtr evaluateConstantExpression(
+VectorPtr tryEvaluateConstantExpression(
     const core::TypedExprPtr& expr,
-    memory::MemoryPool* pool) {
-  auto data = BaseVector::create<RowVector>(ROW({}), 1, pool);
-
-  auto queryCtx = velox::core::QueryCtx::create();
+    memory::MemoryPool* pool,
+    const std::shared_ptr<core::QueryCtx>& queryCtx,
+    bool suppressEvaluationFailures) {
   velox::core::ExecCtx execCtx{pool, queryCtx.get()};
   velox::exec::ExprSet exprSet({expr}, &execCtx);
-  velox::exec::EvalCtx evalCtx(&execCtx, &exprSet, data.get());
 
-  velox::SelectivityVector singleRow(1);
-  std::vector<velox::VectorPtr> results(1);
-  exprSet.eval(singleRow, evalCtx, results);
-  return results.at(0);
+  // The construction of ExprSet involves compiling and constant folding the
+  // expression. If constant folding succeeded, then we get a ConstantExpr.
+  // Constant folding may fail because expression is not constant-foldable or if
+  // an error happened during evaluation (5 / 0 fails with "division by zero").
+  // If constant folding didn't succeed, but suppressEvaluationFailures is
+  // false, we need to re-evaluate the expression to propagate the failure.
+  const bool doEvaluate = exprSet.expr(0)->is<ConstantExpr>() ||
+      (!suppressEvaluationFailures && exprSet.expr(0)->isConstantExpr());
+
+  if (doEvaluate) {
+    auto data = BaseVector::create<RowVector>(ROW({}), 1, pool);
+    velox::exec::EvalCtx evalCtx(&execCtx, &exprSet, data.get());
+    velox::SelectivityVector singleRow(1);
+    std::vector<velox::VectorPtr> results(1);
+    exprSet.eval(singleRow, evalCtx, results);
+    return results.at(0);
+  }
+
+  return nullptr;
 }
 
 } // namespace facebook::velox::exec

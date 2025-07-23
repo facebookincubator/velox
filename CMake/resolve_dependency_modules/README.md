@@ -18,7 +18,6 @@ by Velox. See details on bundling below.
 | libsodium         | default         | No       |
 | lz4               | default         | No       |
 | snappy            | default         | No       |
-| lzo               | default         | No       |
 | xz                | default         | No       |
 | zstd              | default         | No       |
 | openssl           | default         | No       |
@@ -29,9 +28,10 @@ by Velox. See details on bundling below.
 | cmake             | 3.28            | No       |
 | double-conversion | 3.1.5           | No       |
 | xsimd             | 10.0.0          | Yes      |
-| re2               | 2021-04-01      | Yes      |
+| re2               | 2024-07-02      | Yes      |
 | fmt               | 10.1.1          | Yes      |
 | simdjson          | 3.9.3           | Yes      |
+| faiss             | 1.11.0          | Yes      |
 | folly             | v2025.04.28.00  | Yes      |
 | fizz              | v2025.04.28.00  | No       |
 | wangle            | v2025.04.28.00  | No       |
@@ -41,7 +41,7 @@ by Velox. See details on bundling below.
 | DuckDB (testing)  | 0.8.1           | Yes      |
 | cpr (testing)     | 1.10.15         | Yes      |
 | arrow             | 15.0.0          | Yes      |
-| geos              | 3.10.2          | Yes      |
+| geos              | 3.10.7          | Yes      |
 | fast_float        | v8.0.2          | Yes      |
 | xxhash            | default         | No       |
 | thrift            | 0.16            | No       |

@@ -25,10 +25,6 @@
 #include "velox/dwio/common/WriterFactory.h"
 #include "velox/exec/MemoryReclaimer.h"
 
-namespace facebook::velox::dwrf {
-class Writer;
-}
-
 namespace facebook::velox::connector::hive {
 
 class LocationHandle;
@@ -216,6 +212,15 @@ class HiveInsertFileNameGenerator : public FileNameGenerator {
       const std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
       const ConnectorQueryCtx& connectorQueryCtx,
       bool commitRequired) const override;
+
+  /// Version of file generation that takes hiveConfig into account when
+  /// generating file names
+  std::pair<std::string, std::string> gen(
+      std::optional<uint32_t> bucketId,
+      const std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
+      const ConnectorQueryCtx& connectorQueryCtx,
+      const std::shared_ptr<const HiveConfig>& hiveConfig,
+      bool commitRequired) const;
 
   static void registerSerDe();
 
@@ -524,11 +529,6 @@ class HiveDataSink : public DataSink {
       const std::shared_ptr<const HiveConfig>& hiveConfig,
       uint32_t bucketCount,
       std::unique_ptr<core::PartitionFunction> bucketFunction);
-
-  static uint32_t maxBucketCount() {
-    static const uint32_t kMaxBucketCount = 100'000;
-    return kMaxBucketCount;
-  }
 
   void appendData(RowVectorPtr input) override;
 

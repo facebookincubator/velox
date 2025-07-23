@@ -58,8 +58,7 @@ void SplitStaging::copyColumns(
     char* destination,
     bool release) {
   for (auto i = begin; i < end; ++i) {
-    memcpy(destination, staging_[i].hostData, staging_[i].size);
-    destination += staging_[i].size;
+    memcpy(destination + offsets_[i], staging_[i].hostData, staging_[i].size);
   }
   if (release) {
     sem_.release();
@@ -176,9 +175,9 @@ void setFilter(GpuDecode* step, ColumnReader* reader, Stream* stream) {
       step->filterKind = WaveFilterKind::kBigintRange;
       step->nullsAllowed = veloxFilter->testNull();
       step->filter._.int64Range[0] =
-          reinterpret_cast<common::BigintRange*>(veloxFilter)->lower();
+          reinterpret_cast<const common::BigintRange*>(veloxFilter)->lower();
       step->filter._.int64Range[1] =
-          reinterpret_cast<common::BigintRange*>(veloxFilter)->upper();
+          reinterpret_cast<const common::BigintRange*>(veloxFilter)->upper();
       break;
     }
 

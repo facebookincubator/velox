@@ -304,6 +304,13 @@ TEST(FilterTest, bigintValuesUsingHashTable) {
   EXPECT_TRUE(filter->testInt64Range(0, 1, false));
 }
 
+TEST(FilterTest, negatedBigintValuesUsingHashTableOverflow) {
+  auto filter = createNegatedBigintValues(
+      {-9074444101981834051, 7013258837215469735}, false);
+  EXPECT_TRUE(
+      filter->testInt64Range(-9074444101981834051, 7013258837215469735, false));
+}
+
 TEST(FilterTest, negatedBigintValuesUsingHashTable) {
   auto filter = createNegatedBigintValues({1, 6, 10'000, 8, 9, 100, 10}, false);
   auto castedFilter =
@@ -470,7 +477,10 @@ TEST(FilterTest, negatedBigintValuesUsingHashTableSimd) {
 
 TEST(FilterTest, bigintValuesUsingBitmask) {
   auto filter = createBigintValues({1, 10, 100, 1000}, false);
-  ASSERT_TRUE(dynamic_cast<BigintValuesUsingBitmask*>(filter.get()));
+  auto castedFilter = dynamic_cast<BigintValuesUsingBitmask*>(filter.get());
+  ASSERT_TRUE(castedFilter);
+  ASSERT_EQ(castedFilter->min(), 1);
+  ASSERT_EQ(castedFilter->max(), 1000);
 
   EXPECT_TRUE(filter->testInt64(1));
   EXPECT_TRUE(filter->testInt64(10));
@@ -496,6 +506,8 @@ TEST(FilterTest, negatedBigintValuesUsingBitmask) {
   ASSERT_TRUE(castedFilter);
   std::vector<int64_t> filterVals = {1, 6, 8, 9, 10, 100, 1000};
   ASSERT_EQ(castedFilter->values(), filterVals);
+  ASSERT_EQ(castedFilter->min(), 1);
+  ASSERT_EQ(castedFilter->max(), 1000);
 
   EXPECT_FALSE(filter->testInt64(1));
   EXPECT_FALSE(filter->testInt64(10));
@@ -958,6 +970,8 @@ TEST(FilterTest, negatedBytesRange) {
   EXPECT_EQ("c", filter->upper());
   EXPECT_FALSE(filter->isLowerUnbounded());
   EXPECT_FALSE(filter->isUpperUnbounded());
+  EXPECT_FALSE(filter->isLowerExclusive());
+  EXPECT_FALSE(filter->isUpperExclusive());
 
   filter = notBetweenExclusive("b", "d");
   EXPECT_TRUE(filter->testBytes("b", 1));
@@ -972,6 +986,8 @@ TEST(FilterTest, negatedBytesRange) {
   EXPECT_EQ("d", filter->upper());
   EXPECT_FALSE(filter->isLowerUnbounded());
   EXPECT_FALSE(filter->isUpperUnbounded());
+  EXPECT_TRUE(filter->isLowerExclusive());
+  EXPECT_TRUE(filter->isUpperExclusive());
 
   auto filter_with_null = filter->clone(true);
   EXPECT_TRUE(filter_with_null->testBytesRange("bb", "cc", true));
