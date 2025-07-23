@@ -189,23 +189,28 @@ int row_skip(int tbl, ds_key_t count, DSDGenContext& dsdGenContext) {
   int i;
   for (i = 0; dsdGenContext.Streams[i].nColumn != -1; i++) {
     if (dsdGenContext.Streams[i].nTable == tbl) {
-      skip_random(
-          i, count * dsdGenContext.Streams[i].nUsedPerRow, dsdGenContext);
+      ds_key_t safeProduct = static_cast<ds_key_t>(
+          static_cast<uint64_t>(count) *
+          static_cast<uint64_t>(dsdGenContext.Streams[i].nUsedPerRow));
+      skip_random(i, safeProduct, dsdGenContext);
       dsdGenContext.Streams[i].nUsed = 0;
-      dsdGenContext.Streams[i].nTotal =
-          count * dsdGenContext.Streams[i].nUsedPerRow;
+      dsdGenContext.Streams[i].nTotal = safeProduct;
     }
     if (dsdGenContext.Streams[i].nDuplicateOf &&
         (dsdGenContext.Streams[i].nDuplicateOf != i)) {
-      skip_random(
-          dsdGenContext.Streams[i].nDuplicateOf,
-          count *
+      ds_key_t safeProduct = static_cast<ds_key_t>(
+          static_cast<uint64_t>(count) *
+          static_cast<uint64_t>(dsdGenContext.Streams[i].nUsedPerRow));
+      ds_key_t safeProduct2 = static_cast<ds_key_t>(
+          static_cast<uint64_t>(count) *
+          static_cast<uint64_t>(
               dsdGenContext.Streams[dsdGenContext.Streams[i].nDuplicateOf]
-                  .nUsedPerRow,
-          dsdGenContext);
+                  .nUsedPerRow));
+      skip_random(
+          dsdGenContext.Streams[i].nDuplicateOf, safeProduct2, dsdGenContext);
       dsdGenContext.Streams[dsdGenContext.Streams[i].nDuplicateOf].nUsed = 0;
       dsdGenContext.Streams[dsdGenContext.Streams[i].nDuplicateOf].nTotal =
-          count * dsdGenContext.Streams[i].nUsedPerRow;
+          safeProduct;
     }
   }
 
