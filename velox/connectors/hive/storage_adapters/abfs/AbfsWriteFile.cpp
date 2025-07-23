@@ -16,7 +16,7 @@
 
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsWriteFile.h"
 
-#include "AzureClientProviders.h"
+#include "AzureClientProviderFactories.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsConfig.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsUtil.h"
 
@@ -90,8 +90,9 @@ class AbfsWriteFile::Impl {
 AbfsWriteFile::AbfsWriteFile(
     std::string_view path,
     const config::ConfigBase& config) {
-  auto abfsConfig = AbfsConfig(path, config);
-  auto client = AzureClientProviders::getDataLakeFileClient(abfsConfig);
+  const auto abfsPath = std::make_shared<AbfsPath>(path);
+  auto client =
+      AzureClientProviderFactories::getDataLakeFileClient(abfsPath, config);
   impl_ = std::make_unique<Impl>(path, client);
 }
 

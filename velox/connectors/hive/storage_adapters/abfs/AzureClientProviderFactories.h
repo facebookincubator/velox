@@ -16,46 +16,52 @@
 
 #pragma once
 
-#include <memory>
-
-#include "AbfsConfig.h"
-#include "AzureBlobClient.h"
 #include "velox/common/config/Config.h"
+#include "velox/connectors/hive/storage_adapters/abfs/AbfsConfig.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AzureBlobClient.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AzureDataLakeFileClient.h"
+
+#include <functional>
+#include <memory>
+#include <string>
 
 namespace facebook::velox::filesystems {
 
 class AzureClientProvider {
  public:
-  virtual void initialize(
-      const config::ConfigBase& conf,
-      const std::string& accountNameWithSuffix) = 0;
+  virtual ~AzureClientProvider() = default;
 
-  virtual std::unique_ptr<AzureBlobClient> getBlobClient(
-      const std::string& fileUrl,
-      const std::string& fileSystem,
-      const std::string& filePath) = 0;
+  explicit AzureClientProvider(const std::shared_ptr<AbfsPath>& path)
+      : abfsPath_(path) {}
 
-  virtual std::unique_ptr<AzureDataLakeFileClient> getDataLakeFileClient(
-      const std::string& fileUrl,
-      const std::string& fileSystem,
-      const std::string& filePath) = 0;
+  virtual std::unique_ptr<AzureBlobClient> getBlobClient() = 0;
+
+  virtual std::unique_ptr<AzureDataLakeFileClient> getDataLakeFileClient() = 0;
+
+ protected:
+  std::shared_ptr<AbfsPath> abfsPath_;
 };
 
-class AzureClientProviders {
- public:
-  static void registerProvider(
-      const std::string& account,
-      std::shared_ptr<AzureClientProvider> provider);
+using AzureClientProviderFactory =
+    std::function<std::unique_ptr<AzureClientProvider>(
+        const std::shared_ptr<AbfsPath>& path,
+        const config::ConfigBase& config)>;
 
-  static bool providerRegistered(const std::string& account);
+class AzureClientProviderFactories {
+ public:
+  static void registerFactory(
+      const std::string& account,
+      const AzureClientProviderFactory& factory);
+
+  static bool clientFactoryRegistered(const std::string& account);
 
   static std::unique_ptr<AzureBlobClient> getBlobClient(
-      const AbfsConfig& config);
+      const std::shared_ptr<AbfsPath>& abfsPath,
+      const config::ConfigBase& config);
 
   static std::unique_ptr<AzureDataLakeFileClient> getDataLakeFileClient(
-      const AbfsConfig& config);
+      const std::shared_ptr<AbfsPath>& abfsPath,
+      const config::ConfigBase& config);
 };
 
 } // namespace facebook::velox::filesystems

@@ -19,16 +19,18 @@
 #include <azure/storage/blobs/blob_client.hpp>
 
 namespace facebook::velox::filesystems {
+
 class AzureBlobClient {
  public:
   virtual ~AzureBlobClient() {}
 
   virtual Azure::Response<Azure::Storage::Blobs::Models::BlobProperties>
-  GetProperties() = 0;
+  getProperties() = 0;
 
   virtual Azure::Response<Azure::Storage::Blobs::Models::DownloadBlobResult>
-  Download(const Azure::Storage::Blobs::DownloadBlobOptions& options) = 0;
+  download(const Azure::Storage::Blobs::DownloadBlobOptions& options) = 0;
 
-  virtual std::string GetUrl() = 0;
+  virtual std::string getUrl() = 0;
 };
+
 } // namespace facebook::velox::filesystems

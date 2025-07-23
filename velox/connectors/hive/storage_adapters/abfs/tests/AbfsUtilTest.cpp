@@ -14,20 +14,17 @@
  * limitations under the License.
  */
 
-#pragma once
+#include "velox/connectors/hive/storage_adapters/abfs/AbfsUtil.h"
 
-#include <functional>
-#include <memory>
-#include <string>
+#include "gtest/gtest.h"
 
-namespace facebook::velox::filesystems {
+using namespace facebook::velox::filesystems;
 
-class AbfsSasTokenProvider;
-
-using AbfsSasTokenProviderFactory =
-    std::function<std::unique_ptr<AbfsSasTokenProvider>()>;
-
-// Register the ABFS filesystem.
-void registerAbfsFileSystem();
-
-} // namespace facebook::velox::filesystems
+TEST(AbfsUtilsTest, isAbfsFile) {
+  EXPECT_FALSE(isAbfsFile("abfs:"));
+  EXPECT_FALSE(isAbfsFile("abfss:"));
+  EXPECT_FALSE(isAbfsFile("abfs:/"));
+  EXPECT_FALSE(isAbfsFile("abfss:/"));
+  EXPECT_TRUE(isAbfsFile("abfs://test@test.dfs.core.windows.net/test"));
+  EXPECT_TRUE(isAbfsFile("abfss://test@test.dfs.core.windows.net/test"));
+}

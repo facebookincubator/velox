@@ -14,37 +14,30 @@
  * limitations under the License.
  */
 
+#include "velox/connectors/hive/storage_adapters/abfs/DefaultAzureClientProvider.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/config/Config.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsConfig.h"
-#include "velox/connectors/hive/storage_adapters/abfs/AbfsUtil.h"
 
 #include "gtest/gtest.h"
 
 using namespace facebook::velox::filesystems;
 using namespace facebook::velox;
 
-TEST(AbfsUtilsTest, isAbfsFile) {
-  EXPECT_FALSE(isAbfsFile("abfs:"));
-  EXPECT_FALSE(isAbfsFile("abfss:"));
-  EXPECT_FALSE(isAbfsFile("abfs:/"));
-  EXPECT_FALSE(isAbfsFile("abfss:/"));
-  EXPECT_TRUE(isAbfsFile("abfs://test@test.dfs.core.windows.net/test"));
-  EXPECT_TRUE(isAbfsFile("abfss://test@test.dfs.core.windows.net/test"));
-}
-
-TEST(AbfsConfigTest, authType) {
+TEST(DefaultAzureClientProviderTest, authType) {
   const config::ConfigBase config(
       {{"fs.azure.account.auth.type.efg.dfs.core.windows.net", "Custom"},
        {"fs.azure.account.key.efg.dfs.core.windows.net", "456"}},
       false);
   VELOX_ASSERT_USER_THROW(
-      std::make_unique<AbfsConfig>(
-          "abfss://foo@efg.dfs.core.windows.net/test.txt", config),
+      DefaultAzureClientProvider(
+          std::make_shared<AbfsPath>(
+              "abfss://foo@efg.dfs.core.windows.net/test.txt"),
+          config),
       "Unsupported auth type Custom, supported auth types are SharedKey, OAuth and SAS.");
 }
 
-TEST(AbfsConfigTest, clientSecretOAuth) {
+TEST(DefaultAzureClientProviderTest, clientSecretOAuth) {
   const config::ConfigBase config(
       {{"fs.azure.account.auth.type.efg.dfs.core.windows.net", "OAuth"},
        {"fs.azure.account.auth.type.bar1.dfs.core.windows.net", "OAuth"},
@@ -61,26 +54,36 @@ TEST(AbfsConfigTest, clientSecretOAuth) {
         "test"}},
       false);
   VELOX_ASSERT_USER_THROW(
-      std::make_unique<AbfsConfig>(
-          "abfss://foo@bar1.dfs.core.windows.net/test.txt", config),
+      DefaultAzureClientProvider(
+          std::make_shared<AbfsPath>(
+              "abfss://foo@bar1.dfs.core.windows.net/test.txt"),
+          config),
       "Config fs.azure.account.oauth2.client.id.bar1.dfs.core.windows.net not found");
   VELOX_ASSERT_USER_THROW(
-      std::make_unique<AbfsConfig>(
-          "abfss://foo@bar2.dfs.core.windows.net/test.txt", config),
+      DefaultAzureClientProvider(
+          std::make_shared<AbfsPath>(
+              "abfss://foo@bar2.dfs.core.windows.net/test.txt"),
+          config),
       "Config fs.azure.account.oauth2.client.secret.bar2.dfs.core.windows.net not found");
   VELOX_ASSERT_USER_THROW(
-      std::make_unique<AbfsConfig>(
-          "abfss://foo@bar3.dfs.core.windows.net/test.txt", config),
+      DefaultAzureClientProvider(
+          std::make_shared<AbfsPath>(
+              "abfss://foo@bar3.dfs.core.windows.net/test.txt"),
+          config),
       "Config fs.azure.account.oauth2.client.endpoint.bar3.dfs.core.windows.net not found");
-  auto abfsConfig =
-      AbfsConfig("abfss://abc@efg.dfs.core.windows.net/file/test.txt", config);
-  EXPECT_EQ(abfsConfig.tenentId(), "{TENANTID}");
-  EXPECT_EQ(abfsConfig.authorityHost(), "https://login.microsoftonline.com/");
-  auto readClient = abfsConfig.getReadFileClient();
+
+  auto clientProvider = DefaultAzureClientProvider(
+      std::make_shared<AbfsPath>(
+          "abfss://abc@efg.dfs.core.windows.net/file/test.txt"),
+      config);
+  EXPECT_EQ(clientProvider.tenentId(), "{TENANTID}");
   EXPECT_EQ(
-      readClient->GetUrl(),
+      clientProvider.authorityHost(), "https://login.microsoftonline.com/");
+  auto readClient = clientProvider.getBlobClient();
+  EXPECT_EQ(
+      readClient->getUrl(),
       "https://efg.blob.core.windows.net/abc/file/test.txt");
-  auto writeClient = abfsConfig.getWriteFileClient();
+  auto writeClient = clientProvider.getDataLakeFileClient();
   // GetUrl retrieves the value from the internal blob client, which represents
   // the blob's path as well.
   EXPECT_EQ(
@@ -88,23 +91,26 @@ TEST(AbfsConfigTest, clientSecretOAuth) {
       "https://efg.blob.core.windows.net/abc/file/test.txt");
 }
 
-TEST(AbfsConfigTest, sasToken) {
+TEST(DefaultAzureClientProviderTest, sasToken) {
   const config::ConfigBase config(
       {{"fs.azure.account.auth.type.efg.dfs.core.windows.net", "SAS"},
        {"fs.azure.account.auth.type.bar.dfs.core.windows.net", "SAS"},
        {"fs.azure.sas.fixed.token.bar.dfs.core.windows.net", "sas=test"}},
       false);
   VELOX_ASSERT_USER_THROW(
-      std::make_unique<AbfsConfig>(
-          "abfss://foo@efg.dfs.core.windows.net/test.txt", config),
+      DefaultAzureClientProvider(
+          std::make_shared<AbfsPath>(
+              "abfss://foo@efg.dfs.core.windows.net/test.txt"),
+          config),
       "Config fs.azure.sas.fixed.token.efg.dfs.core.windows.net not found");
-  auto abfsConfig =
-      AbfsConfig("abfs://abc@bar.dfs.core.windows.net/file", config);
-  auto readClient = abfsConfig.getReadFileClient();
+  auto clientProvider = DefaultAzureClientProvider(
+      std::make_shared<AbfsPath>("abfs://abc@bar.dfs.core.windows.net/file"),
+      config);
+  auto readClient = clientProvider.getBlobClient();
   EXPECT_EQ(
-      readClient->GetUrl(),
+      readClient->getUrl(),
       "http://bar.blob.core.windows.net/abc/file?sas=test");
-  auto writeClient = abfsConfig.getWriteFileClient();
+  auto writeClient = clientProvider.getDataLakeFileClient();
   // GetUrl retrieves the value from the internal blob client, which represents
   // the blob's path as well.
   EXPECT_EQ(
@@ -112,7 +118,7 @@ TEST(AbfsConfigTest, sasToken) {
       "http://bar.blob.core.windows.net/abc/file?sas=test");
 }
 
-TEST(AbfsConfigTest, sharedKey) {
+TEST(DefaultAzureClientProviderTest, sharedKey) {
   const config::ConfigBase config(
       {{"fs.azure.account.key.efg.dfs.core.windows.net", "123"},
        {"fs.azure.account.auth.type.efg.dfs.core.windows.net", "SharedKey"},
@@ -120,35 +126,42 @@ TEST(AbfsConfigTest, sharedKey) {
        {"fs.azure.account.key.bar.dfs.core.windows.net", "789"}},
       false);
 
-  auto abfsConfig =
-      AbfsConfig("abfs://abc@efg.dfs.core.windows.net/file", config);
-  EXPECT_EQ(abfsConfig.fileSystem(), "abc");
-  EXPECT_EQ(abfsConfig.filePath(), "file");
+  auto abfsPath =
+      std::make_shared<AbfsPath>("abfs://abc@efg.dfs.core.windows.net/file");
+  EXPECT_EQ(abfsPath->fileSystem(), "abc");
+  EXPECT_EQ(abfsPath->filePath(), "file");
+  auto clientProvider = DefaultAzureClientProvider(abfsPath, config);
   EXPECT_EQ(
-      abfsConfig.connectionString(),
+      clientProvider.connectionString(),
       "DefaultEndpointsProtocol=http;AccountName=efg;AccountKey=123;EndpointSuffix=core.windows.net;");
 
-  auto abfssConfig = AbfsConfig(
-      "abfss://abc@foobar.dfs.core.windows.net/sf_1/store_sales/ss_sold_date_sk=2450816/part-00002-a29c25f1-4638-494e-8428-a84f51dcea41.c000.snappy.parquet",
-      config);
-  EXPECT_EQ(abfssConfig.fileSystem(), "abc");
+  auto abfssPath = std::make_shared<AbfsPath>(
+      "abfss://abc@foobar.dfs.core.windows.net/sf_1/store_sales/ss_sold_date_sk=2450816/part-00002-a29c25f1-4638-494e-8428-a84f51dcea41.c000.snappy.parquet");
+  EXPECT_EQ(abfssPath->fileSystem(), "abc");
   EXPECT_EQ(
-      abfssConfig.filePath(),
+      abfssPath->filePath(),
       "sf_1/store_sales/ss_sold_date_sk=2450816/part-00002-a29c25f1-4638-494e-8428-a84f51dcea41.c000.snappy.parquet");
+  clientProvider = DefaultAzureClientProvider(abfssPath, config);
   EXPECT_EQ(
-      abfssConfig.connectionString(),
+      clientProvider.connectionString(),
       "DefaultEndpointsProtocol=https;AccountName=foobar;AccountKey=456;EndpointSuffix=core.windows.net;");
 
   // Test with special character space.
-  auto abfssConfigWithSpecialCharacters = AbfsConfig(
-      "abfss://foo@bar.dfs.core.windows.net/main@dir/sub dir/test.txt", config);
-
-  EXPECT_EQ(abfssConfigWithSpecialCharacters.fileSystem(), "foo");
+  auto abfssPathWithSpecialCharacters = std::make_shared<AbfsPath>(
+      "abfss://foo@bar.dfs.core.windows.net/main@dir/sub dir/test.txt");
+  EXPECT_EQ(abfssPathWithSpecialCharacters->fileSystem(), "foo");
   EXPECT_EQ(
-      abfssConfigWithSpecialCharacters.filePath(), "main@dir/sub dir/test.txt");
+      abfssPathWithSpecialCharacters->filePath(), "main@dir/sub dir/test.txt");
+  clientProvider =
+      DefaultAzureClientProvider(abfssPathWithSpecialCharacters, config);
+  EXPECT_EQ(
+      clientProvider.connectionString(),
+      "DefaultEndpointsProtocol=https;AccountName=bar;AccountKey=789;EndpointSuffix=core.windows.net;");
 
   VELOX_ASSERT_USER_THROW(
-      std::make_unique<AbfsConfig>(
-          "abfss://foo@otheraccount.dfs.core.windows.net/test.txt", config),
+      DefaultAzureClientProvider(
+          std::make_shared<AbfsPath>(
+              "abfss://foo@otheraccount.dfs.core.windows.net/test.txt"),
+          config),
       "Config fs.azure.account.key.otheraccount.dfs.core.windows.net not found");
 }

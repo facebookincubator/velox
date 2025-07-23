@@ -26,6 +26,8 @@
 #include "velox/connectors/hive/FileHandle.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsConfig.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsFileSystem.h"
+
+#include "connectors/hive/storage_adapters/abfs/DefaultAzureClientProvider.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsReadFile.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsWriteFile.h"
 #include "velox/connectors/hive/storage_adapters/abfs/tests/AzuriteServer.h"
@@ -47,12 +49,12 @@ class AbfsFileSystemTest : public testing::Test {
 
   static void SetUpTestCase() {
     registerAbfsFileSystem();
-    AbfsConfig::setUpTestWriteClient(
+    DefaultAzureClientProvider::setUpTestWriteClient(
         []() { return std::make_unique<MockDataLakeFileClient>(); });
   }
 
   static void TearDownTestSuite() {
-    AbfsConfig::tearDownTestWriteClient();
+    DefaultAzureClientProvider::tearDownTestWriteClient();
   }
 
   void SetUp() override {
