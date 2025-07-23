@@ -612,13 +612,14 @@ void genrand_email(
     int nColumn,
     DSDGenContext& dsdGenContext) {
   char* pDomain = nullptr;
-  std::vector<char> szCompany(50);
+  std::vector<char> szCompany(50, '\0');
   int nCompanyLength;
 
   pick_distribution(&pDomain, "top_domains", 1, 1, nColumn, dsdGenContext);
   genrand_integer(
       &nCompanyLength, DIST_UNIFORM, 10, 20, 0, nColumn, dsdGenContext);
-  gen_charset(&szCompany[0], ALPHANUM, 1, 20, nColumn, dsdGenContext);
+  gen_charset(szCompany.data(), ALPHANUM, 1, 20, nColumn, dsdGenContext);
+  szCompany.resize(nCompanyLength + 1);
   szCompany[nCompanyLength] = '\0';
 
   if ((strlen(pFirst) + strlen(pLast) + szCompany.size() + strlen(pDomain) +
