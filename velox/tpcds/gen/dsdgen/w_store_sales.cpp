@@ -113,7 +113,7 @@ void mk_detail(
    */
   if (++dsdGenContext.nStoreSalesItemIndex > dsdGenContext.nStoreSalesItemCount)
     dsdGenContext.nStoreSalesItemIndex = 1;
-  int getperm = getPermutationEntry(
+  long long getperm = getPermutationEntry(
       dsdGenContext.pStoreSalesItemPermutation,
       dsdGenContext.nStoreSalesItemIndex);
   r->ss_sold_item_sk =

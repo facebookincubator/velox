@@ -185,29 +185,36 @@ int row_stop(int tbl, DSDGenContext& dsdGenContext) {
  * TODO: 20020816 jms The second parameter should really be a ds_key_t to allow
  * BIG skips
  */
-int row_skip(int tbl, ds_key_t count, DSDGenContext& dsdGenContext) {
-  int i;
-  for (i = 0; dsdGenContext.Streams[i].nColumn != -1; i++) {
-    if (dsdGenContext.Streams[i].nTable == tbl) {
-      skip_random(
-          i, count * dsdGenContext.Streams[i].nUsedPerRow, dsdGenContext);
-      dsdGenContext.Streams[i].nUsed = 0;
-      dsdGenContext.Streams[i].nTotal =
-          count * dsdGenContext.Streams[i].nUsedPerRow;
+  int row_skip(int tbl, ds_key_t count, DSDGenContext& dsdGenContext) {
+    int i;
+    for (i = 0; dsdGenContext.Streams[i].nColumn != -1; i++) {
+      if (dsdGenContext.Streams[i].nTable == tbl) {
+  	  ds_key_t safeProduct = static_cast<ds_key_t>(
+                    static_cast<unsigned long long>(count) *
+                    static_cast<unsigned long long>(dsdGenContext.Streams[i].nUsedPerRow));
+        skip_random(
+            i, safeProduct, dsdGenContext);
+        dsdGenContext.Streams[i].nUsed = 0;
+        dsdGenContext.Streams[i].nTotal =
+            safeProduct;
+      }
+      if (dsdGenContext.Streams[i].nDuplicateOf &&
+          (dsdGenContext.Streams[i].nDuplicateOf != i)) {
+  	  ds_key_t safeProduct = static_cast<ds_key_t>(
+                    static_cast<unsigned long long>(count) *
+                    static_cast<unsigned long long>(dsdGenContext.Streams[i].nUsedPerRow));
+  	  ds_key_t safeProduct2 = static_cast<ds_key_t>(
+                    static_cast<unsigned long long>(count) *
+                    static_cast<unsigned long long>(dsdGenContext.Streams[dsdGenContext.Streams[i].nDuplicateOf].nUsedPerRow));
+        skip_random(
+            dsdGenContext.Streams[i].nDuplicateOf,
+            safeProduct2,
+            dsdGenContext);
+        dsdGenContext.Streams[dsdGenContext.Streams[i].nDuplicateOf].nUsed = 0;
+        dsdGenContext.Streams[dsdGenContext.Streams[i].nDuplicateOf].nTotal =
+            safeProduct;
+      }
     }
-    if (dsdGenContext.Streams[i].nDuplicateOf &&
-        (dsdGenContext.Streams[i].nDuplicateOf != i)) {
-      skip_random(
-          dsdGenContext.Streams[i].nDuplicateOf,
-          count *
-              dsdGenContext.Streams[dsdGenContext.Streams[i].nDuplicateOf]
-                  .nUsedPerRow,
-          dsdGenContext);
-      dsdGenContext.Streams[dsdGenContext.Streams[i].nDuplicateOf].nUsed = 0;
-      dsdGenContext.Streams[dsdGenContext.Streams[i].nDuplicateOf].nTotal =
-          count * dsdGenContext.Streams[i].nUsedPerRow;
-    }
-  }
 
   return (0);
 }

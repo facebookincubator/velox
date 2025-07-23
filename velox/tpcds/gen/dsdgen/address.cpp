@@ -313,25 +313,35 @@ int mk_city(int nTable, char** dest, DSDGenContext& dsdGenContext) {
  * Side Effects:
  * TODO: None
  */
-int city_hash(int nTable, char* name) {
-  char* cp;
-  int hash_value = 0, res = 0;
+int city_hash(int nTable, char *name) {
+	char *cp;
+	long long hash_value = 0, res = 0; // changed to long long from int
 
-  for (cp = name; *cp; cp++) {
-    hash_value *= 26;
-    hash_value -= 'A';
-    hash_value += *cp;
-    if (hash_value > 1000000) {
-      hash_value %= 10000;
-      res += hash_value;
-      hash_value = 0;
-    }
-  }
-  hash_value %= 1000;
-  res += hash_value;
-  res %= 10000; /* looking for a 4 digit result */
+	for (cp = name; *cp; cp++) {
+		hash_value *= 26;
+        // simulate the overflow as if it were an int
+        if (hash_value > MAXINT) {
+            hash_value %= MAXINT;
+            hash_value -= MAXINT;
+            hash_value -= 2;
+        } else if (hash_value < -MAXINT) {
+            hash_value %= MAXINT;
+            hash_value += MAXINT;
+            hash_value += 2;
+        }
+		hash_value -= 'A';
+		hash_value += *cp;
+		if (hash_value > 1000000) {
+			hash_value %= 10000;
+			res += hash_value;
+			hash_value = 0;
+		}
+	}
+	hash_value %= 1000;
+	res += hash_value;
+	res %= 10000; /* looking for a 4 digit result */
 
-  return (res);
+	return (res);
 }
 
 /*

@@ -30,4 +30,4 @@ ds_key_t* makeKeyPermutation(
     ds_key_t nSize,
     int nStream,
     DSDGenContext& dsdGenContext);
-#define getPermutationEntry(pPermutation, nIndex) (pPermutation[nIndex - 1] + 1)
+#define getPermutationEntry(pPermutation, nIndex) (static_cast<long long>(pPermutation[nIndex - 1]) + 1)
