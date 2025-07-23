@@ -315,10 +315,20 @@ int mk_city(int nTable, char** dest, DSDGenContext& dsdGenContext) {
  */
 int city_hash(int nTable, char* name) {
   char* cp;
-  int hash_value = 0, res = 0;
+  int64_t hash_value = 0, res = 0;
 
   for (cp = name; *cp; cp++) {
     hash_value *= 26;
+    // simulate the overflow as if it were an int
+    if (hash_value > MAXINT) {
+      hash_value %= MAXINT;
+      hash_value -= MAXINT;
+      hash_value -= 2;
+    } else if (hash_value < -MAXINT) {
+      hash_value %= MAXINT;
+      hash_value += MAXINT;
+      hash_value += 2;
+    }
     hash_value -= 'A';
     hash_value += *cp;
     if (hash_value > 1000000) {
