@@ -969,6 +969,34 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
       }
     }
 
+    case common::FilterKind::kBigintValuesUsingBitmask: {
+      auto* bigintValues =
+          static_cast<const common::BigintValuesUsingBitmask*>(&filter);
+      auto const& values = bigintValues->values();
+      if (values.empty()) {
+        VELOX_FAIL("Empty BigintValuesUsingBitmask filter not supported");
+      }
+
+      std::vector<const cudf::ast::expression*> exprVec;
+      for (const auto& value : values) {
+        scalars.emplace_back(std::make_unique<cudf::numeric_scalar<int64_t>>(
+            value, true, stream, mr));
+        auto const& literal = tree.push(
+            cudf::ast::literal{*static_cast<cudf::numeric_scalar<int64_t>*>(
+                scalars.back().get())});
+        auto const& equalExpr =
+            tree.push(Operation{Op::EQUAL, columnRef, literal});
+        exprVec.push_back(&equalExpr);
+      }
+
+      const cudf::ast::expression* result = exprVec[0];
+      for (size_t i = 1; i < exprVec.size(); ++i) {
+        result =
+            &tree.push(Operation{Op::NULL_LOGICAL_OR, *result, *exprVec[i]});
+      }
+      return *result;
+    }
+
     case common::FilterKind::kDoubleRange: {
       return createFloatingPointRangeExpr<double>(
           filter, tree, scalars, columnRef, stream, mr);
@@ -993,9 +1021,10 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
       for (const auto& value : values) {
         scalars.emplace_back(
             std::make_unique<cudf::string_scalar>(value, true, stream, mr));
-        auto literal = tree.push(cudf::ast::literal{
+        auto const& literal = tree.push(cudf::ast::literal{
             *static_cast<cudf::string_scalar*>(scalars.back().get())});
-        auto equalExpr = tree.push(Operation{Op::EQUAL, columnRef, literal});
+        auto const& equalExpr =
+            tree.push(Operation{Op::EQUAL, columnRef, literal});
         exprVec.push_back(&equalExpr);
       }
 
