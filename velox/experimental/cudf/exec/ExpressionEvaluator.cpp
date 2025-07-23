@@ -24,12 +24,17 @@
 #include "velox/vector/ConstantVector.h"
 #include "velox/vector/VectorTypeUtils.h"
 
+#include <cudf/ast/expressions.hpp>
 #include <cudf/datetime.hpp>
 #include <cudf/strings/attributes.hpp>
 #include <cudf/strings/contains.hpp>
 #include <cudf/strings/slice.hpp>
 #include <cudf/table/table.hpp>
+#include <cudf/table/table_view.hpp>
 #include <cudf/transform.hpp>
+
+#include <limits>
+#include <type_traits>
 
 namespace facebook::velox::cudf_velox {
 namespace {
@@ -738,6 +743,26 @@ auto createFloatingPointRangeExpr(
       cudf::ast::operation{Op::NULL_LOGICAL_AND, lowerBound, upperBound});
 };
 
+namespace {
+
+template <facebook::velox::TypeKind KIND>
+void shouldAddMinMax(
+    int64_t lower,
+    int64_t upper,
+    bool* skipLowerBound,
+    bool* skipUpperBound) {
+  using NativeT = typename facebook::velox::TypeTraits<KIND>::NativeType;
+
+  if constexpr (std::is_integral_v<NativeT>) {
+    *skipLowerBound =
+        lower <= static_cast<int64_t>(std::numeric_limits<NativeT>::min());
+    *skipUpperBound =
+        upper >= static_cast<int64_t>(std::numeric_limits<NativeT>::max());
+  }
+}
+
+} // namespace
+
 // Convert subfield filters to cudf AST
 cudf::ast::expression const& createAstFromSubfieldFilter(
     const common::Subfield& subfield,
@@ -839,16 +864,46 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
         return tree.push(Operation{Op::EQUAL, columnRef, literal});
       } else {
         // Range comparison: column >= lower AND column <= upper
-        // TODO (dm): Optimize away bounds that span full type range.
-        auto const& lowerLiteral = makeNumericLiteral(bigintRange->lower());
-        auto const& upperLiteral = makeNumericLiteral(bigintRange->upper());
+        const auto lower = bigintRange->lower();
+        const auto upper = bigintRange->upper();
 
-        auto const& lowerBound =
-            tree.push(Operation{Op::GREATER_EQUAL, columnRef, lowerLiteral});
-        auto const& upperBound =
-            tree.push(Operation{Op::LESS_EQUAL, columnRef, upperLiteral});
-        return tree.push(
-            Operation{Op::NULL_LOGICAL_AND, lowerBound, upperBound});
+        bool skipLowerBound = false;
+        bool skipUpperBound = false;
+
+        VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
+            shouldAddMinMax,
+            columnTypePtr->kind(),
+            lower,
+            upper,
+            &skipLowerBound,
+            &skipUpperBound);
+
+        const cudf::ast::expression* lowerExpr = nullptr;
+        if (!skipLowerBound) {
+          auto const& lowerLiteral = makeNumericLiteral(lower);
+          lowerExpr =
+              &tree.push(Operation{Op::GREATER_EQUAL, columnRef, lowerLiteral});
+        }
+
+        const cudf::ast::expression* upperExpr = nullptr;
+        if (!skipUpperBound) {
+          auto const& upperLiteral = makeNumericLiteral(upper);
+          upperExpr =
+              &tree.push(Operation{Op::LESS_EQUAL, columnRef, upperLiteral});
+        }
+
+        if (lowerExpr && upperExpr) {
+          return tree.push(
+              Operation{Op::NULL_LOGICAL_AND, *lowerExpr, *upperExpr});
+        } else if (lowerExpr) {
+          return *lowerExpr;
+        } else if (upperExpr) {
+          return *upperExpr;
+        }
+
+        // If neither lower nor upper bound expressions were created, it means
+        // the filter covers the entire range of the type, so it's a no-op
+        return tree.push(Operation{Op::EQUAL, columnRef, columnRef});
       }
     }
 
