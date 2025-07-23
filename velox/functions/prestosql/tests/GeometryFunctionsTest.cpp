@@ -2242,3 +2242,13 @@ TEST_F(GeometryFunctionsTest, testStEnvelope) {
       "GEOMETRYCOLLECTION (POINT (5 1), LINESTRING (3 4, 4 4))",
       "POLYGON ((3 1, 3 4, 5 4, 5 1, 3 1))");
 }
+
+TEST_F(GeometryFunctionsTest, geometryOrdering) {
+  // Test that ARRAY_SORT fails with Geometry arrays since they're not orderable
+  VELOX_ASSERT_THROW(
+      evaluateOnce<std::string>(
+          "st_astext(ARRAY_SORT(ARRAY[st_geometryfromtext(c0), st_geometryfromtext(c1)])[1])",
+          std::optional<std::string>("POINT (1 2)"),
+          std::optional<std::string>("LINESTRING (8 4, 4 8, 5 6)")),
+      "Scalar function signature is not supported: array_sort(ARRAY<GEOMETRY>).");
+}

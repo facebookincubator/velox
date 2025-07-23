@@ -45,6 +45,10 @@ class GeometryType : public VarbinaryType {
     return name();
   }
 
+  bool isOrderable() const override {
+    return false;
+  }
+
   folly::dynamic serialize() const override {
     folly::dynamic obj = folly::dynamic::object;
     obj["name"] = "Type";
