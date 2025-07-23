@@ -45,10 +45,6 @@ class ParquetDataSource : public DataSource, public NvtxHelper {
       const ConnectorQueryCtx* connectorQueryCtx,
       const std::shared_ptr<ParquetConfig>& ParquetConfig);
 
-  ~ParquetDataSource() {
-    std::cout << "ParquetDataSource destructor" << std::endl;
-  };
-
   void addSplit(std::shared_ptr<ConnectorSplit> split) override;
 
   void addDynamicFilter(
