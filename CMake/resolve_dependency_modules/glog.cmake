@@ -23,6 +23,7 @@ set(VELOX_GLOG_SOURCE_URL
 velox_resolve_dependency_url(GLOG)
 
 message(STATUS "Building glog from source")
+block(SCOPE_FOR VARIABLES)
 FetchContent_Declare(
   glog
   URL ${VELOX_GLOG_SOURCE_URL}
@@ -37,8 +38,7 @@ set(WITH_UNWIND OFF)
 set(gflags_NAMESPACE google)
 set(BUILD_TESTING OFF)
 FetchContent_MakeAvailable(glog)
-unset(BUILD_TESTING)
-unset(BUILD_SHARED_LIBS)
+endblock()
 
 # Folly uses variables instead of targets
 set(glog_LIBRARY glog::glog)

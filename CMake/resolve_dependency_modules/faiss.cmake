@@ -53,7 +53,7 @@ FetchContent_Declare(
 )
 
 # Set build options
-block()
+block(SCOPE_FOR VARIABLES)
 set(BUILD_SHARED_LIBS OFF)
 set(CMAKE_BUILD_TYPE Release)
 set(FAISS_ENABLE_GPU OFF)

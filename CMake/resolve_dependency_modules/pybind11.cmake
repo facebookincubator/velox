@@ -25,9 +25,11 @@ velox_resolve_dependency_url(PYBIND11)
 
 message(STATUS "Building Pybind11 from source")
 
+block(SCOPE_FOR VARIABLES)
 FetchContent_Declare(
   pybind11
   URL ${VELOX_PYBIND11_SOURCE_URL}
   URL_HASH ${VELOX_PYBIND11_BUILD_SHA256_CHECKSUM})
 
 FetchContent_MakeAvailable(pybind11)
+endblock()

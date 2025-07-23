@@ -25,6 +25,17 @@ else()
 endif()
 
 message(STATUS "Building re2 from source")
+
+# RE2 needs Abseil.
+velox_set_source(absl)
+velox_resolve_dependency(absl)
+
+block(
+  SCOPE_FOR
+  VARIABLES
+  PROPAGATE
+  re2_BINARY_DIR
+  re2_SOURCE_DIR)
 FetchContent_Declare(
   re2
   URL ${VELOX_RE2_SOURCE_URL}
@@ -33,11 +44,10 @@ FetchContent_Declare(
 set(RE2_USE_ICU ON)
 set(RE2_BUILD_TESTING OFF)
 
-# RE2 needs Abseil.
-velox_set_source(absl)
-velox_resolve_dependency(absl)
-
 FetchContent_MakeAvailable(re2)
+
+endblock()
+
 if("${absl_SOURCE}" STREQUAL "SYSTEM")
   if(DEFINED absl_VERSION AND "${absl_VERSION}" VERSION_LESS "20240116")
     message(

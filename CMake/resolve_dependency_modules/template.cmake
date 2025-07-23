@@ -22,9 +22,14 @@ set(VELOX_<PACKAGE>_SOURCE_URL "") # ideally don't use github archive links as
 velox_resolve_dependency_url(<PACKAGE>)
 
 message(STATUS "Building <PACKAGE> from source")
+
+block(SCOPE_FOR VARIABLES) # This isolates our main build from any changes to
+                           # variables like BUILD_TESTING etc. that could
+                           # otherwise leak from the dependencies' CMake
 FetchContent_Declare(
   <package>
   URL ${VELOX_<PACKAGE>_SOURCE_URL}
   URL_HASH ${VELOX_<PACKAGE>_BUILD_SHA256_CHECKSUM})
 
 FetchContent_MakeAvailable(<package>)
+endblock()

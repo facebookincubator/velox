@@ -24,6 +24,7 @@ velox_resolve_dependency_url(SIMDJSON)
 
 message(STATUS "Building simdjson from source")
 
+block(SCOPE_FOR VARIABLES)
 FetchContent_Declare(
   simdjson
   URL ${VELOX_SIMDJSON_SOURCE_URL}
@@ -34,3 +35,4 @@ if(${VELOX_SIMDJSON_SKIPUTF8VALIDATION})
 endif()
 
 FetchContent_MakeAvailable(simdjson)
+endblock()

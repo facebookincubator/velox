@@ -36,6 +36,7 @@ velox_resolve_dependency_url(PROTOBUF)
 
 message(STATUS "Building Protobuf from source")
 
+block(SCOPE_FOR VARIABLES PROPAGATE protobuf_SOURCE_DIR)
 FetchContent_Declare(
   protobuf
   URL ${VELOX_PROTOBUF_SOURCE_URL}
@@ -45,4 +46,6 @@ FetchContent_Declare(
 set(protobuf_BUILD_TESTS OFF)
 set(protobuf_ABSL_PROVIDER "package")
 FetchContent_MakeAvailable(protobuf)
+endblock()
+
 set(Protobuf_INCLUDE_DIRS ${protobuf_SOURCE_DIR}/src)

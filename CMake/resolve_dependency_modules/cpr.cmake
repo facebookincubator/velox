@@ -28,6 +28,8 @@ velox_resolve_dependency(curl)
 velox_resolve_dependency_url(CPR)
 
 message(STATUS "Building cpr from source")
+
+block(SCOPE_FOR VARIABLES)
 FetchContent_Declare(
   cpr
   URL ${VELOX_CPR_SOURCE_URL}
@@ -43,5 +45,6 @@ set(CURL_ZLIB OFF)
 FetchContent_MakeAvailable(cpr)
 # libcpr in its CMakeLists.txt file disables the BUILD_TESTING globally when
 # CPR_USE_SYSTEM_CURL=OFF. unset BUILD_TESTING here.
+endblock()
 unset(BUILD_TESTING)
 unset(BUILD_SHARED_LIBS)

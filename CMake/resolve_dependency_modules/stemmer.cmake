@@ -28,6 +28,7 @@ find_program(MAKE_PROGRAM make REQUIRED)
 set(STEMMER_PREFIX "${CMAKE_BINARY_DIR}/_deps/libstemmer")
 set(STEMMER_INCLUDE_PATH ${STEMMER_PREFIX}/src/libstemmer/include)
 
+block(SCOPE_FOR VARIABLES)
 # We can not use FetchContent as libstemmer does not use cmake
 ExternalProject_Add(
   libstemmer
@@ -43,6 +44,7 @@ ExternalProject_Add(
   BUILD_BYPRODUCTS
     ${STEMMER_PREFIX}/src/libstemmer/${CMAKE_STATIC_LIBRARY_PREFIX}stemmer${CMAKE_STATIC_LIBRARY_SUFFIX}
 )
+endblock()
 
 add_library(stemmer STATIC IMPORTED GLOBAL)
 add_library(stemmer::stemmer ALIAS stemmer)
