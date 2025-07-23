@@ -32,10 +32,8 @@ class ClpDataSource : public DataSource {
  public:
   ClpDataSource(
       const RowTypePtr& outputType,
-      const std::shared_ptr<connector::ConnectorTableHandle>& tableHandle,
-      const std::unordered_map<
-          std::string,
-          std::shared_ptr<connector::ColumnHandle>>& columnHandles,
+      const ConnectorTableHandlePtr& tableHandle,
+      const connector::ColumnHandleMap& columnHandles,
       velox::memory::MemoryPool* pool,
       std::shared_ptr<const ClpConfig>& clpConfig);
 

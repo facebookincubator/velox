@@ -27,15 +27,13 @@
 namespace facebook::velox::connector::clp {
 
 ClpDataSource::ClpDataSource(
-    const RowTypePtr& outputType,
-    const std::shared_ptr<connector::ConnectorTableHandle>& tableHandle,
-    const std::unordered_map<
-        std::string,
-        std::shared_ptr<connector::ColumnHandle>>& columnHandles,
-    velox::memory::MemoryPool* pool,
-    std::shared_ptr<const ClpConfig>& clpConfig)
+const RowTypePtr& outputType,
+  const ConnectorTableHandlePtr& tableHandle,
+  const connector::ColumnHandleMap& columnHandles,
+  velox::memory::MemoryPool* pool,
+  std::shared_ptr<const ClpConfig>& clpConfig)
     : pool_(pool), outputType_(outputType) {
-  auto clpTableHandle = std::dynamic_pointer_cast<ClpTableHandle>(tableHandle);
+  auto clpTableHandle = std::dynamic_pointer_cast<const ClpTableHandle>(tableHandle);
   storageType_ = clpConfig->storageType();
 
   for (const auto& outputName : outputType->names()) {
@@ -45,7 +43,7 @@ ClpDataSource::ClpDataSource(
         "ColumnHandle not found for output name: {}",
         outputName);
     auto clpColumnHandle =
-        std::dynamic_pointer_cast<ClpColumnHandle>(columnHandle->second);
+        std::dynamic_pointer_cast<const ClpColumnHandle>(columnHandle->second);
     VELOX_CHECK_NOT_NULL(
         clpColumnHandle,
         "ColumnHandle must be an instance of ClpColumnHandle for output name: {}",

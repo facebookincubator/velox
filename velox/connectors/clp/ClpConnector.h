@@ -38,10 +38,8 @@ class ClpConnector : public Connector {
 
   std::unique_ptr<DataSource> createDataSource(
       const RowTypePtr& outputType,
-      const std::shared_ptr<ConnectorTableHandle>& tableHandle,
-      const std::unordered_map<
-          std::string,
-          std::shared_ptr<connector::ColumnHandle>>& columnHandles,
+      const ConnectorTableHandlePtr& tableHandle,
+      const connector::ColumnHandleMap& columnHandles,
       ConnectorQueryCtx* connectorQueryCtx) override;
 
   bool supportsSplitPreload() override {
@@ -49,10 +47,10 @@ class ClpConnector : public Connector {
   }
 
   std::unique_ptr<DataSink> createDataSink(
-      RowTypePtr inputType,
-      std::shared_ptr<ConnectorInsertTableHandle> connectorInsertTableHandle,
-      ConnectorQueryCtx* connectorQueryCtx,
-      CommitStrategy commitStrategy) override;
+    RowTypePtr inputType,
+    ConnectorInsertTableHandlePtr connectorInsertTableHandle,
+    ConnectorQueryCtx* connectorQueryCtx,
+    CommitStrategy commitStrategy) override;
 
  private:
   std::shared_ptr<const ClpConfig> config_;

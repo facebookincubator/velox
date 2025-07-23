@@ -127,7 +127,7 @@ set(VELOX_GFLAGS_TYPE
 )
 option(VELOX_ENABLE_EXEC "Build exec." ON)
 option(VELOX_ENABLE_AGGREGATES "Build aggregates." ON)
-option(VELOX_ENABLE_CLP_CONNECTOR "Build CLP connector." OFF)
+option(VELOX_ENABLE_CLP_CONNECTOR "Build CLP connector." ON)
 option(VELOX_ENABLE_HIVE_CONNECTOR "Build Hive connector." ON)
 option(VELOX_ENABLE_TPCH_CONNECTOR "Build TPC-H connector." ON)
 option(VELOX_ENABLE_PRESTO_FUNCTIONS "Build Presto SQL functions." ON)
@@ -372,8 +372,7 @@ endif()
 if(ENABLE_ALL_WARNINGS)
   if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     set(KNOWN_COMPILER_SPECIFIC_WARNINGS
-        "-Wno-implicit-const-int-float-conversion \
-         -Wno-range-loop-analysis \
+        "-Wno-range-loop-analysis \
          -Wno-mismatched-tags \
          -Wno-nullability-completeness")
   elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
