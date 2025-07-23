@@ -411,6 +411,21 @@ TEST_F(DecimalArithmeticTest, multiply) {
            1,
            DECIMAL(38, 0)),
        makeConstant<int64_t>(100, 1, DECIMAL(2, 1))});
+
+  testArithmeticFunction(
+      "multiply",
+      makeConstant<int128_t>(
+          HugeInt::parse("9999542798541987451780195064133346831"),
+          1,
+          DECIMAL(38, 23)),
+      {makeConstant<int128_t>(
+           HugeInt::parse("99997713966580193276534859500386083931"),
+           1,
+           DECIMAL(38, 31)),
+       makeConstant<int128_t>(
+           HugeInt::parse("99997713966580193276534859500386083931"),
+           1,
+           DECIMAL(38, 31))});
 }
 
 TEST_F(DecimalArithmeticTest, divide) {

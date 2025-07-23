@@ -422,12 +422,35 @@ struct DecimalMultiplyFunction {
   }
 
  private:
+  static constexpr int32_t kMaxLargeScale = 2 * LongDecimalType::kMaxPrecision;
+
+  // Pre-compute the powers of ten for large scales. The maximum scale is
+  // 2 * LongDecimalType::kMaxPrecision, which is 76. The
+  // DecimalUtil::kPowersOfTen array is not large enough to hold these values.
+  static constexpr std::array<int256_t, kMaxLargeScale + 1>
+      kLargeScalePowersOfTen =
+          ([]() -> std::array<int256_t, kMaxLargeScale + 1> {
+            std::array<int256_t, kMaxLargeScale + 1> values;
+            values[0] = 1;
+            for (int32_t idx = 1; idx <= kMaxLargeScale; idx++) {
+              values[idx] = values[idx - 1] * 10;
+            }
+            return values;
+          })();
+
+  static int256_t getPowersOfTen(int32_t scale) {
+    VELOX_CHECK_GE(scale, 0);
+    VELOX_CHECK_LE(scale, kMaxLargeScale);
+
+    return kLargeScalePowersOfTen[scale];
+  }
+
   static int256_t reduceScaleBy(int256_t in, int32_t reduceBy) {
     if (reduceBy == 0) {
       return in;
     }
 
-    int256_t divisor = velox::DecimalUtil::kPowersOfTen[reduceBy];
+    int256_t divisor = getPowersOfTen(reduceBy);
     auto result = in / divisor;
     auto remainder = in % divisor;
     // Round up.
