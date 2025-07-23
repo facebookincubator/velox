@@ -53,12 +53,37 @@ class DataLakeFileClientWrapper final : public AzureDataLakeFileClient {
     // do nothing.
   }
 
-  std::string getUrl() const override {
+  std::string getUrl() override {
     return client_->GetUrl();
   }
 
  private:
   const std::unique_ptr<DataLakeFileClient> client_;
+};
+
+class AzureBlobFileClientWrapper : public AzureBlobClient {
+ public:
+  AzureBlobFileClientWrapper(
+      std::unique_ptr<Azure::Storage::Blobs::BlobClient> client) {
+    blobClient_ = std::move(client);
+  }
+
+  Azure::Response<Azure::Storage::Blobs::Models::BlobProperties> GetProperties()
+      override {
+    return blobClient_->GetProperties();
+  }
+
+  Azure::Response<Azure::Storage::Blobs::Models::DownloadBlobResult> Download(
+      const Azure::Storage::Blobs::DownloadBlobOptions& options) override {
+    return blobClient_->Download(options);
+  }
+
+  std::string GetUrl() override {
+    return blobClient_->GetUrl();
+  }
+
+ private:
+  std::unique_ptr<Azure::Storage::Blobs::BlobClient> blobClient_;
 };
 
 AbfsConfig::AbfsConfig(
@@ -80,6 +105,8 @@ AbfsConfig::AbfsConfig(
   auto firstSep = file.find_first_of("/");
   filePath_ = file.substr(firstSep + 1);
   accountNameWithSuffix_ = file.substr(firstAt + 1, firstSep - firstAt - 1);
+  auto firstDot = accountNameWithSuffix_.find_first_of(".");
+  accountName_ = accountNameWithSuffix_.substr(0, firstDot);
 
   auto authTypeKey =
       fmt::format("{}.{}", kAzureAccountAuthType, accountNameWithSuffix_);
@@ -92,12 +119,10 @@ AbfsConfig::AbfsConfig(
         fmt::format("{}.{}", kAzureAccountKey, accountNameWithSuffix_);
     VELOX_USER_CHECK(
         config.valueExists(credKey), "Config {} not found", credKey);
-    auto firstDot = accountNameWithSuffix_.find_first_of(".");
-    auto accountName = accountNameWithSuffix_.substr(0, firstDot);
     auto endpointSuffix = accountNameWithSuffix_.substr(firstDot + 5);
     std::stringstream ss;
     ss << "DefaultEndpointsProtocol=" << (isHttps_ ? "https" : "http");
-    ss << ";AccountName=" << accountName;
+    ss << ";AccountName=" << accountName_;
     ss << ";AccountKey=" << config.get<std::string>(credKey).value();
     ss << ";EndpointSuffix=" << endpointSuffix;
 
@@ -148,20 +173,23 @@ AbfsConfig::AbfsConfig(
   }
 }
 
-std::unique_ptr<BlobClient> AbfsConfig::getReadFileClient() {
+std::unique_ptr<AzureBlobClient> AbfsConfig::getReadFileClient() const {
+  std::unique_ptr<BlobClient> client;
   if (authType_ == kAzureSASAuthType) {
     auto url = getUrl(true);
-    return std::make_unique<BlobClient>(fmt::format("{}?{}", url, sas_));
+    client = std::make_unique<BlobClient>(fmt::format("{}?{}", url, sas_));
   } else if (authType_ == kAzureOAuthAuthType) {
     auto url = getUrl(true);
-    return std::make_unique<BlobClient>(url, tokenCredential_);
+    client = std::make_unique<BlobClient>(url, tokenCredential_);
   } else {
-    return std::make_unique<BlobClient>(BlobClient::CreateFromConnectionString(
-        connectionString_, fileSystem_, filePath_));
+    client =
+        std::make_unique<BlobClient>(BlobClient::CreateFromConnectionString(
+            connectionString_, fileSystem_, filePath_));
   }
+  return std::make_unique<AzureBlobFileClientWrapper>(std::move(client));
 }
 
-std::unique_ptr<AzureDataLakeFileClient> AbfsConfig::getWriteFileClient() {
+std::unique_ptr<AzureDataLakeFileClient> AbfsConfig::getWriteFileClient() const {
   if (testWriteClientFn_) {
     return testWriteClientFn_();
   }
@@ -181,7 +209,7 @@ std::unique_ptr<AzureDataLakeFileClient> AbfsConfig::getWriteFileClient() {
   return std::make_unique<DataLakeFileClientWrapper>(std::move(client));
 }
 
-std::string AbfsConfig::getUrl(bool withblobSuffix) {
+std::string AbfsConfig::getUrl(bool withblobSuffix) const {
   std::string accountNameWithSuffixForUrl(accountNameWithSuffix_);
   if (withblobSuffix) {
     // We should use correct suffix for blob client.

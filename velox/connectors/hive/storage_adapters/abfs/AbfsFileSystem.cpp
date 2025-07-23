@@ -20,6 +20,7 @@
 #include <folly/executors/IOThreadPoolExecutor.h>
 #include <glog/logging.h>
 
+#include "AzureClientProviders.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsConfig.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsReadFile.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsUtil.h"
@@ -35,7 +36,7 @@ class AbfsReadFile::Impl {
   explicit Impl(std::string_view path, const config::ConfigBase& config) {
     auto abfsConfig = AbfsConfig(path, config);
     filePath_ = abfsConfig.filePath();
-    fileClient_ = abfsConfig.getReadFileClient();
+    fileClient_ = AzureClientProviders::getBlobClient(abfsConfig);
   }
 
   void initialize(const FileOptions& options) {
@@ -149,7 +150,7 @@ class AbfsReadFile::Impl {
   }
 
   std::string filePath_;
-  std::unique_ptr<BlobClient> fileClient_;
+  std::unique_ptr<AzureBlobClient> fileClient_;
   int64_t length_ = -1;
 };
 
