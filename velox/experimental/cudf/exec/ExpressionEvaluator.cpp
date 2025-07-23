@@ -838,28 +838,50 @@ auto createFloatingPointRangeExpr(
     const cudf::ast::expression& columnRef,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) -> const cudf::ast::expression& {
-  // TODO (dm): Handle exclusive and unbounded
   auto* range = dynamic_cast<const common::FloatingPointRange<T>*>(&filter);
   VELOX_CHECK_NOT_NULL(range, "Filter is not a floating point range");
 
   using CudfScalar = cudf::numeric_scalar<T>;
-  T lower = range->lower();
-  T upper = range->upper();
 
-  scalars.emplace_back(std::make_unique<CudfScalar>(lower, true, stream, mr));
-  const auto& lowerLiteral = tree.push(
-      cudf::ast::literal{*static_cast<CudfScalar*>(scalars.back().get())});
+  const bool lowerUnbounded = range->lowerUnbounded();
+  const bool upperUnbounded = range->upperUnbounded();
 
-  scalars.emplace_back(std::make_unique<CudfScalar>(upper, true, stream, mr));
-  const auto& upperLiteral = tree.push(
-      cudf::ast::literal{*static_cast<CudfScalar*>(scalars.back().get())});
+  const cudf::ast::expression* lowerExpr = nullptr;
+  const cudf::ast::expression* upperExpr = nullptr;
 
-  const auto& lowerBound = tree.push(
-      cudf::ast::operation{Op::GREATER_EQUAL, columnRef, lowerLiteral});
-  const auto& upperBound =
-      tree.push(cudf::ast::operation{Op::LESS_EQUAL, columnRef, upperLiteral});
-  return tree.push(
-      cudf::ast::operation{Op::NULL_LOGICAL_AND, lowerBound, upperBound});
+  if (!lowerUnbounded) {
+    T lower = range->lower();
+    scalars.emplace_back(std::make_unique<CudfScalar>(lower, true, stream, mr));
+    const auto& lowerLiteral = tree.push(
+        cudf::ast::literal{*static_cast<CudfScalar*>(scalars.back().get())});
+
+    auto lowerOp = range->lowerExclusive() ? Op::GREATER : Op::GREATER_EQUAL;
+    lowerExpr =
+        &tree.push(cudf::ast::operation{lowerOp, columnRef, lowerLiteral});
+  }
+
+  if (!upperUnbounded) {
+    T upper = range->upper();
+    scalars.emplace_back(std::make_unique<CudfScalar>(upper, true, stream, mr));
+    const auto& upperLiteral = tree.push(
+        cudf::ast::literal{*static_cast<CudfScalar*>(scalars.back().get())});
+
+    auto upperOp = range->upperExclusive() ? Op::LESS : Op::LESS_EQUAL;
+    upperExpr =
+        &tree.push(cudf::ast::operation{upperOp, columnRef, upperLiteral});
+  }
+
+  if (lowerExpr && upperExpr) {
+    return tree.push(
+        cudf::ast::operation{Op::NULL_LOGICAL_AND, *lowerExpr, *upperExpr});
+  } else if (lowerExpr) {
+    return *lowerExpr;
+  } else if (upperExpr) {
+    return *upperExpr;
+  } else {
+    // Both bounds unbounded => Pass-through filter (everything).
+    return tree.push(cudf::ast::operation{Op::EQUAL, columnRef, columnRef});
+  }
 };
 
 template <facebook::velox::TypeKind KIND>
