@@ -16,6 +16,7 @@
 
 #include "velox/functions/lib/QuantileDigest.h"
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/RandomSeed.h"
 #include "velox/functions/lib/tests/QuantileDigestTestBase.h"
 
@@ -34,7 +35,7 @@ class QuantileDigestTest : public QuantileDigestTestBase {
   }
 
   static void SetUpTestCase() {
-    memory::MemoryManager::testingSetInstance({});
+    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
   }
 
   std::string encodeBase64(std::string_view input) {
@@ -65,6 +66,17 @@ class QuantileDigestTest : public QuantileDigestTestBase {
     digest.estimateQuantiles(quantiles, results.data());
     for (auto i = 0; i < quantiles.size(); ++i) {
       EXPECT_EQ(results[i], expected[i]);
+    }
+  }
+
+  template <typename T>
+  void testHugeWeight() {
+    constexpr int N = 10;
+    constexpr double kAccuracy = 0.99;
+    constexpr T kMaxValue = std::numeric_limits<T>::max();
+    QuantileDigest<T> digest{StlAllocator<T>(allocator()), kAccuracy};
+    for (auto i = 0; i < N; ++i) {
+      digest.add(T(i), kMaxValue);
     }
   }
 
@@ -101,7 +113,6 @@ class QuantileDigestTest : public QuantileDigestTestBase {
   void testEquivalentMerge() {
     constexpr double kAccuracy = 0.5;
     QuantileDigest<T> digest1{allocator(), kAccuracy};
-    // QuantileDigest<T> digest2{allocator(), kAccuracy};
 
     std::default_random_engine gen(common::testutil::getRandomSeed(42));
     std::uniform_real_distribution<> dist;
@@ -109,10 +120,6 @@ class QuantileDigestTest : public QuantileDigestTestBase {
       auto v = T(dist(gen));
       auto w = (i + 2) % 3 + 1;
       digest1.add(v, w);
-
-      /*v = T(dist(gen));
-      w = (i + 3) % 7 + 1;
-      digest2.add(v, w);*/
     }
 
     QuantileDigest<T> mergeResult{allocator(), kAccuracy};
@@ -536,6 +543,15 @@ TEST_F(QuantileDigestTest, scale) {
   testScale<int64_t>();
   testScale<double>();
   testScale<float>();
+}
+
+TEST_F(QuantileDigestTest, hugeWeight) {
+  VELOX_ASSERT_THROW(
+      testHugeWeight<int64_t>(), "Weighted count in digest is too large");
+  VELOX_ASSERT_THROW(
+      testHugeWeight<double>(), "Weighted count in digest is too large");
+  VELOX_ASSERT_THROW(
+      testHugeWeight<float>(), "Weighted count in digest is too large");
 }
 
 } // namespace facebook::velox::functions

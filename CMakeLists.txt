@@ -343,6 +343,13 @@ if(${CMAKE_SYSTEM_PROCESSOR} MATCHES "aarch64")
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsigned-char")
 endif()
 
+# Ensure that we don't bring in headers that might have coroutines enabled. The
+# dependencies turn off coroutines in folly and the other FBOS dependencies. If
+# not explicitly turned off differences in the build using GCC cause libray
+# incompatibilities of the thrift server and the remote functions library
+# causing SEGVs in the tests.
+string(APPEND CMAKE_CXX_FLAGS " -DFOLLY_CFG_NO_COROUTINES")
+
 # Under Ninja, we are able to designate certain targets large enough to require
 # restricted parallelism.
 if("${MAX_HIGH_MEM_JOBS}")
@@ -361,7 +368,8 @@ endif()
 if(ENABLE_ALL_WARNINGS)
   if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     set(KNOWN_COMPILER_SPECIFIC_WARNINGS
-        "-Wno-range-loop-analysis \
+        "-Wno-implicit-const-int-float-conversion \
+         -Wno-range-loop-analysis \
          -Wno-mismatched-tags \
          -Wno-nullability-completeness")
   elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
@@ -515,21 +523,32 @@ velox_set_source(re2)
 velox_resolve_dependency(re2)
 
 if(${VELOX_ENABLE_CLP_CONNECTOR})
-  set(clp_SOURCE BUNDLED)
-  velox_resolve_dependency(clp)
-
-  set(spdlog_SOURCE BUNDLED)
-  velox_resolve_dependency(spdlog)
-
-  set(msgpack-cxx_SOURCE BUNDLED)
-  velox_resolve_dependency(msgpack-cxx)
-
   velox_set_source(absl)
   velox_resolve_dependency(absl)
 
-  set(curl_SOURCE BUNDLED)
-  velox_resolve_dependency(curl)
-  find_package(ANTLR REQUIRED)
+  velox_set_source(antlr4-runtime)
+  velox_resolve_dependency(antlr4-runtime)
+
+  velox_set_source(date)
+  velox_resolve_dependency(date)
+
+  velox_set_source(msgpack-cxx)
+  velox_resolve_dependency(msgpack-cxx)
+
+  velox_set_source(nlohmann_json)
+  velox_resolve_dependency(nlohmann_json)
+
+  velox_set_source(simdjson)
+  velox_resolve_dependency(simdjson)
+
+  velox_set_source(spdlog)
+  velox_resolve_dependency(spdlog)
+
+  set(ystdlib_cpp_SOURCE BUNDLED)
+  velox_resolve_dependency(ystdlib_cpp)
+
+  set(clp_SOURCE BUNDLED)
+  velox_resolve_dependency(clp)
 endif()
 
 if(${VELOX_BUILD_PYTHON_PACKAGE})

@@ -20,6 +20,7 @@
 #include "velox/connectors/clp/ClpConfig.h"
 
 namespace facebook::velox::connector::clp {
+
 class ClpConnector : public Connector {
  public:
   ClpConnector(
@@ -72,4 +73,5 @@ class ClpConnectorFactory : public ConnectorFactory {
     return std::make_shared<ClpConnector>(id, config);
   }
 };
+
 } // namespace facebook::velox::connector::clp

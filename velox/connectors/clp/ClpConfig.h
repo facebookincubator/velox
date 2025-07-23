@@ -16,8 +16,6 @@
 
 #pragma once
 
-#include <boost/algorithm/string.hpp>
-
 #include "velox/common/config/Config.h"
 
 namespace facebook::velox::config {
@@ -25,8 +23,16 @@ class ConfigBase;
 }
 
 namespace facebook::velox::connector::clp {
+
 class ClpConfig {
  public:
+  enum class StorageType {
+    kFs,
+    kS3,
+  };
+
+  static constexpr const char* kStorageType = "clp.storage-type";
+
   explicit ClpConfig(std::shared_ptr<const config::ConfigBase> config) {
     VELOX_CHECK_NOT_NULL(config, "Config is null for CLP initialization");
     config_ = std::move(config);
@@ -37,7 +43,10 @@ class ClpConfig {
     return config_;
   }
 
+  StorageType storageType() const;
+
  private:
   std::shared_ptr<const config::ConfigBase> config_;
 };
+
 } // namespace facebook::velox::connector::clp

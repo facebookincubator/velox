@@ -44,6 +44,7 @@
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/TableScanTestBase.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/type/Timestamp.h"
@@ -73,201 +74,7 @@ void verifyCacheStats(
 }
 } // namespace
 
-class TableScanTest : public HiveConnectorTestBase {
- protected:
-  void SetUp() override {
-    HiveConnectorTestBase::SetUp();
-    exec::ExchangeSource::factories().clear();
-    exec::ExchangeSource::registerFactory(createLocalExchangeSource);
-  }
-
-  static void SetUpTestCase() {
-    HiveConnectorTestBase::SetUpTestCase();
-  }
-
-  std::vector<RowVectorPtr> makeVectors(
-      int32_t count,
-      int32_t rowsPerVector,
-      const RowTypePtr& rowType = nullptr) {
-    auto inputs = rowType ? rowType : rowType_;
-    return HiveConnectorTestBase::makeVectors(inputs, count, rowsPerVector);
-  }
-
-  exec::Split makeHiveSplit(std::string path, int64_t splitWeight = 0) {
-    return exec::Split(makeHiveConnectorSplit(
-        std::move(path), 0, std::numeric_limits<uint64_t>::max(), splitWeight));
-  }
-
-  std::shared_ptr<Task> assertQuery(
-      const PlanNodePtr& plan,
-      const std::shared_ptr<connector::ConnectorSplit>& hiveSplit,
-      const std::string& duckDbSql) {
-    return OperatorTestBase::assertQuery(plan, {hiveSplit}, duckDbSql);
-  }
-
-  std::shared_ptr<Task> assertQuery(
-      const PlanNodePtr& plan,
-      const exec::Split&& split,
-      const std::string& duckDbSql) {
-    return OperatorTestBase::assertQuery(plan, {split}, duckDbSql);
-  }
-
-  std::shared_ptr<Task> assertQuery(
-      const PlanNodePtr& plan,
-      const std::vector<std::shared_ptr<TempFilePath>>& filePaths,
-      const std::string& duckDbSql) {
-    return HiveConnectorTestBase::assertQuery(plan, filePaths, duckDbSql);
-  }
-
-  std::shared_ptr<Task> assertQuery(
-      const PlanNodePtr& plan,
-      const std::vector<std::shared_ptr<TempFilePath>>& filePaths,
-      const std::string& duckDbSql,
-      const int32_t numPrefetchSplit) {
-    return HiveConnectorTestBase::assertQuery(
-        plan, makeHiveConnectorSplits(filePaths), duckDbSql, numPrefetchSplit);
-  }
-
-  // Run query with spill enabled.
-  std::shared_ptr<Task> assertQuery(
-      const PlanNodePtr& plan,
-      const std::vector<std::shared_ptr<TempFilePath>>& filePaths,
-      const std::string& spillDirectory,
-      const std::string& duckDbSql) {
-    return AssertQueryBuilder(plan, duckDbQueryRunner_)
-        .spillDirectory(spillDirectory)
-        .config(core::QueryConfig::kSpillEnabled, true)
-        .config(core::QueryConfig::kAggregationSpillEnabled, true)
-        .splits(makeHiveConnectorSplits(filePaths))
-        .assertResults(duckDbSql);
-  }
-
-  core::PlanNodePtr tableScanNode() {
-    return tableScanNode(rowType_);
-  }
-
-  core::PlanNodePtr tableScanNode(const RowTypePtr& outputType) {
-    core::PlanNodePtr tableScanNode;
-    const auto plan = PlanBuilder(pool_.get())
-                          .tableScan(outputType)
-                          .capturePlanNode(tableScanNode)
-                          .planNode();
-    VELOX_CHECK(tableScanNode->supportsBarrier());
-    return plan;
-  }
-
-  static PlanNodeStats getTableScanStats(const std::shared_ptr<Task>& task) {
-    auto planStats = toPlanStats(task->taskStats());
-    return std::move(planStats.at("0"));
-  }
-
-  static std::unordered_map<std::string, RuntimeMetric>
-  getTableScanRuntimeStats(const std::shared_ptr<Task>& task) {
-    return task->taskStats().pipelineStats[0].operatorStats[0].runtimeStats;
-  }
-
-  static int64_t getSkippedStridesStat(const std::shared_ptr<Task>& task) {
-    return getTableScanRuntimeStats(task)["skippedStrides"].sum;
-  }
-
-  static int64_t getSkippedSplitsStat(const std::shared_ptr<Task>& task) {
-    return getTableScanRuntimeStats(task)["skippedSplits"].sum;
-  }
-
-  static void waitForFinishedDrivers(
-      const std::shared_ptr<Task>& task,
-      uint32_t n) {
-    // Limit wait to 10 seconds.
-    size_t iteration{0};
-    while (task->numFinishedDrivers() < n and iteration < 100) {
-      /* sleep override */
-      usleep(100'000); // 0.1 second.
-      ++iteration;
-    }
-    ASSERT_EQ(n, task->numFinishedDrivers());
-  }
-
-  void testPartitionedTableImpl(
-      const std::string& filePath,
-      const TypePtr& partitionType,
-      const std::optional<std::string>& partitionValue) {
-    auto split = exec::test::HiveConnectorSplitBuilder(filePath)
-                     .partitionKey("pkey", partitionValue)
-                     .build();
-    auto outputType =
-        ROW({"pkey", "c0", "c1"}, {partitionType, BIGINT(), DOUBLE()});
-    ColumnHandleMap assignments = {
-        {"pkey", partitionKey("pkey", partitionType)},
-        {"c0", regularColumn("c0", BIGINT())},
-        {"c1", regularColumn("c1", DOUBLE())}};
-
-    auto op = PlanBuilder()
-                  .startTableScan()
-                  .outputType(outputType)
-                  .assignments(assignments)
-                  .endTableScan()
-                  .planNode();
-
-    std::string partitionValueStr;
-    partitionValueStr =
-        partitionValue.has_value() ? "'" + *partitionValue + "'" : "null";
-    assertQuery(
-        op, split, fmt::format("SELECT {}, * FROM tmp", partitionValueStr));
-
-    outputType = ROW({"c0", "pkey", "c1"}, {BIGINT(), partitionType, DOUBLE()});
-    op = PlanBuilder()
-             .startTableScan()
-             .outputType(outputType)
-             .assignments(assignments)
-             .endTableScan()
-             .planNode();
-    assertQuery(
-        op,
-        split,
-        fmt::format("SELECT c0, {}, c1 FROM tmp", partitionValueStr));
-    outputType = ROW({"c0", "c1", "pkey"}, {BIGINT(), DOUBLE(), partitionType});
-    op = PlanBuilder()
-             .startTableScan()
-             .outputType(outputType)
-             .assignments(assignments)
-             .endTableScan()
-             .planNode();
-    assertQuery(
-        op,
-        split,
-        fmt::format("SELECT c0, c1, {} FROM tmp", partitionValueStr));
-
-    // select only partition key
-    assignments = {{"pkey", partitionKey("pkey", partitionType)}};
-    outputType = ROW({"pkey"}, {partitionType});
-    op = PlanBuilder()
-             .startTableScan()
-             .outputType(outputType)
-             .assignments(assignments)
-             .endTableScan()
-             .planNode();
-    assertQuery(
-        op, split, fmt::format("SELECT {} FROM tmp", partitionValueStr));
-  }
-
-  void testPartitionedTable(
-      const std::string& filePath,
-      const TypePtr& partitionType,
-      const std::optional<std::string>& partitionValue) {
-    testPartitionedTableImpl(filePath, partitionType, partitionValue);
-    testPartitionedTableImpl(filePath, partitionType, std::nullopt);
-  }
-
-  RowTypePtr rowType_{
-      ROW({"c0", "c1", "c2", "c3", "c4", "c5", "c6"},
-          {BIGINT(),
-           INTEGER(),
-           SMALLINT(),
-           REAL(),
-           DOUBLE(),
-           VARCHAR(),
-           TINYINT()})};
-};
+class TableScanTest : public TableScanTestBase {};
 
 TEST_F(TableScanTest, allColumns) {
   auto vectors = makeVectors(10, 1'000);
@@ -1945,16 +1752,7 @@ TEST_F(TableScanTest, validFileNoData) {
 // An invalid (size = 0) file.
 TEST_F(TableScanTest, emptyFile) {
   auto filePath = TempFilePath::create();
-
-  try {
-    assertQuery(
-        tableScanNode(),
-        makeHiveConnectorSplit(filePath->getPath()),
-        "SELECT * FROM tmp");
-    ASSERT_FALSE(true) << "Function should throw.";
-  } catch (const VeloxException& e) {
-    EXPECT_EQ("ORC file is empty", e.message());
-  }
+  assertQuery(tableScanNode(), makeHiveConnectorSplit(filePath->getPath()), "");
 }
 
 TEST_F(TableScanTest, preloadEmptySplit) {
@@ -5183,6 +4981,24 @@ TEST_F(TableScanTest, readFlatMapAsStruct) {
           c0->childAt(1),
       })});
   AssertQueryBuilder(plan).split(split).assertResults(expected);
+}
+
+TEST_F(TableScanTest, flatMapReadOffset) {
+  auto vector = makeRowVector(
+      {makeNullableMapVector<int64_t, int64_t>({std::nullopt, {{{1, 2}}}})});
+  auto schema = asRowType(vector->type());
+  auto config = std::make_shared<dwrf::Config>();
+  config->set(dwrf::Config::FLATTEN_MAP, true);
+  config->set<const std::vector<uint32_t>>(dwrf::Config::MAP_FLAT_COLS, {0});
+  auto file = TempFilePath::create();
+  writeToFile(file->getPath(), {vector}, config);
+  auto plan = PlanBuilder().tableScan(schema, {"c0 is not null"}).planNode();
+  auto split = makeHiveConnectorSplit(file->getPath());
+  auto expected = makeRowVector({makeMapVector<int64_t, int64_t>({{{1, 2}}})});
+  AssertQueryBuilder(plan)
+      .split(split)
+      .config(QueryConfig::kMaxOutputBatchRows, "1")
+      .assertResults(expected);
 }
 
 TEST_F(TableScanTest, dynamicFilters) {

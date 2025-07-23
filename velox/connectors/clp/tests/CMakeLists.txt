@@ -18,8 +18,8 @@ add_test(velox_clp_connector_test velox_clp_connector_test)
 target_link_libraries(
   velox_clp_connector_test
   velox_clp_connector
-  velox_vector_test_lib
   velox_exec_test_lib
+  velox_vector_test_lib
   GTest::gtest
   GTest::gtest_main)
 

@@ -30,7 +30,6 @@
 #include "velox/functions/prestosql/fuzzer/ApproxPercentileResultVerifier.h"
 #include "velox/functions/prestosql/fuzzer/ArbitraryResultVerifier.h"
 #include "velox/functions/prestosql/fuzzer/AverageResultVerifier.h"
-#include "velox/functions/prestosql/fuzzer/ClassificationAggregationInputGenerator.h"
 #include "velox/functions/prestosql/fuzzer/MapUnionSumInputGenerator.h"
 #include "velox/functions/prestosql/fuzzer/MinMaxByResultVerifier.h"
 #include "velox/functions/prestosql/fuzzer/MinMaxInputGenerator.h"
@@ -79,7 +78,8 @@ getCustomInputGenerators() {
       {"approx_distinct", std::make_shared<ApproxDistinctInputGenerator>()},
       {"approx_set", std::make_shared<ApproxDistinctInputGenerator>()},
       {"approx_percentile", std::make_shared<ApproxPercentileInputGenerator>()},
-      {"map_union_sum", std::make_shared<MapUnionSumInputGenerator>()}};
+      {"map_union_sum", std::make_shared<MapUnionSumInputGenerator>()},
+  };
 }
 
 } // namespace
@@ -107,7 +107,8 @@ int main(int argc, char** argv) {
   facebook::velox::window::prestosql::registerAllWindowFunctions();
   facebook::velox::functions::prestosql::registerInternalFunctions();
   facebook::velox::aggregate::prestosql::registerInternalAggregateFunctions();
-  facebook::velox::memory::MemoryManager::initialize({});
+  facebook::velox::memory::MemoryManager::initialize(
+      facebook::velox::memory::MemoryManager::Options{});
 
   size_t initialSeed = FLAGS_seed == 0 ? std::time(nullptr) : FLAGS_seed;
 

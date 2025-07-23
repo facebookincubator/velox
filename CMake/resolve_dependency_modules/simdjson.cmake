@@ -27,12 +27,11 @@ message(STATUS "Building simdjson from source")
 FetchContent_Declare(
   simdjson
   URL ${VELOX_SIMDJSON_SOURCE_URL}
-  URL_HASH ${VELOX_SIMDJSON_BUILD_SHA256_CHECKSUM})
+  URL_HASH ${VELOX_SIMDJSON_BUILD_SHA256_CHECKSUM}
+  OVERRIDE_FIND_PACKAGE)
 
 if(${VELOX_SIMDJSON_SKIPUTF8VALIDATION})
   set(SIMDJSON_SKIPUTF8VALIDATION ON)
 endif()
 
 FetchContent_MakeAvailable(simdjson)
-target_compile_definitions(simdjson
-                           PUBLIC SIMDJSON_EXPERIMENTAL_ALLOW_INCOMPLETE_JSON)

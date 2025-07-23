@@ -295,4 +295,301 @@ TEST_F(BingTileTypeTest, latitudeLongitudeToTile) {
       "Zoom level 24 is greater than max zoom 23");
 }
 
+TEST_F(BingTileTypeTest, bingTilesAround) {
+  const auto testBingTilesAround =
+      [&](double latitude,
+          double longitude,
+          uint8_t zoom,
+          std::optional<std::vector<std::string>> expectedTileQuadKeys,
+          std::optional<std::string> errorMsg = std::nullopt) {
+        auto tilesAroundResult =
+            BingTileType::bingTilesAround(latitude, longitude, zoom);
+        if (errorMsg.has_value()) {
+          ASSERT_TRUE(tilesAroundResult.hasError());
+          ASSERT_EQ(errorMsg.value(), tilesAroundResult.error());
+        } else {
+          ASSERT_TRUE(tilesAroundResult.hasValue());
+          std::vector<uint64_t> tiles = tilesAroundResult.value();
+          ASSERT_LE(tiles.size(), 9);
+          std::vector<std::string> tileQuadKeys;
+          // Compare quadkeys instead of integer values for brevity and
+          // readability
+          tileQuadKeys.reserve(tiles.size());
+          for (uint64_t tile : tiles) {
+            tileQuadKeys.push_back(BingTileType::bingTileToQuadKey(tile));
+          }
+          ASSERT_EQ(expectedTileQuadKeys.value(), tileQuadKeys);
+        }
+      };
+
+  // General tests
+  testBingTilesAround(30.12, 60, 1, {{"0", "2", "1", "3"}});
+  testBingTilesAround(
+      30.12,
+      60,
+      15,
+      {{"123030123010102",
+        "123030123010120",
+        "123030123010122",
+        "123030123010103",
+        "123030123010121",
+        "123030123010123",
+        "123030123010112",
+        "123030123010130",
+        "123030123010132"}});
+  testBingTilesAround(
+      30.12,
+      60,
+      23,
+      {{"12303012301012121210122",
+        "12303012301012121210300",
+        "12303012301012121210302",
+        "12303012301012121210123",
+        "12303012301012121210301",
+        "12303012301012121210303",
+        "12303012301012121210132",
+        "12303012301012121210310",
+        "12303012301012121210312"}});
+
+  // Test around corner
+  testBingTilesAround(-85.05112878, -180, 1, {{"0", "2", "1", "3"}});
+  testBingTilesAround(-85.05112878, -180, 3, {{"220", "222", "221", "223"}});
+  testBingTilesAround(
+      -85.05112878,
+      -180,
+      15,
+      {{"222222222222220",
+        "222222222222222",
+        "222222222222221",
+        "222222222222223"}});
+
+  testBingTilesAround(-85.05112878, -180, 2, {{"20", "22", "21", "23"}});
+  testBingTilesAround(-85.05112878, 180, 2, {{"30", "32", "31", "33"}});
+  testBingTilesAround(85.05112878, -180, 2, {{"00", "02", "01", "03"}});
+  testBingTilesAround(85.05112878, 180, 2, {{"10", "12", "11", "13"}});
+
+  // Test around edge
+  testBingTilesAround(-85.05112878, 0, 1, {{"0", "2", "1", "3"}});
+  testBingTilesAround(
+      -85.05112878, 0, 3, {{"231", "233", "320", "322", "321", "323"}});
+  testBingTilesAround(
+      -85.05112878,
+      0,
+      15,
+      {{"233333333333331",
+        "233333333333333",
+        "322222222222220",
+        "322222222222222",
+        "322222222222221",
+        "322222222222223"}});
+
+  testBingTilesAround(
+      -85.05112878, 0, 2, {{"21", "23", "30", "32", "31", "33"}});
+  testBingTilesAround(
+      85.05112878, 0, 2, {{"01", "03", "10", "12", "11", "13"}});
+  testBingTilesAround(0, 180, 2, {{"12", "30", "32", "13", "31", "33"}});
+  testBingTilesAround(0, -180, 2, {{"02", "20", "22", "03", "21", "23"}});
+
+  // Test failure cases
+  testBingTilesAround(
+      0, 0, 25, std::nullopt, "Zoom level 25 is greater than max zoom 23");
+  testBingTilesAround(
+      -86,
+      -180,
+      5,
+      std::nullopt,
+      "Latitude -86 is outside of valid range [-85.05112878, 85.05112878]");
+  testBingTilesAround(
+      -85,
+      -181,
+      5,
+      std::nullopt,
+      "Longitude -181 is outside of valid range [-180, 180]");
+}
+
+TEST_F(BingTileTypeTest, bingTilesAroundWithRadius) {
+  const auto testBingTilesAroundWithRadius =
+      [&](double latitude,
+          double longitude,
+          uint8_t zoom,
+          double radiusInKm,
+          std::optional<std::vector<std::string>> expectedTileQuadKeys,
+          std::optional<std::string> errorMsg = std::nullopt) {
+        auto tilesAroundResult = BingTileType::bingTilesAround(
+            latitude, longitude, zoom, radiusInKm);
+        if (errorMsg.has_value()) {
+          ASSERT_TRUE(tilesAroundResult.hasError());
+          ASSERT_EQ(errorMsg.value(), tilesAroundResult.error());
+        } else {
+          ASSERT_TRUE(tilesAroundResult.hasValue());
+          std::vector<uint64_t> tiles = tilesAroundResult.value();
+          std::vector<std::string> tileQuadKeys;
+          tileQuadKeys.reserve(tiles.size());
+          for (uint64_t tile : tiles) {
+            tileQuadKeys.push_back(BingTileType::bingTileToQuadKey(tile));
+          }
+          ASSERT_EQ(expectedTileQuadKeys.value(), tileQuadKeys);
+        }
+      };
+
+  // General cases
+  testBingTilesAroundWithRadius(0, 0, 3, 10, {{"211", "300", "122", "033"}});
+  testBingTilesAroundWithRadius(30.12, 60, 1, 1000, {{"1"}});
+  testBingTilesAroundWithRadius(
+      30.12,
+      60,
+      15,
+      .5,
+      {{"123030123010120", "123030123010121", "123030123010123"}});
+
+  testBingTilesAroundWithRadius(
+      30.12,
+      60,
+      19,
+      .05,
+      {{"1230301230101212120",
+        "1230301230101212121",
+        "1230301230101212130",
+        "1230301230101212103",
+        "1230301230101212123",
+        "1230301230101212112",
+        "1230301230101212102"}});
+
+  // Corner cases. Literally! These test bing tiles around corners.
+  testBingTilesAroundWithRadius(-85.05112878, -180, 1, 500, {{"3", "2"}});
+  testBingTilesAroundWithRadius(
+      -85.05112878,
+      -180,
+      5,
+      200,
+      {{"33332",
+        "33333",
+        "22222",
+        "22223",
+        "22220",
+        "22221",
+        "33330",
+        "33331"}});
+  testBingTilesAroundWithRadius(
+      -85.05112878,
+      -180,
+      15,
+      .2,
+      {{"333333333333332",
+        "333333333333333",
+        "222222222222222",
+        "222222222222223",
+        "222222222222220",
+        "222222222222221",
+        "333333333333330",
+        "333333333333331"}});
+  testBingTilesAroundWithRadius(
+      -85.05112878,
+      -180,
+      4,
+      500,
+      {{"3323",
+        "3332",
+        "3333",
+        "2222",
+        "2223",
+        "2232",
+        "2220",
+        "2221",
+        "3330",
+        "3331"}});
+  testBingTilesAroundWithRadius(
+      -85.05112878,
+      180,
+      4,
+      500,
+      {{"3323",
+        "3332",
+        "3333",
+        "2222",
+        "2223",
+        "2232",
+        "3331",
+        "2221",
+        "2220",
+        "3330"}});
+  testBingTilesAroundWithRadius(
+      85.05112878,
+      -180,
+      4,
+      500,
+      {{"1101",
+        "1110",
+        "1111",
+        "0000",
+        "0001",
+        "0010",
+        "0002",
+        "0003",
+        "1112",
+        "1113"}});
+  testBingTilesAroundWithRadius(
+      85.05112878,
+      180,
+      4,
+      500,
+      {{"1101",
+        "1110",
+        "1111",
+        "0000",
+        "0001",
+        "0010",
+        "1113",
+        "0003",
+        "0002",
+        "1112"}});
+
+  // Edge cases- these test bing tiles around edges.
+  testBingTilesAroundWithRadius(-85.05112878, 0, 3, 300, {{"233", "322"}});
+  testBingTilesAroundWithRadius(
+      -85.05112878,
+      0,
+      12,
+      1,
+      {{"233333333332",
+        "233333333333",
+        "322222222222",
+        "322222222223",
+        "322222222220",
+        "233333333331"}});
+  // Different edges, starting at 2,3
+
+  testBingTilesAroundWithRadius(-85.05112878, 0, 4, 100, {{"2333", "3222"}});
+  testBingTilesAroundWithRadius(85.05112878, 0, 4, 100, {{"0111", "1000"}});
+  testBingTilesAroundWithRadius(
+      0, 180, 4, 100, {{"3111", "2000", "1333", "0222"}});
+  testBingTilesAroundWithRadius(
+      0, -180, 4, 100, {{"3111", "2000", "0222", "1333"}});
+
+  // Failure cases
+  // Invalid radius
+  testBingTilesAroundWithRadius(
+      30.12,
+      60,
+      1,
+      -1,
+      std::nullopt,
+      "Radius in km must between 0 and 1000, got -1");
+  testBingTilesAroundWithRadius(
+      30.12,
+      60,
+      1,
+      2000,
+      std::nullopt,
+      "Radius in km must between 0 and 1000, got 2000");
+  // Too many tiles
+  testBingTilesAroundWithRadius(
+      30.12,
+      60,
+      20,
+      100,
+      std::nullopt,
+      "The number of tiles covering input rectangle exceeds the limit of 1M. Number of tiles: 36699364.");
+}
+
 } // namespace facebook::velox::test

@@ -900,6 +900,21 @@ These semantics are similar to the `Apache Hadoop-Aws module <https://hadoop.apa
        This endpoint is used to acquire access tokens for authenticating with Azure storage.
        The URL follows the format: `https://login.microsoftonline.com/<tenant-id>/oauth2/token`.
 
+CLP Connector
+-----------------------------
+.. list-table::
+   :widths: 20 10 10 70
+   :header-rows: 1
+
+   * - Property Name
+     - Type
+     - Default Value
+     - Description
+   * - clp.storage-type
+     - string
+     - FS
+     - The storage type of CLP archives, **Allowed values:** ``FS``, ``S3``.
+
 Presto-specific Configuration
 -----------------------------
 .. list-table::
@@ -957,8 +972,7 @@ Spark-specific Configuration
      - bool
      - false
      - If true, Spark statistical aggregation functions including skewness, kurtosis, stddev, stddev_samp, variance,
-       var_samp will return NaN instead of NULL when dividing by zero during expression evaluation. Please note that
-       Spark statistical aggregation functions including covar_samp and corr should be supported to respect this configuration.
+       var_samp, covar_samp and corr will return NaN instead of NULL when dividing by zero during expression evaluation.
 
 Tracing
 --------

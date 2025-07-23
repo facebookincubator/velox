@@ -104,7 +104,7 @@ std::unique_ptr<Operator> createScaleWriterLocalPartition(
       operatorId, ctx, localPartitionNode);
 }
 
-OperatorSupplier makeConsumerSupplier(ConsumerSupplier consumerSupplier) {
+OperatorSupplier makeOperatorSupplier(ConsumerSupplier consumerSupplier) {
   if (consumerSupplier) {
     return [consumerSupplier = std::move(consumerSupplier)](
                int32_t operatorId, DriverCtx* ctx) {
@@ -115,7 +115,7 @@ OperatorSupplier makeConsumerSupplier(ConsumerSupplier consumerSupplier) {
   return nullptr;
 }
 
-OperatorSupplier makeConsumerSupplier(
+OperatorSupplier makeOperatorSupplier(
     const std::shared_ptr<const core::PlanNode>& planNode) {
   if (auto localMerge =
           std::dynamic_pointer_cast<const core::LocalMergeNode>(planNode)) {
@@ -155,7 +155,7 @@ OperatorSupplier makeConsumerSupplier(
   if (auto join =
           std::dynamic_pointer_cast<const core::HashJoinNode>(planNode)) {
     return [join](int32_t operatorId, DriverCtx* ctx) {
-      if (ctx->task->hasMixedExecutionGroup() &&
+      if (ctx->task->hasMixedExecutionGroupJoin(join.get()) &&
           needRightSideJoin(join->joinType())) {
         VELOX_UNSUPPORTED(
             "Hash join currently does not support mixed grouped execution for join "
@@ -201,12 +201,12 @@ void plan(
     const std::shared_ptr<const core::PlanNode>& planNode,
     std::vector<std::shared_ptr<const core::PlanNode>>* currentPlanNodes,
     const std::shared_ptr<const core::PlanNode>& consumerNode,
-    OperatorSupplier consumerSupplier,
+    OperatorSupplier operatorSupplier,
     std::vector<std::unique_ptr<DriverFactory>>* driverFactories) {
   if (!currentPlanNodes) {
     driverFactories->push_back(std::make_unique<DriverFactory>());
     currentPlanNodes = &driverFactories->back()->planNodes;
-    driverFactories->back()->consumerSupplier = std::move(consumerSupplier);
+    driverFactories->back()->operatorSupplier = std::move(operatorSupplier);
     driverFactories->back()->consumerNode = consumerNode;
   }
 
@@ -221,7 +221,7 @@ void plan(
           sources[i],
           mustStartNewPipeline(planNode, i) ? nullptr : currentPlanNodes,
           planNode,
-          makeConsumerSupplier(planNode),
+          makeOperatorSupplier(planNode),
           driverFactories);
     }
   }
@@ -255,7 +255,7 @@ uint32_t maxDrivers(
     } else if (
         auto values = std::dynamic_pointer_cast<const core::ValuesNode>(node)) {
       // values node must run single-threaded, unless in test context
-      if (!values->isParallelizable()) {
+      if (!values->testingIsParallelizable()) {
         return 1;
       }
     } else if (std::dynamic_pointer_cast<const core::ArrowStreamNode>(node)) {
@@ -351,7 +351,7 @@ void LocalPlanner::plan(
       planFragment.planNode,
       nullptr,
       nullptr,
-      detail::makeConsumerSupplier(consumerSupplier),
+      detail::makeOperatorSupplier(consumerSupplier),
       driverFactories);
 
   (*driverFactories)[0]->outputDriver = true;
@@ -668,8 +668,8 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
       operators.push_back(std::move(extended));
     }
   }
-  if (consumerSupplier) {
-    operators.push_back(consumerSupplier(operators.size(), ctx.get()));
+  if (operatorSupplier) {
+    operators.push_back(operatorSupplier(operators.size(), ctx.get()));
   }
 
   driver->init(std::move(ctx), std::move(operators));

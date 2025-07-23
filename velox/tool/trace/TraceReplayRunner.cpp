@@ -20,6 +20,7 @@
 
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/memory/Memory.h"
+#include "velox/common/memory/SharedArbitrator.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/HiveDataSink.h"
@@ -92,7 +93,7 @@ DEFINE_int32(
     "Specify the shuffle serialization format, 0: presto columnar, 1: compact row, 2: spark unsafe row.");
 DEFINE_string(
     memory_arbitrator_type,
-    "shared",
+    "SHARED",
     "Specify the memory arbitrator type.");
 DEFINE_uint64(
     query_memory_capacity_mb,
@@ -247,7 +248,9 @@ void TraceReplayRunner::init() {
   VELOX_USER_CHECK(!FLAGS_node_id.empty(), "--node_id must be provided");
 
   if (!memory::MemoryManager::testInstance()) {
-    memory::MemoryManagerOptions options;
+    velox::memory::SharedArbitrator::registerFactory();
+
+    memory::MemoryManager::Options options;
     options.arbitratorKind = FLAGS_memory_arbitrator_type;
     memory::initializeMemoryManager(options);
   }

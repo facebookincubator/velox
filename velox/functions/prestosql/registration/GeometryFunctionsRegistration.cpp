@@ -20,19 +20,69 @@
 #include "velox/functions/prestosql/types/GeometryRegistration.h"
 
 namespace facebook::velox::functions {
-void registerGeometryFunctions(const std::string& prefix) {
-  registerGeometryType();
+
+namespace {
+
+void registerConstructors(const std::string& prefix) {
   registerFunction<StGeometryFromTextFunction, Geometry, Varchar>(
       {{prefix + "ST_GeometryFromText"}});
-
   registerFunction<StGeomFromBinaryFunction, Geometry, Varbinary>(
       {{prefix + "ST_GeomFromBinary"}});
-
   registerFunction<StAsTextFunction, Varchar, Geometry>(
       {{prefix + "ST_AsText"}});
-
   registerFunction<StAsBinaryFunction, Varbinary, Geometry>(
       {{prefix + "ST_AsBinary"}});
+  registerFunction<StPointFunction, Geometry, double, double>(
+      {{prefix + "ST_Point"}});
+}
+
+void registerRelationPredicates(const std::string& prefix) {
+  registerFunction<StRelateFunction, bool, Geometry, Geometry, Varchar>(
+      {{prefix + "ST_Relate"}});
+
+  registerFunction<StContainsFunction, bool, Geometry, Geometry>(
+      {{prefix + "ST_Contains"}});
+  registerFunction<StCrossesFunction, bool, Geometry, Geometry>(
+      {{prefix + "ST_Crosses"}});
+  registerFunction<StDisjointFunction, bool, Geometry, Geometry>(
+      {{prefix + "ST_Disjoint"}});
+  registerFunction<StEqualsFunction, bool, Geometry, Geometry>(
+      {{prefix + "ST_Equals"}});
+  registerFunction<StIntersectsFunction, bool, Geometry, Geometry>(
+      {{prefix + "ST_Intersects"}});
+  registerFunction<StOverlapsFunction, bool, Geometry, Geometry>(
+      {{prefix + "ST_Overlaps"}});
+  registerFunction<StTouchesFunction, bool, Geometry, Geometry>(
+      {{prefix + "ST_Touches"}});
+  registerFunction<StWithinFunction, bool, Geometry, Geometry>(
+      {{prefix + "ST_Within"}});
+}
+
+void registerOverlayOperations(const std::string& prefix) {
+  registerFunction<StDifferenceFunction, Geometry, Geometry, Geometry>(
+      {{prefix + "ST_Difference"}});
+  registerFunction<StIntersectionFunction, Geometry, Geometry, Geometry>(
+      {{prefix + "ST_Intersection"}});
+  registerFunction<StSymDifferenceFunction, Geometry, Geometry, Geometry>(
+      {{prefix + "ST_SymDifference"}});
+  registerFunction<StUnionFunction, Geometry, Geometry, Geometry>(
+      {{prefix + "ST_Union"}});
+}
+
+void registerAccessors(const std::string& prefix) {
+  registerFunction<StAreaFunction, double, Geometry>({{prefix + "ST_Area"}});
+  registerFunction<StXFunction, double, Geometry>({{prefix + "ST_X"}});
+  registerFunction<StYFunction, double, Geometry>({{prefix + "ST_Y"}});
+}
+
+} // namespace
+
+void registerGeometryFunctions(const std::string& prefix) {
+  registerGeometryType();
+  registerConstructors(prefix);
+  registerRelationPredicates(prefix);
+  registerOverlayOperations(prefix);
+  registerAccessors(prefix);
 }
 
 } // namespace facebook::velox::functions

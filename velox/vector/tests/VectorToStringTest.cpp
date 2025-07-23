@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 namespace facebook::velox::test {
@@ -20,7 +21,7 @@ namespace facebook::velox::test {
 class VectorToStringTest : public testing::Test, public VectorTestBase {
  protected:
   static void SetUpTestCase() {
-    memory::MemoryManager::testingSetInstance({});
+    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
   }
 };
 

@@ -19,6 +19,7 @@
 #include "velox/connectors/Connector.h"
 
 namespace facebook::velox::connector::clp {
+
 class ClpColumnHandle : public ColumnHandle {
  public:
   ClpColumnHandle(
@@ -53,4 +54,5 @@ class ClpColumnHandle : public ColumnHandle {
   const TypePtr columnType_;
   const bool nullable_;
 };
+
 } // namespace facebook::velox::connector::clp

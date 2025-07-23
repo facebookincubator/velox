@@ -29,8 +29,8 @@ Connector Interface
    * - Connector Factory
      - Enables creating instances of a particular connector.
 
-Velox provides Hive, CLP and TPC-H Connectors out of the box.
-Let's examine the implementation details of both the Hive and CLP Connectors as examples
+Velox provides Hive, CLP, and TPC-H Connectors out of the box.
+Let's examine the implementation details of both the Hive and CLP Connectors as examples.
 
 Hive Connector
 --------------
@@ -124,27 +124,26 @@ This is the behavior when the proxy settings are enabled:
 
 CLP Connector
 -------------
-The CLP Connector is used to read CLP archives stored in a local file system or S3. It implements similar
-interfaces as the Hive Connector except for the `DataSink` interface. Here we only describe the `DataSource`
-interface and the `ConnectorSplit` interface implementation since `Connector` and `ConnectorFactory` are
+The CLP Connector is used to read CLP archives stored on a local file system or S3. It implements similar
+interfaces as the Hive Connector except for the ``DataSink`` interface. Here we only describe the ``DataSource``
+interface and the ``ConnectorSplit`` interface implementation since `Connector` and ``ConnectorFactory`` are
 similar to the Hive Connector.
 
 ClpConnectorSplit
 ~~~~~~~~~~~~~~~~~
-The ClpConnectorSplit describes a data chunk using `split_path`. For now, only archive format is supported.
-The `split_path` is the path to the archive file.
+``ClpConnectorSplit`` describes a data chunk using ``path``, which is the path to the archive file.
 
 ClpDataSource
 ~~~~~~~~~~~~~
-The ClpDataSource implements the `addSplit` API that consumes a ClpConnectorSplit and `next` API that
+``ClpDataSource`` implements the ``addSplit`` API that consumes a ``ClpConnectorSplit`` and ``next`` API that
 processes the split and returns a batch of rows.
 
-During initialization, it records the KQL query and archive source (S3 or local). It then iterates through each
-output column, accessing its handle to get its type and original name, and specifically for row types, it
-recursively traverses the nested structure to process each field; for non-row types, it directly maps the
-Velox column type to a CLP column type.
+During initialization, it records the KQL query and archive source (S3 or local). It then iterates through
+each output column, accessing its handle to get its type and original name. For row types, it recursively
+traverses the nested structure to process each field; for non-row types, it directly maps the Velox column
+type to a CLP column type.
 
-When a split is added, a `ClpCursor` is created with the archive path and input source. The query is parsed
-and simplified into an AST. On `next`, the cursor finds matching row indices and, if any exist, `ClpDataSource`
-recursively creates a row vector composed of lazy vectors, which use CLP column readers to decode and load data
-as needed during execution.
+When a split is added, a ``ClpCursor`` is created with the archive path and input source. The query is parsed
+and simplified into an AST. On ``next``, the cursor finds matching row indices and, if any exist,
+``ClpDataSource`` recursively creates a row vector composed of lazy vectors, which use CLP column readers to
+decode and load data as needed during execution.

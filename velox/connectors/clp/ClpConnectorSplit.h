@@ -19,14 +19,25 @@
 #include "velox/connectors/Connector.h"
 
 namespace facebook::velox::connector::clp {
+
 struct ClpConnectorSplit : public connector::ConnectorSplit {
-  ClpConnectorSplit(const std::string& connectorId, const std::string& path)
-      : connector::ConnectorSplit(connectorId), path_(path) {}
+  ClpConnectorSplit(
+      const std::string& connectorId,
+      const std::string& path,
+      std::shared_ptr<std::string> kqlQuery)
+      : connector::ConnectorSplit(connectorId),
+        path_(path),
+        kqlQuery_(kqlQuery) {}
 
   [[nodiscard]] std::string toString() const override {
-    return fmt::format("CLP Split: {}", path_);
+    return fmt::format(
+        "CLP Split: path: {}, kqlQuery: {}",
+        path_,
+        kqlQuery_ ? *kqlQuery_ : "<null>");
   }
 
   const std::string path_;
+  std::shared_ptr<std::string> kqlQuery_;
 };
+
 } // namespace facebook::velox::connector::clp

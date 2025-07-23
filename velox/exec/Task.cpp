@@ -311,6 +311,7 @@ Task::Task(
       onError_(std::move(onError)),
       splitsStates_(buildSplitStates(planFragment_.planNode)),
       bufferManager_(OutputBufferManager::getInstanceRef()) {
+  ++numCreatedTasks_;
   // NOTE: the executor must not be folly::InlineLikeExecutor for parallel
   // execution.
   if (mode_ == Task::ExecutionMode::kParallel) {
@@ -379,6 +380,10 @@ Task::TaskList& Task::taskList() {
 folly::SharedMutex& Task::taskListLock() {
   static folly::SharedMutex lock;
   return lock;
+}
+
+size_t Task::numCreatedTasks() {
+  return numCreatedTasks_;
 }
 
 size_t Task::numRunningTasks() {
@@ -1939,11 +1944,37 @@ bool Task::isUngroupedExecution() const {
   return not isGroupedExecution();
 }
 
-bool Task::hasMixedExecutionGroup() const {
-  if (!isGroupedExecution()) {
+bool Task::hasMixedExecutionGroupJoin(
+    const core::HashJoinNode* joinNode) const {
+  VELOX_CHECK_NOT_NULL(joinNode);
+  if (!isGroupedExecution() || numDriversUngrouped_ == 0) {
     return false;
   }
-  return numDriversUngrouped_ > 0;
+
+  // Check if one side is in grouped execution and the other is not
+  const auto& probeSide = joinNode->sources()[0];
+  const auto& buildSide = joinNode->sources()[1];
+
+  // We need to find the relevant leaf nodes that indicates the execution mode
+  // of both sides.
+  const bool probeAnyGroupedLeaf =
+      core::PlanNode::findFirstNode(
+          probeSide.get(), [&](const core::PlanNode* node) {
+            if (!node->sources().empty()) {
+              return false;
+            }
+            return planFragment_.leafNodeRunsGroupedExecution(node->id());
+          }) == nullptr;
+  const bool buildAnyGroupedLeaf =
+      core::PlanNode::findFirstNode(
+          buildSide.get(), [&](const core::PlanNode* node) {
+            if (!node->sources().empty()) {
+              return false;
+            }
+            return planFragment_.leafNodeRunsGroupedExecution(node->id());
+          }) == nullptr;
+
+  return probeAnyGroupedLeaf != buildAnyGroupedLeaf;
 }
 
 bool Task::allSplitsConsumedHelper(const core::PlanNode* planNode) const {

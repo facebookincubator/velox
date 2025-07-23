@@ -28,7 +28,7 @@ using namespace facebook::velox::common;
 class ReaderTest : public testing::Test, public velox::test::VectorTestBase {
  protected:
   static void SetUpTestCase() {
-    memory::MemoryManager::testingSetInstance({});
+    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
   }
 };
 
@@ -76,6 +76,28 @@ TEST_F(ReaderTest, projectColumnsFilterStruct) {
   auto expected = makeRowVector({
       makeFlatVector<int64_t>({2, 4, 6}),
   });
+  test::assertEqualVectors(expected, actual);
+}
+
+TEST_F(ReaderTest, projectColumnsNullField) {
+  constexpr int kSize = 10;
+  auto input = makeRowVector(
+      {makeFlatVector<int64_t>(kSize),
+       makeRowVector({makeFlatVector<int64_t>(kSize, folly::identity)}),
+       makeFlatVector<int64_t>(kSize, folly::identity)});
+  input->childAt(0) = nullptr;
+
+  common::ScanSpec spec("<root>");
+  spec.addField("c0", 0);
+  spec.addField("c1", 1);
+  spec.getOrCreateChild(common::Subfield("c1.c0"))
+      ->setFilter(common::createBigintValues({2, 4, 6}, false));
+  auto actual = RowReader::projectColumns(input, spec, nullptr);
+
+  auto expected = makeRowVector(
+      {makeFlatVector<int64_t>(3),
+       makeRowVector({makeFlatVector<int64_t>({2, 4, 6})})});
+  expected->childAt(0) = nullptr;
   test::assertEqualVectors(expected, actual);
 }
 

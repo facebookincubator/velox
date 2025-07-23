@@ -16,6 +16,7 @@
 
 #include <glog/logging.h>
 
+#include "clp_s/ArchiveReader.hpp"
 #include "clp_s/search/EvaluateTimestampIndex.hpp"
 #include "clp_s/search/ast/ConvertToExists.hpp"
 #include "clp_s/search/ast/EmptyExpr.hpp"
@@ -23,6 +24,7 @@
 #include "clp_s/search/ast/OrOfAndForm.hpp"
 #include "clp_s/search/ast/SearchUtils.hpp"
 #include "clp_s/search/kql/kql.hpp"
+
 #include "velox/connectors/clp/search_lib/ClpCursor.h"
 
 using namespace clp_s;
@@ -30,6 +32,7 @@ using namespace clp_s::search;
 using namespace clp_s::search::ast;
 
 namespace facebook::velox::connector::clp::search_lib {
+
 ClpCursor::ClpCursor(InputSource inputSource, std::string archivePath)
     : errorCode_(ErrorCode::QueryNotInitialized),
       inputSource_(inputSource),
@@ -106,7 +109,7 @@ const std::vector<clp_s::BaseColumnReader*>& ClpCursor::getProjectedColumns()
   if (queryRunner_) {
     return queryRunner_->getProjectedColumns();
   }
-  static std::vector<clp_s::BaseColumnReader*> kEmpty;
+  static std::vector<clp_s::BaseColumnReader*> const kEmpty;
   return kEmpty;
 }
 
@@ -209,6 +212,11 @@ ErrorCode ClpCursor::loadArchive() {
           break;
         case ColumnType::Array:
           columnDescriptor->set_matching_types(LiteralType::ArrayT);
+          break;
+        case ColumnType::Timestamp:
+          columnDescriptor->set_matching_types(
+              LiteralType::EpochDateT | LiteralType::IntegerT |
+              LiteralType::FloatT);
           break;
         default:
           break;

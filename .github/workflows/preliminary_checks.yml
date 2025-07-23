@@ -20,78 +20,39 @@ on:
       - reopened
       - edited
       - synchronize
+  push: {}
 
 permissions:
   contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.repository }}-${{ github.head_ref || github.sha }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{github.ref != 'refs/heads/presto-0.293-clp-connector'}}
 
 jobs:
-  check-matrix:
-    name: ${{ matrix.config.name }}
+  pre-commit:
     runs-on: ubuntu-latest
-    container: ghcr.io/facebookincubator/velox-dev:check
-    strategy:
-      fail-fast: false
-      matrix:
-        config:
-          - { name: "License Header",
-              command: "header-fix",
-              message: "Found missing License Header(s)",
-            }
-          - { name: "Code Format",
-              command: "format-fix",
-              message: "Found format issues"
-            }
     steps:
+      - run: python -m pip install pre-commit
+
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 2
+          persist-credentials: false
 
-      - name: Fix git permissions
-        # Usually actions/checkout does this but as we run in a container
-        # it doesn't work
-        run: git config --global --add safe.directory ${GITHUB_WORKSPACE}
+      - uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}
+          restore-keys: |
+            pre-commit-
 
-      - name: Check ${{ matrix.config.name }}
-        run: |
-          make ${{ matrix.config.command }}
-
-          if ! git diff --quiet; then
-            diff=`git --no-pager diff`
-            echo "${{ matrix.command.message }} in the following files:"
-            git --no-pager diff --name-only
-            echo "Check the Job summary for a copy-pasteable patch."
-
-            echo "> [!IMPORTANT]" >> $GITHUB_STEP_SUMMARY
-            echo "${{ matrix.config.message }}" >> $GITHUB_STEP_SUMMARY
-            echo "> Please apply fix using:"  >> $GITHUB_STEP_SUMMARY
-            echo "\`\`\`sh" >> $GITHUB_STEP_SUMMARY
-            echo "patch -p1 <<EOF" >> $GITHUB_STEP_SUMMARY
-            echo "$diff" >> $GITHUB_STEP_SUMMARY
-            echo "EOF" >> $GITHUB_STEP_SUMMARY
-            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-            exit 1
-          fi
-
-  title-check:
-    name: PR Title Format
-    runs-on: ubuntu-latest
-    steps:
-      - shell: python
+      - name: Run pre-commit
         env:
-          title: "${{ github.event.pull_request.title }}"
+          GH_TOKEN: ${{ github.token }}
         run: |
-          import re
-          import os
-          title = os.environ["title"]
-          title_re = r"^(feat|fix|build|test|docs|refactor|misc)(\(.+\))?!?: ([A-Z].+)[^.]$"
-          match = re.search(title_re, title)
-
-          if match is None:
-            print("::error::Please follow conventional commit guidelines in commit titles as described in CONTRIBUTING.md: https://github.com/facebookincubator/velox/blob/main/CONTRIBUTING.md#commit-messages")
-            exit(1)
-          else:
-            exit(0)
+          files=$(git diff --name-only HEAD^1 HEAD)
+          echo "::group::Changed files"
+          echo $files | tr ' ' '\n'
+          echo "::endgroup::"
+          pre-commit run --show-diff-on-failure --color=always --files $files
