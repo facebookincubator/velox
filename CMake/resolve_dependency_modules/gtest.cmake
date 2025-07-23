@@ -22,6 +22,7 @@ set(VELOX_GTEST_SOURCE_URL
 
 velox_resolve_dependency_url(GTEST)
 
+block(SCOPE_FOR VARIABLES)
 message(STATUS "Building gtest from source")
 FetchContent_Declare(
   googletest
@@ -30,6 +31,7 @@ FetchContent_Declare(
   OVERRIDE_FIND_PACKAGE SYSTEM EXCLUDE_FROM_ALL)
 
 FetchContent_MakeAvailable(googletest)
+endblock()
 
 # Mask compilation warning in clang 16.
 target_compile_options(gtest PRIVATE -Wno-implicit-int-float-conversion)
