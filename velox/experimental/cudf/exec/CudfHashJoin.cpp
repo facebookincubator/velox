@@ -22,7 +22,6 @@
 #include "velox/exec/Task.h"
 
 #include <cudf/copying.hpp>
-#include <cudf/join.hpp>
 
 #include <nvtx3/nvtx3.hpp>
 
