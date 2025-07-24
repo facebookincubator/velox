@@ -129,6 +129,8 @@ void registerAccessors(const std::string& prefix) {
       {{prefix + "ST_Envelope"}});
   registerFunction<StPointsFunction, Array<Geometry>, Geometry>(
       {{prefix + "ST_Points"}});
+  registerFunction<StNumPointsFunction, int32_t, Geometry>(
+      {{prefix + "ST_NumPoints"}});
 }
 
 } // namespace
