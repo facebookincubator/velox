@@ -29,6 +29,7 @@ velox_link_libraries(velox_functions_lib_date_time_formatter velox_type_tz)
 velox_add_library(
   velox_functions_lib
   ArrayShuffle.cpp
+  ArraySort.cpp
   CheckDuplicateKeys.cpp
   CheckNestedNulls.cpp
   KllSketch.cpp
@@ -36,6 +37,7 @@ velox_add_library(
   Re2Functions.cpp
   Repeat.cpp
   Slice.cpp
+  SimpleComparisonMatcher.cpp
   StringEncodingUtils.cpp
   SubscriptUtil.cpp
   TimeUtils.cpp
