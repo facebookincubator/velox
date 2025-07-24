@@ -422,7 +422,7 @@ TEST_F(FlatMapVectorTest, sortedKeyIndices) {
 
 TEST_F(FlatMapVectorTest, toString) {
   auto vector = maker_.flatMapVectorNullable<int64_t, int64_t>({
-      {{}},
+      {std::vector<std::pair<int64_t, std::optional<int64_t>>>{}},
       {std::nullopt},
       {{{1, 0}}},
       {{{1, 1}, {2, std::nullopt}}},
