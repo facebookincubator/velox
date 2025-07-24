@@ -18,10 +18,14 @@
 
 namespace facebook::velox::functions {
 
-using PrestoUpperFunction =
-    UpperLowerTemplateFunction</*isLower=*/false, /*turkishCasing=*/false>;
-using PrestoLowerFunction =
-    UpperLowerTemplateFunction</*isLower=*/true, /*turkishCasing=*/false>;
+using PrestoUpperFunction = UpperLowerTemplateFunction<
+    /*isLower=*/false,
+    /*turkishCasing=*/false,
+    /*greekFinalSigma=*/false>;
+using PrestoLowerFunction = UpperLowerTemplateFunction<
+    /*isLower=*/true,
+    /*turkishCasing=*/false,
+    /*greekFinalSigma=*/false>;
 
 VELOX_DECLARE_VECTOR_FUNCTION(
     udf_upper,

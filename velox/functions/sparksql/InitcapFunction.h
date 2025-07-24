@@ -36,7 +36,8 @@ struct InitCapFunction {
     stringImpl::initcap<
         /*strictSpace=*/true,
         /*isAscii=*/false,
-        /*turkishCasing=*/true>(result, input);
+        /*turkishCasing=*/true,
+        /*greekFinalSigma=*/true>(result, input);
   }
 
   FOLLY_ALWAYS_INLINE void callAscii(
@@ -45,7 +46,8 @@ struct InitCapFunction {
     stringImpl::initcap<
         /*strictSpace=*/true,
         /*isAscii=*/true,
-        /*turkishCasing=*/true>(result, input);
+        /*turkishCasing=*/true,
+        /*greekFinalSigma=*/true>(result, input);
   }
 };
 
