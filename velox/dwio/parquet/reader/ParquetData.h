@@ -213,8 +213,12 @@ class ParquetData : public dwio::common::FormatData {
 
   // Returns the <offset, length> of the row group.
   std::pair<int64_t, int64_t> getRowGroupRegion(uint32_t index) const;
-  void collectIndexPageInfoMap(uint32_t index, PageIndexInfoMap& map);
 
+  /// Updates the page indices for the row group of 'index'.
+  /// Returns true if we should apply page purning.
+  bool collectIndexPageInfoMap(uint32_t index, PageIndexInfoMap& map);
+
+  /// Generates RowRanges that do not satisfy the given filter.
   void filterDataPages(
       uint32_t index,
       folly::F14FastMap<uint32_t, std::unique_ptr<ColumnPageIndex>>&

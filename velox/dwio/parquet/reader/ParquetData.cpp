@@ -96,9 +96,23 @@ bool ParquetData::rowGroupMatches(
   return true;
 }
 
-void ParquetData::collectIndexPageInfoMap(
+bool ParquetData::collectIndexPageInfoMap(
     uint32_t index,
     PageIndexInfoMap& map) {
+  bool applyPageSkipping =
+      scanSpec_.filter() || scanSpec_.numMetadataFilters() > 0;
+  if (applyPageSkipping) {
+    for (auto* parent = type_.get(); parent != nullptr;
+         parent = parent->parquetParent()) {
+      if (parent->parquetParent() &&
+          (parent->type()->kind() == TypeKind::ARRAY ||
+           parent->type()->kind() == TypeKind::MAP ||
+           parent->type()->kind() == TypeKind::ROW)) {
+        applyPageSkipping = false;
+        break;
+      }
+    }
+  }
   const auto& chunk =
       fileMetaDataPtr_.rowGroup(index).columnChunk(type_->column());
   if (chunk.hasColumnAndOffsetIndexOffset()) {
@@ -108,6 +122,7 @@ void ParquetData::collectIndexPageInfoMap(
         chunk.columnIndexOffset(),
         chunk.columnIndexLength()};
   }
+  return applyPageSkipping;
 }
 
 void ParquetData::filterDataPages(
@@ -208,21 +223,8 @@ int64_t ParquetData::handlePageSkipping(
   int64_t skippedPages = 0;
   // Check if the required chunk is already buffered.
   if (!input.isBuffered(chunkReadOffset, chunkReadSize)) {
-    // Determine if page skipping should be applied based on parent type.
-    bool applyPageSkipping = true;
-    for (auto* parent = type_.get(); parent != nullptr;
-         parent = parent->parquetParent()) {
-      if (parent->parquetParent() &&
-          (parent->type()->kind() == TypeKind::ARRAY ||
-           parent->type()->kind() == TypeKind::MAP ||
-           parent->type()->kind() == TypeKind::ROW)) {
-        applyPageSkipping = false;
-        break;
-      }
-    }
-
     // Update skipped pages if applicable.
-    if (pageIndices_[index] && applyPageSkipping) {
+    if (pageIndices_[index]) {
       skippedPages = pageIndices_[index]->updateSkippedPages(rowRanges);
       rowRanges.updateAffectedPages(skippedPages);
       rowRanges.updateCoveredPages(
