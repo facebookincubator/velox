@@ -16,11 +16,13 @@
 
 #pragma once
 
-#include "velox/common/config/Config.h"
-
 #include <functional>
 #include <memory>
 #include <string>
+
+namespace facebook::velox::config {
+class ConfigBase;
+}
 
 namespace facebook::velox::filesystems {
 
