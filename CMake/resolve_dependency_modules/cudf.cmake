@@ -41,7 +41,27 @@ set(VELOX_kvikio_SOURCE_URL
 )
 velox_resolve_dependency_url(kvikio)
 
-set(VELOX_cudf_VERSION 25.08)
+set(VELOX_cudf_VERSION
+    25.08
+    CACHE STRING "cudf version")
+
+# cudf 25.08+ requires C++20
+if(VELOX_cudf_VERSION VERSION_GREATER_EQUAL "25.08")
+  set(VELOX_CUDF_CXX_STANDARD
+      20
+      CACHE STRING "C++ standard for cudf modules")
+  set(VELOX_CUDF_CXX_STANDARD_REQUIRED
+      ON
+      CACHE BOOL "C++ standard required for cudf modules")
+else()
+  set(VELOX_CUDF_CXX_STANDARD
+      ${CMAKE_CXX_STANDARD}
+      CACHE STRING "C++ standard for cudf modules")
+  set(VELOX_CUDF_CXX_STANDARD_REQUIRED
+      ON
+      CACHE BOOL "C++ standard required for cudf modules")
+endif()
+
 set(VELOX_cudf_BUILD_SHA256_CHECKSUM
     01d8bd30e8b953b97c71adb2bfc9d83be440b3df6f822f92af95a471ebf001da)
 set(VELOX_cudf_SOURCE_URL
@@ -89,7 +109,12 @@ FetchContent_MakeAvailable(cudf)
 # cudf
 target_compile_options(
   cudf PRIVATE -Wno-non-virtual-dtor -Wno-missing-field-initializers
-               -Wno-deprecated-copy)
+               -Wno-deprecated-copy -Wno-restrict)
+
+set_target_properties(
+  cudf
+  PROPERTIES CXX_STANDARD ${VELOX_CUDF_CXX_STANDARD}
+             CXX_STANDARD_REQUIRED ${VELOX_CUDF_CXX_STANDARD_REQUIRED})
 
 unset(BUILD_SHARED_LIBS)
 endblock()

@@ -14,6 +14,14 @@
 
 add_executable(velox_cudf_spark_aggregates_test AggregationTest.cpp Main.cpp)
 
+set_target_properties(
+  velox_cudf_spark_aggregates_test
+  PROPERTIES CXX_STANDARD ${VELOX_CUDF_CXX_STANDARD}
+             CXX_STANDARD_REQUIRED ${VELOX_CUDF_CXX_STANDARD_REQUIRED})
+
+# Suppress warnings from included Velox headers when using C++20
+target_compile_options(velox_cudf_spark_aggregates_test PRIVATE -Wno-deprecated)
+
 add_test(
   NAME velox_cudf_spark_aggregates_test
   COMMAND velox_cudf_spark_aggregates_test
