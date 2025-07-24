@@ -161,6 +161,7 @@ int main(int argc, char** argv) {
       "st_length",
       "st_pointn",
       "st_points",
+      "st_envelopeaspts",
       "st_isring",
       "st_relate",
       "st_contains",
