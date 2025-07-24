@@ -34,7 +34,7 @@ SpillConfig::SpillConfig(
     uint64_t _maxSpillRunRows,
     uint64_t _writerFlushThresholdSize,
     const std::string& _compressionKind,
-    int32_t _numMaxMergeWays,
+    uint64_t _numMaxMergeWays,
     std::optional<PrefixSortConfig> _prefixSortConfig,
     const std::string& _fileCreateConfig,
     uint32_t _windowMinReadBatchRows)

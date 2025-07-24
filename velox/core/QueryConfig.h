@@ -1061,9 +1061,9 @@ class QueryConfig {
     return get<std::string>(kSpillCompressionKind, "none");
   }
 
-  int32_t spillNumMaxMergeWays() const {
-    constexpr int32_t kDefaultMergeWays = 0;
-    return get<int32_t>(kSpillNumMaxMergeWays, kDefaultMergeWays);
+  uint64_t spillNumMaxMergeWays() const {
+    constexpr uint64_t kDefaultMergeWays = 0;
+    return get<uint64_t>(kSpillNumMaxMergeWays, kDefaultMergeWays);
   }
 
   bool spillPrefixSortEnabled() const {

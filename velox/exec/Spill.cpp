@@ -316,8 +316,8 @@ SpillPartition::createOrderedReader(
 
 namespace {
 SpillFileInfo mergeFiles(
-    std::vector<SpillFileInfo>& files,
-    std::string& pathPrefix,
+    const std::vector<SpillFileInfo>& files,
+    const std::string& pathPrefix,
     uint64_t readBufferSize,
     uint64_t writeBufferSize,
     vector_size_t batchSize,
@@ -328,16 +328,16 @@ SpillFileInfo mergeFiles(
     memory::MemoryPool* pool,
     folly::Synchronized<common::SpillStats>* spillStats,
     const std::string& fileCreateConfig) {
+  VELOX_CHECK_GT(files.size(), 0);
   std::vector<std::unique_ptr<SpillMergeStream>> streams;
   streams.reserve(files.size());
-  for (auto& fileInfo : files) {
+  for (const auto& fileInfo : files) {
     streams.push_back(FileSpillMergeStream::create(
         SpillReadFile::create(fileInfo, readBufferSize, pool, spillStats)));
   }
-  auto mergeStream =
+  auto mergeTree =
       std::make_unique<TreeOfLosers<SpillMergeStream>>(std::move(streams));
-  VELOX_CHECK(!files.empty());
-  auto type = files[0].type;
+  const auto type = files[0].type;
 
   auto writer = std::make_unique<SpillWriter>(
       type,
@@ -351,7 +351,7 @@ SpillFileInfo mergeFiles(
       pool,
       spillStats);
 
-  for (SpillMergeStream* stream = mergeStream->next(); stream != nullptr;) {
+  while (mergeTree->next()) {
     VectorPtr tmp = std::move(bufferVector);
     BaseVector::prepareForReuse(tmp, batchSize);
     bufferVector = std::static_pointer_cast<RowVector>(tmp);
@@ -359,41 +359,12 @@ SpillFileInfo mergeFiles(
       child->resize(batchSize);
     }
     int32_t outputRow = 0;
-    int32_t outputSize = 0;
-    bool isEndOfBatch = false;
-    while (stream != nullptr && outputRow + outputSize < bufferVector->size()) {
-      VELOX_CHECK_NOT_NULL(stream);
-      bufferSpillSources[outputSize] = &stream->current();
-      bufferSpillSourceRows[outputSize] = stream->currentIndex(&isEndOfBatch);
-      ++outputSize;
-      if (FOLLY_UNLIKELY(isEndOfBatch)) {
-        // The stream is at end of input batch. Need to copy out the rows before
-        // fetching next batch in 'pop'.
-        gatherCopy(
-            bufferVector.get(),
-            outputRow,
-            outputSize,
-            bufferSpillSources,
-            bufferSpillSourceRows);
-        outputRow += outputSize;
-        outputSize = 0;
-      }
-      // Advance the stream.
-      stream->pop();
-      stream = mergeStream->next();
-    }
-    VELOX_CHECK_LE(outputRow + outputSize, bufferVector->size());
-
-    if (FOLLY_LIKELY(outputSize != 0)) {
-      gatherCopy(
-          bufferVector.get(),
-          outputRow,
-          outputSize,
-          bufferSpillSources,
-          bufferSpillSourceRows);
-      outputRow += outputSize;
-      outputSize = 0;
-    }
+    gatherMerge(
+        bufferVector.get(),
+        mergeTree.get(),
+        outputRow,
+        bufferSpillSources,
+        bufferSpillSourceRows);
 
     IndexRange range{0, outputRow};
     writer->write(bufferVector, folly::Range<IndexRange*>(&range, 1));

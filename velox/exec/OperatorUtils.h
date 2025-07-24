@@ -138,6 +138,19 @@ void gatherCopy(
     const std::vector<vector_size_t>& sourceIndices,
     const std::vector<IdentityProjection>& columnMap = {});
 
+/// Merge sort with the mergeTree and gatherCopy the results into target.
+/// 'target' is the result RowVector, and the copying starts from row #0 up to
+/// row #target.size(). 'mergeTree' is the data source. 'count' is the actual
+/// row count that is copied to target. 'bufferSources' and
+/// 'bufferSourceIndices' are buffering vectors that could be reused across
+/// callings.
+void gatherMerge(
+    RowVector* target,
+    TreeOfLosers<SpillMergeStream>* mergeTree,
+    int32_t& count,
+    std::vector<const RowVector*>& bufferSources,
+    std::vector<vector_size_t>& bufferSourceIndices);
+
 /// Generates the system-wide unique disk spill file path for an operator. It
 /// will be the directory on fs with namespace support or common file prefix if
 /// not. It is assumed that the disk spilling file hierarchy for an operator is

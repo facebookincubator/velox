@@ -78,7 +78,7 @@ struct SpillConfig {
       uint64_t _maxSpillRunRows,
       uint64_t _writerFlushThresholdSize,
       const std::string& _compressionKind,
-      int32_t numMaxMergeWays,
+      uint64_t numMaxMergeWays,
       std::optional<PrefixSortConfig> _prefixSortConfig = std::nullopt,
       const std::string& _fileCreateConfig = {},
       uint32_t _windowMinReadBatchRows = 1'000);
@@ -164,7 +164,7 @@ struct SpillConfig {
   // Nums < 2 means unlimited. This is used to cap the max opened file num when
   // merging spilled sorted files to avoid using too much memory and causing
   // OOM.
-  int32_t numMaxMergeWays;
+  uint64_t numMaxMergeWays;
 
   /// Prefix sort config when spilling, enable prefix sort when this config is
   /// set, otherwise, fallback to timsort.
