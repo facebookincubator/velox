@@ -882,7 +882,7 @@
 </li>
         <li><a href="functions/iceberg/functions.html#bucket">bucket()</a>
 </li>
-        <li><a href="functions/presto/array.html#cardinality">cardinality()</a>
+        <li><a href="functions/presto/aggregate.html#cardinality">cardinality()</a>, <a href="functions/presto/array.html#cardinality">[1]</a>
 </li>
         <li><a href="functions/presto/conversion.html#cast">cast()</a>, <a href="functions/spark/conversion.html#cast">[1]</a>
 </li>
@@ -1344,6 +1344,8 @@
 </li>
         <li><a href="functions/presto/hyperloglog.html#merge">merge()</a>, <a href="functions/presto/qdigest.html#merge">[1]</a>, <a href="functions/presto/tdigest.html#merge">[2]</a>
 </li>
+        <li><a href="functions/presto/aggregate.html#merge_sfm">merge_sfm()</a>
+</li>
         <li><a href="functions/presto/tdigest.html#merge_tdigest">merge_tdigest()</a>
 </li>
         <li><a href="functions/spark/binary.html#might_contain">might_contain()</a>
@@ -1397,6 +1399,8 @@
         <li><a href="functions/presto/aggregate.html#noisy_count_gaussian">noisy_count_gaussian()</a>
 </li>
         <li><a href="functions/presto/aggregate.html#noisy_count_if_gaussian">noisy_count_if_gaussian()</a>
+</li>
+        <li><a href="functions/presto/aggregate.html#noisy_empty_approx_set_sfm">noisy_empty_approx_set_sfm()</a>
 </li>
         <li><a href="functions/presto/aggregate.html#id5">noisy_sum_gaussian()</a>, <a href="functions/presto/aggregate.html#noisy_sum_gaussian">[1]</a>
 </li>
@@ -1857,7 +1861,7 @@
     cardinality()
 
       <ul>
-        <li><a href="functions/presto/array.html#cardinality">built-in function</a>
+        <li><a href="functions/presto/aggregate.html#cardinality">built-in function</a>, <a href="functions/presto/array.html#cardinality">[1]</a>
 </li>
       </ul></li>
       <li>
@@ -3539,8 +3543,6 @@
         <li><a href="functions/presto/map.html#map_values">built-in function</a>, <a href="functions/spark/map.html#map_values">[1]</a>
 </li>
       </ul></li>
-  </ul></td>
-  <td style="width: 33%; vertical-align: top;"><ul>
       <li>
     map_zip_with()
 
@@ -3548,6 +3550,8 @@
         <li><a href="functions/presto/map.html#map_zip_with">built-in function</a>, <a href="functions/spark/map.html#map_zip_with">[1]</a>
 </li>
       </ul></li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
       <li>
     mask()
 
@@ -3594,6 +3598,13 @@
       </ul></li>
       <li><a href="bindings/python/plan_builder.html#pyvelox.plan_builder.PlanBuilder.merge_join">merge_join() (pyvelox.plan_builder.PlanBuilder method)</a>
 </li>
+      <li>
+    merge_sfm()
+
+      <ul>
+        <li><a href="functions/presto/aggregate.html#merge_sfm">built-in function</a>
+</li>
+      </ul></li>
       <li>
     merge_tdigest()
 
@@ -3772,8 +3783,6 @@
         <li><a href="functions/presto/aggregate.html#noisy_approx_set_sfm">built-in function</a>
 </li>
       </ul></li>
-  </ul></td>
-  <td style="width: 33%; vertical-align: top;"><ul>
       <li>
     noisy_avg_gaussian()
 
@@ -3781,6 +3790,8 @@
         <li><a href="functions/presto/aggregate.html#id6">built-in function</a>, <a href="functions/presto/aggregate.html#noisy_avg_gaussian">[1]</a>
 </li>
       </ul></li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
       <li>
     noisy_count_gaussian()
 
@@ -3793,6 +3804,13 @@
 
       <ul>
         <li><a href="functions/presto/aggregate.html#noisy_count_if_gaussian">built-in function</a>
+</li>
+      </ul></li>
+      <li>
+    noisy_empty_approx_set_sfm()
+
+      <ul>
+        <li><a href="functions/presto/aggregate.html#noisy_empty_approx_set_sfm">built-in function</a>
 </li>
       </ul></li>
       <li>
