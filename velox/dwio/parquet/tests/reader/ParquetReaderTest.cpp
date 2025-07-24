@@ -946,22 +946,6 @@ TEST_F(ParquetReaderTest, readSampleEqualFilter) {
       "sample.parquet", sampleSchema(), std::move(filters), expected);
 }
 
-TEST_F(ParquetReaderTest, dataPageSkipping) {
-  FilterMap filters;
-  filters.insert({"_1", exec::lessThan(99)});
-  auto expected = makeRowVector({
-      makeFlatVector<int64_t>({0, 1, 2, 3, 4}),
-      makeFlatVector<std::string>({"0", "1", "2", "3", "4"}),
-      makeFlatVector<std::string>({"0", "1", "2", "3", "0"}),
-  });
-
-  auto rowType = ROW({"_1", "_2", "_3"}, {BIGINT(), VARCHAR(), VARCHAR()});
-
-  // assertReadWithFilters(
-  //  "column_index.parquet", rowType, std::move(filters), expected);
-  filters.clear();
-}
-
 TEST_F(ParquetReaderTest, dateFilters) {
   // Read date.parquet with the date filter "date BETWEEN 5 AND 14".
   FilterMap filters;

@@ -154,20 +154,24 @@ void StructColumnReader::enqueueRowGroup(
   }
 }
 
-void StructColumnReader::collectIndexPageInfoMap(
+bool StructColumnReader::collectIndexPageInfoMap(
     uint32_t index,
     PageIndexInfoMap& map) {
+  auto shouldApplyPagePruning = false;
   for (auto& child : children_) {
     if (auto structChild = dynamic_cast<StructColumnReader*>(child)) {
-      structChild->collectIndexPageInfoMap(index, map);
+      return false;
     } else if (auto listChild = dynamic_cast<ListColumnReader*>(child)) {
-      listChild->collectIndexPageInfoMap(index, map);
+      return false;
     } else if (auto mapChild = dynamic_cast<MapColumnReader*>(child)) {
-      mapChild->collectIndexPageInfoMap(index, map);
+      return false;
     } else {
-      child->formatData().as<ParquetData>().collectIndexPageInfoMap(index, map);
+      shouldApplyPagePruning |=
+          child->formatData().as<ParquetData>().collectIndexPageInfoMap(
+              index, map);
     }
   }
+  return shouldApplyPagePruning;
 }
 
 void StructColumnReader::filterDataPages(

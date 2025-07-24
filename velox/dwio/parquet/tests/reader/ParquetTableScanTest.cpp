@@ -47,14 +47,14 @@ class ParquetTableScanTest : public HiveConnectorTestBase {
     parquet::registerParquetReaderFactory();
   }
 
-  void assertSelect(
+  std::shared_ptr<Task> assertSelect(
       std::vector<std::string>&& outputColumnNames,
       const std::string& sql) {
     auto rowType = getRowType(std::move(outputColumnNames));
 
     auto plan = PlanBuilder().tableScan(rowType).planNode();
 
-    assertQuery(plan, splits_, sql);
+    return assertQuery(plan, splits_, sql);
   }
 
   void assertSelectWithDataColumns(
@@ -123,7 +123,7 @@ class ParquetTableScanTest : public HiveConnectorTestBase {
     assertQuery(plan, splits_, sql);
   }
 
-  void assertSelectWithFilterAndAgg(
+  std::shared_ptr<Task> assertSelectWithFilterAndAgg(
       std::vector<std::string>&& outputColumnNames,
       const std::vector<std::string>& filters,
       const std::vector<std::string>& aggregates,
@@ -136,7 +136,7 @@ class ParquetTableScanTest : public HiveConnectorTestBase {
                     .singleAggregation(groupingKeys, aggregates)
                     .planNode();
 
-    AssertQueryBuilder(plan, duckDbQueryRunner_)
+    return AssertQueryBuilder(plan, duckDbQueryRunner_)
         .connectorSessionProperty(
             kHiveConnectorId,
             HiveConfig::kParquetFilterColumnIndexEnabledSession,
@@ -397,160 +397,6 @@ TEST_F(ParquetTableScanTest, basic) {
       {"max(b)"},
       {"a"},
       "SELECT max(b), a FROM tmp WHERE a < 3 GROUP BY a");
-}
-
-TEST_F(ParquetTableScanTest, pageIndex) {
-  // The file column_index.parquet contains two row groups. The first row group
-  // has 19 data pages, and the file includes the page index. The following test
-  // cases verify the correctness of results when page index is used.
-  loadData(
-      getExampleFilePath("column_index.parquet"),
-      ROW({"_1", "_2", "_3", "_5"}, {BIGINT(), VARCHAR(), VARCHAR(), BIGINT()}),
-      makeRowVector(
-          {"_1", "_2", "_3", "_5"},
-          {
-              makeFlatVector<int64_t>(2000, [](auto row) { return row; }),
-              makeFlatVector<std::string>(
-                  2000, [](auto row) { return fmt::format("{}", row); }),
-              makeFlatVector<std::string>(
-                  2000, [](auto row) { return fmt::format("{}", row % 4); }),
-              makeFlatVector<int64_t>(2000, [](auto row) { return row; }),
-          }));
-
-  // With filters.
-  assertSelectWithFilter(
-      {"_1"}, {"_1 < 20"}, "", "SELECT _1 FROM tmp WHERE _1 < 20");
-  assertSelectWithFilter(
-      {"_1"}, {"_1 > 300"}, "", "SELECT _1 FROM tmp WHERE _1 > 300");
-  assertSelectWithFilter(
-      {"_1", "_5"}, {"_1 < 20"}, "", "SELECT _1, _5 FROM tmp WHERE _1 < 20");
-  assertSelectWithFilter(
-      {"_5", "_1"}, {"_1 < 100"}, "", "SELECT _5, _1 FROM tmp WHERE _1 < 100");
-  assertSelectWithFilter(
-      {"_2", "_1"}, {"_1 < 100"}, "", "SELECT _2, _1 FROM tmp WHERE _1 < 100");
-  assertSelectWithFilter(
-      {"_3", "_1"}, {"_1 < 100"}, "", "SELECT _3, _1 FROM tmp WHERE _1 < 100");
-  assertSelectWithFilter(
-      {"_1", "_2"}, {"_1 > 345"}, "", "SELECT _1, _2 FROM tmp WHERE _1 > 345");
-  assertSelectWithFilter(
-      {"_1", "_2"},
-      {"_1 > 345", "_2 <= '901'"},
-      "",
-      "SELECT _1, _2 FROM tmp WHERE _1 > 345 and _2 <= '901'");
-  assertSelectWithFilter(
-      {"_1", "_3"},
-      {"_1 > 345", "_3 == '4'"},
-      "",
-      "SELECT _1, _2 FROM tmp WHERE _1 > 345 and _3 == '4'");
-  assertSelectWithFilter(
-      {"_1", "_3"},
-      {"_1 > 1500"},
-      "",
-      "SELECT _1, _3 FROM tmp WHERE _1 > 1500");
-  assertSelectWithFilter(
-      {"_1", "_5"},
-      {"_1 > 20", "_5 > 300"},
-      "",
-      "SELECT _1, _5 FROM tmp WHERE _1 > 20 and _5 > 300");
-  assertSelectWithFilter(
-      {"_1", "_5"},
-      {"_1 < 300", "_5 < 600"},
-      "",
-      "SELECT _1, _5 FROM tmp WHERE _1 < 300 and _5 < 600");
-  assertSelectWithFilter(
-      {"_1", "_5"},
-      {"_1 > 200", "_5 < 500"},
-      "",
-      "SELECT _1, _5 FROM tmp WHERE _1 > 200 and _5 < 500");
-
-  assertSelectWithFilter(
-      {"_1", "_5"},
-      {"_1 < 200 OR _1 >= 700"},
-      "",
-      "SELECT _1, _5 FROM tmp WHERE _1 < 200 OR _1 >= 700");
-
-  assertSelectWithFilter(
-      {"_1", "_5"},
-      {"_1 > 222", "_5 > 333"},
-      "",
-      "SELECT _1, _5 FROM tmp WHERE _1 > 222 and _5 > 333");
-  assertSelectWithFilter(
-      {"_1", "_5"},
-      {"_1 < 333", "_5 < 656"},
-      "",
-      "SELECT _1, _5 FROM tmp WHERE _1 < 333 and _5 < 656");
-  assertSelectWithFilter(
-      {"_1", "_5"},
-      {"_1 > 222", "_5 < 556"},
-      "",
-      "SELECT _1, _5 FROM tmp WHERE _1 > 222 and _5 < 556");
-
-  // With filter and aggregation.
-  assertSelectWithFilterAndAgg(
-      {"_1"},
-      {"_1 < 30"},
-      {"sum(_1)"},
-      {},
-      "SELECT sum(_1) FROM tmp WHERE _1 < 30");
-  assertSelectWithFilterAndAgg(
-      {"_1", "_5"},
-      {"_1 > 200"},
-      {"sum(_5)"},
-      {},
-      "SELECT sum(_5) FROM tmp WHERE _1 > 200");
-  assertSelectWithFilterAndAgg(
-      {"_1", "_5"},
-      {"_1 < 700"},
-      {"min(_1)", "max(_5)"},
-      {},
-      "SELECT min(_1), max(_5) FROM tmp WHERE _1 < 700");
-  assertSelectWithFilterAndAgg(
-      {"_5", "_1"},
-      {"_1 < 3"},
-      {"max(_5)"},
-      {"_1"},
-      "SELECT max(_5), _1 FROM tmp WHERE _1 < 3 GROUP BY _1");
-  assertSelectWithFilterAndAgg(
-      {"_1", "_2"},
-      {"_1 > 200"},
-      {"count(_2)"},
-      {},
-      "SELECT count(_2) FROM tmp WHERE _1 > 200");
-  assertSelectWithFilterAndAgg(
-      {"_1", "_3"},
-      {"_1 > 200"},
-      {"count(_3)"},
-      {},
-      "SELECT count(_3) FROM tmp WHERE _1 > 200");
-}
-
-TEST_F(ParquetTableScanTest, pageIndexWithStats) {
-  loadData(
-      getExampleFilePath("column_index.parquet"),
-      ROW({"_1"}, {BIGINT()}),
-      makeRowVector(
-          {"_1"},
-          {
-              makeFlatVector<int64_t>(2000, [](auto row) { return row; }),
-          }));
-
-  // With filters.
-  auto task = assertSelectWithFilter(
-      {"_1"}, {"_1 < 20"}, "", "SELECT _1 FROM tmp WHERE _1 < 20");
-  ASSERT_EQ(
-      task->taskStats()
-          .pipelineStats[0]
-          .operatorStats[0]
-          .runtimeStats["skippedPages"]
-          .sum,
-      18);
-  ASSERT_EQ(
-      task->taskStats()
-          .pipelineStats[0]
-          .operatorStats[0]
-          .runtimeStats["processedPages"]
-          .sum,
-      1);
 }
 
 TEST_F(ParquetTableScanTest, lazy) {
@@ -1608,6 +1454,307 @@ TEST_F(ParquetTableScanTest, shortAndLongDecimalReadWithLargerPrecision) {
 
   assertEqualVectors(expectedDecimalVectors->childAt(0), rows->childAt(0));
   assertEqualVectors(expectedDecimalVectors->childAt(1), rows->childAt(1));
+}
+
+TEST_F(ParquetTableScanTest, pageIndexWithStats) {
+  // The file column_index.parquet contains two row groups. The first row group
+  // has 19 data pages, and the file includes the page index. The following test
+  // cases verify the correctness of results when page index is used.
+  loadData(
+      getExampleFilePath("column_index.parquet"),
+      ROW({"_1"}, {BIGINT()}),
+      makeRowVector(
+          {"_1"},
+          {
+              makeFlatVector<int64_t>(2000, [](auto row) { return row; }),
+          }));
+
+  // Without filters, page index is not used, so all pages are processed.
+  auto task = assertSelect({"_1"}, "SELECT _1 FROM tmp");
+  ASSERT_EQ(
+      task->taskStats()
+          .pipelineStats[0]
+          .operatorStats[0]
+          .runtimeStats["skippedPages"]
+          .sum,
+      0);
+  // With filters.
+  task = assertSelectWithFilter(
+      {"_1"}, {"_1 < 20"}, "", "SELECT _1 FROM tmp WHERE _1 < 20");
+  ASSERT_EQ(
+      task->taskStats()
+          .pipelineStats[0]
+          .operatorStats[0]
+          .runtimeStats["skippedPages"]
+          .sum,
+      18);
+  ASSERT_EQ(
+      task->taskStats()
+          .pipelineStats[0]
+          .operatorStats[0]
+          .runtimeStats["processedPages"]
+          .sum,
+      1);
+}
+
+TEST_F(ParquetTableScanTest, pageIndexWithFilter) {
+  loadData(
+      getExampleFilePath("column_index.parquet"),
+      ROW({"_1", "_2", "_3", "_5"}, {BIGINT(), VARCHAR(), VARCHAR(), BIGINT()}),
+      makeRowVector(
+          {"_1", "_2", "_3", "_5"},
+          {
+              makeFlatVector<int64_t>(2000, [](auto row) { return row; }),
+              makeFlatVector<std::string>(
+                  2000, [](auto row) { return fmt::format("{}", row); }),
+              makeFlatVector<std::string>(
+                  2000, [](auto row) { return fmt::format("{}", row % 4); }),
+              makeFlatVector<int64_t>(2000, [](auto row) { return row; }),
+          }));
+  auto verifyPageSkipped = [](const std::shared_ptr<Task>& task,
+                              int64_t expectedSkipped) {
+    ASSERT_EQ(
+        task->taskStats()
+            .pipelineStats[0]
+            .operatorStats[0]
+            .runtimeStats["skippedPages"]
+            .sum,
+        expectedSkipped);
+  };
+  // With filters.
+  auto task = assertSelectWithFilter(
+      {"_1"}, {"_1 < 20"}, "", "SELECT _1 FROM tmp WHERE _1 < 20");
+  verifyPageSkipped(task, 18);
+  task = assertSelectWithFilter(
+      {"_1"}, {"_1 > 300"}, "", "SELECT _1 FROM tmp WHERE _1 > 300");
+  verifyPageSkipped(task, 3);
+
+  // Page skip with multiple columns.
+  task = assertSelectWithFilter(
+      {"_1", "_5"}, {"_1 < 20"}, "", "SELECT _1, _5 FROM tmp WHERE _1 < 20");
+  verifyPageSkipped(task, 36);
+  task = assertSelectWithFilter(
+      {"_5", "_1"}, {"_1 < 100"}, "", "SELECT _5, _1 FROM tmp WHERE _1 < 100");
+  verifyPageSkipped(task, 36);
+  task = assertSelectWithFilter(
+      {"_2", "_1"}, {"_1 < 100"}, "", "SELECT _2, _1 FROM tmp WHERE _1 < 100");
+  verifyPageSkipped(task, 36);
+  task = assertSelectWithFilter(
+      {"_3", "_1"}, {"_1 < 100"}, "", "SELECT _3, _1 FROM tmp WHERE _1 < 100");
+  verifyPageSkipped(task, 36);
+  task = assertSelectWithFilter(
+      {"_1", "_2"}, {"_1 > 345"}, "", "SELECT _1, _2 FROM tmp WHERE _1 > 345");
+  verifyPageSkipped(task, 6);
+
+  task = assertSelectWithFilter(
+      {"_1", "_3"},
+      {"_1 > 1500"},
+      "",
+      "SELECT _1, _3 FROM tmp WHERE _1 > 1500");
+  verifyPageSkipped(task, 30);
+
+  // With multiple filters.
+  task = assertSelectWithFilter(
+      {"_1", "_2"},
+      {"_1 > 345", "_2 < '901'"},
+      "",
+      "SELECT _1, _2 FROM tmp WHERE _1 > 345 and _2 < '901'");
+  verifyPageSkipped(task, 6);
+
+  task = assertSelectWithFilter(
+      {"_1", "_2"},
+      {"_1 > 345", "_2 <= '901'"},
+      "",
+      "SELECT _1, _2 FROM tmp WHERE _1 > 345 and _2 <= '901'");
+  verifyPageSkipped(task, 6);
+
+  task = assertSelectWithFilter(
+      {"_1", "_3"},
+      {"_1 > 345", "_3 != '5'"},
+      "",
+      "SELECT _1, _3 FROM tmp WHERE _1 > 345 and _3 != '5'");
+  verifyPageSkipped(task, 6);
+
+  task = assertSelectWithFilter(
+      {"_1", "_5"},
+      {"_1 > 20", "_5 > 300"},
+      "",
+      "SELECT _1, _5 FROM tmp WHERE _1 > 20 and _5 > 300");
+  verifyPageSkipped(task, 6);
+
+  task = assertSelectWithFilter(
+      {"_1", "_5"},
+      {"_1 < 300", "_5 < 600"},
+      "",
+      "SELECT _1, _5 FROM tmp WHERE _1 < 300 and _5 < 600");
+  verifyPageSkipped(task, 32);
+
+  task = assertSelectWithFilter(
+      {"_1", "_5"},
+      {"_1 > 200", "_5 < 500"},
+      "",
+      "SELECT _1, _5 FROM tmp WHERE _1 > 200 and _5 < 500");
+  verifyPageSkipped(task, 32);
+
+  task = assertSelectWithFilter(
+      {"_1", "_5"},
+      {"_1 > 222", "_5 > 333"},
+      "",
+      "SELECT _1, _5 FROM tmp WHERE _1 > 222 and _5 > 333");
+  verifyPageSkipped(task, 6);
+  task = assertSelectWithFilter(
+      {"_1", "_5"},
+      {"_1 < 333", "_5 < 656"},
+      "",
+      "SELECT _1, _5 FROM tmp WHERE _1 < 333 and _5 < 656");
+  verifyPageSkipped(task, 30);
+
+  task = assertSelectWithFilter(
+      {"_1", "_5"},
+      {"_1 > 222", "_5 < 556"},
+      "",
+      "SELECT _1, _5 FROM tmp WHERE _1 > 222 and _5 < 556");
+  verifyPageSkipped(task, 30);
+
+  // With OR filter.
+  task = assertSelectWithFilter(
+      {"_1", "_5"},
+      {"_1 < 200 OR _1 >= 700"},
+      "",
+      "SELECT _1, _5 FROM tmp WHERE _1 < 200 OR _1 >= 700");
+  verifyPageSkipped(task, 10);
+}
+
+TEST_F(ParquetTableScanTest, pageIndexWithComplexTypeColumn) {
+  std::vector<vector_size_t> offsets;
+  for (auto i = 0; i < 500; ++i) {
+    offsets.push_back(i);
+  }
+  auto elements =
+      makeFlatVector<int64_t>(500, [](vector_size_t row) { return row; });
+  auto arrayVector = makeArrayVector(offsets, elements);
+  loadData(
+      getExampleFilePath("complex_type_column_index.parquet"),
+      ROW({"_1", "_2"}, {BIGINT(), ARRAY(BIGINT())}),
+      makeRowVector(
+          {"_1", "_2"},
+          {
+              makeFlatVector<int64_t>(500, [](auto row) { return row; }),
+              makeArrayVector(offsets, elements),
+          }));
+  auto verifyPageSkipped = [](const std::shared_ptr<Task>& task,
+                              int64_t expectedSkipped) {
+    ASSERT_EQ(
+        task->taskStats()
+            .pipelineStats[0]
+            .operatorStats[0]
+            .runtimeStats["skippedPages"]
+            .sum,
+        expectedSkipped);
+  };
+
+  auto task = assertSelectWithFilter(
+      {"_1"}, {"_1 < 20"}, "", "SELECT _1 FROM tmp WHERE _1 < 20");
+  verifyPageSkipped(task, 4);
+
+  // There is complex type column, so the page index is not used.
+  task = assertSelectWithFilter(
+      {"_1", "_2"}, {"_1 < 20"}, "", "SELECT _1, _2 FROM tmp WHERE _1 < 20");
+  verifyPageSkipped(task, 0);
+}
+
+TEST_F(ParquetTableScanTest, pageIndexWithFilterAndAgg) {
+  // The file column_index.parquet contains two row groups. The first row group
+  // has 19 data pages, and the file includes the page index. The following test
+  // cases verify the correctness of results when page index is used.
+  loadData(
+      getExampleFilePath("column_index.parquet"),
+      ROW({"_1", "_2", "_3", "_5"}, {BIGINT(), VARCHAR(), VARCHAR(), BIGINT()}),
+      makeRowVector(
+          {"_1", "_2", "_3", "_5"},
+          {
+              makeFlatVector<int64_t>(2000, [](auto row) { return row; }),
+              makeFlatVector<std::string>(
+                  2000, [](auto row) { return fmt::format("{}", row); }),
+              makeFlatVector<std::string>(
+                  2000, [](auto row) { return fmt::format("{}", row % 4); }),
+              makeFlatVector<int64_t>(2000, [](auto row) { return row; }),
+          }));
+  auto verifyPageSkipped = [](const std::shared_ptr<Task>& task,
+                              int64_t expectedSkippedPages) {
+    ASSERT_EQ(
+        task->taskStats()
+            .pipelineStats[0]
+            .operatorStats[0]
+            .runtimeStats["skippedPages"]
+            .sum,
+        expectedSkippedPages);
+  };
+  // With filter and aggregation.
+  auto task = assertSelectWithFilterAndAgg(
+      {"_1"},
+      {"_1 < 30"},
+      {"sum(_1)"},
+      {},
+      "SELECT sum(_1) FROM tmp WHERE _1 < 30");
+  verifyPageSkipped(task, 18);
+  task = assertSelectWithFilterAndAgg(
+      {"_1", "_5"},
+      {"_1 > 200"},
+      {"sum(_5)"},
+      {},
+      "SELECT sum(_5) FROM tmp WHERE _1 > 200");
+  verifyPageSkipped(task, 4);
+  task = assertSelectWithFilterAndAgg(
+      {"_1", "_5"},
+      {"_1 < 700"},
+      {"min(_1)", "max(_5)"},
+      {},
+      "SELECT min(_1), max(_5) FROM tmp WHERE _1 < 700");
+  verifyPageSkipped(task, 24);
+  task = assertSelectWithFilterAndAgg(
+      {"_5", "_1"},
+      {"_1 < 3"},
+      {"max(_5)"},
+      {"_1"},
+      "SELECT max(_5), _1 FROM tmp WHERE _1 < 3 GROUP BY _1");
+  verifyPageSkipped(task, 36);
+  task = assertSelectWithFilterAndAgg(
+      {"_1", "_2"},
+      {"_1 > 200"},
+      {"count(_2)"},
+      {},
+      "SELECT count(_2) FROM tmp WHERE _1 > 200");
+  verifyPageSkipped(task, 4);
+  task = assertSelectWithFilterAndAgg(
+      {"_1", "_3"},
+      {"_1 > 200"},
+      {"count(_3)"},
+      {},
+      "SELECT count(_3) FROM tmp WHERE _1 > 200");
+  verifyPageSkipped(task, 4);
+
+  task = assertSelectWithFilterAndAgg(
+      {"_1", "_5"},
+      {"_1 > 200", "_5 < 901"},
+      {"sum(_5)"},
+      {},
+      "SELECT sum(_5) FROM tmp WHERE _1 > 200 and _5 < 901");
+  verifyPageSkipped(task, 22);
+  task = assertSelectWithFilterAndAgg(
+      {"_1", "_2"},
+      {"_1 < 200 or _1 > 901"},
+      {"min(_2)"},
+      {},
+      "SELECT min(_2) FROM tmp WHERE _1 < 200 or _1 > 901");
+  verifyPageSkipped(task, 14);
+  task = assertSelectWithFilterAndAgg(
+      {"_1", "_5", "_3"},
+      {"_1 > 200", "_5 < 901"},
+      {"max(_3)"},
+      {},
+      "SELECT max(_3) FROM tmp WHERE _1 > 200 and _5 < 901");
+  verifyPageSkipped(task, 33);
 }
 
 int main(int argc, char** argv) {

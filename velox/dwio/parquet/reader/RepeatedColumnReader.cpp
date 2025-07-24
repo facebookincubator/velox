@@ -230,9 +230,11 @@ void MapColumnReader::filterRowGroups(
   // empty placeholder to avoid incorrect calling on parent's impl
 }
 
-void MapColumnReader::collectIndexPageInfoMap(
+bool MapColumnReader::collectIndexPageInfoMap(
     uint32_t index,
-    PageIndexInfoMap& map) {}
+    PageIndexInfoMap& map) {
+  return false;
+}
 
 void MapColumnReader::filterDataPages(
     uint32_t index,
@@ -350,9 +352,11 @@ void ListColumnReader::filterRowGroups(
   // empty placeholder to avoid incorrect calling on parent's impl
 }
 
-void ListColumnReader::collectIndexPageInfoMap(
+bool ListColumnReader::collectIndexPageInfoMap(
     uint32_t index,
-    PageIndexInfoMap& map) {}
+    PageIndexInfoMap& map) {
+  return false;
+}
 
 void ListColumnReader::filterDataPages(
     uint32_t index,

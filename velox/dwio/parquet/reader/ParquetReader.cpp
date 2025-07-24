@@ -167,10 +167,6 @@ class ReaderBase {
       const std::vector<T>& children,
       bool fileColumnNamesReadAsLowerCase);
 
-  // Returns true if page index filtering should be used based on the scan spec.
-  // This is determined by checking if the scan spec has a filter.
-  bool shouldUsePageIndexFiltering(velox::common::ScanSpec& scanSpec) const;
-
   // Applies page index filtering for the current row group.
   void applyPageIndexFiltering(
       int32_t currentGroup,
@@ -216,16 +212,10 @@ ReaderBase::ReaderBase(
   VELOX_CHECK_GT(fileLength_, 0, "Parquet file is empty");
   VELOX_CHECK_GE(fileLength_, 12, "Parquet file is too small");
 
-  // If a pushdown filter is present, load the page index to enable page
-  // pruning.
-  if (options_.scanSpec()) {
-    shouldUsePageIndexFiltering_ = options_.parquetFilterColumnIndexEnabled() &&
-        shouldUsePageIndexFiltering(*options_.scanSpec());
-  }
-
   loadFileMetaData();
   initializeSchema();
   initializeVersion();
+  shouldUsePageIndexFiltering_ = options_.parquetFilterColumnIndexEnabled();
 }
 
 void ReaderBase::loadFileMetaData() {
@@ -1170,22 +1160,6 @@ std::shared_ptr<const RowType> ReaderBase::createRowType(
       std::move(childNames), std::move(childTypes));
 }
 
-bool ReaderBase::shouldUsePageIndexFiltering(
-    velox::common::ScanSpec& scanSpec) const {
-  bool result = false;
-  if (scanSpec.readFromFile()) {
-    result = scanSpec.filter() || scanSpec.numMetadataFilters() > 0;
-  }
-  if (!result) {
-    auto& childSpecs = scanSpec.stableChildren();
-    for (auto i = 0; i < childSpecs.size(); ++i) {
-      result |= shouldUsePageIndexFiltering(*childSpecs[i]);
-    }
-  }
-
-  return result;
-}
-
 void ReaderBase::applyPageIndexFiltering(
     int32_t currentGroup,
     uint32_t thisGroup,
@@ -1194,8 +1168,8 @@ void ReaderBase::applyPageIndexFiltering(
     const std::shared_ptr<velox::common::MetadataFilter>& metadataFilter)
     const {
   PageIndexInfoMap map;
-  reader.collectIndexPageInfoMap(thisGroup, map);
-  if (!map.empty()) {
+  bool shouldApplyPagePruning = reader.collectIndexPageInfoMap(thisGroup, map);
+  if (shouldApplyPagePruning && !map.empty()) {
     folly::F14FastMap<uint32_t, std::unique_ptr<ColumnPageIndex>> pageIndices;
     using StreamMap = folly::F14FastMap<
         uint32_t,
