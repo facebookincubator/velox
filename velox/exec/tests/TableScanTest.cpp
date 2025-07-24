@@ -1859,7 +1859,7 @@ TEST_F(TableScanTest, partitionedTableDoubleKey) {
 }
 
 TEST_F(TableScanTest, partitionedTableDecimalKey) {
-  auto rowType = ROW({"c0", "c1"}, {BIGINT(), DECIMAL(20, 4)});
+  auto rowType = ROW({"c0", "c1"}, {BIGINT(), DOUBLE()});
   auto vectors = makeVectors(10, 1'000, rowType);
   auto filePath = TempFilePath::create();
   writeToFile(filePath->getPath(), vectors);
