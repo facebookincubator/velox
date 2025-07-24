@@ -30,13 +30,13 @@ FetchContent_Declare(
   duckdb
   URL ${VELOX_DUCKDB_SOURCE_URL}
   URL_HASH ${VELOX_DUCKDB_BUILD_SHA256_CHECKSUM}
-  PATCH_COMMAND
-    git apply ${CMAKE_CURRENT_LIST_DIR}/duckdb/remove-ccache.patch && git apply
-    ${CMAKE_CURRENT_LIST_DIR}/duckdb/re2.patch)
+  PATCH_COMMAND git apply ${CMAKE_CURRENT_LIST_DIR}/duckdb/remove-ccache.patch
+                && git apply ${CMAKE_CURRENT_LIST_DIR}/duckdb/re2.patch)
 
-# DuckDB uses git commands to retrieve version information during the build, which works
-# with git clone. To prevent incorrectly using the parent project's git version when
-# building from a tarball, we define GIT_COMMIT_HASH to skip that.
+# DuckDB uses git commands to retrieve version information during the build,
+# which works with git clone. To prevent incorrectly using the parent project's
+# git version when building from a tarball, we define GIT_COMMIT_HASH to skip
+# that.
 set(GIT_COMMIT_HASH "6536a77")
 set(BUILD_UNITTESTS OFF)
 set(ENABLE_SANITIZER OFF)
