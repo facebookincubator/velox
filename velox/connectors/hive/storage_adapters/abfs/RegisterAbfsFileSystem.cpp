@@ -15,6 +15,7 @@
  */
 
 #ifdef VELOX_ENABLE_ABFS
+#include "velox/connectors/hive/storage_adapters/abfs/RegisterAbfsFileSystem.h" // @manual
 #include "velox/common/config/Config.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsFileSystem.h" // @manual
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsUtil.h" // @manual
