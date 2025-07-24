@@ -93,11 +93,8 @@ function install_fbthrift {
 
 function install_duckdb {
   if $BUILD_DUCKDB; then
-    # DuckDB executes a git command to retrieve version information during the build.
-    # To prevent it from incorrectly detecting the parent project's git version, we
-    # use git clone instead of downloading the tarball.
-    github_checkout duckdb/duckdb "${DUCKDB_VERSION}" --depth 1
-    cmake_install -DBUILD_UNITTESTS=OFF -DENABLE_SANITIZER=OFF -DENABLE_UBSAN=OFF -DBUILD_SHELL=OFF -DEXPORT_DLL_SYMBOLS=OFF -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}"
+    wget_and_untar https://github.com/duckdb/duckdb/archive/refs/tags/"${DUCKDB_VERSION}".tar.gz duckdb
+    cmake_install_dir duckdb -DBUILD_UNITTESTS=OFF -DENABLE_SANITIZER=OFF -DENABLE_UBSAN=OFF -DBUILD_SHELL=OFF -DEXPORT_DLL_SYMBOLS=OFF -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}"
   fi
 }
 
