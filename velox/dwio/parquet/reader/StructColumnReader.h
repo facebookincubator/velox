@@ -80,7 +80,7 @@ class StructColumnReader : public dwio::common::SelectiveStructColumnReader {
       const dwio::common::StatsContext&,
       dwio::common::FormatData::FilterRowGroupsResult&) const override;
 
-  void collectIndexPageInfoMap(uint32_t index, PageIndexInfoMap& map);
+  bool collectIndexPageInfoMap(uint32_t index, PageIndexInfoMap& map);
 
   void filterDataPages(
       uint32_t index,
