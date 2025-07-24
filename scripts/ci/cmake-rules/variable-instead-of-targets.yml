@@ -15,7 +15,11 @@
 # yamllint disable rule:quoted-strings
 id: variable-instead-of-targets
 message: Don't use variables in place of targets. Use target names directly.
-severity: warning
+severity: error
+ignores:
+  - CMake/VeloxUtils.cmake
+  - velox/experimental/breeze/test/CMakeLists.txt
+  - velox/experimental/breeze/cmake/*
 language: cmake
 utils:
   is-cmake-builtin-var: &is-cmake-builtin-var

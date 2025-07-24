@@ -30,6 +30,12 @@ target_link_libraries(
   velox_link_libs
   Boost::regex
   Folly::folly
-  ${TEST_LINK_LIBS}
+  velox_vector_test_lib
+  velox_exec_test_lib
+  velox_temp_path
+  GTest::gtest_main
+  GTest::gmock
+  gflags::gflags
+  glog::glog
   GTest::gtest
   fmt::fmt)

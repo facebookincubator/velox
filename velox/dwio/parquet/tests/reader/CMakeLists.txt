@@ -19,7 +19,7 @@ add_test(
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(
   velox_dwio_parquet_page_reader_test velox_dwio_native_parquet_reader
-  velox_link_libs ${TEST_LINK_LIBS})
+  velox_link_libs velox_parquet_test_libs)
 
 add_executable(velox_parquet_e2e_filter_test E2EFilterTest.cpp)
 add_test(velox_parquet_e2e_filter_test velox_parquet_e2e_filter_test)
@@ -31,7 +31,7 @@ target_link_libraries(
   lz4::lz4
   zstd::zstd
   ZLIB::ZLIB
-  ${TEST_LINK_LIBS})
+  velox_parquet_test_libs)
 
 add_library(velox_dwio_parquet_reader_benchmark_lib ParquetReaderBenchmark.cpp)
 target_link_libraries(
@@ -41,7 +41,7 @@ target_link_libraries(
   velox_exec_test_lib
   velox_exec
   velox_hive_connector
-  ${TEST_LINK_LIBS}
+  velox_parquet_test_libs
   Folly::follybenchmark
   Folly::folly)
 
@@ -71,7 +71,7 @@ add_test(
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(
   velox_dwio_parquet_structure_decoder_test velox_dwio_native_parquet_reader
-  velox_link_libs ${TEST_LINK_LIBS})
+  velox_link_libs velox_parquet_test_libs)
 
 if(VELOX_ENABLE_BENCHMARKS)
   add_executable(velox_dwio_parquet_structure_decoder_benchmark
@@ -95,7 +95,7 @@ target_link_libraries(
   velox_hive_connector
   velox_link_libs
   velox_type_tz
-  ${TEST_LINK_LIBS})
+  velox_parquet_test_libs)
 
 if(${VELOX_ENABLE_ARROW})
 
@@ -109,6 +109,6 @@ if(${VELOX_ENABLE_ARROW})
     velox_dwio_native_parquet_reader
     arrow
     velox_link_libs
-    ${TEST_LINK_LIBS})
+    velox_parquet_test_libs)
 
 endif()

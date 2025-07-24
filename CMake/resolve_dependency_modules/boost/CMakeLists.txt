@@ -66,6 +66,7 @@ set(BUILD_SHARED_LIBS OFF)
 FetchContent_MakeAvailable(Boost)
 
 list(TRANSFORM BOOST_HEADER_ONLY PREPEND Boost::)
+# ast-grep-ignore
 target_link_libraries(
   boost_headers
   INTERFACE ${BOOST_HEADER_ONLY})

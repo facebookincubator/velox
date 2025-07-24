@@ -28,7 +28,7 @@ target_link_libraries(
   Boost::regex
   velox_link_libs
   Folly::folly
-  ${TEST_LINK_LIBS}
+  velox_parquet_test_libs
   GTest::gtest
   fmt::fmt)
 
@@ -48,6 +48,6 @@ target_link_libraries(
   velox_link_libs
   Boost::regex
   Folly::folly
-  ${TEST_LINK_LIBS}
+  velox_parquet_test_libs
   GTest::gtest
   fmt::fmt)
