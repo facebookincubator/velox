@@ -131,6 +131,11 @@ void registerAccessors(const std::string& prefix) {
       {{prefix + "ST_Points"}});
   registerFunction<StNumPointsFunction, int32_t, Geometry>(
       {{prefix + "ST_NumPoints"}});
+  registerFunction<
+      GeometryNearestPointsFunction,
+      Array<Geometry>,
+      Geometry,
+      Geometry>({{prefix + "geometry_nearest_points"}});
 }
 
 } // namespace
