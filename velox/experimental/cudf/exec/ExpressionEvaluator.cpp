@@ -44,18 +44,15 @@ namespace facebook::velox::cudf_velox {
 namespace {
 template <TypeKind kind>
 cudf::ast::literal makeScalarAndLiteral(
-    const VectorPtr& vector,
-    std::vector<std::unique_ptr<cudf::scalar>>& scalars,
-    size_t atIndex = 0) {
+    const TypePtr& type,
+    const variant& var,
+    std::vector<std::unique_ptr<cudf::scalar>>& scalars) {
   using T = typename facebook::velox::KindToFlatVector<kind>::WrapperType;
   auto stream = cudf::get_default_stream();
   auto mr = cudf::get_current_device_resource_ref();
-  const auto& type = vector->type();
 
   if constexpr (cudf::is_fixed_width<T>()) {
-    auto constVector = vector->as<facebook::velox::SimpleVector<T>>();
-    VELOX_CHECK_NOT_NULL(constVector, "ConstantVector is null");
-    T value = constVector->valueAt(atIndex);
+    T value = var.value<T>();
     if (type->isShortDecimal()) {
       VELOX_FAIL("Short decimal not supported");
       /* TODO: enable after rewriting using binary ops
@@ -116,9 +113,7 @@ cudf::ast::literal makeScalarAndLiteral(
     }
     VELOX_FAIL("Unsupported base type for literal");
   } else if (kind == TypeKind::VARCHAR) {
-    auto constVector = vector->as<facebook::velox::SimpleVector<StringView>>();
-    auto value = constVector->valueAt(atIndex);
-    std::string_view stringValue = static_cast<std::string_view>(value);
+    auto stringValue = var.value<StringView>();
     scalars.emplace_back(
         std::make_unique<cudf::string_scalar>(stringValue, true, stream, mr));
     return cudf::ast::literal{
@@ -131,13 +126,26 @@ cudf::ast::literal makeScalarAndLiteral(
   }
 }
 
+template <TypeKind kind>
+variant getVariant(const VectorPtr& vector, size_t atIndex = 0) {
+  using T = typename facebook::velox::KindToFlatVector<kind>::WrapperType;
+  if constexpr (!std::is_same_v<T, ComplexType>) {
+    return vector->as<SimpleVector<T>>()->valueAt(atIndex);
+  } else {
+    return Variant();
+  }
+}
+
 cudf::ast::literal createLiteral(
     const VectorPtr& vector,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
     size_t atIndex = 0) {
   const auto kind = vector->typeKind();
+  const auto& type = vector->type();
+  variant value =
+      VELOX_DYNAMIC_TYPE_DISPATCH(getVariant, kind, vector, atIndex);
   return VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
-      makeScalarAndLiteral, kind, std::move(vector), scalars, atIndex);
+      makeScalarAndLiteral, kind, type, value, scalars);
 }
 
 // Helper function to extract literals from array elements based on type
@@ -884,13 +892,13 @@ auto createFloatingPointRangeExpr(
   }
 };
 
-template <facebook::velox::TypeKind KIND>
+template <TypeKind Kind>
 void shouldSkipMinMax(
     int64_t lower,
     int64_t upper,
     bool* skipLowerBound,
     bool* skipUpperBound) {
-  using NativeT = typename facebook::velox::TypeTraits<KIND>::NativeType;
+  using NativeT = typename TypeTraits<Kind>::NativeType;
 
   if constexpr (std::is_integral_v<NativeT>) {
     *skipLowerBound =
@@ -934,6 +942,19 @@ const cudf::ast::expression& buildInListExpr(
   return *result;
 }
 
+template <TypeKind Kind>
+variant castInt64To(int64_t value) {
+  using T = typename TypeTraits<Kind>::NativeType;
+
+  if constexpr (std::is_integral_v<T>) {
+    return T(value);
+  } else if constexpr (std::is_floating_point_v<T>) {
+    return T(value);
+  } else {
+    VELOX_FAIL("Unsupported type for castInt64To: {}", mapTypeKindToName(Kind));
+  }
+}
+
 } // namespace
 
 // Convert subfield filters to cudf AST
@@ -973,53 +994,21 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
       auto* bigintRange = static_cast<const common::BigintRange*>(&filter);
       const auto& columnTypePtr = inputRowSchema->childAt(columnIndex);
 
-      auto makeNumericLiteral =
-          [&](int64_t value) -> const cudf::ast::expression& {
-        switch (columnTypePtr->kind()) {
-          case TypeKind::TINYINT:
-            scalars.emplace_back(std::make_unique<cudf::numeric_scalar<int8_t>>(
-                static_cast<int8_t>(value), true, stream, mr));
-            return tree.push(
-                cudf::ast::literal{*static_cast<cudf::numeric_scalar<int8_t>*>(
-                    scalars.back().get())});
-          case TypeKind::SMALLINT:
-            scalars.emplace_back(
-                std::make_unique<cudf::numeric_scalar<int16_t>>(
-                    static_cast<int16_t>(value), true, stream, mr));
-            return tree.push(
-                cudf::ast::literal{*static_cast<cudf::numeric_scalar<int16_t>*>(
-                    scalars.back().get())});
-          case TypeKind::INTEGER:
-            if (columnTypePtr->isDate()) {
-              using T = cudf::timestamp_D;
-              auto time_point =
-                  T(typename T::duration(static_cast<int32_t>(value)));
-              scalars.emplace_back(std::make_unique<cudf::timestamp_scalar<T>>(
-                  time_point, true, stream, mr));
-              return tree.push(
-                  cudf::ast::literal{*static_cast<cudf::timestamp_scalar<T>*>(
-                      scalars.back().get())});
-            } else {
-              scalars.emplace_back(
-                  std::make_unique<cudf::numeric_scalar<int32_t>>(
-                      static_cast<int32_t>(value), true, stream, mr));
-              return tree.push(cudf::ast::literal{
-                  *static_cast<cudf::numeric_scalar<int32_t>*>(
-                      scalars.back().get())});
-            }
-          default:
-            scalars.emplace_back(
-                std::make_unique<cudf::numeric_scalar<int64_t>>(
-                    value, true, stream, mr));
-            return tree.push(
-                cudf::ast::literal{*static_cast<cudf::numeric_scalar<int64_t>*>(
-                    scalars.back().get())});
-        }
+      auto addLiteral = [&](int64_t value) -> const cudf::ast::expression& {
+        variant velox_variant = VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
+            castInt64To, columnTypePtr->kind(), value);
+        const auto& literal = VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
+            makeScalarAndLiteral,
+            columnTypePtr->kind(),
+            columnTypePtr,
+            velox_variant,
+            scalars);
+        return tree.push(literal);
       };
 
       if (bigintRange->isSingleValue()) {
         // Equal comparison: column = value
-        auto const& literal = makeNumericLiteral(bigintRange->lower());
+        auto const& literal = addLiteral(bigintRange->lower());
         return tree.push(Operation{Op::EQUAL, columnRef, literal});
       } else {
         // Range comparison: column >= lower AND column <= upper
@@ -1039,14 +1028,14 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
 
         const cudf::ast::expression* lowerExpr = nullptr;
         if (!skipLowerBound) {
-          auto const& lowerLiteral = makeNumericLiteral(lower);
+          auto const& lowerLiteral = addLiteral(lower);
           lowerExpr =
               &tree.push(Operation{Op::GREATER_EQUAL, columnRef, lowerLiteral});
         }
 
         const cudf::ast::expression* upperExpr = nullptr;
         if (!skipUpperBound) {
-          auto const& upperLiteral = makeNumericLiteral(upper);
+          auto const& upperLiteral = addLiteral(upper);
           upperExpr =
               &tree.push(Operation{Op::LESS_EQUAL, columnRef, upperLiteral});
         }
