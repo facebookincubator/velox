@@ -1032,6 +1032,21 @@ If this behavior is undesirable, use <code class="xref py py-func docutils liter
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="merge">
+<span class="sig-name descname"><span class="pre">merge</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">SfmSketch</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">SfmSketch</span></span></span><a class="headerlink" href="#merge" title="Link to this definition">¶</a></dt>
+<dd><p>An aggregator function that returns a merged <code class="docutils literal notranslate"><span class="pre">SfmSketch</span></code> of the set union of
+individual <code class="docutils literal notranslate"><span class="pre">SfmSketch</span></code> objects, similar to <code class="docutils literal notranslate"><span class="pre">merge(HyperLogLog)</span></code>.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="p">::</span>
+</pre></div>
+</div>
+<blockquote>
+<div><p>SELECT year, cardinality(merge(sketch)) AS annual_distinct_count
+FROM monthly_sketches
+GROUP BY 1</p>
+</div></blockquote>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="merge_sfm">
 <span class="sig-name descname"><span class="pre">merge_sfm</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="pre">ARRAY[SfmSketch,</span> <span class="pre">...]</span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">SfmSketch</span></span></span><a class="headerlink" href="#merge_sfm" title="Link to this definition">¶</a></dt>
 <dd><p>A scalar function that returns a merged <code class="docutils literal notranslate"><span class="pre">SfmSketch</span></code> of the set union of an array of <code class="docutils literal notranslate"><span class="pre">SfmSketch</span></code> objects, similar to <code class="docutils literal notranslate"><span class="pre">merge_hll()</span></code>.</p>
@@ -1218,6 +1233,7 @@ In Journal of Computer and System Sciences, 31:182-209, 1985</p>
 <li><a class="reference internal" href="#noisy_empty_approx_set_sfm"><code class="docutils literal notranslate"><span class="pre">noisy_empty_approx_set_sfm()</span></code></a></li>
 <li><a class="reference internal" href="#noisy_approx_set_sfm_from_index_and_zeros"><code class="docutils literal notranslate"><span class="pre">noisy_approx_set_sfm_from_index_and_zeros()</span></code></a></li>
 <li><a class="reference internal" href="#cardinality"><code class="docutils literal notranslate"><span class="pre">cardinality()</span></code></a></li>
+<li><a class="reference internal" href="#merge"><code class="docutils literal notranslate"><span class="pre">merge()</span></code></a></li>
 <li><a class="reference internal" href="#merge_sfm"><code class="docutils literal notranslate"><span class="pre">merge_sfm()</span></code></a></li>
 </ul>
 </li>
