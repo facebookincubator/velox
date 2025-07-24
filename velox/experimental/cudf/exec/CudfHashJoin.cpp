@@ -23,7 +23,6 @@
 #include "velox/exec/Task.h"
 
 #include <cudf/copying.hpp>
-#include <cudf/join.hpp>
 #include <cudf/null_mask.hpp>
 #include <cudf/stream_compaction.hpp>
 
