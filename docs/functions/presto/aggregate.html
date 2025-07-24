@@ -1000,6 +1000,32 @@ which returns an empty (deterministic) <code class="docutils literal notranslate
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="noisy_approx_set_sfm_from_index_and_zeros">
+<span class="sig-name descname"><span class="pre">noisy_approx_set_sfm_from_index_and_zeros</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">col_index</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">col_zeros</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">epsilon</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">buckets</span></span></em><span class="optional">[</span>, <em class="sig-param"><span class="n"><span class="pre">precision</span></span></em><span class="optional">]</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">SfmSketch</span></span></span><a class="headerlink" href="#noisy_approx_set_sfm_from_index_and_zeros" title="Link to this definition">¶</a></dt>
+<dd><p>Returns an SFM sketch of the input values in <code class="docutils literal notranslate"><span class="pre">col_index</span></code> and <code class="docutils literal notranslate"><span class="pre">col_zeros</span></code>.</p>
+<p>This is similar to <a class="reference internal" href="#noisy_approx_set_sfm" title="noisy_approx_set_sfm"><code class="xref py py-func docutils literal notranslate"><span class="pre">noisy_approx_set_sfm()</span></code></a> except that function calculates a <code class="docutils literal notranslate"><span class="pre">xxhash64()</span></code> of <code class="docutils literal notranslate"><span class="pre">col</span></code>,
+and calculates the SFM PCSA bucket index and number of trailing zeros as described in
+<a class="reference internal" href="#flajoletmartin1985" id="id9"><span>[FlajoletMartin1985]</span></a>. In this function, the caller must explicitly calculate the hash bucket index
+and zeros themselves and pass them as arguments <code class="docutils literal notranslate"><span class="pre">col_index</span></code> and <code class="docutils literal notranslate"><span class="pre">col_zeros</span></code>.</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">col_index</span></code> (bigint) must be in the range <code class="docutils literal notranslate"><span class="pre">0..buckets-1</span></code>.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">col_zeros</span></code> (bigint) must be in the range <code class="docutils literal notranslate"><span class="pre">0..64</span></code>. If it exceeds <code class="docutils literal notranslate"><span class="pre">precision</span></code>, it
+is cropped to <code class="docutils literal notranslate"><span class="pre">precision-1</span></code>.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">epsilon</span></code> (double) is a positive number that controls the level of noise in
+the sketch, as described in <a class="reference internal" href="#hehir2023" id="id10"><span>[Hehir2023]</span></a>. Smaller values of epsilon correspond
+to noisier sketches.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">buckets</span></code> (int) is the number of buckets in the SFM PCSA sketch as described in <a class="reference internal" href="#hehir2023" id="id11"><span>[Hehir2023]</span></a>.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">precision</span></code> (int) defaults to 24.</p></li>
+</ul>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>Like  <a class="reference internal" href="#noisy_approx_set_sfm" title="noisy_approx_set_sfm"><code class="xref py py-func docutils literal notranslate"><span class="pre">noisy_approx_set_sfm()</span></code></a>, this function returns <code class="docutils literal notranslate"><span class="pre">NULL</span></code> when <code class="docutils literal notranslate"><span class="pre">col_index</span></code>
+or <code class="docutils literal notranslate"><span class="pre">col_zeros</span></code> is <code class="docutils literal notranslate"><span class="pre">NULL</span></code>.
+If this behavior is undesirable, use <code class="xref py py-func docutils literal notranslate"><span class="pre">coalesce()</span></code> with <a class="reference internal" href="#noisy_empty_approx_set_sfm" title="noisy_empty_approx_set_sfm"><code class="xref py py-func docutils literal notranslate"><span class="pre">noisy_empty_approx_set_sfm()</span></code></a>.</p>
+</div>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="cardinality">
 <span class="sig-name descname"><span class="pre">cardinality</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">SfmSketch</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#cardinality" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the estimated cardinality (distinct count) of an <code class="docutils literal notranslate"><span class="pre">SfmSketch</span></code> object.</p>
@@ -1030,41 +1056,41 @@ to keep in mind if using these functions for privacy-preserving purposes, includ
 return value noiselessly indicates the absence of data.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">GROUP</span> <span class="pre">BY</span></code> clauses used in combination with noisy aggregation functions reveal non-noisy
 information: the presence or absence of a group noiselessly indicates the presence or
-absence of data. See, e.g., <a class="reference internal" href="#wilkins2024" id="id9"><span>[Wilkins2024]</span></a>.</p></li>
+absence of data. See, e.g., <a class="reference internal" href="#wilkins2024" id="id12"><span>[Wilkins2024]</span></a>.</p></li>
 <li><p>Functions relying on floating-point noise may be susceptible to inference attacks such as
-those identified in <a class="reference internal" href="#mironov2012" id="id10"><span>[Mironov2012]</span></a> and <a class="reference internal" href="#casacuberta2022" id="id11"><span>[Casacuberta2022]</span></a>.</p></li>
+those identified in <a class="reference internal" href="#mironov2012" id="id13"><span>[Mironov2012]</span></a> and <a class="reference internal" href="#casacuberta2022" id="id14"><span>[Casacuberta2022]</span></a>.</p></li>
 </ul>
 </section>
 <section id="references">
 <h3>References<a class="headerlink" href="#references" title="Link to this heading">¶</a></h3>
 <div role="list" class="citation-list">
 <div class="citation" id="casacuberta2022" role="doc-biblioentry">
-<span class="label"><span class="fn-bracket">[</span><a role="doc-backlink" href="#id11">Casacuberta2022</a><span class="fn-bracket">]</span></span>
+<span class="label"><span class="fn-bracket">[</span><a role="doc-backlink" href="#id14">Casacuberta2022</a><span class="fn-bracket">]</span></span>
 <p>Casacuberta, S., Shoemate, M., Vadhan, S., &amp; Wagaman, C. (2022).
 <a class="reference external" href="https://arxiv.org/pdf/2207.10635">Widespread Underestimation of Sensitivity in Differentially Private Libraries and How to Fix It</a>.
 In Proceedings of the 2022 ACM SIGSAC Conference on Computer and Communications Security (pp. 471-484).</p>
 </div>
 <div class="citation" id="hehir2023" role="doc-biblioentry">
 <span class="label"><span class="fn-bracket">[</span>Hehir2023<span class="fn-bracket">]</span></span>
-<span class="backrefs">(<a role="doc-backlink" href="#id7">1</a>,<a role="doc-backlink" href="#id8">2</a>)</span>
+<span class="backrefs">(<a role="doc-backlink" href="#id7">1</a>,<a role="doc-backlink" href="#id8">2</a>,<a role="doc-backlink" href="#id10">3</a>,<a role="doc-backlink" href="#id11">4</a>)</span>
 <p>Hehir, J., Ting, D., &amp; Cormode, G. (2023).
 <a class="reference external" href="https://proceedings.mlr.press/v202/hehir23a/hehir23a.pdf">Sketch-Flip-Merge: Mergeable Sketches for Private Distinct Counting</a>.
 In Proceedings of the 40th International Conference on Machine Learning (Vol. 202).</p>
 </div>
 <div class="citation" id="mironov2012" role="doc-biblioentry">
-<span class="label"><span class="fn-bracket">[</span><a role="doc-backlink" href="#id10">Mironov2012</a><span class="fn-bracket">]</span></span>
+<span class="label"><span class="fn-bracket">[</span><a role="doc-backlink" href="#id13">Mironov2012</a><span class="fn-bracket">]</span></span>
 <p>Mironov, I. (2012).
 <a class="reference external" href="https://www.microsoft.com/en-us/research/wp-content/uploads/2012/10/lsbs.pdf">On significance of the least significant bits for differential privacy</a>.
 In Proceedings of the 2012 ACM Conference on Computer and Communications Security (pp. 650-661).</p>
 </div>
 <div class="citation" id="wilkins2024" role="doc-biblioentry">
-<span class="label"><span class="fn-bracket">[</span><a role="doc-backlink" href="#id9">Wilkins2024</a><span class="fn-bracket">]</span></span>
+<span class="label"><span class="fn-bracket">[</span><a role="doc-backlink" href="#id12">Wilkins2024</a><span class="fn-bracket">]</span></span>
 <p>Wilkins, A., Kifer, D., Zhang, D., &amp; Karrer, B. (2024).
 <a class="reference external" href="https://journalprivacyconfidentiality.org/index.php/jpc/article/view/823/755">Exact Privacy Analysis of the Gaussian Sparse Histogram Mechanism</a>.
 Journal of Privacy and Confidentiality, 14 (1).</p>
 </div>
 <div class="citation" id="flajoletmartin1985" role="doc-biblioentry">
-<span class="label"><span class="fn-bracket">[</span>FlajoletMartin1985<span class="fn-bracket">]</span></span>
+<span class="label"><span class="fn-bracket">[</span><a role="doc-backlink" href="#id9">FlajoletMartin1985</a><span class="fn-bracket">]</span></span>
 <p>Flajolet, P, Martin, G. N. (1985).
 <a class="reference external" href="https://algo.inria.fr/flajolet/Publications/src/FlMa85.pdf">Probabilistic Counting Algorithms for Data Base Applications</a>.
 In Journal of Computer and System Sciences, 31:182-209, 1985</p>
@@ -1190,6 +1216,7 @@ In Journal of Computer and System Sciences, 31:182-209, 1985</p>
 <li><a class="reference internal" href="#noisy_approx_set_sfm"><code class="docutils literal notranslate"><span class="pre">noisy_approx_set_sfm()</span></code></a></li>
 <li><a class="reference internal" href="#noisy_approx_distinct_sfm"><code class="docutils literal notranslate"><span class="pre">noisy_approx_distinct_sfm()</span></code></a></li>
 <li><a class="reference internal" href="#noisy_empty_approx_set_sfm"><code class="docutils literal notranslate"><span class="pre">noisy_empty_approx_set_sfm()</span></code></a></li>
+<li><a class="reference internal" href="#noisy_approx_set_sfm_from_index_and_zeros"><code class="docutils literal notranslate"><span class="pre">noisy_approx_set_sfm_from_index_and_zeros()</span></code></a></li>
 <li><a class="reference internal" href="#cardinality"><code class="docutils literal notranslate"><span class="pre">cardinality()</span></code></a></li>
 <li><a class="reference internal" href="#merge_sfm"><code class="docutils literal notranslate"><span class="pre">merge_sfm()</span></code></a></li>
 </ul>
