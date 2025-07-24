@@ -22,12 +22,14 @@
 #include <chrono>
 #include <cstdint>
 
+#include "connectors/hive/storage_adapters/abfs/RegisterAbfsFileSystem.h"
+
 using namespace facebook::velox::filesystems;
 using namespace facebook::velox;
 
 namespace {
 
-class MyDynamicAbfsSasTokenProvider : public AbfsSasTokenProvider {
+class MyDynamicAbfsSasTokenProvider : public SasTokenProvider {
  public:
   MyDynamicAbfsSasTokenProvider(int64_t expiration)
       : expirationSeconds_(expiration) {}
@@ -76,7 +78,7 @@ TEST(DynamicSasTokenClientProviderTest, dynamicSasToken) {
         {{"fs.azure.account.auth.type.account1.dfs.core.windows.net", "SAS"},
          {"fs.azure.sas.token.renew.period.for.streams", "1"}},
         false);
-    AzureClientProviderFactories::registerFactory(
+    registerAzureClientProviderFactory(
         account,
         [](const std::shared_ptr<AbfsPath>& path,
            const config::ConfigBase& config) {
@@ -117,7 +119,7 @@ TEST(DynamicSasTokenClientProviderTest, dynamicSasToken) {
         {{"fs.azure.account.auth.type.account2.dfs.core.windows.net", "SAS"},
          {"fs.azure.sas.token.renew.period.for.streams", "120"}},
         false);
-    AzureClientProviderFactories::registerFactory(
+    registerAzureClientProviderFactory(
         account,
         [](const std::shared_ptr<AbfsPath>& path,
            const config::ConfigBase& config) {

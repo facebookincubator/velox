@@ -80,7 +80,7 @@ class DynamicSasTokenDataLakeFileClient final : public AzureDataLakeFileClient {
  public:
   DynamicSasTokenDataLakeFileClient(
       const std::shared_ptr<AbfsPath>& abfsPath,
-      const std::shared_ptr<AbfsSasTokenProvider>& sasKeyGenerator,
+      const std::shared_ptr<SasTokenProvider>& sasKeyGenerator,
       int64_t sasTokenRenewPeriod)
       : abfsPath_(abfsPath),
         sasKeyGenerator_(sasKeyGenerator),
@@ -112,7 +112,7 @@ class DynamicSasTokenDataLakeFileClient final : public AzureDataLakeFileClient {
 
  private:
   std::shared_ptr<AbfsPath> abfsPath_;
-  std::shared_ptr<AbfsSasTokenProvider> sasKeyGenerator_;
+  std::shared_ptr<SasTokenProvider> sasKeyGenerator_;
   int64_t sasTokenRenewPeriod_;
 
   std::unique_ptr<DataLakeFileClient> writeClient_{nullptr};
@@ -151,7 +151,7 @@ class DynamicSasTokenBlobClient : public AzureBlobClient {
  public:
   DynamicSasTokenBlobClient(
       const std::shared_ptr<AbfsPath>& abfsPath,
-      const std::shared_ptr<AbfsSasTokenProvider>& sasTokenProvider,
+      const std::shared_ptr<SasTokenProvider>& sasTokenProvider,
       int64_t sasTokenRenewPeriod)
       : abfsPath_(abfsPath),
         sasTokenProvider_(sasTokenProvider),
@@ -173,7 +173,7 @@ class DynamicSasTokenBlobClient : public AzureBlobClient {
 
  private:
   std::shared_ptr<AbfsPath> abfsPath_;
-  std::shared_ptr<AbfsSasTokenProvider> sasTokenProvider_;
+  std::shared_ptr<SasTokenProvider> sasTokenProvider_;
   int64_t sasTokenRenewPeriod_;
 
   std::unique_ptr<Azure::Storage::Blobs::BlobClient> blobClient_{nullptr};
@@ -197,7 +197,7 @@ class DynamicSasTokenBlobClient : public AzureBlobClient {
 DynamicSasTokenClientProvider::DynamicSasTokenClientProvider(
     const std::shared_ptr<AbfsPath>& path,
     const config::ConfigBase& config,
-    const std::shared_ptr<AbfsSasTokenProvider>& sasTokenProvider)
+    const std::shared_ptr<SasTokenProvider>& sasTokenProvider)
     : AzureClientProvider(path), sasTokenProvider_(sasTokenProvider) {
   sasTokenRenewPeriod_ = config.get<int64_t>(
       kAzureSasTokenRenewPeriod, kDefaultSasTokenRenewPeriod);

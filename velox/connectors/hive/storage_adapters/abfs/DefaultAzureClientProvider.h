@@ -18,7 +18,9 @@
 
 #include <azure/identity/client_secret_credential.hpp>
 
-#include "velox/connectors/hive/storage_adapters/abfs/AzureClientProviderFactories.h"
+#include "velox/common/config/Config.h"
+#include "velox/connectors/hive/storage_adapters/abfs/AbfsConfig.h"
+#include "velox/connectors/hive/storage_adapters/abfs/AzureClientProvider.h"
 
 namespace facebook::velox::filesystems {
 

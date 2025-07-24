@@ -34,9 +34,9 @@ static const std::string kAbfsWriteOperation{"write"};
 /// Interface for providing SAS tokens for ABFS file system operations.
 /// Adapted from the Hadoop Azure implementation:
 /// org.apache.hadoop.fs.azurebfs.extensions.SASTokenProvider
-class AbfsSasTokenProvider {
+class SasTokenProvider {
  public:
-  virtual ~AbfsSasTokenProvider() = default;
+  virtual ~SasTokenProvider() = default;
 
   virtual std::string getSasToken(
       const std::string& fileSystem,
@@ -44,19 +44,24 @@ class AbfsSasTokenProvider {
       const std::string& operation) = 0;
 };
 
+/// Client provider that dynamically refreshes SAS tokens based on the
+/// expiration time of the token. A SasTokenProvider for retrieving SAS tokens
+/// must be provided to this class. Example for generating the SAS token can be
+/// found in:
+/// https://github.com/Azure/azure-sdk-for-cpp/blob/3d917e7c178f0a49b189395a907180084857cc70/sdk/storage/azure-storage-blobs/samples/blob_sas.cpp
 class DynamicSasTokenClientProvider : public AzureClientProvider {
  public:
   DynamicSasTokenClientProvider(
       const std::shared_ptr<AbfsPath>& path,
       const config::ConfigBase& config,
-      const std::shared_ptr<AbfsSasTokenProvider>& sasTokenProvider);
+      const std::shared_ptr<SasTokenProvider>& sasTokenProvider);
 
   std::unique_ptr<AzureBlobClient> getBlobClient() override;
 
   std::unique_ptr<AzureDataLakeFileClient> getDataLakeFileClient() override;
 
  private:
-  std::shared_ptr<AbfsSasTokenProvider> sasTokenProvider_;
+  std::shared_ptr<SasTokenProvider> sasTokenProvider_;
   int64_t sasTokenRenewPeriod_;
 };
 

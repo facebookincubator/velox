@@ -27,7 +27,11 @@
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsConfig.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsFileSystem.h"
 
+#include <duckdb/common/unique_ptr.hpp>
+
+#include "connectors/hive/storage_adapters/abfs/AzureClientProviderFactories.h"
 #include "connectors/hive/storage_adapters/abfs/DefaultAzureClientProvider.h"
+#include "connectors/hive/storage_adapters/abfs/RegisterAbfsFileSystem.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsReadFile.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsWriteFile.h"
 #include "velox/connectors/hive/storage_adapters/abfs/tests/AzuriteServer.h"
@@ -40,7 +44,27 @@ using namespace facebook::velox;
 using namespace facebook::velox::filesystems;
 using ::facebook::velox::common::Region;
 
+namespace {
+
 constexpr int kOneMB = 1 << 20;
+
+class DummyAzureClientProvider final : public AzureClientProvider {
+ public:
+  DummyAzureClientProvider(
+      const std::shared_ptr<AbfsPath>& abfsPath,
+      const config::ConfigBase& config)
+      : AzureClientProvider(abfsPath) {}
+
+  std::unique_ptr<AzureBlobClient> getBlobClient() override {
+    VELOX_FAIL("Not implemented.");
+  }
+
+  std::unique_ptr<AzureDataLakeFileClient> getDataLakeFileClient() override {
+    VELOX_FAIL("Not implemented.");
+  }
+};
+
+} // namespace
 
 class AbfsFileSystemTest : public testing::Test {
  public:
@@ -290,4 +314,27 @@ TEST_F(AbfsFileSystemTest, registerAbfsFileSink) {
     auto abfsWriteFile = dynamic_cast<AbfsWriteFile*>(writeFile.get());
     ASSERT_TRUE(abfsWriteFile != nullptr);
   }
+}
+
+TEST_F(AbfsFileSystemTest, registerAzureClientFactory) {
+  static const std::string path = "abfs://test@test.dfs.core.windows.net/test";
+  const auto abfsPath = std::make_shared<AbfsPath>(path);
+
+  registerAzureClientProviderFactory(
+      "test",
+      [](const std::shared_ptr<AbfsPath>& path,
+         const config::ConfigBase& config)
+          -> std::unique_ptr<AzureClientProvider> {
+        return std::make_unique<DummyAzureClientProvider>(path, config);
+      });
+
+  ASSERT_TRUE(AzureClientProviderFactories::clientFactoryRegistered("test"));
+  VELOX_ASSERT_THROW(
+      AzureClientProviderFactories::getBlobClient(
+          abfsPath, config::ConfigBase({})),
+      "Not implemented.");
+  VELOX_ASSERT_THROW(
+      AzureClientProviderFactories::getDataLakeFileClient(
+          abfsPath, config::ConfigBase({})),
+      "Not implemented.");
 }

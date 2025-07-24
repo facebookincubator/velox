@@ -16,26 +16,25 @@
 
 #pragma once
 
-#include <functional>
-#include <memory>
-#include <string>
+#include "velox/connectors/hive/storage_adapters/abfs/AzureBlobClient.h"
+#include "velox/connectors/hive/storage_adapters/abfs/AzureDataLakeFileClient.h"
 
 namespace facebook::velox::filesystems {
 
-class AzureClientProvider;
-class AbfsPath;
+/// Provider interface for creating Azure Blob and Data Lake clients.
+class AzureClientProvider {
+ public:
+  virtual ~AzureClientProvider() = default;
 
-using AzureClientProviderFactory =
-    std::function<std::unique_ptr<AzureClientProvider>(
-        const std::shared_ptr<AbfsPath>& path,
-        const config::ConfigBase& config)>;
+  explicit AzureClientProvider(const std::shared_ptr<AbfsPath>& path)
+      : abfsPath_(path) {}
 
-// Register the ABFS filesystem.
-void registerAbfsFileSystem();
+  virtual std::unique_ptr<AzureBlobClient> getBlobClient() = 0;
 
-// Register a factory for creating AzureClientProvider instances.
-void registerAzureClientProviderFactory(
-    const std::string& account,
-    const AzureClientProviderFactory& factory);
+  virtual std::unique_ptr<AzureDataLakeFileClient> getDataLakeFileClient() = 0;
+
+ protected:
+  std::shared_ptr<AbfsPath> abfsPath_;
+};
 
 } // namespace facebook::velox::filesystems

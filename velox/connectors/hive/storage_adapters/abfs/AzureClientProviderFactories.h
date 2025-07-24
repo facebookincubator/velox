@@ -19,6 +19,7 @@
 #include "velox/common/config/Config.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsConfig.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AzureBlobClient.h"
+#include "velox/connectors/hive/storage_adapters/abfs/AzureClientProvider.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AzureDataLakeFileClient.h"
 
 #include <functional>
@@ -27,26 +28,15 @@
 
 namespace facebook::velox::filesystems {
 
-class AzureClientProvider {
- public:
-  virtual ~AzureClientProvider() = default;
-
-  explicit AzureClientProvider(const std::shared_ptr<AbfsPath>& path)
-      : abfsPath_(path) {}
-
-  virtual std::unique_ptr<AzureBlobClient> getBlobClient() = 0;
-
-  virtual std::unique_ptr<AzureDataLakeFileClient> getDataLakeFileClient() = 0;
-
- protected:
-  std::shared_ptr<AbfsPath> abfsPath_;
-};
-
 using AzureClientProviderFactory =
     std::function<std::unique_ptr<AzureClientProvider>(
         const std::shared_ptr<AbfsPath>& path,
         const config::ConfigBase& config)>;
 
+/// Handles the registration and retrieval of Azure client providers.
+/// If no AzureClientProvider implementation is registered for a specific
+/// account, DefaultAzureClientProviderFactory is used to create the client
+/// based on the configuration provided in AbfsConfig.h.
 class AzureClientProviderFactories {
  public:
   static void registerFactory(
