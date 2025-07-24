@@ -186,7 +186,8 @@ class CastExpr : public SpecialForm {
       vector_size_t row,
       EvalCtx& context,
       const SimpleVector<typename TypeTraits<FromKind>::NativeType>* input,
-      FlatVector<typename TypeTraits<ToKind>::NativeType>* result);
+      FlatVector<typename TypeTraits<ToKind>::NativeType>* result,
+      const TypePtr& toType);
 
   VectorPtr castFromDate(
       const SelectivityVector& rows,
@@ -280,14 +281,16 @@ class CastExpr : public SpecialForm {
       const SelectivityVector& rows,
       exec::EvalCtx& context,
       const BaseVector& input,
-      VectorPtr& result);
+      VectorPtr& result,
+      const TypePtr& toType);
 
   template <typename FromNativeType>
   VectorPtr applyDecimalToVarcharCast(
       const SelectivityVector& rows,
       const BaseVector& input,
       exec::EvalCtx& context,
-      const TypePtr& fromType);
+      const TypePtr& fromType,
+      const TypePtr& toType);
 
   template <TypeKind ToKind>
   void applyCastPrimitivesDispatch(
