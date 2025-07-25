@@ -201,6 +201,7 @@ int main(int argc, char** argv) {
       "st_ymax",
       "st_ymin",
       "flatten_geometry_collections",
+      "expand_envelope",
   };
   size_t initialSeed = FLAGS_seed == 0 ? std::time(nullptr) : FLAGS_seed;
 

@@ -166,6 +166,19 @@ Spatial Operations
     Returns the bounding rectangular polygon of a ``geometry``. Empty input will
     result in empty output.
 
+.. function:: ST_ExteriorRing(geometry: Geometry) -> output: Geometry
+
+    Returns a LineString representing the exterior ring of the input polygon.
+    Empty or null inputs result in null output. Non-polygon types will return
+    an error.
+
+.. function:: expand_envelope(geometry: Geometry, distance: double) -> output: Geometry
+
+    Returns the bounding rectangular polygon of a geometry, expanded by a distance.
+    Empty geometries will return an empty polygon. Negative or NaN distances will
+    return an error. Positive infinity distances may lead to undefined results.
+
+
 Accessors
 ---------
 .. function:: ST_IsValid(geometry: Geometry) -> valid: bool
@@ -374,10 +387,6 @@ Accessors
 .. function:: ST_Dimension(geometry: Geometry) -> output: tinyint
 
     Returns the inherent dimension of this geometry object, which must be less than or equal to the coordinate dimension.
-
-.. function:: ST_ExteriorRing(geometry: Geometry) -> output: Geometry
-
-    Returns a line string representing the exterior ring of the input polygon.
 
 .. function:: simplify_geometry(geometry: Geometry, tolerance: double) -> output: Geometry
 
