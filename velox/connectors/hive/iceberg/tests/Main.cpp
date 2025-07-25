@@ -13,15 +13,17 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#pragma once
 
-#include "velox/vector/ComplexVector.h"
+#include "velox/common/process/ThreadDebugInfo.h"
 
-namespace facebook::velox::connector::hive {
+#include <folly/init/Init.h>
+#include <gtest/gtest.h>
 
-std::vector<std::pair<std::string, std::string>> extractPartitionKeyValues(
-    const RowVectorPtr& partitionsVector,
-    vector_size_t row,
-    const std::string& nullValueName = "");
-
-} // namespace facebook::velox::connector::hive
+// This main is needed for some tests on linux.
+int main(int argc, char** argv) {
+  testing::InitGoogleTest(&argc, argv);
+  // Signal handler required for ThreadDebugInfoTest
+  facebook::velox::process::addDefaultFatalSignalHandler();
+  folly::Init init(&argc, &argv, false);
+  return RUN_ALL_TESTS();
+}
