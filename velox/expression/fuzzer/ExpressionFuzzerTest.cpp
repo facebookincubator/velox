@@ -160,6 +160,11 @@ int main(int argc, char** argv) {
       "st_isempty",
       "st_length",
       "st_pointn",
+      "st_points",
+      "st_interiorrings",
+      "st_geometries,"
+      "geometry_nearest_points",
+      "st_envelopeaspts",
       "st_isring",
       "st_relate",
       "st_contains",
@@ -195,6 +200,7 @@ int main(int argc, char** argv) {
       "st_xmin",
       "st_ymax",
       "st_ymin",
+      "flatten_geometry_collections",
   };
   size_t initialSeed = FLAGS_seed == 0 ? std::time(nullptr) : FLAGS_seed;
 
