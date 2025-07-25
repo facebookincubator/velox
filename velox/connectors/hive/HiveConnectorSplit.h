@@ -17,6 +17,7 @@
 
 #include <optional>
 #include <unordered_map>
+
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/hive/FileProperties.h"
 #include "velox/connectors/hive/TableHandle.h"
