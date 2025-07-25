@@ -16,30 +16,21 @@
 
 #pragma once
 
-#include <functional>
-#include <memory>
-#include <string>
-
-namespace facebook::velox::config {
-class ConfigBase;
-}
+#include <azure/storage/blobs/blob_client.hpp>
 
 namespace facebook::velox::filesystems {
 
-class AzureClientProvider;
-class AbfsPath;
+class AzureBlobClient {
+ public:
+  virtual ~AzureBlobClient() {}
 
-using AzureClientProviderFactory =
-    std::function<std::unique_ptr<AzureClientProvider>(
-        const std::shared_ptr<AbfsPath>& path,
-        const config::ConfigBase& config)>;
+  virtual Azure::Response<Azure::Storage::Blobs::Models::BlobProperties>
+  getProperties() = 0;
 
-// Register the ABFS filesystem.
-void registerAbfsFileSystem();
+  virtual Azure::Response<Azure::Storage::Blobs::Models::DownloadBlobResult>
+  download(const Azure::Storage::Blobs::DownloadBlobOptions& options) = 0;
 
-// Register a factory for creating AzureClientProvider instances.
-void registerAzureClientProviderFactory(
-    const std::string& account,
-    const AzureClientProviderFactory& factory);
+  virtual std::string getUrl() = 0;
+};
 
 } // namespace facebook::velox::filesystems
