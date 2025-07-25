@@ -1067,6 +1067,96 @@ PlanNodePtr ProjectNode::create(const folly::dynamic& obj, void* context) {
       std::move(source));
 }
 
+namespace {
+// makes a list of all names for use in the ProjectNode.
+std::vector<std::string> allNames(
+    const std::vector<std::string>& names,
+    const std::vector<std::string>& moreNames) {
+  auto result = names;
+  result.insert(result.end(), moreNames.begin(), moreNames.end());
+  return result;
+}
+
+// Flattens out projection exprs and adds dummy  exprs for noLoadIdentities.
+// Used to fill in ProjectNode members for use in the summary functions.
+std::vector<core::TypedExprPtr> flattenExprs(
+    const std::vector<std::vector<core::TypedExprPtr>>& exprs,
+    const std::vector<std::string>& moreNames,
+    const core::PlanNodePtr& input) {
+  std::vector<core::TypedExprPtr> result;
+  for (auto& group : exprs) {
+    result.insert(result.end(), group.begin(), group.end());
+  }
+  auto sourceType = input->outputType();
+  for (auto& name : moreNames) {
+    auto idx = sourceType->getChildIdx(name);
+    result.push_back(std::make_shared<core::FieldAccessTypedExpr>(
+        sourceType->childAt(idx), name));
+  }
+  return result;
+}
+} // namespace
+
+ParallelProjectNode::ParallelProjectNode(
+    const core::PlanNodeId& id,
+    std::vector<std::string> names,
+    std::vector<std::vector<core::TypedExprPtr>> exprs,
+    std::vector<std::string> noLoadIdentities,
+    core::PlanNodePtr input)
+    : AbstractProjectNode(
+          id,
+          allNames(names, noLoadIdentities),
+          flattenExprs(exprs, noLoadIdentities, input),
+          input),
+      exprNames_(std::move(names)),
+      exprs_(std::move(exprs)),
+      noLoadIdentities_(std::move(noLoadIdentities)) {}
+
+void ParallelProjectNode::addDetails(std::stringstream& stream) const {
+  AbstractProjectNode::addDetails(stream);
+  stream << " Parallel expr groups: ";
+  int32_t start = 0;
+  for (auto i = 0; i < exprs_.size(); ++i) {
+    stream << fmt::format("[{}-{}]", start, start + exprs_[i].size() - 1)
+           << (i < exprs_.size() - 1 ? ", " : "");
+    start += exprs_[i].size();
+  }
+  stream << std::endl;
+}
+
+folly::dynamic ParallelProjectNode::serialize() const {
+  auto obj = PlanNode::serialize();
+  obj["names"] = ISerializable::serialize(exprNames_);
+  obj["projections"] = ISerializable::serialize(exprs_);
+  obj["noLoadIdentities"] = ISerializable::serialize(noLoadIdentities_);
+  return obj;
+}
+
+void ParallelProjectNode::accept(
+    const PlanNodeVisitor& visitor,
+    PlanNodeVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
+
+// static
+PlanNodePtr ParallelProjectNode::create(
+    const folly::dynamic& obj,
+    void* context) {
+  auto source = deserializeSingleSource(obj, context);
+
+  auto names = deserializeStrings(obj["names"]);
+  auto projections =
+      ISerializable::deserialize<std::vector<std::vector<ITypedExpr>>>(
+          obj["projections"], context);
+  auto noLoadIdentities = deserializeStrings(obj["noLoadIdentities"]);
+  return std::make_shared<ParallelProjectNode>(
+      deserializePlanNodeId(obj),
+      std::move(names),
+      std::move(projections),
+      std::move(noLoadIdentities),
+      std::move(source));
+}
+
 const std::vector<PlanNodePtr>& TableScanNode::sources() const {
   return kEmptySources;
 }
@@ -3025,6 +3115,7 @@ void PlanNode::registerSerDe() {
   registry.Register("OrderByNode", OrderByNode::create);
   registry.Register("PartitionedOutputNode", PartitionedOutputNode::create);
   registry.Register("ProjectNode", ProjectNode::create);
+  registry.Register("ParallelProjectNode", ParallelProjectNode::create);
   registry.Register("RowNumberNode", RowNumberNode::create);
   registry.Register("TableScanNode", TableScanNode::create);
   registry.Register("TableWriteNode", TableWriteNode::create);
