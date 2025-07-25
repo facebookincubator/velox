@@ -2630,3 +2630,47 @@ TEST_F(GeometryFunctionsTest, testStGeometries) {
   ASSERT_TRUE(emptyGeomReturnsNull.has_value());
   ASSERT_TRUE(emptyGeomReturnsNull.value());
 }
+
+TEST_F(GeometryFunctionsTest, testFlattenGeometryCollections) {
+  const auto testFlattenGeometryCollectionsFunc = [&](const std::optional<
+                                                          std::string>& wkt,
+                                                      const std::optional<
+                                                          std::vector<
+                                                              std::string>>&
+                                                          expected) {
+    std::optional<std::string> result = evaluateOnce<std::string>(
+        "ARRAY_JOIN(transform(flatten_geometry_collections(ST_GeometryFromText(c0)), x -> ST_AsText(x)), ':')",
+        wkt);
+
+    if (expected.has_value()) {
+      const std::string& resultString = result.value();
+      const std::vector<std::string>& expectedVector = expected.value();
+      std::vector<std::string> resultVector;
+      folly::split(":", resultString, resultVector);
+
+      ASSERT_EQ(expectedVector.size(), resultVector.size());
+      ASSERT_EQ(expectedVector, resultVector);
+    } else {
+      ASSERT_FALSE(result.has_value());
+    }
+  };
+
+  testFlattenGeometryCollectionsFunc("POINT (1 5)", {{"POINT (1 5)"}});
+  testFlattenGeometryCollectionsFunc(
+      "MULTIPOINT ((0 0), (1 1))", {{"MULTIPOINT (0 0, 1 1)"}});
+  testFlattenGeometryCollectionsFunc("GEOMETRYCOLLECTION EMPTY", {{""}});
+  testFlattenGeometryCollectionsFunc(
+      "GEOMETRYCOLLECTION (POINT EMPTY)", {{"POINT EMPTY"}});
+  testFlattenGeometryCollectionsFunc(
+      "GEOMETRYCOLLECTION (POINT (0 0))", {{"POINT (0 0)"}});
+  testFlattenGeometryCollectionsFunc(
+      "GEOMETRYCOLLECTION (POINT (0 0), GEOMETRYCOLLECTION (POINT (1 1)))",
+      {{"POINT (0 0)", "POINT (1 1)"}});
+
+  std::optional<std::string> wkt = std::nullopt;
+  std::optional<bool> expectNullResult = evaluateOnce<bool>(
+      "flatten_geometry_collections(ST_GeometryFromText(c0)) IS NULL", wkt);
+
+  ASSERT_TRUE(expectNullResult.has_value());
+  ASSERT_TRUE(expectNullResult.value());
+}
