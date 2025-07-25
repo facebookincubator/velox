@@ -125,6 +125,17 @@ void registerAccessors(const std::string& prefix) {
       {{prefix + "ST_ExteriorRing"}});
   registerFunction<StEnvelopeFunction, Geometry, Geometry>(
       {{prefix + "ST_Envelope"}});
+  registerFunction<StBufferFunction, Geometry, Geometry, double>(
+      {{prefix + "ST_Buffer"}});
+  registerFunction<LineLocatePointFunction, double, Geometry, Geometry>(
+      {{prefix + "line_locate_point"}});
+  registerFunction<LineInterpolatePointFunction, Geometry, Geometry, double>(
+      {{prefix + "line_interpolate_point"}});
+
+  velox::exec::registerVectorFunction(
+      prefix + "ST_CoordDim",
+      StCoordDimFunction::signatures(),
+      std::make_unique<StCoordDimFunction>());
 }
 
 } // namespace

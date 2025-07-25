@@ -22,6 +22,7 @@
 #include <geos/io/WKBWriter.h>
 #include <geos/io/WKTReader.h>
 #include <geos/io/WKTWriter.h>
+#include <geos/linearref/LengthIndexedLine.h>
 #include <geos/simplify/TopologyPreservingSimplifier.h>
 #include <geos/util/AssertionFailedException.h>
 #include <geos/util/UnsupportedOperationException.h>
@@ -32,6 +33,7 @@
 #include "velox/functions/prestosql/geospatial/GeometrySerde.h"
 #include "velox/functions/prestosql/geospatial/GeometryUtils.h"
 #include "velox/functions/prestosql/types/GeometryType.h"
+#include "velox/type/Variant.h"
 
 namespace facebook::velox::functions {
 
@@ -1137,6 +1139,27 @@ struct StConvexHullFunction {
     return Status::OK();
   }
 };
+class StCoordDimFunction : public facebook::velox::exec::VectorFunction {
+ public:
+  void apply(
+      const facebook::velox::SelectivityVector& rows,
+      std::vector<facebook::velox::VectorPtr>& /*args*/,
+      const std::shared_ptr<const facebook::velox::Type>& outputType,
+      facebook::velox::exec::EvalCtx& context,
+      facebook::velox::VectorPtr& result) const override {
+    // Create a constant vector of value 2, with size equal to the number of
+    // rows
+    result = facebook::velox::BaseVector::createConstant(
+        outputType, 2, rows.size(), context.pool());
+  }
+  static std::vector<std::shared_ptr<facebook::velox::exec::FunctionSignature>>
+  signatures() {
+    return {facebook::velox::exec::FunctionSignatureBuilder()
+                .returnType("integer")
+                .argumentType("geometry")
+                .build()};
+  }
+};
 
 template <typename T>
 struct StDimensionFunction {
@@ -1215,6 +1238,118 @@ struct StEnvelopeFunction {
     geospatial::GeometrySerializer::serialize(*env, result);
 
     return Status::OK();
+  }
+
+ private:
+  geos::geom::GeometryFactory::Ptr factory_;
+};
+
+template <typename T>
+struct StBufferFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<Geometry>& result,
+      const arg_type<Geometry>& geometry,
+      const arg_type<double>& distance) {
+    if (distance < 0) {
+      VELOX_USER_FAIL(fmt::format(
+          "Provided distance must not be negative. Provided distance: {}",
+          distance));
+    }
+    if (distance == 0) {
+      result = geometry;
+      return true;
+    }
+
+    std::unique_ptr<geos::geom::Geometry> geosGeometry =
+        geospatial::GeometryDeserializer::deserialize(geometry);
+    if (geosGeometry->isEmpty()) {
+      return false;
+    }
+    geospatial::GeometrySerializer::serialize(
+        *(geosGeometry->buffer(distance)), result);
+    return true;
+  }
+};
+
+template <typename T>
+struct LineLocatePointFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<double>& result,
+      const arg_type<Geometry>& inputLine,
+      const arg_type<Geometry>& inputPoint) {
+    auto line = geospatial::GeometryDeserializer::deserialize(inputLine);
+    auto point = geospatial::GeometryDeserializer::deserialize(inputPoint);
+
+    if (line->isEmpty() || point->isEmpty()) {
+      return false;
+    }
+
+    auto lineType = line->getGeometryTypeId();
+    if (lineType != geos::geom::GeometryTypeId::GEOS_LINESTRING &&
+        lineType != geos::geom::GeometryTypeId::GEOS_MULTILINESTRING) {
+      VELOX_USER_FAIL(fmt::format(
+          "First argument to line_locate_point must be a LineString or a MultiLineString. Got: {}",
+          line->getGeometryType()));
+    }
+
+    auto pointType = point->getGeometryTypeId();
+    if (pointType != geos::geom::GeometryTypeId::GEOS_POINT) {
+      VELOX_USER_FAIL(fmt::format(
+          "Second argument to line_locate_point must be a Point. Got: {}",
+          point->getGeometryType()));
+    }
+
+    result = geos::linearref::LengthIndexedLine(line.get())
+                 .indexOf(*(point->getCoordinate())) /
+        line->getLength();
+
+    return true;
+  }
+};
+
+template <typename T>
+struct LineInterpolatePointFunction {
+  LineInterpolatePointFunction() {
+    factory_ = geos::geom::GeometryFactory::create();
+  }
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE Status call(
+      out_type<Geometry>& result,
+      const arg_type<Geometry>& inputLine,
+      const arg_type<double>& fraction) {
+    if (!(0.0 <= fraction && fraction <= 1.0)) {
+      return Status::UserError(fmt::format(
+          "line_interpolate_point: Fraction must be between 0 and 1, but is {}",
+          fraction));
+    }
+    auto line = geospatial::GeometryDeserializer::deserialize(inputLine);
+    Status validate = Status::OK();
+    validate = geospatial::validateType(
+        *line,
+        {geos::geom::GeometryTypeId::GEOS_LINESTRING},
+        "line_interpolate_point");
+
+    if (!validate.ok()) {
+      return validate;
+    }
+
+    if (line->isEmpty()) {
+      geospatial::GeometrySerializer::serialize(
+          *(factory_->createPoint()), result);
+    }
+
+    auto coordinate = geos::linearref::LengthIndexedLine(line.get())
+                          .extractPoint(fraction * line->getLength());
+
+    auto resultPoint = factory_->createPoint(coordinate);
+    geospatial::GeometrySerializer::serialize(*resultPoint, result);
+
+    return validate;
   }
 
  private:

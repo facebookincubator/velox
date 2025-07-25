@@ -316,13 +316,26 @@ Accessors
 
     Returns the minimum convex geometry that encloses all input geometries.
 
+.. function:: ST_CoordDim(geometry: Geometry) -> output: integer
+
+    Return the coordinate dimension of the geometry.
+
 .. function:: ST_Dimension(geometry: Geometry) -> output: tinyint
 
-    Returns the inherent dimension of this geometry object, which must be less than or equal to the coordinate dimension.
+    Returns the inherent dimension of this geometry object, which
+    must be less than or equal to the coordinate dimension.
 
 .. function:: ST_ExteriorRing(geometry: Geometry) -> output: Geometry
 
     Returns a line string representing the exterior ring of the input polygon.
+
+.. function:: ST_Buffer(geometry: Geometry, distance: double) -> output: Geometry
+
+    Returns the geometry that represents all points whose distance from the
+    specified ``geometry`` is less than or equal to the specified ``distance``.
+    If the points of the ``geometry`` are extremely close together
+    (delta < 1e-8), this might return an empty geometry. Empty inputs return
+    null.
 
 .. function:: simplify_geometry(geometry: Geometry, tolerance: double) -> output: Geometry
 
@@ -331,6 +344,21 @@ Accessors
     particular) that are invalid. Tolerance must be a non-negative finite value.
     Using tolerance of 0 will return the original geometry.  Empty geometries
     will also be returned as-is.
+
+.. function:: line_locate_point(linestring: Geometry, point: Geometry) -> output: double
+
+    Returns a float between 0 and 1 representing the location of the closest
+    point on the LineString to the given Point, as a fraction of total 2d line length.
+
+    Returns null if a LineString or a Point is empty or null.
+
+.. function:: line_interpolate_point(linestring: Geometry, fraction: double) -> output: geometry
+
+    Returns the Point on the LineString at a fractional distance given by
+    the double argument. Throws an exception if the distance is not between 0 and 1.
+
+    Returns an empty Point if the LineString is empty.
+    Returns null if either the LineString or double is null.
 
 Bing Tile Functions
 -------------------
