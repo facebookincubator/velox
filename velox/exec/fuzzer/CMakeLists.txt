@@ -158,17 +158,17 @@ target_link_libraries(
   velox_functions_prestosql
   velox_aggregates)
 
-add_library(velox_cache_fuzzer_lib CacheFuzzer.cpp)
-
 # Cache Fuzzer
-add_executable(velox_cache_fuzzer CacheFuzzerRunner.cpp)
-
-target_link_libraries(
-  velox_cache_fuzzer velox_cache_fuzzer_lib velox_fuzzer_util)
+add_library(velox_cache_fuzzer_lib CacheFuzzer.cpp)
 
 target_link_libraries(
   velox_cache_fuzzer_lib velox_dwio_common velox_temp_path
   velox_vector_test_lib)
+
+add_executable(velox_cache_fuzzer CacheFuzzerRunner.cpp)
+
+target_link_libraries(
+  velox_cache_fuzzer velox_cache_fuzzer_lib velox_fuzzer_util)
 
 # Exchange Fuzzer
 add_executable(velox_exchange_fuzzer ExchangeFuzzer.cpp)
@@ -178,6 +178,14 @@ target_link_libraries(
   velox_exec_test_lib
   velox_aggregates
   velox_vector_test_lib
+  velox_vector_fuzzer)
+
+# Table Evolution Fuzzer
+add_executable(velox_table_evolution_fuzzer TableEvolutionFuzzer.cpp
+                                            TableEvolutionFuzzerRunner.cpp)
+
+target_link_libraries(
+  velox_table_evolution_fuzzer velox_exec_test_lib velox_temp_path
   velox_vector_fuzzer)
 
 if(${VELOX_BUILD_TESTING})
