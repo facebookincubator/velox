@@ -13,14 +13,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
-#pragma once
+#include "velox/dwio/parquet/crypto/CryptoFactory.h"
 
 namespace facebook::velox::parquet {
 
-void registerParquetReaderFactory();
-void registerParquetReaderFactory(bool clacEnabled);
+std::unique_ptr<CryptoFactory> CryptoFactory::instance_ = nullptr;
 
-void unregisterParquetReaderFactory();
-
-} // namespace facebook::velox::parquet
+}

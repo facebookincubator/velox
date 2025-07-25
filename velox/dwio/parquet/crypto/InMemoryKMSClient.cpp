@@ -13,14 +13,25 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
-#pragma once
+#include "velox/dwio/parquet/crypto/InMemoryKMSClient.h"
+#include "velox/dwio/parquet/crypto/Exception.h"
 
 namespace facebook::velox::parquet {
 
-void registerParquetReaderFactory();
-void registerParquetReaderFactory(bool clacEnabled);
+std::string InMemoryKMSClient::getKey(
+    const std::string& keyMetadata,
+    const std::string& doAs) {
+  auto it = keyMap_.find(keyMetadata);
+  if (it != keyMap_.end()) {
+    return it->second;
+  }
+  throw CryptoException("[CLAC] http status code 403");
+}
 
-void unregisterParquetReaderFactory();
+void InMemoryKMSClient::putKey(
+    const std::string& keyMetadata,
+    const std::string& key) {
+  keyMap_[keyMetadata] = key;
+}
 
 } // namespace facebook::velox::parquet
