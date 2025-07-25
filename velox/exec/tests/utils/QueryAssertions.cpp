@@ -434,7 +434,7 @@ std::vector<MaterializedRow> materialize(
       } else if (typeKind == TypeKind::ROW) {
         row.push_back(rowVariantAt(dataChunk->GetValue(j, i), type));
       } else if (type->isDecimal()) {
-        row.push_back(duckdb::decimalVariant(dataChunk->GetValue(j, i)));
+        row.push_back(duckdb::decimalVariant(dataChunk->GetValue(j, i), type));
       } else if (type->isIntervalDayTime()) {
         auto value = variant(::duckdb::Interval::GetMicro(
             dataChunk->GetValue(j, i).GetValue<::duckdb::interval_t>()));

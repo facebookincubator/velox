@@ -65,8 +65,9 @@ Variant duckValueToVariant(const ::duckdb::Value& val);
 // To avoid this, this method uses the duckdb::Value::GetUnsafeValue<int>()
 // method.
 // @param val duckdb decimal value.
+// @param type decimal type, if set, can convert varchar value to decimal.
 // @return decimal Variant.
-Variant decimalVariant(const ::duckdb::Value& val);
+Variant decimalVariant(const ::duckdb::Value& val, TypePtr type = nullptr);
 
 // value conversion routines
 template <class T>
