@@ -206,6 +206,32 @@ Accessors
    If the given index is less than 1 or greater than the total number of elements
    in the collection, returns NULL.
 
+.. function:: ST_Points(geometry: Geometry) -> points: array(geometry)
+
+   Returns an array of points in a geometry. Empty or null inputs
+   return null.
+
+.. function:: ST_NumPoints(geometry: Geometry) -> points: integer
+
+   Returns the number of points in a geometry. This is an extension
+   to the SQL/MM ``ST_NumPoints`` function which only applies to
+   point and linestring.
+
+.. function:: geometry_nearest_points(geometry1: Geometry, geometry2: Geometry) -> points: array(geometry)
+
+   Returns the points on each geometry nearest the other. If either geometry
+   is empty, return null. Otherwise, return an array of two Points that have
+   the minimum distance of any two points on the geometries. The first Point
+   will be from the first Geometry argument, the second from the second Geometry
+   argument. If there are multiple pairs with the minimum distance, one pair
+   is chosen arbitrarily.
+
+.. function:: ST_EnvelopeAsPts(geometry: Geometry) -> points: array(geometry)
+
+   Returns an array of two points: the lower left and upper right corners
+   of the bounding rectangular polygon of a geometry. Empty or null inputs
+   return null.
+
 .. function:: geometry_invalid_reason(geometry: Geometry) -> reason: varchar
 
     If ``geometry`` is not valid or not simple, return a description of the
