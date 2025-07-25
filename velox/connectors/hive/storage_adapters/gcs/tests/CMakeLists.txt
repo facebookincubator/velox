@@ -18,6 +18,7 @@ target_link_libraries(
   velox_gcs_file_test
   velox_core
   velox_dwio_common_exception
+  velox_dwio_registered_readers
   velox_exec
   velox_exec_test_lib
   velox_file

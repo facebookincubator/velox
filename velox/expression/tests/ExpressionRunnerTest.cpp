@@ -21,7 +21,7 @@
 #include "velox/common/base/Fs.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/connectors/hive/HiveConnector.h"
-#include "velox/dwio/dwrf/RegisterDwrfWriter.h"
+#include "velox/dwio/RegisterWriters.h"
 #include "velox/exec/fuzzer/FuzzerUtil.h"
 #include "velox/exec/fuzzer/PrestoQueryRunner.h"
 #include "velox/exec/fuzzer/ReferenceQueryRunner.h"
@@ -288,7 +288,7 @@ int main(int argc, char** argv) {
   connector::registerConnectorFactory(
       std::make_shared<connector::hive::HiveConnectorFactory>());
   exec::test::registerHiveConnector({});
-  dwrf::registerDwrfWriterFactory();
+  dwio::registerWriterFactories();
 
   std::shared_ptr<facebook::velox::memory::MemoryPool> rootPool{
       facebook::velox::memory::memoryManager()->addRootPool()};

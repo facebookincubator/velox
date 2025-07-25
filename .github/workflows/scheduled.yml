@@ -171,6 +171,7 @@ jobs:
         if: ${{ github.event_name != 'schedule' && steps.get-sig.outputs.stash-hit != 'true' }}
         working-directory: velox_main
         run: |
+          make clean
           make python-build
 
       - name: Create Baseline Signatures

@@ -16,8 +16,8 @@
 
 #include "velox/exec/tests/TableEvolutionFuzzer.h"
 #include "velox/connectors/hive/HiveConnector.h"
-#include "velox/dwio/dwrf/RegisterDwrfReader.h"
-#include "velox/dwio/dwrf/RegisterDwrfWriter.h"
+#include "velox/dwio/RegisterReaders.h"
+#include "velox/dwio/RegisterWriters.h"
 
 #include <folly/init/Init.h>
 #include <gflags/gflags.h>
@@ -46,8 +46,8 @@ void registerFactories(folly::Executor* ioExecutor) {
               ioExecutor);
   connector::registerConnector(hiveConnector);
   dwio::common::registerFileSinks();
-  dwrf::registerDwrfReaderFactory();
-  dwrf::registerDwrfWriterFactory();
+  dwio::registerReaderFactories();
+  dwio::registerWriterFactories();
 }
 
 TEST(TableEvolutionFuzzerTest, run) {
