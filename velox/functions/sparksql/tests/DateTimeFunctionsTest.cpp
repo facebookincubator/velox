@@ -1132,6 +1132,74 @@ TEST_F(DateTimeFunctionsTest, millisToTimestamp) {
       parseTimestamp("-292275055-05-16 16:47:04.192"));
 }
 
+TEST_F(DateTimeFunctionsTest, secondsToTimestamp) {
+  const auto intSecondsToTimestamp = [&](int64_t seconds) {
+    return evaluateOnce<Timestamp, int64_t>("timestamp_seconds(c0)", seconds);
+  };
+
+  const auto decimalSecondsToTimestamp = [&](double seconds) {
+    return evaluateOnce<Timestamp, double>("timestamp_seconds(c0)", seconds);
+  };
+
+  // Tests using integer seconds as input.
+  EXPECT_EQ(intSecondsToTimestamp(1), parseTimestamp("1970-01-01 00:00:01"));
+  EXPECT_EQ(intSecondsToTimestamp(-1), parseTimestamp("1969-12-31 23:59:59"));
+  EXPECT_EQ(
+      intSecondsToTimestamp(1230219000), parseTimestamp("2008-12-25 15:30:00"));
+  EXPECT_EQ(
+      intSecondsToTimestamp(253402300799),
+      parseTimestamp("9999-12-31 23:59:59"));
+  EXPECT_EQ(
+      intSecondsToTimestamp(-62167219200), parseTimestamp("0000-01-01 0:0:0"));
+  EXPECT_EQ(
+      intSecondsToTimestamp(kMaxTinyint),
+      parseTimestamp("1970-01-01 00:02:07"));
+  EXPECT_EQ(
+      intSecondsToTimestamp(kMinTinyint),
+      parseTimestamp("1969-12-31 23:57:52"));
+  EXPECT_EQ(
+      intSecondsToTimestamp(kMaxSmallint),
+      parseTimestamp("1970-01-01 09:06:07"));
+  EXPECT_EQ(
+      intSecondsToTimestamp(kMinSmallint),
+      parseTimestamp("1969-12-31 14:53:52"));
+  EXPECT_EQ(intSecondsToTimestamp(kMax), parseTimestamp("2038-01-19 03:14:07"));
+  EXPECT_EQ(intSecondsToTimestamp(kMin), parseTimestamp("1901-12-13 20:45:52"));
+
+  // Tests using floating-point seconds as input.
+  EXPECT_EQ(
+      decimalSecondsToTimestamp(1.0), parseTimestamp("1970-01-01 00:00:01"));
+  EXPECT_EQ(
+      decimalSecondsToTimestamp(-1.0), parseTimestamp("1969-12-31 23:59:59"));
+  EXPECT_EQ(
+      decimalSecondsToTimestamp(1230219000.123),
+      parseTimestamp("2008-12-25 15:30:00.123"));
+  EXPECT_EQ(
+      decimalSecondsToTimestamp(0.127),
+      parseTimestamp("1970-01-01 00:00:00.127"));
+  EXPECT_EQ(
+      decimalSecondsToTimestamp(-0.128),
+      parseTimestamp("1969-12-31 23:59:59.872"));
+  EXPECT_EQ(
+      decimalSecondsToTimestamp(32.767),
+      parseTimestamp("1970-01-01 00:00:32.767"));
+  EXPECT_EQ(
+      decimalSecondsToTimestamp(-32.768),
+      parseTimestamp("1969-12-31 23:59:27.232"));
+  EXPECT_EQ(
+      decimalSecondsToTimestamp(20.523),
+      parseTimestamp("1970-01-01 00:00:20.523"));
+  EXPECT_EQ(
+      decimalSecondsToTimestamp(-20.524),
+      parseTimestamp("1969-12-31 23:59:39.476"));
+  EXPECT_EQ(
+      decimalSecondsToTimestamp(2147483647.123),
+      parseTimestamp("2038-01-19 03:14:07.123"));
+  EXPECT_EQ(
+      decimalSecondsToTimestamp(-2147483648.567),
+      parseTimestamp("1901-12-13 20:45:51.433"));
+}
+
 TEST_F(DateTimeFunctionsTest, timestampToMicros) {
   const auto timestampToMicros = [&](const StringView time) {
     return evaluateOnce<int64_t, Timestamp>(

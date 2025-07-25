@@ -285,6 +285,14 @@ These functions support TIMESTAMP and DATE input types.
 
         SELECT timestamp_millis(1230219000123); -- '2008-12-25 15:30:00.123'
 
+.. spark:function:: timestamp_seconds(x) -> timestamp
+
+    Returns timestamp from the number of seconds since UTC epoch.
+    Supported types are: TINYINT, SMALLINT, INTEGER, BIGINT, FLOAT, and DOUBLE.::
+
+        SELECT timestamp_seconds(1230219000); -- '2008-12-25 15:30:00'
+        SELECT timestamp_seconds(1230219000.123); -- '2008-12-25 15:30:00.123'
+
 .. spark:function:: to_unix_timestamp(date) -> bigint
    :noindex:
 
