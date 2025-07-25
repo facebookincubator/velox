@@ -206,6 +206,23 @@ Accessors
    If the given index is less than 1 or greater than the total number of elements
    in the collection, returns NULL.
 
+.. function:: ST_Points(geometry: Geometry) -> points: array(geometry)
+
+   Returns an array of points in a geometry. Empty or null inputs
+   return null.
+
+.. function:: ST_NumPoints(geometry: Geometry) -> points: integer
+
+   Returns the number of points in a geometry. This is an extension
+   to the SQL/MM ``ST_NumPoints`` function which only applies to
+   point and linestring.
+
+.. function:: ST_EnvelopeAsPts(geometry: Geometry) -> points: array(geometry)
+
+   Returns an array of two points: the lower left and upper right corners
+   of the bounding rectangular polygon of a geometry. Empty or null inputs
+   return null.
+
 .. function:: geometry_invalid_reason(geometry: Geometry) -> reason: varchar
 
     If ``geometry`` is not valid or not simple, return a description of the
