@@ -39,7 +39,7 @@ struct MetadataFilter::Node {
   virtual ~Node() = default;
   virtual void addToScanSpec(ScanSpec&) const = 0;
   virtual uint64_t* eval(LeafResults&, int size) const = 0;
-  virtual dwio::common::RowRanges* eval(
+  virtual dwio::common::RowRanges* evalRowRanges(
       LeafRangeResults& leafResults) const = 0;
   virtual std::string toString() const = 0;
 };
@@ -60,7 +60,8 @@ class MetadataFilter::LeafNode : public Node {
     return nullptr;
   }
 
-  dwio::common::RowRanges* eval(LeafRangeResults& leafResults) const override {
+  dwio::common::RowRanges* evalRowRanges(
+      LeafRangeResults& leafResults) const override {
     if (auto it = leafResults.find(this); it != leafResults.end()) {
       return it->second;
     }
@@ -114,9 +115,10 @@ struct MetadataFilter::AndNode : Node {
     return l;
   }
 
-  dwio::common::RowRanges* eval(LeafRangeResults& leafResults) const override {
-    auto* l = lhs_->eval(leafResults);
-    auto* r = rhs_->eval(leafResults);
+  dwio::common::RowRanges* evalRowRanges(
+      LeafRangeResults& leafResults) const override {
+    auto* l = lhs_->evalRowRanges(leafResults);
+    auto* r = rhs_->evalRowRanges(leafResults);
     if (!l) {
       return r;
     }
@@ -164,9 +166,10 @@ struct MetadataFilter::OrNode : Node {
     return l;
   }
 
-  dwio::common::RowRanges* eval(LeafRangeResults& leafResults) const override {
-    auto* l = lhs_->eval(leafResults);
-    auto* r = rhs_->eval(leafResults);
+  dwio::common::RowRanges* evalRowRanges(
+      LeafRangeResults& leafResults) const override {
+    auto* l = lhs_->evalRowRanges(leafResults);
+    auto* r = rhs_->evalRowRanges(leafResults);
     if (!l || !r) {
       return nullptr;
     }
@@ -270,7 +273,7 @@ void MetadataFilter::eval(
   }
 }
 
-void MetadataFilter::eval(
+void MetadataFilter::evalRowRanges(
     std::vector<std::pair<const LeafNode*, dwio::common::RowRanges>>&
         leafNodeResults,
     dwio::common::RowRanges& finalResult) {
@@ -285,7 +288,7 @@ void MetadataFilter::eval(
         "Duplicate results: {}",
         leaf->field().toString());
   }
-  if (auto* combined = root_->eval(leafResults)) {
+  if (auto* combined = root_->evalRowRanges(leafResults)) {
     finalResult = dwio::common::RowRanges::unionWith(finalResult, *combined);
   }
 }
