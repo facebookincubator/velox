@@ -237,7 +237,7 @@ TEST_F(RegexFunctionsTest, regexpReplaceRegistration) {
 }
 
 TEST_F(RegexFunctionsTest, regexpReplaceEmptyString) {
-  std::string output = "";
+  std::string output;
   auto result = testRegexpReplace("", "empty string", "nothing");
   EXPECT_EQ(result, output);
   output = "abc";
