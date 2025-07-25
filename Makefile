@@ -118,13 +118,17 @@ release:				#: Build the release version
 	$(MAKE) build BUILD_DIR=release
 
 minimal_debug:			#: Minimal build with debugging symbols
-	$(MAKE) cmake BUILD_DIR=debug BUILD_TYPE=debug EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS} -DVELOX_BUILD_MINIMAL=ON"
+	$(MAKE) cmake BUILD_DIR=debug BUILD_TYPE=debug \
+		EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS} \
+			-DVELOX_BUILD_MINIMAL=ON"
 	$(MAKE) build BUILD_DIR=debug
 
 min_debug: minimal_debug
 
 minimal:				 #: Minimal build
-	$(MAKE) cmake BUILD_DIR=release BUILD_TYPE=release EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS} -DVELOX_BUILD_MINIMAL=ON"
+	$(MAKE) cmake BUILD_DIR=release BUILD_TYPE=release \
+		EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS} \
+			-DVELOX_BUILD_MINIMAL=ON"
 	$(MAKE) build BUILD_DIR=release
 
 wave:			   	         #: Build with Wave GPU support
@@ -144,26 +148,30 @@ cudf-debug:			 #: Build with debugging symbols and cuDF GPU support
 	$(MAKE) build BUILD_DIR=debug
 
 dwio:						#: Minimal build with dwio enabled.
-	$(MAKE) cmake BUILD_DIR=release BUILD_TYPE=release EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS} \
-																										    							  -DVELOX_BUILD_MINIMAL_WITH_DWIO=ON"
+	$(MAKE) cmake BUILD_DIR=release BUILD_TYPE=release \
+		EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS} \
+			-DVELOX_BUILD_MINIMAL_WITH_DWIO=ON"
 	$(MAKE) build BUILD_DIR=release
 
 dwio_debug:			#: Minimal build with dwio debugging symbols.
-	$(MAKE) cmake BUILD_DIR=debug BUILD_TYPE=debug EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS} \
-																																	  -DVELOX_BUILD_MINIMAL_WITH_DWIO=ON"
+	$(MAKE) cmake BUILD_DIR=debug BUILD_TYPE=debug \
+		EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS} \
+			-DVELOX_BUILD_MINIMAL_WITH_DWIO=ON"
 	$(MAKE) build BUILD_DIR=debug
 
 benchmarks-basic-build:
-	$(MAKE) release EXTRA_CMAKE_FLAGS=" ${EXTRA_CMAKE_FLAGS} \
-                                            -DVELOX_BUILD_TESTING=OFF \
-                                            -DVELOX_ENABLE_BENCHMARKS_BASIC=ON \
-					    -DVELOX_BUILD_RUNNER=OFF"
+	$(MAKE) release \
+		EXTRA_CMAKE_FLAGS=" ${EXTRA_CMAKE_FLAGS} \
+			-DVELOX_BUILD_TESTING=OFF \
+			-DVELOX_ENABLE_BENCHMARKS_BASIC=ON \
+			-DVELOX_BUILD_RUNNER=OFF"
 
 benchmarks-build:
-	$(MAKE) release EXTRA_CMAKE_FLAGS=" ${EXTRA_CMAKE_FLAGS} \
-                                            -DVELOX_BUILD_TESTING=OFF \
-                                            -DVELOX_ENABLE_BENCHMARKS=ON \
-					    -DVELOX_BUILD_RUNNER=OFF"
+	$(MAKE) release \
+		EXTRA_CMAKE_FLAGS=" ${EXTRA_CMAKE_FLAGS} \
+			-DVELOX_BUILD_TESTING=OFF \
+			-DVELOX_ENABLE_BENCHMARKS=ON \
+			-DVELOX_BUILD_RUNNER=OFF"
 
 benchmarks-basic-run:
 	scripts/ci/benchmark-runner.py run \
