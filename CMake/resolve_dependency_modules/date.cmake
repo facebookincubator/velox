@@ -13,25 +13,26 @@
 # limitations under the License.
 include_guard(GLOBAL)
 
-set(VELOX_SIMDJSON_VERSION 3.9.3)
-set(VELOX_SIMDJSON_BUILD_SHA256_CHECKSUM
-    2e3d10abcde543d3dd8eba9297522cafdcebdd1db4f51b28f3bc95bf1d6ad23c)
-set(VELOX_SIMDJSON_SOURCE_URL
-    "https://github.com/simdjson/simdjson/archive/refs/tags/v${VELOX_SIMDJSON_VERSION}.tar.gz"
+set(VELOX_DATE_BUILD_VERSION 3.0.1)
+set(VELOX_DATE_BUILD_SHA256_CHECKSUM
+    7a390f200f0ccd207e8cff6757e04817c1a0aec3e327b006b7eb451c57ee3538)
+set(VELOX_DATE_SOURCE_URL
+    "https://github.com/HowardHinnant/date/archive/refs/tags/v${VELOX_DATE_BUILD_VERSION}.tar.gz"
 )
 
-velox_resolve_dependency_url(SIMDJSON)
+velox_resolve_dependency_url(DATE)
 
-message(STATUS "Building simdjson from source")
+# Optionally set CMake variables *before* make-available
+set(CMAKE_INSTALL_MESSAGE
+    LAZY
+    CACHE STRING "" FORCE)
+
+message(STATUS "Building date from source")
 
 FetchContent_Declare(
-  simdjson
-  URL ${VELOX_SIMDJSON_SOURCE_URL}
-  URL_HASH ${VELOX_SIMDJSON_BUILD_SHA256_CHECKSUM}
+  date
+  URL ${VELOX_DATE_SOURCE_URL}
+  URL_HASH ${VELOX_DATE_BUILD_SHA256_CHECKSUM}
   OVERRIDE_FIND_PACKAGE)
 
-if(${VELOX_SIMDJSON_SKIPUTF8VALIDATION})
-  set(SIMDJSON_SKIPUTF8VALIDATION ON)
-endif()
-
-FetchContent_MakeAvailable(simdjson)
+FetchContent_MakeAvailable(date)
