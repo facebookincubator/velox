@@ -728,7 +728,6 @@ class SpillerTest : public exec::test::RowContainerTestBase {
           auto stream = merge->next();
           if (!stream) {
             FAIL() << "Stream ends after " << i << " entries";
-            break;
           }
           ASSERT_TRUE(rowVector_->equalValueAt(
               &stream->current(), indices[i], stream->currentIndex()));
