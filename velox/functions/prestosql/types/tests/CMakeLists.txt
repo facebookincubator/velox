@@ -24,7 +24,8 @@ add_executable(
   TypeTestBase.cpp
   UuidTypeTest.cpp
   IPAddressTypeTest.cpp
-  IPPrefixTypeTest.cpp)
+  IPPrefixTypeTest.cpp
+)
 
 add_test(velox_presto_types_test velox_presto_types_test)
 
@@ -37,4 +38,5 @@ target_link_libraries(
   GTest::gtest_main
   GTest::gmock
   gflags::gflags
-  glog::glog)
+  glog::glog
+)
