@@ -240,7 +240,7 @@ TEST_F(CustomTypeTest, getCustomTypeNames) {
           "QDIGEST",
           "GEOMETRY",
           "SFMSKETCH",
-      }),
+          "BIGINT_ENUM"}),
       names);
 
   ASSERT_TRUE(
@@ -261,7 +261,7 @@ TEST_F(CustomTypeTest, getCustomTypeNames) {
           "QDIGEST",
           "GEOMETRY",
           "SFMSKETCH",
-      }),
+          "BIGINT_ENUM"}),
       names);
 
   ASSERT_TRUE(unregisterCustomType("fancy_int"));
@@ -293,6 +293,12 @@ TEST_F(CustomTypeTest, nullConstant) {
         checkNullConstant(
             type, fmt::format("QDIGEST({})", parameter->toString()));
       }
+    } else if (name == "BIGINT_ENUM") {
+      auto enumName = "test.enum.mood";
+      auto enumMap = "\"CURIOUSs\": -2, \"HAPPY\": 0";
+      auto typeParameters = {TypeParameter(enumName), TypeParameter(enumMap)};
+      auto type = getCustomType(name, typeParameters);
+      checkNullConstant(type, type->toString());
     } else {
       auto type = getCustomType(name, {});
       checkNullConstant(type, type->toString());
