@@ -283,7 +283,8 @@ class TimestampWithTimeZoneTypeFactory : public CustomTypeFactory {
   }
 
   // Type casting from and to TimestampWithTimezone is not supported yet.
-  exec::CastOperatorPtr getCastOperator() const override {
+  exec::CastOperatorPtr getCastOperator(
+      const TypePtr& /*type*/) const override {
     return TimestampWithTimeZoneCastOperator::get();
   }
 

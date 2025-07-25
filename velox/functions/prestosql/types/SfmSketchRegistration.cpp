@@ -30,7 +30,8 @@ class SfmSketchTypeFactory : public CustomTypeFactory {
 
   // SfmSketch supports casting and should be treated as Varbinary during type
   // casting.
-  exec::CastOperatorPtr getCastOperator() const override {
+  exec::CastOperatorPtr getCastOperator(
+      const TypePtr& /*type*/) const override {
     return nullptr;
   }
 

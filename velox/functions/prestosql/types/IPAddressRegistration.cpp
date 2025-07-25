@@ -265,7 +265,8 @@ class IPAddressTypeFactory : public CustomTypeFactory {
     return IPADDRESS();
   }
 
-  exec::CastOperatorPtr getCastOperator() const override {
+  exec::CastOperatorPtr getCastOperator(
+      const TypePtr& /*type*/) const override {
     return std::make_shared<IPAddressCastOperator>();
   }
 

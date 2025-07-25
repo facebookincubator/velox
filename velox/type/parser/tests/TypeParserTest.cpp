@@ -51,7 +51,8 @@ class TypeFactory : public CustomTypeFactory {
     return type_;
   }
 
-  exec::CastOperatorPtr getCastOperator() const override {
+  exec::CastOperatorPtr getCastOperator(const TypePtr& /*type*/
+  ) const override {
     return nullptr;
   }
 

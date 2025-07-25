@@ -61,7 +61,8 @@ class FancyIntTypeFactory : public CustomTypeFactory {
     return FancyIntType::get();
   }
 
-  exec::CastOperatorPtr getCastOperator() const override {
+  exec::CastOperatorPtr getCastOperator(
+      const TypePtr& /*type*/) const override {
     VELOX_UNSUPPORTED();
   }
 
@@ -152,7 +153,8 @@ class AlwaysFailingTypeFactory : public CustomTypeFactory {
     VELOX_UNSUPPORTED();
   }
 
-  exec::CastOperatorPtr getCastOperator() const override {
+  exec::CastOperatorPtr getCastOperator(
+      const TypePtr& /*type*/) const override {
     VELOX_UNSUPPORTED();
   }
 

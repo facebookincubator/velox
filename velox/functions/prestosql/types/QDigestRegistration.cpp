@@ -29,7 +29,8 @@ class QDigestTypeFactory : public CustomTypeFactory {
   }
 
   // QDigest should be treated as Varbinary during type castings.
-  exec::CastOperatorPtr getCastOperator() const override {
+  exec::CastOperatorPtr getCastOperator(
+      const TypePtr& /*type*/) const override {
     return nullptr;
   }
 

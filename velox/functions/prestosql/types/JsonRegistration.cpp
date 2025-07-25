@@ -32,7 +32,8 @@ class JsonTypeFactory : public CustomTypeFactory {
     return JSON();
   }
 
-  exec::CastOperatorPtr getCastOperator() const override {
+  exec::CastOperatorPtr getCastOperator(
+      const TypePtr& /*type*/) const override {
     return std::make_shared<JsonCastOperator>();
   }
 

@@ -126,7 +126,8 @@ class BingTileTypeFactory : public CustomTypeFactory {
     return BINGTILE();
   }
 
-  exec::CastOperatorPtr getCastOperator() const override {
+  exec::CastOperatorPtr getCastOperator(
+      const TypePtr& /*type*/) const override {
     return BingTileCastOperator::get();
   }
 

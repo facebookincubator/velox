@@ -30,7 +30,8 @@ class TDigestTypeFactory : public CustomTypeFactory {
   }
 
   // TDigest should be treated as Varbinary during type castings.
-  exec::CastOperatorPtr getCastOperator() const override {
+  exec::CastOperatorPtr getCastOperator(
+      const TypePtr& /*type*/) const override {
     return nullptr;
   }
 

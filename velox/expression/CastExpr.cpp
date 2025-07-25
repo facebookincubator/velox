@@ -930,7 +930,7 @@ CastOperatorPtr CastExpr::getCastOperator(const TypePtr& type) {
     return it->second;
   }
 
-  auto castOperator = getCustomTypeCastOperator(key);
+  auto castOperator = getCustomTypeCastOperator(type);
   if (castOperator == nullptr) {
     return nullptr;
   }

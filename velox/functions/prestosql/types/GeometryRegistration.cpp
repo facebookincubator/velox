@@ -29,7 +29,8 @@ class GeometryTypeFactory : public CustomTypeFactory {
     return GEOMETRY();
   }
 
-  exec::CastOperatorPtr getCastOperator() const override {
+  exec::CastOperatorPtr getCastOperator(
+      const TypePtr& /*type*/) const override {
     return nullptr;
   }
 

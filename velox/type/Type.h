@@ -2068,7 +2068,11 @@ class CustomTypeFactory {
   /// should be treated as its underlying native type during type castings,
   /// return a nullptr. If a custom type does not support castings, throw an
   /// exception.
-  virtual exec::CastOperatorPtr getCastOperator() const = 0;
+  /// The TypePtr input parameter is used when the cast operation depends on the
+  /// Type and its properties. For example, when casting to an enum type, the
+  /// CastOperator needs to check if the input value exists in the enum type's
+  /// value map.
+  virtual exec::CastOperatorPtr getCastOperator(const TypePtr& type) const = 0;
 
   virtual AbstractInputGeneratorPtr getInputGenerator(
       const InputGeneratorConfig& config) const = 0;
@@ -2167,7 +2171,11 @@ bool unregisterCustomType(const std::string& name);
 /// Returns the custom cast operator for the custom type with the specified
 /// name. Returns nullptr if a type with the specified name does not exist or
 /// does not have a dedicated custom cast operator.
-exec::CastOperatorPtr getCustomTypeCastOperator(const std::string& name);
+/// The TypePtr input parameter is used when the cast operation depends on the
+/// Type and its properties. For example, when casting to an enum type, the
+/// CastOperator needs to check if the input value exists in the enum type's
+/// value map.
+exec::CastOperatorPtr getCustomTypeCastOperator(const TypePtr& type);
 
 /// Returns the input generator for the custom type with the specified name.
 AbstractInputGeneratorPtr getCustomTypeInputGenerator(

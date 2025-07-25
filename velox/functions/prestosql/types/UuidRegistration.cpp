@@ -189,7 +189,8 @@ class UuidTypeFactory : public CustomTypeFactory {
     return UUID();
   }
 
-  exec::CastOperatorPtr getCastOperator() const override {
+  exec::CastOperatorPtr getCastOperator(
+      const TypePtr& /*type*/) const override {
     return std::make_shared<UuidCastOperator>();
   }
 

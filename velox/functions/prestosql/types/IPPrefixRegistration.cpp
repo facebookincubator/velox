@@ -190,7 +190,8 @@ class IPPrefixTypeFactory : public CustomTypeFactory {
     return IPPrefixType::get();
   }
 
-  exec::CastOperatorPtr getCastOperator() const override {
+  exec::CastOperatorPtr getCastOperator(
+      const TypePtr& /*type*/) const override {
     return std::make_shared<IPPrefixCastOperator>();
   }
 

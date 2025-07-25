@@ -1033,10 +1033,11 @@ TypePtr getCustomType(
   return nullptr;
 }
 
-exec::CastOperatorPtr getCustomTypeCastOperator(const std::string& name) {
-  auto factory = getTypeFactory(name);
+exec::CastOperatorPtr getCustomTypeCastOperator(const TypePtr& type) {
+  auto key = type->name();
+  auto factory = getTypeFactory(key);
   if (factory) {
-    return factory->getCastOperator();
+    return factory->getCastOperator(type);
   }
 
   return nullptr;
