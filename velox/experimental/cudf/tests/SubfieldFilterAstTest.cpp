@@ -39,20 +39,15 @@ class SubfieldFilterAstTest : public OperatorTestBase {
         facebook::velox::test::BatchMaker::createBatch(rowType, rows, *pool_));
   }
 
-  // Execute filter comparison between Velox and cuDF
+  // Execute filter comparison between Velox and cuDF using a pre-created AST.
+  // 'tree' and 'scalars' must out-live the computation because they own the
+  // expression nodes and literal scalars referenced by 'expr'.
   void testFilterExecution(
       const RowTypePtr& rowType,
       const std::string& columnName,
       const common::Filter& filter,
-      const RowVectorPtr& vector) {
-    common::Subfield subfield(columnName);
-    cudf::ast::tree tree;
-    std::vector<std::unique_ptr<cudf::scalar>> scalars;
-
-    // Generate cuDF AST
-    auto& expr =
-        createAstFromSubfieldFilter(subfield, filter, tree, scalars, rowType);
-
+      const RowVectorPtr& vector,
+      const cudf::ast::expression& expr) {
     auto stream = cudf::get_default_stream();
     auto mr = cudf::get_current_device_resource_ref();
 
@@ -140,15 +135,14 @@ TEST_F(SubfieldFilterAstTest, Int32RangeInclusive) {
   common::Subfield subfield(columnName);
   cudf::ast::tree tree;
   std::vector<std::unique_ptr<cudf::scalar>> scalars;
-  ASSERT_NO_THROW({
-    createAstFromSubfieldFilter(subfield, *filter, tree, scalars, rowType);
-  });
-  EXPECT_GT(tree.size(), 0UL) << "No expressions created for test";
+  const auto& expr =
+      createAstFromSubfieldFilter(subfield, *filter, tree, scalars, rowType);
+  ASSERT_GT(tree.size(), 0UL) << "No expressions created for test";
   EXPECT_LE(scalars.size(), 2UL) << "Too many scalars for range filter";
 
   // Execution validation
   auto vec = makeTestVector(rowType, 100);
-  testFilterExecution(rowType, columnName, *filter, vec);
+  testFilterExecution(rowType, columnName, *filter, vec, expr);
 }
 
 TEST_F(SubfieldFilterAstTest, Int64InList) {
@@ -164,16 +158,15 @@ TEST_F(SubfieldFilterAstTest, Int64InList) {
   common::Subfield subfield(columnName);
   cudf::ast::tree tree;
   std::vector<std::unique_ptr<cudf::scalar>> scalars;
-  ASSERT_NO_THROW({
-    createAstFromSubfieldFilter(subfield, *filter, tree, scalars, rowType);
-  });
-  EXPECT_GT(tree.size(), 0UL) << "No expressions created for test";
+  const auto& expr =
+      createAstFromSubfieldFilter(subfield, *filter, tree, scalars, rowType);
+  ASSERT_GT(tree.size(), 0UL) << "No expressions created for test";
   EXPECT_EQ(scalars.size(), inVals.size())
       << "Scalar count mismatch for IN list";
 
   // Execution validation
   auto vec = makeTestVector(rowType, 100);
-  testFilterExecution(rowType, columnName, *filter, vec);
+  testFilterExecution(rowType, columnName, *filter, vec, expr);
 }
 
 TEST_F(SubfieldFilterAstTest, DoubleRange) {
@@ -186,15 +179,14 @@ TEST_F(SubfieldFilterAstTest, DoubleRange) {
   common::Subfield subfield(columnName);
   cudf::ast::tree tree;
   std::vector<std::unique_ptr<cudf::scalar>> scalars;
-  ASSERT_NO_THROW({
-    createAstFromSubfieldFilter(subfield, *filter, tree, scalars, rowType);
-  });
-  EXPECT_GT(tree.size(), 0UL) << "No expressions created for test";
+  const auto& expr =
+      createAstFromSubfieldFilter(subfield, *filter, tree, scalars, rowType);
+  ASSERT_GT(tree.size(), 0UL) << "No expressions created for test";
   EXPECT_LE(scalars.size(), 2UL) << "Too many scalars for float range";
 
   // Execution validation
   auto vec = makeTestVector(rowType, 100);
-  testFilterExecution(rowType, columnName, *filter, vec);
+  testFilterExecution(rowType, columnName, *filter, vec, expr);
 }
 
 TEST_F(SubfieldFilterAstTest, StringInList) {
@@ -208,16 +200,15 @@ TEST_F(SubfieldFilterAstTest, StringInList) {
   common::Subfield subfield(columnName);
   cudf::ast::tree tree;
   std::vector<std::unique_ptr<cudf::scalar>> scalars;
-  ASSERT_NO_THROW({
-    createAstFromSubfieldFilter(subfield, *filter, tree, scalars, rowType);
-  });
-  EXPECT_GT(tree.size(), 0UL) << "No expressions created for test";
+  const auto& expr =
+      createAstFromSubfieldFilter(subfield, *filter, tree, scalars, rowType);
+  ASSERT_GT(tree.size(), 0UL) << "No expressions created for test";
   EXPECT_EQ(scalars.size(), stringVals.size())
       << "Scalar count mismatch for string IN list";
 
   // Execution validation
   auto vec = makeTestVector(rowType, 100);
-  testFilterExecution(rowType, columnName, *filter, vec);
+  testFilterExecution(rowType, columnName, *filter, vec, expr);
 }
 
 TEST_F(SubfieldFilterAstTest, StringRangeNotSupported) {
@@ -271,9 +262,8 @@ TEST_F(SubfieldFilterAstTest, BigintRangeSingleValue) {
   cudf::ast::tree tree;
   std::vector<std::unique_ptr<cudf::scalar>> scalars;
 
-  ASSERT_NO_THROW({
-    createAstFromSubfieldFilter(subfield, *filter, tree, scalars, rowType);
-  });
+  const auto& expr =
+      createAstFromSubfieldFilter(subfield, *filter, tree, scalars, rowType);
 
   EXPECT_GT(tree.size(), 0UL);
   // Single value range should create 1 scalar for equality comparison (c0 = 42)
@@ -282,7 +272,7 @@ TEST_F(SubfieldFilterAstTest, BigintRangeSingleValue) {
 
   // Execution validation
   auto vec = makeTestVector(rowType, 100);
-  testFilterExecution(rowType, columnName, *filter, vec);
+  testFilterExecution(rowType, columnName, *filter, vec, expr);
 }
 
 TEST_F(SubfieldFilterAstTest, Int32SingleValue) {
@@ -295,9 +285,8 @@ TEST_F(SubfieldFilterAstTest, Int32SingleValue) {
   cudf::ast::tree tree;
   std::vector<std::unique_ptr<cudf::scalar>> scalars;
 
-  ASSERT_NO_THROW({
-    createAstFromSubfieldFilter(subfield, *filter, tree, scalars, rowType);
-  });
+  const auto& expr =
+      createAstFromSubfieldFilter(subfield, *filter, tree, scalars, rowType);
 
   EXPECT_GT(tree.size(), 0UL);
   EXPECT_EQ(scalars.size(), 1UL)
@@ -305,7 +294,7 @@ TEST_F(SubfieldFilterAstTest, Int32SingleValue) {
 
   // Execution validation
   auto vec = makeTestVector(rowType, 100);
-  testFilterExecution(rowType, columnName, *filter, vec);
+  testFilterExecution(rowType, columnName, *filter, vec, expr);
 }
 
 // Type boundary tests
@@ -321,9 +310,8 @@ TEST_F(SubfieldFilterAstTest, IntegerOverflowBounds) {
   cudf::ast::tree tree;
   std::vector<std::unique_ptr<cudf::scalar>> scalars;
 
-  ASSERT_NO_THROW({
-    createAstFromSubfieldFilter(subfield, *filter, tree, scalars, rowType);
-  });
+  const auto& expr =
+      createAstFromSubfieldFilter(subfield, *filter, tree, scalars, rowType);
 
   EXPECT_GT(tree.size(), 0UL);
   // Should have created no scalars since both bounds are beyond int32 range
@@ -332,7 +320,7 @@ TEST_F(SubfieldFilterAstTest, IntegerOverflowBounds) {
 
   // Execution validation
   auto vec = makeTestVector(rowType, 100);
-  testFilterExecution(rowType, columnName, *filter, vec);
+  testFilterExecution(rowType, columnName, *filter, vec, expr);
 }
 
 TEST_F(SubfieldFilterAstTest, PartialBoundsOutsideTypeRange) {
@@ -345,9 +333,8 @@ TEST_F(SubfieldFilterAstTest, PartialBoundsOutsideTypeRange) {
   cudf::ast::tree tree;
   std::vector<std::unique_ptr<cudf::scalar>> scalars;
 
-  ASSERT_NO_THROW({
-    createAstFromSubfieldFilter(subfield, *filter, tree, scalars, rowType);
-  });
+  const auto& expr =
+      createAstFromSubfieldFilter(subfield, *filter, tree, scalars, rowType);
 
   EXPECT_GT(tree.size(), 0UL);
   // Should create 1 scalar (upper bound), lower bound should be skipped
@@ -356,7 +343,7 @@ TEST_F(SubfieldFilterAstTest, PartialBoundsOutsideTypeRange) {
 
   // Execution validation
   auto vec = makeTestVector(rowType, 100);
-  testFilterExecution(rowType, columnName, *filter, vec);
+  testFilterExecution(rowType, columnName, *filter, vec, expr);
 }
 
 TEST_F(SubfieldFilterAstTest, SmallIntTypeBounds) {
@@ -369,9 +356,8 @@ TEST_F(SubfieldFilterAstTest, SmallIntTypeBounds) {
   cudf::ast::tree tree;
   std::vector<std::unique_ptr<cudf::scalar>> scalars;
 
-  ASSERT_NO_THROW({
-    createAstFromSubfieldFilter(subfield, *filter, tree, scalars, rowType);
-  });
+  const auto& expr =
+      createAstFromSubfieldFilter(subfield, *filter, tree, scalars, rowType);
 
   EXPECT_GT(tree.size(), 0UL);
   // Should skip both bounds since they exceed int16 range (-32768 to 32767)
@@ -380,7 +366,7 @@ TEST_F(SubfieldFilterAstTest, SmallIntTypeBounds) {
 
   // Execution validation
   auto vec = makeTestVector(rowType, 100);
-  testFilterExecution(rowType, columnName, *filter, vec);
+  testFilterExecution(rowType, columnName, *filter, vec, expr);
 }
 
 TEST_F(SubfieldFilterAstTest, EmptyInListHandling) {
