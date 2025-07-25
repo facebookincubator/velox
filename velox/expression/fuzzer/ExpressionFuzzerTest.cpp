@@ -192,6 +192,8 @@ int main(int argc, char** argv) {
       "st_buffer",
       "geometry_invalid_reason",
       "simplify_geometry",
+      "line_locate_point",
+      "line_interpolate_point",
       "st_xmax",
       "st_xmin",
       "st_ymax",
