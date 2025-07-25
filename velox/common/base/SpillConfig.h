@@ -71,6 +71,7 @@ struct SpillConfig {
       uint64_t _maxSpillRunRows,
       uint64_t _writerFlushThresholdSize,
       const std::string& _compressionKind,
+      uint64_t numMaxMergeWays,
       std::optional<PrefixSortConfig> _prefixSortConfig = std::nullopt,
       const std::string& _fileCreateConfig = {});
 
@@ -150,6 +151,12 @@ struct SpillConfig {
 
   /// CompressionKind when spilling, CompressionKind_NONE means no compression.
   common::CompressionKind compressionKind;
+
+  // The max merge ways when merging sorted files into a single ordered stream.
+  // Nums < 2 means unlimited. This is used to cap the max opened file num when
+  // merging spilled sorted files to avoid using too much memory and causing
+  // OOM.
+  uint64_t numMaxMergeWays;
 
   /// Prefix sort config when spilling, enable prefix sort when this config is
   /// set, otherwise, fallback to timsort.

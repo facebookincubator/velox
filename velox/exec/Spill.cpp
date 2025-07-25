@@ -18,6 +18,7 @@
 #include "velox/common/base/RuntimeMetrics.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/exec/OperatorUtils.h"
 #include "velox/serializers/PrestoSerializer.h"
 
 using facebook::velox::common::testutil::TestValue;
@@ -308,6 +309,143 @@ SpillPartition::createOrderedReader(
     return nullptr;
   }
   return std::make_unique<TreeOfLosers<SpillMergeStream>>(std::move(streams));
+}
+
+namespace {
+SpillFileInfo mergeFiles(
+    const std::vector<SpillFileInfo>& files,
+    const std::string& pathPrefix,
+    uint64_t readBufferSize,
+    uint64_t writeBufferSize,
+    vector_size_t batchSize,
+    RowVectorPtr bufferVector,
+    std::vector<const RowVector*>& bufferSpillSources,
+    std::vector<vector_size_t>& bufferSpillSourceRows,
+    const common::UpdateAndCheckSpillLimitCB& updateAndCheckSpillLimitCb,
+    memory::MemoryPool* pool,
+    folly::Synchronized<common::SpillStats>* spillStats,
+    const std::string& fileCreateConfig) {
+  VELOX_CHECK_GT(files.size(), 0);
+  std::vector<std::unique_ptr<SpillMergeStream>> streams;
+  streams.reserve(files.size());
+  for (const auto& fileInfo : files) {
+    streams.push_back(FileSpillMergeStream::create(
+        SpillReadFile::create(fileInfo, readBufferSize, pool, spillStats)));
+  }
+  auto mergeTree =
+      std::make_unique<TreeOfLosers<SpillMergeStream>>(std::move(streams));
+  const auto type = files[0].type;
+
+  auto writer = std::make_unique<SpillWriter>(
+      type,
+      files[0].sortingKeys,
+      files[0].compressionKind,
+      pathPrefix,
+      std::numeric_limits<uint64_t>::max(),
+      writeBufferSize,
+      fileCreateConfig,
+      updateAndCheckSpillLimitCb,
+      pool,
+      spillStats);
+
+  while (mergeTree->next()) {
+    VectorPtr tmp = std::move(bufferVector);
+    BaseVector::prepareForReuse(tmp, batchSize);
+    bufferVector = std::static_pointer_cast<RowVector>(tmp);
+    for (auto& child : bufferVector->children()) {
+      child->resize(batchSize);
+    }
+    int32_t outputRow = 0;
+    gatherMerge(
+        bufferVector.get(),
+        mergeTree.get(),
+        outputRow,
+        bufferSpillSources,
+        bufferSpillSourceRows);
+
+    IndexRange range{0, outputRow};
+    writer->write(bufferVector, folly::Range<IndexRange*>(&range, 1));
+  }
+  auto resultFiles = writer->finish();
+  VELOX_CHECK_EQ(resultFiles.size(), 1);
+  return std::move(resultFiles[0]);
+}
+
+class CompareFileBySize {
+ public:
+  bool operator()(const SpillFileInfo& lhs, const SpillFileInfo& rhs) const {
+    return lhs.size > rhs.size;
+  }
+};
+} // namespace
+
+std::unique_ptr<TreeOfLosers<SpillMergeStream>>
+SpillPartition::createOrderedReaderWithPreMerge(
+    int mergeWayThreshold,
+    uint64_t readBufferSize,
+    uint64_t writeBufferSize,
+    const common::UpdateAndCheckSpillLimitCB& updateAndCheckSpillLimitCb,
+    memory::MemoryPool* pool,
+    folly::Synchronized<common::SpillStats>* spillStats,
+    const std::string& fileCreateConfig) {
+  if (mergeWayThreshold <= 1 || files_.size() <= mergeWayThreshold) {
+    return createOrderedReader(readBufferSize, pool, spillStats);
+  }
+
+  auto startFileNum = files_.size();
+  std::priority_queue<
+      SpillFileInfo,
+      std::vector<SpillFileInfo>,
+      CompareFileBySize>
+      orderedFiles(files_.begin(), files_.end());
+  SpillFiles files;
+  files.reserve(mergeWayThreshold);
+  auto filePathPrefix = files_[0].path;
+  const size_t batchSize = 1'000;
+  RowVectorPtr bufferVector = std::static_pointer_cast<RowVector>(
+      BaseVector::create(files_[0].type, batchSize, pool));
+  std::vector<const RowVector*> bufferSpillSources(batchSize);
+  std::vector<vector_size_t> bufferSpillSourceRows(batchSize);
+
+  // Recursively merge the files.
+  int round = 0;
+  for (; orderedFiles.size() > mergeWayThreshold; round++) {
+    int mergeFileNum = std::min(
+        static_cast<size_t>(mergeWayThreshold),
+        orderedFiles.size() + 1 - mergeWayThreshold);
+    auto roundPathPrefix =
+        fmt::format("{}-merge-round-{}", filePathPrefix, round);
+    // Choose the top #mergeFileNum smallest files for merging to minimize IO.
+    for (; mergeFileNum > 0; mergeFileNum--) {
+      files.push_back(orderedFiles.top());
+      orderedFiles.pop();
+    }
+    auto mergedFile = mergeFiles(
+        files,
+        roundPathPrefix,
+        readBufferSize,
+        writeBufferSize,
+        batchSize,
+        bufferVector,
+        bufferSpillSources,
+        bufferSpillSourceRows,
+        updateAndCheckSpillLimitCb,
+        pool,
+        spillStats,
+        fileCreateConfig);
+    orderedFiles.push(mergedFile);
+    files.clear();
+  }
+
+  files_.clear();
+  while (!orderedFiles.empty()) {
+    files_.push_back(orderedFiles.top());
+    orderedFiles.pop();
+  }
+  auto endFileNum = files_.size();
+  VLOG(1) << "For file " << files_[0].path << "pre merge from #" << startFileNum
+          << " files to #" << endFileNum << " files in #" << round << " rounds";
+  return createOrderedReader(readBufferSize, pool, spillStats);
 }
 
 IterableSpillPartitionSet::IterableSpillPartitionSet() {
