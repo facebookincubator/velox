@@ -185,6 +185,7 @@ int main(int argc, char** argv) {
       "st_numinteriorring",
       "st_numgeometries",
       "st_convexhull",
+      "st_coorddim",
       "st_dimension",
       "st_exteriorring",
       "st_envelope",
