@@ -2537,3 +2537,96 @@ TEST_F(GeometryFunctionsTest, testGeometryNearestPoints) {
   noNearestPointsFunc("LINESTRING (50 100, 50 200)", std::nullopt);
   noNearestPointsFunc(std::nullopt, std::nullopt);
 }
+
+TEST_F(GeometryFunctionsTest, testStInteriorRings) {
+  const auto testStInteriorRingsFunc = [&](const std::optional<std::string>&
+                                               wkt,
+                                           const std::optional<
+                                               std::vector<std::string>>&
+                                               expected) {
+    std::optional<std::string> result = evaluateOnce<std::string>(
+        "ARRAY_JOIN(transform(ST_InteriorRings(ST_GeometryFromText(c0)), x -> ST_AsText(x)), ':')",
+        wkt);
+
+    if (expected.has_value()) {
+      const std::string& resultString = result.value();
+      const std::vector<std::string>& expectedVector = expected.value();
+      std::vector<std::string> resultVector;
+      folly::split(':', resultString, resultVector);
+
+      ASSERT_EQ(expectedVector.size(), resultVector.size());
+      ASSERT_EQ(expectedVector, resultVector);
+    } else {
+      ASSERT_FALSE(result.has_value());
+    }
+  };
+
+  testStInteriorRingsFunc(
+      "POLYGON ((0 0, 0 3, 3 3, 3 0, 0 0), (1 1, 2 1, 2 2, 1 2, 1 1))",
+      {{"LINESTRING (1 1, 2 1, 2 2, 1 2, 1 1)"}});
+  testStInteriorRingsFunc(
+      "POLYGON ((0 0, 0 5, 5 5, 5 0, 0 0), (1 1, 2 1, 2 2, 1 2, 1 1), (3 3, 4 3, 4 4, 3 4, 3 3))",
+      {{"LINESTRING (1 1, 2 1, 2 2, 1 2, 1 1)",
+        "LINESTRING (3 3, 4 3, 4 4, 3 4, 3 3)"}});
+  testStInteriorRingsFunc("POLYGON ((0 0, 0 1, 1 1, 1 0, 0 0))", {{""}});
+  testStInteriorRingsFunc("POLYGON EMPTY", std::nullopt);
+
+  VELOX_ASSERT_USER_THROW(
+      testStInteriorRingsFunc("POINT (2 3)", std::nullopt),
+      "ST_InteriorRings only applies to Polygon. Input type is: Point");
+}
+
+TEST_F(GeometryFunctionsTest, testStGeometries) {
+  const auto testStGeometriesFunc = [&](const std::optional<std::string>& wkt,
+                                        const std::optional<
+                                            std::vector<std::string>>&
+                                            expected) {
+    std::optional<std::string> result = evaluateOnce<std::string>(
+        "ARRAY_JOIN(transform(ST_Geometries(ST_GeometryFromText(c0)), x -> ST_AsText(x)), ':')",
+        wkt);
+
+    if (expected.has_value()) {
+      const std::string& resultString = result.value();
+      const std::vector<std::string>& expectedVector = expected.value();
+      std::vector<std::string> resultVector;
+      folly::split(":", resultString, resultVector);
+
+      ASSERT_EQ(expectedVector.size(), resultVector.size());
+      ASSERT_EQ(expectedVector, resultVector);
+    } else {
+      ASSERT_FALSE(result.has_value());
+    }
+  };
+
+  testStGeometriesFunc("POINT (1 5)", {{"POINT (1 5)"}});
+
+  testStGeometriesFunc(
+      "LINESTRING (77.29 29.07, 77.42 29.26, 77.27 29.31, 77.29 29.07)",
+      {{"LINESTRING (77.29 29.07, 77.42 29.26, 77.27 29.31, 77.29 29.07)"}});
+  testStGeometriesFunc(
+      "POLYGON ((0 0, 0 1, 1 1, 1 0, 0 0))",
+      {{"POLYGON ((0 0, 0 1, 1 1, 1 0, 0 0))"}});
+  testStGeometriesFunc(
+      "MULTIPOINT (1 2, 4 8, 16 32)",
+      {{"POINT (1 2)", "POINT (4 8)", "POINT (16 32)"}});
+  testStGeometriesFunc(
+      "MULTILINESTRING ((1 1, 2 2))", {{"LINESTRING (1 1, 2 2)"}});
+  testStGeometriesFunc(
+      "MULTIPOLYGON (((0 0, 0 1, 1 1, 1 0, 0 0)), ((1 1, 3 1, 3 3, 1 3, 1 1)))",
+      {{"POLYGON ((0 0, 0 1, 1 1, 1 0, 0 0))",
+        "POLYGON ((1 1, 1 3, 3 3, 3 1, 1 1))"}});
+  testStGeometriesFunc(
+      "GEOMETRYCOLLECTION (POINT (2 3), LINESTRING (2 3, 3 4))",
+      {{"POINT (2 3)", "LINESTRING (2 3, 3 4)"}});
+  testStGeometriesFunc(
+      "GEOMETRYCOLLECTION(MULTIPOINT(0 0, 1 1), GEOMETRYCOLLECTION(MULTILINESTRING((2 2, 3 3))))",
+      {{"MULTIPOINT (0 0, 1 1)",
+        "GEOMETRYCOLLECTION (MULTILINESTRING ((2 2, 3 3)))"}});
+
+  std::optional<bool> emptyGeomReturnsNull = evaluateOnce<bool>(
+      "ST_Geometries(ST_GeometryFromText(c0)) IS NULL",
+      std::optional<std::string>("POLYGON EMPTY"));
+
+  ASSERT_TRUE(emptyGeomReturnsNull.has_value());
+  ASSERT_TRUE(emptyGeomReturnsNull.value());
+}
