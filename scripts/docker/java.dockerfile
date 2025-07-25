@@ -15,7 +15,7 @@
 
 # Global arg default to share across stages
 ARG SPARK_VERSION=3.5.1
-ARG PRESTO_VERSION=0.290
+ARG PRESTO_VERSION=0.293
 
 #########################
 # Stage: Spark Download #
