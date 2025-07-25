@@ -297,6 +297,36 @@ TEST_F(SubfieldFilterAstTest, Int32SingleValue) {
   testFilterExecution(rowType, columnName, *filter, vec, expr);
 }
 
+// Single value that is outside the column's type range.
+// For an INT32 column, pick a 64-bit value greater than INT32_MAX.
+TEST_F(SubfieldFilterAstTest, Int32SingleValueOutOfRange) {
+  const std::string columnName = "c0";
+  auto rowType = ROW({{columnName, INTEGER()}}); // 32-bit int column
+
+  // Value well above INT32_MAX.
+  int64_t outOfRangeValue =
+      static_cast<int64_t>(std::numeric_limits<int32_t>::max()) + 1000;
+
+  auto filter = std::make_unique<common::BigintRange>(
+      outOfRangeValue, outOfRangeValue, /*nullAllowed*/ false);
+
+  // Build AST once.
+  common::Subfield subfield(columnName);
+  cudf::ast::tree tree;
+  std::vector<std::unique_ptr<cudf::scalar>> scalars;
+  const auto& expr =
+      createAstFromSubfieldFilter(subfield, *filter, tree, scalars, rowType);
+
+  EXPECT_GT(tree.size(), 0UL)
+      << "No expressions created for out-of-range single value test";
+  EXPECT_EQ(scalars.size(), 0UL)
+      << "Single value on int32 should create no scalars for out-of-range";
+
+  // Execution validation – compare Velox filter vs cuDF AST results.
+  auto vec = makeTestVector(rowType, 100);
+  testFilterExecution(rowType, columnName, *filter, vec, expr);
+}
+
 // Type boundary tests
 TEST_F(SubfieldFilterAstTest, IntegerOverflowBounds) {
   const std::string columnName = "c0";
