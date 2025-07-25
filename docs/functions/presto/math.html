@@ -128,6 +128,26 @@ If any input array is empty, the function returns NaN. If the input arrays have 
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="dot_product">
+<span class="sig-name descname"><span class="pre">dot_product</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(real)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">array(real)</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">real</span></span></span><a class="headerlink" href="#dot_product" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the <a class="reference external" href="https://en.wikipedia.org/wiki/Dot_product">Dot Product</a> between the vectors represented as array(real).
+If any input array is empty, the function returns NaN. If the input arrays have different sizes, the function throws VeloxUserError.</p>
+<blockquote>
+<div><p>SELECT dot_product(ARRAY[1], ARRAY[2]); – 2.0</p>
+<p>SELECT dot_product(ARRAY[1.0, 2.0], ARRAY[NULL, 3.0]); – NULL</p>
+<p>SELECT dot_product(ARRAY[], ARRAY[2, 3]); – Throws VeloxUserError</p>
+<p>SELECT dot_product(ARRAY[], ARRAY[]); – NaN</p>
+</div></blockquote>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="id6">
+<span class="sig-name descname"><span class="pre">dot_product</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(double)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">array(double)</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#id6" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the <a class="reference external" href="https://en.wikipedia.org/wiki/Dot_product">Dot Product</a> between the vectors represented as array(double).
+If any input array is empty, the function returns NaN. If the input arrays have different sizes, the function throws VeloxUserError.</p>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="degrees">
 <span class="sig-name descname"><span class="pre">degrees</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#degrees" title="Link to this definition">¶</a></dt>
 <dd><p>Converts angle x in radians to degrees.</p>
@@ -279,7 +299,7 @@ For integral types, overflow results in an error.</p>
 <dl class="py function">
 <dt class="sig sig-object py" id="secure_rand">
 <span class="sig-name descname"><span class="pre">secure_rand</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#secure_rand" title="Link to this definition">¶</a></dt>
-<dd><p>This is an alias for <a class="reference internal" href="#id6" title="secure_random"><code class="xref py py-func docutils literal notranslate"><span class="pre">secure_random()</span></code></a>.</p>
+<dd><p>This is an alias for <a class="reference internal" href="#id8" title="secure_random"><code class="xref py py-func docutils literal notranslate"><span class="pre">secure_random()</span></code></a>.</p>
 </dd></dl>
 
 <dl class="py function">
@@ -289,8 +309,8 @@ For integral types, overflow results in an error.</p>
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="id6">
-<span class="sig-name descname"><span class="pre">secure_random</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">lower</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">upper</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">input]</span></span></span><a class="headerlink" href="#id6" title="Link to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="id8">
+<span class="sig-name descname"><span class="pre">secure_random</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">lower</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">upper</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">input]</span></span></span><a class="headerlink" href="#id8" title="Link to this definition">¶</a></dt>
 <dd><p>Returns a cryptographically secure random value in the range lower &lt;= x &lt; upper, where lower &lt; upper.</p>
 </dd></dl>
 
@@ -577,8 +597,8 @@ The probability <code class="docutils literal notranslate"><span class="pre">p</
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="id7">
-<span class="sig-name descname"><span class="pre">inverse_normal_cdf</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">mean</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sd</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">p</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#id7" title="Link to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="id9">
+<span class="sig-name descname"><span class="pre">inverse_normal_cdf</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">mean</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sd</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">p</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#id9" title="Link to this definition">¶</a></dt>
 <dd><p>Compute the inverse of the Normal cdf with given mean and standard
 deviation (sd) for the cumulative probability (p): P(N &lt; n). The mean must be
 a real value and the standard deviation must be a real and positive value (both of type DOUBLE).
@@ -659,6 +679,8 @@ at a confidence specified by the z-score z.</p>
 <li><a class="reference internal" href="#id2"><code class="docutils literal notranslate"><span class="pre">cosine_similarity()</span></code></a></li>
 <li><a class="reference internal" href="#l2_squared"><code class="docutils literal notranslate"><span class="pre">l2_squared()</span></code></a></li>
 <li><a class="reference internal" href="#id4"><code class="docutils literal notranslate"><span class="pre">l2_squared()</span></code></a></li>
+<li><a class="reference internal" href="#dot_product"><code class="docutils literal notranslate"><span class="pre">dot_product()</span></code></a></li>
+<li><a class="reference internal" href="#id6"><code class="docutils literal notranslate"><span class="pre">dot_product()</span></code></a></li>
 <li><a class="reference internal" href="#degrees"><code class="docutils literal notranslate"><span class="pre">degrees()</span></code></a></li>
 <li><a class="reference internal" href="#divide"><code class="docutils literal notranslate"><span class="pre">divide()</span></code></a></li>
 <li><a class="reference internal" href="#e"><code class="docutils literal notranslate"><span class="pre">e()</span></code></a></li>
@@ -682,7 +704,7 @@ at a confidence specified by the z-score z.</p>
 <li><a class="reference internal" href="#round"><code class="docutils literal notranslate"><span class="pre">round()</span></code></a></li>
 <li><a class="reference internal" href="#secure_rand"><code class="docutils literal notranslate"><span class="pre">secure_rand()</span></code></a></li>
 <li><a class="reference internal" href="#secure_random"><code class="docutils literal notranslate"><span class="pre">secure_random()</span></code></a></li>
-<li><a class="reference internal" href="#id6"><code class="docutils literal notranslate"><span class="pre">secure_random()</span></code></a></li>
+<li><a class="reference internal" href="#id8"><code class="docutils literal notranslate"><span class="pre">secure_random()</span></code></a></li>
 <li><a class="reference internal" href="#sign"><code class="docutils literal notranslate"><span class="pre">sign()</span></code></a></li>
 <li><a class="reference internal" href="#sqrt"><code class="docutils literal notranslate"><span class="pre">sqrt()</span></code></a></li>
 <li><a class="reference internal" href="#to_base"><code class="docutils literal notranslate"><span class="pre">to_base()</span></code></a></li>
@@ -730,7 +752,7 @@ at a confidence specified by the z-score z.</p>
 <li><a class="reference internal" href="#inverse_cauchy_cdf"><code class="docutils literal notranslate"><span class="pre">inverse_cauchy_cdf()</span></code></a></li>
 <li><a class="reference internal" href="#inverse_laplace_cdf"><code class="docutils literal notranslate"><span class="pre">inverse_laplace_cdf()</span></code></a></li>
 <li><a class="reference internal" href="#inverse_f_cdf"><code class="docutils literal notranslate"><span class="pre">inverse_f_cdf()</span></code></a></li>
-<li><a class="reference internal" href="#id7"><code class="docutils literal notranslate"><span class="pre">inverse_normal_cdf()</span></code></a></li>
+<li><a class="reference internal" href="#id9"><code class="docutils literal notranslate"><span class="pre">inverse_normal_cdf()</span></code></a></li>
 <li><a class="reference internal" href="#inverse_gamma_cdf"><code class="docutils literal notranslate"><span class="pre">inverse_gamma_cdf()</span></code></a></li>
 <li><a class="reference internal" href="#inverse_binomial_cdf"><code class="docutils literal notranslate"><span class="pre">inverse_binomial_cdf()</span></code></a></li>
 <li><a class="reference internal" href="#inverse_poisson_cdf"><code class="docutils literal notranslate"><span class="pre">inverse_poisson_cdf()</span></code></a></li>
