@@ -47,12 +47,14 @@ add_executable(
   StringWriterTest.cpp
   TryExprTest.cpp
   VariadicViewTest.cpp
-  VectorReaderTest.cpp)
+  VectorReaderTest.cpp
+)
 
 add_test(
   NAME velox_expression_test
   COMMAND velox_expression_test
-  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
 
 target_link_libraries(
   velox_expression_test
@@ -78,7 +80,8 @@ target_link_libraries(
   Folly::folly
   gflags::gflags
   glog::glog
-  fmt::fmt)
+  fmt::fmt
+)
 
 add_library(velox_expression_verifier ExpressionVerifier.cpp)
 
@@ -88,7 +91,8 @@ target_link_libraries(
   velox_vector_fuzzer
   velox_fuzzer_util
   velox_type
-  velox_expression_test_utility)
+  velox_expression_test_utility
+)
 
 add_library(velox_expression_runner ExpressionRunner.cpp)
 target_link_libraries(
@@ -98,7 +102,8 @@ target_link_libraries(
   velox_functions_prestosql
   velox_functions_spark
   velox_parse_parser
-  GTest::gtest)
+  GTest::gtest
+)
 
 add_executable(velox_expression_runner_test ExpressionRunnerTest.cpp)
 target_link_libraries(
@@ -111,10 +116,10 @@ target_link_libraries(
   velox_hive_connector
   velox_fuzzer_util
   GTest::gtest
-  GTest::gtest_main)
+  GTest::gtest_main
+)
 
-add_executable(velox_expression_verifier_unit_test
-               ExpressionVerifierUnitTest.cpp)
+add_executable(velox_expression_verifier_unit_test ExpressionVerifierUnitTest.cpp)
 target_link_libraries(
   velox_expression_verifier_unit_test
   velox_expression_verifier
@@ -126,7 +131,8 @@ target_link_libraries(
   velox_type
   velox_vector_test_lib
   GTest::gtest
-  GTest::gtest_main)
+  GTest::gtest_main
+)
 
 add_executable(velox_expression_runner_unit_test ExpressionRunnerUnitTest.cpp)
 target_link_libraries(
@@ -141,4 +147,5 @@ target_link_libraries(
   velox_exec_test_lib
   velox_vector_test_lib
   GTest::gtest
-  GTest::gtest_main)
+  GTest::gtest_main
+)

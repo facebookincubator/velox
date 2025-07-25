@@ -21,4 +21,5 @@ target_link_libraries(
   gflags::gflags
   glog::glog
   CUB::CUB
-  CUDA::cudart)
+  CUDA::cudart
+)

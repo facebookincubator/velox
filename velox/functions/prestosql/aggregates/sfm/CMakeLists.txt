@@ -12,11 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-velox_add_library(velox_functions_prestosql_aggregates_sfm SfmSketch.cpp
-                  SfmSketchAccumulator.cpp)
+velox_add_library(velox_functions_prestosql_aggregates_sfm SfmSketch.cpp SfmSketchAccumulator.cpp)
 
-velox_link_libraries(velox_functions_prestosql_aggregates_sfm velox_common_base
-                     velox_memory Folly::folly)
+velox_link_libraries(
+  velox_functions_prestosql_aggregates_sfm
+  velox_common_base
+  velox_memory
+  Folly::folly
+)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)

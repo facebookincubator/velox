@@ -119,11 +119,14 @@ add_executable(
   WidthBucketArrayTest.cpp
   WordStemTest.cpp
   ZipTest.cpp
-  ZipWithTest.cpp)
+  ZipWithTest.cpp
+)
 
 if(VELOX_ENABLE_FAISS)
-  set_source_files_properties(DistanceFunctionsTest.cpp
-                              PROPERTIES COMPILE_DEFINITIONS VELOX_ENABLE_FAISS)
+  set_source_files_properties(
+    DistanceFunctionsTest.cpp
+    PROPERTIES COMPILE_DEFINITIONS VELOX_ENABLE_FAISS
+  )
 endif()
 
 add_test(velox_functions_test velox_functions_test)
@@ -143,4 +146,5 @@ target_link_libraries(
   GTest::gtest
   GTest::gtest_main
   GTest::gmock
-  GTest::gmock_main)
+  GTest::gmock_main
+)
