@@ -64,6 +64,7 @@ class TextWriter : public dwio::common::Writer {
 
  private:
   uint8_t getDelimiterForDepth(uint8_t depth) const;
+  std::string dataToWrite;
 
   void writeCellValue(
       const std::shared_ptr<DecodedVector>& decodedColumnVector,
@@ -71,6 +72,11 @@ class TextWriter : public dwio::common::Writer {
       vector_size_t row,
       uint8_t depth,
       std::optional<uint8_t> delimiter);
+
+  void addEscapeChar(
+      const std::string& dataToWrite,
+      std::string& stringWithEscapeChar,
+      uint8_t depth);
 
   const RowTypePtr schema_;
   const std::unique_ptr<BufferedWriterSink> bufferedWriterSink_;
