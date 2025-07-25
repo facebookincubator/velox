@@ -28,6 +28,7 @@ message(STATUS "Building DuckDB from source")
 # twice. Velox already does this. We need fix-duckdbversion.patch as DuckDB
 # tries to infer the version via a git commit hash or git tag. This inference
 # can lead to errors when building in another git project such as Prestissimo.
+block(SCOPE_FOR VARIABLES)
 FetchContent_Declare(
   duckdb
   URL ${VELOX_DUCKDB_SOURCE_URL}
@@ -42,9 +43,7 @@ set(ENABLE_SANITIZER OFF)
 set(ENABLE_UBSAN OFF)
 set(BUILD_SHELL OFF)
 set(EXPORT_DLL_SYMBOLS OFF)
-set(PREVIOUS_BUILD_TYPE ${CMAKE_BUILD_TYPE})
 set(CMAKE_BUILD_TYPE Release)
-set(PREVIOUS_CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS})
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-non-virtual-dtor")
 # Clang17 requires this. See issue #13215.
 if("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang" AND CMAKE_CXX_COMPILER_VERSION
@@ -54,10 +53,8 @@ if("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang" AND CMAKE_CXX_COMPILER_VERSION
 endif()
 
 FetchContent_MakeAvailable(duckdb)
+endblock()
 
 if("${CMAKE_CXX_COMPILER_ID}" MATCHES "GNU")
   target_compile_options(duckdb_catalog PRIVATE -Wno-nonnull-compare)
 endif()
-
-set(CMAKE_CXX_FLAGS ${PREVIOUS_CMAKE_CXX_FLAGS})
-set(CMAKE_BUILD_TYPE ${PREVIOUS_BUILD_TYPE})

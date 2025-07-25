@@ -12,7 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-set(TEST_LINK_LIBS
+add_library(velox_parquet_test_libs INTERFACE)
+target_link_libraries(
+  velox_parquet_test_libs
+  INTERFACE
     velox_dwio_common_test_utils
     velox_vector_test_lib
     velox_exec_test_lib
@@ -40,7 +43,7 @@ target_link_libraries(
   velox_tpch_connector
   velox_aggregates
   velox_tpch_gen
-  ${TEST_LINK_LIBS})
+  velox_parquet_test_libs)
 
 file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/examples
      DESTINATION ${CMAKE_CURRENT_BINARY_DIR})

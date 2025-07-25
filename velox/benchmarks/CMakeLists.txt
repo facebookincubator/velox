@@ -13,7 +13,10 @@
 # limitations under the License.
 add_subdirectory(basic)
 
-set(velox_benchmark_deps
+add_library(velox_benchmark_deps INTERFACE)
+target_link_libraries(
+  velox_benchmark_deps
+  INTERFACE
     velox_type
     velox_vector
     velox_vector_fuzzer
@@ -24,13 +27,12 @@ set(velox_benchmark_deps
     velox_serialization
     Folly::folly
     Folly::follybenchmark
-    ${DOUBLE_CONVERSION}
     gflags::gflags
     glog::glog)
 
 add_library(velox_benchmark_builder ExpressionBenchmarkBuilder.cpp)
 target_link_libraries(
-  velox_benchmark_builder ${velox_benchmark_deps})
+  velox_benchmark_builder velox_benchmark_deps)
 # This is a workaround for the use of VectorTestBase.h which includes gtest.h
 target_link_libraries(
   velox_benchmark_builder GTest::gtest)

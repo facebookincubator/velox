@@ -25,6 +25,7 @@ velox_resolve_dependency_url(CARES)
 
 message(STATUS "Building C-ARES from source")
 
+block(SCOPE_FOR VARIABLES)
 FetchContent_Declare(
   c-ares
   URL ${VELOX_CARES_SOURCE_URL}
@@ -38,6 +39,8 @@ set(CARES_STATIC ON)
 set(CARES_INSTALL ON)
 set(CARES_SHARED OFF)
 FetchContent_MakeAvailable(c-ares)
+endblock()
+
 if(NOT TARGET c-ares::cares)
   add_library(c-ares::cares ALIAS c-ares)
 endif()
