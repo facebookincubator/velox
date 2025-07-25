@@ -2056,9 +2056,9 @@ struct InputGeneratorConfig {
 
 /// Associates custom types with their custom operators to be the payload in
 /// the custom type registry.
-class CustomTypeFactories {
+class CustomTypeFactory {
  public:
-  virtual ~CustomTypeFactories();
+  virtual ~CustomTypeFactory();
 
   /// Returns a shared pointer to the custom type.
   virtual TypePtr getType(
@@ -2108,7 +2108,7 @@ class AbstractInputGenerator {
 /// false if type with the specified name already exists.
 bool registerCustomType(
     const std::string& name,
-    std::unique_ptr<const CustomTypeFactories> factories);
+    std::unique_ptr<const CustomTypeFactory> factories);
 
 // See registerOpaqueType() for documentation on type index and opaque type
 // alias.
