@@ -84,6 +84,13 @@ TEST(DuckConversionTest, duckValueToVariant) {
   }
 }
 
+TEST(DuckConversionTest, duckDecimalVariant) {
+  int64_t value64 = 16;
+  EXPECT_EQ(variant(value64), decimalVariant(Value("0.16"), DECIMAL(14, 2)));
+  int128_t value128 = 123;
+  EXPECT_EQ(variant(value128), decimalVariant(Value("1.23"), DECIMAL(20, 2)));
+}
+
 TEST(DuckConversionTest, duckValueToVariantUnsupported) {
   /// We use ::duckdb::TransformStringToLogicalType() for scalar types instead
   /// of LogicalType:: due this bug in GCC
