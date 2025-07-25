@@ -21,13 +21,8 @@
 
 namespace facebook::velox {
 
-#ifndef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-/// velox/type/parser has been moved to velox/functions/prestosql/types/parser.
-/// This file is for backward compatibility and will be removed once Presto is
-/// updated with the new Velox version.
-
-/// Parses a type string in Presto format to
-/// Velox type. Example type strings:
+/// Parses a type string in Presto format to Velox type.
+/// Example type strings:
 ///    row(col0 bigint, varchar)
 ///    array(bigint)
 ///    map(bigint, array(bigint))
@@ -39,5 +34,4 @@ namespace facebook::velox {
 /// Uses the Type::getType API to convert a string to Velox type.
 TypePtr parseType(const std::string& typeText);
 
-#endif
 } // namespace facebook::velox

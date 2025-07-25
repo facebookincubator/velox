@@ -21,11 +21,6 @@
 
 namespace facebook::velox {
 
-#ifndef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-/// velox/type/parser has been moved to velox/functions/prestosql/types/parser.
-/// This file is for backward compatibility and will be removed once Presto is
-/// updated with the new Velox version.
-
 /// Normalize Presto types such as INT and DOUBLE PRECISION and convert to Velox
 /// type.
 TypePtr typeFromString(
@@ -45,5 +40,4 @@ std::pair<std::string, TypePtr> inferTypeWithSpaces(
     std::vector<std::string>& words,
     bool cannotHaveFieldName = false);
 
-#endif
 } // namespace facebook::velox
