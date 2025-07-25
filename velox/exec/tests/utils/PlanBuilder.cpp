@@ -123,7 +123,8 @@ PlanBuilder& PlanBuilder::tpchTableScan(
     tpch::Table table,
     std::vector<std::string> columnNames,
     double scaleFactor,
-    std::string_view connectorId) {
+    std::string_view connectorId,
+    const std::string& filter) {
   connector::ColumnHandleMap assignmentsMap;
   std::vector<TypePtr> outputTypes;
 
@@ -137,11 +138,24 @@ PlanBuilder& PlanBuilder::tpchTableScan(
     outputTypes.emplace_back(resolveTpchColumn(table, columnName));
   }
   auto rowType = ROW(std::move(columnNames), std::move(outputTypes));
+
+  core::TypedExprPtr filterExpression;
+  if (!filter.empty()) {
+    auto expression = parse::parseExpr(filter, options_);
+    filterExpression =
+        core::Expressions::inferTypes(expression, rowType, pool_);
+  }
+
+  auto tableHandle = std::make_shared<connector::tpch::TpchTableHandle>(
+      std::string(connectorId),
+      table,
+      scaleFactor,
+      std::move(filterExpression));
+
   return TableScanBuilder(*this)
       .filtersAsNode(filtersAsNode_ ? planNodeIdGenerator_ : nullptr)
       .outputType(rowType)
-      .tableHandle(std::make_shared<connector::tpch::TpchTableHandle>(
-          std::string(connectorId), table, scaleFactor))
+      .tableHandle(tableHandle)
       .assignments(assignmentsMap)
       .endTableScan();
 }
@@ -512,10 +526,53 @@ PlanBuilder& PlanBuilder::projectExpressions(
 PlanBuilder& PlanBuilder::project(const std::vector<std::string>& projections) {
   VELOX_CHECK_NOT_NULL(planNode_, "Project cannot be the source node");
   std::vector<std::shared_ptr<const core::IExpr>> expressions;
+  expressions.reserve(projections.size());
   for (auto i = 0; i < projections.size(); ++i) {
     expressions.push_back(parse::parseExpr(projections[i], options_));
   }
   return projectExpressions(expressions);
+}
+
+PlanBuilder& PlanBuilder::parallelProject(
+    const std::vector<std::vector<std::string>>& projectionGroups,
+    const std::vector<std::string>& noLoadColumns) {
+  VELOX_CHECK_NOT_NULL(planNode_, "ParallelProject cannot be the source node");
+
+  std::vector<std::string> names;
+
+  std::vector<std::vector<core::TypedExprPtr>> exprGroups;
+  exprGroups.reserve(projectionGroups.size());
+
+  size_t i = 0;
+
+  for (const auto& group : projectionGroups) {
+    std::vector<core::TypedExprPtr> typedExprs;
+    typedExprs.reserve(group.size());
+
+    for (const auto& expr : group) {
+      const auto typedExpr = inferTypes(parse::parseExpr(expr, options_));
+      typedExprs.push_back(typedExpr);
+
+      if (auto fieldExpr =
+              dynamic_cast<const core::FieldAccessExpr*>(typedExpr.get())) {
+        names.push_back(fieldExpr->name());
+      } else {
+        names.push_back(fmt::format("p{}", i));
+      }
+
+      ++i;
+    }
+    exprGroups.push_back(std::move(typedExprs));
+  }
+
+  planNode_ = std::make_shared<core::ParallelProjectNode>(
+      nextPlanNodeId(),
+      std::move(names),
+      std::move(exprGroups),
+      noLoadColumns,
+      planNode_);
+
+  return *this;
 }
 
 PlanBuilder& PlanBuilder::appendColumns(

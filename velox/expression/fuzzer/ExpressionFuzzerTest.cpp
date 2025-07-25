@@ -64,12 +64,14 @@ using facebook::velox::fuzzer::JsonParseArgValuesGenerator;
 using facebook::velox::fuzzer::QDigestArgValuesGenerator;
 using facebook::velox::fuzzer::TDigestArgValuesGenerator;
 using facebook::velox::fuzzer::UnifiedDigestArgValuesGenerator;
+using facebook::velox::fuzzer::URLArgValuesGenerator;
 using facebook::velox::test::ReferenceQueryRunner;
 
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
 
   facebook::velox::functions::prestosql::registerAllScalarFunctions();
+  facebook::velox::functions::prestosql::registerInternalFunctions();
 
   // Calls common init functions in the necessary order, initializing
   // singletons, installing proper signal handlers for better debugging
@@ -81,10 +83,13 @@ int main(int argc, char** argv) {
 
   // TODO: List of the functions that at some point crash or fail and need to
   // be fixed before we can enable.
+  //
   // This list can include a mix of function names and function signatures.
   // Use function name to exclude all signatures of a given function from
   // testing. Use function signature to exclude only a specific signature.
   std::unordered_set<std::string> skipFunctions = {
+      "noisy_empty_approx_set_sfm", // Non-deterministic because of privacy.
+      "merge_sfm", // Fuzzer can generate sketches of different sizes.
       "element_at",
       "width_bucket",
       // Fuzzer and the underlying engine are confused about TDigest functions
@@ -207,6 +212,8 @@ int main(int argc, char** argv) {
       exprTransformers = {
           {"array_intersect", std::make_shared<SortArrayTransformer>()},
           {"array_except", std::make_shared<SortArrayTransformer>()},
+          {"array_duplicates", std::make_shared<SortArrayTransformer>()},
+          {"map_entries", std::make_shared<SortArrayTransformer>()},
           {"map_keys", std::make_shared<SortArrayTransformer>()},
           {"map_values", std::make_shared<SortArrayTransformer>()}};
 
@@ -215,6 +222,15 @@ int main(int argc, char** argv) {
           {"cast", std::make_shared<CastVarcharAndJsonArgValuesGenerator>()},
           {"json_parse", std::make_shared<JsonParseArgValuesGenerator>()},
           {"json_extract", std::make_shared<JsonExtractArgValuesGenerator>()},
+          {"scale_tdigest",
+           std::make_shared<TDigestArgValuesGenerator>("scale_tdigest")},
+          {"url_extract_fragment", std::make_shared<URLArgValuesGenerator>()},
+          {"url_extract_host", std::make_shared<URLArgValuesGenerator>()},
+          {"url_extract_parameter", std::make_shared<URLArgValuesGenerator>()},
+          {"url_extract_path", std::make_shared<URLArgValuesGenerator>()},
+          {"url_extract_port", std::make_shared<URLArgValuesGenerator>()},
+          {"url_extract_protocol", std::make_shared<URLArgValuesGenerator>()},
+          {"url_extract_query", std::make_shared<URLArgValuesGenerator>()},
           {"value_at_quantile",
            std::make_shared<UnifiedDigestArgValuesGenerator>(
                "value_at_quantile")},
@@ -236,10 +252,12 @@ int main(int argc, char** argv) {
   std::shared_ptr<facebook::velox::memory::MemoryPool> rootPool{
       facebook::velox::memory::memoryManager()->addRootPool()};
   std::shared_ptr<ReferenceQueryRunner> referenceQueryRunner{nullptr};
+
   if (!FLAGS_presto_url.empty()) {
     // Add additional functions to skip since we are now querying Presto
     // directly and are aware of certain failures.
     skipFunctions.insert({
+        "noisy_empty_approx_set_sfm", // non-deterministic because of privacy.
         // https://github.com/facebookincubator/velox/issues/11034
         "cast(real) -> varchar",
         "cast(row(real)) -> row(varchar)",
@@ -262,14 +280,11 @@ int main(int argc, char** argv) {
         "array_intersect", // https://github.com/facebookincubator/velox/issues/10740
         "f_cdf", // https://github.com/facebookincubator/velox/issues/10633
         "truncate", // https://github.com/facebookincubator/velox/issues/10628
-        "url_extract_query", // https://github.com/facebookincubator/velox/issues/10659
         "laplace_cdf", // https://github.com/facebookincubator/velox/issues/10974
         "inverse_beta_cdf", // https://github.com/facebookincubator/velox/issues/11802
         "conjunct", // https://github.com/facebookincubator/velox/issues/10678
-        "url_extract_host", // https://github.com/facebookincubator/velox/issues/10578
         "weibull_cdf", // https://github.com/facebookincubator/velox/issues/10977
         "zip_with", // https://github.com/facebookincubator/velox/issues/10844
-        "url_extract_path", // https://github.com/facebookincubator/velox/issues/10579
         "bitwise_shift_left", // https://github.com/facebookincubator/velox/issues/10870
         "split_part", // https://github.com/facebookincubator/velox/issues/10839
         "bitwise_arithmetic_shift_right", // https://github.com/facebookincubator/velox/issues/10750
@@ -281,8 +296,6 @@ int main(int argc, char** argv) {
         "format_datetime", // https://github.com/facebookincubator/velox/issues/10779
         "inverse_cauchy_cdf", // https://github.com/facebookincubator/velox/issues/10840
         "array_position", // https://github.com/facebookincubator/velox/issues/10580
-        "url_extract_fragment", // https://github.com/facebookincubator/velox/issues/12324
-        "url_extract_protocol", // https://github.com/facebookincubator/velox/issues/12325
         "chi_squared_cdf", // https://github.com/facebookincubator/velox/issues/12327
         "bitwise_left_shift", // https://github.com/facebookincubator/velox/issues/12330
         "log2", // https://github.com/facebookincubator/velox/issues/12338
@@ -372,6 +385,12 @@ int main(int argc, char** argv) {
                               // https://github.com/facebookincubator/velox/pull/13604
         // Not registered
         "array_sum_propagate_element_null",
+
+        // Skipping until the new signature is merged and released in Presto:
+        // https://github.com/prestodb/presto/pull/25521
+        "xxhash64(varbinary,bigint) -> varbinary",
+        "$internal$canonicalize",
+        "$internal$contains",
     });
 
     referenceQueryRunner = std::make_shared<PrestoQueryRunner>(

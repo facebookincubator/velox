@@ -890,6 +890,60 @@ class ProjectNode : public AbstractProjectNode {
 
 using ProjectNodePtr = std::shared_ptr<const ProjectNode>;
 
+/// Variant of ProjectNode that computes projections in
+/// parallel. The exprs are given in groups, so that all exprs in
+/// one group run together and all groups run in parallel. If lazies
+/// are loaded, each lazy must be loaded by exactly one group. If
+/// there are identity projections in the groups, possible lazies
+/// are loaded as part of processing the group. One can additionally
+/// specify 'noLoadIdentities' which are identity projected through
+/// without loading. This last set must be disjoint from all columns
+/// accessed by the exprs. The output type has 'names' first and
+/// then 'noLoadIdentities'. The ith name corresponds to the ith
+/// expr when exprs is flattened. Inherits core::ProjectNode in order to reuse
+/// the summary functions.
+class ParallelProjectNode : public core::AbstractProjectNode {
+ public:
+  ParallelProjectNode(
+      const core::PlanNodeId& id,
+      std::vector<std::string> names,
+      std::vector<std::vector<core::TypedExprPtr>> exprs,
+      std::vector<std::string> noLoadIdentities,
+      core::PlanNodePtr input);
+
+  std::string_view name() const override {
+    return "ParallelProject";
+  }
+
+  const std::vector<std::string>& exprNames() const {
+    return exprNames_;
+  }
+
+  const std::vector<std::vector<core::TypedExprPtr>>& exprs() const {
+    return exprs_;
+  }
+
+  const std::vector<std::string> noLoadIdentities() const {
+    return noLoadIdentities_;
+  }
+
+  folly::dynamic serialize() const override;
+
+  void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
+      const override;
+
+  static PlanNodePtr create(const folly::dynamic& obj, void* context);
+
+ private:
+  void addDetails(std::stringstream& stream) const override;
+
+  const std::vector<std::string> exprNames_;
+  const std::vector<std::vector<core::TypedExprPtr>> exprs_;
+  const std::vector<std::string> noLoadIdentities_;
+};
+
+using ParallelProjectNodePtr = std::shared_ptr<const ParallelProjectNode>;
+
 class TableScanNode : public PlanNode {
  public:
   TableScanNode(
@@ -4830,38 +4884,6 @@ class TopNRowNumberNode : public PlanNode {
       int32_t limit,
       PlanNodePtr source);
 
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  /// Note : This constructor is for backwards compatibility. Remove it after
-  /// migrating Prestissimo to use the new constructor.
-  /// @param partitionKeys Partitioning keys. May be empty.
-  /// @param sortingKeys Sorting keys. May not be empty and may not intersect
-  /// with 'partitionKeys'.
-  /// @param sortingOrders Sorting orders, one per sorting key.
-  /// @param rowNumberColumnName Optional name of the column containing row
-  /// numbers (or rank and dense_rank). If not specified, the output doesn't
-  /// include 'row number' column. This is used when computing partial results.
-  /// @param limit Per-partition limit. The number of
-  /// rows produced by this node will not exceed this value for any given
-  /// partition. Extra rows will be dropped.
-  TopNRowNumberNode(
-      PlanNodeId id,
-      std::vector<FieldAccessTypedExprPtr> partitionKeys,
-      std::vector<FieldAccessTypedExprPtr> sortingKeys,
-      std::vector<SortOrder> sortingOrders,
-      const std::optional<std::string>& rowNumberColumnName,
-      int32_t limit,
-      PlanNodePtr source)
-      : TopNRowNumberNode(
-            id,
-            RankFunction::kRowNumber,
-            partitionKeys,
-            sortingKeys,
-            sortingOrders,
-            rowNumberColumnName,
-            limit,
-            source) {}
-#endif
-
   class Builder {
    public:
     Builder() = default;
@@ -5105,6 +5127,10 @@ class PlanNodeVisitor {
 
   virtual void visit(const ProjectNode& node, PlanNodeVisitorContext& ctx)
       const = 0;
+
+  virtual void visit(
+      const ParallelProjectNode& node,
+      PlanNodeVisitorContext& ctx) const = 0;
 
   virtual void visit(const RowNumberNode& node, PlanNodeVisitorContext& ctx)
       const = 0;
