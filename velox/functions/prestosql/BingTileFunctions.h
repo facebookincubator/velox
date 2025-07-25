@@ -18,7 +18,9 @@
 #include "velox/common/base/Status.h"
 #include "velox/core/QueryConfig.h"
 #include "velox/functions/Macros.h"
+#include "velox/functions/prestosql/geospatial/GeometrySerde.h"
 #include "velox/functions/prestosql/types/BingTileType.h"
+#include "velox/functions/prestosql/types/GeometryType.h"
 
 namespace facebook::velox::functions {
 
@@ -311,6 +313,27 @@ struct BingTilesAroundFunction {
     result.reserve(static_cast<int32_t>(tiles.size()));
     result.add_items(tiles);
     return Status::OK();
+  }
+};
+
+template <typename T>
+struct BingTilePolygonFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Geometry>& result,
+      const arg_type<BingTile>& tile) {
+    auto x = BingTileType::bingTileX(tile);
+    auto y = BingTileType::bingTileY(tile);
+    auto zoom = BingTileType::bingTileZoom(tile);
+
+    double minX = BingTileType::tileXToLongitude(x, zoom);
+    double maxX = BingTileType::tileXToLongitude(x + 1, zoom);
+    double minY = BingTileType::tileYToLatitude(y, zoom);
+    double maxY = BingTileType::tileYToLatitude(y + 1, zoom);
+
+    geospatial::GeometrySerializer::serializeEnvelope(
+        minX, minY, maxX, maxY, result);
   }
 };
 

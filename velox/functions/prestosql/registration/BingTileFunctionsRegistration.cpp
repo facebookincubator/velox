@@ -19,6 +19,7 @@
 #include "velox/functions/prestosql/BingTileFunctions.h"
 #include "velox/functions/prestosql/types/BingTileRegistration.h"
 #include "velox/functions/prestosql/types/BingTileType.h"
+#include "velox/functions/prestosql/types/GeometryRegistration.h"
 #include "velox/type/SimpleFunctionApi.h"
 
 namespace facebook::velox::functions {
@@ -70,12 +71,15 @@ void registerSimpleBingTileFunctions(const std::string& prefix) {
       double,
       int32_t,
       double>({prefix + "bing_tiles_around"});
+  registerFunction<BingTilePolygonFunction, Geometry, BingTile>(
+      {{prefix + "bing_tile_polygon"}});
 }
 
 } // namespace
 
 void registerBingTileFunctions(const std::string& prefix) {
   registerBingTileType();
+  registerGeometryType();
 
   registerSimpleBingTileFunctions(prefix);
 }
