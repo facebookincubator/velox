@@ -78,10 +78,11 @@ std::pair<std::string, std::string> makePartitionKeyValueString(
     const BaseVector* partitionVector,
     vector_size_t row,
     const std::string& name,
-    bool isDate) {
+    bool isDate,
+    const std::string& nullValueName) {
   using T = typename TypeTraits<Kind>::NativeType;
   if (partitionVector->as<SimpleVector<T>>()->isNullAt(row)) {
-    return std::make_pair(name, "");
+    return std::make_pair(name, nullValueName);
   }
   if (isDate) {
     return std::make_pair(
@@ -99,7 +100,8 @@ std::pair<std::string, std::string> makePartitionKeyValueString(
 
 std::vector<std::pair<std::string, std::string>> extractPartitionKeyValues(
     const RowVectorPtr& partitionsVector,
-    vector_size_t row) {
+    vector_size_t row,
+    const std::string& nullValueName) {
   std::vector<std::pair<std::string, std::string>> partitionKeyValues;
   for (auto i = 0; i < partitionsVector->childrenSize(); i++) {
     partitionKeyValues.push_back(PARTITION_TYPE_DISPATCH(
@@ -108,7 +110,8 @@ std::vector<std::pair<std::string, std::string>> extractPartitionKeyValues(
         partitionsVector->childAt(i)->loadedVector(),
         row,
         asRowType(partitionsVector->type())->nameOf(i),
-        partitionsVector->childAt(i)->type()->isDate()));
+        partitionsVector->childAt(i)->type()->isDate(),
+        nullValueName));
   }
   return partitionKeyValues;
 }
