@@ -446,6 +446,12 @@ will evaluate to 1.</p>
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="ST_CoordDim">
+<span class="sig-name descname"><span class="pre">ST_CoordDim</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">output:</span> <span class="pre">integer</span></span></span><a class="headerlink" href="#ST_CoordDim" title="Link to this definition">¶</a></dt>
+<dd><p>Return the coordinate dimension of the geometry.</p>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="ST_Dimension">
 <span class="sig-name descname"><span class="pre">ST_Dimension</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">output:</span> <span class="pre">tinyint</span></span></span><a class="headerlink" href="#ST_Dimension" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the inherent dimension of this geometry object, which must be less than or equal to the coordinate dimension.</p>
@@ -455,6 +461,16 @@ will evaluate to 1.</p>
 <dt class="sig sig-object py" id="ST_ExteriorRing">
 <span class="sig-name descname"><span class="pre">ST_ExteriorRing</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">output:</span> <span class="pre">Geometry</span></span></span><a class="headerlink" href="#ST_ExteriorRing" title="Link to this definition">¶</a></dt>
 <dd><p>Returns a line string representing the exterior ring of the input polygon.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="ST_Buffer">
+<span class="sig-name descname"><span class="pre">ST_Buffer</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">distance</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">double</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">output:</span> <span class="pre">Geometry</span></span></span><a class="headerlink" href="#ST_Buffer" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the geometry that represents all points whose distance from the
+specified <code class="docutils literal notranslate"><span class="pre">geometry</span></code> is less than or equal to the specified <code class="docutils literal notranslate"><span class="pre">distance</span></code>.
+If the points of the <code class="docutils literal notranslate"><span class="pre">geometry</span></code> are extremely close together
+(delta &lt; 1e-8), this might return an empty geometry. Empty inputs return
+null.</p>
 </dd></dl>
 
 <dl class="py function">
@@ -621,8 +637,10 @@ specified.</p>
 <li><a class="reference internal" href="#ST_NumGeometries"><code class="docutils literal notranslate"><span class="pre">ST_NumGeometries()</span></code></a></li>
 <li><a class="reference internal" href="#ST_NumInteriorRing"><code class="docutils literal notranslate"><span class="pre">ST_NumInteriorRing()</span></code></a></li>
 <li><a class="reference internal" href="#ST_ConvexHull"><code class="docutils literal notranslate"><span class="pre">ST_ConvexHull()</span></code></a></li>
+<li><a class="reference internal" href="#ST_CoordDim"><code class="docutils literal notranslate"><span class="pre">ST_CoordDim()</span></code></a></li>
 <li><a class="reference internal" href="#ST_Dimension"><code class="docutils literal notranslate"><span class="pre">ST_Dimension()</span></code></a></li>
 <li><a class="reference internal" href="#ST_ExteriorRing"><code class="docutils literal notranslate"><span class="pre">ST_ExteriorRing()</span></code></a></li>
+<li><a class="reference internal" href="#ST_Buffer"><code class="docutils literal notranslate"><span class="pre">ST_Buffer()</span></code></a></li>
 <li><a class="reference internal" href="#simplify_geometry"><code class="docutils literal notranslate"><span class="pre">simplify_geometry()</span></code></a></li>
 </ul>
 </li>
