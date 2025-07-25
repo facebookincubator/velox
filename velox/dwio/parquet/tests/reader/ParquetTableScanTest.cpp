@@ -1664,9 +1664,9 @@ TEST_F(ParquetTableScanTest, pageIndexWithComplexTypeColumn) {
 }
 
 TEST_F(ParquetTableScanTest, pageIndexWithFilterAndAgg) {
-  // The file column_index.parquet contains two row groups. The first row group
-  // has 19 data pages, and the file includes the page index. The following test
-  // cases verify the correctness of results when page index is used.
+  // The column_index.parquet file has two row groups: the first with 1900 rows
+  // (~19 data pages), the rest in the second. It includes a page index. The
+  // test cases verify correct results when using the page index.
   loadData(
       getExampleFilePath("column_index.parquet"),
       ROW({"_1", "_2", "_3", "_5"}, {BIGINT(), VARCHAR(), VARCHAR(), BIGINT()}),

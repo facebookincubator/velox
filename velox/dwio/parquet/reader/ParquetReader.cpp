@@ -1234,7 +1234,7 @@ void ReaderBase::applyPageIndexFiltering(
     reader.filterDataPages(
         thisGroup, pageIndices, filterResult, metadataFilterResults);
     if (metadataFilter) {
-      metadataFilter->eval(metadataFilterResults, filterResult);
+      metadataFilter->evalRowRanges(metadataFilterResults, filterResult);
     }
     // Apply the filter result to the row ranges for the current group.
     rowRanges.at(currentGroup) = dwio::common::RowRanges::intersection(
