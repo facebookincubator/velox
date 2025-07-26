@@ -705,6 +705,8 @@ struct WriterOptions {
 
   std::string sessionTimezoneName;
   bool adjustTimestampToTimezone{false};
+  bool collectIcebergStats{false};
+  std::shared_ptr<std::vector<int32_t>> sourceColumnIndices{nullptr};
 
   // WriterOption implementations can implement this function to specify how to
   // process format-specific session and connector configs.
