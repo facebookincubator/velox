@@ -17,6 +17,7 @@
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/Task.h"
 #include "velox/expression/FieldReference.h"
+#include "velox/vector/EncodedVectorCopy.h"
 
 namespace facebook::velox::exec {
 
@@ -460,7 +461,8 @@ bool MergeJoin::prepareOutput(
       return true;
     }
 
-    if (isRightJoin(joinType_) && right != currentRight_) {
+    if ((isRightJoin(joinType_) || isFullJoin(joinType_)) &&
+        right != currentRight_) {
       return true;
     }
 
@@ -490,11 +492,10 @@ bool MergeJoin::prepareOutput(
     }
   } else {
     for (const auto& projection : leftProjections_) {
+      auto leftColumn = left->childAt(projection.inputChannel);
+      leftColumn->clearContainingLazyAndWrapped();
       localColumns[projection.outputChannel] = BaseVector::wrapInDictionary(
-          {},
-          leftOutputIndices_,
-          outputBatchSize_,
-          left->childAt(projection.inputChannel));
+          {}, leftOutputIndices_, outputBatchSize_, leftColumn);
     }
   }
   currentLeft_ = left;
@@ -510,11 +511,10 @@ bool MergeJoin::prepareOutput(
     isRightFlattened_ = true;
   } else {
     for (const auto& projection : rightProjections_) {
+      auto rightColumn = right->childAt(projection.inputChannel);
+      rightColumn->clearContainingLazyAndWrapped();
       localColumns[projection.outputChannel] = BaseVector::wrapInDictionary(
-          {},
-          rightOutputIndices_,
-          outputBatchSize_,
-          right->childAt(projection.inputChannel));
+          {}, rightOutputIndices_, outputBatchSize_, rightColumn);
     }
     isRightFlattened_ = false;
   }
@@ -801,6 +801,23 @@ RowVectorPtr MergeJoin::filterOutputForAntiJoin(const RowVectorPtr& output) {
   return wrap(numPassed, indices, output);
 }
 
+VectorPtr MergeJoin::mergeOutputBatches() {
+  VectorPtr target = BaseVector::create(outputType_, bufferedRowCount_, pool());
+  auto targetIndex = 0;
+  for (auto i = 0; i < outputBatches_.size(); ++i) {
+    BaseVector::CopyRange range{0, targetIndex, outputBatches_[i]->size()};
+    encodedVectorCopy(
+        EncodedVectorCopyOptions{pool(), true, 0.5},
+        outputBatches_[i],
+        folly::Range(&range, 1),
+        target);
+    targetIndex += outputBatches_[i]->size();
+  }
+
+  outputBatches_.clear();
+  return target;
+}
+
 RowVectorPtr MergeJoin::getOutput() {
   // Make sure to have is-blocked or needs-input as true if returning null
   // output. Otherwise, Driver assumes the operator is finished.
@@ -814,11 +831,25 @@ RowVectorPtr MergeJoin::getOutput() {
     if (output != nullptr && output->size() > 0) {
       if (filter_) {
         output = applyFilter(output);
+
         if (output != nullptr) {
+          auto numRowsAfterFilter = output->size();
+
           for (const auto [channel, _] : filterInputToOutputChannel_) {
             filterInput_->childAt(channel).reset();
           }
-          return output;
+
+          if (numRowsAfterFilter <= outputBatchSize_ - bufferedRowCount_) {
+            outputBatches_.emplace_back(output);
+            bufferedRowCount_ += numRowsAfterFilter;
+
+            continue;
+          } else {
+            auto target = mergeOutputBatches();
+            outputBatches_.emplace_back(output);
+            bufferedRowCount_ = numRowsAfterFilter;
+            return std::dynamic_pointer_cast<RowVector>(target);
+          }
         }
 
         // No rows survived the filter. Get more rows.
@@ -886,6 +917,12 @@ RowVectorPtr MergeJoin::getOutput() {
         }
       }
       continue;
+    }
+
+    if (outputBatches_.size() > 0 && isFinished()) {
+      auto target = mergeOutputBatches();
+      bufferedRowCount_ = 0;
+      return std::dynamic_pointer_cast<RowVector>(target);
     }
 
     return nullptr;
@@ -1141,7 +1178,7 @@ RowVectorPtr MergeJoin::doGetOutput() {
           isFullJoin(joinType_)) {
         // If output_ is currently wrapping a different buffer, return it
         // first.
-        if (prepareOutput(input_, nullptr)) {
+        if (prepareOutput(input_, rightInput_)) {
           output_->resize(outputSize_);
           return std::move(output_);
         }
@@ -1166,7 +1203,7 @@ RowVectorPtr MergeJoin::doGetOutput() {
       if (isRightJoin(joinType_) || isFullJoin(joinType_)) {
         // If output_ is currently wrapping a different buffer, return it
         // first.
-        if (prepareOutput(nullptr, rightInput_)) {
+        if (prepareOutput(input_, rightInput_)) {
           output_->resize(outputSize_);
           return std::move(output_);
         }
