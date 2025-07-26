@@ -5995,5 +5995,28 @@ TEST_F(TableScanTest, textfileLarge) {
   ASSERT_GT(getTableScanRuntimeStats(task)["ioWaitWallNanos"].sum, 0);
 }
 
+TEST_F(TableScanTest, duplicateFieldProject) {
+  auto vectors = {makeRowVector(
+      {"id", "name"},
+      {
+          makeFlatVector<int32_t>({1, 2}),
+          makeFlatVector<std::string>({"Alice", "John"}),
+      })};
+
+  auto file = TempFilePath::create();
+  writeToFile(file->getPath(), vectors);
+  createDuckDbTable(vectors);
+
+  auto plan = PlanBuilder()
+                  .tableScan(ROW({"id", "name"}, {INTEGER(), VARCHAR()}))
+                  .filter("name is not null and name = 'John'")
+                  .project({"id AS t0", "id AS t1"})
+                  .planNode();
+
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .split(makeHiveConnectorSplit(file->getPath()))
+      .assertResults("SELECT id, id FROM tmp where name = 'John'");
+}
+
 } // namespace
 } // namespace facebook::velox::exec
