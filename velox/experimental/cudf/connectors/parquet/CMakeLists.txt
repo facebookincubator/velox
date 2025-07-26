@@ -16,10 +16,16 @@ add_library(velox_cudf_parquet_config ParquetConfig.cpp)
 
 set_target_properties(
   velox_cudf_parquet_config
-  PROPERTIES CUDA_ARCHITECTURES native)
+  PROPERTIES
+    CUDA_ARCHITECTURES native
+    CXX_STANDARD ${VELOX_CUDF_CXX_STANDARD}
+    CXX_STANDARD_REQUIRED ${VELOX_CUDF_CXX_STANDARD_REQUIRED})
 
 target_link_libraries(
   velox_cudf_parquet_config velox_core velox_exception cudf::cudf)
+
+# Suppress warnings from included Velox headers when using C++20
+target_compile_options(velox_cudf_parquet_config PRIVATE -Wno-deprecated)
 
 add_library(
   velox_cudf_parquet_connector OBJECT
@@ -32,7 +38,10 @@ add_library(
 
 set_target_properties(
   velox_cudf_parquet_connector
-  PROPERTIES CUDA_ARCHITECTURES native)
+  PROPERTIES
+    CUDA_ARCHITECTURES native
+    CXX_STANDARD ${VELOX_CUDF_CXX_STANDARD}
+    CXX_STANDARD_REQUIRED ${VELOX_CUDF_CXX_STANDARD_REQUIRED})
 
 target_link_libraries(
   velox_cudf_parquet_connector
@@ -42,3 +51,6 @@ target_link_libraries(
     velox_connector
     velox_type_tz
     velox_gcs)
+
+# Suppress warnings from included Velox headers when using C++20
+target_compile_options(velox_cudf_parquet_connector PRIVATE -Wno-deprecated)
