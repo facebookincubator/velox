@@ -15,21 +15,18 @@
  */
 #pragma once
 
-#include <string>
-
-#include "velox/functions/Macros.h"
 #include "velox/functions/lib/string/StringImpl.h"
 #include "velox/functions/sparksql/CharVarcharUtils.h"
 
 namespace facebook::velox::functions::sparksql {
 
-/// Ensures that `'abc'` fits within the specified length `n` in
-/// characters. If the length of `'abc'` is equal to `n`, it is returned as-is.
-/// If the length of `'abc'` is less than `n`, it is padded with trailing
-/// spaces(0x20) to the length of `n`. If the length of `'abc'` is greater
-/// than `n`, trailing spaces are trimmed to fit within `n`.
-/// Throws an exception if the trimmed string still exceeds `n` or if `n`
-/// is not a positive value.
+/// Ensures that an input string fits within the specified length `limit` in
+/// characters. If the length of the input string is equal to `limit`, it is
+/// returned as-is. If the length of the input string is less than `limit`, it
+/// is padded with trailing spaces(0x20) to the length of `limit`. If the
+/// length of the input string is greater than `limit`, trailing spaces are
+/// trimmed to fit within `limit`. Throws an exception if the trimmed string
+/// still exceeds `limit` or if `limit` is not a positive value.
 template <typename T>
 struct CharTypeWriteSideCheckFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
@@ -65,10 +62,9 @@ struct CharTypeWriteSideCheckFunction {
 
     if (numCharacters == limit) {
       result.setNoCopy(input);
-      return;
     } else if (numCharacters < limit) {
-      // rpad spaces(0x20) to limit.
-      stringImpl::pad<false /*lpad*/, isAscii>(result, input, limit, {" "});
+      // Rpad spaces(0x20) to limit.
+      stringImpl::pad</*lpad=*/false, isAscii>(result, input, limit, {" "});
     } else {
       trimTrailingSpaces(result, input, numCharacters, limit);
     }

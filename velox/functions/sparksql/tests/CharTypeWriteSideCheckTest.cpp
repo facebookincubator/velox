@@ -21,7 +21,7 @@ namespace {
 
 class CharTypeWriteSideCheckTest : public SparkFunctionBaseTest {};
 
-TEST_F(CharTypeWriteSideCheckTest, charTypeWriteSideCheck) {
+TEST_F(CharTypeWriteSideCheckTest, ascii) {
   const auto charTypeWriteSideCheck =
       [&](const std::optional<std::string>& input,
           const std::optional<int32_t>& limit) {
@@ -31,25 +31,55 @@ TEST_F(CharTypeWriteSideCheckTest, charTypeWriteSideCheck) {
 
   // Case 1: String length equals limit (return as-is).
   EXPECT_EQ(charTypeWriteSideCheck("abc", 3), "abc");
-  EXPECT_EQ(charTypeWriteSideCheck("世界", 2), "世界");
-  EXPECT_EQ(charTypeWriteSideCheck("a世", 2), "a世");
 
   // Case 2: String length < limit (pad with spaces to reach limit).
   EXPECT_EQ(charTypeWriteSideCheck("a", 3), "a  ");
   EXPECT_EQ(charTypeWriteSideCheck("ab", 3), "ab ");
   EXPECT_EQ(charTypeWriteSideCheck("", 3), "   ");
-  EXPECT_EQ(charTypeWriteSideCheck("世", 3), "世  ");
-  EXPECT_EQ(charTypeWriteSideCheck("世界", 3), "世界 ");
 
   // Case 3: String length > limit (try trimming trailing spaces).
   // Case 3a: Successful trimming (exactly fits after trimming).
   EXPECT_EQ(charTypeWriteSideCheck("abc  ", 3), "abc");
-  EXPECT_EQ(charTypeWriteSideCheck("世界   ", 2), "世界");
-  EXPECT_EQ(charTypeWriteSideCheck("a世  ", 2), "a世");
 
   // Case 3b: Successful trimming but contain spare spaces to fit the limit.
   EXPECT_EQ(charTypeWriteSideCheck("a   ", 2), "a ");
+}
+
+TEST_F(CharTypeWriteSideCheckTest, unicode) {
+  const auto charTypeWriteSideCheck =
+      [&](const std::optional<std::string>& input,
+          const std::optional<int32_t>& limit) {
+        return evaluateOnce<std::string>(
+            "char_type_write_side_check(c0, c1)", input, limit);
+      };
+
+  // Case 1: String length equals limit (return as-is).
+  EXPECT_EQ(charTypeWriteSideCheck("世界", 2), "世界");
+  EXPECT_EQ(charTypeWriteSideCheck("a世", 2), "a世");
+  EXPECT_EQ(charTypeWriteSideCheck("Привет", 6), "Привет"); // Cyrillic
+  EXPECT_EQ(charTypeWriteSideCheck("Γειά", 4), "Γειά"); // Greek
+
+  // Case 2: String length < limit (pad with spaces to reach limit).
+  EXPECT_EQ(charTypeWriteSideCheck("世", 3), "世  ");
+  EXPECT_EQ(charTypeWriteSideCheck("世界", 3), "世界 ");
+  EXPECT_EQ(charTypeWriteSideCheck("При", 6), "При   ");
+  EXPECT_EQ(charTypeWriteSideCheck("Γει", 4), "Γει ");
+
+  // Case 3: String length > limit (try trimming trailing spaces).
+  EXPECT_EQ(charTypeWriteSideCheck("世界   ", 2), "世界");
+  EXPECT_EQ(charTypeWriteSideCheck("a世  ", 2), "a世");
   EXPECT_EQ(charTypeWriteSideCheck("世   ", 2), "世 ");
+  EXPECT_EQ(charTypeWriteSideCheck("Привет   ", 6), "Привет");
+  EXPECT_EQ(charTypeWriteSideCheck("Γειά ", 4), "Γειά");
+}
+
+TEST_F(CharTypeWriteSideCheckTest, error) {
+  const auto charTypeWriteSideCheck =
+      [&](const std::optional<std::string>& input,
+          const std::optional<int32_t>& limit) {
+        return evaluateOnce<std::string>(
+            "char_type_write_side_check(c0, c1)", input, limit);
+      };
 
   // Error cases - string length > limit even after trimming trailing spaces.
   VELOX_ASSERT_USER_THROW(
@@ -61,6 +91,12 @@ TEST_F(CharTypeWriteSideCheckTest, charTypeWriteSideCheck) {
   VELOX_ASSERT_USER_THROW(
       charTypeWriteSideCheck("a世界b", 3),
       "Exceeds allowed length limitation: 3");
+  VELOX_ASSERT_USER_THROW(
+      charTypeWriteSideCheck("Приветик", 6),
+      "Exceeds allowed length limitation: 6");
+  VELOX_ASSERT_USER_THROW(
+      charTypeWriteSideCheck("Γειάσου", 4),
+      "Exceeds allowed length limitation: 4");
 
   // Null input cases.
   EXPECT_EQ(charTypeWriteSideCheck(std::nullopt, 5), std::nullopt);
