@@ -267,6 +267,18 @@ String Functions
         SELECT overlay('Spark SQL', 'tructured', 2, 4); -- "Structured SQL"
         SELECT overlay('Spark SQL', '_', -6, 3); -- "_Sql"
 
+.. spark:function:: read_side_padding(string, limit) -> varchar
+
+    Right-pads the given string with spaces to the specified length ``limit``.
+    If the string's length is already greater than or equal to ``limit``, it is returned as-is.
+    Throws an exception if ``limit`` is not greater than 0.
+    Note: This function is not directly callable in Spark SQL, but is used internally for reading CHAR type columns. ::
+
+        -- Test with SparkSQL that triggers the function
+        CREATE TABLE tgt(id char(3)) STORED AS PARQUET;
+        INSERT INTO tgt VALUES ("a");
+        SELECT id FROM tgt; -- "a  "
+
 .. spark:function:: repeat(input, n) -> varchar
 
     Returns the string which repeats ``input`` ``n`` times.

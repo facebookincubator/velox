@@ -23,6 +23,7 @@
 #include "velox/functions/sparksql/InitcapFunction.h"
 #include "velox/functions/sparksql/LuhnCheckFunction.h"
 #include "velox/functions/sparksql/MaskFunction.h"
+#include "velox/functions/sparksql/ReadSidePaddingFunction.h"
 #include "velox/functions/sparksql/Split.h"
 #include "velox/functions/sparksql/String.h"
 #include "velox/functions/sparksql/StringToMap.h"
@@ -165,6 +166,8 @@ void registerStringFunctions(const std::string& prefix) {
       prefix + "lower",
       SparkLowerFunction::signatures(),
       std::make_unique<SparkLowerFunction>());
+  registerFunction<ReadSidePaddingFunction, Varchar, Varchar, int32_t>(
+      {prefix + "read_side_padding"});
   registerFunction<
       VarcharTypeWriteSideCheckFunction,
       Varchar,
