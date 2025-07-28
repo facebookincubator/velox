@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
+#include "velox/functions/lib/Murmur3Hash32Base.h"
 #include "velox/common/base/BitUtil.h"
-#include "velox/functions/lib/Murmur3hash32Base.h"
 
 namespace facebook::velox::functions {
 

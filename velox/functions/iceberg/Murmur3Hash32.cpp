@@ -28,7 +28,7 @@ int32_t Murmur3Hash32::hashInt64(uint64_t input) {
   return Murmur3Hash32Base::hashInt64(input, kSeed);
 }
 
-int32_t Murmur3Hash32::hashBytes(const char* const input, uint32_t len) {
+int32_t Murmur3Hash32::hashBytes(const char* input, uint32_t len) {
   const uint8_t* data = reinterpret_cast<const uint8_t*>(input);
   const int32_t nblocks = len / 4;
 

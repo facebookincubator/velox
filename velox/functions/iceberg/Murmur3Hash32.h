@@ -36,7 +36,7 @@ class Murmur3Hash32 : Murmur3Hash32Base {
   /// Hash the bytes every 4 bytes, XOR on remaining bytes. Processing for the
   /// remaining bytes is different with Spark murmur3 which combine with the
   /// remaining bytes.
-  static int32_t hashBytes(const char* const input, uint32_t len);
+  static int32_t hashBytes(const char* input, uint32_t len);
 };
 
 } // namespace facebook::velox::functions::iceberg
