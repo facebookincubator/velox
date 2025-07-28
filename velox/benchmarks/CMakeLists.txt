@@ -20,6 +20,7 @@ target_link_libraries(
     velox_type
     velox_vector
     velox_vector_fuzzer
+    velox_vector_test_lib
     velox_expression
     velox_parse_parser
     velox_parse_utils
