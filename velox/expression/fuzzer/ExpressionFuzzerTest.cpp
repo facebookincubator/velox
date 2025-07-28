@@ -92,12 +92,6 @@ int main(int argc, char** argv) {
       "merge_sfm", // Fuzzer can generate sketches of different sizes.
       "element_at",
       "width_bucket",
-      // Fuzzer and the underlying engine are confused about TDigest functions
-      // (since TDigest is a user defined type), and tries to pass a
-      // VARBINARY (since TDigest's implementation uses an
-      // alias to VARBINARY).
-      "value_at_quantile",
-      "values_at_quantiles",
       "merge_tdigest",
       "scale_tdigest",
       "quantiles_at_values",
