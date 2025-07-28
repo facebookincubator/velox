@@ -11,11 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-<<<<<<< HEAD
-add_executable(velox_functions_iceberg_test BucketFunctionTest.cpp)
-=======
-add_executable(velox_functions_iceberg_test TruncateTest.cpp)
->>>>>>> 09fed412e2 (add common class)
+add_executable(velox_functions_iceberg_test BucketFunctionTest.cpp TruncateTest.cpp)
 
 add_test(
   NAME velox_functions_iceberg_test
@@ -33,8 +29,4 @@ target_link_libraries(
   velox_dwio_common_test_utils
   GTest::gtest
   GTest::gtest_main
-<<<<<<< HEAD
   GTest::gmock)
-=======
-  GTest::gmock)
->>>>>>> 09fed412e2 (add common class)

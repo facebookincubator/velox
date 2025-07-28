@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 /*
  * Copyright (c) Facebook, Inc. and its affiliates.
  *
@@ -17,22 +16,13 @@
 
 #include "velox/functions/iceberg/Register.h"
 #include "velox/functions/iceberg/BucketFunction.h"
-=======
-#include "velox/functions/iceberg/Register.h"
-#include "velox/functions/iceberg/truncate.h"
->>>>>>> 09fed412e2 (add common class)
+#include "velox/functions/iceberg/Truncate.h"
 
 namespace facebook::velox::functions::iceberg {
 
 void registerFunctions(const std::string& prefix) {
-<<<<<<< HEAD
   registerBucketFunctions(prefix);
-}
-
-} // namespace facebook::velox::functions::iceberg
-=======
   registerTruncateFunctions(prefix);
 }
 
 } // namespace facebook::velox::functions::iceberg
->>>>>>> 09fed412e2 (add common class)

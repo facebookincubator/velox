@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 /*
  * Copyright (c) Facebook, Inc. and its affiliates.
  *
@@ -14,8 +13,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-=======
->>>>>>> 09fed412e2 (add common class)
 #pragma once
 
 #include <string>
@@ -24,8 +21,4 @@ namespace facebook::velox::functions::iceberg {
 
 void registerFunctions(const std::string& prefix = "");
 
-<<<<<<< HEAD
 } // namespace facebook::velox::functions::iceberg
-=======
-} // namespace facebook::velox::functions::iceberg
->>>>>>> 09fed412e2 (add common class)

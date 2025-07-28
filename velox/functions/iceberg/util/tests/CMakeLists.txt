@@ -20,6 +20,7 @@ add_test(
 
 target_link_libraries(
   velox_functions_iceberg_util_test
+  velox_functions_util
   velox_functions_iceberg_util
   GTest::gtest
   GTest::gtest_main

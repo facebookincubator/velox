@@ -15,17 +15,18 @@
  */
 
 #include "velox/functions/Macros.h"
+#include "velox/common/base/Status.h"
 #include "velox/functions/Registerer.h"
-#include "velox/functions/iceberg/TruncateFunction.h"
+#include "velox/functions/iceberg/Truncate.h"
 #include "velox/functions/lib/string/StringImpl.h"
 #include "velox/type/Timestamp.h"
 
 namespace facebook::velox::functions::iceberg {
 namespace {
 
-template <typename T>
+template <typename TExec>
 struct TruncateFunction {
-  VELOX_DEFINE_FUNCTION_TYPES(T);
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
 
   // Results refer to strings in the first argument.
   static constexpr int32_t reuse_strings_from_arg = 0;
@@ -38,14 +39,14 @@ struct TruncateFunction {
       const core::QueryConfig& /*config*/,
       const int32_t* /*length*/,
       const arg_type<Varchar>* /*input*/) {
-    if (inputTypes[1]->kind() == TypeKind::VABINARY) {
+    if (inputTypes[1]->kind() == TypeKind::VARBINARY) {
       inputIsVarbinary = true;
     }
   }
 
-  template <typename TInput>
+  template <typename T>
   FOLLY_ALWAYS_INLINE Status
-  call(TInput& out, const int32_t& length, const TInput& input) {
+  call(T out, int32_t length, T input) {
     VELOX_RETURN_IF(
         length <= 0,
         Status::UserError("Invalid truncate width: {} (must be > 0)", length));
@@ -54,28 +55,28 @@ struct TruncateFunction {
   }
 
   FOLLY_ALWAYS_INLINE Status call(
-      arg_type<Varchar>& out,
+      out_type<Varchar>& out,
       const int32_t& length,
       const arg_type<Varchar>& input) {
     VELOX_RETURN_IF(
         length <= 0,
         Status::UserError("Invalid truncate width: {} (must be > 0)", length));
-    auto truncatedLength = inputisVarbinary
+    auto truncatedLength = inputIsVarbinary
         ? stringImpl::cappedLength<true>(input, length)
         : stringImpl::cappedLength<false>(input, length);
-    out = result.setNoCopy(StringView(input.data(), truncatedLength));
+    out.setNoCopy(StringView(input.data(), truncatedLength));
     return Status::OK();
   }
 
   FOLLY_ALWAYS_INLINE Status callAscii(
-      arg_type<Varchar>& out,
+      out_type<Varchar>& out,
       const int32_t& length,
       const arg_type<Varchar>& input) {
     VELOX_RETURN_IF(
         length <= 0,
         Status::UserError("Invalid truncate width: {} (must be > 0)", length));
     auto truncatedLength = stringImpl::cappedLength<true>(input, length);
-    out = result.setNoCopy(StringView(input.data(), truncatedLength));
+    out.setNoCopy(StringView(input.data(), truncatedLength));
     return Status::OK();
   }
 
