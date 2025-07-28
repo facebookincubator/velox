@@ -18,8 +18,6 @@
 #include "velox/core/Expressions.h"
 #include "velox/functions/iceberg/tests/IcebergFunctionBaseTest.h"
 
-#include <gtest/gtest.h>
-
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::functions::iceberg;

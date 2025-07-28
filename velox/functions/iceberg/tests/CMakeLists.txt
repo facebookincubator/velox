@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-add_executable(velox_functions_iceberg_test BucketFunctionTest.cpp TruncateTest.cpp)
+add_executable(velox_functions_iceberg_test BucketFunctionTest.cpp DateTimeFunctionsTest.cpp TruncateTest.cpp)
 
 add_test(
   NAME velox_functions_iceberg_test
