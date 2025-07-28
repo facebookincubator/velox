@@ -19,7 +19,15 @@ add_executable(velox_cudf_table_scan_test Main.cpp TableScanTest.cpp)
 add_executable(velox_cudf_table_write_test Main.cpp TableWriteTest.cpp)
 add_executable(velox_cudf_local_partition_test Main.cpp LocalPartitionTest.cpp)
 add_executable(velox_cudf_filter_project_test Main.cpp FilterProjectTest.cpp)
+add_executable(velox_cudf_subfield_filter_ast_test Main.cpp
+                                                   SubfieldFilterAstTest.cpp)
 add_executable(velox_cudf_limit_test Main.cpp LimitTest.cpp)
+
+# target_compile_definitions(velox_cudf_hash_join_test PRIVATE -g -O0)
+set_property(
+  SOURCE HashJoinTest.cpp AggregationTest.cpp
+  APPEND
+  PROPERTY COMPILE_FLAGS "-g -O0")
 
 add_test(
   NAME velox_cudf_hash_join_test
@@ -57,6 +65,11 @@ add_test(
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 
 add_test(
+  NAME velox_cudf_subfield_filter_ast_test
+  COMMAND velox_cudf_subfield_filter_ast_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+
+add_test(
   NAME velox_cudf_limit_test
   COMMAND velox_cudf_limit_test
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
@@ -74,6 +87,8 @@ set_tests_properties(velox_cudf_table_scan_test PROPERTIES LABELS cuda_driver
 set_tests_properties(velox_cudf_table_write_test PROPERTIES LABELS cuda_driver
                                                             TIMEOUT 3000)
 set_tests_properties(velox_cudf_filter_project_test
+                     PROPERTIES LABELS cuda_driver TIMEOUT 3000)
+set_tests_properties(velox_cudf_subfield_filter_ast_test
                      PROPERTIES LABELS cuda_driver TIMEOUT 3000)
 set_tests_properties(velox_cudf_limit_test PROPERTIES LABELS cuda_driver
                                                       TIMEOUT 3000)
@@ -145,6 +160,15 @@ target_link_libraries(
 
 target_link_libraries(
   velox_cudf_filter_project_test
+  velox_cudf_exec
+  velox_exec
+  velox_exec_test_lib
+  velox_test_util
+  gtest
+  gtest_main)
+
+target_link_libraries(
+  velox_cudf_subfield_filter_ast_test
   velox_cudf_exec
   velox_exec
   velox_exec_test_lib
