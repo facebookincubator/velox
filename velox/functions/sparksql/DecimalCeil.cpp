@@ -51,9 +51,7 @@ void registerDecimalCeil(const std::string& prefix) {
       exec::SignatureVariable(
           P2::name(),
           fmt::format(
-              "min(38, {p} - {s} + min({s}, 1))",
-              fmt::arg("p", P1::name()),
-              fmt::arg("s", S1::name())),
+              "min(38, {0} - {1} + min({1}, 1))", P1::name(), S1::name()),
           exec::ParameterType::kIntegerParameter),
       exec::SignatureVariable(
           S2::name(), "0", exec::ParameterType::kIntegerParameter),
