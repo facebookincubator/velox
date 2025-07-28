@@ -24,6 +24,7 @@
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/Writer.h"
 #include "velox/dwio/common/WriterFactory.h"
+#include "velox/dwio/parquet/writer/arrow/Metadata.h"
 #include "velox/dwio/parquet/writer/arrow/Types.h"
 #include "velox/dwio/parquet/writer/arrow/util/Compression.h"
 #include "velox/vector/ComplexVector.h"
@@ -195,6 +196,10 @@ class Writer : public dwio::common::Writer {
  private:
   // Sets the memory reclaimers for all the memory pools used by this writer.
   void setMemoryReclaimers();
+
+  // Collect Iceberg data file statistics from FileMetaData.
+  void collectIcebergDataFileStats(
+      const std::shared_ptr<arrow::FileMetaData>& fileMetadata);
 
   // Checks if the input data contains a nested wrapped vector or complex
   // vector. If so, flatten the input to make it compatible with

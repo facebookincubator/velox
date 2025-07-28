@@ -677,6 +677,11 @@ void Statistics::__set_distinct_count(const int64_t val) {
   __isset.distinct_count = true;
 }
 
+void Statistics::__set_nan_count(const int64_t val) {
+  this->nan_count = val;
+  __isset.nan_count = true;
+}
+
 void Statistics::__set_max_value(const std::string& val) {
   this->max_value = val;
   __isset.max_value = true;
@@ -820,6 +825,7 @@ void swap(Statistics& a, Statistics& b) {
   swap(a.min, b.min);
   swap(a.null_count, b.null_count);
   swap(a.distinct_count, b.distinct_count);
+  swap(a.nan_count, b.nan_count);
   swap(a.max_value, b.max_value);
   swap(a.min_value, b.min_value);
   swap(a.__isset, b.__isset);
@@ -830,6 +836,7 @@ Statistics::Statistics(const Statistics& other0) {
   min = other0.min;
   null_count = other0.null_count;
   distinct_count = other0.distinct_count;
+  nan_count = other0.nan_count;
   max_value = other0.max_value;
   min_value = other0.min_value;
   __isset = other0.__isset;
@@ -839,6 +846,7 @@ Statistics& Statistics::operator=(const Statistics& other1) {
   min = other1.min;
   null_count = other1.null_count;
   distinct_count = other1.distinct_count;
+  nan_count = other1.nan_count;
   max_value = other1.max_value;
   min_value = other1.min_value;
   __isset = other1.__isset;

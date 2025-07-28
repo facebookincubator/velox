@@ -20,9 +20,13 @@
 #include <arrow/table.h>
 #include "velox/common/base/Pointers.h"
 #include "velox/common/config/Config.h"
+#include "velox/common/encode/Base64.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/core/QueryConfig.h"
+#include "velox/dwio/parquet/writer/arrow/ArrowSchema.h"
+#include "velox/dwio/parquet/writer/arrow/Metadata.h"
 #include "velox/dwio/parquet/writer/arrow/Properties.h"
+#include "velox/dwio/parquet/writer/arrow/Statistics.h"
 #include "velox/dwio/parquet/writer/arrow/Writer.h"
 #include "velox/exec/MemoryReclaimer.h"
 
@@ -193,47 +197,74 @@ void validateSchemaRecursive(const RowTypePtr& schema) {
   }
 }
 
-std::shared_ptr<::arrow::Field> updateFieldNameRecursive(
+std::shared_ptr<::arrow::Field> updateFieldRecursive(
     const std::shared_ptr<::arrow::Field>& field,
     const Type& type,
-    const std::string& name = "") {
+    const std::string& name = "",
+    const dwio::common::IcebergStatsSettings* icebergStatsSetting = nullptr) {
+  std::shared_ptr<::arrow::Field> newField{nullptr};
   if (type.isRow()) {
     auto& rowType = type.asRow();
-    auto newField = field->WithName(name);
+    newField = field->WithName(name);
     auto structType =
         std::dynamic_pointer_cast<::arrow::StructType>(newField->type());
     auto childrenSize = rowType.size();
     std::vector<std::shared_ptr<::arrow::Field>> newFields;
-    newFields.reserve(childrenSize);
-    for (auto i = 0; i < childrenSize; i++) {
-      newFields.push_back(updateFieldNameRecursive(
-          structType->fields()[i], *rowType.childAt(i), rowType.nameOf(i)));
+    newFields.reserve(rowType.size());
+    for (auto i = 0; i < rowType.size(); ++i) {
+      const auto* childSetting =
+          icebergStatsSetting ? &icebergStatsSetting->children.at(i) : nullptr;
+      newFields.push_back(updateFieldRecursive(
+          structType->fields()[i],
+          *rowType.childAt(i),
+          rowType.nameOf(i),
+          childSetting));
     }
-    return newField->WithType(::arrow::struct_(newFields));
+    newField = newField->WithType(::arrow::struct_(newFields));
   } else if (type.isArray()) {
-    auto newField = field->WithName(name);
+    newField = field->WithName(name);
     auto listType =
         std::dynamic_pointer_cast<::arrow::BaseListType>(newField->type());
     auto elementType = type.asArray().elementType();
     auto elementField = listType->value_field();
-    return newField->WithType(
-        ::arrow::list(updateFieldNameRecursive(elementField, *elementType)));
+    const auto* childSetting =
+        icebergStatsSetting ? &icebergStatsSetting->children.at(0) : nullptr;
+
+    auto updatedElementField =
+        updateFieldRecursive(elementField, *elementType, name, childSetting);
+    newField = newField->WithType(::arrow::list(updatedElementField));
   } else if (type.isMap()) {
     auto mapType = type.asMap();
-    auto newField = field->WithName(name);
+    newField = field->WithName(name);
     auto arrowMapType =
         std::dynamic_pointer_cast<::arrow::MapType>(newField->type());
-    auto newKeyField =
-        updateFieldNameRecursive(arrowMapType->key_field(), *mapType.keyType());
-    auto newValueField = updateFieldNameRecursive(
-        arrowMapType->item_field(), *mapType.valueType());
-    return newField->WithType(
-        ::arrow::map(newKeyField->type(), newValueField->type()));
+    const auto* keySetting =
+        icebergStatsSetting ? &icebergStatsSetting->children.at(0) : nullptr;
+    const auto* valueSetting =
+        icebergStatsSetting ? &icebergStatsSetting->children.at(1) : nullptr;
+    auto newKeyField = updateFieldRecursive(
+        arrowMapType->key_field(),
+        *mapType.keyType(),
+        mapType.nameOf(0),
+        keySetting);
+    auto newValueField = updateFieldRecursive(
+        arrowMapType->item_field(),
+        *mapType.valueType(),
+        mapType.nameOf(1),
+        valueSetting);
+    newField = newField->WithType(
+        std::make_shared<::arrow::MapType>(newKeyField, newValueField));
   } else if (name != "") {
-    return field->WithName(name);
+    newField = field->WithName(name);
   } else {
-    return field;
+    newField = field;
   }
+
+  if (icebergStatsSetting) {
+    newField = newField->WithMetadata(
+        arrow::arrow::FieldIdMetadata(icebergStatsSetting->id));
+  }
+  return newField;
 }
 
 std::optional<TimestampPrecision> getTimestampUnit(
@@ -350,6 +381,9 @@ Writer::Writer(
       getArrowParquetWriterOptions(options, flushPolicy_);
   setMemoryReclaimers();
   writeInt96AsTimestamp_ = options.writeInt96AsTimestamp;
+  dataFileStats_ = std::make_shared<dwio::common::IcebergDataFileStatistics>();
+  icebergStatsSetting_ = std::move(options.icebergStatsSetting);
+  collectIcebergStats_ = options.collectIcebergDataFileStats;
 }
 
 Writer::Writer(
@@ -445,8 +479,12 @@ void Writer::write(const VectorPtr& data) {
   std::vector<std::shared_ptr<::arrow::Field>> newFields;
   auto childSize = schema_->size();
   for (auto i = 0; i < childSize; i++) {
-    newFields.push_back(updateFieldNameRecursive(
-        arrowSchema->fields()[i], *schema_->childAt(i), schema_->nameOf(i)));
+    newFields.push_back(updateFieldRecursive(
+        arrowSchema->fields()[i],
+        *schema_->childAt(i),
+        schema_->nameOf(i),
+        this->icebergStatsSetting_ ? &this->icebergStatsSetting_->at(i)
+                                   : nullptr));
   }
 
   PARQUET_ASSIGN_OR_THROW(
@@ -490,6 +528,9 @@ void Writer::close() {
 
   if (arrowContext_->writer) {
     PARQUET_THROW_NOT_OK(arrowContext_->writer->Close());
+    if (collectIcebergStats_) {
+      collectIcebergDataFileStats(arrowContext_->writer->metadata());
+    }
     arrowContext_->writer.reset();
   }
   PARQUET_THROW_NOT_OK(stream_->Close());
@@ -500,6 +541,96 @@ void Writer::close() {
 void Writer::abort() {
   stream_->abort();
   arrowContext_.reset();
+}
+
+void Writer::collectIcebergDataFileStats(
+    const std::shared_ptr<arrow::FileMetaData>& fileMetadata) {
+  if (!icebergStatsSetting_) {
+    return;
+  }
+  VELOX_CHECK_NOT_NULL(fileMetadata);
+  dataFileStats_->numRecords = fileMetadata->num_rows();
+
+  std::unordered_set<int32_t> skipBoundsFields;
+
+  std::function<int32_t(const dwio::common::IcebergStatsSettings&)>
+      processFields =
+          [&skipBoundsFields, &processFields](
+              const dwio::common::IcebergStatsSettings& field) -> int32_t {
+    if (field.skipBounds) {
+      skipBoundsFields.insert(field.id);
+    }
+    if (field.children.empty()) {
+      return 1;
+    }
+    int32_t count = 0;
+    for (const auto& child : field.children) {
+      count += processFields(child);
+    }
+    return count;
+  };
+
+  // numColumns is not the number of columns in Iceberg table's schema,
+  // e.g., schema_->size(). It also contains the sub-fields when there are
+  // nested types in table's schema.
+  int32_t numColumns = 0;
+  for (const auto& field : *icebergStatsSetting_) {
+    numColumns += processFields(field);
+  }
+
+  std::unordered_map<int32_t, std::shared_ptr<arrow::Statistics>>
+      globalMinStats;
+  std::unordered_map<int32_t, std::shared_ptr<arrow::Statistics>>
+      globalMaxStats;
+
+  const auto numRowGroups = fileMetadata->num_row_groups();
+  for (auto i = 0; i < numRowGroups; ++i) {
+    const auto rgm = fileMetadata->RowGroup(i);
+    VELOX_CHECK_EQ(numColumns, rgm->num_columns());
+    dataFileStats_->splitOffsets.emplace_back(rgm->file_offset());
+
+    for (auto j = 0; j < numColumns; ++j) {
+      const auto columnChunkMetadata = rgm->ColumnChunk(j);
+      const auto fieldId = columnChunkMetadata->field_id();
+      const auto numValues = columnChunkMetadata->num_values();
+
+      dataFileStats_->valueCounts[fieldId] += numValues;
+      dataFileStats_->columnsSizes[fieldId] +=
+          columnChunkMetadata->total_compressed_size();
+
+      const auto columnChunkStats = columnChunkMetadata->statistics();
+      if (columnChunkStats->nan_count() > 0) {
+        dataFileStats_->nanValueCounts[fieldId] +=
+            columnChunkStats->nan_count();
+      }
+      dataFileStats_->nullValueCounts[fieldId] +=
+          columnChunkStats->null_count();
+
+      if (columnChunkStats->HasMinMax() &&
+          !skipBoundsFields.contains(fieldId)) {
+        if (globalMaxStats.find(fieldId) == globalMaxStats.end()) {
+          globalMinStats[fieldId] = columnChunkStats;
+          globalMaxStats[fieldId] = columnChunkStats;
+        } else {
+          globalMaxStats[fieldId] = arrow::Statistics::CompareAndGetMax(
+              globalMaxStats[fieldId], columnChunkStats);
+          globalMinStats[fieldId] = arrow::Statistics::CompareAndGetMin(
+              globalMinStats[fieldId], columnChunkStats);
+        }
+      }
+    }
+  }
+
+  for (const auto& [fieldId, minStats] : globalMinStats) {
+    const auto lowerBound = minStats->MinValue();
+    dataFileStats_->lowerBounds[fieldId] =
+        encoding::Base64::encode(lowerBound.data(), lowerBound.size());
+  }
+  for (const auto& [fieldId, maxStats] : globalMaxStats) {
+    const auto upperBound = maxStats->MaxValue();
+    dataFileStats_->upperBounds[fieldId] =
+        encoding::Base64::encode(upperBound.data(), upperBound.size());
+  }
 }
 
 void Writer::setMemoryReclaimers() {

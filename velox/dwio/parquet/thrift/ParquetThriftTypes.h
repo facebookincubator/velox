@@ -466,12 +466,14 @@ typedef struct _Statistics__isset {
         min(false),
         null_count(false),
         distinct_count(false),
+        nan_count(false),
         max_value(false),
         min_value(false) {}
   bool max : 1;
   bool min : 1;
   bool null_count : 1;
   bool distinct_count : 1;
+  bool nan_count : 1;
   bool max_value : 1;
   bool min_value : 1;
 } _Statistics__isset;
@@ -489,6 +491,7 @@ class Statistics : public virtual apache::thrift::TBase {
         min(),
         null_count(0),
         distinct_count(0),
+        nan_count(0),
         max_value(),
         min_value() {}
 
@@ -516,6 +519,11 @@ class Statistics : public virtual apache::thrift::TBase {
    * count of distinct values occurring
    */
   int64_t distinct_count;
+
+  /**
+   * count of NaN values occurring
+   */
+  int64_t nan_count;
   /**
    * Min and max values for the column, determined by its ColumnOrder.
    *
@@ -534,6 +542,8 @@ class Statistics : public virtual apache::thrift::TBase {
   void __set_null_count(const int64_t val);
 
   void __set_distinct_count(const int64_t val);
+
+  void __set_nan_count(const int64_t val);
 
   void __set_max_value(const std::string& val);
 
@@ -555,6 +565,10 @@ class Statistics : public virtual apache::thrift::TBase {
     if (__isset.distinct_count != rhs.__isset.distinct_count)
       return false;
     else if (__isset.distinct_count && !(distinct_count == rhs.distinct_count))
+      return false;
+    if (__isset.nan_count != rhs.__isset.nan_count)
+      return false;
+    else if (__isset.nan_count && !(nan_count == rhs.nan_count))
       return false;
     if (__isset.max_value != rhs.__isset.max_value)
       return false;
