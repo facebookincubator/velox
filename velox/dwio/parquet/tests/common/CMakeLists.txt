@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_executable(velox_dwio_parquet_common_test LevelConversionTest.cpp)
+add_executable(velox_dwio_parquet_common_test LevelConversionTest.cpp UnicodeUtilTest.cpp)
 
 add_test(velox_dwio_parquet_common_test velox_dwio_parquet_common_test)
 target_link_libraries(
