@@ -18,6 +18,7 @@
 
 #include <folly/Hash.h>
 #include <folly/container/F14Map.h>
+#include <folly/json/dynamic.h>
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/RuntimeMetrics.h"
