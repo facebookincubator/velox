@@ -21,7 +21,8 @@ namespace facebook::velox::functions {
 namespace {
 void registerSimpleFunctions(const std::string& prefix) {
   // Register hash functions.
-  registerFunction<CRC32Function, int64_t, Varbinary>({prefix + "crc32"});
+  // TODO(mbkkt) registerFunction<CRC32Function, int64_t, Varbinary>({prefix +
+  // "crc32"});
   registerFunction<XxHash64Function, Varbinary, Varbinary>(
       {prefix + "xxhash64"});
   registerFunction<XxHash64Function, Varbinary, Varbinary, int64_t>(

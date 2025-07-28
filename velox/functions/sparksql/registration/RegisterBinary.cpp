@@ -22,7 +22,8 @@
 namespace facebook::velox::functions::sparksql {
 
 void registerBinaryFunctions(const std::string& prefix) {
-  registerFunction<CRC32Function, int64_t, Varbinary>({prefix + "crc32"});
+  // TODO(mbkkt) registerFunction<CRC32Function, int64_t, Varbinary>({prefix +
+  // "crc32"});
   exec::registerStatefulVectorFunction(
       prefix + "hash", hashSignatures(), makeHash, hashMetadata());
   exec::registerStatefulVectorFunction(
