@@ -15,6 +15,7 @@
  */
 #include "velox/functions/iceberg/Truncate.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/core/Expressions.h"
 #include "velox/functions/iceberg/tests/IcebergFunctionBaseTest.h"
 
 #include <gtest/gtest.h>
@@ -41,18 +42,29 @@ class TruncateTest : public IcebergFunctionBaseTest {
 
   void truncateExpr(
       const VectorPtr& expected,
-      const std::vector<VectorPtr>& input) {
-    auto result = evaluate<SimpleVector<int32_t>>(
-        "truncate(c0, c1)", makeRowVector(input));
-    facebook::velox::test::assertEqualVectors(expected, result);
+      const std::vector<VectorPtr>& inputs) {
+    VELOX_USER_CHECK_EQ(
+        inputs.size(),
+        2,
+        "At least one input vector is needed for arithmetic function test.");
+    std::vector<core::TypedExprPtr> inputExprs;
+    inputExprs.reserve(inputs.size());
+    inputExprs.emplace_back(
+        std::make_shared<core::FieldAccessTypedExpr>(inputs[0]->type(), "c0"));
+    inputExprs.emplace_back(
+        std::make_shared<core::FieldAccessTypedExpr>(inputs[1]->type(), "c1"));
+    auto expr = std::make_shared<const core::CallTypedExpr>(
+        expected->type(), std::move(inputExprs), "truncate");
+    facebook::velox::test::assertEqualVectors(
+        expected, evaluate(expr, makeRowVector(inputs)));
   }
 };
 
 TEST_F(TruncateTest, tinyInt) {
-//  EXPECT_EQ(truncate<int8_t>(10, 0), 0);
-//  EXPECT_EQ(truncate<int8_t>(10, 1), 0);
-//  EXPECT_EQ(truncate<int8_t>(10, 5), 0);
-//  EXPECT_EQ(truncate<int8_t>(10, 9), 0);
+  EXPECT_EQ(truncate<int8_t>(10, 0), 0);
+  EXPECT_EQ(truncate<int8_t>(10, 1), 0);
+  EXPECT_EQ(truncate<int8_t>(10, 5), 0);
+  EXPECT_EQ(truncate<int8_t>(10, 9), 0);
   EXPECT_EQ(truncate<int8_t>(10, 10), 10);
   EXPECT_EQ(truncate<int8_t>(10, 11), 10);
   EXPECT_EQ(truncate<int8_t>(10, -1), -10);
@@ -155,7 +167,8 @@ TEST_F(TruncateTest, unicodeBoundaries) {
 
 TEST_F(TruncateTest, binary) {
   truncateExpr(
-      makeFlatVector<StringView>({"abc\0\0", "abc", "abc", "测试"}),
+      makeFlatVector<StringView>(
+          {"abc\0\0", "abc", "abc", "测试"}, VARBINARY()),
       {makeFlatVector<int32_t>({10, 3, 3, 6}),
        makeFlatVector<StringView>(
            {"abc\0\0", "abcdefg", "abc", "测试_"}, VARBINARY())});
