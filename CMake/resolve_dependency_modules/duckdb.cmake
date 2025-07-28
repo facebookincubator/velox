@@ -14,10 +14,13 @@
 include_guard(GLOBAL)
 
 set(VELOX_DUCKDB_VERSION 0.8.1)
-set(VELOX_DUCKDB_BUILD_SHA256_CHECKSUM
-    a0674f7e320dc7ebcf51990d7fc1c0e7f7b2c335c08f5953702b5285e6c30694)
-set(VELOX_DUCKDB_SOURCE_URL
-    "https://github.com/duckdb/duckdb/archive/refs/tags/v${VELOX_DUCKDB_VERSION}.tar.gz"
+set(
+  VELOX_DUCKDB_BUILD_SHA256_CHECKSUM
+  a0674f7e320dc7ebcf51990d7fc1c0e7f7b2c335c08f5953702b5285e6c30694
+)
+set(
+  VELOX_DUCKDB_SOURCE_URL
+  "https://github.com/duckdb/duckdb/archive/refs/tags/v${VELOX_DUCKDB_VERSION}.tar.gz"
 )
 set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
 
@@ -35,7 +38,8 @@ FetchContent_Declare(
   PATCH_COMMAND
     git apply ${CMAKE_CURRENT_LIST_DIR}/duckdb/remove-ccache.patch && git apply
     ${CMAKE_CURRENT_LIST_DIR}/duckdb/fix-duckdbversion.patch && git apply
-    ${CMAKE_CURRENT_LIST_DIR}/duckdb/re2.patch)
+    ${CMAKE_CURRENT_LIST_DIR}/duckdb/re2.patch
+)
 
 set(BUILD_UNITTESTS OFF)
 set(ENABLE_SANITIZER OFF)
@@ -47,10 +51,8 @@ set(CMAKE_BUILD_TYPE Release)
 set(PREVIOUS_CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS})
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-non-virtual-dtor")
 # Clang17 requires this. See issue #13215.
-if("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang" AND CMAKE_CXX_COMPILER_VERSION
-                                                  VERSION_GREATER 17.0.0)
-  set(CMAKE_CXX_FLAGS
-      "${CMAKE_CXX_FLAGS} -Wno-missing-template-arg-list-after-template-kw")
+if("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang" AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER 17.0.0)
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-missing-template-arg-list-after-template-kw")
 endif()
 
 FetchContent_MakeAvailable(duckdb)
