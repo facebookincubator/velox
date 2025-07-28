@@ -816,8 +816,12 @@ class HiveIcebergTest : public HiveConnectorTestBase {
   }
 
   template <TypeKind KIND>
-  std::vector<RowVectorPtr>
-  makeVectors(int32_t count, int32_t rowsPerVector, int32_t numColumns = 1) {
+  std::vector<RowVectorPtr> makeVectors(
+      int32_t count,
+      int32_t rowsPerVector,
+      int32_t numColumns = 1,
+      bool allNulls = false,
+      bool partialNull = false) {
     using T = typename TypeTraits<KIND>::NativeType;
 
     // Sample strings for VARCHAR data generation
@@ -854,7 +858,12 @@ class HiveIcebergTest : public HiveConnectorTestBase {
       // repeating. In the second column c1, the values are continuously
       // increasing and each value repeats once. And so on.
       for (int j = 0; j < numColumns; j++) {
-        if constexpr (KIND == TypeKind::VARCHAR) {
+        VectorPtr columnVector;
+
+        if (allNulls) {
+          // Use allNullFlatVector for all-null columns
+          columnVector = vectorMaker_.allNullFlatVector<T>(rowsPerVector);
+        } else if constexpr (KIND == TypeKind::VARCHAR) {
           // For VARCHAR, use sample strings with sequence-based indexing
           auto intData = makeSequenceValues<int64_t>(rowsPerVector, j + 1);
           auto stringVector = BaseVector::create<FlatVector<StringView>>(
@@ -865,7 +874,7 @@ class HiveIcebergTest : public HiveConnectorTestBase {
             const std::string& selectedString = sampleStrings[stringIndex];
             stringVector->set(idx, StringView(selectedString));
           }
-          vectors.push_back(stringVector);
+          columnVector = stringVector;
         } else if constexpr (KIND == TypeKind::VARBINARY) {
           auto intData = makeSequenceValues<int64_t>(rowsPerVector, j + 1);
           auto binaryVector = BaseVector::create<FlatVector<StringView>>(
@@ -881,11 +890,11 @@ class HiveIcebergTest : public HiveConnectorTestBase {
             }
             binaryVector->set(idx, StringView(binaryStr));
           }
-          vectors.push_back(binaryVector);
+          columnVector = binaryVector;
         } else if constexpr (std::is_integral_v<T>) {
           auto data = makeSequenceValues<typename TypeTraits<KIND>::NativeType>(
               rowsPerVector, j + 1);
-          vectors.push_back(vectorMaker_.flatVector<T>(data));
+          columnVector = vectorMaker_.flatVector<T>(data);
         } else if constexpr (std::is_floating_point_v<T>) {
           auto intData = makeSequenceValues<int64_t>(rowsPerVector, j + 1);
           std::vector<T> floatData;
@@ -893,11 +902,26 @@ class HiveIcebergTest : public HiveConnectorTestBase {
           for (auto val : intData) {
             floatData.push_back(static_cast<T>(val) + 0.5f);
           }
-          vectors.push_back(vectorMaker_.flatVector<T>(floatData));
+          columnVector = vectorMaker_.flatVector<T>(floatData);
         } else {
           VELOX_FAIL(
               "Unsupported type for makeVectors: {}", TypeTraits<KIND>::name);
         }
+
+        // Apply partial nulls by randomly setting some positions to null
+        if (partialNull && !allNulls) {
+          std::mt19937 gen(42); // Fixed seed for reproducibility
+          std::uniform_real_distribution<> dis(0.0, 1.0);
+          const double nullProbability = 0.2;
+
+          for (vector_size_t idx = 0; idx < rowsPerVector; ++idx) {
+            if (dis(gen) < nullProbability) {
+              columnVector->setNull(idx, true);
+            }
+          }
+        }
+
+        vectors.push_back(columnVector);
       }
 
       rowVectors.push_back(makeRowVector(names, vectors));
@@ -2623,6 +2647,164 @@ class HiveIcebergEqualityDeletesTest
           {{0, {{StringView("nonexistent1"), StringView("nonexistent2")}}},
            {1, {{StringView("nonexistent3"), StringView("nonexistent4")}}}});
       assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap);
+    }
+  }
+
+  template <TypeKind KIND>
+  void testAllNullsEqualityDeletes() {
+    folly::SingletonVault::singleton()->registrationComplete();
+    using T = typename TypeTraits<KIND>::NativeType;
+
+    std::unordered_map<int8_t, std::vector<int32_t>> equalityFieldIdsMap;
+    std::unordered_map<int8_t, std::vector<std::vector<T>>>
+        equalityDeleteVectorMap;
+    equalityFieldIdsMap.insert({0, {1}});
+
+    // Test with all-null data vectors
+    auto dataVectors = makeVectors<KIND>(1, rowCount_, 1, true, false);
+
+    // Since all values are null, delete operations should not match anything
+    equalityDeleteVectorMap.clear();
+    if constexpr (KIND == TypeKind::VARCHAR || KIND == TypeKind::VARBINARY) {
+      std::vector<StringView> deleteValues = {
+          StringView("apple"), StringView("banana")};
+      equalityDeleteVectorMap.insert({0, {deleteValues}});
+      assertEqualityDeletes<KIND>(
+          equalityDeleteVectorMap,
+          equalityFieldIdsMap,
+          "SELECT * FROM tmp",
+          dataVectors);
+    } else if constexpr (std::is_integral_v<T>) {
+      equalityDeleteVectorMap.insert(
+          {0, {{static_cast<T>(0), static_cast<T>(1)}}});
+      assertEqualityDeletes<KIND>(
+          equalityDeleteVectorMap,
+          equalityFieldIdsMap,
+          "SELECT * FROM tmp",
+          dataVectors);
+    }
+  }
+
+  template <TypeKind KIND>
+  void testPartialNullsEqualityDeletes() {
+    folly::SingletonVault::singleton()->registrationComplete();
+    using T = typename TypeTraits<KIND>::NativeType;
+
+    std::unordered_map<int8_t, std::vector<int32_t>> equalityFieldIdsMap;
+    std::unordered_map<int8_t, std::vector<std::vector<T>>>
+        equalityDeleteVectorMap;
+    equalityFieldIdsMap.insert({0, {1}});
+
+    // Test with partial-null data vectors (20% nulls)
+    auto dataVectors = makeVectors<KIND>(1, rowCount_, 1, false, true);
+
+    // Delete some actual values that should exist in the non-null positions
+    equalityDeleteVectorMap.clear();
+    if constexpr (KIND == TypeKind::VARCHAR || KIND == TypeKind::VARBINARY) {
+      auto flatVector =
+          dataVectors[0]->childAt(0)->template as<FlatVector<StringView>>();
+
+      // Find a few non-null values to delete
+      std::vector<StringView> deleteValues;
+      for (vector_size_t i = 0; i < rowCount_ && deleteValues.size() < 5; ++i) {
+        if (!flatVector->isNullAt(i)) {
+          deleteValues.push_back(flatVector->valueAt(i));
+        }
+      }
+
+      if (!deleteValues.empty()) {
+        equalityDeleteVectorMap.insert({0, {deleteValues}});
+        assertEqualityDeletes<KIND>(
+            equalityDeleteVectorMap, equalityFieldIdsMap, "", dataVectors);
+      }
+    } else if constexpr (std::is_integral_v<T>) {
+      auto flatVector =
+          dataVectors[0]->childAt(0)->template as<FlatVector<T>>();
+
+      // Find a few non-null values to delete
+      std::vector<T> deleteValues;
+      for (vector_size_t i = 0; i < rowCount_ && deleteValues.size() < 5; ++i) {
+        if (!flatVector->isNullAt(i)) {
+          deleteValues.push_back(flatVector->valueAt(i));
+        }
+      }
+
+      if (!deleteValues.empty()) {
+        equalityDeleteVectorMap.insert({0, {deleteValues}});
+        assertEqualityDeletes<KIND>(
+            equalityDeleteVectorMap, equalityFieldIdsMap, "", dataVectors);
+      }
+    }
+  }
+
+  template <TypeKind KIND>
+  void testMixedNullTypesEqualityDeletes() {
+    folly::SingletonVault::singleton()->registrationComplete();
+    using T = typename TypeTraits<KIND>::NativeType;
+
+    std::unordered_map<int8_t, std::vector<int32_t>> equalityFieldIdsMap;
+    std::unordered_map<int8_t, std::vector<std::vector<T>>>
+        equalityDeleteVectorMap;
+    equalityFieldIdsMap.insert({0, {1, 2}});
+
+    // Test with different null patterns for each column
+    // Column 0: all nulls, Column 1: partial nulls
+    auto allNullVectors = makeVectors<KIND>(1, rowCount_, 1, true, false);
+    auto partialNullVectors = makeVectors<KIND>(1, rowCount_, 1, false, true);
+
+    // Combine the vectors to create a mixed scenario
+    std::vector<VectorPtr> combinedVectors = {
+        allNullVectors[0]->childAt(0), partialNullVectors[0]->childAt(0)};
+
+    std::vector<std::string> names = {"c0", "c1"};
+    auto combinedRowVector = makeRowVector(names, combinedVectors);
+    std::vector<RowVectorPtr> dataVectors = {combinedRowVector};
+
+    // Delete operations should only affect the partial null column
+    equalityDeleteVectorMap.clear();
+    if constexpr (KIND == TypeKind::VARCHAR || KIND == TypeKind::VARBINARY) {
+      auto col1FlatVector = partialNullVectors[0]
+                                ->childAt(0)
+                                ->template as<FlatVector<StringView>>();
+
+      // Find non-null values from column 1 to delete
+      std::vector<StringView> deleteValuesCol0; // Empty for all-null column
+      std::vector<StringView> deleteValuesCol1;
+
+      for (vector_size_t i = 0; i < rowCount_ && deleteValuesCol1.size() < 3;
+           ++i) {
+        if (!col1FlatVector->isNullAt(i)) {
+          deleteValuesCol1.push_back(col1FlatVector->valueAt(i));
+        }
+      }
+
+      if (!deleteValuesCol1.empty()) {
+        equalityDeleteVectorMap.insert(
+            {0, {deleteValuesCol0, deleteValuesCol1}});
+        assertEqualityDeletes<KIND>(
+            equalityDeleteVectorMap, equalityFieldIdsMap, "", dataVectors);
+      }
+    } else if constexpr (std::is_integral_v<T>) {
+      auto col1FlatVector =
+          partialNullVectors[0]->childAt(0)->template as<FlatVector<T>>();
+
+      // Find non-null values from column 1 to delete
+      std::vector<T> deleteValuesCol0; // Empty for all-null column
+      std::vector<T> deleteValuesCol1;
+
+      for (vector_size_t i = 0; i < rowCount_ && deleteValuesCol1.size() < 3;
+           ++i) {
+        if (!col1FlatVector->isNullAt(i)) {
+          deleteValuesCol1.push_back(col1FlatVector->valueAt(i));
+        }
+      }
+
+      if (!deleteValuesCol1.empty()) {
+        equalityDeleteVectorMap.insert(
+            {0, {deleteValuesCol0, deleteValuesCol1}});
+        assertEqualityDeletes<KIND>(
+            equalityDeleteVectorMap, equalityFieldIdsMap, "", dataVectors);
+      }
     }
   }
 };
