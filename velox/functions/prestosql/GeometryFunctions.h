@@ -32,6 +32,7 @@
 #include "velox/functions/prestosql/geospatial/GeometrySerde.h"
 #include "velox/functions/prestosql/geospatial/GeometryUtils.h"
 #include "velox/functions/prestosql/types/GeometryType.h"
+#include "velox/type/Variant.h"
 
 namespace facebook::velox::functions {
 
@@ -1137,6 +1138,27 @@ struct StConvexHullFunction {
     return Status::OK();
   }
 };
+class StCoordDimFunction : public facebook::velox::exec::VectorFunction {
+ public:
+  void apply(
+      const facebook::velox::SelectivityVector& rows,
+      std::vector<facebook::velox::VectorPtr>& /*args*/,
+      const std::shared_ptr<const facebook::velox::Type>& outputType,
+      facebook::velox::exec::EvalCtx& context,
+      facebook::velox::VectorPtr& result) const override {
+    // Create a constant vector of value 2, with size equal to the number of
+    // rows
+    result = facebook::velox::BaseVector::createConstant(
+        outputType, 2, rows.size(), context.pool());
+  }
+  static std::vector<std::shared_ptr<facebook::velox::exec::FunctionSignature>>
+  signatures() {
+    return {facebook::velox::exec::FunctionSignatureBuilder()
+                .returnType("integer")
+                .argumentType("geometry")
+                .build()};
+  }
+};
 
 template <typename T>
 struct StDimensionFunction {
@@ -1219,6 +1241,35 @@ struct StEnvelopeFunction {
 
  private:
   geos::geom::GeometryFactory::Ptr factory_;
+};
+
+template <typename T>
+struct StBufferFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<Geometry>& result,
+      const arg_type<Geometry>& geometry,
+      const arg_type<double>& distance) {
+    if (distance < 0) {
+      VELOX_USER_FAIL(fmt::format(
+          "Provided distance must not be negative. Provided distance: {}",
+          distance));
+    }
+    if (distance == 0) {
+      result = geometry;
+      return true;
+    }
+
+    std::unique_ptr<geos::geom::Geometry> geosGeometry =
+        geospatial::GeometryDeserializer::deserialize(geometry);
+    if (geosGeometry->isEmpty()) {
+      return false;
+    }
+    geospatial::GeometrySerializer::serialize(
+        *(geosGeometry->buffer(distance)), result);
+    return true;
+  }
 };
 
 } // namespace facebook::velox::functions
