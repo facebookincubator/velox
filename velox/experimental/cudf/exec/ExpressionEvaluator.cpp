@@ -822,4 +822,337 @@ bool ExpressionEvaluator::canBeEvaluated(
     const std::vector<std::shared_ptr<velox::exec::Expr>>& exprs) {
   return std::all_of(exprs.begin(), exprs.end(), detail::canBeEvaluated);
 }
+
+template <typename T>
+auto createFloatingPointRangeExpr(
+    const common::Filter& filter,
+    cudf::ast::tree& tree,
+    std::vector<std::unique_ptr<cudf::scalar>>& scalars,
+    const cudf::ast::expression& columnRef,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) -> const cudf::ast::expression& {
+  // TODO (dm): Handle exclusive and unbounded
+  auto* range = dynamic_cast<const common::FloatingPointRange<T>*>(&filter);
+  VELOX_CHECK_NOT_NULL(range, "Filter is not a floating point range");
+
+  using CudfScalar = cudf::numeric_scalar<T>;
+  T lower = range->lower();
+  T upper = range->upper();
+
+  scalars.emplace_back(std::make_unique<CudfScalar>(lower, true, stream, mr));
+  const auto& lowerLiteral = tree.push(
+      cudf::ast::literal{*static_cast<CudfScalar*>(scalars.back().get())});
+
+  scalars.emplace_back(std::make_unique<CudfScalar>(upper, true, stream, mr));
+  const auto& upperLiteral = tree.push(
+      cudf::ast::literal{*static_cast<CudfScalar*>(scalars.back().get())});
+
+  const auto& lowerBound = tree.push(
+      cudf::ast::operation{Op::GREATER_EQUAL, columnRef, lowerLiteral});
+  const auto& upperBound =
+      tree.push(cudf::ast::operation{Op::LESS_EQUAL, columnRef, upperLiteral});
+  return tree.push(
+      cudf::ast::operation{Op::NULL_LOGICAL_AND, lowerBound, upperBound});
+};
+
+// Convert subfield filters to cudf AST
+cudf::ast::expression const& createAstFromSubfieldFilter(
+    const common::Subfield& subfield,
+    const common::Filter& filter,
+    cudf::ast::tree& tree,
+    std::vector<std::unique_ptr<cudf::scalar>>& scalars,
+    const RowTypePtr& inputRowSchema) {
+  // First, create column reference from subfield
+  // For now, only support simple field references
+  if (subfield.path().empty() ||
+      subfield.path()[0]->kind() != common::kNestedField) {
+    VELOX_FAIL(
+        "Only simple field references are supported in subfield filters");
+  }
+
+  auto nestedField = static_cast<const common::Subfield::NestedField*>(
+      subfield.path()[0].get());
+  const std::string& fieldName = nestedField->name();
+
+  if (!inputRowSchema->containsChild(fieldName)) {
+    VELOX_FAIL("Field '{}' not found in input schema", fieldName);
+  }
+
+  auto columnIndex = inputRowSchema->getChildIdx(fieldName);
+  auto const& columnRef = tree.push(cudf::ast::column_reference(columnIndex));
+
+  using Op = cudf::ast::ast_operator;
+  using Operation = cudf::ast::operation;
+
+  auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
+
+  switch (filter.kind()) {
+    case common::FilterKind::kBigintRange: {
+      auto* bigintRange = static_cast<const common::BigintRange*>(&filter);
+      const auto& columnTypePtr = inputRowSchema->childAt(columnIndex);
+
+      // DM: cudf's parquet stats filter only supports binary operations on
+      // column references. We'll have to make sure to use literals of the same
+      // type as the column
+
+      // auto const& castedCol = [&]() -> const cudf::ast::expression& {
+      //   if (not columnTypePtr->isBigint()) {
+      //     // cast column to bigint
+      //     auto const& castExpr =
+      //         tree.push(Operation{Op::CAST_TO_INT64, columnRef});
+      //     return castExpr;
+      //   }
+      //   return columnRef;
+      // }();
+
+      auto makeNumericLiteral =
+          [&](int64_t value) -> const cudf::ast::expression& {
+        switch (columnTypePtr->kind()) {
+          case TypeKind::TINYINT:
+            scalars.emplace_back(std::make_unique<cudf::numeric_scalar<int8_t>>(
+                static_cast<int8_t>(value), true, stream, mr));
+            return tree.push(
+                cudf::ast::literal{*static_cast<cudf::numeric_scalar<int8_t>*>(
+                    scalars.back().get())});
+          case TypeKind::SMALLINT:
+            scalars.emplace_back(
+                std::make_unique<cudf::numeric_scalar<int16_t>>(
+                    static_cast<int16_t>(value), true, stream, mr));
+            return tree.push(
+                cudf::ast::literal{*static_cast<cudf::numeric_scalar<int16_t>*>(
+                    scalars.back().get())});
+          case TypeKind::INTEGER:
+            if (columnTypePtr->isDate()) {
+              using T = cudf::timestamp_D;
+              auto time_point =
+                  T(typename T::duration(static_cast<int32_t>(value)));
+              scalars.emplace_back(std::make_unique<cudf::timestamp_scalar<T>>(
+                  time_point, true, stream, mr));
+              return tree.push(
+                  cudf::ast::literal{*static_cast<cudf::timestamp_scalar<T>*>(
+                      scalars.back().get())});
+            } else {
+              scalars.emplace_back(
+                  std::make_unique<cudf::numeric_scalar<int32_t>>(
+                      static_cast<int32_t>(value), true, stream, mr));
+              return tree.push(cudf::ast::literal{
+                  *static_cast<cudf::numeric_scalar<int32_t>*>(
+                      scalars.back().get())});
+            }
+          default:
+            scalars.emplace_back(
+                std::make_unique<cudf::numeric_scalar<int64_t>>(
+                    value, true, stream, mr));
+            return tree.push(
+                cudf::ast::literal{*static_cast<cudf::numeric_scalar<int64_t>*>(
+                    scalars.back().get())});
+        }
+      };
+
+      if (bigintRange->isSingleValue()) {
+        // Equal comparison: column = value
+        auto const& literal = makeNumericLiteral(bigintRange->lower());
+        return tree.push(Operation{Op::EQUAL, columnRef, literal});
+      } else {
+        // Range comparison: column >= lower AND column <= upper
+        // TODO (dm): Optimize away bounds that span full type range.
+        auto const& lowerLiteral = makeNumericLiteral(bigintRange->lower());
+        auto const& upperLiteral = makeNumericLiteral(bigintRange->upper());
+
+        auto const& lowerBound =
+            tree.push(Operation{Op::GREATER_EQUAL, columnRef, lowerLiteral});
+        auto const& upperBound =
+            tree.push(Operation{Op::LESS_EQUAL, columnRef, upperLiteral});
+        return tree.push(
+            Operation{Op::NULL_LOGICAL_AND, lowerBound, upperBound});
+      }
+    }
+
+    case common::FilterKind::kDoubleRange: {
+      return createFloatingPointRangeExpr<double>(
+          filter, tree, scalars, columnRef, stream, mr);
+    }
+
+    case common::FilterKind::kFloatRange: {
+      return createFloatingPointRangeExpr<float>(
+          filter, tree, scalars, columnRef, stream, mr);
+    }
+
+    case common::FilterKind::kBytesValues: {
+      // IN list for strings: column IN (v1, v2, ..., vN)
+      auto* bytesValues = static_cast<const common::BytesValues*>(&filter);
+      const auto& values = bytesValues->values();
+
+      if (values.empty()) {
+        VELOX_FAIL("Empty BytesValues filter not supported");
+      }
+
+      // Create equality expressions for each value and OR them together
+      std::vector<const cudf::ast::expression*> exprVec;
+      for (const auto& value : values) {
+        scalars.emplace_back(
+            std::make_unique<cudf::string_scalar>(value, true, stream, mr));
+        auto literal = tree.push(cudf::ast::literal{
+            *static_cast<cudf::string_scalar*>(scalars.back().get())});
+        auto equalExpr = tree.push(Operation{Op::EQUAL, columnRef, literal});
+        exprVec.push_back(&equalExpr);
+      }
+
+      // OR all equality expressions together
+      const cudf::ast::expression* result = exprVec[0];
+      for (size_t i = 1; i < exprVec.size(); ++i) {
+        result =
+            &tree.push(Operation{Op::NULL_LOGICAL_OR, *result, *exprVec[i]});
+      }
+      return *result;
+    }
+
+    case common::FilterKind::kBytesRange: {
+      auto* bytesRange = static_cast<const common::BytesRange*>(&filter);
+      if (bytesRange->isSingleValue()) {
+        // Equal comparison
+        scalars.emplace_back(std::make_unique<cudf::string_scalar>(
+            bytesRange->lower(), true, stream, mr));
+        auto literal = tree.push(cudf::ast::literal{
+            *static_cast<cudf::string_scalar*>(scalars.back().get())});
+        return tree.push(Operation{Op::EQUAL, columnRef, literal});
+      } else {
+        // Range comparison: column >= lower AND column <= upper
+        scalars.emplace_back(std::make_unique<cudf::string_scalar>(
+            bytesRange->lower(), true, stream, mr));
+        auto lowerLiteral = tree.push(cudf::ast::literal{
+            *static_cast<cudf::string_scalar*>(scalars.back().get())});
+
+        scalars.emplace_back(std::make_unique<cudf::string_scalar>(
+            bytesRange->upper(), true, stream, mr));
+        auto upperLiteral = tree.push(cudf::ast::literal{
+            *static_cast<cudf::string_scalar*>(scalars.back().get())});
+
+        auto const& lowerBound =
+            tree.push(Operation{Op::GREATER_EQUAL, columnRef, lowerLiteral});
+        auto const& upperBound =
+            tree.push(Operation{Op::LESS_EQUAL, columnRef, upperLiteral});
+        return tree.push(
+            Operation{Op::NULL_LOGICAL_AND, lowerBound, upperBound});
+      }
+    }
+
+    case common::FilterKind::kBoolValue: {
+      // TODO (dm): for BoolValue, we'll have to use testBool method to extract
+      // the value since it's private However, for a simpler implementation, we
+      // can skip BoolValue for now
+      VELOX_NYI(
+          "BoolValue filter type not yet supported for subfield filter conversion");
+    }
+
+    case common::FilterKind::kIsNull: {
+      return tree.push(Operation{Op::IS_NULL, columnRef});
+    }
+
+    case common::FilterKind::kIsNotNull: {
+      // For IsNotNull, we can use NOT(IS_NULL)
+      auto nullCheck = tree.push(Operation{Op::IS_NULL, columnRef});
+      return tree.push(Operation{Op::NOT, nullCheck});
+    }
+
+      // TODO (dm): Add support for BigintMultiRange. Skip for now
+
+      // case common::FilterKind::kBigintMultiRange: {
+      //   // Multiple ranges: (column BETWEEN r1.lower AND r1.upper) OR (column
+      //   // BETWEEN r2.lower AND r2.upper) OR ...
+      //   auto* multiRange = static_cast<const
+      //   common::BigintMultiRange*>(&filter); const auto& ranges =
+      //   multiRange->ranges();
+
+      //   if (ranges.empty()) {
+      //     VELOX_FAIL("Empty BigintMultiRange filter not supported");
+      //   }
+
+      //   const auto& columnTypePtr = inputRowSchema->childAt(columnIndex);
+
+      //   auto makeNumericLiteral =
+      //       [&](int64_t value) -> const cudf::ast::expression& {
+      //     switch (columnTypePtr->kind()) {
+      //       case TypeKind::TINYINT:
+      //         scalars.emplace_back(std::make_unique<cudf::numeric_scalar<int8_t>>(
+      //             static_cast<int8_t>(value), true, stream, mr));
+      //         return tree.push(
+      //             cudf::ast::literal{*static_cast<cudf::numeric_scalar<int8_t>*>(
+      //                 scalars.back().get())});
+      //       case TypeKind::SMALLINT:
+      //         scalars.emplace_back(
+      //             std::make_unique<cudf::numeric_scalar<int16_t>>(
+      //                 static_cast<int16_t>(value), true, stream, mr));
+      //         return tree.push(
+      //             cudf::ast::literal{*static_cast<cudf::numeric_scalar<int16_t>*>(
+      //                 scalars.back().get())});
+      //       case TypeKind::INTEGER:
+      //         if (columnTypePtr->isDate()) {
+      //           using T = cudf::timestamp_D;
+      //           auto time_point =
+      //               T(typename T::duration(static_cast<int32_t>(value)));
+      //           scalars.emplace_back(std::make_unique<cudf::timestamp_scalar<T>>(
+      //               time_point, true, stream, mr));
+      //           return tree.push(
+      //               cudf::ast::literal{*static_cast<cudf::timestamp_scalar<T>*>(
+      //                   scalars.back().get())});
+      //         } else {
+      //           scalars.emplace_back(
+      //               std::make_unique<cudf::numeric_scalar<int32_t>>(
+      //                   static_cast<int32_t>(value), true, stream, mr));
+      //           return tree.push(cudf::ast::literal{
+      //               *static_cast<cudf::numeric_scalar<int32_t>*>(
+      //                   scalars.back().get())});
+      //         }
+      //       default:
+      //         scalars.emplace_back(
+      //             std::make_unique<cudf::numeric_scalar<int64_t>>(
+      //                 value, true, stream, mr));
+      //         return tree.push(
+      //             cudf::ast::literal{*static_cast<cudf::numeric_scalar<int64_t>*>(
+      //                 scalars.back().get())});
+      //     }
+      //   };
+
+      //   std::vector<const cudf::ast::expression*> rangeExprs;
+      //   for (const auto& range : ranges) {
+      //     if (range->isSingleValue()) {
+      //       // Equal comparison
+      //       const auto& literal = makeNumericLiteral(range->lower());
+      //       auto equalExpr = tree.push(Operation{Op::EQUAL, columnRef,
+      //       literal}); rangeExprs.push_back(&equalExpr);
+      //     } else {
+      //       // Range comparison
+      //       const auto& lowerLiteral = makeNumericLiteral(range->lower());
+      //       const auto& upperLiteral = makeNumericLiteral(range->upper());
+
+      //       auto lowerBound =
+      //           tree.push(Operation{Op::GREATER_EQUAL, columnRef,
+      //           lowerLiteral});
+      //       auto upperBound =
+      //           tree.push(Operation{Op::LESS_EQUAL, columnRef,
+      //           upperLiteral});
+      //       auto rangeExpr = tree.push(
+      //           Operation{Op::NULL_LOGICAL_AND, lowerBound, upperBound});
+      //       rangeExprs.push_back(&rangeExpr);
+      //     }
+      //   }
+
+      //   // OR all range expressions together
+      //   const cudf::ast::expression* result = rangeExprs[0];
+      //   for (size_t i = 1; i < rangeExprs.size(); ++i) {
+      //     result =
+      //         &tree.push(Operation{Op::NULL_LOGICAL_OR, *result,
+      //         *rangeExprs[i]});
+      //   }
+      //   return *result;
+      // }
+
+    default:
+      VELOX_NYI(
+          "Filter type {} not yet supported for subfield filter conversion",
+          static_cast<int>(filter.kind()));
+  }
+}
 } // namespace facebook::velox::cudf_velox
