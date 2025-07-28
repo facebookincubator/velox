@@ -1236,7 +1236,8 @@ class OpaqueType : public TypeBase<TypeKind::OPAQUE> {
   template <typename T>
   using DeserializeFunc = std::function<std::shared_ptr<T>(const std::string&)>;
 
-  explicit OpaqueType(const std::type_index& typeIndex);
+  constexpr explicit OpaqueType(std::type_index typeIndex)
+      : typeIndex_(typeIndex) {}
 
   uint32_t size() const override {
     return 0;
@@ -1250,7 +1251,7 @@ class OpaqueType : public TypeBase<TypeKind::OPAQUE> {
 
   bool equivalent(const Type& other) const override;
 
-  const std::type_index& typeIndex() const {
+  std::type_index typeIndex() const {
     return typeIndex_;
   }
 
@@ -1276,7 +1277,7 @@ class OpaqueType : public TypeBase<TypeKind::OPAQUE> {
   FOLLY_NOINLINE static std::shared_ptr<const OpaqueType> create() {
     /// static vars in templates are dangerous across DSOs, but it's just a
     /// performance optimization. Comparison looks at type_index anyway.
-    static const OpaqueType kInstance{std::type_index(typeid(Class))};
+    static constexpr OpaqueType kInstance{std::type_index(typeid(Class))};
     return {std::shared_ptr<const OpaqueType>{}, &kInstance};
   }
 
