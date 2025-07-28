@@ -16,7 +16,7 @@
 #pragma once
 
 #include <cstdint>
-#include "functions/lib/Hash.h"
+#include "functions/lib/Murmur3Hash32Base.h"
 
 namespace facebook::velox::functions::iceberg {
 
@@ -27,7 +27,7 @@ namespace facebook::velox::functions::iceberg {
 /// 32-bit hash implementation is the 32-bit Murmur3 hash, x86 variant, seeded
 /// with 0. If not same with Iceberg java version, the partition will be
 /// different and can not read with Iceberg java.
-class Murmur3Hash : Murmur3Hash32 {
+class Murmur3Hash32 : Murmur3Hash32Base {
  public:
   /// Value of type INTEGER and BIGINT is treated as unsigned type.
   /// For the schema evolution, promote int to int64, treat int32 as uint64.

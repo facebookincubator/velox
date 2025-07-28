@@ -19,7 +19,7 @@
 
 #include "velox/common/base/BitUtil.h"
 #include "velox/expression/DecodedArgs.h"
-#include "velox/functions/lib/Hash.h"
+#include "velox/functions/lib/Murmur3Hash32Base.h"
 #include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::functions::sparksql {
@@ -398,7 +398,7 @@ void applyWithType(
 // Signed integer types have been remapped to unsigned types (as in the
 // original) to avoid undefined signed integer overflow and sign extension.
 
-class Murmur3Hash final : public Murmur3Hash32 {
+class Murmur3Hash final : public Murmur3Hash32Base {
  public:
   using SeedType = int32_t;
   using ReturnType = int32_t;
@@ -444,32 +444,6 @@ class Murmur3Hash final : public Murmur3Hash32 {
 
   static uint32_t hashTimestamp(Timestamp input, uint32_t seed) {
     return hashInt64(input.toMicros(), seed);
-  }
-
- private:
-  static uint32_t mixK1(uint32_t k1) {
-    k1 *= 0xcc9e2d51;
-    k1 = bits::rotateLeft(k1, 15);
-    k1 *= 0x1b873593;
-    return k1;
-  }
-
-  static uint32_t mixH1(uint32_t h1, uint32_t k1) {
-    h1 ^= k1;
-    h1 = bits::rotateLeft(h1, 13);
-    h1 = h1 * 5 + 0xe6546b64;
-    return h1;
-  }
-
-  // Finalization mix - force all bits of a hash block to avalanche
-  static uint32_t fmix(uint32_t h1, uint32_t length) {
-    h1 ^= length;
-    h1 ^= h1 >> 16;
-    h1 *= 0x85ebca6b;
-    h1 ^= h1 >> 13;
-    h1 *= 0xc2b2ae35;
-    h1 ^= h1 >> 16;
-    return h1;
   }
 };
 

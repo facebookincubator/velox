@@ -14,12 +14,12 @@
  * limitations under the License.
  */
 
-#include "functions/lib/Hash.h"
 #include "common/base/BitUtil.h"
+#include "functions/lib/Hash.h"
 
 namespace facebook::velox::functions {
 
-uint32_t Murmur3Hash32::hashInt64(uint64_t input, uint32_t seed) {
+uint32_t Murmur3Hash32Base::hashInt64(uint64_t input, uint32_t seed) {
   uint32_t low = input;
   uint32_t high = input >> 32;
 
@@ -32,22 +32,21 @@ uint32_t Murmur3Hash32::hashInt64(uint64_t input, uint32_t seed) {
   return fmix(h1, 8);
 }
 
-uint32_t Murmur3Hash32::mixK1(uint32_t k1) {
+uint32_t Murmur3Hash32Base::mixK1(uint32_t k1) {
   k1 *= 0xcc9e2d51;
   k1 = bits::rotateLeft(k1, 15);
   k1 *= 0x1b873593;
   return k1;
 }
 
-uint32_t Murmur3Hash32::mixH1(uint32_t h1, uint32_t k1) {
+uint32_t Murmur3Hash32Base::mixH1(uint32_t h1, uint32_t k1) {
   h1 ^= k1;
   h1 = bits::rotateLeft(h1, 13);
   h1 = h1 * 5 + 0xe6546b64;
   return h1;
 }
 
-// Finalization mix - force all bits of a hash block to avalanche
-uint32_t Murmur3Hash32::fmix(uint32_t h1, uint32_t length) {
+uint32_t Murmur3Hash32Base::fmix(uint32_t h1, uint32_t length) {
   h1 ^= length;
   h1 ^= h1 >> 16;
   h1 *= 0x85ebca6b;

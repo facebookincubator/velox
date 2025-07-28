@@ -14,15 +14,16 @@
  * limitations under the License.
  */
 
-#include "velox/functions/lib/Hash.h"
+#include "velox/functions/lib/Murmur3Hash32Base.h"
 
 #include <gtest/gtest.h>
 #include "velox/common/base/tests/GTestUtils.h"
 
 namespace {
-TEST(Murmur3Hash32Test, bigint) {
+TEST(Murmur3Hash32BaseTest, bigint) {
   auto hash = [](uint64_t input, uint32_t seed) {
-    return facebook::velox::functions::Murmur3Hash32::hashInt64(input, seed);
+    return facebook::velox::functions::Murmur3Hash32Base::hashInt64(
+        input, seed);
   };
   EXPECT_EQ(hash(10, 0), -289985220);
   EXPECT_EQ(hash(0, 0), 1669671676);

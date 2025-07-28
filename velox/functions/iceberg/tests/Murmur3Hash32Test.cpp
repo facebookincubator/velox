@@ -21,15 +21,15 @@ using namespace facebook::velox::functions::iceberg;
 
 namespace {
 
-TEST(Murmur3HashTest, bigint) {
-  Murmur3Hash func;
+TEST(Murmur3Hash32Test, bigint) {
+  Murmur3Hash32 func;
   EXPECT_EQ(func.hashInt64(10), -289985220);
   EXPECT_EQ(func.hashInt64(0), 1669671676);
   EXPECT_EQ(func.hashInt64(-5), 1222806974);
 }
 
-TEST(Murmur3HashTest, string) {
-  Murmur3Hash func;
+TEST(Murmur3Hash32Test, string) {
+  Murmur3Hash32 func;
 
   const auto hash = [&](std::string input) {
     return func.hashBytes(input.c_str(), input.size());

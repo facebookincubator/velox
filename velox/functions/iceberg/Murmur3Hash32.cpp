@@ -21,14 +21,14 @@ namespace facebook::velox::functions::iceberg {
 
 namespace {
 
-constexpr int kSeed = 0;
+constexpr int32_t kSeed = 0;
 } // namespace
 
-int Murmur3Hash::hashInt64(uint64_t input) {
-  return Murmur3Hash32::hashInt64(input, kSeed);
+int32_t Murmur3Hash32::hashInt64(uint64_t input) {
+  return Murmur3Hash32Base::hashInt64(input, kSeed);
 }
 
-int32_t Murmur3Hash::hashBytes(const char* const input, uint32_t len) {
+int32_t Murmur3Hash32::hashBytes(const char* const input, uint32_t len) {
   const uint8_t* data = reinterpret_cast<const uint8_t*>(input);
   const int32_t nblocks = len / 4;
 

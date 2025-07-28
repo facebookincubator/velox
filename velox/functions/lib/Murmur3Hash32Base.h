@@ -23,9 +23,10 @@ namespace facebook::velox::functions {
 ///
 /// Signed integer types have been remapped to unsigned types (as in the
 /// original) to avoid undefined signed integer overflow and sign extension.
-class Murmur3Hash32 {
+class Murmur3Hash32Base {
  public:
-  /// Hash the lower int , is a fast path of hashBytes.
+  /// Hash the lower int, then combine with higher int, is a fast path of
+  /// hashBytes.
   static uint32_t hashInt64(uint64_t input, uint32_t seed);
 
  protected:
@@ -33,7 +34,7 @@ class Murmur3Hash32 {
 
   static uint32_t mixH1(uint32_t h1, uint32_t k1);
 
-  // Finalization mix - force all bits of a hash block to avalanche
+  // Finalization mix - force all bits of a hash block to avalanche.
   static uint32_t fmix(uint32_t h1, uint32_t length);
 };
 } // namespace facebook::velox::functions
