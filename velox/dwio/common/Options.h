@@ -706,6 +706,13 @@ struct WriterOptions {
   std::string sessionTimezoneName;
   bool adjustTimestampToTimezone{false};
 
+  // This option controls whether collect iceberg data file statistics
+  // during write. It will be set to true only by IcebergDataSink.
+  bool collectIcebergStats{false};
+
+  std::shared_ptr<std::vector<std::pair<int32_t, bool>>> sourceColumnIndices{
+      nullptr};
+
   // WriterOption implementations can implement this function to specify how to
   // process format-specific session and connector configs.
   virtual void processConfigs(
