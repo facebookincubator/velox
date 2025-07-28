@@ -42,6 +42,7 @@ velox_add_library(
   OnDemandUnitLoader.cpp
   InputStream.cpp
   IntDecoder.cpp
+  IcebergStatistics.cpp
   MetadataFilter.cpp
   Options.cpp
   OutputStream.cpp
