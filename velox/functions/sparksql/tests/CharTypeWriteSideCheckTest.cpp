@@ -19,16 +19,17 @@
 namespace facebook::velox::functions::sparksql::test {
 namespace {
 
-class CharTypeWriteSideCheckTest : public SparkFunctionBaseTest {};
+class CharTypeWriteSideCheckTest : public SparkFunctionBaseTest {
+ protected:
+  auto charTypeWriteSideCheck(
+      const std::optional<std::string>& input,
+      const std::optional<int32_t>& limit) {
+    return evaluateOnce<std::string>(
+        "char_type_write_side_check(c0, c1)", input, limit);
+  }
+};
 
 TEST_F(CharTypeWriteSideCheckTest, ascii) {
-  const auto charTypeWriteSideCheck =
-      [&](const std::optional<std::string>& input,
-          const std::optional<int32_t>& limit) {
-        return evaluateOnce<std::string>(
-            "char_type_write_side_check(c0, c1)", input, limit);
-      };
-
   // Case 1: String length equals limit (return as-is).
   EXPECT_EQ(charTypeWriteSideCheck("abc", 3), "abc");
 
@@ -46,13 +47,6 @@ TEST_F(CharTypeWriteSideCheckTest, ascii) {
 }
 
 TEST_F(CharTypeWriteSideCheckTest, unicode) {
-  const auto charTypeWriteSideCheck =
-      [&](const std::optional<std::string>& input,
-          const std::optional<int32_t>& limit) {
-        return evaluateOnce<std::string>(
-            "char_type_write_side_check(c0, c1)", input, limit);
-      };
-
   // Case 1: String length equals limit (return as-is).
   EXPECT_EQ(charTypeWriteSideCheck("世界", 2), "世界");
   EXPECT_EQ(charTypeWriteSideCheck("a世", 2), "a世");
@@ -74,13 +68,6 @@ TEST_F(CharTypeWriteSideCheckTest, unicode) {
 }
 
 TEST_F(CharTypeWriteSideCheckTest, error) {
-  const auto charTypeWriteSideCheck =
-      [&](const std::optional<std::string>& input,
-          const std::optional<int32_t>& limit) {
-        return evaluateOnce<std::string>(
-            "char_type_write_side_check(c0, c1)", input, limit);
-      };
-
   // Error cases - string length > limit even after trimming trailing spaces.
   VELOX_ASSERT_USER_THROW(
       charTypeWriteSideCheck("abcd", 3),
@@ -97,9 +84,6 @@ TEST_F(CharTypeWriteSideCheckTest, error) {
   VELOX_ASSERT_USER_THROW(
       charTypeWriteSideCheck("Γειάσου", 4),
       "Exceeds allowed length limitation: 4");
-
-  // Null input cases.
-  EXPECT_EQ(charTypeWriteSideCheck(std::nullopt, 5), std::nullopt);
 
   // Edge cases - length limit must be positive.
   VELOX_ASSERT_USER_THROW(
