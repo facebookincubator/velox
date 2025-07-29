@@ -300,6 +300,40 @@ in the collection, returns NULL.</p>
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="ST_Points">
+<span class="sig-name descname"><span class="pre">ST_Points</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry:</span> <span class="pre">Geometry)</span> <span class="pre">-&gt;</span> <span class="pre">points:</span> <span class="pre">array(geometry</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#ST_Points" title="Link to this definition">¶</a></dt>
+<dd><p>Returns an array of points in a geometry. Empty or null inputs
+return null.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="ST_NumPoints">
+<span class="sig-name descname"><span class="pre">ST_NumPoints</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">points:</span> <span class="pre">integer</span></span></span><a class="headerlink" href="#ST_NumPoints" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the number of points in a geometry. This is an extension
+to the SQL/MM <code class="docutils literal notranslate"><span class="pre">ST_NumPoints</span></code> function which only applies to
+point and linestring.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="geometry_nearest_points">
+<span class="sig-name descname"><span class="pre">geometry_nearest_points</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry1:</span> <span class="pre">Geometry</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">geometry2:</span> <span class="pre">Geometry)</span> <span class="pre">-&gt;</span> <span class="pre">points:</span> <span class="pre">array(geometry</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#geometry_nearest_points" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the points on each geometry nearest the other. If either geometry
+is empty, return null. Otherwise, return an array of two Points that have
+the minimum distance of any two points on the geometries. The first Point
+will be from the first Geometry argument, the second from the second Geometry
+argument. If there are multiple pairs with the minimum distance, one pair
+is chosen arbitrarily.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="ST_EnvelopeAsPts">
+<span class="sig-name descname"><span class="pre">ST_EnvelopeAsPts</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry:</span> <span class="pre">Geometry)</span> <span class="pre">-&gt;</span> <span class="pre">points:</span> <span class="pre">array(geometry</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#ST_EnvelopeAsPts" title="Link to this definition">¶</a></dt>
+<dd><p>Returns an array of two points: the lower left and upper right corners
+of the bounding rectangular polygon of a geometry. Empty or null inputs
+return null.</p>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="geometry_invalid_reason">
 <span class="sig-name descname"><span class="pre">geometry_invalid_reason</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">reason:</span> <span class="pre">varchar</span></span></span><a class="headerlink" href="#geometry_invalid_reason" title="Link to this definition">¶</a></dt>
 <dd><p>If <code class="docutils literal notranslate"><span class="pre">geometry</span></code> is not valid or not simple, return a description of the
@@ -619,6 +653,10 @@ specified.</p>
 <li><a class="reference internal" href="#ST_IsEmpty"><code class="docutils literal notranslate"><span class="pre">ST_IsEmpty()</span></code></a></li>
 <li><a class="reference internal" href="#ST_Length"><code class="docutils literal notranslate"><span class="pre">ST_Length()</span></code></a></li>
 <li><a class="reference internal" href="#ST_PointN"><code class="docutils literal notranslate"><span class="pre">ST_PointN()</span></code></a></li>
+<li><a class="reference internal" href="#ST_Points"><code class="docutils literal notranslate"><span class="pre">ST_Points()</span></code></a></li>
+<li><a class="reference internal" href="#ST_NumPoints"><code class="docutils literal notranslate"><span class="pre">ST_NumPoints()</span></code></a></li>
+<li><a class="reference internal" href="#geometry_nearest_points"><code class="docutils literal notranslate"><span class="pre">geometry_nearest_points()</span></code></a></li>
+<li><a class="reference internal" href="#ST_EnvelopeAsPts"><code class="docutils literal notranslate"><span class="pre">ST_EnvelopeAsPts()</span></code></a></li>
 <li><a class="reference internal" href="#geometry_invalid_reason"><code class="docutils literal notranslate"><span class="pre">geometry_invalid_reason()</span></code></a></li>
 <li><a class="reference internal" href="#ST_Area"><code class="docutils literal notranslate"><span class="pre">ST_Area()</span></code></a></li>
 <li><a class="reference internal" href="#ST_Centroid"><code class="docutils literal notranslate"><span class="pre">ST_Centroid()</span></code></a></li>
