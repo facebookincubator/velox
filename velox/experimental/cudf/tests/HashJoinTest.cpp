@@ -44,8 +44,6 @@ using namespace facebook::velox::common::testutil;
 
 using facebook::velox::test::BatchMaker;
 
-using facebook::velox::connector::ColumnHandleMap;
-
 namespace {
 
 class HashJoinTest : public HashJoinTestBase {
@@ -63,182 +61,6 @@ class HashJoinTest : public HashJoinTestBase {
     cudf_velox::unregisterCudf();
     HashJoinTestBase::TearDown();
   }
-
-  // Make splits with each plan node having a number of source files.
-  SplitInput makeSpiltInput(
-      const std::vector<core::PlanNodeId>& nodeIds,
-      const std::vector<std::vector<std::shared_ptr<TempFilePath>>>& files) {
-    VELOX_CHECK_EQ(nodeIds.size(), files.size());
-    SplitInput splitInput;
-    for (int i = 0; i < nodeIds.size(); ++i) {
-      std::vector<exec::Split> splits;
-      splits.reserve(files[i].size());
-      for (const auto& file : files[i]) {
-        splits.push_back(exec::Split(makeHiveConnectorSplit(file->getPath())));
-      }
-      splitInput.emplace(nodeIds[i], std::move(splits));
-    }
-    return splitInput;
-  }
-
-  void testLazyVectorsWithFilter(
-      const core::JoinType joinType,
-      const std::string& filter,
-      const std::vector<std::string>& outputLayout,
-      const std::string& referenceQuery) {
-    const vector_size_t vectorSize = 1'000;
-    auto probeVectors = makeBatches(1, [&](int32_t /*unused*/) {
-      return makeRowVector(
-          {makeFlatVector<int32_t>(vectorSize, folly::identity),
-           makeFlatVector<int64_t>(
-               vectorSize, [](auto row) { return row % 23; }),
-           makeFlatVector<int32_t>(
-               vectorSize, [](auto row) { return row % 31; })});
-    });
-
-    std::vector<RowVectorPtr> buildVectors =
-        makeBatches(1, [&](int32_t /*unused*/) {
-          return makeRowVector({makeFlatVector<int32_t>(
-              vectorSize, [](auto row) { return row * 3; })});
-        });
-
-    std::shared_ptr<TempFilePath> probeFile = TempFilePath::create();
-    writeToFile(probeFile->getPath(), probeVectors);
-
-    std::shared_ptr<TempFilePath> buildFile = TempFilePath::create();
-    writeToFile(buildFile->getPath(), buildVectors);
-
-    createDuckDbTable("t", probeVectors);
-    createDuckDbTable("u", buildVectors);
-
-    // Lazy vector is part of the filter but never gets loaded.
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    core::PlanNodeId probeScanId;
-    core::PlanNodeId buildScanId;
-    auto op = PlanBuilder(planNodeIdGenerator)
-                  .tableScan(asRowType(probeVectors[0]->type()))
-                  .capturePlanNodeId(probeScanId)
-                  .hashJoin(
-                      {"c0"},
-                      {"c0"},
-                      PlanBuilder(planNodeIdGenerator)
-                          .tableScan(asRowType(buildVectors[0]->type()))
-                          .capturePlanNodeId(buildScanId)
-                          .planNode(),
-                      filter,
-                      outputLayout,
-                      joinType)
-                  .planNode();
-    SplitInput splitInput = {
-        {probeScanId,
-         {exec::Split(makeHiveConnectorSplit(probeFile->getPath()))}},
-        {buildScanId,
-         {exec::Split(makeHiveConnectorSplit(buildFile->getPath()))}},
-    };
-    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
-        .planNode(std::move(op))
-        .inputSplits(splitInput)
-        .checkSpillStats(false)
-        .referenceQuery(referenceQuery)
-        .run();
-  }
-
-  static uint64_t getInputPositions(
-      const std::shared_ptr<Task>& task,
-      int operatorIndex) {
-    auto stats = task->taskStats().pipelineStats.front().operatorStats;
-    return stats[operatorIndex].inputPositions;
-  }
-
-  static uint64_t getOutputPositions(
-      const std::shared_ptr<Task>& task,
-      const std::string& operatorType) {
-    uint64_t count = 0;
-    for (const auto& pipelineStat : task->taskStats().pipelineStats) {
-      for (const auto& operatorStat : pipelineStat.operatorStats) {
-        if (operatorStat.operatorType == operatorType) {
-          count += operatorStat.outputPositions;
-        }
-      }
-    }
-    return count;
-  }
-
-  static RuntimeMetric getFiltersProduced(
-      const std::shared_ptr<Task>& task,
-      int operatorIndex) {
-    return getOperatorRuntimeStats(
-        task, operatorIndex, "dynamicFiltersProduced");
-  }
-
-  static RuntimeMetric getFiltersAccepted(
-      const std::shared_ptr<Task>& task,
-      int operatorIndex) {
-    return getOperatorRuntimeStats(
-        task, operatorIndex, "dynamicFiltersAccepted");
-  }
-
-  static RuntimeMetric getReplacedWithFilterRows(
-      const std::shared_ptr<Task>& task,
-      int operatorIndex) {
-    return getOperatorRuntimeStats(
-        task, operatorIndex, "replacedWithDynamicFilterRows");
-  }
-
-  static RuntimeMetric getOperatorRuntimeStats(
-      const std::shared_ptr<Task>& task,
-      int32_t operatorIndex,
-      const std::string& statsName) {
-    auto stats = task->taskStats().pipelineStats.front().operatorStats;
-    return stats[operatorIndex].runtimeStats[statsName];
-  }
-
-  static core::JoinType flipJoinType(core::JoinType joinType) {
-    switch (joinType) {
-      case core::JoinType::kInner:
-        return joinType;
-      case core::JoinType::kLeft:
-        return core::JoinType::kRight;
-      case core::JoinType::kRight:
-        return core::JoinType::kLeft;
-      case core::JoinType::kFull:
-        return joinType;
-      case core::JoinType::kLeftSemiFilter:
-        return core::JoinType::kRightSemiFilter;
-      case core::JoinType::kLeftSemiProject:
-        return core::JoinType::kRightSemiProject;
-      case core::JoinType::kRightSemiFilter:
-        return core::JoinType::kLeftSemiFilter;
-      case core::JoinType::kRightSemiProject:
-        return core::JoinType::kLeftSemiProject;
-      default:
-        VELOX_FAIL(
-            "Cannot flip join type: {}", core::JoinTypeName::toName(joinType));
-    }
-  }
-
-  static core::PlanNodePtr flipJoinSides(const core::PlanNodePtr& plan) {
-    auto joinNode = std::dynamic_pointer_cast<const core::HashJoinNode>(plan);
-    VELOX_CHECK_NOT_NULL(joinNode);
-    return std::make_shared<core::HashJoinNode>(
-        joinNode->id(),
-        flipJoinType(joinNode->joinType()),
-        joinNode->isNullAware(),
-        joinNode->rightKeys(),
-        joinNode->leftKeys(),
-        joinNode->filter(),
-        joinNode->sources()[1],
-        joinNode->sources()[0],
-        joinNode->outputType());
-  }
-
-  // The default left and right table types used for test.
-  RowTypePtr probeType_;
-  RowTypePtr buildType_;
-  VectorFuzzer::Options fuzzerOpts_;
-
-  memory::MemoryReclaimer::Stats reclaimerStats_;
-  friend class HashJoinBuilder;
 };
 
 class MultiThreadedHashJoinTest
@@ -3825,7 +3647,7 @@ TEST_F(HashJoinTest, DISABLED_dynamicFilters) {
 
   // Basic push-down.
   {
-    // Inner join.
+    SCOPED_TRACE("Inner join");
     core::PlanNodeId probeScanId;
     core::PlanNodeId joinId;
     auto op = PlanBuilder(planNodeIdGenerator, pool_.get())
@@ -4003,8 +3825,9 @@ TEST_F(HashJoinTest, DISABLED_dynamicFilters) {
   // Basic push-down with column names projected out of the table scan
   // having different names than column names in the files.
   {
+    SCOPED_TRACE("Inner join column rename");
     auto scanOutputType = ROW({"a", "b"}, {INTEGER(), BIGINT()});
-    ColumnHandleMap assignments;
+    connector::ColumnHandleMap assignments;
     assignments["a"] = regularColumn("c0", INTEGER());
     assignments["b"] = regularColumn("c1", BIGINT());
 
@@ -4051,6 +3874,7 @@ TEST_F(HashJoinTest, DISABLED_dynamicFilters) {
 
   // Push-down that requires merging filters.
   {
+    SCOPED_TRACE("Merge filters");
     core::PlanNodeId probeScanId;
     core::PlanNodeId joinId;
     auto op = PlanBuilder(planNodeIdGenerator, pool_.get())
@@ -4091,6 +3915,7 @@ TEST_F(HashJoinTest, DISABLED_dynamicFilters) {
 
   // Push-down that turns join into a no-op.
   {
+    SCOPED_TRACE("canReplaceWithDynamicFilter");
     core::PlanNodeId probeScanId;
     core::PlanNodeId joinId;
     auto op =
@@ -4134,6 +3959,7 @@ TEST_F(HashJoinTest, DISABLED_dynamicFilters) {
   // Push-down that turns join into a no-op with output having a different
   // number of columns than the input.
   {
+    SCOPED_TRACE("canReplaceWithDynamicFilter column rename");
     core::PlanNodeId probeScanId;
     core::PlanNodeId joinId;
     auto op = PlanBuilder(planNodeIdGenerator, pool_.get())
@@ -4174,6 +4000,7 @@ TEST_F(HashJoinTest, DISABLED_dynamicFilters) {
 
   // Push-down that requires merging filters and turns join into a no-op.
   {
+    SCOPED_TRACE("canReplaceWithDynamicFilter merge filters");
     core::PlanNodeId probeScanId;
     core::PlanNodeId joinId;
     auto op = PlanBuilder(planNodeIdGenerator, pool_.get())
@@ -4214,6 +4041,7 @@ TEST_F(HashJoinTest, DISABLED_dynamicFilters) {
 
   // Push-down with highly selective filter in the scan.
   {
+    SCOPED_TRACE("Highly selective filter");
     // Inner join.
     core::PlanNodeId probeScanId;
     core::PlanNodeId joinId;
@@ -4228,6 +4056,7 @@ TEST_F(HashJoinTest, DISABLED_dynamicFilters) {
             .planNode();
 
     {
+      SCOPED_TRACE("Inner join");
       HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .planNode(std::move(op))
           .makeInputSplits(makeInputSplits(probeScanId))
@@ -4272,6 +4101,7 @@ TEST_F(HashJoinTest, DISABLED_dynamicFilters) {
              .planNode();
 
     {
+      SCOPED_TRACE("Left semi join");
       HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .planNode(std::move(op))
           .makeInputSplits(makeInputSplits(probeScanId))
@@ -4316,6 +4146,7 @@ TEST_F(HashJoinTest, DISABLED_dynamicFilters) {
              .planNode();
 
     {
+      SCOPED_TRACE("Right semi join");
       HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .planNode(std::move(op))
           .makeInputSplits(makeInputSplits(probeScanId))
@@ -4356,6 +4187,7 @@ TEST_F(HashJoinTest, DISABLED_dynamicFilters) {
             .planNode();
 
     {
+      SCOPED_TRACE("Right join");
       HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .planNode(std::move(op))
           .makeInputSplits(makeInputSplits(probeScanId))
@@ -4387,6 +4219,7 @@ TEST_F(HashJoinTest, DISABLED_dynamicFilters) {
 
   // Disable filter push-down by using values in place of scan.
   {
+    SCOPED_TRACE("Disabled in case of values node");
     core::PlanNodeId joinId;
     auto op = PlanBuilder(planNodeIdGenerator, pool_.get())
                   .values(probeVectors)
@@ -4410,6 +4243,7 @@ TEST_F(HashJoinTest, DISABLED_dynamicFilters) {
   // Disable filter push-down by using an expression as the join key on the
   // probe side.
   {
+    SCOPED_TRACE("Disabled in case of join condition");
     core::PlanNodeId probeScanId;
     core::PlanNodeId joinId;
     auto op = PlanBuilder(planNodeIdGenerator, pool_.get())
@@ -4783,7 +4617,7 @@ TEST_F(HashJoinTest, DISABLED_dynamicFiltersAppliedToPreloadedSplits) {
   }
 
   auto outputType = ROW({"p0", "p1"}, {BIGINT(), BIGINT()});
-  ColumnHandleMap assignments = {
+  connector::ColumnHandleMap assignments = {
       {"p0", regularColumn("p0", BIGINT())},
       {"p1", partitionKey("p1", BIGINT())}};
   createDuckDbTable("p", probeVectors);
@@ -5179,7 +5013,7 @@ TEST_F(HashJoinTest, dynamicFilterOnPartitionKey) {
                    .partitionKey("k", "0")
                    .build();
   auto outputType = ROW({"n1_0", "n1_1"}, {BIGINT(), BIGINT()});
-  ColumnHandleMap assignments = {
+  connector::ColumnHandleMap assignments = {
       {"n1_0", regularColumn("c0", BIGINT())},
       {"n1_1", partitionKey("k", BIGINT())}};
 
@@ -6735,7 +6569,7 @@ TEST_F(HashJoinTest, DISABLED_reclaimFromJoinBuilderWithMultiDrivers) {
   const auto vectors = createVectors(rowType, 64 << 20, fuzzerOpts_);
   const int numDrivers = 4;
 
-  memory::MemoryManagerOptions options;
+  memory::MemoryManager::Options options;
   options.allocatorCapacity = 8L << 30;
   auto memoryManagerWithoutArbitrator =
       std::make_unique<memory::MemoryManager>(options);
@@ -8427,4 +8261,5 @@ DEBUG_ONLY_TEST_F(HashJoinTest, hashTableCleanupAfterProbeFinish) {
       .run();
   ASSERT_TRUE(tableEmpty);
 }
+
 } // namespace
