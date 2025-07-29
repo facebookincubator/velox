@@ -19,9 +19,9 @@ if(VELOX_ENABLE_ARROW)
   else()
     set(THRIFT_SOURCE "BUNDLED")
   endif()
-  # Apache Arrow 21.0.0 uses 0.22.0 as the bundled Apache Thrift. We can remove
-  # this after 22.0.0 release because this will be used by default. See also:
-  # https://github.com/apache/arrow/issues/47111
+  # Apache Arrow 21.0.0 uses archive.apache.org as the default mirror, which tends to timeout in CI.
+  # We don't need to explicitly set this alternate mirror after the 22.0.0 release because this will be
+  # used by default. See also: https://github.com/apache/arrow/issues/47111
   set(THRIFT_URL
       "https://packages.apache.org/artifactory/arrow/thirdparty/thrift-0.22.0.tar.gz"
   )
