@@ -3647,7 +3647,7 @@ TEST_F(HashJoinTest, DISABLED_dynamicFilters) {
 
   // Basic push-down.
   {
-    // Inner join.
+    SCOPED_TRACE("Inner join");
     core::PlanNodeId probeScanId;
     core::PlanNodeId joinId;
     auto op = PlanBuilder(planNodeIdGenerator, pool_.get())
@@ -3825,8 +3825,9 @@ TEST_F(HashJoinTest, DISABLED_dynamicFilters) {
   // Basic push-down with column names projected out of the table scan
   // having different names than column names in the files.
   {
+    SCOPED_TRACE("Inner join column rename");
     auto scanOutputType = ROW({"a", "b"}, {INTEGER(), BIGINT()});
-    ColumnHandleMap assignments;
+    connector::ColumnHandleMap assignments;
     assignments["a"] = regularColumn("c0", INTEGER());
     assignments["b"] = regularColumn("c1", BIGINT());
 
@@ -3873,6 +3874,7 @@ TEST_F(HashJoinTest, DISABLED_dynamicFilters) {
 
   // Push-down that requires merging filters.
   {
+    SCOPED_TRACE("Merge filters");
     core::PlanNodeId probeScanId;
     core::PlanNodeId joinId;
     auto op = PlanBuilder(planNodeIdGenerator, pool_.get())
@@ -3913,6 +3915,7 @@ TEST_F(HashJoinTest, DISABLED_dynamicFilters) {
 
   // Push-down that turns join into a no-op.
   {
+    SCOPED_TRACE("canReplaceWithDynamicFilter");
     core::PlanNodeId probeScanId;
     core::PlanNodeId joinId;
     auto op =
@@ -3956,6 +3959,7 @@ TEST_F(HashJoinTest, DISABLED_dynamicFilters) {
   // Push-down that turns join into a no-op with output having a different
   // number of columns than the input.
   {
+    SCOPED_TRACE("canReplaceWithDynamicFilter column rename");
     core::PlanNodeId probeScanId;
     core::PlanNodeId joinId;
     auto op = PlanBuilder(planNodeIdGenerator, pool_.get())
@@ -3996,6 +4000,7 @@ TEST_F(HashJoinTest, DISABLED_dynamicFilters) {
 
   // Push-down that requires merging filters and turns join into a no-op.
   {
+    SCOPED_TRACE("canReplaceWithDynamicFilter merge filters");
     core::PlanNodeId probeScanId;
     core::PlanNodeId joinId;
     auto op = PlanBuilder(planNodeIdGenerator, pool_.get())
@@ -4036,6 +4041,7 @@ TEST_F(HashJoinTest, DISABLED_dynamicFilters) {
 
   // Push-down with highly selective filter in the scan.
   {
+    SCOPED_TRACE("Highly selective filter");
     // Inner join.
     core::PlanNodeId probeScanId;
     core::PlanNodeId joinId;
@@ -4050,6 +4056,7 @@ TEST_F(HashJoinTest, DISABLED_dynamicFilters) {
             .planNode();
 
     {
+      SCOPED_TRACE("Inner join");
       HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .planNode(std::move(op))
           .makeInputSplits(makeInputSplits(probeScanId))
@@ -4094,6 +4101,7 @@ TEST_F(HashJoinTest, DISABLED_dynamicFilters) {
              .planNode();
 
     {
+      SCOPED_TRACE("Left semi join");
       HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .planNode(std::move(op))
           .makeInputSplits(makeInputSplits(probeScanId))
@@ -4138,6 +4146,7 @@ TEST_F(HashJoinTest, DISABLED_dynamicFilters) {
              .planNode();
 
     {
+      SCOPED_TRACE("Right semi join");
       HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .planNode(std::move(op))
           .makeInputSplits(makeInputSplits(probeScanId))
@@ -4178,6 +4187,7 @@ TEST_F(HashJoinTest, DISABLED_dynamicFilters) {
             .planNode();
 
     {
+      SCOPED_TRACE("Right join");
       HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .planNode(std::move(op))
           .makeInputSplits(makeInputSplits(probeScanId))
@@ -4209,6 +4219,7 @@ TEST_F(HashJoinTest, DISABLED_dynamicFilters) {
 
   // Disable filter push-down by using values in place of scan.
   {
+    SCOPED_TRACE("Disabled in case of values node");
     core::PlanNodeId joinId;
     auto op = PlanBuilder(planNodeIdGenerator, pool_.get())
                   .values(probeVectors)
@@ -4232,6 +4243,7 @@ TEST_F(HashJoinTest, DISABLED_dynamicFilters) {
   // Disable filter push-down by using an expression as the join key on the
   // probe side.
   {
+    SCOPED_TRACE("Disabled in case of join condition");
     core::PlanNodeId probeScanId;
     core::PlanNodeId joinId;
     auto op = PlanBuilder(planNodeIdGenerator, pool_.get())
@@ -4605,7 +4617,7 @@ TEST_F(HashJoinTest, DISABLED_dynamicFiltersAppliedToPreloadedSplits) {
   }
 
   auto outputType = ROW({"p0", "p1"}, {BIGINT(), BIGINT()});
-  ColumnHandleMap assignments = {
+  connector::ColumnHandleMap assignments = {
       {"p0", regularColumn("p0", BIGINT())},
       {"p1", partitionKey("p1", BIGINT())}};
   createDuckDbTable("p", probeVectors);
@@ -5001,7 +5013,7 @@ TEST_F(HashJoinTest, dynamicFilterOnPartitionKey) {
                    .partitionKey("k", "0")
                    .build();
   auto outputType = ROW({"n1_0", "n1_1"}, {BIGINT(), BIGINT()});
-  ColumnHandleMap assignments = {
+  connector::ColumnHandleMap assignments = {
       {"n1_0", regularColumn("c0", BIGINT())},
       {"n1_1", partitionKey("k", BIGINT())}};
 
@@ -6557,7 +6569,7 @@ TEST_F(HashJoinTest, DISABLED_reclaimFromJoinBuilderWithMultiDrivers) {
   const auto vectors = createVectors(rowType, 64 << 20, fuzzerOpts_);
   const int numDrivers = 4;
 
-  memory::MemoryManagerOptions options;
+  memory::MemoryManager::Options options;
   options.allocatorCapacity = 8L << 30;
   auto memoryManagerWithoutArbitrator =
       std::make_unique<memory::MemoryManager>(options);
@@ -8249,4 +8261,5 @@ DEBUG_ONLY_TEST_F(HashJoinTest, hashTableCleanupAfterProbeFinish) {
       .run();
   ASSERT_TRUE(tableEmpty);
 }
+
 } // namespace

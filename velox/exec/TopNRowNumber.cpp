@@ -140,6 +140,9 @@ TopNRowNumber::TopNRowNumber(
           node->sortingOrders(),
           data_.get()),
       decodedVectors_(inputType_->size()) {
+  VELOX_CHECK_EQ(
+      node->rankFunction(), core::TopNRowNumberNode::RankFunction::kRowNumber);
+
   const auto& keys = node->partitionKeys();
   const auto numKeys = keys.size();
 
@@ -205,13 +208,10 @@ void TopNRowNumber::addInput(RowVectorPtr input) {
     // Initialize new partitions.
     initializeNewPartitions();
 
-    // Process input rows. For each row, lookup the partition. If number of rows
-    // in that partition is less than limit, add the new row. Otherwise, check
-    // if row should replace an existing row or be discarded.
-    for (auto i = 0; i < numInput; ++i) {
-      auto& partition = partitionAt(lookup_->hits[i]);
-      processInputRow(i, partition);
-    }
+    // Process input rows. For each row, lookup the partition. If the highest
+    // (top) rank in that partition is less than limit, add the new row.
+    // Otherwise, check if row should replace an existing row or be discarded.
+    processInputRowLoop(numInput);
 
     if (abandonPartialEarly()) {
       abandonedPartial_ = true;
@@ -222,9 +222,7 @@ void TopNRowNumber::addInput(RowVectorPtr input) {
       outputRows_.resize(outputBatchSize_);
     }
   } else {
-    for (auto i = 0; i < numInput; ++i) {
-      processInputRow(i, *singlePartition_);
-    }
+    processInputRowLoop(numInput);
   }
 }
 
@@ -249,25 +247,52 @@ void TopNRowNumber::initializeNewPartitions() {
   }
 }
 
+char* TopNRowNumber::processRowWithinLimit(
+    vector_size_t /*index*/,
+    TopRows& partition) {
+  // row_number accumulates the new row in the partition, and the top rank is
+  // incremented by 1 as row_number increases by 1 at each new row.
+  ++partition.topRank;
+  return data_->newRow();
+}
+
+char* TopNRowNumber::processRowExceedingLimit(
+    vector_size_t /*index*/,
+    TopRows& partition) {
+  // The new row has rank < highest (aka top) rank at 'limit' function value.
+  // For row_number, such rows are added to the accumulator queue and the
+  // top rank row is popped out. The topRank remains the same.
+  auto& topRows = partition.rows;
+  char* topRow = topRows.top();
+  topRows.pop();
+  // Reuses the space of the popped row itself for the new row.
+  return data_->initializeRow(topRow, true /* reuse */);
+}
+
 void TopNRowNumber::processInputRow(vector_size_t index, TopRows& partition) {
   auto& topRows = partition.rows;
 
   char* newRow = nullptr;
-  if (topRows.size() < limit_) {
-    newRow = data_->newRow();
+  if (partition.topRank < limit_) {
+    newRow = processRowWithinLimit(index, partition);
   } else {
     char* topRow = topRows.top();
 
-    if (!comparator_(decodedVectors_, index, topRow)) {
-      // Drop this input row.
+    const auto result = comparator_.compare(decodedVectors_, index, topRow);
+    if (result > 0) {
+      // The new row is bigger than the top rank so far, so this row is ignored.
       return;
     }
 
-    // Replace existing row.
-    topRows.pop();
+    if (result == 0) {
+      // The new row has the same value as the top rank row. row_number rejects
+      // such rows.
+      return;
+    }
 
-    // Reuse the topRow's memory.
-    newRow = data_->initializeRow(topRow, true /* reuse */);
+    if (result < 0) {
+      newRow = processRowExceedingLimit(index, partition);
+    }
   }
 
   for (auto col = 0; col < decodedVectors_.size(); ++col) {
@@ -275,6 +300,18 @@ void TopNRowNumber::processInputRow(vector_size_t index, TopRows& partition) {
   }
 
   topRows.push(newRow);
+}
+
+void TopNRowNumber::processInputRowLoop(vector_size_t numInput) {
+  if (table_) {
+    for (auto i = 0; i < numInput; ++i) {
+      processInputRow(i, partitionAt(lookup_->hits[i]));
+    }
+  } else {
+    for (auto i = 0; i < numInput; ++i) {
+      processInputRow(i, *singlePartition_);
+    }
+  }
 }
 
 void TopNRowNumber::noMoreInput() {
@@ -293,7 +330,7 @@ void TopNRowNumber::noMoreInput() {
     spiller_->finishSpill(spillPartitionSet);
     VELOX_CHECK_EQ(spillPartitionSet.size(), 1);
     merge_ = spillPartitionSet.begin()->second->createOrderedReader(
-        spillConfig_->readBufferSize, pool(), &spillStats_);
+        spillConfig_->readBufferSize, pool(), spillStats_.get());
   } else {
     outputRows_.resize(outputBatchSize_);
   }
@@ -750,6 +787,6 @@ void TopNRowNumber::setupSpiller() {
       inputType_,
       sortingKeys,
       &spillConfig_.value(),
-      &spillStats_);
+      spillStats_.get());
 }
 } // namespace facebook::velox::exec

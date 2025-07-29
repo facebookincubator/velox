@@ -21,6 +21,21 @@
 
 namespace facebook::velox::common {
 
+// static
+std::string_view ScanSpec::columnTypeString(ScanSpec::ColumnType columnType) {
+  switch (columnType) {
+    case ScanSpec::ColumnType::kRegular:
+      return "REGULAR";
+    case ScanSpec::ColumnType::kRowIndex:
+      return "ROW_INDEX";
+    case ScanSpec::ColumnType::kComposite:
+      return "COMPOSITE";
+    default:
+      VELOX_UNREACHABLE(
+          "Unrecognized ColumnType: {}", static_cast<int8_t>(columnType));
+  }
+}
+
 ScanSpec* ScanSpec::getOrCreateChild(const std::string& name) {
   if (auto it = this->childByFieldName_.find(name);
       it != this->childByFieldName_.end()) {
@@ -204,7 +219,7 @@ void ScanSpec::moveAdaptationFrom(ScanSpec& other) {
 
 namespace {
 bool testIntFilter(
-    common::Filter* filter,
+    const common::Filter* filter,
     dwio::common::IntegerColumnStatistics* intStats,
     bool mayHaveNull) {
   if (!intStats) {
@@ -239,7 +254,7 @@ bool testIntFilter(
 }
 
 bool testDoubleFilter(
-    common::Filter* filter,
+    const common::Filter* filter,
     dwio::common::DoubleColumnStatistics* doubleStats,
     bool mayHaveNull) {
   if (!doubleStats) {
@@ -274,7 +289,7 @@ bool testDoubleFilter(
 }
 
 bool testStringFilter(
-    common::Filter* filter,
+    const common::Filter* filter,
     dwio::common::StringColumnStatistics* stringStats,
     bool mayHaveNull) {
   if (!stringStats) {
@@ -304,7 +319,7 @@ bool testStringFilter(
 }
 
 bool testBoolFilter(
-    common::Filter* filter,
+    const common::Filter* filter,
     dwio::common::BooleanColumnStatistics* boolStats) {
   const auto trueCount = boolStats->getTrueCount();
   const auto falseCount = boolStats->getFalseCount();
@@ -325,7 +340,7 @@ bool testBoolFilter(
 } // namespace
 
 bool testFilter(
-    common::Filter* filter,
+    const common::Filter* filter,
     dwio::common::ColumnStatistics* stats,
     uint64_t totalRows,
     const TypePtr& type) {
@@ -428,10 +443,6 @@ std::string ScanSpec::toString() const {
   return out.str();
 }
 
-void ScanSpec::addFilter(const Filter& filter) {
-  filter_ = filter_ ? filter_->mergeWith(&filter) : filter.clone();
-}
-
 ScanSpec* ScanSpec::addField(const std::string& name, column_index_t channel) {
   auto child = getOrCreateChild(name);
   child->setProjectOut(true);
@@ -510,7 +521,7 @@ namespace {
 template <TypeKind kKind>
 void filterSimpleVectorRows(
     const BaseVector& vector,
-    Filter& filter,
+    const Filter& filter,
     vector_size_t size,
     uint64_t* result) {
   VELOX_CHECK(size == 0 || result);
@@ -529,9 +540,10 @@ void filterSimpleVectorRows(
 
 void filterRows(
     const BaseVector& vector,
-    Filter& filter,
+    const Filter& filter,
     vector_size_t size,
     uint64_t* result) {
+  VELOX_CHECK_LE(size, vector.size());
   switch (vector.typeKind()) {
     case TypeKind::ARRAY:
     case TypeKind::MAP:
@@ -562,9 +574,12 @@ void filterRows(
 
 } // namespace
 
-void ScanSpec::applyFilter(const BaseVector& vector, uint64_t* result) const {
+void ScanSpec::applyFilter(
+    const BaseVector& vector,
+    vector_size_t size,
+    uint64_t* result) const {
   if (filter_) {
-    filterRows(vector, *filter_, vector.size(), result);
+    filterRows(vector, *filter_, size, result);
   }
   if (!vector.type()->isRow()) {
     // Filter on MAP or ARRAY children are pruning, and won't affect correctness
@@ -575,7 +590,7 @@ void ScanSpec::applyFilter(const BaseVector& vector, uint64_t* result) const {
   auto* rowVector = vector.asChecked<RowVector>();
   for (int i = 0; i < rowType.size(); ++i) {
     if (auto* child = childByName(rowType.nameOf(i))) {
-      child->applyFilter(*rowVector->childAt(i), result);
+      child->applyFilter(*rowVector->childAt(i), size, result);
     }
   }
 }

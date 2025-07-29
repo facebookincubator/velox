@@ -408,7 +408,7 @@ ExprPtr compileRewrittenExpression(
     } else {
       result = getSpecialForm(
           config,
-          cast->nullOnFailure() ? "try_cast" : "cast",
+          cast->isTryCast() ? "try_cast" : "cast",
           resultType,
           std::move(compiledInputs),
           trackCpuUsage);
@@ -520,12 +520,21 @@ ExprPtr compileRewrittenExpression(
 
   result->computeMetadata();
 
+  ExprPtr compiled;
   // If the expression is constant folding it is redundant.
-  auto folded = enableConstantFolding && !isConstantExpr
-      ? tryFoldIfConstant(result, scope)
-      : result;
-  scope->visited[expr.get()] = folded;
-  return folded;
+  if (enableConstantFolding && !isConstantExpr) {
+    compiled = tryFoldIfConstant(result, scope);
+    // Constant folding uses an uninitialized ExprSet for eval. This breaks the
+    // invariant that 'memoizingExprs_' relies on, which is that the Expr
+    // pointers will be alive for the lifetime of the ExprSet. Clear the
+    // execution state of the ExprSet to avoid this.
+    scope->exprSet->clear();
+  } else {
+    compiled = result;
+  }
+
+  scope->visited[expr.get()] = compiled;
+  return compiled;
 }
 
 ExprPtr compileExpression(

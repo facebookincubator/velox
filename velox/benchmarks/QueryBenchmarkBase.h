@@ -30,8 +30,6 @@
 #include "velox/common/base/SuccinctPrinter.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/memory/MmapAllocator.h"
-#include "velox/connectors/hive/HiveConfig.h"
-#include "velox/connectors/hive/HiveConnector.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/dwrf/RegisterDwrfReader.h"
 #include "velox/dwio/parquet/RegisterParquetReader.h"
@@ -65,9 +63,12 @@ struct RunStats {
         << succinctBytes(rawInputBytes / (micros / 1000000.0)) << "/s raw, "
         << succinctNanos(userNanos) << " user " << succinctNanos(systemNanos)
         << " system (" << (100 * (userNanos + systemNanos) / (micros * 1000))
-        << "%), flags: ";
-    for (auto& pair : flags) {
-      out << pair.first << "=" << pair.second << " ";
+        << "%)";
+    if (!flags.empty()) {
+      out << " flags: ";
+      for (auto& pair : flags) {
+        out << pair.first << "=" << pair.second << " ";
+      }
     }
     out << std::endl << "======" << std::endl;
     if (detail) {
@@ -126,6 +127,10 @@ class QueryBenchmarkBase {
   std::unique_ptr<folly::IOThreadPoolExecutor> cacheExecutor_;
   std::shared_ptr<memory::MemoryAllocator> allocator_;
   std::shared_ptr<cache::AsyncDataCache> cache_;
+
+  // QueryConfig properties. May be part of parameter sweep.
+  std::unordered_map<std::string, std::string> config_;
+
   // Parameter combinations to try. Each element specifies a flag and possible
   // values. All permutations are tried.
   std::vector<ParameterDim> parameters_;
