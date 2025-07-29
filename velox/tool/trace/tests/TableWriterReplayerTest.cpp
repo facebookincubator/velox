@@ -73,7 +73,7 @@ class TableWriterReplayerTest : public HiveConnectorTestBase {
 
   std::vector<RowVectorPtr> makeBatches(
       vector_size_t numBatches,
-      std::function<RowVectorPtr(int32_t)> makeVector) {
+      const std::function<RowVectorPtr(int32_t)>& makeVector) {
     std::vector<RowVectorPtr> batches;
     batches.reserve(numBatches);
     for (int32_t i = 0; i < numBatches; ++i) {
@@ -160,7 +160,7 @@ class TableWriterReplayerTest : public HiveConnectorTestBase {
       bool hasPartitioningScheme,
       connector::CommitStrategy commitStrategy =
           connector::CommitStrategy::kNoCommit) {
-    return [=](core::PlanNodeId nodeId,
+    return [=](const core::PlanNodeId& nodeId,
                core::PlanNodePtr source) -> core::PlanNodePtr {
       std::shared_ptr<core::AggregationNode> aggNode = nullptr;
       if (aggregationNode == nullptr) {
@@ -240,7 +240,7 @@ class TableWriterReplayerTest : public HiveConnectorTestBase {
 
   static std::shared_ptr<core::AggregationNode> generateAggregationNode(
       const std::string& name,
-      const core::PlanNodeId nodeId,
+      const core::PlanNodeId& nodeId,
       const std::vector<core::FieldAccessTypedExprPtr>& groupingKeys,
       AggregationNode::Step step,
       const PlanNodePtr& source) {
