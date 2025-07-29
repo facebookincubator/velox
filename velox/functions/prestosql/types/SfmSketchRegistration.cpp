@@ -16,7 +16,6 @@
 
 #include "velox/functions/prestosql/types/SfmSketchRegistration.h"
 #include "velox/functions/prestosql/types/SfmSketchType.h"
-#include "velox/functions/prestosql/types/fuzzer_utils/SfmSketchInputGenerator.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox {
@@ -36,8 +35,7 @@ class SfmSketchTypeFactory : public CustomTypeFactory {
 
   AbstractInputGeneratorPtr getInputGenerator(
       const InputGeneratorConfig& config) const override {
-    return std::make_shared<fuzzer::SfmSketchInputGenerator>(
-        config.seed_, config.nullRatio_, config.pool_);
+    return nullptr;
   }
 };
 } // namespace

@@ -16,7 +16,6 @@
 
 #include "velox/functions/prestosql/types/JsonRegistration.h"
 
-#include "velox/common/fuzzer/ConstrainedGenerators.h"
 #include "velox/functions/prestosql/types/JsonCastOperator.h"
 #include "velox/functions/prestosql/types/JsonType.h"
 #include "velox/type/Type.h"
@@ -38,26 +37,7 @@ class JsonTypeFactory : public CustomTypeFactory {
 
   AbstractInputGeneratorPtr getInputGenerator(
       const InputGeneratorConfig& config) const override {
-    static const std::vector<TypePtr> kScalarTypes{
-        BOOLEAN(),
-        TINYINT(),
-        SMALLINT(),
-        INTEGER(),
-        BIGINT(),
-        REAL(),
-        DOUBLE(),
-        VARCHAR(),
-    };
-    fuzzer::FuzzerGenerator rng(config.seed_);
-    return std::make_shared<fuzzer::JsonInputGenerator>(
-        config.seed_,
-        JSON(),
-        config.nullRatio_,
-        fuzzer::getRandomInputGenerator(
-            config.seed_,
-            fuzzer::randType(rng, kScalarTypes, 3),
-            config.nullRatio_),
-        false);
+    return nullptr;
   }
 };
 } // namespace

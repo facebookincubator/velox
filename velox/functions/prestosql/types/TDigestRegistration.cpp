@@ -15,7 +15,6 @@
  */
 
 #include "velox/functions/prestosql/types/TDigestRegistration.h"
-#include "velox/common/fuzzer/ConstrainedGenerators.h"
 #include "velox/functions/prestosql/types/TDigestType.h"
 #include "velox/type/Type.h"
 
@@ -36,9 +35,7 @@ class TDigestTypeFactory : public CustomTypeFactory {
 
   AbstractInputGeneratorPtr getInputGenerator(
       const InputGeneratorConfig& config) const override {
-    fuzzer::FuzzerGenerator rng(config.seed_);
-    return std::make_shared<fuzzer::TDigestInputGenerator>(
-        config.seed_, TDIGEST(DOUBLE()), config.nullRatio_);
+    return nullptr;
   }
 };
 } // namespace
