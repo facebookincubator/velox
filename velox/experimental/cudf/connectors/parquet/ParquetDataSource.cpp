@@ -24,6 +24,7 @@
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include "velox/common/time/Timer.h"
+#include "velox/expression/FieldReference.h"
 
 #include <cudf/io/parquet.hpp>
 #include <cudf/io/types.hpp>

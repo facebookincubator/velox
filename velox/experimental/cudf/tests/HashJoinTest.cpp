@@ -44,6 +44,8 @@ using namespace facebook::velox::common::testutil;
 
 using facebook::velox::test::BatchMaker;
 
+using facebook::velox::connector::ColumnHandleMap;
+
 namespace {
 
 class HashJoinTest : public HashJoinTestBase {
@@ -229,8 +231,6 @@ class HashJoinTest : public HashJoinTestBase {
         joinNode->sources()[0],
         joinNode->outputType());
   }
-
-  const int32_t numDrivers_;
 
   // The default left and right table types used for test.
   RowTypePtr probeType_;
