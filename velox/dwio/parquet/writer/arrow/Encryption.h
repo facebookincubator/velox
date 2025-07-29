@@ -422,7 +422,7 @@ class PARQUET_EXPORT FileDecryptionProperties {
   std::string aad_prefix_;
   std::shared_ptr<AADPrefixVerifier> aad_prefix_verifier_;
 
-  const std::string empty_string_ = "";
+  const std::string empty_string_;
   ColumnPathToDecryptionPropertiesMap column_decryption_properties_;
 
   std::shared_ptr<DecryptionKeyRetriever> key_retriever_;
