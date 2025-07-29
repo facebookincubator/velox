@@ -23,11 +23,10 @@
 #include "velox/exec/LocalPartition.h"
 #include "velox/exec/MemoryReclaimer.h"
 #include "velox/exec/MergeSource.h"
+#include "velox/exec/ScaledScanController.h"
 #include "velox/exec/Split.h"
-#include "velox/exec/TableScan.h"
 #include "velox/exec/TaskStats.h"
 #include "velox/exec/TaskStructs.h"
-#include "velox/exec/TaskTraceWriter.h"
 #include "velox/vector/ComplexVector.h"
 
 namespace facebook::velox::exec {
@@ -1125,6 +1124,11 @@ class Task : public std::enable_shared_from_this<Task> {
 
   void initSplitListeners();
 
+  /// Checks if the task supports barrier processing. Barrier processing is
+  /// supported when the task is under single threaded execution mode and all
+  /// its plan nodes support barrier processing.
+  void ensureBarrierSupport() const;
+
   // Universally unique identifier of the task. Used to identify the task when
   // calling TaskListener.
   const std::string uuid_;
@@ -1147,10 +1151,10 @@ class Task : public std::enable_shared_from_this<Task> {
 
   core::PlanFragment planFragment_;
 
-  // Indicates if this task supports barrier processing. It is set to true if
-  // the task is under single threaded execution mode and all its plan nodes
-  // support barrier processing.
-  const bool supportBarrier_;
+  // First node in the plan fragment that does not support barrier processing.
+  // Barrier is supported when the task is under single threaded execution mode
+  // and all its plan nodes support barrier processing.
+  const core::PlanNode* firstNodeNotSupportingBarrier_{};
 
   const std::optional<TraceConfig> traceConfig_;
 
