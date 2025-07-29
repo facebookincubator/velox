@@ -14,6 +14,17 @@
 id: no-implicit-linking
 snapshots:
   ? |
+    add_executable(my_fuzzer STATIC src.cpp)
+    target_link_libraries(my_fuzzer internal_lib)
+  : fixed: |
+      add_executable(my_fuzzer STATIC src.cpp)
+      target_link_libraries(my_fuzzer PRIVATE internal_lib)
+    labels:
+      - source: target_link_libraries(my_fuzzer internal_lib)
+        style: primary
+        start: 41
+        end: 86
+  ? |
     add_library(mylib STATIC src.cpp)
     target_link_libraries(mylib dependency_lib)
   : fixed: |

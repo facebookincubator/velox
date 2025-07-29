@@ -25,7 +25,24 @@ rule:
       - pattern: target_link_libraries($FIRST PUBLIC $$$REST)
       - pattern: target_link_libraries($FIRST PRIVATE $$$REST)
       - pattern: target_link_libraries($FIRST INTERFACE $$$REST)
-fix: target_link_libraries($FIRST PUBLIC $$$ARGS)
+rewriters:
+  - id: public-scope
+    rule:
+      not:
+        regex: '.*(benchmark|bm|test|fuzzer).*'
+    fix: $FIRST PUBLIC
+  - id: private-scope
+    rule:
+      regex: '.*(benchmark|bm|test|fuzzer).*'
+    fix: $FIRST PRIVATE
+transform:
+  FIRST_WITH_SCOPE:
+    rewrite:
+      source: $FIRST
+      rewriters:
+        - public-scope
+        - private-scope
+fix: target_link_libraries($FIRST_WITH_SCOPE $$$ARGS)
 ---
 
 id: no-implicit-linking-velox
@@ -40,4 +57,21 @@ rule:
       - pattern: velox_link_libraries($FIRST PUBLIC $$$REST)
       - pattern: velox_link_libraries($FIRST PRIVATE $$$REST)
       - pattern: velox_link_libraries($FIRST INTERFACE $$$REST)
-fix: velox_link_libraries($FIRST PUBLIC $$$ARGS)
+rewriters:
+  - id: public-scope
+    rule:
+      not:
+        regex: '.*(benchmark|bm|test|fuzzer).*'
+    fix: $FIRST PUBLIC
+  - id: private-scope
+    rule:
+      regex: '.*(benchmark|bm|test|fuzzer).*'
+    fix: $FIRST PRIVATE
+transform:
+  FIRST_WITH_SCOPE:
+    rewrite:
+      source: $FIRST
+      rewriters:
+        - public-scope
+        - private-scope
+fix: velox_link_libraries($FIRST_WITH_SCOPE $$$ARGS)

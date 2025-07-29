@@ -39,9 +39,15 @@ valid:
         PRIVATE
         internal_lib
     )
+  - |
+    add_executable(my_fuzzer STATIC src.cpp)
+    target_link_libraries(my_fuzzer PRIVATE internal_lib)
 
 invalid:
   # These should trigger the rule - missing scope keywords
+  - |
+    add_executable(my_fuzzer STATIC src.cpp)
+    target_link_libraries(my_fuzzer internal_lib)
   - |
     target_link_libraries(myapp somelib)
   - |
