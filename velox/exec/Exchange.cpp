@@ -16,7 +16,6 @@
 #include "velox/exec/Exchange.h"
 
 #include "velox/exec/Task.h"
-#include "velox/serializers/CompactRowSerializer.h"
 
 namespace facebook::velox::exec {
 
