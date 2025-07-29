@@ -132,7 +132,7 @@ class ParquetDataSource : public DataSource, public NvtxHelper {
   dwio::common::RuntimeStatistics runtimeStats_;
   std::atomic<uint64_t> totalRemainingFilterTime_{0};
 
-  // Create callback data for total scan timing calculation 
+  // Create callback data for total scan timing calculation
   struct TotalScanTimeCallbackData {
     uint64_t startTimeUs;
     std::shared_ptr<io::IoStatistics> ioStats;
