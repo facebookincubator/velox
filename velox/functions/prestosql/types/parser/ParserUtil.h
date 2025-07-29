@@ -21,10 +21,6 @@
 
 namespace facebook::velox {
 
-/// velox/type/parser has been moved to velox/functions/prestosql/types/parser.
-/// This file is for backward compatibility and will be removed once Presto is
-/// updated with the new Velox version.
-
 /// Normalize Presto types such as INT and DOUBLE PRECISION and convert to Velox
 /// type.
 TypePtr typeFromString(

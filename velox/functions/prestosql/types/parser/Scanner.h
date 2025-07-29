@@ -26,9 +26,6 @@
 
 namespace facebook::velox::type {
 
-/// velox/type/parser has been moved to velox/functions/prestosql/types/parser.
-/// This file is for backward compatibility and will be removed once Presto is
-/// updated with the new Velox version.
 class Scanner : public yyFlexLexer {
  public:
   Scanner(
@@ -54,4 +51,5 @@ class Scanner : public yyFlexLexer {
   TypePtr& outputType_;
   const std::string_view input_;
 };
+
 } // namespace facebook::velox::type
