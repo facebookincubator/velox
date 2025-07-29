@@ -355,7 +355,7 @@ uint16_t MemoryManager::alignment() const {
 }
 
 std::shared_ptr<MemoryPoolImpl> MemoryManager::createRootPool(
-    std::string poolName,
+    const std::string& poolName,
     std::unique_ptr<MemoryReclaimer>& reclaimer,
     MemoryPool::Options& options) {
   auto pool = std::make_shared<MemoryPoolImpl>(
