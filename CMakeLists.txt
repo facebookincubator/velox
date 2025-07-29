@@ -13,9 +13,6 @@
 # limitations under the License.
 cmake_minimum_required(VERSION 3.28)
 message(STATUS "Building using CMake version: ${CMAKE_VERSION}")
-set(CMAKE_CXX_STANDARD 20)
-set(CMAKE_CXX_STANDARD_REQUIRED TRUE)
-set(CMAKE_CXX_EXTENSIONS ON) # Big Int is an extension
 message(STATUS "CXX standard: ${CMAKE_CXX_STANDARD}")
 
 # The policy allows us to change options without caching.
@@ -321,9 +318,6 @@ if(UNIX AND NOT APPLE)
   # linker flags, -export-dynamic for rtti
   add_link_options("-Wl,-export-dynamic")
 endif()
-
-# Required so velox code can be used in a dynamic library
-# set(CMAKE_POSITION_INDEPENDENT_CODE TRUE)
 
 # For C++20 support we need GNU GCC11 (or later versions) or Clang/AppleClang 15
 # (or later versions) to get support for the used features.
