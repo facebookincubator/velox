@@ -40,7 +40,7 @@ class FlatVector final : public SimpleVector<T> {
   static constexpr bool can_simd =
       (std::is_same_v<T, int64_t> || std::is_same_v<T, int32_t> ||
        std::is_same_v<T, int16_t> || std::is_same_v<T, int8_t> ||
-       /*std::is_same_v<T, bool> ||*/ std::is_same_v<T, size_t>);
+       std::is_same_v<T, bool> || std::is_same_v<T, size_t>);
 
   /// Minimum size of a string buffer. 32 KB value is chosen to ensure that a
   /// single buffer is sufficient for a "typical" vector: 1K rows, medium size

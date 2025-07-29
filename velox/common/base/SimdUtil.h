@@ -433,16 +433,12 @@ xsimd::batch<T, A> iota(const A& = {});
 // Returns a batch with all elements set to value.  For batch<bool> we
 // use one bit to represent one element.
 template <typename T, typename A = xsimd::default_arch>
-xsimd::batch<T, A> setAll(T value, const A& = {}) {
+auto setAll(T value, const A& = {}) {
   if constexpr (std::is_same_v<T, bool>) {
-#if defined(__aarch64__)
-    return xsimd::batch<T, A>(
-        xsimd::broadcast<unsigned char, A>(value ? -1 : 0));
-#else
-    return xsimd::batch<T, A>(xsimd::broadcast<int64_t, A>(value ? -1 : 0));
-#endif
+    return xsimd::batch<uint8_t, A>{
+        xsimd::broadcast<uint8_t, A>(value ? -1 : 0)};
   } else {
-    return xsimd::broadcast<T, A>(value);
+    return xsimd::batch<T, A>{xsimd::broadcast<T, A>(value)};
   }
 }
 

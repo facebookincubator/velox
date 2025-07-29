@@ -42,7 +42,7 @@ class ConstantVector final : public SimpleVector<T> {
   static constexpr bool can_simd =
       (std::is_same_v<T, int64_t> || std::is_same_v<T, int32_t> ||
        std::is_same_v<T, int16_t> || std::is_same_v<T, int8_t> ||
-       /*std::is_same_v<T, bool> ||*/ std::is_same_v<T, size_t>);
+       std::is_same_v<T, bool> || std::is_same_v<T, size_t>);
 
   ConstantVector(
       velox::memory::MemoryPool* pool,
@@ -478,7 +478,14 @@ class ConstantVector final : public SimpleVector<T> {
   mutable std::atomic<BufferPtr*> wrapInfo_{nullptr};
 
   // This must be at end to avoid memory corruption.
-  std::conditional_t<can_simd, xsimd::batch<T>, char> valueBuffer_;
+  std::conditional_t<
+      can_simd,
+      std::conditional_t<
+          std::is_same_v<T, bool>,
+          xsimd::batch<uint8_t>,
+          xsimd::batch<T>>,
+      char>
+      valueBuffer_;
 };
 
 template <>
