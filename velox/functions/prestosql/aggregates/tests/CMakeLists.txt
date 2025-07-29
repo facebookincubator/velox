@@ -62,23 +62,24 @@ add_test(
 
 target_link_libraries(
   velox_aggregates_test
-  velox_aggregates
-  velox_core
-  velox_dwio_common_test_utils
-  velox_exec
-  velox_exec_test_lib
-  velox_file
-  velox_functions_aggregates
-  velox_functions_aggregates_test_lib
-  velox_functions_window_test_lib
-  velox_functions_test_lib
-  velox_functions_prestosql
-  velox_functions_lib
-  velox_hive_connector
-  velox_simple_aggregate
-  velox_type
-  velox_vector_fuzzer
-  velox_temp_path
-  gflags::gflags
-  GTest::gtest
-  GTest::gtest_main)
+  PRIVATE
+    velox_aggregates
+    velox_core
+    velox_dwio_common_test_utils
+    velox_exec
+    velox_exec_test_lib
+    velox_file
+    velox_functions_aggregates
+    velox_functions_aggregates_test_lib
+    velox_functions_window_test_lib
+    velox_functions_test_lib
+    velox_functions_prestosql
+    velox_functions_lib
+    velox_hive_connector
+    velox_simple_aggregate
+    velox_type
+    velox_vector_fuzzer
+    velox_temp_path
+    gflags::gflags
+    GTest::gtest
+    GTest::gtest_main)

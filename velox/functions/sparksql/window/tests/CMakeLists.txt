@@ -34,4 +34,5 @@ add_test(
   WORKING_DIRECTORY .)
 
 target_link_libraries(
-  velox_spark_windows_test ${CMAKE_WINDOW_TEST_LINK_LIBRARIES})
+  velox_spark_windows_test
+  PRIVATE ${CMAKE_WINDOW_TEST_LINK_LIBRARIES})

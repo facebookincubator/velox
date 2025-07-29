@@ -16,47 +16,46 @@ add_library(velox_aggregation_result_verifier MinMaxByResultVerifier.cpp)
 
 target_link_libraries(
   velox_aggregation_result_verifier
-  velox_core
-  velox_aggregation_fuzzer_base
-  velox_exec_test_lib
-  velox_vector
-  velox_vector_test_lib)
+  PUBLIC velox_core
+         velox_aggregation_fuzzer_base
+         velox_exec_test_lib
+         velox_vector
+         velox_vector_test_lib)
 
 add_executable(velox_aggregation_fuzzer_test AggregationFuzzerTest.cpp)
 
 target_link_libraries(
   velox_aggregation_fuzzer_test
-  velox_aggregation_fuzzer
-  velox_aggregation_fuzzer_base
-  velox_aggregation_result_verifier
-  velox_aggregates
-  velox_window
-  velox_vector_fuzzer
-  velox_vector_test_lib
-  GTest::gtest
-  GTest::gtest_main)
+  PRIVATE
+    velox_aggregation_fuzzer
+    velox_aggregation_fuzzer_base
+    velox_aggregation_result_verifier
+    velox_aggregates
+    velox_window
+    velox_vector_fuzzer
+    velox_vector_test_lib
+    GTest::gtest
+    GTest::gtest_main)
 
 # Window Fuzzer
 add_executable(velox_window_fuzzer_test WindowFuzzerTest.cpp)
 
 target_link_libraries(
   velox_window_fuzzer_test
-  velox_window_fuzzer
-  velox_fuzzer_util
-  velox_aggregates
-  velox_window
-  velox_expression_test_utility
-  velox_functions_prestosql
-  velox_vector_test_lib
-  GTest::gtest
-  GTest::gtest_main)
+  PRIVATE
+    velox_window_fuzzer
+    velox_fuzzer_util
+    velox_aggregates
+    velox_window
+    velox_expression_test_utility
+    velox_functions_prestosql
+    velox_vector_test_lib
+    GTest::gtest
+    GTest::gtest_main)
 
 # Writer Fuzzer
 add_executable(velox_writer_fuzzer_test WriterFuzzerTest.cpp)
 
 target_link_libraries(
   velox_writer_fuzzer_test
-  velox_writer_fuzzer
-  velox_fuzzer_util
-  GTest::gtest
-  GTest::gtest_main)
+  PRIVATE velox_writer_fuzzer velox_fuzzer_util GTest::gtest GTest::gtest_main)

@@ -13,7 +13,7 @@
 # limitations under the License.
 
 velox_add_library(velox_hive_config OBJECT HiveConfig.cpp)
-velox_link_libraries(velox_hive_config velox_core velox_exception)
+velox_link_libraries(velox_hive_config PUBLIC velox_core velox_exception)
 
 add_subdirectory(iceberg)
 
@@ -40,7 +40,7 @@ velox_link_libraries(
 
 velox_add_library(velox_hive_partition_function HivePartitionFunction.cpp)
 
-velox_link_libraries(velox_hive_partition_function velox_core velox_exec)
+velox_link_libraries(velox_hive_partition_function PUBLIC velox_core velox_exec)
 
 add_subdirectory(storage_adapters)
 

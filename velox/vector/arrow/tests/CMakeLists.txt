@@ -18,11 +18,12 @@ add_test(velox_arrow_bridge_test velox_arrow_bridge_test)
 
 target_link_libraries(
   velox_arrow_bridge_test
-  velox_core
-  velox_arrow_bridge
-  velox_vector_test_lib
-  arrow
-  GTest::gtest
-  GTest::gtest_main
-  glog::glog
-  dl)
+  PRIVATE
+    velox_core
+    velox_arrow_bridge
+    velox_vector_test_lib
+    arrow
+    GTest::gtest
+    GTest::gtest_main
+    glog::glog
+    dl)

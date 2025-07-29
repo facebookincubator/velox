@@ -17,4 +17,5 @@ add_executable(velox_parse_test QueryPlannerTest.cpp)
 add_test(velox_parse_test velox_parse_test)
 
 target_link_libraries(
-  velox_parse_test velox_parse_parser GTest::gtest GTest::gtest_main)
+  velox_parse_test
+  PRIVATE velox_parse_parser GTest::gtest GTest::gtest_main)

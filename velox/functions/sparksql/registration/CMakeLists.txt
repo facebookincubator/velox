@@ -37,8 +37,9 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND NOT VELOX_MONO_LIBRARY)
                          PRIVATE -Wno-deprecated-declarations)
 endif()
 
-velox_link_libraries(velox_functions_spark velox_functions_spark_impl
-                     velox_is_null_functions simdjson::simdjson)
+velox_link_libraries(
+  velox_functions_spark PUBLIC velox_functions_spark_impl
+                               velox_is_null_functions simdjson::simdjson)
 
 if(NOT VELOX_MONO_LIBRARY)
   set_property(TARGET velox_functions_spark PROPERTY JOB_POOL_COMPILE

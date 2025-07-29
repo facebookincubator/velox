@@ -17,12 +17,13 @@ add_test(velox_buffer_test velox_buffer_test)
 
 target_link_libraries(
   velox_buffer_test
-  velox_memory
-  velox_buffer
-  velox_test_util
-  GTest::gtest
-  GTest::gtest_main
-  GTest::gmock
-  glog::glog
-  gflags::gflags
-  pthread)
+  PRIVATE
+    velox_memory
+    velox_buffer
+    velox_test_util
+    GTest::gtest
+    GTest::gtest_main
+    GTest::gmock
+    glog::glog
+    gflags::gflags
+    pthread)

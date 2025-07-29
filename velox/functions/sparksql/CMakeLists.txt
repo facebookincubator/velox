@@ -35,12 +35,12 @@ velox_add_library(
 
 velox_link_libraries(
   velox_functions_spark_impl
-  velox_functions_lib
-  velox_functions_prestosql_impl
-  velox_functions_spark_specialforms
-  velox_functions_util
-  Folly::folly
-  simdjson::simdjson)
+  PUBLIC velox_functions_lib
+         velox_functions_prestosql_impl
+         velox_functions_spark_specialforms
+         velox_functions_util
+         Folly::folly
+         simdjson::simdjson)
 
 if(NOT VELOX_MONO_LIBRARY)
   set_property(TARGET velox_functions_spark_impl PROPERTY JOB_POOL_COMPILE

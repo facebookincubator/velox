@@ -24,8 +24,8 @@ velox_add_library(
   ValueSet.cpp
   VarianceAggregatesBase.cpp)
 
-velox_link_libraries(velox_functions_aggregates velox_exec
-                     velox_presto_serializer Folly::folly)
+velox_link_libraries(velox_functions_aggregates
+                     PUBLIC velox_exec velox_presto_serializer Folly::folly)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)

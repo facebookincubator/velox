@@ -24,7 +24,4 @@ velox_add_library(
 
 velox_link_libraries(
   velox_functions_spark_specialforms
-  fmt::fmt
-  velox_functions_lib
-  velox_functions_json
-  velox_expression)
+  PUBLIC fmt::fmt velox_functions_lib velox_functions_json velox_expression)

@@ -15,7 +15,4 @@ add_library(velox_vector_test_lib VectorMaker.cpp VectorTestBase.cpp)
 
 target_link_libraries(
   velox_vector_test_lib
-  velox_row_fast
-  velox_vector
-  GTest::gtest
-  GTest::gtest_main)
+  PRIVATE velox_row_fast velox_vector GTest::gtest GTest::gtest_main)

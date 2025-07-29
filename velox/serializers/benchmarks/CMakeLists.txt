@@ -15,8 +15,9 @@ add_executable(velox_row_serializer_benchmark RowSerializerBenchmark.cpp)
 
 target_link_libraries(
   velox_row_serializer_benchmark
-  velox_presto_serializer
-  velox_vector_fuzzer
-  velox_memory
-  Folly::folly
-  Folly::follybenchmark)
+  PRIVATE
+    velox_presto_serializer
+    velox_vector_fuzzer
+    velox_memory
+    Folly::folly
+    Folly::follybenchmark)

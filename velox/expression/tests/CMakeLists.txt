@@ -59,89 +59,93 @@ add_test(
 
 target_link_libraries(
   velox_expression_test
-  velox_aggregates
-  velox_hive_connector
-  velox_dwio_common
-  velox_dwio_common_exception
-  velox_exec_test_lib
-  velox_expression
-  velox_expression_test_utility
-  velox_functions_lib
-  velox_functions_prestosql
-  velox_functions_test_lib
-  velox_parse_parser
-  velox_parse_expression
-  velox_presto_serializer
-  velox_type_test_lib
-  velox_vector_test_lib
-  velox_vector_fuzzer
-  GTest::gtest
-  GTest::gtest_main
-  GTest::gmock
-  Folly::folly
-  gflags::gflags
-  glog::glog
-  fmt::fmt)
+  PRIVATE
+    velox_aggregates
+    velox_hive_connector
+    velox_dwio_common
+    velox_dwio_common_exception
+    velox_exec_test_lib
+    velox_expression
+    velox_expression_test_utility
+    velox_functions_lib
+    velox_functions_prestosql
+    velox_functions_test_lib
+    velox_parse_parser
+    velox_parse_expression
+    velox_presto_serializer
+    velox_type_test_lib
+    velox_vector_test_lib
+    velox_vector_fuzzer
+    GTest::gtest
+    GTest::gtest_main
+    GTest::gmock
+    Folly::folly
+    gflags::gflags
+    glog::glog
+    fmt::fmt)
 
 add_library(velox_expression_verifier ExpressionVerifier.cpp)
 
 target_link_libraries(
   velox_expression_verifier
-  velox_vector_test_lib
-  velox_vector_fuzzer
-  velox_fuzzer_util
-  velox_type
-  velox_expression_test_utility)
+  PUBLIC velox_vector_test_lib
+         velox_vector_fuzzer
+         velox_fuzzer_util
+         velox_type
+         velox_expression_test_utility)
 
 add_library(velox_expression_runner ExpressionRunner.cpp)
 target_link_libraries(
   velox_expression_runner
-  velox_expression_verifier
-  velox_fuzzer_util
-  velox_functions_prestosql
-  velox_functions_spark
-  velox_parse_parser
-  GTest::gtest)
+  PUBLIC velox_expression_verifier
+         velox_fuzzer_util
+         velox_functions_prestosql
+         velox_functions_spark
+         velox_parse_parser
+         GTest::gtest)
 
 add_executable(velox_expression_runner_test ExpressionRunnerTest.cpp)
 target_link_libraries(
   velox_expression_runner_test
-  velox_expression_runner
-  velox_fuzzer_util
-  velox_exec_test_lib
-  velox_function_registry
-  velox_file
-  velox_hive_connector
-  velox_fuzzer_util
-  GTest::gtest
-  GTest::gtest_main)
+  PRIVATE
+    velox_expression_runner
+    velox_fuzzer_util
+    velox_exec_test_lib
+    velox_function_registry
+    velox_file
+    velox_hive_connector
+    velox_fuzzer_util
+    GTest::gtest
+    GTest::gtest_main)
 
 add_executable(velox_expression_verifier_unit_test
                ExpressionVerifierUnitTest.cpp)
 target_link_libraries(
   velox_expression_verifier_unit_test
-  velox_expression_verifier
-  velox_file
-  velox_temp_path
-  velox_parse_expression
-  velox_parse_parser
-  velox_parse_utils
-  velox_type
-  velox_vector_test_lib
-  GTest::gtest
-  GTest::gtest_main)
+  PRIVATE
+    velox_expression_verifier
+    velox_file
+    velox_temp_path
+    velox_parse_expression
+    velox_parse_parser
+    velox_parse_utils
+    velox_type
+    velox_vector_test_lib
+    GTest::gtest
+    GTest::gtest_main)
 
 add_executable(velox_expression_runner_unit_test ExpressionRunnerUnitTest.cpp)
 target_link_libraries(
   velox_expression_runner_unit_test
-  velox_dwio_common_test_utils
-  velox_expression
-  velox_expression_runner
-  velox_expression_fuzzer
-  velox_expression_verifier
-  velox_function_registry
-  velox_temp_path
-  velox_exec_test_lib
-  velox_vector_test_lib
-  GTest::gtest
-  GTest::gtest_main)
+  PRIVATE
+    velox_dwio_common_test_utils
+    velox_expression
+    velox_expression_runner
+    velox_expression_fuzzer
+    velox_expression_verifier
+    velox_function_registry
+    velox_temp_path
+    velox_exec_test_lib
+    velox_vector_test_lib
+    GTest::gtest
+    GTest::gtest_main)

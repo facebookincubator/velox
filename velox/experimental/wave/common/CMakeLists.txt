@@ -25,14 +25,14 @@ add_library(
 
 target_link_libraries(
   velox_wave_common
-  velox_exception
-  velox_common_base
-  velox_type
-  Folly::folly
-  CUDA::cuda_driver
-  CUDA::nvrtc
-  CUDA::cudart
-  breeze_cuda)
+  PUBLIC velox_exception
+         velox_common_base
+         velox_type
+         Folly::folly
+         CUDA::cuda_driver
+         CUDA::nvrtc
+         CUDA::cudart
+         breeze_cuda)
 
 target_compile_definitions(velox_wave_common PRIVATE VELOX_OSS_BUILD=1)
 

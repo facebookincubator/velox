@@ -24,9 +24,9 @@ velox_add_library(
 
 velox_link_libraries(
   velox_dwio_arrow_parquet_writer_util_lib
-  velox_dwio_common
-  arrow
-  Snappy::snappy
-  zstd::zstd
-  ZLIB::ZLIB
-  lz4::lz4)
+  PUBLIC velox_dwio_common
+         arrow
+         Snappy::snappy
+         zstd::zstd
+         ZLIB::ZLIB
+         lz4::lz4)

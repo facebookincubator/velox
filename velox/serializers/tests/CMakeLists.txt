@@ -20,23 +20,25 @@ add_test(velox_serializer_test velox_serializer_test)
 
 target_link_libraries(
   velox_serializer_test
-  velox_presto_serializer
-  velox_vector_test_lib
-  velox_vector_fuzzer
-  velox_row_fast
-  GTest::gtest
-  GTest::gtest_main
-  glog::glog)
+  PRIVATE
+    velox_presto_serializer
+    velox_vector_test_lib
+    velox_vector_fuzzer
+    velox_row_fast
+    GTest::gtest
+    GTest::gtest_main
+    glog::glog)
 
 if(VELOX_ENABLE_BENCHMARKS)
   add_executable(velox_serializer_benchmark SerializerBenchmark.cpp)
 
   target_link_libraries(
     velox_serializer_benchmark
-    velox_presto_serializer
-    velox_vector_test_lib
-    velox_vector_fuzzer
-    GTest::gtest
-    GTest::gtest_main
-    glog::glog)
+    PRIVATE
+      velox_presto_serializer
+      velox_vector_test_lib
+      velox_vector_fuzzer
+      GTest::gtest
+      GTest::gtest_main
+      glog::glog)
 endif()

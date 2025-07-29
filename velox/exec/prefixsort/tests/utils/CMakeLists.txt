@@ -15,4 +15,5 @@
 add_library(velox_exec_prefixsort_test_lib EncoderTestUtils.cpp)
 
 target_link_libraries(
-  velox_exec_prefixsort_test_lib velox_vector_test_lib)
+  velox_exec_prefixsort_test_lib
+  PRIVATE velox_vector_test_lib)

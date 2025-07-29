@@ -14,7 +14,8 @@
 
 velox_add_library(velox_buffer Buffer.cpp StringViewBufferHolder.cpp)
 
-velox_link_libraries(velox_buffer velox_memory velox_common_base Folly::folly)
+velox_link_libraries(velox_buffer PUBLIC velox_memory velox_common_base
+                                         Folly::folly)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)

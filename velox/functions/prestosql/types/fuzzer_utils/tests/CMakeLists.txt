@@ -22,10 +22,11 @@ add_test(velox_presto_types_fuzzer_utils_test
 
 target_link_libraries(
   velox_presto_types_fuzzer_utils_test
-  velox_presto_types_fuzzer_utils
-  velox_functions_test_lib
-  velox_presto_types
-  velox_type
-  velox_type_tz
-  GTest::gtest
-  GTest::gtest_main)
+  PRIVATE
+    velox_presto_types_fuzzer_utils
+    velox_functions_test_lib
+    velox_presto_types
+    velox_type
+    velox_type_tz
+    GTest::gtest
+    GTest::gtest_main)

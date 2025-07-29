@@ -61,12 +61,12 @@ endif()
 velox_add_library(velox_id_map BigintIdMap.cpp)
 velox_link_libraries(
   velox_id_map
-  velox_memory
-  velox_flag_definitions
-  velox_process
-  glog::glog
-  Folly::folly
-  fmt::fmt)
+  PUBLIC velox_memory
+         velox_flag_definitions
+         velox_process
+         glog::glog
+         Folly::folly
+         fmt::fmt)
 
 velox_add_library(velox_status Status.cpp)
 velox_link_libraries(

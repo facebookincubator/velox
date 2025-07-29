@@ -14,4 +14,4 @@
 
 velox_add_library(velox_dwio_orc_reader OrcReader.cpp)
 
-velox_link_libraries(velox_dwio_orc_reader velox_dwio_dwrf_reader)
+velox_link_libraries(velox_dwio_orc_reader PUBLIC velox_dwio_dwrf_reader)

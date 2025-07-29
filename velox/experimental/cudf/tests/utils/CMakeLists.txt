@@ -21,17 +21,18 @@ set_target_properties(
 
 target_link_libraries(
   velox_cudf_exec_test_lib
-  velox_vector_test_lib
-  velox_temp_path
-  velox_cursor
-  cudf::cudf
-  velox_cudf_exec
-  velox_cudf_vector
-  velox_core
-  velox_exception
-  velox_expression
-  velox_parse_parser
-  velox_duckdb_conversion
-  velox_file_test_utils
-  velox_cudf_parquet_connector
-  velox_aggregates)
+  PRIVATE
+    velox_vector_test_lib
+    velox_temp_path
+    velox_cursor
+    cudf::cudf
+    velox_cudf_exec
+    velox_cudf_vector
+    velox_core
+    velox_exception
+    velox_expression
+    velox_parse_parser
+    velox_duckdb_conversion
+    velox_file_test_utils
+    velox_cudf_parquet_connector
+    velox_aggregates)

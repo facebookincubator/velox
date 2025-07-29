@@ -26,7 +26,8 @@ target_link_libraries(
 add_executable(velox_benchmark_call_null_free_no_nulls
                CallNullFreeBenchmark.cpp)
 target_link_libraries(
-  velox_benchmark_call_null_free_no_nulls velox_expression_benchmark_deps)
+  velox_benchmark_call_null_free_no_nulls
+  PRIVATE velox_expression_benchmark_deps)
 target_compile_definitions(
   velox_benchmark_call_null_free_no_nulls PUBLIC WITH_NULL_ARRAYS=false
                                                  WITH_NULL_ELEMENTS=false)
@@ -34,7 +35,8 @@ target_compile_definitions(
 add_executable(velox_benchmark_call_null_free_null_arrays
                CallNullFreeBenchmark.cpp)
 target_link_libraries(
-  velox_benchmark_call_null_free_null_arrays velox_expression_benchmark_deps)
+  velox_benchmark_call_null_free_null_arrays
+  PRIVATE velox_expression_benchmark_deps)
 target_compile_definitions(
   velox_benchmark_call_null_free_null_arrays PUBLIC WITH_NULL_ARRAYS=true
                                                     WITH_NULL_ELEMENTS=false)
@@ -42,7 +44,8 @@ target_compile_definitions(
 add_executable(velox_benchmark_call_null_free_null_elements
                CallNullFreeBenchmark.cpp)
 target_link_libraries(
-  velox_benchmark_call_null_free_null_elements velox_expression_benchmark_deps)
+  velox_benchmark_call_null_free_null_elements
+  PRIVATE velox_expression_benchmark_deps)
 target_compile_definitions(
   velox_benchmark_call_null_free_null_elements PUBLIC WITH_NULL_ARRAYS=false
                                                       WITH_NULL_ELEMENTS=true)
@@ -51,11 +54,12 @@ add_executable(velox_benchmark_call_null_free_null_arrays_and_null_elements
                CallNullFreeBenchmark.cpp)
 target_link_libraries(
   velox_benchmark_call_null_free_null_arrays_and_null_elements
-  velox_expression_benchmark_deps)
+  PRIVATE velox_expression_benchmark_deps)
 target_compile_definitions(
   velox_benchmark_call_null_free_null_arrays_and_null_elements
   PUBLIC WITH_NULL_ARRAYS=true WITH_NULL_ELEMENTS=true)
 
 add_executable(velox_benchmark_variadic VariadicBenchmark.cpp)
 target_link_libraries(
-  velox_benchmark_variadic velox_expression_benchmark_deps)
+  velox_benchmark_variadic
+  PRIVATE velox_expression_benchmark_deps)

@@ -15,7 +15,8 @@
 add_subdirectory(utils)
 add_library(velox_dwio_faulty_file_sink FaultyFileSink.cpp)
 target_link_libraries(
-  velox_dwio_faulty_file_sink velox_file_test_utils velox_dwio_common)
+  velox_dwio_faulty_file_sink
+  PUBLIC velox_file_test_utils velox_dwio_common)
 
 # There is an issue with the VTT symbol for the InlineExecutor from folly when
 # building on Linux with Clang15. It is not created and results in a SEGV when
@@ -61,18 +62,19 @@ add_executable(
 add_test(velox_dwio_common_test velox_dwio_common_test)
 target_link_libraries(
   velox_dwio_common_test
-  velox_dwio_common_test_utils
-  velox_temp_path
-  velox_vector_test_lib
-  Boost::regex
-  velox_link_libs
-  Folly::folly
-  GTest::gtest
-  GTest::gtest_main
-  GTest::gmock
-  glog::glog
-  fmt::fmt
-  protobuf::libprotobuf)
+  PRIVATE
+    velox_dwio_common_test_utils
+    velox_temp_path
+    velox_vector_test_lib
+    Boost::regex
+    velox_link_libs
+    Folly::folly
+    GTest::gtest
+    GTest::gtest_main
+    GTest::gmock
+    glog::glog
+    fmt::fmt
+    protobuf::libprotobuf)
 
 if(VELOX_ENABLE_BENCHMARKS)
   add_executable(velox_dwio_common_data_buffer_benchmark
@@ -80,21 +82,23 @@ if(VELOX_ENABLE_BENCHMARKS)
 
   target_link_libraries(
     velox_dwio_common_data_buffer_benchmark
-    velox_dwio_common
-    velox_memory
-    velox_dwio_common_exception
-    Folly::folly
-    Folly::follybenchmark)
+    PRIVATE
+      velox_dwio_common
+      velox_memory
+      velox_dwio_common_exception
+      Folly::folly
+      Folly::follybenchmark)
 
   add_executable(velox_dwio_common_int_decoder_benchmark
                  IntDecoderBenchmark.cpp)
   target_link_libraries(
     velox_dwio_common_int_decoder_benchmark
-    velox_dwio_common_exception
-    velox_exception
-    velox_dwio_dwrf_common
-    Folly::folly
-    Folly::follybenchmark)
+    PRIVATE
+      velox_dwio_common_exception
+      velox_exception
+      velox_dwio_dwrf_common
+      Folly::folly
+      Folly::follybenchmark)
 
   if(VELOX_ENABLE_ARROW)
     add_subdirectory(Lemire/FastPFor)
@@ -106,11 +110,12 @@ if(VELOX_ENABLE_BENCHMARKS)
 
     target_link_libraries(
       velox_dwio_common_bitpack_decoder_benchmark
-      velox_dwio_common
-      arrow
-      velox_fastpforlib
-      duckdb_static
-      Folly::folly
-      Folly::follybenchmark)
+      PRIVATE
+        velox_dwio_common
+        arrow
+        velox_fastpforlib
+        duckdb_static
+        Folly::folly
+        Folly::follybenchmark)
   endif()
 endif()

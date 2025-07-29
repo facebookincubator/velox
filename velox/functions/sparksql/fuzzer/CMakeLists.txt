@@ -84,30 +84,31 @@ target_include_directories(velox_spark_query_runner
 
 target_link_libraries(
   velox_spark_query_runner
-  velox_dwio_arrow_parquet_writer
-  velox_common_fuzzer_util
-  velox_fuzzer_util
-  velox_exec_test_lib
-  velox_arrow_bridge
-  gRPC::grpc++
-  gRPC::grpc
-  protobuf::libprotobuf
-  arrow)
+  PUBLIC velox_dwio_arrow_parquet_writer
+         velox_common_fuzzer_util
+         velox_fuzzer_util
+         velox_exec_test_lib
+         velox_arrow_bridge
+         gRPC::grpc++
+         gRPC::grpc
+         protobuf::libprotobuf
+         arrow)
 
 add_executable(spark_aggregation_fuzzer_test SparkAggregationFuzzerTest.cpp)
 
 target_link_libraries(
   spark_aggregation_fuzzer_test
-  velox_aggregation_fuzzer
-  velox_aggregation_fuzzer_base
-  velox_functions_spark_aggregates
-  velox_dwio_parquet_writer
-  velox_spark_query_runner
-  velox_fuzzer_util
-  velox_window
-  velox_vector_test_lib
-  GTest::gtest
-  GTest::gtest_main)
+  PRIVATE
+    velox_aggregation_fuzzer
+    velox_aggregation_fuzzer_base
+    velox_functions_spark_aggregates
+    velox_dwio_parquet_writer
+    velox_spark_query_runner
+    velox_fuzzer_util
+    velox_window
+    velox_vector_test_lib
+    GTest::gtest
+    GTest::gtest_main)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)

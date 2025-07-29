@@ -15,23 +15,25 @@ add_library(velox_dwio_iceberg_reader_benchmark_lib
             IcebergSplitReaderBenchmark.cpp)
 target_link_libraries(
   velox_dwio_iceberg_reader_benchmark_lib
-  velox_exec_test_lib
-  velox_exec
-  velox_hive_connector
-  Folly::folly
-  Folly::follybenchmark)
+  PRIVATE
+    velox_exec_test_lib
+    velox_exec
+    velox_hive_connector
+    Folly::folly
+    Folly::follybenchmark)
 
 if(VELOX_ENABLE_BENCHMARKS)
   add_executable(velox_dwio_iceberg_reader_benchmark
                  IcebergSplitReaderBenchmarkMain.cpp)
   target_link_libraries(
     velox_dwio_iceberg_reader_benchmark
-    velox_dwio_iceberg_reader_benchmark_lib
-    velox_exec_test_lib
-    velox_exec
-    velox_hive_connector
-    Folly::folly
-    Folly::follybenchmark)
+    PRIVATE
+      velox_dwio_iceberg_reader_benchmark_lib
+      velox_exec_test_lib
+      velox_exec
+      velox_hive_connector
+      Folly::folly
+      Folly::follybenchmark)
 endif()
 
 if(NOT VELOX_DISABLE_GOOGLETEST)
@@ -42,18 +44,19 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
 
   target_link_libraries(
     velox_hive_iceberg_test
-    velox_dwio_iceberg_reader_benchmark_lib
-    velox_hive_connector
-    velox_hive_iceberg_splitreader
-    velox_hive_partition_function
-    velox_dwio_common_exception
-    velox_dwio_common_test_utils
-    velox_vector_test_lib
-    velox_exec
-    velox_exec_test_lib
-    Folly::folly
-    Folly::follybenchmark
-    GTest::gtest
-    GTest::gtest_main)
+    PRIVATE
+      velox_dwio_iceberg_reader_benchmark_lib
+      velox_hive_connector
+      velox_hive_iceberg_splitreader
+      velox_hive_partition_function
+      velox_dwio_common_exception
+      velox_dwio_common_test_utils
+      velox_vector_test_lib
+      velox_exec
+      velox_exec_test_lib
+      Folly::folly
+      Folly::follybenchmark
+      GTest::gtest
+      GTest::gtest_main)
 
 endif()

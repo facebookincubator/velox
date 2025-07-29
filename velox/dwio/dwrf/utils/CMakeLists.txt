@@ -17,5 +17,5 @@ if(${VELOX_BUILD_TESTING})
 endif()
 
 velox_add_library(velox_dwio_dwrf_utils ProtoUtils.cpp BitIterator.h)
-velox_link_libraries(velox_dwio_dwrf_utils velox_dwio_dwrf_common velox_type
-                     velox_memory)
+velox_link_libraries(velox_dwio_dwrf_utils PUBLIC velox_dwio_dwrf_common
+                                                  velox_type velox_memory)

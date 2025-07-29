@@ -17,19 +17,21 @@ add_test(velox_tpch_connector_test velox_tpch_connector_test)
 
 target_link_libraries(
   velox_tpch_connector_test
-  velox_tpch_connector
-  velox_vector_test_lib
-  velox_exec_test_lib
-  velox_aggregates
-  GTest::gtest
-  GTest::gtest_main)
+  PRIVATE
+    velox_tpch_connector
+    velox_vector_test_lib
+    velox_exec_test_lib
+    velox_aggregates
+    GTest::gtest
+    GTest::gtest_main)
 
 add_executable(velox_tpch_speed_test SpeedTest.cpp)
 
 target_link_libraries(
   velox_tpch_speed_test
-  velox_tpch_connector
-  velox_exec
-  velox_exec_test_lib
-  velox_memory
-  fmt::fmt)
+  PRIVATE
+    velox_tpch_connector
+    velox_exec
+    velox_exec_test_lib
+    velox_memory
+    fmt::fmt)

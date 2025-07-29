@@ -14,4 +14,4 @@
 
 velox_add_library(velox_dwio_common_encryption Encryption.cpp)
 
-velox_link_libraries(velox_dwio_common_encryption Folly::folly)
+velox_link_libraries(velox_dwio_common_encryption PUBLIC Folly::folly)

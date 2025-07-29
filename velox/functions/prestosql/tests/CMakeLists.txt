@@ -133,17 +133,18 @@ add_test(velox_functions_test velox_functions_test)
 
 target_link_libraries(
   velox_functions_test
-  velox_functions_test_lib
-  velox_exec
-  velox_expression
-  velox_functions_prestosql
-  velox_functions_lib
-  velox_exec_test_lib
-  velox_dwio_common_test_utils
-  velox_vector_fuzzer
-  velox_expression_fuzzer_test_utility
-  velox_expression_fuzzer
-  GTest::gtest
-  GTest::gtest_main
-  GTest::gmock
-  GTest::gmock_main)
+  PRIVATE
+    velox_functions_test_lib
+    velox_exec
+    velox_expression
+    velox_functions_prestosql
+    velox_functions_lib
+    velox_exec_test_lib
+    velox_dwio_common_test_utils
+    velox_vector_fuzzer
+    velox_expression_fuzzer_test_utility
+    velox_expression_fuzzer
+    GTest::gtest
+    GTest::gtest_main
+    GTest::gmock
+    GTest::gmock_main)

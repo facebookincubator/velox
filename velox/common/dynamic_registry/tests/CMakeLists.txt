@@ -91,13 +91,14 @@ add_executable(velox_function_dynamic_link_test DynamicLinkTest.cpp)
 
 target_link_libraries(
   velox_function_dynamic_link_test
-  velox_functions_test_lib
-  velox_dynamic_library_loader
-  velox_function_registry
-  xsimd
-  GTest::gmock
-  GTest::gtest
-  GTest::gtest_main)
+  PRIVATE
+    velox_functions_test_lib
+    velox_dynamic_library_loader
+    velox_function_registry
+    xsimd
+    GTest::gmock
+    GTest::gtest
+    GTest::gtest_main)
 
 target_compile_definitions(
   velox_function_dynamic_link_test

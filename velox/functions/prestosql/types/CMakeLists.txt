@@ -31,14 +31,14 @@ endif()
 
 velox_link_libraries(
   velox_presto_types
-  velox_type
-  velox_memory
-  velox_expression
-  velox_functions_util
-  velox_functions_json
-  velox_functions_lib_date_time_formatter
-  velox_constrained_input_generators
-  velox_presto_types_fuzzer_utils)
+  PUBLIC velox_type
+         velox_memory
+         velox_expression
+         velox_functions_util
+         velox_functions_json
+         velox_functions_lib_date_time_formatter
+         velox_constrained_input_generators
+         velox_presto_types_fuzzer_utils)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)

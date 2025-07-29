@@ -15,4 +15,5 @@
 add_library(velox_functions_aggregates_test_lib AggregationTestBase.cpp)
 
 target_link_libraries(
-  velox_functions_aggregates_test_lib velox_exec_test_lib velox_vector_test_lib)
+  velox_functions_aggregates_test_lib
+  PRIVATE velox_exec_test_lib velox_vector_test_lib)

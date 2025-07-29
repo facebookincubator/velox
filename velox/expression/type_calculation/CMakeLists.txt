@@ -40,4 +40,4 @@ velox_add_library(
   ${FLEX_TypeCalculationScanner_OUTPUTS}
   Scanner.h
   TypeCalculation.h)
-velox_link_libraries(velox_type_calculation velox_common_base)
+velox_link_libraries(velox_type_calculation PUBLIC velox_common_base)

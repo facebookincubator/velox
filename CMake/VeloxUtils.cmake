@@ -147,10 +147,12 @@ function(velox_link_libraries TARGET)
         message(DEBUG "\t\tDROP: ${_arg}")
       else()
         message(DEBUG "\t\tADDING: ${_arg}")
+        # ast-grep-ignore
         target_link_libraries(velox ${_arg})
       endif()
     endforeach()
   else()
+    # ast-grep-ignore
     target_link_libraries(${TARGET} ${ARGN})
   endif()
 endfunction()

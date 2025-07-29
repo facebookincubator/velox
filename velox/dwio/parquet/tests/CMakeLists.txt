@@ -40,10 +40,8 @@ add_test(
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(
   velox_dwio_parquet_tpch_test
-  velox_tpch_connector
-  velox_aggregates
-  velox_tpch_gen
-  velox_parquet_test_libs)
+  PRIVATE velox_tpch_connector velox_aggregates velox_tpch_gen
+          velox_parquet_test_libs)
 
 file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/examples
      DESTINATION ${CMAKE_CURRENT_BINARY_DIR})

@@ -15,7 +15,7 @@
 # yamllint disable rule:quoted-strings
 id: no-implicit-linking
 language: cmake
-severity: warning
+severity: error
 message: "Always specify scope (PUBLIC, PRIVATE, or INTERFACE) in target_link_libraries to make dependencies explicit"
 rule:
   kind: normal_command

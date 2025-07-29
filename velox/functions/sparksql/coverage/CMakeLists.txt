@@ -15,9 +15,9 @@ add_executable(velox_sparksql_coverage Coverage.cpp)
 
 target_link_libraries(
   velox_sparksql_coverage
-  velox_functions_spark
-  velox_function_registry
-  velox_functions_spark_aggregates
-  velox_functions_spark_window
-  velox_row_fast
-  velox_coverage_util)
+  PUBLIC velox_functions_spark
+         velox_function_registry
+         velox_functions_spark_aggregates
+         velox_functions_spark_window
+         velox_row_fast
+         velox_coverage_util)

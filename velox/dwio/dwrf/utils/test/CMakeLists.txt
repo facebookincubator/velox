@@ -19,10 +19,11 @@ add_test(velox_dwio_dwrf_utils_test velox_dwio_dwrf_utils_test)
 
 target_link_libraries(
   velox_dwio_dwrf_utils_test
-  velox_dwio_common
-  velox_dwio_dwrf_utils
-  velox_dwio_common_exception
-  velox_type_fbhive
-  GTest::gtest
-  GTest::gtest_main
-  glog::glog)
+  PRIVATE
+    velox_dwio_common
+    velox_dwio_dwrf_utils
+    velox_dwio_common_exception
+    velox_type_fbhive
+    GTest::gtest
+    GTest::gtest_main
+    glog::glog)

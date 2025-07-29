@@ -39,4 +39,4 @@ include_directories(${PROJECT_BINARY_DIR})
 include_directories(${FLEX_INCLUDE_DIRS})
 velox_add_library(velox_signature_parser ${BISON_SignatureParser_OUTPUTS}
                   ${FLEX_SignatureParserScanner_OUTPUTS} ParseUtil.cpp)
-velox_link_libraries(velox_signature_parser velox_common_base velox_type)
+velox_link_libraries(velox_signature_parser PUBLIC velox_common_base velox_type)

@@ -14,4 +14,4 @@
 
 velox_add_library(velox_common_io IoStatistics.cpp)
 
-velox_link_libraries(velox_common_io Folly::folly glog::glog)
+velox_link_libraries(velox_common_io PUBLIC Folly::folly glog::glog)

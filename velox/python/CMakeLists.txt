@@ -51,7 +51,8 @@ target_include_directories(velox_py_init
 # pyvelox.type library:
 add_library(velox_py_type_lib type/PyType.cpp)
 target_link_libraries(
-  velox_py_type_lib velox_type pybind11::module)
+  velox_py_type_lib
+  PUBLIC velox_type pybind11::module)
 
 pyvelox_add_module(type MODULE type/type.cpp)
 target_link_libraries(
@@ -61,7 +62,8 @@ target_link_libraries(
 # pyvelox.file library:
 add_library(velox_py_file_lib file/PyFile.cpp)
 target_link_libraries(
-  velox_py_file_lib velox_dwio_common velox_py_init pybind11::module)
+  velox_py_file_lib
+  PUBLIC velox_dwio_common velox_py_init pybind11::module)
 
 pyvelox_add_module(file MODULE file/file.cpp)
 target_link_libraries(
@@ -71,7 +73,8 @@ target_link_libraries(
 # pyvelox.vector library:
 add_library(velox_py_vector_lib vector/PyVector.cpp)
 target_link_libraries(
-  velox_py_vector_lib velox_vector pybind11::module)
+  velox_py_vector_lib
+  PUBLIC velox_vector pybind11::module)
 
 pyvelox_add_module(vector MODULE vector/vector.cpp)
 target_link_libraries(
@@ -84,23 +87,23 @@ target_include_directories(velox_py_plan_builder_lib
                            PUBLIC ${PROJECT_SOURCE_DIR}/velox/external/xxhash)
 target_link_libraries(
   velox_py_plan_builder_lib
-  velox_py_type_lib
-  velox_py_vector_lib
-  velox_py_init
-  velox_vector
-  velox_core
-  velox_cursor
-  velox_hive_connector
-  velox_aggregates
-  velox_functions_prestosql
-  velox_parse_expression
-  velox_exec_test_lib
-  velox_tpch_connector
-  velox_dwio_dwrf_reader
-  velox_dwio_dwrf_common
-  velox_dwio_dwrf_writer
-  Folly::folly
-  pybind11::module)
+  PUBLIC velox_py_type_lib
+         velox_py_vector_lib
+         velox_py_init
+         velox_vector
+         velox_core
+         velox_cursor
+         velox_hive_connector
+         velox_aggregates
+         velox_functions_prestosql
+         velox_parse_expression
+         velox_exec_test_lib
+         velox_tpch_connector
+         velox_dwio_dwrf_reader
+         velox_dwio_dwrf_common
+         velox_dwio_dwrf_writer
+         Folly::folly
+         pybind11::module)
 
 pyvelox_add_module(plan_builder MODULE plan_builder/plan_builder.cpp)
 target_link_libraries(
@@ -114,18 +117,18 @@ target_include_directories(velox_py_local_runner_lib
                            PUBLIC ${PROJECT_SOURCE_DIR}/velox/external/xxhash)
 target_link_libraries(
   velox_py_local_runner_lib
-  velox_py_type_lib
-  velox_py_vector_lib
-  velox_py_init
-  velox_vector
-  velox_core
-  velox_cursor
-  velox_hive_connector
-  velox_exec_test_lib
-  velox_dwio_dwrf_reader
-  velox_dwio_dwrf_common
-  velox_dwio_dwrf_writer
-  pybind11::module)
+  PUBLIC velox_py_type_lib
+         velox_py_vector_lib
+         velox_py_init
+         velox_vector
+         velox_core
+         velox_cursor
+         velox_hive_connector
+         velox_exec_test_lib
+         velox_dwio_dwrf_reader
+         velox_dwio_dwrf_common
+         velox_dwio_dwrf_writer
+         pybind11::module)
 
 pyvelox_add_module(runner MODULE runner/runner.cpp)
 target_link_libraries(

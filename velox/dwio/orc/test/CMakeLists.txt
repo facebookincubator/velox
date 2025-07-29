@@ -20,11 +20,12 @@ add_test(
 
 target_link_libraries(
   velox_dwio_orc_reader_test
-  velox_dwrf_test_utils
-  velox_dwio_common_test_utils
-  GTest::gtest
-  GTest::gtest_main
-  GTest::gmock)
+  PRIVATE
+    velox_dwrf_test_utils
+    velox_dwio_common_test_utils
+    GTest::gtest
+    GTest::gtest_main
+    GTest::gmock)
 
 add_executable(velox_dwio_orc_reader_filter_test ReaderFilterTest.cpp)
 add_test(
@@ -34,11 +35,12 @@ add_test(
 
 target_link_libraries(
   velox_dwio_orc_reader_filter_test
-  velox_dwrf_test_utils
-  velox_dwio_common_test_utils
-  GTest::gtest
-  GTest::gtest_main
-  GTest::gmock)
+  PRIVATE
+    velox_dwrf_test_utils
+    velox_dwio_common_test_utils
+    GTest::gtest
+    GTest::gtest_main
+    GTest::gmock)
 
 file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/examples
      DESTINATION ${CMAKE_CURRENT_BINARY_DIR})

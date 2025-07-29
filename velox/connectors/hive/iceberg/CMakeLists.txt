@@ -15,8 +15,8 @@
 velox_add_library(velox_hive_iceberg_splitreader IcebergSplitReader.cpp
                   IcebergSplit.cpp PositionalDeleteFileReader.cpp)
 
-velox_link_libraries(velox_hive_iceberg_splitreader velox_connector
-                     Folly::folly)
+velox_link_libraries(velox_hive_iceberg_splitreader PUBLIC velox_connector
+                                                           Folly::folly)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)

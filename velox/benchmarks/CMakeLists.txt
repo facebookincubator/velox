@@ -33,10 +33,12 @@ target_link_libraries(
 
 add_library(velox_benchmark_builder ExpressionBenchmarkBuilder.cpp)
 target_link_libraries(
-  velox_benchmark_builder velox_benchmark_deps)
+  velox_benchmark_builder
+  PRIVATE velox_benchmark_deps)
 # This is a workaround for the use of VectorTestBase.h which includes gtest.h
 target_link_libraries(
-  velox_benchmark_builder GTest::gtest)
+  velox_benchmark_builder
+  PRIVATE GTest::gtest)
 
 if(${VELOX_ENABLE_BENCHMARKS})
   add_subdirectory(tpch)
@@ -46,23 +48,24 @@ endif()
 add_library(velox_query_benchmark QueryBenchmarkBase.cpp)
 target_link_libraries(
   velox_query_benchmark
-  velox_aggregates
-  velox_connector
-  velox_exec
-  velox_exec_test_lib
-  velox_dwio_common
-  velox_dwio_common_exception
-  velox_dwio_parquet_reader
-  velox_dwio_common_test_utils
-  velox_exception
-  velox_memory
-  velox_process
-  velox_serialization
-  velox_encode
-  velox_type
-  velox_type_fbhive
-  velox_caching
-  velox_vector_test_lib
-  Folly::folly
-  Folly::follybenchmark
-  fmt::fmt)
+  PRIVATE
+    velox_aggregates
+    velox_connector
+    velox_exec
+    velox_exec_test_lib
+    velox_dwio_common
+    velox_dwio_common_exception
+    velox_dwio_parquet_reader
+    velox_dwio_common_test_utils
+    velox_exception
+    velox_memory
+    velox_process
+    velox_serialization
+    velox_encode
+    velox_type
+    velox_type_fbhive
+    velox_caching
+    velox_vector_test_lib
+    Folly::folly
+    Folly::follybenchmark
+    fmt::fmt)

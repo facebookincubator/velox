@@ -17,8 +17,9 @@ add_test(velox_tpch_gen_test velox_tpch_gen_test)
 
 target_link_libraries(
   velox_tpch_gen_test
-  velox_tpch_gen
-  velox_type
-  velox_vector
-  GTest::gtest
-  GTest::gtest_main)
+  PRIVATE
+    velox_tpch_gen
+    velox_type
+    velox_vector
+    GTest::gtest
+    GTest::gtest_main)

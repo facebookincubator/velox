@@ -22,20 +22,21 @@ add_test(
 
 target_link_libraries(
   velox_text_writer_test
-  velox_dwio_text_writer
-  velox_dwio_text_reader
-  velox_dwio_common_test_utils
-  velox_dwio_text_reader_register
-  velox_dwio_text_writer_register
-  velox_link_libs
-  Boost::regex
-  Folly::folly
-  velox_vector_test_lib
-  velox_exec_test_lib
-  velox_temp_path
-  GTest::gtest_main
-  GTest::gmock
-  gflags::gflags
-  glog::glog
-  GTest::gtest
-  fmt::fmt)
+  PRIVATE
+    velox_dwio_text_writer
+    velox_dwio_text_reader
+    velox_dwio_common_test_utils
+    velox_dwio_text_reader_register
+    velox_dwio_text_writer_register
+    velox_link_libs
+    Boost::regex
+    Folly::folly
+    velox_vector_test_lib
+    velox_exec_test_lib
+    velox_temp_path
+    GTest::gtest_main
+    GTest::gmock
+    gflags::gflags
+    glog::glog
+    GTest::gtest
+    fmt::fmt)

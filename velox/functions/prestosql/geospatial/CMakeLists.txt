@@ -13,4 +13,4 @@
 # limitations under the License.
 velox_add_library(velox_functions_geo GeometrySerde.cpp GeometryUtils.cpp)
 
-velox_link_libraries(velox_functions_geo velox_functions_lib GEOS::geos)
+velox_link_libraries(velox_functions_geo PUBLIC velox_functions_lib GEOS::geos)

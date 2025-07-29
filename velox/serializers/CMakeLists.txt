@@ -26,7 +26,7 @@ velox_add_library(
   RowSerializer.cpp
   VectorStream.cpp)
 
-velox_link_libraries(velox_presto_serializer velox_vector velox_row_fast)
+velox_link_libraries(velox_presto_serializer PUBLIC velox_vector velox_row_fast)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)

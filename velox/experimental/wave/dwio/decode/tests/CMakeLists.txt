@@ -19,10 +19,11 @@ set_tests_properties(velox_wave_decode_test PROPERTIES LABELS cuda_driver)
 
 target_link_libraries(
   velox_wave_decode_test
-  velox_wave_decode
-  velox_wave_common
-  velox_memory
-  GTest::gtest
-  GTest::gtest_main
-  Folly::folly
-  fmt::fmt)
+  PRIVATE
+    velox_wave_decode
+    velox_wave_common
+    velox_memory
+    GTest::gtest
+    GTest::gtest_main
+    Folly::folly
+    fmt::fmt)

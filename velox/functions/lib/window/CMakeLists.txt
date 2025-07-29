@@ -19,8 +19,8 @@ velox_add_library(
   Rank.cpp
   RowNumber.cpp)
 
-velox_link_libraries(velox_functions_window velox_buffer velox_exec
-                     Folly::folly)
+velox_link_libraries(velox_functions_window PUBLIC velox_buffer velox_exec
+                                                   Folly::folly)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)

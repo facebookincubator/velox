@@ -55,11 +55,8 @@ function(breeze_add_metal_test target source shaderlib)
       ${OPT_FLAGS}
       ${SANITIZE_COMPILE_FLAGS})
   target_link_libraries(
-    ${target}
-    "-framework Foundation"
-    "-framework CoreGraphics"
-    "-framework Metal"
-    test_main)
+    ${target} PUBLIC "-framework Foundation" "-framework CoreGraphics"
+                     "-framework Metal" test_main)
   target_link_options(${target} PRIVATE ${SANITIZE_LINK_FLAGS})
   gtest_discover_tests(${target} TEST_PREFIX metal: DISCOVERY_MODE PRE_TEST)
 endfunction()

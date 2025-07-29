@@ -15,7 +15,8 @@
 add_library(velox_wave_stream OperandSet.cpp Wave.cpp)
 
 target_link_libraries(
-  velox_wave_stream Folly::folly fmt::fmt xsimd)
+  velox_wave_stream
+  PUBLIC Folly::folly fmt::fmt xsimd)
 
 add_library(
   velox_wave_exec OBJECT
@@ -41,13 +42,13 @@ add_library(
 
 target_link_libraries(
   velox_wave_exec
-  velox_wave_vector
-  velox_wave_common
-  velox_wave_stream
-  velox_exception
-  velox_common_base
-  velox_exec
-  CUDA::cudart)
+  PUBLIC velox_wave_vector
+         velox_wave_common
+         velox_wave_stream
+         velox_exception
+         velox_common_base
+         velox_exec
+         CUDA::cudart)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)

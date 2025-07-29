@@ -21,9 +21,10 @@ add_test(NAME velox_functions_aggregates_test
 
 target_link_libraries(
   velox_functions_aggregates_test
-  velox_functions_aggregates
-  velox_functions_test_lib
-  Folly::folly
-  GTest::gtest
-  GTest::gtest_main
-  glog::glog)
+  PRIVATE
+    velox_functions_aggregates
+    velox_functions_test_lib
+    Folly::folly
+    GTest::gtest
+    GTest::gtest_main
+    glog::glog)
