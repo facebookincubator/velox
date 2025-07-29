@@ -41,7 +41,7 @@ class LambdaParameterizedBaseTest
     return evaluate(*exprSet, data);
   }
 
- private:
+ protected:
   std::shared_ptr<core::QueryCtx> queryCtxParametrized_{core::QueryCtx::create(
       executor_.get(),
       core::QueryConfig(
