@@ -136,13 +136,6 @@ void registerAccessors(const std::string& prefix) {
       std::make_unique<StCoordDimFunction>());
   registerFunction<StPointsFunction, Array<Geometry>, Geometry>(
       {{prefix + "ST_Points"}});
-  registerFunction<StNumPointsFunction, int32_t, Geometry>(
-      {{prefix + "ST_NumPoints"}});
-  registerFunction<
-      GeometryNearestPointsFunction,
-      Array<Geometry>,
-      Geometry,
-      Geometry>({{prefix + "geometry_nearest_points"}});
 }
 
 } // namespace
