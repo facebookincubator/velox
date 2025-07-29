@@ -15,7 +15,6 @@
  */
 
 #include <memory>
-#include <stdexcept>
 
 #include "gtest/gtest-message.h"
 #include "gtest/gtest-test-part.h"
