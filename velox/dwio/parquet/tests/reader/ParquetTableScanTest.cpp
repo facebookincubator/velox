@@ -541,6 +541,23 @@ TEST_F(ParquetTableScanTest, array) {
 
   assertSelectWithFilter(
       {"repeatedInt"}, {}, "", "SELECT UNNEST(array[array[1,2,3]])");
+
+  // Requested type does not match the element type.
+  auto rowType = ROW({"repeatedInt"}, {ARRAY(INTEGER())});
+  parse::ParseOptions options;
+
+  auto plan = PlanBuilder(pool_.get())
+                  .setParseOptions(options)
+                  .tableScan(rowType, {}, "", rowType, {})
+                  .planNode();
+
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .connectorSessionProperty(
+          kHiveConnectorId,
+          HiveConfig::kEnableRequestedTypeCheckSession,
+          "false")
+      .splits({makeSplit(getExampleFilePath("old_repeated_int.parquet"))})
+      .assertResults("SELECT UNNEST(array[array[1,2,3]])");
 }
 
 // Optional array with required elements.
