@@ -27,7 +27,6 @@ velox_add_library(
   SfmSketchRegistration.cpp
   TDigestRegistration.cpp
   QDigestRegistration.cpp
-  SfmSketchRegistration.cpp
   TimestampWithTimeZoneRegistration.cpp
   UuidRegistration.cpp)
 if(VELOX_ENABLE_GEO)

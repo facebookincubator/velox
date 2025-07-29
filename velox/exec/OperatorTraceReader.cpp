@@ -140,7 +140,8 @@ std::vector<std::string> OperatorTraceSplitReader::deserialize(
       std::string splitStr(length, '\0');
       stream->readBytes(reinterpret_cast<uint8_t*>(splitStr.data()), length);
       const auto crc32 = stream->read<uint32_t>();
-      const auto actualCrc32 = static_cast<uint32_t>(absl::ComputeCrc32c(splitStr));
+      const auto actualCrc32 =
+          static_cast<uint32_t>(absl::ComputeCrc32c(splitStr));
       if (crc32 != actualCrc32) {
         LOG(ERROR) << "Failed to verify the split checksum " << crc32
                    << " which does not equal to the actual computed checksum "

@@ -244,10 +244,6 @@ if(DEFINED ENV{INSTALL_PREFIX})
   include_directories(BEFORE "$ENV{INSTALL_PREFIX}/include")
 endif()
 
-# We look for OpenSSL here to cache the result enforce the version across our
-# dependencies.
-# find_package(OpenSSL REQUIRED)
-
 if(VELOX_ENABLE_CCACHE
    AND NOT CMAKE_C_COMPILER_LAUNCHER
    AND NOT CMAKE_CXX_COMPILER_LAUNCHER
@@ -650,7 +646,6 @@ if(CMAKE_HOST_SYSTEM_NAME MATCHES "Darwin")
 endif()
 find_package(BISON 3.0.4 REQUIRED)
 find_package(FLEX 2.5.13 REQUIRED)
-# find_package(double-conversion 3.1.5 REQUIRED)
 
 include_directories(SYSTEM velox)
 include_directories(SYSTEM velox/external)
@@ -663,13 +658,11 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
       PARENT_SCOPE)
 endif()
 
-#[[
 velox_set_source(xsimd)
 velox_resolve_dependency(xsimd 10.0.0)
 
 velox_set_source(stemmer)
 velox_resolve_dependency(stemmer)
-]]
 
 if(VELOX_BUILD_TESTING)
   set(BUILD_TESTING ON)

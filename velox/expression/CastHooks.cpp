@@ -16,5 +16,4 @@
 
 #include "CastHooks.h"
 
-namespace facebook::velox::exec {
-} // namespace facebook::velox::exec
+namespace facebook::velox::exec {} // namespace facebook::velox::exec
