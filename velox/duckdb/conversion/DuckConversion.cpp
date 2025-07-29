@@ -14,9 +14,6 @@
  * limitations under the License.
  */
 #include "velox/duckdb/conversion/DuckConversion.h"
-
-#include <type/DecimalUtil.h>
-
 #include "velox/type/Variant.h"
 
 namespace facebook::velox::duckdb {
@@ -35,10 +32,8 @@ using ::duckdb::dtime_t;
 using ::duckdb::string_t;
 using ::duckdb::timestamp_t;
 
-Variant decimalVariant(const Value& val, TypePtr type) {
-  VELOX_DCHECK(
-      val.type().id() == LogicalTypeId::DECIMAL ||
-      (val.type().id() == LogicalTypeId::VARCHAR && type));
+Variant decimalVariant(const Value& val) {
+  VELOX_DCHECK(val.type().id() == LogicalTypeId::DECIMAL);
   switch (val.type().InternalType()) {
     case ::duckdb::PhysicalType::INT128: {
       auto unscaledValue = val.GetValueUnsafe<::duckdb::hugeint_t>();
@@ -52,22 +47,6 @@ Variant decimalVariant(const Value& val, TypePtr type) {
     }
     case ::duckdb::PhysicalType::INT64: {
       return Variant(val.GetValueUnsafe<int64_t>());
-    }
-    case ::duckdb::PhysicalType::VARCHAR: {
-      auto str = val.GetValueUnsafe<string_t>();
-      auto [p, s] = getDecimalPrecisionScale(*type);
-      if (type->isLongDecimal()) {
-        int128_t result;
-        auto status = DecimalUtil::castFromString(
-            StringView(str.GetData(), str.GetSize()), p, s, result);
-        VELOX_CHECK(status.ok(), status.message());
-        return Variant(result);
-      }
-      int64_t result;
-      auto status = DecimalUtil::castFromString(
-          StringView(str.GetData(), str.GetSize()), p, s, result);
-      VELOX_CHECK(status.ok(), status.message());
-      return Variant(result);
     }
     default:
       VELOX_UNSUPPORTED();
