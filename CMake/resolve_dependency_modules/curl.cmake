@@ -28,3 +28,10 @@ FetchContent_Declare(
   curl
   URL ${VELOX_CURL_SOURCE_URL}
   URL_HASH ${VELOX_CURL_BUILD_SHA256_CHECKSUM})
+
+set(BUILD_SHARED_LIBS ${VELOX_BUILD_SHARED})
+
+FetchContent_MakeAvailable(curl)
+
+unset(BUILD_TESTING)
+unset(BUILD_SHARED_LIBS)
