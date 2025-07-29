@@ -81,6 +81,15 @@ PlanNodePtr deserializeSingleSource(const folly::dynamic& obj, void* context) {
 PlanNodeId deserializePlanNodeId(const folly::dynamic& obj) {
   return obj["id"].asString();
 }
+
+template <typename K, typename V>
+std::unordered_map<V, K> invertMap(const std::unordered_map<K, V>& mapping) {
+  std::unordered_map<V, K> inverted;
+  for (const auto& [key, value] : mapping) {
+    inverted.emplace(value, key);
+  }
+  return inverted;
+}
 } // namespace
 
 const SortOrder kAscNullsFirst(true, true);
@@ -1055,6 +1064,96 @@ PlanNodePtr ProjectNode::create(const folly::dynamic& obj, void* context) {
       deserializePlanNodeId(obj),
       std::move(names),
       std::move(projections),
+      std::move(source));
+}
+
+namespace {
+// makes a list of all names for use in the ProjectNode.
+std::vector<std::string> allNames(
+    const std::vector<std::string>& names,
+    const std::vector<std::string>& moreNames) {
+  auto result = names;
+  result.insert(result.end(), moreNames.begin(), moreNames.end());
+  return result;
+}
+
+// Flattens out projection exprs and adds dummy  exprs for noLoadIdentities.
+// Used to fill in ProjectNode members for use in the summary functions.
+std::vector<core::TypedExprPtr> flattenExprs(
+    const std::vector<std::vector<core::TypedExprPtr>>& exprs,
+    const std::vector<std::string>& moreNames,
+    const core::PlanNodePtr& input) {
+  std::vector<core::TypedExprPtr> result;
+  for (auto& group : exprs) {
+    result.insert(result.end(), group.begin(), group.end());
+  }
+  auto sourceType = input->outputType();
+  for (auto& name : moreNames) {
+    auto idx = sourceType->getChildIdx(name);
+    result.push_back(std::make_shared<core::FieldAccessTypedExpr>(
+        sourceType->childAt(idx), name));
+  }
+  return result;
+}
+} // namespace
+
+ParallelProjectNode::ParallelProjectNode(
+    const core::PlanNodeId& id,
+    std::vector<std::string> names,
+    std::vector<std::vector<core::TypedExprPtr>> exprs,
+    std::vector<std::string> noLoadIdentities,
+    core::PlanNodePtr input)
+    : AbstractProjectNode(
+          id,
+          allNames(names, noLoadIdentities),
+          flattenExprs(exprs, noLoadIdentities, input),
+          input),
+      exprNames_(std::move(names)),
+      exprs_(std::move(exprs)),
+      noLoadIdentities_(std::move(noLoadIdentities)) {}
+
+void ParallelProjectNode::addDetails(std::stringstream& stream) const {
+  AbstractProjectNode::addDetails(stream);
+  stream << " Parallel expr groups: ";
+  int32_t start = 0;
+  for (auto i = 0; i < exprs_.size(); ++i) {
+    stream << fmt::format("[{}-{}]", start, start + exprs_[i].size() - 1)
+           << (i < exprs_.size() - 1 ? ", " : "");
+    start += exprs_[i].size();
+  }
+  stream << std::endl;
+}
+
+folly::dynamic ParallelProjectNode::serialize() const {
+  auto obj = PlanNode::serialize();
+  obj["names"] = ISerializable::serialize(exprNames_);
+  obj["projections"] = ISerializable::serialize(exprs_);
+  obj["noLoadIdentities"] = ISerializable::serialize(noLoadIdentities_);
+  return obj;
+}
+
+void ParallelProjectNode::accept(
+    const PlanNodeVisitor& visitor,
+    PlanNodeVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
+
+// static
+PlanNodePtr ParallelProjectNode::create(
+    const folly::dynamic& obj,
+    void* context) {
+  auto source = deserializeSingleSource(obj, context);
+
+  auto names = deserializeStrings(obj["names"]);
+  auto projections =
+      ISerializable::deserialize<std::vector<std::vector<ITypedExpr>>>(
+          obj["projections"], context);
+  auto noLoadIdentities = deserializeStrings(obj["noLoadIdentities"]);
+  return std::make_shared<ParallelProjectNode>(
+      deserializePlanNodeId(obj),
+      std::move(names),
+      std::move(projections),
+      std::move(noLoadIdentities),
       std::move(source));
 }
 
@@ -2174,8 +2273,41 @@ PlanNodePtr RowNumberNode::create(const folly::dynamic& obj, void* context) {
       source);
 }
 
+namespace {
+std::unordered_map<TopNRowNumberNode::RankFunction, std::string>
+rankFunctionNames() {
+  return {
+      {TopNRowNumberNode::RankFunction::kRowNumber, "row_number"},
+      {TopNRowNumberNode::RankFunction::kRank, "rank"},
+      {TopNRowNumberNode::RankFunction::kDenseRank, "dense_rank"},
+  };
+}
+} // namespace
+
+// static
+const char* TopNRowNumberNode::rankFunctionName(
+    TopNRowNumberNode::RankFunction function) {
+  static const auto kFunctionNames = rankFunctionNames();
+  auto it = kFunctionNames.find(function);
+  VELOX_CHECK(
+      it != kFunctionNames.end(),
+      "Invalid rank function {}",
+      static_cast<int>(function));
+  return it->second.c_str();
+}
+
+// static
+TopNRowNumberNode::RankFunction TopNRowNumberNode::rankFunctionFromName(
+    std::string_view name) {
+  static const auto kFunctionNames = invertMap(rankFunctionNames());
+  auto it = kFunctionNames.find(name.data());
+  VELOX_CHECK(it != kFunctionNames.end(), "Invalid rank function {}", name);
+  return it->second;
+}
+
 TopNRowNumberNode::TopNRowNumberNode(
     PlanNodeId id,
+    RankFunction function,
     std::vector<FieldAccessTypedExprPtr> partitionKeys,
     std::vector<FieldAccessTypedExprPtr> sortingKeys,
     std::vector<SortOrder> sortingOrders,
@@ -2183,6 +2315,7 @@ TopNRowNumberNode::TopNRowNumberNode(
     int32_t limit,
     PlanNodePtr source)
     : PlanNode(std::move(id)),
+      function_(function),
       partitionKeys_{std::move(partitionKeys)},
       sortingKeys_{std::move(sortingKeys)},
       sortingOrders_{std::move(sortingOrders)},
@@ -2220,6 +2353,8 @@ TopNRowNumberNode::TopNRowNumberNode(
 }
 
 void TopNRowNumberNode::addDetails(std::stringstream& stream) const {
+  stream << rankFunctionName(function_) << " ";
+
   if (!partitionKeys_.empty()) {
     stream << "partition by (";
     addFields(stream, partitionKeys_);
@@ -2235,6 +2370,7 @@ void TopNRowNumberNode::addDetails(std::stringstream& stream) const {
 
 folly::dynamic TopNRowNumberNode::serialize() const {
   auto obj = PlanNode::serialize();
+  obj["function"] = rankFunctionName(function_);
   obj["partitionKeys"] = ISerializable::serialize(partitionKeys_);
   obj["sortingKeys"] = ISerializable::serialize(sortingKeys_);
   obj["sortingOrders"] = serializeSortingOrders(sortingOrders_);
@@ -2256,6 +2392,7 @@ PlanNodePtr TopNRowNumberNode::create(
     const folly::dynamic& obj,
     void* context) {
   auto source = deserializeSingleSource(obj, context);
+  auto function = rankFunctionFromName(obj["function"].asString());
   auto partitionKeys = deserializeFields(obj["partitionKeys"], context);
   auto sortingKeys = deserializeFields(obj["sortingKeys"], context);
 
@@ -2268,6 +2405,7 @@ PlanNodePtr TopNRowNumberNode::create(
 
   return std::make_shared<TopNRowNumberNode>(
       deserializePlanNodeId(obj),
+      function,
       partitionKeys,
       sortingKeys,
       sortingOrders,
@@ -2977,6 +3115,7 @@ void PlanNode::registerSerDe() {
   registry.Register("OrderByNode", OrderByNode::create);
   registry.Register("PartitionedOutputNode", PartitionedOutputNode::create);
   registry.Register("ProjectNode", ProjectNode::create);
+  registry.Register("ParallelProjectNode", ParallelProjectNode::create);
   registry.Register("RowNumberNode", RowNumberNode::create);
   registry.Register("TableScanNode", TableScanNode::create);
   registry.Register("TableWriteNode", TableWriteNode::create);

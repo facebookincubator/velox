@@ -161,6 +161,11 @@ Spatial Operations
     Returns the geometry that represents the all points in either ``geometry1``
     or ``geometry2``.
 
+.. function:: ST_Envelope(geometry: Geometry) -> envelope: Geometry
+
+    Returns the bounding rectangular polygon of a ``geometry``. Empty input will
+    result in empty output.
+
 Accessors
 ---------
 .. function:: ST_IsValid(geometry: Geometry) -> valid: bool
@@ -311,9 +316,25 @@ Accessors
 
     Returns the minimum convex geometry that encloses all input geometries.
 
+.. function:: ST_CoordDim(geometry: Geometry) -> output: integer
+
+    Return the coordinate dimension of the geometry.
+
 .. function:: ST_Dimension(geometry: Geometry) -> output: tinyint
 
     Returns the inherent dimension of this geometry object, which must be less than or equal to the coordinate dimension.
+
+.. function:: ST_ExteriorRing(geometry: Geometry) -> output: Geometry
+
+    Returns a line string representing the exterior ring of the input polygon.
+
+.. function:: ST_Buffer(geometry: Geometry, distance: double) -> output: Geometry
+
+    Returns the geometry that represents all points whose distance from the
+    specified ``geometry`` is less than or equal to the specified ``distance``.
+    If the points of the ``geometry`` are extremely close together
+    (delta < 1e-8), this might return an empty geometry. Empty inputs return
+    null.
 
 .. function:: simplify_geometry(geometry: Geometry, tolerance: double) -> output: Geometry
 

@@ -17,6 +17,7 @@
 
 #include "velox/expression/FunctionSignature.h"
 #include "velox/type/Type.h"
+#include "velox/type/TypeCoercer.h"
 
 namespace facebook::velox::exec {
 
@@ -26,11 +27,22 @@ class SignatureBinderBase {
       : signature_{signature} {}
 
   /// Return true if actualType can bind to typeSignature and update bindings_
-  /// accordingly. The number of parameters in typeSignature and actualType must
-  /// match. Return false otherwise.
+  /// accordingly. The number of parameters in typeSignature and actualType
+  /// must match. Return false otherwise.
   bool tryBind(
       const exec::TypeSignature& typeSignature,
       const TypePtr& actualType);
+
+  /// Like 'tryBind', but allows implicit type conversion if actualType
+  /// doesn't match typeSignature exactly.
+  ///
+  /// @param coercion Type coercion necessary to bind actualType to
+  /// typeSignature if there is no exact match. 'coercion.type' is null if
+  /// there is exact match.
+  bool tryBindWithCoercion(
+      const exec::TypeSignature& typeSignature,
+      const TypePtr& actualType,
+      Coercion& coercion);
 
   // Return the variables of the signature.
   auto& variables() const {
@@ -55,6 +67,12 @@ class SignatureBinderBase {
   bool tryBindIntegerParameters(
       const std::vector<exec::TypeSignature>& parameters,
       const TypePtr& actualType);
+
+  bool tryBind(
+      const exec::TypeSignature& typeSignature,
+      const TypePtr& actualType,
+      bool allowCoercion,
+      Coercion& coercion);
 };
 
 /// Resolves generic type names in the function signature using actual input
@@ -75,6 +93,13 @@ class SignatureBinder : private SignatureBinderBase {
 
   /// Returns true if successfully resolved all generic type names.
   bool tryBind();
+
+  /// Like 'tryBind', but allows implicit type conversion if actualTypes don't
+  /// match the signature exactly.
+  /// @param coercions Type coercions necessary to bind actualTypes to the
+  /// signature. There is one entry per argument. Coercion.type is null if no
+  /// coercion is required for that argument.
+  bool tryBindWithCoercions(std::vector<Coercion>& coercions);
 
   /// Returns concrete return type or null if couldn't fully resolve.
   TypePtr tryResolveReturnType() {
@@ -110,6 +135,9 @@ class SignatureBinder : private SignatureBinderBase {
       std::unordered_map<std::string, int>& integerVariablesBindings);
 
  private:
+  bool tryBind(bool allowCoercions, std::vector<Coercion>& coercions);
+
   const std::vector<TypePtr>& actualTypes_;
 };
+
 } // namespace facebook::velox::exec

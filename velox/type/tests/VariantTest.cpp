@@ -34,6 +34,7 @@ void testSerDe(const Variant& value) {
 TEST(VariantTest, arrayInferType) {
   EXPECT_EQ(*ARRAY(UNKNOWN()), *Variant(TypeKind::ARRAY).inferType());
   EXPECT_EQ(*ARRAY(UNKNOWN()), *Variant::array({}).inferType());
+  EXPECT_EQ(*ARRAY(UNKNOWN()), *Variant::null(TypeKind::ARRAY).inferType());
   EXPECT_EQ(
       *ARRAY(BIGINT()),
       *Variant::array({Variant(TypeKind::BIGINT)}).inferType());
@@ -52,6 +53,8 @@ TEST(VariantTest, arrayInferType) {
 TEST(VariantTest, mapInferType) {
   EXPECT_EQ(*Variant::map({{1LL, 1LL}}).inferType(), *MAP(BIGINT(), BIGINT()));
   EXPECT_EQ(*Variant::map({}).inferType(), *MAP(UNKNOWN(), UNKNOWN()));
+  EXPECT_EQ(
+      *MAP(UNKNOWN(), UNKNOWN()), *Variant::null(TypeKind::MAP).inferType());
 
   const Variant nullBigint = Variant::null(TypeKind::BIGINT);
   const Variant nullReal = Variant::null(TypeKind::REAL);
@@ -63,6 +66,97 @@ TEST(VariantTest, mapInferType) {
       *MAP(BIGINT(), REAL()));
   EXPECT_EQ(
       *Variant::map({{nullBigint, 1.0f}}).inferType(), *MAP(UNKNOWN(), REAL()));
+}
+
+TEST(VariantTest, rowInferType) {
+  EXPECT_EQ(
+      *ROW({BIGINT(), VARCHAR()}),
+      *Variant::row({Variant(1LL), Variant("velox")}).inferType());
+  EXPECT_EQ(*ROW({}), *Variant::null(TypeKind::ROW).inferType());
+}
+
+TEST(VariantTest, arrayTypeCompatibility) {
+  const auto empty = Variant::array({});
+
+  EXPECT_TRUE(empty.isTypeCompatible(ARRAY(UNKNOWN())));
+  EXPECT_TRUE(empty.isTypeCompatible(ARRAY(BIGINT())));
+
+  EXPECT_FALSE(empty.isTypeCompatible(UNKNOWN()));
+  EXPECT_FALSE(empty.isTypeCompatible(BIGINT()));
+  EXPECT_FALSE(empty.isTypeCompatible(MAP(INTEGER(), REAL())));
+
+  const auto null = Variant::null(TypeKind::ARRAY);
+
+  EXPECT_TRUE(null.isTypeCompatible(ARRAY(UNKNOWN())));
+  EXPECT_TRUE(null.isTypeCompatible(ARRAY(BIGINT())));
+
+  EXPECT_FALSE(null.isTypeCompatible(UNKNOWN()));
+  EXPECT_FALSE(null.isTypeCompatible(BIGINT()));
+  EXPECT_FALSE(null.isTypeCompatible(MAP(INTEGER(), REAL())));
+
+  const auto array = Variant::array({1, 2, 3});
+
+  EXPECT_TRUE(array.isTypeCompatible(ARRAY(INTEGER())));
+
+  EXPECT_FALSE(array.isTypeCompatible(INTEGER()));
+  EXPECT_FALSE(array.isTypeCompatible(ARRAY(REAL())));
+}
+
+TEST(VariantTest, mapTypeCompatibility) {
+  const auto empty = Variant::map({});
+
+  EXPECT_TRUE(empty.isTypeCompatible(MAP(UNKNOWN(), UNKNOWN())));
+  EXPECT_TRUE(empty.isTypeCompatible(MAP(BIGINT(), BIGINT())));
+  EXPECT_TRUE(empty.isTypeCompatible(MAP(REAL(), UNKNOWN())));
+  EXPECT_TRUE(empty.isTypeCompatible(MAP(INTEGER(), DOUBLE())));
+
+  EXPECT_FALSE(empty.isTypeCompatible(UNKNOWN()));
+  EXPECT_FALSE(empty.isTypeCompatible(BIGINT()));
+  EXPECT_FALSE(empty.isTypeCompatible(ARRAY(INTEGER())));
+
+  const auto null = Variant::null(TypeKind::MAP);
+
+  EXPECT_TRUE(null.isTypeCompatible(MAP(UNKNOWN(), UNKNOWN())));
+  EXPECT_TRUE(null.isTypeCompatible(MAP(BIGINT(), BIGINT())));
+  EXPECT_TRUE(null.isTypeCompatible(MAP(REAL(), UNKNOWN())));
+  EXPECT_TRUE(null.isTypeCompatible(MAP(INTEGER(), DOUBLE())));
+
+  EXPECT_FALSE(null.isTypeCompatible(UNKNOWN()));
+  EXPECT_FALSE(null.isTypeCompatible(BIGINT()));
+  EXPECT_FALSE(null.isTypeCompatible(ARRAY(INTEGER())));
+
+  const auto map = Variant::map({{1, 1.0f}, {2, 2.0f}});
+
+  EXPECT_TRUE(map.isTypeCompatible(MAP(INTEGER(), REAL())));
+
+  EXPECT_FALSE(map.isTypeCompatible(MAP(INTEGER(), DOUBLE())));
+  EXPECT_FALSE(map.isTypeCompatible(UNKNOWN()));
+  EXPECT_FALSE(map.isTypeCompatible(ARRAY(BIGINT())));
+}
+
+TEST(VariantTest, rowTypeCompatibility) {
+  const auto empty = Variant::row({});
+
+  EXPECT_TRUE(empty.isTypeCompatible(ROW({})));
+
+  EXPECT_FALSE(empty.isTypeCompatible(BIGINT()));
+  EXPECT_FALSE(empty.isTypeCompatible(ROW({INTEGER(), REAL()})));
+
+  const auto null = Variant::null(TypeKind::ROW);
+
+  EXPECT_TRUE(null.isTypeCompatible(ROW({INTEGER(), REAL()})));
+  EXPECT_TRUE(null.isTypeCompatible(ROW({"a", "b"}, {INTEGER(), REAL()})));
+
+  EXPECT_FALSE(null.isTypeCompatible(BIGINT()));
+
+  const auto row = Variant::row({1, 2.0f});
+
+  EXPECT_TRUE(row.isTypeCompatible(ROW({INTEGER(), REAL()})));
+  EXPECT_TRUE(row.isTypeCompatible(ROW({"a", "b"}, {INTEGER(), REAL()})));
+
+  EXPECT_FALSE(row.isTypeCompatible(ROW({INTEGER()})));
+  EXPECT_FALSE(row.isTypeCompatible(ROW({INTEGER(), DOUBLE()})));
+  EXPECT_FALSE(row.isTypeCompatible(BIGINT()));
 }
 
 struct Foo {};
@@ -317,28 +411,30 @@ class VariantSerializationTest : public ::testing::Test {
                 obj["name"].asString(), obj["value"].asBool());
           });
     });
-    var_ = Variant::opaque<SerializableClass>(
+
+    value_ = Variant::opaque<SerializableClass>(
         std::make_shared<SerializableClass>("test_class", false));
   }
 
-  Variant var_;
+  Variant value_;
 };
 
 TEST_F(VariantSerializationTest, serializeOpaque) {
-  auto serialized = var_.serialize();
-  auto deserialized_variant = Variant::create(serialized);
-  auto opaque = deserialized_variant.value<TypeKind::OPAQUE>().obj;
-  auto original_class = std::static_pointer_cast<SerializableClass>(opaque);
-  EXPECT_EQ(original_class->name, "test_class");
-  EXPECT_EQ(original_class->value, false);
+  auto serialized = value_.serialize();
+  auto deserialized = Variant::create(serialized);
+  auto opaque = deserialized.value<TypeKind::OPAQUE>().obj;
+  auto original = std::static_pointer_cast<SerializableClass>(opaque);
+  EXPECT_EQ(original->name, "test_class");
+  EXPECT_EQ(original->value, false);
 }
 
-TEST_F(VariantSerializationTest, opaqueToString) {
-  const auto type = var_.inferType();
-  auto s = var_.toJson(type);
-  EXPECT_EQ(
-      s,
-      "Opaque<type:OPAQUE<SerializableClass>,value:\"{\"name\":\"test_class\",\"value\":false}\">");
+TEST_F(VariantSerializationTest, opaqueToJson) {
+  const auto type = value_.inferType();
+
+  const auto expected =
+      R"(Opaque<type:OPAQUE<SerializableClass>,value:"{"name":"test_class","value":false}">)";
+  EXPECT_EQ(value_.toJson(type), expected);
+  EXPECT_EQ(value_.toString(type), expected);
 }
 
 TEST(VariantFloatingToJsonTest, normalTest) {
@@ -546,4 +642,14 @@ TEST(VariantTest, hashMap) {
   ASSERT_NE(a.hash(), b.hash());
   ASSERT_EQ(a.hash(), c.hash());
   ASSERT_NE(a.hash(), d.hash());
+}
+
+TEST(VariantTest, toString) {
+  EXPECT_EQ(Variant::array({1, 2, 3}).toString(ARRAY(INTEGER())), "[1,2,3]");
+  EXPECT_EQ(
+      Variant::map({{1, 2}, {3, 4}}).toString(MAP(INTEGER(), INTEGER())),
+      R"([{"key":1,"value":2},{"key":3,"value":4}])");
+  EXPECT_EQ(
+      Variant::row({1, 2, 3}).toString(ROW({INTEGER(), INTEGER(), INTEGER()})),
+      "[1,2,3]");
 }

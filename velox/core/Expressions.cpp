@@ -364,7 +364,7 @@ bool equalsImpl(
 
   if (otherNull || thisNull) {
     return BaseVector::compareNulls(thisNull, otherNull, kEqualValueAtFlags)
-        .value();
+               .value() == 0;
   }
 
   return VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
@@ -383,11 +383,9 @@ bool ConstantTypedExpr::equals(const ITypedExpr& other) const {
   }
 
   if (this->hasValueVector() != casted->hasValueVector()) {
-    if (this->hasValueVector()) {
-      return equalsImpl(this->valueVector_, 0, casted->value_);
-    } else {
-      return equalsImpl(casted->valueVector_, 0, this->value_);
-    }
+    return this->hasValueVector()
+        ? equalsImpl(this->valueVector_, 0, casted->value_)
+        : equalsImpl(casted->valueVector_, 0, this->value_);
   }
 
   if (this->hasValueVector()) {
@@ -493,6 +491,21 @@ size_t ConstantTypedExpr::localHash() const {
   return bits::hashMix(kBaseHash, h);
 }
 
+std::string CallTypedExpr::toString() const {
+  std::string str{};
+  str += name();
+  str += "(";
+  for (size_t i = 0; i < inputs().size(); ++i) {
+    auto& input = inputs().at(i);
+    if (i != 0) {
+      str += ",";
+    }
+    str += input->toString();
+  }
+  str += ")";
+  return str;
+}
+
 void CallTypedExpr::accept(
     const ITypedExprVisitor& visitor,
     ITypedExprVisitorContext& context) const {
@@ -512,6 +525,43 @@ TypedExprPtr CallTypedExpr::create(const folly::dynamic& obj, void* context) {
 
   return std::make_shared<CallTypedExpr>(
       std::move(type), std::move(inputs), obj["functionName"].asString());
+}
+
+TypedExprPtr FieldAccessTypedExpr::rewriteInputNames(
+    const std::unordered_map<std::string, TypedExprPtr>& mapping) const {
+  if (inputs().empty()) {
+    auto it = mapping.find(name_);
+    return it != mapping.end()
+        ? it->second
+        : std::make_shared<FieldAccessTypedExpr>(type(), name_);
+  }
+
+  auto newInputs = rewriteInputsRecursive(mapping);
+  VELOX_CHECK_EQ(1, newInputs.size());
+  // Only rewrite name if input in InputTypedExpr. Rewrite in other
+  // cases(like dereference) is unsound.
+  if (!std::dynamic_pointer_cast<const InputTypedExpr>(newInputs[0])) {
+    return std::make_shared<FieldAccessTypedExpr>(type(), newInputs[0], name_);
+  }
+  auto it = mapping.find(name_);
+  auto newName = name_;
+  if (it != mapping.end()) {
+    if (auto name =
+            std::dynamic_pointer_cast<const FieldAccessTypedExpr>(it->second)) {
+      newName = name->name();
+    }
+  }
+  return std::make_shared<FieldAccessTypedExpr>(type(), newInputs[0], newName);
+}
+
+std::string FieldAccessTypedExpr::toString() const {
+  std::stringstream ss;
+  ss << std::quoted(name(), '"', '"');
+  if (inputs().empty()) {
+    return fmt::format("{}", ss.str());
+  }
+
+  return fmt::format("{}[{}]", inputs()[0]->toString(), ss.str());
 }
 
 void FieldAccessTypedExpr::accept(
@@ -570,6 +620,40 @@ TypedExprPtr DereferenceTypedExpr::create(
       std::move(type), std::move(inputs[0]), index);
 }
 
+namespace {
+TypePtr toRowType(
+    const std::vector<std::string>& names,
+    const std::vector<TypedExprPtr>& expressions) {
+  std::vector<TypePtr> types;
+  types.reserve(expressions.size());
+  for (const auto& expr : expressions) {
+    types.push_back(expr->type());
+  }
+
+  auto namesCopy = names;
+  return ROW(std::move(namesCopy), std::move(types));
+}
+} // namespace
+
+ConcatTypedExpr::ConcatTypedExpr(
+    const std::vector<std::string>& names,
+    const std::vector<TypedExprPtr>& inputs)
+    : ITypedExpr{ExprKind::kConcat, toRowType(names, inputs), inputs} {}
+
+std::string ConcatTypedExpr::toString() const {
+  std::string str{};
+  str += "CONCAT(";
+  for (size_t i = 0; i < inputs().size(); ++i) {
+    auto& input = inputs().at(i);
+    if (i != 0) {
+      str += ",";
+    }
+    str += input->toString();
+  }
+  str += ")";
+  return str;
+}
+
 void ConcatTypedExpr::accept(
     const ITypedExprVisitor& visitor,
     ITypedExprVisitorContext& context) const {
@@ -587,6 +671,17 @@ TypedExprPtr ConcatTypedExpr::create(const folly::dynamic& obj, void* context) {
 
   return std::make_shared<ConcatTypedExpr>(
       type->asRow().names(), std::move(inputs));
+}
+
+TypedExprPtr LambdaTypedExpr::rewriteInputNames(
+    const std::unordered_map<std::string, TypedExprPtr>& mapping) const {
+  for (const auto& name : signature_->names()) {
+    if (mapping.count(name)) {
+      VELOX_USER_FAIL("Ambiguous variable: {}", name);
+    }
+  }
+  return std::make_shared<LambdaTypedExpr>(
+      signature_, body_->rewriteInputNames(mapping));
 }
 
 void LambdaTypedExpr::accept(
@@ -609,6 +704,16 @@ TypedExprPtr LambdaTypedExpr::create(const folly::dynamic& obj, void* context) {
 
   return std::make_shared<LambdaTypedExpr>(
       asRowType(signature), std::move(body));
+}
+
+std::string CastTypedExpr::toString() const {
+  if (isTryCast_) {
+    return fmt::format(
+        "try_cast {} as {}", inputs()[0]->toString(), type()->toString());
+  } else {
+    return fmt::format(
+        "cast {} as {}", inputs()[0]->toString(), type()->toString());
+  }
 }
 
 void CastTypedExpr::accept(

@@ -890,6 +890,60 @@ class ProjectNode : public AbstractProjectNode {
 
 using ProjectNodePtr = std::shared_ptr<const ProjectNode>;
 
+/// Variant of ProjectNode that computes projections in
+/// parallel. The exprs are given in groups, so that all exprs in
+/// one group run together and all groups run in parallel. If lazies
+/// are loaded, each lazy must be loaded by exactly one group. If
+/// there are identity projections in the groups, possible lazies
+/// are loaded as part of processing the group. One can additionally
+/// specify 'noLoadIdentities' which are identity projected through
+/// without loading. This last set must be disjoint from all columns
+/// accessed by the exprs. The output type has 'names' first and
+/// then 'noLoadIdentities'. The ith name corresponds to the ith
+/// expr when exprs is flattened. Inherits core::ProjectNode in order to reuse
+/// the summary functions.
+class ParallelProjectNode : public core::AbstractProjectNode {
+ public:
+  ParallelProjectNode(
+      const core::PlanNodeId& id,
+      std::vector<std::string> names,
+      std::vector<std::vector<core::TypedExprPtr>> exprs,
+      std::vector<std::string> noLoadIdentities,
+      core::PlanNodePtr input);
+
+  std::string_view name() const override {
+    return "ParallelProject";
+  }
+
+  const std::vector<std::string>& exprNames() const {
+    return exprNames_;
+  }
+
+  const std::vector<std::vector<core::TypedExprPtr>>& exprs() const {
+    return exprs_;
+  }
+
+  const std::vector<std::string> noLoadIdentities() const {
+    return noLoadIdentities_;
+  }
+
+  folly::dynamic serialize() const override;
+
+  void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
+      const override;
+
+  static PlanNodePtr create(const folly::dynamic& obj, void* context);
+
+ private:
+  void addDetails(std::stringstream& stream) const override;
+
+  const std::vector<std::string> exprNames_;
+  const std::vector<std::vector<core::TypedExprPtr>> exprs_;
+  const std::vector<std::string> noLoadIdentities_;
+};
+
+using ParallelProjectNodePtr = std::shared_ptr<const ParallelProjectNode>;
+
 class TableScanNode : public PlanNode {
  public:
   TableScanNode(
@@ -3967,24 +4021,6 @@ class UnnestNode : public PlanNode {
       std::optional<std::string> emptyUnnestValueName,
       const PlanNodePtr& source);
 
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  UnnestNode(
-      const PlanNodeId& id,
-      std::vector<FieldAccessTypedExprPtr> replicateVariables,
-      std::vector<FieldAccessTypedExprPtr> unnestVariables,
-      std::vector<std::string> unnestNames,
-      std::optional<std::string> ordinalityName,
-      const PlanNodePtr& source)
-      : UnnestNode(
-            id,
-            std::move(replicateVariables),
-            std::move(unnestVariables),
-            std::move(unnestNames),
-            std::move(ordinalityName),
-            std::nullopt,
-            source) {}
-#endif
-
   class Builder {
    public:
     Builder() = default;
@@ -4809,24 +4845,38 @@ class MarkDistinctNode : public PlanNode {
 
 using MarkDistinctNodePtr = std::shared_ptr<const MarkDistinctNode>;
 
-/// Optimized version of a WindowNode for a single row_number function with a
-/// limit over sorted partitions.
-/// The output of this node contains all input columns followed by an optional
+/// Optimized version of a WindowNode for a single row_number, rank or
+/// dense_rank function with a limit over sorted partitions. The output of this
+/// node contains all input columns followed by an optional
 /// 'rowNumberColumnName' BIGINT column.
+/// TODO: This node will be renamed to TopNRank or TopNRowNode once all the
+/// support for handling rank and dense_rank is committed to Velox.
 class TopNRowNumberNode : public PlanNode {
  public:
+  enum class RankFunction {
+    kRowNumber,
+    kRank,
+    kDenseRank,
+  };
+
+  static const char* rankFunctionName(RankFunction function);
+
+  static RankFunction rankFunctionFromName(std::string_view name);
+
+  /// @param rankFunction RanksFunction (row_number, rank, dense_rank) for TopN.
   /// @param partitionKeys Partitioning keys. May be empty.
   /// @param sortingKeys Sorting keys. May not be empty and may not intersect
   /// with 'partitionKeys'.
   /// @param sortingOrders Sorting orders, one per sorting key.
   /// @param rowNumberColumnName Optional name of the column containing row
-  /// numbers. If not specified, the output doesn't include 'row number'
-  /// column. This is used when computing partial results.
+  /// numbers or rank or dense_rank. If not specified, the output doesn't
+  /// include 'row_number' column. This is used when computing partial results.
   /// @param limit Per-partition limit. The number of
   /// rows produced by this node will not exceed this value for any given
   /// partition. Extra rows will be dropped.
   TopNRowNumberNode(
       PlanNodeId id,
+      RankFunction function,
       std::vector<FieldAccessTypedExprPtr> partitionKeys,
       std::vector<FieldAccessTypedExprPtr> sortingKeys,
       std::vector<SortOrder> sortingOrders,
@@ -4849,10 +4899,16 @@ class TopNRowNumberNode : public PlanNode {
       limit_ = other.limit();
       VELOX_CHECK_EQ(other.sources().size(), 1);
       source_ = other.sources()[0];
+      function_ = other.rankFunction();
     }
 
     Builder& id(PlanNodeId id) {
       id_ = std::move(id);
+      return *this;
+    }
+
+    Builder& function(RankFunction function) {
+      function_ = function;
       return *this;
     }
 
@@ -4907,6 +4963,7 @@ class TopNRowNumberNode : public PlanNode {
 
       return std::make_shared<TopNRowNumberNode>(
           id_.value(),
+          function_.has_value() ? function_.value() : RankFunction::kRowNumber,
           partitionKeys_.value(),
           sortingKeys_.value(),
           sortingOrders_.value(),
@@ -4917,6 +4974,7 @@ class TopNRowNumberNode : public PlanNode {
 
    private:
     std::optional<PlanNodeId> id_;
+    std::optional<RankFunction> function_;
     std::optional<std::vector<FieldAccessTypedExprPtr>> partitionKeys_;
     std::optional<std::vector<FieldAccessTypedExprPtr>> sortingKeys_;
     std::optional<std::vector<SortOrder>> sortingOrders_;
@@ -4960,6 +5018,10 @@ class TopNRowNumberNode : public PlanNode {
     return limit_;
   }
 
+  RankFunction rankFunction() const {
+    return function_;
+  }
+
   bool generateRowNumber() const {
     return outputType_->size() > sources_[0]->outputType()->size();
   }
@@ -4974,6 +5036,8 @@ class TopNRowNumberNode : public PlanNode {
 
  private:
   void addDetails(std::stringstream& stream) const override;
+
+  const RankFunction function_;
 
   const std::vector<FieldAccessTypedExprPtr> partitionKeys_;
 
@@ -5064,6 +5128,10 @@ class PlanNodeVisitor {
   virtual void visit(const ProjectNode& node, PlanNodeVisitorContext& ctx)
       const = 0;
 
+  virtual void visit(
+      const ParallelProjectNode& node,
+      PlanNodeVisitorContext& ctx) const = 0;
+
   virtual void visit(const RowNumberNode& node, PlanNodeVisitorContext& ctx)
       const = 0;
 
@@ -5124,5 +5192,16 @@ template <>
 struct fmt::formatter<facebook::velox::core::JoinType> : formatter<int> {
   auto format(facebook::velox::core::JoinType s, format_context& ctx) const {
     return formatter<int>::format(static_cast<int>(s), ctx);
+  }
+};
+
+template <>
+struct fmt::formatter<facebook::velox::core::TopNRowNumberNode::RankFunction>
+    : formatter<std::string> {
+  auto format(
+      facebook::velox::core::TopNRowNumberNode::RankFunction f,
+      format_context& ctx) const {
+    return formatter<std::string>::format(
+        facebook::velox::core::TopNRowNumberNode::rankFunctionName(f), ctx);
   }
 };

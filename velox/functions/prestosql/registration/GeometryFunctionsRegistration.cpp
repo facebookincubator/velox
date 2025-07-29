@@ -121,6 +121,17 @@ void registerAccessors(const std::string& prefix) {
       {{prefix + "ST_ConvexHull"}});
   registerFunction<StDimensionFunction, int8_t, Geometry>(
       {{prefix + "ST_Dimension"}});
+  registerFunction<StExteriorRingFunction, Geometry, Geometry>(
+      {{prefix + "ST_ExteriorRing"}});
+  registerFunction<StEnvelopeFunction, Geometry, Geometry>(
+      {{prefix + "ST_Envelope"}});
+  registerFunction<StBufferFunction, Geometry, Geometry, double>(
+      {{prefix + "ST_Buffer"}});
+
+  velox::exec::registerVectorFunction(
+      prefix + "ST_CoordDim",
+      StCoordDimFunction::signatures(),
+      std::make_unique<StCoordDimFunction>());
 }
 
 } // namespace

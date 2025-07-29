@@ -39,31 +39,36 @@ class SfmSketchInputGenerator : public AbstractInputGenerator {
   template <typename T>
   variant generateTyped() {
     HashStringAllocator allocator(pool_);
-    // Create SfmSketch with random parameters
 
-    auto indexBitLength = rand<int32_t>(rng_, 1, 16); // 1 to 16 index bits
-    auto numberOfBuckets = SfmSketch::numBuckets(indexBitLength);
-    auto precision = rand<int32_t>(rng_, 1, 64 - indexBitLength);
+    // SFM sketch require indexBitLength and precision to be the same for
+    // functions such as merge and mergeArray.
+    if (!indexBitLength_.has_value() && !precision_.has_value()) {
+      indexBitLength_ = rand<int32_t>(rng_, 1, 16);
+      numberOfBuckets_ = SfmSketch::numBuckets(*indexBitLength_);
+      precision_ = rand<int32_t>(rng_, 1, 64 - *indexBitLength_);
+    }
 
-    auto sketch = SfmSketch(&allocator);
-    sketch.initialize(numberOfBuckets, precision);
+    auto sketch = SfmSketch(&allocator, /* seed */ 1);
+    sketch.initialize(*numberOfBuckets_, *precision_);
 
     // Add values to the sketch
-    auto numValues = rand<int32_t>(
-        rng_, 1, 10); // we don't want type generation to take too long.
+    auto numValues = rand<int32_t>(rng_, 1, 10);
     for (auto i = 0; i < numValues; ++i) {
       if constexpr (
           std::is_same_v<T, std::string> || std::is_same_v<T, StringView>) {
-        std::wstring_convert<std::codecvt_utf8<char16_t>, char16_t> converter;
+        // Generate a random string directly without using randString since it
+        // is deprecated.
         auto size = rand<int32_t>(rng_, 0, 100); // size of the string.
-        std::string result;
-        static const std::vector<UTF8CharList> encodings{
-            UTF8CharList::ASCII,
-            UTF8CharList::UNICODE_CASE_SENSITIVE,
-            UTF8CharList::EXTENDED_UNICODE,
-            UTF8CharList::MATHEMATICAL_SYMBOLS};
-        auto str = randString(rng_, size, encodings, result, converter);
-        sketch.add(std::hash<std::string>{}(str));
+        std::string str;
+        str.reserve(size);
+
+        // Generate random ASCII characters.
+        for (int j = 0; j < size; ++j) {
+          char c = static_cast<char>(rand<int32_t>(rng_, 32, 126));
+          str.push_back(c);
+        }
+
+        sketch.add(str);
       } else if (std::is_same_v<T, UnknownValue>) {
         // No-op since SfmSketch ignores input nulls.
       } else {
@@ -71,14 +76,7 @@ class SfmSketchInputGenerator : public AbstractInputGenerator {
       }
     }
 
-    // Randomly enable privacy after adding values.
-    if (rand<bool>(rng_)) {
-      auto epsilon =
-          rand<double>(rng_, 0.1, std::numeric_limits<double>::max());
-      sketch.enablePrivacy(epsilon);
-    }
-
-    // Serialize the sketch
+    // Serialize the sketch.
     auto size = sketch.serializedSize();
     std::string buff(size, '\0');
     sketch.serialize(buff.data());
@@ -87,6 +85,9 @@ class SfmSketchInputGenerator : public AbstractInputGenerator {
 
   TypePtr baseType_;
   memory::MemoryPool* pool_;
+  std::optional<int32_t> indexBitLength_;
+  std::optional<int32_t> precision_;
+  std::optional<int32_t> numberOfBuckets_;
 };
 
 } // namespace facebook::velox::fuzzer

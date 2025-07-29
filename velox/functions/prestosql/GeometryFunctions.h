@@ -32,6 +32,7 @@
 #include "velox/functions/prestosql/geospatial/GeometrySerde.h"
 #include "velox/functions/prestosql/geospatial/GeometryUtils.h"
 #include "velox/functions/prestosql/types/GeometryType.h"
+#include "velox/type/Variant.h"
 
 namespace facebook::velox::functions {
 
@@ -642,7 +643,7 @@ struct StXMinFunction {
 
   bool call(out_type<double>& result, const arg_type<Geometry>& geometry) {
     const std::unique_ptr<geos::geom::Envelope> env =
-        geospatial::getEnvelopeFromGeometry(geometry);
+        geospatial::GeometryDeserializer::deserializeEnvelope(geometry);
     if (env->isNull()) {
       return false;
     }
@@ -657,7 +658,7 @@ struct StYMinFunction {
 
   bool call(out_type<double>& result, const arg_type<Geometry>& geometry) {
     const std::unique_ptr<geos::geom::Envelope> env =
-        geospatial::getEnvelopeFromGeometry(geometry);
+        geospatial::GeometryDeserializer::deserializeEnvelope(geometry);
     if (env->isNull()) {
       return false;
     }
@@ -672,7 +673,7 @@ struct StXMaxFunction {
 
   bool call(out_type<double>& result, const arg_type<Geometry>& geometry) {
     const std::unique_ptr<geos::geom::Envelope> env =
-        geospatial::getEnvelopeFromGeometry(geometry);
+        geospatial::GeometryDeserializer::deserializeEnvelope(geometry);
     if (env->isNull()) {
       return false;
     }
@@ -687,7 +688,7 @@ struct StYMaxFunction {
 
   bool call(out_type<double>& result, const arg_type<Geometry>& geometry) {
     const std::unique_ptr<geos::geom::Envelope> env =
-        geospatial::getEnvelopeFromGeometry(geometry);
+        geospatial::GeometryDeserializer::deserializeEnvelope(geometry);
     if (env->isNull()) {
       return false;
     }
@@ -822,8 +823,13 @@ struct StIsEmptyFunction {
 
   FOLLY_ALWAYS_INLINE Status
   call(out_type<bool>& result, const arg_type<Geometry>& geometry) {
-    GEOS_TRY(result = geospatial::getEnvelopeFromGeometry(geometry)->isNull();
-             , "Failed to get envelope from geometry");
+    GEOS_TRY(
+        {
+          const std::unique_ptr<geos::geom::Envelope> env =
+              geospatial::GeometryDeserializer::deserializeEnvelope(geometry);
+          result = env->isNull();
+        },
+        "Failed to get envelope from geometry");
     return Status::OK();
   }
 };
@@ -1132,6 +1138,27 @@ struct StConvexHullFunction {
     return Status::OK();
   }
 };
+class StCoordDimFunction : public facebook::velox::exec::VectorFunction {
+ public:
+  void apply(
+      const facebook::velox::SelectivityVector& rows,
+      std::vector<facebook::velox::VectorPtr>& /*args*/,
+      const std::shared_ptr<const facebook::velox::Type>& outputType,
+      facebook::velox::exec::EvalCtx& context,
+      facebook::velox::VectorPtr& result) const override {
+    // Create a constant vector of value 2, with size equal to the number of
+    // rows
+    result = facebook::velox::BaseVector::createConstant(
+        outputType, 2, rows.size(), context.pool());
+  }
+  static std::vector<std::shared_ptr<facebook::velox::exec::FunctionSignature>>
+  signatures() {
+    return {facebook::velox::exec::FunctionSignatureBuilder()
+                .returnType("integer")
+                .argumentType("geometry")
+                .build()};
+  }
+};
 
 template <typename T>
 struct StDimensionFunction {
@@ -1143,6 +1170,105 @@ struct StDimensionFunction {
         geospatial::GeometryDeserializer::deserialize(geometry)->getDimension();
 
     return Status::OK();
+  }
+};
+
+template <typename T>
+struct StExteriorRingFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<Geometry>& result,
+      const arg_type<Geometry>& geometry) {
+    std::unique_ptr<geos::geom::Geometry> geosGeometry =
+        geospatial::GeometryDeserializer::deserialize(geometry);
+
+    auto validate = geospatial::validateType(
+        *geosGeometry,
+        {geos::geom::GeometryTypeId::GEOS_POLYGON},
+        "ST_ExteriorRing");
+
+    if (!validate.ok()) {
+      VELOX_USER_FAIL(validate.message());
+    }
+
+    if (geosGeometry->isEmpty()) {
+      return false;
+    }
+
+    geos::geom::Polygon* polygon =
+        dynamic_cast<geos::geom::Polygon*>(geosGeometry.get());
+
+    VELOX_CHECK_NOT_NULL(
+        polygon, "Validation passed but type not recognized as Polygon");
+
+    geospatial::GeometrySerializer::serialize(
+        *(polygon->getExteriorRing()), result);
+
+    return true;
+  }
+};
+
+template <typename T>
+struct StEnvelopeFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  StEnvelopeFunction() {
+    factory_ = geos::geom::GeometryFactory::create();
+  }
+
+  FOLLY_ALWAYS_INLINE Status
+  call(out_type<Geometry>& result, const arg_type<Geometry>& geometry) {
+    std::unique_ptr<const geos::geom::Geometry> geosGeometry =
+        geospatial::GeometryDeserializer::deserialize(geometry);
+
+    auto env = geosGeometry->getEnvelope();
+
+    if (env->isEmpty()) {
+      GEOS_TRY(
+          {
+            auto polygon =
+                std::unique_ptr<geos::geom::Polygon>(factory_->createPolygon());
+            geospatial::GeometrySerializer::serialize(*polygon, result);
+          },
+          "Failed to create empty polygon in ST_Envelope");
+    }
+
+    geospatial::GeometrySerializer::serialize(*env, result);
+
+    return Status::OK();
+  }
+
+ private:
+  geos::geom::GeometryFactory::Ptr factory_;
+};
+
+template <typename T>
+struct StBufferFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<Geometry>& result,
+      const arg_type<Geometry>& geometry,
+      const arg_type<double>& distance) {
+    if (distance < 0) {
+      VELOX_USER_FAIL(fmt::format(
+          "Provided distance must not be negative. Provided distance: {}",
+          distance));
+    }
+    if (distance == 0) {
+      result = geometry;
+      return true;
+    }
+
+    std::unique_ptr<geos::geom::Geometry> geosGeometry =
+        geospatial::GeometryDeserializer::deserialize(geometry);
+    if (geosGeometry->isEmpty()) {
+      return false;
+    }
+    geospatial::GeometrySerializer::serialize(
+        *(geosGeometry->buffer(distance)), result);
+    return true;
   }
 };
 

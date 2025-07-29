@@ -82,6 +82,10 @@ class BingTileType : public BigintType {
     return obj;
   }
 
+  bool isOrderable() const override {
+    return false;
+  }
+
   static constexpr uint8_t kBingTileVersion = 0;
   static constexpr uint8_t kBingTileMaxZoomLevel = 23;
   static constexpr uint8_t kBingTileZoomBitWidth = 5;

@@ -90,9 +90,25 @@ bool checkNamedRowField(
 
 } // namespace
 
+bool SignatureBinder::tryBindWithCoercions(std::vector<Coercion>& coercions) {
+  return tryBind(true, coercions);
+}
+
 bool SignatureBinder::tryBind() {
+  std::vector<Coercion> coercions;
+  return tryBind(false, coercions);
+}
+
+bool SignatureBinder::tryBind(
+    bool allowCoercions,
+    std::vector<Coercion>& coercions) {
+  if (allowCoercions) {
+    coercions.clear();
+    coercions.resize(actualTypes_.size());
+  }
+
   const auto& formalArgs = signature_.argumentTypes();
-  auto formalArgsCnt = formalArgs.size();
+  const auto formalArgsCnt = formalArgs.size();
 
   if (signature_.variableArity()) {
     if (actualTypes_.size() < formalArgsCnt - 1) {
@@ -118,8 +134,15 @@ bool SignatureBinder::tryBind() {
 
   for (auto i = 0; i < formalArgsCnt && i < actualTypes_.size(); i++) {
     if (actualTypes_[i]) {
-      if (!SignatureBinderBase::tryBind(formalArgs[i], actualTypes_[i])) {
-        return false;
+      if (allowCoercions) {
+        if (!SignatureBinderBase::tryBindWithCoercion(
+                formalArgs[i], actualTypes_[i], coercions[i])) {
+          return false;
+        }
+      } else {
+        if (!SignatureBinderBase::tryBind(formalArgs[i], actualTypes_[i])) {
+          return false;
+        }
       }
     } else {
       return false;
@@ -151,9 +174,26 @@ bool SignatureBinderBase::checkOrSetIntegerParameter(
   return true;
 }
 
+bool SignatureBinderBase::tryBindWithCoercion(
+    const exec::TypeSignature& typeSignature,
+    const TypePtr& actualType,
+    Coercion& coercion) {
+  return tryBind(typeSignature, actualType, true, coercion);
+}
+
 bool SignatureBinderBase::tryBind(
     const exec::TypeSignature& typeSignature,
     const TypePtr& actualType) {
+  Coercion coercion;
+  return tryBind(typeSignature, actualType, false, coercion);
+}
+
+bool SignatureBinderBase::tryBind(
+    const exec::TypeSignature& typeSignature,
+    const TypePtr& actualType,
+    bool allowCoercion,
+    Coercion& coercion) {
+  coercion.reset();
   if (isAny(typeSignature)) {
     return true;
   }
@@ -196,6 +236,13 @@ bool SignatureBinderBase::tryBind(
       boost::algorithm::to_upper_copy(std::string(actualType->name()));
 
   if (typeName != actualTypeName) {
+    if (allowCoercion) {
+      if (auto availableCoercion =
+              TypeCoercer::coerceTypeBase(actualType, typeName)) {
+        coercion = availableCoercion.value();
+        return true;
+      }
+    }
     return false;
   }
 
@@ -220,6 +267,7 @@ bool SignatureBinderBase::tryBind(
         }
 
         if (!tryBind(params[i], actualParameter.type)) {
+          // TODO Allow coercions for complex types.
           return false;
         }
         break;
