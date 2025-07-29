@@ -396,6 +396,18 @@ class ConstantVector final : public SimpleVector<T> {
         BaseVector::storageByteCount_);
   }
 
+  void transferOrCopyTo(velox::memory::MemoryPool* pool) override {
+    BaseVector::transferOrCopyTo(pool);
+    if (valueVector_) {
+      valueVector_->transferOrCopyTo(pool);
+    }
+    if (stringBuffer_) {
+      if (!stringBuffer_->transferTo(pool)) {
+        stringBuffer_ = AlignedBuffer::copy<char>(pool, stringBuffer_);
+      }
+    }
+  }
+
  protected:
   std::string toSummaryString() const override {
     std::stringstream out;
