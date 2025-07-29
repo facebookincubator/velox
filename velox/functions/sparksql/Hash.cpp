@@ -409,6 +409,10 @@ class Murmur3Hash final : public Murmur3Hash32Base {
     return fmix(h1, 4);
   }
 
+  static uint32_t hashInt64(int64_t input,  uint32_t seed) {
+    return Murmur3Hash32Base::hashInt64(input, seed);
+  }
+
   // Floating point numbers are hashed as if they are integers, with
   // -0f defined to have the same output as +0f.
   static uint32_t hashFloat(float input, uint32_t seed) {

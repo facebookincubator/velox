@@ -24,12 +24,11 @@ namespace facebook::velox::functions {
 /// Signed integer types have been remapped to unsigned types (as in the
 /// original) to avoid undefined signed integer overflow and sign extension.
 class Murmur3Hash32Base {
- public:
+ protected:
   /// Hash the lower int, then combine with higher int, is a fast path of
   /// hashBytes.
   static uint32_t hashInt64(uint64_t input, uint32_t seed);
 
- protected:
   static uint32_t mixK1(uint32_t k1);
 
   static uint32_t mixH1(uint32_t h1, uint32_t k1);

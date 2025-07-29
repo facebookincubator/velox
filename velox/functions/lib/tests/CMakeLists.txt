@@ -22,7 +22,6 @@ add_executable(
   KllSketchTest.cpp
   LambdaFunctionUtilTest.cpp
   MapConcatTest.cpp
-  Murmur3Hash32BaseTest.cpp
   QuantileDigestTest.cpp
   Re2FunctionsTest.cpp
   RepeatTest.cpp

@@ -17,8 +17,7 @@
 
 #include <gtest/gtest.h>
 
-using namespace facebook::velox::functions::iceberg;
-
+namespace facebook::velox::functions::iceberg {
 namespace {
 
 TEST(Murmur3Hash32Test, bigint) {
@@ -46,3 +45,4 @@ TEST(Murmur3Hash32Test, string) {
   EXPECT_EQ(hash("😀"), -1095487750);
 }
 } // namespace
+}
