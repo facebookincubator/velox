@@ -302,6 +302,19 @@ uint32_t ScaleWriterLocalPartition::getNextWriterId() {
   // when the worker is overloaded which might cause a lot of queuing on both
   // producer and consumer sides. The buffered memory ratio is not a reliable
   // signal in that case.
+  VLOG(0) << "----";
+  VLOG(0) << "  numWriters_: " << numWriters_
+          << " numPartitions_: " << numPartitions_;
+  VLOG(0) << "  memoryManager_->bufferedBytes(): "
+          << memoryManager_->bufferedBytes()
+          << "   memoryManager_->maxBufferBytes() / 2: "
+          << memoryManager_->maxBufferBytes() / 2;
+  VLOG(0) << "  processedDataBytes_:" << processedDataBytes_
+          << " processedBytesAtLastScale_: " << processedBytesAtLastScale_;
+  VLOG(0) << "  minDataProcessedBytes_: " << minDataProcessedBytes_;
+  VLOG(0) << "  queryPool_->reservedBytes(): " << queryPool_->reservedBytes()
+          << " queryPool_->maxCapacity(): " << queryPool_->maxCapacity()
+          << " maxQueryMemoryUsageRatio_: " << maxQueryMemoryUsageRatio_;
   if ((numWriters_ < numPartitions_) &&
       (memoryManager_->bufferedBytes() >=
        memoryManager_->maxBufferBytes() / 2) &&
@@ -315,6 +328,7 @@ uint32_t ScaleWriterLocalPartition::getNextWriterId() {
       (queryPool_->reservedBytes() <
        queryPool_->maxCapacity() * maxQueryMemoryUsageRatio_)) {
     ++numWriters_;
+    VLOG(0) << " Need more writers. numWriters_: " << numWriters_;
     processedBytesAtLastScale_ = processedDataBytes_;
     LOG(INFO) << "Scaled task writer count to: " << numWriters_
               << " with max of " << numPartitions_;
@@ -330,5 +344,6 @@ void ScaleWriterLocalPartition::close() {
   }
   stats_.wlock()->addRuntimeStat(
       kScaledWriters, RuntimeCounter(numWriters_ - 1));
+  VLOG(0) << "Closing ScaleWriterLocalPartition. Recording kScaledWriters: " << numWriters_ - 1;
 }
 } // namespace facebook::velox::exec
