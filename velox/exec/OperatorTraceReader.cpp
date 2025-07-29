@@ -16,7 +16,7 @@
 
 #include <utility>
 
-#include <absl/crc/crc32c.h>
+#include <folly/hash/Checksum.h>
 #include "velox/common/file/FileInputStream.h"
 #include "velox/exec/OperatorTraceReader.h"
 #include "velox/exec/TraceUtil.h"
@@ -140,8 +140,8 @@ std::vector<std::string> OperatorTraceSplitReader::deserialize(
       std::string splitStr(length, '\0');
       stream->readBytes(reinterpret_cast<uint8_t*>(splitStr.data()), length);
       const auto crc32 = stream->read<uint32_t>();
-      const auto actualCrc32 =
-          static_cast<uint32_t>(absl::ComputeCrc32c(splitStr));
+      const auto actualCrc32 = folly::crc32(
+          reinterpret_cast<const uint8_t*>(splitStr.data()), splitStr.size());
       if (crc32 != actualCrc32) {
         LOG(ERROR) << "Failed to verify the split checksum " << crc32
                    << " which does not equal to the actual computed checksum "

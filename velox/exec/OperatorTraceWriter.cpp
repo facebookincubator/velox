@@ -16,7 +16,7 @@
 
 #include "velox/exec/OperatorTraceWriter.h"
 
-#include <absl/crc/crc32c.h>
+#include <folly/hash/Checksum.h>
 #include <folly/io/Cursor.h>
 #include <utility>
 
@@ -141,7 +141,8 @@ void OperatorTraceSplitWriter::finish() {
 std::unique_ptr<folly::IOBuf> OperatorTraceSplitWriter::serialize(
     const std::string& split) {
   const uint32_t length = split.length();
-  const uint32_t crc32 = static_cast<uint32_t>(absl::ComputeCrc32c(split));
+  const uint32_t crc32 = folly::crc32(
+      reinterpret_cast<const uint8_t*>(split.data()), split.size());
   auto ioBuf =
       folly::IOBuf::create(sizeof(length) + split.size() + sizeof(crc32));
   folly::io::Appender appender(ioBuf.get(), 0);
