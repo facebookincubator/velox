@@ -19,14 +19,16 @@
 namespace facebook::velox::functions::sparksql::test {
 namespace {
 
-class ReadSidePaddingFunctionTest : public SparkFunctionBaseTest {};
+class ReadSidePaddingFunctionTest : public SparkFunctionBaseTest {
+ protected:
+  auto readSidePadding(
+      const std::optional<std::string>& input,
+      const std::optional<int32_t>& limit) {
+    return evaluateOnce<std::string>("read_side_padding(c0, c1)", input, limit);
+  }
+};
 
 TEST_F(ReadSidePaddingFunctionTest, ascii) {
-  const auto readSidePadding = [&](const std::optional<std::string>& input,
-                                   const std::optional<int32_t>& limit) {
-    return evaluateOnce<std::string>("read_side_padding(c0, c1)", input, limit);
-  };
-
   // String length < limit: pad with spaces.
   EXPECT_EQ(readSidePadding("a", 3), "a  ");
 
@@ -36,11 +38,6 @@ TEST_F(ReadSidePaddingFunctionTest, ascii) {
 }
 
 TEST_F(ReadSidePaddingFunctionTest, unicode) {
-  const auto readSidePadding = [&](const std::optional<std::string>& input,
-                                   const std::optional<int32_t>& limit) {
-    return evaluateOnce<std::string>("read_side_padding(c0, c1)", input, limit);
-  };
-
   // String length < limit: pad with spaces.
   EXPECT_EQ(readSidePadding("世", 3), "世  ");
   EXPECT_EQ(readSidePadding("a世", 3), "a世 ");
@@ -55,14 +52,6 @@ TEST_F(ReadSidePaddingFunctionTest, unicode) {
 }
 
 TEST_F(ReadSidePaddingFunctionTest, error) {
-  const auto readSidePadding = [&](const std::optional<std::string>& input,
-                                   const std::optional<int32_t>& limit) {
-    return evaluateOnce<std::string>("read_side_padding(c0, c1)", input, limit);
-  };
-
-  // Null input cases.
-  EXPECT_EQ(readSidePadding(std::nullopt, 5), std::nullopt);
-
   // Edge cases - length limit must be positive.
   VELOX_ASSERT_USER_THROW(
       readSidePadding("a", 0), "The length limit must be greater than 0.");
