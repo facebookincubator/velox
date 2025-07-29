@@ -108,6 +108,21 @@ namespace {
 std::vector<TypePtr> deserializeChildTypes(const folly::dynamic& obj) {
   return velox::ISerializable::deserialize<std::vector<Type>>(obj["cTypes"]);
 }
+
+std::map<std::string, int64_t> deserializeLongEnumMapParam(
+    const folly::dynamic& arr) {
+  VELOX_CHECK(arr.isArray());
+  std::map<std::string, int64_t> map;
+  for (const auto& pair : arr) {
+    VELOX_USER_CHECK(pair.isArray(), "Expected array for long enum map param");
+    VELOX_USER_CHECK(
+        pair.size() == 2, "Invalid key-value pair for long enum map param");
+    std::string key = pair[0].asString();
+    int64_t value = pair[1].asInt();
+    map.emplace(std::move(key), value);
+  }
+  return map;
+}
 } // namespace
 
 TypePtr Type::create(const folly::dynamic& obj) {
@@ -116,22 +131,32 @@ TypePtr Type::create(const folly::dynamic& obj) {
     return deserializedTypeCache().get(id);
   }
 
+  auto typeName = obj["type"].asString();
+  if (isDecimalName(typeName)) {
+    return DECIMAL(obj["precision"].asInt(), obj["scale"].asInt());
+  }
+
   std::vector<TypePtr> childTypes;
   if (obj.find("cTypes") != obj.items().end()) {
     childTypes = deserializeChildTypes(obj);
   }
 
-  auto typeName = obj["type"].asString();
-  if (isDecimalName(typeName)) {
-    return DECIMAL(obj["precision"].asInt(), obj["scale"].asInt());
-  }
   // Checks if 'typeName' specifies a custom type.
   if (customTypeExists(typeName)) {
     std::vector<TypeParameter> params;
-    params.reserve(childTypes.size());
-    for (auto& child : childTypes) {
-      params.emplace_back(child);
+    if (obj.find("cTypes") != obj.items().end()) {
+      params.reserve(childTypes.size());
+      for (auto& child : childTypes) {
+        params.emplace_back(child);
+      }
     }
+    if (obj.find("stringParam") != obj.items().end() &&
+        obj.find("kLongEnumMapParam") != obj.items().end()) {
+      params.emplace_back(TypeParameter(obj["stringParam"].asString()));
+      params.emplace_back(
+          deserializeLongEnumMapParam(obj["kLongEnumMapParam"]));
+    }
+
     return getCustomType(typeName, params);
   }
 
