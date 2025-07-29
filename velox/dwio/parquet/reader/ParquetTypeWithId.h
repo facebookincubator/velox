@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <utility>
+
 #include "velox/dwio/common/TypeWithId.h"
 #include "velox/dwio/parquet/common/LevelConversion.h"
 #include "velox/dwio/parquet/thrift/ParquetThriftTypes.h"
@@ -52,7 +54,7 @@ class ParquetTypeWithId : public dwio::common::TypeWithId {
       int32_t scale = 0,
       int32_t typeLength = 0)
       : TypeWithId(type, std::move(children), id, maxId, column),
-        name_(name),
+        name_(std::move(name)),
         parquetType_(parquetType),
         logicalType_(std::move(logicalType)),
         convertedType_(convertedType),
