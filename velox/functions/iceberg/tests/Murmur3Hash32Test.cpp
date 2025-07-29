@@ -45,4 +45,4 @@ TEST(Murmur3Hash32Test, string) {
   EXPECT_EQ(hash("😀"), -1095487750);
 }
 } // namespace
-}
+} // namespace facebook::velox::functions::iceberg
