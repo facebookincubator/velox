@@ -430,18 +430,6 @@ uint32_t crc32U64(uint32_t checksum, uint64_t value, const A& arch = {}) {
 template <typename T, typename A = xsimd::default_arch>
 xsimd::batch<T, A> iota(const A& = {});
 
-// Returns a batch with all elements set to value.  For batch<bool> we
-// use one bit to represent one element.
-template <typename T, typename A = xsimd::default_arch>
-auto setAll(T value, const A& = {}) {
-  if constexpr (std::is_same_v<T, bool>) {
-    return xsimd::batch<uint8_t, A>{
-        xsimd::broadcast<uint8_t, A>(value ? -1 : 0)};
-  } else {
-    return xsimd::batch<T, A>{xsimd::broadcast<T, A>(value)};
-  }
-}
-
 // Stores 'data' into 'destination' for the lanes in 'mask'. 'mask' is expected
 // to specify contiguous lower lanes of 'batch'. For non-SIMD cases, 'mask' is
 // not used but rather the number of leading lanes of 'batch' to store is given

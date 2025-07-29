@@ -160,22 +160,6 @@ std::unique_ptr<SimpleVector<uint64_t>> DictionaryVector<T>::hashAll() const {
 }
 
 template <typename T>
-xsimd::batch<T> DictionaryVector<T>::loadSIMDValueBufferAt(
-    size_t byteOffset) const {
-  if constexpr (can_simd) {
-    constexpr int N = xsimd::batch<T>::size;
-    alignas(xsimd::default_arch::alignment()) T tmp[N];
-    auto startIndex = byteOffset / sizeof(T);
-    for (int i = 0; i < N; ++i) {
-      tmp[i] = valueAtFast(startIndex + i);
-    }
-    return xsimd::load_aligned(tmp);
-  } else {
-    VELOX_UNREACHABLE();
-  }
-}
-
-template <typename T>
 VectorPtr DictionaryVector<T>::slice(vector_size_t offset, vector_size_t length)
     const {
   VELOX_DCHECK(initialized_);

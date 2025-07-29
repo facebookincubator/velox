@@ -68,16 +68,6 @@ Range<T> FlatVector<T>::asRange() const {
 }
 
 template <typename T>
-xsimd::batch<T> FlatVector<T>::loadSIMDValueBufferAt(size_t byteOffset) const {
-  auto mem = reinterpret_cast<uint8_t*>(rawValues_) + byteOffset;
-  if constexpr (std::is_same_v<T, bool>) {
-    return xsimd::batch<uint8_t>(xsimd::load_unaligned(mem));
-  } else {
-    return xsimd::load_unaligned(reinterpret_cast<T*>(mem));
-  }
-}
-
-template <typename T>
 std::unique_ptr<SimpleVector<uint64_t>> FlatVector<T>::hashAll() const {
   using len_type = decltype(BaseVector::length_);
   BufferPtr hashBuffer =
@@ -111,21 +101,6 @@ std::unique_ptr<SimpleVector<uint64_t>> FlatVector<T>::hashAll() const {
       0 /*nullCount*/,
       false /*sorted*/,
       sizeof(uint64_t) * BaseVector::length_ /*representedBytes*/);
-}
-
-template <typename T>
-bool FlatVector<T>::useSimdEquality(size_t numCmpVals) const {
-  if constexpr (!std::is_integral_v<T>) {
-    return false;
-  } else {
-    // Uses a cost estimate for a SIMD comparison of a single comparison
-    // value vs. that of doing the fallback set lookup to determine
-    // whether or not to pursue the SIMD path or the fallback path.
-    auto fallbackCost = SET_CMP_COST * BaseVector::length_;
-    auto simdCost = SIMD_CMP_COST * numCmpVals * BaseVector::length_ /
-        xsimd::batch<T>::size;
-    return simdCost <= fallbackCost;
-  }
 }
 
 template <typename T>

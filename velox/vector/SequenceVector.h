@@ -34,11 +34,6 @@ namespace facebook::velox {
 template <typename T>
 class SequenceVector : public SimpleVector<T> {
  public:
-  static constexpr bool can_simd =
-      (std::is_same_v<T, int64_t> || std::is_same_v<T, int32_t> ||
-       std::is_same_v<T, int16_t> || std::is_same_v<T, int8_t> ||
-       std::is_same_v<T, size_t>);
-
   SequenceVector(
       velox::memory::MemoryPool* pool,
       vector_size_t length,
@@ -88,15 +83,6 @@ class SequenceVector : public SimpleVector<T> {
   }
 
   std::unique_ptr<SimpleVector<uint64_t>> hashAll() const override;
-
-  /**
-   * Loads a 256bit vector of data at the virtual byteOffset given
-   * Note this method is implemented on each vector type, but is intentionally
-   * not virtual for performance reasons
-   *
-   * @param byteOffset - the byte offset to laod from
-   */
-  xsimd::batch<T> loadSIMDValueBufferAt(size_t index) const;
 
   /**
    * Returns a shared_ptr to the underlying byte buffer holding the values for

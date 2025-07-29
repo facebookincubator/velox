@@ -39,11 +39,6 @@ class ConstantVector final : public SimpleVector<T> {
   ConstantVector(const ConstantVector&) = delete;
   ConstantVector& operator=(const ConstantVector&) = delete;
 
-  static constexpr bool can_simd =
-      (std::is_same_v<T, int64_t> || std::is_same_v<T, int32_t> ||
-       std::is_same_v<T, int16_t> || std::is_same_v<T, int8_t> ||
-       std::is_same_v<T, bool> || std::is_same_v<T, size_t>);
-
   ConstantVector(
       velox::memory::MemoryPool* pool,
       vector_size_t length,
@@ -81,10 +76,6 @@ class ConstantVector final : public SimpleVector<T> {
         // Copy string value.
         setValue(value_.str());
       }
-    }
-    // If this is not encoded integer, or string, set value buffer
-    if constexpr (can_simd) {
-      valueBuffer_ = simd::setAll(value_);
     }
   }
 
@@ -185,14 +176,6 @@ class ConstantVector final : public SimpleVector<T> {
   const void* valuesAsVoid() const override {
     VELOX_DCHECK(initialized_);
     return &value_;
-  }
-
-  /// Loads a 256bit vector of data at the virtual byteOffset given
-  /// Note this method is implemented on each vector type, but is intentionally
-  /// not virtual for performance reasons
-  xsimd::batch<T> loadSIMDValueBufferAt(size_t /* byteOffset */) const {
-    VELOX_DCHECK(initialized_);
-    return valueBuffer_;
   }
 
   std::unique_ptr<SimpleVector<uint64_t>> hashAll() const override;
@@ -449,9 +432,6 @@ class ConstantVector final : public SimpleVector<T> {
   void setValue(const std::string& string) {
     BaseVector::inMemoryBytes_ += string.size();
     value_ = velox::to<decltype(value_)>(string);
-    if constexpr (can_simd) {
-      valueBuffer_ = simd::setAll(value_);
-    }
   }
 
   void makeNullsBuffer() {
@@ -476,16 +456,6 @@ class ConstantVector final : public SimpleVector<T> {
   bool isNull_ = false;
   bool initialized_{false};
   mutable std::atomic<BufferPtr*> wrapInfo_{nullptr};
-
-  // This must be at end to avoid memory corruption.
-  std::conditional_t<
-      can_simd,
-      std::conditional_t<
-          std::is_same_v<T, bool>,
-          xsimd::batch<uint8_t>,
-          xsimd::batch<T>>,
-      char>
-      valueBuffer_;
 };
 
 template <>
