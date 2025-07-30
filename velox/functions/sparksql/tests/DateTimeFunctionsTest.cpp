@@ -1140,6 +1140,18 @@ TEST_F(DateTimeFunctionsTest, millisToTimestamp) {
 TEST_F(DateTimeFunctionsTest, secondsToTimestamp) {
   // Tests using integer seconds as input.
   EXPECT_EQ(
+      secondsToTimestamp<int8_t>(1), parseTimestamp("1970-01-01 00:00:01"));
+  EXPECT_EQ(
+      secondsToTimestamp<int8_t>(-1), parseTimestamp("1969-12-31 23:59:59"));
+  EXPECT_EQ(
+      secondsToTimestamp<int16_t>(1), parseTimestamp("1970-01-01 00:00:01"));
+  EXPECT_EQ(
+      secondsToTimestamp<int16_t>(-1), parseTimestamp("1969-12-31 23:59:59"));
+  EXPECT_EQ(
+      secondsToTimestamp<int32_t>(1), parseTimestamp("1970-01-01 00:00:01"));
+  EXPECT_EQ(
+      secondsToTimestamp<int32_t>(-1), parseTimestamp("1969-12-31 23:59:59"));
+  EXPECT_EQ(
       secondsToTimestamp<int64_t>(1), parseTimestamp("1970-01-01 00:00:01"));
   EXPECT_EQ(
       secondsToTimestamp<int64_t>(-1), parseTimestamp("1969-12-31 23:59:59"));
@@ -1153,45 +1165,56 @@ TEST_F(DateTimeFunctionsTest, secondsToTimestamp) {
       secondsToTimestamp<int64_t>(-62167219200),
       parseTimestamp("0000-01-01 0:0:0"));
   EXPECT_EQ(
-      secondsToTimestamp<int64_t>(kMaxTinyint),
+      secondsToTimestamp<int8_t>(kMaxTinyint),
       parseTimestamp("1970-01-01 00:02:07"));
   EXPECT_EQ(
-      secondsToTimestamp<int64_t>(kMinTinyint),
+      secondsToTimestamp<int8_t>(kMinTinyint),
       parseTimestamp("1969-12-31 23:57:52"));
   EXPECT_EQ(
-      secondsToTimestamp<int64_t>(kMaxSmallint),
+      secondsToTimestamp<int16_t>(kMaxSmallint),
       parseTimestamp("1970-01-01 09:06:07"));
   EXPECT_EQ(
-      secondsToTimestamp<int64_t>(kMinSmallint),
+      secondsToTimestamp<int16_t>(kMinSmallint),
       parseTimestamp("1969-12-31 14:53:52"));
   EXPECT_EQ(
-      secondsToTimestamp<int64_t>(kMax), parseTimestamp("2038-01-19 03:14:07"));
+      secondsToTimestamp<int32_t>(kMax), parseTimestamp("2038-01-19 03:14:07"));
   EXPECT_EQ(
-      secondsToTimestamp<int64_t>(kMin), parseTimestamp("1901-12-13 20:45:52"));
+      secondsToTimestamp<int32_t>(kMin), parseTimestamp("1901-12-13 20:45:52"));
 
   // Tests using floating-point seconds as input.
-  EXPECT_EQ(secondsToTimestamp(1.0), parseTimestamp("1970-01-01 00:00:01"));
-  EXPECT_EQ(secondsToTimestamp(-1.0), parseTimestamp("1969-12-31 23:59:59"));
   EXPECT_EQ(
-      secondsToTimestamp(1230219000.123),
+      secondsToTimestamp<float>(1.0), parseTimestamp("1970-01-01 00:00:01"));
+  EXPECT_EQ(
+      secondsToTimestamp<float>(-1.0), parseTimestamp("1969-12-31 23:59:59"));
+  EXPECT_EQ(
+      secondsToTimestamp<double>(1.0), parseTimestamp("1970-01-01 00:00:01"));
+  EXPECT_EQ(
+      secondsToTimestamp<double>(-1.0), parseTimestamp("1969-12-31 23:59:59"));
+  EXPECT_EQ(
+      secondsToTimestamp<double>(1230219000.123),
       parseTimestamp("2008-12-25 15:30:00.123"));
   EXPECT_EQ(
-      secondsToTimestamp(0.127), parseTimestamp("1970-01-01 00:00:00.127"));
+      secondsToTimestamp<double>(0.127),
+      parseTimestamp("1970-01-01 00:00:00.127"));
   EXPECT_EQ(
-      secondsToTimestamp(-0.128), parseTimestamp("1969-12-31 23:59:59.872"));
+      secondsToTimestamp<double>(-0.128),
+      parseTimestamp("1969-12-31 23:59:59.872"));
   EXPECT_EQ(
-      secondsToTimestamp(32.767), parseTimestamp("1970-01-01 00:00:32.767"));
+      secondsToTimestamp<double>(32.767),
+      parseTimestamp("1970-01-01 00:00:32.767"));
   EXPECT_EQ(
-      secondsToTimestamp(-32.768), parseTimestamp("1969-12-31 23:59:27.232"));
+      secondsToTimestamp<double>(-32.768),
+      parseTimestamp("1969-12-31 23:59:27.232"));
   EXPECT_EQ(
-      secondsToTimestamp(20.523), parseTimestamp("1970-01-01 00:00:20.523"));
+      secondsToTimestamp<double>(20.523),
+      parseTimestamp("1970-01-01 00:00:20.523"));
   EXPECT_EQ(
       secondsToTimestamp(-20.524), parseTimestamp("1969-12-31 23:59:39.476"));
   EXPECT_EQ(
-      secondsToTimestamp(2147483647.123),
+      secondsToTimestamp<double>(2147483647.123),
       parseTimestamp("2038-01-19 03:14:07.123"));
   EXPECT_EQ(
-      secondsToTimestamp(-2147483648.567),
+      secondsToTimestamp<double>(-2147483648.567),
       parseTimestamp("1901-12-13 20:45:51.433"));
 }
 
