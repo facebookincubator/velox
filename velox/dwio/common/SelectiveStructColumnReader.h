@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/SelectiveColumnReaderInternal.h"
 
 namespace facebook::velox::dwio::common {
@@ -111,6 +112,7 @@ class SelectiveStructColumnReaderBase : public SelectiveColumnReader {
   static constexpr int32_t kConstantChildSpecSubscript = -1;
 
   SelectiveStructColumnReaderBase(
+      const dwio::common::ColumnReaderOptions& columnReaderOptions,
       const TypePtr& requestedType,
       const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
       FormatParams& params,
@@ -118,6 +120,7 @@ class SelectiveStructColumnReaderBase : public SelectiveColumnReader {
       bool isRoot = false,
       bool generateLazyChildren = true)
       : SelectiveColumnReader(requestedType, fileType, params, scanSpec),
+        columnReaderOptions_(columnReaderOptions),
         debugString_(
             getExceptionContext().message(VeloxException::Type::kSystem)),
         isRoot_(isRoot),
@@ -171,6 +174,8 @@ class SelectiveStructColumnReaderBase : public SelectiveColumnReader {
       setOutputRows(rows);
     }
   }
+
+  const dwio::common::ColumnReaderOptions& columnReaderOptions_;
 
   // Context information obtained from ExceptionContext. Stored here
   // so that LazyVector readers under this can add this to their
