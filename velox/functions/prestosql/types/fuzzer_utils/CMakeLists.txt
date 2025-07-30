@@ -20,8 +20,11 @@ velox_link_libraries(
   velox_type
   velox_common_fuzzer_util
   velox_presto_types
-  velox_type_tz
-  velox_functions_prestosql_aggregates_sfm)
+  velox_type_tz)
+if(VELOX_ENABLE_AGGREGATES)
+  velox_link_libraries(velox_presto_types_fuzzer_utils
+                       velox_functions_prestosql_aggregates_sfm)
+endif()
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
