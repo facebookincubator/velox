@@ -108,6 +108,21 @@ namespace {
 std::vector<TypePtr> deserializeChildTypes(const folly::dynamic& obj) {
   return velox::ISerializable::deserialize<std::vector<Type>>(obj["cTypes"]);
 }
+
+std::map<std::string, int64_t> deserializeLongEnumMapParam(
+    const folly::dynamic& arr) {
+  VELOX_CHECK(arr.isArray());
+  std::map<std::string, int64_t> map;
+  for (const auto& pair : arr) {
+    VELOX_USER_CHECK(pair.isArray(), "Expected array for long enum map param");
+    VELOX_USER_CHECK(
+        pair.size() == 2, "Invalid key-value pair for long enum map param");
+    std::string key = pair[0].asString();
+    int64_t value = pair[1].asInt();
+    map.emplace(std::move(key), value);
+  }
+  return map;
+}
 } // namespace
 
 TypePtr Type::create(const folly::dynamic& obj) {
@@ -116,22 +131,32 @@ TypePtr Type::create(const folly::dynamic& obj) {
     return deserializedTypeCache().get(id);
   }
 
+  auto typeName = obj["type"].asString();
+  if (isDecimalName(typeName)) {
+    return DECIMAL(obj["precision"].asInt(), obj["scale"].asInt());
+  }
+
   std::vector<TypePtr> childTypes;
   if (obj.find("cTypes") != obj.items().end()) {
     childTypes = deserializeChildTypes(obj);
   }
 
-  auto typeName = obj["type"].asString();
-  if (isDecimalName(typeName)) {
-    return DECIMAL(obj["precision"].asInt(), obj["scale"].asInt());
-  }
   // Checks if 'typeName' specifies a custom type.
   if (customTypeExists(typeName)) {
     std::vector<TypeParameter> params;
-    params.reserve(childTypes.size());
-    for (auto& child : childTypes) {
-      params.emplace_back(child);
+    if (obj.find("cTypes") != obj.items().end()) {
+      params.reserve(childTypes.size());
+      for (auto& child : childTypes) {
+        params.emplace_back(child);
+      }
     }
+    if (obj.find("stringParam") != obj.items().end() &&
+        obj.find("kLongEnumMapParam") != obj.items().end()) {
+      params.emplace_back(TypeParameter(obj["stringParam"].asString()));
+      params.emplace_back(
+          deserializeLongEnumMapParam(obj["kLongEnumMapParam"]));
+    }
+
     return getCustomType(typeName, params);
   }
 
@@ -963,10 +988,10 @@ std::string Type::toSummaryString(TypeSummaryOptions options) const {
 
 namespace {
 
-std::unordered_map<std::string, std::unique_ptr<const CustomTypeFactories>>&
+std::unordered_map<std::string, std::unique_ptr<const CustomTypeFactory>>&
 typeFactories() {
   static std::
-      unordered_map<std::string, std::unique_ptr<const CustomTypeFactories>>
+      unordered_map<std::string, std::unique_ptr<const CustomTypeFactory>>
           factories;
   return factories;
 }
@@ -987,9 +1012,9 @@ std::unordered_map<std::type_index, std::string>& getOpaqueAliasByTypeIndex() {
 
 bool registerCustomType(
     const std::string& name,
-    std::unique_ptr<const CustomTypeFactories> factories) {
+    std::unique_ptr<const CustomTypeFactory> factory) {
   auto uppercaseName = boost::algorithm::to_upper_copy(name);
-  return typeFactories().emplace(uppercaseName, std::move(factories)).second;
+  return typeFactories().emplace(uppercaseName, std::move(factory)).second;
 }
 
 bool customTypeExists(const std::string& name) {
@@ -1010,8 +1035,8 @@ bool unregisterCustomType(const std::string& name) {
   return typeFactories().erase(uppercaseName) == 1;
 }
 
-const CustomTypeFactories* FOLLY_NULLABLE
-getTypeFactories(const std::string& name) {
+const CustomTypeFactory* FOLLY_NULLABLE
+getTypeFactory(const std::string& name) {
   auto uppercaseName = boost::algorithm::to_upper_copy(name);
   auto it = typeFactories().find(uppercaseName);
 
@@ -1025,33 +1050,33 @@ getTypeFactories(const std::string& name) {
 TypePtr getCustomType(
     const std::string& name,
     const std::vector<TypeParameter>& parameters) {
-  auto factories = getTypeFactories(name);
-  if (factories) {
-    return factories->getType(parameters);
+  auto factory = getTypeFactory(name);
+  if (factory) {
+    return factory->getType(parameters);
   }
 
   return nullptr;
 }
 
 exec::CastOperatorPtr getCustomTypeCastOperator(const std::string& name) {
-  auto factories = getTypeFactories(name);
-  if (factories) {
-    return factories->getCastOperator();
+  auto factory = getTypeFactory(name);
+  if (factory) {
+    return factory->getCastOperator();
   }
 
   return nullptr;
 }
 
-CustomTypeFactories::~CustomTypeFactories() = default;
+CustomTypeFactory::~CustomTypeFactory() = default;
 
 AbstractInputGenerator::~AbstractInputGenerator() = default;
 
 AbstractInputGeneratorPtr getCustomTypeInputGenerator(
     const std::string& name,
     const InputGeneratorConfig& config) {
-  auto factories = getTypeFactories(name);
-  if (factories) {
-    return factories->getInputGenerator(config);
+  auto factory = getTypeFactory(name);
+  if (factory) {
+    return factory->getInputGenerator(config);
   }
 
   return nullptr;
