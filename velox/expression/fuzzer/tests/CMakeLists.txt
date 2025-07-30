@@ -14,8 +14,8 @@
 
 add_library(velox_expression_fuzzer_test_utility ArgTypesGeneratorTestUtils.cpp)
 target_link_libraries(
-  velox_expression_fuzzer_test_utility velox_expression_functions
-  velox_function_registry GTest::gtest)
+  velox_expression_fuzzer_test_utility
+  PRIVATE velox_expression_functions velox_function_registry GTest::gtest)
 
 add_executable(
   velox_expression_fuzzer_unit_test
@@ -24,11 +24,12 @@ add_executable(
 
 target_link_libraries(
   velox_expression_fuzzer_unit_test
-  velox_expression_fuzzer
-  velox_functions_prestosql
-  velox_presto_types
-  velox_core
-  velox_expression
-  velox_expression_fuzzer_test_utility
-  GTest::gtest
-  GTest::gtest_main)
+  PRIVATE
+    velox_expression_fuzzer
+    velox_functions_prestosql
+    velox_presto_types
+    velox_core
+    velox_expression
+    velox_expression_fuzzer_test_utility
+    GTest::gtest
+    GTest::gtest_main)

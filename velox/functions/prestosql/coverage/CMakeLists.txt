@@ -15,9 +15,9 @@ add_executable(velox_prestosql_coverage Coverage.cpp)
 
 target_link_libraries(
   velox_prestosql_coverage
-  velox_functions_prestosql
-  velox_function_registry
-  velox_aggregates
-  velox_row_fast
-  velox_window
-  velox_coverage_util)
+  PUBLIC velox_functions_prestosql
+         velox_function_registry
+         velox_aggregates
+         velox_row_fast
+         velox_window
+         velox_coverage_util)

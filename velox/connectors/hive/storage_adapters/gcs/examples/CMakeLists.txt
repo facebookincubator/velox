@@ -15,10 +15,10 @@
 add_executable(velox_gcsfile_example GcsFileSystemExample.cpp)
 target_link_libraries(
   velox_gcsfile_example
-  Folly::folly
-  velox_file
-  velox_gcs
-  velox_core
-  velox_hive_connector
-  velox_dwio_common_exception
-  velox_exec)
+  PUBLIC Folly::folly
+         velox_file
+         velox_gcs
+         velox_core
+         velox_hive_connector
+         velox_dwio_common_exception
+         velox_exec)

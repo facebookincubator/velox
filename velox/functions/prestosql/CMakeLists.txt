@@ -67,26 +67,27 @@ velox_add_library(
 
 velox_link_libraries(
   velox_functions_prestosql_impl
-  velox_common_hyperloglog
-  velox_functions_json
-  velox_functions_lib
-  velox_expression
-  velox_external_md5
-  velox_type_tz
-  velox_presto_types
-  velox_functions_util
-  Folly::folly
-  stemmer::stemmer)
+  PUBLIC velox_common_hyperloglog
+         velox_functions_json
+         velox_functions_lib
+         velox_expression
+         velox_external_md5
+         velox_type_tz
+         velox_presto_types
+         velox_functions_util
+         Folly::folly
+         stemmer::stemmer)
 
 if(VELOX_ENABLE_FAISS)
-  velox_link_libraries(velox_functions_prestosql_impl FAISS::faiss)
+  velox_link_libraries(velox_functions_prestosql_impl PUBLIC FAISS::faiss)
   velox_compile_definitions(velox_functions_prestosql_impl
                             PRIVATE VELOX_ENABLE_FAISS)
 endif()
 
 if(VELOX_ENABLE_GEO)
   add_subdirectory(geospatial)
-  velox_link_libraries(velox_functions_prestosql_impl velox_functions_geo)
+  velox_link_libraries(velox_functions_prestosql_impl
+                       PUBLIC velox_functions_geo)
 endif()
 
 if(NOT VELOX_MONO_LIBRARY)

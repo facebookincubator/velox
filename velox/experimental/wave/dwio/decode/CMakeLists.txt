@@ -18,4 +18,5 @@ endif()
 add_library(velox_wave_decode GpuDecoder.cu)
 
 target_link_libraries(
-  velox_wave_decode velox_wave_common CUDA::cudart breeze_cuda)
+  velox_wave_decode
+  PUBLIC velox_wave_common CUDA::cudart breeze_cuda)

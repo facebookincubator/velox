@@ -24,6 +24,7 @@ string(
 velox_resolve_dependency_url(GFLAGS)
 
 message(STATUS "Building gflags from source")
+block(SCOPE_FOR VARIABLES)
 FetchContent_Declare(
   gflags
   URL ${VELOX_GFLAGS_SOURCE_URL}
@@ -43,19 +44,8 @@ set(GFLAGS_IS_SUBPROJECT ON)
 
 # Workaround for https://github.com/gflags/gflags/issues/277
 unset(BUILD_SHARED_LIBS)
-if(DEFINED CACHE{BUILD_SHARED_LIBS})
-  set(CACHED_BUILD_SHARED_LIBS ${BUILD_SHARED_LIBS})
-  unset(BUILD_SHARED_LIBS CACHE)
-endif()
-
 FetchContent_MakeAvailable(gflags)
-
-# Workaround for https://github.com/gflags/gflags/issues/277
-if(DEFINED CACHED_BUILD_SHARED_LIBS)
-  set(BUILD_SHARED_LIBS
-      ${CACHED_BUILD_SHARED_LIBS}
-      CACHE BOOL "Restored after setting up gflags" FORCE)
-endif()
+endblock()
 
 # This causes find_package(gflags) in other dependencies to search in the build
 # directory and prevents the system gflags from being found when they don't use

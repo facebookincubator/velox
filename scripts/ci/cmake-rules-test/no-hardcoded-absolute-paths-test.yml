@@ -1,0 +1,193 @@
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+id: no-hardcoded-absolute-paths
+valid:
+  # Good practices that should NOT trigger the rule
+
+  # Using CMake variables instead of hard-coded paths
+  - |
+    target_link_libraries(mylib PRIVATE ${CMAKE_BINARY_DIR}/lib/libfoo.so)
+  - |
+    target_include_directories(mylib PRIVATE ${CMAKE_SOURCE_DIR}/include)
+  - |
+    install(FILES config.h DESTINATION ${CMAKE_INSTALL_PREFIX}/include)
+  - |
+    find_library(FOO_LIB foo PATHS ${CMAKE_PREFIX_PATH}/lib)
+  - |
+    set(LIB_PATH ${CMAKE_BINARY_DIR}/lib/libbar.a)
+    target_link_libraries(mylib PRIVATE ${LIB_PATH})
+
+  # Using relative paths
+  - |
+    target_link_libraries(mylib PRIVATE lib/libfoo.so)
+  - |
+    target_include_directories(mylib PRIVATE include)
+  - |
+    add_subdirectory(src)
+  - |
+    file(COPY resources/ DESTINATION output/resources/)
+  - |
+    install(FILES config.h DESTINATION include)
+
+  # Using generator expressions
+  - |
+    target_include_directories(mylib PRIVATE
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<INSTALL_INTERFACE:include>
+    )
+  - |
+    target_link_libraries(mylib PRIVATE
+        $<TARGET_FILE:dependency>
+    )
+
+  # Using find_package results (typically absolute but not hard-coded)
+  - |
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(GTK REQUIRED gtk+-3.0)
+    target_link_libraries(mylib PRIVATE ${GTK_LIBRARIES})
+  - |
+    find_package(Boost REQUIRED COMPONENTS system filesystem)
+    target_link_libraries(mylib PRIVATE Boost::system Boost::filesystem)
+
+  # Comments mentioning absolute paths should not trigger
+  - |
+    # This library is typically installed in /usr/lib/libfoo.so
+    find_library(FOO_LIB foo)
+    target_link_libraries(mylib PRIVATE ${FOO_LIB})
+  - |
+    # On Windows this might be C:\Program Files\MyLib\lib\mylib.lib
+    find_library(MYLIB_LIB mylib)
+
+  # Variable names that happen to look like paths should not trigger
+  - |
+    set(usr_lib_path "some_value")
+    set(opt_include "/some/computed/path")
+    target_include_directories(mylib PRIVATE ${opt_include})
+
+  # Using standard CMake variables for common system paths
+  - |
+    target_include_directories(mylib SYSTEM PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/external)
+  - |
+    set_target_properties(mylib PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+    )
+
+invalid:
+  # These should trigger the rule - hard-coded absolute paths
+
+  # Unix-style absolute paths in target_link_libraries
+  - target_link_libraries(mylib PRIVATE /usr/lib/libfoo.so)
+  - target_link_libraries(mylib PRIVATE /opt/local/lib/libbar.a)
+  - target_link_libraries(mylib PRIVATE /lib/x86_64-linux-gnu/libm.so.6)
+  - |
+    target_link_libraries(mylib PRIVATE
+        /usr/lib/libfoo.so
+        /opt/lib/libbar.a
+    )
+
+  # Windows-style absolute paths in target_link_libraries
+  - target_link_libraries(mylib PRIVATE "C:/Program Files/MyLib/lib/mylib.lib")
+  - target_link_libraries(mylib PRIVATE "D:\\libs\\foo.lib")
+  - target_link_libraries(mylib PRIVATE "C:\\Windows\\System32\\kernel32.lib")
+
+  # Unix-style absolute paths in target_include_directories
+  - target_include_directories(mylib PRIVATE /usr/include)
+  - target_include_directories(mylib PRIVATE /opt/local/include)
+  - target_include_directories(mylib PRIVATE /usr/local/include/gtk-3.0)
+  - |
+    target_include_directories(mylib PRIVATE
+        /usr/include
+        /opt/include
+    )
+
+  # Windows-style absolute paths in target_include_directories
+  - target_include_directories(mylib PRIVATE "C:/Program Files/MyLib/include")
+  - target_include_directories(mylib PRIVATE "D:\\dev\\headers")
+  - target_include_directories(mylib PRIVATE "C:\\msys64\\mingw64\\include")
+
+  # Hard-coded paths in find_library
+  - find_library(FOO_LIB foo PATHS /usr/lib)
+  - find_library(BAR_LIB bar PATHS /opt/local/lib /usr/local/lib)
+  - find_library(WIN_LIB winlib PATHS "C:/Program Files/WinLib/lib")
+
+  # Hard-coded paths in find_path
+  - find_path(FOO_INCLUDE foo.h PATHS /usr/include)
+  - find_path(BAR_INCLUDE bar.h PATHS "C:\\Program Files\\Headers")
+
+  # Hard-coded paths in install commands
+  - install(FILES config.h DESTINATION /usr/local/include)
+  - install(TARGETS myapp DESTINATION /opt/myapp/bin)
+  - install(FILES script.sh DESTINATION "C:/Program Files/MyApp")
+
+  # Hard-coded paths in file operations
+  - file(COPY resources/ DESTINATION /opt/myapp/share/)
+  - file(WRITE /tmp/config.txt "some content")
+  - file(MAKE_DIRECTORY "/usr/local/myapp")
+
+  # Hard-coded paths in add_custom_command
+  - |
+    add_custom_command(
+        OUTPUT generated.h
+        COMMAND /usr/bin/generator input.txt generated.h
+        DEPENDS input.txt
+    )
+  - |
+    add_custom_command(
+        TARGET myapp POST_BUILD
+        COMMAND "C:/tools/post-process.exe" $<TARGET_FILE:myapp>
+    )
+
+  # Hard-coded paths in execute_process
+  - execute_process(COMMAND /bin/bash script.sh)
+  - execute_process(COMMAND "C:\\Windows\\System32\\cmd.exe" /c dir)
+
+  # Hard-coded paths in set_target_properties
+  - |
+    set_target_properties(mylib PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY /opt/myapp/bin
+    )
+  - |
+    set_target_properties(mylib PROPERTIES
+        LIBRARY_OUTPUT_DIRECTORY "C:/MyApp/lib"
+    )
+
+  # Mixed valid and invalid in same file - invalid ones should trigger
+  - |
+    cmake_minimum_required(VERSION 3.10)
+    project(TestProject)
+
+    # This is good
+    target_include_directories(mylib PRIVATE ${CMAKE_SOURCE_DIR}/include)
+
+    # This should trigger
+    target_link_libraries(mylib PRIVATE /usr/lib/libfoo.so)
+
+    # This is also good
+    target_link_libraries(mylib PRIVATE ${CMAKE_BINARY_DIR}/lib/libbar.a)
+
+  # Multiple hard-coded paths in single command
+  - |
+    target_link_libraries(myapp PRIVATE
+        /usr/lib/libfoo.so
+        /opt/lib/libbar.a
+        /lib/libsystem.so
+    )
+
+  # Complex nested examples
+  - |
+    if(UNIX)
+        target_link_libraries(mylib PRIVATE /usr/lib/libunix.so)
+    elseif(WIN32)
+        target_link_libraries(mylib PRIVATE "C:/Windows/System32/winlib.lib")
+    endif()

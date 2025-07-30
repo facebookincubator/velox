@@ -14,5 +14,6 @@
 add_executable(velox_prefix_sort_algorithm_benchmark
                PrefixSortAlgorithmBenchmark.cpp)
 target_link_libraries(
-  velox_prefix_sort_algorithm_benchmark velox_exec_prefixsort_test_lib
-  velox_vector_test_lib Folly::follybenchmark)
+  velox_prefix_sort_algorithm_benchmark
+  PRIVATE velox_exec_prefixsort_test_lib velox_vector_test_lib
+          Folly::follybenchmark)

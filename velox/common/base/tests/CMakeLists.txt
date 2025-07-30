@@ -63,14 +63,15 @@ add_test(velox_id_map_test velox_id_map_test)
 
 target_link_libraries(
   velox_id_map_test
-  velox_id_map
-  velox_common_base
-  velox_memory
-  Boost::headers
-  glog::glog
-  GTest::gtest
-  GTest::gtest_main
-  pthread)
+  PRIVATE
+    velox_id_map
+    velox_common_base
+    velox_memory
+    Boost::headers
+    glog::glog
+    GTest::gtest
+    GTest::gtest_main
+    pthread)
 
 add_executable(velox_memcpy_meter Memcpy.cpp)
 target_link_libraries(

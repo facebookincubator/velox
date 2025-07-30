@@ -1,0 +1,463 @@
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+id: no-hardcoded-absolute-paths
+snapshots:
+  ? |
+    add_custom_command(
+        OUTPUT generated.h
+        COMMAND /usr/bin/generator input.txt generated.h
+        DEPENDS input.txt
+    )
+  : labels:
+      - source: |-
+          add_custom_command(
+              OUTPUT generated.h
+              COMMAND /usr/bin/generator input.txt generated.h
+              DEPENDS input.txt
+          )
+        style: primary
+        start: 0
+        end: 119
+      - source: |2
+
+              OUTPUT generated.h
+              COMMAND /usr/bin/generator input.txt generated.h
+              DEPENDS input.txt
+        style: secondary
+        start: 19
+        end: 118
+  ? |
+    add_custom_command(
+        TARGET myapp POST_BUILD
+        COMMAND "C:/tools/post-process.exe" $<TARGET_FILE:myapp>
+    )
+  : labels:
+      - source: |-
+          add_custom_command(
+              TARGET myapp POST_BUILD
+              COMMAND "C:/tools/post-process.exe" $<TARGET_FILE:myapp>
+          )
+        style: primary
+        start: 0
+        end: 110
+      - source: |2
+
+              TARGET myapp POST_BUILD
+              COMMAND "C:/tools/post-process.exe" $<TARGET_FILE:myapp>
+        style: secondary
+        start: 19
+        end: 109
+  ? |
+    cmake_minimum_required(VERSION 3.10)
+    project(TestProject)
+
+    # This is good
+    target_include_directories(mylib PRIVATE ${CMAKE_SOURCE_DIR}/include)
+
+    # This should trigger
+    target_link_libraries(mylib PRIVATE /usr/lib/libfoo.so)
+
+    # This is also good
+    target_link_libraries(mylib PRIVATE ${CMAKE_BINARY_DIR}/lib/libbar.a)
+  : labels:
+      - source: target_link_libraries(mylib PRIVATE /usr/lib/libfoo.so)
+        style: primary
+        start: 167
+        end: 222
+      - source: mylib PRIVATE /usr/lib/libfoo.so
+        style: secondary
+        start: 189
+        end: 221
+  execute_process(COMMAND "C:\\Windows\\System32\\cmd.exe" /c dir):
+    labels:
+      - source: execute_process(COMMAND "C:\\Windows\\System32\\cmd.exe" /c dir)
+        style: primary
+        start: 0
+        end: 64
+      - source: COMMAND "C:\\Windows\\System32\\cmd.exe" /c dir
+        style: secondary
+        start: 16
+        end: 63
+  execute_process(COMMAND /bin/bash script.sh):
+    labels:
+      - source: execute_process(COMMAND /bin/bash script.sh)
+        style: primary
+        start: 0
+        end: 44
+      - source: COMMAND /bin/bash script.sh
+        style: secondary
+        start: 16
+        end: 43
+  file(COPY resources/ DESTINATION /opt/myapp/share/):
+    labels:
+      - source: file(COPY resources/ DESTINATION /opt/myapp/share/)
+        style: primary
+        start: 0
+        end: 51
+      - source: COPY resources/ DESTINATION /opt/myapp/share/
+        style: secondary
+        start: 5
+        end: 50
+  file(MAKE_DIRECTORY "/usr/local/myapp"):
+    labels:
+      - source: file(MAKE_DIRECTORY "/usr/local/myapp")
+        style: primary
+        start: 0
+        end: 39
+      - source: MAKE_DIRECTORY "/usr/local/myapp"
+        style: secondary
+        start: 5
+        end: 38
+  file(WRITE /tmp/config.txt "some content"):
+    labels:
+      - source: file(WRITE /tmp/config.txt "some content")
+        style: primary
+        start: 0
+        end: 42
+      - source: WRITE /tmp/config.txt "some content"
+        style: secondary
+        start: 5
+        end: 41
+  find_library(BAR_LIB bar PATHS /opt/local/lib /usr/local/lib):
+    labels:
+      - source: find_library(BAR_LIB bar PATHS /opt/local/lib /usr/local/lib)
+        style: primary
+        start: 0
+        end: 61
+      - source: BAR_LIB bar PATHS /opt/local/lib /usr/local/lib
+        style: secondary
+        start: 13
+        end: 60
+  find_library(FOO_LIB foo PATHS /usr/lib):
+    labels:
+      - source: find_library(FOO_LIB foo PATHS /usr/lib)
+        style: primary
+        start: 0
+        end: 40
+      - source: FOO_LIB foo PATHS /usr/lib
+        style: secondary
+        start: 13
+        end: 39
+  find_library(WIN_LIB winlib PATHS "C:/Program Files/WinLib/lib"):
+    labels:
+      - source: find_library(WIN_LIB winlib PATHS "C:/Program Files/WinLib/lib")
+        style: primary
+        start: 0
+        end: 64
+      - source: WIN_LIB winlib PATHS "C:/Program Files/WinLib/lib"
+        style: secondary
+        start: 13
+        end: 63
+  find_path(BAR_INCLUDE bar.h PATHS "C:\\Program Files\\Headers"):
+    labels:
+      - source: find_path(BAR_INCLUDE bar.h PATHS "C:\\Program Files\\Headers")
+        style: primary
+        start: 0
+        end: 63
+      - source: BAR_INCLUDE bar.h PATHS "C:\\Program Files\\Headers"
+        style: secondary
+        start: 10
+        end: 62
+  find_path(FOO_INCLUDE foo.h PATHS /usr/include):
+    labels:
+      - source: find_path(FOO_INCLUDE foo.h PATHS /usr/include)
+        style: primary
+        start: 0
+        end: 47
+      - source: FOO_INCLUDE foo.h PATHS /usr/include
+        style: secondary
+        start: 10
+        end: 46
+  ? |-
+    if(UNIX)
+        target_link_libraries(mylib PRIVATE /usr/lib/libunix.so)
+    elseif(WIN32)
+        target_link_libraries(mylib PRIVATE "C:/Windows/System32/winlib.lib")
+    endif()
+  : labels:
+      - source: target_link_libraries(mylib PRIVATE /usr/lib/libunix.so)
+        style: primary
+        start: 13
+        end: 69
+      - source: mylib PRIVATE /usr/lib/libunix.so
+        style: secondary
+        start: 35
+        end: 68
+  ? |
+    if(UNIX)
+        target_link_libraries(mylib PRIVATE /usr/lib/libunix.so)
+    elseif(WIN32)
+        target_link_libraries(mylib PRIVATE "C:/Windows/System32/winlib.lib")
+    endif()
+  : labels:
+      - source: target_link_libraries(mylib PRIVATE /usr/lib/libunix.so)
+        style: primary
+        start: 13
+        end: 69
+      - source: mylib PRIVATE /usr/lib/libunix.so
+        style: secondary
+        start: 35
+        end: 68
+  install(FILES config.h DESTINATION /usr/local/include):
+    labels:
+      - source: install(FILES config.h DESTINATION /usr/local/include)
+        style: primary
+        start: 0
+        end: 54
+      - source: FILES config.h DESTINATION /usr/local/include
+        style: secondary
+        start: 8
+        end: 53
+  install(FILES script.sh DESTINATION "C:/Program Files/MyApp"):
+    labels:
+      - source: install(FILES script.sh DESTINATION "C:/Program Files/MyApp")
+        style: primary
+        start: 0
+        end: 61
+      - source: FILES script.sh DESTINATION "C:/Program Files/MyApp"
+        style: secondary
+        start: 8
+        end: 60
+  install(TARGETS myapp DESTINATION /opt/myapp/bin):
+    labels:
+      - source: install(TARGETS myapp DESTINATION /opt/myapp/bin)
+        style: primary
+        start: 0
+        end: 49
+      - source: TARGETS myapp DESTINATION /opt/myapp/bin
+        style: secondary
+        start: 8
+        end: 48
+  ? |
+    set_target_properties(mylib PROPERTIES
+        LIBRARY_OUTPUT_DIRECTORY "C:/MyApp/lib"
+    )
+  : labels:
+      - source: |-
+          set_target_properties(mylib PROPERTIES
+              LIBRARY_OUTPUT_DIRECTORY "C:/MyApp/lib"
+          )
+        style: primary
+        start: 0
+        end: 84
+      - source: |
+          mylib PROPERTIES
+              LIBRARY_OUTPUT_DIRECTORY "C:/MyApp/lib"
+        style: secondary
+        start: 22
+        end: 83
+  ? |
+    set_target_properties(mylib PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY /opt/myapp/bin
+    )
+  : labels:
+      - source: |-
+          set_target_properties(mylib PROPERTIES
+              RUNTIME_OUTPUT_DIRECTORY /opt/myapp/bin
+          )
+        style: primary
+        start: 0
+        end: 84
+      - source: |
+          mylib PROPERTIES
+              RUNTIME_OUTPUT_DIRECTORY /opt/myapp/bin
+        style: secondary
+        start: 22
+        end: 83
+  ? |
+    target_include_directories(mylib PRIVATE
+        /usr/include
+        /opt/include
+    )
+  : labels:
+      - source: |-
+          target_include_directories(mylib PRIVATE
+              /usr/include
+              /opt/include
+          )
+        style: primary
+        start: 0
+        end: 76
+      - source: |
+          mylib PRIVATE
+              /usr/include
+              /opt/include
+        style: secondary
+        start: 27
+        end: 75
+  target_include_directories(mylib PRIVATE "C:/Program Files/MyLib/include"):
+    labels:
+      - source: target_include_directories(mylib PRIVATE "C:/Program Files/MyLib/include")
+        style: primary
+        start: 0
+        end: 74
+      - source: mylib PRIVATE "C:/Program Files/MyLib/include"
+        style: secondary
+        start: 27
+        end: 73
+  target_include_directories(mylib PRIVATE "C:\\msys64\\mingw64\\include"):
+    labels:
+      - source: target_include_directories(mylib PRIVATE "C:\\msys64\\mingw64\\include")
+        style: primary
+        start: 0
+        end: 72
+      - source: mylib PRIVATE "C:\\msys64\\mingw64\\include"
+        style: secondary
+        start: 27
+        end: 71
+  target_include_directories(mylib PRIVATE "D:\\dev\\headers"):
+    labels:
+      - source: target_include_directories(mylib PRIVATE "D:\\dev\\headers")
+        style: primary
+        start: 0
+        end: 60
+      - source: mylib PRIVATE "D:\\dev\\headers"
+        style: secondary
+        start: 27
+        end: 59
+  target_include_directories(mylib PRIVATE /opt/local/include):
+    labels:
+      - source: target_include_directories(mylib PRIVATE /opt/local/include)
+        style: primary
+        start: 0
+        end: 60
+      - source: mylib PRIVATE /opt/local/include
+        style: secondary
+        start: 27
+        end: 59
+  target_include_directories(mylib PRIVATE /usr/include):
+    labels:
+      - source: target_include_directories(mylib PRIVATE /usr/include)
+        style: primary
+        start: 0
+        end: 54
+      - source: mylib PRIVATE /usr/include
+        style: secondary
+        start: 27
+        end: 53
+  target_include_directories(mylib PRIVATE /usr/local/include/gtk-3.0):
+    labels:
+      - source: target_include_directories(mylib PRIVATE /usr/local/include/gtk-3.0)
+        style: primary
+        start: 0
+        end: 68
+      - source: mylib PRIVATE /usr/local/include/gtk-3.0
+        style: secondary
+        start: 27
+        end: 67
+  ? |
+    target_link_libraries(myapp PRIVATE
+        /usr/lib/libfoo.so
+        /opt/lib/libbar.a
+        /lib/libsystem.so
+    )
+  : labels:
+      - source: |-
+          target_link_libraries(myapp PRIVATE
+              /usr/lib/libfoo.so
+              /opt/lib/libbar.a
+              /lib/libsystem.so
+          )
+        style: primary
+        start: 0
+        end: 104
+      - source: |
+          myapp PRIVATE
+              /usr/lib/libfoo.so
+              /opt/lib/libbar.a
+              /lib/libsystem.so
+        style: secondary
+        start: 22
+        end: 103
+  ? |
+    target_link_libraries(mylib PRIVATE
+        /usr/lib/libfoo.so
+        /opt/lib/libbar.a
+    )
+  : labels:
+      - source: |-
+          target_link_libraries(mylib PRIVATE
+              /usr/lib/libfoo.so
+              /opt/lib/libbar.a
+          )
+        style: primary
+        start: 0
+        end: 82
+      - source: |
+          mylib PRIVATE
+              /usr/lib/libfoo.so
+              /opt/lib/libbar.a
+        style: secondary
+        start: 22
+        end: 81
+  target_link_libraries(mylib PRIVATE "C:/Program Files/MyLib/lib/mylib.lib"):
+    labels:
+      - source: target_link_libraries(mylib PRIVATE "C:/Program Files/MyLib/lib/mylib.lib")
+        style: primary
+        start: 0
+        end: 75
+      - source: mylib PRIVATE "C:/Program Files/MyLib/lib/mylib.lib"
+        style: secondary
+        start: 22
+        end: 74
+  target_link_libraries(mylib PRIVATE "C:\\Windows\\System32\\kernel32.lib"):
+    labels:
+      - source: target_link_libraries(mylib PRIVATE "C:\\Windows\\System32\\kernel32.lib")
+        style: primary
+        start: 0
+        end: 74
+      - source: mylib PRIVATE "C:\\Windows\\System32\\kernel32.lib"
+        style: secondary
+        start: 22
+        end: 73
+  target_link_libraries(mylib PRIVATE "D:\\libs\\foo.lib"):
+    labels:
+      - source: target_link_libraries(mylib PRIVATE "D:\\libs\\foo.lib")
+        style: primary
+        start: 0
+        end: 56
+      - source: mylib PRIVATE "D:\\libs\\foo.lib"
+        style: secondary
+        start: 22
+        end: 55
+  target_link_libraries(mylib PRIVATE /lib/x86_64-linux-gnu/libm.so.6):
+    labels:
+      - source: target_link_libraries(mylib PRIVATE /lib/x86_64-linux-gnu/libm.so.6)
+        style: primary
+        start: 0
+        end: 68
+      - source: mylib PRIVATE /lib/x86_64-linux-gnu/libm.so.6
+        style: secondary
+        start: 22
+        end: 67
+  target_link_libraries(mylib PRIVATE /opt/local/lib/libbar.a):
+    labels:
+      - source: target_link_libraries(mylib PRIVATE /opt/local/lib/libbar.a)
+        style: primary
+        start: 0
+        end: 60
+      - source: mylib PRIVATE /opt/local/lib/libbar.a
+        style: secondary
+        start: 22
+        end: 59
+  target_link_libraries(mylib PRIVATE /usr/lib/libfoo.so):
+    labels:
+      - source: target_link_libraries(mylib PRIVATE /usr/lib/libfoo.so)
+        style: primary
+        start: 0
+        end: 55
+      - source: mylib PRIVATE /usr/lib/libfoo.so
+        style: secondary
+        start: 22
+        end: 54

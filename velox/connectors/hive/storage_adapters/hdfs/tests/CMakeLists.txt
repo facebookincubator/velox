@@ -18,16 +18,17 @@ add_executable(velox_hdfs_file_test HdfsFileSystemTest.cpp HdfsMiniCluster.cpp
 add_test(velox_hdfs_file_test velox_hdfs_file_test)
 target_link_libraries(
   velox_hdfs_file_test
-  velox_file
-  velox_hdfs
-  velox_core
-  velox_exec_test_lib
-  velox_hive_connector
-  velox_dwio_common_exception
-  velox_exec
-  GTest::gtest
-  GTest::gtest_main
-  GTest::gmock)
+  PRIVATE
+    velox_file
+    velox_hdfs
+    velox_core
+    velox_exec_test_lib
+    velox_hive_connector
+    velox_dwio_common_exception
+    velox_exec
+    GTest::gtest
+    GTest::gtest_main
+    GTest::gmock)
 
 target_compile_options(velox_hdfs_file_test
                        PRIVATE -Wno-deprecated-declarations)
@@ -39,11 +40,12 @@ add_test(velox_hdfs_insert_test velox_hdfs_insert_test)
 
 target_link_libraries(
   velox_hdfs_insert_test
-  velox_exec_test_lib
-  velox_exec
-  GTest::gtest
-  GTest::gtest_main
-  GTest::gmock)
+  PRIVATE
+    velox_exec_test_lib
+    velox_exec
+    GTest::gtest
+    GTest::gtest_main
+    GTest::gmock)
 
 target_compile_options(velox_hdfs_insert_test
                        PRIVATE -Wno-deprecated-declarations)

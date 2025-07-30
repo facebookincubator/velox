@@ -28,6 +28,7 @@ velox_resolve_dependency_url(GRPC)
 
 message(STATUS "Building gRPC from source")
 
+block(SCOPE_FOR VARIABLES)
 FetchContent_Declare(
   gRPC
   URL ${VELOX_GRPC_SOURCE_URL}
@@ -59,6 +60,8 @@ set(gRPC_INSTALL
     ON
     CACHE BOOL "Generate installation target")
 FetchContent_MakeAvailable(gRPC)
+endblock()
+
 add_library(gRPC::grpc ALIAS grpc)
 add_library(gRPC::grpc++ ALIAS grpc++)
 add_executable(gRPC::grpc_cpp_plugin ALIAS grpc_cpp_plugin)

@@ -40,13 +40,13 @@ velox_add_library(
 
 velox_link_libraries(
   velox_type
-  velox_type_tz
-  velox_common_base
-  velox_encode
-  velox_exception
-  velox_serialization
-  velox_external_date
-  velox_status
-  Boost::headers
-  Folly::folly
-  re2::re2)
+  PUBLIC velox_type_tz
+         velox_common_base
+         velox_encode
+         velox_exception
+         velox_serialization
+         velox_external_date
+         velox_status
+         Boost::headers
+         Folly::folly
+         re2::re2)

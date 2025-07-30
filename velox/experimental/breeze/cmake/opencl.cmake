@@ -46,7 +46,7 @@ function(breeze_add_opencl_test target source shaderlib)
                                               SHADER_LIB=\"${shaderlib}\")
   target_compile_options(${target} PRIVATE ${WARN_FLAGS} ${OPT_FLAGS}
                                            ${SANITIZE_COMPILE_FLAGS})
-  target_link_libraries(${target} gtest -lOpenCL test_main)
+  target_link_libraries(${target} PUBLIC gtest -lOpenCL test_main)
   target_link_options(
     ${target}
     PRIVATE

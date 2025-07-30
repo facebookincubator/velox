@@ -33,11 +33,12 @@ add_test(velox_presto_types_test velox_presto_types_test)
 
 target_link_libraries(
   velox_presto_types_test
-  velox_presto_types
-  velox_type_parser
-  Folly::folly
-  GTest::gtest
-  GTest::gtest_main
-  GTest::gmock
-  gflags::gflags
-  glog::glog)
+  PRIVATE
+    velox_presto_types
+    velox_type_parser
+    Folly::folly
+    GTest::gtest
+    GTest::gtest_main
+    GTest::gmock
+    gflags::gflags
+    glog::glog)

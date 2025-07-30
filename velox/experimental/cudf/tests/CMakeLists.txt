@@ -80,86 +80,94 @@ set_tests_properties(velox_cudf_limit_test PROPERTIES LABELS cuda_driver
 
 target_link_libraries(
   velox_cudf_hash_join_test
-  velox_cudf_exec
-  velox_exec
-  velox_exec_test_lib
-  velox_test_util
-  velox_vector_fuzzer
-  gtest
-  gtest_main
-  Folly::folly
-  fmt::fmt)
+  PRIVATE
+    velox_cudf_exec
+    velox_exec
+    velox_exec_test_lib
+    velox_test_util
+    velox_vector_fuzzer
+    gtest
+    gtest_main
+    Folly::folly
+    fmt::fmt)
 
 target_link_libraries(
   velox_cudf_order_by_test
-  velox_cudf_exec
-  velox_exec
-  velox_exec_test_lib
-  velox_test_util
-  gtest
-  gtest_main
-  fmt::fmt)
+  PRIVATE
+    velox_cudf_exec
+    velox_exec
+    velox_exec_test_lib
+    velox_test_util
+    gtest
+    gtest_main
+    fmt::fmt)
 
 target_link_libraries(
   velox_cudf_aggregation_test
-  velox_cudf_exec
-  velox_exec
-  velox_exec_test_lib
-  velox_test_util
-  velox_vector_fuzzer
-  gtest
-  gtest_main
-  fmt::fmt)
+  PRIVATE
+    velox_cudf_exec
+    velox_exec
+    velox_exec_test_lib
+    velox_test_util
+    velox_vector_fuzzer
+    gtest
+    gtest_main
+    fmt::fmt)
 
 target_link_libraries(
   velox_cudf_local_partition_test
-  velox_cudf_exec
-  velox_exec
-  velox_exec_test_lib
-  velox_test_util
-  gtest
-  gtest_main
-  fmt::fmt)
+  PRIVATE
+    velox_cudf_exec
+    velox_exec
+    velox_exec_test_lib
+    velox_test_util
+    gtest
+    gtest_main
+    fmt::fmt)
 
 target_link_libraries(
   velox_cudf_table_scan_test
-  velox_cudf_exec_test_lib
-  velox_cudf_parquet_connector
-  velox_exec
-  velox_exec_test_lib
-  velox_test_util
-  gtest
-  gtest_main
-  fmt::fmt)
+  PRIVATE
+    velox_cudf_exec_test_lib
+    velox_cudf_parquet_connector
+    velox_exec
+    velox_exec_test_lib
+    velox_test_util
+    gtest
+    gtest_main
+    fmt::fmt)
 
 target_link_libraries(
   velox_cudf_table_write_test
-  velox_cudf_exec_test_lib
-  velox_cudf_parquet_connector
-  velox_exec
-  velox_exec_test_lib
-  velox_test_util
-  gtest
-  gtest_main
-  fmt::fmt)
+  PRIVATE
+    velox_cudf_exec_test_lib
+    velox_cudf_parquet_connector
+    velox_exec
+    velox_exec_test_lib
+    velox_test_util
+    gtest
+    gtest_main
+    fmt::fmt)
 
 target_link_libraries(
   velox_cudf_filter_project_test
-  velox_cudf_exec
-  velox_exec
-  velox_exec_test_lib
-  velox_test_util
-  gtest
-  gtest_main)
+  PRIVATE
+    velox_cudf_exec
+    velox_exec
+    velox_exec_test_lib
+    velox_test_util
+    gtest
+    gtest_main)
 
 target_link_libraries(
   velox_cudf_limit_test
-  velox_cudf_exec
-  velox_exec
-  velox_exec_test_lib
-  velox_test_util
-  gtest
-  gtest_main)
+  PRIVATE
+    velox_cudf_exec
+    velox_exec
+    velox_exec_test_lib
+    velox_test_util
+    gtest
+    gtest_main)
 
 add_subdirectory(utils)
 

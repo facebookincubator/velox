@@ -18,21 +18,22 @@ add_test(veloxwave_vector_test velox_wave_vector_test)
 
 target_link_libraries(
   velox_wave_vector_test
-  velox_wave_vector
-  velox_type
-  velox_vector
-  Boost::atomic
-  Boost::context
-  Boost::date_time
-  Boost::filesystem
-  Boost::program_options
-  Boost::regex
-  Boost::thread
-  Boost::system
-  GTest::gtest
-  GTest::gtest_main
-  GTest::gmock
-  Folly::folly
-  gflags::gflags
-  glog::glog
-  fmt::fmt)
+  PRIVATE
+    velox_wave_vector
+    velox_type
+    velox_vector
+    Boost::atomic
+    Boost::context
+    Boost::date_time
+    Boost::filesystem
+    Boost::program_options
+    Boost::regex
+    Boost::thread
+    Boost::system
+    GTest::gtest
+    GTest::gtest_main
+    GTest::gmock
+    Folly::folly
+    gflags::gflags
+    glog::glog
+    fmt::fmt)

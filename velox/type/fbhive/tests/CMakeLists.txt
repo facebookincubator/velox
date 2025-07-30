@@ -21,11 +21,12 @@ add_test(
 
 target_link_libraries(
   velox_type_fbhive_test
-  velox_type_fbhive
-  velox_type
-  GTest::gtest
-  GTest::gtest_main
-  GTest::gmock)
+  PRIVATE
+    velox_type_fbhive
+    velox_type
+    GTest::gtest
+    GTest::gtest_main
+    GTest::gmock)
 
 add_executable(velox_type_serializer_fbhive_test HiveTypeSerializerTests.cpp)
 
@@ -36,8 +37,9 @@ add_test(
 
 target_link_libraries(
   velox_type_serializer_fbhive_test
-  velox_type_fbhive
-  velox_type
-  GTest::gtest
-  GTest::gtest_main
-  GTest::gmock)
+  PRIVATE
+    velox_type_fbhive
+    velox_type
+    GTest::gtest
+    GTest::gtest_main
+    GTest::gmock)

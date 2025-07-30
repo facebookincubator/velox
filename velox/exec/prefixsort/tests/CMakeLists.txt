@@ -24,5 +24,6 @@ add_test(
 set_tests_properties(velox_exec_prefixsort_test PROPERTIES TIMEOUT 3000)
 
 target_link_libraries(
-  velox_exec_prefixsort_test velox_exec_prefixsort_test_lib velox_vector_fuzzer
-  velox_vector_test_lib)
+  velox_exec_prefixsort_test
+  PRIVATE velox_exec_prefixsort_test_lib velox_vector_fuzzer
+          velox_vector_test_lib)

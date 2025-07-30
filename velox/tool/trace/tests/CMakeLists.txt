@@ -33,15 +33,16 @@ set_tests_properties(velox_tool_trace_test PROPERTIES TIMEOUT 3000)
 
 target_link_libraries(
   velox_tool_trace_test
-  velox_exec
-  velox_exec_test_lib
-  velox_memory
-  velox_query_trace_replayer_base
-  velox_trace_file_tool_base
-  velox_vector_fuzzer
-  GTest::gtest_main
-  GTest::gmock
-  Folly::folly
-  gflags::gflags
-  glog::glog
-  fmt::fmt)
+  PRIVATE
+    velox_exec
+    velox_exec_test_lib
+    velox_memory
+    velox_query_trace_replayer_base
+    velox_trace_file_tool_base
+    velox_vector_fuzzer
+    GTest::gtest_main
+    GTest::gmock
+    Folly::folly
+    gflags::gflags
+    glog::glog
+    fmt::fmt)

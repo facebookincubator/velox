@@ -25,6 +25,7 @@ velox_resolve_dependency_url(ABSL)
 
 message(STATUS "Building Abseil from source")
 
+block(SCOPE_FOR VARIABLES)
 FetchContent_Declare(
   absl
   URL ${VELOX_ABSL_SOURCE_URL}
@@ -36,3 +37,4 @@ set(ABSL_BUILD_TESTING OFF)
 set(ABSL_PROPAGATE_CXX_STD ON)
 set(ABSL_ENABLE_INSTALL ON)
 FetchContent_MakeAvailable(absl)
+endblock()

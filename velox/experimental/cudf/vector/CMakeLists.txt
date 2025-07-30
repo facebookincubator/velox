@@ -20,7 +20,4 @@ set_target_properties(
 
 target_link_libraries(
   velox_cudf_vector
-  cudf::cudf
-  velox_exception
-  velox_common_base
-  velox_vector)
+  PUBLIC cudf::cudf velox_exception velox_common_base velox_vector)

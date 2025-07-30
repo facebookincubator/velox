@@ -14,16 +14,17 @@
 
 add_library(velox_wave_mock_file FileFormat.cpp)
 target_link_libraries(
-  velox_wave_mock_file velox_exception velox_common_base velox_vector)
+  velox_wave_mock_file
+  PUBLIC velox_exception velox_common_base velox_vector)
 
 add_library(velox_wave_mock_reader WaveTestSplitReader.cpp TestFormatReader.cpp)
 
 target_link_libraries(
   velox_wave_mock_reader
-  velox_wave_exec
-  velox_wave_mock_file
-  velox_wave_dwio
-  velox_wave_decode
-  velox_exception
-  velox_common_base
-  velox_vector)
+  PUBLIC velox_wave_exec
+         velox_wave_mock_file
+         velox_wave_dwio
+         velox_wave_decode
+         velox_exception
+         velox_common_base
+         velox_vector)

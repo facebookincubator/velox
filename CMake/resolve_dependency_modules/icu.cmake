@@ -26,6 +26,7 @@ velox_resolve_dependency_url(ICU4C)
 
 message(STATUS "Building ICU4C from source")
 
+block(SCOPE_FOR VARIABLES)
 ProcessorCount(NUM_JOBS)
 velox_set_with_default(NUM_JOBS NUM_THREADS ${NUM_JOBS})
 find_program(MAKE_PROGRAM make REQUIRED)
@@ -85,8 +86,9 @@ foreach(component ${icu_components})
     ICU::${component}
     PROPERTIES IMPORTED_LOCATION ${ICU_${component}_LIBRARY}
                INTERFACE_SYSTEM_INCLUDE_DIRECTORIES ${ICU_INCLUDE_DIRS})
-  target_link_libraries(ICU::ICU INTERFACE ICU::${component})
+  target_link_libraries(ICU::ICU INTERFACE ICU::${component}) # ast-grep-ignore
 endforeach()
+endblock()
 
 # We have to keep the FindICU.cmake in a subfolder to prevent it from overriding
 # the system provided one when ICU_SOURCE=SYSTEM

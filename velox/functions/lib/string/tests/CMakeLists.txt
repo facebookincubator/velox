@@ -17,9 +17,10 @@ add_test(velox_functions_string_test velox_functions_string_test)
 
 target_link_libraries(
   velox_functions_string_test
-  velox_functions_string
-  Folly::folly
-  GTest::gtest
-  GTest::gtest_main
-  gflags::gflags
-  glog::glog)
+  PRIVATE
+    velox_functions_string
+    Folly::folly
+    GTest::gtest
+    GTest::gtest_main
+    gflags::gflags
+    glog::glog)

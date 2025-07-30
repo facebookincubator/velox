@@ -19,7 +19,5 @@ add_test(velox_functions_prestosql_aggregates_sfm_test
 
 target_link_libraries(
   velox_functions_prestosql_aggregates_sfm_test
-  velox_functions_prestosql_aggregates_sfm
-  velox_memory
-  GTest::gtest
-  GTest::gtest_main)
+  PRIVATE velox_functions_prestosql_aggregates_sfm velox_memory GTest::gtest
+          GTest::gtest_main)

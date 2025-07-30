@@ -22,5 +22,5 @@ target_link_libraries(
 add_executable(velox_functions_remote_server_main RemoteFunctionServiceMain.cpp)
 
 target_link_libraries(
-  velox_functions_remote_server_main velox_functions_remote_server
-  velox_functions_prestosql)
+  velox_functions_remote_server_main
+  PUBLIC velox_functions_remote_server velox_functions_prestosql)

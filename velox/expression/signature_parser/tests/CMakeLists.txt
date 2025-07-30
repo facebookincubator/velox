@@ -18,8 +18,9 @@ add_test(NAME velox_signature_parser_test COMMAND velox_signature_parser_test)
 
 target_link_libraries(
   velox_signature_parser_test
-  velox_signature_parser
-  velox_type_signature
-  GTest::gtest
-  GTest::gtest_main
-  GTest::gmock)
+  PRIVATE
+    velox_signature_parser
+    velox_type_signature
+    GTest::gtest
+    GTest::gtest_main
+    GTest::gmock)

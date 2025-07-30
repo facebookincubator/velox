@@ -18,4 +18,5 @@ add_library(velox_wave_dwio ColumnReader.cpp FormatData.cpp ReadStream.cpp
                             StructColumnReader.cpp)
 
 target_link_libraries(
-  velox_wave_dwio Folly::folly fmt::fmt xsimd)
+  velox_wave_dwio
+  PUBLIC Folly::folly fmt::fmt xsimd)

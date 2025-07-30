@@ -102,30 +102,30 @@ velox_add_library(
 
 velox_link_libraries(
   velox_exec
-  velox_file
-  velox_core
-  velox_vector
-  velox_connector
-  velox_expression
-  velox_time
-  velox_common_base
-  velox_test_util
-  velox_arrow_bridge
-  velox_common_compression)
+  PUBLIC velox_file
+         velox_core
+         velox_vector
+         velox_connector
+         velox_expression
+         velox_time
+         velox_common_base
+         velox_test_util
+         velox_arrow_bridge
+         velox_common_compression)
 
 velox_add_library(velox_cursor Cursor.cpp)
 velox_link_libraries(
   velox_cursor
-  velox_core
-  velox_exception
-  velox_expression
-  velox_dwio_common
-  velox_dwio_dwrf_reader
-  velox_dwio_dwrf_writer
-  velox_type_fbhive
-  velox_presto_serializer
-  velox_functions_prestosql
-  velox_aggregates)
+  PUBLIC velox_core
+         velox_exception
+         velox_expression
+         velox_dwio_common
+         velox_dwio_dwrf_reader
+         velox_dwio_dwrf_writer
+         velox_type_fbhive
+         velox_presto_serializer
+         velox_functions_prestosql
+         velox_aggregates)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(fuzzer)

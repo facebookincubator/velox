@@ -14,4 +14,5 @@
 
 add_library(velox_wave_vector WaveVector.cpp)
 target_link_libraries(
-  velox_wave_vector velox_vector velox_common_base)
+  velox_wave_vector
+  PUBLIC velox_vector velox_common_base)

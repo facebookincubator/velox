@@ -15,46 +15,49 @@ add_executable(velox_aggregates_simple_aggregates_bm SimpleAggregates.cpp)
 
 target_link_libraries(
   velox_aggregates_simple_aggregates_bm
-  velox_aggregates
-  velox_hive_connector
-  velox_functions_lib
-  velox_exec_test_lib
-  velox_functions_prestosql
-  velox_dwio_common_exception
-  velox_vector_fuzzer
-  velox_vector_test_lib
-  Folly::folly
-  Folly::follybenchmark
-  gflags::gflags)
+  PRIVATE
+    velox_aggregates
+    velox_hive_connector
+    velox_functions_lib
+    velox_exec_test_lib
+    velox_functions_prestosql
+    velox_dwio_common_exception
+    velox_vector_fuzzer
+    velox_vector_test_lib
+    Folly::folly
+    Folly::follybenchmark
+    gflags::gflags)
 
 add_executable(velox_aggregates_string_keys_bm TwoStringKeys.cpp)
 
 target_link_libraries(
   velox_aggregates_string_keys_bm
-  velox_aggregates
-  velox_hive_connector
-  velox_functions_lib
-  velox_exec_test_lib
-  velox_functions_prestosql
-  velox_dwio_common_exception
-  velox_vector_fuzzer
-  velox_vector_test_lib
-  Folly::folly
-  Folly::follybenchmark
-  gflags::gflags)
+  PRIVATE
+    velox_aggregates
+    velox_hive_connector
+    velox_functions_lib
+    velox_exec_test_lib
+    velox_functions_prestosql
+    velox_dwio_common_exception
+    velox_vector_fuzzer
+    velox_vector_test_lib
+    Folly::folly
+    Folly::follybenchmark
+    gflags::gflags)
 
 add_executable(velox_aggregates_reduce_agg_bm ReduceAgg.cpp)
 
 target_link_libraries(
   velox_aggregates_reduce_agg_bm
-  velox_aggregates
-  velox_hive_connector
-  velox_functions_lib
-  velox_exec_test_lib
-  velox_functions_prestosql
-  velox_dwio_common_exception
-  velox_vector_fuzzer
-  velox_vector_test_lib
-  Folly::folly
-  Folly::follybenchmark
-  gflags::gflags)
+  PRIVATE
+    velox_aggregates
+    velox_hive_connector
+    velox_functions_lib
+    velox_exec_test_lib
+    velox_functions_prestosql
+    velox_dwio_common_exception
+    velox_vector_fuzzer
+    velox_vector_test_lib
+    Folly::folly
+    Folly::follybenchmark
+    gflags::gflags)

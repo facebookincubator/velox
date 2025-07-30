@@ -19,8 +19,8 @@ velox_add_library(
   SIMDJsonExtractor.cpp
   SIMDJsonUtil.cpp)
 
-velox_link_libraries(velox_functions_json velox_functions_lib
-                     simdjson::simdjson)
+velox_link_libraries(velox_functions_json PUBLIC velox_functions_lib
+                                                 simdjson::simdjson)
 
 velox_compile_definitions(velox_functions_json
                           PRIVATE SIMDJSON_EXPERIMENTAL_ALLOW_INCOMPLETE_JSON)

@@ -1,0 +1,139 @@
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+id: variable-instead-of-targets
+valid:
+  # Good practices that should NOT trigger the rule
+  - |
+    add_library(math_utils src/math.cpp)
+    add_library(string_utils src/string.cpp)
+
+    add_executable(myapp src/main.cpp)
+    target_link_libraries(myapp PRIVATE math_utils string_utils)
+  - |
+    # Direct target names are preferred
+    target_link_libraries(myapp
+        PRIVATE
+        target1
+        target2
+        target3
+    )
+  # These are now considered valid - find_library results with _LIBRARY/_LIBRARIES suffix
+  - |
+    find_library(MATH_LIBRARY math)
+    target_link_libraries(myapp PRIVATE ${MATH_LIBRARY})
+  - |
+    find_library(STRING_LIBRARIES string)
+    target_link_libraries(myapp PRIVATE ${STRING_LIBRARIES})
+  # Path variables are now considered valid
+  - |
+    target_link_libraries(myapp PRIVATE ${CMAKE_BINARY_DIR}/lib/libfoo.a)
+  - |
+    target_link_libraries(myapp PRIVATE ${CMAKE_SOURCE_DIR}/external/lib.a)
+  - |
+    target_link_libraries(myapp PRIVATE ${PROJECT_BINARY_DIR}/lib/custom.so)
+  - |
+    target_link_libraries(myapp PRIVATE /usr/lib/${ARCH}/libsomething.so)
+  # Generator expressions are valid - they should not trigger the rule
+  - |
+    target_link_libraries(
+      test_main
+      PUBLIC gtest $<$<BOOL:${BUILD_TRACING}>:perfetto>)
+  - |
+    target_link_libraries(myapp PRIVATE $<$<CONFIG:Debug>:debug_lib>)
+  - |
+    target_link_libraries(myapp PUBLIC $<TARGET_NAME:some_target>)
+  - |
+    target_link_libraries(myapp INTERFACE $<$<PLATFORM_ID:Windows>:ws2_32>)
+  - |
+    target_link_libraries(myapp PRIVATE regular_target $<$<BOOL:${USE_FEATURE}>:feature_lib>)
+
+  # add_dependencies with direct target names - should NOT trigger the rule
+  - |
+    add_dependencies(myapp dependency1 dependency2)
+  - |
+    add_dependencies(main_target build_step test_step)
+  - |
+    add_dependencies(executable
+        library1
+        library2
+        custom_target)
+
+  # set_target_properties with direct target names - should NOT trigger the rule
+  - |
+    set_target_properties(my_target PROPERTIES OUTPUT_NAME "renamed")
+  - |
+    set_target_properties(library1 library2 PROPERTIES CXX_STANDARD 17)
+  - |
+    set_target_properties(target1 target2 target3
+        PROPERTIES
+        POSITION_INDEPENDENT_CODE ON
+        CXX_VISIBILITY_PRESET hidden)
+
+  # Commands with CMAKE/PROJECT variables should NOT trigger (same exclusions apply)
+  - |
+    add_dependencies(myapp ${CMAKE_BINARY_DIR}/custom_target)
+  - |
+    set_target_properties(${CMAKE_PROJECT_NAME} PROPERTIES VERSION 1.0)
+invalid:
+  # target_link_libraries - these should trigger the rule - using variables instead of targets
+  - |
+    set(MATH_LIB math_utils)
+    target_link_libraries(myapp PRIVATE ${MATH_LIB})
+  - |
+    set(STRING_LIB string_utils)
+    target_link_libraries(myapp PUBLIC ${STRING_LIB})
+  - |
+    set(ALL_LIBS math_utils string_utils)
+    target_link_libraries(myapp INTERFACE ${ALL_LIBS})
+  - |
+    set(MYLIB some_target)
+    target_link_libraries(myapp ${MYLIB})
+  - |
+    set(MATH_LIB math_utils)
+    set(STRING_LIB string_utils)
+    set(ALL_LIBS ${MATH_LIB} ${STRING_LIB})
+
+    add_executable(myapp src/main.cpp)
+    target_link_libraries(myapp PRIVATE ${ALL_LIBS})
+  - |
+    set(TARGET_NAME my_target)
+    target_link_libraries(myapp PRIVATE ${TARGET_NAME})
+  # Variables ending in _LIB (without _LIBRARY suffix) are still flagged
+  - |
+    find_library(FOO_LIB foo PATHS /usr/local/lib)
+    target_link_libraries(myapp PRIVATE ${FOO_LIB})
+
+  # add_dependencies - using variables instead of target dependencies
+  - |
+    set(DEP_TARGET my_dependency)
+    add_dependencies(myapp ${DEP_TARGET})
+  - |
+    set(MULTIPLE_DEPS dep1 dep2 dep3)
+    add_dependencies(myapp ${MULTIPLE_DEPS})
+  - |
+    set(BUILD_DEP build_target)
+    set(TEST_DEP test_target)
+    add_dependencies(myapp ${BUILD_DEP} ${TEST_DEP})
+
+  # set_target_properties - using variables for target names
+  - |
+    set(TARGET_NAME my_target)
+    set_target_properties(${TARGET_NAME} PROPERTIES OUTPUT_NAME "renamed")
+  - |
+    set(LIB1 library1)
+    set(LIB2 library2)
+    set_target_properties(${LIB1} ${LIB2} PROPERTIES CXX_STANDARD 17)
+  - |
+    set(ALL_TARGETS target1 target2 target3)
+    set_target_properties(${ALL_TARGETS} PROPERTIES POSITION_INDEPENDENT_CODE ON)

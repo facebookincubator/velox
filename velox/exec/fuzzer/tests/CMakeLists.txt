@@ -16,4 +16,5 @@ add_executable(presto_sql_test PrestoSqlTest.cpp)
 add_test(presto_sql_test presto_sql_test)
 
 target_link_libraries(
-  presto_sql_test velox_fuzzer_util velox_presto_types)
+  presto_sql_test
+  PRIVATE velox_fuzzer_util velox_presto_types)

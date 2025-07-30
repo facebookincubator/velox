@@ -36,16 +36,17 @@ add_test(velox_functions_spark_aggregates_test
 
 target_link_libraries(
   velox_functions_spark_aggregates_test
-  velox_exec_test_lib
-  velox_vector_test_lib
-  velox_functions_aggregates_test_lib
-  velox_functions_spark
-  velox_functions_spark_aggregates
-  velox_hive_connector
-  velox_vector_fuzzer
-  gflags::gflags
-  GTest::gtest
-  GTest::gtest_main)
+  PRIVATE
+    velox_exec_test_lib
+    velox_vector_test_lib
+    velox_functions_aggregates_test_lib
+    velox_functions_spark
+    velox_functions_spark_aggregates
+    velox_hive_connector
+    velox_vector_fuzzer
+    gflags::gflags
+    GTest::gtest
+    GTest::gtest_main)
 
 add_executable(velox_spark_aggregate_function_registry_test
                AggregateRegisterTest.cpp)
@@ -54,5 +55,5 @@ add_test(velox_spark_aggregate_function_registry_test
          velox_spark_aggregate_function_registry_test)
 
 target_link_libraries(
-  velox_spark_aggregate_function_registry_test velox_functions_spark_aggregates
-  GTest::gtest GTest::gtest_main)
+  velox_spark_aggregate_function_registry_test
+  PRIVATE velox_functions_spark_aggregates GTest::gtest GTest::gtest_main)

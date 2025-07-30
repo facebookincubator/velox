@@ -34,9 +34,10 @@ if(VELOX_SKIP_WAVE_BRANCH_KERNEL_TEST)
 endif()
 target_link_libraries(
   velox_wave_common_test
-  velox_wave_common
-  xsimd
-  GTest::gtest
-  GTest::gtest_main
-  CUDA::cudart
-  breeze_cuda)
+  PRIVATE
+    velox_wave_common
+    xsimd
+    GTest::gtest
+    GTest::gtest_main
+    CUDA::cudart
+    breeze_cuda)

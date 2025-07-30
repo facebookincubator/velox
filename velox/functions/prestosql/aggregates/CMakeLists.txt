@@ -59,17 +59,17 @@ velox_add_library(
 
 velox_link_libraries(
   velox_aggregates
-  velox_common_hyperloglog
-  velox_exec
-  velox_expression
-  velox_presto_serializer
-  velox_presto_types
-  velox_functions_aggregates
-  velox_functions_lib
-  velox_functions_util
-  velox_presto_types
-  velox_functions_prestosql_aggregates_sfm
-  Folly::folly)
+  PUBLIC velox_common_hyperloglog
+         velox_exec
+         velox_expression
+         velox_presto_serializer
+         velox_presto_types
+         velox_functions_aggregates
+         velox_functions_lib
+         velox_functions_util
+         velox_presto_types
+         velox_functions_prestosql_aggregates_sfm
+         Folly::folly)
 
 add_subdirectory(sfm)
 

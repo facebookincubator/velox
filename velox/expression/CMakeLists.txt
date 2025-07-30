@@ -14,17 +14,14 @@
 
 velox_add_library(velox_type_signature OBJECT TypeSignature.cpp)
 
-velox_link_libraries(velox_type_signature velox_common_base)
+velox_link_libraries(velox_type_signature PUBLIC velox_common_base)
 
 velox_add_library(velox_expression_functions FunctionSignature.cpp
                   SignatureBinder.cpp ReverseSignatureBinder.cpp)
 
 velox_link_libraries(
-  velox_expression_functions
-  velox_common_base
-  velox_type_calculation
-  velox_type_signature
-  velox_signature_parser)
+  velox_expression_functions PUBLIC velox_common_base velox_type_calculation
+                                    velox_type_signature velox_signature_parser)
 
 velox_add_library(
   velox_expression
@@ -54,14 +51,14 @@ velox_add_library(
 
 velox_link_libraries(
   velox_expression
-  velox_core
-  velox_vector
-  velox_common_base
-  velox_expression_functions
-  velox_functions_util
-  velox_type_tz
-  double-conversion::double-conversion
-  Folly::folly)
+  PUBLIC velox_core
+         velox_vector
+         velox_common_base
+         velox_expression_functions
+         velox_functions_util
+         velox_type_tz
+         double-conversion::double-conversion
+         Folly::folly)
 
 add_subdirectory(type_calculation)
 add_subdirectory(signature_parser)

@@ -1,0 +1,105 @@
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+id: cmake-minimum-version-error
+snapshots:
+  ? |-
+    # Multiple version specifications (first one triggers)
+    cmake_minimum_required(VERSION 3.5)
+    cmake_minimum_required(VERSION 3.15)
+  : labels:
+      - source: cmake_minimum_required(VERSION 3.5)
+        style: primary
+        start: 55
+        end: 90
+  ? |
+    # Multiple version specifications (first one triggers)
+    cmake_minimum_required(VERSION 3.5)
+    cmake_minimum_required(VERSION 3.15)
+  : labels:
+      - source: cmake_minimum_required(VERSION 3.5)
+        style: primary
+        start: 55
+        end: 90
+      - source: VERSION 3.5
+        style: secondary
+        start: 78
+        end: 89
+  ? |
+    # Project with old minimum version
+    cmake_minimum_required(VERSION 2.6)
+    project(OldProject)
+  : labels:
+      - source: cmake_minimum_required(VERSION 2.6)
+        style: primary
+        start: 35
+        end: 70
+      - source: VERSION 2.6
+        style: secondary
+        start: 58
+        end: 69
+  ? |
+    cmake_minimum_required(VERSION 2.8)
+  : labels:
+      - source: cmake_minimum_required(VERSION 2.8)
+        style: primary
+        start: 0
+        end: 35
+      - source: VERSION 2.8
+        style: secondary
+        start: 23
+        end: 34
+  ? |
+    cmake_minimum_required(VERSION 2.8.12)
+  : labels:
+      - source: cmake_minimum_required(VERSION 2.8.12)
+        style: primary
+        start: 0
+        end: 38
+      - source: VERSION 2.8.12
+        style: secondary
+        start: 23
+        end: 37
+  ? |
+    cmake_minimum_required(VERSION 3.0)
+  : labels:
+      - source: cmake_minimum_required(VERSION 3.0)
+        style: primary
+        start: 0
+        end: 35
+      - source: VERSION 3.0
+        style: secondary
+        start: 23
+        end: 34
+  ? |
+    cmake_minimum_required(VERSION 3.5)
+  : labels:
+      - source: cmake_minimum_required(VERSION 3.5)
+        style: primary
+        start: 0
+        end: 35
+      - source: VERSION 3.5
+        style: secondary
+        start: 23
+        end: 34
+  ? |
+    cmake_minimum_required(VERSION 3.9)
+  : labels:
+      - source: cmake_minimum_required(VERSION 3.9)
+        style: primary
+        start: 0
+        end: 35
+      - source: VERSION 3.9
+        style: secondary
+        start: 23
+        end: 34

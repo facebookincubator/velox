@@ -78,15 +78,16 @@ add_test(velox_functions_spark_test velox_functions_spark_test)
 
 target_link_libraries(
   velox_functions_spark_test
-  velox_functions_spark
-  velox_functions_test_lib
-  velox_exec_test_lib
-  velox_expression_fuzzer_test_utility
-  velox_expression_fuzzer
-  fmt::fmt
-  GTest::gtest
-  GTest::gtest_main
-  GTest::gmock)
+  PRIVATE
+    velox_functions_spark
+    velox_functions_test_lib
+    velox_exec_test_lib
+    velox_expression_fuzzer_test_utility
+    velox_expression_fuzzer
+    fmt::fmt
+    GTest::gtest
+    GTest::gtest_main
+    GTest::gmock)
 
 add_executable(velox_spark_function_registry_test RegisterTest.cpp)
 
@@ -94,7 +95,4 @@ add_test(velox_spark_function_registry_test velox_spark_function_registry_test)
 
 target_link_libraries(
   velox_spark_function_registry_test
-  velox_expression
-  velox_functions_spark
-  GTest::gtest
-  GTest::gtest_main)
+  PRIVATE velox_expression velox_functions_spark GTest::gtest GTest::gtest_main)

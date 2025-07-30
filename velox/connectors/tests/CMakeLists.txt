@@ -16,8 +16,9 @@ add_test(velox_connector_test velox_connector_test)
 
 target_link_libraries(
   velox_connector_test
-  velox_connector
-  GTest::gtest
-  GTest::gtest_main
-  glog::glog
-  Folly::folly)
+  PRIVATE
+    velox_connector
+    GTest::gtest
+    GTest::gtest_main
+    glog::glog
+    Folly::folly)

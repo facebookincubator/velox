@@ -1,0 +1,379 @@
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+id: avoid-directory-wide-functions
+snapshots:
+  ? |
+    # BEFORE/AFTER options
+    include_directories(BEFORE include/)
+    include_directories(AFTER external/)
+  : labels:
+      - source: include_directories(BEFORE include/)
+        style: primary
+        start: 23
+        end: 59
+  ? |
+    # Conditional directory-wide options - still should trigger
+    if(MSVC)
+        add_compile_options(/W4)
+    else()
+        add_compile_options(-Wall -Wextra)
+    endif()
+  : labels:
+      - source: add_compile_options(/W4)
+        style: primary
+        start: 73
+        end: 97
+  ? |
+    # Conditional directory-wide options - still should trigger
+    if(UNIX)
+        add_link_options(-pthread)
+    elseif(WIN32)
+        add_link_options(/DEBUG)
+    endif()
+  : labels:
+      - source: add_link_options(-pthread)
+        style: primary
+        start: 73
+        end: 99
+  ? |
+    # MSVC style options
+    add_compile_options(/W4 /O2)
+  : labels:
+      - source: add_compile_options(/W4 /O2)
+        style: primary
+        start: 21
+        end: 49
+  ? |
+    # Mixed usage - still should trigger
+    add_executable(myapp src/main.cpp)
+    add_link_options(-static)
+    target_link_options(myapp PRIVATE -Wl,--strip-all)
+  : labels:
+      - source: add_link_options(-static)
+        style: primary
+        start: 72
+        end: 97
+  ? |
+    # Mixed usage - still should trigger
+    add_library(mylib src/lib.cpp)
+    add_compile_options(-fPIC)
+    target_compile_options(mylib PRIVATE -Wall)
+  : labels:
+      - source: add_compile_options(-fPIC)
+        style: primary
+        start: 68
+        end: 94
+  ? |-
+    # Mixed usage - still should trigger
+    add_library(mylib src/lib.cpp)
+    include_directories(include/)
+    target_include_directories(mylib PRIVATE src/)
+  : labels:
+      - source: include_directories(include/)
+        style: primary
+        start: 68
+        end: 97
+  ? |
+    # Mixed usage - still should trigger
+    add_library(mylib src/lib.cpp)
+    include_directories(include/)
+    target_include_directories(mylib PRIVATE src/)
+  : labels:
+      - source: include_directories(include/)
+        style: primary
+        start: 68
+        end: 97
+  ? |
+    # Mixed usage - this should still trigger
+    add_library(mylib src/lib.cpp)
+    add_definitions(-DGLOBAL_DEF)
+    target_compile_definitions(mylib PRIVATE LOCAL_DEF)
+  : labels:
+      - source: add_definitions(-DGLOBAL_DEF)
+        style: primary
+        start: 73
+        end: 102
+  ? |
+    # Mixed with target definitions - still should trigger
+    add_library(mylib src/lib.cpp)
+    add_compile_definitions(GLOBAL_DEFINE)
+    target_compile_definitions(mylib PRIVATE LOCAL_DEFINE)
+  : labels:
+      - source: add_compile_definitions(GLOBAL_DEFINE)
+        style: primary
+        start: 86
+        end: 124
+  ? |
+    # Multiple definitions
+    add_compile_definitions(DEBUG TESTING VERSION=2.0)
+  : labels:
+      - source: add_compile_definitions(DEBUG TESTING VERSION=2.0)
+        style: primary
+        start: 23
+        end: 73
+  ? |
+    # Multiple definitions
+    add_definitions(-DDEBUG -DVERSION=1.0)
+  : labels:
+      - source: add_definitions(-DDEBUG -DVERSION=1.0)
+        style: primary
+        start: 23
+        end: 61
+  ? |
+    # SYSTEM includes
+    include_directories(SYSTEM /usr/local/include)
+  : labels:
+      - source: include_directories(SYSTEM /usr/local/include)
+        style: primary
+        start: 18
+        end: 64
+  ? |
+    # Using variables
+    set(INC_DIRS include/ src/)
+    include_directories(${INC_DIRS})
+  : labels:
+      - source: include_directories(${INC_DIRS})
+        style: primary
+        start: 46
+        end: 78
+  ? |
+    # Using variables
+    set(LINK_FLAGS -pthread -Wl,--as-needed)
+    add_link_options(${LINK_FLAGS})
+  : labels:
+      - source: add_link_options(${LINK_FLAGS})
+        style: primary
+        start: 59
+        end: 90
+  ? |
+    # Using variables
+    set(MY_DEFS -DFOO -DBAR)
+    add_definitions(${MY_DEFS})
+  : labels:
+      - source: add_definitions(${MY_DEFS})
+        style: primary
+        start: 43
+        end: 70
+  ? |
+    # Using variables
+    set(MY_DEFS DEBUG PROFILE)
+    add_compile_definitions(${MY_DEFS})
+  : labels:
+      - source: add_compile_definitions(${MY_DEFS})
+        style: primary
+        start: 45
+        end: 80
+  ? |
+    # Using variables
+    set(WARNING_FLAGS -Wall -Wextra)
+    add_compile_options(${WARNING_FLAGS})
+  : labels:
+      - source: add_compile_options(${WARNING_FLAGS})
+        style: primary
+        start: 51
+        end: 88
+  ? |
+    # Windows style options
+    add_link_options(/SUBSYSTEM:CONSOLE /DEBUG)
+  : labels:
+      - source: add_link_options(/SUBSYSTEM:CONSOLE /DEBUG)
+        style: primary
+        start: 24
+        end: 67
+  ? |
+    add_compile_definitions(
+        DEBUG_MODE
+        VERSION=1.2.3
+    )
+  : labels:
+      - source: |-
+          add_compile_definitions(
+              DEBUG_MODE
+              VERSION=1.2.3
+          )
+        style: primary
+        start: 0
+        end: 59
+  ? |
+    add_compile_definitions(FOO BAR=value)
+  : labels:
+      - source: add_compile_definitions(FOO BAR=value)
+        style: primary
+        start: 0
+        end: 38
+  add_compile_definitions(FOO):
+    labels:
+      - source: add_compile_definitions(FOO)
+        style: primary
+        start: 0
+        end: 28
+  ? |
+    add_compile_options(
+        -Wall
+        -Wextra
+        -O2
+    )
+  : labels:
+      - source: |-
+          add_compile_options(
+              -Wall
+              -Wextra
+              -O2
+          )
+        style: primary
+        start: 0
+        end: 52
+  ? |
+    add_compile_options(-Wall -Wextra -Wpedantic)
+  : labels:
+      - source: add_compile_options(-Wall -Wextra -Wpedantic)
+        style: primary
+        start: 0
+        end: 45
+  add_compile_options(-Wall):
+    labels:
+      - source: add_compile_options(-Wall)
+        style: primary
+        start: 0
+        end: 26
+  ? |
+    add_definitions(
+        -DFOO
+        -DBAR=value
+    )
+  : labels:
+      - source: |-
+          add_definitions(
+              -DFOO
+              -DBAR=value
+          )
+        style: primary
+        start: 0
+        end: 44
+  ? |
+    add_definitions(-DFOO -DBAR)
+  : labels:
+      - source: add_definitions(-DFOO -DBAR)
+        style: primary
+        start: 0
+        end: 28
+  add_definitions(-DFOO):
+    labels:
+      - source: add_definitions(-DFOO)
+        style: primary
+        start: 0
+        end: 22
+  ? |
+    add_link_options(
+        -pthread
+        -Wl,--as-needed
+        -static-libgcc
+    )
+  : labels:
+      - source: |-
+          add_link_options(
+              -pthread
+              -Wl,--as-needed
+              -static-libgcc
+          )
+        style: primary
+        start: 0
+        end: 71
+  ? |
+    add_link_options(-Wl,--as-needed -Wl,--no-undefined)
+  : labels:
+      - source: add_link_options(-Wl,--as-needed -Wl,--no-undefined)
+        style: primary
+        start: 0
+        end: 52
+  add_link_options(-pthread):
+    labels:
+      - source: add_link_options(-pthread)
+        style: primary
+        start: 0
+        end: 26
+  ? |
+    cmake_minimum_required(VERSION 3.10)
+    project(TestProject)
+    add_compile_options(-std=c++17)
+  : labels:
+      - source: add_compile_options(-std=c++17)
+        style: primary
+        start: 58
+        end: 89
+  ? |
+    cmake_minimum_required(VERSION 3.10)
+    project(TestProject)
+    add_definitions(-DPROJECT_BUILD)
+  : labels:
+      - source: add_definitions(-DPROJECT_BUILD)
+        style: primary
+        start: 58
+        end: 90
+  ? |
+    cmake_minimum_required(VERSION 3.10)
+    project(TestProject)
+    include_directories(include/)
+  : labels:
+      - source: include_directories(include/)
+        style: primary
+        start: 58
+        end: 87
+  ? |
+    cmake_minimum_required(VERSION 3.12)
+    project(TestProject)
+    add_compile_definitions(PROJECT_GLOBAL)
+  : labels:
+      - source: add_compile_definitions(PROJECT_GLOBAL)
+        style: primary
+        start: 58
+        end: 97
+  ? |
+    cmake_minimum_required(VERSION 3.13)
+    project(TestProject)
+    add_link_options(-fPIC)
+  : labels:
+      - source: add_link_options(-fPIC)
+        style: primary
+        start: 58
+        end: 81
+  ? |
+    include_directories(
+        include/
+        external/
+        ${CMAKE_SOURCE_DIR}/third_party/
+    )
+  : labels:
+      - source: |-
+          include_directories(
+              include/
+              external/
+              ${CMAKE_SOURCE_DIR}/third_party/
+          )
+        style: primary
+        start: 0
+        end: 86
+  ? |
+    include_directories(include/ src/)
+  : labels:
+      - source: include_directories(include/ src/)
+        style: primary
+        start: 0
+        end: 34
+  include_directories(include/):
+    labels:
+      - source: include_directories(include/)
+        style: primary
+        start: 0
+        end: 29

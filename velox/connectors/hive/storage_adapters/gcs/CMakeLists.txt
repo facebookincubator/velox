@@ -24,8 +24,8 @@ if(VELOX_ENABLE_GCS)
     GcsUtil.cpp
     GcsWriteFile.cpp
     GcsReadFile.cpp)
-  velox_link_libraries(velox_gcs velox_dwio_common Folly::folly
-                       google-cloud-cpp::storage)
+  velox_link_libraries(velox_gcs PUBLIC velox_dwio_common Folly::folly
+                                        google-cloud-cpp::storage)
 
   if(${VELOX_BUILD_TESTING})
     add_subdirectory(tests)

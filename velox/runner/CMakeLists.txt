@@ -16,18 +16,18 @@ if(${VELOX_BUILD_TESTING})
 endif()
 
 velox_add_library(velox_multifragment_plan MultiFragmentPlan.cpp)
-velox_link_libraries(velox_multifragment_plan velox_common_base velox_memory
-                     velox_core)
+velox_link_libraries(velox_multifragment_plan PUBLIC velox_common_base
+                                                     velox_memory velox_core)
 
 velox_add_library(velox_local_runner LocalRunner.cpp Runner.cpp)
 
 velox_link_libraries(
   velox_local_runner
-  velox_multifragment_plan
-  velox_common_base
-  velox_memory
-  velox_hive_connector
-  velox_dwio_common
-  velox_dwio_dwrf_writer
-  velox_exec
-  velox_cursor)
+  PUBLIC velox_multifragment_plan
+         velox_common_base
+         velox_memory
+         velox_hive_connector
+         velox_dwio_common
+         velox_dwio_dwrf_writer
+         velox_exec
+         velox_cursor)

@@ -29,35 +29,38 @@ add_library(velox_overload_varchar_function_dynamic SHARED
 add_library(velox_function_non_default_dynamic SHARED
             DynamicFunctionNonDefault.cpp)
 
-set(CMAKE_DYLIB_TEST_LINK_LIBRARIES fmt::fmt Folly::folly glog::glog xsimd)
+add_library(velox_dylib_test_libs INTERFACE)
+target_link_libraries(
+  velox_dylib_test_libs
+  INTERFACE fmt::fmt Folly::folly glog::glog xsimd)
 
 target_link_libraries(
   velox_function_dynamic
-  PRIVATE ${CMAKE_DYLIB_TEST_LINK_LIBRARIES})
+  PRIVATE velox_dylib_test_libs)
 
 target_link_libraries(
   velox_overwrite_int_function_dynamic
-  PRIVATE ${CMAKE_DYLIB_TEST_LINK_LIBRARIES})
+  PRIVATE velox_dylib_test_libs)
 
 target_link_libraries(
   velox_overwrite_varchar_function_dynamic
-  PRIVATE ${CMAKE_DYLIB_TEST_LINK_LIBRARIES})
+  PRIVATE velox_dylib_test_libs)
 
 target_link_libraries(
   velox_function_err_dynamic
-  PRIVATE ${CMAKE_DYLIB_TEST_LINK_LIBRARIES})
+  PRIVATE velox_dylib_test_libs)
 
 target_link_libraries(
   velox_overload_int_function_dynamic
-  PRIVATE ${CMAKE_DYLIB_TEST_LINK_LIBRARIES})
+  PRIVATE velox_dylib_test_libs)
 
 target_link_libraries(
   velox_overload_varchar_function_dynamic
-  PRIVATE ${CMAKE_DYLIB_TEST_LINK_LIBRARIES})
+  PRIVATE velox_dylib_test_libs)
 
 target_link_libraries(
   velox_function_non_default_dynamic
-  PRIVATE ${CMAKE_DYLIB_TEST_LINK_LIBRARIES})
+  PRIVATE velox_dylib_test_libs)
 
 if(APPLE)
   set(COMMON_LIBRARY_LINK_OPTIONS "-Wl,-undefined,dynamic_lookup")
@@ -88,13 +91,14 @@ add_executable(velox_function_dynamic_link_test DynamicLinkTest.cpp)
 
 target_link_libraries(
   velox_function_dynamic_link_test
-  velox_functions_test_lib
-  velox_dynamic_library_loader
-  velox_function_registry
-  xsimd
-  GTest::gmock
-  GTest::gtest
-  GTest::gtest_main)
+  PRIVATE
+    velox_functions_test_lib
+    velox_dynamic_library_loader
+    velox_function_registry
+    xsimd
+    GTest::gmock
+    GTest::gtest
+    GTest::gtest_main)
 
 target_compile_definitions(
   velox_function_dynamic_link_test

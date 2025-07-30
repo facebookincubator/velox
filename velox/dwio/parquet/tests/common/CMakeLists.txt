@@ -17,10 +17,11 @@ add_executable(velox_dwio_parquet_common_test LevelConversionTest.cpp)
 add_test(velox_dwio_parquet_common_test velox_dwio_parquet_common_test)
 target_link_libraries(
   velox_dwio_parquet_common_test
-  velox_dwio_parquet_common
-  arrow
-  thrift
-  velox_link_libs
-  GTest::gtest
-  GTest::gmock
-  GTest::gtest_main)
+  PRIVATE
+    velox_dwio_parquet_common
+    arrow
+    thrift
+    velox_link_libs
+    GTest::gtest
+    GTest::gmock
+    GTest::gtest_main)

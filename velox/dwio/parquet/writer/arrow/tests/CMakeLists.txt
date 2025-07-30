@@ -32,14 +32,15 @@ add_test(velox_dwio_arrow_parquet_writer_test
 
 target_link_libraries(
   velox_dwio_arrow_parquet_writer_test
-  velox_dwio_arrow_parquet_writer_test_lib
-  GTest::gmock
-  GTest::gtest
-  GTest::gtest_main
-  arrow
-  arrow_testing
-  velox_dwio_native_parquet_reader
-  velox_temp_path)
+  PRIVATE
+    velox_dwio_arrow_parquet_writer_test_lib
+    GTest::gmock
+    GTest::gtest
+    GTest::gtest_main
+    arrow
+    arrow_testing
+    velox_dwio_native_parquet_reader
+    velox_temp_path)
 
 add_library(
   velox_dwio_arrow_parquet_writer_test_lib
@@ -52,5 +53,5 @@ add_library(
   XxHasher.cpp)
 
 target_link_libraries(
-  velox_dwio_arrow_parquet_writer_test_lib arrow
-  velox_dwio_arrow_parquet_writer_lib GTest::gtest)
+  velox_dwio_arrow_parquet_writer_test_lib
+  PRIVATE arrow velox_dwio_arrow_parquet_writer_lib GTest::gtest)

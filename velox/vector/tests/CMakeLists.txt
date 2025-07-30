@@ -43,30 +43,31 @@ add_test(velox_vector_test velox_vector_test)
 
 target_link_libraries(
   velox_vector_test
-  velox_time
-  velox_vector_fuzzer
-  velox_vector_test_lib
-  velox_buffer
-  velox_serialization
-  velox_presto_serializer
-  velox_presto_types
-  velox_temp_path
-  velox_type_test_lib
-  Boost::atomic
-  Boost::context
-  Boost::date_time
-  Boost::filesystem
-  Boost::program_options
-  Boost::regex
-  Boost::thread
-  Boost::system
-  GTest::gtest
-  GTest::gtest_main
-  GTest::gmock
-  Folly::folly
-  glog::glog
-  fmt::fmt
-  dl)
+  PRIVATE
+    velox_time
+    velox_vector_fuzzer
+    velox_vector_test_lib
+    velox_buffer
+    velox_serialization
+    velox_presto_serializer
+    velox_presto_types
+    velox_temp_path
+    velox_type_test_lib
+    Boost::atomic
+    Boost::context
+    Boost::date_time
+    Boost::filesystem
+    Boost::program_options
+    Boost::regex
+    Boost::thread
+    Boost::system
+    GTest::gtest
+    GTest::gtest_main
+    GTest::gmock
+    Folly::folly
+    glog::glog
+    fmt::fmt
+    dl)
 
 add_executable(simple_vector_test SimpleVectorTest.cpp ToStringUtilityTest.cpp)
 
@@ -74,15 +75,16 @@ add_test(simple_vector_test simple_vector_test)
 
 target_link_libraries(
   simple_vector_test
-  velox_vector
-  velox_buffer
-  velox_type
-  velox_vector_test_lib
-  GTest::gtest
-  GTest::gtest_main
-  Folly::folly
-  glog::glog
-  fmt::fmt)
+  PRIVATE
+    velox_vector
+    velox_buffer
+    velox_type
+    velox_vector_test_lib
+    GTest::gtest
+    GTest::gtest_main
+    Folly::folly
+    glog::glog
+    fmt::fmt)
 
 add_executable(bias_vector_test BiasVectorTest.cpp)
 
@@ -90,10 +92,11 @@ add_test(bias_vector_test bias_vector_test)
 
 target_link_libraries(
   bias_vector_test
-  velox_vector
-  Boost::filesystem
-  GTest::gtest
-  GTest::gtest_main
-  Folly::folly
-  glog::glog
-  fmt::fmt)
+  PRIVATE
+    velox_vector
+    Boost::filesystem
+    GTest::gtest
+    GTest::gtest_main
+    Folly::folly
+    glog::glog
+    fmt::fmt)

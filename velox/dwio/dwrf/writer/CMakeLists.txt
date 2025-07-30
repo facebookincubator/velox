@@ -28,15 +28,15 @@ velox_add_library(
 
 velox_link_libraries(
   velox_dwio_dwrf_writer
-  velox_common_hyperloglog
-  velox_dwio_common
-  velox_dwio_dwrf_common
-  velox_dwio_dwrf_utils
-  velox_exec
-  velox_process
-  velox_time
-  velox_vector
-  Boost::headers
-  lz4::lz4
-  zstd::zstd
-  ZLIB::ZLIB)
+  PUBLIC velox_common_hyperloglog
+         velox_dwio_common
+         velox_dwio_dwrf_common
+         velox_dwio_dwrf_utils
+         velox_exec
+         velox_process
+         velox_time
+         velox_vector
+         Boost::headers
+         lz4::lz4
+         zstd::zstd
+         ZLIB::ZLIB)
