@@ -90,8 +90,6 @@ void registerTruncateFunctions(const std::string& prefix) {
       {prefix + "truncate"});
   registerFunction<TruncateFunction, int64_t, int32_t, int64_t>(
       {prefix + "truncate"});
-  registerFunction<TruncateFunction, int128_t, int32_t, int128_t>(
-      {prefix + "truncate"});
   registerFunction<TruncateFunction, Varchar, int32_t, Varchar>(
       {prefix + "truncate"});
   registerFunction<TruncateFunction, Varbinary, int32_t, Varbinary>(

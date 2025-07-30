@@ -80,11 +80,11 @@ struct HoursFunction {
 
 void registerDateTimeFunctions(const std::string& prefix) {
   registerFunction<YearsFunction, int32_t, Timestamp>({prefix + "years"});
-  registerFunction<YearsFunction, int32_t, int32_t>({prefix + "years"});
+  registerFunction<YearsFunction, int32_t, Date>({prefix + "years"});
   registerFunction<MonthsFunction, int32_t, Timestamp>({prefix + "months"});
-  registerFunction<MonthsFunction, int32_t, int32_t>({prefix + "months"});
+  registerFunction<MonthsFunction, int32_t, Date>({prefix + "months"});
   registerFunction<DaysFunction, int32_t, Timestamp>({prefix + "days"});
-  registerFunction<DaysFunction, int32_t, int32_t>({prefix + "days"});
+  registerFunction<DaysFunction, int32_t, Date>({prefix + "days"});
   registerFunction<HoursFunction, int32_t, Timestamp>({prefix + "hours"});
 }
 } // namespace facebook::velox::functions::iceberg
