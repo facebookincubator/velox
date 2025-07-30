@@ -76,7 +76,13 @@ class RowVector : public BaseVector {
       std::shared_ptr<const Type> type,
       velox::memory::MemoryPool* pool);
 
-  virtual ~RowVector() override {}
+  ~RowVector() override {
+    for (auto children : children_) {
+      if (children) {
+        children->clearContainingLazyAndWrapped();
+      }
+    }
+  }
 
   bool containsNullAt(vector_size_t idx) const override;
 
@@ -202,9 +208,9 @@ class RowVector : public BaseVector {
 
   /// For backwards compatibility.
   /// TODO Remove after updating callsites.
-  [[deprecated]]
-  std::string deprecatedToString(vector_size_t index, vector_size_t limit)
-      const;
+  [[deprecated]] std::string deprecatedToString(
+      vector_size_t index,
+      vector_size_t limit) const;
 
   void ensureWritable(const SelectivityVector& rows) override;
 
