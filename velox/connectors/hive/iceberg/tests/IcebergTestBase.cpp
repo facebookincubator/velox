@@ -225,7 +225,7 @@ IcebergTestBase::createIcebergInsertTableHandle(
   auto partitionSpec = createPartitionSpec(partitionTransforms, rowType);
 
   // Create sorting columns if specified
-  std::vector<std::shared_ptr<const IcebergSortingColumn>> sortingColumns;
+  std::vector<IcebergSortingColumn> sortingColumns;
   for (const auto& sortExpr : sortedBy) {
     std::string columnName;
     bool isAscending = true;
@@ -252,8 +252,8 @@ IcebergTestBase::createIcebergInsertTableHandle(
     }
 
     core::SortOrder sortOrder(isAscending, isNullsFirst);
-    sortingColumns.push_back(
-        std::make_shared<IcebergSortingColumn>(columnName, sortOrder));
+    IcebergSortingColumn(columnName, sortOrder);
+    sortingColumns.push_back(IcebergSortingColumn(columnName, sortOrder));
   }
 
   return std::make_shared<IcebergInsertTableHandle>(

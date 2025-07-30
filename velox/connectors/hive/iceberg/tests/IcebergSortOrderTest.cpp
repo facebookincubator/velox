@@ -37,8 +37,7 @@ class IcebergSortOrderTest : public IcebergTestBase {
         {INTEGER(), BIGINT(), VARCHAR(), DATE(), DECIMAL(18, 3), VARBINARY()});
   }
 
-  /// Verify that data in the file is sorted according to the specified sort
-  /// columns.
+  // Verify data in the file is sorted according to the specified sort columns.
   void verifySortOrder(
       const std::string& dataPath,
       const std::vector<std::string>& sortColumns) {
@@ -47,7 +46,7 @@ class IcebergSortOrderTest : public IcebergTestBase {
 
     // Create a projection that selects all columns.
     std::vector<std::string> allColumns;
-    for (int32_t i = 0; i < rowType_->size(); ++i) {
+    for (auto i = 0; i < rowType_->size(); ++i) {
       allColumns.push_back(rowType_->nameOf(i));
     }
 
@@ -85,7 +84,7 @@ class IcebergSortOrderTest : public IcebergTestBase {
       }
 
       int32_t columnIndex = -1;
-      for (int32_t i = 0; i < rowType_->size(); ++i) {
+      for (auto i = 0; i < rowType_->size(); ++i) {
         if (rowType_->nameOf(i) == columnName) {
           columnIndex = i;
           break;
@@ -100,7 +99,7 @@ class IcebergSortOrderTest : public IcebergTestBase {
       vector_size_t firstNonNullIndex = 0;
       vector_size_t lastNullIndex = 0;
 
-      for (vector_size_t i = 0; i < columnVector->size(); ++i) {
+      for (auto i = 0; i < columnVector->size(); ++i) {
         if (columnVector->isNullAt(i)) {
           hasNulls = true;
           lastNullIndex = i;
@@ -126,7 +125,7 @@ class IcebergSortOrderTest : public IcebergTestBase {
       SelectivityVector rows(columnVector->size());
       decoded.decode(*columnVector, rows);
 
-      for (vector_size_t i = 1; i < columnVector->size(); ++i) {
+      for (auto i = 1; i < columnVector->size(); ++i) {
         // Skip if either current or previous is null.
         if (columnVector->isNullAt(i) || columnVector->isNullAt(i - 1)) {
           continue;
@@ -191,14 +190,14 @@ class IcebergSortOrderTest : public IcebergTestBase {
     }
   }
 
-  /// Verify that data is sorted according to multiple sort columns.
+  // Verify that data is sorted according to multiple sort columns.
   void verifyMultiColumnSortOrder(
       const std::string& dataPath,
       const std::vector<std::string>& sortColumns) {
     auto splits = createSplitsForDirectory(dataPath);
     ASSERT_FALSE(splits.empty()) << "No data files found in " << dataPath;
     std::vector<std::string> allColumns;
-    for (int32_t i = 0; i < rowType_->size(); ++i) {
+    for (auto i = 0; i < rowType_->size(); ++i) {
       allColumns.push_back(rowType_->nameOf(i));
     }
 
@@ -240,7 +239,7 @@ class IcebergSortOrderTest : public IcebergTestBase {
       }
 
       int32_t columnIndex = -1;
-      for (int32_t i = 0; i < rowType_->size(); ++i) {
+      for (auto i = 0; i < rowType_->size(); ++i) {
         if (rowType_->nameOf(i) == columnName) {
           columnIndex = i;
           break;
@@ -256,7 +255,7 @@ class IcebergSortOrderTest : public IcebergTestBase {
     }
 
     // Verify the sort order row by row.
-    for (vector_size_t i = 1; i < result->size(); ++i) {
+    for (auto i = 1; i < result->size(); ++i) {
       // Compare row i-1 with row i using all sort columns in order.
       for (size_t colIdx = 0; colIdx < columnIndices.size(); ++colIdx) {
         int32_t columnIndex = columnIndices[colIdx];
@@ -379,7 +378,6 @@ class IcebergSortOrderTest : public IcebergTestBase {
     }
   }
 
-  // Test function for sorting with partitioning.
   void testSortingWithPartitioning(
       const std::vector<std::string>& partitionTransforms,
       const std::vector<std::string>& sortExpressions,
@@ -550,6 +548,12 @@ TEST_F(IcebergSortOrderTest, multiColumnSortWithNull) {
 TEST_F(IcebergSortOrderTest, sortWithSinglePartitioning) {
   testSortingWithPartitioning({"bucket(c_date, 5)"}, {"c_int ASC"});
   testSortingWithPartitioning({"bucket(c_int, 7)"}, {"c_varchar ASC"});
+}
+
+TEST_F(IcebergSortOrderTest, sortWithPartitioningOnSameColumn) {
+  testSortingWithPartitioning({"bucket(c_date, 5)"}, {"c_date ASC"});
+  testSortingWithPartitioning({"bucket(c_int, 7)"}, {"c_int ASC"});
+  testSortingWithPartitioning({"bucket(c_varchar, 4)"}, {"c_varchar DESC"});
 }
 
 TEST_F(IcebergSortOrderTest, sortWithMultiPartitioning) {

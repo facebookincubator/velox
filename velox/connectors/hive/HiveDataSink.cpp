@@ -38,6 +38,23 @@ namespace {
   memory::NonReclaimableSectionGuard nonReclaimableGuard( \
       writerInfo_[(index)]->nonReclaimableSectionHolder.get())
 
+// Returns the type of non-partition data columns.
+RowTypePtr getNonPartitionTypes(
+    const std::vector<column_index_t>& dataCols,
+    const RowTypePtr& inputType) {
+  std::vector<std::string> childNames;
+  std::vector<TypePtr> childTypes;
+  const auto& dataSize = dataCols.size();
+  childNames.reserve(dataSize);
+  childTypes.reserve(dataSize);
+  for (int dataCol : dataCols) {
+    childNames.push_back(inputType->nameOf(dataCol));
+    childTypes.push_back(inputType->childAt(dataCol));
+  }
+
+  return ROW(std::move(childNames), std::move(childTypes));
+}
+
 // Filters out partition columns if there is any.
 RowVectorPtr makeDataInput(
     const std::vector<column_index_t>& dataCols,
@@ -175,23 +192,6 @@ getBucketCount(const HiveBucketProperty* bucketProperty) {
   return bucketProperty == nullptr ? 0 : bucketProperty->bucketCount();
 }
 } // namespace
-
-// Returns the type of non-partition data columns.
-RowTypePtr getNonPartitionTypes(
-    const std::vector<column_index_t>& dataCols,
-    const RowTypePtr& inputType) {
-  std::vector<std::string> childNames;
-  std::vector<TypePtr> childTypes;
-  const auto& dataSize = dataCols.size();
-  childNames.reserve(dataSize);
-  childTypes.reserve(dataSize);
-  for (int dataCol : dataCols) {
-    childNames.push_back(inputType->nameOf(dataCol));
-    childTypes.push_back(inputType->childAt(dataCol));
-  }
-
-  return ROW(std::move(childNames), std::move(childTypes));
-}
 
 const HiveWriterId& HiveWriterId::unpartitionedId() {
   static const HiveWriterId writerId{0};

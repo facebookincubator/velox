@@ -113,7 +113,7 @@ IcebergInsertTableHandle::IcebergInsertTableHandle(
     std::shared_ptr<const IcebergPartitionSpec> partitionSpec,
     memory::MemoryPool* pool,
     dwio::common::FileFormat tableStorageFormat,
-    const std::vector<std::shared_ptr<const IcebergSortingColumn>>& sortedBy,
+    const std::vector<IcebergSortingColumn>& sortedBy,
     std::optional<common::CompressionKind> compressionKind,
     const std::unordered_map<std::string, std::string>& serdeParameters)
     : HiveInsertTableHandle(
@@ -197,15 +197,14 @@ IcebergDataSink::IcebergDataSink(
   if (!sortedBy.empty()) {
     sortColumnIndices_.reserve(sortedBy.size());
     sortCompareFlags_.reserve(sortedBy.size());
-    for (int i = 0; i < sortedBy.size(); ++i) {
+    for (auto i = 0; i < sortedBy.size(); ++i) {
       auto columnIndex =
-          getNonPartitionTypes(dataChannels_, inputType_)
-              ->getChildIdxIfExists(sortedBy.at(i)->sortColumn());
+          inputType_->getChildIdxIfExists(sortedBy[i].sortColumn());
       if (columnIndex.has_value()) {
         sortColumnIndices_.push_back(columnIndex.value());
         sortCompareFlags_.push_back(
-            {sortedBy.at(i)->sortOrder().isNullsFirst(),
-             sortedBy.at(i)->sortOrder().isAscending(),
+            {sortedBy[i].sortOrder().isNullsFirst(),
+             sortedBy[i].sortOrder().isAscending(),
              false,
              CompareFlags::NullHandlingMode::kNullAsValue});
       }
@@ -348,10 +347,10 @@ IcebergDataSink::maybeCreateBucketSortWriter(
   if (!sortWrite()) {
     return writer;
   }
-  auto* sortPool = writerInfo_.back()->sortPool.get();
+  auto sortPool = writerInfo_.back()->sortPool.get();
   VELOX_CHECK_NOT_NULL(sortPool);
   auto sortBuffer = std::make_unique<exec::SortBuffer>(
-      getNonPartitionTypes(dataChannels_, inputType_),
+      inputType_,
       sortColumnIndices_,
       sortCompareFlags_,
       sortPool,
@@ -373,33 +372,19 @@ IcebergSortingColumn::IcebergSortingColumn(
     const std::string& sortColumn,
     const core::SortOrder& sortOrder)
     : sortColumn_(sortColumn), sortOrder_(sortOrder) {
-  VELOX_USER_CHECK(!sortColumn_.empty(), "iceberg sort column must be set");
+  VELOX_USER_CHECK(!sortColumn_.empty(), "iceberg sort column must be set.");
+}
+
+const std::string& IcebergSortingColumn::sortColumn() const {
+  return sortColumn_;
+}
+
+const core::SortOrder& IcebergSortingColumn::sortOrder() const {
+  return sortOrder_;
 }
 
 folly::dynamic IcebergSortingColumn::serialize() const {
-  folly::dynamic obj = folly::dynamic::object;
-  obj["name"] = "IcebergSortingColumn";
-  obj["columnName"] = sortColumn_;
-  obj["sortOrder"] = sortOrder_.serialize();
-  return obj;
-}
-
-std::shared_ptr<IcebergSortingColumn> IcebergSortingColumn::deserialize(
-    const folly::dynamic& obj,
-    void* context) {
-  const std::string columnName = obj["columnName"].asString();
-  const auto sortOrder = core::SortOrder::deserialize(obj["sortOrder"]);
-  return std::make_shared<IcebergSortingColumn>(columnName, sortOrder);
-}
-
-std::string IcebergSortingColumn::toString() const {
-  return fmt::format(
-      "[COLUMN[{}] ORDER[{}]]", sortColumn_, sortOrder_.toString());
-}
-
-void IcebergSortingColumn::registerSerDe() {
-  auto& registry = DeserializationWithContextRegistryForSharedPtr();
-  registry.Register("IcebergSortingColumn", IcebergSortingColumn::deserialize);
+  VELOX_UNREACHABLE("Unexpected code path, implement serialize() first.");
 }
 
 } // namespace facebook::velox::connector::hive::iceberg

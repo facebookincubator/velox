@@ -30,10 +30,6 @@ namespace facebook::velox::connector::hive {
 class LocationHandle;
 using LocationHandlePtr = std::shared_ptr<const LocationHandle>;
 
-RowTypePtr getNonPartitionTypes(
-    const std::vector<column_index_t>& dataCols,
-    const RowTypePtr& inputType);
-
 /// Location related properties of the Hive table to be written.
 class LocationHandle : public ISerializable {
  public:

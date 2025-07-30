@@ -28,23 +28,11 @@ class IcebergSortingColumn : public ISerializable {
       const std::string& sortColumn,
       const core::SortOrder& sortOrder);
 
-  const std::string& sortColumn() const {
-    return sortColumn_;
-  }
+  const std::string& sortColumn() const;
 
-  core::SortOrder sortOrder() const {
-    return sortOrder_;
-  }
+  const core::SortOrder& sortOrder() const;
 
   folly::dynamic serialize() const override;
-
-  static std::shared_ptr<IcebergSortingColumn> deserialize(
-      const folly::dynamic& obj,
-      void* context);
-
-  std::string toString() const;
-
-  static void registerSerDe();
 
  private:
   const std::string sortColumn_;
@@ -61,8 +49,7 @@ class IcebergInsertTableHandle final : public HiveInsertTableHandle {
       memory::MemoryPool* pool,
       dwio::common::FileFormat tableStorageFormat =
           dwio::common::FileFormat::PARQUET,
-      const std::vector<std::shared_ptr<const IcebergSortingColumn>>& sortedBy =
-          {},
+      const std::vector<IcebergSortingColumn>& sortedBy = {},
       std::optional<common::CompressionKind> compressionKind = {},
       const std::unordered_map<std::string, std::string>& serdeParameters = {});
 
@@ -76,15 +63,14 @@ class IcebergInsertTableHandle final : public HiveInsertTableHandle {
     return columnTransforms_;
   }
 
-  const std::vector<std::shared_ptr<const IcebergSortingColumn>>& sortedBy()
-      const {
+  const std::vector<IcebergSortingColumn>& sortedBy() const {
     return sortedBy_;
   }
 
  private:
   const std::shared_ptr<const IcebergPartitionSpec> partitionSpec_;
   const std::vector<ColumnTransform> columnTransforms_;
-  const std::vector<std::shared_ptr<const IcebergSortingColumn>> sortedBy_;
+  const std::vector<IcebergSortingColumn> sortedBy_;
 };
 
 class IcebergDataSink : public HiveDataSink {
