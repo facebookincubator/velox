@@ -12,8 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_executable(velox_abfs_test AbfsFileSystemTest.cpp AbfsCommonTest.cpp
-                               AzuriteServer.cpp MockDataLakeFileClient.cpp)
+add_executable(
+  velox_abfs_test
+  AbfsFileSystemTest.cpp
+  AbfsUtilTest.cpp
+  DefaultAzureClientProvidersTest.cpp
+  AzureClientProviderFactoriesTest.cpp
+  AzuriteServer.cpp
+  MockDataLakeFileClient.cpp)
 
 add_test(velox_abfs_test velox_abfs_test)
 target_link_libraries(
