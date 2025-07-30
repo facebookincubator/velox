@@ -134,7 +134,7 @@ class IndexLookupJoinTest : public IndexLookupJoinTestBase,
       std::make_unique<folly::CPUThreadPoolExecutor>(128)};
 };
 
-TEST_P(IndexLookupJoinTest, joinCondition) {
+TEST_F(IndexLookupJoinTest, joinCondition) {
   const auto rowType =
       ROW({"c0", "c1", "c2", "c3", "c4"},
           {BIGINT(), BIGINT(), BIGINT(), ARRAY(BIGINT()), BIGINT()});
@@ -147,9 +147,7 @@ TEST_P(IndexLookupJoinTest, joinCondition) {
   auto inFilterCondition = PlanBuilder::parseIndexJoinCondition(
       "contains(ARRAY[1,2], c2)", rowType, pool_.get());
   ASSERT_TRUE(inFilterCondition->isFilter());
-  ASSERT_EQ(
-      inFilterCondition->toString(),
-      "ROW[\"c2\"] IN 2 elements starting at 0 {1, 2}");
+  ASSERT_EQ(inFilterCondition->toString(), "ROW[\"c2\"] IN {1, 2}");
 
   auto betweenFilterCondition = PlanBuilder::parseIndexJoinCondition(
       "c0 between 0 AND 1", rowType, pool_.get());
@@ -2575,6 +2573,56 @@ TEST_P(IndexLookupJoinTest, joinFuzzer) {
       32,
       GetParam().numPrefetches,
       "SELECT u.c0, u.c1, u.c2, u.c3, u.c4, u.c5, t.c0, t.c1, t.c2, t.c3, t.c4, t.c5 FROM t, u WHERE t.c0 = u.c0 AND array_contains(t.c4, u.c1) AND u.c2 BETWEEN t.c1 AND t.c2");
+}
+
+TEST_P(IndexLookupJoinTest, tableRowsWithDuplicateKeys) {
+  SequenceTableData tableData;
+  generateIndexTableData({10, 1, 1}, tableData, pool_);
+  for (int i = 0; i < keyType_->size(); ++i) {
+    tableData.keyData->childAt(i) = makeFlatVector<int64_t>(
+        tableData.keyData->childAt(i)->size(),
+        [](auto /*unused*/) { return 1; });
+    tableData.tableData->childAt(i) = makeFlatVector<int64_t>(
+        tableData.keyData->childAt(i)->size(),
+        [](auto /*unused*/) { return 1; });
+  }
+
+  auto probeVectors = generateProbeInput(
+      4, 32, 1, tableData, pool_, {"t0", "t1", "t2"}, false, {}, {}, 100);
+  std::vector<std::shared_ptr<TempFilePath>> probeFiles =
+      createProbeFiles(probeVectors);
+
+  createDuckDbTable("t", probeVectors);
+  createDuckDbTable("u", {tableData.tableData});
+
+  const auto indexTable = TestIndexTable::create(
+      /*numEqualJoinKeys=*/3, tableData.keyData, tableData.valueData, *pool());
+  const auto indexTableHandle =
+      makeIndexTableHandle(indexTable, GetParam().asyncLookup);
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto scanOutput = tableType_->names();
+  const auto indexScanNode = makeIndexScanNode(
+      planNodeIdGenerator,
+      indexTableHandle,
+      makeScanOutputType(scanOutput),
+      makeIndexColumnHandles(scanOutput));
+
+  auto plan = makeLookupPlan(
+      planNodeIdGenerator,
+      indexScanNode,
+      {"t0", "t1", "t2"},
+      {"u0", "u1", "u2"},
+      {},
+      core::JoinType::kInner,
+      scanOutput);
+  runLookupQuery(
+      plan,
+      probeFiles,
+      GetParam().serialExecution,
+      GetParam().serialExecution,
+      32,
+      GetParam().numPrefetches,
+      "SELECT u.c0, u.c1, u.c2, u.c3, u.c4, u.c5 FROM t, u WHERE t.c0 = u.c0 AND t.c1 = u.c1 AND u.c2 = t.c2");
 }
 } // namespace
 

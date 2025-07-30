@@ -16,14 +16,12 @@
 #include <boost/lexical_cast.hpp>
 #include <boost/uuid/uuid_generators.hpp>
 #include <boost/uuid/uuid_io.hpp>
-#include <fstream>
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/Fs.h"
 #include "velox/common/base/SuccinctPrinter.h"
 #include "velox/common/process/ThreadDebugInfo.h"
 #include "velox/common/testutil/TestValue.h"
-#include "velox/core/Expressions.h"
 #include "velox/expression/CastExpr.h"
 #include "velox/expression/ConstantExpr.h"
 #include "velox/expression/Expr.h"
@@ -33,6 +31,7 @@
 #include "velox/expression/PeeledEncoding.h"
 #include "velox/expression/ScopedVarSetter.h"
 #include "velox/expression/VectorFunction.h"
+#include "velox/vector/LazyVector.h"
 #include "velox/vector/SelectivityVector.h"
 #include "velox/vector/VectorSaver.h"
 
@@ -42,6 +41,28 @@ DECLARE_bool(force_eval_simplified);
 DECLARE_bool(velox_experimental_save_input_on_fatal_signal);
 
 namespace facebook::velox::exec {
+
+namespace {
+folly::F14FastMap<SpecialFormKind, std::string> specialFormNames() {
+  static const folly::F14FastMap<SpecialFormKind, std::string> kNames = {
+      {SpecialFormKind::kFieldAccess, "FIELD"},
+      {SpecialFormKind::kConstant, "CONSTANT"},
+      {SpecialFormKind::kCast, "CAST"},
+      {SpecialFormKind::kCoalesce, "COALESCE"},
+      {SpecialFormKind::kSwitch, "SWITCH"},
+      {SpecialFormKind::kLambda, "LAMBDA"},
+      {SpecialFormKind::kTry, "TRY"},
+      {SpecialFormKind::kAnd, "AND"},
+      {SpecialFormKind::kOr, "OR"},
+      {SpecialFormKind::kCustom, "CUSTOM"},
+  };
+
+  return kNames;
+}
+} // namespace
+
+VELOX_DEFINE_ENUM_NAME(SpecialFormKind, specialFormNames);
+
 folly::Synchronized<std::vector<std::shared_ptr<ExprSetListener>>>&
 exprSetListeners() {
   static folly::Synchronized<std::vector<std::shared_ptr<ExprSetListener>>>
@@ -122,7 +143,7 @@ Expr::Expr(
       name_(std::move(name)),
       vectorFunction_(std::move(vectorFunction)),
       vectorFunctionMetadata_{std::move(metadata)},
-      specialForm_{false},
+      specialFormKind_{std::nullopt},
       supportsFlatNoNullsFastPath_{
           vectorFunction_->supportsFlatNoNullsFastPath() &&
           type_->isPrimitiveType() && type_->isFixedWidth() &&
@@ -1682,7 +1703,7 @@ void Expr::appendInputsSql(
   }
 }
 
-bool Expr::isConstant() const {
+bool Expr::isConstantExpr() const {
   return isDeterministic() && distinctFields_.empty();
 }
 
@@ -1791,7 +1812,8 @@ namespace {
 void addStats(
     const exec::Expr& expr,
     std::unordered_map<std::string, exec::ExprStats>& stats,
-    std::unordered_set<const exec::Expr*>& uniqueExprs) {
+    std::unordered_set<const exec::Expr*>& uniqueExprs,
+    bool excludeSpecialForm) {
   auto it = uniqueExprs.find(&expr);
   if (it != uniqueExprs.end()) {
     // Common sub-expression. Skip to avoid double counting.
@@ -1800,13 +1822,16 @@ void addStats(
 
   uniqueExprs.insert(&expr);
 
+  bool excludeSplFormExpr = excludeSpecialForm && expr.isSpecialForm();
   // Do not aggregate empty stats.
-  if (expr.stats().numProcessedRows || expr.stats().defaultNullRowsSkipped) {
+  bool emptyStats =
+      !expr.stats().numProcessedRows && !expr.stats().defaultNullRowsSkipped;
+  if (!emptyStats && !excludeSplFormExpr) {
     stats[expr.name()].add(expr.stats());
   }
 
   for (const auto& input : expr.inputs()) {
-    addStats(*input, stats, uniqueExprs);
+    addStats(*input, stats, uniqueExprs, excludeSpecialForm);
   }
 }
 
@@ -1815,11 +1840,12 @@ std::string makeUuid() {
 }
 } // namespace
 
-std::unordered_map<std::string, exec::ExprStats> ExprSet::stats() const {
+std::unordered_map<std::string, exec::ExprStats> ExprSet::stats(
+    bool excludeSpecialForm) const {
   std::unordered_map<std::string, exec::ExprStats> stats;
   std::unordered_set<const exec::Expr*> uniqueExprs;
   for (const auto& expr : exprs()) {
-    addStats(*expr, stats, uniqueExprs);
+    addStats(*expr, stats, uniqueExprs, excludeSpecialForm);
   }
 
   return stats;
@@ -2029,6 +2055,15 @@ void SimpleExpressionEvaluator::evaluate(
   result = results[0];
 }
 
+void SimpleExpressionEvaluator::evaluate(
+    exec::ExprSet* exprSet,
+    const SelectivityVector& rows,
+    const RowVector& input,
+    std::vector<VectorPtr>& results) {
+  EvalCtx context(ensureExecCtx(), exprSet, &input);
+  exprSet->eval(0, exprSet->size(), true, rows, context, results);
+}
+
 core::ExecCtx* SimpleExpressionEvaluator::ensureExecCtx() {
   if (!execCtx_) {
     execCtx_ = std::make_unique<core::ExecCtx>(pool_, queryCtx_);
@@ -2051,7 +2086,7 @@ VectorPtr tryEvaluateConstantExpression(
   // If constant folding didn't succeed, but suppressEvaluationFailures is
   // false, we need to re-evaluate the expression to propagate the failure.
   const bool doEvaluate = exprSet.expr(0)->is<ConstantExpr>() ||
-      (!suppressEvaluationFailures && exprSet.expr(0)->isConstant());
+      (!suppressEvaluationFailures && exprSet.expr(0)->isConstantExpr());
 
   if (doEvaluate) {
     auto data = BaseVector::create<RowVector>(ROW({}), 1, pool);

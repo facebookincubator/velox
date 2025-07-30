@@ -18,7 +18,11 @@
 #include "velox/common/config/Config.h"
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/tpch/TpchConnectorSplit.h"
+#include "velox/core/ITypedExpr.h"
+#include "velox/exec/OperatorUtils.h"
+#include "velox/expression/Expr.h"
 #include "velox/tpch/gen/TpchGen.h"
+#include "velox/vector/BaseVector.h"
 
 namespace facebook::velox::connector::tpch {
 
@@ -44,19 +48,35 @@ class TpchTableHandle : public ConnectorTableHandle {
   explicit TpchTableHandle(
       std::string connectorId,
       velox::tpch::Table table,
-      double scaleFactor = 1.0)
+      double scaleFactor = 1.0,
+      velox::core::TypedExprPtr filterExpression = nullptr)
       : ConnectorTableHandle(std::move(connectorId)),
         table_(table),
-        scaleFactor_(scaleFactor) {
+        scaleFactor_(scaleFactor),
+        filterExpression_(std::move(filterExpression)) {
     VELOX_CHECK_GE(scaleFactor, 0, "Tpch scale factor must be non-negative");
+    auto sf = static_cast<int>(scaleFactor_);
+    if (sf > 0) {
+      name_ = fmt::format("sf{}.{}", sf, velox::tpch::toTableName(table));
+    } else {
+      name_ = fmt::format("tiny.{}", velox::tpch::toTableName(table));
+    }
   }
 
   ~TpchTableHandle() override {}
 
   std::string toString() const override;
 
+  const std::string& name() const override {
+    return name_;
+  }
+
   velox::tpch::Table getTable() const {
     return table_;
+  }
+
+  const velox::core::TypedExprPtr& filterExpression() const {
+    return filterExpression_;
   }
 
   double getScaleFactor() const {
@@ -66,6 +86,8 @@ class TpchTableHandle : public ConnectorTableHandle {
  private:
   const velox::tpch::Table table_;
   double scaleFactor_;
+  std::string name_;
+  const velox::core::TypedExprPtr filterExpression_;
 };
 
 class TpchDataSource : public DataSource {
@@ -74,7 +96,7 @@ class TpchDataSource : public DataSource {
       const RowTypePtr& outputType,
       const connector::ConnectorTableHandlePtr& tableHandle,
       const connector::ColumnHandleMap& columnHandles,
-      velox::memory::MemoryPool* pool);
+      ConnectorQueryCtx* connectorQueryCtx);
 
   void addSplit(std::shared_ptr<ConnectorSplit> split) override;
 
@@ -104,6 +126,7 @@ class TpchDataSource : public DataSource {
   bool isLineItem() const;
 
   RowVectorPtr projectOutputColumns(RowVectorPtr vector);
+  RowVectorPtr applyFilter(RowVectorPtr& vector, exec::ExprSet* filter);
 
   velox::tpch::Table tpchTable_;
   double scaleFactor_{1.0};
@@ -124,6 +147,12 @@ class TpchDataSource : public DataSource {
   size_t completedRows_{0};
   size_t completedBytes_{0};
 
+  SelectivityVector filterSelectivityVector_;
+  exec::FilterEvalCtx filterEvalCtx_;
+  std::shared_ptr<BaseVector> filterMask_;
+  std::unique_ptr<exec::ExprSet> filterExpression_;
+
+  ConnectorQueryCtx* connectorQueryCtx_;
   memory::MemoryPool* pool_;
 };
 
@@ -132,8 +161,7 @@ class TpchConnector final : public Connector {
   TpchConnector(
       const std::string& id,
       std::shared_ptr<const config::ConfigBase> config,
-      folly::Executor* /*executor*/)
-      : Connector(id) {}
+      folly::Executor* /*executor*/);
 
   std::unique_ptr<DataSource> createDataSource(
       const RowTypePtr& outputType,
@@ -141,10 +169,7 @@ class TpchConnector final : public Connector {
       const connector::ColumnHandleMap& columnHandles,
       ConnectorQueryCtx* connectorQueryCtx) override final {
     return std::make_unique<TpchDataSource>(
-        outputType,
-        tableHandle,
-        columnHandles,
-        connectorQueryCtx->memoryPool());
+        outputType, tableHandle, columnHandles, connectorQueryCtx);
   }
 
   std::unique_ptr<DataSink> createDataSink(
@@ -154,6 +179,14 @@ class TpchConnector final : public Connector {
       CommitStrategy /*commitStrategy*/) override final {
     VELOX_NYI("TpchConnector does not support data sink.");
   }
+
+  ConnectorMetadata* metadata() const override {
+    VELOX_CHECK_NOT_NULL(metadata_);
+    return metadata_.get();
+  }
+
+ private:
+  std::shared_ptr<ConnectorMetadata> metadata_;
 };
 
 class TpchConnectorFactory : public ConnectorFactory {
@@ -173,5 +206,16 @@ class TpchConnectorFactory : public ConnectorFactory {
     return std::make_shared<TpchConnector>(id, config, ioExecutor);
   }
 };
+
+class TpchConnectorMetadataFactory {
+ public:
+  virtual std::shared_ptr<ConnectorMetadata> create(
+      TpchConnector* connector) = 0;
+
+  virtual ~TpchConnectorMetadataFactory() = default;
+};
+
+bool registerTpchConnectorMetadataFactory(
+    std::unique_ptr<TpchConnectorMetadataFactory>);
 
 } // namespace facebook::velox::connector::tpch

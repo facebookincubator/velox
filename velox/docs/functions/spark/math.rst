@@ -1,10 +1,12 @@
-====================================
+======================
 Mathematical Functions
-====================================
+======================
 
 .. spark:function:: abs(x) -> [same as x]
 
-    Returns the absolute value of ``x``.
+    Returns the absolute value of ``x``. When ``x`` is negative minimum
+    value of integral type, returns the same value as ``x`` following
+    the behavior when Spark ANSI mode is disabled.
 
 .. spark:function:: acos(x) -> double
 
@@ -61,6 +63,10 @@ Mathematical Functions
 .. spark:function:: bin(x) -> varchar
 
     Returns the string representation of the long value ``x`` represented in binary.
+
+.. spark:function:: cbrt(x) -> double
+
+    Returns the cube root of ``x``.
 
 .. spark:function:: ceil(x) -> [same as x]
 
@@ -202,10 +208,6 @@ Mathematical Functions
 .. spark:function:: sqrt(x) -> double
 
     Returns the square root of ``x``.
-
-.. spark:function:: cbrt(x) -> double
-
-    Returns the cube root of ``x``.
 
 .. spark:function:: multiply(x, y) -> [same as x]
 

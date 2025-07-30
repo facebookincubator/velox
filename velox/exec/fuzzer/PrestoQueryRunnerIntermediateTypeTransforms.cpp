@@ -23,9 +23,11 @@
 #include "velox/functions/prestosql/types/HyperLogLogType.h"
 #include "velox/functions/prestosql/types/JsonType.h"
 #include "velox/functions/prestosql/types/QDigestType.h"
+#include "velox/functions/prestosql/types/SfmSketchType.h"
 #include "velox/functions/prestosql/types/TDigestType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/parse/Expressions.h"
+#include "velox/parse/TypeResolver.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
 
 namespace facebook::velox::exec::test {
@@ -60,6 +62,9 @@ intermediateTypeTransforms() {
           {QDIGEST(REAL()),
            std::make_shared<IntermediateTypeTransformUsingCast>(
                QDIGEST(REAL()), VARBINARY())},
+          {SFMSKETCH(),
+           std::make_shared<IntermediateTypeTransformUsingCast>(
+               SFMSKETCH(), VARBINARY())},
           {JSON(), std::make_shared<JsonTransform>()},
           {BINGTILE(),
            std::make_shared<IntermediateTypeTransformUsingCast>(

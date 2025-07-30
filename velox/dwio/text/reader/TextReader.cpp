@@ -15,26 +15,30 @@
  */
 
 #include "velox/dwio/text/reader/TextReader.h"
+#include "velox/common/encode/Base64.h"
 #include "velox/dwio/common/exception/Exceptions.h"
 #include "velox/type/fbhive/HiveTypeParser.h"
 
 #include <string>
 
-namespace facebook::velox::dwio::common {
+namespace facebook::velox::text {
 
 using common::CompressionKind;
+
+using dwio::common::EOFError;
+using dwio::common::RowReader;
+using dwio::common::verify;
+
+using folly::AsciiCaseInsensitive;
+using folly::StringPiece;
 
 const std::string TEXTFILE_CODEC = "org.apache.hadoop.io.compress.GzipCodec";
 const std::string TEXTFILE_COMPRESSION_EXTENSION = ".gz";
 const std::string TEXTFILE_COMPRESSION_EXTENSION_RAW = ".deflate";
 
-namespace {
+static std::string emptyString = std::string();
 
-void unsupportedBatchType(BaseVector* FOLLY_NULLABLE data) {
-  logic_error(
-      "unsupported vector type: %s",
-      (data == nullptr) ? "null" : typeid(*data).name());
-}
+namespace {
 
 void resizeVector(
     BaseVector* FOLLY_NULLABLE data,
@@ -96,7 +100,8 @@ FileContents::FileContents(
       input{nullptr},
       pool{pool},
       fileLength{0},
-      compression{CompressionKind::CompressionKind_NONE} {
+      compression{CompressionKind::CompressionKind_NONE},
+      needsEscape{} {
   needsEscape.fill(false);
   needsEscape.at(0) = true;
 }
@@ -118,12 +123,11 @@ TextRowReader::TextRowReader(
       atEOF_{false},
       atSOL_{false},
       depth_{0},
-      unreadData_{""},
       unreadIdx_{0},
       limit_{opts.limit()},
       fileLength_{getStreamLength()},
-      ownedString_{""},
-      stringViewBuffer_{StringViewBufferHolder(&contents_->pool)} {
+      varBinBuf_{
+          std::make_shared<dwio::common::DataBuffer<char>>(contents_->pool)} {
   // Seek to first line at or after the specified region.
   if (contents_->compression == CompressionKind::CompressionKind_NONE) {
     /**
@@ -145,7 +149,7 @@ TextRowReader::TextRowReader(
     contents_->inputStream = contents_->input->read(
         streamPosition_,
         contents_->fileLength - streamPosition_,
-        LogType::STREAM);
+        dwio::common::LogType::STREAM);
 
     if (pos_ != 0) {
       unreadData_.clear();
@@ -189,8 +193,8 @@ uint64_t TextRowReader::next(
   auto reqChildCount = reqT->size();
 
   // create top level RowVector
-  auto rowVecPtr = std::static_pointer_cast<RowVector>(
-      BaseVector::create(reqT->type(), rows, &contents_->pool));
+  auto rowVecPtr = BaseVector::create<RowVector>(
+      reqT->type(), (vector_size_t)rows, &contents_->pool);
 
   vector_size_t rowsRead = 0;
   const auto initialPos = pos_;
@@ -230,7 +234,7 @@ uint64_t TextRowReader::next(
       auto childVector = rowVecPtr->childAt(i).get();
 
       if (childVector != nullptr) {
-        rowVecPtr->setNull(i, true);
+        rowVecPtr->setNull(static_cast<vector_size_t>(i), true);
       }
     }
     (void)skipLine();
@@ -245,6 +249,7 @@ uint64_t TextRowReader::next(
     // handle empty file
     if (initialPos == pos_ && atEOF_) {
       currentRow_ = 0;
+      rowsRead = 0;
     }
   }
 
@@ -261,10 +266,11 @@ int64_t TextRowReader::nextRowNumber() {
 }
 
 int64_t TextRowReader::nextReadSize(uint64_t size) {
-  return std::min(fileLength_ - currentRow_, size);
+  return static_cast<int64_t>(std::min(fileLength_ - currentRow_, size));
 }
 
-void TextRowReader::updateRuntimeStats(RuntimeStatistics& /*stats*/) const {
+void TextRowReader::updateRuntimeStats(
+    dwio::common::RuntimeStatistics& /*stats*/) const {
   // No-op for non-selective reader.
 }
 
@@ -339,14 +345,14 @@ void TextRowReader::setEOF() {
 /// types
 void TextRowReader::incrementDepth() {
   if (depth_ > 4) {
-    parse_error("Schema nesting too deep");
+    dwio::common::parse_error("Schema nesting too deep");
   }
   depth_++;
 }
 
 void TextRowReader::decrementDepth(DelimType& delim) {
   if (depth_ == 0) {
-    logic_error("Attempt to decrement nesting depth of 0");
+    dwio::common::logic_error("Attempt to decrement nesting depth of 0");
   }
   depth_--;
   auto d = depth_ + DelimTypeEOR;
@@ -414,21 +420,20 @@ bool TextRowReader::isNone(DelimType delim) {
   return (delim == DelimTypeNone);
 }
 
-StringView TextRowReader::getStringView(
-    TextRowReader& th,
-    bool& isNull,
-    DelimType& delim) {
+std::string&
+TextRowReader::getString(TextRowReader& th, bool& isNull, DelimType& delim) {
   if (th.atEOL_) {
     delim = DelimTypeEOR; // top-level EOR
   }
 
   if (th.isEOEorEOR(delim)) {
     isNull = true;
-    return StringView("");
+    return emptyString;
   }
 
   bool wasEscaped = false;
   th.ownedString_.clear();
+
   /**
   Processing has to be done character by characater instad of chunk by chunk.
   This is to avoid edge case handling if escape character(s) are cut off at
@@ -454,7 +459,7 @@ StringView TextRowReader::getStringView(
 
   if (th.ownedString_ == th.contents_->serDeOptions.nullString) {
     isNull = true;
-    return StringView("");
+    return emptyString;
   }
 
   if (wasEscaped) {
@@ -481,7 +486,7 @@ StringView TextRowReader::getStringView(
     th.ownedString_.resize(j);
   }
 
-  return th.stringViewBuffer_.getOwnedValue(th.ownedString_);
+  return th.ownedString_;
 }
 
 uint8_t TextRowReader::getByte(DelimType& delim) {
@@ -696,7 +701,6 @@ bool TextRowReader::skipLine() {
 }
 
 void TextRowReader::resetLine() {
-  stringViewBuffer_ = StringViewBufferHolder(&contents_->pool);
   if (!atEOF_) {
     atEOL_ = false;
     VELOX_CHECK_EQ(depth_, 0);
@@ -706,9 +710,9 @@ void TextRowReader::resetLine() {
 
 template <typename T>
 T TextRowReader::getInteger(TextRowReader& th, bool& isNull, DelimType& delim) {
-  const auto& s = getStringView(th, isNull, delim);
+  const std::string& str = getString(th, isNull, delim);
 
-  if (s.empty()) {
+  if (str.empty()) {
     isNull = true;
   }
   if (isNull) {
@@ -717,8 +721,7 @@ T TextRowReader::getInteger(TextRowReader& th, bool& isNull, DelimType& delim) {
 
   // Test if s is not acceptable integer format for
   // the warehouse, for cases accepted by stol().
-  const auto& strRef = s.data();
-  char c = strRef[0];
+  char c = str[0];
   if (c != '-' && !std::isdigit(static_cast<unsigned char>(c))) {
     isNull = true;
     return 0;
@@ -727,18 +730,18 @@ T TextRowReader::getInteger(TextRowReader& th, bool& isNull, DelimType& delim) {
   int64_t v = 0;
   unsigned long long scanPos = 0;
   errno = 0;
-  auto scanCount = sscanf(s.data(), "%" SCNd64 "%lln", &v, &scanPos);
+  auto scanCount = sscanf(str.c_str(), "%" SCNd64 "%lln", &v, &scanPos);
   if (scanCount != 1 || errno == ERANGE) {
     isNull = true;
     return 0;
   }
-  if (scanPos < s.size()) {
+  if (scanPos < str.size()) {
     // Check if the string is a valid decimal.
-    for (uint64_t i = scanPos; i < s.size(); i++) {
-      if (i == scanPos && strRef[i] == '.') {
+    for (uint64_t i = scanPos; i < str.size(); i++) {
+      if (i == scanPos && str[i] == '.') {
         continue;
       }
-      if (strRef[i] >= '0' && strRef[i] <= '9') {
+      if (str[i] >= '0' && str[i] <= '9') {
         continue;
       }
       isNull = true;
@@ -766,31 +769,28 @@ bool TextRowReader::getBoolean(
     TextRowReader& th,
     bool& isNull,
     DelimType& delim) {
-  const auto& s = getStringView(th, isNull, delim);
-  if (s.empty()) {
+  const std::string& str = getString(th, isNull, delim);
+  if (str.empty()) {
     isNull = true;
   }
   if (isNull) {
     return false;
   }
-  if (s.compare(trueStringView) == 0) {
+  if (str.compare(trueStringView) == 0) {
     return true;
   }
-  if (s.compare(falseStringView) == 0) {
+  if (str.compare(falseStringView) == 0) {
     return false;
   }
 
-  const auto& strRef = s.data();
-  switch (s.size()) {
+  switch (str.size()) {
     case 4:
-      if (folly::StringPiece(strRef).equals(
-              "TRUE", folly::AsciiCaseInsensitive())) {
+      if (StringPiece(str).equals("TRUE", AsciiCaseInsensitive())) {
         return true;
       }
       break;
     case 5:
-      if (folly::StringPiece(strRef).equals(
-              "FALSE", folly::AsciiCaseInsensitive())) {
+      if (StringPiece(str).equals("FALSE", AsciiCaseInsensitive())) {
         return false;
       }
       break;
@@ -806,52 +806,58 @@ namespace {
 
 static const StringView NaNStringView = StringView{"NaN"};
 static const StringView InfinityStringView = StringView{"Infinity"};
+static const StringView ShortInfinityStringView = StringView{"Inf"};
 static const StringView NegInfinityStringView = StringView{"-Infinity"};
+static const StringView ShortNegInfinityStringView = StringView{"-Inf"};
 
-bool unacceptableFloatingPoint(StringView& s) {
-  bool seenPeriod = false;
+bool unacceptableFloatingPoint(std::string& s) {
   for (int i = 0; i < s.size(); ++i) {
     char c = s.data()[i];
-    if (c == '.') {
-      if (seenPeriod) {
-        return false;
-      } else {
-        seenPeriod = true;
-      }
-      continue;
-    }
-
     if (!(std::isalpha(c) || c == '-')) {
       return false;
     }
   }
 
-  return (
-      s != NaNStringView && s != InfinityStringView &&
-      s != NegInfinityStringView);
+  bool isNaN =
+      StringPiece(s).equals(StringPiece(NaNStringView), AsciiCaseInsensitive());
+
+  bool isInf = StringPiece(s).equals(
+      StringPiece(InfinityStringView), AsciiCaseInsensitive());
+  bool isShortInf = StringPiece(s).equals(
+      StringPiece(ShortInfinityStringView), AsciiCaseInsensitive());
+
+  bool isNegInf = StringPiece(s).equals(
+      StringPiece(NegInfinityStringView), AsciiCaseInsensitive());
+  bool isShortNegInf = StringPiece(s).equals(
+      StringPiece(ShortNegInfinityStringView), AsciiCaseInsensitive());
+
+  return (!isNaN && !isInf && !isShortInf && !isNegInf && !isShortNegInf);
 }
 
-StringView trimStringView(StringView& s) {
+void trimStringInPlace(std::string& s) {
   const auto isNotSpace = [](unsigned char ch) { return ch > 0x20; };
-  auto strView = std::string_view(s.data(), s.size());
-
-  // Find first non-whitespace character.
   size_t start = 0;
-  while (start < strView.size() && !isNotSpace(strView[start])) {
+  size_t end = s.size();
+
+  // Find first non-whitespace character
+  while (start < end && !isNotSpace(s[start])) {
     ++start;
   }
 
-  if (start == strView.size()) {
-    return StringView("");
+  // If the string is all whitespace
+  if (start == end) {
+    s.clear();
+    return;
   }
 
-  // Find last non-whitespace character.
-  size_t end = strView.size() - 1;
-  while (end > start && !isNotSpace(strView[end])) {
-    --end;
+  // Find last non-whitespace character
+  size_t last = end - 1;
+  while (last > start && !isNotSpace(s[last])) {
+    --last;
   }
 
-  return StringView(strView.data() + start, end - start + 1);
+  // Erase leading and trailing whitespace
+  s = s.substr(start, last - start + 1);
 }
 
 } // namespace
@@ -860,16 +866,22 @@ float TextRowReader::getFloat(
     TextRowReader& th,
     bool& isNull,
     DelimType& delim) {
-  auto strView = getStringView(th, isNull, delim);
-  if (strView.empty()) {
+  std::string& str = getString(th, isNull, delim);
+  if (str.empty()) {
     isNull = true;
   }
   if (isNull) {
     return 0;
   }
 
-  strView = trimStringView(strView);
-  if (unacceptableFloatingPoint(strView)) {
+  trimStringInPlace(str);
+
+  if (str.data()[0] == '.') {
+    th.ownedString_.insert(th.ownedString_.begin(), '0');
+    str = th.ownedString_;
+  }
+
+  if (unacceptableFloatingPoint(str)) {
     isNull = true;
     return 0.0;
   }
@@ -878,8 +890,8 @@ float TextRowReader::getFloat(
   unsigned long long scanPos = 0;
   // We ignore ERANGE, since denormalized floats and
   // infinities are acceptable.
-  auto scanCount = sscanf(strView.data(), "%f%lln", &v, &scanPos);
-  if (scanCount != 1 || scanPos < strView.size()) {
+  auto scanCount = sscanf(str.c_str(), "%f%lln", &v, &scanPos);
+  if (scanCount != 1 || scanPos < str.size()) {
     isNull = true;
     return 0.0;
   }
@@ -888,34 +900,49 @@ float TextRowReader::getFloat(
 
 double
 TextRowReader::getDouble(TextRowReader& th, bool& isNull, DelimType& delim) {
-  auto strView = getStringView(th, isNull, delim);
-  if (strView.empty()) {
+  std::string& str = getString(th, isNull, delim);
+  if (str.empty()) {
     isNull = true;
   }
+
   if (isNull) {
-    return 0;
+    return 0.0;
   }
 
-  strView = trimStringView(strView);
+  trimStringInPlace(str);
+
+  if (str.data()[0] == '.') {
+    th.ownedString_.insert(th.ownedString_.begin(), '0');
+    str = th.ownedString_;
+  }
+
   // Filter out values from non-warehouse sources which
   // other readers translate to null. Warehouse
   // readers require upper-case values.
-  if (unacceptableFloatingPoint(strView)) {
+  if (unacceptableFloatingPoint(str)) {
     isNull = true;
     return 0.0;
   }
+
   double v = 0.0;
   unsigned long long scanPos = 0;
   // We ignore ERANGE, since denormalized doubles and
   // infinities are acceptable.
-  auto scanCount = sscanf(strView.data(), "%lf%lln", &v, &scanPos);
-  if (scanCount != 1 || scanPos < strView.size()) {
+  auto scanCount = sscanf(str.c_str(), "%lf%lln", &v, &scanPos);
+  if (scanCount != 1 || scanPos < str.size()) {
     isNull = true;
     return 0.0;
   }
   return v;
 }
 
+/// TODO: Reconsider error handling strategy for malformed data
+/// Currently, all read functions convert invalid/malformed data to NULL values.
+/// This approach may produce incorrect query results, particularly for
+/// aggregate operations where a high volume of NULLs can significantly skew
+/// calculations (e.g., COUNT, AVG, SUM). Consider alternative strategies such
+/// as throwing exceptions, logging warnings, or providing configurable error
+/// handling modes.
 void TextRowReader::readElement(
     const std::shared_ptr<const Type>& t,
     const std::shared_ptr<const Type>& reqT,
@@ -935,7 +962,10 @@ void TextRowReader::readElement(
               getInteger<int32_t>, data, insertionRow, delim);
           break;
         default:
-          unsupportedBatchType(data);
+          VELOX_FAIL(
+              "Requested type {} is not supported to be read as type {}",
+              reqT->toString(),
+              t->toString());
           break;
       }
       break;
@@ -960,16 +990,23 @@ void TextRowReader::readElement(
               getInteger<int16_t>, data, insertionRow, delim);
           break;
         default:
-          unsupportedBatchType(data);
+          VELOX_FAIL(
+              "Requested type {} is not supported to be read as type {}",
+              reqT->toString(),
+              t->toString());
           break;
       }
       break;
 
-    case TypeKind::VARBINARY:
-    case TypeKind::VARCHAR: {
-      const auto& strView = getStringView(*this, isNull, delim);
-      const auto& flatVector =
-          data ? data->asChecked<FlatVector<StringView>>() : nullptr;
+    case TypeKind::VARBINARY: {
+      const std::string& str = getString(*this, isNull, delim);
+
+      // Early return if no data vector or at EOF
+      if ((atEOF_ && atSOL_) || (data == nullptr)) {
+        return;
+      }
+
+      const auto& flatVector = data->asChecked<FlatVector<StringView>>();
       if (!flatVector) {
         VELOX_FAIL(
             "Vector for column type does not match: expected FlatVector<StringView>, got {}",
@@ -977,11 +1014,67 @@ void TextRowReader::readElement(
         return;
       }
 
-      if ((atEOF_ && atSOL_) || (flatVector == nullptr)) {
-        break;
+      // Allocate a blob buffer
+      size_t len = str.size();
+      const auto blen = encoding::Base64::calculateDecodedSize(str.data(), len);
+      varBinBuf_->resize(blen.value_or(0));
+
+      // decode from base64 to the blob buffer.
+      Status status = encoding::Base64::decode(
+          str.data(), str.size(), varBinBuf_->data(), blen.value_or(0));
+
+      if (status.code() == StatusCode::kOK) {
+        flatVector->set(
+            insertionRow,
+            StringView(varBinBuf_->data(), static_cast<int32_t>(blen.value())));
+      } else {
+        // Not valid base64:  just copy as-is for compatibility.
+        //
+        // Note that some warehouse file have simply binary data
+        // in what should be a base64-encoded field, and which
+        // may result in extra rows.  Other readers behave as
+        // below, so this provides compatibility, even if  all
+        // readers should really reject these files.
+        varBinBuf_->resize(str.size());
+
+        VELOX_CHECK_NOT_NULL(str.data());
+
+        len = str.size();
+        memcpy(varBinBuf_->data(), str.data(), str.size());
+
+        // Use StringView, set(vector_size_t idx, T value) fails because
+        // strlen(varBinBuf_->data()) is undefined due to lack of null
+        // terminator
+        flatVector->set(
+            insertionRow,
+            StringView(varBinBuf_->data(), static_cast<int32_t>(str.size())));
       }
 
-      flatVector->set(insertionRow, strView);
+      if (isNull) {
+        flatVector->setNull(insertionRow, true);
+      }
+
+      break;
+    }
+    case TypeKind::VARCHAR: {
+      const std::string& str = getString(*this, isNull, delim);
+
+      // Early return if no data vector or at EOF
+      if ((atEOF_ && atSOL_) || (data == nullptr)) {
+        return;
+      }
+
+      const auto& flatVector = data->asChecked<FlatVector<StringView>>();
+      if (!flatVector) {
+        VELOX_FAIL(
+            "Vector for column type does not match: expected FlatVector<StringView>, got {}",
+            data ? data->type()->toString() : "null");
+        return;
+      }
+
+      flatVector->set(
+          insertionRow,
+          StringView(str.data(), static_cast<int32_t>(str.size())));
 
       if (isNull) {
         flatVector->setNull(insertionRow, true);
@@ -1008,7 +1101,10 @@ void TextRowReader::readElement(
           putValue<bool, bool>(getBoolean, data, insertionRow, delim);
           break;
         default:
-          unsupportedBatchType(data);
+          VELOX_FAIL(
+              "Requested type {} is not supported to be read as type {}",
+              reqT->toString(),
+              t->toString());
           break;
       }
       break;
@@ -1032,7 +1128,10 @@ void TextRowReader::readElement(
               getInteger<int8_t>, data, insertionRow, delim);
           break;
         default:
-          unsupportedBatchType(data);
+          VELOX_FAIL(
+              "Requested type {} is not supported to be read as type {}",
+              reqT->toString(),
+              t->toString());
           break;
       }
       break;
@@ -1227,10 +1326,13 @@ void TextRowReader::readElement(
           putValue<float, float>(getFloat, data, insertionRow, delim);
           break;
         case TypeKind::DOUBLE:
-          putValue<float, double>(getFloat, data, insertionRow, delim);
+          putValue<float, double>(getDouble, data, insertionRow, delim);
           break;
         default:
-          unsupportedBatchType(data);
+          VELOX_FAIL(
+              "Requested type {} is not supported to be read as type {}",
+              reqT->toString(),
+              t->toString());
           break;
       }
       break;
@@ -1240,14 +1342,14 @@ void TextRowReader::readElement(
       break;
 
     case TypeKind::TIMESTAMP: {
-      const auto& s = getStringView(*this, isNull, delim);
+      const std::string& s = getString(*this, isNull, delim);
+
       // Early return if no data vector or at EOF
       if ((atEOF_ && atSOL_) || (data == nullptr)) {
         return;
       }
 
-      auto flatVector =
-          data ? data->asChecked<FlatVector<Timestamp>>() : nullptr;
+      auto flatVector = data->asChecked<FlatVector<Timestamp>>();
       if (!flatVector) {
         VELOX_FAIL(
             "Vector for column type does not match: expected FlatVector<Timestamp>, got {}",
@@ -1273,6 +1375,8 @@ void TextRowReader::readElement(
     default:
       VELOX_NYI("readElement unhandled type (kind code {})", t->kind());
   }
+
+  ownedString_.clear();
 }
 
 uint64_t maxStreamsForType(const std::shared_ptr<const Type>& type) {
@@ -1323,12 +1427,13 @@ void TextRowReader::putValue(
     return;
   }
 
-  flatVector->set(insertionRow, v);
-
   // Handle null property.
   if (isNull) {
     flatVector->setNull(insertionRow, isNull);
+    return;
   }
+
+  flatVector->set(insertionRow, v);
 }
 
 const std::shared_ptr<const RowType>& TextRowReader::getType() const {
@@ -1468,4 +1573,4 @@ uint64_t TextReader::getMemoryUse() {
   return memory;
 }
 
-} // namespace facebook::velox::dwio::common
+} // namespace facebook::velox::text

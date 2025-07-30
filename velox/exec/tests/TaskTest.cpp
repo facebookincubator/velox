@@ -2668,13 +2668,12 @@ TEST_F(TaskTest, invalidPlanNodeForBarrier) {
       makeFlatVector<int64_t>(1'000, [](auto row) { return row; }),
   });
 
-  // Filter + Project.
   const auto plan = PlanBuilder()
                         .values({data, data})
                         .filter("c0 < 100")
                         .project({"c0 + 5"})
                         .planFragment();
-  ASSERT_FALSE(plan.supportsBarrier());
+  ASSERT_TRUE(plan.firstNodeNotSupportingBarrier());
 
   const auto task = Task::create(
       "invalidPlanNodeForBarrier",
@@ -2683,7 +2682,9 @@ TEST_F(TaskTest, invalidPlanNodeForBarrier) {
       core::QueryCtx::create(),
       Task::ExecutionMode::kSerial);
   ASSERT_TRUE(!task->underBarrier());
-  VELOX_ASSERT_THROW(task->requestBarrier(), "Task doesn't support barrier");
+  VELOX_ASSERT_THROW(
+      task->requestBarrier(),
+      "Name of the first node that doesn't support barriered execution:");
 }
 
 TEST_F(TaskTest, barrierAfterNoMoreSplits) {
@@ -2733,7 +2734,7 @@ TEST_F(TaskTest, invalidTaskModeForBarrier) {
                         .filter("c0 < 100")
                         .project({"c0 + 5"})
                         .planFragment();
-  ASSERT_TRUE(plan.supportsBarrier());
+  ASSERT_TRUE(plan.firstNodeNotSupportingBarrier() == nullptr);
 
   const auto task = Task::create(
       "invalidTaskModeForBarrier",
@@ -2742,7 +2743,9 @@ TEST_F(TaskTest, invalidTaskModeForBarrier) {
       core::QueryCtx::create(),
       Task::ExecutionMode::kParallel);
   ASSERT_TRUE(!task->underBarrier());
-  VELOX_ASSERT_THROW(task->requestBarrier(), "Task doesn't support barrier");
+  VELOX_ASSERT_THROW(
+      task->requestBarrier(),
+      "(Parallel vs. Serial) Task doesn't support barriered execution.");
 }
 
 TEST_F(TaskTest, addSplitAfterBarrier) {
@@ -2760,7 +2763,7 @@ TEST_F(TaskTest, addSplitAfterBarrier) {
                         .filter("c0 < 100")
                         .project({"c0 + 5"})
                         .planFragment();
-  ASSERT_TRUE(plan.supportsBarrier());
+  ASSERT_TRUE(plan.firstNodeNotSupportingBarrier() == nullptr);
 
   const auto task = Task::create(
       "barrierAfterNoMoreSplits",
@@ -3148,6 +3151,9 @@ TEST_F(TaskTest, testTerminateDuringBarrierWithUnion) {
 TEST_F(TaskTest, expressionStatsInBetweenBarriers) {
   // Verify that expression stats are collected in between barriers and at the
   // end.
+  // This projection ensures that we verify that inputs of special
+  // form (coalesce) are also included.
+  const std::string projection = "coalesce(c0 + 1, 0)";
   const int numRows{10};
   auto data = makeRowVector({
       makeFlatVector<int64_t>(numRows, [](auto row) { return row; }),
@@ -3160,7 +3166,7 @@ TEST_F(TaskTest, expressionStatsInBetweenBarriers) {
   auto plan = PlanBuilder()
                   .tableScan(asRowType(data->type()))
                   .capturePlanNodeId(scanId)
-                  .project({"c0 + 1"})
+                  .project({projection})
                   .capturePlanNodeId(projectNodeId)
                   .planFragment();
 
@@ -3196,6 +3202,8 @@ TEST_F(TaskTest, expressionStatsInBetweenBarriers) {
     auto& projectStats = taskStats.pipelineStats[0].operatorStats[1];
     ASSERT_EQ(projectStats.planNodeId, nodeId);
     auto& expressionStats = projectStats.expressionStats;
+    // Ensure only the non-special form expression is tracked.
+    ASSERT_EQ(expressionStats.size(), 1);
     auto it = expressionStats.find("plus");
     ASSERT_TRUE(it != expressionStats.end());
     ASSERT_EQ(it->second.numProcessedRows, expectedNumProcessedRows);

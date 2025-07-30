@@ -35,17 +35,11 @@ bool isPositiveInteger(const std::string& str) {
       }) == str.end();
 }
 
-std::string buildCalculation(
-    const std::string& variable,
-    const std::string& calculation) {
-  return fmt::format("{}={}", variable, calculation);
-}
-
-std::optional<int64_t> tryResolveLongLiteral(
+std::optional<int> tryResolveLongLiteral(
     const TypeSignature& parameter,
     const std::unordered_map<std::string, SignatureVariable>& variables,
     std::unordered_map<std::string, int>& integerVariablesBindings) {
-  auto variable = parameter.baseName();
+  const auto& variable = parameter.baseName();
 
   if (isPositiveInteger(variable)) {
     // Handle constant.
@@ -61,15 +55,15 @@ std::optional<int64_t> tryResolveLongLiteral(
     return std::nullopt;
   }
 
-  auto& constraints = it->second.constraint();
+  const auto& constraints = it->second.constraint();
 
-  if (constraints == "") {
+  if (constraints.empty()) {
     return std::nullopt;
   }
 
   // Try to assign value based on constraints.
   // Check constraints and evaluate.
-  auto calculation = buildCalculation(variable, constraints);
+  const auto calculation = fmt::format("{}={}", variable, constraints);
   expression::calculation::evaluate(calculation, integerVariablesBindings);
   VELOX_CHECK(
       integerVariablesBindings.count(variable),
@@ -96,9 +90,25 @@ bool checkNamedRowField(
 
 } // namespace
 
+bool SignatureBinder::tryBindWithCoercions(std::vector<Coercion>& coercions) {
+  return tryBind(true, coercions);
+}
+
 bool SignatureBinder::tryBind() {
+  std::vector<Coercion> coercions;
+  return tryBind(false, coercions);
+}
+
+bool SignatureBinder::tryBind(
+    bool allowCoercions,
+    std::vector<Coercion>& coercions) {
+  if (allowCoercions) {
+    coercions.clear();
+    coercions.resize(actualTypes_.size());
+  }
+
   const auto& formalArgs = signature_.argumentTypes();
-  auto formalArgsCnt = formalArgs.size();
+  const auto formalArgsCnt = formalArgs.size();
 
   if (signature_.variableArity()) {
     if (actualTypes_.size() < formalArgsCnt - 1) {
@@ -122,17 +132,24 @@ bool SignatureBinder::tryBind() {
     }
   }
 
-  bool allBound = true;
   for (auto i = 0; i < formalArgsCnt && i < actualTypes_.size(); i++) {
     if (actualTypes_[i]) {
-      if (!SignatureBinderBase::tryBind(formalArgs[i], actualTypes_[i])) {
-        allBound = false;
+      if (allowCoercions) {
+        if (!SignatureBinderBase::tryBindWithCoercion(
+                formalArgs[i], actualTypes_[i], coercions[i])) {
+          return false;
+        }
+      } else {
+        if (!SignatureBinderBase::tryBind(formalArgs[i], actualTypes_[i])) {
+          return false;
+        }
       }
     } else {
-      allBound = false;
+      return false;
     }
   }
-  return allBound;
+
+  return true;
 }
 
 bool SignatureBinderBase::checkOrSetIntegerParameter(
@@ -143,6 +160,12 @@ bool SignatureBinderBase::checkOrSetIntegerParameter(
   }
   if (!variables().count(parameterName)) {
     // Return false if the parameter is not found in the signature.
+    return false;
+  }
+
+  const auto& constraint = variables().at(parameterName).constraint();
+  if (isPositiveInteger(constraint) && atoi(constraint.c_str()) != value) {
+    // Return false if the actual value does not match the constraint.
     return false;
   }
 
@@ -157,14 +180,31 @@ bool SignatureBinderBase::checkOrSetIntegerParameter(
   return true;
 }
 
+bool SignatureBinderBase::tryBindWithCoercion(
+    const exec::TypeSignature& typeSignature,
+    const TypePtr& actualType,
+    Coercion& coercion) {
+  return tryBind(typeSignature, actualType, true, coercion);
+}
+
 bool SignatureBinderBase::tryBind(
     const exec::TypeSignature& typeSignature,
     const TypePtr& actualType) {
+  Coercion coercion;
+  return tryBind(typeSignature, actualType, false, coercion);
+}
+
+bool SignatureBinderBase::tryBind(
+    const exec::TypeSignature& typeSignature,
+    const TypePtr& actualType,
+    bool allowCoercion,
+    Coercion& coercion) {
+  coercion.reset();
   if (isAny(typeSignature)) {
     return true;
   }
 
-  const auto baseName = typeSignature.baseName();
+  const auto& baseName = typeSignature.baseName();
 
   if (variables().count(baseName)) {
     // Variables cannot have further parameters.
@@ -202,6 +242,13 @@ bool SignatureBinderBase::tryBind(
       boost::algorithm::to_upper_copy(std::string(actualType->name()));
 
   if (typeName != actualTypeName) {
+    if (allowCoercion) {
+      if (auto availableCoercion =
+              TypeCoercer::coerceTypeBase(actualType, typeName)) {
+        coercion = availableCoercion.value();
+        return true;
+      }
+    }
     return false;
   }
 
@@ -226,6 +273,7 @@ bool SignatureBinderBase::tryBind(
         }
 
         if (!tryBind(params[i], actualParameter.type)) {
+          // TODO Allow coercions for complex types.
           return false;
         }
         break;
@@ -239,7 +287,7 @@ TypePtr SignatureBinder::tryResolveType(
     const std::unordered_map<std::string, SignatureVariable>& variables,
     const std::unordered_map<std::string, TypePtr>& typeVariablesBindings,
     std::unordered_map<std::string, int>& integerVariablesBindings) {
-  const auto baseName = typeSignature.baseName();
+  const auto& baseName = typeSignature.baseName();
 
   if (variables.count(baseName)) {
     auto it = typeVariablesBindings.find(baseName);
@@ -259,7 +307,7 @@ TypePtr SignatureBinder::tryResolveType(
     auto literal =
         tryResolveLongLiteral(param, variables, integerVariablesBindings);
     if (literal.has_value()) {
-      typeParameters.push_back(TypeParameter(literal.value()));
+      typeParameters.emplace_back(literal.value());
       continue;
     }
 
@@ -268,7 +316,7 @@ TypePtr SignatureBinder::tryResolveType(
     if (!type) {
       return nullptr;
     }
-    typeParameters.push_back(TypeParameter(type, param.rowFieldName()));
+    typeParameters.emplace_back(type, param.rowFieldName());
   }
 
   try {
@@ -280,7 +328,7 @@ TypePtr SignatureBinder::tryResolveType(
     return nullptr;
   }
 
-  auto typeKind = tryMapNameToTypeKind(typeName);
+  auto typeKind = TypeKindName::tryToTypeKind(typeName);
   if (!typeKind.has_value()) {
     return nullptr;
   }

@@ -323,7 +323,7 @@ class QueryConfig {
       "spill_file_create_config";
 
   /// Default offset spill start partition bit. It is used with
-  /// 'kJoinSpillPartitionBits' or 'kAggregationSpillPartitionBits' together to
+  /// 'kSpillNumPartitionBits' together to
   /// calculate the spilling partition number for join spill or aggregation
   /// spill.
   static constexpr const char* kSpillStartPartitionBit =
@@ -637,12 +637,20 @@ class QueryConfig {
   static constexpr const char* kFieldNamesInJsonCastEnabled =
       "field_names_in_json_cast_enabled";
 
-  /// If this is true, then operators that evaluate expressions will track their
-  /// stats and return them as part of their operator stats. Tracking these
-  /// stats can be expensive (especially if operator stats are retrieved
-  /// frequently) and this allows the user to explicitly enable it.
+  /// If this is true, then operators that evaluate expressions will track
+  /// stats for expressions that are not special forms and return them as
+  /// part of their operator stats. Tracking these stats can be expensive
+  /// (especially if operator stats are retrieved frequently) and this allows
+  /// the user to explicitly enable it.
   static constexpr const char* kOperatorTrackExpressionStats =
       "operator_track_expression_stats";
+
+  /// If this is true, enable the operator input/output batch size stats
+  /// collection in driver execution. This can be expensive for data types with
+  /// a large number of columns (e.g., ROW types) as it calls estimateFlatSize()
+  /// which recursively calculates sizes for all child vectors.
+  static constexpr const char* kEnableOperatorBatchSizeStats =
+      "enable_operator_batch_size_stats";
 
   /// If this is true, then the unnest operator might split output for each
   /// input batch based on the output batch size control. Otherwise, it produces
@@ -1186,6 +1194,10 @@ class QueryConfig {
 
   bool operatorTrackExpressionStats() const {
     return get<bool>(kOperatorTrackExpressionStats, false);
+  }
+
+  bool enableOperatorBatchSizeStats() const {
+    return get<bool>(kEnableOperatorBatchSizeStats, true);
   }
 
   bool unnestSplitOutput() const {

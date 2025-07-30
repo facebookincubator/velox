@@ -17,9 +17,8 @@
 #include "velox/expression/EvalCtx.h"
 #include <exception>
 #include "velox/common/testutil/TestValue.h"
-#include "velox/core/QueryConfig.h"
-#include "velox/expression/Expr.h"
 #include "velox/expression/PeeledEncoding.h"
+#include "velox/vector/LazyVector.h"
 
 using facebook::velox::common::testutil::TestValue;
 

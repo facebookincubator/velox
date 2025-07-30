@@ -13,19 +13,17 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/common/process/ThreadDebugInfo.h"
 
-#pragma once
+#include <folly/Unit.h>
+#include <folly/init/Init.h>
+#include <gtest/gtest.h>
 
-#include "velox/type/Type.h"
-
-namespace facebook::velox::type {
-
-class TypeParser {
- public:
-  TypeParser() = default;
-  virtual ~TypeParser() = default;
-
-  virtual std::shared_ptr<const velox::Type> parse(const std::string& ser) = 0;
-};
-
-} // namespace facebook::velox::type
+// This main is needed for some tests on linux.
+int main(int argc, char** argv) {
+  testing::InitGoogleTest(&argc, argv);
+  // Signal handler required for ThreadDebugInfoTest
+  facebook::velox::process::addDefaultFatalSignalHandler();
+  folly::Init init(&argc, &argv, false);
+  return RUN_ALL_TESTS();
+}

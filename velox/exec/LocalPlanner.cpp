@@ -35,6 +35,7 @@
 #include "velox/exec/NestedLoopJoinProbe.h"
 #include "velox/exec/OperatorTraceScan.h"
 #include "velox/exec/OrderBy.h"
+#include "velox/exec/ParallelProject.h"
 #include "velox/exec/PartitionedOutput.h"
 #include "velox/exec/RoundRobinPartitionFunction.h"
 #include "velox/exec/RowNumber.h"
@@ -204,10 +205,11 @@ void plan(
     OperatorSupplier operatorSupplier,
     std::vector<std::unique_ptr<DriverFactory>>* driverFactories) {
   if (!currentPlanNodes) {
-    driverFactories->push_back(std::make_unique<DriverFactory>());
-    currentPlanNodes = &driverFactories->back()->planNodes;
-    driverFactories->back()->operatorSupplier = std::move(operatorSupplier);
-    driverFactories->back()->consumerNode = consumerNode;
+    auto driverFactory = std::make_unique<DriverFactory>();
+    currentPlanNodes = &driverFactory->planNodes;
+    driverFactory->operatorSupplier = std::move(operatorSupplier);
+    driverFactory->consumerNode = consumerNode;
+    driverFactories->push_back(std::move(driverFactory));
   }
 
   const auto& sources = planNode->sources();
@@ -351,7 +353,7 @@ void LocalPlanner::plan(
       planFragment.planNode,
       nullptr,
       nullptr,
-      detail::makeOperatorSupplier(consumerSupplier),
+      detail::makeOperatorSupplier(std::move(consumerSupplier)),
       driverFactories);
 
   (*driverFactories)[0]->outputDriver = true;
@@ -401,14 +403,14 @@ void LocalPlanner::determineGroupedExecutionPipelines(
       size_t numGroupedExecutionSources{0};
       for (const auto& sourceNode : localPartitionNode->sources()) {
         for (auto& anotherFactory : driverFactories) {
-          if (sourceNode == anotherFactory->planNodes.back() and
+          if (sourceNode == anotherFactory->planNodes.back() &&
               anotherFactory->groupedExecution) {
             ++numGroupedExecutionSources;
             break;
           }
         }
       }
-      if (numGroupedExecutionSources > 0 and
+      if (numGroupedExecutionSources > 0 &&
           numGroupedExecutionSources == localPartitionNode->sources().size()) {
         factory->groupedExecution = true;
       }
@@ -495,6 +497,12 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
             std::dynamic_pointer_cast<const core::ProjectNode>(planNode)) {
       operators.push_back(
           std::make_unique<FilterProject>(id, ctx.get(), nullptr, projectNode));
+    } else if (
+        auto projectNode =
+            std::dynamic_pointer_cast<const core::ParallelProjectNode>(
+                planNode)) {
+      operators.push_back(
+          std::make_unique<ParallelProject>(id, ctx.get(), projectNode));
     } else if (
         auto valuesNode =
             std::dynamic_pointer_cast<const core::ValuesNode>(planNode)) {

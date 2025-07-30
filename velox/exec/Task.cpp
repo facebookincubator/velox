@@ -31,7 +31,9 @@
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/OutputBufferManager.h"
 #include "velox/exec/PlanNodeStats.h"
+#include "velox/exec/TableScan.h"
 #include "velox/exec/Task.h"
+#include "velox/exec/TaskTraceWriter.h"
 #include "velox/exec/TraceUtil.h"
 
 using facebook::velox::common::testutil::TestValue;
@@ -55,7 +57,7 @@ class EventCompletionNotifier {
       std::vector<ContinuePromise> promises,
       std::function<void()> callback = nullptr) {
     active_ = true;
-    callback_ = callback;
+    callback_ = std::move(callback);
     promises_ = std::move(promises);
   }
 
@@ -185,6 +187,7 @@ void movePromisesOut(
   }
   from.clear();
 }
+
 } // namespace
 
 std::string executionModeString(Task::ExecutionMode mode) {
@@ -338,9 +341,8 @@ Task::Task(
       memoryArbitrationPriority_(memoryArbitrationPriority),
       queryCtx_(std::move(queryCtx)),
       planFragment_(std::move(planFragment)),
-      supportBarrier_(
-          (mode_ == Task::ExecutionMode::kSerial) &&
-          planFragment_.supportsBarrier()),
+      firstNodeNotSupportingBarrier_(
+          planFragment_.firstNodeNotSupportingBarrier()),
       traceConfig_(maybeMakeTraceConfig()),
       consumerSupplier_(std::move(consumerSupplier)),
       onError_(std::move(onError)),
@@ -418,6 +420,19 @@ Task::~Task() {
   for (auto& promise : taskDeletionPromises) {
     promise.setValue();
   }
+}
+
+void Task::ensureBarrierSupport() const {
+  VELOX_CHECK_EQ(
+      mode_,
+      Task::ExecutionMode::kSerial,
+      "Task doesn't support barriered execution.");
+
+  VELOX_CHECK_NULL(
+      firstNodeNotSupportingBarrier_,
+      "Task doesn't support barriered execution. Name of the first node that "
+      "doesn't support barriered execution: {}",
+      firstNodeNotSupportingBarrier_->name());
 }
 
 Task::TaskList& Task::taskList() {
@@ -1505,7 +1520,7 @@ std::unique_ptr<ContinuePromise> Task::addSplitLocked(
     SplitsState& splitsState,
     const exec::Split& split) {
   if (split.isBarrier()) {
-    VELOX_CHECK(supportBarrier_);
+    ensureBarrierSupport();
     VELOX_CHECK(splitsState.sourceIsTableScan);
     VELOX_CHECK(!splitsState.noMoreSplits);
     return addSplitToStoreLocked(
@@ -1646,12 +1661,12 @@ void Task::noMoreSplits(const core::PlanNodeId& planNodeId) {
 }
 
 ContinueFuture Task::requestBarrier() {
-  VELOX_CHECK(supportBarrier_, "Task doesn't support barrier");
+  ensureBarrierSupport();
   return startBarrier("Task::requestBarrier");
 }
 
 ContinueFuture Task::startBarrier(std::string_view comment) {
-  VELOX_CHECK(supportBarrier_);
+  ensureBarrierSupport();
   std::vector<std::unique_ptr<ContinuePromise>> promises;
   SCOPE_EXIT {
     for (auto& promise : promises) {
@@ -1747,6 +1762,7 @@ namespace {
 bool isTableScan(const Operator* op) {
   return dynamic_cast<const TableScan*>(op) != nullptr;
 }
+
 } // namespace
 
 void Task::dropInput(Operator* op) {

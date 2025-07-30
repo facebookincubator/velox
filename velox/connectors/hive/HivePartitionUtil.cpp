@@ -15,6 +15,7 @@
  */
 
 #include "velox/connectors/hive/HivePartitionUtil.h"
+#include "velox/vector/SimpleVector.h"
 
 namespace facebook::velox::connector::hive {
 
@@ -28,6 +29,7 @@ namespace facebook::velox::connector::hive {
       case TypeKind::BIGINT:                                                \
       case TypeKind::VARCHAR:                                               \
       case TypeKind::VARBINARY:                                             \
+      case TypeKind::TIMESTAMP:                                             \
         return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(                          \
             TEMPLATE_FUNC, typeKind, __VA_ARGS__);                          \
       default:                                                              \
@@ -45,6 +47,30 @@ inline std::string makePartitionValueString(T value) {
 template <>
 inline std::string makePartitionValueString(bool value) {
   return value ? "true" : "false";
+}
+
+template <>
+inline std::string makePartitionValueString(Timestamp value) {
+  value.toTimezone(Timestamp::defaultTimezone());
+  TimestampToStringOptions options;
+  options.dateTimeSeparator = ' ';
+  // Set the precision to milliseconds, and enable the skipTrailingZeros match
+  // the timestamp precision and truncation behavior of Presto.
+  options.precision = TimestampPrecision::kMilliseconds;
+  options.skipTrailingZeros = true;
+
+  auto result = value.toString(options);
+
+  // Presto's java.sql.Timestamp.toString() always keeps at least one decimal
+  // place even when all fractional seconds are zero.
+  // If skipTrailingZeros removed all fractional digits, add back ".0" to match
+  // Presto's behavior.
+  if (auto dotPos = result.find_last_of('.'); dotPos == std::string::npos) {
+    // No decimal point found, add ".0"
+    result += ".0";
+  }
+
+  return result;
 }
 
 template <TypeKind Kind>

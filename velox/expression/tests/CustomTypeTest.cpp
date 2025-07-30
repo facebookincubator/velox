@@ -20,6 +20,7 @@
 #include "velox/functions/Macros.h"
 #include "velox/functions/Registerer.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/types/SfmSketchRegistration.h"
 #include "velox/type/OpaqueCustomTypes.h"
 
 namespace facebook::velox::test {
@@ -221,39 +222,33 @@ TEST_F(CustomTypeTest, customType) {
 }
 
 TEST_F(CustomTypeTest, getCustomTypeNames) {
-  auto names = getCustomTypeNames();
-  ASSERT_EQ(
-      (std::unordered_set<std::string>{
-          "JSON",
-          "HYPERLOGLOG",
-          "TIMESTAMP WITH TIME ZONE",
-          "UUID",
-          "IPADDRESS",
-          "IPPREFIX",
-          "BINGTILE",
-          "TDIGEST",
-          "QDIGEST",
-          "GEOMETRY"}),
-      names);
+  // SFMSKETCH is a newly registered custom type, unlike others,
+  // registerSfmSketchType() is not called in the constructor of CustomTypeTest,
+  // so we explicitly call it here.
+  registerSfmSketchType();
+
+  auto expectedTypes = std::unordered_set<std::string>{
+      "JSON",
+      "HYPERLOGLOG",
+      "TIMESTAMP WITH TIME ZONE",
+      "UUID",
+      "IPADDRESS",
+      "IPPREFIX",
+      "BINGTILE",
+      "TDIGEST",
+      "QDIGEST",
+      "SFMSKETCH",
+  };
+#ifdef VELOX_ENABLE_GEO
+  expectedTypes.insert("GEOMETRY");
+#endif
+  ASSERT_EQ(expectedTypes, getCustomTypeNames());
 
   ASSERT_TRUE(registerCustomType(
       "fancy_int", std::make_unique<FancyIntTypeFactories>()));
+  expectedTypes.insert("FANCY_INT");
 
-  names = getCustomTypeNames();
-  ASSERT_EQ(
-      (std::unordered_set<std::string>{
-          "JSON",
-          "HYPERLOGLOG",
-          "TIMESTAMP WITH TIME ZONE",
-          "UUID",
-          "IPADDRESS",
-          "IPPREFIX",
-          "BINGTILE",
-          "FANCY_INT",
-          "TDIGEST",
-          "QDIGEST",
-          "GEOMETRY"}),
-      names);
+  ASSERT_EQ(expectedTypes, getCustomTypeNames());
 
   ASSERT_TRUE(unregisterCustomType("fancy_int"));
 }

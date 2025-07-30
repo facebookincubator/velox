@@ -60,6 +60,11 @@ Generic Configuration
      - true
      - Whether to track CPU usage for stages of individual operators. Can be expensive when processing small batches,
        e.g. < 10K rows.
+   * - operator_batch_size_stats_enabled
+     - bool
+     - true
+     - If true, the driver will collect the operator's input/output batch size through vector flat size estimation, otherwise not.
+     - We might turn this off in use cases which have very wide column width and batch size estimation has non-trivial cpu cost.
    * - hash_adaptivity_enabled
      - bool
      - true
@@ -183,6 +188,13 @@ Generic Configuration
      - 0
      - Specifies The max number of input splits to listen to by SplitListener per table scan node per
        worker. It's up to the SplitListener implementation to respect this config.
+   * - operator_track_expression_stats
+     - bool
+     - false
+     - If this is true, then operators that evaluate expressions will track stats for expressions that
+       are not special forms and return them as part of their operator stats. Tracking these stats can
+       be expensive (especially if operator stats are retrieved frequently) and this allows the user to
+       explicitly enable it.
 
 .. _expression-evaluation-conf:
 
@@ -420,7 +432,7 @@ Spilling
    * - spiller_start_partition_bit
      - integer
      - 29
-     - The start partition bit which is used with `spiller_partition_bits` together to calculate the spilling partition number.
+     - The start partition bit which is used with `spiller_num_partition_bits` together to calculate the spilling partition number.
    * - spiller_num_partition_bits
      - integer
      - 3

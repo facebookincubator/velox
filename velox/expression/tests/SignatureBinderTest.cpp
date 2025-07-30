@@ -32,6 +32,14 @@ void testSignatureBinder(
   exec::SignatureBinder binder(*signature, actualTypes);
   ASSERT_TRUE(binder.tryBind());
 
+  std::vector<Coercion> coercions;
+  ASSERT_TRUE(binder.tryBindWithCoercions(coercions));
+
+  ASSERT_EQ(coercions.size(), actualTypes.size());
+  for (const auto& coercion : coercions) {
+    ASSERT_TRUE(coercion.type == nullptr);
+  }
+
   auto returnType = binder.tryResolveReturnType();
   ASSERT_TRUE(returnType != nullptr);
   ASSERT_EQ(*expectedReturnType, *returnType);
@@ -39,9 +47,15 @@ void testSignatureBinder(
 
 void assertCannotResolve(
     const std::shared_ptr<exec::FunctionSignature>& signature,
-    const std::vector<TypePtr>& actualTypes) {
+    const std::vector<TypePtr>& actualTypes,
+    bool allowCoercion = false) {
   exec::SignatureBinder binder(*signature, actualTypes);
   ASSERT_FALSE(binder.tryBind());
+
+  if (allowCoercion) {
+    std::vector<Coercion> coercions;
+    ASSERT_FALSE(binder.tryBindWithCoercions(coercions));
+  }
 }
 
 TEST(SignatureBinderTest, decimals) {
@@ -266,6 +280,19 @@ TEST(SignatureBinderTest, decimals) {
       assertCannotResolve(signature, {DECIMAL(11, 6), DECIMAL(20, 4)});
       assertCannotResolve(signature, {DECIMAL(11, 8), DECIMAL(18, 4)});
     }
+  }
+
+  // The precision and scale are fixed to the constraints.
+  {
+    auto signature = exec::FunctionSignatureBuilder()
+                         .integerVariable("a_precision", "38")
+                         .integerVariable("a_scale", "0")
+                         .returnType("varchar")
+                         .argumentType("decimal(a_precision, a_scale)")
+                         .build();
+
+    testSignatureBinder(signature, {DECIMAL(38, 0)}, VARCHAR());
+    assertCannotResolve(signature, {DECIMAL(18, 6)});
   }
 }
 
@@ -981,6 +1008,119 @@ TEST(SignatureBinderTest, namedRows) {
                          .build();
     testSignatureBinder(signature, {VARCHAR()}, ROW({{"foo", BIGINT()}}));
   }
+}
+
+std::string toString(const std::vector<TypePtr>& types) {
+  std::stringstream out;
+
+  for (auto i = 0; i < types.size(); ++i) {
+    if (i > 0) {
+      out << ", ";
+    }
+    out << types.at(i)->toString();
+  }
+
+  return out.str();
+}
+
+void testCoercions(
+    const exec::FunctionSignaturePtr& signature,
+    const std::vector<TypePtr>& actualTypes,
+    const std::vector<TypePtr>& expectedCoercions,
+    const TypePtr& expectedReturnType) {
+  SCOPED_TRACE(fmt::format("Signature: {}", signature->toString()));
+  SCOPED_TRACE(fmt::format("Actual types: {}", toString(actualTypes)));
+
+  exec::SignatureBinder binder(*signature, actualTypes);
+
+  ASSERT_FALSE(binder.tryBind());
+
+  std::vector<Coercion> coercions;
+  ASSERT_TRUE(binder.tryBindWithCoercions(coercions));
+
+  ASSERT_EQ(expectedCoercions.size(), coercions.size());
+  for (auto i = 0; i < expectedCoercions.size(); ++i) {
+    if (expectedCoercions[i] == nullptr) {
+      ASSERT_TRUE(coercions[i].type == nullptr);
+    } else {
+      ASSERT_EQ(*coercions[i].type, *expectedCoercions[i]);
+    }
+  }
+
+  auto returnType = binder.tryResolveReturnType();
+  ASSERT_TRUE(returnType != nullptr);
+  ASSERT_EQ(*expectedReturnType, *returnType);
+}
+
+void testNoCoercions(
+    const exec::FunctionSignaturePtr& signature,
+    const std::vector<TypePtr>& actualTypes,
+    const TypePtr& expectedReturnType) {
+  SCOPED_TRACE(fmt::format("Signature: {}", signature->toString()));
+  SCOPED_TRACE(fmt::format("Actual types: {}", toString(actualTypes)));
+
+  {
+    exec::SignatureBinder binder(*signature, actualTypes);
+    ASSERT_TRUE(binder.tryBind());
+
+    auto returnType = binder.tryResolveReturnType();
+    ASSERT_TRUE(returnType != nullptr);
+    ASSERT_EQ(*expectedReturnType, *returnType);
+  }
+
+  {
+    exec::SignatureBinder binder(*signature, actualTypes);
+
+    std::vector<Coercion> coercions;
+    ASSERT_TRUE(binder.tryBindWithCoercions(coercions));
+
+    auto returnType = binder.tryResolveReturnType();
+    ASSERT_TRUE(returnType != nullptr);
+    ASSERT_EQ(*expectedReturnType, *returnType);
+
+    ASSERT_EQ(actualTypes.size(), coercions.size());
+    for (auto i = 0; i < actualTypes.size(); ++i) {
+      ASSERT_TRUE(coercions[i].type == nullptr);
+    }
+  }
+}
+
+TEST(SignatureBinderTest, coercions) {
+  auto signature = exec::FunctionSignatureBuilder()
+                       .returnType("boolean")
+                       .argumentType("smallint")
+                       .argumentType("integer")
+                       .argumentType("bigint")
+                       .argumentType("real")
+                       .argumentType("double")
+                       .build();
+
+  testCoercions(
+      signature,
+      {TINYINT(), TINYINT(), TINYINT(), TINYINT(), TINYINT()},
+      {SMALLINT(), INTEGER(), BIGINT(), REAL(), DOUBLE()},
+      BOOLEAN());
+
+  testCoercions(
+      signature,
+      {SMALLINT(), SMALLINT(), SMALLINT(), REAL(), REAL()},
+      {nullptr, INTEGER(), BIGINT(), nullptr, DOUBLE()},
+      BOOLEAN());
+
+  testNoCoercions(
+      signature,
+      {SMALLINT(), INTEGER(), BIGINT(), REAL(), DOUBLE()},
+      BOOLEAN());
+
+  assertCannotResolve(
+      signature,
+      {INTEGER(), INTEGER(), INTEGER(), INTEGER(), INTEGER()},
+      /*allowCoercion*/ true);
+
+  assertCannotResolve(
+      signature,
+      {SMALLINT(), INTEGER(), VARCHAR(), INTEGER(), INTEGER()},
+      /*allowCoercion*/ true);
 }
 
 } // namespace
