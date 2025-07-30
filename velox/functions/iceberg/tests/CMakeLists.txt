@@ -20,7 +20,7 @@ add_test(
 
 target_link_libraries(
   velox_functions_iceberg_test
-  velox_functions_iceberg_util
+  velox_functions_iceberg_hash
   GTest::gtest
   GTest::gtest_main
   GTest::gmock)
