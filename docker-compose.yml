@@ -12,7 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-#TODO document usage
+# The docker-compose file is used only for running the services:
+# `docker compose run adapters-cpp`
+#
+# If you want to build any of the images you will need to use docker bake:
+# `docker bake adapters-amd64`
+#
+# The target names are defined in docker-bake.hcl, you can use the names
+# from `docker-compose.yml`, like `adapters-cpp` but those will not make use
+# of layer caching and will tag images with the wrong tag for the multi-arch images.
+# Do this for local use only!
+#
+# When testing changes you want to push as a PR use docker bake.
 services:
   # This is not an actual target and just used to inherit the env and volume
   # defaults

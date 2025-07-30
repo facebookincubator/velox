@@ -78,6 +78,7 @@ jobs:
         with:
           targets: ${{ matrix.target }}-${{ matrix.os.platform }}
           push: ${{ github.repository == 'facebookincubator/velox' && github.event_name != 'pull_request'}}
+          # loads the image into the local image store, this allows us to export it in the next step
           load: ${{  github.event_name == 'pull_request' && matrix.target == 'ci' && matrix.os.platform == 'amd64' }}
 
       - name: Export Base Image
