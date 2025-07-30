@@ -81,6 +81,7 @@ class ParquetWriterTest : public ParquetTestBase {
   };
 
   inline static const std::string kHiveConnectorId = "test-hive";
+  dwio::common::ColumnReaderStatistics stats;
 };
 
 class ArrowMemoryPool final : public ::arrow::MemoryPool {
@@ -203,7 +204,8 @@ TEST_F(ParquetWriterTest, dictionaryEncodingWithDictionaryPageSize) {
               std::move(inputStream),
               *leafPool_,
               colChunkPtr.compression(),
-              colChunkPtr.totalCompressedSize());
+              colChunkPtr.totalCompressedSize(),
+              stats);
           return pageReader->readPageHeader();
         }
         constexpr int64_t kFirstDataPageCompressedSize = 1291;
@@ -219,7 +221,8 @@ TEST_F(ParquetWriterTest, dictionaryEncodingWithDictionaryPageSize) {
             std::move(inputStream),
             *leafPool_,
             colChunkPtr.compression(),
-            colChunkPtr.totalCompressedSize());
+            colChunkPtr.totalCompressedSize(),
+            stats);
         return pageReader->readPageHeader();
       };
 
@@ -371,7 +374,8 @@ TEST_F(ParquetWriterTest, dictionaryEncodingOff) {
             std::move(inputStream),
             *leafPool_,
             colChunkPtr.compression(),
-            colChunkPtr.totalCompressedSize());
+            colChunkPtr.totalCompressedSize(),
+            stats);
         return pageReader->readPageHeader();
       };
 
@@ -538,7 +542,8 @@ TEST_F(ParquetWriterTest, testPageSizeAndBatchSizeConfiguration) {
             std::move(inputStream),
             *leafPool_,
             colChunkPtr.compression(),
-            colChunkPtr.totalCompressedSize());
+            colChunkPtr.totalCompressedSize(),
+            stats);
         return pageReader->readPageHeader();
       };
 
@@ -685,7 +690,8 @@ TEST_F(ParquetWriterTest, toggleDataPageVersion) {
             std::move(inputStream),
             *leafPool_,
             colChunkPtr.compression(),
-            colChunkPtr.totalCompressedSize());
+            colChunkPtr.totalCompressedSize(),
+            stats);
 
         return pageReader->readPageHeader().type;
       };
