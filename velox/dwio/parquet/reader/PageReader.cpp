@@ -17,11 +17,11 @@
 #include "velox/dwio/parquet/reader/PageReader.h"
 
 #include "velox/common/testutil/TestValue.h"
+#include "velox/common/time/Timer.h"
 #include "velox/dwio/common/BufferUtil.h"
 #include "velox/dwio/common/ColumnVisitors.h"
 #include "velox/dwio/parquet/common/LevelConversion.h"
 #include "velox/dwio/parquet/thrift/ThriftTransport.h"
-
 #include "velox/vector/FlatVector.h"
 
 #include <thrift/protocol/TCompactProtocol.h> // @manual
@@ -106,26 +106,31 @@ PageHeader PageReader::readPageHeader() {
 }
 
 const char* PageReader::readBytes(int32_t size, BufferPtr& copy) {
-  if (bufferEnd_ == bufferStart_) {
-    const void* buffer = nullptr;
-    int32_t bufferSize = 0;
-    if (!inputStream_->Next(&buffer, &bufferSize)) {
-      VELOX_FAIL("Read past end");
+  uint64_t readUs{0};
+  {
+    MicrosecondTimer timer(&readUs);
+    if (bufferEnd_ == bufferStart_) {
+      const void* buffer = nullptr;
+      int32_t bufferSize = 0;
+      if (!inputStream_->Next(&buffer, &bufferSize)) {
+        VELOX_FAIL("Read past end");
+      }
+      bufferStart_ = reinterpret_cast<const char*>(buffer);
+      bufferEnd_ = bufferStart_ + bufferSize;
     }
-    bufferStart_ = reinterpret_cast<const char*>(buffer);
-    bufferEnd_ = bufferStart_ + bufferSize;
+    if (bufferEnd_ - bufferStart_ >= size) {
+      bufferStart_ += size;
+      return bufferStart_ - size;
+    }
+    dwio::common::ensureCapacity<char>(copy, size, &pool_);
+    dwio::common::readBytes(
+        size,
+        inputStream_.get(),
+        copy->asMutable<char>(),
+        bufferStart_,
+        bufferEnd_);
   }
-  if (bufferEnd_ - bufferStart_ >= size) {
-    bufferStart_ += size;
-    return bufferStart_ - size;
-  }
-  dwio::common::ensureCapacity<char>(copy, size, &pool_);
-  dwio::common::readBytes(
-      size,
-      inputStream_.get(),
-      copy->asMutable<char>(),
-      bufferStart_,
-      bufferEnd_);
+  stats_.incPageScanTime(readUs * 1'000);
   return copy->as<char>();
 }
 

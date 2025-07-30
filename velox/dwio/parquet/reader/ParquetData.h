@@ -42,6 +42,7 @@ class ParquetParams : public dwio::common::FormatParams {
         metaData_(metaData),
         sessionTimezone_(sessionTimezone),
         timestampPrecision_(timestampPrecision) {}
+
   std::unique_ptr<dwio::common::FormatData> toFormatData(
       const std::shared_ptr<const dwio::common::TypeWithId>& type,
       const common::ScanSpec& scanSpec) override;
@@ -63,6 +64,7 @@ class ParquetData : public dwio::common::FormatData {
       const std::shared_ptr<const dwio::common::TypeWithId>& type,
       const FileMetaDataPtr fileMetadataPtr,
       memory::MemoryPool& pool,
+      dwio::common::ColumnReaderStatistics& stats,
       const tz::TimeZone* sessionTimezone)
       : pool_(pool),
         type_(std::static_pointer_cast<const ParquetTypeWithId>(type)),
@@ -70,6 +72,7 @@ class ParquetData : public dwio::common::FormatData {
         maxDefine_(type_->maxDefine_),
         maxRepeat_(type_->maxRepeat_),
         rowsInRowGroup_(-1),
+        stats_(stats),
         sessionTimezone_(sessionTimezone) {}
 
   /// Prepares to read data for 'index'th row group.
@@ -90,8 +93,9 @@ class ParquetData : public dwio::common::FormatData {
     return reader_.get();
   }
 
-  // Reads null flags for 'numValues' next top level rows. The first 'numValues'
-  // bits of 'nulls' are set and the reader is advanced by numValues'.
+  // Reads null flags for 'numValues' next top level rows. The first
+  // 'numValues' bits of 'nulls' are set and the reader is advanced by
+  // numValues'.
   void readNullsOnly(int32_t numValues, BufferPtr& nulls) {
     reader_->readNullsOnly(numValues, nulls);
   }
@@ -100,8 +104,9 @@ class ParquetData : public dwio::common::FormatData {
     return maxDefine_ > 0;
   }
 
-  /// Sets nulls to be returned by readNulls(). Nulls for non-leaf readers come
-  /// from leaf repdefs which are gathered before descending the reader tree.
+  /// Sets nulls to be returned by readNulls(). Nulls for non-leaf readers
+  /// come from leaf repdefs which are gathered before descending the reader
+  /// tree.
   void setNulls(BufferPtr& nulls, int32_t numValues) {
     if (nulls || numValues) {
       VELOX_CHECK_EQ(presetNullsConsumed_, presetNullsSize_);
@@ -120,8 +125,8 @@ class ParquetData : public dwio::common::FormatData {
       const uint64_t* incomingNulls,
       BufferPtr& nulls,
       bool nullsOnly = false) override {
-    // If the query accesses only nulls, read the nulls from the pages in range.
-    // If nulls are preread, return those minus any skipped.
+    // If the query accesses only nulls, read the nulls from the pages in
+    // range. If nulls are preread, return those minus any skipped.
     if (presetNulls_) {
       VELOX_CHECK_LE(numValues, presetNullsSize_ - presetNullsConsumed_);
       if (!presetNullsConsumed_ && numValues == presetNullsSize_) {
@@ -144,8 +149,8 @@ class ParquetData : public dwio::common::FormatData {
       readNullsOnly(numValues, nulls);
       return;
     }
-    // There are no column-level nulls in Parquet, only page-level ones, so this
-    // is always non-null.
+    // There are no column-level nulls in Parquet, only page-level ones, so
+    // this is always non-null.
     nulls = nullptr;
   }
 
@@ -219,6 +224,7 @@ class ParquetData : public dwio::common::FormatData {
   const uint32_t maxDefine_;
   const uint32_t maxRepeat_;
   int64_t rowsInRowGroup_;
+  dwio::common::ColumnReaderStatistics& stats_;
   const tz::TimeZone* sessionTimezone_;
   std::unique_ptr<PageReader> reader_;
 
