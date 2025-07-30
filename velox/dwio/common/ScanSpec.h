@@ -435,11 +435,11 @@ class ScanSpec {
   bool filterDisabled_ = false;
   dwio::common::DeltaColumnUpdater* deltaUpdate_ = nullptr;
 
-  // Filters that will be only used for row group filtering based on metadata.
-  // The conjunctions among these filters are tracked in MetadataFilter, with
-  // the pointers to LeafNodes are stored here.  We need to keep these pointers
-  // so that we can match the leaf node filter results and apply logical
-  // conjunctions later properly.
+  // Filters that are used for both row group and page level filtering based on
+  // metadata. The conjunctions among these filters are tracked in
+  // MetadataFilter, with the pointers to LeafNodes stored here. We keep these
+  // pointers so that we can match the leaf node filter results and apply
+  // logical conjunctions properly later.
   std::vector<std::pair<const MetadataFilter::LeafNode*, common::Filter*>>
       metadataFilters_;
 

@@ -87,6 +87,11 @@ class ParquetData : public dwio::common::FormatData {
   /// Positions 'this' at 'index'th row group. loadRowGroup must be called
   /// first. The returned PositionProvider is empty and should not be used.
   /// Other formats may use it.
+  /// Note:
+  /// If page pruning has occurred,
+  /// we create the PageReader using the ColumnPageIndex and the per‑page
+  /// streams produced after pruning. Otherwise, we create the PageReader from
+  /// the original row group data stream.
   dwio::common::PositionProvider seekToRowGroup(int64_t index) override;
 
   void filterRowGroups(
@@ -215,7 +220,7 @@ class ParquetData : public dwio::common::FormatData {
   std::pair<int64_t, int64_t> getRowGroupRegion(uint32_t index) const;
 
   /// Updates the page indices for the row group of 'index'.
-  /// Returns true if we should apply page purning.
+  /// Returns true if we should apply page pruning.
   bool collectIndexPageInfoMap(uint32_t index, PageIndexInfoMap& map);
 
   /// Generates RowRanges that do not satisfy the given filter.
@@ -269,7 +274,7 @@ class ParquetData : public dwio::common::FormatData {
   // The page indices for the row groups.
   std::vector<std::unique_ptr<ColumnPageIndex>> pageIndices_;
 
-  // Streams for the pages after page purning.
+  // Streams for the pages after page pruning.
   std::vector<std::vector<std::unique_ptr<dwio::common::SeekableInputStream>>>
       pagesStreams_;
 

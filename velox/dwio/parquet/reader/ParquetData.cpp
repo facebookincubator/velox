@@ -138,9 +138,6 @@ void ParquetData::filterDataPages(
     pageIndices_[index] = std::move(it->second);
   } else {
     pageIndices_[index].reset();
-  }
-
-  if (!pageIndices_[index]) {
     return;
   }
 
@@ -158,13 +155,13 @@ void ParquetData::filterDataPages(
   for (auto i = 0; i < numPages; ++i) {
     auto numRows = pageIndex->pageRowCount(i);
     auto firstRowIndex = pageIndex->pageFirstRowIndex(i);
+    auto lastRowIndex = firstRowIndex + numRows - 1;
     auto stats = pageIndex->buildColumnStatisticsForPage(i, *type);
 
     // Skip page if main filter does not match.
     if (scanSpec_.filter() &&
         !testFilter(scanSpec_.filter(), stats.get(), numRows, type)) {
-      filteredPages.add(
-          dwio::common::RowRange(firstRowIndex, firstRowIndex + numRows - 1));
+      filteredPages.add(dwio::common::RowRange(firstRowIndex, lastRowIndex));
       continue;
     }
 
@@ -173,7 +170,7 @@ void ParquetData::filterDataPages(
       if (metadataFilter &&
           !testFilter(metadataFilter, stats.get(), numRows, type)) {
         metadataFilterResults[metadataFiltersStartIndex + j].second.add(
-            dwio::common::RowRange(firstRowIndex, firstRowIndex + numRows - 1));
+            dwio::common::RowRange(firstRowIndex, lastRowIndex));
       }
     }
   }
@@ -195,8 +192,10 @@ void ParquetData::enqueueRowGroup(
       type_->column());
 
   uint64_t chunkReadOffset = chunk.dataPageOffset();
+
+  // Parquet file header is 4 bytes, so dictionaryPageOffset() < 4 is invalid.
   if (chunk.hasDictionaryPageOffset() && chunk.dictionaryPageOffset() >= 4) {
-    // this assumes the data pages follow the dict pages directly.
+    // This assumes the data pages follow the dict pages directly.
     chunkReadOffset = chunk.dictionaryPageOffset();
   }
 
@@ -306,6 +305,7 @@ dwio::common::PositionProvider ParquetData::seekToRowGroup(int64_t index) {
   VELOX_CHECK_LT(index, streams_.size());
   auto metadata = fileMetaDataPtr_.rowGroup(index).columnChunk(type_->column());
   if (streams_[index] == nullptr) {
+    VELOX_CHECK_NOT_NULL(pageIndices_[index]);
     reader_ = std::make_unique<PageReader>(
         std::move(pagesStreams_[index]),
         pool_,
