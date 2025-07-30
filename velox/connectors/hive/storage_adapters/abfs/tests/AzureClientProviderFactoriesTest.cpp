@@ -108,18 +108,18 @@ TEST(AzureClientProviderFactoriesTest, createFromConfig) {
 }
 
 TEST(AzureClientProviderFactoriesTest, registerAzureClientFactory) {
-  static const std::string path = "abfs://test@test.dfs.core.windows.net/test";
+  static const std::string path = "abfs://test@efg.dfs.core.windows.net/test";
   const auto abfsPath = std::make_shared<AbfsPath>(path);
 
   registerAzureClientProviderFactory(
-      "test",
+      "efg",
       [](const std::shared_ptr<AbfsPath>& path,
          const config::ConfigBase& config)
           -> std::unique_ptr<AzureClientProvider> {
         return std::make_unique<DummyAzureClientProvider>(path, config);
       });
 
-  ASSERT_TRUE(AzureClientProviderFactories::clientFactoryRegistered("test"));
+  ASSERT_TRUE(AzureClientProviderFactories::clientFactoryRegistered("efg"));
   VELOX_ASSERT_THROW(
       AzureClientProviderFactories::getBlobClient(
           abfsPath, config::ConfigBase({})),
@@ -129,5 +129,5 @@ TEST(AzureClientProviderFactoriesTest, registerAzureClientFactory) {
           abfsPath, config::ConfigBase({})),
       "Not implemented.");
 
-  ASSERT_FALSE(AzureClientProviderFactories::clientFactoryRegistered("foo"));
+  ASSERT_FALSE(AzureClientProviderFactories::clientFactoryRegistered("efg2"));
 }
