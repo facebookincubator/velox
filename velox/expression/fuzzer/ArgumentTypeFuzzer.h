@@ -86,6 +86,9 @@ class ArgumentTypeFuzzer {
   /// Generates an orderable random type, including structs, and arrays.
   TypePtr randOrderableType();
 
+  /// Generates a random non decimal numeric type.
+  TypePtr randNonDecimalNumericType();
+
   // Bind 'name' variable, if not already bound, using 'constant' constraint
   // ('name'='123'). Return bound value if 'name' is already bound or was
   // successfully bound to a constant value. Return std::nullopt otherwise.
