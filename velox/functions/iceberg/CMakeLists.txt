@@ -14,7 +14,12 @@
 
 add_subdirectory(util)
 
-velox_add_library(velox_functions_iceberg BucketFunction.cpp DateTimeFunctions.cpp Register.cpp Truncate.cpp)
+velox_add_library(
+  velox_functions_iceberg
+  BucketFunction.cpp
+  DateTimeFunctions.cpp
+  Register.cpp
+  Truncate.cpp)
 
 velox_link_libraries(velox_functions_iceberg velox_functions_iceberg_util
                      velox_functions_lib Folly::folly)

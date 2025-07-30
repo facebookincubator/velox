@@ -21,10 +21,10 @@
 using namespace facebook::velox;
 
 namespace {
-class DateTimeFunctonsTest
+class DateTimeFunctionsTest
     : public functions::iceberg::test::IcebergFunctionBaseTest {};
 
-TEST_F(DateTimeFunctonsTest, years) {
+TEST_F(DateTimeFunctionsTest, years) {
   const auto years = [&](const StringView& ts) {
     auto timestamp = std::make_optional<Timestamp>(parseTimestamp(ts));
     auto result = evaluateOnce<int32_t>("years(c0)", timestamp);
@@ -44,7 +44,7 @@ TEST_F(DateTimeFunctonsTest, years) {
   EXPECT_EQ(-1, yearsDate("1969-12-31"));
 }
 
-TEST_F(DateTimeFunctonsTest, months) {
+TEST_F(DateTimeFunctionsTest, months) {
   const auto months = [&](const StringView& ts) {
     auto timestamp = std::make_optional<Timestamp>(parseTimestamp(ts));
     auto result = evaluateOnce<int32_t>("months(c0)", timestamp);
@@ -64,7 +64,7 @@ TEST_F(DateTimeFunctonsTest, months) {
   EXPECT_EQ(-1, monthsDate("1969-12-31"));
 }
 
-TEST_F(DateTimeFunctonsTest, days) {
+TEST_F(DateTimeFunctionsTest, days) {
   const auto days = [&](const StringView& ts) {
     auto timestamp = std::make_optional<Timestamp>(parseTimestamp(ts));
     auto result = evaluateOnce<int32_t>("days(c0)", timestamp);
@@ -81,7 +81,7 @@ TEST_F(DateTimeFunctonsTest, days) {
   EXPECT_EQ(days("1969-12-31 23:59:58.999999"), daysDate("1969-12-31"));
 }
 
-TEST_F(DateTimeFunctonsTest, hours) {
+TEST_F(DateTimeFunctionsTest, hours) {
   const auto hours = [&](const StringView& ts) {
     auto timestamp = std::make_optional<Timestamp>(parseTimestamp(ts));
     auto result = evaluateOnce<int32_t>("hours(c0)", timestamp);
