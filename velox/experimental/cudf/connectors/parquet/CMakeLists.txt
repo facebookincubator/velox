@@ -22,7 +22,7 @@ target_link_libraries(
   velox_cudf_parquet_config velox_core velox_exception cudf::cudf)
 
 add_library(
-  velox_cudf_parquet_connector OBJECT
+  velox_cudf_parquet_connector
   ParquetConfig.cpp
   ParquetConnector.cpp
   ParquetConnectorSplit.cpp

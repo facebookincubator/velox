@@ -15,6 +15,7 @@
  */
 
 #include "velox/experimental/cudf/connectors/parquet/ParquetConnector.h"
+#include "velox/experimental/cudf/connectors/parquet/ParquetDataSink.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetDataSource.h"
 
 namespace facebook::velox::cudf_velox::connector::parquet {

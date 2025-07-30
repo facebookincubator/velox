@@ -16,9 +16,21 @@
 
 #include "velox/experimental/cudf/connectors/parquet/ParquetConnectorSplit.h"
 
+#include <cudf/io/types.hpp>
+
 #include <string>
 
 namespace facebook::velox::cudf_velox::connector::parquet {
+
+ParquetConnectorSplit::ParquetConnectorSplit(
+    const std::string& connectorId,
+    const std::string& _filePath,
+    int64_t _splitWeight)
+    : facebook::velox::connector::ConnectorSplit(connectorId, _splitWeight),
+      filePath(_filePath),
+      cudfSourceInfo(std::make_unique<cudf::io::source_info>(filePath)) {}
+
+ParquetConnectorSplit::~ParquetConnectorSplit() = default;
 
 std::string ParquetConnectorSplit::toString() const {
   return fmt::format("Parquet: {}", filePath);

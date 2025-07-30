@@ -254,11 +254,13 @@ const std::unordered_set<std::string> supportedOps = {
     "between",
     "in",
     "cast",
+    "try_cast",
     "switch",
     "year",
     "length",
     "substr",
-    "like"};
+    "like",
+    "isnotnull"};
 
 namespace detail {
 
@@ -341,6 +343,7 @@ cudf::ast::expression const& AstContext::addPrecomputeInstruction(
   for (size_t sideIdx = 0; sideIdx < inputRowSchema.size(); ++sideIdx) {
     if (inputRowSchema[sideIdx].get()->containsChild(name)) {
       auto columnIndex = inputRowSchema[sideIdx].get()->getChildIdx(name);
+      VELOX_CHECK_NE(columnIndex, -1, "Field not found, " + name);
       auto newColumnIndex = inputRowSchema[sideIdx].get()->size() +
           precomputeInstructions[sideIdx].get().size();
       if (fieldName.empty()) {
@@ -422,6 +425,11 @@ cudf::ast::expression const& AstContext::pushExprToTree(
     VELOX_CHECK_EQ(len, 1);
     auto const& op1 = pushExprToTree(expr->inputs()[0]);
     return tree.push(Operation{unaryOps.at(name), op1});
+  } else if (name == "isnotnull") {
+    VELOX_CHECK_EQ(len, 1);
+    auto const& op1 = pushExprToTree(expr->inputs()[0]);
+    auto const& nullOp = tree.push(Operation{Op::IS_NULL, op1});
+    return tree.push(Operation{Op::NOT, nullOp});
   } else if (name == "between") {
     VELOX_CHECK_EQ(len, 3);
     auto const& value = pushExprToTree(expr->inputs()[0]);
