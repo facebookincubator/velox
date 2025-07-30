@@ -2574,7 +2574,7 @@ TEST_F(TestReader, readStringDictionaryAsFlat) {
   ASSERT_EQ(rowReader->next(20, actual), 20);
   ASSERT_EQ(actual->size(), 1);
   ASSERT_TRUE(actual->as<RowVector>()->childAt(0)->isFlatEncoding());
-  stats = {};
+  stats.clear();
   rowReader->updateRuntimeStats(stats);
   ASSERT_EQ(stats.columnReaderStatistics.flattenStringDictionaryValues, 1);
 }
