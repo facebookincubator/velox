@@ -13,25 +13,23 @@
 # limitations under the License.
 include_guard(GLOBAL)
 
-set(VELOX_SIMDJSON_VERSION 3.9.3)
-set(VELOX_SIMDJSON_BUILD_SHA256_CHECKSUM
-    2e3d10abcde543d3dd8eba9297522cafdcebdd1db4f51b28f3bc95bf1d6ad23c)
-set(VELOX_SIMDJSON_SOURCE_URL
-    "https://github.com/simdjson/simdjson/archive/refs/tags/v${VELOX_SIMDJSON_VERSION}.tar.gz"
+set(VELOX_MSGPACK_BUILD_VERSION cpp-7.0.0)
+set(VELOX_MSGPACK_BUILD_SHA256_CHECKSUM
+    070881ebea9208cf7e731fd5a46a11404025b2f260ab9527e32dfcb7c689fbfc)
+set(VELOX_MSGPACK_SOURCE_URL
+    "https://github.com/msgpack/msgpack-c/archive/refs/tags/${VELOX_MSGPACK_BUILD_VERSION}.tar.gz"
 )
 
-velox_resolve_dependency_url(SIMDJSON)
+velox_resolve_dependency_url(MSGPACK)
 
-message(STATUS "Building simdjson from source")
+message(STATUS "Building msgpack-cxx from source")
 
 FetchContent_Declare(
-  simdjson
-  URL ${VELOX_SIMDJSON_SOURCE_URL}
-  URL_HASH ${VELOX_SIMDJSON_BUILD_SHA256_CHECKSUM}
-  OVERRIDE_FIND_PACKAGE)
+  msgpack-cxx
+  URL ${VELOX_MSGPACK_SOURCE_URL}
+  URL_HASH ${VELOX_MSGPACK_BUILD_SHA256_CHECKSUM}
+  OVERRIDE_FIND_PACKAGE EXCLUDE_FROM_ALL SYSTEM)
 
-if(${VELOX_SIMDJSON_SKIPUTF8VALIDATION})
-  set(SIMDJSON_SKIPUTF8VALIDATION ON)
-endif()
+set(MSGPACK_USE_BOOST OFF)
 
-FetchContent_MakeAvailable(simdjson)
+FetchContent_MakeAvailable(msgpack-cxx)
