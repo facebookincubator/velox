@@ -196,7 +196,7 @@ void CudfHashJoinBuild::noMoreInput() {
       !joinNode_->filter();
   auto hashObject = (buildHashJoin) ? std::make_shared<cudf::hash_join>(
                                           tbl->view().select(buildKeyIndices),
-                                          cudf::null_equality::EQUAL,
+                                          cudf::null_equality::UNEQUAL,
                                           stream)
                                     : nullptr;
   if (buildHashJoin) {
@@ -456,7 +456,7 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
           leftTableView,
           rightTableView,
           tree_.back(),
-          cudf::null_equality::EQUAL,
+          cudf::null_equality::UNEQUAL,
           std::nullopt,
           stream);
     } else {
@@ -472,7 +472,7 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
           leftTableView,
           rightTableView,
           tree_.back(),
-          cudf::null_equality::EQUAL,
+          cudf::null_equality::UNEQUAL,
           std::nullopt,
           stream);
     } else {
@@ -488,14 +488,14 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
           rightTableView,
           leftTableView,
           tree_.back(),
-          cudf::null_equality::EQUAL,
+          cudf::null_equality::UNEQUAL,
           std::nullopt,
           stream);
     } else {
       std::tie(rightJoinIndices, leftJoinIndices) = cudf::left_join(
           rightTableView.select(rightKeyIndices_),
           leftTableView.select(leftKeyIndices_),
-          cudf::null_equality::EQUAL,
+          cudf::null_equality::UNEQUAL,
           stream,
           cudf::get_current_device_resource_ref());
     }
@@ -507,7 +507,7 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
           leftTableView,
           rightTableView,
           tree_.back(),
-          cudf::null_equality::EQUAL,
+          cudf::null_equality::UNEQUAL,
           stream,
           cudf::get_current_device_resource_ref());
     } else {
@@ -526,14 +526,14 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
           leftTableView,
           rightTableView,
           tree_.back(),
-          cudf::null_equality::EQUAL,
+          cudf::null_equality::UNEQUAL,
           stream,
           cudf::get_current_device_resource_ref());
     } else {
       leftJoinIndices = cudf::left_semi_join(
           leftTableView.select(leftKeyIndices_),
           rightTableView.select(rightKeyIndices_),
-          cudf::null_equality::EQUAL,
+          cudf::null_equality::UNEQUAL,
           stream,
           cudf::get_current_device_resource_ref());
     }
@@ -545,14 +545,14 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
           rightTableView,
           leftTableView,
           tree_.back(),
-          cudf::null_equality::EQUAL,
+          cudf::null_equality::UNEQUAL,
           stream,
           cudf::get_current_device_resource_ref());
     } else {
       rightJoinIndices = cudf::left_semi_join(
           rightTableView.select(rightKeyIndices_),
           leftTableView.select(leftKeyIndices_),
-          cudf::null_equality::EQUAL,
+          cudf::null_equality::UNEQUAL,
           stream,
           cudf::get_current_device_resource_ref());
     }
