@@ -26,7 +26,7 @@ namespace facebook::velox::type::fbhive {
 
 namespace {
 /// Returns true only if 'str' contains digits.
-bool isPositiveInteger(const std::string& str) {
+bool isPositiveInteger(std::string_view str) {
   return !str.empty() &&
       std::find_if(str.begin(), str.end(), [](unsigned char c) {
         return !std::isdigit(c);
@@ -110,11 +110,8 @@ Result HiveTypeParser::parseType() {
           std::atoi(precision.value.data()), std::atoi(scale.value.data()))};
     } else if (nt.metadata->tokenString[0] == "date") {
       return Result{DATE()};
-    }
-    auto scalarType = createScalarType(nt.typeKind());
-    VELOX_CHECK_NOT_NULL(
-        scalarType, "Returned a null scalar type for ", nt.typeKind());
-    if (nt.metadata->tokenType == TokenType::String &&
+    } else if (
+        nt.metadata->tokenType == TokenType::String &&
         lookAhead() == TokenType::LeftRoundBracket) {
       eatToken(TokenType::LeftRoundBracket);
       Token length = nextToken();
@@ -122,7 +119,11 @@ Result HiveTypeParser::parseType() {
           isPositiveInteger(length.value.toString()),
           "Varchar length must be a positive integer");
       eatToken(TokenType::RightRoundBracket);
+      return Result{VARCHAR(std::atoi(length.value.data()))};
     }
+    auto scalarType = createScalarType(nt.typeKind());
+    VELOX_CHECK_NOT_NULL(
+        scalarType, "Returned a null scalar type for ", nt.typeKind());
     return Result{scalarType};
   } else if (nt.isOpaqueType()) {
     eatToken(TokenType::StartSubType);
