@@ -26,6 +26,11 @@
 namespace facebook::velox::connector::hive::iceberg {
 
 namespace {
+
+#define WRITER_NON_RECLAIMABLE_SECTION_GUARD(index)       \
+  memory::NonReclaimableSectionGuard nonReclaimableGuard( \
+      writerInfo_[(index)]->nonReclaimableSectionHolder.get())
+
 std::string toJson(const std::vector<folly::dynamic>& partitionValues) {
   folly::dynamic jsonObject = folly::dynamic::object();
   folly::dynamic valuesArray = folly::dynamic::array();
@@ -192,6 +197,47 @@ IcebergDataSink::IcebergDataSink(
   if (isPartitioned()) {
     partitionData_.resize(maxOpenWriters_);
   }
+  const auto& inputColumns = insertTableHandle_->inputColumns();
+
+  std::function<void(const IcebergNestedField&, const TypePtr&, bool)>
+      collectChildIds = [&](const IcebergNestedField& f,
+                            const TypePtr& type,
+                            bool skipBounds) {
+        bool currentSkipBounds = skipBounds || type->isMap() || type->isArray();
+        if (!f.children.empty()) {
+          VELOX_CHECK_EQ(f.children.size(), type->size());
+          if (type->isRow()) {
+            auto rowType = asRowType(type);
+            for (size_t i = 0; i < f.children.size(); ++i) {
+              collectChildIds(
+                  f.children[i], rowType->childAt(i), currentSkipBounds);
+            }
+          } else if (type->isArray()) {
+            auto arrayType = type->asArray();
+            collectChildIds(
+                f.children[0], arrayType.elementType(), currentSkipBounds);
+          } else if (type->isMap()) {
+            auto mapType = type->asMap();
+            for (size_t i = 0; i < f.children.size(); ++i) {
+              collectChildIds(
+                  f.children[i], mapType.childAt(i), currentSkipBounds);
+            }
+          }
+        } else {
+          columnStatsSettings_->push_back({f.id, currentSkipBounds});
+        }
+      };
+
+  columnStatsSettings_ =
+      std::make_shared<std::vector<std::pair<int32_t, bool>>>();
+  for (const auto& columnHandle : inputColumns) {
+    auto icebergColumnHandle =
+        std::dynamic_pointer_cast<const IcebergColumnHandle>(columnHandle);
+    collectChildIds(
+        icebergColumnHandle->nestedField(),
+        icebergColumnHandle->dataType(),
+        false);
+  }
 }
 
 std::vector<std::string> IcebergDataSink::commitMessage() const {
@@ -219,8 +265,7 @@ std::vector<std::string> IcebergDataSink::commitMessage() const {
           (fs::path(info->writerParameters.writeDirectory()) /
                         info->writerParameters.writeFileName()).string())
         ("fileSizeInBytes", ioStats_.at(i)->rawBytesWritten())
-        ("metrics",
-          folly::dynamic::object("recordCount", info->numWrittenRows))
+        ("metrics", dataFileStats_[i]->toJson())
         ("partitionSpecJson", icebergInsertTableHandle->partitionSpec()->specId)
         ("fileFormat", fileFormat)
         ("content", "DATA");
@@ -319,6 +364,8 @@ HiveWriterId IcebergDataSink::getIcebergWriterId(size_t row) const {
 std::shared_ptr<dwio::common::WriterOptions>
 IcebergDataSink::createWriterOptions() const {
   auto options = HiveDataSink::createWriterOptions();
+  options->sourceColumnIndices = columnStatsSettings_;
+  options->collectIcebergStats = true;
 #ifdef VELOX_ENABLE_PARQUET
   auto parquetOptions =
       std::dynamic_pointer_cast<parquet::WriterOptions>(options);
@@ -337,6 +384,27 @@ std::optional<std::string> IcebergDataSink::getPartitionName(
         partitionIdGenerator_->partitionName(id.partitionId.value());
   }
   return partitionName;
+}
+
+void IcebergDataSink::closeInternal() {
+  VELOX_CHECK_NE(state_, State::kRunning);
+  VELOX_CHECK_NE(state_, State::kFinishing);
+
+  common::testutil::TestValue::adjust(
+      "facebook::velox::connector::hive::IcebergDataSink::closeInternal", this);
+
+  if (state_ == State::kClosed) {
+    for (int i = 0; i < writers_.size(); ++i) {
+      WRITER_NON_RECLAIMABLE_SECTION_GUARD(i);
+      writers_[i]->close();
+      dataFileStats_.push_back(writers_[i]->dataFileStats());
+    }
+  } else {
+    for (int i = 0; i < writers_.size(); ++i) {
+      WRITER_NON_RECLAIMABLE_SECTION_GUARD(i);
+      writers_[i]->abort();
+    }
+  }
 }
 
 } // namespace facebook::velox::connector::hive::iceberg
