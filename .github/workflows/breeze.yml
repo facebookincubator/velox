@@ -106,7 +106,6 @@ jobs:
       - name: Install Dependencies
         run: |
           source scripts/setup-ubuntu.sh && install_apt_deps && install_cuda ${CUDA_VERSION}
-          sudo chmod 755 -R /usr/local/lib/python3.10/dist-packages
 
       - name: Make RelWithDebInfo Build
         run: |
