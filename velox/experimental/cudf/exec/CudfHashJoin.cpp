@@ -369,6 +369,10 @@ bool CudfHashJoinProbe::needsInput() const {
 }
 
 void CudfHashJoinProbe::addInput(RowVectorPtr input) {
+  if (skipInput_) {
+    VELOX_CHECK_NULL(input_);
+    return;
+  }
   auto cudfInput = std::dynamic_pointer_cast<CudfVector>(input);
   VELOX_CHECK_NOT_NULL(cudfInput);
   // Count nulls in join key columns
@@ -391,10 +395,11 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
   }
   VELOX_NVTX_OPERATOR_FUNC_RANGE();
 
-  if (!input_) {
+  if (finished_ or !hashObject_.has_value()) {
     return nullptr;
   }
-  if (!hashObject_.has_value()) {
+
+  if (!input_) {
     return nullptr;
   }
   auto cudfInput = std::dynamic_pointer_cast<CudfVector>(input_);
@@ -593,6 +598,13 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
       pool(), outputType_, size, std::move(cudfOutput), stream);
 }
 
+bool CudfHashJoinProbe::skipProbeOnEmptyBuild() const {
+  auto const joinType = joinNode_->joinType();
+  return isInnerJoin(joinType) || isLeftSemiFilterJoin(joinType) ||
+      isRightJoin(joinType) || isRightSemiFilterJoin(joinType) ||
+      isRightSemiProjectJoin(joinType);
+}
+
 exec::BlockingReason CudfHashJoinProbe::isBlocked(ContinueFuture* future) {
   if (hashObject_.has_value()) {
     return exec::BlockingReason::kNotBlocked;
@@ -615,6 +627,20 @@ exec::BlockingReason CudfHashJoinProbe::isBlocked(ContinueFuture* future) {
   }
   hashObject_ = std::move(hashObject);
 
+  auto& rightTable = hashObject_.value().first;
+  // should be rightTable->numDistinct() but it needs compute,
+  // so we use num_rows()
+  if (rightTable->num_rows() == 0) {
+    if (skipProbeOnEmptyBuild()) {
+      if (operatorCtx_->driverCtx()
+              ->queryConfig()
+              .hashProbeFinishEarlyOnEmptyBuild()) {
+        noMoreInput();
+      } else {
+        skipInput_ = true;
+      }
+    }
+  }
   return exec::BlockingReason::kNotBlocked;
 }
 
