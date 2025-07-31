@@ -175,6 +175,12 @@ class BingTileType : public BigintType {
       double longitude,
       uint8_t zoomLevel,
       double radiusInKm);
+
+  static double distance(
+      double latitude1,
+      double longitude1,
+      double latitude2,
+      double longitude2);
 };
 
 inline bool isBingTileType(const TypePtr& type) {
