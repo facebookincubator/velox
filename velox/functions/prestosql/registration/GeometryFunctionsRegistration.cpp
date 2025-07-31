@@ -17,6 +17,7 @@
 #include <string>
 #include "velox/functions/Registerer.h"
 #include "velox/functions/prestosql/GeometryFunctions.h"
+#include "velox/functions/prestosql/types/BingTileType.h"
 #include "velox/functions/prestosql/types/GeometryRegistration.h"
 
 namespace facebook::velox::functions {
@@ -155,6 +156,11 @@ void registerAccessors(const std::string& prefix) {
       Geometry>({{prefix + "flatten_geometry_collections"}});
 }
 
+void registerBingTileGeometryFunctions(const std::string& prefix) {
+  registerFunction<BingTilePolygonFunction, Geometry, BingTile>(
+      {{prefix + "bing_tile_polygon"}});
+}
+
 } // namespace
 
 void registerGeometryFunctions(const std::string& prefix) {
@@ -163,6 +169,7 @@ void registerGeometryFunctions(const std::string& prefix) {
   registerRelationPredicates(prefix);
   registerOverlayOperations(prefix);
   registerAccessors(prefix);
+  registerBingTileGeometryFunctions(prefix);
 }
 
 } // namespace facebook::velox::functions
