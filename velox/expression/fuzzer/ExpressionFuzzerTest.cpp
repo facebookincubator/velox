@@ -242,6 +242,7 @@ std::unordered_set<std::string> skipFunctions = {
     "st_ymax",
     "st_ymin",
     "flatten_geometry_collections",
+    "expand_envelope",
 };
 
 std::unordered_set<std::string> skipFunctionsSOT = {
