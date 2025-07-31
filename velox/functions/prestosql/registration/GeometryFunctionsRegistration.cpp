@@ -158,6 +158,13 @@ void registerAccessors(const std::string& prefix) {
       FlattenGeometryCollectionsFunction,
       Array<Geometry>,
       Geometry>({{prefix + "flatten_geometry_collections"}});
+  registerFunction<
+      GreatCircleDistanceFunction,
+      double,
+      double,
+      double,
+      double,
+      double>({{prefix + "great_circle_distance"}});
 }
 
 void registerBingTileGeometryFunctions(const std::string& prefix) {
