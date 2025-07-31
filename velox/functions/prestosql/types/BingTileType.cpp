@@ -18,6 +18,7 @@
 #include <folly/Expected.h>
 #include <algorithm>
 #include <optional>
+#include <queue>
 #include <string>
 
 namespace facebook::velox {

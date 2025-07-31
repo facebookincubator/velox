@@ -218,6 +218,11 @@ std::vector<int64_t> getMinimalTilesCoveringGeometry(
     int32_t zoom,
     uint8_t maxZoomShift);
 
+std::vector<int64_t> getDissolvedTilesCoveringGeometry(
+    const geos::geom::Geometry& geometry,
+    int32_t zoom,
+    uint8_t maxZoomShift);
+
 bool isPointOrRectangle(
     const geos::geom::Geometry& geometry,
     const geos::geom::Envelope& envelope);
