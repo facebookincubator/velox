@@ -721,6 +721,76 @@ bool ExpressionEvaluator::canBeEvaluated(
 
 namespace {
 
+template <
+    typename RangeT,
+    typename ScalarT,
+    typename = std::enable_if_t<
+        std::is_base_of_v<facebook::velox::common::AbstractRange, RangeT>>>
+const cudf::ast::expression& createRangeExpr(
+    const facebook::velox::common::Filter& filter,
+    cudf::ast::tree& tree,
+    std::vector<std::unique_ptr<cudf::scalar>>& scalars,
+    const cudf::ast::expression& columnRef,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  using Op = cudf::ast::ast_operator;
+  using Operation = cudf::ast::operation;
+
+  auto* range = dynamic_cast<const RangeT*>(&filter);
+  VELOX_CHECK_NOT_NULL(range, "Filter is not the expected range type");
+
+  const bool lowerUnbounded = range->lowerUnbounded();
+  const bool upperUnbounded = range->upperUnbounded();
+
+  const cudf::ast::expression* lowerExpr = nullptr;
+  const cudf::ast::expression* upperExpr = nullptr;
+
+  auto addLiteral = [&](auto value) -> const cudf::ast::expression& {
+    scalars.emplace_back(std::make_unique<ScalarT>(value, true, stream, mr));
+    return tree.push(
+        cudf::ast::literal{*static_cast<ScalarT*>(scalars.back().get())});
+  };
+
+  // If RangeT is BytesValues and it's a single value, return a simple equality
+  // expression. This is an early return for the single-value IN-list filter on
+  // bytes.
+  if constexpr (std::is_same_v<RangeT, facebook::velox::common::BytesRange>) {
+    if (range->isSingleValue()) {
+      // Only one value in the IN-list, so just compare for equality.
+      auto singleValue = range->lower();
+      const auto& literal = addLiteral(singleValue);
+      return tree.push(Operation{Op::EQUAL, columnRef, literal});
+    }
+  }
+
+  if (!lowerUnbounded) {
+    auto lowerValue = range->lower();
+    const auto& lowerLiteral = addLiteral(lowerValue);
+
+    auto lowerOp = range->lowerExclusive() ? Op::GREATER : Op::GREATER_EQUAL;
+    lowerExpr = &tree.push(Operation{lowerOp, columnRef, lowerLiteral});
+  }
+
+  if (!upperUnbounded) {
+    auto upperValue = range->upper();
+    const auto& upperLiteral = addLiteral(upperValue);
+
+    auto upperOp = range->upperExclusive() ? Op::LESS : Op::LESS_EQUAL;
+    upperExpr = &tree.push(Operation{upperOp, columnRef, upperLiteral});
+  }
+
+  if (lowerExpr && upperExpr) {
+    return tree.push(Operation{Op::NULL_LOGICAL_AND, *lowerExpr, *upperExpr});
+  } else if (lowerExpr) {
+    return *lowerExpr;
+  } else if (upperExpr) {
+    return *upperExpr;
+  }
+
+  // Both bounds unbounded => Pass-through filter (everything).
+  return tree.push(Operation{Op::EQUAL, columnRef, columnRef});
+}
+
 template <TypeKind Kind>
 std::reference_wrapper<const cudf::ast::expression> buildBigintRangeExpr(
     const common::Filter& filter,
@@ -810,51 +880,22 @@ auto createFloatingPointRangeExpr(
     const cudf::ast::expression& columnRef,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) -> const cudf::ast::expression& {
-  auto* range = dynamic_cast<const common::FloatingPointRange<T>*>(&filter);
-  VELOX_CHECK_NOT_NULL(range, "Filter is not a floating point range");
-
-  using CudfScalar = cudf::numeric_scalar<T>;
-
-  const bool lowerUnbounded = range->lowerUnbounded();
-  const bool upperUnbounded = range->upperUnbounded();
-
-  const cudf::ast::expression* lowerExpr = nullptr;
-  const cudf::ast::expression* upperExpr = nullptr;
-
-  if (!lowerUnbounded) {
-    T lower = range->lower();
-    scalars.emplace_back(std::make_unique<CudfScalar>(lower, true, stream, mr));
-    const auto& lowerLiteral = tree.push(
-        cudf::ast::literal{*static_cast<CudfScalar*>(scalars.back().get())});
-
-    auto lowerOp = range->lowerExclusive() ? Op::GREATER : Op::GREATER_EQUAL;
-    lowerExpr =
-        &tree.push(cudf::ast::operation{lowerOp, columnRef, lowerLiteral});
-  }
-
-  if (!upperUnbounded) {
-    T upper = range->upper();
-    scalars.emplace_back(std::make_unique<CudfScalar>(upper, true, stream, mr));
-    const auto& upperLiteral = tree.push(
-        cudf::ast::literal{*static_cast<CudfScalar*>(scalars.back().get())});
-
-    auto upperOp = range->upperExclusive() ? Op::LESS : Op::LESS_EQUAL;
-    upperExpr =
-        &tree.push(cudf::ast::operation{upperOp, columnRef, upperLiteral});
-  }
-
-  if (lowerExpr && upperExpr) {
-    return tree.push(
-        cudf::ast::operation{Op::NULL_LOGICAL_AND, *lowerExpr, *upperExpr});
-  } else if (lowerExpr) {
-    return *lowerExpr;
-  } else if (upperExpr) {
-    return *upperExpr;
-  } else {
-    // Both bounds unbounded => Pass-through filter (everything).
-    return tree.push(cudf::ast::operation{Op::EQUAL, columnRef, columnRef});
-  }
+  return createRangeExpr<
+      facebook::velox::common::FloatingPointRange<T>,
+      cudf::numeric_scalar<T>>(filter, tree, scalars, columnRef, stream, mr);
 };
+
+const cudf::ast::expression& createBytesRangeExpr(
+    const common::Filter& filter,
+    cudf::ast::tree& tree,
+    std::vector<std::unique_ptr<cudf::scalar>>& scalars,
+    const cudf::ast::expression& columnRef,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  return createRangeExpr<
+      facebook::velox::common::BytesRange,
+      cudf::string_scalar>(filter, tree, scalars, columnRef, stream, mr);
+}
 
 template <typename FilterT, typename ScalarT>
 const cudf::ast::expression& buildInListExpr(
@@ -962,12 +1003,18 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
           filter, tree, scalars, columnRef, stream, mr);
     }
 
+    case common::FilterKind::kBytesRange: {
+      return createBytesRangeExpr(filter, tree, scalars, columnRef, stream, mr);
+    }
+
     case common::FilterKind::kBoolValue: {
-      // TODO (dm): for BoolValue, we'll have to use testBool method to extract
-      // the value since it's private However, for a simpler implementation, we
-      // can skip BoolValue for now
-      VELOX_NYI(
-          "BoolValue filter type not yet supported for subfield filter conversion");
+      auto* boolValue = static_cast<const common::BoolValue*>(&filter);
+      auto matchesTrue = boolValue->testBool(true);
+      scalars.emplace_back(std::make_unique<cudf::numeric_scalar<bool>>(
+          matchesTrue, true, stream, mr));
+      auto const& matchesBoolExpr = tree.push(cudf::ast::literal{
+          *static_cast<cudf::numeric_scalar<bool>*>(scalars.back().get())});
+      return tree.push(Operation{Op::EQUAL, columnRef, matchesBoolExpr});
     }
 
     case common::FilterKind::kIsNull: {
