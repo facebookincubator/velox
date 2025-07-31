@@ -29,7 +29,7 @@ class SparkComparisonMatcher : public ComparisonMatcher {
  public:
   SparkComparisonMatcher(
       const std::string& prefix,
-      std::vector<std::shared_ptr<Matcher>> inputMatchers,
+      const std::vector<std::shared_ptr<Matcher>>& inputMatchers,
       std::string* op)
       : ComparisonMatcher(prefix, inputMatchers, op) {}
 

@@ -56,9 +56,9 @@ class ComparisonMatcher : public Matcher {
  public:
   ComparisonMatcher(
       const std::string& prefix,
-      std::vector<std::shared_ptr<Matcher>> inputMatchers,
+      const std::vector<std::shared_ptr<Matcher>>& inputMatchers,
       std::string* op)
-      : prefix_{prefix}, inputMatchers_{std::move(inputMatchers)}, op_{op} {
+      : prefix_{prefix}, inputMatchers_{inputMatchers}, op_{op} {
     VELOX_CHECK_EQ(2, inputMatchers_.size());
   }
 

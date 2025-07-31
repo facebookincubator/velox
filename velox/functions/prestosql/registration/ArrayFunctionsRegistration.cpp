@@ -177,7 +177,6 @@ void registerArrayFunctions(const std::string& prefix) {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_max_by, prefix + "array_max_by");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_min_by, prefix + "array_min_by");
 
-
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_sum, prefix + "array_sum");
   exec::registerStatefulVectorFunction(
       prefix + "repeat", repeatSignatures(), makeRepeat, repeatMetadata());

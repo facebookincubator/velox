@@ -13,21 +13,33 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#pragma once
 
-#include "velox/core/Expressions.h"
-#include "velox/functions/lib/ArraySort.h"
+#include "velox/functions/prestosql/ArraySort.h"
 
 namespace facebook::velox::functions {
 
 std::shared_ptr<exec::VectorFunction> makeArraySortAsc(
     const std::string& name,
     const std::vector<exec::VectorFunctionArg>& inputArgs,
-    const core::QueryConfig& config);
+    const core::QueryConfig& config) {
+  if (inputArgs.size() == 2) {
+    return makeArraySortLambdaFunction(name, inputArgs, config, true, true);
+  }
+
+  VELOX_CHECK_EQ(inputArgs.size(), 1);
+  return makeArraySort(name, inputArgs, config, true, false, true);
+}
 
 std::shared_ptr<exec::VectorFunction> makeArraySortDesc(
     const std::string& name,
     const std::vector<exec::VectorFunctionArg>& inputArgs,
-    const core::QueryConfig& config);
+    const core::QueryConfig& config) {
+  if (inputArgs.size() == 2) {
+    return makeArraySortLambdaFunction(name, inputArgs, config, false, true);
+  }
+
+  VELOX_CHECK_EQ(inputArgs.size(), 1);
+  return makeArraySort(name, inputArgs, config, false, false, true);
+}
 
 } // namespace facebook::velox::functions

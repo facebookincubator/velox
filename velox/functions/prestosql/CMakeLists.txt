@@ -26,6 +26,7 @@ velox_add_library(
   ArrayAndMapMatch.cpp
   ArrayMinMaxBy.cpp
   ArrayPosition.cpp
+  ArraySort.cpp
   ArraySum.cpp
   Comparisons.cpp
   DecimalFunctions.cpp

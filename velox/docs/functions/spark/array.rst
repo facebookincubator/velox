@@ -190,10 +190,10 @@ Array Functions
 
 .. spark:function:: array_sort(array(E), function(E,E,U)) -> array(E)
     :noindex:
-    
+
     Returns the array sorted by values computed using specified lambda in ascending
     order. ``U`` must be an orderable type.
-    The function attempts to analyze the lambda function and rewrite it into a simpler call that 
+    The function attempts to analyze the lambda function and rewrite it into a simpler call that
     specifies the sort-by expression (like :spark:func:`array_sort(array(E), function(E,U)) -> array(E)`). For example, ``(left, right) -> if(length(left) > length(right), 1, if(length(left) < length(right), -1, 0))`` will be rewritten to ``x -> length(x)``. If rewrite is not possible, a user error will be thrown.
     If the rewritten function returns NULL, the corresponding element will be placed at the end the returned array. Please note that due to this rewrite optimization, the NULL handling logics between Spark and Velox differ. In Spark, the position of NULL element is determined by the comparison of NULL with other elements. ::
 

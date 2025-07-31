@@ -415,7 +415,7 @@ class ArraySortLambdaFunction : public exec::VectorFunction {
 // Create function template based on type.
 template <TypeKind kind>
 std::shared_ptr<exec::VectorFunction> createTyped(
-    const std::vector<exec::VectorFunctionArg>& inputArgs,
+    const std::vector<exec::VectorFunctionArg>& /*inputArgs*/,
     bool ascending,
     bool nullsFirst,
     bool throwOnNestedNull = true) {
