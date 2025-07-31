@@ -18,6 +18,7 @@
 #include "velox/experimental/cudf/exec/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
+#include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
 #include "velox/exec/Task.h"
 
@@ -158,7 +159,15 @@ void CudfHashJoinBuild::noMoreInput() {
   };
 
   auto stream = cudfGlobalStreamPool().get_stream();
-  auto tbl = getConcatenatedTable(inputs_, stream);
+  std::unique_ptr<cudf::table> tbl;
+  if (inputs_.size() == 0) {
+    auto emptyRowVector = RowVector::createEmpty(
+        joinNode_->sources()[1]->outputType(), operatorCtx_->pool());
+    tbl = facebook::velox::cudf_velox::with_arrow::toCudfTable(
+        emptyRowVector, operatorCtx_->pool(), stream);
+  } else {
+    tbl = getConcatenatedTable(inputs_, stream);
+  }
 
   // Release input data after synchronizing
   stream.synchronize();
