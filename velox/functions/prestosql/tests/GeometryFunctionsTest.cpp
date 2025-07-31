@@ -18,8 +18,10 @@
 #include <array>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/types/BingTileType.h"
 
 using facebook::velox::functions::test::FunctionBaseTest;
+using namespace facebook::velox;
 
 class GeometryFunctionsTest : public FunctionBaseTest {
  public:
@@ -3057,4 +3059,293 @@ TEST_F(GeometryFunctionsTest, testGreatCircleDistance) {
           std::numeric_limits<double>::signaling_NaN(),
           std::nullopt),
       "Latitude must be in range [-90, 90] and longitude must be in range [-180, 180]. Got latitude: 30 and longitude: nan");
+}
+
+std::string readFile(const std::string& input) {
+  std::ifstream file(input);
+  std::stringstream buffer;
+  buffer << file.rdbuf();
+  std::string contents = buffer.str();
+  return contents;
+}
+
+TEST_F(GeometryFunctionsTest, testGeometryToBingTiles) {
+  const auto testGeometryToBingTilesFunc = [&](const std::optional<std::string>&
+                                                   wkt,
+                                               const std::optional<int32_t>
+                                                   zoom,
+                                               const std::optional<std::vector<
+                                                   std::optional<std::string>>>&
+                                                   expectedQuadKeys) {
+    std::vector<std::optional<std::string>> wktVec = {wkt};
+    auto inputWkt = makeNullableFlatVector<std::string>(wktVec);
+    std::vector<std::optional<int32_t>> zoomVec = {zoom};
+    auto inputZoom = makeNullableFlatVector<int32_t>(zoomVec);
+    auto inputVec = makeRowVector({inputWkt, inputZoom});
+
+    facebook::velox::VectorPtr output = evaluate(
+        "ARRAY_SORT(TRANSFORM(geometry_to_bing_tiles(ST_GeometryFromText(c0), c1), x -> bing_tile_quadkey(x)))",
+        inputVec);
+
+    auto arrayVector =
+        std::dynamic_pointer_cast<facebook::velox::ArrayVector>(output);
+
+    if (expectedQuadKeys.has_value()) {
+      ASSERT_TRUE(arrayVector != nullptr);
+      auto expected = makeNullableArrayVector<std::string>({expectedQuadKeys});
+      facebook::velox::test::assertEqualVectors(expected, output);
+    } else {
+      ASSERT_TRUE(output->isNullAt(0));
+    }
+  };
+
+  const auto assertPointInCoveringFunc = [&](const std::optional<std::string>&
+                                                 wkt,
+                                             const std::optional<double> x,
+                                             const std::optional<double> y,
+                                             const std::optional<int8_t> zoom) {
+    std::optional<bool> result = evaluateOnce<bool>(
+        "contains(geometry_to_bing_tiles(ST_GeometryFromText(c0), c1), geometry_to_bing_tiles(ST_Point(c2, c3), c1)[1])",
+        wkt,
+        zoom,
+        x,
+        y);
+    ASSERT_TRUE(result.has_value());
+    ASSERT_TRUE(result.value());
+  };
+
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kDebugBingTileChildrenMaxZoomShift, "20"}});
+
+  // Geometries at boundaries of tiles
+  testGeometryToBingTilesFunc("POINT (0 0)", 1, {{"3"}});
+  testGeometryToBingTilesFunc(
+      fmt::format("POINT ({} 0)", BingTileType::kMinLongitude), 1, {{"2"}});
+  testGeometryToBingTilesFunc(
+      fmt::format("POINT ({} 0)", BingTileType::kMaxLongitude), 1, {{"3"}});
+  testGeometryToBingTilesFunc(
+      fmt::format("POINT (0 {})", BingTileType::kMinLatitude), 1, {{"3"}});
+  testGeometryToBingTilesFunc(
+      fmt::format("POINT (0 {})", BingTileType::kMaxLatitude), 1, {{"1"}});
+  testGeometryToBingTilesFunc(
+      fmt::format(
+          "POINT ({} {})",
+          BingTileType::kMinLongitude,
+          BingTileType::kMinLatitude),
+      1,
+      {{"2"}});
+  testGeometryToBingTilesFunc(
+      fmt::format(
+          "POINT ({} {})",
+          BingTileType::kMinLongitude,
+          BingTileType::kMaxLatitude),
+      1,
+      {{"0"}});
+  testGeometryToBingTilesFunc(
+      fmt::format(
+          "POINT ({} {})",
+          BingTileType::kMaxLongitude,
+          BingTileType::kMaxLatitude),
+      1,
+      {{"1"}});
+  testGeometryToBingTilesFunc(
+      fmt::format(
+          "POINT ({} {})",
+          BingTileType::kMaxLongitude,
+          BingTileType::kMinLatitude),
+      1,
+      {{"3"}});
+  testGeometryToBingTilesFunc("LINESTRING (-1 0, -2 0)", 1, {{"2"}});
+  testGeometryToBingTilesFunc("LINESTRING (1 0, 2 0)", 1, {{"3"}});
+  testGeometryToBingTilesFunc("LINESTRING (0 -1, 0 -2)", 1, {{"3"}});
+  testGeometryToBingTilesFunc("LINESTRING (0 1, 0 2)", 1, {{"1"}});
+  testGeometryToBingTilesFunc(
+      fmt::format(
+          "LINESTRING ({} 1, {} 2)",
+          BingTileType::kMinLongitude,
+          BingTileType::kMinLongitude),
+      1,
+      {{"0"}});
+  testGeometryToBingTilesFunc(
+      fmt::format(
+          "LINESTRING ({} -1, {} -2)",
+          BingTileType::kMinLongitude,
+          BingTileType::kMinLongitude),
+      1,
+      {{"2"}});
+  testGeometryToBingTilesFunc(
+      fmt::format(
+          "LINESTRING ({} 1, {} 2)",
+          BingTileType::kMaxLongitude,
+          BingTileType::kMaxLongitude),
+      1,
+      {{"1"}});
+  testGeometryToBingTilesFunc(
+      fmt::format(
+          "LINESTRING ({} -1, {} -2)",
+          BingTileType::kMaxLongitude,
+          BingTileType::kMaxLongitude),
+      1,
+      {{"3"}});
+
+  // Make sure corners are included
+  assertPointInCoveringFunc("POLYGON ((0 0, 0 10, 10 10, 10 0, 0 0))", 6, 0, 0);
+  assertPointInCoveringFunc(
+      "POLYGON ((0 0, 0 10, 10 10, 10 0, 0 0))", 6, 0, 10);
+  assertPointInCoveringFunc(
+      "POLYGON ((0 0, 0 10, 10 10, 10 0, 0 0))", 6, 10, 10);
+  assertPointInCoveringFunc(
+      "POLYGON ((0 0, 0 10, 10 10, 10 0, 0 0))", 6, 10, 0);
+
+  // General geometries
+  testGeometryToBingTilesFunc("POINT (60 30.12)", 0, {{""}});
+  testGeometryToBingTilesFunc("POINT (60 30.12)", 10, {{"1230301230"}});
+  testGeometryToBingTilesFunc("POINT (60 30.12)", 15, {{"123030123010121"}});
+  testGeometryToBingTilesFunc("POINT (60 30.12)", 16, {{"1230301230101212"}});
+  testGeometryToBingTilesFunc(
+      "POLYGON ((0 0, 0 10, 10 10, 10 0, 0 0))",
+      6,
+      {{"122220", "122221", "122222", "122223", "300000", "300001"}});
+  testGeometryToBingTilesFunc(
+      "POLYGON ((0 0, 0 10, 10 10, 0 0))",
+      6,
+      {{"122220", "122221", "122222", "300000"}});
+  testGeometryToBingTilesFunc(
+      "POLYGON ((10 10, -10 10, -20 -15, 10 10))", 3, {{"033", "122", "211"}});
+  testGeometryToBingTilesFunc(
+      "POLYGON ((10 10, -10 10, -20 -15, 10 10))",
+      6,
+      {{"033321",
+        "033323",
+        "033330",
+        "033331",
+        "033332",
+        "033333",
+        "122220",
+        "122221",
+        "122222",
+        "211101",
+        "211102",
+        "211103",
+        "211110",
+        "211111",
+        "211112",
+        "211120",
+        "211121"}});
+
+  testGeometryToBingTilesFunc(
+      "GEOMETRYCOLLECTION (POINT (60 30.12))", 10, {{"1230301230"}});
+  testGeometryToBingTilesFunc(
+      "GEOMETRYCOLLECTION (POINT (60 30.12))", 15, {{"123030123010121"}});
+  testGeometryToBingTilesFunc(
+      "GEOMETRYCOLLECTION (POLYGON ((10 10, -10 10, -20 -15, 10 10)))",
+      3,
+      {{"033", "122", "211"}});
+  testGeometryToBingTilesFunc(
+      "GEOMETRYCOLLECTION (POINT (60 30.12), POLYGON ((10 10, -10 10, -20 -15, 10 10)))",
+      3,
+      {{"033", "122", "123", "211"}});
+
+  testGeometryToBingTilesFunc(
+      "POLYGON ((0 0, 0 10, 10 10, 10 0, 0 0))", 1, {{"1", "3"}});
+  testGeometryToBingTilesFunc(
+      "POLYGON ((0 0, 0 10, 10 10, 0 0))", 1, {{"1", "3"}});
+  testGeometryToBingTilesFunc(
+      "POLYGON ((10 10, 10 20, 20 20, 20 10, 10 10), (12 12, 12 14, 14 14, 14 12, 12 12))",
+      1,
+      {{"1"}});
+
+  testGeometryToBingTilesFunc("POINT (0 0)", 1, {{"3"}});
+  testGeometryToBingTilesFunc(
+      "POLYGON ((0 0, 0 10, 10 10, 0 0))", 1, {{"1", "3"}});
+
+  // Empty geometries
+  testGeometryToBingTilesFunc("POINT EMPTY", 10, {{}});
+  testGeometryToBingTilesFunc("POLYGON EMPTY", 10, {{}});
+  testGeometryToBingTilesFunc("GEOMETRYCOLLECTION EMPTY", 10, {{}});
+
+  // Geometries at MIN_LONGITUDE/MAX_LATITUDE
+  testGeometryToBingTilesFunc(
+      "LINESTRING (-180 -79.19245, -180 -79.17133464081945)",
+      8,
+      {{"22200000"}});
+  testGeometryToBingTilesFunc(
+      fmt::format("POINT ({} 0)", BingTileType::kMinLongitude), 5, {{"20000"}});
+  testGeometryToBingTilesFunc(
+      fmt::format("POINT (0 {})", BingTileType::kMaxLatitude), 5, {{"10000"}});
+  testGeometryToBingTilesFunc(
+      fmt::format(
+          "POINT ({} {})",
+          BingTileType::kMinLongitude,
+          BingTileType::kMaxLatitude),
+      5,
+      {{"00000"}});
+
+  // Invalid inputs
+  // Longitude out of range
+  VELOX_ASSERT_USER_THROW(
+      testGeometryToBingTilesFunc("POINT (600 30.12)", 10, std::nullopt),
+      "Longitude span for the geometry must be in [-180.00, 180.00] range");
+  VELOX_ASSERT_USER_THROW(
+      testGeometryToBingTilesFunc(
+          "POLYGON ((1000 10, -10 10, -20 -15, 1000 10))", 10, std::nullopt),
+      "Longitude span for the geometry must be in [-180.00, 180.00] range");
+  // Latitude out of range
+  VELOX_ASSERT_USER_THROW(
+      testGeometryToBingTilesFunc("POINT (60 300.12)", 10, std::nullopt),
+      "Latitude span for the geometry must be in [-85.05, 85.05] range");
+  VELOX_ASSERT_USER_THROW(
+      testGeometryToBingTilesFunc(
+          "POLYGON ((10 1000, -10 10, -20 -15, 10 1000))", 10, std::nullopt),
+      "Latitude span for the geometry must be in [-85.05, 85.05] range");
+  // Invalid zoom
+  VELOX_ASSERT_USER_THROW(
+      testGeometryToBingTilesFunc("POINT (60 30.12)", -1, std::nullopt),
+      "Zoom level must be between 0 and 23");
+  VELOX_ASSERT_USER_THROW(
+      testGeometryToBingTilesFunc("POINT (60 30.12)", 24, std::nullopt),
+      "Zoom level must be between 0 and 23");
+  // Input rectangle too large
+  VELOX_ASSERT_USER_THROW(
+      evaluateOnce<int64_t>(
+          "geometry_to_bing_tiles(ST_Envelope(ST_GeometryFromText(c0)), c1)[1]",
+          std::optional<std::string>("LINESTRING (0 0, 80 80)"),
+          std::optional<int32_t>(16)),
+      "The zoom level is too high or the geometry is too large to compute a set of covering Bing tiles. Please use a lower zoom level, or tile only a section of the geometry.");
+  ASSERT_EQ(
+      112,
+      evaluateOnce<int64_t>(
+          "cardinality(geometry_to_bing_tiles(ST_Envelope(ST_GeometryFromText(c0)), c1))",
+          std::optional<std::string>("LINESTRING (0 0, 80 80)"),
+          std::optional<int32_t>(5)));
+
+  // Complex input polygon
+  auto largeWkt = readFile(
+      "velox/functions/prestosql/tests/geometry_test_resources/big_polygon.txt");
+  ASSERT_EQ(
+      9043,
+      evaluateOnce<int64_t>(
+          "cardinality(geometry_to_bing_tiles(ST_GeometryFromText(c0), c1))",
+          std::optional<std::string>(largeWkt),
+          std::optional<int32_t>(16)));
+  ASSERT_EQ(
+      19939,
+      evaluateOnce<int64_t>(
+          "cardinality(geometry_to_bing_tiles(ST_Envelope(ST_GeometryFromText(c0)), c1))",
+          std::optional<std::string>(largeWkt),
+          std::optional<int32_t>(16)));
+
+  // Zoom level is too high
+  VELOX_ASSERT_USER_THROW(
+      evaluateOnce<int64_t>(
+          "cardinality(geometry_to_bing_tiles(ST_GeometryFromText(c0), c1))",
+          std::optional<std::string>("POLYGON ((0 0, 0 20, 20 20, 0 0))"),
+          std::optional<int32_t>(20)),
+      "The zoom level is too high or the geometry is too large to compute a set of covering Bing tiles. Please use a lower zoom level, or tile only a section of the geometry.");
+  ASSERT_EQ(
+      428788,
+      evaluateOnce<int64_t>(
+          "cardinality(geometry_to_bing_tiles(ST_GeometryFromText(c0), c1))",
+          std::optional<std::string>("POLYGON ((0 0, 0 20, 20 20, 0 0))"),
+          std::optional<int32_t>(14)));
 }
