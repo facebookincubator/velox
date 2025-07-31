@@ -213,6 +213,8 @@ std::unordered_set<std::string> skipFunctions = {
     "st_union",
     "st_point",
     "st_points",
+    "st_interiorrings",
+    "st_geometries",
     "st_x",
     "st_y",
     "st_isvalid",
@@ -239,6 +241,7 @@ std::unordered_set<std::string> skipFunctions = {
     "st_xmin",
     "st_ymax",
     "st_ymin",
+    "flatten_geometry_collections",
 };
 
 std::unordered_set<std::string> skipFunctionsSOT = {
