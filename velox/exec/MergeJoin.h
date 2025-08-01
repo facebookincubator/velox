@@ -310,6 +310,9 @@ class MergeJoin : public Operator {
   // rows from the left side that have a match on the right.
   RowVectorPtr filterOutputForAntiJoin(const RowVectorPtr& output);
 
+  // Merge all output batches from outputBatches_, then empty the container.
+  VectorPtr mergeOutputBatches();
+
   // As we populate the results of the join, we track whether a given
   // output row is a result of a match between left and right sides or a miss.
   // We use JoinTracker::addMatch and addMiss methods for that.
@@ -558,6 +561,11 @@ class MergeJoin : public Operator {
   std::optional<Match> rightMatch_;
 
   RowVectorPtr output_;
+
+  // Cache the small output batches into outputBatches_.
+  std::vector<RowVectorPtr> outputBatches_;
+  // Number of rows accumulated in outputBatches_.
+  vector_size_t bufferedRowCount_{0};
 
   // Number of rows accumulated in the output_.
   vector_size_t outputSize_;
