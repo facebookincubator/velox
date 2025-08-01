@@ -80,6 +80,13 @@ TextWriter::TextWriter(
       headerLineCount_(options->headerLineCount),
       serDeOptions_(serDeOptions) {
   VELOX_CHECK_LE(headerLineCount_, 1, "Header line count must be <= 1");
+
+  if (options->compressionKind.has_value() &&
+      options->compressionKind.value() != common::CompressionKind_NONE) {
+    VELOX_UNSUPPORTED(
+        "Text Writer does not support compression. Attempted to set compression kind to {}",
+        compressionKindToString(options->compressionKind.value()));
+  }
 }
 
 uint8_t TextWriter::getDelimiterForDepth(uint8_t depth) const {
