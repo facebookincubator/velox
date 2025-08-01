@@ -166,6 +166,25 @@ Spatial Operations
     Returns the bounding rectangular polygon of a ``geometry``. Empty input will
     result in empty output.
 
+.. function:: ST_ExteriorRing(geometry: Geometry) -> output: Geometry
+
+    Returns a LineString representing the exterior ring of the input polygon.
+    Empty or null inputs result in null output. Non-polygon types will return
+    an error.
+
+.. function:: expand_envelope(geometry: Geometry, distance: double) -> output: Geometry
+
+    Returns the bounding rectangular polygon of a geometry, expanded by a distance.
+    Empty geometries will return an empty polygon. Negative or NaN distances will
+    return an error. Positive infinity distances may lead to undefined results.
+
+.. function:: geometry_union(geometries: array(Geometry)) -> union: Geometry
+
+    Returns a geometry that represents the point set union of the input geometries.
+    Performance of this function, in conjunction with array_agg() to first
+    aggregate the input geometries, may be better than geometry_union_agg(),
+    at the expense of higher memory utilization.
+
 Accessors
 ---------
 .. function:: ST_IsValid(geometry: Geometry) -> valid: bool
@@ -334,6 +353,35 @@ Accessors
     ``ST_NumGeometries(ST_GeometryFromText('GEOMETRYCOLLECTION(POINT EMPTY, POINT (1 2))'))``
     will evaluate to 1.
 
+.. function:: ST_InteriorRings(geometry: Geometry) -> output: array(geometry)
+
+    Returns an array of all interior rings found in the input geometry,
+    or an empty array if the polygon has no interior rings. Returns
+    null if the input geometry is empty.
+    Throws an error if the input geometry is not a polygon.
+
+.. function:: ST_Geometries(geometry: Geometry) -> output: array(geometry)
+
+    Returns an array of geometries in the specified collection. Returns
+    a one-element array if the input geometry is not a multi-geometry.
+    Returns null if input geometry is empty. For example, a MultiLineString
+    will create an array of LineStrings. A GeometryCollection will
+    produce an un-flattened array of its constituents:
+    GEOMETRYCOLLECTION(MULTIPOINT(0 0, 1 1),
+    GEOMETRYCOLLECTION(MULTILINESTRING((2 2, 3 3)))) would produce
+    array[MULTIPOINT(0 0, 1 1), GEOMETRYCOLLECTION(MULTILINESTRING((2 2, 3 3)))]
+
+.. function:: flatten_geometry_collections(geometry: Geometry) -> output: array(geometry)
+
+    Recursively flattens any GeometryCollections in Geometry, returning an array
+    of constituent non-GeometryCollection geometries. The order of the array
+    is arbitrary and should not be relied upon. null input results in null output.
+    Examples:
+
+    POINT (0 0) -> [POINT (0 0)], MULTIPOINT (0 0, 1 1) -> [MULTIPOINT (0 0, 1 1)],
+    GEOMETRYCOLLECTION (POINT (0 0), GEOMETRYCOLLECTION (POINT (1 1))) ->
+    [POINT (0 0), POINT (1 1)], GEOMETRYCOLLECTION EMPTY -> [].
+
 .. function:: ST_NumInteriorRing(geometry: Geometry) -> output: integer
 
     Returns the cardinality of the collection of interior rings of a polygon.
@@ -369,6 +417,18 @@ Accessors
     particular) that are invalid. Tolerance must be a non-negative finite value.
     Using tolerance of 0 will return the original geometry.  Empty geometries
     will also be returned as-is.
+
+.. function:: geometry_as_geojson(geometry: Geometry) -> output: varchar
+
+    Returns the GeoJSON encoded defined by the input geometry. If the
+    geometry is atomic (non-multi) empty, this function would return null.
+    Null input returns null output.
+
+.. function:: geometry_from_geojson(geometry: varchar) -> output: geometry
+
+    Returns the geometry type object from the GeoJSON representation.
+    The geometry cannot be empty if it is an atomic (non-multi) geometry type.
+    Null input returns null output.
 
 Bing Tile Functions
 -------------------
@@ -437,6 +497,18 @@ for more details.
 
     Returns the quadkey representing the provided bing tile.
 
+.. function:: geometry_to_bing_tiles(geometry: Geometry, zoom_level: tinyint) -> tiles: array(BingTile)
+
+    Returns the minimum set of Bing tiles that fully covers a given geometry at a
+    given zoom level. Zoom levels from 1 to 23 are supported.
+
+.. function:: geometry_to_dissolved_bing_tiles(geometry: Geometry, max_zoom_level: tinyint) -> tile: array(BingTile)
+
+    Returns the minimum set of Bing tiles that fully covers a given geometry at a
+    given zoom level, recursively dissolving full sets of children into parents.
+    This results in a smaller array of tiles of different zoom levels.
+    For example, if the non-dissolved covering is [“00”, “01”, “02”, “03”, “10”],
+    the dissolved covering would be [“0”, “10”]. Zoom levels from 0 to 23 are supported.
 
 .. _OpenGIS Specifications: https://www.ogc.org/standards/ogcapi-features/
 .. _SQL/MM Part 3: Spatial: https://www.iso.org/standard/31369.html
