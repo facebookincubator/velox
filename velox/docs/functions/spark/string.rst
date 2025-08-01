@@ -274,10 +274,16 @@ String Functions
     Throws an exception if ``limit`` is not greater than 0.
     Note: This function is not directly callable in Spark SQL, but is used internally for reading CHAR type columns. ::
 
-        -- Test with SparkSQL that triggers the function
-        CREATE TABLE tgt(id char(3)) STORED AS PARQUET;
-        INSERT INTO tgt VALUES ("a");
-        SELECT id FROM tgt; -- "a  "
+        -- Function call examples (this function is not directly callable in Spark SQL).
+        read_side_padding("a", 3) -- "a  "
+        read_side_padding("abc", 3) -- "abc"
+        read_side_padding("abcd", 3) -- "abcd"
+        read_side_padding("世", 3) -- "世  "
+        read_side_padding("世界", 2) -- "世界"
+        read_side_padding("Привет", 8) -- "Привет  "
+        read_side_padding("Γειά", 5) -- "Γειά "
+        read_side_padding("Приветик", 6) -- "Приветик"
+        read_side_padding("a", 0) -- VeloxUserError: "The length limit must be greater than 0."
 
 .. spark:function:: repeat(input, n) -> varchar
 
