@@ -21,6 +21,8 @@
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
+#include "velox/expression/fuzzer/ExpressionFuzzer.h"
+#include "velox/functions/FunctionRegistry.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
 #include <filesystem>
@@ -272,6 +274,55 @@ common::SubfieldFilters generateSubfieldFilters(
       filterSpecs, {finalExpectedData}, &mutations, hitRows);
 }
 
+fuzzer::ExpressionFuzzer::FuzzedExpressionData generateRemainingFilters(
+    const TableEvolutionFuzzer::Config& config,
+    unsigned currentSeed) {
+  // Use ExpressionFuzzer to generate complex expressions, but use the actual
+  // data types from finalExpectedData
+  // Configure ExpressionFuzzer to generate simpler expressions suitable for
+  // filters
+  fuzzer::ExpressionFuzzer::Options options;
+  options.enableComplexTypes = false; // Disable complex types to avoid issues
+  options.enableDecimalType = false; // Disable decimal types
+  options.maxLevelOfNesting = 3; // Reduce nesting to avoid complexity
+  options.nullRatio = 0.0; // No null values to avoid type resolution issues
+  // Only use simple comparison and logical functions suitable for filters
+  options.useOnlyFunctions = "eq,neq,lt,lte,gt,gte,and,or,not";
+  options.specialForms = "and,or"; // Only simple special forms
+
+  // Skip complex functions that generate unparseable expressions
+  options.skipFunctions = {
+      "regexp_like",
+      "regexp_extract",
+      "replace",
+      "replace_first",
+      "json_format",
+      "json_extract",
+      "json_parse",
+      "from_utf8",
+      "to_utf8",
+      "reverse",
+      "upper",
+      "lower",
+      "st_coorddim",
+      "is_null",
+      "is_not_null"};
+
+  auto signatureMap = getVectorFunctionSignatures();
+
+  // Configure VectorFuzzer to avoid null values and use the actual data types
+  VectorFuzzer::Options vectorFuzzerOptions;
+  vectorFuzzerOptions.nullRatio = 0.0; // No nulls
+  vectorFuzzerOptions.vectorSize = 100;
+  auto vectorFuzzer =
+      std::make_shared<VectorFuzzer>(vectorFuzzerOptions, config.pool);
+
+  fuzzer::ExpressionFuzzer expressionFuzzer(
+      signatureMap, currentSeed, vectorFuzzer, options);
+
+  return expressionFuzzer.fuzzExpressions(1);
+}
+
 } // namespace
 
 VectorPtr TableEvolutionFuzzer::liftToType(
@@ -384,11 +435,46 @@ void TableEvolutionFuzzer::run() {
     oomInjectorWritePath.enable();
   }
 
-  // Step 1: Test setup and bucketColumnIndices generation
-  auto bucketColumnIndices = generateBucketColumnIndices();
-  auto testSetups = makeSetups(bucketColumnIndices);
+  // Step 1: Generate remaining filters and extract new columns
+  auto generatedRemainingFilters =
+      generateRemainingFilters(config_, currentSeed_);
 
-  // Step 2: Create and execute write tasks
+  // Extract all columns from generatedRemainingFilters.inputType
+  std::vector<std::string> additionalColumnNames;
+  std::vector<TypePtr> additionalColumnTypes;
+
+  if (generatedRemainingFilters.inputType) {
+    for (int i = 0; i < generatedRemainingFilters.inputType->size(); ++i) {
+      const auto& columnName = generatedRemainingFilters.inputType->nameOf(i);
+      additionalColumnNames.push_back(columnName);
+      additionalColumnTypes.push_back(
+          generatedRemainingFilters.inputType->childAt(i));
+    }
+  }
+
+  if (!additionalColumnNames.empty()) {
+    VLOG(1)
+        << "Found " << additionalColumnNames.size()
+        << " columns from generateRemainingFilters, will add to schema evolution";
+  }
+
+  // Step 2: Test setup and bucketColumnIndices generation with additional
+  // columns
+  auto bucketColumnIndices = generateBucketColumnIndices();
+
+  // Track column name mappings during evolution
+  std::unordered_map<std::string, std::string> columnNameMapping;
+  for (const auto& columnName : additionalColumnNames) {
+    columnNameMapping[columnName] = columnName; // Initially map to itself
+  }
+
+  auto testSetups = makeSetups(
+      bucketColumnIndices,
+      additionalColumnNames,
+      additionalColumnTypes,
+      &columnNameMapping);
+
+  // Step 3: Create and execute write tasks
   auto tableOutputRootDir = TempDirectoryPath::create();
   std::vector<std::shared_ptr<TaskCursor>> writeTasks(
       2 * config_.evolutionCount - 1);
@@ -404,7 +490,7 @@ void TableEvolutionFuzzer::run() {
   auto executor = folly::getGlobalCPUExecutor();
   auto writeResults = runTaskCursors(writeTasks, *executor);
 
-  // Step 3: Create scan splits from write results
+  // Step 4: Create scan splits from write results
   std::optional<int32_t> selectedBucket;
   if (!bucketColumnIndices.empty()) {
     selectedBucket =
@@ -419,11 +505,15 @@ void TableEvolutionFuzzer::run() {
       selectedBucket,
       finalExpectedData);
 
-  // Step 4: Setup scan tasks with filters
+  // Step 5: Setup scan tasks with filters
   auto rowType = testSetups.back().schema;
   PushdownConfig subfieldFilterConfig;
   subfieldFilterConfig.subfieldFiltersMap =
       generateSubfieldFilters(rowType, finalExpectedData);
+
+  // Apply generated remaining filters with updated column names
+  applyRemainingFilters(
+      generatedRemainingFilters, columnNameMapping, subfieldFilterConfig);
 
   std::vector<std::shared_ptr<TaskCursor>> scanTasks(2);
   scanTasks[0] = makeScanTask(
@@ -438,7 +528,7 @@ void TableEvolutionFuzzer::run() {
     oomInjectorReadPath.enable();
   }
 
-  // Step 5: Execute scan tasks and verify results
+  // Step 6: Execute scan tasks and verify results
   auto scanResults = runTaskCursors(scanTasks, *executor);
 
   // Skip result verification when OOM injection is enabled
@@ -472,13 +562,25 @@ TypePtr TableEvolutionFuzzer::makeNewType(int maxDepth) {
   return vectorFuzzer_.randType(scalarTypes, maxDepth);
 }
 
-RowTypePtr TableEvolutionFuzzer::makeInitialSchema() {
+RowTypePtr TableEvolutionFuzzer::makeInitialSchema(
+    const std::vector<std::string>& additionalColumnNames,
+    const std::vector<TypePtr>& additionalColumnTypes) {
   std::vector<std::string> names(config_.columnCount);
   std::vector<TypePtr> types(config_.columnCount);
   for (int i = 0; i < config_.columnCount; ++i) {
     names[i] = makeNewName();
     types[i] = makeNewType(3);
   }
+
+  // Add additional columns from generateRemainingFilters
+  for (int i = 0; i < additionalColumnNames.size(); ++i) {
+    names.push_back(additionalColumnNames[i]);
+    types.push_back(additionalColumnTypes[i]);
+    VLOG(1) << "Adding additional column to initial schema: "
+            << additionalColumnNames[i] << " of type "
+            << additionalColumnTypes[i]->toString();
+  }
+
   return ROW(std::move(names), std::move(types));
 }
 
@@ -515,7 +617,8 @@ TypePtr TableEvolutionFuzzer::evolveType(const TypePtr& old) {
 
 RowTypePtr TableEvolutionFuzzer::evolveRowType(
     const RowType& old,
-    const std::vector<column_index_t>& bucketColumnIndices) {
+    const std::vector<column_index_t>& bucketColumnIndices,
+    std::unordered_map<std::string, std::string>* columnNameMapping) {
   auto names = old.names();
   auto types = old.children();
   for (int i = 0, j = 0; i < old.size(); ++i) {
@@ -527,7 +630,22 @@ RowTypePtr TableEvolutionFuzzer::evolveRowType(
       continue;
     }
     if (folly::Random::oneIn(4, rng_)) {
-      names[i] = makeNewName();
+      auto oldName = names[i];
+      auto newName = makeNewName();
+      names[i] = newName;
+
+      // Update column name mapping if provided
+      if (columnNameMapping) {
+        // Find if this column was originally from generateRemainingFilters
+        for (auto& [originalName, currentName] : *columnNameMapping) {
+          if (currentName == oldName) {
+            currentName = newName;
+            VLOG(1) << "Updated column name mapping: " << originalName << " -> "
+                    << newName;
+            break;
+          }
+        }
+      }
     }
     types[i] = evolveType(types[i]);
   }
@@ -539,14 +657,18 @@ RowTypePtr TableEvolutionFuzzer::evolveRowType(
 }
 
 std::vector<TableEvolutionFuzzer::Setup> TableEvolutionFuzzer::makeSetups(
-    const std::vector<column_index_t>& bucketColumnIndices) {
+    const std::vector<column_index_t>& bucketColumnIndices,
+    const std::vector<std::string>& additionalColumnNames,
+    const std::vector<TypePtr>& additionalColumnTypes,
+    std::unordered_map<std::string, std::string>* columnNameMapping) {
   std::vector<Setup> setups(config_.evolutionCount);
   for (int i = 0; i < config_.evolutionCount; ++i) {
     if (i == 0) {
-      setups[i].schema = makeInitialSchema();
-    } else {
       setups[i].schema =
-          evolveRowType(*setups[i - 1].schema, bucketColumnIndices);
+          makeInitialSchema(additionalColumnNames, additionalColumnTypes);
+    } else {
+      setups[i].schema = evolveRowType(
+          *setups[i - 1].schema, bucketColumnIndices, columnNameMapping);
     }
     if (!bucketColumnIndices.empty()) {
       if (i == 0) {
@@ -714,6 +836,64 @@ void TableEvolutionFuzzer::createWriteTasks(
     writeTasks[2 * i + 1] = makeWriteTask(
         testSetups.back(), expectedData, expectedDir, bucketColumnIndices);
   }
+}
+
+void TableEvolutionFuzzer::applyRemainingFilters(
+    const fuzzer::ExpressionFuzzer::FuzzedExpressionData&
+        generatedRemainingFilters,
+    const std::unordered_map<std::string, std::string>& columnNameMapping,
+    PushdownConfig& subfieldFilterConfig) {
+  if (generatedRemainingFilters.expressions.empty() ||
+      columnNameMapping.empty()) {
+    return;
+  }
+
+  std::vector<std::string> filterStrings;
+  for (const auto& expr : generatedRemainingFilters.expressions) {
+    auto filterString = expr->toString();
+
+    // Update column names in the filter string using columnNameMapping
+    for (const auto& [originalName, currentName] : columnNameMapping) {
+      // Simple string replacement - this is a basic approach
+      // In a more robust implementation, we would parse the expression tree
+      size_t pos = 0;
+      while ((pos = filterString.find(originalName, pos)) !=
+             std::string::npos) {
+        // Check if this is a complete word (not part of another identifier)
+        bool isCompleteWord = true;
+        if (pos > 0 &&
+            (std::isalnum(filterString[pos - 1]) ||
+             filterString[pos - 1] == '_')) {
+          isCompleteWord = false;
+        }
+        if (pos + originalName.length() < filterString.length() &&
+            (std::isalnum(filterString[pos + originalName.length()]) ||
+             filterString[pos + originalName.length()] == '_')) {
+          isCompleteWord = false;
+        }
+
+        if (isCompleteWord) {
+          filterString.replace(pos, originalName.length(), currentName);
+          pos += currentName.length();
+        } else {
+          pos += originalName.length();
+        }
+      }
+    }
+
+    filterStrings.push_back(filterString);
+    VLOG(1) << "Updated filter expression: " << filterString;
+  }
+
+  if (filterStrings.size() == 1) {
+    subfieldFilterConfig.remainingFilter = filterStrings[0];
+  } else if (filterStrings.size() > 1) {
+    subfieldFilterConfig.remainingFilter =
+        "(" + folly::join(") AND (", filterStrings) + ")";
+  }
+
+  VLOG(1) << "Applied remaining filter with updated column names: "
+          << subfieldFilterConfig.remainingFilter;
 }
 
 } // namespace facebook::velox::exec::test
