@@ -1080,33 +1080,7 @@ struct DateAddFunction : public TimestampWithTimezoneSupport<T> {
     if (value != (int32_t)value) {
       VELOX_UNSUPPORTED("integer overflow");
     }
-
-    if (LIKELY(sessionTimeZone_ != nullptr)) {
-      // sessionTimeZone not null means that the config
-      // adjust_timestamp_to_timezone is on.
-      Timestamp zonedTimestamp = timestamp;
-      zonedTimestamp.toTimezone(*sessionTimeZone_);
-
-      Timestamp resultTimestamp =
-          addToTimestamp(zonedTimestamp, unit, (int32_t)value);
-
-      if (isTimeUnit(unit)) {
-        const int64_t offset = static_cast<Timestamp>(timestamp).getSeconds() -
-            zonedTimestamp.getSeconds();
-        result = Timestamp(
-            resultTimestamp.getSeconds() + offset, resultTimestamp.getNanos());
-      } else {
-        result = Timestamp(
-            sessionTimeZone_
-                ->correct_nonexistent_time(
-                    std::chrono::seconds(resultTimestamp.getSeconds()))
-                .count(),
-            resultTimestamp.getNanos());
-        result.toGMT(*sessionTimeZone_);
-      }
-    } else {
-      result = addToTimestamp(timestamp, unit, (int32_t)value);
-    }
+    result = addToTimestamp(unit, (int32_t)value, timestamp, sessionTimeZone_);
   }
 
   FOLLY_ALWAYS_INLINE void call(
