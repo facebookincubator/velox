@@ -382,6 +382,7 @@ struct ToJsonFunction {
             return false;
           }
         }
+        return true;
       }
       case TypeKind::ARRAY: {
         return isSupportedType(type->childAt(0), false, isMapKey);
