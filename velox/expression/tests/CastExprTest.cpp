@@ -1676,13 +1676,20 @@ TEST_F(CastExprTest, testNullOnFailure) {
 }
 
 TEST_F(CastExprTest, toString) {
-  auto input = std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "a");
-  exec::ExprSet exprSet(
-      {makeCastExpr(input, BIGINT(), false),
-       makeCastExpr(input, ARRAY(VARCHAR()), false)},
-      &execCtx_);
-  ASSERT_EQ("cast((a) as BIGINT)", exprSet.exprs()[0]->toString());
-  ASSERT_EQ("cast((a) as ARRAY<VARCHAR>)", exprSet.exprs()[1]->toString());
+  const std::vector<TypePtr> kTypes = {VARCHAR(), VARCHAR(10)};
+
+  for (const auto& type : kTypes) {
+    SCOPED_TRACE(fmt::format("Type: {}", type->toString()));
+    auto input = std::make_shared<core::FieldAccessTypedExpr>(type, "a");
+    exec::ExprSet exprSet(
+        {makeCastExpr(input, BIGINT(), false),
+         makeCastExpr(input, ARRAY(type), false)},
+        &execCtx_);
+    ASSERT_EQ("cast((a) as BIGINT)", exprSet.exprs()[0]->toString());
+    ASSERT_EQ(
+        fmt::format("cast((a) as ARRAY<{}>)", type->toString()),
+        exprSet.exprs()[1]->toString());
+  }
 }
 
 TEST_F(CastExprTest, decimalToIntegral) {
@@ -1720,59 +1727,68 @@ TEST_F(CastExprTest, decimalToBool) {
 }
 
 TEST_F(CastExprTest, decimalToVarchar) {
-  auto flatForInline = makeNullableFlatVector<int64_t>(
-      {123456789, -333333333, 0, 5, -9, std::nullopt}, DECIMAL(9, 2));
-  testCast(
-      flatForInline,
-      makeNullableFlatVector<StringView>(
-          {"1234567.89",
-           "-3333333.33",
-           "0.00",
-           "0.05",
-           "-0.09",
-           std::nullopt}));
+  const std::vector<TypePtr> outputTypes = {VARCHAR(), VARCHAR(100)};
 
-  auto shortFlatForZero = makeNullableFlatVector<int64_t>({0}, DECIMAL(6, 0));
-  testCast(shortFlatForZero, makeNullableFlatVector<StringView>({"0"}));
+  for (auto& type : outputTypes) {
+    SCOPED_TRACE(fmt::format("Type: {}", type->toString()));
+    auto flatForInline = makeNullableFlatVector<int64_t>(
+        {123456789, -333333333, 0, 5, -9, std::nullopt}, DECIMAL(9, 2));
+    testCast(
+        flatForInline,
+        makeNullableFlatVector<StringView>(
+            {"1234567.89",
+             "-3333333.33",
+             "0.00",
+             "0.05",
+             "-0.09",
+             std::nullopt},
+            type));
 
-  auto shortFlat = makeNullableFlatVector<int64_t>(
-      {DecimalUtil::kShortDecimalMin,
-       -3,
-       0,
-       55,
-       DecimalUtil::kShortDecimalMax,
-       std::nullopt},
-      DECIMAL(18, 18));
-  testCast(
-      shortFlat,
-      makeNullableFlatVector<StringView>(
-          {"-0.999999999999999999",
-           "-0.000000000000000003",
-           "0.000000000000000000",
-           "0.000000000000000055",
-           "0.999999999999999999",
-           std::nullopt}));
+    auto shortFlatForZero = makeNullableFlatVector<int64_t>({0}, DECIMAL(6, 0));
+    testCast(shortFlatForZero, makeNullableFlatVector<StringView>({"0"}));
 
-  auto longFlat = makeNullableFlatVector<int128_t>(
-      {DecimalUtil::kLongDecimalMin,
-       0,
-       DecimalUtil::kLongDecimalMax,
-       HugeInt::build(0xFFFFFFFFFFFFFFFFull, 0xFFFFFFFFFFFFFFFFull),
-       HugeInt::build(0xffff, 0xffffffffffffffff),
-       std::nullopt},
-      DECIMAL(38, 5));
-  testCast(
-      longFlat,
-      makeNullableFlatVector<StringView>(
-          {"-999999999999999999999999999999999.99999",
-           "0.00000",
-           "999999999999999999999999999999999.99999",
-           "-0.00001",
-           "12089258196146291747.06175",
-           std::nullopt}));
+    auto shortFlat = makeNullableFlatVector<int64_t>(
+        {DecimalUtil::kShortDecimalMin,
+         -3,
+         0,
+         55,
+         DecimalUtil::kShortDecimalMax,
+         std::nullopt},
+        DECIMAL(18, 18));
+    testCast(
+        shortFlat,
+        makeNullableFlatVector<StringView>(
+            {"-0.999999999999999999",
+             "-0.000000000000000003",
+             "0.000000000000000000",
+             "0.000000000000000055",
+             "0.999999999999999999",
+             std::nullopt},
+            type));
 
-  auto longFlatForZero = makeNullableFlatVector<int128_t>({0}, DECIMAL(25, 0));
-  testCast(longFlatForZero, makeNullableFlatVector<StringView>({"0"}));
+    auto longFlat = makeNullableFlatVector<int128_t>(
+        {DecimalUtil::kLongDecimalMin,
+         0,
+         DecimalUtil::kLongDecimalMax,
+         HugeInt::build(0xFFFFFFFFFFFFFFFFull, 0xFFFFFFFFFFFFFFFFull),
+         HugeInt::build(0xffff, 0xffffffffffffffff),
+         std::nullopt},
+        DECIMAL(38, 5));
+    testCast(
+        longFlat,
+        makeNullableFlatVector<StringView>(
+            {"-999999999999999999999999999999999.99999",
+             "0.00000",
+             "999999999999999999999999999999999.99999",
+             "-0.00001",
+             "12089258196146291747.06175",
+             std::nullopt},
+            type));
+
+    auto longFlatForZero =
+        makeNullableFlatVector<int128_t>({0}, DECIMAL(25, 0));
+    testCast(longFlatForZero, makeNullableFlatVector<StringView>({"0"}, type));
+  }
 }
 
 TEST_F(CastExprTest, decimalToDecimal) {
@@ -2531,6 +2547,19 @@ TEST_F(CastExprTest, castAsCall) {
   auto result = evaluate(callExpr, input);
   auto expected = makeNullableFlatVector(outputValues);
   assertEqualVectors(expected, result);
+}
+
+TEST_F(CastExprTest, varcharToVarchar) {
+  testCast(
+      makeNullableFlatVector<StringView>(
+          {"123456", "12345678901234567890", std::nullopt}, VARCHAR()),
+      makeNullableFlatVector<StringView>(
+          {"123456", "1234567890", std::nullopt}, VARCHAR(10)));
+  testCast(
+      makeNullableFlatVector<StringView>(
+          {"123456", "12345678901234567890", std::nullopt}, VARCHAR(20)),
+      makeNullableFlatVector<StringView>(
+          {"123456", "12345678901234567890", std::nullopt}, VARCHAR()));
 }
 
 namespace {
