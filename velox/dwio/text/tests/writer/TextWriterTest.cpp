@@ -85,7 +85,7 @@ TEST_F(TextWriterTest, write) {
       {
           makeConstant(true, 3),
           makeFlatVector<int8_t>({1, 2, 3}),
-          makeFlatVector<int16_t>({1, 2, 3}), // TODO null
+          makeFlatVector<int16_t>({1, 2, 3}),
           makeFlatVector<int32_t>({1, 2, 3}),
           makeFlatVector<int64_t>({1, 2, 3}),
           makeFlatVector<float>({1.1, kInf, 3.1}),
@@ -214,6 +214,74 @@ TEST_F(TextWriterTest, verifyWriteWithTextReader) {
   auto sink = std::make_unique<dwio::common::LocalFileSink>(
       filePath.string(),
       dwio::common::FileSink::Options{.pool = leafPool_.get()});
+  auto writer = std::make_unique<TextWriter>(
+      schema,
+      std::move(sink),
+      std::make_shared<text::WriterOptions>(writerOptions));
+  writer->write(data);
+  writer->close();
+
+  // Set up reader.
+  auto readerFactory =
+      dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
+  auto readFile = std::make_shared<LocalReadFile>(filePath.string());
+  auto readerOptions = dwio::common::ReaderOptions(pool());
+  readerOptions.setFileSchema(schema);
+  auto input =
+      std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
+  auto reader = readerFactory->createReader(std::move(input), readerOptions);
+  dwio::common::RowReaderOptions rowReaderOptions;
+  setScanSpec(*schema, rowReaderOptions);
+  auto rowReader = reader->createRowReader(rowReaderOptions);
+
+  EXPECT_EQ(*reader->rowType(), *schema);
+
+  VectorPtr result;
+
+  ASSERT_EQ(rowReader->next(3, result), 3);
+  for (int i = 0; i < 3; ++i) {
+    EXPECT_TRUE(result->equalValueAt(data.get(), i, i));
+  }
+}
+
+TEST_F(TextWriterTest, DISABLED_writeCompressed) {
+  auto schema =
+      ROW({"c0", "c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8", "c9"},
+          {BOOLEAN(),
+           TINYINT(),
+           SMALLINT(),
+           INTEGER(),
+           BIGINT(),
+           REAL(),
+           DOUBLE(),
+           TIMESTAMP(),
+           VARCHAR(),
+           VARBINARY()});
+  auto data = makeRowVector(
+      {"c0", "c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8", "c9"},
+      {
+          makeConstant(true, 3),
+          makeFlatVector<int8_t>({1, 2, 3}),
+          makeFlatVector<int16_t>({1, 2, 3}),
+          makeFlatVector<int32_t>({1, 2, 3}),
+          makeFlatVector<int64_t>({1, 2, 3}),
+          makeFlatVector<float>({1.1, kInf, 3.1}),
+          makeFlatVector<double>({1.1, kNaN, 3.1}),
+          makeFlatVector<Timestamp>(
+              3, [](auto i) { return Timestamp(i, i * 1'000'000); }),
+          makeFlatVector<StringView>({"hello", "world", "cpp"}, VARCHAR()),
+          makeFlatVector<StringView>({"hello", "world", "cpp"}, VARBINARY()),
+      });
+
+  WriterOptions writerOptions;
+  writerOptions.memoryPool = rootPool_.get();
+  writerOptions.compressionKind = common::CompressionKind_ZLIB;
+
+  const auto tempPath = tempPath_->getPath();
+  const auto filename = "test_text_writer.deflate";
+  auto filePath = fs::path(fmt::format("{}/{}", tempPath, filename));
+  auto sink = std::make_unique<dwio::common::LocalFileSink>(
+      filePath, dwio::common::FileSink::Options{.pool = leafPool_.get()});
   auto writer = std::make_unique<TextWriter>(
       schema,
       std::move(sink),
@@ -474,6 +542,164 @@ TEST_F(TextWriterTest, verifyMapAndArrayComplexTypesWithTextReader) {
   writerOptions.memoryPool = rootPool_.get();
   auto filePath =
       fs::path(fmt::format("{}/test_text_writer.txt", tempPath_->getPath()));
+
+  auto sink = std::make_unique<dwio::common::LocalFileSink>(
+      filePath.string(),
+      dwio::common::FileSink::Options{.pool = leafPool_.get()});
+
+  // use traits to specify delimiters when it is not nested
+  const auto serDeOptions = dwio::common::SerDeOptions('\x01', '|', '#');
+  auto writer = std::make_unique<TextWriter>(
+      schema,
+      std::move(sink),
+      std::make_shared<text::WriterOptions>(writerOptions),
+      serDeOptions);
+  writer->write(data);
+  writer->close();
+
+  // Set up reader.
+  auto readerFactory =
+      dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
+  auto readFile = std::make_shared<LocalReadFile>(filePath.string());
+  auto readerOptions = dwio::common::ReaderOptions(pool());
+  readerOptions.setFileSchema(schema);
+  readerOptions.setSerDeOptions(serDeOptions);
+  auto input =
+      std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
+  auto reader = readerFactory->createReader(std::move(input), readerOptions);
+  dwio::common::RowReaderOptions rowReaderOptions;
+  setScanSpec(*schema, rowReaderOptions);
+  auto rowReader = reader->createRowReader(rowReaderOptions);
+
+  // Change the expected value
+  const auto expected = makeRowVector(
+      {makeArrayVector<int64_t>(
+           {{1, 11, 111},
+            {22, 22222},
+            {333, 33},
+            {4444, 44},
+            {5, 555},
+            {666, 66, 66},
+            {7777, 7, 777},
+            {8888, 88},
+            {9, 99},
+            {10, 10000},
+            {111, 1, 111},
+            {12, 11122222, 222},
+            {13, 11133333, 333}}),
+       makeArrayVector<double>(
+           {{1.123, 1.3123},
+            {2.333, -5512, 1.23},
+            {-6.1, 65.777},
+            {4.2, 24, 324.11},
+            {47.2, 213.23},
+            {79.5, -44.11},
+            {3.141593, 441.124},
+            {-221.145, 878.43, -11},
+            {93.12, 632},
+            {-4123.11, -177.1},
+            {950.2, -4412},
+            {43.66, 33121.43},
+            {-42.11, -123.43}}),
+       std::make_shared<MapVector>(
+           pool(),
+           MAP(keyVector->type(), valueVector->type()),
+           nullptr,
+           length,
+           offsets,
+           sizes,
+           keyVector,
+           valueVector)});
+
+  EXPECT_EQ(*reader->rowType(), *schema);
+
+  VectorPtr result;
+  ASSERT_EQ(rowReader->next(13, result), 13);
+  for (int i = 0; i < 13; ++i) {
+    EXPECT_TRUE(result->equalValueAt(expected.get(), i, i));
+  }
+}
+
+TEST_F(TextWriterTest, DISABLED_mapAndArrayComplexTypesCompressed) {
+  const vector_size_t length = 13;
+  const auto keyVector = makeFlatVector<int64_t>(
+      {1,   111,  22, 22222, 333, 33, 44,    5,   555, 66, 7777,     7,
+       777, 8888, 88, 9,     99,  10, 10000, 111, 1,   11, 11122222, 123142});
+  const auto valueVector = makeFlatVector<bool>(
+      {false, true, true,  false, false, true,  false, true,
+       false, true, false, true,  false, false, true,  true,
+       false, true, false, true,  false, true,  true,  true});
+  BufferPtr sizes = facebook::velox::allocateOffsets(length, pool());
+  BufferPtr offsets = facebook::velox::allocateOffsets(length, pool());
+  auto rawSizes = sizes->asMutable<vector_size_t>();
+  auto rawOffsets = offsets->asMutable<vector_size_t>();
+  rawSizes[0] = 2;
+  rawSizes[1] = 2;
+  rawSizes[2] = 2;
+  rawSizes[3] = 1;
+  rawSizes[4] = 2;
+  rawSizes[5] = 1;
+  rawSizes[6] = 3;
+  rawSizes[7] = 2;
+  rawSizes[8] = 2;
+  rawSizes[9] = 2;
+  rawSizes[10] = 3;
+  rawSizes[11] = 1;
+  rawSizes[12] = 1;
+  for (int i = 1; i < length; i++) {
+    rawOffsets[i] = rawOffsets[i - 1] + rawSizes[i - 1];
+  }
+
+  const auto data = makeRowVector(
+      {makeArrayVector<int64_t>(
+           {{1, 11, 111},
+            {22, 22222},
+            {333, 33},
+            {4444, 44},
+            {5, 555},
+            {666, 66, 66},
+            {7777, 7, 777},
+            {8888, 88},
+            {9, 99},
+            {10, 10000},
+            {111, 1, 111},
+            {12, 11122222, 222},
+            {13, 11133333, 333}}),
+       makeArrayVector<double>(
+           {{1.123, 1.3123},
+            {2.333, -5512, 1.23},
+            {-6.1, 65.777},
+            {4.2, 24, 324.11},
+            {47.2, 213.23},
+            {79.5, -44.11},
+            {3.1415926, 441.124},
+            {-221.145, 878.43, -11},
+            {93.12, 632},
+            {-4123.11, -177.1},
+            {950.2, -4412},
+            {43.66, 33121.43},
+            {-42.11, -123.43}}),
+       std::make_shared<MapVector>(
+           pool(),
+           MAP(keyVector->type(), valueVector->type()),
+           nullptr,
+           length,
+           offsets,
+           sizes,
+           keyVector,
+           valueVector)});
+
+  const auto schema = ROW(
+      {{"col_bigint_arr", ARRAY(BIGINT())},
+       {"col_double_arr", ARRAY(DOUBLE())},
+       {"col_map", MAP(BIGINT(), BOOLEAN())}});
+
+  WriterOptions writerOptions;
+  writerOptions.memoryPool = rootPool_.get();
+  writerOptions.compressionKind = common::CompressionKind_ZSTD;
+
+  auto filePath =
+      fs::path(fmt::format("{}/test_text_writer.zst", tempPath_->getPath()));
 
   auto sink = std::make_unique<dwio::common::LocalFileSink>(
       filePath.string(),
@@ -1254,6 +1480,83 @@ TEST_F(TextWriterTest, DISABLED_deeplyNestedComplexTypes) {
 
   // Row 2: {30: [{300:false, 400:false, 500:true}]}
   EXPECT_EQ(result[2][0], "30#300@false!400@false!500@true");
+}
+
+TEST_F(TextWriterTest, DISABLED_nestedRowTypesCompressed) {
+  // Test specifically for nested ROW types
+  auto nestedRowChildren = std::vector<VectorPtr>{
+      makeFlatVector<int32_t>({42, 100, -5, 0, 999}),
+      makeFlatVector<bool>({true, false, true, false, true}),
+      makeArrayVector<double>(
+          {{3.14159, 2.71828},
+           {2.71828, 1.41421, 0.0},
+           {1.41421, -123.456},
+           {0.0, 999.999},
+           {-123.456, 42.0, 3.14159}})};
+  auto nestedRowVector = makeRowVector(
+      {"nested_int", "nested_bool", "nested_arr_double"}, nestedRowChildren);
+
+  const auto data = makeRowVector(
+      {makeFlatVector<std::string>(
+           {"hello", "world", "test", "sample", "data"}),
+       nestedRowVector,
+       makeFlatVector<bool>({false, true, false, true, false})});
+
+  const auto schema = ROW(
+      {{"col_varchar", VARCHAR()},
+       {"col_nested_row",
+        ROW(
+            {{"nested_int", INTEGER()},
+             {"nested_bool", BOOLEAN()},
+             {"nested_arr_double", ARRAY(DOUBLE())}})},
+       {"col_bool", BOOLEAN()}});
+
+  WriterOptions writerOptions;
+  writerOptions.memoryPool = rootPool_.get();
+  writerOptions.compressionKind = common::CompressionKind_ZLIB;
+
+  const auto tempPath = tempPath_->getPath();
+  const auto filename = "test_nested_row_writer.deflate";
+
+  auto filePath = fs::path(fmt::format("{}/{}", tempPath, filename));
+  auto sink = std::make_unique<dwio::common::LocalFileSink>(
+      filePath, dwio::common::FileSink::Options{.pool = leafPool_.get()});
+
+  // Use custom delimiters: field separator '\x01', nested row field separator
+  // '\x02'
+  const auto serDeOptions = dwio::common::SerDeOptions('\x01', '\x02', '#');
+  auto writer = std::make_unique<TextWriter>(
+      schema,
+      std::move(sink),
+      std::make_shared<text::WriterOptions>(writerOptions),
+      serDeOptions);
+  writer->write(data);
+  writer->close();
+
+  // Set up reader
+  auto readerFactory =
+      dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
+  auto readFile = std::make_shared<LocalReadFile>(filePath.string());
+  auto readerOptions = dwio::common::ReaderOptions(pool());
+  readerOptions.setFileSchema(schema);
+  readerOptions.setSerDeOptions(serDeOptions);
+
+  auto input =
+      std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
+  auto reader = readerFactory->createReader(std::move(input), readerOptions);
+  dwio::common::RowReaderOptions rowReaderOptions;
+  setScanSpec(*schema, rowReaderOptions);
+
+  auto rowReader = reader->createRowReader(rowReaderOptions);
+
+  EXPECT_EQ(*reader->rowType(), *schema);
+
+  VectorPtr result;
+
+  ASSERT_EQ(rowReader->next(5, result), 5);
+  for (int i = 0; i < 5; ++i) {
+    EXPECT_TRUE(result->equalValueAt(data.get(), i, i));
+  }
 }
 
 TEST_F(TextWriterTest, abort) {
