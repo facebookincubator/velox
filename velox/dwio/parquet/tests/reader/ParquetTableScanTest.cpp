@@ -15,6 +15,7 @@
  */
 
 #include <folly/init/Init.h>
+#include <vector/VectorPrinter.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h" // @manual
@@ -426,6 +427,24 @@ TEST_F(ParquetTableScanTest, aggregatePushdown) {
   ASSERT_EQ(rows->childrenSize(), 2);
   assertEqualVectors(rows->childAt(0), keysVector);
   assertEqualVectors(rows->childAt(1), valuesVector);
+}
+
+TEST_F(ParquetTableScanTest, aggregatePushdownToSmallPages) {
+  FLAGS_velox_exception_user_stacktrace_enabled = true;
+
+  auto expectedRowVector = makeRowVector({makeFlatVector<int16_t>({2, 4, 1}), makeFlatVector<int64_t>({35, 3, 1})});
+  auto outputType = ROW({"searchengineid", "isrefresh", "searchphrase"}, {SMALLINT(), SMALLINT(), VARCHAR()});
+  auto plan = PlanBuilder(pool())
+                  .tableScan(outputType, {}, "searchphrase <> '' AND searchengineid in (cast(1 as SMALLINT), cast(2 as SMALLINT), cast(4 as SMALLINT))")
+                  .singleAggregation({"searchengineid"}, {"sum(isrefresh) as s"})
+                  .orderBy({"s DESC"}, false)
+                  .planNode();
+  std::vector<std::shared_ptr<connector::ConnectorSplit>> splits;
+  splits.push_back(makeSplit(getExampleFilePath("clickbench-refreshes-pagesize-128.parquet")));
+  auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
+  ASSERT_EQ(result->size(), 3);
+  ASSERT_EQ(result->childrenSize(), 2);
+  assertEqualVectors(expectedRowVector, result);
 }
 
 TEST_F(ParquetTableScanTest, countStar) {
