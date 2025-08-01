@@ -1670,11 +1670,20 @@ std::shared_ptr<exec::VectorFunction> makeRe2Search(
 
 std::vector<std::shared_ptr<exec::FunctionSignature>> re2SearchSignatures() {
   // varchar, varchar -> boolean
-  return {exec::FunctionSignatureBuilder()
-              .returnType("boolean")
-              .argumentType("varchar")
-              .argumentType("varchar")
-              .build()};
+  return {
+      exec::FunctionSignatureBuilder()
+          .returnType("boolean")
+          .argumentType("varchar")
+          .argumentType("varchar")
+          .build(),
+      exec::FunctionSignatureBuilder()
+          .returnType("boolean")
+          .integerVariable("x")
+          .integerVariable("y")
+          .argumentType("varchar(x)")
+          .argumentType("varchar(y)")
+          .build(),
+  };
 }
 
 std::shared_ptr<exec::VectorFunction> makeRe2Extract(
@@ -1753,14 +1762,37 @@ std::vector<std::shared_ptr<exec::FunctionSignature>> re2ExtractSignatures() {
           .build(),
       exec::FunctionSignatureBuilder()
           .returnType("varchar")
+          .integerVariable("x")
+          .integerVariable("y")
+          .argumentType("varchar(x)")
+          .argumentType("varchar(y)")
+          .build(),
+      exec::FunctionSignatureBuilder()
+          .returnType("varchar")
           .argumentType("varchar")
           .argumentType("varchar")
           .argumentType("bigint")
           .build(),
       exec::FunctionSignatureBuilder()
           .returnType("varchar")
+          .integerVariable("x")
+          .integerVariable("y")
+          .argumentType("varchar(x)")
+          .argumentType("varchar(y)")
+          .argumentType("bigint")
+          .build(),
+      exec::FunctionSignatureBuilder()
+          .returnType("varchar")
           .argumentType("varchar")
           .argumentType("varchar")
+          .argumentType("integer")
+          .build(),
+      exec::FunctionSignatureBuilder()
+          .returnType("varchar")
+          .integerVariable("x")
+          .integerVariable("y")
+          .argumentType("varchar(x)")
+          .argumentType("varchar(y)")
           .argumentType("integer")
           .build(),
   };
@@ -2322,9 +2354,25 @@ std::vector<std::shared_ptr<exec::FunctionSignature>> likeSignatures() {
           .build(),
       exec::FunctionSignatureBuilder()
           .returnType("boolean")
+          .integerVariable("x")
+          .integerVariable("y")
+          .argumentType("varchar(x)")
+          .constantArgumentType("varchar(y)")
+          .build(),
+      exec::FunctionSignatureBuilder()
+          .returnType("boolean")
           .argumentType("varchar")
           .constantArgumentType("varchar")
           .constantArgumentType("varchar")
+          .build(),
+      exec::FunctionSignatureBuilder()
+          .returnType("boolean")
+          .integerVariable("x")
+          .integerVariable("y")
+          .integerVariable("z")
+          .argumentType("varchar(x)")
+          .constantArgumentType("varchar(y)")
+          .constantArgumentType("varchar(z)")
           .build(),
   };
 }
@@ -2425,9 +2473,10 @@ std::vector<std::shared_ptr<exec::FunctionSignature>>
 regexpReplaceWithLambdaSignatures() {
   return {exec::FunctionSignatureBuilder()
               .returnType("varchar")
+              .integerVariable("x")
               .argumentType("varchar")
               .argumentType("varchar")
-              .argumentType("function(array(varchar), varchar)")
+              .argumentType("function(array(varchar), varchar(x))")
               .build()};
 }
 } // namespace facebook::velox::functions
