@@ -41,6 +41,7 @@ add_executable(
   ElementAtTest.cpp
   FactorialTest.cpp
   FromJsonTest.cpp
+  GetArrayStructFieldsTest.cpp
   GetJsonObjectTest.cpp
   GetStructFieldTest.cpp
   HashTest.cpp
