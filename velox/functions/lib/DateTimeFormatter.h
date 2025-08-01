@@ -188,11 +188,13 @@ class DateTimeFormatter {
       std::unique_ptr<char[]>&& literalBuf,
       size_t bufSize,
       std::vector<DateTimeToken>&& tokens,
-      DateTimeFormatterType type)
+      DateTimeFormatterType type,
+      bool truncateFractionOfSecondToMillis)
       : literalBuf_(std::move(literalBuf)),
         bufSize_(bufSize),
         tokens_(std::move(tokens)),
-        type_(type) {}
+        type_(type),
+        truncateFractionOfSecondToMillis_(truncateFractionOfSecondToMillis) {}
 
   const std::unique_ptr<char[]>& literalBuf() const {
     return literalBuf_;
@@ -237,13 +239,15 @@ class DateTimeFormatter {
   size_t bufSize_;
   std::vector<DateTimeToken> tokens_;
   DateTimeFormatterType type_;
+  bool truncateFractionOfSecondToMillis_;
 };
 
 Expected<std::shared_ptr<DateTimeFormatter>> buildMysqlDateTimeFormatter(
     const std::string_view& format);
 
 Expected<std::shared_ptr<DateTimeFormatter>> buildJodaDateTimeFormatter(
-    const std::string_view& format);
+    const std::string_view& format,
+    bool truncateFractionOfSecondToMillis = true);
 
 Expected<std::shared_ptr<DateTimeFormatter>> buildSimpleDateTimeFormatter(
     const std::string_view& format,
