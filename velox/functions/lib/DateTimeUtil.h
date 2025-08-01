@@ -24,7 +24,7 @@ namespace facebook::velox::functions {
 namespace {
 constexpr double kNanosecondsInSecond = 1'000'000'000;
 constexpr int64_t kNanosecondsInMillisecond = 1'000'000;
-constexpr int64_t kMicrosecondsInNanoseconds = 1'000;
+constexpr int64_t kNanosecondsInMicrosecond = 1'000;
 constexpr int64_t kMillisecondsInSecond = 1'000;
 } // namespace
 
@@ -273,16 +273,16 @@ addToTimestamp(const Timestamp& timestamp, DateTimeUnit unit, int32_t value) {
   // The microsecond unit is handled independently to prevent overflow while
   // converting all timestamps to microseconds for each unit.
   if (unit == DateTimeUnit::kMicrosecond) {
-    const std::chrono::time_point<std::chrono::system_clock> inTimestamp(
+    const std::chrono::time_point<std::chrono::system_clock> inMicroTimestamp(
         std::chrono::microseconds(timestamp.toMicros()));
-    std::chrono::time_point<std::chrono::system_clock> outTimestamp =
-        inTimestamp + std::chrono::microseconds(value);
-    Timestamp microTimestamp =
-        Timestamp::fromMicros(outTimestamp.time_since_epoch().count());
+    const std::chrono::time_point<std::chrono::system_clock> outMicroTimestamp =
+        inMicroTimestamp + std::chrono::microseconds(value);
+    const Timestamp microTimestamp =
+        Timestamp::fromMicros(outMicroTimestamp.time_since_epoch().count());
     return Timestamp(
         microTimestamp.getSeconds(),
         microTimestamp.getNanos() +
-            timestamp.getNanos() % kMicrosecondsInNanoseconds);
+            timestamp.getNanos() % kNanosecondsInMicrosecond);
   }
 
   const std::chrono::
@@ -358,8 +358,8 @@ FOLLY_ALWAYS_INLINE Timestamp addToTimestamp(
     Timestamp resultTimestamp = addToTimestamp(zonedTimestamp, unit, value);
 
     if (isTimeUnit(unit)) {
-      const int64_t offset = static_cast<Timestamp>(timestamp).getSeconds() -
-          zonedTimestamp.getSeconds();
+      const int64_t offset =
+          timestamp.getSeconds() - zonedTimestamp.getSeconds();
       result = Timestamp(
           resultTimestamp.getSeconds() + offset, resultTimestamp.getNanos());
     } else {
