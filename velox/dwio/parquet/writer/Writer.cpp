@@ -20,9 +20,12 @@
 #include <arrow/table.h>
 #include "velox/common/base/Pointers.h"
 #include "velox/common/config/Config.h"
+#include "velox/common/encode/Base64.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/core/QueryConfig.h"
+#include "velox/dwio/parquet/writer/arrow/Metadata.h"
 #include "velox/dwio/parquet/writer/arrow/Properties.h"
+#include "velox/dwio/parquet/writer/arrow/Statistics.h"
 #include "velox/dwio/parquet/writer/arrow/Writer.h"
 #include "velox/exec/MemoryReclaimer.h"
 
@@ -350,6 +353,9 @@ Writer::Writer(
       getArrowParquetWriterOptions(options, flushPolicy_);
   setMemoryReclaimers();
   writeInt96AsTimestamp_ = options.writeInt96AsTimestamp;
+  dataFileStats_ = std::make_shared<dwio::common::IcebergDataFileStatistics>();
+  sourceColumnIndices_ = std::move(options.sourceColumnIndices);
+  collectIcebergStats_ = options.collectIcebergStats;
 }
 
 Writer::Writer(
@@ -490,6 +496,9 @@ void Writer::close() {
 
   if (arrowContext_->writer) {
     PARQUET_THROW_NOT_OK(arrowContext_->writer->Close());
+    if (collectIcebergStats_) {
+      collectIcebergDataFileStats(arrowContext_->writer->metadata());
+    }
     arrowContext_->writer.reset();
   }
   PARQUET_THROW_NOT_OK(stream_->Close());
@@ -500,6 +509,68 @@ void Writer::close() {
 void Writer::abort() {
   stream_->abort();
   arrowContext_.reset();
+}
+
+void Writer::collectIcebergDataFileStats(
+    const std::shared_ptr<arrow::FileMetaData>& fileMetadata) {
+  VELOX_CHECK_NOT_NULL(fileMetadata);
+  dataFileStats_->numRecords = fileMetadata->num_rows();
+  // numColumns is not the number of columns in Iceberg table's schema,
+  // e.g., schema_->size(). It also contains the sub-fields when there are
+  // nested types in table's schema.
+  auto numColumns = sourceColumnIndices_->size();
+  std::vector<std::shared_ptr<arrow::Statistics>> globalMinStats;
+  std::vector<std::shared_ptr<arrow::Statistics>> globalMaxStats;
+  globalMinStats.reserve(numColumns);
+  globalMaxStats.reserve(numColumns);
+  std::vector<bool> hasMinMax(numColumns, false);
+
+  const auto numRowGroups = fileMetadata->num_row_groups();
+  for (auto i = 0; i < numRowGroups; ++i) {
+    auto rgm = fileMetadata->RowGroup(i);
+    VELOX_CHECK_EQ(numColumns, rgm->num_columns());
+    for (auto j = 0; j < numColumns; ++j) {
+      auto sourceColumnId = (*sourceColumnIndices_)[j].first;
+      auto columnChunkMetadata = rgm->ColumnChunk(j);
+      auto numValues = columnChunkMetadata->num_values();
+      dataFileStats_->valueCounts[sourceColumnId] += numValues;
+      dataFileStats_->columnsSizes[sourceColumnId] +=
+          columnChunkMetadata->total_compressed_size();
+
+      auto columnChunkStats = columnChunkMetadata->statistics();
+      if (columnChunkStats->nan_count() > 0) {
+        dataFileStats_->nanValueCounts[sourceColumnId] +=
+            columnChunkStats->nan_count();
+      }
+      dataFileStats_->nullValueCounts[sourceColumnId] +=
+          columnChunkStats->null_count();
+
+      if (columnChunkStats->HasMinMax()) {
+        if (!hasMinMax[j]) {
+          hasMinMax[j] = true;
+          globalMinStats[j] = columnChunkStats;
+          globalMaxStats[j] = columnChunkStats;
+        } else {
+          globalMaxStats[j] = arrow::Statistics::CompareAndGetMax(
+              globalMaxStats[j], columnChunkStats);
+          globalMinStats[j] = arrow::Statistics::CompareAndGetMin(
+              globalMinStats[j], columnChunkStats);
+        }
+      }
+    }
+  }
+  for (auto j = 0; j < numColumns; ++j) {
+    auto sourceColumnId = (*sourceColumnIndices_)[j].first;
+    auto skipBounds = (*sourceColumnIndices_)[j].second;
+    if (hasMinMax[j] && !skipBounds) {
+      const auto lowerBound = globalMinStats[j]->MinValue();
+      dataFileStats_->lowerBounds[sourceColumnId] =
+          encoding::Base64::encode(lowerBound.data(), lowerBound.size());
+      const auto upperBound = globalMaxStats[j]->MaxValue();
+      dataFileStats_->upperBounds[sourceColumnId] =
+          encoding::Base64::encode(upperBound.data(), upperBound.size());
+    }
+  }
 }
 
 void Writer::setMemoryReclaimers() {
