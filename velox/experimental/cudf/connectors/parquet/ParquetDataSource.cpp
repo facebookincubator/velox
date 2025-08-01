@@ -17,12 +17,13 @@
 #include "velox/experimental/cudf/connectors/parquet/ParquetConfig.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetConnectorSplit.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetDataSource.h"
-#include "velox/experimental/cudf/connectors/parquet/ParquetTableHandle.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
+#include "velox/connectors/hive/HiveConnectorSplit.h"
+#include "velox/connectors/hive/TableHandle.h"
 #include "velox/expression/FieldReference.h"
 
 #include <cudf/io/parquet.hpp>
@@ -66,30 +67,28 @@ ParquetDataSource::ParquetDataSource(
         "ColumnHandle is missing for output column: {}",
         outputName);
 
-    auto* handle = static_cast<const ParquetColumnHandle*>(it->second.get());
+    auto* handle = static_cast<const hive::HiveColumnHandle*>(it->second.get());
     readColumnNames_.emplace_back(handle->name());
   }
 
-  // Dynamic cast tableHandle to ParquetTableHandle
   tableHandle_ =
-      std::dynamic_pointer_cast<const ParquetTableHandle>(tableHandle);
+      std::dynamic_pointer_cast<const hive::HiveTableHandle>(tableHandle);
   VELOX_CHECK_NOT_NULL(
-      tableHandle_, "TableHandle must be an instance of ParquetTableHandle");
+      tableHandle_, "TableHandle must be an instance of HiveTableHandle");
 
   // Create empty IOStats for later use
   ioStats_ = std::make_shared<io::IoStatistics>();
 
-  // Create subfield filter
-  auto subfieldFilter = tableHandle_->subfieldFilterExpr();
-  if (subfieldFilter) {
-    subfieldFilterExprSet_ = expressionEvaluator_->compile(subfieldFilter);
+  // Copy subfield filters
+  for (const auto& [k, v] : tableHandle_->subfieldFilters()) {
+    subfieldFilters_.emplace(k.clone(), v->clone());
     // Add fields in the filter to the columns to read if not there
-    for (const auto& field : subfieldFilterExprSet_->distinctFields()) {
+    for (const auto& [field, _] : subfieldFilters_) {
       if (std::find(
               readColumnNames_.begin(),
               readColumnNames_.end(),
-              field->name()) == readColumnNames_.end()) {
-        readColumnNames_.push_back(field->name());
+              field.toString()) == readColumnNames_.end()) {
+        readColumnNames_.push_back(field.toString());
       }
     }
   }
@@ -194,6 +193,9 @@ std::optional<RowVectorPtr> ParquetDataSource::next(
     cudfTable = std::make_unique<cudf::table>(std::move(originalColumns));
   }
 
+  // TODO (dm): Should we only enable table scan if cudf is registered?
+  // Earlier we could enable cudf table scans without using other cudf operators
+  // We still can, but I'm wondering if this is the right thing to do
   auto output = cudfIsRegistered()
       ? std::make_shared<CudfVector>(
             pool_, outputType_, nRows, std::move(cudfTable), stream_)
@@ -213,8 +215,27 @@ std::optional<RowVectorPtr> ParquetDataSource::next(
 }
 
 void ParquetDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
-  // Dynamic cast split to `ParquetConnectorSplit`
-  split_ = std::dynamic_pointer_cast<ParquetConnectorSplit>(split);
+  split_ = [&]() {
+    // Dynamic cast split to `ParquetConnectorSplit`
+    if (std::dynamic_pointer_cast<ParquetConnectorSplit>(split)) {
+      return std::dynamic_pointer_cast<ParquetConnectorSplit>(split);
+      // Convert `HiveConnectorSplit` to `ParquetConnectorSplit`
+    } else if (std::dynamic_pointer_cast<hive::HiveConnectorSplit>(split)) {
+      const auto hiveSplit =
+          std::dynamic_pointer_cast<hive::HiveConnectorSplit>(split);
+      VELOX_CHECK_EQ(
+          hiveSplit->fileFormat,
+          dwio::common::FileFormat::PARQUET,
+          "Unsupported file format for conversion from HiveConnectorSplit to ParquetConnectorSplit");
+      return ParquetConnectorSplitBuilder(hiveSplit->filePath)
+          .connectorId(hiveSplit->connectorId)
+          .splitWeight(hiveSplit->splitWeight)
+          .build();
+    } else {
+      VELOX_FAIL("Unsupported split type: {}", split->toString());
+    }
+  }();
+
   VLOG(1) << "Adding split " << split_->toString();
 
   // Split reader already exists, reset
@@ -256,39 +277,47 @@ ParquetDataSource::createSplitReader() {
     readerOptions.set_num_rows(parquetConfig_->numRows().value());
   }
 
-  if (subfieldFilterExprSet_) {
-    auto subfieldFilterExpr = subfieldFilterExprSet_->expr(0);
-
-    // non-ast instructions in filter is not supported for SubFieldFilter.
-    // precomputeInstructions which are non-ast instructions should be empty.
-    std::vector<PrecomputeInstruction> precomputeInstructions;
-
-    const RowTypePtr readerFilterType_ = [&] {
+  if (subfieldFilters_.size()) {
+    const RowTypePtr readerFilterType = [&] {
       if (tableHandle_->dataColumns()) {
-        std::vector<std::string> new_names;
-        std::vector<TypePtr> new_types;
+        std::vector<std::string> newNames;
+        std::vector<TypePtr> newTypes;
 
         for (const auto& name : readColumnNames_) {
           // Ensure all columns being read are available to the filter
           auto parsedType = tableHandle_->dataColumns()->findChild(name);
-          new_names.emplace_back(std::move(name));
-          new_types.push_back(parsedType);
+          newNames.emplace_back(std::move(name));
+          newTypes.push_back(parsedType);
         }
 
-        return ROW(std::move(new_names), std::move(new_types));
+        return ROW(std::move(newNames), std::move(newTypes));
       } else {
         return outputType_;
       }
     }();
 
-    createAstTree(
-        subfieldFilterExpr,
-        subfieldTree_,
-        subfieldScalars_,
-        readerFilterType_,
-        precomputeInstructions);
-    VELOX_CHECK_EQ(precomputeInstructions.size(), 0);
-    readerOptions.set_filter(subfieldTree_.back());
+    // Convert subfield filters to cudf AST
+    for (const auto& [subfield, filter] : subfieldFilters_) {
+      auto const& filterExpr = createAstFromSubfieldFilter(
+          subfield, *filter, subfieldTree_, subfieldScalars_, readerFilterType);
+      subfieldFilterExprs_.push_back(&filterExpr);
+    }
+
+    // Combine multiple filters with AND
+    if (subfieldFilterExprs_.size() == 1) {
+      readerOptions.set_filter(subfieldTree_.back());
+    } else if (subfieldFilterExprs_.size() > 1) {
+      // AND all filter expressions together
+      auto* result = subfieldFilterExprs_[0];
+      for (size_t i = 1; i < subfieldFilterExprs_.size(); i++) {
+        auto const& andExpr = subfieldTree_.push(cudf::ast::operation{
+            cudf::ast::ast_operator::NULL_LOGICAL_AND,
+            *result,
+            *subfieldFilterExprs_[i]});
+        result = &andExpr;
+      }
+      readerOptions.set_filter(*result);
+    }
   }
 
   // Set column projection if needed
