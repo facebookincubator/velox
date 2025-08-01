@@ -36,7 +36,8 @@ Expected<std::shared_ptr<DateTimeFormatter>> getDateTimeFormatter(
       return buildSimpleDateTimeFormatter(format, /*lenient=*/true);
     default:
       return buildJodaDateTimeFormatter(
-          std::string_view(format.data(), format.size()));
+          std::string_view(format.data(), format.size()),
+          /* truncateFractionOfSecondToMillis */ false);
   }
 }
 
