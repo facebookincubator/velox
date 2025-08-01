@@ -56,6 +56,16 @@ namespace facebook::velox::functions::geospatial {
     VELOX_FAIL(fmt::format("{}: {}", user_error_message, e.what()));       \
   }
 
+class GeometryCollectionIterator {
+ public:
+  explicit GeometryCollectionIterator(const geos::geom::Geometry* geometry);
+  bool hasNext();
+  const geos::geom::Geometry* next();
+
+ private:
+  std::deque<const geos::geom::Geometry*> geometriesDeque;
+};
+
 geos::geom::GeometryFactory* getGeometryFactory();
 
 FOLLY_ALWAYS_INLINE const
@@ -123,6 +133,17 @@ FOLLY_ALWAYS_INLINE bool isMultiType(const geos::geom::Geometry& geometry) {
   return std::count(multiTypes.begin(), multiTypes.end(), type);
 }
 
+FOLLY_ALWAYS_INLINE bool isAtomicType(const geos::geom::Geometry& geometry) {
+  geos::geom::GeometryTypeId type = geometry.getGeometryTypeId();
+
+  static const std::vector<geos::geom::GeometryTypeId> atomicTypes{
+      geos::geom::GeometryTypeId::GEOS_LINESTRING,
+      geos::geom::GeometryTypeId::GEOS_POLYGON,
+      geos::geom::GeometryTypeId::GEOS_POINT};
+
+  return std::count(atomicTypes.begin(), atomicTypes.end(), type);
+}
+
 std::optional<std::string> geometryInvalidReason(
     const geos::geom::Geometry* geometry);
 
@@ -182,5 +203,28 @@ FOLLY_ALWAYS_INLINE void canonicalizePolygonCoordinates(
         coordinates, partIndexes.back(), coordinates->size(), shellPart.back());
   }
 }
+
+Status validateLatitudeLongitude(double latitude, double longitude);
+
+std::vector<const geos::geom::Geometry*> flattenCollection(
+    const geos::geom::Geometry* geometry);
+
+std::vector<int64_t> getMinimalTilesCoveringGeometry(
+    const geos::geom::Envelope& envelope,
+    int32_t zoom);
+
+std::vector<int64_t> getMinimalTilesCoveringGeometry(
+    const geos::geom::Geometry& geometry,
+    int32_t zoom,
+    uint8_t maxZoomShift);
+
+std::vector<int64_t> getDissolvedTilesCoveringGeometry(
+    const geos::geom::Geometry& geometry,
+    int32_t zoom,
+    uint8_t maxZoomShift);
+
+bool isPointOrRectangle(
+    const geos::geom::Geometry& geometry,
+    const geos::geom::Envelope& envelope);
 
 } // namespace facebook::velox::functions::geospatial
