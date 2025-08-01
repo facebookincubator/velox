@@ -217,29 +217,29 @@ void SelectiveIntegerColumnReader::processValueHook(
       readHelper<Reader, velox::common::AlwaysTrue, isDense>(
           &alwaysTrue(),
           rows,
-          ExtractToHook<aggregate::SumHook<int64_t, false>>(hook));
+          ExtractToHook<aggregate::SumHook<int64_t, false>>(this, hook));
       break;
     case aggregate::AggregationHook::kBigintSumOverflow:
       readHelper<Reader, velox::common::AlwaysTrue, isDense>(
           &alwaysTrue(),
           rows,
-          ExtractToHook<aggregate::SumHook<int64_t, true>>(hook));
+          ExtractToHook<aggregate::SumHook<int64_t, true>>(this, hook));
       break;
     case aggregate::AggregationHook::kBigintMax:
       readHelper<Reader, velox::common::AlwaysTrue, isDense>(
           &dwio::common::alwaysTrue(),
           rows,
-          ExtractToHook<aggregate::MinMaxHook<int64_t, false>>(hook));
+          ExtractToHook<aggregate::MinMaxHook<int64_t, false>>(this, hook));
       break;
     case aggregate::AggregationHook::kBigintMin:
       readHelper<Reader, velox::common::AlwaysTrue, isDense>(
           &alwaysTrue(),
           rows,
-          ExtractToHook<aggregate::MinMaxHook<int64_t, true>>(hook));
+          ExtractToHook<aggregate::MinMaxHook<int64_t, true>>(this, hook));
       break;
     default:
       readHelper<Reader, velox::common::AlwaysTrue, isDense>(
-          &alwaysTrue(), rows, ExtractToGenericHook(hook));
+          &alwaysTrue(), rows, ExtractToGenericHook(this, hook));
   }
 }
 

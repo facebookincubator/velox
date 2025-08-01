@@ -82,8 +82,8 @@ class ExtractToHook {
   using HookType = THook;
   static constexpr bool kSkipNulls = THook::kSkipNulls;
 
-  explicit ExtractToHook(ValueHook* hook)
-      : hook_(*reinterpret_cast<THook*>(hook)) {}
+  explicit ExtractToHook(SelectiveColumnReader* reader, ValueHook* hook)
+      : reader_(reader), hook_(*reinterpret_cast<THook*>(hook)) {}
 
   bool acceptsNulls() {
     return hook_.acceptsNulls();
@@ -92,11 +92,13 @@ class ExtractToHook {
   template <typename T>
   void addNull(vector_size_t rowIndex) {
     hook_.addNull(rowIndex);
+    reader_->incrementNumValues(1);
   }
 
   template <typename V>
   void addValue(vector_size_t rowIndex, V value) {
     hook_.addValueTyped(rowIndex, value);
+    reader_->incrementNumValues(1);
   }
 
   auto& hook() {
@@ -104,6 +106,7 @@ class ExtractToHook {
   }
 
  private:
+  SelectiveColumnReader* const reader_;
   THook hook_;
 };
 
@@ -112,7 +115,7 @@ class ExtractToGenericHook {
   using HookType = ValueHook;
   static constexpr bool kSkipNulls = false;
 
-  explicit ExtractToGenericHook(ValueHook* hook) : hook_(hook) {}
+  explicit ExtractToGenericHook(SelectiveColumnReader* reader, ValueHook* hook) : reader_(reader), hook_(hook) {}
 
   bool acceptsNulls() const {
     return hook_->acceptsNulls();
@@ -121,11 +124,13 @@ class ExtractToGenericHook {
   template <typename T>
   void addNull(vector_size_t rowIndex) {
     hook_->addNull(rowIndex);
+    reader_->incrementNumValues(1);
   }
 
   template <typename V>
   void addValue(vector_size_t rowIndex, V value) {
     hook_->addValueTyped(rowIndex, value);
+    reader_->incrementNumValues(1);
   }
 
   ValueHook& hook() {
@@ -133,6 +138,7 @@ class ExtractToGenericHook {
   }
 
  private:
+  SelectiveColumnReader* const reader_;
   ValueHook* hook_;
 };
 
@@ -1543,12 +1549,12 @@ class StringColumnReadWithVisitorHelper {
         if (isDense) {
           readHelper<velox::common::AlwaysTrue, true>(
               &alwaysTrue(),
-              ExtractToGenericHook(hook),
+              ExtractToGenericHook(&reader_, hook),
               std::forward<F>(readWithVisitor));
         } else {
           readHelper<velox::common::AlwaysTrue, false>(
               &alwaysTrue(),
-              ExtractToGenericHook(hook),
+              ExtractToGenericHook(&reader_, hook),
               std::forward<F>(readWithVisitor));
         }
       } else {
