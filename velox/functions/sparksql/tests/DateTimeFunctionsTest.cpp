@@ -1564,5 +1564,87 @@ TEST_F(DateTimeFunctionsTest, timestampdiff) {
           parseTimestamp("2020-02-29 10:00:00.500"),
           parseTimestamp("2018-02-28 10:00:00.500")));
 }
+
+TEST_F(DateTimeFunctionsTest, timestampadd) {
+  const auto timestampadd = [&](const std::string& unit,
+                                std::optional<int32_t> value,
+                                std::optional<Timestamp> timestamp) {
+    return evaluateOnce<Timestamp>(
+        fmt::format("timestampadd('{}', c0, c1)", unit), value, timestamp);
+  };
+
+  // Check null behaviors
+  EXPECT_EQ(std::nullopt, timestampadd("second", 1, std::nullopt));
+  EXPECT_EQ(std::nullopt, timestampadd("month", std::nullopt, Timestamp(0, 0)));
+
+  // Check invalid units
+  VELOX_ASSERT_THROW(
+      timestampadd("invalid_unit", 1, Timestamp(0, 0)),
+      "Unsupported datetime unit: invalid_unit");
+
+  EXPECT_EQ(
+      Timestamp(1551348061, 999) /*2019-02-28 10:01:01.000000*/,
+      timestampadd(
+          "microsecond",
+          60 * 1000000 + 500,
+          Timestamp(1551348000, 999'500'999) /*2019-02-28 10:00:00.999500*/));
+  EXPECT_EQ(
+      Timestamp(1551348061, 999'999) /*2019-02-28 10:01:01.000*/,
+      timestampadd(
+          "millisecond",
+          60 * 1000 + 500,
+          Timestamp(1551348000, 500'999'999) /*2019-02-28 10:00:00.500*/));
+  EXPECT_EQ(
+      Timestamp(1551434400, 500'999'999) /*2019-03-01 10:00:00.500*/,
+      timestampadd(
+          "second",
+          60 * 60 * 24,
+          Timestamp(1551348000, 500'999'999) /*2019-02-28 10:00:00.500*/));
+  EXPECT_EQ(
+      Timestamp(1551434400, 500'999'999) /*2019-03-01 10:00:00.500*/,
+      timestampadd(
+          "minute",
+          60 * 24,
+          Timestamp(1551348000, 500'999'999) /*2019-02-28 10:00:00.500*/));
+  EXPECT_EQ(
+      Timestamp(1551434400, 500'999'999) /*2019-03-01 10:00:00.500*/,
+      timestampadd(
+          "hour",
+          24,
+          Timestamp(1551348000, 500'999'999) /*2019-02-28 10:00:00.500*/));
+  EXPECT_EQ(
+      Timestamp(1551434400, 500'999'999) /*2019-03-01 10:00:00.500*/,
+      timestampadd(
+          "day",
+          1,
+          Timestamp(1551348000, 500'999'999) /*2019-02-28 10:00:00.500*/));
+  EXPECT_EQ(
+      Timestamp(1551434400, 500'999'999) /*2019-03-01 10:00:00.500*/,
+      timestampadd(
+          "dayofyear",
+          1,
+          Timestamp(1551348000, 500'999'999) /*2019-02-28 10:00:00.500*/));
+  EXPECT_EQ(
+      parseTimestamp("2019-03-07 10:00:00.500"),
+      timestampadd("week", 1, parseTimestamp("2019-02-28 10:00:00.500")));
+  EXPECT_EQ(
+      Timestamp(1585389600, 500'999'999) /*2020-03-28 10:00:00.500*/,
+      timestampadd(
+          "month",
+          12 + 1,
+          Timestamp(1551348000, 500'999'999) /*2019-02-28 10:00:00.500*/));
+  EXPECT_EQ(
+      Timestamp(1582884000, 500'999'999) /*2020-02-28 10:00:00.500*/,
+      timestampadd(
+          "quarter",
+          4,
+          Timestamp(1551348000, 500'999'999) /*2019-02-28 10:00:00.500*/));
+  EXPECT_EQ(
+      Timestamp(1582884000, 500'999'999) /*2020-02-28 10:00:00.500*/,
+      timestampadd(
+          "year",
+          1,
+          Timestamp(1551348000, 500'999'999) /*2019-02-28 10:00:00.500*/));
+}
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test
