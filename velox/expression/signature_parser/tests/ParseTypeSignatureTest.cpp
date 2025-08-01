@@ -344,5 +344,25 @@ TEST_F(ParseTypeSignatureTest, invalidSignatures) {
   EXPECT_THROW(parseTypeSignature("array(array(T)"), VeloxRuntimeError);
 }
 
+TEST_F(ParseTypeSignatureTest, varcharN) {
+  {
+    auto signature = parseTypeSignature("VARCHAR(x)");
+    ASSERT_EQ(signature.baseName(), "VARCHAR");
+    ASSERT_EQ(signature.parameters().size(), 1);
+
+    auto param = signature.parameters()[0];
+    ASSERT_EQ(param.baseName(), "x");
+    ASSERT_EQ(param.parameters().size(), 0);
+  }
+  {
+    auto signature = parseTypeSignature("varchar(10)");
+    ASSERT_EQ(signature.baseName(), "varchar");
+    ASSERT_EQ(signature.parameters().size(), 1);
+    auto param = signature.parameters()[0];
+    ASSERT_EQ(param.baseName(), "10");
+    ASSERT_EQ(param.parameters().size(), 0);
+  }
+}
+
 } // namespace
 } // namespace facebook::velox

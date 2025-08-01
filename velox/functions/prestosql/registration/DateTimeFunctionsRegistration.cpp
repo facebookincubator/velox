@@ -78,6 +78,11 @@ void registerFromUnixtime(const std::string& name) {
       FromUnixtimeFunction,
       TimestampWithTimezone,
       double,
+      VarcharN<L1>>({name});
+  registerFunction<
+      FromUnixtimeFunction,
+      TimestampWithTimezone,
+      double,
       int64_t,
       int64_t>({name});
 }
@@ -92,6 +97,7 @@ void registerSimpleFunctions(const std::string& prefix) {
   registerFromUnixtime(prefix + "from_unixtime");
 
   registerFunction<DateFunction, Date, Varchar>({prefix + "date"});
+  registerFunction<DateFunction, Date, VarcharN<L1>>({prefix + "date"});
   registerFunction<DateFunction, Date, Timestamp>({prefix + "date"});
   registerFunction<DateFunction, Date, TimestampWithTimezone>(
       {prefix + "date"});
@@ -245,38 +251,84 @@ void registerSimpleFunctions(const std::string& prefix) {
 
   registerFunction<DateTruncFunction, Timestamp, Varchar, Timestamp>(
       {prefix + "date_trunc"});
+  registerFunction<DateTruncFunction, Timestamp, VarcharN<L1>, Timestamp>(
+      {prefix + "date_trunc"});
   registerFunction<DateTruncFunction, Date, Varchar, Date>(
+      {prefix + "date_trunc"});
+  registerFunction<DateTruncFunction, Date, VarcharN<L1>, Date>(
       {prefix + "date_trunc"});
   registerFunction<
       DateTruncFunction,
       TimestampWithTimezone,
       Varchar,
       TimestampWithTimezone>({prefix + "date_trunc"});
+  registerFunction<
+      DateTruncFunction,
+      TimestampWithTimezone,
+      VarcharN<L1>,
+      TimestampWithTimezone>({prefix + "date_trunc"});
   registerFunction<DateAddFunction, Date, Varchar, int64_t, Date>(
+      {prefix + "date_add"});
+  registerFunction<DateAddFunction, Date, VarcharN<L1>, int64_t, Date>(
       {prefix + "date_add"});
   registerFunction<DateAddFunction, Timestamp, Varchar, int64_t, Timestamp>(
       {prefix + "date_add"});
+  registerFunction<
+      DateAddFunction,
+      Timestamp,
+      VarcharN<L1>,
+      int64_t,
+      Timestamp>({prefix + "date_add"});
   registerFunction<
       DateAddFunction,
       TimestampWithTimezone,
       Varchar,
       int64_t,
       TimestampWithTimezone>({prefix + "date_add"});
+  registerFunction<
+      DateAddFunction,
+      TimestampWithTimezone,
+      VarcharN<L1>,
+      int64_t,
+      TimestampWithTimezone>({prefix + "date_add"});
   registerFunction<DateDiffFunction, int64_t, Varchar, Date, Date>(
+      {prefix + "date_diff"});
+  registerFunction<DateDiffFunction, int64_t, VarcharN<L1>, Date, Date>(
       {prefix + "date_diff"});
   registerFunction<DateDiffFunction, int64_t, Varchar, Timestamp, Timestamp>(
       {prefix + "date_diff"});
   registerFunction<
       DateDiffFunction,
       int64_t,
+      VarcharN<L1>,
+      Timestamp,
+      Timestamp>({prefix + "date_diff"});
+  registerFunction<
+      DateDiffFunction,
+      int64_t,
       Varchar,
+      TimestampWithTimezone,
+      TimestampWithTimezone>({prefix + "date_diff"});
+  registerFunction<
+      DateDiffFunction,
+      int64_t,
+      VarcharN<L1>,
       TimestampWithTimezone,
       TimestampWithTimezone>({prefix + "date_diff"});
   registerFunction<DateFormatFunction, Varchar, Timestamp, Varchar>(
       {prefix + "date_format"});
+  registerFunction<DateFormatFunction, Varchar, Timestamp, VarcharN<L1>>(
+      {prefix + "date_format"});
   registerFunction<DateFormatFunction, Varchar, TimestampWithTimezone, Varchar>(
       {prefix + "date_format"});
+  registerFunction<
+      DateFormatFunction,
+      Varchar,
+      TimestampWithTimezone,
+      VarcharN<L1>>({prefix + "date_format"});
   registerFunction<FormatDateTimeFunction, Varchar, Timestamp, Varchar>(
+      {prefix + "format_datetime"});
+  registerFunction<FormatDateTimeFunction, Varchar, Timestamp, VarcharN<L1>>(
       {prefix + "format_datetime"});
   registerFunction<
       FormatDateTimeFunction,
@@ -284,15 +336,31 @@ void registerSimpleFunctions(const std::string& prefix) {
       TimestampWithTimezone,
       Varchar>({prefix + "format_datetime"});
   registerFunction<
+      FormatDateTimeFunction,
+      Varchar,
+      TimestampWithTimezone,
+      VarcharN<L1>>({prefix + "format_datetime"});
+  registerFunction<
       ParseDateTimeFunction,
       TimestampWithTimezone,
       Varchar,
       Varchar>({prefix + "parse_datetime"});
+  registerFunction<
+      ParseDateTimeFunction,
+      TimestampWithTimezone,
+      VarcharN<L1>,
+      VarcharN<L2>>({prefix + "parse_datetime"});
   registerFunction<DateParseFunction, Timestamp, Varchar, Varchar>(
+      {prefix + "date_parse"});
+  registerFunction<DateParseFunction, Timestamp, VarcharN<L1>, VarcharN<L2>>(
       {prefix + "date_parse"});
   registerFunction<FromIso8601Date, Date, Varchar>(
       {prefix + "from_iso8601_date"});
+  registerFunction<FromIso8601Date, Date, VarcharN<L1>>(
+      {prefix + "from_iso8601_date"});
   registerFunction<FromIso8601Timestamp, TimestampWithTimezone, Varchar>(
+      {prefix + "from_iso8601_timestamp"});
+  registerFunction<FromIso8601Timestamp, TimestampWithTimezone, VarcharN<L1>>(
       {prefix + "from_iso8601_timestamp"});
   registerFunction<CurrentDateFunction, Date>({prefix + "current_date"});
 
@@ -307,6 +375,11 @@ void registerSimpleFunctions(const std::string& prefix) {
       TimestampWithTimezone,
       TimestampWithTimezone,
       Varchar>({prefix + "at_timezone"});
+  registerFunction<
+      AtTimezoneFunction,
+      TimestampWithTimezone,
+      TimestampWithTimezone,
+      VarcharN<L1>>({prefix + "at_timezone"});
 
   registerFunction<ToMillisecondFunction, int64_t, IntervalDayTime>(
       {prefix + "to_milliseconds"});
@@ -320,6 +393,8 @@ void registerSimpleFunctions(const std::string& prefix) {
       {prefix + "parse_duration"});
 
   registerFunction<LocalTimeFunction, Time>({prefix + "localtime"});
+  registerFunction<ParseDurationFunction, IntervalDayTime, VarcharN<L1>>(
+      {prefix + "parse_duration"});
 }
 } // namespace
 

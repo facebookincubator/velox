@@ -31,7 +31,9 @@ namespace {
 
 void registerFailFunction(const std::vector<std::string>& names) {
   registerFunction<FailFunction, UnknownValue, Varchar>(names);
+  registerFunction<FailFunction, UnknownValue, VarcharN<L1>>(names);
   registerFunction<FailFunction, UnknownValue, int32_t, Varchar>(names);
+  registerFunction<FailFunction, UnknownValue, int32_t, VarcharN<L1>>(names);
   registerFunction<FailFromJsonFunction, UnknownValue, Json>(names);
   registerFunction<FailFromJsonFunction, UnknownValue, int32_t, Json>(names);
 }
@@ -54,6 +56,7 @@ void registerAllGreatestLeastFunctions(const std::string& prefix) {
   registerGreatestLeastFunction<float>(prefix);
   registerGreatestLeastFunction<double>(prefix);
   registerGreatestLeastFunction<Varchar>(prefix);
+  registerGreatestLeastFunction<VarcharN<L1>>(prefix);
   registerGreatestLeastFunction<LongDecimal<P1, S1>>(prefix);
   registerGreatestLeastFunction<ShortDecimal<P1, S1>>(prefix);
   registerGreatestLeastFunction<Date>(prefix);

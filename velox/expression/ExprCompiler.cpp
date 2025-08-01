@@ -271,7 +271,8 @@ ExprPtr tryFoldIfConstant(const ExprPtr& expr, Scope* scope) {
       expr->eval(rows, context, result);
       auto constantVector = BaseVector::wrapInConstant(1, 0, std::move(result));
 
-      auto resultExpr = std::make_shared<ConstantExpr>(constantVector);
+      auto resultExpr =
+          std::make_shared<ConstantExpr>(expr->type(), constantVector);
       if (expr->stats().defaultNullRowsSkipped ||
           std::any_of(
               expr->inputs().begin(),

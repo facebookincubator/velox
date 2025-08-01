@@ -229,7 +229,12 @@ void CastExpr::applyCastKernel(
         ToKind == TypeKind::VARCHAR || ToKind == TypeKind::VARBINARY) {
       // Write the result output to the output vector
       auto writer = exec::StringWriter(result, row);
-      writer.copy_from(output);
+      auto maxWriteLength = getVaryingLengthScalarTypeLength(*result->type());
+      if (output.size() > maxWriteLength) {
+        writer.copy_from(output.substr(0, maxWriteLength));
+      } else {
+        writer.copy_from(output);
+      }
       writer.finalize();
     } else {
       result->set(row, output);

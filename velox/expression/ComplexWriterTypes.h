@@ -95,7 +95,8 @@ struct PrimitiveWriter {
 
 template <typename V>
 bool constexpr has_string_value =
-    std::is_same_v<V, Varchar> || std::is_same_v<V, Varbinary>;
+    std::is_same_v<V, Varchar> || std::is_same_v<V, Varbinary> ||
+    is_specialization_of_varcharn_v<V> || is_specialization_of_varbinaryn_v<V>;
 
 template <typename T, bool providesCustomComparison>
 bool constexpr has_string_value<CustomType<T, providesCustomComparison>> =

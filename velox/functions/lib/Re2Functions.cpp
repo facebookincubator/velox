@@ -1772,17 +1772,17 @@ std::vector<std::shared_ptr<exec::FunctionSignature>> re2ExtractSignatures() {
           .build(),
       exec::FunctionSignatureBuilder()
           .returnType("varchar")
-          .argumentType("varchar")
-          .argumentType("varchar")
-          .argumentType("bigint")
+          .integerVariable("x")
+          .integerVariable("y")
+          .argumentType("varchar(x)")
+          .argumentType("varchar(y)")
           .build(),
       exec::FunctionSignatureBuilder()
           .returnType("varchar")
           .argumentType("varchar")
           .argumentType("varchar")
-          .argumentType("integer")
-          .build(),
-  };
+          .argumentType("bigint")
+          .build()};
 }
 
 PatternMetadata PatternMetadata::generic() {
@@ -2341,9 +2341,25 @@ std::vector<std::shared_ptr<exec::FunctionSignature>> likeSignatures() {
           .build(),
       exec::FunctionSignatureBuilder()
           .returnType("boolean")
+          .integerVariable("x")
+          .integerVariable("y")
+          .argumentType("varchar(x)")
+          .constantArgumentType("varchar(y)")
+          .build(),
+      exec::FunctionSignatureBuilder()
+          .returnType("boolean")
           .argumentType("varchar")
           .constantArgumentType("varchar")
           .constantArgumentType("varchar")
+          .build(),
+      exec::FunctionSignatureBuilder()
+          .returnType("boolean")
+          .integerVariable("x")
+          .integerVariable("y")
+          .integerVariable("z")
+          .argumentType("varchar(x)")
+          .constantArgumentType("varchar(y)")
+          .constantArgumentType("varchar(z)")
           .build(),
   };
 }

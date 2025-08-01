@@ -142,6 +142,13 @@ class FromUtf8Function : public exec::VectorFunction {
             .argumentType("varbinary")
             .argumentType("varchar")
             .build(),
+        // varbinary, varchar(x) -> varchar
+        exec::FunctionSignatureBuilder()
+            .returnType("varchar")
+            .integerVariable("x")
+            .argumentType("varbinary")
+            .argumentType("varchar(x)")
+            .build(),
     };
   }
 

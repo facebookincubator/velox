@@ -27,6 +27,7 @@ namespace facebook::velox::fuzzer::test {
 
 namespace {
 const uint32_t kMaxVariadicArgs = 5;
+
 } // namespace
 
 class ArgumentTypeFuzzerTest : public testing::Test {

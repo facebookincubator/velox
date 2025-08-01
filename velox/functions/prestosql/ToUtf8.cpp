@@ -53,10 +53,18 @@ class ToUtf8Function : public exec::VectorFunction {
 
   static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
     // varchar -> varbinary
-    return {exec::FunctionSignatureBuilder()
-                .returnType("varbinary")
-                .argumentType("varchar")
-                .build()};
+    // varchar(x) -> varbinary
+    return {
+        exec::FunctionSignatureBuilder()
+            .returnType("varbinary")
+            .argumentType("varchar")
+            .build(),
+        exec::FunctionSignatureBuilder()
+            .integerVariable("x")
+            .returnType("varbinary")
+            .argumentType("varchar(x)")
+            .build(),
+    };
   }
 };
 } // namespace

@@ -20,10 +20,12 @@
 namespace facebook::velox::exec {
 class ConstantExpr : public SpecialForm {
  public:
-  explicit ConstantExpr(VectorPtr value)
+  explicit ConstantExpr(VectorPtr value) : ConstantExpr(value->type(), value){};
+
+  explicit ConstantExpr(const TypePtr& type, VectorPtr value)
       : SpecialForm(
             SpecialFormKind::kConstant,
-            value->type(),
+            type,
             std::vector<ExprPtr>(),
             "literal",
             !value->isNullAt(0) /* supportsFlatNoNullsFastPath */,

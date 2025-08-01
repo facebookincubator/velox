@@ -158,15 +158,12 @@ TEST_F(ComparisonsTest, between) {
 }
 
 TEST_F(ComparisonsTest, betweenVarchar) {
-  using S = StringView;
-
   const auto between = [&](std::optional<std::string> s) {
-    auto expr = "c0 between 'mango' and 'pear'";
-    if (s.has_value()) {
-      return evaluateOnce<bool>(expr, std::optional(S(s.value())));
-    } else {
-      return evaluateOnce<bool>(expr, std::optional<S>());
-    }
+    const std::optional<std::string> lower = "mango";
+    const std::optional<std::string> upper = "pear";
+
+    auto expr = "c0 between c1 and c2";
+    return evaluateOnceWithVarcharArgs<bool>(expr, s, lower, upper);
   };
 
   EXPECT_EQ(std::nullopt, between(std::nullopt));

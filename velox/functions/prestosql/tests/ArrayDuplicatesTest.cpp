@@ -87,63 +87,81 @@ TEST_F(ArrayDuplicatesTest, integerArrays) {
 TEST_F(ArrayDuplicatesTest, inlineStringArrays) {
   using S = StringView;
 
-  auto array = makeNullableArrayVector<StringView>({
-      {},
-      {S("")},
-      {std::nullopt},
-      {S("a"), S("b")},
-      {S("a"), std::nullopt, S("b")},
-      {S("a"), S("a")},
-      {S("b"), S("a"), S("b"), S("a"), S("a")},
-      {std::nullopt, std::nullopt},
-      {S("b"), std::nullopt, S("a"), S("a"), std::nullopt, S("b")},
-  });
+  TypePtr type = ARRAY(VARCHAR());
+  for (int loop = 0; loop < 2; loop++) {
+    auto array = makeNullableArrayVector<StringView>(
+        {
+            {},
+            {S("")},
+            {std::nullopt},
+            {S("a"), S("b")},
+            {S("a"), std::nullopt, S("b")},
+            {S("a"), S("a")},
+            {S("b"), S("a"), S("b"), S("a"), S("a")},
+            {std::nullopt, std::nullopt},
+            {S("b"), std::nullopt, S("a"), S("a"), std::nullopt, S("b")},
+        },
+        type);
 
-  auto expected = makeNullableArrayVector<StringView>({
-      {},
-      {},
-      {},
-      {},
-      {},
-      {S("a")},
-      {S("a"), S("b")},
-      {std::nullopt},
-      {std::nullopt, S("a"), S("b")},
-  });
+    auto expected = makeNullableArrayVector<StringView>(
+        {
+            {},
+            {},
+            {},
+            {},
+            {},
+            {S("a")},
+            {S("a"), S("b")},
+            {std::nullopt},
+            {std::nullopt, S("a"), S("b")},
+        },
+        type);
 
-  testExpr(expected, "array_duplicates(C0)", {array});
+    testExpr(expected, "array_duplicates(C0)", {array});
+    type = ARRAY(VARCHAR(12));
+  }
 }
 
 // Test non-inline (> 12 character length) strings.
 TEST_F(ArrayDuplicatesTest, stringArrays) {
   using S = StringView;
 
-  auto array = makeNullableArrayVector<StringView>({
-      {S("red shiny car ahead"), S("blue clear sky above")},
-      {S("blue clear sky above"),
-       S("yellow rose flowers"),
-       std::nullopt,
-       S("blue clear sky above"),
-       S("orange beautiful sunset")},
-      {
-          S("red shiny car ahead"),
-          std::nullopt,
-          S("purple is an elegant color"),
-          S("red shiny car ahead"),
-          S("green plants make us happy"),
-          S("purple is an elegant color"),
-          std::nullopt,
-          S("purple is an elegant color"),
-      },
-  });
+  TypePtr type = ARRAY(VARCHAR());
+  for (int loop = 0; loop < 2; loop++) {
+    auto array = makeNullableArrayVector<StringView>(
+        {
+            {S("red shiny car ahead"), S("blue clear sky above")},
+            {S("blue clear sky above"),
+             S("yellow rose flowers"),
+             std::nullopt,
+             S("blue clear sky above"),
+             S("orange beautiful sunset")},
+            {
+                S("red shiny car ahead"),
+                std::nullopt,
+                S("purple is an elegant color"),
+                S("red shiny car ahead"),
+                S("green plants make us happy"),
+                S("purple is an elegant color"),
+                std::nullopt,
+                S("purple is an elegant color"),
+            },
+        },
+        type);
 
-  auto expected = makeNullableArrayVector<StringView>({
-      {},
-      {S("blue clear sky above")},
-      {std::nullopt, S("purple is an elegant color"), S("red shiny car ahead")},
-  });
+    auto expected = makeNullableArrayVector<StringView>(
+        {
+            {},
+            {S("blue clear sky above")},
+            {std::nullopt,
+             S("purple is an elegant color"),
+             S("red shiny car ahead")},
+        },
+        type);
 
-  testExpr(expected, "array_duplicates(C0)", {array});
+    testExpr(expected, "array_duplicates(C0)", {array});
+    type = ARRAY(VARCHAR(50));
+  }
 }
 
 TEST_F(ArrayDuplicatesTest, nonContiguousRows) {

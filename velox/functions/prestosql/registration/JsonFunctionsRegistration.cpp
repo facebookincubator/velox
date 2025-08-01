@@ -26,37 +26,60 @@ void registerJsonFunctions(const std::string& prefix) {
       {prefix + "is_json_scalar"});
   registerFunction<IsJsonScalarFunction, bool, Varchar>(
       {prefix + "is_json_scalar"});
+  registerFunction<IsJsonScalarFunction, bool, VarcharN<L1>>(
+      {prefix + "is_json_scalar"});
 
   registerFunction<JsonExtractScalarFunction, Varchar, Json, Varchar>(
       {prefix + "json_extract_scalar"});
+  registerFunction<JsonExtractScalarFunction, Varchar, Json, VarcharN<L1>>(
+      {prefix + "json_extract_scalar"});
   registerFunction<JsonExtractScalarFunction, Varchar, Varchar, Varchar>(
       {prefix + "json_extract_scalar"});
+  registerFunction<
+      JsonExtractScalarFunction,
+      VarcharN<L1>,
+      VarcharN<L1>,
+      VarcharN<L2>>({prefix + "json_extract_scalar"});
 
   registerFunction<JsonArrayLengthFunction, int64_t, Json>(
       {prefix + "json_array_length"});
   registerFunction<JsonArrayLengthFunction, int64_t, Varchar>(
+      {prefix + "json_array_length"});
+  registerFunction<JsonArrayLengthFunction, int64_t, VarcharN<L1>>(
       {prefix + "json_array_length"});
 
   registerFunction<JsonArrayContainsFunction, bool, Json, bool>(
       {prefix + "json_array_contains"});
   registerFunction<JsonArrayContainsFunction, bool, Varchar, bool>(
       {prefix + "json_array_contains"});
+  registerFunction<JsonArrayContainsFunction, bool, VarcharN<L1>, bool>(
+      {prefix + "json_array_contains"});
   registerFunction<JsonArrayContainsFunction, bool, Json, int64_t>(
       {prefix + "json_array_contains"});
   registerFunction<JsonArrayContainsFunction, bool, Varchar, int64_t>(
+      {prefix + "json_array_contains"});
+  registerFunction<JsonArrayContainsFunction, bool, VarcharN<L1>, int64_t>(
       {prefix + "json_array_contains"});
   registerFunction<JsonArrayContainsFunction, bool, Json, double>(
       {prefix + "json_array_contains"});
   registerFunction<JsonArrayContainsFunction, bool, Varchar, double>(
       {prefix + "json_array_contains"});
+  registerFunction<JsonArrayContainsFunction, bool, VarcharN<L1>, double>(
+      {prefix + "json_array_contains"});
   registerFunction<JsonArrayContainsFunction, bool, Json, Varchar>(
       {prefix + "json_array_contains"});
   registerFunction<JsonArrayContainsFunction, bool, Varchar, Varchar>(
       {prefix + "json_array_contains"});
+  registerFunction<JsonArrayContainsFunction, bool, VarcharN<L1>, VarcharN<L2>>(
+      {prefix + "json_array_contains"});
 
   registerFunction<JsonSizeFunction, int64_t, Json, Varchar>(
       {prefix + "json_size"});
+  registerFunction<JsonSizeFunction, int64_t, Json, VarcharN<L1>>(
+      {prefix + "json_size"});
   registerFunction<JsonSizeFunction, int64_t, Varchar, Varchar>(
+      {prefix + "json_size"});
+  registerFunction<JsonSizeFunction, int64_t, VarcharN<L1>, VarcharN<L2>>(
       {prefix + "json_size"});
 
   VELOX_REGISTER_VECTOR_FUNCTION(udf_json_extract, prefix + "json_extract");

@@ -29,7 +29,7 @@ bool isAny(const TypeSignature& typeSignature) {
 }
 
 /// Returns true only if 'str' contains digits.
-bool isPositiveInteger(const std::string& str) {
+bool isPositiveInteger(std::string_view str) {
   return !str.empty() &&
       std::find_if(str.begin(), str.end(), [](unsigned char c) {
         return !std::isdigit(c);
@@ -111,6 +111,14 @@ bool checkNamedRowField(
   return true;
 }
 
+bool typesAreBoundedVarchar(const TypePtr& left, const TypePtr& right) {
+  return (
+      left->kind() == TypeKind::VARCHAR && right->kind() == TypeKind::VARCHAR &&
+      left->isVarcharN() && right->isVarcharN() &&
+      left->asVarcharN().parameters().size() == 1 &&
+      right->asVarcharN().parameters().size() == 1);
+}
+
 } // namespace
 
 bool SignatureBinder::tryBindWithCoercions(std::vector<Coercion>& coercions) {
@@ -143,7 +151,11 @@ bool SignatureBinder::tryBind(
         auto& type = actualTypes_[formalArgsCnt - 1];
         for (auto i = formalArgsCnt; i < actualTypes_.size(); i++) {
           if (!type->equivalent(*actualTypes_[i]) &&
-              actualTypes_[i]->kind() != TypeKind::UNKNOWN) {
+              actualTypes_[i]->kind() != TypeKind::UNKNOWN &&
+              // Support variableArity for bounded Varchar because the type
+              // signature variable is fixed for the variable type defintion and
+              // are not equivalent as a result.
+              !(typesAreBoundedVarchar(actualTypes_[i], type))) {
             return false;
           }
         }

@@ -122,6 +122,13 @@ struct resolver<Varchar> {
   using out_type = StringWriter;
 };
 
+template <typename L>
+struct resolver<VarcharN<L>> {
+  using in_type = StringView;
+  using null_free_in_type = in_type;
+  using out_type = StringWriter;
+};
+
 template <>
 struct resolver<Varbinary> {
   using in_type = StringView;

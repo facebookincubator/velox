@@ -383,6 +383,7 @@ TEST_F(TypeAnalysisTest, physicalType) {
   testPhysicalType<Date>(INTEGER());
   testPhysicalType<Timestamp>(TIMESTAMP());
   testPhysicalType<Varchar>(VARCHAR());
+  testPhysicalType<VarcharN<C1>>(VARCHAR());
   testPhysicalType<Varbinary>(VARBINARY());
 
   testPhysicalType<ShortDecimal<P1, S1>>(BIGINT());
