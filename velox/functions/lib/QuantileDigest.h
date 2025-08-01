@@ -90,6 +90,16 @@ class QuantileDigest {
   // min/max range.
   std::optional<double> quantileAtValue(T value) const;
 
+  // Calculate the truncated mean between quantile bounds
+  // Returns null when empty
+  template <typename ValueFunc = std::function<double(T)>>
+  std::optional<double> getTruncatedMean(
+      double lowerQuantileBound,
+      double upperQuantileBound,
+      ValueFunc valueFunc = [](T value) {
+        return static_cast<double>(value);
+      }) const;
+
  private:
   using U = std::conditional_t<sizeof(T) == sizeof(int64_t), int64_t, int32_t>;
 
@@ -1296,6 +1306,87 @@ std::optional<double> QuantileDigest<T, Allocator>::quantileAtValue(
       lefts_,
       rights_);
   return bucketCount / weightedCount_;
+}
+
+template <typename T, typename Allocator>
+template <typename ValueFunc>
+std::optional<double> QuantileDigest<T, Allocator>::getTruncatedMean(
+    double lowerQuantileBound,
+    double upperQuantileBound,
+    ValueFunc valueFunc) const {
+  VELOX_USER_CHECK(
+      0 <= lowerQuantileBound && lowerQuantileBound <= 1,
+      "Lower quantile bound must be between 0 and 1");
+  VELOX_USER_CHECK(
+      0 <= upperQuantileBound && upperQuantileBound <= 1,
+      "Upper quantile bound must be between 0 and 1");
+  VELOX_USER_CHECK(
+      lowerQuantileBound <= upperQuantileBound,
+      "Lower quantile bound must be less than or equal to upper quantile bound");
+
+  if (weightedCount_ == 0 || root_ == -1) {
+    return std::nullopt;
+  }
+
+  if (lowerQuantileBound == 0 && upperQuantileBound == 1) {
+    double sum = 0.0;
+    postOrderTraverse(
+        root_,
+        [this, &sum, &valueFunc](int32_t node) {
+          sum += counts_[node] *
+              valueFunc(postprocessByType(bitsToLong(values_[node])));
+          return true;
+        },
+        lefts_,
+        rights_);
+    return sum / weightedCount_;
+  }
+
+  double lowerRank = lowerQuantileBound * weightedCount_;
+  double upperRank = upperQuantileBound * weightedCount_;
+  double weightSoFar = 0.0;
+  double mean = 0.0;
+  double count = 0.0;
+
+  postOrderTraverse(
+      root_,
+      [this, &weightSoFar, &mean, &count, lowerRank, upperRank, &valueFunc](
+          int32_t node) {
+        double nodeCount = counts_[node];
+        if (nodeCount == 0) {
+          return true;
+        }
+
+        weightSoFar += nodeCount;
+
+        double amountOverLower = std::max(weightSoFar - lowerRank, 0.0);
+        double amountOverUpper = std::max(weightSoFar - upperRank, 0.0);
+        nodeCount = std::max(
+            0.0,
+            std::min(
+                std::min(nodeCount, amountOverLower),
+                nodeCount - amountOverUpper));
+
+        if (amountOverLower > 0) {
+          double value =
+              valueFunc(postprocessByType(bitsToLong(values_[node])));
+          mean = (mean * count + nodeCount * value) / (count + nodeCount);
+          count += nodeCount;
+        }
+        // Stop traversal
+        if (amountOverUpper > 0 || weightSoFar == weightedCount_) {
+          return false;
+        }
+        return true;
+      },
+      lefts_,
+      rights_);
+
+  if (count > 0) {
+    return mean;
+  }
+
+  return std::nullopt;
 }
 
 } // namespace qdigest
