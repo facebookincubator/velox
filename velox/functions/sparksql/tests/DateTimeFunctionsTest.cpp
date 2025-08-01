@@ -1573,11 +1573,11 @@ TEST_F(DateTimeFunctionsTest, timestampadd) {
         fmt::format("timestampadd('{}', c0, c1)", unit), value, timestamp);
   };
 
-  // Check null behaviors
+  // Check null behaviors.
   EXPECT_EQ(std::nullopt, timestampadd("second", 1, std::nullopt));
   EXPECT_EQ(std::nullopt, timestampadd("month", std::nullopt, Timestamp(0, 0)));
 
-  // Check invalid units
+  // Check invalid units.
   VELOX_ASSERT_THROW(
       timestampadd("invalid_unit", 1, Timestamp(0, 0)),
       "Unsupported datetime unit: invalid_unit");
@@ -1645,6 +1645,32 @@ TEST_F(DateTimeFunctionsTest, timestampadd) {
           "year",
           1,
           Timestamp(1551348000, 500'999'999) /*2019-02-28 10:00:00.500*/));
+
+  // Test for coercing to the last day of a year-month.
+  EXPECT_EQ(
+      Timestamp(1582970400, 500'999'999) /*2020-02-29 10:00:00.500*/,
+      timestampadd(
+          "day",
+          365 + 30,
+          Timestamp(1548842400, 500'999'999) /*2019-01-30 10:00:00.500*/));
+  EXPECT_EQ(
+      Timestamp(1582970400, 500'999'999) /*2020-02-29 10:00:00.500*/,
+      timestampadd(
+          "month",
+          12 + 1,
+          Timestamp(1548842400, 500'999'999) /*2019-01-30 10:00:00.500*/));
+  EXPECT_EQ(
+      Timestamp(1582970400, 500'999'999) /*2020-02-29 10:00:00.500*/,
+      timestampadd(
+          "quarter",
+          1,
+          Timestamp(1575108000, 500'999'999) /*2019-11-30 10:00:00.500*/));
+  EXPECT_EQ(
+      Timestamp(1898503200, 500'999'999) /*2030-02-28 10:00:00.500*/,
+      timestampadd(
+          "year",
+          10,
+          Timestamp(1582970400, 500'999'999) /*2020-02-29 10:00:00.500*/));
 }
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test
