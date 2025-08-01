@@ -819,7 +819,8 @@ int32_t parseFromPattern(
     const char* end,
     Date& date,
     bool specifierNext,
-    DateTimeFormatterType type) {
+    DateTimeFormatterType type,
+    bool truncateFractionOfSecondToMillis) {
   if (curPattern.specifier == DateTimeFormatSpecifier::TIMEZONE_OFFSET_ID) {
     int64_t size;
     if (curPattern.minRepresentDigits < 3) {
@@ -910,7 +911,14 @@ int32_t parseFromPattern(
       // it as the whole number; otherwise, it pads the number with zeros.
       if (type != DateTimeFormatterType::STRICT_SIMPLE &&
           type != DateTimeFormatterType::LENIENT_SIMPLE) {
-        number *= std::pow(10, 3 - count);
+        if (truncateFractionOfSecondToMillis) {
+          number *= std::pow(10, 3 - count);
+          number *= util::kMicrosPerMsec;
+        } else {
+          number *= std::pow(10, 6 - count);
+        }
+      } else {
+        number *= util::kMicrosPerMsec;
       }
     } else if (
         (curPattern.specifier == DateTimeFormatSpecifier::YEAR ||
@@ -1093,7 +1101,7 @@ int32_t parseFromPattern(
         break;
 
       case DateTimeFormatSpecifier::FRACTION_OF_SECOND:
-        date.microsecond = number * util::kMicrosPerMsec;
+        date.microsecond = number;
         break;
 
       case DateTimeFormatSpecifier::WEEK_YEAR:
@@ -1582,12 +1590,26 @@ Expected<DateTimeResult> DateTimeFormatter::parse(
         if (i + 1 < tokens_.size() &&
             tokens_[i + 1].type == DateTimeToken::Type::kPattern) {
           if (parseFromPattern(
-                  tok.pattern, input, cur, end, date, true, type_) == -1) {
+                  tok.pattern,
+                  input,
+                  cur,
+                  end,
+                  date,
+                  true,
+                  type_,
+                  truncateFractionOfSecondToMillis_) == -1) {
             return parseFail(input, cur, end);
           }
         } else {
           if (parseFromPattern(
-                  tok.pattern, input, cur, end, date, false, type_) == -1) {
+                  tok.pattern,
+                  input,
+                  cur,
+                  end,
+                  date,
+                  false,
+                  type_,
+                  truncateFractionOfSecondToMillis_) == -1) {
             return parseFail(input, cur, end);
           }
         }
@@ -1816,7 +1838,8 @@ Expected<std::shared_ptr<DateTimeFormatter>> buildMysqlDateTimeFormatter(
 }
 
 Expected<std::shared_ptr<DateTimeFormatter>> buildJodaDateTimeFormatter(
-    const std::string_view& format) {
+    const std::string_view& format,
+    bool truncateFractionOfSecondToMillis) {
   if (format.empty()) {
     if (threadSkipErrorDetails()) {
       return folly::makeUnexpected(Status::UserError());
@@ -1826,6 +1849,7 @@ Expected<std::shared_ptr<DateTimeFormatter>> buildJodaDateTimeFormatter(
   }
 
   DateTimeFormatterBuilder builder(format.size());
+  builder.truncateFractionOfSecondToMillis(truncateFractionOfSecondToMillis);
   const char* cur = format.data();
   const char* end = cur + format.size();
 
