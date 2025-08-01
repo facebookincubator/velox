@@ -163,7 +163,7 @@ class SplitReader {
  private:
   /// Different table formats may have different meatadata columns.
   /// This function will be used to update the scanSpec for these columns.
-  std::vector<TypePtr> adaptColumns(
+  virtual std::vector<TypePtr> adaptColumns(
       const RowTypePtr& fileType,
       const std::shared_ptr<const velox::RowType>& tableSchema) const;
 
