@@ -110,9 +110,10 @@ RowVectorPtr genTpcdsTableData(
     size_t offset,
     double scaleFactor,
     int32_t parallel,
-    int32_t child) {
+    int32_t child,
+    bool useVarcharN) {
   //  Create schema and allocate vectors.
-  auto rowType = getTableSchema(table);
+  auto rowType = getTableSchema(table, useVarcharN);
   auto table_id = static_cast<int>(table);
   DSDGenIterator dsdGenIterator(scaleFactor, parallel, child);
   size_t vectorSize =
@@ -141,12 +142,13 @@ RowVectorPtr genTpcdsParentAndChildTable(
     int32_t child,
     Table parentTable,
     Table childTable,
-    bool childTableCall) {
+    bool childTableCall,
+    bool useVarcharN) {
   // Whenever a call to generate a table which is either marked as a
   // parent or a child is requested, both the child and parent tables
   // need to be populated.
 
-  auto parentTableType = getTableSchema(parentTable);
+  auto parentTableType = getTableSchema(parentTable, useVarcharN);
   DSDGenIterator dsdGenIterator(scaleFactor, parallel, child);
   size_t parentTableVectorSize = getVectorSize(
       dsdGenIterator.getRowCount(static_cast<int>(parentTable)),
@@ -157,7 +159,7 @@ RowVectorPtr genTpcdsParentAndChildTable(
   auto children =
       allocateChildVectors(parentTableType, parentTableUpperBound, pool);
 
-  auto childTableType = getTableSchema(childTable);
+  auto childTableType = getTableSchema(childTable, useVarcharN);
   auto childChildren =
       allocateChildVectors(childTableType, parentTableUpperBound, pool);
 
@@ -766,56 +768,558 @@ static const RowTypePtr websiteType = ROW(
      VARCHAR(),     VARCHAR(),    VARCHAR(), VARCHAR(), VARCHAR(), VARCHAR(),
      DECIMAL(5, 2), DECIMAL(5, 2)});
 
-const RowTypePtr getTableSchema(Table table) {
+static const RowTypePtr callCenterTypeVarcharN =
+    ROW({"cc_call_center_sk", "cc_call_center_id",
+         "cc_rec_start_date", "cc_rec_end_date",
+         "cc_closed_date_sk", "cc_open_date_sk",
+         "cc_name",           "cc_class",
+         "cc_employees",      "cc_sq_ft",
+         "cc_hours",          "cc_manager",
+         "cc_mkt_id",         "cc_mkt_class",
+         "cc_mkt_desc",       "cc_market_manager",
+         "cc_division",       "cc_division_name",
+         "cc_company",        "cc_company_name",
+         "cc_street_number",  "cc_street_name",
+         "cc_street_type",    "cc_suite_number",
+         "cc_city",           "cc_county",
+         "cc_state",          "cc_zip",
+         "cc_country",        "cc_gmt_offset",
+         "cc_tax_percentage"},
+        {BIGINT(),
+         VARCHAR(16) /* CHAR */,
+         DATE(),
+         DATE(),
+         INTEGER(),
+         INTEGER(),
+         VARCHAR(50),
+         VARCHAR(50),
+         INTEGER(),
+         INTEGER(),
+         VARCHAR(20) /* CHAR */,
+         VARCHAR(40),
+         INTEGER(),
+         VARCHAR(50) /* CHAR */,
+         VARCHAR(100),
+         VARCHAR(40),
+         INTEGER(),
+         VARCHAR(50),
+         INTEGER(),
+         VARCHAR(50) /* CHAR */,
+         VARCHAR(10) /* CHAR */,
+         VARCHAR(60),
+         VARCHAR(15) /* CHAR */,
+         VARCHAR(10) /* CHAR */,
+         VARCHAR(60),
+         VARCHAR(30),
+         VARCHAR(2) /* CHAR */,
+         VARCHAR(10) /* CHAR */,
+         VARCHAR(20),
+         DECIMAL(5, 2),
+         DECIMAL(5, 2)});
+
+static const RowTypePtr catalogPageTypeVarcharN =
+    ROW({"cp_catalog_page_sk",
+         "cp_catalog_page_id",
+         "cp_start_date_sk",
+         "cp_end_date_sk",
+         "cp_department",
+         "cp_catalog_number",
+         "cp_catalog_page_number",
+         "cp_description",
+         "cp_type"},
+        {BIGINT(),
+         VARCHAR(16) /* CHAR */,
+         INTEGER(),
+         INTEGER(),
+         VARCHAR(50),
+         INTEGER(),
+         INTEGER(),
+         VARCHAR(100),
+         VARCHAR(100)});
+
+static const RowTypePtr customerTypeVarcharN = ROW(
+    {
+        "c_customer_sk",
+        "c_customer_id",
+        "c_current_cdemo_sk",
+        "c_current_hdemo_sk",
+        "c_current_addr_sk",
+        "c_first_shipto_date_sk",
+        "c_first_sales_date_sk",
+        "c_salutation",
+        "c_first_name",
+        "c_last_name",
+        "c_preferred_cust_flag",
+        "c_birth_day",
+        "c_birth_month",
+        "c_birth_year",
+        "c_birth_country",
+        "c_login",
+        "c_email_address",
+        "c_last_review_date_sk",
+    },
+    {
+        BIGINT(),
+        VARCHAR(16) /* CHAR */,
+        BIGINT(),
+        BIGINT(),
+        BIGINT(),
+        BIGINT(),
+        BIGINT(),
+        VARCHAR(10) /* CHAR */,
+        VARCHAR(20) /* CHAR */,
+        VARCHAR(30) /* CHAR */,
+        VARCHAR(1) /* CHAR */,
+        INTEGER(),
+        INTEGER(),
+        INTEGER(),
+        VARCHAR(20),
+        VARCHAR(13) /* CHAR */,
+        VARCHAR(50) /* CHAR */,
+        BIGINT(),
+    });
+
+static const RowTypePtr customerAddressTypeVarcharN =
+    ROW({"ca_address_sk",
+         "ca_address_id",
+         "ca_street_number",
+         "ca_street_name",
+         "ca_street_type",
+         "ca_suite_number",
+         "ca_city",
+         "ca_county",
+         "ca_state",
+         "ca_zip",
+         "ca_country",
+         "ca_gmt_offset",
+         "ca_location_type"},
+        {BIGINT(),
+         VARCHAR(16) /* CHAR */,
+         VARCHAR(10) /* CHAR */,
+         VARCHAR(60),
+         VARCHAR(15) /* CHAR */,
+         VARCHAR(10) /* CHAR */,
+         VARCHAR(60),
+         VARCHAR(30),
+         VARCHAR(2) /* CHAR */,
+         VARCHAR(10) /* CHAR */,
+         VARCHAR(20),
+         DECIMAL(5, 2),
+         VARCHAR(20) /* CHAR */});
+
+static const RowTypePtr customerDemographicsTypeVarcharN =
+    ROW({"cd_demo_sk",
+         "cd_gender",
+         "cd_marital_status",
+         "cd_education_status",
+         "cd_purchase_estimate",
+         "cd_credit_rating",
+         "cd_dep_count",
+         "cd_dep_employed_count",
+         "cd_dep_college_count"},
+        {BIGINT(),
+         VARCHAR(1) /* CHAR */,
+         VARCHAR(1) /* CHAR */,
+         VARCHAR(20) /* CHAR */,
+         INTEGER(),
+         VARCHAR(10) /* CHAR */,
+         INTEGER(),
+         INTEGER(),
+         INTEGER()});
+
+static const RowTypePtr dateDimTypeVarcharN = ROW(
+    {
+        "d_date_sk",
+        "d_date_id",
+        "d_date",
+        "d_month_seq",
+        "d_week_seq",
+        "d_quarter_seq",
+        "d_year",
+        "d_dow",
+        "d_moy",
+        "d_dom",
+        "d_qoy",
+        "d_fy_year",
+        "d_fy_quarter_seq",
+        "d_fy_week_seq",
+        "d_day_name",
+        "d_quarter_name",
+        "d_holiday",
+        "d_weekend",
+        "d_following_holiday",
+        "d_first_dom",
+        "d_last_dom",
+        "d_same_day_ly",
+        "d_same_day_lq",
+        "d_current_day",
+        "d_current_week",
+        "d_current_month",
+        "d_current_quarter",
+        "d_current_year",
+    },
+    {
+        BIGINT(),
+        VARCHAR(16) /* CHAR */,
+        DATE(),
+        INTEGER(),
+        INTEGER(),
+        INTEGER(),
+        INTEGER(),
+        INTEGER(),
+        INTEGER(),
+        INTEGER(),
+        INTEGER(),
+        INTEGER(),
+        INTEGER(),
+        INTEGER(),
+        VARCHAR(9) /* CHAR */,
+        VARCHAR(6) /* CHAR */,
+        VARCHAR(1) /* CHAR */,
+        VARCHAR(1) /* CHAR */,
+        VARCHAR(1) /* CHAR */,
+        INTEGER(),
+        INTEGER(),
+        INTEGER(),
+        INTEGER(),
+        VARCHAR(1) /* CHAR */,
+        VARCHAR(1) /* CHAR */,
+        VARCHAR(1) /* CHAR */,
+        VARCHAR(1) /* CHAR */,
+        VARCHAR(1) /* CHAR */,
+    });
+
+static const RowTypePtr householdDemographicsTypeVarcharN =
+    ROW({"hd_demo_sk",
+         "hd_income_band_sk",
+         "hd_buy_potential",
+         "hd_dep_count",
+         "hd_vehicle_count"},
+        {BIGINT(), BIGINT(), VARCHAR(15) /* CHAR */, INTEGER(), INTEGER()});
+
+static const RowTypePtr itemTypeVarcharN = ROW(
+    {"i_item_sk",     "i_item_id",       "i_rec_start_date", "i_rec_end_date",
+     "i_item_desc",   "i_current_price", "i_wholesale_cost", "i_brand_id",
+     "i_brand",       "i_class_id",      "i_class",          "i_category_id",
+     "i_category",    "i_manufact_id",   "i_manufact",       "i_size",
+     "i_formulation", "i_color",         "i_units",          "i_container",
+     "i_manager_id",  "i_product_name"},
+    {BIGINT(),
+     VARCHAR(16) /* CHAR */,
+     DATE(),
+     DATE(),
+     VARCHAR(200),
+     DECIMAL(7, 2),
+     DECIMAL(7, 2),
+     INTEGER(),
+     VARCHAR(50) /* CHAR */,
+     INTEGER(),
+     VARCHAR(50) /* CHAR */,
+     INTEGER(),
+     VARCHAR(50) /* CHAR */,
+     INTEGER(),
+     VARCHAR(50) /* CHAR */,
+     VARCHAR(20) /* CHAR */,
+     VARCHAR(20) /* CHAR */,
+     VARCHAR(20) /* CHAR */,
+     VARCHAR(10) /* CHAR */,
+     VARCHAR(10) /* CHAR */,
+     INTEGER(),
+     VARCHAR(50) /* CHAR */});
+
+static const RowTypePtr promotionTypeVarcharN =
+    ROW({"p_promo_sk",
+         "p_promo_id",
+         "p_start_date_sk",
+         "p_end_date_sk",
+         "p_item_sk",
+         "p_cost",
+         "p_response_targe",
+         "p_promo_name",
+         "p_channel_dmail",
+         "p_channel_email",
+         "p_channel_catalog",
+         "p_channel_tv",
+         "p_channel_radio",
+         "p_channel_press",
+         "p_channel_event",
+         "p_channel_demo",
+         "p_channel_details",
+         "p_purpose",
+         "p_discount_active"},
+        {BIGINT(),
+         VARCHAR(16) /* CHAR */,
+         BIGINT(),
+         BIGINT(),
+         BIGINT(),
+         DECIMAL(15, 2),
+         INTEGER(),
+         VARCHAR(50) /* CHAR */,
+         VARCHAR(1) /* CHAR */,
+         VARCHAR(1) /* CHAR */,
+         VARCHAR(1) /* CHAR */,
+         VARCHAR(1) /* CHAR */,
+         VARCHAR(1) /* CHAR */,
+         VARCHAR(1) /* CHAR */,
+         VARCHAR(1) /* CHAR */,
+         VARCHAR(1) /* CHAR */,
+         VARCHAR(100),
+         VARCHAR(15) /* CHAR */,
+         VARCHAR(1) /* CHAR */});
+
+static const RowTypePtr reasonTypeVarcharN =
+    ROW({"r_reason_sk", "r_reason_id", "r_reason_desc"},
+        {BIGINT(), VARCHAR(16) /* CHAR */, VARCHAR(100) /* CHAR */});
+
+static const RowTypePtr shipModeTypeVarcharN =
+    ROW({"sm_ship_mode_sk",
+         "sm_ship_mode_id",
+         "sm_type",
+         "sm_code",
+         "sm_carrier",
+         "sm_contract"},
+        {BIGINT(),
+         VARCHAR(16) /* CHAR */,
+         VARCHAR(30) /* CHAR */,
+         VARCHAR(10) /* CHAR */,
+         VARCHAR(20) /* CHAR */,
+         VARCHAR(20) /* CHAR */});
+
+static const RowTypePtr storeTypeVarcharN = ROW(
+    {
+        "s_store_sk",
+        "s_store_id",
+        "s_rec_start_date",
+        "s_rec_end_date",
+        "s_closed_date_sk",
+        "s_store_name",
+        "s_number_employees",
+        "s_floor_space",
+        "s_hours",
+        "s_manager",
+        "s_market_id",
+        "s_geography_class",
+        "s_market_desc",
+        "s_market_manager",
+        "s_division_id",
+        "s_division_name",
+        "s_company_id",
+        "s_company_name",
+        "s_street_number",
+        "s_street_name",
+        "s_street_type",
+        "s_suite_number",
+        "s_city",
+        "s_county",
+        "s_state",
+        "s_zip",
+        "s_country",
+        "s_gmt_offset",
+        "s_tax_precentage",
+    },
+    {
+        BIGINT(),
+        VARCHAR(16) /* CHAR(16) */,
+        DATE(),
+        DATE(),
+        BIGINT(),
+        VARCHAR(50),
+        INTEGER(),
+        INTEGER(),
+        VARCHAR(20) /* CHAR(20) */,
+        VARCHAR(40),
+        INTEGER(),
+        VARCHAR(100),
+        VARCHAR(100),
+        VARCHAR(40),
+        INTEGER(),
+        VARCHAR(50),
+        INTEGER(),
+        VARCHAR(50),
+        VARCHAR(10),
+        VARCHAR(60),
+        VARCHAR(15) /* CHAR */,
+        VARCHAR(10) /* CHAR */,
+        VARCHAR(60),
+        VARCHAR(30),
+        VARCHAR(2) /* CHAR */,
+        VARCHAR(10) /* CHAR */,
+        VARCHAR(20),
+        DECIMAL(5, 2),
+        DECIMAL(5, 2),
+    });
+
+static const RowTypePtr timeDimTypeVarcharN =
+    ROW({"t_time_sk",
+         "t_time_id",
+         "t_time",
+         "t_hour",
+         "t_minute",
+         "t_second",
+         "t_am_pm",
+         "t_shift",
+         "t_sub_shift",
+         "t_meal_time"},
+        {BIGINT(),
+         VARCHAR(16) /* CHAR */,
+         INTEGER(),
+         INTEGER(),
+         INTEGER(),
+         INTEGER(),
+         VARCHAR(2) /* CHAR */,
+         VARCHAR(20) /* CHAR */,
+         VARCHAR(20) /* CHAR */,
+         VARCHAR(20) /* CHAR */});
+
+static const RowTypePtr warehouseTypeVarcharN =
+    ROW({"w_warehouse_sk",
+         "w_warehouse_id",
+         "w_warehouse_name",
+         "w_warehouse_sq_ft",
+         "w_street_number",
+         "w_street_name",
+         "w_street_type",
+         "w_suite_number",
+         "w_city",
+         "w_county",
+         "w_state",
+         "w_zip",
+         "w_country",
+         "w_gmt_offset"},
+        {BIGINT(),
+         VARCHAR(16) /* CHAR */,
+         VARCHAR(20),
+         INTEGER(),
+         VARCHAR(10) /* CHAR */,
+         VARCHAR(60),
+         VARCHAR(15) /* CHAR */,
+         VARCHAR(10) /* CHAR */,
+         VARCHAR(60),
+         VARCHAR(30),
+         VARCHAR(2) /* CHAR */,
+         VARCHAR(10) /* CHAR */,
+         VARCHAR(),
+         DECIMAL(5, 2)});
+
+static const RowTypePtr webPageTypeVarcharN =
+    ROW({"wp_web_page_sk",
+         "wp_web_page_id",
+         "wp_rec_start_date",
+         "wp_rec_end_date",
+         "wp_creation_date_sk",
+         "wp_access_date_sk",
+         "wp_autogen_flag",
+         "wp_customer_sk",
+         "wp_url",
+         "wp_type",
+         "wp_char_count",
+         "wp_link_count",
+         "wp_image_count",
+         "wp_max_ad_count"},
+        {BIGINT(),
+         VARCHAR(16) /* CHAR */,
+         DATE(),
+         DATE(),
+         BIGINT(),
+         BIGINT(),
+         VARCHAR(1) /* CHAR */,
+         BIGINT(),
+         VARCHAR(100),
+         VARCHAR(50) /* CHAR */,
+         INTEGER(),
+         INTEGER(),
+         INTEGER(),
+         INTEGER()});
+
+static const RowTypePtr websiteTypeVarcharN =
+    ROW({"web_site_sk",        "web_site_id",       "web_rec_start_date",
+         "web_rec_end_date",   "web_name",          "web_open_date_sk",
+         "web_close_date_sk",  "web_class",         "web_manager",
+         "web_mkt_id",         "web_mkt_class",     "web_mkt_desc",
+         "web_market_manager", "web_company_id",    "web_company_name",
+         "web_street_number",  "web_street_name",   "web_street_type",
+         "web_suite_number",   "web_city",          "web_county",
+         "web_state",          "web_zip",           "web_country",
+         "web_gmt_offset",     "web_tax_percentage"},
+        {BIGINT(),
+         VARCHAR(16) /* CHAR */,
+         DATE(),
+         DATE(),
+         VARCHAR(50),
+         BIGINT(),
+         BIGINT(),
+         VARCHAR(50),
+         VARCHAR(40),
+         INTEGER(),
+         VARCHAR(50),
+         VARCHAR(100),
+         VARCHAR(40),
+         INTEGER(),
+         VARCHAR(50) /* CHAR */,
+         VARCHAR(10) /* CHAR */,
+         VARCHAR(60),
+         VARCHAR(15) /* CHAR */,
+         VARCHAR(10) /* CHAR */,
+         VARCHAR(60),
+         VARCHAR(30),
+         VARCHAR(2) /* CHAR */,
+         VARCHAR(10) /* CHAR */,
+         VARCHAR(20),
+         DECIMAL(5, 2),
+         DECIMAL(5, 2)});
+
+const RowTypePtr getTableSchema(Table table, bool useVarcharN) {
   switch (table) {
     case Table::TBL_CALL_CENTER:
-      return callCenterType;
+      return useVarcharN ? callCenterTypeVarcharN : callCenterType;
     case Table::TBL_CATALOG_PAGE:
-      return catalogPageType;
+      return useVarcharN ? catalogPageTypeVarcharN : catalogPageType;
     case Table::TBL_CATALOG_RETURNS:
       return catalogReturnsType;
     case Table::TBL_CATALOG_SALES:
       return catalogSalesType;
     case Table::TBL_CUSTOMER:
-      return customerType;
+      return useVarcharN ? customerTypeVarcharN : customerType;
     case Table::TBL_CUSTOMER_ADDRESS:
-      return customerAddressType;
+      return useVarcharN ? customerAddressTypeVarcharN : customerAddressType;
     case Table::TBL_CUSTOMER_DEMOGRAPHICS:
-      return customerDemographicsType;
+      return useVarcharN ? customerDemographicsTypeVarcharN
+                         : customerDemographicsType;
     case Table::TBL_DATE_DIM:
-      return dateDimType;
+      return useVarcharN ? dateDimTypeVarcharN : dateDimType;
     case Table::TBL_HOUSEHOLD_DEMOGRAPHICS:
-      return householdDemographicsType;
+      return useVarcharN ? householdDemographicsTypeVarcharN
+                         : householdDemographicsType;
     case Table::TBL_INCOME_BAND:
       return incomeBandType;
     case Table::TBL_INVENTORY:
       return inventoryType;
     case Table::TBL_ITEM:
-      return itemType;
+      return useVarcharN ? itemTypeVarcharN : itemType;
     case Table::TBL_PROMOTION:
-      return promotionType;
+      return useVarcharN ? promotionTypeVarcharN : promotionType;
     case Table::TBL_REASON:
-      return reasonType;
+      return useVarcharN ? reasonTypeVarcharN : reasonType;
     case Table::TBL_SHIP_MODE:
-      return shipModeType;
+      return useVarcharN ? shipModeTypeVarcharN : shipModeType;
     case Table::TBL_STORE:
-      return storeType;
+      return useVarcharN ? storeTypeVarcharN : storeType;
     case Table::TBL_STORE_RETURNS:
       return storeReturnsType;
     case Table::TBL_STORE_SALES:
       return storeSalesType;
     case Table::TBL_TIME_DIM:
-      return timeDimType;
+      return useVarcharN ? timeDimTypeVarcharN : timeDimType;
     case Table::TBL_WAREHOUSE:
-      return warehouseType;
+      return useVarcharN ? warehouseTypeVarcharN : warehouseType;
     case Table::TBL_WEB_PAGE:
-      return webPageType;
+      return useVarcharN ? webPageTypeVarcharN : webPageType;
     case Table::TBL_WEB_RETURNS:
       return webReturnsType;
     case Table::TBL_WEB_SALES:
       return webSalesType;
     case Table::TBL_WEB_SITE:
-      return websiteType;
+      return useVarcharN ? websiteTypeVarcharN : websiteType;
     default:
       VELOX_UNREACHABLE();
   }
@@ -840,7 +1344,7 @@ Table fromTableName(std::string_view tableName) {
 }
 
 TypePtr resolveTpcdsColumn(Table table, const std::string& columnName) {
-  return getTableSchema(table)->findChild(columnName);
+  return getTableSchema(table, false /* useVarcharN */)->findChild(columnName);
 }
 
 RowVectorPtr genTpcdsData(
@@ -850,7 +1354,8 @@ RowVectorPtr genTpcdsData(
     memory::MemoryPool* pool,
     double scaleFactor,
     int32_t parallel,
-    int32_t child) {
+    int32_t child,
+    bool useVarcharN) {
   switch (table) {
     Table parentTable, childTable;
     case Table::TBL_CATALOG_RETURNS:
@@ -866,7 +1371,8 @@ RowVectorPtr genTpcdsData(
           child,
           parentTable,
           childTable,
-          table == childTable);
+          table == childTable,
+          useVarcharN);
     case Table::TBL_WEB_RETURNS:
     case Table::TBL_WEB_SALES:
       parentTable = Table::TBL_WEB_SALES;
@@ -880,7 +1386,8 @@ RowVectorPtr genTpcdsData(
           child,
           parentTable,
           childTable,
-          table == childTable);
+          table == childTable,
+          useVarcharN);
     case Table::TBL_STORE_RETURNS:
     case Table::TBL_STORE_SALES:
       parentTable = Table::TBL_STORE_SALES;
@@ -894,7 +1401,8 @@ RowVectorPtr genTpcdsData(
           child,
           parentTable,
           childTable,
-          table == childTable);
+          table == childTable,
+          useVarcharN);
     case Table::TBL_CALL_CENTER:
     case Table::TBL_CATALOG_PAGE:
     case Table::TBL_CUSTOMER:
@@ -914,7 +1422,14 @@ RowVectorPtr genTpcdsData(
     case Table::TBL_WEB_PAGE:
     case Table::TBL_WEB_SITE:
       return genTpcdsTableData(
-          table, pool, maxRows, offset, scaleFactor, parallel, child);
+          table,
+          pool,
+          maxRows,
+          offset,
+          scaleFactor,
+          parallel,
+          child,
+          useVarcharN);
     default:
       VELOX_UNREACHABLE();
   }

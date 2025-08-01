@@ -36,24 +36,33 @@ RowVectorPtr getTpchData(
     size_t maxRows,
     size_t offset,
     double scaleFactor,
-    memory::MemoryPool* pool) {
+    memory::MemoryPool* pool,
+    bool useVarcharN) {
   switch (table) {
     case Table::TBL_PART:
-      return velox::tpch::genTpchPart(pool, maxRows, offset, scaleFactor);
+      return velox::tpch::genTpchPart(
+          pool, maxRows, offset, scaleFactor, useVarcharN);
     case Table::TBL_SUPPLIER:
-      return velox::tpch::genTpchSupplier(pool, maxRows, offset, scaleFactor);
+      return velox::tpch::genTpchSupplier(
+          pool, maxRows, offset, scaleFactor, useVarcharN);
     case Table::TBL_PARTSUPP:
-      return velox::tpch::genTpchPartSupp(pool, maxRows, offset, scaleFactor);
+      return velox::tpch::genTpchPartSupp(
+          pool, maxRows, offset, scaleFactor, useVarcharN);
     case Table::TBL_CUSTOMER:
-      return velox::tpch::genTpchCustomer(pool, maxRows, offset, scaleFactor);
+      return velox::tpch::genTpchCustomer(
+          pool, maxRows, offset, scaleFactor, useVarcharN);
     case Table::TBL_ORDERS:
-      return velox::tpch::genTpchOrders(pool, maxRows, offset, scaleFactor);
+      return velox::tpch::genTpchOrders(
+          pool, maxRows, offset, scaleFactor, useVarcharN);
     case Table::TBL_LINEITEM:
-      return velox::tpch::genTpchLineItem(pool, maxRows, offset, scaleFactor);
+      return velox::tpch::genTpchLineItem(
+          pool, maxRows, offset, scaleFactor, useVarcharN);
     case Table::TBL_NATION:
-      return velox::tpch::genTpchNation(pool, maxRows, offset, scaleFactor);
+      return velox::tpch::genTpchNation(
+          pool, maxRows, offset, scaleFactor, useVarcharN);
     case Table::TBL_REGION:
-      return velox::tpch::genTpchRegion(pool, maxRows, offset, scaleFactor);
+      return velox::tpch::genTpchRegion(
+          pool, maxRows, offset, scaleFactor, useVarcharN);
   }
   return nullptr;
 }
@@ -83,8 +92,8 @@ TpchDataSource::TpchDataSource(
   tpchTable_ = tpchTableHandle->getTable();
   scaleFactor_ = tpchTableHandle->getScaleFactor();
   tpchTableRowCount_ = getRowCount(tpchTable_, scaleFactor_);
-
-  auto tpchTableSchema = getTableSchema(tpchTableHandle->getTable());
+  auto tpchTableSchema =
+      getTableSchema(tpchTableHandle->getTable(), getUseVarcharNColumns());
   VELOX_CHECK_NOT_NULL(tpchTableSchema, "TpchSchema can't be null.");
 
   outputColumnMappings_.reserve(outputType->size());
@@ -223,8 +232,13 @@ std::optional<RowVectorPtr> TpchDataSource::next(
   }
 
   size_t maxRows = std::min(size, (splitEnd_ - splitOffset_));
-  auto outputVector =
-      getTpchData(tpchTable_, maxRows, splitOffset_, scaleFactor_, pool_);
+  auto outputVector = getTpchData(
+      tpchTable_,
+      maxRows,
+      splitOffset_,
+      scaleFactor_,
+      pool_,
+      getUseVarcharNColumns());
 
   // If the split is exhausted.
   if (!outputVector || outputVector->size() == 0) {
@@ -247,4 +261,8 @@ bool TpchDataSource::isLineItem() const {
   return tpchTable_ == Table::TBL_LINEITEM;
 }
 
+bool TpchDataSource::getUseVarcharNColumns() const {
+  return connectorQueryCtx_->sessionProperties()->get<bool>(
+      "use_tpch_tpcds_varcharn_columns", true);
+}
 } // namespace facebook::velox::connector::tpch

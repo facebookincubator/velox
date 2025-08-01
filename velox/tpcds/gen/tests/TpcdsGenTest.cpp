@@ -40,8 +40,8 @@ class TpcdsGenTest : public testing::Test {
 };
 
 TEST_F(TpcdsGenTest, batches) {
-  auto rowVector1 =
-      genTpcdsData(tpcds::Table::TBL_ITEM, 5000, 0, pool_.get(), 1, 1, 1);
+  auto rowVector1 = genTpcdsData(
+      tpcds::Table::TBL_ITEM, 5000, 0, pool_.get(), 1, 1, 1, false);
 
   EXPECT_EQ(22, rowVector1->childrenSize());
   EXPECT_EQ(5000, rowVector1->size());
@@ -61,8 +61,8 @@ TEST_F(TpcdsGenTest, batches) {
   LOG(INFO) << rowVector1->toString(4000);
 
   // Get second batch.
-  auto rowVector2 =
-      genTpcdsData(tpcds::Table::TBL_ITEM, 5000, 5000, pool_.get(), 1, 1, 1);
+  auto rowVector2 = genTpcdsData(
+      tpcds::Table::TBL_ITEM, 5000, 5000, pool_.get(), 1, 1, 1, false);
 
   EXPECT_EQ(22, rowVector2->childrenSize());
   EXPECT_EQ(5000, rowVector2->size());
@@ -85,12 +85,26 @@ TEST_F(TpcdsGenTest, batches) {
 TEST_F(TpcdsGenTest, lastBatch) {
   // Ask for 10000 but there are only 5000 left.
   auto rowVector = genTpcdsData(
-      tpcds::Table::TBL_CUSTOMER_ADDRESS, 10000, 45000, pool_.get(), 1, 1, 1);
+      tpcds::Table::TBL_CUSTOMER_ADDRESS,
+      10000,
+      45000,
+      pool_.get(),
+      1,
+      1,
+      1,
+      false);
   EXPECT_EQ(5000, rowVector->size());
 
   // Ensure we get 10000 on a larger scale factor.
   rowVector = genTpcdsData(
-      tpcds::Table::TBL_CUSTOMER_ADDRESS, 10000, 45000, pool_.get(), 10, 1, 1);
+      tpcds::Table::TBL_CUSTOMER_ADDRESS,
+      10000,
+      45000,
+      pool_.get(),
+      10,
+      1,
+      1,
+      false);
   EXPECT_EQ(10000, rowVector->size());
 }
 
@@ -98,11 +112,32 @@ TEST_F(TpcdsGenTest, reproducible) {
   // Ensure data generated is reproducible.
   {
     auto rowVector1 = genTpcdsData(
-        tpcds::Table::TBL_CUSTOMER_ADDRESS, 5000, 0, pool_.get(), 1, 1, 1);
+        tpcds::Table::TBL_CUSTOMER_ADDRESS,
+        5000,
+        0,
+        pool_.get(),
+        1,
+        1,
+        1,
+        false);
     auto rowVector2 = genTpcdsData(
-        tpcds::Table::TBL_CUSTOMER_ADDRESS, 5000, 0, pool_.get(), 1, 1, 1);
+        tpcds::Table::TBL_CUSTOMER_ADDRESS,
+        5000,
+        0,
+        pool_.get(),
+        1,
+        1,
+        1,
+        false);
     auto rowVector3 = genTpcdsData(
-        tpcds::Table::TBL_CUSTOMER_ADDRESS, 5000, 0, pool_.get(), 1, 1, 1);
+        tpcds::Table::TBL_CUSTOMER_ADDRESS,
+        5000,
+        0,
+        pool_.get(),
+        1,
+        1,
+        1,
+        false);
 
     for (size_t i = 0; i < rowVector1->size(); ++i) {
       ASSERT_TRUE(rowVector1->equalValueAt(rowVector2.get(), i, i));
@@ -113,11 +148,32 @@ TEST_F(TpcdsGenTest, reproducible) {
   // Ensure it's also reproducible if we add an offset.
   {
     auto rowVector1 = genTpcdsData(
-        tpcds::Table::TBL_CUSTOMER_ADDRESS, 5000, 1000, pool_.get(), 1, 1, 1);
+        tpcds::Table::TBL_CUSTOMER_ADDRESS,
+        5000,
+        1000,
+        pool_.get(),
+        1,
+        1,
+        1,
+        false);
     auto rowVector2 = genTpcdsData(
-        tpcds::Table::TBL_CUSTOMER_ADDRESS, 5000, 1000, pool_.get(), 1, 1, 1);
+        tpcds::Table::TBL_CUSTOMER_ADDRESS,
+        5000,
+        1000,
+        pool_.get(),
+        1,
+        1,
+        1,
+        false);
     auto rowVector3 = genTpcdsData(
-        tpcds::Table::TBL_CUSTOMER_ADDRESS, 5000, 1000, pool_.get(), 1, 1, 1);
+        tpcds::Table::TBL_CUSTOMER_ADDRESS,
+        5000,
+        1000,
+        pool_.get(),
+        1,
+        1,
+        1,
+        false);
 
     for (size_t i = 0; i < rowVector1->size(); ++i) {
       ASSERT_TRUE(rowVector1->equalValueAt(rowVector2.get(), i, i));
@@ -128,9 +184,23 @@ TEST_F(TpcdsGenTest, reproducible) {
   // Ensure that if the offsets are different, records will be different.
   {
     auto rowVector1 = genTpcdsData(
-        tpcds::Table::TBL_CUSTOMER_ADDRESS, 5000, 0, pool_.get(), 1, 1, 1);
+        tpcds::Table::TBL_CUSTOMER_ADDRESS,
+        5000,
+        0,
+        pool_.get(),
+        1,
+        1,
+        1,
+        false);
     auto rowVector2 = genTpcdsData(
-        tpcds::Table::TBL_CUSTOMER_ADDRESS, 5000, 500, pool_.get(), 1, 1, 1);
+        tpcds::Table::TBL_CUSTOMER_ADDRESS,
+        5000,
+        500,
+        pool_.get(),
+        1,
+        1,
+        1,
+        false);
 
     for (size_t i = 0; i < rowVector2->size(); ++i) {
       ASSERT_FALSE(rowVector1->equalValueAt(rowVector2.get(), i, i));

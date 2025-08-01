@@ -81,7 +81,7 @@ class TpcdsDataSource : public velox::connector::DataSource {
       const std::unordered_map<
           std::string,
           std::shared_ptr<const velox::connector::ColumnHandle>>& columnHandles,
-      velox::memory::MemoryPool* FOLLY_NONNULL pool);
+      ConnectorQueryCtx* connectorQueryCtx);
 
   void addSplit(std::shared_ptr<ConnectorSplit> split) override;
 
@@ -109,6 +109,8 @@ class TpcdsDataSource : public velox::connector::DataSource {
  private:
   RowVectorPtr projectOutputColumns(RowVectorPtr vector);
 
+  bool getUseVarcharNColumns() const;
+
   velox::tpcds::Table table_;
   double scaleFactor_{0.01};
   size_t rowCount_{0};
@@ -128,6 +130,7 @@ class TpcdsDataSource : public velox::connector::DataSource {
   size_t completedRows_{0};
   size_t completedBytes_{0};
 
+  ConnectorQueryCtx* connectorQueryCtx_;
   memory::MemoryPool* FOLLY_NONNULL pool_;
 };
 
@@ -147,10 +150,7 @@ class TpcdsConnector final : public velox::connector::Connector {
           std::shared_ptr<const velox::connector::ColumnHandle>>& columnHandles,
       ConnectorQueryCtx* FOLLY_NONNULL connectorQueryCtx) override final {
     return std::make_unique<TpcdsDataSource>(
-        outputType,
-        tableHandle,
-        columnHandles,
-        connectorQueryCtx->memoryPool());
+        outputType, tableHandle, columnHandles, connectorQueryCtx);
   }
 
   std::unique_ptr<DataSink> createDataSink(

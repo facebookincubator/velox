@@ -2532,27 +2532,27 @@ const std::unordered_map<std::string, std::vector<std::string>>
     TpchQueryBuilder::kTables_ = {
         std::make_pair(
             "lineitem",
-            tpch::getTableSchema(tpch::Table::TBL_LINEITEM)->names()),
+            tpch::getTableSchema(tpch::Table::TBL_LINEITEM, false)->names()),
         std::make_pair(
             "orders",
-            tpch::getTableSchema(tpch::Table::TBL_ORDERS)->names()),
+            tpch::getTableSchema(tpch::Table::TBL_ORDERS, false)->names()),
         std::make_pair(
             "customer",
-            tpch::getTableSchema(tpch::Table::TBL_CUSTOMER)->names()),
+            tpch::getTableSchema(tpch::Table::TBL_CUSTOMER, false)->names()),
         std::make_pair(
             "nation",
-            tpch::getTableSchema(tpch::Table::TBL_NATION)->names()),
+            tpch::getTableSchema(tpch::Table::TBL_NATION, false)->names()),
         std::make_pair(
             "region",
-            tpch::getTableSchema(tpch::Table::TBL_REGION)->names()),
+            tpch::getTableSchema(tpch::Table::TBL_REGION, false)->names()),
         std::make_pair(
             "part",
-            tpch::getTableSchema(tpch::Table::TBL_PART)->names()),
+            tpch::getTableSchema(tpch::Table::TBL_PART, false)->names()),
         std::make_pair(
             "supplier",
-            tpch::getTableSchema(tpch::Table::TBL_SUPPLIER)->names()),
+            tpch::getTableSchema(tpch::Table::TBL_SUPPLIER, false)->names()),
         std::make_pair(
             "partsupp",
-            tpch::getTableSchema(tpch::Table::TBL_PARTSUPP)->names())};
+            tpch::getTableSchema(tpch::Table::TBL_PARTSUPP, false)->names())};
 
 } // namespace facebook::velox::exec::test

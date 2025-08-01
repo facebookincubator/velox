@@ -47,12 +47,34 @@ class SplitFunction : public exec::VectorFunction {
                                 .argumentType("varchar")
                                 .argumentType("varchar")
                                 .build());
+    signatures.emplace_back(exec::FunctionSignatureBuilder()
+                                .returnType("array(varchar)")
+                                .integerVariable("x")
+                                .integerVariable("y")
+                                .argumentType("varchar(x)")
+                                .argumentType("varchar(y)")
+                                .build());
 
     // varchar, varchar, integer|bigint -> array(varchar)
     for (const auto& limitType : {"integer", "bigint"}) {
       signatures.emplace_back(exec::FunctionSignatureBuilder()
                                   .returnType("array(varchar)")
                                   .argumentType("varchar")
+                                  .argumentType("varchar")
+                                  .argumentType(limitType)
+                                  .build());
+      signatures.emplace_back(exec::FunctionSignatureBuilder()
+                                  .returnType("array(varchar)")
+                                  .integerVariable("x")
+                                  .integerVariable("y")
+                                  .argumentType("varchar(x)")
+                                  .argumentType("varchar(y)")
+                                  .argumentType(limitType)
+                                  .build());
+      signatures.emplace_back(exec::FunctionSignatureBuilder()
+                                  .returnType("array(varchar)")
+                                  .integerVariable("x")
+                                  .argumentType("varchar(x)")
                                   .argumentType("varchar")
                                   .argumentType(limitType)
                                   .build());

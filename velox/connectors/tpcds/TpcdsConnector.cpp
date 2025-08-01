@@ -35,8 +35,9 @@ TpcdsDataSource::TpcdsDataSource(
     const std::unordered_map<
         std::string,
         std::shared_ptr<const velox::connector::ColumnHandle>>& columnHandles,
-    velox::memory::MemoryPool* FOLLY_NONNULL pool)
-    : pool_(pool) {
+    ConnectorQueryCtx* connectorQueryCtx)
+    : connectorQueryCtx_(connectorQueryCtx),
+      pool_(connectorQueryCtx_->memoryPool()) {
   const auto tpcdsTableHandle =
       std::dynamic_pointer_cast<const TpcdsTableHandle>(tableHandle);
   VELOX_CHECK_NOT_NULL(
@@ -46,7 +47,8 @@ TpcdsDataSource::TpcdsDataSource(
   velox::tpcds::DSDGenIterator dsdGenIterator(scaleFactor_, 1, 1);
   rowCount_ = dsdGenIterator.getRowCount(static_cast<int>(table_));
 
-  auto tpcdsTableSchema = getTableSchema(tpcdsTableHandle->getTpcdsTable());
+  auto tpcdsTableSchema = getTableSchema(
+      tpcdsTableHandle->getTpcdsTable(), getUseVarcharNColumns());
   VELOX_CHECK_NOT_NULL(tpcdsTableSchema, "TpcdsSchema can't be null.");
 
   outputColumnMappings_.reserve(outputType->size());
@@ -121,7 +123,14 @@ std::optional<RowVectorPtr> TpcdsDataSource::next(
   vector_size_t parallel = currentSplit_->totalParts_;
   vector_size_t child = currentSplit_->partNumber_;
   auto outputVector = genTpcdsData(
-      table_, maxRows, splitOffset_, pool_, scaleFactor_, parallel, child);
+      table_,
+      maxRows,
+      splitOffset_,
+      pool_,
+      scaleFactor_,
+      parallel,
+      child,
+      getUseVarcharNColumns());
 
   // If the split is exhausted.
   if (!outputVector || outputVector->size() == 0) {
@@ -137,5 +146,10 @@ std::optional<RowVectorPtr> TpcdsDataSource::next(
   completedBytes_ += outputVector->retainedSize();
 
   return projectOutputColumns(outputVector);
+}
+
+bool TpcdsDataSource::getUseVarcharNColumns() const {
+  return connectorQueryCtx_->sessionProperties()->get<bool>(
+      "use_tpch_tpcds_varcharn_columns", true);
 }
 } // namespace facebook::velox::connector::tpcds

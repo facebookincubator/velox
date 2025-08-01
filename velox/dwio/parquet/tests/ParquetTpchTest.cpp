@@ -89,7 +89,7 @@ class ParquetTpchTest : public testing::Test {
       auto tableName = toTableName(table);
       auto tableDirectory =
           fmt::format("{}/{}", tempDirectory_->getPath(), tableName);
-      auto tableSchema = tpch::getTableSchema(table);
+      auto tableSchema = tpch::getTableSchema(table, false);
       auto columnNames = tableSchema->names();
       auto plan = PlanBuilder()
                       .tpchTableScan(table, std::move(columnNames), 0.01)

@@ -152,7 +152,8 @@ size_t getRowCount(Table table, double scaleFactor) {
   return 0; // make gcc happy.
 }
 
-RowTypePtr getTableSchema(Table table) {
+RowTypePtr getTableSchema(Table table, bool useVarcharN) {
+  VLOG(1) << "getTableSchema - useVarcharN: " << std::to_string(useVarcharN);
   switch (table) {
     case Table::TBL_PART: {
       static RowTypePtr type = ROW(
@@ -178,7 +179,30 @@ RowTypePtr getTableSchema(Table table) {
               DOUBLE(),
               VARCHAR(),
           });
-      return type;
+      static RowTypePtr typeVarcharN = ROW(
+          {
+              "p_partkey",
+              "p_name",
+              "p_mfgr",
+              "p_brand",
+              "p_type",
+              "p_size",
+              "p_container",
+              "p_retailprice",
+              "p_comment",
+          },
+          {
+              BIGINT(),
+              VARCHAR(55),
+              VARCHAR(25),
+              VARCHAR(10),
+              VARCHAR(25),
+              INTEGER(),
+              VARCHAR(10),
+              DOUBLE(),
+              VARCHAR(23),
+          });
+      return useVarcharN ? typeVarcharN : type;
     }
 
     case Table::TBL_SUPPLIER: {
@@ -201,7 +225,26 @@ RowTypePtr getTableSchema(Table table) {
               DOUBLE(),
               VARCHAR(),
           });
-      return type;
+      static RowTypePtr typeVarcharN = ROW(
+          {
+              "s_suppkey",
+              "s_name",
+              "s_address",
+              "s_nationkey",
+              "s_phone",
+              "s_acctbal",
+              "s_comment",
+          },
+          {
+              BIGINT(),
+              VARCHAR(25),
+              VARCHAR(40),
+              BIGINT(),
+              VARCHAR(15),
+              DOUBLE(),
+              VARCHAR(101),
+          });
+      return useVarcharN ? typeVarcharN : type;
     }
 
     case Table::TBL_PARTSUPP: {
@@ -220,7 +263,22 @@ RowTypePtr getTableSchema(Table table) {
               DOUBLE(),
               VARCHAR(),
           });
-      return type;
+      static RowTypePtr typeVarcharN = ROW(
+          {
+              "ps_partkey",
+              "ps_suppkey",
+              "ps_availqty",
+              "ps_supplycost",
+              "ps_comment",
+          },
+          {
+              BIGINT(),
+              BIGINT(),
+              INTEGER(),
+              DOUBLE(),
+              VARCHAR(199),
+          });
+      return useVarcharN ? typeVarcharN : type;
     }
 
     case Table::TBL_CUSTOMER: {
@@ -245,7 +303,28 @@ RowTypePtr getTableSchema(Table table) {
               VARCHAR(),
               VARCHAR(),
           });
-      return type;
+      static RowTypePtr typeVarcharN = ROW(
+          {
+              "c_custkey",
+              "c_name",
+              "c_address",
+              "c_nationkey",
+              "c_phone",
+              "c_acctbal",
+              "c_mktsegment",
+              "c_comment",
+          },
+          {
+              BIGINT(),
+              VARCHAR(25),
+              VARCHAR(40),
+              BIGINT(),
+              VARCHAR(15),
+              DOUBLE(),
+              VARCHAR(10),
+              VARCHAR(117),
+          });
+      return useVarcharN ? typeVarcharN : type;
     }
 
     case Table::TBL_ORDERS: {
@@ -272,7 +351,30 @@ RowTypePtr getTableSchema(Table table) {
               INTEGER(),
               VARCHAR(),
           });
-      return type;
+      static RowTypePtr typeVarcharN = ROW(
+          {
+              "o_orderkey",
+              "o_custkey",
+              "o_orderstatus",
+              "o_totalprice",
+              "o_orderdate",
+              "o_orderpriority",
+              "o_clerk",
+              "o_shippriority",
+              "o_comment",
+          },
+          {
+              BIGINT(),
+              BIGINT(),
+              VARCHAR(1),
+              DOUBLE(),
+              DATE(),
+              VARCHAR(15),
+              VARCHAR(15),
+              INTEGER(),
+              VARCHAR(79),
+          });
+      return useVarcharN ? typeVarcharN : type;
     }
 
     case Table::TBL_LINEITEM: {
@@ -313,7 +415,44 @@ RowTypePtr getTableSchema(Table table) {
               VARCHAR(),
               VARCHAR(),
           });
-      return type;
+      static RowTypePtr typeVarcharN = ROW(
+          {
+              "l_orderkey",
+              "l_partkey",
+              "l_suppkey",
+              "l_linenumber",
+              "l_quantity",
+              "l_extendedprice",
+              "l_discount",
+              "l_tax",
+              "l_returnflag",
+              "l_linestatus",
+              "l_shipdate",
+              "l_commitdate",
+              "l_receiptdate",
+              "l_shipinstruct",
+              "l_shipmode",
+              "l_comment",
+          },
+          {
+              BIGINT(),
+              BIGINT(),
+              BIGINT(),
+              INTEGER(),
+              DOUBLE(),
+              DOUBLE(),
+              DOUBLE(),
+              DOUBLE(),
+              VARCHAR(1),
+              VARCHAR(1),
+              DATE(),
+              DATE(),
+              DATE(),
+              VARCHAR(25),
+              VARCHAR(10),
+              VARCHAR(44),
+          });
+      return useVarcharN ? typeVarcharN : type;
     }
 
     case Table::TBL_NATION: {
@@ -330,7 +469,20 @@ RowTypePtr getTableSchema(Table table) {
               BIGINT(),
               VARCHAR(),
           });
-      return type;
+      static RowTypePtr typeVarcharN = ROW(
+          {
+              "n_nationkey",
+              "n_name",
+              "n_regionkey",
+              "n_comment",
+          },
+          {
+              BIGINT(),
+              VARCHAR(25),
+              BIGINT(),
+              VARCHAR(152),
+          });
+      return useVarcharN ? typeVarcharN : type;
     }
     case Table::TBL_REGION: {
       static RowTypePtr type = ROW(
@@ -344,23 +496,35 @@ RowTypePtr getTableSchema(Table table) {
               VARCHAR(),
               VARCHAR(),
           });
-      return type;
+      static RowTypePtr typeVarcharN = ROW(
+          {
+              "r_regionkey",
+              "r_name",
+              "r_comment",
+          },
+          {
+              BIGINT(),
+              VARCHAR(25),
+              VARCHAR(152),
+          });
+      return useVarcharN ? typeVarcharN : type;
     }
   }
   return nullptr; // make gcc happy.
 }
 
 TypePtr resolveTpchColumn(Table table, const std::string& columnName) {
-  return getTableSchema(table)->findChild(columnName);
+  return getTableSchema(table, false /* useVarcharN */)->findChild(columnName);
 }
 
 RowVectorPtr genTpchOrders(
     memory::MemoryPool* pool,
     size_t maxRows,
     size_t offset,
-    double scaleFactor) {
+    double scaleFactor,
+    bool useVarcharN) {
   // Create schema and allocate vectors.
-  auto ordersRowType = getTableSchema(Table::TBL_ORDERS);
+  auto ordersRowType = getTableSchema(Table::TBL_ORDERS, useVarcharN);
   size_t vectorSize = getVectorSize(
       getRowCount(Table::TBL_ORDERS, scaleFactor), maxRows, offset);
   auto children = allocateVectors(ordersRowType, vectorSize, pool);
@@ -403,7 +567,8 @@ RowVectorPtr genTpchLineItem(
     memory::MemoryPool* pool,
     size_t maxOrderRows,
     size_t ordersOffset,
-    double scaleFactor) {
+    double scaleFactor,
+    bool useVarcharN) {
   // We control the buffer size based on the orders table, then allocate the
   // underlying buffer using the worst case (orderVectorSize * 7).
   size_t orderVectorSize = getVectorSize(
@@ -411,7 +576,7 @@ RowVectorPtr genTpchLineItem(
   size_t lineItemUpperBound = orderVectorSize * 7;
 
   // Create schema and allocate vectors.
-  auto lineItemRowType = getTableSchema(Table::TBL_LINEITEM);
+  auto lineItemRowType = getTableSchema(Table::TBL_LINEITEM, useVarcharN);
   auto children = allocateVectors(lineItemRowType, lineItemUpperBound, pool);
 
   auto orderKeyVector = children[0]->asFlatVector<int64_t>();
@@ -493,9 +658,10 @@ RowVectorPtr genTpchPart(
     memory::MemoryPool* pool,
     size_t maxRows,
     size_t offset,
-    double scaleFactor) {
+    double scaleFactor,
+    bool useVarcharN) {
   // Create schema and allocate vectors.
-  auto partRowType = getTableSchema(Table::TBL_PART);
+  auto partRowType = getTableSchema(Table::TBL_PART, useVarcharN);
   size_t vectorSize =
       getVectorSize(getRowCount(Table::TBL_PART, scaleFactor), maxRows, offset);
   auto children = allocateVectors(partRowType, vectorSize, pool);
@@ -537,9 +703,10 @@ RowVectorPtr genTpchSupplier(
     memory::MemoryPool* pool,
     size_t maxRows,
     size_t offset,
-    double scaleFactor) {
+    double scaleFactor,
+    bool useVarcharN) {
   // Create schema and allocate vectors.
-  auto supplierRowType = getTableSchema(Table::TBL_SUPPLIER);
+  auto supplierRowType = getTableSchema(Table::TBL_SUPPLIER, useVarcharN);
   size_t vectorSize = getVectorSize(
       getRowCount(Table::TBL_SUPPLIER, scaleFactor), maxRows, offset);
   auto children = allocateVectors(supplierRowType, vectorSize, pool);
@@ -581,9 +748,10 @@ RowVectorPtr genTpchPartSupp(
     memory::MemoryPool* pool,
     size_t maxRows,
     size_t offset,
-    double scaleFactor) {
+    double scaleFactor,
+    bool useVarcharN) {
   // Create schema and allocate vectors.
-  auto partSuppRowType = getTableSchema(Table::TBL_PARTSUPP);
+  auto partSuppRowType = getTableSchema(Table::TBL_PARTSUPP, useVarcharN);
   size_t vectorSize = getVectorSize(
       getRowCount(Table::TBL_PARTSUPP, scaleFactor), maxRows, offset);
   auto children = allocateVectors(partSuppRowType, vectorSize, pool);
@@ -641,9 +809,10 @@ RowVectorPtr genTpchCustomer(
     memory::MemoryPool* pool,
     size_t maxRows,
     size_t offset,
-    double scaleFactor) {
+    double scaleFactor,
+    bool useVarcharN) {
   // Create schema and allocate vectors.
-  auto customerRowType = getTableSchema(Table::TBL_CUSTOMER);
+  auto customerRowType = getTableSchema(Table::TBL_CUSTOMER, useVarcharN);
   size_t vectorSize = getVectorSize(
       getRowCount(Table::TBL_CUSTOMER, scaleFactor), maxRows, offset);
   auto children = allocateVectors(customerRowType, vectorSize, pool);
@@ -688,9 +857,10 @@ RowVectorPtr genTpchNation(
     memory::MemoryPool* pool,
     size_t maxRows,
     size_t offset,
-    double scaleFactor) {
+    double scaleFactor,
+    bool useVarcharN) {
   // Create schema and allocate vectors.
-  auto nationRowType = getTableSchema(Table::TBL_NATION);
+  auto nationRowType = getTableSchema(Table::TBL_NATION, useVarcharN);
   size_t vectorSize = getVectorSize(
       getRowCount(Table::TBL_NATION, scaleFactor), maxRows, offset);
   auto children = allocateVectors(nationRowType, vectorSize, pool);
@@ -722,9 +892,10 @@ RowVectorPtr genTpchRegion(
     memory::MemoryPool* pool,
     size_t maxRows,
     size_t offset,
-    double scaleFactor) {
+    double scaleFactor,
+    bool useVarcharN) {
   // Create schema and allocate vectors.
-  auto regionRowType = getTableSchema(Table::TBL_REGION);
+  auto regionRowType = getTableSchema(Table::TBL_REGION, useVarcharN);
   size_t vectorSize = getVectorSize(
       getRowCount(Table::TBL_REGION, scaleFactor), maxRows, offset);
   auto children = allocateVectors(regionRowType, vectorSize, pool);

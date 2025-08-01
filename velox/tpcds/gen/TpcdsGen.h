@@ -88,7 +88,7 @@ static const auto tables = {
 std::string_view toTableName(Table table);
 
 /// Returns the schema (RowType) for a particular TPC-DS table.
-const velox::RowTypePtr getTableSchema(Table table);
+const velox::RowTypePtr getTableSchema(Table table, bool useVarcharN);
 
 /// Returns TPC-DS table enum corresponding to name.
 Table fromTableName(std::string_view tableName);
@@ -105,7 +105,8 @@ velox::RowVectorPtr genTpcdsData(
     velox::memory::MemoryPool* pool,
     double scaleFactor,
     int32_t parallel,
-    int32_t child);
+    int32_t child,
+    bool useVarcharN);
 
 TypePtr resolveTpcdsColumn(Table table, const std::string& columnName);
 } // namespace facebook::velox::tpcds

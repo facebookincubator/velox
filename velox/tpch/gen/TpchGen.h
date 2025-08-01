@@ -69,7 +69,7 @@ Table fromTableName(std::string_view tableName);
 size_t getRowCount(Table table, double scaleFactor);
 
 /// Returns the schema (RowType) for a particular TPC-H table.
-RowTypePtr getTableSchema(Table table);
+RowTypePtr getTableSchema(Table table, bool useVarcharN);
 
 /// Returns the type of a particular table:column pair. Throws if `columnName`
 /// does not exist in `table`.
@@ -93,7 +93,8 @@ RowVectorPtr genTpchOrders(
     memory::MemoryPool* pool,
     size_t maxRows = 10000,
     size_t offset = 0,
-    double scaleFactor = 1);
+    double scaleFactor = 1,
+    bool useVarcharN = false);
 
 /// NOTE: This function's parameters have different semantic from the function
 /// above. Dbgen does not provide deterministic random access to lineitem
@@ -131,7 +132,8 @@ RowVectorPtr genTpchLineItem(
     memory::MemoryPool* pool,
     size_t maxOrdersRows = 10000,
     size_t ordersOffset = 0,
-    double scaleFactor = 1);
+    double scaleFactor = 1,
+    bool useVarcharN = false);
 
 /// Returns a row vector containing at most `maxRows` rows of the "part"
 /// table, starting at `offset`, and given the scale factor. The row vector
@@ -151,7 +153,8 @@ RowVectorPtr genTpchPart(
     memory::MemoryPool* pool,
     size_t maxRows = 10000,
     size_t offset = 0,
-    double scaleFactor = 1);
+    double scaleFactor = 1,
+    bool useVarcharN = false);
 
 /// Returns a row vector containing at most `maxRows` rows of the "supplier"
 /// table, starting at `offset`, and given the scale factor. The row vector
@@ -169,7 +172,8 @@ RowVectorPtr genTpchSupplier(
     memory::MemoryPool* pool,
     size_t maxRows = 10000,
     size_t offset = 0,
-    double scaleFactor = 1);
+    double scaleFactor = 1,
+    bool useVarcharN = false);
 
 /// Returns a row vector containing at most `maxRows` rows of the "partsupp"
 /// table, starting at `offset`, and given the scale factor. The row vector
@@ -185,7 +189,8 @@ RowVectorPtr genTpchPartSupp(
     memory::MemoryPool* pool,
     size_t maxRows = 10000,
     size_t offset = 0,
-    double scaleFactor = 1);
+    double scaleFactor = 1,
+    bool useVarcharN = false);
 
 /// Returns a row vector containing at most `maxRows` rows of the "customer"
 /// table, starting at `offset`, and given the scale factor. The row vector
@@ -204,7 +209,8 @@ RowVectorPtr genTpchCustomer(
     memory::MemoryPool* pool,
     size_t maxRows = 10000,
     size_t offset = 0,
-    double scaleFactor = 1);
+    double scaleFactor = 1,
+    bool useVarcharN = false);
 
 /// Returns a row vector containing at most `maxRows` rows of the "nation"
 /// table, starting at `offset`, and given the scale factor. The row vector
@@ -219,7 +225,8 @@ RowVectorPtr genTpchNation(
     memory::MemoryPool* pool,
     size_t maxRows = 10000,
     size_t offset = 0,
-    double scaleFactor = 1);
+    double scaleFactor = 1,
+    bool useVarcharN = false);
 
 /// Returns a row vector containing at most `maxRows` rows of the "region"
 /// table, starting at `offset`, and given the scale factor. The row vector
@@ -233,7 +240,8 @@ RowVectorPtr genTpchRegion(
     memory::MemoryPool* pool,
     size_t maxRows = 10000,
     size_t offset = 0,
-    double scaleFactor = 1);
+    double scaleFactor = 1,
+    bool useVarcharN = false);
 
 /// Gets the specified TPC-H query number as a string.
 std::string getQuery(int query);

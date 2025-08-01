@@ -73,12 +73,13 @@ class TpchSpeedTest {
 
     // Create a simple plan composed of a single table scan.
     core::PlanNodeId scanId;
-    auto plan =
-        PlanBuilder()
-            .tpchTableScan(
-                table, folly::copy(getTableSchema(table)->names()), scaleFactor)
-            .capturePlanNodeId(scanId)
-            .planNode();
+    auto plan = PlanBuilder()
+                    .tpchTableScan(
+                        table,
+                        folly::copy(getTableSchema(table, false)->names()),
+                        scaleFactor)
+                    .capturePlanNodeId(scanId)
+                    .planNode();
 
     totalRows_ = 0;
     totalBytes_ = 0;

@@ -122,6 +122,8 @@ class TpchDataSource : public DataSource {
     return {};
   }
 
+  bool getUseVarcharNColumns() const;
+
  private:
   bool isLineItem() const;
 
