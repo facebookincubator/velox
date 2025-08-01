@@ -81,10 +81,18 @@ class UpperLowerTemplateFunction : public exec::VectorFunction {
 
   static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
     // varchar -> varchar
-    return {exec::FunctionSignatureBuilder()
-                .returnType("varchar")
-                .argumentType("varchar")
-                .build()};
+    return {
+        exec::FunctionSignatureBuilder()
+            .returnType("varchar")
+            .argumentType("varchar")
+            .build(),
+        exec::FunctionSignatureBuilder()
+            .integerVariable("x")
+            .integerVariable("y")
+            .returnType("varchar(x)")
+            .argumentType("varchar(y)")
+            .build(),
+    };
   }
 
   bool ensureStringEncodingSetAtAllInputs() const override {
