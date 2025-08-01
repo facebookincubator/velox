@@ -237,8 +237,14 @@ TEST_F(ApproxDistinctTest, globalAggStrings) {
   auto values = makeFlatVector<StringView>(size, [&](auto row) {
     return StringView(kFruits[row % kFruits.size()]);
   });
+  auto valuesWithVarcharN = makeFlatVector<StringView>(
+      size,
+      [&](auto row) { return StringView(kFruits[row % kFruits.size()]); },
+      nullptr,
+      VARCHAR(100));
 
   testGlobalAgg(values, kFruits.size(), true);
+  testGlobalAgg(valuesWithVarcharN, kFruits.size(), true);
 }
 
 TEST_F(ApproxDistinctTest, globalAggVarbinary) {

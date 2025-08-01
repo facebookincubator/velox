@@ -224,15 +224,70 @@ struct Date {
   Date() {}
 };
 
+struct Varchar {
+ private:
+  Varchar() {}
+};
+
+template <size_t size>
+struct ConstantIntegerVariable {
+  static size_t getId() {
+    return size;
+  }
+
+  static std::string name() {
+    return fmt::format("{}", size);
+  }
+};
+
+// Constants with fixed integer value 1 and 2.
+using C1 = ConstantIntegerVariable<1>;
+using C2 = ConstantIntegerVariable<2>;
+// Make sure to not overlap with the decimal integer variables identifiers
+// because a signature with Decimal and Varchar parameters can resolve to the
+// same variable.
+using L1 = IntegerVariable<10>;
+using L2 = IntegerVariable<11>;
+using L3 = IntegerVariable<12>;
+using A = IntegerVariable<kVaryingLengthScalarTypeUnboundedLength>;
+
+template <typename L>
+struct VarcharN {
+ private:
+  VarcharN() {}
+};
+
+template <typename>
+struct is_specialization_of_varcharn : public std::false_type {};
+
+template <typename L>
+struct is_specialization_of_varcharn<VarcharN<L>> : public std::true_type {};
+
+template <typename T>
+inline constexpr auto is_specialization_of_varcharn_v =
+    is_specialization_of_varcharn<T>::value;
+
 struct Varbinary {
  private:
   Varbinary() {}
 };
 
-struct Varchar {
+template <typename L>
+struct VarbinaryN {
  private:
-  Varchar() {}
+  VarbinaryN() {}
 };
+
+template <typename>
+struct is_specialization_of_varbinaryn : public std::false_type {};
+
+template <typename L>
+struct is_specialization_of_varbinaryn<VarbinaryN<L>> : public std::true_type {
+};
+
+template <typename T>
+inline constexpr auto is_specialization_of_varbinaryn_v =
+    is_specialization_of_varbinaryn<T>::value;
 
 // Type to use for inputs and outputs of simple functions with BigintEnum types.
 // E.g. arg_type<BigintEnum<E1>> and out_type<BigintEnum<E1>>.
@@ -350,8 +405,15 @@ struct SimpleTypeTrait<LongDecimal<P, S>>
 template <>
 struct SimpleTypeTrait<Varchar> : public TypeTraits<TypeKind::VARCHAR> {};
 
+template <typename L>
+struct SimpleTypeTrait<VarcharN<L>> : public TypeTraits<TypeKind::VARCHAR> {};
+
 template <>
 struct SimpleTypeTrait<Varbinary> : public TypeTraits<TypeKind::VARBINARY> {};
+
+template <typename L>
+struct SimpleTypeTrait<VarbinaryN<L>> : public TypeTraits<TypeKind::VARBINARY> {
+};
 
 template <>
 struct SimpleTypeTrait<Date> : public TypeTraits<TypeKind::INTEGER> {
@@ -471,8 +533,22 @@ struct MaterializeType<Varchar> {
   static constexpr bool requiresMaterialization = false;
 };
 
+template <typename L>
+struct MaterializeType<VarcharN<L>> {
+  using nullable_t = std::string;
+  using null_free_t = std::string;
+  static constexpr bool requiresMaterialization = false;
+};
+
 template <>
 struct MaterializeType<Varbinary> {
+  using nullable_t = std::string;
+  using null_free_t = std::string;
+  static constexpr bool requiresMaterialization = false;
+};
+
+template <typename L>
+struct MaterializeType<VarbinaryN<L>> {
   using nullable_t = std::string;
   using null_free_t = std::string;
   static constexpr bool requiresMaterialization = false;
