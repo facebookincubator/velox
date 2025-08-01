@@ -410,6 +410,11 @@ enum class TypeParameterKind {
   kType,
   /// Integer. For example, precision in a decimal type.
   kLongLiteral,
+  /// String. For example, the name of an enum type.
+  kStringLiteral,
+  /// Map of string keys to long values. For example, the values map of a
+  /// BigintEnum type.
+  kLongEnumMapLiteral,
 };
 
 struct TypeParameter {
@@ -423,6 +428,14 @@ struct TypeParameter {
   /// or unset.
   const std::optional<int64_t> longLiteral;
 
+  /// Must be set when kind is kStringLiteral. All other properties should be
+  /// null or unset.
+  const std::optional<std::string> stringLiteral;
+
+  /// Must be set when kind is kLongEnumMapLiteral. All other properties should
+  /// be null or unset.
+  const std::optional<std::map<std::string, int64_t>> longEnumMapLiteral;
+
   /// If this parameter is a child of another parent row type, it can optionally
   /// have a name, e.g, "id" for `row(id bigint)`. Only set when kind is kType
   const std::optional<std::string> rowFieldName;
@@ -434,6 +447,8 @@ struct TypeParameter {
       : kind{TypeParameterKind::kType},
         type{std::move(_type)},
         longLiteral{std::nullopt},
+        stringLiteral{std::nullopt},
+        longEnumMapLiteral{std::nullopt},
         rowFieldName(std::move(_rowFieldName)) {}
 
   /// Creates kLongLiteral parameter.
@@ -441,6 +456,27 @@ struct TypeParameter {
       : kind{TypeParameterKind::kLongLiteral},
         type{nullptr},
         longLiteral{_longLiteral},
+        stringLiteral{std::nullopt},
+        longEnumMapLiteral{std::nullopt},
+        rowFieldName{std::nullopt} {}
+
+  /// Creates kStringLiteral parameter.
+  explicit TypeParameter(const std::string& _stringLiteral)
+      : kind{TypeParameterKind::kStringLiteral},
+        type{nullptr},
+        longLiteral{std::nullopt},
+        stringLiteral{_stringLiteral},
+        longEnumMapLiteral{std::nullopt},
+        rowFieldName{std::nullopt} {}
+
+  /// Creates kLongEnumMap parameter.
+  explicit TypeParameter(
+      const std::map<std::string, int64_t>& _longEnumMapLiteral)
+      : kind{TypeParameterKind::kLongEnumMapLiteral},
+        type{nullptr},
+        longLiteral{std::nullopt},
+        stringLiteral{std::nullopt},
+        longEnumMapLiteral{_longEnumMapLiteral},
         rowFieldName{std::nullopt} {}
 };
 

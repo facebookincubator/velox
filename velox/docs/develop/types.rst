@@ -176,6 +176,7 @@ IPPREFIX                  ROW(HUGEINT,TINYINT)
 GEOMETRY                  VARBINARY
 TDIGEST                   VARBINARY
 QDIGEST                   VARBINARY
+BIGINT_ENUM               BIGINT
 ========================  =====================
 
 TIMESTAMP WITH TIME ZONE represents a time point in milliseconds precision
@@ -222,6 +223,13 @@ data for a given input set, and can be queried to retrieve approximate quantile 
 distribution. They may be merged without losing precision, and for storage and retrieval they may
 be cast to/from VARBINARY. The parameter type (BIGINT, REAL, or DOUBLE) represents
 the set of numbers that may be ingested by the quantile digest.
+
+BIGINT_ENUM([kStringLiteral, kLongEnumMapLiteral]) type represents an enumerated value where the physical type is BIGINT.
+It takes a vector of TypeParameters with 2 elements as input. The first element is a string literal that represents
+the name of the enum. The second element is a map literal that represents the mapping of string keys to BIGINT values.
+Casting is permitted between an enum type and any integer type.
+Casting between different enum types is not permitted.
+Comparison operations are only allowed between values of the same enum type.
 
 Spark Types
 ~~~~~~~~~~~~
