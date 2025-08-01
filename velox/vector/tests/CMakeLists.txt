@@ -37,7 +37,8 @@ add_executable(
   VectorStreamTest.cpp
   VectorTest.cpp
   VectorTestUtils.cpp
-  VectorToStringTest.cpp)
+  VectorToStringTest.cpp
+)
 
 add_test(velox_vector_test velox_vector_test)
 
@@ -66,7 +67,8 @@ target_link_libraries(
   Folly::folly
   glog::glog
   fmt::fmt
-  dl)
+  dl
+)
 
 add_executable(simple_vector_test SimpleVectorTest.cpp ToStringUtilityTest.cpp)
 
@@ -82,7 +84,8 @@ target_link_libraries(
   GTest::gtest_main
   Folly::folly
   glog::glog
-  fmt::fmt)
+  fmt::fmt
+)
 
 add_executable(bias_vector_test BiasVectorTest.cpp)
 
@@ -96,4 +99,5 @@ target_link_libraries(
   GTest::gtest_main
   Folly::folly
   glog::glog
-  fmt::fmt)
+  fmt::fmt
+)

@@ -13,27 +13,27 @@
 # limitations under the License.
 add_subdirectory(basic)
 
-set(velox_benchmark_deps
-    velox_type
-    velox_vector
-    velox_vector_fuzzer
-    velox_expression
-    velox_parse_parser
-    velox_parse_utils
-    velox_parse_expression
-    velox_serialization
-    Folly::folly
-    Folly::follybenchmark
-    ${DOUBLE_CONVERSION}
-    gflags::gflags
-    glog::glog)
+set(
+  velox_benchmark_deps
+  velox_type
+  velox_vector
+  velox_vector_fuzzer
+  velox_expression
+  velox_parse_parser
+  velox_parse_utils
+  velox_parse_expression
+  velox_serialization
+  Folly::folly
+  Folly::follybenchmark
+  ${DOUBLE_CONVERSION}
+  gflags::gflags
+  glog::glog
+)
 
 add_library(velox_benchmark_builder ExpressionBenchmarkBuilder.cpp)
-target_link_libraries(
-  velox_benchmark_builder ${velox_benchmark_deps})
+target_link_libraries(velox_benchmark_builder ${velox_benchmark_deps})
 # This is a workaround for the use of VectorTestBase.h which includes gtest.h
-target_link_libraries(
-  velox_benchmark_builder GTest::gtest)
+target_link_libraries(velox_benchmark_builder GTest::gtest)
 
 if(${VELOX_ENABLE_BENCHMARKS})
   add_subdirectory(tpch)
@@ -62,4 +62,5 @@ target_link_libraries(
   velox_vector_test_lib
   Folly::folly
   Folly::follybenchmark
-  fmt::fmt)
+  fmt::fmt
+)
