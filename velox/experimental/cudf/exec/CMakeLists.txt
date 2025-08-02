@@ -38,4 +38,10 @@ target_link_libraries(
     velox_cudf_vector
     velox_exec)
 
-target_compile_options(velox_cudf_exec PRIVATE -Wno-missing-field-initializers)
+target_compile_options(velox_cudf_exec PRIVATE -Wno-missing-field-initializers
+                                               -Wno-deprecated)
+
+set_target_properties(
+  velox_cudf_exec
+  PROPERTIES CXX_STANDARD ${VELOX_CUDF_CXX_STANDARD}
+             CXX_STANDARD_REQUIRED ${VELOX_CUDF_CXX_STANDARD_REQUIRED})
