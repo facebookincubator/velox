@@ -229,7 +229,14 @@ std::shared_ptr<::arrow::Field> updateFieldNameRecursive(
         arrowMapType->item_field(), *mapType.valueType());
     return newField->WithType(
         ::arrow::map(newKeyField->type(), newValueField->type()));
-  } else if (name != "") {
+  } else if (!name.empty() && type.isDecimal()) {
+    auto newField = field->WithName(name);
+    auto precisionScale = getDecimalPrecisionScale(type);
+    // Parquet type is set from the column type rather than inferred from the
+    // field data.
+    return newField->WithType(
+        ::arrow::decimal(precisionScale.first, precisionScale.second));
+  } else if (!name.empty()) {
     return field->WithName(name);
   } else {
     return field;
@@ -316,6 +323,34 @@ std::optional<std::string> getParquetCreatedBy(
     return config.get<std::string>(configKey).value();
   }
   return std::nullopt;
+}
+
+bool equivalentWithSimilarDecimal(
+    const TypePtr dataType,
+    const Type& schemaType) {
+  const auto& schemaTyped = schemaType.asRow();
+  if (schemaTyped.size() != dataType->size()) {
+    return false;
+  }
+  if (!(typeid(*dataType) == typeid(schemaType))) {
+    return false;
+  }
+  for (size_t i = 0; i < dataType->size(); ++i) {
+    if (schemaTyped.childAt(i)->isDecimal()) {
+      auto presicisonScaleSchema =
+          getDecimalPrecisionScale(*schemaTyped.childAt(i));
+      auto precisionScaleData = getDecimalPrecisionScale(*dataType->childAt(i));
+      // Table precision can be larger than or equal to the inserted data, but
+      // the scale must be the same.
+      if (presicisonScaleSchema.first < precisionScaleData.first ||
+          presicisonScaleSchema.second != precisionScaleData.second) {
+        return false;
+      }
+    } else if (!dataType->childAt(i)->equivalent(*schemaTyped.childAt(i))) {
+      return false;
+    }
+  }
+  return true;
 }
 
 } // namespace
@@ -424,7 +459,7 @@ dwio::common::StripeProgress getStripeProgress(
  */
 void Writer::write(const VectorPtr& data) {
   VELOX_USER_CHECK(
-      data->type()->equivalent(*schema_),
+      equivalentWithSimilarDecimal(data->type(), *schema_),
       "The file schema type should be equal with the input rowvector type.");
 
   VectorPtr exportData = data;
