@@ -23,8 +23,8 @@
 #include "velox/common/fuzzer/Utils.h"
 #include "velox/common/memory/SharedArbitrator.h"
 #include "velox/connectors/hive/HiveConnector.h"
-#include "velox/dwio/dwrf/RegisterDwrfReader.h" // @manual
-#include "velox/dwio/dwrf/RegisterDwrfWriter.h" // @manual
+#include "velox/dwio/RegisterReaders.h"
+#include "velox/dwio/RegisterWriters.h"
 #include "velox/exec/MemoryReclaimer.h"
 #include "velox/exec/fuzzer/FuzzerUtil.h"
 #include "velox/exec/tests/utils/ArbitratorTestUtil.h"
@@ -281,8 +281,8 @@ MemoryArbitrationFuzzer::MemoryArbitrationFuzzer(size_t initialSeed)
               test::kHiveConnectorId,
               std::make_shared<config::ConfigBase>(std::move(hiveConfig)));
   connector::registerConnector(hiveConnector);
-  dwrf::registerDwrfReaderFactory();
-  dwrf::registerDwrfWriterFactory();
+  dwio::registerReaderFactories();
+  dwio::registerWriterFactories();
 
   seed(initialSeed);
 }
