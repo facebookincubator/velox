@@ -625,4 +625,24 @@ struct CheckedDivideFunction {
   }
 };
 
+template <typename TExec>
+struct CheckedAbsFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+  template <typename T>
+  FOLLY_ALWAYS_INLINE Status call(T& result, const T& a) {
+    if constexpr (std::is_integral_v<T>) {
+      if (UNLIKELY(a == std::numeric_limits<T>::min())) {
+        if (threadSkipErrorDetails()) {
+          return Status::UserError();
+        }
+        return Status::UserError("Arithmetic overflow: abs({})", a);
+      }
+      result = a < 0 ? -a : a;
+    } else {
+      result = std::abs(a);
+    }
+    return Status::OK();
+  }
+};
+
 } // namespace facebook::velox::functions::sparksql
