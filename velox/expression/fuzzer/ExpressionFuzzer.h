@@ -110,6 +110,14 @@ class ExpressionFuzzer {
     // This can be used to control the size of the input of the fuzzer
     // expression.
     std::optional<int32_t> maxInputsThreshold = std::nullopt;
+
+    // When parameterized varchar types are generated this defines the upper
+    // bound for the parametr value. Note: this value is also used by the
+    // VectorFuzzer for the maximum possible constant string value used. Except
+    // the VectorFuzzer also takes the parameterized type into account to avoid
+    // generating a string that's too large for the concrete fuzzed varchar
+    // type. Passed through to the ArgumentFuzzer.
+    int32_t maxVarcharTypeLength = 100;
   };
 
   ExpressionFuzzer(
@@ -162,6 +170,9 @@ class ExpressionFuzzer {
 
  private:
   bool isSupportedSignature(const exec::FunctionSignature& signature);
+
+  bool containsLengthParameterizedTypeInSignature(
+      const exec::FunctionSignature& signature);
 
   // Either generates a new expression of the required return type or if
   // already generated expressions of the same return type exist then there is
