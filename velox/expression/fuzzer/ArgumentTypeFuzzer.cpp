@@ -33,7 +33,7 @@ using exec::test::sanitizeTryResolveType;
 
 std::string typeToBaseName(const TypePtr& type) {
   if (type->isDecimal()) {
-    return "decimal";
+    return std::string(kNormalizedDecimalTypeName);
   } else if (isIPPrefixType(type)) {
     return "ipprefix";
   } else if (isIPAddressType(type)) {
@@ -51,10 +51,12 @@ std::optional<TypeKind> baseNameToTypeKind(const std::string& typeName) {
 
 namespace {
 
-bool isDecimalBaseName(const std::string& typeName) {
+bool isNormalizedBaseName(
+    std::string_view normalizedBaseTypeName,
+    const std::string& typeName) {
   auto normalized = boost::algorithm::to_lower_copy(typeName);
 
-  return normalized == "decimal";
+  return normalized == normalizedBaseTypeName;
 }
 
 /// Returns true only if 'str' contains digits.
@@ -67,13 +69,14 @@ bool isPositiveInteger(const std::string& str) {
 
 } // namespace
 
-void ArgumentTypeFuzzer::determineUnboundedIntegerVariables(
+void ArgumentTypeFuzzer::determineDecimalIntegerVariables(
     const exec::TypeSignature& type) {
   std::vector<exec::TypeSignature> decimalTypes;
-  findDecimalTypes(type, decimalTypes);
+  findTypesInSignature(kNormalizedDecimalTypeName, type, decimalTypes);
   if (decimalTypes.empty()) {
     return;
   }
+
   for (const auto& decimalType : decimalTypes) {
     auto [p, s] = tryBindFixedPrecisionScale(decimalType);
 
@@ -106,6 +109,34 @@ void ArgumentTypeFuzzer::determineUnboundedIntegerVariables(
     integerBindings_[precision] = p.value();
     integerBindings_[scale] = s.value();
   }
+}
+
+void ArgumentTypeFuzzer::determineVarcharIntegerVariables(
+    const exec::TypeSignature& type) {
+  std::vector<exec::TypeSignature> varcharTypes;
+  findTypesInSignature(kNormalizedVarcharTypeName, type, varcharTypes);
+  if (varcharTypes.empty() || type.parameters().empty()) {
+    return;
+  }
+
+  for (const auto& varcharType : varcharTypes) {
+    auto length = tryBindFixedVarcharLength(varcharType);
+
+    if (length.has_value()) {
+      return;
+    }
+
+    length = rand32(1, options_.maxVarcharTypeLength);
+    VELOX_CHECK_EQ(1, varcharType.parameters().size());
+    const auto& lParameter = varcharType.parameters()[0].baseName();
+    integerBindings_[lParameter] = length.value();
+  }
+}
+
+void ArgumentTypeFuzzer::determineUnboundedIntegerVariables(
+    const exec::TypeSignature& type) {
+  determineDecimalIntegerVariables(type);
+  determineVarcharIntegerVariables(type);
 }
 
 void ArgumentTypeFuzzer::determineUnboundedTypeVariables() {
@@ -152,7 +183,7 @@ bool ArgumentTypeFuzzer::fuzzArgumentTypes(uint32_t maxVariadicArgs) {
     types.emplace_back(signature_.returnType());
     for (const auto& type : types) {
       std::vector<exec::TypeSignature> decimalTypes;
-      findDecimalTypes(type, decimalTypes);
+      findTypesInSignature(kNormalizedDecimalTypeName, type, decimalTypes);
       if (decimalTypes.empty()) {
         continue;
       }
@@ -269,7 +300,8 @@ std::optional<int> ArgumentTypeFuzzer::tryFixedBinding(
 std::pair<std::optional<int>, std::optional<int>>
 ArgumentTypeFuzzer::tryBindFixedPrecisionScale(
     const exec::TypeSignature& type) {
-  VELOX_CHECK(isDecimalBaseName(type.baseName()));
+  VELOX_CHECK(
+      isNormalizedBaseName(kNormalizedDecimalTypeName, type.baseName()));
   VELOX_CHECK_EQ(2, type.parameters().size());
 
   const auto& precisionName = type.parameters()[0].baseName();
@@ -280,15 +312,28 @@ ArgumentTypeFuzzer::tryBindFixedPrecisionScale(
   return {p, s};
 }
 
-void ArgumentTypeFuzzer::findDecimalTypes(
+void ArgumentTypeFuzzer::findTypesInSignature(
+    std::string_view searchType,
     const exec::TypeSignature& type,
-    std::vector<exec::TypeSignature>& decimalTypes) const {
-  if (isDecimalBaseName(type.baseName())) {
-    decimalTypes.push_back(type);
+    std::vector<exec::TypeSignature>& foundTypes) {
+  if (isNormalizedBaseName(searchType, type.baseName())) {
+    foundTypes.push_back(type);
   }
   for (const auto& param : type.parameters()) {
-    findDecimalTypes(param, decimalTypes);
+    findTypesInSignature(searchType, param, foundTypes);
   }
+}
+
+std::optional<int> ArgumentTypeFuzzer::tryBindFixedVarcharLength(
+    const exec::TypeSignature& type) {
+  VELOX_CHECK(
+      isNormalizedBaseName(kNormalizedVarcharTypeName, type.baseName()));
+  VELOX_CHECK_EQ(1, type.parameters().size());
+
+  const auto& lengthParameter = type.parameters()[0].baseName();
+
+  std::optional<int> length = tryFixedBinding(lengthParameter);
+  return length;
 }
 
 } // namespace facebook::velox::fuzzer
