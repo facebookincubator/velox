@@ -116,7 +116,8 @@ class ExtractToGenericHook {
   using HookType = ValueHook;
   static constexpr bool kSkipNulls = false;
 
-  explicit ExtractToGenericHook(SelectiveColumnReader* reader, ValueHook* hook) : reader_(reader), hook_(hook) {}
+  explicit ExtractToGenericHook(SelectiveColumnReader* reader, ValueHook* hook)
+      : reader_(reader), hook_(hook) {}
 
   bool acceptsNulls() const {
     return hook_->acceptsNulls();
