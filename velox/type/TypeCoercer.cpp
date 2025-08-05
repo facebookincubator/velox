@@ -44,10 +44,11 @@ allowedCoercions() {
     }
   };
 
-  add(TINYINT(), {SMALLINT(), INTEGER(), BIGINT(), REAL(), DOUBLE()});
-  add(SMALLINT(), {INTEGER(), BIGINT(), REAL(), DOUBLE()});
-  add(INTEGER(), {BIGINT(), REAL(), DOUBLE()});
-  add(BIGINT(), {DOUBLE()});
+  add(TINYINT(),
+      {SMALLINT(), INTEGER(), BIGINT(), HUGEINT(), REAL(), DOUBLE()});
+  add(SMALLINT(), {INTEGER(), BIGINT(), HUGEINT(), REAL(), DOUBLE()});
+  add(INTEGER(), {BIGINT(), HUGEINT(), DOUBLE()});
+  add(BIGINT(), {HUGEINT()});
   add(REAL(), {DOUBLE()});
 
   return coercions;
