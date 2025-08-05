@@ -107,7 +107,8 @@ SharedKeyAzureClientProvider::SharedKeyAzureClientProvider(
   connectionString_ = ss.str();
 }
 
-std::unique_ptr<AzureBlobClient> SharedKeyAzureClientProvider::getBlobClient() {
+std::unique_ptr<AzureBlobClient>
+SharedKeyAzureClientProvider::getReadFileClient() {
   auto client =
       std::make_unique<BlobClient>(BlobClient::CreateFromConnectionString(
           connectionString_, abfsPath_->fileSystem(), abfsPath_->filePath()));
@@ -115,7 +116,7 @@ std::unique_ptr<AzureBlobClient> SharedKeyAzureClientProvider::getBlobClient() {
 }
 
 std::unique_ptr<AzureDataLakeFileClient>
-SharedKeyAzureClientProvider::getDataLakeFileClient() {
+SharedKeyAzureClientProvider::getWriteFileClient() {
   auto client = std::make_unique<DataLakeFileClient>(
       DataLakeFileClient::CreateFromConnectionString(
           connectionString_, abfsPath_->fileSystem(), abfsPath_->filePath()));
@@ -160,14 +161,14 @@ OAuthAzureClientProvider::OAuthAzureClientProvider(
       options);
 }
 
-std::unique_ptr<AzureBlobClient> OAuthAzureClientProvider::getBlobClient() {
+std::unique_ptr<AzureBlobClient> OAuthAzureClientProvider::getReadFileClient() {
   const auto url = abfsPath_->getUrl(true);
   auto client = std::make_unique<BlobClient>(url, tokenCredential_);
   return std::make_unique<BlobClientWrapper>(std::move(client));
 }
 
 std::unique_ptr<AzureDataLakeFileClient>
-OAuthAzureClientProvider::getDataLakeFileClient() {
+OAuthAzureClientProvider::getWriteFileClient() {
   const auto url = abfsPath_->getUrl(false);
   auto client = std::make_unique<DataLakeFileClient>(url, tokenCredential_);
   return std::make_unique<DataLakeFileClientWrapper>(std::move(client));
@@ -183,14 +184,15 @@ FixedSasAzureClientProvider::FixedSasAzureClientProvider(
   sas_ = config.get<std::string>(sasKey).value();
 }
 
-std::unique_ptr<AzureBlobClient> FixedSasAzureClientProvider::getBlobClient() {
+std::unique_ptr<AzureBlobClient>
+FixedSasAzureClientProvider::getReadFileClient() {
   const auto url = abfsPath_->getUrl(true);
   auto client = std::make_unique<BlobClient>(fmt::format("{}?{}", url, sas_));
   return std::make_unique<BlobClientWrapper>(std::move(client));
 }
 
 std::unique_ptr<AzureDataLakeFileClient>
-FixedSasAzureClientProvider::getDataLakeFileClient() {
+FixedSasAzureClientProvider::getWriteFileClient() {
   const auto url = abfsPath_->getUrl(false);
   auto client =
       std::make_unique<DataLakeFileClient>(fmt::format("{}?{}", url, sas_));

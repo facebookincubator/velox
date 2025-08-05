@@ -33,11 +33,11 @@ class DummyAzureClientProvider final : public AzureClientProvider {
       const config::ConfigBase& config)
       : AzureClientProvider(abfsPath) {}
 
-  std::unique_ptr<AzureBlobClient> getBlobClient() override {
+  std::unique_ptr<AzureBlobClient> getReadFileClient() override {
     VELOX_FAIL("Not implemented.");
   }
 
-  std::unique_ptr<AzureDataLakeFileClient> getDataLakeFileClient() override {
+  std::unique_ptr<AzureDataLakeFileClient> getWriteFileClient() override {
     VELOX_FAIL("Not implemented.");
   }
 };
@@ -119,7 +119,8 @@ TEST(AzureClientProviderFactoriesTest, registerAzureClientFactory) {
         return std::make_unique<DummyAzureClientProvider>(path, config);
       });
 
-  ASSERT_TRUE(AzureClientProviderFactories::clientFactoryRegistered("efg"));
+  ASSERT_TRUE(
+      AzureClientProviderFactories::getClientFactory("efg").has_value());
   VELOX_ASSERT_THROW(
       AzureClientProviderFactories::getBlobClient(
           abfsPath, config::ConfigBase({})),
@@ -129,5 +130,18 @@ TEST(AzureClientProviderFactoriesTest, registerAzureClientFactory) {
           abfsPath, config::ConfigBase({})),
       "Not implemented.");
 
-  ASSERT_FALSE(AzureClientProviderFactories::clientFactoryRegistered("efg2"));
+  ASSERT_FALSE(
+      AzureClientProviderFactories::getClientFactory("efg2").has_value());
+
+  // Registering again with overwrite = false should throw an error.
+  VELOX_ASSERT_USER_THROW(
+      registerAzureClientProviderFactory(
+          "efg",
+          [](const std::shared_ptr<AbfsPath>& path,
+             const config::ConfigBase& config)
+              -> std::unique_ptr<AzureClientProvider> {
+            return std::make_unique<DummyAzureClientProvider>(path, config);
+          },
+          false),
+      "AzureClientProvider for account 'efg' is already registered.");
 }

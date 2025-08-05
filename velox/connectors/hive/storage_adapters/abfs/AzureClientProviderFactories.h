@@ -45,12 +45,19 @@ using AzureClientProviderFactory =
 class AzureClientProviderFactories {
  public:
   /// Registers a factory for creating AzureClientProvider instances.
+  /// If overwrite is true, it will overwrite any existing factory
+  /// registered for the specified account. Otherwise, it will throw an
+  /// exception.
   static void registerFactory(
       const std::string& account,
-      const AzureClientProviderFactory& factory);
+      const AzureClientProviderFactory& factory,
+      bool overwrite);
 
-  /// Checks if a factory is registered for the given account.
-  static bool clientFactoryRegistered(const std::string& account);
+  /// Get the registered AzureClientProviderFactory for the specified
+  /// account. If no factory is registered for the account, returns
+  /// std::nullopt.
+  static std::optional<AzureClientProviderFactory> getClientFactory(
+      const std::string& account);
 
   /// Uses the registered AzureClientProviderFactory to create an
   /// AzureBlobClient. If no factory is registered for the account

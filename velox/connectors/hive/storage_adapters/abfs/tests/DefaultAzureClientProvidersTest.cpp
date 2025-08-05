@@ -66,11 +66,11 @@ TEST(DefaultAzureClientProviderTest, clientSecretOAuth) {
   EXPECT_EQ(clientProvider.tenentId(), "{TENANTID}");
   EXPECT_EQ(
       clientProvider.authorityHost(), "https://login.microsoftonline.com/");
-  auto readClient = clientProvider.getBlobClient();
+  auto readClient = clientProvider.getReadFileClient();
   EXPECT_EQ(
       readClient->getUrl(),
       "https://efg.blob.core.windows.net/abc/file/test.txt");
-  auto writeClient = clientProvider.getDataLakeFileClient();
+  auto writeClient = clientProvider.getWriteFileClient();
   // GetUrl retrieves the value from the internal blob client, which represents
   // the blob's path as well.
   EXPECT_EQ(
@@ -93,11 +93,11 @@ TEST(DefaultAzureClientProviderTest, fixedSasToken) {
   auto clientProvider = FixedSasAzureClientProvider(
       std::make_shared<AbfsPath>("abfs://abc@bar.dfs.core.windows.net/file"),
       config);
-  auto readClient = clientProvider.getBlobClient();
+  auto readClient = clientProvider.getReadFileClient();
   EXPECT_EQ(
       readClient->getUrl(),
       "http://bar.blob.core.windows.net/abc/file?sas=test");
-  auto writeClient = clientProvider.getDataLakeFileClient();
+  auto writeClient = clientProvider.getWriteFileClient();
   // GetUrl retrieves the value from the internal blob client, which represents
   // the blob's path as well.
   EXPECT_EQ(

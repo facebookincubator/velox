@@ -65,9 +65,10 @@ void registerAbfsFileSystem() {
 
 void registerAzureClientProviderFactory(
     const std::string& account,
-    const AzureClientProviderFactory& factory) {
+    const AzureClientProviderFactory& factory,
+    bool overwrite) {
 #ifdef VELOX_ENABLE_ABFS
-  AzureClientProviderFactories::registerFactory(account, factory);
+  AzureClientProviderFactories::registerFactory(account, factory, overwrite);
 #endif
 }
 

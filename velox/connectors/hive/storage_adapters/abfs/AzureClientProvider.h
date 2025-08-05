@@ -29,9 +29,9 @@ class AzureClientProvider {
   explicit AzureClientProvider(const std::shared_ptr<AbfsPath>& path)
       : abfsPath_(path) {}
 
-  virtual std::unique_ptr<AzureBlobClient> getBlobClient() = 0;
+  virtual std::unique_ptr<AzureBlobClient> getReadFileClient() = 0;
 
-  virtual std::unique_ptr<AzureDataLakeFileClient> getDataLakeFileClient() = 0;
+  virtual std::unique_ptr<AzureDataLakeFileClient> getWriteFileClient() = 0;
 
  protected:
   std::shared_ptr<AbfsPath> abfsPath_;
