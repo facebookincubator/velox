@@ -37,9 +37,13 @@ using AzureClientProviderFactory =
 // Register the ABFS filesystem.
 void registerAbfsFileSystem();
 
-// Register a factory for creating AzureClientProvider instances.
+/// Registers a factory for creating AzureClientProvider instances.
+/// If overwrite is true, it will overwrite any existing factory
+/// registered for the specified account. Otherwise, it will throw an
+/// exception.
 void registerAzureClientProviderFactory(
     const std::string& account,
-    const AzureClientProviderFactory& factory);
+    const AzureClientProviderFactory& factory,
+    bool overwrite = true);
 
 } // namespace facebook::velox::filesystems

@@ -29,9 +29,9 @@ class SharedKeyAzureClientProvider final : public AzureClientProvider {
       const std::shared_ptr<AbfsPath>& abfsPath,
       const config::ConfigBase& config);
 
-  std::unique_ptr<AzureBlobClient> getBlobClient() override;
+  std::unique_ptr<AzureBlobClient> getReadFileClient() override;
 
-  std::unique_ptr<AzureDataLakeFileClient> getDataLakeFileClient() override;
+  std::unique_ptr<AzureDataLakeFileClient> getWriteFileClient() override;
 
   /// Test only.
   std::string connectionString() const {
@@ -50,9 +50,9 @@ class OAuthAzureClientProvider final : public AzureClientProvider {
       const std::shared_ptr<AbfsPath>& abfsPath,
       const config::ConfigBase& config);
 
-  std::unique_ptr<AzureBlobClient> getBlobClient() override;
+  std::unique_ptr<AzureBlobClient> getReadFileClient() override;
 
-  std::unique_ptr<AzureDataLakeFileClient> getDataLakeFileClient() override;
+  std::unique_ptr<AzureDataLakeFileClient> getWriteFileClient() override;
 
   /// Test only.
   std::string tenentId() const {
@@ -77,9 +77,9 @@ class FixedSasAzureClientProvider final : public AzureClientProvider {
       const std::shared_ptr<AbfsPath>& abfsPath,
       const config::ConfigBase& config);
 
-  std::unique_ptr<AzureBlobClient> getBlobClient() override;
+  std::unique_ptr<AzureBlobClient> getReadFileClient() override;
 
-  std::unique_ptr<AzureDataLakeFileClient> getDataLakeFileClient() override;
+  std::unique_ptr<AzureDataLakeFileClient> getWriteFileClient() override;
 
  private:
   std::string sas_;

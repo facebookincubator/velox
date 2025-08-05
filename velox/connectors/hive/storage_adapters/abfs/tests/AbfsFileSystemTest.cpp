@@ -57,11 +57,11 @@ class TestAzureClientProvider final : public AzureClientProvider {
     delegated_ = std::make_unique<SharedKeyAzureClientProvider>(path, config);
   }
 
-  std::unique_ptr<AzureBlobClient> getBlobClient() override {
-    return delegated_->getBlobClient();
+  std::unique_ptr<AzureBlobClient> getReadFileClient() override {
+    return delegated_->getReadFileClient();
   }
 
-  std::unique_ptr<AzureDataLakeFileClient> getDataLakeFileClient() override {
+  std::unique_ptr<AzureDataLakeFileClient> getWriteFileClient() override {
     return std::make_unique<MockDataLakeFileClient>();
   }
 
