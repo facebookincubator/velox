@@ -253,5 +253,14 @@ TEST_F(SplitTest, regexDelimiter) {
   };
   testSplit(input, "🙂", -1, numRows, expected);
 }
+
+TEST_F(SplitTest, singleMetaCharacterDelimiter) {
+  auto input = std::vector<std::string>{"abc", ""};
+  auto expected = std::vector<std::vector<std::string>>({
+      {"", "", "", ""},
+      {""},
+  });
+  testSplit(input, ".", std::nullopt, 2, expected);
+}
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test

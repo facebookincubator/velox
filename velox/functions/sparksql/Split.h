@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <string_view>
+
 #include "velox/functions/lib/Utf8Utils.h"
 
 namespace facebook::velox::functions::sparksql {
@@ -131,6 +133,14 @@ struct Split {
       return;
     }
 
+    // Fast path: if delimiter is a single non-regex meta character, use
+    // std::string_view::find instead of regex. This avoids invoking RE2 and
+    // significantly speeds up simple splits.
+    if (delimiter.size() == 1 && !isRegexMetaCharacter(delimiter[0])) {
+      splitWithSingleChar(result, input, delimiter[0], limit);
+      return;
+    }
+
     // Splits input string using the delimiter and adds the cutting-off pieces
     // to elements vector until the string's end or the limit is reached.
     int32_t addedElements{0};
@@ -186,6 +196,50 @@ struct Split {
     // Add the rest of the string and we are done.
     // Note that the rest of the string can be empty - we still add it.
     result.add_item().setNoCopy(StringView(start + pos, end - pos));
+  }
+
+  // Fast path for single-character delimiter that is not a regex meta
+  // character. Splits the input using std::string_view::find, avoiding RE2.
+  void splitWithSingleChar(
+      out_type<Array<Varchar>>& result,
+      const arg_type<Varchar>& input,
+      char delimiter,
+      int32_t limit) const {
+    std::string_view sinput(input.data(), input.size());
+    int32_t addedElements = 0;
+    while (true) {
+      auto idx = sinput.find(delimiter);
+      if (idx == std::string_view::npos) {
+        break;
+      }
+      result.add_item().setNoCopy(StringView(sinput.data(), idx));
+      sinput.remove_prefix(idx + 1);
+      ++addedElements;
+      if (addedElements + 1 == limit) {
+        break;
+      }
+    }
+    result.add_item().setNoCopy(StringView(sinput.data(), sinput.size()));
+  }
+
+  static bool isRegexMetaCharacter(char c) {
+    switch (c) {
+      case '.':
+      case '$':
+      case '|':
+      case '(':
+      case ')':
+      case '[':
+      case '{':
+      case '^':
+      case '?':
+      case '*':
+      case '+':
+      case '\\':
+        return true;
+      default:
+        return false;
+    }
   }
 
   mutable facebook::velox::functions::detail::ReCache cache_;
