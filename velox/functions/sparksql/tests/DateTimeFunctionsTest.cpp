@@ -784,9 +784,21 @@ TEST_F(DateTimeFunctionsTest, getTimestamp) {
           const std::string& format) {
         return getTimestamp(dateString, format)->toString();
       };
+
   EXPECT_EQ(
       getTimestamp("1970-01-01 00:00:00.123456", "yyyy-MM-dd HH:mm:ss.SSS"),
       std::nullopt);
+  EXPECT_EQ(
+      getTimestamp(
+          "1970-01-01 00:00:00.123456789", "yyyy-MM-dd HH:mm:ss.SSSSSS"),
+      std::nullopt);
+
+  // Spark precision till microsecond
+  EXPECT_EQ(
+      getTimestamp(
+          "1970-01-01 00:00:00.123456789", "yyyy-MM-dd HH:mm:ss.SSSSSSSSS"),
+      Timestamp(0, 123456000));
+
   EXPECT_EQ(
       getTimestamp("1970-01-01 00:00:00.123456", "yyyy-MM-dd HH:mm:ss.SSSSSS"),
       Timestamp(0, 123456000));
