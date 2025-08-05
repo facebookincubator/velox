@@ -59,6 +59,14 @@ void registerTpch(
       connectorId, std::move(configs));
 }
 
+bool hasConnector(const std::string& connectorId) {
+  return connector::hasConnector(connectorId);
+}
+
+bool hasConnectorFactory(const std::string& connectorName) {
+  return connector::hasConnectorFactory(connectorName);
+}
+
 // Is it ok to unregister connectors that were not registered.
 void unregister(const std::string& connectorId) {
   if (!facebook::velox::connector::unregisterConnector(connectorId) ||
