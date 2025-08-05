@@ -19,7 +19,6 @@
 #include "velox/exec/AggregateCompanionSignatures.h"
 #include "velox/exec/AggregateFunctionRegistry.h"
 #include "velox/exec/RowContainer.h"
-#include "velox/expression/SignatureBinder.h"
 
 namespace facebook::velox::exec {
 
