@@ -31,13 +31,13 @@ class GetArrayStructFieldsFunction : public exec::VectorFunction {
       const TypePtr& /*resultType*/,
       exec::EvalCtx& context,
       VectorPtr& result) const override {
-    // Decode input array vector
+    // Decode input array vector.
     exec::LocalDecodedVector decoded(context, *args[0], rows);
     auto arrayVec = decoded->base()->as<ArrayVector>();
 
     DecodedVector decodedElement(*arrayVec->elements());
     auto elements = decodedElement.base()->as<RowVector>();
-    auto fieldVec = elements->childAt(ordinal_);
+    auto fieldVector = elements->childAt(ordinal_);
 
     VectorPtr fieldResult;
     if (elements->mayHaveNulls()) {
@@ -48,18 +48,18 @@ class GetArrayStructFieldsFunction : public exec::VectorFunction {
         rawIndices[i] = i;
       }
       fieldResult = BaseVector::wrapInDictionary(
-          elements->nulls(), indices, elements->size(), fieldVec);
+          elements->nulls(), indices, elements->size(), fieldVector);
     } else {
-      fieldResult = fieldVec;
+      fieldResult = fieldVector;
     }
     if (!decodedElement.isIdentityMapping()) {
       fieldResult = decodedElement.wrap(
           fieldResult, *arrayVec->elements(), decodedElement.size());
     }
 
-    auto tempResult = std::make_shared<ArrayVector>(
+    auto arrayResult = std::make_shared<ArrayVector>(
         context.pool(),
-        ARRAY(fieldVec->type()),
+        ARRAY(fieldVector->type()),
         arrayVec->nulls(),
         arrayVec->size(),
         arrayVec->offsets(),
@@ -67,9 +67,9 @@ class GetArrayStructFieldsFunction : public exec::VectorFunction {
         fieldResult);
 
     if (decoded->isIdentityMapping()) {
-      result = tempResult;
+      result = arrayResult;
     } else {
-      result = decoded->wrap(tempResult, *args[0], decoded->size());
+      result = decoded->wrap(arrayResult, *args[0], decoded->size());
     }
   }
 
