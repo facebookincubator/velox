@@ -325,7 +325,8 @@ std::vector<core::TypedExprPtr> QDigestArgValuesGenerator::generate(
       "value_at_quantile",
       "values_at_quantiles",
       "quantile_at_value",
-      "scale_qdigest"};
+      "scale_qdigest",
+      "fb_truncated_mean"};
   if (std::find(functionNames.begin(), functionNames.end(), functionName_) ==
       functionNames.end()) {
     return inputExpressions;
