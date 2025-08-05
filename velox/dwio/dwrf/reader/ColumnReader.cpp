@@ -31,7 +31,6 @@
 #include <folly/Conv.h>
 #include <folly/Likely.h>
 #include <folly/Portability.h>
-#include <folly/String.h>
 
 namespace facebook::velox::dwrf {
 
