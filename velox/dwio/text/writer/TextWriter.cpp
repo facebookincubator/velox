@@ -348,7 +348,7 @@ void TextWriter::writeCellValue(
       [[fallthrough]];
     default:
       VELOX_NYI(
-          "Text writer does not support type {}", mapTypeKindToName(type));
+          "Text writer does not support type {}", TypeKindName::toName(type));
   }
 
   VELOX_CHECK(
