@@ -50,6 +50,7 @@ velox_add_library(
   MarkDistinct.cpp
   MemoryReclaimer.cpp
   Merge.cpp
+  MergeSpill.cpp
   MergeJoin.cpp
   MergeSource.cpp
   NestedLoopJoinBuild.cpp
