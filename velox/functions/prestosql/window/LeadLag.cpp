@@ -30,7 +30,11 @@ class LeadLagFunction : public exec::WindowFunction {
       bool ignoreNulls,
       velox::memory::MemoryPool* pool)
       : WindowFunction(resultType, pool, nullptr), ignoreNulls_(ignoreNulls) {
-    valueIndex_ = args[0].index.value();
+    if (args[0].constantValue) {
+      constantValue_ = args[0].constantValue;
+    } else {
+      valueIndex_ = args[0].index.value();
+    }
 
     initializeOffset(args);
     initializeDefaultValue(args);
@@ -44,6 +48,12 @@ class LeadLagFunction : public exec::WindowFunction {
     ignoreNullsForPartition_ = false;
 
     if (ignoreNulls_) {
+      if (constantValue_) {
+        // The special ignoreNulls processing is not required if it's not null
+        // constant.
+        ignoreNullsForPartition_ = constantValue_->isNullAt(0);
+        return;
+      }
       auto partitionSize = partition_->numRows();
       AlignedBuffer::reallocate<bool>(&nulls_, partitionSize);
 
@@ -67,6 +77,17 @@ class LeadLagFunction : public exec::WindowFunction {
 
     rowNumbers_.resize(numRows);
 
+    if (constantValue_) {
+      // For null constant 'value', ignoreNulls means each result row needs to
+      // be set with default value.
+      if (ignoreNullsForPartition_) {
+        std::fill(rowNumbers_.begin(), rowNumbers_.end(), kDefaultValueRow);
+        setDefaultValue(result, resultOffset);
+        partitionOffset_ += numRows;
+        return;
+      }
+    }
+
     if (constantOffset_.has_value() || isConstantOffsetNull_) {
       setRowNumbersForConstantOffset();
     } else {
@@ -77,9 +98,20 @@ class LeadLagFunction : public exec::WindowFunction {
       }
     }
 
-    auto rowNumbersRange = folly::Range(rowNumbers_.data(), numRows);
-    partition_->extractColumn(
-        valueIndex_, rowNumbersRange, resultOffset, result);
+    if (constantValue_) {
+      for (auto i = 0; i < rowNumbers_.size(); ++i) {
+        if (rowNumbers_[i] >= 0 && !constantValue_->isNullAt(0)) {
+          result->copy(constantValue_.get(), resultOffset + i, 0, 1);
+        } else {
+          // It can still be set with default value if provided.
+          result->setNull(resultOffset + i, true);
+        }
+      }
+    } else {
+      auto rowNumbersRange = folly::Range(rowNumbers_.data(), numRows);
+      partition_->extractColumn(
+          valueIndex_, rowNumbersRange, resultOffset, result);
+    }
 
     setDefaultValue(result, resultOffset);
 
@@ -287,7 +319,10 @@ class LeadLagFunction : public exec::WindowFunction {
   // be skipped for them. Used for tracking this at the partition level.
   bool ignoreNullsForPartition_;
 
-  // Index of the 'value' argument.
+  // Constant 'value'.
+  VectorPtr constantValue_;
+
+  // Index of the 'value' argument, which will be set if not constant.
   column_index_t valueIndex_;
 
   // Index of the 'offset' argument if offset is not constant.
