@@ -24,8 +24,6 @@
 
 #include <fcntl.h>
 #include <folly/executors/IOThreadPoolExecutor.h>
-#include <folly/executors/QueuedImmediateExecutor.h>
-#include <glog/logging.h>
 #include <gtest/gtest.h>
 #include <re2/re2.h>
 
