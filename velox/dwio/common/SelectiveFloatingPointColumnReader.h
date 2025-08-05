@@ -156,7 +156,9 @@ void SelectiveFloatingPointColumnReader<TData, TRequested>::processValueHook(
   switch (hook->kind()) {
     case aggregate::AggregationHook::kDoubleSum:
       readHelper<Reader, velox::common::AlwaysTrue, isDense>(
-          &alwaysTrue(), rows, ExtractToHook<aggregate::SumHook<double>>(this, hook));
+          &alwaysTrue(),
+          rows,
+          ExtractToHook<aggregate::SumHook<double>>(this, hook));
       break;
     case aggregate::AggregationHook::kFloatingPointMax:
       readHelper<Reader, velox::common::AlwaysTrue, isDense>(
