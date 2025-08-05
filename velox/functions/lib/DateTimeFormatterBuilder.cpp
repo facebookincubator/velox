@@ -174,8 +174,8 @@ DateTimeFormatterBuilder& DateTimeFormatterBuilder::appendFractionOfSecond(
 }
 
 DateTimeFormatterBuilder&
-DateTimeFormatterBuilder::truncateFractionOfSecondToMillis(bool truncate) {
-  truncateFractionOfSecondToMillis_ = truncate;
+DateTimeFormatterBuilder::setFractionOfSecondPrecision(FractionOfSecondPrecision fractionOfSecondPrecision) {
+  fractionOfSecondPrecision_ = fractionOfSecondPrecision;
   return *this;
 }
 
@@ -229,7 +229,7 @@ std::shared_ptr<DateTimeFormatter> DateTimeFormatterBuilder::build() {
       bufEnd_,
       std::move(tokens_),
       type_,
-      truncateFractionOfSecondToMillis_);
+      fractionOfSecondPrecision_);
 }
 
 } // namespace facebook::velox::functions

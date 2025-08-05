@@ -820,7 +820,7 @@ int32_t parseFromPattern(
     Date& date,
     bool specifierNext,
     DateTimeFormatterType type,
-    bool truncateFractionOfSecondToMillis) {
+    FractionOfSecondPrecision fractionOfSecondPrecision) {
   if (curPattern.specifier == DateTimeFormatSpecifier::TIMEZONE_OFFSET_ID) {
     int64_t size;
     if (curPattern.minRepresentDigits < 3) {
@@ -911,11 +911,13 @@ int32_t parseFromPattern(
       // it as the whole number; otherwise, it pads the number with zeros.
       if (type != DateTimeFormatterType::STRICT_SIMPLE &&
           type != DateTimeFormatterType::LENIENT_SIMPLE) {
-        if (truncateFractionOfSecondToMillis) {
+        if (fractionOfSecondPrecision == FractionOfSecondPrecision::kMillisecond) {
           number *= std::pow(10, 3 - count);
           number *= util::kMicrosPerMsec;
-        } else {
+        } else if (fractionOfSecondPrecision == FractionOfSecondPrecision::kMicrosecond) {
           number *= std::pow(10, 6 - count);
+        } else {
+          number = 0;
         }
       } else {
         number *= util::kMicrosPerMsec;
@@ -1597,7 +1599,7 @@ Expected<DateTimeResult> DateTimeFormatter::parse(
                   date,
                   true,
                   type_,
-                  truncateFractionOfSecondToMillis_) == -1) {
+                  fractionOfSecondPrecision_) == -1) {
             return parseFail(input, cur, end);
           }
         } else {
@@ -1609,7 +1611,7 @@ Expected<DateTimeResult> DateTimeFormatter::parse(
                   date,
                   false,
                   type_,
-                  truncateFractionOfSecondToMillis_) == -1) {
+                  fractionOfSecondPrecision_) == -1) {
             return parseFail(input, cur, end);
           }
         }
@@ -1839,7 +1841,7 @@ Expected<std::shared_ptr<DateTimeFormatter>> buildMysqlDateTimeFormatter(
 
 Expected<std::shared_ptr<DateTimeFormatter>> buildJodaDateTimeFormatter(
     const std::string_view& format,
-    bool truncateFractionOfSecondToMillis) {
+    FractionOfSecondPrecision fractionOfSecondPrecision) {
   if (format.empty()) {
     if (threadSkipErrorDetails()) {
       return folly::makeUnexpected(Status::UserError());
@@ -1849,7 +1851,7 @@ Expected<std::shared_ptr<DateTimeFormatter>> buildJodaDateTimeFormatter(
   }
 
   DateTimeFormatterBuilder builder(format.size());
-  builder.truncateFractionOfSecondToMillis(truncateFractionOfSecondToMillis);
+  builder.setFractionOfSecondPrecision(fractionOfSecondPrecision);
   const char* cur = format.data();
   const char* end = cur + format.size();
 
