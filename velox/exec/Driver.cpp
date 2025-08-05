@@ -132,6 +132,7 @@ std::optional<common::SpillConfig> DriverCtx::makeSpillConfig(
       spillFilePrefix,
       queryConfig.maxSpillFileSize(),
       queryConfig.spillWriteBufferSize(),
+      queryConfig.spillWriteBatchSize(),
       queryConfig.spillReadBufferSize(),
       task->queryCtx()->spillExecutor(),
       queryConfig.minSpillableReservationPct(),
