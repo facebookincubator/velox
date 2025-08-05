@@ -18,7 +18,7 @@
 
 #include <memory>
 
-#include "folly/json.h"
+#include "folly/json/json.h"
 
 #include "velox/common/fuzzer/Utils.h"
 #include "velox/functions/lib/QuantileDigest.h"
