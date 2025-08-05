@@ -135,11 +135,7 @@ FOLLY_ALWAYS_INLINE bool isTimeUnit(const DateTimeUnit unit) {
   return unit < DateTimeUnit::kDay;
 }
 
-enum class FractionOfSecondPrecision {
-  kSecond,
-  kMillisecond,
-    kMicrosecond
-};
+enum class FractionOfSecondPrecision { kSecond, kMillisecond, kMicrosecond };
 
 struct FormatPattern {
   DateTimeFormatSpecifier specifier;
@@ -253,7 +249,8 @@ Expected<std::shared_ptr<DateTimeFormatter>> buildMysqlDateTimeFormatter(
 
 Expected<std::shared_ptr<DateTimeFormatter>> buildJodaDateTimeFormatter(
     const std::string_view& format,
-    FractionOfSecondPrecision fractionOfSecondPrecision = FractionOfSecondPrecision::kMicrosecond);
+    FractionOfSecondPrecision fractionOfSecondPrecision =
+        FractionOfSecondPrecision::kMicrosecond);
 
 Expected<std::shared_ptr<DateTimeFormatter>> buildSimpleDateTimeFormatter(
     const std::string_view& format,
