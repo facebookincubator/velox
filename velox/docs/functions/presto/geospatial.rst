@@ -211,12 +211,6 @@ Accessors
    Returns an array of points in a geometry. Empty or null inputs
    return null.
 
-.. function:: ST_NumPoints(geometry: Geometry) -> points: integer
-
-   Returns the number of points in a geometry. This is an extension
-   to the SQL/MM ``ST_NumPoints`` function which only applies to
-   point and linestring.
-
 .. function:: geometry_nearest_points(geometry1: Geometry, geometry2: Geometry) -> points: array(geometry)
 
    Returns the points on each geometry nearest the other. If either geometry
