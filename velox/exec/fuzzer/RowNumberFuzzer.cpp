@@ -147,7 +147,7 @@ void RowNumberFuzzer::addPlansWithTableScan(
     std::vector<PlanWithSplits>& altPlans) {
   VELOX_CHECK(!tableDir.empty());
 
-  if (!isTableScanSupported(input[0]->type())) {
+  if (!test::isTableScanSupported(input[0]->type())) {
     return;
   }
 
