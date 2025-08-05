@@ -290,10 +290,17 @@ struct AstContext {
 
   cudf::ast::expression const& pushExprToTree(
       const std::shared_ptr<velox::exec::Expr>& expr);
+  cudf::ast::expression const& addPrecomputeInstructionOnSide(
+      size_t sideIdx,
+      size_t columnIndex,
+      std::string const& instruction,
+      std::string const& fieldName,
+      const std::shared_ptr<velox::exec::Expr>& expr);
   cudf::ast::expression const& addPrecomputeInstruction(
       std::string const& name,
       std::string const& instruction,
-      std::string const& fieldName = {});
+      std::string const& fieldName = {},
+      const std::shared_ptr<velox::exec::Expr>& expr = nullptr);
   cudf::ast::expression const& multipleInputsToPairWise(
       const std::shared_ptr<velox::exec::Expr>& expr);
   static bool canBeEvaluated(const std::shared_ptr<velox::exec::Expr>& expr);
@@ -342,29 +349,38 @@ std::vector<int> getNestedColumnIndices(
   return indices;
 }
 
+cudf::ast::expression const& AstContext::addPrecomputeInstructionOnSide(
+    size_t sideIdx,
+    size_t columnIndex,
+    std::string const& instruction,
+    std::string const& fieldName,
+    const std::shared_ptr<velox::exec::Expr>& expr) {
+  auto newColumnIndex = inputRowSchema[sideIdx].get()->size() +
+      precomputeInstructions[sideIdx].get().size();
+  if (fieldName.empty()) {
+    // This custom op should be added to input columns.
+    precomputeInstructions[sideIdx].get().emplace_back(
+        columnIndex, instruction, newColumnIndex, expr);
+  } else {
+    auto nestedIndices = getNestedColumnIndices(
+        inputRowSchema[sideIdx].get()->childAt(columnIndex), fieldName);
+    precomputeInstructions[sideIdx].get().emplace_back(
+        columnIndex, instruction, newColumnIndex, nestedIndices, expr);
+  }
+  auto side = static_cast<cudf::ast::table_reference>(sideIdx);
+  return tree.push(cudf::ast::column_reference(newColumnIndex, side));
+}
+
 cudf::ast::expression const& AstContext::addPrecomputeInstruction(
     std::string const& name,
     std::string const& instruction,
-    std::string const& fieldName) {
+    std::string const& fieldName,
+    const std::shared_ptr<velox::exec::Expr>& expr) {
   for (size_t sideIdx = 0; sideIdx < inputRowSchema.size(); ++sideIdx) {
     if (inputRowSchema[sideIdx].get()->containsChild(name)) {
       auto columnIndex = inputRowSchema[sideIdx].get()->getChildIdx(name);
-      auto newColumnIndex = inputRowSchema[sideIdx].get()->size() +
-          precomputeInstructions[sideIdx].get().size();
-      if (fieldName.empty()) {
-        // This custom op should be added to input columns.
-        precomputeInstructions[sideIdx].get().emplace_back(
-            columnIndex, instruction, newColumnIndex);
-      } else {
-        auto nestedIndices = getNestedColumnIndices(
-            inputRowSchema[sideIdx].get()->childAt(columnIndex), fieldName);
-        if (nestedIndices.empty())
-          continue;
-        precomputeInstructions[sideIdx].get().emplace_back(
-            columnIndex, instruction, newColumnIndex, nestedIndices);
-      }
-      auto side = static_cast<cudf::ast::table_reference>(sideIdx);
-      return tree.push(cudf::ast::column_reference(newColumnIndex, side));
+      return addPrecomputeInstructionOnSide(
+          sideIdx, columnIndex, instruction, fieldName, expr);
     }
   }
   VELOX_FAIL("Field not found, " + name);
@@ -602,13 +618,8 @@ cudf::ast::expression const& AstContext::pushExprToTree(
     return addPrecomputeInstruction(fieldExpr->name(), likeExpr);
   } else if (name == "cardinality") {
     VELOX_CHECK_EQ(len, 1);
-
-    auto fieldExpr =
-        std::dynamic_pointer_cast<FieldReference>(expr->inputs()[0]);
-    VELOX_CHECK_NOT_NULL(fieldExpr, "Expression is not a field");
-
     auto const& colRef =
-        addPrecomputeInstruction(fieldExpr->name(), "cardinality");
+        addPrecomputeInstructionOnSide(0, 0, "cardinality", "", expr);
 
     return tree.push(Operation{Op::CAST_TO_INT64, colRef});
   } else if (name == "split") {
@@ -617,19 +628,7 @@ cudf::ast::expression const& AstContext::pushExprToTree(
         std::dynamic_pointer_cast<FieldReference>(expr->inputs()[0]);
     VELOX_CHECK_NOT_NULL(fieldExpr, "Expression is not a field");
 
-    auto splitLiteralExpr =
-        std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[1]);
-    VELOX_CHECK_NOT_NULL(splitLiteralExpr, "Expression is not a literal");
-
-    createLiteral(splitLiteralExpr->value(), scalars);
-
-    auto maxsplitLiteral =
-        std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[2]);
-    auto splitExpr = fmt::format(
-        "split {} {}",
-        scalars.size() - 1,
-        maxsplitLiteral->value()->toString(0));
-    return addPrecomputeInstruction(fieldExpr->name(), splitExpr);
+    return addPrecomputeInstruction(fieldExpr->name(), "split", "", expr);
   } else if (auto fieldExpr = std::dynamic_pointer_cast<FieldReference>(expr)) {
     // Refer to the appropriate side
     const auto fieldName =
@@ -655,17 +654,80 @@ cudf::ast::expression const& AstContext::pushExprToTree(
   }
 }
 
+std::unique_ptr<cudf::column> computeExpression(
+    const std::shared_ptr<velox::exec::Expr>& expr,
+    const cudf::table_view& inputTableView,
+    const RowTypePtr& inputRowSchema,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  using velox::exec::ConstantExpr;
+  using velox::exec::FieldReference;
+  std::vector<std::unique_ptr<cudf::scalar>> scalars;
+
+  if (auto fieldExpr = std::dynamic_pointer_cast<FieldReference>(expr)) {
+    auto name = fieldExpr->name();
+    auto columnIndex = inputRowSchema->getChildIdx(name);
+    return std::make_unique<cudf::column>(
+        inputTableView.column(columnIndex), stream, mr);
+  }
+
+  if (auto constExpr = std::dynamic_pointer_cast<ConstantExpr>(expr)) {
+    createLiteral(constExpr->value(), scalars);
+    return cudf::make_column_from_scalar(
+        *scalars.back(), inputTableView.num_rows(), stream, mr);
+  }
+
+  const auto name =
+      stripPrefix(expr->name(), CudfOptions::getInstance().prefix());
+
+  if (name == "cardinality") {
+    VELOX_CHECK_EQ(expr->inputs().size(), 1);
+    auto inputCol = computeExpression(
+        expr->inputs()[0], inputTableView, inputRowSchema, stream, mr);
+    return cudf::lists::count_elements(inputCol->view(), stream, mr);
+  }
+
+  if (name == "split") {
+    VELOX_CHECK_EQ(expr->inputs().size(), 3);
+    auto dataCol = computeExpression(
+        expr->inputs()[0], inputTableView, inputRowSchema, stream, mr);
+
+    auto delimiterExpr =
+        std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[1]);
+    VELOX_CHECK_NOT_NULL(delimiterExpr, "split delimiter must be a constant");
+    auto scalarsSize = scalars.size();
+    createLiteral(delimiterExpr->value(), scalars);
+    VELOX_CHECK_EQ(scalars.size(), scalarsSize + 1);
+    auto& delimiterScalar =
+        *static_cast<cudf::string_scalar*>(scalars.back().get());
+
+    auto limitExpr = std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[2]);
+    VELOX_CHECK_NOT_NULL(limitExpr, "split limit must be a constant");
+    auto maxSplitCount = std::stoll(limitExpr->value()->toString(0));
+    // Presto specifies maxSplitCount as the maximum size of the returned array
+    // while cuDF understands the parameter as how many splits can it perform.
+    maxSplitCount -= 1;
+
+    return cudf::strings::split_record(
+        dataCol->view(), delimiterScalar, maxSplitCount, stream, mr);
+  }
+
+  VELOX_FAIL("Unsupported expression for recursive evaluation: " + name);
+}
+
 void addPrecomputedColumns(
     std::vector<std::unique_ptr<cudf::column>>& input_table_columns,
     const std::vector<PrecomputeInstruction>& precompute_instructions,
     const std::vector<std::unique_ptr<cudf::scalar>>& scalars,
+    const RowTypePtr& inputRowSchema,
     rmm::cuda_stream_view stream) {
   for (const auto& instruction : precompute_instructions) {
     auto
         [dependent_column_index,
          ins_name,
          new_column_index,
-         nested_dependent_column_indices] = instruction;
+         nested_dependent_column_indices,
+         expr] = instruction;
     if (ins_name == "year") {
       auto newColumn = cudf::datetime::extract_datetime_component(
           input_table_columns[dependent_column_index]->view(),
@@ -742,25 +804,31 @@ void addPrecomputedColumns(
           cudf::get_current_device_resource_ref());
       input_table_columns.emplace_back(std::move(newColumn));
     } else if (ins_name == "cardinality") {
-      auto newColumn = cudf::lists::count_elements(
-          input_table_columns[dependent_column_index]->view(),
+      // Create a table_view from the input columns
+      std::vector<cudf::column_view> columnViews;
+      columnViews.reserve(input_table_columns.size());
+      for (const auto& col : input_table_columns) {
+        columnViews.push_back(col->view());
+      }
+      cudf::table_view inputTableView(columnViews);
+      auto newColumn = computeExpression(
+          expr,
+          inputTableView,
+          inputRowSchema,
           stream,
           cudf::get_current_device_resource_ref());
       input_table_columns.emplace_back(std::move(newColumn));
     } else if (ins_name.rfind("split", 0) == 0) {
-      VELOX_CHECK_GT(ins_name.length(), 5);
-      std::istringstream iss(ins_name.substr(5));
-      int scalarIndex, maxSplitCount;
-      iss >> scalarIndex >> maxSplitCount;
-      VELOX_CHECK(!iss.fail(), "Unable to parse scalarIndex and maxSplitCount");
-      // Presto specifies maxSplitCount as the maximum size of the returned
-      // array while cuDF understands the parameter as how many splits can it
-      // perform.
-      maxSplitCount -= 1;
-      auto newColumn = cudf::strings::split_record(
-          input_table_columns[dependent_column_index]->view(),
-          *static_cast<cudf::string_scalar*>(scalars[scalarIndex].get()),
-          maxSplitCount,
+      std::vector<cudf::column_view> columnViews;
+      columnViews.reserve(input_table_columns.size());
+      for (const auto& col : input_table_columns) {
+        columnViews.push_back(col->view());
+      }
+      cudf::table_view inputTableView(columnViews);
+      auto newColumn = computeExpression(
+          expr,
+          inputTableView,
+          inputRowSchema,
           stream,
           cudf::get_current_device_resource_ref());
       input_table_columns.emplace_back(std::move(newColumn));
@@ -772,7 +840,8 @@ void addPrecomputedColumns(
 
 ExpressionEvaluator::ExpressionEvaluator(
     const std::vector<std::shared_ptr<velox::exec::Expr>>& exprs,
-    const RowTypePtr& inputRowSchema) {
+    const RowTypePtr& inputRowSchema)
+    : inputRowSchema_(inputRowSchema) {
   exprAst_.reserve(exprs.size());
   for (const auto& expr : exprs) {
     cudf::ast::tree tree;
@@ -794,7 +863,11 @@ std::vector<std::unique_ptr<cudf::column>> ExpressionEvaluator::compute(
     rmm::device_async_resource_ref mr) {
   auto numColumns = inputTableColumns.size();
   addPrecomputedColumns(
-      inputTableColumns, precomputeInstructions_, scalars_, stream);
+      inputTableColumns,
+      precomputeInstructions_,
+      scalars_,
+      inputRowSchema_,
+      stream);
   auto astInputTable =
       std::make_unique<cudf::table>(std::move(inputTableColumns));
   auto astInputTableView = astInputTable->view();

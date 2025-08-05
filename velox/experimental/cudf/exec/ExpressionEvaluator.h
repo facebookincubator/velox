@@ -35,21 +35,31 @@ struct PrecomputeInstruction {
   std::string ins_name;
   int new_column_index;
   std::vector<int> nested_dependent_column_indices;
+  std::shared_ptr<velox::exec::Expr> expr;
 
   // Constructor to initialize the struct with values
-  PrecomputeInstruction(int depIndex, const std::string& name, int newIndex)
-      : dependent_column_index(depIndex),
-        ins_name(name),
-        new_column_index(newIndex) {}
   PrecomputeInstruction(
       int depIndex,
       const std::string& name,
       int newIndex,
-      const std::vector<int>& nestedIndices)
+      const std::shared_ptr<velox::exec::Expr>& expr = nullptr)
       : dependent_column_index(depIndex),
         ins_name(name),
         new_column_index(newIndex),
-        nested_dependent_column_indices(nestedIndices) {}
+        expr(expr) {}
+
+  // TODO (dm): This two ctor situation is crazy.
+  PrecomputeInstruction(
+      int depIndex,
+      const std::string& name,
+      int newIndex,
+      const std::vector<int>& nestedIndices,
+      const std::shared_ptr<velox::exec::Expr>& expr = nullptr)
+      : dependent_column_index(depIndex),
+        ins_name(name),
+        new_column_index(newIndex),
+        nested_dependent_column_indices(nestedIndices),
+        expr(expr) {}
 };
 
 cudf::ast::expression const& createAstTree(
@@ -67,12 +77,6 @@ cudf::ast::expression const& createAstTree(
     const RowTypePtr& rightRowSchema,
     std::vector<PrecomputeInstruction>& leftPrecomputeInstructions,
     std::vector<PrecomputeInstruction>& rightPrecomputeInstructions);
-
-void addPrecomputedColumns(
-    std::vector<std::unique_ptr<cudf::column>>& inputTableColumns,
-    const std::vector<PrecomputeInstruction>& precomputeInstructions,
-    const std::vector<std::unique_ptr<cudf::scalar>>& scalars,
-    rmm::cuda_stream_view stream);
 
 // Evaluates the expression tree
 class ExpressionEvaluator {
@@ -102,6 +106,7 @@ class ExpressionEvaluator {
   // supported operations in expressions
   // <dependent_column_index, "instruction", new_column_index>
   std::vector<PrecomputeInstruction> precomputeInstructions_;
+  RowTypePtr inputRowSchema_;
 };
 
 } // namespace facebook::velox::cudf_velox
