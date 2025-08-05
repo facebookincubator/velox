@@ -277,8 +277,10 @@ addToTimestamp(const Timestamp& timestamp, DateTimeUnit unit, int32_t value) {
         std::chrono::microseconds(timestamp.toMicros()));
     const std::chrono::time_point<std::chrono::system_clock> outMicroTimestamp =
         inMicroTimestamp + std::chrono::microseconds(value);
-    const Timestamp microTimestamp =
-        Timestamp::fromMicros(outMicroTimestamp.time_since_epoch().count());
+    const Timestamp microTimestamp = Timestamp::fromMicros(
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            outMicroTimestamp.time_since_epoch())
+            .count());
     return Timestamp(
         microTimestamp.getSeconds(),
         microTimestamp.getNanos() +
