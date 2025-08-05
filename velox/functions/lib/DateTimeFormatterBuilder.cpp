@@ -174,7 +174,8 @@ DateTimeFormatterBuilder& DateTimeFormatterBuilder::appendFractionOfSecond(
 }
 
 DateTimeFormatterBuilder&
-DateTimeFormatterBuilder::setFractionOfSecondPrecision(FractionOfSecondPrecision fractionOfSecondPrecision) {
+DateTimeFormatterBuilder::setFractionOfSecondPrecision(
+    FractionOfSecondPrecision fractionOfSecondPrecision) {
   fractionOfSecondPrecision_ = fractionOfSecondPrecision;
   return *this;
 }
