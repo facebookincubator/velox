@@ -248,7 +248,7 @@ class DateTimeFormatterBuilder {
   /// be 9870, with digit being 6 the formatted result will be 987000
   DateTimeFormatterBuilder& appendFractionOfSecond(size_t digits);
 
-  DateTimeFormatterBuilder& truncateFractionOfSecondToMillis(bool truncate);
+  DateTimeFormatterBuilder& setFractionOfSecondPrecision(FractionOfSecondPrecision fractionOfSecondPrecision);
 
   /// Appends time zone to formatter builder, e.g: 'Pacific Standard Time' or
   /// 'PST'
@@ -283,7 +283,7 @@ class DateTimeFormatterBuilder {
   size_t bufEnd_{0};
   std::vector<DateTimeToken> tokens_;
   DateTimeFormatterType type_{DateTimeFormatterType::UNKNOWN};
-  bool truncateFractionOfSecondToMillis_{true};
+  FractionOfSecondPrecision fractionOfSecondPrecision_;
 };
 
 } // namespace facebook::velox::functions

@@ -135,6 +135,12 @@ FOLLY_ALWAYS_INLINE bool isTimeUnit(const DateTimeUnit unit) {
   return unit < DateTimeUnit::kDay;
 }
 
+enum class FractionOfSecondPrecision {
+  kSecond,
+  kMillisecond,
+    kMicrosecond
+};
+
 struct FormatPattern {
   DateTimeFormatSpecifier specifier;
 
@@ -189,12 +195,12 @@ class DateTimeFormatter {
       size_t bufSize,
       std::vector<DateTimeToken>&& tokens,
       DateTimeFormatterType type,
-      bool truncateFractionOfSecondToMillis)
+      FractionOfSecondPrecision fractionOfSecondPrecision)
       : literalBuf_(std::move(literalBuf)),
         bufSize_(bufSize),
         tokens_(std::move(tokens)),
         type_(type),
-        truncateFractionOfSecondToMillis_(truncateFractionOfSecondToMillis) {}
+        fractionOfSecondPrecision_(fractionOfSecondPrecision) {}
 
   const std::unique_ptr<char[]>& literalBuf() const {
     return literalBuf_;
@@ -239,7 +245,7 @@ class DateTimeFormatter {
   size_t bufSize_;
   std::vector<DateTimeToken> tokens_;
   DateTimeFormatterType type_;
-  bool truncateFractionOfSecondToMillis_;
+  FractionOfSecondPrecision fractionOfSecondPrecision_;
 };
 
 Expected<std::shared_ptr<DateTimeFormatter>> buildMysqlDateTimeFormatter(
@@ -247,7 +253,7 @@ Expected<std::shared_ptr<DateTimeFormatter>> buildMysqlDateTimeFormatter(
 
 Expected<std::shared_ptr<DateTimeFormatter>> buildJodaDateTimeFormatter(
     const std::string_view& format,
-    bool truncateFractionOfSecondToMillis = true);
+    FractionOfSecondPrecision fractionOfSecondPrecision = FractionOfSecondPrecision::kMicrosecond);
 
 Expected<std::shared_ptr<DateTimeFormatter>> buildSimpleDateTimeFormatter(
     const std::string_view& format,
