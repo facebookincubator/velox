@@ -24,44 +24,15 @@ function(get_rpath_origin VAR)
 endfunction()
 
 function(pyvelox_add_module TARGET)
-  pybind11_add_module(${TARGET} ${ARGN})
-
-  if(DEFINED SKBUILD_PROJECT_VERSION_FULL)
-    target_compile_definitions(
-      ${TARGET} PRIVATE PYVELOX_VERSION=${SKBUILD_PROJECT_VERSION_FULL})
-  else()
-    target_compile_definitions(${TARGET} PRIVATE PYVELOX_VERSION=dev)
-  endif()
-
-  # Set the rpath so linker looks within pyvelox package for libs
-  get_rpath_origin(_origin)
-  set_target_properties(
-    ${TARGET} PROPERTIES INSTALL_RPATH "${_origin}/;${CMAKE_BINARY_DIR}/lib"
-                         INSTALL_RPATH_USE_LINK_PATH TRUE)
-  install(TARGETS ${TARGET} LIBRARY DESTINATION pyvelox
-                                    COMPONENT pyvelox_libraries)
 endfunction()
 
 # TODO use file sets
 function(velox_install_library_headers)
-  # Find any headers and install them relative to the source tree in include.
-  file(GLOB _hdrs "*.h")
-  if(NOT "${_hdrs}" STREQUAL "")
-    cmake_path(
-      RELATIVE_PATH
-      CMAKE_CURRENT_SOURCE_DIR
-      BASE_DIRECTORY
-      "${CMAKE_SOURCE_DIR}"
-      OUTPUT_VARIABLE
-      _hdr_dir)
-    install(FILES ${_hdrs} DESTINATION include/${_hdr_dir})
-  endif()
 endfunction()
 
 # Base add velox library call to add a library and install it.
 function(velox_base_add_library TARGET)
   add_library(${TARGET} ${ARGN})
-  install(TARGETS ${TARGET} DESTINATION lib/velox)
   velox_install_library_headers()
 endfunction()
 
@@ -98,8 +69,6 @@ function(velox_add_library TARGET)
     if(TARGET velox)
       # Target already exists, append sources to it.
       target_sources(velox PRIVATE ${ARGN})
-      install(TARGETS velox LIBRARY DESTINATION pyvelox
-                                    COMPONENT pyvelox_libraries)
     else()
       set(_type STATIC)
       if(VELOX_BUILD_SHARED)
@@ -111,7 +80,6 @@ function(velox_add_library TARGET)
                                              ${PROJECT_BINARY_DIR}/lib)
       set_target_properties(velox PROPERTIES ARCHIVE_OUTPUT_DIRECTORY
                                              ${PROJECT_BINARY_DIR}/lib)
-      install(TARGETS velox DESTINATION lib/velox)
     endif()
     # create alias for compatability
     if(NOT TARGET ${TARGET})

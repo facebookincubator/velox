@@ -641,9 +641,6 @@ endif()
 find_package(BISON 3.0.4 REQUIRED)
 find_package(FLEX 2.5.13 REQUIRED)
 
-include_directories(SYSTEM velox)
-include_directories(SYSTEM velox/external)
-
 if(NOT VELOX_DISABLE_GOOGLETEST)
   velox_set_source(GTest)
   velox_resolve_dependency(GTest)
@@ -662,12 +659,6 @@ if(VELOX_BUILD_TESTING)
   set(BUILD_TESTING ON)
   include(CTest) # include after project() but before add_subdirectory()
 endif()
-
-include_directories(.)
-
-# TODO: Include all other installation files. For now just making sure this
-# generates an installable makefile.
-install(FILES velox/type/Type.h DESTINATION "include/velox")
 
 # Adding this down here prevents warnings in dependencies from stopping the
 # build
