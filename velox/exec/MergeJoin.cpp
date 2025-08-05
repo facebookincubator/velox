@@ -461,13 +461,13 @@ bool MergeJoin::prepareOutput(
       return true;
     }
 
-    if (isRightJoin(joinType_) && right != currentRight_) {
-      return true;
-    }
-
     // If there is a new right, we need to flatten the dictionary.
     if (!isRightFlattened_ && right && currentRight_ != right) {
       flattenRightProjections();
+    }
+
+    if (right != currentRight_) {
+      return true;
     }
     return false;
   }
@@ -491,11 +491,15 @@ bool MergeJoin::prepareOutput(
     }
   } else {
     for (const auto& projection : leftProjections_) {
+      auto leftColumn = left->childAt(projection.inputChannel);
+      // Flatten the left column if the column already is DictionaryVector.
+      if (leftColumn->wrappedVector()->encoding() ==
+          VectorEncoding::Simple::DICTIONARY) {
+        BaseVector::flattenVector(leftColumn);
+      }
+
       localColumns[projection.outputChannel] = BaseVector::wrapInDictionary(
-          {},
-          leftOutputIndices_,
-          outputBatchSize_,
-          left->childAt(projection.inputChannel));
+          {}, leftOutputIndices_, outputBatchSize_, leftColumn);
     }
   }
   currentLeft_ = left;
@@ -1178,7 +1182,7 @@ RowVectorPtr MergeJoin::doGetOutput() {
           isFullJoin(joinType_)) {
         // If output_ is currently wrapping a different buffer, return it
         // first.
-        if (prepareOutput(input_, nullptr)) {
+        if (prepareOutput(input_, rightInput_)) {
           output_->resize(outputSize_);
           return std::move(output_);
         }
@@ -1203,7 +1207,7 @@ RowVectorPtr MergeJoin::doGetOutput() {
       if (isRightJoin(joinType_) || isFullJoin(joinType_)) {
         // If output_ is currently wrapping a different buffer, return it
         // first.
-        if (prepareOutput(nullptr, rightInput_)) {
+        if (prepareOutput(input_, rightInput_)) {
           output_->resize(outputSize_);
           return std::move(output_);
         }
