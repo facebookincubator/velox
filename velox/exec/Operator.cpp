@@ -681,6 +681,8 @@ void Operator::MemoryReclaimer::enterArbitration() {
     // is not issued from a driver thread. For example, async streaming shuffle
     // and table scan prefetch execution path might initiate memory arbitration
     // request from non-driver thread.
+    LOG(WARNING)
+        << "================ driverThreadCtx == nullptr --- ENTER ARBITRATION";
     return;
   }
 
@@ -699,12 +701,15 @@ void Operator::MemoryReclaimer::enterArbitration() {
           "The current running driver and the request driver must be from the same task");
     }
   }
+  LOG(WARNING) << "================= SUSPENDING driver ";
   if (runningDriver->task()->enterSuspended(runningDriver->state()) !=
       StopReason::kNone) {
+    LOG(WARNING) << "================= != enterSuspended not having kNone";
     // There is no need for arbitration if the associated task has already
     // terminated.
     VELOX_FAIL("Terminate detected when entering suspension");
   }
+  LOG(WARNING) << "================= driver SUSPENDED";
 }
 
 void Operator::MemoryReclaimer::leaveArbitration() noexcept {
@@ -712,6 +717,8 @@ void Operator::MemoryReclaimer::leaveArbitration() noexcept {
   if (FOLLY_UNLIKELY(driverThreadCtx == nullptr)) {
     // Skips the driver suspension handling if this memory arbitration request
     // is not issued from a driver thread.
+    LOG(WARNING)
+        << "================ driverThreadCtx == nullptr --- LEAVE ARBITRATION";
     return;
   }
   Driver* const runningDriver = driverThreadCtx->driverCtx()->driver;
@@ -723,7 +730,9 @@ void Operator::MemoryReclaimer::leaveArbitration() noexcept {
           "The current running driver and the request driver must be from the same task");
     }
   }
+  LOG(WARNING) << "================= RESUMING driver ";
   runningDriver->task()->leaveSuspended(runningDriver->state());
+  LOG(WARNING) << "================= driver RESUMED";
 }
 
 bool Operator::MemoryReclaimer::reclaimableBytes(
