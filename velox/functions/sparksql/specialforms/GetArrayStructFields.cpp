@@ -39,19 +39,22 @@ class GetArrayStructFieldsFunction : public exec::VectorFunction {
     auto elements = decodedElement.base()->as<RowVector>();
     auto fieldVector = elements->childAt(ordinal_);
 
-    VectorPtr fieldResult;
+    VectorPtr fieldResult = fieldVector;
     if (elements->mayHaveNulls()) {
-      auto indices = AlignedBuffer::allocate<vector_size_t>(
-          elements->size(), context.pool(), 0);
-      auto rawIndices = indices->asMutable<vector_size_t>();
-      for (int32_t i = 0; i < elements->size(); ++i) {
-        rawIndices[i] = i;
-      }
+      auto size = elements->size();
+      auto indices =
+          AlignedBuffer::allocate<vector_size_t>(size, context.pool());
+      std::iota(
+          indices->asMutable<vector_size_t>(),
+          indices->asMutable<vector_size_t>() + size,
+          0);
+
+      // Wrap field with nulls from elements.
       fieldResult = BaseVector::wrapInDictionary(
-          elements->nulls(), indices, elements->size(), fieldVector);
-    } else {
-      fieldResult = fieldVector;
+          elements->nulls(), indices, size, fieldResult);
     }
+
+    // Apply element decoding if needed.
     if (!decodedElement.isIdentityMapping()) {
       fieldResult = decodedElement.wrap(
           fieldResult, *arrayVec->elements(), decodedElement.size());
