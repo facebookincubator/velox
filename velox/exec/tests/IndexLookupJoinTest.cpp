@@ -18,6 +18,7 @@
 #include "folly/experimental/EventCount.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest-matchers.h"
+#include "velox/common/base/PeriodicStatsReporter.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/Connector.h"
@@ -97,9 +98,11 @@ class IndexLookupJoinTest : public IndexLookupJoinTestBase,
     probeType_ = ROW(
         {"t0", "t1", "t2", "t3", "t4", "t5"},
         {BIGINT(), BIGINT(), BIGINT(), BIGINT(), ARRAY(BIGINT()), VARCHAR()});
+    stopPeriodicStatsReporter();
   }
 
   void TearDown() override {
+    startPeriodicStatsReporter({});
     connector::unregisterConnectorFactory(kTestIndexConnectorName);
     connector::unregisterConnector(kTestIndexConnectorName);
     HiveConnectorTestBase::TearDown();
@@ -1181,7 +1184,7 @@ TEST_P(IndexLookupJoinTest, betweenJoinCondition) {
         GetParam().hasNullKeys,
         {},
         {{"t2", "t3"}},
-        /*eqaulityMatchPct=*/80,
+        /*equalMatchPct=*/80,
         /*inColumns=*/std::nullopt,
         testData.betweenMatchPct);
     std::vector<std::shared_ptr<TempFilePath>> probeFiles =
@@ -1505,7 +1508,7 @@ TEST_P(IndexLookupJoinTest, inJoinCondition) {
         GetParam().hasNullKeys,
         {{"t4"}},
         {},
-        /*eqaulityMatchPct=*/80,
+        /*equalMatchPct=*/80,
         testData.inMatchPct);
     std::vector<std::shared_ptr<TempFilePath>> probeFiles =
         createProbeFiles(probeVectors);
@@ -1765,7 +1768,7 @@ TEST_P(IndexLookupJoinTest, prefixKeysbetweenJoinCondition) {
         GetParam().hasNullKeys,
         {},
         {{"t1", "t2"}},
-        /*eqaulityMatchPct=*/80,
+        /*equalMatchPct=*/80,
         /*inColumns=*/std::nullopt,
         testData.betweenMatchPct);
     std::vector<std::shared_ptr<TempFilePath>> probeFiles =
@@ -1889,7 +1892,7 @@ TEST_P(IndexLookupJoinTest, prefixInJoinCondition) {
         GetParam().hasNullKeys,
         {{"t4"}},
         {},
-        /*eqaulityMatchPct=*/80,
+        /*equalMatchPct=*/80,
         testData.inMatchPct);
     std::vector<std::shared_ptr<TempFilePath>> probeFiles =
         createProbeFiles(probeVectors);
@@ -2373,9 +2376,6 @@ DEBUG_ONLY_TEST_P(IndexLookupJoinTest, runtimeStats) {
 }
 
 TEST_P(IndexLookupJoinTest, barrier) {
-  if (!GetParam().serialExecution) {
-    GTEST_SKIP();
-  }
   SequenceTableData tableData;
   generateIndexTableData({100, 1, 1}, tableData, pool_);
   const int numProbeSplits{5};

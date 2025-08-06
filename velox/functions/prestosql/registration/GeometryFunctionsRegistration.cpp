@@ -69,6 +69,8 @@ void registerOverlayOperations(const std::string& prefix) {
       {{prefix + "ST_SymDifference"}});
   registerFunction<StUnionFunction, Geometry, Geometry, Geometry>(
       {{prefix + "ST_Union"}});
+  registerFunction<StEnvelopeAsPtsFunction, Array<Geometry>, Geometry>(
+      {{prefix + "ST_EnvelopeAsPts"}});
 }
 
 void registerAccessors(const std::string& prefix) {
@@ -132,6 +134,15 @@ void registerAccessors(const std::string& prefix) {
       prefix + "ST_CoordDim",
       StCoordDimFunction::signatures(),
       std::make_unique<StCoordDimFunction>());
+  registerFunction<StPointsFunction, Array<Geometry>, Geometry>(
+      {{prefix + "ST_Points"}});
+  registerFunction<StNumPointsFunction, int32_t, Geometry>(
+      {{prefix + "ST_NumPoints"}});
+  registerFunction<
+      GeometryNearestPointsFunction,
+      Array<Geometry>,
+      Geometry,
+      Geometry>({{prefix + "geometry_nearest_points"}});
 }
 
 } // namespace
