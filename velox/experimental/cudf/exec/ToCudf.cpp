@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/connectors/parquet/ParquetDataSource.h"
 #include "velox/experimental/cudf/exec/CudfConversion.h"
 #include "velox/experimental/cudf/exec/CudfFilterProject.h"
 #include "velox/experimental/cudf/exec/CudfHashAggregation.h"
@@ -25,6 +26,8 @@
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 
+#include "velox/connectors/hive/HiveConnector.h"
+#include "velox/connectors/hive/TableHandle.h"
 #include "velox/exec/Driver.h"
 #include "velox/exec/FilterProject.h"
 #include "velox/exec/HashAggregation.h"
@@ -94,8 +97,7 @@ bool CompileState::compile() {
       facebook::velox::connector::getAllConnectors().count("test-parquet") > 0;
   auto isTableScanSupported =
       [isParquetConnectorRegistered](const exec::Operator* op) {
-        return isAnyOf<exec::TableScan>(op) && isParquetConnectorRegistered &&
-            cudfTableScanEnabled();
+        return isAnyOf<exec::TableScan>(op) && cudfTableScanEnabled();
       };
 
   auto isFilterProjectSupported = [](const exec::Operator* op) {
@@ -326,6 +328,41 @@ void registerCudf(const CudfOptions& options) {
   }
   if (!options.cudfEnabled) {
     return;
+  }
+
+  // Register delegate so HiveConnector can create GPU Parquet reader.
+  if (cudfTableScanEnabled()) {
+    facebook::velox::connector::hive::HiveConnector::registerDataSourceDelegate(
+        [](const facebook::velox::RowTypePtr& outputType,
+           const facebook::velox::connector::ConnectorTableHandlePtr&
+               tableHandle,
+           const facebook::velox::connector::ColumnHandleMap& columnHandles,
+           facebook::velox::FileHandleFactory* /*fileHandleFactory*/,
+           folly::Executor* executor,
+           facebook::velox::connector::ConnectorQueryCtx* connectorQueryCtx,
+           const std::shared_ptr<
+               const facebook::velox::connector::hive::HiveConfig>& hiveConfig)
+            -> std::unique_ptr<facebook::velox::connector::DataSource> {
+          auto hiveHandle = std::dynamic_pointer_cast<
+              const facebook::velox::connector::hive::HiveTableHandle>(
+              tableHandle);
+          if (!hiveHandle) {
+            return nullptr;
+          }
+
+          auto parquetConfig = std::make_shared<
+              facebook::velox::cudf_velox::connector::parquet::ParquetConfig>(
+              hiveConfig->config());
+
+          return std::make_unique<facebook::velox::cudf_velox::connector::
+                                      parquet::ParquetDataSource>(
+              outputType,
+              tableHandle,
+              columnHandles,
+              executor,
+              connectorQueryCtx,
+              parquetConfig);
+        });
   }
 
   CUDF_FUNC_RANGE();

@@ -33,6 +33,7 @@ namespace facebook::velox::exec::test {
 
 struct PushdownConfig {
   common::SubfieldFilters subfieldFiltersMap;
+  std::string remainingFilter;
 };
 
 /// A builder class with fluent API for building query plans. Plans are built
@@ -175,14 +176,12 @@ class PlanBuilder {
   ///
   /// @param outputType List of column names and types to read from the table.
   /// @param PushdownConfig Contains pushdown configs for the table scan.
-  /// @param remainingFilter SQL expression for the additional conjunct.
   /// @param dataColumns Optional data columns that may differ from outputType.
   /// @param assignments Optional ColumnHandles.
 
   PlanBuilder& tableScanWithPushDown(
       const RowTypePtr& outputType,
       const PushdownConfig& pushdownConfig,
-      const std::string& remainingFilter = "",
       const RowTypePtr& dataColumns = nullptr,
       const connector::ColumnHandleMap& assignments = {});
 
@@ -321,7 +320,6 @@ class PlanBuilder {
     std::string tableName_{"hive_table"};
     std::string connectorId_{kHiveDefaultConnectorId};
     RowTypePtr outputType_;
-    std::vector<core::ExprPtr> subfieldFilters_;
     core::ExprPtr remainingFilter_;
     RowTypePtr dataColumns_;
     std::unordered_map<std::string, std::string> columnAliases_;

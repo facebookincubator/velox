@@ -18,13 +18,13 @@
 
 #include "velox/experimental/cudf/connectors/parquet/ParquetConfig.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetConnectorSplit.h"
-#include "velox/experimental/cudf/connectors/parquet/ParquetTableHandle.h"
 #include "velox/experimental/cudf/exec/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
 
 #include "velox/common/base/RandomUtil.h"
 #include "velox/common/io/IoStatistics.h"
 #include "velox/connectors/Connector.h"
+#include "velox/connectors/hive/TableHandle.h"
 #include "velox/dwio/common/Statistics.h"
 #include "velox/type/Type.h"
 
@@ -62,6 +62,10 @@ class ParquetDataSource : public DataSource, public NvtxHelper {
     return completedRows_;
   }
 
+  const common::SubfieldFilters* getFilters() const override {
+    return &subfieldFilters_;
+  }
+
   uint64_t getCompletedBytes() override {
     return completedBytes_;
   }
@@ -89,7 +93,7 @@ class ParquetDataSource : public DataSource, public NvtxHelper {
   RowVectorPtr emptyOutput_;
 
   std::shared_ptr<ParquetConnectorSplit> split_;
-  std::shared_ptr<const ParquetTableHandle> tableHandle_;
+  std::shared_ptr<const hive::HiveTableHandle> tableHandle_;
 
   const std::shared_ptr<ParquetConfig> parquetConfig_;
 
@@ -131,7 +135,6 @@ class ParquetDataSource : public DataSource, public NvtxHelper {
   std::vector<std::unique_ptr<cudf::scalar>> subfieldScalars_;
   std::vector<const cudf::ast::expression*> subfieldFilterExprs_;
   cudf::ast::tree subfieldTree_;
-  std::unique_ptr<exec::ExprSet> subfieldFilterExprSet_;
   common::SubfieldFilters subfieldFilters_;
 
   dwio::common::RuntimeStatistics runtimeStats_;

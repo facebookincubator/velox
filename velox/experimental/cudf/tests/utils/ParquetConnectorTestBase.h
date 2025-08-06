@@ -20,8 +20,9 @@
 #include "velox/experimental/cudf/connectors/parquet/ParquetConnector.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetDataSink.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetDataSource.h"
-#include "velox/experimental/cudf/connectors/parquet/ParquetTableHandle.h"
 
+#include "velox/connectors/hive/HiveConnectorSplit.h"
+#include "velox/connectors/hive/TableHandle.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/TempFilePath.h"
@@ -81,8 +82,7 @@ class ParquetConnectorTestBase
   static std::vector<std::shared_ptr<facebook::velox::exec::test::TempFilePath>>
   makeFilePaths(int count);
 
-  static std::shared_ptr<
-      facebook::velox::cudf_velox::connector::parquet::ParquetConnectorSplit>
+  static std::shared_ptr<facebook::velox::connector::hive::HiveConnectorSplit>
   makeParquetConnectorSplit(
       const std::string& filePath,
       int64_t splitWeight = 0);
@@ -94,21 +94,22 @@ class ParquetConnectorTestBase
           std::shared_ptr<facebook::velox::exec::test::TempFilePath>>&
           filePaths);
 
-  static std::vector<std::shared_ptr<connector::parquet::ParquetConnectorSplit>>
+  static std::vector<
+      std::shared_ptr<facebook::velox::connector::hive::HiveConnectorSplit>>
   makeParquetConnectorSplits(const std::string& filePath, uint32_t splitCount);
 
-  static std::shared_ptr<connector::parquet::ParquetTableHandle>
+  static std::shared_ptr<facebook::velox::connector::hive::HiveTableHandle>
   makeTableHandle(
       const std::string& tableName = "parquet_table",
       const RowTypePtr& dataColumns = nullptr,
       bool filterPushdownEnabled = false,
-      const core::TypedExprPtr& subfieldFilterExpr = nullptr,
+      common::SubfieldFilters subfieldFilters = {},
       const core::TypedExprPtr& remainingFilterExpr = nullptr) {
-    return std::make_shared<connector::parquet::ParquetTableHandle>(
-        kParquetConnectorId,
+    return std::make_shared<facebook::velox::connector::hive::HiveTableHandle>(
+        "hive",
         tableName,
         filterPushdownEnabled,
-        subfieldFilterExpr,
+        std::move(subfieldFilters),
         remainingFilterExpr,
         dataColumns);
   }
@@ -116,11 +117,22 @@ class ParquetConnectorTestBase
   /// @param name Column name.
   /// @param type Column type.
   /// @param Required subfields of this column.
-  static std::unique_ptr<connector::parquet::ParquetColumnHandle>
+  static std::shared_ptr<facebook::velox::connector::hive::HiveColumnHandle>
   makeColumnHandle(
       const std::string& name,
       const TypePtr& type,
-      const std::vector<connector::parquet::ParquetColumnHandle>& children);
+      facebook::velox::connector::hive::HiveColumnHandle::ColumnType
+          columnType = facebook::velox::connector::hive::HiveColumnHandle::
+              ColumnType::kRegular,
+      const std::vector<facebook::velox::common::Subfield>& requiredSubfields =
+          {}) {
+    return std::make_shared<facebook::velox::connector::hive::HiveColumnHandle>(
+        name,
+        columnType,
+        type,
+        type,
+        std::vector<facebook::velox::common::Subfield>{});
+  }
 
   /// @param name Column name.
   /// @param type Column type.

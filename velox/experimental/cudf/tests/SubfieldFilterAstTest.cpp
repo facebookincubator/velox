@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #include "velox/experimental/cudf/exec/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
@@ -108,6 +124,11 @@ class SubfieldFilterAstTest : public OperatorTestBase {
             veloxExpected = filter.testFloat(v);
             break;
           }
+          case TypeKind::BOOLEAN: {
+            auto v = fieldVec->asFlatVector<bool>()->valueAt(i);
+            veloxExpected = filter.testBool(v);
+            break;
+          }
           case TypeKind::VARCHAR: {
             auto sv = fieldVec->asFlatVector<StringView>()->valueAt(i);
             veloxExpected = filter.testBytes(sv.data(), sv.size());
@@ -211,8 +232,9 @@ TEST_F(SubfieldFilterAstTest, StringInList) {
   testFilterExecution(rowType, columnName, *filter, vec, expr);
 }
 
-TEST_F(SubfieldFilterAstTest, StringRangeNotSupported) {
-  auto rowType = ROW({{"c2", VARCHAR()}});
+TEST_F(SubfieldFilterAstTest, StringRange) {
+  const std::string columnName = "c2";
+  auto rowType = ROW({{columnName, VARCHAR()}});
   auto filter = std::make_unique<common::BytesRange>(
       "apple",
       /*lowerUnbounded*/ false,
@@ -222,33 +244,70 @@ TEST_F(SubfieldFilterAstTest, StringRangeNotSupported) {
       /*upperExclusive*/ false,
       /*nullAllowed*/ false);
 
-  common::Subfield subfield("c2");
+  // AST validation
+  common::Subfield subfield(columnName);
   cudf::ast::tree tree;
   std::vector<std::unique_ptr<cudf::scalar>> scalars;
+  const auto& expr =
+      createAstFromSubfieldFilter(subfield, *filter, tree, scalars, rowType);
+  ASSERT_GT(tree.size(), 0UL) << "No expressions created for test";
+  EXPECT_LE(scalars.size(), 2UL) << "Too many scalars for string range";
 
-  // BytesRange is not yet implemented, should throw
-  EXPECT_THROW(
-      {
-        createAstFromSubfieldFilter(subfield, *filter, tree, scalars, rowType);
-      },
-      VeloxRuntimeError);
+  // Execution validation
+  auto vec = makeTestVector(rowType, 100);
+  testFilterExecution(rowType, columnName, *filter, vec, expr);
 }
 
-TEST_F(SubfieldFilterAstTest, BoolValueNotSupported) {
-  auto rowType = ROW({{"flag", BOOLEAN()}});
+// Single value string range test
+TEST_F(SubfieldFilterAstTest, StringRangeSingleValue) {
+  const std::string columnName = "c2";
+  auto rowType = ROW({{columnName, VARCHAR()}});
+
+  // Define a single-value range where lower == upper.
+  auto filter = std::make_unique<common::BytesRange>(
+      "banana",
+      /*lowerUnbounded*/ false,
+      /*lowerExclusive*/ false,
+      "banana",
+      /*upperUnbounded*/ false,
+      /*upperExclusive*/ false,
+      /*nullAllowed*/ false);
+
+  // AST validation
+  common::Subfield subfield(columnName);
+  cudf::ast::tree tree;
+  std::vector<std::unique_ptr<cudf::scalar>> scalars;
+  const auto& expr =
+      createAstFromSubfieldFilter(subfield, *filter, tree, scalars, rowType);
+
+  EXPECT_GT(tree.size(), 0UL);
+  // Single value range should create exactly one scalar for equality
+  EXPECT_EQ(scalars.size(), 1UL)
+      << "Single value range should create 1 scalar for equality";
+
+  // Execution validation
+  auto vec = makeTestVector(rowType, 100);
+  testFilterExecution(rowType, columnName, *filter, vec, expr);
+}
+
+TEST_F(SubfieldFilterAstTest, BoolValue) {
+  const std::string columnName = "flag";
+  auto rowType = ROW({{columnName, BOOLEAN()}});
   auto filter =
       std::make_unique<common::BoolValue>(true, /*nullAllowed*/ false);
 
-  common::Subfield subfield("flag");
+  // AST validation
+  common::Subfield subfield(columnName);
   cudf::ast::tree tree;
   std::vector<std::unique_ptr<cudf::scalar>> scalars;
+  const auto& expr =
+      createAstFromSubfieldFilter(subfield, *filter, tree, scalars, rowType);
+  ASSERT_GT(tree.size(), 0UL) << "No expressions created for test";
+  EXPECT_LE(scalars.size(), 1UL) << "Too many scalars for bool value";
 
-  // BoolValue is not yet implemented, should throw
-  EXPECT_THROW(
-      {
-        createAstFromSubfieldFilter(subfield, *filter, tree, scalars, rowType);
-      },
-      VeloxRuntimeError);
+  // Execution validation
+  auto vec = makeTestVector(rowType, 100);
+  testFilterExecution(rowType, columnName, *filter, vec, expr);
 }
 
 // Single value range tests
