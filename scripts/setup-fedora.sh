@@ -51,12 +51,12 @@ function install_clang15 {
 # Install packages required for build.
 function install_build_prerequisites {
   dnf update -y
-  dnf_install  dnf-plugins-core # For ccache, ninja
+  dnf_install dnf-plugins-core # For ccache, ninja
   if grep -q CentOS /etc/os-release; then
     dnf config-manager --set-enabled crb
     dnf update -y
   fi
-  dnf_install autoconf automake ccache  git libtool \
+  dnf_install autoconf automake ccache git libtool \
     ninja-build python3-pip python3-devel wget which
 
   install_uv
