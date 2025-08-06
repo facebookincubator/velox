@@ -16,10 +16,7 @@ add_library(velox_cudf_vector CudfVector.cpp)
 
 set_target_properties(
   velox_cudf_vector
-  PROPERTIES
-    CUDA_ARCHITECTURES native
-    CXX_STANDARD ${VELOX_CUDF_CXX_STANDARD}
-    CXX_STANDARD_REQUIRED ${VELOX_CUDF_CXX_STANDARD_REQUIRED})
+  PROPERTIES CUDA_ARCHITECTURES native)
 
 target_link_libraries(
   velox_cudf_vector
@@ -27,6 +24,3 @@ target_link_libraries(
   velox_exception
   velox_common_base
   velox_vector)
-
-# Suppress warnings from included Velox headers when using C++20
-target_compile_options(velox_cudf_vector PRIVATE -Wno-deprecated)
