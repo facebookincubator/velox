@@ -16,7 +16,7 @@
 #pragma once
 
 #include <boost/random/uniform_01.hpp>
-#include "velox/expression/fuzzer/DecimalArgTypesGeneratorBase.h"
+#include "velox/expression/fuzzer/ArgTypesGenerator.h"
 
 namespace facebook::velox::exec::test {
 
@@ -26,13 +26,20 @@ class TruncateArgTypesGenerator : public fuzzer::ArgTypesGenerator {
       const exec::FunctionSignature& signature,
       const TypePtr& returnType,
       FuzzerGenerator& rng) override {
-    // Only the single-arg truncate function is supported because
-    // ArgumentTypeFuzzer can generate argument types for the two-arg truncate
-    // function.
-    VELOX_CHECK_EQ(1, signature.argumentTypes().size());
-    // Generates a decimal type following below formulas:
-    // p = max(p1 - s1, 1)
-    // s = 0
+    if (signature.argumentTypes().size() == 1) {
+      return generateSingleArg(returnType, rng);
+    }
+    VELOX_CHECK_EQ(2, signature.argumentTypes().size());
+    return generateTwoArgs(returnType);
+  }
+
+ private:
+  // Generates a decimal type following below formulas:
+  // p = max(p1 - s1, 1)
+  // s = 0
+  std::vector<TypePtr> generateSingleArg(
+      const TypePtr& returnType,
+      FuzzerGenerator& rng) {
     const auto [p, s] = getDecimalPrecisionScale(*returnType);
     if (s != 0) {
       return {};
@@ -48,7 +55,14 @@ class TruncateArgTypesGenerator : public fuzzer::ArgTypesGenerator {
     return {DECIMAL(p + s1, s1)};
   }
 
- private:
+  // Generates a decimal type and an integer type. Decimal type is generated
+  // following below formulas:
+  // p = p1
+  // s = s1
+  std::vector<TypePtr> generateTwoArgs(const TypePtr& returnType) {
+    return {returnType, INTEGER()};
+  }
+
   // Returns true 50% of times.
   static bool coinToss(FuzzerGenerator& rng) {
     return boost::random::uniform_01<double>()(rng) < 0.5;
