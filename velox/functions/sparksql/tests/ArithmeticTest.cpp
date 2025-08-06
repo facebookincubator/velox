@@ -786,9 +786,11 @@ TEST_F(ArithmeticTest, checkedAbs) {
   assertErrorForCheckedAbs<int16_t>(
       std::numeric_limits<int16_t>::min(), "Arithmetic overflow: abs(-32768)");
   assertErrorForCheckedAbs<int32_t>(
-      std::numeric_limits<int32_t>::min(), "Arithmetic overflow: abs(-2147483648)");
+      std::numeric_limits<int32_t>::min(),
+      "Arithmetic overflow: abs(-2147483648)");
   assertErrorForCheckedAbs<int64_t>(
-      std::numeric_limits<int64_t>::min(), "Arithmetic overflow: abs(-9223372036854775808)");
+      std::numeric_limits<int64_t>::min(),
+      "Arithmetic overflow: abs(-9223372036854775808)");
   EXPECT_EQ(checkedAbs<int8_t>(-127), 127);
   EXPECT_EQ(checkedAbs<int16_t>(-32767), 32767);
   EXPECT_EQ(checkedAbs<int32_t>(-2147483647), 2147483647);
