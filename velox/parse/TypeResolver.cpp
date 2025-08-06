@@ -22,7 +22,7 @@
 #include "velox/functions/FunctionRegistry.h"
 #include "velox/parse/Expressions.h"
 #include "velox/type/Type.h"
-#include "velox/vector/VariantToVector.h"
+#include "velox/vector/BaseVector.h"
 
 namespace facebook::velox::parse {
 namespace {
@@ -324,23 +324,15 @@ TypedExprPtr Expressions::inferTypes(
   }
 
   if (auto constant = std::dynamic_pointer_cast<const ConstantExpr>(expr)) {
-    if (constant->type()->kind() == TypeKind::ARRAY) {
-      // Transform variant vector into an ArrayVector, then wrap it into a
-      // ConstantVector<ComplexType>.
-      VELOX_CHECK_NOT_NULL(
-          pool, "parsing array literals requires a memory pool");
-      VectorPtr constantVector;
-      if (constant->value().isNull()) {
-        constantVector =
-            BaseVector::createNullConstant(constant->type(), 1, pool);
-      } else {
-        constantVector =
-            variantToVector(constant->type(), constant->value(), pool);
-      }
-      return std::make_shared<ConstantTypedExpr>(constantVector);
+    if (constant->type()->isPrimitiveType()) {
+      return std::make_shared<ConstantTypedExpr>(
+          constant->type(), constant->value());
     }
-    return std::make_shared<ConstantTypedExpr>(
-        constant->type(), constant->value());
+    VELOX_CHECK_NOT_NULL(
+        pool, "parsing complex literals requires a memory pool");
+    auto constantVector = BaseVector::createConstant(
+        constant->type(), constant->value(), 1, pool);
+    return std::make_shared<ConstantTypedExpr>(constantVector);
   }
 
   if (auto cast = std::dynamic_pointer_cast<const CastExpr>(expr)) {
