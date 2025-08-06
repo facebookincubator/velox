@@ -29,6 +29,7 @@ velox_add_library(
   ArraySort.cpp
   ArraySum.cpp
   Comparisons.cpp
+  CurrentTimestamp.cpp
   DecimalFunctions.cpp
   ElementAt.cpp
   FilterFunctions.cpp

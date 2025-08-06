@@ -5494,3 +5494,39 @@ TEST_F(DateTimeFunctionsTest, xxHash64FunctionTimestamp) {
   EXPECT_EQ(
       7585368295023641328, xxhash64(parseTimestamp("1900-01-01 00:00:00.000")));
 }
+
+TEST_F(DateTimeFunctionsTest, currentTimestampVector) {
+  setQueryTimeZone("Asia/Kolkata");
+
+  const int numRows = 10;
+  auto rowVector = makeRowVector(ROW({}), numRows);
+
+  auto before = Timestamp::now().toMillis();
+
+  // Evaluate as vector
+  auto resultVector = evaluate("now()", rowVector);
+  auto currentVector = evaluate("current_timestamp()", rowVector);
+
+  auto after = Timestamp::now().toMillis();
+
+  auto flatResult = resultVector->as<FlatVector<int64_t>>();
+  auto flatCurrent = currentVector->as<FlatVector<int64_t>>();
+
+  for (int i = 0; i < numRows; ++i) {
+    auto packedNow = flatResult->valueAt(i);
+    auto packedCurrent = flatCurrent->valueAt(i);
+
+    auto unpackedNow = TimestampWithTimezone::unpack(packedNow).value();
+    auto unpackedCurrent = TimestampWithTimezone::unpack(packedCurrent).value();
+
+    EXPECT_LE(before, unpackedNow.milliSeconds_);
+    EXPECT_LE(unpackedNow.milliSeconds_, after);
+    EXPECT_LE(before, unpackedCurrent.milliSeconds_);
+    EXPECT_LE(unpackedCurrent.milliSeconds_, after);
+
+    EXPECT_EQ(unpackedNow.timezone_->name(), "Asia/Kolkata");
+    EXPECT_EQ(unpackedCurrent.timezone_->name(), "Asia/Kolkata");
+
+    EXPECT_NEAR(unpackedNow.milliSeconds_, unpackedCurrent.milliSeconds_, 200);
+  }
+}

@@ -17,6 +17,8 @@
 #include "velox/functions/Registerer.h"
 #include "velox/functions/prestosql/DateTimeFunctions.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneRegistration.h"
+#include "velox/functions/prestosql/CurrentTimestamp.h"
+
 
 namespace facebook::velox::functions {
 namespace {
@@ -87,6 +89,8 @@ void registerSimpleFunctions(const std::string& prefix) {
       {prefix + "to_unixtime"});
   registerFunction<ToUnixtimeFunction, double, TimestampWithTimezone>(
       {prefix + "to_unixtime"});
+  registerCurrentTimestamp("current_timestamp");
+  registerCurrentTimestamp("now");
 
   registerFromUnixtime(prefix + "from_unixtime");
 
