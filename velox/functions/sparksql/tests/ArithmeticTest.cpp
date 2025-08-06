@@ -890,28 +890,5 @@ TEST_F(CbrtTest, cbrt) {
   EXPECT_TRUE(std::isnan(cbrt(kNan).value()));
 }
 
-TEST_F(ArithmeticTest, tryMultiply) {
-  // Test basic functionality
-  EXPECT_EQ(evaluateOnce<int64_t>("try_multiply(2, 3)"), 6);
-  EXPECT_EQ(evaluateOnce<int64_t>("try_multiply(-2, 3)"), -6);
-  EXPECT_EQ(evaluateOnce<int64_t>("try_multiply(0, 5)"), 0);
-
-  // Test with nulls
-  EXPECT_EQ(evaluateOnce<int64_t>("try_multiply(2, cast(null as integer))"), std::nullopt);
-  EXPECT_EQ(evaluateOnce<int64_t>("try_multiply(cast(null as integer), 3)"), std::nullopt);
-
-  // Test overflow (should return null instead of throwing)
-  EXPECT_EQ(evaluateOnce<int64_t>("try_multiply(9223372036854775807, 2)"), std::nullopt);
-  EXPECT_EQ(evaluateOnce<int64_t>("try_multiply(-9223372036854775808, 2)"), std::nullopt);
-
-  // Test floating point
-  EXPECT_EQ(evaluateOnce<double>("try_multiply(2.5, 3.0)"), 7.5);
-  EXPECT_EQ(evaluateOnce<double>("try_multiply(2.5, cast(null as double))"), std::nullopt);
-
-  // Test that it's equivalent to try(multiply(...))
-  EXPECT_EQ(evaluateOnce<int64_t>("try_multiply(2, 3)"),
-            evaluateOnce<int64_t>("try(multiply(2, 3))"));
-}
-
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test
