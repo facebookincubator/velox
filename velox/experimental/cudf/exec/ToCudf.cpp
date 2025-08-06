@@ -261,6 +261,9 @@ bool CompileState::compile() {
       replaceOp.push_back(
           std::make_unique<CudfLocalPartition>(id, ctx, planNode));
       replaceOp.back()->initialize();
+    } else if (
+        auto localExchangeOp = dynamic_cast<exec::LocalExchange*>(oper)) {
+      keepOperator = 1;
     }
 
     if (producesGpuOutput(oper) and
@@ -323,7 +326,7 @@ void registerCudf(const CudfOptions& options) {
   cudaFree(nullptr); // Initialize CUDA context at startup
 
   const std::string mrMode = options.cudfMemoryResource;
-  auto mr = cudf_velox::createMemoryResource(mrMode);
+  auto mr = cudf_velox::createMemoryResource(mrMode, options.memoryPercent);
   cudf::set_current_device_resource(mr.get());
 
   exec::Operator::registerOperator(
