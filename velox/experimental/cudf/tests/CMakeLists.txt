@@ -21,29 +21,6 @@ add_executable(velox_cudf_local_partition_test Main.cpp LocalPartitionTest.cpp)
 add_executable(velox_cudf_filter_project_test Main.cpp FilterProjectTest.cpp)
 add_executable(velox_cudf_limit_test Main.cpp LimitTest.cpp)
 
-set_target_properties(
-  velox_cudf_hash_join_test
-  velox_cudf_order_by_test
-  velox_cudf_aggregation_test
-  velox_cudf_table_scan_test
-  velox_cudf_table_write_test
-  velox_cudf_local_partition_test
-  velox_cudf_filter_project_test
-  velox_cudf_limit_test
-  PROPERTIES CXX_STANDARD ${VELOX_CUDF_CXX_STANDARD}
-             CXX_STANDARD_REQUIRED ${VELOX_CUDF_CXX_STANDARD_REQUIRED})
-
-# Suppress warnings from included Velox headers when using C++20
-target_compile_options(velox_cudf_hash_join_test PRIVATE -Wno-deprecated)
-target_compile_options(velox_cudf_order_by_test PRIVATE -Wno-deprecated)
-target_compile_options(velox_cudf_aggregation_test PRIVATE -Wno-deprecated)
-target_compile_options(velox_cudf_table_scan_test PRIVATE -Wno-deprecated)
-target_compile_options(velox_cudf_table_write_test PRIVATE -Wno-deprecated)
-target_compile_options(velox_cudf_local_partition_test PRIVATE -Wno-deprecated)
-target_compile_options(velox_cudf_filter_project_test PRIVATE -Wno-deprecated
-                                                              -Wno-restrict)
-target_compile_options(velox_cudf_limit_test PRIVATE -Wno-deprecated)
-
 add_test(
   NAME velox_cudf_hash_join_test
   COMMAND velox_cudf_hash_join_test

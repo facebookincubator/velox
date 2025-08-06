@@ -17,10 +17,7 @@ add_library(velox_cudf_exec_test_lib ParquetConnectorTestBase.cpp
 
 set_target_properties(
   velox_cudf_exec_test_lib
-  PROPERTIES
-    CUDA_ARCHITECTURES native
-    CXX_STANDARD ${VELOX_CUDF_CXX_STANDARD}
-    CXX_STANDARD_REQUIRED ${VELOX_CUDF_CXX_STANDARD_REQUIRED})
+  PROPERTIES CUDA_ARCHITECTURES native)
 
 target_link_libraries(
   velox_cudf_exec_test_lib
@@ -38,6 +35,3 @@ target_link_libraries(
   velox_file_test_utils
   velox_cudf_parquet_connector
   velox_aggregates)
-
-# Suppress warnings from included Velox headers when using C++20
-target_compile_options(velox_cudf_exec_test_lib PRIVATE -Wno-deprecated)
