@@ -345,7 +345,7 @@ struct ToJsonFunction {
       const core::QueryConfig& config,
       const void* /*input*/,
       const void* /*timeZone*/) {
-    VELOX_CHECK(
+    VELOX_USER_CHECK(
         isSupportedType(inputTypes[0], true),
         "to_json function does not support type {}.",
         inputTypes[0]->toString());
