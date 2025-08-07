@@ -454,7 +454,7 @@ TEST(TypeTest, row) {
     seen++;
   }
   ASSERT_EQ(seen, 2);
-  ASSERT_EQ(approximateTypeEncodingwidth(row0), 2);
+  ASSERT_EQ(approximateTypeEncodingwidth(row0), 4);
 
   EXPECT_STREQ(row0->name(), "ROW");
   ASSERT_EQ(row0->parameters().size(), 2);
@@ -471,12 +471,12 @@ TEST(TypeTest, row) {
   ASSERT_EQ(row1->nameOf(0), "a,b");
   ASSERT_EQ(row1->nameOf(1), R"(my "column")");
   ASSERT_EQ(row1->childAt(1)->toString(), R"(ROW<"#1":BIGINT>)");
-  ASSERT_EQ(approximateTypeEncodingwidth(row1), 2);
+  ASSERT_EQ(approximateTypeEncodingwidth(row1), 4);
 
   const auto row2 = ROW({{"", INTEGER()}});
   ASSERT_EQ(row2->toString(), R"(ROW<"":INTEGER>)");
   ASSERT_EQ(row2->nameOf(0), "");
-  ASSERT_EQ(approximateTypeEncodingwidth(row2), 1);
+  ASSERT_EQ(approximateTypeEncodingwidth(row2), 2);
 
   VELOX_ASSERT_THROW(createScalarType(TypeKind::ROW), "not a scalar type");
   VELOX_ASSERT_THROW(
