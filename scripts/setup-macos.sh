@@ -92,7 +92,7 @@ function install_build_prerequisites {
   # Install ccache
   curl -L https://github.com/ccache/ccache/releases/download/v"${CCACHE_VERSION}"/ccache-"${CCACHE_VERSION}"-darwin.tar.gz -o ccache.tar.gz
   tar -xf ccache.tar.gz
-  sudo mv ccache-"${CCACHE_VERSION}"-darwin/ccache /usr/local/bin/
+  $SUDO mv ccache-"${CCACHE_VERSION}"-darwin/ccache "$INSTALL_PREFIX"
   rm -rf ccache-"${CCACHE_VERSION}"-darwin ccache.tar.gz
 }
 
