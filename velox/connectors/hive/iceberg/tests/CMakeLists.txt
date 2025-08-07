@@ -60,9 +60,9 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
 
     target_link_libraries(velox_hive_iceberg_test velox_dwio_parquet_reader)
 
-  endif()
+    file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/examples
+         DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
 
-  file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/examples
-       DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
+  endif()
 
 endif()
