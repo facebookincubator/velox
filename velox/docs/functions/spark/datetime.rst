@@ -274,7 +274,7 @@ These functions support TIMESTAMP and DATE input types.
 .. spark:function:: timestampadd(unit, value, timestamp) -> timestamp
 
     Adds an interval ``value`` of type ``unit`` to ``timestamp``.
-    Subtraction can be performed by using a negative value.
+    Subtraction can be performed by using a negative ``value``.
     Throws exception if ``unit`` is invalid.
     ``unit`` is case insensitive and must be one of the following:
     ``YEAR``, ``QUARTER``, ``MONTH``, ``WEEK``, ``DAY``, ``DAYOFYEAR``, ``HOUR``, ``MINUTE``, ``SECOND``,
@@ -282,6 +282,7 @@ These functions support TIMESTAMP and DATE input types.
 
         SELECT timestampadd(YEAR, 1, '2030-02-28 10:00:00.500'); -- 2031-02-28 10:00:00.500
         SELECT timestampadd(DAY, 1, '2020-02-29 10:00:00.500'); -- 2020-03-01 10:00:00.500
+        SELECT timestampadd(DAYOFYEAR, 1, '2020-02-29 10:00:00.500'); -- 2020-03-01 10:00:00.500
         SELECT timestampadd(SECOND, 10, '2019-03-01 10:00:00.500'); -- 2019-03-01 10:00:10.500
         SELECT timestampadd(MICROSECOND, 500, '2019-02-28 10:01:00.500999'); -- 2019-02-28 10:01:00.501499
 

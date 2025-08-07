@@ -44,7 +44,7 @@ struct ToUnixtimeFunction {
       double& result,
       const arg_type<TimestampWithTimezone>& timestampWithTimezone) {
     const auto milliseconds = unpackMillisUtc(*timestampWithTimezone);
-    result = (double)milliseconds / kMillisecondsInSecond;
+    result = (double)milliseconds / Timestamp::kMillisecondsInSecond;
   }
 };
 
@@ -852,7 +852,7 @@ struct MillisecondFunction : public TimestampWithTimezoneSupport<T> {
   FOLLY_ALWAYS_INLINE void call(
       int64_t& result,
       const arg_type<Timestamp>& timestamp) {
-    result = timestamp.getNanos() / kNanosecondsInMillisecond;
+    result = timestamp.getNanos() / Timestamp::kNanosecondsInMillisecond;
   }
 
   FOLLY_ALWAYS_INLINE void call(
@@ -866,7 +866,7 @@ struct MillisecondFunction : public TimestampWithTimezoneSupport<T> {
       int64_t& result,
       const arg_type<TimestampWithTimezone>& timestampWithTimezone) {
     auto timestamp = this->toTimestamp(timestampWithTimezone);
-    result = timestamp.getNanos() / kNanosecondsInMillisecond;
+    result = timestamp.getNanos() / Timestamp::kNanosecondsInMillisecond;
   }
 };
 
@@ -877,7 +877,7 @@ struct MillisecondFromIntervalFunction {
   FOLLY_ALWAYS_INLINE void call(
       int64_t& result,
       const arg_type<IntervalDayTime>& millis) {
-    result = millis % kMillisecondsInSecond;
+    result = millis % Timestamp::kMillisecondsInSecond;
   }
 };
 

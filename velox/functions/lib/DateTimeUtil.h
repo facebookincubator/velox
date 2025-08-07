@@ -21,12 +21,6 @@
 #include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox::functions {
-namespace {
-constexpr double kNanosecondsInSecond = 1'000'000'000;
-constexpr int64_t kNanosecondsInMillisecond = 1'000'000;
-constexpr int64_t kNanosecondsInMicrosecond = 1'000;
-constexpr int64_t kMillisecondsInSecond = 1'000;
-} // namespace
 
 /// Returns toTimestamp - fromTimestamp expressed in terms of unit.
 /// @param respectLastDay If true, the last day of a year-month is respected.
@@ -284,7 +278,7 @@ addToTimestamp(const Timestamp& timestamp, DateTimeUnit unit, int32_t value) {
     return Timestamp(
         microTimestamp.getSeconds(),
         microTimestamp.getNanos() +
-            timestamp.getNanos() % kNanosecondsInMicrosecond);
+            timestamp.getNanos() % Timestamp::kNanosecondsInMicrosecond);
   }
 
   const std::chrono::
@@ -342,7 +336,7 @@ addToTimestamp(const Timestamp& timestamp, DateTimeUnit unit, int32_t value) {
   return Timestamp(
       milliTimestamp.getSeconds(),
       milliTimestamp.getNanos() +
-          timestamp.getNanos() % kNanosecondsInMillisecond);
+          timestamp.getNanos() % Timestamp::kNanosecondsInMillisecond);
 }
 
 FOLLY_ALWAYS_INLINE Timestamp addToTimestamp(

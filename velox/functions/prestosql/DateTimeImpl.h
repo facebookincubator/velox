@@ -29,7 +29,8 @@ namespace facebook::velox::functions {
 
 FOLLY_ALWAYS_INLINE double toUnixtime(const Timestamp& timestamp) {
   double result = timestamp.getSeconds();
-  result += static_cast<double>(timestamp.getNanos()) / kNanosecondsInSecond;
+  result +=
+      static_cast<double>(timestamp.getNanos()) / Timestamp::kNanosInSecond;
   return result;
 }
 
@@ -58,7 +59,8 @@ FOLLY_ALWAYS_INLINE Timestamp fromUnixtime(double unixtime) {
     ++seconds;
     milliseconds = 0;
   }
-  return Timestamp(seconds, milliseconds * kNanosecondsInMillisecond);
+  return Timestamp(
+      seconds, milliseconds * Timestamp::kNanosecondsInMillisecond);
 }
 
 FOLLY_ALWAYS_INLINE boost::int64_t fromUnixtime(
@@ -83,7 +85,8 @@ FOLLY_ALWAYS_INLINE boost::int64_t fromUnixtime(
                         : pack(std::numeric_limits<int64_t>::max(), timeZoneId);
   }
 
-  return pack(std::llround(unixtime * kMillisecondsInSecond), timeZoneId);
+  return pack(
+      std::llround(unixtime * Timestamp::kMillisecondsInSecond), timeZoneId);
 }
 
 // If time zone is provided, use it for the arithmetic operation (convert to it,

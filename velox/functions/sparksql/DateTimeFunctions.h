@@ -997,8 +997,9 @@ struct TimestampAddFunction {
       const int32_t* /*value*/,
       const arg_type<Timestamp>* /*timestamp*/) {
     VELOX_USER_CHECK_NOT_NULL(unitString);
-    if (boost::algorithm::to_lower_copy(StringView(*unitString).str()) ==
-        "dayofyear") {
+    std::string unitStr(*unitString);
+    folly::toLowerAscii(unitStr);
+    if (unitStr == "dayofyear") {
       unit_ = DateTimeUnit::kDay;
     } else {
       unit_ = fromDateTimeUnitString(
