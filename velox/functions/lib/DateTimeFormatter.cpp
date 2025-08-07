@@ -820,7 +820,7 @@ int32_t parseFromPattern(
     Date& date,
     bool specifierNext,
     DateTimeFormatterType type,
-    FractionOfSecondPrecision fractionOfSecondPrecision) {
+    TimestampPrecision fractionOfSecondPrecision) {
   if (curPattern.specifier == DateTimeFormatSpecifier::TIMEZONE_OFFSET_ID) {
     int64_t size;
     if (curPattern.minRepresentDigits < 3) {
@@ -912,15 +912,13 @@ int32_t parseFromPattern(
       if (type != DateTimeFormatterType::STRICT_SIMPLE &&
           type != DateTimeFormatterType::LENIENT_SIMPLE) {
         if (fractionOfSecondPrecision ==
-            FractionOfSecondPrecision::kMillisecond) {
+            TimestampPrecision::kMilliseconds) {
           number *= std::pow(10, 3 - count);
           number *= util::kMicrosPerMsec;
         } else if (
             fractionOfSecondPrecision ==
-            FractionOfSecondPrecision::kMicrosecond) {
+            TimestampPrecision::kMicroseconds) {
           number *= std::pow(10, 6 - count);
-        } else {
-          number = 0;
         }
       } else {
         number *= util::kMicrosPerMsec;
@@ -1844,7 +1842,7 @@ Expected<std::shared_ptr<DateTimeFormatter>> buildMysqlDateTimeFormatter(
 
 Expected<std::shared_ptr<DateTimeFormatter>> buildJodaDateTimeFormatter(
     const std::string_view& format,
-    FractionOfSecondPrecision fractionOfSecondPrecision) {
+    TimestampPrecision fractionOfSecondPrecision) {
   if (format.empty()) {
     if (threadSkipErrorDetails()) {
       return folly::makeUnexpected(Status::UserError());
