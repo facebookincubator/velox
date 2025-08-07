@@ -1106,6 +1106,11 @@ Another example is that the ‘W’ pattern, which means week in month, is not s
 <td><p>If true, Spark statistical aggregation functions including skewness, kurtosis, stddev, stddev_samp, variance,
 var_samp, covar_samp and corr will return NaN instead of NULL when dividing by zero during expression evaluation.</p></td>
 </tr>
+<tr class="row-odd"><td><p>spark.json_ignore_null_fields</p></td>
+<td><p>bool</p></td>
+<td><p>true</p></td>
+<td><p>If true, ignore null fields when generating JSON string. If false, null fields are included with a null value.</p></td>
+</tr>
 </tbody>
 </table>
 </section>
