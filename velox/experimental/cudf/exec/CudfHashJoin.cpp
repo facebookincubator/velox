@@ -103,8 +103,7 @@ void CudfHashJoinBuild::addInput(RowVectorPtr input) {
     auto cudfInput = std::dynamic_pointer_cast<CudfVector>(input);
     VELOX_CHECK_NOT_NULL(cudfInput);
     // Count nulls in join key columns
-    cudf::size_type null_count{};
-    std::tie(std::ignore, null_count) = cudf::bitmask_and(
+    auto [_, null_count] = cudf::bitmask_and(
         cudfInput->getTableView(),
         cudfInput->stream(),
         cudf::get_current_device_resource_ref());
@@ -385,8 +384,7 @@ void CudfHashJoinProbe::addInput(RowVectorPtr input) {
   auto cudfInput = std::dynamic_pointer_cast<CudfVector>(input);
   VELOX_CHECK_NOT_NULL(cudfInput);
   // Count nulls in join key columns
-  cudf::size_type null_count{};
-  std::tie(std::ignore, null_count) = cudf::bitmask_and(
+  auto [_, null_count] = cudf::bitmask_and(
       cudfInput->getTableView(),
       cudfInput->stream(),
       cudf::get_current_device_resource_ref());
