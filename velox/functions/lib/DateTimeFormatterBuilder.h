@@ -256,7 +256,7 @@ class DateTimeFormatterBuilder {
   /// kMillisecond the result will be 123 or with kMicrosecond result will be
   /// 123456
   DateTimeFormatterBuilder& setFractionOfSecondPrecision(
-      FractionOfSecondPrecision fractionOfSecondPrecision);
+      TimestampPrecision fractionOfSecondPrecision);
 
   /// Appends time zone to formatter builder, e.g: 'Pacific Standard Time' or
   /// 'PST'
@@ -291,7 +291,7 @@ class DateTimeFormatterBuilder {
   size_t bufEnd_{0};
   std::vector<DateTimeToken> tokens_;
   DateTimeFormatterType type_{DateTimeFormatterType::UNKNOWN};
-  FractionOfSecondPrecision fractionOfSecondPrecision_;
+  TimestampPrecision fractionOfSecondPrecision_;
 };
 
 } // namespace facebook::velox::functions
