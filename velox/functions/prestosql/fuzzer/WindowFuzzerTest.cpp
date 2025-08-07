@@ -117,6 +117,8 @@ int main(int argc, char** argv) {
       "classification_recall",
       "classification_miss_rate",
       "classification_thresholds",
+      // Fuzzer can generate sketches of different sizes.
+      "merge_hll",
       // Skip internal functions used only for result verifications.
       "$internal$count_distinct",
       "$internal$array_agg",
