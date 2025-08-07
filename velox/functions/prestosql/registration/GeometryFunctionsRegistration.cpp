@@ -71,6 +71,8 @@ void registerOverlayOperations(const std::string& prefix) {
       {{prefix + "ST_Union"}});
   registerFunction<StEnvelopeAsPtsFunction, Array<Geometry>, Geometry>(
       {{prefix + "ST_EnvelopeAsPts"}});
+  registerFunction<ExpandEnvelopeFunction, Geometry, Geometry, double>(
+      {{prefix + "expand_envelope"}});
 }
 
 void registerAccessors(const std::string& prefix) {
@@ -142,11 +144,19 @@ void registerAccessors(const std::string& prefix) {
       {{prefix + "ST_Points"}});
   registerFunction<StNumPointsFunction, int32_t, Geometry>(
       {{prefix + "ST_NumPoints"}});
+  registerFunction<StInteriorRingsFunction, Array<Geometry>, Geometry>(
+      {{prefix + "ST_InteriorRings"}});
+  registerFunction<StGeometriesFunction, Array<Geometry>, Geometry>(
+      {{prefix + "ST_Geometries"}});
   registerFunction<
       GeometryNearestPointsFunction,
       Array<Geometry>,
       Geometry,
       Geometry>({{prefix + "geometry_nearest_points"}});
+  registerFunction<
+      FlattenGeometryCollectionsFunction,
+      Array<Geometry>,
+      Geometry>({{prefix + "flatten_geometry_collections"}});
 }
 
 } // namespace

@@ -1542,4 +1542,144 @@ struct LineInterpolatePointFunction {
   geos::geom::GeometryFactory::Ptr factory_;
 };
 
+template <typename T>
+struct StInteriorRingsFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<Array<Geometry>>& result,
+      const arg_type<Geometry>& geometry) {
+    std::unique_ptr<geos::geom::Geometry> geosGeometry =
+        geospatial::GeometryDeserializer::deserialize(geometry);
+
+    auto validate = geospatial::validateType(
+        *geosGeometry,
+        {geos::geom::GeometryTypeId::GEOS_POLYGON},
+        "ST_InteriorRings");
+
+    if (!validate.ok()) {
+      VELOX_USER_FAIL(validate.message());
+    }
+    if (geosGeometry->isEmpty()) {
+      return false;
+    }
+
+    geos::geom::Polygon* polygon =
+        dynamic_cast<geos::geom::Polygon*>(geosGeometry.get());
+    VELOX_CHECK_NOT_NULL(
+        polygon, "Validation passed but type not recognized as Polygon");
+
+    auto numInteriorRings = polygon->getNumInteriorRing();
+    result.reserve(static_cast<int32_t>(numInteriorRings));
+
+    for (int i = 0; i < numInteriorRings; i++) {
+      geospatial::GeometrySerializer::serialize(
+          *(polygon->getInteriorRingN(i)), result.add_item());
+    }
+
+    return true;
+  }
+};
+
+template <typename T>
+struct StGeometriesFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<Array<Geometry>>& result,
+      const arg_type<Geometry>& geometry) {
+    std::unique_ptr<geos::geom::Geometry> geosGeometry =
+        geospatial::GeometryDeserializer::deserialize(geometry);
+
+    if (geosGeometry->isEmpty()) {
+      return false;
+    }
+
+    if (!geospatial::isMultiType(*geosGeometry)) {
+      result.reserve(1);
+      geospatial::GeometrySerializer::serialize(
+          *(geosGeometry), result.add_item());
+      return true;
+    }
+
+    geos::geom::GeometryCollection* geomCollection =
+        dynamic_cast<geos::geom::GeometryCollection*>(geosGeometry.get());
+
+    VELOX_CHECK_NOT_NULL(
+        geomCollection,
+        "Failure in ST_Geometries: geometry should be multi type but cast to GeometryCollection failed");
+
+    int32_t numGeometries =
+        static_cast<int32_t>(geomCollection->getNumGeometries());
+    result.reserve(numGeometries);
+
+    for (int i = 0; i < numGeometries; i++) {
+      geospatial::GeometrySerializer::serialize(
+          *(geomCollection->getGeometryN(i)), result.add_item());
+    }
+
+    return true;
+  }
+};
+
+template <typename T>
+struct FlattenGeometryCollectionsFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE Status
+  call(out_type<Array<Geometry>>& result, const arg_type<Geometry>& geometry) {
+    std::unique_ptr<geos::geom::Geometry> geosGeometry =
+        geospatial::GeometryDeserializer::deserialize(geometry);
+
+    geospatial::GeometryCollectionIterator it(geosGeometry.get());
+    while (it.hasNext()) {
+      geospatial::GeometrySerializer::serialize(
+          *(it.next()), result.add_item());
+    }
+
+    return Status::OK();
+  }
+};
+
+template <typename T>
+struct ExpandEnvelopeFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  ExpandEnvelopeFunction() {
+    factory_ = geos::geom::GeometryFactory::create();
+  }
+
+  FOLLY_ALWAYS_INLINE Status call(
+      out_type<Geometry>& result,
+      const arg_type<Geometry>& geometry,
+      const arg_type<double>& distance) {
+    if (std::isnan(distance)) {
+      return Status::UserError("Distance must be a non-NaN number");
+    }
+    if (distance < 0) {
+      return Status::UserError("Distance must be a non-negative number");
+    }
+    if (distance == std::numeric_limits<double>::infinity()) {
+      geospatial::GeometrySerializer::serialize(
+          *factory_->createPolygon(), result);
+      return Status::OK();
+    }
+
+    const std::unique_ptr<geos::geom::Envelope> envelope =
+        geospatial::GeometryDeserializer::deserializeEnvelope(geometry);
+    if (envelope->isNull()) {
+      geospatial::GeometrySerializer::serializeEnvelope(*envelope, result);
+      return Status::OK();
+    }
+
+    envelope->expandBy(distance);
+    geospatial::GeometrySerializer::serializeEnvelope(*envelope, result);
+
+    return Status::OK();
+  }
+
+ private:
+  geos::geom::GeometryFactory::Ptr factory_;
+};
+
 } // namespace facebook::velox::functions
