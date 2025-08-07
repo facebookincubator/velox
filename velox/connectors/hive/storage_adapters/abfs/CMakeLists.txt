@@ -22,7 +22,9 @@ if(VELOX_ENABLE_ABFS)
     PRIVATE
     AbfsFileSystem.cpp
     AbfsConfig.cpp
-    AbfsWriteFile.cpp)
+    AbfsWriteFile.cpp
+    AzureClientProviderFactories.cpp
+    DefaultAzureClientProviders.cpp)
 
   velox_link_libraries(
     velox_abfs

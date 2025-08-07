@@ -16,9 +16,34 @@
 
 #pragma once
 
+#include <functional>
+#include <memory>
+#include <string>
+
+namespace facebook::velox::config {
+class ConfigBase;
+}
+
 namespace facebook::velox::filesystems {
+
+class AzureClientProvider;
+class AbfsPath;
+
+using AzureClientProviderFactory =
+    std::function<std::unique_ptr<AzureClientProvider>(
+        const std::shared_ptr<AbfsPath>& path,
+        const config::ConfigBase& config)>;
 
 // Register the ABFS filesystem.
 void registerAbfsFileSystem();
+
+/// Registers a factory for creating AzureClientProvider instances.
+/// If overwrite is true, it will overwrite any existing factory
+/// registered for the specified account. Otherwise, it will throw an
+/// exception.
+void registerAzureClientProviderFactory(
+    const std::string& account,
+    const AzureClientProviderFactory& factory,
+    bool overwrite = true);
 
 } // namespace facebook::velox::filesystems

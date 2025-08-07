@@ -26,6 +26,12 @@
 #include "velox/connectors/hive/FileHandle.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsConfig.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsFileSystem.h"
+
+#include <duckdb/common/unique_ptr.hpp>
+
+#include "connectors/hive/storage_adapters/abfs/AzureClientProviderFactories.h"
+#include "connectors/hive/storage_adapters/abfs/DefaultAzureClientProviders.h"
+#include "connectors/hive/storage_adapters/abfs/RegisterAbfsFileSystem.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsReadFile.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsWriteFile.h"
 #include "velox/connectors/hive/storage_adapters/abfs/tests/AzuriteServer.h"
@@ -38,7 +44,32 @@ using namespace facebook::velox;
 using namespace facebook::velox::filesystems;
 using ::facebook::velox::common::Region;
 
+namespace {
+
 constexpr int kOneMB = 1 << 20;
+
+class TestAzureClientProvider final : public AzureClientProvider {
+ public:
+  explicit TestAzureClientProvider(
+      const std::shared_ptr<AbfsPath>& path,
+      const config::ConfigBase& config)
+      : AzureClientProvider(path) {
+    delegated_ = std::make_unique<SharedKeyAzureClientProvider>(path, config);
+  }
+
+  std::unique_ptr<AzureBlobClient> getReadFileClient() override {
+    return delegated_->getReadFileClient();
+  }
+
+  std::unique_ptr<AzureDataLakeFileClient> getWriteFileClient() override {
+    return std::make_unique<MockDataLakeFileClient>();
+  }
+
+ private:
+  std::unique_ptr<AzureClientProvider> delegated_;
+};
+
+} // namespace
 
 class AbfsFileSystemTest : public testing::Test {
  public:
@@ -47,12 +78,12 @@ class AbfsFileSystemTest : public testing::Test {
 
   static void SetUpTestCase() {
     registerAbfsFileSystem();
-    AbfsConfig::setUpTestWriteClient(
-        []() { return std::make_unique<MockDataLakeFileClient>(); });
-  }
-
-  static void TearDownTestSuite() {
-    AbfsConfig::tearDownTestWriteClient();
+    registerAzureClientProviderFactory(
+        "test",
+        [](const std::shared_ptr<AbfsPath>& path,
+           const config::ConfigBase& config) {
+          return std::make_unique<TestAzureClientProvider>(path, config);
+        });
   }
 
   void SetUp() override {

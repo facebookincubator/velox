@@ -14,10 +14,13 @@
  * limitations under the License.
  */
 
+#include "velox/connectors/hive/storage_adapters/abfs/RegisterAbfsFileSystem.h" // @manual
+
 #ifdef VELOX_ENABLE_ABFS
 #include "velox/common/config/Config.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsFileSystem.h" // @manual
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsUtil.h" // @manual
+#include "velox/connectors/hive/storage_adapters/abfs/AzureClientProviderFactories.h" // @manual
 #include "velox/dwio/common/FileSink.h"
 #endif
 
@@ -57,6 +60,15 @@ void registerAbfsFileSystem() {
   registerFileSystem(isAbfsFile, std::function(abfsFileSystemGenerator));
   dwio::common::FileSink::registerFactory(
       std::function(abfsWriteFileSinkGenerator));
+#endif
+}
+
+void registerAzureClientProviderFactory(
+    const std::string& account,
+    const AzureClientProviderFactory& factory,
+    bool overwrite) {
+#ifdef VELOX_ENABLE_ABFS
+  AzureClientProviderFactories::registerFactory(account, factory, overwrite);
 #endif
 }
 
