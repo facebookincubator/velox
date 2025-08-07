@@ -240,6 +240,12 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   /// Frees an allocated buffer.
   virtual void free(void* p, int64_t size) = 0;
 
+  /// Transfer the ownership of memory at 'buffer' for 'size' bytes to the
+  /// memory pool 'dest'. Returns true if the transfer succeeds.
+  virtual bool transferTo(MemoryPool* dest, void* buffer, int64_t size) {
+    return false;
+  }
+
   /// Allocates one or more runs that add up to at least 'numPages', with the
   /// smallest run being at least 'minSizeClass' pages. 'minSizeClass' must be
   /// <= the size of the largest size class. The new memory is returned in 'out'
@@ -603,6 +609,8 @@ class MemoryPoolImpl : public MemoryPool {
   void* reallocate(void* p, int64_t size, int64_t newSize) override;
 
   void free(void* p, int64_t size) override;
+
+  bool transferTo(MemoryPool* dest, void* buffer, int64_t size) override;
 
   void allocateNonContiguous(
       MachinePageCount numPages,
