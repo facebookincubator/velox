@@ -911,13 +911,11 @@ int32_t parseFromPattern(
       // it as the whole number; otherwise, it pads the number with zeros.
       if (type != DateTimeFormatterType::STRICT_SIMPLE &&
           type != DateTimeFormatterType::LENIENT_SIMPLE) {
-        if (fractionOfSecondPrecision ==
-            TimestampPrecision::kMilliseconds) {
+        if (fractionOfSecondPrecision == TimestampPrecision::kMilliseconds) {
           number *= std::pow(10, 3 - count);
           number *= util::kMicrosPerMsec;
         } else if (
-            fractionOfSecondPrecision ==
-            TimestampPrecision::kMicroseconds) {
+            fractionOfSecondPrecision == TimestampPrecision::kMicroseconds) {
           number *= std::pow(10, 6 - count);
         }
       } else {
