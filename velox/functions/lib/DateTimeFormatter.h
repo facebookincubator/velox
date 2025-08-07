@@ -247,9 +247,9 @@ Expected<std::shared_ptr<DateTimeFormatter>> buildMysqlDateTimeFormatter(
 
 Expected<std::shared_ptr<DateTimeFormatter>> buildJodaDateTimeFormatter(
     const std::string_view& format,
-    // Defautl kMilliseconds for Presto, in Spark it is set to kMicroseconds
+    // Default kMilliseconds for Presto, in Spark it is set to kMicroseconds
     TimestampPrecision fractionOfSecondPrecision =
-        TimestampPrecision::kMicroseconds);
+        TimestampPrecision::kMilliseconds);
 
 Expected<std::shared_ptr<DateTimeFormatter>> buildSimpleDateTimeFormatter(
     const std::string_view& format,
