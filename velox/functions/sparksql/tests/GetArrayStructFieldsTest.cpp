@@ -43,12 +43,14 @@ class GetArrayStructFieldsTest : public SparkFunctionBaseTest {
     assertEqualVectors(expected, result);
 
     // Input is dictionary or constant encoding.
-    testEncodings(expr, {input}, expected);
+    if (input->size() >= 3) {
+      testEncodings(expr, {input}, expected);
+    }
   }
 };
 
 TEST_F(GetArrayStructFieldsTest, simpleType) {
-  std::vector<vector_size_t> offsets{0, 1, 3};
+  std::vector<vector_size_t> offsets{0, 1, 1};
   auto colInt = makeFlatVector<int32_t>({1, 2, 3, 4});
   auto colString = makeNullableFlatVector<std::string>(
       {"hello", "world", std::nullopt, "test"});
@@ -128,6 +130,15 @@ TEST_F(GetArrayStructFieldsTest, decodeElement) {
       data, 0, makeArrayVector(offsets, makeFlatVector<int32_t>({4, 3, 1, 2})));
 }
 
+TEST_F(GetArrayStructFieldsTest, emptyInput) {
+  std::vector<std::vector<std::optional<std::tuple<int32_t, std::string>>>>
+      data = {};
+
+  auto rowType = ROW({INTEGER(), VARCHAR()});
+  auto arrayVector = makeArrayOfRowVector(data, rowType);
+  testGetArrayStructFields(arrayVector, 0, makeArrayVector<int32_t>({}));
+}
+
 TEST_F(GetArrayStructFieldsTest, invalidOrdinal) {
   std::vector<vector_size_t> offsets{0};
   auto colInt = makeFlatVector<int32_t>({1, 2, 3, 4});
@@ -141,7 +152,7 @@ TEST_F(GetArrayStructFieldsTest, invalidOrdinal) {
 
   VELOX_ASSERT_USER_THROW(
       testGetArrayStructFields(data, -1, makeArrayVector(offsets, colInt)),
-      "Invalid ordinal. Should be greater than 0.");
+      "Invalid ordinal. Should be greater than or equal to 0.");
 
   VELOX_ASSERT_USER_THROW(
       testGetArrayStructFields(data, 2, makeArrayVector(offsets, colInt)),

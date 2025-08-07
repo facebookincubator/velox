@@ -22,13 +22,14 @@ Miscellaneous Functions
     The ``ordinal`` is 0-based, and if ``ordinal`` is negative or greater than or equal to
     the children size of strcut, exception is thrown. ::
 
-        SELECT from_json('[{"name":"Alice"}, {"name":"Bob"}, {"name":"Charlie"}]', 'array<struct<name:string>>' ).name; -- array("Alice", "Bob", "Charlie")
+        SELECT items.col1 FROM VALUES (array(struct(100,'foo'), struct(200,'bar'))) AS t(items); -- array(100, 200)
+        SELECT items.col2 FROM VALUES (array(struct(100,'foo'), struct(200,'bar'))) AS t(items); -- array('foo', 'bar')
 
 .. spark:function:: get_struct_field(struct, ordinal) -> T
 
     Returns the value of nested subfield at position ``ordinal`` in the input ``struct``.
     The input must be of row type and nested complex type is allowed.
-    The ``ordinal`` is 0-based, and if ``ordinal`` is negative or greater than or equal to
+    The ``ordinal`` is 0-based, and if ``ordinal`` is negative or no less than
     the children size of ``struct``, exception is thrown. ::
 
         SELECT from_json('{"a": 1, "b": [1, 2, 3]}', 'a INT, b ARRAY<INT>').a; -- 1

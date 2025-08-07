@@ -121,7 +121,8 @@ exec::ExprPtr GetArrayStructFieldsCallToSpecialForm::constructSpecialForm(
 
   auto ordinal = constantVector->valueAt(0);
 
-  VELOX_USER_CHECK_GE(ordinal, 0, "Invalid ordinal. Should be greater than 0.");
+  VELOX_USER_CHECK_GE(
+      ordinal, 0, "Invalid ordinal. Should be greater than or equal to 0.");
   auto numFields = args[0]->type()->asArray().elementType()->asRow().size();
   VELOX_USER_CHECK_LT(
       ordinal,
