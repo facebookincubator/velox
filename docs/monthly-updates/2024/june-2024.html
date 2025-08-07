@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>June 2024 Update &#8212; Velox  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=8f2a1f02" />
+    <link rel="stylesheet" type="text/css" href="../../_static/nature.css?v=0f882399" />
+    <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../../_static/doctools.js?v=9a2dae69"></script>
+    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="May 2024 Update" href="may-2024.html" />
+    <link rel="prev" title="July 2024 Update" href="july-2024.html" /> 
+  </head><body>
+    <div class="related" role="navigation" aria-label="Related">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../../genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="may-2024.html" title="May 2024 Update"
+             accesskey="N">next</a> |</li>
+        <li class="right" >
+          <a href="july-2024.html" title="July 2024 Update"
+             accesskey="P">previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../../monthly-updates.html" >Monthly Updates</a> &#187;</li>
+          <li class="nav-item nav-item-2"><a href="index.html" accesskey="U">2024</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">June 2024 Update</a></li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <section id="june-2024-update">
+<h1>June 2024 Update<a class="headerlink" href="#june-2024-update" title="Link to this heading">¶</a></h1>
+<p>This month has <strong>261</strong> commits from <strong>58</strong> authors. Below are some of the highlights.</p>
+<section id="documentation">
+<h2>Documentation<a class="headerlink" href="#documentation" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Document <a class="reference internal" href="../../develop/timestamp.html"><span class="doc">Timestamp and Timezone Management</span></a>.</p></li>
+</ul>
+</section>
+<section id="core-library">
+<h2>Core Library<a class="headerlink" href="#core-library" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Add UUID Presto type.</p></li>
+<li><p>Add options to configure saving data to SSD cache. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/10056">#10056</a></p></li>
+<li><p>Add support for spill read ahead. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/10008">#10008</a></p></li>
+<li><p>Fix Joins with filters on LazyVectors. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/10045">#10045</a></p></li>
+<li><p>Fix incorrect results due to lazy evaluation of remaining filter. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/10072">#10072</a></p></li>
+</ul>
+</section>
+<section id="presto-functions">
+<h2>Presto Functions<a class="headerlink" href="#presto-functions" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Add <a class="reference internal" href="../../functions/presto/regexp.html#regexp_split" title="regexp_split"><code class="xref py py-func docutils literal notranslate"><span class="pre">regexp_split()</span></code></a>, <a class="reference internal" href="../../functions/presto/regexp.html#id0" title="regexp_replace"><code class="xref py py-func docutils literal notranslate"><span class="pre">regexp_replace()</span></code></a>, <a class="reference internal" href="../../functions/presto/datetime.html#to_milliseconds" title="to_milliseconds"><code class="xref py py-func docutils literal notranslate"><span class="pre">to_milliseconds()</span></code></a>,
+<a class="reference internal" href="../../functions/presto/datetime.html#from_iso8601_timestamp" title="from_iso8601_timestamp"><code class="xref py py-func docutils literal notranslate"><span class="pre">from_iso8601_timestamp()</span></code></a>, <a class="reference internal" href="../../functions/presto/json.html#json_array_get" title="json_array_get"><code class="xref py py-func docutils literal notranslate"><span class="pre">json_array_get()</span></code></a>,
+<a class="reference internal" href="../../functions/presto/map.html#map_remove_null_values" title="map_remove_null_values"><code class="xref py py-func docutils literal notranslate"><span class="pre">map_remove_null_values()</span></code></a>, <a class="reference internal" href="../../functions/presto/array.html#array_cum_sum" title="array_cum_sum"><code class="xref py py-func docutils literal notranslate"><span class="pre">array_cum_sum()</span></code></a>, <a class="reference internal" href="../../functions/presto/string.html#id2" title="normalize"><code class="xref py py-func docutils literal notranslate"><span class="pre">normalize()</span></code></a>,
+<a class="reference internal" href="../../functions/presto/math.html#id9" title="inverse_normal_cdf"><code class="xref py py-func docutils literal notranslate"><span class="pre">inverse_normal_cdf()</span></code></a>, <a class="reference internal" href="../../functions/presto/string.html#lpad" title="lpad"><code class="xref py py-func docutils literal notranslate"><span class="pre">lpad()</span></code></a>, <a class="reference internal" href="../../functions/presto/string.html#rpad" title="rpad"><code class="xref py py-func docutils literal notranslate"><span class="pre">rpad()</span></code></a>, <a class="reference internal" href="../../functions/presto/misc.html#id2" title="fail"><code class="xref py py-func docutils literal notranslate"><span class="pre">fail()</span></code></a>,
+<a class="reference internal" href="../../functions/presto/map.html#map_top_n_keys" title="map_top_n_keys"><code class="xref py py-func docutils literal notranslate"><span class="pre">map_top_n_keys()</span></code></a> functions.</p></li>
+<li><p>Add support for TS_WITH_TZ +/- INTERVAL function.</p></li>
+<li><p>Add support for INTERVAL input to <a class="reference internal" href="../../functions/presto/datetime.html#year" title="year"><code class="xref py py-func docutils literal notranslate"><span class="pre">year()</span></code></a>, <a class="reference internal" href="../../functions/presto/datetime.html#month" title="month"><code class="xref py py-func docutils literal notranslate"><span class="pre">month()</span></code></a>, <a class="reference internal" href="../../functions/presto/datetime.html#hour" title="hour"><code class="xref py py-func docutils literal notranslate"><span class="pre">hour()</span></code></a>,
+<a class="reference internal" href="../../functions/presto/datetime.html#minute" title="minute"><code class="xref py py-func docutils literal notranslate"><span class="pre">minute()</span></code></a>, <a class="reference internal" href="../../functions/presto/datetime.html#second" title="second"><code class="xref py py-func docutils literal notranslate"><span class="pre">second()</span></code></a>, <a class="reference internal" href="../../functions/presto/datetime.html#millisecond" title="millisecond"><code class="xref py py-func docutils literal notranslate"><span class="pre">millisecond()</span></code></a>, comparison functions.</p></li>
+<li><p>Add support for CAST(TIMESTAMP WITH TIMEZONE AS VARCHAR).</p></li>
+<li><p>Add support for CAST(DATE AS TIMESTAMP WITH TIMEZONE).</p></li>
+<li><p>Add support for CAST(TIMESTAMP WITH TIMEZONE AS DATE).</p></li>
+<li><p>Add support for trailing spaces in CAST(VARCHAR as DATE).</p></li>
+<li><p>Add support for negative array index, single-quoted keys, paths without leading “$”
+JsonPath argument in JSON functions such as <a class="reference internal" href="../../functions/presto/json.html#json_extract" title="json_extract"><code class="xref py py-func docutils literal notranslate"><span class="pre">json_extract()</span></code></a>.</p></li>
+<li><p>Add support for DECIMAL in <a class="reference internal" href="../../functions/presto/decimal.html#id0" title="modulus"><code class="xref py py-func docutils literal notranslate"><span class="pre">modulus()</span></code></a> function.</p></li>
+<li><p>Add support for DATETIME unit ‘week’ in <a class="reference internal" href="../../functions/presto/datetime.html#date_add" title="date_add"><code class="xref py py-func docutils literal notranslate"><span class="pre">date_add()</span></code></a> and <a class="reference internal" href="../../functions/presto/datetime.html#date_diff" title="date_diff"><code class="xref py py-func docutils literal notranslate"><span class="pre">date_diff()</span></code></a> functions.</p></li>
+<li><p>Add support for TIMESTAMP input in <a class="reference internal" href="../../functions/presto/datetime.html#to_iso8601" title="to_iso8601"><code class="xref py py-func docutils literal notranslate"><span class="pre">to_iso8601()</span></code></a> function.</p></li>
+<li><p>Add support for variable pattern and replacement in <a class="reference internal" href="../../functions/presto/regexp.html#id0" title="regexp_replace"><code class="xref py py-func docutils literal notranslate"><span class="pre">regexp_replace()</span></code></a> function.</p></li>
+<li><p>Add support for INTERVAL and TIMESTAMP WITH TIMEZONE to between function.</p></li>
+<li><p>Fix parsing of ‘March’ and ‘MARCH’ input in <code class="xref py py-func docutils literal notranslate"><span class="pre">date_parse()</span></code> function.</p></li>
+<li><p>Add support for complex types to <a class="reference internal" href="../../functions/presto/comparison.html#distinct_from" title="distinct_from"><code class="xref py py-func docutils literal notranslate"><span class="pre">distinct_from()</span></code></a>, <a class="reference internal" href="../../functions/presto/array.html#array_distinct" title="array_distinct"><code class="xref py py-func docutils literal notranslate"><span class="pre">array_distinct()</span></code></a>,
+<a class="reference internal" href="../../functions/presto/aggregate.html#histogram" title="histogram"><code class="xref py py-func docutils literal notranslate"><span class="pre">histogram()</span></code></a> functions.</p></li>
+<li><p>Add support for VARBINARY to <a class="reference internal" href="../../functions/presto/string.html#concat" title="concat"><code class="xref py py-func docutils literal notranslate"><span class="pre">concat()</span></code></a>, <a class="reference internal" href="../../functions/presto/binary.html#from_base64" title="from_base64"><code class="xref py py-func docutils literal notranslate"><span class="pre">from_base64()</span></code></a>, <a class="reference internal" href="../../functions/presto/string.html#substr" title="substr"><code class="xref py py-func docutils literal notranslate"><span class="pre">substr()</span></code></a> functions.</p></li>
+<li><p>Add support for REAL, DECIMAL to <a class="reference internal" href="../../functions/presto/math.html#truncate" title="truncate"><code class="xref py py-func docutils literal notranslate"><span class="pre">truncate()</span></code></a> function.</p></li>
+<li><p>Add support for <code class="xref py py-func docutils literal notranslate"><span class="pre">from_unixtime(unixtime,</span> <span class="pre">hours,</span> <span class="pre">minutes)()</span></code> function.</p></li>
+<li><p>Add support for TIMESTAMP WITH TIME ZONE input to <a class="reference internal" href="../../functions/presto/comparison.html#least" title="least"><code class="xref py py-func docutils literal notranslate"><span class="pre">least()</span></code></a>, <a class="reference internal" href="../../functions/presto/comparison.html#greatest" title="greatest"><code class="xref py py-func docutils literal notranslate"><span class="pre">greatest()</span></code></a>, <a class="reference internal" href="../../functions/presto/math.html#minus" title="minus"><code class="xref py py-func docutils literal notranslate"><span class="pre">minus()</span></code></a> functions.</p></li>
+<li><p>Add support for BOOLEAN input to <a class="reference internal" href="../../functions/presto/aggregate.html#approx_most_frequent" title="approx_most_frequent"><code class="xref py py-func docutils literal notranslate"><span class="pre">approx_most_frequent()</span></code></a> function.</p></li>
+<li><p>Fix <a class="reference internal" href="../../functions/presto/json.html#json_array_contains" title="json_array_contains"><code class="xref py py-func docutils literal notranslate"><span class="pre">json_array_contains()</span></code></a> for NaN, Infinity, -Infinity arguments. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/10023">#10023</a></p></li>
+<li><p>Fix <a class="reference internal" href="../../functions/presto/aggregate.html#min" title="min"><code class="xref py py-func docutils literal notranslate"><span class="pre">min()</span></code></a>, <a class="reference internal" href="../../functions/presto/aggregate.html#max" title="max"><code class="xref py py-func docutils literal notranslate"><span class="pre">max()</span></code></a> handling for NaN, Infinity, -Infinity arguments. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/9931">#9931</a></p></li>
+</ul>
+</section>
+<section id="spark-functions">
+<h2>Spark Functions<a class="headerlink" href="#spark-functions" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Add <a class="reference internal" href="../../functions/spark/math.html#log" title="log"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">log()</span></code></a> function.</p></li>
+<li><p>Add support for DECIMAL input to <a class="reference internal" href="../../functions/spark/comparison.html#greatest" title="greatest"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">greatest()</span></code></a> and <a class="reference internal" href="../../functions/spark/comparison.html#least" title="least"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">least()</span></code></a> functions.</p></li>
+<li><p>Add support for complex types to <a class="reference internal" href="../../functions/spark/comparison.html#equalto" title="equalto"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">equalto()</span></code></a> and <a class="reference internal" href="../../functions/spark/comparison.html#equalnullsafe" title="equalnullsafe"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">equalnullsafe()</span></code></a> functions.</p></li>
+<li><p>Add support for FLOAT and DOUBLE types to <code class="xref spark spark-func docutils literal notranslate"><span class="pre">mod()</span></code> function.</p></li>
+<li><p>Fix <a class="reference internal" href="../../functions/spark/decimal.html#in" title="in"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">in()</span></code></a> for NaN inputs.</p></li>
+</ul>
+</section>
+<section id="hive-connector">
+<h2>Hive Connector<a class="headerlink" href="#hive-connector" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Add “cache.no_retention” session config to allow a query not retain data in the AsyncDataCache
+and skip SSD Cache.</p></li>
+<li><p>Add retry for S3 filesystem.</p></li>
+<li><p>Add support for ORC file-format Reader.</p></li>
+</ul>
+</section>
+<section id="performance-and-correctness">
+<h2>Performance and Correctness<a class="headerlink" href="#performance-and-correctness" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Add benchmark of casting string to double.</p></li>
+<li><p>Add benchmark for Iceberg SplitReader.</p></li>
+<li><p>Parallelize spilling by partitioning. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/9938">#9938</a></p></li>
+<li><p>Optimize merge-join by using vectorization and conditional use of dictionary encoding. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/9763">#9763</a></p></li>
+<li><p>SIMD-ize comparisons for DATE type.</p></li>
+</ul>
+</section>
+<section id="build-system">
+<h2>Build System<a class="headerlink" href="#build-system" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Add support for Centos9 Stream + GCC12.</p></li>
+<li><p>Update fbos deps to v2024.05.20.00.</p></li>
+</ul>
+</section>
+<section id="credits">
+<h2>Credits<a class="headerlink" href="#credits" title="Link to this heading">¶</a></h2>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span> <span class="mi">1</span>  <span class="n">Amit</span> <span class="n">Dutta</span> <span class="o">-</span> <span class="n">Meta</span>
+ <span class="mi">3</span>  <span class="n">Andrii</span> <span class="n">Rosa</span> <span class="o">-</span> <span class="n">Meta</span>
+ <span class="mi">1</span>  <span class="n">Ankita</span> <span class="n">Victor</span> <span class="o">-</span> <span class="n">Microsoft</span>
+ <span class="mi">1</span>  <span class="n">Athmaja</span> <span class="n">N</span> <span class="o">-</span> <span class="n">IBM</span>
+ <span class="mi">8</span>  <span class="n">Bikramjeet</span> <span class="n">Vig</span> <span class="o">-</span> <span class="n">Meta</span>
+ <span class="mi">2</span>  <span class="n">Christian</span> <span class="n">Zentgraf</span> <span class="o">-</span> <span class="n">IBM</span>
+ <span class="mi">1</span>  <span class="n">Daniel</span> <span class="n">Hunte</span> <span class="o">-</span> <span class="n">Meta</span>
+ <span class="mi">1</span>  <span class="n">Daniel</span> <span class="n">Jonathan</span> <span class="n">Hunte</span> <span class="o">-</span> <span class="n">Meta</span>
+<span class="mi">13</span>  <span class="n">Deepak</span> <span class="n">Majeti</span> <span class="o">-</span> <span class="n">IBM</span>
+ <span class="mi">1</span>  <span class="n">Deepashree</span> <span class="n">Gandhi</span> <span class="o">-</span> <span class="n">IBM</span>
+ <span class="mi">1</span>  <span class="n">Huameng</span> <span class="p">(</span><span class="n">Michael</span><span class="p">)</span> <span class="n">Jiang</span> <span class="o">-</span> <span class="n">Meta</span>
+ <span class="mi">1</span>  <span class="n">Jacob</span> <span class="n">Khaliqi</span>
+ <span class="mi">5</span>  <span class="n">Jacob</span> <span class="n">Wujciak</span><span class="o">-</span><span class="n">Jens</span> <span class="o">-</span> <span class="n">Voltron</span> <span class="n">Data</span>
+ <span class="mi">3</span>  <span class="n">Jia</span> <span class="n">Ke</span> <span class="o">-</span> <span class="n">Intel</span>
+ <span class="mi">7</span>  <span class="n">Jialiang</span> <span class="n">Tan</span>
+<span class="mi">17</span>  <span class="n">Jimmy</span> <span class="n">Lu</span> <span class="o">-</span> <span class="n">Meta</span>
+ <span class="mi">7</span>  <span class="n">Ke</span>
+<span class="mi">24</span>  <span class="n">Kevin</span> <span class="n">Wilfong</span> <span class="o">-</span> <span class="n">Meta</span>
+ <span class="mi">3</span>  <span class="n">Krishna</span> <span class="n">Pai</span> <span class="o">-</span> <span class="n">Meta</span>
+ <span class="mi">1</span>  <span class="n">Kunal</span> <span class="n">Kataria</span> <span class="o">-</span> <span class="n">Meta</span>
+<span class="mi">56</span>  <span class="n">Masha</span> <span class="n">Basmanova</span> <span class="o">-</span> <span class="n">Meta</span>
+ <span class="mi">1</span>  <span class="n">NEUpanning</span>
+ <span class="mi">4</span>  <span class="n">Orri</span> <span class="n">Erling</span> <span class="o">-</span> <span class="n">Meta</span>
+ <span class="mi">5</span>  <span class="n">PHILO</span><span class="o">-</span><span class="n">HE</span> <span class="o">-</span> <span class="n">Intel</span>
+ <span class="mi">9</span>  <span class="n">Pedro</span> <span class="n">Eugenio</span> <span class="n">Rocha</span> <span class="n">Pedreira</span> <span class="o">-</span> <span class="n">Meta</span>
+ <span class="mi">3</span>  <span class="n">Pramod</span> <span class="n">Satya</span> <span class="o">-</span> <span class="n">IBM</span>
+ <span class="mi">1</span>  <span class="n">Pranjal</span> <span class="n">Shankhdhar</span> <span class="o">-</span> <span class="n">Meta</span>
+ <span class="mi">1</span>  <span class="n">Pratik</span> <span class="n">Joseph</span> <span class="n">Dabre</span>
+ <span class="mi">1</span>  <span class="n">Reetika</span> <span class="n">Agrawal</span> <span class="o">-</span> <span class="n">IBM</span>
+ <span class="mi">3</span>  <span class="n">Sandino</span> <span class="n">Flores</span> <span class="o">-</span> <span class="n">Intel</span>
+ <span class="mi">7</span>  <span class="n">Wei</span> <span class="n">He</span> <span class="o">-</span> <span class="n">Meta</span>
+ <span class="mi">1</span>  <span class="n">Yoav</span> <span class="n">Helfman</span> <span class="o">-</span> <span class="n">Meta</span>
+<span class="mi">11</span>  <span class="n">Zac</span> <span class="n">Wen</span> <span class="o">-</span> <span class="n">Meta</span>
+ <span class="mi">1</span>  <span class="n">Zhenyuan</span> <span class="n">Zhao</span> <span class="o">-</span> <span class="n">Meta</span>
+ <span class="mi">1</span>  <span class="n">aditi</span><span class="o">-</span><span class="n">pandit</span> <span class="o">-</span> <span class="n">IBM</span>
+ <span class="mi">1</span>  <span class="n">chenweiguo</span><span class="o">.</span><span class="n">vc</span> <span class="o">-</span> <span class="n">ByteDance</span>
+ <span class="mi">1</span>  <span class="n">deepthydavis</span> <span class="o">-</span> <span class="n">IBM</span>
+ <span class="mi">4</span>  <span class="n">duanmeng</span> <span class="o">-</span> <span class="n">Tencent</span>
+ <span class="mi">1</span>  <span class="n">gaoyangxiaozhu</span>
+ <span class="mi">1</span>  <span class="n">joey</span><span class="o">.</span><span class="n">ljy</span> <span class="o">-</span> <span class="n">Alibaba</span> <span class="n">Inc</span>
+ <span class="mi">1</span>  <span class="n">liangyongyuan</span> <span class="o">-</span> <span class="n">Xiaomi</span>
+ <span class="mi">4</span>  <span class="n">lingbin</span> <span class="o">-</span> <span class="n">Alibaba</span> <span class="n">Inc</span>
+ <span class="mi">3</span>  <span class="n">mwish</span>
+ <span class="mi">1</span>  <span class="n">rexan</span>
+ <span class="mi">2</span>  <span class="n">rui</span><span class="o">-</span><span class="n">mo</span> <span class="o">-</span> <span class="n">Intel</span>
+ <span class="mi">1</span>  <span class="n">soumyaduriseti</span> <span class="o">-</span> <span class="n">IBM</span>
+ <span class="mi">1</span>  <span class="n">wjameswu</span> <span class="o">-</span> <span class="n">Tencent</span>
+ <span class="mi">8</span>  <span class="n">wypb</span> <span class="o">-</span> <span class="n">Tencent</span>
+<span class="mi">16</span>  <span class="n">xiaoxmeng</span> <span class="o">-</span> <span class="n">Meta</span>
+ <span class="mi">1</span>  <span class="n">yan</span> <span class="n">ma</span> <span class="o">-</span> <span class="n">Intel</span>
+ <span class="mi">1</span>  <span class="n">yangshijie</span><span class="mf">.2024</span> <span class="o">-</span> <span class="n">ByteDance</span>
+ <span class="mi">4</span>  <span class="n">yanngyoung</span> <span class="o">-</span> <span class="n">Tencent</span>
+ <span class="mi">5</span>  <span class="n">zhli1142015</span> <span class="o">-</span> <span class="n">Microsoft</span>
+</pre></div>
+</div>
+</section>
+</section>
+
+
+            <div class="clearer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="Main">
+        <div class="sphinxsidebarwrapper">
+  <div>
+    <h3><a href="../../index.html">Table of Contents</a></h3>
+    <ul>
+<li><a class="reference internal" href="#">June 2024 Update</a><ul>
+<li><a class="reference internal" href="#documentation">Documentation</a></li>
+<li><a class="reference internal" href="#core-library">Core Library</a></li>
+<li><a class="reference internal" href="#presto-functions">Presto Functions</a></li>
+<li><a class="reference internal" href="#spark-functions">Spark Functions</a></li>
+<li><a class="reference internal" href="#hive-connector">Hive Connector</a></li>
+<li><a class="reference internal" href="#performance-and-correctness">Performance and Correctness</a></li>
+<li><a class="reference internal" href="#build-system">Build System</a></li>
+<li><a class="reference internal" href="#credits">Credits</a></li>
+</ul>
+</li>
+</ul>
+
+  </div>
+  <div>
+    <h4>Previous topic</h4>
+    <p class="topless"><a href="july-2024.html"
+                          title="previous chapter">July 2024 Update</a></p>
+  </div>
+  <div>
+    <h4>Next topic</h4>
+    <p class="topless"><a href="may-2024.html"
+                          title="next chapter">May 2024 Update</a></p>
+  </div>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../../_sources/monthly-updates/2024/june-2024.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<search id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</search>
+<script>document.getElementById('searchbox').style.display = "block"</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="Related">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../../genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="may-2024.html" title="May 2024 Update"
+             >next</a> |</li>
+        <li class="right" >
+          <a href="july-2024.html" title="July 2024 Update"
+             >previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../../monthly-updates.html" >Monthly Updates</a> &#187;</li>
+          <li class="nav-item nav-item-2"><a href="index.html" >2024</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">June 2024 Update</a></li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+    &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.4.7.
+    </div>
+  </body>
+</html>

@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>July 2025 Update &#8212; Velox  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=8f2a1f02" />
+    <link rel="stylesheet" type="text/css" href="../_static/nature.css?v=0f882399" />
+    <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=9a2dae69"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="June 2025 Update" href="june-2025.html" />
+    <link rel="prev" title="Monthly Updates" href="../monthly-updates.html" /> 
+  </head><body>
+    <div class="related" role="navigation" aria-label="Related">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="june-2025.html" title="June 2025 Update"
+             accesskey="N">next</a> |</li>
+        <li class="right" >
+          <a href="../monthly-updates.html" title="Monthly Updates"
+             accesskey="P">previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../monthly-updates.html" accesskey="U">Monthly Updates</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">July 2025 Update</a></li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <section id="july-2025-update">
+<h1>July 2025 Update<a class="headerlink" href="#july-2025-update" title="Link to this heading">¶</a></h1>
+<p>This update was generated with the assistance of AI. While we strive for accuracy, please note
+that AI-generated content may not always be error-free. We encourage you to verify any information
+that is important to you.</p>
+<section id="core-library">
+<h2>Core Library<a class="headerlink" href="#core-library" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Switch to C++20 standard. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/10866">#10866</a></p></li>
+<li><p>Add ParallelProject node and operator from Verax. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/14220">#14220</a></p></li>
+<li><p>Add barriered execution support to AssignUniqueId. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/14224">#14224</a></p></li>
+<li><p>Add support for left join semantics to Unnest. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/14095">#14095</a></p></li>
+<li><p>Add support for converting OPAQUE vectors to variant. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/14235">#14235</a></p></li>
+<li><p>Add basic support for coercions to help with function type resolution. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/14113">#14113</a></p></li>
+<li><p>Optimize streaming aggregation by removing max output batch size limit, reducing peak memory 4x. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/14238">#14238</a></p></li>
+<li><p>Fix deadlock when dropping non-existent child memory pools. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/14202">#14202</a></p></li>
+<li><p>Fix Variant::hash and BaseVector::hashValueAt for arrays and maps. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/14019">#14019</a></p></li>
+<li><p>Fix ConstantTypedExpr equals/hash/toString methods for various data types. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/14055">#14055</a></p></li>
+<li><p>Fix AssignUniqueId needsInput logic. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/14127">#14127</a></p></li>
+</ul>
+</section>
+<section id="presto-functions">
+<h2>Presto Functions<a class="headerlink" href="#presto-functions" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Add <a class="reference internal" href="../functions/presto/math.html#id6" title="dot_product"><code class="xref py py-func docutils literal notranslate"><span class="pre">dot_product()</span></code></a> function for embedding similarity calculations.</p></li>
+<li><p>Add seeded version of <a class="reference internal" href="../functions/presto/binary.html#id0" title="xxhash64"><code class="xref py py-func docutils literal notranslate"><span class="pre">xxhash64()</span></code></a> function.</p></li>
+<li><p>Add SFM sketch functions: <a class="reference internal" href="../functions/presto/tdigest.html#merge" title="merge"><code class="xref py py-func docutils literal notranslate"><span class="pre">merge()</span></code></a>, <a class="reference internal" href="../functions/presto/aggregate.html#noisy_approx_set_sfm_from_index_and_zeros" title="noisy_approx_set_sfm_from_index_and_zeros"><code class="xref py py-func docutils literal notranslate"><span class="pre">noisy_approx_set_sfm_from_index_and_zeros()</span></code></a>, <a class="reference internal" href="../functions/presto/aggregate.html#noisy_approx_distinct_sfm" title="noisy_approx_distinct_sfm"><code class="xref py py-func docutils literal notranslate"><span class="pre">noisy_approx_distinct_sfm()</span></code></a> and <a class="reference internal" href="../functions/presto/aggregate.html#noisy_approx_set_sfm" title="noisy_approx_set_sfm"><code class="xref py py-func docutils literal notranslate"><span class="pre">noisy_approx_set_sfm()</span></code></a> aggregate functions.</p></li>
+<li><p>Add <a class="reference internal" href="../functions/presto/tdigest.html#quantile_at_value" title="quantile_at_value"><code class="xref py py-func docutils literal notranslate"><span class="pre">quantile_at_value()</span></code></a> and <code class="xref py py-func docutils literal notranslate"><span class="pre">scale_qdigest()</span></code> functions.</p></li>
+<li><p>Add <a class="reference internal" href="../functions/presto/geospatial.html#geometry_nearest_points" title="geometry_nearest_points"><code class="xref py py-func docutils literal notranslate"><span class="pre">geometry_nearest_points()</span></code></a>, <a class="reference internal" href="../functions/presto/geospatial.html#ST_NumPoints" title="ST_NumPoints"><code class="xref py py-func docutils literal notranslate"><span class="pre">ST_NumPoints()</span></code></a>, <a class="reference internal" href="../functions/presto/geospatial.html#ST_EnvelopeAsPts" title="ST_EnvelopeAsPts"><code class="xref py py-func docutils literal notranslate"><span class="pre">ST_EnvelopeAsPts()</span></code></a>, <a class="reference internal" href="../functions/presto/geospatial.html#ST_Points" title="ST_Points"><code class="xref py py-func docutils literal notranslate"><span class="pre">ST_Points()</span></code></a> functions.</p></li>
+<li><p>Add <a class="reference internal" href="../functions/presto/geospatial.html#ST_Buffer" title="ST_Buffer"><code class="xref py py-func docutils literal notranslate"><span class="pre">ST_Buffer()</span></code></a>, <a class="reference internal" href="../functions/presto/geospatial.html#ST_CoordDim" title="ST_CoordDim"><code class="xref py py-func docutils literal notranslate"><span class="pre">ST_CoordDim()</span></code></a>, <a class="reference internal" href="../functions/presto/geospatial.html#ST_Envelope" title="ST_Envelope"><code class="xref py py-func docutils literal notranslate"><span class="pre">ST_Envelope()</span></code></a>, <a class="reference internal" href="../functions/presto/geospatial.html#ST_ExteriorRing" title="ST_ExteriorRing"><code class="xref py py-func docutils literal notranslate"><span class="pre">ST_ExteriorRing()</span></code></a> functions.</p></li>
+<li><p>Add <a class="reference internal" href="../functions/presto/geospatial.html#ST_ConvexHull" title="ST_ConvexHull"><code class="xref py py-func docutils literal notranslate"><span class="pre">ST_ConvexHull()</span></code></a>, <a class="reference internal" href="../functions/presto/geospatial.html#ST_Dimension" title="ST_Dimension"><code class="xref py py-func docutils literal notranslate"><span class="pre">ST_Dimension()</span></code></a>, <a class="reference internal" href="../functions/presto/geospatial.html#ST_NumInteriorRing" title="ST_NumInteriorRing"><code class="xref py py-func docutils literal notranslate"><span class="pre">ST_NumInteriorRing()</span></code></a>, <a class="reference internal" href="../functions/presto/geospatial.html#ST_NumGeometries" title="ST_NumGeometries"><code class="xref py py-func docutils literal notranslate"><span class="pre">ST_NumGeometries()</span></code></a> functions.</p></li>
+<li><p>Add <a class="reference internal" href="../functions/presto/geospatial.html#ST_GeometryN" title="ST_GeometryN"><code class="xref py py-func docutils literal notranslate"><span class="pre">ST_GeometryN()</span></code></a>, <a class="reference internal" href="../functions/presto/geospatial.html#ST_InteriorRingN" title="ST_InteriorRingN"><code class="xref py py-func docutils literal notranslate"><span class="pre">ST_InteriorRingN()</span></code></a>, <a class="reference internal" href="../functions/presto/geospatial.html#ST_StartPoint" title="ST_StartPoint"><code class="xref py py-func docutils literal notranslate"><span class="pre">ST_StartPoint()</span></code></a>, <a class="reference internal" href="../functions/presto/geospatial.html#ST_EndPoint" title="ST_EndPoint"><code class="xref py py-func docutils literal notranslate"><span class="pre">ST_EndPoint()</span></code></a> functions.</p></li>
+<li><p>Add <a class="reference internal" href="../functions/presto/geospatial.html#ST_PointN" title="ST_PointN"><code class="xref py py-func docutils literal notranslate"><span class="pre">ST_PointN()</span></code></a>, <a class="reference internal" href="../functions/presto/geospatial.html#ST_Length" title="ST_Length"><code class="xref py py-func docutils literal notranslate"><span class="pre">ST_Length()</span></code></a>, <a class="reference internal" href="../functions/presto/geospatial.html#ST_IsClosed" title="ST_IsClosed"><code class="xref py py-func docutils literal notranslate"><span class="pre">ST_IsClosed()</span></code></a>, <code class="xref py py-func docutils literal notranslate"><span class="pre">ST_Empty()</span></code>, <a class="reference internal" href="../functions/presto/geospatial.html#ST_IsRing" title="ST_IsRing"><code class="xref py py-func docutils literal notranslate"><span class="pre">ST_IsRing()</span></code></a> functions.</p></li>
+<li><p>Add <a class="reference internal" href="../functions/presto/geospatial.html#ST_Polygon" title="ST_Polygon"><code class="xref py py-func docutils literal notranslate"><span class="pre">ST_Polygon()</span></code></a> function.</p></li>
+<li><p>Fix Geometry serialization/deserialization errors for GeometryCollections with empty geometries. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/14243">#14243</a></p></li>
+<li><p>Optimize <a class="reference internal" href="../functions/presto/array.html#flatten" title="flatten"><code class="xref py py-func docutils literal notranslate"><span class="pre">flatten()</span></code></a> as a VectorFunction to enable zero copy. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/14215">#14215</a></p></li>
+</ul>
+</section>
+<section id="spark-functions">
+<h2>Spark Functions<a class="headerlink" href="#spark-functions" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Add <a class="reference internal" href="../functions/spark/string.html#base64" title="base64"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">base64()</span></code></a> and <a class="reference internal" href="../functions/spark/string.html#initcap" title="initcap"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">initcap()</span></code></a> functions.</p></li>
+<li><p>Add support for decimal type in <a class="reference internal" href="../functions/spark/json.html#from_json" title="from_json"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">from_json()</span></code></a> function.</p></li>
+<li><p>Add <a class="reference internal" href="../functions/spark/math.html#abs" title="abs"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">abs()</span></code></a> function to handle ANSI mode differences from Presto.</p></li>
+<li><p>Fix <a class="reference internal" href="../functions/spark/aggregate.html#corr" title="corr"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">corr()</span></code></a> aggregate function to return NaN instead of NULL when variance is zero. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/13956">#13956</a></p></li>
+<li><p>Fix <a class="reference internal" href="../functions/spark/aggregate.html#covar_samp" title="covar_samp"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">covar_samp()</span></code></a> aggregate function to return NaN instead of Inf when c2 is infinite. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/13990">#13990</a></p></li>
+<li><p>Fix <a class="reference internal" href="../functions/spark/json.html#get_json_object" title="get_json_object"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">get_json_object()</span></code></a> function to normalize JSON paths properly. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/13854">#13854</a></p></li>
+</ul>
+</section>
+<section id="connectors">
+<h2>Connectors<a class="headerlink" href="#connectors" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Add metadata support and filter pushdown to TpchConnector. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/14099">#14099</a></p></li>
+<li><p>Add HDFS filesystem operations: remove, rmdir, rename, mkdir. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/13948">#13948</a></p></li>
+<li><p>Add S3 filesystem operations: exists and list. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/13893">#13893</a></p></li>
+<li><p>Add TokenProvider support to ConnectorQueryCtx for authentication. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/13919">#13919</a></p></li>
+<li><p>Add support for timestamp as Hive partition ID. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/13494">#13494</a></p></li>
+<li><p>Add text format write support for complex types: ROW, MAP, and ARRAY. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/14064">#14064</a></p></li>
+<li><p>Add escape character support for text parsing. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/14130">#14130</a></p></li>
+<li><p>Add backward compatibility support for TIMESTAMP in TextReader. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/14063">#14063</a></p></li>
+<li><p>Fix HiveDataSink to materialize input before writes to prevent lazy vector errors. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/14085">#14085</a></p></li>
+</ul>
+</section>
+<section id="performance-and-correctness">
+<h2>Performance and Correctness<a class="headerlink" href="#performance-and-correctness" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Make BingTile and other custom types non-orderable to match Presto behavior. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/14100">#14100</a></p></li>
+<li><p>Fix Cast to JSON output size estimation for invalid Unicode input. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/14062">#14062</a></p></li>
+<li><p>Fix constant input size validation in streaming aggregation. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/13933">#13933</a></p></li>
+<li><p>Fix hash aggregation row container cleanup crash on abort. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/13979">#13979</a></p></li>
+</ul>
+</section>
+<section id="credits">
+<h2>Credits<a class="headerlink" href="#credits" title="Link to this heading">¶</a></h2>
+<p>Amit Dutta, Bikramjeet Vig, Bowen Wu, Chengcheng Jin, Christian Zentgraf,
+Elodie Li, Eric Jia, Heidi Han, Henry Edwin Dikeman, Hongze Zhang, Jacob
+Khaliqi, Jacob Wujciak-Jens, James Gill, Jialiang Tan, Jimmy Lu, Joe Abraham,
+Ke Jia, Ke Wang, Kevin Wilfong, Konstantinos Karatsenidis, Krishna Pai, Libin
+Bai, Manikanta Loya, Masha Basmanova, Natasha Sehgal, Oliver Xu, Orri Erling,
+Patrick Sullivan, Pedro Eugenio Rocha Pedreira, Peter Enescu, Pramod Satya,
+Raaghav Ravishankar, Rajeev Dharmendra Singh, Rui Mo, Sutou Kouhei, Tony Liu,
+Vincent Crabtree, Xiao Du, Xiaoxuan Meng, Yi Cheng Lee, Yuxuan Chen, Zhen Li,
+Zhiying Liang, aditi-pandit, lingbin, nimesh.k, wecharyu, wraymo, zhli1142015,
+zml1206</p>
+</section>
+</section>
+
+
+            <div class="clearer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="Main">
+        <div class="sphinxsidebarwrapper">
+  <div>
+    <h3><a href="../index.html">Table of Contents</a></h3>
+    <ul>
+<li><a class="reference internal" href="#">July 2025 Update</a><ul>
+<li><a class="reference internal" href="#core-library">Core Library</a></li>
+<li><a class="reference internal" href="#presto-functions">Presto Functions</a></li>
+<li><a class="reference internal" href="#spark-functions">Spark Functions</a></li>
+<li><a class="reference internal" href="#connectors">Connectors</a></li>
+<li><a class="reference internal" href="#performance-and-correctness">Performance and Correctness</a></li>
+<li><a class="reference internal" href="#credits">Credits</a></li>
+</ul>
+</li>
+</ul>
+
+  </div>
+  <div>
+    <h4>Previous topic</h4>
+    <p class="topless"><a href="../monthly-updates.html"
+                          title="previous chapter">Monthly Updates</a></p>
+  </div>
+  <div>
+    <h4>Next topic</h4>
+    <p class="topless"><a href="june-2025.html"
+                          title="next chapter">June 2025 Update</a></p>
+  </div>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../_sources/monthly-updates/july-2025.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<search id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</search>
+<script>document.getElementById('searchbox').style.display = "block"</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="Related">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="june-2025.html" title="June 2025 Update"
+             >next</a> |</li>
+        <li class="right" >
+          <a href="../monthly-updates.html" title="Monthly Updates"
+             >previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../monthly-updates.html" >Monthly Updates</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">July 2025 Update</a></li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+    &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.4.7.
+    </div>
+  </body>
+</html>

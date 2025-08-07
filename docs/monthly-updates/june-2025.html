@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>June 2025 Update &#8212; Velox  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=8f2a1f02" />
+    <link rel="stylesheet" type="text/css" href="../_static/nature.css?v=0f882399" />
+    <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=9a2dae69"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="May 2025 Update" href="may-2025.html" />
+    <link rel="prev" title="July 2025 Update" href="july-2025.html" /> 
+  </head><body>
+    <div class="related" role="navigation" aria-label="Related">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="may-2025.html" title="May 2025 Update"
+             accesskey="N">next</a> |</li>
+        <li class="right" >
+          <a href="july-2025.html" title="July 2025 Update"
+             accesskey="P">previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../monthly-updates.html" accesskey="U">Monthly Updates</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">June 2025 Update</a></li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <section id="june-2025-update">
+<h1>June 2025 Update<a class="headerlink" href="#june-2025-update" title="Link to this heading">¶</a></h1>
+<p>This update was generated with the assistance of AI. While we strive for accuracy, please note
+that AI-generated content may not always be error-free. We encourage you to verify any information
+that is important to you.</p>
+<section id="core-library">
+<h2>Core Library<a class="headerlink" href="#core-library" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Add null key support for index join. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/13891">#13891</a></p></li>
+<li><p>Add Async SpillMerger in LocalMerge. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/13634">#13634</a></p></li>
+<li><p>Share filter among drivers for improved efficiency. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/13784">#13784</a></p></li>
+<li><p>Make global arbitration consider query priority. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/13827">#13827</a></p></li>
+<li><p>Fix anti and semi join result mismatch with filter and multiple matches. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/13123">#13123</a></p></li>
+<li><p>Fix the server crash caused by remote exchange error. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/13905">#13905</a></p></li>
+<li><p>Fix resource release for memoizing constant folding expression. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/13755">#13755</a></p></li>
+<li><p>Fix Expr::isDeterministic for lambda functions. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/13647">#13647</a></p></li>
+<li><p>Enable constant folding for lambda functions. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/13642">#13642</a></p></li>
+</ul>
+</section>
+<section id="presto-functions">
+<h2>Presto Functions<a class="headerlink" href="#presto-functions" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Add <a class="reference internal" href="../functions/presto/aggregate.html#id6" title="noisy_avg_gaussian"><code class="xref py py-func docutils literal notranslate"><span class="pre">noisy_avg_gaussian()</span></code></a>, <a class="reference internal" href="../functions/presto/aggregate.html#id5" title="noisy_sum_gaussian"><code class="xref py py-func docutils literal notranslate"><span class="pre">noisy_sum_gaussian()</span></code></a>, <a class="reference internal" href="../functions/presto/aggregate.html#noisy_count_gaussian" title="noisy_count_gaussian"><code class="xref py py-func docutils literal notranslate"><span class="pre">noisy_count_gaussian()</span></code></a>, <a class="reference internal" href="../functions/presto/aggregate.html#noisy_count_if_gaussian" title="noisy_count_if_gaussian"><code class="xref py py-func docutils literal notranslate"><span class="pre">noisy_count_if_gaussian()</span></code></a> functions.</p></li>
+<li><p>Add <a class="reference internal" href="../functions/presto/tdigest.html#tdigest_agg" title="tdigest_agg"><code class="xref py py-func docutils literal notranslate"><span class="pre">tdigest_agg()</span></code></a>, <code class="xref py py-func docutils literal notranslate"><span class="pre">value_at_quatile()</span></code>, <a class="reference internal" href="../functions/presto/tdigest.html#values_at_quantiles" title="values_at_quantiles"><code class="xref py py-func docutils literal notranslate"><span class="pre">values_at_quantiles()</span></code></a>, <a class="reference internal" href="../functions/presto/tdigest.html#quantile_at_value" title="quantile_at_value"><code class="xref py py-func docutils literal notranslate"><span class="pre">quantile_at_value()</span></code></a> functions.</p></li>
+<li><p>Add <a class="reference internal" href="../functions/presto/math.html#inverse_chi_squared_cdf" title="inverse_chi_squared_cdf"><code class="xref py py-func docutils literal notranslate"><span class="pre">inverse_chi_squared_cdf()</span></code></a>, <a class="reference internal" href="../functions/presto/math.html#inverse_f_cdf" title="inverse_f_cdf"><code class="xref py py-func docutils literal notranslate"><span class="pre">inverse_f_cdf()</span></code></a> functions.</p></li>
+<li><p>Add <a class="reference internal" href="../functions/presto/math.html#id4" title="l2_squared"><code class="xref py py-func docutils literal notranslate"><span class="pre">l2_squared()</span></code></a> function.</p></li>
+<li><p>Add <a class="reference internal" href="../functions/presto/geospatial.html#ST_Distance" title="ST_Distance"><code class="xref py py-func docutils literal notranslate"><span class="pre">ST_Distance()</span></code></a>, <a class="reference internal" href="../functions/presto/geospatial.html#ST_GeometryType" title="ST_GeometryType"><code class="xref py py-func docutils literal notranslate"><span class="pre">ST_GeometryType()</span></code></a>, <code class="xref py py-func docutils literal notranslate"><span class="pre">St_Centroid()</span></code>, <code class="xref py py-func docutils literal notranslate"><span class="pre">St_Boundary()</span></code>, <a class="reference internal" href="../functions/presto/geospatial.html#ST_XMin" title="ST_XMin"><code class="xref py py-func docutils literal notranslate"><span class="pre">ST_XMin()</span></code></a>, <a class="reference internal" href="../functions/presto/geospatial.html#ST_XMax" title="ST_XMax"><code class="xref py py-func docutils literal notranslate"><span class="pre">ST_XMax()</span></code></a>, <a class="reference internal" href="../functions/presto/geospatial.html#ST_YMin" title="ST_YMin"><code class="xref py py-func docutils literal notranslate"><span class="pre">ST_YMin()</span></code></a>, <a class="reference internal" href="../functions/presto/geospatial.html#ST_YMax" title="ST_YMax"><code class="xref py py-func docutils literal notranslate"><span class="pre">ST_YMax()</span></code></a> functions.</p></li>
+<li><p>Add serialization and deserialization of Geometry type to/from WKT and WKB. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/12771">#12771</a></p></li>
+<li><p>Fix <a class="reference internal" href="../functions/presto/tdigest.html#values_at_quantiles" title="values_at_quantiles"><code class="xref py py-func docutils literal notranslate"><span class="pre">values_at_quantiles()</span></code></a> function to throw error on null input. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/13810">#13810</a></p></li>
+<li><p>Optimize <a class="reference internal" href="../functions/presto/array.html#array_remove" title="array_remove"><code class="xref py py-func docutils literal notranslate"><span class="pre">array_remove()</span></code></a> to avoid unnecessary string copies.</p></li>
+</ul>
+</section>
+<section id="spark-functions">
+<h2>Spark Functions<a class="headerlink" href="#spark-functions" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Add <a class="reference internal" href="../functions/spark/string.html#unbase64" title="unbase64"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">unbase64()</span></code></a>, <a class="reference internal" href="../functions/spark/datetime.html#trunc" title="trunc"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">trunc()</span></code></a>, <a class="reference internal" href="../functions/spark/string.html#varchar_type_write_side_check" title="varchar_type_write_side_check"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">varchar_type_write_side_check()</span></code></a>, <a class="reference internal" href="../functions/spark/math.html#cbrt" title="cbrt"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">cbrt()</span></code></a> functions.</p></li>
+<li><p>Fix try_cast and cast function error case handling. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/12993">#12993</a></p></li>
+<li><p>Fix <a class="reference internal" href="../functions/spark/string.html#lower" title="lower"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">lower()</span></code></a> function on unicode character. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/13158">#13158</a></p></li>
+<li><p>Fix handling of extreme floating-point values in <a class="reference internal" href="../functions/spark/json.html#from_json" title="from_json"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">from_json()</span></code></a>. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/13378">#13378</a></p></li>
+</ul>
+</section>
+<section id="connectors">
+<h2>Connectors<a class="headerlink" href="#connectors" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Add support for exist and list functions in HdfsFileSystem. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/13813">#13813</a></p></li>
+<li><p>Add GCS filesystem operations: rmdir, mkdir, and rename. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/13533">#13533</a>, <a class="reference external" href="https://github.com/facebookincubator/velox/pull/13532">#13532</a>, <a class="reference external" href="https://github.com/facebookincubator/velox/pull/13490">#13490</a></p></li>
+<li><p>Flatten complex-type vectors when writing to Parquet. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/13338">#13338</a></p></li>
+<li><p>Fix multi range filter in timestamp reader for Parquet. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/12926">#12926</a></p></li>
+<li><p>Fix NPE when reading complex type data from Parquet v2. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/13512">#13512</a></p></li>
+</ul>
+</section>
+<section id="performance-and-correctness">
+<h2>Performance and Correctness<a class="headerlink" href="#performance-and-correctness" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Optimize getStringView performance. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/13870">#13870</a></p></li>
+<li><p>Optimize streaming aggregation performance. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/13812">#13812</a></p></li>
+<li><p>Reduce HashTable load factor from 0.875 to 0.7 for better performance. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/13694">#13694</a></p></li>
+<li><p>Improve fillNewMemory tight loop performance. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/13883">#13883</a></p></li>
+<li><p>Increase readBatchSize when the last batch is empty in TableScan. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/13626">#13626</a></p></li>
+</ul>
+</section>
+<section id="credits">
+<h2>Credits<a class="headerlink" href="#credits" title="Link to this heading">¶</a></h2>
+<p>aditi-pandit, Anders Dellien, Andrii Rosa, Artem Selishchev, Bikramjeet Vig,
+Bowen Wu, Chandrashekhar Kumar Singh, Chengcheng Jin, Christian Zentgraf,
+David Reveman, Deepak Majeti, Devavret Makkar, Dharan Aditya, duanmeng,
+Eric Jia, Huameng (Michael) Jiang, iiFeung, Jacob Khaliqi, Jacob Wujciak-Jens,
+Jialiang Tan, Jim Meyering, Jimmy Lu, Jin Chengcheng, Joe Giardino, joey.ljy,
+Ke Jia, Ke Wang, Kent Yao, Kevin Wilfong, Konstantinos Karatsenidis,
+Kostas Xirogiannopoulos, Krishna Pai, lingbin, Luis Garcés-Erice, Mario Ruiz,
+Masha Basmanova, Natasha Sehgal, Oliver Xu, Orri Erling, Patrick Sullivan,
+Paul Meng, Peter Enescu, Ping Liu, Richard Barnes, Rui Mo, Shakyan Kushwaha,
+Wei He, wraymo, xhs7700, Xiao Du, xiaodou, Xiaoxuan Meng, Xin Zhang, Yabin Ma,
+Yi Cheng Lee, yingsu00, Yoav Helfman, <a class="reference external" href="mailto:yumwang&#37;&#52;&#48;ebay&#46;com">yumwang<span>&#64;</span>ebay<span>&#46;</span>com</a>, Zhichen Xu,
+zhli1142015, zml1206, Zoltan Arnold Nagy</p>
+</section>
+</section>
+
+
+            <div class="clearer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="Main">
+        <div class="sphinxsidebarwrapper">
+  <div>
+    <h3><a href="../index.html">Table of Contents</a></h3>
+    <ul>
+<li><a class="reference internal" href="#">June 2025 Update</a><ul>
+<li><a class="reference internal" href="#core-library">Core Library</a></li>
+<li><a class="reference internal" href="#presto-functions">Presto Functions</a></li>
+<li><a class="reference internal" href="#spark-functions">Spark Functions</a></li>
+<li><a class="reference internal" href="#connectors">Connectors</a></li>
+<li><a class="reference internal" href="#performance-and-correctness">Performance and Correctness</a></li>
+<li><a class="reference internal" href="#credits">Credits</a></li>
+</ul>
+</li>
+</ul>
+
+  </div>
+  <div>
+    <h4>Previous topic</h4>
+    <p class="topless"><a href="july-2025.html"
+                          title="previous chapter">July 2025 Update</a></p>
+  </div>
+  <div>
+    <h4>Next topic</h4>
+    <p class="topless"><a href="may-2025.html"
+                          title="next chapter">May 2025 Update</a></p>
+  </div>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../_sources/monthly-updates/june-2025.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<search id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</search>
+<script>document.getElementById('searchbox').style.display = "block"</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="Related">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="may-2025.html" title="May 2025 Update"
+             >next</a> |</li>
+        <li class="right" >
+          <a href="july-2025.html" title="July 2025 Update"
+             >previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../monthly-updates.html" >Monthly Updates</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">June 2025 Update</a></li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+    &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.4.7.
+    </div>
+  </body>
+</html>

@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>March 2024 Update &#8212; Velox  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=8f2a1f02" />
+    <link rel="stylesheet" type="text/css" href="../../_static/nature.css?v=0f882399" />
+    <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../../_static/doctools.js?v=9a2dae69"></script>
+    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="February 2024 Update" href="february-2024.html" />
+    <link rel="prev" title="April 2024 Update" href="april-2024.html" /> 
+  </head><body>
+    <div class="related" role="navigation" aria-label="Related">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../../genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="february-2024.html" title="February 2024 Update"
+             accesskey="N">next</a> |</li>
+        <li class="right" >
+          <a href="april-2024.html" title="April 2024 Update"
+             accesskey="P">previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../../monthly-updates.html" >Monthly Updates</a> &#187;</li>
+          <li class="nav-item nav-item-2"><a href="index.html" accesskey="U">2024</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">March 2024 Update</a></li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <section id="march-2024-update">
+<h1>March 2024 Update<a class="headerlink" href="#march-2024-update" title="Link to this heading">¶</a></h1>
+<section id="documentation">
+<h2>Documentation<a class="headerlink" href="#documentation" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Document <a class="reference external" href="https://velox-lib.io/docs/community/design-philosophy/">design philosophy</a></p></li>
+<li><p>Document custom input generators and verifiers supported in the Aggregation Fuzzer.</p></li>
+<li><p>Document runtime stats reported by the HashTable. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/9255">#9255</a></p></li>
+<li><p>Document usage of generic types in Simple Function API. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/9084">#9084</a></p></li>
+</ul>
+</section>
+<section id="core-library">
+<h2>Core Library<a class="headerlink" href="#core-library" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Add prefix-sort for fixed width sorting keys.</p></li>
+<li><p>Add null behavior and determinism scalar function metadata to the registry. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/9209">#9209</a></p></li>
+<li><p>Add order-sensitive aggregate function metadata to the registry. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/9050">#9050</a></p></li>
+<li><p>Add support for DECIMAL type to Simple Function API. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/9096">#9096</a></p></li>
+<li><p>Add support for lambda functions (reduce_agg) to StreamingAggregation.</p></li>
+<li><p>Deprecate threshold based spilling in Aggregation and OrderBy.</p></li>
+<li><p>Optimize Exchange protocol used by Presto for latency. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/8845">#8845</a></p></li>
+</ul>
+</section>
+<section id="presto-functions">
+<h2>Presto Functions<a class="headerlink" href="#presto-functions" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Add <a class="reference internal" href="../../functions/presto/datetime.html#day" title="day"><code class="xref py py-func docutils literal notranslate"><span class="pre">day()</span></code></a>, <a class="reference internal" href="../../functions/presto/binary.html#from_ieee754_32" title="from_ieee754_32"><code class="xref py py-func docutils literal notranslate"><span class="pre">from_ieee754_32()</span></code></a>, <a class="reference internal" href="../../functions/presto/string.html#hamming_distance" title="hamming_distance"><code class="xref py py-func docutils literal notranslate"><span class="pre">hamming_distance()</span></code></a>, <a class="reference internal" href="../../functions/presto/map.html#map_normalize" title="map_normalize"><code class="xref py py-func docutils literal notranslate"><span class="pre">map_normalize()</span></code></a>,
+<a class="reference internal" href="../../functions/presto/map.html#map_top_n" title="map_top_n"><code class="xref py py-func docutils literal notranslate"><span class="pre">map_top_n()</span></code></a> scalar functions.</p></li>
+<li><p>Add support for DECIMAL input type to <a class="reference internal" href="../../functions/presto/math.html#floor" title="floor"><code class="xref py py-func docutils literal notranslate"><span class="pre">floor()</span></code></a> function.</p></li>
+<li><p>Add support for timestamp +/- IntervalYearMonth.</p></li>
+<li><p>Add <a class="reference internal" href="../../functions/presto/aggregate.html#regr_avgx" title="regr_avgx"><code class="xref py py-func docutils literal notranslate"><span class="pre">regr_avgx()</span></code></a>, <a class="reference internal" href="../../functions/presto/aggregate.html#regr_avgy" title="regr_avgy"><code class="xref py py-func docutils literal notranslate"><span class="pre">regr_avgy()</span></code></a>, <a class="reference internal" href="../../functions/presto/aggregate.html#regr_count" title="regr_count"><code class="xref py py-func docutils literal notranslate"><span class="pre">regr_count()</span></code></a>, <a class="reference internal" href="../../functions/presto/aggregate.html#regr_r2" title="regr_r2"><code class="xref py py-func docutils literal notranslate"><span class="pre">regr_r2()</span></code></a>,
+<a class="reference internal" href="../../functions/presto/aggregate.html#regr_sxx" title="regr_sxx"><code class="xref py py-func docutils literal notranslate"><span class="pre">regr_sxx()</span></code></a>, <a class="reference internal" href="../../functions/presto/aggregate.html#regr_sxy" title="regr_sxy"><code class="xref py py-func docutils literal notranslate"><span class="pre">regr_sxy()</span></code></a>, and <a class="reference internal" href="../../functions/presto/aggregate.html#regr_syy" title="regr_syy"><code class="xref py py-func docutils literal notranslate"><span class="pre">regr_syy()</span></code></a> aggregation functions.</p></li>
+</ul>
+</section>
+<section id="spark-functions">
+<h2>Spark Functions<a class="headerlink" href="#spark-functions" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Add <a class="reference internal" href="../../functions/spark/array.html#array_remove" title="array_remove"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">array_remove()</span></code></a>, <a class="reference internal" href="../../functions/spark/string.html#bit_length" title="bit_length"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">bit_length()</span></code></a>, <a class="reference internal" href="../../functions/spark/bitwise.html#bitwise_xor" title="bitwise_xor"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">bitwise_xor()</span></code></a>,
+<a class="reference internal" href="../../functions/spark/bitwise.html#bitwise_not" title="bitwise_not"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">bitwise_not()</span></code></a>, <a class="reference internal" href="../../functions/spark/datetime.html#make_ym_interval" title="make_ym_interval"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">make_ym_interval()</span></code></a>, <a class="reference internal" href="../../functions/spark/datetime.html#from_utc_timestamp" title="from_utc_timestamp"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">from_utc_timestamp()</span></code></a>,
+<a class="reference internal" href="../../functions/spark/datetime.html#to_utc_timestamp" title="to_utc_timestamp"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">to_utc_timestamp()</span></code></a>, <a class="reference internal" href="../../functions/spark/datetime.html#make_timestamp" title="make_timestamp"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">make_timestamp()</span></code></a>, <code class="xref spark spark-func docutils literal notranslate"><span class="pre">map_subset()</span></code>,
+<a class="reference internal" href="../../functions/spark/math.html#unhex" title="unhex"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">unhex()</span></code></a>, <a class="reference internal" href="../../functions/spark/datetime.html#unix_date" title="unix_date"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">unix_date()</span></code></a>, <a class="reference internal" href="../../functions/spark/misc.html#uuid" title="uuid"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">uuid()</span></code></a> functions.</p></li>
+<li><p>Add <a class="reference internal" href="../../functions/spark/regexp.html#regexp_replace" title="regexp_replace"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">regexp_replace()</span></code></a> function.</p></li>
+<li><p>Add <a class="reference internal" href="../../functions/spark/misc.html#monotonically_increasing_id" title="monotonically_increasing_id"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">monotonically_increasing_id()</span></code></a>, <a class="reference internal" href="../../functions/spark/misc.html#spark_partition_id" title="spark_partition_id"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">spark_partition_id()</span></code></a> functions.</p></li>
+<li><p>Add <a class="reference internal" href="../../functions/spark/aggregate.html#kurtosis" title="kurtosis"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">kurtosis()</span></code></a> and <a class="reference internal" href="../../functions/spark/aggregate.html#skewness" title="skewness"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">skewness()</span></code></a> aggregation functions.</p></li>
+<li><p>Add support for DECIMAL inputs to <a class="reference internal" href="../../functions/spark/aggregate.html#sum" title="sum"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">sum()</span></code></a> aggregation function.</p></li>
+<li><p>Add CAST(real as decimal).</p></li>
+<li><p>Add configuration property ‘spark.partition_id’.</p></li>
+</ul>
+</section>
+<section id="hive-connector">
+<h2>Hive Connector<a class="headerlink" href="#hive-connector" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Add support for S3 client no_proxy CIDR expression. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/9160">#9160</a></p></li>
+<li><p>Add support for synthetic columns ‘$file_size’ and ‘$file_modified_time’.</p></li>
+<li><p>Optimize reading a small sample of rows. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/8920">#8920</a>.</p></li>
+<li><p>Fix Parquet reader for files with different encodings across row groups. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/9129">#9129</a></p></li>
+</ul>
+</section>
+<section id="performance-and-correctness">
+<h2>Performance and Correctness<a class="headerlink" href="#performance-and-correctness" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Add nightly run of Aggregation fuzzer using Presto as source of truth.</p></li>
+<li><p>Add nightly run of Exchange fuzzer.</p></li>
+<li><p>Add utility to randomly trigger OOMs and integrate it into Aggregation and Join fuzzers.</p></li>
+<li><p>Add group execution mode to Join fuzzer.</p></li>
+<li><p>Add support for random frame clause generation to Window fuzzer.</p></li>
+<li><p>Add custom input generator for map_union_sum Presto aggregation function.</p></li>
+<li><p>Add custom result verifier for arbitrary Presto aggregation function.</p></li>
+</ul>
+</section>
+<section id="credits">
+<h2>Credits<a class="headerlink" href="#credits" title="Link to this heading">¶</a></h2>
+<p>8dukongjian, Amit Dutta, Ankita Victor, Bikramjeet Vig, Christian Zentgraf,
+Daniel Munoz, Deepak Majeti, Ge Gao, InitialZJ, Jacob Wujciak-Jens, Jake Jung,
+Jialiang Tan, Jimmy Lu, Karteekmurthys, Kevin Wilfong, Krishna Pai, Ma,  Rong,
+Mahadevuni Naveen Kumar, Marcus D. Hanwell, Masha Basmanova, Nicholas Ormrod,
+Nick Terrell, Orri Erling, PHILO-HE, Patrick Sullivan, Pedro Pedreira, Pramod,
+Pratik Joseph Dabre, Qian Sun, Richard Barnes, Sandino Flores, Schierbeck,
+Cody, Sergey Pershin, Ubuntu, Wei He, Yang Zhang, Zac Wen, aditi-pandit,
+duanmeng, f0rest9999, hengjiang.ly, joey.ljy, lingbin, mwish, rexan, rui-mo,
+willsfeng, wypb, xiaodai1002, xiaoxmeng, xumingming, youxiduo, yuling.sh,
+zhli1142015, zky.zhoukeyong</p>
+</section>
+</section>
+
+
+            <div class="clearer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="Main">
+        <div class="sphinxsidebarwrapper">
+  <div>
+    <h3><a href="../../index.html">Table of Contents</a></h3>
+    <ul>
+<li><a class="reference internal" href="#">March 2024 Update</a><ul>
+<li><a class="reference internal" href="#documentation">Documentation</a></li>
+<li><a class="reference internal" href="#core-library">Core Library</a></li>
+<li><a class="reference internal" href="#presto-functions">Presto Functions</a></li>
+<li><a class="reference internal" href="#spark-functions">Spark Functions</a></li>
+<li><a class="reference internal" href="#hive-connector">Hive Connector</a></li>
+<li><a class="reference internal" href="#performance-and-correctness">Performance and Correctness</a></li>
+<li><a class="reference internal" href="#credits">Credits</a></li>
+</ul>
+</li>
+</ul>
+
+  </div>
+  <div>
+    <h4>Previous topic</h4>
+    <p class="topless"><a href="april-2024.html"
+                          title="previous chapter">April 2024 Update</a></p>
+  </div>
+  <div>
+    <h4>Next topic</h4>
+    <p class="topless"><a href="february-2024.html"
+                          title="next chapter">February 2024 Update</a></p>
+  </div>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../../_sources/monthly-updates/2024/march-2024.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<search id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</search>
+<script>document.getElementById('searchbox').style.display = "block"</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="Related">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../../genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="february-2024.html" title="February 2024 Update"
+             >next</a> |</li>
+        <li class="right" >
+          <a href="april-2024.html" title="April 2024 Update"
+             >previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../../monthly-updates.html" >Monthly Updates</a> &#187;</li>
+          <li class="nav-item nav-item-2"><a href="index.html" >2024</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">March 2024 Update</a></li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+    &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.4.7.
+    </div>
+  </body>
+</html>

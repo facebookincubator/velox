@@ -939,7 +939,7 @@ Otherwise, noise is drawn from a secure random.</p>
 <span class="sig-name descname"><span class="pre">noisy_avg_gaussian</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">col</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">noise_scale</span></span></em><span class="optional">[</span>, <em class="sig-param"><span class="n"><span class="pre">random_seed</span></span></em><span class="optional">]</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#noisy_avg_gaussian" title="Link to this definition">¶</a></dt>
 <dd><p>Calculates the average (arithmetic mean) of all the input values in col and then adds a
 normally distributed random double value with 0 mean and standard deviation of noise_scale.</p>
-<p>If provided, random_seed is used to seed the random number generator.
+<p>If provided, <code class="docutils literal notranslate"><span class="pre">random_seed</span></code> is used to seed the random number generator.
 Otherwise, noise is drawn from a secure random.</p>
 </dd></dl>
 
@@ -949,7 +949,7 @@ Otherwise, noise is drawn from a secure random.</p>
 <dd><p>Calculates the average (arithmetic mean) of all the input values in <code class="docutils literal notranslate"><span class="pre">col</span></code> and then adds a
 normally distributed random double value with 0 mean and standard deviation of <code class="docutils literal notranslate"><span class="pre">noise_scale</span></code>.
 Each value is clipped to the range of [<code class="docutils literal notranslate"><span class="pre">lower</span></code>, <code class="docutils literal notranslate"><span class="pre">upper</span></code>] before averaging.</p>
-<p>If provided, random_seed is used to seed the random number generator.
+<p>If provided, <code class="docutils literal notranslate"><span class="pre">random_seed</span></code> is used to seed the random number generator.
 Otherwise, noise is drawn from a secure random.</p>
 </dd></dl>
 
@@ -988,12 +988,9 @@ This is analogous to the (deterministic) <a class="reference internal" href="#ap
 <dt class="sig sig-object py" id="noisy_empty_approx_set_sfm">
 <span class="sig-name descname"><span class="pre">noisy_empty_approx_set_sfm</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">epsilon</span></span></em><span class="optional">[</span>, <em class="sig-param"><span class="n"><span class="pre">buckets</span></span></em><span class="optional">[</span>, <em class="sig-param"><span class="n"><span class="pre">precision</span></span></em><span class="optional">]</span><span class="optional">]</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">SfmSketch</span></span></span><a class="headerlink" href="#noisy_empty_approx_set_sfm" title="Link to this definition">¶</a></dt>
 <dd><p>Returns an SFM sketch with no items in it. This is analogous to the <code class="docutils literal notranslate"><span class="pre">empty_approx_set()</span></code> function,
-which returns an empty (deterministic) <code class="docutils literal notranslate"><span class="pre">HyperLogLog</span></code> sketch.
-* <code class="docutils literal notranslate"><span class="pre">epsilon</span></code> (double) is a positive number that controls the level of noise in the sketch, as described in <a class="reference internal" href="#hehir2023" id="id8"><span>[Hehir2023]</span></a>.</p>
-<blockquote>
-<div><p>Smaller values of epsilon correspond to noisier sketches.</p>
-</div></blockquote>
+which returns an empty (deterministic) <code class="docutils literal notranslate"><span class="pre">HyperLogLog</span></code> sketch.</p>
 <ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">epsilon</span></code> (double) is a positive number that controls the level of noise in the sketch, as described in <a class="reference internal" href="#hehir2023" id="id8"><span>[Hehir2023]</span></a>. Smaller values of epsilon correspond to noisier sketches.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">buckets</span></code> (int) defaults to 4096.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">precision</span></code> (int) defaults to 24.</p></li>
 </ul>
@@ -1036,14 +1033,11 @@ If this behavior is undesirable, use <code class="xref py py-func docutils liter
 <span class="sig-name descname"><span class="pre">merge</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">SfmSketch</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">SfmSketch</span></span></span><a class="headerlink" href="#merge" title="Link to this definition">¶</a></dt>
 <dd><p>An aggregator function that returns a merged <code class="docutils literal notranslate"><span class="pre">SfmSketch</span></code> of the set union of
 individual <code class="docutils literal notranslate"><span class="pre">SfmSketch</span></code> objects, similar to <code class="docutils literal notranslate"><span class="pre">merge(HyperLogLog)</span></code>.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="p">::</span>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">year</span><span class="p">,</span> <span class="n">cardinality</span><span class="p">(</span><span class="n">merge</span><span class="p">(</span><span class="n">sketch</span><span class="p">))</span> <span class="n">AS</span> <span class="n">annual_distinct_count</span>
+<span class="n">FROM</span> <span class="n">monthly_sketches</span>
+<span class="n">GROUP</span> <span class="n">BY</span> <span class="mi">1</span>
 </pre></div>
 </div>
-<blockquote>
-<div><p>SELECT year, cardinality(merge(sketch)) AS annual_distinct_count
-FROM monthly_sketches
-GROUP BY 1</p>
-</div></blockquote>
 </dd></dl>
 
 <dl class="py function">

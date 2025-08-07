@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>January 2024 Update &#8212; Velox  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=8f2a1f02" />
+    <link rel="stylesheet" type="text/css" href="../../_static/nature.css?v=0f882399" />
+    <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../../_static/doctools.js?v=9a2dae69"></script>
+    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="2023" href="../2023/index.html" />
+    <link rel="prev" title="February 2024 Update" href="february-2024.html" /> 
+  </head><body>
+    <div class="related" role="navigation" aria-label="Related">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../../genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="../2023/index.html" title="2023"
+             accesskey="N">next</a> |</li>
+        <li class="right" >
+          <a href="february-2024.html" title="February 2024 Update"
+             accesskey="P">previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../../monthly-updates.html" >Monthly Updates</a> &#187;</li>
+          <li class="nav-item nav-item-2"><a href="index.html" accesskey="U">2024</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">January 2024 Update</a></li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <section id="january-2024-update">
+<h1>January 2024 Update<a class="headerlink" href="#january-2024-update" title="Link to this heading">¶</a></h1>
+<section id="documentation">
+<h2>Documentation<a class="headerlink" href="#documentation" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Add documentation about <a class="reference internal" href="../../develop/hash-table.html"><span class="doc">Hash Table</span></a>.</p></li>
+<li><p>Add documentation about <a class="reference internal" href="../../develop/memory.html"><span class="doc">memory management</span></a>.</p></li>
+</ul>
+</section>
+<section id="core-library">
+<h2>Core Library<a class="headerlink" href="#core-library" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Add metrics to track time spent in memory arbitration. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/8497">#8497</a>, <a class="reference external" href="https://github.com/facebookincubator/velox/pull/8482">#8482</a></p></li>
+<li><p>Add metric to track average buffer time for exchange. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/8534">#8534</a></p></li>
+<li><p>Optimize count(distinct x) when x is of complex type. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/8560">#8560</a></p></li>
+<li><p>Optimize latency for exchange that uses arbitrary buffer. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/8532">#8532</a>, <a class="reference external" href="https://github.com/facebookincubator/velox/pull/8480">#8480</a></p></li>
+<li><p>Optimize MallocAllocator to reduce lock contention. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/8477">#8477</a></p></li>
+<li><p>Fix aggregation over all-null keys with ignoreNullKeys = true. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/8422">#8422</a></p></li>
+<li><p>Fix race condition in task completion that caused <cite>Output buffers for task not found</cite> failures. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/8357">#8357</a></p></li>
+<li><p>Fix evaluation of CAST expression under TRY. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/8365">#8365</a></p></li>
+<li><p>Fix <cite>FlatVector&lt;StringView&gt;::copy</cite> for vectors with more than 2GB of data. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/8516">#8516</a></p></li>
+<li><p>Fix crash in <cite>FlatVector&lt;bool&gt;::ensureWritable</cite>. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/8450">#8450</a></p></li>
+<li><p>Fix interaction of spilling and yielding in Hash Join operator. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/8520">#8520</a></p></li>
+<li><p>Fix rawInputPositions metrics in Exchange operator. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/8370">#8370</a></p></li>
+</ul>
+</section>
+<section id="presto-functions">
+<h2>Presto Functions<a class="headerlink" href="#presto-functions" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Add <a class="reference internal" href="../../functions/presto/binary.html#from_ieee754_64" title="from_ieee754_64"><code class="xref py py-func docutils literal notranslate"><span class="pre">from_ieee754_64()</span></code></a>, <a class="reference internal" href="../../functions/presto/map.html#multimap_from_entries" title="multimap_from_entries"><code class="xref py py-func docutils literal notranslate"><span class="pre">multimap_from_entries()</span></code></a>, <a class="reference internal" href="../../functions/presto/array.html#ngrams" title="ngrams"><code class="xref py py-func docutils literal notranslate"><span class="pre">ngrams()</span></code></a> functions.</p></li>
+<li><p>Add support for VARBINARY inputs to <a class="reference internal" href="../../functions/presto/array.html#reverse" title="reverse"><code class="xref py py-func docutils literal notranslate"><span class="pre">reverse()</span></code></a> function.</p></li>
+<li><p>Add support for arrays of complex types to <a class="reference internal" href="../../functions/presto/array.html#array_min" title="array_min"><code class="xref py py-func docutils literal notranslate"><span class="pre">array_min()</span></code></a> and <a class="reference internal" href="../../functions/presto/array.html#array_max" title="array_max"><code class="xref py py-func docutils literal notranslate"><span class="pre">array_max()</span></code></a> functions.</p></li>
+<li><p>Add support for casting DOUBLE and VARCHAR as DECIMAL.</p></li>
+<li><p>Add support for UNKNOWN key to <a class="reference internal" href="../../functions/presto/aggregate.html#map_agg" title="map_agg"><code class="xref py py-func docutils literal notranslate"><span class="pre">map_agg()</span></code></a> function.</p></li>
+<li><p>Add support for timezone offsets to <a class="reference internal" href="../../functions/presto/datetime.html#timezone_hour" title="timezone_hour"><code class="xref py py-func docutils literal notranslate"><span class="pre">timezone_hour()</span></code></a> and <a class="reference internal" href="../../functions/presto/datetime.html#timezone_minute" title="timezone_minute"><code class="xref py py-func docutils literal notranslate"><span class="pre">timezone_minute()</span></code></a> functions. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/8269">#8269</a></p></li>
+<li><p>Optimize cast from JSON by using simdjson. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/8216">#8216</a></p></li>
+<li><p>Fix handling of timestamps with timezone in <a class="reference internal" href="../../functions/presto/datetime.html#date_diff" title="date_diff"><code class="xref py py-func docutils literal notranslate"><span class="pre">date_diff()</span></code></a> function. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/8540">#8540</a></p></li>
+<li><p>Fix <a class="reference internal" href="../../functions/presto/json.html#json_parse" title="json_parse"><code class="xref py py-func docutils literal notranslate"><span class="pre">json_parse()</span></code></a> for inputs with very large numbers. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/8455">#8455</a></p></li>
+<li><p>Fix kAtLeastN and kExactlyN fast paths in LIKE for inputs with multi-byte characters. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/8150">#8150</a></p></li>
+<li><p>Fix <a class="reference internal" href="../../functions/presto/aggregate.html#approx_distinct" title="approx_distinct"><code class="xref py py-func docutils literal notranslate"><span class="pre">approx_distinct()</span></code></a> aggregate function for TIMESTAMP inputs. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/8164">#8164</a></p></li>
+<li><p>Fix <a class="reference internal" href="../../functions/presto/aggregate.html#min" title="min"><code class="xref py py-func docutils literal notranslate"><span class="pre">min()</span></code></a> and <a class="reference internal" href="../../functions/presto/aggregate.html#max" title="max"><code class="xref py py-func docutils literal notranslate"><span class="pre">max()</span></code></a> when used in Window operator. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/8311">#8311</a></p></li>
+</ul>
+</section>
+<section id="spark-functions">
+<h2>Spark Functions<a class="headerlink" href="#spark-functions" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Add <a class="reference internal" href="../../functions/spark/datetime.html#from_unixtime" title="from_unixtime"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">from_unixtime()</span></code></a>, <a class="reference internal" href="../../functions/spark/string.html#find_in_set" title="find_in_set"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">find_in_set()</span></code></a>, <a class="reference internal" href="../../functions/spark/datetime.html#get_timestamp" title="get_timestamp"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">get_timestamp()</span></code></a>,
+<a class="reference internal" href="../../functions/spark/datetime.html#hour" title="hour"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">hour()</span></code></a>, <a class="reference internal" href="../../functions/spark/math.html#hex" title="hex"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">hex()</span></code></a>, <a class="reference internal" href="../../functions/spark/math.html#isnan" title="isnan"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">isnan()</span></code></a>, <a class="reference internal" href="../../functions/spark/string.html#id0" title="replace"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">replace()</span></code></a> functions.</p></li>
+<li><p>Add support for TINYINT and SMALLINT inputs to <a class="reference internal" href="../../functions/spark/datetime.html#date_add" title="date_add"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">date_add()</span></code></a> and <a class="reference internal" href="../../functions/spark/datetime.html#date_sub" title="date_sub"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">date_sub()</span></code></a> functions.</p></li>
+<li><p>Add support for casting DOUBLE and VARCHAR as DECIMAL.</p></li>
+<li><p>Fix crash in <a class="reference internal" href="../../functions/spark/string.html#conv" title="conv"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">conv()</span></code></a> function. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/8046">#8046</a></p></li>
+</ul>
+</section>
+<section id="hive-connector">
+<h2>Hive Connector<a class="headerlink" href="#hive-connector" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Fix crash in Parquet reader when processing empty row groups. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/8000">#8000</a></p></li>
+<li><p>Fix data sink to avoid writing partition columns to files. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/8089">#8089</a></p></li>
+</ul>
+</section>
+<section id="performance-and-correctness">
+<h2>Performance and Correctness<a class="headerlink" href="#performance-and-correctness" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Add support for aggregations over distinct inputs to AggregationFuzzer.</p></li>
+<li><p>Reduce memory usage of histogram metrics. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/8458">#8458</a></p></li>
+<li><p>Add Join Fuzzer run to CI that runs on each PR.</p></li>
+<li><p>Add Aggregation Fuzzer run using Presto as source of truth to experimental CI.</p></li>
+</ul>
+</section>
+<section id="build-system">
+<h2>Build System<a class="headerlink" href="#build-system" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Upgrade folly to v2023.12.04.00 (from v2022.11.14.00).</p></li>
+<li><p>Upgrade fmt to 10.1.1 (from 8.0.1).</p></li>
+</ul>
+</section>
+<section id="credits">
+<h2>Credits<a class="headerlink" href="#credits" title="Link to this heading">¶</a></h2>
+<p>Amit Dutta, Benwei Shi, Bikramjeet Vig, Chen Zhang, Chengcheng Jin, Christian
+Zentgraf, Deepak Majeti, Ge Gao, Hongze Zhang, Jacob Wujciak-Jens, Jia Ke,
+Jialiang Tan, Jimmy Lu, Ke, Kevin Wilfong, Krishna Pai, Laith Sakka, Lu Niu,
+Ma, Rong, Masha Basmanova, Mike Lui, Orri Erling, PHILO-HE, Pedro Eugenio
+Rocha Pedreira, Pratik Joseph Dabre, Ravi Rahman, Richard Barnes, Schierbeck,
+Cody, Sergey Pershin, Sitao Lv, Taras Galkovskyi, Wei He, Yedidya Feldblum,
+Yuan Zhou, Yuping Fan, Zac Wen, aditi-pandit, binwei, duanmeng, hengjiang.ly,
+icejoywoo, lingbin, mwish, rui-mo, wypb, xiaoxmeng, xumingming, yangchuan,
+yingsu00, youxiduo, yuling.sh, zhli1142015, zky.zhoukeyong, zwangsheng</p>
+</section>
+</section>
+
+
+            <div class="clearer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="Main">
+        <div class="sphinxsidebarwrapper">
+  <div>
+    <h3><a href="../../index.html">Table of Contents</a></h3>
+    <ul>
+<li><a class="reference internal" href="#">January 2024 Update</a><ul>
+<li><a class="reference internal" href="#documentation">Documentation</a></li>
+<li><a class="reference internal" href="#core-library">Core Library</a></li>
+<li><a class="reference internal" href="#presto-functions">Presto Functions</a></li>
+<li><a class="reference internal" href="#spark-functions">Spark Functions</a></li>
+<li><a class="reference internal" href="#hive-connector">Hive Connector</a></li>
+<li><a class="reference internal" href="#performance-and-correctness">Performance and Correctness</a></li>
+<li><a class="reference internal" href="#build-system">Build System</a></li>
+<li><a class="reference internal" href="#credits">Credits</a></li>
+</ul>
+</li>
+</ul>
+
+  </div>
+  <div>
+    <h4>Previous topic</h4>
+    <p class="topless"><a href="february-2024.html"
+                          title="previous chapter">February 2024 Update</a></p>
+  </div>
+  <div>
+    <h4>Next topic</h4>
+    <p class="topless"><a href="../2023/index.html"
+                          title="next chapter">2023</a></p>
+  </div>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../../_sources/monthly-updates/2024/january-2024.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<search id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</search>
+<script>document.getElementById('searchbox').style.display = "block"</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="Related">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../../genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="../2023/index.html" title="2023"
+             >next</a> |</li>
+        <li class="right" >
+          <a href="february-2024.html" title="February 2024 Update"
+             >previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../../monthly-updates.html" >Monthly Updates</a> &#187;</li>
+          <li class="nav-item nav-item-2"><a href="index.html" >2024</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">January 2024 Update</a></li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+    &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.4.7.
+    </div>
+  </body>
+</html>

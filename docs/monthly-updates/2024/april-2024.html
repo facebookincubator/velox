@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>April 2024 Update &#8212; Velox  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=8f2a1f02" />
+    <link rel="stylesheet" type="text/css" href="../../_static/nature.css?v=0f882399" />
+    <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../../_static/doctools.js?v=9a2dae69"></script>
+    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="March 2024 Update" href="march-2024.html" />
+    <link rel="prev" title="May 2024 Update" href="may-2024.html" /> 
+  </head><body>
+    <div class="related" role="navigation" aria-label="Related">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../../genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="march-2024.html" title="March 2024 Update"
+             accesskey="N">next</a> |</li>
+        <li class="right" >
+          <a href="may-2024.html" title="May 2024 Update"
+             accesskey="P">previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../../monthly-updates.html" >Monthly Updates</a> &#187;</li>
+          <li class="nav-item nav-item-2"><a href="index.html" accesskey="U">2024</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">April 2024 Update</a></li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <section id="april-2024-update">
+<h1>April 2024 Update<a class="headerlink" href="#april-2024-update" title="Link to this heading">¶</a></h1>
+<section id="documentation">
+<h2>Documentation<a class="headerlink" href="#documentation" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Document operations on decimals for <a class="reference internal" href="../../functions/presto/decimal.html"><span class="doc">Presto</span></a>
+and <a class="reference internal" href="../../functions/spark/decimal.html"><span class="doc">Spark</span></a>.</p></li>
+<li><p>Document spill write stats. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/9326">#9326</a></p></li>
+</ul>
+</section>
+<section id="core-library">
+<h2>Core Library<a class="headerlink" href="#core-library" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Fix bugs in Window operator. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/9476">#9476</a>, <a class="reference external" href="https://github.com/facebookincubator/velox/pull/9271">#9271</a>, <a class="reference external" href="https://github.com/facebookincubator/velox/pull/9257">#9257</a></p></li>
+</ul>
+</section>
+<section id="presto-functions">
+<h2>Presto Functions<a class="headerlink" href="#presto-functions" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Add <a class="reference internal" href="../../functions/presto/string.html#id1" title="word_stem"><code class="xref py py-func docutils literal notranslate"><span class="pre">word_stem()</span></code></a> and <a class="reference internal" href="../../functions/presto/datetime.html#to_iso8601" title="to_iso8601"><code class="xref py py-func docutils literal notranslate"><span class="pre">to_iso8601()</span></code></a> scalar functions.</p></li>
+<li><p>Add support for DECIMAL inputs to <a class="reference internal" href="../../functions/presto/aggregate.html#arbitrary" title="arbitrary"><code class="xref py py-func docutils literal notranslate"><span class="pre">arbitrary()</span></code></a>, <a class="reference internal" href="../../functions/presto/aggregate.html#min" title="min"><code class="xref py py-func docutils literal notranslate"><span class="pre">min()</span></code></a> and <a class="reference internal" href="../../functions/presto/aggregate.html#max" title="max"><code class="xref py py-func docutils literal notranslate"><span class="pre">max()</span></code></a> aggregate functions.</p></li>
+<li><p>Fix <a class="reference internal" href="../../functions/presto/json.html#json_extract" title="json_extract"><code class="xref py py-func docutils literal notranslate"><span class="pre">json_extract()</span></code></a> for paths with wildcards.</p></li>
+</ul>
+</section>
+<section id="spark-functions">
+<h2>Spark Functions<a class="headerlink" href="#spark-functions" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Add <code class="xref spark spark-func docutils literal notranslate"><span class="pre">array_size()</span></code>, <a class="reference internal" href="../../functions/spark/array.html#flatten" title="flatten"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">flatten()</span></code></a>, <a class="reference internal" href="../../functions/spark/datetime.html#year_of_week" title="year_of_week"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">year_of_week()</span></code></a> scalar functions.</p></li>
+<li><p>Add <a class="reference internal" href="../../functions/spark/aggregate.html#collect_list" title="collect_list"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">collect_list()</span></code></a> and <a class="reference internal" href="../../functions/spark/aggregate.html#regr_replacement" title="regr_replacement"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">regr_replacement()</span></code></a> aggregate functions.</p></li>
+</ul>
+</section>
+<section id="hive-connector">
+<h2>Hive Connector<a class="headerlink" href="#hive-connector" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Add support for storing decimal as integer in Parquet writer.</p></li>
+<li><p>Add hive.s3.connect-timeout, hive.s3.socket-timeout and hive.s3.max-connections configs. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/9472">#9472</a></p></li>
+<li><p>Fix complex type handing in Parquet reader. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/9187">#9187</a></p></li>
+<li><p>Fix DWRF reader to skip null map keys.</p></li>
+</ul>
+</section>
+<section id="performance-and-correctness">
+<h2>Performance and Correctness<a class="headerlink" href="#performance-and-correctness" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Add aggregation and window fuzzer runs to every PR.</p></li>
+<li><p>Add nightly run of window fuzzer.</p></li>
+<li><p>Add check for aggregate function signature changes to every PR.</p></li>
+<li><p>Add biased aggregation fuzzer run for newly added aggregate functions to every PR.</p></li>
+</ul>
+</section>
+<section id="build-system">
+<h2>Build System<a class="headerlink" href="#build-system" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Add nightly job to track build metrics.</p></li>
+</ul>
+</section>
+<section id="credits">
+<h2>Credits<a class="headerlink" href="#credits" title="Link to this heading">¶</a></h2>
+<p>Andres Suarez, Andrii Rosa, Ankita Victor, Ashwin Krishna Kumar, Bikramjeet Vig,
+Christian Zentgraf, Daniel Munoz, David McKnight, Deepak Majeti, Hengzhi Chen,
+Huameng (Michael) Jiang, Jacob Wujciak-Jens, Jeongseok Lee, Jialiang Tan, Jimmy
+Lu, Karteekmurthys, Ke, Kevin Wilfong, Krishna Pai, Lu Niu, Ludovic Henry, Ma,
+Rong, Mahadevuni Naveen Kumar, Masha Basmanova, Mike Lui, Minhan Cao, PHILO-HE,
+Pedro Eugenio Rocha Pedreira, Pedro Pedreira, Pramod, Qian Sun, Richard Barnes,
+Sergey Pershin, Shabab Ayub, Tengfei Huang, Terry Wang, Wei He, Weitao Wan,
+Wills Feng, Yang Zhang, Yihong Wang, Yoav Helfman, Zac Wen, Zhenyuan Zhao,
+aditi-pandit, chliang, cindyyyang, duanmeng, jay.narale, joey.ljy, mohsaka,
+rui-mo, svm1, willsfeng, wutiangan, wypb, xiaoxmeng, yingsu00, zhli1142015</p>
+</section>
+</section>
+
+
+            <div class="clearer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="Main">
+        <div class="sphinxsidebarwrapper">
+  <div>
+    <h3><a href="../../index.html">Table of Contents</a></h3>
+    <ul>
+<li><a class="reference internal" href="#">April 2024 Update</a><ul>
+<li><a class="reference internal" href="#documentation">Documentation</a></li>
+<li><a class="reference internal" href="#core-library">Core Library</a></li>
+<li><a class="reference internal" href="#presto-functions">Presto Functions</a></li>
+<li><a class="reference internal" href="#spark-functions">Spark Functions</a></li>
+<li><a class="reference internal" href="#hive-connector">Hive Connector</a></li>
+<li><a class="reference internal" href="#performance-and-correctness">Performance and Correctness</a></li>
+<li><a class="reference internal" href="#build-system">Build System</a></li>
+<li><a class="reference internal" href="#credits">Credits</a></li>
+</ul>
+</li>
+</ul>
+
+  </div>
+  <div>
+    <h4>Previous topic</h4>
+    <p class="topless"><a href="may-2024.html"
+                          title="previous chapter">May 2024 Update</a></p>
+  </div>
+  <div>
+    <h4>Next topic</h4>
+    <p class="topless"><a href="march-2024.html"
+                          title="next chapter">March 2024 Update</a></p>
+  </div>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../../_sources/monthly-updates/2024/april-2024.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<search id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</search>
+<script>document.getElementById('searchbox').style.display = "block"</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="Related">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../../genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="march-2024.html" title="March 2024 Update"
+             >next</a> |</li>
+        <li class="right" >
+          <a href="may-2024.html" title="May 2024 Update"
+             >previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../../monthly-updates.html" >Monthly Updates</a> &#187;</li>
+          <li class="nav-item nav-item-2"><a href="index.html" >2024</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">April 2024 Update</a></li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+    &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.4.7.
+    </div>
+  </body>
+</html>

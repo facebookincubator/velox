@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>May 2024 Update &#8212; Velox  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=8f2a1f02" />
+    <link rel="stylesheet" type="text/css" href="../../_static/nature.css?v=0f882399" />
+    <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../../_static/doctools.js?v=9a2dae69"></script>
+    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="April 2024 Update" href="april-2024.html" />
+    <link rel="prev" title="June 2024 Update" href="june-2024.html" /> 
+  </head><body>
+    <div class="related" role="navigation" aria-label="Related">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../../genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="april-2024.html" title="April 2024 Update"
+             accesskey="N">next</a> |</li>
+        <li class="right" >
+          <a href="june-2024.html" title="June 2024 Update"
+             accesskey="P">previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../../monthly-updates.html" >Monthly Updates</a> &#187;</li>
+          <li class="nav-item nav-item-2"><a href="index.html" accesskey="U">2024</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">May 2024 Update</a></li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <section id="may-2024-update">
+<h1>May 2024 Update<a class="headerlink" href="#may-2024-update" title="Link to this heading">¶</a></h1>
+<section id="documentation">
+<h2>Documentation<a class="headerlink" href="#documentation" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Publish blog post about <a class="reference external" href="https://velox-lib.io/blog/optimize-try-more">optimizing TRY and TRY_CAST</a></p></li>
+<li><p>Publish <a class="reference external" href="https://velox-lib.io/docs/community/technical-governance">Technical Governance</a>.</p></li>
+</ul>
+</section>
+<section id="core-library">
+<h2>Core Library<a class="headerlink" href="#core-library" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Optimize TRY and TRY_CAST for cases when many rows fail.</p></li>
+<li><p>Add support for LEFT SEMI FILTER and RIGHT SEMI FILTER merge joins.</p></li>
+<li><p>Add support for DECIMAL input to aggregations over distinct values. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/9850">#9850</a></p></li>
+<li><p>Add support for specifying overwrite behavior when registering simple scalar functions. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/9158">#9158</a></p></li>
+<li><p>Fix LEFT merge join with extra filter. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/9862">#9862</a></p></li>
+<li><p>Fix Nested Loop join with empty build and extra filter. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/9892">#9892</a></p></li>
+<li><p>Fix crash when copying complex vectors. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/9725">#9725</a></p></li>
+<li><p>Fix reuse of LazyVectors in TableScan to avoid crashes in downstream operators. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/9811">#9811</a></p></li>
+<li><p>Add support for including metadata identifying the operator that generated an error in error messages to ease troubleshooting. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/9695">#9695</a></p></li>
+</ul>
+</section>
+<section id="presto-functions">
+<h2>Presto Functions<a class="headerlink" href="#presto-functions" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Add <code class="xref py py-func docutils literal notranslate"><span class="pre">at_timezone()</span></code> function.</p></li>
+<li><p>Add support for VARBINARY input to <a class="reference internal" href="../../functions/presto/aggregate.html#approx_distinct" title="approx_distinct"><code class="xref py py-func docutils literal notranslate"><span class="pre">approx_distinct()</span></code></a> aggregate function.</p></li>
+<li><p>Add support for CAST(varchar AS timestamp with time zone).</p></li>
+<li><p>Add support for DECIMAL inputs to <a class="reference internal" href="../../functions/presto/aggregate.html#min_by" title="min_by"><code class="xref py py-func docutils literal notranslate"><span class="pre">min_by()</span></code></a> and <a class="reference internal" href="../../functions/presto/aggregate.html#max_by" title="max_by"><code class="xref py py-func docutils literal notranslate"><span class="pre">max_by()</span></code></a> aggregate functions.</p></li>
+<li><p>Fix <a class="reference internal" href="../../functions/presto/array.html#arrays_overlap" title="arrays_overlap"><code class="xref py py-func docutils literal notranslate"><span class="pre">arrays_overlap()</span></code></a> function for empty arrays. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/9922">#9922</a></p></li>
+<li><p>Fix <a class="reference internal" href="../../functions/presto/map.html#map_top_n" title="map_top_n"><code class="xref py py-func docutils literal notranslate"><span class="pre">map_top_n()</span></code></a> function to break ties by comparing keys.</p></li>
+<li><p>Fix CAST(IntervalDayTime AS Varchar) for negative intervals. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/9871">#9871</a></p></li>
+<li><p>Fix <a class="reference internal" href="../../functions/presto/binary.html#from_base64" title="from_base64"><code class="xref py py-func docutils literal notranslate"><span class="pre">from_base64()</span></code></a> for inputs without padding. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/8647">#8647</a></p></li>
+<li><p>Fix handling of equality and total ordering of NaN (Not-a-Number) floating point
+values in <a class="reference internal" href="../../functions/presto/array.html#array_min" title="array_min"><code class="xref py py-func docutils literal notranslate"><span class="pre">array_min()</span></code></a>, <a class="reference internal" href="../../functions/presto/array.html#array_sort" title="array_sort"><code class="xref py py-func docutils literal notranslate"><span class="pre">array_sort()</span></code></a>, <a class="reference internal" href="../../functions/presto/array.html#array_distinct" title="array_distinct"><code class="xref py py-func docutils literal notranslate"><span class="pre">array_distinct()</span></code></a>,
+<a class="reference internal" href="../../functions/presto/array.html#array_except" title="array_except"><code class="xref py py-func docutils literal notranslate"><span class="pre">array_except()</span></code></a>, <a class="reference internal" href="../../functions/presto/array.html#array_intersect" title="array_intersect"><code class="xref py py-func docutils literal notranslate"><span class="pre">array_intersect()</span></code></a>, <code class="xref py py-func docutils literal notranslate"><span class="pre">array_union()</span></code>,
+<a class="reference internal" href="../../functions/presto/array.html#array_position" title="array_position"><code class="xref py py-func docutils literal notranslate"><span class="pre">array_position()</span></code></a>, <a class="reference internal" href="../../functions/presto/array.html#array_remove" title="array_remove"><code class="xref py py-func docutils literal notranslate"><span class="pre">array_remove()</span></code></a>, <a class="reference internal" href="../../functions/presto/array.html#arrays_overlap" title="arrays_overlap"><code class="xref py py-func docutils literal notranslate"><span class="pre">arrays_overlap()</span></code></a>, <a class="reference internal" href="../../functions/presto/array.html#contains" title="contains"><code class="xref py py-func docutils literal notranslate"><span class="pre">contains()</span></code></a>,
+map subscript and <a class="reference internal" href="../../functions/presto/aggregate.html#multimap_agg" title="multimap_agg"><code class="xref py py-func docutils literal notranslate"><span class="pre">multimap_agg()</span></code></a>.</p></li>
+</ul>
+</section>
+<section id="spark-functions">
+<h2>Spark Functions<a class="headerlink" href="#spark-functions" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Add <a class="reference internal" href="../../functions/spark/math.html#expm1" title="expm1"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">expm1()</span></code></a>, <a class="reference internal" href="../../functions/spark/array.html#get" title="get"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">get()</span></code></a>, <a class="reference internal" href="../../functions/spark/math.html#rint" title="rint"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">rint()</span></code></a>, <a class="reference internal" href="../../functions/spark/array.html#shuffle" title="shuffle"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">shuffle()</span></code></a>,
+<a class="reference internal" href="../../functions/spark/string.html#soundex" title="soundex"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">soundex()</span></code></a>, <code class="xref py py-func docutils literal notranslate"><span class="pre">unix_seconds()</span></code>, <a class="reference internal" href="../../functions/spark/math.html#width_bucket" title="width_bucket"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">width_bucket()</span></code></a> functions.</p></li>
+<li><p>Add support for complex type inputs to <a class="reference internal" href="../../functions/spark/binary.html#hash" title="hash"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">hash()</span></code></a> and <a class="reference internal" href="../../functions/spark/binary.html#xxhash64" title="xxhash64"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">xxhash64()</span></code></a> functions.</p></li>
+<li><p>Fix CAST(tinyint/smallint/integer/bigint as varbinary). <a class="reference external" href="https://github.com/facebookincubator/velox/pull/9819">#9819</a></p></li>
+<li><p>Fix return type for <a class="reference internal" href="../../functions/spark/aggregate.html#sum" title="sum"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">sum()</span></code></a> aggregate function with REAL input. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/9818">#9818</a></p></li>
+</ul>
+</section>
+<section id="hive-connector">
+<h2>Hive Connector<a class="headerlink" href="#hive-connector" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Add support for projecting synthesized row-number column from Table Scan. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/9174">#9174</a></p></li>
+</ul>
+</section>
+<section id="performance-and-correctness">
+<h2>Performance and Correctness<a class="headerlink" href="#performance-and-correctness" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Optimize memory arbitration to avoid interference between queries to reduce overall query execution time.</p></li>
+<li><p>Add cache expiration function to simple LRU cache to support remote IO throttling.</p></li>
+<li><p>Add Fuzzers for TableWriter and RowNumber operators.</p></li>
+<li><p>Add support for Nested Loop joins to Join Fuzzer.</p></li>
+<li><p>Add support for testing different sorting flags to Window Fuzzer.</p></li>
+<li><p>Add custom argument type generators for Presto decimal functions. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/9715">#9715</a></p></li>
+<li><p>Add support for logical input types in the evaluateOnce() unit test helper method. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/9708">#9708</a></p></li>
+<li><p>Re-enable testing of merge joins in Join Fuzzer.</p></li>
+</ul>
+</section>
+<section id="build-system">
+<h2>Build System<a class="headerlink" href="#build-system" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Upgrade aws-sdk-cpp to 1.11.321 (from 1.11.169).</p></li>
+<li><p>Upgrade cmake to 3.28.3 (from 3.14).</p></li>
+<li><p>Upgrade simdjson to 3.9.3 (from 3.8.0).</p></li>
+<li><p>Add support for docker image with Spark Connect server to use with Fuzzer. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/9759">#9759</a></p></li>
+<li><p>Add dashboard with <a class="reference external" href="https://facebookincubator.github.io/velox/bm-report/">build time metrics</a>.</p></li>
+</ul>
+</section>
+<section id="credits">
+<h2>Credits<a class="headerlink" href="#credits" title="Link to this heading">¶</a></h2>
+<p>Ankita Victor, Ashwin Krishna Kumar, Bikramjeet Vig, Bradley Dice, Daniel Munoz,
+Deepak Majeti, Giuseppe Ottaviano, Jacob Wujciak-Jens, Jia Ke, Jialiang Tan,
+Jimmy Lu, Joe Abraham, Karteekmurthys, Ke, Kevin Wilfong, Kk Pulla, Krishna
+Pai, Ma,  Rong, Masha Basmanova, NEUpanning, PHILO-HE, Patrick Sullivan, Pedro
+Eugenio Rocha Pedreira, Richard Barnes, Sandino Flores, Sergey Pershin, Ubuntu,
+Wei He, Weihan Tang, Yang Zhang, Zac Wen, Zuyu ZHANG, aditi-pandit, chliang,
+duanmeng, gaoyangxiaozhu, jay.narale, joey.ljy, kevin, kikimo, lingbin, rui-mo,
+svm1, xiaoxmeng, xumingming, yan ma, yanngyoung, yingsu00, zhli1142015,
+zhouyifan279, zjuwangg, zky.zhoukeyong, 高阳阳</p>
+</section>
+</section>
+
+
+            <div class="clearer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="Main">
+        <div class="sphinxsidebarwrapper">
+  <div>
+    <h3><a href="../../index.html">Table of Contents</a></h3>
+    <ul>
+<li><a class="reference internal" href="#">May 2024 Update</a><ul>
+<li><a class="reference internal" href="#documentation">Documentation</a></li>
+<li><a class="reference internal" href="#core-library">Core Library</a></li>
+<li><a class="reference internal" href="#presto-functions">Presto Functions</a></li>
+<li><a class="reference internal" href="#spark-functions">Spark Functions</a></li>
+<li><a class="reference internal" href="#hive-connector">Hive Connector</a></li>
+<li><a class="reference internal" href="#performance-and-correctness">Performance and Correctness</a></li>
+<li><a class="reference internal" href="#build-system">Build System</a></li>
+<li><a class="reference internal" href="#credits">Credits</a></li>
+</ul>
+</li>
+</ul>
+
+  </div>
+  <div>
+    <h4>Previous topic</h4>
+    <p class="topless"><a href="june-2024.html"
+                          title="previous chapter">June 2024 Update</a></p>
+  </div>
+  <div>
+    <h4>Next topic</h4>
+    <p class="topless"><a href="april-2024.html"
+                          title="next chapter">April 2024 Update</a></p>
+  </div>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../../_sources/monthly-updates/2024/may-2024.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<search id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</search>
+<script>document.getElementById('searchbox').style.display = "block"</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="Related">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../../genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="april-2024.html" title="April 2024 Update"
+             >next</a> |</li>
+        <li class="right" >
+          <a href="june-2024.html" title="June 2024 Update"
+             >previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../../monthly-updates.html" >Monthly Updates</a> &#187;</li>
+          <li class="nav-item nav-item-2"><a href="index.html" >2024</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">May 2024 Update</a></li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+    &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.4.7.
+    </div>
+  </body>
+</html>

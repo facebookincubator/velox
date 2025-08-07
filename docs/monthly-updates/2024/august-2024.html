@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>August 2024 Update &#8212; Velox  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=8f2a1f02" />
+    <link rel="stylesheet" type="text/css" href="../../_static/nature.css?v=0f882399" />
+    <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../../_static/doctools.js?v=9a2dae69"></script>
+    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="July 2024 Update" href="july-2024.html" />
+    <link rel="prev" title="2024" href="index.html" /> 
+  </head><body>
+    <div class="related" role="navigation" aria-label="Related">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../../genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="july-2024.html" title="July 2024 Update"
+             accesskey="N">next</a> |</li>
+        <li class="right" >
+          <a href="index.html" title="2024"
+             accesskey="P">previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../../monthly-updates.html" >Monthly Updates</a> &#187;</li>
+          <li class="nav-item nav-item-2"><a href="index.html" accesskey="U">2024</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">August 2024 Update</a></li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <section id="august-2024-update">
+<h1>August 2024 Update<a class="headerlink" href="#august-2024-update" title="Link to this heading">¶</a></h1>
+<p>This month has <strong>144</strong> commits from <strong>45</strong> authors. Below are some of the highlights.</p>
+<section id="core-library">
+<h2>Core Library<a class="headerlink" href="#core-library" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Add IPAddress Presto type.</p></li>
+<li><p>Add support for copying a vector to a new memory pool. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/10647">#10647</a></p></li>
+<li><p>Add support for Wave metrics.</p></li>
+<li><p>Add support for byte input stream backed by a file. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/10717">#10717</a></p></li>
+<li><p>Add near zero-copy import &amp; export for Arrow BinaryView/Utf8View formats. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/9726">#9726</a></p></li>
+<li><p>Add support for custom join bridges. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/10626">#10626</a></p></li>
+<li><p>Add support for row-level streaming build in the window operator. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/9025">#9025</a></p></li>
+<li><p>Fix some joins to preserve probe order. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/10651">#10651</a>, <a class="reference external" href="https://github.com/facebookincubator/velox/pull/10832">#10832</a></p></li>
+<li><p>Fix row vectors export to Arrow. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/10703">#10703</a></p></li>
+<li><p>Fix memory arbitration/reclaim in single-threaded execution. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/10600">#10600</a></p></li>
+<li><p>Fix filter evaluation for missing fields in a file. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/10777">#10777</a></p></li>
+<li><p>Fix a race condition in query memory abort process. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/10826">#10826</a></p></li>
+<li><p>Fix common sub-expression. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/10837">#10837</a></p></li>
+</ul>
+</section>
+<section id="presto-functions">
+<h2>Presto Functions<a class="headerlink" href="#presto-functions" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Add support for WEEK_OF_WEEK_YEAR to <a class="reference internal" href="../../functions/presto/datetime.html#date_format" title="date_format"><code class="xref py py-func docutils literal notranslate"><span class="pre">date_format()</span></code></a> function.</p></li>
+<li><p>Add support for UNKNOWN type in <a class="reference internal" href="../../functions/presto/map.html#map_concat" title="map_concat"><code class="xref py py-func docutils literal notranslate"><span class="pre">map_concat()</span></code></a> function.</p></li>
+<li><p>Add support for complex types in <a class="reference internal" href="../../functions/presto/array.html#array_except" title="array_except"><code class="xref py py-func docutils literal notranslate"><span class="pre">array_except()</span></code></a>, <a class="reference internal" href="../../functions/presto/array.html#array_intersect" title="array_intersect"><code class="xref py py-func docutils literal notranslate"><span class="pre">array_intersect()</span></code></a>,
+and <a class="reference internal" href="../../functions/presto/array.html#arrays_overlap" title="arrays_overlap"><code class="xref py py-func docutils literal notranslate"><span class="pre">arrays_overlap()</span></code></a>.</p></li>
+<li><p>Fix <cite>json_array_*</cite> functions to return NULL for malformed inputs.</p></li>
+<li><p>Fix NaN comparison in <a class="reference internal" href="../../functions/presto/aggregate.html#approx_percentile" title="approx_percentile"><code class="xref py py-func docutils literal notranslate"><span class="pre">approx_percentile()</span></code></a>. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/10710">#10710</a></p></li>
+<li><p>Fix <a class="reference internal" href="../../functions/presto/array.html#array_join" title="array_join"><code class="xref py py-func docutils literal notranslate"><span class="pre">array_join()</span></code></a> for TIMESTAMP inputs. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/10881">#10881</a></p></li>
+</ul>
+</section>
+<section id="spark-functions">
+<h2>Spark Functions<a class="headerlink" href="#spark-functions" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Add <a class="reference internal" href="../../functions/spark/string.html#empty2null" title="empty2null"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">empty2null()</span></code></a>, <a class="reference internal" href="../../functions/spark/array.html#slice" title="slice"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">slice()</span></code></a> scalar functions.</p></li>
+<li><p>Add <a class="reference internal" href="../../functions/spark/aggregate.html#mode" title="mode"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">mode()</span></code></a> aggregate function.</p></li>
+<li><p>Add support for UNKNOWN type in <a class="reference internal" href="../../functions/spark/binary.html#hash" title="hash"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">hash()</span></code></a> function.</p></li>
+<li><p>Add support for regex delimiter and limit argument in <a class="reference internal" href="../../functions/spark/string.html#split" title="split"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">split()</span></code></a> function.</p></li>
+<li><p>Fix <a class="reference internal" href="../../functions/spark/aggregate.html#collect_set" title="collect_set"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">collect_set()</span></code></a> output. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/10737">#10737</a></p></li>
+</ul>
+</section>
+<section id="hive-connector">
+<h2>Hive Connector<a class="headerlink" href="#hive-connector" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Add support for column names to include space character.</p></li>
+<li><p>Fix Parquet RowGroup filtering for MAP and ARRAY types. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/10510">#10510</a></p></li>
+<li><p>Fix reading legacy array and map types in parquet. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/9728">#9728</a>, <a class="reference external" href="https://github.com/facebookincubator/velox/pull/10753">#10753</a></p></li>
+</ul>
+</section>
+<section id="performance-and-correctness">
+<h2>Performance and Correctness<a class="headerlink" href="#performance-and-correctness" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Add support for Spark query runner. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/10357">#10357</a></p></li>
+<li><p>Add Query Trace Writers and Readers. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/10774">#10774</a></p></li>
+<li><p>Optimize remaining filter to not eagerly materialize multi-referenced fields. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/10645">#10645</a></p></li>
+<li><p>Optimize cross joins for single record build side. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/10726">#10726</a></p></li>
+</ul>
+</section>
+<section id="build-system">
+<h2>Build System<a class="headerlink" href="#build-system" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Add support for Clang15.</p></li>
+</ul>
+</section>
+<section id="credits">
+<h2>Credits<a class="headerlink" href="#credits" title="Link to this heading">¶</a></h2>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span> <span class="mi">3</span>  <span class="n">Amit</span> <span class="n">Dutta</span> <span class="o">-</span> <span class="n">Meta</span>
+ <span class="mi">5</span>  <span class="n">Bikramjeet</span> <span class="n">Vig</span> <span class="o">-</span> <span class="n">Meta</span>
+ <span class="mi">5</span>  <span class="n">Chengcheng</span> <span class="n">Jin</span> <span class="o">-</span> <span class="n">Intel</span>
+ <span class="mi">3</span>  <span class="n">Christian</span> <span class="n">Zentgraf</span> <span class="o">-</span> <span class="n">IBM</span>
+ <span class="mi">7</span>  <span class="n">Daniel</span> <span class="n">Hunte</span> <span class="o">-</span> <span class="n">Meta</span>
+ <span class="mi">4</span>  <span class="n">Deepak</span> <span class="n">Majeti</span> <span class="o">-</span> <span class="n">IBM</span>
+ <span class="mi">4</span>  <span class="n">Hongze</span> <span class="n">Zhang</span> <span class="o">-</span> <span class="n">Intel</span>
+ <span class="mi">1</span>  <span class="n">Huameng</span> <span class="p">(</span><span class="n">Michael</span><span class="p">)</span> <span class="n">Jiang</span> <span class="o">-</span> <span class="n">Meta</span>
+ <span class="mi">1</span>  <span class="n">Jacob</span> <span class="n">Khaliqi</span> <span class="o">-</span> <span class="n">Meta</span>
+ <span class="mi">4</span>  <span class="n">Jacob</span> <span class="n">Wujciak</span><span class="o">-</span><span class="n">Jens</span> <span class="o">-</span> <span class="n">Voltron</span> <span class="n">Data</span>
+ <span class="mi">6</span>  <span class="n">Jia</span> <span class="n">Ke</span> <span class="o">-</span> <span class="n">Intel</span>
+<span class="mi">14</span>  <span class="n">Jialiang</span> <span class="n">Tan</span>
+ <span class="mi">8</span>  <span class="n">Jimmy</span> <span class="n">Lu</span> <span class="o">-</span> <span class="n">Meta</span>
+ <span class="mi">2</span>  <span class="n">Joe</span> <span class="n">Abraham</span> <span class="o">-</span> <span class="n">IBM</span>
+ <span class="mi">1</span>  <span class="n">Karthikeyan</span> <span class="n">Natarajan</span> <span class="o">-</span> <span class="n">Nvidia</span>
+ <span class="mi">7</span>  <span class="n">Ke</span> <span class="n">Wang</span> <span class="o">-</span> <span class="n">Meta</span>
+ <span class="mi">1</span>  <span class="n">Kevin</span> <span class="n">Wilfong</span> <span class="o">-</span> <span class="n">Meta</span>
+ <span class="mi">5</span>  <span class="n">Krishna</span> <span class="n">Pai</span> <span class="o">-</span> <span class="n">Meta</span>
+ <span class="mi">1</span>  <span class="n">Masha</span> <span class="n">Basmanova</span> <span class="o">-</span> <span class="n">Meta</span>
+ <span class="mi">1</span>  <span class="n">Muhammad</span> <span class="n">Faisal</span> <span class="o">-</span> <span class="n">Meta</span>
+ <span class="mi">1</span>  <span class="n">Orri</span> <span class="n">Erling</span> <span class="o">-</span> <span class="n">Meta</span>
+<span class="mi">11</span>  <span class="n">Pedro</span> <span class="n">Eugenio</span> <span class="n">Rocha</span> <span class="n">Pedreira</span> <span class="o">-</span> <span class="n">Meta</span>
+ <span class="mi">2</span>  <span class="n">Pramod</span> <span class="n">Satya</span> <span class="o">-</span> <span class="n">IBM</span>
+ <span class="mi">2</span>  <span class="n">Satadru</span> <span class="n">Pan</span> <span class="o">-</span> <span class="n">Meta</span>
+ <span class="mi">1</span>  <span class="n">Serge</span> <span class="n">Druzkin</span> <span class="o">-</span> <span class="n">Meta</span>
+ <span class="mi">1</span>  <span class="n">Sergey</span> <span class="n">Pershin</span> <span class="o">-</span> <span class="n">Meta</span>
+ <span class="mi">1</span>  <span class="n">Stan</span> <span class="n">Ionascu</span> <span class="o">-</span> <span class="n">Meta</span>
+ <span class="mi">1</span>  <span class="n">Urvish</span> <span class="n">Desai</span> <span class="o">-</span> <span class="n">ByteDance</span>
+ <span class="mi">4</span>  <span class="n">Wei</span> <span class="n">He</span> <span class="o">-</span> <span class="n">Meta</span>
+ <span class="mi">3</span>  <span class="n">Yang</span> <span class="n">Zhang</span> <span class="o">-</span> <span class="n">Alibaba</span> <span class="n">Inc</span>
+ <span class="mi">2</span>  <span class="n">Zuyu</span> <span class="n">ZHANG</span>
+ <span class="mi">2</span>  <span class="n">duanmeng</span> <span class="o">-</span> <span class="n">Tencent</span>
+ <span class="mi">1</span>  <span class="n">gaoyangxiaozhu</span>
+ <span class="mi">1</span>  <span class="n">hitarth</span>
+ <span class="mi">1</span>  <span class="n">kevincmchen</span>
+ <span class="mi">1</span>  <span class="n">lingbin</span>
+ <span class="mi">1</span>  <span class="n">mohsaka</span>
+ <span class="mi">2</span>  <span class="n">rexan</span>
+ <span class="mi">6</span>  <span class="n">Rui</span> <span class="n">Mo</span> <span class="o">-</span> <span class="n">Intel</span>
+ <span class="mi">1</span>  <span class="n">snadukudy</span>
+<span class="mi">12</span>  <span class="n">xiaoxmeng</span> <span class="o">-</span> <span class="n">Meta</span>
+ <span class="mi">2</span>  <span class="n">yan</span> <span class="n">ma</span> <span class="o">-</span> <span class="n">Intel</span>
+ <span class="mi">1</span>  <span class="n">yingsu00</span>
+ <span class="mi">1</span>  <span class="n">zhaokuo</span>
+ <span class="mi">1</span>  <span class="n">Zhen</span> <span class="n">Li</span> <span class="o">-</span> <span class="n">Microsoft</span>
+</pre></div>
+</div>
+</section>
+</section>
+
+
+            <div class="clearer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="Main">
+        <div class="sphinxsidebarwrapper">
+  <div>
+    <h3><a href="../../index.html">Table of Contents</a></h3>
+    <ul>
+<li><a class="reference internal" href="#">August 2024 Update</a><ul>
+<li><a class="reference internal" href="#core-library">Core Library</a></li>
+<li><a class="reference internal" href="#presto-functions">Presto Functions</a></li>
+<li><a class="reference internal" href="#spark-functions">Spark Functions</a></li>
+<li><a class="reference internal" href="#hive-connector">Hive Connector</a></li>
+<li><a class="reference internal" href="#performance-and-correctness">Performance and Correctness</a></li>
+<li><a class="reference internal" href="#build-system">Build System</a></li>
+<li><a class="reference internal" href="#credits">Credits</a></li>
+</ul>
+</li>
+</ul>
+
+  </div>
+  <div>
+    <h4>Previous topic</h4>
+    <p class="topless"><a href="index.html"
+                          title="previous chapter">2024</a></p>
+  </div>
+  <div>
+    <h4>Next topic</h4>
+    <p class="topless"><a href="july-2024.html"
+                          title="next chapter">July 2024 Update</a></p>
+  </div>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../../_sources/monthly-updates/2024/august-2024.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<search id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</search>
+<script>document.getElementById('searchbox').style.display = "block"</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="Related">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../../genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="july-2024.html" title="July 2024 Update"
+             >next</a> |</li>
+        <li class="right" >
+          <a href="index.html" title="2024"
+             >previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../../monthly-updates.html" >Monthly Updates</a> &#187;</li>
+          <li class="nav-item nav-item-2"><a href="index.html" >2024</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">August 2024 Update</a></li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+    &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.4.7.
+    </div>
+  </body>
+</html>
