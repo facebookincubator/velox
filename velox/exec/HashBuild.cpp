@@ -387,6 +387,7 @@ void HashBuild::addInput(RowVectorPtr input) {
   }
 
   if (dropDuplicates_ && !abandonBuildNoDupHash_) {
+    LOG(INFO) << "abandonBuildNoDupHash_ is FALSE!! Optimization ran!!";
     const bool abandonEarly = abandonBuildNoDupHashEarly(table_->numDistinct());
     numHashInputRows_ += activeRows_.countSelected();
     if (abandonEarly) {

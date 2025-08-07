@@ -743,7 +743,7 @@ class QueryConfig {
   }
 
   int32_t abandonBuildNoDupHashMinPct() const {
-    return get<int32_t>(kAbandonBuildNoDupHashMinPct, 0);
+    return get<int32_t>(kAbandonBuildNoDupHashMinPct, 100);
   }
 
   int32_t maxElementsSizeInRepeatAndSequence() const {
