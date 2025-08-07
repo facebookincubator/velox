@@ -15,6 +15,7 @@
  */
 #include <boost/algorithm/string.hpp>
 #include <optional>
+#include <unordered_map>
 
 #include "velox/expression/SignatureBinder.h"
 #include "velox/expression/type_calculation/TypeCalculation.h"
@@ -114,38 +115,81 @@ bool SignatureBinder::tryBind(
     if (actualTypes_.size() < formalArgsCnt - 1) {
       return false;
     }
-
-    if (!isAny(signature_.argumentTypes().back())) {
-      if (actualTypes_.size() > formalArgsCnt) {
-        auto& type = actualTypes_[formalArgsCnt - 1];
-        for (auto i = formalArgsCnt; i < actualTypes_.size(); i++) {
-          if (!type->equivalent(*actualTypes_[i]) &&
-              actualTypes_[i]->kind() != TypeKind::UNKNOWN) {
-            return false;
-          }
-        }
-      }
-    }
   } else {
     if (formalArgsCnt != actualTypes_.size()) {
       return false;
     }
   }
 
-  for (auto i = 0; i < formalArgsCnt && i < actualTypes_.size(); i++) {
-    if (actualTypes_[i]) {
-      if (allowCoercions) {
-        if (!SignatureBinderBase::tryBindWithCoercion(
-                formalArgs[i], actualTypes_[i], coercions[i])) {
+  struct VarInfo {
+    TypePtr type;
+    std::vector<size_t> positions;
+  };
+  std::unordered_map<std::string, VarInfo> varInfo;
+
+  for (size_t i = 0; i < actualTypes_.size(); ++i) {
+    auto actual = actualTypes_[i];
+    if (!actual) {
+      return false;
+    }
+
+    const auto& formal = i < formalArgsCnt ? formalArgs[i] : formalArgs.back();
+    const auto& baseName = formal.baseName();
+
+    if (allowCoercions && variables().count(baseName)) {
+      auto& info = varInfo[baseName];
+      info.positions.push_back(i);
+
+      if (!info.type) {
+        auto& variable = variables().at(baseName);
+        if (actual->isUnKnown() && variable.knownTypesOnly()) {
           return false;
         }
-      } else {
-        if (!SignatureBinderBase::tryBind(formalArgs[i], actualTypes_[i])) {
+        if (variable.orderableTypesOnly() && !actual->isOrderable()) {
+          return false;
+        }
+        if (variable.comparableTypesOnly() && !actual->isComparable()) {
+          return false;
+        }
+        info.type = actual;
+        typeVariablesBindings_[baseName] = actual;
+      } else if (!info.type->equivalent(*actual)) {
+        if (auto c = TypeCoercer::coerceTypeBase(actual, info.type->name())) {
+          coercions[i] = c.value();
+        } else if (
+            auto c = TypeCoercer::coerceTypeBase(info.type, actual->name())) {
+          info.type = c->type;
+          typeVariablesBindings_[baseName] = info.type;
+          for (auto pos : info.positions) {
+            auto argType = actualTypes_[pos];
+            if (info.type->equivalent(*argType)) {
+              coercions[pos].reset();
+            } else {
+              auto cPrev =
+                  TypeCoercer::coerceTypeBase(argType, info.type->name());
+              if (!cPrev) {
+                return false;
+              }
+              coercions[pos] = cPrev.value();
+            }
+          }
+        } else {
           return false;
         }
       }
+
+      continue;
+    }
+
+    if (allowCoercions) {
+      if (!SignatureBinderBase::tryBindWithCoercion(
+              formal, actual, coercions[i])) {
+        return false;
+      }
     } else {
-      return false;
+      if (!SignatureBinderBase::tryBind(formal, actual)) {
+        return false;
+      }
     }
   }
 
@@ -215,9 +259,23 @@ bool SignatureBinderBase::tryBind(
     VELOX_CHECK(variable.isTypeParameter(), "Not expecting integer variable");
 
     if (typeVariablesBindings_.count(baseName)) {
-      // If the the variable type is already mapped to a concrete type, make
-      // sure the mapped type is equivalent to the actual type.
-      return typeVariablesBindings_[baseName]->equivalent(*actualType);
+      // If the variable is already mapped to a concrete type, ensure the
+      // actual type can be coerced to it when coercions are allowed. If
+      // coercions are not allowed, require exact match.
+      const auto& boundType = typeVariablesBindings_[baseName];
+      if (boundType->equivalent(*actualType)) {
+        return true;
+      }
+
+      if (allowCoercion) {
+        if (auto availableCoercion =
+                TypeCoercer::coerceTypeBase(actualType, boundType->name())) {
+          coercion = availableCoercion.value();
+          return true;
+        }
+      }
+
+      return false;
     }
 
     if (actualType->isUnKnown() && variable.knownTypesOnly()) {
@@ -258,6 +316,11 @@ bool SignatureBinderBase::tryBind(
     return false;
   }
 
+  bool hasCoercion = false;
+  int32_t totalCost = 0;
+  std::vector<TypePtr> newParameters;
+  newParameters.reserve(params.size());
+
   for (auto i = 0; i < params.size(); i++) {
     const auto& actualParameter = actualType->parameters()[i];
     switch (actualParameter.kind) {
@@ -267,17 +330,39 @@ bool SignatureBinderBase::tryBind(
           return false;
         }
         break;
-      case TypeParameterKind::kType:
+      case TypeParameterKind::kType: {
         if (!checkNamedRowField(params[i], actualType, i)) {
           return false;
         }
 
-        if (!tryBind(params[i], actualParameter.type)) {
-          // TODO Allow coercions for complex types.
+        Coercion childCoercion;
+        if (!tryBind(
+                params[i],
+                actualParameter.type,
+                allowCoercion,
+                childCoercion)) {
           return false;
         }
+        if (allowCoercion && childCoercion.type != nullptr) {
+          hasCoercion = true;
+          totalCost += childCoercion.cost;
+          newParameters.emplace_back(childCoercion.type);
+        } else {
+          newParameters.emplace_back(actualParameter.type);
+        }
         break;
+      }
     }
+  }
+
+  if (allowCoercion && hasCoercion) {
+    std::vector<TypeParameter> typeParameters;
+    typeParameters.reserve(newParameters.size());
+    for (auto i = 0; i < newParameters.size(); ++i) {
+      typeParameters.emplace_back(newParameters[i], params[i].rowFieldName());
+    }
+    coercion.type = getType(typeName, typeParameters);
+    coercion.cost = totalCost;
   }
   return true;
 }
