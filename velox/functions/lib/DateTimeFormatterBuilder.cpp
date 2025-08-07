@@ -176,7 +176,9 @@ DateTimeFormatterBuilder& DateTimeFormatterBuilder::appendFractionOfSecond(
 DateTimeFormatterBuilder&
 DateTimeFormatterBuilder::setFractionOfSecondPrecision(
     TimestampPrecision fractionOfSecondPrecision) {
-  VELOX_CHECK(fractionOfSecondPrecision != TimestampPrecision::kNanoseconds, "Nanos not supported");
+  VELOX_CHECK(
+      fractionOfSecondPrecision != TimestampPrecision::kNanoseconds,
+      "Nanos not supported");
   fractionOfSecondPrecision_ = fractionOfSecondPrecision;
   return *this;
 }
@@ -212,8 +214,9 @@ DateTimeFormatterBuilder& DateTimeFormatterBuilder::appendLiteral(
     tokens_.back().literal =
         std::string_view(prev.data(), prev.size() + literalSize);
   } else {
-    tokens_.emplace_back(std::string_view(
-        literalBuf_.get() + bufEnd_ - literalSize, literalSize));
+    tokens_.emplace_back(
+        std::string_view(
+            literalBuf_.get() + bufEnd_ - literalSize, literalSize));
   }
   return *this;
 }
