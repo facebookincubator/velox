@@ -1044,21 +1044,22 @@ core::TypedExprPtr ExpressionFuzzer::generateExpressionFromSignatureTemplate(
       chosenSignature, returnType, rng_, supportedScalarTypes_};
 
   std::vector<TypePtr> argumentTypes;
-  if (argTypesGenerators_.find(functionName) != argTypesGenerators_.end()) {
-    // Use the argument generator to generate argument types.
-    argumentTypes = argTypesGenerators_[functionName]->generateArgs(
-        chosenSignature, returnType, rng_);
-    if (argumentTypes.empty()) {
-      return nullptr;
-    }
-  } else if (fuzzer.fuzzArgumentTypes(options_.maxNumVarArgs)) {
+  if (fuzzer.fuzzArgumentTypes(options_.maxNumVarArgs)) {
     // Use the argument fuzzer to generate argument types.
     argumentTypes = fuzzer.argumentTypes();
   } else {
-    VELOX_FAIL(
+    auto it = argTypesGenerators_.find(functionName);
+    // Since the argument type fuzzer cannot produce argument types, argument
+    // generators should be provided.
+    VELOX_CHECK(
+        it != argTypesGenerators_.end(),
         "Cannot generate argument types for {} with return type {}.",
         functionName,
         returnType->toString());
+    argumentTypes = it->second->generateArgs(chosenSignature, returnType, rng_);
+    if (argumentTypes.empty()) {
+      return nullptr;
+    }
   }
 
   auto constantArguments = chosenSignature.constantArguments();
