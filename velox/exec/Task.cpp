@@ -396,6 +396,7 @@ Task::~Task() {
 #define CLEAR(_action_)   \
   clearStage = #_action_; \
   _action_;
+
   CLEAR(threadFinishPromises_.clear());
   CLEAR(splitGroupStates_.clear());
   CLEAR(taskStats_ = TaskStats());
@@ -413,6 +414,9 @@ Task::~Task() {
   CLEAR(pool_.reset());
   CLEAR(planFragment_ = core::PlanFragment());
   CLEAR(queryCtx_.reset());
+
+#undef CLEAR
+
   clearStage = "exiting ~Task()";
 
   // Ful-fill the task deletion promises at the end.
