@@ -19,7 +19,7 @@ Miscellaneous Functions
 
     Extracts the ``ordinal``-th fields of all array elements, and returns them as a new array.
     The first input must be of array(strcut) type and nested complex type is allowed.
-    The ``ordinal`` is 0-based, and if ``ordinal`` is negative or greater than or equal to
+    The ``ordinal`` is 0-based, and if ``ordinal`` is negative or no less than
     the children size of strcut, exception is thrown. ::
 
         SELECT items.col1 FROM VALUES (array(struct(100,'foo'), struct(200,'bar'))) AS t(items); -- array(100, 200)
@@ -29,7 +29,7 @@ Miscellaneous Functions
 
     Returns the value of nested subfield at position ``ordinal`` in the input ``struct``.
     The input must be of row type and nested complex type is allowed.
-    The ``ordinal`` is 0-based, and if ``ordinal`` is negative or no less than
+    The ``ordinal`` is 0-based, and if ``ordinal`` is negative or greater than or equal to
     the children size of ``struct``, exception is thrown. ::
 
         SELECT from_json('{"a": 1, "b": [1, 2, 3]}', 'a INT, b ARRAY<INT>').a; -- 1
