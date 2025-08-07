@@ -161,11 +161,6 @@ Spatial Operations
     Returns the geometry that represents the all points in either ``geometry1``
     or ``geometry2``.
 
-.. function:: ST_Envelope(geometry: Geometry) -> envelope: Geometry
-
-    Returns the bounding rectangular polygon of a ``geometry``. Empty input will
-    result in empty output.
-
 Accessors
 ---------
 .. function:: ST_IsValid(geometry: Geometry) -> valid: bool
@@ -205,32 +200,6 @@ Accessors
    Returns the vertex of a LineString at a given index (indices start at 1).
    If the given index is less than 1 or greater than the total number of elements
    in the collection, returns NULL.
-
-.. function:: ST_Points(geometry: Geometry) -> points: array(geometry)
-
-   Returns an array of points in a geometry. Empty or null inputs
-   return null.
-
-.. function:: ST_NumPoints(geometry: Geometry) -> points: integer
-
-   Returns the number of points in a geometry. This is an extension
-   to the SQL/MM ``ST_NumPoints`` function which only applies to
-   point and linestring.
-
-.. function:: geometry_nearest_points(geometry1: Geometry, geometry2: Geometry) -> points: array(geometry)
-
-   Returns the points on each geometry nearest the other. If either geometry
-   is empty, return null. Otherwise, return an array of two Points that have
-   the minimum distance of any two points on the geometries. The first Point
-   will be from the first Geometry argument, the second from the second Geometry
-   argument. If there are multiple pairs with the minimum distance, one pair
-   is chosen arbitrarily.
-
-.. function:: ST_EnvelopeAsPts(geometry: Geometry) -> points: array(geometry)
-
-   Returns an array of two points: the lower left and upper right corners
-   of the bounding rectangular polygon of a geometry. Empty or null inputs
-   return null.
 
 .. function:: geometry_invalid_reason(geometry: Geometry) -> reason: varchar
 
@@ -342,25 +311,9 @@ Accessors
 
     Returns the minimum convex geometry that encloses all input geometries.
 
-.. function:: ST_CoordDim(geometry: Geometry) -> output: integer
-
-    Return the coordinate dimension of the geometry.
-
 .. function:: ST_Dimension(geometry: Geometry) -> output: tinyint
 
     Returns the inherent dimension of this geometry object, which must be less than or equal to the coordinate dimension.
-
-.. function:: ST_ExteriorRing(geometry: Geometry) -> output: Geometry
-
-    Returns a line string representing the exterior ring of the input polygon.
-
-.. function:: ST_Buffer(geometry: Geometry, distance: double) -> output: Geometry
-
-    Returns the geometry that represents all points whose distance from the
-    specified ``geometry`` is less than or equal to the specified ``distance``.
-    If the points of the ``geometry`` are extremely close together
-    (delta < 1e-8), this might return an empty geometry. Empty inputs return
-    null.
 
 .. function:: simplify_geometry(geometry: Geometry, tolerance: double) -> output: Geometry
 

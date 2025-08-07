@@ -371,23 +371,6 @@ Returns null if <code class="docutils literal notranslate"><span class="pre">day
 </dd></dl>
 
 <dl class="spark function">
-<dt class="sig sig-object spark" id="timestampdiff">
-<span class="sig-name descname"><span class="pre">timestampdiff</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">unit</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">timestamp1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">timestamp2</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#timestampdiff" title="Link to this definition">¶</a></dt>
-<dd><p>Returns <code class="docutils literal notranslate"><span class="pre">timestamp2</span></code> - <code class="docutils literal notranslate"><span class="pre">timestamp1</span></code> expressed in terms of <code class="docutils literal notranslate"><span class="pre">unit</span></code>, the fraction
-part is truncated.
-Throws exception if <code class="docutils literal notranslate"><span class="pre">unit</span></code> is invalid.
-<code class="docutils literal notranslate"><span class="pre">unit</span></code> is case insensitive and must be one of the following:
-<code class="docutils literal notranslate"><span class="pre">YEAR</span></code>, <code class="docutils literal notranslate"><span class="pre">QUARTER</span></code>, <code class="docutils literal notranslate"><span class="pre">MONTH</span></code>, <code class="docutils literal notranslate"><span class="pre">WEEK</span></code>, <code class="docutils literal notranslate"><span class="pre">DAY</span></code>, <code class="docutils literal notranslate"><span class="pre">HOUR</span></code>, <code class="docutils literal notranslate"><span class="pre">MINUTE</span></code>, <code class="docutils literal notranslate"><span class="pre">SECOND</span></code>,
-<code class="docutils literal notranslate"><span class="pre">MILLISECOND</span></code>, <code class="docutils literal notranslate"><span class="pre">MICROSECOND</span></code>.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">timestampdiff</span><span class="p">(</span><span class="n">YEAR</span><span class="p">,</span> <span class="s1">&#39;2020-02-29 10:00:00.500&#39;</span><span class="p">,</span> <span class="s1">&#39;2030-02-28 10:00:00.500&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="mi">9</span>
-<span class="n">SELECT</span> <span class="n">timestampdiff</span><span class="p">(</span><span class="n">DAY</span><span class="p">,</span> <span class="s1">&#39;2019-01-30 10:00:00.500&#39;</span><span class="p">,</span> <span class="s1">&#39;2020-02-29 10:00:00.500&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="mi">395</span>
-<span class="n">SELECT</span> <span class="n">timestampdiff</span><span class="p">(</span><span class="n">SECOND</span><span class="p">,</span> <span class="s1">&#39;2019-02-28 10:00:00.500&#39;</span><span class="p">,</span> <span class="s1">&#39;2019-03-01 10:00:00.500&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="mi">86400</span>
-<span class="n">SELECT</span> <span class="n">timestampdiff</span><span class="p">(</span><span class="n">MICROSECOND</span><span class="p">,</span> <span class="s1">&#39;2019-02-28 10:00:00.000000&#39;</span><span class="p">,</span> <span class="s1">&#39;2019-02-28 10:01:00.500999&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="mi">60500999</span>
-</pre></div>
-</div>
-</dd></dl>
-
-<dl class="spark function">
 <dt class="sig sig-object spark" id="timestamp_micros">
 <span class="sig-name descname"><span class="pre">timestamp_micros</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">timestamp</span></span></span><a class="headerlink" href="#timestamp_micros" title="Link to this definition">¶</a></dt>
 <dd><p>Returns timestamp from the number of microseconds since UTC epoch.
@@ -659,7 +642,6 @@ returned for invalid format; otherwise, exception is thrown.</p>
 <li><a class="reference internal" href="#next_day"><code class="docutils literal notranslate"><span class="pre">next_day()</span></code></a></li>
 <li><a class="reference internal" href="#quarter"><code class="docutils literal notranslate"><span class="pre">quarter()</span></code></a></li>
 <li><a class="reference internal" href="#second"><code class="docutils literal notranslate"><span class="pre">second()</span></code></a></li>
-<li><a class="reference internal" href="#timestampdiff"><code class="docutils literal notranslate"><span class="pre">timestampdiff()</span></code></a></li>
 <li><a class="reference internal" href="#timestamp_micros"><code class="docutils literal notranslate"><span class="pre">timestamp_micros()</span></code></a></li>
 <li><a class="reference internal" href="#timestamp_millis"><code class="docutils literal notranslate"><span class="pre">timestamp_millis()</span></code></a></li>
 <li><a class="reference internal" href="#to_unix_timestamp"><code class="docutils literal notranslate"><span class="pre">to_unix_timestamp()</span></code></a></li>

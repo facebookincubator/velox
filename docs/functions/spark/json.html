@@ -60,9 +60,9 @@ be found in <a class="reference external" href="https://www.json.org">this JSON 
 <dd><p>Casts <code class="docutils literal notranslate"><span class="pre">jsonString</span></code> to an ARRAY, MAP, or ROW type, with the output type
 determined by the expression. Returns NULL, if the input string is unparsable.
 Supported element types include BOOLEAN, TINYINT, SMALLINT, INTEGER, BIGINT,
-REAL, DOUBLE, DECIMAL, DATE, VARCHAR, ARRAY, MAP and ROW. When casting to ARRAY
-or MAP, the element type of the array or the value type of the map must be one
-of these supported types, and for maps, the key type must be VARCHAR. Casting
+REAL, DOUBLE, DATE, VARCHAR, ARRAY, MAP and ROW. When casting to ARRAY or MAP,
+the element type of the array or the value type of the map must be one of
+these supported types, and for maps, the key type must be VARCHAR. Casting
 to ROW supports only JSON objects.
 Note that since the result type can be inferred from the expression, in Velox we
 do not need to provide the <code class="docutils literal notranslate"><span class="pre">schema</span></code> parameter as required by Spark’s from_json
@@ -70,7 +70,6 @@ function.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">from_json</span><span class="p">(</span><span class="s1">&#39;{&quot;a&quot;: true}&#39;</span><span class="p">,</span> <span class="s1">&#39;a BOOLEAN&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="p">{</span><span class="s1">&#39;a&#39;</span><span class="o">=</span><span class="n">true</span><span class="p">}</span>
 <span class="n">SELECT</span> <span class="n">from_json</span><span class="p">(</span><span class="s1">&#39;{&quot;a&quot;: 1}&#39;</span><span class="p">,</span> <span class="s1">&#39;a INT&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="p">{</span><span class="s1">&#39;a&#39;</span><span class="o">=</span><span class="mi">1</span><span class="p">}</span>
 <span class="n">SELECT</span> <span class="n">from_json</span><span class="p">(</span><span class="s1">&#39;{&quot;a&quot;: 1.0}&#39;</span><span class="p">,</span> <span class="s1">&#39;a DOUBLE&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="p">{</span><span class="s1">&#39;a&#39;</span><span class="o">=</span><span class="mf">1.0</span><span class="p">}</span>
-<span class="n">SELECT</span> <span class="n">from_json</span><span class="p">(</span><span class="s1">&#39;{&quot;a&quot;: 5.321E2}&#39;</span><span class="p">,</span> <span class="s1">&#39;a DECIMAL(7, 2)&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="p">{</span><span class="s1">&#39;a&#39;</span><span class="o">=</span><span class="mf">532.10</span><span class="p">}</span>
 <span class="n">SELECT</span> <span class="n">from_json</span><span class="p">(</span><span class="s1">&#39;{&quot;a&quot;:&quot;2021-7-1T&quot;}&#39;</span><span class="p">,</span> <span class="s1">&#39;a DATE&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="p">{</span><span class="s1">&#39;a&#39;</span><span class="o">=</span><span class="s2">&quot;2021-07-01&quot;</span><span class="p">}</span>
 <span class="n">SELECT</span> <span class="n">from_json</span><span class="p">(</span><span class="s1">&#39;{&quot;a&quot;:&quot;1&quot;}&#39;</span><span class="p">,</span> <span class="s1">&#39;a DATE&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="p">{</span><span class="s1">&#39;a&#39;</span><span class="o">=</span><span class="s2">&quot;1970-01-02&quot;</span><span class="p">}</span>
 <span class="n">SELECT</span> <span class="n">from_json</span><span class="p">(</span><span class="s1">&#39;[&quot;name&quot;, &quot;age&quot;, &quot;id&quot;]&#39;</span><span class="p">,</span> <span class="s1">&#39;ARRAY&lt;STRING&gt;&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="p">[</span><span class="s1">&#39;name&#39;</span><span class="p">,</span> <span class="s1">&#39;age&#39;</span><span class="p">,</span> <span class="s1">&#39;id&#39;</span><span class="p">]</span>
@@ -140,30 +139,6 @@ returns null.</p>
 </div>
 </dd></dl>
 
-<dl class="spark function">
-<dt class="sig sig-object spark" id="to_json">
-<span class="sig-name descname"><span class="pre">to_json</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">jsonObject</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">jsonString</span></span></span><a class="headerlink" href="#to_json" title="Link to this definition">¶</a></dt>
-<dd><p>Converts a Json object (ROW, ARRAY or MAP) into a JSON string.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">to_json</span><span class="p">(</span><span class="n">named_struct</span><span class="p">(</span><span class="s1">&#39;c0&#39;</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="s1">&#39;c1&#39;</span><span class="p">,</span> <span class="s1">&#39;a&#39;</span><span class="p">));</span> <span class="o">--</span> <span class="p">{</span><span class="s2">&quot;c0&quot;</span><span class="p">:</span><span class="mi">1</span><span class="p">,</span><span class="s2">&quot;c1&quot;</span><span class="p">:</span><span class="s2">&quot;a&quot;</span><span class="p">}</span>
-<span class="n">SELECT</span> <span class="n">to_json</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">));</span> <span class="o">--</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">]</span>
-<span class="n">SELECT</span> <span class="n">to_json</span><span class="p">(</span><span class="n">MAP</span><span class="p">(</span><span class="s1">&#39;x&#39;</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="s1">&#39;y&#39;</span><span class="p">,</span> <span class="mi">2</span><span class="p">));</span> <span class="o">--</span> <span class="p">{</span><span class="s2">&quot;x&quot;</span><span class="p">:</span><span class="mi">1</span><span class="p">,</span><span class="s2">&quot;y&quot;</span><span class="p">:</span><span class="mi">2</span><span class="p">}</span>
-</pre></div>
-</div>
-<p>The current implementation has following limitations.</p>
-<ul>
-<li><p>Does not support user provided options.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">to_json</span><span class="p">(</span><span class="n">MAP</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="s1">&#39;a&#39;</span><span class="p">),</span> <span class="nb">map</span><span class="p">(</span><span class="s1">&#39;option&#39;</span><span class="p">,</span> <span class="s1">&#39;value&#39;</span><span class="p">))</span>
-</pre></div>
-</div>
-</li>
-<li><p>MAP key type cannot be/contain MAP.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">to_json</span><span class="p">(</span><span class="n">MAP</span><span class="p">(</span><span class="n">MAP</span><span class="p">(</span><span class="s1">&#39;a&#39;</span><span class="p">,</span> <span class="mi">1</span><span class="p">),</span> <span class="mi">10</span><span class="p">))</span>
-</pre></div>
-</div>
-</li>
-</ul>
-</dd></dl>
-
 </section>
 </section>
 
@@ -184,7 +159,6 @@ returns null.</p>
 <li><a class="reference internal" href="#get_json_object"><code class="docutils literal notranslate"><span class="pre">get_json_object()</span></code></a></li>
 <li><a class="reference internal" href="#json_array_length"><code class="docutils literal notranslate"><span class="pre">json_array_length()</span></code></a></li>
 <li><a class="reference internal" href="#json_object_keys"><code class="docutils literal notranslate"><span class="pre">json_object_keys()</span></code></a></li>
-<li><a class="reference internal" href="#to_json"><code class="docutils literal notranslate"><span class="pre">to_json()</span></code></a></li>
 </ul>
 </li>
 </ul>
