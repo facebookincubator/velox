@@ -956,21 +956,45 @@ struct SecondsToTimestampFunction {
   VELOX_DEFINE_FUNCTION_TYPES(TExec);
 
   template <typename T>
-  FOLLY_ALWAYS_INLINE void call(out_type<Timestamp>& result, const T seconds) {
+  FOLLY_ALWAYS_INLINE void call(out_type<Timestamp>& result, T seconds) {
     if constexpr (std::is_integral_v<T>) {
       result = Timestamp(static_cast<int64_t>(seconds), 0);
     } else {
-      int64_t wholeSeconds = static_cast<int64_t>(seconds);
-      double fractionalSeconds = seconds - wholeSeconds;
+      // Scale to microseconds using double, truncating toward zero.
+      const double microsD = static_cast<double>(seconds) * 1'000'000.0;
 
-      if (seconds < 0 && fractionalSeconds != 0) {
-        wholeSeconds -= 1;
-        fractionalSeconds += 1;
+      // Saturate like Java's cast to long.
+      constexpr double kMaxMicrosD =
+          static_cast<double>(std::numeric_limits<int64_t>::max());
+      constexpr double kMinMicrosD =
+          static_cast<double>(std::numeric_limits<int64_t>::min());
+
+      // Cutoff values are based on Java's Long.MAX_VALUE and Long.MIN_VALUE.
+      constexpr int64_t maxSeconds = 9223372036854LL;
+      constexpr int64_t maxNanoseconds = 775807000LL;
+      constexpr int64_t minSeconds = -9223372036855LL;
+      constexpr int64_t minNanoseconds = 224192000LL;
+
+      if (microsD >= kMaxMicrosD) {
+        result = Timestamp(maxSeconds, maxNanoseconds);
+        return;
+      } else if (microsD <= kMinMicrosD) {
+        result = Timestamp(minSeconds, minNanoseconds);
+        return;
       }
-      // To avoid floating point arithmetic precision issues, multiply and round
-      // the fractional seconds then multiply the result to get nanoseconds.
-      int64_t nano = static_cast<int64_t>(
-          std::round(fractionalSeconds * 1'000'000) * 1'000);
+
+      const int64_t micros = static_cast<int64_t>(microsD);
+
+      // Split into whole seconds and remaining microseconds.
+      constexpr int64_t kMicrosPerSec = 1'000'000;
+      int64_t wholeSeconds = micros / kMicrosPerSec;
+      int64_t remainingMicros = micros % kMicrosPerSec;
+      if (remainingMicros < 0) {
+        wholeSeconds -= 1;
+        remainingMicros += kMicrosPerSec;
+      }
+
+      const int64_t nano = remainingMicros * 1'000;
       result = Timestamp(wholeSeconds, nano);
     }
   }

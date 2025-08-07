@@ -42,6 +42,10 @@ class DateTimeFunctionsTest : public SparkFunctionBaseTest {
   static constexpr int8_t kMaxTinyint = std::numeric_limits<int8_t>::max();
   static constexpr int64_t kMinBigint = std::numeric_limits<int64_t>::min();
   static constexpr int64_t kMaxBigint = std::numeric_limits<int64_t>::max();
+  static constexpr float kMinFloat = std::numeric_limits<float>::lowest();
+  static constexpr float kMaxFloat = std::numeric_limits<float>::max();
+  static constexpr double kMinDouble = std::numeric_limits<double>::lowest();
+  static constexpr double kMaxDouble = std::numeric_limits<double>::max();
 
  protected:
   void setQueryTimeZone(const std::string& timeZone) {
@@ -1187,6 +1191,17 @@ TEST_F(DateTimeFunctionsTest, secondsToTimestamp) {
   EXPECT_EQ(
       secondsToTimestamp<float>(-1.0), parseTimestamp("1969-12-31 23:59:59"));
   EXPECT_EQ(
+      secondsToTimestamp<float>(1.1234567),
+      parseTimestamp("1970-01-01 00:00:01.123456"));
+  EXPECT_EQ(
+      secondsToTimestamp<float>(kMaxFloat),
+      parseTimestamp("+294247-01-10 04:00:54.775807"));
+  EXPECT_EQ(
+      secondsToTimestamp<float>(kMinFloat),
+      parseTimestamp("-290308-12-21 19:59:05.224192"));
+
+  // Tests using double seconds as input.
+  EXPECT_EQ(
       secondsToTimestamp<double>(1.0), parseTimestamp("1970-01-01 00:00:01"));
   EXPECT_EQ(
       secondsToTimestamp<double>(-1.0), parseTimestamp("1969-12-31 23:59:59"));
@@ -1216,6 +1231,15 @@ TEST_F(DateTimeFunctionsTest, secondsToTimestamp) {
   EXPECT_EQ(
       secondsToTimestamp<double>(-2147483648.567),
       parseTimestamp("1901-12-13 20:45:51.433"));
+  EXPECT_EQ(
+      secondsToTimestamp<double>(1.1234567),
+      parseTimestamp("1970-01-01 00:00:01.123456"));
+  EXPECT_EQ(
+      secondsToTimestamp<double>(kMinDouble),
+      parseTimestamp("-290308-12-21 19:59:05.224192"));
+  EXPECT_EQ(
+      secondsToTimestamp<double>(kMaxDouble),
+      parseTimestamp("+294247-01-10 04:00:54.775807"));
 }
 
 TEST_F(DateTimeFunctionsTest, timestampToMicros) {
