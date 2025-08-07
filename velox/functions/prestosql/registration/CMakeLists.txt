@@ -34,11 +34,17 @@ velox_add_library(
   MathematicalOperatorsRegistration.cpp
   ProbabilityTrigonometricFunctionsRegistration.cpp
   RegistrationFunctions.cpp
-  SfmSketchFunctionsRegistration.cpp
   StringFunctionsRegistration.cpp
   TDigestFunctionsRegistration.cpp
   QDigestFunctionsRegistration.cpp
   URLFunctionsRegistration.cpp)
+
+if(VELOX_ENABLE_AGGREGATES)
+  velox_compile_definitions(velox_functions_prestosql
+                            PRIVATE VELOX_ENABLE_AGGREGATES)
+  velox_sources(velox_functions_prestosql PRIVATE
+                SfmSketchFunctionsRegistration.cpp)
+endif()
 
 if(VELOX_ENABLE_GEO)
   velox_compile_definitions(velox_functions_prestosql PRIVATE VELOX_ENABLE_GEO)
@@ -59,12 +65,13 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND NOT VELOX_MONO_LIBRARY)
                          PRIVATE -Wno-deprecated-declarations)
 endif()
 
-velox_link_libraries(
-  velox_functions_prestosql
-  velox_functions_prestosql_impl
-  velox_is_null_functions
-  velox_functions_prestosql_aggregates_sfm
-  simdjson::simdjson)
+velox_link_libraries(velox_functions_prestosql velox_functions_prestosql_impl
+                     velox_is_null_functions)
+if(VELOX_ENABLE_AGGREGATES)
+  velox_link_libraries(velox_functions_prestosql
+                       velox_functions_prestosql_aggregates_sfm)
+endif()
+velox_link_libraries(velox_functions_prestosql simdjson::simdjson)
 
 if(NOT VELOX_MONO_LIBRARY)
   set_property(TARGET velox_functions_prestosql PROPERTY JOB_POOL_COMPILE

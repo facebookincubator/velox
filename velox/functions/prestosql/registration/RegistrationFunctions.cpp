@@ -31,7 +31,9 @@ extern void registerGeneralFunctions(const std::string& prefix);
 extern void registerHyperLogFunctions(const std::string& prefix);
 extern void registerTDigestFunctions(const std::string& prefix);
 extern void registerQDigestFunctions(const std::string& prefix);
+#ifdef VELOX_ENABLE_AGGREGATES
 extern void registerSfmSketchFunctions(const std::string& prefix);
+#endif
 extern void registerIntegerFunctions(const std::string& prefix);
 extern void registerFloatingPointFunctions(const std::string& prefix);
 extern void registerJsonFunctions(const std::string& prefix);
@@ -89,7 +91,9 @@ void registerQDigestFunctions(const std::string& prefix) {
 }
 
 void registerSfmSketchFunctions(const std::string& prefix) {
+#ifdef VELOX_ENABLE_AGGREGATES
   functions::registerSfmSketchFunctions(prefix);
+#endif
 }
 
 void registerIntegerFunctions(const std::string& prefix) {
