@@ -237,6 +237,13 @@ is not congtained in <code class="docutils literal notranslate"><span class="pre
 or <code class="docutils literal notranslate"><span class="pre">geometry2</span></code>.</p>
 </dd></dl>
 
+<dl class="py function">
+<dt class="sig sig-object py" id="ST_Envelope">
+<span class="sig-name descname"><span class="pre">ST_Envelope</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">envelope:</span> <span class="pre">Geometry</span></span></span><a class="headerlink" href="#ST_Envelope" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the bounding rectangular polygon of a <code class="docutils literal notranslate"><span class="pre">geometry</span></code>. Empty input will
+result in empty output.</p>
+</dd></dl>
+
 </section>
 <section id="accessors">
 <h2>Accessors<a class="headerlink" href="#accessors" title="Link to this heading">¶</a></h2>
@@ -290,6 +297,40 @@ return an error if the input geometry is not a LineString or MultiLineString.</p
 <dd><p>Returns the vertex of a LineString at a given index (indices start at 1).
 If the given index is less than 1 or greater than the total number of elements
 in the collection, returns NULL.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="ST_Points">
+<span class="sig-name descname"><span class="pre">ST_Points</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry:</span> <span class="pre">Geometry)</span> <span class="pre">-&gt;</span> <span class="pre">points:</span> <span class="pre">array(geometry</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#ST_Points" title="Link to this definition">¶</a></dt>
+<dd><p>Returns an array of points in a geometry. Empty or null inputs
+return null.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="ST_NumPoints">
+<span class="sig-name descname"><span class="pre">ST_NumPoints</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">points:</span> <span class="pre">integer</span></span></span><a class="headerlink" href="#ST_NumPoints" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the number of points in a geometry. This is an extension
+to the SQL/MM <code class="docutils literal notranslate"><span class="pre">ST_NumPoints</span></code> function which only applies to
+point and linestring.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="geometry_nearest_points">
+<span class="sig-name descname"><span class="pre">geometry_nearest_points</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry1:</span> <span class="pre">Geometry</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">geometry2:</span> <span class="pre">Geometry)</span> <span class="pre">-&gt;</span> <span class="pre">points:</span> <span class="pre">array(geometry</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#geometry_nearest_points" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the points on each geometry nearest the other. If either geometry
+is empty, return null. Otherwise, return an array of two Points that have
+the minimum distance of any two points on the geometries. The first Point
+will be from the first Geometry argument, the second from the second Geometry
+argument. If there are multiple pairs with the minimum distance, one pair
+is chosen arbitrarily.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="ST_EnvelopeAsPts">
+<span class="sig-name descname"><span class="pre">ST_EnvelopeAsPts</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry:</span> <span class="pre">Geometry)</span> <span class="pre">-&gt;</span> <span class="pre">points:</span> <span class="pre">array(geometry</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#ST_EnvelopeAsPts" title="Link to this definition">¶</a></dt>
+<dd><p>Returns an array of two points: the lower left and upper right corners
+of the bounding rectangular polygon of a geometry. Empty or null inputs
+return null.</p>
 </dd></dl>
 
 <dl class="py function">
@@ -439,9 +480,32 @@ will evaluate to 1.</p>
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="ST_CoordDim">
+<span class="sig-name descname"><span class="pre">ST_CoordDim</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">output:</span> <span class="pre">integer</span></span></span><a class="headerlink" href="#ST_CoordDim" title="Link to this definition">¶</a></dt>
+<dd><p>Return the coordinate dimension of the geometry.</p>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="ST_Dimension">
 <span class="sig-name descname"><span class="pre">ST_Dimension</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">output:</span> <span class="pre">tinyint</span></span></span><a class="headerlink" href="#ST_Dimension" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the inherent dimension of this geometry object, which must be less than or equal to the coordinate dimension.</p>
+<dd><p>Returns the inherent dimension of this geometry object, which
+must be less than or equal to the coordinate dimension.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="ST_ExteriorRing">
+<span class="sig-name descname"><span class="pre">ST_ExteriorRing</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">output:</span> <span class="pre">Geometry</span></span></span><a class="headerlink" href="#ST_ExteriorRing" title="Link to this definition">¶</a></dt>
+<dd><p>Returns a line string representing the exterior ring of the input polygon.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="ST_Buffer">
+<span class="sig-name descname"><span class="pre">ST_Buffer</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">distance</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">double</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">output:</span> <span class="pre">Geometry</span></span></span><a class="headerlink" href="#ST_Buffer" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the geometry that represents all points whose distance from the
+specified <code class="docutils literal notranslate"><span class="pre">geometry</span></code> is less than or equal to the specified <code class="docutils literal notranslate"><span class="pre">distance</span></code>.
+If the points of the <code class="docutils literal notranslate"><span class="pre">geometry</span></code> are extremely close together
+(delta &lt; 1e-8), this might return an empty geometry. Empty inputs return
+null.</p>
 </dd></dl>
 
 <dl class="py function">
@@ -452,6 +516,23 @@ Douglas-Peucker algorithm. Will avoid creating geometries (polygons in
 particular) that are invalid. Tolerance must be a non-negative finite value.
 Using tolerance of 0 will return the original geometry.  Empty geometries
 will also be returned as-is.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="line_locate_point">
+<span class="sig-name descname"><span class="pre">line_locate_point</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">linestring</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">point</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">output:</span> <span class="pre">double</span></span></span><a class="headerlink" href="#line_locate_point" title="Link to this definition">¶</a></dt>
+<dd><p>Returns a float between 0 and 1 representing the location of the closest
+point on the LineString to the given Point, as a fraction of total 2d line length.</p>
+<p>Returns null if a LineString or a Point is empty or null.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="line_interpolate_point">
+<span class="sig-name descname"><span class="pre">line_interpolate_point</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">linestring</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">fraction</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">double</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">output:</span> <span class="pre">geometry</span></span></span><a class="headerlink" href="#line_interpolate_point" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the Point on the LineString at a fractional distance given by
+the double argument. Throws an exception if the distance is not between 0 and 1.</p>
+<p>Returns an empty Point if the LineString is empty.
+Returns null if either the LineString or double is null.</p>
 </dd></dl>
 
 </section>
@@ -579,6 +660,7 @@ specified.</p>
 <li><a class="reference internal" href="#ST_Intersection"><code class="docutils literal notranslate"><span class="pre">ST_Intersection()</span></code></a></li>
 <li><a class="reference internal" href="#ST_SymDifference"><code class="docutils literal notranslate"><span class="pre">ST_SymDifference()</span></code></a></li>
 <li><a class="reference internal" href="#ST_Union"><code class="docutils literal notranslate"><span class="pre">ST_Union()</span></code></a></li>
+<li><a class="reference internal" href="#ST_Envelope"><code class="docutils literal notranslate"><span class="pre">ST_Envelope()</span></code></a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#accessors">Accessors</a><ul>
@@ -589,6 +671,10 @@ specified.</p>
 <li><a class="reference internal" href="#ST_IsEmpty"><code class="docutils literal notranslate"><span class="pre">ST_IsEmpty()</span></code></a></li>
 <li><a class="reference internal" href="#ST_Length"><code class="docutils literal notranslate"><span class="pre">ST_Length()</span></code></a></li>
 <li><a class="reference internal" href="#ST_PointN"><code class="docutils literal notranslate"><span class="pre">ST_PointN()</span></code></a></li>
+<li><a class="reference internal" href="#ST_Points"><code class="docutils literal notranslate"><span class="pre">ST_Points()</span></code></a></li>
+<li><a class="reference internal" href="#ST_NumPoints"><code class="docutils literal notranslate"><span class="pre">ST_NumPoints()</span></code></a></li>
+<li><a class="reference internal" href="#geometry_nearest_points"><code class="docutils literal notranslate"><span class="pre">geometry_nearest_points()</span></code></a></li>
+<li><a class="reference internal" href="#ST_EnvelopeAsPts"><code class="docutils literal notranslate"><span class="pre">ST_EnvelopeAsPts()</span></code></a></li>
 <li><a class="reference internal" href="#geometry_invalid_reason"><code class="docutils literal notranslate"><span class="pre">geometry_invalid_reason()</span></code></a></li>
 <li><a class="reference internal" href="#ST_Area"><code class="docutils literal notranslate"><span class="pre">ST_Area()</span></code></a></li>
 <li><a class="reference internal" href="#ST_Centroid"><code class="docutils literal notranslate"><span class="pre">ST_Centroid()</span></code></a></li>
@@ -607,8 +693,13 @@ specified.</p>
 <li><a class="reference internal" href="#ST_NumGeometries"><code class="docutils literal notranslate"><span class="pre">ST_NumGeometries()</span></code></a></li>
 <li><a class="reference internal" href="#ST_NumInteriorRing"><code class="docutils literal notranslate"><span class="pre">ST_NumInteriorRing()</span></code></a></li>
 <li><a class="reference internal" href="#ST_ConvexHull"><code class="docutils literal notranslate"><span class="pre">ST_ConvexHull()</span></code></a></li>
+<li><a class="reference internal" href="#ST_CoordDim"><code class="docutils literal notranslate"><span class="pre">ST_CoordDim()</span></code></a></li>
 <li><a class="reference internal" href="#ST_Dimension"><code class="docutils literal notranslate"><span class="pre">ST_Dimension()</span></code></a></li>
+<li><a class="reference internal" href="#ST_ExteriorRing"><code class="docutils literal notranslate"><span class="pre">ST_ExteriorRing()</span></code></a></li>
+<li><a class="reference internal" href="#ST_Buffer"><code class="docutils literal notranslate"><span class="pre">ST_Buffer()</span></code></a></li>
 <li><a class="reference internal" href="#simplify_geometry"><code class="docutils literal notranslate"><span class="pre">simplify_geometry()</span></code></a></li>
+<li><a class="reference internal" href="#line_locate_point"><code class="docutils literal notranslate"><span class="pre">line_locate_point()</span></code></a></li>
+<li><a class="reference internal" href="#line_interpolate_point"><code class="docutils literal notranslate"><span class="pre">line_interpolate_point()</span></code></a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#bing-tile-functions">Bing Tile Functions</a><ul>
