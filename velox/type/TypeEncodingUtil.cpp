@@ -34,16 +34,16 @@ size_t approximateTypeEncodingwidth(const TypePtr& type) {
 
   switch (type->kind()) {
     case TypeKind::ARRAY:
-      return 1 + approximateTypeEncodingwidth(type->asArray().elementType());
+      return approximateTypeEncodingwidth(type->asArray().elementType()) + 1;
     case TypeKind::MAP:
-      return 1 + approximateTypeEncodingwidth(type->asMap().keyType()) +
-          approximateTypeEncodingwidth(type->asMap().valueType());
+      return approximateTypeEncodingwidth(type->asMap().keyType()) +
+          approximateTypeEncodingwidth(type->asMap().valueType()) + 1;
     case TypeKind::ROW: {
       size_t fieldWidth = 0;
       for (const auto& child : type->asRow().children()) {
         fieldWidth += approximateTypeEncodingwidth(child);
       }
-      return fieldWidth;
+      return fieldWidth + 1;
     }
     default:
       VELOX_UNREACHABLE("Unsupported type: {}", type->toString());

@@ -994,7 +994,7 @@ TEST_F(VectorFuzzerTest, randTypeByWidth) {
   ASSERT_EQ(approximateTypeEncodingwidth(type), 4);
   type = ROW(
       {INTEGER(), ARRAY(BIGINT()), MAP(VARCHAR(), DOUBLE()), ROW({TINYINT()})});
-  ASSERT_EQ(approximateTypeEncodingwidth(type), 7);
+  ASSERT_EQ(approximateTypeEncodingwidth(type), 9);
 
   // Test randType by width. Results should be at least a RowType with one
   // field, so the minimal type width is 2.
