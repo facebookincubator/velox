@@ -30,7 +30,6 @@
 #include "velox/functions/sparksql/fuzzer/DivideArgTypesGenerator.h"
 #include "velox/functions/sparksql/fuzzer/MakeTimestampArgTypesGenerator.h"
 #include "velox/functions/sparksql/fuzzer/MultiplyArgTypesGenerator.h"
-#include "velox/functions/sparksql/fuzzer/ToJsonArgTypesGenerator.h"
 #include "velox/functions/sparksql/fuzzer/UnscaledValueArgTypesGenerator.h"
 #include "velox/functions/sparksql/registration/Register.h"
 
@@ -107,8 +106,7 @@ int main(int argc, char** argv) {
           {"unscaled_value",
            std::make_shared<UnscaledValueArgTypesGenerator>()},
           {"make_timestamp",
-           std::make_shared<MakeTimestampArgTypesGenerator>()},
-          {"to_json", std::make_shared<ToJsonArgTypesGenerator>()}};
+           std::make_shared<MakeTimestampArgTypesGenerator>()}};
 
   std::shared_ptr<ReferenceQueryRunner> referenceQueryRunner{nullptr};
   return FuzzerRunner::run(
