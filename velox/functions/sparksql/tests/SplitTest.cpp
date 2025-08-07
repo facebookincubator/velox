@@ -306,6 +306,17 @@ TEST_F(SplitTest, fastPath) {
   // Single character delimiter.
   testSplit(input, "<", std::nullopt, 1, expected);
   testSplitConstantDelim(input, "<", std::nullopt, 1, expected);
+
+  input = std::vector<std::string>{
+      {"I©he©she©they"}, // Simple
+      {"one©©©four©"}, // Empty strings
+      {"a©\xED©\xA0©123"}, // Not a well-formed UTF-8 string
+      {""}, // The whole string is empty
+  };
+
+  // Octal string delimiter that is outside the range of ASCII characters.
+  testSplit(input, "\\251", std::nullopt, 1, expected);
+  testSplitConstantDelim(input, "\\251", std::nullopt, 1, expected);
 }
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test

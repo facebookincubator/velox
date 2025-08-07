@@ -100,7 +100,7 @@ BENCHMARK_RELATIVE(split, n) {
 int main(int argc, char** argv) {
   folly::Init init{&argc, &argv};
   memory::MemoryManager::initialize(memory::MemoryManager::Options{});
-  LOG(ERROR) << "Seed: " << seed;
+  LOG(INFO) << "Seed: " << seed;
   benchmark = std::make_unique<SplitBenchmark>(seed);
   folly::runBenchmarks();
   benchmark.reset();

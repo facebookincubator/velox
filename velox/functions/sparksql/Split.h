@@ -138,13 +138,17 @@ struct Split {
   }
 
   // Fast path if the delimiter is a
-  // (1)one-char String and this character is not one of the RegEx's meta
+  // (1)one-char string and this character is not one of the RegEx's meta
   // characters ".$|()[{^?*+\\", or
-  // (2)two-char String and the first char is the backslash and the second is
+  // (2)two-char string and the first char is the backslash and the second is
   // not the ascii digit or ascii letter, or
-  // (3)octal string.
+  // (3)octal string that falls within the range of ASCII characters.
   void initializeFastPath(const char* delimiterStr, size_t delimiterSize) {
+    // Referencing from
+    // https://github.com/openjdk/jdk8/blob/master/jdk/src/share/classes/java/lang/String.java#L2325
+    // to align with Spark.
     const std::string reservedChars = ".$|()[{^?*+\\";
+
     if (delimiterSize == 1) {
       singleCharDelimiter_ = delimiterStr[0];
       if (reservedChars.find(singleCharDelimiter_) == std::string::npos) {
