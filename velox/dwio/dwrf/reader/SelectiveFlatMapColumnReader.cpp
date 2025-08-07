@@ -203,6 +203,7 @@ class SelectiveFlatMapAsStructReader : public SelectiveStructColumnReaderBase {
       DwrfParams& params,
       common::ScanSpec& scanSpec)
       : SelectiveStructColumnReaderBase(
+            columnReaderOptions,
             requestedType,
             fileType,
             params,
@@ -241,6 +242,7 @@ class SelectiveFlatMapAsMapReader : public SelectiveStructColumnReaderBase {
       DwrfParams& params,
       common::ScanSpec& scanSpec)
       : SelectiveStructColumnReaderBase(
+            columnReaderOptions,
             requestedType,
             fileType,
             params,
@@ -280,6 +282,7 @@ class SelectiveFlatMapReader
       DwrfParams& params,
       common::ScanSpec& scanSpec)
       : dwio::common::SelectiveFlatMapColumnReader(
+            columnReaderOptions,
             requestedType,
             fileType,
             params,
