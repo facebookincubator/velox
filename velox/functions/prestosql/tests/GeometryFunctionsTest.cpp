@@ -16,11 +16,13 @@
 
 #include <gtest/gtest.h>
 #include <array>
-#include "velox/common/base/Status.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/dwio/common/tests/utils/DataFiles.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/types/BingTileType.h"
 
 using facebook::velox::functions::test::FunctionBaseTest;
+using namespace facebook::velox;
 
 class GeometryFunctionsTest : public FunctionBaseTest {
  public:
@@ -2699,4 +2701,1267 @@ TEST_F(GeometryFunctionsTest, testLineInterpolatePoint) {
       testLineInterpolatePointFunc(
           "LINESTRING (0 0, 0 1, 2 1)", 1.5, std::nullopt),
       "line_interpolate_point: Fraction must be between 0 and 1, but is 1.5");
+}
+
+TEST_F(GeometryFunctionsTest, testStInteriorRings) {
+  const auto testStInteriorRingsFunc = [&](const std::optional<std::string>&
+                                               wkt,
+                                           const std::optional<std::vector<
+                                               std::optional<std::string>>>&
+                                               expectedGeoms) {
+    auto input = makeSingleStringInputRow(wkt);
+
+    facebook::velox::VectorPtr output = evaluate(
+        "transform(ST_InteriorRings(ST_GeometryFromText(c0)), x -> ST_AsText(x))",
+        input);
+
+    auto arrayVector =
+        std::dynamic_pointer_cast<facebook::velox::ArrayVector>(output);
+
+    if (expectedGeoms.has_value()) {
+      ASSERT_TRUE(arrayVector != nullptr);
+
+      std::vector<std::vector<std::optional<std::string>>> vec = {
+          expectedGeoms.value()};
+      auto expected = makeNullableArrayVector<std::string>(vec);
+      facebook::velox::test::assertEqualVectors(expected, output);
+    } else {
+      ASSERT_TRUE(output->isNullAt(0));
+    }
+  };
+
+  testStInteriorRingsFunc(
+      "POLYGON ((0 0, 0 3, 3 3, 3 0, 0 0), (1 1, 2 1, 2 2, 1 2, 1 1))",
+      {{"LINESTRING (1 1, 2 1, 2 2, 1 2, 1 1)"}});
+  testStInteriorRingsFunc(
+      "POLYGON ((0 0, 0 5, 5 5, 5 0, 0 0), (1 1, 2 1, 2 2, 1 2, 1 1), (3 3, 4 3, 4 4, 3 4, 3 3))",
+      {{"LINESTRING (1 1, 2 1, 2 2, 1 2, 1 1)",
+        "LINESTRING (3 3, 4 3, 4 4, 3 4, 3 3)"}});
+  testStInteriorRingsFunc("POLYGON ((0 0, 0 1, 1 1, 1 0, 0 0))", {{}});
+  testStInteriorRingsFunc("POLYGON EMPTY", std::nullopt);
+
+  VELOX_ASSERT_USER_THROW(
+      testStInteriorRingsFunc("POINT (2 3)", std::nullopt),
+      "ST_InteriorRings only applies to Polygon. Input type is: Point");
+}
+
+TEST_F(GeometryFunctionsTest, testStGeometries) {
+  const auto testStGeometriesFunc = [&](const std::optional<std::string>& wkt,
+                                        const std::optional<std::vector<
+                                            std::optional<std::string>>>&
+                                            expectedGeoms) {
+    auto input = makeSingleStringInputRow(wkt);
+    facebook::velox::VectorPtr output = evaluate(
+        "transform(ST_Geometries(ST_GeometryFromText(c0)), x -> ST_AsText(x))",
+        input);
+
+    auto arrayVector =
+        std::dynamic_pointer_cast<facebook::velox::ArrayVector>(output);
+
+    if (expectedGeoms.has_value()) {
+      ASSERT_TRUE(arrayVector != nullptr);
+
+      std::vector<std::vector<std::optional<std::string>>> vec = {
+          expectedGeoms.value()};
+      auto expected = makeNullableArrayVector<std::string>(vec);
+      facebook::velox::test::assertEqualVectors(expected, output);
+    } else {
+      ASSERT_TRUE(output->isNullAt(0));
+    }
+  };
+
+  testStGeometriesFunc("POINT (1 5)", {{"POINT (1 5)"}});
+
+  testStGeometriesFunc(
+      "LINESTRING (77.29 29.07, 77.42 29.26, 77.27 29.31, 77.29 29.07)",
+      {{"LINESTRING (77.29 29.07, 77.42 29.26, 77.27 29.31, 77.29 29.07)"}});
+  testStGeometriesFunc(
+      "POLYGON ((0 0, 0 1, 1 1, 1 0, 0 0))",
+      {{"POLYGON ((0 0, 0 1, 1 1, 1 0, 0 0))"}});
+  testStGeometriesFunc(
+      "MULTIPOINT (1 2, 4 8, 16 32)",
+      {{"POINT (1 2)", "POINT (4 8)", "POINT (16 32)"}});
+  testStGeometriesFunc(
+      "MULTILINESTRING ((1 1, 2 2))", {{"LINESTRING (1 1, 2 2)"}});
+  testStGeometriesFunc(
+      "MULTIPOLYGON (((0 0, 0 1, 1 1, 1 0, 0 0)), ((1 1, 3 1, 3 3, 1 3, 1 1)))",
+      {{"POLYGON ((0 0, 0 1, 1 1, 1 0, 0 0))",
+        "POLYGON ((1 1, 1 3, 3 3, 3 1, 1 1))"}});
+  testStGeometriesFunc(
+      "GEOMETRYCOLLECTION (POINT (2 3), LINESTRING (2 3, 3 4))",
+      {{"POINT (2 3)", "LINESTRING (2 3, 3 4)"}});
+  testStGeometriesFunc(
+      "GEOMETRYCOLLECTION(MULTIPOINT(0 0, 1 1), GEOMETRYCOLLECTION(MULTILINESTRING((2 2, 3 3))))",
+      {{"MULTIPOINT (0 0, 1 1)",
+        "GEOMETRYCOLLECTION (MULTILINESTRING ((2 2, 3 3)))"}});
+
+  std::optional<bool> emptyGeomReturnsNull = evaluateOnce<bool>(
+      "ST_Geometries(ST_GeometryFromText(c0)) IS NULL",
+      std::optional<std::string>("POLYGON EMPTY"));
+
+  ASSERT_TRUE(emptyGeomReturnsNull.has_value());
+  ASSERT_TRUE(emptyGeomReturnsNull.value());
+}
+
+TEST_F(GeometryFunctionsTest, testFlattenGeometryCollections) {
+  const auto testFlattenGeometryCollectionsFunc = [&](const std::optional<
+                                                          std::string>& wkt,
+                                                      const std::optional<
+                                                          std::vector<
+                                                              std::optional<
+                                                                  std::
+                                                                      string>>>&
+                                                          expectedGeoms) {
+    auto input = makeSingleStringInputRow(wkt);
+    facebook::velox::VectorPtr output = evaluate(
+        "transform(flatten_geometry_collections(ST_GeometryFromText(c0)), x -> ST_AsText(x))",
+        input);
+
+    auto arrayVector =
+        std::dynamic_pointer_cast<facebook::velox::ArrayVector>(output);
+
+    if (expectedGeoms.has_value()) {
+      ASSERT_TRUE(arrayVector != nullptr);
+
+      std::vector<std::vector<std::optional<std::string>>> vec = {
+          expectedGeoms.value()};
+      auto expected = makeNullableArrayVector<std::string>(vec);
+      facebook::velox::test::assertEqualVectors(expected, output);
+    } else {
+      ASSERT_TRUE(output->isNullAt(0));
+    }
+  };
+
+  testFlattenGeometryCollectionsFunc("POINT (1 5)", {{"POINT (1 5)"}});
+  testFlattenGeometryCollectionsFunc(
+      "MULTIPOINT ((0 0), (1 1))", {{"MULTIPOINT (0 0, 1 1)"}});
+  testFlattenGeometryCollectionsFunc("GEOMETRYCOLLECTION EMPTY", {{}});
+  testFlattenGeometryCollectionsFunc(
+      "GEOMETRYCOLLECTION (POINT EMPTY)", {{"POINT EMPTY"}});
+  testFlattenGeometryCollectionsFunc(
+      "GEOMETRYCOLLECTION (POINT (0 0))", {{"POINT (0 0)"}});
+  testFlattenGeometryCollectionsFunc(
+      "GEOMETRYCOLLECTION (POINT (0 0), GEOMETRYCOLLECTION (POINT (1 1)))",
+      {{"POINT (0 0)", "POINT (1 1)"}});
+
+  std::optional<std::string> wkt = std::nullopt;
+  std::optional<bool> expectNullResult = evaluateOnce<bool>(
+      "flatten_geometry_collections(ST_GeometryFromText(c0)) IS NULL", wkt);
+
+  ASSERT_TRUE(expectNullResult.has_value());
+  ASSERT_TRUE(expectNullResult.value());
+}
+
+TEST_F(GeometryFunctionsTest, testExpandEnvelope) {
+  const auto testExpandEnvelopeFunc =
+      [&](const std::optional<std::string>& wkt,
+          const std::optional<double>& distance,
+          const std::optional<std::string>& expected) {
+        std::optional<std::string> result = evaluateOnce<std::string>(
+            "ST_AsText(expand_envelope(ST_GeometryFromText(c0), c1))",
+            wkt,
+            distance);
+
+        if (wkt.has_value() && distance.has_value()) {
+          ASSERT_TRUE(result.has_value());
+          ASSERT_EQ(result.value(), expected.value());
+        } else {
+          ASSERT_FALSE(result.has_value());
+        }
+      };
+
+  testExpandEnvelopeFunc(
+      "POINT (1 10)", 3, "POLYGON ((-2 7, -2 13, 4 13, 4 7, -2 7))");
+  testExpandEnvelopeFunc(
+      "LINESTRING (1 10, 3 15)", 2, "POLYGON ((-1 8, -1 17, 5 17, 5 8, -1 8))");
+  testExpandEnvelopeFunc(
+      "GEOMETRYCOLLECTION (POINT (5 1), LINESTRING (3 4, 4 4))",
+      1,
+      "POLYGON ((2 0, 2 5, 6 5, 6 0, 2 0))");
+
+  testExpandEnvelopeFunc("POINT EMPTY", 3, "POLYGON EMPTY");
+  testExpandEnvelopeFunc("POLYGON EMPTY", 3, "POLYGON EMPTY");
+
+  testExpandEnvelopeFunc(std::nullopt, 3, "POLYGON EMPTY");
+  testExpandEnvelopeFunc("POINT EMPTY", std::nullopt, "POLYGON EMPTY");
+  testExpandEnvelopeFunc(std::nullopt, std::nullopt, "POLYGON EMPTY");
+
+  // presto-java returns empty envelopes when expand_envelope is called with
+  // infinity distance, so we do the same for consistency.
+  testExpandEnvelopeFunc(
+      "POINT (1 1)", std::numeric_limits<double>::infinity(), "POLYGON EMPTY");
+
+  VELOX_ASSERT_USER_THROW(
+      testExpandEnvelopeFunc(
+          "POINT (1 10)", -1, "POLYGON ((-2 7, -2 13, 4 13, 4 7, -2 7))"),
+      "Distance must be a non-negative number");
+
+  VELOX_ASSERT_USER_THROW(
+      testExpandEnvelopeFunc(
+          "POINT (1 10)",
+          std::numeric_limits<double>::quiet_NaN(),
+          std::nullopt),
+      "Distance must be a non-NaN number");
+
+  VELOX_ASSERT_USER_THROW(
+      testExpandEnvelopeFunc(
+          "POINT (1 10)",
+          std::numeric_limits<double>::signaling_NaN(),
+          std::nullopt),
+      "Distance must be a non-NaN number");
+
+  std::optional<std::string> wrappedEnvelopeResult = evaluateOnce<std::string>(
+      "ST_AsText(expand_envelope(ST_Envelope(ST_GeometryFromText(c0)), c1))",
+      std::optional<std::string>("POINT (1 10)"),
+      std::optional<double>(3));
+  ASSERT_TRUE(wrappedEnvelopeResult.has_value());
+  ASSERT_EQ(
+      wrappedEnvelopeResult.value(),
+      "POLYGON ((-2 7, -2 13, 4 13, 4 7, -2 7))");
+}
+
+TEST_F(GeometryFunctionsTest, testBingTilePolygon) {
+  const auto testBingTilePolygonFunc =
+      [&](const std::optional<int32_t>& x,
+          const std::optional<int32_t>& y,
+          const std::optional<int8_t>& zoom,
+          const std::optional<std::string>& expected) {
+        std::optional<std::string> result = evaluateOnce<std::string>(
+            "ST_AsText(bing_tile_polygon(bing_tile(c0, c1, c2)))", x, y, zoom);
+
+        if (x.has_value() && y.has_value() && zoom.has_value()) {
+          ASSERT_TRUE(result.has_value());
+          ASSERT_EQ(result.value(), expected.value());
+        } else {
+          ASSERT_FALSE(result.has_value());
+        }
+      };
+
+  testBingTilePolygonFunc(
+      0,
+      0,
+      0,
+      "POLYGON ((-180 85.05112877980659, -180 -85.05112877980659, 180 -85.05112877980659, 180 85.05112877980659, -180 85.05112877980659))");
+  testBingTilePolygonFunc(
+      1,
+      1,
+      1,
+      "POLYGON ((0 0, 0 -85.05112877980659, 180 -85.05112877980659, 180 0, 0 0))");
+  testBingTilePolygonFunc(
+      3,
+      3,
+      2,
+      "POLYGON ((90 -66.51326044311185, 90 -85.05112877980659, 180 -85.05112877980659, 180 -66.51326044311185, 90 -66.51326044311185))");
+  testBingTilePolygonFunc(
+      7,
+      7,
+      3,
+      "POLYGON ((135 -79.17133464081945, 135 -85.05112877980659, 180 -85.05112877980659, 180 -79.17133464081945, 135 -79.17133464081945))");
+  testBingTilePolygonFunc(
+      15,
+      15,
+      4,
+      "POLYGON ((157.5 -82.67628497834906, 157.5 -85.05112877980659, 180 -85.05112877980659, 180 -82.67628497834906, 157.5 -82.67628497834906))");
+
+  testBingTilePolygonFunc(
+      31,
+      31,
+      5,
+      "POLYGON ((168.75 -83.97925949886206, 168.75 -85.05112877980659, 180 -85.05112877980659, 180 -83.97925949886206, 168.75 -83.97925949886206))");
+  testBingTilePolygonFunc(
+      0,
+      0,
+      1,
+      "POLYGON ((-180 85.05112877980659, -180 0, 0 0, 0 85.05112877980659, -180 85.05112877980659))");
+  testBingTilePolygonFunc(
+      1,
+      1,
+      2,
+      "POLYGON ((-90 66.51326044311186, -90 0, 0 0, 0 66.51326044311186, -90 66.51326044311186))");
+  testBingTilePolygonFunc(
+      1,
+      1,
+      23,
+      "POLYGON ((-179.99995708465576 85.05112507763845, -179.99995708465576 85.05112137546752, -179.99991416931152 85.05112137546752, -179.99991416931152 85.05112507763845, -179.99995708465576 85.05112507763845))");
+}
+
+TEST_F(GeometryFunctionsTest, testGeometryToFromGeoJson) {
+  const auto testGeometryToFromGeoJsonFunc = [&](const std::optional<
+                                                     std::string>& wkt,
+                                                 const std::optional<
+                                                     std::string>& expected =
+                                                     std::nullopt) {
+    std::optional<std::string> result = evaluateOnce<std::string>(
+        "ST_AsText(geometry_from_geojson(geometry_as_geojson(ST_GeometryFromText(c0))))",
+        wkt);
+
+    if (wkt.has_value()) {
+      ASSERT_TRUE(result.has_value());
+      if (expected.has_value()) {
+        ASSERT_EQ(expected.value(), result.value());
+      } else {
+        ASSERT_EQ(wkt.value(), result.value());
+      }
+    } else {
+      ASSERT_FALSE(result.has_value());
+    }
+  };
+
+  const auto testGeometryToJsonFunc =
+      [&](const std::optional<std::string>& wkt,
+          const std::optional<std::string>& expected) {
+        std::optional<std::string> result = evaluateOnce<std::string>(
+            "geometry_as_geojson(ST_GeometryFromText(c0))", wkt);
+
+        if (expected.has_value()) {
+          ASSERT_TRUE(result.has_value());
+          ASSERT_EQ(expected.value(), result.value());
+        } else {
+          ASSERT_FALSE(result.has_value());
+        }
+      };
+
+  const auto testGeometryFromJsonFunc =
+      [&](const std::optional<std::string>& json,
+          const std::optional<std::string>& expected) {
+        std::optional<std::string> result = evaluateOnce<std::string>(
+            "ST_AsText(geometry_from_geojson(c0))", json);
+
+        if (expected.has_value()) {
+          ASSERT_TRUE(result.has_value());
+          ASSERT_EQ(expected.value(), result.value());
+        } else {
+          ASSERT_FALSE(result.has_value());
+        }
+      };
+
+  // empty atomic (non-multi) geometries should return null
+  testGeometryToJsonFunc("POINT EMPTY", std::nullopt);
+  testGeometryToJsonFunc("POLYGON EMPTY", std::nullopt);
+  testGeometryToJsonFunc("LINESTRING EMPTY", std::nullopt);
+
+  testGeometryToJsonFunc(std::nullopt, std::nullopt);
+
+  // empty multi geometries should return empty
+  testGeometryToFromGeoJsonFunc("MULTIPOINT EMPTY");
+  testGeometryToFromGeoJsonFunc("MULTIPOLYGON EMPTY");
+  testGeometryToFromGeoJsonFunc("MULTILINESTRING EMPTY");
+  testGeometryToFromGeoJsonFunc("GEOMETRYCOLLECTION EMPTY");
+
+  // valid nonempty geometries should return as is.
+  testGeometryToFromGeoJsonFunc("POINT (1 2)");
+  testGeometryToFromGeoJsonFunc("MULTIPOINT (1 2, 3 4)");
+  testGeometryToFromGeoJsonFunc("LINESTRING (0 0, 1 2, 3 4)");
+  testGeometryToFromGeoJsonFunc("MULTILINESTRING ((1 1, 5 1), (2 4, 4 4))");
+  testGeometryToFromGeoJsonFunc("POLYGON ((0 0, 0 1, 1 1, 1 0, 0 0))");
+  testGeometryToFromGeoJsonFunc(
+      "POLYGON ((0 0, 0 3, 3 3, 3 0, 0 0), (1 1, 2 1, 2 2, 1 2, 1 1))");
+  testGeometryToFromGeoJsonFunc(
+      "MULTIPOLYGON (((1 1, 1 3, 3 3, 3 1, 1 1)), ((2 4, 2 6, 6 6, 6 4, 2 4)))");
+  testGeometryToFromGeoJsonFunc(
+      "GEOMETRYCOLLECTION (POINT (1 2), LINESTRING (0 0, 1 2, 3 4), POLYGON ((0 0, 0 1, 1 1, 1 0, 0 0)))");
+
+  // Nested geometry collections
+  testGeometryToFromGeoJsonFunc(
+      "GEOMETRYCOLLECTION (GEOMETRYCOLLECTION (POINT (1 2), LINESTRING (0 0, 1 2, 3 4), POLYGON ((0 0, 0 1, 1 1, 1 0, 0 0))))");
+  testGeometryToFromGeoJsonFunc(
+      "GEOMETRYCOLLECTION (GEOMETRYCOLLECTION (GEOMETRYCOLLECTION (POINT (1 2), LINESTRING (0 0, 1 2, 3 4), POLYGON ((0 0, 0 1, 1 1, 1 0, 0 0)))))");
+  testGeometryToFromGeoJsonFunc(
+      "GEOMETRYCOLLECTION (GEOMETRYCOLLECTION EMPTY, LINESTRING (0 0, 1 2, 3 4), POLYGON ((0 0, 0 1, 1 1, 1 0, 0 0)))",
+      "GEOMETRYCOLLECTION (GEOMETRYCOLLECTION (LINESTRING (0 0, 1 2, 3 4), POLYGON ((0 0, 0 1, 1 1, 1 0, 0 0))))");
+  testGeometryToFromGeoJsonFunc(
+      "GEOMETRYCOLLECTION (GEOMETRYCOLLECTION (GEOMETRYCOLLECTION EMPTY, LINESTRING EMPTY, POLYGON EMPTY))",
+      "GEOMETRYCOLLECTION (GEOMETRYCOLLECTION (GEOMETRYCOLLECTION (LINESTRING EMPTY, POLYGON EMPTY)))");
+  testGeometryToFromGeoJsonFunc(
+      "GEOMETRYCOLLECTION (LINESTRING EMPTY, MULTIPOINT EMPTY)");
+  testGeometryToFromGeoJsonFunc(
+      "GEOMETRYCOLLECTION (POINT EMPTY, POINT EMPTY)");
+
+  // invalid geometries should return as is.
+  testGeometryToFromGeoJsonFunc("MULTIPOINT (0 0, 0 1, 1 1, 0 1)");
+  testGeometryToFromGeoJsonFunc("LINESTRING (0 0, 0 1, 0 1, 1 1, 1 0, 0 0)");
+  testGeometryToFromGeoJsonFunc("LINESTRING (0 0, 1 1, 1 0, 0 1)");
+
+  testGeometryFromJsonFunc(
+      "{\"type\":\"LineString\",\"coordinates\":[]}", "LINESTRING EMPTY");
+  testGeometryFromJsonFunc(
+      "{\"type\":\"MultiPoint\",\"coordinates\":[]}", "MULTIPOINT EMPTY");
+  testGeometryFromJsonFunc(
+      "{\"type\":\"MultiPolygon\",\"coordinates\":[]}", "MULTIPOLYGON EMPTY");
+  testGeometryFromJsonFunc(
+      "{\"type\":\"MultiLineString\",\"coordinates\":[[[0.0,0.0],[1,10]],[[10,10],[20,30]],[[123,123],[456,789]]]}",
+      "MULTILINESTRING ((0 0, 1 10), (10 10, 20 30), (123 123, 456 789))");
+  testGeometryFromJsonFunc(
+      "{\"type\":\"Polygon\",\"coordinates\":[]}", "POLYGON EMPTY");
+
+  testGeometryFromJsonFunc(std::nullopt, std::nullopt);
+
+  VELOX_ASSERT_USER_THROW(
+      testGeometryFromJsonFunc(
+          "{\"type\":\"MultiPoint\",\"invalidField\":[]}", std::nullopt),
+      "Error parsing JSON");
+
+  VELOX_ASSERT_USER_THROW(
+      testGeometryFromJsonFunc(
+          "{\"coordinates\":[[[0.0,0.0],[1,10]],[[10,10],[20,30]],[[123,123],[456,789]]]}",
+          std::nullopt),
+      "Error parsing JSON");
+  VELOX_ASSERT_USER_THROW(
+      testGeometryFromJsonFunc(
+          "{\"type\":\"MultiPoint\",\"crashMe\"}", std::nullopt),
+      "Error parsing JSON");
+}
+
+TEST_F(GeometryFunctionsTest, testGreatCircleDistance) {
+  const auto testGreatCircleDistanceFunc =
+      [&](const std::optional<double>& lat1,
+          const std::optional<double>& long1,
+          const std::optional<double>& lat2,
+          const std::optional<double>& long2,
+          const std::optional<double>& expected) {
+        std::optional<double> result = evaluateOnce<double>(
+            "great_circle_distance(c0, c1, c2, c3)", lat1, long1, lat2, long2);
+
+        if (expected.has_value()) {
+          ASSERT_TRUE(result.has_value());
+          ASSERT_TRUE(std::abs(result.value() - expected.value()) < .0001);
+        } else {
+          ASSERT_FALSE(result.has_value());
+        }
+      };
+
+  testGreatCircleDistanceFunc(
+      36.12, -86.67, 33.94, -118.40, 2886.4489734366994);
+  testGreatCircleDistanceFunc(
+      33.94, -118.40, 36.12, -86.67, 2886.4489734366994);
+  testGreatCircleDistanceFunc(
+      42.3601, -71.0589, 42.4430, -71.2290, 16.734697434573437);
+  testGreatCircleDistanceFunc(36.12, -86.67, 36.12, -86.67, 0.0);
+
+  VELOX_ASSERT_USER_THROW(
+      testGreatCircleDistanceFunc(91, 20, 30, 40, std::nullopt),
+      "Latitude must be in range [-90, 90] and longitude must be in range [-180, 180]. Got latitude: 91 and longitude: 20");
+  VELOX_ASSERT_USER_THROW(
+      testGreatCircleDistanceFunc(10, 20, 91, 40, std::nullopt),
+      "Latitude must be in range [-90, 90] and longitude must be in range [-180, 180]. Got latitude: 91 and longitude: 40");
+  VELOX_ASSERT_USER_THROW(
+      testGreatCircleDistanceFunc(10, 181, 30, 40, std::nullopt),
+      "Latitude must be in range [-90, 90] and longitude must be in range [-180, 180]. Got latitude: 10 and longitude: 181");
+  VELOX_ASSERT_USER_THROW(
+      testGreatCircleDistanceFunc(10, 20, 30, -181, std::nullopt),
+      "Latitude must be in range [-90, 90] and longitude must be in range [-180, 180]. Got latitude: 30 and longitude: -181");
+  VELOX_ASSERT_USER_THROW(
+      testGreatCircleDistanceFunc(
+          std::numeric_limits<double>::infinity(), 20, 30, 40, std::nullopt),
+      "Latitude must be in range [-90, 90] and longitude must be in range [-180, 180]. Got latitude: inf and longitude: 20");
+  VELOX_ASSERT_USER_THROW(
+      testGreatCircleDistanceFunc(
+          10, 20, 30, std::numeric_limits<double>::quiet_NaN(), std::nullopt),
+      "Latitude must be in range [-90, 90] and longitude must be in range [-180, 180]. Got latitude: 30 and longitude: nan");
+  VELOX_ASSERT_USER_THROW(
+      testGreatCircleDistanceFunc(
+          10,
+          20,
+          30,
+          std::numeric_limits<double>::signaling_NaN(),
+          std::nullopt),
+      "Latitude must be in range [-90, 90] and longitude must be in range [-180, 180]. Got latitude: 30 and longitude: nan");
+}
+
+std::string readFile(const std::string& input) {
+  std::string path =
+      test::getDataFilePath("velox/functions/prestosql/tests/", input);
+  std::ifstream file(path);
+  std::stringstream buffer;
+  buffer << file.rdbuf();
+  std::string contents = buffer.str();
+  return contents;
+}
+
+TEST_F(GeometryFunctionsTest, testGeometryToBingTiles) {
+  const auto testGeometryToBingTilesFunc = [&](const std::optional<std::string>&
+                                                   wkt,
+                                               const std::optional<int32_t>
+                                                   zoom,
+                                               const std::optional<std::vector<
+                                                   std::optional<std::string>>>&
+                                                   expectedQuadKeys) {
+    std::vector<std::optional<std::string>> wktVec = {wkt};
+    auto inputWkt = makeNullableFlatVector<std::string>(wktVec);
+    std::vector<std::optional<int32_t>> zoomVec = {zoom};
+    auto inputZoom = makeNullableFlatVector<int32_t>(zoomVec);
+    auto inputVec = makeRowVector({inputWkt, inputZoom});
+
+    facebook::velox::VectorPtr output = evaluate(
+        "ARRAY_SORT(TRANSFORM(geometry_to_bing_tiles(ST_GeometryFromText(c0), c1), x -> bing_tile_quadkey(x)))",
+        inputVec);
+
+    auto arrayVector =
+        std::dynamic_pointer_cast<facebook::velox::ArrayVector>(output);
+
+    if (expectedQuadKeys.has_value()) {
+      ASSERT_TRUE(arrayVector != nullptr);
+      auto expected = makeNullableArrayVector<std::string>({expectedQuadKeys});
+      facebook::velox::test::assertEqualVectors(expected, output);
+    } else {
+      ASSERT_TRUE(output->isNullAt(0));
+    }
+  };
+
+  const auto assertPointInCoveringFunc = [&](const std::optional<std::string>&
+                                                 wkt,
+                                             const std::optional<double> x,
+                                             const std::optional<double> y,
+                                             const std::optional<int8_t> zoom) {
+    std::optional<bool> result = evaluateOnce<bool>(
+        "contains(geometry_to_bing_tiles(ST_GeometryFromText(c0), c1), geometry_to_bing_tiles(ST_Point(c2, c3), c1)[1])",
+        wkt,
+        zoom,
+        x,
+        y);
+    ASSERT_TRUE(result.has_value());
+    ASSERT_TRUE(result.value());
+  };
+
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kDebugBingTileChildrenMaxZoomShift, "20"}});
+
+  // Geometries at boundaries of tiles
+  testGeometryToBingTilesFunc("POINT (0 0)", 1, {{"3"}});
+  testGeometryToBingTilesFunc(
+      fmt::format("POINT ({} 0)", BingTileType::kMinLongitude), 1, {{"2"}});
+  testGeometryToBingTilesFunc(
+      fmt::format("POINT ({} 0)", BingTileType::kMaxLongitude), 1, {{"3"}});
+  testGeometryToBingTilesFunc(
+      fmt::format("POINT (0 {})", BingTileType::kMinLatitude), 1, {{"3"}});
+  testGeometryToBingTilesFunc(
+      fmt::format("POINT (0 {})", BingTileType::kMaxLatitude), 1, {{"1"}});
+  testGeometryToBingTilesFunc(
+      fmt::format(
+          "POINT ({} {})",
+          BingTileType::kMinLongitude,
+          BingTileType::kMinLatitude),
+      1,
+      {{"2"}});
+  testGeometryToBingTilesFunc(
+      fmt::format(
+          "POINT ({} {})",
+          BingTileType::kMinLongitude,
+          BingTileType::kMaxLatitude),
+      1,
+      {{"0"}});
+  testGeometryToBingTilesFunc(
+      fmt::format(
+          "POINT ({} {})",
+          BingTileType::kMaxLongitude,
+          BingTileType::kMaxLatitude),
+      1,
+      {{"1"}});
+  testGeometryToBingTilesFunc(
+      fmt::format(
+          "POINT ({} {})",
+          BingTileType::kMaxLongitude,
+          BingTileType::kMinLatitude),
+      1,
+      {{"3"}});
+  testGeometryToBingTilesFunc("LINESTRING (-1 0, -2 0)", 1, {{"2"}});
+  testGeometryToBingTilesFunc("LINESTRING (1 0, 2 0)", 1, {{"3"}});
+  testGeometryToBingTilesFunc("LINESTRING (0 -1, 0 -2)", 1, {{"3"}});
+  testGeometryToBingTilesFunc("LINESTRING (0 1, 0 2)", 1, {{"1"}});
+  testGeometryToBingTilesFunc(
+      fmt::format(
+          "LINESTRING ({} 1, {} 2)",
+          BingTileType::kMinLongitude,
+          BingTileType::kMinLongitude),
+      1,
+      {{"0"}});
+  testGeometryToBingTilesFunc(
+      fmt::format(
+          "LINESTRING ({} -1, {} -2)",
+          BingTileType::kMinLongitude,
+          BingTileType::kMinLongitude),
+      1,
+      {{"2"}});
+  testGeometryToBingTilesFunc(
+      fmt::format(
+          "LINESTRING ({} 1, {} 2)",
+          BingTileType::kMaxLongitude,
+          BingTileType::kMaxLongitude),
+      1,
+      {{"1"}});
+  testGeometryToBingTilesFunc(
+      fmt::format(
+          "LINESTRING ({} -1, {} -2)",
+          BingTileType::kMaxLongitude,
+          BingTileType::kMaxLongitude),
+      1,
+      {{"3"}});
+
+  // Make sure corners are included
+  assertPointInCoveringFunc("POLYGON ((0 0, 0 10, 10 10, 10 0, 0 0))", 6, 0, 0);
+  assertPointInCoveringFunc(
+      "POLYGON ((0 0, 0 10, 10 10, 10 0, 0 0))", 6, 0, 10);
+  assertPointInCoveringFunc(
+      "POLYGON ((0 0, 0 10, 10 10, 10 0, 0 0))", 6, 10, 10);
+  assertPointInCoveringFunc(
+      "POLYGON ((0 0, 0 10, 10 10, 10 0, 0 0))", 6, 10, 0);
+
+  // General geometries
+  testGeometryToBingTilesFunc("POINT (60 30.12)", 0, {{""}});
+  testGeometryToBingTilesFunc("POINT (60 30.12)", 10, {{"1230301230"}});
+  testGeometryToBingTilesFunc("POINT (60 30.12)", 15, {{"123030123010121"}});
+  testGeometryToBingTilesFunc("POINT (60 30.12)", 16, {{"1230301230101212"}});
+  testGeometryToBingTilesFunc(
+      "POLYGON ((0 0, 0 10, 10 10, 10 0, 0 0))",
+      6,
+      {{"122220", "122221", "122222", "122223", "300000", "300001"}});
+  testGeometryToBingTilesFunc(
+      "POLYGON ((0 0, 0 10, 10 10, 0 0))",
+      6,
+      {{"122220", "122221", "122222", "300000"}});
+  testGeometryToBingTilesFunc(
+      "POLYGON ((10 10, -10 10, -20 -15, 10 10))", 3, {{"033", "122", "211"}});
+  testGeometryToBingTilesFunc(
+      "POLYGON ((10 10, -10 10, -20 -15, 10 10))",
+      6,
+      {{"033321",
+        "033323",
+        "033330",
+        "033331",
+        "033332",
+        "033333",
+        "122220",
+        "122221",
+        "122222",
+        "211101",
+        "211102",
+        "211103",
+        "211110",
+        "211111",
+        "211112",
+        "211120",
+        "211121"}});
+
+  testGeometryToBingTilesFunc(
+      "GEOMETRYCOLLECTION (POINT (60 30.12))", 10, {{"1230301230"}});
+  testGeometryToBingTilesFunc(
+      "GEOMETRYCOLLECTION (POINT (60 30.12))", 15, {{"123030123010121"}});
+  testGeometryToBingTilesFunc(
+      "GEOMETRYCOLLECTION (POLYGON ((10 10, -10 10, -20 -15, 10 10)))",
+      3,
+      {{"033", "122", "211"}});
+  testGeometryToBingTilesFunc(
+      "GEOMETRYCOLLECTION (POINT (60 30.12), POLYGON ((10 10, -10 10, -20 -15, 10 10)))",
+      3,
+      {{"033", "122", "123", "211"}});
+
+  testGeometryToBingTilesFunc(
+      "POLYGON ((0 0, 0 10, 10 10, 10 0, 0 0))", 1, {{"1", "3"}});
+  testGeometryToBingTilesFunc(
+      "POLYGON ((0 0, 0 10, 10 10, 0 0))", 1, {{"1", "3"}});
+  testGeometryToBingTilesFunc(
+      "POLYGON ((10 10, 10 20, 20 20, 20 10, 10 10), (12 12, 12 14, 14 14, 14 12, 12 12))",
+      1,
+      {{"1"}});
+
+  testGeometryToBingTilesFunc("POINT (0 0)", 1, {{"3"}});
+  testGeometryToBingTilesFunc(
+      "POLYGON ((0 0, 0 10, 10 10, 0 0))", 1, {{"1", "3"}});
+
+  // Empty geometries
+  testGeometryToBingTilesFunc("POINT EMPTY", 10, {{}});
+  testGeometryToBingTilesFunc("POLYGON EMPTY", 10, {{}});
+  testGeometryToBingTilesFunc("GEOMETRYCOLLECTION EMPTY", 10, {{}});
+
+  // Geometries at MIN_LONGITUDE/MAX_LATITUDE
+  testGeometryToBingTilesFunc(
+      "LINESTRING (-180 -79.19245, -180 -79.17133464081945)",
+      8,
+      {{"22200000"}});
+  testGeometryToBingTilesFunc(
+      fmt::format("POINT ({} 0)", BingTileType::kMinLongitude), 5, {{"20000"}});
+  testGeometryToBingTilesFunc(
+      fmt::format("POINT (0 {})", BingTileType::kMaxLatitude), 5, {{"10000"}});
+  testGeometryToBingTilesFunc(
+      fmt::format(
+          "POINT ({} {})",
+          BingTileType::kMinLongitude,
+          BingTileType::kMaxLatitude),
+      5,
+      {{"00000"}});
+
+  // Invalid inputs
+  // Longitude out of range
+  VELOX_ASSERT_USER_THROW(
+      testGeometryToBingTilesFunc("POINT (600 30.12)", 10, std::nullopt),
+      "Longitude span for the geometry must be in [-180.00, 180.00] range");
+  VELOX_ASSERT_USER_THROW(
+      testGeometryToBingTilesFunc(
+          "POLYGON ((1000 10, -10 10, -20 -15, 1000 10))", 10, std::nullopt),
+      "Longitude span for the geometry must be in [-180.00, 180.00] range");
+  // Latitude out of range
+  VELOX_ASSERT_USER_THROW(
+      testGeometryToBingTilesFunc("POINT (60 300.12)", 10, std::nullopt),
+      "Latitude span for the geometry must be in [-85.05, 85.05] range");
+  VELOX_ASSERT_USER_THROW(
+      testGeometryToBingTilesFunc(
+          "POLYGON ((10 1000, -10 10, -20 -15, 10 1000))", 10, std::nullopt),
+      "Latitude span for the geometry must be in [-85.05, 85.05] range");
+  // Invalid zoom
+  VELOX_ASSERT_USER_THROW(
+      testGeometryToBingTilesFunc("POINT (60 30.12)", -1, std::nullopt),
+      "Zoom level must be between 0 and 23");
+  VELOX_ASSERT_USER_THROW(
+      testGeometryToBingTilesFunc("POINT (60 30.12)", 24, std::nullopt),
+      "Zoom level must be between 0 and 23");
+  // Input rectangle too large
+  VELOX_ASSERT_USER_THROW(
+      evaluateOnce<int64_t>(
+          "geometry_to_bing_tiles(ST_Envelope(ST_GeometryFromText(c0)), c1)[1]",
+          std::optional<std::string>("LINESTRING (0 0, 80 80)"),
+          std::optional<int32_t>(16)),
+      "The zoom level is too high or the geometry is too large to compute a set of covering Bing tiles. Please use a lower zoom level, or tile only a section of the geometry.");
+  ASSERT_EQ(
+      112,
+      evaluateOnce<int64_t>(
+          "cardinality(geometry_to_bing_tiles(ST_Envelope(ST_GeometryFromText(c0)), c1))",
+          std::optional<std::string>("LINESTRING (0 0, 80 80)"),
+          std::optional<int32_t>(5)));
+
+  // Complex input polygon
+  auto largeWkt = readFile("geometry_test_resources/big_polygon");
+  ASSERT_EQ(
+      9043,
+      evaluateOnce<int64_t>(
+          "cardinality(geometry_to_bing_tiles(ST_GeometryFromText(c0), c1))",
+          std::optional<std::string>(largeWkt),
+          std::optional<int32_t>(16)));
+  ASSERT_EQ(
+      19939,
+      evaluateOnce<int64_t>(
+          "cardinality(geometry_to_bing_tiles(ST_Envelope(ST_GeometryFromText(c0)), c1))",
+          std::optional<std::string>(largeWkt),
+          std::optional<int32_t>(16)));
+
+  // Zoom level is too high
+  VELOX_ASSERT_USER_THROW(
+      evaluateOnce<int64_t>(
+          "cardinality(geometry_to_bing_tiles(ST_GeometryFromText(c0), c1))",
+          std::optional<std::string>("POLYGON ((0 0, 0 20, 20 20, 0 0))"),
+          std::optional<int32_t>(20)),
+      "The zoom level is too high or the geometry is too large to compute a set of covering Bing tiles. Please use a lower zoom level, or tile only a section of the geometry.");
+  ASSERT_EQ(
+      428788,
+      evaluateOnce<int64_t>(
+          "cardinality(geometry_to_bing_tiles(ST_GeometryFromText(c0), c1))",
+          std::optional<std::string>("POLYGON ((0 0, 0 20, 20 20, 0 0))"),
+          std::optional<int32_t>(14)));
+}
+
+TEST_F(GeometryFunctionsTest, testGeometryToDissolvedBingTiles) {
+  const auto testGeometryToDissolvedBingTilesFunc = [&](const std::optional<
+                                                            std::string>& wkt,
+                                                        const std::optional<
+                                                            int32_t> zoom,
+                                                        const std::optional<
+                                                            std::vector<
+                                                                std::optional<
+                                                                    std::
+                                                                        string>>>&
+                                                            expectedQuadKeys) {
+    std::vector<std::optional<std::string>> wktVec = {wkt};
+    auto inputWkt = makeNullableFlatVector<std::string>(wktVec);
+    std::vector<std::optional<int32_t>> zoomVec = {zoom};
+    auto inputZoom = makeNullableFlatVector<int32_t>(zoomVec);
+    auto inputVec = makeRowVector({inputWkt, inputZoom});
+
+    facebook::velox::VectorPtr output = evaluate(
+        "ARRAY_SORT(TRANSFORM(geometry_to_dissolved_bing_tiles(ST_GeometryFromText(c0), c1), x -> bing_tile_quadkey(x)))",
+        inputVec);
+
+    auto arrayVector =
+        std::dynamic_pointer_cast<facebook::velox::ArrayVector>(output);
+
+    if (expectedQuadKeys.has_value()) {
+      ASSERT_TRUE(arrayVector != nullptr);
+      auto expected = makeNullableArrayVector<std::string>({expectedQuadKeys});
+      facebook::velox::test::assertEqualVectors(expected, output);
+    } else {
+      ASSERT_TRUE(output->isNullAt(0));
+    }
+  };
+
+  // Empty geometries
+  testGeometryToDissolvedBingTilesFunc("POINT EMPTY", 0, {{}});
+  testGeometryToDissolvedBingTilesFunc("POINT EMPTY", 10, {{}});
+  testGeometryToDissolvedBingTilesFunc("POINT EMPTY", 23, {{}});
+  testGeometryToDissolvedBingTilesFunc("POLYGON EMPTY", 10, {{}});
+  testGeometryToDissolvedBingTilesFunc("GEOMETRYCOLLECTION EMPTY", 10, {{}});
+
+  // Geometries at tile borders
+  testGeometryToDissolvedBingTilesFunc("POINT (0 0)", 0, {{""}});
+  testGeometryToDissolvedBingTilesFunc(
+      fmt::format("POINT ({} 0)", BingTileType::kMinLongitude), 0, {{""}});
+  testGeometryToDissolvedBingTilesFunc(
+      fmt::format("POINT ({} 0)", BingTileType::kMaxLongitude), 0, {{""}});
+  testGeometryToDissolvedBingTilesFunc(
+      fmt::format("POINT (0 {})", BingTileType::kMinLatitude), 0, {{""}});
+  testGeometryToDissolvedBingTilesFunc(
+      fmt::format("POINT (0 {})", BingTileType::kMaxLatitude), 0, {{""}});
+  testGeometryToDissolvedBingTilesFunc(
+      fmt::format(
+          "POINT ({} {})",
+          BingTileType::kMinLongitude,
+          BingTileType::kMinLatitude),
+      0,
+      {{""}});
+  testGeometryToDissolvedBingTilesFunc(
+      fmt::format(
+          "POINT ({} {})",
+          BingTileType::kMinLongitude,
+          BingTileType::kMaxLatitude),
+      0,
+      {{""}});
+  testGeometryToDissolvedBingTilesFunc(
+      fmt::format(
+          "POINT ({} {})",
+          BingTileType::kMaxLongitude,
+          BingTileType::kMaxLatitude),
+      0,
+      {{""}});
+  testGeometryToDissolvedBingTilesFunc(
+      fmt::format(
+          "POINT ({} {})",
+          BingTileType::kMaxLongitude,
+          BingTileType::kMinLatitude),
+      0,
+      {{""}});
+  testGeometryToDissolvedBingTilesFunc("POINT (0 0)", 1, {{"3"}});
+  testGeometryToDissolvedBingTilesFunc(
+      fmt::format("POINT ({} 0)", BingTileType::kMinLongitude), 1, {{"2"}});
+  testGeometryToDissolvedBingTilesFunc(
+      fmt::format("POINT ({} 0)", BingTileType::kMaxLongitude), 1, {{"3"}});
+  testGeometryToDissolvedBingTilesFunc(
+      fmt::format("POINT (0 {})", BingTileType::kMinLatitude), 1, {{"3"}});
+  testGeometryToDissolvedBingTilesFunc(
+      fmt::format("POINT (0 {})", BingTileType::kMaxLatitude), 1, {{"1"}});
+  testGeometryToDissolvedBingTilesFunc(
+      fmt::format(
+          "POINT ({} {})",
+          BingTileType::kMinLongitude,
+          BingTileType::kMinLatitude),
+      1,
+      {{"2"}});
+  testGeometryToDissolvedBingTilesFunc(
+      fmt::format(
+          "POINT ({} {})",
+          BingTileType::kMinLongitude,
+          BingTileType::kMaxLatitude),
+      1,
+      {{"0"}});
+  testGeometryToDissolvedBingTilesFunc(
+      fmt::format(
+          "POINT ({} {})",
+          BingTileType::kMaxLongitude,
+          BingTileType::kMaxLatitude),
+      1,
+      {{"1"}});
+  testGeometryToDissolvedBingTilesFunc(
+      fmt::format(
+          "POINT ({} {})",
+          BingTileType::kMaxLongitude,
+          BingTileType::kMinLatitude),
+      1,
+      {{"3"}});
+  testGeometryToDissolvedBingTilesFunc("LINESTRING (-1 0, -2 0)", 1, {{"2"}});
+  testGeometryToDissolvedBingTilesFunc("LINESTRING (1 0, 2 0)", 1, {{"3"}});
+  testGeometryToDissolvedBingTilesFunc("LINESTRING (0 -1, 0 -2)", 1, {{"3"}});
+  testGeometryToDissolvedBingTilesFunc("LINESTRING (0 1, 0 2)", 1, {{"1"}});
+
+  testGeometryToDissolvedBingTilesFunc(
+      fmt::format(
+          "LINESTRING ({} 1, {} 2)",
+          BingTileType::kMinLongitude,
+          BingTileType::kMinLongitude),
+      1,
+      {{"0"}});
+  testGeometryToDissolvedBingTilesFunc(
+      fmt::format(
+          "LINESTRING ({} -1, {} -2)",
+          BingTileType::kMinLongitude,
+          BingTileType::kMinLongitude),
+      1,
+      {{"2"}});
+  testGeometryToDissolvedBingTilesFunc(
+      fmt::format(
+          "LINESTRING ({} 1, {} 2)",
+          BingTileType::kMaxLongitude,
+          BingTileType::kMaxLongitude),
+      1,
+      {{"1"}});
+  testGeometryToDissolvedBingTilesFunc(
+      fmt::format(
+          "LINESTRING ({} -1, {} -2)",
+          BingTileType::kMaxLongitude,
+          BingTileType::kMaxLongitude),
+      1,
+      {{"3"}});
+
+  // General Geometries
+  testGeometryToDissolvedBingTilesFunc("POINT (60 30.12)", 0, {{""}});
+  testGeometryToDissolvedBingTilesFunc(
+      "POINT (60 30.12)", 10, {{"1230301230"}});
+  testGeometryToDissolvedBingTilesFunc(
+      "POINT (60 30.12)", 15, {{"123030123010121"}});
+  testGeometryToDissolvedBingTilesFunc(
+      "POINT (60 30.12)", 16, {{"1230301230101212"}});
+  testGeometryToDissolvedBingTilesFunc(
+      "POLYGON ((0 0, 0 10, 10 10, 10 0, 0 0))",
+      6,
+      {{"12222", "300000", "300001"}});
+  testGeometryToDissolvedBingTilesFunc(
+      "POLYGON ((0 0, 0 10, 10 10, 0 0))",
+      6,
+      {{"122220", "122221", "122222", "300000"}});
+  testGeometryToDissolvedBingTilesFunc(
+      "POLYGON ((10 10, -10 10, -20 -15, 10 10))", 3, {{"033", "122", "211"}});
+  testGeometryToDissolvedBingTilesFunc(
+      "POLYGON ((10 10, -10 10, -20 -15, 10 10))",
+      6,
+      {{"033321",
+        "033323",
+        "03333",
+        "122220",
+        "122221",
+        "122222",
+        "211101",
+        "211102",
+        "211103",
+        "211110",
+        "211111",
+        "211112",
+        "211120",
+        "211121"}});
+  testGeometryToDissolvedBingTilesFunc(
+      "GEOMETRYCOLLECTION (POINT (60 30.12))", 10, {{"1230301230"}});
+  testGeometryToDissolvedBingTilesFunc(
+      "GEOMETRYCOLLECTION (POINT (60 30.12))", 15, {{"123030123010121"}});
+  testGeometryToDissolvedBingTilesFunc(
+      "GEOMETRYCOLLECTION (POLYGON ((10 10, -10 10, -20 -15, 10 10)))",
+      3,
+      {{"033", "122", "211"}});
+  testGeometryToDissolvedBingTilesFunc(
+      "GEOMETRYCOLLECTION (POINT (60 30.12), POLYGON ((10 10, -10 10, -20 -15, 10 10)))",
+      3,
+      {{"033", "122", "123", "211"}});
+  testGeometryToDissolvedBingTilesFunc(
+      "GEOMETRYCOLLECTION (POINT (0.1 0.1), POINT(0.1 -0.1), POINT(-0.1 -0.1), POINT(-0.1 0.1))",
+      3,
+      {{"033", "122", "211", "300"}});
+
+  ASSERT_EQ(
+      2320,
+      evaluateOnce<int64_t>(
+          "cardinality(geometry_to_dissolved_bing_tiles(ST_GeometryFromText(c0), c1))",
+          std::optional<std::string>("POLYGON ((0 0, 0 20, 20 20, 0 0))"),
+          std::optional<int32_t>(14)));
+
+  // Invalid inputs
+  // Longitude out of range
+  VELOX_ASSERT_USER_THROW(
+      testGeometryToDissolvedBingTilesFunc(
+          "POINT (600 30.12)", 10, std::nullopt),
+      "Longitude span for the geometry must be in [-180.00, 180.00] range");
+  VELOX_ASSERT_USER_THROW(
+      testGeometryToDissolvedBingTilesFunc(
+          "POLYGON ((1000 10, -10 10, -20 -15, 1000 10))", 10, std::nullopt),
+      "Longitude span for the geometry must be in [-180.00, 180.00] range");
+  // Latitude out of range
+  VELOX_ASSERT_USER_THROW(
+      testGeometryToDissolvedBingTilesFunc(
+          "POINT (60 300.12)", 10, std::nullopt),
+      "Latitude span for the geometry must be in [-85.05, 85.05] range");
+  VELOX_ASSERT_USER_THROW(
+      testGeometryToDissolvedBingTilesFunc(
+          "POLYGON ((10 1000, -10 10, -20 -15, 10 1000))", 10, std::nullopt),
+      "Latitude span for the geometry must be in [-85.05, 85.05] range");
+  // Invalid zoom
+  VELOX_ASSERT_USER_THROW(
+      testGeometryToDissolvedBingTilesFunc(
+          "POINT (60 30.12)", -1, std::nullopt),
+      "Zoom level must be between 0 and 23");
+  VELOX_ASSERT_USER_THROW(
+      testGeometryToDissolvedBingTilesFunc(
+          "POINT (60 30.12)", 24, std::nullopt),
+      "Zoom level must be between 0 and 23");
+}
+
+TEST_F(GeometryFunctionsTest, testGeometryUnion) {
+  const auto testGeometryUnionFunc = [&](const std::optional<
+                                             std::vector<std::string>>& wkts,
+                                         const std::optional<std::string>&
+                                             expected) {
+    std::vector<std::vector<std::string>> nestedStrings = {wkts.value()};
+    auto arrayVec =
+        makeArrayVector<std::string>(nestedStrings, facebook::velox::VARCHAR());
+    auto input = makeRowVector(
+        {arrayVec, makeNullableFlatVector<std::string>({expected})});
+    std::optional<bool> result = evaluateOnce<bool>(
+        "ST_Equals(GEOMETRY_UNION(transform(c0, x -> ST_GEOMETRYFROMTEXT(x))), ST_GeometryFromText(c1))",
+        input);
+
+    if (expected.has_value()) {
+      ASSERT_TRUE(result.has_value());
+      ASSERT_TRUE(result.value());
+    } else {
+      ASSERT_FALSE(result.has_value());
+    }
+  };
+
+  testGeometryUnionFunc({{"POINT EMPTY", "POINT (1 1)"}}, "POINT (1 1)");
+  testGeometryUnionFunc({{"POINT (1 1)", "POINT (1 1)"}}, "POINT (1 1)");
+  testGeometryUnionFunc({{"POINT (1 1)"}}, "POINT (1 1)");
+  testGeometryUnionFunc(
+      {{"POINT (1 2)", "POINT (3 4)"}}, "MULTIPOINT (1 2, 3 4)");
+
+  testGeometryUnionFunc({{"LINESTRING (0 0, 1 1)"}}, "LINESTRING (0 0, 1 1)");
+
+  testGeometryUnionFunc({{"POINT EMPTY", "LINESTRING EMPTY"}}, "POLYGON EMPTY");
+
+  testGeometryUnionFunc(
+      {{"POINT EMPTY", "POLYGON EMPTY", "MULTIPOINT EMPTY"}}, "POLYGON EMPTY");
+  testGeometryUnionFunc(
+      {{"GEOMETRYCOLLECTION ( POLYGON ((2 2, 3 1, 1 1, 2 2)), POLYGON ((3 2, 4 1, 2 1, 3 2)) )",
+        "GEOMETRYCOLLECTION ( POLYGON ((4 2, 5 1, 3 1, 4 2)) )"}},
+      "POLYGON ((2.5 1.5, 3 2, 3.5 1.5, 4 2, 5 1, 4 1, 3 1, 2 1, 1 1, 2 2, 2.5 1.5))");
+
+  testGeometryUnionFunc(
+      {{"POLYGON ((1 1, 3 1, 3 3, 1 3, 1 1))", "POINT (5 2)"}},
+      "GEOMETRYCOLLECTION (POINT (5 2), POLYGON ((1 1, 1 3, 3 3, 3 1, 1 1)))");
+
+  // Point test cases
+  testGeometryUnionFunc(
+      {{"POINT (1 2)", "POINT (1 2)", "POINT (1 2)"}}, "POINT (1 2)");
+
+  testGeometryUnionFunc({{"POINT EMPTY", "POINT (1 2)"}}, "POINT (1 2)");
+
+  testGeometryUnionFunc(
+      {{"POINT (1 2)", "POINT (3 4)"}}, "MULTIPOINT (1 2, 3 4)");
+
+  // Linestring test cases
+  testGeometryUnionFunc(
+      {{"LINESTRING (1 1, 2 2)",
+        "LINESTRING (1 1, 2 2)",
+        "LINESTRING (1 1, 2 2)"}},
+      "LINESTRING (1 1, 2 2)");
+
+  testGeometryUnionFunc(
+      {{"LINESTRING EMPTY", "LINESTRING (1 1, 2 2)"}}, "LINESTRING (1 1, 2 2)");
+
+  testGeometryUnionFunc(
+      {{"LINESTRING (1 1, 2 2, 3 3)", "LINESTRING (2 2, 3 3, 4 4)"}},
+      "LINESTRING (1 1, 2 2, 3 3, 4 4)");
+
+  testGeometryUnionFunc(
+      {{"LINESTRING (1 1, 2 2, 3 3)", "LINESTRING (1 2, 2 3, 3 4)"}},
+      "MULTILINESTRING ((1 1, 2 2, 3 3), (1 2, 2 3, 3 4))");
+
+  testGeometryUnionFunc(
+      {{"LINESTRING (1 1, 3 3)",
+        "LINESTRING (3 1, 2 2)",
+        "LINESTRING (2 2, 3 3)",
+        "LINESTRING (2 2, 1 3)"}},
+      "MULTILINESTRING ((1 1, 2 2, 3 3), (3 1, 1 3))");
+
+  // Polygon test cases
+  testGeometryUnionFunc(
+      {{"POLYGON ((2 2, 1 1, 3 1, 2 2))",
+        "POLYGON ((2 2, 1 1, 3 1, 2 2))",
+        "POLYGON ((2 2, 1 1, 3 1, 2 2))"}},
+      "POLYGON ((2 2, 1 1, 3 1, 2 2))");
+
+  testGeometryUnionFunc(
+      {{"POLYGON EMPTY)", "POLYGON ((2 2, 1 1, 3 1, 2 2))"}},
+      "POLYGON ((2 2, 1 1, 3 1, 2 2))");
+
+  testGeometryUnionFunc(
+      {{"POLYGON ((2 2, 3 1, 1 1, 2 2))",
+        "POLYGON ((3 2, 4 1, 2 1, 3 2))",
+        "POLYGON ((4 2, 5 1, 3 1, 4 2))"}},
+      "POLYGON ((1 1, 2 1, 3 1, 4 1, 5 1, 4 2, 3.5 1.5, 3 2, 2.5 1.5, 2 2, 1 1))");
+
+  testGeometryUnionFunc(
+      {{"POLYGON ((2 2, 3 1, 1 1, 2 2))", "POLYGON ((4 2, 5 1, 3 1, 4 2))"}},
+      "MULTIPOLYGON (((1 1, 3 1, 2 2, 1 1)), ((3 1, 5 1, 4 2, 3 1)))");
+
+  testGeometryUnionFunc(
+      {{"POLYGON ((2 2, 3 1, 1 1, 2 2))", "POLYGON ((5 2, 6 1, 4 1, 5 2))"}},
+      "MULTIPOLYGON (((1 1, 3 1, 2 2, 1 1)), ((4 1, 6 1, 5 2, 4 1)))");
+
+  testGeometryUnionFunc(
+      {{"POLYGON ((1 1, 6 1, 6 6, 1 6, 1 1), (3 3, 4 3, 4 4, 3 4, 3 3))",
+        "POLYGON ((3 3, 4 3, 4 4, 3 4, 3 3))"}},
+      "POLYGON ((1 1, 6 1, 6 6, 1 6, 1 1))");
+
+  testGeometryUnionFunc(
+      {{"POLYGON ((1 1, 6 1, 6 6, 1 6, 1 1), (3 3, 4 3, 4 4, 3 4, 3 3))",
+        "POLYGON ((2 2, 5 2, 5 5, 2 5, 2 2))"}},
+      "POLYGON ((1 1, 6 1, 6 6, 1 6, 1 1))");
+
+  testGeometryUnionFunc(
+      {{"POLYGON ((1 1, 6 1, 6 6, 1 6, 1 1), (3 3, 4 3, 4 4, 3 4, 3 3))",
+        "POLYGON ((3.25 3.25, 3.75 3.25, 3.75 3.75, 3.25 3.75, 3.25 3.25))"}},
+      "MULTIPOLYGON (((1 1, 6 1, 6 6, 1 6, 1 1), (3 3, 4 3, 4 4, 3 4, 3 3)), ((3.25 3.25, 3.75 3.25, 3.75 3.75, 3.25 3.75, 3.25 3.25)))");
+
+  testGeometryUnionFunc(
+      {{"POLYGON ((1 1, 6 1, 6 6, 1 6, 1 1), (3 3, 4 3, 4 4, 3 4, 3 3))",
+        "POLYGON ((3 3, 3 3.5, 3.5 3.5, 3.5 3, 3 3))",
+        "POLYGON ((3.5 3.5, 3.5 4, 4 4, 4 3.5, 3.5 3.5))",
+        "POLYGON ((3 3.5, 3 4, 3.5 4, 3.5 3.5, 3 3.5))",
+        "POLYGON ((3.5 3, 3.5 3.5, 4 3.5, 4 3, 3.5 3))"}},
+      "POLYGON ((1 1, 6 1, 6 6, 1 6, 1 1))");
+
+  testGeometryUnionFunc(
+      {{"POLYGON ((1 3, 1 4, 6 4, 6 3, 1 3))",
+        "POLYGON ((3 1, 4 1, 4 6, 3 6, 3 1))"}},
+      "POLYGON ((3 1, 4 1, 4 3, 6 3, 6 4, 4 4, 4 6, 3 6, 3 4, 1 4, 1 3, 3 3, 3 1))");
+
+  testGeometryUnionFunc(
+      {{"POLYGON ((1 3, 1 4, 3 4, 3 3, 1 3))",
+        "POLYGON ((3 3, 3 4, 4 4, 4 3, 3 3))",
+        "POLYGON ((4 3, 4 4, 6 4, 6 3, 4 3))",
+        "POLYGON ((3 1, 4 1, 4 3, 3 3, 3 1))",
+        "POLYGON ((3 4, 3 6, 4 6, 4 4, 3 4))"}},
+      "POLYGON ((3 1, 4 1, 4 3, 6 3, 6 4, 4 4, 4 6, 3 6, 3 4, 1 4, 1 3, 3 3, 3 1))");
+
+  testGeometryUnionFunc(
+      {{"POLYGON ((1 1, 3 1, 3 3, 1 3, 1 1))", "POINT (3 2)"}},
+      "POLYGON ((1 1, 3 1, 3 2, 3 3, 1 3, 1 1))");
+
+  // Multipoint test cases
+  testGeometryUnionFunc(
+      {{"MULTIPOINT ((1 2), (2 4), (3 6), (4 8))",
+        "MULTIPOINT ((1 2), (2 4), (3 6), (4 8))",
+        "MULTIPOINT ((1 2), (2 4), (3 6), (4 8))"}},
+      "MULTIPOINT ((1 2), (2 4), (3 6), (4 8))");
+
+  testGeometryUnionFunc(
+      {{"MULTIPOINT EMPTY", "MULTIPOINT ((1 2), (2 4), (3 6), (4 8))"}},
+      "MULTIPOINT ((1 2), (2 4), (3 6), (4 8))");
+
+  testGeometryUnionFunc(
+      {{"MULTIPOINT ((1 2), (2 4))", "MULTIPOINT ((3 6), (4 8))"}},
+      "MULTIPOINT ((1 2), (2 4), (3 6), (4 8))");
+
+  testGeometryUnionFunc(
+      {{"MULTIPOINT ((1 2), (2 4))",
+        "MULTIPOINT ((2 4), (3 6))",
+        "MULTIPOINT ((3 6), (4 8))"}},
+      "MULTIPOINT ((1 2), (2 4), (3 6), (4 8))");
+
+  // Multilinestring test cases
+  testGeometryUnionFunc(
+      {{"MULTILINESTRING ((1 5, 4 1), (2 5, 5 1))",
+        "MULTILINESTRING ((1 5, 4 1), (2 5, 5 1))",
+        "MULTILINESTRING ((1 5, 4 1), (2 5, 5 1))"}},
+      "MULTILINESTRING ((1 5, 4 1), (2 5, 5 1))");
+
+  testGeometryUnionFunc(
+      {{"MULTILINESTRING EMPTY", "MULTILINESTRING ((1 5, 4 1), (2 5, 5 1))"}},
+      "MULTILINESTRING ((1 5, 4 1), (2 5, 5 1))");
+
+  testGeometryUnionFunc(
+      {{"MULTILINESTRING ((1 5, 4 1), (3 5, 6 1))",
+        "MULTILINESTRING ((2 5, 5 1), (4 5, 7 1))"}},
+      "MULTILINESTRING ((1 5, 4 1), (2 5, 5 1), (3 5, 6 1), (4 5, 7 1))");
+
+  testGeometryUnionFunc(
+      {{"MULTILINESTRING ((1 5, 4 1), (3 5, 6 1))",
+        "MULTILINESTRING ((2 5, 5 1), (4 5, 7 1))",
+        "LINESTRING (1 3, 8 3)"}},
+      "MULTILINESTRING ((1 5, 4 1), (2 5, 5 1), (3 5, 6 1), (4 5, 7 1), (1 3, 8 3))");
+
+  // Multipolygon test cases
+  testGeometryUnionFunc(
+      {{"MULTIPOLYGON(((4 2, 5 1, 3 1, 4 2)), ((14 12, 15 11, 13 11, 14 12)))",
+        "MULTIPOLYGON(((4 2, 5 1, 3 1, 4 2)), ((14 12, 15 11, 13 11, 14 12)))"}},
+      "MULTIPOLYGON (((4 2, 3 1, 5 1, 4 2)), ((14 12, 13 11, 15 11, 14 12)))");
+
+  testGeometryUnionFunc(
+      {{"MULTIPOLYGON EMPTY",
+        "MULTIPOLYGON (((4 2, 5 1, 3 1, 4 2)), ((14 12, 15 11, 13 11, 14 12)))"}},
+      "MULTIPOLYGON (((4 2, 3 1, 5 1, 4 2)), ((14 12, 13 11, 15 11, 14 12)))");
+
+  testGeometryUnionFunc(
+      {{"MULTIPOLYGON ((( 0 0, 0 2, 2 2, 2 0, 0 0 )), (( 0 3, 0 5, 2 5, 2 3, 0 3 )))",
+        "MULTIPOLYGON ((( 3 0, 3 2, 5 2, 5 0, 3 0 )), (( 3 3, 3 5, 5 5, 5 3, 3 3 )))"}},
+      "MULTIPOLYGON (((0 0, 2 0, 2 2, 0 2, 0 0)), ((3 0, 5 0, 5 2, 3 2, 3 0)), ((0 3, 2 3, 2 5, 0 5, 0 3)), ((3 3, 5 3, 5 5, 3 5, 3 3)))");
+
+  testGeometryUnionFunc(
+      {{"MULTIPOLYGON (((2 2, 3 1, 1 1, 2 2)), ((3 2, 4 1, 2 1, 3 2)))",
+        "MULTIPOLYGON(((4 2, 5 1, 3 1, 4 2)))"}},
+      "POLYGON ((1 1, 2 1, 3 1, 4 1, 5 1, 4 2, 3.5 1.5, 3 2, 2.5 1.5, 2 2, 1 1))");
+
+  testGeometryUnionFunc(
+      {{"MULTIPOLYGON (((1 3, 1 4, 3 4, 3 3, 1 3)), ((3 3, 3 4, 4 4, 4 3, 3 3)), ((4 3, 4 4, 6 4, 6 3, 4 3)))",
+        "MULTIPOLYGON (((3 1, 4 1, 4 3, 3 3, 3 1)), ((3 4, 3 6, 4 6, 4 4, 3 4)))"}},
+      "POLYGON ((3 1, 4 1, 4 3, 6 3, 6 4, 4 4, 4 6, 3 6, 3 4, 1 4, 1 3, 3 3, 3 1))");
+
+  // GeometryCollection test cases
+  testGeometryUnionFunc(
+      {{"MULTIPOLYGON (((0 0, 2 0, 2 2, 0 2, 0 0)), ((3 0, 5 0, 5 2, 3 2, 3 0)))",
+        "GEOMETRYCOLLECTION ( POLYGON ((0 0, 2 0, 2 2, 0 2, 0 0)), POLYGON ((3 0, 5 0, 5 2, 3 2, 3 0)))",
+        "GEOMETRYCOLLECTION ( POLYGON ((0 0, 2 0, 2 2, 0 2, 0 0)), POLYGON ((3 0, 5 0, 5 2, 3 2, 3 0)))"}},
+      "MULTIPOLYGON (((0 0, 2 0, 2 2, 0 2, 0 0)), ((3 0, 5 0, 5 2, 3 2, 3 0)))");
+
+  testGeometryUnionFunc(
+      {{"GEOMETRYCOLLECTION EMPTY", "GEOMETRYCOLLECTION EMPTY"}},
+      "GEOMETRYCOLLECTION EMPTY");
+
+  testGeometryUnionFunc(
+      {{"GEOMETRYCOLLECTION EMPTY",
+        "GEOMETRYCOLLECTION ( POLYGON ((0 0, 2 0, 2 2, 0 2, 0 0)), POLYGON ((3 0, 5 0, 5 2, 3 2, 3 0)))"}},
+      "MULTIPOLYGON (((0 0, 2 0, 2 2, 0 2, 0 0)), ((3 0, 5 0, 5 2, 3 2, 3 0)))");
+
+  testGeometryUnionFunc(
+      {{"GEOMETRYCOLLECTION ( POLYGON ((2 2, 3 1, 1 1, 2 2)), POLYGON ((3 2, 4 1, 2 1, 3 2)) )",
+        "GEOMETRYCOLLECTION ( POLYGON ((4 2, 5 1, 3 1, 4 2)) )"}},
+      "POLYGON ((1 1, 2 1, 3 1, 4 1, 5 1, 4 2, 3.5 1.5, 3 2, 2.5 1.5, 2 2, 1 1))");
+
+  testGeometryUnionFunc(
+      {{"GEOMETRYCOLLECTION ( POLYGON (( 0 0, 0 2, 2 2, 2 0, 0 0 )), POLYGON (( 0 3, 0 5, 2 5, 2 3, 0 3 )) )",
+        "GEOMETRYCOLLECTION ( POLYGON (( 3 0, 3 2, 5 2, 5 0, 3 0 )), POLYGON (( 3 3, 3 5, 5 5, 5 3, 3 3 )) )"}},
+      "MULTIPOLYGON (((0 0, 2 0, 2 2, 0 2, 0 0)), ((3 0, 5 0, 5 2, 3 2, 3 0)), ((0 3, 2 3, 2 5, 0 5, 0 3)), ((3 3, 5 3, 5 5, 3 5, 3 3)))");
+
+  testGeometryUnionFunc(
+      {{"POLYGON ((1 1, 3 1, 3 3, 1 3, 1 1))", "LINESTRING (0 2, 5 2)"}},
+      "GEOMETRYCOLLECTION (MULTILINESTRING ((0 2, 1 2), (3 2, 5 2)), POLYGON ((1 1, 3 1, 3 2, 3 3, 1 3, 1 2, 1 1)))");
+
+  testGeometryUnionFunc(
+      {{"POLYGON ((1 1, 3 1, 3 3, 1 3, 1 1))", "LINESTRING (0 5, 5 5)"}},
+      "GEOMETRYCOLLECTION (LINESTRING (0 5, 5 5), POLYGON ((1 1, 3 1, 3 3, 1 3, 1 1)))");
+
+  testGeometryUnionFunc(
+      {{"POLYGON ((1 1, 3 1, 3 3, 1 3, 1 1))", "POINT (5 2)"}},
+      "GEOMETRYCOLLECTION (POINT (5 2), POLYGON ((1 1, 3 1, 3 3, 1 3, 1 1)))");
+
+  testGeometryUnionFunc({{"POINT EMPTY"}}, "POLYGON EMPTY");
+  testGeometryUnionFunc({{"MULTIPOINT EMPTY"}}, "POLYGON EMPTY");
+  testGeometryUnionFunc({{"POLYGON EMPTY"}}, "POLYGON EMPTY");
+  testGeometryUnionFunc({{"MULTIPOLYGON EMPTY"}}, "POLYGON EMPTY");
+  testGeometryUnionFunc({{"LINESTRING EMPTY"}}, "POLYGON EMPTY");
+  testGeometryUnionFunc({{"MULTILINESTRING EMPTY"}}, "POLYGON EMPTY");
+  testGeometryUnionFunc({{"GEOMETRYCOLLECTION EMPTY"}}, "POLYGON EMPTY");
+  testGeometryUnionFunc(
+      {{"GEOMETRYCOLLECTION EMPTY",
+        "MULTILINESTRING EMPTY",
+        "LINESTRING EMPTY",
+        "MULTIPOLYGON EMPTY",
+        "POLYGON EMPTY",
+        "MULTIPOINT EMPTY",
+        "POINT EMPTY"}},
+      "POLYGON EMPTY");
+
+  // Empty array should return null
+  testGeometryUnionFunc({{}}, std::nullopt);
 }

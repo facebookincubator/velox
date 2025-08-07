@@ -213,6 +213,8 @@ std::unordered_set<std::string> skipFunctions = {
     "st_union",
     "st_point",
     "st_points",
+    "st_interiorrings",
+    "st_geometries",
     "st_x",
     "st_y",
     "st_isvalid",
@@ -241,6 +243,14 @@ std::unordered_set<std::string> skipFunctions = {
     "st_ymin",
     "line_locate_point",
     "line_interpolate_point",
+    "flatten_geometry_collections",
+    "expand_envelope",
+    "bing_tile_polygon",
+    "geometry_as_geojson",
+    "geometry_from_geojson",
+    "geometry_to_bing_tiles",
+    "geometry_to_dissolved_bing_tiles",
+    "geometry_union",
 };
 
 std::unordered_set<std::string> skipFunctionsSOT = {

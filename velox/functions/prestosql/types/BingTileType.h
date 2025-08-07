@@ -157,6 +157,16 @@ class BingTileType : public BigintType {
   static folly::Expected<uint64_t, std::string>
   latitudeLongitudeToTile(double latitude, double longitude, uint8_t zoomLevel);
 
+  /**
+   * Return the longitude (in degrees) of the west edge of the tile.
+   */
+  static double tileXToLongitude(uint32_t tileX, uint8_t zoomLevel);
+
+  /**
+   * Return the latitude (in degrees) of the north edge of the tile.
+   */
+  static double tileYToLatitude(uint32_t tileY, uint8_t zoomLevel);
+
   static folly::Expected<std::vector<uint64_t>, std::string>
   bingTilesAround(double latitude, double longitude, uint8_t zoomLevel);
 
@@ -165,6 +175,15 @@ class BingTileType : public BigintType {
       double longitude,
       uint8_t zoomLevel,
       double radiusInKm);
+
+  // This isn't used in BingTiles, but since it relies on
+  // GreatCircleDistanceToPoint this is exposed here for use in Geometry
+  // functions.
+  static double greatCircleDistance(
+      double latitude1,
+      double longitude1,
+      double latitude2,
+      double longitude2);
 };
 
 inline bool isBingTileType(const TypePtr& type) {
