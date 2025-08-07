@@ -17,11 +17,10 @@
 #include "velox/type/Variant.h"
 #include <cfloat>
 #include "folly/json.h"
+#include "velox/common/base/BitUtil.h"
 #include "velox/common/encode/Base64.h"
 #include "velox/type/DecimalUtil.h"
 #include "velox/type/FloatingPointUtil.h"
-#include "velox/common/base/BitUtil.h"
-#include "velox/vector/BaseVector.h"
 
 namespace facebook::velox {
 
@@ -826,7 +825,7 @@ uint64_t Variant::hash() const {
 template <>
 uint64_t Variant::hash<TypeKind::ARRAY>() const {
   const auto& arrayVariant = value<TypeKind::ARRAY>();
-  uint64_t hash = BaseVector::kNullHash;
+  uint64_t hash = bits::kNullHash;
   for (int32_t i = 0; i < arrayVariant.size(); ++i) {
     hash = bits::hashMix(hash, arrayVariant[i].hash());
   }
@@ -836,7 +835,7 @@ uint64_t Variant::hash<TypeKind::ARRAY>() const {
 template <>
 uint64_t Variant::hash<TypeKind::ROW>() const {
   const auto& rowVariant = value<TypeKind::ROW>();
-  uint64_t hash = BaseVector::kNullHash;
+  uint64_t hash = bits::kNullHash;
   for (int32_t i = 0; i < rowVariant.size(); ++i) {
     const auto childHash = rowVariant[i].hash();
     hash = (i == 0 ? childHash : bits::hashMix(hash, childHash));
@@ -853,7 +852,7 @@ uint64_t Variant::hash<TypeKind::TIMESTAMP>() const {
 template <>
 uint64_t Variant::hash<TypeKind::MAP>() const {
   const auto& mapVariant = value<TypeKind::MAP>();
-  uint64_t hash = BaseVector::kNullHash;
+  uint64_t hash = bits::kNullHash;
   for (const auto& [key, value] : mapVariant) {
     const auto elementHash = bits::hashMix(key.hash(), value.hash());
     hash = bits::commutativeHashMix(hash, elementHash);
@@ -863,7 +862,7 @@ uint64_t Variant::hash<TypeKind::MAP>() const {
 
 uint64_t Variant::hash() const {
   if (isNull()) {
-    return BaseVector::kNullHash;
+    return bits::kNullHash;
   }
 
   return VELOX_DYNAMIC_TYPE_DISPATCH_ALL(hash, kind_);
