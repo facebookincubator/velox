@@ -229,7 +229,18 @@ std::shared_ptr<::arrow::Field> updateFieldNameRecursive(
         arrowMapType->item_field(), *mapType.valueType());
     return newField->WithType(
         ::arrow::map(newKeyField->type(), newValueField->type()));
-  } else if (name != "") {
+  } else if (type.isDecimal()) {
+    // Parquet type is set from the column type rather than inferred from the
+    // field data.
+    auto precisionScale = getDecimalPrecisionScale(type);
+    if (!name.empty()) {
+      auto newField = field->WithName(name);
+      return newField->WithType(
+          ::arrow::decimal(precisionScale.first, precisionScale.second));
+    }
+    return field->WithType(
+        ::arrow::decimal(precisionScale.first, precisionScale.second));
+  } else if (!name.empty()) {
     return field->WithName(name);
   } else {
     return field;
@@ -316,6 +327,72 @@ std::optional<std::string> getParquetCreatedBy(
     return config.get<std::string>(configKey).value();
   }
   return std::nullopt;
+}
+
+bool equivalentWithSimilarDecimal(
+    const Type& dataType,
+    const Type& schemaType) {
+  if (!(typeid(dataType) == typeid(schemaType))) {
+    return false;
+  }
+  if (schemaType.isRow()) {
+    const auto& schemaTyped = schemaType.asRow();
+    if (schemaTyped.size() != dataType.size()) {
+      return false;
+    }
+    for (size_t i = 0; i < dataType.size(); ++i) {
+      if (schemaTyped.childAt(i)->isDecimal()) {
+        auto presicisonScaleSchema =
+            getDecimalPrecisionScale(*schemaTyped.childAt(i));
+        auto precisionScaleData =
+            getDecimalPrecisionScale(*dataType.childAt(i));
+        // Table precision can be larger than or equal to the inserted data, but
+        // the scale must be the same.
+        if (presicisonScaleSchema.first < precisionScaleData.first ||
+            presicisonScaleSchema.second != precisionScaleData.second) {
+          return false;
+        }
+      } else if (!equivalentWithSimilarDecimal(
+                     *dataType.childAt(i), *schemaTyped.childAt(i))) {
+        return false;
+      }
+    }
+  } else if (schemaType.isArray()) {
+    const auto& schemaTyped = schemaType.asArray();
+    const auto& dataTyped = dataType.asArray();
+    if (schemaTyped.childAt(0)->isDecimal()) {
+      auto presicisonScaleSchema =
+          getDecimalPrecisionScale(*schemaTyped.childAt(0));
+      auto precisionScaleData = getDecimalPrecisionScale(*dataType.childAt(0));
+      if (presicisonScaleSchema.first < precisionScaleData.first ||
+          presicisonScaleSchema.second != precisionScaleData.second) {
+        return false;
+      }
+    }
+    return equivalentWithSimilarDecimal(
+        *dataTyped.elementType(), *schemaTyped.elementType());
+  } else if (schemaType.isMap()) {
+    auto& schemaTyped = schemaType.asMap();
+    auto& dataTyped = dataType.asMap();
+    return equivalentWithSimilarDecimal(
+               *dataTyped.keyType(), *schemaTyped.keyType()) &&
+        equivalentWithSimilarDecimal(
+               *dataTyped.valueType(), *schemaTyped.valueType());
+  } else if (schemaType.isFunction()) {
+    auto& schemaTyped = schemaType.asFunction();
+    auto& dataTyped = dataType.asFunction();
+    if (dataTyped.size() != schemaTyped.size()) {
+      return false;
+    }
+    for (auto i = 0; i < schemaTyped.size(); ++i) {
+      if (!equivalentWithSimilarDecimal(
+              *dataTyped.childAt(i), *schemaTyped.childAt(i))) {
+        return false;
+      }
+    }
+    return true;
+  }
+  return true;
 }
 
 } // namespace
@@ -424,7 +501,7 @@ dwio::common::StripeProgress getStripeProgress(
  */
 void Writer::write(const VectorPtr& data) {
   VELOX_USER_CHECK(
-      data->type()->equivalent(*schema_),
+      equivalentWithSimilarDecimal(*data->type(), *schema_),
       "The file schema type should be equal with the input rowvector type.");
 
   VectorPtr exportData = data;
