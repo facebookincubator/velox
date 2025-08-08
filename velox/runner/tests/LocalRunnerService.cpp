@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/runner/if/gen-cpp2/LocalRunnerService.h"
 #include <folly/init/Init.h>
 #include <folly/io/async/EventBase.h>
 #include <folly/io/async/EventBaseManager.h>
@@ -25,6 +26,7 @@
 #include <proxygen/httpserver/RequestHandler.h>
 #include <proxygen/httpserver/RequestHandlerFactory.h>
 #include <proxygen/httpserver/ResponseBuilder.h>
+#include <thrift/lib/cpp2/server/ThriftServer.h>
 #include <memory>
 #include <string>
 #include "velox/common/file/FileSystems.h"
@@ -37,9 +39,13 @@
 #include "velox/runner/LocalRunner.h"
 
 using namespace facebook::velox;
+using namespace facebook::velox::runner;
 using namespace proxygen;
 
-DEFINE_int32(port, 9090, "Port to listen on");
+DEFINE_int32(http_port, 9090, "Port to listen on for HTTP");
+DEFINE_int32(thrift_port, 9091, "Port to listen on for Thrift");
+DEFINE_bool(enable_http, true, "Enable HTTP server");
+DEFINE_bool(enable_thrift, true, "Enable Thrift server");
 DEFINE_string(
     registry,
     "presto",
@@ -91,6 +97,117 @@ class StdoutCapture {
 
 // Helper functions for LocalRunnerService
 namespace {
+
+// Convert Velox RowVector to Thrift ResultBatch
+ResultBatch convertToResultBatch(const std::vector<RowVectorPtr>& rowVectors) {
+  ResultBatch resultBatch;
+
+  if (rowVectors.empty()) {
+    return resultBatch;
+  }
+
+  // Get column names and types from the first row vector
+  const auto& firstVector = rowVectors[0];
+  if (!firstVector || !firstVector->type() || !firstVector->type()->isRow()) {
+    return resultBatch;
+  }
+
+  const auto& rowType = firstVector->type()->asRow();
+  for (auto i = 0; i < rowType.size(); ++i) {
+    resultBatch.columnNames()->push_back(rowType.nameOf(i));
+    resultBatch.columnTypes()->push_back(rowType.childAt(i)->toString());
+  }
+
+  // Process each row vector
+  for (const auto& rowVector : rowVectors) {
+    if (!rowVector) {
+      continue;
+    }
+
+    for (vector_size_t rowIdx = 0; rowIdx < rowVector->size(); ++rowIdx) {
+      ResultRow row;
+
+      for (auto colIdx = 0; colIdx < rowVector->childrenSize(); ++colIdx) {
+        const auto& vector = rowVector->childAt(colIdx);
+        Cell cell;
+
+        if (vector->isNullAt(rowIdx)) {
+          cell.isNull() = true;
+        } else {
+          cell.isNull() = false;
+          ScalarValue value;
+
+          // Handle different vector types
+          switch (vector->typeKind()) {
+            case TypeKind::BOOLEAN:
+              value.boolValue_ref() =
+                  vector->as<SimpleVector<bool>>()->valueAt(rowIdx);
+              break;
+            case TypeKind::TINYINT:
+              value.tinyintValue_ref() =
+                  vector->as<SimpleVector<int8_t>>()->valueAt(rowIdx);
+              break;
+            case TypeKind::SMALLINT:
+              value.smallintValue_ref() =
+                  vector->as<SimpleVector<int16_t>>()->valueAt(rowIdx);
+              break;
+            case TypeKind::INTEGER:
+              value.integerValue_ref() =
+                  vector->as<SimpleVector<int32_t>>()->valueAt(rowIdx);
+              break;
+            case TypeKind::BIGINT:
+              value.bigintValue_ref() =
+                  vector->as<SimpleVector<int64_t>>()->valueAt(rowIdx);
+              break;
+            case TypeKind::REAL:
+              value.realValue_ref() =
+                  vector->as<SimpleVector<float>>()->valueAt(rowIdx);
+              break;
+            case TypeKind::DOUBLE:
+              value.doubleValue_ref() =
+                  vector->as<SimpleVector<double>>()->valueAt(rowIdx);
+              break;
+            case TypeKind::VARCHAR:
+              value.varcharValue_ref() =
+                  vector->as<SimpleVector<StringView>>()->valueAt(rowIdx).str();
+              break;
+            case TypeKind::VARBINARY: {
+              const auto& binValue =
+                  vector->as<SimpleVector<StringView>>()->valueAt(rowIdx);
+              value.varbinaryValue_ref() =
+                  std::string(binValue.data(), binValue.size());
+              break;
+            }
+            case TypeKind::TIMESTAMP:
+              value.timestampValue_ref() = vector->as<SimpleVector<Timestamp>>()
+                                               ->valueAt(rowIdx)
+                                               .toMillis();
+              break;
+            /*case TypeKind::DATE:
+              value.dateValue_ref() =
+                  vector->as<SimpleVector<Date>>()->valueAt(rowIdx).days();
+              break;*/
+            default:
+              // For unsupported types, set to null
+              cell.isNull() = true;
+              break;
+          }
+
+          if (!*cell.isNull()) {
+            cell.value_ref() = std::move(value);
+          }
+        }
+
+        row.cells()->push_back(std::move(cell));
+      }
+
+      resultBatch.rows()->push_back(std::move(row));
+    }
+  }
+
+  return resultBatch;
+}
+
 std::shared_ptr<memory::MemoryPool> makeRootPool(const std::string& queryId) {
   static std::atomic_uint64_t poolId{0};
   return memory::memoryManager()->addRootPool(
@@ -104,11 +221,9 @@ std::vector<RowVectorPtr> readCursor(
   // vectors to 'pool' that has longer lifetime.
   std::vector<RowVectorPtr> result;
   while (auto rows = runner->next()) {
-    auto rowVector =
-        std::dynamic_pointer_cast<RowVector>(BaseVector::copy(*rows, pool));
-    if (rowVector) {
+    if (auto rowVector =
+            std::dynamic_pointer_cast<RowVector>(BaseVector::copy(*rows, pool)))
       result.push_back(rowVector);
-    }
   }
   return result;
 }
@@ -174,6 +289,53 @@ createEmptySplitSourceFactory() {
   return std::make_shared<runner::SimpleSplitSourceFactory>(
       std::move(nodeSplitMap));
 }
+
+// Execute a plan and return the results
+std::pair<std::vector<RowVectorPtr>, std::string> executePlanHelper(
+    const std::string& serializedPlan,
+    const std::string& queryId,
+    int32_t numWorkers,
+    int32_t numDrivers,
+    std::shared_ptr<folly::CPUThreadPoolExecutor> executor,
+    std::shared_ptr<memory::MemoryPool> rootPool,
+    std::shared_ptr<memory::MemoryPool> pool) {
+  // Capture stdout
+  StdoutCapture stdoutCapture;
+
+  // Deserialize the plan
+  core::PlanNodePtr plan;
+  try {
+    folly::dynamic planJson = folly::parseJson(serializedPlan);
+    plan = core::PlanNode::deserialize<core::PlanNode>(planJson, pool.get());
+  } catch (const std::exception& e) {
+    throw std::runtime_error(
+        fmt::format("Failed to deserialize plan: {}", e.what()));
+  }
+  LOG(INFO) << "Deserialized plan: " << plan->toString(true, true);
+
+  // Create a MultiFragmentPlan from the deserialized plan
+  auto multiFragmentPlan =
+      createSingleFragmentPlan(plan, queryId, numWorkers, numDrivers);
+
+  // Create a LocalRunner
+  executor = std::make_shared<folly::CPUThreadPoolExecutor>(4);
+  auto localRunner = std::make_shared<runner::LocalRunner>(
+      multiFragmentPlan,
+      makeQueryCtx(queryId, rootPool.get(), executor.get()),
+      createEmptySplitSourceFactory());
+
+  // Run the query and collect results
+  std::vector<RowVectorPtr> results;
+  try {
+    results = readCursor(localRunner, pool.get());
+    localRunner->waitForCompletion(500'000); // 500ms timeout
+  } catch (const std::exception& e) {
+    throw std::runtime_error(
+        fmt::format("Error executing query: {}", e.what()));
+  }
+
+  return {results, stdoutCapture.str()};
+}
 } // namespace
 
 // Handler for HTTP requests
@@ -220,48 +382,29 @@ class LocalRunnerHandler : public RequestHandler {
         return;
       }
 
-      // Capture stdout to return as part of the response
-      StdoutCapture stdoutCapture;
-
       // Create memory pools
       std::shared_ptr<memory::MemoryPool> rootPool = makeRootPool(queryId);
       std::shared_ptr<memory::MemoryPool> pool =
           memory::memoryManager()->addLeafPool("output");
 
-      // Deserialize the plan
-      core::PlanNodePtr plan;
-      try {
-        folly::dynamic planJson = folly::parseJson(serializedPlan);
-        plan =
-            core::PlanNode::deserialize<core::PlanNode>(planJson, pool.get());
-      } catch (const std::exception& e) {
-        ResponseBuilder(downstream_)
-            .status(400, "Bad Request")
-            .body(fmt::format("Failed to deserialize plan: {}", e.what()))
-            .sendWithEOM();
-        return;
-      }
-
-      // Create a MultiFragmentPlan from the deserialized plan
-      auto multiFragmentPlan =
-          createSingleFragmentPlan(plan, queryId, numWorkers, numDrivers);
-
-      // Create a LocalRunner
-      executor_ = std::make_shared<folly::CPUThreadPoolExecutor>(4);
-      auto localRunner = std::make_shared<runner::LocalRunner>(
-          multiFragmentPlan,
-          makeQueryCtx(queryId, rootPool.get(), executor_.get()),
-          createEmptySplitSourceFactory());
-
-      // Run the query and collect results
+      // Execute the plan
       std::vector<RowVectorPtr> results;
+      std::string output;
       try {
-        results = readCursor(localRunner, pool.get());
-        localRunner->waitForCompletion(500'000); // 500ms timeout
+        auto [executionResults, capturedOutput] = executePlanHelper(
+            serializedPlan,
+            queryId,
+            numWorkers,
+            numDrivers,
+            executor_,
+            rootPool,
+            pool);
+        results = std::move(executionResults);
+        output = std::move(capturedOutput);
       } catch (const std::exception& e) {
         ResponseBuilder(downstream_)
             .status(500, "Internal Server Error")
-            .body(fmt::format("Error executing query: {}", e.what()))
+            .body(e.what())
             .sendWithEOM();
         return;
       }
@@ -330,7 +473,7 @@ class LocalRunnerHandler : public RequestHandler {
       // Create response JSON
       folly::dynamic responseJson = folly::dynamic::object;
       responseJson["status"] = "success";
-      responseJson["output"] = stdoutCapture.str();
+      responseJson["output"] = output;
       responseJson["results"] = std::move(resultsJson);
 
       // Send the response
@@ -384,6 +527,61 @@ class LocalRunnerHandlerFactory : public RequestHandlerFactory {
   }
 };
 
+// Implementation of the Thrift service
+class LocalRunnerServiceHandler : public LocalRunnerServiceSvIf {
+ public:
+  void executePlan(
+      ExecutePlanResponse& response,
+      std::unique_ptr<ExecutePlanRequest> request) override {
+    // Create memory pools
+    std::shared_ptr<memory::MemoryPool> rootPool =
+        makeRootPool(*request->queryId());
+    std::shared_ptr<memory::MemoryPool> pool =
+        memory::memoryManager()->addLeafPool("output");
+
+    // Execute the plan
+    std::vector<RowVectorPtr> results;
+    std::string output;
+    try {
+      LOG(INFO) << "Executing Plan in Service Handler";
+      auto [executionResults, capturedOutput] = executePlanHelper(
+          *request->serializedPlan(),
+          *request->queryId(),
+          *request->numWorkers(),
+          *request->numDrivers(),
+          executor_,
+          rootPool,
+          pool);
+      results = std::move(executionResults);
+      output = std::move(capturedOutput);
+
+      // Debug logging, can be removed when service is finalized.
+      std::ostringstream report;
+      report << "\nAfter action report:";
+      for (const auto& rowVector : results) {
+        report << "\n\trowVector: " << rowVector->toString();
+      }
+      report << "\n\tstdout: " << output;
+      LOG(INFO) << report.str();
+    } catch (const std::exception& e) {
+      LOG(INFO) << "Exception executing plan: " << e.what();
+      response.success() = false;
+      response.errorMessage() = e.what();
+      return;
+    }
+
+    // Convert results to Thrift response
+    LOG(INFO) << "Converting results to Thrift response";
+    response.resultBatches()->push_back(convertToResultBatch(results));
+    response.output() = output;
+    response.success() = true;
+    LOG(INFO) << "Finished converting results to Thrift response";
+  }
+
+ private:
+  std::shared_ptr<folly::CPUThreadPoolExecutor> executor_;
+};
+
 int main(int argc, char** argv) {
   // Initialize gflags and glog
   folly::Init init(&argc, &argv);
@@ -406,30 +604,55 @@ int main(int argc, char** argv) {
       "presto.default.", false, true);
   window::prestosql::registerAllWindowFunctions("presto.default.");
 
-  // Set up the HTTP server
-  std::vector<HTTPServer::IPConfig> IPs = {
-      {folly::SocketAddress("127.0.0.1", FLAGS_port),
-       HTTPServer::Protocol::HTTP}};
+  // Start HTTP server if enabled
+  std::unique_ptr<HTTPServer> httpServer;
+  std::thread httpThread;
 
-  HTTPServerOptions options;
-  options.threads = 4;
-  options.idleTimeout = std::chrono::milliseconds(60000);
-  options.shutdownOn = {SIGINT, SIGTERM};
-  options.enableContentCompression = false;
-  options.handlerFactories =
-      RequestHandlerChain().addThen<LocalRunnerHandlerFactory>().build();
+  if (FLAGS_enable_http) {
+    std::vector<HTTPServer::IPConfig> IPs = {
+        {folly::SocketAddress("127.0.0.1", FLAGS_http_port),
+         HTTPServer::Protocol::HTTP}};
 
-  // Create and start the server
-  HTTPServer server(std::move(options));
-  server.bind(IPs);
+    HTTPServerOptions options;
+    options.threads = 4;
+    options.idleTimeout = std::chrono::milliseconds(60000);
+    options.shutdownOn = {SIGINT, SIGTERM};
+    options.enableContentCompression = false;
+    options.handlerFactories =
+        RequestHandlerChain().addThen<LocalRunnerHandlerFactory>().build();
 
-  LOG(INFO) << "Starting LocalRunner service on port " << FLAGS_port;
+    // Create and start the HTTP server
+    httpServer = std::make_unique<HTTPServer>(std::move(options));
+    httpServer->bind(IPs);
 
-  // Start the server
-  std::thread t([&]() { server.start(); });
+    LOG(INFO) << "Starting HTTP LocalRunner service on port "
+              << FLAGS_http_port;
 
-  // Wait for the server to exit
-  t.join();
+    // Start the HTTP server in a separate thread
+    httpThread = std::thread([&httpServer]() { httpServer->start(); });
+  }
+
+  // Start Thrift server if enabled
+  std::shared_ptr<apache::thrift::ThriftServer> thriftServer;
+
+  if (FLAGS_enable_thrift) {
+    // Create the Thrift server
+    auto handler = std::make_shared<LocalRunnerServiceHandler>();
+    thriftServer = std::make_shared<apache::thrift::ThriftServer>();
+    thriftServer->setPort(FLAGS_thrift_port);
+    thriftServer->setInterface(handler);
+    thriftServer->setNumIOWorkerThreads(4);
+    thriftServer->setNumCPUWorkerThreads(4);
+
+    LOG(INFO) << "Starting Thrift LocalRunner service on port "
+              << FLAGS_thrift_port;
+
+    // Start the Thrift server (this blocks)
+    thriftServer->serve();
+  } else if (FLAGS_enable_http) {
+    // If only HTTP is enabled, wait for the HTTP thread
+    httpThread.join();
+  }
 
   return 0;
 }

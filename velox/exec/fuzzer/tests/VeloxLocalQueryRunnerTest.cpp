@@ -66,7 +66,7 @@ TEST_F(VeloxLocalQueryRunnerTest, SimpleQuery) {
   // Create a VeloxLocalQueryRunner
   auto queryRunner = std::make_unique<VeloxLocalQueryRunner>(
       rootPool_.get(),
-      "http://127.0.0.1:9090",
+      "thrift:127.0.0.1:9091",
       std::chrono::milliseconds(5000));
 
   // Create a simple plan: values -> project
