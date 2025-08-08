@@ -43,6 +43,11 @@ Generic Configuration
      - integer
      - 80
      - Abandons partial TopNRowNumber if number of output rows equals or exceeds this percentage of the number of input rows.
+   * - ansi_enabled
+     - bool
+     - false
+     - If true, Velox will use an ANSI-compliant dialect. For example, Velox will throw a runtime exception instead of
+       returning null results when the inputs to a SQL operator or function are invalid.
    * - session_timezone
      - string
      -

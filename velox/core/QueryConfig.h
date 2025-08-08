@@ -36,6 +36,11 @@ class QueryConfig {
   static constexpr const char* kQueryMaxMemoryPerNode =
       "query_max_memory_per_node";
 
+  /// If true, Velox will use an ANSI-compliant dialect. For example, Velox will
+  /// throw a runtime exception instead of returning null results when the inputs
+  /// to a SQL operator or function are invalid.
+  static constexpr const char* kAnsiEnabled = "ansi_enabled";
+
   /// User provided session timezone. Stores a string with the actual timezone
   /// name, e.g: "America/Los_Angeles".
   static constexpr const char* kSessionTimezone = "session_timezone";
@@ -862,6 +867,10 @@ class QueryConfig {
 
   uint64_t exprMaxCompiledRegexes() const {
     return get<uint64_t>(kExprMaxCompiledRegexes, 100);
+  }
+
+  bool ansiEnabled() const {
+    return get<bool>(kAnsiEnabled, false);
   }
 
   bool adjustTimestampToTimezone() const {
