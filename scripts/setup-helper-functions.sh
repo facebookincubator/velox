@@ -154,29 +154,29 @@ function get_cxx_flags {
       # PartNum, [15:4]: The primary part number such as Neoverse N1/N2 core.
       ARM_CPU_PRODUCT=${hex_ARM_CPU_DETECT: -4:3}
 
-      if [ "$ARM_CPU_PRODUCT" = "$Neoverse_N1" ]; then
-        echo -n "-mcpu=neoverse-n1 "
-      elif [ "$ARM_CPU_PRODUCT" = "$Neoverse_N2" ]; then
-        echo -n "-mcpu=neoverse-n2 "
-      elif [ "$ARM_CPU_PRODUCT" = "$Neoverse_V1" ]; then
-        echo -n "-mcpu=neoverse-v1 "
-      elif [ "$ARM_CPU_PRODUCT" = "$Neoverse_V2" ]; then
-        # Read the JEDEC JEP-106 manufacturer ID to distinguish different Neoverse V2 cores
-        # https://developer.arm.com/documentation/ka001301/latest/
-        SOC_ID_FILE="/sys/devices/soc0/soc_id"
-        GRACE_SOC_ID="jep106:036b:0241"
-        # Check for NVIDIA Grace which has various extensions
-        if [ -f "$SOC_ID_FILE" ] && [ "$(cat $SOC_ID_FILE)" = "$GRACE_SOC_ID" ]; then
-          echo -n "-mcpu=neoverse-v2+crypto+sha3+sm4+sve2-aes+sve2-sha3+sve2-sm4"
+        if [ "$ARM_CPU_PRODUCT" = "$Neoverse_N1" ]; then
+          echo -n "-mcpu=neoverse-n1 "
+        elif [ "$ARM_CPU_PRODUCT" = "$Neoverse_N2" ]; then
+          echo -n "-mcpu=neoverse-n2 "
+        elif [ "$ARM_CPU_PRODUCT" = "$Neoverse_V1" ]; then
+          echo -n "-mcpu=neoverse-v1 "
+        elif [ "$ARM_CPU_PRODUCT" = "$Neoverse_V2" ]; then
+          # Read the JEDEC JEP-106 manufacturer ID to distinguish different Neoverse V2 cores
+          # https://developer.arm.com/documentation/ka001301/latest/
+          SOC_ID_FILE="/sys/devices/soc0/soc_id"
+          GRACE_SOC_ID="jep106:036b:0241"
+          # Check for NVIDIA Grace which has various extensions
+          if [ -f "$SOC_ID_FILE" ] && [ "$(cat $SOC_ID_FILE)" = "$GRACE_SOC_ID" ]; then
+            echo -n "-mcpu=neoverse-v2+crypto+sha3+sm4+sve2-aes+sve2-sha3+sve2-sm4"
+          else
+            echo -n "-mcpu=neoverse-v2 "
+          fi
         else
-          echo -n "-mcpu=neoverse-v2 "
+          echo -n "-march=armv8-a+crc+crypto "
         fi
       else
-        echo -n "-march=armv8-a+crc+crypto "
+        echo -n ""
       fi
-    else
-      echo -n ""
-    fi
     ;;
   *)
     echo -n "Architecture not supported!"
@@ -184,6 +184,33 @@ function get_cxx_flags {
   esac
 
 }
+
+detect_sve_flags() {
+  if grep -q "sve" /proc/cpuinfo; then
+    ARCH_FLAGS="-march=armv8-a+sve"
+    SVE_VECTOR_BITS=$(
+      gcc $ARCH_FLAGS -o detect_sve_vector -xc++ - -lstdc++ <<EOF
+      #include <arm_sve.h>
+      #include <iostream>
+      int main() {
+          std::cout << svcntb() * 8 << std::endl;
+          return 0;
+      }
+EOF
+      ./detect_sve_vector 2>/dev/null
+    )
+
+    if [ "$SVE_VECTOR_BITS" ]; then
+      echo "-msve-vector-bits=$SVE_VECTOR_BITS -DSVE_BITS=$SVE_VECTOR_BITS"
+    fi
+
+    rm -f detect_sve_vector
+  fi
+}
+
+if [[ "${BASH_SOURCE[0]}" == "${0}" && "$1" == "detect_sve_flags" ]]; then
+  detect_sve_flags
+fi
 
 function wget_and_untar {
   local URL=$1
