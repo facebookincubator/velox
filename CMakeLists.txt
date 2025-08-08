@@ -402,6 +402,7 @@ if(ENABLE_ALL_WARNINGS)
          -Wno-maybe-uninitialized \
          -Wno-unused-result \
          -Wno-format-overflow \
+	 -Wno-error=template-id-cdtor \
          -Wno-strict-aliasing")
     # Avoid compiler bug for GCC 12.2.1
     # https://gcc.gnu.org/bugzilla/show_bug.cgi?id=105329
