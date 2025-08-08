@@ -1825,6 +1825,102 @@ PlanNodePtr NestedLoopJoinNode::create(
       outputType);
 }
 
+// static
+const JoinType SpatialJoinNode::kDefaultJoinType = JoinType::kInner;
+// static
+const TypedExprPtr SpatialJoinNode::kDefaultJoinCondition = nullptr;
+
+SpatialJoinNode::SpatialJoinNode(
+    const PlanNodeId& id,
+    JoinType joinType,
+    TypedExprPtr joinCondition,
+    PlanNodePtr left,
+    PlanNodePtr right,
+    RowTypePtr outputType)
+    : PlanNode(id),
+      joinType_(joinType),
+      joinCondition_(std::move(joinCondition)),
+      sources_({std::move(left), std::move(right)}),
+      outputType_(std::move(outputType)) {
+  VELOX_USER_CHECK(
+      isSupported(joinType_),
+      "The join type is not supported by spatial join: {}",
+      JoinTypeName::toName(joinType_));
+
+  auto leftType = sources_[0]->outputType();
+  auto rightType = sources_[1]->outputType();
+  auto numOutputColumms = outputType_->size();
+
+  for (auto i = 0; i < numOutputColumms; ++i) {
+    const auto name = outputType_->nameOf(i);
+    const bool leftContains = leftType->containsChild(name);
+    const bool rightContains = rightType->containsChild(name);
+    VELOX_USER_CHECK(
+        !(leftContains && rightContains),
+        "Duplicate column name found on join's left and right sides: {}",
+        name);
+    VELOX_USER_CHECK(
+        leftContains || rightContains,
+        "Join's output column not found in either left or right sides: {}",
+        name);
+  }
+}
+
+bool SpatialJoinNode::isSupported(JoinType joinType) {
+  switch (joinType) {
+    case JoinType::kInner:
+      [[fallthrough]];
+    case JoinType::kLeft:
+      return true;
+    default:
+      return false;
+  }
+}
+
+void SpatialJoinNode::addDetails(std::stringstream& stream) const {
+  stream << JoinTypeName::toName(joinType_);
+  if (joinCondition_) {
+    stream << ", joinCondition: " << joinCondition_->toString();
+  }
+}
+
+folly::dynamic SpatialJoinNode::serialize() const {
+  auto obj = PlanNode::serialize();
+  obj["joinType"] = JoinTypeName::toName(joinType_);
+  if (joinCondition_) {
+    obj["joinCondition"] = joinCondition_->serialize();
+  }
+  obj["outputType"] = outputType_->serialize();
+  return obj;
+}
+
+void SpatialJoinNode::accept(
+    const PlanNodeVisitor& visitor,
+    PlanNodeVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
+
+PlanNodePtr SpatialJoinNode::create(const folly::dynamic& obj, void* context) {
+  auto sources = deserializeSources(obj, context);
+  VELOX_CHECK_EQ(2, sources.size());
+
+  TypedExprPtr joinCondition;
+  if (obj.count("joinCondition")) {
+    joinCondition =
+        ISerializable::deserialize<ITypedExpr>(obj["joinCondition"], context);
+  }
+
+  auto outputType = deserializeRowType(obj["outputType"]);
+
+  return std::make_shared<SpatialJoinNode>(
+      deserializePlanNodeId(obj),
+      JoinTypeName::toJoinType(obj["joinType"].asString()),
+      joinCondition,
+      sources[0],
+      sources[1],
+      outputType);
+}
+
 AssignUniqueIdNode::AssignUniqueIdNode(
     const PlanNodeId& id,
     const std::string& idName,
@@ -3136,6 +3232,7 @@ void PlanNode::registerSerDe() {
   registry.Register("MergeJoinNode", MergeJoinNode::create);
   registry.Register("IndexLookupJoinNode", IndexLookupJoinNode::create);
   registry.Register("NestedLoopJoinNode", NestedLoopJoinNode::create);
+  registry.Register("SpatialJoinNode", SpatialJoinNode::create);
   registry.Register("LimitNode", LimitNode::create);
   registry.Register("LocalMergeNode", LocalMergeNode::create);
   registry.Register("LocalPartitionNode", LocalPartitionNode::create);

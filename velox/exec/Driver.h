@@ -778,6 +778,8 @@ struct DriverFactory {
   folly::F14FastSet<core::PlanNodeId> mixedExecutionModeHashJoinNodeIds;
   /// Same as 'mixedExecutionModeHashJoinNodeIds' but for Nested Loop Joins.
   folly::F14FastSet<core::PlanNodeId> mixedExecutionModeNestedLoopJoinNodeIds;
+  /// Same as 'mixedExecutionModeHashJoinNodeIds' but for Spatial Joins.
+  folly::F14FastSet<core::PlanNodeId> mixedExecutionModeSpatialJoinNodeIds;
 
   std::shared_ptr<Driver> createDriver(
       std::unique_ptr<DriverCtx> ctx,
@@ -865,6 +867,10 @@ struct DriverFactory {
   /// Returns plan node IDs for which Nested Loop Join Bridges must be created
   /// based on this pipeline.
   std::vector<core::PlanNodeId> needsNestedLoopJoinBridges() const;
+
+  /// Returns plan node IDs for which Spatial Join Bridges must be created
+  /// based on this pipeline.
+  std::vector<core::PlanNodeId> needsSpatialJoinBridges() const;
 
   static std::vector<DriverAdapter> adapters;
 };
