@@ -210,6 +210,18 @@ class Reader {
   static TypePtr updateColumnNames(
       const TypePtr& fileType,
       const TypePtr& tableType);
+
+  const std::unordered_set<int32_t>& requiredExtraFieldIds() const {
+    return requiredExtraFieldIds_;
+  }
+
+  void setRequiredExtraFieldIds(
+      std::unordered_set<int32_t>& requiredExtraFieldIds) {
+    requiredExtraFieldIds_ = requiredExtraFieldIds;
+  }
+
+ private:
+  std::unordered_set<int32_t> requiredExtraFieldIds_;
 };
 
 } // namespace facebook::velox::dwio::common
