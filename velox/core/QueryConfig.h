@@ -36,11 +36,6 @@ class QueryConfig {
   static constexpr const char* kQueryMaxMemoryPerNode =
       "query_max_memory_per_node";
 
-  /// If true, Velox will use an ANSI-compliant dialect. For example, Velox will
-  /// throw a runtime exception instead of returning null results when the inputs
-  /// to a SQL operator or function are invalid.
-  static constexpr const char* kAnsiEnabled = "ansi_enabled";
-
   /// User provided session timezone. Stores a string with the actual timezone
   /// name, e.g: "America/Los_Angeles".
   static constexpr const char* kSessionTimezone = "session_timezone";
@@ -367,6 +362,11 @@ class QueryConfig {
   /// If true, array_agg() aggregation function will ignore nulls in the input.
   static constexpr const char* kPrestoArrayAggIgnoreNulls =
       "presto.array_agg.ignore_nulls";
+
+  /// If true, Velox will use an ANSI-compliant dialect. For example, Velox will
+  /// throw a runtime exception instead of returning null results when the
+  /// inputs to a SQL operator or function are invalid.
+  static constexpr const char* kSparkAnsiEnabled = "spark.ansi_enabled";
 
   /// The default number of expected items for the bloomfilter.
   static constexpr const char* kSparkBloomFilterExpectedNumItems =
@@ -869,10 +869,6 @@ class QueryConfig {
     return get<uint64_t>(kExprMaxCompiledRegexes, 100);
   }
 
-  bool ansiEnabled() const {
-    return get<bool>(kAnsiEnabled, false);
-  }
-
   bool adjustTimestampToTimezone() const {
     return get<bool>(kAdjustTimestampToTimezone, false);
   }
@@ -1028,6 +1024,10 @@ class QueryConfig {
 
   bool prestoArrayAggIgnoreNulls() const {
     return get<bool>(kPrestoArrayAggIgnoreNulls, false);
+  }
+
+  bool sparkAnsiEnabled() const {
+    return get<bool>(kSparkAnsiEnabled, false);
   }
 
   int64_t sparkBloomFilterExpectedNumItems() const {
