@@ -468,6 +468,40 @@ will evaluate to 1.</p>
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="ST_InteriorRings">
+<span class="sig-name descname"><span class="pre">ST_InteriorRings</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry:</span> <span class="pre">Geometry)</span> <span class="pre">-&gt;</span> <span class="pre">output:</span> <span class="pre">array(geometry</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#ST_InteriorRings" title="Link to this definition">¶</a></dt>
+<dd><p>Returns an array of all interior rings found in the input geometry,
+or an empty array if the polygon has no interior rings. Returns
+null if the input geometry is empty.
+Throws an error if the input geometry is not a polygon.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="ST_Geometries">
+<span class="sig-name descname"><span class="pre">ST_Geometries</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry:</span> <span class="pre">Geometry)</span> <span class="pre">-&gt;</span> <span class="pre">output:</span> <span class="pre">array(geometry</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#ST_Geometries" title="Link to this definition">¶</a></dt>
+<dd><p>Returns an array of geometries in the specified collection. Returns
+a one-element array if the input geometry is not a multi-geometry.
+Returns null if input geometry is empty. For example, a MultiLineString
+will create an array of LineStrings. A GeometryCollection will
+produce an un-flattened array of its constituents:
+GEOMETRYCOLLECTION (MULTIPOINT(0 0, 1 1),
+GEOMETRYCOLLECTION (MULTILINESTRING((2 2, 3 3))) ) would produce
+array[MULTIPOINT(0 0, 1 1), GEOMETRYCOLLECTION( MULTILINESTRING((2 2, 3 3)) )]</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="flatten_geometry_collections">
+<span class="sig-name descname"><span class="pre">flatten_geometry_collections</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry:</span> <span class="pre">Geometry)</span> <span class="pre">-&gt;</span> <span class="pre">output:</span> <span class="pre">array(geometry</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#flatten_geometry_collections" title="Link to this definition">¶</a></dt>
+<dd><p>Recursively flattens any GeometryCollections in Geometry, returning an array
+of constituent non-GeometryCollection geometries. The order of the array
+is arbitrary and should not be relied upon. null input results in null output.
+Examples:</p>
+<p>POINT (0 0) -&gt; [POINT (0 0)], MULTIPOINT (0 0, 1 1) -&gt; [MULTIPOINT (0 0, 1 1)],
+GEOMETRYCOLLECTION (POINT (0 0), GEOMETRYCOLLECTION (POINT (1 1))) -&gt;
+[POINT (0 0), POINT (1 1)], GEOMETRYCOLLECTION EMPTY -&gt; [].</p>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="ST_NumInteriorRing">
 <span class="sig-name descname"><span class="pre">ST_NumInteriorRing</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">output:</span> <span class="pre">integer</span></span></span><a class="headerlink" href="#ST_NumInteriorRing" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the cardinality of the collection of interior rings of a polygon.</p>
@@ -691,6 +725,9 @@ specified.</p>
 <li><a class="reference internal" href="#ST_GeometryN"><code class="docutils literal notranslate"><span class="pre">ST_GeometryN()</span></code></a></li>
 <li><a class="reference internal" href="#ST_InteriorRingN"><code class="docutils literal notranslate"><span class="pre">ST_InteriorRingN()</span></code></a></li>
 <li><a class="reference internal" href="#ST_NumGeometries"><code class="docutils literal notranslate"><span class="pre">ST_NumGeometries()</span></code></a></li>
+<li><a class="reference internal" href="#ST_InteriorRings"><code class="docutils literal notranslate"><span class="pre">ST_InteriorRings()</span></code></a></li>
+<li><a class="reference internal" href="#ST_Geometries"><code class="docutils literal notranslate"><span class="pre">ST_Geometries()</span></code></a></li>
+<li><a class="reference internal" href="#flatten_geometry_collections"><code class="docutils literal notranslate"><span class="pre">flatten_geometry_collections()</span></code></a></li>
 <li><a class="reference internal" href="#ST_NumInteriorRing"><code class="docutils literal notranslate"><span class="pre">ST_NumInteriorRing()</span></code></a></li>
 <li><a class="reference internal" href="#ST_ConvexHull"><code class="docutils literal notranslate"><span class="pre">ST_ConvexHull()</span></code></a></li>
 <li><a class="reference internal" href="#ST_CoordDim"><code class="docutils literal notranslate"><span class="pre">ST_CoordDim()</span></code></a></li>

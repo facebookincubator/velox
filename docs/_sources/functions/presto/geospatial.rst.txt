@@ -334,6 +334,35 @@ Accessors
     ``ST_NumGeometries(ST_GeometryFromText('GEOMETRYCOLLECTION(POINT EMPTY, POINT (1 2))'))``
     will evaluate to 1.
 
+.. function:: ST_InteriorRings(geometry: Geometry) -> output: array(geometry)
+
+    Returns an array of all interior rings found in the input geometry,
+    or an empty array if the polygon has no interior rings. Returns
+    null if the input geometry is empty.
+    Throws an error if the input geometry is not a polygon.
+
+.. function:: ST_Geometries(geometry: Geometry) -> output: array(geometry)
+
+    Returns an array of geometries in the specified collection. Returns
+    a one-element array if the input geometry is not a multi-geometry.
+    Returns null if input geometry is empty. For example, a MultiLineString
+    will create an array of LineStrings. A GeometryCollection will
+    produce an un-flattened array of its constituents:
+    GEOMETRYCOLLECTION (MULTIPOINT(0 0, 1 1),
+    GEOMETRYCOLLECTION (MULTILINESTRING((2 2, 3 3))) ) would produce
+    array[MULTIPOINT(0 0, 1 1), GEOMETRYCOLLECTION( MULTILINESTRING((2 2, 3 3)) )]
+
+.. function:: flatten_geometry_collections(geometry: Geometry) -> output: array(geometry)
+
+    Recursively flattens any GeometryCollections in Geometry, returning an array
+    of constituent non-GeometryCollection geometries. The order of the array
+    is arbitrary and should not be relied upon. null input results in null output.
+    Examples:
+
+    POINT (0 0) -> [POINT (0 0)], MULTIPOINT (0 0, 1 1) -> [MULTIPOINT (0 0, 1 1)],
+    GEOMETRYCOLLECTION (POINT (0 0), GEOMETRYCOLLECTION (POINT (1 1))) ->
+    [POINT (0 0), POINT (1 1)], GEOMETRYCOLLECTION EMPTY -> [].
+
 .. function:: ST_NumInteriorRing(geometry: Geometry) -> output: integer
 
     Returns the cardinality of the collection of interior rings of a polygon.
