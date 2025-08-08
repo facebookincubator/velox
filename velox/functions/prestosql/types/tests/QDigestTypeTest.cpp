@@ -15,8 +15,8 @@
  */
 #include "velox/functions/prestosql/types/QDigestType.h"
 #include "velox/functions/prestosql/types/QDigestRegistration.h"
+#include "velox/functions/prestosql/types/parser/TypeParser.h"
 #include "velox/functions/prestosql/types/tests/TypeTestBase.h"
-#include "velox/type/parser/TypeParser.h"
 
 namespace facebook::velox::test {
 namespace {
