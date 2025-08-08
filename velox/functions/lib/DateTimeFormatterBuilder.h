@@ -248,6 +248,16 @@ class DateTimeFormatterBuilder {
   /// be 9870, with digit being 6 the formatted result will be 987000
   DateTimeFormatterBuilder& appendFractionOfSecond(size_t digits);
 
+  /// Sets the precision for the fraction of second part of timestamp,
+  ///
+  /// \param fractionOfSecondPrecision this can be set to kSecond, kMilliSecond,
+  /// kMicrosecond. The additional digits present in the fraction of second will
+  /// be truncated. e.g. 1999-01-01 01:59:00.123456, with precision set to
+  /// kMillisecond the result will be 123 or with kMicrosecond result will be
+  /// 123456
+  DateTimeFormatterBuilder& setFractionOfSecondPrecision(
+      TimestampPrecision fractionOfSecondPrecision);
+
   /// Appends time zone to formatter builder, e.g: 'Pacific Standard Time' or
   /// 'PST'
   ///
@@ -281,6 +291,7 @@ class DateTimeFormatterBuilder {
   size_t bufEnd_{0};
   std::vector<DateTimeToken> tokens_;
   DateTimeFormatterType type_{DateTimeFormatterType::UNKNOWN};
+  TimestampPrecision fractionOfSecondPrecision_;
 };
 
 } // namespace facebook::velox::functions
