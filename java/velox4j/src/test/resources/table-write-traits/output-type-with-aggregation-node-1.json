@@ -1,0 +1,21 @@
+{
+  "name" : "Type",
+  "type" : "ROW",
+  "names" : [ "rows", "fragments", "commitcontext", "foo", "sum" ],
+  "cTypes" : [ {
+    "name" : "Type",
+    "type" : "BIGINT"
+  }, {
+    "name" : "Type",
+    "type" : "VARBINARY"
+  }, {
+    "name" : "Type",
+    "type" : "VARBINARY"
+  }, {
+    "name" : "Type",
+    "type" : "INTEGER"
+  }, {
+    "name" : "Type",
+    "type" : "INTEGER"
+  } ]
+}
