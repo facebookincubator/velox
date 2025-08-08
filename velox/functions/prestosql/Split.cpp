@@ -85,7 +85,7 @@ class SplitFunction : public exec::VectorFunction {
       default:
         VELOX_FAIL(
             "Unsupported type for 'limit' argument of 'split' function: {}",
-            mapTypeKindToName(limitType));
+            TypeKindName::toName(limitType));
     }
   }
 

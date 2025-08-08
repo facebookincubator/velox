@@ -277,7 +277,7 @@ class SubscriptImpl : public exec::Subscript {
       default:
         VELOX_UNSUPPORTED(
             "Unsupported type for element_at index {}",
-            mapTypeKindToName(indexArg->typeKind()));
+            TypeKindName::toName(indexArg->typeKind()));
     }
   }
 

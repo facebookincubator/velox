@@ -122,7 +122,7 @@ cudf::ast::literal makeScalarAndLiteral(
     // TODO for non-numeric types too.
     VELOX_NYI(
         "Non-numeric types not yet implemented for kind " +
-        mapTypeKindToName(kind));
+        std::string(TypeKindName::toName(kind)));
   }
 }
 
