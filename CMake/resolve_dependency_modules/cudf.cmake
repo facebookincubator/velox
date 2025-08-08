@@ -27,7 +27,7 @@ velox_resolve_dependency_url(rapids_cmake)
 
 set(VELOX_rmm_VERSION 25.08)
 set(VELOX_rmm_BUILD_SHA256_CHECKSUM
-  f2d7a64a3dcfe9b49231375b6df72b3be8a10e0828404463fd5176a9d75a1d4f)
+    f2d7a64a3dcfe9b49231375b6df72b3be8a10e0828404463fd5176a9d75a1d4f)
 set(VELOX_rmm_SOURCE_URL
     "https://github.com/rapidsai/rmm/archive/29dd32302eb7c3e16fb837a1cfe4baac98071512.tar.gz"
 )
