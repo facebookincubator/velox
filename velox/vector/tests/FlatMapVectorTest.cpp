@@ -17,9 +17,9 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include "velox/common/base/VeloxException.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/Memory.h"
+#include "velox/common/testutil/OptionalEmpty.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -421,19 +421,14 @@ TEST_F(FlatMapVectorTest, sortedKeyIndices) {
 }
 
 TEST_F(FlatMapVectorTest, toString) {
-  auto vector = maker_.flatMapVectorNullable<int64_t, int64_t>({
-      std::make_optional<
-          std::vector<std::pair<int64_t, std::optional<int64_t>>>>({}),
-      std::nullopt,
-      std::make_optional<
-          std::vector<std::pair<int64_t, std::optional<int64_t>>>>({{1, 0}}),
-      std::make_optional<
-          std::vector<std::pair<int64_t, std::optional<int64_t>>>>(
-          {{1, 1}, {2, std::nullopt}}),
-      std::make_optional<
-          std::vector<std::pair<int64_t, std::optional<int64_t>>>>(
-          {{0, 0}, {1, 1}, {2, 2}, {3, 3}, {4, 4}, {5, 5}}),
-  });
+  auto vector = maker_.flatMapVectorNullable<int64_t, int64_t>(
+      {common::testutil::optionalEmpty,
+       std::nullopt,
+       std::vector<std::pair<int64_t, std::optional<int64_t>>>{{1, 0}},
+       std::vector<std::pair<int64_t, std::optional<int64_t>>>{
+           {1, 1}, {2, std::nullopt}},
+       std::vector<std::pair<int64_t, std::optional<int64_t>>>{
+           {0, 0}, {1, 1}, {2, 2}, {3, 3}, {4, 4}, {5, 5}}});
 
   EXPECT_EQ(
       vector->toString(), "[FLAT_MAP MAP<BIGINT,BIGINT>: 5 elements, 1 nulls]");
