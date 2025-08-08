@@ -658,7 +658,7 @@ TEST_F(FunctionRegistryTest, resolveFunctionWithCoercions) {
     testCannotResolve("foo", {TINYINT(), VARCHAR()});
   }
 
-  // Coercions with complex types are not supported yet.
+  // Coercions with complex types.
   {
     SCOPE_EXIT {
       removeFunction("foo");
@@ -673,10 +673,56 @@ TEST_F(FunctionRegistryTest, resolveFunctionWithCoercions) {
         },
         std::make_unique<DummyVectorFunction>());
 
-    testCannotResolve("foo", {ARRAY(TINYINT()), SMALLINT()});
+    testCoercions(
+        "foo",
+        {ARRAY(TINYINT()), SMALLINT()},
+        INTEGER(),
+        {ARRAY(INTEGER()), INTEGER()});
   }
 
-  // Coercions with variable number of arguments are not supported yet.
+  // Coercions with map types.
+  {
+    SCOPE_EXIT {
+      removeFunction("foo");
+    };
+
+    exec::registerVectorFunction(
+        "foo",
+        {
+            makeSignature("integer", {"map(integer, integer)"}),
+            makeSignature("bigint", {"map(bigint, bigint)"}),
+        },
+        std::make_unique<DummyVectorFunction>());
+
+    testCoercions(
+        "foo",
+        {MAP(SMALLINT(), TINYINT())},
+        BIGINT(),
+        {MAP(BIGINT(), BIGINT())});
+  }
+
+  // Coercions with row types.
+  {
+    SCOPE_EXIT {
+      removeFunction("foo");
+    };
+
+    exec::registerVectorFunction(
+        "foo",
+        {
+            makeSignature("integer", {"row(integer, integer)"}),
+            makeSignature("bigint", {"row(bigint, bigint)"}),
+        },
+        std::make_unique<DummyVectorFunction>());
+
+    testCoercions(
+        "foo",
+        {ROW({INTEGER(), TINYINT()})},
+        BIGINT(),
+        {ROW({BIGINT(), BIGINT()})});
+  }
+
+  // Coercions with variable number of arguments.
   {
     SCOPE_EXIT {
       removeFunction("foo");
@@ -698,10 +744,14 @@ TEST_F(FunctionRegistryTest, resolveFunctionWithCoercions) {
              .build()},
         std::make_unique<DummyVectorFunction>());
 
-    testCannotResolve("foo", {TINYINT(), SMALLINT(), INTEGER()});
+    testCoercions(
+        "foo",
+        {TINYINT(), SMALLINT(), INTEGER()},
+        BIGINT(),
+        {BIGINT(), BIGINT(), BIGINT()});
   }
 
-  // Coercions with generic types are not supported yet.
+  // Coercions with generic types.
   {
     SCOPE_EXIT {
       removeFunction("foo");
@@ -717,7 +767,7 @@ TEST_F(FunctionRegistryTest, resolveFunctionWithCoercions) {
              .build()},
         std::make_unique<DummyVectorFunction>());
 
-    testCannotResolve("foo", {TINYINT(), REAL()});
+    testCoercions("foo", {TINYINT(), REAL()}, REAL(), {REAL(), nullptr});
   }
 }
 
