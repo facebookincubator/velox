@@ -1478,8 +1478,8 @@ folly::dynamic AbstractJoinNode::serializeBase() const {
 }
 
 namespace {
-folly::F14FastMap<JoinType, std::string> joinTypeNames() {
-  return {
+const auto& joinTypeNames() {
+  static const folly::F14FastMap<JoinType, std::string_view> kNames = {
       {JoinType::kInner, "INNER"},
       {JoinType::kLeft, "LEFT"},
       {JoinType::kRight, "RIGHT"},
@@ -1490,6 +1490,7 @@ folly::F14FastMap<JoinType, std::string> joinTypeNames() {
       {JoinType::kRightSemiProject, "RIGHT SEMI (PROJECT)"},
       {JoinType::kAnti, "ANTI"},
   };
+  return kNames;
 }
 } // namespace
 
@@ -2733,12 +2734,13 @@ PlanNodePtr LocalPartitionNode::create(
 }
 
 namespace {
-folly::F14FastMap<LocalPartitionNode::Type, std::string>
-localPartitionTypeNames() {
-  return {
-      {LocalPartitionNode::Type::kGather, "GATHER"},
-      {LocalPartitionNode::Type::kRepartition, "REPARTITION"},
-  };
+const auto& localPartitionTypeNames() {
+  static const folly::F14FastMap<LocalPartitionNode::Type, std::string_view>
+      kNames = {
+          {LocalPartitionNode::Type::kGather, "GATHER"},
+          {LocalPartitionNode::Type::kRepartition, "REPARTITION"},
+      };
+  return kNames;
 }
 } // namespace
 
@@ -2865,15 +2867,15 @@ PlanNodePtr EnforceSingleRowNode::create(
 }
 
 namespace {
-folly::F14FastMap<PartitionedOutputNode::Kind, std::string>
-partitionKindNames() {
-  return {
-      {PartitionedOutputNode::Kind::kPartitioned, "PARTITIONED"},
-      {PartitionedOutputNode::Kind::kBroadcast, "BROADCAST"},
-      {PartitionedOutputNode::Kind::kArbitrary, "ARBITRARY"},
-  };
+const auto& partitionKindNames() {
+  static const folly::F14FastMap<PartitionedOutputNode::Kind, std::string_view>
+      kNames = {
+          {PartitionedOutputNode::Kind::kPartitioned, "PARTITIONED"},
+          {PartitionedOutputNode::Kind::kBroadcast, "BROADCAST"},
+          {PartitionedOutputNode::Kind::kArbitrary, "ARBITRARY"},
+      };
+  return kNames;
 }
-
 } // namespace
 
 VELOX_DEFINE_EMBEDDED_ENUM_NAME(PartitionedOutputNode, Kind, partitionKindNames)
