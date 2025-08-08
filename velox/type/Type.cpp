@@ -109,6 +109,38 @@ namespace {
 std::vector<TypePtr> deserializeChildTypes(const folly::dynamic& obj) {
   return velox::ISerializable::deserialize<std::vector<Type>>(obj["cTypes"]);
 }
+
+template <typename ValueType>
+TypeParameter deserializeEnumParam(const folly::dynamic& obj) {
+  auto enumName = obj["enumName"].asString();
+  VELOX_CHECK(obj["valuesMap"].isArray());
+  auto arr = obj["valuesMap"];
+
+  // Construct the values map
+  std::unordered_map<std::string, ValueType> map;
+  for (const auto& pair : arr) {
+    VELOX_USER_CHECK(pair.isArray(), "Expected array for long enum map param");
+    VELOX_USER_CHECK(
+        pair.size() == 2, "Invalid key-value pair for long enum map param");
+    std::string key = pair[0].asString();
+    if constexpr (std::is_same_v<ValueType, int64_t>) {
+      int64_t value = pair[1].asInt();
+      map.emplace(std::move(key), value);
+    } else if constexpr (std::is_same_v<ValueType, std::string>) {
+      std::string value = pair[1].asString();
+      map.emplace(std::move(key), value);
+    }
+  }
+
+  // Construct the corresponding TypeParameter
+  if constexpr (std::is_same_v<ValueType, int64_t>) {
+    return TypeParameter(std::move(LongEnumParameter(enumName, map)));
+  } else if constexpr (std::is_same_v<ValueType, std::string>) {
+    return TypeParameter(std::move(VarcharEnumParameter(enumName, map)));
+  }
+  VELOX_UNREACHABLE(
+      "Only int64_t and std::string value types are supported for enum types.");
+}
 } // namespace
 
 TypePtr Type::create(const folly::dynamic& obj) {
@@ -117,22 +149,35 @@ TypePtr Type::create(const folly::dynamic& obj) {
     return deserializedTypeCache().get(id);
   }
 
+  auto typeName = obj["type"].asString();
+  if (isDecimalName(typeName)) {
+    return DECIMAL(obj["precision"].asInt(), obj["scale"].asInt());
+  }
+
   std::vector<TypePtr> childTypes;
   if (obj.find("cTypes") != obj.items().end()) {
     childTypes = deserializeChildTypes(obj);
   }
 
-  auto typeName = obj["type"].asString();
-  if (isDecimalName(typeName)) {
-    return DECIMAL(obj["precision"].asInt(), obj["scale"].asInt());
-  }
   // Checks if 'typeName' specifies a custom type.
   if (customTypeExists(typeName)) {
     std::vector<TypeParameter> params;
-    params.reserve(childTypes.size());
-    for (auto& child : childTypes) {
-      params.emplace_back(child);
+    if (obj.find("cTypes") != obj.items().end()) {
+      params.reserve(childTypes.size());
+      for (auto& child : childTypes) {
+        params.emplace_back(child);
+      }
     }
+    if (obj.find("kLongEnumParam") != obj.items().end()) {
+      params.emplace_back(deserializeEnumParam<int64_t>(obj["kLongEnumParam"]));
+    }
+    // TODO: Add support for VarcharEnumType, serialized with parameter
+    // kVarcharEnumParam
+    // if (obj.find("kVarcharEnumParam") != obj.items().end()) {
+    //   params.emplace_back(
+    //       deserializeEnumParam<std::string>(obj["kLongEnumParam"]));
+    // }
+
     return getCustomType(typeName, params);
   }
 
