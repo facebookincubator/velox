@@ -18,6 +18,8 @@
 #include <velox/type/HugeInt.h>
 #include <vector>
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/functions/prestosql/types/BigintEnumRegistration.h"
+#include "velox/functions/prestosql/types/BigintEnumType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneRegistration.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/OpaqueCustomTypes.h"
@@ -245,7 +247,7 @@ TEST(SignatureBinderTest, decimals) {
       std::unordered_map<std::string, int> integerVariables;
       ASSERT_EQ(
           exec::SignatureBinder::tryResolveType(
-              typeSignature, {}, {}, integerVariables),
+              typeSignature, {}, {}, integerVariables, {}),
           nullptr);
     }
     // Type parameter + constraint = error.
@@ -817,6 +819,7 @@ TEST(SignatureBinderTest, logicalType) {
 
 TEST(SignatureBinderTest, customType) {
   registerTimestampWithTimeZoneType();
+  registerBigintEnumType();
 
   // Custom type as an argument type.
   {
@@ -850,6 +853,22 @@ TEST(SignatureBinderTest, customType) {
                          .build();
 
     testSignatureBinder(signature, {INTEGER()}, TIMESTAMP_WITH_TIME_ZONE());
+  }
+
+  {
+    // bigint_enum(enumParameters) -> bigint
+    auto signature = exec::FunctionSignatureBuilder()
+                         .enumVariable("enumParameters")
+                         .returnType("bigint")
+                         .argumentType("bigint_enum(enumParameters)")
+                         .build();
+    std::string enumName = "test.enum.mood";
+    std::unordered_map<std::string, int64_t> enumMap = {
+        {"CURIOUS", -2}, {"HAPPY", 0}};
+    LongEnumParameter longEnumParameter(enumName, enumMap);
+    const std::vector<TypeParameter>& typeParameters = {
+        TypeParameter(longEnumParameter)};
+    testSignatureBinder(signature, {BIGINT_ENUM(typeParameters)}, BIGINT());
   }
 
   // Unknown custom type.

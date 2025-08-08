@@ -31,6 +31,11 @@ TypePtr customTypeWithChildren(
     const std::string& name,
     const std::vector<TypePtr>& children);
 
+TypePtr getEnumType(
+    std::string enumType,
+    const std::string& enumName,
+    const std::string& valuesMap);
+
 /// Convert words with spaces to a Velox type.
 /// First check if all the words are a Velox type.
 /// Then check if the first word is a field name and the remaining words are a
