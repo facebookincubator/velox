@@ -15,7 +15,7 @@
  */
 #pragma once
 
-#include <folly/container/EvictingCacheMap.h>
+#include "velox/type/SimpleFunctionApi.h"
 
 #include "velox/type/Type.h"
 
@@ -36,6 +36,10 @@ class BigintEnumType : public BigintType {
 
   static std::string mapToString(
       std::unordered_map<std::string, int64_t> longEnumMap);
+
+  static const std::string& keyAt(
+      int64_t value,
+      const std::unordered_map<int64_t, std::string>& flippedLongEnumMap);
 
   bool equivalent(const Type& other) const override {
     return this == &other;
@@ -67,6 +71,10 @@ class BigintEnumType : public BigintType {
     return name_;
   }
 
+  const std::unordered_map<int64_t, std::string>& flippedLongEnumMap() const {
+    return flippedMap_;
+  }
+
  private:
   const std::vector<TypeParameter> parameters_;
 
@@ -83,5 +91,15 @@ inline BigintEnumTypePtr BIGINT_ENUM(
 FOLLY_ALWAYS_INLINE bool isBigintEnumType(const TypePtr& type) {
   return dynamic_cast<const BigintEnumType*>(type.get()) != nullptr;
 }
+
+// Type to use for inputs and outputs of simple functions, e.g.
+// arg_type<BigintEnum> and out_type<BigintEnum>.
+template <typename P>
+struct BigintEnumT {
+  using type = int64_t;
+  static constexpr const char* typeName = "bigint_enum(enumParameters)";
+};
+template <typename P>
+using BigintEnum = CustomType<BigintEnumT<P>>;
 
 } // namespace facebook::velox

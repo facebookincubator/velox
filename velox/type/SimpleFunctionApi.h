@@ -64,6 +64,16 @@ using S2 = IntegerVariable<6>;
 using S3 = IntegerVariable<7>;
 using S4 = IntegerVariable<8>;
 
+template <size_t id>
+struct EnumVariable {
+  static size_t getId() {
+    return id;
+  }
+};
+
+using E1 = EnumVariable<1>;
+using E2 = EnumVariable<2>;
+
 template <typename P, typename S>
 struct ShortDecimal {
  private:

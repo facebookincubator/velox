@@ -408,10 +408,16 @@ using TypePtr = std::shared_ptr<const Type>;
 /// A struct which represents the parameters for a BigintEnumType.
 /// Consists of the name of the enum and a map of string keys to bigint values.
 struct LongEnumParameter {
+  LongEnumParameter() = default;
+
   LongEnumParameter(
       std::string _name,
       std::unordered_map<std::string, int64_t> _valuesMap)
       : name{_name}, valuesMap{_valuesMap} {}
+
+  bool operator==(const LongEnumParameter& other) const {
+    return name == other.name && valuesMap == other.valuesMap;
+  }
 
   std::string name;
   std::unordered_map<std::string, int64_t> valuesMap;
@@ -420,11 +426,16 @@ struct LongEnumParameter {
 /// A struct which represents the parameters for a VarcharEnumType.
 /// Consists of the name of the enum and a map of string keys to string values.
 struct VarcharEnumParameter {
+  VarcharEnumParameter() = default;
+
   VarcharEnumParameter(
       std::string _name,
       std::unordered_map<std::string, std::string> _valuesMap)
       : name{_name}, valuesMap{_valuesMap} {}
 
+  bool operator==(const VarcharEnumParameter& other) const {
+    return name == other.name && valuesMap == other.valuesMap;
+  }
   std::string name;
   std::unordered_map<std::string, std::string> valuesMap;
 };
