@@ -58,7 +58,7 @@ class IPAddressType final : public HugeintType {
 
  public:
   static std::shared_ptr<const IPAddressType> get() {
-    static constexpr IPAddressType kInstance;
+    VELOX_CONSTEXPR_SINGLETON IPAddressType kInstance;
     return {std::shared_ptr<const IPAddressType>{}, &kInstance};
   }
 

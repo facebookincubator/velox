@@ -24,7 +24,7 @@ class SfmSketchType final : public VarbinaryType {
 
  public:
   static std::shared_ptr<const SfmSketchType> get() {
-    static constexpr SfmSketchType kInstance;
+    VELOX_CONSTEXPR_SINGLETON SfmSketchType kInstance;
     return {std::shared_ptr<const SfmSketchType>{}, &kInstance};
   }
 

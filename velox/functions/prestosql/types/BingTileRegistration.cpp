@@ -29,7 +29,7 @@ class BingTileCastOperator final : public exec::CastOperator {
 
  public:
   static std::shared_ptr<const CastOperator> get() {
-    static constexpr BingTileCastOperator kInstance;
+    VELOX_CONSTEXPR_SINGLETON BingTileCastOperator kInstance;
     return {std::shared_ptr<const CastOperator>{}, &kInstance};
   }
 

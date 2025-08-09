@@ -29,7 +29,7 @@ class UuidType final : public HugeintType {
 
  public:
   static std::shared_ptr<const UuidType> get() {
-    static constexpr UuidType kInstance;
+    VELOX_CONSTEXPR_SINGLETON UuidType kInstance;
     return {std::shared_ptr<const UuidType>{}, &kInstance};
   }
 

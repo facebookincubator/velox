@@ -25,7 +25,7 @@ class BigintTypeWithCustomComparison : public BigintType {
 
  public:
   static std::shared_ptr<const BigintTypeWithCustomComparison> get() {
-    static constexpr BigintTypeWithCustomComparison kInstance;
+    VELOX_CONSTEXPR_SINGLETON BigintTypeWithCustomComparison kInstance;
     return {
         std::shared_ptr<const BigintTypeWithCustomComparison>{}, &kInstance};
   }
@@ -84,7 +84,7 @@ class BigintTypeWithInvalidCustomComparison : public BigintType {
 
  public:
   static std::shared_ptr<const BigintTypeWithInvalidCustomComparison> get() {
-    static constexpr BigintTypeWithInvalidCustomComparison kInstance;
+    VELOX_CONSTEXPR_SINGLETON BigintTypeWithInvalidCustomComparison kInstance;
     return {
         std::shared_ptr<const BigintTypeWithInvalidCustomComparison>{},
         &kInstance};

@@ -189,7 +189,7 @@ class TimestampWithTimeZoneCastOperator final : public exec::CastOperator {
 
  public:
   static std::shared_ptr<const CastOperator> get() {
-    static constexpr TimestampWithTimeZoneCastOperator kInstance;
+    VELOX_CONSTEXPR_SINGLETON TimestampWithTimeZoneCastOperator kInstance;
     return {std::shared_ptr<const CastOperator>{}, &kInstance};
   }
 

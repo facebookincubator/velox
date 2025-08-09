@@ -27,7 +27,7 @@ class GeometryType final : public VarbinaryType {
 
  public:
   static std::shared_ptr<const GeometryType> get() {
-    static constexpr GeometryType kInstance;
+    VELOX_CONSTEXPR_SINGLETON GeometryType kInstance;
     return {std::shared_ptr<const GeometryType>{}, &kInstance};
   }
 

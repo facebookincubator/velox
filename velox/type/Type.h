@@ -35,6 +35,7 @@
 #include <velox/common/Enums.h>
 #include "velox/common/base/ClassName.h"
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/base/Macros.h"
 #include "velox/common/serialization/Serializable.h"
 #include "velox/type/HugeInt.h"
 #include "velox/type/StringView.h"
@@ -782,8 +783,9 @@ class ScalarType : public CanProvideCustomComparisonType<KIND> {
     return Type::cppSizeInBytes();
   }
 
-  // TODO: It should be constexpr starting from C++23. In such case similar
-  // places but with type parameters can be constexpr too.
+  // TODO: This and all similar functions should be constexpr starting from
+  // C++23. In such case similar places but with type parameters can be
+  // constexpr too.
   static std::shared_ptr<const ScalarType<KIND>> create() {
     static constexpr ScalarType<KIND> kInstance;
     return {std::shared_ptr<const ScalarType<KIND>>{}, &kInstance};
@@ -1451,7 +1453,7 @@ class DateType final : public IntegerType {
 
  public:
   static std::shared_ptr<const DateType> get() {
-    static constexpr DateType kInstance;
+    VELOX_CONSTEXPR_SINGLETON DateType kInstance;
     return {std::shared_ptr<const DateType>{}, &kInstance};
   }
 
@@ -1527,9 +1529,7 @@ struct TypeFactory {
 template <>
 struct TypeFactory<TypeKind::UNKNOWN> {
   static std::shared_ptr<const UnknownType> create() {
-    // TODO: It should be constexpr but old compilers for some reason fails to
-    // compile it, although it's C++20.
-    static const UnknownType kInstance;
+    VELOX_CONSTEXPR_SINGLETON UnknownType kInstance;
     return {std::shared_ptr<const UnknownType>{}, &kInstance};
   }
 };

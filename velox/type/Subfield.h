@@ -20,6 +20,7 @@
 #include <ostream>
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/base/Macros.h"
 
 namespace facebook::velox::common {
 
@@ -33,7 +34,7 @@ enum SubfieldKind {
 // Contains field name separators to be used in Tokenizer.
 struct Separators {
   static std::shared_ptr<const Separators> get() {
-    static constexpr Separators kInstance;
+    VELOX_CONSTEXPR_SINGLETON Separators kInstance;
     return {std::shared_ptr<const Separators>{}, &kInstance};
   }
 

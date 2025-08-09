@@ -62,7 +62,7 @@ class TimestampWithTimeZoneType final : public BigintType {
 
  public:
   static std::shared_ptr<const TimestampWithTimeZoneType> get() {
-    static constexpr TimestampWithTimeZoneType kInstance;
+    VELOX_CONSTEXPR_SINGLETON TimestampWithTimeZoneType kInstance;
     return {std::shared_ptr<const TimestampWithTimeZoneType>{}, &kInstance};
   }
 

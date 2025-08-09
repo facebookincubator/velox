@@ -2833,7 +2833,8 @@ class BigintTypeWithCustomComparisonCastOperator final
 
  public:
   static std::shared_ptr<const CastOperator> get() {
-    static constexpr BigintTypeWithCustomComparisonCastOperator kInstance;
+    VELOX_CONSTEXPR_SINGLETON BigintTypeWithCustomComparisonCastOperator
+        kInstance;
     return {std::shared_ptr<const CastOperator>{}, &kInstance};
   }
 
