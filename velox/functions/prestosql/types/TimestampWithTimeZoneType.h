@@ -57,11 +57,12 @@ inline Timestamp unpackTimestampUtc(int64_t dateTimeWithTimeZone) {
 /// Represents timestamp with time zone as a number of milliseconds since epoch
 /// and time zone ID.
 class TimestampWithTimeZoneType final : public BigintType {
-  TimestampWithTimeZoneType() : BigintType(true) {}
+  constexpr TimestampWithTimeZoneType()
+      : BigintType{ProvideCustomComparison{}} {}
 
  public:
   static std::shared_ptr<const TimestampWithTimeZoneType> get() {
-    static const TimestampWithTimeZoneType kInstance;
+    static constexpr TimestampWithTimeZoneType kInstance;
     return {std::shared_ptr<const TimestampWithTimeZoneType>{}, &kInstance};
   }
 

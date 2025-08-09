@@ -676,8 +676,11 @@ template <TypeKind KIND>
 struct kindCanProvideCustomComparison<
     KIND,
     std::enable_if_t<
-        TypeTraits<KIND>::isPrimitiveType && TypeTraits<KIND>::isFixedWidth>> {
-  static constexpr bool value = true;
+        TypeTraits<KIND>::isPrimitiveType && TypeTraits<KIND>::isFixedWidth>>
+    : std::true_type {};
+
+struct ProvideCustomComparison {
+  explicit ProvideCustomComparison() = default;
 };
 
 template <TypeKind KIND>
@@ -687,13 +690,10 @@ class TypeBase : public Type {
 
   constexpr explicit TypeBase() : Type{KIND, false} {}
 
-  explicit TypeBase(bool providesCustomComparison)
-      : Type{KIND, providesCustomComparison} {
-    if (providesCustomComparison) {
-      VELOX_CHECK(
-          kindCanProvideCustomComparison<KIND>::value,
-          "Custom comparisons are only supported for primitive types that are fixed width.");
-    }
+  constexpr explicit TypeBase(ProvideCustomComparison tag) : Type{KIND, true} {
+    static_assert(
+        kindCanProvideCustomComparison<KIND>::value,
+        "Custom comparisons are only supported for primitive types that are fixed width.");
   }
 
   bool isPrimitiveType() const override {
@@ -729,10 +729,7 @@ class TypeBase : public Type {
 template <TypeKind KIND>
 class CanProvideCustomComparisonType : public TypeBase<KIND> {
  public:
-  explicit CanProvideCustomComparisonType() = default;
-
-  explicit CanProvideCustomComparisonType(bool providesCustomComparison)
-      : TypeBase<KIND>{providesCustomComparison} {}
+  using TypeBase<KIND>::TypeBase;
 
   virtual int32_t compare(
       const typename TypeBase<KIND>::NativeType& /*left*/,
@@ -755,10 +752,7 @@ class CanProvideCustomComparisonType : public TypeBase<KIND> {
 template <TypeKind KIND>
 class ScalarType : public CanProvideCustomComparisonType<KIND> {
  public:
-  explicit ScalarType() = default;
-
-  explicit ScalarType(bool providesCustomComparison)
-      : CanProvideCustomComparisonType<KIND>{providesCustomComparison} {}
+  using CanProvideCustomComparisonType<KIND>::CanProvideCustomComparisonType;
 
   uint32_t size() const override {
     return 0;
@@ -1444,7 +1438,7 @@ class IntervalYearMonthType final : public IntegerType {
   }
 };
 
-FOLLY_ALWAYS_INLINE const std::shared_ptr<const IntervalYearMonthType>&
+FOLLY_ALWAYS_INLINE std::shared_ptr<const IntervalYearMonthType>
 INTERVAL_YEAR_MONTH() {
   return IntervalYearMonthType::get();
 }

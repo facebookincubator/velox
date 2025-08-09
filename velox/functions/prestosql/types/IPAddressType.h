@@ -54,11 +54,11 @@ tryGetIPv6asInt128FromString(const std::string& ipAddressStr) {
 } // namespace ipaddress
 
 class IPAddressType final : public HugeintType {
-  IPAddressType() : HugeintType(/*providesCustomComparison*/ true) {}
+  constexpr IPAddressType() : HugeintType{ProvideCustomComparison{}} {}
 
  public:
   static std::shared_ptr<const IPAddressType> get() {
-    static const IPAddressType kInstance;
+    static constexpr IPAddressType kInstance;
     return {std::shared_ptr<const IPAddressType>{}, &kInstance};
   }
 
