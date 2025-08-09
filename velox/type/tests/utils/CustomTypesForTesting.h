@@ -19,7 +19,7 @@
 
 namespace facebook::velox::test {
 /// A custom type that provides custom comparison and hash functions.
-class BigintTypeWithCustomComparison : public BigintType {
+class BigintTypeWithCustomComparison final : public BigintType {
   constexpr BigintTypeWithCustomComparison()
       : BigintType{ProvideCustomComparison{}} {}
 
@@ -78,7 +78,7 @@ BIGINT_TYPE_WITH_CUSTOM_COMPARISON() {
 
 /// A custom type that declares it providesCustomComparison but does not
 /// implement the compare or hash functions. This is not supported.
-class BigintTypeWithInvalidCustomComparison : public BigintType {
+class BigintTypeWithInvalidCustomComparison final : public BigintType {
   constexpr BigintTypeWithInvalidCustomComparison()
       : BigintType{ProvideCustomComparison{}} {}
 

@@ -1351,7 +1351,7 @@ class IntervalDayTimeType final : public BigintType {
 
  public:
   static std::shared_ptr<const IntervalDayTimeType> get() {
-    static constexpr IntervalDayTimeType kInstance;
+    VELOX_CONSTEXPR_SINGLETON IntervalDayTimeType kInstance;
     return {std::shared_ptr<const IntervalDayTimeType>{}, &kInstance};
   }
 
@@ -1403,7 +1403,7 @@ class IntervalYearMonthType final : public IntegerType {
 
  public:
   static std::shared_ptr<const IntervalYearMonthType> get() {
-    static constexpr IntervalYearMonthType kInstance;
+    VELOX_CONSTEXPR_SINGLETON IntervalYearMonthType kInstance;
     return {std::shared_ptr<const IntervalYearMonthType>{}, &kInstance};
   }
 
