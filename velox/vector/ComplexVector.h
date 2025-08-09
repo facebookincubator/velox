@@ -450,7 +450,7 @@ class ArrayVector : public ArrayVectorBase {
       velox::memory::MemoryPool* pool,
       std::shared_ptr<const Type> type,
       BufferPtr nulls,
-      size_t length,
+      vector_size_t length,
       BufferPtr offsets,
       BufferPtr lengths,
       VectorPtr elements,
