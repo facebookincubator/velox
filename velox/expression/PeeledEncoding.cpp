@@ -26,7 +26,7 @@ namespace facebook::velox::exec {
     DecodedVector& decodedVector,
     bool canPeelsHaveNulls,
     std::vector<VectorPtr>& peeledVectors) {
-  std::shared_ptr<PeeledEncoding> peeledEncoding(new PeeledEncoding());
+  auto peeledEncoding = std::make_shared<PeeledEncoding>();
   if (peeledEncoding->peelInternal(
           vectorsToPeel,
           rows,
