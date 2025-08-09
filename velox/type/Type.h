@@ -507,13 +507,13 @@ struct TypeParameter {
 class Type : public Tree<const TypePtr>, public velox::ISerializable {
  public:
   constexpr explicit Type(TypeKind kind, bool providesCustomComparison = false)
-      : kind_{kind}, providesCustomComparison_(providesCustomComparison) {}
+      : kind_{kind}, providesCustomComparison_{providesCustomComparison} {}
 
   TypeKind kind() const {
     return kind_;
   }
 
-  virtual ~Type() = default;
+  ~Type() override = default;
 
   /// This convenience method makes pattern matching easier. Rather than having
   /// to know the implementation type up front, just use as<TypeKind::MAP> (for
@@ -729,7 +729,7 @@ class TypeBase : public Type {
 template <TypeKind KIND>
 class CanProvideCustomComparisonType : public TypeBase<KIND> {
  public:
-  constexpr explicit CanProvideCustomComparisonType() = default;
+  explicit CanProvideCustomComparisonType() = default;
 
   explicit CanProvideCustomComparisonType(bool providesCustomComparison)
       : TypeBase<KIND>{providesCustomComparison} {}
@@ -755,7 +755,7 @@ class CanProvideCustomComparisonType : public TypeBase<KIND> {
 template <TypeKind KIND>
 class ScalarType : public CanProvideCustomComparisonType<KIND> {
  public:
-  constexpr explicit ScalarType() = default;
+  explicit ScalarType() = default;
 
   explicit ScalarType(bool providesCustomComparison)
       : CanProvideCustomComparisonType<KIND>{providesCustomComparison} {}
@@ -788,7 +788,9 @@ class ScalarType : public CanProvideCustomComparisonType<KIND> {
     return Type::cppSizeInBytes();
   }
 
-  FOLLY_NOINLINE static std::shared_ptr<const ScalarType<KIND>> create() {
+  // TODO: It should be constexpr starting from C++23. In such case similar
+  // places but with type parameters can be constexpr too.
+  static std::shared_ptr<const ScalarType<KIND>> create() {
     static constexpr ScalarType<KIND> kInstance;
     return {std::shared_ptr<const ScalarType<KIND>>{}, &kInstance};
   }
@@ -878,13 +880,13 @@ class DecimalType : public ScalarType<KIND> {
   const std::vector<TypeParameter> parameters_;
 };
 
-class ShortDecimalType : public DecimalType<TypeKind::BIGINT> {
+class ShortDecimalType final : public DecimalType<TypeKind::BIGINT> {
  public:
   ShortDecimalType(int precision, int scale)
       : DecimalType<TypeKind::BIGINT>(precision, scale) {}
 };
 
-class LongDecimalType : public DecimalType<TypeKind::HUGEINT> {
+class LongDecimalType final : public DecimalType<TypeKind::HUGEINT> {
  public:
   LongDecimalType(int precision, int scale)
       : DecimalType<TypeKind::HUGEINT>(precision, scale) {}
@@ -922,7 +924,7 @@ std::pair<uint8_t, uint8_t> getDecimalPrecisionScale(const Type& type);
 
 class UnknownType : public CanProvideCustomComparisonType<TypeKind::UNKNOWN> {
  public:
-  constexpr explicit UnknownType() = default;
+  explicit UnknownType() = default;
 
   explicit UnknownType(bool proivdesCustomComparison)
       : CanProvideCustomComparisonType<TypeKind::UNKNOWN>(
@@ -1351,15 +1353,13 @@ constexpr long kMillisInHour = 60 * kMillisInMinute;
 constexpr long kMillisInDay = 24 * kMillisInHour;
 
 /// Time interval in milliseconds.
-class IntervalDayTimeType : public BigintType {
- private:
+class IntervalDayTimeType final : public BigintType {
   IntervalDayTimeType() = default;
 
  public:
-  static const std::shared_ptr<const IntervalDayTimeType>& get() {
-    static const std::shared_ptr<const IntervalDayTimeType> kType{
-        new IntervalDayTimeType()};
-    return kType;
+  static std::shared_ptr<const IntervalDayTimeType> get() {
+    static constexpr IntervalDayTimeType kInstance;
+    return {std::shared_ptr<const IntervalDayTimeType>{}, &kInstance};
   }
 
   const char* name() const override {
@@ -1393,7 +1393,7 @@ class IntervalDayTimeType : public BigintType {
   }
 };
 
-FOLLY_ALWAYS_INLINE const std::shared_ptr<const IntervalDayTimeType>&
+FOLLY_ALWAYS_INLINE std::shared_ptr<const IntervalDayTimeType>
 INTERVAL_DAY_TIME() {
   return IntervalDayTimeType::get();
 }
@@ -1405,15 +1405,13 @@ FOLLY_ALWAYS_INLINE bool Type::isIntervalDayTime() const {
 
 constexpr long kMonthInYear = 12;
 /// Time interval in months.
-class IntervalYearMonthType : public IntegerType {
- private:
+class IntervalYearMonthType final : public IntegerType {
   IntervalYearMonthType() = default;
 
  public:
-  static const std::shared_ptr<const IntervalYearMonthType>& get() {
-    static const std::shared_ptr<const IntervalYearMonthType> kType{
-        new IntervalYearMonthType()};
-    return kType;
+  static std::shared_ptr<const IntervalYearMonthType> get() {
+    static constexpr IntervalYearMonthType kInstance;
+    return {std::shared_ptr<const IntervalYearMonthType>{}, &kInstance};
   }
 
   const char* name() const override {
@@ -1457,14 +1455,13 @@ FOLLY_ALWAYS_INLINE bool Type::isIntervalYearMonth() const {
 }
 
 /// Date is represented as the number of days since epoch start using int32_t.
-class DateType : public IntegerType {
- private:
+class DateType final : public IntegerType {
   DateType() = default;
 
  public:
-  static const std::shared_ptr<const DateType>& get() {
-    static const std::shared_ptr<const DateType> kType{new DateType()};
-    return kType;
+  static std::shared_ptr<const DateType> get() {
+    static constexpr DateType kInstance;
+    return {std::shared_ptr<const DateType>{}, &kInstance};
   }
 
   const char* name() const override {
@@ -1501,7 +1498,7 @@ class DateType : public IntegerType {
   }
 };
 
-FOLLY_ALWAYS_INLINE const std::shared_ptr<const DateType>& DATE() {
+FOLLY_ALWAYS_INLINE std::shared_ptr<const DateType> DATE() {
   return DateType::get();
 }
 
@@ -1538,7 +1535,9 @@ struct TypeFactory {
 
 template <>
 struct TypeFactory<TypeKind::UNKNOWN> {
-  FOLLY_NOINLINE static std::shared_ptr<const UnknownType> create() {
+  static std::shared_ptr<const UnknownType> create() {
+    // TODO: It should be constexpr but old compilers for some reason fails to
+    // compile it, although it's C++20.
     static const UnknownType kInstance;
     return {std::shared_ptr<const UnknownType>{}, &kInstance};
   }
