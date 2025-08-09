@@ -106,6 +106,10 @@ class LocalSelectivityVector;
 ///                    DictWithNulls(Dict3(Flat2))
 ///    peel: DictNoNulls
 class PeeledEncoding {
+  struct PrivateTag {
+    explicit PrivateTag() = default;
+  };
+
  public:
   /// Factory method for constructing a PeeledEncoding object only if peeling
   /// was successful. Takes a set of vectors and peels all the common encoding
@@ -178,9 +182,11 @@ class PeeledEncoding {
     });
   }
 
- private:
-  PeeledEncoding() = default;
+  // This constructor is public only for make_shared and can't be used,
+  // to create a PeeledEncoding use PeeledEncoding::peel(...)
+  explicit PeeledEncoding(PrivateTag) {}
 
+ private:
   // Contains the actual implementation of peeling. Return true is peeling was
   // successful.
   bool peelInternal(
