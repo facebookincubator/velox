@@ -952,6 +952,28 @@ void TextRowReader::readElement(
   bool isNull = false;
   switch (t->kind()) {
     case TypeKind::INTEGER:
+      if (t->isDate()) {
+        // If the type is a date, convert the string to DateType.
+        // The string is expected to be in the format YYYY-MM-DD.
+        // If string is malformed, isNull is set true.
+        putValue<int32_t, int32_t>(
+        [this](TextRowReader& th, bool& isNull, DelimType& delim) {
+            const std::string& str = getString(*this, isNull, delim);
+            const std::string& str = getString(*this, isNull, delim);
+            int32_t days=0;
+            try {
+              days = DATE()->toDays(str.c_str(), str.size());
+            } catch (VeloxException& e) {
+              isNull = true;
+              throw;
+            }
+            return days;
+          },
+          data,
+          insertionRow,
+          delim);
+        break;
+      }
       switch (reqT->kind()) {
         case TypeKind::BIGINT:
           putValue<int32_t, int64_t>(
