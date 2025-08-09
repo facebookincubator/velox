@@ -918,11 +918,8 @@ std::pair<uint8_t, uint8_t> getDecimalPrecisionScale(const Type& type);
 
 class UnknownType : public CanProvideCustomComparisonType<TypeKind::UNKNOWN> {
  public:
-  explicit UnknownType() = default;
-
-  explicit UnknownType(bool proivdesCustomComparison)
-      : CanProvideCustomComparisonType<TypeKind::UNKNOWN>(
-            proivdesCustomComparison) {}
+  using CanProvideCustomComparisonType<
+      TypeKind::UNKNOWN>::CanProvideCustomComparisonType;
 
   uint32_t size() const override {
     return 0;
