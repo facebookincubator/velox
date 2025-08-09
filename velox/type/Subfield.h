@@ -32,16 +32,14 @@ enum SubfieldKind {
 
 // Contains field name separators to be used in Tokenizer.
 struct Separators {
-  static const std::shared_ptr<Separators>& get() {
-    static const std::shared_ptr<Separators> instance =
-        std::make_shared<Separators>();
-    return instance;
+  static std::shared_ptr<const Separators> get() {
+    static constexpr Separators kInstance;
+    return {std::shared_ptr<const Separators>{}, &kInstance};
   }
 
   bool isSeparator(char c) const {
-    return (
-        c == closeBracket || c == dot || c == openBracket || c == quote ||
-        c == wildCard);
+    return c == closeBracket || c == dot || c == openBracket || c == quote ||
+        c == wildCard;
   }
 
   char backSlash = '\\';
