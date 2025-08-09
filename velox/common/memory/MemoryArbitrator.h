@@ -240,12 +240,8 @@ class MemoryArbitrator {
     Stats() = default;
 
     Stats operator-(const Stats& other) const;
-    bool operator==(const Stats& other) const;
-    bool operator!=(const Stats& other) const;
-    bool operator<(const Stats& other) const;
-    bool operator>(const Stats& other) const;
-    bool operator>=(const Stats& other) const;
-    bool operator<=(const Stats& other) const;
+    bool operator==(const Stats& other) const = default;
+    auto operator<=>(const Stats& other) const = default;
 
     bool empty() const {
       return numRequests == 0;
@@ -321,8 +317,7 @@ class MemoryReclaimer {
 
     void reset();
 
-    bool operator==(const Stats& other) const;
-    bool operator!=(const Stats& other) const;
+    bool operator==(const Stats& other) const = default;
     Stats& operator+=(const Stats& other);
   };
 
