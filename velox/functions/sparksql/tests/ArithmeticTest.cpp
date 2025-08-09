@@ -216,6 +216,10 @@ class ArithmeticTest : public SparkFunctionBaseTest {
       const std::optional<T> b) {
     return evaluateOnce<T>("checked_subtract(c0, c1)", a, b);
   }
+  template <typename T>
+  std::optional<T> checkedAbs(const std::optional<T> a) {
+    return evaluateOnce<T>("checked_abs(c0)", a);
+  }
 
   template <typename T>
   std::optional<T> abs(const std::optional<T> input) {
@@ -269,6 +273,21 @@ class ArithmeticTest : public SparkFunctionBaseTest {
       const std::optional<T> b,
       const std::string& errorMessage) {
     assertErrorForCheckedArithmetic("checked_subtract", a, b, errorMessage);
+  }
+  template <typename T>
+  void assertErrorForCheckedAbs(
+      const std::optional<T> a,
+      const std::string& errorMessage) {
+    auto res = evaluateOnce<T>("try(checked_abs(c0))", a);
+    ASSERT_TRUE(!res.has_value());
+    try {
+      evaluateOnce<T>("checked_abs(c0)", a);
+      FAIL() << "Expected an error";
+    } catch (const std::exception& e) {
+      ASSERT_TRUE(std::string(e.what()).find(errorMessage) != std::string::npos)
+          << "Expected error message to contain '" << errorMessage
+          << "', but got '" << e.what() << "'";
+    }
   }
 
   static constexpr float kNan = std::numeric_limits<float>::quiet_NaN();
@@ -758,6 +777,31 @@ TEST_F(ArithmeticTest, abs) {
   EXPECT_EQ(abs<double>(-99999.9999), 99999.9999);
   EXPECT_EQ(
       abs<double>(std::numeric_limits<double>::lowest()),
+      std::numeric_limits<double>::max());
+}
+
+TEST_F(ArithmeticTest, checkedAbs) {
+  assertErrorForCheckedAbs<int8_t>(
+      std::numeric_limits<int8_t>::min(), "Arithmetic overflow: abs(-128)");
+  assertErrorForCheckedAbs<int16_t>(
+      std::numeric_limits<int16_t>::min(), "Arithmetic overflow: abs(-32768)");
+  assertErrorForCheckedAbs<int32_t>(
+      std::numeric_limits<int32_t>::min(),
+      "Arithmetic overflow: abs(-2147483648)");
+  assertErrorForCheckedAbs<int64_t>(
+      std::numeric_limits<int64_t>::min(),
+      "Arithmetic overflow: abs(-9223372036854775808)");
+  EXPECT_EQ(checkedAbs<int8_t>(-127), 127);
+  EXPECT_EQ(checkedAbs<int16_t>(-32767), 32767);
+  EXPECT_EQ(checkedAbs<int32_t>(-2147483647), 2147483647);
+  EXPECT_EQ(checkedAbs<int64_t>(-9223372036854775807), 9223372036854775807);
+  EXPECT_EQ(checkedAbs<float>(-99999.9999f), 99999.9999f);
+  EXPECT_EQ(
+      checkedAbs<float>(std::numeric_limits<float>::lowest()),
+      std::numeric_limits<float>::max());
+  EXPECT_EQ(checkedAbs<double>(-99999.9999), 99999.9999);
+  EXPECT_EQ(
+      checkedAbs<double>(std::numeric_limits<double>::lowest()),
       std::numeric_limits<double>::max());
 }
 

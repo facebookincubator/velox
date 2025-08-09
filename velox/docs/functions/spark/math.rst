@@ -93,6 +93,11 @@ Mathematical Functions
     Returns the result of subtracting y from x. The types of x and y must be the same.
     For integral types, overflow results in an error. Corresponds to Spark's operator ``-`` with ``failOnError`` as true.
 
+.. function:: checked_abs(x) -> [same as x]
+
+    Returns the absolute value of ``x``. For integral types, when ``x`` is negative minimum
+    value, overflow results in an error. Corresponds to Spark's ``abs`` function with ``failOnError`` as true.
+
 .. spark:function:: cos(x) -> double
 
     Returns the cosine of ``x``.
