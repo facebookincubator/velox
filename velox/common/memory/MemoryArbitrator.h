@@ -240,8 +240,8 @@ class MemoryArbitrator {
     Stats() = default;
 
     Stats operator-(const Stats& other) const;
-    bool operator==(const Stats& other) const = default;
-    auto operator<=>(const Stats& other) const = default;
+    bool operator==(const Stats& other) const;
+    std::strong_ordering operator<=>(const Stats& other) const;
 
     bool empty() const {
       return numRequests == 0;

@@ -387,6 +387,62 @@ MemoryArbitrator::Stats MemoryArbitrator::Stats::operator-(
   return result;
 }
 
+bool MemoryArbitrator::Stats::operator==(const Stats& other) const {
+  return std::tie(
+             numRequests,
+             numSucceeded,
+             numAborted,
+             numFailures,
+             reclaimedFreeBytes,
+             reclaimedUsedBytes,
+             maxCapacityBytes,
+             freeCapacityBytes,
+             freeReservedCapacityBytes,
+             numNonReclaimableAttempts) ==
+      std::tie(
+             other.numRequests,
+             other.numSucceeded,
+             other.numAborted,
+             other.numFailures,
+             other.reclaimedFreeBytes,
+             other.reclaimedUsedBytes,
+             other.maxCapacityBytes,
+             other.freeCapacityBytes,
+             other.freeReservedCapacityBytes,
+             other.numNonReclaimableAttempts);
+}
+
+std::strong_ordering MemoryArbitrator::Stats::operator<=>(
+    const Stats& other) const {
+  uint32_t gtCount{0};
+  uint32_t ltCount{0};
+#define UPDATE_COUNTER(counter)           \
+  do {                                    \
+    if (counter < other.counter) {        \
+      ++ltCount;                          \
+    } else if (counter > other.counter) { \
+      ++gtCount;                          \
+    }                                     \
+  } while (0);
+
+  UPDATE_COUNTER(numRequests);
+  UPDATE_COUNTER(numSucceeded);
+  UPDATE_COUNTER(numAborted);
+  UPDATE_COUNTER(numFailures);
+  UPDATE_COUNTER(reclaimedFreeBytes);
+  UPDATE_COUNTER(reclaimedUsedBytes);
+  UPDATE_COUNTER(numNonReclaimableAttempts);
+#undef UPDATE_COUNTER
+  VELOX_CHECK(
+      !((gtCount > 0) && (ltCount > 0)),
+      "gtCount {} ltCount {}",
+      gtCount,
+      ltCount);
+  return ltCount > 0 ? std::strong_ordering::less
+      : gtCount > 0  ? std::strong_ordering::greater
+                     : std::strong_ordering::equal;
+}
+
 MemoryArbitrationContext::MemoryArbitrationContext(const MemoryPool* requestor)
     : type(Type::kLocal), requestorName(requestor->name()) {}
 
