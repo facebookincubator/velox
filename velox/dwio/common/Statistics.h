@@ -534,34 +534,15 @@ class Statistics {
 };
 
 struct ColumnReaderStatistics {
-  void clear() {
-    pageScanTime.store(0, std::memory_order_relaxed);
-    flattenStringDictionaryValues = 0;
-  }
-
-  void incPageScanTime(uint64_t v) {
-    pageScanTime.fetch_add(v, std::memory_order_relaxed);
-  }
-
   // Number of rows returned by string dictionary reader that is flattened
   // instead of keeping dictionary encoding.
   int64_t flattenStringDictionaryValues{0};
 
-  std::atomic<uint64_t> pageScanTime{0};
+  // Total time spent in loading pages, in nanoseconds.
+  uint64_t pageLoadTimeNs{0};
 };
 
 struct RuntimeStatistics {
-  void clear() {
-    skippedSplits = 0;
-    processedSplits = 0;
-    skippedSplitBytes = 0;
-    skippedStrides = 0;
-    processedStrides = 0;
-    footerBufferOverread = 0;
-    numStripes = 0;
-    columnReaderStatistics.clear();
-  }
-
   // Number of splits skipped based on statistics.
   int64_t skippedSplits{0};
 
@@ -619,9 +600,10 @@ struct RuntimeStatistics {
           "flattenStringDictionaryValues",
           RuntimeMetric(columnReaderStatistics.flattenStringDictionaryValues));
     }
-    if (columnReaderStatistics.pageScanTime > 0) {
+    if (columnReaderStatistics.pageLoadTimeNs > 0) {
       result.emplace(
-          "pageScanTime", RuntimeCounter(columnReaderStatistics.pageScanTime));
+          "pageLoadTimeNs",
+          RuntimeMetric(columnReaderStatistics.pageLoadTimeNs));
     }
     return result;
   }

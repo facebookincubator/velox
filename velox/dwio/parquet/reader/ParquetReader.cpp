@@ -1332,9 +1332,8 @@ class ParquetRowReader::Impl {
   void updateRuntimeStats(dwio::common::RuntimeStatistics& stats) const {
     stats.skippedStrides += skippedStrides_;
     stats.processedStrides += rowGroupIds_.size();
-    stats.columnReaderStatistics.pageScanTime.fetch_add(
-        columnReaderStats_.pageScanTime.load(std::memory_order_relaxed),
-        std::memory_order_relaxed);
+    stats.columnReaderStatistics.pageLoadTimeNs +=
+        columnReaderStats_.pageLoadTimeNs;
   }
 
   void resetFilterCaches() {

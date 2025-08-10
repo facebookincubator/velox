@@ -42,7 +42,6 @@ class ParquetParams : public dwio::common::FormatParams {
         metaData_(metaData),
         sessionTimezone_(sessionTimezone),
         timestampPrecision_(timestampPrecision) {}
-
   std::unique_ptr<dwio::common::FormatData> toFormatData(
       const std::shared_ptr<const dwio::common::TypeWithId>& type,
       const common::ScanSpec& scanSpec) override;
