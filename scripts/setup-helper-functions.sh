@@ -209,7 +209,7 @@ EOF
   fi
 }
 
-if [[ "${BASH_SOURCE[0]}" == "${0}" && "$1" == "detect_sve_flags" ]]; then
+if [[ ${BASH_SOURCE[0]} == "${0}" && $1 == "detect_sve_flags" ]]; then
   detect_sve_flags
 fi
 
