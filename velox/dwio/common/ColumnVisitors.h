@@ -82,7 +82,7 @@ class ExtractToHook {
   using HookType = THook;
   static constexpr bool kSkipNulls = THook::kSkipNulls;
 
-  explicit ExtractToHook(SelectiveColumnReader* reader, ValueHook* hook)
+  ExtractToHook(SelectiveColumnReader* reader, ValueHook* hook)
       : reader_(reader), hook_(*reinterpret_cast<THook*>(hook)) {}
 
   bool acceptsNulls() {
@@ -115,7 +115,7 @@ class ExtractToGenericHook {
   using HookType = ValueHook;
   static constexpr bool kSkipNulls = false;
 
-  explicit ExtractToGenericHook(SelectiveColumnReader* reader, ValueHook* hook)
+  ExtractToGenericHook(SelectiveColumnReader* reader, ValueHook* hook)
       : reader_(reader), hook_(hook) {}
 
   bool acceptsNulls() const {
