@@ -15,7 +15,7 @@
  */
 
 #include "velox/connectors/hive/storage_adapters/abfs/AzureClientProviderFactories.h"
-#include "velox/connectors/hive/storage_adapters/abfs/DefaultAzureClientProviders.h"
+#include "velox/connectors/hive/storage_adapters/abfs/AzureClientProviders.h"
 
 #include <folly/Synchronized.h>
 #include <unordered_map>
@@ -33,42 +33,21 @@ azureClientFactoryRegistry() {
   return factories;
 }
 
-std::unique_ptr<AzureClientProvider> defaultAzureClientProviderFactory(
-    const std::shared_ptr<AbfsPath>& abfsPath,
-    const config::ConfigBase& config) {
-  auto authTypeKey = fmt::format(
-      "{}.{}", kAzureAccountAuthType, abfsPath->accountNameWithSuffix());
-  std::string authType = kAzureSharedKeyAuthType;
-  if (config.valueExists(authTypeKey)) {
-    authType = config.get<std::string>(authTypeKey).value();
-  }
-
-  if (authType == kAzureSharedKeyAuthType) {
-    return std::make_unique<SharedKeyAzureClientProvider>(abfsPath, config);
-  }
-  if (authType == kAzureOAuthAuthType) {
-    return std::make_unique<OAuthAzureClientProvider>(abfsPath, config);
-  }
-  if (authType == kAzureSASAuthType) {
-    return std::make_unique<FixedSasAzureClientProvider>(abfsPath, config);
-  }
+void factoryNotRegistered(const std::string& account) {
   VELOX_USER_FAIL(
-      "Unsupported auth type {}, supported auth types are SharedKey, OAuth and SAS.",
-      authType);
+      "No AzureClientProviderFactory registered for account '{}'. Please use "
+      "`registerAzureClientProviderFactory` to register a factory for the "
+      "account before using it.",
+      account);
 }
 
 } // namespace
 
 void AzureClientProviderFactories::registerFactory(
     const std::string& account,
-    const AzureClientProviderFactory& factory,
-    bool overwrite) {
+    const AzureClientProviderFactory& factory) {
   azureClientFactoryRegistry().withWLock([&](auto& factories) {
     auto it = factories.find(account);
-    VELOX_USER_CHECK(
-        overwrite || it == factories.end(),
-        "AzureClientProvider for account '{}' is already registered.",
-        account);
     factories[account] = factory;
   });
 }
@@ -84,29 +63,28 @@ AzureClientProviderFactories::getClientFactory(const std::string& account) {
       });
 }
 
-std::unique_ptr<AzureBlobClient> AzureClientProviderFactories::getBlobClient(
+std::unique_ptr<AzureBlobClient>
+AzureClientProviderFactories::getReadFileClient(
     const std::shared_ptr<AbfsPath>& abfsPath,
     const config::ConfigBase& config) {
   if (const auto factory = getClientFactory(abfsPath->accountName())) {
-    return factory.value()(abfsPath, config)->getReadFileClient();
+    return factory.value()(abfsPath->accountName())
+        ->getReadFileClient(abfsPath, config);
   }
-  return defaultAzureClientProviderFactory(abfsPath, config)
-      ->getReadFileClient();
+  factoryNotRegistered(abfsPath->accountName());
+  VELOX_UNREACHABLE();
 }
 
 std::unique_ptr<AzureDataLakeFileClient>
-AzureClientProviderFactories::getDataLakeFileClient(
+AzureClientProviderFactories::getWriteFileClient(
     const std::shared_ptr<AbfsPath>& abfsPath,
     const config::ConfigBase& config) {
-  if (getClientFactory(abfsPath->accountName())) {
-    const auto factory =
-        azureClientFactoryRegistry().withRLock([&](const auto& factories) {
-          return factories.at(abfsPath->accountName());
-        });
-    return factory(abfsPath, config)->getWriteFileClient();
+  if (const auto factory = getClientFactory(abfsPath->accountName())) {
+    return factory.value()(abfsPath->accountName())
+        ->getWriteFileClient(abfsPath, config);
   }
-  return defaultAzureClientProviderFactory(abfsPath, config)
-      ->getWriteFileClient();
+  factoryNotRegistered(abfsPath->accountName());
+  VELOX_UNREACHABLE();
 }
 
 } // namespace facebook::velox::filesystems

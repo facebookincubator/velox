@@ -18,7 +18,7 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AzureClientProviderFactories.h"
-#include "velox/connectors/hive/storage_adapters/abfs/DefaultAzureClientProviders.h"
+#include "velox/connectors/hive/storage_adapters/abfs/AzureClientProviders.h"
 #include "velox/connectors/hive/storage_adapters/abfs/RegisterAbfsFileSystem.h"
 
 using namespace facebook::velox;
@@ -28,19 +28,36 @@ namespace {
 
 class DummyAzureClientProvider final : public AzureClientProvider {
  public:
-  DummyAzureClientProvider(
-      const std::shared_ptr<AbfsPath>& abfsPath,
-      const config::ConfigBase& config)
-      : AzureClientProvider(abfsPath) {}
-
-  std::unique_ptr<AzureBlobClient> getReadFileClient() override {
-    VELOX_FAIL("Not implemented.");
+  std::unique_ptr<AzureBlobClient> getReadFileClient(
+      const std::shared_ptr<AbfsPath>& path,
+      const config::ConfigBase& config) override {
+    VELOX_FAIL("DummyAzureClientProvider: Not implemented.");
   }
 
-  std::unique_ptr<AzureDataLakeFileClient> getWriteFileClient() override {
-    VELOX_FAIL("Not implemented.");
+  std::unique_ptr<AzureDataLakeFileClient> getWriteFileClient(
+      const std::shared_ptr<AbfsPath>& path,
+      const config::ConfigBase& config) override {
+    VELOX_FAIL("DummyAzureClientProvider: Not implemented.");
   }
 };
+
+void registerOAuthClientProviderFactory(const std::string& accountName) {
+  registerAzureClientProviderFactory(accountName, [](const auto& accountName) {
+    return std::make_unique<OAuthAzureClientProvider>();
+  });
+}
+
+void registerFixedSasClientProviderFactory(const std::string& accountName) {
+  registerAzureClientProviderFactory(accountName, [](const auto& accountName) {
+    return std::make_unique<FixedSasAzureClientProvider>();
+  });
+}
+
+void registerSharedKeyClientProviderFactory(const std::string& accountName) {
+  registerAzureClientProviderFactory(accountName, [](const auto& accountName) {
+    return std::make_unique<SharedKeyAzureClientProvider>();
+  });
+}
 
 } // namespace
 
@@ -50,60 +67,46 @@ TEST(AzureClientProviderFactoriesTest, createFromConfig) {
 
   {
     // OAuth auth type.
+    registerOAuthClientProviderFactory("efg");
     const config::ConfigBase config(
-        {{"fs.azure.account.auth.type.efg.dfs.core.windows.net", "OAuth"},
-         {"fs.azure.account.oauth2.client.id.efg.dfs.core.windows.net", "123"},
+        {{"fs.azure.account.oauth2.client.id.efg.dfs.core.windows.net", "123"},
          {"fs.azure.account.oauth2.client.secret.efg.dfs.core.windows.net",
           "456"},
          {"fs.azure.account.oauth2.client.endpoint.efg.dfs.core.windows.net",
           "https://login.microsoftonline.com/{TENANTID}/oauth2/token"}},
         false);
     ASSERT_NE(
-        AzureClientProviderFactories::getBlobClient(abfsPath, config), nullptr);
+        AzureClientProviderFactories::getReadFileClient(abfsPath, config),
+        nullptr);
     ASSERT_NE(
-        AzureClientProviderFactories::getDataLakeFileClient(abfsPath, config),
+        AzureClientProviderFactories::getWriteFileClient(abfsPath, config),
         nullptr);
   }
 
   {
     // SharedKey auth type.
+    registerSharedKeyClientProviderFactory("efg");
     const config::ConfigBase config(
-        {{"fs.azure.account.auth.type.efg.dfs.core.windows.net", "SharedKey"},
-         {"fs.azure.account.key.efg.dfs.core.windows.net", "456"}},
-        false);
+        {{"fs.azure.account.key.efg.dfs.core.windows.net", "456"}}, false);
     ASSERT_NE(
-        AzureClientProviderFactories::getBlobClient(abfsPath, config), nullptr);
+        AzureClientProviderFactories::getReadFileClient(abfsPath, config),
+        nullptr);
     ASSERT_NE(
-        AzureClientProviderFactories::getDataLakeFileClient(abfsPath, config),
+        AzureClientProviderFactories::getWriteFileClient(abfsPath, config),
         nullptr);
   }
 
   {
     // SAS auth type.
+    registerFixedSasClientProviderFactory("efg");
     const config::ConfigBase config(
-        {{"fs.azure.account.auth.type.efg.dfs.core.windows.net", "SAS"},
-         {"fs.azure.sas.fixed.token.efg.dfs.core.windows.net", "456"}},
-        false);
+        {{"fs.azure.sas.fixed.token.efg.dfs.core.windows.net", "456"}}, false);
     ASSERT_NE(
-        AzureClientProviderFactories::getBlobClient(abfsPath, config), nullptr);
-    ASSERT_NE(
-        AzureClientProviderFactories::getDataLakeFileClient(abfsPath, config),
+        AzureClientProviderFactories::getReadFileClient(abfsPath, config),
         nullptr);
-  }
-
-  {
-    // Invalid auth type.
-    const config::ConfigBase config(
-        {{"fs.azure.account.auth.type.efg.dfs.core.windows.net", "Custom"},
-         {"fs.azure.account.key.efg.dfs.core.windows.net", "456"}},
-        false);
-    const std::string error =
-        "Unsupported auth type Custom, supported auth types are SharedKey, OAuth and SAS.";
-    VELOX_ASSERT_USER_THROW(
-        AzureClientProviderFactories::getBlobClient(abfsPath, config), error);
-    VELOX_ASSERT_USER_THROW(
-        AzureClientProviderFactories::getDataLakeFileClient(abfsPath, config),
-        error);
+    ASSERT_NE(
+        AzureClientProviderFactories::getWriteFileClient(abfsPath, config),
+        nullptr);
   }
 }
 
@@ -113,35 +116,21 @@ TEST(AzureClientProviderFactoriesTest, registerAzureClientFactory) {
 
   registerAzureClientProviderFactory(
       "efg",
-      [](const std::shared_ptr<AbfsPath>& path,
-         const config::ConfigBase& config)
-          -> std::unique_ptr<AzureClientProvider> {
-        return std::make_unique<DummyAzureClientProvider>(path, config);
+      [](const std::string& account) -> std::unique_ptr<AzureClientProvider> {
+        return std::make_unique<DummyAzureClientProvider>();
       });
 
   ASSERT_TRUE(
       AzureClientProviderFactories::getClientFactory("efg").has_value());
   VELOX_ASSERT_THROW(
-      AzureClientProviderFactories::getBlobClient(
+      AzureClientProviderFactories::getReadFileClient(
           abfsPath, config::ConfigBase({})),
-      "Not implemented.");
+      "DummyAzureClientProvider: Not implemented.");
   VELOX_ASSERT_THROW(
-      AzureClientProviderFactories::getDataLakeFileClient(
+      AzureClientProviderFactories::getWriteFileClient(
           abfsPath, config::ConfigBase({})),
-      "Not implemented.");
+      "DummyAzureClientProvider: Not implemented.");
 
   ASSERT_FALSE(
       AzureClientProviderFactories::getClientFactory("efg2").has_value());
-
-  // Registering again with overwrite = false should throw an error.
-  VELOX_ASSERT_USER_THROW(
-      registerAzureClientProviderFactory(
-          "efg",
-          [](const std::shared_ptr<AbfsPath>& path,
-             const config::ConfigBase& config)
-              -> std::unique_ptr<AzureClientProvider> {
-            return std::make_unique<DummyAzureClientProvider>(path, config);
-          },
-          false),
-      "AzureClientProvider for account 'efg' is already registered.");
 }

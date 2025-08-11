@@ -31,19 +31,16 @@ class AbfsPath;
 
 using AzureClientProviderFactory =
     std::function<std::unique_ptr<AzureClientProvider>(
-        const std::shared_ptr<AbfsPath>& path,
-        const config::ConfigBase& config)>;
+        const std::string& account)>;
 
 // Register the ABFS filesystem.
 void registerAbfsFileSystem();
 
 /// Registers a factory for creating AzureClientProvider instances.
-/// If overwrite is true, it will overwrite any existing factory
-/// registered for the specified account. Otherwise, it will throw an
-/// exception.
+/// Any existing factory registered for the specified account will be
+/// overwritten by recalling this method with the same account name.
 void registerAzureClientProviderFactory(
     const std::string& account,
-    const AzureClientProviderFactory& factory,
-    bool overwrite = true);
+    const AzureClientProviderFactory& factory);
 
 } // namespace facebook::velox::filesystems

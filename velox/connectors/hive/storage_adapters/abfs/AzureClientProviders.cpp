@@ -14,11 +14,12 @@
  * limitations under the License.
  */
 
-#include "velox/connectors/hive/storage_adapters/abfs/DefaultAzureClientProviders.h"
+#include "velox/connectors/hive/storage_adapters/abfs/AzureClientProviders.h"
 
 #include <azure/identity/client_secret_credential.hpp>
 
 namespace facebook::velox::filesystems {
+
 namespace {
 
 class DataLakeFileClientWrapper final : public AzureDataLakeFileClient {
@@ -82,20 +83,47 @@ class BlobClientWrapper : public AzureBlobClient {
 
 } // namespace
 
-SharedKeyAzureClientProvider::SharedKeyAzureClientProvider(
+std::unique_ptr<AzureBlobClient>
+SharedKeyAzureClientProvider::getReadFileClient(
     const std::shared_ptr<AbfsPath>& abfsPath,
-    const config::ConfigBase& config)
-    : AzureClientProvider(abfsPath) {
-  auto credKey = fmt::format(
-      "{}.{}", kAzureAccountKey, abfsPath_->accountNameWithSuffix());
+    const config::ConfigBase& config) {
+  init(abfsPath, config);
+  auto client =
+      std::make_unique<BlobClient>(BlobClient::CreateFromConnectionString(
+          connectionString_, abfsPath->fileSystem(), abfsPath->filePath()));
+  return std::make_unique<BlobClientWrapper>(std::move(client));
+}
+
+std::unique_ptr<AzureDataLakeFileClient>
+SharedKeyAzureClientProvider::getWriteFileClient(
+    const std::shared_ptr<AbfsPath>& abfsPath,
+    const config::ConfigBase& config) {
+  init(abfsPath, config);
+  auto client = std::make_unique<DataLakeFileClient>(
+      DataLakeFileClient::CreateFromConnectionString(
+          connectionString_, abfsPath->fileSystem(), abfsPath->filePath()));
+  return std::make_unique<DataLakeFileClientWrapper>(std::move(client));
+}
+
+std::string SharedKeyAzureClientProvider::connectionString(
+    const std::shared_ptr<AbfsPath>& abfsPath,
+    const config::ConfigBase& config) {
+  init(abfsPath, config);
+  return connectionString_;
+}
+
+void SharedKeyAzureClientProvider::init(
+    const std::shared_ptr<AbfsPath>& abfsPath,
+    const config::ConfigBase& config) {
+  auto credKey =
+      fmt::format("{}.{}", kAzureAccountKey, abfsPath->accountNameWithSuffix());
   VELOX_USER_CHECK(config.valueExists(credKey), "Config {} not found", credKey);
-  auto firstDot = abfsPath_->accountNameWithSuffix().find_first_of(".");
+  auto firstDot = abfsPath->accountNameWithSuffix().find_first_of(".");
   auto endpointSuffix =
-      abfsPath_->accountNameWithSuffix().substr(firstDot + 5 /* .dfs. */);
+      abfsPath->accountNameWithSuffix().substr(firstDot + 5 /* .dfs. */);
   std::stringstream ss;
-  ss << "DefaultEndpointsProtocol="
-     << (abfsPath_->isHttps() ? "https" : "http");
-  ss << ";AccountName=" << abfsPath_->accountName();
+  ss << "DefaultEndpointsProtocol=" << (abfsPath->isHttps() ? "https" : "http");
+  ss << ";AccountName=" << abfsPath->accountName();
   ss << ";AccountKey=" << config.get<std::string>(credKey).value();
   ss << ";EndpointSuffix=" << endpointSuffix;
 
@@ -107,36 +135,46 @@ SharedKeyAzureClientProvider::SharedKeyAzureClientProvider(
   connectionString_ = ss.str();
 }
 
-std::unique_ptr<AzureBlobClient>
-SharedKeyAzureClientProvider::getReadFileClient() {
-  auto client =
-      std::make_unique<BlobClient>(BlobClient::CreateFromConnectionString(
-          connectionString_, abfsPath_->fileSystem(), abfsPath_->filePath()));
+std::unique_ptr<AzureBlobClient> OAuthAzureClientProvider::getReadFileClient(
+    const std::shared_ptr<AbfsPath>& abfsPath,
+    const config::ConfigBase& config) {
+  init(abfsPath, config);
+  const auto url = abfsPath->getUrl(true);
+  auto client = std::make_unique<BlobClient>(url, tokenCredential_);
   return std::make_unique<BlobClientWrapper>(std::move(client));
 }
 
 std::unique_ptr<AzureDataLakeFileClient>
-SharedKeyAzureClientProvider::getWriteFileClient() {
-  auto client = std::make_unique<DataLakeFileClient>(
-      DataLakeFileClient::CreateFromConnectionString(
-          connectionString_, abfsPath_->fileSystem(), abfsPath_->filePath()));
+OAuthAzureClientProvider::getWriteFileClient(
+    const std::shared_ptr<AbfsPath>& abfsPath,
+    const config::ConfigBase& config) {
+  init(abfsPath, config);
+  const auto url = abfsPath->getUrl(false);
+  auto client = std::make_unique<DataLakeFileClient>(url, tokenCredential_);
   return std::make_unique<DataLakeFileClientWrapper>(std::move(client));
 }
 
-OAuthAzureClientProvider::OAuthAzureClientProvider(
+std::pair<std::string, std::string>
+OAuthAzureClientProvider::tenantIdAndAuthorityHost(
     const std::shared_ptr<AbfsPath>& abfsPath,
-    const config::ConfigBase& config)
-    : AzureClientProvider(abfsPath) {
+    const config::ConfigBase& config) {
+  init(abfsPath, config);
+  return {tenentId_, authorityHost_};
+}
+
+void OAuthAzureClientProvider::init(
+    const std::shared_ptr<AbfsPath>& abfsPath,
+    const config::ConfigBase& config) {
   auto clientIdKey = fmt::format(
-      "{}.{}", kAzureAccountOAuth2ClientId, abfsPath_->accountNameWithSuffix());
+      "{}.{}", kAzureAccountOAuth2ClientId, abfsPath->accountNameWithSuffix());
   auto clientSecretKey = fmt::format(
       "{}.{}",
       kAzureAccountOAuth2ClientSecret,
-      abfsPath_->accountNameWithSuffix());
+      abfsPath->accountNameWithSuffix());
   auto clientEndpointKey = fmt::format(
       "{}.{}",
       kAzureAccountOAuth2ClientEndpoint,
-      abfsPath_->accountNameWithSuffix());
+      abfsPath->accountNameWithSuffix());
   VELOX_USER_CHECK(
       config.valueExists(clientIdKey), "Config {} not found", clientIdKey);
   VELOX_USER_CHECK(
@@ -161,41 +199,40 @@ OAuthAzureClientProvider::OAuthAzureClientProvider(
       options);
 }
 
-std::unique_ptr<AzureBlobClient> OAuthAzureClientProvider::getReadFileClient() {
-  const auto url = abfsPath_->getUrl(true);
-  auto client = std::make_unique<BlobClient>(url, tokenCredential_);
-  return std::make_unique<BlobClientWrapper>(std::move(client));
-}
-
-std::unique_ptr<AzureDataLakeFileClient>
-OAuthAzureClientProvider::getWriteFileClient() {
-  const auto url = abfsPath_->getUrl(false);
-  auto client = std::make_unique<DataLakeFileClient>(url, tokenCredential_);
-  return std::make_unique<DataLakeFileClientWrapper>(std::move(client));
-}
-
-FixedSasAzureClientProvider::FixedSasAzureClientProvider(
+std::unique_ptr<AzureBlobClient> FixedSasAzureClientProvider::getReadFileClient(
     const std::shared_ptr<AbfsPath>& abfsPath,
-    const config::ConfigBase& config)
-    : AzureClientProvider(abfsPath) {
-  auto sasKey =
-      fmt::format("{}.{}", kAzureSASKey, abfsPath_->accountNameWithSuffix());
-  VELOX_USER_CHECK(config.valueExists(sasKey), "Config {} not found", sasKey);
-  sas_ = config.get<std::string>(sasKey).value();
-}
-
-std::unique_ptr<AzureBlobClient>
-FixedSasAzureClientProvider::getReadFileClient() {
-  const auto url = abfsPath_->getUrl(true);
+    const config::ConfigBase& config) {
+  init(abfsPath, config);
+  const auto url = abfsPath->getUrl(true);
   auto client = std::make_unique<BlobClient>(fmt::format("{}?{}", url, sas_));
   return std::make_unique<BlobClientWrapper>(std::move(client));
 }
 
 std::unique_ptr<AzureDataLakeFileClient>
-FixedSasAzureClientProvider::getWriteFileClient() {
-  const auto url = abfsPath_->getUrl(false);
+FixedSasAzureClientProvider::getWriteFileClient(
+    const std::shared_ptr<AbfsPath>& abfsPath,
+    const config::ConfigBase& config) {
+  init(abfsPath, config);
+  const auto url = abfsPath->getUrl(false);
   auto client =
       std::make_unique<DataLakeFileClient>(fmt::format("{}?{}", url, sas_));
   return std::make_unique<DataLakeFileClientWrapper>(std::move(client));
 }
+
+std::string FixedSasAzureClientProvider::sas(
+    const std::shared_ptr<AbfsPath>& abfsPath,
+    const config::ConfigBase& config) {
+  init(abfsPath, config);
+  return sas_;
+}
+
+void FixedSasAzureClientProvider::init(
+    const std::shared_ptr<AbfsPath>& abfsPath,
+    const config::ConfigBase& config) {
+  auto sasKey =
+      fmt::format("{}.{}", kAzureSASKey, abfsPath->accountNameWithSuffix());
+  VELOX_USER_CHECK(config.valueExists(sasKey), "Config {} not found", sasKey);
+  sas_ = config.get<std::string>(sasKey).value();
+}
+
 } // namespace facebook::velox::filesystems

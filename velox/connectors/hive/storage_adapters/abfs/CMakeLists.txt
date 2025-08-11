@@ -24,7 +24,7 @@ if(VELOX_ENABLE_ABFS)
     AbfsConfig.cpp
     AbfsWriteFile.cpp
     AzureClientProviderFactories.cpp
-    DefaultAzureClientProviders.cpp)
+    AzureClientProviders.cpp)
 
   velox_link_libraries(
     velox_abfs

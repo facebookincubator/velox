@@ -26,15 +26,15 @@ class AzureClientProvider {
  public:
   virtual ~AzureClientProvider() = default;
 
-  explicit AzureClientProvider(const std::shared_ptr<AbfsPath>& path)
-      : abfsPath_(path) {}
+  /// Creates AzureBlobClient for file read operations.
+  virtual std::unique_ptr<AzureBlobClient> getReadFileClient(
+      const std::shared_ptr<AbfsPath>& path,
+      const config::ConfigBase& config) = 0;
 
-  virtual std::unique_ptr<AzureBlobClient> getReadFileClient() = 0;
-
-  virtual std::unique_ptr<AzureDataLakeFileClient> getWriteFileClient() = 0;
-
- protected:
-  std::shared_ptr<AbfsPath> abfsPath_;
+  /// Creates AzureDataLakeFileClient for file write operations.
+  virtual std::unique_ptr<AzureDataLakeFileClient> getWriteFileClient(
+      const std::shared_ptr<AbfsPath>& path,
+      const config::ConfigBase& config) = 0;
 };
 
 } // namespace facebook::velox::filesystems

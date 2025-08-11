@@ -24,14 +24,14 @@
 
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 
 namespace facebook::velox::filesystems {
 
 using AzureClientProviderFactory =
     std::function<std::unique_ptr<AzureClientProvider>(
-        const std::shared_ptr<AbfsPath>& path,
-        const config::ConfigBase& config)>;
+        const std::string& account)>;
 
 /// Handles the registration of Azure client providers and the creation of
 /// AzureBlobClient and AzureDataLakeFileClient instances.
@@ -45,13 +45,11 @@ using AzureClientProviderFactory =
 class AzureClientProviderFactories {
  public:
   /// Registers a factory for creating AzureClientProvider instances.
-  /// If overwrite is true, it will overwrite any existing factory
-  /// registered for the specified account. Otherwise, it will throw an
-  /// exception.
+  /// Any existing factory registered for the specified account will be
+  /// overwritten by recalling this method with the same account name.
   static void registerFactory(
       const std::string& account,
-      const AzureClientProviderFactory& factory,
-      bool overwrite);
+      const AzureClientProviderFactory& factory);
 
   /// Get the registered AzureClientProviderFactory for the specified
   /// account. If no factory is registered for the account, returns
@@ -60,22 +58,22 @@ class AzureClientProviderFactories {
       const std::string& account);
 
   /// Uses the registered AzureClientProviderFactory to create an
-  /// AzureBlobClient. If no factory is registered for the account
-  /// specified in `abfsPath`, falls back to the default client providers in
-  /// `DefaultAzureClientProviders.h`, based on the authentication configuration
-  /// in `config`. A temporary AzureClientProvider instance will be created to
-  /// get the client.
-  static std::unique_ptr<AzureBlobClient> getBlobClient(
+  /// AzureBlobClient for file read operations. If no factory is registered for
+  /// the account specified in `abfsPath`, falls back to the default client
+  /// providers in `DefaultAzureClientProviders.h`, based on the authentication
+  /// configuration in `config`. A temporary AzureClientProvider instance will
+  /// be created to get the client.
+  static std::unique_ptr<AzureBlobClient> getReadFileClient(
       const std::shared_ptr<AbfsPath>& abfsPath,
       const config::ConfigBase& config);
 
   /// Uses the registered AzureClientProviderFactory to create an
-  /// AzureDataLakeFileClient. If no factory is registered for the account
-  /// specified in `abfsPath`, falls back to the default client providers in
-  /// `DefaultAzureClientProviders.h`, based on the authentication configuration
-  /// in `config`. A temporary AzureClientProvider instance will be created to
-  /// get the client.
-  static std::unique_ptr<AzureDataLakeFileClient> getDataLakeFileClient(
+  /// AzureDataLakeFileClient for file write operations. If no factory is
+  /// registered for the account specified in `abfsPath`, falls back to the
+  /// default client providers in `DefaultAzureClientProviders.h`, based on the
+  /// authentication configuration in `config`. A temporary AzureClientProvider
+  /// instance will be created to get the client.
+  static std::unique_ptr<AzureDataLakeFileClient> getWriteFileClient(
       const std::shared_ptr<AbfsPath>& abfsPath,
       const config::ConfigBase& config);
 };

@@ -18,27 +18,36 @@
 
 #include "velox/common/config/Config.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsConfig.h"
+#include "velox/connectors/hive/storage_adapters/abfs/AzureBlobClient.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AzureClientProvider.h"
+#include "velox/connectors/hive/storage_adapters/abfs/AzureDataLakeFileClient.h"
+
+#include <memory>
+#include <string>
 
 namespace facebook::velox::filesystems {
 
 /// AzureClientProvider for Shared Key authentication.
 class SharedKeyAzureClientProvider final : public AzureClientProvider {
  public:
-  SharedKeyAzureClientProvider(
+  std::unique_ptr<AzureBlobClient> getReadFileClient(
+      const std::shared_ptr<AbfsPath>& abfsPath,
+      const config::ConfigBase& config) override;
+
+  std::unique_ptr<AzureDataLakeFileClient> getWriteFileClient(
+      const std::shared_ptr<AbfsPath>& abfsPath,
+      const config::ConfigBase& config) override;
+
+  /// Test only.
+  std::string connectionString(
       const std::shared_ptr<AbfsPath>& abfsPath,
       const config::ConfigBase& config);
 
-  std::unique_ptr<AzureBlobClient> getReadFileClient() override;
-
-  std::unique_ptr<AzureDataLakeFileClient> getWriteFileClient() override;
-
-  /// Test only.
-  std::string connectionString() const {
-    return connectionString_;
-  }
-
  private:
+  void init(
+      const std::shared_ptr<AbfsPath>& abfsPath,
+      const config::ConfigBase& config);
+
   // Container name is called FileSystem in some Azure API.
   std::string connectionString_;
 };
@@ -46,25 +55,24 @@ class SharedKeyAzureClientProvider final : public AzureClientProvider {
 /// AzureClientProvider for OAuth authentication.
 class OAuthAzureClientProvider final : public AzureClientProvider {
  public:
-  OAuthAzureClientProvider(
+  std::unique_ptr<AzureBlobClient> getReadFileClient(
+      const std::shared_ptr<AbfsPath>& abfsPath,
+      const config::ConfigBase& config) override;
+
+  std::unique_ptr<AzureDataLakeFileClient> getWriteFileClient(
+      const std::shared_ptr<AbfsPath>& abfsPath,
+      const config::ConfigBase& config) override;
+
+  /// Test only.
+  std::pair<std::string, std::string> tenantIdAndAuthorityHost(
       const std::shared_ptr<AbfsPath>& abfsPath,
       const config::ConfigBase& config);
 
-  std::unique_ptr<AzureBlobClient> getReadFileClient() override;
-
-  std::unique_ptr<AzureDataLakeFileClient> getWriteFileClient() override;
-
-  /// Test only.
-  std::string tenentId() const {
-    return tenentId_;
-  }
-
-  /// Test only.
-  std::string authorityHost() const {
-    return authorityHost_;
-  }
-
  private:
+  void init(
+      const std::shared_ptr<AbfsPath>& abfsPath,
+      const config::ConfigBase& config);
+
   std::string tenentId_;
   std::string authorityHost_;
   std::shared_ptr<Azure::Core::Credentials::TokenCredential> tokenCredential_;
@@ -73,15 +81,24 @@ class OAuthAzureClientProvider final : public AzureClientProvider {
 /// AzureClientProvider for SAS authentication with a fixed SAS token.
 class FixedSasAzureClientProvider final : public AzureClientProvider {
  public:
-  FixedSasAzureClientProvider(
+  std::unique_ptr<AzureBlobClient> getReadFileClient(
+      const std::shared_ptr<AbfsPath>& abfsPath,
+      const config::ConfigBase& config) override;
+
+  std::unique_ptr<AzureDataLakeFileClient> getWriteFileClient(
+      const std::shared_ptr<AbfsPath>& abfsPath,
+      const config::ConfigBase& config) override;
+
+  /// Test only.
+  std::string sas(
       const std::shared_ptr<AbfsPath>& abfsPath,
       const config::ConfigBase& config);
 
-  std::unique_ptr<AzureBlobClient> getReadFileClient() override;
-
-  std::unique_ptr<AzureDataLakeFileClient> getWriteFileClient() override;
-
  private:
+  void init(
+      const std::shared_ptr<AbfsPath>& abfsPath,
+      const config::ConfigBase& config);
+
   std::string sas_;
 };
 

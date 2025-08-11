@@ -92,7 +92,7 @@ AbfsWriteFile::AbfsWriteFile(
     const config::ConfigBase& config) {
   const auto abfsPath = std::make_shared<AbfsPath>(path);
   auto client =
-      AzureClientProviderFactories::getDataLakeFileClient(abfsPath, config);
+      AzureClientProviderFactories::getWriteFileClient(abfsPath, config);
   impl_ = std::make_unique<Impl>(path, client);
 }
 

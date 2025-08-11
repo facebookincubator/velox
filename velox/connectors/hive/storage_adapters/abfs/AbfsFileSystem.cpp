@@ -36,7 +36,8 @@ class AbfsReadFile::Impl {
   explicit Impl(std::string_view path, const config::ConfigBase& config) {
     auto abfsPath = std::make_shared<AbfsPath>(path);
     filePath_ = abfsPath->filePath();
-    fileClient_ = AzureClientProviderFactories::getBlobClient(abfsPath, config);
+    fileClient_ =
+        AzureClientProviderFactories::getReadFileClient(abfsPath, config);
   }
 
   void initialize(const FileOptions& options) {
