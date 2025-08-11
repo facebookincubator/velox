@@ -24,7 +24,8 @@
 namespace facebook::velox::functions::iceberg {
 namespace {
 
-FOLLY_ALWAYS_INLINE int32_t getBucketIndex(int32_t numBuckets, int32_t hashedValue) {
+FOLLY_ALWAYS_INLINE int32_t
+getBucketIndex(int32_t numBuckets, int32_t hashedValue) {
   return (hashedValue & INT_MAX) % numBuckets;
 }
 
@@ -106,7 +107,6 @@ void registerBucketFunctions(const std::string& prefix) {
   registerFunction<BucketFunction, int32_t, int32_t, Date>({prefix + "bucket"});
   registerFunction<BucketFunction, int32_t, int32_t, Timestamp>(
       {prefix + "bucket"});
-
 
   registerFunction<
       BucketDecimalFunction,
