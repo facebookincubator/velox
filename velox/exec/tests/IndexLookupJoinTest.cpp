@@ -18,6 +18,7 @@
 #include "folly/experimental/EventCount.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest-matchers.h"
+#include "velox/common/base/PeriodicStatsReporter.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/Connector.h"
@@ -97,9 +98,11 @@ class IndexLookupJoinTest : public IndexLookupJoinTestBase,
     probeType_ = ROW(
         {"t0", "t1", "t2", "t3", "t4", "t5"},
         {BIGINT(), BIGINT(), BIGINT(), BIGINT(), ARRAY(BIGINT()), VARCHAR()});
+    stopPeriodicStatsReporter();
   }
 
   void TearDown() override {
+    startPeriodicStatsReporter({});
     connector::unregisterConnectorFactory(kTestIndexConnectorName);
     connector::unregisterConnector(kTestIndexConnectorName);
     HiveConnectorTestBase::TearDown();
@@ -227,6 +230,7 @@ TEST_P(IndexLookupJoinTest, planNodeAndSerde) {
                         {"u0"},
                         indexTableScan,
                         {},
+                        /*includeMatchColumn=*/false,
                         {"t0", "u1", "t2", "t1"},
                         joinType)
                     .planNode();
@@ -248,6 +252,7 @@ TEST_P(IndexLookupJoinTest, planNodeAndSerde) {
                         {"u0"},
                         indexTableScan,
                         {"contains(t3, u0)", "contains(t4, u1)"},
+                        /*includeMatchColumn=*/false,
                         {"t0", "u1", "t2", "t1"},
                         joinType)
                     .planNode();
@@ -271,6 +276,7 @@ TEST_P(IndexLookupJoinTest, planNodeAndSerde) {
                         {"u0 between t0 AND t1",
                          "u1 between t1 AND 10",
                          "u1 between 10 AND t1"},
+                        /*includeMatchColumn=*/false,
                         {"t0", "u1", "t2", "t1"},
                         joinType)
                     .planNode();
@@ -292,8 +298,31 @@ TEST_P(IndexLookupJoinTest, planNodeAndSerde) {
                         {"u0"},
                         indexTableScan,
                         {"contains(t3, u0)", "u1 between 10 AND t1"},
+                        /*includeMatchColumn=*/false,
                         {"t0", "u1", "t2", "t1"},
                         joinType)
+                    .planNode();
+    auto indexLookupJoinNode =
+        std::dynamic_pointer_cast<const core::IndexLookupJoinNode>(plan);
+    ASSERT_EQ(indexLookupJoinNode->joinConditions().size(), 2);
+    ASSERT_EQ(
+        indexLookupJoinNode->lookupSource()->tableHandle()->connectorId(),
+        kTestIndexConnectorName);
+    testSerde(plan);
+  }
+
+  // with has match column.
+  {
+    auto plan = PlanBuilder(planNodeIdGenerator, pool_.get())
+                    .values({left})
+                    .indexLookupJoin(
+                        {"t0"},
+                        {"u0"},
+                        indexTableScan,
+                        {"contains(t3, u0)", "u1 between 10 AND t1"},
+                        /*includeMatchColumn=*/true,
+                        {"t0", "u1", "t2", "t1", "match"},
+                        core::JoinType::kLeft)
                     .planNode();
     auto indexLookupJoinNode =
         std::dynamic_pointer_cast<const core::IndexLookupJoinNode>(plan);
@@ -314,6 +343,7 @@ TEST_P(IndexLookupJoinTest, planNodeAndSerde) {
                 {"u0"},
                 indexTableScan,
                 {},
+                /*includeMatchColumn=*/false,
                 {"t0", "u1", "t2", "t1"},
                 core::JoinType::kFull)
             .planNode(),
@@ -326,7 +356,12 @@ TEST_P(IndexLookupJoinTest, planNodeAndSerde) {
         PlanBuilder(planNodeIdGenerator)
             .values({left})
             .indexLookupJoin(
-                {"t0"}, {"u0"}, nonIndexTableScan, {}, {"t0", "u1", "t2", "t1"})
+                {"t0"},
+                {"u0"},
+                nonIndexTableScan,
+                {},
+                /*includeMatchColumn=*/false,
+                {"t0", "u1", "t2", "t1"})
             .planNode(),
         "The lookup table handle hive_table from connector test-hive doesn't support index lookup");
   }
@@ -341,9 +376,10 @@ TEST_P(IndexLookupJoinTest, planNodeAndSerde) {
                 {"u0"},
                 indexTableScan,
                 {"contains(t4, u0)"},
+                /*includeMatchColumn=*/false,
                 {"t0", "u1", "t2", "t1"})
             .planNode(),
-        "JoinNode requires same number of join keys on left and right sides");
+        "The index lookup join node requires same number of join keys on left and right sides");
   }
 
   // No join keys.
@@ -356,9 +392,10 @@ TEST_P(IndexLookupJoinTest, planNodeAndSerde) {
                 {},
                 indexTableScan,
                 {"contains(t4, u0)"},
+                /*includeMatchColumn=*/false,
                 {"t0", "u1", "t2", "t1"})
             .planNode(),
-        "JoinNode requires at least one join key");
+        "The index lookup join node requires at least one join key");
   }
 }
 
@@ -753,6 +790,7 @@ TEST_P(IndexLookupJoinTest, equalJoin) {
         {"t0", "t1", "t2"},
         {"u0", "u1", "u2"},
         {},
+        /*includeMatchColumn=*/false,
         testData.joinType,
         testData.outputColumns);
     runLookupQuery(
@@ -763,6 +801,21 @@ TEST_P(IndexLookupJoinTest, equalJoin) {
         32,
         GetParam().numPrefetches,
         testData.duckDbVerifySql);
+    if (testData.joinType != core::JoinType::kLeft) {
+      continue;
+    }
+    const auto probeScanId = probeScanNodeId_;
+    auto planWithMatchColumn = makeLookupPlan(
+        planNodeIdGenerator,
+        indexScanNode,
+        {"t0", "t1", "t2"},
+        {"u0", "u1", "u2"},
+        {},
+        /*includeMatchColumn=*/true,
+        testData.joinType,
+        testData.outputColumns);
+    verifyResultWithMatchColumn(
+        plan, probeScanId, planWithMatchColumn, probeScanNodeId_, probeFiles);
   }
 }
 
@@ -1181,7 +1234,7 @@ TEST_P(IndexLookupJoinTest, betweenJoinCondition) {
         GetParam().hasNullKeys,
         {},
         {{"t2", "t3"}},
-        /*eqaulityMatchPct=*/80,
+        /*equalMatchPct=*/80,
         /*inColumns=*/std::nullopt,
         testData.betweenMatchPct);
     std::vector<std::shared_ptr<TempFilePath>> probeFiles =
@@ -1210,6 +1263,7 @@ TEST_P(IndexLookupJoinTest, betweenJoinCondition) {
         {"t0", "t1"},
         {"u0", "u1"},
         {testData.betweenCondition},
+        /*includeMatchColumn=*/false,
         testData.joinType,
         testData.outputColumns);
     runLookupQuery(
@@ -1220,6 +1274,21 @@ TEST_P(IndexLookupJoinTest, betweenJoinCondition) {
         32,
         GetParam().numPrefetches,
         testData.duckDbVerifySql);
+    if (testData.joinType != core::JoinType::kLeft) {
+      continue;
+    }
+    const auto probeScanId = probeScanNodeId_;
+    auto planWithMatchColumn = makeLookupPlan(
+        planNodeIdGenerator,
+        indexScanNode,
+        {"t0", "t1"},
+        {"u0", "u1"},
+        {testData.betweenCondition},
+        /*includeMatchColumn=*/true,
+        testData.joinType,
+        testData.outputColumns);
+    verifyResultWithMatchColumn(
+        plan, probeScanId, planWithMatchColumn, probeScanNodeId_, probeFiles);
   }
 }
 
@@ -1505,7 +1574,7 @@ TEST_P(IndexLookupJoinTest, inJoinCondition) {
         GetParam().hasNullKeys,
         {{"t4"}},
         {},
-        /*eqaulityMatchPct=*/80,
+        /*equalMatchPct=*/80,
         testData.inMatchPct);
     std::vector<std::shared_ptr<TempFilePath>> probeFiles =
         createProbeFiles(probeVectors);
@@ -1533,6 +1602,7 @@ TEST_P(IndexLookupJoinTest, inJoinCondition) {
         {"t0", "t1"},
         {"u0", "u1"},
         {testData.inCondition},
+        /*includeMatchColumn=*/false,
         testData.joinType,
         testData.outputColumns);
     runLookupQuery(
@@ -1543,6 +1613,21 @@ TEST_P(IndexLookupJoinTest, inJoinCondition) {
         32,
         GetParam().numPrefetches,
         testData.duckDbVerifySql);
+    if (testData.joinType != core::JoinType::kLeft) {
+      continue;
+    }
+    const auto probeScanId = probeScanNodeId_;
+    auto planWithMatchColumn = makeLookupPlan(
+        planNodeIdGenerator,
+        indexScanNode,
+        {"t0", "t1"},
+        {"u0", "u1"},
+        {testData.inCondition},
+        /*includeMatchColumn=*/true,
+        testData.joinType,
+        testData.outputColumns);
+    verifyResultWithMatchColumn(
+        plan, probeScanId, planWithMatchColumn, probeScanNodeId_, probeFiles);
   }
 }
 
@@ -1672,6 +1757,7 @@ TEST_P(IndexLookupJoinTest, prefixKeysEqualJoin) {
         leftKeys,
         rightKeys,
         {},
+        /*includeMatchColumn=*/false,
         testData.joinType,
         testData.outputColumns);
     runLookupQuery(
@@ -1682,6 +1768,21 @@ TEST_P(IndexLookupJoinTest, prefixKeysEqualJoin) {
         32,
         GetParam().numPrefetches,
         testData.duckDbVerifySql);
+    if (testData.joinType != core::JoinType::kLeft) {
+      continue;
+    }
+    const auto probeScanId = probeScanNodeId_;
+    auto planWithMatchColumn = makeLookupPlan(
+        planNodeIdGenerator,
+        indexScanNode,
+        leftKeys,
+        rightKeys,
+        {},
+        /*includeMatchColumn=*/true,
+        testData.joinType,
+        testData.outputColumns);
+    verifyResultWithMatchColumn(
+        plan, probeScanId, planWithMatchColumn, probeScanNodeId_, probeFiles);
   }
 }
 
@@ -1765,7 +1866,7 @@ TEST_P(IndexLookupJoinTest, prefixKeysbetweenJoinCondition) {
         GetParam().hasNullKeys,
         {},
         {{"t1", "t2"}},
-        /*eqaulityMatchPct=*/80,
+        /*equalMatchPct=*/80,
         /*inColumns=*/std::nullopt,
         testData.betweenMatchPct);
     std::vector<std::shared_ptr<TempFilePath>> probeFiles =
@@ -1794,6 +1895,7 @@ TEST_P(IndexLookupJoinTest, prefixKeysbetweenJoinCondition) {
         {"t0"},
         {"u0"},
         {testData.betweenCondition},
+        /*includeMatchColumn=*/false,
         testData.joinType,
         testData.outputColumns);
     runLookupQuery(
@@ -1804,6 +1906,21 @@ TEST_P(IndexLookupJoinTest, prefixKeysbetweenJoinCondition) {
         32,
         GetParam().numPrefetches,
         testData.duckDbVerifySql);
+    if (testData.joinType != core::JoinType::kLeft) {
+      continue;
+    }
+    const auto probeScanId = probeScanNodeId_;
+    auto planWithMatchColumn = makeLookupPlan(
+        planNodeIdGenerator,
+        indexScanNode,
+        {"t0"},
+        {"u0"},
+        {testData.betweenCondition},
+        /*includeMatchColumn=*/true,
+        testData.joinType,
+        testData.outputColumns);
+    verifyResultWithMatchColumn(
+        plan, probeScanId, planWithMatchColumn, probeScanNodeId_, probeFiles);
   }
 }
 
@@ -1889,7 +2006,7 @@ TEST_P(IndexLookupJoinTest, prefixInJoinCondition) {
         GetParam().hasNullKeys,
         {{"t4"}},
         {},
-        /*eqaulityMatchPct=*/80,
+        /*equalMatchPct=*/80,
         testData.inMatchPct);
     std::vector<std::shared_ptr<TempFilePath>> probeFiles =
         createProbeFiles(probeVectors);
@@ -1917,6 +2034,7 @@ TEST_P(IndexLookupJoinTest, prefixInJoinCondition) {
         {"t0"},
         {"u0"},
         {testData.inCondition},
+        /*includeMatchColumn=*/false,
         testData.joinType,
         testData.outputColumns);
     runLookupQuery(
@@ -1927,6 +2045,21 @@ TEST_P(IndexLookupJoinTest, prefixInJoinCondition) {
         32,
         GetParam().numPrefetches,
         testData.duckDbVerifySql);
+    if (testData.joinType != core::JoinType::kLeft) {
+      continue;
+    }
+    const auto probeScanId = probeScanNodeId_;
+    auto planWithMatchColumn = makeLookupPlan(
+        planNodeIdGenerator,
+        indexScanNode,
+        {"t0"},
+        {"u0"},
+        {testData.inCondition},
+        /*includeMatchColumn=*/true,
+        testData.joinType,
+        testData.outputColumns);
+    verifyResultWithMatchColumn(
+        plan, probeScanId, planWithMatchColumn, probeScanNodeId_, probeFiles);
   }
 }
 
@@ -1975,6 +2108,7 @@ DEBUG_ONLY_TEST_P(IndexLookupJoinTest, connectorError) {
       {"t0", "t1", "t2"},
       {"u0", "u1", "u2"},
       {},
+      /*includeMatchColumn=*/false,
       core::JoinType::kInner,
       {"u0", "u1", "u2", "t5"});
   VELOX_ASSERT_THROW(
@@ -2043,6 +2177,7 @@ DEBUG_ONLY_TEST_P(IndexLookupJoinTest, prefetch) {
       {"t0", "t1", "t2"},
       {"u0", "u1", "u2"},
       {},
+      /*includeMatchColumn=*/false,
       core::JoinType::kInner,
       {"u3", "t5"});
   std::thread queryThread([&] {
@@ -2145,6 +2280,7 @@ TEST_P(IndexLookupJoinTest, outputBatchSizeWithInnerJoin) {
         {"t0", "t1", "t2"},
         {"u0", "u1", "u2"},
         {},
+        /*includeMatchColumn=*/false,
         core::JoinType::kInner,
         {"t4", "u5"});
     const auto task =
@@ -2252,6 +2388,7 @@ TEST_P(IndexLookupJoinTest, outputBatchSizeWithLeftJoin) {
         {"t0", "t1", "t2"},
         {"u0", "u1", "u2"},
         {},
+        /*includeMatchColumn=*/false,
         core::JoinType::kLeft,
         {"t4", "u5"});
     const auto task =
@@ -2277,6 +2414,18 @@ TEST_P(IndexLookupJoinTest, outputBatchSizeWithLeftJoin) {
     ASSERT_EQ(
         toPlanStats(task->taskStats()).at(joinNodeId_).outputVectors,
         testData.numExpectedOutputBatch);
+    const auto probeScanId = probeScanNodeId_;
+    auto planWithMatchColumn = makeLookupPlan(
+        planNodeIdGenerator,
+        indexScanNode,
+        {"t0", "t1", "t2"},
+        {"u0", "u1", "u2"},
+        {},
+        /*includeMatchColumn=*/true,
+        core::JoinType::kLeft,
+        {"t4", "u5"});
+    verifyResultWithMatchColumn(
+        plan, probeScanId, planWithMatchColumn, probeScanNodeId_, probeFiles);
   }
 }
 
@@ -2323,6 +2472,7 @@ DEBUG_ONLY_TEST_P(IndexLookupJoinTest, runtimeStats) {
       {"t0", "t1", "t2"},
       {"u0", "u1", "u2"},
       {},
+      /*includeMatchColumn=*/false,
       core::JoinType::kInner,
       {"u3", "t5"});
   auto task = runLookupQuery(
@@ -2357,9 +2507,6 @@ DEBUG_ONLY_TEST_P(IndexLookupJoinTest, runtimeStats) {
   ASSERT_EQ(runtimeStats.count(IndexLookupJoin::kClientResultProcessTime), 0);
   ASSERT_EQ(runtimeStats.count(IndexLookupJoin::kClientLookupResultSize), 0);
   ASSERT_EQ(runtimeStats.count(IndexLookupJoin::kClientLookupResultRawSize), 0);
-  ASSERT_EQ(
-      runtimeStats.count(IndexLookupJoin::kClientNumLazyDecodedResultBatches),
-      0);
   ASSERT_THAT(
       operatorStats.toString(true, true),
       testing::MatchesRegex(".*Runtime stats.*connectorLookupWallNanos:.*"));
@@ -2373,9 +2520,6 @@ DEBUG_ONLY_TEST_P(IndexLookupJoinTest, runtimeStats) {
 }
 
 TEST_P(IndexLookupJoinTest, barrier) {
-  if (!GetParam().serialExecution) {
-    GTEST_SKIP();
-  }
   SequenceTableData tableData;
   generateIndexTableData({100, 1, 1}, tableData, pool_);
   const int numProbeSplits{5};
@@ -2412,6 +2556,7 @@ TEST_P(IndexLookupJoinTest, barrier) {
       {"t0", "t1", "t2"},
       {"u0", "u1", "u2"},
       {},
+      /*includeMatchColumn=*/false,
       core::JoinType::kInner,
       {"u3", "t5"});
 
@@ -2500,6 +2645,7 @@ TEST_P(IndexLookupJoinTest, nullKeys) {
       {"t0", "t1", "t2"},
       {"u0", "u1", "u2"},
       {},
+      /*includeMatchColumn=*/false,
       core::JoinType::kInner,
       {"u3", "t5"});
 
@@ -2518,6 +2664,7 @@ TEST_P(IndexLookupJoinTest, nullKeys) {
       {"t0", "t1", "t2"},
       {"u0", "u1", "u2"},
       {},
+      /*includeMatchColumn=*/false,
       core::JoinType::kLeft,
       {"u3", "t5"});
 
@@ -2529,6 +2676,19 @@ TEST_P(IndexLookupJoinTest, nullKeys) {
       32,
       GetParam().numPrefetches,
       "SELECT u.c3, t.c5 FROM t LEFT JOIN u ON t.c0 = u.c0 AND t.c1 = u.c1 AND t.c2 = u.c2");
+
+  const auto probeScanId = probeScanNodeId_;
+  auto planWithMatchColumn = makeLookupPlan(
+      planNodeIdGenerator,
+      indexScanNode,
+      {"t0", "t1", "t2"},
+      {"u0", "u1", "u2"},
+      {},
+      /*includeMatchColumn=*/true,
+      core::JoinType::kLeft,
+      {"u3", "t5"});
+  verifyResultWithMatchColumn(
+      leftPlan, probeScanId, planWithMatchColumn, probeScanNodeId_, probeFiles);
 }
 
 TEST_P(IndexLookupJoinTest, joinFuzzer) {
@@ -2563,6 +2723,7 @@ TEST_P(IndexLookupJoinTest, joinFuzzer) {
       {"t0"},
       {"u0"},
       {"contains(t4, u1)", "u2 between t1 and t2"},
+      /*includeMatchColumn=*/false,
       core::JoinType::kInner,
       {"u0", "u4", "t0", "t1", "t4"});
   runLookupQuery(
@@ -2613,6 +2774,7 @@ TEST_P(IndexLookupJoinTest, tableRowsWithDuplicateKeys) {
       {"t0", "t1", "t2"},
       {"u0", "u1", "u2"},
       {},
+      /*includeMatchColumn=*/false,
       core::JoinType::kInner,
       scanOutput);
   runLookupQuery(

@@ -213,6 +213,8 @@ std::unordered_set<std::string> skipFunctions = {
     "st_union",
     "st_point",
     "st_points",
+    "st_interiorrings",
+    "st_geometries",
     "st_x",
     "st_y",
     "st_isvalid",
@@ -239,6 +241,9 @@ std::unordered_set<std::string> skipFunctions = {
     "st_xmin",
     "st_ymax",
     "st_ymin",
+    "line_locate_point",
+    "line_interpolate_point",
+    "flatten_geometry_collections",
 };
 
 std::unordered_set<std::string> skipFunctionsSOT = {
@@ -353,6 +358,13 @@ std::unordered_set<std::string> skipFunctionsSOT = {
     "json_size", // https://github.com/facebookincubator/velox/issues/12371
     "json_extract_scalar", // https://github.com/facebookincubator/velox/issues/10698
     "json_array_contains", // https://github.com/facebookincubator/velox/issues/13685
+    // https://github.com/facebookincubator/velox/issues/14313
+    "array_intersect",
+    "array_except",
+    "array_duplicates",
+    "map_entries",
+    "map_keys",
+    "map_values",
     "clamp", // Function clamp not registered
     "current_date", // Non-deterministic
     "xxhash64_internal",

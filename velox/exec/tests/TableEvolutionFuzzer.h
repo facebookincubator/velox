@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#pragma once
+
 #include "velox/exec/Cursor.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
@@ -21,6 +23,8 @@
 #include <folly/init/Init.h>
 #include <gflags/gflags.h>
 #include <gtest/gtest.h>
+#include <unordered_set>
+#include "velox/expression/fuzzer/ExpressionFuzzer.h"
 
 namespace facebook::velox::exec::test {
 
@@ -76,16 +80,24 @@ class TableEvolutionFuzzer {
 
   TypePtr makeNewType(int maxDepth);
 
-  RowTypePtr makeInitialSchema();
+  RowTypePtr makeInitialSchema(
+      const std::vector<std::string>& additionalColumnNames = {},
+      const std::vector<TypePtr>& additionalColumnTypes = {});
 
   TypePtr evolveType(const TypePtr& old);
 
   RowTypePtr evolveRowType(
       const RowType& old,
-      const std::vector<column_index_t>& bucketColumnIndices);
+      const std::vector<column_index_t>& bucketColumnIndices,
+      std::unordered_map<std::string, std::string>* columnNameMapping =
+          nullptr);
 
   std::vector<Setup> makeSetups(
-      const std::vector<column_index_t>& bucketColumnIndices);
+      const std::vector<column_index_t>& bucketColumnIndices,
+      const std::vector<std::string>& additionalColumnNames = {},
+      const std::vector<TypePtr>& additionalColumnTypes = {},
+      std::unordered_map<std::string, std::string>* columnNameMapping =
+          nullptr);
 
   static std::unique_ptr<TaskCursor> makeWriteTask(
       const Setup& setup,
@@ -105,6 +117,43 @@ class TableEvolutionFuzzer {
       std::vector<Split> splits,
       const PushdownConfig& pushdownConfig,
       bool useFiltersAsNode);
+
+  /// Randomly generates bucket column indices for partitioning data.
+  /// Returns a vector of column indices that will be used for bucketing,
+  /// with each column having a 1/(2*columnCount) probability of being selected.
+  std::vector<column_index_t> generateBucketColumnIndices();
+
+  /// Creates write tasks for all evolution steps.
+  /// Generates test data and creates TaskCursor objects for writing data
+  /// to temporary directories. Populates the writeTasks vector and sets
+  /// finalExpectedData to the data from the last evolution step.
+  void createWriteTasks(
+      const std::vector<Setup>& testSetups,
+      const std::vector<column_index_t>& bucketColumnIndices,
+      const std::string& tableOutputRootDirPath,
+      std::vector<std::shared_ptr<TaskCursor>>& writeTasks,
+      RowVectorPtr& finalExpectedData);
+
+  /// Creates scan splits from write results.
+  /// Converts the output of write tasks into scan splits that can be used
+  /// for reading the written data back during the scan phase.
+  std::pair<std::vector<Split>, std::vector<Split>>
+  createScanSplitsFromWriteResults(
+      const std::vector<std::vector<RowVectorPtr>>& writeResults,
+      const std::vector<Setup>& testSetups,
+      const std::vector<column_index_t>& bucketColumnIndices,
+      std::optional<int32_t> selectedBucket,
+      const RowVectorPtr& finalExpectedData);
+
+  /// Applies remaining filters with updated column names.
+  /// Updates filter expressions to use evolved column names based on the
+  /// column name mapping tracked during schema evolution.
+  void applyRemainingFilters(
+      const fuzzer::ExpressionFuzzer::FuzzedExpressionData&
+          generatedRemainingFilters,
+      const std::unordered_map<std::string, std::string>& columnNameMapping,
+      PushdownConfig& pushdownConfig,
+      const std::unordered_set<std::string>& subfieldFilteredFields);
 
   const Config config_;
   VectorFuzzer vectorFuzzer_;

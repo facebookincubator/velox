@@ -37,3 +37,7 @@ endif()
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()
+
+if(${VELOX_ENABLE_ICEBERG_FUNCTIONS})
+  add_subdirectory(iceberg)
+endif()

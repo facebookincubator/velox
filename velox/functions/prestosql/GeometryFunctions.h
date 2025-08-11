@@ -22,6 +22,7 @@
 #include <geos/io/WKBWriter.h>
 #include <geos/io/WKTReader.h>
 #include <geos/io/WKTWriter.h>
+#include <geos/linearref/LengthIndexedLine.h>
 #include <geos/operation/distance/DistanceOp.h>
 #include <geos/simplify/TopologyPreservingSimplifier.h>
 #include <geos/util/AssertionFailedException.h>
@@ -1454,6 +1455,190 @@ struct GeometryNearestPointsFunction {
 
  private:
   geos::geom::GeometryFactory::Ptr factory_;
+};
+
+template <typename T>
+struct LineLocatePointFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<double>& result,
+      const arg_type<Geometry>& inputLine,
+      const arg_type<Geometry>& inputPoint) {
+    auto line = geospatial::GeometryDeserializer::deserialize(inputLine);
+    auto point = geospatial::GeometryDeserializer::deserialize(inputPoint);
+
+    if (line->isEmpty() || point->isEmpty()) {
+      return false;
+    }
+
+    auto lineType = line->getGeometryTypeId();
+    if (lineType != geos::geom::GeometryTypeId::GEOS_LINESTRING &&
+        lineType != geos::geom::GeometryTypeId::GEOS_MULTILINESTRING) {
+      VELOX_USER_FAIL(fmt::format(
+          "First argument to line_locate_point must be a LineString or a MultiLineString. Got: {}",
+          line->getGeometryType()));
+    }
+
+    auto pointType = point->getGeometryTypeId();
+    if (pointType != geos::geom::GeometryTypeId::GEOS_POINT) {
+      VELOX_USER_FAIL(fmt::format(
+          "Second argument to line_locate_point must be a Point. Got: {}",
+          point->getGeometryType()));
+    }
+
+    result = geos::linearref::LengthIndexedLine(line.get())
+                 .indexOf(*(point->getCoordinate())) /
+        line->getLength();
+
+    return true;
+  }
+};
+
+template <typename T>
+struct LineInterpolatePointFunction {
+  LineInterpolatePointFunction() {
+    factory_ = geos::geom::GeometryFactory::create();
+  }
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE Status call(
+      out_type<Geometry>& result,
+      const arg_type<Geometry>& inputLine,
+      const arg_type<double>& fraction) {
+    if (!(0.0 <= fraction && fraction <= 1.0)) {
+      return Status::UserError(fmt::format(
+          "line_interpolate_point: Fraction must be between 0 and 1, but is {}",
+          fraction));
+    }
+    auto line = geospatial::GeometryDeserializer::deserialize(inputLine);
+    Status validate = Status::OK();
+    validate = geospatial::validateType(
+        *line,
+        {geos::geom::GeometryTypeId::GEOS_LINESTRING},
+        "line_interpolate_point");
+
+    if (!validate.ok()) {
+      return validate;
+    }
+
+    if (line->isEmpty()) {
+      geospatial::GeometrySerializer::serialize(
+          *(factory_->createPoint()), result);
+    }
+
+    geos::geom::Coordinate coordinate =
+        geos::linearref::LengthIndexedLine(line.get())
+            .extractPoint(fraction * line->getLength());
+
+    auto resultPoint =
+        std::unique_ptr<geos::geom::Point>(factory_->createPoint(coordinate));
+    geospatial::GeometrySerializer::serialize(*resultPoint, result);
+
+    return validate;
+  }
+
+ private:
+  geos::geom::GeometryFactory::Ptr factory_;
+};
+
+template <typename T>
+struct StInteriorRingsFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<Array<Geometry>>& result,
+      const arg_type<Geometry>& geometry) {
+    std::unique_ptr<geos::geom::Geometry> geosGeometry =
+        geospatial::GeometryDeserializer::deserialize(geometry);
+
+    auto validate = geospatial::validateType(
+        *geosGeometry,
+        {geos::geom::GeometryTypeId::GEOS_POLYGON},
+        "ST_InteriorRings");
+
+    if (!validate.ok()) {
+      VELOX_USER_FAIL(validate.message());
+    }
+    if (geosGeometry->isEmpty()) {
+      return false;
+    }
+
+    geos::geom::Polygon* polygon =
+        dynamic_cast<geos::geom::Polygon*>(geosGeometry.get());
+    VELOX_CHECK_NOT_NULL(
+        polygon, "Validation passed but type not recognized as Polygon");
+
+    auto numInteriorRings = polygon->getNumInteriorRing();
+    result.reserve(static_cast<int32_t>(numInteriorRings));
+
+    for (int i = 0; i < numInteriorRings; i++) {
+      geospatial::GeometrySerializer::serialize(
+          *(polygon->getInteriorRingN(i)), result.add_item());
+    }
+
+    return true;
+  }
+};
+
+template <typename T>
+struct StGeometriesFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<Array<Geometry>>& result,
+      const arg_type<Geometry>& geometry) {
+    std::unique_ptr<geos::geom::Geometry> geosGeometry =
+        geospatial::GeometryDeserializer::deserialize(geometry);
+
+    if (geosGeometry->isEmpty()) {
+      return false;
+    }
+
+    if (!geospatial::isMultiType(*geosGeometry)) {
+      result.reserve(1);
+      geospatial::GeometrySerializer::serialize(
+          *(geosGeometry), result.add_item());
+      return true;
+    }
+
+    geos::geom::GeometryCollection* geomCollection =
+        dynamic_cast<geos::geom::GeometryCollection*>(geosGeometry.get());
+
+    VELOX_CHECK_NOT_NULL(
+        geomCollection,
+        "Failure in ST_Geometries: geometry should be multi type but cast to GeometryCollection failed");
+
+    int32_t numGeometries =
+        static_cast<int32_t>(geomCollection->getNumGeometries());
+    result.reserve(numGeometries);
+
+    for (int i = 0; i < numGeometries; i++) {
+      geospatial::GeometrySerializer::serialize(
+          *(geomCollection->getGeometryN(i)), result.add_item());
+    }
+
+    return true;
+  }
+};
+
+template <typename T>
+struct FlattenGeometryCollectionsFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE Status
+  call(out_type<Array<Geometry>>& result, const arg_type<Geometry>& geometry) {
+    std::unique_ptr<geos::geom::Geometry> geosGeometry =
+        geospatial::GeometryDeserializer::deserialize(geometry);
+
+    geospatial::GeometryCollectionIterator it(geosGeometry.get());
+    while (it.hasNext()) {
+      geospatial::GeometrySerializer::serialize(
+          *(it.next()), result.add_item());
+    }
+
+    return Status::OK();
+  }
 };
 
 } // namespace facebook::velox::functions

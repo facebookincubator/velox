@@ -30,6 +30,7 @@ add_executable(
   AtLeastNNonNullsTest.cpp
   Base64Test.cpp
   BitwiseTest.cpp
+  CharTypeWriteSideCheckTest.cpp
   ComparisonsTest.cpp
   ConcatWsTest.cpp
   DateTimeFunctionsTest.cpp
@@ -40,6 +41,7 @@ add_executable(
   ElementAtTest.cpp
   FactorialTest.cpp
   FromJsonTest.cpp
+  FromToJsonRoundTripTest.cpp
   GetJsonObjectTest.cpp
   GetStructFieldTest.cpp
   HashTest.cpp
@@ -67,6 +69,7 @@ add_executable(
   SplitTest.cpp
   StringTest.cpp
   StringToMapTest.cpp
+  ToJsonTest.cpp
   UnBase64Test.cpp
   UnscaledValueFunctionTest.cpp
   UpperLowerTest.cpp

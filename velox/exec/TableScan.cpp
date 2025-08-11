@@ -231,10 +231,10 @@ RowVectorPtr TableScan::getOutput() {
                1.0 * data->size() / readBatchSize,
                1.0 / kMaxSelectiveBatchSizeMultiplier});
           if (ioTimeUs > 0) {
-            RECORD_HISTOGRAM_METRIC_VALUE(
+            RECORD_METRIC_VALUE(
                 velox::kMetricTableScanBatchProcessTimeMs, ioTimeUs / 1'000);
           }
-          RECORD_HISTOGRAM_METRIC_VALUE(
+          RECORD_METRIC_VALUE(
               velox::kMetricTableScanBatchBytes, data->estimateFlatSize());
           return data;
         } else {
@@ -320,6 +320,9 @@ bool TableScan::getSplit() {
   if (FOLLY_UNLIKELY(splitTracer_ != nullptr)) {
     splitTracer_->write(split);
   }
+
+  stats_.wlock()->addRuntimeStat(
+      "connectorSplitSize", RuntimeCounter(split.connectorSplit->size()));
   const auto& connectorSplit = split.connectorSplit;
   currentSplitWeight_ = connectorSplit->splitWeight;
   needNewSplit_ = false;

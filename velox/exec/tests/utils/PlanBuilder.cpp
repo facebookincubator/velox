@@ -268,8 +268,6 @@ core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
 
   core::TypedExprPtr filterNodeExpr;
 
-  common::SubfieldFilters filters;
-
   bool useCudf = false;
 #ifdef VELOX_ENABLE_CUDF2
   useCudf = true;
@@ -284,10 +282,6 @@ core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
     }
 
     subfieldFiltersMap_.clear();
-  }
-
-  if (filtersAsNode_) {
-    VELOX_CHECK(filters.empty());
   }
 
   core::TypedExprPtr remainingFilterExpr;
@@ -322,7 +316,7 @@ core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
           connectorId_,
           tableName_,
           true,
-          filtersAsNode_ ? std::move(filters) : std::move(subfieldFiltersMap_),
+          std::move(subfieldFiltersMap_),
           remainingFilterExpr,
           dataColumns_);
     }();
@@ -1305,7 +1299,7 @@ PlanBuilder& PlanBuilder::topN(
 PlanBuilder& PlanBuilder::limit(int64_t offset, int64_t count, bool isPartial) {
   planNode_ = std::make_shared<core::LimitNode>(
       nextPlanNodeId(), offset, count, isPartial, planNode_);
-  VELOX_CHECK(!planNode_->supportsBarrier());
+  VELOX_CHECK(planNode_->supportsBarrier());
   return *this;
 }
 
@@ -1987,12 +1981,19 @@ PlanBuilder& PlanBuilder::indexLookupJoin(
     const std::vector<std::string>& rightKeys,
     const core::TableScanNodePtr& right,
     const std::vector<std::string>& joinConditions,
+    bool includeMatchColumn,
     const std::vector<std::string>& outputLayout,
     core::JoinType joinType) {
   VELOX_CHECK_NOT_NULL(planNode_, "indexLookupJoin cannot be the source node");
-  const auto inputType = concat(planNode_->outputType(), right->outputType());
+  auto inputType = concat(planNode_->outputType(), right->outputType());
+  if (includeMatchColumn) {
+    auto names = inputType->names();
+    names.push_back(outputLayout.back());
+    auto types = inputType->children();
+    types.push_back(BOOLEAN());
+    inputType = ROW(std::move(names), std::move(types));
+  }
   auto outputType = extract(inputType, outputLayout);
-
   auto leftKeyFields = fields(planNode_->outputType(), leftKeys);
   auto rightKeyFields = fields(right->outputType(), rightKeys);
 
@@ -2009,6 +2010,7 @@ PlanBuilder& PlanBuilder::indexLookupJoin(
       std::move(leftKeyFields),
       std::move(rightKeyFields),
       std::move(joinConditionPtrs),
+      includeMatchColumn,
       std::move(planNode_),
       right,
       std::move(outputType));
