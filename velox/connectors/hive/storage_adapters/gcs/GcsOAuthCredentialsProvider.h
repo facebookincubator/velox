@@ -22,6 +22,9 @@ namespace facebook::velox::filesystems {
 
 namespace gcs = ::google::cloud::storage;
 
+/// Interface for providing OAuth2 credentials for Google Cloud Storage (GCS).
+/// Implementations should return a GCS OAuth2 credential used for creating the
+/// GCS client for a specific bucket via `getCredentials`.
 class GcsOAuthCredentialsProvider {
  public:
   virtual ~GcsOAuthCredentialsProvider() = default;
