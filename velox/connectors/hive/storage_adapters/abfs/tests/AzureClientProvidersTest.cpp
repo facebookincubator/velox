@@ -60,13 +60,15 @@ TEST(AzureClientProvidersTest, clientSecretOAuth) {
           config),
       "Config fs.azure.account.oauth2.client.endpoint.bar3.dfs.core.windows.net not found");
 
-  auto tenantIdAndAuthorityHost = clientProvider.tenantIdAndAuthorityHost(
-      std::make_shared<AbfsPath>(
-          "abfss://abc@efg.dfs.core.windows.net/file/test.txt"),
-      config);
+  const auto expectedTenantIdAndAuthorityHost =
+      std::make_pair<std::string, std::string>(
+          "{TENANTID}", "https://login.microsoftonline.com/");
   EXPECT_EQ(
-      tenantIdAndAuthorityHost,
-      std::make_pair("{TENANTID}", "https://login.microsoftonline.com/"));
+      clientProvider.tenantIdAndAuthorityHost(
+          std::make_shared<AbfsPath>(
+              "abfss://abc@efg.dfs.core.windows.net/file/test.txt"),
+          config),
+      expectedTenantIdAndAuthorityHost);
 
   const auto abfsPath = std::make_shared<AbfsPath>(
       "abfss://abc@efg.dfs.core.windows.net/file/test.txt");
