@@ -82,10 +82,10 @@ struct Enums {
 
 #define VELOX_DEFINE_ENUM_NAME(EnumType, Names)                             \
   std::string_view EnumType##Name::toName(EnumType value) {                 \
-    const auto& kNames = Names();                                           \
-    auto it = kNames.find(value);                                           \
+    const auto& names = Names();                                            \
+    auto it = names.find(value);                                            \
     VELOX_CHECK(                                                            \
-        it != kNames.end(),                                                 \
+        it != names.end(),                                                  \
         "Invalid enum value: {}",                                           \
         static_cast<std::underlying_type_t<EnumType>>(value));              \
     return it->second;                                                      \
@@ -115,10 +115,10 @@ struct Enums {
 
 #define VELOX_DEFINE_EMBEDDED_ENUM_NAME(Class, EnumType, Names)             \
   std::string_view Class::toName(Class::EnumType value) {                   \
-    const auto& kNames = Names();                                           \
-    auto it = kNames.find(value);                                           \
+    const auto& names = Names();                                            \
+    auto it = names.find(value);                                            \
     VELOX_CHECK(                                                            \
-        it != kNames.end(),                                                 \
+        it != names.end(),                                                  \
         "Invalid enum value: {}",                                           \
         static_cast<std::underlying_type_t<Class::EnumType>>(value));       \
     return it->second;                                                      \

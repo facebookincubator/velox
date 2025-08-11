@@ -331,13 +331,15 @@ void AggregationNode::addDetails(std::stringstream& stream) const {
 }
 
 namespace {
-folly::F14FastMap<AggregationNode::Step, std::string> stepNames() {
-  return {
-      {AggregationNode::Step::kPartial, "PARTIAL"},
-      {AggregationNode::Step::kFinal, "FINAL"},
-      {AggregationNode::Step::kIntermediate, "INTERMEDIATE"},
-      {AggregationNode::Step::kSingle, "SINGLE"},
-  };
+const auto& stepNames() {
+  static const folly::F14FastMap<AggregationNode::Step, std::string_view>
+      kNames = {
+          {AggregationNode::Step::kPartial, "PARTIAL"},
+          {AggregationNode::Step::kFinal, "FINAL"},
+          {AggregationNode::Step::kIntermediate, "INTERMEDIATE"},
+          {AggregationNode::Step::kSingle, "SINGLE"},
+      };
+  return kNames;
 }
 
 } // namespace
@@ -2116,25 +2118,29 @@ void WindowNode::addDetails(std::stringstream& stream) const {
 }
 
 namespace {
-folly::F14FastMap<WindowNode::BoundType, std::string> boundTypeNames() {
-  return {
-      {WindowNode::BoundType::kCurrentRow, "CURRENT ROW"},
-      {WindowNode::BoundType::kPreceding, "PRECEDING"},
-      {WindowNode::BoundType::kFollowing, "FOLLOWING"},
-      {WindowNode::BoundType::kUnboundedPreceding, "UNBOUNDED PRECEDING"},
-      {WindowNode::BoundType::kUnboundedFollowing, "UNBOUNDED FOLLOWING"},
-  };
+const auto& boundTypeNames() {
+  static const folly::F14FastMap<WindowNode::BoundType, std::string_view>
+      kNames = {
+          {WindowNode::BoundType::kCurrentRow, "CURRENT ROW"},
+          {WindowNode::BoundType::kPreceding, "PRECEDING"},
+          {WindowNode::BoundType::kFollowing, "FOLLOWING"},
+          {WindowNode::BoundType::kUnboundedPreceding, "UNBOUNDED PRECEDING"},
+          {WindowNode::BoundType::kUnboundedFollowing, "UNBOUNDED FOLLOWING"},
+      };
+  return kNames;
 }
 } // namespace
 
 VELOX_DEFINE_EMBEDDED_ENUM_NAME(WindowNode, BoundType, boundTypeNames)
 
 namespace {
-folly::F14FastMap<WindowNode::WindowType, std::string> windowTypeNames() {
-  return {
-      {WindowNode::WindowType::kRows, "ROWS"},
-      {WindowNode::WindowType::kRange, "RANGE"},
-  };
+const auto& windowTypeNames() {
+  static const folly::F14FastMap<WindowNode::WindowType, std::string_view>
+      kNames = {
+          {WindowNode::WindowType::kRows, "ROWS"},
+          {WindowNode::WindowType::kRange, "RANGE"},
+      };
+  return kNames;
 }
 } // namespace
 
