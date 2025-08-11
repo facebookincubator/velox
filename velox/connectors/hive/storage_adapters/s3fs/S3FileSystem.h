@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <folly/executors/CPUThreadPoolExecutor.h>
 #include "velox/common/file/FileSystems.h"
 
 namespace Aws::Auth {
@@ -87,9 +88,56 @@ class S3FileSystem : public FileSystem {
 
   std::string getLogPrefix() const;
 
+  static bool isUploadPartAsyncEnabled() {
+    return uploadPartAsyncEnabled;
+  }
+
+  static void setUploadPartAsyncEnabled(bool enabled) {
+    uploadPartAsyncEnabled = enabled;
+  }
+  static size_t getPartUploadSize() {
+    return kPartUploadSize;
+  }
+
+  static void setPartUploadSize(size_t partUploadSize) {
+    VELOX_USER_CHECK_GT(
+        partUploadSize,
+        0,
+        "Invalid configuration: 'hive.s3.part-upload-size' must be greater than 0.");
+    kPartUploadSize = partUploadSize;
+  }
+  static size_t getWriteFileSemaphoreNum() {
+    return writeFileSemaphore;
+  }
+
+  static void setWriteFileSemaphoreNum(size_t value) {
+    VELOX_USER_CHECK_GT(
+        value,
+        0,
+        "Invalid configuration: 'hive.s3.writeFileSemaphoreNum' must be greater than 0.");
+    writeFileSemaphore = value;
+  }
+  static std::shared_ptr<folly::CPUThreadPoolExecutor> getUploadThreadPool() {
+    return uploadThreadPool_;
+  }
+  static void setUploadThreadPool(
+      std::shared_ptr<folly::CPUThreadPoolExecutor> threadPool) {
+    VELOX_USER_CHECK(
+     threadPool != nullptr && threadPool.get() != nullptr &&
+        threadPool->numThreads() > 0,
+     "Invalid configuration: 'hive.s3.uploadThreads' must be greater than 0.");
+    uploadThreadPool_ = threadPool;
+  }
+
  protected:
   class Impl;
   std::shared_ptr<Impl> impl_;
+
+ private:
+  static bool uploadPartAsyncEnabled;
+  static size_t kPartUploadSize;
+  static size_t writeFileSemaphore;
+  static std::shared_ptr<folly::CPUThreadPoolExecutor> uploadThreadPool_;
 };
 
 } // namespace facebook::velox::filesystems

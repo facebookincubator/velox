@@ -76,6 +76,10 @@ class S3Config {
     kRetryMode,
     kUseProxyFromEnv,
     kCredentialsProvider,
+    KS3UploadPartAsync,
+    kS3PartUploadSize,
+    KS3WriteFileSemaphoreNum,
+    KS3UploadThreads,
     kEnd
   };
 
@@ -114,6 +118,14 @@ class S3Config {
              std::make_pair("use-proxy-from-env", "false")},
             {Keys::kCredentialsProvider,
              std::make_pair("aws-credentials-provider", std::nullopt)},
+            {Keys::KS3UploadPartAsync,
+             std::make_pair("uploadPartAsync","false")},
+            {Keys::kS3PartUploadSize,
+             std::make_pair("part-upload-size", std::nullopt)},
+            {Keys::KS3WriteFileSemaphoreNum,
+              std::make_pair("writeFileSemaphoreNum", std::nullopt)},
+            {Keys::KS3UploadThreads,
+            std::make_pair("uploadThreads", std::nullopt)},
         };
     return config;
   }
@@ -241,6 +253,35 @@ class S3Config {
 
   std::optional<std::string> credentialsProvider() const {
     return config_.find(Keys::kCredentialsProvider)->second;
+  }
+
+  bool uploadPartAsync() const {
+    auto value = config_.find(Keys::KS3UploadPartAsync)->second.value();
+    return folly::to<bool>(value);
+  }
+
+  std::optional<int32_t> partUploadSize() const {
+    auto val = config_.find(Keys::kS3PartUploadSize)->second;
+    if (val.has_value()) {
+      return folly::to<uint32_t>(val.value());
+    }
+    return std::optional<uint32_t>();
+  }
+
+  std::optional<int32_t> writeFileSemaphoreNum() const {
+    auto val = config_.find(Keys::KS3WriteFileSemaphoreNum)->second;
+    if (val.has_value()) {
+      return folly::to<uint32_t>(val.value());
+    }
+    return std::optional<uint32_t>();
+  }
+
+  std::optional<int32_t> uploadThreads() const {
+    auto val = config_.find(Keys::KS3UploadThreads)->second;
+    if (val.has_value()) {
+      return folly::to<uint32_t>(val.value());
+    }
+    return std::optional<uint32_t>();
   }
 
  private:
