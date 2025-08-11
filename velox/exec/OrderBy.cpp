@@ -100,6 +100,12 @@ RowVectorPtr OrderBy::getOutput() {
     return nullptr;
   }
 
+  auto guard = folly::makeGuard([&](){
+    if (finished_) {
+      sortBuffer_.reset();
+    }
+  });
+
   RowVectorPtr output = sortBuffer_->getOutput(maxOutputRows_);
   finished_ = (output == nullptr);
   return output;
