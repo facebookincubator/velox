@@ -129,6 +129,10 @@ void registerAccessors(const std::string& prefix) {
       {{prefix + "ST_Envelope"}});
   registerFunction<StBufferFunction, Geometry, Geometry, double>(
       {{prefix + "ST_Buffer"}});
+  registerFunction<LineLocatePointFunction, double, Geometry, Geometry>(
+      {{prefix + "line_locate_point"}});
+  registerFunction<LineInterpolatePointFunction, Geometry, Geometry, double>(
+      {{prefix + "line_interpolate_point"}});
 
   velox::exec::registerVectorFunction(
       prefix + "ST_CoordDim",
@@ -138,11 +142,19 @@ void registerAccessors(const std::string& prefix) {
       {{prefix + "ST_Points"}});
   registerFunction<StNumPointsFunction, int32_t, Geometry>(
       {{prefix + "ST_NumPoints"}});
+  registerFunction<StInteriorRingsFunction, Array<Geometry>, Geometry>(
+      {{prefix + "ST_InteriorRings"}});
+  registerFunction<StGeometriesFunction, Array<Geometry>, Geometry>(
+      {{prefix + "ST_Geometries"}});
   registerFunction<
       GeometryNearestPointsFunction,
       Array<Geometry>,
       Geometry,
       Geometry>({{prefix + "geometry_nearest_points"}});
+  registerFunction<
+      FlattenGeometryCollectionsFunction,
+      Array<Geometry>,
+      Geometry>({{prefix + "flatten_geometry_collections"}});
 }
 
 } // namespace

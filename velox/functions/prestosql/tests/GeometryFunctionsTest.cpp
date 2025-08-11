@@ -16,7 +16,6 @@
 
 #include <gtest/gtest.h>
 #include <array>
-#include "velox/common/base/Status.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 
@@ -2593,4 +2592,259 @@ TEST_F(GeometryFunctionsTest, testGeometryNearestPoints) {
       std::nullopt, "POLYGON ((10 100, 30 10, 30 100, 10 100))");
   noNearestPointsFunc("LINESTRING (50 100, 50 200)", std::nullopt);
   noNearestPointsFunc(std::nullopt, std::nullopt);
+}
+
+TEST_F(GeometryFunctionsTest, testLineLocatePoint) {
+  const auto testLineLocatePointFunc = [&](const std::optional<std::string>&
+                                               lineWkt,
+                                           const std::optional<std::string>&
+                                               pointWkt,
+                                           const std::optional<double>&
+                                               expected) {
+    std::optional<double> result = evaluateOnce<double>(
+        "line_locate_point(ST_GeometryFromText(c0), ST_GeometryFromText(c1))",
+        lineWkt,
+        pointWkt);
+
+    if (expected.has_value()) {
+      ASSERT_TRUE(result.has_value());
+      ASSERT_EQ(result.value(), expected.value());
+    } else {
+      ASSERT_FALSE(result.has_value());
+    }
+  };
+
+  testLineLocatePointFunc("LINESTRING (0 0, 0 1)", "POINT (0 0.2)", .2);
+  testLineLocatePointFunc("LINESTRING (0 0, 0 1)", "POINT (0 0)", 0.0);
+  testLineLocatePointFunc("LINESTRING (0 0, 0 1)", "POINT (0 -1)", 0.0);
+  testLineLocatePointFunc("LINESTRING (0 0, 0 1)", "POINT (0 1)", 1.0);
+  testLineLocatePointFunc("LINESTRING (0 0, 0 1)", "POINT (0 2)", 1.0);
+  testLineLocatePointFunc(
+      "LINESTRING (0 0, 0 1, 2 1)", "POINT (0 0.2)", 0.06666666666666667);
+  testLineLocatePointFunc(
+      "LINESTRING (0 0, 0 1, 2 1)", "POINT (0.9 1)", 0.6333333333333333);
+  testLineLocatePointFunc("LINESTRING (1 3, 5 4)", "POINT (1 3)", 0.0);
+  testLineLocatePointFunc(
+      "LINESTRING (1 3, 5 4)", "POINT (2 3)", 0.23529411764705882);
+  testLineLocatePointFunc("LINESTRING (1 3, 5 4)", "POINT (5 4)", 1.0);
+  testLineLocatePointFunc(
+      "MULTILINESTRING ((0 0, 0 1), (2 2, 4 2))",
+      "POINT (3 1)",
+      0.6666666666666666);
+
+  testLineLocatePointFunc("LINESTRING EMPTY", "POINT (5 4)", std::nullopt);
+  testLineLocatePointFunc("LINESTRING (1 3, 5 4)", "POINT EMPTY", std::nullopt);
+
+  testLineLocatePointFunc(std::nullopt, "POINT (5 4)", std::nullopt);
+  testLineLocatePointFunc("LINESTRING (1 3, 5 4)", std::nullopt, std::nullopt);
+
+  VELOX_ASSERT_USER_THROW(
+      testLineLocatePointFunc(
+          "POLYGON ((1 1, 1 4, 4 4, 4 1, 1 1))", "POINT (5 4)", std::nullopt),
+      "First argument to line_locate_point must be a LineString or a MultiLineString. Got: Polygon");
+
+  VELOX_ASSERT_USER_THROW(
+      testLineLocatePointFunc(
+          "LINESTRING (0 0, 0 1)", "LINESTRING (1 3, 5 4)", std::nullopt),
+      "Second argument to line_locate_point must be a Point. Got: LineString");
+}
+
+TEST_F(GeometryFunctionsTest, testLineInterpolatePoint) {
+  const auto testLineInterpolatePointFunc =
+      [&](const std::optional<std::string>& wkt,
+          const std::optional<double>& fraction,
+          const std::optional<std::string>& expected) {
+        std::optional<std::string> result = evaluateOnce<std::string>(
+            "ST_AsText(line_interpolate_point(ST_GeometryFromText(c0), c1))",
+            wkt,
+            fraction);
+
+        if (expected.has_value()) {
+          ASSERT_TRUE(result.has_value());
+          ASSERT_EQ(result.value(), expected.value());
+        } else {
+          ASSERT_FALSE(result.has_value());
+        }
+      };
+
+  testLineInterpolatePointFunc("LINESTRING EMPTY", .5, "POINT EMPTY");
+  testLineInterpolatePointFunc("LINESTRING (0 0, 0 1)", .2, "POINT (0 0.2)");
+  testLineInterpolatePointFunc("LINESTRING (0 0, 0 1)", 0.0, "POINT (0 0)");
+  testLineInterpolatePointFunc("LINESTRING (0 0, 0 1)", 1.0, "POINT (0 1)");
+  testLineInterpolatePointFunc(
+      "LINESTRING (0 0, 0 1, 3 1)", .0625, "POINT (0 0.25)");
+  testLineInterpolatePointFunc(
+      "LINESTRING (0 0, 0 1, 3 1)", .75, "POINT (2 1)");
+  testLineInterpolatePointFunc("LINESTRING (1 3, 5 4)", 0.0, "POINT (1 3)");
+  testLineInterpolatePointFunc("LINESTRING (1 3, 5 4)", 0.25, "POINT (2 3.25)");
+  testLineInterpolatePointFunc("LINESTRING (1 3, 5 4)", 1.0, "POINT (5 4)");
+
+  VELOX_ASSERT_USER_THROW(
+      testLineInterpolatePointFunc(
+          "POLYGON ((1 1, 1 4, 4 4, 4 1, 1 1))", .5, std::nullopt),
+      "line_interpolate_point only applies to LineString. Input type is: Polygon");
+
+  VELOX_ASSERT_USER_THROW(
+      testLineInterpolatePointFunc(
+          "MULTILINESTRING ((0 0, 0 1), (2 2, 4 2))", .5, std::nullopt),
+      "line_interpolate_point only applies to LineString. Input type is: MultiLineString");
+
+  VELOX_ASSERT_USER_THROW(
+      testLineInterpolatePointFunc(
+          "LINESTRING (0 0, 0 1, 2 1)", -1.0, std::nullopt),
+      "line_interpolate_point: Fraction must be between 0 and 1, but is -1");
+
+  VELOX_ASSERT_USER_THROW(
+      testLineInterpolatePointFunc(
+          "LINESTRING (0 0, 0 1, 2 1)", 1.5, std::nullopt),
+      "line_interpolate_point: Fraction must be between 0 and 1, but is 1.5");
+}
+
+TEST_F(GeometryFunctionsTest, testStInteriorRings) {
+  const auto testStInteriorRingsFunc = [&](const std::optional<std::string>&
+                                               wkt,
+                                           const std::optional<std::vector<
+                                               std::optional<std::string>>>&
+                                               expectedGeoms) {
+    auto input = makeSingleStringInputRow(wkt);
+
+    facebook::velox::VectorPtr output = evaluate(
+        "transform(ST_InteriorRings(ST_GeometryFromText(c0)), x -> ST_AsText(x))",
+        input);
+
+    auto arrayVector =
+        std::dynamic_pointer_cast<facebook::velox::ArrayVector>(output);
+
+    if (expectedGeoms.has_value()) {
+      ASSERT_TRUE(arrayVector != nullptr);
+
+      std::vector<std::vector<std::optional<std::string>>> vec = {
+          expectedGeoms.value()};
+      auto expected = makeNullableArrayVector<std::string>(vec);
+      facebook::velox::test::assertEqualVectors(expected, output);
+    } else {
+      ASSERT_TRUE(output->isNullAt(0));
+    }
+  };
+
+  testStInteriorRingsFunc(
+      "POLYGON ((0 0, 0 3, 3 3, 3 0, 0 0), (1 1, 2 1, 2 2, 1 2, 1 1))",
+      {{"LINESTRING (1 1, 2 1, 2 2, 1 2, 1 1)"}});
+  testStInteriorRingsFunc(
+      "POLYGON ((0 0, 0 5, 5 5, 5 0, 0 0), (1 1, 2 1, 2 2, 1 2, 1 1), (3 3, 4 3, 4 4, 3 4, 3 3))",
+      {{"LINESTRING (1 1, 2 1, 2 2, 1 2, 1 1)",
+        "LINESTRING (3 3, 4 3, 4 4, 3 4, 3 3)"}});
+  testStInteriorRingsFunc("POLYGON ((0 0, 0 1, 1 1, 1 0, 0 0))", {{}});
+  testStInteriorRingsFunc("POLYGON EMPTY", std::nullopt);
+
+  VELOX_ASSERT_USER_THROW(
+      testStInteriorRingsFunc("POINT (2 3)", std::nullopt),
+      "ST_InteriorRings only applies to Polygon. Input type is: Point");
+}
+
+TEST_F(GeometryFunctionsTest, testStGeometries) {
+  const auto testStGeometriesFunc = [&](const std::optional<std::string>& wkt,
+                                        const std::optional<std::vector<
+                                            std::optional<std::string>>>&
+                                            expectedGeoms) {
+    auto input = makeSingleStringInputRow(wkt);
+    facebook::velox::VectorPtr output = evaluate(
+        "transform(ST_Geometries(ST_GeometryFromText(c0)), x -> ST_AsText(x))",
+        input);
+
+    auto arrayVector =
+        std::dynamic_pointer_cast<facebook::velox::ArrayVector>(output);
+
+    if (expectedGeoms.has_value()) {
+      ASSERT_TRUE(arrayVector != nullptr);
+
+      std::vector<std::vector<std::optional<std::string>>> vec = {
+          expectedGeoms.value()};
+      auto expected = makeNullableArrayVector<std::string>(vec);
+      facebook::velox::test::assertEqualVectors(expected, output);
+    } else {
+      ASSERT_TRUE(output->isNullAt(0));
+    }
+  };
+
+  testStGeometriesFunc("POINT (1 5)", {{"POINT (1 5)"}});
+
+  testStGeometriesFunc(
+      "LINESTRING (77.29 29.07, 77.42 29.26, 77.27 29.31, 77.29 29.07)",
+      {{"LINESTRING (77.29 29.07, 77.42 29.26, 77.27 29.31, 77.29 29.07)"}});
+  testStGeometriesFunc(
+      "POLYGON ((0 0, 0 1, 1 1, 1 0, 0 0))",
+      {{"POLYGON ((0 0, 0 1, 1 1, 1 0, 0 0))"}});
+  testStGeometriesFunc(
+      "MULTIPOINT (1 2, 4 8, 16 32)",
+      {{"POINT (1 2)", "POINT (4 8)", "POINT (16 32)"}});
+  testStGeometriesFunc(
+      "MULTILINESTRING ((1 1, 2 2))", {{"LINESTRING (1 1, 2 2)"}});
+  testStGeometriesFunc(
+      "MULTIPOLYGON (((0 0, 0 1, 1 1, 1 0, 0 0)), ((1 1, 3 1, 3 3, 1 3, 1 1)))",
+      {{"POLYGON ((0 0, 0 1, 1 1, 1 0, 0 0))",
+        "POLYGON ((1 1, 1 3, 3 3, 3 1, 1 1))"}});
+  testStGeometriesFunc(
+      "GEOMETRYCOLLECTION (POINT (2 3), LINESTRING (2 3, 3 4))",
+      {{"POINT (2 3)", "LINESTRING (2 3, 3 4)"}});
+  testStGeometriesFunc(
+      "GEOMETRYCOLLECTION(MULTIPOINT(0 0, 1 1), GEOMETRYCOLLECTION(MULTILINESTRING((2 2, 3 3))))",
+      {{"MULTIPOINT (0 0, 1 1)",
+        "GEOMETRYCOLLECTION (MULTILINESTRING ((2 2, 3 3)))"}});
+
+  std::optional<bool> emptyGeomReturnsNull = evaluateOnce<bool>(
+      "ST_Geometries(ST_GeometryFromText(c0)) IS NULL",
+      std::optional<std::string>("POLYGON EMPTY"));
+
+  ASSERT_TRUE(emptyGeomReturnsNull.has_value());
+  ASSERT_TRUE(emptyGeomReturnsNull.value());
+}
+
+TEST_F(GeometryFunctionsTest, testFlattenGeometryCollections) {
+  const auto testFlattenGeometryCollectionsFunc = [&](const std::optional<
+                                                          std::string>& wkt,
+                                                      const std::optional<
+                                                          std::vector<
+                                                              std::optional<
+                                                                  std::
+                                                                      string>>>&
+                                                          expectedGeoms) {
+    auto input = makeSingleStringInputRow(wkt);
+    facebook::velox::VectorPtr output = evaluate(
+        "transform(flatten_geometry_collections(ST_GeometryFromText(c0)), x -> ST_AsText(x))",
+        input);
+
+    auto arrayVector =
+        std::dynamic_pointer_cast<facebook::velox::ArrayVector>(output);
+
+    if (expectedGeoms.has_value()) {
+      ASSERT_TRUE(arrayVector != nullptr);
+
+      std::vector<std::vector<std::optional<std::string>>> vec = {
+          expectedGeoms.value()};
+      auto expected = makeNullableArrayVector<std::string>(vec);
+      facebook::velox::test::assertEqualVectors(expected, output);
+    } else {
+      ASSERT_TRUE(output->isNullAt(0));
+    }
+  };
+
+  testFlattenGeometryCollectionsFunc("POINT (1 5)", {{"POINT (1 5)"}});
+  testFlattenGeometryCollectionsFunc(
+      "MULTIPOINT ((0 0), (1 1))", {{"MULTIPOINT (0 0, 1 1)"}});
+  testFlattenGeometryCollectionsFunc("GEOMETRYCOLLECTION EMPTY", {{}});
+  testFlattenGeometryCollectionsFunc(
+      "GEOMETRYCOLLECTION (POINT EMPTY)", {{"POINT EMPTY"}});
+  testFlattenGeometryCollectionsFunc(
+      "GEOMETRYCOLLECTION (POINT (0 0))", {{"POINT (0 0)"}});
+  testFlattenGeometryCollectionsFunc(
+      "GEOMETRYCOLLECTION (POINT (0 0), GEOMETRYCOLLECTION (POINT (1 1)))",
+      {{"POINT (0 0)", "POINT (1 1)"}});
+
+  std::optional<std::string> wkt = std::nullopt;
+  std::optional<bool> expectNullResult = evaluateOnce<bool>(
+      "flatten_geometry_collections(ST_GeometryFromText(c0)) IS NULL", wkt);
+
+  ASSERT_TRUE(expectNullResult.has_value());
+  ASSERT_TRUE(expectNullResult.value());
 }
