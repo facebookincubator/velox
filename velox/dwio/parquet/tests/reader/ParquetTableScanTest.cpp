@@ -15,7 +15,6 @@
  */
 
 #include <folly/init/Init.h>
-#include <vector/VectorPrinter.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h" // @manual
@@ -430,8 +429,6 @@ TEST_F(ParquetTableScanTest, aggregatePushdown) {
 }
 
 TEST_F(ParquetTableScanTest, aggregatePushdownToSmallPages) {
-  FLAGS_velox_exception_user_stacktrace_enabled = true;
-
   auto expectedRowVector = makeRowVector(
       {makeFlatVector<int16_t>({2, 4, 1}),
        makeFlatVector<int64_t>({35, 3, 1})});
