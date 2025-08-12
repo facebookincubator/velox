@@ -1110,6 +1110,13 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
           filter, tree, columnRef, scalars, stream, mr);
     }
 
+    case common::FilterKind::kNegatedBytesValues: {
+      auto const& expr =
+          buildInListExpr<common::NegatedBytesValues, cudf::string_scalar>(
+              filter, tree, columnRef, scalars, stream, mr);
+      return tree.push(Operation{Op::NOT, expr});
+    }
+
     case common::FilterKind::kDoubleRange: {
       return createFloatingPointRangeExpr<double>(
           filter, tree, scalars, columnRef, stream, mr);
