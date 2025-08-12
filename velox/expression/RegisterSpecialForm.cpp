@@ -21,13 +21,25 @@
 #include "velox/expression/CoalesceExpr.h"
 #include "velox/expression/ConjunctExpr.h"
 #include "velox/expression/ExprConstants.h"
+#include "velox/expression/ExprRewrite.h"
+#include "velox/expression/ExprRewriteRegistry.h"
 #include "velox/expression/FunctionCallToSpecialForm.h"
 #include "velox/expression/RowConstructor.h"
 #include "velox/expression/SpecialFormRegistry.h"
+#include "velox/expression/SpecialFormRewrites.h"
 #include "velox/expression/SwitchExpr.h"
 #include "velox/expression/TryExpr.h"
 
 namespace facebook::velox::exec {
+
+void registerSpecialFormExpressionRewrites() {
+  // Register expression optimizations for AND, OR.
+  registerExpressionRewrite(
+      expression::kConjunct,
+      std::make_unique<expression::ExpressionRewrite>(
+          expression::rewriteConjunctExpression));
+}
+
 void registerFunctionCallToSpecialForms() {
   registerFunctionCallToSpecialForm(
       expression::kAnd,
@@ -50,5 +62,7 @@ void registerFunctionCallToSpecialForms() {
   registerFunctionCallToSpecialForm(
       RowConstructorCallToSpecialForm::kRowConstructor,
       std::make_unique<RowConstructorCallToSpecialForm>());
+
+  registerSpecialFormExpressionRewrites();
 }
 } // namespace facebook::velox::exec

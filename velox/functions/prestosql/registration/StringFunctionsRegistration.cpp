@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/expression/ExprRewriteRegistry.h"
 #include "velox/functions/Registerer.h"
 #include "velox/functions/lib/Re2Functions.h"
 #include "velox/functions/prestosql/RegexpReplace.h"
@@ -189,9 +190,15 @@ void registerSplitToMap(const std::string& prefix) {
       Varchar,
       Varchar,
       bool>({"$internal$split_to_map"});
-  exec::registerExpressionRewrite([prefix](const auto& expr) {
-    return rewriteSplitToMapCall(prefix, expr);
-  });
+  exec::registerExpressionRewrite(
+      "split_to_map",
+      std::make_unique<expression::ExpressionRewrite>(
+          [prefix](
+              const core::TypedExprPtr& expr,
+              const std::shared_ptr<core::QueryCtx>& /*queryCtx*/,
+              memory::MemoryPool* /*pool*/) {
+            return rewriteSplitToMapCall(prefix, expr);
+          }));
 }
 } // namespace
 
