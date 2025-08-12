@@ -192,16 +192,7 @@ void QueryBenchmarkBase::initialize() {
   ioExecutor_ =
       std::make_unique<folly::IOThreadPoolExecutor>(FLAGS_num_io_threads);
 
-  // Add new values into the hive configuration...
-  auto configurationValues = std::unordered_map<std::string, std::string>();
-  configurationValues[connector::hive::HiveConfig::kMaxCoalescedBytes] =
-      std::to_string(FLAGS_max_coalesced_bytes);
-  configurationValues[connector::hive::HiveConfig::kMaxCoalescedDistance] =
-      FLAGS_max_coalesced_distance_bytes;
-  configurationValues[connector::hive::HiveConfig::kPrefetchRowGroups] =
-      std::to_string(FLAGS_parquet_prefetch_rowgroups);
-  auto properties = std::make_shared<const config::ConfigBase>(
-      std::move(configurationValues));
+  auto properties = makeConnectorProperties();
 
   // Create hive connector with config...
   connector::registerConnectorFactory(
@@ -213,6 +204,21 @@ void QueryBenchmarkBase::initialize() {
   connector::registerConnector(hiveConnector);
   parquet::registerParquetReaderFactory();
   dwrf::registerDwrfReaderFactory();
+}
+
+std::shared_ptr<config::ConfigBase>
+QueryBenchmarkBase::makeConnectorProperties() {
+  // Default behaviour identical to the original hard-coded version.
+  std::unordered_map<std::string, std::string> configurationValues;
+  configurationValues[connector::hive::HiveConfig::kMaxCoalescedBytes] =
+      std::to_string(FLAGS_max_coalesced_bytes);
+  configurationValues[connector::hive::HiveConfig::kMaxCoalescedDistance] =
+      FLAGS_max_coalesced_distance_bytes;
+  configurationValues[connector::hive::HiveConfig::kPrefetchRowGroups] =
+      std::to_string(FLAGS_parquet_prefetch_rowgroups);
+
+  return std::make_shared<config::ConfigBase>(
+      std::move(configurationValues), true);
 }
 
 std::vector<std::shared_ptr<connector::ConnectorSplit>>

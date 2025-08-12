@@ -117,6 +117,8 @@ class QueryBenchmarkBase {
 
   void runAllCombinations();
 
+  virtual std::shared_ptr<config::ConfigBase> makeConnectorProperties();
+
  protected:
   std::unique_ptr<folly::IOThreadPoolExecutor> ioExecutor_;
   std::unique_ptr<folly::IOThreadPoolExecutor> cacheExecutor_;

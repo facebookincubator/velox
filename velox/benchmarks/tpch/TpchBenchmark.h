@@ -32,21 +32,11 @@ class TpchBenchmark : public facebook::velox::QueryBenchmarkBase {
   void runMain(std::ostream& out, facebook::velox::RunStats& runStats) override;
 
   void runQuery(int32_t queryId) {
-    auto planContext = queryBuilder_->getQueryPlan(queryId);
-    planContext = editQueryPlan(std::move(planContext));
+    const auto planContext = queryBuilder_->getQueryPlan(queryId);
     run(planContext, queryConfigs_);
   }
 
  protected:
-  /// Virtual function to edit query plans if needed.
-  /// The default implementation returns the plan as-is.
-  /// Derived classes can override this to modify plans, e.g., for CUDF
-  /// processing.
-  virtual facebook::velox::exec::test::TpchPlan editQueryPlan(
-      facebook::velox::exec::test::TpchPlan planContext) {
-    return planContext;
-  }
-
   std::unordered_map<std::string, std::string> queryConfigs_;
 
  private:

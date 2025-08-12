@@ -82,7 +82,6 @@ void TpchBenchmark::runMain(
     auto queryPlan = FLAGS_io_meter_column_pct > 0
         ? queryBuilder_->getIoMeterPlan(FLAGS_io_meter_column_pct)
         : queryBuilder_->getQueryPlan(FLAGS_run_query_verbose);
-    queryPlan = editQueryPlan(std::move(queryPlan));
     auto [cursor, actualResults] = run(queryPlan, queryConfigs_);
     if (!cursor) {
       LOG(ERROR) << "Query terminated with error. Exiting";
