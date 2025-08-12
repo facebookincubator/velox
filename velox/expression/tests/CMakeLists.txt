@@ -26,6 +26,7 @@ add_executable(
   ExprStatsTest.cpp
   ExprTest.cpp
   ExprToSubfieldFilterTest.cpp
+  ExprOptimizerTest.cpp
   EvalCtxTest.cpp
   EvalErrorsTest.cpp
   EvalSimplifiedTest.cpp

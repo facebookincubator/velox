@@ -26,6 +26,9 @@
 #include "velox/dwio/dwrf/RegisterDwrfWriter.h"
 #include "velox/exec/fuzzer/FuzzerUtil.h"
 #include "velox/expression/Expr.h"
+#include "velox/expression/ExprConstants.h"
+#include "velox/expression/ExprOptimizer.h"
+#include "velox/expression/ExprUtils.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/expression/ReverseSignatureBinder.h"
 #include "velox/expression/fuzzer/ExpressionFuzzer.h"
@@ -372,6 +375,12 @@ void ExpressionFuzzerVerifier::go() {
     LOG(WARNING) << "No functions to fuzz.";
     return;
   }
+  auto enableExpressionOptimizer =
+      options_.expressionFuzzerOptions.enableExpressionOptimizer;
+  if (enableExpressionOptimizer) {
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{"expression.apply_special_form_rewrites", "true"}});
+  }
 
   auto startTime = std::chrono::system_clock::now();
   size_t i = 0;
@@ -400,6 +409,34 @@ void ExpressionFuzzerVerifier::go() {
     // for floating-point columns and make investigation of failures easier.
     expressions.push_back(
         std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "row_number"));
+
+    if (enableExpressionOptimizer) {
+      std::vector<core::TypedExprPtr> filteredExpressions;
+      for (const auto& expression : expressions) {
+        auto optimizedExpression = expression;
+        try {
+          optimizedExpression = expression::optimizeExpressions(
+                                    {expression}, queryCtx_, pool_.get())
+                                    .front();
+          if (expression::utils::isCall(
+                  optimizedExpression, expression::kFail)) {
+            continue;
+          }
+        } catch (const VeloxException& e) {
+          LOG(INFO) << "Expression optimization failed for: "
+                    << expression->toString();
+          continue;
+        } catch (...) {
+          LOG(ERROR)
+              << "Expression optimization threw exception other than VeloxUserError and VeloxRuntimeError: "
+              << expression->toString();
+          throw;
+        }
+        filteredExpressions.emplace_back(optimizedExpression);
+      }
+
+      expressions = std::move(filteredExpressions);
+    }
 
     for (auto& [funcName, count] : selectionStats) {
       exprNameToStats_[funcName].numTimesSelected += count;

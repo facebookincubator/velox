@@ -162,6 +162,11 @@ DEFINE_string(
     "of functions at every instance. Number of tickets must be a positive "
     "integer. Example: eq=3,floor=5");
 
+DEFINE_bool(
+    enable_expression_optimizer,
+    false,
+    "Optimize and constant fold each fuzzer generated expression.");
+
 namespace facebook::velox::fuzzer {
 
 namespace {
@@ -194,6 +199,7 @@ ExpressionFuzzer::Options getExpressionFuzzerOptions(
   opts.nullRatio = FLAGS_null_ratio;
   opts.specialForms = FLAGS_special_forms;
   opts.useOnlyFunctions = FLAGS_only;
+  opts.enableExpressionOptimizer = FLAGS_enable_expression_optimizer;
   opts.skipFunctions = skipFunctions;
   opts.referenceQueryRunner = referenceQueryRunner;
   opts.exprTransformers = exprTransformers;
