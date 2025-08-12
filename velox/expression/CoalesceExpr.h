@@ -15,12 +15,11 @@
  */
 #pragma once
 
+#include "velox/expression/ExprConstants.h"
 #include "velox/expression/FunctionCallToSpecialForm.h"
 #include "velox/expression/SpecialForm.h"
 
 namespace facebook::velox::exec {
-
-const char* const kCoalesce = "coalesce";
 
 class CoalesceExpr : public SpecialForm {
  public:
