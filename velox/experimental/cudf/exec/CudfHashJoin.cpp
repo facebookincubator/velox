@@ -18,11 +18,15 @@
 #include "velox/experimental/cudf/exec/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
+#include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
 #include "velox/exec/Task.h"
 
 #include <cudf/copying.hpp>
-#include <cudf/join.hpp>
+#include <cudf/join/join.hpp>
+#include <cudf/join/mixed_join.hpp>
+#include <cudf/null_mask.hpp>
+#include <cudf/stream_compaction.hpp>
 
 #include <nvtx3/nvtx3.hpp>
 
@@ -100,6 +104,17 @@ void CudfHashJoinBuild::addInput(RowVectorPtr input) {
   if (input->size() > 0) {
     auto cudfInput = std::dynamic_pointer_cast<CudfVector>(input);
     VELOX_CHECK_NOT_NULL(cudfInput);
+    // Count nulls in join key columns
+    cudf::size_type null_count{};
+    std::tie(std::ignore, null_count) = cudf::bitmask_and(
+        cudfInput->getTableView(),
+        cudfInput->stream(),
+        cudf::get_current_device_resource_ref());
+    {
+      // Update statistics for null keys in join operator.
+      auto lockedStats = stats_.wlock();
+      lockedStats->numNullKeys += null_count;
+    }
     inputs_.push_back(std::move(cudfInput));
   }
 }
@@ -146,7 +161,15 @@ void CudfHashJoinBuild::noMoreInput() {
   };
 
   auto stream = cudfGlobalStreamPool().get_stream();
-  auto tbl = getConcatenatedTable(inputs_, stream);
+  std::unique_ptr<cudf::table> tbl;
+  if (inputs_.size() == 0) {
+    auto emptyRowVector = RowVector::createEmpty(
+        joinNode_->sources()[1]->outputType(), operatorCtx_->pool());
+    tbl = facebook::velox::cudf_velox::with_arrow::toCudfTable(
+        emptyRowVector, operatorCtx_->pool(), stream);
+  } else {
+    tbl = getConcatenatedTable(inputs_, stream);
+  }
 
   // Release input data after synchronizing
   stream.synchronize();
@@ -175,7 +198,7 @@ void CudfHashJoinBuild::noMoreInput() {
       !joinNode_->filter();
   auto hashObject = (buildHashJoin) ? std::make_shared<cudf::hash_join>(
                                           tbl->view().select(buildKeyIndices),
-                                          cudf::null_equality::EQUAL,
+                                          cudf::null_equality::UNEQUAL,
                                           stream)
                                     : nullptr;
   if (buildHashJoin) {
@@ -353,11 +376,108 @@ CudfHashJoinProbe::CudfHashJoinProbe(
 }
 
 bool CudfHashJoinProbe::needsInput() const {
-  return !finished_ && input_ == nullptr;
+  if (cudfDebugEnabled()) {
+    std::cout << "Calling CudfHashJoinProbe::needsInput" << std::endl;
+  }
+  if (joinNode_->isRightJoin()) {
+    return !noMoreInput_;
+  }
+  return !noMoreInput_ && !finished_ && input_ == nullptr;
 }
 
 void CudfHashJoinProbe::addInput(RowVectorPtr input) {
-  input_ = std::move(input);
+  if (skipInput_) {
+    VELOX_CHECK_NULL(input_);
+    return;
+  }
+  auto cudfInput = std::dynamic_pointer_cast<CudfVector>(input);
+  VELOX_CHECK_NOT_NULL(cudfInput);
+  // Count nulls in join key columns
+  cudf::size_type null_count{};
+  std::tie(std::ignore, null_count) = cudf::bitmask_and(
+      cudfInput->getTableView(),
+      cudfInput->stream(),
+      cudf::get_current_device_resource_ref());
+  {
+    // Update statistics for null keys in join operator.
+    auto lockedStats = stats_.wlock();
+    lockedStats->numNullKeys += null_count;
+  }
+  if (!joinNode_->isRightJoin()) {
+    input_ = std::move(input);
+    return;
+  }
+
+  // Queue inputs and process all at once
+  if (input->size() > 0) {
+    inputs_.push_back(std::move(cudfInput));
+  }
+}
+
+void CudfHashJoinProbe::noMoreInput() {
+  if (cudfDebugEnabled()) {
+    std::cout << "Calling CudfHashJoinProbe::noMoreInput" << std::endl;
+  }
+  VELOX_NVTX_OPERATOR_FUNC_RANGE();
+  Operator::noMoreInput();
+  if (!joinNode_->isRightJoin()) {
+    return;
+  }
+  std::vector<ContinuePromise> promises;
+  std::vector<std::shared_ptr<exec::Driver>> peers;
+  // Only last driver collects all answers
+  if (!operatorCtx_->task()->allPeersFinished(
+          planNodeId(), operatorCtx_->driver(), &future_, promises, peers)) {
+    return;
+  }
+  // Collect results from peers
+  for (auto& peer : peers) {
+    auto op = peer->findOperator(planNodeId());
+    auto* probe = dynamic_cast<CudfHashJoinProbe*>(op);
+    VELOX_CHECK_NOT_NULL(probe);
+    inputs_.insert(inputs_.end(), probe->inputs_.begin(), probe->inputs_.end());
+  }
+
+  SCOPE_EXIT {
+    // Realize the promises so that the other Drivers (which were not
+    // the last to finish) can continue from the barrier and finish.
+    peers.clear();
+    for (auto& promise : promises) {
+      promise.setValue();
+    }
+  };
+
+  auto stream = cudfGlobalStreamPool().get_stream();
+  std::unique_ptr<cudf::table> tbl;
+  if (inputs_.size() == 0) {
+    auto emptyRowVector = RowVector::createEmpty(
+        joinNode_->sources()[1]->outputType(), operatorCtx_->pool());
+    tbl = facebook::velox::cudf_velox::with_arrow::toCudfTable(
+        emptyRowVector, operatorCtx_->pool(), stream);
+  } else {
+    tbl = getConcatenatedTable(inputs_, stream);
+  }
+
+  // Release input data after synchronizing
+  stream.synchronize();
+
+  VELOX_CHECK_NOT_NULL(tbl);
+
+  if (cudfDebugEnabled()) {
+    std::cout << "Probe table number of columns: " << tbl->num_columns()
+              << std::endl;
+    std::cout << "Probe table number of rows: " << tbl->num_rows() << std::endl;
+  }
+
+  // Store the concatenated table in input_
+  input_ = std::make_shared<CudfVector>(
+      operatorCtx_->pool(),
+      joinNode_->outputType(),
+      tbl->num_rows(),
+      std::move(tbl),
+      stream);
+
+  inputs_.clear();
 }
 
 RowVectorPtr CudfHashJoinProbe::getOutput() {
@@ -366,10 +486,11 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
   }
   VELOX_NVTX_OPERATOR_FUNC_RANGE();
 
-  if (!input_) {
+  if (finished_ or !hashObject_.has_value()) {
     return nullptr;
   }
-  if (!hashObject_.has_value()) {
+
+  if (!input_) {
     return nullptr;
   }
   auto cudfInput = std::dynamic_pointer_cast<CudfVector>(input_);
@@ -402,6 +523,24 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
           hashObject_.has_value());
   }
 
+  // Special case for null-aware anti join where
+  // build table is not empty, no nulls, and probe table has nulls
+  if (joinNode_->isNullAware() and !joinNode_->filter()) {
+    auto const rightTableHasNulls =
+        cudf::has_nulls(rightTable->view().select(rightKeyIndices_));
+    auto const leftTableHasNulls =
+        cudf::has_nulls(leftTable->view().select(leftKeyIndices_));
+    if (rightTable->num_rows() > 0 and !rightTableHasNulls and
+        leftTableHasNulls) {
+      // drop nulls on probe table
+      leftTable = cudf::drop_nulls(
+          leftTable->view(),
+          leftKeyIndices_,
+          stream,
+          cudf::get_current_device_resource_ref());
+    }
+  }
+
   std::unique_ptr<rmm::device_uvector<cudf::size_type>> leftJoinIndices;
   std::unique_ptr<rmm::device_uvector<cudf::size_type>> rightJoinIndices;
 
@@ -417,7 +556,7 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
           leftTableView,
           rightTableView,
           tree_.back(),
-          cudf::null_equality::EQUAL,
+          cudf::null_equality::UNEQUAL,
           std::nullopt,
           stream);
     } else {
@@ -433,7 +572,7 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
           leftTableView,
           rightTableView,
           tree_.back(),
-          cudf::null_equality::EQUAL,
+          cudf::null_equality::UNEQUAL,
           std::nullopt,
           stream);
     } else {
@@ -449,14 +588,14 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
           rightTableView,
           leftTableView,
           tree_.back(),
-          cudf::null_equality::EQUAL,
+          cudf::null_equality::UNEQUAL,
           std::nullopt,
           stream);
     } else {
       std::tie(rightJoinIndices, leftJoinIndices) = cudf::left_join(
           rightTableView.select(rightKeyIndices_),
           leftTableView.select(leftKeyIndices_),
-          cudf::null_equality::EQUAL,
+          cudf::null_equality::UNEQUAL,
           stream,
           cudf::get_current_device_resource_ref());
     }
@@ -468,16 +607,25 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
           leftTableView,
           rightTableView,
           tree_.back(),
-          cudf::null_equality::EQUAL,
+          cudf::null_equality::UNEQUAL,
           stream,
           cudf::get_current_device_resource_ref());
     } else {
-      leftJoinIndices = cudf::left_anti_join(
-          leftTableView.select(leftKeyIndices_),
-          rightTableView.select(rightKeyIndices_),
-          cudf::null_equality::EQUAL,
-          stream,
-          cudf::get_current_device_resource_ref());
+      auto const rightTableHasNulls =
+          cudf::has_nulls(rightTableView.select(rightKeyIndices_));
+      if (joinNode_->isNullAware() and rightTableHasNulls) {
+        // empty result
+        leftJoinIndices =
+            std::make_unique<rmm::device_uvector<cudf::size_type>>(
+                0, stream, cudf::get_current_device_resource_ref());
+      } else {
+        leftJoinIndices = cudf::left_anti_join(
+            leftTableView.select(leftKeyIndices_),
+            rightTableView.select(rightKeyIndices_),
+            cudf::null_equality::UNEQUAL,
+            stream,
+            cudf::get_current_device_resource_ref());
+      }
     }
   } else if (joinNode_->isLeftSemiFilterJoin()) {
     if (joinNode_->filter()) {
@@ -487,14 +635,14 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
           leftTableView,
           rightTableView,
           tree_.back(),
-          cudf::null_equality::EQUAL,
+          cudf::null_equality::UNEQUAL,
           stream,
           cudf::get_current_device_resource_ref());
     } else {
       leftJoinIndices = cudf::left_semi_join(
           leftTableView.select(leftKeyIndices_),
           rightTableView.select(rightKeyIndices_),
-          cudf::null_equality::EQUAL,
+          cudf::null_equality::UNEQUAL,
           stream,
           cudf::get_current_device_resource_ref());
     }
@@ -506,14 +654,14 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
           rightTableView,
           leftTableView,
           tree_.back(),
-          cudf::null_equality::EQUAL,
+          cudf::null_equality::UNEQUAL,
           stream,
           cudf::get_current_device_resource_ref());
     } else {
       rightJoinIndices = cudf::left_semi_join(
           rightTableView.select(rightKeyIndices_),
           leftTableView.select(leftKeyIndices_),
-          cudf::null_equality::EQUAL,
+          cudf::null_equality::UNEQUAL,
           stream,
           cudf::get_current_device_resource_ref());
     }
@@ -568,7 +716,22 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
       pool(), outputType_, size, std::move(cudfOutput), stream);
 }
 
+bool CudfHashJoinProbe::skipProbeOnEmptyBuild() const {
+  auto const joinType = joinNode_->joinType();
+  return isInnerJoin(joinType) || isLeftSemiFilterJoin(joinType) ||
+      isRightJoin(joinType) || isRightSemiFilterJoin(joinType) ||
+      isRightSemiProjectJoin(joinType);
+}
+
 exec::BlockingReason CudfHashJoinProbe::isBlocked(ContinueFuture* future) {
+  if (joinNode_->isRightJoin() && hashObject_.has_value()) {
+    if (!future_.valid()) {
+      return exec::BlockingReason::kNotBlocked;
+    }
+    *future = std::move(future_);
+    return exec::BlockingReason::kWaitForJoinProbe;
+  }
+
   if (hashObject_.has_value()) {
     return exec::BlockingReason::kNotBlocked;
   }
@@ -590,6 +753,24 @@ exec::BlockingReason CudfHashJoinProbe::isBlocked(ContinueFuture* future) {
   }
   hashObject_ = std::move(hashObject);
 
+  auto& rightTable = hashObject_.value().first;
+  // should be rightTable->numDistinct() but it needs compute,
+  // so we use num_rows()
+  if (rightTable->num_rows() == 0) {
+    if (skipProbeOnEmptyBuild()) {
+      if (operatorCtx_->driverCtx()
+              ->queryConfig()
+              .hashProbeFinishEarlyOnEmptyBuild()) {
+        noMoreInput();
+      } else {
+        skipInput_ = true;
+      }
+    }
+  }
+  if (joinNode_->isRightJoin() && future_.valid()) {
+    *future = std::move(future_);
+    return exec::BlockingReason::kWaitForJoinProbe;
+  }
   return exec::BlockingReason::kNotBlocked;
 }
 
