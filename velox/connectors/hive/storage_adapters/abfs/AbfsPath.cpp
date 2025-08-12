@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/connectors/hive/storage_adapters/abfs/AbfsConfig.h"
+#include "velox/connectors/hive/storage_adapters/abfs/AbfsPath.h"
 
 #include "velox/common/config/Config.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsUtil.h"

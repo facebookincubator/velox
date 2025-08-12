@@ -41,40 +41,24 @@ class DummyAzureClientProvider final : public AzureClientProvider {
   }
 };
 
-void registerOAuthClientProviderFactory(const std::string& accountName) {
-  registerAzureClientProviderFactory(accountName, [](const auto& accountName) {
-    return std::make_unique<OAuthAzureClientProvider>();
-  });
-}
-
-void registerFixedSasClientProviderFactory(const std::string& accountName) {
-  registerAzureClientProviderFactory(accountName, [](const auto& accountName) {
-    return std::make_unique<FixedSasAzureClientProvider>();
-  });
-}
-
-void registerSharedKeyClientProviderFactory(const std::string& accountName) {
-  registerAzureClientProviderFactory(accountName, [](const auto& accountName) {
-    return std::make_unique<SharedKeyAzureClientProvider>();
-  });
-}
-
 } // namespace
 
-TEST(AzureClientProviderFactoriesTest, createFromConfig) {
+TEST(AzureClientProviderFactoriesTest, registerFromConfig) {
   const auto abfsPath = std::make_shared<AbfsPath>(
       "abfss://abc@efg.dfs.core.windows.net/file/test.txt");
 
   {
     // OAuth auth type.
-    registerOAuthClientProviderFactory("efg");
     const config::ConfigBase config(
-        {{"fs.azure.account.oauth2.client.id.efg.dfs.core.windows.net", "123"},
+        {{"fs.azure.account.auth.type.efg.dfs.core.windows.net", "OAuth"},
+         {"fs.azure.account.oauth2.client.id.efg.dfs.core.windows.net", "123"},
          {"fs.azure.account.oauth2.client.secret.efg.dfs.core.windows.net",
           "456"},
          {"fs.azure.account.oauth2.client.endpoint.efg.dfs.core.windows.net",
           "https://login.microsoftonline.com/{TENANTID}/oauth2/token"}},
         false);
+    registerAzureClientProvider(config);
+
     ASSERT_NE(
         AzureClientProviderFactories::getReadFileClient(abfsPath, config),
         nullptr);
@@ -85,9 +69,12 @@ TEST(AzureClientProviderFactoriesTest, createFromConfig) {
 
   {
     // SharedKey auth type.
-    registerSharedKeyClientProviderFactory("efg");
     const config::ConfigBase config(
-        {{"fs.azure.account.key.efg.dfs.core.windows.net", "456"}}, false);
+        {{"fs.azure.account.auth.type.efg.dfs.core.windows.net", "SharedKey"},
+         {"fs.azure.account.key.efg.dfs.core.windows.net", "456"}},
+        false);
+    registerAzureClientProvider(config);
+
     ASSERT_NE(
         AzureClientProviderFactories::getReadFileClient(abfsPath, config),
         nullptr);
@@ -98,9 +85,12 @@ TEST(AzureClientProviderFactoriesTest, createFromConfig) {
 
   {
     // SAS auth type.
-    registerFixedSasClientProviderFactory("efg");
     const config::ConfigBase config(
-        {{"fs.azure.sas.fixed.token.efg.dfs.core.windows.net", "456"}}, false);
+        {{"fs.azure.account.auth.type.efg.dfs.core.windows.net", "SAS"},
+         {"fs.azure.sas.fixed.token.efg.dfs.core.windows.net", "456"}},
+        false);
+    registerAzureClientProvider(config);
+
     ASSERT_NE(
         AzureClientProviderFactories::getReadFileClient(abfsPath, config),
         nullptr);
@@ -108,9 +98,31 @@ TEST(AzureClientProviderFactoriesTest, createFromConfig) {
         AzureClientProviderFactories::getWriteFileClient(abfsPath, config),
         nullptr);
   }
+
+  {
+    // Invalid auth type.
+    const config::ConfigBase config(
+        {{"fs.azure.account.auth.type.efg.dfs.core.windows.net", "Custom"},
+         {"fs.azure.account.key.efg.dfs.core.windows.net", "456"}},
+        false);
+    VELOX_ASSERT_THROW(
+        registerAzureClientProvider(config),
+        "Unsupported auth type Custom, supported auth types are SharedKey, OAuth and SAS.");
+  }
+
+  {
+    // Invalid config key.
+    const config::ConfigBase config(
+        {{"fs.azure.account.auth.type.efg", "SharedKey"},
+         {"fs.azure.account.key.efg.dfs.core.windows.net", "456"}},
+        false);
+    VELOX_ASSERT_THROW(
+        registerAzureClientProvider(config),
+        "Invalid Azure account auth type key: fs.azure.account.auth.type.efg");
+  }
 }
 
-TEST(AzureClientProviderFactoriesTest, registerAzureClientFactory) {
+TEST(AzureClientProviderFactoriesTest, registerCustomFactory) {
   static const std::string path = "abfs://test@efg.dfs.core.windows.net/test";
   const auto abfsPath = std::make_shared<AbfsPath>(path);
 

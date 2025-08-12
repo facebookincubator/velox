@@ -24,8 +24,8 @@
 #include "velox/common/file/File.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/connectors/hive/FileHandle.h"
-#include "velox/connectors/hive/storage_adapters/abfs/AbfsConfig.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsFileSystem.h"
+#include "velox/connectors/hive/storage_adapters/abfs/AbfsPath.h"
 
 #include <duckdb/common/unique_ptr.hpp>
 
@@ -79,7 +79,7 @@ class AbfsFileSystemTest : public testing::Test {
 
   static void SetUpTestCase() {
     registerAbfsFileSystem();
-    registerAzureClientProviderFactory("test", [](const std::string& account) {
+    registerAzureClientProviderFactory("test", [](const std::string&) {
       return std::make_unique<TestAzureClientProvider>();
     });
   }
@@ -203,31 +203,31 @@ TEST_F(AbfsFileSystemTest, fileHandleWithProperties) {
   readData(fileHandleWithoutProperties->file.get());
 }
 
-// TEST_F(AbfsFileSystemTest, multipleThreadsWithReadFile) {
-//   std::atomic<bool> startThreads = false;
-//   std::vector<std::thread> threads;
-//   std::mt19937 generator(std::random_device{}());
-//   std::vector<int> sleepTimesInMicroseconds = {0, 500, 5000};
-//   std::uniform_int_distribution<std::size_t> distribution(
-//       0, sleepTimesInMicroseconds.size() - 1);
-//   for (int i = 0; i < 10; i++) {
-//     auto thread = std::thread([&] {
-//       int index = distribution(generator);
-//       while (!startThreads) {
-//         std::this_thread::yield();
-//       }
-//       std::this_thread::sleep_for(
-//           std::chrono::microseconds(sleepTimesInMicroseconds[index]));
-//       auto readFile = abfs_->openFileForRead(azuriteServer_->fileURI());
-//       readData(readFile.get());
-//     });
-//     threads.emplace_back(std::move(thread));
-//   }
-//   startThreads = true;
-//   for (auto& thread : threads) {
-//     thread.join();
-//   }
-// }
+TEST_F(AbfsFileSystemTest, multipleThreadsWithReadFile) {
+  std::atomic<bool> startThreads = false;
+  std::vector<std::thread> threads;
+  std::mt19937 generator(std::random_device{}());
+  std::vector<int> sleepTimesInMicroseconds = {0, 500, 5000};
+  std::uniform_int_distribution<std::size_t> distribution(
+      0, sleepTimesInMicroseconds.size() - 1);
+  for (int i = 0; i < 10; i++) {
+    auto thread = std::thread([&] {
+      int index = distribution(generator);
+      while (!startThreads) {
+        std::this_thread::yield();
+      }
+      std::this_thread::sleep_for(
+          std::chrono::microseconds(sleepTimesInMicroseconds[index]));
+      auto readFile = abfs_->openFileForRead(azuriteServer_->fileURI());
+      readData(readFile.get());
+    });
+    threads.emplace_back(std::move(thread));
+  }
+  startThreads = true;
+  for (auto& thread : threads) {
+    thread.join();
+  }
+}
 
 TEST_F(AbfsFileSystemTest, missingFile) {
   const std::string abfsFile = azuriteServer_->URI() + "test.txt";

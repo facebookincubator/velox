@@ -17,7 +17,7 @@
 #pragma once
 
 #include "velox/common/config/Config.h"
-#include "velox/connectors/hive/storage_adapters/abfs/AbfsConfig.h"
+#include "velox/connectors/hive/storage_adapters/abfs/AbfsPath.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AzureBlobClient.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AzureClientProvider.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AzureDataLakeFileClient.h"
@@ -40,7 +40,7 @@ using AzureClientProviderFactory =
 /// provider to get the clients. If no implementation is registered for a
 /// specific account, use the default client providers in
 /// `DefaultAzureClientProviders.h` to create clients based on the
-/// authentication configuration in `AbfsConfig.h`. Supported authentication
+/// authentication configuration in `AbfsPath.h`. Supported authentication
 /// methods are SharedKey, OAuth, and fixed SAS token.
 class AzureClientProviderFactories {
  public:
