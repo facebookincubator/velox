@@ -49,8 +49,8 @@ TEST_F(GcsFileSystemTest, readFile) {
   EXPECT_EQ(size, ref_size);
   EXPECT_EQ(readFile->pread(0, size), kLoremIpsum);
 
-  char buffer1[size];
-  ASSERT_EQ(readFile->pread(0, size, &buffer1), kLoremIpsum);
+  std::vector<char> buffer1(size);
+  ASSERT_EQ(readFile->pread(0, size, buffer1.data()), kLoremIpsum);
   ASSERT_EQ(readFile->size(), ref_size);
 
   char buffer2[50];
