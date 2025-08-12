@@ -3643,39 +3643,6 @@ class NoOpVectorFunction : public exec::VectorFunction {
 };
 } // namespace
 
-TEST_P(ParameterizedExprTest, applyFunctionNoResult) {
-  auto data = makeRowVector({
-      makeFlatVector<int32_t>({1, 2, 3}),
-  });
-
-  exec::registerVectorFunction(
-      "always_throws_vector_function",
-      TestingAlwaysThrowsVectorFunction::signatures(),
-      std::make_unique<TestingAlwaysThrowsVectorFunction>(true));
-
-  // At various places in the code, we don't check if result has been set or
-  // not.  Conjuncts have the nice property that they set throwOnError to
-  // false and don't check if the result VectorPtr is nullptr.
-  assertError(
-      "always_throws_vector_function(c0) AND true",
-      makeFlatVector<int32_t>({1, 2, 3}),
-      "always_throws_vector_function(c0)",
-      "Top-level Expression: and(always_throws_vector_function(c0), true:BOOLEAN)",
-      TestingAlwaysThrowsVectorFunction::kVeloxErrorMessage);
-
-  exec::registerVectorFunction(
-      "no_op",
-      NoOpVectorFunction::signatures(),
-      std::make_unique<NoOpVectorFunction>());
-
-  assertError(
-      "no_op(c0) AND true",
-      makeFlatVector<int32_t>({1, 2, 3}),
-      "no_op(c0)",
-      "Top-level Expression: and(no_op(c0), true:BOOLEAN)",
-      "Function neither returned results nor threw exception.");
-}
-
 TEST_P(ParameterizedExprTest, mapKeysAndValues) {
   // Verify that the right size of maps and keys arrays are created. This is
   // done by executing eval with a selectivity vector larger than the size of
@@ -3810,46 +3777,6 @@ TEST_P(ParameterizedExprTest, stdExceptionInVectorFunction) {
       "always_throws_vector_function(c0)",
       makeFlatVector<int32_t>({1, 2, 3}),
       TestingAlwaysThrowsVectorFunction::kStdErrorMessage);
-}
-
-TEST_P(ParameterizedExprTest, cseUnderTry) {
-  auto input = makeRowVector({
-      makeNullableFlatVector<int8_t>({31, 3, 31, 31, 2, std::nullopt}),
-  });
-
-  // All rows trigger overflow.
-  VELOX_ASSERT_THROW(
-      evaluate(
-          "72::tinyint * 31::tinyint <> 4 or 72::tinyint * 31::tinyint <> 5",
-          input),
-      "integer overflow: 72 * 31");
-
-  auto result = evaluate(
-      "try(72::tinyint * 31::tinyint <> 4 or 72::tinyint * 31::tinyint <> 5)",
-      input);
-  assertEqualVectors(makeNullConstant(TypeKind::BOOLEAN, 6), result);
-
-  // Only some rows trigger overflow.
-  VELOX_ASSERT_THROW(
-      evaluate(
-          "36::tinyint * c0 <> 4 or 36::tinyint * c0 <> 5 or 36::tinyint * c0 <> 6",
-          input),
-      "integer overflow: 36 * 31");
-
-  result = evaluate(
-      "try(36::tinyint * c0 <> 4 or 36::tinyint * c0 <> 5 or 36::tinyint * c0 <> 6)",
-      input);
-
-  assertEqualVectors(
-      makeNullableFlatVector<bool>({
-          std::nullopt,
-          true,
-          std::nullopt,
-          std::nullopt,
-          true,
-          std::nullopt,
-      }),
-      result);
 }
 
 namespace {

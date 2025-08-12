@@ -14,7 +14,10 @@
  * limitations under the License.
  */
 #include "velox/expression/ConjunctExpr.h"
+#include "velox/core/Expressions.h"
 #include "velox/expression/BooleanMix.h"
+#include "velox/expression/ExprConstants.h"
+#include "velox/expression/ExprUtils.h"
 #include "velox/expression/FieldReference.h"
 #include "velox/expression/ScopedVarSetter.h"
 
