@@ -437,6 +437,7 @@ jobs:
                 --max_expression_trees_per_step 2 \
                 --retry_with_try \
                 --enable_dereference \
+                --enable_expression_optimizer \
                 --duration_sec $DURATION \
                 --minloglevel=0 \
                 --stderrthreshold=2 \
