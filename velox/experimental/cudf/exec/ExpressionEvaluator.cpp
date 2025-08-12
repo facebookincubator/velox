@@ -25,6 +25,7 @@
 #include "velox/vector/VectorTypeUtils.h"
 
 #include <cudf/ast/expressions.hpp>
+#include <cudf/column/column_factories.hpp>
 #include <cudf/datetime.hpp>
 #include <cudf/lists/count_elements.hpp>
 #include <cudf/strings/attributes.hpp>
@@ -1107,6 +1108,13 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
     case common::FilterKind::kBytesValues: {
       return buildInListExpr<common::BytesValues, cudf::string_scalar>(
           filter, tree, columnRef, scalars, stream, mr);
+    }
+
+    case common::FilterKind::kNegatedBytesValues: {
+      auto const& expr =
+          buildInListExpr<common::NegatedBytesValues, cudf::string_scalar>(
+              filter, tree, columnRef, scalars, stream, mr);
+      return tree.push(Operation{Op::NOT, expr});
     }
 
     case common::FilterKind::kDoubleRange: {
