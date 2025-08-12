@@ -248,6 +248,7 @@ std::unordered_set<std::string> skipFunctions = {
     "bing_tile_polygon",
     "geometry_as_geojson",
     "geometry_from_geojson",
+    "geometry_to_bing_tiles",
 };
 
 std::unordered_set<std::string> skipFunctionsSOT = {
