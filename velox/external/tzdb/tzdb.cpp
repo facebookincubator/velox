@@ -774,6 +774,9 @@ static void __parse_tzdata_record_type(
 
       default:
         if constexpr (recordType == 'z') {
+          // Only z (Zones) have continuation lines.
+          // When parsing z, any token not matched by the earlier cases is invalid.
+          // (continuations are consumed inside __parse_zone)
           std::__throw_runtime_error("corrupt tzdb: unexpected input");
         } else {
           __skip_line(__input);
@@ -786,6 +789,8 @@ static void __parse_tzdata(
     tzdb& __db,
     __rules_storage_type& __rules,
     std::istream& __input) {
+  // Parse tzdata.zi in order: Rules → Zones → Links.
+  // Zones may reference Rules; Links alias Zones.
   const std::string buf{std::istreambuf_iterator<char>(__input), {}};
   { std::istringstream iss(buf); __parse_tzdata_record_type<'r'>(__db, __rules, iss); }
   { std::istringstream iss(buf); __parse_tzdata_record_type<'z'>(__db, __rules, iss); }
