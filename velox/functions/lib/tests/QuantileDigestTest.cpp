@@ -952,4 +952,194 @@ TEST_F(QuantileDigestTest, getDistributionFunction) {
   testGetDistributionFunction<float>();
 }
 
+TEST_F(QuantileDigestTest, truncatedMeanBaseCases) {
+  // Empty digest
+  QuantileDigest<int64_t> emptyDigest{
+      StlAllocator<int64_t>(allocator()), 0.001};
+  EXPECT_FALSE(emptyDigest.getTruncatedMean(0.0, 1.0).has_value());
+
+  // Single element
+  QuantileDigest<int64_t> singleDigest{
+      StlAllocator<int64_t>(allocator()), 0.001};
+  singleDigest.add(1, 1.0);
+  EXPECT_NEAR(singleDigest.getTruncatedMean(0.0, 1.0).value(), 1.0, 1e-6);
+  EXPECT_NEAR(singleDigest.getTruncatedMean(0.4999, 0.5).value(), 1.0, 1e-6);
+  EXPECT_FALSE(singleDigest.getTruncatedMean(0.5, 0.5).has_value());
+}
+
+TEST_F(QuantileDigestTest, truncatedMeanShortList) {
+  QuantileDigest<int64_t> digest{StlAllocator<int64_t>(allocator()), 0.001};
+  digest.add(1, 1.0);
+  digest.add(2, 1.0);
+  digest.add(3, 1.0);
+
+  EXPECT_NEAR(digest.getTruncatedMean(0.0, 1.0).value(), 2.0, 1e-6);
+  EXPECT_NEAR(digest.getTruncatedMean(0.5, 1.0).value(), 4.0 / 1.5, 1e-6);
+  EXPECT_NEAR(digest.getTruncatedMean(0.0, 0.5).value(), 2.0 / 1.5, 1e-6);
+  EXPECT_NEAR(digest.getTruncatedMean(0.0, 0.1).value(), 1.0, 1e-6);
+  EXPECT_NEAR(digest.getTruncatedMean(0.9, 0.99).value(), 3.0, 1e-6);
+}
+
+TEST_F(QuantileDigestTest, truncatedMeanSkewed) {
+  QuantileDigest<int64_t> digest{StlAllocator<int64_t>(allocator()), 0.01};
+  digest.add(1, 1.0);
+  digest.add(5, 1.0);
+  digest.add(10, 1.0);
+  digest.add(20, 1.0);
+  digest.add(50, 1.0);
+
+  EXPECT_NEAR(digest.getTruncatedMean(0.25, 0.75).value(), 11.5, 0.1);
+}
+
+TEST_F(QuantileDigestTest, truncatedMeanRepeated) {
+  QuantileDigest<int64_t> digest{StlAllocator<int64_t>(allocator()), 0.01};
+  digest.add(1, 1.0);
+  for (int i = 0; i < 8; i++) {
+    digest.add(2, 1.0);
+  }
+  digest.add(5, 1.0);
+
+  EXPECT_NEAR(digest.getTruncatedMean(0.0, 0.5).value(), 1.8, 0.1);
+  EXPECT_NEAR(digest.getTruncatedMean(0.4, 0.6).value(), 2.0, 0.01);
+  EXPECT_NEAR(digest.getTruncatedMean(0.8, 1.0).value(), 3.5, 0.1);
+}
+
+TEST_F(QuantileDigestTest, truncatedMeanSigned) {
+  QuantileDigest<int64_t> digest{StlAllocator<int64_t>(allocator()), 0.01};
+  digest.add(-2, 1.0);
+  digest.add(-1, 1.0);
+  digest.add(0, 1.0);
+  digest.add(1, 1.0);
+  digest.add(2, 1.0);
+
+  EXPECT_NEAR(digest.getTruncatedMean(0.0, 0.4).value(), -1.5, 0.1);
+  EXPECT_NEAR(digest.getTruncatedMean(0.4, 0.6).value(), 0.0, 0.01);
+  EXPECT_NEAR(digest.getTruncatedMean(0.2, 0.8).value(), 0.0, 0.01);
+  EXPECT_NEAR(digest.getTruncatedMean(0.4, 1.0).value(), 1.0, 0.1);
+}
+
+TEST_F(QuantileDigestTest, truncatedMeanDoubles) {
+  QuantileDigest<double> digest{StlAllocator<double>(allocator()), 0.01};
+  digest.add(0.2, 1.0);
+  digest.add(0.8, 1.0);
+  digest.add(1.4, 1.0);
+  digest.add(2.0, 1.0);
+  digest.add(2.6, 1.0);
+
+  EXPECT_NEAR(digest.getTruncatedMean(0.0, 1.0).value(), 1.4, 0.01);
+  EXPECT_NEAR(digest.getTruncatedMean(0.6, 1.0).value(), 2.3, 0.1);
+  EXPECT_NEAR(digest.getTruncatedMean(0.0, 0.4).value(), 0.5, 0.1);
+}
+
+TEST_F(QuantileDigestTest, truncatedMeanWeighted) {
+  QuantileDigest<int64_t> digest{StlAllocator<int64_t>(allocator()), 0.01};
+  digest.add(2, 1.0);
+  digest.add(4, 2.0);
+  digest.add(5, 3.0);
+  digest.add(6, 3.0);
+  digest.add(10, 1.0);
+
+  EXPECT_NEAR(digest.getTruncatedMean(0.0, 0.1).value(), 2.0, 0.01);
+  EXPECT_NEAR(digest.getTruncatedMean(0.2, 0.8).value(), 31.0 / 6.0, 0.01);
+  EXPECT_NEAR(digest.getTruncatedMean(0.6, 1.0).value(), 28.0 / 4.0, 0.01);
+}
+
+TEST_F(QuantileDigestTest, truncatedMeanBoundaries) {
+  QuantileDigest<int64_t> digest{StlAllocator<int64_t>(allocator()), 0.01};
+  for (int64_t i = 1; i <= 10; i++) {
+    digest.add(i, 1.0);
+  }
+
+  // Test exact boundaries
+  EXPECT_NEAR(digest.getTruncatedMean(0.0, 1.0).value(), 5.5, 0.01);
+  EXPECT_FALSE(digest.getTruncatedMean(0.0, 0.0).has_value());
+  EXPECT_FALSE(digest.getTruncatedMean(1.0, 1.0).has_value());
+
+  EXPECT_NEAR(digest.getTruncatedMean(0.01, 0.99).value(), 5.5, 0.1);
+  EXPECT_NEAR(digest.getTruncatedMean(0.0, 0.99).value(), 5.45, 0.1);
+  EXPECT_NEAR(digest.getTruncatedMean(0.01, 1.0).value(), 5.55, 0.1);
+}
+
+TEST_F(QuantileDigestTest, truncatedMeanInvalidInputs) {
+  QuantileDigest<int64_t> digest{StlAllocator<int64_t>(allocator()), 0.01};
+  for (int i = 1; i <= 5; i++) {
+    digest.add(i, 1.0);
+  }
+
+  // Test invalid quantile ranges
+  VELOX_ASSERT_THROW(
+      digest.getTruncatedMean(-0.1, 0.5),
+      "lowerQuantileBound must be between 0 and 1");
+  VELOX_ASSERT_THROW(
+      digest.getTruncatedMean(0.5, 1.1),
+      "upperQuantileBound must be between 0 and 1");
+
+  // Test equal bounds - should return null
+  EXPECT_FALSE(digest.getTruncatedMean(0.6, 0.6).has_value());
+  EXPECT_FALSE(digest.getTruncatedMean(0.6, 0.4).has_value());
+}
+
+TEST_F(QuantileDigestTest, truncatedMeanFloatingPointPrecision) {
+  QuantileDigest<double> digest{StlAllocator<double>(allocator()), 0.01};
+
+  // Add some very small and very large values
+  digest.add(1e-10, 1.0);
+  digest.add(1e-5, 1.0);
+  digest.add(1.0, 1.0);
+  digest.add(1e5, 1.0);
+  digest.add(1e10, 1.0);
+
+  // Test that truncated mean handles large ranges correctly
+  EXPECT_NEAR(
+      digest.getTruncatedMean(0.0, 0.6).value(),
+      (1e-10 + 1e-5 + 1.0) / 3.0,
+      1e-10);
+  EXPECT_NEAR(
+      digest.getTruncatedMean(0.4, 1.0).value(), (1.0 + 1e5 + 1e10) / 3.0, 1e5);
+}
+
+TEST_F(QuantileDigestTest, truncatedMeanSkew) {
+  QuantileDigest<int64_t> digest{StlAllocator<int64_t>(allocator()), 0.01};
+  std::vector<int64_t> vals = {1, 1, 1, 1, 1, 2,  2,   2,   2,   2,
+                               3, 3, 3, 3, 3, 50, 100, 200, 400, 1000};
+  for (auto val : vals) {
+    digest.add(val, 1.0);
+  }
+
+  EXPECT_NEAR(digest.getTruncatedMean(0.0, 0.75).value(), 2.0, 0.01);
+  EXPECT_NEAR(digest.getTruncatedMean(0.0, 0.8).value(), 80.0 / 16.0, 0.1);
+  EXPECT_NEAR(digest.getTruncatedMean(0.0, 0.85).value(), 180.0 / 17.0, 0.1);
+  EXPECT_NEAR(digest.getTruncatedMean(0.0, 0.9).value(), 380.0 / 18.0, 0.1);
+  EXPECT_NEAR(digest.getTruncatedMean(0.0, 0.95).value(), 780.0 / 19.0, 0.1);
+  EXPECT_NEAR(digest.getTruncatedMean(0.0, 0.99).value(), 1580.0 / 19.8, 0.1);
+  EXPECT_NEAR(digest.getTruncatedMean(0.0, 1.0).value(), 1780.0 / 20.0, 0.1);
+}
+
+TEST_F(QuantileDigestTest, truncatedMeanDoubleSkew) {
+  QuantileDigest<double> digest{StlAllocator<double>(allocator()), 0.01};
+  std::vector<double> vals = {
+      0.2, 0.2, 0.2, 0.2, 0.2, 5.0, 10.5, 50.5, 99.5, 9999.5};
+  for (auto val : vals) {
+    digest.add(val, 1.0);
+  }
+
+  EXPECT_NEAR(digest.getTruncatedMean(0.0, 0.6).value(), 6.0 / 6, 0.1);
+  EXPECT_NEAR(digest.getTruncatedMean(0.0, 0.8).value(), 67.0 / 8, 0.1);
+  EXPECT_NEAR(digest.getTruncatedMean(0.0, 0.9).value(), 166.5 / 9, 0.1);
+  EXPECT_NEAR(digest.getTruncatedMean(0.0, 1.0).value(), 10166.0 / 10, 0.1);
+  EXPECT_NEAR(digest.getTruncatedMean(0.5, 1.0).value(), 10165.0 / 5, 0.1);
+}
+
+TEST_F(QuantileDigestTest, truncatedMeanDoubleSigned) {
+  QuantileDigest<double> digest{StlAllocator<double>(allocator()), 0.01};
+  std::vector<double> vals = {-2.5, -0.5, 0.0, 0.5, 2.5};
+  for (auto val : vals) {
+    digest.add(val, 1.0);
+  }
+
+  EXPECT_NEAR(digest.getTruncatedMean(0.0, 0.6).value(), -1.0, 0.1);
+  EXPECT_NEAR(digest.getTruncatedMean(0.2, 0.8).value(), 0.0, 0.01);
+  EXPECT_NEAR(digest.getTruncatedMean(0.4, 1.0).value(), 1.0, 0.1);
+}
+
 } // namespace facebook::velox::functions
