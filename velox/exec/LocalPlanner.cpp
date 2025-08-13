@@ -40,6 +40,8 @@
 #include "velox/exec/RoundRobinPartitionFunction.h"
 #include "velox/exec/RowNumber.h"
 #include "velox/exec/ScaleWriterLocalPartition.h"
+#include "velox/exec/SpatialJoinBuild.h"
+#include "velox/exec/SpatialJoinProbe.h"
 #include "velox/exec/StreamingAggregation.h"
 #include "velox/exec/TableScan.h"
 #include "velox/exec/TableWriteMerge.h"
@@ -171,6 +173,13 @@ OperatorSupplier makeOperatorSupplier(
           std::dynamic_pointer_cast<const core::NestedLoopJoinNode>(planNode)) {
     return [join](int32_t operatorId, DriverCtx* ctx) {
       return std::make_unique<NestedLoopJoinBuild>(operatorId, ctx, join);
+    };
+  }
+
+  if (auto join =
+          std::dynamic_pointer_cast<const core::SpatialJoinNode>(planNode)) {
+    return [join](int32_t operatorId, DriverCtx* ctx) {
+      return std::make_unique<SpatialJoinBuild>(operatorId, ctx, join);
     };
   }
 
@@ -458,6 +467,22 @@ void LocalPlanner::markMixedJoinBridges(
             break;
           }
         }
+      } else if (
+          auto joinNode =
+              std::dynamic_pointer_cast<const core::SpatialJoinNode>(
+                  planNode)) {
+        // See if the build source (2nd) belongs to an ungrouped execution.
+        auto& buildSourceNode = planNode->sources()[1];
+        for (auto& factoryOther : driverFactories) {
+          if (!factoryOther->groupedExecution &&
+              buildSourceNode->id() == factoryOther->outputNodeId()) {
+            factoryOther->mixedExecutionModeSpatialJoinNodeIds.emplace(
+                planNode->id());
+            factory->mixedExecutionModeSpatialJoinNodeIds.emplace(
+                planNode->id());
+            break;
+          }
+        }
       }
     }
   }
@@ -557,6 +582,11 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
                 planNode)) {
       operators.push_back(
           std::make_unique<NestedLoopJoinProbe>(id, ctx.get(), joinNode));
+    } else if (
+        auto spatialJoinNode =
+            std::dynamic_pointer_cast<const core::SpatialJoinNode>(planNode)) {
+      operators.push_back(
+          std::make_unique<SpatialJoinProbe>(id, ctx.get(), spatialJoinNode));
     } else if (
         auto joinNode =
             std::dynamic_pointer_cast<const core::IndexLookupJoinNode>(
@@ -769,6 +799,29 @@ std::vector<core::PlanNodeId> DriverFactory::needsNestedLoopJoinBridges()
       // Grouped execution pipelines should not create cross-mode bridges.
       if (!groupedExecution ||
           !mixedExecutionModeNestedLoopJoinNodeIds.contains(joinNode->id())) {
+        planNodeIds.emplace_back(joinNode->id());
+      }
+    }
+  }
+
+  return planNodeIds;
+}
+
+std::vector<core::PlanNodeId> DriverFactory::needsSpatialJoinBridges() const {
+  std::vector<core::PlanNodeId> planNodeIds;
+  // Ungrouped execution pipelines need to take care of cross-mode bridges.
+  if (!groupedExecution && !mixedExecutionModeSpatialJoinNodeIds.empty()) {
+    planNodeIds.insert(
+        planNodeIds.end(),
+        mixedExecutionModeSpatialJoinNodeIds.begin(),
+        mixedExecutionModeSpatialJoinNodeIds.end());
+  }
+  for (const auto& planNode : planNodes) {
+    if (auto joinNode =
+            std::dynamic_pointer_cast<const core::SpatialJoinNode>(planNode)) {
+      // Grouped execution pipelines should not create cross-mode bridges.
+      if (!groupedExecution ||
+          !mixedExecutionModeSpatialJoinNodeIds.contains(joinNode->id())) {
         planNodeIds.emplace_back(joinNode->id());
       }
     }

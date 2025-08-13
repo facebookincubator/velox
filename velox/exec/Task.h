@@ -34,6 +34,7 @@ class OutputBufferManager;
 
 class HashJoinBridge;
 class NestedLoopJoinBridge;
+class SpatialJoinBridge;
 class SplitListener;
 
 using ConnectorSplitPreloadFunc =
@@ -554,6 +555,11 @@ class Task : public std::enable_shared_from_this<Task> {
       uint32_t splitGroupId,
       const std::vector<core::PlanNodeId>& planNodeIds);
 
+  /// Adds SpatialJoinBridge's for all the specified plan node IDs.
+  void addSpatialJoinBridgesLocked(
+      uint32_t splitGroupId,
+      const std::vector<core::PlanNodeId>& planNodeIds);
+
   /// Adds custom join bridges for all the specified plan nodes.
   void addCustomJoinBridgesLocked(
       uint32_t splitGroupId,
@@ -573,6 +579,11 @@ class Task : public std::enable_shared_from_this<Task> {
 
   /// Returns a NestedLoopJoinBridge for 'planNodeId'.
   std::shared_ptr<NestedLoopJoinBridge> getNestedLoopJoinBridge(
+      uint32_t splitGroupId,
+      const core::PlanNodeId& planNodeId);
+
+  /// Returns a SpatialJoinBridge for 'planNodeId'.
+  std::shared_ptr<SpatialJoinBridge> getSpatialJoinBridge(
       uint32_t splitGroupId,
       const core::PlanNodeId& planNodeId);
 
