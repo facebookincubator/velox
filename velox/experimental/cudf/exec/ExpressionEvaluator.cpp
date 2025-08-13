@@ -785,12 +785,12 @@ ColumnOrView CudfExpressionNode::eval(
 }
 
 void addPrecomputedColumns(
-    std::vector<std::unique_ptr<cudf::column>>& input_table_columns,
-    const std::vector<PrecomputeInstruction>& precompute_instructions,
+    std::vector<std::unique_ptr<cudf::column>>& inputTableColumns,
+    const std::vector<PrecomputeInstruction>& precomputeInstructions,
     const std::vector<std::unique_ptr<cudf::scalar>>& scalars,
     const RowTypePtr& inputRowSchema,
     rmm::cuda_stream_view stream) {
-  for (const auto& instruction : precompute_instructions) {
+  for (const auto& instruction : precomputeInstructions) {
     auto
         [dependent_column_index,
          ins_name,
@@ -801,66 +801,66 @@ void addPrecomputedColumns(
     // If a compiled cudf node is available, evaluate it directly.
     if (cudf_node) {
       auto result = cudf_node->eval(
-          input_table_columns,
+          inputTableColumns,
           inputRowSchema,
           stream,
           cudf::get_current_device_resource_ref());
       if (std::holds_alternative<cudf::column_view>(result)) {
-        input_table_columns.emplace_back(std::make_unique<cudf::column>(
+        inputTableColumns.emplace_back(std::make_unique<cudf::column>(
             std::get<cudf::column_view>(result),
             stream,
             cudf::get_current_device_resource_ref()));
       } else {
-        input_table_columns.emplace_back(
+        inputTableColumns.emplace_back(
             std::move(std::get<std::unique_ptr<cudf::column>>(result)));
       }
       continue;
     }
     if (ins_name == "year") {
       auto newColumn = cudf::datetime::extract_datetime_component(
-          input_table_columns[dependent_column_index]->view(),
+          inputTableColumns[dependent_column_index]->view(),
           cudf::datetime::datetime_component::YEAR,
           stream,
           cudf::get_current_device_resource_ref());
-      input_table_columns.emplace_back(std::move(newColumn));
+      inputTableColumns.emplace_back(std::move(newColumn));
     } else if (ins_name == "length") {
       auto newColumn = cudf::strings::count_characters(
-          input_table_columns[dependent_column_index]->view(),
+          inputTableColumns[dependent_column_index]->view(),
           stream,
           cudf::get_current_device_resource_ref());
-      input_table_columns.emplace_back(std::move(newColumn));
+      inputTableColumns.emplace_back(std::move(newColumn));
     } else if (ins_name == "lower") {
       auto newColumn = cudf::strings::to_lower(
-          input_table_columns[dependent_column_index]->view(),
+          inputTableColumns[dependent_column_index]->view(),
           stream,
           cudf::get_current_device_resource_ref());
-      input_table_columns.emplace_back(std::move(newColumn));
+      inputTableColumns.emplace_back(std::move(newColumn));
     } else if (ins_name.rfind("like", 0) == 0) {
       auto scalarIndex = std::stoi(ins_name.substr(4));
       auto newColumn = cudf::strings::like(
-          input_table_columns[dependent_column_index]->view(),
+          inputTableColumns[dependent_column_index]->view(),
           *static_cast<cudf::string_scalar*>(scalars[scalarIndex].get()),
           cudf::string_scalar(
               "", true, stream, cudf::get_current_device_resource_ref()),
           stream,
           cudf::get_current_device_resource_ref());
-      input_table_columns.emplace_back(std::move(newColumn));
+      inputTableColumns.emplace_back(std::move(newColumn));
     } else if (ins_name.rfind("fill", 0) == 0) {
       auto scalarIndex =
           std::stoi(ins_name.substr(5)); // "fill " is 5 characters
       auto newColumn = cudf::make_column_from_scalar(
           *static_cast<cudf::string_scalar*>(scalars[scalarIndex].get()),
-          input_table_columns[dependent_column_index]->size(),
+          inputTableColumns[dependent_column_index]->size(),
           stream,
           cudf::get_current_device_resource_ref());
-      input_table_columns.emplace_back(std::move(newColumn));
+      inputTableColumns.emplace_back(std::move(newColumn));
     } else if (ins_name == "nested_column") {
       auto newColumn = std::make_unique<cudf::column>(
-          input_table_columns[dependent_column_index]->view().child(
+          inputTableColumns[dependent_column_index]->view().child(
               nested_dependent_column_indices[0]),
           stream,
           cudf::get_current_device_resource_ref());
-      input_table_columns.emplace_back(std::move(newColumn));
+      inputTableColumns.emplace_back(std::move(newColumn));
     } else {
       VELOX_FAIL("Unsupported precompute operation " + ins_name);
     }
