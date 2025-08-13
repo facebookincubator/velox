@@ -178,6 +178,13 @@ Spatial Operations
     Empty geometries will return an empty polygon. Negative or NaN distances will
     return an error. Positive infinity distances may lead to undefined results.
 
+.. function:: geometry_union(geometries: array(Geometry)) -> union: Geometry
+
+    Returns a geometry that represents the point set union of the input geometries.
+    Performance of this function, in conjunction with array_agg() to first
+    aggregate the input geometries, may be better than geometry_union_agg(),
+    at the expense of higher memory utilization. Empty array input returns
+    null.
 
 Accessors
 ---------
@@ -428,6 +435,18 @@ Accessors
     Returns an empty Point if the LineString is empty.
     Returns null if either the LineString or double is null.
 
+.. function:: geometry_as_geojson(geometry: Geometry) -> output: varchar
+
+    Returns the GeoJSON encoded defined by the input geometry. If the
+    geometry is atomic (non-multi) empty, this function would return null.
+    Null input returns null output.
+
+.. function:: geometry_from_geojson(geometry: varchar) -> output: geometry
+
+    Returns the geometry type object from the GeoJSON representation.
+    The geometry cannot be empty if it is an atomic (non-multi) geometry type.
+    Null input returns null output.
+
 Bing Tile Functions
 -------------------
 
@@ -495,6 +514,18 @@ for more details.
 
     Returns the quadkey representing the provided bing tile.
 
+.. function:: geometry_to_bing_tiles(geometry: Geometry, zoom_level: tinyint) -> tiles: array(BingTile)
+
+    Returns the minimum set of Bing tiles that fully covers a given geometry at a
+    given zoom level. Zoom levels from 1 to 23 are supported.
+
+.. function:: geometry_to_dissolved_bing_tiles(geometry: Geometry, max_zoom_level: tinyint) -> tile: array(BingTile)
+
+    Returns the minimum set of Bing tiles that fully covers a given geometry at a
+    given zoom level, recursively dissolving full sets of children into parents.
+    This results in a smaller array of tiles of different zoom levels.
+    For example, if the non-dissolved covering is [“00”, “01”, “02”, “03”, “10”],
+    the dissolved covering would be [“0”, “10”]. Zoom levels from 0 to 23 are supported.
 
 .. _OpenGIS Specifications: https://www.ogc.org/standards/ogcapi-features/
 .. _SQL/MM Part 3: Spatial: https://www.iso.org/standard/31369.html
