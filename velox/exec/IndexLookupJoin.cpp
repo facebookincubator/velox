@@ -20,7 +20,6 @@
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/Task.h"
 #include "velox/expression/Expr.h"
-#include "velox/expression/FieldReference.h"
 
 namespace facebook::velox::exec {
 namespace {
