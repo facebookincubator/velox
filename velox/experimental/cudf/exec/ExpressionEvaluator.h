@@ -37,7 +37,6 @@ struct PrecomputeInstruction {
   std::string ins_name;
   int new_column_index;
   std::vector<int> nested_dependent_column_indices;
-  std::shared_ptr<velox::exec::Expr> expr;
   // Optional: compiled cudf expression node for recursive/non-AST eval
   std::shared_ptr<CudfExpressionNode> cudf_node;
 
@@ -46,12 +45,10 @@ struct PrecomputeInstruction {
       int depIndex,
       const std::string& name,
       int newIndex,
-      const std::shared_ptr<velox::exec::Expr>& expr = nullptr,
       const std::shared_ptr<CudfExpressionNode>& node = nullptr)
       : dependent_column_index(depIndex),
         ins_name(name),
         new_column_index(newIndex),
-        expr(expr),
         cudf_node(node) {}
 
   // TODO (dm): This two ctor situation is crazy.
@@ -60,13 +57,11 @@ struct PrecomputeInstruction {
       const std::string& name,
       int newIndex,
       const std::vector<int>& nestedIndices,
-      const std::shared_ptr<velox::exec::Expr>& expr = nullptr,
       const std::shared_ptr<CudfExpressionNode>& node = nullptr)
       : dependent_column_index(depIndex),
         ins_name(name),
         new_column_index(newIndex),
         nested_dependent_column_indices(nestedIndices),
-        expr(expr),
         cudf_node(node) {}
 };
 
