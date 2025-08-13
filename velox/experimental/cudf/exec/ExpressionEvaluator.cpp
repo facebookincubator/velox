@@ -690,20 +690,17 @@ std::shared_ptr<CudfExpressionNode> CudfExpressionNode::create(
   return node;
 }
 
-std::unique_ptr<cudf::column> CudfExpressionNode::eval(
+ColumnOrView CudfExpressionNode::eval(
     std::vector<std::unique_ptr<cudf::column>>& inputTableColumns,
     const RowTypePtr& inputRowSchema,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
   using velox::exec::FieldReference;
 
-  // TODO (dm): Use ColumnOrView to prevent copies of input column when fields
-  // are accessed
   if (auto fieldExpr = std::dynamic_pointer_cast<FieldReference>(expr)) {
     auto name = fieldExpr->name();
     auto columnIndex = inputRowSchema->getChildIdx(name);
-    return std::make_unique<cudf::column>(
-        inputTableColumns[columnIndex]->view(), stream, mr);
+    return inputTableColumns[columnIndex]->view();
   }
 
   if (expr->name() == "split") {
@@ -722,11 +719,11 @@ std::unique_ptr<cudf::column> CudfExpressionNode::eval(
     maxSplitCount -= 1;
 
     return cudf::strings::split_record(
-        dataCol->view(), delimiterScalar, maxSplitCount, stream, mr);
+        asView(dataCol), delimiterScalar, maxSplitCount, stream, mr);
   } else if (expr->name() == "cardinality") {
     auto dataCol =
         subexpressions[0]->eval(inputTableColumns, inputRowSchema, stream, mr);
-    return cudf::lists::count_elements(dataCol->view(), stream, mr);
+    return cudf::lists::count_elements(asView(dataCol), stream, mr);
   }
 
   VELOX_FAIL(
@@ -816,7 +813,15 @@ void addPrecomputedColumns(
           inputRowSchema,
           stream,
           cudf::get_current_device_resource_ref());
-      input_table_columns.emplace_back(std::move(newColumn));
+      if (std::holds_alternative<cudf::column_view>(newColumn)) {
+        input_table_columns.emplace_back(std::make_unique<cudf::column>(
+            std::get<cudf::column_view>(newColumn),
+            stream,
+            cudf::get_current_device_resource_ref()));
+      } else {
+        input_table_columns.emplace_back(
+            std::move(std::get<std::unique_ptr<cudf::column>>(newColumn)));
+      }
       continue;
     }
     if (ins_name == "year") {

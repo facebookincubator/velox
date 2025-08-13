@@ -70,6 +70,25 @@ struct PrecomputeInstruction {
         cudf_node(node) {}
 };
 
+// Holds either a non-owning cudf::column_view (zero-copy) or an owning
+// cudf::column (materialised result).
+using ColumnOrView =
+    std::variant<cudf::column_view, std::unique_ptr<cudf::column>>;
+
+// Helper to always obtain a column_view.
+inline cudf::column_view asView(ColumnOrView& holder) {
+  return std::visit(
+      [](auto& h) -> cudf::column_view {
+        using T = std::decay_t<decltype(h)>;
+        if constexpr (std::is_same_v<T, cudf::column_view>) {
+          return h;
+        } else {
+          return h->view();
+        }
+      },
+      holder);
+}
+
 struct CudfExpressionNode {
   std::shared_ptr<velox::exec::Expr> expr;
   std::vector<std::unique_ptr<cudf::scalar>> scalars;
@@ -85,8 +104,7 @@ struct CudfExpressionNode {
   // TODO (dm): A storage for keeping results in case this is a multiply
   // referenced subexpression (to do CSE)
 
-  // TODO (dm): Add eval method. Kinda like VectorFunction's apply()
-  std::unique_ptr<cudf::column> eval(
+  ColumnOrView eval(
       std::vector<std::unique_ptr<cudf::column>>& inputTableColumns,
       //   TODO (dm): Do something to avoid passing schema
       const RowTypePtr& inputRowSchema,
