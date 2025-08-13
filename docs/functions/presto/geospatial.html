@@ -585,6 +585,22 @@ the double argument. Throws an exception if the distance is not between 0 and 1.
 Returns null if either the LineString or double is null.</p>
 </dd></dl>
 
+<dl class="py function">
+<dt class="sig sig-object py" id="geometry_as_geojson">
+<span class="sig-name descname"><span class="pre">geometry_as_geojson</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">output:</span> <span class="pre">varchar</span></span></span><a class="headerlink" href="#geometry_as_geojson" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the GeoJSON encoded defined by the input geometry. If the
+geometry is atomic (non-multi) empty, this function would return null.
+Null input returns null output.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="geometry_from_geojson">
+<span class="sig-name descname"><span class="pre">geometry_from_geojson</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">varchar</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">output:</span> <span class="pre">geometry</span></span></span><a class="headerlink" href="#geometry_from_geojson" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the geometry type object from the GeoJSON representation.
+The geometry cannot be empty if it is an atomic (non-multi) geometry type.
+Null input returns null output.</p>
+</dd></dl>
+
 </section>
 <section id="bing-tile-functions">
 <h2>Bing Tile Functions<a class="headerlink" href="#bing-tile-functions" title="Link to this heading">¶</a></h2>
@@ -755,6 +771,8 @@ specified.</p>
 <li><a class="reference internal" href="#simplify_geometry"><code class="docutils literal notranslate"><span class="pre">simplify_geometry()</span></code></a></li>
 <li><a class="reference internal" href="#line_locate_point"><code class="docutils literal notranslate"><span class="pre">line_locate_point()</span></code></a></li>
 <li><a class="reference internal" href="#line_interpolate_point"><code class="docutils literal notranslate"><span class="pre">line_interpolate_point()</span></code></a></li>
+<li><a class="reference internal" href="#geometry_as_geojson"><code class="docutils literal notranslate"><span class="pre">geometry_as_geojson()</span></code></a></li>
+<li><a class="reference internal" href="#geometry_from_geojson"><code class="docutils literal notranslate"><span class="pre">geometry_from_geojson()</span></code></a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#bing-tile-functions">Bing Tile Functions</a><ul>
