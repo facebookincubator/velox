@@ -137,10 +137,12 @@ target "presto-java" {
 target "fedora" {
   inherits   = ["base"]
   context    = "."
-  name       = "fedora-amd64"
-  target     = "fedora"
+  matrix = {
+      arch = ["amd64"]
+    }
+  name       = "fedora-${arch}"
   dockerfile = "scripts/docker/fedora.dockerfile"
-  args = {
-    VELOX_BUILD_SHARED = "ON"
-  }
+  target     = "fedora"
+  cache-to   = cache-to-arch("fedora", "${arch}")
+  cache-from = cache-from-arch("fedora", "${arch}")
 }
