@@ -211,6 +211,7 @@ class ConcatFilesSpillMergeStreamTest : public OperatorTestBase {
       "0.0.0",
       10, // Force to create a file per spill to mock multiple files per stream
       0,
+      0,
       1 << 20,
       executor_.get(),
       100,
