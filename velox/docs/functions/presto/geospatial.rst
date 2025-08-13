@@ -428,6 +428,18 @@ Accessors
     Returns an empty Point if the LineString is empty.
     Returns null if either the LineString or double is null.
 
+.. function:: geometry_as_geojson(geometry: Geometry) -> output: varchar
+
+    Returns the GeoJSON encoded defined by the input geometry. If the
+    geometry is atomic (non-multi) empty, this function would return null.
+    Null input returns null output.
+
+.. function:: geometry_from_geojson(geometry: varchar) -> output: geometry
+
+    Returns the geometry type object from the GeoJSON representation.
+    The geometry cannot be empty if it is an atomic (non-multi) geometry type.
+    Null input returns null output.
+
 Bing Tile Functions
 -------------------
 
@@ -495,6 +507,10 @@ for more details.
 
     Returns the quadkey representing the provided bing tile.
 
+.. function:: geometry_to_bing_tiles(geometry: Geometry, zoom_level: tinyint) -> tiles: array(BingTile)
+
+    Returns the minimum set of Bing tiles that fully covers a given geometry at a
+    given zoom level. Zoom levels from 1 to 23 are supported.
 
 .. _OpenGIS Specifications: https://www.ogc.org/standards/ogcapi-features/
 .. _SQL/MM Part 3: Spatial: https://www.iso.org/standard/31369.html
