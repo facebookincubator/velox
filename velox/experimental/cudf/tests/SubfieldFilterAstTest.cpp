@@ -232,6 +232,28 @@ TEST_F(SubfieldFilterAstTest, StringInList) {
   testFilterExecution(rowType, columnName, *filter, vec, expr);
 }
 
+TEST_F(SubfieldFilterAstTest, StringNotInList) {
+  const std::string columnName = "c2";
+  auto rowType = ROW({{columnName, VARCHAR()}});
+  std::vector<std::string> stringVals = {"apple", "cherry"};
+  auto filter = std::make_unique<common::NegatedBytesValues>(
+      stringVals, /*nullAllowed*/ false);
+
+  // AST validation
+  common::Subfield subfield(columnName);
+  cudf::ast::tree tree;
+  std::vector<std::unique_ptr<cudf::scalar>> scalars;
+  const auto& expr =
+      createAstFromSubfieldFilter(subfield, *filter, tree, scalars, rowType);
+  ASSERT_GT(tree.size(), 0UL) << "No expressions created for test";
+  EXPECT_EQ(scalars.size(), stringVals.size())
+      << "Scalar count mismatch for string NOT IN list";
+
+  // Execution validation
+  auto vec = makeTestVector(rowType, 100);
+  testFilterExecution(rowType, columnName, *filter, vec, expr);
+}
+
 TEST_F(SubfieldFilterAstTest, StringRange) {
   const std::string columnName = "c2";
   auto rowType = ROW({{columnName, VARCHAR()}});
