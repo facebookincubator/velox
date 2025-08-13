@@ -23,8 +23,6 @@
 #include "velox/functions/lib/benchmarks/FunctionBenchmarkBase.h"
 #include "velox/functions/prestosql/ArithmeticImpl.h"
 #include "velox/functions/prestosql/Comparisons.h"
-#include "velox/parse/ExpressionsParser.h"
-#include "velox/parse/TypeResolver.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
 DEFINE_int64(fuzzer_seed, 99887766, "Seed for random input dataset generator");
