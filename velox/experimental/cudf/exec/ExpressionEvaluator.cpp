@@ -1155,4 +1155,43 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
           static_cast<int>(filter.kind()));
   }
 }
+
+// Create a combined AST from a set of subfield filters by chaining them with
+// logical ANDs. The returned expression is owned by the provided 'tree'.
+cudf::ast::expression const& createAstFromSubfieldFilters(
+    const common::SubfieldFilters& subfieldFilters,
+    cudf::ast::tree& tree,
+    std::vector<std::unique_ptr<cudf::scalar>>& scalars,
+    const RowTypePtr& inputRowSchema) {
+  using Op = cudf::ast::ast_operator;
+  using Operation = cudf::ast::operation;
+
+  std::vector<const cudf::ast::expression*> exprRefs;
+
+  // Build individual filter expressions.
+  for (const auto& [subfield, filterPtr] : subfieldFilters) {
+    if (!filterPtr) {
+      continue;
+    }
+    auto const& expr = createAstFromSubfieldFilter(
+        subfield, *filterPtr, tree, scalars, inputRowSchema);
+    exprRefs.push_back(&expr);
+  }
+
+  VELOX_CHECK_GT(exprRefs.size(), 0, "No subfield filters provided");
+
+  if (exprRefs.size() == 1) {
+    return *exprRefs[0];
+  }
+
+  // Combine expressions with NULL_LOGICAL_AND.
+  const cudf::ast::expression* result = exprRefs[0];
+  for (size_t i = 1; i < exprRefs.size(); ++i) {
+    auto const& andExpr =
+        tree.push(Operation{Op::NULL_LOGICAL_AND, *result, *exprRefs[i]});
+    result = &andExpr;
+  }
+
+  return *result;
+}
 } // namespace facebook::velox::cudf_velox
