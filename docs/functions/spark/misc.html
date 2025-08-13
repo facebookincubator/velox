@@ -58,6 +58,19 @@ Nested nulls in complex type values are handled as non-nulls.</p>
 </dd></dl>
 
 <dl class="spark function">
+<dt class="sig sig-object spark" id="get_array_struct_fields">
+<span class="sig-name descname"><span class="pre">get_array_struct_fields</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ordinal</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#get_array_struct_fields" title="Link to this definition">¶</a></dt>
+<dd><p>Extracts the <code class="docutils literal notranslate"><span class="pre">ordinal</span></code>-th fields of all array elements, and returns them as a new array.
+The first input must be of array(strcut) type and nested complex type is allowed.
+The <code class="docutils literal notranslate"><span class="pre">ordinal</span></code> is 0-based, and if <code class="docutils literal notranslate"><span class="pre">ordinal</span></code> is negative or no less than
+the children size of strcut, exception is thrown.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">items</span><span class="o">.</span><span class="n">col1</span> <span class="n">FROM</span> <span class="n">VALUES</span> <span class="p">(</span><span class="n">array</span><span class="p">(</span><span class="n">struct</span><span class="p">(</span><span class="mi">100</span><span class="p">,</span><span class="s1">&#39;foo&#39;</span><span class="p">),</span> <span class="n">struct</span><span class="p">(</span><span class="mi">200</span><span class="p">,</span><span class="s1">&#39;bar&#39;</span><span class="p">)))</span> <span class="n">AS</span> <span class="n">t</span><span class="p">(</span><span class="n">items</span><span class="p">);</span> <span class="o">--</span> <span class="n">array</span><span class="p">(</span><span class="mi">100</span><span class="p">,</span> <span class="mi">200</span><span class="p">)</span>
+<span class="n">SELECT</span> <span class="n">items</span><span class="o">.</span><span class="n">col2</span> <span class="n">FROM</span> <span class="n">VALUES</span> <span class="p">(</span><span class="n">array</span><span class="p">(</span><span class="n">struct</span><span class="p">(</span><span class="mi">100</span><span class="p">,</span><span class="s1">&#39;foo&#39;</span><span class="p">),</span> <span class="n">struct</span><span class="p">(</span><span class="mi">200</span><span class="p">,</span><span class="s1">&#39;bar&#39;</span><span class="p">)))</span> <span class="n">AS</span> <span class="n">t</span><span class="p">(</span><span class="n">items</span><span class="p">);</span> <span class="o">--</span> <span class="n">array</span><span class="p">(</span><span class="s1">&#39;foo&#39;</span><span class="p">,</span> <span class="s1">&#39;bar&#39;</span><span class="p">)</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="spark function">
 <dt class="sig sig-object spark" id="get_struct_field">
 <span class="sig-name descname"><span class="pre">get_struct_field</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">struct</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ordinal</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">T</span></span></span><a class="headerlink" href="#get_struct_field" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the value of nested subfield at position <code class="docutils literal notranslate"><span class="pre">ordinal</span></code> in the input <code class="docutils literal notranslate"><span class="pre">struct</span></code>.
@@ -128,6 +141,7 @@ from Pseudo-Random Numbers with the seed by combining user-specified
     <ul>
 <li><a class="reference internal" href="#">Miscellaneous Functions</a><ul>
 <li><a class="reference internal" href="#at_least_n_non_nulls"><code class="docutils literal notranslate"><span class="pre">at_least_n_non_nulls()</span></code></a></li>
+<li><a class="reference internal" href="#get_array_struct_fields"><code class="docutils literal notranslate"><span class="pre">get_array_struct_fields()</span></code></a></li>
 <li><a class="reference internal" href="#get_struct_field"><code class="docutils literal notranslate"><span class="pre">get_struct_field()</span></code></a></li>
 <li><a class="reference internal" href="#monotonically_increasing_id"><code class="docutils literal notranslate"><span class="pre">monotonically_increasing_id()</span></code></a></li>
 <li><a class="reference internal" href="#raise_error"><code class="docutils literal notranslate"><span class="pre">raise_error()</span></code></a></li>
