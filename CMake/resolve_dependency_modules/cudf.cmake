@@ -19,25 +19,25 @@ cmake_minimum_required(VERSION 3.30.4)
 
 set(VELOX_rapids_cmake_VERSION 25.08)
 set(VELOX_rapids_cmake_BUILD_SHA256_CHECKSUM
-    f0e5484d49d9365b84eb41799db4fb1c5c8532f251ace734ead168bbbc1111c7)
+    38f9e374e726b9c30098c723ba97cde4574f411228453f0d247457406143ae20)
 set(VELOX_rapids_cmake_SOURCE_URL
-    "https://github.com/rapidsai/rapids-cmake/archive/492d474a62a91dd61bd6b91994eec2125e12fab8.tar.gz"
+    "https://github.com/rapidsai/rapids-cmake/archive/a0349d5b0eff1c68c399526b512aae754420a5b0.tar.gz"
 )
 velox_resolve_dependency_url(rapids_cmake)
 
 set(VELOX_rmm_VERSION 25.08)
 set(VELOX_rmm_BUILD_SHA256_CHECKSUM
-    9dc014c44191b0a23430f1bd7ebe38663643cdbbedd47a5a8e2079fdbbd4eb2e)
+    f2d7a64a3dcfe9b49231375b6df72b3be8a10e0828404463fd5176a9d75a1d4f)
 set(VELOX_rmm_SOURCE_URL
-    "https://github.com/rapidsai/rmm/archive/a68fdfe26e0d1e2e37feddf53eda1b7b5044f9f4.tar.gz"
+    "https://github.com/rapidsai/rmm/archive/29dd32302eb7c3e16fb837a1cfe4baac98071512.tar.gz"
 )
 velox_resolve_dependency_url(rmm)
 
 set(VELOX_kvikio_VERSION 25.08)
 set(VELOX_kvikio_BUILD_SHA256_CHECKSUM
-    8a5251ee1dff576578b0f96130ef87bfd8693de4769c08d33f203b6ea6750bab)
+    456126c106830666398b49fbeca572717c0b7f8f612ad7a6c96c7f63a6a1ad98)
 set(VELOX_kvikio_SOURCE_URL
-    "https://github.com/rapidsai/kvikio/archive/54c420a652bf29e3c7de9ac2e2e19af07de7c256.tar.gz"
+    "https://github.com/rapidsai/kvikio/archive/a2bbfeb0de49c29245da15d9df0ae7619c0a7531.tar.gz"
 )
 velox_resolve_dependency_url(kvikio)
 
@@ -46,9 +46,9 @@ set(VELOX_cudf_VERSION
     CACHE STRING "cudf version")
 
 set(VELOX_cudf_BUILD_SHA256_CHECKSUM
-    01d8bd30e8b953b97c71adb2bfc9d83be440b3df6f822f92af95a471ebf001da)
+    a7a33283d58c4ec56b5183d334445ee5cfccf95d0752899a7d59579e5ee28abe)
 set(VELOX_cudf_SOURCE_URL
-    "https://github.com/rapidsai/cudf/archive/da6ce2a96b616891d66c4f41ade9db4047eb4b3f.tar.gz"
+    "https://github.com/rapidsai/cudf/archive/f366b7f82966ba0a75aba8f806c6c5b58202d483.tar.gz"
 )
 velox_resolve_dependency_url(cudf)
 

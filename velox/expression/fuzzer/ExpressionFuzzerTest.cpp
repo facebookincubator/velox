@@ -244,6 +244,7 @@ std::unordered_set<std::string> skipFunctions = {
     "line_locate_point",
     "line_interpolate_point",
     "flatten_geometry_collections",
+    "expand_envelope",
 };
 
 std::unordered_set<std::string> skipFunctionsSOT = {
@@ -386,6 +387,7 @@ std::unordered_set<std::string> skipFunctionsSOT = {
     // Skipping until the new signature is merged and released in Presto:
     // https://github.com/prestodb/presto/pull/25521
     "xxhash64(varbinary,bigint) -> varbinary",
+    "map_keys_by_top_n_values", // https://github.com/facebookincubator/velox/issues/14374
     "$internal$canonicalize",
     "$internal$contains",
 };
