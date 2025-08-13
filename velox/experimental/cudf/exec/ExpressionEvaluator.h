@@ -16,7 +16,6 @@
 
 #pragma once
 
-#include "velox/core/Expressions.h"
 #include "velox/expression/Expr.h"
 #include "velox/type/Type.h"
 
@@ -28,6 +27,9 @@
 
 namespace facebook::velox::cudf_velox {
 
+// Forward declaration to allow usage in PrecomputeInstruction
+struct CudfExpressionNode;
+
 // Pre-compute instructions for the expression,
 // for ops that are not supported by cudf::ast
 struct PrecomputeInstruction {
@@ -36,17 +38,21 @@ struct PrecomputeInstruction {
   int new_column_index;
   std::vector<int> nested_dependent_column_indices;
   std::shared_ptr<velox::exec::Expr> expr;
+  // Optional: compiled cudf expression node for recursive/non-AST eval
+  std::shared_ptr<CudfExpressionNode> cudf_node;
 
   // Constructor to initialize the struct with values
   PrecomputeInstruction(
       int depIndex,
       const std::string& name,
       int newIndex,
-      const std::shared_ptr<velox::exec::Expr>& expr = nullptr)
+      const std::shared_ptr<velox::exec::Expr>& expr = nullptr,
+      const std::shared_ptr<CudfExpressionNode>& node = nullptr)
       : dependent_column_index(depIndex),
         ins_name(name),
         new_column_index(newIndex),
-        expr(expr) {}
+        expr(expr),
+        cudf_node(node) {}
 
   // TODO (dm): This two ctor situation is crazy.
   PrecomputeInstruction(
@@ -54,12 +60,38 @@ struct PrecomputeInstruction {
       const std::string& name,
       int newIndex,
       const std::vector<int>& nestedIndices,
-      const std::shared_ptr<velox::exec::Expr>& expr = nullptr)
+      const std::shared_ptr<velox::exec::Expr>& expr = nullptr,
+      const std::shared_ptr<CudfExpressionNode>& node = nullptr)
       : dependent_column_index(depIndex),
         ins_name(name),
         new_column_index(newIndex),
         nested_dependent_column_indices(nestedIndices),
-        expr(expr) {}
+        expr(expr),
+        cudf_node(node) {}
+};
+
+struct CudfExpressionNode {
+  std::shared_ptr<velox::exec::Expr> expr;
+  std::vector<std::unique_ptr<cudf::scalar>> scalars;
+  std::vector<std::shared_ptr<CudfExpressionNode>> subexpressions;
+
+  // TODO (dm): Needs some form of function identification. I'd say let's add a
+  // registration mechanism. get function from it and store it here.
+
+  // TODO (dm): Add a factory that takes a velox expr
+  static std::shared_ptr<CudfExpressionNode> create(
+      const std::shared_ptr<velox::exec::Expr>& expr);
+
+  // TODO (dm): A storage for keeping results in case this is a multiply
+  // referenced subexpression (to do CSE)
+
+  // TODO (dm): Add eval method. Kinda like VectorFunction's apply()
+  std::unique_ptr<cudf::column> eval(
+      std::vector<std::unique_ptr<cudf::column>>& inputTableColumns,
+      //   TODO (dm): Do something to avoid passing schema
+      const RowTypePtr& inputRowSchema,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr);
 };
 
 cudf::ast::expression const& createAstTree(
