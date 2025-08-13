@@ -388,6 +388,27 @@ if pos + len is negative, it refers to -(pos + len)th element before the end of 
 </dd></dl>
 
 <dl class="spark function">
+<dt class="sig sig-object spark" id="read_side_padding">
+<span class="sig-name descname"><span class="pre">read_side_padding</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">limit</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#read_side_padding" title="Link to this definition">¶</a></dt>
+<dd><p>Right-pads the given string with spaces to the specified length <code class="docutils literal notranslate"><span class="pre">limit</span></code>.
+If the string’s length is already greater than or equal to <code class="docutils literal notranslate"><span class="pre">limit</span></code>, it is returned as-is.
+Throws an exception if <code class="docutils literal notranslate"><span class="pre">limit</span></code> is not greater than 0.
+Note: This function is not directly callable in Spark SQL, but is used internally for reading CHAR type columns.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">--</span> <span class="n">Function</span> <span class="n">call</span> <span class="n">examples</span> <span class="p">(</span><span class="n">this</span> <span class="n">function</span> <span class="ow">is</span> <span class="ow">not</span> <span class="n">directly</span> <span class="nb">callable</span> <span class="ow">in</span> <span class="n">Spark</span> <span class="n">SQL</span><span class="p">)</span><span class="o">.</span>
+<span class="n">read_side_padding</span><span class="p">(</span><span class="s2">&quot;a&quot;</span><span class="p">,</span> <span class="mi">3</span><span class="p">)</span> <span class="o">--</span> <span class="s2">&quot;a  &quot;</span>
+<span class="n">read_side_padding</span><span class="p">(</span><span class="s2">&quot;abc&quot;</span><span class="p">,</span> <span class="mi">3</span><span class="p">)</span> <span class="o">--</span> <span class="s2">&quot;abc&quot;</span>
+<span class="n">read_side_padding</span><span class="p">(</span><span class="s2">&quot;abcd&quot;</span><span class="p">,</span> <span class="mi">3</span><span class="p">)</span> <span class="o">--</span> <span class="s2">&quot;abcd&quot;</span>
+<span class="n">read_side_padding</span><span class="p">(</span><span class="s2">&quot;世&quot;</span><span class="p">,</span> <span class="mi">3</span><span class="p">)</span> <span class="o">--</span> <span class="s2">&quot;世  &quot;</span>
+<span class="n">read_side_padding</span><span class="p">(</span><span class="s2">&quot;世界&quot;</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span> <span class="o">--</span> <span class="s2">&quot;世界&quot;</span>
+<span class="n">read_side_padding</span><span class="p">(</span><span class="s2">&quot;Привет&quot;</span><span class="p">,</span> <span class="mi">8</span><span class="p">)</span> <span class="o">--</span> <span class="s2">&quot;Привет  &quot;</span>
+<span class="n">read_side_padding</span><span class="p">(</span><span class="s2">&quot;Γειά&quot;</span><span class="p">,</span> <span class="mi">5</span><span class="p">)</span> <span class="o">--</span> <span class="s2">&quot;Γειά &quot;</span>
+<span class="n">read_side_padding</span><span class="p">(</span><span class="s2">&quot;Приветик&quot;</span><span class="p">,</span> <span class="mi">6</span><span class="p">)</span> <span class="o">--</span> <span class="s2">&quot;Приветик&quot;</span>
+<span class="n">read_side_padding</span><span class="p">(</span><span class="s2">&quot;a&quot;</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span> <span class="o">--</span> <span class="n">VeloxUserError</span><span class="p">:</span> <span class="s2">&quot;The length limit must be greater than 0.&quot;</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="spark function">
 <dt class="sig sig-object spark" id="repeat">
 <span class="sig-name descname"><span class="pre">repeat</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">n</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#repeat" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the string which repeats <code class="docutils literal notranslate"><span class="pre">input</span></code> <code class="docutils literal notranslate"><span class="pre">n</span></code> times.
@@ -692,6 +713,7 @@ Note: This function is not directly callable in Spark SQL, but internally used f
 <li><a class="reference internal" href="#luhn_check"><code class="docutils literal notranslate"><span class="pre">luhn_check()</span></code></a></li>
 <li><a class="reference internal" href="#mask"><code class="docutils literal notranslate"><span class="pre">mask()</span></code></a></li>
 <li><a class="reference internal" href="#overlay"><code class="docutils literal notranslate"><span class="pre">overlay()</span></code></a></li>
+<li><a class="reference internal" href="#read_side_padding"><code class="docutils literal notranslate"><span class="pre">read_side_padding()</span></code></a></li>
 <li><a class="reference internal" href="#repeat"><code class="docutils literal notranslate"><span class="pre">repeat()</span></code></a></li>
 <li><a class="reference internal" href="#replace"><code class="docutils literal notranslate"><span class="pre">replace()</span></code></a></li>
 <li><a class="reference internal" href="#id0"><code class="docutils literal notranslate"><span class="pre">replace()</span></code></a></li>
