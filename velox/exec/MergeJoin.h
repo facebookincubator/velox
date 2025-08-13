@@ -439,6 +439,9 @@ class MergeJoin : public Operator {
     // first row.
     void addMiss(vector_size_t outputIndex) {
       matchingRows_.setValid(outputIndex, false);
+      // addMiss should be called for left-side row that has no match on the
+      // right-side. This implies it must be a new row.
+      rawLeftRowNumbers_[outputIndex] = ++lastLeftRowNumber_;
       resetLastVector();
     }
 
@@ -486,18 +489,17 @@ class MergeJoin : public Operator {
       return currentLeftRowNumber_ == rawLeftRowNumbers_[row];
     }
 
-    // Called when all rows from the current output batch are processed and the
-    // next batch of output will start with a new left-side row or there will
-    // be no more batches. Calls 'onMiss' for the last left-side row if the
-    // filter failed for all matches of that row.
+    // Called when all rows from the current output batch are processed. Calls
+    // 'onMiss' for the last left-side row if the filter failed for all matches
+    // of that row.
     template <typename TOnMiss>
     void noMoreFilterResults(TOnMiss onMiss) {
-      if (!currentRowPassed_) {
+      if (!currentRowPassed_ && currentRow_ >= 0) {
         onMiss(currentRow_);
       }
 
+      // Output index is meanless for next batch, so reset it to -1.
       currentRow_ = -1;
-      currentRowPassed_ = false;
     }
 
     void reset();

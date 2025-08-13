@@ -1391,20 +1391,43 @@ RowVectorPtr MergeJoin::applyFilter(const RowVectorPtr& output) {
     // Before we leave the current buffer, since we may not have seen the next
     // left key match yet, the last key match may still be pending to produce
     // a row (because `processFilterResult()` was not called yet).
-    //
-    // To handle this, we need to call `noMoreFilterResults()` unless the
-    // same current left key match may continue in the next buffer. So there
-    // are two cases to check:
-    //
-    // 1. If leftMatch_ is nullopt, there for sure the next buffer will
-    // contain a different key match.
-    //
-    // 2. leftMatch_ may not be nullopt, but may be related to a different
-    // (subsequent) left key. So we check if the last row in the batch has the
-    // same left row number as the last key match.
-    if (!leftMatch_ || !joinTracker_->isCurrentLeftMatch(numRows - 1)) {
-      joinTracker_->noMoreFilterResults(onMiss);
-    }
+    auto onMissLastRow = [&](auto... args) {
+      // To handle this, we need to call `onMiss()` unless the
+      // same current left key match may continue in the next buffer.
+
+      // 1. If leftMatch_ is nullopt, there for sure the next buffer will
+      // contain a different key match.
+      // 2. leftMatch_ may not be nullopt, but may be related to a different
+      // (subsequent) left key. So we check if the last row in the batch has the
+      // same left row number as the last key match.
+      if (!leftMatch_ || !joinTracker_->isCurrentLeftMatch(numRows - 1)) {
+        onMiss(args...);
+        return;
+      }
+
+      // 3. The last row of the batch may have the same left row number, but the
+      // right-side match might have just completed an iteration. In this case:
+      //    - The next batch will begin with a new left row.
+      //    - The right-side cursor will move to the start.
+      VELOX_CHECK(leftMatch_);
+      VELOX_CHECK(rightMatch_);
+      if (leftMatch_->cursor) {
+        VELOX_CHECK(rightMatch_->cursor);
+
+        auto& otherMatch =
+            (isRightJoin(joinType_) || isRightSemiFilterJoin(joinType_))
+            ? leftMatch_
+            : rightMatch_;
+
+        if (otherMatch->cursor->batchIndex == 0 &&
+            otherMatch->cursor->rowIndex == otherMatch->startRowIndex) {
+          onMiss(args...);
+          return;
+        }
+      }
+    };
+
+    joinTracker_->noMoreFilterResults(onMissLastRow);
   } else {
     filterRows_.resize(numRows);
     filterRows_.setAll();
