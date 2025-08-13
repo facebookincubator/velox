@@ -33,33 +33,27 @@ azureClientFactoryRegistry() {
   return factories;
 }
 
-void factoryNotRegistered(const std::string& account) {
-  VELOX_USER_FAIL(
-      "No AzureClientProviderFactory registered for account '{}'. Please use "
-      "`registerAzureClientProviderFactory` to register a factory for the "
-      "account before using it.",
-      account);
-}
-
 } // namespace
 
 void AzureClientProviderFactories::registerFactory(
     const std::string& account,
     const AzureClientProviderFactory& factory) {
-  azureClientFactoryRegistry().withWLock([&](auto& factories) {
-    auto it = factories.find(account);
-    factories[account] = factory;
-  });
+  azureClientFactoryRegistry().withWLock(
+      [&](auto& factories) { factories[account] = factory; });
 }
 
-std::optional<AzureClientProviderFactory>
-AzureClientProviderFactories::getClientFactory(const std::string& account) {
+AzureClientProviderFactory AzureClientProviderFactories::getClientFactory(
+    const std::string& account) {
   return azureClientFactoryRegistry().withRLock(
-      [&](const auto& factories) -> std::optional<AzureClientProviderFactory> {
+      [&](const auto& factories) -> AzureClientProviderFactory {
         if (auto it = factories.find(account); it != factories.end()) {
           return it->second;
         }
-        return std::nullopt;
+        VELOX_USER_FAIL(
+            "No AzureClientProviderFactory registered for account '{}'. Please use "
+            "`registerAzureClientProviderFactory` to register a factory for the "
+            "account before using it.",
+            account);
       });
 }
 
@@ -67,24 +61,16 @@ std::unique_ptr<AzureBlobClient>
 AzureClientProviderFactories::getReadFileClient(
     const std::shared_ptr<AbfsPath>& abfsPath,
     const config::ConfigBase& config) {
-  if (const auto factory = getClientFactory(abfsPath->accountName())) {
-    return factory.value()(abfsPath->accountName())
-        ->getReadFileClient(abfsPath, config);
-  }
-  factoryNotRegistered(abfsPath->accountName());
-  VELOX_UNREACHABLE();
+  auto factory = getClientFactory(abfsPath->accountName());
+  return factory(abfsPath->accountName())->getReadFileClient(abfsPath, config);
 }
 
 std::unique_ptr<AzureDataLakeFileClient>
 AzureClientProviderFactories::getWriteFileClient(
     const std::shared_ptr<AbfsPath>& abfsPath,
     const config::ConfigBase& config) {
-  if (const auto factory = getClientFactory(abfsPath->accountName())) {
-    return factory.value()(abfsPath->accountName())
-        ->getWriteFileClient(abfsPath, config);
-  }
-  factoryNotRegistered(abfsPath->accountName());
-  VELOX_UNREACHABLE();
+  auto factory = getClientFactory(abfsPath->accountName());
+  return factory(abfsPath->accountName())->getWriteFileClient(abfsPath, config);
 }
 
 } // namespace facebook::velox::filesystems

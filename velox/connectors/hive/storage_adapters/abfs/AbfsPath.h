@@ -16,8 +16,6 @@
 
 #pragma once
 
-#include <azure/core/credentials/credentials.hpp>
-#include <azure/storage/blobs/blob_client.hpp>
 #include <azure/storage/files/datalake.hpp>
 #include <folly/hash/Hash.h>
 #include <string>

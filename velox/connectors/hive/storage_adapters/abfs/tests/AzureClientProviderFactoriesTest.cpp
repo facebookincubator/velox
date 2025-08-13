@@ -132,8 +132,7 @@ TEST(AzureClientProviderFactoriesTest, registerCustomFactory) {
         return std::make_unique<DummyAzureClientProvider>();
       });
 
-  ASSERT_TRUE(
-      AzureClientProviderFactories::getClientFactory("efg").has_value());
+  ASSERT_NO_THROW(AzureClientProviderFactories::getClientFactory("efg"));
   VELOX_ASSERT_THROW(
       AzureClientProviderFactories::getReadFileClient(
           abfsPath, config::ConfigBase({})),
@@ -143,6 +142,7 @@ TEST(AzureClientProviderFactoriesTest, registerCustomFactory) {
           abfsPath, config::ConfigBase({})),
       "DummyAzureClientProvider: Not implemented.");
 
-  ASSERT_FALSE(
-      AzureClientProviderFactories::getClientFactory("efg2").has_value());
+  VELOX_ASSERT_THROW(
+      AzureClientProviderFactories::getClientFactory("efg2"),
+      "No AzureClientProviderFactory registered for account 'efg2'.");
 }

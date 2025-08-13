@@ -15,11 +15,7 @@
  */
 
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsPath.h"
-
-#include "velox/common/config/Config.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsUtil.h"
-
-#include <azure/identity/client_secret_credential.hpp>
 
 namespace facebook::velox::filesystems {
 
