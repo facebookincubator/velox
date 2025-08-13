@@ -340,9 +340,8 @@ Task::Task(
       memoryArbitrationPriority_(memoryArbitrationPriority),
       queryCtx_(std::move(queryCtx)),
       planFragment_(std::move(planFragment)),
-      supportBarrier_(
-          (mode_ == Task::ExecutionMode::kSerial) &&
-          planFragment_.supportsBarrier()),
+      firstNodeNotSupportingBarrier_(
+          planFragment_.firstNodeNotSupportingBarrier()),
       traceConfig_(maybeMakeTraceConfig()),
       consumerSupplier_(std::move(consumerSupplier)),
       onError_(std::move(onError)),
@@ -420,6 +419,19 @@ Task::~Task() {
   for (auto& promise : taskDeletionPromises) {
     promise.setValue();
   }
+}
+
+void Task::ensureBarrierSupport() const {
+  VELOX_CHECK_EQ(
+      mode_,
+      Task::ExecutionMode::kSerial,
+      "Task doesn't support barriered execution.");
+
+  VELOX_CHECK_NULL(
+      firstNodeNotSupportingBarrier_,
+      "Task doesn't support barriered execution. Name of the first node that "
+      "doesn't support barriered execution: {}",
+      firstNodeNotSupportingBarrier_->name());
 }
 
 Task::TaskList& Task::taskList() {
@@ -1507,7 +1519,7 @@ std::unique_ptr<ContinuePromise> Task::addSplitLocked(
     SplitsState& splitsState,
     const exec::Split& split) {
   if (split.isBarrier()) {
-    VELOX_CHECK(supportBarrier_);
+    ensureBarrierSupport();
     VELOX_CHECK(splitsState.sourceIsTableScan);
     VELOX_CHECK(!splitsState.noMoreSplits);
     return addSplitToStoreLocked(
@@ -1648,12 +1660,12 @@ void Task::noMoreSplits(const core::PlanNodeId& planNodeId) {
 }
 
 ContinueFuture Task::requestBarrier() {
-  VELOX_CHECK(supportBarrier_, "Task doesn't support barrier");
+  ensureBarrierSupport();
   return startBarrier("Task::requestBarrier");
 }
 
 ContinueFuture Task::startBarrier(std::string_view comment) {
-  VELOX_CHECK(supportBarrier_);
+  ensureBarrierSupport();
   std::vector<std::unique_ptr<ContinuePromise>> promises;
   SCOPE_EXIT {
     for (auto& promise : promises) {
@@ -1842,6 +1854,11 @@ bool Task::checkNoMoreSplitGroupsLocked() {
   return false;
 }
 
+bool Task::testingAllSplitsFinished() {
+  std::lock_guard<std::timed_mutex> l(mutex_);
+  return isAllSplitsFinishedLocked();
+}
+
 bool Task::isAllSplitsFinishedLocked() {
   return (taskStats_.numFinishedSplits == taskStats_.numTotalSplits) &&
       allNodesReceivedNoMoreSplitsMessageLocked();
@@ -1986,9 +2003,6 @@ void Task::splitFinished(bool fromTableScan, int64_t splitWeight) {
     --taskStats_.numRunningTableScanSplits;
     taskStats_.runningTableScanSplitWeights -= splitWeight;
   }
-  if (isAllSplitsFinishedLocked()) {
-    taskStats_.executionEndTimeMs = getCurrentTimeMs();
-  }
 }
 
 void Task::multipleSplitsFinished(
@@ -2001,9 +2015,6 @@ void Task::multipleSplitsFinished(
   if (fromTableScan) {
     taskStats_.numRunningTableScanSplits -= numSplits;
     taskStats_.runningTableScanSplitWeights -= splitsWeight;
-  }
-  if (isAllSplitsFinishedLocked()) {
-    taskStats_.executionEndTimeMs = getCurrentTimeMs();
   }
 }
 
@@ -2152,13 +2163,6 @@ bool Task::checkIfFinishedLocked() {
     if (splitGroupStates_[kUngroupedGroupId].numFinishedOutputDrivers ==
         numDrivers(outputPipelineId)) {
       allFinished = true;
-
-      if (taskStats_.executionEndTimeMs == 0) {
-        // In case we haven't set executionEndTimeMs due to all splits
-        // depleted, we set it here. This can happen due to task error or task
-        // being cancelled.
-        taskStats_.executionEndTimeMs = getCurrentTimeMs();
-      }
     }
   }
 

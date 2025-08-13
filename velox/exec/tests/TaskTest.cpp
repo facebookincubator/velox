@@ -25,6 +25,7 @@
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/exec/Cursor.h"
+#include "velox/exec/HashAggregation.h"
 #include "velox/exec/OutputBufferManager.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/Values.h"
@@ -2668,13 +2669,12 @@ TEST_F(TaskTest, invalidPlanNodeForBarrier) {
       makeFlatVector<int64_t>(1'000, [](auto row) { return row; }),
   });
 
-  // Filter + Project.
   const auto plan = PlanBuilder()
                         .values({data, data})
                         .filter("c0 < 100")
                         .project({"c0 + 5"})
                         .planFragment();
-  ASSERT_FALSE(plan.supportsBarrier());
+  ASSERT_TRUE(plan.firstNodeNotSupportingBarrier());
 
   const auto task = Task::create(
       "invalidPlanNodeForBarrier",
@@ -2683,7 +2683,9 @@ TEST_F(TaskTest, invalidPlanNodeForBarrier) {
       core::QueryCtx::create(),
       Task::ExecutionMode::kSerial);
   ASSERT_TRUE(!task->underBarrier());
-  VELOX_ASSERT_THROW(task->requestBarrier(), "Task doesn't support barrier");
+  VELOX_ASSERT_THROW(
+      task->requestBarrier(),
+      "Name of the first node that doesn't support barriered execution:");
 }
 
 TEST_F(TaskTest, barrierAfterNoMoreSplits) {
@@ -2733,7 +2735,7 @@ TEST_F(TaskTest, invalidTaskModeForBarrier) {
                         .filter("c0 < 100")
                         .project({"c0 + 5"})
                         .planFragment();
-  ASSERT_TRUE(plan.supportsBarrier());
+  ASSERT_TRUE(plan.firstNodeNotSupportingBarrier() == nullptr);
 
   const auto task = Task::create(
       "invalidTaskModeForBarrier",
@@ -2742,7 +2744,9 @@ TEST_F(TaskTest, invalidTaskModeForBarrier) {
       core::QueryCtx::create(),
       Task::ExecutionMode::kParallel);
   ASSERT_TRUE(!task->underBarrier());
-  VELOX_ASSERT_THROW(task->requestBarrier(), "Task doesn't support barrier");
+  VELOX_ASSERT_THROW(
+      task->requestBarrier(),
+      "(Parallel vs. Serial) Task doesn't support barriered execution.");
 }
 
 TEST_F(TaskTest, addSplitAfterBarrier) {
@@ -2760,7 +2764,7 @@ TEST_F(TaskTest, addSplitAfterBarrier) {
                         .filter("c0 < 100")
                         .project({"c0 + 5"})
                         .planFragment();
-  ASSERT_TRUE(plan.supportsBarrier());
+  ASSERT_TRUE(plan.firstNodeNotSupportingBarrier() == nullptr);
 
   const auto task = Task::create(
       "barrierAfterNoMoreSplits",
@@ -3220,4 +3224,53 @@ TEST_F(TaskTest, expressionStatsInBetweenBarriers) {
   verifyExpressionStats(taskStats, 20);
 }
 
+DEBUG_ONLY_TEST_F(TaskTest, taskExecutionEndTime) {
+  std::vector<RowVectorPtr> vectors;
+  std::vector<std::shared_ptr<TempFilePath>> tempFiles;
+  const int numSplits{5};
+  const int numRowsPerSplit{1'000};
+  for (int32_t i = 0; i < numSplits; ++i) {
+    vectors.push_back(makeRowVector(
+        {makeFlatVector<int32_t>(numRowsPerSplit, [](auto row) { return row; }),
+         makeFlatVector<int32_t>(
+             numRowsPerSplit, [](auto row) { return row * 2; })}));
+    tempFiles.push_back(TempFilePath::create());
+  }
+  writeToFiles(toFilePaths(tempFiles), vectors);
+  createDuckDbTable(vectors);
+
+  const int injectedDelaySecs{2};
+  std::atomic_bool injectDelayOnce{true};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Driver::runInternal::getOutput",
+      std::function<void(const velox::exec::Operator*)>(
+          ([&](const velox::exec::Operator* op) {
+            if (op->operatorCtx()->operatorType() == "HashAggregation") {
+              return;
+            }
+            auto task = op->operatorCtx()->task();
+            if (!task->testingAllSplitsFinished()) {
+              return;
+            }
+            if (!injectDelayOnce.exchange(false)) {
+              return;
+            }
+            std::this_thread::sleep_for(
+                std::chrono::seconds(injectedDelaySecs)); // No Lint.
+          })));
+
+  core::PlanNodeId tableScanNodeId;
+  auto plan = test::PlanBuilder()
+                  .tableScan(asRowType(vectors.back()->type()))
+                  .capturePlanNodeId(tableScanNodeId)
+                  .singleAggregation({"c0"}, {"sum(c1)"})
+                  .planNode();
+  auto task = AssertQueryBuilder(plan, duckDbQueryRunner_)
+                  .splits(tableScanNodeId, makeHiveConnectorSplits(tempFiles))
+                  .assertResults("SELECT c0, sum(c1) FROM tmp GROUP BY c0");
+  const auto taskStats = task->taskStats();
+  ASSERT_GE(
+      taskStats.executionEndTimeMs - taskStats.executionStartTimeMs,
+      injectedDelaySecs * 1'000);
+}
 } // namespace facebook::velox::exec::test

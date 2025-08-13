@@ -163,6 +163,12 @@ bool SignatureBinderBase::checkOrSetIntegerParameter(
     return false;
   }
 
+  const auto& constraint = variables().at(parameterName).constraint();
+  if (isPositiveInteger(constraint) && atoi(constraint.c_str()) != value) {
+    // Return false if the actual value does not match the constraint.
+    return false;
+  }
+
   if (integerVariablesBindings_.count(parameterName)) {
     // Return false if the parameter is found with a different value.
     if (integerVariablesBindings_[parameterName] != value) {
@@ -270,6 +276,9 @@ bool SignatureBinderBase::tryBind(
           // TODO Allow coercions for complex types.
           return false;
         }
+        break;
+      default:
+        // TODO: Add support for kLongEnumLiteral and kVarcharEnumLiteral.
         break;
     }
   }

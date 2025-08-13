@@ -83,6 +83,50 @@ class GeometrySerializer {
       const geos::geom::Geometry& geometry,
       StringWriter& stringWriter) {
     VarbinaryWriter writer(stringWriter);
+    writeGeometry(geometry, writer);
+  }
+
+  template <typename StringWriter>
+  static void serializeEnvelope(
+      double xMin,
+      double yMin,
+      double xMax,
+      double yMax,
+      StringWriter& stringWriter) {
+    VarbinaryWriter writer(stringWriter);
+    writer.write(static_cast<uint8_t>(GeometrySerializationType::ENVELOPE));
+    writer.write(xMin);
+    writer.write(yMin);
+    writer.write(xMax);
+    writer.write(yMax);
+  }
+
+  template <typename StringWriter>
+  static void serializeEnvelope(
+      geos::geom::Envelope& envelope,
+      StringWriter& stringWriter) {
+    if (FOLLY_UNLIKELY(envelope.isNull())) {
+      serializeEnvelope(
+          std::numeric_limits<double>::quiet_NaN(),
+          std::numeric_limits<double>::quiet_NaN(),
+          std::numeric_limits<double>::quiet_NaN(),
+          std::numeric_limits<double>::quiet_NaN(),
+          stringWriter);
+    } else {
+      serializeEnvelope(
+          envelope.getMinX(),
+          envelope.getMinY(),
+          envelope.getMaxX(),
+          envelope.getMaxY(),
+          stringWriter);
+    }
+  }
+
+ private:
+  template <typename T>
+  static void writeGeometry(
+      const geos::geom::Geometry& geometry,
+      VarbinaryWriter<T>& writer) {
     auto geometryType = geometry.getGeometryTypeId();
     switch (geometryType) {
       case geos::geom::GEOS_POINT:
@@ -115,7 +159,6 @@ class GeometrySerializer {
     }
   }
 
- private:
   template <typename T>
   static void writeEnvelope(
       const geos::geom::Geometry& geometry,
@@ -280,8 +323,8 @@ class GeometrySerializer {
   template <typename T>
   static void writeGeometryCollection(
       const geos::geom::Geometry& collection,
-      VarbinaryWriter<T>& output) {
-    output.write(
+      VarbinaryWriter<T>& writer) {
+    writer.write(
         static_cast<uint8_t>(GeometrySerializationType::GEOMETRY_COLLECTION));
 
     for (size_t geometryIndex = 0;
@@ -293,11 +336,11 @@ class GeometrySerializer {
       std::string tempBuffer;
       VarbinaryWriter tempOutput(tempBuffer);
 
-      serialize(*geometry, tempOutput);
+      writeGeometry(*geometry, tempOutput);
 
       int32_t length = static_cast<int32_t>(tempBuffer.size());
-      output.write(length);
-      output.write(tempBuffer.data(), tempBuffer.size());
+      writer.write(length);
+      writer.write(tempBuffer.data(), tempBuffer.size());
     }
   }
 };
@@ -310,14 +353,14 @@ class GeometryDeserializer {
   static std::unique_ptr<geos::geom::Geometry> deserialize(
       const StringView& geometryString) {
     velox::common::InputByteStream inputStream(geometryString.data());
-    return deserialize(inputStream, geometryString.size());
+    return readGeometry(inputStream, geometryString.size());
   }
 
   static const std::unique_ptr<geos::geom::Envelope> deserializeEnvelope(
       const StringView& geometry);
 
  private:
-  static std::unique_ptr<geos::geom::Geometry> deserialize(
+  static std::unique_ptr<geos::geom::Geometry> readGeometry(
       velox::common::InputByteStream& stream,
       size_t size);
 

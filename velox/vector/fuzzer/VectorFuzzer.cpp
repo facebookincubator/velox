@@ -27,6 +27,7 @@
 #include "velox/type/Timestamp.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/FlatVector.h"
+#include "velox/vector/LazyVector.h"
 #include "velox/vector/NullsBuilder.h"
 #include "velox/vector/VectorTypeUtils.h"
 #include "velox/vector/fuzzer/ConstrainedVectorGenerator.h"
@@ -247,7 +248,7 @@ AbstractInputGeneratorPtr maybeGetCustomTypeInputGenerator(
     FuzzerGenerator& rng,
     memory::MemoryPool* pool) {
   if (customTypeExists(type->name())) {
-    InputGeneratorConfig config{rand<uint32_t>(rng), nullRatio, pool};
+    InputGeneratorConfig config{rand<uint32_t>(rng), nullRatio, pool, type};
     return getCustomTypeInputGenerator(type->name(), config);
   }
 

@@ -24,6 +24,7 @@
 #include <sstream>
 #include <typeindex>
 
+#include "velox/type/DecimalUtil.h"
 #include "velox/type/TimestampConversion.h"
 
 namespace std {
@@ -809,7 +810,7 @@ void OpaqueType::registerSerializationTypeErased(
 }
 
 ArrayTypePtr ARRAY(TypePtr elementType) {
-  return std::make_shared<ArrayType>(std::move(elementType));
+  return TypeFactory<TypeKind::ARRAY>::create(std::move(elementType));
 }
 
 RowTypePtr ROW(std::vector<std::string> names, std::vector<TypePtr> types) {
@@ -835,13 +836,14 @@ RowTypePtr ROW(std::vector<TypePtr>&& types) {
 }
 
 MapTypePtr MAP(TypePtr keyType, TypePtr valType) {
-  return std::make_shared<MapType>(std::move(keyType), std::move(valType));
+  return TypeFactory<TypeKind::MAP>::create(
+      std::move(keyType), std::move(valType));
 }
 
 std::shared_ptr<const FunctionType> FUNCTION(
     std::vector<TypePtr>&& argumentTypes,
     TypePtr returnType) {
-  return std::make_shared<FunctionType>(
+  return std::make_shared<const FunctionType>(
       std::move(argumentTypes), std::move(returnType));
 }
 
@@ -875,6 +877,11 @@ TypePtr DECIMAL(const uint8_t precision, const uint8_t scale) {
   return std::make_shared<LongDecimalType>(precision, scale);
 }
 
+// static
+std::string LongDecimalType::toString(int128_t value, const Type& type) {
+  return DecimalUtil::toString(value, type);
+}
+
 TypePtr createScalarType(TypeKind kind) {
   return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(createScalarType, kind);
 }
@@ -885,9 +892,9 @@ TypePtr createType(TypeKind kind, std::vector<TypePtr>&& children) {
         children.size(),
         1,
         "FUNCTION type should have at least one child type");
-    std::vector<TypePtr> argTypes(
-        children.begin(), children.begin() + children.size() - 1);
-    return std::make_shared<FunctionType>(std::move(argTypes), children.back());
+    auto returnType = std::move(children.back());
+    children.pop_back();
+    return FUNCTION(std::move(children), std::move(returnType));
   }
 
   if (kind == TypeKind::UNKNOWN) {
@@ -963,10 +970,10 @@ std::string Type::toSummaryString(TypeSummaryOptions options) const {
 
 namespace {
 
-std::unordered_map<std::string, std::unique_ptr<const CustomTypeFactories>>&
+std::unordered_map<std::string, std::unique_ptr<const CustomTypeFactory>>&
 typeFactories() {
   static std::
-      unordered_map<std::string, std::unique_ptr<const CustomTypeFactories>>
+      unordered_map<std::string, std::unique_ptr<const CustomTypeFactory>>
           factories;
   return factories;
 }
@@ -987,9 +994,9 @@ std::unordered_map<std::type_index, std::string>& getOpaqueAliasByTypeIndex() {
 
 bool registerCustomType(
     const std::string& name,
-    std::unique_ptr<const CustomTypeFactories> factories) {
+    std::unique_ptr<const CustomTypeFactory> factory) {
   auto uppercaseName = boost::algorithm::to_upper_copy(name);
-  return typeFactories().emplace(uppercaseName, std::move(factories)).second;
+  return typeFactories().emplace(uppercaseName, std::move(factory)).second;
 }
 
 bool customTypeExists(const std::string& name) {
@@ -1010,8 +1017,8 @@ bool unregisterCustomType(const std::string& name) {
   return typeFactories().erase(uppercaseName) == 1;
 }
 
-const CustomTypeFactories* FOLLY_NULLABLE
-getTypeFactories(const std::string& name) {
+const CustomTypeFactory* FOLLY_NULLABLE
+getTypeFactory(const std::string& name) {
   auto uppercaseName = boost::algorithm::to_upper_copy(name);
   auto it = typeFactories().find(uppercaseName);
 
@@ -1025,33 +1032,33 @@ getTypeFactories(const std::string& name) {
 TypePtr getCustomType(
     const std::string& name,
     const std::vector<TypeParameter>& parameters) {
-  auto factories = getTypeFactories(name);
-  if (factories) {
-    return factories->getType(parameters);
+  auto factory = getTypeFactory(name);
+  if (factory) {
+    return factory->getType(parameters);
   }
 
   return nullptr;
 }
 
 exec::CastOperatorPtr getCustomTypeCastOperator(const std::string& name) {
-  auto factories = getTypeFactories(name);
-  if (factories) {
-    return factories->getCastOperator();
+  auto factory = getTypeFactory(name);
+  if (factory) {
+    return factory->getCastOperator();
   }
 
   return nullptr;
 }
 
-CustomTypeFactories::~CustomTypeFactories() = default;
+CustomTypeFactory::~CustomTypeFactory() = default;
 
 AbstractInputGenerator::~AbstractInputGenerator() = default;
 
 AbstractInputGeneratorPtr getCustomTypeInputGenerator(
     const std::string& name,
     const InputGeneratorConfig& config) {
-  auto factories = getTypeFactories(name);
-  if (factories) {
-    return factories->getInputGenerator(config);
+  auto factory = getTypeFactory(name);
+  if (factory) {
+    return factory->getInputGenerator(config);
   }
 
   return nullptr;
@@ -1343,5 +1350,33 @@ std::string getOpaqueAliasForTypeId(std::type_index typeIndex) {
       "Could not find type index '{}'. Did you call registerOpaqueType?",
       typeIndex.name());
   return it->second;
+}
+
+std::string stringifyTruncatedElementList(
+    size_t size,
+    const std::function<void(std::stringstream&, size_t)>& stringifyElement,
+    size_t limit) {
+  if (size == 0) {
+    return "<empty>";
+  }
+
+  VELOX_CHECK_GT(limit, 0);
+
+  const size_t limitedSize = std::min(size, limit);
+
+  std::stringstream out;
+  out << "{";
+  for (size_t i = 0; i < limitedSize; ++i) {
+    if (i > 0) {
+      out << ", ";
+    }
+    stringifyElement(out, i);
+  }
+
+  if (size > limitedSize) {
+    out << ", ..." << (size - limitedSize) << " more";
+  }
+  out << "}";
+  return out.str();
 }
 } // namespace facebook::velox

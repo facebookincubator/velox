@@ -19,10 +19,12 @@
 #include "velox/functions/prestosql/StringFunctions.h"
 #include "velox/functions/prestosql/URLFunctions.h"
 #include "velox/functions/sparksql/Base64Function.h"
+#include "velox/functions/sparksql/CharTypeWriteSideCheck.h"
 #include "velox/functions/sparksql/ConcatWs.h"
 #include "velox/functions/sparksql/InitcapFunction.h"
 #include "velox/functions/sparksql/LuhnCheckFunction.h"
 #include "velox/functions/sparksql/MaskFunction.h"
+#include "velox/functions/sparksql/ReadSidePaddingFunction.h"
 #include "velox/functions/sparksql/Split.h"
 #include "velox/functions/sparksql/String.h"
 #include "velox/functions/sparksql/StringToMap.h"
@@ -64,10 +66,6 @@ void registerStringFunctions(const std::string& prefix) {
       {prefix + "replace"});
   registerFunction<FindInSetFunction, int32_t, Varchar, Varchar>(
       {prefix + "find_in_set"});
-  registerFunction<UrlEncodeFunction, Varchar, Varchar>(
-      {prefix + "url_encode"});
-  registerFunction<UrlDecodeFunction, Varchar, Varchar>(
-      {prefix + "url_decode"});
   registerFunction<sparksql::ChrFunction, Varchar, int64_t>({prefix + "chr"});
   registerFunction<AsciiFunction, int32_t, Varchar>({prefix + "ascii"});
   registerFunction<sparksql::LPadFunction, Varchar, Varchar, int32_t, Varchar>(
@@ -153,10 +151,14 @@ void registerStringFunctions(const std::string& prefix) {
       std::make_unique<ConcatWsCallToSpecialForm>());
   registerFunction<LuhnCheckFunction, bool, Varchar>({prefix + "luhn_check"});
 
-  using SparkUpperFunction =
-      UpperLowerTemplateFunction</*isLower=*/false, /*forSpark=*/true>;
-  using SparkLowerFunction =
-      UpperLowerTemplateFunction</*isLower=*/true, /*forSpark=*/true>;
+  using SparkUpperFunction = UpperLowerTemplateFunction<
+      /*isLower=*/false,
+      /*turkishCasing=*/true,
+      /*greekFinalSigma=*/true>;
+  using SparkLowerFunction = UpperLowerTemplateFunction<
+      /*isLower=*/true,
+      /*turkishCasing=*/true,
+      /*greekFinalSigma=*/true>;
   exec::registerVectorFunction(
       prefix + "upper",
       SparkUpperFunction::signatures(),
@@ -165,11 +167,16 @@ void registerStringFunctions(const std::string& prefix) {
       prefix + "lower",
       SparkLowerFunction::signatures(),
       std::make_unique<SparkLowerFunction>());
+  registerFunction<ReadSidePaddingFunction, Varchar, Varchar, int32_t>(
+      {prefix + "read_side_padding"});
   registerFunction<
       VarcharTypeWriteSideCheckFunction,
       Varchar,
       Varchar,
       int32_t>({prefix + "varchar_type_write_side_check"});
+
+  registerFunction<CharTypeWriteSideCheckFunction, Varchar, Varchar, int32_t>(
+      {prefix + "char_type_write_side_check"});
 
   registerFunction<Base64Function, Varchar, Varbinary>({prefix + "base64"});
   registerFunction<UnBase64Function, Varbinary, Varchar>({prefix + "unbase64"});

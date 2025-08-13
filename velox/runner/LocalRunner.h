@@ -65,7 +65,8 @@ class LocalRunner : public Runner,
   LocalRunner(
       const MultiFragmentPlanPtr& plan,
       std::shared_ptr<core::QueryCtx> queryCtx,
-      std::shared_ptr<SplitSourceFactory> splitSourceFactory);
+      std::shared_ptr<SplitSourceFactory> splitSourceFactory,
+      std::shared_ptr<memory::MemoryPool> outputPool = nullptr);
 
   RowVectorPtr next() override;
 
@@ -82,8 +83,8 @@ class LocalRunner : public Runner,
  private:
   void start();
 
-  // Creates all stages except for the single worker final consumer stage.
-  std::vector<std::shared_ptr<exec::RemoteConnectorSplit>> makeStages();
+  void makeStages(const std::shared_ptr<exec::Task>& lastStageTask);
+
   std::shared_ptr<SplitSource> splitSourceForScan(
       const core::TableScanNode& scan);
 

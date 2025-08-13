@@ -21,38 +21,12 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/ComplexVector.h"
+#include "velox/vector/DecodedVector.h"
+#include "velox/vector/FlatMapVector.h"
+#include "velox/vector/LazyVector.h"
 #include "velox/vector/SimpleVector.h"
 
 namespace facebook::velox {
-
-std::string ArrayVectorBase::stringifyTruncatedElementList(
-    vector_size_t size,
-    const std::function<void(std::stringstream&, vector_size_t)>&
-        stringifyElement,
-    vector_size_t limit) {
-  if (size == 0) {
-    return "<empty>";
-  }
-
-  VELOX_CHECK_GT(limit, 0);
-
-  const vector_size_t limitedSize = std::min(size, limit);
-
-  std::stringstream out;
-  out << "{";
-  for (vector_size_t i = 0; i < limitedSize; ++i) {
-    if (i > 0) {
-      out << ", ";
-    }
-    stringifyElement(out, i);
-  }
-
-  if (size > limitedSize) {
-    out << ", ..." << (size - limitedSize) << " more";
-  }
-  out << "}";
-  return out.str();
-}
 
 // static
 std::shared_ptr<RowVector> RowVector::createEmpty(
@@ -410,7 +384,7 @@ std::string RowVector::deprecatedToString(
     return std::string(BaseVector::kNullValueString);
   }
 
-  return ArrayVectorBase::stringifyTruncatedElementList(
+  return stringifyTruncatedElementList(
       children_.size(),
       [&](auto& out, auto i) {
         out << (children_[i] ? children_[i]->toString(index) : "<not set>");
@@ -1305,41 +1279,50 @@ std::optional<int32_t> MapVector::compare(
 
   auto otherValue = other->wrappedVector();
   auto wrappedOtherIndex = other->wrappedIndex(otherIndex);
-  VELOX_CHECK_EQ(
-      VectorEncoding::Simple::MAP,
-      otherValue->encoding(),
-      "Compare of MAP and non-MAP: {} and {}",
-      BaseVector::toString(),
-      otherValue->BaseVector::toString());
-  auto otherMap = otherValue->as<MapVector>();
 
-  if (keys_->typeKind() != otherMap->keys_->typeKind() ||
-      values_->typeKind() != otherMap->values_->typeKind()) {
+  if (otherValue->encoding() == VectorEncoding::Simple::MAP) {
+    auto otherMap = otherValue->as<MapVector>();
+
+    if (keys_->typeKind() != otherMap->keys_->typeKind() ||
+        values_->typeKind() != otherMap->values_->typeKind()) {
+      VELOX_FAIL(
+          "Compare of maps of different key/value types: {} and {}",
+          BaseVector::toString(),
+          otherMap->BaseVector::toString());
+    }
+
+    if (flags.equalsOnly &&
+        rawSizes_[index] != otherMap->rawSizes_[wrappedOtherIndex]) {
+      return 1;
+    }
+
+    auto leftIndices = sortedKeyIndices(index);
+    auto rightIndices = otherMap->sortedKeyIndices(wrappedOtherIndex);
+
+    auto result = compareArrays(
+        *keys_, *otherMap->keys_, leftIndices, rightIndices, flags);
+    VELOX_DCHECK(result.has_value(), "Keys may not have nulls or nested nulls");
+
+    // Keys are not the same, values not compared.
+    if (result.value()) {
+      return result;
+    }
+
+    return compareArrays(
+        *values_, *otherMap->values_, leftIndices, rightIndices, flags);
+  } else if (otherValue->encoding() == VectorEncoding::Simple::FLAT_MAP) {
+    auto otherFlatMap = otherValue->as<FlatMapVector>();
+
+    // Reverse the order and compare the flat map to the map, this way we can
+    // reuse the implementation in FlatMapVector.
+    return otherFlatMap->compare(
+        this, wrappedOtherIndex, index, CompareFlags::reverseDirection(flags));
+  } else {
     VELOX_FAIL(
-        "Compare of maps of different key/value types: {} and {}",
+        "Compare of MAP and non-MAP: {} and {}",
         BaseVector::toString(),
-        otherMap->BaseVector::toString());
+        otherValue->BaseVector::toString());
   }
-
-  if (flags.equalsOnly &&
-      rawSizes_[index] != otherMap->rawSizes_[wrappedOtherIndex]) {
-    return 1;
-  }
-
-  auto leftIndices = sortedKeyIndices(index);
-  auto rightIndices = otherMap->sortedKeyIndices(wrappedOtherIndex);
-
-  auto result =
-      compareArrays(*keys_, *otherMap->keys_, leftIndices, rightIndices, flags);
-  VELOX_DCHECK(result.has_value(), "Keys may not have nulls or nested nulls");
-
-  // Keys are not the same, values not compared.
-  if (result.value()) {
-    return result;
-  }
-
-  return compareArrays(
-      *values_, *otherMap->values_, leftIndices, rightIndices, flags);
 }
 
 uint64_t MapVector::hashValueAt(vector_size_t index) const {

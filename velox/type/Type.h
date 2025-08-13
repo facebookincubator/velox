@@ -405,11 +405,29 @@ struct TypeFactory;
 class Type;
 using TypePtr = std::shared_ptr<const Type>;
 
+/// A struct which represents the parameters for a BigintEnumType.
+/// Consists of the name of the enum and a map of string keys to bigint values.
+struct LongEnumParameter {
+  std::string name;
+  std::unordered_map<std::string, int64_t> valuesMap;
+};
+
+/// A struct which represents the parameters for a VarcharEnumType.
+/// Consists of the name of the enum and a map of string keys to string values.
+struct VarcharEnumParameter {
+  std::string name;
+  std::unordered_map<std::string, std::string> valuesMap;
+};
+
 enum class TypeParameterKind {
   /// Type. For example, element type in the array, map, or row children type.
   kType,
   /// Integer. For example, precision in a decimal type.
   kLongLiteral,
+  /// LongEnumLiteral. Used for BigintEnum types.
+  kLongEnumLiteral,
+  /// VarcharEnumLiteral. Used for VarcharEnum types.
+  kVarcharEnumLiteral,
 };
 
 struct TypeParameter {
@@ -423,6 +441,14 @@ struct TypeParameter {
   /// or unset.
   const std::optional<int64_t> longLiteral;
 
+  /// Must be set when kind is kLongEnumLiteral. All other properties should
+  /// be null or unset.
+  const std::optional<LongEnumParameter> longEnumLiteral;
+
+  /// Must be set when kind is kVarcharEnumLiteral. All other properties should
+  /// be null or unset.
+  const std::optional<VarcharEnumParameter> varcharEnumLiteral;
+
   /// If this parameter is a child of another parent row type, it can optionally
   /// have a name, e.g, "id" for `row(id bigint)`. Only set when kind is kType
   const std::optional<std::string> rowFieldName;
@@ -434,6 +460,8 @@ struct TypeParameter {
       : kind{TypeParameterKind::kType},
         type{std::move(_type)},
         longLiteral{std::nullopt},
+        longEnumLiteral{std::nullopt},
+        varcharEnumLiteral(std::nullopt),
         rowFieldName(std::move(_rowFieldName)) {}
 
   /// Creates kLongLiteral parameter.
@@ -441,6 +469,26 @@ struct TypeParameter {
       : kind{TypeParameterKind::kLongLiteral},
         type{nullptr},
         longLiteral{_longLiteral},
+        longEnumLiteral{std::nullopt},
+        varcharEnumLiteral(std::nullopt),
+        rowFieldName{std::nullopt} {}
+
+  /// Creates kLongEnumLiteral parameter.
+  explicit TypeParameter(const LongEnumParameter& _longEnumParameter)
+      : kind{TypeParameterKind::kLongEnumLiteral},
+        type{nullptr},
+        longLiteral{std::nullopt},
+        longEnumLiteral{_longEnumParameter},
+        varcharEnumLiteral(std::nullopt),
+        rowFieldName{std::nullopt} {}
+
+  /// Creates kVarcharEnumLiteral parameter.
+  explicit TypeParameter(const VarcharEnumParameter& _varcharEnumParameter)
+      : kind{TypeParameterKind::kVarcharEnumLiteral},
+        type{nullptr},
+        longLiteral{std::nullopt},
+        longEnumLiteral{std::nullopt},
+        varcharEnumLiteral{_varcharEnumParameter},
         rowFieldName{std::nullopt} {}
 };
 
@@ -458,7 +506,7 @@ struct TypeParameter {
 ///                   BigintType
 class Type : public Tree<const TypePtr>, public velox::ISerializable {
  public:
-  explicit Type(TypeKind kind, bool providesCustomComparison = false)
+  constexpr explicit Type(TypeKind kind, bool providesCustomComparison = false)
       : kind_{kind}, providesCustomComparison_(providesCustomComparison) {}
 
   TypeKind kind() const {
@@ -594,6 +642,9 @@ class Type : public Tree<const TypePtr>, public velox::ISerializable {
 
   bool containsUnknown() const;
 
+  template <typename T>
+  std::string valueToString(T value) const;
+
   VELOX_DEFINE_CLASS_NAME(Type)
 
  protected:
@@ -634,7 +685,9 @@ class TypeBase : public Type {
  public:
   using NativeType = typename TypeTraits<KIND>::NativeType;
 
-  explicit TypeBase(bool providesCustomComparison = false)
+  constexpr explicit TypeBase() : Type{KIND, false} {}
+
+  explicit TypeBase(bool providesCustomComparison)
       : Type{KIND, providesCustomComparison} {
     if (providesCustomComparison) {
       VELOX_CHECK(
@@ -676,7 +729,9 @@ class TypeBase : public Type {
 template <TypeKind KIND>
 class CanProvideCustomComparisonType : public TypeBase<KIND> {
  public:
-  explicit CanProvideCustomComparisonType(bool providesCustomComparison = false)
+  constexpr explicit CanProvideCustomComparisonType() = default;
+
+  explicit CanProvideCustomComparisonType(bool providesCustomComparison)
       : TypeBase<KIND>{providesCustomComparison} {}
 
   virtual int32_t compare(
@@ -700,7 +755,9 @@ class CanProvideCustomComparisonType : public TypeBase<KIND> {
 template <TypeKind KIND>
 class ScalarType : public CanProvideCustomComparisonType<KIND> {
  public:
-  explicit ScalarType(bool providesCustomComparison = false)
+  constexpr explicit ScalarType() = default;
+
+  explicit ScalarType(bool providesCustomComparison)
       : CanProvideCustomComparisonType<KIND>{providesCustomComparison} {}
 
   uint32_t size() const override {
@@ -731,7 +788,10 @@ class ScalarType : public CanProvideCustomComparisonType<KIND> {
     return Type::cppSizeInBytes();
   }
 
-  FOLLY_NOINLINE static const std::shared_ptr<const ScalarType<KIND>> create();
+  FOLLY_NOINLINE static std::shared_ptr<const ScalarType<KIND>> create() {
+    static constexpr ScalarType<KIND> kInstance;
+    return {std::shared_ptr<const ScalarType<KIND>>{}, &kInstance};
+  }
 
   bool equivalent(const Type& other) const override {
     return Type::hasSameTypeId(other);
@@ -745,12 +805,6 @@ class ScalarType : public CanProvideCustomComparisonType<KIND> {
     return obj;
   }
 };
-
-template <TypeKind KIND>
-const std::shared_ptr<const ScalarType<KIND>> ScalarType<KIND>::create() {
-  static const auto instance = std::make_shared<const ScalarType<KIND>>();
-  return instance;
-}
 
 /// This class represents the fixed-point numbers.
 /// The parameter "precision" represents the number of digits the
@@ -834,6 +888,8 @@ class LongDecimalType : public DecimalType<TypeKind::HUGEINT> {
  public:
   LongDecimalType(int precision, int scale)
       : DecimalType<TypeKind::HUGEINT>(precision, scale) {}
+
+  static std::string toString(int128_t value, const Type& type);
 };
 
 TypePtr DECIMAL(uint8_t precision, uint8_t scale);
@@ -866,7 +922,9 @@ std::pair<uint8_t, uint8_t> getDecimalPrecisionScale(const Type& type);
 
 class UnknownType : public CanProvideCustomComparisonType<TypeKind::UNKNOWN> {
  public:
-  explicit UnknownType(bool proivdesCustomComparison = false)
+  constexpr explicit UnknownType() = default;
+
+  explicit UnknownType(bool proivdesCustomComparison)
       : CanProvideCustomComparisonType<TypeKind::UNKNOWN>(
             proivdesCustomComparison) {}
 
@@ -1226,9 +1284,8 @@ class OpaqueType : public TypeBase<TypeKind::OPAQUE> {
   FOLLY_NOINLINE static std::shared_ptr<const OpaqueType> create() {
     /// static vars in templates are dangerous across DSOs, but it's just a
     /// performance optimization. Comparison looks at type_index anyway.
-    static const auto instance =
-        std::make_shared<const OpaqueType>(std::type_index(typeid(Class)));
-    return instance;
+    static const OpaqueType kInstance{std::type_index(typeid(Class))};
+    return {std::shared_ptr<const OpaqueType>{}, &kInstance};
   }
 
   /// This function currently doesn't do synchronization neither with reads
@@ -1481,22 +1538,24 @@ struct TypeFactory {
 
 template <>
 struct TypeFactory<TypeKind::UNKNOWN> {
-  static std::shared_ptr<const UnknownType> create() {
-    return std::make_shared<UnknownType>();
+  FOLLY_NOINLINE static std::shared_ptr<const UnknownType> create() {
+    static const UnknownType kInstance;
+    return {std::shared_ptr<const UnknownType>{}, &kInstance};
   }
 };
 
 template <>
 struct TypeFactory<TypeKind::ARRAY> {
   static ArrayTypePtr create(TypePtr elementType) {
-    return std::make_shared<ArrayType>(std::move(elementType));
+    return std::make_shared<const ArrayType>(std::move(elementType));
   }
 };
 
 template <>
 struct TypeFactory<TypeKind::MAP> {
   static MapTypePtr create(TypePtr keyType, TypePtr valType) {
-    return std::make_shared<MapType>(std::move(keyType), std::move(valType));
+    return std::make_shared<const MapType>(
+        std::move(keyType), std::move(valType));
   }
 };
 
@@ -2052,13 +2111,14 @@ struct InputGeneratorConfig {
   size_t seed_;
   double nullRatio_;
   memory::MemoryPool* pool_;
+  TypePtr type_{nullptr}; // Added type to support
 };
 
 /// Associates custom types with their custom operators to be the payload in
 /// the custom type registry.
-class CustomTypeFactories {
+class CustomTypeFactory {
  public:
-  virtual ~CustomTypeFactories();
+  virtual ~CustomTypeFactory();
 
   /// Returns a shared pointer to the custom type.
   virtual TypePtr getType(
@@ -2108,7 +2168,7 @@ class AbstractInputGenerator {
 /// false if type with the specified name already exists.
 bool registerCustomType(
     const std::string& name,
-    std::unique_ptr<const CustomTypeFactories> factories);
+    std::unique_ptr<const CustomTypeFactory> factories);
 
 // See registerOpaqueType() for documentation on type index and opaque type
 // alias.
@@ -2273,6 +2333,42 @@ class DeserializedTypeCache {
 };
 
 DeserializedTypeCache& deserializedTypeCache();
+
+template <typename T>
+std::string Type::valueToString(T value) const {
+  if constexpr (std::is_same_v<T, bool>) {
+    return value ? "true" : "false";
+  } else if constexpr (std::is_same_v<T, std::shared_ptr<void>>) {
+    return "<opaque>";
+  } else if constexpr (
+      std::is_same_v<T, int64_t> || std::is_same_v<T, int128_t>) {
+    if (isDecimal()) {
+      return LongDecimalType::toString(value, *this);
+    } else {
+      return velox::to<std::string>(value);
+    }
+  } else if constexpr (std::is_same_v<T, int32_t>) {
+    if (isDate()) {
+      return DATE()->toString(value);
+    } else {
+      return velox::to<std::string>(value);
+    }
+  } else {
+    return velox::to<std::string>(value);
+  }
+}
+
+/// Return a string representation of a limited number of elements at the
+/// start of the array or map.
+///
+/// @param size Total number of elements.
+/// @param stringifyElement Function to call to append individual elements.
+/// Will be called up to 'limit' times.
+/// @param limit Maximum number of elements to include in the result.
+std::string stringifyTruncatedElementList(
+    size_t size,
+    const std::function<void(std::stringstream&, size_t)>& stringifyElement,
+    size_t limit = 5);
 
 } // namespace facebook::velox
 
