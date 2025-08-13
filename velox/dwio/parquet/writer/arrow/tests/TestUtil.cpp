@@ -19,19 +19,12 @@
 #include "velox/dwio/parquet/writer/arrow/tests/TestUtil.h"
 
 #include <algorithm>
-#include <chrono>
 #include <limits>
 #include <memory>
 #include <random>
 #include <string>
 #include <utility>
 #include <vector>
-
-#include "velox/dwio/parquet/writer/arrow/ColumnPage.h"
-#include "velox/dwio/parquet/writer/arrow/ColumnWriter.h"
-#include "velox/dwio/parquet/writer/arrow/Encoding.h"
-#include "velox/dwio/parquet/writer/arrow/Platform.h"
-#include "velox/dwio/parquet/writer/arrow/tests/ColumnReader.h"
 
 namespace facebook::velox::parquet::arrow {
 namespace test {
