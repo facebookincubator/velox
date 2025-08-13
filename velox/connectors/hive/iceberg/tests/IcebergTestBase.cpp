@@ -124,18 +124,51 @@ void addColumnHandles(
   for (const auto& field : partitionFields) {
     partitionColumnIds.insert(field.id);
   }
+  HiveColumnHandle::ColumnParseParameters columnParseParameters;
 
-  columnHandles.reserve(rowType->size());
+  std::function<IcebergNestedField(const TypePtr&, int32_t&)>
+      collectNestedField = [&](const TypePtr& type,
+                               int32_t& columnOrdinal) -> IcebergNestedField {
+    int32_t currentId = columnOrdinal++;
+    std::vector<IcebergNestedField> children;
+    if (type->isRow()) {
+      auto rowType = asRowType(type);
+      for (auto i = 0; i < rowType->size(); ++i) {
+        children.push_back(
+            collectNestedField(rowType->childAt(i), columnOrdinal));
+      }
+    } else if (type->isArray()) {
+      auto arrayType = std::dynamic_pointer_cast<const ArrayType>(type);
+      for (auto i = 0; i < arrayType->size(); ++i) {
+        children.push_back(
+            collectNestedField(arrayType->childAt(i), columnOrdinal));
+      }
+    } else if (type->isMap()) {
+      auto mapType = std::dynamic_pointer_cast<const MapType>(type);
+      for (auto i = 0; i < mapType->size(); ++i) {
+        children.push_back(
+            collectNestedField(mapType->childAt(i), columnOrdinal));
+      }
+    }
+
+    return IcebergNestedField{currentId, children};
+  };
+
+  int32_t startIndex = 1;
   for (auto i = 0; i < rowType->size(); ++i) {
-    const auto columnType = partitionColumnIds.count(i) > 0
-        ? HiveColumnHandle::ColumnType::kPartitionKey
-        : HiveColumnHandle::ColumnType::kRegular;
-
-    columnHandles.push_back(std::make_shared<HiveColumnHandle>(
-        rowType->nameOf(i),
-        columnType,
-        rowType->childAt(i),
-        rowType->childAt(i)));
+    auto columnName = rowType->nameOf(i);
+    auto type = rowType->childAt(i);
+    auto field = collectNestedField(type, startIndex);
+    columnHandles.push_back(std::make_shared<IcebergColumnHandle>(
+        columnName,
+        partitionColumnIds.count(i) > 0
+            ? HiveColumnHandle::ColumnType::kPartitionKey
+            : HiveColumnHandle::ColumnType::kRegular,
+        type,
+        type,
+        field,
+        std::vector<common::Subfield>{},
+        columnParseParameters));
   }
 }
 
