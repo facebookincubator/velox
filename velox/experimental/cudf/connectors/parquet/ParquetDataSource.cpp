@@ -262,7 +262,7 @@ void ParquetDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
       VELOX_CHECK_EQ(
           hiveSplit->fileFormat,
           dwio::common::FileFormat::PARQUET,
-          "Unsupported file format for conversion from HiveConnectorSplit to ParquetConnectorSplit");
+          "Unsupported file format for conversion from HiveConnectorSplit to cuDF ParquetConnectorSplit");
       return ParquetConnectorSplitBuilder(hiveSplit->filePath)
           .connectorId(hiveSplit->connectorId)
           .splitWeight(hiveSplit->splitWeight)
