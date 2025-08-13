@@ -178,7 +178,7 @@ TEST_F(TableScanTest, allColumns) {
   createDuckDbTable(vectors);
   auto plan = tableScanNode();
 
-  std::string const duckDbSql = "SELECT * FROM tmp";
+  const std::string duckDbSql = "SELECT * FROM tmp";
 
   // Helper to test scan all columns for the given splits
   auto testScanAllColumns =
