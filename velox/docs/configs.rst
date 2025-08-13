@@ -917,12 +917,15 @@ These semantics are similar to the `Apache Hadoop-Aws module <https://hadoop.apa
      - Description
    * - fs.azure.account.auth.type.<storage-account>.dfs.core.windows.net
      - string
-     - SharedKey
+     -
      - Specifies the authentication mechanism to use for Azure storage accounts.
        **Allowed values:** "SharedKey", "OAuth", "SAS".
        "SharedKey": Uses the storage account name and key for authentication.
        "OAuth": Utilizes OAuth tokens for secure authentication.
        "SAS": Employs Shared Access Signatures for granular access control.
+       To create Azure clients with the configured authentication type, the caller must
+       register the corresponding Azure client provider from the configuration by calling
+       `registerAzureClientProvider`.
    * - fs.azure.account.key.<storage-account>.dfs.core.windows.net
      - string
      -
@@ -951,6 +954,12 @@ These semantics are similar to the `Apache Hadoop-Aws module <https://hadoop.apa
      - Specifies the OAuth 2.0 token endpoint URL for the Azure AD application.
        This endpoint is used to acquire access tokens for authenticating with Azure storage.
        The URL follows the format: `https://login.microsoftonline.com/<tenant-id>/oauth2/token`.
+   * - fs.azure.sas.token.renew.period.for.streams
+     - string
+     - 120
+     - Specifies the period in seconds to re-use SAS tokens until the expiry is within this number of seconds.
+       This configuration is used together with `registerSasTokenProvider` for dynamic SAS token renewal.
+       When a SAS token is close to expiry, it will be renewed by getting a new token from the provider.
 
 Presto-specific Configuration
 -----------------------------
