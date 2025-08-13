@@ -654,6 +654,63 @@ TEST_F(MergeJoinTest, leftAndRightJoinFilter) {
               filter));
     }
   }
+
+  // Each output batch has exactly one left row.
+  left = makeRowVector(
+      {"t_c0", "t_c1"},
+      {
+          makeNullableFlatVector<int32_t>({2, 2}),
+          makeNullableFlatVector<int32_t>({5, 3}),
+      });
+
+  right = makeRowVector(
+      {"u_c0", "u_c1"},
+      {
+          makeNullableFlatVector<int32_t>({2, 2}),
+          makeNullableFlatVector<int32_t>({3, 4}),
+      });
+
+  createDuckDbTable("t", {left});
+  createDuckDbTable("u", {right});
+
+  assertQuery(
+      makeCursorParameters(leftPlan("t_c1 < u_c1"), 2),
+      "SELECT t_c0, t_c1, u_c1 from t LEFT JOIN u ON t_c0 = u_c0 AND t_c1 < u_c1");
+
+  assertQuery(
+      makeCursorParameters(rightPlan("t_c1 < u_c1"), 2),
+      "SELECT t_c0, t_c1, u_c1 from u RIGHT JOIN t ON t_c0 = u_c0 AND t_c1 < u_c1");
+
+  // Output batch ends with null row
+  // t_c0 t_c1 u_c0 u_c1 | Join Tracker
+  // Batch 0
+  // 1    2    1    2    | [0] = 0
+  // 2    2    2    2    | [1] = 1
+  // Batch 1
+  // 2    2    2    1    | [0] = 1
+  // 3    5    null null | [1] = 2
+  // Batch 2
+  // 4    5    4    6    | [0] = 3
+  left = makeRowVector(
+      {"t_c0", "t_c1"},
+      {
+          makeNullableFlatVector<int32_t>({1, 2, 3, 4}),
+          makeNullableFlatVector<int32_t>({2, 2, 5, 5}),
+      });
+
+  right = makeRowVector(
+      {"u_c0", "u_c1"},
+      {
+          makeNullableFlatVector<int32_t>({1, 2, 2, 4}),
+          makeNullableFlatVector<int32_t>({2, 2, 1, 6}),
+      });
+
+  createDuckDbTable("t", {left});
+  createDuckDbTable("u", {right});
+
+  assertQuery(
+      makeCursorParameters(leftPlan("t_c1 < u_c1"), 2),
+      "SELECT t_c0, t_c1, u_c1 from t LEFT JOIN u ON t_c0 = u_c0 AND t_c1 < u_c1");
 }
 
 TEST_F(MergeJoinTest, rightJoinWithDuplicateMatch) {
