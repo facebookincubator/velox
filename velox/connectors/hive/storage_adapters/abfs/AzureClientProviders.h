@@ -48,7 +48,6 @@ class SharedKeyAzureClientProvider final : public AzureClientProvider {
       const std::shared_ptr<AbfsPath>& abfsPath,
       const config::ConfigBase& config);
 
-  // Container name is called FileSystem in some Azure API.
   std::string connectionString_;
 };
 

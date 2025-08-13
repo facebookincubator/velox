@@ -50,9 +50,10 @@ AzureClientProviderFactory AzureClientProviderFactories::getClientFactory(
           return it->second;
         }
         VELOX_USER_FAIL(
-            "No AzureClientProviderFactory registered for account '{}'. Please use "
-            "`registerAzureClientProviderFactory` to register a factory for the "
-            "account before using it.",
+            "No AzureClientProviderFactory registered for account '{}'."
+            "Please use `registerAzureClientProvider` or "
+            "`registerAzureClientProviderFactory` to register a factory for "
+            "the account before using it.",
             account);
       });
 }
