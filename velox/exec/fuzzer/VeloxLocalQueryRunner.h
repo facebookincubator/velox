@@ -23,9 +23,7 @@ namespace facebook::velox::exec::test {
 
 class VeloxLocalQueryRunner : public ReferenceQueryRunner {
  public:
-  /// @param serviceUri LocalRunnerService endpoint, e.g. http://127.0.0.1:9090
-  /// for HTTP
-  ///                   or thrift://127.0.0.1:9091 for Thrift
+  /// @param serviceUri Thrift URI of the LocalRunnerService.
   /// @param timeout Timeout in milliseconds of a request.
   VeloxLocalQueryRunner(
       memory::MemoryPool* aggregatePool,
@@ -77,12 +75,10 @@ class VeloxLocalQueryRunner : public ReferenceQueryRunner {
 
   std::string serviceUri_;
   std::chrono::milliseconds timeout_;
-  // folly::EventBaseThread eventBaseThread_;
   folly::EventBase eventBase_;
   std::shared_ptr<memory::MemoryPool> pool_;
 
   // Thrift-specific members
-  bool useThrift_{true};
   std::string thriftHost_;
   int thriftPort_{9091};
 };

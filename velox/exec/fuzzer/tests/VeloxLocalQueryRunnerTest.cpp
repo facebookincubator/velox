@@ -38,7 +38,17 @@ DEFINE_int64(
     seed,
     0,
     "Initial seed for random number generator "
-    "(use it to reproduce previous results).");
+    "(used to reproduce previous results).");
+
+DEFINE_uint32(
+    timeout,
+    10000,
+    "Timeout (in milliseconds) for thrift requests made to LocalRunnerService.");
+
+DEFINE_string(
+    url,
+    "http://127.0.0.1:9091",
+    "URI for thrift requests to LocalRunnerService. Defaults to localhost on port 9091.");
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec::test;
@@ -405,9 +415,7 @@ class VeloxLocalQueryRunnerTest : public testing::Test {
     rootPool_ = memory::memoryManager()->addRootPool("root");
     pool_ = rootPool_->addLeafChild("leaf2");
     queryRunner_ = std::make_shared<VeloxLocalQueryRunner>(
-        rootPool_.get(),
-        "thrift:127.0.0.1:9091",
-        std::chrono::milliseconds(5000));
+        rootPool_.get(), FLAGS_url, std::chrono::milliseconds(FLAGS_timeout));
     initialSeed_ = FLAGS_seed == 0 ? std::time(nullptr) : FLAGS_seed;
     skipFunctions.insert(skipFunctionsSOT.begin(), skipFunctionsSOT.end());
   }

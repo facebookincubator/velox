@@ -24,36 +24,17 @@
 #include "velox/common/memory/Memory.h"
 #include "velox/core/PlanNode.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
+#include "velox/functions/prestosql/types/BingTileType.h"
+#include "velox/functions/prestosql/types/GeometryType.h"
+#include "velox/functions/prestosql/types/HyperLogLogType.h"
+#include "velox/functions/prestosql/types/JsonType.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/runner/if/gen-cpp2/LocalRunnerService.h"
 #include "velox/vector/VectorSaver.h"
 
 using namespace facebook::velox::runner;
 
 namespace facebook::velox::exec::test {
-
-namespace {
-// Helper class to handle HTTP responses
-class ServerResponse {
- public:
-  explicit ServerResponse(const std::string& response)
-      : response_(folly::parseJson(response)) {}
-
-  void throwIfFailed() {
-    if (response_.getDefault("status", "").asString() != "success") {
-      VELOX_FAIL(
-          "Query failed: {}",
-          response_.getDefault("message", "Unknown error").asString());
-    }
-  }
-
-  folly::dynamic& results() {
-    return response_["results"];
-  }
-
- private:
-  folly::dynamic response_;
-};
-} // namespace
 
 VeloxLocalQueryRunner::VeloxLocalQueryRunner(
     memory::MemoryPool* aggregatePool,
@@ -62,28 +43,11 @@ VeloxLocalQueryRunner::VeloxLocalQueryRunner(
     : ReferenceQueryRunner(aggregatePool),
       serviceUri_(std::move(serviceUri)),
       timeout_(timeout) {
-  // eventBaseThread_.start("VeloxLocalQueryRunner");
   pool_ = aggregatePool->addLeafChild("leaf");
 
-  // Parse the URI to determine if it's HTTP or Thrift
-  try {
-    folly::Uri uri(serviceUri_);
-    if (uri.scheme() == "thrift") {
-      // Extract host and port for Thrift
-      useThrift_ = true;
-      thriftHost_ = uri.host() == "" ? "127.0.0.1" : uri.host();
-      thriftPort_ = uri.port() > 0 ? uri.port() : 9091; // Default Thrift port
-      LOG(INFO) << thriftHost_ << ":" << thriftPort_;
-    } else {
-      // Use HTTP
-      useThrift_ = false;
-    }
-  } catch (const std::exception& e) {
-    // If URI parsing fails, default to HTTP
-    useThrift_ = false;
-    LOG(WARNING) << "Failed to parse service URI: " << e.what()
-                 << ". Defaulting to HTTP.";
-  }
+  folly::Uri uri(serviceUri_);
+  thriftHost_ = uri.host();
+  thriftPort_ = uri.port();
 }
 
 const std::vector<TypePtr>& VeloxLocalQueryRunner::supportedScalarTypes()
@@ -221,9 +185,22 @@ std::vector<RowVectorPtr> convertToRowVectors(
         type = TIMESTAMP();
       } else if (typeStr == "DATE") {
         type = DATE();
+      } else if (typeStr == "BINGTILE") {
+        type = BINGTILE();
+      } else if (typeStr == "INTERVAL YEAR TO MONTH") {
+        type = INTERVAL_YEAR_MONTH();
+      } else if (typeStr == "TIMESTAMP WITH TIME ZONE") {
+        type = TIMESTAMP_WITH_TIME_ZONE();
+      } else if (typeStr == "HYPERLOGLOG") {
+        type = HYPERLOGLOG();
+      } else if (typeStr == "UNKNOWN") {
+        type = UNKNOWN();
+      } else if (typeStr == "GEOMETRY") {
+        type = GEOMETRY();
+      } else if (typeStr == "JSON") {
+        type = JSON();
       } else {
-        // Default to VARCHAR for unsupported types
-        type = VARCHAR();
+        VELOX_FAIL(fmt::format("Unsupported type: {}", typeStr));
       }
 
       types.push_back(type);
@@ -316,16 +293,9 @@ std::vector<RowVectorPtr> convertToRowVectors(
                     rowIdx, Timestamp::fromMillis(*value.timestampValue_ref()));
               }
               break;
-            /*case TypeKind::DATE:
-              if (value.dateValue_ref().has_value()) {
-                vector->as<FlatVector<Date>>()->set(
-                    rowIdx, Date(*value.dateValue_ref()));
-              }
-              break;*/
             default:
-              // For unsupported types, set to null
-              vector->setNull(rowIdx, true);
-              break;
+              VELOX_FAIL(
+                  fmt::format("Unsupported type: {}", vector->typeKind()));
           }
         }
       }
@@ -357,156 +327,34 @@ std::vector<RowVectorPtr> VeloxLocalQueryRunner::executeSerializedPlan(
     const std::string& serializedPlan) {
   std::string queryId = fmt::format("velox_local_query_runner_{}", rand());
 
-  if (useThrift_) {
-    LOG(INFO) << "Using Thrift protocol for query execution";
-    // Use Thrift protocol
-    // auto evb = eventBaseThread_.getEventBase();
-    auto client =
-        createThriftClient(thriftHost_, thriftPort_, timeout_, &eventBase_);
+  auto client =
+      createThriftClient(thriftHost_, thriftPort_, timeout_, &eventBase_);
 
-    // Create the request
-    ExecutePlanRequest request;
-    request.serializedPlan() = serializedPlan;
-    request.queryId() = queryId;
-    request.numWorkers() = 4; // Default value
-    request.numDrivers() = 2; // Default value
+  // Create the request
+  ExecutePlanRequest request;
+  request.serializedPlan() = serializedPlan;
+  request.queryId() = queryId;
+  request.numWorkers() = 4; // Default value
+  request.numDrivers() = 2; // Default value
 
-    // Send the request
-    ExecutePlanResponse response;
-    try {
-      client->sync_executePlan(response, request); // sync_executePlan
-    } catch (const std::exception& e) {
-      VELOX_FAIL("Thrift request failed: {}", e.what());
-    }
-
-    // Check for errors
-    if (!*response.success()) {
-      VELOX_FAIL(
-          "Query execution failed: {}",
-          response.errorMessage().has_value() ? *response.errorMessage()
-                                              : "Unknown error");
-    }
-
-    // Convert the results to RowVectorPtr
-    return convertToRowVectors(*response.resultBatches(), pool_.get());
-  } else {
-    LOG(INFO) << "Using HTTP protocol for query execution";
-    // Use HTTP protocol (existing implementation)
-    // Prepare the request body
-    folly::dynamic requestBody = folly::dynamic::object;
-    requestBody["serialized_plan"] = serializedPlan;
-    requestBody["query_id"] = queryId;
-
-    // Send the request to the LocalRunnerService
-    cpr::Url url{serviceUri_};
-    cpr::Body body{folly::toJson(requestBody)};
-    cpr::Header header{{"Content-Type", "application/json"}};
-    cpr::Timeout timeout{timeout_};
-    cpr::Response response = cpr::Post(url, body, header, timeout);
-
-    // Check for HTTP errors
-    VELOX_CHECK_EQ(
-        response.status_code,
-        200,
-        "HTTP request failed: {} {}",
-        response.status_code,
-        response.error.message);
-
-    // Parse the response
-    ServerResponse serverResponse(response.text);
-    serverResponse.throwIfFailed();
-
-    // Convert the results to RowVectorPtr
-    std::vector<RowVectorPtr> queryResults;
-    folly::dynamic& results = serverResponse.results();
-
-    // If there are no results, return an empty vector
-    if (results.empty()) {
-      return queryResults;
-    }
-
-    // Process each batch of results
-    for (const auto& batch : results) {
-      if (batch.empty()) {
-        continue;
-      }
-
-      // Extract column names and types from the first row
-      std::vector<std::string> names;
-      std::vector<TypePtr> types;
-      for (const auto& item : batch[0].items()) {
-        names.push_back(item.first.asString());
-        const auto& value = item.second;
-
-        // Determine the type based on the value
-        if (value.isNull()) {
-          types.push_back(VARCHAR()); // Default to VARCHAR for null values
-        } else if (value.isBool()) {
-          types.push_back(BOOLEAN());
-        } else if (value.isInt()) {
-          types.push_back(BIGINT());
-        } else if (value.isDouble()) {
-          types.push_back(DOUBLE());
-        } else if (value.isString()) {
-          types.push_back(VARCHAR());
-        } else {
-          // For complex types, use VARCHAR as a fallback
-          types.push_back(VARCHAR());
-        }
-      }
-
-      // Create a row type
-      auto rowType = ROW(std::move(names), std::move(types));
-
-      // Create vectors for each column
-      std::vector<VectorPtr> columns;
-      for (size_t colIdx = 0; colIdx < rowType->size(); colIdx++) {
-        const auto& type = rowType->childAt(colIdx);
-        auto vector = BaseVector::create(type, batch.size(), pool_.get());
-        columns.push_back(vector);
-      }
-
-      // Populate the vectors with data
-      for (size_t rowIdx = 0; rowIdx < batch.size(); rowIdx++) {
-        const auto& row = batch[rowIdx];
-        for (size_t colIdx = 0; colIdx < rowType->size(); colIdx++) {
-          const auto& name = rowType->nameOf(colIdx);
-          const auto& value = row[name];
-          auto& vector = columns[colIdx];
-
-          if (value.isNull()) {
-            vector->setNull(rowIdx, true);
-          } else {
-            switch (vector->typeKind()) {
-              case TypeKind::BOOLEAN:
-                vector->as<FlatVector<bool>>()->set(rowIdx, value.asBool());
-                break;
-              case TypeKind::BIGINT:
-                vector->as<FlatVector<int64_t>>()->set(rowIdx, value.asInt());
-                break;
-              case TypeKind::DOUBLE:
-                vector->as<FlatVector<double>>()->set(rowIdx, value.asDouble());
-                break;
-              case TypeKind::VARCHAR:
-                vector->as<FlatVector<StringView>>()->set(
-                    rowIdx, StringView(value.asString().c_str()));
-                break;
-              default:
-                // For unsupported types, set to null
-                vector->setNull(rowIdx, true);
-            }
-          }
-        }
-      }
-
-      // Create a row vector from the columns
-      auto rowVector = std::make_shared<RowVector>(
-          pool_.get(), rowType, nullptr, batch.size(), std::move(columns));
-      queryResults.push_back(rowVector);
-    }
-
-    return queryResults;
+  // Send the request
+  ExecutePlanResponse response;
+  try {
+    client->sync_executePlan(response, request);
+  } catch (const std::exception& e) {
+    VELOX_FAIL("Thrift request failed: {}", e.what());
   }
+
+  // Check for errors
+  if (!*response.success()) {
+    VELOX_FAIL(
+        "Query execution failed: {}",
+        response.errorMessage().has_value() ? *response.errorMessage()
+                                            : "Unknown error");
+  }
+
+  // Convert the results to RowVectorPtr
+  return convertToRowVectors(*response.resultBatches(), pool_.get());
 }
 
 } // namespace facebook::velox::exec::test

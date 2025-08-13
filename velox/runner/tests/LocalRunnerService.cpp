@@ -22,10 +22,6 @@
 #include <folly/portability/GFlags.h>
 #include <gflags/gflags.h>
 #include <glog/logging.h>
-#include <proxygen/httpserver/HTTPServer.h>
-#include <proxygen/httpserver/RequestHandler.h>
-#include <proxygen/httpserver/RequestHandlerFactory.h>
-#include <proxygen/httpserver/ResponseBuilder.h>
 #include <thrift/lib/cpp2/server/ThriftServer.h>
 #include <memory>
 #include <string>
@@ -34,45 +30,22 @@
 #include "velox/dwio/dwrf/RegisterDwrfWriter.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
+#include "velox/functions/prestosql/types/BingTileType.h"
+#include "velox/functions/prestosql/types/GeometryType.h"
+#include "velox/functions/prestosql/types/HyperLogLogType.h"
+#include "velox/functions/prestosql/types/JsonType.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/functions/prestosql/window/WindowFunctionsRegistration.h"
 #include "velox/functions/sparksql/registration/Register.h"
 #include "velox/runner/LocalRunner.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::runner;
-using namespace proxygen;
+// using namespace proxygen;
 
-DEFINE_int32(http_port, 9090, "Port to listen on for HTTP");
-DEFINE_int32(thrift_port, 9091, "Port to listen on for Thrift");
-DEFINE_bool(enable_http, true, "Enable HTTP server");
-DEFINE_bool(enable_thrift, true, "Enable Thrift server");
-DEFINE_string(
-    registry,
-    "presto",
-    "Function registry to use for query evaluation. Currently supported values are "
-    "presto and spark. Default is presto.");
+DEFINE_int32(port, 9091, "");
 DEFINE_int32(num_workers, 4, "Number of workers to use for query execution");
 DEFINE_int32(num_drivers, 2, "Number of drivers per worker");
-
-static bool validateRegistry(const char* flagName, const std::string& value) {
-  static const std::unordered_set<std::string> kRegistries = {
-      "presto", "spark"};
-  if (kRegistries.count(value) != 1) {
-    std::cerr << "Invalid value for --" << flagName << ": " << value << ". ";
-    std::cerr << "Valid values are: " << folly::join(", ", kRegistries) << "."
-              << std::endl;
-    return false;
-  }
-  if (value == "spark") {
-    functions::sparksql::registerFunctions("");
-  } else if (value == "presto") {
-    functions::prestosql::registerAllScalarFunctions();
-  }
-
-  return true;
-}
-
-DEFINE_validator(registry, &validateRegistry);
 
 // Capture stdout to a string
 class StdoutCapture {
@@ -183,14 +156,8 @@ ResultBatch convertToResultBatch(const std::vector<RowVectorPtr>& rowVectors) {
                                                ->valueAt(rowIdx)
                                                .toMillis();
               break;
-            /*case TypeKind::DATE:
-              value.dateValue_ref() =
-                  vector->as<SimpleVector<Date>>()->valueAt(rowIdx).days();
-              break;*/
             default:
-              // For unsupported types, set to null
-              cell.isNull() = true;
-              break;
+              VELOX_FAIL(fmt::format("Unsupported type: {}", vector->type()));
           }
 
           if (!*cell.isNull()) {
@@ -291,7 +258,7 @@ createEmptySplitSourceFactory() {
 }
 
 // Execute a plan and return the results
-std::pair<std::vector<RowVectorPtr>, std::string> executePlanHelper(
+std::pair<std::vector<RowVectorPtr>, std::string> executePlan(
     const std::string& serializedPlan,
     const std::string& queryId,
     int32_t numWorkers,
@@ -311,7 +278,7 @@ std::pair<std::vector<RowVectorPtr>, std::string> executePlanHelper(
     throw std::runtime_error(
         fmt::format("Failed to deserialize plan: {}", e.what()));
   }
-  LOG(INFO) << "Deserialized plan: " << plan->toString(true, true);
+  LOG(INFO) << "Deserialized plan:\n" << plan->toString(true, true);
 
   // Create a MultiFragmentPlan from the deserialized plan
   auto multiFragmentPlan =
@@ -338,201 +305,14 @@ std::pair<std::vector<RowVectorPtr>, std::string> executePlanHelper(
 }
 } // namespace
 
-// Handler for HTTP requests
-class LocalRunnerHandler : public RequestHandler {
- public:
-  void onRequest(std::unique_ptr<HTTPMessage> request) noexcept override {
-    request_ = std::move(request);
-  }
-
-  void onBody(std::unique_ptr<folly::IOBuf> body) noexcept override {
-    if (body_) {
-      body_->prependChain(std::move(body));
-    } else {
-      body_ = std::move(body);
-    }
-  }
-
-  void onEOM() noexcept override {
-    try {
-      // Parse the request body as JSON
-      std::string bodyStr;
-      if (body_) {
-        bodyStr = body_->moveToFbString().toStdString();
-      }
-
-      folly::dynamic requestJson = folly::parseJson(bodyStr);
-
-      // Extract serialized plan from the JSON
-      std::string serializedPlan =
-          requestJson.getDefault("serialized_plan", "").asString();
-      std::string queryId =
-          requestJson.getDefault("query_id", "query").asString();
-      int numWorkers =
-          requestJson.getDefault("num_workers", FLAGS_num_workers).asInt();
-      int numDrivers =
-          requestJson.getDefault("num_drivers", FLAGS_num_drivers).asInt();
-
-      // Validate required parameters
-      if (serializedPlan.empty()) {
-        ResponseBuilder(downstream_)
-            .status(400, "Bad Request")
-            .body("serialized_plan is required")
-            .sendWithEOM();
-        return;
-      }
-
-      // Create memory pools
-      std::shared_ptr<memory::MemoryPool> rootPool = makeRootPool(queryId);
-      std::shared_ptr<memory::MemoryPool> pool =
-          memory::memoryManager()->addLeafPool("output");
-
-      // Execute the plan
-      std::vector<RowVectorPtr> results;
-      std::string output;
-      try {
-        auto [executionResults, capturedOutput] = executePlanHelper(
-            serializedPlan,
-            queryId,
-            numWorkers,
-            numDrivers,
-            executor_,
-            rootPool,
-            pool);
-        results = std::move(executionResults);
-        output = std::move(capturedOutput);
-      } catch (const std::exception& e) {
-        ResponseBuilder(downstream_)
-            .status(500, "Internal Server Error")
-            .body(e.what())
-            .sendWithEOM();
-        return;
-      }
-
-      // Convert results to JSON
-      folly::dynamic resultsJson = folly::dynamic::array;
-      for (const auto& rowVector : results) {
-        if (!rowVector) {
-          continue; // Skip null vectors
-        }
-        folly::dynamic rowsJson = folly::dynamic::array;
-        for (vector_size_t i = 0; i < rowVector->size(); ++i) {
-          folly::dynamic rowJson = folly::dynamic::object;
-          for (auto colIdx = 0; colIdx < rowVector->childrenSize(); ++colIdx) {
-            if (!rowVector->type() || !rowVector->type()->isRow()) {
-              continue; // Skip if type is null or not a row type
-            }
-            const auto& name = rowVector->type()->asRow().nameOf(colIdx);
-            const auto& vector = rowVector->childAt(colIdx);
-
-            if (vector->isNullAt(i)) {
-              rowJson[name] = nullptr;
-            } else {
-              // Handle different vector types
-              switch (vector->typeKind()) {
-                case TypeKind::BOOLEAN:
-                  rowJson[name] = vector->as<SimpleVector<bool>>()->valueAt(i);
-                  break;
-                case TypeKind::TINYINT:
-                  rowJson[name] =
-                      vector->as<SimpleVector<int8_t>>()->valueAt(i);
-                  break;
-                case TypeKind::SMALLINT:
-                  rowJson[name] =
-                      vector->as<SimpleVector<int16_t>>()->valueAt(i);
-                  break;
-                case TypeKind::INTEGER:
-                  rowJson[name] =
-                      vector->as<SimpleVector<int32_t>>()->valueAt(i);
-                  break;
-                case TypeKind::BIGINT:
-                  rowJson[name] =
-                      vector->as<SimpleVector<int64_t>>()->valueAt(i);
-                  break;
-                case TypeKind::REAL:
-                  rowJson[name] = vector->as<SimpleVector<float>>()->valueAt(i);
-                  break;
-                case TypeKind::DOUBLE:
-                  rowJson[name] =
-                      vector->as<SimpleVector<double>>()->valueAt(i);
-                  break;
-                case TypeKind::VARCHAR:
-                  rowJson[name] =
-                      vector->as<SimpleVector<StringView>>()->valueAt(i).str();
-                  break;
-                default:
-                  rowJson[name] = fmt::format("[{}]", vector->toString(i));
-              }
-            }
-          }
-          rowsJson.push_back(std::move(rowJson));
-        }
-        resultsJson.push_back(std::move(rowsJson));
-      }
-
-      // Create response JSON
-      folly::dynamic responseJson = folly::dynamic::object;
-      responseJson["status"] = "success";
-      responseJson["output"] = output;
-      responseJson["results"] = std::move(resultsJson);
-
-      // Send the response
-      ResponseBuilder(downstream_)
-          .status(200, "OK")
-          .header("Content-Type", "application/json")
-          .body(folly::toJson(responseJson))
-          .sendWithEOM();
-
-    } catch (const std::exception& e) {
-      // Handle exceptions
-      folly::dynamic errorJson = folly::dynamic::object;
-      errorJson["status"] = "error";
-      errorJson["message"] = e.what();
-
-      ResponseBuilder(downstream_)
-          .status(500, "Internal Server Error")
-          .header("Content-Type", "application/json")
-          .body(folly::toJson(errorJson))
-          .sendWithEOM();
-    }
-  }
-
-  void onUpgrade(UpgradeProtocol /*protocol*/) noexcept override {
-    // Not implemented
-  }
-
-  void requestComplete() noexcept override {
-    delete this;
-  }
-
-  void onError(ProxygenError /*err*/) noexcept override {
-    delete this;
-  }
-
- private:
-  std::unique_ptr<HTTPMessage> request_;
-  std::unique_ptr<folly::IOBuf> body_;
-  std::shared_ptr<folly::CPUThreadPoolExecutor> executor_;
-};
-
-// Factory for creating request handlers
-class LocalRunnerHandlerFactory : public RequestHandlerFactory {
- public:
-  void onServerStart(folly::EventBase* /*evb*/) noexcept override {}
-
-  void onServerStop() noexcept override {}
-
-  RequestHandler* onRequest(RequestHandler*, HTTPMessage*) noexcept override {
-    return new LocalRunnerHandler();
-  }
-};
-
 // Implementation of the Thrift service
 class LocalRunnerServiceHandler : public LocalRunnerServiceSvIf {
  public:
   void executePlan(
       ExecutePlanResponse& response,
       std::unique_ptr<ExecutePlanRequest> request) override {
+    LOG(INFO) << "Received executePlan request";
+
     // Create memory pools
     std::shared_ptr<memory::MemoryPool> rootPool =
         makeRootPool(*request->queryId());
@@ -543,8 +323,8 @@ class LocalRunnerServiceHandler : public LocalRunnerServiceSvIf {
     std::vector<RowVectorPtr> results;
     std::string output;
     try {
-      LOG(INFO) << "Executing Plan in Service Handler";
-      auto [executionResults, capturedOutput] = executePlanHelper(
+      LOG(INFO) << "Executing plan in service handler";
+      auto [executionResults, capturedOutput] = ::executePlan(
           *request->serializedPlan(),
           *request->queryId(),
           *request->numWorkers(),
@@ -556,13 +336,13 @@ class LocalRunnerServiceHandler : public LocalRunnerServiceSvIf {
       output = std::move(capturedOutput);
 
       // Debug logging, can be removed when service is finalized.
-      std::ostringstream report;
-      report << "\nAfter action report:";
+      std::ostringstream result;
+      result << "Result:";
       for (const auto& rowVector : results) {
-        report << "\n\trowVector: " << rowVector->toString();
+        result << "\nresult rowVector: " << rowVector->toString();
       }
-      report << "\n\tstdout: " << output;
-      LOG(INFO) << report.str();
+      result << "\nstdout: " << output;
+      LOG(INFO) << result.str();
     } catch (const std::exception& e) {
       LOG(INFO) << "Exception executing plan: " << e.what();
       response.success() = false;
@@ -575,7 +355,7 @@ class LocalRunnerServiceHandler : public LocalRunnerServiceSvIf {
     response.resultBatches()->push_back(convertToResultBatch(results));
     response.output() = output;
     response.success() = true;
-    LOG(INFO) << "Finished converting results to Thrift response";
+    LOG(INFO) << "Response sent";
   }
 
  private:
@@ -589,70 +369,27 @@ int main(int argc, char** argv) {
   // Initialize memory manager
   memory::initializeMemoryManager(memory::MemoryManager::Options{});
 
-  // Register file systems and connectors
+  // Register file systems, connectors and functions
   filesystems::registerLocalFileSystem();
   connector::registerConnectorFactory(
       std::make_shared<connector::hive::HiveConnectorFactory>());
   dwrf::registerDwrfWriterFactory();
-
   Type::registerSerDe();
   core::PlanNode::registerSerDe();
   core::ITypedExpr::registerSerDe();
+  functions::prestosql::registerAllScalarFunctions();
 
-  functions::prestosql::registerAllScalarFunctions("presto.default.");
-  aggregate::prestosql::registerAllAggregateFunctions(
-      "presto.default.", false, true);
-  window::prestosql::registerAllWindowFunctions("presto.default.");
+  // Create the Thrift server
+  std::shared_ptr<apache::thrift::ThriftServer> thriftServer =
+      std::make_shared<apache::thrift::ThriftServer>();
+  thriftServer->setPort(FLAGS_port);
+  thriftServer->setInterface(std::make_shared<LocalRunnerServiceHandler>());
+  thriftServer->setNumIOWorkerThreads(4);
+  thriftServer->setNumCPUWorkerThreads(4);
 
-  // Start HTTP server if enabled
-  std::unique_ptr<HTTPServer> httpServer;
-  std::thread httpThread;
-
-  if (FLAGS_enable_http) {
-    std::vector<HTTPServer::IPConfig> IPs = {
-        {folly::SocketAddress("127.0.0.1", FLAGS_http_port),
-         HTTPServer::Protocol::HTTP}};
-
-    HTTPServerOptions options;
-    options.threads = 4;
-    options.idleTimeout = std::chrono::milliseconds(60000);
-    options.shutdownOn = {SIGINT, SIGTERM};
-    options.enableContentCompression = false;
-    options.handlerFactories =
-        RequestHandlerChain().addThen<LocalRunnerHandlerFactory>().build();
-
-    // Create and start the HTTP server
-    httpServer = std::make_unique<HTTPServer>(std::move(options));
-    httpServer->bind(IPs);
-
-    LOG(INFO) << "Starting HTTP LocalRunner service on port "
-              << FLAGS_http_port;
-
-    // Start the HTTP server in a separate thread
-    httpThread = std::thread([&httpServer]() { httpServer->start(); });
-  }
-
-  // Start Thrift server if enabled
-  std::shared_ptr<apache::thrift::ThriftServer> thriftServer;
-
-  if (FLAGS_enable_thrift) {
-    // Create the Thrift server
-    auto handler = std::make_shared<LocalRunnerServiceHandler>();
-    thriftServer = std::make_shared<apache::thrift::ThriftServer>();
-    thriftServer->setPort(FLAGS_thrift_port);
-    thriftServer->setInterface(handler);
-    thriftServer->setNumIOWorkerThreads(4);
-    thriftServer->setNumCPUWorkerThreads(4);
-
-    LOG(INFO) << "Starting Thrift LocalRunner service on port "
-              << FLAGS_thrift_port;
-
-    // Start the Thrift server (this blocks)
-    thriftServer->serve();
-  } else if (FLAGS_enable_http) {
-    // If only HTTP is enabled, wait for the HTTP thread
-    httpThread.join();
-  }
+  // Start the Thrift server (this blocks)
+  LOG(INFO) << "Starting LocalRunnerService";
+  thriftServer->serve();
 
   return 0;
 }
