@@ -19,7 +19,6 @@
 
 #include "velox/dwio/common/exception/Exception.h"
 #include "velox/dwio/dwrf/common/DecoderUtil.h"
-#include "velox/dwio/dwrf/common/wrap/coded-stream-wrapper.h"
 #include "velox/dwio/dwrf/reader/StripeStream.h"
 
 namespace facebook::velox::dwrf {
