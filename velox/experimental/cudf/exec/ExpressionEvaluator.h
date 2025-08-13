@@ -20,9 +20,11 @@
 #include "velox/type/Type.h"
 
 #include <cudf/ast/expressions.hpp>
+#include <cudf/column/column.hpp>
 
 #include <memory>
 #include <string>
+#include <variant>
 #include <vector>
 
 namespace facebook::velox::cudf_velox {
