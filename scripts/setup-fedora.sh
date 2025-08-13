@@ -52,12 +52,16 @@ function install_clang15 {
 function install_build_prerequisites {
   dnf update -y
   dnf_install dnf-plugins-core # For ccache, ninja
-  if grep -q CentOS /etc/os-release; then
-    dnf config-manager --set-enabled crb
-    dnf update -y
-  fi
-  dnf_install autoconf automake ccache git g++ libtool \
+  dnf_install autoconf automake ccache git g++-14 libtool \
     ninja-build python3-pip python3-devel wget which
+
+  # Set up gcc alternatives
+  sudo alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 140 \
+  --slave /usr/bin/g++ g++ /usr/bin/g++-14 \
+  --slave /usr/bin/gcov gcov /usr/bin/gcov-14 \
+  --slave /usr/bin/gcc-ar gcc-ar /usr/bin/gcc-ar-14 \
+  --slave /usr/bin/gcc-ranlib gcc-ranlib /usr/bin/gcc-ranlib-14 \
+  --slave /usr/bin/gcc-nm gcc-nm /usr/bin/gcc-nm-14
 
   install_uv
   uv_install cmake
@@ -125,8 +129,9 @@ function install_velox_deps {
       export CC=/usr/bin/clang-15
       export CXX=/usr/bin/clang++-15
     else
-      # Activate gcc12; enable errors on unset variables afterwards.
-      #source /opt/rh/gcc-toolset-12/enable || exit 1
+      # Activate gcc 14
+      export CXX=/usr/bin/gcc-14
+      export CXX=/usr/bin/g++-14
       set -u
     fi
 
@@ -145,8 +150,9 @@ function install_velox_deps {
       export CC=/usr/bin/clang-15
       export CXX=/usr/bin/clang++-15
     else
-      # Activate gcc12; enable errors on unset variables afterwards.
-      #source /opt/rh/gcc-toolset-12/enable || exit 1
+      # Activate gcc 14
+      export CXX=/usr/bin/gcc-14
+      export CXX=/usr/bin/g++-14
       set -u
     fi
     install_velox_deps
