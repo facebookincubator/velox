@@ -28,6 +28,7 @@ velox_resolve_dependency_url(GOOGLE_CLOUD_CPP)
 
 message(STATUS "Building Google Cloud CPP storage from source")
 
+block(SCOPE_FOR VARIABLES)
 FetchContent_Declare(
   google_cloud_cpp
   URL ${VELOX_GOOGLE_CLOUD_CPP_SOURCE_URL}
@@ -39,3 +40,4 @@ set(GOOGLE_CLOUD_CPP_ENABLE
     "storage"
     CACHE STRING "The list of libraries to build.")
 FetchContent_MakeAvailable(google_cloud_cpp)
+endblock()

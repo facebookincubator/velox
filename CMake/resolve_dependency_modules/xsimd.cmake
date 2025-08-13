@@ -23,9 +23,11 @@ set(VELOX_XSIMD_SOURCE_URL
 velox_resolve_dependency_url(XSIMD)
 
 message(STATUS "Building xsimd from source")
+block(SCOPE_FOR VARIABLES)
 FetchContent_Declare(
   xsimd
   URL ${VELOX_XSIMD_SOURCE_URL}
   URL_HASH ${VELOX_XSIMD_BUILD_SHA256_CHECKSUM})
 
 FetchContent_MakeAvailable(xsimd)
+endblock()
