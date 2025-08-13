@@ -1535,7 +1535,7 @@ class ApplicationVersionParser {
     auto version_pre_release_start =
         version_parsing_position_ + 1; // +1 is for '-'.
     auto version_pre_release_end =
-        version_string_.find_first_of("+", version_pre_release_start);
+        version_string_.find_first_of('+', version_pre_release_start);
     // No BUILD_INFO
     if (version_pre_release_end == std::string::npos) {
       version_pre_release_end = version_string_.size();
@@ -1570,7 +1570,7 @@ class ApplicationVersionParser {
     }
     auto build_name_start = build_mark_position + build_mark.size();
     RemovePrecedingSpaces(created_by_, build_name_start, created_by_.size());
-    auto build_name_end = created_by_.find_first_of(")", build_name_start);
+    auto build_name_end = created_by_.find_first_of(')', build_name_start);
     // No end ")".
     if (build_name_end == std::string::npos) {
       return false;
