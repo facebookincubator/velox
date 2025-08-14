@@ -676,6 +676,11 @@ Each query can override the config by setting corresponding query session proper
      - bool
      - true
      - Reads timestamp partition value as local time if true. Otherwise, reads as UTC.
+   * - hive.preserve-flat-maps-in-memory
+     - hive.preserve_flat_maps_in_memory
+     - bool
+     - false
+     - Whether to preserve flat maps in memory as FlatMapVectors instead of converting them to MapVectors.
 
 ``ORC File Format Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
