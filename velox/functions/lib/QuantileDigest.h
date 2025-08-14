@@ -109,6 +109,21 @@ class QuantileDigest {
           CdfEntry>>
   getDistributionFunction(double rangeStart, double rangeEnd) const;
 
+  /// Get the approx truncated mean from the digest.
+  /// Computes the mean of values between the specified quantile bounds,
+  /// excluding outliers.
+  ///
+  /// Example: For data [1, 10, 11, 12, 100] with bounds [0.25, 0.75], this
+  /// excludes the outliers (1, 100) and computes the mean of the middle values
+  /// as 11.
+  template <typename ValueFunc = std::function<double(T)>>
+  std::optional<double> getTruncatedMean(
+      double lowerQuantileBound,
+      double upperQuantileBound,
+      ValueFunc valueFunc = [](T value) {
+        return static_cast<double>(value);
+      }) const;
+
  private:
   using U = std::conditional_t<sizeof(T) == sizeof(int64_t), int64_t, int32_t>;
 
@@ -1369,6 +1384,77 @@ QuantileDigest<T, Allocator>::getDistributionFunction(
   cdf.push_back({static_cast<T>(rangeEnd), 1.0});
 
   return cdf;
+}
+
+template <typename T, typename Allocator>
+template <typename ValueFunc>
+std::optional<double> QuantileDigest<T, Allocator>::getTruncatedMean(
+    double lowerQuantileBound,
+    double upperQuantileBound,
+    ValueFunc valueFunc) const {
+  VELOX_USER_CHECK(
+      0 <= lowerQuantileBound && lowerQuantileBound <= 1,
+      "lowerQuantileBound must be between 0 and 1");
+  VELOX_USER_CHECK(
+      0 <= upperQuantileBound && upperQuantileBound <= 1,
+      "upperQuantileBound must be between 0 and 1");
+
+  if (weightedCount_ == 0 || lowerQuantileBound >= upperQuantileBound) {
+    return std::nullopt;
+  }
+
+  double meanResult = 0.0;
+  double lowerRank = lowerQuantileBound * weightedCount_;
+  double upperRank = upperQuantileBound * weightedCount_;
+
+  double sum = 0.0;
+  double count = 0.0;
+  double mean = 0.0;
+
+  postOrderTraverse(
+      root_,
+      [this,
+       &meanResult,
+       &sum,
+       &count,
+       &mean,
+       lowerRank,
+       upperRank,
+       &valueFunc](int32_t node) {
+        double nodeCount = counts_[node];
+        if (nodeCount == 0) {
+          return true;
+        }
+
+        sum += nodeCount;
+
+        double amountOverLower = std::max(sum - lowerRank, 0.0);
+        double amountOverUpper = std::max(sum - upperRank, 0.0);
+        // Constrain node count to the rank of the lower and upper bound
+        // quantiles
+        nodeCount = std::max(
+            0.0,
+            std::min(
+                std::min(nodeCount, amountOverLower),
+                nodeCount - amountOverUpper));
+
+        if (amountOverLower > 0) {
+          double value =
+              valueFunc(postprocessByType(std::min(upperBound(node), max_)));
+          mean = (mean * count + nodeCount * value) / (count + nodeCount);
+          count += nodeCount;
+        }
+
+        if (amountOverUpper > 0 || sum == weightedCount_) {
+          meanResult = mean;
+          return false;
+        }
+        return true;
+      },
+      lefts_,
+      rights_);
+
+  return meanResult;
 }
 
 } // namespace qdigest
