@@ -681,8 +681,8 @@ template <>
 inline uint64_t VectorHasher::valueId(Timestamp value) {
   if (FOLLY_UNLIKELY(
           value.getNanos() % Timestamp::kNanosecondsInMillisecond != 0)) {
-    // The timestamp is in nanosecond precision. The values are
-    // not mappable to uint64.
+    // The timestamp is in nanosecond or microsecond precision. The values are
+    // not mappable to milliseconds without precision loss.
     setRangeOverflow();
     setDistinctOverflow();
     return kUnmappable;
