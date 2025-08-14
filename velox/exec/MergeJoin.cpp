@@ -1389,15 +1389,10 @@ RowVectorPtr MergeJoin::applyFilter(const RowVectorPtr& output) {
 
       // 1. If leftMatch_ is nullopt, there for sure the next buffer will
       // contain a different key match.
-      if (!leftMatch_) {
-        onMiss(args...);
-        return;
-      }
-
       // 2. leftMatch_ may not be nullopt, but may be related to a different
       // (subsequent) left key. So we check if the last row in the batch has the
       // same left row number as the last key match.
-      if (!joinTracker_->isCurrentLeftMatch(numRows - 1)) {
+      if (!leftMatch_ || !joinTracker_->isCurrentLeftMatch(numRows - 1)) {
         onMiss(args...);
         return;
       }
