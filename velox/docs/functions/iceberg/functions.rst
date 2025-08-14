@@ -10,15 +10,15 @@ Refer to `Iceberg documenation <https://iceberg.apache.org/spec/#partition-trans
 
 .. iceberg:function:: bucket(numBuckets, input) -> integer
 
-   Returns an integer between 0 and ``numBuckets - 1`` representing the bucket assignment.
-   Bucket partition transforms use a 32-bit hash of the ``input``. The 32-bit hash implementation is the 32-bit Murmur3 hash, x86 variant, seeded with 0.
-   The hash mod ``numBuckets`` must produce a positive value by first discarding the sign bit of the hash value.
+   Returns an integer between 0 and numBuckets - 1, indicating the assigned bucket.
+   Bucket partitioning is based on a 32-bit hash of the input, specifically using the x86
+   variant of the Murmur3 hash function with a seed of 0.
 
    In pseudo-code, the function is showing as following. ::
 
-       def bucket_N(x) = (murmur3_x86_32_hash(x) & Integer.MAX_VALUE) % N
+       def bucket(numBuckets, input)= (murmur3_x86_32_hash(input) & Integer.MAX_VALUE) % numBuckets
 
-   Argument ``numBuckets`` is of type INTEGER, the ``numBuckets`` must be more than 0, otherwise, throws.
+   The ``numBuckets`` is of type INTEGER and must be greater than 0. Otherwise, an exception is thrown.
    Supported types for ``input`` are INTEGER, BIGINT, DECIMAL, DATE, TIMESTAMP, VARCHAR, VARBINARY. ::
        SELECT bucket(128, 'abcd'); -- 4
        SELECT bucket(100, 34L); -- 79

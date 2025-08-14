@@ -15,11 +15,9 @@
  */
 
 #include "velox/functions/iceberg/BucketFunction.h"
-#include "velox/common/base/Status.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/Registerer.h"
 #include "velox/functions/iceberg/Murmur3Hash32.h"
-#include "velox/type/Timestamp.h"
 
 namespace facebook::velox::functions::iceberg {
 namespace {
@@ -57,8 +55,8 @@ template <typename TExec>
 struct BucketFunction {
   VELOX_DEFINE_FUNCTION_TYPES(TExec);
 
-  /// Value of type INTEGER and BIGINT is treated as unsigned type.
-  /// For the schema evolution, may promote int to int64, treat int32 as uint64.
+  // Value of type INTEGER and BIGINT is treated as unsigned type.
+  // For the schema evolution, may promote int to int64, treat int32 as uint64.
   template <typename T>
   FOLLY_ALWAYS_INLINE Status call(int32_t& out, int32_t numBuckets, T input) {
     VELOX_RETURN_IF(
