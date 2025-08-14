@@ -327,7 +327,8 @@ We can now populate the strings using the setNoCopy method.
 .. code-block:: c++
 
     for (auto i = 0; i < 100; ++i) {
-     substr->setNoCopy(i, StringView(vector->valueAt(i).data(), 20));
+     const auto value = vector->valueAt(i);
+     substr->setNoCopy(i, StringView(value.data(), 20));
     }
 
     LOG(INFO) << substr->toString();

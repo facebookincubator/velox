@@ -1290,10 +1290,10 @@ TEST_P(StringReaderTests, testDictionaryWithNulls) {
     } else {
       EXPECT_FALSE(stringBatch->isNullAt(i));
       const char* expected = i < 98 ? "ORC" : "Owen";
-      ASSERT_EQ(strlen(expected), stringBatch->valueAt(i).size())
-          << "Wrong length at " << i;
+      const auto value = stringBatch->valueAt(i);
+      ASSERT_EQ(strlen(expected), value.size()) << "Wrong length at " << i;
       for (size_t letter = 0; letter < strlen(expected); ++letter) {
-        EXPECT_EQ(expected[letter], stringBatch->valueAt(i).data()[letter])
+        EXPECT_EQ(expected[letter], value.data()[letter])
             << "Wrong contents at " << i << ", " << letter;
       }
     }
@@ -1453,8 +1453,7 @@ TEST_P(StringReaderTests, testStringDictSkipNoNulls) {
       EXPECT_EQ(
           rowCount % 2 == 0 ? dictVals[rowCount / 2]
                             : strideDictVals[rowCount / 2],
-          std::string(
-              stringBatch->valueAt(i).data(), stringBatch->valueAt(i).size()));
+          std::string(stringBatch->valueAt(i)));
       ++rowCount;
     }
     provider.addRow(rowsRead);
@@ -1612,9 +1611,7 @@ TEST_P(StringReaderTests, testStringDictSkipWithNulls) {
         size_t k = j / 2;
         EXPECT_EQ(
             j % 2 == 0 ? dictVals[k] : strideDictVals[k],
-            std::string(
-                stringBatch->valueAt(i).data(),
-                stringBatch->valueAt(i).size()));
+            std::string(stringBatch->valueAt(i)));
       } else {
         EXPECT_TRUE(stringBatch->isNullAt(i));
       }
@@ -1800,10 +1797,11 @@ TEST_P(TestColumnReader, testSkipWithNulls) {
     for (size_t j = 0; j < 10; ++j) {
       size_t k = 10 * i + j;
       EXPECT_FALSE(intBatch->isNullAt(k)) << "Wrong at " << i;
-      ASSERT_EQ(2, stringBatch->valueAt(k).size()) << "Wrong at " << k;
-      EXPECT_EQ('0' + static_cast<char>(i), stringBatch->valueAt(k).data()[0])
+      const auto value = stringBatch->valueAt(k);
+      ASSERT_EQ(2, value.size()) << "Wrong at " << k;
+      EXPECT_EQ('0' + static_cast<char>(i), value.data()[0])
           << "Wrong at " << k;
-      EXPECT_EQ('0' + static_cast<char>(j), stringBatch->valueAt(k).data()[1])
+      EXPECT_EQ('0' + static_cast<char>(j), value.data()[1])
           << "Wrong at " << k;
     }
   }
@@ -1867,9 +1865,10 @@ TEST_P(StringReaderTests, testBinaryDirect) {
     ASSERT_EQ(50, strings->size());
     ASSERT_EQ(0, getNullCount(strings));
     for (size_t j = 0; j < batch->size(); ++j) {
-      ASSERT_EQ(2, strings->valueAt(j).size());
-      EXPECT_EQ((50 * i + j) / 10, strings->valueAt(j).data()[0]);
-      EXPECT_EQ((50 * i + j) % 10, strings->valueAt(j).data()[1]);
+      const auto value = strings->valueAt(j);
+      ASSERT_EQ(2, value.size());
+      EXPECT_EQ((50 * i + j) / 10, value.data()[0]);
+      EXPECT_EQ((50 * i + j) % 10, value.data()[1]);
     }
   }
 }
@@ -1936,11 +1935,10 @@ TEST_P(StringReaderTests, testBinaryDirectWithNulls) {
     for (size_t j = 0; j < batch->size(); ++j) {
       ASSERT_EQ(((128 * i + j) & 4) != 0, strings->isNullAt(j));
       if (!strings->isNullAt(j)) {
-        ASSERT_EQ(2, strings->valueAt(j).size());
-        EXPECT_EQ(
-            'A' + static_cast<char>(next / 16), strings->valueAt(j).data()[0]);
-        EXPECT_EQ(
-            'A' + static_cast<char>(next % 16), strings->valueAt(j).data()[1]);
+        const auto value = strings->valueAt(j);
+        ASSERT_EQ(2, value.size());
+        EXPECT_EQ('A' + static_cast<char>(next / 16), value.data()[0]);
+        EXPECT_EQ('A' + static_cast<char>(next % 16), value.data()[1]);
         next += 1;
       }
     }
@@ -2050,9 +2048,10 @@ TEST_P(StringReaderTests, testStringDirectShortBuffer) {
     ASSERT_EQ(25, strings->size());
     ASSERT_EQ(0, getNullCount(strings));
     for (size_t j = 0; j < batch->size(); ++j) {
-      ASSERT_EQ(2, strings->valueAt(j).size());
-      EXPECT_EQ((25 * i + j) / 10, strings->valueAt(j).data()[0]);
-      EXPECT_EQ((25 * i + j) % 10, strings->valueAt(j).data()[1]);
+      const auto value = strings->valueAt(j);
+      ASSERT_EQ(2, value.size());
+      EXPECT_EQ((25 * i + j) / 10, value.data()[0]);
+      EXPECT_EQ((25 * i + j) % 10, value.data()[1]);
     }
   }
 }
@@ -2120,9 +2119,10 @@ TEST_P(StringReaderTests, testStringDirectShortBufferWithNulls) {
     for (size_t j = 0; j < batch->size(); ++j) {
       ASSERT_EQ((j & 4) != 0, strings->isNullAt(j));
       if (!strings->isNullAt(j)) {
-        ASSERT_EQ(2, strings->valueAt(j).size());
-        EXPECT_EQ('A' + next / 16, strings->valueAt(j).data()[0]);
-        EXPECT_EQ('A' + next % 16, strings->valueAt(j).data()[1]);
+        const auto value = strings->valueAt(j);
+        ASSERT_EQ(2, value.size());
+        EXPECT_EQ('A' + next / 16, value.data()[0]);
+        EXPECT_EQ('A' + next % 16, value.data()[1]);
         next += 1;
       }
     }
@@ -2184,17 +2184,18 @@ TEST_P(StringReaderTests, testStringDirectNullAcrossWindow) {
   ASSERT_TRUE(strings->isNullAt(0));
   for (size_t j = 1; j < batch->size(); ++j) {
     ASSERT_FALSE(strings->isNullAt(j));
-    ASSERT_EQ(1, strings->valueAt(j).size());
-    ASSERT_EQ('a' + j - 1, strings->valueAt(j).data()[0])
-        << "difference at " << j;
+    auto value = strings->valueAt(j);
+    ASSERT_EQ(1, value.size());
+    ASSERT_EQ('a' + j - 1, value.data()[0]) << "difference at " << j;
 
     skipAndRead(batch, /* read */ 2);
     strings = getOnlyChild<FlatVector<StringView>>(batch);
     ASSERT_EQ(2, strings->size());
     ASSERT_EQ(0, getNullCount(strings));
     for (size_t j = 0; j < batch->size(); ++j) {
-      ASSERT_EQ(1, strings->valueAt(j).size());
-      ASSERT_EQ('f' + j, strings->valueAt(j).data()[0]);
+      auto value = strings->valueAt(j);
+      ASSERT_EQ(1, value.size());
+      ASSERT_EQ('f' + j, value.data()[0]);
     }
   }
 }
@@ -2204,9 +2205,10 @@ void validateFlatVectorBatch(
     SimpleVectorPtr<StringView> strings,
     int offset) {
   for (size_t i = 0; i < batch->size(); ++i) {
-    ASSERT_EQ(offset + i, strings->valueAt(i).size());
-    for (size_t j = 0; j < strings->valueAt(i).size(); ++j) {
-      EXPECT_EQ(static_cast<char>(j), strings->valueAt(i).data()[j]);
+    const auto value = strings->valueAt(i);
+    ASSERT_EQ(offset + i, value.size());
+    for (size_t j = 0; j < value.size(); ++j) {
+      EXPECT_EQ(static_cast<char>(j), value.data()[j]);
     }
   }
 }
@@ -4494,8 +4496,7 @@ TEST_P(StringReaderTests, testStringDictStrideDictDoesntExist) {
       EXPECT_EQ(
           inStride(rowCount) ? strideDictVals[strideDictOffset++]
                              : dictVals[dictOffset++],
-          std::string(
-              stringBatch->valueAt(i).data(), stringBatch->valueAt(i).size()));
+          std::string(stringBatch->valueAt(i)));
       ++rowCount;
     }
     provider.addRow(rowIndexStride);
@@ -4646,8 +4647,7 @@ TEST_P(StringReaderTests, testStringDictZeroLengthStrideDict) {
       EXPECT_EQ(
           inStride(rowCount) ? strideDictVals[strideDictOffset++]
                              : dictVals[dictOffset++],
-          std::string(
-              stringBatch->valueAt(i).data(), stringBatch->valueAt(i).size()));
+          std::string(stringBatch->valueAt(i)));
       ++rowCount;
     }
     provider.addRow(rowIndexStride);

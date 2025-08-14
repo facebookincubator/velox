@@ -413,12 +413,11 @@ TEST_F(StringFunctionsTest, substrVariable) {
                 << "expected null at " << i << " for " << funcName;
           } else {
             if (expectedStart(i) != 0) {
-              EXPECT_EQ(vector->valueAt(i).size(), expectedLength(i))
+              const auto value = vector->valueAt(i);
+              EXPECT_EQ(value.size(), expectedLength(i))
                   << "at " << i << " for " << funcName;
               for (int l = 0; l < expectedLength(i); l++) {
-                EXPECT_EQ(
-                    vector->valueAt(i).data()[l],
-                    strings[i][expectedStart(i) - 1 + l])
+                EXPECT_EQ(value.data()[l], strings[i][expectedStart(i) - 1 + l])
                     << "at " << i << " for " << funcName;
               }
             } else {
