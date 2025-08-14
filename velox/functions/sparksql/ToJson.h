@@ -46,7 +46,8 @@ void appendDecimal(T value, const Type& type, std::string& result) {
   const size_t maxSize = DecimalUtil::maxStringViewSize(precision, scale);
   size_t oldSize = result.size();
   result.resize(oldSize + maxSize);
-  size_t len = DecimalUtil::castToString(value, scale, maxSize, result.data() + oldSize);
+  size_t len = 
+      DecimalUtil::castToString(value, scale, maxSize, result.data() + oldSize);
   result.resize(oldSize + len);
 }
 
