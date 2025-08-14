@@ -77,7 +77,7 @@ struct StringView {
     }
   }
 
-  static StringView makeInline(std::string str) {
+  static StringView makeInline(const std::string& str) {
     VELOX_DCHECK(isInline(str.size()));
     return StringView{str};
   }
@@ -91,14 +91,15 @@ struct StringView {
   //
   /* implicit */ StringView(const char* data)
       : StringView(data, strlen(data)) {}
+  StringView(std::nullptr_t) = delete;
 
   explicit StringView(const folly::fbstring& value)
       : StringView(value.data(), value.size()) {}
-  explicit StringView(folly::fbstring&& value) = delete;
+  StringView(folly::fbstring&& value) = delete;
 
   explicit StringView(const std::string& value)
       : StringView(value.data(), value.size()) {}
-  explicit StringView(std::string&& value) = delete;
+  StringView(std::string&& value) = delete;
 
   explicit StringView(std::string_view value)
       : StringView(value.data(), value.size()) {}
@@ -111,7 +112,7 @@ struct StringView {
     return size <= kInlineSize;
   }
 
-  const char* data() && = delete;
+  const char* data() const&& = delete;
   const char* data() const& {
     return isInline() ? prefix_ : value_.data;
   }
@@ -192,13 +193,13 @@ struct StringView {
     return compare(other) >= 0;
   }
 
-  operator folly::StringPiece() && = delete;
+  operator folly::StringPiece() const&& = delete;
   operator folly::StringPiece() const& {
-    return folly::StringPiece(data(), size());
+    return {data(), size()};
   }
 
   operator std::string() const {
-    return std::string(data(), size());
+    return {data(), size()};
   }
 
   std::string str() const {
@@ -213,22 +214,22 @@ struct StringView {
     return *this;
   }
 
-  operator folly::dynamic() && = delete;
+  operator folly::dynamic() const&& = delete;
   operator folly::dynamic() const& {
     return folly::dynamic(folly::StringPiece(data(), size()));
   }
 
-  operator std::string_view() && = delete;
+  operator std::string_view() const&& = delete;
   explicit operator std::string_view() const& {
-    return std::string_view(data(), size());
+    return {data(), size()};
   }
 
-  const char* begin() && = delete;
+  const char* begin() const&& = delete;
   const char* begin() const& {
     return data();
   }
 
-  const char* end() && = delete;
+  const char* end() const&& = delete;
   const char* end() const& {
     return data() + size();
   }
@@ -251,11 +252,11 @@ struct StringView {
       int32_t numStrings);
 
  private:
-  inline int64_t sizeAndPrefixAsInt64() const {
+  int64_t sizeAndPrefixAsInt64() const {
     return reinterpret_cast<const int64_t*>(this)[0];
   }
 
-  inline int64_t inlinedAsInt64() const {
+  int64_t inlinedAsInt64() const {
     return reinterpret_cast<const int64_t*>(this)[1];
   }
 
@@ -278,7 +279,7 @@ struct StringView {
 //   auto myStringView = "my string"_sv;
 //   auto vec = {"str1"_sv, "str2"_sv};
 inline StringView operator""_sv(const char* str, size_t len) {
-  return StringView(str, len);
+  return {str, static_cast<int32_t>(len)};
 }
 
 } // namespace facebook::velox

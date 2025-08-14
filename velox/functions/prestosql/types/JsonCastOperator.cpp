@@ -1219,13 +1219,13 @@ void JsonCastOperator::castFromJson(
   exec::VectorWriter<Any> writer;
   writer.init(*flatResult);
   // Input is guaranteed to be in flat or constant encodings when passed in.
-  auto* inputVector = input.as<SimpleVector<StringView>>();
+  const auto* inputVector = input.as<SimpleVector<StringView>>();
   size_t maxSize = 0;
   rows.applyToSelected([&](auto row) {
     if (inputVector->isNullAt(row)) {
       return;
     }
-    auto& input = inputVector->valueAt(row);
+    auto input = inputVector->valueAt(row);
     maxSize = std::max(maxSize, input.size());
   });
   paddedInput_.resize(maxSize + simdjson::SIMDJSON_PADDING);
@@ -1237,7 +1237,7 @@ void JsonCastOperator::castFromJson(
           writer.commitNull();
           return;
         }
-        auto& input = inputVector->valueAt(row);
+        auto input = inputVector->valueAt(row);
         memcpy(paddedInput_.data(), input.data(), input.size());
         simdjson::padded_string_view paddedInput(
             paddedInput_.data(), input.size(), paddedInput_.size());

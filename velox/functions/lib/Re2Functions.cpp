@@ -2236,16 +2236,15 @@ std::shared_ptr<exec::VectorFunction> makeLike(
     // we should support too.
     //
     // [1].https://github.com/facebookincubator/velox/issues/8363
+    const auto value = constantEscape->valueAt(0);
     try {
       VELOX_USER_CHECK_EQ(
-          constantEscape->valueAt(0).size(),
-          1,
-          "Escape string must be a single character");
+          value.size(), 1, "Escape string must be a single character");
     } catch (...) {
       return std::make_shared<exec::AlwaysFailingVectorFunction>(
           std::current_exception());
     }
-    escapeChar = constantEscape->valueAt(0).data()[0];
+    escapeChar = value.data()[0];
   }
 
   BaseVector* constantPattern = inputArgs[1].constantValue.get();
