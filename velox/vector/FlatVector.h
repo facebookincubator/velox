@@ -37,11 +37,6 @@ class FlatVector final : public SimpleVector<T> {
   FlatVector(const FlatVector&) = delete;
   FlatVector& operator=(const FlatVector&) = delete;
 
-  static constexpr bool can_simd =
-      (std::is_same_v<T, int64_t> || std::is_same_v<T, int32_t> ||
-       std::is_same_v<T, int16_t> || std::is_same_v<T, int8_t> ||
-       std::is_same_v<T, bool> || std::is_same_v<T, size_t>);
-
   /// Minimum size of a string buffer. 32 KB value is chosen to ensure that a
   /// single buffer is sufficient for a "typical" vector: 1K rows, medium size
   /// strings.
@@ -110,21 +105,17 @@ class FlatVector final : public SimpleVector<T> {
     }
   }
 
-  virtual ~FlatVector() override = default;
+  ~FlatVector() override = default;
 
+  // TODO: This method should be removed because there's no performance
+  // benefit in calling it instead of valueAt.
   T valueAtFast(vector_size_t idx) const;
 
-  const T valueAt(vector_size_t idx) const override {
+  T valueAt(vector_size_t idx) const override {
     return valueAtFast(idx);
   }
 
   std::unique_ptr<SimpleVector<uint64_t>> hashAll() const override;
-
-  /// Loads a SIMD vector of data at the virtual byteOffset given
-  /// Note this method is implemented on each vector type, but is intentionally
-  /// not virtual for performance reasons.
-  /// 'index' indicates the byte offset to load from
-  xsimd::batch<T> loadSIMDValueBufferAt(size_t index) const;
 
   /// dictionary vector makes internal usehere for SIMD functions
   template <typename X>
@@ -162,8 +153,8 @@ class FlatVector final : public SimpleVector<T> {
         const auto numCopyBytes =
             std::min<vector_size_t>(values_->size(), numNewBytes);
         if constexpr (!std::is_same_v<T, bool>) {
-          auto dst = newValues->asMutable<char>();
-          auto src = values_->as<char>();
+          auto* dst = newValues->asMutable<char>();
+          const auto* src = values_->as<char>();
           memcpy(dst, src, numCopyBytes);
         } else {
           auto dst = newValues->asMutable<T>();
@@ -181,11 +172,6 @@ class FlatVector final : public SimpleVector<T> {
     rawValues_ = values_->asMutable<T>();
     return values_;
   }
-
-  /// Returns true if this number of comparison values on this vector should use
-  /// simd for equality constraint filtering, false to use standard set
-  /// examination filtering.
-  bool useSimdEquality(size_t numCmpVals) const;
 
   /// Returns the raw values of this vector as a continuous array.
   const T* rawValues() const;
@@ -417,7 +403,7 @@ class FlatVector final : public SimpleVector<T> {
   uint64_t retainedSize() const override {
     auto size =
         BaseVector::retainedSize() + (values_ ? values_->capacity() : 0);
-    for (auto& buffer : stringBuffers_) {
+    for (const auto& buffer : stringBuffers_) {
       size += buffer->capacity();
     }
     return size;

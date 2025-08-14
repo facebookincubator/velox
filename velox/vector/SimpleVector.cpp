@@ -24,7 +24,7 @@ void SimpleVector<StringView>::validate(
   BaseVector::validate(options);
 
   // We only validate the right size of ascii info, if it has any selection.
-  auto rlockedAsciiComputedRows{asciiInfo.readLockedAsciiComputedRows()};
+  auto rlockedAsciiComputedRows = asciiInfo_.readLockedAsciiComputedRows();
   if (rlockedAsciiComputedRows->hasSelections()) {
     VELOX_CHECK_GE(rlockedAsciiComputedRows->size(), size());
   }
