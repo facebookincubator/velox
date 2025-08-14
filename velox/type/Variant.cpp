@@ -184,8 +184,8 @@ std::string stringifyFloatingPointerValue(T val) {
 void Variant::throwCheckIsKindError(TypeKind kind) const {
   throw std::invalid_argument{fmt::format(
       "wrong kind! {} != {}",
-      mapTypeKindToName(kind_),
-      mapTypeKindToName(kind))};
+      TypeKindName::toName(kind_),
+      TypeKindName::toName(kind))};
 }
 
 void Variant::throwCheckPtrError() const {
@@ -476,7 +476,8 @@ std::string Variant::toJson(const TypePtr& type) const {
   }
 
   VELOX_UNSUPPORTED(
-      "Unsupported: given type {} is not json-ready", mapTypeKindToName(kind_));
+      "Unsupported: given type {} is not json-ready",
+      TypeKindName::toName(kind_));
 }
 
 // This is the unsafe older implementation of toJson. It is kept here for
@@ -602,7 +603,8 @@ std::string Variant::toJsonUnsafe(const TypePtr& type) const {
   }
 
   VELOX_UNSUPPORTED(
-      "Unsupported: given type {} is not json-ready", mapTypeKindToName(kind_));
+      "Unsupported: given type {} is not json-ready",
+      TypeKindName::toName(kind_));
 }
 
 void serializeOpaque(
@@ -624,7 +626,7 @@ void serializeOpaque(
 folly::dynamic Variant::serialize() const {
   folly::dynamic variantObj = folly::dynamic::object;
 
-  variantObj["type"] = mapTypeKindToName(kind_);
+  variantObj["type"] = std::string(TypeKindName::toName(kind_));
   auto& objValue = variantObj["value"];
   if (isNull()) {
     objValue = nullptr;
@@ -735,7 +737,7 @@ Variant deserializeOpaque(const folly::dynamic& variantobj) {
 }
 
 Variant Variant::create(const folly::dynamic& variantobj) {
-  TypeKind kind = mapNameToTypeKind(variantobj["type"].asString());
+  TypeKind kind = TypeKindName::toTypeKind(variantobj["type"].asString());
   const folly::dynamic& obj = variantobj["value"];
 
   if (obj.isNull()) {

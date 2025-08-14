@@ -84,7 +84,9 @@ cudf::type_id veloxToCudfTypeId(const TypePtr& type) {
     // case TypeKind::OPAQUE: return cudf::type_id::EMPTY;
     // case TypeKind::INVALID: return cudf::type_id::EMPTY;
     default:
-      CUDF_FAIL("Unsupported Velox type: " + mapTypeKindToName(type->kind()));
+      CUDF_FAIL(
+          "Unsupported Velox type: " +
+          std::string(TypeKindName::toName(type->kind())));
       return cudf::type_id::EMPTY;
   }
 }

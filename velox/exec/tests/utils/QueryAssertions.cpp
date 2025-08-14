@@ -21,6 +21,7 @@
 #include "velox/duckdb/conversion/DuckConversion.h"
 #include "velox/exec/Cursor.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
+#include "velox/type/Type.h"
 #include "velox/vector/VariantToVector.h"
 #include "velox/vector/VectorTypeUtils.h"
 
@@ -709,7 +710,7 @@ std::string toTypeString(const MaterializedRow& row) {
     if (i > 0) {
       out << ", ";
     }
-    out << mapTypeKindToName(row[i].kind());
+    out << TypeKindName::toName(row[i].kind());
   }
   out << ")";
   return out.str();

@@ -1709,7 +1709,7 @@ std::shared_ptr<exec::VectorFunction> makeRe2Extract(
             groupIdTypeKind == TypeKind::BIGINT,
         "{} requires third argument of type INTEGER or BIGINT, but got {}",
         name,
-        mapTypeKindToName(groupIdTypeKind));
+        TypeKindName::toName(groupIdTypeKind));
   }
 
   BaseVector* constantPattern = inputArgs[1].constantValue.get();
@@ -2360,7 +2360,7 @@ std::shared_ptr<exec::VectorFunction> makeRe2ExtractAll(
             groupIdTypeKind == TypeKind::BIGINT,
         "{} requires third argument of type INTEGER or BIGINT, but got {}",
         name,
-        mapTypeKindToName(groupIdTypeKind));
+        TypeKindName::toName(groupIdTypeKind));
   }
 
   BaseVector* constantPattern = inputArgs[1].constantValue.get();

@@ -134,8 +134,8 @@ void checkTypeCompatibility(
     VELOX_SCHEMA_MISMATCH_ERROR(fmt::format(
         "{}, From Kind: {}, To Kind: {}",
         exceptionMessageCreator ? exceptionMessageCreator() : "Schema mismatch",
-        mapTypeKindToName(from.kind()),
-        mapTypeKindToName(kind(to))));
+        TypeKindName::toName(from.kind()),
+        TypeKindName::toName(kind(to))));
   }
 
   if (recurse) {

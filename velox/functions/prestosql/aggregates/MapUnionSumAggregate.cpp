@@ -481,7 +481,7 @@ std::unique_ptr<exec::Aggregate> createMapUnionSumAggregate(
       return std::make_unique<MapUnionSumAggregate<K, double>>(resultType);
     default:
       VELOX_UNREACHABLE(
-          "Unexpected value type {}", mapTypeKindToName(valueKind));
+          "Unexpected value type {}", TypeKindName::toName(valueKind));
   }
 }
 
@@ -563,7 +563,7 @@ void registerMapUnionSumAggregate(
                   valueTypeKind, resultType);
             }
             VELOX_UNREACHABLE(
-                "Unexpected key type {}", mapTypeKindToName(keyTypeKind));
+                "Unexpected key type {}", TypeKindName::toName(keyTypeKind));
         }
       },
       withCompanionFunctions,

@@ -666,7 +666,7 @@ void registerMultiMapAggAggregate(
             return std::make_unique<MultiMapAggAggregate<int32_t>>(resultType);
           default:
             VELOX_UNREACHABLE(
-                "Unexpected type {}", mapTypeKindToName(typeKind));
+                "Unexpected type {}", TypeKindName::toName(typeKind));
         }
       },
       withCompanionFunctions,

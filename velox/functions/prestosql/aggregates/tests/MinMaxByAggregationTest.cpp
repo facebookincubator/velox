@@ -59,82 +59,82 @@ std::vector<TestParam> getTestParams() {
   return params;
 }
 
-#define EXECUTE_TEST_BY_VALUE_TYPE(testFunc, valueType)              \
-  do {                                                               \
-    switch (GetParam().comparisonType) {                             \
-      case TypeKind::BOOLEAN:                                        \
-        testFunc<valueType, bool>();                                 \
-        break;                                                       \
-      case TypeKind::TINYINT:                                        \
-        testFunc<valueType, int8_t>();                               \
-        break;                                                       \
-      case TypeKind::SMALLINT:                                       \
-        testFunc<valueType, int16_t>();                              \
-        break;                                                       \
-      case TypeKind::INTEGER:                                        \
-        testFunc<valueType, int32_t>();                              \
-        break;                                                       \
-      case TypeKind::BIGINT:                                         \
-        testFunc<valueType, int64_t>();                              \
-        break;                                                       \
-      case TypeKind::HUGEINT:                                        \
-        testFunc<valueType, int128_t>();                             \
-        break;                                                       \
-      case TypeKind::REAL:                                           \
-        testFunc<valueType, float>();                                \
-        break;                                                       \
-      case TypeKind::DOUBLE:                                         \
-        testFunc<valueType, double>();                               \
-        break;                                                       \
-      case TypeKind::VARCHAR:                                        \
-        testFunc<valueType, StringView>();                           \
-        break;                                                       \
-      case TypeKind::TIMESTAMP:                                      \
-        testFunc<valueType, Timestamp>();                            \
-        break;                                                       \
-      default:                                                       \
-        LOG(FATAL) << "Unsupported comparison type of minmax_by(): " \
-                   << mapTypeKindToName(GetParam().comparisonType);  \
-    }                                                                \
+#define EXECUTE_TEST_BY_VALUE_TYPE(testFunc, valueType)                \
+  do {                                                                 \
+    switch (GetParam().comparisonType) {                               \
+      case TypeKind::BOOLEAN:                                          \
+        testFunc<valueType, bool>();                                   \
+        break;                                                         \
+      case TypeKind::TINYINT:                                          \
+        testFunc<valueType, int8_t>();                                 \
+        break;                                                         \
+      case TypeKind::SMALLINT:                                         \
+        testFunc<valueType, int16_t>();                                \
+        break;                                                         \
+      case TypeKind::INTEGER:                                          \
+        testFunc<valueType, int32_t>();                                \
+        break;                                                         \
+      case TypeKind::BIGINT:                                           \
+        testFunc<valueType, int64_t>();                                \
+        break;                                                         \
+      case TypeKind::HUGEINT:                                          \
+        testFunc<valueType, int128_t>();                               \
+        break;                                                         \
+      case TypeKind::REAL:                                             \
+        testFunc<valueType, float>();                                  \
+        break;                                                         \
+      case TypeKind::DOUBLE:                                           \
+        testFunc<valueType, double>();                                 \
+        break;                                                         \
+      case TypeKind::VARCHAR:                                          \
+        testFunc<valueType, StringView>();                             \
+        break;                                                         \
+      case TypeKind::TIMESTAMP:                                        \
+        testFunc<valueType, Timestamp>();                              \
+        break;                                                         \
+      default:                                                         \
+        LOG(FATAL) << "Unsupported comparison type of minmax_by(): "   \
+                   << TypeKindName::toName(GetParam().comparisonType); \
+    }                                                                  \
   } while (0);
 
-#define EXECUTE_TEST(testFunc)                                  \
-  do {                                                          \
-    switch (GetParam().valueType) {                             \
-      case TypeKind::BOOLEAN:                                   \
-        EXECUTE_TEST_BY_VALUE_TYPE(testFunc, bool);             \
-        break;                                                  \
-      case TypeKind::TINYINT:                                   \
-        EXECUTE_TEST_BY_VALUE_TYPE(testFunc, int8_t);           \
-        break;                                                  \
-      case TypeKind::SMALLINT:                                  \
-        EXECUTE_TEST_BY_VALUE_TYPE(testFunc, int16_t);          \
-        break;                                                  \
-      case TypeKind::INTEGER:                                   \
-        EXECUTE_TEST_BY_VALUE_TYPE(testFunc, int32_t);          \
-        break;                                                  \
-      case TypeKind::BIGINT:                                    \
-        EXECUTE_TEST_BY_VALUE_TYPE(testFunc, int64_t);          \
-        break;                                                  \
-      case TypeKind::HUGEINT:                                   \
-        EXECUTE_TEST_BY_VALUE_TYPE(testFunc, int128_t);         \
-        break;                                                  \
-      case TypeKind::REAL:                                      \
-        EXECUTE_TEST_BY_VALUE_TYPE(testFunc, float);            \
-        break;                                                  \
-      case TypeKind::DOUBLE:                                    \
-        EXECUTE_TEST_BY_VALUE_TYPE(testFunc, double);           \
-        break;                                                  \
-      case TypeKind::VARCHAR:                                   \
-        EXECUTE_TEST_BY_VALUE_TYPE(testFunc, StringView);       \
-        break;                                                  \
-      case TypeKind::TIMESTAMP:                                 \
-        EXECUTE_TEST_BY_VALUE_TYPE(testFunc, Timestamp);        \
-        break;                                                  \
-      default:                                                  \
-        LOG(FATAL) << "Unsupported value type of minmax_by(): " \
-                   << mapTypeKindToName(GetParam().valueType);  \
-    }                                                           \
+#define EXECUTE_TEST(testFunc)                                    \
+  do {                                                            \
+    switch (GetParam().valueType) {                               \
+      case TypeKind::BOOLEAN:                                     \
+        EXECUTE_TEST_BY_VALUE_TYPE(testFunc, bool);               \
+        break;                                                    \
+      case TypeKind::TINYINT:                                     \
+        EXECUTE_TEST_BY_VALUE_TYPE(testFunc, int8_t);             \
+        break;                                                    \
+      case TypeKind::SMALLINT:                                    \
+        EXECUTE_TEST_BY_VALUE_TYPE(testFunc, int16_t);            \
+        break;                                                    \
+      case TypeKind::INTEGER:                                     \
+        EXECUTE_TEST_BY_VALUE_TYPE(testFunc, int32_t);            \
+        break;                                                    \
+      case TypeKind::BIGINT:                                      \
+        EXECUTE_TEST_BY_VALUE_TYPE(testFunc, int64_t);            \
+        break;                                                    \
+      case TypeKind::HUGEINT:                                     \
+        EXECUTE_TEST_BY_VALUE_TYPE(testFunc, int128_t);           \
+        break;                                                    \
+      case TypeKind::REAL:                                        \
+        EXECUTE_TEST_BY_VALUE_TYPE(testFunc, float);              \
+        break;                                                    \
+      case TypeKind::DOUBLE:                                      \
+        EXECUTE_TEST_BY_VALUE_TYPE(testFunc, double);             \
+        break;                                                    \
+      case TypeKind::VARCHAR:                                     \
+        EXECUTE_TEST_BY_VALUE_TYPE(testFunc, StringView);         \
+        break;                                                    \
+      case TypeKind::TIMESTAMP:                                   \
+        EXECUTE_TEST_BY_VALUE_TYPE(testFunc, Timestamp);          \
+        break;                                                    \
+      default:                                                    \
+        LOG(FATAL) << "Unsupported value type of minmax_by(): "   \
+                   << TypeKindName::toName(GetParam().valueType); \
+    }                                                             \
   } while (0);
 
 template <typename T>
@@ -194,7 +194,7 @@ class MinMaxByAggregationTestBase : public AggregationTestBase {
     }
     VELOX_FAIL(
         "Type {} is not found in rowType_: ",
-        mapTypeKindToName(kind),
+        TypeKindName::toName(kind),
         rowType_->toString());
   }
 
@@ -305,7 +305,7 @@ VectorPtr MinMaxByAggregationTestBase::buildDataVector(
       return buildDataVector<Timestamp>(size, values);
     default:
       LOG(FATAL) << "Unsupported value/comparison type of minmax_by(): "
-                 << mapTypeKindToName(kind);
+                 << TypeKindName::toName(kind);
   }
 }
 
@@ -369,7 +369,7 @@ void MinMaxByAggregationTestBase::SetUp() {
             type, buildDataVector<StringView>(numValues_));
         break;
       default:
-        LOG(FATAL) << "Unsupported data type: " << mapTypeKindToName(type);
+        LOG(FATAL) << "Unsupported data type: " << TypeKindName::toName(type);
     }
   }
   ASSERT_EQ(dataVectorsByType_.size(), kSupportedTypes.size());

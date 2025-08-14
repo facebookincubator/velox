@@ -155,7 +155,9 @@ Result HiveTypeParser::parseType() {
         return Result{velox::ARRAY(resultList.typelist.at(0))};
       }
       default:
-        VELOX_FAIL("unsupported kind: " + mapTypeKindToName(nt.typeKind()));
+        VELOX_FAIL(
+            "unsupported kind: " +
+            std::string(TypeKindName::toName(nt.typeKind())));
     }
   }
 }
