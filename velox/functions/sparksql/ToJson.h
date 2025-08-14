@@ -218,7 +218,13 @@ void toJson<TypeKind::TIMESTAMP>(
     size_t oldSize = result.size();
     result.resize(oldSize + maxSize + 2); // +2 for quotes
     result[oldSize] = '"';
-    auto size = formatter->format(value, options.timeZone, maxSize, result.data() + oldSize + 1, false, "Z");
+    auto size = formatter->format(
+        value,
+        options.timeZone,
+        maxSize,
+        result.data() + oldSize + 1,
+        false,
+        "Z");
     result[oldSize + 1 + size] = '"';
     result.resize(oldSize + size + 2);
   }
