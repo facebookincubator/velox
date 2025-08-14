@@ -44,9 +44,10 @@ template <typename T>
 void appendDecimal(T value, const Type& type, std::string& result) {
   auto [precision, scale] = getDecimalPrecisionScale(type);
   const size_t maxSize = DecimalUtil::maxStringViewSize(precision, scale);
-  char buffer[maxSize];
-  size_t len = DecimalUtil::castToString(value, scale, maxSize, buffer);
-  result.append(buffer, len);
+  size_t oldSize = result.size();
+  result.resize(oldSize + maxSize);
+  size_t len = DecimalUtil::castToString(value, scale, maxSize, result.data() + oldSize);
+  result.resize(oldSize + len);
 }
 
 // Forward declarations for explicit specializations.
@@ -214,10 +215,12 @@ void toJson<TypeKind::TIMESTAMP>(
         functions::buildJodaDateTimeFormatter("yyyy-MM-dd'T'HH:mm:ss.SSSZZ")
             .value();
     const auto maxSize = formatter->maxResultSize(options.timeZone);
-    char buffer[maxSize];
-    auto size =
-        formatter->format(value, options.timeZone, maxSize, buffer, false, "Z");
-    result.append("\"").append(buffer, size).append("\"");
+    size_t oldSize = result.size();
+    result.resize(oldSize + maxSize + 2); // +2 for quotes
+    result[oldSize] = '"';
+    auto size = formatter->format(value, options.timeZone, maxSize, result.data() + oldSize + 1, false, "Z");
+    result[oldSize + 1 + size] = '"';
+    result.resize(oldSize + size + 2);
   }
 }
 
