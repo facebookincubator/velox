@@ -65,4 +65,37 @@ std::pair<std::string, std::shared_ptr<const Type>> inferTypeWithSpaces(
       fieldName, typeFromString(allWords.substr(fieldName.size() + 1)));
 }
 
+std::unordered_map<std::string, int64_t> parseMapFromString(
+    const std::string& input) {
+  folly::dynamic obj = folly::parseJson(input);
+  VELOX_CHECK(obj.isObject(), "Parsed JSON is not an object");
+  std::unordered_map<std::string, int64_t> result;
+
+  for (const auto& item : obj.items()) {
+    std::string key = item.first.asString();
+    VELOX_CHECK(
+        item.second.isInt(),
+        "Invalid value {} for key {} in enum type",
+        item.second,
+        key);
+    int64_t value = item.second.asInt();
+    result.emplace(std::move(key), value);
+  }
+
+  return result;
+}
+
+TypePtr getEnumType(
+    const std::string& enumType,
+    const std::string& enumName,
+    const std::string& valuesMap) {
+  std::vector<TypeParameter> params;
+  LongEnumParameter longEnumParameter(enumName, parseMapFromString(valuesMap));
+  params.emplace_back(TypeParameter(longEnumParameter));
+  if (enumType == "BigintEnum") {
+    return getType("BIGINT_ENUM", params);
+  }
+
+  VELOX_UNREACHABLE("Invalid type {}, expected BigintEnum", enumType);
+}
 } // namespace facebook::velox
