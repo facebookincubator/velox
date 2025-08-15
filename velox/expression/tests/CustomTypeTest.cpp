@@ -236,6 +236,7 @@ TEST_F(CustomTypeTest, getCustomTypeNames) {
       "TDIGEST",
       "QDIGEST",
       "SFMSKETCH",
+      "BIGINT_ENUM",
   };
 #ifdef VELOX_ENABLE_GEO
   expectedTypes.insert("GEOMETRY");
@@ -277,6 +278,15 @@ TEST_F(CustomTypeTest, nullConstant) {
         checkNullConstant(
             type, fmt::format("QDIGEST({})", parameter->toString()));
       }
+    } else if (name == "BIGINT_ENUM") {
+      auto enumName = "test.enum.mood";
+      std::unordered_map<std::string, int64_t> enumMap = {
+          {"CURIOUS", -2}, {"HAPPY", 0}};
+      LongEnumParameter longEnumParameter(enumName, enumMap);
+      auto type = getCustomType(name, {TypeParameter(longEnumParameter)});
+      checkNullConstant(
+          type,
+          "test.enum.mood:BigintEnum(test.enum.mood{\"CURIOUS\": -2, \"HAPPY\": 0})");
     } else {
       auto type = getCustomType(name, {});
       checkNullConstant(type, type->toString());
