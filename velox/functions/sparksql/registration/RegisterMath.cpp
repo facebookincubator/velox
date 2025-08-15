@@ -128,6 +128,7 @@ void registerMathFunctions(const std::string& prefix) {
   registerBinaryNumeric<CheckedSubtractFunction>({prefix + "checked_subtract"});
   registerBinaryNumeric<CheckedMultiplyFunction>({prefix + "checked_multiply"});
   registerBinaryNumeric<CheckedDivideFunction>({prefix + "checked_divide"});
+  registerUnaryNumeric<CheckedAbsFunction>({prefix + "checked_abs"});
   registerFunction<sparksql::FactorialFunction, int64_t, int32_t>(
       {prefix + "factorial"});
 }
