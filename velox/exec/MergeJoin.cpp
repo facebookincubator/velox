@@ -488,6 +488,11 @@ bool MergeJoin::prepareOutput(
   } else {
     for (const auto& projection : leftProjections_) {
       auto column = left->childAt(projection.inputChannel);
+      // Flatten the left column if the column already is DictionaryVector.
+      if (column->wrappedVector()->encoding() ==
+          VectorEncoding::Simple::DICTIONARY) {
+        BaseVector::flattenVector(column);
+      }
       column->clearContainingLazyAndWrapped();
       localColumns[projection.outputChannel] = BaseVector::wrapInDictionary(
           {}, leftOutputIndices_, outputBatchSize_, column);
