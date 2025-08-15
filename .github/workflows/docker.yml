@@ -273,6 +273,3 @@ jobs:
           name: digests-fedora-amd64
           path: ${{ runner.temp }}/digests/*
           retention-days: 1
-
-
-

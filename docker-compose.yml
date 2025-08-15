@@ -93,7 +93,6 @@ services:
         - SPARK_VERSION=3.5.1
       dockerfile: scripts/docker/java.dockerfile
 
-
   fedora:
     extends: base-block
     image: ghcr.io/facebookincubator/velox-dev:fedora

@@ -402,12 +402,15 @@ if(ENABLE_ALL_WARNINGS)
          -Wno-maybe-uninitialized \
          -Wno-unused-result \
          -Wno-format-overflow \
-	 -Wno-error=template-id-cdtor \
          -Wno-strict-aliasing")
     # Avoid compiler bug for GCC 12.2.1
     # https://gcc.gnu.org/bugzilla/show_bug.cgi?id=105329
     if(CMAKE_CXX_COMPILER_VERSION VERSION_EQUAL "12.2.1")
       string(APPEND KNOWN_COMPILER_SPECIFIC_WARNINGS " -Wno-restrict")
+    endif()
+    if(CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL "14.0.0")
+      string(APPEND KNOWN_COMPILER_SPECIFIC_WARNINGS
+             " -Wno-error=template-id-cdtor")
     endif()
   endif()
 

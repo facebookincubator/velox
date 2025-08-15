@@ -57,11 +57,11 @@ function install_build_prerequisites {
 
   # Set up gcc alternatives
   sudo alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 140 \
-  --slave /usr/bin/g++ g++ /usr/bin/g++-14 \
-  --slave /usr/bin/gcov gcov /usr/bin/gcov-14 \
-  --slave /usr/bin/gcc-ar gcc-ar /usr/bin/gcc-ar-14 \
-  --slave /usr/bin/gcc-ranlib gcc-ranlib /usr/bin/gcc-ranlib-14 \
-  --slave /usr/bin/gcc-nm gcc-nm /usr/bin/gcc-nm-14
+    --slave /usr/bin/g++ g++ /usr/bin/g++-14 \
+    --slave /usr/bin/gcov gcov /usr/bin/gcov-14 \
+    --slave /usr/bin/gcc-ar gcc-ar /usr/bin/gcc-ar-14 \
+    --slave /usr/bin/gcc-ranlib gcc-ranlib /usr/bin/gcc-ranlib-14 \
+    --slave /usr/bin/gcc-nm gcc-nm /usr/bin/gcc-nm-14
 
   install_uv
   uv_install cmake
