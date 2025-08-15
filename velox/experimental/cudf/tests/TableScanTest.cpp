@@ -69,8 +69,13 @@ class TableScanTest : public virtual ParquetConnectorTestBase {
     return ParquetConnectorTestBase::makeVectors(inputs, count, rowsPerVector);
   }
 
-  Split makeParquetSplit(std::string path, int64_t splitWeight = 0) {
-    return Split(makeParquetConnectorSplit(std::move(path), splitWeight));
+  Split makeParquetSplit(
+      std::string path,
+      uint64_t start,
+      uint64_t length,
+      int64_t splitWeight = 0) {
+    return Split(
+        makeParquetConnectorSplit(std::move(path), start, length, splitWeight));
   }
 
   std::shared_ptr<Task> assertQuery(
@@ -176,6 +181,39 @@ TEST_F(TableScanTest, allColumns) {
   createDuckDbTable(vectors);
   auto plan = tableScanNode();
   auto task = assertQuery(plan, {filePath}, "SELECT * FROM tmp");
+
+  // A quick sanity check for memory usage reporting. Check that peak total
+  // memory usage for the project node is > 0.
+  auto planStats = toPlanStats(task->taskStats());
+  auto scanNodeId = plan->id();
+  auto it = planStats.find(scanNodeId);
+  ASSERT_TRUE(it != planStats.end());
+  ASSERT_TRUE(it->second.peakMemoryBytes > 0);
+
+  //  Verifies there is no dynamic filter stats.
+  ASSERT_TRUE(it->second.dynamicFilterStats.empty());
+
+  // TODO: We are not writing any customStats yet so disable this check
+  // ASSERT_LT(0, it->second.customStats.at("ioWaitWallNanos").sum);
+}
+
+TEST_F(TableScanTest, skipRowsNumRows) {
+  auto vectors = makeVectors(10, 1'000);
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), vectors, "c");
+
+  createDuckDbTable(vectors);
+  auto plan = tableScanNode();
+
+  auto constexpr start = 10;
+  auto constexpr length = 100;
+  auto split =
+      cudf_velox::exec::test::ParquetConnectorSplitBuilder(filePath->getPath())
+          .start(start)
+          .length(length)
+          .build();
+
+  auto task = assertQuery(plan, split, "SELECT * FROM tmp LIMIT 100 OFFSET 10");
 
   // A quick sanity check for memory usage reporting. Check that peak total
   // memory usage for the project node is > 0.
