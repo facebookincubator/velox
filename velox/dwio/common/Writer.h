@@ -21,6 +21,9 @@
 #include <optional>
 #include <string>
 
+#include "velox/dwio/common/IcebergStatistics.h"
+#include "velox/dwio/common/Options.h"
+#include "velox/dwio/common/Statistics.h"
 #include "velox/vector/ComplexVector.h"
 
 namespace facebook::velox::dwio::common {
@@ -79,6 +82,11 @@ class Writer {
   /// Data can no longer be written.
   virtual void abort() = 0;
 
+  /// Return statistics based on each Iceberg data file
+  std::shared_ptr<IcebergDataFileStatistics> dataFileStats() const {
+    return dataFileStats_;
+  };
+
  protected:
   bool isRunning() const;
   bool isFinishing() const;
@@ -92,6 +100,10 @@ class Writer {
   static void checkStateTransition(State oldState, State newState);
 
   State state_{State::kInit};
+  bool collectIcebergStats_{false};
+  std::shared_ptr<IcebergDataFileStatistics> dataFileStats_{nullptr};
+  std::shared_ptr<std::vector<IcebergStatsSettings>> icebergStatsSetting_{
+      nullptr};
 };
 
 FOLLY_ALWAYS_INLINE std::ostream& operator<<(
