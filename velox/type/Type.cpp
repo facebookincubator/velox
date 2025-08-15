@@ -109,6 +109,35 @@ namespace {
 std::vector<TypePtr> deserializeChildTypes(const folly::dynamic& obj) {
   return velox::ISerializable::deserialize<std::vector<Type>>(obj["cTypes"]);
 }
+
+template <typename ValueType>
+TypeParameter deserializeEnumParam(const folly::dynamic& obj) {
+  auto enumName = obj["enumName"].asString();
+  VELOX_CHECK(obj["valuesMap"].isObject());
+  auto valuesMap = obj["valuesMap"];
+
+  // Construct the values map
+  std::unordered_map<std::string, ValueType> map;
+  for (const auto& item : valuesMap.items()) {
+    std::string key = item.first.asString();
+    if constexpr (std::is_same_v<ValueType, int64_t>) {
+      int64_t value = item.second.asInt();
+      map.emplace(std::move(key), value);
+    } else if constexpr (std::is_same_v<ValueType, std::string>) {
+      std::string value = item.second.asString();
+      map.emplace(std::move(key), value);
+    }
+  }
+
+  // Construct the corresponding TypeParameter
+  if constexpr (std::is_same_v<ValueType, int64_t>) {
+    return TypeParameter(std::move(LongEnumParameter(enumName, map)));
+  } else if constexpr (std::is_same_v<ValueType, std::string>) {
+    return TypeParameter(std::move(VarcharEnumParameter(enumName, map)));
+  }
+  VELOX_UNREACHABLE(
+      "Only int64_t and std::string value types are supported for enum types.");
+}
 } // namespace
 
 TypePtr Type::create(const folly::dynamic& obj) {
@@ -129,9 +158,14 @@ TypePtr Type::create(const folly::dynamic& obj) {
   // Checks if 'typeName' specifies a custom type.
   if (customTypeExists(typeName)) {
     std::vector<TypeParameter> params;
-    params.reserve(childTypes.size());
-    for (auto& child : childTypes) {
-      params.emplace_back(child);
+    if (obj.find("cTypes") != obj.items().end()) {
+      params.reserve(childTypes.size());
+      for (auto& child : childTypes) {
+        params.emplace_back(child);
+      }
+    }
+    if (obj.find("kLongEnumParam") != obj.items().end()) {
+      params.emplace_back(deserializeEnumParam<int64_t>(obj["kLongEnumParam"]));
     }
     return getCustomType(typeName, params);
   }
