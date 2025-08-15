@@ -270,6 +270,12 @@ class Task : public std::enable_shared_from_this<Task> {
   /// corresponding to plan node with specified ID.
   void noMoreSplits(const core::PlanNodeId& planNodeId);
 
+  /// Transitions the task into kFinished state if all split groups are done and
+  /// the task otherwise finished (all partitioned output consumed, etc).
+  /// Used in the delayed task execution where we can process 'no more splits'
+  /// message before the task started.
+  void finishIfAllSplitGroupsAreDone();
+
   /// Updates the total number of output buffers to broadcast or arbitrarily
   /// distribute the results of the execution to. Used when plan tree ends with
   /// a PartitionedOutputNode with broadcast of arbitrary output type.
