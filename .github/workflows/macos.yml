@@ -93,7 +93,7 @@ jobs:
           faiss_SOURCE: BUNDLED #brew faiss is not supported
           CMAKE_POLICY_VERSION_MINIMUM: '3.5'
         run: |
-          ccache -sz -M 5Gi
+          ${{ env.INSTALL_PREFIX }}/bin/ccache -sz -M 5Gi
           cmake \
               -B _build/$BUILD_TYPE \
               -GNinja \
@@ -108,7 +108,7 @@ jobs:
       - name: Build
         run: |
           cmake --build _build/$BUILD_TYPE -j $NJOBS
-          ccache -s
+          ${{ env.INSTALL_PREFIX }}/bin/ccache -s
 
       - uses: apache/infrastructure-actions/stash/save@3354c1565d4b0e335b78a76aedd82153a9e144d4
         with:
