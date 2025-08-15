@@ -25,7 +25,6 @@
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/exec/Cursor.h"
-#include "velox/exec/HashAggregation.h"
 #include "velox/exec/OutputBufferManager.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/Values.h"
@@ -3273,4 +3272,72 @@ DEBUG_ONLY_TEST_F(TaskTest, taskExecutionEndTime) {
       taskStats.executionEndTimeMs - taskStats.executionStartTimeMs,
       injectedDelaySecs * 1'000);
 }
+
+// Test for Task::finishIfAllSplitGroupsAreDone()
+TEST_F(TaskTest, finishIfAllSplitGroupsAreDone) {
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>(100, [](auto row) { return row; }),
+  });
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+
+  // Create a plan with two joins and three source nodes. One mixed grouped mode
+  // join and one non mixed grouped mode join.
+  core::PlanNodeId groupedScanNodeId;
+
+  auto planFragment = PlanBuilder(planNodeIdGenerator)
+                          .tableScan(asRowType(data->type()))
+                          .capturePlanNodeId(groupedScanNodeId)
+                          .project({"c0 % 5 as k", "c0"})
+                          .singleAggregation({"k"}, {"sum(c0)", "avg(c0)"})
+                          .planFragment();
+
+  planFragment.executionStrategy = core::ExecutionStrategy::kGrouped;
+  planFragment.groupedExecutionLeafNodeIds.emplace(groupedScanNodeId);
+  planFragment.numSplitGroups = 2;
+
+  // Case 1: empty task with 'no more splits' message arriving before the start.
+  auto task = Task::create(
+      "task-grouped-execution-empty",
+      folly::copy(planFragment),
+      0,
+      core::QueryCtx::create(driverExecutor_.get()),
+      Task::ExecutionMode::kParallel);
+
+  // Emulate 'no more splits message' before the task is started.
+  task->noMoreSplits(groupedScanNodeId);
+
+  // Task would not be in the kFinished state even though all splits are done.
+  EXPECT_EQ(task->state(), TaskState::kRunning);
+
+  task->start(1);
+
+  // No more splits will be there, the task has done everything.
+  EXPECT_EQ(task->state(), TaskState::kRunning);
+  task->finishIfAllSplitGroupsAreDone();
+  EXPECT_EQ(task->state(), TaskState::kFinished);
+
+  // Case 2: task with 'no more splits' message arriving after the start.
+  task = Task::create(
+      "task-grouped-execution",
+      std::move(planFragment),
+      0,
+      core::QueryCtx::create(driverExecutor_.get()),
+      Task::ExecutionMode::kParallel);
+
+  // Task would not be in the kFinished state.
+  EXPECT_EQ(task->state(), TaskState::kRunning);
+
+  task->start(1);
+
+  task->noMoreSplits(groupedScanNodeId);
+
+  // No more splits will be there, the task has done everything.
+  EXPECT_EQ(task->state(), TaskState::kFinished);
+
+  // Call this to see if it is safe to call it after finished.
+  task->finishIfAllSplitGroupsAreDone();
+  EXPECT_EQ(task->state(), TaskState::kFinished);
+}
+
 } // namespace facebook::velox::exec::test

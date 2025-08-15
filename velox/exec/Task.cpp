@@ -1659,6 +1659,18 @@ void Task::noMoreSplits(const core::PlanNodeId& planNodeId) {
   }
 }
 
+void Task::finishIfAllSplitGroupsAreDone() {
+  bool allFinished;
+  {
+    std::lock_guard<std::timed_mutex> l(mutex_);
+    allFinished = checkNoMoreSplitGroupsLocked();
+  }
+
+  if (allFinished) {
+    terminate(TaskState::kFinished);
+  }
+}
+
 ContinueFuture Task::requestBarrier() {
   ensureBarrierSupport();
   return startBarrier("Task::requestBarrier");
