@@ -864,6 +864,9 @@ class ShortDecimalType final : public DecimalType<TypeKind::BIGINT> {
 
 class LongDecimalType final : public DecimalType<TypeKind::HUGEINT> {
  public:
+  // Avoid hiding overloaded virtual function.
+  using DecimalType<TypeKind::HUGEINT>::toString;
+
   LongDecimalType(int precision, int scale)
       : DecimalType<TypeKind::HUGEINT>(precision, scale) {}
 
