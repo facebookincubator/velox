@@ -75,7 +75,7 @@ class TableWriteTraits {
       "pageSinkCommitStrategy";
   static constexpr std::string_view klastPageContextKey = "lastPage";
 
-  static const RowTypePtr outputType(
+  static RowTypePtr outputType(
       const core::AggregationNodePtr& aggregationNode = nullptr);
 
   /// Returns the parsed commit context from table writer 'output'.

@@ -472,7 +472,7 @@ const TypePtr& TableWriteTraits::contextColumnType() {
   return kContextType;
 }
 
-const RowTypePtr TableWriteTraits::outputType(
+RowTypePtr TableWriteTraits::outputType(
     const core::AggregationNodePtr& aggregationNode) {
   static const auto kOutputTypeWithoutStats =
       ROW({rowCountColumnName(), fragmentColumnName(), contextColumnName()},
@@ -488,12 +488,13 @@ folly::dynamic TableWriteTraits::getTableCommitContext(
   VELOX_CHECK_GT(input->size(), 0);
   auto* contextVector =
       input->childAt(kContextChannel)->as<SimpleVector<StringView>>();
-  return folly::parseJson(contextVector->valueAt(input->size() - 1));
+  const auto value = contextVector->valueAt(input->size() - 1);
+  return folly::parseJson(value);
 }
 
 int64_t TableWriteTraits::getRowCount(const RowVectorPtr& output) {
   VELOX_CHECK_GT(output->size(), 0);
-  auto rowCountVector =
+  auto* rowCountVector =
       output->childAt(kRowCountChannel)->asFlatVector<int64_t>();
   VELOX_CHECK_NOT_NULL(rowCountVector);
   int64_t rowCount{0};

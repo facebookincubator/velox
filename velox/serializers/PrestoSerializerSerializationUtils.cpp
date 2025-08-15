@@ -187,7 +187,7 @@ void serializeConstantVectorRangesImpl(
     auto opaqueType =
         std::dynamic_pointer_cast<const OpaqueType>(constVector->type());
     auto serialization = opaqueType->getSerializeFunc();
-    T valueOpaque = constVector->valueAtFast(0);
+    T valueOpaque = constVector->valueAt(0);
 
     std::string serialized = serialization(valueOpaque);
     const auto value = StringView(serialized);
@@ -196,7 +196,7 @@ void serializeConstantVectorRangesImpl(
       stream->appendOne(value);
     }
   } else {
-    T value = constVector->valueAtFast(0);
+    T value = constVector->valueAt(0);
     for (int32_t i = 0; i < count; ++i) {
       stream->appendNonNull();
       stream->appendOne(value);
@@ -320,7 +320,7 @@ void serializeBiasVectorRanges(
       stream->appendNonNull(ranges[i].size);
       int32_t end = ranges[i].begin + ranges[i].size;
       for (int32_t offset = ranges[i].begin; offset < end; ++offset) {
-        stream->appendOne(biasVector->valueAtFast(offset));
+        stream->appendOne(biasVector->valueAt(offset));
       }
     }
   } else {
@@ -332,7 +332,7 @@ void serializeBiasVectorRanges(
           continue;
         }
         stream->appendNonNull();
-        stream->appendOne(biasVector->valueAtFast(offset));
+        stream->appendOne(biasVector->valueAt(offset));
       }
     }
   }
@@ -861,7 +861,7 @@ void serializeConstantVector(
     return;
   }
 
-  T value = constVector->valueAtFast(0);
+  T value = constVector->valueAt(0);
   for (int32_t i = 0; i < numRows; ++i) {
     stream->appendNonNull();
     stream->appendOne(value);

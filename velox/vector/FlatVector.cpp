@@ -34,7 +34,7 @@ bool FlatVector<bool>::valueAtFast(vector_size_t idx) const {
 
 template <>
 Range<bool> FlatVector<bool>::asRange() const {
-  return Range<bool>(rawValues<int64_t>(), 0, BaseVector::length_);
+  return {rawValues<int64_t>(), 0, BaseVector::length_};
 }
 
 template <>
@@ -133,15 +133,16 @@ void FlatVector<StringView>::acquireSharedStringBuffers(
   source = source->wrappedVector();
   switch (source->encoding()) {
     case VectorEncoding::Simple::FLAT: {
-      auto* flat = source->asUnchecked<FlatVector<StringView>>();
-      for (auto& buffer : flat->stringBuffers_) {
+      const auto* flat = source->asUnchecked<FlatVector<StringView>>();
+      for (const auto& buffer : flat->stringBuffers_) {
         addStringBuffer(buffer);
       }
       break;
     }
     case VectorEncoding::Simple::CONSTANT: {
       if (!source->isNullAt(0)) {
-        auto* constant = source->asUnchecked<ConstantVector<StringView>>();
+        const auto* constant =
+            source->asUnchecked<ConstantVector<StringView>>();
         auto buffer = constant->getStringBuffer();
         if (buffer != nullptr) {
           addStringBuffer(buffer);
@@ -172,8 +173,8 @@ void FlatVector<StringView>::acquireSharedStringBuffersRecursive(
         // Nothing to acquire.
         return;
       }
-      auto* flat = source->asUnchecked<FlatVector<StringView>>();
-      for (auto& buffer : flat->stringBuffers_) {
+      const auto* flat = source->asUnchecked<FlatVector<StringView>>();
+      for (const auto& buffer : flat->stringBuffers_) {
         addStringBuffer(buffer);
       }
       return;
@@ -196,14 +197,15 @@ void FlatVector<StringView>::acquireSharedStringBuffersRecursive(
     case VectorEncoding::Simple::FLAT_MAP: {
       acquireSharedStringBuffersRecursive(
           source->asUnchecked<FlatMapVector>()->distinctKeys().get());
-      for (auto& mapValue : source->asUnchecked<FlatMapVector>()->mapValues()) {
+      for (const auto& mapValue :
+           source->asUnchecked<FlatMapVector>()->mapValues()) {
         acquireSharedStringBuffersRecursive(mapValue.get());
       }
       return;
     }
 
     case VectorEncoding::Simple::ROW: {
-      for (auto& child : source->asUnchecked<RowVector>()->children()) {
+      for (const auto& child : source->asUnchecked<RowVector>()->children()) {
         acquireSharedStringBuffersRecursive(child.get());
       }
       return;
@@ -217,11 +219,12 @@ void FlatVector<StringView>::acquireSharedStringBuffersRecursive(
         // Nothing to acquire.
         return;
       }
-      auto* constantVector = source->asUnchecked<ConstantVector<StringView>>();
+      const auto* constantVector =
+          source->asUnchecked<ConstantVector<StringView>>();
       if (constantVector->isNullAt(0)) {
         return;
       }
-      auto* constant = source->asUnchecked<ConstantVector<StringView>>();
+      const auto* constant = source->asUnchecked<ConstantVector<StringView>>();
       auto buffer = constant->getStringBuffer();
       if (buffer != nullptr) {
         addStringBuffer(buffer);
@@ -264,7 +267,8 @@ void FlatVector<StringView>::copy(
     return;
   }
 
-  auto leaf = source->wrappedVector()->asUnchecked<SimpleVector<StringView>>();
+  const auto* leaf =
+      source->wrappedVector()->asUnchecked<SimpleVector<StringView>>();
 
   if (pool_ == leaf->pool()) {
     // We copy referencing the storage of 'source'.
@@ -272,7 +276,7 @@ void FlatVector<StringView>::copy(
     acquireSharedStringBuffers(source);
   } else {
     DecodedVector decoded(*source);
-    uint64_t* rawNulls = const_cast<uint64_t*>(BaseVector::rawNulls_);
+    auto* rawNulls = const_cast<uint64_t*>(BaseVector::rawNulls_);
     if (decoded.mayHaveNulls()) {
       rawNulls = BaseVector::mutableRawNulls();
     }
@@ -311,7 +315,7 @@ void FlatVector<StringView>::copy(
     }
   }
 
-  if (auto stringVector = source->as<SimpleVector<StringView>>()) {
+  if (const auto* stringVector = source->as<SimpleVector<StringView>>()) {
     if (auto ascii = stringVector->isAscii(rows, toSourceRow)) {
       setIsAscii(ascii.value(), rows);
     } else {
@@ -319,10 +323,10 @@ void FlatVector<StringView>::copy(
       ensureIsAsciiCapacity();
       // If we arent All ascii, then invalidate
       // because the remaining selected rows might be ascii
-      if (!asciiInfo.isAllAscii()) {
+      if (!asciiInfo_.isAllAscii()) {
         invalidateIsAscii();
       } else {
-        asciiInfo.writeLockedAsciiComputedRows()->deselect(rows);
+        asciiInfo_.writeLockedAsciiComputedRows()->deselect(rows);
       }
     }
   }
@@ -334,7 +338,7 @@ void FlatVector<StringView>::copy(
 template <>
 VectorPtr FlatVector<StringView>::testingCopyPreserveEncodings(
     velox::memory::MemoryPool* pool) const {
-  const auto allocPool = pool ? pool : BaseVector::pool_;
+  auto* allocPool = pool ? pool : BaseVector::pool_;
   // If the backing memory pool is the same as the vector pool
   // we can do a shallow copy as string buffers can be shared.
   if (pool == BaseVector::pool_) {
@@ -351,55 +355,54 @@ VectorPtr FlatVector<StringView>::testingCopyPreserveEncodings(
         SimpleVector<StringView>::isSorted_,
         BaseVector::representedByteCount_,
         BaseVector::storageByteCount_);
-  } else {
-    size_t totalBytes = 0;
-    auto newValuesBuffer =
-        AlignedBuffer::allocate<StringView>(BaseVector::size(), allocPool);
-    auto* rawCopyValues = newValuesBuffer->asMutable<StringView>();
-    // Copy non Null StringViews to value buffer.
+  }
+  size_t totalBytes = 0;
+  auto newValuesBuffer =
+      AlignedBuffer::allocate<StringView>(BaseVector::size(), allocPool);
+  auto* rawCopyValues = newValuesBuffer->asMutable<StringView>();
+  // Copy non Null StringViews to value buffer.
+  for (vector_size_t i = 0; i < BaseVector::size(); i++) {
+    if (!BaseVector::isNullAt(i)) {
+      auto v = valueAt(i);
+      if (v.isInline()) {
+        rawCopyValues[i] = v;
+      } else {
+        totalBytes += v.size();
+      }
+    }
+  }
+
+  std::vector<BufferPtr> newStringBuffers;
+  if (totalBytes > 0) {
+    newStringBuffers.emplace_back(
+        AlignedBuffer::allocate<char>(totalBytes, allocPool));
+    char* rawBuffer = newStringBuffers.back()->asMutable<char>();
+
     for (vector_size_t i = 0; i < BaseVector::size(); i++) {
       if (!BaseVector::isNullAt(i)) {
         auto v = valueAt(i);
-        if (v.isInline()) {
-          rawCopyValues[i] = v;
-        } else {
-          totalBytes += v.size();
+        if (!v.isInline()) {
+          memcpy(rawBuffer, v.data(), v.size());
+          rawCopyValues[i] = StringView(rawBuffer, v.size());
+          rawBuffer += v.size();
         }
       }
     }
-
-    std::vector<BufferPtr> newStringBuffers;
-    if (totalBytes > 0) {
-      newStringBuffers.emplace_back(
-          AlignedBuffer::allocate<char>(totalBytes, allocPool));
-      char* rawBuffer = newStringBuffers.back()->asMutable<char>();
-
-      for (vector_size_t i = 0; i < BaseVector::size(); i++) {
-        if (!BaseVector::isNullAt(i)) {
-          auto v = valueAt(i);
-          if (!v.isInline()) {
-            memcpy(rawBuffer, v.data(), v.size());
-            rawCopyValues[i] = StringView(rawBuffer, v.size());
-            rawBuffer += v.size();
-          }
-        }
-      }
-    }
-
-    return std::make_shared<FlatVector<StringView>>(
-        allocPool,
-        BaseVector::type_,
-        AlignedBuffer::copy(allocPool, BaseVector::nulls_),
-        BaseVector::length_,
-        newValuesBuffer,
-        std::move(newStringBuffers),
-        SimpleVector<StringView>::stats_,
-        BaseVector::distinctValueCount_,
-        BaseVector::nullCount_,
-        SimpleVector<StringView>::isSorted_,
-        BaseVector::representedByteCount_,
-        BaseVector::storageByteCount_);
   }
+
+  return std::make_shared<FlatVector<StringView>>(
+      allocPool,
+      BaseVector::type_,
+      AlignedBuffer::copy(allocPool, BaseVector::nulls_),
+      BaseVector::length_,
+      newValuesBuffer,
+      std::move(newStringBuffers),
+      SimpleVector<StringView>::stats_,
+      BaseVector::distinctValueCount_,
+      BaseVector::nullCount_,
+      SimpleVector<StringView>::isSorted_,
+      BaseVector::representedByteCount_,
+      BaseVector::storageByteCount_);
 }
 
 // For strings, we also verify if they point to valid memory locations inside
@@ -414,7 +417,7 @@ void FlatVector<StringView>::validate(
   }
   VELOX_CHECK_NOT_NULL(values_);
   VELOX_CHECK_GE(values_->size(), byteSize);
-  auto rawValues = values_->as<StringView>();
+  const auto* rawValues = values_->as<StringView>();
 
   for (auto i = 0; i < BaseVector::length_; ++i) {
     if (isNullAt(i)) {
@@ -424,7 +427,7 @@ void FlatVector<StringView>::validate(
     if (!stringView.isInline()) {
       bool isValid = false;
       for (const auto& buffer : stringBuffers_) {
-        auto start = buffer->as<char>();
+        const auto* start = buffer->as<char>();
         if (stringView.data() >= start &&
             stringView.data() < start + buffer->size()) {
           isValid = true;

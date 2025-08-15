@@ -13,10 +13,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#pragma once
 
 #include <folly/Conv.h>
 
 #include "velox/vector/BuilderTypeUtils.h"
+#include "velox/vector/SequenceVector.h"
 
 namespace facebook::velox {
 
@@ -67,13 +69,13 @@ void SequenceVector<T>::setInternalState() {
 }
 
 template <typename T>
-bool SequenceVector<T>::isNullAtFast(vector_size_t idx) const {
-  size_t offset = offsetOfIndex(idx);
+bool SequenceVector<T>::isNullAt(vector_size_t idx) const {
+  auto offset = offsetOfIndex(idx);
   return sequenceValues_->isNullAt(offset);
 }
 
 template <typename T>
-const T SequenceVector<T>::valueAtFast(vector_size_t idx) const {
+T SequenceVector<T>::valueAt(vector_size_t idx) const {
   size_t offset = offsetOfIndex(idx);
   return scalarSequenceValues_->valueAt(offset);
 }
@@ -89,8 +91,8 @@ std::unique_ptr<SimpleVector<uint64_t>> SequenceVector<T>::hashAll() const {
   auto sequenceCount = numSequences();
   BufferPtr hashes =
       AlignedBuffer::allocate<uint64_t>(sequenceCount, BaseVector::pool_);
-  uint64_t* rawHashes = hashes->asMutable<uint64_t>();
-  for (size_t i = 0; i < sequenceCount; ++i) {
+  auto* rawHashes = hashes->asMutable<uint64_t>();
+  for (vector_size_t i = 0; i < sequenceCount; ++i) {
     rawHashes[i] = sequenceValues_->hashValueAt(i);
   }
   auto hashValues = std::make_shared<FlatVector<uint64_t>>(
@@ -99,7 +101,7 @@ std::unique_ptr<SimpleVector<uint64_t>> SequenceVector<T>::hashAll() const {
       BufferPtr(nullptr),
       sequenceCount,
       hashes,
-      std::vector<BufferPtr>(0) /*stringBuffers*/,
+      std::vector<BufferPtr>{} /*stringBuffers*/,
       SimpleVectorStats<uint64_t>{}, /*stats*/
       std::nullopt /*distinctValueCount*/,
       0 /* nullCount */,
@@ -117,26 +119,6 @@ std::unique_ptr<SimpleVector<uint64_t>> SequenceVector<T>::hashAll() const {
       false /* sorted */,
       sizeof(uint64_t) * BaseVector::length_ /* representedBytes */,
       0 /* nullSequenceCount */);
-}
-
-template <typename T>
-xsimd::batch<T> SequenceVector<T>::loadSIMDValueBufferAt(
-    size_t byteOffset) const {
-  if constexpr (std::is_same_v<T, bool>) {
-    throw std::runtime_error(
-        "Sequence encoding only supports SIMD operations on integers");
-  } else {
-    constexpr int kBatchSize = xsimd::batch<T>::size;
-    auto startIndex = byteOffset / sizeof(T);
-    if (checkLoadRange(startIndex, kBatchSize)) {
-      return simd::setAll(valueAtFast(startIndex));
-    }
-    alignas(xsimd::default_arch::alignment()) T tmp[kBatchSize];
-    for (int i = 0; i < kBatchSize; ++i) {
-      tmp[i] = valueAtFast(startIndex + i);
-    }
-    return xsimd::load_aligned(tmp);
-  }
 }
 
 template <typename T>

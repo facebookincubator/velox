@@ -25,24 +25,11 @@
 
 namespace facebook::velox {
 
-namespace {
-struct DummyReleaser {
-  void addRef() const {}
-
-  void release() const {}
-};
-} // namespace
-
 template <typename T>
 class ConstantVector final : public SimpleVector<T> {
  public:
   ConstantVector(const ConstantVector&) = delete;
   ConstantVector& operator=(const ConstantVector&) = delete;
-
-  static constexpr bool can_simd =
-      (std::is_same_v<T, int64_t> || std::is_same_v<T, int32_t> ||
-       std::is_same_v<T, int16_t> || std::is_same_v<T, int8_t> ||
-       std::is_same_v<T, bool> || std::is_same_v<T, size_t>);
 
   ConstantVector(
       velox::memory::MemoryPool* pool,
@@ -81,10 +68,6 @@ class ConstantVector final : public SimpleVector<T> {
         // Copy string value.
         setValue(value_.str());
       }
-    }
-    // If this is not encoded integer, or string, set value buffer
-    if constexpr (can_simd) {
-      valueBuffer_ = simd::setAll(value_);
     }
   }
 
@@ -129,7 +112,7 @@ class ConstantVector final : public SimpleVector<T> {
     setInternalState();
   }
 
-  virtual ~ConstantVector() override {
+  ~ConstantVector() override {
     if (auto* wrapInfo = wrapInfo_.load()) {
       delete wrapInfo;
     }
@@ -157,16 +140,12 @@ class ConstantVector final : public SimpleVector<T> {
     VELOX_FAIL("setNull not supported on ConstantVector");
   }
 
-  const T value() const {
+  T value() const {
     VELOX_DCHECK(initialized_);
     return value_;
   }
 
-  const T valueAtFast(vector_size_t /*idx*/) const {
-    return value();
-  }
-
-  virtual const T valueAt(vector_size_t /*idx*/) const override {
+  T valueAt(vector_size_t /*idx*/) const final {
     VELOX_DCHECK(initialized_);
     SimpleVector<T>::checkElementSize();
     return value();
@@ -185,14 +164,6 @@ class ConstantVector final : public SimpleVector<T> {
   const void* valuesAsVoid() const override {
     VELOX_DCHECK(initialized_);
     return &value_;
-  }
-
-  /// Loads a 256bit vector of data at the virtual byteOffset given
-  /// Note this method is implemented on each vector type, but is intentionally
-  /// not virtual for performance reasons
-  xsimd::batch<T> loadSIMDValueBufferAt(size_t /* byteOffset */) const {
-    VELOX_DCHECK(initialized_);
-    return valueBuffer_;
   }
 
   std::unique_ptr<SimpleVector<uint64_t>> hashAll() const override;
@@ -239,13 +210,17 @@ class ConstantVector final : public SimpleVector<T> {
   }
 
   const BufferPtr& wrapInfo() const override {
-    static const DummyReleaser kDummy;
+    struct DummyReleaser {
+      void addRef() const {}
+
+      void release() const {}
+    };
     auto* wrapInfo = wrapInfo_.load();
     if (FOLLY_UNLIKELY(!wrapInfo)) {
-      wrapInfo = new BufferPtr(BufferView<DummyReleaser>::create(
+      wrapInfo = new BufferPtr{BufferView<DummyReleaser>::create(
           reinterpret_cast<const uint8_t*>(&index_),
           sizeof(vector_size_t),
-          kDummy));
+          DummyReleaser{})};
       BufferPtr* oldWrapInfo = nullptr;
       if (!wrapInfo_.compare_exchange_strong(oldWrapInfo, wrapInfo)) {
         delete wrapInfo;
@@ -431,7 +406,7 @@ class ConstantVector final : public SimpleVector<T> {
         value_ = simple->valueAt(index_);
         if constexpr (std::is_same_v<T, StringView>) {
           // Copy string value.
-          StringView* valuePtr = reinterpret_cast<StringView*>(&value_);
+          auto* valuePtr = reinterpret_cast<StringView*>(&value_);
           setValue(std::string(valuePtr->data(), valuePtr->size()));
 
           auto stringVector = simple->template as<SimpleVector<StringView>>();
@@ -449,9 +424,6 @@ class ConstantVector final : public SimpleVector<T> {
   void setValue(const std::string& string) {
     BaseVector::inMemoryBytes_ += string.size();
     value_ = velox::to<decltype(value_)>(string);
-    if constexpr (can_simd) {
-      valueBuffer_ = simd::setAll(value_);
-    }
   }
 
   void makeNullsBuffer() {
@@ -476,9 +448,6 @@ class ConstantVector final : public SimpleVector<T> {
   bool isNull_ = false;
   bool initialized_{false};
   mutable std::atomic<BufferPtr*> wrapInfo_{nullptr};
-
-  // This must be at end to avoid memory corruption.
-  std::conditional_t<can_simd, xsimd::batch<T>, char> valueBuffer_;
 };
 
 template <>

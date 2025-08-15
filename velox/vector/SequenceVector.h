@@ -34,11 +34,6 @@ namespace facebook::velox {
 template <typename T>
 class SequenceVector : public SimpleVector<T> {
  public:
-  static constexpr bool can_simd =
-      (std::is_same_v<T, int64_t> || std::is_same_v<T, int32_t> ||
-       std::is_same_v<T, int16_t> || std::is_same_v<T, int8_t> ||
-       std::is_same_v<T, size_t>);
-
   SequenceVector(
       velox::memory::MemoryPool* pool,
       vector_size_t length,
@@ -51,7 +46,6 @@ class SequenceVector : public SimpleVector<T> {
       std::optional<ByteCount> representedBytes = std::nullopt,
       std::optional<ByteCount> storageByteCount = std::nullopt);
 
- public:
   ~SequenceVector() override = default;
 
   bool mayHaveNulls() const override {
@@ -62,11 +56,7 @@ class SequenceVector : public SimpleVector<T> {
     return sequenceValues_->mayHaveNullsRecursive();
   }
 
-  bool isNullAtFast(vector_size_t idx) const;
-
-  bool isNullAt(vector_size_t idx) const override {
-    return isNullAtFast(idx);
-  }
+  bool isNullAt(vector_size_t idx) const final;
 
   bool containsNullAt(vector_size_t idx) const override {
     if constexpr (std::is_same_v<T, ComplexType>) {
@@ -74,36 +64,23 @@ class SequenceVector : public SimpleVector<T> {
         return true;
       }
 
-      size_t offset = offsetOfIndex(idx);
+      auto offset = offsetOfIndex(idx);
       return sequenceValues_->containsNullAt(offset);
     } else {
       return isNullAt(idx);
     }
   }
 
-  const T valueAtFast(vector_size_t idx) const;
-
-  const T valueAt(vector_size_t idx) const override {
-    return valueAtFast(idx);
-  }
+  T valueAt(vector_size_t idx) const final;
 
   std::unique_ptr<SimpleVector<uint64_t>> hashAll() const override;
-
-  /**
-   * Loads a 256bit vector of data at the virtual byteOffset given
-   * Note this method is implemented on each vector type, but is intentionally
-   * not virtual for performance reasons
-   *
-   * @param byteOffset - the byte offset to laod from
-   */
-  xsimd::batch<T> loadSIMDValueBufferAt(size_t index) const;
 
   /**
    * Returns a shared_ptr to the underlying byte buffer holding the values for
    * this vector as SequenceLength types. This is used during execution to
    * process over the subset of values when possible.
    */
-  inline VectorPtr getSequenceValues() const {
+  VectorPtr getSequenceValues() const {
     return sequenceValues_;
   }
 
@@ -132,7 +109,7 @@ class SequenceVector : public SimpleVector<T> {
   /**
    * Returns a shared_ptr to the underlying values container.
    */
-  inline VectorPtr getValuesVectorShared() const {
+  VectorPtr getValuesVectorShared() const {
     return sequenceValues_;
   }
 
@@ -157,7 +134,7 @@ class SequenceVector : public SimpleVector<T> {
    * is logically resident at the given index, or, -1 for an index that is < 0
    * or an index that is >= the logical length of this vector.
    */
-  vector_size_t offsetOfIndex(vector_size_t idx) const;
+  vector_size_t offsetOfIndex(vector_size_t index) const;
 
   const BaseVector* wrappedVector() const override {
     return sequenceValues_->wrappedVector();
@@ -214,7 +191,7 @@ class SequenceVector : public SimpleVector<T> {
   // Prepares for use after construction.
   void setInternalState();
 
-  bool checkLoadRange(size_t idx, size_t count) const;
+  bool checkLoadRange(size_t index, size_t count) const;
 
   VectorPtr sequenceValues_;
   SimpleVector<T>* scalarSequenceValues_ = nullptr;

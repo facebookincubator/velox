@@ -32,8 +32,6 @@ class DictionaryVector : public SimpleVector<T> {
   DictionaryVector(const DictionaryVector&) = delete;
   DictionaryVector& operator=(const DictionaryVector&) = delete;
 
-  static constexpr bool can_simd = std::is_same_v<T, int64_t>;
-
   // Creates dictionary vector using base vector (dictionaryValues) and a set
   // of indices (dictionaryIndexArray).
   //
@@ -55,7 +53,7 @@ class DictionaryVector : public SimpleVector<T> {
       BufferPtr nulls,
       vector_size_t length,
       VectorPtr dictionaryValues,
-      BufferPtr dictionaryIndexArray,
+      BufferPtr dictionaryIndices,
       const SimpleVectorStats<T>& stats = {},
       std::optional<vector_size_t> distinctValueCount = std::nullopt,
       std::optional<vector_size_t> nullCount = std::nullopt,
@@ -63,7 +61,7 @@ class DictionaryVector : public SimpleVector<T> {
       std::optional<ByteCount> representedBytes = std::nullopt,
       std::optional<ByteCount> storageByteCount = std::nullopt);
 
-  virtual ~DictionaryVector() override {
+  ~DictionaryVector() override {
     dictionaryValues_->clearContainingLazyAndWrapped();
   }
 
@@ -93,13 +91,11 @@ class DictionaryVector : public SimpleVector<T> {
     }
   }
 
-  const T valueAtFast(vector_size_t idx) const;
-
   /**
    * @return the value at the given index value for a dictionary entry, i.e.
    * gets the dictionary value by its indexed value.
    */
-  const T valueAt(vector_size_t idx) const override {
+  T valueAt(vector_size_t idx) const final {
     VELOX_DCHECK(initialized_);
     VELOX_DCHECK(!isNullAt(idx), "found null value at: {}", idx);
     auto innerIndex = getDictionaryIndex(idx);
@@ -108,21 +104,11 @@ class DictionaryVector : public SimpleVector<T> {
 
   std::unique_ptr<SimpleVector<uint64_t>> hashAll() const override;
 
-  /**
-   * Loads a SIMD vector of data at the virtual byteOffset given
-   * Note this method is implemented on each vector type, but is intentionally
-   * not virtual for performance reasons
-   *
-   * @param index at which to start the vector load
-   * @return the vector of values starting at the given index
-   */
-  xsimd::batch<T> loadSIMDValueBufferAt(size_t index) const;
-
-  inline const BufferPtr& indices() const {
+  const BufferPtr& indices() const {
     return indices_;
   }
 
-  inline BufferPtr& indices() {
+  BufferPtr& indices() {
     return indices_;
   }
 
@@ -205,7 +191,7 @@ class DictionaryVector : public SimpleVector<T> {
 
   void setDictionaryValues(VectorPtr dictionaryValues) {
     dictionaryValues_->clearContainingLazyAndWrapped();
-    dictionaryValues_ = dictionaryValues;
+    dictionaryValues_ = std::move(dictionaryValues);
     initialized_ = false;
     setInternalState();
   }
@@ -252,7 +238,7 @@ class DictionaryVector : public SimpleVector<T> {
 
  private:
   // return the dictionary index for the specified vector index.
-  inline vector_size_t getDictionaryIndex(vector_size_t idx) const {
+  vector_size_t getDictionaryIndex(vector_size_t idx) const {
     return rawIndices_[idx];
   }
 

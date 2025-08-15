@@ -13,10 +13,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#pragma once
 
 #include <type_traits>
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/vector/BiasVector.h"
 #include "velox/vector/BuilderTypeUtils.h"
 #include "velox/vector/FlatVector.h"
 #include "velox/vector/TypeAliases.h"
@@ -63,7 +65,6 @@ BiasVector<T>::BiasVector(
           valueType_ == TypeKind::TINYINT,
       "Invalid array type for biased values");
 
-  biasBuffer_ = simd::setAll(bias_);
   rawValues_ = values_->as<uint8_t>();
   BaseVector::inMemoryBytes_ += values_->size();
 }
@@ -78,7 +79,7 @@ std::unique_ptr<SimpleVector<uint64_t>> BiasVector<T>::hashAll() const {
   // If there is at least one value, then indices_ is set and has a pool.
   BufferPtr hashes =
       AlignedBuffer::allocate<uint64_t>(BaseVector::length_, values_->pool());
-  uint64_t* rawHashes = hashes->asMutable<uint64_t>();
+  auto* rawHashes = hashes->asMutable<uint64_t>();
   for (size_t i = 0; i < BaseVector::length_; ++i) {
     rawHashes[i] = this->hashValueAt(i);
   }
@@ -97,7 +98,8 @@ std::unique_ptr<SimpleVector<uint64_t>> BiasVector<T>::hashAll() const {
 }
 
 template <typename T>
-const T BiasVector<T>::valueAtFast(vector_size_t idx) const {
+T BiasVector<T>::valueAt(vector_size_t idx) const {
+  SimpleVector<T>::checkElementSize();
   switch (valueType_) {
     case TypeKind::INTEGER:
       return bias_ + reinterpret_cast<const int32_t*>(rawValues_)[idx];
@@ -107,40 +109,6 @@ const T BiasVector<T>::valueAtFast(vector_size_t idx) const {
       return bias_ + reinterpret_cast<const int8_t*>(rawValues_)[idx];
     default:
       VELOX_UNSUPPORTED("Invalid type");
-  }
-}
-
-template <typename T>
-xsimd::batch<T> BiasVector<T>::loadSIMDValueBufferAt(size_t index) const {
-  if constexpr (std::is_same_v<T, int64_t>) {
-    switch (valueType_) {
-      case TypeKind::INTEGER:
-        return biasBuffer_ + loadSIMDInternal<int32_t>(index);
-      case TypeKind::SMALLINT:
-        return biasBuffer_ + loadSIMDInternal<int16_t>(index);
-      case TypeKind::TINYINT:
-        return biasBuffer_ + loadSIMDInternal<int8_t>(index);
-      default:
-        VELOX_UNSUPPORTED("Invalid type");
-    }
-  } else if constexpr (std::is_same_v<T, int32_t>) {
-    switch (valueType_) {
-      case TypeKind::SMALLINT:
-        return biasBuffer_ + loadSIMDInternal<int16_t>(index);
-      case TypeKind::TINYINT:
-        return biasBuffer_ + loadSIMDInternal<int8_t>(index);
-      default:
-        VELOX_UNSUPPORTED("Invalid type");
-    }
-  } else if constexpr (std::is_same_v<T, int16_t>) {
-    switch (valueType_) {
-      case TypeKind::TINYINT:
-        return biasBuffer_ + loadSIMDInternal<int8_t>(index);
-      default:
-        VELOX_UNSUPPORTED("Invalid type");
-    }
-  } else {
-    VELOX_UNSUPPORTED("Unsupported type for biased vector");
   }
 }
 

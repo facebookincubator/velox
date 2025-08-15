@@ -61,11 +61,11 @@ void StringColumnReader::getValues(const RowSet& rows, VectorPtr* result) {
 
 void StringColumnReader::dedictionarize() {
   if (scanSpec_->keepValues()) {
-    auto dict = formatData_->as<ParquetData>()
-                    .dictionaryValues(fileType_->type())
-                    ->as<FlatVector<StringView>>();
+    auto* dict = formatData_->as<ParquetData>()
+                     .dictionaryValues(fileType_->type())
+                     ->as<FlatVector<StringView>>();
     auto valuesCapacity = values_->capacity();
-    auto indices = values_->as<vector_size_t>();
+    const auto* indices = values_->as<vector_size_t>();
     // 'values_' is sized for the batch worth of StringViews. It is filled with
     // 32 bit indices by dictionary scan.
     VELOX_CHECK_GE(valuesCapacity, numValues_ * sizeof(StringView));
@@ -81,9 +81,9 @@ void StringColumnReader::dedictionarize() {
         reinterpret_cast<StringView*>(rawValues_)[i] = StringView();
         continue;
       }
-      auto& view = dict->valueAt(indices[i]);
+      auto view = dict->valueAt(indices[i]);
       numValues_ = i;
-      addStringValue(folly::StringPiece(view.data(), view.size()));
+      addStringValue(view);
     }
     numValues_ = numValues;
   }
