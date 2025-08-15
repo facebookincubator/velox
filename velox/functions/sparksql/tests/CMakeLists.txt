@@ -42,6 +42,7 @@ add_executable(
   FactorialTest.cpp
   FromJsonTest.cpp
   FromToJsonRoundTripTest.cpp
+  GetArrayStructFieldsTest.cpp
   GetJsonObjectTest.cpp
   GetStructFieldTest.cpp
   HashTest.cpp
@@ -60,6 +61,7 @@ add_executable(
   MonotonicallyIncreasingIdTest.cpp
   RaiseErrorTest.cpp
   RandTest.cpp
+  ReadSidePaddingFunctionTest.cpp
   RegexFunctionsTest.cpp
   SliceTest.cpp
   SizeTest.cpp

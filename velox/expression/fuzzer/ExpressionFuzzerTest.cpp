@@ -244,6 +244,10 @@ std::unordered_set<std::string> skipFunctions = {
     "line_locate_point",
     "line_interpolate_point",
     "flatten_geometry_collections",
+    "expand_envelope",
+    "bing_tile_polygon",
+    "geometry_as_geojson",
+    "geometry_from_geojson",
 };
 
 std::unordered_set<std::string> skipFunctionsSOT = {

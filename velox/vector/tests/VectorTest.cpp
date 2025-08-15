@@ -34,6 +34,7 @@
 #include "velox/vector/SelectivityVector.h"
 #include "velox/vector/SimpleVector.h"
 #include "velox/vector/TypeAliases.h"
+#include "velox/vector/VariantToVector.h"
 #include "velox/vector/VectorTypeUtils.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -875,6 +876,17 @@ class VectorTest : public testing::Test, public velox::test::VectorTestBase {
     OStreamOutputStream oddOutputStream(&oddStream);
     even.flush(&evenOutputStream);
     odd.flush(&oddOutputStream);
+    ASSERT_GT(even.size(), 0);
+    even.clear();
+    // We expect two pages for header after clear.
+    ASSERT_EQ(
+        even.size(),
+        memory::AllocationTraits::pageBytes(even.testingAllocationQuantum()));
+    ASSERT_GT(odd.size(), 0);
+    odd.clear();
+    ASSERT_EQ(
+        odd.size(),
+        memory::AllocationTraits::pageBytes(odd.testingAllocationQuantum()));
 
     auto evenString = evenStream.str();
     checkSizes(source.get(), evenSizes, evenString);
@@ -3597,6 +3609,43 @@ TEST_F(VectorTest, hashValueAtMap) {
   EXPECT_EQ(data->hashValueAt(0), data->hashValueAt(5));
 }
 
+TEST_F(VectorTest, variantHashMatchesVectorHash) {
+  auto flat = makeNullableFlatVector<int64_t>({1, std::nullopt, 3});
+  for (vector_size_t i = 0; i < flat->size(); ++i) {
+    auto v = vectorToVariant(flat, i);
+    EXPECT_EQ(flat->hashValueAt(i), v.hash()) << "at " << i;
+  }
+
+  auto array = makeArrayVectorFromJson<int64_t>({
+      "[1, 2, 3]",
+      "null",
+      "[1, null, 3]",
+  });
+  for (vector_size_t i = 0; i < array->size(); ++i) {
+    auto v = vectorToVariant(array, i);
+    EXPECT_EQ(array->hashValueAt(i), v.hash()) << "at " << i;
+  }
+
+  auto map = makeMapVectorFromJson<int64_t, int64_t>({
+      "{1: 10}",
+      "null",
+      "{1: null}",
+  });
+  for (vector_size_t i = 0; i < map->size(); ++i) {
+    auto v = vectorToVariant(map, i);
+    EXPECT_EQ(map->hashValueAt(i), v.hash()) << "at " << i;
+  }
+
+  auto child1 = makeFlatVector<int64_t>({1, 2, 3});
+  auto child2 = makeNullableFlatVector<int64_t>({4, 5, std::nullopt});
+  auto row =
+      makeRowVector({child1, child2}, [](vector_size_t i) { return i == 1; });
+  for (vector_size_t i = 0; i < row->size(); ++i) {
+    auto v = vectorToVariant(row, i);
+    EXPECT_EQ(row->hashValueAt(i), v.hash()) << "at " << i;
+  }
+}
+
 TEST_F(VectorTest, hashAll) {
   auto data = makeFlatVector<int32_t>({1, 2, 3});
   ASSERT_TRUE(data->getNullCount().has_value());
@@ -4166,6 +4215,5 @@ TEST_F(VectorTest, estimateFlatSize) {
   // Test that the second call to prepareForReuse will not cause crash
   arrayVector->prepareForReuse();
 }
-
 } // namespace
 } // namespace facebook::velox

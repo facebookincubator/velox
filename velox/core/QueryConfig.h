@@ -264,7 +264,8 @@ class QueryConfig {
       "topn_row_number_spill_enabled";
 
   /// LocalMerge spilling flag, only applies if "spill_enabled" flag is set.
-  static constexpr const char* kLocalMergeSpillEnabled = "local_merge_enabled";
+  static constexpr const char* kLocalMergeSpillEnabled =
+      "local_merge_spill_enabled";
 
   /// Specify the max number of local sources to merge at a time.
   static constexpr const char* kLocalMergeMaxNumMergeSources =
@@ -465,11 +466,6 @@ class QueryConfig {
 
   /// Base dir of a query to store tracing data.
   static constexpr const char* kQueryTraceDir = "query_trace_dir";
-
-  /// @Deprecated. Do not use. Remove once existing call sites are updated.
-  /// The plan node id whose input data will be traced.
-  /// Empty string if only want to trace the query metadata.
-  static constexpr const char* kQueryTraceNodeIds = "query_trace_node_id";
 
   /// The plan node id whose input data will be traced.
   /// Empty string if only want to trace the query metadata.
@@ -987,12 +983,6 @@ class QueryConfig {
   std::string queryTraceDir() const {
     // The default query trace dir, empty by default.
     return get<std::string>(kQueryTraceDir, "");
-  }
-
-  /// @Deprecated. Do not use. Remove once existing call sites are updated.
-  std::string queryTraceNodeIds() const {
-    // Use the new config kQueryTraceNodeId.
-    return get<std::string>(kQueryTraceNodeId, "");
   }
 
   std::string queryTraceNodeId() const {
