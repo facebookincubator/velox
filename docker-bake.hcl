@@ -133,3 +133,16 @@ target "presto-java" {
   cache-to   = cache-to-arch("presto-java", "amd64")
   cache-from = cache-from-arch("presto-java", "amd64")
 }
+
+target "fedora" {
+  inherits   = ["base"]
+  context    = "."
+  matrix = {
+      arch = ["amd64"]
+    }
+  name       = "fedora-${arch}"
+  dockerfile = "scripts/docker/fedora.dockerfile"
+  target     = "fedora"
+  cache-to   = cache-to-arch("fedora", "${arch}")
+  cache-from = cache-from-arch("fedora", "${arch}")
+}
