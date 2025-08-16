@@ -136,6 +136,19 @@ class TableWriter : public Operator {
     // the table writer operator pool. So we report the memory usage from
     // 'connectorPool_'.
     stats.memoryStats = MemoryStats::memStatsFromPool(connectorPool_);
+
+    if (FOLLY_LIKELY(dataSink_ != nullptr)) {
+      try {
+        const auto connectorStats = dataSink_->runtimeStats();
+        for (const auto& [name, counter] : connectorStats) {
+          stats.runtimeStats[name] = RuntimeMetric(counter.value, counter.unit);
+        }
+      } catch (const std::exception& e) {
+        LOG(WARNING) << "Failed to collect DataSink runtime stats: "
+                     << e.what();
+      }
+    }
+
     return stats;
   }
 
