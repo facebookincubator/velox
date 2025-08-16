@@ -106,8 +106,16 @@ std::vector<int64_t>
 toInt64List(const VectorPtr& vector, vector_size_t start, vector_size_t size) {
   auto ints = vector->as<SimpleVector<T>>();
   std::vector<int64_t> values;
-  for (auto i = 0; i < size; i++) {
-    values.push_back(ints->valueAt(start + i));
+  if (!ints->mayHaveNulls()) {
+    for (auto i = 0; i < size; i++) {
+      values.push_back(ints->valueAt(start + i));
+    }
+  } else {
+    for (auto i = 0; i < size; i++) {
+      if (!ints->isNullAt(start + i)) {
+        values.push_back(ints->valueAt(start + i));
+      }
+    }
   }
   return values;
 }
@@ -400,9 +408,18 @@ std::unique_ptr<common::Filter> ExprToSubfieldFilterParser::makeInFilter(
     case TypeKind::VARCHAR: {
       auto stringElements = elements->as<SimpleVector<StringView>>();
       std::vector<std::string> values;
-      for (auto i = 0; i < size; i++) {
-        values.push_back(stringElements->valueAt(offset + i).str());
+      if (!stringElements->mayHaveNulls()) {
+        for (auto i = 0; i < size; i++) {
+          values.push_back(stringElements->valueAt(offset + i).str());
+        }
+      } else {
+        for (auto i = 0; i < size; i++) {
+          if (!stringElements->isNullAt(offset + i)) {
+            values.push_back(stringElements->valueAt(offset + i).str());
+          }
+        }
       }
+
       if (negated) {
         return notIn(values);
       }
