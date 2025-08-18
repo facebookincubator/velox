@@ -86,15 +86,29 @@ inline cudf::column_view asView(ColumnOrView& holder) {
       holder);
 }
 
+class CudfFunction {
+ public:
+  virtual ~CudfFunction() = default;
+  virtual ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const = 0;
+};
+
+using CudfFunctionFactory = std::function<std::shared_ptr<CudfFunction>(
+    const std::string& name,
+    const std::shared_ptr<velox::exec::Expr>& expr)>;
+
+bool registerCudfFunction(
+    const std::string& name,
+    CudfFunctionFactory factory,
+    bool overwrite = true);
+
 struct CudfExpressionNode {
   std::shared_ptr<velox::exec::Expr> expr;
-  std::vector<std::unique_ptr<cudf::scalar>> scalars;
+  std::shared_ptr<CudfFunction> function;
   std::vector<std::shared_ptr<CudfExpressionNode>> subexpressions;
 
-  // TODO (dm): Needs some form of function identification. I'd say let's add a
-  // registration mechanism. get function from it and store it here.
-
-  // TODO (dm): Add a factory that takes a velox expr
   static std::shared_ptr<CudfExpressionNode> create(
       const std::shared_ptr<velox::exec::Expr>& expr);
 
