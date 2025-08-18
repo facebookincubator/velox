@@ -986,12 +986,11 @@ struct SecondsToTimestampFunction {
       const int64_t micros = static_cast<int64_t>(microsD);
 
       // Split into whole seconds and remaining microseconds.
-      constexpr int64_t kMicrosPerSec = 1'000'000;
-      int64_t wholeSeconds = micros / kMicrosPerSec;
-      int64_t remainingMicros = micros % kMicrosPerSec;
+      int64_t wholeSeconds = micros / util::kMicrosPerSec;
+      int64_t remainingMicros = micros % util::kMicrosPerSec;
       if (remainingMicros < 0) {
         wholeSeconds -= 1;
-        remainingMicros += kMicrosPerSec;
+        remainingMicros += util::kMicrosPerSec;
       }
 
       const int64_t nano = remainingMicros * 1'000;
