@@ -17,35 +17,35 @@
 #pragma once
 
 #include "velox/connectors/Connector.h"
-#include "velox/connectors/hive/SplitReader.h"
-#include "velox/connectors/hive/iceberg/PositionalDeleteFileReader.h"
+#include "velox/connectors/lakehouse/common/SplitReader.h"
+#include "velox/connectors/lakehouse/iceberg/PositionalDeleteFileReader.h"
 #include "velox/exec/OperatorUtils.h"
 
-namespace facebook::velox::connector::hive::iceberg {
+namespace facebook::velox::connector::lakehouse::iceberg {
 
 struct IcebergDeleteFile;
 
-class IcebergSplitReader : public SplitReader {
+class IcebergSplitReader : public common::SplitReader {
  public:
   IcebergSplitReader(
-      const std::shared_ptr<const hive::HiveConnectorSplit>& hiveSplit,
-      const HiveTableHandlePtr& hiveTableHandle,
-      const std::unordered_map<std::string, HiveColumnHandlePtr>* partitionKeys,
+      const std::shared_ptr<const common::HiveConnectorSplit>& hiveSplit,
+      const common::HiveTableHandlePtr& hiveTableHandle,
+      const std::unordered_map<std::string, common::HiveColumnHandlePtr>* partitionKeys,
       const ConnectorQueryCtx* connectorQueryCtx,
-      const std::shared_ptr<const HiveConfig>& hiveConfig,
+      const std::shared_ptr<const common::HiveConfig>& hiveConfig,
       const RowTypePtr& readerOutputType,
       const std::shared_ptr<io::IoStatistics>& ioStats,
       const std::shared_ptr<filesystems::File::IoStats>& fsStats,
-      FileHandleFactory* fileHandleFactory,
+      common::FileHandleFactory* fileHandleFactory,
       folly::Executor* executor,
-      const std::shared_ptr<common::ScanSpec>& scanSpec,
+      const std::shared_ptr<velox::common::ScanSpec>& scanSpec,
       core::ExpressionEvaluator* expressionEvaluator,
       std::atomic<uint64_t>& totalRemainingFilterTime);
 
   ~IcebergSplitReader() override;
 
   void prepareSplit(
-      std::shared_ptr<common::MetadataFilter> metadataFilter,
+      std::shared_ptr<velox::common::MetadataFilter> metadataFilter,
       dwio::common::RuntimeStatistics& runtimeStats) override;
 
   uint64_t next(uint64_t size, VectorPtr& output) override;
@@ -71,4 +71,4 @@ class IcebergSplitReader : public SplitReader {
   SelectivityVector filterRows_;
   exec::FilterEvalCtx filterEvalCtx_;
 };
-} // namespace facebook::velox::connector::hive::iceberg
+} // namespace facebook::velox::connector::lakehouse::iceberg

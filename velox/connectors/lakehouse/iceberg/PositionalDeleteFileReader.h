@@ -20,12 +20,12 @@
 #include <memory>
 
 #include "velox/connectors/Connector.h"
-#include "velox/connectors/hive/FileHandle.h"
-#include "velox/connectors/hive/HiveConfig.h"
-#include "velox/connectors/hive/HiveConnectorSplit.h"
+#include "velox/connectors/lakehouse/common/FileHandle.h"
+#include "velox/connectors/lakehouse/common/HiveConfig.h"
+#include "velox/connectors/lakehouse/common/HiveConnectorSplit.h"
 #include "velox/dwio/common/Reader.h"
 
-namespace facebook::velox::connector::hive::iceberg {
+namespace facebook::velox::connector::lakehouse::iceberg {
 
 struct IcebergDeleteFile;
 struct IcebergMetadataColumn;
@@ -35,10 +35,10 @@ class PositionalDeleteFileReader {
   PositionalDeleteFileReader(
       const IcebergDeleteFile& deleteFile,
       const std::string& baseFilePath,
-      FileHandleFactory* fileHandleFactory,
+      common::FileHandleFactory* fileHandleFactory,
       const ConnectorQueryCtx* connectorQueryCtx,
       folly::Executor* executor,
-      const std::shared_ptr<const HiveConfig>& hiveConfig,
+      const std::shared_ptr<const common::HiveConfig>& hiveConfig,
       const std::shared_ptr<io::IoStatistics>& ioStats,
       const std::shared_ptr<filesystems::File::IoStats>& fsStats,
       dwio::common::RuntimeStatistics& runtimeStats,
@@ -63,10 +63,10 @@ class PositionalDeleteFileReader {
 
   const IcebergDeleteFile& deleteFile_;
   const std::string& baseFilePath_;
-  FileHandleFactory* const fileHandleFactory_;
+  common::FileHandleFactory* const fileHandleFactory_;
   folly::Executor* const executor_;
   const ConnectorQueryCtx* connectorQueryCtx_;
-  const std::shared_ptr<const HiveConfig> hiveConfig_;
+  const std::shared_ptr<const common::HiveConfig> hiveConfig_;
   const std::shared_ptr<io::IoStatistics> ioStats_;
   const std::shared_ptr<filesystems::File::IoStats> fsStats_;
   const std::shared_ptr<filesystems::File::IoStats> fsStats;
@@ -76,7 +76,7 @@ class PositionalDeleteFileReader {
   std::shared_ptr<IcebergMetadataColumn> posColumn_;
   uint64_t splitOffset_;
 
-  std::shared_ptr<HiveConnectorSplit> deleteSplit_;
+  std::shared_ptr<common::HiveConnectorSplit> deleteSplit_;
   std::unique_ptr<dwio::common::RowReader> deleteRowReader_;
   // The vector to hold the delete positions read from the positional delete
   // file. These positions are relative to the start of the whole base data
@@ -91,4 +91,4 @@ class PositionalDeleteFileReader {
   uint64_t totalNumRowsScanned_;
 };
 
-} // namespace facebook::velox::connector::hive::iceberg
+} // namespace facebook::velox::connector::lakehouse::iceberg

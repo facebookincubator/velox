@@ -21,7 +21,7 @@
 
 #include "velox/dwio/common/Options.h"
 
-namespace facebook::velox::connector::hive::iceberg {
+namespace facebook::velox::connector::lakehouse::iceberg {
 
 enum class FileContent {
   kData,
@@ -69,4 +69,4 @@ struct IcebergDeleteFile {
         upperBounds(_upperBounds) {}
 };
 
-} // namespace facebook::velox::connector::hive::iceberg
+} // namespace facebook::velox::connector::lakehouse::iceberg

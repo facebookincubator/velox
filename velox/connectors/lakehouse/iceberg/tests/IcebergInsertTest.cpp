@@ -17,10 +17,10 @@
 #include <folly/init/Init.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/connectors/hive/iceberg/tests/IcebergTestBase.h"
+#include "velox/connectors/lakehouse/iceberg/tests/IcebergTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
-namespace facebook::velox::connector::hive::iceberg::test {
+namespace facebook::velox::connector::lakehouse::iceberg::test {
 class IcebergInsertTest : public IcebergTestBase {
  protected:
   void SetUp() override {
@@ -117,9 +117,9 @@ TEST_F(IcebergInsertTest, testSingleColumnAsPartition) {
       if (i != colIndex) {
         assignments.insert(
             {name,
-             std::make_shared<HiveColumnHandle>(
+             std::make_shared<common::HiveColumnHandle>(
                  name,
-                 HiveColumnHandle::ColumnType::kRegular,
+                 common::HiveColumnHandle::ColumnType::kRegular,
                  rowType_->childAt(i),
                  rowType_->childAt(i))});
       }
@@ -128,9 +128,9 @@ TEST_F(IcebergInsertTest, testSingleColumnAsPartition) {
     // Add partition column.
     assignments.insert(
         {colName,
-         std::make_shared<HiveColumnHandle>(
+         std::make_shared<common::HiveColumnHandle>(
              colName,
-             HiveColumnHandle::ColumnType::kPartitionKey,
+             common::HiveColumnHandle::ColumnType::kPartitionKey,
              rowType_->childAt(colIndex),
              rowType_->childAt(colIndex))});
 
@@ -248,12 +248,12 @@ TEST_F(IcebergInsertTest, testColumnCombinationsAsPartition) {
     for (auto i = 0; i < rowType_->size(); i++) {
       const auto& name = rowType_->nameOf(i);
       auto columnType = partitionColumns.count(i) > 0
-          ? HiveColumnHandle::ColumnType::kPartitionKey
-          : HiveColumnHandle::ColumnType::kRegular;
+          ? common::HiveColumnHandle::ColumnType::kPartitionKey
+          : common::HiveColumnHandle::ColumnType::kRegular;
 
       assignments.insert(
           {name,
-           std::make_shared<HiveColumnHandle>(
+           std::make_shared<common::HiveColumnHandle>(
                name, columnType, rowType_->childAt(i), rowType_->childAt(i))});
     }
 
@@ -265,4 +265,4 @@ TEST_F(IcebergInsertTest, testColumnCombinationsAsPartition) {
   }
 }
 
-} // namespace facebook::velox::connector::hive::iceberg::test
+} // namespace facebook::velox::connector::lakehouse::iceberg::test

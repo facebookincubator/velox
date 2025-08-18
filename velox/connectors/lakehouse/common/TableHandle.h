@@ -21,7 +21,7 @@
 #include "velox/type/Subfield.h"
 #include "velox/type/Type.h"
 
-namespace facebook::velox::connector::hive {
+namespace facebook::velox::connector::lakehouse::common {
 
 class HiveColumnHandle : public ColumnHandle {
  public:
@@ -52,7 +52,7 @@ class HiveColumnHandle : public ColumnHandle {
       ColumnType columnType,
       TypePtr dataType,
       TypePtr hiveType,
-      std::vector<common::Subfield> requiredSubfields = {},
+      std::vector<velox::common::Subfield> requiredSubfields = {},
       ColumnParseParameters columnParseParameters = {})
       : name_(name),
         columnType_(columnType),
@@ -97,7 +97,7 @@ class HiveColumnHandle : public ColumnHandle {
   ///
   /// Pruning arrays means dropping values with indices larger than maximum
   /// required index.
-  const std::vector<common::Subfield>& requiredSubfields() const {
+  const std::vector<velox::common::Subfield>& requiredSubfields() const {
     return requiredSubfields_;
   }
 
@@ -128,7 +128,7 @@ class HiveColumnHandle : public ColumnHandle {
   const ColumnType columnType_;
   const TypePtr dataType_;
   const TypePtr hiveType_;
-  const std::vector<common::Subfield> requiredSubfields_;
+  const std::vector<velox::common::Subfield> requiredSubfields_;
   const ColumnParseParameters columnParseParameters_;
 };
 
@@ -142,7 +142,7 @@ class HiveTableHandle : public ConnectorTableHandle {
       std::string connectorId,
       const std::string& tableName,
       bool filterPushdownEnabled,
-      common::SubfieldFilters subfieldFilters,
+      velox::common::SubfieldFilters subfieldFilters,
       const core::TypedExprPtr& remainingFilter,
       const RowTypePtr& dataColumns = nullptr,
       const std::unordered_map<std::string, std::string>& tableParameters = {});
@@ -159,7 +159,7 @@ class HiveTableHandle : public ConnectorTableHandle {
     return filterPushdownEnabled_;
   }
 
-  const common::SubfieldFilters& subfieldFilters() const {
+  const velox::common::SubfieldFilters& subfieldFilters() const {
     return subfieldFilters_;
   }
 
@@ -189,7 +189,7 @@ class HiveTableHandle : public ConnectorTableHandle {
  private:
   const std::string tableName_;
   const bool filterPushdownEnabled_;
-  const common::SubfieldFilters subfieldFilters_;
+  const velox::common::SubfieldFilters subfieldFilters_;
   const core::TypedExprPtr remainingFilter_;
   const RowTypePtr dataColumns_;
   const std::unordered_map<std::string, std::string> tableParameters_;
@@ -197,4 +197,4 @@ class HiveTableHandle : public ConnectorTableHandle {
 
 using HiveTableHandlePtr = std::shared_ptr<const HiveTableHandle>;
 
-} // namespace facebook::velox::connector::hive
+} // namespace facebook::velox::connector::lakehouse::common

@@ -20,7 +20,7 @@
 
 #include "velox/type/Type.h"
 
-namespace facebook::velox::connector::hive::iceberg {
+namespace facebook::velox::connector::lakehouse::iceberg {
 
 struct IcebergMetadataColumn {
   int id;
@@ -52,4 +52,4 @@ struct IcebergMetadataColumn {
   }
 };
 
-} // namespace facebook::velox::connector::hive::iceberg
+} // namespace facebook::velox::connector::lakehouse::iceberg

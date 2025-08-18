@@ -14,29 +14,29 @@
  * limitations under the License.
  */
 
-#include "velox/connectors/hive/iceberg/IcebergSplitReader.h"
+#include "velox/connectors/lakehouse/iceberg/IcebergSplitReader.h"
 
-#include "velox/connectors/hive/iceberg/EqualityDeleteFileReader.h"
-#include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
-#include "velox/connectors/hive/iceberg/IcebergSplit.h"
+#include "velox/connectors/lakehouse/iceberg/EqualityDeleteFileReader.h"
+#include "velox/connectors/lakehouse/iceberg/IcebergDeleteFile.h"
+#include "velox/connectors/lakehouse/iceberg/IcebergSplit.h"
 #include "velox/dwio/common/BufferUtil.h"
 
 using namespace facebook::velox::dwio::common;
 
-namespace facebook::velox::connector::hive::iceberg {
+namespace facebook::velox::connector::lakehouse::iceberg {
 
 IcebergSplitReader::IcebergSplitReader(
-    const std::shared_ptr<const hive::HiveConnectorSplit>& hiveSplit,
-    const HiveTableHandlePtr& hiveTableHandle,
-    const std::unordered_map<std::string, HiveColumnHandlePtr>* partitionKeys,
+    const std::shared_ptr<const common::HiveConnectorSplit>& hiveSplit,
+    const common::HiveTableHandlePtr& hiveTableHandle,
+    const std::unordered_map<std::string, common::HiveColumnHandlePtr>* partitionKeys,
     const ConnectorQueryCtx* connectorQueryCtx,
-    const std::shared_ptr<const HiveConfig>& hiveConfig,
+    const std::shared_ptr<const common::HiveConfig>& hiveConfig,
     const RowTypePtr& readerOutputType,
     const std::shared_ptr<io::IoStatistics>& ioStats,
     const std::shared_ptr<filesystems::File::IoStats>& fsStats,
-    FileHandleFactory* const fileHandleFactory,
+    common::FileHandleFactory* const fileHandleFactory,
     folly::Executor* executor,
-    const std::shared_ptr<common::ScanSpec>& scanSpec,
+    const std::shared_ptr<velox::common::ScanSpec>& scanSpec,
     core::ExpressionEvaluator* expressionEvaluator,
     std::atomic<uint64_t>& totalRemainingFilterTime)
     : SplitReader(
@@ -61,7 +61,7 @@ IcebergSplitReader::IcebergSplitReader(
 IcebergSplitReader::~IcebergSplitReader() {}
 
 void IcebergSplitReader::prepareSplit(
-    std::shared_ptr<common::MetadataFilter> metadataFilter,
+    std::shared_ptr<velox::common::MetadataFilter> metadataFilter,
     dwio::common::RuntimeStatistics& runtimeStats) {
   createReader();
   if (emptySplit_) {
@@ -240,4 +240,4 @@ uint64_t IcebergSplitReader::next(uint64_t size, VectorPtr& output) {
   return rowsScanned;
 }
 
-} // namespace facebook::velox::connector::hive::iceberg
+} // namespace facebook::velox::connector::lakehouse::iceberg

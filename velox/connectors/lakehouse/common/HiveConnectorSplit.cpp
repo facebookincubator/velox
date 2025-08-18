@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 
-#include "velox/connectors/hive/HiveConnectorSplit.h"
+#include "velox/connectors/lakehouse/common/HiveConnectorSplit.h"
 
-namespace facebook::velox::connector::hive {
+namespace facebook::velox::connector::lakehouse::common {
 
 std::string HiveConnectorSplit::toString() const {
   if (tableBucketNumber.has_value()) {
@@ -222,4 +222,4 @@ void HiveConnectorSplit::registerSerDe() {
   auto& registry = DeserializationRegistryForSharedPtr();
   registry.Register("HiveConnectorSplit", HiveConnectorSplit::create);
 }
-} // namespace facebook::velox::connector::hive
+} // namespace facebook::velox::connector::lakehouse::common

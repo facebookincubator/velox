@@ -18,7 +18,7 @@
 
 #include "velox/exec/VectorHasher.h"
 
-namespace facebook::velox::connector::hive {
+namespace facebook::velox::connector::lakehouse::common {
 /// Generate sequential integer IDs for distinct partition values, which could
 /// be used as vector index.
 class PartitionIdGenerator {
@@ -99,4 +99,4 @@ class PartitionIdGenerator {
   SelectivityVector allRows_;
 };
 
-} // namespace facebook::velox::connector::hive
+} // namespace facebook::velox::connector::lakehouse::common

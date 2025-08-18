@@ -16,11 +16,12 @@
 #pragma once
 
 #include "velox/common/file/FileSystems.h"
-#include "velox/connectors/hive/TableHandle.h"
-#include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
-#include "velox/connectors/hive/iceberg/IcebergMetadataColumns.h"
-#include "velox/connectors/hive/iceberg/IcebergSplit.h"
-#include "velox/connectors/hive/iceberg/IcebergSplitReader.h"
+#include "velox/connectors/lakehouse/common/HiveConnectorSplit.h"
+#include "velox/connectors/lakehouse/common/TableHandle.h"
+#include "velox/connectors/lakehouse/iceberg/IcebergDeleteFile.h"
+#include "velox/connectors/lakehouse/iceberg/IcebergMetadataColumns.h"
+#include "velox/connectors/lakehouse/iceberg/IcebergSplit.h"
+#include "velox/connectors/lakehouse/iceberg/IcebergSplitReader.h"
 #include "velox/dwio/common/tests/utils/DataSetBuilder.h"
 #include "velox/dwio/dwrf/RegisterDwrfReader.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
@@ -30,7 +31,7 @@
 #include <folly/Benchmark.h>
 #include <folly/init/Init.h>
 
-namespace facebook::velox::iceberg::reader::test {
+namespace facebook::velox::connector::lakehouse::iceberg::test {
 
 constexpr uint32_t kNumRowsPerBatch = 20000;
 constexpr uint32_t kNumBatches = 50;
@@ -70,12 +71,12 @@ class IcebergSplitReaderBenchmark {
       RowTypePtr& rowType,
       const std::vector<dwio::common::FilterSpec>& filterSpecs,
       std::vector<uint64_t>& hitRows,
-      common::SubfieldFilters& filters);
+      velox::common::SubfieldFilters& filters);
 
   int read(
       const RowTypePtr& rowType,
       uint32_t nextSize,
-      std::unique_ptr<connector::hive::iceberg::IcebergSplitReader>
+      std::unique_ptr<connector::lakehouse::iceberg::IcebergSplitReader>
           icebergSplitReader);
 
   void readSingleColumn(
@@ -86,16 +87,17 @@ class IcebergSplitReaderBenchmark {
       float deleteRate,
       uint32_t nextSize);
 
-  std::vector<std::shared_ptr<connector::hive::HiveConnectorSplit>>
+  std::vector<std::shared_ptr<connector::lakehouse::common::HiveConnectorSplit>>
   createIcebergSplitsWithPositionalDelete(
       int32_t deleteRowsPercentage,
       int32_t deleteFilesCount);
 
   std::vector<std::string> listFiles(const std::string& dirPath);
 
-  std::shared_ptr<connector::hive::HiveConnectorSplit> makeIcebergSplit(
+  std::shared_ptr<connector::lakehouse::common::HiveConnectorSplit>
+  makeIcebergSplit(
       const std::string& dataFilePath,
-      const std::vector<connector::hive::iceberg::IcebergDeleteFile>&
+      const std::vector<connector::lakehouse::iceberg::IcebergDeleteFile>&
           deleteFiles = {});
 
   std::vector<int64_t> makeRandomDeleteRows(int32_t deleteRowsCount);
@@ -131,4 +133,4 @@ void run(
     float deleteRateX100,
     uint32_t nextSize);
 
-} // namespace facebook::velox::iceberg::reader::test
+} // namespace facebook::velox::connector::lakehouse::iceberg::test

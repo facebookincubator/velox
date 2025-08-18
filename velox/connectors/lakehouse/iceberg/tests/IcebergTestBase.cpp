@@ -14,13 +14,13 @@
  * limitations under the License.
  */
 
-#include "velox/connectors/hive/iceberg/tests/IcebergTestBase.h"
+#include "velox/connectors/lakehouse/iceberg/tests/IcebergTestBase.h"
 
 #include <regex>
 
-#include "velox/connectors/hive/iceberg/PartitionSpec.h"
+#include "velox/connectors/lakehouse/iceberg/PartitionSpec.h"
 
-namespace facebook::velox::connector::hive::iceberg::test {
+namespace facebook::velox::connector::lakehouse::iceberg::test {
 void IcebergTestBase::SetUp() {
   HiveConnectorTestBase::SetUp();
   parquet::registerParquetReaderFactory();
@@ -32,7 +32,7 @@ void IcebergTestBase::SetUp() {
       std::unordered_map<std::string, std::string>(), true);
 
   connectorConfig_ =
-      std::make_shared<HiveConfig>(std::make_shared<config::ConfigBase>(
+      std::make_shared<common::HiveConfig>(std::make_shared<config::ConfigBase>(
           std::unordered_map<std::string, std::string>()));
 
   setupMemoryPools("IcebergTestBase");
@@ -73,7 +73,7 @@ void IcebergTestBase::setupMemoryPools(const std::string& name) {
       connectorPool_.get(),
       connectorSessionProperties_.get(),
       nullptr,
-      common::PrefixSortConfig(),
+      velox::common::PrefixSortConfig(),
       nullptr,
       nullptr,
       "query" + name,
@@ -130,24 +130,24 @@ IcebergTestBase::createIcebergInsertTableHandle(
     const RowTypePtr& rowType,
     const std::string& outputDirectoryPath,
     const std::vector<std::string>& partitionTransforms) {
-  std::vector<std::shared_ptr<const HiveColumnHandle>> columnHandles;
+  std::vector<std::shared_ptr<const common::HiveColumnHandle>> columnHandles;
   for (auto i = 0; i < rowType->size(); ++i) {
     auto columnName = rowType->nameOf(i);
-    auto columnType = HiveColumnHandle::ColumnType::kRegular;
+    auto columnType = common::HiveColumnHandle::ColumnType::kRegular;
     for (auto transform : partitionTransforms) {
       if (columnName == transform) {
-        columnType = HiveColumnHandle::ColumnType::kPartitionKey;
+        columnType = common::HiveColumnHandle::ColumnType::kPartitionKey;
         break;
       }
     }
-    columnHandles.push_back(std::make_shared<HiveColumnHandle>(
+    columnHandles.push_back(std::make_shared<common::HiveColumnHandle>(
         columnName, columnType, rowType->childAt(i), rowType->childAt(i)));
   }
 
-  auto locationHandle = std::make_shared<LocationHandle>(
+  auto locationHandle = std::make_shared<common::LocationHandle>(
       outputDirectoryPath,
       outputDirectoryPath,
-      LocationHandle::TableType::kNew);
+      common::LocationHandle::TableType::kNew);
 
   auto partitionSpec = createPartitionSpec(partitionTransforms);
 
@@ -157,7 +157,7 @@ IcebergTestBase::createIcebergInsertTableHandle(
       partitionSpec,
       fileFormat_,
       nullptr,
-      common::CompressionKind::CompressionKind_ZSTD);
+      velox::common::CompressionKind::CompressionKind_ZSTD);
 }
 
 std::shared_ptr<IcebergDataSink> IcebergTestBase::createIcebergDataSink(
@@ -220,7 +220,7 @@ IcebergTestBase::createSplitsForDirectory(const std::string& directory) {
                           ->openFileForRead(filePath);
     const auto fileSize = file->size();
 
-    splits.push_back(std::make_shared<HiveIcebergSplit>(
+    splits.push_back(std::make_shared<iceberg::HiveIcebergSplit>(
         kHiveConnectorId,
         filePath,
         fileFormat_,
@@ -237,4 +237,4 @@ IcebergTestBase::createSplitsForDirectory(const std::string& directory) {
   return splits;
 }
 
-} // namespace facebook::velox::connector::hive::iceberg::test
+} // namespace facebook::velox::connector::lakehouse::iceberg::test

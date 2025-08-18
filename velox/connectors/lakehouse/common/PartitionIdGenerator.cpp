@@ -14,14 +14,14 @@
  * limitations under the License.
  */
 
-#include "velox/connectors/hive/PartitionIdGenerator.h"
+#include "velox/connectors/lakehouse/common/PartitionIdGenerator.h"
 
-#include "velox/connectors/hive/HivePartitionUtil.h"
+#include "velox/connectors/lakehouse/common/HivePartitionUtil.h"
 #include "velox/dwio/catalog/fbhive/FileUtils.h"
 
 using namespace facebook::velox::dwio::catalog::fbhive;
 
-namespace facebook::velox::connector::hive {
+namespace facebook::velox::connector::lakehouse::common {
 
 PartitionIdGenerator::PartitionIdGenerator(
     const RowTypePtr& inputType,
@@ -182,4 +182,4 @@ void PartitionIdGenerator::savePartitionValues(
   }
 }
 
-} // namespace facebook::velox::connector::hive
+} // namespace facebook::velox::connector::lakehouse::common

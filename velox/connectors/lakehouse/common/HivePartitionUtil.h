@@ -17,11 +17,11 @@
 
 #include "velox/vector/ComplexVector.h"
 
-namespace facebook::velox::connector::hive {
+namespace facebook::velox::connector::lakehouse::common {
 
 std::vector<std::pair<std::string, std::string>> extractPartitionKeyValues(
     const RowVectorPtr& partitionsVector,
     vector_size_t row,
     const std::string& nullValueName = "");
 
-} // namespace facebook::velox::connector::hive
+} // namespace facebook::velox::connector::lakehouse::common

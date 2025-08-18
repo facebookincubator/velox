@@ -14,20 +14,20 @@
  * limitations under the License.
  */
 
-#include "velox/connectors/hive/HiveDataSource.h"
+#include "velox/connectors/lakehouse/common/HiveDataSource.h"
 
 #include <fmt/ranges.h>
 #include <string>
 #include <unordered_map>
 
 #include "velox/common/testutil/TestValue.h"
-#include "velox/connectors/hive/HiveConfig.h"
+#include "velox/connectors/lakehouse/common/HiveConfig.h"
 #include "velox/dwio/common/ReaderFactory.h"
 #include "velox/expression/FieldReference.h"
 
 using facebook::velox::common::testutil::TestValue;
 
-namespace facebook::velox::connector::hive {
+namespace facebook::velox::connector::lakehouse::common {
 
 class HiveTableHandle;
 class HiveColumnHandle;
@@ -198,7 +198,7 @@ HiveDataSource::HiveDataSource(
           connectorQueryCtx_->sessionProperties()),
       pool_);
   if (remainingFilter) {
-    metadataFilter_ = std::make_shared<common::MetadataFilter>(
+    metadataFilter_ = std::make_shared<velox::common::MetadataFilter>(
         *scanSpec_, *remainingFilter, expressionEvaluator_);
   }
 
@@ -338,7 +338,7 @@ std::optional<RowVectorPtr> HiveDataSource::next(
   VELOX_CHECK_NOT_NULL(splitReader_, "No split reader present");
 
   TestValue::adjust(
-      "facebook::velox::connector::hive::HiveDataSource::next", this);
+      "facebook::velox::connector::lakehouse::common::HiveDataSource::next", this);
 
   if (splitReader_->emptySplit()) {
     resetSplit();
@@ -416,7 +416,7 @@ std::optional<RowVectorPtr> HiveDataSource::next(
 
 void HiveDataSource::addDynamicFilter(
     column_index_t outputChannel,
-    const std::shared_ptr<common::Filter>& filter) {
+    const std::shared_ptr<velox::common::Filter>& filter) {
   auto& fieldSpec = scanSpec_->getChildByChannel(outputChannel);
   fieldSpec.setFilter(filter);
   scanSpec_->resetCachedValues(true);
@@ -569,4 +569,4 @@ void HiveDataSource::registerWaveDelegateHook(WaveDelegateHookFunction hook) {
 }
 std::shared_ptr<wave::WaveDataSource> toWaveDataSource();
 
-} // namespace facebook::velox::connector::hive
+} // namespace facebook::velox::connector::lakehouse::common

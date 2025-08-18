@@ -17,12 +17,12 @@
 
 #include <string>
 
-#include "velox/connectors/hive/HiveConnectorSplit.h"
-#include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
+#include "velox/connectors/lakehouse/common/HiveConnectorSplit.h"
+#include "velox/connectors/lakehouse/iceberg/IcebergDeleteFile.h"
 
-namespace facebook::velox::connector::hive::iceberg {
+namespace facebook::velox::connector::lakehouse::iceberg {
 
-struct HiveIcebergSplit : public connector::hive::HiveConnectorSplit {
+struct HiveIcebergSplit : public connector::lakehouse::common::HiveConnectorSplit {
   std::vector<IcebergDeleteFile> deleteFiles;
 
   HiveIcebergSplit(
@@ -38,7 +38,7 @@ struct HiveIcebergSplit : public connector::hive::HiveConnectorSplit {
       const std::shared_ptr<std::string>& extraFileInfo = {},
       bool cacheable = true,
       const std::unordered_map<std::string, std::string>& infoColumns = {},
-      std::optional<FileProperties> fileProperties = std::nullopt);
+      std::optional<common::FileProperties> fileProperties = std::nullopt);
 
   // For tests only
   HiveIcebergSplit(
@@ -55,7 +55,7 @@ struct HiveIcebergSplit : public connector::hive::HiveConnectorSplit {
       bool cacheable = true,
       std::vector<IcebergDeleteFile> deletes = {},
       const std::unordered_map<std::string, std::string>& infoColumns = {},
-      std::optional<FileProperties> fileProperties = std::nullopt);
+      std::optional<common::FileProperties> fileProperties = std::nullopt);
 };
 
-} // namespace facebook::velox::connector::hive::iceberg
+} // namespace facebook::velox::connector::lakehouse::iceberg

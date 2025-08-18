@@ -16,8 +16,8 @@
 #pragma once
 
 #include "velox/connectors/Connector.h"
-#include "velox/connectors/hive/FileHandle.h"
-#include "velox/connectors/hive/HiveConfig.h"
+#include "velox/connectors/lakehouse/common/FileHandle.h"
+#include "velox/connectors/lakehouse/common/HiveConfig.h"
 #include "velox/core/PlanNode.h"
 
 namespace facebook::velox::dwio::common {
@@ -25,7 +25,7 @@ class DataSink;
 class DataSource;
 } // namespace facebook::velox::dwio::common
 
-namespace facebook::velox::connector::hive {
+namespace facebook::velox::connector::lakehouse::common {
 
 class HiveConnector : public Connector {
  public:
@@ -171,4 +171,4 @@ class HiveConnectorMetadataFactory {
 bool registerHiveConnectorMetadataFactory(
     std::unique_ptr<HiveConnectorMetadataFactory>);
 
-} // namespace facebook::velox::connector::hive
+} // namespace facebook::velox::connector::lakehouse::common

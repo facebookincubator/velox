@@ -17,15 +17,15 @@
 
 #include "velox/common/compression/Compression.h"
 #include "velox/connectors/Connector.h"
-#include "velox/connectors/hive/HiveConfig.h"
-#include "velox/connectors/hive/PartitionIdGenerator.h"
-#include "velox/connectors/hive/TableHandle.h"
+#include "velox/connectors/lakehouse/common/HiveConfig.h"
+#include "velox/connectors/lakehouse/common/PartitionIdGenerator.h"
+#include "velox/connectors/lakehouse/common/TableHandle.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/Writer.h"
 #include "velox/dwio/common/WriterFactory.h"
 #include "velox/exec/MemoryReclaimer.h"
 
-namespace facebook::velox::connector::hive {
+namespace facebook::velox::connector::lakehouse::common {
 
 class LocationHandle;
 using LocationHandlePtr = std::shared_ptr<const LocationHandle>;
@@ -219,7 +219,7 @@ class HiveInsertFileNameGenerator : public FileNameGenerator {
       std::optional<uint32_t> bucketId,
       const std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
       const ConnectorQueryCtx& connectorQueryCtx,
-      const std::shared_ptr<const HiveConfig>& hiveConfig,
+      const std::shared_ptr<const common::HiveConfig>& hiveConfig,
       bool commitRequired) const;
 
   static void registerSerDe();
@@ -241,7 +241,7 @@ class HiveInsertTableHandle : public ConnectorInsertTableHandle {
       std::shared_ptr<const LocationHandle> locationHandle,
       dwio::common::FileFormat storageFormat = dwio::common::FileFormat::DWRF,
       std::shared_ptr<const HiveBucketProperty> bucketProperty = nullptr,
-      std::optional<common::CompressionKind> compressionKind = {},
+      std::optional<velox::common::CompressionKind> compressionKind = {},
       const std::unordered_map<std::string, std::string>& serdeParameters = {},
       const std::shared_ptr<dwio::common::WriterOptions>& writerOptions =
           nullptr,
@@ -262,7 +262,7 @@ class HiveInsertTableHandle : public ConnectorInsertTableHandle {
         fileNameGenerator_(std::move(fileNameGenerator)) {
     if (compressionKind.has_value()) {
       VELOX_CHECK(
-          compressionKind.value() != common::CompressionKind_MAX,
+          compressionKind.value() != velox::common::CompressionKind_MAX,
           "Unsupported compression type: CompressionKind_MAX");
     }
 
@@ -293,7 +293,7 @@ class HiveInsertTableHandle : public ConnectorInsertTableHandle {
     return locationHandle_;
   }
 
-  std::optional<common::CompressionKind> compressionKind() const {
+  std::optional<velox::common::CompressionKind> compressionKind() const {
     return compressionKind_;
   }
 
@@ -342,7 +342,7 @@ class HiveInsertTableHandle : public ConnectorInsertTableHandle {
   const std::shared_ptr<const LocationHandle> locationHandle_;
   const dwio::common::FileFormat storageFormat_;
   const std::shared_ptr<const HiveBucketProperty> bucketProperty_;
-  const std::optional<common::CompressionKind> compressionKind_;
+  const std::optional<velox::common::CompressionKind> compressionKind_;
   const std::unordered_map<std::string, std::string> serdeParameters_;
   const std::shared_ptr<dwio::common::WriterOptions> writerOptions_;
   const bool ensureFiles_;
@@ -440,7 +440,7 @@ struct HiveWriterInfo {
       std::shared_ptr<memory::MemoryPool> _sortPool)
       : writerParameters(std::move(parameters)),
         nonReclaimableSectionHolder(new tsan_atomic<bool>(false)),
-        spillStats(std::make_unique<folly::Synchronized<common::SpillStats>>()),
+        spillStats(std::make_unique<folly::Synchronized<velox::common::SpillStats>>()),
         writerPool(std::move(_writerPool)),
         sinkPool(std::move(_sinkPool)),
         sortPool(std::move(_sortPool)) {}
@@ -449,7 +449,7 @@ struct HiveWriterInfo {
   const std::unique_ptr<tsan_atomic<bool>> nonReclaimableSectionHolder;
   /// Collects the spill stats from sort writer if the spilling has been
   /// triggered.
-  const std::unique_ptr<folly::Synchronized<common::SpillStats>> spillStats;
+  const std::unique_ptr<folly::Synchronized<velox::common::SpillStats>> spillStats;
   const std::shared_ptr<memory::MemoryPool> writerPool;
   const std::shared_ptr<memory::MemoryPool> sinkPool;
   const std::shared_ptr<memory::MemoryPool> sortPool;
@@ -519,14 +519,14 @@ class HiveDataSink : public DataSink {
       std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
       const ConnectorQueryCtx* connectorQueryCtx,
       CommitStrategy commitStrategy,
-      const std::shared_ptr<const HiveConfig>& hiveConfig);
+      const std::shared_ptr<const common::HiveConfig>& hiveConfig);
 
   HiveDataSink(
       RowTypePtr inputType,
       std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
       const ConnectorQueryCtx* connectorQueryCtx,
       CommitStrategy commitStrategy,
-      const std::shared_ptr<const HiveConfig>& hiveConfig,
+      const std::shared_ptr<const common::HiveConfig>& hiveConfig,
       uint32_t bucketCount,
       std::unique_ptr<core::PartitionFunction> bucketFunction,
       const std::vector<column_index_t>& dataChannels);
@@ -678,7 +678,7 @@ class HiveDataSink : public DataSink {
   const std::shared_ptr<const HiveInsertTableHandle> insertTableHandle_;
   const ConnectorQueryCtx* const connectorQueryCtx_;
   const CommitStrategy commitStrategy_;
-  const std::shared_ptr<const HiveConfig> hiveConfig_;
+  const std::shared_ptr<const common::HiveConfig> hiveConfig_;
   const HiveWriterParameters::UpdateMode updateMode_;
   const uint32_t maxOpenWriters_;
   const std::vector<column_index_t> partitionChannels_;
@@ -688,7 +688,7 @@ class HiveDataSink : public DataSink {
   const int32_t bucketCount_{0};
   const std::unique_ptr<core::PartitionFunction> bucketFunction_;
   const std::shared_ptr<dwio::common::WriterFactory> writerFactory_;
-  const common::SpillConfig* const spillConfig_;
+  const velox::common::SpillConfig* const spillConfig_;
   const uint64_t sortWriterFinishTimeSliceLimitMs_{0};
 
   std::vector<column_index_t> sortColumnIndices_;
@@ -730,25 +730,25 @@ FOLLY_ALWAYS_INLINE std::ostream& operator<<(
   os << HiveDataSink::stateString(state);
   return os;
 }
-} // namespace facebook::velox::connector::hive
+} // namespace facebook::velox::connector::lakehouse::common
 
 template <>
-struct fmt::formatter<facebook::velox::connector::hive::HiveDataSink::State>
+struct fmt::formatter<facebook::velox::connector::lakehouse::common::HiveDataSink::State>
     : formatter<std::string> {
   auto format(
-      facebook::velox::connector::hive::HiveDataSink::State s,
+      facebook::velox::connector::lakehouse::common::HiveDataSink::State s,
       format_context& ctx) const {
     return formatter<std::string>::format(
-        facebook::velox::connector::hive::HiveDataSink::stateString(s), ctx);
+        facebook::velox::connector::lakehouse::common::HiveDataSink::stateString(s), ctx);
   }
 };
 
 template <>
 struct fmt::formatter<
-    facebook::velox::connector::hive::LocationHandle::TableType>
+    facebook::velox::connector::lakehouse::common::LocationHandle::TableType>
     : formatter<int> {
   auto format(
-      facebook::velox::connector::hive::LocationHandle::TableType s,
+      facebook::velox::connector::lakehouse::common::LocationHandle::TableType s,
       format_context& ctx) const {
     return formatter<int>::format(static_cast<int>(s), ctx);
   }

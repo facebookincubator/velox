@@ -18,8 +18,8 @@
 
 #include <gtest/gtest.h>
 
-#include "velox/connectors/hive/iceberg/IcebergDataSink.h"
-#include "velox/connectors/hive/iceberg/IcebergSplit.h"
+#include "velox/connectors/lakehouse/iceberg/IcebergDataSink.h"
+#include "velox/connectors/lakehouse/iceberg/IcebergSplit.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
@@ -28,7 +28,7 @@
 #include "velox/dwio/parquet/reader/ParquetReader.h"
 #endif
 
-namespace facebook::velox::connector::hive::iceberg::test {
+namespace facebook::velox::connector::lakehouse::iceberg::test {
 
 class IcebergTestBase : public exec::test::HiveConnectorTestBase {
  protected:
@@ -78,11 +78,11 @@ class IcebergTestBase : public exec::test::HiveConnectorTestBase {
   std::shared_ptr<memory::MemoryPool> opPool_;
   std::shared_ptr<memory::MemoryPool> connectorPool_;
   std::shared_ptr<config::ConfigBase> connectorSessionProperties_;
-  std::shared_ptr<HiveConfig> connectorConfig_;
+  std::shared_ptr<common::HiveConfig> connectorConfig_;
   std::unique_ptr<ConnectorQueryCtx> connectorQueryCtx_;
   VectorFuzzer::Options fuzzerOptions_;
   std::unique_ptr<VectorFuzzer> fuzzer_;
   std::unique_ptr<velox::test::VectorMaker> vectorMaker_;
 };
 
-} // namespace facebook::velox::connector::hive::iceberg::test
+} // namespace facebook::velox::connector::lakehouse::iceberg::test

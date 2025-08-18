@@ -13,15 +13,15 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/connectors/hive/iceberg/FilterUtil.h"
+#include "velox/connectors/lakehouse/iceberg/FilterUtil.h"
 
-namespace facebook::velox::connector::hive::iceberg {
+namespace facebook::velox::connector::lakehouse::iceberg {
 
 using namespace facebook::velox::exec;
 using namespace facebook::velox::core;
 
 template <typename T>
-std::unique_ptr<common::Filter> createNegatedBigintValuesFilter(
+std::unique_ptr<velox::common::Filter> createNegatedBigintValuesFilter(
     const VectorPtr& valuesVector,
     vector_size_t offset,
     vector_size_t size) {
@@ -34,12 +34,12 @@ std::unique_ptr<common::Filter> createNegatedBigintValuesFilter(
   return common::createNegatedBigintValues(values, !hasNull);
 }
 
-std::unique_ptr<common::Filter> createNotInFilter(
+std::unique_ptr<velox::common::Filter> createNotInFilter(
     const VectorPtr& elements,
     vector_size_t offset,
     vector_size_t size,
     TypeKind type) {
-  std::unique_ptr<common::Filter> filter;
+  std::unique_ptr<velox::common::Filter> filter;
   switch (type) {
     case TypeKind::HUGEINT:
       // TODO: createNegatedHugeintValuesFilter is not implemented yet.
@@ -84,4 +84,4 @@ std::unique_ptr<common::Filter> createNotInFilter(
   }
   return filter;
 }
-} // namespace facebook::velox::connector::hive::iceberg
+} // namespace facebook::velox::connector::lakehouse::iceberg

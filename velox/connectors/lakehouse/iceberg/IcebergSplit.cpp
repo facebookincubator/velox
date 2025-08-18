@@ -14,11 +14,11 @@
  * limitations under the License.
  */
 
-#include "velox/connectors/hive/iceberg/IcebergSplit.h"
+#include "velox/connectors/lakehouse/iceberg/IcebergSplit.h"
 
-#include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
+#include "velox/connectors/lakehouse/iceberg/IcebergDeleteFile.h"
 
-namespace facebook::velox::connector::hive::iceberg {
+namespace facebook::velox::connector::lakehouse::iceberg {
 
 HiveIcebergSplit::HiveIcebergSplit(
     const std::string& connectorId,
@@ -33,8 +33,8 @@ HiveIcebergSplit::HiveIcebergSplit(
     const std::shared_ptr<std::string>& extraFileInfo,
     bool cacheable,
     const std::unordered_map<std::string, std::string>& infoColumns,
-    std::optional<FileProperties> properties)
-    : HiveConnectorSplit(
+    std::optional<common::FileProperties> properties)
+    : common::HiveConnectorSplit(
           connectorId,
           filePath,
           fileFormat,
@@ -69,8 +69,8 @@ HiveIcebergSplit::HiveIcebergSplit(
     bool cacheable,
     std::vector<IcebergDeleteFile> deletes,
     const std::unordered_map<std::string, std::string>& infoColumns,
-    std::optional<FileProperties> properties)
-    : HiveConnectorSplit(
+    std::optional<common::FileProperties> properties)
+    : common::HiveConnectorSplit(
           connectorId,
           filePath,
           fileFormat,
@@ -88,4 +88,4 @@ HiveIcebergSplit::HiveIcebergSplit(
           std::nullopt,
           std::nullopt),
       deleteFiles(std::move(deletes)) {}
-} // namespace facebook::velox::connector::hive::iceberg
+} // namespace facebook::velox::connector::lakehouse::iceberg

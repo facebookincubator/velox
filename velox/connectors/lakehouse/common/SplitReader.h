@@ -18,8 +18,8 @@
 
 #include "velox/common/base/RandomUtil.h"
 #include "velox/common/file/FileSystems.h"
-#include "velox/connectors/hive/FileHandle.h"
-#include "velox/connectors/hive/HivePartitionFunction.h"
+#include "velox/connectors/lakehouse/common/FileHandle.h"
+#include "velox/connectors/lakehouse/common/HivePartitionFunction.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/Reader.h"
 
@@ -45,7 +45,7 @@ namespace facebook::velox::memory {
 class MemoryPool;
 }
 
-namespace facebook::velox::connector::hive {
+namespace facebook::velox::connector::lakehouse::common {
 
 struct HiveConnectorSplit;
 class HiveTableHandle;
@@ -55,19 +55,19 @@ class HiveConfig;
 class SplitReader {
  public:
   static std::unique_ptr<SplitReader> create(
-      const std::shared_ptr<hive::HiveConnectorSplit>& hiveSplit,
+      const std::shared_ptr<HiveConnectorSplit>& hiveSplit,
       const std::shared_ptr<const HiveTableHandle>& hiveTableHandle,
       const std::unordered_map<
           std::string,
           std::shared_ptr<const HiveColumnHandle>>* partitionKeys,
       const ConnectorQueryCtx* connectorQueryCtx,
-      const std::shared_ptr<const HiveConfig>& hiveConfig,
+      const std::shared_ptr<const common::HiveConfig>& hiveConfig,
       const RowTypePtr& readerOutputType,
       const std::shared_ptr<io::IoStatistics>& ioStats,
       const std::shared_ptr<filesystems::File::IoStats>& fsStats,
       FileHandleFactory* fileHandleFactory,
       folly::Executor* executor,
-      const std::shared_ptr<common::ScanSpec>& scanSpec,
+      const std::shared_ptr<velox::common::ScanSpec>& scanSpec,
       core::ExpressionEvaluator* expressionEvaluator,
       std::atomic<uint64_t>& totalRemainingFilterTime);
 
@@ -81,7 +81,7 @@ class SplitReader {
   /// files or log files, and add column adapatations for metadata columns. It
   /// would be called only once per incoming split
   virtual void prepareSplit(
-      std::shared_ptr<common::MetadataFilter> metadataFilter,
+      std::shared_ptr<velox::common::MetadataFilter> metadataFilter,
       dwio::common::RuntimeStatistics& runtimeStats);
 
   virtual uint64_t next(uint64_t size, VectorPtr& output);
@@ -110,19 +110,19 @@ class SplitReader {
 
  protected:
   SplitReader(
-      const std::shared_ptr<const hive::HiveConnectorSplit>& hiveSplit,
+      const std::shared_ptr<const HiveConnectorSplit>& hiveSplit,
       const std::shared_ptr<const HiveTableHandle>& hiveTableHandle,
       const std::unordered_map<
           std::string,
           std::shared_ptr<const HiveColumnHandle>>* partitionKeys,
       const ConnectorQueryCtx* connectorQueryCtx,
-      const std::shared_ptr<const HiveConfig>& hiveConfig,
+      const std::shared_ptr<const common::HiveConfig>& hiveConfig,
       const RowTypePtr& readerOutputType,
       const std::shared_ptr<io::IoStatistics>& ioStats,
       const std::shared_ptr<filesystems::File::IoStats>& fsStats,
       FileHandleFactory* fileHandleFactory,
       folly::Executor* executor,
-      const std::shared_ptr<common::ScanSpec>& scanSpec);
+      const std::shared_ptr<velox::common::ScanSpec>& scanSpec);
 
   /// Create the dwio::common::Reader object baseReader_, which will be used to
   /// read the data file's metadata and schema
@@ -148,7 +148,7 @@ class SplitReader {
   /// Create the dwio::common::RowReader object baseRowReader_, which owns the
   /// ColumnReaders that will be used to read the data
   void createRowReader(
-      std::shared_ptr<common::MetadataFilter> metadataFilter,
+      std::shared_ptr<velox::common::MetadataFilter> metadataFilter,
       RowTypePtr rowType);
 
   const folly::F14FastSet<column_index_t>& bucketChannels() const {
@@ -170,7 +170,7 @@ class SplitReader {
       const std::shared_ptr<const velox::RowType>& tableSchema) const;
 
   void setPartitionValue(
-      common::ScanSpec* spec,
+      velox::common::ScanSpec* spec,
       const std::string& partitionKey,
       const std::optional<std::string>& value) const;
 
@@ -181,7 +181,7 @@ class SplitReader {
       std::string,
       std::shared_ptr<const HiveColumnHandle>>* const partitionKeys_;
   const ConnectorQueryCtx* connectorQueryCtx_;
-  const std::shared_ptr<const HiveConfig> hiveConfig_;
+  const std::shared_ptr<const common::HiveConfig> hiveConfig_;
 
   RowTypePtr readerOutputType_;
   const std::shared_ptr<io::IoStatistics> ioStats_;
@@ -190,7 +190,7 @@ class SplitReader {
   folly::Executor* const executor_;
   memory::MemoryPool* const pool_;
 
-  std::shared_ptr<common::ScanSpec> scanSpec_;
+  std::shared_ptr<velox::common::ScanSpec> scanSpec_;
   std::unique_ptr<dwio::common::Reader> baseReader_;
   std::unique_ptr<dwio::common::RowReader> baseRowReader_;
   dwio::common::ReaderOptions baseReaderOpts_;
@@ -203,4 +203,4 @@ class SplitReader {
   std::vector<uint32_t> partitions_;
 };
 
-} // namespace facebook::velox::connector::hive
+} // namespace facebook::velox::connector::lakehouse::common

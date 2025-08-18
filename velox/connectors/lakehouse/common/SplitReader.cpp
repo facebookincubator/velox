@@ -14,17 +14,17 @@
  * limitations under the License.
  */
 
-#include "velox/connectors/hive/SplitReader.h"
+#include "velox/connectors/lakehouse/common/SplitReader.h"
 
 #include "velox/common/caching/CacheTTLController.h"
-#include "velox/connectors/hive/HiveConfig.h"
-#include "velox/connectors/hive/HiveConnectorSplit.h"
-#include "velox/connectors/hive/HiveConnectorUtil.h"
-#include "velox/connectors/hive/TableHandle.h"
-#include "velox/connectors/hive/iceberg/IcebergSplitReader.h"
+#include "velox/connectors/lakehouse/common/HiveConfig.h"
+#include "velox/connectors/lakehouse/common/HiveConnectorSplit.h"
+#include "velox/connectors/lakehouse/common/HiveConnectorUtil.h"
+#include "velox/connectors/lakehouse/common/TableHandle.h"
+#include "velox/connectors/lakehouse/iceberg/IcebergSplitReader.h"
 #include "velox/dwio/common/ReaderFactory.h"
 
-namespace facebook::velox::connector::hive {
+namespace facebook::velox::connector::lakehouse::common {
 namespace {
 
 template <TypeKind kind>
@@ -74,17 +74,17 @@ VectorPtr newConstantFromString(
 } // namespace
 
 std::unique_ptr<SplitReader> SplitReader::create(
-    const std::shared_ptr<hive::HiveConnectorSplit>& hiveSplit,
+    const std::shared_ptr<HiveConnectorSplit>& hiveSplit,
     const HiveTableHandlePtr& hiveTableHandle,
     const std::unordered_map<std::string, HiveColumnHandlePtr>* partitionKeys,
     const ConnectorQueryCtx* connectorQueryCtx,
-    const std::shared_ptr<const HiveConfig>& hiveConfig,
+    const std::shared_ptr<const common::HiveConfig>& hiveConfig,
     const RowTypePtr& readerOutputType,
     const std::shared_ptr<io::IoStatistics>& ioStats,
     const std::shared_ptr<filesystems::File::IoStats>& fsStats,
     FileHandleFactory* fileHandleFactory,
     folly::Executor* executor,
-    const std::shared_ptr<common::ScanSpec>& scanSpec,
+    const std::shared_ptr<velox::common::ScanSpec>& scanSpec,
     core::ExpressionEvaluator* expressionEvaluator,
     std::atomic<uint64_t>& totalRemainingFilterTime) {
   //  Create the SplitReader based on hiveSplit->customSplitInfo["table_format"]
@@ -121,17 +121,17 @@ std::unique_ptr<SplitReader> SplitReader::create(
 }
 
 SplitReader::SplitReader(
-    const std::shared_ptr<const hive::HiveConnectorSplit>& hiveSplit,
+    const std::shared_ptr<const HiveConnectorSplit>& hiveSplit,
     const HiveTableHandlePtr& hiveTableHandle,
     const std::unordered_map<std::string, HiveColumnHandlePtr>* partitionKeys,
     const ConnectorQueryCtx* connectorQueryCtx,
-    const std::shared_ptr<const HiveConfig>& hiveConfig,
+    const std::shared_ptr<const common::HiveConfig>& hiveConfig,
     const RowTypePtr& readerOutputType,
     const std::shared_ptr<io::IoStatistics>& ioStats,
     const std::shared_ptr<filesystems::File::IoStats>& fsStats,
     FileHandleFactory* fileHandleFactory,
     folly::Executor* executor,
-    const std::shared_ptr<common::ScanSpec>& scanSpec)
+    const std::shared_ptr<velox::common::ScanSpec>& scanSpec)
     : hiveSplit_(hiveSplit),
       hiveTableHandle_(hiveTableHandle),
       partitionKeys_(partitionKeys),
@@ -149,7 +149,7 @@ SplitReader::SplitReader(
 
 void SplitReader::configureReaderOptions(
     std::shared_ptr<velox::random::RandomSkipTracker> randomSkip) {
-  hive::configureReaderOptions(
+  lakehouse::common::configureReaderOptions(
       hiveConfig_,
       connectorQueryCtx_,
       hiveTableHandle_,
@@ -161,7 +161,7 @@ void SplitReader::configureReaderOptions(
 }
 
 void SplitReader::prepareSplit(
-    std::shared_ptr<common::MetadataFilter> metadataFilter,
+    std::shared_ptr<velox::common::MetadataFilter> metadataFilter,
     dwio::common::RuntimeStatistics& runtimeStats) {
   createReader();
   if (emptySplit_) {
@@ -371,7 +371,7 @@ bool SplitReader::checkIfSplitIsEmpty(
 }
 
 void SplitReader::createRowReader(
-    std::shared_ptr<common::MetadataFilter> metadataFilter,
+    std::shared_ptr<velox::common::MetadataFilter> metadataFilter,
     RowTypePtr rowType) {
   VELOX_CHECK_NULL(baseRowReader_);
   configureRowReaderOptions(
@@ -416,7 +416,7 @@ std::vector<TypePtr> SplitReader::adaptColumns(
               connectorQueryCtx_->sessionProperties()));
       childSpec->setConstantValue(constant);
     } else if (
-        childSpec->columnType() == common::ScanSpec::ColumnType::kRegular) {
+        childSpec->columnType() == velox::common::ScanSpec::ColumnType::kRegular) {
       auto fileTypeIdx = fileType->getChildIdxIfExists(fieldName);
       if (!fileTypeIdx.has_value()) {
         // Column is missing. Most likely due to schema evolution.
@@ -457,7 +457,7 @@ std::vector<TypePtr> SplitReader::adaptColumns(
 }
 
 void SplitReader::setPartitionValue(
-    common::ScanSpec* spec,
+    velox::common::ScanSpec* spec,
     const std::string& partitionKey,
     const std::optional<std::string>& value) const {
   auto it = partitionKeys_->find(partitionKey);
@@ -480,4 +480,4 @@ void SplitReader::setPartitionValue(
   spec->setConstantValue(constant);
 }
 
-} // namespace facebook::velox::connector::hive
+} // namespace facebook::velox::connector::lakehouse::common

@@ -18,7 +18,7 @@
 #include "velox/core/PlanNode.h"
 #include "velox/vector/DecodedVector.h"
 
-namespace facebook::velox::connector::hive {
+namespace facebook::velox::connector::lakehouse::common {
 
 class HivePartitionFunction : public core::PartitionFunction {
  public:
@@ -106,4 +106,4 @@ class HiveIdentityPartitionFunction : public core::PartitionFunction {
       std::make_unique<DecodedVector>();
 };
 
-} // namespace facebook::velox::connector::hive
+} // namespace facebook::velox::connector::lakehouse::common

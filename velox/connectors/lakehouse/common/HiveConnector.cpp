@@ -14,20 +14,20 @@
  * limitations under the License.
  */
 
-#include "velox/connectors/hive/HiveConnector.h"
+#include "velox/connectors/lakehouse/common/HiveConnector.h"
 
-#include "velox/connectors/hive/HiveConfig.h"
-#include "velox/connectors/hive/HiveDataSink.h"
-#include "velox/connectors/hive/HiveDataSource.h"
-#include "velox/connectors/hive/HivePartitionFunction.h"
-#include "velox/connectors/hive/iceberg/IcebergDataSink.h"
+#include "velox/connectors/lakehouse/common/HiveConfig.h"
+#include "velox/connectors/lakehouse/common/HiveDataSink.h"
+#include "velox/connectors/lakehouse/common/HiveDataSource.h"
+#include "velox/connectors/lakehouse/common/HivePartitionFunction.h"
+#include "velox/connectors/lakehouse/iceberg/IcebergDataSink.h"
 
 #include <boost/lexical_cast.hpp>
 #include <memory>
 
 using namespace facebook::velox::exec;
 
-namespace facebook::velox::connector::hive {
+namespace facebook::velox::connector::lakehouse::common {
 
 namespace {
 std::vector<std::unique_ptr<HiveConnectorMetadataFactory>>&
@@ -134,7 +134,7 @@ std::unique_ptr<core::PartitionFunction> HivePartitionFunctionSpec::create(
           std::mt19937{0});
     }
   }
-  return std::make_unique<velox::connector::hive::HivePartitionFunction>(
+  return std::make_unique<velox::connector::lakehouse::common::HivePartitionFunction>(
       numBuckets_,
       bucketToPartition_.empty() ? std::move(bucketToPartitions)
                                  : bucketToPartition_,
@@ -211,4 +211,4 @@ bool registerHiveConnectorMetadataFactory(
   return true;
 }
 
-} // namespace facebook::velox::connector::hive
+} // namespace facebook::velox::connector::lakehouse::common

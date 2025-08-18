@@ -11,26 +11,26 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-add_library(velox_dwio_iceberg_reader_benchmark_lib
+add_library(velox_lakehouse_iceberg_reader_benchmark_lib
             IcebergSplitReaderBenchmark.cpp)
 target_link_libraries(
-  velox_dwio_iceberg_reader_benchmark_lib
+  velox_lakehouse_iceberg_reader_benchmark_lib
   velox_exec_test_lib
   velox_exec
-  velox_hive_connector
+  velox_connector_lakehouse_common
   Folly::folly
   Folly::follybenchmark
   ${TEST_LINK_LIBS})
 
 if(VELOX_ENABLE_BENCHMARKS)
-  add_executable(velox_dwio_iceberg_reader_benchmark
+  add_executable(velox_lakehouse_iceberg_reader_benchmark
                  IcebergSplitReaderBenchmarkMain.cpp)
   target_link_libraries(
-    velox_dwio_iceberg_reader_benchmark
-    velox_dwio_iceberg_reader_benchmark_lib
+    velox_lakehouse_iceberg_reader_benchmark
+    velox_lakehouse_iceberg_reader_benchmark_lib
     velox_exec_test_lib
     velox_exec
-    velox_hive_connector
+    velox_connector_lakehouse_common
     Folly::folly
     Folly::follybenchmark
     ${TEST_LINK_LIBS})
@@ -39,20 +39,20 @@ endif()
 if(NOT VELOX_DISABLE_GOOGLETEST)
 
   add_executable(
-    velox_hive_iceberg_test
+    velox_lakehouse_iceberg_test
     IcebergInsertTest.cpp
     IcebergReadTest.cpp
     IcebergSplitReaderBenchmarkTest.cpp
     IcebergTestBase.cpp
     Main.cpp)
-  add_test(velox_hive_iceberg_test velox_hive_iceberg_test)
+  add_test(velox_lakehouse_iceberg_test velox_lakehouse_iceberg_test)
 
   target_link_libraries(
-    velox_hive_iceberg_test
-    velox_dwio_iceberg_reader_benchmark_lib
-    velox_hive_connector
-    velox_hive_iceberg_splitreader
-    velox_hive_partition_function
+    velox_lakehouse_iceberg_test
+    velox_lakehouse_iceberg_reader_benchmark_lib
+    velox_connector_lakehouse_common
+    velox_lakehouse_iceberg_splitreader
+    velox_lakehouse_hive_partition_function
     velox_dwio_common_exception
     velox_dwio_common_test_utils
     velox_vector_test_lib
@@ -65,7 +65,7 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     GTest::gtest_main)
 
   if(VELOX_ENABLE_PARQUET)
-    target_link_libraries(velox_hive_iceberg_test velox_dwio_parquet_writer
+    target_link_libraries(velox_lakehouse_iceberg_test velox_dwio_parquet_writer
                           velox_dwio_parquet_reader)
   endif()
 

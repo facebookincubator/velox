@@ -14,11 +14,11 @@
  * limitations under the License.
  */
 
-#include "velox/connectors/hive/iceberg/IcebergDataSink.h"
+#include "velox/connectors/lakehouse/iceberg/IcebergDataSink.h"
 #include "velox/common/base/Fs.h"
-#include "velox/connectors/hive/HiveConnectorUtil.h"
+#include "velox/connectors/lakehouse/common/HiveConnectorUtil.h"
 
-namespace facebook::velox::connector::hive::iceberg {
+namespace facebook::velox::connector::lakehouse::iceberg {
 
 namespace {
 
@@ -54,13 +54,13 @@ folly::dynamic extractPartitionValue<TypeKind::VARBINARY>(
   VELOX_NYI("Partition on varbinary column is not supported yet.");
 }
 
-class IcebergFileNameGenerator : public FileNameGenerator {
+class IcebergFileNameGenerator : public common::FileNameGenerator {
  public:
   IcebergFileNameGenerator() {}
 
   std::pair<std::string, std::string> gen(
       std::optional<uint32_t> bucketId,
-      const std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
+      const std::shared_ptr<const common::HiveInsertTableHandle> insertTableHandle,
       const ConnectorQueryCtx& connectorQueryCtx,
       bool commitRequired) const override;
 
@@ -71,12 +71,12 @@ class IcebergFileNameGenerator : public FileNameGenerator {
 
 std::pair<std::string, std::string> IcebergFileNameGenerator::gen(
     std::optional<uint32_t> bucketId,
-    const std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
+    const std::shared_ptr<const common::HiveInsertTableHandle> insertTableHandle,
     const ConnectorQueryCtx& connectorQueryCtx,
     bool commitRequired) const {
   auto targetFileName = insertTableHandle->locationHandle()->targetFileName();
   if (targetFileName.empty()) {
-    targetFileName = fmt::format("{}", makeUuid());
+    targetFileName = fmt::format("{}", common::makeUuid());
   }
 
   return {
@@ -95,14 +95,14 @@ std::string IcebergFileNameGenerator::toString() const {
 } // namespace
 
 IcebergInsertTableHandle::IcebergInsertTableHandle(
-    std::vector<std::shared_ptr<const HiveColumnHandle>> inputColumns,
-    std::shared_ptr<const LocationHandle> locationHandle,
+    std::vector<std::shared_ptr<const common::HiveColumnHandle>> inputColumns,
+    std::shared_ptr<const common::LocationHandle> locationHandle,
     std::shared_ptr<const IcebergPartitionSpec> partitionSpec,
     dwio::common::FileFormat tableStorageFormat,
-    std::shared_ptr<HiveBucketProperty> bucketProperty,
-    std::optional<common::CompressionKind> compressionKind,
+    std::shared_ptr<common::HiveBucketProperty> bucketProperty,
+    std::optional<velox::common::CompressionKind> compressionKind,
     const std::unordered_map<std::string, std::string>& serdeParameters)
-    : HiveInsertTableHandle(
+    : common::HiveInsertTableHandle(
           std::move(inputColumns),
           std::move(locationHandle),
           tableStorageFormat,
@@ -119,7 +119,7 @@ IcebergDataSink::IcebergDataSink(
     std::shared_ptr<const IcebergInsertTableHandle> insertTableHandle,
     const facebook::velox::connector::ConnectorQueryCtx* connectorQueryCtx,
     facebook::velox::connector::CommitStrategy commitStrategy,
-    const std::shared_ptr<const HiveConfig>& hiveConfig)
+    const std::shared_ptr<const common::HiveConfig>& hiveConfig)
     : IcebergDataSink(
           std::move(inputType),
           insertTableHandle,
@@ -135,12 +135,12 @@ IcebergDataSink::IcebergDataSink(
 
 IcebergDataSink::IcebergDataSink(
     RowTypePtr inputType,
-    std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
+    std::shared_ptr<const common::HiveInsertTableHandle> insertTableHandle,
     const ConnectorQueryCtx* connectorQueryCtx,
     CommitStrategy commitStrategy,
-    const std::shared_ptr<const HiveConfig>& hiveConfig,
+    const std::shared_ptr<const common::HiveConfig>& hiveConfig,
     const std::vector<column_index_t>& dataChannels)
-    : HiveDataSink(
+    : common::HiveDataSink(
           inputType,
           insertTableHandle,
           connectorQueryCtx,
@@ -231,18 +231,18 @@ void IcebergDataSink::splitInputRowsAndEnsureWriters(RowVectorPtr input) {
   }
 }
 
-HiveWriterId IcebergDataSink::getIcebergWriterId(size_t row) const {
+common::HiveWriterId IcebergDataSink::getIcebergWriterId(size_t row) const {
   std::optional<uint32_t> partitionId;
   if (isPartitioned()) {
     VELOX_CHECK_LT(partitionIds_[row], std::numeric_limits<uint32_t>::max());
     partitionId = static_cast<uint32_t>(partitionIds_[row]);
   }
 
-  return HiveWriterId{partitionId, std::nullopt};
+  return common::HiveWriterId{partitionId, std::nullopt};
 }
 
 std::optional<std::string> IcebergDataSink::getPartitionName(
-    const HiveWriterId& id) const {
+    const common::HiveWriterId& id) const {
   std::optional<std::string> partitionName;
   if (isPartitioned()) {
     partitionName =
@@ -251,4 +251,4 @@ std::optional<std::string> IcebergDataSink::getPartitionName(
   return partitionName;
 }
 
-} // namespace facebook::velox::connector::hive::iceberg
+} // namespace facebook::velox::connector::lakehouse::iceberg

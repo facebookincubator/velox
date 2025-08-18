@@ -14,11 +14,11 @@
  * limitations under the License.
  */
 
-#include "velox/connectors/hive/iceberg/EqualityDeleteFileReader.h"
+#include "velox/connectors/lakehouse/iceberg/EqualityDeleteFileReader.h"
 
-#include "velox/connectors/hive/HiveConnectorUtil.h"
-#include "velox/connectors/hive/iceberg/FilterUtil.h"
-#include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
+#include "velox/connectors/lakehouse/common/HiveConnectorUtil.h"
+#include "velox/connectors/lakehouse/iceberg/FilterUtil.h"
+#include "velox/connectors/lakehouse/iceberg/IcebergDeleteFile.h"
 #include "velox/core/Expressions.h"
 #include "velox/dwio/common/ReaderFactory.h"
 
@@ -26,17 +26,17 @@ using namespace facebook::velox::common;
 using namespace facebook::velox::core;
 using namespace facebook::velox::exec;
 
-namespace facebook::velox::connector::hive::iceberg {
+namespace facebook::velox::connector::lakehouse::iceberg {
 
 static constexpr const int kMaxBatchRows = 10'000;
 
 EqualityDeleteFileReader::EqualityDeleteFileReader(
     const IcebergDeleteFile& deleteFile,
     std::shared_ptr<const dwio::common::TypeWithId> baseFileSchema,
-    FileHandleFactory* fileHandleFactory,
+    common::FileHandleFactory* fileHandleFactory,
     folly::Executor* executor,
     const ConnectorQueryCtx* connectorQueryCtx,
-    const std::shared_ptr<const HiveConfig>& hiveConfig,
+    const std::shared_ptr<const common::HiveConfig>& hiveConfig,
     const std::shared_ptr<io::IoStatistics> ioStats,
     const std::shared_ptr<filesystems::File::IoStats>& fsStats,
     const std::string& connectorId)
@@ -57,7 +57,7 @@ EqualityDeleteFileReader::EqualityDeleteFileReader(
   // columns a, then a!=1 can be pushed as a filter when reading this delete
   // file.
 
-  deleteSplit_ = std::make_shared<HiveConnectorSplit>(
+  deleteSplit_ = std::make_shared<common::HiveConnectorSplit>(
       connectorId,
       deleteFile_.filePath,
       deleteFile_.fileFormat,
@@ -75,11 +75,11 @@ EqualityDeleteFileReader::EqualityDeleteFileReader(
       {},
       deleteReaderOpts);
 
-  const FileHandleKey fileHandleKey{
+  const common::FileHandleKey fileHandleKey{
       .filename = deleteFile_.filePath,
       .tokenProvider = connectorQueryCtx->fsTokenProvider()};
   auto deleteFileHandleCachePtr = fileHandleFactory_->generate(fileHandleKey);
-  auto deleteFileInput = createBufferedInput(
+  auto deleteFileInput = common::createBufferedInput(
       *deleteFileHandleCachePtr,
       deleteReaderOpts,
       connectorQueryCtx,
@@ -93,7 +93,7 @@ EqualityDeleteFileReader::EqualityDeleteFileReader(
 
   // For now, we assume only the delete columns are written in the delete file
   deleteFileRowType_ = deleteReader->rowType();
-  auto scanSpec = std::make_shared<common::ScanSpec>("<root>");
+  auto scanSpec = std::make_shared<velox::common::ScanSpec>("<root>");
   scanSpec->addAllChildFields(deleteFileRowType_->asRow());
 
   dwio::common::RowReaderOptions deleteRowReaderOpts;
@@ -164,11 +164,11 @@ void EqualityDeleteFileReader::buildDomainFilter(
   }
 
   if (filter->kind() != FilterKind::kAlwaysTrue) {
-    if (subfieldFilters.find(common::Subfield(name)) != subfieldFilters.end()) {
-      subfieldFilters[common::Subfield(name)] =
-          subfieldFilters[common::Subfield(name)]->mergeWith(filter.get());
+    if (subfieldFilters.find(velox::common::Subfield(name)) != subfieldFilters.end()) {
+      subfieldFilters[velox::common::Subfield(name)] =
+          subfieldFilters[velox::common::Subfield(name)]->mergeWith(filter.get());
     } else {
-      subfieldFilters[common::Subfield(name)] = std::move(filter);
+      subfieldFilters[velox::common::Subfield(name)] = std::move(filter);
     }
   }
 }
@@ -221,4 +221,4 @@ void EqualityDeleteFileReader::buildFilterFunctions(
   }
 }
 
-} // namespace facebook::velox::connector::hive::iceberg
+} // namespace facebook::velox::connector::lakehouse::iceberg

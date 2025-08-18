@@ -17,28 +17,28 @@
 #pragma once
 
 #include "velox/connectors/Connector.h"
-#include "velox/connectors/hive/FileHandle.h"
-#include "velox/connectors/hive/HiveConfig.h"
-#include "velox/connectors/hive/HiveConnectorSplit.h"
+#include "velox/connectors/lakehouse/common/FileHandle.h"
+#include "velox/connectors/lakehouse/common/HiveConfig.h"
+#include "velox/connectors/lakehouse/common/HiveConnectorSplit.h"
 #include "velox/dwio/common/Reader.h"
 #include "velox/expression/Expr.h"
 
-namespace facebook::velox::connector::hive::iceberg {
+namespace facebook::velox::connector::lakehouse::iceberg {
 
 class IcebergDeleteFile;
 
 using SubfieldFilters =
-    std::unordered_map<common::Subfield, std::unique_ptr<common::Filter>>;
+    std::unordered_map<velox::common::Subfield, std::unique_ptr<velox::common::Filter>>;
 
 class EqualityDeleteFileReader {
  public:
   EqualityDeleteFileReader(
       const IcebergDeleteFile& deleteFile,
       std::shared_ptr<const dwio::common::TypeWithId> baseFileSchema,
-      FileHandleFactory* fileHandleFactory,
+      common::FileHandleFactory* fileHandleFactory,
       folly::Executor* executor,
       const ConnectorQueryCtx* connectorQueryCtx,
-      const std::shared_ptr<const HiveConfig>& hiveConfig,
+      const std::shared_ptr<const common::HiveConfig>& hiveConfig,
       const std::shared_ptr<io::IoStatistics> ioStats,
       const std::shared_ptr<filesystems::File::IoStats>& fsStats,
       const std::string& connectorId);
@@ -70,12 +70,12 @@ class EqualityDeleteFileReader {
 
   // The cache factory of the file handles, which can be used to return the file
   // handle of the delete file.
-  FileHandleFactory* const fileHandleFactory_;
+  common::FileHandleFactory* const fileHandleFactory_;
   memory::MemoryPool* const pool_;
 
   // The split of the equality delete file to be processed by the delete file
   // RowReader.
-  std::shared_ptr<const HiveConnectorSplit> deleteSplit_;
+  std::shared_ptr<const common::HiveConnectorSplit> deleteSplit_;
   // The RowType of the equality delete file
   RowTypePtr deleteFileRowType_;
   // The RowReader to read the equality delete file
@@ -84,4 +84,4 @@ class EqualityDeleteFileReader {
   VectorPtr deleteValuesOutput_;
 };
 
-} // namespace facebook::velox::connector::hive::iceberg
+} // namespace facebook::velox::connector::lakehouse::iceberg

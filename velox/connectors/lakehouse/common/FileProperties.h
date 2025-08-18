@@ -27,7 +27,7 @@
 
 #include <cstdint>
 
-namespace facebook::velox {
+namespace facebook::velox::connector::lakehouse::common {
 
 struct FileProperties {
   std::optional<int64_t> fileSize;
@@ -36,4 +36,4 @@ struct FileProperties {
   std::shared_ptr<std::string> extraFileInfo{nullptr};
 };
 
-} // namespace facebook::velox
+} // namespace facebook::velox::connector::lakehouse::common

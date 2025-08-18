@@ -29,12 +29,12 @@
  * limitations under the License.
  */
 
-#include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
+#include "velox/connectors/lakehouse/iceberg/IcebergDeleteFile.h"
 
-namespace facebook::velox::connector::hive::iceberg {
+namespace facebook::velox::connector::lakehouse::iceberg {
 
 fmt::underlying_t<FileContent> format_as(FileContent f) {
   return fmt::underlying(f);
 }
 
-} // namespace facebook::velox::connector::hive::iceberg
+} // namespace facebook::velox::connector::lakehouse::iceberg

@@ -16,10 +16,10 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
-#include "velox/connectors/hive/HiveConnectorSplit.h"
-#include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
-#include "velox/connectors/hive/iceberg/IcebergMetadataColumns.h"
-#include "velox/connectors/hive/iceberg/IcebergSplit.h"
+#include "velox/connectors/lakehouse/common/HiveConnectorSplit.h"
+#include "velox/connectors/lakehouse/iceberg/IcebergDeleteFile.h"
+#include "velox/connectors/lakehouse/iceberg/IcebergMetadataColumns.h"
+#include "velox/connectors/lakehouse/iceberg/IcebergSplit.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -31,7 +31,7 @@ using namespace facebook::velox::exec;
 using namespace facebook::velox::dwio::common;
 using namespace facebook::velox::test;
 
-namespace facebook::velox::connector::hive::iceberg {
+namespace facebook::velox::connector::lakehouse::iceberg::test {
 
 class HiveIcebergTest : public HiveConnectorTestBase {
  public:
@@ -375,7 +375,7 @@ class HiveIcebergTest : public HiveConnectorTestBase {
     const uint64_t splitSize = std::floor((fileSize) / splitCount);
 
     for (int i = 0; i < splitCount; ++i) {
-      splits.emplace_back(std::make_shared<HiveIcebergSplit>(
+      splits.emplace_back(std::make_shared<iceberg::HiveIcebergSplit>(
           kHiveConnectorId,
           dataFilePath,
           fileFormat_,
@@ -991,21 +991,21 @@ TEST_F(HiveIcebergTest, testPartitionedRead) {
   connector::ColumnHandleMap assignments;
   assignments.insert(
       {"c0",
-       std::make_shared<HiveColumnHandle>(
+       std::make_shared<common::HiveColumnHandle>(
            "c0",
-           HiveColumnHandle::ColumnType::kRegular,
+           common::HiveColumnHandle::ColumnType::kRegular,
            rowType->childAt(0),
            rowType->childAt(0))});
 
-  std::vector<common::Subfield> requiredSubFields;
-  HiveColumnHandle::ColumnParseParameters columnParseParameters;
+  std::vector<velox::common::Subfield> requiredSubFields;
+  common::HiveColumnHandle::ColumnParseParameters columnParseParameters;
   columnParseParameters.partitionDateValueFormat =
-      HiveColumnHandle::ColumnParseParameters::kDaysSinceEpoch;
+      common::HiveColumnHandle::ColumnParseParameters::kDaysSinceEpoch;
   assignments.insert(
       {"ds",
-       std::make_shared<HiveColumnHandle>(
+       std::make_shared<common::HiveColumnHandle>(
            "ds",
-           HiveColumnHandle::ColumnType::kPartitionKey,
+           common::HiveColumnHandle::ColumnType::kPartitionKey,
            rowType->childAt(1),
            rowType->childAt(1),
            std::move(requiredSubFields),
@@ -1269,4 +1269,4 @@ TEST_F(HiveIcebergTest, TestSubFieldEqualityDelete) {
   assertEqualityDeletes(
       icebergSplits.back(), ROW({"c_bigint"}, {BIGINT()}), duckDbSql);
 }
-} // namespace facebook::velox::connector::hive::iceberg
+} // namespace facebook::velox::connector::lakehouse::iceberg::test

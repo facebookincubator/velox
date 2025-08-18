@@ -18,11 +18,11 @@
 #include <optional>
 #include <unordered_map>
 #include "velox/connectors/Connector.h"
-#include "velox/connectors/hive/FileProperties.h"
-#include "velox/connectors/hive/TableHandle.h"
+#include "velox/connectors/lakehouse/common/FileProperties.h"
+#include "velox/connectors/lakehouse/common/TableHandle.h"
 #include "velox/dwio/common/Options.h"
 
-namespace facebook::velox::connector::hive {
+namespace facebook::velox::connector::lakehouse::common {
 
 /// A bucket conversion that should happen on the split.  This happens when we
 /// increase the bucket count of a table, but the old partitions are still
@@ -213,8 +213,8 @@ class HiveConnectorSplitBuilder {
     return *this;
   }
 
-  std::shared_ptr<connector::hive::HiveConnectorSplit> build() const {
-    return std::make_shared<connector::hive::HiveConnectorSplit>(
+  std::shared_ptr<connector::lakehouse::common::HiveConnectorSplit> build() const {
+    return std::make_shared<connector::lakehouse::common::HiveConnectorSplit>(
         connectorId_,
         filePath_,
         fileFormat_,
@@ -252,4 +252,4 @@ class HiveConnectorSplitBuilder {
   std::optional<RowIdProperties> rowIdProperties_ = std::nullopt;
 };
 
-} // namespace facebook::velox::connector::hive
+} // namespace facebook::velox::connector::lakehouse::common

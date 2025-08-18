@@ -19,16 +19,16 @@
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/io/IoStatistics.h"
 #include "velox/connectors/Connector.h"
-#include "velox/connectors/hive/FileHandle.h"
-#include "velox/connectors/hive/HiveConnectorSplit.h"
-#include "velox/connectors/hive/HiveConnectorUtil.h"
-#include "velox/connectors/hive/SplitReader.h"
-#include "velox/connectors/hive/TableHandle.h"
+#include "velox/connectors/lakehouse/common/FileHandle.h"
+#include "velox/connectors/lakehouse/common/HiveConnectorSplit.h"
+#include "velox/connectors/lakehouse/common/HiveConnectorUtil.h"
+#include "velox/connectors/lakehouse/common/SplitReader.h"
+#include "velox/connectors/lakehouse/common/TableHandle.h"
 #include "velox/dwio/common/Statistics.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/expression/Expr.h"
 
-namespace facebook::velox::connector::hive {
+namespace facebook::velox::connector::lakehouse::common {
 
 class HiveConfig;
 
@@ -50,7 +50,7 @@ class HiveDataSource : public DataSource {
 
   void addDynamicFilter(
       column_index_t outputChannel,
-      const std::shared_ptr<common::Filter>& filter) override;
+      const std::shared_ptr<velox::common::Filter>& filter) override;
 
   uint64_t getCompletedBytes() override {
     return ioStats_->rawBytesRead();
@@ -70,7 +70,7 @@ class HiveDataSource : public DataSource {
 
   int64_t estimatedRowSize() override;
 
-  const common::SubfieldFilters* getFilters() const override {
+  const velox::common::SubfieldFilters* getFilters() const override {
     return &filters_;
   }
 
@@ -79,7 +79,7 @@ class HiveDataSource : public DataSource {
   using WaveDelegateHookFunction =
       std::function<std::shared_ptr<wave::WaveDataSource>(
           const HiveTableHandlePtr& hiveTableHandle,
-          const std::shared_ptr<common::ScanSpec>& scanSpec,
+          const std::shared_ptr<velox::common::ScanSpec>& scanSpec,
           const RowTypePtr& readerOutputType,
           std::unordered_map<std::string, HiveColumnHandlePtr>* partitionKeys,
           FileHandleFactory* fileHandleFactory,
@@ -88,7 +88,7 @@ class HiveDataSource : public DataSource {
           const std::shared_ptr<HiveConfig>& hiveConfig,
           const std::shared_ptr<io::IoStatistics>& ioStats,
           const exec::ExprSet* remainingFilter,
-          std::shared_ptr<common::MetadataFilter> metadataFilter)>;
+          std::shared_ptr<velox::common::MetadataFilter> metadataFilter)>;
 
   static WaveDelegateHookFunction waveDelegateHook_;
 
@@ -109,7 +109,7 @@ class HiveDataSource : public DataSource {
 
   std::shared_ptr<HiveConnectorSplit> split_;
   HiveTableHandlePtr hiveTableHandle_;
-  std::shared_ptr<common::ScanSpec> scanSpec_;
+  std::shared_ptr<velox::common::ScanSpec> scanSpec_;
   VectorPtr output_;
   std::unique_ptr<SplitReader> splitReader_;
 
@@ -154,11 +154,11 @@ class HiveDataSource : public DataSource {
   // Column handles for the Split info columns keyed on their column names.
   std::unordered_map<std::string, HiveColumnHandlePtr> infoColumns_;
   SpecialColumnNames specialColumns_{};
-  std::vector<common::Subfield> remainingFilterSubfields_;
-  folly::F14FastMap<std::string, std::vector<const common::Subfield*>>
+  std::vector<velox::common::Subfield> remainingFilterSubfields_;
+  folly::F14FastMap<std::string, std::vector<const velox::common::Subfield*>>
       subfields_;
-  common::SubfieldFilters filters_;
-  std::shared_ptr<common::MetadataFilter> metadataFilter_;
+  velox::common::SubfieldFilters filters_;
+  std::shared_ptr<velox::common::MetadataFilter> metadataFilter_;
   std::shared_ptr<exec::ExprSet> remainingFilterExprSet_;
   RowVectorPtr emptyOutput_;
   dwio::common::RuntimeStatistics runtimeStats_;
@@ -184,4 +184,4 @@ class HiveDataSource : public DataSource {
   // return the same.
   std::shared_ptr<wave::WaveDataSource> waveDataSource_;
 };
-} // namespace facebook::velox::connector::hive
+} // namespace facebook::velox::connector::lakehouse::common

@@ -14,13 +14,13 @@
  * limitations under the License.
  */
 
-#include "velox/connectors/hive/iceberg/tests/IcebergSplitReaderBenchmark.h"
+#include "velox/connectors/lakehouse/iceberg/tests/IcebergSplitReaderBenchmark.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::dwio;
 using namespace facebook::velox::dwio::common;
 using namespace facebook::velox::dwrf;
-using namespace facebook::velox::iceberg::reader::test;
+using namespace facebook::velox::connector::lakehouse::iceberg::test;
 using namespace facebook::velox::test;
 
 #define PARQUET_BENCHMARKS_FILTER_DELETES(_type_, _name_, _filter_, _deletes_) \

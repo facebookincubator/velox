@@ -23,7 +23,7 @@ namespace facebook::velox::config {
 class ConfigBase;
 }
 
-namespace facebook::velox::connector::hive {
+namespace facebook::velox::connector::lakehouse::common {
 
 /// Hive connector configs.
 class HiveConfig {
@@ -291,4 +291,4 @@ class HiveConfig {
   std::shared_ptr<const config::ConfigBase> config_;
 };
 
-} // namespace facebook::velox::connector::hive
+} // namespace facebook::velox::connector::lakehouse::common

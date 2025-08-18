@@ -13,7 +13,7 @@
 # limitations under the License.
 
 velox_add_library(
-  velox_hive_iceberg_splitreader
+  velox_lakehouse_iceberg_splitreader
   EqualityDeleteFileReader.cpp
   FilterUtil.cpp
   IcebergDeleteFile.cpp
@@ -22,7 +22,7 @@ velox_add_library(
   PositionalDeleteFileReader.cpp
   IcebergDataSink.cpp)
 
-velox_link_libraries(velox_hive_iceberg_splitreader velox_connector
+velox_link_libraries(velox_lakehouse_iceberg_splitreader velox_connector
                      velox_dwio_common Folly::folly)
 
 if(${VELOX_BUILD_TESTING})

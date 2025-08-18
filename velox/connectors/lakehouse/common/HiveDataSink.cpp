@@ -14,16 +14,16 @@
  * limitations under the License.
  */
 
-#include "velox/connectors/hive/HiveDataSink.h"
+#include "velox/connectors/lakehouse/common/HiveDataSink.h"
 
 #include "velox/common/base/Counters.h"
 #include "velox/common/base/Fs.h"
 #include "velox/common/base/StatsReporter.h"
 #include "velox/common/testutil/TestValue.h"
-#include "velox/connectors/hive/HiveConfig.h"
-#include "velox/connectors/hive/HiveConnectorUtil.h"
-#include "velox/connectors/hive/HivePartitionFunction.h"
-#include "velox/connectors/hive/TableHandle.h"
+#include "velox/connectors/lakehouse/common/HiveConfig.h"
+#include "velox/connectors/lakehouse/common/HiveConnectorUtil.h"
+#include "velox/connectors/lakehouse/common/HivePartitionFunction.h"
+#include "velox/connectors/lakehouse/common/TableHandle.h"
 #include "velox/core/ITypedExpr.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/SortingWriter.h"
@@ -32,7 +32,7 @@
 
 using facebook::velox::common::testutil::TestValue;
 
-namespace facebook::velox::connector::hive {
+namespace facebook::velox::connector::lakehouse::common {
 namespace {
 #define WRITER_NON_RECLAIMABLE_SECTION_GUARD(index)       \
   memory::NonReclaimableSectionGuard nonReclaimableGuard( \
@@ -176,7 +176,7 @@ std::shared_ptr<memory::MemoryPool> createSortPool(
 }
 
 uint64_t getFinishTimeSliceLimitMsFromHiveConfig(
-    const std::shared_ptr<const HiveConfig>& config,
+    const std::shared_ptr<const common::HiveConfig>& config,
     const config::ConfigBase* sessions) {
   const uint64_t flushTimeSliceLimitMsFromConfig =
       config->sortWriterFinishTimeSliceLimitMs(sessions);
@@ -361,7 +361,7 @@ HiveDataSink::HiveDataSink(
     std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
     const ConnectorQueryCtx* connectorQueryCtx,
     CommitStrategy commitStrategy,
-    const std::shared_ptr<const HiveConfig>& hiveConfig)
+    const std::shared_ptr<const common::HiveConfig>& hiveConfig)
     : HiveDataSink(
           inputType,
           insertTableHandle,
@@ -381,7 +381,7 @@ HiveDataSink::HiveDataSink(
     std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
     const ConnectorQueryCtx* connectorQueryCtx,
     CommitStrategy commitStrategy,
-    const std::shared_ptr<const HiveConfig>& hiveConfig,
+    const std::shared_ptr<const common::HiveConfig>& hiveConfig,
     uint32_t bucketCount,
     std::unique_ptr<core::PartitionFunction> bucketFunction,
     const std::vector<column_index_t>& dataChannels)
@@ -702,7 +702,7 @@ void HiveDataSink::closeInternal() {
   VELOX_CHECK_NE(state_, State::kFinishing);
 
   TestValue::adjust(
-      "facebook::velox::connector::hive::HiveDataSink::closeInternal", this);
+      "facebook::velox::connector::lakehouse::common::HiveDataSink::closeInternal", this);
 
   if (state_ == State::kClosed) {
     for (int i = 0; i < writers_.size(); ++i) {
@@ -975,7 +975,7 @@ std::pair<std::string, std::string> HiveInsertFileNameGenerator::gen(
     const ConnectorQueryCtx& connectorQueryCtx,
     bool commitRequired) const {
   auto defaultHiveConfig =
-      std::make_shared<const HiveConfig>(std::make_shared<config::ConfigBase>(
+      std::make_shared<const common::HiveConfig>(std::make_shared<config::ConfigBase>(
           std::unordered_map<std::string, std::string>()));
 
   return this->gen(
@@ -990,7 +990,7 @@ std::pair<std::string, std::string> HiveInsertFileNameGenerator::gen(
     std::optional<uint32_t> bucketId,
     const std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
     const ConnectorQueryCtx& connectorQueryCtx,
-    const std::shared_ptr<const HiveConfig>& hiveConfig,
+    const std::shared_ptr<const common::HiveConfig>& hiveConfig,
     bool commitRequired) const {
   auto targetFileName = insertTableHandle->locationHandle()->targetFileName();
   const bool generateFileName = targetFileName.empty();
@@ -1054,14 +1054,14 @@ HiveWriterParameters::UpdateMode HiveDataSink::getUpdateMode() const {
       const auto insertBehavior = hiveConfig_->insertExistingPartitionsBehavior(
           connectorQueryCtx_->sessionProperties());
       switch (insertBehavior) {
-        case HiveConfig::InsertExistingPartitionsBehavior::kOverwrite:
+        case common::HiveConfig::InsertExistingPartitionsBehavior::kOverwrite:
           return HiveWriterParameters::UpdateMode::kOverwrite;
-        case HiveConfig::InsertExistingPartitionsBehavior::kError:
+        case common::HiveConfig::InsertExistingPartitionsBehavior::kError:
           return HiveWriterParameters::UpdateMode::kNew;
         default:
           VELOX_UNSUPPORTED(
               "Unsupported insert existing partitions behavior: {}",
-              HiveConfig::insertExistingPartitionsBehaviorString(
+              common::HiveConfig::insertExistingPartitionsBehaviorString(
                   insertBehavior));
       }
     } else {
@@ -1111,7 +1111,7 @@ folly::dynamic HiveInsertTableHandle::serialize() const {
   }
 
   if (compressionKind_.has_value()) {
-    obj["compressionKind"] = common::compressionKindToString(*compressionKind_);
+    obj["compressionKind"] = velox::common::compressionKindToString(*compressionKind_);
   }
 
   folly::dynamic params = folly::dynamic::object;
@@ -1133,10 +1133,10 @@ HiveInsertTableHandlePtr HiveInsertTableHandle::create(
   auto storageFormat =
       dwio::common::toFileFormat(obj["tableStorageFormat"].asString());
 
-  std::optional<common::CompressionKind> compressionKind = std::nullopt;
+  std::optional<velox::common::CompressionKind> compressionKind = std::nullopt;
   if (obj.count("compressionKind") > 0) {
     compressionKind =
-        common::stringToCompressionKind(obj["compressionKind"].asString());
+        velox::common::stringToCompressionKind(obj["compressionKind"].asString());
   }
 
   std::shared_ptr<const HiveBucketProperty> bucketProperty;
@@ -1175,7 +1175,7 @@ std::string HiveInsertTableHandle::toString() const {
   std::ostringstream out;
   out << "HiveInsertTableHandle [" << dwio::common::toString(storageFormat_);
   if (compressionKind_.has_value()) {
-    out << " " << common::compressionKindToString(compressionKind_.value());
+    out << " " << velox::common::compressionKindToString(compressionKind_.value());
   } else {
     out << " none";
   }
@@ -1299,4 +1299,4 @@ uint64_t HiveDataSink::WriterReclaimer::reclaim(
   }
   return reclaimedBytes;
 }
-} // namespace facebook::velox::connector::hive
+} // namespace facebook::velox::connector::lakehouse::common

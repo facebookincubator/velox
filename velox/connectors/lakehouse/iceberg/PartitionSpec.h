@@ -20,7 +20,7 @@
 #include <string>
 #include <vector>
 
-namespace facebook::velox::connector::hive::iceberg {
+namespace facebook::velox::connector::lakehouse::iceberg {
 
 enum class TransformType {
   kIdentity,
@@ -60,4 +60,4 @@ struct IcebergPartitionSpec {
       : specId(_specId), fields(_fields) {}
 };
 
-} // namespace facebook::velox::connector::hive::iceberg
+} // namespace facebook::velox::connector::lakehouse::iceberg

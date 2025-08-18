@@ -12,13 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-velox_add_library(velox_hive_config OBJECT HiveConfig.cpp)
-velox_link_libraries(velox_hive_config velox_core velox_exception)
-
-add_subdirectory(iceberg)
+velox_add_library(velox_lakehouse_hive_config OBJECT HiveConfig.cpp)
+velox_link_libraries(velox_lakehouse_hive_config velox_core velox_exception)
 
 velox_add_library(
-  velox_hive_connector
+  velox_connector_lakehouse_common
   OBJECT
   FileHandle.cpp
   HiveConfig.cpp
@@ -33,21 +31,12 @@ velox_add_library(
   TableHandle.cpp)
 
 velox_link_libraries(
-  velox_hive_connector
-  PUBLIC velox_hive_iceberg_splitreader
+  velox_connector_lakehouse_common
+  PUBLIC velox_lakehouse_iceberg_splitreader
   PRIVATE velox_common_io velox_connector velox_dwio_catalog_fbhive
-          velox_hive_partition_function)
+          velox_lakehouse_hive_partition_function)
 
-velox_add_library(velox_hive_partition_function HivePartitionFunction.cpp)
+velox_add_library(velox_lakehouse_hive_partition_function HivePartitionFunction.cpp)
 
-velox_link_libraries(velox_hive_partition_function velox_core velox_exec)
+velox_link_libraries(velox_lakehouse_hive_partition_function velox_core velox_exec)
 
-add_subdirectory(storage_adapters)
-
-if(${VELOX_BUILD_TESTING})
-  add_subdirectory(tests)
-endif()
-
-if(${VELOX_ENABLE_BENCHMARKS})
-  add_subdirectory(benchmarks)
-endif()

@@ -14,23 +14,23 @@
  * limitations under the License.
  */
 
-#include "velox/connectors/hive/iceberg/PositionalDeleteFileReader.h"
+#include "velox/connectors/lakehouse/iceberg/PositionalDeleteFileReader.h"
 
-#include "velox/connectors/hive/HiveConnectorUtil.h"
-#include "velox/connectors/hive/TableHandle.h"
-#include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
-#include "velox/connectors/hive/iceberg/IcebergMetadataColumns.h"
+#include "velox/connectors/lakehouse/common/HiveConnectorUtil.h"
+#include "velox/connectors/lakehouse/common/TableHandle.h"
+#include "velox/connectors/lakehouse/iceberg/IcebergDeleteFile.h"
+#include "velox/connectors/lakehouse/iceberg/IcebergMetadataColumns.h"
 #include "velox/dwio/common/ReaderFactory.h"
 
-namespace facebook::velox::connector::hive::iceberg {
+namespace facebook::velox::connector::lakehouse::iceberg {
 
 PositionalDeleteFileReader::PositionalDeleteFileReader(
     const IcebergDeleteFile& deleteFile,
     const std::string& baseFilePath,
-    FileHandleFactory* fileHandleFactory,
+    common::FileHandleFactory* fileHandleFactory,
     const ConnectorQueryCtx* connectorQueryCtx,
     folly::Executor* executor,
-    const std::shared_ptr<const HiveConfig>& hiveConfig,
+    const std::shared_ptr<const common::HiveConfig>& hiveConfig,
     const std::shared_ptr<io::IoStatistics>& ioStats,
     const std::shared_ptr<filesystems::File::IoStats>& fsStats,
     dwio::common::RuntimeStatistics& runtimeStats,
@@ -60,10 +60,10 @@ PositionalDeleteFileReader::PositionalDeleteFileReader(
   //  this batch. If not, no need to proceed.
 
   // Create the ScanSpec for this delete file
-  auto scanSpec = std::make_shared<common::ScanSpec>("<root>");
+  auto scanSpec = std::make_shared<velox::common::ScanSpec>("<root>");
   scanSpec->addField(posColumn_->name, 0);
   auto* pathSpec = scanSpec->getOrCreateChild(filePathColumn_->name);
-  pathSpec->setFilter(std::make_unique<common::BytesValues>(
+  pathSpec->setFilter(std::make_unique<velox::common::BytesValues>(
       std::vector<std::string>({baseFilePath_}), false));
 
   // Create the file schema (in RowType) and split that will be used by readers
@@ -74,7 +74,7 @@ PositionalDeleteFileReader::PositionalDeleteFileReader(
   RowTypePtr deleteFileSchema =
       ROW(std::move(deleteColumnNames), std::move(deleteColumnTypes));
 
-  deleteSplit_ = std::make_shared<HiveConnectorSplit>(
+  deleteSplit_ = std::make_shared<common::HiveConnectorSplit>(
       connectorId,
       deleteFile_.filePath,
       deleteFile_.fileFormat,
@@ -92,11 +92,11 @@ PositionalDeleteFileReader::PositionalDeleteFileReader(
       /*tableParameters=*/{},
       deleteReaderOpts);
 
-  const FileHandleKey fileHandleKey{
+  const common::FileHandleKey fileHandleKey{
       .filename = deleteFile_.filePath,
       .tokenProvider = connectorQueryCtx_->fsTokenProvider()};
   auto deleteFileHandleCachePtr = fileHandleFactory_->generate(fileHandleKey);
-  auto deleteFileInput = createBufferedInput(
+  auto deleteFileInput = common::createBufferedInput(
       *deleteFileHandleCachePtr,
       deleteReaderOpts,
       connectorQueryCtx,
@@ -112,7 +112,7 @@ PositionalDeleteFileReader::PositionalDeleteFileReader(
   // 1) the delete file doesn't contain the base file that is being read; 2) The
   // delete file does not contain the positions in the current batch for the
   // base file.
-  if (!testFilters(
+  if (!common::testFilters(
           scanSpec.get(),
           deleteReader.get(),
           deleteSplit_->filePath,
@@ -284,4 +284,4 @@ bool PositionalDeleteFileReader::readFinishedForBatch(
   return false;
 }
 
-} // namespace facebook::velox::connector::hive::iceberg
+} // namespace facebook::velox::connector::lakehouse::iceberg

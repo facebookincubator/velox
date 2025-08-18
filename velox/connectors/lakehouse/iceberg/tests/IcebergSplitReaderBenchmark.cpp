@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/connectors/hive/iceberg/tests/IcebergSplitReaderBenchmark.h"
+#include "velox/connectors/lakehouse/iceberg/tests/IcebergSplitReaderBenchmark.h"
 
 #include <filesystem>
 
@@ -26,11 +26,11 @@ using namespace facebook::velox;
 using namespace facebook::velox::dwio;
 using namespace facebook::velox::dwio::common;
 using namespace facebook::velox::dwrf;
-using namespace facebook::velox::connector::hive;
-using namespace facebook::velox::connector::hive::iceberg;
+using namespace facebook::velox::connector::lakehouse::common;
+using namespace facebook::velox::connector::lakehouse::iceberg;
 using namespace facebook::velox::memory;
 
-namespace facebook::velox::iceberg::reader::test {
+namespace facebook::velox::connector::lakehouse::iceberg::test {
 void IcebergSplitReaderBenchmark::writeToFile(
     const std::vector<RowVectorPtr>& batches) {
   auto path = fileFolder_->getPath() + "/" + fileName_;
@@ -99,7 +99,7 @@ std::vector<std::string> IcebergSplitReaderBenchmark::listFiles(
   return files;
 }
 
-std::shared_ptr<HiveConnectorSplit>
+std::shared_ptr<common::HiveConnectorSplit>
 IcebergSplitReaderBenchmark::makeIcebergSplit(
     const std::string& dataFilePath,
     const std::vector<IcebergDeleteFile>& deleteFiles) {
@@ -110,7 +110,7 @@ IcebergSplitReaderBenchmark::makeIcebergSplit(
   auto readFile = std::make_shared<LocalReadFile>(dataFilePath);
   const int64_t fileSize = readFile->size();
 
-  return std::make_shared<HiveIcebergSplit>(
+  return std::make_shared<iceberg::HiveIcebergSplit>(
       kHiveConnectorId,
       dataFilePath,
       fileFomat_,
@@ -159,11 +159,11 @@ std::string IcebergSplitReaderBenchmark::writePositionDeleteFile(
   return deleteFilePath;
 }
 
-std::vector<std::shared_ptr<HiveConnectorSplit>>
+std::vector<std::shared_ptr<common::HiveConnectorSplit>>
 IcebergSplitReaderBenchmark::createIcebergSplitsWithPositionalDelete(
     int32_t deleteRowsPercentage,
     int32_t deleteFilesCount) {
-  std::vector<std::shared_ptr<HiveConnectorSplit>> splits;
+  std::vector<std::shared_ptr<common::HiveConnectorSplit>> splits;
 
   std::vector<std::string> deleteFilePaths;
   std::vector<std::string> dataFilePaths = listFiles(fileFolder_->getPath());
@@ -280,13 +280,13 @@ void IcebergSplitReaderBenchmark::readSingleColumn(
   auto scanSpec =
       createScanSpec(*batches, rowType, filterSpecs, hitRows, filters);
 
-  std::vector<std::shared_ptr<HiveConnectorSplit>> splits =
+  std::vector<std::shared_ptr<common::HiveConnectorSplit>> splits =
       createIcebergSplitsWithPositionalDelete(deletePct, 1);
 
   core::TypedExprPtr remainingFilterExpr;
 
-  std::shared_ptr<HiveTableHandle> hiveTableHandle =
-      std::make_shared<HiveTableHandle>(
+  std::shared_ptr<common::HiveTableHandle> hiveTableHandle =
+      std::make_shared<common::HiveTableHandle>(
           "kHiveConnectorId",
           "tableName",
           false,
@@ -294,8 +294,8 @@ void IcebergSplitReaderBenchmark::readSingleColumn(
           remainingFilterExpr,
           rowType);
 
-  std::shared_ptr<HiveConfig> hiveConfig =
-      std::make_shared<HiveConfig>(std::make_shared<config::ConfigBase>(
+  std::shared_ptr<common::HiveConfig> hiveConfig =
+      std::make_shared<common::HiveConfig>(std::make_shared<config::ConfigBase>(
           std::unordered_map<std::string, std::string>(), true));
   const RowTypePtr readerOutputType;
   const std::shared_ptr<io::IoStatistics> ioStats =
@@ -319,7 +319,7 @@ void IcebergSplitReaderBenchmark::readSingleColumn(
           connectorPool.get(),
           connectorSessionProperties_.get(),
           nullptr,
-          common::PrefixSortConfig(),
+          velox::common::PrefixSortConfig(),
           nullptr,
           nullptr,
           "query.IcebergSplitReader",
@@ -328,10 +328,10 @@ void IcebergSplitReaderBenchmark::readSingleColumn(
           0,
           "");
 
-  FileHandleFactory fileHandleFactory(
-      std::make_unique<SimpleLRUCache<FileHandleKey, FileHandle>>(
+  common::FileHandleFactory fileHandleFactory(
+      std::make_unique<SimpleLRUCache<common::FileHandleKey, common::FileHandle>>(
           hiveConfig->numCacheFileHandles()),
-      std::make_unique<FileHandleGenerator>(connectorSessionProperties_));
+      std::make_unique<common::FileHandleGenerator>(connectorSessionProperties_));
 
   suspender.dismiss();
 
@@ -340,7 +340,7 @@ void IcebergSplitReaderBenchmark::readSingleColumn(
   std::atomic<uint64_t> totalRemainingFilterMs;
 
   uint64_t resultSize = 0;
-  for (std::shared_ptr<HiveConnectorSplit> split : splits) {
+  for (std::shared_ptr<common::HiveConnectorSplit> split : splits) {
     scanSpec->resetCachedValues(true);
 
     std::unique_ptr<IcebergSplitReader> icebergSplitReader =
@@ -402,4 +402,4 @@ void run(
       columnName, type, 0, filterRateX100, deleteRateX100, nextSize);
 }
 
-} // namespace facebook::velox::iceberg::reader::test
+} // namespace facebook::velox::connector::lakehouse::iceberg::test

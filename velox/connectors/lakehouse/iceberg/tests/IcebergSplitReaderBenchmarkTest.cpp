@@ -14,10 +14,10 @@
  * limitations under the License.
  */
 
-#include "velox/connectors/hive/iceberg/tests/IcebergSplitReaderBenchmark.h"
+#include "velox/connectors/lakehouse/iceberg/tests/IcebergSplitReaderBenchmark.h"
 #include <gtest/gtest.h>
 
-namespace facebook::velox::iceberg::reader::test {
+namespace facebook::velox::connector::lakehouse::iceberg::test {
 namespace {
 TEST(IcebergSplitReaderBenchmarkTest, basic) {
   memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
@@ -27,4 +27,4 @@ TEST(IcebergSplitReaderBenchmarkTest, basic) {
   run(1, "BigInt", BIGINT(), 100, 100, 500);
 }
 } // namespace
-} // namespace facebook::velox::iceberg::reader::test
+} // namespace facebook::velox::connector::lakehouse::iceberg::test

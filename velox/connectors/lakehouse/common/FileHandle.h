@@ -31,9 +31,9 @@
 #include "velox/common/config/Config.h"
 #include "velox/common/file/File.h"
 #include "velox/common/file/TokenProvider.h"
-#include "velox/connectors/hive/FileProperties.h"
+#include "velox/connectors/lakehouse/common/FileProperties.h"
 
-namespace facebook::velox {
+namespace facebook::velox::connector::lakehouse::common {
 
 // See the file comment.
 struct FileHandle {
@@ -82,12 +82,12 @@ struct FileHandleKey {
   }
 };
 
-} // namespace facebook::velox
+} // namespace facebook::velox::connector::lakehouse::common
 
 namespace std {
 template <>
-struct hash<facebook::velox::FileHandleKey> {
-  size_t operator()(const facebook::velox::FileHandleKey& key) const noexcept {
+struct hash<facebook::velox::connector::lakehouse::common::FileHandleKey> {
+  size_t operator()(const facebook::velox::connector::lakehouse::common::FileHandleKey& key) const noexcept {
     size_t filenameHash = std::hash<std::string>()(key.filename);
     return key.tokenProvider ? facebook::velox::bits::hashMix(
                                    filenameHash, key.tokenProvider->hash())
@@ -96,9 +96,9 @@ struct hash<facebook::velox::FileHandleKey> {
 };
 } // namespace std
 
-namespace facebook::velox {
+namespace facebook::velox::connector::lakehouse::common {
 using FileHandleCache =
-    SimpleLRUCache<facebook::velox::FileHandleKey, FileHandle>;
+    SimpleLRUCache<facebook::velox::connector::lakehouse::common::FileHandleKey, FileHandle>;
 
 // Creates FileHandles via the Generator interface the CachedFactory requires.
 class FileHandleGenerator {
@@ -127,4 +127,4 @@ using FileHandleCachedPtr = CachedPtr<FileHandleKey, FileHandle>;
 
 using FileHandleCacheStats = SimpleLRUCacheStats;
 
-} // namespace facebook::velox
+} // namespace facebook::velox::connector::lakehouse::common

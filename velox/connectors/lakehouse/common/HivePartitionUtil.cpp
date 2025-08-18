@@ -14,10 +14,10 @@
  * limitations under the License.
  */
 
-#include "velox/connectors/hive/HivePartitionUtil.h"
+#include "velox/connectors/lakehouse/common/HivePartitionUtil.h"
 #include "velox/vector/SimpleVector.h"
 
-namespace facebook::velox::connector::hive {
+namespace facebook::velox::connector::lakehouse::common {
 
 #define PARTITION_TYPE_DISPATCH(TEMPLATE_FUNC, typeKind, ...)               \
   [&]() {                                                                   \
@@ -116,4 +116,4 @@ std::vector<std::pair<std::string, std::string>> extractPartitionKeyValues(
   return partitionKeyValues;
 }
 
-} // namespace facebook::velox::connector::hive
+} // namespace facebook::velox::connector::lakehouse::common

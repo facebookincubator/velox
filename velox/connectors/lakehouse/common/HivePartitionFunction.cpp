@@ -13,9 +13,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/connectors/hive/HivePartitionFunction.h"
+#include "velox/connectors/lakehouse/common/HivePartitionFunction.h"
 
-namespace facebook::velox::connector::hive {
+namespace facebook::velox::connector::lakehouse::common {
 
 namespace {
 void mergeHash(bool mix, uint32_t oneHash, uint32_t& aggregateHash) {
@@ -576,4 +576,4 @@ std::optional<uint32_t> HiveIdentityPartitionFunction::partition(
   return std::nullopt;
 }
 
-} // namespace facebook::velox::connector::hive
+} // namespace facebook::velox::connector::lakehouse::common

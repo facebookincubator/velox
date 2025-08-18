@@ -20,11 +20,11 @@
 #include "velox/type/Filter.h"
 #include "velox/vector/ComplexVector.h"
 
-namespace facebook::velox::connector::hive::iceberg {
-std::unique_ptr<common::Filter> createNotInFilter(
+namespace facebook::velox::connector::lakehouse::iceberg {
+std::unique_ptr<velox::common::Filter> createNotInFilter(
     const VectorPtr& elements,
     vector_size_t offset,
     vector_size_t size,
     TypeKind type);
 
-} // namespace facebook::velox::connector::hive::iceberg
+} // namespace facebook::velox::connector::lakehouse::iceberg

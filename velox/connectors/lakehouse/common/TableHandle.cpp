@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 
-#include "velox/connectors/hive/TableHandle.h"
+#include "velox/connectors/lakehouse/common/TableHandle.h"
 
-namespace facebook::velox::connector::hive {
+namespace facebook::velox::connector::lakehouse::common {
 
 namespace {
 std::unordered_map<HiveColumnHandle::ColumnType, std::string>
@@ -88,7 +88,7 @@ ColumnHandlePtr HiveColumnHandle::create(const folly::dynamic& obj) {
   auto hiveType = ISerializable::deserialize<Type>(obj["hiveType"]);
 
   const auto& arr = obj["requiredSubfields"];
-  std::vector<common::Subfield> requiredSubfields;
+  std::vector<velox::common::Subfield> requiredSubfields;
   requiredSubfields.reserve(arr.size());
   for (auto& s : arr) {
     requiredSubfields.emplace_back(s.asString());
@@ -107,7 +107,7 @@ HiveTableHandle::HiveTableHandle(
     std::string connectorId,
     const std::string& tableName,
     bool filterPushdownEnabled,
-    common::SubfieldFilters subfieldFilters,
+    velox::common::SubfieldFilters subfieldFilters,
     const core::TypedExprPtr& remainingFilter,
     const RowTypePtr& dataColumns,
     const std::unordered_map<std::string, std::string>& tableParameters)
@@ -124,7 +124,7 @@ std::string HiveTableHandle::toString() const {
   out << "table: " << tableName_;
   if (!subfieldFilters_.empty()) {
     // Sort filters by subfield for deterministic output.
-    std::map<std::string, common::Filter*> orderedFilters;
+    std::map<std::string, velox::common::Filter*> orderedFilters;
     for (const auto& [field, filter] : subfieldFilters_) {
       orderedFilters[field.toString()] = filter.get();
     }
@@ -204,13 +204,13 @@ ConnectorTableHandlePtr HiveTableHandle::create(
         ISerializable::deserialize<core::ITypedExpr>(it->second, context);
   }
 
-  common::SubfieldFilters subfieldFilters;
+  velox::common::SubfieldFilters subfieldFilters;
   folly::dynamic subfieldFiltersObj = obj["subfieldFilters"];
   for (const auto& subfieldFilter : subfieldFiltersObj) {
-    common::Subfield subfield(subfieldFilter["subfield"].asString());
+    velox::common::Subfield subfield(subfieldFilter["subfield"].asString());
     auto filter =
-        ISerializable::deserialize<common::Filter>(subfieldFilter["filter"]);
-    subfieldFilters[common::Subfield(std::move(subfield.path()))] =
+        ISerializable::deserialize<velox::common::Filter>(subfieldFilter["filter"]);
+    subfieldFilters[velox::common::Subfield(std::move(subfield.path()))] =
         filter->clone();
   }
 
@@ -241,4 +241,4 @@ void HiveTableHandle::registerSerDe() {
   registry.Register("HiveTableHandle", create);
 }
 
-} // namespace facebook::velox::connector::hive
+} // namespace facebook::velox::connector::lakehouse::common
