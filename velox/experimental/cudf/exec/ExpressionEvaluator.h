@@ -94,7 +94,6 @@ struct CudfExpressionNode {
   // TODO (dm): Needs some form of function identification. I'd say let's add a
   // registration mechanism. get function from it and store it here.
 
-  // TODO (dm): Add a factory that takes a velox expr
   static std::shared_ptr<CudfExpressionNode> create(
       const std::shared_ptr<velox::exec::Expr>& expr);
 
@@ -103,7 +102,6 @@ struct CudfExpressionNode {
 
   ColumnOrView eval(
       std::vector<std::unique_ptr<cudf::column>>& inputTableColumns,
-      //   TODO (dm): Do something to avoid passing schema
       const RowTypePtr& inputRowSchema,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr);
