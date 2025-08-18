@@ -24,7 +24,6 @@
 #include "velox/exec/MemoryReclaimer.h"
 #include "velox/exec/MergeSource.h"
 #include "velox/exec/ScaledScanController.h"
-#include "velox/exec/Split.h"
 #include "velox/exec/TaskStats.h"
 #include "velox/exec/TaskStructs.h"
 #include "velox/vector/ComplexVector.h"
@@ -776,6 +775,9 @@ class Task : public std::enable_shared_from_this<Task> {
   /// The testing method returns true if any driver is blocked waiting for
   /// split.
   bool testingHasDriverWaitForSplit() const;
+
+  /// Returns true if all the splits have finished.
+  bool testingAllSplitsFinished();
 
  private:
   // Hook of system-wide running task list.

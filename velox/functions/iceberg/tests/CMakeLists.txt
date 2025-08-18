@@ -11,23 +11,16 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-if(${VELOX_BUILD_TESTING})
-  add_subdirectory(tests)
-endif()
+add_executable(velox_functions_iceberg_test Murmur3Hash32Test.cpp)
 
-velox_add_library(velox_multifragment_plan MultiFragmentPlan.cpp)
-velox_link_libraries(velox_multifragment_plan velox_common_base velox_memory
-                     velox_core)
+add_test(
+  NAME velox_functions_iceberg_test
+  COMMAND velox_functions_iceberg_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 
-velox_add_library(velox_local_runner LocalRunner.cpp Runner.cpp)
-
-velox_link_libraries(
-  velox_local_runner
-  velox_multifragment_plan
-  velox_common_base
-  velox_memory
-  velox_hive_connector
-  velox_dwio_common
-  velox_dwio_dwrf_writer
-  velox_exec
-  velox_cursor)
+target_link_libraries(
+  velox_functions_iceberg_test
+  velox_functions_iceberg_hash
+  GTest::gtest
+  GTest::gtest_main
+  GTest::gmock)

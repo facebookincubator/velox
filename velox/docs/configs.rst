@@ -315,7 +315,7 @@ Spilling
      - boolean
      - true
      - When `spill_enabled` is true, determines whether HashBuild and HashProbe operators can spill to disk under memory pressure.
-   * - local_merge_enabled
+   * - local_merge_spill_enabled
      - boolean
      - false
      - When `spill_enabled` is true, determines whether LocalMerge operators can spill to disk to cap memory usage.
@@ -1010,6 +1010,10 @@ Spark-specific Configuration
      - false
      - If true, Spark statistical aggregation functions including skewness, kurtosis, stddev, stddev_samp, variance,
        var_samp, covar_samp and corr will return NaN instead of NULL when dividing by zero during expression evaluation.
+   * - spark.json_ignore_null_fields
+     - bool
+     - true
+     - If true, ignore null fields when generating JSON string. If false, null fields are included with a null value.
 
 Tracing
 --------

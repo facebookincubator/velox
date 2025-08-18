@@ -437,6 +437,10 @@ class Variant {
   /// Returns a string of the Variant value.
   std::string toString(const TypePtr& type) const;
 
+  /// Returns a string representation identical to
+  /// BaseVector::createConstant(type, *this)->toString(0).
+  std::string toStringAsVector(const TypePtr& type) const;
+
   folly::dynamic serialize() const;
 
   static Variant create(const folly::dynamic& obj);
@@ -592,10 +596,6 @@ class Variant {
 
 inline bool operator==(const Variant& a, const Variant& b) {
   return a.equals(b);
-}
-
-inline bool operator!=(const Variant& a, const Variant& b) {
-  return !(a == b);
 }
 
 struct VariantConverter {
