@@ -14,7 +14,7 @@ Refer to `Iceberg documenation <https://iceberg.apache.org/spec/#partition-trans
    Bucket partitioning is based on a 32-bit hash of the input, specifically using the x86
    variant of the Murmur3 hash function with a seed of 0.
 
-   In pseudo-code, the function is showing as following. ::
+   The function can be expressed in pseudo-code as below. ::
 
        def bucket(numBuckets, input)= (murmur3_x86_32_hash(input) & Integer.MAX_VALUE) % numBuckets
 
