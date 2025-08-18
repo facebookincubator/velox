@@ -709,7 +709,18 @@ std::shared_ptr<CudfExpressionNode> CudfExpressionNode::create(
       scalars.emplace_back(
           std::make_unique<cudf::numeric_scalar<cudf::size_type>>(
               endPosition, true, stream, mr));
+    } else {
+      // No length specified - create null/invalid end scalar for unlimited
+      // length
+      scalars.emplace_back(
+          std::make_unique<cudf::numeric_scalar<cudf::size_type>>(
+              0, false, stream, mr));
     }
+
+    // Pre-construct the step scalar (always 1)
+    scalars.emplace_back(
+        std::make_unique<cudf::numeric_scalar<cudf::size_type>>(
+            1, true, stream, mr));
 
     node->subexpressions.push_back(
         CudfExpressionNode::create(expr->inputs()[0]));
@@ -756,28 +767,16 @@ ColumnOrView CudfExpressionNode::eval(
     auto dataCol =
         subexpressions[0]->eval(inputTableColumns, inputRowSchema, stream, mr);
 
-    // Use pre-computed start position (already adjusted for 0-based indexing)
+    // Use pre-computed scalars: [0] = start, [1] = end, [2] = step
     auto& startScalar =
         *static_cast<cudf::numeric_scalar<cudf::size_type>*>(scalars[0].get());
-
-    // Use pre-computed end position if available, otherwise set to null for
-    // unlimited length
-    cudf::numeric_scalar<cudf::size_type> endScalarCudf = [&]() {
-      if (scalars.size() > 1) {
-        auto& endScalar = *static_cast<cudf::numeric_scalar<cudf::size_type>*>(
-            scalars[1].get());
-        return cudf::numeric_scalar<cudf::size_type>(
-            endScalar.value(), true, stream, mr);
-      } else {
-        return cudf::numeric_scalar<cudf::size_type>(0, false, stream, mr);
-      }
-    }();
-
-    auto stepScalar =
-        cudf::numeric_scalar<cudf::size_type>(1, true, stream, mr);
+    auto& endScalar =
+        *static_cast<cudf::numeric_scalar<cudf::size_type>*>(scalars[1].get());
+    auto& stepScalar =
+        *static_cast<cudf::numeric_scalar<cudf::size_type>*>(scalars[2].get());
 
     return cudf::strings::slice_strings(
-        asView(dataCol), startScalar, endScalarCudf, stepScalar, stream, mr);
+        asView(dataCol), startScalar, endScalar, stepScalar, stream, mr);
   }
 
   VELOX_FAIL(
