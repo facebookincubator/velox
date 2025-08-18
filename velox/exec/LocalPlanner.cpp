@@ -335,6 +335,16 @@ uint32_t maxDrivers(
   }
   return count;
 }
+
+std::optional<uint32_t> numDriverOverride(
+    const DriverFactory& driverFactory,
+    const core::QueryConfig& queryConfig) {
+  core::PlanNodeId tableScanNodeId;
+  if (driverFactory.needsTableScan(tableScanNodeId)) {
+    return queryConfig.taskTableScanDriverCount();
+  }
+  return std::nullopt;
+}
 } // namespace detail
 
 // static
@@ -367,6 +377,10 @@ void LocalPlanner::plan(
   for (auto& factory : *driverFactories) {
     factory->maxDrivers = detail::maxDrivers(*factory, queryConfig);
     factory->numDrivers = std::min(factory->maxDrivers, maxDrivers);
+    auto numDrivers = detail::numDriverOverride(*factory, queryConfig);
+    if (numDrivers.has_value()) {
+      factory->numDrivers = numDrivers.value();
+    }
 
     // Pipelines running grouped/bucketed execution would have separate groups
     // of drivers dealing with separate split groups (one driver can access

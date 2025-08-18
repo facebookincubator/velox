@@ -396,6 +396,11 @@ class QueryConfig {
   static constexpr const char* kSparkJsonIgnoreNullFields =
       "spark.json_ignore_null_fields";
 
+  /// The number of table scan operators per task. When set, it will override
+  /// the max driver count limit.
+  static constexpr const char* kTaskTableScanDriverCount =
+      "task_table_scan_driver_count";
+
   /// The number of local parallel table writer operators per task.
   static constexpr const char* kTaskWriterCount = "task_writer_count";
 
@@ -1067,6 +1072,10 @@ class QueryConfig {
 
   bool operatorTrackCpuUsage() const {
     return get<bool>(kOperatorTrackCpuUsage, true);
+  }
+
+  std::optional<uint32_t> taskTableScanDriverCount() const {
+    return get<uint32_t>(kTaskTableScanDriverCount);
   }
 
   uint32_t taskWriterCount() const {

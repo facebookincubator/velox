@@ -40,12 +40,14 @@ TEST_F(QueryConfigTest, setConfig) {
   std::string path = "/tmp/setConfig";
   std::unordered_map<std::string, std::string> configData(
       {{QueryConfig::kLegacyCast, "true"},
-       {QueryConfig::kRequestDataSizesMaxWaitSec, "12"}});
+       {QueryConfig::kRequestDataSizesMaxWaitSec, "12"},
+       {QueryConfig::kTaskTableScanDriverCount, "40"}});
   auto queryCtx = QueryCtx::create(nullptr, QueryConfig{std::move(configData)});
   const QueryConfig& config = queryCtx->queryConfig();
 
   ASSERT_TRUE(config.isLegacyCast());
   EXPECT_EQ(config.requestDataSizesMaxWaitSec(), 12);
+  EXPECT_EQ(config.taskTableScanDriverCount(), 40);
 }
 
 TEST_F(QueryConfigTest, invalidConfig) {
