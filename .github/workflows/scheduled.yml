@@ -123,14 +123,25 @@ jobs:
         working-directory: ${{ github.workspace }}
         env:
           GH_TOKEN: ${{ github.token }}
+          INPUT_REF: ${{ inputs.ref || 'main' }}
+          HEAD_REF: ${{ github.head_ref }}
+          BASE_REF: ${{ github.base_ref }}
+          ACTOR: ${{ github.actor }}
         id: get-head
         run: |
           if [ '${{ github.event_name == 'push' }}' == "true" ]; then
             # get the parent commit of the current one to get the relevant function signatures
             head_main=$(gh api -q '.parents.[0].sha' '/repos/facebookincubator/velox/commits/${{ github.sha }}')
+          elif [ '${{ github.event_name == 'pull_request' }}' == "true" ]; then
+            # Get the merge base from the api
+            head_main=$(gh api -q '.merge_base_commit.sha' \
+              /repos/facebookincubator/velox/compare/facebookincubator:$BASE_REF...$ACTOR:$HEAD_REF \
+            )
           else
-            head_main=$(gh api -H "Accept: application/vnd.github.sha" /repos/facebookincubator/velox/commits/heads/main)
+            head_main=$INPUT_REF
           fi
+
+          echo "Determined SHA: $head_main"
           echo "head_main=$head_main" >> $GITHUB_OUTPUT
 
       - name: Get Function Signature Stash
