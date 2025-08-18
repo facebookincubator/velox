@@ -80,6 +80,7 @@ jobs:
             brew uninstall cmake
             pipx install --force cmake==3.31
           fi
+          echo "$INSTALL_PREFIX/bin" >> $GITHUB_PATH
 
       - name: Cache ccache
         uses: apache/infrastructure-actions/stash/restore@3354c1565d4b0e335b78a76aedd82153a9e144d4
@@ -93,7 +94,7 @@ jobs:
           faiss_SOURCE: BUNDLED #brew faiss is not supported
           CMAKE_POLICY_VERSION_MINIMUM: '3.5'
         run: |
-          ${{ env.INSTALL_PREFIX }}/bin/ccache -sz -M 5Gi
+          ccache -sz -M 5Gi
           cmake \
               -B _build/$BUILD_TYPE \
               -GNinja \
@@ -108,7 +109,7 @@ jobs:
       - name: Build
         run: |
           cmake --build _build/$BUILD_TYPE -j $NJOBS
-          ${{ env.INSTALL_PREFIX }}/bin/ccache -s
+          ccache -s
 
       - uses: apache/infrastructure-actions/stash/save@3354c1565d4b0e335b78a76aedd82153a9e144d4
         with:
