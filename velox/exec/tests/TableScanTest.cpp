@@ -40,6 +40,7 @@
 #include "velox/exec/Exchange.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/TableScan.h"
+
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -564,6 +565,75 @@ TEST_F(TableScanTest, subfieldPruningRowType) {
   for (int i = 0; i < d->size(); ++i) {
     ASSERT_TRUE(e->isNullAt(i) || d->isNullAt(i));
   }
+}
+
+TEST_F(TableScanTest, subfieldPruningRowTypeSubscriptReachesChildrenSize) {
+  auto dataColumnType = ROW({"b", "d"}, {BIGINT(), DOUBLE()});
+  auto dataRowType = ROW({"e"}, {dataColumnType});
+
+  auto requestedColumnType =
+      ROW({"b", "c", "d"}, {BIGINT(), BIGINT(), DOUBLE()});
+  auto requestedRowType = ROW({"e"}, {requestedColumnType});
+
+  auto vectors = makeVectors(10, 1'000, dataRowType);
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), vectors);
+  std::vector<common::Subfield> requiredSubfields;
+  requiredSubfields.emplace_back("e.d");
+  connector::ColumnHandleMap assignments;
+  assignments["e"] = std::make_shared<HiveColumnHandle>(
+      "e",
+      HiveColumnHandle::ColumnType::kRegular,
+      requestedColumnType,
+      requestedColumnType,
+      std::move(requiredSubfields));
+  auto op = PlanBuilder()
+                .startTableScan()
+                .outputType(requestedRowType)
+                .assignments(assignments)
+                .endTableScan()
+                .planNode();
+  auto split = makeHiveConnectorSplit(filePath->getPath());
+  auto result = AssertQueryBuilder(op).split(split).copyResults(pool());
+  ASSERT_EQ(result->size(), 10'000);
+  auto rows = result->as<RowVector>();
+  ASSERT_TRUE(rows);
+  ASSERT_EQ(rows->childrenSize(), 1);
+  auto e = rows->childAt(0)->as<RowVector>();
+  ASSERT_TRUE(e);
+  ASSERT_EQ(e->childrenSize(), 3);
+
+  // Asserts e.b is pruned.
+  auto b = e->childAt(0);
+  ASSERT_EQ(b->size(), e->size());
+  for (int i = 0; i < b->size(); ++i) {
+    ASSERT_TRUE(e->isNullAt(i) || b->isNullAt(i));
+  }
+
+  // Asserts e.c is pruned.
+  auto c = e->childAt(1);
+  ASSERT_EQ(b->size(), e->size());
+  for (int i = 0; i < c->size(); ++i) {
+    ASSERT_TRUE(e->isNullAt(i) || c->isNullAt(i));
+  }
+
+  // Assert scanned result from e.d is matching input vectors.
+  auto d = e->childAt(2);
+  int j = 0;
+  for (auto& vec : vectors) {
+    ASSERT_LE(j + vec->size(), d->size());
+    auto ee = vec->childAt(0)->as<RowVector>();
+    auto dd = ee->childAt(1);
+    for (int i = 0; i < vec->size(); ++i) {
+      if (ee->isNullAt(i) || dd->isNullAt(i)) {
+        ASSERT_TRUE(e->isNullAt(j) || d->isNullAt(j));
+      } else {
+        ASSERT_TRUE(dd->equalValueAt(d.get(), i, j));
+      }
+      ++j;
+    }
+  }
+  ASSERT_EQ(j, c->size());
 }
 
 TEST_F(TableScanTest, subfieldPruningRemainingFilterSubfieldsMissing) {
