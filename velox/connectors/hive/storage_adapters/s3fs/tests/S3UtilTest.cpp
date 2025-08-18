@@ -15,6 +15,7 @@
  */
 
 #include "velox/connectors/hive/storage_adapters/s3fs/S3Util.h"
+#include "velox/connectors/hive/storage_adapters/s3fs/S3ReadFile.h"
 
 #include "gtest/gtest.h"
 
@@ -83,6 +84,28 @@ TEST(S3UtilTest, isCosNFile) {
   EXPECT_FALSE(isCosNFile("cosn:/bucket"));
   EXPECT_FALSE(isCosNFile("COSN://BUCKET/sub-key/file.txt"));
   EXPECT_TRUE(isCosNFile("cosn://bucket/file.txt"));
+}
+
+TEST(S3UtilTest, s3ParsePath) {
+  auto s3AwsPath = parseS3Path("s3://bucket/file.txt");
+  auto ossPath = parseS3Path("oss://bucket-name/file.txt");
+  auto s3aPath = parseS3Path("s3a://bucket-NAME/sub-PATH/my-file.txt");
+  auto s3nPath = parseS3Path("s3n://bucket-NAME/sub-PATH/my-file.txt");
+  auto cosPath = parseS3Path("cos://bucket-name/file.txt");
+  auto cosnPath = parseS3Path("cosn://bucket-name/file.txt");
+
+  EXPECT_EQ(s3AwsPath.scheme, "s3://");
+  EXPECT_EQ(s3AwsPath.path, "bucket/file.txt");
+  EXPECT_EQ(ossPath.scheme, "oss://");
+  EXPECT_EQ(ossPath.path, "bucket-name/file.txt");
+  EXPECT_EQ(s3aPath.scheme, "s3a://");
+  EXPECT_EQ(s3aPath.path, "bucket-NAME/sub-PATH/my-file.txt");
+  EXPECT_EQ(s3nPath.scheme, "s3n://");
+  EXPECT_EQ(s3nPath.path, "bucket-NAME/sub-PATH/my-file.txt");
+  EXPECT_EQ(cosPath.scheme, "cos://");
+  EXPECT_EQ(cosPath.path, "bucket-name/file.txt");
+  EXPECT_EQ(cosnPath.scheme, "cosn://");
+  EXPECT_EQ(cosnPath.path, "bucket-name/file.txt");
 }
 
 TEST(S3UtilTest, s3Path) {
@@ -166,6 +189,22 @@ TEST(S3UtilTest, isIpExcludedFromProxy) {
   for (auto pair : tests) {
     EXPECT_EQ(isHostExcludedFromProxy(hostname, pair.first), pair.second)
         << pair.first;
+  }
+}
+
+TEST(S3UtilTest, s3ReadFileGetName) {
+  std::vector<std::string> testCases = {
+      "s3://my-bucket/path/to/file.txt",
+      "s3a://test-bucket/data.parquet",
+      "s3n://analytics-bucket/logs/2023/file.log",
+      "oss://oss-bucket/images/photo.jpg",
+      "cos://cos-bucket/documents/report.pdf",
+      "cosn://cosn-bucket/backup/archive.zip"};
+
+  for (const auto& testCase : testCases) {
+    S3ReadFile readFile(testCase, nullptr);
+    EXPECT_EQ(readFile.getName(), testCase)
+        << "Failed for input path: " << testCase;
   }
 }
 

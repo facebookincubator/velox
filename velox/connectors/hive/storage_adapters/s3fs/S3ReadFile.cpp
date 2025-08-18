@@ -40,9 +40,11 @@ Aws::IOStreamFactory AwsWriteableStreamFactory(void* data, int64_t nbytes) {
 
 class S3ReadFile ::Impl {
  public:
-  explicit Impl(std::string_view path, Aws::S3::S3Client* client)
+  explicit Impl(std::string_view fullPath, Aws::S3::S3Client* client)
       : client_(client) {
-    getBucketAndKeyFromPath(path, bucket_, key_);
+    const auto pathInfo = parseS3Path(fullPath);
+    scheme_ = pathInfo.scheme;
+    getBucketAndKeyFromPath(pathInfo.path, bucket_, key_);
   }
 
   // Gets the length of the file.
@@ -134,7 +136,7 @@ class S3ReadFile ::Impl {
   }
 
   std::string getName() const {
-    return fmt::format("s3://{}/{}", bucket_, key_);
+    return fmt::format("{}{}/{}", scheme_, bucket_, key_);
   }
 
  private:
@@ -164,6 +166,7 @@ class S3ReadFile ::Impl {
   }
 
   Aws::S3::S3Client* client_;
+  std::string_view scheme_;
   std::string bucket_;
   std::string key_;
   int64_t length_ = -1;
