@@ -617,7 +617,7 @@ TEST_F(TableScanTest, subfieldPruningRowTypeSubscriptReachesChildrenSize) {
     ASSERT_TRUE(e->isNullAt(i) || c->isNullAt(i));
   }
 
-  // Assert scanned result from e.d is matching input vectors.
+  // Asserts scanned result for e.d is matching input vectors.
   auto d = e->childAt(2);
   int j = 0;
   for (auto& vec : vectors) {
