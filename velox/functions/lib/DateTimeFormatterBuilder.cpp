@@ -177,8 +177,10 @@ DateTimeFormatterBuilder&
 DateTimeFormatterBuilder::setFractionOfSecondPrecision(
     TimestampPrecision fractionOfSecondPrecision) {
   VELOX_CHECK(
-      fractionOfSecondPrecision != TimestampPrecision::kNanoseconds,
-      "Nanos not supported");
+      fractionOfSecondPrecision == TimestampPrecision::kMilliseconds ||
+          fractionOfSecondPrecision == TimestampPrecision::kMicroseconds,
+      "{} not supported",
+      fractionOfSecondPrecision);
   fractionOfSecondPrecision_ = fractionOfSecondPrecision;
   return *this;
 }

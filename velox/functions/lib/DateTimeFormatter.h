@@ -245,9 +245,11 @@ class DateTimeFormatter {
 Expected<std::shared_ptr<DateTimeFormatter>> buildMysqlDateTimeFormatter(
     const std::string_view& format);
 
+/// @param fractionOfSecondPrecision The precision of the second fraction part.
+/// By default, it is kMilliseconds to be compatible with Presto. In Spark it is
+/// set to kMicroseconds.
 Expected<std::shared_ptr<DateTimeFormatter>> buildJodaDateTimeFormatter(
     const std::string_view& format,
-    // Default kMilliseconds for Presto, in Spark it is set to kMicroseconds
     TimestampPrecision fractionOfSecondPrecision =
         TimestampPrecision::kMilliseconds);
 
