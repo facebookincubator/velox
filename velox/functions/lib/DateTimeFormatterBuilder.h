@@ -292,7 +292,8 @@ class DateTimeFormatterBuilder {
   size_t bufEnd_{0};
   std::vector<DateTimeToken> tokens_;
   DateTimeFormatterType type_{DateTimeFormatterType::UNKNOWN};
-  TimestampPrecision fractionOfSecondPrecision_;
+  TimestampPrecision fractionOfSecondPrecision_{
+      TimestampPrecision::kMilliseconds};
 };
 
 } // namespace facebook::velox::functions
