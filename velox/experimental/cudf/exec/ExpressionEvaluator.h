@@ -117,7 +117,6 @@ struct CudfExpressionNode {
 
   ColumnOrView eval(
       std::vector<std::unique_ptr<cudf::column>>& inputTableColumns,
-      //   TODO (dm): Do something to avoid passing schema
       const RowTypePtr& inputRowSchema,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr);
