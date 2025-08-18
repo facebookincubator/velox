@@ -382,18 +382,16 @@ uint64_t TableWriter::ConnectorReclaimer::reclaim(
 
   auto* writer = dynamic_cast<TableWriter*>(op_);
   if (writer->closed_) {
-    // TODO: reduce the log frequency if it is too verbose.
     ++stats.numNonReclaimableAttempts;
-    LOG(WARNING) << "Can't reclaim from a closed writer connector pool: "
+    FB_LOG_EVERY_MS(WARNING, 1000) << "Can't reclaim from a closed writer connector pool: "
                  << pool->name()
                  << ", memory usage: " << succinctBytes(pool->reservedBytes());
     return 0;
   }
 
   if (writer->dataSink_ == nullptr) {
-    // TODO: reduce the log frequency if it is too verbose.
     ++stats.numNonReclaimableAttempts;
-    LOG(WARNING)
+    FB_LOG_EVERY_MS(WARNING, 1000)
         << "Can't reclaim from a writer connector pool which hasn't initialized yet: "
         << pool->name()
         << ", memory usage: " << succinctBytes(pool->reservedBytes());
