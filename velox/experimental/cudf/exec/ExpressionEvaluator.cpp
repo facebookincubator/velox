@@ -583,15 +583,9 @@ cudf::ast::expression const& AstContext::pushExprToTree(
     VELOX_CHECK_NOT_NULL(fieldExpr, "Expression is not a field");
     return addPrecomputeInstruction(fieldExpr->name(), "lower");
   } else if (name == "substr") {
-    VELOX_CHECK_GE(len, 2);
-    VELOX_CHECK_LE(len, 3);
-    auto fieldExpr =
-        std::dynamic_pointer_cast<FieldReference>(expr->inputs()[0]);
-    VELOX_CHECK_NOT_NULL(fieldExpr, "Expression is not a field");
-
     // Build a cudf expression node for recursive evaluation
     auto node = CudfExpressionNode::create(expr);
-    return addPrecomputeInstruction(fieldExpr->name(), "substr", "", node);
+    return addPrecomputeInstructionOnSide(0, 0, "substr", "", node);
   } else if (name == "like") {
     VELOX_CHECK_EQ(len, 2);
 
@@ -617,11 +611,8 @@ cudf::ast::expression const& AstContext::pushExprToTree(
     return tree.push(Operation{Op::CAST_TO_INT64, colRef});
   } else if (name == "split") {
     VELOX_CHECK_EQ(len, 3);
-    auto fieldExpr =
-        std::dynamic_pointer_cast<FieldReference>(expr->inputs()[0]);
-    VELOX_CHECK_NOT_NULL(fieldExpr, "Expression is not a field");
     auto node = CudfExpressionNode::create(expr);
-    return addPrecomputeInstruction(fieldExpr->name(), "split", "", node);
+    return addPrecomputeInstructionOnSide(0, 0, "split", "", node);
   } else if (auto fieldExpr = std::dynamic_pointer_cast<FieldReference>(expr)) {
     // Refer to the appropriate side
     const auto fieldName =
