@@ -24,7 +24,6 @@
 
 #include <functional>
 #include <memory>
-#include <optional>
 #include <string>
 
 namespace facebook::velox::filesystems {

@@ -27,7 +27,7 @@
 
 namespace facebook::velox::filesystems {
 
-/// AzureClientProvider for Shared Key authentication.
+// AzureClientProvider for Shared Key authentication.
 class SharedKeyAzureClientProvider final : public AzureClientProvider {
  public:
   std::unique_ptr<AzureBlobClient> getReadFileClient(
@@ -38,7 +38,7 @@ class SharedKeyAzureClientProvider final : public AzureClientProvider {
       const std::shared_ptr<AbfsPath>& abfsPath,
       const config::ConfigBase& config) override;
 
-  /// Test only.
+  // Test only.
   std::string connectionString(
       const std::shared_ptr<AbfsPath>& abfsPath,
       const config::ConfigBase& config);
@@ -51,7 +51,7 @@ class SharedKeyAzureClientProvider final : public AzureClientProvider {
   std::string connectionString_;
 };
 
-/// AzureClientProvider for OAuth authentication.
+// AzureClientProvider for OAuth authentication.
 class OAuthAzureClientProvider final : public AzureClientProvider {
  public:
   std::unique_ptr<AzureBlobClient> getReadFileClient(
@@ -62,7 +62,7 @@ class OAuthAzureClientProvider final : public AzureClientProvider {
       const std::shared_ptr<AbfsPath>& abfsPath,
       const config::ConfigBase& config) override;
 
-  /// Test only.
+  // Test only.
   std::pair<std::string, std::string> tenantIdAndAuthorityHost(
       const std::shared_ptr<AbfsPath>& abfsPath,
       const config::ConfigBase& config);
@@ -77,7 +77,7 @@ class OAuthAzureClientProvider final : public AzureClientProvider {
   std::shared_ptr<Azure::Core::Credentials::TokenCredential> tokenCredential_;
 };
 
-/// AzureClientProvider for SAS authentication with a fixed SAS token.
+// AzureClientProvider for SAS authentication with a fixed SAS token.
 class FixedSasAzureClientProvider final : public AzureClientProvider {
  public:
   std::unique_ptr<AzureBlobClient> getReadFileClient(
@@ -88,7 +88,7 @@ class FixedSasAzureClientProvider final : public AzureClientProvider {
       const std::shared_ptr<AbfsPath>& abfsPath,
       const config::ConfigBase& config) override;
 
-  /// Test only.
+  // Test only.
   std::string sas(
       const std::shared_ptr<AbfsPath>& abfsPath,
       const config::ConfigBase& config);

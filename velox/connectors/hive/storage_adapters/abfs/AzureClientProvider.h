@@ -21,17 +21,17 @@
 
 namespace facebook::velox::filesystems {
 
-/// Provider interface for creating Azure Blob and Data Lake clients.
+// Provider interface for creating Azure Blob and Data Lake clients.
 class AzureClientProvider {
  public:
   virtual ~AzureClientProvider() = default;
 
-  /// Creates AzureBlobClient for file read operations.
+  // Creates AzureBlobClient for file read operations.
   virtual std::unique_ptr<AzureBlobClient> getReadFileClient(
       const std::shared_ptr<AbfsPath>& path,
       const config::ConfigBase& config) = 0;
 
-  /// Creates AzureDataLakeFileClient for file write operations.
+  // Creates AzureDataLakeFileClient for file write operations.
   virtual std::unique_ptr<AzureDataLakeFileClient> getWriteFileClient(
       const std::shared_ptr<AbfsPath>& path,
       const config::ConfigBase& config) = 0;

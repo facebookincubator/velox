@@ -186,7 +186,9 @@ void OAuthAzureClientProvider::init(
       "Config {} not found",
       clientEndpointKey);
   auto clientEndpoint = config.get<std::string>(clientEndpointKey).value();
-  auto firstSep = clientEndpoint.find_first_of("/", /* https:// */ 8);
+  // Length of "https://".
+  static const std::size_t kHttpsPrefixLen = 8;
+  auto firstSep = clientEndpoint.find_first_of("/", kHttpsPrefixLen);
   authorityHost_ = clientEndpoint.substr(0, firstSep + 1);
   auto sedondSep = clientEndpoint.find_first_of("/", firstSep + 1);
   tenentId_ = clientEndpoint.substr(firstSep + 1, sedondSep - firstSep - 1);

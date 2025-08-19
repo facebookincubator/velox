@@ -21,8 +21,10 @@
 #include <string>
 
 namespace facebook::velox::config {
+
 class ConfigBase;
-}
+
+} // namespace facebook::velox::config
 
 namespace facebook::velox::filesystems {
 

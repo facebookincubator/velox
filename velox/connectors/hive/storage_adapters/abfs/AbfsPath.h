@@ -54,7 +54,7 @@ static constexpr const char* kAzureOAuthAuthType = "OAuth";
 
 static constexpr const char* kAzureSASAuthType = "SAS";
 
-/// Helper class to parse and extract information from a given ABFS path.
+// Helper class to parse and extract information from a given ABFS path.
 class AbfsPath {
  public:
   AbfsPath(std::string_view path);

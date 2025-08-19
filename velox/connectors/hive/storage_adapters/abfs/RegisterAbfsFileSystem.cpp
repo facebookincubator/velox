@@ -29,6 +29,17 @@
 namespace facebook::velox::filesystems {
 
 #ifdef VELOX_ENABLE_ABFS
+
+namespace {
+
+template <typename T>
+void registerProviderFactory(const std::string& accountName) {
+  AzureClientProviderFactories::registerFactory(
+      accountName, [](const std::string&) { return std::make_unique<T>(); });
+}
+
+} // namespace
+
 folly::once_flag abfsInitiationFlag;
 
 std::shared_ptr<FileSystem> abfsFileSystemGenerator(
@@ -71,7 +82,7 @@ void registerAzureClientProvider(const config::ConfigBase& config) {
     constexpr std::string_view authTypePrefix{kAzureAccountAuthType};
     if (key.find(authTypePrefix) == 0) {
       std::string_view skey = key;
-      // extract the accountName after "fs.azure.account.auth.type.".
+      // Extract the accountName after "fs.azure.account.auth.type.".
       auto remaining = skey.substr(authTypePrefix.size() + 1);
       auto dot = remaining.find(".");
       VELOX_CHECK_NE(
@@ -82,20 +93,11 @@ void registerAzureClientProvider(const config::ConfigBase& config) {
       auto accountName = std::string(remaining.substr(0, dot));
 
       if (value == kAzureSharedKeyAuthType) {
-        AzureClientProviderFactories::registerFactory(
-            accountName, [](const std::string&) {
-              return std::make_unique<SharedKeyAzureClientProvider>();
-            });
+        registerProviderFactory<SharedKeyAzureClientProvider>(accountName);
       } else if (value == kAzureOAuthAuthType) {
-        AzureClientProviderFactories::registerFactory(
-            accountName, [](const std::string&) {
-              return std::make_unique<OAuthAzureClientProvider>();
-            });
+        registerProviderFactory<OAuthAzureClientProvider>(accountName);
       } else if (value == kAzureSASAuthType) {
-        AzureClientProviderFactories::registerFactory(
-            accountName, [](const std::string&) {
-              return std::make_unique<FixedSasAzureClientProvider>();
-            });
+        registerProviderFactory<FixedSasAzureClientProvider>(accountName);
       } else {
         VELOX_USER_FAIL(
             "Unsupported auth type {}, supported auth types are SharedKey, OAuth and SAS.",

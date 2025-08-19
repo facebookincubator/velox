@@ -20,7 +20,7 @@
 
 namespace facebook::velox::filesystems {
 
-/// Interface for Azure Blob Storage client operations.
+// Interface for Azure Blob Storage client operations.
 class AzureBlobClient {
  public:
   virtual ~AzureBlobClient() {}

@@ -44,9 +44,9 @@ std::string AbfsPath::getUrl(bool withblobSuffix) const {
   std::string accountNameWithSuffixForUrl(accountNameWithSuffix_);
   if (withblobSuffix) {
     // We should use correct suffix for blob client.
-    size_t start_pos = accountNameWithSuffixForUrl.find("dfs");
-    if (start_pos != std::string::npos) {
-      accountNameWithSuffixForUrl.replace(start_pos, 3, "blob");
+    size_t startPos = accountNameWithSuffixForUrl.find("dfs");
+    if (startPos != std::string::npos) {
+      accountNameWithSuffixForUrl.replace(startPos, 3, "blob");
     }
   }
   return fmt::format(
