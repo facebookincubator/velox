@@ -33,6 +33,16 @@ void StringVectorBuffer::appendByte(int8_t value) {
   rawBuffer_[currentPosition_++] = value;
 }
 
+void StringVectorBuffer::appendBytes(const int8_t *data, size_t size) {
+  if (size == 0) {
+    return;
+  }
+  ensureCapacity(size);
+  VELOX_CHECK_GT(writableCapacity(), 0, "No writable capacity");
+  std::memcpy(rawBuffer_ + currentPosition_, data, size);
+  currentPosition_ += size;
+}
+
 void StringVectorBuffer::flushRow(vector_size_t rowId) {
   // Flush the current row to the vector.
   vector_->setNoCopy(

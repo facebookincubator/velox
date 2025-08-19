@@ -40,8 +40,10 @@ class StringVectorBuffer {
       size_t maxCapacity);
 
   /// Appends a byte to the buffer.
-  /// TODO: supports appending multiple bytes at a time.
   void appendByte(int8_t value);
+  
+  /// Appends a sequence of bytes to the buffer.
+  void appendBytes(const int8_t* data, size_t size);
 
   /// Sets the row at 'rowId' with current buffered data without data copy.
   void flushRow(vector_size_t rowId);

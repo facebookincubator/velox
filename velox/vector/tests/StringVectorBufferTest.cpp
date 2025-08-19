@@ -144,4 +144,71 @@ TEST_F(StringVectorBufferTest, appendAndFlushMaxCapacity) {
       testAppendAndFlush(stringVec, 20, 20),
       "Cannot grow buffer with totalCapacity:20B to meet minRequiredCapacity:41B");
 }
+
+TEST_F(StringVectorBufferTest, appendBytes) {
+  auto batchSize = 10;
+  auto vector = BaseVector::create<FlatVector<StringView>>(
+      VARBINARY(), batchSize, pool_.get());
+
+  StringVectorBuffer buffer(vector.get(), 10, 100);
+
+  // test basic int8_t data
+  {
+    int8_t data1[] = {1, 2, 3, 4, 5};
+    buffer.appendBytes(data1, sizeof(data1));
+    buffer.flushRow(0);
+    EXPECT_EQ(vector->valueAt(0).size(), sizeof(data1));
+    EXPECT_EQ(std::string(vector->valueAt(0).data(), vector->valueAt(0).size()),
+              std::string("\x01\x02\x03\x04\x05", 5));
+  }
+
+  // test uint8_t data
+  {
+    uint8_t data2[] = {0xAA, 0xBB, 0xCC};
+    buffer.appendBytes(reinterpret_cast<const int8_t *>(data2), sizeof(data2));
+    buffer.flushRow(1);
+    EXPECT_EQ(vector->valueAt(1).size(), sizeof(data2));
+    EXPECT_EQ(std::string(vector->valueAt(1).data(), vector->valueAt(1).size()),
+              std::string("\xAA\xBB\xCC", 3));
+  }
+
+  // test char data
+  {
+    const char *data3 = "hello";
+    buffer.appendBytes(reinterpret_cast<const int8_t *>(data3), strlen(data3));
+    buffer.flushRow(2);
+    EXPECT_EQ(vector->valueAt(2).size(), strlen(data3));
+    EXPECT_EQ(std::string(vector->valueAt(2).data(), vector->valueAt(2).size()),
+              "hello");
+    // totalCapacity_ becomes 10 * 2 = 20 bytes after this append
+  }
+
+  // do nothing with empty data
+  {
+    int8_t emptyData[] = {};
+    buffer.appendBytes(emptyData, 0);
+    buffer.flushRow(3);
+    EXPECT_EQ(vector->valueAt(3).size(), 0);
+  }
+
+  // large data, should resize the buffer second time
+  {
+    // minRequiredCapacity = 20 + 0 + 50 = 70 (total + unflushed + grow)
+    // newTotalCapacity = max(20 * 2, 70) = 70
+    int8_t largeData[50];
+    std::fill(std::begin(largeData), std::end(largeData), 0x7F);
+    buffer.appendBytes(largeData, sizeof(largeData));
+    buffer.flushRow(4);
+    EXPECT_EQ(vector->valueAt(4).size(), sizeof(largeData));
+  }
+
+  // finally, test overflow case
+  {
+    int8_t overflowData[60];
+    VELOX_ASSERT_THROW(
+    buffer.appendBytes(overflowData, sizeof(overflowData)),
+    "Cannot grow buffer with totalCapacity:70B to meet minRequiredCapacity:130B");
+  }
+}
+
 } // namespace facebook::velox::test
