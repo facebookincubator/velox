@@ -644,7 +644,8 @@ std::shared_ptr<CudfExpressionNode> CudfExpressionNode::create(
     const std::shared_ptr<velox::exec::Expr>& expr) {
   using velox::exec::ConstantExpr;
   // TODO (dm): get name of function and get function from map
-  auto name = expr->name();
+  const auto name =
+      stripPrefix(expr->name(), CudfOptions::getInstance().prefix());
   // auto func = CudfFunctionRegistry::get().getFunction(name);
   // return CudfExpressionNode(expr, func);
   auto node = std::make_shared<CudfExpressionNode>();
@@ -735,7 +736,10 @@ ColumnOrView CudfExpressionNode::eval(
     return inputTableColumns[columnIndex]->view();
   }
 
-  if (expr->name() == "split") {
+  const auto name =
+      stripPrefix(expr->name(), CudfOptions::getInstance().prefix());
+
+  if (name == "split") {
     auto dataCol =
         subexpressions[0]->eval(inputTableColumns, inputRowSchema, stream, mr);
     auto delimiterScalar =
@@ -752,11 +756,11 @@ ColumnOrView CudfExpressionNode::eval(
 
     return cudf::strings::split_record(
         asView(dataCol), delimiterScalar, maxSplitCount, stream, mr);
-  } else if (expr->name() == "cardinality") {
+  } else if (name == "cardinality") {
     auto dataCol =
         subexpressions[0]->eval(inputTableColumns, inputRowSchema, stream, mr);
     return cudf::lists::count_elements(asView(dataCol), stream, mr);
-  } else if (expr->name() == "substr") {
+  } else if (name == "substr") {
     auto dataCol =
         subexpressions[0]->eval(inputTableColumns, inputRowSchema, stream, mr);
 
