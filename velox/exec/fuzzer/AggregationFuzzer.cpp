@@ -19,13 +19,10 @@
 
 #include "velox/common/base/Portability.h"
 #include "velox/connectors/hive/TableHandle.h"
-#include "velox/dwio/dwrf/reader/DwrfReader.h"
-
-#include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
-
 #include "velox/exec/PartitionFunction.h"
 #include "velox/exec/fuzzer/FuzzerUtil.h"
+#include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/expression/fuzzer/FuzzerToolkit.h"
 #include "velox/vector/VectorSaver.h"
 
