@@ -834,6 +834,323 @@ TEST_F(HiveIcebergTest, testPartitionedRead) {
   HiveConnectorTestBase::assertQuery(plan, splits, "SELECT 0, '2018-04-06'");
 }
 
+TEST_F(HiveIcebergTest, testReadDecimal) {
+  RowTypePtr rowType{ROW({"c0", "price"}, {BIGINT(), DECIMAL(10, 2)})};
+  std::unordered_map<std::string, std::optional<std::string>> partitionKeys;
+
+  std::vector<std::shared_ptr<ConnectorSplit>> splits;
+  std::vector<RowVectorPtr> allDataVectors;
+  std::vector<std::shared_ptr<TempFilePath>> tempFiles;
+
+  std::vector<std::string> decimalPartitionValues = {"123.45", "678.90"};
+
+  for (auto i = 0; i < decimalPartitionValues.size(); ++i) {
+    std::vector<RowVectorPtr> dataVectors;
+    // Create data file with only c0 column (price is partition column).
+    VectorPtr c0 = makeFlatVector<int64_t>({i * 10, i * 10 + 1, i * 10 + 2});
+    dataVectors.push_back(makeRowVector({"c0"}, {c0}));
+
+    auto dataFilePath = TempFilePath::create();
+    writeToFile(
+        dataFilePath->getPath(), dataVectors, config_, flushPolicyFactory_);
+
+    partitionKeys["price"] = decimalPartitionValues[i];
+    auto icebergSplits =
+        makeIcebergSplits(dataFilePath->getPath(), {}, partitionKeys);
+    splits.insert(splits.end(), icebergSplits.begin(), icebergSplits.end());
+    tempFiles.push_back(dataFilePath);
+
+    VectorPtr expectedPrice =
+        makeFlatVector<int64_t>({12345, 12345, 12345}, DECIMAL(10, 2));
+    if (i == 1) {
+      expectedPrice =
+          makeFlatVector<int64_t>({67890, 67890, 67890}, DECIMAL(10, 2));
+    }
+    allDataVectors.push_back(
+        makeRowVector({"c0", "price"}, {c0, expectedPrice}));
+  }
+
+  ColumnHandleMap assignments;
+  assignments.insert(
+      {"c0",
+       std::make_shared<HiveColumnHandle>(
+           "c0",
+           HiveColumnHandle::ColumnType::kRegular,
+           rowType->childAt(0),
+           rowType->childAt(0))});
+
+  assignments.insert(
+      {"price",
+       std::make_shared<HiveColumnHandle>(
+           "price",
+           HiveColumnHandle::ColumnType::kPartitionKey,
+           rowType->childAt(1),
+           rowType->childAt(1))});
+
+  auto plan = PlanBuilder(pool_.get())
+                  .tableScan(rowType, {}, "", rowType, assignments)
+                  .planNode();
+
+  createDuckDbTable(allDataVectors);
+  assertQuery(plan, splits, "SELECT * FROM tmp", 0);
+}
+
+TEST_F(HiveIcebergTest, testReadLongDecimal) {
+  RowTypePtr rowType{ROW({"c0", "amount"}, {BIGINT(), DECIMAL(20, 5)})};
+  std::unordered_map<std::string, std::optional<std::string>> partitionKeys;
+
+  std::vector<std::shared_ptr<ConnectorSplit>> splits;
+  std::vector<RowVectorPtr> allDataVectors;
+  std::string decimalPartitionValue = "123456789012.34567";
+
+  std::vector<RowVectorPtr> dataVectors;
+  // Create data file with only c0 column (amount is partition column).
+  VectorPtr c0 = makeFlatVector<int64_t>({100, 200, 300});
+  dataVectors.push_back(makeRowVector({"c0"}, {c0}));
+
+  auto dataFilePath = TempFilePath::create();
+  writeToFile(
+      dataFilePath->getPath(), dataVectors, config_, flushPolicyFactory_);
+
+  partitionKeys["amount"] = decimalPartitionValue;
+  auto icebergSplits =
+      makeIcebergSplits(dataFilePath->getPath(), {}, partitionKeys);
+  splits.insert(splits.end(), icebergSplits.begin(), icebergSplits.end());
+
+  std::vector<std::shared_ptr<TempFilePath>> tempFiles = {dataFilePath};
+
+  VectorPtr expectedAmount = makeFlatVector<int128_t>(
+      {HugeInt::parse("12345678901234567"),
+       HugeInt::parse("12345678901234567"),
+       HugeInt::parse("12345678901234567")},
+      DECIMAL(20, 5));
+  allDataVectors.push_back(
+      makeRowVector({"c0", "amount"}, {c0, expectedAmount}));
+
+  ColumnHandleMap assignments;
+  assignments.insert(
+      {"c0",
+       std::make_shared<HiveColumnHandle>(
+           "c0",
+           HiveColumnHandle::ColumnType::kRegular,
+           rowType->childAt(0),
+           rowType->childAt(0))});
+
+  assignments.insert(
+      {"amount",
+       std::make_shared<HiveColumnHandle>(
+           "amount",
+           HiveColumnHandle::ColumnType::kPartitionKey,
+           rowType->childAt(1),
+           rowType->childAt(1))});
+
+  auto plan = PlanBuilder(pool_.get())
+                  .tableScan(rowType, {}, "", rowType, assignments)
+                  .planNode();
+
+  createDuckDbTable(allDataVectors);
+  assertQuery(plan, splits, "SELECT * FROM tmp", 0);
+}
+
+TEST_F(HiveIcebergTest, testAddNewColumn) {
+  RowTypePtr oldRowType{ROW({"c0"}, {BIGINT()})};
+  RowTypePtr newRowType{ROW({"c0", "c1"}, {BIGINT(), INTEGER()})};
+
+  std::vector<RowVectorPtr> dataVectors;
+  VectorPtr c0 = makeFlatVector<int64_t>({1, 2, 3, 4, 5});
+  dataVectors.push_back(makeRowVector({"c0"}, {c0}));
+
+  auto dataFilePath = TempFilePath::create();
+  std::vector<std::shared_ptr<TempFilePath>> tempFiles = {dataFilePath};
+  writeToFile(
+      dataFilePath->getPath(), dataVectors, config_, flushPolicyFactory_);
+
+  auto icebergSplits = makeIcebergSplits(dataFilePath->getPath());
+
+  // Read with new schema (c0 and c1).
+  ColumnHandleMap assignments;
+  assignments.insert(
+      {"c0",
+       std::make_shared<HiveColumnHandle>(
+           "c0",
+           HiveColumnHandle::ColumnType::kRegular,
+           newRowType->childAt(0),
+           newRowType->childAt(0))});
+
+  assignments.insert(
+      {"c1",
+       std::make_shared<HiveColumnHandle>(
+           "c1",
+           HiveColumnHandle::ColumnType::kRegular,
+           newRowType->childAt(1),
+           newRowType->childAt(1))});
+
+  auto plan = PlanBuilder(pool_.get())
+                  .tableScan(newRowType, {}, "", newRowType, assignments)
+                  .planNode();
+
+  // Expected result: c0 has values, c1 is NULL.
+  VectorPtr expectedC1 = makeNullableFlatVector<int32_t>(
+      {std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt});
+  std::vector<RowVectorPtr> expectedVectors;
+  expectedVectors.push_back(makeRowVector({"c0", "c1"}, {c0, expectedC1}));
+
+  createDuckDbTable(expectedVectors);
+  assertQuery(plan, icebergSplits, "SELECT * FROM tmp", 0);
+}
+
+TEST_F(HiveIcebergTest, testAddNewDecimalColumn) {
+  RowTypePtr oldRowType{ROW({"c0"}, {BIGINT()})};
+  RowTypePtr newRowType{ROW({"c0", "price"}, {BIGINT(), DECIMAL(10, 2)})};
+
+  // Write data file with old schema (only c0).
+  std::vector<RowVectorPtr> dataVectors;
+  VectorPtr c0 = makeFlatVector<int64_t>({10, 20, 30});
+  dataVectors.push_back(makeRowVector({"c0"}, {c0}));
+
+  auto dataFilePath = TempFilePath::create();
+  std::vector<std::shared_ptr<TempFilePath>> tempFiles = {dataFilePath};
+  writeToFile(
+      dataFilePath->getPath(), dataVectors, config_, flushPolicyFactory_);
+
+  auto icebergSplits = makeIcebergSplits(dataFilePath->getPath());
+
+  // Read with new schema (c0 and price).
+  ColumnHandleMap assignments;
+  assignments.insert(
+      {"c0",
+       std::make_shared<HiveColumnHandle>(
+           "c0",
+           HiveColumnHandle::ColumnType::kRegular,
+           newRowType->childAt(0),
+           newRowType->childAt(0))});
+
+  assignments.insert(
+      {"price",
+       std::make_shared<HiveColumnHandle>(
+           "price",
+           HiveColumnHandle::ColumnType::kRegular,
+           newRowType->childAt(1),
+           newRowType->childAt(1))});
+
+  auto plan = PlanBuilder(pool_.get())
+                  .tableScan(newRowType, {}, "", newRowType, assignments)
+                  .planNode();
+
+  // Expected result: c0 has values, price is NULL.
+  VectorPtr expectedPrice = makeNullableFlatVector<int64_t>(
+      {std::nullopt, std::nullopt, std::nullopt}, DECIMAL(10, 2));
+  std::vector<RowVectorPtr> expectedVectors;
+  expectedVectors.push_back(
+      makeRowVector({"c0", "price"}, {c0, expectedPrice}));
+
+  createDuckDbTable(expectedVectors);
+  assertQuery(plan, icebergSplits, "SELECT * FROM tmp", 0);
+}
+
+TEST_F(HiveIcebergTest, testReadPartitionColumnsFromFile) {
+  RowTypePtr tableSchema{
+      ROW({"c0", "c1", "c2", "price", "region"},
+          {BIGINT(), INTEGER(), VARCHAR(), DECIMAL(10, 2), VARCHAR()})};
+
+  std::unordered_map<std::string, std::optional<std::string>> partitionKeys;
+  std::vector<std::shared_ptr<ConnectorSplit>> splits;
+  std::vector<RowVectorPtr> allDataVectors;
+  std::vector<std::shared_ptr<TempFilePath>> tempFiles;
+
+  std::vector<std::pair<std::string, std::string>> partitions = {
+      {"123.45", "US"}, {"678.90", "EU"}};
+
+  for (auto i = 0; i < partitions.size(); ++i) {
+    std::vector<RowVectorPtr> dataVectors;
+
+    // Write ALL 5 columns to the data file (including partition columns).
+    VectorPtr c0 = makeFlatVector<int64_t>({i * 100, i * 100 + 1, i * 100 + 2});
+    VectorPtr c1 = makeFlatVector<int32_t>({i * 10, i * 10 + 10, i * 10 + 20});
+    VectorPtr c2 = makeFlatVector<std::string>(
+        {"row" + std::to_string(i * 3),
+         "row" + std::to_string(i * 3 + 1),
+         "row" + std::to_string(i * 3 + 2)});
+
+    VectorPtr priceInFile =
+        makeFlatVector<int64_t>({12345, 12345, 12345}, DECIMAL(10, 2));
+    VectorPtr regionInFile = makeFlatVector<std::string>({"US", "US", "US"});
+    if (i == 1) {
+      priceInFile =
+          makeFlatVector<int64_t>({67890, 67890, 67890}, DECIMAL(10, 2));
+      regionInFile = makeFlatVector<std::string>({"EU", "EU", "EU"});
+    }
+
+    dataVectors.push_back(makeRowVector(
+        {"c0", "c1", "c2", "price", "region"},
+        {c0, c1, c2, priceInFile, regionInFile}));
+
+    auto dataFilePath = TempFilePath::create();
+    writeToFile(
+        dataFilePath->getPath(), dataVectors, config_, flushPolicyFactory_);
+
+    // Do not explicitly set partition key.
+    auto icebergSplits = makeIcebergSplits(dataFilePath->getPath(), {});
+
+    splits.insert(splits.end(), icebergSplits.begin(), icebergSplits.end());
+    tempFiles.push_back(dataFilePath);
+
+    // Expected result: ALL values come from the data file.
+    allDataVectors.push_back(makeRowVector(
+        {"c0", "c1", "c2", "price", "region"},
+        {c0, c1, c2, priceInFile, regionInFile}));
+  }
+
+  ColumnHandleMap assignments;
+  assignments.insert(
+      {"c0",
+       std::make_shared<HiveColumnHandle>(
+           "c0",
+           HiveColumnHandle::ColumnType::kRegular,
+           tableSchema->childAt(0),
+           tableSchema->childAt(0))});
+
+  assignments.insert(
+      {"c1",
+       std::make_shared<HiveColumnHandle>(
+           "c1",
+           HiveColumnHandle::ColumnType::kRegular,
+           tableSchema->childAt(1),
+           tableSchema->childAt(1))});
+
+  assignments.insert(
+      {"c2",
+       std::make_shared<HiveColumnHandle>(
+           "c2",
+           HiveColumnHandle::ColumnType::kRegular,
+           tableSchema->childAt(2),
+           tableSchema->childAt(2))});
+
+  // Mark price and region as partition columns.
+  assignments.insert(
+      {"price",
+       std::make_shared<HiveColumnHandle>(
+           "price",
+           HiveColumnHandle::ColumnType::kPartitionKey,
+           tableSchema->childAt(3),
+           tableSchema->childAt(3))});
+
+  assignments.insert(
+      {"region",
+       std::make_shared<HiveColumnHandle>(
+           "region",
+           HiveColumnHandle::ColumnType::kPartitionKey,
+           tableSchema->childAt(4),
+           tableSchema->childAt(4))});
+
+  auto plan = PlanBuilder(pool_.get())
+                  .tableScan(tableSchema, {}, "", tableSchema, assignments)
+                  .planNode();
+
+  createDuckDbTable(allDataVectors);
+  assertQuery(plan, splits, "SELECT * FROM tmp", 0);
+}
+
 #ifdef VELOX_ENABLE_PARQUET
 TEST_F(HiveIcebergTest, testPositionalDeleteFileWithRowGroupFilter) {
   // This file contains three row groups, each with about 100 rows.
