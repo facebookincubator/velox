@@ -160,15 +160,8 @@ void CudfHashJoinBuild::noMoreInput() {
   };
 
   auto stream = cudfGlobalStreamPool().get_stream();
-  std::unique_ptr<cudf::table> tbl;
-  if (inputs_.size() == 0) {
-    auto emptyRowVector = RowVector::createEmpty(
-        joinNode_->sources()[1]->outputType(), operatorCtx_->pool());
-    tbl = facebook::velox::cudf_velox::with_arrow::toCudfTable(
-        emptyRowVector, operatorCtx_->pool(), stream);
-  } else {
-    tbl = getConcatenatedTable(inputs_, stream);
-  }
+  auto tbl = getConcatenatedTable(
+      inputs_, joinNode_->sources()[1]->outputType(), stream);
 
   // Release input data after synchronizing
   stream.synchronize();
@@ -446,15 +439,8 @@ void CudfHashJoinProbe::noMoreInput() {
   };
 
   auto stream = cudfGlobalStreamPool().get_stream();
-  std::unique_ptr<cudf::table> tbl;
-  if (inputs_.size() == 0) {
-    auto emptyRowVector = RowVector::createEmpty(
-        joinNode_->sources()[1]->outputType(), operatorCtx_->pool());
-    tbl = facebook::velox::cudf_velox::with_arrow::toCudfTable(
-        emptyRowVector, operatorCtx_->pool(), stream);
-  } else {
-    tbl = getConcatenatedTable(inputs_, stream);
-  }
+  auto tbl = getConcatenatedTable(
+      inputs_, joinNode_->sources()[1]->outputType(), stream);
 
   // Release input data after synchronizing
   stream.synchronize();
