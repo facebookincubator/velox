@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <limits>
 #include <optional>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/expression/VectorReaders.h"
@@ -33,7 +34,7 @@ using namespace facebook::velox::exec;
 namespace facebook::velox {
 namespace {
 
-static constexpr int64_t overflowSize = 3UL << 30;
+static constexpr vector_size_t overflowSize = std::numeric_limits<vector_size_t>::max();
 
 class GenericWriterTest : public functions::test::FunctionBaseTest {};
 
