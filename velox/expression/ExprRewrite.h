@@ -32,6 +32,26 @@ core::TypedExprPtr rewriteConjunctExpression(
     const std::shared_ptr<core::QueryCtx>& queryCtx,
     memory::MemoryPool* pool);
 
+core::TypedExprPtr rewriteCoalesceExpression(
+    const core::TypedExprPtr& input,
+    const std::shared_ptr<core::QueryCtx>& queryCtx,
+    memory::MemoryPool* pool);
+
+core::TypedExprPtr rewriteIfExpression(
+    const core::TypedExprPtr& input,
+    const std::shared_ptr<core::QueryCtx>& queryCtx,
+    memory::MemoryPool* pool);
+
+core::TypedExprPtr rewriteSwitchExpression(
+    const core::TypedExprPtr& input,
+    const std::shared_ptr<core::QueryCtx>& queryCtx,
+    memory::MemoryPool* pool);
+
+core::TypedExprPtr rewriteInExpression(
+    const core::TypedExprPtr& input,
+    const std::shared_ptr<core::QueryCtx>& queryCtx,
+    memory::MemoryPool* pool);
+
 /// Applies all registered expression rewrites to `expr` sequentially and
 /// constant folds the result. Returns a rewritten TypedExpr.
 /// Specifically, the function returns:
