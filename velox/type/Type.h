@@ -35,6 +35,7 @@
 #include <velox/common/Enums.h>
 #include "velox/common/base/ClassName.h"
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/base/Macros.h"
 #include "velox/common/serialization/Serializable.h"
 #include "velox/type/HugeInt.h"
 #include "velox/type/StringView.h"
@@ -105,8 +106,6 @@ inline std::string mapTypeKindToName(const TypeKind& typeKind) {
   return std::string(TypeKindName::toName(typeKind));
 }
 
-std::ostream& operator<<(std::ostream& os, const TypeKind& kind);
-
 template <TypeKind KIND>
 class ScalarType;
 class ShortDecimalType;
@@ -123,24 +122,8 @@ struct UnknownValue {
     return true;
   }
 
-  bool operator!=(const UnknownValue& /* b */) const {
-    return false;
-  }
-
-  bool operator<(const UnknownValue& /* b */) const {
-    return false;
-  }
-
-  bool operator<=(const UnknownValue& /* b */) const {
-    return true;
-  }
-
-  bool operator>(const UnknownValue& /* b */) const {
-    return false;
-  }
-
-  bool operator>=(const UnknownValue& /* b */) const {
-    return true;
+  auto operator<=>(const UnknownValue& /* b */) const {
+    return std::strong_ordering::equal;
   }
 };
 
@@ -507,13 +490,13 @@ struct TypeParameter {
 class Type : public Tree<const TypePtr>, public velox::ISerializable {
  public:
   constexpr explicit Type(TypeKind kind, bool providesCustomComparison = false)
-      : kind_{kind}, providesCustomComparison_(providesCustomComparison) {}
+      : kind_{kind}, providesCustomComparison_{providesCustomComparison} {}
 
   TypeKind kind() const {
     return kind_;
   }
 
-  virtual ~Type() = default;
+  ~Type() override = default;
 
   /// This convenience method makes pattern matching easier. Rather than having
   /// to know the implementation type up front, just use as<TypeKind::MAP> (for
@@ -579,10 +562,6 @@ class Type : public Tree<const TypePtr>, public velox::ISerializable {
   /// For primitive types: same as equivalent.
   virtual bool operator==(const Type& other) const {
     return this->equals(other);
-  }
-
-  inline bool operator!=(const Type& other) const {
-    return !(*this == other);
   }
 
   // todo(youknowjack): avoid expensive virtual function calls for these
@@ -676,8 +655,11 @@ template <TypeKind KIND>
 struct kindCanProvideCustomComparison<
     KIND,
     std::enable_if_t<
-        TypeTraits<KIND>::isPrimitiveType && TypeTraits<KIND>::isFixedWidth>> {
-  static constexpr bool value = true;
+        TypeTraits<KIND>::isPrimitiveType && TypeTraits<KIND>::isFixedWidth>>
+    : std::true_type {};
+
+struct ProvideCustomComparison {
+  explicit ProvideCustomComparison() = default;
 };
 
 template <TypeKind KIND>
@@ -687,13 +669,10 @@ class TypeBase : public Type {
 
   constexpr explicit TypeBase() : Type{KIND, false} {}
 
-  explicit TypeBase(bool providesCustomComparison)
-      : Type{KIND, providesCustomComparison} {
-    if (providesCustomComparison) {
-      VELOX_CHECK(
-          kindCanProvideCustomComparison<KIND>::value,
-          "Custom comparisons are only supported for primitive types that are fixed width.");
-    }
+  constexpr explicit TypeBase(ProvideCustomComparison tag) : Type{KIND, true} {
+    static_assert(
+        kindCanProvideCustomComparison<KIND>::value,
+        "Custom comparisons are only supported for primitive types that are fixed width.");
   }
 
   bool isPrimitiveType() const override {
@@ -729,10 +708,7 @@ class TypeBase : public Type {
 template <TypeKind KIND>
 class CanProvideCustomComparisonType : public TypeBase<KIND> {
  public:
-  constexpr explicit CanProvideCustomComparisonType() = default;
-
-  explicit CanProvideCustomComparisonType(bool providesCustomComparison)
-      : TypeBase<KIND>{providesCustomComparison} {}
+  using TypeBase<KIND>::TypeBase;
 
   virtual int32_t compare(
       const typename TypeBase<KIND>::NativeType& /*left*/,
@@ -755,10 +731,7 @@ class CanProvideCustomComparisonType : public TypeBase<KIND> {
 template <TypeKind KIND>
 class ScalarType : public CanProvideCustomComparisonType<KIND> {
  public:
-  constexpr explicit ScalarType() = default;
-
-  explicit ScalarType(bool providesCustomComparison)
-      : CanProvideCustomComparisonType<KIND>{providesCustomComparison} {}
+  using CanProvideCustomComparisonType<KIND>::CanProvideCustomComparisonType;
 
   uint32_t size() const override {
     return 0;
@@ -788,7 +761,10 @@ class ScalarType : public CanProvideCustomComparisonType<KIND> {
     return Type::cppSizeInBytes();
   }
 
-  FOLLY_NOINLINE static std::shared_ptr<const ScalarType<KIND>> create() {
+  // TODO: This and all similar functions should be constexpr starting from
+  // C++23. In such case similar places but with type parameters can be
+  // constexpr too.
+  static std::shared_ptr<const ScalarType<KIND>> create() {
     static constexpr ScalarType<KIND> kInstance;
     return {std::shared_ptr<const ScalarType<KIND>>{}, &kInstance};
   }
@@ -878,13 +854,13 @@ class DecimalType : public ScalarType<KIND> {
   const std::vector<TypeParameter> parameters_;
 };
 
-class ShortDecimalType : public DecimalType<TypeKind::BIGINT> {
+class ShortDecimalType final : public DecimalType<TypeKind::BIGINT> {
  public:
   ShortDecimalType(int precision, int scale)
       : DecimalType<TypeKind::BIGINT>(precision, scale) {}
 };
 
-class LongDecimalType : public DecimalType<TypeKind::HUGEINT> {
+class LongDecimalType final : public DecimalType<TypeKind::HUGEINT> {
  public:
   LongDecimalType(int precision, int scale)
       : DecimalType<TypeKind::HUGEINT>(precision, scale) {}
@@ -922,11 +898,8 @@ std::pair<uint8_t, uint8_t> getDecimalPrecisionScale(const Type& type);
 
 class UnknownType : public CanProvideCustomComparisonType<TypeKind::UNKNOWN> {
  public:
-  constexpr explicit UnknownType() = default;
-
-  explicit UnknownType(bool proivdesCustomComparison)
-      : CanProvideCustomComparisonType<TypeKind::UNKNOWN>(
-            proivdesCustomComparison) {}
+  using CanProvideCustomComparisonType<
+      TypeKind::UNKNOWN>::CanProvideCustomComparisonType;
 
   uint32_t size() const override {
     return 0;
@@ -1351,15 +1324,13 @@ constexpr long kMillisInHour = 60 * kMillisInMinute;
 constexpr long kMillisInDay = 24 * kMillisInHour;
 
 /// Time interval in milliseconds.
-class IntervalDayTimeType : public BigintType {
- private:
+class IntervalDayTimeType final : public BigintType {
   IntervalDayTimeType() = default;
 
  public:
-  static const std::shared_ptr<const IntervalDayTimeType>& get() {
-    static const std::shared_ptr<const IntervalDayTimeType> kType{
-        new IntervalDayTimeType()};
-    return kType;
+  static std::shared_ptr<const IntervalDayTimeType> get() {
+    VELOX_CONSTEXPR_SINGLETON IntervalDayTimeType kInstance;
+    return {std::shared_ptr<const IntervalDayTimeType>{}, &kInstance};
   }
 
   const char* name() const override {
@@ -1393,7 +1364,7 @@ class IntervalDayTimeType : public BigintType {
   }
 };
 
-FOLLY_ALWAYS_INLINE const std::shared_ptr<const IntervalDayTimeType>&
+FOLLY_ALWAYS_INLINE std::shared_ptr<const IntervalDayTimeType>
 INTERVAL_DAY_TIME() {
   return IntervalDayTimeType::get();
 }
@@ -1405,15 +1376,13 @@ FOLLY_ALWAYS_INLINE bool Type::isIntervalDayTime() const {
 
 constexpr long kMonthInYear = 12;
 /// Time interval in months.
-class IntervalYearMonthType : public IntegerType {
- private:
+class IntervalYearMonthType final : public IntegerType {
   IntervalYearMonthType() = default;
 
  public:
-  static const std::shared_ptr<const IntervalYearMonthType>& get() {
-    static const std::shared_ptr<const IntervalYearMonthType> kType{
-        new IntervalYearMonthType()};
-    return kType;
+  static std::shared_ptr<const IntervalYearMonthType> get() {
+    VELOX_CONSTEXPR_SINGLETON IntervalYearMonthType kInstance;
+    return {std::shared_ptr<const IntervalYearMonthType>{}, &kInstance};
   }
 
   const char* name() const override {
@@ -1446,7 +1415,7 @@ class IntervalYearMonthType : public IntegerType {
   }
 };
 
-FOLLY_ALWAYS_INLINE const std::shared_ptr<const IntervalYearMonthType>&
+FOLLY_ALWAYS_INLINE std::shared_ptr<const IntervalYearMonthType>
 INTERVAL_YEAR_MONTH() {
   return IntervalYearMonthType::get();
 }
@@ -1457,14 +1426,13 @@ FOLLY_ALWAYS_INLINE bool Type::isIntervalYearMonth() const {
 }
 
 /// Date is represented as the number of days since epoch start using int32_t.
-class DateType : public IntegerType {
- private:
+class DateType final : public IntegerType {
   DateType() = default;
 
  public:
-  static const std::shared_ptr<const DateType>& get() {
-    static const std::shared_ptr<const DateType> kType{new DateType()};
-    return kType;
+  static std::shared_ptr<const DateType> get() {
+    VELOX_CONSTEXPR_SINGLETON DateType kInstance;
+    return {std::shared_ptr<const DateType>{}, &kInstance};
   }
 
   const char* name() const override {
@@ -1501,7 +1469,7 @@ class DateType : public IntegerType {
   }
 };
 
-FOLLY_ALWAYS_INLINE const std::shared_ptr<const DateType>& DATE() {
+FOLLY_ALWAYS_INLINE std::shared_ptr<const DateType> DATE() {
   return DateType::get();
 }
 
@@ -1538,8 +1506,8 @@ struct TypeFactory {
 
 template <>
 struct TypeFactory<TypeKind::UNKNOWN> {
-  FOLLY_NOINLINE static std::shared_ptr<const UnknownType> create() {
-    static const UnknownType kInstance;
+  static std::shared_ptr<const UnknownType> create() {
+    VELOX_CONSTEXPR_SINGLETON UnknownType kInstance;
     return {std::shared_ptr<const UnknownType>{}, &kInstance};
   }
 };

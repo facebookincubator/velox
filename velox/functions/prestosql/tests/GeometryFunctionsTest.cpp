@@ -2916,3 +2916,195 @@ TEST_F(GeometryFunctionsTest, testExpandEnvelope) {
       wrappedEnvelopeResult.value(),
       "POLYGON ((-2 7, -2 13, 4 13, 4 7, -2 7))");
 }
+
+TEST_F(GeometryFunctionsTest, testBingTilePolygon) {
+  const auto testBingTilePolygonFunc =
+      [&](const std::optional<int32_t>& x,
+          const std::optional<int32_t>& y,
+          const std::optional<int8_t>& zoom,
+          const std::optional<std::string>& expected) {
+        std::optional<std::string> result = evaluateOnce<std::string>(
+            "ST_AsText(bing_tile_polygon(bing_tile(c0, c1, c2)))", x, y, zoom);
+
+        if (x.has_value() && y.has_value() && zoom.has_value()) {
+          ASSERT_TRUE(result.has_value());
+          ASSERT_EQ(result.value(), expected.value());
+        } else {
+          ASSERT_FALSE(result.has_value());
+        }
+      };
+
+  testBingTilePolygonFunc(
+      0,
+      0,
+      0,
+      "POLYGON ((-180 85.05112877980659, -180 -85.05112877980659, 180 -85.05112877980659, 180 85.05112877980659, -180 85.05112877980659))");
+  testBingTilePolygonFunc(
+      1,
+      1,
+      1,
+      "POLYGON ((0 0, 0 -85.05112877980659, 180 -85.05112877980659, 180 0, 0 0))");
+  testBingTilePolygonFunc(
+      3,
+      3,
+      2,
+      "POLYGON ((90 -66.51326044311185, 90 -85.05112877980659, 180 -85.05112877980659, 180 -66.51326044311185, 90 -66.51326044311185))");
+  testBingTilePolygonFunc(
+      7,
+      7,
+      3,
+      "POLYGON ((135 -79.17133464081945, 135 -85.05112877980659, 180 -85.05112877980659, 180 -79.17133464081945, 135 -79.17133464081945))");
+  testBingTilePolygonFunc(
+      15,
+      15,
+      4,
+      "POLYGON ((157.5 -82.67628497834906, 157.5 -85.05112877980659, 180 -85.05112877980659, 180 -82.67628497834906, 157.5 -82.67628497834906))");
+
+  testBingTilePolygonFunc(
+      31,
+      31,
+      5,
+      "POLYGON ((168.75 -83.97925949886206, 168.75 -85.05112877980659, 180 -85.05112877980659, 180 -83.97925949886206, 168.75 -83.97925949886206))");
+  testBingTilePolygonFunc(
+      0,
+      0,
+      1,
+      "POLYGON ((-180 85.05112877980659, -180 0, 0 0, 0 85.05112877980659, -180 85.05112877980659))");
+  testBingTilePolygonFunc(
+      1,
+      1,
+      2,
+      "POLYGON ((-90 66.51326044311186, -90 0, 0 0, 0 66.51326044311186, -90 66.51326044311186))");
+  testBingTilePolygonFunc(
+      1,
+      1,
+      23,
+      "POLYGON ((-179.99995708465576 85.05112507763845, -179.99995708465576 85.05112137546752, -179.99991416931152 85.05112137546752, -179.99991416931152 85.05112507763845, -179.99995708465576 85.05112507763845))");
+}
+
+TEST_F(GeometryFunctionsTest, testGeometryToFromGeoJson) {
+  const auto testGeometryToFromGeoJsonFunc = [&](const std::optional<
+                                                     std::string>& wkt,
+                                                 const std::optional<
+                                                     std::string>& expected =
+                                                     std::nullopt) {
+    std::optional<std::string> result = evaluateOnce<std::string>(
+        "ST_AsText(geometry_from_geojson(geometry_as_geojson(ST_GeometryFromText(c0))))",
+        wkt);
+
+    if (wkt.has_value()) {
+      ASSERT_TRUE(result.has_value());
+      if (expected.has_value()) {
+        ASSERT_EQ(expected.value(), result.value());
+      } else {
+        ASSERT_EQ(wkt.value(), result.value());
+      }
+    } else {
+      ASSERT_FALSE(result.has_value());
+    }
+  };
+
+  const auto testGeometryToJsonFunc =
+      [&](const std::optional<std::string>& wkt,
+          const std::optional<std::string>& expected) {
+        std::optional<std::string> result = evaluateOnce<std::string>(
+            "geometry_as_geojson(ST_GeometryFromText(c0))", wkt);
+
+        if (expected.has_value()) {
+          ASSERT_TRUE(result.has_value());
+          ASSERT_EQ(expected.value(), result.value());
+        } else {
+          ASSERT_FALSE(result.has_value());
+        }
+      };
+
+  const auto testGeometryFromJsonFunc =
+      [&](const std::optional<std::string>& json,
+          const std::optional<std::string>& expected) {
+        std::optional<std::string> result = evaluateOnce<std::string>(
+            "ST_AsText(geometry_from_geojson(c0))", json);
+
+        if (expected.has_value()) {
+          ASSERT_TRUE(result.has_value());
+          ASSERT_EQ(expected.value(), result.value());
+        } else {
+          ASSERT_FALSE(result.has_value());
+        }
+      };
+
+  // empty atomic (non-multi) geometries should return null
+  testGeometryToJsonFunc("POINT EMPTY", std::nullopt);
+  testGeometryToJsonFunc("POLYGON EMPTY", std::nullopt);
+  testGeometryToJsonFunc("LINESTRING EMPTY", std::nullopt);
+
+  testGeometryToJsonFunc(std::nullopt, std::nullopt);
+
+  // empty multi geometries should return empty
+  testGeometryToFromGeoJsonFunc("MULTIPOINT EMPTY");
+  testGeometryToFromGeoJsonFunc("MULTIPOLYGON EMPTY");
+  testGeometryToFromGeoJsonFunc("MULTILINESTRING EMPTY");
+  testGeometryToFromGeoJsonFunc("GEOMETRYCOLLECTION EMPTY");
+
+  // valid nonempty geometries should return as is.
+  testGeometryToFromGeoJsonFunc("POINT (1 2)");
+  testGeometryToFromGeoJsonFunc("MULTIPOINT (1 2, 3 4)");
+  testGeometryToFromGeoJsonFunc("LINESTRING (0 0, 1 2, 3 4)");
+  testGeometryToFromGeoJsonFunc("MULTILINESTRING ((1 1, 5 1), (2 4, 4 4))");
+  testGeometryToFromGeoJsonFunc("POLYGON ((0 0, 0 1, 1 1, 1 0, 0 0))");
+  testGeometryToFromGeoJsonFunc(
+      "POLYGON ((0 0, 0 3, 3 3, 3 0, 0 0), (1 1, 2 1, 2 2, 1 2, 1 1))");
+  testGeometryToFromGeoJsonFunc(
+      "MULTIPOLYGON (((1 1, 1 3, 3 3, 3 1, 1 1)), ((2 4, 2 6, 6 6, 6 4, 2 4)))");
+  testGeometryToFromGeoJsonFunc(
+      "GEOMETRYCOLLECTION (POINT (1 2), LINESTRING (0 0, 1 2, 3 4), POLYGON ((0 0, 0 1, 1 1, 1 0, 0 0)))");
+
+  // Nested geometry collections
+  testGeometryToFromGeoJsonFunc(
+      "GEOMETRYCOLLECTION (GEOMETRYCOLLECTION (POINT (1 2), LINESTRING (0 0, 1 2, 3 4), POLYGON ((0 0, 0 1, 1 1, 1 0, 0 0))))");
+  testGeometryToFromGeoJsonFunc(
+      "GEOMETRYCOLLECTION (GEOMETRYCOLLECTION (GEOMETRYCOLLECTION (POINT (1 2), LINESTRING (0 0, 1 2, 3 4), POLYGON ((0 0, 0 1, 1 1, 1 0, 0 0)))))");
+  testGeometryToFromGeoJsonFunc(
+      "GEOMETRYCOLLECTION (GEOMETRYCOLLECTION EMPTY, LINESTRING (0 0, 1 2, 3 4), POLYGON ((0 0, 0 1, 1 1, 1 0, 0 0)))",
+      "GEOMETRYCOLLECTION (GEOMETRYCOLLECTION (LINESTRING (0 0, 1 2, 3 4), POLYGON ((0 0, 0 1, 1 1, 1 0, 0 0))))");
+  testGeometryToFromGeoJsonFunc(
+      "GEOMETRYCOLLECTION (GEOMETRYCOLLECTION (GEOMETRYCOLLECTION EMPTY, LINESTRING EMPTY, POLYGON EMPTY))",
+      "GEOMETRYCOLLECTION (GEOMETRYCOLLECTION (GEOMETRYCOLLECTION (LINESTRING EMPTY, POLYGON EMPTY)))");
+  testGeometryToFromGeoJsonFunc(
+      "GEOMETRYCOLLECTION (LINESTRING EMPTY, MULTIPOINT EMPTY)");
+  testGeometryToFromGeoJsonFunc(
+      "GEOMETRYCOLLECTION (POINT EMPTY, POINT EMPTY)");
+
+  // invalid geometries should return as is.
+  testGeometryToFromGeoJsonFunc("MULTIPOINT (0 0, 0 1, 1 1, 0 1)");
+  testGeometryToFromGeoJsonFunc("LINESTRING (0 0, 0 1, 0 1, 1 1, 1 0, 0 0)");
+  testGeometryToFromGeoJsonFunc("LINESTRING (0 0, 1 1, 1 0, 0 1)");
+
+  testGeometryFromJsonFunc(
+      "{\"type\":\"LineString\",\"coordinates\":[]}", "LINESTRING EMPTY");
+  testGeometryFromJsonFunc(
+      "{\"type\":\"MultiPoint\",\"coordinates\":[]}", "MULTIPOINT EMPTY");
+  testGeometryFromJsonFunc(
+      "{\"type\":\"MultiPolygon\",\"coordinates\":[]}", "MULTIPOLYGON EMPTY");
+  testGeometryFromJsonFunc(
+      "{\"type\":\"MultiLineString\",\"coordinates\":[[[0.0,0.0],[1,10]],[[10,10],[20,30]],[[123,123],[456,789]]]}",
+      "MULTILINESTRING ((0 0, 1 10), (10 10, 20 30), (123 123, 456 789))");
+  testGeometryFromJsonFunc(
+      "{\"type\":\"Polygon\",\"coordinates\":[]}", "POLYGON EMPTY");
+
+  testGeometryFromJsonFunc(std::nullopt, std::nullopt);
+
+  VELOX_ASSERT_USER_THROW(
+      testGeometryFromJsonFunc(
+          "{\"type\":\"MultiPoint\",\"invalidField\":[]}", std::nullopt),
+      "Error parsing JSON");
+
+  VELOX_ASSERT_USER_THROW(
+      testGeometryFromJsonFunc(
+          "{\"coordinates\":[[[0.0,0.0],[1,10]],[[10,10],[20,30]],[[123,123],[456,789]]]}",
+          std::nullopt),
+      "Error parsing JSON");
+  VELOX_ASSERT_USER_THROW(
+      testGeometryFromJsonFunc(
+          "{\"type\":\"MultiPoint\",\"crashMe\"}", std::nullopt),
+      "Error parsing JSON");
+}
