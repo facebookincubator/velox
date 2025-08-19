@@ -34,7 +34,7 @@ using namespace facebook::velox::exec;
 namespace facebook::velox {
 namespace {
 
-static constexpr vector_size_t overflowSize = 
+static constexpr vector_size_t overflowSize =
     std::numeric_limits<vector_size_t>::max();
 
 class GenericWriterTest : public functions::test::FunctionBaseTest {};
