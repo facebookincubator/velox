@@ -15,6 +15,7 @@
  */
 
 #include <gtest/gtest.h>
+
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/vector/StringVectorBuffer.h"
 
