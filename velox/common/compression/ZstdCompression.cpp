@@ -26,7 +26,8 @@ namespace {
 constexpr int32_t kZstdDefaultCompressionLevel = 1;
 
 Status zstdError(const char* prefixMessage, size_t errorCode) {
-  return Status::IOError(prefixMessage, ZSTD_getErrorName(errorCode));
+  auto errorName = ZSTD_getErrorName(errorCode);
+  return Status::IOError(prefixMessage, errorName);
 }
 
 class ZstdCodec : public Codec {
@@ -136,7 +137,7 @@ ZstdDecompressor::~ZstdDecompressor() {
 Status ZstdDecompressor::init() {
   finished_ = false;
   const auto ret = ZSTD_initDStream(stream_);
-  VELOX_RETURN_IF(ZSTD_isError(ret), zstdError("ZSTD init failed: ", ret));
+  VELOX_RETURN_IF(ZSTD_isError(ret), zstdError("ZSTD init failed: {}", ret));
   return Status::OK();
 }
 
@@ -152,7 +153,7 @@ Expected<StreamingDecompressor::DecompressResult> ZstdDecompressor::decompress(
 
   const auto ret = ZSTD_decompressStream(stream_, &outBuffer, &inBuffer);
   VELOX_RETURN_UNEXPECTED_IF(
-      ZSTD_isError(ret), zstdError("ZSTD decompression failed: ", ret));
+      ZSTD_isError(ret), zstdError("ZSTD decompression failed: {}", ret));
   finished_ = ret == 0;
   return DecompressResult{
       static_cast<uint64_t>(inBuffer.pos),
@@ -177,7 +178,7 @@ ZstdCompressor::~ZstdCompressor() {
 
 Status ZstdCompressor::init() const {
   const auto ret = ZSTD_initCStream(stream_, compressionLevel_);
-  VELOX_RETURN_IF(ZSTD_isError(ret), zstdError("ZSTD init failed: ", ret));
+  VELOX_RETURN_IF(ZSTD_isError(ret), zstdError("ZSTD init failed: {}", ret));
   return Status::OK();
 }
 
@@ -193,7 +194,7 @@ Expected<StreamingCompressor::CompressResult> ZstdCompressor::compress(
 
   const auto ret = ZSTD_compressStream(stream_, &outBuffer, &inBuffer);
   VELOX_RETURN_UNEXPECTED_IF(
-      ZSTD_isError(ret), zstdError("ZSTD compression failed: ", ret));
+      ZSTD_isError(ret), zstdError("ZSTD compression failed: {}", ret));
   return CompressResult{
       static_cast<uint64_t>(inBuffer.pos),
       static_cast<uint64_t>(outBuffer.pos),
@@ -208,7 +209,7 @@ Expected<StreamingCompressor::FlushResult> ZstdCompressor::flush(
 
   const auto ret = ZSTD_flushStream(stream_, &outBuffer);
   VELOX_RETURN_UNEXPECTED_IF(
-      ZSTD_isError(ret), zstdError("ZSTD flush failed: ", ret));
+      ZSTD_isError(ret), zstdError("ZSTD flush failed: {}", ret));
   return FlushResult{static_cast<uint64_t>(outBuffer.pos), ret > 0};
 }
 
@@ -220,7 +221,7 @@ Expected<StreamingCompressor::EndResult> ZstdCompressor::finalize(
 
   const auto ret = ZSTD_endStream(stream_, &outBuffer);
   VELOX_RETURN_UNEXPECTED_IF(
-      ZSTD_isError(ret), zstdError("ZSTD end failed: ", ret));
+      ZSTD_isError(ret), zstdError("ZSTD finalize failed: {}", ret));
   return EndResult{static_cast<uint64_t>(outBuffer.pos), ret > 0};
 }
 
@@ -246,7 +247,7 @@ Expected<uint64_t> ZstdCodec::compress(
       output, outputLength, input, inputLength, compressionLevel_);
   VELOX_RETURN_UNEXPECTED_IF(
       ZSTD_isError(compressedSize),
-      zstdError("ZSTD compression failed: ", compressedSize));
+      zstdError("ZSTD compression failed: {}", compressedSize));
   return compressedSize;
 }
 
@@ -262,7 +263,7 @@ Expected<uint64_t> ZstdCodec::decompress(
       ZSTD_decompress(output, outputLength, input, inputLength);
   VELOX_RETURN_UNEXPECTED_IF(
       ZSTD_isError(decompressedSize),
-      zstdError("ZSTD decompression failed: ", decompressedSize));
+      zstdError("ZSTD decompression failed: {}", decompressedSize));
   return decompressedSize;
 }
 
@@ -283,7 +284,7 @@ Expected<uint64_t> ZstdCodec::compressFixedLength(
       return outputLength;
     }
     return folly::makeUnexpected(
-        zstdError("ZSTD compression failed: ", compressedSize));
+        zstdError("ZSTD compression failed: {}", compressedSize));
   }
   return compressedSize;
 }
@@ -294,16 +295,16 @@ bool ZstdCodec::supportsStreamingCompression() const {
 
 Expected<std::shared_ptr<StreamingCompressor>>
 ZstdCodec::makeStreamingCompressor() {
-  auto ptr = std::make_shared<ZstdCompressor>(compressionLevel_);
-  VELOX_RETURN_UNEXPECTED_NOT_OK(ptr->init());
-  return ptr;
+  auto compressor = std::make_shared<ZstdCompressor>(compressionLevel_);
+  VELOX_RETURN_UNEXPECTED_NOT_OK(compressor->init());
+  return compressor;
 }
 
 Expected<std::shared_ptr<StreamingDecompressor>>
 ZstdCodec::makeStreamingDecompressor() {
-  auto ptr = std::make_shared<ZstdDecompressor>();
-  VELOX_RETURN_UNEXPECTED_NOT_OK(ptr->init());
-  return ptr;
+  auto decompressor = std::make_shared<ZstdDecompressor>();
+  VELOX_RETURN_UNEXPECTED_NOT_OK(decompressor->init());
+  return decompressor;
 }
 
 int32_t ZstdCodec::minCompressionLevel() const {

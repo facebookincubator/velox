@@ -15,7 +15,6 @@
  */
 #pragma once
 
-#include <memory>
 #include "velox/common/compression/Compression.h"
 
 namespace facebook::velox::common {

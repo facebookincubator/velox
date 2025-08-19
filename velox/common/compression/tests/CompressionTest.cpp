@@ -19,6 +19,7 @@
 #include <memory>
 #include <random>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -123,9 +124,31 @@ void checkCodecRoundtrip(
   ASSERT_EQ(data, decompressed);
   ASSERT_EQ(data.size(), decompressedLength);
 
+  // Compress with codec c1 with a smaller output buffer to test compression
+  // failure.
+  static const std::unordered_map<CompressionKind, std::string>
+      compressionFailures = {
+          {CompressionKind_LZ4, "LZ4 compression failed"},
+          {CompressionKind_ZSTD,
+           "ZSTD compression failed: Destination buffer is too small"},
+      };
+  VELOX_ASSERT_ERROR_STATUS(
+      c1->compress(
+            data.data(), data.size(), compressed.data(), compressedLength - 1)
+          .error(),
+      StatusCode::kIOError,
+      compressionFailures.at(c1->compressionKind()));
+
   // Decompress corrupted data.
   std::vector<uint8_t> corruptedData = compressed;
   corruptedData.resize(compressed.size() + 1);
+
+  static const std::unordered_map<CompressionKind, std::string>
+      decompressionFailures = {
+          {CompressionKind_LZ4, "LZ4 decompression failed"},
+          {CompressionKind_ZSTD,
+           "ZSTD decompression failed: Src size is incorrect"},
+      };
   VELOX_ASSERT_ERROR_STATUS(
       c2->decompress(
             corruptedData.data(),
@@ -134,7 +157,7 @@ void checkCodecRoundtrip(
             decompressed.size())
           .error(),
       StatusCode::kIOError,
-      "decompression failed");
+      decompressionFailures.at(c2->compressionKind()));
 }
 
 // Use same codec for both compression and decompression.
