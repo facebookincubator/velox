@@ -104,6 +104,8 @@ bool registerCudfFunction(
     CudfFunctionFactory factory,
     bool overwrite = true);
 
+bool registerBuiltinFunctions(const std::string& prefix);
+
 struct CudfExpressionNode {
   std::shared_ptr<velox::exec::Expr> expr;
   std::shared_ptr<CudfFunction> function;
