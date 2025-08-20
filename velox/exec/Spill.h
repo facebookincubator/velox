@@ -33,6 +33,24 @@
 #include "velox/vector/VectorStream.h"
 
 namespace facebook::velox::exec {
+
+class SpillMergeStream;
+
+namespace utils {
+/// Merge sort with the mergeTree and gatherCopy the results into target.
+/// 'target' is the result RowVector, and the copying starts from row #0 up to
+/// row #target.size(). 'mergeTree' is the data source. 'count' is the actual
+/// row count that is copied to target. 'bufferSources' and
+/// 'bufferSourceIndices' are buffering vectors that could be reused across
+/// callings.
+void gatherMerge(
+    RowVector* target,
+    TreeOfLosers<SpillMergeStream>* mergeTree,
+    int32_t& count,
+    std::vector<const RowVector*>& bufferSources,
+    std::vector<vector_size_t>& bufferSourceIndices);
+} // namespace utils
+
 class VectorHasher;
 
 /// A source of sorted spilled RowVectors coming either from a file or memory.

@@ -455,43 +455,6 @@ void gatherCopy(
   }
 }
 
-void gatherMerge(
-    RowVector* target,
-    TreeOfLosers<SpillMergeStream>* mergeTree,
-    int32_t& count,
-    std::vector<const RowVector*>& bufferSources,
-    std::vector<vector_size_t>& bufferSourceIndices) {
-  VELOX_CHECK_GE(bufferSources.size(), target->size());
-  VELOX_CHECK_GE(bufferSourceIndices.size(), target->size());
-  count = 0;
-  int32_t outputSize = 0;
-  bool isEndOfBatch = false;
-  SpillMergeStream* currentStream = mergeTree->next();
-  while (currentStream != nullptr && count + outputSize < target->size()) {
-    bufferSources[outputSize] = &currentStream->current();
-    bufferSourceIndices[outputSize] =
-        currentStream->currentIndex(&isEndOfBatch);
-    ++outputSize;
-    if (FOLLY_UNLIKELY(isEndOfBatch)) {
-      // The stream is at end of input batch. Need to copy out the rows before
-      // fetching next batch in 'pop'.
-      gatherCopy(target, count, outputSize, bufferSources, bufferSourceIndices);
-      count += outputSize;
-      outputSize = 0;
-    }
-    // Advance the stream.
-    currentStream->pop();
-    currentStream = mergeTree->next();
-  }
-  VELOX_CHECK_LE(count + outputSize, target->size());
-
-  if (FOLLY_LIKELY(outputSize != 0)) {
-    gatherCopy(target, count, outputSize, bufferSources, bufferSourceIndices);
-    count += outputSize;
-    outputSize = 0;
-  }
-}
-
 std::string makeOperatorSpillPath(
     const std::string& spillDir,
     int pipelineId,

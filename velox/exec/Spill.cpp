@@ -24,6 +24,46 @@
 using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::exec {
+
+namespace utils {
+void gatherMerge(
+    RowVector* target,
+    TreeOfLosers<SpillMergeStream>* mergeTree,
+    int32_t& count,
+    std::vector<const RowVector*>& bufferSources,
+    std::vector<vector_size_t>& bufferSourceIndices) {
+  VELOX_CHECK_GE(bufferSources.size(), target->size());
+  VELOX_CHECK_GE(bufferSourceIndices.size(), target->size());
+  count = 0;
+  int32_t outputSize = 0;
+  bool isEndOfBatch = false;
+  for (auto currentStream = mergeTree->next();
+       currentStream != nullptr && count + outputSize < target->size();
+       currentStream = mergeTree->next()) {
+    bufferSources[outputSize] = &currentStream->current();
+    bufferSourceIndices[outputSize] =
+        currentStream->currentIndex(&isEndOfBatch);
+    ++outputSize;
+    if (FOLLY_UNLIKELY(isEndOfBatch)) {
+      // The stream is at end of input batch. Need to copy out the rows before
+      // fetching next batch in 'pop'.
+      gatherCopy(target, count, outputSize, bufferSources, bufferSourceIndices);
+      count += outputSize;
+      outputSize = 0;
+    }
+    // Advance the stream.
+    currentStream->pop();
+  }
+  VELOX_CHECK_LE(count + outputSize, target->size());
+
+  if (FOLLY_LIKELY(outputSize != 0)) {
+    gatherCopy(target, count, outputSize, bufferSources, bufferSourceIndices);
+    count += outputSize;
+    outputSize = 0;
+  }
+}
+} // namespace utils
+
 void SpillMergeStream::pop() {
   VELOX_CHECK(!closed_);
   if (++index_ >= size_) {
@@ -359,7 +399,7 @@ SpillFileInfo mergeFiles(
       child->resize(batchSize);
     }
     int32_t outputRow = 0;
-    gatherMerge(
+    utils::gatherMerge(
         bufferVector.get(),
         mergeTree.get(),
         outputRow,
@@ -374,12 +414,15 @@ SpillFileInfo mergeFiles(
   return std::move(resultFiles[0]);
 }
 
-class CompareFileBySize {
- public:
+struct SpillFileInfoComp {
   bool operator()(const SpillFileInfo& lhs, const SpillFileInfo& rhs) const {
     return lhs.size > rhs.size;
   }
 };
+using SpillFileInfoHeap = std::priority_queue<
+    SpillFileInfo,
+    std::vector<SpillFileInfo>,
+    SpillFileInfoComp>;
 } // namespace
 
 std::unique_ptr<TreeOfLosers<SpillMergeStream>>
@@ -396,15 +439,11 @@ SpillPartition::createOrderedReaderWithPreMerge(
   }
 
   auto startFileNum = files_.size();
-  std::priority_queue<
-      SpillFileInfo,
-      std::vector<SpillFileInfo>,
-      CompareFileBySize>
-      orderedFiles(files_.begin(), files_.end());
+  SpillFileInfoHeap orderedFiles(files_.begin(), files_.end());
   SpillFiles files;
   files.reserve(mergeWayThreshold);
   auto filePathPrefix = files_[0].path;
-  const size_t batchSize = 1'000;
+  constexpr size_t batchSize = 1'000;
   RowVectorPtr bufferVector = std::static_pointer_cast<RowVector>(
       BaseVector::create(files_[0].type, batchSize, pool));
   std::vector<const RowVector*> bufferSpillSources(batchSize);
