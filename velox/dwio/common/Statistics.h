@@ -609,6 +609,7 @@ struct RuntimeStatistics {
       result.emplace(
           "pageLoadTimeNs",
           RuntimeMetric(columnReaderStatistics.pageLoadTimeNs));
+    }
     if (skippedPages > 0) {
       result.emplace("skippedPages", RuntimeMetric(skippedPages));
     }
