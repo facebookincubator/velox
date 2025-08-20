@@ -170,7 +170,8 @@ struct UnixTimestampParseFunction {
     if (dateTimeResult.hasError()) {
       return false;
     }
-    (*dateTimeResult).timestamp.toGMT(*getTimeZone(*dateTimeResult));
+    (*dateTimeResult)
+        .timestamp.toGMTWithGapCorrection(*getTimeZone(*dateTimeResult));
     result = (*dateTimeResult).timestamp.getSeconds();
     return true;
   }
@@ -254,7 +255,8 @@ struct UnixTimestampParseWithFormatFunction
     if (dateTimeResult.hasError()) {
       return false;
     }
-    (*dateTimeResult).timestamp.toGMT(*this->getTimeZone(*dateTimeResult));
+    (*dateTimeResult)
+        .timestamp.toGMTWithGapCorrection(*this->getTimeZone(*dateTimeResult));
     result = (*dateTimeResult).timestamp.getSeconds();
     return true;
   }
@@ -267,7 +269,7 @@ struct UnixTimestampParseWithFormatFunction
 
   FOLLY_ALWAYS_INLINE void call(int64_t& result, const arg_type<Date>& input) {
     auto timestamp = Timestamp::fromDate(input);
-    timestamp.toGMT(*this->sessionTimeZone_);
+    timestamp.toGMTWithGapCorrection(*this->sessionTimeZone_);
 
     int64_t seconds = timestamp.getSeconds();
     // Spark converts days as microseconds and then divide it by 10e6 to get
@@ -372,7 +374,7 @@ struct ToUtcTimestampFunction {
         : tz::locateZone(std::string_view(timezone), false);
     VELOX_USER_CHECK_NOT_NULL(
         fromTimezone, "Unknown time zone: '{}'", timezone);
-    result.toGMT(*fromTimezone);
+    result.toGMTWithGapCorrection(*fromTimezone);
   }
 
  private:
@@ -456,7 +458,8 @@ struct GetTimestampFunction {
     if (dateTimeResult.hasError()) {
       return false;
     }
-    (*dateTimeResult).timestamp.toGMT(*getTimeZone(*dateTimeResult));
+    (*dateTimeResult)
+        .timestamp.toGMTWithGapCorrection(*getTimeZone(*dateTimeResult));
     result = (*dateTimeResult).timestamp;
     return true;
   }
