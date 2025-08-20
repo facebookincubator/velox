@@ -54,6 +54,12 @@ class S3WriteFile::Impl {
       auto objectMetadata = client_->HeadObject(request);
       if (!objectMetadata.IsSuccess()) {
         RECORD_METRIC_VALUE(kMetricS3GetMetadataErrors);
+        if (objectMetadata.GetError().ShouldRetry()) {
+          RECORD_METRIC_VALUE(
+              getS3RetryableErrorString(
+                  getErrorStringFromS3Error(objectMetadata.GetError())),
+              objectMetadata.GetRetryCount());
+        }
       }
       RECORD_METRIC_VALUE(
           kMetricS3GetObjectRetries, objectMetadata.GetRetryCount());
@@ -73,6 +79,14 @@ class S3WriteFile::Impl {
         Aws::S3::Model::CreateBucketRequest request;
         request.SetBucket(bucket_);
         auto outcome = client_->CreateBucket(request);
+        if (!outcome.IsSuccess()) {
+          if (outcome.GetError().ShouldRetry()) {
+            RECORD_METRIC_VALUE(
+                getS3RetryableErrorString(
+                    getErrorStringFromS3Error(outcome.GetError())),
+                outcome.GetRetryCount());
+          }
+        }
         VELOX_CHECK_AWS_OUTCOME(
             outcome, "Failed to create S3 bucket", bucket_, "");
       }
@@ -95,6 +109,14 @@ class S3WriteFile::Impl {
       request.SetChecksumAlgorithm(Aws::S3::Model::ChecksumAlgorithm::CRC32);
 
       auto outcome = client_->CreateMultipartUpload(request);
+      if (!outcome.IsSuccess()) {
+        if (outcome.GetError().ShouldRetry()) {
+          RECORD_METRIC_VALUE(
+              getS3RetryableErrorString(
+                  getErrorStringFromS3Error(outcome.GetError())),
+              outcome.GetRetryCount());
+        }
+      }
       VELOX_CHECK_AWS_OUTCOME(
           outcome, "Failed initiating multiple part upload", bucket_, key_);
       uploadState_.id = outcome.GetResult().GetUploadId();
@@ -146,6 +168,12 @@ class S3WriteFile::Impl {
         RECORD_METRIC_VALUE(kMetricS3SuccessfulUploads);
       } else {
         RECORD_METRIC_VALUE(kMetricS3FailedUploads);
+        if (outcome.GetError().ShouldRetry()) {
+          RECORD_METRIC_VALUE(
+              getS3RetryableErrorString(
+                  getErrorStringFromS3Error(outcome.GetError())),
+              outcome.GetRetryCount());
+        }
       }
       VELOX_CHECK_AWS_OUTCOME(
           outcome, "Failed to complete multiple part upload", bucket_, key_);
@@ -218,6 +246,14 @@ class S3WriteFile::Impl {
       // checksum computation and is not restricted by fips.
       request.SetChecksumAlgorithm(Aws::S3::Model::ChecksumAlgorithm::CRC32);
       auto outcome = client_->UploadPart(request);
+      if (!outcome.IsSuccess()) {
+        if (outcome.GetError().ShouldRetry()) {
+          RECORD_METRIC_VALUE(
+              getS3RetryableErrorString(
+                  getErrorStringFromS3Error(outcome.GetError())),
+              outcome.GetRetryCount());
+        }
+      }
       VELOX_CHECK_AWS_OUTCOME(outcome, "Failed to upload", bucket_, key_);
       // Append ETag and part number for this uploaded part.
       // This will be needed for upload completion in Close().
