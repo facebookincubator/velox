@@ -1029,7 +1029,8 @@ void ReaderBase::applyPageIndexFiltering(
     using StreamMap = folly::F14FastMap<
         uint32_t,
         std::unique_ptr<dwio::common::SeekableInputStream>>;
-    StreamMap offSetStreamMap, columnStreamMap;
+    StreamMap offSetStreamMap;
+    StreamMap columnStreamMap;
 
     // Helper lambda to read and deserialize a Thrift object from a
     // stream.
