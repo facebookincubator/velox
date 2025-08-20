@@ -1701,6 +1701,178 @@ TEST_F(
   }
 }
 
+TEST_F(
+    IcebergReadEqualityDeleteTest,
+    equalityDeletesFloatAndDoubleThrowsError) {
+  folly::SingletonVault::singleton()->registrationComplete();
+
+  // Test for float (REAL)
+  {
+    std::unordered_map<int8_t, std::vector<int32_t>> equalityFieldIdsMap;
+    std::unordered_map<int8_t, std::vector<std::vector<float>>>
+        equalityDeleteVectorMap;
+    equalityFieldIdsMap.insert({{0, {1}}, {1, {2}}});
+    equalityDeleteVectorMap.insert({{0, {{0, 1}}}, {1, {{2, 3}}}});
+    VELOX_ASSERT_THROW(
+        assertEqualityDeletes<TypeKind::REAL>(
+            equalityDeleteVectorMap, equalityFieldIdsMap),
+        "Iceberg does not allow DOUBLE or REAL columns as the equality delete columns: c1 : REAL");
+  }
+
+  // Test for float (REAL) - Delete all
+  {
+    std::unordered_map<int8_t, std::vector<int32_t>> equalityFieldIdsMap;
+    std::unordered_map<int8_t, std::vector<std::vector<float>>>
+        equalityDeleteVectorMap;
+    equalityFieldIdsMap.insert({0, {1}});
+    std::vector<float> allValues;
+    for (int i = 0; i < rowCount_; ++i) {
+      allValues.push_back(static_cast<double>(i));
+    }
+    equalityDeleteVectorMap.insert({0, {allValues}});
+    VELOX_ASSERT_THROW(
+        assertEqualityDeletes<TypeKind::REAL>(
+            equalityDeleteVectorMap, equalityFieldIdsMap),
+        "Iceberg does not allow DOUBLE or REAL columns as the equality delete columns: c0 : REAL");
+  }
+
+  // Test for double (DOUBLE)
+  {
+    std::unordered_map<int8_t, std::vector<int32_t>> equalityFieldIdsMap;
+    std::unordered_map<int8_t, std::vector<std::vector<double>>>
+        equalityDeleteVectorMap;
+    equalityFieldIdsMap.insert({{0, {1}}, {1, {2}}});
+    equalityDeleteVectorMap.insert({{0, {{0, 1}}}, {1, {{2, 3}}}});
+    VELOX_ASSERT_THROW(
+        assertEqualityDeletes<TypeKind::DOUBLE>(
+            equalityDeleteVectorMap, equalityFieldIdsMap),
+        "Iceberg does not allow DOUBLE or REAL columns as the equality delete columns: c1 : DOUBLE");
+  }
+
+  // Test for double (DOUBLE) - Delete all
+  {
+    std::unordered_map<int8_t, std::vector<int32_t>> equalityFieldIdsMap;
+    std::unordered_map<int8_t, std::vector<std::vector<double>>>
+        equalityDeleteVectorMap;
+    equalityFieldIdsMap.insert({0, {1}});
+    std::vector<double> allValues;
+    for (int i = 0; i < rowCount_; ++i) {
+      allValues.push_back(static_cast<double>(i));
+    }
+    equalityDeleteVectorMap.insert({0, {allValues}});
+    VELOX_ASSERT_THROW(
+        assertEqualityDeletes<TypeKind::DOUBLE>(
+            equalityDeleteVectorMap, equalityFieldIdsMap),
+        "Iceberg does not allow DOUBLE or REAL columns as the equality delete columns: c0 : DOUBLE");
+  }
+}
+
+TEST_F(IcebergReadEqualityDeleteTest, equalityDeletesShortDecimal) {
+  folly::SingletonVault::singleton()->registrationComplete();
+
+  // Use DECIMAL(6, 2) for short decimal (precision 6, scale 2)
+  auto decimalType = DECIMAL(6, 2);
+  std::unordered_map<int8_t, std::vector<int32_t>> equalityFieldIdsMap;
+  std::unordered_map<int8_t, std::vector<std::vector<int64_t>>>
+      equalityDeleteVectorMap;
+  equalityFieldIdsMap.insert({0, {1}});
+
+  // Values: 123456 (represents 1234.56), 789012 (represents 7890.12)
+  equalityDeleteVectorMap.insert({0, {{123456, 789012}}});
+  std::vector<RowVectorPtr> dataVectors = {makeRowVector(
+      {"c0"},
+      {makeFlatVector<int64_t>(
+          {123456, 789012, 345678, 901234, 567890}, decimalType)})};
+
+  assertEqualityDeletes<TypeKind::BIGINT>(
+      equalityDeleteVectorMap,
+      equalityFieldIdsMap,
+      "SELECT * FROM tmp WHERE c0 NOT IN (1234.56, 7890.12)",
+      dataVectors);
+
+  // Delete all
+  equalityDeleteVectorMap.clear();
+  equalityDeleteVectorMap.insert(
+      {0, {{123456, 789012, 345678, 901234, 567890}}});
+
+  assertEqualityDeletes<TypeKind::BIGINT>(
+      equalityDeleteVectorMap,
+      equalityFieldIdsMap,
+      "SELECT * FROM tmp WHERE 1 = 0",
+      dataVectors);
+
+  // Delete none
+  equalityDeleteVectorMap.clear();
+  equalityDeleteVectorMap.insert({0, {{}}});
+  assertEqualityDeletes<TypeKind::BIGINT>(
+      equalityDeleteVectorMap,
+      equalityFieldIdsMap,
+      "SELECT * FROM tmp",
+      dataVectors);
+}
+
+TEST_F(IcebergReadEqualityDeleteTest, equalityDeletesLongDecimal) {
+  folly::SingletonVault::singleton()->registrationComplete();
+
+  // Use DECIMAL(25, 5) for long decimal (precision 25, scale 5)
+  auto decimalType = DECIMAL(25, 5);
+  std::unordered_map<int8_t, std::vector<int32_t>> equalityFieldIdsMap;
+  std::unordered_map<int8_t, std::vector<std::vector<int128_t>>>
+      equalityDeleteVectorMap;
+  equalityFieldIdsMap.insert({0, {1}});
+
+  // Values: 123456789012345 (represents 1234567.89012), 987654321098765
+  // (represents 9876543.21098)
+  equalityDeleteVectorMap.insert(
+      {0, {{int128_t(123456789012345), int128_t(987654321098765)}}});
+  std::vector<RowVectorPtr> dataVectors = {makeRowVector(
+      {"c0"},
+      {makeFlatVector<int128_t>(
+          {(123456789012345),
+           (987654321098765),
+           (111111111111111),
+           (222222222222222),
+           (333333333333333)},
+          decimalType)})};
+
+  VELOX_ASSERT_THROW(
+      assertEqualityDeletes<TypeKind::HUGEINT>(
+          equalityDeleteVectorMap,
+          equalityFieldIdsMap,
+          "SELECT * FROM tmp WHERE c0 NOT IN (123456789012345, 987654321098765)",
+          dataVectors),
+      "Decimal is not supported for DWRF.");
+
+  // Delete all
+  equalityDeleteVectorMap.clear();
+  equalityDeleteVectorMap.insert(
+      {0,
+       {{123456789012345,
+         987654321098765,
+         111111111111111,
+         222222222222222,
+         333333333333333}}});
+
+  VELOX_ASSERT_THROW(
+      assertEqualityDeletes<TypeKind::HUGEINT>(
+          equalityDeleteVectorMap,
+          equalityFieldIdsMap,
+          "SELECT * FROM tmp WHERE 1 = 0",
+          dataVectors),
+      "Decimal is not supported for DWRF.");
+
+  // Delete none
+  equalityDeleteVectorMap.clear();
+  equalityDeleteVectorMap.insert({0, {{}}});
+  VELOX_ASSERT_THROW(
+      assertEqualityDeletes<TypeKind::HUGEINT>(
+          equalityDeleteVectorMap,
+          equalityFieldIdsMap,
+          "SELECT * FROM tmp",
+          dataVectors),
+      "Decimal is not supported for DWRF.");
+}
+
 class IcebergReadEqualityDeletesParameterizedTest
     : public IcebergReadPositionalDeleteTest,
       public testing::WithParamInterface<TypeKind> {
