@@ -15,6 +15,8 @@
  */
 
 #include "velox/benchmarks/tpch/TpchBenchmark.h"
+#include <iostream>
+#include "velox/exec/PlanNodeStats.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;

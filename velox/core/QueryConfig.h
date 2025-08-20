@@ -264,7 +264,8 @@ class QueryConfig {
       "topn_row_number_spill_enabled";
 
   /// LocalMerge spilling flag, only applies if "spill_enabled" flag is set.
-  static constexpr const char* kLocalMergeSpillEnabled = "local_merge_enabled";
+  static constexpr const char* kLocalMergeSpillEnabled =
+      "local_merge_spill_enabled";
 
   /// Specify the max number of local sources to merge at a time.
   static constexpr const char* kLocalMergeMaxNumMergeSources =
@@ -466,11 +467,6 @@ class QueryConfig {
   /// Base dir of a query to store tracing data.
   static constexpr const char* kQueryTraceDir = "query_trace_dir";
 
-  /// @Deprecated. Do not use. Remove once existing call sites are updated.
-  /// The plan node id whose input data will be traced.
-  /// Empty string if only want to trace the query metadata.
-  static constexpr const char* kQueryTraceNodeIds = "query_trace_node_id";
-
   /// The plan node id whose input data will be traced.
   /// Empty string if only want to trace the query metadata.
   static constexpr const char* kQueryTraceNodeId = "query_trace_node_id";
@@ -667,6 +663,13 @@ class QueryConfig {
   /// respect this config.
   static constexpr const char* kMaxNumSplitsListenedTo =
       "max_num_splits_listened_to";
+
+  /// Source of the query. Used by Presto to identify the file system username.
+  static constexpr const char* kSource = "source";
+
+  /// Client tags of the query. Used by Presto to identify the file system
+  /// username.
+  static constexpr const char* kClientTags = "client_tags";
 
   bool selectiveNimbleReaderEnabled() const {
     return get<bool>(kSelectiveNimbleReaderEnabled, false);
@@ -989,12 +992,6 @@ class QueryConfig {
     return get<std::string>(kQueryTraceDir, "");
   }
 
-  /// @Deprecated. Do not use. Remove once existing call sites are updated.
-  std::string queryTraceNodeIds() const {
-    // Use the new config kQueryTraceNodeId.
-    return get<std::string>(kQueryTraceNodeId, "");
-  }
-
   std::string queryTraceNodeId() const {
     // The default query trace node ID, empty by default.
     return get<std::string>(kQueryTraceNodeId, "");
@@ -1211,6 +1208,14 @@ class QueryConfig {
 
   int32_t maxNumSplitsListenedTo() const {
     return get<int32_t>(kMaxNumSplitsListenedTo, 0);
+  }
+
+  std::string source() const {
+    return get<std::string>(kSource, "");
+  }
+
+  std::string clientTags() const {
+    return get<std::string>(kClientTags, "");
   }
 
   template <typename T>
