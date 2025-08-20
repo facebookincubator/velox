@@ -15,7 +15,6 @@
  */
 #include "velox/exec/OperatorUtils.h"
 #include <gtest/gtest.h>
-
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
