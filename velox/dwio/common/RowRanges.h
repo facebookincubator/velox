@@ -52,7 +52,7 @@ struct RowRange {
     return from_ > other.to_;
   }
 
-  static std::optional<RowRange> TryUnion(
+  static std::optional<RowRange> tryUnion(
       const RowRange& left,
       const RowRange& right) {
     if (left.from_ <= right.from_) {
@@ -82,22 +82,22 @@ struct RowRange {
     return std::nullopt;
   }
 
-  // Difference of two RowRanges: left \ right
-  // Returns at most two disjoint ranges
+  /// Difference of two RowRanges: left \ right.
+  /// Returns at most two disjoint ranges.
   static std::vector<RowRange> difference(
       const RowRange& left,
       const RowRange& right) {
     std::vector<RowRange> result;
     auto inter = intersection(left, right);
     if (!inter) {
-      // No overlap, entire left remains
+      // No overlap, entire left remains.
       result.push_back(left);
     } else {
-      // Before intersection
+      // Before intersection.
       if (left.from_ < inter->from_) {
         result.emplace_back(left.from_, inter->from_ - 1);
       }
-      // After intersection
+      // After intersection.
       if (inter->to_ < left.to_) {
         result.emplace_back(inter->to_ + 1, left.to_);
       }
@@ -210,7 +210,7 @@ class RowRanges {
     auto& last = ranges_.back();
     // Try to merge: if overlapping or adjacent, extend the last interval;
     // otherwise, append directly.
-    if (auto m = RowRange::TryUnion(last, range)) {
+    if (auto m = RowRange::tryUnion(last, range)) {
       last = *m;
     } else {
       VELOX_CHECK(last.isBefore(range));

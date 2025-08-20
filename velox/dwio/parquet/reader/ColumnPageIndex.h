@@ -54,8 +54,8 @@ class ColumnPageIndex {
         offsetIndex_(std::move(offsetIndex)),
         totalRows_(totalRows),
         isPageSkipped_(offsetIndex_.page_locations.size(), false) {
-    VELOX_CHECK(
-        columnIndex_.max_values.size() == offsetIndex_.page_locations.size());
+    VELOX_CHECK_EQ(
+        columnIndex_.max_values.size(), offsetIndex_.page_locations.size());
     // Precompute row counts for each page using OffsetIndex.first_row_index
     size_t n = offsetIndex_.page_locations.size();
     pageRowCount_.reserve(n);
@@ -213,25 +213,23 @@ class ColumnPageIndex {
   }
 
   void setPageStreamIndex(size_t pageIndex, int32_t streamIndex) {
-    if (pageIndex < pageToStreamIdx.size()) {
-      pageToStreamIdx[pageIndex] = streamIndex;
-    } else {
+    if (pageIndex >= pageToStreamIdx.size()) {
       VELOX_FAIL(
           "Page index {} out of bounds for pageToStreamIdx {}",
           pageIndex,
           pageToStreamIdx.size());
     }
+    pageToStreamIdx[pageIndex] = streamIndex;
   }
 
   int32_t getPageStreamIndex(size_t pageIndex) const {
-    if (pageIndex < pageToStreamIdx.size()) {
-      return pageToStreamIdx[pageIndex];
-    } else {
+    if (pageIndex >= pageToStreamIdx.size()) {
       VELOX_FAIL(
           "Page index {} out of bounds for pageToStreamIdx {}",
           pageIndex,
           pageToStreamIdx.size());
     }
+    return pageToStreamIdx[pageIndex];
   }
 
  private:
