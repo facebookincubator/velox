@@ -41,6 +41,62 @@ std::string getErrorStringFromS3Error(
       return "Service unavailable";
     case Aws::S3::S3Errors::NETWORK_CONNECTION:
       return "Network connection";
+    case Aws::S3::S3Errors::INCOMPLETE_SIGNATURE:
+      return "Incomplete signature";
+    case Aws::S3::S3Errors::INTERNAL_FAILURE:
+      return "Internal failure";
+    case Aws::S3::S3Errors::INVALID_ACTION:
+      return "Invalid action";
+    case Aws::S3::S3Errors::INVALID_CLIENT_TOKEN_ID:
+      return "Invalid client token id";
+    case Aws::S3::S3Errors::INVALID_PARAMETER_COMBINATION:
+      return "Invalid parameter combination";
+    case Aws::S3::S3Errors::INVALID_QUERY_PARAMETER:
+      return "Invalid query parameter";
+    case Aws::S3::S3Errors::INVALID_PARAMETER_VALUE:
+      return "Invalid parameter value";
+    case Aws::S3::S3Errors::MISSING_ACTION:
+      return "Missing action";
+    case Aws::S3::S3Errors::MISSING_AUTHENTICATION_TOKEN:
+      return "Missing authentication token";
+    case Aws::S3::S3Errors::MISSING_PARAMETER:
+      return "Missing parameter";
+    case Aws::S3::S3Errors::OPT_IN_REQUIRED:
+      return "Opt in required";
+    case Aws::S3::S3Errors::REQUEST_EXPIRED:
+      return "Request expired";
+    case Aws::S3::S3Errors::THROTTLING:
+      return "Throttling";
+    case Aws::S3::S3Errors::VALIDATION:
+      return "Validation";
+    case Aws::S3::S3Errors::UNRECOGNIZED_CLIENT:
+      return "Unrecognized client";
+    case Aws::S3::S3Errors::MALFORMED_QUERY_STRING:
+      return "Malformed query string";
+    case Aws::S3::S3Errors::SLOW_DOWN:
+      return "Slow down";
+    case Aws::S3::S3Errors::REQUEST_TIME_TOO_SKEWED:
+      return "Request time too skewed";
+    case Aws::S3::S3Errors::INVALID_SIGNATURE:
+      return "Invalid signature";
+    case Aws::S3::S3Errors::SIGNATURE_DOES_NOT_MATCH:
+      return "Signature does not match";
+    case Aws::S3::S3Errors::INVALID_ACCESS_KEY_ID:
+      return "Invalid access key id";
+    case Aws::S3::S3Errors::REQUEST_TIMEOUT:
+      return "Request timeout";
+    case Aws::S3::S3Errors::BUCKET_ALREADY_EXISTS:
+      return "Bucket already exists";
+    case Aws::S3::S3Errors::BUCKET_ALREADY_OWNED_BY_YOU:
+      return "Bucket already owned by you";
+    case Aws::S3::S3Errors::INVALID_OBJECT_STATE:
+      return "Invalid object state";
+    case Aws::S3::S3Errors::NO_SUCH_UPLOAD:
+      return "No such upload";
+    case Aws::S3::S3Errors::OBJECT_ALREADY_IN_ACTIVE_TIER:
+      return "Object already in active tier";
+    case Aws::S3::S3Errors::OBJECT_NOT_IN_ACTIVE_TIER:
+      return "Object not in active tier";
     default:
       return "Unknown error";
   }
