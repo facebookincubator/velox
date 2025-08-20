@@ -29,11 +29,11 @@ TEST(RowRangesTest, rowRange) {
   EXPECT_EQ(r.to_, 10);
   EXPECT_EQ(r.count(), 6); // 10 - 5 + 1
   EXPECT_EQ(r.toString(), "[5, 10]");
-  auto ru1 = RowRange::TryUnion(RowRange(1, 5), RowRange(6, 8));
+  auto ru1 = RowRange::tryUnion(RowRange(1, 5), RowRange(6, 8));
   EXPECT_TRUE(ru1.has_value());
   EXPECT_EQ(ru1->toString(), "[1, 8]");
 
-  auto ru2 = RowRange::TryUnion(RowRange(1, 5), RowRange(7, 8));
+  auto ru2 = RowRange::tryUnion(RowRange(1, 5), RowRange(7, 8));
   EXPECT_FALSE(ru2.has_value());
 
   auto ri = RowRange::intersection(RowRange(2, 6), RowRange(4, 10));
