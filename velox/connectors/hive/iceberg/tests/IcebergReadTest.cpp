@@ -606,7 +606,8 @@ class IcebergReadPositionalDeleteTest : public HiveConnectorTestBase {
     if (equalityDeleteVector.size() == 1) {
       std::string name = fmt::format("c{}", equalityFieldIds[0] - 1);
       predicates = fmt::format(
-          "{} NOT IN ({})",
+          "({} IS NULL OR {} NOT IN ({}))",
+          name,
           name,
           makeNotInList<KIND>({equalityDeleteVector[0]}));
     } else {
@@ -816,8 +817,12 @@ class IcebergReadPositionalDeleteTest : public HiveConnectorTestBase {
   }
 
   template <TypeKind KIND>
-  std::vector<RowVectorPtr>
-  makeVectors(int32_t count, int32_t rowsPerVector, int32_t numColumns = 1) {
+  std::vector<RowVectorPtr> makeVectors(
+      int32_t count,
+      int32_t rowsPerVector,
+      int32_t numColumns = 1,
+      bool allNulls = false,
+      bool partialNull = false) {
     using T = typename TypeTraits<KIND>::NativeType;
 
     // Sample strings for VARCHAR data generation
@@ -855,7 +860,11 @@ class IcebergReadPositionalDeleteTest : public HiveConnectorTestBase {
       // increasing and each value repeats once. And so on.
       for (int j = 0; j < numColumns; j++) {
         VectorPtr columnVector;
-        if constexpr (KIND == TypeKind::VARCHAR) {
+
+        if (allNulls) {
+          // Use allNullFlatVector for all-null columns
+          columnVector = vectorMaker_.allNullFlatVector<T>(rowsPerVector);
+        } else if constexpr (KIND == TypeKind::VARCHAR) {
           // For VARCHAR, use sample strings with sequence-based indexing
           auto intData = makeSequenceValues<int64_t>(rowsPerVector, j + 1);
           auto stringVector = BaseVector::create<FlatVector<StringView>>(
@@ -899,6 +908,20 @@ class IcebergReadPositionalDeleteTest : public HiveConnectorTestBase {
           VELOX_FAIL(
               "Unsupported type for makeVectors: {}", TypeTraits<KIND>::name);
         }
+
+        // Apply partial nulls by randomly setting some positions to null
+        if (partialNull && !allNulls) {
+          std::mt19937 gen(42); // Fixed seed for reproducibility
+          std::uniform_real_distribution<> dis(0.0, 1.0);
+          const double nullProbability = 0.2;
+
+          for (vector_size_t idx = 0; idx < rowsPerVector; ++idx) {
+            if (dis(gen) < nullProbability) {
+              columnVector->setNull(idx, true);
+            }
+          }
+        }
+
         vectors.push_back(columnVector);
       }
 
@@ -2400,6 +2423,164 @@ class IcebergReadEqualityDeletesParameterizedTest
       assertEqualityDeletes<KIND>(equalityDeleteVectorMap, equalityFieldIdsMap);
     }
   }
+
+  template <TypeKind KIND>
+  void testAllNullsEqualityDeletes() {
+    folly::SingletonVault::singleton()->registrationComplete();
+    using T = typename TypeTraits<KIND>::NativeType;
+
+    std::unordered_map<int8_t, std::vector<int32_t>> equalityFieldIdsMap;
+    std::unordered_map<int8_t, std::vector<std::vector<T>>>
+        equalityDeleteVectorMap;
+    equalityFieldIdsMap.insert({0, {1}});
+
+    // Test with all-null data vectors
+    auto dataVectors = makeVectors<KIND>(1, rowCount_, 1, true, false);
+
+    // Since all values are null, delete operations should not match anything
+    equalityDeleteVectorMap.clear();
+    if constexpr (KIND == TypeKind::VARCHAR || KIND == TypeKind::VARBINARY) {
+      std::vector<StringView> deleteValues = {
+          StringView("apple"), StringView("banana")};
+      equalityDeleteVectorMap.insert({0, {deleteValues}});
+      assertEqualityDeletes<KIND>(
+          equalityDeleteVectorMap,
+          equalityFieldIdsMap,
+          "SELECT * FROM tmp",
+          dataVectors);
+    } else if constexpr (std::is_integral_v<T>) {
+      equalityDeleteVectorMap.insert(
+          {0, {{static_cast<T>(0), static_cast<T>(1)}}});
+      assertEqualityDeletes<KIND>(
+          equalityDeleteVectorMap,
+          equalityFieldIdsMap,
+          "SELECT * FROM tmp",
+          dataVectors);
+    }
+  }
+
+  template <TypeKind KIND>
+  void testPartialNullsEqualityDeletes() {
+    folly::SingletonVault::singleton()->registrationComplete();
+    using T = typename TypeTraits<KIND>::NativeType;
+
+    std::unordered_map<int8_t, std::vector<int32_t>> equalityFieldIdsMap;
+    std::unordered_map<int8_t, std::vector<std::vector<T>>>
+        equalityDeleteVectorMap;
+    equalityFieldIdsMap.insert({0, {1}});
+
+    // Test with partial-null data vectors (20% nulls)
+    auto dataVectors = makeVectors<KIND>(1, rowCount_, 1, false, true);
+
+    // Delete some actual values that should exist in the non-null positions
+    equalityDeleteVectorMap.clear();
+    if constexpr (KIND == TypeKind::VARCHAR || KIND == TypeKind::VARBINARY) {
+      auto flatVector =
+          dataVectors[0]->childAt(0)->template as<FlatVector<StringView>>();
+
+      // Find a few non-null values to delete
+      std::vector<StringView> deleteValues;
+      for (vector_size_t i = 0; i < rowCount_ && deleteValues.size() < 5; ++i) {
+        if (!flatVector->isNullAt(i)) {
+          deleteValues.push_back(flatVector->valueAt(i));
+        }
+      }
+
+      if (!deleteValues.empty()) {
+        equalityDeleteVectorMap.insert({0, {deleteValues}});
+        assertEqualityDeletes<KIND>(
+            equalityDeleteVectorMap, equalityFieldIdsMap, "", dataVectors);
+      }
+    } else if constexpr (std::is_integral_v<T>) {
+      auto flatVector =
+          dataVectors[0]->childAt(0)->template as<FlatVector<T>>();
+
+      // Find a few non-null values to delete
+      std::vector<T> deleteValues;
+      for (vector_size_t i = 0; i < rowCount_ && deleteValues.size() < 5; ++i) {
+        if (!flatVector->isNullAt(i)) {
+          deleteValues.push_back(flatVector->valueAt(i));
+        }
+      }
+
+      if (!deleteValues.empty()) {
+        equalityDeleteVectorMap.insert({0, {deleteValues}});
+        assertEqualityDeletes<KIND>(
+            equalityDeleteVectorMap, equalityFieldIdsMap, "", dataVectors);
+      }
+    }
+  }
+
+  template <TypeKind KIND>
+  void testMixedNullTypesEqualityDeletes() {
+    folly::SingletonVault::singleton()->registrationComplete();
+    using T = typename TypeTraits<KIND>::NativeType;
+
+    std::unordered_map<int8_t, std::vector<int32_t>> equalityFieldIdsMap;
+    std::unordered_map<int8_t, std::vector<std::vector<T>>>
+        equalityDeleteVectorMap;
+    equalityFieldIdsMap.insert({0, {1, 2}});
+
+    // Test with different null patterns for each column
+    // Column 0: all nulls, Column 1: partial nulls
+    auto allNullVectors = makeVectors<KIND>(1, rowCount_, 1, true, false);
+    auto partialNullVectors = makeVectors<KIND>(1, rowCount_, 1, false, true);
+
+    // Combine the vectors to create a mixed scenario
+    std::vector<VectorPtr> combinedVectors = {
+        allNullVectors[0]->childAt(0), partialNullVectors[0]->childAt(0)};
+
+    std::vector<std::string> names = {"c0", "c1"};
+    auto combinedRowVector = makeRowVector(names, combinedVectors);
+    std::vector<RowVectorPtr> dataVectors = {combinedRowVector};
+
+    // Delete operations should only affect the partial null column
+    equalityDeleteVectorMap.clear();
+    if constexpr (KIND == TypeKind::VARCHAR || KIND == TypeKind::VARBINARY) {
+      auto col1FlatVector = partialNullVectors[0]
+                                ->childAt(0)
+                                ->template as<FlatVector<StringView>>();
+
+      // Find non-null values from column 1 to delete
+      std::vector<StringView> deleteValuesCol0; // Empty for all-null column
+      std::vector<StringView> deleteValuesCol1;
+
+      for (vector_size_t i = 0; i < rowCount_ && deleteValuesCol1.size() < 3;
+           ++i) {
+        if (!col1FlatVector->isNullAt(i)) {
+          deleteValuesCol1.push_back(col1FlatVector->valueAt(i));
+        }
+      }
+
+      if (!deleteValuesCol1.empty()) {
+        equalityDeleteVectorMap.insert(
+            {0, {deleteValuesCol0, deleteValuesCol1}});
+        assertEqualityDeletes<KIND>(
+            equalityDeleteVectorMap, equalityFieldIdsMap, "", dataVectors);
+      }
+    } else if constexpr (std::is_integral_v<T>) {
+      auto col1FlatVector =
+          partialNullVectors[0]->childAt(0)->template as<FlatVector<T>>();
+
+      // Find non-null values from column 1 to delete
+      std::vector<T> deleteValuesCol0; // Empty for all-null column
+      std::vector<T> deleteValuesCol1;
+
+      for (vector_size_t i = 0; i < rowCount_ && deleteValuesCol1.size() < 3;
+           ++i) {
+        if (!col1FlatVector->isNullAt(i)) {
+          deleteValuesCol1.push_back(col1FlatVector->valueAt(i));
+        }
+      }
+
+      if (!deleteValuesCol1.empty()) {
+        equalityDeleteVectorMap.insert(
+            {0, {deleteValuesCol0, deleteValuesCol1}});
+        assertEqualityDeletes<KIND>(
+            equalityDeleteVectorMap, equalityFieldIdsMap, "", dataVectors);
+      }
+    }
+  }
 };
 
 TEST_P(
@@ -2428,6 +2609,26 @@ TEST_P(
   TypeKind typeKind = GetParam();
   VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
       testMultipleFileMultipleColumnEqualityDeletes, typeKind);
+}
+
+TEST_P(IcebergReadEqualityDeletesParameterizedTest, allNullsEqualityDeletes) {
+  TypeKind typeKind = GetParam();
+  VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(testAllNullsEqualityDeletes, typeKind);
+}
+
+TEST_P(
+    IcebergReadEqualityDeletesParameterizedTest,
+    partialNullsEqualityDeletes) {
+  TypeKind typeKind = GetParam();
+  VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(testPartialNullsEqualityDeletes, typeKind);
+}
+
+TEST_P(
+    IcebergReadEqualityDeletesParameterizedTest,
+    mixedNullTypesEqualityDeletes) {
+  TypeKind typeKind = GetParam();
+  VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+      testMixedNullTypesEqualityDeletes, typeKind);
 }
 
 INSTANTIATE_TEST_SUITE_P(
