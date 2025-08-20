@@ -74,7 +74,7 @@ void setTimestampOrNull(
   const auto timeZoneName = timeZoneVector->valueAt<StringView>(row);
   const auto* timeZone = tz::locateZone(std::string_view(timeZoneName));
   if (timestamp.has_value()) {
-    timestamp->toGMT(*timeZone);
+    timestamp->toGMTWithGapCorrection(*timeZone);
     result->set(row, *timestamp);
   } else {
     result->setNull(row, true);
@@ -87,7 +87,7 @@ void setTimestampOrNull(
     const tz::TimeZone* timeZone,
     FlatVector<Timestamp>* result) {
   if (timestamp.has_value()) {
-    timestamp->toGMT(*timeZone);
+    timestamp->toGMTWithGapCorrection(*timeZone);
     result->set(row, *timestamp);
   } else {
     result->setNull(row, true);
