@@ -603,10 +603,10 @@ struct RuntimeStatistics {
           RuntimeMetric(columnReaderStatistics.flattenStringDictionaryValues));
     }
     if (skippedPages > 0) {
-      result.emplace("skippedPages", RuntimeCounter(skippedPages));
+      result.emplace("skippedPages", RuntimeMetric(skippedPages));
     }
     if (processedPages > 0) {
-      result.emplace("processedPages", RuntimeCounter(processedPages));
+      result.emplace("processedPages", RuntimeMetric(processedPages));
     }
     return result;
   }

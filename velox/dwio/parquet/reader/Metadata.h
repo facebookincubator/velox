@@ -37,7 +37,7 @@ class ColumnChunkMetaDataPtr {
   /// Check the presence of the dictionary page offset in ColumnChunk metadata.
   bool hasDictionaryPageOffset() const;
 
-  /// Check the presence of column and offset index  page offset in the
+  /// Check the presence of column and offset index page offset in the
   /// ColumnChunk metadata.
   bool hasColumnAndOffsetIndexOffset() const;
 

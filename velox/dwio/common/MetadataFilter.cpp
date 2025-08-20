@@ -151,7 +151,7 @@ struct MetadataFilter::AndNode final : ConditionNode {
 
   dwio::common::RowRanges* evalRowRanges(
       LeafRangeResults& leafResults) const override {
-    uint64_t* result = nullptr;
+    dwio::common::RowRanges* result = nullptr;
     for (const auto& arg : args_) {
       auto* a = arg->evalRowRanges(leafResults);
       if (!a) {
@@ -192,7 +192,7 @@ struct MetadataFilter::OrNode final : ConditionNode {
 
   dwio::common::RowRanges* evalRowRanges(
       LeafRangeResults& leafResults) const override {
-    uint64_t* result = nullptr;
+    dwio::common::RowRanges* result = nullptr;
     for (const auto& arg : args_) {
       auto* a = arg->evalRowRanges(leafResults);
       if (!a) {
