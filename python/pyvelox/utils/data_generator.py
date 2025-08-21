@@ -21,7 +21,7 @@ import sys
 
 from pyvelox.file import File
 from pyvelox.plan_builder import PlanBuilder
-from pyvelox.runner import LocalRunner, register_hive, register_tpch, unregister
+from pyvelox.runner import LocalRunner, register_hive, register_tpch, unregister, has_connector, has_connector_factory
 
 TPCH_CONNECTOR_NAME = "tpch"
 HIVE_CONNECTOR_NAME = "hive"
@@ -57,10 +57,11 @@ def generate_tpch_data(
     elif os.listdir(output_path):
         raise Exception(f"Refusing to write to non-empty directory '{output_path}'.")
 
-    # Hack to prevent an extension from being thrown when the function is run multiple times in the same python session,
-    # register_* should handle this or there needs to be a function to check if a connector exits
-    unregister(TPCH_CONNECTOR_NAME)
-    unregister(HIVE_CONNECTOR_NAME)
+    # Hack to prevent an extension from being thrown when the function is run multiple times in the same python session
+    if has_connector(TPCH_CONNECTOR_NAME):
+        unregister(TPCH_CONNECTOR_NAME)
+    if has_connector(HIVE_CONNECTOR_NAME):
+        unregister(HIVE_CONNECTOR_NAME)
     register_tpch(TPCH_CONNECTOR_NAME)
     register_hive(HIVE_CONNECTOR_NAME)
 
@@ -157,7 +158,7 @@ def main() -> int:
     result = generate_tpch_data(**vars(args))
 
     logging.info(
-        f"Written {result.row_count} records to {result.file_count} output files at '{result.output_path}'"  # pyre-ignore
+        f"Written {result.get('row_count')} records to {result.get('file_count')} output files at '{result.get('output_path')}'"  # pyre-ignore
     )
 
     return 0 if result else 1
