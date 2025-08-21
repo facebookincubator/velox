@@ -91,8 +91,8 @@ TEST_F(MakeTimestampTest, basic) {
     const auto day = makeFlatVector<int32_t>({11, 11, 1, 10});
     const auto hour = makeFlatVector<int32_t>({6, 6, 1, 2});
     const auto minute = makeFlatVector<int32_t>({30, 30, 1, 1});
-    const auto micros = makeFlatVector<int64_t>(
-        {45678000, 45678000, 1e6, 45678000}, microsType);
+    const auto micros =
+        makeFlatVector<int64_t>({45678000, 45678000, 0, 45678000}, microsType);
     const auto timeZone = makeNullableFlatVector<StringView>(
         {"GMT", "CET", std::nullopt, "America/Chicago"});
     auto data =
