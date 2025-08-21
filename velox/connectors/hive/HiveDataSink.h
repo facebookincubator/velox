@@ -679,7 +679,7 @@ class HiveDataSink : public DataSink {
   // Invoked to write 'input' to the specified file writer.
   void write(size_t index, RowVectorPtr input);
 
-  void closeInternal();
+  virtual void closeInternal();
 
   const RowTypePtr inputType_;
   const std::shared_ptr<const HiveInsertTableHandle> insertTableHandle_;
