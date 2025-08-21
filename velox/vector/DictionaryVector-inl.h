@@ -13,9 +13,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#pragma once
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/vector/BuilderTypeUtils.h"
+#include "velox/vector/DictionaryVector.h"
 #include "velox/vector/FlatVector.h"
 #include "velox/vector/TypeAliases.h"
 
@@ -92,8 +94,8 @@ DictionaryVector<T>::DictionaryVector(
       dictionaryIndices->size(),
       length * sizeof(vector_size_t),
       "Malformed dictionary, index array is shorter than DictionaryVector");
-  dictionaryValues_ = dictionaryValues;
-  indices_ = dictionaryIndices;
+  dictionaryValues_ = std::move(dictionaryValues);
+  indices_ = std::move(dictionaryIndices);
   setInternalState();
 }
 
@@ -105,22 +107,6 @@ bool DictionaryVector<T>::isNullAt(vector_size_t idx) const {
   }
   auto innerIndex = getDictionaryIndex(idx);
   return dictionaryValues_->isNullAt(innerIndex);
-}
-
-template <typename T>
-const T DictionaryVector<T>::valueAtFast(vector_size_t idx) const {
-  VELOX_DCHECK(initialized_);
-  if (rawDictionaryValues_) {
-    return rawDictionaryValues_[getDictionaryIndex(idx)];
-  }
-  return scalarDictionaryValues_->valueAt(getDictionaryIndex(idx));
-}
-
-template <>
-inline const bool DictionaryVector<bool>::valueAtFast(vector_size_t idx) const {
-  VELOX_DCHECK(initialized_);
-  auto innerIndex = getDictionaryIndex(idx);
-  return scalarDictionaryValues_->valueAt(innerIndex);
 }
 
 template <typename T>
@@ -136,7 +122,7 @@ std::unique_ptr<SimpleVector<uint64_t>> DictionaryVector<T>::hashAll() const {
   // If there is at least one value, then indices_ is set and has a pool.
   BufferPtr hashes =
       AlignedBuffer::allocate<uint64_t>(BaseVector::length_, indices_->pool());
-  uint64_t* rawHashes = hashes->asMutable<uint64_t>();
+  auto* rawHashes = hashes->asMutable<uint64_t>();
   for (vector_size_t i = 0; i < BaseVector::length_; ++i) {
     if (BaseVector::isNullAt(i)) {
       rawHashes[i] = BaseVector::kNullHash;
@@ -157,22 +143,6 @@ std::unique_ptr<SimpleVector<uint64_t>> DictionaryVector<T>::hashAll() const {
       0 /* nullCount */,
       false /* sorted */,
       sizeof(uint64_t) * BaseVector::length_ /* representedBytes */);
-}
-
-template <typename T>
-xsimd::batch<T> DictionaryVector<T>::loadSIMDValueBufferAt(
-    size_t byteOffset) const {
-  if constexpr (can_simd) {
-    constexpr int N = xsimd::batch<T>::size;
-    alignas(xsimd::default_arch::alignment()) T tmp[N];
-    auto startIndex = byteOffset / sizeof(T);
-    for (int i = 0; i < N; ++i) {
-      tmp[i] = valueAtFast(startIndex + i);
-    }
-    return xsimd::load_aligned(tmp);
-  } else {
-    VELOX_UNREACHABLE();
-  }
 }
 
 template <typename T>

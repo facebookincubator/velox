@@ -82,10 +82,9 @@ void castFromString(
     const SelectivityVector& rows,
     int64_t* rawResults) {
   context.applyToSelectedNoThrow(rows, [&](auto row) {
+    const auto value = inputVector.valueAt(row);
     const auto castResult = util::fromTimestampWithTimezoneString(
-        inputVector.valueAt(row).data(),
-        inputVector.valueAt(row).size(),
-        util::TimestampParseMode::kPrestoCast);
+        value.data(), value.size(), util::TimestampParseMode::kPrestoCast);
     if (castResult.hasError()) {
       context.setStatus(row, castResult.error());
     } else {
@@ -96,9 +95,7 @@ void castFromString(
         if (millisOffset.has_value()) {
           context.setStatus(
               row,
-              Status::UserError(
-                  "Unknown timezone value in: \"{}\"",
-                  inputVector.valueAt(row)));
+              Status::UserError("Unknown timezone value in: \"{}\"", value));
           return;
         }
         const auto& config = context.execCtx()->queryCtx()->queryConfig();
