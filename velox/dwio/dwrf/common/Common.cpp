@@ -15,7 +15,6 @@
  */
 
 #include "velox/dwio/dwrf/common/Common.h"
-#include "velox/common/compression/Compression.h"
 
 #include <folly/Conv.h>
 
