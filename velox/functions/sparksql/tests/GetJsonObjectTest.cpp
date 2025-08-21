@@ -15,7 +15,6 @@
  */
 #include <stdint.h>
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
-#include "velox/type/Type.h"
 
 namespace facebook::velox::functions::sparksql::test {
 namespace {
@@ -160,6 +159,22 @@ TEST_F(GetJsonObjectTest, incompleteJson) {
           R"({"my": {"info": {"name": "Alice", "age": "5", "id": "001"}}},)",
           "$['my']['info']"),
       R"({"name": "Alice", "age": "5", "id": "001"})");
+}
+
+TEST_F(GetJsonObjectTest, bigint) {
+  EXPECT_EQ(
+      getJsonObject(
+          R"({"big": 98765432109876543210987654321098765432 })", "$.big"),
+      "98765432109876543210987654321098765432");
+  EXPECT_EQ(
+      getJsonObject(
+          R"({"big":  -98765432109876543210987654321098765432})", "$.big"),
+      "-98765432109876543210987654321098765432");
+  EXPECT_EQ(
+      getJsonObject(
+          R"({"nested": {"num": -1234567890123456789012345678901234567890 }})",
+          "$.nested.num"),
+      "-1234567890123456789012345678901234567890");
 }
 
 } // namespace

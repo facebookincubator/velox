@@ -18,6 +18,7 @@
 
 #include <boost/regex.hpp>
 #include "velox/functions/Macros.h"
+#include "velox/functions/lib/JsonUtil.h"
 #include "velox/functions/prestosql/json/SIMDJsonUtil.h"
 
 namespace facebook::velox::functions::sparksql {
@@ -148,6 +149,11 @@ struct GetJsonObjectFunction {
       // can check the validity of ending character.
       case simdjson::ondemand::json_type::number: {
         switch (rawResult.get_number_type()) {
+          case simdjson::ondemand::number_type::big_integer: {
+            result.append(trimToken(rawResult.raw_json_token()));
+            // advance the simdjson parsing position
+            return !rawResult.get_double().error();
+          }
           case simdjson::ondemand::number_type::unsigned_integer: {
             uint64_t numberResult;
             if (!rawResult.get_uint64().get(numberResult)) {
