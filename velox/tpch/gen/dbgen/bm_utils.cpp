@@ -45,21 +45,15 @@
 #include "dbgen/config.h" // @manual
 #include "dbgen/dss.h" // @manual
 
-#include <errno.h>
 #include <stdio.h>
 #include <string.h>
-#include <time.h>
 #ifdef HP
 #include <strings.h>
 #endif /* HP */
 #include <ctype.h>
-#include <math.h>
 #ifndef _POSIX_SOURCE
 // #include <malloc.h>
 #endif /* POSIX_SOURCE */
-#include <fcntl.h>
-#include <sys/stat.h>
-#include <sys/types.h>
 /* Lines added by Chuck McDevitt for WIN32 support */
 #ifdef WIN32
 #ifndef _POSIX_
