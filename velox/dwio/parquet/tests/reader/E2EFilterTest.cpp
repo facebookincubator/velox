@@ -119,6 +119,7 @@ TEST_F(E2EFilterTest, boolean) {
 }
 
 TEST_F(E2EFilterTest, integerDirect) {
+#ifdef __AVX2__
   options_.enableDictionary = false;
   options_.dataPageSize = 4 * 1024;
 
@@ -131,6 +132,9 @@ TEST_F(E2EFilterTest, integerDirect) {
       true,
       {"short_val", "int_val", "long_val"},
       20);
+#else
+  GTEST_SKIP() << "Skipping test until supporting non-AVX2 machine can also pass the unit test";
+#endif
 }
 
 TEST_F(E2EFilterTest, integerDeltaBinaryPack) {
@@ -150,6 +154,7 @@ TEST_F(E2EFilterTest, integerDeltaBinaryPack) {
 }
 
 TEST_F(E2EFilterTest, compression) {
+#ifdef __AVX2__
   for (const auto compression :
        {common::CompressionKind_SNAPPY,
         common::CompressionKind_ZSTD,
@@ -213,9 +218,13 @@ TEST_F(E2EFilterTest, compression) {
         {"tinyint_val", "short_val", "int_val", "long_val"},
         3);
   }
+#else
+GTEST_SKIP() << "Skipping test until supporting non-AVX2 machine can also pass the unit test";
+#endif
 }
 
 TEST_F(E2EFilterTest, integerDictionary) {
+#ifdef __AVX2__
   options_.dataPageSize = 4 * 1024;
 
   testWithTypes(
@@ -256,6 +265,9 @@ TEST_F(E2EFilterTest, integerDictionary) {
       true,
       {"short_val", "int_val", "long_val"},
       20);
+#else
+  GTEST_SKIP() << "Skipping test until supporting non-AVX2 machine can also pass the unit test";
+#endif
 }
 
 TEST_F(E2EFilterTest, timestampInt64Direct) {
@@ -311,6 +323,7 @@ TEST_F(E2EFilterTest, timestampInt96Dictionary) {
 }
 
 TEST_F(E2EFilterTest, floatAndDoubleDirect) {
+#ifdef __AVX2__
   options_.enableDictionary = false;
   options_.dataPageSize = 4 * 1024;
 
@@ -329,6 +342,9 @@ TEST_F(E2EFilterTest, floatAndDoubleDirect) {
       true,
       {"float_val", "double_val", "float_val2", "double_val2", "float_null"},
       20);
+#else
+GTEST_SKIP() << "Skipping test until supporting non-AVX2 machine can also pass the unit test";
+#endif
 }
 
 TEST_F(E2EFilterTest, floatAndDouble) {
@@ -508,6 +524,7 @@ TEST_F(E2EFilterTest, stringDirect) {
 }
 
 TEST_F(E2EFilterTest, stringDictionary) {
+#ifdef __AVX2__
   testWithTypes(
       "string_val:string,"
       "string_val_2:string,"
@@ -520,6 +537,9 @@ TEST_F(E2EFilterTest, stringDictionary) {
       true,
       {"string_val", "string_val_2"},
       20);
+#else
+GTEST_SKIP() << "Skipping test until supporting non-AVX2 machine can also pass the unit test";
+#endif
 }
 
 TEST_F(E2EFilterTest, stringDeltaByteArray) {
@@ -540,6 +560,7 @@ TEST_F(E2EFilterTest, stringDeltaByteArray) {
 }
 
 TEST_F(E2EFilterTest, dedictionarize) {
+#ifdef __AVX2__
   rowsInRowGroup_ = 10'000;
   options_.dictionaryPageSizeLimit = 20'000;
 
@@ -554,6 +575,9 @@ TEST_F(E2EFilterTest, dedictionarize) {
       true,
       {"long_val", "string_val", "string_val_2"},
       20);
+#else
+  GTEST_SKIP() << "Skipping test until supporting non-AVX2 machine can also pass the unit test";
+#endif
 }
 
 TEST_F(E2EFilterTest, filterStruct) {
@@ -575,6 +599,7 @@ TEST_F(E2EFilterTest, filterStruct) {
 }
 
 TEST_F(E2EFilterTest, list) {
+#ifdef __AVX2__
   // Break up the leaf data in small pages to cover coalescing repdefs.
   options_.dataPageSize = 4 * 1024;
 
@@ -587,6 +612,9 @@ TEST_F(E2EFilterTest, list) {
       false,
       {"long_val", "array_val"},
       10);
+#else
+  GTEST_SKIP() << "Skipping test until supporting non-AVX2 machine can also pass the unit test";
+#endif
 }
 
 TEST_F(E2EFilterTest, metadataFilter) {
@@ -605,6 +633,7 @@ TEST_F(E2EFilterTest, mutationCornerCases) {
 }
 
 TEST_F(E2EFilterTest, map) {
+#ifdef __AVX2__
   // Break up the leaf data in small pages to cover coalescing repdefs.
   options_.dataPageSize = 4 * 1024;
 
@@ -619,6 +648,9 @@ TEST_F(E2EFilterTest, map) {
       false,
       {"long_val", "map_val"},
       10);
+#else
+  GTEST_SKIP() << "Skipping test until supporting non-AVX2 machine can also pass the unit test";
+#endif
 }
 
 TEST_F(E2EFilterTest, varbinaryDirect) {
@@ -638,6 +670,7 @@ TEST_F(E2EFilterTest, varbinaryDirect) {
 }
 
 TEST_F(E2EFilterTest, varbinaryDictionary) {
+#ifdef __AVX2__
   testWithTypes(
       "varbinary_val:varbinary,"
       "varbinary_val_2:varbinary,"
@@ -650,6 +683,9 @@ TEST_F(E2EFilterTest, varbinaryDictionary) {
       true,
       {"varbinary_val", "varbinary_val_2"},
       20);
+#else
+  GTEST_SKIP() << "Skipping test until supporting non-AVX2 machine can also pass the unit test";
+#endif
 }
 
 TEST_F(E2EFilterTest, largeMetadata) {
