@@ -139,6 +139,11 @@ class QueryConfig {
   static constexpr const char* kLocalExchangePartitionBufferPreserveEncoding =
       "local_exchange_partition_buffer_preserve_encoding";
 
+  /// Maximum number of vectors buffered in each local merge source before
+  /// blocking to wait for consumers.
+  static constexpr const char* kLocalMergeSourceQueueSize =
+      "local_merge_source_queue_size";
+
   /// Maximum size in bytes to accumulate in ExchangeQueue. Enforced
   /// approximately, not strictly.
   static constexpr const char* kMaxExchangeBufferSize =
@@ -525,7 +530,7 @@ class QueryConfig {
 
   /// Some lambda functions over arrays and maps are evaluated in batches of the
   /// underlying elements that comprise the arrays/maps. This is done to make
-  /// the batch size managable as array vectors can have thousands of elements
+  /// the batch size manageable as array vectors can have thousands of elements
   /// each and hit scaling limits as implementations typically expect
   /// BaseVectors to a couple of thousand entries. This lets up tune those batch
   /// sizes.
@@ -664,6 +669,13 @@ class QueryConfig {
   static constexpr const char* kMaxNumSplitsListenedTo =
       "max_num_splits_listened_to";
 
+  /// Source of the query. Used by Presto to identify the file system username.
+  static constexpr const char* kSource = "source";
+
+  /// Client tags of the query. Used by Presto to identify the file system
+  /// username.
+  static constexpr const char* kClientTags = "client_tags";
+
   bool selectiveNimbleReaderEnabled() const {
     return get<bool>(kSelectiveNimbleReaderEnabled, false);
   }
@@ -787,6 +799,10 @@ class QueryConfig {
   bool localExchangePartitionBufferPreserveEncoding() const {
     /// Trying to preserve encoding can be expensive. Disabled by default.
     return get<bool>(kLocalExchangePartitionBufferPreserveEncoding, false);
+  }
+
+  uint32_t localMergeSourceQueueSize() const {
+    return get<uint32_t>(kLocalMergeSourceQueueSize, 2);
   }
 
   uint64_t maxExchangeBufferSize() const {
@@ -1201,6 +1217,14 @@ class QueryConfig {
 
   int32_t maxNumSplitsListenedTo() const {
     return get<int32_t>(kMaxNumSplitsListenedTo, 0);
+  }
+
+  std::string source() const {
+    return get<std::string>(kSource, "");
+  }
+
+  std::string clientTags() const {
+    return get<std::string>(kClientTags, "");
   }
 
   template <typename T>
