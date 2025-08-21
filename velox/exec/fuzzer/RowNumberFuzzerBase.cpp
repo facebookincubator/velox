@@ -31,7 +31,7 @@ DEFINE_int32(steps, 10, "Number of plans to generate and test.");
 
 DEFINE_int32(
     duration_sec,
-    0,
+    600,
     "For how long it should run (in seconds). If zero, "
     "it executes exactly --steps iterations and exits.");
 
