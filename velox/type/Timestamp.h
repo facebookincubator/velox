@@ -358,7 +358,7 @@ struct Timestamp {
       const TimestampToStringOptions& options,
       char* const startPosition);
 
-  /// Strict conversion of local timestamp to the GMT
+  /// Assuming the timestamp represents a time at zone, converts it to the GMT
   /// time at the same moment. For example:
   ///
   ///  Timestamp ts{0, 0};
