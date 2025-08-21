@@ -222,6 +222,9 @@ struct OperatorStats {
   void addRuntimeStat(const std::string& name, const RuntimeCounter& value);
   void add(const OperatorStats& other);
   void clear();
+  std::string toString() const;
 };
+
+std::string toString(const OperatorStats& stats);
 
 } // namespace facebook::velox::exec

@@ -28,6 +28,7 @@ velox_add_library(
   ContainerRowSerde.cpp
   DistinctAggregations.cpp
   Driver.cpp
+  DriverStats.cpp
   EnforceSingleRow.cpp
   Exchange.cpp
   ExchangeClient.cpp
@@ -56,6 +57,7 @@ velox_add_library(
   NestedLoopJoinBuild.cpp
   NestedLoopJoinProbe.cpp
   Operator.cpp
+  OperatorStats.cpp
   OperatorUtils.cpp
   OrderBy.cpp
   OutputBuffer.cpp
@@ -91,6 +93,7 @@ velox_add_library(
   TableWriteMerge.cpp
   TableWriter.cpp
   Task.cpp
+  TaskStats.cpp
   TopN.cpp
   TopNRowNumber.cpp
   Unnest.cpp

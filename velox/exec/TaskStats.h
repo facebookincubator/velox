@@ -47,6 +47,8 @@ struct PipelineStats {
 
   PipelineStats(bool _inputPipeline, bool _outputPipeline)
       : inputPipeline{_inputPipeline}, outputPipeline{_outputPipeline} {}
+
+  std::string toString() const;
 };
 
 /// Stores execution stats per task.
@@ -126,6 +128,8 @@ struct TaskStats {
   uint32_t memoryReclaimCount{0};
   /// The total memory reclamation time.
   uint64_t memoryReclaimMs{0};
+
+  std::string toString() const;
 };
 
 } // namespace facebook::velox::exec

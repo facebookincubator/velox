@@ -14,21 +14,26 @@
  * limitations under the License.
  */
 
-#pragma once
-
-#include <unordered_map>
-#include "velox/common/base/RuntimeMetrics.h"
+#include "velox/exec/DriverStats.h"
+#include <sstream>
 
 namespace facebook::velox::exec {
 
-struct DriverStats {
-  static constexpr const char* kTotalPauseTime = "totalDriverPauseWallNanos";
-  static constexpr const char* kTotalOffThreadTime =
-      "totalDriverOffThreadWallNanos";
+std::string DriverStats::toString() const {
+  std::stringstream out;
 
-  std::unordered_map<std::string, RuntimeMetric> runtimeStats;
+  out << "[DriverStats] runtimeStats: {";
+  bool first = true;
+  for (const auto& [name, metric] : runtimeStats) {
+    if (!first) {
+      out << ", ";
+    }
+    out << name << ":" << metric.sum;
+    first = false;
+  }
+  out << "}";
 
-  std::string toString() const;
-};
+  return out.str();
+}
 
 } // namespace facebook::velox::exec
