@@ -38,7 +38,7 @@ sys.path.insert(0, os.path.abspath("ext"))
 # -- Project information -----------------------------------------------------
 
 project = "Velox"
-copyright = "TBD"
+copyright = '%Y' # this will make sure the copyright year is always correct.
 
 
 # -- General configuration ---------------------------------------------------
