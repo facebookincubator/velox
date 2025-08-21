@@ -38,7 +38,8 @@ class ValueStatisticsBuilder {
   static std::unique_ptr<const ValueStatisticsBuilder> create(
       WriterContext& context,
       const dwio::common::TypeWithId& root) {
-    auto options = StatisticsBuilderOptions::fromConfig(context.getConfigs());
+    auto options = StatisticsBuilderOptions::fromConfig(
+        context.getConfigs(), context.fileFormat());
     return create_(context, root, options);
   }
 
@@ -52,15 +53,15 @@ class ValueStatisticsBuilder {
     }
   }
 
-  uint64_t writeFileStats(
-      std::function<proto::ColumnStatistics&(uint32_t)> statsFactory) const {
-    auto& stats = statsFactory(id_);
+  uint64_t writeFileStats(std::function<ColumnStatisticsWriteWrapper(uint32_t)>
+                              statsFactory) const {
+    auto stats = statsFactory(id_);
     statisticsBuilder_->toProto(stats);
     uint64_t size = context_.getPhysicalSizeAggregator(id_).getResult();
     for (int32_t i = 0; i < children_.size(); ++i) {
       children_[i]->writeFileStats(statsFactory);
     }
-    stats.set_size(size);
+    stats.setSize(size);
     return size;
   }
 
@@ -209,10 +210,13 @@ class ValueWriter {
     columnWriter_->createIndexEntry();
   }
 
-  void flush(std::function<proto::ColumnEncoding&(uint32_t)> encodingFactory) {
+  void flush(
+      std::function<ColumnEncodingWriteWrapper(uint32_t)> encodingFactory) {
     inMap_->flush();
-    columnWriter_->flush(encodingFactory, [&](auto& encoding) {
-      *encoding.mutable_key() = keyInfo_;
+    columnWriter_->flush(encodingFactory, [&](auto encoding) {
+      if (encoding.format() == DwrfFormat::kDwrf) {
+        *encoding.mutableKey() = keyInfo_;
+      }
     });
   }
 
@@ -290,20 +294,21 @@ class FlatMapColumnWriter : public BaseColumnWriter {
   uint64_t write(const VectorPtr& slice, const common::Ranges& ranges) override;
 
   void flush(
-      std::function<proto::ColumnEncoding&(uint32_t)> encodingFactory,
-      std::function<void(proto::ColumnEncoding&)> encodingOverride) override;
+      std::function<ColumnEncodingWriteWrapper(uint32_t)> encodingFactory,
+      std::function<void(ColumnEncodingWriteWrapper&)> encodingOverride)
+      override;
 
   void createIndexEntry() override;
 
   void reset() override;
 
-  uint64_t writeFileStats(std::function<proto::ColumnStatistics&(uint32_t)>
+  uint64_t writeFileStats(std::function<ColumnStatisticsWriteWrapper(uint32_t)>
                               statsFactory) const override;
 
  private:
   using KeyType = typename TypeTraits<K>::NativeType;
 
-  void setEncoding(proto::ColumnEncoding& encoding) const override;
+  void setEncoding(ColumnEncodingWriteWrapper& encoding) const override;
 
   ValueWriter& getValueWriter(KeyType key, uint32_t inMapSize);
 

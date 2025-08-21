@@ -123,50 +123,65 @@ EncodingIter::pointer EncodingIter::operator->() const {
 }
 
 EncodingManager::EncodingManager(
-    const encryption::EncryptionHandler& encryptionHandler)
-    : encryptionHandler_{encryptionHandler} {
+    const encryption::EncryptionHandler& encryptionHandler,
+    dwio::common::FileFormat fileFormat)
+    : encryptionHandler_{encryptionHandler},
+      arena_{std::make_unique<google::protobuf::Arena>()} {
   initEncryptionGroups();
-}
-
-proto::ColumnEncoding& EncodingManager::addEncodingToFooter(uint32_t nodeId) {
-  if (encryptionHandler_.isEncrypted(nodeId)) {
-    auto index = encryptionHandler_.getEncryptionGroupIndex(nodeId);
-    return *encryptionGroups_.at(index).add_encoding();
+  if (fileFormat == dwio::common::FileFormat::DWRF) {
+    auto dwrfStripeFooter =
+        google::protobuf::Arena::CreateMessage<proto::StripeFooter>(
+            arena_.get());
+    footer_ = std::make_unique<StripeFooterWriteWrapper>(dwrfStripeFooter);
   } else {
-    return *footer_.add_encoding();
+    auto orcStripeFooter =
+        google::protobuf::Arena::CreateMessage<proto::orc::StripeFooter>(
+            arena_.get());
+    footer_ = std::make_unique<StripeFooterWriteWrapper>(orcStripeFooter);
   }
 }
 
-proto::Stream* EncodingManager::addStreamToFooter(
+ColumnEncodingWriteWrapper EncodingManager::addEncodingToFooter(
+    uint32_t nodeId) {
+  if (encryptionHandler_.isEncrypted(nodeId)) {
+    auto index = encryptionHandler_.getEncryptionGroupIndex(nodeId);
+    return ColumnEncodingWriteWrapper(
+        encryptionGroups_.at(index).add_encoding());
+  } else {
+    return footer_->addEncoding();
+  }
+}
+
+StreamWriteWrapper EncodingManager::addStreamToFooter(
     uint32_t nodeId,
     uint32_t& currentIndex) {
   if (encryptionHandler_.isEncrypted(nodeId)) {
     currentIndex = encryptionHandler_.getEncryptionGroupIndex(nodeId);
-    return encryptionGroups_.at(currentIndex).add_streams();
+    return StreamWriteWrapper(encryptionGroups_.at(currentIndex).add_streams());
   } else {
     currentIndex = std::numeric_limits<uint32_t>::max();
-    return footer_.add_streams();
+    return footer_->addStreams();
   }
 }
 
 std::string* EncodingManager::addEncryptionGroupToFooter() {
-  return footer_.add_encryptiongroups();
+  return footer_->addEncryptionGroups();
 }
 
 proto::StripeEncryptionGroup EncodingManager::getEncryptionGroup(uint32_t i) {
   return encryptionGroups_.at(i);
 }
 
-const proto::StripeFooter& EncodingManager::getFooter() const {
-  return footer_;
+const StripeFooterWriteWrapper& EncodingManager::getFooter() const {
+  return *footer_;
 }
 
 EncodingIter EncodingManager::begin() const {
-  return EncodingIter::begin(footer_, encryptionGroups_);
+  return EncodingIter::begin(*footer_->dwrfPtr(), encryptionGroups_);
 }
 
 EncodingIter EncodingManager::end() const {
-  return EncodingIter::end(footer_, encryptionGroups_);
+  return EncodingIter::end(*footer_->dwrfPtr(), encryptionGroups_);
 }
 
 void EncodingManager::initEncryptionGroups() {
@@ -234,6 +249,7 @@ LayoutPlanner::LayoutPlanner(const dwio::common::TypeWithId& schema) {
 }
 
 LayoutResult LayoutPlanner::plan(
+    dwio::common::FileFormat fileFormat,
     const EncodingContainer& encoding,
     StreamList streams) const {
   // place index before data
@@ -241,7 +257,11 @@ LayoutResult LayoutPlanner::plan(
     return isIndexStream(stream.first->kind());
   });
   const size_t indexCount = iter - streams.begin();
-  auto flatMapCols = getFlatMapColumns(encoding, nodeToColumnMap_);
+
+  folly::F14FastSet<uint32_t> flatMapCols;
+  if (fileFormat == dwio::common::FileFormat::DWRF) {
+    flatMapCols = getFlatMapColumns(encoding, nodeToColumnMap_);
+  }
 
   // sort streams
   sortBySize(streams.begin(), iter, flatMapCols);

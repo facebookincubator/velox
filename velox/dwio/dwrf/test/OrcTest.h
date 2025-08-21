@@ -263,7 +263,8 @@ class TestPositionRecorder : public PositionRecorder {
 
 class MockIndexBuilder : public IndexBuilder {
  public:
-  explicit MockIndexBuilder() : IndexBuilder{nullptr} {}
+  explicit MockIndexBuilder()
+      : IndexBuilder{nullptr, dwio::common::FileFormat::ORC} {}
 
   MOCK_METHOD2(add, void(uint64_t, int));
   MOCK_METHOD1(addEntry, void(const StatisticsBuilder&));
@@ -276,9 +277,11 @@ class ProtoWriter : public WriterBase {
   ProtoWriter(
       std::shared_ptr<memory::MemoryPool> pool,
       memory::MemoryPool& sinkPool)
-      : WriterBase{std::make_unique<dwio::common::MemorySink>(
-            1024,
-            dwio::common::FileSink::Options{.pool = &sinkPool})} {
+      : WriterBase{
+            std::make_unique<dwio::common::MemorySink>(
+                1024,
+                dwio::common::FileSink::Options{.pool = &sinkPool}),
+            dwio::common::FileFormat::ORC} {
     initContext(
         std::make_shared<Config>(), pool->addAggregateChild("proto_writer"));
   }

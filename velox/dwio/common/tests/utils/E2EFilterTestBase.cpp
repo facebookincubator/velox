@@ -98,6 +98,7 @@ void E2EFilterTestBase::readWithoutFilter(
   dwio::common::RowReaderOptions rowReaderOpts;
   auto input = std::make_unique<BufferedInput>(
       std::make_shared<InMemoryReadFile>(sinkData_), readerOpts.memoryPool());
+  setUpReaderOptions(readerOpts);
   auto reader = makeReader(readerOpts, std::move(input));
 
   // The spec must stay live over the lifetime of the reader.
@@ -152,6 +153,7 @@ void E2EFilterTestBase::readWithFilter(
   dwio::common::RowReaderOptions rowReaderOpts;
   auto input = std::make_unique<BufferedInput>(
       std::make_shared<InMemoryReadFile>(sinkData_), readerOpts.memoryPool());
+  setUpReaderOptions(readerOpts);
   auto reader = makeReader(readerOpts, std::move(input));
 
   // The spec must stay live over the lifetime of the reader.
@@ -515,6 +517,7 @@ void E2EFilterTestBase::testMetadataFilterImpl(
   RowReaderOptions rowReaderOpts;
   auto input = std::make_unique<BufferedInput>(
       std::make_shared<InMemoryReadFile>(sinkData_), readerOpts.memoryPool());
+  setUpReaderOptions(readerOpts);
   auto reader = makeReader(readerOpts, std::move(input));
   setUpRowReaderOptions(rowReaderOpts, spec);
   rowReaderOpts.setMetadataFilter(metadataFilter);
@@ -727,6 +730,7 @@ void E2EFilterTestBase::testSubfieldsPruning() {
   RowReaderOptions rowReaderOpts;
   auto input = std::make_unique<BufferedInput>(
       std::make_shared<InMemoryReadFile>(sinkData_), readerOpts.memoryPool());
+  setUpReaderOptions(readerOpts);
   auto reader = makeReader(readerOpts, std::move(input));
   setUpRowReaderOptions(rowReaderOpts, spec);
   auto rowReader = reader->createRowReader(rowReaderOpts);
@@ -816,6 +820,7 @@ void E2EFilterTestBase::testMutationCornerCases() {
   ReaderOptions readerOpts{leafPool_.get()};
   auto input = std::make_unique<BufferedInput>(
       std::make_shared<InMemoryReadFile>(sinkData_), readerOpts.memoryPool());
+  setUpReaderOptions(readerOpts);
   auto reader = makeReader(readerOpts, std::move(input));
 
   // 1. Interleave batches with and without deletions.
