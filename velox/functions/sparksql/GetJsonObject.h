@@ -62,6 +62,80 @@ struct GetJsonObjectFunction {
     }
     const auto formattedJsonPath =
         jsonPath_.has_value() ? jsonPath_.value() : normalizeJsonPath(jsonPath);
+
+    auto wildcardPos = formattedJsonPath.find("[*]", 0);
+    if (wildcardPos != std::string::npos) {
+      std::string_view partialPath(formattedJsonPath.data(), wildcardPos);
+      std::string_view remainingPath(
+          formattedJsonPath.data() + wildcardPos + 3,
+          formattedJsonPath.size() - wildcardPos - 3);
+      auto rawPartialResult = jsonDoc.at_path(partialPath);
+      if (rawPartialResult.error()) {
+        return false;
+      }
+      // The next token in JsonPath is wildcard, so the partial result can
+      // only be an array.
+      if (rawPartialResult.type() != simdjson::ondemand::json_type::array) {
+        return false;
+      }
+
+      if (remainingPath.empty()) {
+        std::stringstream ss;
+        ss << rawPartialResult;
+        result.append(ss.str());
+        // TODO; add check for ending char.
+        return true;
+      }
+
+      std::stringstream ss;
+      int resultElementCount = 0;
+      for (auto element : rawPartialResult) {
+        // TODO: consolidate the below code.
+        try {
+          // Can return error result or throw exception possibly.
+          auto rawResult = element.at_path(remainingPath);
+          if (rawResult.error()) {
+            // return false;
+            continue;
+          }
+
+          ++resultElementCount;
+          if (resultElementCount > 1) {
+            ss << ",";
+          }
+          ss << rawResult;
+          // if (!extractStringResult(rawResult, result)) {
+          //  return false;
+          //}
+
+        } catch (simdjson::simdjson_error& e) {
+          return false;
+        }
+      }
+
+      if (resultElementCount == 0) {
+        return false;
+      }
+      const auto& rawString = ss.str();
+      // Only one element in result, no bracket.
+      if (resultElementCount == 1) {
+        if (rawString.front() == '"' && rawString.back() == '"') {
+          result.resize(rawString.size() - 2);
+          std::memcpy(
+              result.data(), rawString.data() + 1, rawString.size() - 2);
+        } else {
+          result.append(rawString);
+        }
+
+      } else {
+        result.reserve(rawString.size() + 2);
+        result.append("[");
+        result.append(rawString);
+        result.append("]");
+      }
+      return true;
+    }
+
     try {
       // Can return error result or throw exception possibly.
       auto rawResult = jsonDoc.at_path(formattedJsonPath);
