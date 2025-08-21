@@ -229,6 +229,8 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
       int64_t size,
       std::optional<uint32_t> alignment = std::nullopt) = 0;
 
+  virtual void reportAllocation(int64_t size) = 0;
+
   /// Allocates a zero-filled buffer with capacity that can store 'numEntries'
   /// entries with each size of 'sizeEach'.
   virtual void* allocateZeroFilled(int64_t numEntries, int64_t sizeEach) = 0;
@@ -239,6 +241,8 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
 
   /// Frees an allocated buffer.
   virtual void free(void* p, int64_t size) = 0;
+
+  virtual void reportFree(int64_t size) = 0;
 
   /// Allocates one or more runs that add up to at least 'numPages', with the
   /// smallest run being at least 'minSizeClass' pages. 'minSizeClass' must be
@@ -598,11 +602,15 @@ class MemoryPoolImpl : public MemoryPool {
   void* allocate(int64_t size, std::optional<uint32_t> alignment = std::nullopt)
       override;
 
+  void reportAllocation(int64_t size) override;
+
   void* allocateZeroFilled(int64_t numEntries, int64_t sizeEach) override;
 
   void* reallocate(void* p, int64_t size, int64_t newSize) override;
 
   void free(void* p, int64_t size) override;
+
+  void reportFree(int64_t size) override;
 
   void allocateNonContiguous(
       MachinePageCount numPages,
