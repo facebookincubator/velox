@@ -22,9 +22,6 @@
 #include "velox/connectors/hive/storage_adapters/abfs/AzureClientProvider.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AzureDataLakeFileClient.h"
 
-#include <memory>
-#include <string>
-
 namespace facebook::velox::filesystems {
 
 // AzureClientProvider for Shared Key authentication.

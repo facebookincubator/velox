@@ -18,7 +18,6 @@
 #include "velox/connectors/hive/storage_adapters/abfs/AzureClientProviders.h"
 
 #include <folly/Synchronized.h>
-#include <unordered_map>
 
 namespace facebook::velox::filesystems {
 

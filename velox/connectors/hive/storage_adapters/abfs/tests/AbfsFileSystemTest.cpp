@@ -27,8 +27,6 @@
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsFileSystem.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsPath.h"
 
-#include <duckdb/common/unique_ptr.hpp>
-
 #include "connectors/hive/storage_adapters/abfs/AzureClientProviderFactories.h"
 #include "connectors/hive/storage_adapters/abfs/AzureClientProviders.h"
 #include "connectors/hive/storage_adapters/abfs/RegisterAbfsFileSystem.h"
