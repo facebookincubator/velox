@@ -335,6 +335,8 @@ void registerCudf(const CudfOptions& options) {
     return;
   }
 
+  registerBuiltinFunctions(options.prefix());
+
   // Register delegate so HiveConnector can create GPU Parquet reader.
   if (cudfTableScanEnabled()) {
     facebook::velox::connector::hive::HiveConnector::registerDataSourceDelegate(

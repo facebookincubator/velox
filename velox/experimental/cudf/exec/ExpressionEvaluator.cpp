@@ -805,9 +805,7 @@ std::shared_ptr<CudfFunction> createCudfFunction(
   return nullptr;
 }
 
-static bool registerBuiltinFunctions() {
-  auto prefix = CudfOptions::getInstance().prefix();
-
+bool registerBuiltinFunctions(const std::string& prefix) {
   registerCudfFunction(
       "split",
       [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
@@ -846,8 +844,6 @@ static bool registerBuiltinFunctions() {
 
   return true;
 }
-
-static bool registered = registerBuiltinFunctions();
 
 std::shared_ptr<CudfExpressionNode> CudfExpressionNode::create(
     const std::shared_ptr<velox::exec::Expr>& expr) {
