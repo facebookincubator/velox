@@ -151,7 +151,7 @@ struct GetJsonObjectFunction {
         switch (rawResult.get_number_type()) {
           case simdjson::ondemand::number_type::big_integer: {
             result.append(trimToken(rawResult.raw_json_token()));
-            // advance the simdjson parsing position
+            // Advance the simdjson parsing position.
             return !rawResult.get_double().error();
           }
           case simdjson::ondemand::number_type::unsigned_integer: {
