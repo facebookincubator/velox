@@ -17,8 +17,6 @@
 #pragma once
 
 #include <assert.h>
-#include <cub/thread/thread_load.cuh>
-#include <cub/util_ptx.cuh>
 #include "velox/experimental/wave/common/ArenaWithFreeBase.h"
 #include "velox/experimental/wave/common/FreeSet.cuh"
 
@@ -35,7 +33,7 @@ struct ArenaWithFree : public ArenaWithFreeBase {
     }
     auto offset = atomicAdd(&rowOffset, rowSize);
 
-    if (offset + rowSize < cub::ThreadLoad<cub::LOAD_CG>(&stringOffset)) {
+    if (offset + rowSize < __ldcg(&stringOffset)) {
       if (!inRange(base + offset)) {
         assert(false);
       }
@@ -65,7 +63,7 @@ struct ArenaWithFree : public ArenaWithFreeBase {
   T* __device__ allocate(int32_t cnt) {
     uint32_t size = sizeof(T) * cnt;
     auto offset = atomicSub(&stringOffset, size);
-    if (offset - size > cub::ThreadLoad<cub::LOAD_CG>(&rowOffset)) {
+    if (offset - size > __ldcg(&rowOffset)) {
       if (!inRange(base + offset - size)) {
         assert(false);
       }
