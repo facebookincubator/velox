@@ -19,7 +19,7 @@ target_link_libraries(
   velox_dwio_parquet_common_test
   velox_dwio_parquet_common
   arrow
-  thrift
+  thrift::thrift
   velox_link_libs
   velox_exec
   GTest::gtest

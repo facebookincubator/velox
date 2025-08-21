@@ -15,8 +15,10 @@ project(Arrow)
 
 if(VELOX_ENABLE_ARROW)
   if(Thrift_FOUND)
+    set(ARROW_WITH_THRIFT OFF)
     set(THRIFT_SOURCE "SYSTEM")
   else()
+    set(ARROW_WITH_THRIFT ON)
     set(THRIFT_SOURCE "BUNDLED")
   endif()
   # Apache Arrow 21.0.0 uses archive.apache.org as the default mirror, which
@@ -31,7 +33,7 @@ if(VELOX_ENABLE_ARROW)
   set(ARROW_CMAKE_ARGS
       -DARROW_PARQUET=OFF
       -DARROW_DEPENDENCY_SOURCE=AUTO
-      -DARROW_WITH_THRIFT=ON
+      -DARROW_WITH_THRIFT=${ARROW_WITH_THRIFT}
       -DARROW_WITH_LZ4=ON
       -DARROW_WITH_SNAPPY=ON
       -DARROW_WITH_ZLIB=ON
@@ -51,8 +53,10 @@ if(VELOX_ENABLE_ARROW)
       -DCMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH})
   set(ARROW_LIBDIR ${ARROW_PREFIX}/install/${CMAKE_INSTALL_LIBDIR})
 
-  add_library(thrift STATIC IMPORTED GLOBAL)
-  if(NOT Thrift_FOUND)
+  if(Thrift_FOUND)
+    set(ARROW_THRIFT_LIB)
+  else()
+    add_library(thrift::thrift STATIC IMPORTED GLOBAL)
     set(THRIFT_SOURCE_ROOT ${ARROW_PREFIX}/src/arrow_ep-build/_deps/thrift-src)
     set(THRIFT_BUILD_ROOT ${ARROW_PREFIX}/src/arrow_ep-build/_deps/thrift-build)
     set(THRIFT_INCLUDE_DIR ${THRIFT_BUILD_ROOT}
@@ -60,10 +64,11 @@ if(VELOX_ENABLE_ARROW)
     foreach(dir ${THRIFT_INCLUDE_DIR})
       file(MAKE_DIRECTORY ${dir})
     endforeach()
-    set(THRIFT_LIB ${ARROW_PREFIX}/src/arrow_ep-build/lib/libthrift.a)
+    set(ARROW_THRIFT_LIB ${ARROW_PREFIX}/src/arrow_ep-build/lib/libthrift.a)
+    target_include_directories(thrift::thrift INTERFACE ${THRIFT_INCLUDE_DIR})
+    set_property(TARGET thrift::thrift PROPERTY IMPORTED_LOCATION
+                                                ${ARROW_THRIFT_LIB})
   endif()
-  target_include_directories(thrift INTERFACE ${THRIFT_INCLUDE_DIR})
-  set_property(TARGET thrift PROPERTY IMPORTED_LOCATION ${THRIFT_LIB})
 
   set(VELOX_ARROW_BUILD_VERSION 21.0.0)
   set(VELOX_ARROW_BUILD_SHA256_CHECKSUM
@@ -92,19 +97,22 @@ if(VELOX_ENABLE_ARROW)
     ${CMAKE_COMMAND}
     CMAKE_ARGS ${ARROW_CMAKE_ARGS}
     BUILD_BYPRODUCTS ${ARROW_LIBDIR}/libarrow.a
-                     ${ARROW_LIBDIR}/libarrow_testing.a ${THRIFT_LIB})
+                     ${ARROW_LIBDIR}/libarrow_testing.a ${ARROW_THRIFT_LIB})
 
   add_library(arrow STATIC IMPORTED GLOBAL)
   add_library(arrow_testing STATIC IMPORTED GLOBAL)
   add_dependencies(arrow arrow_ep)
   add_dependencies(arrow_testing arrow)
+  if(NOT Thrift_FOUND)
+    add_dependencies(thrift::thrift arrow_ep)
+  endif()
   file(MAKE_DIRECTORY ${ARROW_PREFIX}/install/include)
   set_target_properties(
     arrow arrow_testing PROPERTIES INTERFACE_INCLUDE_DIRECTORIES
                                    ${ARROW_PREFIX}/install/include)
   set_target_properties(arrow PROPERTIES IMPORTED_LOCATION
                                          ${ARROW_LIBDIR}/libarrow.a)
-  set_property(TARGET arrow PROPERTY INTERFACE_LINK_LIBRARIES ${RE2} thrift)
+  target_link_libraries(arrow INTERFACE ${RE2})
   set_target_properties(
     arrow_testing PROPERTIES IMPORTED_LOCATION
                              ${ARROW_LIBDIR}/libarrow_testing.a)

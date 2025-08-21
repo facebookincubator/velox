@@ -16,6 +16,6 @@ velox_add_library(velox_dwio_parquet_thrift ParquetThriftTypes.cpp)
 velox_link_libraries(
   velox_dwio_parquet_thrift
   arrow
-  thrift
+  thrift::thrift
   Boost::headers
   fmt::fmt)
