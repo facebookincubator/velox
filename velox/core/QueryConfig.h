@@ -264,7 +264,8 @@ class QueryConfig {
       "topn_row_number_spill_enabled";
 
   /// LocalMerge spilling flag, only applies if "spill_enabled" flag is set.
-  static constexpr const char* kLocalMergeSpillEnabled = "local_merge_enabled";
+  static constexpr const char* kLocalMergeSpillEnabled =
+      "local_merge_spill_enabled";
 
   /// Specify the max number of local sources to merge at a time.
   static constexpr const char* kLocalMergeMaxNumMergeSources =
@@ -662,6 +663,13 @@ class QueryConfig {
   /// respect this config.
   static constexpr const char* kMaxNumSplitsListenedTo =
       "max_num_splits_listened_to";
+
+  /// Source of the query. Used by Presto to identify the file system username.
+  static constexpr const char* kSource = "source";
+
+  /// Client tags of the query. Used by Presto to identify the file system
+  /// username.
+  static constexpr const char* kClientTags = "client_tags";
 
   bool selectiveNimbleReaderEnabled() const {
     return get<bool>(kSelectiveNimbleReaderEnabled, false);
@@ -1200,6 +1208,14 @@ class QueryConfig {
 
   int32_t maxNumSplitsListenedTo() const {
     return get<int32_t>(kMaxNumSplitsListenedTo, 0);
+  }
+
+  std::string source() const {
+    return get<std::string>(kSource, "");
+  }
+
+  std::string clientTags() const {
+    return get<std::string>(kClientTags, "");
   }
 
   template <typename T>

@@ -315,7 +315,7 @@ Spilling
      - boolean
      - true
      - When `spill_enabled` is true, determines whether HashBuild and HashProbe operators can spill to disk under memory pressure.
-   * - local_merge_enabled
+   * - local_merge_spill_enabled
      - boolean
      - false
      - When `spill_enabled` is true, determines whether LocalMerge operators can spill to disk to cap memory usage.
@@ -676,6 +676,12 @@ Each query can override the config by setting corresponding query session proper
      - bool
      - true
      - Reads timestamp partition value as local time if true. Otherwise, reads as UTC.
+   * - hive.preserve-flat-maps-in-memory
+     - hive.preserve_flat_maps_in_memory
+     - bool
+     - false
+     - Whether to preserve flat maps in memory as FlatMapVectors instead of converting them to MapVectors. This is only applied during data reading inside the DWRF and Nimble readers, not during downstream processing like expression evaluation etc.
+
 
 ``ORC File Format Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -13,17 +13,22 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/common/process/ThreadDebugInfo.h"
 
-#include <folly/Unit.h>
-#include <folly/init/Init.h>
-#include <gtest/gtest.h>
+// Adapted from Apache Arrow:
+// https://github.com/apache/arrow/blob/apache-arrow-15.0.0/cpp/src/arrow/util/bpacking.h
+// Copyright 2016-2024 The Apache Software Foundation
 
-// This main is needed for some tests on linux.
-int main(int argc, char** argv) {
-  testing::InitGoogleTest(&argc, argv);
-  // Signal handler required for ThreadDebugInfoTest
-  facebook::velox::process::addDefaultFatalSignalHandler();
-  folly::Init init(&argc, &argv, false);
-  return RUN_ALL_TESTS();
-}
+#pragma once
+
+#include "arrow/util/visibility.h"
+
+#include <stdint.h>
+
+namespace arrow::internal {
+
+ARROW_EXPORT
+int unpack32(const uint32_t* in, uint32_t* out, int batch_size, int num_bits);
+ARROW_EXPORT
+int unpack64(const uint8_t* in, uint64_t* out, int batch_size, int num_bits);
+
+} // namespace arrow::internal

@@ -170,18 +170,6 @@ function install_simdjson {
 
 function install_arrow {
   wget_and_untar https://github.com/apache/arrow/archive/apache-arrow-"${ARROW_VERSION}".tar.gz arrow
-  (
-    # Can be removed after an upgrade to Arrow 20.0.0
-    if [ -z "$VELOX_ARROW_CMAKE_PATCH" ]; then
-      # We need to set a different path when building the Dockerfile.
-      ABSOLUTE_SCRIPTDIR=$(realpath "$SCRIPT_DIR")
-      VELOX_ARROW_CMAKE_PATCH="$ABSOLUTE_SCRIPTDIR/../CMake/resolve_dependency_modules/arrow/cmake-compatibility.patch"
-    fi
-
-    cd "$DEPENDENCY_DIR"/arrow || exit 1
-    git apply "$VELOX_ARROW_CMAKE_PATCH"
-  ) || exit 1
-
   cmake_install_dir arrow/cpp \
     -DARROW_PARQUET=OFF \
     -DARROW_WITH_THRIFT=ON \
@@ -190,6 +178,7 @@ function install_arrow {
     -DARROW_WITH_ZLIB=ON \
     -DARROW_WITH_ZSTD=ON \
     -DARROW_JEMALLOC=OFF \
+    -DARROW_MIMALLOC=OFF \
     -DARROW_SIMD_LEVEL=NONE \
     -DARROW_RUNTIME_SIMD_LEVEL=NONE \
     -DARROW_WITH_UTF8PROC=OFF \
@@ -232,7 +221,7 @@ function install_stemmer {
   wget_and_untar https://snowballstem.org/dist/libstemmer_c-"${STEMMER_VERSION}".tar.gz stemmer
   (
     cd "${DEPENDENCY_DIR}"/stemmer || exit
-    sed -i '/CPPFLAGS=-Iinclude/ s/$/ -fPIC/' Makefile
+    sed -i='' '/CPPFLAGS=-Iinclude/ s/$/ -fPIC/' Makefile
     make clean && make "-j${NPROC}"
     ${SUDO} cp libstemmer.a "${INSTALL_PREFIX}"/lib/
     ${SUDO} cp include/libstemmer.h "${INSTALL_PREFIX}"/include/
