@@ -1739,4 +1739,100 @@ struct GeometryFromGeoJsonFunction {
   }
 };
 
+template <typename T>
+struct GreatCircleDistanceFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE Status call(
+      out_type<double>& result,
+      const arg_type<double>& lat1,
+      const arg_type<double>& long1,
+      const arg_type<double>& lat2,
+      const arg_type<double>& long2) {
+    Status status = geospatial::validateLatitudeLongitude(lat1, long1);
+    if (FOLLY_UNLIKELY(!status.ok())) {
+      return status;
+    }
+
+    status = geospatial::validateLatitudeLongitude(lat2, long2);
+    if (FOLLY_UNLIKELY(!status.ok())) {
+      return status;
+    }
+
+    result = BingTileType::greatCircleDistance(lat1, long1, lat2, long2);
+    return status;
+  }
+};
+
+template <typename T>
+struct GeometryToBingTilesFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  uint8_t maxZoomShift = 5;
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /* inputTypes */,
+      const core::QueryConfig& config,
+      const arg_type<Geometry>* /* geometry */,
+      const arg_type<int32_t>* /* zoom */) {
+    maxZoomShift =
+        std::max<uint8_t>(config.debugBingTileChildrenMaxZoomShift(), 1);
+  }
+
+  FOLLY_ALWAYS_INLINE Status call(
+      out_type<Array<BingTile>>& result,
+      const arg_type<Geometry>& geometry,
+      const arg_type<int32_t>& zoom) {
+    if (zoom < 0 || zoom > 23) {
+      return Status::UserError("Zoom level must be between 0 and 23");
+    }
+    auto envelope =
+        geospatial::GeometryDeserializer::deserializeEnvelope(geometry);
+    if (envelope->isNull()) {
+      return Status::OK();
+    }
+
+    std::vector<int64_t> covering;
+    auto geom = geospatial::GeometryDeserializer::deserialize(geometry);
+
+    if (geom->getGeometryTypeId() == geos::geom::GeometryTypeId::GEOS_POINT) {
+      covering = geospatial::getMinimalTilesCoveringGeometry(*envelope, zoom);
+    } else {
+      if (geospatial::isPointOrRectangle(*geom)) {
+        covering = geospatial::getMinimalTilesCoveringGeometry(*envelope, zoom);
+      } else {
+        covering = geospatial::getMinimalTilesCoveringGeometry(
+            *geom, zoom, maxZoomShift);
+      }
+    }
+
+    result.add_items(covering);
+    return Status::OK();
+  }
+};
+
+template <typename T>
+struct GeometryToDissolvedBingTilesFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE Status call(
+      out_type<Array<BingTile>>& result,
+      const arg_type<Geometry>& geometry,
+      const arg_type<int32_t>& zoom) {
+    if (zoom < 0 || zoom > 23) {
+      return Status::UserError("Zoom level must be between 0 and 23");
+    }
+    auto geom = geospatial::GeometryDeserializer::deserialize(geometry);
+    if (geom->isEmpty()) {
+      return Status::OK();
+    }
+
+    std::vector<int64_t> covering =
+        geospatial::getDissolvedTilesCoveringGeometry(*geom, zoom);
+
+    result.add_items(covering);
+    return Status::OK();
+  }
+};
+
 } // namespace facebook::velox::functions
