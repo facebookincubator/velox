@@ -265,67 +265,28 @@ struct Converter<
     return folly::makeUnexpected(Status::UserError(kErrorMessage));
   }
 
-  static Expected<T> convertStringToInt(const folly::StringPiece v) {
-    // Handling integer target cases
-    T result = 0;
-    int index = 0;
-    int len = v.size();
-    if (len == 0) {
-      return folly::makeUnexpected(Status::UserError(
-          "Cannot cast an empty string to an integral value."));
+  inline static Expected<T> convertStringToInt(const folly::StringPiece vv) {
+    const auto test_err = folly::tryTo<T>(vv);
+    if(!test_err.hasError()) {
+      return test_err.value();
     }
-
-    // Setting negative flag
-    bool negative = false;
-    // Setting decimalPoint flag
-    bool decimalPoint = false;
-    if (v[0] == '-' || v[0] == '+') {
-      if (len == 1) {
-        return folly::makeUnexpected(Status::UserError(
-            "Cannot cast an '{}' string to an integral value.", v[0]));
-      }
-      negative = v[0] == '-';
-      index = 1;
+    const auto v = folly::ltrimWhitespace(vv);
+    int pos = v.rfind('.');
+    if (pos == folly::StringPiece::npos) { 
+      return folly::makeUnexpected(Status::UserError("Invalid number format"));
     }
-    if (negative) {
-      for (; index < len; index++) {
-        // Truncate the decimal
-        if (!decimalPoint && v[index] == '.') {
-          decimalPoint = true;
-          if (++index == len) {
-            break;
-          }
-        }
-        if (!std::isdigit(v[index])) {
-          return folly::makeUnexpected(
-              Status::UserError("Encountered a non-digit character"));
-        }
-        if (!decimalPoint) {
-          result = checkedMultiply<T>(result, 10, CppToType<T>::name);
-          result = checkedMinus<T>(result, v[index] - '0', CppToType<T>::name);
-        }
+    else { 
+      if(pos == v.size() - 1) //1234.         .
+        return detail::callFollyTo<T>(v.subpiece(0, pos));
+      folly::StringPiece after_dot_sp = v.subpiece(pos + 1);
+      std::string_view after_dot(after_dot_sp.data(), after_dot_sp.size());
+      if(after_dot.find_first_not_of("0123456789") != std::string_view::npos){
+        return folly::makeUnexpected(Status::UserError("Invalid number format"));
       }
-    } else {
-      for (; index < len; index++) {
-        // Truncate the decimal
-        if (!decimalPoint && v[index] == '.') {
-          decimalPoint = true;
-          if (++index == len) {
-            break;
-          }
-        }
-        if (!std::isdigit(v[index])) {
-          return folly::makeUnexpected(
-              Status::UserError("Encountered a non-digit character"));
-        }
-        if (!decimalPoint) {
-          result = checkedMultiply<T>(result, 10, CppToType<T>::name);
-          result = checkedPlus<T>(result, v[index] - '0', CppToType<T>::name);
-        }
-      }
+      if(pos == 0) //" .1234"
+        return static_cast<T>(0);
+      return detail::callFollyTo<T>(v.subpiece(0, pos));
     }
-    // Final result
-    return result;
   }
 
   static Expected<T> tryCast(folly::StringPiece v) {
