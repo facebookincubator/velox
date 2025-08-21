@@ -24,7 +24,6 @@
 
 #include "arrow/result.h"
 #include "arrow/status.h"
-#include "arrow/util/logging.h"
 #include "velox/dwio/parquet/writer/arrow/util/CompressionInternal.h"
 
 namespace facebook::velox::parquet::arrow::util {
