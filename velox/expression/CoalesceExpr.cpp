@@ -25,7 +25,7 @@ CoalesceExpr::CoalesceExpr(
           SpecialFormKind::kCoalesce,
           std::move(type),
           std::move(inputs),
-          kCoalesce,
+          expression::kCoalesce,
           inputsSupportFlatNoNullsFastPath,
           false /* trackCpuUsage */) {
   std::vector<TypePtr> inputTypes;
