@@ -18,9 +18,9 @@
 
 #include <gtest/gtest.h>
 
+#include "velox/connectors/lakehouse/common/tests/HiveConnectorTestBase.h"
 #include "velox/connectors/lakehouse/iceberg/IcebergDataSink.h"
 #include "velox/connectors/lakehouse/iceberg/IcebergSplit.h"
-#include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #ifdef VELOX_ENABLE_PARQUET
@@ -30,7 +30,7 @@
 
 namespace facebook::velox::connector::lakehouse::iceberg::test {
 
-class IcebergTestBase : public exec::test::HiveConnectorTestBase {
+class IcebergTestBase : public common::test::HiveConnectorTestBase {
  protected:
   void SetUp() override;
 

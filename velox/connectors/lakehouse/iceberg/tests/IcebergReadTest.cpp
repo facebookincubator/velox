@@ -17,23 +17,23 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/connectors/lakehouse/common/HiveConnectorSplit.h"
+#include "velox/connectors/lakehouse/common/tests/HiveConnectorTestBase.h"
+#include "velox/connectors/lakehouse/common/tests/PlanBuilder.h"
 #include "velox/connectors/lakehouse/iceberg/IcebergDeleteFile.h"
 #include "velox/connectors/lakehouse/iceberg/IcebergMetadataColumns.h"
 #include "velox/connectors/lakehouse/iceberg/IcebergSplit.h"
 #include "velox/exec/PlanNodeStats.h"
-#include "velox/exec/tests/utils/HiveConnectorTestBase.h"
-#include "velox/exec/tests/utils/PlanBuilder.h"
 
 #include <folly/Singleton.h>
 
-using namespace facebook::velox::exec::test;
+using namespace facebook::velox::connector::lakehouse::common::test;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::dwio::common;
 using namespace facebook::velox::test;
 
 namespace facebook::velox::connector::lakehouse::iceberg::test {
 
-class HiveIcebergTest : public HiveConnectorTestBase {
+class HiveIcebergTest : public common::test::HiveConnectorTestBase {
  public:
   HiveIcebergTest()
       : config_{std::make_shared<facebook::velox::dwrf::Config>()} {
@@ -179,11 +179,11 @@ class HiveIcebergTest : public HiveConnectorTestBase {
       int32_t splitCount = 1) {
     // Keep the reference to the deleteFilePath, otherwise the corresponding
     // file will be deleted.
-    std::map<std::string, std::shared_ptr<TempFilePath>> dataFilePaths =
-        writeDataFiles(rowGroupSizesForFiles);
+    std::map<std::string, std::shared_ptr<exec::test::TempFilePath>>
+        dataFilePaths = writeDataFiles(rowGroupSizesForFiles);
     std::unordered_map<
         std::string,
-        std::pair<int64_t, std::shared_ptr<TempFilePath>>>
+        std::pair<int64_t, std::shared_ptr<exec::test::TempFilePath>>>
         deleteFilePaths = writePositionDeleteFiles(
             deleteFilesForBaseDatafiles, dataFilePaths);
 
@@ -260,14 +260,14 @@ class HiveIcebergTest : public HiveConnectorTestBase {
 
     VELOX_CHECK_LE(equalityFieldIdsMap.size(), numDataColumns);
 
-    std::shared_ptr<TempFilePath> dataFilePath =
+    std::shared_ptr<exec::test::TempFilePath> dataFilePath =
         writeDataFiles(rowCount, numDataColumns, 1, dataVectors)[0];
 
     std::vector<IcebergDeleteFile> deleteFiles;
     std::string predicates = "";
     unsigned long numDeletedValues = 0;
 
-    std::vector<std::shared_ptr<TempFilePath>> deleteFilePaths;
+    std::vector<std::shared_ptr<exec::test::TempFilePath>> deleteFilePaths;
     for (auto it = equalityFieldIdsMap.begin();
          it != equalityFieldIdsMap.end();) {
       auto equalityFieldIds = it->second;
@@ -375,18 +375,19 @@ class HiveIcebergTest : public HiveConnectorTestBase {
     const uint64_t splitSize = std::floor((fileSize) / splitCount);
 
     for (int i = 0; i < splitCount; ++i) {
-      splits.emplace_back(std::make_shared<iceberg::HiveIcebergSplit>(
-          kHiveConnectorId,
-          dataFilePath,
-          fileFormat_,
-          i * splitSize,
-          splitSize,
-          partitionKeys,
-          std::nullopt,
-          customSplitInfo,
-          nullptr,
-          /*cacheable=*/true,
-          deleteFiles));
+      splits.emplace_back(
+          std::make_shared<iceberg::HiveIcebergSplit>(
+              common::test::kHiveConnectorId,
+              dataFilePath,
+              fileFormat_,
+              i * splitSize,
+              splitSize,
+              partitionKeys,
+              std::nullopt,
+              customSplitInfo,
+              nullptr,
+              /*cacheable=*/true,
+              deleteFiles));
     }
 
     return splits;
@@ -407,16 +408,18 @@ class HiveIcebergTest : public HiveConnectorTestBase {
   }
 
  private:
-  std::map<std::string, std::shared_ptr<TempFilePath>> writeDataFiles(
+  std::map<std::string, std::shared_ptr<exec::test::TempFilePath>>
+  writeDataFiles(
       std::map<std::string, std::vector<int64_t>> rowGroupSizesForFiles) {
-    std::map<std::string, std::shared_ptr<TempFilePath>> dataFilePaths;
+    std::map<std::string, std::shared_ptr<exec::test::TempFilePath>>
+        dataFilePaths;
 
     std::vector<RowVectorPtr> dataVectorsJoined;
     dataVectorsJoined.reserve(rowGroupSizesForFiles.size());
 
     int64_t startingValue = 0;
     for (auto& dataFile : rowGroupSizesForFiles) {
-      dataFilePaths[dataFile.first] = TempFilePath::create();
+      dataFilePaths[dataFile.first] = exec::test::TempFilePath::create();
 
       // We make the values are continuously increasing even across base data
       // files. This is to make constructing DuckDB queries easier
@@ -441,7 +444,7 @@ class HiveIcebergTest : public HiveConnectorTestBase {
   /// <"dataFile2", {pos_RG1, pos_RG2,..}>
   std::unordered_map<
       std::string,
-      std::pair<int64_t, std::shared_ptr<TempFilePath>>>
+      std::pair<int64_t, std::shared_ptr<exec::test::TempFilePath>>>
   writePositionDeleteFiles(
       const std::unordered_map<
           std::string, // delete file name
@@ -450,17 +453,18 @@ class HiveIcebergTest : public HiveConnectorTestBase {
               std::vector<int64_t>>>&
           deleteFilesForBaseDatafiles, // <base file name, delete position
                                        // vector for all RowGroups>
-      std::map<std::string, std::shared_ptr<TempFilePath>> baseFilePaths) {
+      std::map<std::string, std::shared_ptr<exec::test::TempFilePath>>
+          baseFilePaths) {
     std::unordered_map<
         std::string,
-        std::pair<int64_t, std::shared_ptr<TempFilePath>>>
+        std::pair<int64_t, std::shared_ptr<exec::test::TempFilePath>>>
         deleteFilePaths;
     deleteFilePaths.reserve(deleteFilesForBaseDatafiles.size());
 
     for (auto& deleteFile : deleteFilesForBaseDatafiles) {
       auto deleteFileName = deleteFile.first;
       auto deleteFileContent = deleteFile.second;
-      auto deleteFilePath = TempFilePath::create();
+      auto deleteFilePath = exec::test::TempFilePath::create();
 
       std::vector<RowVectorPtr> deleteFileVectors;
       int64_t totalPositionsInDeleteFile = 0;
@@ -697,7 +701,7 @@ class HiveIcebergTest : public HiveConnectorTestBase {
   RowTypePtr rowType_{ROW({"c0"}, {BIGINT()})};
   dwio::common::FileFormat fileFormat_{dwio::common::FileFormat::DWRF};
 
-  std::shared_ptr<TempFilePath> writeEqualityDeleteFile(
+  std::shared_ptr<exec::test::TempFilePath> writeEqualityDeleteFile(
       const std::vector<std::vector<int64_t>>& equalityDeleteVector) {
     std::vector<std::string> names;
     std::vector<VectorPtr> vectors;
@@ -708,13 +712,13 @@ class HiveIcebergTest : public HiveConnectorTestBase {
 
     RowVectorPtr deleteFileVectors = makeRowVector(names, vectors);
 
-    auto deleteFilePath = TempFilePath::create();
+    auto deleteFilePath = exec::test::TempFilePath::create();
     writeToFile(deleteFilePath->getPath(), deleteFileVectors);
 
     return deleteFilePath;
   }
 
-  std::vector<std::shared_ptr<TempFilePath>> writeDataFiles(
+  std::vector<std::shared_ptr<exec::test::TempFilePath>> writeDataFiles(
       uint64_t numRows,
       int32_t numColumns = 1,
       int32_t splitCount = 1,
@@ -724,10 +728,10 @@ class HiveIcebergTest : public HiveConnectorTestBase {
     }
     VELOX_CHECK_EQ(dataVectors.size(), splitCount);
 
-    std::vector<std::shared_ptr<TempFilePath>> dataFilePaths;
+    std::vector<std::shared_ptr<exec::test::TempFilePath>> dataFilePaths;
     dataFilePaths.reserve(splitCount);
     for (auto i = 0; i < splitCount; i++) {
-      dataFilePaths.emplace_back(TempFilePath::create());
+      dataFilePaths.emplace_back(exec::test::TempFilePath::create());
       writeToFile(dataFilePaths.back()->getPath(), dataVectors[i]);
     }
 
@@ -969,7 +973,7 @@ TEST_F(HiveIcebergTest, testPartitionedRead) {
   // in velox, we do not need to convert it to days.
   // Test query on two partitions ds=17627(2018-04-06), ds=17628(2018-04-07)
   std::vector<std::shared_ptr<ConnectorSplit>> splits;
-  std::vector<std::shared_ptr<TempFilePath>> dataFilePaths;
+  std::vector<std::shared_ptr<exec::test::TempFilePath>> dataFilePaths;
   for (int i = 0; i <= 1; ++i) {
     std::vector<RowVectorPtr> dataVectors;
     int32_t daysSinceEpoch = 17627 + i;
@@ -978,7 +982,7 @@ TEST_F(HiveIcebergTest, testPartitionedRead) {
         makeFlatVector<int32_t>((std::vector<int32_t>){daysSinceEpoch});
     dataVectors.push_back(makeRowVector({"c0", "ds"}, {c0, ds}));
 
-    auto dataFilePath = TempFilePath::create();
+    auto dataFilePath = exec::test::TempFilePath::create();
     dataFilePaths.push_back(dataFilePath);
     writeToFile(
         dataFilePath->getPath(), dataVectors, config_, flushPolicyFactory_);
@@ -1224,7 +1228,8 @@ TEST_F(HiveIcebergTest, TestSubFieldEqualityDelete) {
   folly::SingletonVault::singleton()->registrationComplete();
 
   // Write the base file
-  std::shared_ptr<TempFilePath> dataFilePath = TempFilePath::create();
+  std::shared_ptr<exec::test::TempFilePath> dataFilePath =
+      exec::test::TempFilePath::create();
   std::vector<RowVectorPtr> dataVectors = {makeRowVector(
       {"c_bigint", "c_row"},
       {makeFlatVector<int64_t>(20, [](auto row) { return row + 1; }),
@@ -1242,9 +1247,9 @@ TEST_F(HiveIcebergTest, TestSubFieldEqualityDelete) {
   std::vector<RowVectorPtr> deleteDataVectors = {makeRowVector(
       {"c1"}, {makeFlatVector<int64_t>(2, [](auto row) { return row + 1; })})};
 
-  std::vector<std::shared_ptr<TempFilePath>> deleteFilePaths;
+  std::vector<std::shared_ptr<exec::test::TempFilePath>> deleteFilePaths;
   auto equalityFieldIds = std::vector<int32_t>({4});
-  auto deleteFilePath = TempFilePath::create();
+  auto deleteFilePath = exec::test::TempFilePath::create();
   writeToFile(deleteFilePath->getPath(), deleteDataVectors.back());
   deleteFilePaths.push_back(deleteFilePath);
   IcebergDeleteFile deleteFile(

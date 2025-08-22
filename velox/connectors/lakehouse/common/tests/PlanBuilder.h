@@ -16,11 +16,11 @@
 
 #pragma once
 
-#include <velox/core/Expressions.h>
-#include <velox/core/ITypedExpr.h>
-#include <velox/core/PlanFragment.h>
-#include <velox/core/PlanNode.h>
-#include "velox/connectors/hive/HiveDataSink.h"
+#include "velox/connectors/lakehouse/common/HiveDataSink.h"
+#include "velox/core/Expressions.h"
+#include "velox/core/ITypedExpr.h"
+#include "velox/core/PlanFragment.h"
+#include "velox/core/PlanNode.h"
 #include "velox/parse/ExpressionsParser.h"
 #include "velox/parse/IExpr.h"
 #include "velox/parse/PlanNodeIdGenerator.h"
@@ -29,10 +29,10 @@ namespace facebook::velox::tpch {
 enum class Table : uint8_t;
 }
 
-namespace facebook::velox::exec::test {
+namespace facebook::velox::connector::lakehouse::common::test {
 
 struct PushdownConfig {
-  common::SubfieldFilters subfieldFiltersMap;
+  velox::common::SubfieldFilters subfieldFiltersMap;
   std::string remainingFilter;
 };
 
@@ -257,7 +257,7 @@ class PlanBuilder {
 
     // @param subfieldFiltersMap A map of Subfield to Filters.
     TableScanBuilder& subfieldFiltersMap(
-        const common::SubfieldFilters& filtersMap);
+        const velox::common::SubfieldFilters& filtersMap);
 
     /// @param subfieldFilter A single SQL expression to be applied to an
     /// individual column.
@@ -333,7 +333,7 @@ class PlanBuilder {
     std::shared_ptr<core::PlanNodeIdGenerator> planNodeIdGenerator_;
 
     // SubfieldFilters object containing filters to apply.
-    common::SubfieldFilters subfieldFiltersMap_;
+    velox::common::SubfieldFilters subfieldFiltersMap_;
   };
 
   /// Start a TableScanBuilder.
@@ -419,8 +419,8 @@ class PlanBuilder {
 
     /// @param sortBy Specifies the sort by columns.
     TableWriterBuilder& sortBy(
-        std::vector<std::shared_ptr<const connector::hive::HiveSortingColumn>>
-            sortBy) {
+        std::vector<std::shared_ptr<
+            const connector::lakehouse::common::HiveSortingColumn>> sortBy) {
       sortBy_ = std::move(sortBy);
       return *this;
     }
@@ -448,7 +448,7 @@ class PlanBuilder {
     /// @param compressionKind Compression scheme to use for writing the
     /// output data files.
     TableWriterBuilder& compressionKind(
-        common::CompressionKind compressionKind) {
+        velox::common::CompressionKind compressionKind) {
       compressionKind_ = compressionKind;
       return *this;
     }
@@ -490,14 +490,16 @@ class PlanBuilder {
     int32_t bucketCount_{0};
     std::vector<std::string> bucketedBy_;
     std::vector<std::string> aggregates_;
-    std::vector<std::shared_ptr<const connector::hive::HiveSortingColumn>>
+    std::vector<
+        std::shared_ptr<const connector::lakehouse::common::HiveSortingColumn>>
         sortBy_;
 
     std::unordered_map<std::string, std::string> serdeParameters_;
     std::shared_ptr<dwio::common::WriterOptions> options_;
 
     dwio::common::FileFormat fileFormat_{dwio::common::FileFormat::DWRF};
-    common::CompressionKind compressionKind_{common::CompressionKind_NONE};
+    velox::common::CompressionKind compressionKind_{
+        velox::common::CompressionKind_NONE};
 
     bool ensureFiles_{false};
     connector::CommitStrategy commitStrategy_{
@@ -726,8 +728,8 @@ class PlanBuilder {
       const std::vector<std::string>& partitionBy,
       int32_t bucketCount,
       const std::vector<std::string>& bucketedBy,
-      const std::vector<
-          std::shared_ptr<const connector::hive::HiveSortingColumn>>& sortBy,
+      const std::vector<std::shared_ptr<
+          const connector::lakehouse::common::HiveSortingColumn>>& sortBy,
       const dwio::common::FileFormat fileFormat =
           dwio::common::FileFormat::DWRF,
       const std::vector<std::string>& aggregates = {},
@@ -735,7 +737,8 @@ class PlanBuilder {
       const std::unordered_map<std::string, std::string>& serdeParameters = {},
       const std::shared_ptr<dwio::common::WriterOptions>& options = nullptr,
       const std::string& outputFileName = "",
-      const common::CompressionKind = common::CompressionKind_NONE,
+      const velox::common::CompressionKind =
+          velox::common::CompressionKind_NONE,
       const RowTypePtr& schema = nullptr,
       const bool ensureFiles = false,
       const connector::CommitStrategy commitStrategy =
@@ -1097,7 +1100,7 @@ class PlanBuilder {
   /// A convenience method to add a LocalPartitionNode with a single source (the
   /// current plan node) and hive bucket property.
   PlanBuilder& localPartitionByBucket(
-      const std::shared_ptr<connector::hive::HiveBucketProperty>&
+      const std::shared_ptr<connector::lakehouse::common::HiveBucketProperty>&
           bucketProperty);
 
   /// Add a LocalPartitionNode to partition the input using batch-level
@@ -1498,4 +1501,4 @@ class PlanBuilder {
   memory::MemoryPool* pool_;
   bool filtersAsNode_{false};
 };
-} // namespace facebook::velox::exec::test
+} // namespace facebook::velox::connector::lakehouse::common::test

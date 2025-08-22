@@ -17,8 +17,8 @@
 #include <folly/init/Init.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/connectors/lakehouse/common/tests/PlanBuilder.h"
 #include "velox/connectors/lakehouse/iceberg/tests/IcebergTestBase.h"
-#include "velox/exec/tests/utils/PlanBuilder.h"
 
 namespace facebook::velox::connector::lakehouse::iceberg::test {
 class IcebergInsertTest : public IcebergTestBase {
@@ -54,7 +54,7 @@ TEST_F(IcebergInsertTest, testIcebergTableWrite) {
   createDuckDbTable(vectors);
   auto splits = createSplitsForDirectory(dataPath);
   ASSERT_EQ(splits.size(), commitTasks.size());
-  auto plan = exec::test::PlanBuilder().tableScan(rowType_).planNode();
+  auto plan = common::test::PlanBuilder().tableScan(rowType_).planNode();
   assertQuery(plan, splits, fmt::format("SELECT * FROM tmp"));
 }
 
@@ -134,7 +134,7 @@ TEST_F(IcebergInsertTest, testSingleColumnAsPartition) {
              rowType_->childAt(colIndex),
              rowType_->childAt(colIndex))});
 
-    auto plan = exec::test::PlanBuilder(pool_.get())
+    auto plan = common::test::PlanBuilder(pool_.get())
                     .tableScan(rowType_, {}, "", nullptr, assignments)
                     .planNode();
 
@@ -257,7 +257,7 @@ TEST_F(IcebergInsertTest, testColumnCombinationsAsPartition) {
                name, columnType, rowType_->childAt(i), rowType_->childAt(i))});
     }
 
-    auto plan = exec::test::PlanBuilder(pool_.get())
+    auto plan = common::test::PlanBuilder(pool_.get())
                     .tableScan(rowType_, {}, "", nullptr, assignments)
                     .planNode();
 

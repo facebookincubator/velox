@@ -140,8 +140,9 @@ IcebergTestBase::createIcebergInsertTableHandle(
         break;
       }
     }
-    columnHandles.push_back(std::make_shared<common::HiveColumnHandle>(
-        columnName, columnType, rowType->childAt(i), rowType->childAt(i)));
+    columnHandles.push_back(
+        std::make_shared<common::HiveColumnHandle>(
+            columnName, columnType, rowType->childAt(i), rowType->childAt(i)));
   }
 
   auto locationHandle = std::make_shared<common::LocationHandle>(
@@ -220,18 +221,19 @@ IcebergTestBase::createSplitsForDirectory(const std::string& directory) {
                           ->openFileForRead(filePath);
     const auto fileSize = file->size();
 
-    splits.push_back(std::make_shared<iceberg::HiveIcebergSplit>(
-        kHiveConnectorId,
-        filePath,
-        fileFormat_,
-        0,
-        fileSize,
-        partitionKeys,
-        std::nullopt,
-        customSplitInfo,
-        nullptr,
-        /*cacheable=*/true,
-        std::vector<IcebergDeleteFile>()));
+    splits.push_back(
+        std::make_shared<iceberg::HiveIcebergSplit>(
+            kHiveConnectorId,
+            filePath,
+            fileFormat_,
+            0,
+            fileSize,
+            partitionKeys,
+            std::nullopt,
+            customSplitInfo,
+            nullptr,
+            /*cacheable=*/true,
+            std::vector<IcebergDeleteFile>()));
   }
 
   return splits;

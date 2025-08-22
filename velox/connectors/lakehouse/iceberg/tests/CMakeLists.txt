@@ -15,6 +15,7 @@ add_library(velox_lakehouse_iceberg_reader_benchmark_lib
             IcebergSplitReaderBenchmark.cpp)
 target_link_libraries(
   velox_lakehouse_iceberg_reader_benchmark_lib
+  velox_lakehouse_common_test_lib
   velox_exec_test_lib
   velox_exec
   velox_connector_lakehouse_common
@@ -36,8 +37,7 @@ if(VELOX_ENABLE_BENCHMARKS)
     ${TEST_LINK_LIBS})
 endif()
 
-if(NOT VELOX_DISABLE_GOOGLETEST)
-
+if(VELOX_BUILD_TESTING AND (NOT VELOX_DISABLE_GOOGLETEST))
   add_executable(
     velox_lakehouse_iceberg_test
     IcebergInsertTest.cpp
@@ -50,6 +50,7 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
   target_link_libraries(
     velox_lakehouse_iceberg_test
     velox_lakehouse_iceberg_reader_benchmark_lib
+    velox_lakehouse_common_test_lib
     velox_connector_lakehouse_common
     velox_lakehouse_iceberg_splitreader
     velox_lakehouse_hive_partition_function
