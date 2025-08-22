@@ -17,6 +17,7 @@
 #pragma once
 
 #include <boost/regex.hpp>
+#include <type/Conversions.h>
 #include "velox/functions/Macros.h"
 #include "velox/functions/lib/JsonUtil.h"
 #include "velox/functions/prestosql/json/SIMDJsonUtil.h"
@@ -149,40 +150,21 @@ struct GetJsonObjectFunction {
       // can check the validity of ending character.
       case simdjson::ondemand::json_type::number: {
         switch (rawResult.get_number_type()) {
-          case simdjson::ondemand::number_type::big_integer: {
+          case simdjson::ondemand::number_type::floating_point_number: {
+            double numberResult;
+            if (!rawResult.get_double().get(numberResult)) {
+              result.append(
+                  util::Converter<TypeKind::VARCHAR>::tryCast(numberResult)
+                      .value());
+              return true;
+            }
+            return false;
+          }
+          default: {
             result.append(trimToken(rawResult.raw_json_token()));
             // Advance the simdjson parsing position.
             return !rawResult.get_double().error();
           }
-          case simdjson::ondemand::number_type::unsigned_integer: {
-            uint64_t numberResult;
-            if (!rawResult.get_uint64().get(numberResult)) {
-              ss << numberResult;
-              result.append(ss.str());
-              return true;
-            }
-            return false;
-          }
-          case simdjson::ondemand::number_type::signed_integer: {
-            int64_t numberResult;
-            if (!rawResult.get_int64().get(numberResult)) {
-              ss << numberResult;
-              result.append(ss.str());
-              return true;
-            }
-            return false;
-          }
-          case simdjson::ondemand::number_type::floating_point_number: {
-            double numberResult;
-            if (!rawResult.get_double().get(numberResult)) {
-              ss << rawResult;
-              result.append(ss.str());
-              return true;
-            }
-            return false;
-          }
-          default:
-            VELOX_UNREACHABLE();
         }
       }
       case simdjson::ondemand::json_type::boolean: {

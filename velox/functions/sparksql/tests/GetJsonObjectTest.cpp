@@ -145,6 +145,9 @@ TEST_F(GetJsonObjectTest, incompleteJson) {
       getJsonObject(R"({"hello": "3.5","taskSort":"2",,,,,,})", "$.hello"),
       "3.5");
   EXPECT_EQ(
+      getJsonObject(R"({"hello": 3.5,"taskSort":"2",,,,,,})", "$.hello"),
+      "3.5");
+  EXPECT_EQ(
       getJsonObject(R"({"hello": "boy","taskSort":"2"},,,,,)", "$.hello"),
       "boy");
   EXPECT_EQ(getJsonObject(R"({"hello": "boy\n"},)", "$.hello"), "boy\n");
@@ -161,7 +164,19 @@ TEST_F(GetJsonObjectTest, incompleteJson) {
       R"({"name": "Alice", "age": "5", "id": "001"})");
 }
 
-TEST_F(GetJsonObjectTest, bigint) {
+TEST_F(GetJsonObjectTest, number) {
+  EXPECT_EQ(getJsonObject(R"({"f": +INF})", "$.f"), std::nullopt);
+  EXPECT_EQ(getJsonObject(R"({"f": -INF})", "$.f"), std::nullopt);
+  EXPECT_EQ(getJsonObject(R"({"f": NaN})", "$.f"), std::nullopt);
+  EXPECT_EQ(getJsonObject(R"({"f": Infinity})", "$.f"), std::nullopt);
+  EXPECT_EQ(getJsonObject(R"({"f": +21.00})", "$.f"), std::nullopt);
+  EXPECT_EQ(getJsonObject(R"({"f": +0.00})", "$.f"), std::nullopt);
+  EXPECT_EQ(getJsonObject(R"({"f": -0.00})", "$.f"), "-0.0");
+  EXPECT_EQ(getJsonObject(R"({"f": 0.00})", "$.f"), "0.0");
+  EXPECT_EQ(getJsonObject(R"({"f": -21.00})", "$.f"), "-21.0");
+  EXPECT_EQ(getJsonObject(R"({"f": -21.010})", "$.f"), "-21.01");
+  EXPECT_EQ(getJsonObject(R"({"f": 21e3})", "$.f"), "21000.0");
+  EXPECT_EQ(getJsonObject(R"({"f": -21E-3})", "$.f"), "-0.021");
   EXPECT_EQ(
       getJsonObject(
           R"({"big": 98765432109876543210987654321098765432 })", "$.big"),
