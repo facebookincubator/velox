@@ -37,7 +37,7 @@
 #include "velox/parse/ExpressionsParser.h"
 #include "velox/parse/TypeResolver.h"
 #include "velox/vector/SelectivityVector.h"
-#include "velox/vector/VariantToVector.h"
+#include "velox/vector/BaseVector.h"
 #include "velox/vector/VectorSaver.h"
 #include "velox/vector/tests/TestingAlwaysThrowsFunction.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
@@ -2627,7 +2627,7 @@ TEST_F(ExprTest, constantToStringEqualsHashConsistency) {
     auto a = std::make_shared<core::ConstantTypedExpr>(type, value);
 
     auto b = std::make_shared<core::ConstantTypedExpr>(
-        variantToVector(type, value, pool()));
+        BaseVector::createConstant(type, value, 1, pool()));
 
     EXPECT_EQ(a->toString(), b->toString());
 
