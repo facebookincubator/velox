@@ -183,14 +183,22 @@ class StringFunctionsTest : public FunctionBaseTest {
     testQuery("lower(upper(C0))");
   }
 
+  static const size_t kMaxStringLength = 100;
+
   void testConcatFlatVector(
       const std::vector<std::vector<std::string>>& inputTable,
-      const size_t argsCount) {
+      const size_t argsCount,
+      bool randomizeVarcharColumnSizes = false) {
     std::vector<VectorPtr> inputVectors;
 
     for (int i = 0; i < argsCount; i++) {
+      auto varcharLength =
+          (folly::Random::rand32() % kMaxStringLength) + kMaxStringLength;
+      auto varcharType =
+          randomizeVarcharColumnSizes ? VARCHAR(varcharLength) : VARCHAR();
+      SCOPED_TRACE(varcharType->toString());
       inputVectors.emplace_back(
-          BaseVector::create(VARCHAR(), inputTable.size(), execCtx_.pool()));
+          BaseVector::create(varcharType, inputTable.size(), execCtx_.pool()));
     }
 
     for (int row = 0; row < inputTable.size(); row++) {
@@ -877,7 +885,6 @@ TEST_F(StringFunctionsTest, lower) {
 TEST_F(StringFunctionsTest, concat) {
   size_t maxArgsCount = 10; // cols
   size_t rowCount = 100;
-  size_t maxStringLength = 100;
 
   std::vector<std::vector<std::string>> inputTable;
   for (int argsCount = 2; argsCount <= maxArgsCount; argsCount++) {
@@ -890,12 +897,13 @@ TEST_F(StringFunctionsTest, concat) {
     for (int row = 0; row < rowCount; row++) {
       for (int col = 0; col < argsCount; col++) {
         inputTable[row][col] =
-            generateRandomString(folly::Random::rand32() % maxStringLength);
+            generateRandomString(folly::Random::rand32() % kMaxStringLength);
       }
     }
 
     SCOPED_TRACE(fmt::format("Number of arguments: {}", argsCount));
     testConcatFlatVector(inputTable, argsCount);
+    testConcatFlatVector(inputTable, argsCount, true);
   }
 
   // Test constant input vector with 2 args
@@ -903,6 +911,20 @@ TEST_F(StringFunctionsTest, concat) {
     auto rows = makeRowVector(makeRowType({VARCHAR(), VARCHAR()}), 10);
     auto c0 = generateRandomString(20);
     auto c1 = generateRandomString(20);
+    auto result = evaluate<SimpleVector<StringView>>(
+        fmt::format("concat('{}', '{}')", c0, c1), rows);
+    for (int i = 0; i < 10; ++i) {
+      EXPECT_EQ(result->valueAt(i), c0 + c1);
+    }
+  }
+
+  // Test constant input vector with 2 args with bounded varchar type
+  {
+    auto rows = makeRowVector(
+        makeRowType({VARCHAR(kMaxStringLength), VARCHAR(kMaxStringLength)}),
+        10);
+    auto c0 = generateRandomString(kMaxStringLength);
+    auto c1 = generateRandomString(kMaxStringLength);
     auto result = evaluate<SimpleVector<StringView>>(
         fmt::format("concat('{}', '{}')", c0, c1), rows);
     for (int i = 0; i < 10; ++i) {
@@ -918,14 +940,14 @@ TEST_F(StringFunctionsTest, concat) {
             1'000,
             [&](auto /* row */) {
               value = generateRandomString(
-                  folly::Random::rand32() % maxStringLength);
+                  folly::Random::rand32() % kMaxStringLength);
               return StringView(value);
             }),
         makeFlatVector<StringView>(
             1'000,
             [&](auto /* row */) {
               value = generateRandomString(
-                  folly::Random::rand32() % maxStringLength);
+                  folly::Random::rand32() % kMaxStringLength);
               return StringView(value);
             }),
     });
@@ -2282,23 +2304,29 @@ TEST_F(StringFunctionsTest, normalize) {
 }
 
 TEST_F(StringFunctionsTest, trail) {
-  auto trail = [&](std::optional<std::string> string,
+  auto trail = [&](const TypePtr& type,
+                   std::optional<std::string> string,
                    std::optional<int32_t> N) {
-    return evaluateOnce<std::string>("trail(c0, c1)", string, N);
+    return evaluateOnce<std::string>("trail(c0, c1)", type, string, N);
   };
   // Test registered signatures
   auto signatures = getSignatureStrings("trail");
-  ASSERT_EQ(1, signatures.size());
+  ASSERT_EQ(2, signatures.size());
   ASSERT_EQ(1, signatures.count("(varchar,integer) -> varchar"));
+  ASSERT_EQ(1, signatures.count("(varchar(i1),integer) -> varchar(i1)"));
 
   // Basic Test
-  EXPECT_EQ("bar", trail("foobar", 3));
-  EXPECT_EQ("foobar", trail("foobar", 7));
-  EXPECT_EQ("", trail("foobar", 0));
-  EXPECT_EQ("", trail("foobar", -1));
+  EXPECT_EQ("bar", trail(VARCHAR(), "foobar", 3));
+  EXPECT_EQ("bar", trail(VARCHAR(3), "foobar", 3));
+  EXPECT_EQ("foobar", trail(VARCHAR(), "foobar", 7));
+  EXPECT_EQ("foobar", trail(VARCHAR(10), "foobar", 7));
+  EXPECT_EQ("", trail(VARCHAR(), "foobar", 0));
+  EXPECT_EQ("", trail(VARCHAR(), "foobar", -1));
 
   // Test empty
-  EXPECT_EQ("", trail("", 3));
+  EXPECT_EQ("", trail(VARCHAR(), "", 3));
+
+  EXPECT_EQ(std::nullopt, trail(VARCHAR(), std::nullopt, 3));
 }
 
 TEST_F(StringFunctionsTest, xxHash64FunctionVarchar) {

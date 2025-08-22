@@ -190,6 +190,7 @@ void registerArrayFunctions(const std::string& prefix) {
   registerArrayMinMaxFunctions<double>(prefix);
   registerArrayMinMaxFunctions<bool>(prefix);
   registerArrayMinMaxFunctions<Varchar>(prefix);
+  registerArrayMinMaxFunctions<VarcharN<L1>>(prefix);
   registerArrayMinMaxFunctions<Timestamp>(prefix);
   registerArrayMinMaxFunctions<Date>(prefix);
   registerArrayMinMaxFunctions<Orderable<T1>>(prefix);
