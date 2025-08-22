@@ -376,8 +376,7 @@ size_t estimateOutputBatchRowSize(
   const auto estimateRowSize =
       std::max<vector_size_t>(1, estimateRowSizeSum / numEstimations);
   return std::min<vector_size_t>(
-      std::max<vector_size_t>(1, maxBytes / estimateRowSize),
-      maxRows);
+      std::max<vector_size_t>(1, maxBytes / estimateRowSize), maxRows);
 }
 
 SpillFileInfo mergeFiles(
