@@ -177,6 +177,12 @@ TEST_F(GetJsonObjectTest, number) {
   EXPECT_EQ(getJsonObject(R"({"f": -21.010})", "$.f"), "-21.01");
   EXPECT_EQ(getJsonObject(R"({"f": 21e3})", "$.f"), "21000.0");
   EXPECT_EQ(getJsonObject(R"({"f": -21E-3})", "$.f"), "-0.021");
+  EXPECT_EQ(getJsonObject(R"({"i": +0})", "$.i"), std::nullopt);
+  EXPECT_EQ(getJsonObject(R"({"i": -00})", "$.i"), std::nullopt);
+  EXPECT_EQ(getJsonObject(R"({"i": 00})", "$.i"), std::nullopt);
+  EXPECT_EQ(getJsonObject(R"({"i": 001})", "$.i"), std::nullopt);
+  EXPECT_EQ(getJsonObject(R"({"i": -0})", "$.i"), "0");
+  EXPECT_EQ(getJsonObject(R"({"i": 0})", "$.i"), "0");
   EXPECT_EQ(
       getJsonObject(
           R"({"big": 98765432109876543210987654321098765432 })", "$.big"),
