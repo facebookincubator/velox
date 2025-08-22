@@ -99,7 +99,7 @@ struct BitMask<T, A, 1> {
   }
 #endif
 
-  static int toBitMask(xsimd::batch_bool<T, A> mask, const xsimd::generic&) {
+  static int toBitMask(xsimd::batch_bool<T, A> mask, const xsimd::common&) {
     return genericToBitMask(mask);
   }
 };
@@ -905,7 +905,7 @@ template <typename A>
 xsimd::batch<int16_t, A> pack32(
     xsimd::batch<int32_t, A> x,
     xsimd::batch<int32_t, A> y,
-    const xsimd::generic&) {
+    const xsimd::common&) {
   constexpr std::size_t size = xsimd::batch<int32_t, A>::size;
   alignas(A) int32_t xArr[size];
   alignas(A) int32_t yArr[size];
@@ -1167,7 +1167,7 @@ struct GetHalf<int64_t, int32_t, A> {
   template <bool kSecond>
   static xsimd::batch<int64_t, A> apply(
       xsimd::batch<int32_t, A> data,
-      const xsimd::generic&) {
+      const xsimd::common&) {
     constexpr std::size_t input_size = xsimd::batch<int32_t, A>::size;
     constexpr std::size_t half_size = input_size / 2;
 
@@ -1238,7 +1238,7 @@ struct GetHalf<uint64_t, int32_t, A> {
   template <bool kSecond>
   static xsimd::batch<uint64_t, A> apply(
       xsimd::batch<int32_t, A> data,
-      const xsimd::generic&) {
+      const xsimd::common&) {
     constexpr std::size_t input_size = xsimd::batch<int32_t, A>::size;
     constexpr std::size_t half_size = input_size / 2;
     std::array<int32_t, input_size> input_buffer;
