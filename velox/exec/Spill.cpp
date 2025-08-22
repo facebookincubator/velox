@@ -355,12 +355,38 @@ SpillPartition::createOrderedReader(
 }
 
 namespace {
+size_t estimateOutputBatchRowSize(
+    const std::vector<std::unique_ptr<SpillMergeStream>>& streams,
+    const vector_size_t maxRows,
+    const size_t maxBytes) {
+  size_t numEstimations{0};
+  int64_t estimateRowSizeSum{0};
+  for (const auto& stream : streams) {
+    const auto estimateRowSize = stream->estimateRowSize();
+    if (estimateRowSize.has_value()) {
+      ++numEstimations;
+      estimateRowSizeSum += estimateRowSize.value();
+    }
+  }
+
+  if (numEstimations == 0) {
+    return maxRows;
+  }
+
+  const auto estimateRowSize =
+      std::max<vector_size_t>(1, estimateRowSizeSum / numEstimations);
+  return std::min<vector_size_t>(
+      std::max<vector_size_t>(1, maxBytes / estimateRowSize),
+      maxRows);
+}
+
 SpillFileInfo mergeFiles(
     const std::vector<SpillFileInfo>& files,
     const std::string& pathPrefix,
     uint64_t readBufferSize,
     uint64_t writeBufferSize,
-    vector_size_t batchSize,
+    vector_size_t maxBatchRows,
+    size_t maxBatchBytes,
     RowVectorPtr bufferVector,
     std::vector<const RowVector*>& bufferSpillSources,
     std::vector<vector_size_t>& bufferSpillSourceRows,
@@ -375,6 +401,9 @@ SpillFileInfo mergeFiles(
     streams.push_back(FileSpillMergeStream::create(
         SpillReadFile::create(fileInfo, readBufferSize, pool, spillStats)));
   }
+  auto batchRows =
+      estimateOutputBatchRowSize(streams, maxBatchRows, maxBatchBytes);
+
   auto mergeTree =
       std::make_unique<TreeOfLosers<SpillMergeStream>>(std::move(streams));
   const auto type = files[0].type;
@@ -393,10 +422,10 @@ SpillFileInfo mergeFiles(
 
   while (mergeTree->next()) {
     VectorPtr tmp = std::move(bufferVector);
-    BaseVector::prepareForReuse(tmp, batchSize);
+    BaseVector::prepareForReuse(tmp, batchRows);
     bufferVector = std::static_pointer_cast<RowVector>(tmp);
     for (auto& child : bufferVector->children()) {
-      child->resize(batchSize);
+      child->resize(batchRows);
     }
     int32_t outputRow = 0;
     utils::gatherMerge(
@@ -443,11 +472,12 @@ SpillPartition::createOrderedReaderWithPreMerge(
   SpillFiles files;
   files.reserve(mergeWayThreshold);
   auto filePathPrefix = files_[0].path;
-  constexpr size_t batchSize = 1'000;
+  constexpr size_t maxBatchRows = 1'000;
+  constexpr size_t maxBatchBytes = 64 * 1024;
   RowVectorPtr bufferVector = std::static_pointer_cast<RowVector>(
-      BaseVector::create(files_[0].type, batchSize, pool));
-  std::vector<const RowVector*> bufferSpillSources(batchSize);
-  std::vector<vector_size_t> bufferSpillSourceRows(batchSize);
+      BaseVector::create(files_[0].type, maxBatchRows, pool));
+  std::vector<const RowVector*> bufferSpillSources(maxBatchRows);
+  std::vector<vector_size_t> bufferSpillSourceRows(maxBatchRows);
 
   // Recursively merge the files.
   int round = 0;
@@ -467,7 +497,8 @@ SpillPartition::createOrderedReaderWithPreMerge(
         roundPathPrefix,
         readBufferSize,
         writeBufferSize,
-        batchSize,
+        maxBatchRows,
+        maxBatchBytes,
         bufferVector,
         bufferSpillSources,
         bufferSpillSourceRows,
