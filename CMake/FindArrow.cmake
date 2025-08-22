@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-include(FindPackageHandleStandardArgs)
+find_package(Thrift)
 
 set(find_package_args)
 if(Arrow_FIND_VERSION)
