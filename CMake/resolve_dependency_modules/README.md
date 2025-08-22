@@ -44,7 +44,7 @@ by Velox. See details on bundling below.
 | geos              | 3.10.7          | Yes      |
 | fast_float        | v8.0.2          | Yes      |
 | xxhash            | default         | No       |
-| thrift            | 0.16            | No       |
+| thrift            | 0.16            | Yes      |
 
 # Bundled Dependency Management
 This module provides a dependency management system that allows us to automatically fetch and build dependencies from source if needed.

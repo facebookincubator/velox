@@ -495,6 +495,10 @@ set(BOOST_INCLUDE_LIBRARIES
     regex
     system
     thread)
+if(VELOX_ENABLE_PARQUET)
+  # System Apache Thrift doesn't need this but bundled Apache Thrift needs this.
+  list(APPEND BOOST_INCLUDE_LIBRARIES locale)
+endif()
 
 velox_set_source(Boost)
 velox_resolve_dependency(Boost 1.77.0 COMPONENTS ${BOOST_INCLUDE_LIBRARIES})
@@ -691,6 +695,11 @@ message("FINAL CMAKE_CXX_FLAGS=${CMAKE_CXX_FLAGS}")
 if(VELOX_ENABLE_ARROW)
   velox_set_source(Arrow)
   velox_resolve_dependency(Arrow)
+endif()
+
+if(VELOX_ENABLE_PARQUET)
+  velox_set_source(Thrift)
+  velox_resolve_dependency(Thrift)
 endif()
 
 if(VELOX_ENABLE_GEO)
