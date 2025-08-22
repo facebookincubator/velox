@@ -469,7 +469,7 @@ struct ExtractJsonTypeImpl {
       exec::GenericWriter& writer) {
     constexpr T kNaN = std::numeric_limits<T>::quiet_NaN();
     constexpr T kInf = std::numeric_limits<T>::infinity();
-    // strip surrounding quotes if any.
+    // Strip surrounding quotes if any.
     std::string_view stripped = s;
     if (s.size() >= 2 && s.front() == '"' && s.back() == '"') {
       stripped = s.substr(1, s.size() - 2);
