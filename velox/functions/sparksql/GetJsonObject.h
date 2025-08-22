@@ -161,7 +161,14 @@ struct GetJsonObjectFunction {
             return false;
           }
           default: {
-            result.append(trimToken(rawResult.raw_json_token()));
+            std::string_view intResult = trimToken(rawResult.raw_json_token());
+            // Spark uses Jackson to parse JSON, which does not preserve the
+            // negative sign for -0. See the implementation here:
+            // https://github.com/FasterXML/jackson-core/blob/93deb382b962359dff28a312741eff62c2573e75/src/main/java/com/fasterxml/jackson/core/util/TextBuffer.java#L699-L702
+            if (intResult == "-0") {
+              intResult = "0";
+            }
+            result.append(intResult);
             // Advance the simdjson parsing position.
             return !rawResult.get_double().error();
           }
