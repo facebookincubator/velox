@@ -369,6 +369,11 @@ class QueryConfig {
   static constexpr const char* kPrestoArrayAggIgnoreNulls =
       "presto.array_agg.ignore_nulls";
 
+  /// If true, Velox will use an ANSI-compliant dialect. For example, Velox will
+  /// throw a runtime exception instead of returning null results when the
+  /// inputs to a SQL operator or function are invalid.
+  static constexpr const char* kSparkAnsiEnabled = "spark.ansi_enabled";
+
   /// The default number of expected items for the bloomfilter.
   static constexpr const char* kSparkBloomFilterExpectedNumItems =
       "spark.bloom_filter.expected_num_items";
@@ -1040,6 +1045,10 @@ class QueryConfig {
 
   bool prestoArrayAggIgnoreNulls() const {
     return get<bool>(kPrestoArrayAggIgnoreNulls, false);
+  }
+
+  bool sparkAnsiEnabled() const {
+    return get<bool>(kSparkAnsiEnabled, false);
   }
 
   int64_t sparkBloomFilterExpectedNumItems() const {
