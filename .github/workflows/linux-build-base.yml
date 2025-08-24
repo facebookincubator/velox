@@ -216,13 +216,6 @@ jobs:
         shell: bash
         working-directory: velox
     steps:
-      # Remove once image is rebuild after #14575
-      - name: Install dependencies for stash action
-        working-directory: ${{ github.workspace }}
-        run: |
-          dnf install -y jq gh c-ares-devel grpc-devel gflags-devel glog-devel \
-            protobuf-devel thrift-devel snappy-devel boost-devel fmt-devel
-
       - name: Get Ccache Stash
         uses: apache/infrastructure-actions/stash/restore@3354c1565d4b0e335b78a76aedd82153a9e144d4
         with:
@@ -246,8 +239,12 @@ jobs:
       - name: Make Debug Build
         env:
           VELOX_DEPENDENCY_SOURCE: SYSTEM
+          faiss_SOURCE: BUNDLED
           MAKEFLAGS: NUM_THREADS=8 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=3
-          EXTRA_CMAKE_FLAGS: -DVELOX_ENABLE_ARROW=ON -DVELOX_ENABLE_PARQUET=ON -DVELOX_ENABLE_EXAMPLES=ON
+          EXTRA_CMAKE_FLAGS: >-
+            -DVELOX_ENABLE_PARQUET=ON
+            -DARROW_THRIFT_USE_SHARED=ON
+            -DVELOX_ENABLE_EXAMPLES=ON
         run: |
           export EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS} -DVELOX_ENABLE_FAISS=ON"
           make debug
