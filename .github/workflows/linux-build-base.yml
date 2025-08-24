@@ -217,6 +217,10 @@ jobs:
         shell: bash
         working-directory: velox
     steps:
+      # Remove once image is rebuild after #14575
+      - name: Install dependencies for stash action
+        working-directory: ${{ github.workspace }}
+        run: dnf install -y jq gh
 
       - name: Get Ccache Stash
         uses: apache/infrastructure-actions/stash/restore@3354c1565d4b0e335b78a76aedd82153a9e144d4
