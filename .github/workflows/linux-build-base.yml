@@ -36,7 +36,6 @@ jobs:
     env:
       CCACHE_DIR: ${{ github.workspace }}/ccache
       VELOX_DEPENDENCY_SOURCE: SYSTEM
-      GTest_SOURCE: BUNDLED
       cudf_SOURCE: BUNDLED
       CUDA_VERSION: '12.8'
       faiss_SOURCE: BUNDLED
@@ -209,7 +208,7 @@ jobs:
     container: ghcr.io/facebookincubator/velox-dev:fedora
     # prevent errors when forks ff their main branch
     if: ${{ github.repository == 'facebookincubator/velox' }}
-    name: Fedora debug with resolve_dependency
+    name: Fedora debug
     env:
       CCACHE_DIR: ${{ github.workspace }}/ccache
     defaults:
@@ -220,7 +219,9 @@ jobs:
       # Remove once image is rebuild after #14575
       - name: Install dependencies for stash action
         working-directory: ${{ github.workspace }}
-        run: dnf install -y jq gh
+        run: |
+          dnf install -y jq gh c-ares-devel grpc-devel gflags-devel glog-devel \
+            protobuf-devel thrift-devel snappy-devel boost-devel fmt-devel
 
       - name: Get Ccache Stash
         uses: apache/infrastructure-actions/stash/restore@3354c1565d4b0e335b78a76aedd82153a9e144d4
@@ -238,18 +239,13 @@ jobs:
           path: velox
           persist-credentials: false
 
-      - name: Install Dependencies
-        run: |
-          source scripts/setup-fedora.sh && install_apt_deps && install_faiss_deps
-
       - name: Clear CCache Statistics
         run: |
           ccache -sz
 
       - name: Make Debug Build
         env:
-          VELOX_DEPENDENCY_SOURCE: BUNDLED
-          ICU_SOURCE: SYSTEM
+          VELOX_DEPENDENCY_SOURCE: SYSTEM
           MAKEFLAGS: NUM_THREADS=8 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=3
           EXTRA_CMAKE_FLAGS: -DVELOX_ENABLE_ARROW=ON -DVELOX_ENABLE_PARQUET=ON -DVELOX_ENABLE_EXAMPLES=ON
         run: |
