@@ -47,14 +47,12 @@ add_dependencies(glog gflags::gflags)
 
 # The default target has the glog-src as an include dir but this causes issues
 # with folly due to an internal glog 'demangle.h' being mistaken for a system
-# header so we remove glog_SOURCE_DIR by overwriting
-# INTERFACE_INCLUDE_DIRECTORIES
-get_target_property(
-  _glog_target glog::glog ALIASED_TARGET) # Can't set properties on ALIAS
-                                          # targets
-set_target_properties(
-  ${_glog_target}
-  PROPERTIES INTERFACE_INCLUDE_DIRECTORIES ${glog_BINARY_DIR})
+# header so we remove glog_SOURCE_DIR by overwriting INTERFACE_INCLUDE_DIRECTORIES
+
+# Can't set properties on ALIAS targets
+get_target_property(_glog_target glog::glog ALIASED_TARGET)
+
+set_target_properties(${_glog_target} PROPERTIES INTERFACE_INCLUDE_DIRECTORIES ${glog_BINARY_DIR})
 
 # These headers are missing from glog_BINARY_DIR
 file(COPY ${glog_SOURCE_DIR}/src/glog/platform.h

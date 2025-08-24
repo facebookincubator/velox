@@ -41,8 +41,8 @@ pyvelox_add_module["_canonical_name"] = "pyvelox_add_module"
 
 # Define the argument structure of our custom functions, this influences how they are formatted
 command_definitions = {
-    "pybind11_add_module": pyvelox_add_module,
-    "pyvelox_add_module": pybind11_add_module,
+    "pybind11_add_module": pybind11_add_module,
+    "pyvelox_add_module": pyvelox_add_module,
     "velox_add_library": velox_add_library,
     "velox_base_add_library": velox_base_add_library,
     "velox_build_dependency": {
