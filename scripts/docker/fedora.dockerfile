@@ -64,6 +64,7 @@ ENV UV_TOOL_BIN_DIR=/usr/local/bin \
 RUN /bin/bash -c 'source /setup-fedora.sh && \
       install_build_prerequisites && \
       install_velox_deps_from_dnf && \
+      dnf_install jq gh &&\
       dnf clean all'
 
 RUN ln -s $(which python3) /usr/bin/python
