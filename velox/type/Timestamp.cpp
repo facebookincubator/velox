@@ -268,17 +268,22 @@ StringView Timestamp::tmToStringView(
   *writePosition++ = ':';
   writePosition += appendDigits(tmValue.tm_min, 2, writePosition);
 
-  // Second.
-  *writePosition++ = ':';
-  writePosition += appendDigits(tmValue.tm_sec, 2, writePosition);
-
   if (options.precision == TimestampToStringOptions::Precision::kMilliseconds) {
     nanos /= 1'000'000;
   } else if (
       options.precision == TimestampToStringOptions::Precision::kMicroseconds) {
     nanos /= 1'000;
   }
-  if (options.skipTrailingZeros && nanos == 0) {
+
+  // Second.
+  const bool shouldSkipSeconds =
+      options.skipTrailingZeroSeconds && tmValue.tm_sec == 0 && nanos == 0;
+  if (!shouldSkipSeconds) {
+    *writePosition++ = ':';
+    writePosition += appendDigits(tmValue.tm_sec, 2, writePosition);
+  }
+
+  if ((options.skipTrailingZeros && nanos == 0) || shouldSkipSeconds) {
     return StringView(startPosition, writePosition - startPosition);
   }
 
