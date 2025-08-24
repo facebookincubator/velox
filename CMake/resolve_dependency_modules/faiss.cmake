@@ -48,8 +48,8 @@ FetchContent_Declare(
   faiss
   URL ${VELOX_FAISS_SOURCE_URL}
   URL_HASH ${VELOX_FAISS_BUILD_SHA256_CHECKSUM}
-  SYSTEM # Once there are targets depending on FAISS we can add
-         # `EXCLUDE_FROM_ALL` back in
+  SYSTEM 
+  EXCLUDE_FROM_ALL
 )
 
 # Set build options

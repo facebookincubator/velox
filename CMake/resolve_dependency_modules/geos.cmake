@@ -13,14 +13,20 @@
 # limitations under the License.
 include_guard(GLOBAL)
 
-block() # This creates a separate scope so any changed variables don't affect
-        # the rest of the build.
-
-set(VELOX_GEOS_BUILD_VERSION 3.10.7)
-set(VELOX_GEOS_BUILD_SHA256_CHECKSUM
-    8b2ab4d04d660e27f2006550798f49dd11748c3767455cae9f71967dc437da1f)
-string(CONCAT VELOX_GEOS_SOURCE_URL "https://download.osgeo.org/geos/"
-              "geos-${VELOX_GEOS_BUILD_VERSION}.tar.bz2")
+# This creates a separate scope so any changed variables don't affect
+# the rest of the build.
+block()
+  set(VELOX_GEOS_BUILD_VERSION 3.10.7)
+  set(
+    VELOX_GEOS_BUILD_SHA256_CHECKSUM
+    8b2ab4d04d660e27f2006550798f49dd11748c3767455cae9f71967dc437da1f
+  )
+  string(
+    CONCAT
+    VELOX_GEOS_SOURCE_URL
+    "https://download.osgeo.org/geos/"
+    "geos-${VELOX_GEOS_BUILD_VERSION}.tar.bz2"
+  )
 
 velox_resolve_dependency_url(GEOS)
 
