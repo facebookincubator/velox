@@ -190,9 +190,9 @@ jobs:
       - name: Load Base Image
         if: ${{ github.event_name == 'pull_request' }}
         run: |
-          docker load -i /tmp/centos9-amd64/centos9.tar
+          docker load -i /tmp/centos9.tar
           docker images
-          rm /tmp/centos9-amd64/centos9.tar
+          rm /tmp/centos9.tar
 
       - name: Build and Push
         uses: docker/bake-action@37816e747588cb137173af99ab33873600c46ea8 # v6.8.0
