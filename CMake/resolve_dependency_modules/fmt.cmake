@@ -22,6 +22,7 @@ set(VELOX_FMT_SOURCE_URL
 velox_resolve_dependency_url(FMT)
 
 message(STATUS "Building fmt from source")
+block(SCOPE_FOR VARIABLES PROPAGATE fmt_BINARY_DIR)
 FetchContent_Declare(
   fmt
   URL ${VELOX_FMT_SOURCE_URL}
@@ -31,4 +32,6 @@ FetchContent_Declare(
 set(FMT_INSTALL ON)
 set(fmt_BUILD_TESTS OFF)
 FetchContent_MakeAvailable(fmt)
+endblock()
+
 list(APPEND CMAKE_PREFIX_PATH ${fmt_BINARY_DIR})
