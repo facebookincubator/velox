@@ -18,6 +18,7 @@
 #include <unordered_set>
 
 #include "velox/exec/fuzzer/PrestoQueryRunner.h"
+#include "velox/exec/fuzzer/VeloxLocalQueryRunner.h"
 #include "velox/expression/fuzzer/ArgTypesGenerator.h"
 #include "velox/expression/fuzzer/ArgValuesGenerators.h"
 #include "velox/expression/fuzzer/ExpressionFuzzer.h"
@@ -28,7 +29,6 @@
 #include "velox/functions/prestosql/fuzzer/ModulusArgTypesGenerator.h"
 #include "velox/functions/prestosql/fuzzer/MultiplyArgTypesGenerator.h"
 #include "velox/functions/prestosql/fuzzer/PlusMinusArgTypesGenerator.h"
-
 #include "velox/functions/prestosql/fuzzer/SortArrayTransformer.h"
 #include "velox/functions/prestosql/fuzzer/TruncateArgTypesGenerator.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
@@ -45,6 +45,12 @@ DEFINE_string(
     "Presto coordinator URI along with port. If set, we use Presto as the "
     "source of truth. Otherwise, use the Velox simplified expression evaluation. Example: "
     "--presto_url=http://127.0.0.1:8080");
+
+DEFINE_string(
+    local_runner_url,
+    "",
+    "URI for thrift requests to LocalRunnerService. Defaults to localhost on port 9091. "
+    "Example: --local_runner_url=http://127.0.0.1:9091");
 
 DEFINE_uint32(
     req_timeout_ms,
@@ -426,6 +432,12 @@ int main(int argc, char** argv) {
         "expression_fuzzer",
         static_cast<std::chrono::milliseconds>(FLAGS_req_timeout_ms));
     LOG(INFO) << "Using Presto as the reference DB.";
+  } else if (!FLAGS_local_runner_url.empty()) {
+    referenceQueryRunner = std::make_shared<VeloxLocalQueryRunner>(
+        rootPool.get(),
+        FLAGS_local_runner_url,
+        std::chrono::milliseconds(FLAGS_req_timeout_ms));
+    LOG(INFO) << "Using LocalQueryRunner as the reference engine.";
   }
   FuzzerRunner::runFromGtest(
       initialSeed,
