@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/connectors/hive/storage_adapters/abfs/AzureClientProviders.h"
+#include "velox/connectors/hive/storage_adapters/abfs/AzureClientProviderImpl.h"
 
 #include <azure/identity/client_secret_credential.hpp>
 

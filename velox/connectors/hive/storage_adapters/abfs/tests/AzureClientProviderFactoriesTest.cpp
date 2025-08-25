@@ -18,7 +18,7 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AzureClientProviderFactories.h"
-#include "velox/connectors/hive/storage_adapters/abfs/AzureClientProviders.h"
+#include "velox/connectors/hive/storage_adapters/abfs/AzureClientProviderImpl.h"
 #include "velox/connectors/hive/storage_adapters/abfs/RegisterAbfsFileSystem.h"
 
 using namespace facebook::velox;

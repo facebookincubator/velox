@@ -16,7 +16,7 @@
 
 #include "velox/connectors/hive/storage_adapters/abfs/tests/AzuriteServer.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsPath.h"
-#include "velox/connectors/hive/storage_adapters/abfs/AzureClientProviders.h"
+#include "velox/connectors/hive/storage_adapters/abfs/AzureClientProviderImpl.h"
 
 namespace facebook::velox::filesystems {
 

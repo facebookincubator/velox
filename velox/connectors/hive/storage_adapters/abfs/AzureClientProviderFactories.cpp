@@ -15,7 +15,7 @@
  */
 
 #include "velox/connectors/hive/storage_adapters/abfs/AzureClientProviderFactories.h"
-#include "velox/connectors/hive/storage_adapters/abfs/AzureClientProviders.h"
+#include "velox/connectors/hive/storage_adapters/abfs/AzureClientProviderImpl.h"
 
 #include <folly/Synchronized.h>
 
@@ -37,8 +37,11 @@ azureClientFactoryRegistry() {
 void AzureClientProviderFactories::registerFactory(
     const std::string& account,
     const AzureClientProviderFactory& factory) {
-  azureClientFactoryRegistry().withWLock(
-      [&](auto& factories) { factories[account] = factory; });
+  azureClientFactoryRegistry().withWLock([&](auto& factories) {
+    auto [_, inserted] = factories.insert_or_assign(account, factory);
+    LOG_IF(INFO, !inserted) << "AzureClientProviderFactory for account '"
+                            << account << "' has been overridden.";
+  });
 }
 
 AzureClientProviderFactory AzureClientProviderFactories::getClientFactory(
