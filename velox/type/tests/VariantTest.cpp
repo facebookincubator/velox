@@ -816,10 +816,10 @@ void testArrayOfArraysGetter(const std::vector<std::vector<T>>& inputs) {
   std::vector<Variant> variants;
   variants.reserve(inputs.size());
 
-  for (const auto& arr : inputs) {
+  for (const auto& input : inputs) {
     std::vector<Variant> innerVariants;
-    innerVariants.reserve(arr.size());
-    for (const auto& v : arr) {
+    innerVariants.reserve(input.size());
+    for (const auto& v : input) {
       innerVariants.emplace_back(v);
     }
     variants.emplace_back(Variant::array(innerVariants));
@@ -843,10 +843,10 @@ template <typename K, typename V>
 void testMapOfArraysGetter(const std::map<K, std::vector<V>>& inputs) {
   std::map<Variant, Variant> variants;
 
-  for (const auto& [k, arr] : inputs) {
+  for (const auto& [k, input] : inputs) {
     std::vector<Variant> innerVariants;
-    innerVariants.reserve(arr.size());
-    for (const auto& v : arr) {
+    innerVariants.reserve(input.size());
+    for (const auto& v : input) {
       innerVariants.emplace_back(v);
     }
     variants.emplace(k, Variant::array(innerVariants));
