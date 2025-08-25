@@ -11,23 +11,19 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+add_executable(velox_s3FileSystem_benchmark
+        S3FileSystemBenchmark.cpp)
 
-# for generated headers
-
-velox_add_library(velox_s3fs RegisterS3FileSystem.cpp)
-if(VELOX_ENABLE_S3)
-  velox_sources(
-    velox_s3fs
-    PRIVATE S3FileSystem.cpp S3Util.cpp S3Config.cpp S3WriteFile.cpp S3ReadFile.cpp
-  )
-
-  velox_include_directories(velox_s3fs PRIVATE ${AWSSDK_INCLUDE_DIRS})
-  velox_link_libraries(velox_s3fs PRIVATE velox_dwio_common Folly::folly ${AWSSDK_LIBRARIES})
-
-  if(${VELOX_BUILD_TESTING})
-    add_subdirectory(tests)
-  endif()
-  if(${VELOX_ENABLE_BENCHMARKS})
-    add_subdirectory(benchmark)
-  endif()
-endif()
+add_test(velox_s3FileSystem_benchmark velox_s3FileSystem_benchmark)
+target_link_libraries(
+        velox_s3FileSystem_benchmark
+        velox_file
+        velox_s3fs
+        velox_core
+        velox_exec_test_lib
+        velox_dwio_common_exception
+        velox_exec
+        GTest::gtest
+        Folly::folly
+        Folly::follybenchmark
+        GTest::gtest_main)

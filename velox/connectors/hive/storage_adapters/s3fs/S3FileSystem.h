@@ -123,9 +123,9 @@ class S3FileSystem : public FileSystem {
   static void setUploadThreadPool(
       std::shared_ptr<folly::CPUThreadPoolExecutor> threadPool) {
     VELOX_USER_CHECK(
-     threadPool != nullptr && threadPool.get() != nullptr &&
-        threadPool->numThreads() > 0,
-     "Invalid configuration: 'hive.s3.uploadThreads' must be greater than 0.");
+        threadPool != nullptr && threadPool.get() != nullptr &&
+            threadPool->numThreads() > 0,
+        "Invalid configuration: 'hive.s3.uploadThreads' must be greater than 0.");
     uploadThreadPool_ = threadPool;
   }
 
