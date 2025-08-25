@@ -26,6 +26,8 @@
 #include <folly/Expected.h>
 #include <folly/Likely.h>
 
+#include "velox/common/base/ExceptionHelper.h"
+
 namespace facebook::velox {
 
 /// The Status object is an object holding the outcome of an operation (success
@@ -525,13 +527,13 @@ void Status::moveFrom(Status& s) {
     VELOX_RETURN_IF(!__s.ok(), __s);                          \
   } while (false)
 
-#define _VELOX_RETURN_IMPL(expr, exprStr, error, ...)                        \
-  do {                                                                       \
-    if (FOLLY_UNLIKELY(expr)) {                                              \
-      auto message = ::facebook::velox::internal::errorMessage(__VA_ARGS__); \
-      return error(                                                          \
-          ::facebook::velox::internal::generateError(message, exprStr));     \
-    }                                                                        \
+#define _VELOX_RETURN_IMPL(expr, exprStr, error, ...)                    \
+  do {                                                                   \
+    if (FOLLY_UNLIKELY(expr)) {                                          \
+      auto message = ::facebook::velox::errorMessage(__VA_ARGS__);       \
+      return error(                                                      \
+          ::facebook::velox::internal::generateError(message, exprStr)); \
+    }                                                                    \
   } while (0)
 
 /// If the caller passes a custom message (4 *or more* arguments), we
@@ -603,39 +605,6 @@ inline const Status& genericToStatus(const Status& st) {
 }
 inline Status genericToStatus(Status&& st) {
   return std::move(st);
-}
-
-struct CompileTimeEmptyString {
-  CompileTimeEmptyString() = default;
-  constexpr operator const char*() const {
-    return "";
-  }
-  constexpr operator std::string_view() const {
-    return {};
-  }
-  operator std::string() const {
-    return {};
-  }
-};
-
-/// When there is no message passed, we can statically detect this case
-/// and avoid passing even a single unnecessary argument pointer,
-/// minimizing size and thus maximizing eligibility for inlining.
-inline CompileTimeEmptyString errorMessage() {
-  return {};
-}
-
-inline const char* errorMessage(const char* s) {
-  return s;
-}
-
-inline std::string errorMessage(const std::string& str) {
-  return str;
-}
-
-template <typename... Args>
-std::string errorMessage(fmt::string_view fmt, const Args&... args) {
-  return fmt::vformat(fmt, fmt::make_format_args(args...));
 }
 
 std::string generateError(std::string message, std::string exprStr);
