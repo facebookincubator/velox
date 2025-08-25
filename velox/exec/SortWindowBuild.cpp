@@ -295,13 +295,28 @@ void SortWindowBuild::noMoreInput() {
 }
 
 void SortWindowBuild::loadNextPartitionFromSpill() {
-  sortedRows_.clear();
-  sortedRows_.shrink_to_fit();
-  data_->clear();
+  // Check if nextPartition is already loaded. If so, return directly.
+  if (currentPartition_ < static_cast<int>(partitionStartRows_.size() - 2)) {
+    return;
+  }
 
+  constexpr int kBatchSize = 1'000;
+  sortedRows_.clear();
+  sortedRows_.reserve(kBatchSize);
+  data_->clear();
+  partitionStartRows_.clear();
+  partitionStartRows_.reserve(kBatchSize);
+  partitionStartRows_.push_back(0);
+  currentPartition_ = -1;
+
+  // Load at least kBatchSize rows and a complete partition. The rows might
+  // contain multiple partitions. Record the partition boundaries as inMemory
+  // case. In this way, the logic of getting window partitions would be
+  // identical between inMemory and spill.
   for (;;) {
     auto next = merge_->next();
     if (next == nullptr) {
+      partitionStartRows_.push_back(sortedRows_.size());
       break;
     }
 
@@ -324,7 +339,10 @@ void SortWindowBuild::loadNextPartitionFromSpill() {
     }
 
     if (newPartition) {
-      break;
+      partitionStartRows_.push_back(sortedRows_.size());
+      if (sortedRows_.size() >= kBatchSize) {
+        break;
+      }
     }
 
     auto* newRow = data_->newRow();
@@ -334,16 +352,13 @@ void SortWindowBuild::loadNextPartitionFromSpill() {
     sortedRows_.push_back(newRow);
     next->pop();
   }
+
+  if (sortedRows_.empty()) {
+    partitionStartRows_.clear();
+  }
 }
 
 std::shared_ptr<WindowPartition> SortWindowBuild::nextPartition() {
-  if (merge_ != nullptr) {
-    VELOX_CHECK(!sortedRows_.empty(), "No window partitions available");
-    auto partition = folly::Range(sortedRows_.data(), sortedRows_.size());
-    return std::make_shared<WindowPartition>(
-        data_.get(), partition, inversedInputChannels_, sortKeyInfo_);
-  }
-
   VELOX_CHECK(!partitionStartRows_.empty(), "No window partitions available");
 
   currentPartition_++;
@@ -365,7 +380,6 @@ std::shared_ptr<WindowPartition> SortWindowBuild::nextPartition() {
 bool SortWindowBuild::hasNextPartition() {
   if (merge_ != nullptr) {
     loadNextPartitionFromSpill();
-    return !sortedRows_.empty();
   }
 
   return partitionStartRows_.size() > 0 &&
