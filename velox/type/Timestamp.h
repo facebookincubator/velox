@@ -366,11 +366,6 @@ struct Timestamp {
   ///  ts.toString(); // returns January 1, 1970 08:00:00
   void toGMT(const tz::TimeZone& zone);
 
-  /// Lenient conversion of local timestamp to the GMT time.
-  /// If the local time is invalid (DST gap), it will be corrected by
-  /// shifting forward to the nearest valid time.
-  void toGMTWithGapCorrection(const tz::TimeZone& zone);
-
   /// Assuming the timestamp represents a GMT time, converts it to the time at
   /// the same moment at zone. For example:
   ///
