@@ -1087,7 +1087,8 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
   template <typename T>
   ArrowArray fillArrowArray(
       const std::vector<std::optional<T>>& inputValues,
-      ArrowContextHolder& holder) {
+      ArrowContextHolder& holder,
+      const char* format = nullptr) {
     using TArrow = typename VeloxToArrowType<T>::type;
     int64_t length = inputValues.size();
     int64_t nullCount = 0;
@@ -1119,7 +1120,10 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
 
   ArrowArray fillArrowArray(
       const std::vector<std::optional<std::string>>& inputValues,
-      ArrowContextHolder& holder) {
+      ArrowContextHolder& holder,
+      const char* format = nullptr) {
+    bool const is32 =
+        format == nullptr || (format[0] != 'U' && format[0] != 'Z');
     int64_t length = inputValues.size();
     int64_t nullCount = 0;
 
@@ -1132,13 +1136,20 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
     }
 
     holder.nulls = AlignedBuffer::allocate<uint64_t>(length, pool_.get());
-    holder.offsets = AlignedBuffer::allocate<int32_t>(length + 1, pool_.get());
+    holder.offsets = is32
+        ? AlignedBuffer::allocate<int32_t>(length + 1, pool_.get())
+        : AlignedBuffer::allocate<int64_t>(length + 1, pool_.get());
     holder.values = AlignedBuffer::allocate<char>(bufferSize, pool_.get());
 
     auto rawNulls = holder.nulls->asMutable<uint64_t>();
     auto rawOffsets = holder.offsets->asMutable<int32_t>();
+    auto rawOffsets64 = holder.offsets->asMutable<int64_t>();
     auto rawValues = holder.values->asMutable<char>();
-    *rawOffsets = 0;
+    if (is32) {
+      *rawOffsets = 0;
+    } else {
+      *rawOffsets64 = 0;
+    }
 
     holder.buffers[2] = (length == 0) ? nullptr : (const void*)rawValues;
     holder.buffers[1] = (length == 0) ? nullptr : (const void*)rawOffsets;
@@ -1147,16 +1158,26 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
       if (inputValues[i] == std::nullopt) {
         bits::setNull(rawNulls, i);
         nullCount++;
-        *(rawOffsets + 1) = *rawOffsets;
-        ++rawOffsets;
+        if (is32) {
+          *(rawOffsets + 1) = *rawOffsets;
+          ++rawOffsets;
+        } else {
+          *(rawOffsets64 + 1) = *rawOffsets64;
+          ++rawOffsets64;
+        }
       } else {
         bits::clearNull(rawNulls, i);
         const auto& val = *inputValues[i];
 
         std::memcpy(rawValues, val.data(), val.size());
         rawValues += val.size();
-        *(rawOffsets + 1) = *rawOffsets + val.size();
-        ++rawOffsets;
+        if (is32) {
+          *(rawOffsets + 1) = *rawOffsets + val.size();
+          ++rawOffsets;
+        } else {
+          *(rawOffsets64 + 1) = *rawOffsets64 + val.size();
+          ++rawOffsets64;
+        }
       }
     }
 
@@ -1172,7 +1193,7 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
       const char* format,
       const std::vector<std::optional<TInput>>& inputValues) {
     ArrowContextHolder holder;
-    auto arrowArray = fillArrowArray(inputValues, holder);
+    auto arrowArray = fillArrowArray(inputValues, holder, format);
 
     auto arrowSchema = makeArrowSchema(format);
     auto output = importFromArrow(arrowSchema, arrowArray, pool_.get());
@@ -1346,6 +1367,37 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
 
     testArrowImport<std::string>(
         "z",
+        {
+            std::nullopt,
+            "testing",
+            "a",
+            std::nullopt,
+            "varbinary",
+            "vector",
+            std::nullopt,
+        });
+  }
+
+  void testImportString64() {
+    testArrowImport<std::string>("U", {});
+    testArrowImport<std::string>("U", {"single"});
+    testArrowImport<std::string>(
+        "U",
+        {
+            "hello world",
+            "larger string which should not be inlined...",
+            std::nullopt,
+            "hello",
+            "from",
+            "the",
+            "other",
+            "side",
+            std::nullopt,
+            std::nullopt,
+        });
+
+    testArrowImport<std::string>(
+        "Z",
         {
             std::nullopt,
             "testing",
@@ -1837,6 +1889,10 @@ TEST_F(ArrowBridgeArrayImportAsViewerTest, string) {
   testImportString();
 }
 
+TEST_F(ArrowBridgeArrayImportAsViewerTest, string64) {
+  testImportString64();
+}
+
 TEST_F(ArrowBridgeArrayImportAsViewerTest, stringview) {
   testImportStringView();
 }
@@ -1892,6 +1948,10 @@ TEST_F(ArrowBridgeArrayImportAsOwnerTest, without_nulls_buffer) {
 
 TEST_F(ArrowBridgeArrayImportAsOwnerTest, string) {
   testImportString();
+}
+
+TEST_F(ArrowBridgeArrayImportAsOwnerTest, string64) {
+  testImportString64();
 }
 
 TEST_F(ArrowBridgeArrayImportAsOwnerTest, stringview) {
