@@ -174,7 +174,8 @@ TEST(StatusTest, statusMacros) {
       Status::UserError("Reason: (2 vs. 1)\nExpression: 2 > 1\n"));
   ASSERT_EQ(
       returnMacroFormat(),
-      Status::UserError("Reason: (2 vs. 1) Occurred 5 times.\nExpression: 2 > 1\n"));
+      Status::UserError(
+          "Reason: (2 vs. 1) Occurred 5 times.\nExpression: 2 > 1\n"));
   ASSERT_EQ(
       returnMacroGT(),
       Status::UserError(
