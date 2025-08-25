@@ -118,7 +118,7 @@ jobs:
 
     steps:
 
-      - name: Get latest commit from main
+      - name: Get merge base with main
         if: ${{ github.event_name != 'schedule' }}
         working-directory: ${{ github.workspace }}
         env:
@@ -127,7 +127,7 @@ jobs:
           HEAD_REF: ${{ github.head_ref }}
           BASE_REF: ${{ github.base_ref }}
           ACTOR: ${{ github.actor }}
-        id: get-head
+        id: get-merge-base
         run: |
           if [ '${{ github.event_name == 'push' }}' == "true" ]; then
             # get the parent commit of the current one to get the relevant function signatures
@@ -149,7 +149,7 @@ jobs:
         id: get-sig
         with:
           path: /tmp/signatures
-          key: function-signatures-${{ steps.get-head.outputs.head_main || github.sha }}
+          key: function-signatures-${{ steps.get-merge-base.outputs.head_main || github.sha }}
 
       - name: Restore ccache
         uses: apache/infrastructure-actions/stash/restore@3354c1565d4b0e335b78a76aedd82153a9e144d4
@@ -175,7 +175,7 @@ jobs:
         if: ${{ github.event_name != 'schedule' && steps.get-sig.outputs.stash-hit != 'true' }}
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          ref: ${{ steps.get-head.outputs.head_main || 'main' }}
+          ref: ${{ steps.get-merge-base.outputs.head_main || 'main' }}
           path: velox_main
           persist-credentials: false
 
@@ -202,7 +202,7 @@ jobs:
         uses: apache/infrastructure-actions/stash/save@3354c1565d4b0e335b78a76aedd82153a9e144d4
         with:
           path: /tmp/signatures
-          key: function-signatures-${{ steps.get-head.outputs.head_main }}
+          key: function-signatures-${{ steps.get-merge-base.outputs.head_main }}
 
       - name: Checkout Contender
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
