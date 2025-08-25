@@ -225,7 +225,8 @@ TEST_F(S3FileSystemTest, writeFileAsync) {
   const auto filename = localPath(bucketName) + "/" + file;
   const auto s3File = s3URI(bucketName, file);
 
-  auto hiveConfig =  minioServer_->hiveConfig({{"hive.s3.uploadPartAsync", "true"}});
+  auto hiveConfig =
+      minioServer_->hiveConfig({{"hive.s3.uploadPartAsync", "true"}});
   filesystems::S3FileSystem s3fs(bucketName, hiveConfig);
 
   auto pool = memory::memoryManager()->addLeafPool("S3FileSystemTest");
@@ -301,14 +302,14 @@ TEST_F(S3FileSystemTest, writeFileAsync) {
   ASSERT_TRUE(s3fs.exists(s3File));
 }
 
-
 TEST_F(S3FileSystemTest, writeFileAndRead) {
   const auto bucketName = "writedata";
   const auto file = "test.txt";
   const auto filename = localPath(bucketName) + "/" + file;
   const auto s3File = s3URI(bucketName, file);
 
-  auto hiveConfig = minioServer_->hiveConfig({{"hive.s3.uploadPartAsync", "false"}});
+  auto hiveConfig =
+      minioServer_->hiveConfig({{"hive.s3.uploadPartAsync", "false"}});
   filesystems::S3FileSystem s3fs(bucketName, hiveConfig);
   auto pool = memory::memoryManager()->addLeafPool("S3FileSystemTest");
   auto writeFile =
