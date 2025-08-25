@@ -48,7 +48,7 @@ struct Enums {
 ///
 /// enum class Foo {...};
 ///
-/// VELOX_DEFINE_ENUM_NAME(Foo);
+/// VELOX_DECLARE_ENUM_NAME(Foo);
 ///
 /// In the cpp file, define the mapping:
 ///
@@ -62,12 +62,12 @@ struct Enums {
 /// }
 /// } // namespace
 ///
-/// VELOX_DECLARE_ENUM_NAME(Foo, fooNames);
+/// VELOX_DEFINE_ENUM_NAME(Foo, fooNames);
 ///
 /// In the client code, use FooName::toName(Foo::kFirst) to get the name of the
 /// enum and FooName::toFoo("FIRST") or FooName::tryToFoo("FIRST") to get the
 /// enum value. toFoo throws an exception if input is not a valid name, while
-/// tryToFoo returns an std::nullopt.
+/// tryToFoo returns a std::nullopt.
 ///
 /// Use _EMBEDDED_ versions of the macros to define enums embedded in other
 /// classes.
@@ -77,7 +77,8 @@ struct Enums {
     static std::string_view toName(EnumType value);                        \
     static EnumType to##EnumType(std::string_view name);                   \
     static std::optional<EnumType> tryTo##EnumType(std::string_view name); \
-  };
+  };                                                                       \
+  std::ostream& operator<<(std::ostream& os, const EnumType& value);
 
 #define VELOX_DEFINE_ENUM_NAME(EnumType, Names)                             \
   std::string_view EnumType##Name::toName(EnumType value) {                 \
@@ -107,6 +108,10 @@ struct Enums {
       return std::nullopt;                                                  \
     }                                                                       \
     return it->second;                                                      \
+  }                                                                         \
+  std::ostream& operator<<(std::ostream& os, const EnumType& value) {       \
+    os << EnumType##Name::toName(value);                                    \
+    return os;                                                              \
   }
 
 #define VELOX_DECLARE_EMBEDDED_ENUM_NAME(EnumType)     \

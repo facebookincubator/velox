@@ -70,14 +70,14 @@ class BaseVector {
   BaseVector(const BaseVector&) = delete;
   BaseVector& operator=(const BaseVector&) = delete;
 
-  static constexpr uint64_t kNullHash = 1;
+  static constexpr uint64_t kNullHash = bits::kNullHash;
 
   BaseVector(
       velox::memory::MemoryPool* pool,
       TypePtr type,
       VectorEncoding::Simple encoding,
       BufferPtr nulls,
-      size_t length,
+      vector_size_t length,
       std::optional<vector_size_t> distinctValueCount = std::nullopt,
       std::optional<vector_size_t> nullCount = std::nullopt,
       std::optional<ByteCount> representedByteCount = std::nullopt,
@@ -628,14 +628,9 @@ class BaseVector {
   /// before making a new ConstantVector. The result vector is either a
   /// ConstantVector holding a scalar value or a ConstantVector wrapping flat or
   /// lazy vector. The result cannot be a wrapping over another constant or
-  /// dictionary vector. If copyBase is true and the result vector wraps a
-  /// vector, the wrapped vector is newly constructed by copying the value from
-  /// the original, guaranteeing no Vectors are shared with 'vector'.
-  static VectorPtr wrapInConstant(
-      vector_size_t length,
-      vector_size_t index,
-      VectorPtr vector,
-      bool copyBase = false);
+  /// dictionary vector.
+  static VectorPtr
+  wrapInConstant(vector_size_t length, vector_size_t index, VectorPtr vector);
 
   /// Makes 'result' writable for 'rows'. A wrapper (e.g. dictionary, constant,
   /// sequence) is flattened and a multiply referenced flat vector is copied.

@@ -52,6 +52,25 @@ class PlanBuilder:
         num_parts: int = 1,
         connector_id: str = "tpch",
     ) -> PlanBuilder: ...
+    def hash_join(
+        self,
+        left_keys: list[str],
+        right_keys: list[str],
+        build_plan_node: PlanNode,
+        output: list[str] = [],
+        filter: str = "",
+        join_type: JoinType = JoinType.INNER
+    ) -> PlanBuilder: ...
+    def aggregate(
+        self,
+        grouping_keys: list[str],
+        aggregations: list[str],
+    ) -> PlanBuilder: ...
+    def streaming_aggregate(
+        self,
+        grouping_keys: list[str],
+        aggregations: list[str],
+    ) -> PlanBuilder: ...
     def table_write(
         self,
         output_file: Optional[File] = None,
@@ -59,6 +78,13 @@ class PlanBuilder:
         connector_id: str = "hive",
         output_schema: Optional[Type] = None,
     ) -> PlanBuilder: ...
-    def get_plan_node(self) -> PlanBuilder: ...
+    def unnest(
+        self,
+        unnest_columns: list[str],
+        replicate_columns: list[str] = [],
+        ordinal_column: Optional[str] = None,
+        empty_unnest_value_name: Optional[str] = None,
+    ) -> PlanBuilder: ...
+    def get_plan_node(self) -> PlanNode: ...
     def new_builder(self) -> PlanBuilder: ...
     def id(self) -> str: ...

@@ -22,7 +22,6 @@
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/type/Filter.h"
 #include "velox/type/Subfield.h"
-#include "velox/vector/tests/utils/VectorTestBase.h"
 
 #include <cudf/column/column_view.hpp>
 #include <cudf/table/table.hpp>
@@ -226,6 +225,28 @@ TEST_F(SubfieldFilterAstTest, StringInList) {
   ASSERT_GT(tree.size(), 0UL) << "No expressions created for test";
   EXPECT_EQ(scalars.size(), stringVals.size())
       << "Scalar count mismatch for string IN list";
+
+  // Execution validation
+  auto vec = makeTestVector(rowType, 100);
+  testFilterExecution(rowType, columnName, *filter, vec, expr);
+}
+
+TEST_F(SubfieldFilterAstTest, StringNotInList) {
+  const std::string columnName = "c2";
+  auto rowType = ROW({{columnName, VARCHAR()}});
+  std::vector<std::string> stringVals = {"apple", "cherry"};
+  auto filter = std::make_unique<common::NegatedBytesValues>(
+      stringVals, /*nullAllowed*/ false);
+
+  // AST validation
+  common::Subfield subfield(columnName);
+  cudf::ast::tree tree;
+  std::vector<std::unique_ptr<cudf::scalar>> scalars;
+  const auto& expr =
+      createAstFromSubfieldFilter(subfield, *filter, tree, scalars, rowType);
+  ASSERT_GT(tree.size(), 0UL) << "No expressions created for test";
+  EXPECT_EQ(scalars.size(), stringVals.size())
+      << "Scalar count mismatch for string NOT IN list";
 
   // Execution validation
   auto vec = makeTestVector(rowType, 100);
@@ -474,6 +495,99 @@ TEST_F(SubfieldFilterAstTest, EmptyInListHandling) {
         createAstFromSubfieldFilter(subfield, *filter, tree, scalars, rowType);
       },
       VeloxException);
+}
+
+TEST_F(SubfieldFilterAstTest, MultipleSubfieldFilters) {
+  // Schema with multiple columns to filter on.
+  auto rowType = ROW({
+      {"c0", INTEGER()},
+      {"c1", DOUBLE()},
+      {"c2", VARCHAR()},
+      {"flag", BOOLEAN()},
+  });
+
+  // Build multiple filters across columns.
+  common::SubfieldFilters filters;
+  filters.emplace(
+      common::Subfield("c0"),
+      std::make_shared<common::BigintRange>(10, 20, /*nullAllowed*/ false));
+  filters.emplace(
+      common::Subfield("c1"),
+      std::make_shared<common::DoubleRange>(
+          0.1, false, false, 10.5, false, false, /*nullAllowed*/ false));
+  filters.emplace(
+      common::Subfield("c2"),
+      std::make_shared<common::NegatedBytesValues>(
+          std::vector<std::string>{"apple", "cherry"},
+          /*nullAllowed*/ false));
+  filters.emplace(
+      common::Subfield("flag"),
+      std::make_shared<common::BoolValue>(true, /*nullAllowed*/ false));
+
+  // Build AST for combined filters.
+  cudf::ast::tree tree;
+  std::vector<std::unique_ptr<cudf::scalar>> scalars;
+  auto const& combinedExpr =
+      createAstFromSubfieldFilters(filters, tree, scalars, rowType);
+  ASSERT_GT(tree.size(), 0UL) << "No expressions created for combined filters";
+  // Expect number of scalars to equal the sum of scalars used by each filter.
+  EXPECT_GE(scalars.size(), 1UL);
+
+  // Create input vector and evaluate using cuDF.
+  auto vec = makeTestVector(rowType, 200);
+  auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
+
+  auto cudfTable =
+      cudf_velox::with_arrow::toCudfTable(vec, pool_.get(), stream);
+  ASSERT_NE(cudfTable, nullptr);
+  auto cudfResult =
+      cudf::compute_column(cudfTable->view(), combinedExpr, stream, mr);
+  ASSERT_NE(cudfResult, nullptr);
+  EXPECT_EQ(cudfResult->type().id(), cudf::type_id::BOOL8);
+  EXPECT_EQ(cudfResult->size(), vec->size());
+
+  // Convert cuDF result back to Velox bool vector.
+  auto resultTable = std::make_unique<cudf::table>(
+      std::vector<std::unique_ptr<cudf::column>>{});
+  std::vector<std::unique_ptr<cudf::column>> cols;
+  cols.emplace_back(
+      std::move(const_cast<std::unique_ptr<cudf::column>&>(cudfResult)));
+  resultTable = std::make_unique<cudf::table>(std::move(cols));
+  auto veloxBoolRow = cudf_velox::with_arrow::toVeloxColumn(
+      resultTable->view(), pool_.get(), "cmp_", stream);
+  auto boolVector = veloxBoolRow->childAt(0)->asFlatVector<bool>();
+  boolVector->loadedVector();
+
+  // Validate row-wise: AND of each filter's predicate; skip rows with any
+  // nulls.
+  auto c0Vec = vec->childAt(rowType->getChildIdx("c0"));
+  auto c1Vec = vec->childAt(rowType->getChildIdx("c1"));
+  auto c2Vec = vec->childAt(rowType->getChildIdx("c2"));
+  auto flagVec = vec->childAt(rowType->getChildIdx("flag"));
+
+  auto& f0 = *filters.at(common::Subfield("c0"));
+  auto& f1 = *filters.at(common::Subfield("c1"));
+  auto& f2 = *filters.at(common::Subfield("c2"));
+  auto& f3 = *filters.at(common::Subfield("flag"));
+
+  for (int i = 0; i < vec->size(); ++i) {
+    if (c0Vec->isNullAt(i) || c1Vec->isNullAt(i) || c2Vec->isNullAt(i) ||
+        flagVec->isNullAt(i)) {
+      continue;
+    }
+
+    bool e0 = f0.testInt64(
+        static_cast<int64_t>(c0Vec->asFlatVector<int32_t>()->valueAt(i)));
+    bool e1 = f1.testDouble(c1Vec->asFlatVector<double>()->valueAt(i));
+    auto sv = c2Vec->asFlatVector<StringView>()->valueAt(i);
+    bool e2 = f2.testBytes(sv.data(), sv.size());
+    bool e3 = f3.testBool(flagVec->asFlatVector<bool>()->valueAt(i));
+    bool expected = e0 && e1 && e2 && e3;
+
+    bool got = boolVector->valueAt(i);
+    EXPECT_EQ(expected, got) << "Mismatch at row " << i;
+  }
 }
 
 } // namespace

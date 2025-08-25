@@ -75,6 +75,10 @@ struct ConnectorSplit : public ISerializable {
     return nullptr;
   }
 
+  virtual uint64_t size() const {
+    return 0;
+  }
+
   virtual ~ConnectorSplit() {}
 
   virtual std::string toString() const {
@@ -236,6 +240,10 @@ class DataSink {
 
   /// Returns the stats of this data sink.
   virtual Stats stats() const = 0;
+
+  virtual std::unordered_map<std::string, RuntimeCounter> runtimeStats() const {
+    return {};
+  }
 };
 
 class DataSource {
@@ -657,6 +665,11 @@ class Connector {
   virtual folly::Executor* executor() const {
     return nullptr;
   }
+
+  /// The name of the common runtime stats collected and reported by connector
+  /// data/index sources.
+  static inline const std::string kTotalRemainingFilterTime{
+      "totalRemainingFilterWallNanos"};
 
  private:
   static void unregisterTracker(cache::ScanTracker* tracker);

@@ -753,7 +753,7 @@ TEST_F(ArbitrationParticipantTest, getGrowTargets) {
     auto participant =
         ArbitrationParticipant::create(10, task->pool(), &config);
     auto scopedParticipant = participant->lock().value();
-    scopedParticipant->shrink(/*reclaimFromAll=*/true);
+    scopedParticipant->shrink(/*reclaimAll=*/true);
     ASSERT_EQ(scopedParticipant->capacity(), 0);
     void* buffer = task->allocate(testData.capacity);
     SCOPE_EXIT {
@@ -860,7 +860,7 @@ TEST_F(ArbitrationParticipantTest, reclaimableFreeCapacityAndShrink) {
         ASSERT_EQ(scopedParticipant->pool()->peakBytes(), testData.peakBytes);
       }
 
-      scopedParticipant->shrink(/*reclaimFromAll=*/true);
+      scopedParticipant->shrink(/*reclaimAll=*/true);
       scopedParticipant->grow(testData.capacity, 0);
       ASSERT_EQ(scopedParticipant->capacity(), testData.capacity);
 
@@ -1020,7 +1020,7 @@ TEST_F(ArbitrationParticipantTest, reclaimableUsedCapacityAndReclaim) {
       ASSERT_EQ(scopedParticipant->pool()->peakBytes(), testData.peakBytes);
     }
 
-    scopedParticipant->shrink(/*reclaimFromAll=*/true);
+    scopedParticipant->shrink(/*reclaimAll=*/true);
     scopedParticipant->grow(testData.capacity, 0);
     ASSERT_EQ(scopedParticipant->capacity(), testData.capacity);
 
@@ -1335,7 +1335,7 @@ TEST_F(ArbitrationParticipantTest, abort) {
     const std::string abortReason = "test abort";
     try {
       VELOX_FAIL(abortReason);
-    } catch (const VeloxRuntimeError& e) {
+    } catch (const VeloxRuntimeError&) {
       ASSERT_EQ(
           scopedParticipant->abort(std::current_exception()),
           testData.expectedReclaimCapacity);
@@ -1351,7 +1351,7 @@ TEST_F(ArbitrationParticipantTest, abort) {
 
     try {
       VELOX_FAIL(abortReason);
-    } catch (const VeloxRuntimeError& e) {
+    } catch (const VeloxRuntimeError&) {
       ASSERT_EQ(scopedParticipant->abort(std::current_exception()), 0);
     }
     ASSERT_EQ(scopedParticipant->stats().numShrinks, prevNumShrunks + 1);
@@ -1431,7 +1431,7 @@ DEBUG_ONLY_TEST_F(ArbitrationParticipantTest, reclaimLock) {
     const std::string abortReason = "test abort";
     try {
       VELOX_FAIL(abortReason);
-    } catch (const VeloxRuntimeError& e) {
+    } catch (const VeloxRuntimeError&) {
       ASSERT_EQ(scopedParticipant->abort(std::current_exception()), 32 * MB);
     }
     abortCompletedFlag = true;
@@ -1508,7 +1508,7 @@ DEBUG_ONLY_TEST_F(ArbitrationParticipantTest, abortedCheck) {
     const std::string abortReason = "test abort1";
     try {
       VELOX_FAIL(abortReason);
-    } catch (const VeloxRuntimeError& e) {
+    } catch (const VeloxRuntimeError&) {
       ASSERT_EQ(scopedParticipant->abort(std::current_exception()), MB);
     }
   });
@@ -1517,7 +1517,7 @@ DEBUG_ONLY_TEST_F(ArbitrationParticipantTest, abortedCheck) {
     const std::string abortReason = "test abort2";
     try {
       VELOX_FAIL(abortReason);
-    } catch (const VeloxRuntimeError& e) {
+    } catch (const VeloxRuntimeError&) {
       ASSERT_EQ(scopedParticipant->abort(std::current_exception()), 0);
     }
   });
@@ -1579,7 +1579,7 @@ DEBUG_ONLY_TEST_F(ArbitrationParticipantTest, concurrentAbort) {
   // Second abort uses main thread.
   try {
     VELOX_FAIL("test abort 2");
-  } catch (const VeloxRuntimeError& e) {
+  } catch (const VeloxRuntimeError&) {
     ASSERT_EQ(scopedParticipant->abort(std::current_exception()), 32 * MB);
   }
 
@@ -1732,7 +1732,7 @@ TEST_F(ArbitrationParticipantTest, arbitrationOperation) {
     ASSERT_FALSE(abortOp.aborted());
     try {
       VELOX_FAIL("abort op");
-    } catch (const VeloxRuntimeError& e) {
+    } catch (const VeloxRuntimeError&) {
       ASSERT_EQ(scopedParticipant->abort(std::current_exception()), 0);
     }
     ASSERT_TRUE(abortOp.aborted());

@@ -526,8 +526,8 @@ class PlanBuilder {
       bool parallelizable = false,
       size_t repeatTimes = 1);
 
-  PlanBuilder& filtersAsNode(bool _filtersAsNode) {
-    filtersAsNode_ = _filtersAsNode;
+  PlanBuilder& filtersAsNode(bool filtersAsNode) {
+    filtersAsNode_ = filtersAsNode;
     return *this;
   }
 
@@ -601,6 +601,11 @@ class PlanBuilder {
   PlanBuilder& parallelProject(
       const std::vector<std::vector<std::string>>& projectionGroups,
       const std::vector<std::string>& noLoadColumns = {});
+
+  /// Add a LazyDereferenceNode to the plan.
+  /// @param projections Same format as in `project`, but can only contain
+  /// field/subfield accesses.
+  PlanBuilder& lazyDereference(const std::vector<std::string>& projections);
 
   /// Add a ProjectNode to keep all existing columns and append more columns
   /// using specified expressions.
@@ -1213,6 +1218,9 @@ class PlanBuilder {
   /// condition column from left side or a constant but at least one of them
   /// must not be constant. They all have the same type.
   /// @param joinType Type of the join supported: inner, left.
+  /// @param includeMatchColumn if true, 'outputLayout' should include a boolean
+  /// column at the end to indicate if a join output row has a match or not.
+  /// This only applies for left join.
   ///
   /// See hashJoin method for the description of the other parameters.
   PlanBuilder& indexLookupJoin(
@@ -1220,6 +1228,7 @@ class PlanBuilder {
       const std::vector<std::string>& rightKeys,
       const core::TableScanNodePtr& right,
       const std::vector<std::string>& joinConditions,
+      bool includeMatchColumn,
       const std::vector<std::string>& outputLayout,
       core::JoinType joinType = core::JoinType::kInner);
 

@@ -437,6 +437,10 @@ class Variant {
   /// Returns a string of the Variant value.
   std::string toString(const TypePtr& type) const;
 
+  /// Returns a string representation identical to
+  /// BaseVector::createConstant(type, *this)->toString(0).
+  std::string toStringAsVector(const TypePtr& type) const;
+
   folly::dynamic serialize() const;
 
   static Variant create(const folly::dynamic& obj);
@@ -519,12 +523,82 @@ class Variant {
     return value<TypeKind::ROW>();
   }
 
+  /// Returns a map of Variants.
   const std::map<Variant, Variant>& map() const {
     return value<TypeKind::MAP>();
   }
 
+  /// Returns a map of primitive values. Assumes all keys and values are not
+  /// null.
+  template <typename K, typename V>
+  std::map<K, V> map() const {
+    const auto& variants = value<TypeKind::MAP>();
+
+    std::map<K, V> values;
+    for (const auto& [k, v] : variants) {
+      values.emplace(k.template value<K>(), v.template value<V>());
+    }
+
+    return values;
+  }
+
+  /// Returns a map of optional primitive values. All keys are assumed to be not
+  /// null. Null values are returned as unset optional.
+  template <typename K, typename V>
+  std::map<K, std::optional<V>> nullableMap() const {
+    const auto& variants = value<TypeKind::MAP>();
+
+    std::map<K, std::optional<V>> values;
+    for (const auto& [k, v] : variants) {
+      if (v.isNull()) {
+        values.emplace(k.template value<K>(), std::nullopt);
+      } else {
+        values.emplace(k.template value<K>(), v.template value<V>());
+      }
+    }
+
+    return values;
+  }
+
+  /// Returns a std::vector of Variants.
   const std::vector<Variant>& array() const {
     return value<TypeKind::ARRAY>();
+  }
+
+  /// Returns a std::vector of primitive values. Assumes that all values are not
+  /// null.
+  template <typename T>
+  std::vector<T> array() const {
+    const auto& variants = value<TypeKind::ARRAY>();
+
+    std::vector<T> values;
+    values.reserve(variants.size());
+
+    for (const auto& v : variants) {
+      values.emplace_back(v.template value<T>());
+    }
+
+    return values;
+  }
+
+  /// Returns a std::vector of optional primitive values. Null values are
+  /// returned as unset optional.
+  template <typename T>
+  std::vector<std::optional<T>> nullableArray() const {
+    const auto& variants = value<TypeKind::ARRAY>();
+
+    std::vector<std::optional<T>> values;
+    values.reserve(variants.size());
+
+    for (const auto& v : variants) {
+      if (v.isNull()) {
+        values.emplace_back(std::nullopt);
+      } else {
+        values.emplace_back(v.template value<T>());
+      }
+    }
+
+    return values;
   }
 
   template <class T>
@@ -592,10 +666,6 @@ class Variant {
 
 inline bool operator==(const Variant& a, const Variant& b) {
   return a.equals(b);
-}
-
-inline bool operator!=(const Variant& a, const Variant& b) {
-  return !(a == b);
 }
 
 struct VariantConverter {

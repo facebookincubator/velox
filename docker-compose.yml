@@ -60,7 +60,7 @@ services:
     extends: centos-cpp
     image: ghcr.io/facebookincubator/velox-dev:adapters
     environment:
-      EXTRA_CMAKE_FLAGS: >
+      EXTRA_CMAKE_FLAGS: >-
         -DVELOX_ENABLE_PARQUET=ON
         -DVELOX_ENABLE_S3=ON
     build:
@@ -92,3 +92,12 @@ services:
       args:
         - SPARK_VERSION=3.5.1
       dockerfile: scripts/docker/java.dockerfile
+
+  fedora:
+    extends: base-block
+    image: ghcr.io/facebookincubator/velox-dev:fedora
+    build:
+      dockerfile: scripts/docker/fedora.dockerfile
+      target: fedora
+    environment:
+      VELOX_BUILD_SHARED: "ON"

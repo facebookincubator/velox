@@ -218,7 +218,11 @@ using EvalErrorsPtr = std::shared_ptr<EvalErrors>;
 // flags for Expr interpreter.
 class EvalCtx {
  public:
-  EvalCtx(core::ExecCtx* execCtx, ExprSet* exprSet, const RowVector* row);
+  EvalCtx(
+      core::ExecCtx* execCtx,
+      ExprSet* exprSet,
+      const RowVector* row,
+      bool lazyDereference = false);
 
   /// For testing only.
   explicit EvalCtx(core::ExecCtx* execCtx);
@@ -441,6 +445,15 @@ class EvalCtx {
     return exprSet_;
   }
 
+  /// By default (when this is false), lazy vectors are all loaded at beginning
+  /// of evaluation.  When this is true, the evalution should contain only field
+  /// references, and we only load the lazy vector when we take a child from it,
+  /// and we keep the output child lazy as well.  This is used to maximize
+  /// parallelism in ParallelProject.
+  bool lazyDereference() const {
+    return lazyDereference_;
+  }
+
   VectorEncoding::Simple wrapEncoding() const;
 
   void setPeeledEncoding(std::shared_ptr<PeeledEncoding>& peel) {
@@ -551,7 +564,7 @@ class EvalCtx {
   void ensureErrorsVectorSize(EvalErrorsPtr& errors, vector_size_t size) const;
 
   // Updates 'errorPtr' to clear null at 'index' to indicate an error has
-  // occured without specifying error details.
+  // occurred without specifying error details.
   void addError(vector_size_t index, EvalErrorsPtr& errorsPtr) const;
 
   // Copy error from 'from' at index 'fromIndex' to 'to' at index 'toIndex'.
@@ -566,6 +579,7 @@ class EvalCtx {
   core::ExecCtx* const execCtx_;
   ExprSet* const exprSet_;
   const RowVector* row_;
+  const bool lazyDereference_;
   bool inputFlatNoNulls_;
 
   // Corresponds 1:1 to children of 'row_'. Set to an inner vector
