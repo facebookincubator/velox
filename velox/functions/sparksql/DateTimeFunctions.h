@@ -963,23 +963,11 @@ struct SecondsToTimestampFunction {
       // Scale to microseconds using double, truncating toward zero.
       const double microsD = static_cast<double>(seconds) * 1'000'000.0;
 
-      // Saturate like Java's cast to long.
-      constexpr double kMaxMicrosD =
-          static_cast<double>(std::numeric_limits<int64_t>::max());
-      constexpr double kMinMicrosD =
-          static_cast<double>(std::numeric_limits<int64_t>::min());
-
-      // Cutoff values are based on Java's Long.MAX_VALUE and Long.MIN_VALUE.
-      constexpr int64_t maxSeconds = 9223372036854LL;
-      constexpr int64_t maxNanoseconds = 775807000LL;
-      constexpr int64_t minSeconds = -9223372036855LL;
-      constexpr int64_t minNanoseconds = 224192000LL;
-
       if (microsD >= kMaxMicrosD) {
-        result = Timestamp(maxSeconds, maxNanoseconds);
+        result = Timestamp(kMaxSeconds, kMaxNanoseconds);
         return;
       } else if (microsD <= kMinMicrosD) {
-        result = Timestamp(minSeconds, minNanoseconds);
+        result = Timestamp(kMinSeconds, kMinNanoseconds);
         return;
       }
 
@@ -997,6 +985,16 @@ struct SecondsToTimestampFunction {
       result = Timestamp(wholeSeconds, nano);
     }
   }
+
+ private:
+  static constexpr double kMaxMicrosD =
+      static_cast<double>(std::numeric_limits<int64_t>::max());
+  static constexpr double kMinMicrosD =
+      static_cast<double>(std::numeric_limits<int64_t>::min());
+  static constexpr int64_t kMaxSeconds = 9223372036854LL;
+  static constexpr int64_t kMaxNanoseconds = 775807000LL;
+  static constexpr int64_t kMinSeconds = -9223372036855LL;
+  static constexpr int64_t kMinNanoseconds = 224192000LL;
 };
 
 template <typename T>
