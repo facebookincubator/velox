@@ -525,6 +525,74 @@ void Status::moveFrom(Status& s) {
     VELOX_RETURN_IF(!__s.ok(), __s);                          \
   } while (false)
 
+#define _VELOX_RETURN_IMPL(expr, exprStr, error, ...)                        \
+  do {                                                                       \
+    if (FOLLY_UNLIKELY(expr)) {                                              \
+      auto message = ::facebook::velox::internal::errorMessage(__VA_ARGS__); \
+      return error(                                                          \
+          ::facebook::velox::internal::generateError(message, exprStr));     \
+    }                                                                        \
+  } while (0)
+
+/// If the caller passes a custom message (4 *or more* arguments), we
+/// have to construct a format string from ours ("({} vs. {})") plus
+/// theirs by adding a space and shuffling arguments. If they don't (exactly 3
+/// arguments), we can just pass our own format string and arguments straight
+/// through.
+#define _VELOX_RETURN_OP_WITH_USER_FMT_HELPER(  \
+    implmacro, expr1, expr2, op, user_fmt, ...) \
+  implmacro(                                    \
+      (expr1)op(expr2),                         \
+      #expr1 " " #op " " #expr2,                \
+      "({} vs. {}) " user_fmt,                  \
+      expr1,                                    \
+      expr2,                                    \
+      ##__VA_ARGS__)
+
+#define _VELOX_RETURN_OP_HELPER(implmacro, expr1, expr2, op, ...) \
+  do {                                                            \
+    if constexpr (FOLLY_PP_DETAIL_NARGS(__VA_ARGS__) > 0) {       \
+      _VELOX_RETURN_OP_WITH_USER_FMT_HELPER(                      \
+          implmacro, expr1, expr2, op, __VA_ARGS__);              \
+    } else {                                                      \
+      implmacro(                                                  \
+          (expr1)op(expr2),                                       \
+          #expr1 " " #op " " #expr2,                              \
+          "({} vs. {})",                                          \
+          expr1,                                                  \
+          expr2);                                                 \
+    }                                                             \
+  } while (0)
+
+#define _VELOX_USER_RETURN_IMPL(expr, exprStr, ...) \
+  _VELOX_RETURN_IMPL(                               \
+      expr, exprStr, ::facebook::velox::Status::UserError, ##__VA_ARGS__)
+
+#define _VELOX_USER_RETURN_OP(expr1, expr2, op, ...) \
+  _VELOX_RETURN_OP_HELPER(                           \
+      _VELOX_USER_RETURN_IMPL, expr1, expr2, op, ##__VA_ARGS__)
+
+// For all below macros, an additional message can be passed using a
+// format string and arguments, as with `fmt::format`.
+#define VELOX_USER_RETURN(expr, ...) \
+  _VELOX_USER_RETURN_IMPL(expr, #expr, ##__VA_ARGS__)
+#define VELOX_USER_RETURN_GT(e1, e2, ...) \
+  _VELOX_USER_RETURN_OP(e1, e2, >, ##__VA_ARGS__)
+#define VELOX_USER_RETURN_GE(e1, e2, ...) \
+  _VELOX_USER_RETURN_OP(e1, e2, >=, ##__VA_ARGS__)
+#define VELOX_USER_RETURN_LT(e1, e2, ...) \
+  _VELOX_USER_RETURN_OP(e1, e2, <, ##__VA_ARGS__)
+#define VELOX_USER_RETURN_LE(e1, e2, ...) \
+  _VELOX_USER_RETURN_OP(e1, e2, <=, ##__VA_ARGS__)
+#define VELOX_USER_RETURN_EQ(e1, e2, ...) \
+  _VELOX_USER_RETURN_OP(e1, e2, ==, ##__VA_ARGS__)
+#define VELOX_USER_RETURN_NE(e1, e2, ...) \
+  _VELOX_USER_RETURN_OP(e1, e2, !=, ##__VA_ARGS__)
+#define VELOX_USER_RETURN_NULL(e, ...) \
+  VELOX_USER_RETURN(e == nullptr, ##__VA_ARGS__)
+#define VELOX_USER_RETURN_NOT_NULL(e, ...) \
+  VELOX_USER_RETURN(e != nullptr, ##__VA_ARGS__)
+
 namespace internal {
 
 /// Common API for extracting Status from either Status or Result<T> (the latter
@@ -536,6 +604,41 @@ inline const Status& genericToStatus(const Status& st) {
 inline Status genericToStatus(Status&& st) {
   return std::move(st);
 }
+
+struct CompileTimeEmptyString {
+  CompileTimeEmptyString() = default;
+  constexpr operator const char*() const {
+    return "";
+  }
+  constexpr operator std::string_view() const {
+    return {};
+  }
+  operator std::string() const {
+    return {};
+  }
+};
+
+/// When there is no message passed, we can statically detect this case
+/// and avoid passing even a single unnecessary argument pointer,
+/// minimizing size and thus maximizing eligibility for inlining.
+inline CompileTimeEmptyString errorMessage() {
+  return {};
+}
+
+inline const char* errorMessage(const char* s) {
+  return s;
+}
+
+inline std::string errorMessage(const std::string& str) {
+  return str;
+}
+
+template <typename... Args>
+std::string errorMessage(fmt::string_view fmt, const Args&... args) {
+  return fmt::vformat(fmt, fmt::make_format_args(args...));
+}
+
+std::string generateError(std::string message, std::string exprStr);
 
 } // namespace internal
 

@@ -118,6 +118,35 @@ Status returnNotOk(Status s) {
   return Status::Invalid("invalid");
 }
 
+#define STATUS_MACRO_TEST(name, macro) \
+  Status returnMacro##name() {         \
+    macro;                             \
+    return Status::OK();               \
+  }
+
+STATUS_MACRO_TEST(GT, VELOX_USER_RETURN_GT(2, 1, "User error occurred."));
+STATUS_MACRO_TEST(GE, VELOX_USER_RETURN_GE(2, 1, "User error occurred."));
+STATUS_MACRO_TEST(LT, VELOX_USER_RETURN_LT(1, 2, "User error occurred."));
+STATUS_MACRO_TEST(LE, VELOX_USER_RETURN_LE(1, 2, "User error occurred."));
+STATUS_MACRO_TEST(EQ, VELOX_USER_RETURN_EQ(1, 1, "User error occurred."));
+STATUS_MACRO_TEST(NE, VELOX_USER_RETURN_NE(1, 3, "User error occurred."));
+STATUS_MACRO_TEST(
+    NULL,
+    VELOX_USER_RETURN_NULL(nullptr, "User error occurred."));
+
+Status returnNotNull() {
+  Status status = Status::OK();
+  VELOX_USER_RETURN_NOT_NULL(&status, "User error occurred.");
+  return Status::OK();
+}
+
+Status returnMacroCheck() {
+  Status status = Status::OK();
+  VELOX_USER_RETURN(
+      status.code() != StatusCode::kCancelled, "User error occurred.");
+  return Status::OK();
+}
+
 TEST(StatusTest, statusMacros) {
   ASSERT_EQ(returnIf(true), Status::Invalid("error"));
   ASSERT_EQ(returnIf(false), Status::OK());
@@ -134,6 +163,43 @@ TEST(StatusTest, statusMacros) {
     didThrow = true;
   }
   ASSERT_TRUE(didThrow) << "VELOX_CHECK_OK did not throw";
+
+  ASSERT_EQ(
+      returnMacroCheck(),
+      Status::UserError(
+          "Reason: User error occurred.\nExpression: status.code() != StatusCode::kCancelled\n"));
+  ASSERT_EQ(
+      returnMacroGT(),
+      Status::UserError(
+          "Reason: (2 vs. 1) User error occurred.\nExpression: 2 > 1\n"));
+  ASSERT_EQ(
+      returnMacroGE(),
+      Status::UserError(
+          "Reason: (2 vs. 1) User error occurred.\nExpression: 2 >= 1\n"));
+  ASSERT_EQ(
+      returnMacroLT(),
+      Status::UserError(
+          "Reason: (1 vs. 2) User error occurred.\nExpression: 1 < 2\n"));
+  ASSERT_EQ(
+      returnMacroLE(),
+      Status::UserError(
+          "Reason: (1 vs. 2) User error occurred.\nExpression: 1 <= 2\n"));
+  ASSERT_EQ(
+      returnMacroEQ(),
+      Status::UserError(
+          "Reason: (1 vs. 1) User error occurred.\nExpression: 1 == 1\n"));
+  ASSERT_EQ(
+      returnMacroNE(),
+      Status::UserError(
+          "Reason: (1 vs. 3) User error occurred.\nExpression: 1 != 3\n"));
+  ASSERT_EQ(
+      returnMacroNULL(),
+      Status::UserError(
+          "Reason: User error occurred.\nExpression: nullptr == nullptr\n"));
+  ASSERT_EQ(
+      returnNotNull(),
+      Status::UserError(
+          "Reason: User error occurred.\nExpression: &status != nullptr\n"));
 }
 
 Expected<int> modulo(int a, int b) {
