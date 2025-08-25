@@ -208,8 +208,18 @@ BenchmarkStats IcebergInsertBenchmark::runBenchmark(
     connector::hive::iceberg::TransformType transformType,
     std::optional<int32_t> parameter,
     uint32_t numRows) {
-  rowType_ =
-      ROW({{"id", BIGINT()}, {"partition_col", dataType}, {"data", VARCHAR()}});
+  rowType_ = ROW(
+      {{"id", BIGINT()},
+       {"image", VARBINARY()},
+       {"yes", BOOLEAN()},
+       {"level", SMALLINT()},
+       {"days", INTEGER()},
+       {"date", DATE()},
+       {"partition_col", dataType},
+       {"data", VARCHAR()},
+       {"timestamp", TIMESTAMP()},
+       {"price", DOUBLE()},
+       {"ask", REAL()}});
 
   const uint32_t batchSize = 10'000;
   const uint32_t numBatches = (numRows + batchSize - 1) / batchSize;
@@ -245,6 +255,7 @@ void run(
   IcebergInsertBenchmark benchmark;
   auto stats =
       benchmark.runBenchmark(dataType, transformType, parameter, numRows);
+  counters["Elapsed"] = stats.duration.count() / 1000;
   counters["MemoryMB"] = stats.memoryUsedMB;
   counters["PeakMB"] = stats.peakMemoryMB;
 }

@@ -15,7 +15,10 @@
  */
 #include <folly/Benchmark.h>
 #include <folly/init/Init.h>
+#include <gflags/gflags.h>
 #include "velox/connectors/hive/iceberg/tests/IcebergInsertBenchmark.h"
+
+DEFINE_int32(vector_size, 100000, "Number of rows to benchmark");
 
 using namespace facebook::velox;
 using namespace facebook::velox::iceberg::insert::test;
@@ -90,7 +93,7 @@ using namespace facebook::velox::iceberg::insert::test;
         counters);                                                            \
   }
 
-constexpr int32_t kRows = 100'000;
+const int32_t kRows = FLAGS_vector_size;
 
 IDENTITY_BENCHMARKS(BOOLEAN(), Boolean, kRows);
 IDENTITY_BENCHMARKS(TINYINT(), Tinyint, kRows);
@@ -103,16 +106,26 @@ IDENTITY_BENCHMARKS(VARBINARY(), Varbinary, kRows);
 IDENTITY_BENCHMARKS(DATE(), Date, kRows);
 IDENTITY_BENCHMARKS(TIMESTAMP(), Timestamp, kRows);
 
+BENCHMARK_DRAW_LINE();
+
 YEAR_BENCHMARKS(DATE(), Date, kRows);
 YEAR_BENCHMARKS(TIMESTAMP(), Timestamp, kRows);
+
+BENCHMARK_DRAW_LINE();
 
 MONTH_BENCHMARKS(DATE(), Date, kRows);
 MONTH_BENCHMARKS(TIMESTAMP(), Timestamp, kRows);
 
+BENCHMARK_DRAW_LINE();
+
 DAY_BENCHMARKS(DATE(), Date, kRows);
 DAY_BENCHMARKS(TIMESTAMP(), Timestamp, kRows);
 
+BENCHMARK_DRAW_LINE();
+
 HOUR_BENCHMARKS(TIMESTAMP(), Timestamp, kRows);
+
+BENCHMARK_DRAW_LINE();
 
 BUCKET_BENCHMARKS(INTEGER(), Int, 10, kRows);
 BUCKET_BENCHMARKS(INTEGER(), Int, 50, kRows);
@@ -124,6 +137,8 @@ BUCKET_BENCHMARKS(DATE(), Date, 11, kRows);
 BUCKET_BENCHMARKS(TIMESTAMP(), Timestamp, 13, kRows);
 BUCKET_BENCHMARKS(VARCHAR(), Varchar, 10, kRows);
 BUCKET_BENCHMARKS(VARBINARY(), Varbinary, 10, kRows);
+
+BENCHMARK_DRAW_LINE();
 
 TRUNCATE_BENCHMARKS(INTEGER(), Int, 100, kRows);
 TRUNCATE_BENCHMARKS(INTEGER(), Int, 1000, kRows);
@@ -138,6 +153,7 @@ BENCHMARK_DRAW_LINE();
 
 int main(int argc, char** argv) {
   folly::Init init{&argc, &argv};
+  ::gflags::ParseCommandLineFlags(&argc, &argv, true);
   memory::MemoryManager::initialize(memory::MemoryManager::Options{});
   folly::runBenchmarks();
   return 0;
