@@ -52,9 +52,12 @@ credentialsProviderFactories() {
 std::shared_ptr<GcsOAuthCredentialsProvider> getCredentialsProviderByName(
     const std::string& providerName,
     const std::shared_ptr<connector::hive::HiveConfig>& hiveConfig) {
+  VELOX_USER_CHECK(
+      !providerName.empty(),
+      "GcsOAuthCredentialsProviderFactory name cannot be empty");
   return credentialsProviderFactories().withRLock([&](const auto& factories) {
     const auto it = factories.find(providerName);
-    VELOX_CHECK(
+    VELOX_USER_CHECK(
         it != factories.end(),
         "GcsOAuthCredentialsProviderFactory for '{}' not registered",
         providerName);

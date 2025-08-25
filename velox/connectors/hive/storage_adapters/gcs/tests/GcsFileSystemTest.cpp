@@ -277,23 +277,39 @@ TEST_F(GcsFileSystemTest, credentialsProvider) {
       };
   registerGcsOAuthCredentialsProvider("dummy_provider", providerFactory);
 
-  std::unordered_map<std::string, std::string> configOverride = {
-      {"hive.gcs.auth.access-token-provider", "dummy_provider"}};
-  auto hiveConfig = emulator_->hiveConfig(configOverride);
+  {
+    std::unordered_map<std::string, std::string> configOverride = {
+        {"hive.gcs.auth.access-token-provider", "dummy_provider"}};
+    auto hiveConfig = emulator_->hiveConfig(configOverride);
 
-  filesystems::GcsFileSystem gcfs(
-      emulator_->preexistingBucketName(), hiveConfig);
-  VELOX_ASSERT_THROW(
-      gcfs.initializeClient(),
-      "DummyGcsOAuthCredentialsProvider: Not implemented");
+    filesystems::GcsFileSystem gcfs(
+        emulator_->preexistingBucketName(), hiveConfig);
+    VELOX_ASSERT_THROW(
+        gcfs.initializeClient(),
+        "DummyGcsOAuthCredentialsProvider: Not implemented");
 
-  VELOX_ASSERT_THROW(
-      registerGcsOAuthCredentialsProvider("", providerFactory),
-      "GcsOAuthCredentialsProviderFactory name cannot be empty");
+    VELOX_ASSERT_THROW(
+        registerGcsOAuthCredentialsProvider("", providerFactory),
+        "GcsOAuthCredentialsProviderFactory name cannot be empty");
 
-  VELOX_ASSERT_THROW(
-      registerGcsOAuthCredentialsProvider("dummy_provider", providerFactory),
-      "GcsOAuthCredentialsProviderFactory 'dummy_provider' already registered");
+    VELOX_ASSERT_THROW(
+        registerGcsOAuthCredentialsProvider("dummy_provider", providerFactory),
+        "GcsOAuthCredentialsProviderFactory 'dummy_provider' already registered");
+  }
+
+  // Invalid provider name.
+  {
+    std::unordered_map<std::string, std::string> configOverride = {
+        {"hive.gcs.auth.access-token-provider", ""}};
+    auto hiveConfig = emulator_->hiveConfig(configOverride);
+
+    filesystems::GcsFileSystem gcfs(
+        emulator_->preexistingBucketName(), hiveConfig);
+
+    VELOX_ASSERT_THROW(
+        gcfs.initializeClient(),
+        "GcsOAuthCredentialsProviderFactory name cannot be empty");
+  }
 }
 
 TEST_F(GcsFileSystemTest, defaultCacheKey) {
