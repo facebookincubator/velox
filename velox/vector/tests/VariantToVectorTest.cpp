@@ -137,7 +137,7 @@ TEST_F(VariantToVectorTest, saveVarcharArrayVector) {
   saveVector(*vectorWithNulls, out);
   std::istringstream in(out.str());
   auto vectorCopy = restoreVector(in, pool());
-  auto variantCopy = vectorToVariant(vectorCopy, 0);
+  auto variantCopy = vectorCopy->variantAt(0);
   EXPECT_EQ(variantCopy, variant);
 }
 
