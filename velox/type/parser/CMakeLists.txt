@@ -23,7 +23,7 @@ bison_target(
 
 flex_target(
   TypeParserScanner TypeParser.ll ${CMAKE_CURRENT_BINARY_DIR}/Scanner.cpp
-  COMPILE_FLAGS "-Cf --prefix=veloxtp")
+  COMPILE_FLAGS "-Cf --prefix=veloxtpdeprecated")
 
 add_flex_bison_dependency(TypeParserScanner TypeParser)
 

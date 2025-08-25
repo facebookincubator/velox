@@ -1609,6 +1609,15 @@ TEST_F(VectorTest, rowPrepareForReuse) {
   }
 }
 
+TEST_F(VectorTest, makeFlatVectorWithInitializerList) {
+  auto vector = makeFlatVector<int64_t>({803});
+
+  ASSERT_NE(vector, nullptr);
+  EXPECT_EQ(vector->size(), 1);
+
+  EXPECT_EQ(vector->asFlatVector<int64_t>()->valueAt(0), 803);
+}
+
 TEST_F(VectorTest, wrapConstantInDictionary) {
   // Wrap Constant in Dictionary with no extra nulls. Expect Constant.
   auto indices = makeIndices(10, [](auto row) { return row % 2; });
@@ -3612,7 +3621,7 @@ TEST_F(VectorTest, hashValueAtMap) {
 TEST_F(VectorTest, variantHashMatchesVectorHash) {
   auto flat = makeNullableFlatVector<int64_t>({1, std::nullopt, 3});
   for (vector_size_t i = 0; i < flat->size(); ++i) {
-    auto v = vectorToVariant(flat, i);
+    auto v = flat->variantAt(i);
     EXPECT_EQ(flat->hashValueAt(i), v.hash()) << "at " << i;
   }
 
@@ -3622,7 +3631,7 @@ TEST_F(VectorTest, variantHashMatchesVectorHash) {
       "[1, null, 3]",
   });
   for (vector_size_t i = 0; i < array->size(); ++i) {
-    auto v = vectorToVariant(array, i);
+    auto v = array->variantAt(i);
     EXPECT_EQ(array->hashValueAt(i), v.hash()) << "at " << i;
   }
 
@@ -3632,7 +3641,7 @@ TEST_F(VectorTest, variantHashMatchesVectorHash) {
       "{1: null}",
   });
   for (vector_size_t i = 0; i < map->size(); ++i) {
-    auto v = vectorToVariant(map, i);
+    auto v = map->variantAt(i);
     EXPECT_EQ(map->hashValueAt(i), v.hash()) << "at " << i;
   }
 
@@ -3641,7 +3650,7 @@ TEST_F(VectorTest, variantHashMatchesVectorHash) {
   auto row =
       makeRowVector({child1, child2}, [](vector_size_t i) { return i == 1; });
   for (vector_size_t i = 0; i < row->size(); ++i) {
-    auto v = vectorToVariant(row, i);
+    auto v = row->variantAt(i);
     EXPECT_EQ(row->hashValueAt(i), v.hash()) << "at " << i;
   }
 }
