@@ -17,6 +17,8 @@
 #include "velox/experimental/cudf/connectors/parquet/ParquetConfig.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetConnectorSplit.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetDataSource.h"
+#include "velox/experimental/cudf/connectors/parquet/ParquetTableHandle.h"
+#include "velox/experimental/cudf/exec/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
@@ -333,28 +335,11 @@ ParquetDataSource::createSplitReader() {
       }
     }();
 
-    // Convert subfield filters to cudf AST
-    for (const auto& [subfield, filter] : subfieldFilters_) {
-      auto const& filterExpr = createAstFromSubfieldFilter(
-          subfield, *filter, subfieldTree_, subfieldScalars_, readerFilterType);
-      subfieldFilterExprs_.push_back(&filterExpr);
-    }
+    // Build a combined AST for all subfield filters.
+    auto const& combinedExpr = createAstFromSubfieldFilters(
+        subfieldFilters_, subfieldTree_, subfieldScalars_, readerFilterType);
 
-    // Combine multiple filters with AND
-    if (subfieldFilterExprs_.size() == 1) {
-      readerOptions.set_filter(subfieldTree_.back());
-    } else if (subfieldFilterExprs_.size() > 1) {
-      // AND all filter expressions together
-      auto* result = subfieldFilterExprs_[0];
-      for (size_t i = 1; i < subfieldFilterExprs_.size(); i++) {
-        auto const& andExpr = subfieldTree_.push(cudf::ast::operation{
-            cudf::ast::ast_operator::NULL_LOGICAL_AND,
-            *result,
-            *subfieldFilterExprs_[i]});
-        result = &andExpr;
-      }
-      readerOptions.set_filter(*result);
-    }
+    readerOptions.set_filter(combinedExpr);
   }
 
   // Set column projection if needed
