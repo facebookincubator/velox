@@ -266,7 +266,13 @@ void ParquetDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
           hiveSplit->fileFormat,
           dwio::common::FileFormat::PARQUET,
           "Unsupported file format for conversion from HiveConnectorSplit to ParquetConnectorSplit");
-      return ParquetConnectorSplitBuilder(hiveSplit->filePath)
+      // Remove "file:" prefix from the file path if present
+      std::string cleanedPath = hiveSplit->filePath;
+      constexpr std::string_view filePrefix = "file:";
+      if (cleanedPath.compare(0, filePrefix.size(), filePrefix) == 0) {
+        cleanedPath = cleanedPath.substr(filePrefix.size());
+      }
+      return ParquetConnectorSplitBuilder(cleanedPath)
           .connectorId(hiveSplit->connectorId)
           .splitWeight(hiveSplit->splitWeight)
           .build();
