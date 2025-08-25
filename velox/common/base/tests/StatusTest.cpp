@@ -125,6 +125,7 @@ Status returnNotOk(Status s) {
   }
 
 STATUS_MACRO_TEST(EmptyMessage, VELOX_USER_RETURN_GT(2, 1));
+STATUS_MACRO_TEST(Format, VELOX_USER_RETURN_GT(2, 1, "Occurred {} times.", 5));
 STATUS_MACRO_TEST(GT, VELOX_USER_RETURN_GT(2, 1, "User error occurred."));
 STATUS_MACRO_TEST(GE, VELOX_USER_RETURN_GE(2, 1, "User error occurred."));
 STATUS_MACRO_TEST(LT, VELOX_USER_RETURN_LT(1, 2, "User error occurred."));
@@ -135,9 +136,8 @@ STATUS_MACRO_TEST(
     NULL,
     VELOX_USER_RETURN_NULL(nullptr, "User error occurred."));
 
-Status returnNotNull() {
-  Status status = Status::OK();
-  VELOX_USER_RETURN_NOT_NULL(&status, "User error occurred.");
+Status returnNotNull(Status* status) {
+  VELOX_USER_RETURN_NOT_NULL(status, "User error occurred.");
   return Status::OK();
 }
 
@@ -173,6 +173,9 @@ TEST(StatusTest, statusMacros) {
       returnMacroEmptyMessage(),
       Status::UserError("Reason: (2 vs. 1)\nExpression: 2 > 1\n"));
   ASSERT_EQ(
+      returnMacroFormat(),
+      Status::UserError("Reason: (2 vs. 1) Occurred 5 times.\nExpression: 2 > 1\n"));
+  ASSERT_EQ(
       returnMacroGT(),
       Status::UserError(
           "Reason: (2 vs. 1) User error occurred.\nExpression: 2 > 1\n"));
@@ -200,10 +203,11 @@ TEST(StatusTest, statusMacros) {
       returnMacroNULL(),
       Status::UserError(
           "Reason: User error occurred.\nExpression: nullptr == nullptr\n"));
+  Status status = Status::OK();
   ASSERT_EQ(
-      returnNotNull(),
+      returnNotNull(&status),
       Status::UserError(
-          "Reason: User error occurred.\nExpression: &status != nullptr\n"));
+          "Reason: User error occurred.\nExpression: status != nullptr\n"));
 }
 
 Expected<int> modulo(int a, int b) {
