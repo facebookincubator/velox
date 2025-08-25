@@ -254,6 +254,36 @@ AbstractInputGeneratorPtr maybeGetCustomTypeInputGenerator(
 
   return nullptr;
 }
+
+template <TypeKind kind>
+VectorPtr extractDistinctKeys(VectorPtr allKeys, memory::MemoryPool* pool) {
+  using TCpp = typename TypeTraits<kind>::NativeType;
+
+  std::vector<TCpp> distinctKeys;
+  std::unordered_set<TCpp> keySet;
+  auto flatKeys = allKeys->asFlatVector<TCpp>();
+  auto result = BaseVector::create<FlatVector<TCpp>>(
+      allKeys->type(), allKeys->size(), pool);
+
+  auto index = 0;
+  for (int i = 0; i < flatKeys->size(); ++i) {
+    auto key = flatKeys->valueAt(i);
+    if (keySet.find(key) == keySet.end()) {
+      keySet.insert(key);
+      distinctKeys.push_back(key);
+      result->set(index++, key);
+    }
+  }
+
+  result->resize(index);
+  if (allKeys->getDistinctValueCount().has_value())
+    VELOX_CHECK_EQ(
+        result->size(),
+        allKeys->getDistinctValueCount().value(),
+        "extracted distinct keys size should match input distinct value count");
+  return result;
+}
+
 } // namespace
 
 VectorPtr VectorFuzzer::fuzzNotNull(
@@ -531,19 +561,24 @@ VectorPtr VectorFuzzer::fuzzComplex(const TypePtr& type, vector_size_t size) {
     }
 
     case TypeKind::MAP: {
-      // Do not initialize keys and values inline in the fuzzMap call as C++
-      // does not specify the order they'll be called in, leading to
-      // inconsistent results across platforms.
-      const auto& keyType = type->asMap().keyType();
-      const auto& valueType = type->asMap().valueType();
-      auto length = getElementsVectorLength(opts_, size);
+      if (opts_.allowFlatMapVector && coinToss(.5)) {
+        return fuzzFlatMap(
+            type->asMap().keyType(), type->asMap().valueType(), size);
+      } else {
+        // Do not initialize keys and values inline in the fuzzMap call as C++
+        // does not specify the order they'll be called in, leading to
+        // inconsistent results across platforms.
+        const auto& keyType = type->asMap().keyType();
+        const auto& valueType = type->asMap().valueType();
+        auto length = getElementsVectorLength(opts_, size);
 
-      auto keys = opts_.normalizeMapKeys || !opts_.containerHasNulls
-          ? fuzzNotNull(keyType, length)
-          : fuzz(keyType, length);
-      auto values = opts_.containerHasNulls ? fuzz(valueType, length)
-                                            : fuzzNotNull(valueType, length);
-      return fuzzMap(keys, values, size);
+        auto keys = opts_.normalizeMapKeys || !opts_.containerHasNulls
+            ? fuzzNotNull(keyType, length)
+            : fuzz(keyType, length);
+        auto values = opts_.containerHasNulls ? fuzz(valueType, length)
+                                              : fuzzNotNull(valueType, length);
+        return fuzzMap(keys, values, size);
+      }
     }
 
     default:
@@ -713,6 +748,33 @@ MapVectorPtr VectorFuzzer::fuzzMap(
       values);
 }
 
+FlatMapVectorPtr VectorFuzzer::fuzzFlatMap(
+    const TypePtr& keyType,
+    const TypePtr& valueType,
+    vector_size_t size) {
+  // generate a vector of keys and extract the distinct ones
+  auto allKeys = fuzzFlatNotNull(keyType, getElementsVectorLength(opts_, size));
+  VectorPtr distinctKeys = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+      extractDistinctKeys, keyType->kind(), allKeys, pool_);
+
+  // inMap buffer and mapValues vector should be the same size
+  std::vector<VectorPtr> mapValues(distinctKeys->size());
+  std::vector<BufferPtr> inMaps(distinctKeys->size());
+  for (int i = 0; i < mapValues.size(); ++i) {
+    mapValues[i] = fuzzFlatNotNull(valueType, size);
+    inMaps[i] = fuzzInMap(size);
+  }
+
+  return std::make_shared<FlatMapVector>(
+      pool_,
+      MAP(keyType, valueType),
+      nullptr,
+      size,
+      distinctKeys,
+      mapValues,
+      inMaps);
+}
+
 RowVectorPtr VectorFuzzer::fuzzInputRow(
     const RowTypePtr& rowType,
     const std::vector<AbstractInputGeneratorPtr>& inputGenerators) {
@@ -817,6 +879,20 @@ BufferPtr VectorFuzzer::fuzzIndices(
     rawIndices[i] = rand<vector_size_t>(rng_) % baseVectorSize;
   }
   return indices;
+}
+
+BufferPtr VectorFuzzer::fuzzInMap(vector_size_t size) {
+  VELOX_CHECK_GE(size, 0);
+  auto inMap = AlignedBuffer::allocate<bool>(size, pool_, 0);
+  auto mutableInMap = inMap->asMutable<uint64_t>();
+
+  for (auto row = 0; row < size; ++row) {
+    if (coinToss(.25)) {
+      bits::setBit(mutableInMap, row);
+    }
+  }
+
+  return inMap;
 }
 
 std::pair<int8_t, int8_t> VectorFuzzer::randPrecisionScale(
