@@ -1902,6 +1902,9 @@ ExprSet::~ExprSet() {
   exprSetListeners().withRLock([&](auto& listeners) {
     if (!listeners.empty()) {
       auto exprStats = stats();
+      if (exprStats.empty()) {
+        return;
+      }
 
       std::vector<std::string> sqls;
       std::vector<VectorPtr> complexConstants;
