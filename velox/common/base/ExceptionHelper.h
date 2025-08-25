@@ -16,8 +16,8 @@
 
 #pragma once
 
-#include <string>
 #include <fmt/format.h>
+#include <string>
 
 namespace facebook::velox {
 
@@ -53,4 +53,4 @@ template <typename... Args>
 std::string errorMessage(fmt::string_view fmt, const Args&... args) {
   return fmt::vformat(fmt, fmt::make_format_args(args...));
 }
-}
+} // namespace facebook::velox
