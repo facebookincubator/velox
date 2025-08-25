@@ -233,7 +233,7 @@ int IcebergSplitReaderBenchmark::read(
     const RowTypePtr& rowType,
     uint32_t nextSize,
     std::unique_ptr<IcebergSplitReader> icebergSplitReader) {
-  runtimeStats_ = RuntimeStatistics();
+  runtimeStats_.clear();
   icebergSplitReader->resetFilterCaches();
   int resultSize = 0;
   auto result = BaseVector::create(rowType, 0, leafPool_.get());
