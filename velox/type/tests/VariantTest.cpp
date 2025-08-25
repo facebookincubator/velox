@@ -815,6 +815,7 @@ template <typename T>
 void testArrayOfArraysGetter(const std::vector<std::vector<T>>& inputs) {
   std::vector<Variant> variants;
   variants.reserve(inputs.size());
+
   for (const auto& arr : inputs) {
     std::vector<Variant> innerVariants;
     innerVariants.reserve(arr.size());
@@ -841,6 +842,7 @@ TEST(VariantTest, arrayOfArraysGetter) {
 template <typename K, typename V>
 void testMapOfArraysGetter(const std::map<K, std::vector<V>>& inputs) {
   std::map<Variant, Variant> variants;
+
   for (const auto& [k, arr] : inputs) {
     std::vector<Variant> innerVariants;
     innerVariants.reserve(arr.size());

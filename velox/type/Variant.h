@@ -569,7 +569,7 @@ class Variant {
     for (const auto& [k, v] : variants) {
       values.emplace(k.template value<K>(), v.template array<V>());
     }
-    
+
     return values;
   }
 
