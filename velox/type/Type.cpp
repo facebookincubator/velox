@@ -43,8 +43,8 @@ bool isColumnNameRequiringEscaping(const std::string& name) {
   return !RE2::FullMatch(name, re);
 }
 
-folly::F14FastMap<TypeKind, std::string> typeKindNames() {
-  static const folly::F14FastMap<TypeKind, std::string> kNames = {
+const auto& typeKindNames() {
+  static const folly::F14FastMap<TypeKind, std::string_view> kNames = {
       {TypeKind::BOOLEAN, "BOOLEAN"},
       {TypeKind::TINYINT, "TINYINT"},
       {TypeKind::SMALLINT, "SMALLINT"},
@@ -64,7 +64,6 @@ folly::F14FastMap<TypeKind, std::string> typeKindNames() {
       {TypeKind::OPAQUE, "OPAQUE"},
       {TypeKind::INVALID, "INVALID"},
   };
-
   return kNames;
 }
 } // namespace
@@ -99,11 +98,6 @@ struct OpaqueSerdeRegistry {
   }
 };
 } // namespace
-
-std::ostream& operator<<(std::ostream& os, const TypeKind& kind) {
-  os << TypeKindName::toName(kind);
-  return os;
-}
 
 namespace {
 std::vector<TypePtr> deserializeChildTypes(const folly::dynamic& obj) {

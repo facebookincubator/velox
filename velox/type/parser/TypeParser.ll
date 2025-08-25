@@ -4,6 +4,7 @@
 
 #include "velox/type/parser/TypeParser.yy.h"  // @manual
 #include "velox/type/parser/Scanner.h"
+
 #define YY_DECL int facebook::velox::type::Scanner::lex(facebook::velox::type::Parser::semantic_type *yylval)
 %}
 

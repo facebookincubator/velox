@@ -17,6 +17,7 @@
 #include <string>
 #include "velox/functions/Registerer.h"
 #include "velox/functions/prestosql/GeometryFunctions.h"
+#include "velox/functions/prestosql/types/BingTileType.h"
 #include "velox/functions/prestosql/types/GeometryRegistration.h"
 
 namespace facebook::velox::functions {
@@ -71,6 +72,8 @@ void registerOverlayOperations(const std::string& prefix) {
       {{prefix + "ST_Union"}});
   registerFunction<StEnvelopeAsPtsFunction, Array<Geometry>, Geometry>(
       {{prefix + "ST_EnvelopeAsPts"}});
+  registerFunction<ExpandEnvelopeFunction, Geometry, Geometry, double>(
+      {{prefix + "expand_envelope"}});
 }
 
 void registerAccessors(const std::string& prefix) {
@@ -146,6 +149,10 @@ void registerAccessors(const std::string& prefix) {
       {{prefix + "ST_InteriorRings"}});
   registerFunction<StGeometriesFunction, Array<Geometry>, Geometry>(
       {{prefix + "ST_Geometries"}});
+  registerFunction<GeometryAsGeoJsonFunction, Varchar, Geometry>(
+      {{prefix + "geometry_as_geojson"}});
+  registerFunction<GeometryFromGeoJsonFunction, Geometry, Varchar>(
+      {{prefix + "geometry_from_geojson"}});
   registerFunction<
       GeometryNearestPointsFunction,
       Array<Geometry>,
@@ -157,6 +164,11 @@ void registerAccessors(const std::string& prefix) {
       Geometry>({{prefix + "flatten_geometry_collections"}});
 }
 
+void registerBingTileGeometryFunctions(const std::string& prefix) {
+  registerFunction<BingTilePolygonFunction, Geometry, BingTile>(
+      {{prefix + "bing_tile_polygon"}});
+}
+
 } // namespace
 
 void registerGeometryFunctions(const std::string& prefix) {
@@ -165,6 +177,7 @@ void registerGeometryFunctions(const std::string& prefix) {
   registerRelationPredicates(prefix);
   registerOverlayOperations(prefix);
   registerAccessors(prefix);
+  registerBingTileGeometryFunctions(prefix);
 }
 
 } // namespace facebook::velox::functions

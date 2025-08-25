@@ -674,7 +674,7 @@ TEST(TypeTest, opaqueWithMetadata) {
   auto type = std::make_shared<OpaqueWithMetadataType>(123);
   auto type2 = std::make_shared<OpaqueWithMetadataType>(123);
   auto other = std::make_shared<OpaqueWithMetadataType>(234);
-  EXPECT_TRUE(def->operator!=(*type));
+  EXPECT_TRUE(*def != *type);
   EXPECT_EQ(*type, *type2);
   EXPECT_NE(*type, *other);
 
@@ -1128,10 +1128,6 @@ TEST(TypeTest, providesCustomComparison) {
   EXPECT_THROW(
       test::BIGINT_TYPE_WITH_INVALID_CUSTOM_COMPARISON()->hash(0),
       VeloxRuntimeError);
-
-  // We do not support variable width custom comparison for variable width
-  // types, so attempting to instantiate one should fail.
-  EXPECT_THROW(test::VARCHAR_TYPE_WITH_CUSTOM_COMPARISON(), VeloxRuntimeError);
 }
 
 TEST(TypeTest, toSummaryString) {

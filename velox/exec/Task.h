@@ -24,7 +24,6 @@
 #include "velox/exec/MemoryReclaimer.h"
 #include "velox/exec/MergeSource.h"
 #include "velox/exec/ScaledScanController.h"
-#include "velox/exec/Split.h"
 #include "velox/exec/TaskStats.h"
 #include "velox/exec/TaskStructs.h"
 #include "velox/vector/ComplexVector.h"
@@ -465,7 +464,8 @@ class Task : public std::enable_shared_from_this<Task> {
   std::shared_ptr<MergeSource> addLocalMergeSource(
       uint32_t splitGroupId,
       const core::PlanNodeId& planNodeId,
-      const RowTypePtr& rowType);
+      const RowTypePtr& rowType,
+      int queueSize);
 
   /// Returns all MergeSource's for the specified splitGroupId and planNodeId.
   const std::vector<std::shared_ptr<MergeSource>>& getLocalMergeSources(
@@ -776,6 +776,9 @@ class Task : public std::enable_shared_from_this<Task> {
   /// The testing method returns true if any driver is blocked waiting for
   /// split.
   bool testingHasDriverWaitForSplit() const;
+
+  /// Returns true if all the splits have finished.
+  bool testingAllSplitsFinished();
 
  private:
   // Hook of system-wide running task list.

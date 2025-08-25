@@ -13,17 +13,20 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/common/process/ThreadDebugInfo.h"
 
-#include <folly/Unit.h>
-#include <folly/init/Init.h>
-#include <gtest/gtest.h>
+#pragma once
 
-// This main is needed for some tests on linux.
-int main(int argc, char** argv) {
-  testing::InitGoogleTest(&argc, argv);
-  // Signal handler required for ThreadDebugInfoTest
-  facebook::velox::process::addDefaultFatalSignalHandler();
-  folly::Init init(&argc, &argv, false);
-  return RUN_ALL_TESTS();
-}
+#include <unordered_map>
+#include "velox/common/base/RuntimeMetrics.h"
+
+namespace facebook::velox::exec {
+
+struct DriverStats {
+  static constexpr const char* kTotalPauseTime = "totalDriverPauseWallNanos";
+  static constexpr const char* kTotalOffThreadTime =
+      "totalDriverOffThreadWallNanos";
+
+  std::unordered_map<std::string, RuntimeMetric> runtimeStats;
+};
+
+} // namespace facebook::velox::exec

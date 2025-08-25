@@ -13,26 +13,20 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#pragma once
 
-#include "velox/runner/Runner.h"
+namespace facebook::velox::expression {
 
-namespace facebook::velox::runner {
+constexpr const char* kConjunt = "conjunct";
+constexpr const char* kAnd = "and";
+constexpr const char* kOr = "or";
+constexpr const char* kSwitch = "switch";
+constexpr const char* kIn = "in";
+constexpr const char* kIf = "if";
+constexpr const char* kFail = "fail";
+constexpr const char* kCoalesce = "coalesce";
+constexpr const char* kCast = "cast";
+constexpr const char* kTryCast = "try_cast";
+constexpr const char* kTry = "try";
 
-// static
-std::string Runner::stateString(Runner::State state) {
-  switch (state) {
-    case Runner::State::kInitialized:
-      return "initialized";
-    case Runner::State::kRunning:
-      return "running";
-    case Runner::State::kCancelled:
-      return "cancelled";
-    case Runner::State::kError:
-      return "error";
-    case Runner::State::kFinished:
-      return "finished";
-  }
-  return fmt::format("invalid state {}", static_cast<int32_t>(state));
-}
-
-} // namespace facebook::velox::runner
+} // namespace facebook::velox::expression

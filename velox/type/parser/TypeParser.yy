@@ -29,7 +29,8 @@
 
 %code
 {
-    #include <velox/type/parser/Scanner.h>
+    #include "velox/type/parser/Scanner.h"
+
     #define yylex(x) scanner->lex(x)
 }
 

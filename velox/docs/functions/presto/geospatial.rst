@@ -166,6 +166,19 @@ Spatial Operations
     Returns the bounding rectangular polygon of a ``geometry``. Empty input will
     result in empty output.
 
+.. function:: ST_ExteriorRing(geometry: Geometry) -> output: Geometry
+
+    Returns a LineString representing the exterior ring of the input polygon.
+    Empty or null inputs result in null output. Non-polygon types will return
+    an error.
+
+.. function:: expand_envelope(geometry: Geometry, distance: double) -> output: Geometry
+
+    Returns the bounding rectangular polygon of a geometry, expanded by a distance.
+    Empty geometries will return an empty polygon. Negative or NaN distances will
+    return an error. Positive infinity distances may lead to undefined results.
+
+
 Accessors
 ---------
 .. function:: ST_IsValid(geometry: Geometry) -> valid: bool
@@ -414,6 +427,18 @@ Accessors
 
     Returns an empty Point if the LineString is empty.
     Returns null if either the LineString or double is null.
+
+.. function:: geometry_as_geojson(geometry: Geometry) -> output: varchar
+
+    Returns the GeoJSON encoded defined by the input geometry. If the
+    geometry is atomic (non-multi) empty, this function would return null.
+    Null input returns null output.
+
+.. function:: geometry_from_geojson(geometry: varchar) -> output: geometry
+
+    Returns the geometry type object from the GeoJSON representation.
+    The geometry cannot be empty if it is an atomic (non-multi) geometry type.
+    Null input returns null output.
 
 Bing Tile Functions
 -------------------

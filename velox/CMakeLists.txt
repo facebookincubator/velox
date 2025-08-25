@@ -33,9 +33,7 @@ if(${VELOX_ENABLE_EXAMPLES} AND ${VELOX_ENABLE_EXPRESSION})
   add_subdirectory(examples)
 endif()
 
-if(${VELOX_ENABLE_BENCHMARKS} OR ${VELOX_ENABLE_BENCHMARKS_BASIC})
-  add_subdirectory(benchmarks)
-endif()
+add_subdirectory(benchmarks)
 
 if(${VELOX_ENABLE_EXPRESSION})
   add_subdirectory(expression)
@@ -59,10 +57,6 @@ add_subdirectory(connectors)
 
 if(${VELOX_ENABLE_EXEC})
   add_subdirectory(exec)
-  # Disable runner from pyvelox builds
-  if(${VELOX_BUILD_RUNNER})
-    add_subdirectory(runner)
-  endif()
 endif()
 
 if(${VELOX_ENABLE_DUCKDB})

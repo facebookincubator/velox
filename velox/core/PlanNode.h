@@ -74,14 +74,7 @@ class SortOrder {
     return nullsFirst_;
   }
 
-  bool operator==(const SortOrder& other) const {
-    return std::tie(ascending_, nullsFirst_) ==
-        std::tie(other.ascending_, other.nullsFirst_);
-  }
-
-  bool operator!=(const SortOrder& other) const {
-    return !(*this == other);
-  }
+  bool operator==(const SortOrder& other) const = default;
 
   std::string toString() const {
     return fmt::format(
@@ -948,6 +941,29 @@ class ParallelProjectNode : public core::AbstractProjectNode {
   const std::vector<std::string> exprNames_;
   const std::vector<std::vector<core::TypedExprPtr>> exprs_;
   const std::vector<std::string> noLoadIdentities_;
+};
+
+/// Variant of project node that contains only field accesses and dereferences,
+/// and does not materialize the input columns.  Used to split subfields of
+/// struct columns for later parallel processing.
+class LazyDereferenceNode : public core::ProjectNode {
+ public:
+  LazyDereferenceNode(
+      const PlanNodeId& id,
+      std::vector<std::string> names,
+      std::vector<TypedExprPtr> projections,
+      PlanNodePtr source)
+      : ProjectNode(
+            id,
+            std::move(names),
+            std::move(projections),
+            std::move(source)) {}
+
+  std::string_view name() const override {
+    return "LazyDereference";
+  }
+
+  static PlanNodePtr create(const folly::dynamic& obj, void* context);
 };
 
 using ParallelProjectNodePtr = std::shared_ptr<const ParallelProjectNode>;
@@ -3302,6 +3318,33 @@ struct BetweenIndexLookupCondition : public IndexLookupCondition {
 using BetweenIndexLookupConditionPtr =
     std::shared_ptr<BetweenIndexLookupCondition>;
 
+/// Represents EQUAL index lookup condition: 'key' = 'value'. 'value' must be a
+/// constant value with the same type as 'key'.
+struct EqualIndexLookupCondition : public IndexLookupCondition {
+  /// The value to compare against.
+  TypedExprPtr value;
+
+  EqualIndexLookupCondition(FieldAccessTypedExprPtr _key, TypedExprPtr _value)
+      : IndexLookupCondition(std::move(_key)), value(std::move(_value)) {
+    validate();
+  }
+
+  bool isFilter() const override;
+
+  folly::dynamic serialize() const override;
+
+  std::string toString() const override;
+
+  static IndexLookupConditionPtr create(
+      const folly::dynamic& obj,
+      void* context);
+
+ private:
+  void validate() const;
+};
+
+using EqualIndexLookupConditionPtr = std::shared_ptr<EqualIndexLookupCondition>;
+
 /// Represents index lookup join. Translates to an exec::IndexLookupJoin
 /// operator. Assumes the right input is a table scan source node that provides
 /// indexed table lookup for the left input with the specified join keys and
@@ -3351,28 +3394,6 @@ class IndexLookupJoinNode : public AbstractJoinNode {
       PlanNodePtr left,
       TableScanNodePtr right,
       RowTypePtr outputType);
-
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  IndexLookupJoinNode(
-      const PlanNodeId& id,
-      JoinType joinType,
-      const std::vector<FieldAccessTypedExprPtr>& leftKeys,
-      const std::vector<FieldAccessTypedExprPtr>& rightKeys,
-      const std::vector<IndexLookupConditionPtr>& joinConditions,
-      PlanNodePtr left,
-      TableScanNodePtr right,
-      RowTypePtr outputType)
-      : IndexLookupJoinNode(
-            id,
-            joinType,
-            leftKeys,
-            rightKeys,
-            joinConditions,
-            /*includeMatchColumn=*/false,
-            std::move(left),
-            std::move(right),
-            std::move(outputType)) {}
-#endif
 
   class Builder
       : public AbstractJoinNode::Builder<IndexLookupJoinNode, Builder> {
@@ -3760,6 +3781,144 @@ class OrderByNode : public PlanNode {
 };
 
 using OrderByNodePtr = std::shared_ptr<const OrderByNode>;
+
+/// Represents a spatial join between two geometries. Translates to an
+/// exec::SpatialJoinProbe and exec::SpatialJoinBuild. A separate
+/// pipeline is produced for the build side when generating exec::Operators.
+///
+/// Spatial join supports "local" spatial predicates, i.e. predicates that
+/// require defined proximity.  Examples include ST_Intersects or any of
+/// the DE-9IM predicates except for ST_Disjoint.  It also supports
+/// `ST_Distance(g1, g2) <= d`.
+///
+/// The local join index is a collection of bounding boxes for a quick
+/// check (either "no" or "maybe"), and the actual predicate must be
+/// checked for each candidate.
+///
+/// Currently only INNER joins are supported, but LEFT joins are planned.
+class SpatialJoinNode : public PlanNode {
+ public:
+  SpatialJoinNode(
+      const PlanNodeId& id,
+      JoinType joinType,
+      TypedExprPtr joinCondition,
+      PlanNodePtr left,
+      PlanNodePtr right,
+      RowTypePtr outputType);
+
+  class Builder {
+   public:
+    Builder() = default;
+
+    explicit Builder(const SpatialJoinNode& other) {
+      id_ = other.id();
+      joinType_ = other.joinType();
+      joinCondition_ = other.joinCondition();
+      VELOX_CHECK_EQ(other.sources().size(), 2);
+      left_ = other.sources()[0];
+      right_ = other.sources()[1];
+      outputType_ = other.outputType();
+    }
+
+    Builder& id(PlanNodeId id) {
+      id_ = std::move(id);
+      return *this;
+    }
+
+    Builder& joinType(JoinType joinType) {
+      joinType_ = joinType;
+      return *this;
+    }
+
+    Builder& joinCondition(TypedExprPtr joinCondition) {
+      joinCondition_ = std::move(joinCondition);
+      return *this;
+    }
+
+    Builder& left(PlanNodePtr left) {
+      left_ = std::move(left);
+      return *this;
+    }
+
+    Builder& right(PlanNodePtr right) {
+      right_ = std::move(right);
+      return *this;
+    }
+
+    Builder& outputType(RowTypePtr outputType) {
+      outputType_ = std::move(outputType);
+      return *this;
+    }
+
+    std::shared_ptr<SpatialJoinNode> build() const {
+      VELOX_USER_CHECK(id_.has_value(), "SpatialJoinNode id is not set");
+      VELOX_USER_CHECK(
+          left_.has_value(), "SpatialJoinNode left source is not set");
+      VELOX_USER_CHECK(
+          right_.has_value(), "SpatialJoinNode right source is not set");
+      VELOX_USER_CHECK(
+          outputType_.has_value(), "SpatialJoinNode outputType is not set");
+
+      return std::make_shared<SpatialJoinNode>(
+          id_.value(),
+          joinType_,
+          joinCondition_,
+          left_.value(),
+          right_.value(),
+          outputType_.value());
+    }
+
+   private:
+    std::optional<PlanNodeId> id_;
+    JoinType joinType_ = kDefaultJoinType;
+    TypedExprPtr joinCondition_;
+    std::optional<PlanNodePtr> left_;
+    std::optional<PlanNodePtr> right_;
+    std::optional<RowTypePtr> outputType_;
+  };
+
+  const std::vector<PlanNodePtr>& sources() const override {
+    return sources_;
+  }
+
+  void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
+      const override;
+
+  const RowTypePtr& outputType() const override {
+    return outputType_;
+  }
+
+  std::string_view name() const override {
+    return "SpatialJoin";
+  }
+
+  const TypedExprPtr& joinCondition() const {
+    return joinCondition_;
+  }
+
+  JoinType joinType() const {
+    return joinType_;
+  }
+
+  folly::dynamic serialize() const override;
+
+  /// If spatial join supports this join type.
+  static bool isSupported(JoinType joinType);
+
+  static PlanNodePtr create(const folly::dynamic& obj, void* context);
+
+ private:
+  static const JoinType kDefaultJoinType;
+
+  void addDetails(std::stringstream& stream) const override;
+
+  const JoinType joinType_;
+  const TypedExprPtr joinCondition_;
+  const std::vector<PlanNodePtr> sources_;
+  const RowTypePtr outputType_;
+};
+
+using SpatialJoinNodePtr = std::shared_ptr<const SpatialJoinNode>;
 
 class TopNNode : public PlanNode {
  public:
@@ -5149,6 +5308,9 @@ class PlanNodeVisitor {
   virtual void visit(
       const NestedLoopJoinNode& node,
       PlanNodeVisitorContext& ctx) const = 0;
+
+  virtual void visit(const SpatialJoinNode& node, PlanNodeVisitorContext& ctx)
+      const = 0;
 
   virtual void visit(const OrderByNode& node, PlanNodeVisitorContext& ctx)
       const = 0;
