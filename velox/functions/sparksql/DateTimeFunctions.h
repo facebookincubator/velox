@@ -20,6 +20,7 @@
 
 #include "velox/functions/lib/DateTimeFormatter.h"
 #include "velox/functions/lib/TimeUtils.h"
+#include "velox/functions/sparksql/TimestampUtils.h"
 #include "velox/type/TimestampConversion.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
@@ -170,8 +171,8 @@ struct UnixTimestampParseFunction {
     if (dateTimeResult.hasError()) {
       return false;
     }
-    (*dateTimeResult)
-        .timestamp.toGMTWithGapCorrection(*getTimeZone(*dateTimeResult));
+    toGMTWithGapCorrection(
+        (*dateTimeResult).timestamp, *getTimeZone(*dateTimeResult));
     result = (*dateTimeResult).timestamp.getSeconds();
     return true;
   }
@@ -255,8 +256,8 @@ struct UnixTimestampParseWithFormatFunction
     if (dateTimeResult.hasError()) {
       return false;
     }
-    (*dateTimeResult)
-        .timestamp.toGMTWithGapCorrection(*this->getTimeZone(*dateTimeResult));
+    toGMTWithGapCorrection(
+        (*dateTimeResult).timestamp, *this->getTimeZone(*dateTimeResult));
     result = (*dateTimeResult).timestamp.getSeconds();
     return true;
   }
@@ -269,7 +270,7 @@ struct UnixTimestampParseWithFormatFunction
 
   FOLLY_ALWAYS_INLINE void call(int64_t& result, const arg_type<Date>& input) {
     auto timestamp = Timestamp::fromDate(input);
-    timestamp.toGMTWithGapCorrection(*this->sessionTimeZone_);
+    toGMTWithGapCorrection(timestamp, *this->sessionTimeZone_);
 
     int64_t seconds = timestamp.getSeconds();
     // Spark converts days as microseconds and then divide it by 10e6 to get
@@ -374,7 +375,7 @@ struct ToUtcTimestampFunction {
         : tz::locateZone(std::string_view(timezone), false);
     VELOX_USER_CHECK_NOT_NULL(
         fromTimezone, "Unknown time zone: '{}'", timezone);
-    result.toGMTWithGapCorrection(*fromTimezone);
+    toGMTWithGapCorrection(result, *fromTimezone);
   }
 
  private:
@@ -458,8 +459,8 @@ struct GetTimestampFunction {
     if (dateTimeResult.hasError()) {
       return false;
     }
-    (*dateTimeResult)
-        .timestamp.toGMTWithGapCorrection(*getTimeZone(*dateTimeResult));
+    toGMTWithGapCorrection(
+        (*dateTimeResult).timestamp, *getTimeZone(*dateTimeResult));
     result = (*dateTimeResult).timestamp;
     return true;
   }

@@ -49,42 +49,26 @@ Timestamp Timestamp::now() {
   return fromMillis(epochMs);
 }
 
-namespace {
-int64_t toGMTCommon(const tz::TimeZone& zone, int64_t seconds, bool handleGap) {
+void Timestamp::toGMT(const tz::TimeZone& zone) {
   std::chrono::seconds sysSeconds;
 
   try {
-    sysSeconds = zone.to_sys(std::chrono::seconds(seconds));
+    sysSeconds = zone.to_sys(std::chrono::seconds(seconds_));
   } catch (const tzdb::ambiguous_local_time&) {
     // If the time is ambiguous, pick the earlier possibility to be consistent
     // with Presto.
     sysSeconds = zone.to_sys(
-        std::chrono::seconds(seconds), tz::TimeZone::TChoose::kEarliest);
+        std::chrono::seconds(seconds_), tz::TimeZone::TChoose::kEarliest);
   } catch (const tzdb::nonexistent_local_time& error) {
-    if (handleGap) {
-      sysSeconds = zone.to_sys(
-          zone.correct_nonexistent_time(std::chrono::seconds(seconds)));
-    } else {
-      // If the time does not exist, fail the conversion.
-      VELOX_USER_FAIL(error.what());
-    }
+    // If the time does not exist, fail the conversion.
+    VELOX_USER_FAIL(error.what());
   } catch (const std::invalid_argument& e) {
     // Invalid argument means we hit a conversion not supported by
     // external/date. Need to throw a RuntimeError so that try() statements do
     // not suppress it.
     VELOX_FAIL_UNSUPPORTED_INPUT_UNCATCHABLE(e.what());
   }
-  return sysSeconds.count();
-}
-
-} // namespace
-
-void Timestamp::toGMT(const tz::TimeZone& zone) {
-  seconds_ = toGMTCommon(zone, seconds_, false);
-}
-
-void Timestamp::toGMTWithGapCorrection(const tz::TimeZone& zone) {
-  seconds_ = toGMTCommon(zone, seconds_, true);
+  seconds_ = sysSeconds.count();
 }
 
 std::chrono::time_point<std::chrono::system_clock, std::chrono::milliseconds>
