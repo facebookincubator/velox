@@ -862,8 +862,10 @@ void testMapOfArraysGetter(const std::map<K, std::vector<V>>& inputs) {
 }
 
 TEST(VariantTest, mapOfArraysGetter) {
-  testMapOfArraysGetter<int32_t, float>({{1, {1.1f, 2.2f}}, {2, {3.3f}}, {3, {}}});
-  testMapOfArraysGetter<std::string, int64_t>({{"a", {1, 2}}, {"b", {}}, {"c", {3}}});
+  testMapOfArraysGetter<int32_t, float>(
+      {{1, {1.1f, 2.2f}}, {2, {3.3f}}, {3, {}}});
+  testMapOfArraysGetter<std::string, int64_t>(
+      {{"a", {1, 2}}, {"b", {}}, {"c", {3}}});
 }
 
 } // namespace
