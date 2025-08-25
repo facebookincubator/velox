@@ -747,14 +747,14 @@ TYPED_TEST(SimpleVectorCompareTest, compareDescNullsLast) {
   this->runTest({/*nullsFirst=*/false, /*ascending=*/false});
 }
 
-template <typename T, int32_t offset>
-inline T simd256_extract_value(xsimd::batch<T> simdValue) {
+template <typename T, int32_t offset, typename U>
+inline T simd256_extract_value(xsimd::batch<U> simdValue) {
   if constexpr (std::is_same_v<T, bool>) {
     static_assert(offset < 256);
     auto byte = xsimd::batch<uint8_t>(simdValue).get(offset / 8);
     return byte & (1 << (offset % 8));
   } else if constexpr (std::is_integral_v<T>) {
-    static_assert(offset < xsimd::batch<T>::size);
+    static_assert(offset < xsimd::batch<U>::size);
     return simdValue.get(offset);
   } else {
     VELOX_UNSUPPORTED(
@@ -770,7 +770,7 @@ template <typename T, int i>
 struct AssertSimdElement {
   static void eq(
       const std::vector<std::optional<T>>& expected,
-      xsimd::batch<T> simdBuffer,
+      simd::xbatch<T> simdBuffer,
       size_t base) {
     static_assert(i >= 0);
     if (base + i < expected.size()) {
@@ -806,7 +806,7 @@ struct CanSimd {
 };
 
 template <typename T>
-xsimd::batch<T> loadSIMDValueBufferAt(
+simd::xbatch<T> loadSIMDValueBufferAt(
     const SimpleVector<T>* outVector,
     size_t byteOffset) {
   switch (outVector->encoding()) {
@@ -886,16 +886,19 @@ class SimpleVectorSimdTypedTest : public SimpleVectorTest {
             2008 /* seed */);
 
         auto vector = maker_.encodedVector(encode, expected.data());
-        constexpr auto width = xsimd::batch<T>::size;
+
+        constexpr bool is_bool = std::is_same_v<T, bool>;
+        constexpr auto width = simd::xbatch<T>::size;
+        // Though sizeof(bool) = 1, while a bool only occupies 1 bit in
+        // SIMD.
+        constexpr auto element_bitwidth = is_bool ? 1 : sizeof(T) * 8;
 
         // TODO T71293360: determine SIMD behavior when index + SIMD register
         // width result exceeds the vector length
         for (size_t base = 0; base + width < vector->size(); base += width) {
           auto simdBuffer = loadSIMDValueBufferAt<T>(
               static_cast<SimpleVector<T>*>(vector.get()),
-              // Though sizeof(bool) = 1, while a bool only occupies 1 bit in
-              // SIMD.
-              std::is_same_v<T, bool> ? base / 8 : base * sizeof(T));
+              (base * element_bitwidth) / 8);
           AssertSimdElement<T, width - 1>::eq(
               expected.data(), simdBuffer, base);
         }
