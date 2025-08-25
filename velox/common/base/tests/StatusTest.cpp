@@ -124,6 +124,7 @@ Status returnNotOk(Status s) {
     return Status::OK();               \
   }
 
+STATUS_MACRO_TEST(EmptyMessage, VELOX_USER_RETURN_GT(2, 1));
 STATUS_MACRO_TEST(GT, VELOX_USER_RETURN_GT(2, 1, "User error occurred."));
 STATUS_MACRO_TEST(GE, VELOX_USER_RETURN_GE(2, 1, "User error occurred."));
 STATUS_MACRO_TEST(LT, VELOX_USER_RETURN_LT(1, 2, "User error occurred."));
@@ -168,6 +169,9 @@ TEST(StatusTest, statusMacros) {
       returnMacroCheck(),
       Status::UserError(
           "Reason: User error occurred.\nExpression: status.code() != StatusCode::kCancelled\n"));
+  ASSERT_EQ(
+      returnMacroEmptyMessage(),
+      Status::UserError("Reason: (2 vs. 1)\nExpression: 2 > 1\n"));
   ASSERT_EQ(
       returnMacroGT(),
       Status::UserError(
