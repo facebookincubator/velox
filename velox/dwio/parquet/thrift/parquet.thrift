@@ -40,6 +40,8 @@
 namespace cpp parquet.format
 namespace java org.apache.parquet.format
 
+include "thrift/annotation/thrift.thrift"
+
 /**
  * Types supported by Parquet.  These types are intended to be used in combination
  * with the encodings to control the on disk storage format.
@@ -580,6 +582,7 @@ struct DataPageHeaderV2 {
   definition_levels_byte_length + repetition_levels_byte_length + 1 and compressed_page_size (included)
   is compressed with the compression_codec.
   If missing it is considered compressed */
+  @thrift.AllowUnsafeOptionalCustomDefaultValue
   7: optional bool is_compressed = 1;
 
   /** optional statistics for the data in this page **/
