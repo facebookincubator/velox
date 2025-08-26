@@ -951,6 +951,52 @@ struct MillisToTimestampFunction {
   }
 };
 
+template <typename TExec>
+struct SecondsToTimestampFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  template <typename T>
+  FOLLY_ALWAYS_INLINE void call(out_type<Timestamp>& result, T seconds) {
+    if constexpr (std::is_integral_v<T>) {
+      result = Timestamp(static_cast<int64_t>(seconds), 0);
+    } else {
+      // Scale to microseconds using double, truncating toward zero.
+      const double microsD = static_cast<double>(seconds) * 1'000'000.0;
+
+      if (microsD >= kMaxMicrosD) {
+        result = Timestamp(kMaxSeconds, kMaxNanoseconds);
+        return;
+      } else if (microsD <= kMinMicrosD) {
+        result = Timestamp(kMinSeconds, kMinNanoseconds);
+        return;
+      }
+
+      const int64_t micros = static_cast<int64_t>(microsD);
+
+      // Split into whole seconds and remaining microseconds.
+      int64_t wholeSeconds = micros / util::kMicrosPerSec;
+      int64_t remainingMicros = micros % util::kMicrosPerSec;
+      if (remainingMicros < 0) {
+        wholeSeconds -= 1;
+        remainingMicros += util::kMicrosPerSec;
+      }
+
+      const int64_t nano = remainingMicros * 1'000;
+      result = Timestamp(wholeSeconds, nano);
+    }
+  }
+
+ private:
+  static constexpr double kMaxMicrosD =
+      static_cast<double>(std::numeric_limits<int64_t>::max());
+  static constexpr double kMinMicrosD =
+      static_cast<double>(std::numeric_limits<int64_t>::min());
+  static constexpr int64_t kMaxSeconds = 9223372036854LL;
+  static constexpr int64_t kMaxNanoseconds = 775807000LL;
+  static constexpr int64_t kMinSeconds = -9223372036855LL;
+  static constexpr int64_t kMinNanoseconds = 224192000LL;
+};
+
 template <typename T>
 struct TimestampDiffFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
