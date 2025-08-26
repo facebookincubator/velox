@@ -1020,6 +1020,7 @@ const cudf::ast::expression& buildInListExpr(
     cudf::ast::tree& tree,
     const cudf::ast::expression& columnRef,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
+    bool isNegated,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
   using Op = cudf::ast::ast_operator;
@@ -1037,13 +1038,19 @@ const cudf::ast::expression& buildInListExpr(
     scalars.emplace_back(std::make_unique<ScalarT>(value, true, stream, mr));
     auto const& literal = tree.push(
         cudf::ast::literal{*static_cast<ScalarT*>(scalars.back().get())});
-    auto const& equalExpr = tree.push(Operation{Op::EQUAL, columnRef, literal});
+    auto const& equalExpr = tree.push(
+        Operation{isNegated ? Op::NOT_EQUAL : Op::EQUAL, columnRef, literal});
     exprVec.push_back(&equalExpr);
   }
 
   const cudf::ast::expression* result = exprVec[0];
   for (size_t i = 1; i < exprVec.size(); ++i) {
-    result = &tree.push(Operation{Op::NULL_LOGICAL_OR, *result, *exprVec[i]});
+    if (isNegated) {
+      result =
+          &tree.push(Operation{Op::NULL_LOGICAL_AND, *result, *exprVec[i]});
+    } else {
+      result = &tree.push(Operation{Op::NULL_LOGICAL_OR, *result, *exprVec[i]});
+    }
   }
   return *result;
 }
@@ -1177,14 +1184,12 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
 
     case common::FilterKind::kBytesValues: {
       return buildInListExpr<common::BytesValues, cudf::string_scalar>(
-          filter, tree, columnRef, scalars, stream, mr);
+          filter, tree, columnRef, scalars, false, stream, mr);
     }
 
     case common::FilterKind::kNegatedBytesValues: {
-      auto const& expr =
-          buildInListExpr<common::NegatedBytesValues, cudf::string_scalar>(
-              filter, tree, columnRef, scalars, stream, mr);
-      return tree.push(Operation{Op::NOT, expr});
+      return buildInListExpr<common::NegatedBytesValues, cudf::string_scalar>(
+          filter, tree, columnRef, scalars, true, stream, mr);
     }
 
     case common::FilterKind::kDoubleRange: {
