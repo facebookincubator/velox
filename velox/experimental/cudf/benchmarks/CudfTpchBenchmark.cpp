@@ -24,6 +24,8 @@
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 
+#include <experimental/cudf/connectors/parquet/CudfHiveConnector.h>
+
 DECLARE_int64(max_coalesced_bytes);
 DECLARE_string(max_coalesced_distance_bytes);
 DECLARE_int32(parquet_prefetch_rowgroups);
@@ -48,10 +50,48 @@ DEFINE_int32(
     100000,
     "Preferred output batch size in rows for cudf operators.");
 
+DEFINE_bool(velox_cudf_table_scan, true, "Enable cuDF table scan");
+
 class CudfTpchBenchmark : public TpchBenchmark {
  public:
   void initialize() override {
     TpchBenchmark::initialize();
+
+    if (FLAGS_velox_cudf_table_scan) {
+      connector::unregisterConnectorFactory(
+          connector::hive::HiveConnectorFactory::kHiveConnectorName);
+      connector::unregisterConnector(
+          facebook::velox::exec::test::kHiveConnectorId);
+
+      // Add new values into the parquet configuration...
+      auto parquetConfigurationValues =
+          std::unordered_map<std::string, std::string>();
+      parquetConfigurationValues
+          [cudf_velox::connector::parquet::ParquetConfig::kMaxChunkReadLimit] =
+              std::to_string(FLAGS_cudf_chunk_read_limit);
+      parquetConfigurationValues
+          [cudf_velox::connector::parquet::ParquetConfig::kMaxPassReadLimit] =
+              std::to_string(FLAGS_cudf_pass_read_limit);
+      parquetConfigurationValues[cudf_velox::connector::parquet::ParquetConfig::
+                                     kAllowMismatchedParquetSchemas] =
+          std::to_string(true);
+      auto parquetProperties = std::make_shared<const config::ConfigBase>(
+          std::move(parquetConfigurationValues));
+
+      // Create parquet connector with config...
+      connector::registerConnectorFactory(
+          std::make_shared<
+              cudf_velox::connector::parquet::CudfHiveConnectorFactory>());
+      auto cudfHiveConnector =
+          connector::getConnectorFactory(
+              facebook::velox::connector::hive::HiveConnectorFactory::
+                  kHiveConnectorName)
+              ->newConnector(
+                  facebook::velox::exec::test::kHiveConnectorId,
+                  parquetProperties,
+                  ioExecutor_.get());
+      connector::registerConnector(cudfHiveConnector);
+    }
 
     // Enable cuDF operators
     cudf_velox::registerCudf();
@@ -83,8 +123,7 @@ class CudfTpchBenchmark : public TpchBenchmark {
       const exec::test::TpchPlan& plan) override {
     // TODO (dm): Figure out a way to enforce 1 split per file in
     // ParquetDataSource outside of this benchmark
-    if (facebook::velox::cudf_velox::cudfIsRegistered() &&
-        facebook::velox::cudf_velox::cudfTableScanEnabled()) {
+    if (FLAGS_velox_cudf_table_scan) {
       // TODO (dm): Instead of this, we can maybe use
       // makeHiveConnectorSplits(vector<shared_ptr<TempFilePath>>& filePaths)
       std::vector<std::shared_ptr<connector::ConnectorSplit>> result;
