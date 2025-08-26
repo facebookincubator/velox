@@ -742,8 +742,7 @@ class PlanBuilder {
           connector::CommitStrategy::kNoCommit);
 
   /// Add a TableWriteMergeNode.
-  PlanBuilder& tableWriteMerge(
-      const core::AggregationNodePtr& aggregationNode = nullptr);
+  PlanBuilder& tableWriteMerge();
 
   /// Add an AggregationNode representing partial aggregation with the
   /// specified grouping keys, aggregates and optional masks.

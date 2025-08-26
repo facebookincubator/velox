@@ -19,6 +19,7 @@ target_link_libraries(
 
 add_library(
   velox_exec_test_lib
+  AggregationResolver.cpp
   AssertQueryBuilder.cpp
   ArbitratorTestUtil.cpp
   HiveConnectorTestBase.cpp

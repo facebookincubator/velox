@@ -164,7 +164,7 @@ class TableWriterReplayerTest : public HiveConnectorTestBase {
                core::PlanNodePtr source) -> core::PlanNodePtr {
       std::shared_ptr<core::AggregationNode> aggNode = nullptr;
       if (aggregationNode == nullptr) {
-        aggNode = generateAggregationNode(
+        aggNode = generateColumnStatsSpec(
             "c0", nodeId, {}, core::AggregationNode::Step::kPartial, source);
       } else {
         aggNode = aggregationNode;
@@ -238,7 +238,7 @@ class TableWriterReplayerTest : public HiveConnectorTestBase {
     }
   }
 
-  static std::shared_ptr<core::AggregationNode> generateAggregationNode(
+  static std::shared_ptr<core::AggregationNode> generateColumnStatsSpec(
       const std::string& name,
       const core::PlanNodeId nodeId,
       const std::vector<core::FieldAccessTypedExprPtr>& groupingKeys,
