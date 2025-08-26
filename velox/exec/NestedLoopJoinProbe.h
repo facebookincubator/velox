@@ -153,6 +153,15 @@ class NestedLoopJoinProbe : public Operator {
         decodedFilterResult_.valueAt<bool>(i));
   }
 
+  // NestedLoopJoinProbe::getOutput() can be computationally expensive when
+  // processing large buildVectors_, as it iterates through all build rows for
+  // each probe row. The probe moves slowly through buildVectors_, making the
+  // numOutputRows_ >= outputBatchSize_ check harder to reach, which can cause
+  // driver threads to get stuck in long-running processing loops that exceed
+  // their allocated CPU time slice limits, preventing other tasks from being
+  // scheduled and degrading overall system responsiveness.
+  bool shouldYield() const;
+
   // Generates the next batch of a cross product between probe and build. It
   // should be used as the entry point, and will internally delegate to one of
   // the three functions below.
