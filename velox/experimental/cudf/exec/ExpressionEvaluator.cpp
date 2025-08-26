@@ -1216,6 +1216,7 @@ const cudf::ast::expression& buildInListExpr(
     cudf::ast::tree& tree,
     const cudf::ast::expression& columnRef,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
+    bool isNegated,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
   using Op = cudf::ast::ast_operator;
@@ -1233,15 +1234,82 @@ const cudf::ast::expression& buildInListExpr(
     scalars.emplace_back(std::make_unique<ScalarT>(value, true, stream, mr));
     auto const& literal = tree.push(
         cudf::ast::literal{*static_cast<ScalarT*>(scalars.back().get())});
-    auto const& equalExpr = tree.push(Operation{Op::EQUAL, columnRef, literal});
+    auto const& equalExpr = tree.push(
+        Operation{isNegated ? Op::NOT_EQUAL : Op::EQUAL, columnRef, literal});
     exprVec.push_back(&equalExpr);
   }
 
   const cudf::ast::expression* result = exprVec[0];
   for (size_t i = 1; i < exprVec.size(); ++i) {
-    result = &tree.push(Operation{Op::NULL_LOGICAL_OR, *result, *exprVec[i]});
+    if (isNegated) {
+      result =
+          &tree.push(Operation{Op::NULL_LOGICAL_AND, *result, *exprVec[i]});
+    } else {
+      result = &tree.push(Operation{Op::NULL_LOGICAL_OR, *result, *exprVec[i]});
+    }
   }
   return *result;
+}
+
+// Build an IN-list expression for integer columns where the filter values are
+// provided as int64_t but the column may be any integral type. Values outside
+// the target type's range are ignored. If all values are out of range, this
+// returns a constant false expression (col != col).
+template <TypeKind Kind>
+std::reference_wrapper<const cudf::ast::expression> buildIntegerInListExpr(
+    const common::Filter& filter,
+    cudf::ast::tree& tree,
+    std::vector<std::unique_ptr<cudf::scalar>>& scalars,
+    const cudf::ast::expression& columnRef,
+    rmm::cuda_stream_view /*stream*/,
+    rmm::device_async_resource_ref /*mr*/,
+    const TypePtr& columnTypePtr) {
+  using NativeT = typename TypeTraits<Kind>::NativeType;
+
+  if constexpr (std::is_integral_v<NativeT>) {
+    using Op = cudf::ast::ast_operator;
+    using Operation = cudf::ast::operation;
+
+    auto* valuesFilter =
+        static_cast<const common::BigintValuesUsingBitmask*>(&filter);
+    const auto& values = valuesFilter->values();
+
+    std::vector<const cudf::ast::expression*> exprVec;
+    exprVec.reserve(values.size());
+
+    for (const int64_t value : values) {
+      if (value < static_cast<int64_t>(std::numeric_limits<NativeT>::min()) ||
+          value > static_cast<int64_t>(std::numeric_limits<NativeT>::max())) {
+        // Skip values that cannot be represented in the column type.
+        continue;
+      }
+
+      variant veloxVariant = static_cast<NativeT>(value);
+      const auto& literal =
+          makeScalarAndLiteral<Kind>(columnTypePtr, veloxVariant, scalars);
+      auto const& cudfLiteral = tree.push(literal);
+      auto const& equalExpr =
+          tree.push(Operation{Op::EQUAL, columnRef, cudfLiteral});
+      exprVec.push_back(&equalExpr);
+    }
+
+    if (exprVec.empty()) {
+      // No representable values -> always false
+      auto const& alwaysFalse =
+          tree.push(Operation{Op::NOT_EQUAL, columnRef, columnRef});
+      return std::ref(alwaysFalse);
+    }
+
+    const cudf::ast::expression* result = exprVec[0];
+    for (size_t i = 1; i < exprVec.size(); ++i) {
+      result = &tree.push(Operation{Op::NULL_LOGICAL_OR, *result, *exprVec[i]});
+    }
+    return std::ref(*result);
+  } else {
+    VELOX_FAIL(
+        "Unsupported type for buildIntegerInListExpr: {}",
+        mapTypeKindToName(Kind));
+  }
 }
 
 } // namespace
@@ -1295,22 +1363,29 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
     }
 
     case common::FilterKind::kBigintValuesUsingBitmask: {
-      return buildInListExpr<
-          common::BigintValuesUsingBitmask,
-          cudf::numeric_scalar<int64_t>>(
-          filter, tree, columnRef, scalars, stream, mr);
+      auto const& columnType = inputRowSchema->childAt(columnIndex);
+      // Dispatch by the column's integer kind and cast filter values to it.
+      auto result = VELOX_DYNAMIC_TYPE_DISPATCH(
+          buildIntegerInListExpr,
+          columnType->kind(),
+          filter,
+          tree,
+          scalars,
+          columnRef,
+          stream,
+          mr,
+          columnType);
+      return result.get();
     }
 
     case common::FilterKind::kBytesValues: {
       return buildInListExpr<common::BytesValues, cudf::string_scalar>(
-          filter, tree, columnRef, scalars, stream, mr);
+          filter, tree, columnRef, scalars, false, stream, mr);
     }
 
     case common::FilterKind::kNegatedBytesValues: {
-      auto const& expr =
-          buildInListExpr<common::NegatedBytesValues, cudf::string_scalar>(
-              filter, tree, columnRef, scalars, stream, mr);
-      return tree.push(Operation{Op::NOT, expr});
+      return buildInListExpr<common::NegatedBytesValues, cudf::string_scalar>(
+          filter, tree, columnRef, scalars, true, stream, mr);
     }
 
     case common::FilterKind::kDoubleRange: {
