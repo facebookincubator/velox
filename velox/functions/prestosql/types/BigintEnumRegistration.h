@@ -16,15 +16,8 @@
 
 #pragma once
 
-namespace facebook::velox::functions::aggregate {
+namespace facebook::velox {
 
-/// Interface for randomization strategy. We will implement different
-/// randomization strategies in merging, enable-privacy and testing.
-class RandomizationStrategy {
- public:
-  virtual bool nextBoolean(double probability) = 0;
+void registerBigintEnumType();
 
-  virtual ~RandomizationStrategy() = default;
-};
-
-} // namespace facebook::velox::functions::aggregate
+} // namespace facebook::velox

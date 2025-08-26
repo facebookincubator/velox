@@ -12,12 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-velox_add_library(velox_functions_prestosql_aggregates_sfm SfmSketch.cpp
-                  SfmSketchAccumulator.cpp)
+add_executable(velox_presto_type_parser_test TypeParserTest.cpp)
 
-velox_link_libraries(velox_functions_prestosql_aggregates_sfm velox_common_base
-                     velox_memory Folly::folly)
+add_test(NAME velox_presto_type_parser_test
+         COMMAND velox_presto_type_parser_test)
 
-if(${VELOX_BUILD_TESTING})
-  add_subdirectory(tests)
-endif()
+target_link_libraries(
+  velox_presto_type_parser_test
+  velox_presto_type_parser
+  velox_presto_types
+  velox_type
+  GTest::gtest
+  GTest::gtest_main
+  GTest::gmock)
