@@ -597,7 +597,8 @@ void VectorFuzzer::fuzzOffsetsAndSizes(
     BufferPtr& offsets,
     BufferPtr& sizes,
     size_t elementsSize,
-    size_t size) {
+    size_t size,
+    bool isMapType) {
   offsets = allocateOffsets(size, pool_);
   sizes = allocateSizes(size, pool_);
   auto rawOffsets = offsets->asMutable<vector_size_t>();
@@ -619,9 +620,10 @@ void VectorFuzzer::fuzzOffsetsAndSizes(
       length = containerAvgLength;
     }
 
-    // If we exhausted the available elements, add empty arrays.
+    // If we exhausted the available elements, adjust length to fit remaining
+    // elements.
     if ((childSize + length) > elementsSize) {
-      length = 0;
+      length = elementsSize > childSize ? elementsSize - childSize : 0;
     }
     rawSizes[i] = length;
     childSize += length;
@@ -694,10 +696,330 @@ VectorPtr VectorFuzzer::normalizeMapKeys(
   return keys;
 }
 
+MapVectorPtr VectorFuzzer::ensureUniqueMapContent(
+    const VectorPtr& keys,
+    const VectorPtr& values,
+    vector_size_t size) {
+  // Use the original key and value types to maintain schema compatibility
+  TypePtr keyType = keys->type();
+  TypePtr valueType = values->type();
+
+  // Check if this map type has unsupported key/value types for unique content
+  // generation Boolean types only have 2 possible values, insufficient for
+  // generating unique content across many maps, so fall back to regular map
+  // generation
+  if (keyType->isBoolean() || valueType->isBoolean()) {
+    // Generate regular map with the provided keys and values without unique
+    // content
+    size_t elementsSize = std::min(keys->size(), values->size());
+    BufferPtr offsets, sizes;
+    fuzzOffsetsAndSizes(offsets, sizes, elementsSize, size);
+    return std::make_shared<MapVector>(
+        pool_,
+        MAP(keyType, valueType),
+        fuzzNulls(size),
+        size,
+        offsets,
+        sizes,
+        opts_.normalizeMapKeys ? normalizeMapKeys(keys, size, offsets, sizes)
+                               : keys,
+        values);
+  }
+
+  // Generate completely unique map content across all map instances
+  // This includes: global key uniqueness, global value uniqueness,
+  // global key-value pair uniqueness, and no duplicates within each map
+  std::vector<VectorPtr> allKeyElements;
+  std::vector<VectorPtr> allValueElements;
+  std::vector<vector_size_t> newOffsets(size);
+  std::vector<vector_size_t> newSizes(size);
+
+  // Global tracking to ensure complete uniqueness across ALL maps
+  std::unordered_set<uint64_t> globalSeenKeyHashes;
+  std::unordered_set<uint64_t> globalSeenValueHashes;
+  std::unordered_set<std::string> globalSeenKeyValuePairs;
+
+  vector_size_t currentOffset = 0;
+
+  for (vector_size_t mapIdx = 0; mapIdx < size; ++mapIdx) {
+    newOffsets[mapIdx] = currentOffset;
+
+    // Generate varied map sizes to ensure different maps have different
+    // structures Use prime numbers and different formulas to maximize variation
+    vector_size_t mapSize;
+    if (opts_.containerLength <= 1) {
+      mapSize = 1;
+    } else {
+      // Use different formulas for different maps to ensure variety
+      switch (mapIdx % 4) {
+        case 0:
+          mapSize = 1 + (mapIdx * 7) % opts_.containerLength;
+          break;
+        case 1:
+          mapSize = 1 + (mapIdx * 11 + 3) % opts_.containerLength;
+          break;
+        case 2:
+          mapSize = 1 + (mapIdx * 13 + 5) % opts_.containerLength;
+          break;
+        default:
+          mapSize = 1 + (mapIdx * 17 + 7) % opts_.containerLength;
+          break;
+      }
+      mapSize = std::max(
+          static_cast<vector_size_t>(1),
+          std::min(mapSize, static_cast<vector_size_t>(opts_.containerLength)));
+    }
+
+    // Generate unique key-value pairs for this map that are globally unique
+    std::vector<VectorPtr> mapKeyElements;
+    std::vector<VectorPtr> mapValueElements;
+
+    for (vector_size_t elemIdx = 0; elemIdx < mapSize; ++elemIdx) {
+      vector_size_t attempts = 0;
+      const vector_size_t maxAttempts = 10000;
+      bool foundUniqueContent = false;
+
+      while (!foundUniqueContent && attempts < maxAttempts) {
+        attempts++;
+
+        // Create highly varied seeds using multiple prime numbers and offsets
+        // to ensure maximum diversity across all maps and elements
+        auto baseSeed = rand<uint32_t>(rng_);
+        auto tempSeed = baseSeed + mapIdx * 1000003UL + // Large prime
+            elemIdx * 1000033UL + // Different large prime
+            attempts * 1000037UL + // Another large prime
+            size * 1000039UL + // Yet another large prime
+            currentOffset * 1000081UL + // More variation
+            (mapIdx * elemIdx) * 1000099UL + // Cross product for more variety
+            (mapIdx + elemIdx + attempts) * 1000117UL; // Additional entropy
+
+        // Create a temporary fuzzer with the unique seed
+        VectorFuzzer tempFuzzer(opts_, pool_, tempSeed);
+
+        // Generate a single key-value pair
+        auto singleKey = opts_.normalizeMapKeys || !opts_.containerHasNulls
+            ? tempFuzzer.fuzzFlatNotNull(keyType, 1)
+            : tempFuzzer.fuzzFlat(keyType, 1);
+        auto singleValue = opts_.containerHasNulls
+            ? tempFuzzer.fuzzFlat(valueType, 1)
+            : tempFuzzer.fuzzFlatNotNull(valueType, 1);
+
+        // Check if this key-value pair is globally unique
+        uint64_t keyHash = singleKey->hashValueAt(0);
+        uint64_t valueHash = singleValue->hashValueAt(0);
+
+        // Create a combined hash for the key-value pair
+        std::string keyValuePair =
+            std::to_string(keyHash) + "_" + std::to_string(valueHash);
+
+        if (globalSeenKeyHashes.find(keyHash) == globalSeenKeyHashes.end() &&
+            globalSeenValueHashes.find(valueHash) ==
+                globalSeenValueHashes.end() &&
+            globalSeenKeyValuePairs.find(keyValuePair) ==
+                globalSeenKeyValuePairs.end()) {
+          globalSeenKeyHashes.insert(keyHash);
+          globalSeenValueHashes.insert(valueHash);
+          globalSeenKeyValuePairs.insert(keyValuePair);
+
+          mapKeyElements.push_back(singleKey);
+          mapValueElements.push_back(singleValue);
+          foundUniqueContent = true;
+        }
+      }
+
+      // If we couldn't find globally unique content, force uniqueness using
+      // deterministic approach
+      if (!foundUniqueContent) {
+        // Create completely unique deterministic content based on global
+        // position
+        uint64_t globalElementIndex = currentOffset + elemIdx;
+
+        // Generate deterministic unique key
+        if (keyType->isVarchar()) {
+          std::string uniqueKey = "globally_unique_key_" +
+              std::to_string(globalElementIndex) + "_map_" +
+              std::to_string(mapIdx) + "_elem_" + std::to_string(elemIdx) +
+              "_attempt_" + std::to_string(attempts);
+
+          auto keyBuffer =
+              AlignedBuffer::allocate<char>(uniqueKey.size(), pool_);
+          std::memcpy(
+              keyBuffer->asMutable<char>(), uniqueKey.data(), uniqueKey.size());
+
+          auto keyVector = std::make_shared<FlatVector<StringView>>(
+              pool_,
+              VARCHAR(),
+              nullptr,
+              1,
+              nullptr,
+              std::vector<BufferPtr>{keyBuffer});
+          keyVector->set(
+              0, StringView(keyBuffer->as<char>(), uniqueKey.size()));
+
+          mapKeyElements.push_back(keyVector);
+        } else if (keyType->isInteger()) {
+          // Use global element index to ensure uniqueness across all maps
+          int32_t uniqueKeyValue = static_cast<int32_t>(
+              globalElementIndex * 1000000 + mapIdx * 1000 + elemIdx);
+          auto keyVector = BaseVector::create(INTEGER(), 1, pool_);
+          keyVector->asFlatVector<int32_t>()->set(0, uniqueKeyValue);
+          mapKeyElements.push_back(keyVector);
+        } else if (keyType->isBigint()) {
+          // Use global element index to ensure uniqueness across all maps
+          int64_t uniqueKeyValue =
+              static_cast<int64_t>(globalElementIndex) * 1000000000000LL +
+              static_cast<int64_t>(mapIdx) * 1000000LL + elemIdx;
+          auto keyVector = BaseVector::create(BIGINT(), 1, pool_);
+          keyVector->asFlatVector<int64_t>()->set(0, uniqueKeyValue);
+          mapKeyElements.push_back(keyVector);
+        } else {
+          // For other key types, use a globally unique seed
+          auto tempSeed = globalElementIndex * 2000000003UL +
+              mapIdx * 2000000011UL + elemIdx * 2000000017UL +
+              attempts * 2000000023UL;
+          VectorFuzzer tempFuzzer(opts_, pool_, tempSeed);
+          auto singleKey = opts_.normalizeMapKeys || !opts_.containerHasNulls
+              ? tempFuzzer.fuzzFlatNotNull(keyType, 1)
+              : tempFuzzer.fuzzFlat(keyType, 1);
+          mapKeyElements.push_back(singleKey);
+        }
+
+        // Generate corresponding globally unique value
+        if (valueType->isVarchar()) {
+          std::string uniqueValue = "globally_unique_value_" +
+              std::to_string(globalElementIndex) + "_map_" +
+              std::to_string(mapIdx) + "_elem_" + std::to_string(elemIdx) +
+              "_attempt_" + std::to_string(attempts);
+
+          auto valueBuffer =
+              AlignedBuffer::allocate<char>(uniqueValue.size(), pool_);
+          std::memcpy(
+              valueBuffer->asMutable<char>(),
+              uniqueValue.data(),
+              uniqueValue.size());
+
+          auto valueVector = std::make_shared<FlatVector<StringView>>(
+              pool_,
+              VARCHAR(),
+              nullptr,
+              1,
+              nullptr,
+              std::vector<BufferPtr>{valueBuffer});
+          valueVector->set(
+              0, StringView(valueBuffer->as<char>(), uniqueValue.size()));
+
+          mapValueElements.push_back(valueVector);
+        } else if (valueType->isRow()) {
+          // For ROW types, generate deterministic unique content for each field
+          const auto& rowType = valueType->asRow();
+          std::vector<VectorPtr> childVectors;
+          childVectors.reserve(rowType.size());
+
+          for (auto fieldIdx = 0; fieldIdx < rowType.size(); ++fieldIdx) {
+            const auto& fieldType = rowType.childAt(fieldIdx);
+            auto fieldSeed = globalElementIndex * 4000000007UL +
+                mapIdx * 4000000009UL + elemIdx * 4000000013UL +
+                fieldIdx * 4000000021UL + attempts * 4000000037UL;
+
+            VectorFuzzer fieldFuzzer(opts_, pool_, fieldSeed);
+            auto fieldVector = opts_.containerHasNulls
+                ? fieldFuzzer.fuzzFlat(fieldType, 1)
+                : fieldFuzzer.fuzzFlatNotNull(fieldType, 1);
+            childVectors.push_back(fieldVector);
+          }
+
+          auto rowVector = std::make_shared<RowVector>(
+              pool_, valueType, nullptr, 1, std::move(childVectors));
+          mapValueElements.push_back(rowVector);
+        } else {
+          // For other value types, use a globally unique seed
+          auto tempSeed = globalElementIndex * 3000000007UL +
+              mapIdx * 3000000013UL + elemIdx * 3000000019UL +
+              attempts * 3000000029UL;
+          VectorFuzzer tempFuzzer(opts_, pool_, tempSeed);
+          auto singleValue = opts_.containerHasNulls
+              ? tempFuzzer.fuzzFlat(valueType, 1)
+              : tempFuzzer.fuzzFlatNotNull(valueType, 1);
+          mapValueElements.push_back(singleValue);
+        }
+      }
+    }
+
+    // Add all elements for this map
+    for (size_t i = 0; i < mapKeyElements.size(); ++i) {
+      allKeyElements.push_back(mapKeyElements[i]);
+      allValueElements.push_back(mapValueElements[i]);
+    }
+
+    newSizes[mapIdx] = mapKeyElements.size();
+    currentOffset += mapKeyElements.size();
+  }
+
+  // Concatenate all key and value elements
+  VectorPtr newKeys;
+  VectorPtr newValues;
+
+  if (allKeyElements.empty()) {
+    newKeys = BaseVector::create(keyType, 0, pool_);
+    newValues = BaseVector::create(valueType, 0, pool_);
+  } else {
+    // Calculate total size for keys and values
+    vector_size_t totalKeySize = 0;
+    for (const auto& keyElement : allKeyElements) {
+      totalKeySize += keyElement->size();
+    }
+
+    // Create new vectors with the total size
+    newKeys = BaseVector::create(keyType, totalKeySize, pool_);
+    newValues = BaseVector::create(valueType, totalKeySize, pool_);
+
+    // Copy data from each element
+    vector_size_t copyOffset = 0;
+    for (size_t i = 0; i < allKeyElements.size(); ++i) {
+      const auto& keyElement = allKeyElements[i];
+      const auto& valueElement = allValueElements[i];
+
+      newKeys->copy(keyElement.get(), copyOffset, 0, keyElement->size());
+      newValues->copy(valueElement.get(), copyOffset, 0, valueElement->size());
+
+      copyOffset += keyElement->size();
+    }
+  }
+
+  // Create new offset and size buffers
+  auto newOffsetsBuffer = AlignedBuffer::allocate<vector_size_t>(size, pool_);
+  auto newSizesBuffer = AlignedBuffer::allocate<vector_size_t>(size, pool_);
+
+  auto rawNewOffsets = newOffsetsBuffer->asMutable<vector_size_t>();
+  auto rawNewSizes = newSizesBuffer->asMutable<vector_size_t>();
+
+  for (vector_size_t i = 0; i < size; ++i) {
+    rawNewOffsets[i] = newOffsets[i];
+    rawNewSizes[i] = newSizes[i];
+  }
+
+  return std::make_shared<MapVector>(
+      pool_,
+      MAP(keyType, valueType),
+      fuzzNulls(size),
+      size,
+      newOffsetsBuffer,
+      newSizesBuffer,
+      newKeys,
+      newValues);
+}
+
 MapVectorPtr VectorFuzzer::fuzzMap(
     const VectorPtr& keys,
     const VectorPtr& values,
     vector_size_t size) {
+  // If ensureUniqueMapContent is enabled, use it for complete uniqueness
+  // across all maps (keys, values, and key-value pairs)
+  if (opts_.ensureUniqueMapContent) {
+    return ensureUniqueMapContent(keys, values, size);
+  }
+
+  // Default map generation with possible duplicate keys and values
   size_t elementsSize = std::min(keys->size(), values->size());
   BufferPtr offsets, sizes;
   fuzzOffsetsAndSizes(offsets, sizes, elementsSize, size);
