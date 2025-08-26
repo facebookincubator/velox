@@ -1688,6 +1688,48 @@ TEST_F(TextReaderTest, nestedRows) {
   ASSERT_EQ(rowReader->next(10, result), 0);
 }
 
+TEST_F(TextReaderTest, date_type) {
+  auto type = ROW(
+      {{"col_date", DATE()}});
+
+  auto factory = dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
+  auto path = velox::test::getDataFilePath(
+      "velox/dwio/text/tests/reader/", "examples/date_file");
+  auto readFile = std::make_shared<LocalReadFile>(path);
+
+  auto readerOptions = dwio::common::ReaderOptions(pool());
+  readerOptions.setFileSchema(type);
+
+  auto input =
+      std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
+  auto reader = factory->createReader(std::move(input), readerOptions);
+
+  dwio::common::RowReaderOptions rowOptions;
+  setScanSpec(*type, rowOptions);
+
+  auto rowReader = reader->createRowReader(rowOptions);
+  VectorPtr result;
+
+  ASSERT_EQ(rowReader->next(5, result), 5);
+
+  ASSERT_EQ(*result->type(), *type);
+  auto vec = makeFlatVector<int32_t>({
+    DATE()->toDays("1970-1-1"),
+    DATE()->toDays("2000-1-1"),
+    DATE()->toDays("2025-1-1"),
+    0,
+    0
+  });
+  vec->setNull(3, true);
+  vec->setNull(4, true);
+  auto expected = makeRowVector({vec});
+
+  ASSERT_EQ(result->size(), expected->size());
+  for (int i = 0; i < expected->size(); ++i) {
+    ASSERT_TRUE(result->equalValueAt(expected.get(), i, i));
+  }
+}
+
 } // namespace
 
 } // namespace facebook::velox::text
