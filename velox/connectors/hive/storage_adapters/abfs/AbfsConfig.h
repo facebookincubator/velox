@@ -73,9 +73,12 @@ class AbfsConfig {
     return filePath_;
   }
 
-  /// Test only.
   std::string fileSystem() const {
     return fileSystem_;
+  }
+
+  std::string accountNameWithSuffix() const {
+    return accountNameWithSuffix_;
   }
 
   /// Test only.

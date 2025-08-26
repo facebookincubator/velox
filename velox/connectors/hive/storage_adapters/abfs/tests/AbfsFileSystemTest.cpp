@@ -289,3 +289,26 @@ TEST_F(AbfsFileSystemTest, registerAbfsFileSink) {
     ASSERT_TRUE(abfsWriteFile != nullptr);
   }
 }
+
+TEST_F(AbfsFileSystemTest, registerFileSystemFromCache) {
+  static const std::vector<std::string> paths = {
+      "abfs://test@test.dfs.core.windows.net/test",
+      "abfss://test@test.dfs.core.windows.net/test"};
+
+  std::unordered_map<std::string, std::string> config(
+      {{"fs.azure.account.key.test.dfs.core.windows.net", "NDU2"}});
+  auto hiveConfig =
+      std::make_shared<const config::ConfigBase>(std::move(config));
+
+  std::shared_ptr<filesystems::FileSystem> firstFs = nullptr;
+
+  for (const auto& path : paths) {
+    auto fs = filesystems::getFileSystem(path, hiveConfig);
+
+    if (!firstFs) {
+      firstFs = fs;
+    } else {
+      ASSERT_EQ(firstFs.get(), fs.get());
+    }
+  }
+}

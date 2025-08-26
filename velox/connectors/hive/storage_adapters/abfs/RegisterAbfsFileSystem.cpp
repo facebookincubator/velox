@@ -19,21 +19,72 @@
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsFileSystem.h" // @manual
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsUtil.h" // @manual
 #include "velox/dwio/common/FileSink.h"
+
+#include "velox/connectors/hive/storage_adapters/abfs/AbfsConfig.h"
 #endif
 
 namespace facebook::velox::filesystems {
 
 #ifdef VELOX_ENABLE_ABFS
-folly::once_flag abfsInitiationFlag;
 
-std::shared_ptr<FileSystem> abfsFileSystemGenerator(
-    std::shared_ptr<const config::ConfigBase> properties,
-    std::string_view filePath) {
-  static std::shared_ptr<FileSystem> filesystem;
-  folly::call_once(abfsInitiationFlag, [&properties]() {
-    filesystem = std::make_shared<AbfsFileSystem>(properties);
-  });
-  return filesystem;
+using FileSystemMap = folly::Synchronized<
+    std::unordered_map<std::string, std::shared_ptr<FileSystem>>>;
+
+/// Multiple ABFS filesystems are supported.
+FileSystemMap& gcsFileSystems() {
+  static FileSystemMap instances;
+  return instances;
+}
+
+std::function<std::shared_ptr<
+    FileSystem>(std::shared_ptr<const config::ConfigBase>, std::string_view)>
+abfsFileSystemGenerator() {
+  static auto filesystemGenerator =
+      [](std::shared_ptr<const config::ConfigBase> properties,
+         std::string_view filePath) {
+        auto abfsConfig = AbfsConfig(filePath, *properties);
+
+        auto cacheKey = fmt::format(
+            "{}-{}",
+            abfsConfig.fileSystem(),
+            properties->get<std::string>(
+                "fs.azure.blob-endpoint", abfsConfig.accountNameWithSuffix()));
+
+        // Check if an instance exists with a read lock (shared).
+        auto fs = gcsFileSystems().withRLock(
+            [&](auto& instanceMap) -> std::shared_ptr<FileSystem> {
+              auto iterator = instanceMap.find(cacheKey);
+              if (iterator != instanceMap.end()) {
+                return iterator->second;
+              }
+              return nullptr;
+            });
+        if (fs != nullptr) {
+          return fs;
+        }
+
+        return gcsFileSystems().withWLock(
+            [&](auto& instanceMap) -> std::shared_ptr<FileSystem> {
+              // Repeat the checks with a write lock.
+              auto iterator = instanceMap.find(cacheKey);
+              if (iterator != instanceMap.end()) {
+                return iterator->second;
+              }
+
+              std::shared_ptr<AbfsFileSystem> fs;
+              if (properties != nullptr) {
+                fs = std::make_shared<AbfsFileSystem>(properties);
+              } else {
+                fs = std::make_shared<AbfsFileSystem>(
+                    std::make_shared<config::ConfigBase>(
+                        std::unordered_map<std::string, std::string>()));
+              }
+
+              instanceMap.insert({cacheKey, fs});
+              return fs;
+            });
+      };
+  return filesystemGenerator;
 }
 
 std::unique_ptr<velox::dwio::common::FileSink> abfsWriteFileSinkGenerator(
@@ -54,7 +105,7 @@ std::unique_ptr<velox::dwio::common::FileSink> abfsWriteFileSinkGenerator(
 
 void registerAbfsFileSystem() {
 #ifdef VELOX_ENABLE_ABFS
-  registerFileSystem(isAbfsFile, std::function(abfsFileSystemGenerator));
+  registerFileSystem(isAbfsFile, abfsFileSystemGenerator());
   dwio::common::FileSink::registerFactory(
       std::function(abfsWriteFileSinkGenerator));
 #endif
