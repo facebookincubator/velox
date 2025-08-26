@@ -80,23 +80,6 @@ class HiveConnector : public Connector {
     return fileHandleFactory_.clearCache();
   }
 
-  /// Delegated DataSource creation
-  /// If a delegate is registered it will be invoked before the default
-  /// HiveDataSource is built. The delegate can return nullptr to signal that it
-  /// does not wish to handle the request.
-  using DataSourceDelegate =
-      std::function<std::unique_ptr<facebook::velox::connector::DataSource>(
-          const RowTypePtr& /*outputType*/,
-          const ConnectorTableHandlePtr& /*tableHandle*/,
-          const connector::ColumnHandleMap& /*columnHandles*/,
-          FileHandleFactory* /*fileHandleFactory*/,
-          folly::Executor* /*executor*/,
-          ConnectorQueryCtx* /*connectorQueryCtx*/,
-          const std::shared_ptr<const HiveConfig>& /*hiveConfig*/)>;
-
-  static void registerDataSourceDelegate(DataSourceDelegate delegate);
-  static DataSourceDelegate dataSourceDelegate_;
-
  protected:
   const std::shared_ptr<HiveConfig> hiveConfig_;
   FileHandleFactory fileHandleFactory_;

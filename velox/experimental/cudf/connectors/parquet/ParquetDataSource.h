@@ -130,7 +130,6 @@ class ParquetDataSource : public DataSource, public NvtxHelper {
 
   // Expression evaluator for subfield filter.
   std::vector<std::unique_ptr<cudf::scalar>> subfieldScalars_;
-  std::vector<const cudf::ast::expression*> subfieldFilterExprs_;
   cudf::ast::tree subfieldTree_;
   common::SubfieldFilters subfieldFilters_;
 

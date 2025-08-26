@@ -28,12 +28,6 @@ using namespace facebook::velox::exec;
 
 namespace facebook::velox::connector::hive {
 
-HiveConnector::DataSourceDelegate HiveConnector::dataSourceDelegate_ = nullptr;
-
-void HiveConnector::registerDataSourceDelegate(DataSourceDelegate delegate) {
-  dataSourceDelegate_ = std::move(delegate);
-}
-
 namespace {
 std::vector<std::unique_ptr<HiveConnectorMetadataFactory>>&
 hiveConnectorMetadataFactories() {
@@ -78,21 +72,6 @@ std::unique_ptr<DataSource> HiveConnector::createDataSource(
     const ConnectorTableHandlePtr& tableHandle,
     const std::unordered_map<std::string, ColumnHandlePtr>& columnHandles,
     ConnectorQueryCtx* connectorQueryCtx) {
-  // If a delegate is registered, give it the first chance to create a data
-  // source.  It may return nullptr to fallback to the default HiveDataSource.
-  if (dataSourceDelegate_) {
-    if (auto dataSource = dataSourceDelegate_(
-            outputType,
-            tableHandle,
-            columnHandles,
-            &fileHandleFactory_,
-            executor_,
-            connectorQueryCtx,
-            hiveConfig_)) {
-      return dataSource;
-    }
-  }
-
   return std::make_unique<HiveDataSource>(
       outputType,
       tableHandle,
