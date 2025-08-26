@@ -198,7 +198,11 @@ TEST_F(SubfieldFilterAstTest, DoubleRange) {
 TEST_F(SubfieldFilterAstTest, StringInList) {
   const std::string columnName = "c2";
   auto rowType = ROW({{columnName, VARCHAR()}});
-  std::vector<std::string> stringVals = {"apple", "cherry"};
+// Manually construct a VARCHAR column so IN-list values are guaranteed.
+  auto strings = makeFlatVector<std::string>(std::vector<std::string>{
+      "alpha", "zeta", "beta", "omega", "alpha", "beta"});
+  auto vec = makeRowVector({columnName}, {strings});
+  std::vector<std::string> stringVals = {"alpha", "beta"};
   auto filter =
       std::make_unique<common::BytesValues>(stringVals, /*nullAllowed*/ false);
 
@@ -213,14 +217,17 @@ TEST_F(SubfieldFilterAstTest, StringInList) {
       << "Scalar count mismatch for string IN list";
 
   // Execution validation
-  auto vec = makeTestVector(rowType, 100);
-  testFilterExecution(rowType, columnName, *filter, vec, expr);
+    testFilterExecution(rowType, columnName, *filter, vec, expr);
 }
 
 TEST_F(SubfieldFilterAstTest, StringNotInList) {
   const std::string columnName = "c2";
   auto rowType = ROW({{columnName, VARCHAR()}});
-  std::vector<std::string> stringVals = {"apple", "cherry"};
+// Manually construct a VARCHAR column and a NOT IN list.
+  auto strings = makeFlatVector<std::string>(std::vector<std::string>{
+      "alpha", "beta", "gamma", "delta", "alpha", "epsilon"});
+  auto vec = makeRowVector({columnName}, {strings});
+  std::vector<std::string> stringVals = {"alpha", "beta"};
   auto filter = std::make_unique<common::NegatedBytesValues>(
       stringVals, /*nullAllowed*/ false);
 
@@ -235,8 +242,7 @@ TEST_F(SubfieldFilterAstTest, StringNotInList) {
       << "Scalar count mismatch for string NOT IN list";
 
   // Execution validation
-  auto vec = makeTestVector(rowType, 100);
-  testFilterExecution(rowType, columnName, *filter, vec, expr);
+    testFilterExecution(rowType, columnName, *filter, vec, expr);
 }
 
 TEST_F(SubfieldFilterAstTest, StringRange) {
