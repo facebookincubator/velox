@@ -126,6 +126,15 @@ class VectorFuzzer {
     /// If true, generated map keys are normalized (unique and not-null).
     bool normalizeMapKeys{true};
 
+    /// Controls map content uniqueness. If true, ensures completely unique map
+    /// content across all map instances within the same vector, including:
+    /// - No duplicate keys across all maps (global key uniqueness)
+    /// - No duplicate values across all maps (global value uniqueness)
+    /// - No duplicate key-value pairs across all maps
+    /// - No duplicate keys within each individual map
+    /// If false, allows duplicate keys and values across and within maps.
+    bool ensureUniqueMapContent{false};
+
     /// Control the precision of timestamps generated. By default generate using
     /// nanoseconds precision.
     using TimestampPrecision = fuzzer::FuzzerTimestampPrecision;
@@ -261,6 +270,17 @@ class VectorFuzzer {
   /// this method throws if the keys vector has nulls.
   MapVectorPtr
   fuzzMap(const VectorPtr& keys, const VectorPtr& values, vector_size_t size);
+
+  /// Generates a map vector with unique content across all map instances.
+  /// When ensureUniqueMapContent is true, this ensures:
+  /// - No duplicate keys across all maps (global key uniqueness)
+  /// - No duplicate values across all maps (global value uniqueness)
+  /// - No duplicate key-value pairs across all maps
+  /// - No duplicate keys within each individual map
+  MapVectorPtr ensureUniqueMapContent(
+      const VectorPtr& keys,
+      const VectorPtr& values,
+      vector_size_t size);
 
   /// Returns a "fuzzed" row vector with randomized data and nulls.
   RowVectorPtr fuzzRow(const RowTypePtr& rowType);
@@ -416,7 +436,8 @@ class VectorFuzzer {
       BufferPtr& offsets,
       BufferPtr& sizes,
       size_t elementsSize,
-      size_t size);
+      size_t size,
+      bool isMapType = false);
 
   // Normalize a vector to be used as map key.
   // For each map element, if duplicate key values are found, remove them (and
