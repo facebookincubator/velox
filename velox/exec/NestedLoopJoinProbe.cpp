@@ -251,6 +251,11 @@ RowVectorPtr NestedLoopJoinProbe::getOutput() {
     // Generate actual join output by processing probe and build matches, and
     // probe mismaches (for left joins).
     output = generateOutput();
+
+    // Check if driver should yield to prevent getting stuck in long processing
+    if (FOLLY_UNLIKELY(shouldYield())) {
+      break;
+    }
   }
   return output;
 }
@@ -769,6 +774,10 @@ RowVectorPtr NestedLoopJoinProbe::getBuildMismatchedOutput(
   }
   return std::make_shared<RowVector>(
       pool(), outputType_, nullptr, numUnmatched, std::move(projectedChildren));
+}
+
+bool NestedLoopJoinProbe::shouldYield() const {
+  return operatorCtx_->driverCtx()->driver->shouldYield();
 }
 
 } // namespace facebook::velox::exec
