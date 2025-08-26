@@ -59,3 +59,9 @@ target_link_libraries(
   velox_presto_serializer
   velox_functions_prestosql
   velox_aggregates)
+
+if(VELOX_ENABLE_CUDF)
+  target_compile_definitions(velox_exec_test_lib PRIVATE VELOX_ENABLE_CUDF)
+  target_link_libraries(velox_exec_test_lib velox_cudf_exec
+                        velox_cudf_parquet_connector)
+endif()
