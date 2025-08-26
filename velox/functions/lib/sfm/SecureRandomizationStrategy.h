@@ -14,21 +14,21 @@
  * limitations under the License.
  */
 
-// Adapted from Apache Arrow:
-// https://github.com/apache/arrow/blob/apache-arrow-15.0.0/cpp/src/arrow/util/bpacking.h
-// Copyright 2016-2024 The Apache Software Foundation
-
 #pragma once
 
-#include "arrow/util/visibility.h"
+#include <folly/Random.h>
+#include "velox/functions/lib/sfm/RandomizationStrategy.h"
 
-#include <stdint.h>
+namespace facebook::velox::functions::sfm {
 
-namespace arrow::internal {
+/// A secure randomization strategy used to enable differential privacy for
+/// SfmSketch.
+class SecureRandomizationStrategy : public RandomizationStrategy {
+ public:
+  bool nextBoolean(double probability) override {
+    // folly random generate random number in [0, 1)
+    return folly::Random::secureRandDouble01() < probability;
+  }
+};
 
-ARROW_EXPORT
-int unpack32(const uint32_t* in, uint32_t* out, int batch_size, int num_bits);
-ARROW_EXPORT
-int unpack64(const uint8_t* in, uint64_t* out, int batch_size, int num_bits);
-
-} // namespace arrow::internal
+} // namespace facebook::velox::functions::sfm
