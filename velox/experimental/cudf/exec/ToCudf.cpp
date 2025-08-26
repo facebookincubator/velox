@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/connectors/parquet/CudfHiveConnector.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetDataSource.h"
 #include "velox/experimental/cudf/exec/CudfConversion.h"
 #include "velox/experimental/cudf/exec/CudfFilterProject.h"
@@ -47,7 +48,6 @@
 DEFINE_bool(velox_cudf_enabled, true, "Enable cuDF-Velox acceleration");
 DEFINE_string(velox_cudf_memory_resource, "async", "Memory resource for cuDF");
 DEFINE_bool(velox_cudf_debug, false, "Enable debug printing");
-DEFINE_bool(velox_cudf_table_scan, true, "Enable cuDF table scan");
 
 namespace facebook::velox::cudf_velox {
 
@@ -93,12 +93,25 @@ bool CompileState::compile() {
     return driverFactory_.consumerNode;
   };
 
-  const bool isParquetConnectorRegistered =
-      facebook::velox::connector::getAllConnectors().count("test-parquet") > 0;
-  auto isTableScanSupported =
-      [isParquetConnectorRegistered](const exec::Operator* op) {
-        return isAnyOf<exec::TableScan>(op) && cudfTableScanEnabled();
-      };
+  auto isTableScanSupported = [getPlanNode](const exec::Operator* op) {
+    if (!isAnyOf<exec::TableScan>(op)) {
+      return false;
+    }
+    auto tableScanNode = std::dynamic_pointer_cast<const core::TableScanNode>(
+        getPlanNode(op->planNodeId()));
+    VELOX_CHECK(tableScanNode != nullptr);
+    auto const& connector = velox::connector::getConnector(
+        tableScanNode->tableHandle()->connectorId());
+    auto cudfHiveConnector = std::dynamic_pointer_cast<
+        facebook::velox::cudf_velox::connector::parquet::CudfHiveConnector>(
+        connector);
+    if (!cudfHiveConnector) {
+      return false;
+    }
+    // TODO (dm): we need to ask CudfHiveConnector whether this table handle is
+    // supported by it. It may choose to produce a HiveDatasource.
+    return true;
+  };
 
   auto isFilterProjectSupported = [](const exec::Operator* op) {
     if (auto filterProjectOp = dynamic_cast<const exec::FilterProject*>(op)) {
@@ -337,41 +350,6 @@ void registerCudf(const CudfOptions& options) {
 
   registerBuiltinFunctions(options.prefix());
 
-  // Register delegate so HiveConnector can create GPU Parquet reader.
-  if (cudfTableScanEnabled()) {
-    facebook::velox::connector::hive::HiveConnector::registerDataSourceDelegate(
-        [](const facebook::velox::RowTypePtr& outputType,
-           const facebook::velox::connector::ConnectorTableHandlePtr&
-               tableHandle,
-           const facebook::velox::connector::ColumnHandleMap& columnHandles,
-           facebook::velox::FileHandleFactory* /*fileHandleFactory*/,
-           folly::Executor* executor,
-           facebook::velox::connector::ConnectorQueryCtx* connectorQueryCtx,
-           const std::shared_ptr<
-               const facebook::velox::connector::hive::HiveConfig>& hiveConfig)
-            -> std::unique_ptr<facebook::velox::connector::DataSource> {
-          auto hiveHandle = std::dynamic_pointer_cast<
-              const facebook::velox::connector::hive::HiveTableHandle>(
-              tableHandle);
-          if (!hiveHandle) {
-            return nullptr;
-          }
-
-          auto parquetConfig = std::make_shared<
-              facebook::velox::cudf_velox::connector::parquet::ParquetConfig>(
-              hiveConfig->config());
-
-          return std::make_unique<facebook::velox::cudf_velox::connector::
-                                      parquet::ParquetDataSource>(
-              outputType,
-              tableHandle,
-              columnHandles,
-              executor,
-              connectorQueryCtx,
-              parquetConfig);
-        });
-  }
-
   CUDF_FUNC_RANGE();
   cudaFree(nullptr); // Initialize CUDA context at startup
 
@@ -406,10 +384,6 @@ bool cudfIsRegistered() {
 
 bool cudfDebugEnabled() {
   return FLAGS_velox_cudf_debug;
-}
-
-bool cudfTableScanEnabled() {
-  return CudfOptions::getInstance().cudfTableScan;
 }
 
 } // namespace facebook::velox::cudf_velox
