@@ -403,7 +403,6 @@ core::PlanNodePtr PlanBuilder::TableWriterBuilder::build(core::PlanNodeId id) {
     VELOX_CHECK_EQ(
         aggregationNode->supportsBarrier(), aggregationNode->isPreGrouped());
   }
-
   const auto writeNode = std::make_shared<core::TableWriteNode>(
       id,
       outputType,
@@ -740,6 +739,22 @@ PlanBuilder& PlanBuilder::tableWrite(
       .endTableWriter();
 }
 
+namespace {
+// Finds the table writer source node rooted from 'node'.
+const core::TableWriteNodePtr findTableWrite(const core::PlanNodePtr planNode) {
+  if (auto writer =
+          std::dynamic_pointer_cast<const core::TableWriteNode>(planNode)) {
+    return writer;
+  }
+  for (const auto& source : planNode->sources()) {
+    if (auto writer = findTableWrite(source)) {
+      return writer;
+    }
+  }
+  return nullptr;
+}
+} // namespace
+
 PlanBuilder& PlanBuilder::tableWriteMerge(
     const core::AggregationNodePtr& aggregationNode) {
   planNode_ = std::make_shared<core::TableWriteMergeNode>(
@@ -752,7 +767,6 @@ PlanBuilder& PlanBuilder::tableWriteMerge(
 }
 
 namespace {
-
 std::string throwAggregateFunctionDoesntExist(const std::string& name) {
   std::stringstream error;
   error << "Aggregate function doesn't exist: " << name << ".";
@@ -876,7 +890,6 @@ class AggregateTypeResolver {
   const core::Expressions::TypeResolverHook previousHook_;
   std::vector<TypePtr> rawInputTypes_;
 };
-
 } // namespace
 
 core::PlanNodePtr PlanBuilder::createIntermediateOrFinalAggregation(
@@ -2324,8 +2337,8 @@ PlanBuilder& PlanBuilder::window(
   options.parseIntegerAsBigint = options_.parseIntegerAsBigint;
   for (const auto& windowString : windowFunctions) {
     const auto& windowExpr = duckdb::parseWindowExpr(windowString, options);
-    // All window function SQL strings in the list are expected to have the same
-    // PARTITION BY and ORDER BY clauses. Validate this assumption.
+    // All window function SQL strings in the list are expected to have the
+    // same PARTITION BY and ORDER BY clauses. Validate this assumption.
     if (first) {
       partitionKeys =
           parsePartitionKeys(windowExpr, windowString, inputType, pool_);
