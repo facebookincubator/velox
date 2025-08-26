@@ -59,6 +59,10 @@ set(BOOST_HEADER_ONLY
     uuid
     variant)
 list(APPEND BOOST_INCLUDE_LIBRARIES ${BOOST_HEADER_ONLY})
+if(VELOX_ENABLE_PARQUET)
+  # System Apache Thrift doesn't need them but bundled Apache Thrift needs them.
+  list(APPEND BOOST_INCLUDE_LIBRARIES algorithm tokenizer)
+endif()
 
 # The `headers` target is not created by Boost cmake and leads to a warning
 list(REMOVE_ITEM BOOST_INCLUDE_LIBRARIES headers)
