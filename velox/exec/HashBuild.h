@@ -204,6 +204,11 @@ class HashBuild final : public Operator {
   // not.
   bool nonReclaimableState() const;
 
+  // True if we have enough rows and not enough duplicate join keys, i.e. more
+  // than 'abandonBuildNoDuplicatesHashMinRows_' rows and more than
+  // 'abandonBuildNoDuplicatesHashMinPct_' % of rows are unique.
+  bool abandonBuildNoDupHashEarly(int64_t numDistinct) const;
+
   const std::shared_ptr<const core::HashJoinNode> joinNode_;
 
   const core::JoinType joinType_;
@@ -242,6 +247,9 @@ class HashBuild final : public Operator {
   // Container for the rows being accumulated.
   std::unique_ptr<BaseHashTable> table_;
 
+  // Used for building hash table while adding input rows.
+  std::unique_ptr<HashLookup> lookup_;
+
   // Key channels in 'input_'
   std::vector<column_index_t> keyChannels_;
 
@@ -268,6 +276,14 @@ class HashBuild final : public Operator {
   // True if this is a build side of an anti or left semi project join and has
   // at least one entry with null join keys.
   bool joinHasNullKeys_{false};
+
+  // Indicates whether drop duplicate rows. Rows containing duplicate keys
+  // can be removed for left semi and anti join.
+  const bool dropDuplicates_;
+
+  // Whether to abandon building a HashTable without duplicates in HashBuild
+  // addInput phase for left semi/anti join.
+  bool abandonBuildNoDupHash_{false};
 
   // The type used to spill hash table which might attach a boolean column to
   // record the probed flag if 'needProbedFlagSpill_' is true.
@@ -310,6 +326,19 @@ class HashBuild final : public Operator {
 
   // Maps key channel in 'input_' to channel in key.
   folly::F14FastMap<column_index_t, column_index_t> keyChannelMap_;
+
+  // Count the number of hash table input rows for building no duplicates
+  // hash table. It will not be updated after abandonBuildNoDupHash_ is true.
+  int64_t numHashInputRows_ = 0;
+
+  // Minimum number of rows to see before deciding to give up build no
+  // duplicates hash table.
+  const int32_t abandonBuildNoDupHashMinRows_;
+
+  // Min unique rows pct for give up build no duplicates hash table. If more
+  // than this many rows are unique, build hash table in addInput phase is not
+  // worthwhile.
+  const int32_t abandonBuildNoDupHashMinPct_;
 };
 
 inline std::ostream& operator<<(std::ostream& os, HashBuild::State state) {
