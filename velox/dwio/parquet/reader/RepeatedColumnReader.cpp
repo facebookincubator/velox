@@ -33,9 +33,6 @@ PageReader* readLeafRepDefs(
       return nullptr;
     }
     auto pageReader = reader->formatData().as<ParquetData>().reader();
-    if (pageReader == nullptr) {
-      return nullptr;
-    }
     pageReader->decodeRepDefs(numTop);
     return pageReader;
   }

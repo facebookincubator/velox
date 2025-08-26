@@ -1221,6 +1221,12 @@ TEST_F(TableScanTest, structMatchByName) {
 
   auto file = TempFilePath::create();
   writeToFile(file->getPath(), {vector});
+  createDuckDbTable({vector});
+
+  assertSelectUseColumnNames(
+      asRowType(vector->type()),
+      "SELECT id, name, address from tmp",
+      file->getPath());
 
   // Add one non-existing subfield 'middle' to the 'name' field and rename filed
   // 'address'.
@@ -1233,12 +1239,25 @@ TEST_F(TableScanTest, structMatchByName) {
       rowType, "SELECT 2, ('Janet', null, 'Jones'), null", file->getPath());
 
   // Filter pushdown on the non-existing field.
-  createDuckDbTable({vector});
   assertSelectUseColumnNames(
       rowType,
       "SELECT * from tmp where false",
       file->getPath(),
       "not(is_null(name.middle))");
+
+  // Rename subfields of the 'name' field.
+  rowType =
+      ROW({"id", "name", "address"},
+          {BIGINT(), ROW({"a", "b"}, {VARCHAR(), VARCHAR()}), VARCHAR()});
+  assertSelectUseColumnNames(
+      rowType, "SELECT 2, row(null, null), '567 Maple Drive'", file->getPath());
+
+  // Filter pushdown on the NULL subfield.
+  assertSelectUseColumnNames(
+      rowType,
+      "SELECT * from tmp where false",
+      file->getPath(),
+      "not(is_null(name.a))");
 
   // Deletion of one subfield from the 'name' field.
   rowType =
@@ -1274,6 +1293,79 @@ TEST_F(TableScanTest, structMatchByName) {
   const auto rows = result->as<RowVector>();
   const auto expected = makeRowVector(ROW({}, {}), 1);
   facebook::velox::test::assertEqualVectors(expected, rows->childAt(1));
+}
+
+TEST_F(TableScanTest, structMatchByIndex) {
+  const auto assertSelectUseIndex = [this](
+                                        const RowTypePtr& outputType,
+                                        const std::string& sql,
+                                        const std::string& filePath) {
+    const auto plan = PlanBuilder().tableScan(outputType, {}, "").planNode();
+    AssertQueryBuilder(plan, duckDbQueryRunner_)
+        .connectorSessionProperty(
+            kHiveConnectorId,
+            connector::hive::HiveConfig::kOrcUseColumnNamesSession,
+            "false")
+        .split(makeHiveConnectorSplit(filePath))
+        .assertResults(sql);
+  };
+
+  std::vector<int64_t> values = {2};
+  const auto id = makeFlatVector<int64_t>(values);
+  const auto name = makeRowVector(
+      {"first", "last"},
+      {
+          makeFlatVector<std::string>({"Janet"}),
+          makeFlatVector<std::string>({"Jones"}),
+      });
+  const auto address = makeFlatVector<std::string>({"567 Maple Drive"});
+  const auto vector =
+      makeRowVector({"id", "name", "address"}, {id, name, address});
+
+  const auto file = TempFilePath::create();
+  writeToFile(file->getPath(), {vector});
+  createDuckDbTable({vector});
+
+  assertSelectUseIndex(
+      asRowType(vector->type()),
+      "SELECT id, name, address from tmp",
+      file->getPath());
+
+  // Add one nonexisting subfield 'middle' to the 'name' field.
+  auto rowType =
+      ROW({"id", "name", "address"},
+          {BIGINT(),
+           ROW({"first", "middle", "last"}, {VARCHAR(), VARCHAR(), VARCHAR()}),
+           VARCHAR()});
+  assertSelectUseIndex(
+      rowType,
+      "SELECT 2, ('Janet', 'Jones', null), '567 Maple Drive'",
+      file->getPath());
+
+  // // Rename subfields of the 'name' field.
+  // rowType =
+  //     ROW({"id", "name", "address"},
+  //         {BIGINT(), ROW({"a", "b"}, {VARCHAR(), VARCHAR()}), VARCHAR()});
+  // loadData(file->getPath(), rowType, vector);
+  // assertSelectWithDataColumns(
+  //     {"id", "name", "address"},
+  //     rowType,
+  //     "SELECT 2, ('Janet', 'Jones'), '567 Maple Drive'");
+
+  // // Deletion of one subfield from the 'name' field.
+  // rowType =
+  //     ROW({"id", "name", "address"},
+  //         {BIGINT(), ROW({"full"}, {VARCHAR()}), VARCHAR()});
+  // loadData(file->getPath(), rowType, vector);
+  // EXPECT_THROW(
+  //     assertSelectWithDataColumns({"id", "name", "address"}, rowType, ""),
+  //     VeloxRuntimeError);
+
+  // // No subfield in the 'name' field.
+  // rowType = ROW({"id", "name", "address"}, {BIGINT(), ROW({}, {}),
+  // VARCHAR()}); loadData(file->getPath(), rowType, vector); EXPECT_THROW(
+  //     assertSelectWithDataColumns({"id", "name", "address"}, rowType, ""),
+  //     VeloxRuntimeError);
 }
 
 // Tests queries that use Lazy vectors with multiple layers of wrapping.

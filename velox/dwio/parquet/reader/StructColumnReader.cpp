@@ -43,10 +43,17 @@ StructColumnReader::StructColumnReader(
   auto& childSpecs = scanSpec_->stableChildren();
   const bool useColumnNames =
       columnReaderOptions.useColumnNamesForColumnMapping_;
+
+  if (useColumnNames && childSpecs.empty()) {
+    // No children to read, set the struct as null.
+    scanSpec_->setConstantValue(
+        BaseVector::createNullConstant(requestedType_, 1, &pool));
+  }
+
   std::vector<column_index_t> missingFields;
   for (auto i = 0; i < childSpecs.size(); ++i) {
     auto childSpec = childSpecs[i];
-    if (childSpec->isConstant() &&
+    if (childSpec->isConstant() ||
         (!useColumnNames && isChildMissing(*childSpec))) {
       childSpec->setSubscript(kConstantChildSpecSubscript);
       continue;
@@ -76,14 +83,14 @@ StructColumnReader::StructColumnReader(
   // mapping.
   if (missingFields.size() > 0) {
     // Set the struct as null if all the subfields in the requested type are
-    // missing and the number of subfields is more than one.
-    if (childSpecs.size() > 1 && missingFields.size() == childSpecs.size()) {
+    // missing.
+    if (missingFields.size() == childSpecs.size()) {
       scanSpec_->setConstantValue(
           BaseVector::createNullConstant(requestedType_, 1, &pool));
     } else {
       // Set null constant for the missing subfield of requested type.
       auto rowTypePtr = asRowType(requestedType_);
-      for (int channel : missingFields) {
+      for (column_index_t channel : missingFields) {
         childSpecs[channel]->setConstantValue(BaseVector::createNullConstant(
             rowTypePtr->findChild(childSpecs[channel]->fieldName()), 1, &pool));
       }

@@ -1248,7 +1248,7 @@ TEST_F(ParquetTableScanTest, structMatchByName) {
       ROW({"id", "name", "address"},
           {BIGINT(), ROW({"full"}, {VARCHAR()}), VARCHAR()});
   loadData(file->getPath(), rowType, vector);
-  assertSelectUseColumnNames(rowType, "SELECT 2, row(null), '567 Maple Drive'");
+  assertSelectUseColumnNames(rowType, "SELECT 2, null, '567 Maple Drive'");
 
   // Filter pushdown on the non-existing subfield.
   assertSelectUseColumnNames(
@@ -1256,23 +1256,8 @@ TEST_F(ParquetTableScanTest, structMatchByName) {
 
   // No subfield in the 'name' field.
   rowType = ROW({"id", "name", "address"}, {BIGINT(), ROW({}, {}), VARCHAR()});
-  const auto op = PlanBuilder()
-                      .startTableScan()
-                      .outputType(rowType)
-                      .dataColumns(rowType)
-                      .endTableScan()
-                      .planNode();
-  const auto split = makeSplit(file->getPath());
-  const auto result = AssertQueryBuilder(op)
-                          .connectorSessionProperty(
-                              kHiveConnectorId,
-                              HiveConfig::kParquetUseColumnNamesSession,
-                              "true")
-                          .split(split)
-                          .copyResults(pool());
-  const auto rows = result->as<RowVector>();
-  const auto expected = makeRowVector(ROW({}, {}), 1);
-  assertEqualVectors(expected, rows->childAt(1));
+  loadData(file->getPath(), rowType, vector);
+  assertSelectUseColumnNames(rowType, "SELECT 2, null, '567 Maple Drive'");
 
   // Case sensitivity when matching by name.
   vector = makeRowVector(
@@ -1307,6 +1292,65 @@ TEST_F(ParquetTableScanTest, structMatchByName) {
           "true")
       .splits(splits())
       .assertResults("SELECT 2, ('Janet', null, 'Jones'), '567 Maple Drive'");
+}
+
+TEST_F(ParquetTableScanTest, structMatchByIndex) {
+  std::vector<int64_t> values = {2};
+  const auto id = makeFlatVector<int64_t>(values);
+  const auto name = makeRowVector(
+      {"first", "last"},
+      {
+          makeFlatVector<std::string>({"Janet"}),
+          makeFlatVector<std::string>({"Jones"}),
+      });
+  const auto address = makeFlatVector<std::string>({"567 Maple Drive"});
+  const auto vector =
+      makeRowVector({"id", "name", "address"}, {id, name, address});
+
+  WriterOptions options;
+  const auto file = TempFilePath::create();
+  writeToParquetFile(file->getPath(), {vector}, options);
+
+  loadData(file->getPath(), asRowType(vector->type()), vector);
+  assertSelect({"id", "name", "address"}, "SELECT id, name, address from tmp");
+
+  // Add one nonexisting subfield 'middle' to the 'name' field.
+  auto rowType =
+      ROW({"id", "name", "address"},
+          {BIGINT(),
+           ROW({"first", "middle", "last"}, {VARCHAR(), VARCHAR(), VARCHAR()}),
+           VARCHAR()});
+  loadData(file->getPath(), rowType, vector);
+  assertSelectWithDataColumns(
+      {"id", "name", "address"},
+      rowType,
+      "SELECT 2, ('Janet', 'Jones', null), '567 Maple Drive'");
+
+  // Rename subfields of the 'name' field.
+  rowType =
+      ROW({"id", "name", "address"},
+          {BIGINT(), ROW({"a", "b"}, {VARCHAR(), VARCHAR()}), VARCHAR()});
+  loadData(file->getPath(), rowType, vector);
+  assertSelectWithDataColumns(
+      {"id", "name", "address"},
+      rowType,
+      "SELECT 2, ('Janet', 'Jones'), '567 Maple Drive'");
+
+  // Deletion of one subfield from the 'name' field.
+  rowType =
+      ROW({"id", "name", "address"},
+          {BIGINT(), ROW({"full"}, {VARCHAR()}), VARCHAR()});
+  loadData(file->getPath(), rowType, vector);
+  EXPECT_THROW(
+      assertSelectWithDataColumns({"id", "name", "address"}, rowType, ""),
+      VeloxRuntimeError);
+
+  // No subfield in the 'name' field.
+  rowType = ROW({"id", "name", "address"}, {BIGINT(), ROW({}, {}), VARCHAR()});
+  loadData(file->getPath(), rowType, vector);
+  EXPECT_THROW(
+      assertSelectWithDataColumns({"id", "name", "address"}, rowType, ""),
+      VeloxRuntimeError);
 }
 
 TEST_F(ParquetTableScanTest, deltaByteArray) {
