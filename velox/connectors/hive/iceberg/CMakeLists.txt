@@ -14,6 +14,8 @@
 
 velox_add_library(
   velox_hive_iceberg_splitreader
+  IcebergColumnHandle.cpp
+  DataFileStatsCollector.cpp
   IcebergDataSink.cpp
   IcebergPartitionIdGenerator.cpp
   IcebergSplit.cpp
