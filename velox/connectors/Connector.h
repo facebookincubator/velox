@@ -590,7 +590,7 @@ class Connector {
   /// ConnectorSplit in addSplit(). If so, TableScan can preload splits
   /// so that file opening and metadata operations are off the Driver'
   /// thread.
-  virtual bool supportsSplitPreload() {
+  virtual bool supportsSplitPreload() const {
     return false;
   }
 

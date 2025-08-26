@@ -54,7 +54,7 @@ class HiveConnector : public Connector {
       const connector::ColumnHandleMap& columnHandles,
       ConnectorQueryCtx* connectorQueryCtx) override;
 
-  bool supportsSplitPreload() override {
+  bool supportsSplitPreload() const override {
     return true;
   }
 
