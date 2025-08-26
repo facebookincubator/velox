@@ -113,6 +113,16 @@ class SubfieldFilterAstTest : public OperatorTestBase {
             veloxExpected = filter.testInt64(static_cast<int64_t>(v));
             break;
           }
+          case TypeKind::SMALLINT: {
+            auto v = fieldVec->asFlatVector<int16_t>()->valueAt(i);
+            veloxExpected = filter.testInt64(static_cast<int64_t>(v));
+            break;
+          }
+          case TypeKind::TINYINT: {
+            auto v = fieldVec->asFlatVector<int8_t>()->valueAt(i);
+            veloxExpected = filter.testInt64(static_cast<int64_t>(v));
+            break;
+          }
           case TypeKind::DOUBLE: {
             auto v = fieldVec->asFlatVector<double>()->valueAt(i);
             veloxExpected = filter.testDouble(v);
@@ -159,30 +169,6 @@ TEST_F(SubfieldFilterAstTest, Int32RangeInclusive) {
       createAstFromSubfieldFilter(subfield, *filter, tree, scalars, rowType);
   ASSERT_GT(tree.size(), 0UL) << "No expressions created for test";
   EXPECT_LE(scalars.size(), 2UL) << "Too many scalars for range filter";
-
-  // Execution validation
-  auto vec = makeTestVector(rowType, 100);
-  testFilterExecution(rowType, columnName, *filter, vec, expr);
-}
-
-TEST_F(SubfieldFilterAstTest, Int64InList) {
-  const std::string columnName = "c0";
-  auto rowType = ROW({{columnName, BIGINT()}});
-  std::vector<int64_t> inVals = {1, 2, 5, 7};
-  int64_t min = *std::min_element(inVals.begin(), inVals.end());
-  int64_t max = *std::max_element(inVals.begin(), inVals.end());
-  auto filter = std::make_unique<common::BigintValuesUsingBitmask>(
-      min, max, inVals, /*nullAllowed*/ false);
-
-  // AST validation
-  common::Subfield subfield(columnName);
-  cudf::ast::tree tree;
-  std::vector<std::unique_ptr<cudf::scalar>> scalars;
-  const auto& expr =
-      createAstFromSubfieldFilter(subfield, *filter, tree, scalars, rowType);
-  ASSERT_GT(tree.size(), 0UL) << "No expressions created for test";
-  EXPECT_EQ(scalars.size(), inVals.size())
-      << "Scalar count mismatch for IN list";
 
   // Execution validation
   auto vec = makeTestVector(rowType, 100);
@@ -589,5 +575,105 @@ TEST_F(SubfieldFilterAstTest, MultipleSubfieldFilters) {
     EXPECT_EQ(expected, got) << "Mismatch at row " << i;
   }
 }
+
+struct IntInListCase {
+  TypeKind kind;
+  std::vector<int64_t> values;
+  const char* name;
+};
+
+class IntInListParamTest : public SubfieldFilterAstTest,
+                           public ::testing::WithParamInterface<IntInListCase> {
+};
+
+static bool isRepresentableForKind(int64_t v, TypeKind kind) {
+  switch (kind) {
+    case TypeKind::TINYINT:
+      return v >= std::numeric_limits<int8_t>::min() &&
+          v <= std::numeric_limits<int8_t>::max();
+    case TypeKind::SMALLINT:
+      return v >= std::numeric_limits<int16_t>::min() &&
+          v <= std::numeric_limits<int16_t>::max();
+    case TypeKind::INTEGER:
+      return v >= std::numeric_limits<int32_t>::min() &&
+          v <= std::numeric_limits<int32_t>::max();
+    case TypeKind::BIGINT:
+      return true;
+    default:
+      return false;
+  }
+}
+
+static TypePtr buildTypeForKind(TypeKind kind) {
+  switch (kind) {
+    case TypeKind::TINYINT:
+      return TINYINT();
+    case TypeKind::SMALLINT:
+      return SMALLINT();
+    case TypeKind::INTEGER:
+      return INTEGER();
+    case TypeKind::BIGINT:
+      return BIGINT();
+    default:
+      VELOX_FAIL("Unsupported kind for IntInListParamTest");
+  }
+}
+
+TEST_P(IntInListParamTest, InListParam) {
+  const auto& p = GetParam();
+  const std::string columnName = "c0";
+  auto rowType = ROW({{columnName, buildTypeForKind(p.kind)}});
+
+  int64_t min = *std::min_element(p.values.begin(), p.values.end());
+  int64_t max = *std::max_element(p.values.begin(), p.values.end());
+  auto filter = std::make_unique<common::BigintValuesUsingBitmask>(
+      min, max, p.values, /*nullAllowed*/ false);
+
+  common::Subfield subfield(columnName);
+  cudf::ast::tree tree;
+  std::vector<std::unique_ptr<cudf::scalar>> scalars;
+  const auto& expr =
+      createAstFromSubfieldFilter(subfield, *filter, tree, scalars, rowType);
+  ASSERT_GT(tree.size(), 0UL);
+
+  size_t expectedScalars = 0;
+  for (auto v : p.values) {
+    if (isRepresentableForKind(v, p.kind)) {
+      expectedScalars++;
+    }
+  }
+  EXPECT_EQ(scalars.size(), expectedScalars)
+      << "Scalar count mismatch for IN list with kind "
+      << mapTypeKindToName(p.kind);
+
+  auto vec = makeTestVector(rowType, 100);
+  testFilterExecution(rowType, columnName, *filter, vec, expr);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    IntegerInList,
+    IntInListParamTest,
+    ::testing::Values(
+        IntInListCase{TypeKind::BIGINT, {1, 2, 5, 7}, "BigintBasic"},
+        IntInListCase{TypeKind::INTEGER, {1, 2, 5, 7}, "Int32Basic"},
+        IntInListCase{TypeKind::SMALLINT, {-10, 0, 32767}, "SmallIntBasic"},
+        IntInListCase{TypeKind::TINYINT, {-128, 0, 127}, "TinyIntBasic"},
+        IntInListCase{
+            TypeKind::INTEGER,
+            {static_cast<int64_t>(std::numeric_limits<int32_t>::max()),
+             static_cast<int64_t>(std::numeric_limits<int32_t>::max()) + 1},
+            "Int32MixedOutOfRange"},
+        IntInListCase{
+            TypeKind::SMALLINT,
+            {static_cast<int64_t>(std::numeric_limits<int16_t>::max()) + 1000,
+             static_cast<int64_t>(std::numeric_limits<int16_t>::min()) - 1000},
+            "SmallIntAllOutOfRange"},
+        IntInListCase{
+            TypeKind::TINYINT,
+            {1000, -1000},
+            "TinyIntAllOutOfRange"}),
+    [](const ::testing::TestParamInfo<IntInListCase>& info) {
+      return std::string(info.param.name);
+    });
 
 } // namespace
