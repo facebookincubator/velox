@@ -2047,6 +2047,23 @@ TEST_P(MultiThreadedHashJoinTest, rightJoin) {
       .joinOutputLayout({"c0", "c1", "u_c1"})
       .referenceQuery(
           "SELECT t.c0, t.c1, u.c1 FROM t RIGHT JOIN u ON t.c0 = u.c0")
+      .verifier([&](const std::shared_ptr<Task>& task, bool /*unused*/) {
+        int nullJoinBuildKeyCount = 0;
+        int nullJoinProbeKeyCount = 0;
+
+        for (auto& pipeline : task->taskStats().pipelineStats) {
+          for (auto op : pipeline.operatorStats) {
+            if (op.operatorType == "CudfHashJoinBuild") {
+              nullJoinBuildKeyCount += op.numNullKeys;
+            }
+            if (op.operatorType == "CudfHashJoinProbe") {
+              nullJoinProbeKeyCount += op.numNullKeys;
+            }
+          }
+        }
+        ASSERT_GT(nullJoinBuildKeyCount, 0);
+        ASSERT_GT(nullJoinProbeKeyCount, 0);
+      })
       .run();
 }
 
