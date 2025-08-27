@@ -282,7 +282,8 @@ struct UnixTimestampParseWithFormatFunction
     // For timestamp input, the format parameter is ignored as per Spark behavior.
     // This is documented in Spark: "If the first parameter is a Date or Timestamp 
     // instead of String, we will ignore the second parameter."
-    result = input.getSeconds();
+    // Reuse the existing timestamp-only implementation.
+    call(result, input);
   }
 
   FOLLY_ALWAYS_INLINE void call(int64_t& result, const arg_type<Date>& input) {
