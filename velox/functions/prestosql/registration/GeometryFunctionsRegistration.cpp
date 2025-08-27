@@ -162,11 +162,28 @@ void registerAccessors(const std::string& prefix) {
       FlattenGeometryCollectionsFunction,
       Array<Geometry>,
       Geometry>({{prefix + "flatten_geometry_collections"}});
+  registerFunction<
+      GreatCircleDistanceFunction,
+      double,
+      double,
+      double,
+      double,
+      double>({{prefix + "great_circle_distance"}});
 }
 
 void registerBingTileGeometryFunctions(const std::string& prefix) {
   registerFunction<BingTilePolygonFunction, Geometry, BingTile>(
       {{prefix + "bing_tile_polygon"}});
+  registerFunction<
+      GeometryToBingTilesFunction,
+      Array<BingTile>,
+      Geometry,
+      int32_t>({{prefix + "geometry_to_bing_tiles"}});
+  registerFunction<
+      GeometryToDissolvedBingTilesFunction,
+      Array<BingTile>,
+      Geometry,
+      int32_t>({{prefix + "geometry_to_dissolved_bing_tiles"}});
 }
 
 } // namespace
