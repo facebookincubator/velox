@@ -57,7 +57,7 @@ class S3FileSystemBenchmark {
     addBucket(bucketName);
     const auto s3File = s3URI(bucketName, file.c_str());
     auto hiveConfig = minioServer_->hiveConfig(
-        {{"hive.s3.uploadPartAsync",
+        {{"hive.s3.upload-part-async",
           enableUploadPartAsync ? "true" : "false"}});
     filesystems::S3FileSystem s3fs(bucketName, hiveConfig);
     suspender.dismiss();
