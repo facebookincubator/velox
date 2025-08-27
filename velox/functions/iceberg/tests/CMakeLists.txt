@@ -24,12 +24,8 @@ target_link_libraries(
   velox_functions_iceberg_test
   velox_functions_iceberg
   velox_functions_test_lib
-  velox_is_null_functions
-  velox_exec_test_lib
   velox_expression
   velox_memory
-  velox_dwio_common_test_utils
   GTest::gtest
   GTest::gtest_main
-  GTest::gmock
 )
