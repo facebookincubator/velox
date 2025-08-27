@@ -11,19 +11,18 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-add_executable(velox_s3FileSystem_benchmark
-        S3FileSystemBenchmark.cpp)
+add_executable(velox_s3FileSystem_benchmark S3FileSystemBenchmark.cpp)
 
 add_test(velox_s3FileSystem_benchmark velox_s3FileSystem_benchmark)
 target_link_libraries(
-        velox_s3FileSystem_benchmark
-        velox_file
-        velox_s3fs
-        velox_core
-        velox_exec_test_lib
-        velox_dwio_common_exception
-        velox_exec
-        GTest::gtest
-        Folly::folly
-        Folly::follybenchmark
-        GTest::gtest_main)
+  velox_s3FileSystem_benchmark
+  velox_file
+  velox_s3fs
+  velox_core
+  velox_exec_test_lib
+  velox_dwio_common_exception
+  velox_exec
+  GTest::gtest
+  Folly::folly
+  Folly::follybenchmark
+  GTest::gtest_main)

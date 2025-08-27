@@ -229,11 +229,71 @@ void registerCredentialsProvider(
   });
 }
 
-bool S3FileSystem::uploadPartAsyncEnabled = false;
-size_t S3FileSystem::kPartUploadSize = 10485760;
-size_t S3FileSystem::writeFileSemaphore = 4;
-std::shared_ptr<folly::CPUThreadPoolExecutor> S3FileSystem::uploadThreadPool_ =
-    nullptr;
+std::shared_ptr<S3UploadManager> S3UploadManager::instance_ = nullptr;
+S3UploadManager::S3UploadManager(const S3Config& s3Config) {
+  uploadPartAsyncEnabled = s3Config.uploadPartAsync();
+  setPartUploadSize(s3Config.partUploadSize().value_or(kDefaultPartUploadSize));
+  setWriteFileSemaphoreNum(
+      s3Config.writeFileSemaphoreNum().value_or(kDefaultWriteFileSemaphore));
+  setUploadThreadPool(s3Config.uploadThreads().value_or(kDefaultUploadThreads));
+}
+
+std::shared_ptr<S3UploadManager> S3UploadManager::getInstance(
+    const S3Config& s3Config) {
+#ifndef NDEBUG
+  // In debug mode, always create a new S3UploadManager instance for each
+  // s3Config.
+  instance_ = std::make_shared<S3UploadManager>(s3Config);
+#else
+  // In no debug mode, create a new instance only if it doesn't already exist.
+  if (!instance_) {
+    instance_ = std::make_shared<UploadPartAsync>(s3Config);
+  }
+#endif
+  return instance_;
+}
+
+bool S3UploadManager::isUploadPartAsyncEnabled() const {
+  return uploadPartAsyncEnabled;
+}
+
+size_t S3UploadManager::getPartUploadSize() const {
+  return kPartUploadSize;
+}
+
+size_t S3UploadManager::getWriteFileSemaphoreNum() const {
+  return writeFileSemaphore;
+}
+
+std::shared_ptr<folly::CPUThreadPoolExecutor>
+S3UploadManager::getUploadThreadPool() const {
+  return uploadThreadPool_;
+}
+
+void S3UploadManager::setPartUploadSize(size_t partUploadSize) {
+  kPartUploadSize =
+      validatePositiveValue(partUploadSize, "hive.s3.part-upload-size");
+}
+
+void S3UploadManager::setWriteFileSemaphoreNum(size_t value) {
+  writeFileSemaphore =
+      validatePositiveValue(value, "hive.s3.write-file-semaphore-num");
+}
+
+void S3UploadManager::setUploadThreadPool(size_t value) {
+  auto threadPool = std::make_shared<folly::CPUThreadPoolExecutor>(
+      validatePositiveValue(value, "hive.s3.upload-threads"));
+  uploadThreadPool_ = threadPool;
+}
+
+size_t S3UploadManager::validatePositiveValue(
+    size_t value,
+    const std::string& name) {
+  VELOX_USER_CHECK(
+      value > 0,
+      fmt::format("Invalid configuration: '{}' must be greater than 0.", name));
+  return value;
+}
 
 class S3FileSystem::Impl {
  public:
@@ -302,17 +362,7 @@ class S3FileSystem::Impl {
 
     auto credentialsProvider = getCredentialsProvider(s3Config);
 
-    S3FileSystem::setUploadPartAsyncEnabled(s3Config.uploadPartAsync());
-    S3FileSystem::setPartUploadSize(
-        s3Config.partUploadSize().value_or(10485760));
-
-    S3FileSystem::setWriteFileSemaphoreNum(
-        s3Config.writeFileSemaphoreNum().value_or(4));
-
-    auto threadPoolSize = s3Config.uploadThreads().value_or(16);
-    S3FileSystem::setUploadThreadPool(
-        std::make_shared<folly::CPUThreadPoolExecutor>(threadPoolSize));
-
+    uploadManager_ = S3UploadManager::getInstance(s3Config);
     client_ = std::make_shared<Aws::S3::S3Client>(
         credentialsProvider, nullptr /* endpointProvider */, clientConfig);
     ++fileSystemCount;
@@ -452,6 +502,10 @@ class S3FileSystem::Impl {
     return client_.get();
   }
 
+  std::shared_ptr<S3UploadManager> s3UploadManager() const {
+    return uploadManager_;
+  }
+
   std::string getLogLevelName() const {
     return getAwsInstance()->getLogLevelName();
   }
@@ -462,6 +516,7 @@ class S3FileSystem::Impl {
 
  private:
   std::shared_ptr<Aws::S3::S3Client> client_;
+  std::shared_ptr<S3UploadManager> uploadManager_;
 };
 
 S3FileSystem::S3FileSystem(
@@ -493,8 +548,8 @@ std::unique_ptr<WriteFile> S3FileSystem::openFileForWrite(
     std::string_view s3Path,
     const FileOptions& options) {
   const auto path = getPath(s3Path);
-  auto s3file =
-      std::make_unique<S3WriteFile>(path, impl_->s3Client(), options.pool);
+  auto s3file = std::make_unique<S3WriteFile>(
+      path, impl_->s3Client(), options.pool, impl_->s3UploadManager());
   return s3file;
 }
 

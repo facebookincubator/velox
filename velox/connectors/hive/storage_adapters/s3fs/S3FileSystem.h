@@ -34,6 +34,33 @@ void finalizeS3();
 
 class S3Config;
 
+struct S3UploadManager {
+  explicit S3UploadManager(const S3Config& s3Config);
+  static std::shared_ptr<S3UploadManager> getInstance(const S3Config& s3Config);
+
+  bool isUploadPartAsyncEnabled() const;
+  size_t getPartUploadSize() const;
+  size_t getWriteFileSemaphoreNum() const;
+  std::shared_ptr<folly::CPUThreadPoolExecutor> getUploadThreadPool() const;
+
+ private:
+  static constexpr bool kDefaultUploadPartAsyncEnabled = false;
+  static constexpr size_t kDefaultPartUploadSize = 10485760;
+  static constexpr size_t kDefaultWriteFileSemaphore = 4;
+  static constexpr size_t kDefaultUploadThreads = 16;
+
+  bool uploadPartAsyncEnabled;
+  size_t kPartUploadSize;
+  size_t writeFileSemaphore;
+  std::shared_ptr<folly::CPUThreadPoolExecutor> uploadThreadPool_;
+  static std::shared_ptr<S3UploadManager> instance_;
+
+  void setPartUploadSize(size_t partUploadSize);
+  void setWriteFileSemaphoreNum(size_t value);
+  void setUploadThreadPool(size_t value);
+  static size_t validatePositiveValue(size_t value, const std::string& name);
+};
+
 using AWSCredentialsProviderFactory =
     std::function<std::shared_ptr<Aws::Auth::AWSCredentialsProvider>(
         const S3Config& config)>;
@@ -88,56 +115,9 @@ class S3FileSystem : public FileSystem {
 
   std::string getLogPrefix() const;
 
-  static bool isUploadPartAsyncEnabled() {
-    return uploadPartAsyncEnabled;
-  }
-
-  static void setUploadPartAsyncEnabled(bool enabled) {
-    uploadPartAsyncEnabled = enabled;
-  }
-  static size_t getPartUploadSize() {
-    return kPartUploadSize;
-  }
-
-  static void setPartUploadSize(size_t partUploadSize) {
-    VELOX_USER_CHECK_GT(
-        partUploadSize,
-        0,
-        "Invalid configuration: 'hive.s3.part-upload-size' must be greater than 0.");
-    kPartUploadSize = partUploadSize;
-  }
-  static size_t getWriteFileSemaphoreNum() {
-    return writeFileSemaphore;
-  }
-
-  static void setWriteFileSemaphoreNum(size_t value) {
-    VELOX_USER_CHECK_GT(
-        value,
-        0,
-        "Invalid configuration: 'hive.s3.writeFileSemaphoreNum' must be greater than 0.");
-    writeFileSemaphore = value;
-  }
-  static std::shared_ptr<folly::CPUThreadPoolExecutor> getUploadThreadPool() {
-    return uploadThreadPool_;
-  }
-  static void setUploadThreadPool(
-      std::shared_ptr<folly::CPUThreadPoolExecutor> threadPool) {
-    VELOX_USER_CHECK(
-        threadPool != nullptr && threadPool.get() != nullptr &&
-            threadPool->numThreads() > 0,
-        "Invalid configuration: 'hive.s3.uploadThreads' must be greater than 0.");
-    uploadThreadPool_ = threadPool;
-  }
-
  protected:
   class Impl;
   std::shared_ptr<Impl> impl_;
-
- private:
-  static bool uploadPartAsyncEnabled;
-  static size_t kPartUploadSize;
-  static size_t writeFileSemaphore;
-  static std::shared_ptr<folly::CPUThreadPoolExecutor> uploadThreadPool_;
 };
 
 } // namespace facebook::velox::filesystems
