@@ -996,6 +996,8 @@ struct SecondsToTimestampFunction {
       static_cast<double>(std::numeric_limits<int64_t>::min());
   static constexpr double kMaxSecondsD = kMaxMicrosD / 1'000'000.0;
   static constexpr double kMinSecondsD = kMinMicrosD / 1'000'000.0;
+
+  // Cutoff values are based on Java's Long.MAX_VALUE and Long.MIN_VALUE.
   static constexpr int64_t kMaxSeconds = 9223372036854LL;
   static constexpr int64_t kMaxNanoseconds = 775807000LL;
   static constexpr int64_t kMinSeconds = -9223372036855LL;
