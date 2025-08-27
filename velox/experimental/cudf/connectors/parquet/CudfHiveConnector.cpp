@@ -16,6 +16,9 @@
 
 #include "velox/experimental/cudf/connectors/parquet/CudfHiveConnector.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetDataSource.h"
+#include "velox/experimental/cudf/exec/ToCudf.h"
+
+#include "velox/connectors/hive/HiveDataSource.h"
 
 namespace facebook::velox::cudf_velox::connector::parquet {
 
@@ -40,17 +43,24 @@ std::unique_ptr<DataSource> CudfHiveConnector::createDataSource(
   // TODO (dm): Make this ^^^ happen
   // Problem: this information is in split, not table handle
 
-  auto hiveTableHandle =
-      std::dynamic_pointer_cast<const hive::HiveTableHandle>(tableHandle);
-  VELOX_CHECK(hiveTableHandle, "CudfHiveConnector expects hive table handle!");
+  if (cudfIsRegistered()) {
+    return std::make_unique<ParquetDataSource>(
+        outputType,
+        tableHandle,
+        columnHandles,
+        executor_,
+        connectorQueryCtx,
+        parquetConfig_);
+  }
 
-  return std::make_unique<ParquetDataSource>(
+  return std::make_unique<hive::HiveDataSource>(
       outputType,
       tableHandle,
       columnHandles,
+      &fileHandleFactory_,
       executor_,
       connectorQueryCtx,
-      parquetConfig_);
+      hiveConfig_);
 }
 
 // TODO (dm): Add data sink
