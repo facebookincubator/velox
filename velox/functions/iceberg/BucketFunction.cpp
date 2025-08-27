@@ -36,10 +36,7 @@ struct BucketDecimalFunction {
 
   template <typename T>
   FOLLY_ALWAYS_INLINE Status call(int32_t& out, int32_t numBuckets, T input) {
-    VELOX_RETURN_IF(
-        numBuckets <= 0,
-        Status::UserError(
-            "Invalid number of buckets: {} (must be > 0)", numBuckets));
+    VELOX_USER_RETURN_LE(numBuckets, 0, "Invalid number of buckets.");
     char bytes[sizeof(int128_t)];
     const auto length = DecimalUtil::toByteArray(input, bytes);
     const auto hash = Murmur3Hash32::hashBytes(bytes, length);
@@ -59,10 +56,7 @@ struct BucketFunction {
   // For the schema evolution, may promote int to int64, treat int32 as uint64.
   template <typename T>
   FOLLY_ALWAYS_INLINE Status call(int32_t& out, int32_t numBuckets, T input) {
-    VELOX_RETURN_IF(
-        numBuckets <= 0,
-        Status::UserError(
-            "Invalid number of buckets: {} (must be > 0)", numBuckets));
+    VELOX_USER_RETURN_LE(numBuckets, 0, "Invalid number of buckets.");
     const auto hash = Murmur3Hash32::hashInt64(input);
     out = getBucketIndex(numBuckets, hash);
     return Status::OK();
@@ -70,10 +64,7 @@ struct BucketFunction {
 
   FOLLY_ALWAYS_INLINE Status
   call(int32_t& out, int32_t numBuckets, const arg_type<Varchar>& input) {
-    VELOX_RETURN_IF(
-        numBuckets <= 0,
-        Status::UserError(
-            "Invalid number of buckets: {} (must be > 0)", numBuckets));
+    VELOX_USER_RETURN_LE(numBuckets, 0, "Invalid number of buckets.");
     const auto hash = Murmur3Hash32::hashBytes(input.data(), input.size());
     out = getBucketIndex(numBuckets, hash);
     return Status::OK();
@@ -81,10 +72,7 @@ struct BucketFunction {
 
   FOLLY_ALWAYS_INLINE Status
   call(int32_t& out, int32_t numBuckets, const arg_type<Timestamp>& input) {
-    VELOX_RETURN_IF(
-        numBuckets <= 0,
-        Status::UserError(
-            "Invalid number of buckets: {} (must be > 0)", numBuckets));
+    VELOX_USER_RETURN_LE(numBuckets, 0, "Invalid number of buckets.");
     const auto hash = Murmur3Hash32::hashInt64(input.toMicros());
     out = getBucketIndex(numBuckets, hash);
     return Status::OK();
