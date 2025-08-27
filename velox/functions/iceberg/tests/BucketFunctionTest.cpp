@@ -40,12 +40,13 @@ class BucketFunctionTest
     return evaluateOnce<int32_t>("bucket(c0, c1)", numBuckets, value);
   }
 
-  void assertBucket(
-      const VectorPtr& expected,
-      const std::vector<VectorPtr>& input) {
-    auto result =
-        evaluate<SimpleVector<int32_t>>("bucket(c0, c1)", makeRowVector(input));
-    facebook::velox::test::assertEqualVectors(expected, result);
+  template <typename T>
+  std::optional<int32_t> bucket(
+      const TypePtr& type,
+      std::optional<int32_t> numBuckets,
+      std::optional<T> value) {
+    return evaluateOnce<int32_t>(
+        "bucket(c0, c1)", {INTEGER(), type}, numBuckets, value);
   }
 };
 
@@ -88,10 +89,8 @@ TEST_F(BucketFunctionTest, string) {
 }
 
 TEST_F(BucketFunctionTest, binary) {
-  assertBucket(
-      makeFlatVector<int32_t>({122, 4}),
-      {makeFlatVector<int32_t>({128, 5}),
-       makeFlatVector<StringView>({"abc", "abcdefg"}, VARBINARY())});
+  EXPECT_EQ(bucket<StringView>(VARBINARY(), 128, "abc"), 122);
+  EXPECT_EQ(bucket<StringView>(VARBINARY(), 5, "abcdefg"), 4);
 }
 
 TEST_F(BucketFunctionTest, timestamp) {
@@ -107,19 +106,20 @@ TEST_F(BucketFunctionTest, timestamp) {
 }
 
 TEST_F(BucketFunctionTest, date) {
-  assertBucket(
-      makeFlatVector<int32_t>({3, 6}),
-      {makeConstant<int32_t>(10, 2), makeFlatVector<int32_t>({8, 42}, DATE())});
+  EXPECT_EQ(bucket<int32_t>(DATE(), 10, 8), 3);
+  EXPECT_EQ(bucket<int32_t>(DATE(), 10, 42), 6);
 }
 
 TEST_F(BucketFunctionTest, decimal) {
-  assertBucket(
-      makeFlatVector<int32_t>({56, 13, 2, 85, 3}),
-      {makeFlatVector<int32_t>({64, 18, 16, 128, 18}),
-       makeFlatVector<int64_t>({1234, 1230, 12999, 5, 5, 5}, DECIMAL(9, 2))});
-  assertBucket(
-      makeFlatVector<int32_t>({7, 7, 6, 4}),
-      {makeConstant<int32_t>(10, 4),
-       makeFlatVector<int128_t>(
-           {12, 0, 234, DecimalUtil::kLongDecimalMax}, DECIMAL(38, 2))});
+  EXPECT_EQ(bucket<int64_t>(DECIMAL(9, 2), 64, 1234), 56);
+  EXPECT_EQ(bucket<int64_t>(DECIMAL(9, 2), 18, 1230), 13);
+  EXPECT_EQ(bucket<int64_t>(DECIMAL(9, 2), 16, 12999), 2);
+  EXPECT_EQ(bucket<int64_t>(DECIMAL(9, 2), 128, 5), 85);
+  EXPECT_EQ(bucket<int64_t>(DECIMAL(9, 2), 18, 5), 3);
+
+  EXPECT_EQ(bucket<int128_t>(DECIMAL(38, 2), 10, 12), 7);
+  EXPECT_EQ(bucket<int128_t>(DECIMAL(38, 2), 10, 0), 7);
+  EXPECT_EQ(bucket<int128_t>(DECIMAL(38, 2), 10, 234), 6);
+  EXPECT_EQ(
+      bucket<int128_t>(DECIMAL(38, 2), 10, DecimalUtil::kLongDecimalMax), 4);
 }

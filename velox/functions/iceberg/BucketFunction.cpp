@@ -24,7 +24,7 @@ namespace {
 
 FOLLY_ALWAYS_INLINE int32_t
 getBucketIndex(int32_t numBuckets, int32_t hashedValue) {
-  return (hashedValue & INT_MAX) % numBuckets;
+  return (hashedValue & std::numeric_limits<int32_t>::max()) % numBuckets;
 }
 
 // bucket(numBuckets, decimal) -> bucketIndex
