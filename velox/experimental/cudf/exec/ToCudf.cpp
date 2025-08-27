@@ -275,6 +275,14 @@ bool CompileState::compile(bool force_replace) {
     }
 
     if (force_replace) {
+      if (FLAGS_velox_cudf_debug) {
+        std::printf(
+            "Operator: ID %d: %s, keepOperator = %d, replaceOp.size() = %ld\n",
+            oper->operatorId(),
+            oper->toString().c_str(),
+            keepOperator,
+            replaceOp.size());
+      }
       auto shouldSupportTableScan =
           [isParquetConnectorRegistered](const exec::Operator* op) {
             return isAnyOf<exec::TableScan>(op) && isParquetConnectorRegistered;
