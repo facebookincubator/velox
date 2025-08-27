@@ -18,7 +18,6 @@
 #include <folly/synchronization/ThrottledLifoSem.h>
 #include "velox/common/base/StatsReporter.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/S3Counters.h"
-#include "velox/connectors/hive/storage_adapters/s3fs/S3FileSystem.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/S3Util.h"
 #include "velox/dwio/common/DataBuffer.h"
 
@@ -40,13 +39,17 @@ class S3WriteFile::Impl {
   explicit Impl(
       std::string_view path,
       Aws::S3::S3Client* client,
-      memory::MemoryPool* pool)
-      : client_(client), pool_(pool) {
+      memory::MemoryPool* pool,
+      std::shared_ptr<S3UploadManager> uploadManager)
+      : client_(client), pool_(pool), uploadManager_(uploadManager) {
     VELOX_CHECK_NOT_NULL(client);
     VELOX_CHECK_NOT_NULL(pool);
+    VELOX_CHECK_NOT_NULL(uploadManager);
+    semaphore_ = std::make_unique<folly::ThrottledLifoSem>(
+        uploadManager_->getWriteFileSemaphoreNum());
     getBucketAndKeyFromPath(path, bucket_, key_);
     currentPart_ = std::make_unique<dwio::common::DataBuffer<char>>(*pool_);
-    currentPart_->reserve(S3FileSystem::getPartUploadSize());
+    currentPart_->reserve(uploadManager_->getPartUploadSize());
     // Check that the object doesn't exist, if it does throw an error.
     {
       Aws::S3::Model::HeadObjectRequest request;
@@ -109,7 +112,7 @@ class S3WriteFile::Impl {
   void append(std::string_view data) {
     VELOX_CHECK(!closed(), "File is closed");
     if (data.size() + currentPart_->size() >=
-        S3FileSystem::getPartUploadSize()) {
+        uploadManager_->getPartUploadSize()) {
       upload(data);
     } else {
       // Append to current part.
@@ -123,7 +126,7 @@ class S3WriteFile::Impl {
     VELOX_CHECK(!closed(), "File is closed");
     /// currentPartSize must be less than kPartUploadSize since
     /// append() would have already flushed after reaching kUploadPartSize.
-    VELOX_CHECK_LT(currentPart_->size(), S3FileSystem::getPartUploadSize());
+    VELOX_CHECK_LT(currentPart_->size(), uploadManager_->getPartUploadSize());
   }
 
   // Complete the multipart upload and close the file.
@@ -133,9 +136,9 @@ class S3WriteFile::Impl {
     }
     RECORD_METRIC_VALUE(kMetricS3StartedUploads);
     uploadPart({currentPart_->data(), currentPart_->size()}, true);
-    if (S3FileSystem::isUploadPartAsyncEnabled()) {
-      if (futures.size() > 0) {
-        folly::collectAll(std::move(futures)).get();
+    if (uploadManager_->isUploadPartAsyncEnabled()) {
+      if (futures_.size() > 0) {
+        folly::collectAll(std::move(futures_)).get();
       }
       // The list of parts should be in ascending order.
       std::sort(
@@ -193,11 +196,6 @@ class S3WriteFile::Impl {
     int64_t partNumber = 0;
     Aws::String id;
   };
-  UploadState uploadState_;
-  std::mutex uploadStateMutex_;
-  std::vector<folly::Future<folly::Unit>> futures;
-  folly::ThrottledLifoSem semaphore{
-      static_cast<uint32_t>(S3FileSystem::getWriteFileSemaphoreNum())};
 
   // Data can be smaller or larger than the kPartUploadSize.
   // Complete the currentPart_ and upload kPartUploadSize chunks of data.
@@ -211,17 +209,17 @@ class S3WriteFile::Impl {
     uploadPart({currentPart_->data(), currentPart_->size()});
     dataPtr += remainingBufferSize;
     dataSize -= remainingBufferSize;
-    while (dataSize > S3FileSystem::getPartUploadSize()) {
-      uploadPart({dataPtr, S3FileSystem::getPartUploadSize()});
-      dataPtr += S3FileSystem::getPartUploadSize();
-      dataSize -= S3FileSystem::getPartUploadSize();
+    while (dataSize > uploadManager_->getPartUploadSize()) {
+      uploadPart({dataPtr, uploadManager_->getPartUploadSize()});
+      dataPtr += uploadManager_->getPartUploadSize();
+      dataSize -= uploadManager_->getPartUploadSize();
     }
     // Stash the remaining at the beginning of currentPart.
     currentPart_->unsafeAppend(0, dataPtr, dataSize);
   }
 
   void uploadPart(const std::string_view part, bool isLast = false) {
-    if (S3FileSystem::isUploadPartAsyncEnabled()) {
+    if (uploadManager_->isUploadPartAsyncEnabled()) {
       // If this is the last part and no parts have been uploaded yet,
       // use the synchronous upload method.
       if (isLast && uploadState_.partNumber == 0) {
@@ -234,11 +232,12 @@ class S3WriteFile::Impl {
     }
   }
 
+  // Upload the part synchronously.
   void uploadPartV1(const std::string_view part, bool isLast = false) {
     // Only the last part can be less than kPartUploadSize.
     VELOX_CHECK(
         isLast ||
-        (!isLast && (part.size() == S3FileSystem::getPartUploadSize())));
+        (!isLast && (part.size() == uploadManager_->getPartUploadSize())));
     // Upload the part.
     {
       Aws::S3::Model::UploadPartRequest request;
@@ -270,20 +269,22 @@ class S3WriteFile::Impl {
       uploadState_.completedParts.push_back(std::move(part));
     }
   }
+
+  // Upload the part asynchronously.
   void uploadPartAsync(const std::string_view part, const bool isLast = false) {
     VELOX_CHECK(
         isLast ||
-        (!isLast && (part.size() == S3FileSystem::getPartUploadSize())));
-    semaphore.wait();
+        (!isLast && (part.size() == uploadManager_->getPartUploadSize())));
+    semaphore_->wait();
     const int64_t partNumber = ++uploadState_.partNumber;
     auto const partLength = part.size();
     std::shared_ptr<std::string> partStr =
         std::make_shared<std::string>(part.data(), part.size());
-    futures.emplace_back(folly::via(
-        S3FileSystem::getUploadThreadPool().get(),
+    futures_.emplace_back(folly::via(
+        uploadManager_->getUploadThreadPool().get(),
         [this, partNumber, partStr, partLength]() {
           SCOPE_EXIT {
-            semaphore.post();
+            semaphore_->post();
           };
           try {
             Aws::S3::Model::UploadPartRequest request;
@@ -323,13 +324,19 @@ class S3WriteFile::Impl {
   std::string bucket_;
   std::string key_;
   size_t fileSize_ = -1;
+  UploadState uploadState_;
+  std::mutex uploadStateMutex_;
+  std::vector<folly::Future<folly::Unit>> futures_;
+  std::unique_ptr<folly::ThrottledLifoSem> semaphore_;
+  std::shared_ptr<S3UploadManager> uploadManager_;
 };
 
 S3WriteFile::S3WriteFile(
     std::string_view path,
     Aws::S3::S3Client* client,
-    memory::MemoryPool* pool) {
-  impl_ = std::make_shared<Impl>(path, client, pool);
+    memory::MemoryPool* pool,
+    std::shared_ptr<S3UploadManager> uploadManager) {
+  impl_ = std::make_shared<Impl>(path, client, pool, uploadManager);
 }
 
 void S3WriteFile::append(std::string_view data) {

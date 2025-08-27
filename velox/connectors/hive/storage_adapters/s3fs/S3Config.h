@@ -119,13 +119,13 @@ class S3Config {
             {Keys::kCredentialsProvider,
              std::make_pair("aws-credentials-provider", std::nullopt)},
             {Keys::KS3UploadPartAsync,
-             std::make_pair("uploadPartAsync", "false")},
+             std::make_pair("upload-part-async", "false")},
             {Keys::kS3PartUploadSize,
              std::make_pair("part-upload-size", std::nullopt)},
             {Keys::KS3WriteFileSemaphoreNum,
-             std::make_pair("writeFileSemaphoreNum", std::nullopt)},
+             std::make_pair("write-file-semaphore-num", std::nullopt)},
             {Keys::KS3UploadThreads,
-             std::make_pair("uploadThreads", std::nullopt)},
+             std::make_pair("upload-threads", std::nullopt)},
         };
     return config;
   }
