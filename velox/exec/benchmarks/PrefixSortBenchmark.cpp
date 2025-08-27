@@ -16,7 +16,6 @@
 #include <folly/Benchmark.h>
 #include <folly/init/Init.h>
 
-#include "glog/logging.h"
 #include "velox/exec/PrefixSort.h"
 #include "velox/exec/benchmarks/OrderByBenchmarkUtil.h"
 
