@@ -155,7 +155,8 @@ void hashPrimitive(
     bool mix,
     std::vector<uint32_t>& hashes) {
   const auto& type = values.base()->type();
-  const auto scale = type->isDecimal() ? getDecimalPrecisionScale(*type).second : 0;
+  const auto scale =
+      type->isDecimal() ? getDecimalPrecisionScale(*type).second : 0;
   if (rows.isAllSelected()) {
     // The compiler seems to be a little fickle with optimizations.
     // Although rows.applyToSelected should do roughly the same thing, doing
