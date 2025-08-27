@@ -32,7 +32,6 @@ inline int32_t hashDecimal(T value, uint8_t scale) {
   uint64_t absValue =
       isNegative ? -static_cast<uint64_t>(value) : static_cast<uint64_t>(value);
 
-  // Split into 32-bit words (big-endian)
   int32_t high = static_cast<int32_t>(absValue >> 32);
   int32_t low = static_cast<int32_t>(absValue & 0xFFFFFFFF);
 
@@ -57,7 +56,7 @@ inline int32_t hashDecimal<int128_t>(int128_t value, uint8_t scale) {
   words[2] = static_cast<int32_t>(absValue >> 32);
   words[3] = static_cast<int32_t>(absValue);
 
-  int hash = 0;
+  int32_t hash = 0;
   for (auto i = 0; i < 4; i++) {
     hash = 31 * hash + words[i];
   }
