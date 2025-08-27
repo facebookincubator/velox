@@ -26,13 +26,16 @@ ConstantEvalResult evalExprAsConstant(const core::TypedExprPtr& expr) {
     if (constantExpr->isNull()) {
       return ConstantEvalResult::IS_NULL;
     }
-    auto value = constantExpr->hasValueVector()
-        ? constantExpr->valueVector()->as<ConstantVector<bool>>()->valueAt(0)
-        : constantExpr->value().value<TypeKind::BOOLEAN>();
-    if (value) {
-      return ConstantEvalResult::IS_TRUE;
+    if (constantExpr->type()->isBoolean()) {
+      auto value = constantExpr->hasValueVector()
+          ? constantExpr->valueVector()->as<ConstantVector<bool>>()->valueAt(0)
+          : constantExpr->value().value<TypeKind::BOOLEAN>();
+      if (value) {
+        return ConstantEvalResult::IS_TRUE;
+      }
+      return ConstantEvalResult::IS_FALSE;
     }
-    return ConstantEvalResult::IS_FALSE;
+    return ConstantEvalResult::IS_NON_BOOL_CONSTANT;
   }
   return ConstantEvalResult::IS_NOT_CONSTANT;
 }

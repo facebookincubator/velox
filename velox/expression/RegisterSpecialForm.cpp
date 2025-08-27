@@ -33,11 +33,26 @@
 namespace facebook::velox::exec {
 
 void registerSpecialFormExpressionRewrites() {
-  // Register expression optimizations for AND, OR.
   registerExpressionRewrite(
       expression::kConjunct,
       std::make_unique<expression::ExpressionRewrite>(
           expression::rewriteConjunctExpression));
+  registerExpressionRewrite(
+      expression::kCoalesce,
+      std::make_unique<expression::ExpressionRewrite>(
+          expression::rewriteCoalesceExpression));
+  registerExpressionRewrite(
+      expression::kIf,
+      std::make_unique<expression::ExpressionRewrite>(
+          expression::rewriteIfExpression));
+  registerExpressionRewrite(
+      expression::kSwitch,
+      std::make_unique<expression::ExpressionRewrite>(
+          expression::rewriteSwitchExpression));
+  registerExpressionRewrite(
+      expression::kIn,
+      std::make_unique<expression::ExpressionRewrite>(
+          expression::rewriteInExpression));
 }
 
 void registerFunctionCallToSpecialForms() {

@@ -24,7 +24,8 @@ enum class ConstantEvalResult {
   IS_NOT_CONSTANT = 0,
   IS_NULL,
   IS_TRUE,
-  IS_FALSE
+  IS_FALSE,
+  IS_NON_BOOL_CONSTANT
 };
 
 /// Helper function to evaluate an expression to a boolean constant.
