@@ -326,6 +326,26 @@ TEST_F(DateTimeFunctionsTest, unixTimestampTimestampInput) {
   EXPECT_EQ(kMin, unixTimestamp(Timestamp(kMin, 0)));
 }
 
+TEST_F(DateTimeFunctionsTest, unixTimestampTimestampWithFormatInput) {
+  const auto unixTimestamp = [&](std::optional<Timestamp> timestamp,
+                                 std::optional<StringView> formatStr) {
+    return evaluateOnce<int64_t>("unix_timestamp(c0, c1)", timestamp, formatStr);
+  };
+  
+  // Test that format parameter is ignored for timestamp input (as per Spark behavior)
+  EXPECT_EQ(0, unixTimestamp(Timestamp(0, 0), "yyyy-MM-dd"));
+  EXPECT_EQ(1, unixTimestamp(Timestamp(1, 990), "invalid-format"));
+  EXPECT_EQ(61, unixTimestamp(Timestamp(61, 0), "yyyy/MM/dd HH:mm:ss"));
+  EXPECT_EQ(-1, unixTimestamp(Timestamp(-1, 0), "MM-dd-yyyy"));
+  EXPECT_EQ(1739933174, unixTimestamp(Timestamp(1739933174, 0), ""));
+  
+  // Test with null timestamp
+  EXPECT_EQ(std::nullopt, unixTimestamp(std::nullopt, "yyyy-MM-dd"));
+  
+  // Test with empty format string (format is ignored anyway)
+  EXPECT_EQ(0, unixTimestamp(Timestamp(0, 0), ""));
+}
+
 TEST_F(DateTimeFunctionsTest, unixTimestampDateInput) {
   const auto unixTimestamp = [&](std::optional<int32_t> date) {
     return evaluateOnce<int64_t>("unix_timestamp(c0)", {DATE()}, date);
