@@ -57,7 +57,7 @@ bool isAnyOf(const Base* p) {
 
 } // namespace
 
-bool CompileState::compile() {
+bool CompileState::compile(bool force_replace) {
   auto operators = driver_.operators();
 
   if (FLAGS_velox_cudf_debug) {
@@ -274,6 +274,30 @@ bool CompileState::compile() {
       replaceOp.back()->initialize();
     }
 
+    if (force_replace) {
+      auto shouldSupportTableScan =
+          [isParquetConnectorRegistered](const exec::Operator* op) {
+            return isAnyOf<exec::TableScan>(op) && isParquetConnectorRegistered;
+          };
+      auto shouldSupportGpuOperator =
+          [isFilterProjectSupported,
+           shouldSupportTableScan](const exec::Operator* op) {
+            return isAnyOf<
+                       exec::OrderBy,
+                       exec::HashAggregation,
+                       exec::Limit,
+                       exec::LocalPartition,
+                       exec::LocalExchange,
+                       exec::HashBuild,
+                       exec::HashProbe>(op) ||
+                isFilterProjectSupported(op) || shouldSupportTableScan(op);
+          };
+      if (keepOperator == 0 && shouldSupportGpuOperator(oper) &&
+          replaceOp.empty()) {
+        throw std::runtime_error("Replacement with cuDF operator failed.");
+      }
+    }
+
     if (not replaceOp.empty()) {
       operatorsOffset += replaceOp.size() - 1 + keepOperator;
       [[maybe_unused]] auto replaced = driverFactory_.replaceOperators(
@@ -300,21 +324,24 @@ bool CompileState::compile() {
 
 struct CudfDriverAdapter {
   std::shared_ptr<rmm::mr::device_memory_resource> mr_;
+  bool force_replace_;
 
-  CudfDriverAdapter(std::shared_ptr<rmm::mr::device_memory_resource> mr)
-      : mr_(mr) {}
+  CudfDriverAdapter(
+      std::shared_ptr<rmm::mr::device_memory_resource> mr,
+      bool force_replace)
+      : mr_(mr), force_replace_{force_replace} {}
 
   // Call operator needed by DriverAdapter
   bool operator()(const exec::DriverFactory& factory, exec::Driver& driver) {
     auto state = CompileState(factory, driver);
-    auto res = state.compile();
+    auto res = state.compile(force_replace_);
     return res;
   }
 };
 
 static bool isCudfRegistered = false;
 
-void registerCudf(const CudfOptions& options) {
+void registerCudf(const CudfOptions& options, bool force_replace) {
   if (cudfIsRegistered()) {
     return;
   }
@@ -331,7 +358,7 @@ void registerCudf(const CudfOptions& options) {
 
   exec::Operator::registerOperator(
       std::make_unique<CudfHashJoinBridgeTranslator>());
-  CudfDriverAdapter cda{mr};
+  CudfDriverAdapter cda{mr, force_replace};
   exec::DriverAdapter cudfAdapter{kCudfAdapterName, {}, cda};
   exec::DriverFactory::registerAdapter(cudfAdapter);
   isCudfRegistered = true;

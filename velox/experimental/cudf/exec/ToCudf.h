@@ -41,7 +41,7 @@ class CompileState {
 
   // Replaces sequences of Operators in the Driver given at construction with
   // cuDF equivalents. Returns true if the Driver was changed.
-  bool compile();
+  bool compile(bool force_replace);
 
   const exec::DriverFactory& driverFactory_;
   exec::Driver& driver_;
@@ -82,7 +82,9 @@ class CudfOptions {
 };
 
 /// Registers adapter to add cuDF operators to Drivers.
-void registerCudf(const CudfOptions& options = CudfOptions::getInstance());
+void registerCudf(
+    const CudfOptions& options = CudfOptions::getInstance(),
+    bool force_replace = false);
 void unregisterCudf();
 
 /// Returns true if cuDF is registered.
