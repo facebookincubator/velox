@@ -26,6 +26,47 @@ int32_t hashInt64(int64_t value) {
   return ((*reinterpret_cast<uint64_t*>(&value)) >> 32) ^ value;
 }
 
+template <typename T>
+inline int32_t hashDecimal(T value, uint8_t scale) {
+  bool isNegative = value < 0;
+  uint64_t absValue =
+      isNegative ? -static_cast<uint64_t>(value) : static_cast<uint64_t>(value);
+
+  // Split into 32-bit words (big-endian)
+  int32_t high = static_cast<int32_t>(absValue >> 32);
+  int32_t low = static_cast<int32_t>(absValue & 0xFFFFFFFF);
+
+  int32_t hash = 31 * high + low;
+  if (isNegative) {
+    hash = -hash;
+  }
+
+  return 31 * hash + scale;
+}
+
+// Simulates Hive's hashing function from Hive v1.2.1
+// org.apache.hadoop.hive.serde2.objectinspector.ObjectInspectorUtils#hashcode()
+// Returns java BigDecimal#hashCode()
+template <>
+inline int32_t hashDecimal<int128_t>(int128_t value, uint8_t scale) {
+  int32_t words[4];
+  bool isNegative = value < 0;
+  uint128_t absValue = isNegative ? -value : value;
+  words[0] = static_cast<int32_t>(absValue >> 96);
+  words[1] = static_cast<int32_t>(absValue >> 64);
+  words[2] = static_cast<int32_t>(absValue >> 32);
+  words[3] = static_cast<int32_t>(absValue);
+
+  int hash = 0;
+  for (auto i = 0; i < 4; i++) {
+    hash = 31 * hash + words[i];
+  }
+  if (isNegative) {
+    hash = -hash;
+  }
+  return hash * 31 + scale;
+}
+
 #if defined(__has_feature)
 #if __has_feature(__address_sanitizer__)
 __attribute__((no_sanitize("integer")))
@@ -114,6 +155,8 @@ void hashPrimitive(
     const SelectivityVector& rows,
     bool mix,
     std::vector<uint32_t>& hashes) {
+  const auto& type = values.base()->type();
+  const auto scale = type->isDecimal() ? getDecimalPrecisionScale(*type).second : 0;
   if (rows.isAllSelected()) {
     // The compiler seems to be a little fickle with optimizations.
     // Although rows.applyToSelected should do roughly the same thing, doing
@@ -122,18 +165,43 @@ void hashPrimitive(
     // benchmarks.
     vector_size_t numRows = rows.size();
     for (auto i = 0; i < numRows; ++i) {
-      const uint32_t hash = values.isNullAt(i)
-          ? 0
-          : hashOne<kind>(
-                values.valueAt<typename TypeTraits<kind>::NativeType>(i));
+      int32_t hash;
+      if (values.isNullAt(i)) {
+        hash = 0;
+      } else if constexpr (
+          kind == TypeKind::BIGINT || kind == TypeKind::HUGEINT) {
+        if (type->isDecimal()) {
+          hash = hashDecimal(
+              values.valueAt<typename TypeTraits<kind>::NativeType>(i), scale);
+        } else {
+          hash = hashOne<kind>(
+              values.valueAt<typename TypeTraits<kind>::NativeType>(i));
+        }
+      } else {
+        hash = hashOne<kind>(
+            values.valueAt<typename TypeTraits<kind>::NativeType>(i));
+      }
       mergeHash(mix, hash, hashes[i]);
     }
   } else {
     rows.applyToSelected([&](auto row) INLINE_LAMBDA {
-      const uint32_t hash = values.isNullAt(row)
-          ? 0
-          : hashOne<kind>(
-                values.valueAt<typename TypeTraits<kind>::NativeType>(row));
+      int32_t hash;
+      if (values.isNullAt(row)) {
+        hash = 0;
+      } else if constexpr (
+          kind == TypeKind::BIGINT || kind == TypeKind::HUGEINT) {
+        if (type->isDecimal()) {
+          hash = hashDecimal(
+              values.valueAt<typename TypeTraits<kind>::NativeType>(row),
+              scale);
+        } else {
+          hash = hashOne<kind>(
+              values.valueAt<typename TypeTraits<kind>::NativeType>(row));
+        }
+      } else {
+        hash = hashOne<kind>(
+            values.valueAt<typename TypeTraits<kind>::NativeType>(row));
+      }
       mergeHash(mix, hash, hashes[row]);
     });
   }
@@ -208,6 +276,16 @@ void HivePartitionFunction::hashTyped<TypeKind::BIGINT>(
     std::vector<uint32_t>& hashes,
     size_t /* poolIndex */) {
   hashPrimitive<TypeKind::BIGINT>(values, rows, mix, hashes);
+}
+
+template <>
+void HivePartitionFunction::hashTyped<TypeKind::HUGEINT>(
+    const DecodedVector& values,
+    const SelectivityVector& rows,
+    bool mix,
+    std::vector<uint32_t>& hashes,
+    size_t /* poolIndex */) {
+  hashPrimitive<TypeKind::HUGEINT>(values, rows, mix, hashes);
 }
 
 template <>

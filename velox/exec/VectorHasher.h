@@ -291,6 +291,7 @@ class VectorHasher {
       case TypeKind::SMALLINT:
       case TypeKind::INTEGER:
       case TypeKind::BIGINT:
+      case TypeKind::HUGEINT:
       case TypeKind::VARCHAR:
       case TypeKind::VARBINARY:
       case TypeKind::TIMESTAMP:
