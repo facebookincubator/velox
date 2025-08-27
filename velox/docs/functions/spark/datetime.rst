@@ -431,7 +431,7 @@ These functions support TIMESTAMP and DATE input types.
 .. spark:function:: unix_timestamp(timestamp, format) -> bigint
    :noindex:
 
-    Returns the UNIX timestamp of the given ``timestamp`` in seconds. The ``format`` 
+    Returns the UNIX timestamp of the given ``timestamp`` in seconds. The ``format``
     parameter is ignored for timestamp input, as per Spark behavior. ::
 
         SELECT unix_timestamp(CAST(0 AS TIMESTAMP), 'yyyy-MM-dd'); -- 0

@@ -279,10 +279,6 @@ struct UnixTimestampParseWithFormatFunction
       int64_t& result,
       const arg_type<Timestamp>& input,
       const arg_type<Varchar>& format) {
-    // For timestamp input, the format parameter is ignored as per Spark behavior.
-    // This is documented in Spark: "If the first parameter is a Date or Timestamp 
-    // instead of String, we will ignore the second parameter."
-    // Reuse the existing timestamp-only implementation.
     call(result, input);
   }
 
