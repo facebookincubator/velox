@@ -206,6 +206,29 @@ std::vector<RowVectorPtr> addExtraGroupingKey(
 }
 
 // Given the name of the original aggregation function and the argument types,
+// return the name of the merge_extract companion function with a suffix of the
+// result type. Merge_extract function names with suffixes should only be used
+// when the original aggregation function has multiple signatures with the same
+// intermediate type.
+std::string getMergeExtractFunctionNameWithSuffix(
+    const std::string& name,
+    const std::vector<TypePtr>& argTypes) {
+  auto signatures = exec::getAggregateFunctionSignatures(name);
+  VELOX_CHECK(signatures.has_value());
+
+  for (const auto& signature : signatures.value()) {
+    exec::SignatureBinder binder{*signature, argTypes};
+    if (binder.tryBind()) {
+      if (auto resolvedType = binder.tryResolveReturnType()) {
+        return exec::CompanionSignatures::mergeExtractFunctionNameWithSuffix(
+            name, signature->returnType());
+      }
+    }
+  }
+  VELOX_UNREACHABLE("Could not find a function bound to argTypes.");
+}
+
+// Given the name of the original aggregation function and the argument types,
 // return the name of the extract companion function with a suffix of the result
 // type. Extract function names with suffixes should only be used when the
 // original aggregation function has multiple signatures with the same
@@ -228,12 +251,13 @@ std::string getExtractFunctionNameWithSuffix(
   VELOX_UNREACHABLE("Could not find a function bound to argTypes.");
 }
 
-// Given the `index`-th aggregation expression, e.g., "avg(c0)", return three
+// Given the `index`-th aggregation expression, e.g., "avg(c0)", return four
 // strings of its partial companion aggregation expression, merge companion
-// aggregation expression, and extract companion expression, e.g.,
-// {"avg_partial(c0)", "avg_merge(a0)", "avg_extract_double(a0)"} when `index`
-// is 0.
-std::tuple<std::string, std::string, std::string> getCompanionAggregates(
+// aggregation expression, merge_extract companion expression and extract
+// companion expression, e.g., {"avg_partial(c0)", "avg_merge(a0)",
+// "avg_merge_extract_double(a0)", "avg_extract_double(a0)"} when `index` is 0.
+std::tuple<std::string, std::string, std::string, std::string>
+getCompanionAggregates(
     column_index_t index,
     const exec::CompanionFunctionSignatureMap& companionFunctions,
     const std::string& functionName,
@@ -247,9 +271,24 @@ std::tuple<std::string, std::string, std::string> getCompanionAggregates(
   auto mergeAggregate = fmt::format(
       "{}(a{})", companionFunctions.merge.front().functionName, index);
 
-  // Construct the extract expression. Rename the result of the extract
-  // expression to be the same as the original aggregation result, so that
-  // post-aggregation projections, if exist, can apply with no change.
+  // Construct the merge_extract expression. Rename the result of the expression
+  // to be the same as the original aggregation result, so that post-aggregation
+  // projections, if exist, can apply with no change.
+  std::string mergeExtractExpression;
+  if (companionFunctions.mergeExtract.size() == 1) {
+    mergeExtractExpression = fmt::format(
+        "{0}(a{1}) as a{1}",
+        companionFunctions.mergeExtract.front().functionName,
+        index);
+  } else {
+    VELOX_CHECK_GT(companionFunctions.mergeExtract.size(), 1);
+    auto mergeExtractFunctionName =
+        getMergeExtractFunctionNameWithSuffix(functionName, argTypes);
+    mergeExtractExpression =
+        fmt::format("{0}(a{1}) as a{1}", mergeExtractFunctionName, index);
+  }
+
+  // Construct the extract expression.
   std::string extractExpression;
   if (companionFunctions.extract.size() == 1) {
     extractExpression = fmt::format(
@@ -263,7 +302,11 @@ std::tuple<std::string, std::string, std::string> getCompanionAggregates(
     extractExpression =
         fmt::format("{0}(a{1}) as a{1}", extractFunctionName, index);
   }
-  return std::make_tuple(partialAggregate, mergeAggregate, extractExpression);
+  return std::make_tuple(
+      partialAggregate,
+      mergeAggregate,
+      mergeExtractExpression,
+      extractExpression);
 }
 
 // Given a list of aggregation expressions, e.g., {"avg(c0)"}, return a list of
@@ -389,6 +432,7 @@ void AggregationTestBase::testAggregationsWithCompanion(
 
   std::vector<std::string> partialAggregates;
   std::vector<std::string> mergeAggregates;
+  std::vector<std::string> mergeExtractAggregates;
   std::vector<std::string> extractExpressions;
   extractExpressions.insert(
       extractExpressions.end(), groupingKeys.begin(), groupingKeys.end());
@@ -399,7 +443,7 @@ void AggregationTestBase::testAggregationsWithCompanion(
         exec::getCompanionFunctionSignatures(functionNames[i]);
     VELOX_CHECK(companionSignatures.has_value());
 
-    const auto& [partialAggregate, mergeAggregate, extractAggregate] =
+    const auto& [partialAggregate, mergeAggregate, mergeExtractAggregate, extractAggregate] =
         getCompanionAggregates(
             i,
             *companionSignatures,
@@ -408,6 +452,7 @@ void AggregationTestBase::testAggregationsWithCompanion(
             aggregatesArgTypes[i]);
     partialAggregates.push_back(partialAggregate);
     mergeAggregates.push_back(mergeAggregate);
+    mergeExtractAggregates.push_back(mergeExtractAggregate);
     extractExpressions.push_back(extractAggregate);
   }
 
@@ -523,6 +568,28 @@ void AggregationTestBase::testAggregationsWithCompanion(
         .intermediateAggregation()
         .finalAggregation()
         .project(extractExpressions);
+
+    if (!postAggregationProjections.empty()) {
+      builder.project(postAggregationProjections);
+    }
+
+    AssertQueryBuilder queryBuilder(builder.planNode(), duckDbQueryRunner_);
+    queryBuilder.configs(config);
+    assertResults(queryBuilder);
+  }
+
+  {
+    SCOPED_TRACE("Run partial + intermediate + final merge extract");
+    PlanBuilder builder(pool());
+    builder.values(dataWithExtraGroupingKey);
+    preAggregationProcessing(builder);
+
+    builder.partialAggregation(groupingKeysWithPartialKey, partialAggregates)
+        .intermediateAggregation()
+        .finalAggregation()
+        .partialAggregation(groupingKeys, mergeExtractAggregates)
+        .intermediateAggregation()
+        .finalAggregation();
 
     if (!postAggregationProjections.empty()) {
       builder.project(postAggregationProjections);
