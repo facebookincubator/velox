@@ -960,17 +960,20 @@ struct SecondsToTimestampFunction {
     if constexpr (std::is_integral_v<T>) {
       result = Timestamp(static_cast<int64_t>(seconds), 0);
     } else {
-      // Scale to microseconds using double, truncating toward zero.
-      const double microsD = static_cast<double>(seconds) * 1'000'000.0;
+      // Cast to double and check bounds to prevent ensuing overflow.
+      const double secondsD = static_cast<double>(seconds);
 
-      if (microsD >= kMaxMicrosD) {
+      if (secondsD >= kMaxSecondsD) {
         result = Timestamp(kMaxSeconds, kMaxNanoseconds);
         return;
-      } else if (microsD <= kMinMicrosD) {
+      }
+      if (secondsD <= kMinSecondsD) {
         result = Timestamp(kMinSeconds, kMinNanoseconds);
         return;
       }
 
+      // Scale to microseconds and truncate toward zero.
+      const double microsD = static_cast<double>(secondsD) * 1'000'000.0;
       const int64_t micros = static_cast<int64_t>(microsD);
 
       // Split into whole seconds and remaining microseconds.
@@ -991,6 +994,8 @@ struct SecondsToTimestampFunction {
       static_cast<double>(std::numeric_limits<int64_t>::max());
   static constexpr double kMinMicrosD =
       static_cast<double>(std::numeric_limits<int64_t>::min());
+  static constexpr double kMaxSecondsD = kMaxMicrosD / 1'000'000.0;
+  static constexpr double kMinSecondsD = kMinMicrosD / 1'000'000.0;
   static constexpr int64_t kMaxSeconds = 9223372036854LL;
   static constexpr int64_t kMaxNanoseconds = 775807000LL;
   static constexpr int64_t kMinSeconds = -9223372036855LL;
