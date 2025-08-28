@@ -1558,8 +1558,7 @@ TEST_P(MultiThreadedHashJoinTest, antiJoinWithFilterAndEmptyBuild) {
   }
 }
 
-// TODO: fix failing test
-TEST_P(MultiThreadedHashJoinTest, DISABLED_leftJoin) {
+TEST_P(MultiThreadedHashJoinTest, leftJoin) {
   // Left side keys are [0, 1, 2,..20].
   // Use 3-rd column as row number to allow for asserting the order of
   // results.
@@ -1614,7 +1613,7 @@ TEST_P(MultiThreadedHashJoinTest, DISABLED_leftJoin) {
       .joinType(core::JoinType::kLeft)
       .joinOutputLayout({"row_number", "c0", "c1", "u_c0"})
       .referenceQuery(
-          "SELECT t.row_number, t.c0, t.c1, u.c0 FROM t RIGHT JOIN u ON t.c0 = u.c0")
+          "SELECT t.row_number, t.c0, t.c1, u.c0 FROM t LEFT JOIN u ON t.c0 = u.c0")
       .verifier([&](const std::shared_ptr<Task>& task, bool /*unused*/) {
         int nullJoinBuildKeyCount = 0;
         int nullJoinProbeKeyCount = 0;
