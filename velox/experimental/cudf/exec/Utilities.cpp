@@ -126,7 +126,7 @@ std::unique_ptr<cudf::table> makeEmptyTable(TypePtr const& inputType) {
 
 std::unique_ptr<cudf::table> getConcatenatedTable(
     std::vector<CudfVectorPtr>& tables,
-    TypePtr const& tableType,
+    const TypePtr& tableType,
     rmm::cuda_stream_view stream) {
   // Check for empty vector
   if (tables.size() == 0) {
