@@ -1121,6 +1121,7 @@ TEST_P(MultiThreadedHashJoinTest, nullAwareAntiJoinWithFilter) {
             });
       });
 
+  // null-anti join with filter not supported
   VELOX_ASSERT_THROW(
       HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .numDrivers(numDrivers_)
@@ -1176,6 +1177,7 @@ TEST_P(MultiThreadedHashJoinTest, nullAwareAntiJoinWithFilterAndEmptyBuild) {
           });
     });
 
+    // null-anti join with filter not supported
     VELOX_ASSERT_THROW(
         HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
             .hashProbeFinishEarlyOnEmptyBuild(finishOnEmpty)
@@ -1238,6 +1240,7 @@ TEST_P(MultiThreadedHashJoinTest, nullAwareAntiJoinWithFilterAndNullKey) {
 
     auto testProbeVectors = probeVectors;
     auto testBuildVectors = buildVectors;
+    // null-anti join with filter not supported
     VELOX_ASSERT_THROW(
         HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
             .numDrivers(numDrivers_)
@@ -1300,6 +1303,7 @@ TEST_P(
 
     auto testProbeVectors = probeVectors;
     auto testBuildVectors = buildVectors;
+    // null-anti join with filter not supported
     VELOX_ASSERT_THROW(
         HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
             .numDrivers(numDrivers_)
@@ -1340,6 +1344,7 @@ TEST_P(MultiThreadedHashJoinTest, nullAwareAntiJoinWithFilterOnNullableColumn) {
               makeFlatVector<int32_t>(234, folly::identity, nullEvery(91)),
           });
     });
+    // null-anti join with filter not supported
     VELOX_ASSERT_THROW(
         HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
             .numDrivers(numDrivers_)
@@ -1392,6 +1397,7 @@ TEST_P(MultiThreadedHashJoinTest, nullAwareAntiJoinWithFilterOnNullableColumn) {
               makeFlatVector<int32_t>(234, folly::identity, nullEvery(37)),
           });
     });
+    // null-anti join with filter not supported
     VELOX_ASSERT_THROW(
         HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
             .numDrivers(numDrivers_)
@@ -2296,6 +2302,7 @@ TEST_P(MultiThreadedHashJoinTest, fullJoin) {
         });
       });
 
+  // full join not supported
   VELOX_ASSERT_THROW(
       HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .numDrivers(numDrivers_)
@@ -2353,6 +2360,7 @@ TEST_P(MultiThreadedHashJoinTest, fullJoinWithEmptyBuild) {
           });
         });
 
+    // full join not supported
     VELOX_ASSERT_THROW(
         HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
             .hashProbeFinishEarlyOnEmptyBuild(finishOnEmpty)
@@ -2410,6 +2418,7 @@ TEST_P(MultiThreadedHashJoinTest, fullJoinWithNoMatch) {
         });
       });
 
+  // full join not supported
   VELOX_ASSERT_THROW(
       HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .numDrivers(numDrivers_)
@@ -2468,6 +2477,7 @@ TEST_P(MultiThreadedHashJoinTest, fullJoinWithFilters) {
   {
     auto testProbeVectors = probeVectors;
     auto testBuildVectors = buildVectors;
+    // full join not supported
     VELOX_ASSERT_THROW(
         HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
             .numDrivers(numDrivers_)
@@ -2490,6 +2500,7 @@ TEST_P(MultiThreadedHashJoinTest, fullJoinWithFilters) {
   {
     auto testProbeVectors = probeVectors;
     auto testBuildVectors = buildVectors;
+    // full join not supported
     VELOX_ASSERT_THROW(
         HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
             .numDrivers(numDrivers_)
@@ -2598,6 +2609,7 @@ TEST_F(HashJoinTest, nullAwareRightSemiProjectOverScan) {
          {exec::Split(makeHiveConnectorSplit(buildFile->getPath()))}},
     };
 
+    // right semi project not supported
     VELOX_ASSERT_THROW(
         HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
             .planNode(plan)
@@ -2677,6 +2689,7 @@ TEST_F(HashJoinTest, duplicateJoinKeys) {
       {core::JoinType::kLeft, "LEFT JOIN"},
       {core::JoinType::kRight, "RIGHT JOIN"}};
 
+  // full outer join not supported
   std::vector<std::pair<core::JoinType, std::string>> throwingJoins = {
       {core::JoinType::kFull, "FULL OUTER JOIN"}};
 
@@ -2771,6 +2784,7 @@ TEST_F(HashJoinTest, semiProject) {
                       core::JoinType::kLeftSemiProject)
                   .planNode();
 
+  // left semi project not supported
   VELOX_ASSERT_THROW(
       HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .injectSpill(false)
@@ -2781,6 +2795,7 @@ TEST_F(HashJoinTest, semiProject) {
           .run(),
       "Replacement with cuDF operator failed");
 
+  // left semi project not supported
   VELOX_ASSERT_THROW(
       HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .injectSpill(false)
@@ -2808,6 +2823,7 @@ TEST_F(HashJoinTest, semiProject) {
                  core::JoinType::kLeftSemiProject)
              .planNode();
 
+  // left semi project not supported
   VELOX_ASSERT_THROW(
       HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .injectSpill(false)
@@ -2818,6 +2834,7 @@ TEST_F(HashJoinTest, semiProject) {
           .run(),
       "Replacement with cuDF operator failed");
 
+  // left semi project not supported
   VELOX_ASSERT_THROW(
       HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .injectSpill(false)
@@ -2846,6 +2863,7 @@ TEST_F(HashJoinTest, semiProject) {
                  core::JoinType::kLeftSemiProject)
              .planNode();
 
+  // left semi project not supported
   VELOX_ASSERT_THROW(
       HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .injectSpill(false)
@@ -2858,6 +2876,7 @@ TEST_F(HashJoinTest, semiProject) {
           .run(),
       "Replacement with cuDF operator failed");
 
+  // left semi project not supported
   VELOX_ASSERT_THROW(
       HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .injectSpill(false)
@@ -2926,6 +2945,7 @@ TEST_F(HashJoinTest, semiProjectWithNullKeys) {
   // Null join keys on both sides.
   auto plan = makePlan(false /*nullAware*/);
 
+  // left semi project not supported
   VELOX_ASSERT_THROW(
       HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .injectSpill(false)
@@ -2936,6 +2956,7 @@ TEST_F(HashJoinTest, semiProjectWithNullKeys) {
           .run(),
       "Replacement with cuDF operator failed");
 
+  // left semi project not supported
   VELOX_ASSERT_THROW(
       HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .injectSpill(false)
@@ -2948,6 +2969,7 @@ TEST_F(HashJoinTest, semiProjectWithNullKeys) {
 
   plan = makePlan(true /*nullAware*/);
 
+  // left semi project not supported
   VELOX_ASSERT_THROW(
       HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .injectSpill(false)
@@ -2957,6 +2979,7 @@ TEST_F(HashJoinTest, semiProjectWithNullKeys) {
           .run(),
       "Replacement with cuDF operator failed");
 
+  // left semi project not supported
   VELOX_ASSERT_THROW(
       HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .injectSpill(false)
@@ -2969,6 +2992,7 @@ TEST_F(HashJoinTest, semiProjectWithNullKeys) {
   // Null join keys on build side-only.
   plan = makePlan(false /*nullAware*/, "t0 IS NOT NULL");
 
+  // left semi project not supported
   VELOX_ASSERT_THROW(
       HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .injectSpill(false)
@@ -2979,6 +3003,7 @@ TEST_F(HashJoinTest, semiProjectWithNullKeys) {
           .run(),
       "Replacement with cuDF operator failed");
 
+  // left semi project not supported
   VELOX_ASSERT_THROW(
       HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .injectSpill(false)
@@ -2991,6 +3016,7 @@ TEST_F(HashJoinTest, semiProjectWithNullKeys) {
 
   plan = makePlan(true /*nullAware*/, "t0 IS NOT NULL");
 
+  // left semi project not supported
   VELOX_ASSERT_THROW(
       HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .injectSpill(false)
@@ -3001,6 +3027,7 @@ TEST_F(HashJoinTest, semiProjectWithNullKeys) {
           .run(),
       "Replacement with cuDF operator failed");
 
+  // left semi project not supported
   VELOX_ASSERT_THROW(
       HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .injectSpill(false)
@@ -3014,6 +3041,7 @@ TEST_F(HashJoinTest, semiProjectWithNullKeys) {
   // Null join keys on probe side-only.
   plan = makePlan(false /*nullAware*/, "", "u0 IS NOT NULL");
 
+  // left semi project not supported
   VELOX_ASSERT_THROW(
       HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .injectSpill(false)
@@ -3024,6 +3052,7 @@ TEST_F(HashJoinTest, semiProjectWithNullKeys) {
           .run(),
       "Replacement with cuDF operator failed");
 
+  // left semi project not supported
   VELOX_ASSERT_THROW(
       HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .injectSpill(false)
@@ -3036,6 +3065,7 @@ TEST_F(HashJoinTest, semiProjectWithNullKeys) {
 
   plan = makePlan(true /*nullAware*/, "", "u0 IS NOT NULL");
 
+  // left semi project not supported
   VELOX_ASSERT_THROW(
       HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .injectSpill(false)
@@ -3046,6 +3076,7 @@ TEST_F(HashJoinTest, semiProjectWithNullKeys) {
           .run(),
       "Replacement with cuDF operator failed");
 
+  // left semi project not supported
   VELOX_ASSERT_THROW(
       HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .injectSpill(false)
@@ -3059,6 +3090,7 @@ TEST_F(HashJoinTest, semiProjectWithNullKeys) {
   // Empty build side.
   plan = makePlan(false /*nullAware*/, "", "u0 < 0");
 
+  // left semi project not supported
   VELOX_ASSERT_THROW(
       HashJoinBuilder(*pool_, duckDbQueryRunner_, executor_.get())
           .planNode(plan)
@@ -3069,6 +3101,7 @@ TEST_F(HashJoinTest, semiProjectWithNullKeys) {
           .run(),
       "Replacement with cuDF operator failed");
 
+  // left semi project not supported
   VELOX_ASSERT_THROW(
       HashJoinBuilder(*pool_, duckDbQueryRunner_, executor_.get())
           .planNode(flipJoinSides(plan))
@@ -3081,6 +3114,7 @@ TEST_F(HashJoinTest, semiProjectWithNullKeys) {
 
   plan = makePlan(true /*nullAware*/, "", "u0 < 0");
 
+  // left semi project not supported
   VELOX_ASSERT_THROW(
       HashJoinBuilder(*pool_, duckDbQueryRunner_, executor_.get())
           .planNode(plan)
@@ -3091,6 +3125,7 @@ TEST_F(HashJoinTest, semiProjectWithNullKeys) {
           .run(),
       "Replacement with cuDF operator failed");
 
+  // left semi project not supported
   VELOX_ASSERT_THROW(
       HashJoinBuilder(*pool_, duckDbQueryRunner_, executor_.get())
           .planNode(flipJoinSides(plan))
@@ -3104,6 +3139,7 @@ TEST_F(HashJoinTest, semiProjectWithNullKeys) {
   // Build side with all rows having null join keys.
   plan = makePlan(false /*nullAware*/, "", "u0 IS NULL");
 
+  // left semi project not supported
   VELOX_ASSERT_THROW(
       HashJoinBuilder(*pool_, duckDbQueryRunner_, executor_.get())
           .planNode(plan)
@@ -3114,6 +3150,7 @@ TEST_F(HashJoinTest, semiProjectWithNullKeys) {
           .run(),
       "Replacement with cuDF operator failed");
 
+  // left semi project not supported
   VELOX_ASSERT_THROW(
       HashJoinBuilder(*pool_, duckDbQueryRunner_, executor_.get())
           .planNode(flipJoinSides(plan))
@@ -3126,6 +3163,7 @@ TEST_F(HashJoinTest, semiProjectWithNullKeys) {
 
   plan = makePlan(true /*nullAware*/, "", "u0 IS NULL");
 
+  // left semi project not supported
   VELOX_ASSERT_THROW(
       HashJoinBuilder(*pool_, duckDbQueryRunner_, executor_.get())
           .planNode(plan)
@@ -3136,6 +3174,7 @@ TEST_F(HashJoinTest, semiProjectWithNullKeys) {
           .run(),
       "Replacement with cuDF operator failed");
 
+  // left semi project not supported
   VELOX_ASSERT_THROW(
       HashJoinBuilder(*pool_, duckDbQueryRunner_, executor_.get())
           .planNode(flipJoinSides(plan))
@@ -3194,6 +3233,7 @@ TEST_F(HashJoinTest, semiProjectWithFilter) {
   for (const auto& filter : filters) {
     auto plan = makePlan(true /*nullAware*/, filter);
 
+    // left semi project not supported
     VELOX_ASSERT_THROW(
         HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
             .planNode(plan)
@@ -3208,6 +3248,7 @@ TEST_F(HashJoinTest, semiProjectWithFilter) {
 
     // DuckDB Exists operator returns NULL when u0 or t0 is NULL. We exclude
     // these values.
+    // left semi project not supported
     VELOX_ASSERT_THROW(
         HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
             .planNode(plan)
@@ -3378,7 +3419,6 @@ TEST_F(HashJoinTest, nullAwareMultiKeyNotAllowed) {
       "Null-aware joins allow only one join key");
 }
 
-// kLeftSemiProject not yet supported
 TEST_F(HashJoinTest, semiProjectOverLazyVectors) {
   auto probeVectors = makeBatches(1, [&](auto /*unused*/) {
     return makeRowVector(
@@ -3434,6 +3474,7 @@ TEST_F(HashJoinTest, semiProjectOverLazyVectors) {
        {exec::Split(makeHiveConnectorSplit(buildFile->getPath()))}},
   };
 
+  // left semi project not supported
   VELOX_ASSERT_THROW(
       HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .planNode(plan)
@@ -3443,6 +3484,7 @@ TEST_F(HashJoinTest, semiProjectOverLazyVectors) {
           .run(),
       "Replacement with cuDF operator failed");
 
+  // right semi project not supported
   VELOX_ASSERT_THROW(
       HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .planNode(flipJoinSides(plan))
@@ -3469,6 +3511,7 @@ TEST_F(HashJoinTest, semiProjectOverLazyVectors) {
                  core::JoinType::kLeftSemiProject)
              .planNode();
 
+  // left semi project not supported
   VELOX_ASSERT_THROW(
       HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .planNode(plan)
@@ -3479,6 +3522,7 @@ TEST_F(HashJoinTest, semiProjectOverLazyVectors) {
           .run(),
       "Replacement with cuDF operator failed");
 
+  // right semi project not supported
   VELOX_ASSERT_THROW(
       HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .planNode(flipJoinSides(plan))
@@ -3686,6 +3730,7 @@ TEST_F(HashJoinTest, lazyVectorPartiallyLoadedInFilterFullJoin) {
   // Test the case where a filter loads a subset of the rows that will be output
   // from a column on the probe side.
 
+  // full join not supported
   VELOX_ASSERT_THROW(
       testLazyVectorsWithFilter(
           core::JoinType::kFull,
@@ -3699,6 +3744,7 @@ TEST_F(HashJoinTest, lazyVectorPartiallyLoadedInFilterLeftSemiProject) {
   // Test the case where a filter loads a subset of the rows that will be output
   // from a column on the probe side.
 
+  // left semi project not supported
   VELOX_ASSERT_THROW(
       testLazyVectorsWithFilter(
           core::JoinType::kLeftSemiProject,
