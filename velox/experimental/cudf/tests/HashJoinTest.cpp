@@ -2672,7 +2672,7 @@ TEST_F(HashJoinTest, duplicateJoinKeys) {
       {core::JoinType::kLeft, "LEFT JOIN"},
       {core::JoinType::kRight, "RIGHT JOIN"}};
 
-  std::vector<std::pair<core::JoinType, std::string>> throwing_joins = {
+  std::vector<std::pair<core::JoinType, std::string>> throwingJoins = {
       {core::JoinType::kFull, "FULL OUTER JOIN"}};
 
   for (const auto& [joinType, joinTypeSql] : joins) {
@@ -2701,7 +2701,7 @@ TEST_F(HashJoinTest, duplicateJoinKeys) {
             " u ON t.c0 = u.c0 and t.c0 = u.c1");
   }
 
-  for (const auto& [joinType, joinTypeSql] : throwing_joins) {
+  for (const auto& [joinType, joinTypeSql] : throwingJoins) {
     // Duplicate keys on the build side.
     ASSERT_THROW(
         assertPlan(
