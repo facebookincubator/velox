@@ -451,6 +451,7 @@ bool ExpressionFuzzer::isSupportedSignature(
   if (usesTypeName(signature, "opaque") ||
       usesTypeName(signature, "interval day to second") ||
       usesTypeName(signature, "ipprefix") ||
+      usesTypeName(signature, "sfmsketch") ||
       (!options_.enableDecimalType && usesTypeName(signature, "decimal")) ||
       (!options_.enableComplexTypes && useComplexType) ||
       (options_.enableComplexTypes && usesTypeName(signature, "unknown"))) {
