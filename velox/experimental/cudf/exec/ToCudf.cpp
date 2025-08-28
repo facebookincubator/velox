@@ -300,10 +300,7 @@ bool CompileState::compile(bool force_replace) {
                        exec::HashProbe>(op) ||
                 isFilterProjectSupported(op) || shouldSupportTableScan(op);
           };
-      if (keepOperator == 0 && shouldSupportGpuOperator(oper) &&
-          replaceOp.empty()) {
-        throw std::runtime_error("Replacement with cuDF operator failed.");
-      }
+      VELOX_CHECK(!(keepOperator == 0 && shouldSupportGpuOperator(oper) && replaceOp.empty()), "Replacement with cuDF operator failed");
     }
 
     if (not replaceOp.empty()) {

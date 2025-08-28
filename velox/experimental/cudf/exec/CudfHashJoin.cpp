@@ -371,7 +371,7 @@ bool CudfHashJoinProbe::needsInput() const {
   if (cudfDebugEnabled()) {
     std::cout << "Calling CudfHashJoinProbe::needsInput" << std::endl;
   }
-  if (joinNode_->isRightJoin()) {
+  if (joinNode_->isRightJoin() || joinNode_->isRightSemiFilterJoin()) {
     return !noMoreInput_;
   }
   return !noMoreInput_ && !finished_ && input_ == nullptr;
@@ -394,7 +394,7 @@ void CudfHashJoinProbe::addInput(RowVectorPtr input) {
     auto lockedStats = stats_.wlock();
     lockedStats->numNullKeys += null_count;
   }
-  if (!joinNode_->isRightJoin()) {
+  if (!joinNode_->isRightJoin() && !joinNode_->isRightSemiFilterJoin()) {
     input_ = std::move(input);
     return;
   }
@@ -411,7 +411,7 @@ void CudfHashJoinProbe::noMoreInput() {
   }
   VELOX_NVTX_OPERATOR_FUNC_RANGE();
   Operator::noMoreInput();
-  if (!joinNode_->isRightJoin()) {
+  if (!joinNode_->isRightJoin() && !joinNode_->isRightSemiFilterJoin()) {
     return;
   }
   std::vector<ContinuePromise> promises;
@@ -708,7 +708,7 @@ bool CudfHashJoinProbe::skipProbeOnEmptyBuild() const {
 }
 
 exec::BlockingReason CudfHashJoinProbe::isBlocked(ContinueFuture* future) {
-  if (joinNode_->isRightJoin() && hashObject_.has_value()) {
+  if ((joinNode_->isRightJoin() || joinNode_->isRightSemiFilterJoin()) && hashObject_.has_value()) {
     if (!future_.valid()) {
       return exec::BlockingReason::kNotBlocked;
     }
@@ -751,7 +751,7 @@ exec::BlockingReason CudfHashJoinProbe::isBlocked(ContinueFuture* future) {
       }
     }
   }
-  if (joinNode_->isRightJoin() && future_.valid()) {
+  if ((joinNode_->isRightJoin() || joinNode_->isRightSemiFilterJoin()) && future_.valid()) {
     *future = std::move(future_);
     return exec::BlockingReason::kWaitForJoinProbe;
   }
