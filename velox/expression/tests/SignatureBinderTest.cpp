@@ -1138,5 +1138,27 @@ TEST(SignatureBinderTest, coercions) {
       /*allowCoercion*/ true);
 }
 
+TEST(SignatureBinderTest, nonDecimalNumericTypeConstraint) {
+  auto signature = exec::AggregateFunctionSignatureBuilder()
+                       .nonDecimalNumericTypeVariable("T")
+                       .argumentType("T")
+                       .intermediateType("T")
+                       .returnType("bigint")
+                       .build();
+
+  testSignatureBinder(signature, {TINYINT()}, BIGINT());
+  testSignatureBinder(signature, {SMALLINT()}, BIGINT());
+  testSignatureBinder(signature, {INTEGER()}, BIGINT());
+  testSignatureBinder(signature, {BIGINT()}, BIGINT());
+  testSignatureBinder(signature, {REAL()}, BIGINT());
+  testSignatureBinder(signature, {DOUBLE()}, BIGINT());
+
+  assertCannotResolve(signature, {DECIMAL(8, 5)});
+  assertCannotResolve(signature, {DECIMAL(38, 15)});
+  assertCannotResolve(signature, {VARCHAR()});
+  assertCannotResolve(
+      signature, {ARRAY(ROW({"c0", "c1"}, {BIGINT(), SMALLINT()}))});
+}
+
 } // namespace
 } // namespace facebook::velox::exec::test
