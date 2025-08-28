@@ -32,3 +32,14 @@ target_link_libraries(
   Folly::folly
   Folly::follybenchmark
   fmt::fmt)
+
+add_executable(velox_hive_insertion_benchmark InsertionBenchmark.cpp
+                                              InsertionBenchmarkMain.cpp)
+
+target_link_libraries(
+  velox_hive_insertion_benchmark
+  velox_dwio_parquet_writer
+  velox_exec_test_lib
+  velox_hive_connector
+  Folly::follybenchmark
+  fmt::fmt)

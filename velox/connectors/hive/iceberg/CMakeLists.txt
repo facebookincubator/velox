@@ -18,6 +18,11 @@ velox_add_library(velox_hive_iceberg_splitreader IcebergSplitReader.cpp
 velox_link_libraries(velox_hive_iceberg_splitreader velox_connector
                      Folly::folly)
 
+if(VELOX_ENABLE_PARQUET)
+  velox_link_libraries(velox_hive_iceberg_splitreader
+                       velox_dwio_arrow_parquet_writer)
+endif()
+
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()

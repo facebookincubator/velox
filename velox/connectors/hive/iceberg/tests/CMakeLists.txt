@@ -58,4 +58,22 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     GTest::gtest
     GTest::gtest_main)
 
+  if(VELOX_ENABLE_PARQUET)
+    target_link_libraries(velox_hive_iceberg_test velox_dwio_parquet_writer
+                          velox_dwio_parquet_reader)
+  endif()
+
 endif()
+
+add_executable(
+  iceberg_insert_benchmark IcebergInsertBenchmark.cpp
+                           IcebergInsertBenchmarkMain.cpp IcebergTestBase.cpp)
+
+target_link_libraries(
+  iceberg_insert_benchmark
+  velox_hive_iceberg_splitreader
+  velox_dwio_parquet_reader
+  velox_dwio_parquet_writer
+  velox_vector_test_lib
+  velox_exec_test_lib
+  Folly::follybenchmark)
