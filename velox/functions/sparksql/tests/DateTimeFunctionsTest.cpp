@@ -96,7 +96,6 @@ TEST_F(DateTimeFunctionsTest, toUtcTimestamp) {
   EXPECT_EQ(
       "2015-01-23T16:00:00.000000000",
       toUtcTimestamp("2015-01-24 00:00:00", "+08:00"));
-  //
   EXPECT_EQ(
       "2024-03-10T08:01:58.000000000",
       toUtcTimestamp("2024-03-10 02:01:58", "America/Chicago"));

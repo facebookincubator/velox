@@ -32,7 +32,8 @@ velox_add_library(
   Size.cpp
   String.cpp
   TimestampUtils.cpp
-  UnscaledValueFunction.cpp)
+  UnscaledValueFunction.cpp
+)
 
 velox_link_libraries(
   velox_functions_spark_impl
