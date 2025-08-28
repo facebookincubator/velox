@@ -96,7 +96,13 @@ function install_fbthrift {
 function install_duckdb {
   if $BUILD_DUCKDB; then
     wget_and_untar https://github.com/duckdb/duckdb/archive/refs/tags/"${DUCKDB_VERSION}".tar.gz duckdb
-    cmake_install_dir duckdb -DBUILD_UNITTESTS=OFF -DENABLE_SANITIZER=OFF -DENABLE_UBSAN=OFF -DBUILD_SHELL=OFF -DEXPORT_DLL_SYMBOLS=OFF -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}"
+    # DuckDB uses git commands to retrieve version information during the build,
+    # which works with git clone. To prevent incorrectly using the parent project's
+    # git version when building from a tarball, we define GIT_COMMIT_HASH to skip
+    # that.
+    cmake_install_dir duckdb \
+      -DGIT_COMMIT_HASH="6536a77" -DBUILD_UNITTESTS=OFF -DENABLE_SANITIZER=OFF -DENABLE_UBSAN=OFF \
+      -DBUILD_SHELL=OFF -DEXPORT_DLL_SYMBOLS=OFF -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}"
   fi
 }
 
@@ -170,6 +176,18 @@ function install_simdjson {
 
 function install_arrow {
   wget_and_untar https://github.com/apache/arrow/archive/apache-arrow-"${ARROW_VERSION}".tar.gz arrow
+  (
+    # Can be removed after an upgrade to Arrow 20.0.0
+    if [ -z "$VELOX_ARROW_CMAKE_PATCH" ]; then
+      # We need to set a different path when building the Dockerfile.
+      ABSOLUTE_SCRIPTDIR=$(realpath "$SCRIPT_DIR")
+      VELOX_ARROW_CMAKE_PATCH="$ABSOLUTE_SCRIPTDIR/../CMake/resolve_dependency_modules/arrow/cmake-compatibility.patch"
+    fi
+
+    cd "$DEPENDENCY_DIR"/arrow || exit 1
+    git apply "$VELOX_ARROW_CMAKE_PATCH"
+  ) || exit 1
+
   cmake_install_dir arrow/cpp \
     -DARROW_PARQUET=OFF \
     -DARROW_WITH_THRIFT=ON \
@@ -178,7 +196,6 @@ function install_arrow {
     -DARROW_WITH_ZLIB=ON \
     -DARROW_WITH_ZSTD=ON \
     -DARROW_JEMALLOC=OFF \
-    -DARROW_MIMALLOC=OFF \
     -DARROW_SIMD_LEVEL=NONE \
     -DARROW_RUNTIME_SIMD_LEVEL=NONE \
     -DARROW_WITH_UTF8PROC=OFF \
