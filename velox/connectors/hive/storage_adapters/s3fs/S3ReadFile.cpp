@@ -67,6 +67,12 @@ class S3ReadFile ::Impl {
     auto outcome = client_->HeadObject(request);
     if (!outcome.IsSuccess()) {
       RECORD_METRIC_VALUE(kMetricS3GetMetadataErrors);
+      if (outcome.GetError().ShouldRetry()) {
+        RECORD_METRIC_VALUE(
+            getS3RetryableErrorString(
+                getErrorStringFromS3Error(outcome.GetError())),
+            outcome.GetRetryCount());
+      }
     }
     RECORD_METRIC_VALUE(kMetricS3GetMetadataRetries, outcome.GetRetryCount());
     VELOX_CHECK_AWS_OUTCOME(
@@ -157,6 +163,12 @@ class S3ReadFile ::Impl {
     auto outcome = client_->GetObject(request);
     if (!outcome.IsSuccess()) {
       RECORD_METRIC_VALUE(kMetricS3GetObjectErrors);
+      if (outcome.GetError().ShouldRetry()) {
+        RECORD_METRIC_VALUE(
+            getS3RetryableErrorString(
+                getErrorStringFromS3Error(outcome.GetError())),
+            outcome.GetRetryCount());
+      }
     }
     RECORD_METRIC_VALUE(kMetricS3GetObjectRetries, outcome.GetRetryCount());
     RECORD_METRIC_VALUE(kMetricS3ActiveConnections, -1);
