@@ -75,5 +75,20 @@ TEST_F(BigintEnumTypeTest, basic) {
 TEST_F(BigintEnumTypeTest, serde) {
   testTypeSerde(moodEnum_);
 }
+
+TEST_F(BigintEnumTypeTest, keyAt) {
+  // Test with existing values
+  auto curKey = moodEnum_->keyAt(-2);
+  ASSERT_TRUE(curKey.has_value());
+  ASSERT_EQ(*curKey, "CURIOUS");
+
+  auto happyKey = moodEnum_->keyAt(0);
+  ASSERT_TRUE(happyKey.has_value());
+  ASSERT_EQ(*happyKey, "HAPPY");
+
+  // Test with non-existing value
+  auto nonExistingKey = moodEnum_->keyAt(42);
+  ASSERT_FALSE(nonExistingKey.has_value());
+}
 } // namespace
 } // namespace facebook::velox
