@@ -349,7 +349,7 @@ struct CudfDriverAdapter {
 
 static bool isCudfRegistered = false;
 
-void registerCudf(const CudfOptions& options, bool force_replace) {
+void registerCudf(const CudfOptions& options) {
   if (cudfIsRegistered()) {
     return;
   }
@@ -366,7 +366,7 @@ void registerCudf(const CudfOptions& options, bool force_replace) {
 
   exec::Operator::registerOperator(
       std::make_unique<CudfHashJoinBridgeTranslator>());
-  CudfDriverAdapter cda{mr, force_replace};
+  CudfDriverAdapter cda{mr, options.force_replace};
   exec::DriverAdapter cudfAdapter{kCudfAdapterName, {}, cda};
   exec::DriverFactory::registerAdapter(cudfAdapter);
   isCudfRegistered = true;

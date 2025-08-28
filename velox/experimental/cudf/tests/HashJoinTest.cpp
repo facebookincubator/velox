@@ -54,7 +54,8 @@ class HashJoinTest : public HashJoinTestBase {
 
   void SetUp() override {
     HashJoinTestBase::SetUp();
-    cudf_velox::registerCudf(cudf_velox::CudfOptions::getInstance(), true);
+    auto options = cudf_velox::CudfOptions(true);
+    cudf_velox::registerCudf(std::move(options));
   }
 
   void TearDown() override {

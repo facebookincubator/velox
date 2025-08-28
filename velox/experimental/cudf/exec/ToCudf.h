@@ -68,6 +68,15 @@ class CudfOptions {
   // The initial percent of GPU memory to allocate for memory resource for one
   // thread.
   int memoryPercent;
+  const bool force_replace;
+
+  CudfOptions(bool force_repl)
+      : cudfEnabled(FLAGS_velox_cudf_enabled),
+        cudfMemoryResource(FLAGS_velox_cudf_memory_resource),
+        cudfTableScan(FLAGS_velox_cudf_table_scan),
+        memoryPercent(50),
+        force_replace{force_repl},
+        prefix_("") {}
 
  private:
   CudfOptions()
@@ -75,6 +84,7 @@ class CudfOptions {
         cudfMemoryResource(FLAGS_velox_cudf_memory_resource),
         cudfTableScan(FLAGS_velox_cudf_table_scan),
         memoryPercent(50),
+        force_replace{false},
         prefix_("") {}
   CudfOptions(const CudfOptions&) = delete;
   CudfOptions& operator=(const CudfOptions&) = delete;
@@ -82,9 +92,7 @@ class CudfOptions {
 };
 
 /// Registers adapter to add cuDF operators to Drivers.
-void registerCudf(
-    const CudfOptions& options = CudfOptions::getInstance(),
-    bool force_replace = false);
+void registerCudf(const CudfOptions& options = CudfOptions::getInstance());
 void unregisterCudf();
 
 /// Returns true if cuDF is registered.
