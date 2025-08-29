@@ -98,7 +98,7 @@ core::PlanNodePtr OperatorReplayerBase::createPlan() {
       planFragment_.get(),
       [this](const core::PlanNode* node) { return node->id() == nodeId_; });
 
-  if (replayNode->name() == "TableScan") {
+  if (replayNode->sources().empty()) {
     return exec::test::PlanBuilder()
         .addNode(replayNodeFactory(replayNode))
         .capturePlanNodeId(replayPlanNodeId_)
