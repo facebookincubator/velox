@@ -21,13 +21,40 @@
 #include "velox/expression/CoalesceExpr.h"
 #include "velox/expression/ConjunctExpr.h"
 #include "velox/expression/ExprConstants.h"
+#include "velox/expression/ExprRewrite.h"
+#include "velox/expression/ExprRewriteRegistry.h"
 #include "velox/expression/FunctionCallToSpecialForm.h"
 #include "velox/expression/RowConstructor.h"
 #include "velox/expression/SpecialFormRegistry.h"
+#include "velox/expression/SpecialFormRewrites.h"
 #include "velox/expression/SwitchExpr.h"
 #include "velox/expression/TryExpr.h"
 
 namespace facebook::velox::exec {
+
+void registerSpecialFormExpressionRewrites() {
+  registerExpressionRewrite(
+      expression::kConjunct,
+      std::make_unique<expression::ExpressionRewrite>(
+          expression::rewriteConjunctExpression));
+  registerExpressionRewrite(
+      expression::kCoalesce,
+      std::make_unique<expression::ExpressionRewrite>(
+          expression::rewriteCoalesceExpression));
+  registerExpressionRewrite(
+      expression::kIf,
+      std::make_unique<expression::ExpressionRewrite>(
+          expression::rewriteIfExpression));
+  registerExpressionRewrite(
+      expression::kSwitch,
+      std::make_unique<expression::ExpressionRewrite>(
+          expression::rewriteSwitchExpression));
+  registerExpressionRewrite(
+      expression::kIn,
+      std::make_unique<expression::ExpressionRewrite>(
+          expression::rewriteInExpression));
+}
+
 void registerFunctionCallToSpecialForms() {
   registerFunctionCallToSpecialForm(
       expression::kAnd,
@@ -50,5 +77,7 @@ void registerFunctionCallToSpecialForms() {
   registerFunctionCallToSpecialForm(
       RowConstructorCallToSpecialForm::kRowConstructor,
       std::make_unique<RowConstructorCallToSpecialForm>());
+
+  registerSpecialFormExpressionRewrites();
 }
 } // namespace facebook::velox::exec
