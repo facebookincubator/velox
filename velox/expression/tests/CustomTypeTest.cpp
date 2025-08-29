@@ -237,6 +237,8 @@ TEST_F(CustomTypeTest, getCustomTypeNames) {
       "QDIGEST",
       "SFMSKETCH",
       "BIGINT_ENUM",
+      "KHYPERLOGLOG",
+      "P4HYPERLOGLOG",
   };
 #ifdef VELOX_ENABLE_GEO
   expectedTypes.insert("GEOMETRY");
