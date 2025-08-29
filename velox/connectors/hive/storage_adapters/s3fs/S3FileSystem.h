@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <folly/executors/CPUThreadPoolExecutor.h>
 #include "velox/common/file/FileSystems.h"
 
 namespace Aws::Auth {
@@ -32,6 +33,33 @@ bool initializeS3(
 void finalizeS3();
 
 class S3Config;
+
+struct S3UploadManager {
+  explicit S3UploadManager(const S3Config& s3Config);
+  static std::shared_ptr<S3UploadManager> getInstance(const S3Config& s3Config);
+
+  bool isUploadPartAsyncEnabled() const;
+  size_t getPartUploadSize() const;
+  size_t getWriteFileSemaphoreNum() const;
+  std::shared_ptr<folly::CPUThreadPoolExecutor> getUploadThreadPool() const;
+
+ private:
+  static constexpr bool kDefaultUploadPartAsyncEnabled = false;
+  static constexpr size_t kDefaultPartUploadSize = 10485760;
+  static constexpr size_t kDefaultWriteFileSemaphore = 4;
+  static constexpr size_t kDefaultUploadThreads = 16;
+
+  bool uploadPartAsyncEnabled;
+  size_t kPartUploadSize;
+  size_t writeFileSemaphore;
+  std::shared_ptr<folly::CPUThreadPoolExecutor> uploadThreadPool_;
+  static std::shared_ptr<S3UploadManager> instance_;
+
+  void setPartUploadSize(size_t partUploadSize);
+  void setWriteFileSemaphoreNum(size_t value);
+  void setUploadThreadPool(size_t value);
+  static size_t validatePositiveValue(size_t value, const std::string& name);
+};
 
 using AWSCredentialsProviderFactory =
     std::function<std::shared_ptr<Aws::Auth::AWSCredentialsProvider>(
