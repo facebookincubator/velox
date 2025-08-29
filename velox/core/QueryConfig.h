@@ -692,6 +692,11 @@ class QueryConfig {
   /// username.
   static constexpr const char* kClientTags = "client_tags";
 
+  /// Special form expression rewrites are applied if this is true. False by
+  /// default.
+  static constexpr const char* kExprApplySpecialFormRewrites =
+      "expression.apply_special_form_rewrites";
+
   bool selectiveNimbleReaderEnabled() const {
     return get<bool>(kSelectiveNimbleReaderEnabled, false);
   }
@@ -1243,6 +1248,10 @@ class QueryConfig {
 
   int32_t maxNumSplitsListenedTo() const {
     return get<int32_t>(kMaxNumSplitsListenedTo, 0);
+  }
+
+  bool exprApplySpecialFormRewrites() const {
+    return get<bool>(kExprApplySpecialFormRewrites, false);
   }
 
   std::string source() const {
