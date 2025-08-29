@@ -387,6 +387,14 @@ TEST_F(TypeParserTest, bigintEnumBasic) {
           "test.enum.mood:BigintEnum(test.enum.mood{\"CURIOUS\":-2, \"HAPPY\":0})"),
       *BIGINT_ENUM(moodWithNegativeValue));
 
+  // Parse large integers.
+  LongEnumParameter moodWithLargeValue(
+      "test.enum.mood", {{"CURIOUS", -2}, {"HAPPY", 106071912278278}});
+  ASSERT_EQ(
+      *parseType(
+          "test.enum.mood:BigintEnum(test.enum.mood{\"CURIOUS\":-2, \"HAPPY\":106071912278278})"),
+      *BIGINT_ENUM(moodWithLargeValue));
+
   // Enum name that is not in the form catalog.namespace.enum_name.
   LongEnumParameter otherEnumInfo(
       "someEnumType", {{"CURIOUS", 2}, {"HAPPY", 0}});
