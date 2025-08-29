@@ -126,7 +126,7 @@ SplitReader::SplitReader(
     const std::shared_ptr<io::IoStatistics>& ioStats,
     const std::shared_ptr<filesystems::File::IoStats>& fsStats,
     FileHandleFactory* fileHandleFactory,
-    folly::Executor* executor,
+    folly::Executor* ioExecutor,
     const std::shared_ptr<common::ScanSpec>& scanSpec)
     : hiveSplit_(hiveSplit),
       hiveTableHandle_(hiveTableHandle),
@@ -137,7 +137,7 @@ SplitReader::SplitReader(
       ioStats_(ioStats),
       fsStats_(fsStats),
       fileHandleFactory_(fileHandleFactory),
-      executor_(executor),
+      ioExecutor_(ioExecutor),
       pool_(connectorQueryCtx->memoryPool()),
       scanSpec_(scanSpec),
       baseReaderOpts_(connectorQueryCtx->memoryPool()),
@@ -318,7 +318,7 @@ void SplitReader::createReader() {
       connectorQueryCtx_,
       ioStats_,
       fsStats_,
-      executor_);
+      ioExecutor_);
 
   baseReader_ = dwio::common::getReaderFactory(baseReaderOpts_.fileFormat())
                     ->createReader(std::move(baseFileInput), baseReaderOpts_);
@@ -378,6 +378,7 @@ void SplitReader::createRowReader(
       hiveSplit_,
       hiveConfig_,
       connectorQueryCtx_->sessionProperties(),
+      ioExecutor_,
       baseRowReaderOpts_);
   baseRowReaderOpts_.setTrackRowSize(
       connectorQueryCtx_->rowSizeTrackingEnabled());

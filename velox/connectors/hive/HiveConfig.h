@@ -146,6 +146,11 @@ class HiveConfig {
   /// meta data together. Optimization to decrease the small IO requests
   static constexpr const char* kFilePreloadThreshold = "file-preload-threshold";
 
+  /// Configures how many stripes we read in parallel.
+  /// When set to 0, parallel unit loader is disabled.
+  static constexpr const char* kParallelUnitLoadCount = "parallel-unit-load-count";
+  static constexpr const char* kParallelUnitLoadCountSession = "parallel_unit_load_count";
+
   /// Config used to create write files. This config is provided to underlying
   /// file system through hive connector and data sink. The config is free form.
   /// The form should be defined by the underlying file system.
@@ -234,6 +239,8 @@ class HiveConfig {
   int32_t maxCoalescedDistanceBytes(const config::ConfigBase* session) const;
 
   int32_t prefetchRowGroups() const;
+
+  size_t parallelUnitLoadCount(const config::ConfigBase* session) const;
 
   int32_t loadQuantum(const config::ConfigBase* session) const;
 
