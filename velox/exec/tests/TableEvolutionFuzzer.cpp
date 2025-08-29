@@ -126,26 +126,6 @@ bool hasEmptyElement(const RowVectorPtr& data, int columnIndex) {
   return false; // No empty maps found
 }
 
-bool hasDuplicateMapKeys(const RowVectorPtr& data, int columnIndex) {
-  auto mapVector = data->childAt(columnIndex)->as<MapVector>();
-  if (!mapVector) {
-    return false;
-  }
-
-  auto keys = mapVector->mapKeys();
-  auto totalKeyCount = keys->size();
-
-  for (int i = 0; i < totalKeyCount; ++i) {
-    for (int j = i + 1; j < totalKeyCount; ++j) {
-      if (keys->equalValueAt(keys.get(), i, j)) {
-        return true;
-      }
-    }
-  }
-
-  return false;
-}
-
 } // namespace
 
 TableEvolutionFuzzer::TableEvolutionFuzzer(const Config& config)
@@ -508,7 +488,7 @@ VectorPtr TableEvolutionFuzzer::liftToType(
 
 void TableEvolutionFuzzer::run() {
   ScopedOOMInjector oomInjectorWritePath(
-      []() -> bool { return folly::Random::oneIn(10); },
+      [this]() -> bool { return folly::Random::oneIn(10, rng_); },
       10); // Check the condition every 10 ms.
   if (FLAGS_enable_oom_injection_write_path) {
     oomInjectorWritePath.enable();
@@ -639,7 +619,7 @@ void TableEvolutionFuzzer::run() {
       makeScanTask(rowType, std::move(expectedSplits), pushownConfig, true);
 
   ScopedOOMInjector oomInjectorReadPath(
-      []() -> bool { return folly::Random::oneIn(10); },
+      [this]() -> bool { return folly::Random::oneIn(10, rng_); },
       10); // Check the condition every 10 ms.
   if (FLAGS_enable_oom_injection_read_path) {
     oomInjectorReadPath.enable();
@@ -812,7 +792,9 @@ std::unique_ptr<TaskCursor> TableEvolutionFuzzer::makeWriteTask(
     const Setup& setup,
     const RowVectorPtr& data,
     const std::string& outputDir,
-    const std::vector<column_index_t>& bucketColumnIndices) {
+    const std::vector<column_index_t>& bucketColumnIndices,
+    FuzzerGenerator& rng,
+    bool enableFlatMap) {
   auto builder = PlanBuilder().values({data});
 
   // Create serdeParameters using proper dwrf::Config for flatmap configuration
@@ -829,13 +811,11 @@ std::unique_ptr<TaskCursor> TableEvolutionFuzzer::makeWriteTask(
           continue;
         }
 
-        // Check if this specific map column has duplicate elements
-        if (hasDuplicateMapKeys(data, i)) {
-          continue;
-        }
-
         if (!hasUnsupportedMapKey(setup.schema->childAt(i))) {
-          supportedMapColumnIndices.push_back(static_cast<uint32_t>(i));
+          // %50 chance to enable flatmap for this map column.
+          if (enableFlatMap && folly::Random::oneIn(2, rng)) {
+            supportedMapColumnIndices.push_back(static_cast<uint32_t>(i));
+          }
         }
       }
     }
@@ -1010,8 +990,8 @@ void TableEvolutionFuzzer::createWriteTasks(
     }
     auto actualDir = fmt::format("{}/actual_{}", tableOutputRootDirPath, i);
     VELOX_CHECK(std::filesystem::create_directory(actualDir));
-    writeTasks[2 * i] =
-        makeWriteTask(testSetups[i], data, actualDir, bucketColumnIndices);
+    writeTasks[2 * i] = makeWriteTask(
+        testSetups[i], data, actualDir, bucketColumnIndices, rng_, false);
 
     if (i == config_.evolutionCount - 1) {
       finalExpectedData = std::move(data);
@@ -1023,7 +1003,12 @@ void TableEvolutionFuzzer::createWriteTasks(
         liftToType(data, testSetups.back().schema));
 
     writeTasks[2 * i + 1] = makeWriteTask(
-        testSetups.back(), expectedData, expectedDir, bucketColumnIndices);
+        testSetups.back(),
+        expectedData,
+        expectedDir,
+        bucketColumnIndices,
+        rng_,
+        false);
   }
 }
 
