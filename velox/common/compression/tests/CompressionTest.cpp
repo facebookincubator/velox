@@ -19,6 +19,7 @@
 #include <memory>
 #include <random>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -106,11 +107,11 @@ void checkCodecRoundtrip(
   std::vector<uint8_t> decompressed(data.size() == 0 ? 1 : data.size());
 
   // Compress with codec c1.
-  auto compressionLength =
+  auto compressedLength =
       c1->compress(
             data.data(), data.size(), compressed.data(), maxCompressedLen)
           .thenOrThrow(folly::identity, throwsNotOk);
-  compressed.resize(compressionLength);
+  compressed.resize(compressedLength);
 
   // Decompress with codec c2.
   auto decompressedLength = c2->decompress(
@@ -122,6 +123,41 @@ void checkCodecRoundtrip(
   decompressed.resize(data.size());
   ASSERT_EQ(data, decompressed);
   ASSERT_EQ(data.size(), decompressedLength);
+
+  // Compress with codec c1 with a smaller output buffer to test compression
+  // failure.
+  static const std::unordered_map<CompressionKind, std::string>
+      compressionFailures = {
+          {CompressionKind_LZ4, "LZ4 compression failed"},
+          {CompressionKind_ZSTD,
+           "ZSTD compression failed: Destination buffer is too small"},
+      };
+  VELOX_ASSERT_ERROR_STATUS(
+      c1->compress(
+            data.data(), data.size(), compressed.data(), compressedLength - 1)
+          .error(),
+      StatusCode::kIOError,
+      compressionFailures.at(c1->compressionKind()));
+
+  // Decompress corrupted data.
+  std::vector<uint8_t> corruptedData = compressed;
+  corruptedData.resize(compressed.size() + 1);
+
+  static const std::unordered_map<CompressionKind, std::string>
+      decompressionFailures = {
+          {CompressionKind_LZ4, "LZ4 decompression failed"},
+          {CompressionKind_ZSTD,
+           "ZSTD decompression failed: Src size is incorrect"},
+      };
+  VELOX_ASSERT_ERROR_STATUS(
+      c2->decompress(
+            corruptedData.data(),
+            corruptedData.size(),
+            decompressed.data(),
+            decompressed.size())
+          .error(),
+      StatusCode::kIOError,
+      decompressionFailures.at(c2->compressionKind()));
 }
 
 // Use same codec for both compression and decompression.
@@ -427,6 +463,13 @@ TEST_P(CodecTest, getUncompressedLength) {
         codec->getUncompressedLength(compressed.data(), compressedLength)
             .thenOrThrow(folly::identity, throwsNotOk);
     ASSERT_EQ(uncompressedLength, inputLength);
+
+    // Test corrupted data by removing the first byte.
+    VELOX_ASSERT_ERROR_STATUS(
+        codec->getUncompressedLength(compressed.data() + 1, compressedLength)
+            .error(),
+        StatusCode::kIOError,
+        "Invalid compressed data.");
   } else {
     VELOX_ASSERT_ERROR_STATUS(
         codec->getUncompressedLength(compressed.data(), compressedLength)
@@ -436,9 +479,6 @@ TEST_P(CodecTest, getUncompressedLength) {
             "getUncompressedLength is unsupported with {} format.",
             codec->name()));
   }
-
-  // TODO: For codecs that support getUncompressedLength(), verify the error
-  // message for corrupted data.
 }
 
 TEST_P(CodecTest, codecRoundtrip) {
@@ -506,6 +546,11 @@ INSTANTIATE_TEST_SUITE_P(
     TestLz4,
     CodecTest,
     ::testing::ValuesIn(generateLz4TestParams()));
+
+INSTANTIATE_TEST_SUITE_P(
+    TestZstd,
+    CodecTest,
+    ::testing::Values(TestParams{CompressionKind::CompressionKind_ZSTD}));
 
 TEST(CodecLZ4HadoopTest, compatibility) {
   // LZ4 Hadoop codec should be able to read back LZ4 raw blocks.
