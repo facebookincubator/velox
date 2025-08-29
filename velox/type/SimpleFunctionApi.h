@@ -64,6 +64,20 @@ using S2 = IntegerVariable<6>;
 using S3 = IntegerVariable<7>;
 using S4 = IntegerVariable<8>;
 
+template <size_t id>
+struct EnumVariable {
+  static size_t getId() {
+    return id;
+  }
+
+  static std::string name() {
+    return fmt::format("E{}", id);
+  }
+};
+
+using E1 = EnumVariable<1>;
+using E2 = EnumVariable<2>;
+
 template <typename P, typename S>
 struct ShortDecimal {
  private:
@@ -219,6 +233,30 @@ struct Varchar {
  private:
   Varchar() {}
 };
+
+// Type to use for inputs and outputs of simple functions with BigintEnum types.
+// E.g. arg_type<BigintEnum<E1>> and out_type<BigintEnum<E1>>.
+template <typename E>
+struct BigintEnumT {
+  using type = int64_t;
+
+  static inline const std::string typeName = "bigint_enum(" + E::name() + ")";
+};
+
+template <typename E>
+using BigintEnum = CustomType<BigintEnumT<E>>;
+
+// Type to use for inputs and outputs of simple functions with VarcharEnum
+// types. E.g. arg_type<VarcharEnum<E1>> and out_type<VarcharEnum<E1>>.
+template <typename E>
+struct VarcharEnumT {
+  using type = Varchar;
+
+  static inline const std::string typeName = "varchar_enum(" + E::name() + ")";
+};
+
+template <typename E>
+using VarcharEnum = CustomType<VarcharEnumT<E>>;
 
 template <typename T>
 struct Constant {};
