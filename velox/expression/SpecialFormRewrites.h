@@ -13,20 +13,19 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#pragma once
+#include "velox/core/Expressions.h"
+#include "velox/core/QueryCtx.h"
 
 namespace facebook::velox::expression {
 
-constexpr const char* kConjunct = "conjunct";
-constexpr const char* kAnd = "and";
-constexpr const char* kOr = "or";
-constexpr const char* kSwitch = "switch";
-constexpr const char* kIn = "in";
-constexpr const char* kIf = "if";
-constexpr const char* kFail = "fail";
-constexpr const char* kCoalesce = "coalesce";
-constexpr const char* kCast = "cast";
-constexpr const char* kTryCast = "try_cast";
-constexpr const char* kTry = "try";
+/// Flattens inputs to conjunct expressions 'AND' and 'OR'. Simplifies conjunct
+/// expressions 'AND' and 'OR' to constant boolean expressions 'false' and
+/// 'true' respectively if any of the inputs can be constant folded to 'false'
+/// and 'true'. The rewrite also prunes inputs to conjunct expressions 'AND'
+/// and 'OR' that can be constant folded to 'true' and 'false' respectively.
+core::TypedExprPtr rewriteConjunctExpression(
+    const core::TypedExprPtr& input,
+    const std::shared_ptr<core::QueryCtx>& queryCtx,
+    memory::MemoryPool* pool);
 
 } // namespace facebook::velox::expression

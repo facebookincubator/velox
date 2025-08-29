@@ -13,20 +13,27 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#pragma once
+
+#include <set>
+
+#include "velox/expression/ExprRewrite.h"
+#include "velox/expression/ExprRewriteRegistry.h"
 
 namespace facebook::velox::expression {
 
-constexpr const char* kConjunct = "conjunct";
-constexpr const char* kAnd = "and";
-constexpr const char* kOr = "or";
-constexpr const char* kSwitch = "switch";
-constexpr const char* kIn = "in";
-constexpr const char* kIf = "if";
-constexpr const char* kFail = "fail";
-constexpr const char* kCoalesce = "coalesce";
-constexpr const char* kCast = "cast";
-constexpr const char* kTryCast = "try_cast";
-constexpr const char* kTry = "try";
+core::TypedExprPtr rewriteExpression(
+    const core::TypedExprPtr& expr,
+    const std::shared_ptr<core::QueryCtx>& queryCtx,
+    memory::MemoryPool* pool) {
+  const auto& rewriteRegistry = exec::expressionRewriteRegistry();
+  const auto& rewriteNames = rewriteRegistry.getExpressionRewriteNames();
+  for (const auto& name : rewriteNames) {
+    auto expressionRewriteFunc = *rewriteRegistry.getExpressionRewrite(name);
+    if (auto rewritten = expressionRewriteFunc(expr, queryCtx, pool)) {
+      return rewritten;
+    }
+  }
+  return nullptr;
+}
 
 } // namespace facebook::velox::expression
