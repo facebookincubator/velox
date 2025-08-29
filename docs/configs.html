@@ -993,12 +993,15 @@ The provider must be registered using “registerGcsOAuthCredentialsProvider” 
 <tbody>
 <tr class="row-even"><td><p>fs.azure.account.auth.type.&lt;storage-account&gt;.dfs.core.windows.net</p></td>
 <td><p>string</p></td>
-<td><p>SharedKey</p></td>
+<td></td>
 <td><p>Specifies the authentication mechanism to use for Azure storage accounts.
 <strong>Allowed values:</strong> “SharedKey”, “OAuth”, “SAS”.
 “SharedKey”: Uses the storage account name and key for authentication.
 “OAuth”: Utilizes OAuth tokens for secure authentication.
-“SAS”: Employs Shared Access Signatures for granular access control.</p></td>
+“SAS”: Employs Shared Access Signatures for granular access control.
+To create Azure clients with the configured authentication type, the caller must
+register the corresponding Azure client provider from the configuration by calling
+<cite>registerAzureClientProvider</cite>.</p></td>
 </tr>
 <tr class="row-odd"><td><p>fs.azure.account.key.&lt;storage-account&gt;.dfs.core.windows.net</p></td>
 <td><p>string</p></td>
