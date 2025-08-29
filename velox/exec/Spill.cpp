@@ -18,11 +18,52 @@
 #include "velox/common/base/RuntimeMetrics.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/exec/OperatorUtils.h"
 #include "velox/serializers/PrestoSerializer.h"
 
 using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::exec {
+
+namespace utils {
+void gatherMerge(
+    RowVector* target,
+    TreeOfLosers<SpillMergeStream>* mergeTree,
+    int32_t& count,
+    std::vector<const RowVector*>& bufferSources,
+    std::vector<vector_size_t>& bufferSourceIndices) {
+  VELOX_CHECK_GE(bufferSources.size(), target->size());
+  VELOX_CHECK_GE(bufferSourceIndices.size(), target->size());
+  count = 0;
+  int32_t outputSize = 0;
+  bool isEndOfBatch = false;
+  for (auto currentStream = mergeTree->next();
+       currentStream != nullptr && count + outputSize < target->size();
+       currentStream = mergeTree->next()) {
+    bufferSources[outputSize] = &currentStream->current();
+    bufferSourceIndices[outputSize] =
+        currentStream->currentIndex(&isEndOfBatch);
+    ++outputSize;
+    if (FOLLY_UNLIKELY(isEndOfBatch)) {
+      // The stream is at end of input batch. Need to copy out the rows before
+      // fetching next batch in 'pop'.
+      gatherCopy(target, count, outputSize, bufferSources, bufferSourceIndices);
+      count += outputSize;
+      outputSize = 0;
+    }
+    // Advance the stream.
+    currentStream->pop();
+  }
+  VELOX_CHECK_LE(count + outputSize, target->size());
+
+  if (FOLLY_LIKELY(outputSize != 0)) {
+    gatherCopy(target, count, outputSize, bufferSources, bufferSourceIndices);
+    count += outputSize;
+    outputSize = 0;
+  }
+}
+} // namespace utils
+
 void SpillMergeStream::pop() {
   VELOX_CHECK(!closed_);
   if (++index_ >= size_) {
@@ -308,6 +349,172 @@ SpillPartition::createOrderedReader(
     return nullptr;
   }
   return std::make_unique<TreeOfLosers<SpillMergeStream>>(std::move(streams));
+}
+
+namespace {
+size_t estimateOutputBatchRowSize(
+    const std::vector<std::unique_ptr<SpillMergeStream>>& streams,
+    const vector_size_t maxRows,
+    const size_t maxBytes) {
+  size_t numEstimations{0};
+  int64_t estimateRowSizeSum{0};
+  for (const auto& stream : streams) {
+    const auto estimateRowSize = stream->estimateRowSize();
+    if (estimateRowSize.has_value()) {
+      ++numEstimations;
+      estimateRowSizeSum += estimateRowSize.value();
+    }
+  }
+
+  if (numEstimations == 0) {
+    return maxRows;
+  }
+
+  const auto estimateRowSize =
+      std::max<vector_size_t>(1, estimateRowSizeSum / numEstimations);
+  return std::min<vector_size_t>(
+      std::max<vector_size_t>(1, maxBytes / estimateRowSize), maxRows);
+}
+
+SpillFileInfo mergeFiles(
+    const std::vector<SpillFileInfo>& files,
+    const std::string& pathPrefix,
+    uint64_t readBufferSize,
+    uint64_t writeBufferSize,
+    vector_size_t maxBatchRows,
+    size_t maxBatchBytes,
+    RowVectorPtr bufferVector,
+    std::vector<const RowVector*>& bufferSpillSources,
+    std::vector<vector_size_t>& bufferSpillSourceRows,
+    const common::UpdateAndCheckSpillLimitCB& updateAndCheckSpillLimitCb,
+    memory::MemoryPool* pool,
+    folly::Synchronized<common::SpillStats>* spillStats,
+    const std::string& fileCreateConfig) {
+  VELOX_CHECK_GT(files.size(), 0);
+  std::vector<std::unique_ptr<SpillMergeStream>> streams;
+  streams.reserve(files.size());
+  for (const auto& fileInfo : files) {
+    streams.push_back(FileSpillMergeStream::create(
+        SpillReadFile::create(fileInfo, readBufferSize, pool, spillStats)));
+  }
+  auto batchRows =
+      estimateOutputBatchRowSize(streams, maxBatchRows, maxBatchBytes);
+
+  auto mergeTree =
+      std::make_unique<TreeOfLosers<SpillMergeStream>>(std::move(streams));
+  const auto type = files[0].type;
+
+  auto writer = std::make_unique<SpillWriter>(
+      type,
+      files[0].sortingKeys,
+      files[0].compressionKind,
+      pathPrefix,
+      std::numeric_limits<uint64_t>::max(),
+      writeBufferSize,
+      fileCreateConfig,
+      updateAndCheckSpillLimitCb,
+      pool,
+      spillStats);
+
+  while (mergeTree->next()) {
+    VectorPtr tmp = std::move(bufferVector);
+    BaseVector::prepareForReuse(tmp, batchRows);
+    bufferVector = std::static_pointer_cast<RowVector>(tmp);
+    for (auto& child : bufferVector->children()) {
+      child->resize(batchRows);
+    }
+    int32_t outputRow = 0;
+    utils::gatherMerge(
+        bufferVector.get(),
+        mergeTree.get(),
+        outputRow,
+        bufferSpillSources,
+        bufferSpillSourceRows);
+
+    IndexRange range{0, outputRow};
+    writer->write(bufferVector, folly::Range<IndexRange*>(&range, 1));
+  }
+  auto resultFiles = writer->finish();
+  VELOX_CHECK_EQ(resultFiles.size(), 1);
+  return std::move(resultFiles[0]);
+}
+
+struct SpillFileInfoComp {
+  bool operator()(const SpillFileInfo& lhs, const SpillFileInfo& rhs) const {
+    return lhs.size > rhs.size;
+  }
+};
+using SpillFileInfoHeap = std::priority_queue<
+    SpillFileInfo,
+    std::vector<SpillFileInfo>,
+    SpillFileInfoComp>;
+} // namespace
+
+std::unique_ptr<TreeOfLosers<SpillMergeStream>>
+SpillPartition::createOrderedReaderWithPreMerge(
+    int mergeWayThreshold,
+    uint64_t readBufferSize,
+    uint64_t writeBufferSize,
+    const common::UpdateAndCheckSpillLimitCB& updateAndCheckSpillLimitCb,
+    memory::MemoryPool* pool,
+    folly::Synchronized<common::SpillStats>* spillStats,
+    const std::string& fileCreateConfig) {
+  if (mergeWayThreshold <= 1 || files_.size() <= mergeWayThreshold) {
+    return createOrderedReader(readBufferSize, pool, spillStats);
+  }
+
+  auto startFileNum = files_.size();
+  SpillFileInfoHeap orderedFiles(files_.begin(), files_.end());
+  SpillFiles files;
+  files.reserve(mergeWayThreshold);
+  auto filePathPrefix = files_[0].path;
+  constexpr size_t maxBatchRows = 1'000;
+  constexpr size_t maxBatchBytes = 64 * 1024;
+  RowVectorPtr bufferVector = std::static_pointer_cast<RowVector>(
+      BaseVector::create(files_[0].type, maxBatchRows, pool));
+  std::vector<const RowVector*> bufferSpillSources(maxBatchRows);
+  std::vector<vector_size_t> bufferSpillSourceRows(maxBatchRows);
+
+  // Recursively merge the files.
+  int round = 0;
+  for (; orderedFiles.size() > mergeWayThreshold; round++) {
+    int mergeFileNum = std::min(
+        static_cast<size_t>(mergeWayThreshold),
+        orderedFiles.size() + 1 - mergeWayThreshold);
+    auto roundPathPrefix =
+        fmt::format("{}-merge-round-{}", filePathPrefix, round);
+    // Choose the top #mergeFileNum smallest files for merging to minimize IO.
+    for (; mergeFileNum > 0; mergeFileNum--) {
+      files.push_back(orderedFiles.top());
+      orderedFiles.pop();
+    }
+    auto mergedFile = mergeFiles(
+        files,
+        roundPathPrefix,
+        readBufferSize,
+        writeBufferSize,
+        maxBatchRows,
+        maxBatchBytes,
+        bufferVector,
+        bufferSpillSources,
+        bufferSpillSourceRows,
+        updateAndCheckSpillLimitCb,
+        pool,
+        spillStats,
+        fileCreateConfig);
+    orderedFiles.push(mergedFile);
+    files.clear();
+  }
+
+  files_.clear();
+  while (!orderedFiles.empty()) {
+    files_.push_back(orderedFiles.top());
+    orderedFiles.pop();
+  }
+  auto endFileNum = files_.size();
+  VLOG(1) << "For file " << files_[0].path << "pre merge from #" << startFileNum
+          << " files to #" << endFileNum << " files in #" << round << " rounds";
+  return createOrderedReader(readBufferSize, pool, spillStats);
 }
 
 IterableSpillPartitionSet::IterableSpillPartitionSet() {
