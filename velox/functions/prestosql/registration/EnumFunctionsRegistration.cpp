@@ -28,5 +28,7 @@ void registerEnumFunctions(const std::string& prefix) {
 
   registerFunction<EnumKeyFunction, Varchar, BigintEnum<E1>>(
       {prefix + "enum_key"});
+  registerFunction<EnumKeyFunction, Varchar, VarcharEnum<E1>>(
+      {prefix + "enum_key"});
 }
 } // namespace facebook::velox::functions
