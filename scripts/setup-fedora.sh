@@ -82,6 +82,7 @@ function install_velox_deps {
   run_and_time install_simdjson # to new in fedora repos
   run_and_time install_geos     # to new in fedora repos
   run_and_time install_faiss
+  run_and_time install_roaring
 }
 
 (return 2>/dev/null) && return # If script was sourced, don't run commands.
