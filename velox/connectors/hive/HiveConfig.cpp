@@ -159,6 +159,14 @@ int32_t HiveConfig::prefetchRowGroups() const {
   return config_->get<int32_t>(kPrefetchRowGroups, 1);
 }
 
+size_t HiveConfig::parallelUnitLoadCount(const config::ConfigBase* session) const {
+  auto count = session->get<size_t>(
+      kParallelUnitLoadCountSession,
+      config_->get<size_t>(kParallelUnitLoadCount, 0));
+  VELOX_CHECK_LE(count, 100, "parallelUnitLoadCount too large: {}", count);
+  return count;
+}
+
 int32_t HiveConfig::loadQuantum(const config::ConfigBase* session) const {
   return session->get<int32_t>(
       kLoadQuantumSession, config_->get<int32_t>(kLoadQuantum, 8 << 20));
