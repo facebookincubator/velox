@@ -214,6 +214,7 @@ bool ArgumentTypeFuzzer::fuzzArgumentTypes(uint32_t maxVariadicArgs) {
     bindings_ = binder.bindings();
     integerBindings_ = binder.integerBindings();
     longEnumParameterBindings_ = binder.longEnumParameterBindings();
+    varcharEnumParameterBindings_ = binder.varcharEnumParameterBindings();
   }
 
   const auto& formalArgs = signature_.argumentTypes();
@@ -234,7 +235,8 @@ bool ArgumentTypeFuzzer::fuzzArgumentTypes(uint32_t maxVariadicArgs) {
           variables(),
           bindings_,
           integerBindings_,
-          longEnumParameterBindings_);
+          longEnumParameterBindings_,
+          varcharEnumParameterBindings_);
       VELOX_CHECK(actualArg != nullptr);
     }
     argumentTypes_.push_back(actualArg);
@@ -274,7 +276,8 @@ TypePtr ArgumentTypeFuzzer::fuzzReturnType() {
         variables(),
         bindings_,
         integerBindings_,
-        longEnumParameterBindings_);
+        longEnumParameterBindings_,
+        varcharEnumParameterBindings_);
   }
 
   VELOX_CHECK_NOT_NULL(returnType_);
