@@ -615,6 +615,7 @@ void configureRowReaderOptions(
     const std::shared_ptr<const HiveConnectorSplit>& hiveSplit,
     const std::shared_ptr<const HiveConfig>& hiveConfig,
     const config::ConfigBase* sessionProperties,
+    folly::Executor* const ioExecutor,
     dwio::common::RowReaderOptions& rowReaderOptions) {
   auto skipRowsIt =
       tableParameters.find(dwio::common::TableParameter::kSkipHeaderLineCount);
@@ -622,6 +623,7 @@ void configureRowReaderOptions(
     rowReaderOptions.setSkipRows(folly::to<uint64_t>(skipRowsIt->second));
   }
   rowReaderOptions.setScanSpec(scanSpec);
+  rowReaderOptions.setIOExecutor(ioExecutor);
   rowReaderOptions.setMetadataFilter(std::move(metadataFilter));
   rowReaderOptions.setRequestedType(rowType);
   rowReaderOptions.range(hiveSplit->start, hiveSplit->length);
@@ -630,6 +632,13 @@ void configureRowReaderOptions(
         hiveConfig->readTimestampUnit(sessionProperties)));
     rowReaderOptions.setPreserveFlatMapsInMemory(
         hiveConfig->preserveFlatMapsInMemory(sessionProperties));
+    rowReaderOptions.setParallelUnitLoadCount(
+        hiveConfig->parallelUnitLoadCount(sessionProperties));
+    // When parallel unit loader is enabled, all units would be loaded by
+    // ParallelUnitLoader, thus disable eagerFirstStripeLoad.
+    if (hiveConfig->parallelUnitLoadCount(sessionProperties) > 0) {
+      rowReaderOptions.setEagerFirstStripeLoad(false);
+    }
   }
   rowReaderOptions.setSerdeParameters(hiveSplit->serdeParameters);
 }

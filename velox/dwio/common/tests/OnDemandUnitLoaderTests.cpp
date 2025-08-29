@@ -17,9 +17,8 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/common/OnDemandUnitLoader.h"
-#include "velox/dwio/common/UnitLoaderTools.h"
+#include "velox/dwio/common/tests/UnitLoaderBaseTest.h"
 #include "velox/dwio/common/tests/utils/UnitLoaderTestTools.h"
 
 using namespace ::testing;
@@ -30,6 +29,38 @@ using facebook::velox::dwio::common::UnitLoaderFactory;
 using facebook::velox::dwio::common::test::getUnitsLoadedWithFalse;
 using facebook::velox::dwio::common::test::LoadUnitMock;
 using facebook::velox::dwio::common::test::ReaderMock;
+
+class OnDemandUnitLoaderCommonTests
+    : public UnitLoaderBaseTest<OnDemandUnitLoaderFactory> {
+ protected:
+  OnDemandUnitLoaderFactory createFactory() override {
+    return OnDemandUnitLoaderFactory(nullptr);
+  }
+};
+
+TEST_F(OnDemandUnitLoaderCommonTests, NoUnitButSkip) {
+  testNoUnitButSkip();
+}
+
+TEST_F(OnDemandUnitLoaderCommonTests, InitialSkip) {
+  testInitialSkip();
+}
+
+TEST_F(OnDemandUnitLoaderCommonTests, CanRequestUnitMultipleTimes) {
+  testCanRequestUnitMultipleTimes();
+}
+
+TEST_F(OnDemandUnitLoaderCommonTests, UnitOutOfRange) {
+  testUnitOutOfRange();
+}
+
+TEST_F(OnDemandUnitLoaderCommonTests, SeekOutOfRange) {
+  testSeekOutOfRange();
+}
+
+TEST_F(OnDemandUnitLoaderCommonTests, SeekOutOfRangeReaderError) {
+  testSeekOutOfRangeReaderError();
+}
 
 TEST(OnDemandUnitLoaderTests, LoadsCorrectlyWithReader) {
   size_t blockedOnIoCount = 0;
@@ -126,97 +157,4 @@ TEST(OnDemandUnitLoaderTests, CanSeek) {
   EXPECT_TRUE(readerMock.read(5)); // Unit: 0, rows: 5-9, load(0), unload(1)
   EXPECT_EQ(readerMock.unitsLoaded(), std::vector<bool>({true, false, false}));
   EXPECT_EQ(blockedOnIoCount, 4);
-}
-
-TEST(OnDemandUnitLoaderTests, SeekOutOfRangeReaderError) {
-  size_t blockedOnIoCount = 0;
-  OnDemandUnitLoaderFactory factory([&](auto) { ++blockedOnIoCount; });
-  ReaderMock readerMock{{10, 20, 30}, {0, 0, 0}, factory, 0};
-  EXPECT_EQ(readerMock.unitsLoaded(), std::vector<bool>({false, false, false}));
-  EXPECT_EQ(blockedOnIoCount, 0);
-  readerMock.seek(59);
-
-  readerMock.seek(60);
-
-  VELOX_ASSERT_THROW(
-      readerMock.seek(61),
-      "Can't seek to possition 61 in file. Must be up to 60.");
-}
-
-TEST(OnDemandUnitLoaderTests, SeekOutOfRange) {
-  OnDemandUnitLoaderFactory factory(nullptr);
-  std::vector<std::atomic_bool> unitsLoaded(getUnitsLoadedWithFalse(1));
-  std::vector<std::unique_ptr<LoadUnit>> units;
-  units.push_back(std::make_unique<LoadUnitMock>(10, 0, unitsLoaded, 0));
-
-  auto unitLoader = factory.create(std::move(units), 0);
-
-  unitLoader->onSeek(0, 10);
-
-  VELOX_ASSERT_THROW(unitLoader->onSeek(0, 11), "Row out of range");
-}
-
-TEST(OnDemandUnitLoaderTests, UnitOutOfRange) {
-  OnDemandUnitLoaderFactory factory(nullptr);
-  std::vector<std::atomic_bool> unitsLoaded(getUnitsLoadedWithFalse(1));
-  std::vector<std::unique_ptr<LoadUnit>> units;
-  units.push_back(std::make_unique<LoadUnitMock>(10, 0, unitsLoaded, 0));
-
-  auto unitLoader = factory.create(std::move(units), 0);
-  unitLoader->getLoadedUnit(0);
-
-  VELOX_ASSERT_THROW(unitLoader->getLoadedUnit(1), "Unit out of range");
-}
-
-TEST(OnDemandUnitLoaderTests, CanRequestUnitMultipleTimes) {
-  OnDemandUnitLoaderFactory factory(nullptr);
-  std::vector<std::atomic_bool> unitsLoaded(getUnitsLoadedWithFalse(1));
-  std::vector<std::unique_ptr<LoadUnit>> units;
-  units.push_back(std::make_unique<LoadUnitMock>(10, 0, unitsLoaded, 0));
-
-  auto unitLoader = factory.create(std::move(units), 0);
-  unitLoader->getLoadedUnit(0);
-  unitLoader->getLoadedUnit(0);
-  unitLoader->getLoadedUnit(0);
-}
-
-TEST(OnDemandUnitLoaderTests, InitialSkip) {
-  auto getFactoryWithSkip = [](uint64_t skipToRow) {
-    auto factory = std::make_unique<OnDemandUnitLoaderFactory>(nullptr);
-    std::vector<std::atomic_bool> unitsLoaded(getUnitsLoadedWithFalse(1));
-    std::vector<std::unique_ptr<LoadUnit>> units;
-    units.push_back(std::make_unique<LoadUnitMock>(10, 0, unitsLoaded, 0));
-    units.push_back(std::make_unique<LoadUnitMock>(20, 0, unitsLoaded, 1));
-    units.push_back(std::make_unique<LoadUnitMock>(30, 0, unitsLoaded, 2));
-    factory->create(std::move(units), skipToRow);
-  };
-
-  EXPECT_NO_THROW(getFactoryWithSkip(0));
-  EXPECT_NO_THROW(getFactoryWithSkip(1));
-  EXPECT_NO_THROW(getFactoryWithSkip(9));
-  EXPECT_NO_THROW(getFactoryWithSkip(10));
-  EXPECT_NO_THROW(getFactoryWithSkip(11));
-  EXPECT_NO_THROW(getFactoryWithSkip(29));
-  EXPECT_NO_THROW(getFactoryWithSkip(30));
-  EXPECT_NO_THROW(getFactoryWithSkip(31));
-  EXPECT_NO_THROW(getFactoryWithSkip(59));
-  EXPECT_NO_THROW(getFactoryWithSkip(60));
-  VELOX_ASSERT_THROW(
-      getFactoryWithSkip(61),
-      "Can only skip up to the past-the-end row of the file.");
-  VELOX_ASSERT_THROW(
-      getFactoryWithSkip(100),
-      "Can only skip up to the past-the-end row of the file.");
-}
-
-TEST(OnDemandUnitLoaderTests, NoUnitButSkip) {
-  OnDemandUnitLoaderFactory factory(nullptr);
-  std::vector<std::unique_ptr<LoadUnit>> units;
-
-  EXPECT_NO_THROW(factory.create(std::move(units), 0));
-
-  std::vector<std::unique_ptr<LoadUnit>> units2;
-  VELOX_ASSERT_THROW(
-      factory.create(std::move(units2), 1),
-      "Can only skip up to the past-the-end row of the file.");
 }
