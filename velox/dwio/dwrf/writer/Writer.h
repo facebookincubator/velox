@@ -134,7 +134,7 @@ class Writer : public dwio::common::Writer {
     return writerBase_->getContext();
   }
 
-  const proto::Footer& getFooter() const {
+  const std::unique_ptr<FooterWriteWrapper>& getFooter() const {
     return writerBase_->getFooter();
   }
 
