@@ -50,8 +50,6 @@ class BucketFunctionTest
   }
 };
 
-} // namespace
-
 TEST_F(BucketFunctionTest, integerTypes) {
   EXPECT_EQ(bucket<int32_t>(10, 8), 3);
   EXPECT_EQ(bucket<int32_t>(10, 42), 6);
@@ -123,3 +121,5 @@ TEST_F(BucketFunctionTest, decimal) {
   EXPECT_EQ(
       bucket<int128_t>(DECIMAL(38, 2), 10, DecimalUtil::kLongDecimalMax), 4);
 }
+
+} // namespace
