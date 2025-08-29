@@ -81,6 +81,10 @@ class ArgumentTypeFuzzer {
   // Noop if 'type' is not a decimal type signature.
   void determineUnboundedIntegerVariables(const exec::TypeSignature& type);
 
+  // Bind LongEnumParameter variables used in enum type signatures to
+  // randomly generated values if not already bound.
+  void determineUnboundedEnumVariables(const exec::TypeSignature& type);
+
   TypePtr randType();
 
   /// Generates an orderable random type, including structs, and arrays.
@@ -115,6 +119,10 @@ class ArgumentTypeFuzzer {
 
   /// Bindings between LongEnumParameter variables and their actual types.
   std::unordered_map<std::string, LongEnumParameter> longEnumParameterBindings_;
+
+  /// Bindings between VarcharEnumParameter variables and their actual types.
+  std::unordered_map<std::string, VarcharEnumParameter>
+      varcharEnumParameterBindings_;
 
   /// RNG to generate random types for unbounded type variables when necessary.
   FuzzerGenerator& rng_;
