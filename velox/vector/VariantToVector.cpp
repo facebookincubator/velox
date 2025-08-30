@@ -62,7 +62,14 @@ struct VariantToVector<
 
     // Allocate nulls and data buffers and set all values to null by default.
     const vector_size_t dataSize = data.size();
-    BufferPtr valuesBuffer = AlignedBuffer::allocate<T>(dataSize, pool);
+    BufferPtr valuesBuffer;
+    if constexpr (std::is_same_v<T, StringView>) {
+      // Make sure to initialize StringView values so they can be safely
+      // accessed.
+      valuesBuffer = AlignedBuffer::allocate<T>(dataSize, pool, T());
+    } else {
+      valuesBuffer = AlignedBuffer::allocate<T>(dataSize, pool);
+    }
     BufferPtr nulls = allocateNulls(dataSize, pool, bits::kNull);
 
     // Create flat vector to store all the values.
