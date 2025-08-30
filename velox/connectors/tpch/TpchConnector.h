@@ -163,6 +163,11 @@ class TpchConnector final : public Connector {
       std::shared_ptr<const config::ConfigBase> config,
       folly::Executor* /*executor*/);
 
+  const std::shared_ptr<const config::ConfigBase>& connectorConfig()
+      const override {
+    return config_;
+  }
+
   std::unique_ptr<DataSource> createDataSource(
       const RowTypePtr& outputType,
       const ConnectorTableHandlePtr& tableHandle,
@@ -186,6 +191,7 @@ class TpchConnector final : public Connector {
   }
 
  private:
+  std::shared_ptr<const config::ConfigBase> config_;
   std::shared_ptr<ConnectorMetadata> metadata_;
 };
 
