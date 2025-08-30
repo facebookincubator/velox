@@ -37,6 +37,8 @@ velox_add_library(
   EvalCtx.cpp
   Expr.cpp
   ExprCompiler.cpp
+  ExprRewrite.cpp
+  ExprRewriteRegistry.cpp
   ExprToSubfieldFilter.cpp
   FieldReference.cpp
   FunctionCallToSpecialForm.cpp
