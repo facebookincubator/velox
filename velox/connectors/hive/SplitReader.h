@@ -185,7 +185,7 @@ class SplitReader {
   const std::shared_ptr<io::IoStatistics> ioStats_;
   const std::shared_ptr<filesystems::File::IoStats> fsStats_;
   FileHandleFactory* const fileHandleFactory_;
-  folly::Executor* const executor_;
+  folly::Executor* const ioExecutor_;
   memory::MemoryPool* const pool_;
 
   std::shared_ptr<common::ScanSpec> scanSpec_;

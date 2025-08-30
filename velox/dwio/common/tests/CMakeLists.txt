@@ -54,6 +54,7 @@ add_executable(
   UnitLoaderToolsTests.cpp
   WriterTest.cpp
   OptionsTests.cpp
+  ParallelUnitLoaderTest.cpp
 )
 add_test(velox_dwio_common_test velox_dwio_common_test)
 target_link_libraries(
