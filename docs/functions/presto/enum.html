@@ -5,7 +5,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>UUID Functions &#8212; Velox  documentation</title>
+    <title>Enum Functions &#8212; Velox  documentation</title>
     <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=8f2a1f02" />
     <link rel="stylesheet" type="text/css" href="../../_static/nature.css?v=0f882399" />
     <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
@@ -13,8 +13,8 @@
     <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="Enum Functions" href="enum.html" />
-    <link rel="prev" title="IP Functions" href="ipaddress.html" /> 
+    <link rel="next" title="Miscellaneous Functions" href="misc.html" />
+    <link rel="prev" title="UUID Functions" href="uuid.html" /> 
   </head><body>
     <div class="related" role="navigation" aria-label="Related">
       <h3>Navigation</h3>
@@ -23,14 +23,14 @@
           <a href="../../genindex.html" title="General Index"
              accesskey="I">index</a></li>
         <li class="right" >
-          <a href="enum.html" title="Enum Functions"
+          <a href="misc.html" title="Miscellaneous Functions"
              accesskey="N">next</a> |</li>
         <li class="right" >
-          <a href="ipaddress.html" title="IP Functions"
+          <a href="uuid.html" title="UUID Functions"
              accesskey="P">previous</a> |</li>
         <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
           <li class="nav-item nav-item-1"><a href="../../functions.html" accesskey="U">Presto Functions</a> &#187;</li>
-        <li class="nav-item nav-item-this"><a href="">UUID Functions</a></li> 
+        <li class="nav-item nav-item-this"><a href="">Enum Functions</a></li> 
       </ul>
     </div>  
 
@@ -39,12 +39,16 @@
         <div class="bodywrapper">
           <div class="body" role="main">
             
-  <section id="uuid-functions">
-<h1>UUID Functions<a class="headerlink" href="#uuid-functions" title="Link to this heading">¶</a></h1>
+  <section id="enum-functions">
+<h1>Enum Functions<a class="headerlink" href="#enum-functions" title="Link to this heading">¶</a></h1>
 <dl class="py function">
-<dt class="sig sig-object py" id="uuid">
-<span class="sig-name descname"><span class="pre">uuid</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">uuid</span></span></span><a class="headerlink" href="#uuid" title="Link to this definition">¶</a></dt>
-<dd><p>Returns a pseudo randomly generated UUID (type 4).</p>
+<dt class="sig sig-object py" id="enum_key">
+<span class="sig-name descname"><span class="pre">enum_key</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#enum_key" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the string key of the enum value, where <code class="docutils literal notranslate"><span class="pre">x</span></code> is either a BigintEnum or VarcharEnum value.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">enum_key</span><span class="p">(</span><span class="n">alpha</span><span class="o">.</span><span class="n">A</span><span class="p">);</span> <span class="o">--</span> <span class="s2">&quot;A&quot;</span>
+</pre></div>
+</div>
+<p>where alpha is a BigintEnum type with name “alpha” and values {“A”: 1, “B”: 2}</p>
 </dd></dl>
 
 </section>
@@ -59,8 +63,8 @@
   <div>
     <h3><a href="../../index.html">Table of Contents</a></h3>
     <ul>
-<li><a class="reference internal" href="#">UUID Functions</a><ul>
-<li><a class="reference internal" href="#uuid"><code class="docutils literal notranslate"><span class="pre">uuid()</span></code></a></li>
+<li><a class="reference internal" href="#">Enum Functions</a><ul>
+<li><a class="reference internal" href="#enum_key"><code class="docutils literal notranslate"><span class="pre">enum_key()</span></code></a></li>
 </ul>
 </li>
 </ul>
@@ -68,18 +72,18 @@
   </div>
   <div>
     <h4>Previous topic</h4>
-    <p class="topless"><a href="ipaddress.html"
-                          title="previous chapter">IP Functions</a></p>
+    <p class="topless"><a href="uuid.html"
+                          title="previous chapter">UUID Functions</a></p>
   </div>
   <div>
     <h4>Next topic</h4>
-    <p class="topless"><a href="enum.html"
-                          title="next chapter">Enum Functions</a></p>
+    <p class="topless"><a href="misc.html"
+                          title="next chapter">Miscellaneous Functions</a></p>
   </div>
   <div role="note" aria-label="source link">
     <h3>This Page</h3>
     <ul class="this-page-menu">
-      <li><a href="../../_sources/functions/presto/uuid.rst.txt"
+      <li><a href="../../_sources/functions/presto/enum.rst.txt"
             rel="nofollow">Show Source</a></li>
     </ul>
    </div>
@@ -104,14 +108,14 @@
           <a href="../../genindex.html" title="General Index"
              >index</a></li>
         <li class="right" >
-          <a href="enum.html" title="Enum Functions"
+          <a href="misc.html" title="Miscellaneous Functions"
              >next</a> |</li>
         <li class="right" >
-          <a href="ipaddress.html" title="IP Functions"
+          <a href="uuid.html" title="UUID Functions"
              >previous</a> |</li>
         <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
           <li class="nav-item nav-item-1"><a href="../../functions.html" >Presto Functions</a> &#187;</li>
-        <li class="nav-item nav-item-this"><a href="">UUID Functions</a></li> 
+        <li class="nav-item nav-item-this"><a href="">Enum Functions</a></li> 
       </ul>
     </div>
     <div class="footer" role="contentinfo">
