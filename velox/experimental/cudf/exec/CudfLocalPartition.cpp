@@ -24,6 +24,14 @@
 
 namespace facebook::velox::cudf_velox {
 
+bool CudfLocalPartition::shouldReplace(
+    const std::shared_ptr<const core::LocalPartitionNode>& planNode) {
+  std::string spec = planNode->partitionFunctionSpec().toString();
+  // Only replace LocalPartition with CudfLocalPartition for hash partitioning.
+  // TODO: Round Robin Row-Wise Partitioning can be supported in future.
+  return spec.find("HASH(") != std::string::npos;
+}
+
 CudfLocalPartition::CudfLocalPartition(
     int32_t operatorId,
     exec::DriverCtx* ctx,
