@@ -60,11 +60,11 @@ add_executable(
   DecimalArithmeticTest.cpp
   DistanceFunctionsTest.cpp
   ElementAtTest.cpp
+  EnumFunctionsTest.cpp
   FailTest.cpp
   FindFirstTest.cpp
   FloatingPointFunctionsTest.cpp
   FromUtf8Test.cpp
-  GeometryFunctionsTest.cpp
   GreatestLeastTest.cpp
   HyperLogLogCastTest.cpp
   HyperLogLogFunctionsTest.cpp
@@ -89,6 +89,7 @@ add_executable(
   MapZipWithTest.cpp
   MultimapFromEntriesTest.cpp
   NotTest.cpp
+  ParsePrestoDataSizeTest.cpp
   ProbabilityTest.cpp
   RandTest.cpp
   ReduceTest.cpp
@@ -98,6 +99,7 @@ add_executable(
   RoundTest.cpp
   ScalarFunctionRegTest.cpp
   SequenceTest.cpp
+  SfmSketchFunctionsTest.cpp
   SimpleComparisonMatcherTest.cpp
   SliceTest.cpp
   SplitTest.cpp
@@ -118,11 +120,18 @@ add_executable(
   WidthBucketArrayTest.cpp
   WordStemTest.cpp
   ZipTest.cpp
-  ZipWithTest.cpp)
+  ZipWithTest.cpp
+)
+
+if(VELOX_ENABLE_GEO)
+  target_sources(velox_functions_test PRIVATE GeometryFunctionsTest.cpp)
+endif()
 
 if(VELOX_ENABLE_FAISS)
-  set_source_files_properties(DistanceFunctionsTest.cpp
-                              PROPERTIES COMPILE_DEFINITIONS VELOX_ENABLE_FAISS)
+  set_source_files_properties(
+    DistanceFunctionsTest.cpp
+    PROPERTIES COMPILE_DEFINITIONS VELOX_ENABLE_FAISS
+  )
 endif()
 
 add_test(velox_functions_test velox_functions_test)
@@ -142,4 +151,5 @@ target_link_libraries(
   GTest::gtest
   GTest::gtest_main
   GTest::gmock
-  GTest::gmock_main)
+  GTest::gmock_main
+)

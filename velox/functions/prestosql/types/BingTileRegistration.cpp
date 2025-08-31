@@ -24,13 +24,13 @@ namespace facebook::velox {
 
 namespace {
 
-class BingTileCastOperator : public exec::CastOperator {
- public:
-  static const std::shared_ptr<const CastOperator>& get() {
-    static const std::shared_ptr<const CastOperator> instance{
-        new BingTileCastOperator()};
+class BingTileCastOperator final : public exec::CastOperator {
+  BingTileCastOperator() = default;
 
-    return instance;
+ public:
+  static std::shared_ptr<const CastOperator> get() {
+    VELOX_CONSTEXPR_SINGLETON BingTileCastOperator kInstance;
+    return {std::shared_ptr<const CastOperator>{}, &kInstance};
   }
 
   bool isSupportedFromType(const TypePtr& other) const override {
@@ -113,12 +113,9 @@ class BingTileCastOperator : public exec::CastOperator {
           "Cast from BINGTILE to {} not yet supported", resultType->toString());
     }
   }
-
- private:
-  BingTileCastOperator() = default;
 };
 
-class BingTileTypeFactories : public CustomTypeFactories {
+class BingTileTypeFactory : public CustomTypeFactory {
  public:
   velox::TypePtr getType(
       const std::vector<velox::TypeParameter>& parameters) const override {
@@ -140,8 +137,7 @@ class BingTileTypeFactories : public CustomTypeFactories {
 } // namespace
 
 void registerBingTileType() {
-  registerCustomType(
-      "bingtile", std::make_unique<const BingTileTypeFactories>());
+  registerCustomType("bingtile", std::make_unique<const BingTileTypeFactory>());
 }
 
 } // namespace facebook::velox

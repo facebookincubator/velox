@@ -2827,13 +2827,15 @@ TEST_F(CastExprTest, intervalDayTimeToVarchar) {
       "Cast from VARCHAR to INTERVAL DAY TO SECOND is not supported");
 }
 
-class BigintTypeWithCustomComparisonCastOperator : public exec::CastOperator {
- public:
-  static const std::shared_ptr<const CastOperator>& get() {
-    static const std::shared_ptr<const CastOperator> instance{
-        new BigintTypeWithCustomComparisonCastOperator()};
+class BigintTypeWithCustomComparisonCastOperator final
+    : public exec::CastOperator {
+  BigintTypeWithCustomComparisonCastOperator() = default;
 
-    return instance;
+ public:
+  static std::shared_ptr<const CastOperator> get() {
+    VELOX_CONSTEXPR_SINGLETON BigintTypeWithCustomComparisonCastOperator
+        kInstance;
+    return {std::shared_ptr<const CastOperator>{}, &kInstance};
   }
 
   bool isSupportedFromType(const TypePtr& other) const override {
@@ -2861,12 +2863,9 @@ class BigintTypeWithCustomComparisonCastOperator : public exec::CastOperator {
       VectorPtr& result) const override {
     VELOX_FAIL("Cast from BigintTypeWithCustomComparison should not be called");
   }
-
- private:
-  BigintTypeWithCustomComparisonCastOperator() = default;
 };
 
-class BigintTypeWithCustomComparisonTypeFactories : public CustomTypeFactories {
+class BigintTypeWithCustomComparisonTypeFactory : public CustomTypeFactory {
  public:
   TypePtr getType(const std::vector<TypeParameter>& parameters) const override {
     VELOX_CHECK(parameters.empty());
@@ -2898,8 +2897,7 @@ TEST_F(CastExprTest, skipUnnecessaryChildrenOfComplexTypes) {
   VELOX_CHECK(
       registerCustomType(
           BIGINT_TYPE_WITH_CUSTOM_COMPARISON()->name(),
-          std::make_unique<
-              const BigintTypeWithCustomComparisonTypeFactories>()),
+          std::make_unique<const BigintTypeWithCustomComparisonTypeFactory>()),
       "Failed to register custom type 'bigint type with custom comparison'");
 
   const auto valuesThatThrowOnCast = makeFlatVector<int64_t>(

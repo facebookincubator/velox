@@ -15,6 +15,8 @@
  */
 #include "velox/expression/CoalesceExpr.h"
 
+#include "velox/expression/ExprConstants.h"
+
 namespace facebook::velox::exec {
 
 CoalesceExpr::CoalesceExpr(
@@ -22,9 +24,10 @@ CoalesceExpr::CoalesceExpr(
     std::vector<ExprPtr>&& inputs,
     bool inputsSupportFlatNoNullsFastPath)
     : SpecialForm(
+          SpecialFormKind::kCoalesce,
           std::move(type),
           std::move(inputs),
-          kCoalesce,
+          expression::kCoalesce,
           inputsSupportFlatNoNullsFastPath,
           false /* trackCpuUsage */) {
   std::vector<TypePtr> inputTypes;
@@ -39,7 +42,7 @@ CoalesceExpr::CoalesceExpr(
   auto expectedType = resolveType(inputTypes);
   VELOX_CHECK(
       *expectedType == *this->type(),
-      "Coalesce expression type different than its inputs. Expected {} but got Actual {}.",
+      "Coalesce expression type different than its inputs. Expected {}, but got {}.",
       expectedType->toString(),
       this->type()->toString());
 }

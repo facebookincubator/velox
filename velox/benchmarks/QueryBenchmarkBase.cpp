@@ -15,18 +15,37 @@
  */
 
 #include "velox/benchmarks/QueryBenchmarkBase.h"
+#include <iostream>
+#include "velox/common/base/SuccinctPrinter.h"
+#include "velox/common/file/FileSystems.h"
 #include "velox/connectors/hive/HiveConnector.h"
+#include "velox/dwio/dwrf/RegisterDwrfReader.h"
+#include "velox/dwio/parquet/RegisterParquetReader.h"
+#include "velox/exec/Split.h"
+#include "velox/exec/tests/utils/HiveConnectorTestBase.h"
+#include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
+#include "velox/functions/prestosql/registration/RegistrationFunctions.h"
+#include "velox/parse/TypeResolver.h"
 
-#include "velox/experimental/cudf/connectors/parquet/ParquetConfig.h"
-#include "velox/experimental/cudf/connectors/parquet/ParquetConnector.h"
-#include "velox/experimental/cudf/exec/CudfConversion.h"
-#include "velox/experimental/cudf/tests/utils/ParquetConnectorTestBase.h"
+namespace {
 
-DEFINE_string(data_format, "parquet", "Data format");
+bool validateDataFormat(const char* flagname, const std::string& value) {
+  if ((value.compare("parquet") == 0) || (value.compare("dwrf") == 0)) {
+    return true;
+  }
+  std::cout
+      << fmt::format(
+             "Invalid value for --{}: {}. Allowed values are [\"parquet\", \"dwrf\"]",
+             flagname,
+             value)
+      << std::endl;
+  return false;
+}
+} // namespace
 
-DEFINE_validator(
-    data_format,
-    &facebook::velox::QueryBenchmarkBase::validateDataFormat);
+DEFINE_string(data_format, "parquet", "Data format: parquet or dwrf.");
+
+DEFINE_validator(data_format, &validateDataFormat);
 
 DEFINE_bool(
     include_custom_stats,
@@ -135,20 +154,24 @@ using namespace facebook::velox::dwio::common;
 
 namespace facebook::velox {
 
-//  static
-bool QueryBenchmarkBase::validateDataFormat(
-    const char* flagname,
-    const std::string& value) {
-  if ((value.compare("parquet") == 0) || (value.compare("dwrf") == 0)) {
-    return true;
+std::string RunStats::toString(bool detail) const {
+  std::stringstream out;
+  out << succinctNanos(micros * 1000) << " "
+      << succinctBytes(rawInputBytes / (micros / 1000000.0)) << "/s raw, "
+      << succinctNanos(userNanos) << " user " << succinctNanos(systemNanos)
+      << " system (" << (100 * (userNanos + systemNanos) / (micros * 1000))
+      << "%)";
+  if (!flags.empty()) {
+    out << " flags: ";
+    for (auto& pair : flags) {
+      out << pair.first << "=" << pair.second << " ";
+    }
   }
-  std::cout
-      << fmt::format(
-             "Invalid value for --{}: {}. Allowed values are [\"parquet\", \"dwrf\"]",
-             flagname,
-             value)
-      << std::endl;
-  return false;
+  out << std::endl << "======" << std::endl;
+  if (detail) {
+    out << std::endl << output << std::endl;
+  }
+  return out.str();
 }
 
 // static
@@ -233,38 +256,6 @@ void QueryBenchmarkBase::initialize() {
   connector::registerConnector(hiveConnector);
   parquet::registerParquetReaderFactory();
   dwrf::registerDwrfReaderFactory();
-
-  // Add new values into the parquet configuration...
-  auto parquetConfigurationValues =
-      std::unordered_map<std::string, std::string>();
-  parquetConfigurationValues
-      [cudf_velox::connector::parquet::ParquetConfig::kMaxChunkReadLimit] =
-          std::to_string(FLAGS_cudf_chunk_read_limit);
-  parquetConfigurationValues
-      [cudf_velox::connector::parquet::ParquetConfig::kMaxPassReadLimit] =
-          std::to_string(FLAGS_cudf_pass_read_limit);
-  parquetConfigurationValues[cudf_velox::connector::parquet::ParquetConfig::
-                                 kAllowMismatchedParquetSchemas] =
-      std::to_string(true);
-  auto parquetProperties = std::make_shared<const config::ConfigBase>(
-      std::move(parquetConfigurationValues));
-
-  // Create parquet connector with config...
-  connector::registerConnectorFactory(
-      std::make_shared<
-          cudf_velox::connector::parquet::ParquetConnectorFactory>());
-  auto parquetConnector =
-      connector::getConnectorFactory(
-          cudf_velox::connector::parquet::ParquetConnectorFactory::
-              kParquetConnectorName)
-          ->newConnector(
-              cudf_velox::exec::test::kParquetConnectorId,
-              parquetProperties,
-              ioExecutor_.get());
-  connector::registerConnector(parquetConnector);
-
-  // Enable cuDF operators
-  cudf_velox::registerCudf();
 }
 
 std::vector<std::shared_ptr<connector::ConnectorSplit>>
@@ -281,27 +272,7 @@ QueryBenchmarkBase::listSplits(
   return result;
 }
 
-std::vector<std::shared_ptr<connector::ConnectorSplit>>
-QueryBenchmarkBase::listCudfSplits(
-    const std::string& path,
-    int32_t /*numSplitsPerFile*/,
-    const exec::test::TpchPlan& plan) {
-  std::vector<std::shared_ptr<connector::ConnectorSplit>> result;
-  auto temp = cudf_velox::exec::test::ParquetConnectorTestBase::
-      makeParquetConnectorSplits(path, 1);
-  for (auto& i : temp) {
-    result.push_back(i);
-  }
-  return result;
-}
-
 void QueryBenchmarkBase::shutdown() {
-  cudf_velox::unregisterCudf();
-  facebook::velox::connector::unregisterConnector(
-      cudf_velox::exec::test::kParquetConnectorId);
-  facebook::velox::connector::unregisterConnectorFactory(
-      cudf_velox::connector::parquet::ParquetConnectorFactory::
-          kParquetConnectorName);
   if (cache_) {
     cache_->shutdown();
   }
@@ -323,8 +294,6 @@ QueryBenchmarkBase::run(const TpchPlan& tpchPlan) {
           std::to_string(FLAGS_preferred_output_batch_rows);
       params.queryConfigs[core::QueryConfig::kMaxOutputBatchRows] =
           std::to_string(FLAGS_max_output_batch_rows);
-      params.queryConfigs[cudf_velox::CudfFromVelox::kGpuBatchSizeRows] =
-          std::to_string(FLAGS_cudf_gpu_batch_size_rows);
       params.queryConfigs[core::QueryConfig::kMaxPartialAggregationMemory] =
           std::to_string(FLAGS_max_partial_aggregation_memory);
       const int numSplitsPerFile = FLAGS_num_splits_per_file;
@@ -334,13 +303,7 @@ QueryBenchmarkBase::run(const TpchPlan& tpchPlan) {
         if (!taskCursor->noMoreSplits()) {
           for (const auto& entry : tpchPlan.dataFiles) {
             for (const auto& path : entry.second) {
-              auto splits = facebook::velox::cudf_velox::cudfIsRegistered() &&
-                      facebook::velox::connector::getAllConnectors().count(
-                          cudf_velox::exec::test::kParquetConnectorId) > 0 &&
-                      facebook::velox::cudf_velox::cudfTableScanEnabled()
-                  ? listCudfSplits(
-                        path, 1 /* numSplitsPerFile = 1 for cudf */, tpchPlan)
-                  : listSplits(path, numSplitsPerFile, tpchPlan);
+              auto splits = listSplits(path, numSplitsPerFile, tpchPlan);
               for (auto split : splits) {
                 task->addSplit(entry.first, exec::Split(std::move(split)));
               }

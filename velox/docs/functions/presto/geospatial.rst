@@ -166,6 +166,19 @@ Spatial Operations
     Returns the bounding rectangular polygon of a ``geometry``. Empty input will
     result in empty output.
 
+.. function:: ST_ExteriorRing(geometry: Geometry) -> output: Geometry
+
+    Returns a LineString representing the exterior ring of the input polygon.
+    Empty or null inputs result in null output. Non-polygon types will return
+    an error.
+
+.. function:: expand_envelope(geometry: Geometry, distance: double) -> output: Geometry
+
+    Returns the bounding rectangular polygon of a geometry, expanded by a distance.
+    Empty geometries will return an empty polygon. Negative or NaN distances will
+    return an error. Positive infinity distances may lead to undefined results.
+
+
 Accessors
 ---------
 .. function:: ST_IsValid(geometry: Geometry) -> valid: bool
@@ -205,6 +218,32 @@ Accessors
    Returns the vertex of a LineString at a given index (indices start at 1).
    If the given index is less than 1 or greater than the total number of elements
    in the collection, returns NULL.
+
+.. function:: ST_Points(geometry: Geometry) -> points: array(geometry)
+
+   Returns an array of points in a geometry. Empty or null inputs
+   return null.
+
+.. function:: ST_NumPoints(geometry: Geometry) -> points: integer
+
+   Returns the number of points in a geometry. This is an extension
+   to the SQL/MM ``ST_NumPoints`` function which only applies to
+   point and linestring.
+
+.. function:: geometry_nearest_points(geometry1: Geometry, geometry2: Geometry) -> points: array(geometry)
+
+   Returns the points on each geometry nearest the other. If either geometry
+   is empty, return null. Otherwise, return an array of two Points that have
+   the minimum distance of any two points on the geometries. The first Point
+   will be from the first Geometry argument, the second from the second Geometry
+   argument. If there are multiple pairs with the minimum distance, one pair
+   is chosen arbitrarily.
+
+.. function:: ST_EnvelopeAsPts(geometry: Geometry) -> points: array(geometry)
+
+   Returns an array of two points: the lower left and upper right corners
+   of the bounding rectangular polygon of a geometry. Empty or null inputs
+   return null.
 
 .. function:: geometry_invalid_reason(geometry: Geometry) -> reason: varchar
 
@@ -308,6 +347,35 @@ Accessors
     ``ST_NumGeometries(ST_GeometryFromText('GEOMETRYCOLLECTION(POINT EMPTY, POINT (1 2))'))``
     will evaluate to 1.
 
+.. function:: ST_InteriorRings(geometry: Geometry) -> output: array(geometry)
+
+    Returns an array of all interior rings found in the input geometry,
+    or an empty array if the polygon has no interior rings. Returns
+    null if the input geometry is empty.
+    Throws an error if the input geometry is not a polygon.
+
+.. function:: ST_Geometries(geometry: Geometry) -> output: array(geometry)
+
+    Returns an array of geometries in the specified collection. Returns
+    a one-element array if the input geometry is not a multi-geometry.
+    Returns null if input geometry is empty. For example, a MultiLineString
+    will create an array of LineStrings. A GeometryCollection will
+    produce an un-flattened array of its constituents:
+    GEOMETRYCOLLECTION (MULTIPOINT(0 0, 1 1),
+    GEOMETRYCOLLECTION (MULTILINESTRING((2 2, 3 3))) ) would produce
+    array[MULTIPOINT(0 0, 1 1), GEOMETRYCOLLECTION( MULTILINESTRING((2 2, 3 3)) )]
+
+.. function:: flatten_geometry_collections(geometry: Geometry) -> output: array(geometry)
+
+    Recursively flattens any GeometryCollections in Geometry, returning an array
+    of constituent non-GeometryCollection geometries. The order of the array
+    is arbitrary and should not be relied upon. null input results in null output.
+    Examples:
+
+    POINT (0 0) -> [POINT (0 0)], MULTIPOINT (0 0, 1 1) -> [MULTIPOINT (0 0, 1 1)],
+    GEOMETRYCOLLECTION (POINT (0 0), GEOMETRYCOLLECTION (POINT (1 1))) ->
+    [POINT (0 0), POINT (1 1)], GEOMETRYCOLLECTION EMPTY -> [].
+
 .. function:: ST_NumInteriorRing(geometry: Geometry) -> output: integer
 
     Returns the cardinality of the collection of interior rings of a polygon.
@@ -316,13 +384,26 @@ Accessors
 
     Returns the minimum convex geometry that encloses all input geometries.
 
+.. function:: ST_CoordDim(geometry: Geometry) -> output: integer
+
+    Return the coordinate dimension of the geometry.
+
 .. function:: ST_Dimension(geometry: Geometry) -> output: tinyint
 
-    Returns the inherent dimension of this geometry object, which must be less than or equal to the coordinate dimension.
+    Returns the inherent dimension of this geometry object, which
+    must be less than or equal to the coordinate dimension.
 
 .. function:: ST_ExteriorRing(geometry: Geometry) -> output: Geometry
 
     Returns a line string representing the exterior ring of the input polygon.
+
+.. function:: ST_Buffer(geometry: Geometry, distance: double) -> output: Geometry
+
+    Returns the geometry that represents all points whose distance from the
+    specified ``geometry`` is less than or equal to the specified ``distance``.
+    If the points of the ``geometry`` are extremely close together
+    (delta < 1e-8), this might return an empty geometry. Empty inputs return
+    null.
 
 .. function:: simplify_geometry(geometry: Geometry, tolerance: double) -> output: Geometry
 
@@ -331,6 +412,33 @@ Accessors
     particular) that are invalid. Tolerance must be a non-negative finite value.
     Using tolerance of 0 will return the original geometry.  Empty geometries
     will also be returned as-is.
+
+.. function:: line_locate_point(linestring: Geometry, point: Geometry) -> output: double
+
+    Returns a float between 0 and 1 representing the location of the closest
+    point on the LineString to the given Point, as a fraction of total 2d line length.
+
+    Returns null if a LineString or a Point is empty or null.
+
+.. function:: line_interpolate_point(linestring: Geometry, fraction: double) -> output: geometry
+
+    Returns the Point on the LineString at a fractional distance given by
+    the double argument. Throws an exception if the distance is not between 0 and 1.
+
+    Returns an empty Point if the LineString is empty.
+    Returns null if either the LineString or double is null.
+
+.. function:: geometry_as_geojson(geometry: Geometry) -> output: varchar
+
+    Returns the GeoJSON encoded defined by the input geometry. If the
+    geometry is atomic (non-multi) empty, this function would return null.
+    Null input returns null output.
+
+.. function:: geometry_from_geojson(geometry: varchar) -> output: geometry
+
+    Returns the geometry type object from the GeoJSON representation.
+    The geometry cannot be empty if it is an atomic (non-multi) geometry type.
+    Null input returns null output.
 
 Bing Tile Functions
 -------------------

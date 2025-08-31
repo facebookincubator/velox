@@ -165,6 +165,8 @@ void registerArrayFunctions(const std::string& prefix) {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_max_by, prefix + "array_max_by");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_min_by, prefix + "array_min_by");
 
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_array_flatten, prefix + "flatten");
+
   exec::registerExpressionRewrite([prefix](const auto& expr) {
     return rewriteArraySortCall(prefix, expr);
   });
@@ -211,11 +213,6 @@ void registerArrayFunctions(const std::string& prefix) {
 
   registerArrayConcatFunctions(prefix);
   registerArrayNGramsFunctions(prefix);
-
-  registerFunction<
-      ArrayFlattenFunction,
-      Array<Generic<T1>>,
-      Array<Array<Generic<T1>>>>({prefix + "flatten"});
 
   registerArrayRemoveFunctions<int8_t>(prefix);
   registerArrayRemoveFunctions<int16_t>(prefix);
@@ -316,6 +313,8 @@ void registerArrayFunctions(const std::string& prefix) {
   registerArrayCumSumFunction<int128_t>(prefix);
   registerArrayCumSumFunction<float>(prefix);
   registerArrayCumSumFunction<double>(prefix);
+  registerArrayCumSumFunction<LongDecimal<P1, S1>>(prefix);
+  registerArrayCumSumFunction<ShortDecimal<P1, S1>>(prefix);
 
   registerArrayHasDuplicatesFunctions<int8_t>(prefix);
   registerArrayHasDuplicatesFunctions<int16_t>(prefix);

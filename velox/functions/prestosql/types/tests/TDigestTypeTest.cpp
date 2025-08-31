@@ -15,8 +15,8 @@
  */
 #include "velox/functions/prestosql/types/TDigestType.h"
 #include "velox/functions/prestosql/types/TDigestRegistration.h"
+#include "velox/functions/prestosql/types/parser/TypeParser.h"
 #include "velox/functions/prestosql/types/tests/TypeTestBase.h"
-#include "velox/type/parser/TypeParser.h"
 
 namespace facebook::velox::test {
 namespace {
@@ -36,6 +36,8 @@ TEST_F(TDigestTypeTest, basic) {
 
   ASSERT_TRUE(hasType("TDIGEST"));
   ASSERT_EQ(*getType("TDIGEST", {TypeParameter(DOUBLE())}), *TDIGEST(DOUBLE()));
+
+  ASSERT_FALSE(TDIGEST(DOUBLE())->isOrderable());
 }
 
 TEST_F(TDigestTypeTest, serde) {
@@ -43,7 +45,9 @@ TEST_F(TDigestTypeTest, serde) {
 }
 
 TEST_F(TDigestTypeTest, parse) {
-  ASSERT_EQ(*parseType("tdigest(double)"), *TDIGEST(DOUBLE()));
+  ASSERT_EQ(
+      *facebook::velox::functions::prestosql::parseType("tdigest(double)"),
+      *TDIGEST(DOUBLE()));
 }
 
 } // namespace

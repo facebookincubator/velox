@@ -16,6 +16,7 @@
 #pragma once
 
 #include <folly/CPortability.h>
+#include <folly/Hash.h>
 #include <folly/Random.h>
 #include <folly/Range.h>
 #include <folly/dynamic.h>
@@ -33,8 +34,10 @@
 #include <vector>
 
 #include <velox/common/Enums.h>
+#include "velox/common/base/BitUtil.h"
 #include "velox/common/base/ClassName.h"
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/base/Macros.h"
 #include "velox/common/serialization/Serializable.h"
 #include "velox/type/HugeInt.h"
 #include "velox/type/StringView.h"
@@ -105,8 +108,6 @@ inline std::string mapTypeKindToName(const TypeKind& typeKind) {
   return std::string(TypeKindName::toName(typeKind));
 }
 
-std::ostream& operator<<(std::ostream& os, const TypeKind& kind);
-
 template <TypeKind KIND>
 class ScalarType;
 class ShortDecimalType;
@@ -123,24 +124,8 @@ struct UnknownValue {
     return true;
   }
 
-  bool operator!=(const UnknownValue& /* b */) const {
-    return false;
-  }
-
-  bool operator<(const UnknownValue& /* b */) const {
-    return false;
-  }
-
-  bool operator<=(const UnknownValue& /* b */) const {
-    return true;
-  }
-
-  bool operator>(const UnknownValue& /* b */) const {
-    return false;
-  }
-
-  bool operator>=(const UnknownValue& /* b */) const {
-    return true;
+  auto operator<=>(const UnknownValue& /* b */) const {
+    return std::strong_ordering::equal;
   }
 };
 
@@ -405,11 +390,46 @@ struct TypeFactory;
 class Type;
 using TypePtr = std::shared_ptr<const Type>;
 
+/// Represents the parameters for a BigintEnumType.
+/// Consists of the name of the enum and a map of string keys to bigint values.
+struct LongEnumParameter {
+  LongEnumParameter() = default;
+
+  LongEnumParameter(
+      std::string enumName,
+      std::unordered_map<std::string, int64_t> enumValuesMap)
+      : name(std::move(enumName)), valuesMap(std::move(enumValuesMap)) {}
+
+  bool operator==(const LongEnumParameter& other) const {
+    return name == other.name && valuesMap == other.valuesMap;
+  }
+
+  folly::dynamic serializeEnumParameter() const;
+
+  struct Hash {
+    size_t operator()(const LongEnumParameter& param) const;
+  };
+
+  std::string name;
+  std::unordered_map<std::string, int64_t> valuesMap;
+};
+
+/// Represents the parameters for a VarcharEnumType.
+/// Consists of the name of the enum and a map of string keys to string values.
+struct VarcharEnumParameter {
+  std::string name;
+  std::unordered_map<std::string, std::string> valuesMap;
+};
+
 enum class TypeParameterKind {
   /// Type. For example, element type in the array, map, or row children type.
   kType,
   /// Integer. For example, precision in a decimal type.
   kLongLiteral,
+  /// LongEnumLiteral. Used for BigintEnum types.
+  kLongEnumLiteral,
+  /// VarcharEnumLiteral. Used for VarcharEnum types.
+  kVarcharEnumLiteral,
 };
 
 struct TypeParameter {
@@ -423,6 +443,14 @@ struct TypeParameter {
   /// or unset.
   const std::optional<int64_t> longLiteral;
 
+  /// Must be set when kind is kLongEnumLiteral. All other properties should
+  /// be null or unset.
+  const std::optional<LongEnumParameter> longEnumLiteral;
+
+  /// Must be set when kind is kVarcharEnumLiteral. All other properties should
+  /// be null or unset.
+  const std::optional<VarcharEnumParameter> varcharEnumLiteral;
+
   /// If this parameter is a child of another parent row type, it can optionally
   /// have a name, e.g, "id" for `row(id bigint)`. Only set when kind is kType
   const std::optional<std::string> rowFieldName;
@@ -434,6 +462,8 @@ struct TypeParameter {
       : kind{TypeParameterKind::kType},
         type{std::move(_type)},
         longLiteral{std::nullopt},
+        longEnumLiteral{std::nullopt},
+        varcharEnumLiteral(std::nullopt),
         rowFieldName(std::move(_rowFieldName)) {}
 
   /// Creates kLongLiteral parameter.
@@ -441,6 +471,26 @@ struct TypeParameter {
       : kind{TypeParameterKind::kLongLiteral},
         type{nullptr},
         longLiteral{_longLiteral},
+        longEnumLiteral{std::nullopt},
+        varcharEnumLiteral(std::nullopt),
+        rowFieldName{std::nullopt} {}
+
+  /// Creates kLongEnumLiteral parameter.
+  explicit TypeParameter(LongEnumParameter _longEnumParameter)
+      : kind{TypeParameterKind::kLongEnumLiteral},
+        type{nullptr},
+        longLiteral{std::nullopt},
+        longEnumLiteral{std::move(_longEnumParameter)},
+        varcharEnumLiteral(std::nullopt),
+        rowFieldName{std::nullopt} {}
+
+  /// Creates kVarcharEnumLiteral parameter.
+  explicit TypeParameter(VarcharEnumParameter _varcharEnumParameter)
+      : kind{TypeParameterKind::kVarcharEnumLiteral},
+        type{nullptr},
+        longLiteral{std::nullopt},
+        longEnumLiteral{std::nullopt},
+        varcharEnumLiteral{std::move(_varcharEnumParameter)},
         rowFieldName{std::nullopt} {}
 };
 
@@ -458,14 +508,14 @@ struct TypeParameter {
 ///                   BigintType
 class Type : public Tree<const TypePtr>, public velox::ISerializable {
  public:
-  explicit Type(TypeKind kind, bool providesCustomComparison = false)
-      : kind_{kind}, providesCustomComparison_(providesCustomComparison) {}
+  constexpr explicit Type(TypeKind kind, bool providesCustomComparison = false)
+      : kind_{kind}, providesCustomComparison_{providesCustomComparison} {}
 
   TypeKind kind() const {
     return kind_;
   }
 
-  virtual ~Type() = default;
+  ~Type() override = default;
 
   /// This convenience method makes pattern matching easier. Rather than having
   /// to know the implementation type up front, just use as<TypeKind::MAP> (for
@@ -533,10 +583,6 @@ class Type : public Tree<const TypePtr>, public velox::ISerializable {
     return this->equals(other);
   }
 
-  inline bool operator!=(const Type& other) const {
-    return !(*this == other);
-  }
-
   // todo(youknowjack): avoid expensive virtual function calls for these
   // simple functions
   virtual size_t cppSizeInBytes() const {
@@ -594,6 +640,9 @@ class Type : public Tree<const TypePtr>, public velox::ISerializable {
 
   bool containsUnknown() const;
 
+  template <typename T>
+  std::string valueToString(T value) const;
+
   VELOX_DEFINE_CLASS_NAME(Type)
 
  protected:
@@ -625,8 +674,11 @@ template <TypeKind KIND>
 struct kindCanProvideCustomComparison<
     KIND,
     std::enable_if_t<
-        TypeTraits<KIND>::isPrimitiveType && TypeTraits<KIND>::isFixedWidth>> {
-  static constexpr bool value = true;
+        TypeTraits<KIND>::isPrimitiveType && TypeTraits<KIND>::isFixedWidth>>
+    : std::true_type {};
+
+struct ProvideCustomComparison {
+  explicit ProvideCustomComparison() = default;
 };
 
 template <TypeKind KIND>
@@ -634,13 +686,12 @@ class TypeBase : public Type {
  public:
   using NativeType = typename TypeTraits<KIND>::NativeType;
 
-  explicit TypeBase(bool providesCustomComparison = false)
-      : Type{KIND, providesCustomComparison} {
-    if (providesCustomComparison) {
-      VELOX_CHECK(
-          kindCanProvideCustomComparison<KIND>::value,
-          "Custom comparisons are only supported for primitive types that are fixed width.");
-    }
+  constexpr explicit TypeBase() : Type{KIND, false} {}
+
+  constexpr explicit TypeBase(ProvideCustomComparison tag) : Type{KIND, true} {
+    static_assert(
+        kindCanProvideCustomComparison<KIND>::value,
+        "Custom comparisons are only supported for primitive types that are fixed width.");
   }
 
   bool isPrimitiveType() const override {
@@ -676,8 +727,7 @@ class TypeBase : public Type {
 template <TypeKind KIND>
 class CanProvideCustomComparisonType : public TypeBase<KIND> {
  public:
-  explicit CanProvideCustomComparisonType(bool providesCustomComparison = false)
-      : TypeBase<KIND>{providesCustomComparison} {}
+  using TypeBase<KIND>::TypeBase;
 
   virtual int32_t compare(
       const typename TypeBase<KIND>::NativeType& /*left*/,
@@ -700,8 +750,7 @@ class CanProvideCustomComparisonType : public TypeBase<KIND> {
 template <TypeKind KIND>
 class ScalarType : public CanProvideCustomComparisonType<KIND> {
  public:
-  explicit ScalarType(bool providesCustomComparison = false)
-      : CanProvideCustomComparisonType<KIND>{providesCustomComparison} {}
+  using CanProvideCustomComparisonType<KIND>::CanProvideCustomComparisonType;
 
   uint32_t size() const override {
     return 0;
@@ -731,7 +780,13 @@ class ScalarType : public CanProvideCustomComparisonType<KIND> {
     return Type::cppSizeInBytes();
   }
 
-  FOLLY_NOINLINE static const std::shared_ptr<const ScalarType<KIND>> create();
+  // TODO: This and all similar functions should be constexpr starting from
+  // C++23. In such case similar places but with type parameters can be
+  // constexpr too.
+  static std::shared_ptr<const ScalarType<KIND>> create() {
+    static constexpr ScalarType<KIND> kInstance;
+    return {std::shared_ptr<const ScalarType<KIND>>{}, &kInstance};
+  }
 
   bool equivalent(const Type& other) const override {
     return Type::hasSameTypeId(other);
@@ -745,12 +800,6 @@ class ScalarType : public CanProvideCustomComparisonType<KIND> {
     return obj;
   }
 };
-
-template <TypeKind KIND>
-const std::shared_ptr<const ScalarType<KIND>> ScalarType<KIND>::create() {
-  static const auto instance = std::make_shared<const ScalarType<KIND>>();
-  return instance;
-}
 
 /// This class represents the fixed-point numbers.
 /// The parameter "precision" represents the number of digits the
@@ -824,16 +873,18 @@ class DecimalType : public ScalarType<KIND> {
   const std::vector<TypeParameter> parameters_;
 };
 
-class ShortDecimalType : public DecimalType<TypeKind::BIGINT> {
+class ShortDecimalType final : public DecimalType<TypeKind::BIGINT> {
  public:
   ShortDecimalType(int precision, int scale)
       : DecimalType<TypeKind::BIGINT>(precision, scale) {}
 };
 
-class LongDecimalType : public DecimalType<TypeKind::HUGEINT> {
+class LongDecimalType final : public DecimalType<TypeKind::HUGEINT> {
  public:
   LongDecimalType(int precision, int scale)
       : DecimalType<TypeKind::HUGEINT>(precision, scale) {}
+
+  static std::string toString(int128_t value, const Type& type);
 };
 
 TypePtr DECIMAL(uint8_t precision, uint8_t scale);
@@ -866,9 +917,8 @@ std::pair<uint8_t, uint8_t> getDecimalPrecisionScale(const Type& type);
 
 class UnknownType : public CanProvideCustomComparisonType<TypeKind::UNKNOWN> {
  public:
-  explicit UnknownType(bool proivdesCustomComparison = false)
-      : CanProvideCustomComparisonType<TypeKind::UNKNOWN>(
-            proivdesCustomComparison) {}
+  using CanProvideCustomComparisonType<
+      TypeKind::UNKNOWN>::CanProvideCustomComparisonType;
 
   uint32_t size() const override {
     return 0;
@@ -1226,9 +1276,8 @@ class OpaqueType : public TypeBase<TypeKind::OPAQUE> {
   FOLLY_NOINLINE static std::shared_ptr<const OpaqueType> create() {
     /// static vars in templates are dangerous across DSOs, but it's just a
     /// performance optimization. Comparison looks at type_index anyway.
-    static const auto instance =
-        std::make_shared<const OpaqueType>(std::type_index(typeid(Class)));
-    return instance;
+    static const OpaqueType kInstance{std::type_index(typeid(Class))};
+    return {std::shared_ptr<const OpaqueType>{}, &kInstance};
   }
 
   /// This function currently doesn't do synchronization neither with reads
@@ -1294,15 +1343,13 @@ constexpr long kMillisInHour = 60 * kMillisInMinute;
 constexpr long kMillisInDay = 24 * kMillisInHour;
 
 /// Time interval in milliseconds.
-class IntervalDayTimeType : public BigintType {
- private:
+class IntervalDayTimeType final : public BigintType {
   IntervalDayTimeType() = default;
 
  public:
-  static const std::shared_ptr<const IntervalDayTimeType>& get() {
-    static const std::shared_ptr<const IntervalDayTimeType> kType{
-        new IntervalDayTimeType()};
-    return kType;
+  static std::shared_ptr<const IntervalDayTimeType> get() {
+    VELOX_CONSTEXPR_SINGLETON IntervalDayTimeType kInstance;
+    return {std::shared_ptr<const IntervalDayTimeType>{}, &kInstance};
   }
 
   const char* name() const override {
@@ -1336,7 +1383,7 @@ class IntervalDayTimeType : public BigintType {
   }
 };
 
-FOLLY_ALWAYS_INLINE const std::shared_ptr<const IntervalDayTimeType>&
+FOLLY_ALWAYS_INLINE std::shared_ptr<const IntervalDayTimeType>
 INTERVAL_DAY_TIME() {
   return IntervalDayTimeType::get();
 }
@@ -1348,15 +1395,13 @@ FOLLY_ALWAYS_INLINE bool Type::isIntervalDayTime() const {
 
 constexpr long kMonthInYear = 12;
 /// Time interval in months.
-class IntervalYearMonthType : public IntegerType {
- private:
+class IntervalYearMonthType final : public IntegerType {
   IntervalYearMonthType() = default;
 
  public:
-  static const std::shared_ptr<const IntervalYearMonthType>& get() {
-    static const std::shared_ptr<const IntervalYearMonthType> kType{
-        new IntervalYearMonthType()};
-    return kType;
+  static std::shared_ptr<const IntervalYearMonthType> get() {
+    VELOX_CONSTEXPR_SINGLETON IntervalYearMonthType kInstance;
+    return {std::shared_ptr<const IntervalYearMonthType>{}, &kInstance};
   }
 
   const char* name() const override {
@@ -1389,7 +1434,7 @@ class IntervalYearMonthType : public IntegerType {
   }
 };
 
-FOLLY_ALWAYS_INLINE const std::shared_ptr<const IntervalYearMonthType>&
+FOLLY_ALWAYS_INLINE std::shared_ptr<const IntervalYearMonthType>
 INTERVAL_YEAR_MONTH() {
   return IntervalYearMonthType::get();
 }
@@ -1400,14 +1445,13 @@ FOLLY_ALWAYS_INLINE bool Type::isIntervalYearMonth() const {
 }
 
 /// Date is represented as the number of days since epoch start using int32_t.
-class DateType : public IntegerType {
- private:
+class DateType final : public IntegerType {
   DateType() = default;
 
  public:
-  static const std::shared_ptr<const DateType>& get() {
-    static const std::shared_ptr<const DateType> kType{new DateType()};
-    return kType;
+  static std::shared_ptr<const DateType> get() {
+    VELOX_CONSTEXPR_SINGLETON DateType kInstance;
+    return {std::shared_ptr<const DateType>{}, &kInstance};
   }
 
   const char* name() const override {
@@ -1444,7 +1488,7 @@ class DateType : public IntegerType {
   }
 };
 
-FOLLY_ALWAYS_INLINE const std::shared_ptr<const DateType>& DATE() {
+FOLLY_ALWAYS_INLINE std::shared_ptr<const DateType> DATE() {
   return DateType::get();
 }
 
@@ -1482,21 +1526,23 @@ struct TypeFactory {
 template <>
 struct TypeFactory<TypeKind::UNKNOWN> {
   static std::shared_ptr<const UnknownType> create() {
-    return std::make_shared<UnknownType>();
+    VELOX_CONSTEXPR_SINGLETON UnknownType kInstance;
+    return {std::shared_ptr<const UnknownType>{}, &kInstance};
   }
 };
 
 template <>
 struct TypeFactory<TypeKind::ARRAY> {
   static ArrayTypePtr create(TypePtr elementType) {
-    return std::make_shared<ArrayType>(std::move(elementType));
+    return std::make_shared<const ArrayType>(std::move(elementType));
   }
 };
 
 template <>
 struct TypeFactory<TypeKind::MAP> {
   static MapTypePtr create(TypePtr keyType, TypePtr valType) {
-    return std::make_shared<MapType>(std::move(keyType), std::move(valType));
+    return std::make_shared<const MapType>(
+        std::move(keyType), std::move(valType));
   }
 };
 
@@ -1509,16 +1555,51 @@ struct TypeFactory<TypeKind::ROW> {
   }
 };
 
+/// Returns an array of 'elementType'.
+///
+/// Example: ARRAY(INTEGER()).
 ArrayTypePtr ARRAY(TypePtr elementType);
 
+/// Returns a map of 'keyType' and 'valueType'.
+///
+/// Example: MAP(INTEGER(), REAL()).
+MapTypePtr MAP(TypePtr keyType, TypePtr valueType);
+
+/// Returns a struct with specified field names and types. Number of 'names'
+/// must match number of 'types'. Empty 'names' and 'types' are allowed.
+///
+/// Example: ROW({"a", "b", "c"}, {INTEGER(), BIGINT(), VARCHAR()}).
 RowTypePtr ROW(std::vector<std::string> names, std::vector<TypePtr> types);
 
+/// Returns a homogenous struct where all fields have the same type.
+///
+/// Example:
+///
+///   ROW({"a", "b", "c"}, REAL()) is a shortcut for
+///     ROW({"a", "b", "c"}, {REAL(), REAL(), REAL()}).
+RowTypePtr ROW(std::vector<std::string> names, const TypePtr& childType);
+
+RowTypePtr ROW(
+    std::initializer_list<std::string> names,
+    const TypePtr& childType);
+
+/// Creates a RowType from list of (name, type) pairs.
+///
+/// Example: ROW({{"a", INTEGER()}, {"b", BIGINT()}, {"c", VARCHAR()}}).
 RowTypePtr ROW(
     std::initializer_list<std::pair<const std::string, TypePtr>>&& pairs);
 
-RowTypePtr ROW(std::vector<TypePtr>&& types);
+/// Returns a struct with a single field.
+///
+/// Example: ROW("a", BIGINT()) is a shortcut for ROW({{"a", BIGINT()}}).
+RowTypePtr ROW(std::string name, TypePtr type);
 
-MapTypePtr MAP(TypePtr keyType, TypePtr valType);
+/// Returns anonymoous struct where field names are empty.
+///
+/// Examples:
+///    ROW({INTEGER(), BIGINT(), VARCHAR()})
+///    ROW({}) // Struct with no fields.
+RowTypePtr ROW(std::vector<TypePtr>&& types);
 
 std::shared_ptr<const FunctionType> FUNCTION(
     std::vector<TypePtr>&& argumentTypes,
@@ -2052,13 +2133,14 @@ struct InputGeneratorConfig {
   size_t seed_;
   double nullRatio_;
   memory::MemoryPool* pool_;
+  TypePtr type_{nullptr}; // Added type to support
 };
 
 /// Associates custom types with their custom operators to be the payload in
 /// the custom type registry.
-class CustomTypeFactories {
+class CustomTypeFactory {
  public:
-  virtual ~CustomTypeFactories();
+  virtual ~CustomTypeFactory();
 
   /// Returns a shared pointer to the custom type.
   virtual TypePtr getType(
@@ -2108,7 +2190,7 @@ class AbstractInputGenerator {
 /// false if type with the specified name already exists.
 bool registerCustomType(
     const std::string& name,
-    std::unique_ptr<const CustomTypeFactories> factories);
+    std::unique_ptr<const CustomTypeFactory> factories);
 
 // See registerOpaqueType() for documentation on type index and opaque type
 // alias.
@@ -2273,6 +2355,42 @@ class DeserializedTypeCache {
 };
 
 DeserializedTypeCache& deserializedTypeCache();
+
+template <typename T>
+std::string Type::valueToString(T value) const {
+  if constexpr (std::is_same_v<T, bool>) {
+    return value ? "true" : "false";
+  } else if constexpr (std::is_same_v<T, std::shared_ptr<void>>) {
+    return "<opaque>";
+  } else if constexpr (
+      std::is_same_v<T, int64_t> || std::is_same_v<T, int128_t>) {
+    if (isDecimal()) {
+      return LongDecimalType::toString(value, *this);
+    } else {
+      return velox::to<std::string>(value);
+    }
+  } else if constexpr (std::is_same_v<T, int32_t>) {
+    if (isDate()) {
+      return DATE()->toString(value);
+    } else {
+      return velox::to<std::string>(value);
+    }
+  } else {
+    return velox::to<std::string>(value);
+  }
+}
+
+/// Return a string representation of a limited number of elements at the
+/// start of the array or map.
+///
+/// @param size Total number of elements.
+/// @param stringifyElement Function to call to append individual elements.
+/// Will be called up to 'limit' times.
+/// @param limit Maximum number of elements to include in the result.
+std::string stringifyTruncatedElementList(
+    size_t size,
+    const std::function<void(std::stringstream&, size_t)>& stringifyElement,
+    size_t limit = 5);
 
 } // namespace facebook::velox
 

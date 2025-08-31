@@ -27,6 +27,8 @@
 
 #include <cudf/ast/expressions.hpp>
 #include <cudf/join/hash_join.hpp>
+#include <cudf/join/join.hpp>
+#include <cudf/join/mixed_join.hpp>
 #include <cudf/table/table.hpp>
 
 namespace facebook::velox::cudf_velox {

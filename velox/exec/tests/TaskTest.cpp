@@ -25,6 +25,7 @@
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/exec/Cursor.h"
+#include "velox/exec/HashAggregation.h"
 #include "velox/exec/OutputBufferManager.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/Values.h"
@@ -458,6 +459,55 @@ class TestBadMemoryTranslator : public exec::Operator::PlanNodeTranslator {
     }
     return nullptr;
   }
+};
+
+// Test operator that calls the protected shouldYield() method to verify it
+// correctly delegates to the driver's shouldYield() implementation and
+// respects CPU time slice limits.
+class TestShouldYieldOperator : public exec::Operator {
+ public:
+  TestShouldYieldOperator(
+      int32_t operatorId,
+      exec::DriverCtx* driverCtx,
+      const RowTypePtr& outputType,
+      const std::string& nodeId)
+      : Operator(driverCtx, outputType, operatorId, nodeId, "TestShouldYield") {
+  }
+
+  bool needsInput() const override {
+    return !noMoreInput_ && !input_;
+  }
+
+  void addInput(RowVectorPtr input) override {
+    input_ = std::move(input);
+  }
+
+  RowVectorPtr getOutput() override {
+    if (!input_) {
+      return nullptr;
+    }
+
+    // Test the protected shouldYield() method
+    shouldYieldResult_ = shouldYield();
+
+    return input_;
+  }
+
+  exec::BlockingReason isBlocked(ContinueFuture* /*unused*/) override {
+    return exec::BlockingReason::kNotBlocked;
+  }
+
+  bool isFinished() override {
+    return noMoreInput_ && !input_;
+  }
+
+  bool getShouldYieldResult() const {
+    return shouldYieldResult_;
+  }
+
+ private:
+  RowVectorPtr input_;
+  bool shouldYieldResult_{false};
 };
 } // namespace
 
@@ -2668,13 +2718,12 @@ TEST_F(TaskTest, invalidPlanNodeForBarrier) {
       makeFlatVector<int64_t>(1'000, [](auto row) { return row; }),
   });
 
-  // Filter + Project.
   const auto plan = PlanBuilder()
                         .values({data, data})
                         .filter("c0 < 100")
                         .project({"c0 + 5"})
                         .planFragment();
-  ASSERT_FALSE(plan.supportsBarrier());
+  ASSERT_TRUE(plan.firstNodeNotSupportingBarrier());
 
   const auto task = Task::create(
       "invalidPlanNodeForBarrier",
@@ -2683,7 +2732,9 @@ TEST_F(TaskTest, invalidPlanNodeForBarrier) {
       core::QueryCtx::create(),
       Task::ExecutionMode::kSerial);
   ASSERT_TRUE(!task->underBarrier());
-  VELOX_ASSERT_THROW(task->requestBarrier(), "Task doesn't support barrier");
+  VELOX_ASSERT_THROW(
+      task->requestBarrier(),
+      "Name of the first node that doesn't support barriered execution:");
 }
 
 TEST_F(TaskTest, barrierAfterNoMoreSplits) {
@@ -2733,7 +2784,7 @@ TEST_F(TaskTest, invalidTaskModeForBarrier) {
                         .filter("c0 < 100")
                         .project({"c0 + 5"})
                         .planFragment();
-  ASSERT_TRUE(plan.supportsBarrier());
+  ASSERT_TRUE(plan.firstNodeNotSupportingBarrier() == nullptr);
 
   const auto task = Task::create(
       "invalidTaskModeForBarrier",
@@ -2742,7 +2793,9 @@ TEST_F(TaskTest, invalidTaskModeForBarrier) {
       core::QueryCtx::create(),
       Task::ExecutionMode::kParallel);
   ASSERT_TRUE(!task->underBarrier());
-  VELOX_ASSERT_THROW(task->requestBarrier(), "Task doesn't support barrier");
+  VELOX_ASSERT_THROW(
+      task->requestBarrier(),
+      "(Parallel vs. Serial) Task doesn't support barriered execution.");
 }
 
 TEST_F(TaskTest, addSplitAfterBarrier) {
@@ -2760,7 +2813,7 @@ TEST_F(TaskTest, addSplitAfterBarrier) {
                         .filter("c0 < 100")
                         .project({"c0 + 5"})
                         .planFragment();
-  ASSERT_TRUE(plan.supportsBarrier());
+  ASSERT_TRUE(plan.firstNodeNotSupportingBarrier() == nullptr);
 
   const auto task = Task::create(
       "barrierAfterNoMoreSplits",
@@ -3218,6 +3271,111 @@ TEST_F(TaskTest, expressionStatsInBetweenBarriers) {
   taskStats = task->taskStats();
   ASSERT_EQ(taskStats.numFinishedSplits, 2);
   verifyExpressionStats(taskStats, 20);
+}
+
+DEBUG_ONLY_TEST_F(TaskTest, taskExecutionEndTime) {
+  std::vector<RowVectorPtr> vectors;
+  std::vector<std::shared_ptr<TempFilePath>> tempFiles;
+  const int numSplits{5};
+  const int numRowsPerSplit{1'000};
+  for (int32_t i = 0; i < numSplits; ++i) {
+    vectors.push_back(makeRowVector(
+        {makeFlatVector<int32_t>(numRowsPerSplit, [](auto row) { return row; }),
+         makeFlatVector<int32_t>(
+             numRowsPerSplit, [](auto row) { return row * 2; })}));
+    tempFiles.push_back(TempFilePath::create());
+  }
+  writeToFiles(toFilePaths(tempFiles), vectors);
+  createDuckDbTable(vectors);
+
+  const int injectedDelaySecs{2};
+  std::atomic_bool injectDelayOnce{true};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Driver::runInternal::getOutput",
+      std::function<void(const velox::exec::Operator*)>(
+          ([&](const velox::exec::Operator* op) {
+            if (op->operatorCtx()->operatorType() == "HashAggregation") {
+              return;
+            }
+            auto task = op->operatorCtx()->task();
+            if (!task->testingAllSplitsFinished()) {
+              return;
+            }
+            if (!injectDelayOnce.exchange(false)) {
+              return;
+            }
+            std::this_thread::sleep_for(
+                std::chrono::seconds(injectedDelaySecs)); // No Lint.
+          })));
+
+  core::PlanNodeId tableScanNodeId;
+  auto plan = test::PlanBuilder()
+                  .tableScan(asRowType(vectors.back()->type()))
+                  .capturePlanNodeId(tableScanNodeId)
+                  .singleAggregation({"c0"}, {"sum(c1)"})
+                  .planNode();
+  auto task = AssertQueryBuilder(plan, duckDbQueryRunner_)
+                  .splits(tableScanNodeId, makeHiveConnectorSplits(tempFiles))
+                  .assertResults("SELECT c0, sum(c1) FROM tmp GROUP BY c0");
+  const auto taskStats = task->taskStats();
+  ASSERT_GE(
+      taskStats.executionEndTimeMs - taskStats.executionStartTimeMs,
+      injectedDelaySecs * 1'000);
+}
+
+DEBUG_ONLY_TEST_F(TaskTest, operatorShouldYieldMethod) {
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  const auto data = makeRowVector({
+      makeFlatVector<int64_t>(3, [](auto row) { return row; }),
+  });
+  const uint64_t kDriverCpuTimeSliceLimitMs = 100;
+
+  struct {
+    bool hasDelay;
+    std::string debugString() const {
+      return fmt::format("hasDelay: {}", hasDelay);
+    }
+  } testSetting[]{{true}, {false}};
+
+  for (const auto& testData : testSetting) {
+    SCOPED_TRACE(testData.debugString());
+    std::atomic<bool> shouldYieldResult{false};
+
+    SCOPED_TESTVALUE_SET(
+        "facebook::velox::exec::Values::getOutput",
+        std::function<void(const exec::Values*)>(
+            [&](const exec::Values* values) {
+              auto testShouldYieldOp =
+                  std::make_unique<TestShouldYieldOperator>(
+                      0,
+                      values->operatorCtx()->driverCtx(),
+                      ROW({"c0"}, {BIGINT()}),
+                      planNodeIdGenerator->next());
+
+              testShouldYieldOp->addInput(
+                  makeRowVector({makeFlatVector<int64_t>({1})}));
+              if (testData.hasDelay) {
+                std::this_thread::sleep_for(
+                    std::chrono::milliseconds(2 * kDriverCpuTimeSliceLimitMs));
+              }
+
+              // This will test shouldYield() internally
+              testShouldYieldOp->getOutput();
+              shouldYieldResult = testShouldYieldOp->getShouldYieldResult();
+            }));
+
+    auto queryCtx = core::QueryCtx::create(
+        executor_.get(),
+        core::QueryConfig({
+            {core::QueryConfig::kDriverCpuTimeSliceLimitMs,
+             folly::to<std::string>(kDriverCpuTimeSliceLimitMs)},
+        }));
+
+    auto plan = PlanBuilder(planNodeIdGenerator).values({data}).planNode();
+    AssertQueryBuilder(plan).queryCtx(queryCtx).copyResults(pool());
+
+    ASSERT_EQ(testData.hasDelay, shouldYieldResult.load());
+  }
 }
 
 } // namespace facebook::velox::exec::test

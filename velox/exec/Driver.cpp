@@ -18,6 +18,7 @@
 
 #include "velox/common/process/TraceContext.h"
 #include "velox/exec/Task.h"
+#include "velox/vector/LazyVector.h"
 
 using facebook::velox::common::testutil::TestValue;
 
@@ -1090,7 +1091,7 @@ std::string Driver::toString() const {
     std::string blockedOp = (blockedOperatorId_ < operators_.size())
         ? operators_[blockedOperatorId_]->toString()
         : "<unknown op>";
-    out << "blocked (" << blockingReasonToString(blockingReason_) << " "
+    out << "blocked (" << BlockingReasonName::toName(blockingReason_) << " "
         << blockedOp << "), ";
   } else if (state_.isEnqueued) {
     out << "enqueued ";
@@ -1128,7 +1129,7 @@ Driver::CancelGuard::~CancelGuard() {
 
 folly::dynamic Driver::toJson() const {
   folly::dynamic obj = folly::dynamic::object;
-  obj["blockingReason"] = blockingReasonToString(blockingReason_);
+  obj["blockingReason"] = BlockingReasonName::toName(blockingReason_);
   obj["state"] = state_.toJson();
   obj["closed"] = closed_.load();
   obj["queueTimeStartMicros"] = queueTimeStartUs_;
@@ -1221,40 +1222,6 @@ StopReason Driver::blockDriver(
 
 std::string Driver::label() const {
   return fmt::format("<Driver {}:{}>", task()->taskId(), ctx_->driverId);
-}
-
-std::string blockingReasonToString(BlockingReason reason) {
-  switch (reason) {
-    case BlockingReason::kNotBlocked:
-      return "kNotBlocked";
-    case BlockingReason::kWaitForConsumer:
-      return "kWaitForConsumer";
-    case BlockingReason::kWaitForSplit:
-      return "kWaitForSplit";
-    case BlockingReason::kWaitForProducer:
-      return "kWaitForProducer";
-    case BlockingReason::kWaitForJoinBuild:
-      return "kWaitForJoinBuild";
-    case BlockingReason::kWaitForJoinProbe:
-      return "kWaitForJoinProbe";
-    case BlockingReason::kWaitForMergeJoinRightSide:
-      return "kWaitForMergeJoinRightSide";
-    case BlockingReason::kWaitForMemory:
-      return "kWaitForMemory";
-    case BlockingReason::kWaitForConnector:
-      return "kWaitForConnector";
-    case BlockingReason::kYield:
-      return "kYield";
-    case BlockingReason::kWaitForArbitration:
-      return "kWaitForArbitration";
-    case BlockingReason::kWaitForScanScaleUp:
-      return "kWaitForScanScaleUp";
-    case BlockingReason::kWaitForIndexLookup:
-      return "kWaitForIndexLookup";
-    default:
-      VELOX_UNREACHABLE(
-          fmt::format("Unknown blocking reason {}", static_cast<int>(reason)));
-  }
 }
 
 DriverThreadContext* driverThreadContext() {

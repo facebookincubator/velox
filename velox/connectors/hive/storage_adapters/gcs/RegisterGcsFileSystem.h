@@ -16,9 +16,26 @@
 
 #pragma once
 
+#include <functional>
+#include <memory>
+#include <string>
+
+namespace facebook::velox::connector::hive {
+class HiveConfig;
+}
+
 namespace facebook::velox::filesystems {
+class GcsOAuthCredentialsProvider;
 
 // Register the GCS filesystem.
 void registerGcsFileSystem();
+
+using GcsOAuthCredentialsProviderFactory =
+    std::function<std::shared_ptr<GcsOAuthCredentialsProvider>(
+        const std::shared_ptr<connector::hive::HiveConfig>& hiveConfig)>;
+
+void registerGcsOAuthCredentialsProvider(
+    const std::string& providerName,
+    const GcsOAuthCredentialsProviderFactory& factory);
 
 } // namespace facebook::velox::filesystems

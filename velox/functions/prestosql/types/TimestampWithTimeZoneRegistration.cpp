@@ -184,13 +184,13 @@ void castToDate(
   });
 }
 
-class TimestampWithTimeZoneCastOperator : public exec::CastOperator {
- public:
-  static const std::shared_ptr<const CastOperator>& get() {
-    static const std::shared_ptr<const CastOperator> instance{
-        new TimestampWithTimeZoneCastOperator()};
+class TimestampWithTimeZoneCastOperator final : public exec::CastOperator {
+  TimestampWithTimeZoneCastOperator() = default;
 
-    return instance;
+ public:
+  static std::shared_ptr<const CastOperator> get() {
+    VELOX_CONSTEXPR_SINGLETON TimestampWithTimeZoneCastOperator kInstance;
+    return {std::shared_ptr<const CastOperator>{}, &kInstance};
   }
 
   bool isSupportedFromType(const TypePtr& other) const override {
@@ -270,12 +270,9 @@ class TimestampWithTimeZoneCastOperator : public exec::CastOperator {
           resultType->toString());
     }
   }
-
- private:
-  TimestampWithTimeZoneCastOperator() = default;
 };
 
-class TimestampWithTimeZoneTypeFactories : public CustomTypeFactories {
+class TimestampWithTimeZoneTypeFactory : public CustomTypeFactory {
  public:
   TypePtr getType(const std::vector<TypeParameter>& parameters) const override {
     VELOX_CHECK(parameters.empty());
@@ -298,6 +295,6 @@ class TimestampWithTimeZoneTypeFactories : public CustomTypeFactories {
 void registerTimestampWithTimeZoneType() {
   registerCustomType(
       "timestamp with time zone",
-      std::make_unique<const TimestampWithTimeZoneTypeFactories>());
+      std::make_unique<const TimestampWithTimeZoneTypeFactory>());
 }
 } // namespace facebook::velox

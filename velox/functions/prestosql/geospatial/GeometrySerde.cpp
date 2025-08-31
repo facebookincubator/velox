@@ -25,7 +25,7 @@
 using facebook::velox::common::InputByteStream;
 
 namespace facebook::velox::functions::geospatial {
-std::unique_ptr<geos::geom::Geometry> GeometryDeserializer::deserialize(
+std::unique_ptr<geos::geom::Geometry> GeometryDeserializer::readGeometry(
     velox::common::InputByteStream& stream,
     size_t size) {
   auto geometryType = static_cast<GeometrySerializationType>(
@@ -107,9 +107,9 @@ geos::geom::Coordinate GeometryDeserializer::readCoordinate(
 std::unique_ptr<geos::geom::CoordinateSequence>
 GeometryDeserializer::readCoordinates(
     velox::common::InputByteStream& input,
-    int count) {
+    size_t count) {
   auto coords = std::make_unique<geos::geom::CoordinateArraySequence>(count, 2);
-  for (int i = 0; i < count; ++i) {
+  for (size_t i = 0; i < count; ++i) {
     // TODO: Consider using setOrdinate if there's a performance issue.
     coords->setAt(readCoordinate(input), i);
   }
@@ -130,9 +130,10 @@ std::unique_ptr<geos::geom::Geometry> GeometryDeserializer::readMultiPoint(
     velox::common::InputByteStream& input) {
   skipEsriType(input);
   skipEnvelope(input);
-  int pointCount = input.read<int>();
+  size_t pointCount = input.read<int32_t>();
   auto coords = readCoordinates(input, pointCount);
   std::vector<std::unique_ptr<geos::geom::Point>> points;
+  points.reserve(coords->size());
   for (size_t i = 0; i < coords->size(); ++i) {
     points.push_back(
         std::unique_ptr<geos::geom::Point>(getGeometryFactory()->createPoint(
@@ -146,7 +147,8 @@ std::unique_ptr<geos::geom::Geometry> GeometryDeserializer::readPolyline(
     bool multiType) {
   skipEsriType(input);
   skipEnvelope(input);
-  int partCount = input.read<int>();
+  size_t partCount = input.read<int32_t>();
+  size_t pointCount = input.read<int32_t>();
 
   if (partCount == 0) {
     if (multiType) {
@@ -155,17 +157,15 @@ std::unique_ptr<geos::geom::Geometry> GeometryDeserializer::readPolyline(
     return getGeometryFactory()->createLineString();
   }
 
-  int pointCount = input.read<int>();
-  std::vector<int> startIndexes(partCount);
-
-  for (int i = 0; i < partCount; ++i) {
-    startIndexes[i] = input.read<int>();
+  std::vector<size_t> startIndexes(partCount);
+  for (size_t i = 0; i < partCount; ++i) {
+    startIndexes[i] = input.read<int32_t>();
   }
 
-  std::vector<int> partLengths(partCount);
+  std::vector<size_t> partLengths(partCount);
   if (partCount > 1) {
     partLengths[0] = startIndexes[1];
-    for (int i = 1; i < partCount - 1; ++i) {
+    for (size_t i = 1; i < partCount - 1; ++i) {
       partLengths[i] = startIndexes[i + 1] - startIndexes[i];
     }
   }
@@ -173,7 +173,7 @@ std::unique_ptr<geos::geom::Geometry> GeometryDeserializer::readPolyline(
 
   std::vector<std::unique_ptr<geos::geom::LineString>> lineStrings;
   lineStrings.reserve(partCount);
-  for (int i = 0; i < partCount; ++i) {
+  for (size_t i = 0; i < partCount; ++i) {
     lineStrings.push_back(getGeometryFactory()->createLineString(
         readCoordinates(input, partLengths[i])));
   }
@@ -195,7 +195,8 @@ std::unique_ptr<geos::geom::Geometry> GeometryDeserializer::readPolygon(
   skipEsriType(input);
   skipEnvelope(input);
 
-  int partCount = input.read<int>();
+  size_t partCount = input.read<int32_t>();
+  size_t pointCount = input.read<int32_t>();
   if (partCount == 0) {
     if (multiType) {
       return getGeometryFactory()->createMultiPolygon();
@@ -203,16 +204,15 @@ std::unique_ptr<geos::geom::Geometry> GeometryDeserializer::readPolygon(
     return getGeometryFactory()->createPolygon();
   }
 
-  int pointCount = input.read<int>();
-  std::vector<int> startIndexes(partCount);
-  for (int i = 0; i < partCount; i++) {
-    startIndexes[i] = input.read<int>();
+  std::vector<size_t> startIndexes(partCount);
+  for (size_t i = 0; i < partCount; i++) {
+    startIndexes[i] = input.read<int32_t>();
   }
 
-  std::vector<int> partLengths(partCount);
+  std::vector<size_t> partLengths(partCount);
   if (partCount > 1) {
     partLengths[0] = startIndexes[1];
-    for (int i = 1; i < partCount - 1; i++) {
+    for (size_t i = 1; i < partCount - 1; i++) {
       partLengths[i] = startIndexes[i + 1] - startIndexes[i];
     }
   }
@@ -222,7 +222,7 @@ std::unique_ptr<geos::geom::Geometry> GeometryDeserializer::readPolygon(
   std::vector<std::unique_ptr<geos::geom::LinearRing>> holes;
   std::vector<std::unique_ptr<geos::geom::Polygon>> polygons;
 
-  for (int i = 0; i < partCount; i++) {
+  for (size_t i = 0; i < partCount; i++) {
     auto coordinates = readCoordinates(input, partLengths[i]);
 
     if (isClockwise(coordinates, 0, coordinates->size())) {
@@ -283,11 +283,12 @@ GeometryDeserializer::readGeometryCollection(
   auto offset = input.offset();
   while (size - offset > 0) {
     // Skip the length field
-    input.read<int>();
-    geometries.push_back(deserialize(input, size));
+    input.read<int32_t>();
+    geometries.push_back(readGeometry(input, size));
     offset = input.offset();
   }
   std::vector<const geos::geom::Geometry*> rawGeometries;
+  rawGeometries.reserve(geometries.size());
   for (const auto& geometry : geometries) {
     rawGeometries.push_back(geometry.get());
   }

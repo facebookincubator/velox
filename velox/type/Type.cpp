@@ -24,6 +24,7 @@
 #include <sstream>
 #include <typeindex>
 
+#include "velox/type/DecimalUtil.h"
 #include "velox/type/TimestampConversion.h"
 
 namespace std {
@@ -42,8 +43,8 @@ bool isColumnNameRequiringEscaping(const std::string& name) {
   return !RE2::FullMatch(name, re);
 }
 
-folly::F14FastMap<TypeKind, std::string> typeKindNames() {
-  static const folly::F14FastMap<TypeKind, std::string> kNames = {
+const auto& typeKindNames() {
+  static const folly::F14FastMap<TypeKind, std::string_view> kNames = {
       {TypeKind::BOOLEAN, "BOOLEAN"},
       {TypeKind::TINYINT, "TINYINT"},
       {TypeKind::SMALLINT, "SMALLINT"},
@@ -63,10 +64,37 @@ folly::F14FastMap<TypeKind, std::string> typeKindNames() {
       {TypeKind::OPAQUE, "OPAQUE"},
       {TypeKind::INVALID, "INVALID"},
   };
-
   return kNames;
 }
 } // namespace
+
+folly::dynamic LongEnumParameter::serializeEnumParameter() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["enumName"] = name;
+  folly::dynamic follyMap = folly::dynamic::object;
+  for (const auto& [key, value] : valuesMap) {
+    follyMap[key] = value;
+  }
+  obj["valuesMap"] = follyMap;
+  return obj;
+}
+
+size_t LongEnumParameter::Hash::operator()(
+    const LongEnumParameter& param) const {
+  uint64_t nameHash = folly::Hash{}(param.name);
+
+  // Hash each key-value pair and combine using commutativeHashMix
+  // to ensure order independence.
+  uint64_t mapHash = facebook::velox::bits::kNullHash;
+  for (const auto& [key, value] : param.valuesMap) {
+    const auto elementHash = facebook::velox::bits::hashMix(
+        folly::Hash{}(key), folly::Hash{}(value));
+    mapHash = facebook::velox::bits::commutativeHashMix(mapHash, elementHash);
+  }
+
+  // Combine name hash with map hash.
+  return facebook::velox::bits::hashMix(nameHash, mapHash);
+}
 
 VELOX_DEFINE_ENUM_NAME(TypeKind, typeKindNames);
 
@@ -99,14 +127,35 @@ struct OpaqueSerdeRegistry {
 };
 } // namespace
 
-std::ostream& operator<<(std::ostream& os, const TypeKind& kind) {
-  os << TypeKindName::toName(kind);
-  return os;
-}
-
 namespace {
 std::vector<TypePtr> deserializeChildTypes(const folly::dynamic& obj) {
   return velox::ISerializable::deserialize<std::vector<Type>>(obj["cTypes"]);
+}
+
+template <typename ValueType>
+TypeParameter deserializeEnumParam(const folly::dynamic& obj) {
+  auto enumName = obj["enumName"].asString();
+  VELOX_CHECK(obj["valuesMap"].isObject());
+  auto valuesMap = obj["valuesMap"];
+
+  // Construct the values map
+  std::unordered_map<std::string, ValueType> map;
+  for (const auto& item : valuesMap.items()) {
+    std::string key = item.first.asString();
+    if constexpr (std::is_same_v<ValueType, int64_t>) {
+      int64_t value = item.second.asInt();
+      map.emplace(std::move(key), value);
+    } else {
+      VELOX_UNREACHABLE("Only int64_t value type is supported for enum types.");
+    }
+  }
+
+  // Construct the corresponding TypeParameter
+  if constexpr (std::is_same_v<ValueType, int64_t>) {
+    return TypeParameter(LongEnumParameter(enumName, map));
+  }
+  // TODO: Add the same deserialize logic for VarcharEnumType
+  VELOX_UNREACHABLE("Only int64_t value type is supported for enum types.");
 }
 } // namespace
 
@@ -128,9 +177,14 @@ TypePtr Type::create(const folly::dynamic& obj) {
   // Checks if 'typeName' specifies a custom type.
   if (customTypeExists(typeName)) {
     std::vector<TypeParameter> params;
-    params.reserve(childTypes.size());
-    for (auto& child : childTypes) {
-      params.emplace_back(child);
+    if (obj.find("cTypes") != obj.items().end()) {
+      params.reserve(childTypes.size());
+      for (auto& child : childTypes) {
+        params.emplace_back(child);
+      }
+    }
+    if (obj.find("kLongEnumParam") != obj.items().end()) {
+      params.emplace_back(deserializeEnumParam<int64_t>(obj["kLongEnumParam"]));
     }
     return getCustomType(typeName, params);
   }
@@ -809,39 +863,57 @@ void OpaqueType::registerSerializationTypeErased(
 }
 
 ArrayTypePtr ARRAY(TypePtr elementType) {
-  return std::make_shared<ArrayType>(std::move(elementType));
+  return TypeFactory<TypeKind::ARRAY>::create(std::move(elementType));
+}
+
+MapTypePtr MAP(TypePtr keyType, TypePtr valueType) {
+  return TypeFactory<TypeKind::MAP>::create(
+      std::move(keyType), std::move(valueType));
 }
 
 RowTypePtr ROW(std::vector<std::string> names, std::vector<TypePtr> types) {
   return TypeFactory<TypeKind::ROW>::create(std::move(names), std::move(types));
 }
 
+RowTypePtr ROW(std::vector<std::string> names, TypePtr childType) {
+  const auto cnt = names.size();
+  return ROW(std::move(names), std::vector(cnt, childType));
+}
+
+RowTypePtr ROW(
+    std::initializer_list<std::string> names,
+    const TypePtr& childType) {
+  const auto cnt = names.size();
+  return TypeFactory<TypeKind::ROW>::create(
+      std::vector(names), std::vector(cnt, childType));
+}
+
+RowTypePtr ROW(std::string name, TypePtr type) {
+  return ROW({{std::move(name), std::move(type)}});
+}
+
 RowTypePtr ROW(
     std::initializer_list<std::pair<const std::string, TypePtr>>&& pairs) {
-  std::vector<TypePtr> types;
   std::vector<std::string> names;
-  types.reserve(pairs.size());
+  std::vector<TypePtr> types;
   names.reserve(pairs.size());
-  for (auto& p : pairs) {
-    types.push_back(p.second);
-    names.push_back(p.first);
+  types.reserve(pairs.size());
+  for (const auto& [name, type] : pairs) {
+    names.push_back(name);
+    types.push_back(type);
   }
   return TypeFactory<TypeKind::ROW>::create(std::move(names), std::move(types));
 }
 
 RowTypePtr ROW(std::vector<TypePtr>&& types) {
   std::vector<std::string> names(types.size(), "");
-  return TypeFactory<TypeKind::ROW>::create(std::move(names), std::move(types));
-}
-
-MapTypePtr MAP(TypePtr keyType, TypePtr valType) {
-  return std::make_shared<MapType>(std::move(keyType), std::move(valType));
+  return ROW(std::move(names), std::move(types));
 }
 
 std::shared_ptr<const FunctionType> FUNCTION(
     std::vector<TypePtr>&& argumentTypes,
     TypePtr returnType) {
-  return std::make_shared<FunctionType>(
+  return std::make_shared<const FunctionType>(
       std::move(argumentTypes), std::move(returnType));
 }
 
@@ -875,6 +947,11 @@ TypePtr DECIMAL(const uint8_t precision, const uint8_t scale) {
   return std::make_shared<LongDecimalType>(precision, scale);
 }
 
+// static
+std::string LongDecimalType::toString(int128_t value, const Type& type) {
+  return DecimalUtil::toString(value, type);
+}
+
 TypePtr createScalarType(TypeKind kind) {
   return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(createScalarType, kind);
 }
@@ -885,9 +962,9 @@ TypePtr createType(TypeKind kind, std::vector<TypePtr>&& children) {
         children.size(),
         1,
         "FUNCTION type should have at least one child type");
-    std::vector<TypePtr> argTypes(
-        children.begin(), children.begin() + children.size() - 1);
-    return std::make_shared<FunctionType>(std::move(argTypes), children.back());
+    auto returnType = std::move(children.back());
+    children.pop_back();
+    return FUNCTION(std::move(children), std::move(returnType));
   }
 
   if (kind == TypeKind::UNKNOWN) {
@@ -963,10 +1040,10 @@ std::string Type::toSummaryString(TypeSummaryOptions options) const {
 
 namespace {
 
-std::unordered_map<std::string, std::unique_ptr<const CustomTypeFactories>>&
+std::unordered_map<std::string, std::unique_ptr<const CustomTypeFactory>>&
 typeFactories() {
   static std::
-      unordered_map<std::string, std::unique_ptr<const CustomTypeFactories>>
+      unordered_map<std::string, std::unique_ptr<const CustomTypeFactory>>
           factories;
   return factories;
 }
@@ -987,9 +1064,9 @@ std::unordered_map<std::type_index, std::string>& getOpaqueAliasByTypeIndex() {
 
 bool registerCustomType(
     const std::string& name,
-    std::unique_ptr<const CustomTypeFactories> factories) {
+    std::unique_ptr<const CustomTypeFactory> factory) {
   auto uppercaseName = boost::algorithm::to_upper_copy(name);
-  return typeFactories().emplace(uppercaseName, std::move(factories)).second;
+  return typeFactories().emplace(uppercaseName, std::move(factory)).second;
 }
 
 bool customTypeExists(const std::string& name) {
@@ -1010,8 +1087,8 @@ bool unregisterCustomType(const std::string& name) {
   return typeFactories().erase(uppercaseName) == 1;
 }
 
-const CustomTypeFactories* FOLLY_NULLABLE
-getTypeFactories(const std::string& name) {
+const CustomTypeFactory* FOLLY_NULLABLE
+getTypeFactory(const std::string& name) {
   auto uppercaseName = boost::algorithm::to_upper_copy(name);
   auto it = typeFactories().find(uppercaseName);
 
@@ -1025,33 +1102,33 @@ getTypeFactories(const std::string& name) {
 TypePtr getCustomType(
     const std::string& name,
     const std::vector<TypeParameter>& parameters) {
-  auto factories = getTypeFactories(name);
-  if (factories) {
-    return factories->getType(parameters);
+  auto factory = getTypeFactory(name);
+  if (factory) {
+    return factory->getType(parameters);
   }
 
   return nullptr;
 }
 
 exec::CastOperatorPtr getCustomTypeCastOperator(const std::string& name) {
-  auto factories = getTypeFactories(name);
-  if (factories) {
-    return factories->getCastOperator();
+  auto factory = getTypeFactory(name);
+  if (factory) {
+    return factory->getCastOperator();
   }
 
   return nullptr;
 }
 
-CustomTypeFactories::~CustomTypeFactories() = default;
+CustomTypeFactory::~CustomTypeFactory() = default;
 
 AbstractInputGenerator::~AbstractInputGenerator() = default;
 
 AbstractInputGeneratorPtr getCustomTypeInputGenerator(
     const std::string& name,
     const InputGeneratorConfig& config) {
-  auto factories = getTypeFactories(name);
-  if (factories) {
-    return factories->getInputGenerator(config);
+  auto factory = getTypeFactory(name);
+  if (factory) {
+    return factory->getInputGenerator(config);
   }
 
   return nullptr;
@@ -1343,5 +1420,33 @@ std::string getOpaqueAliasForTypeId(std::type_index typeIndex) {
       "Could not find type index '{}'. Did you call registerOpaqueType?",
       typeIndex.name());
   return it->second;
+}
+
+std::string stringifyTruncatedElementList(
+    size_t size,
+    const std::function<void(std::stringstream&, size_t)>& stringifyElement,
+    size_t limit) {
+  if (size == 0) {
+    return "<empty>";
+  }
+
+  VELOX_CHECK_GT(limit, 0);
+
+  const size_t limitedSize = std::min(size, limit);
+
+  std::stringstream out;
+  out << "{";
+  for (size_t i = 0; i < limitedSize; ++i) {
+    if (i > 0) {
+      out << ", ";
+    }
+    stringifyElement(out, i);
+  }
+
+  if (size > limitedSize) {
+    out << ", ..." << (size - limitedSize) << " more";
+  }
+  out << "}";
+  return out.str();
 }
 } // namespace facebook::velox

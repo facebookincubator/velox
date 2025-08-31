@@ -21,7 +21,6 @@
 #include "velox/duckdb/conversion/DuckConversion.h"
 #include "velox/exec/Cursor.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
-#include "velox/vector/VariantToVector.h"
 #include "velox/vector/VectorTypeUtils.h"
 
 using facebook::velox::duckdb::duckdbTimestampToVelox;
@@ -811,7 +810,7 @@ std::vector<MaterializedRow> materialize(const RowVectorPtr& vector) {
     MaterializedRow row;
     row.reserve(numColumns);
     for (size_t j = 0; j < numColumns; ++j) {
-      row.push_back(vectorToVariant(simpleVectors[j], i));
+      row.push_back(simpleVectors[j]->variantAt(i));
     }
     rows.push_back(row);
   }
@@ -1345,11 +1344,12 @@ std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>> readCursor(
   // 'result' borrows memory from cursor so the life cycle must be shorter.
   std::vector<RowVectorPtr> result;
   auto* task = cursor->task().get();
-
   while (!cursor->noMoreSplits()) {
     addSplits(cursor.get());
     while (cursor->moveNext()) {
-      result.push_back(cursor->current());
+      auto vector = cursor->current();
+      vector->loadedVector();
+      result.push_back(std::move(vector));
       testingMaybeTriggerAbort(task);
     }
   }

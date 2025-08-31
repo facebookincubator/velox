@@ -34,7 +34,11 @@ std::string sanitizeName(const std::string& name);
 /// Return a list of primitive type names.
 const std::vector<std::string> primitiveTypeNames();
 
-enum class ParameterType : int8_t { kTypeParameter, kIntegerParameter };
+enum class ParameterType : int8_t {
+  kTypeParameter,
+  kIntegerParameter,
+  kEnumParameter,
+};
 
 /// Canonical names for functions that have special treatments in pushdowns.
 enum class FunctionCanonicalName {
@@ -88,6 +92,10 @@ class SignatureVariable {
     return type_ == ParameterType::kIntegerParameter;
   }
 
+  bool isEnumParameter() const {
+    return type_ == ParameterType::kEnumParameter;
+  }
+
   bool operator==(const SignatureVariable& rhs) const {
     return type_ == rhs.type_ && name_ == rhs.name_ &&
         constraint_ == rhs.constraint_ &&
@@ -137,6 +145,23 @@ class FunctionSignature {
 
   const std::vector<TypeSignature>& argumentTypes() const {
     return argumentTypes_;
+  }
+
+  const TypeSignature& argumentTypeAt(size_t index) const {
+    return argumentTypes_.at(index);
+  }
+
+  bool isLambdaArgumentAt(size_t index) const {
+    return argumentTypes().at(index).baseName() == "function";
+  }
+
+  bool hasLambdaArgument() const {
+    for (auto i = 0; i < argumentTypes_.size(); ++i) {
+      if (isLambdaArgumentAt(i)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   const std::vector<bool>& constantArguments() const {
@@ -289,6 +314,15 @@ class FunctionSignatureBuilder {
     addVariable(
         variables_,
         SignatureVariable(name, constraint, ParameterType::kIntegerParameter));
+    return *this;
+  }
+
+  FunctionSignatureBuilder& enumVariable(
+      const std::string& name,
+      std::optional<std::string> constraint = std::nullopt) {
+    addVariable(
+        variables_,
+        SignatureVariable(name, constraint, ParameterType::kEnumParameter));
     return *this;
   }
 

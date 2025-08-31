@@ -19,7 +19,6 @@
 #include <boost/regex.hpp>
 #include <xxhash.h>
 #include <string_view>
-#include "velox/expression/ComplexViewTypes.h"
 #include "velox/functions/lib/DateTimeFormatter.h"
 #include "velox/functions/lib/TimeUtils.h"
 #include "velox/functions/prestosql/DateTimeImpl.h"
@@ -44,7 +43,7 @@ struct ToUnixtimeFunction {
       double& result,
       const arg_type<TimestampWithTimezone>& timestampWithTimezone) {
     const auto milliseconds = unpackMillisUtc(*timestampWithTimezone);
-    result = (double)milliseconds / kMillisecondsInSecond;
+    result = (double)milliseconds / Timestamp::kMillisecondsInSecond;
   }
 };
 
@@ -852,7 +851,7 @@ struct MillisecondFunction : public TimestampWithTimezoneSupport<T> {
   FOLLY_ALWAYS_INLINE void call(
       int64_t& result,
       const arg_type<Timestamp>& timestamp) {
-    result = timestamp.getNanos() / kNanosecondsInMillisecond;
+    result = timestamp.getNanos() / Timestamp::kNanosecondsInMillisecond;
   }
 
   FOLLY_ALWAYS_INLINE void call(
@@ -866,7 +865,7 @@ struct MillisecondFunction : public TimestampWithTimezoneSupport<T> {
       int64_t& result,
       const arg_type<TimestampWithTimezone>& timestampWithTimezone) {
     auto timestamp = this->toTimestamp(timestampWithTimezone);
-    result = timestamp.getNanos() / kNanosecondsInMillisecond;
+    result = timestamp.getNanos() / Timestamp::kNanosecondsInMillisecond;
   }
 };
 
@@ -877,16 +876,11 @@ struct MillisecondFromIntervalFunction {
   FOLLY_ALWAYS_INLINE void call(
       int64_t& result,
       const arg_type<IntervalDayTime>& millis) {
-    result = millis % kMillisecondsInSecond;
+    result = millis % Timestamp::kMillisecondsInSecond;
   }
 };
 
 namespace {
-inline bool isTimeUnit(const DateTimeUnit unit) {
-  return unit == DateTimeUnit::kMillisecond || unit == DateTimeUnit::kSecond ||
-      unit == DateTimeUnit::kMinute || unit == DateTimeUnit::kHour;
-}
-
 inline bool isDateUnit(const DateTimeUnit unit) {
   return unit == DateTimeUnit::kDay || unit == DateTimeUnit::kMonth ||
       unit == DateTimeUnit::kQuarter || unit == DateTimeUnit::kYear ||
@@ -1085,33 +1079,7 @@ struct DateAddFunction : public TimestampWithTimezoneSupport<T> {
     if (value != (int32_t)value) {
       VELOX_UNSUPPORTED("integer overflow");
     }
-
-    if (LIKELY(sessionTimeZone_ != nullptr)) {
-      // sessionTimeZone not null means that the config
-      // adjust_timestamp_to_timezone is on.
-      Timestamp zonedTimestamp = timestamp;
-      zonedTimestamp.toTimezone(*sessionTimeZone_);
-
-      Timestamp resultTimestamp =
-          addToTimestamp(zonedTimestamp, unit, (int32_t)value);
-
-      if (isTimeUnit(unit)) {
-        const int64_t offset = static_cast<Timestamp>(timestamp).getSeconds() -
-            zonedTimestamp.getSeconds();
-        result = Timestamp(
-            resultTimestamp.getSeconds() + offset, resultTimestamp.getNanos());
-      } else {
-        result = Timestamp(
-            sessionTimeZone_
-                ->correct_nonexistent_time(
-                    std::chrono::seconds(resultTimestamp.getSeconds()))
-                .count(),
-            resultTimestamp.getNanos());
-        result.toGMT(*sessionTimeZone_);
-      }
-    } else {
-      result = addToTimestamp(timestamp, unit, (int32_t)value);
-    }
+    result = addToTimestamp(unit, (int32_t)value, timestamp, sessionTimeZone_);
   }
 
   FOLLY_ALWAYS_INLINE void call(
@@ -1196,27 +1164,7 @@ struct DateDiffFunction : public TimestampWithTimezoneSupport<T> {
       const arg_type<Timestamp>& timestamp2) {
     const auto unit = unit_.value_or(
         fromDateTimeUnitString(unitString, /*throwIfInvalid=*/true).value());
-
-    if (LIKELY(sessionTimeZone_ != nullptr)) {
-      // sessionTimeZone not null means that the config
-      // adjust_timestamp_to_timezone is on.
-      Timestamp fromZonedTimestamp = timestamp1;
-      fromZonedTimestamp.toTimezone(*sessionTimeZone_);
-
-      Timestamp toZonedTimestamp = timestamp2;
-      if (isTimeUnit(unit)) {
-        const int64_t offset = static_cast<Timestamp>(timestamp1).getSeconds() -
-            fromZonedTimestamp.getSeconds();
-        toZonedTimestamp = Timestamp(
-            toZonedTimestamp.getSeconds() - offset,
-            toZonedTimestamp.getNanos());
-      } else {
-        toZonedTimestamp.toTimezone(*sessionTimeZone_);
-      }
-      result = diffTimestamp(unit, fromZonedTimestamp, toZonedTimestamp);
-    } else {
-      result = diffTimestamp(unit, timestamp1, timestamp2);
-    }
+    result = diffTimestamp(unit, timestamp1, timestamp2, sessionTimeZone_);
   }
 
   FOLLY_ALWAYS_INLINE void call(

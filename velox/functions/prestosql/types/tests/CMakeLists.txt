@@ -15,7 +15,6 @@
 add_executable(
   velox_presto_types_test
   BingTileTypeTest.cpp
-  GeometryTypeTest.cpp
   HyperLogLogTypeTest.cpp
   JsonTypeTest.cpp
   TimestampWithTimeZoneTypeTest.cpp
@@ -24,17 +23,23 @@ add_executable(
   TypeTestBase.cpp
   UuidTypeTest.cpp
   IPAddressTypeTest.cpp
-  IPPrefixTypeTest.cpp)
+  IPPrefixTypeTest.cpp
+)
+
+if(VELOX_ENABLE_GEO)
+  target_sources(velox_presto_types_test PRIVATE GeometryTypeTest.cpp)
+endif()
 
 add_test(velox_presto_types_test velox_presto_types_test)
 
 target_link_libraries(
   velox_presto_types_test
   velox_presto_types
-  velox_type_parser
+  velox_presto_type_parser
   Folly::folly
   GTest::gtest
   GTest::gtest_main
   GTest::gmock
   gflags::gflags
-  glog::glog)
+  glog::glog
+)
