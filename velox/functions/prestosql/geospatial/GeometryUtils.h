@@ -56,6 +56,16 @@ namespace facebook::velox::functions::geospatial {
     VELOX_FAIL(fmt::format("{}: {}", user_error_message, e.what()));       \
   }
 
+class GeometryCollectionIterator {
+ public:
+  explicit GeometryCollectionIterator(const geos::geom::Geometry* geometry);
+  bool hasNext();
+  const geos::geom::Geometry* next();
+
+ private:
+  std::deque<const geos::geom::Geometry*> geometriesDeque;
+};
+
 geos::geom::GeometryFactory* getGeometryFactory();
 
 FOLLY_ALWAYS_INLINE const
@@ -123,6 +133,17 @@ FOLLY_ALWAYS_INLINE bool isMultiType(const geos::geom::Geometry& geometry) {
   return std::count(multiTypes.begin(), multiTypes.end(), type);
 }
 
+FOLLY_ALWAYS_INLINE bool isAtomicType(const geos::geom::Geometry& geometry) {
+  geos::geom::GeometryTypeId type = geometry.getGeometryTypeId();
+
+  static const std::vector<geos::geom::GeometryTypeId> atomicTypes{
+      geos::geom::GeometryTypeId::GEOS_LINESTRING,
+      geos::geom::GeometryTypeId::GEOS_POLYGON,
+      geos::geom::GeometryTypeId::GEOS_POINT};
+
+  return std::count(atomicTypes.begin(), atomicTypes.end(), type);
+}
+
 std::optional<std::string> geometryInvalidReason(
     const geos::geom::Geometry* geometry);
 
@@ -130,10 +151,10 @@ std::optional<std::string> geometryInvalidReason(
 /// clockwise.
 FOLLY_ALWAYS_INLINE bool isClockwise(
     const std::unique_ptr<geos::geom::CoordinateSequence>& coordinates,
-    int start,
-    int end) {
+    size_t start,
+    size_t end) {
   double sum = 0.0;
-  for (int i = start; i < end - 1; i++) {
+  for (size_t i = start; i < end - 1; i++) {
     const auto& p1 = coordinates->getAt(i);
     const auto& p2 = coordinates->getAt(i + 1);
     sum += (p2.x - p1.x) * (p2.y + p1.y);
@@ -144,9 +165,9 @@ FOLLY_ALWAYS_INLINE bool isClockwise(
 /// Reverses the order of coordinates in the sequence between `start` and `end`
 FOLLY_ALWAYS_INLINE void reverse(
     const std::unique_ptr<geos::geom::CoordinateSequence>& coordinates,
-    int start,
-    int end) {
-  for (int i = 0; i < (end - start) / 2; ++i) {
+    size_t start,
+    size_t end) {
+  for (size_t i = 0; i < (end - start) / 2; ++i) {
     auto temp = coordinates->getAt(start + i);
     coordinates->setAt(coordinates->getAt(end - 1 - i), start + i);
     coordinates->setAt(temp, end - 1 - i);
@@ -158,8 +179,8 @@ FOLLY_ALWAYS_INLINE void reverse(
 /// - Interior rings (holes) must be counter-clockwise.
 FOLLY_ALWAYS_INLINE void canonicalizePolygonCoordinates(
     const std::unique_ptr<geos::geom::CoordinateSequence>& coordinates,
-    int start,
-    int end,
+    size_t start,
+    size_t end,
     bool isShell) {
   bool isClockwiseFlag = isClockwise(coordinates, start, end);
 
@@ -171,7 +192,7 @@ FOLLY_ALWAYS_INLINE void canonicalizePolygonCoordinates(
 /// Applies `canonicalizePolygonCoordinates` to all rings in a polygon.
 FOLLY_ALWAYS_INLINE void canonicalizePolygonCoordinates(
     const std::unique_ptr<geos::geom::CoordinateSequence>& coordinates,
-    const std::vector<int>& partIndexes,
+    const std::vector<size_t>& partIndexes,
     const std::vector<bool>& shellPart) {
   for (size_t part = 0; part < partIndexes.size() - 1; part++) {
     canonicalizePolygonCoordinates(
@@ -182,5 +203,10 @@ FOLLY_ALWAYS_INLINE void canonicalizePolygonCoordinates(
         coordinates, partIndexes.back(), coordinates->size(), shellPart.back());
   }
 }
+
+Status validateLatitudeLongitude(double latitude, double longitude);
+
+std::vector<const geos::geom::Geometry*> flattenCollection(
+    const geos::geom::Geometry* geometry);
 
 } // namespace facebook::velox::functions::geospatial

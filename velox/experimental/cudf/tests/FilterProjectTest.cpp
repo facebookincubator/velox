@@ -18,6 +18,7 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
@@ -368,6 +369,41 @@ class CudfFilterProjectTest : public OperatorTestBase {
     runTest(
         plan,
         "SELECT c0 IN (1, 2, 3) OR c1 IN (1.5, 2.5) OR c2 IN ('test1', 'test2') AS result FROM tmp");
+  }
+
+  void testStringLiteralExpansion(const std::vector<RowVectorPtr>& input) {
+    // Test VARCHAR literal as standalone expression (needs special handling)
+    auto plan = PlanBuilder()
+                    .values(input)
+                    .project({"'literal_value' AS result"})
+                    .planNode();
+
+    runTest(plan, "SELECT 'literal_value' AS result FROM tmp");
+  }
+
+  void testStringLiteralInComparison(const std::vector<RowVectorPtr>& input) {
+    // Test VARCHAR literal within comparison (should work normally)
+    auto plan = PlanBuilder()
+                    .values(input)
+                    .project({"c2 = 'test_value' AS result"})
+                    .planNode();
+
+    runTest(plan, "SELECT c2 = 'test_value' AS result FROM tmp");
+  }
+
+  void testMixedLiteralProjection(const std::vector<RowVectorPtr>& input) {
+    // Test mixing standalone literals with expressions containing literals
+    auto plan = PlanBuilder()
+                    .values(input)
+                    .project(
+                        {"'standalone_string' AS str_literal",
+                         "42 AS int_literal",
+                         "c2 = 'comparison_string' AS bool_result"})
+                    .planNode();
+
+    runTest(
+        plan,
+        "SELECT 'standalone_string' AS str_literal, 42 AS int_literal, c2 = 'comparison_string' AS bool_result FROM tmp");
   }
 
   void runTest(core::PlanNodePtr planNode, const std::string& duckDbSql) {
@@ -775,6 +811,30 @@ TEST_F(CudfFilterProjectTest, filterWithEmptyResult) {
   assertQuery(plan, "SELECT c0, c1, c2 FROM tmp WHERE c0 < 0 AND c0 > 1000");
 }
 
+TEST_F(CudfFilterProjectTest, stringLiteralExpansion) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testStringLiteralExpansion(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, stringLiteralInComparison) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testStringLiteralInComparison(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, mixedLiteralProjection) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testMixedLiteralProjection(vectors);
+}
+
 TEST_F(CudfFilterProjectTest, dereference) {
   auto rowType = ROW(
       {"c0", "c1", "c2", "c3"}, {BIGINT(), INTEGER(), SMALLINT(), DOUBLE()});
@@ -796,4 +856,140 @@ TEST_F(CudfFilterProjectTest, dereference) {
              .planNode();
   assertQuery(plan, "SELECT c1, c2 FROM tmp WHERE c1 % 10 = 5");
 }
+
+TEST_F(CudfFilterProjectTest, cardinality) {
+  auto input = makeArrayVector<int64_t>({{1, 2, 3}, {1, 2}, {}});
+  auto data = makeRowVector({input});
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .project({"cardinality(c0) AS result"})
+                  .planNode();
+  auto expected = makeRowVector({makeFlatVector<int64_t>({3, 2, 0})});
+  AssertQueryBuilder(plan).assertResults({expected});
+}
+
+TEST_F(CudfFilterProjectTest, split) {
+  auto input = makeFlatVector<std::string>(
+      {"hello world", "hello world2", "hello hello"});
+  auto data = makeRowVector({input});
+  createDuckDbTable({data});
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .project({"split(c0, 'hello', 2) AS result"})
+                  .planNode();
+  auto splitResults = AssertQueryBuilder(plan).copyResults(pool());
+
+  auto calculatedSplitResults = makeRowVector({
+      makeArrayVector<std::string>({
+          {"", " world"},
+          {"", " world2"},
+          {"", " hello"},
+      }),
+  });
+  facebook::velox::test::assertEqualVectors(
+      splitResults, calculatedSplitResults);
+}
+
+TEST_F(CudfFilterProjectTest, cardinalityAndSplitOneByOne) {
+  auto input = makeFlatVector<std::string>(
+      {"hello world", "hello world2", "hello hello", "does not contain it"});
+  auto data = makeRowVector({input});
+  auto splitPlan = PlanBuilder()
+                       .values({data})
+                       .project({"split(c0, 'hello', 2) AS c0"})
+                       .planNode();
+  auto splitResults = AssertQueryBuilder(splitPlan).copyResults(pool());
+
+  auto calculatedSplitResults = makeRowVector({
+      makeArrayVector<std::string>({
+          {"", " world"},
+          {"", " world2"},
+          {"", " hello"},
+          {"does not contain it"},
+      }),
+  });
+  facebook::velox::test::assertEqualVectors(
+      splitResults, calculatedSplitResults);
+  auto cardinalityPlan = PlanBuilder()
+                             .values({splitResults})
+                             .project({"cardinality(c0) AS result"})
+                             .planNode();
+  auto expected = makeRowVector({makeFlatVector<int64_t>({2, 2, 2, 1})});
+  AssertQueryBuilder(cardinalityPlan).assertResults({expected});
+}
+
+// TODO: Requires a fix for the expression evaluator to handle function nesting.
+TEST_F(CudfFilterProjectTest, DISABLED_cardinalityAndSplitFused) {
+  auto input = makeFlatVector<std::string>(
+      {"hello world", "hello world2", "hello hello", "does not contain it"});
+  auto data = makeRowVector({input});
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .project({"cardinality(split(c0, 'hello', 2)) AS c0"})
+                  .planNode();
+  auto expected = makeRowVector({makeFlatVector<int64_t>({2, 2, 2, 1})});
+  AssertQueryBuilder(plan).assertResults({expected});
+}
+
+TEST_F(CudfFilterProjectTest, negativeSubstr) {
+  auto input =
+      makeFlatVector<std::string>({"hellobutlonghello", "secondstring"});
+  auto data = makeRowVector({input});
+  auto negativeSubstrPlan =
+      PlanBuilder().values({data}).project({"substr(c0, -2) AS c0"}).planNode();
+  auto negativeSubstrResults =
+      AssertQueryBuilder(negativeSubstrPlan).copyResults(pool());
+
+  auto calculatedNegativeSubstrResults = makeRowVector({
+      makeFlatVector<std::string>({
+          "lo",
+          "ng",
+      }),
+  });
+  facebook::velox::test::assertEqualVectors(
+      negativeSubstrResults, calculatedNegativeSubstrResults);
+}
+
+TEST_F(CudfFilterProjectTest, negativeSubstrWithLength) {
+  auto input =
+      makeFlatVector<std::string>({"hellobutlonghello", "secondstring"});
+  auto data = makeRowVector({input});
+  auto negativeSubstrWithLengthPlan = PlanBuilder()
+                                          .values({data})
+                                          .project({"substr(c0, -6, 3) AS c0"})
+                                          .planNode();
+  auto negativeSubstrWithLengthResults =
+      AssertQueryBuilder(negativeSubstrWithLengthPlan).copyResults(pool());
+
+  auto calculatedNegativeSubstrWithLengthResults = makeRowVector({
+      makeFlatVector<std::string>({
+          "ghe",
+          "str",
+      }),
+  });
+  facebook::velox::test::assertEqualVectors(
+      negativeSubstrWithLengthResults,
+      calculatedNegativeSubstrWithLengthResults);
+}
+
+TEST_F(CudfFilterProjectTest, substrWithLength) {
+  auto input =
+      makeFlatVector<std::string>({"hellobutlonghello", "secondstring"});
+  auto data = makeRowVector({input});
+  auto SubstrPlan = PlanBuilder()
+                        .values({data})
+                        .project({"substr(c0, 1, 3) AS c0"})
+                        .planNode();
+  auto SubstrResults = AssertQueryBuilder(SubstrPlan).copyResults(pool());
+
+  auto calculatedSubstrResults = makeRowVector({
+      makeFlatVector<std::string>({
+          "hel",
+          "sec",
+      }),
+  });
+  facebook::velox::test::assertEqualVectors(
+      SubstrResults, calculatedSubstrResults);
+}
+
 } // namespace

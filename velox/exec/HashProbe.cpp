@@ -21,6 +21,7 @@
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/Task.h"
 #include "velox/expression/FieldReference.h"
+#include "velox/vector/LazyVector.h"
 
 using facebook::velox::common::testutil::TestValue;
 
@@ -2069,7 +2070,7 @@ void HashProbe::close() {
   spillOutputReader_.reset();
   clearBuffers();
 
-  // Fullfill any pending promises
+  // Fulfill any pending promises
   if (lastProber_) {
     wakeupPeerOperators();
   }

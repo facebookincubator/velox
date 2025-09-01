@@ -93,6 +93,11 @@ std::optional<std::string> HiveConfig::gcsMaxRetryTime() const {
       config_->get<std::string>(kGcsMaxRetryTime));
 }
 
+std::optional<std::string> HiveConfig::gcsAuthAccessTokenProvider() const {
+  return static_cast<std::optional<std::string>>(
+      config_->get<std::string>(kGcsAuthAccessTokenProvider));
+}
+
 bool HiveConfig::isOrcUseColumnNames(const config::ConfigBase* session) const {
   return session->get<bool>(
       kOrcUseColumnNamesSession, config_->get<bool>(kOrcUseColumnNames, false));
@@ -236,6 +241,13 @@ std::string HiveConfig::hiveLocalDataPath() const {
 
 std::string HiveConfig::hiveLocalFileFormat() const {
   return config_->get<std::string>(kLocalFileFormat, "");
+}
+
+bool HiveConfig::preserveFlatMapsInMemory(
+    const config::ConfigBase* session) const {
+  return session->get<bool>(
+      kPreserveFlatMapsInMemorySession,
+      config_->get<bool>(kPreserveFlatMapsInMemory, false));
 }
 
 } // namespace facebook::velox::connector::hive

@@ -22,8 +22,6 @@
 
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/core/ExpressionEvaluator.h"
-#include "velox/core/Expressions.h"
-#include "velox/expression/DecodedArgs.h"
 #include "velox/expression/EvalCtx.h"
 #include "velox/expression/ExprStats.h"
 #include "velox/expression/VectorFunction.h"
@@ -106,6 +104,21 @@ class MutableRemainingRows {
   LocalSelectivityVector mutableRowsHolder_;
 };
 
+enum class SpecialFormKind : int32_t {
+  kFieldAccess = 0,
+  kConstant = 1,
+  kCast = 2,
+  kCoalesce = 3,
+  kSwitch = 4,
+  kLambda = 5,
+  kTry = 6,
+  kAnd = 7,
+  kOr = 8,
+  kCustom = 999,
+};
+
+VELOX_DECLARE_ENUM_NAME(SpecialFormKind);
+
 // An executable expression.
 class Expr {
  public:
@@ -113,14 +126,14 @@ class Expr {
       TypePtr type,
       std::vector<std::shared_ptr<Expr>>&& inputs,
       std::string name,
-      bool specialForm,
+      std::optional<SpecialFormKind> specialFormKind,
       bool supportsFlatNoNullsFastPath,
       bool trackCpuUsage)
       : type_(std::move(type)),
         inputs_(std::move(inputs)),
         name_(std::move(name)),
         vectorFunction_(nullptr),
-        specialForm_{specialForm},
+        specialFormKind_{specialFormKind},
         supportsFlatNoNullsFastPath_{supportsFlatNoNullsFastPath},
         trackCpuUsage_{trackCpuUsage} {}
 
@@ -248,7 +261,51 @@ class Expr {
   }
 
   bool isSpecialForm() const {
-    return specialForm_;
+    return specialFormKind_.has_value();
+  }
+
+  SpecialFormKind specialFormKind() const {
+    return specialFormKind_.value();
+  }
+
+  bool isFieldAccess() const {
+    return specialFormKind_ == SpecialFormKind::kFieldAccess;
+  }
+
+  bool isConstant() const {
+    return specialFormKind_ == SpecialFormKind::kConstant;
+  }
+
+  bool isCast() const {
+    return specialFormKind_ == SpecialFormKind::kCast;
+  }
+
+  bool isCoalesce() const {
+    return specialFormKind_ == SpecialFormKind::kCoalesce;
+  }
+
+  bool isSwitch() const {
+    return specialFormKind_ == SpecialFormKind::kSwitch;
+  }
+
+  bool isLambda() const {
+    return specialFormKind_ == SpecialFormKind::kLambda;
+  }
+
+  bool isTry() const {
+    return specialFormKind_ == SpecialFormKind::kTry;
+  }
+
+  bool isAnd() const {
+    return specialFormKind_ == SpecialFormKind::kAnd;
+  }
+
+  bool isOr() const {
+    return specialFormKind_ == SpecialFormKind::kOr;
+  }
+
+  bool isCustom() const {
+    return specialFormKind_ == SpecialFormKind::kCustom;
   }
 
   virtual bool isConditional() const {
@@ -263,7 +320,7 @@ class Expr {
     return deterministic_;
   }
 
-  virtual bool isConstant() const;
+  virtual bool isConstantExpr() const;
 
   bool supportsFlatNoNullsFastPath() const {
     return supportsFlatNoNullsFastPath_;
@@ -552,7 +609,7 @@ class Expr {
   const std::string name_;
   const std::shared_ptr<VectorFunction> vectorFunction_;
   const VectorFunctionMetadata vectorFunctionMetadata_;
-  const bool specialForm_;
+  const std::optional<SpecialFormKind> specialFormKind_;
   const bool supportsFlatNoNullsFastPath_;
   const bool trackCpuUsage_;
 
@@ -682,7 +739,8 @@ class ExprSet {
   explicit ExprSet(
       const std::vector<core::TypedExprPtr>& source,
       core::ExecCtx* execCtx,
-      bool enableConstantFolding = true);
+      bool enableConstantFolding = true,
+      bool lazyDereference = false);
 
   virtual ~ExprSet();
 
@@ -730,6 +788,10 @@ class ExprSet {
     return distinctFields_;
   }
 
+  bool lazyDereference() const {
+    return lazyDereference_;
+  }
+
   // Flags a shared subexpression which needs to be reset (e.g. previously
   // computed results must be deleted) when evaluating new batch of data.
   void addToReset(const std::shared_ptr<Expr>& expr) {
@@ -772,6 +834,7 @@ class ExprSet {
   // Exprs which retain memoized state, e.g. from running over dictionaries.
   std::unordered_set<Expr*> memoizingExprs_;
   core::ExecCtx* const execCtx_;
+  const bool lazyDereference_;
 };
 
 class ExprSetSimplified : public ExprSet {
@@ -804,7 +867,8 @@ class ExprSetSimplified : public ExprSet {
 // account and instantiates the correct ExprSet class.
 std::unique_ptr<ExprSet> makeExprSetFromFlag(
     std::vector<core::TypedExprPtr>&& source,
-    core::ExecCtx* execCtx);
+    core::ExecCtx* execCtx,
+    bool lazyDereference = false);
 
 /// Evaluates a deterministic expression that doesn't depend on any inputs and
 /// returns the result as single-row vector. Returns nullptr if the expression
@@ -881,11 +945,22 @@ class SimpleExpressionEvaluator : public core::ExpressionEvaluator {
         std::vector<core::TypedExprPtr>{expression}, ensureExecCtx());
   }
 
+  std::unique_ptr<ExprSet> compile(
+      const std::vector<core::TypedExprPtr>& expressions) override {
+    return std::make_unique<ExprSet>(expressions, ensureExecCtx());
+  }
+
   void evaluate(
       ExprSet* exprSet,
       const SelectivityVector& rows,
       const RowVector& input,
       VectorPtr& result) override;
+
+  void evaluate(
+      exec::ExprSet* exprSet,
+      const SelectivityVector& rows,
+      const RowVector& input,
+      std::vector<VectorPtr>& results) override;
 
   memory::MemoryPool* pool() override {
     return pool_;

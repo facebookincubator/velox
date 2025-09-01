@@ -196,6 +196,13 @@ class VectorTestBase {
   }
 
   template <typename T>
+  FlatVectorPtr<EvalType<T>> makeFlatVector(
+      const std::initializer_list<T>& data,
+      const TypePtr& type = CppToType<T>::create()) {
+    return vectorMaker_.flatVector<T>(data, type);
+  }
+
+  template <typename T>
   FlatVectorPtr<EvalType<T>> makeNullableFlatVector(
       const std::vector<std::optional<T>>& data,
       const TypePtr& type = CppToType<T>::create()) {
@@ -810,7 +817,7 @@ class VectorTestBase {
         pool(),
         CppToType<T>::create(),
         size,
-        std::make_unique<SimpleVectorLoader>([=](RowSet rows) {
+        std::make_unique<SimpleVectorLoader>([=, this](RowSet rows) {
           if (expectedSize.has_value()) {
             VELOX_CHECK_EQ(rows.size(), *expectedSize);
           }
@@ -828,7 +835,7 @@ class VectorTestBase {
         pool(),
         vector->type(),
         vector->size(),
-        std::make_unique<SimpleVectorLoader>([=](RowSet /*rows*/) {
+        std::make_unique<SimpleVectorLoader>([=, this](RowSet /*rows*/) {
           auto indices =
               makeIndices(vector->size(), [](auto row) { return row; });
           return wrapInDictionary(indices, vector->size(), vector);

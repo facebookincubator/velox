@@ -20,6 +20,7 @@
 #include "velox/common/testutil/TestValue.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/Task.h"
+#include "velox/exec/VectorHasher.h"
 #include "velox/expression/FieldReference.h"
 
 using facebook::velox::common::testutil::TestValue;
@@ -891,7 +892,7 @@ void HashBuild::processSpillInput() {
     if (!isRunning()) {
       return;
     }
-    if (operatorCtx_->driver()->shouldYield()) {
+    if (shouldYield()) {
       state_ = State::kYield;
       future_ = ContinueFuture{folly::Unit{}};
       return;

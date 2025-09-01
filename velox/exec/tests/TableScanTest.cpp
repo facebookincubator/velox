@@ -353,8 +353,8 @@ TEST_F(TableScanTest, timestamp) {
   op = PlanBuilder(pool_.get())
            .startTableScan()
            .outputType(ROW({"c0", "c1"}, {BIGINT(), TIMESTAMP()}))
-           .subfieldFilter("c1 is null")
            .dataColumns(dataColumns)
+           .subfieldFilter("c1 is null")
            .endTableScan()
            .planNode();
   assertQuery(op, {filePath}, "SELECT c0, c1 FROM tmp WHERE c1 is null");
@@ -362,8 +362,8 @@ TEST_F(TableScanTest, timestamp) {
   op = PlanBuilder(pool_.get())
            .startTableScan()
            .outputType(ROW({"c0", "c1"}, {BIGINT(), TIMESTAMP()}))
-           .subfieldFilter("c1 < '1970-01-01 01:30:00'::TIMESTAMP")
            .dataColumns(dataColumns)
+           .subfieldFilter("c1 < '1970-01-01 01:30:00'::TIMESTAMP")
            .endTableScan()
            .planNode();
   assertQuery(
@@ -382,8 +382,8 @@ TEST_F(TableScanTest, timestamp) {
   op = PlanBuilder(pool_.get())
            .startTableScan()
            .outputType(ROW({"c0"}, {BIGINT()}))
-           .subfieldFilter("c1 is null")
            .dataColumns(dataColumns)
+           .subfieldFilter("c1 is null")
            .endTableScan()
            .planNode();
   assertQuery(op, {filePath}, "SELECT c0 FROM tmp WHERE c1 is null");
@@ -391,8 +391,8 @@ TEST_F(TableScanTest, timestamp) {
   op = PlanBuilder(pool_.get())
            .startTableScan()
            .outputType(ROW({"c0"}, {BIGINT()}))
-           .subfieldFilter("c1 < timestamp'1970-01-01 01:30:00'")
            .dataColumns(dataColumns)
+           .subfieldFilter("c1 < timestamp'1970-01-01 01:30:00'")
            .endTableScan()
            .planNode();
   assertQuery(
@@ -1055,8 +1055,8 @@ TEST_F(TableScanTest, missingColumns) {
   op = PlanBuilder(pool_.get())
            .startTableScan()
            .outputType(outputType)
-           .subfieldFilter("c1 <= 100.1")
            .dataColumns(dataColumns)
+           .subfieldFilter("c1 <= 100.1")
            .endTableScan()
            .planNode();
   assertQuery(op, filePaths, "SELECT * FROM tmp WHERE c1 <= 100.1", 0);
@@ -1065,8 +1065,8 @@ TEST_F(TableScanTest, missingColumns) {
   op = PlanBuilder(pool_.get())
            .startTableScan()
            .outputType(outputType)
-           .subfieldFilter("c1 <= 2000.1")
            .dataColumns(dataColumns)
+           .subfieldFilter("c1 <= 2000.1")
            .endTableScan()
            .planNode();
 
@@ -1076,8 +1076,8 @@ TEST_F(TableScanTest, missingColumns) {
   op = PlanBuilder(pool_.get())
            .startTableScan()
            .outputType(outputTypeC0)
-           .subfieldFilter("c1 <= 3000.1")
            .dataColumns(dataColumns)
+           .subfieldFilter("c1 <= 3000.1")
            .endTableScan()
            .planNode();
 
@@ -1087,8 +1087,8 @@ TEST_F(TableScanTest, missingColumns) {
   op = PlanBuilder(pool_.get())
            .startTableScan()
            .outputType(ROW({}, {}))
-           .subfieldFilter("c1 <= 4000.1")
            .dataColumns(dataColumns)
+           .subfieldFilter("c1 <= 4000.1")
            .endTableScan()
            .singleAggregation({}, {"count(1)"})
            .planNode();
@@ -1116,8 +1116,8 @@ TEST_F(TableScanTest, missingColumns) {
   op = PlanBuilder(pool_.get())
            .startTableScan()
            .outputType(ROW({}, {}))
-           .subfieldFilter("c1 is null")
            .dataColumns(dataColumns)
+           .subfieldFilter("c1 is null")
            .endTableScan()
            .singleAggregation({}, {"count(1)"})
            .planNode();
@@ -1337,6 +1337,18 @@ TEST_F(TableScanTest, batchSize) {
     EXPECT_LT(opStats.outputVectors, opStats.outputPositions);
     EXPECT_GT(opStats.outputPositions / opStats.outputVectors, 1);
     EXPECT_LT(opStats.outputPositions / opStats.outputVectors, numRows);
+  }
+  {
+    SCOPED_TRACE("Projection");
+    plan = PlanBuilder().tableScan(ROW({}, {}), {}, "", rowType).planNode();
+    auto task = AssertQueryBuilder(plan)
+                    .splits(makeHiveConnectorSplits({filePath}))
+                    .config(
+                        QueryConfig::kPreferredOutputBatchBytes,
+                        std::to_string(1 + numRows / 8))
+                    .assertResults(makeRowVector(ROW({}, {}), numRows));
+    const auto opStats = task->taskStats().pipelineStats[0].operatorStats[0];
+    EXPECT_EQ(opStats.outputVectors, 1);
   }
 }
 
@@ -5092,6 +5104,34 @@ TEST_F(TableScanTest, flatMapReadOffset) {
       .assertResults(expected);
 }
 
+TEST_F(TableScanTest, flatMapKeyTypeEvolution) {
+  auto vector =
+      makeRowVector({makeMapVector<int32_t, int64_t>({{{1, 2}, {3, 4}}})});
+  auto config = std::make_shared<dwrf::Config>();
+  config->set(dwrf::Config::FLATTEN_MAP, true);
+  config->set<const std::vector<uint32_t>>(dwrf::Config::MAP_FLAT_COLS, {0});
+  auto file = TempFilePath::create();
+  writeToFile(file->getPath(), {vector}, config);
+  auto split = makeHiveConnectorSplit(file->getPath());
+  auto schema = ROW({"c0"}, {MAP(BIGINT(), BIGINT())});
+  {
+    SCOPED_TRACE("Read as map");
+    auto plan = PlanBuilder().tableScan(schema).planNode();
+    auto expected =
+        makeRowVector({makeMapVector<int64_t, int64_t>({{{1, 2}, {3, 4}}})});
+    AssertQueryBuilder(plan).split(split).assertResults(expected);
+  }
+  {
+    SCOPED_TRACE("Read as struct");
+    auto readSchema = ROW({"c0"}, {ROW({"1", "3"}, {BIGINT(), BIGINT()})});
+    auto plan = PlanBuilder().tableScan(readSchema, {}, "", schema).planNode();
+    auto expected = makeRowVector({makeRowVector(
+        {"1", "3"},
+        {makeConstant<int64_t>(2, 1), makeConstant<int64_t>(4, 1)})});
+    AssertQueryBuilder(plan).split(split).assertResults(expected);
+  }
+}
+
 TEST_F(TableScanTest, dynamicFilters) {
   // Make sure filters on same column from multiple downstream operators are
   // merged properly without overwriting each other.
@@ -5993,6 +6033,29 @@ TEST_F(TableScanTest, textfileLarge) {
   ASSERT_EQ(rawInputBytes, loadQuantum);
   ASSERT_GT(getTableScanRuntimeStats(task)["totalScanTime"].sum, 0);
   ASSERT_GT(getTableScanRuntimeStats(task)["ioWaitWallNanos"].sum, 0);
+}
+
+TEST_F(TableScanTest, duplicateFieldProject) {
+  auto vector = makeRowVector(
+      {"id", "name"},
+      {
+          makeFlatVector<int32_t>({1, 2}),
+          makeFlatVector<std::string>({"Alice", "John"}),
+      });
+
+  auto file = TempFilePath::create();
+  writeToFile(file->getPath(), vector);
+  createDuckDbTable({vector});
+
+  auto plan = PlanBuilder()
+                  .tableScan(vector->rowType())
+                  .filter("name = 'John'")
+                  .project({"id AS t0", "id AS t1"})
+                  .planNode();
+
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .split(makeHiveConnectorSplit(file->getPath()))
+      .assertResults("SELECT id, id FROM tmp WHERE name = 'John'");
 }
 
 } // namespace

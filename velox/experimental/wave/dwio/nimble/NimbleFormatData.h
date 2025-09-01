@@ -28,25 +28,32 @@
 namespace facebook::velox::wave {
 
 class NimbleChunkDecodePipeline {
+  constexpr static int32_t kAnyLevel = -1;
+
  public:
   NimbleChunkDecodePipeline(std::unique_ptr<NimbleEncoding> encoding);
   NimbleChunkDecodePipeline(NimbleChunk const& chunk);
-  NimbleEncoding* next();
+  NimbleEncoding* next(int32_t level = kAnyLevel);
   bool finished() const;
   uint32_t size() const {
     return pipeline_.size();
   }
   NimbleEncoding& operator[](uint32_t index) {
-    return *pipeline_[index];
+    return *(pipeline_[index].first);
   }
-  NimbleEncoding& rootEncoding() {
+  NimbleEncoding& rootEncoding() const {
     return *encoding_;
+  }
+  int32_t maxLevel() const {
+    return maxLevel_;
   }
 
  private:
   std::unique_ptr<NimbleEncoding> encoding_;
-  std::vector<NimbleEncoding*> pipeline_;
-  typename std::vector<NimbleEncoding*>::iterator currentEncoding_;
+  std::vector<std::pair<NimbleEncoding*, int32_t>> pipeline_;
+  typename decltype(pipeline_)::iterator currentEncoding_;
+  int32_t maxLevel_{0};
+  // int32_t currentLevel_{0};
 };
 
 class NimbleFormatData : public wave::FormatData {
@@ -59,10 +66,23 @@ class NimbleFormatData : public wave::FormatData {
       std::vector<NimbleChunkDecodePipeline>&& pipelines)
       : operand_(operand),
         totalRows_(totalRows),
-        pipelines_(std::move(pipelines)) {}
+        pipelines_(std::move(pipelines)) {
+    offsets_.resize(pipelines_.size());
+    int32_t sum = 0;
+    for (size_t i = 0; i < pipelines_.size(); ++i) {
+      offsets_[i] = sum;
+      sum += pipelines_[i].rootEncoding().numValues();
+    }
+  }
 
   bool hasNulls() const override {
-    return false; // TODO: support nulls
+    for (int i = 0; i < pipelines_.size(); i++) {
+      auto& pipeline = pipelines_[i];
+      if (pipeline.rootEncoding().isNullableEncoding()) {
+        return true;
+      }
+    }
+    return false;
   }
 
   int32_t totalRows() const override {
@@ -73,6 +93,9 @@ class NimbleFormatData : public wave::FormatData {
     currentRow_ = startRow;
     queued_ = false;
   }
+
+  int32_t maxDecodeLevel() const override;
+  bool hasMultiChunks() const override;
 
   void griddize(
       ColumnOp& op,
@@ -106,6 +129,7 @@ class NimbleFormatData : public wave::FormatData {
 
   const NimbleEncoding* encoding_;
   std::vector<NimbleChunkDecodePipeline> pipelines_;
+  std::vector<int32_t> offsets_;
 };
 
 class NimbleFormatParams : public wave::FormatParams {

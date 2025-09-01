@@ -108,12 +108,16 @@ jobs:
           key: ccache-linux-adapters
 
       - name: Run Tests
-        # Some of the adapters dependencies are in the 'adapters' conda env
-        shell: mamba run --no-capture-output -n adapters /usr/bin/bash -e {0}
         env:
           LIBHDFS3_CONF: "${{ github.workspace }}/scripts/hdfs-client.xml"
         working-directory: _build/release
         run: |
+          # Can be removed after images are rebuild
+          if [ -f "/opt/miniforge/etc/profile.d/conda.sh" ]; then
+            source "/opt/miniforge/etc/profile.d/conda.sh"
+            conda activate adapters
+          fi
+
           export CLASSPATH=`/usr/local/hadoop/bin/hdfs classpath --glob`
           ctest -j 8 --output-on-failure --no-tests=error -E "velox_exec_test|velox_hdfs_file_test|velox_s3"
 

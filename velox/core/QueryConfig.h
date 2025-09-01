@@ -139,6 +139,11 @@ class QueryConfig {
   static constexpr const char* kLocalExchangePartitionBufferPreserveEncoding =
       "local_exchange_partition_buffer_preserve_encoding";
 
+  /// Maximum number of vectors buffered in each local merge source before
+  /// blocking to wait for consumers.
+  static constexpr const char* kLocalMergeSourceQueueSize =
+      "local_merge_source_queue_size";
+
   /// Maximum size in bytes to accumulate in ExchangeQueue. Enforced
   /// approximately, not strictly.
   static constexpr const char* kMaxExchangeBufferSize =
@@ -264,7 +269,8 @@ class QueryConfig {
       "topn_row_number_spill_enabled";
 
   /// LocalMerge spilling flag, only applies if "spill_enabled" flag is set.
-  static constexpr const char* kLocalMergeSpillEnabled = "local_merge_enabled";
+  static constexpr const char* kLocalMergeSpillEnabled =
+      "local_merge_spill_enabled";
 
   /// Specify the max number of local sources to merge at a time.
   static constexpr const char* kLocalMergeMaxNumMergeSources =
@@ -363,6 +369,13 @@ class QueryConfig {
   static constexpr const char* kPrestoArrayAggIgnoreNulls =
       "presto.array_agg.ignore_nulls";
 
+  /// If true, Spark function's behavior is ANSI-compliant, e.g. throws runtime
+  /// exception instead of returning null on invalid inputs.
+  /// Note: This feature is still under development to achieve full ANSI
+  /// compliance. Users can refer to the Spark function documentation to verify
+  /// the current support status of a specific function.
+  static constexpr const char* kSparkAnsiEnabled = "spark.ansi_enabled";
+
   /// The default number of expected items for the bloomfilter.
   static constexpr const char* kSparkBloomFilterExpectedNumItems =
       "spark.bloom_filter.expected_num_items";
@@ -389,6 +402,11 @@ class QueryConfig {
   /// evaluation.
   static constexpr const char* kSparkLegacyStatisticalAggregate =
       "spark.legacy_statistical_aggregate";
+
+  /// If true, ignore null fields when generating JSON string.
+  /// If false, null fields are included with a null value.
+  static constexpr const char* kSparkJsonIgnoreNullFields =
+      "spark.json_ignore_null_fields";
 
   /// The number of local parallel table writer operators per task.
   static constexpr const char* kTaskWriterCount = "task_writer_count";
@@ -461,11 +479,6 @@ class QueryConfig {
   /// Base dir of a query to store tracing data.
   static constexpr const char* kQueryTraceDir = "query_trace_dir";
 
-  /// @Deprecated. Do not use. Remove once existing call sites are updated.
-  /// The plan node id whose input data will be traced.
-  /// Empty string if only want to trace the query metadata.
-  static constexpr const char* kQueryTraceNodeIds = "query_trace_node_id";
-
   /// The plan node id whose input data will be traced.
   /// Empty string if only want to trace the query metadata.
   static constexpr const char* kQueryTraceNodeId = "query_trace_node_id";
@@ -522,9 +535,18 @@ class QueryConfig {
   static constexpr const char* kDebugMemoryPoolNameRegex =
       "debug_memory_pool_name_regex";
 
+  /// Warning threshold in bytes for debug memory pools. When set to a
+  /// non-zero value, a warning will be logged once per memory pool when
+  /// allocations cause the pool to exceed this threshold. This is useful for
+  /// identifying memory usage patterns during debugging. Requires allocation
+  /// tracking to be enabled via `debug_memory_pool_name_regex` for the pool. A
+  /// value of 0 means no warning threshold is enforced.
+  static constexpr const char* kDebugMemoryPoolWarnThresholdBytes =
+      "debug_memory_pool_warn_threshold_bytes";
+
   /// Some lambda functions over arrays and maps are evaluated in batches of the
   /// underlying elements that comprise the arrays/maps. This is done to make
-  /// the batch size managable as array vectors can have thousands of elements
+  /// the batch size manageable as array vectors can have thousands of elements
   /// each and hit scaling limits as implementations typically expect
   /// BaseVectors to a couple of thousand entries. This lets up tune those batch
   /// sizes.
@@ -663,8 +685,23 @@ class QueryConfig {
   static constexpr const char* kMaxNumSplitsListenedTo =
       "max_num_splits_listened_to";
 
+  /// Source of the query. Used by Presto to identify the file system username.
+  static constexpr const char* kSource = "source";
+
+  /// Client tags of the query. Used by Presto to identify the file system
+  /// username.
+  static constexpr const char* kClientTags = "client_tags";
+
+  /// Enable row size tracker as a fallback to file level row size estimates.
+  static constexpr const char* kRowSizeTrackingEnabled =
+      "row_size_tracking_enabled";
+
   bool selectiveNimbleReaderEnabled() const {
     return get<bool>(kSelectiveNimbleReaderEnabled, false);
+  }
+
+  bool rowSizeTrackingEnabled() const {
+    return get<bool>(kRowSizeTrackingEnabled, true);
   }
 
   bool debugDisableExpressionsWithPeeling() const {
@@ -685,6 +722,12 @@ class QueryConfig {
 
   std::string debugMemoryPoolNameRegex() const {
     return get<std::string>(kDebugMemoryPoolNameRegex, "");
+  }
+
+  uint64_t debugMemoryPoolWarnThresholdBytes() const {
+    return config::toCapacity(
+        get<std::string>(kDebugMemoryPoolWarnThresholdBytes, "0B"),
+        config::CapacityUnit::BYTE);
   }
 
   std::optional<uint32_t> debugAggregationApproxPercentileFixedRandomSeed()
@@ -786,6 +829,10 @@ class QueryConfig {
   bool localExchangePartitionBufferPreserveEncoding() const {
     /// Trying to preserve encoding can be expensive. Disabled by default.
     return get<bool>(kLocalExchangePartitionBufferPreserveEncoding, false);
+  }
+
+  uint32_t localMergeSourceQueueSize() const {
+    return get<uint32_t>(kLocalMergeSourceQueueSize, 2);
   }
 
   uint64_t maxExchangeBufferSize() const {
@@ -984,12 +1031,6 @@ class QueryConfig {
     return get<std::string>(kQueryTraceDir, "");
   }
 
-  /// @Deprecated. Do not use. Remove once existing call sites are updated.
-  std::string queryTraceNodeIds() const {
-    // Use the new config kQueryTraceNodeId.
-    return get<std::string>(kQueryTraceNodeId, "");
-  }
-
   std::string queryTraceNodeId() const {
     // The default query trace node ID, empty by default.
     return get<std::string>(kQueryTraceNodeId, "");
@@ -1014,6 +1055,10 @@ class QueryConfig {
 
   bool prestoArrayAggIgnoreNulls() const {
     return get<bool>(kPrestoArrayAggIgnoreNulls, false);
+  }
+
+  bool sparkAnsiEnabled() const {
+    return get<bool>(kSparkAnsiEnabled, false);
   }
 
   int64_t sparkBloomFilterExpectedNumItems() const {
@@ -1053,6 +1098,10 @@ class QueryConfig {
 
   bool sparkLegacyStatisticalAggregate() const {
     return get<bool>(kSparkLegacyStatisticalAggregate, false);
+  }
+
+  bool sparkJsonIgnoreNullFields() const {
+    return get<bool>(kSparkJsonIgnoreNullFields, true);
   }
 
   bool exprTrackCpuUsage() const {
@@ -1202,6 +1251,14 @@ class QueryConfig {
 
   int32_t maxNumSplitsListenedTo() const {
     return get<int32_t>(kMaxNumSplitsListenedTo, 0);
+  }
+
+  std::string source() const {
+    return get<std::string>(kSource, "");
+  }
+
+  std::string clientTags() const {
+    return get<std::string>(kClientTags, "");
   }
 
   template <typename T>

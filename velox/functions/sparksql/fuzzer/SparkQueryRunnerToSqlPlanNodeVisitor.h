@@ -122,8 +122,19 @@ class SparkQueryRunnerToSqlPlanNodeVisitor
   void visit(const core::ProjectNode& node, core::PlanNodeVisitorContext& ctx)
       const override;
 
+  void visit(const core::ParallelProjectNode&, core::PlanNodeVisitorContext&)
+      const override {
+    VELOX_NYI();
+  }
+
   void visit(const core::RowNumberNode&, core::PlanNodeVisitorContext&)
       const override {
+    VELOX_NYI();
+  }
+
+  void visit(
+      const core::SpatialJoinNode& node,
+      core::PlanNodeVisitorContext& ctx) const override {
     VELOX_NYI();
   }
 

@@ -14,6 +14,7 @@
 list(APPEND CMAKE_PREFIX_PATH "${CUDAToolkit_LIBRARY_DIR}/cmake")
 find_package(Thrust REQUIRED)
 find_package(CUB REQUIRED)
+find_package(Thrust REQUIRED)
 
 add_executable(velox_gpu_hash_table_test HashTableTest.cu)
 target_link_libraries(
@@ -23,4 +24,5 @@ target_link_libraries(
   glog::glog
   CUB::CUB
   Thrust::Thrust
-  CUDA::cudart)
+  CUDA::cudart
+)

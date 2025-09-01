@@ -75,6 +75,10 @@ struct ConnectorSplit : public ISerializable {
     return nullptr;
   }
 
+  virtual uint64_t size() const {
+    return 0;
+  }
+
   virtual ~ConnectorSplit() {}
 
   virtual std::string toString() const {
@@ -236,6 +240,10 @@ class DataSink {
 
   /// Returns the stats of this data sink.
   virtual Stats stats() const = 0;
+
+  virtual std::unordered_map<std::string, RuntimeCounter> runtimeStats() const {
+    return {};
+  }
 };
 
 class DataSource {
@@ -519,6 +527,14 @@ class ConnectorQueryCtx {
     selectiveNimbleReaderEnabled_ = value;
   }
 
+  bool rowSizeTrackingEnabled() const {
+    return rowSizeTrackingEnabled_;
+  }
+
+  void setRowSizeTrackingEnabled(bool value) {
+    rowSizeTrackingEnabled_ = value;
+  }
+
   std::shared_ptr<filesystems::TokenProvider> fsTokenProvider() const {
     return fsTokenProvider_;
   }
@@ -541,6 +557,7 @@ class ConnectorQueryCtx {
   const folly::CancellationToken cancellationToken_;
   const std::shared_ptr<filesystems::TokenProvider> fsTokenProvider_;
   bool selectiveNimbleReaderEnabled_{false};
+  bool rowSizeTrackingEnabled_{true};
 };
 
 class ConnectorMetadata;
@@ -657,6 +674,11 @@ class Connector {
   virtual folly::Executor* executor() const {
     return nullptr;
   }
+
+  /// The name of the common runtime stats collected and reported by connector
+  /// data/index sources.
+  static inline const std::string kTotalRemainingFilterTime{
+      "totalRemainingFilterWallNanos"};
 
  private:
   static void unregisterTracker(cache::ScanTracker* tracker);

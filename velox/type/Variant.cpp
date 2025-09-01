@@ -17,6 +17,7 @@
 #include "velox/type/Variant.h"
 #include <cfloat>
 #include "folly/json.h"
+#include "velox/common/base/BitUtil.h"
 #include "velox/common/encode/Base64.h"
 #include "velox/type/DecimalUtil.h"
 #include "velox/type/FloatingPointUtil.h"
@@ -255,6 +256,83 @@ std::string Variant::toString(const TypePtr& type) const {
   }
 
   folly::assume_unreachable();
+}
+
+namespace {
+
+std::string toStringAsVectorImpl(const TypePtr& type, const Variant& value);
+
+template <TypeKind Kind>
+std::string toStringAsVectorNoNull(const TypePtr& type, const Variant& value) {
+  using T = typename TypeTraits<Kind>::NativeType;
+
+  return type->template valueToString<T>(T(value.value<Kind>()));
+}
+
+template <>
+std::string toStringAsVectorNoNull<TypeKind::OPAQUE>(
+    const TypePtr& type,
+    const Variant& value) {
+  return "<opaque>";
+}
+
+template <>
+std::string toStringAsVectorNoNull<TypeKind::ARRAY>(
+    const TypePtr& type,
+    const Variant& value) {
+  const auto& arrayValue = value.value<TypeKind::ARRAY>();
+  const auto& elementType = type->childAt(0);
+
+  return stringifyTruncatedElementList(
+      arrayValue.size(), [&](auto& out, auto i) {
+        out << toStringAsVectorImpl(elementType, arrayValue.at(i));
+      });
+}
+
+template <>
+std::string toStringAsVectorNoNull<TypeKind::MAP>(
+    const TypePtr& type,
+    const Variant& value) {
+  const auto& mapValue = value.value<TypeKind::MAP>();
+  const auto& keyType = type->childAt(0);
+  const auto& valueType = type->childAt(1);
+
+  auto it = mapValue.begin();
+
+  return stringifyTruncatedElementList(mapValue.size(), [&](auto& out, auto i) {
+    out << toStringAsVectorImpl(keyType, it->first) << " => "
+        << toStringAsVectorImpl(valueType, it->second);
+    ++it;
+  });
+}
+
+template <>
+std::string toStringAsVectorNoNull<TypeKind::ROW>(
+    const TypePtr& type,
+    const Variant& value) {
+  const auto size = type->size();
+
+  const auto& rowValue = value.value<TypeKind::ROW>();
+  VELOX_CHECK_EQ(size, rowValue.size());
+
+  return stringifyTruncatedElementList(size, [&](auto& out, auto i) {
+    out << toStringAsVectorImpl(type->childAt(i), rowValue.at(i));
+  });
+}
+
+std::string toStringAsVectorImpl(const TypePtr& type, const Variant& value) {
+  if (value.isNull()) {
+    return "null";
+  }
+
+  return VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
+      toStringAsVectorNoNull, type->kind(), type, value);
+}
+
+} // namespace
+
+std::string Variant::toStringAsVector(const TypePtr& type) const {
+  return toStringAsVectorImpl(type, *this);
 }
 
 namespace {
@@ -823,24 +901,21 @@ uint64_t Variant::hash() const {
 
 template <>
 uint64_t Variant::hash<TypeKind::ARRAY>() const {
-  auto& arrayVariant = value<TypeKind::ARRAY>();
-  auto hasher = folly::Hash{};
-  uint64_t hash = 0;
-  for (int32_t i = 0; i < arrayVariant.size(); i++) {
-    hash =
-        folly::hash::hash_combine_generic(hasher, hash, arrayVariant[i].hash());
+  const auto& arrayVariant = value<TypeKind::ARRAY>();
+  uint64_t hash = bits::kNullHash;
+  for (int32_t i = 0; i < arrayVariant.size(); ++i) {
+    hash = bits::hashMix(hash, arrayVariant[i].hash());
   }
   return hash;
 }
 
 template <>
 uint64_t Variant::hash<TypeKind::ROW>() const {
-  auto hasher = folly::Hash{};
-  uint64_t hash = 0;
-  auto& rowVariant = value<TypeKind::ROW>();
-  for (int32_t i = 0; i < rowVariant.size(); i++) {
-    hash =
-        folly::hash::hash_combine_generic(hasher, hash, rowVariant[i].hash());
+  const auto& rowVariant = value<TypeKind::ROW>();
+  uint64_t hash = bits::kNullHash;
+  for (int32_t i = 0; i < rowVariant.size(); ++i) {
+    const auto childHash = rowVariant[i].hash();
+    hash = (i == 0 ? childHash : bits::hashMix(hash, childHash));
   }
   return hash;
 }
@@ -853,23 +928,18 @@ uint64_t Variant::hash<TypeKind::TIMESTAMP>() const {
 
 template <>
 uint64_t Variant::hash<TypeKind::MAP>() const {
-  auto hasher = folly::Hash{};
-
   const auto& mapVariant = value<TypeKind::MAP>();
-
-  // Map is already sorted by key.
-  uint64_t hash = 0;
+  uint64_t hash = bits::kNullHash;
   for (const auto& [key, value] : mapVariant) {
-    hash = folly::hash::hash_combine_generic(hasher, hash, key.hash());
-    hash = folly::hash::hash_combine_generic(hasher, hash, value.hash());
+    const auto elementHash = bits::hashMix(key.hash(), value.hash());
+    hash = bits::commutativeHashMix(hash, elementHash);
   }
-
   return hash;
 }
 
 uint64_t Variant::hash() const {
   if (isNull()) {
-    return folly::Hash{}(static_cast<int32_t>(kind_));
+    return bits::kNullHash;
   }
 
   return VELOX_DYNAMIC_TYPE_DISPATCH_ALL(hash, kind_);
@@ -1083,6 +1153,9 @@ TypePtr Variant::inferType() const {
       return ARRAY(std::move(elementType));
     }
     case TypeKind::OPAQUE: {
+      if (isNull()) {
+        return UNKNOWN();
+      }
       return value<TypeKind::OPAQUE>().type;
     }
     case TypeKind::UNKNOWN: {

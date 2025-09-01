@@ -27,6 +27,7 @@
 #include "velox/functions/prestosql/fuzzer/ApproxPercentileResultVerifier.h"
 #include "velox/functions/prestosql/fuzzer/AverageResultVerifier.h"
 #include "velox/functions/prestosql/fuzzer/MinMaxInputGenerator.h"
+#include "velox/functions/prestosql/fuzzer/NumericHistogramInputGenerator.h"
 #include "velox/functions/prestosql/fuzzer/QDigestAggInputGenerator.h"
 #include "velox/functions/prestosql/fuzzer/QDigestAggResultVerifier.h"
 #include "velox/functions/prestosql/fuzzer/TDigestAggregateInputGenerator.h"
@@ -82,7 +83,9 @@ getCustomInputGenerators() {
       {"lead", std::make_shared<WindowOffsetInputGenerator>(1)},
       {"lag", std::make_shared<WindowOffsetInputGenerator>(1)},
       {"nth_value", std::make_shared<WindowOffsetInputGenerator>(1)},
-      {"ntile", std::make_shared<WindowOffsetInputGenerator>(0)}};
+      {"ntile", std::make_shared<WindowOffsetInputGenerator>(0)},
+      {"numeric_histogram", std::make_shared<NumericHistogramInputGenerator>()},
+  };
 }
 
 } // namespace
@@ -128,8 +131,13 @@ int main(int argc, char** argv) {
       "noisy_count_if_gaussian",
       "noisy_count_gaussian",
       "noisy_sum_gaussian",
+      "noisy_approx_set_sfm",
+      "noisy_approx_distinct_sfm",
+      "noisy_approx_set_sfm_from_index_and_zeros",
       // https://github.com/facebookincubator/velox/issues/13547
       "merge",
+      // https://github.com/facebookincubator/velox/issues/14423
+      "numeric_histogram",
   };
 
   if (!FLAGS_presto_url.empty()) {

@@ -180,15 +180,15 @@ RowVectorPtr TableScan::getOutput() {
         }
         continue;
       }
-      const auto estimatedRowSize = dataSource_->estimatedRowSize();
-      readBatchSize_ =
-          estimatedRowSize == connector::DataSource::kUnknownRowSize
-          ? outputBatchRows()
-          : outputBatchRows(estimatedRowSize);
     }
     VELOX_CHECK(!needNewSplit_);
     VELOX_CHECK(!hasDrained());
 
+    const auto estimatedRowSize = dataSource_->estimatedRowSize();
+    // TODO: Expose this to operator stats.
+    readBatchSize_ = estimatedRowSize == connector::DataSource::kUnknownRowSize
+        ? outputBatchRows()
+        : outputBatchRows(estimatedRowSize);
     int32_t readBatchSize = readBatchSize_;
     if (maxFilteringRatio_ > 0) {
       readBatchSize = std::min(
@@ -231,10 +231,10 @@ RowVectorPtr TableScan::getOutput() {
                1.0 * data->size() / readBatchSize,
                1.0 / kMaxSelectiveBatchSizeMultiplier});
           if (ioTimeUs > 0) {
-            RECORD_HISTOGRAM_METRIC_VALUE(
+            RECORD_METRIC_VALUE(
                 velox::kMetricTableScanBatchProcessTimeMs, ioTimeUs / 1'000);
           }
-          RECORD_HISTOGRAM_METRIC_VALUE(
+          RECORD_METRIC_VALUE(
               velox::kMetricTableScanBatchBytes, data->estimateFlatSize());
           return data;
         } else {
@@ -320,6 +320,9 @@ bool TableScan::getSplit() {
   if (FOLLY_UNLIKELY(splitTracer_ != nullptr)) {
     splitTracer_->write(split);
   }
+
+  stats_.wlock()->addRuntimeStat(
+      "connectorSplitSize", RuntimeCounter(split.connectorSplit->size()));
   const auto& connectorSplit = split.connectorSplit;
   currentSplitWeight_ = connectorSplit->splitWeight;
   needNewSplit_ = false;
@@ -361,9 +364,17 @@ bool TableScan::getSplit() {
     // The AsyncSource returns a unique_ptr to a shared_ptr. The unique_ptr
     // will be nullptr if there was a cancellation.
     numReadyPreloadedSplits_ += connectorSplit->dataSource->hasValue();
+    auto startTimeNs = getCurrentTimeNano();
     auto preparedDataSource = connectorSplit->dataSource->move();
-    stats_.wlock()->getOutputTiming.add(
-        connectorSplit->dataSource->prepareTiming());
+    auto endTimeNs = getCurrentTimeNano();
+    stats_.wlock()->addRuntimeStat(
+        "waitForPreloadSplitNanos",
+        RuntimeCounter(endTimeNs - startTimeNs, RuntimeCounter::Unit::kNanos));
+    stats_.wlock()->addRuntimeStat(
+        "preloadSplitPrepareTimeNanos",
+        RuntimeCounter(
+            connectorSplit->dataSource->prepareTiming().wallNanos,
+            RuntimeCounter::Unit::kNanos));
     if (!preparedDataSource) {
       // There must be a cancellation.
       VELOX_CHECK(operatorCtx_->task()->isCancelled());

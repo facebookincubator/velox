@@ -54,8 +54,8 @@ jobs:
 
       - name: Install Dependencies
         env:
-          # Remove after image is rebuild for 14016
-          VELOX_ARROW_CMAKE_PATCH: "${{ github.workspace }}/CMake/resolve_dependency_modules/arrow/cmake-compatibility.patch"
+          VELOX_BUILD_SHARED: "ON"
+          VELOX_ARROW_CMAKE_PATCH: ${{ github.workspace }}/CMake/resolve_dependency_modules/arrow/cmake-compatibility.patch
         run: |
           if git diff --name-only HEAD^1 HEAD | grep -q "scripts/setup-"; then
             # Overwrite old setup scripts with changed versions
@@ -64,12 +64,10 @@ jobs:
             mkdir /tmp/build
             cd /tmp/build
             source /opt/rh/gcc-toolset-12/enable
-            # install basic deps
-            bash /setup-centos9.sh
+            # Install basic deps with GCC. Some deps have problems (e.g. folly missing atomic lib).
+            USE_CLANG=false bash /setup-centos9.sh
 
-            source /setup-centos9.sh
-            install_adapters
-            install_cuda $CUDA_VERSION
+            bash /setup-centos-adapters.sh
 
             cd /
             rm -rf /tmp/build # cleanup to avoid issues with disk space
@@ -97,19 +95,25 @@ jobs:
             "-DVELOX_ENABLE_EXAMPLES=ON"
             "-DVELOX_ENABLE_ARROW=ON"
             "-DVELOX_ENABLE_GEO=ON"
-            "-DVELOX_ENABLE_FAISS=ON"
             "-DVELOX_ENABLE_PARQUET=ON"
             "-DVELOX_ENABLE_HDFS=ON"
             "-DVELOX_ENABLE_S3=ON"
             "-DVELOX_ENABLE_GCS=ON"
             "-DVELOX_ENABLE_ABFS=ON"
-            "-DVELOX_ENABLE_REMOTE_FUNCTIONS=ON"
-            "-DVELOX_ENABLE_CUDF=ON"
             "-DVELOX_ENABLE_WAVE=ON"
             "-DVELOX_MONO_LIBRARY=ON"
             "-DVELOX_BUILD_SHARED=ON"
           )
-          if [[ "${USE_CLANG}" = "true" ]]; then scripts/setup-centos9.sh install_clang15; export CC=/usr/bin/clang-15; export CXX=/usr/bin/clang++-15; CUDA_FLAGS="-ccbin /usr/lib64/llvm15/bin/clang++-15"; fi
+          if [[ "${USE_CLANG}" = "true" ]]; then
+             scripts/setup-centos9.sh install_clang15; export CC=/usr/bin/clang-15; export CXX=/usr/bin/clang++-15; CUDA_FLAGS="-ccbin /usr/lib64/llvm15/bin/clang++-15";
+          else
+            # cuDF (unsupported for Clang) and Faiss (link issue when using Clang)
+            # are excluded for Clang compilation and need to be added back when using GCC.
+            EXTRA_CMAKE_FLAGS+="-DVELOX_ENABLE_CUDF=ON"
+            EXTRA_CMAKE_FLAGS+="-DVELOX_ENABLE_FAISS=ON"
+            # Investigate issues with remote function service: Issue #13897
+            EXTRA_CMAKE_FLAGS+="-DVELOX_ENABLE_REMOTE_FUNCTIONS=ON"
+          fi
           make release EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS[*]}"
 
       - name: Ccache after
@@ -121,12 +125,16 @@ jobs:
           key: ccache-linux-adapters-${{ inputs.use-clang && 'clang' || 'gcc' }}
 
       - name: Run Tests
-        # Some of the adapters dependencies are in the 'adapters' conda env
-        shell: mamba run --no-capture-output -n adapters /usr/bin/bash -e {0}
         env:
           LIBHDFS3_CONF: ${{ github.workspace }}/scripts/ci/hdfs-client.xml
         working-directory: _build/release
         run: |
+          # Can be removed after images are rebuild
+          if [ -f "/opt/miniforge/etc/profile.d/conda.sh" ]; then
+            source "/opt/miniforge/etc/profile.d/conda.sh"
+            conda activate adapters
+          fi
+
           export CLASSPATH=`/usr/local/hadoop/bin/hdfs classpath --glob`
           ctest -j 8 --label-exclude cuda_driver --output-on-failure --no-tests=error
 
@@ -173,9 +181,14 @@ jobs:
           VELOX_DEPENDENCY_SOURCE: BUNDLED
           ICU_SOURCE: SYSTEM
           MAKEFLAGS: NUM_THREADS=8 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=3
-          EXTRA_CMAKE_FLAGS: -DVELOX_ENABLE_ARROW=ON -DVELOX_ENABLE_PARQUET=ON -DVELOX_ENABLE_EXAMPLES=ON -DVELOX_ENABLE_FAISS=ON
+          EXTRA_CMAKE_FLAGS: -DVELOX_ENABLE_ARROW=ON -DVELOX_ENABLE_PARQUET=ON -DVELOX_ENABLE_EXAMPLES=ON
         run: |
-          if [[ "${USE_CLANG}" = "true" ]]; then export CC=/usr/bin/clang-15; export CXX=/usr/bin/clang++-15; fi
+          # Faiss (link issue when using Clang) is excluded for Clang compilation and needs to be added back when using GCC.
+          if [[ "${USE_CLANG}" = "true" ]]; then
+            export CC=/usr/bin/clang-15; export CXX=/usr/bin/clang++-15;
+          else
+            export EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS} -DVELOX_ENABLE_FAISS=ON"
+          fi
           make debug
 
       - name: CCache after

@@ -82,7 +82,7 @@ template <typename T>
 class RandomInputGenerator<T, std::enable_if_t<std::is_same_v<T, StringView>>>
     : public AbstractInputGenerator {
  public:
-  RandomInputGenerator<T, std::enable_if_t<std::is_same_v<T, StringView>>>(
+  RandomInputGenerator(
       size_t seed,
       const TypePtr& type,
       double nullRatio,
@@ -98,8 +98,7 @@ class RandomInputGenerator<T, std::enable_if_t<std::is_same_v<T, StringView>>>
         encodings_{encodings},
         randomStrVariationOptions_{randomStrVariationOptions} {}
 
-  ~RandomInputGenerator<T, std::enable_if_t<std::is_same_v<T, StringView>>>()
-      override = default;
+  ~RandomInputGenerator() override = default;
 
   variant generate() override {
     if (coinToss(rng_, nullRatio_)) {
@@ -126,7 +125,7 @@ template <typename T>
 class RandomInputGenerator<T, std::enable_if_t<std::is_same_v<T, ArrayType>>>
     : public AbstractInputGenerator {
  public:
-  RandomInputGenerator<T, std::enable_if_t<std::is_same_v<T, ArrayType>>>(
+  RandomInputGenerator(
       size_t seed,
       const TypePtr& type,
       double nullRatio,
@@ -143,8 +142,7 @@ class RandomInputGenerator<T, std::enable_if_t<std::is_same_v<T, ArrayType>>>
         containAtIndex_{containAtIndex},
         containGenerator_{std::move(containGenerator)} {}
 
-  ~RandomInputGenerator<T, std::enable_if_t<std::is_same_v<T, ArrayType>>>()
-      override = default;
+  ~RandomInputGenerator() override = default;
 
   variant generate() override {
     if (coinToss(rng_, nullRatio_)) {
@@ -180,7 +178,7 @@ template <typename T>
 class RandomInputGenerator<T, std::enable_if_t<std::is_same_v<T, MapType>>>
     : public AbstractInputGenerator {
  public:
-  RandomInputGenerator<T, std::enable_if_t<std::is_same_v<T, MapType>>>(
+  RandomInputGenerator(
       size_t seed,
       const TypePtr& type,
       double nullRatio,
@@ -207,8 +205,7 @@ class RandomInputGenerator<T, std::enable_if_t<std::is_same_v<T, MapType>>>
     }
   }
 
-  ~RandomInputGenerator<T, std::enable_if_t<std::is_same_v<T, MapType>>>()
-      override = default;
+  ~RandomInputGenerator() override = default;
 
   variant generate() override {
     if (coinToss(rng_, nullRatio_)) {
@@ -248,7 +245,7 @@ template <typename T>
 class RandomInputGenerator<T, std::enable_if_t<std::is_same_v<T, RowType>>>
     : public AbstractInputGenerator {
  public:
-  RandomInputGenerator<T, std::enable_if_t<std::is_same_v<T, RowType>>>(
+  RandomInputGenerator(
       size_t seed,
       const TypePtr& type,
       std::vector<std::unique_ptr<AbstractInputGenerator>> fieldGenerators,
@@ -267,8 +264,7 @@ class RandomInputGenerator<T, std::enable_if_t<std::is_same_v<T, RowType>>>
     }
   }
 
-  ~RandomInputGenerator<T, std::enable_if_t<std::is_same_v<T, RowType>>>()
-      override = default;
+  ~RandomInputGenerator() override = default;
 
   variant generate() override {
     if (coinToss(rng_, nullRatio_)) {
@@ -384,6 +380,21 @@ class JsonInputGenerator : public AbstractInputGenerator {
     return folly::dynamic(value);
   }
 
+  // Presto and Velox JSON parser have different behavior for floating point
+  // with magnitudes greater than equal to 10^-3 and less than 10^7. Clamp
+  // values to avoid scientific notation when comparing JSON parse results.
+  template <TypeKind KIND>
+  folly::dynamic convertVariantToDynamicFloatingPoint(const variant& v) {
+    using T = typename TypeTraits<KIND>::DeepCopiedType;
+    VELOX_CHECK(v.isSet());
+    const T value = v.value<T>();
+    const T absValue = std::abs(value);
+    const T sign = value < 0 ? static_cast<T>(-1.0) : static_cast<T>(1.0);
+    const T clampedValue =
+        std::clamp(absValue, static_cast<T>(1e-3), static_cast<T>(1e7 - 1));
+    return folly::dynamic(sign * clampedValue);
+  }
+
   folly::dynamic convertVariantToDynamic(const variant& object);
 
   void makeRandomVariation(std::string& json);
@@ -478,6 +489,33 @@ class CastVarcharInputGenerator : public AbstractInputGenerator {
   TypePtr castToType_;
 
   std::string generateValidPrimitiveAsString();
+};
+
+class URLInputGenerator : public AbstractInputGenerator {
+ public:
+  URLInputGenerator(
+      size_t seed,
+      const TypePtr& type,
+      double nullRatio,
+      std::string functionName,
+      std::vector<std::string> functionsToSkipForMailTo,
+      std::vector<std::string> functionsToSkipForTruncate);
+
+  ~URLInputGenerator() override;
+
+  variant generate() override;
+
+ private:
+  std::shared_ptr<RuleList> generateURLRules();
+  std::shared_ptr<RuleList> generateMailToRules();
+  std::shared_ptr<RuleList> generateChromeExtensionRules();
+
+  const std::string functionName_;
+  // Particular UDFs are known to have mismatches for mailto and trucated input.
+  // Let's skip those test cases for now. More info can be found in
+  // https://github.com/facebookincubator/velox/issues/14204.
+  const std::vector<std::string> functionsToSkipForMailTo_;
+  const std::vector<std::string> functionsToSkipForTruncate_;
 };
 
 class TDigestInputGenerator : public AbstractInputGenerator {

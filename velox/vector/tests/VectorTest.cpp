@@ -34,6 +34,7 @@
 #include "velox/vector/SelectivityVector.h"
 #include "velox/vector/SimpleVector.h"
 #include "velox/vector/TypeAliases.h"
+#include "velox/vector/VariantToVector.h"
 #include "velox/vector/VectorTypeUtils.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -875,6 +876,17 @@ class VectorTest : public testing::Test, public velox::test::VectorTestBase {
     OStreamOutputStream oddOutputStream(&oddStream);
     even.flush(&evenOutputStream);
     odd.flush(&oddOutputStream);
+    ASSERT_GT(even.size(), 0);
+    even.clear();
+    // We expect two pages for header after clear.
+    ASSERT_EQ(
+        even.size(),
+        memory::AllocationTraits::pageBytes(even.testingAllocationQuantum()));
+    ASSERT_GT(odd.size(), 0);
+    odd.clear();
+    ASSERT_EQ(
+        odd.size(),
+        memory::AllocationTraits::pageBytes(odd.testingAllocationQuantum()));
 
     auto evenString = evenStream.str();
     checkSizes(source.get(), evenSizes, evenString);
@@ -1476,16 +1488,6 @@ TEST_F(VectorTest, wrapInConstant) {
     ASSERT_TRUE(constArrayVector->equalValueAt(arrayVector.get(), i, 3));
   }
 
-  // Wrap constant with valueVector and null value.
-  constBaseVector = std::make_shared<ConstantVector<ComplexType>>(
-      pool(), size, 7, arrayVector);
-  constArrayVector = std::dynamic_pointer_cast<ConstantVector<ComplexType>>(
-      BaseVector::wrapInConstant(size, 22, constBaseVector, true));
-  EXPECT_NE(constArrayVector->valueVector(), nullptr);
-  for (auto i = 0; i < size; i++) {
-    ASSERT_TRUE(constArrayVector->isNullAt(i));
-  }
-
   // Wrap a loaded lazy complex vector that will be retained as a valueVector.
   // Ensure the lazy layer is stripped away and the valueVector points to the
   // loaded Vector underneath it.
@@ -1499,78 +1501,6 @@ TEST_F(VectorTest, wrapInConstant) {
   constArrayVector = std::dynamic_pointer_cast<ConstantVector<ComplexType>>(
       BaseVector::wrapInConstant(size, 22, lazyOverArray));
   EXPECT_FALSE(constArrayVector->valueVector()->isLazy());
-}
-
-TEST_F(VectorTest, wrapInConstantWithCopy) {
-  // Wrap flat vector.
-  const vector_size_t size = 1'000;
-  auto flatVector =
-      makeFlatVector<int32_t>(size, [](auto row) { return row; }, nullEvery(7));
-
-  auto constVector = std::dynamic_pointer_cast<ConstantVector<int32_t>>(
-      BaseVector::wrapInConstant(size, 5, flatVector, true));
-  EXPECT_EQ(constVector->valueVector(), nullptr);
-  for (auto i = 0; i < size; i++) {
-    ASSERT_FALSE(constVector->isNullAt(i));
-    ASSERT_EQ(5, constVector->valueAt(i));
-  }
-
-  constVector = std::dynamic_pointer_cast<ConstantVector<int32_t>>(
-      BaseVector::wrapInConstant(size, 7, flatVector, true));
-  EXPECT_EQ(constVector->valueVector(), nullptr);
-  for (auto i = 0; i < size; i++) {
-    ASSERT_TRUE(constVector->isNullAt(i));
-  }
-
-  // Wrap dictionary vector.
-  BufferPtr indices = AlignedBuffer::allocate<vector_size_t>(size, pool());
-  auto rawIndices = indices->asMutable<vector_size_t>();
-  for (auto i = 0; i < size; i++) {
-    rawIndices[i] = 2 * i % size;
-  }
-
-  BufferPtr nulls = allocateNulls(size, pool());
-  auto rawNulls = nulls->asMutable<uint64_t>();
-  for (auto i = 0; i < size; i++) {
-    bits::setNull(rawNulls, i, i % 11 == 0);
-  }
-
-  auto dictVector =
-      BaseVector::wrapInDictionary(nulls, indices, size, flatVector);
-
-  constVector = std::dynamic_pointer_cast<ConstantVector<int32_t>>(
-      BaseVector::wrapInConstant(size, 5, dictVector, true));
-  EXPECT_EQ(constVector->valueVector(), nullptr);
-  for (auto i = 0; i < size; i++) {
-    ASSERT_FALSE(constVector->isNullAt(i));
-    ASSERT_EQ(10, constVector->valueAt(i));
-  }
-
-  // Wrap constant with valueVector.
-  auto arrayVector = makeArrayVector<int32_t>(
-      size, [](auto) { return 10; }, [](auto i) { return i; }, nullEvery(7));
-  auto constBaseVector = std::make_shared<ConstantVector<ComplexType>>(
-      pool(), size, 3, arrayVector);
-  auto constArrayVector =
-      std::dynamic_pointer_cast<ConstantVector<ComplexType>>(
-          BaseVector::wrapInConstant(size, 22, constBaseVector, true));
-  EXPECT_NE(constArrayVector->valueVector(), nullptr);
-  EXPECT_EQ(constArrayVector->valueVector().use_count(), 1);
-  for (auto i = 0; i < size; i++) {
-    ASSERT_FALSE(constArrayVector->isNullAt(i));
-    ASSERT_TRUE(constArrayVector->equalValueAt(arrayVector.get(), i, 3));
-  }
-
-  // Wrap constant with valueVector and null value.
-  constBaseVector = std::make_shared<ConstantVector<ComplexType>>(
-      pool(), size, 7, arrayVector);
-  constArrayVector = std::dynamic_pointer_cast<ConstantVector<ComplexType>>(
-      BaseVector::wrapInConstant(size, 22, constBaseVector, true));
-  EXPECT_NE(constArrayVector->valueVector(), nullptr);
-  EXPECT_EQ(constArrayVector->valueVector().use_count(), 1);
-  for (auto i = 0; i < size; i++) {
-    ASSERT_TRUE(constArrayVector->isNullAt(i));
-  }
 }
 
 TEST_F(VectorTest, rowResize) {
@@ -1677,6 +1607,15 @@ TEST_F(VectorTest, rowPrepareForReuse) {
       ASSERT_EQ(child->size(), newSize);
     }
   }
+}
+
+TEST_F(VectorTest, makeFlatVectorWithInitializerList) {
+  auto vector = makeFlatVector<int64_t>({803});
+
+  ASSERT_NE(vector, nullptr);
+  EXPECT_EQ(vector->size(), 1);
+
+  EXPECT_EQ(vector->asFlatVector<int64_t>()->valueAt(0), 803);
 }
 
 TEST_F(VectorTest, wrapConstantInDictionary) {
@@ -3679,6 +3618,43 @@ TEST_F(VectorTest, hashValueAtMap) {
   EXPECT_EQ(data->hashValueAt(0), data->hashValueAt(5));
 }
 
+TEST_F(VectorTest, variantHashMatchesVectorHash) {
+  auto flat = makeNullableFlatVector<int64_t>({1, std::nullopt, 3});
+  for (vector_size_t i = 0; i < flat->size(); ++i) {
+    auto v = flat->variantAt(i);
+    EXPECT_EQ(flat->hashValueAt(i), v.hash()) << "at " << i;
+  }
+
+  auto array = makeArrayVectorFromJson<int64_t>({
+      "[1, 2, 3]",
+      "null",
+      "[1, null, 3]",
+  });
+  for (vector_size_t i = 0; i < array->size(); ++i) {
+    auto v = array->variantAt(i);
+    EXPECT_EQ(array->hashValueAt(i), v.hash()) << "at " << i;
+  }
+
+  auto map = makeMapVectorFromJson<int64_t, int64_t>({
+      "{1: 10}",
+      "null",
+      "{1: null}",
+  });
+  for (vector_size_t i = 0; i < map->size(); ++i) {
+    auto v = map->variantAt(i);
+    EXPECT_EQ(map->hashValueAt(i), v.hash()) << "at " << i;
+  }
+
+  auto child1 = makeFlatVector<int64_t>({1, 2, 3});
+  auto child2 = makeNullableFlatVector<int64_t>({4, 5, std::nullopt});
+  auto row =
+      makeRowVector({child1, child2}, [](vector_size_t i) { return i == 1; });
+  for (vector_size_t i = 0; i < row->size(); ++i) {
+    auto v = row->variantAt(i);
+    EXPECT_EQ(row->hashValueAt(i), v.hash()) << "at " << i;
+  }
+}
+
 TEST_F(VectorTest, hashAll) {
   auto data = makeFlatVector<int32_t>({1, 2, 3});
   ASSERT_TRUE(data->getNullCount().has_value());
@@ -4248,6 +4224,5 @@ TEST_F(VectorTest, estimateFlatSize) {
   // Test that the second call to prepareForReuse will not cause crash
   arrayVector->prepareForReuse();
 }
-
 } // namespace
 } // namespace facebook::velox

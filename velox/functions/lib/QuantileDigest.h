@@ -90,6 +90,46 @@ class QuantileDigest {
   // min/max range.
   std::optional<double> quantileAtValue(T value) const;
 
+  struct CdfEntry {
+    T upperBound;
+    double cumulativeProbability;
+  };
+
+  /// Returns the cumulative distribution function as a vector of entries
+  /// mapping upper bounds to cumulative probabilities for values within
+  /// the specified range [rangeStart, rangeEnd]. The CDF provides
+  /// a lower bound estimate for the proportion of items <= x with error
+  /// bounded by the digest's maxError parameter. This is a
+  /// right-continous step function, i.e., values in between entries
+  /// have the same estimated cumulative probability as the
+  /// previous entry.
+  const std::vector<
+      CdfEntry,
+      typename std::allocator_traits<Allocator>::template rebind_alloc<
+          CdfEntry>>
+  getDistributionFunction(T rangeStart, T rangeEnd) const;
+
+  struct ValueCountPair {
+    T value;
+    double count;
+  };
+
+  /// Get values and their counts within the specified quantile bounds.
+  /// Returns a vector of (value, count) pairs for all nodes that fall
+  /// within the [lowerQuantileBound, upperQuantileBound] range.
+  /// This allows UDFs to compute various statistics (mean, median, stddev,
+  /// etc.) from the same underlying data.
+  ///
+  /// Example: For data [1, 10, 11, 12, 100] with bounds [0.25, 0.75], this
+  /// returns the values and counts for the middle quantile range,
+  /// excluding the outliers (1, 100).
+  std::vector<
+      ValueCountPair,
+      typename std::allocator_traits<Allocator>::template rebind_alloc<
+          ValueCountPair>>
+  getValuesInQuantileRange(double lowerQuantileBound, double upperQuantileBound)
+      const;
+
  private:
   using U = std::conditional_t<sizeof(T) == sizeof(int64_t), int64_t, int32_t>;
 
@@ -1296,6 +1336,116 @@ std::optional<double> QuantileDigest<T, Allocator>::quantileAtValue(
       lefts_,
       rights_);
   return bucketCount / weightedCount_;
+}
+
+template <typename T, typename Allocator>
+const std::vector<
+    typename QuantileDigest<T, Allocator>::CdfEntry,
+    typename QuantileDigest<T, Allocator>::template RebindAlloc<
+        typename QuantileDigest<T, Allocator>::CdfEntry>>
+QuantileDigest<T, Allocator>::getDistributionFunction(T rangeStart, T rangeEnd)
+    const {
+  std::vector<CdfEntry, RebindAlloc<CdfEntry>> cdf(
+      RebindAlloc<CdfEntry>(counts_.get_allocator()));
+
+  if (weightedCount_ == 0 || root_ == -1) {
+    return cdf;
+  }
+
+  VELOX_USER_CHECK_LE(
+      rangeStart,
+      rangeEnd,
+      "rangeStart must be less than or equal to rangeEnd");
+
+  // Always start with (rangeStart, 0) as the starting point.
+  cdf.push_back({rangeStart, 0.0});
+
+  // Build CDF during post-order traversal.
+  double cumulativeProbability = 0.0;
+  postOrderTraverse(
+      root_,
+      [this, &cdf, &cumulativeProbability, rangeStart, rangeEnd](int32_t node) {
+        if (counts_[node] > 0) {
+          T nodeUpper = postprocessByType(this->upperBound(node));
+          cumulativeProbability += counts_[node] / weightedCount_;
+          // Only include values within the specified range.
+          if (nodeUpper >= rangeEnd) {
+            return false;
+          } else if (nodeUpper >= rangeStart) {
+            // Take the largest probability for the same upperBound.
+            if (nodeUpper == cdf.back().upperBound) {
+              cdf.back().cumulativeProbability = cumulativeProbability;
+            } else {
+              cdf.push_back({nodeUpper, cumulativeProbability});
+            }
+          }
+        }
+        return true;
+      },
+      lefts_,
+      rights_);
+
+  // Always end with (rangeEnd, 1) as the endpoint.
+  cdf.push_back({rangeEnd, 1.0});
+
+  return cdf;
+}
+
+template <typename T, typename Allocator>
+std::vector<
+    typename QuantileDigest<T, Allocator>::ValueCountPair,
+    typename QuantileDigest<T, Allocator>::template RebindAlloc<
+        typename QuantileDigest<T, Allocator>::ValueCountPair>>
+QuantileDigest<T, Allocator>::getValuesInQuantileRange(
+    double lowerQuantileBound,
+    double upperQuantileBound) const {
+  std::vector<ValueCountPair, RebindAlloc<ValueCountPair>> result(
+      RebindAlloc<ValueCountPair>(counts_.get_allocator()));
+
+  VELOX_USER_CHECK(
+      0 <= lowerQuantileBound && lowerQuantileBound <= 1,
+      "lowerQuantileBound must be between 0 and 1");
+  VELOX_USER_CHECK(
+      0 <= upperQuantileBound && upperQuantileBound <= 1,
+      "upperQuantileBound must be between 0 and 1");
+
+  if (weightedCount_ == 0 || lowerQuantileBound >= upperQuantileBound) {
+    return result;
+  }
+
+  double lowerRank = lowerQuantileBound * weightedCount_;
+  double upperRank = upperQuantileBound * weightedCount_;
+  double sum = 0.0;
+
+  postOrderTraverse(
+      root_,
+      [this, &result, &sum, lowerRank, upperRank](int32_t node) {
+        double nodeCount = counts_[node];
+        if (nodeCount == 0) {
+          return true;
+        }
+
+        double previous = sum;
+        sum += nodeCount;
+
+        // Calculate what portion of this node falls within [lowerRank,
+        // upperRank]
+        double startInRange = std::max(previous, lowerRank);
+        double endInRange = std::min(sum, upperRank);
+        double countInRange = std::max(0.0, endInRange - startInRange);
+
+        // Only add if there's actually something in range
+        if (countInRange > 0) {
+          T value = postprocessByType(std::min(upperBound(node), max_));
+          result.push_back({value, countInRange});
+        }
+
+        return sum < upperRank;
+      },
+      lefts_,
+      rights_);
+
+  return result;
 }
 
 } // namespace qdigest

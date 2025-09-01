@@ -27,6 +27,7 @@
 #include "velox/exec/PartitionFunction.h"
 #include "velox/exec/Split.h"
 #include "velox/exec/TaskTraceReader.h"
+#include "velox/exec/TaskTraceWriter.h"
 #include "velox/exec/Trace.h"
 #include "velox/exec/TraceUtil.h"
 #include "velox/exec/tests/utils/ArbitratorTestUtil.h"
@@ -761,7 +762,7 @@ TEST_F(OperatorTraceTest, traceSplitRoundTrip) {
   for (int i = 0; i < 3; ++i) {
     const auto opTraceDir = getOpTraceDirectory(
         taskTraceDir,
-        /*planNodeId=*/"0",
+        /*nodeId=*/"0",
         /*pipelineId=*/0,
         /*driverId=*/i);
     const auto summaryFilePath = getOpTraceSummaryFilePath(opTraceDir);
@@ -827,7 +828,7 @@ TEST_F(OperatorTraceTest, traceSplitPartial) {
   for (int i = 0; i < 3; ++i) {
     const auto opTraceDir = getOpTraceDirectory(
         taskTraceDir,
-        /*planNodeId=*/"0",
+        /*nodeId=*/"0",
         /*pipelineId=*/0,
         /*driverId=*/i);
     const auto summaryFilePath = getOpTraceSummaryFilePath(opTraceDir);
@@ -916,7 +917,7 @@ TEST_F(OperatorTraceTest, traceSplitCorrupted) {
   for (int i = 0; i < 3; ++i) {
     const auto opTraceDir = getOpTraceDirectory(
         taskTraceDir,
-        /*planNodeId=*/"0",
+        /*nodeId=*/"0",
         /*pipelineId=*/0,
         /*driverId=*/i);
     const auto summaryFilePath = getOpTraceSummaryFilePath(opTraceDir);

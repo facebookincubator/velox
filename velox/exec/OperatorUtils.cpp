@@ -18,6 +18,7 @@
 #include "velox/expression/EvalCtx.h"
 #include "velox/vector/ConstantVector.h"
 #include "velox/vector/FlatVector.h"
+#include "velox/vector/LazyVector.h"
 
 namespace facebook::velox::exec {
 
@@ -229,7 +230,7 @@ vector_size_t processEncodedFilterResults(
     const SelectivityVector& rows,
     FilterEvalCtx& filterEvalCtx,
     memory::MemoryPool* pool) {
-  auto size = rows.size();
+  const auto size = rows.size();
 
   DecodedVector& decoded = filterEvalCtx.decodedResult;
   decoded.decode(*filterResult.get(), rows);
@@ -455,6 +456,14 @@ std::string makeOperatorSpillPath(
   return fmt::format("{}/{}_{}_{}", spillDir, pipelineId, driverId, operatorId);
 }
 
+void setOperatorRuntimeStats(
+    const std::string& name,
+    const RuntimeCounter& value,
+    std::unordered_map<std::string, RuntimeMetric>& stats) {
+  stats[name] = RuntimeMetric(value.unit);
+  stats[name].addValue(value.value);
+}
+
 void addOperatorRuntimeStats(
     const std::string& name,
     const RuntimeCounter& value,
@@ -504,12 +513,24 @@ void projectChildren(
     const std::vector<IdentityProjection>& projections,
     int32_t size,
     const BufferPtr& mapping) {
+  int maxInputChannel = -1;
+  int maxOutputChannel = -1;
   for (auto [inputChannel, outputChannel] : projections) {
-    if (outputChannel >= projectedChildren.size()) {
-      projectedChildren.resize(outputChannel + 1);
+    maxInputChannel = std::max<int>(maxInputChannel, inputChannel);
+    maxOutputChannel = std::max<int>(maxOutputChannel, outputChannel);
+  }
+  // Cache for already wrapped children to avoid wrapping the same child
+  // multiple times.
+  std::vector<VectorPtr> wrappedChildren(1 + maxInputChannel);
+  if (1 + maxOutputChannel > projectedChildren.size()) {
+    projectedChildren.resize(1 + maxOutputChannel);
+  }
+  for (auto [inputChannel, outputChannel] : projections) {
+    auto& wrapped = wrappedChildren[inputChannel];
+    if (!wrapped) {
+      wrapped = wrapChild(size, mapping, src[inputChannel]);
     }
-    projectedChildren[outputChannel] =
-        wrapChild(size, mapping, src[inputChannel]);
+    projectedChildren[outputChannel] = wrapped;
   }
 }
 

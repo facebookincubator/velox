@@ -19,6 +19,7 @@
 #include "velox/exec/fuzzer/PrestoQueryRunner.h"
 #include "velox/exec/fuzzer/ReferenceQueryRunner.h"
 #include "velox/functions/prestosql/types/JsonType.h"
+#include "velox/vector/SimpleVector.h"
 
 namespace facebook::velox::exec::test {
 
@@ -595,6 +596,12 @@ void PrestoSqlPlanNodeVisitor::visit(
           "Unknown join type: {}", static_cast<int>(node.joinType()));
   }
   visitorContext.sql = sql.str();
+}
+
+void PrestoSqlPlanNodeVisitor::visit(
+    const core::SpatialJoinNode& node,
+    core::PlanNodeVisitorContext& ctx) const {
+  VELOX_NYI("SpatialJoinNode is not yet supported in SQL conversion");
 }
 
 std::optional<std::string> PrestoSqlPlanNodeVisitor::toSql(

@@ -18,6 +18,8 @@
 #include <velox/type/HugeInt.h>
 #include <vector>
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/functions/prestosql/types/BigintEnumRegistration.h"
+#include "velox/functions/prestosql/types/BigintEnumType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneRegistration.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/OpaqueCustomTypes.h"
@@ -245,7 +247,7 @@ TEST(SignatureBinderTest, decimals) {
       std::unordered_map<std::string, int> integerVariables;
       ASSERT_EQ(
           exec::SignatureBinder::tryResolveType(
-              typeSignature, {}, {}, integerVariables),
+              typeSignature, {}, {}, integerVariables, {}),
           nullptr);
     }
     // Type parameter + constraint = error.
@@ -280,6 +282,19 @@ TEST(SignatureBinderTest, decimals) {
       assertCannotResolve(signature, {DECIMAL(11, 6), DECIMAL(20, 4)});
       assertCannotResolve(signature, {DECIMAL(11, 8), DECIMAL(18, 4)});
     }
+  }
+
+  // The precision and scale are fixed to the constraints.
+  {
+    auto signature = exec::FunctionSignatureBuilder()
+                         .integerVariable("a_precision", "38")
+                         .integerVariable("a_scale", "0")
+                         .returnType("varchar")
+                         .argumentType("decimal(a_precision, a_scale)")
+                         .build();
+
+    testSignatureBinder(signature, {DECIMAL(38, 0)}, VARCHAR());
+    assertCannotResolve(signature, {DECIMAL(18, 6)});
   }
 }
 
@@ -804,6 +819,7 @@ TEST(SignatureBinderTest, logicalType) {
 
 TEST(SignatureBinderTest, customType) {
   registerTimestampWithTimeZoneType();
+  registerBigintEnumType();
 
   // Custom type as an argument type.
   {
@@ -837,6 +853,18 @@ TEST(SignatureBinderTest, customType) {
                          .build();
 
     testSignatureBinder(signature, {INTEGER()}, TIMESTAMP_WITH_TIME_ZONE());
+  }
+
+  {
+    // bigint_enum(enumParameters) -> bigint
+    auto signature = exec::FunctionSignatureBuilder()
+                         .enumVariable("E")
+                         .returnType("bigint")
+                         .argumentType("bigint_enum(E)")
+                         .build();
+    LongEnumParameter moodInfo(
+        "test.enum.mood", {{"CURIOUS", -2}, {"HAPPY", 0}});
+    testSignatureBinder(signature, {BIGINT_ENUM(moodInfo)}, BIGINT());
   }
 
   // Unknown custom type.

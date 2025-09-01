@@ -46,6 +46,10 @@ if [[ ${VERSION} =~ "20.04" ]]; then
   export CXX=/usr/bin/g++-11
 fi
 
+if lscpu | grep -q "sve"; then
+  $SUDO apt install -y gcc-12 g++-12
+fi
+
 function install_clang15 {
   if [[ ! ${VERSION} =~ "22.04" && ! ${VERSION} =~ "24.04" ]]; then
     echo "Warning: using the Clang configuration is for Ubuntu 22.04 and 24.04. Errors might occur."
@@ -54,7 +58,7 @@ function install_clang15 {
   if [[ ${VERSION} =~ "22.04" ]]; then
     CLANG_PACKAGE_LIST="${CLANG_PACKAGE_LIST} gcc-12 g++-12 libc++-12-dev"
   fi
-  ${SUDO} apt install "${CLANG_PACKAGE_LIST}" -y
+  ${SUDO} apt install ${CLANG_PACKAGE_LIST} -y
 }
 
 # For Ubuntu 20.04 we need add the toolchain PPA to get access to gcc11.
@@ -84,13 +88,8 @@ function install_build_prerequisites {
     libtool \
     wget
 
-  if [ ! -f "${PYTHON_VENV}"/pyvenv.cfg ]; then
-    echo "Creating Python Virtual Environment at ${PYTHON_VENV}"
-    python3 -m venv "${PYTHON_VENV}"
-  fi
-  source "${PYTHON_VENV}"/bin/activate
-  # Install to /usr/local to make it available to all users.
-  ${SUDO} pip3 install cmake==3.30.4
+  install_uv
+  uv_install cmake==3.30.4
 
   install_gcc11_if_needed
 
@@ -98,14 +97,6 @@ function install_build_prerequisites {
     install_clang15
   fi
 
-}
-
-# Install packages required to fix format
-function install_format_prerequisites {
-  pip3 install regex
-  ${SUDO} apt install -y \
-    clang-format \
-    cmake-format
 }
 
 # Install packages required for build.
@@ -260,7 +251,6 @@ function install_velox_deps {
 
 function install_apt_deps {
   install_build_prerequisites
-  install_format_prerequisites
   install_velox_deps_from_apt
 }
 
