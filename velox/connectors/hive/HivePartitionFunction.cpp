@@ -155,8 +155,31 @@ void hashPrimitive(
     bool mix,
     std::vector<uint32_t>& hashes) {
   const auto& type = values.base()->type();
-  const auto scale =
-      type->isDecimal() ? getDecimalPrecisionScale(*type).second : 0;
+  if (type->isDecimal()) {
+    const auto scale = getDecimalPrecisionScale(*type).second;
+    if (rows.isAllSelected()) {
+      vector_size_t numRows = rows.size();
+      for (auto i = 0; i < numRows; ++i) {
+        const uint32_t hash = values.isNullAt(i)
+            ? 0
+            : hashDecimal(
+                  values.valueAt<typename TypeTraits<kind>::NativeType>(i),
+                  scale);
+        mergeHash(mix, hash, hashes[i]);
+      }
+    } else {
+      rows.applyToSelected([&](auto row) INLINE_LAMBDA {
+        const uint32_t hash = values.isNullAt(i)
+            ? 0
+            : hashDecimal(
+                  values.valueAt<typename TypeTraits<kind>::NativeType>(i),
+                  scale);
+        mergeHash(mix, hash, hashes[row]);
+      });
+    }
+    return;
+  }
+
   if (rows.isAllSelected()) {
     // The compiler seems to be a little fickle with optimizations.
     // Although rows.applyToSelected should do roughly the same thing, doing
@@ -165,43 +188,18 @@ void hashPrimitive(
     // benchmarks.
     vector_size_t numRows = rows.size();
     for (auto i = 0; i < numRows; ++i) {
-      int32_t hash;
-      if (values.isNullAt(i)) {
-        hash = 0;
-      } else if constexpr (
-          kind == TypeKind::BIGINT || kind == TypeKind::HUGEINT) {
-        if (type->isDecimal()) {
-          hash = hashDecimal(
-              values.valueAt<typename TypeTraits<kind>::NativeType>(i), scale);
-        } else {
-          hash = hashOne<kind>(
-              values.valueAt<typename TypeTraits<kind>::NativeType>(i));
-        }
-      } else {
-        hash = hashOne<kind>(
-            values.valueAt<typename TypeTraits<kind>::NativeType>(i));
-      }
+      const uint32_t hash = values.isNullAt(i)
+          ? 0
+          : hashOne<kind>(
+                values.valueAt<typename TypeTraits<kind>::NativeType>(i));
       mergeHash(mix, hash, hashes[i]);
     }
   } else {
     rows.applyToSelected([&](auto row) INLINE_LAMBDA {
-      int32_t hash;
-      if (values.isNullAt(row)) {
-        hash = 0;
-      } else if constexpr (
-          kind == TypeKind::BIGINT || kind == TypeKind::HUGEINT) {
-        if (type->isDecimal()) {
-          hash = hashDecimal(
-              values.valueAt<typename TypeTraits<kind>::NativeType>(row),
-              scale);
-        } else {
-          hash = hashOne<kind>(
-              values.valueAt<typename TypeTraits<kind>::NativeType>(row));
-        }
-      } else {
-        hash = hashOne<kind>(
-            values.valueAt<typename TypeTraits<kind>::NativeType>(row));
-      }
+      const uint32_t hash = values.isNullAt(i)
+          ? 0
+          : hashOne<kind>(
+                values.valueAt<typename TypeTraits<kind>::NativeType>(i));
       mergeHash(mix, hash, hashes[row]);
     });
   }
