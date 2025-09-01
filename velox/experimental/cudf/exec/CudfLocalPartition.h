@@ -24,7 +24,7 @@ namespace facebook::velox::cudf_velox {
 
 enum class PartitionFunctionType {
   kHash,
-  kRoundRobin,
+  kRoundRobinRow,
 };
 
 class CudfLocalPartition : public exec::Operator, public NvtxHelper {

@@ -88,12 +88,12 @@ CudfLocalPartition::CudfLocalPartition(
     }
     partitionFunctionType_ = PartitionFunctionType::kHash;
   } else if (
-      numPartitions_ > 1 && spec.find("ROUND ROBIN") != std::string::npos) {
-    partitionFunctionType_ = PartitionFunctionType::kRoundRobin;
+      numPartitions_ > 1 && spec.find("ROUND ROBIN ROW") != std::string::npos) {
+    partitionFunctionType_ = PartitionFunctionType::kRoundRobinRow;
   }
   VELOX_CHECK(
       numPartitions_ == 1 || partitionKeyIndices_.size() > 0 ||
-      partitionFunctionType_ == PartitionFunctionType::kRoundRobin);
+      partitionFunctionType_ == PartitionFunctionType::kRoundRobinRow);
 
   // Since we're replacing the LocalPartition with CudfLocalPartition, the
   // number of producers is already set. Adding producer only adds to a counter
@@ -127,7 +127,7 @@ void CudfLocalPartition::addInput(RowVectorPtr input) {
             cudf::hash_id::HASH_MURMUR3,
             cudf::DEFAULT_HASH_SEED,
             stream);
-      } else if (partitionFunctionType_ == PartitionFunctionType::kRoundRobin) {
+      } else if (partitionFunctionType_ == PartitionFunctionType::kRoundRobinRow) {
         return cudf::round_robin_partition(
             tableView, numPartitions_, counter_, stream);
         counter_ = (counter_ + cudfVector->size()) % numPartitions_;
