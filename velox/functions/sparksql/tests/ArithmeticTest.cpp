@@ -774,17 +774,13 @@ TEST_F(ArithmeticTest, absAnsiMode) {
 
   // Minimum values should throw in ANSI mode
   EXPECT_THROW(
-      abs<int8_t>(std::numeric_limits<int8_t>::min()),
-      VeloxUserError);
+      abs<int8_t>(std::numeric_limits<int8_t>::min()), VeloxUserError);
   EXPECT_THROW(
-      abs<int16_t>(std::numeric_limits<int16_t>::min()),
-      VeloxUserError);
+      abs<int16_t>(std::numeric_limits<int16_t>::min()), VeloxUserError);
   EXPECT_THROW(
-      abs<int32_t>(std::numeric_limits<int32_t>::min()),
-      VeloxUserError);
+      abs<int32_t>(std::numeric_limits<int32_t>::min()), VeloxUserError);
   EXPECT_THROW(
-      abs<int64_t>(std::numeric_limits<int64_t>::min()),
-      VeloxUserError);
+      abs<int64_t>(std::numeric_limits<int64_t>::min()), VeloxUserError);
 
   // Floating point should still work normally (no overflow for floats)
   EXPECT_EQ(abs<float>(-99999.9999f), 99999.9999f);
