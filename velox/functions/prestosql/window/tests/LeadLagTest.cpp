@@ -502,5 +502,47 @@ TEST_F(LeadLagTest, ignoreNulls) {
   }
 }
 
+TEST_F(LeadLagTest, constantValue) {
+  auto size = 40;
+  auto input = makeRowVector(
+      {makeFlatVector<int32_t>(size, [](auto row) { return row % 5; }),
+       makeFlatVector<int64_t>(
+           size, [](auto row) { return row % 7; }, nullEvery(8)),
+       makeFlatVector<int64_t>(size, [](auto row) { return row % 6 + 1; })});
+  const std::vector<std::string> kFunctionsList = {
+      "lag(NULL::bigint, 2)",
+      "lag(NULL::bigint, 2, 99)",
+
+      "lead(100, 2)",
+      "lag(100, 2)",
+      "lead(100, 2, 99)",
+      "lag(100, 2, 99)",
+      "lead(100, 2 IGNORE NULLS)",
+      "lag(100, 2 IGNORE NULLS)",
+      "lead(100, 2, 99 IGNORE NULLS)",
+      "lag(100, 2, 99 IGNORE NULLS)",
+
+      "lead(100, c2)",
+      "lag(100, c2)",
+      "lead(100, c2, 99)",
+      "lag(100, c2, 99)",
+      "lead(100, c2 IGNORE NULLS)",
+      "lag(100, c2 IGNORE NULLS)",
+      "lead(100, c2, 99 IGNORE NULLS)",
+      "lag(100, c2, 99 IGNORE NULLS)",
+  };
+
+  bool createTable = true;
+  for (auto fn : kFunctionsList) {
+    WindowTestBase::testWindowFunction(
+        {input},
+        fn,
+        kIgnoreNullsPartitionClauses,
+        kIgnoreNullsFrames,
+        createTable);
+    createTable = false;
+  }
+}
+
 } // namespace
 } // namespace facebook::velox::window::test
