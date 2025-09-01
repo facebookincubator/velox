@@ -25,9 +25,8 @@ class IcebergFunctionBaseTest
     : public facebook::velox::functions::test::FunctionBaseTest {
  protected:
   static void SetUpTestCase() {
-    parse::registerTypeResolver();
+    FunctionBaseTest::SetUpTestCase();
     registerFunctions("");
-    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
   }
 };
 

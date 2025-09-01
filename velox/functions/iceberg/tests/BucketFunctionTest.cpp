@@ -23,6 +23,7 @@ using namespace facebook::velox;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::functions::iceberg;
 
+namespace facebook::velox::functions::iceberg {
 namespace {
 
 class BucketFunctionTest
@@ -123,3 +124,4 @@ TEST_F(BucketFunctionTest, decimal) {
 }
 
 } // namespace
+} // namespace facebook::velox::functions::iceberg
