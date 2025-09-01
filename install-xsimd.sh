@@ -12,9 +12,10 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+set -e
 
 if [ ! -d "xsimd" ]; then
-    git clone https://github.com/xtensor-stack/xsimd --recurse-submodules
+  git clone https://github.com/xtensor-stack/xsimd --recurse-submodules
 fi
 cd xsimd
 
