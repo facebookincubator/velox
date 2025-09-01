@@ -62,6 +62,8 @@ class IcebergTestBase : public exec::test::HiveConnectorTestBase {
       const std::vector<PartitionField>& transformSpecs,
       const RowTypePtr& rowType);
 
+  void setupMemoryPools(const std::string& name);
+
  private:
   std::shared_ptr<IcebergInsertTableHandle> createIcebergInsertTableHandle(
       const RowTypePtr& rowType,
@@ -72,11 +74,10 @@ class IcebergTestBase : public exec::test::HiveConnectorTestBase {
   std::vector<std::string> listPartitionDirectories(
       const std::string& dataPath);
 
-  void setupMemoryPools(const std::string& name);
-
  protected:
   RowTypePtr rowType_;
   std::shared_ptr<memory::MemoryPool> opPool_;
+  std::shared_ptr<config::ConfigBase> connectorSessionProperties_;
 
  private:
   static constexpr const char* kHiveConnectorId = "test-hive";
@@ -86,7 +87,6 @@ class IcebergTestBase : public exec::test::HiveConnectorTestBase {
 
   std::shared_ptr<memory::MemoryPool> root_;
   std::shared_ptr<memory::MemoryPool> connectorPool_;
-  std::shared_ptr<config::ConfigBase> connectorSessionProperties_;
   std::shared_ptr<HiveConfig> connectorConfig_;
   std::unique_ptr<ConnectorQueryCtx> connectorQueryCtx_;
   VectorFuzzer::Options fuzzerOptions_;

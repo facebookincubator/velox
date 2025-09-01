@@ -31,6 +31,9 @@ namespace facebook::velox::connector::hive::iceberg {
 
 namespace {
 
+constexpr std::string_view kNotClusteredRowsErrorMsg =
+    "Incoming records violate the writer assumption that records are clustered by spec and \n by partition within each spec. Either cluster the incoming records or switch to fanout writers.\nEncountered records that belong to already closed files:\n";
+
 #define WRITER_NON_RECLAIMABLE_SECTION_GUARD(index)       \
   memory::NonReclaimableSectionGuard nonReclaimableGuard( \
       writerInfo_[(index)]->nonReclaimableSectionHolder.get())
@@ -208,7 +211,10 @@ IcebergDataSink::IcebergDataSink(
                     insertTableHandle->columnTransforms(),
                     hiveConfig->isPartitionPathAsLowerCase(
                         connectorQueryCtx->sessionProperties()))
-              : nullptr) {
+              : nullptr),
+      fanoutEnabled_(
+          hiveConfig_->fanoutEnabled(connectorQueryCtx_->sessionProperties())),
+      currentWriterId_(0) {
   if (isPartitioned()) {
     partitionData_.resize(maxOpenWriters_);
   }
@@ -325,8 +331,6 @@ std::vector<std::string> IcebergDataSink::commitMessage() const {
 }
 
 void IcebergDataSink::splitInputRowsAndEnsureWriters(RowVectorPtr input) {
-  VELOX_CHECK(isPartitioned());
-
   std::fill(partitionSizes_.begin(), partitionSizes_.end(), 0);
 
   const auto numRows = partitionIds_.size();
@@ -339,26 +343,7 @@ void IcebergDataSink::splitInputRowsAndEnsureWriters(RowVectorPtr input) {
     if (!partitionData_[index].empty()) {
       continue;
     }
-
-    std::vector<folly::dynamic> partitionValues(partitionChannels_.size());
-    auto icebergPartitionIdGenerator =
-        dynamic_cast<const IcebergPartitionIdGenerator*>(
-            partitionIdGenerator_.get());
-    VELOX_CHECK_NOT_NULL(icebergPartitionIdGenerator);
-    const RowVectorPtr transformedValues =
-        icebergPartitionIdGenerator->partitionValues();
-    for (auto i = 0; i < partitionChannels_.size(); ++i) {
-      auto block = transformedValues->childAt(i);
-      if (block->isNullAt(index)) {
-        partitionValues[i] = nullptr;
-      } else {
-        DecodedVector decoded(*block);
-        partitionValues[i] = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-            extractPartitionValue, block->typeKind(), &decoded, index);
-      }
-    }
-
-    partitionData_[index] = partitionValues;
+    buildPartitionData(index);
   }
 
   for (auto i = 0; i < partitionSizes_.size(); ++i) {
@@ -369,6 +354,11 @@ void IcebergDataSink::splitInputRowsAndEnsureWriters(RowVectorPtr input) {
   }
 }
 
+void IcebergDataSink::computePartition(const RowVectorPtr& input) {
+  VELOX_CHECK(isPartitioned());
+  partitionIdGenerator_->run(input, partitionIds_);
+}
+
 void IcebergDataSink::appendData(RowVectorPtr input) {
   checkRunning();
   if (!isPartitioned()) {
@@ -377,22 +367,79 @@ void IcebergDataSink::appendData(RowVectorPtr input) {
     return;
   }
 
-  // Compute partition and bucket numbers.
-  computePartitionAndBucketIds(input);
+  computePartition(input);
 
-  splitInputRowsAndEnsureWriters(input);
+  if (fanoutEnabled_) {
+    splitInputRowsAndEnsureWriters(input);
 
-  for (auto index = 0; index < writers_.size(); ++index) {
-    const vector_size_t partitionSize = partitionSizes_[index];
-    if (partitionSize == 0) {
-      continue;
+    for (auto index = 0; index < writers_.size(); ++index) {
+      const vector_size_t partitionSize = partitionSizes_[index];
+      if (partitionSize == 0) {
+        continue;
+      }
+
+      const RowVectorPtr writerInput = partitionSize == input->size()
+          ? input
+          : exec::wrap(partitionSize, partitionRows_[index], input);
+      write(index, writerInput);
     }
-
-    const RowVectorPtr writerInput = partitionSize == input->size()
-        ? input
-        : exec::wrap(partitionSize, partitionRows_[index], input);
-    write(index, writerInput);
+  } else { // Clustered mode.
+    std::fill(partitionSizes_.begin(), partitionSizes_.end(), 0);
+    const auto numRows = input->size();
+    uint32_t index = 0;
+    for (auto row = 0; row < numRows; ++row) {
+      auto id = getIcebergWriterId(row);
+      index = ensureWriter(id);
+      if (currentWriterId_ != index) {
+        clusteredWrite(input, currentWriterId_);
+        closeWriter(currentWriterId_);
+        completedWriterIds_.insert(currentWriterId_);
+        VELOX_USER_CHECK_EQ(
+            completedWriterIds_.count(index),
+            0,
+            "{}",
+            kNotClusteredRowsErrorMsg);
+        currentWriterId_ = index;
+      }
+      updatePartitionRows(index, numRows, row);
+      buildPartitionData(index);
+    }
+    clusteredWrite(input, index);
   }
+}
+
+void IcebergDataSink::buildPartitionData(int32_t index) {
+  std::vector<folly::dynamic> partitionValues(partitionChannels_.size());
+  auto icebergPartitionIdGenerator =
+      dynamic_cast<const IcebergPartitionIdGenerator*>(
+          partitionIdGenerator_.get());
+  VELOX_CHECK_NOT_NULL(icebergPartitionIdGenerator);
+  const RowVectorPtr transformedValues =
+      icebergPartitionIdGenerator->partitionValues();
+  for (auto i = 0; i < partitionChannels_.size(); ++i) {
+    auto block = transformedValues->childAt(i);
+    if (block->isNullAt(index)) {
+      partitionValues[i] = nullptr;
+    } else {
+      DecodedVector decoded(*block);
+      partitionValues[i] = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+          extractPartitionValue, block->typeKind(), &decoded, index);
+    }
+  }
+  partitionData_[index] = partitionValues;
+}
+
+void IcebergDataSink::clusteredWrite(RowVectorPtr input, int32_t writerIdx) {
+  if (partitionSizes_[writerIdx] != 0) {
+    VELOX_CHECK_NOT_NULL(partitionRows_[writerIdx]);
+    partitionRows_[writerIdx]->setSize(
+        partitionSizes_[writerIdx] * sizeof(vector_size_t));
+  }
+  const vector_size_t partitionSize = partitionSizes_[writerIdx];
+  const RowVectorPtr writerInput = partitionSize == input->size()
+      ? input
+      : exec::wrap(partitionSize, partitionRows_[writerIdx], input);
+  write(writerIdx, writerInput);
 }
 
 HiveWriterId IcebergDataSink::getIcebergWriterId(size_t row) const {
@@ -463,9 +510,11 @@ void IcebergDataSink::closeInternal() {
 
   if (state_ == State::kClosed) {
     for (int i = 0; i < writers_.size(); ++i) {
-      WRITER_NON_RECLAIMABLE_SECTION_GUARD(i);
-      writers_[i]->close();
-      dataFileStats_.push_back(writers_[i]->dataFileStats());
+      if (writers_[i]) {
+        WRITER_NON_RECLAIMABLE_SECTION_GUARD(i);
+        writers_[i]->close();
+        dataFileStats_.push_back(writers_[i]->dataFileStats());
+      }
     }
   } else {
     for (int i = 0; i < writers_.size(); ++i) {
@@ -473,6 +522,63 @@ void IcebergDataSink::closeInternal() {
       writers_[i]->abort();
     }
   }
+}
+
+void IcebergDataSink::closeWriter(int32_t index) {
+  common::testutil::TestValue::adjust(
+      "facebook::velox::connector::hive::iceberg::IcebergDataSink::closeWriter",
+      this);
+
+  if (writers_[index]) {
+    WRITER_NON_RECLAIMABLE_SECTION_GUARD(index);
+    if (sortWrite()) {
+      finishWriter(index);
+    }
+    writers_[index]->close();
+    dataFileStats_.push_back(writers_[index]->dataFileStats());
+    writers_[index] = nullptr;
+  }
+}
+
+bool IcebergDataSink::finishWriter(int32_t index) {
+  if (!sortWrite()) {
+    return true;
+  }
+
+  if (writers_[index]) {
+    const uint64_t startTimeMs = getCurrentTimeMs();
+    if (!writers_[index]->finish()) {
+      return false;
+    }
+    if (getCurrentTimeMs() - startTimeMs > sortWriterFinishTimeSliceLimitMs_) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool IcebergDataSink::finish() {
+  // Flush is reentry state.
+  setState(State::kFinishing);
+
+  // As for now, only sorted writer needs flush buffered data. For non-sorted
+  // writer, data is directly written to the underlying file writer.
+  if (!sortWrite()) {
+    return true;
+  }
+
+  // TODO: we might refactor to move the data sorting logic into hive data sink.
+  const uint64_t startTimeMs = getCurrentTimeMs();
+  for (auto i = 0; i < writers_.size(); ++i) {
+    WRITER_NON_RECLAIMABLE_SECTION_GUARD(i);
+    if (writers_[i] && !writers_[i]->finish()) {
+      return false;
+    }
+    if (getCurrentTimeMs() - startTimeMs > sortWriterFinishTimeSliceLimitMs_) {
+      return false;
+    }
+  }
+  return true;
 }
 
 std::unique_ptr<facebook::velox::dwio::common::Writer>

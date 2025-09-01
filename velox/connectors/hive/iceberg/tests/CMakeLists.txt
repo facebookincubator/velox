@@ -49,6 +49,7 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     IcebergTestBase.cpp
     IcebergTransformE2ETest.cpp
     IcebergTransformUnitTest.cpp
+    IcebergWriterModeTest.cpp
     Main.cpp
     Murmur3Test.cpp
   )
