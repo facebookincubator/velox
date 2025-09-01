@@ -355,17 +355,17 @@ SpillPartition::createOrderedReader(
 }
 
 namespace {
-size_t estimateOutputBatchRowSize(
+size_t estimateOutputBatchRows(
     const std::vector<std::unique_ptr<SpillMergeStream>>& streams,
     const vector_size_t maxRows,
     const size_t maxBytes) {
   size_t numEstimations{0};
   int64_t estimateRowSizeSum{0};
   for (const auto& stream : streams) {
-    const auto estimateRowSize = stream->estimateRowSize();
-    if (estimateRowSize.has_value()) {
+    const auto streamEstimateRowSize = stream->estimateRowSize();
+    if (streamEstimateRowSize.has_value()) {
       ++numEstimations;
-      estimateRowSizeSum += estimateRowSize.value();
+      estimateRowSizeSum += streamEstimateRowSize.value();
     }
   }
 
@@ -379,16 +379,34 @@ size_t estimateOutputBatchRowSize(
       std::max<vector_size_t>(1, maxBytes / estimateRowSize), maxRows);
 }
 
+// This contains batching parameters and various kinds of batching buffers that
+// are reused across multiple merging rounds.
+struct BatchingBufferParams {
+  BatchingBufferParams(
+      const vector_size_t _maxBatchRows,
+      const size_t _maxBatchBytes,
+      const TypePtr& type,
+      memory::MemoryPool* pool)
+      : maxBatchRows(_maxBatchRows), maxBatchBytes(_maxBatchBytes) {
+    rowVector = std::static_pointer_cast<RowVector>(
+        BaseVector::create(type, maxBatchRows, pool));
+    spillSources.resize(maxBatchRows);
+    spillSourceRows.resize(maxBatchRows);
+  }
+
+  const vector_size_t maxBatchRows;
+  const size_t maxBatchBytes;
+  RowVectorPtr rowVector;
+  std::vector<const RowVector*> spillSources;
+  std::vector<vector_size_t> spillSourceRows;
+};
+
 SpillFileInfo mergeFiles(
     const std::vector<SpillFileInfo>& files,
     const std::string& pathPrefix,
     uint64_t readBufferSize,
     uint64_t writeBufferSize,
-    vector_size_t maxBatchRows,
-    size_t maxBatchBytes,
-    RowVectorPtr bufferVector,
-    std::vector<const RowVector*>& bufferSpillSources,
-    std::vector<vector_size_t>& bufferSpillSourceRows,
+    BatchingBufferParams& bufferParams,
     const common::UpdateAndCheckSpillLimitCB& updateAndCheckSpillLimitCb,
     memory::MemoryPool* pool,
     folly::Synchronized<common::SpillStats>* spillStats,
@@ -400,8 +418,8 @@ SpillFileInfo mergeFiles(
     streams.push_back(FileSpillMergeStream::create(
         SpillReadFile::create(fileInfo, readBufferSize, pool, spillStats)));
   }
-  auto batchRows =
-      estimateOutputBatchRowSize(streams, maxBatchRows, maxBatchBytes);
+  const auto batchRows = estimateOutputBatchRows(
+      streams, bufferParams.maxBatchRows, bufferParams.maxBatchBytes);
 
   auto mergeTree =
       std::make_unique<TreeOfLosers<SpillMergeStream>>(std::move(streams));
@@ -420,22 +438,22 @@ SpillFileInfo mergeFiles(
       spillStats);
 
   while (mergeTree->next()) {
-    VectorPtr tmp = std::move(bufferVector);
+    VectorPtr tmp = std::move(bufferParams.rowVector);
     BaseVector::prepareForReuse(tmp, batchRows);
-    bufferVector = std::static_pointer_cast<RowVector>(tmp);
-    for (auto& child : bufferVector->children()) {
+    bufferParams.rowVector = std::static_pointer_cast<RowVector>(tmp);
+    for (auto& child : bufferParams.rowVector->children()) {
       child->resize(batchRows);
     }
     int32_t outputRow = 0;
     utils::gatherMerge(
-        bufferVector.get(),
+        bufferParams.rowVector.get(),
         mergeTree.get(),
         outputRow,
-        bufferSpillSources,
-        bufferSpillSourceRows);
+        bufferParams.spillSources,
+        bufferParams.spillSourceRows);
 
     IndexRange range{0, outputRow};
-    writer->write(bufferVector, folly::Range<IndexRange*>(&range, 1));
+    writer->write(bufferParams.rowVector, folly::Range<IndexRange*>(&range, 1));
   }
   auto resultFiles = writer->finish();
   VELOX_CHECK_EQ(resultFiles.size(), 1);
@@ -455,39 +473,35 @@ using SpillFileInfoHeap = std::priority_queue<
 
 std::unique_ptr<TreeOfLosers<SpillMergeStream>>
 SpillPartition::createOrderedReaderWithPreMerge(
-    int mergeWayThreshold,
+    uint32_t numMaxMergeFiles,
     uint64_t readBufferSize,
     uint64_t writeBufferSize,
     const common::UpdateAndCheckSpillLimitCB& updateAndCheckSpillLimitCb,
     memory::MemoryPool* pool,
     folly::Synchronized<common::SpillStats>* spillStats,
     const std::string& fileCreateConfig) {
-  if (mergeWayThreshold <= 1 || files_.size() <= mergeWayThreshold) {
+  if (numMaxMergeFiles <= 1 || files_.size() <= numMaxMergeFiles) {
     return createOrderedReader(readBufferSize, pool, spillStats);
   }
 
-  auto startFileNum = files_.size();
   SpillFileInfoHeap orderedFiles(files_.begin(), files_.end());
   SpillFiles files;
-  files.reserve(mergeWayThreshold);
-  auto filePathPrefix = files_[0].path;
+  files.reserve(numMaxMergeFiles);
+  const auto filePathPrefix = files_[0].path;
   constexpr size_t maxBatchRows = 1'000;
   constexpr size_t maxBatchBytes = 64 * 1024;
-  RowVectorPtr bufferVector = std::static_pointer_cast<RowVector>(
-      BaseVector::create(files_[0].type, maxBatchRows, pool));
-  std::vector<const RowVector*> bufferSpillSources(maxBatchRows);
-  std::vector<vector_size_t> bufferSpillSourceRows(maxBatchRows);
+  BatchingBufferParams bufferParams(
+      maxBatchRows, maxBatchBytes, files_[0].type, pool);
 
   // Recursively merge the files.
-  int round = 0;
-  for (; orderedFiles.size() > mergeWayThreshold; round++) {
-    int mergeFileNum = std::min(
-        static_cast<size_t>(mergeWayThreshold),
-        orderedFiles.size() + 1 - mergeWayThreshold);
+  for (int round = 0; orderedFiles.size() > numMaxMergeFiles; round++) {
+    const int numMergeFiles = std::min(
+        static_cast<size_t>(numMaxMergeFiles),
+        orderedFiles.size() + 1 - numMaxMergeFiles);
     auto roundPathPrefix =
         fmt::format("{}-merge-round-{}", filePathPrefix, round);
-    // Choose the top #mergeFileNum smallest files for merging to minimize IO.
-    for (; mergeFileNum > 0; mergeFileNum--) {
+    // Choose the top #numMergeFiles smallest files for merging to minimize IO.
+    for (int i = 0; i < numMergeFiles; i++) {
       files.push_back(orderedFiles.top());
       orderedFiles.pop();
     }
@@ -496,11 +510,7 @@ SpillPartition::createOrderedReaderWithPreMerge(
         roundPathPrefix,
         readBufferSize,
         writeBufferSize,
-        maxBatchRows,
-        maxBatchBytes,
-        bufferVector,
-        bufferSpillSources,
-        bufferSpillSourceRows,
+        bufferParams,
         updateAndCheckSpillLimitCb,
         pool,
         spillStats,
@@ -514,9 +524,6 @@ SpillPartition::createOrderedReaderWithPreMerge(
     files_.push_back(orderedFiles.top());
     orderedFiles.pop();
   }
-  auto endFileNum = files_.size();
-  VLOG(1) << "For file " << files_[0].path << "pre merge from #" << startFileNum
-          << " files to #" << endFileNum << " files in #" << round << " rounds";
   return createOrderedReader(readBufferSize, pool, spillStats);
 }
 

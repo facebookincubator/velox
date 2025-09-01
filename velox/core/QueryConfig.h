@@ -334,12 +334,13 @@ class QueryConfig {
   static constexpr const char* kSpillCompressionKind =
       "spill_compression_codec";
 
-  // The max merge ways when merging sorted files into a single ordered stream.
-  // Nums < 2 means unlimited. This is used to cap the max opened file num when
-  // merging spilled sorted files to avoid using too much memory and causing
-  // OOM.
-  static constexpr const char* kSpillNumMaxMergeWays =
-      "spill_num_max_merge_ways";
+  /// The max number of files to merge at a time when merging sorted files into
+  /// a single ordered stream. 0 means unlimited. This is used to reduce memory
+  /// pressure by capping the number of open files when merging spilled sorted
+  /// files to avoid using too much memory and causing OOM. Note that this is
+  /// only applicable for ordered spill.
+  static constexpr const char* kSpillNumMaxMergeFiles =
+      "spill_num_max_merge_files";
 
   /// Enable the prefix sort or fallback to timsort in spill. The prefix sort is
   /// faster than std::sort but requires the memory to build normalized prefix
@@ -1061,9 +1062,9 @@ class QueryConfig {
     return get<std::string>(kSpillCompressionKind, "none");
   }
 
-  uint64_t spillNumMaxMergeWays() const {
-    constexpr uint64_t kDefaultMergeWays = 0;
-    return get<uint64_t>(kSpillNumMaxMergeWays, kDefaultMergeWays);
+  uint32_t spillNumMaxMergeFiles() const {
+    constexpr uint32_t kDefaultMergeFiles = 0;
+    return get<uint32_t>(kSpillNumMaxMergeFiles, kDefaultMergeFiles);
   }
 
   bool spillPrefixSortEnabled() const {

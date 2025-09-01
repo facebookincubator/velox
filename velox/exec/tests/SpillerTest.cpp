@@ -715,7 +715,7 @@ class SpillerTest : public exec::test::RowContainerTestBase {
       // We make a merge reader that merges the spill files and the rows that
       // are still in the RowContainer.
       auto merge = spillPartition->createOrderedReaderWithPreMerge(
-          spillConfig_.numMaxMergeWays,
+          spillConfig_.numMaxMergeFiles,
           spillConfig_.readBufferSize,
           spillConfig_.writeBufferSize,
           spillConfig_.updateAndCheckSpillLimitCb,
@@ -725,7 +725,7 @@ class SpillerTest : public exec::test::RowContainerTestBase {
       ASSERT_TRUE(merge != nullptr);
       ASSERT_TRUE(
           spillPartition->createOrderedReaderWithPreMerge(
-              spillConfig_.numMaxMergeWays,
+              spillConfig_.numMaxMergeFiles,
               spillConfig_.readBufferSize,
               spillConfig_.writeBufferSize,
               spillConfig_.updateAndCheckSpillLimitCb,

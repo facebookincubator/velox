@@ -485,7 +485,7 @@ void SortBuffer::prepareOutputWithSpill() {
   VELOX_CHECK_EQ(spillPartitionSet_.size(), 1);
   spillMerger_ =
       spillPartitionSet_.begin()->second->createOrderedReaderWithPreMerge(
-          spillConfig_->numMaxMergeWays,
+          spillConfig_->numMaxMergeFiles,
           spillConfig_->readBufferSize,
           spillConfig_->writeBufferSize,
           spillConfig_->updateAndCheckSpillLimitCb,
