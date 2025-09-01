@@ -773,8 +773,7 @@ TEST_F(ArithmeticTest, absAnsiMode) {
   EXPECT_EQ(abs<int64_t>(-9223372036854775807), 9223372036854775807);
 
   // Minimum values should throw in ANSI mode
-  EXPECT_THROW(
-      abs<int8_t>(std::numeric_limits<int8_t>::min()), VeloxUserError);
+  EXPECT_THROW(abs<int8_t>(std::numeric_limits<int8_t>::min()), VeloxUserError);
   EXPECT_THROW(
       abs<int16_t>(std::numeric_limits<int16_t>::min()), VeloxUserError);
   EXPECT_THROW(
