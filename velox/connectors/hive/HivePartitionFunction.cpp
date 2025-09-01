@@ -169,7 +169,7 @@ void hashPrimitive(
       }
     } else {
       rows.applyToSelected([&](auto row) INLINE_LAMBDA {
-        const uint32_t hash = values.isNullAt(i)
+        const uint32_t hash = values.isNullAt(row)
             ? 0
             : hashDecimal(
                   values.valueAt<typename TypeTraits<kind>::NativeType>(i),
@@ -196,7 +196,7 @@ void hashPrimitive(
     }
   } else {
     rows.applyToSelected([&](auto row) INLINE_LAMBDA {
-      const uint32_t hash = values.isNullAt(i)
+      const uint32_t hash = values.isNullAt(row)
           ? 0
           : hashOne<kind>(
                 values.valueAt<typename TypeTraits<kind>::NativeType>(i));
