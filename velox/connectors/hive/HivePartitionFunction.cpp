@@ -172,7 +172,7 @@ void hashPrimitive(
         const uint32_t hash = values.isNullAt(row)
             ? 0
             : hashDecimal(
-                  values.valueAt<typename TypeTraits<kind>::NativeType>(i),
+                  values.valueAt<typename TypeTraits<kind>::NativeType>(row),
                   scale);
         mergeHash(mix, hash, hashes[row]);
       });
@@ -199,7 +199,7 @@ void hashPrimitive(
       const uint32_t hash = values.isNullAt(row)
           ? 0
           : hashOne<kind>(
-                values.valueAt<typename TypeTraits<kind>::NativeType>(i));
+                values.valueAt<typename TypeTraits<kind>::NativeType>(row));
       mergeHash(mix, hash, hashes[row]);
     });
   }
