@@ -32,9 +32,9 @@ namespace facebook::velox::functions::sparksql {
 template <typename TExec>
 struct AbsFunction {
   VELOX_DEFINE_FUNCTION_TYPES(TExec);
-  
+
   bool ansiEnabled_ = false;
-  
+
   template <typename TInput>
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
