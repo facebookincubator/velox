@@ -505,10 +505,6 @@ class PARQUET_EXPORT ColumnDescriptor {
     return node_;
   }
 
-  int32_t field_id() const {
-    return node_->field_id();
-  }
-
   std::string ToString() const;
 
   int type_length() const;

@@ -394,7 +394,7 @@ class ColumnChunkMetaData::ColumnChunkMetaDataImpl {
   }
 
   inline int32_t field_id() const {
-    return descr_->field_id();
+    return descr_->schema_node()->field_id();
   }
 
  private:

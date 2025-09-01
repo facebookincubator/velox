@@ -44,6 +44,7 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     IcebergPartitionIdGeneratorTest.cpp
     IcebergReadTest.cpp
     IcebergSplitReaderBenchmarkTest.cpp
+    IcebergStatsTest.cpp
     IcebergTestBase.cpp
     IcebergTransformE2ETest.cpp
     IcebergTransformUnitTest.cpp
