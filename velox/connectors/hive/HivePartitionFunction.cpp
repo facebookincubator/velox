@@ -155,29 +155,31 @@ void hashPrimitive(
     bool mix,
     std::vector<uint32_t>& hashes) {
   const auto& type = values.base()->type();
-  if (type->isDecimal()) {
-    const auto scale = getDecimalPrecisionScale(*type).second;
-    if (rows.isAllSelected()) {
-      vector_size_t numRows = rows.size();
-      for (auto i = 0; i < numRows; ++i) {
-        const uint32_t hash = values.isNullAt(i)
-            ? 0
-            : hashDecimal(
-                  values.valueAt<typename TypeTraits<kind>::NativeType>(i),
-                  scale);
-        mergeHash(mix, hash, hashes[i]);
+  if constexpr (kind == TypeKind::BIGINT || kind == TypeKind::HUGEINT) {
+    if (type->isDecimal()) {
+      const auto scale = getDecimalPrecisionScale(*type).second;
+      if (rows.isAllSelected()) {
+        vector_size_t numRows = rows.size();
+        for (auto i = 0; i < numRows; ++i) {
+          const uint32_t hash = values.isNullAt(i)
+              ? 0
+              : hashDecimal(
+                    values.valueAt<typename TypeTraits<kind>::NativeType>(i),
+                    scale);
+          mergeHash(mix, hash, hashes[i]);
+        }
+      } else {
+        rows.applyToSelected([&](auto row) INLINE_LAMBDA {
+          const uint32_t hash = values.isNullAt(row)
+              ? 0
+              : hashDecimal(
+                    values.valueAt<typename TypeTraits<kind>::NativeType>(row),
+                    scale);
+          mergeHash(mix, hash, hashes[row]);
+        });
       }
-    } else {
-      rows.applyToSelected([&](auto row) INLINE_LAMBDA {
-        const uint32_t hash = values.isNullAt(row)
-            ? 0
-            : hashDecimal(
-                  values.valueAt<typename TypeTraits<kind>::NativeType>(row),
-                  scale);
-        mergeHash(mix, hash, hashes[row]);
-      });
+      return;
     }
-    return;
   }
 
   if (rows.isAllSelected()) {
