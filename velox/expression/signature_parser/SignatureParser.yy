@@ -34,7 +34,7 @@
 %expect 1
 
 %nterm <std::shared_ptr<exec::TypeSignature>> special_type function_type decimal_type row_type array_type map_type
-%nterm <std::shared_ptr<exec::TypeSignature>> type named_type type_or_named
+%nterm <std::shared_ptr<exec::TypeSignature>> type named_type type_or_named type_list_with_ellipsis
 %nterm <std::vector<exec::TypeSignature>> type_list type_list_opt_names
 %nterm <std::vector<std::string>> type_with_spaces
 
@@ -81,8 +81,11 @@ type_list_opt_names : type_or_named                               { $$.push_back
                     | type_list_opt_names COMMA type_or_named { $1.push_back(*($3)); $$ = std::move($1); }
                     ;
 
-row_type : ROW LPAREN type_list_opt_names RPAREN      { $$ = std::make_shared<exec::TypeSignature>("row", $3); }
-         | ROW LPAREN type_or_named COMMA ELLIPSIS RPAREN { $$ = std::make_shared<exec::TypeSignature>("row", std::vector<exec::TypeSignature>{*($3)}, std::nullopt, true); }
+type_list_with_ellipsis : type_list_opt_names                    { $$ = std::make_shared<exec::TypeSignature>("row", $1); }
+                        | type_or_named COMMA ELLIPSIS           { $$ = std::make_shared<exec::TypeSignature>("row", std::vector<exec::TypeSignature>{*($1)}, std::nullopt, true); }
+                        ;
+
+row_type : ROW LPAREN type_list_with_ellipsis RPAREN { $$ = $3; }
          ;
 
 array_type : ARRAY LPAREN type RPAREN             { $$ = std::make_shared<exec::TypeSignature>(exec::TypeSignature("array", { *($3) })); }
