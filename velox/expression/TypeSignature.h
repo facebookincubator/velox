@@ -33,13 +33,16 @@ class TypeSignature {
   /// @param rowFieldName if this type signature is a field of another parent
   /// row type, it can optionally have a name. E.g. `row(id bigint)` would have
   /// "id" set as rowFieldName in the "bigint" parameter.
+  /// @param variadicLastParam indicates if the last parameter is variadic.
   TypeSignature(
       std::string baseName,
       std::vector<TypeSignature> parameters,
-      std::optional<std::string> rowFieldName = std::nullopt)
+      std::optional<std::string> rowFieldName = std::nullopt,
+      bool variadicLastParam = false)
       : baseName_{std::move(baseName)},
         parameters_{std::move(parameters)},
-        rowFieldName_(std::move(rowFieldName)) {}
+        rowFieldName_(std::move(rowFieldName)),
+        variadicLastParam_{variadicLastParam} {}
 
   const std::string& baseName() const {
     return baseName_;
@@ -53,11 +56,20 @@ class TypeSignature {
     return rowFieldName_;
   }
 
+  bool hasVariadicLastParam() const {
+    return variadicLastParam_;
+  }
+
+  bool isHomogeneousRow() const {
+    return baseName_ == "row" && parameters_.size() == 1 && variadicLastParam_;
+  }
+
   std::string toString() const;
 
   bool operator==(const TypeSignature& rhs) const {
     return baseName_ == rhs.baseName_ && parameters_ == rhs.parameters_ &&
-        rowFieldName_ == rhs.rowFieldName_;
+        rowFieldName_ == rhs.rowFieldName_ &&
+        variadicLastParam_ == rhs.variadicLastParam_;
   }
 
  private:
@@ -67,6 +79,9 @@ class TypeSignature {
   // If this object is a field of another parent row type, it can optionally
   // have a name, e.g, `row(id bigint)`
   const std::optional<std::string> rowFieldName_;
+
+  // Indicates if the last parameter is variadic
+  bool variadicLastParam_{false};
 };
 
 using TypeSignaturePtr = std::shared_ptr<TypeSignature>;
