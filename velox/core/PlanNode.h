@@ -107,15 +107,19 @@ extern const SortOrder kDescNullsLast;
 struct PlanSummaryOptions {
   /// Options that apply specifically to PROJECT nodes.
   struct ProjectOptions {
-    /// For a given PROJECT node, maximum number of non-identity projection
-    /// expressions to include in the summary. By default, no expression is
-    /// included.
+    /// For a given PROJECT node, maximum number of non-identity and
+    /// non-constant projection expressions to include in the summary. By
+    /// default, no expression is included.
     size_t maxProjections = 0;
 
     /// For a given PROJECT node, maximum number of dereference (access of a
     /// struct field) expressions to include in the summary. By default, no
     /// expression is included.
     size_t maxDereferences = 0;
+
+    /// For a given PROJECT node, maximum number of constant expressions to
+    /// include in the summary. By default, no expression is included.
+    size_t maxConstants = 0;
   };
 
   ProjectOptions project = {};
@@ -221,16 +225,15 @@ class PlanNode : public ISerializable {
   ///
   /// @param addContext Optional lambda to add context for a given plan node.
   /// Receives plan node ID, indentation and std::stringstream where to append
-  /// the context. Use indentation for second and subsequent lines of a
-  /// multi-line context. Do not use indentation for single-line context. Do not
-  /// add trailing new-line character for the last or only line of context.
+  /// the context. Start each line of context with 'indentation' and end with a
+  /// new-line character.
   std::string toString(
       bool detailed = false,
       bool recursive = false,
       const std::function<void(
           const PlanNodeId& planNodeId,
           const std::string& indentation,
-          std::stringstream& stream)>& addContext = nullptr) const {
+          std::ostream& stream)>& addContext = nullptr) const {
     std::stringstream stream;
     toString(stream, detailed, recursive, 0, addContext);
     return stream.str();
@@ -288,7 +291,7 @@ class PlanNode : public ISerializable {
       const std::function<void(
           const PlanNodeId& planNodeId,
           const std::string& indentation,
-          std::stringstream& stream)>& addContext) const;
+          std::ostream& stream)>& addContext) const;
 
   // The default implementation calls 'addDetails' and truncates the result.
   virtual void addSummaryDetails(
@@ -321,10 +324,7 @@ class ValuesNode : public PlanNode {
       size_t repeatTimes = kDefaultRepeatTimes)
       : PlanNode(id),
         values_(std::move(values)),
-        outputType_(
-            values_.empty()
-                ? ROW({})
-                : std::dynamic_pointer_cast<const RowType>(values_[0]->type())),
+        outputType_(values_.empty() ? ROW({}) : values_[0]->rowType()),
         parallelizable_(parallelizable),
         repeatTimes_(repeatTimes) {}
 
@@ -821,16 +821,7 @@ class AbstractProjectNode : public PlanNode {
 
   static RowTypePtr makeOutputType(
       const std::vector<std::string>& names,
-      const std::vector<TypedExprPtr>& projections) {
-    std::vector<TypePtr> types;
-    types.reserve(projections.size());
-    for (auto& projection : projections) {
-      types.push_back(projection->type());
-    }
-
-    auto namesCopy = names;
-    return std::make_shared<RowType>(std::move(namesCopy), std::move(types));
-  }
+      const std::vector<TypedExprPtr>& projections);
 
   const std::vector<PlanNodePtr> sources_;
   const std::vector<std::string> names_;
@@ -908,7 +899,7 @@ class ParallelProjectNode : public core::AbstractProjectNode {
   ParallelProjectNode(
       const core::PlanNodeId& id,
       std::vector<std::string> names,
-      std::vector<std::vector<core::TypedExprPtr>> exprs,
+      std::vector<std::vector<core::TypedExprPtr>> exprGroups,
       std::vector<std::string> noLoadIdentities,
       core::PlanNodePtr input);
 
@@ -920,8 +911,8 @@ class ParallelProjectNode : public core::AbstractProjectNode {
     return exprNames_;
   }
 
-  const std::vector<std::vector<core::TypedExprPtr>>& exprs() const {
-    return exprs_;
+  const std::vector<std::vector<core::TypedExprPtr>>& exprGroups() const {
+    return exprGroups_;
   }
 
   const std::vector<std::string> noLoadIdentities() const {
@@ -939,7 +930,7 @@ class ParallelProjectNode : public core::AbstractProjectNode {
   void addDetails(std::stringstream& stream) const override;
 
   const std::vector<std::string> exprNames_;
-  const std::vector<std::vector<core::TypedExprPtr>> exprs_;
+  const std::vector<std::vector<core::TypedExprPtr>> exprGroups_;
   const std::vector<std::string> noLoadIdentities_;
 };
 
@@ -1399,13 +1390,58 @@ inline std::string mapAggregationStepToName(const AggregationNode::Step& step) {
   return ss.str();
 }
 
+/// Specify the column stats collection by aggregation. This is used by table
+/// writer plan nodes.
+struct ColumnStatsSpec : public ISerializable {
+  /// Grouping keys of the aggregation. It is set to partitioning keys for the
+  /// partitioned table. It is empty for unpartitioned table.
+  std::vector<FieldAccessTypedExprPtr> groupingKeys;
+
+  /// Step of the aggregation. Specifies the stage of multi-step aggregation
+  /// processing for column statistics collection:
+  /// - kSingle: used by TableWrite to complete aggregation in one step when no
+  ///   multi-stage processing needed.
+  /// - kPartial: used by TableWrite for the first stage of multi-step
+  ///   aggregation, produces intermediate results that need further processing
+  ///   (used in distributed scenarios)
+  /// - kIntermediate: used by TableWriteMerge in middle stage that processes
+  ///   partial results and produces more refined intermediate results for
+  ///   further aggregation
+  /// - kFinal: used by TableWriteMerge Final stage that processes intermediate
+  ///   results to produce the complete aggregated statistics.
+  AggregationNode::Step aggregationStep{AggregationNode::Step::kSingle};
+
+  /// Names of the aggregations.
+  std::vector<std::string> aggregateNames;
+
+  /// Aggregations.
+  std::vector<AggregationNode::Aggregate> aggregates;
+
+  ColumnStatsSpec(
+      std::vector<FieldAccessTypedExprPtr> _groupingKeys,
+      AggregationNode::Step _aggregationStep,
+      std::vector<std::string> _aggregateNames,
+      std::vector<AggregationNode::Aggregate> _aggregates)
+      : groupingKeys(std::move(_groupingKeys)),
+        aggregationStep(_aggregationStep),
+        aggregateNames(std::move(_aggregateNames)),
+        aggregates(std::move(_aggregates)) {
+    VELOX_CHECK(!aggregates.empty());
+    VELOX_CHECK_EQ(aggregates.size(), aggregateNames.size());
+  }
+
+  folly::dynamic serialize() const override;
+
+  static ColumnStatsSpec create(const folly::dynamic& obj, void* context);
+};
+
 class TableWriteNode : public PlanNode {
  public:
   TableWriteNode(
       const PlanNodeId& id,
       const RowTypePtr& columns,
       const std::vector<std::string>& columnNames,
-      AggregationNodePtr aggregationNode,
+      std::optional<ColumnStatsSpec> columnStatsSpec,
       std::shared_ptr<const InsertTableHandle> insertTableHandle,
       bool hasPartitioningScheme,
       RowTypePtr outputType,
@@ -1415,7 +1451,7 @@ class TableWriteNode : public PlanNode {
         sources_{source},
         columns_{columns},
         columnNames_{columnNames},
-        aggregationNode_(std::move(aggregationNode)),
+        columnStatsSpec_(std::move(columnStatsSpec)),
         insertTableHandle_(std::move(insertTableHandle)),
         hasPartitioningScheme_(hasPartitioningScheme),
         outputType_(std::move(outputType)),
@@ -1438,7 +1474,7 @@ class TableWriteNode : public PlanNode {
       id_ = other.id();
       columns_ = other.columns();
       columnNames_ = other.columnNames();
-      aggregationNode_ = other.aggregationNode();
+      columnStatsSpec_ = other.columnStatsSpec();
       insertTableHandle_ = other.insertTableHandle();
       hasPartitioningScheme_ = other.hasPartitioningScheme();
       outputType_ = other.outputType();
@@ -1462,8 +1498,8 @@ class TableWriteNode : public PlanNode {
       return *this;
     }
 
-    Builder& aggregationNode(AggregationNodePtr aggregationNode) {
-      aggregationNode_ = std::move(aggregationNode);
+    Builder& columnStatsSpec(std::optional<ColumnStatsSpec> columnStatsSpec) {
+      columnStatsSpec_ = std::move(columnStatsSpec);
       return *this;
     }
 
@@ -1500,10 +1536,6 @@ class TableWriteNode : public PlanNode {
       VELOX_USER_CHECK(
           columnNames_.has_value(), "TableWriteNode columnNames is not set");
       VELOX_USER_CHECK(
-          aggregationNode_.has_value(),
-          "TableWriteNode aggregationNode is not set");
-      VELOX_USER_CHECK(
-
           insertTableHandle_.has_value(),
           "TableWriteNode insertTableHandle is not set");
       VELOX_USER_CHECK(
@@ -1520,7 +1552,7 @@ class TableWriteNode : public PlanNode {
           id_.value(),
           columns_.value(),
           columnNames_.value(),
-          aggregationNode_.value(),
+          columnStatsSpec_,
           insertTableHandle_.value(),
           hasPartitioningScheme_.value(),
           outputType_.value(),
@@ -1532,7 +1564,7 @@ class TableWriteNode : public PlanNode {
     std::optional<PlanNodeId> id_;
     std::optional<RowTypePtr> columns_;
     std::optional<std::vector<std::string>> columnNames_;
-    std::optional<AggregationNodePtr> aggregationNode_;
+    std::optional<ColumnStatsSpec> columnStatsSpec_;
     std::optional<std::shared_ptr<const InsertTableHandle>> insertTableHandle_;
     std::optional<bool> hasPartitioningScheme_;
     std::optional<RowTypePtr> outputType_;
@@ -1580,9 +1612,15 @@ class TableWriteNode : public PlanNode {
     return commitStrategy_;
   }
 
-  /// Optional aggregation node for column statistics collection
-  const AggregationNodePtr& aggregationNode() const {
-    return aggregationNode_;
+  /// Returns true of this table write plan node has configured column
+  /// statistics collection.
+  bool hasColumnStatsSpec() const {
+    return columnStatsSpec_.has_value();
+  }
+
+  /// Optional spec for column statistics collection.
+  const std::optional<ColumnStatsSpec>& columnStatsSpec() const {
+    return columnStatsSpec_;
   }
 
   bool canSpill(const QueryConfig& queryConfig) const override {
@@ -1603,7 +1641,7 @@ class TableWriteNode : public PlanNode {
   const std::vector<PlanNodePtr> sources_;
   const RowTypePtr columns_;
   const std::vector<std::string> columnNames_;
-  const AggregationNodePtr aggregationNode_;
+  const std::optional<ColumnStatsSpec> columnStatsSpec_;
   const std::shared_ptr<const InsertTableHandle> insertTableHandle_;
   const bool hasPartitioningScheme_;
   const RowTypePtr outputType_;
@@ -1620,12 +1658,21 @@ class TableWriteMergeNode : public PlanNode {
   TableWriteMergeNode(
       const PlanNodeId& id,
       RowTypePtr outputType,
-      AggregationNodePtr aggregationNode,
+      std::optional<ColumnStatsSpec> columnStatsSpec,
       PlanNodePtr source)
       : PlanNode(id),
-        aggregationNode_(std::move(aggregationNode)),
+        columnStatsSpec_(std::move(columnStatsSpec)),
         sources_{std::move(source)},
-        outputType_(std::move(outputType)) {}
+        outputType_(std::move(outputType)) {
+    if (hasColumnStatsSpec()) {
+      VELOX_USER_CHECK(
+          columnStatsSpec_->aggregationStep ==
+                  core::AggregationNode::Step::kFinal ||
+              columnStatsSpec_->aggregationStep ==
+                  core::AggregationNode::Step::kIntermediate,
+          "TableWriteMergeNode requires aggregation step to be intermediate or final");
+    }
+  }
 
   class Builder {
    public:
@@ -1634,7 +1681,7 @@ class TableWriteMergeNode : public PlanNode {
     explicit Builder(const TableWriteMergeNode& other) {
       id_ = other.id();
       outputType_ = other.outputType();
-      aggregationNode_ = other.aggregationNode();
+      columnStatsSpec_ = other.columnStatsSpec();
       VELOX_CHECK_EQ(other.sources().size(), 1);
       source_ = other.sources()[0];
     }
@@ -1649,8 +1696,8 @@ class TableWriteMergeNode : public PlanNode {
       return *this;
     }
 
-    Builder& aggregationNode(AggregationNodePtr aggregationNode) {
-      aggregationNode_ = std::move(aggregationNode);
+    Builder& columnStatsSpec(std::optional<ColumnStatsSpec> columnStatsSpec) {
+      columnStatsSpec_ = std::move(columnStatsSpec);
       return *this;
     }
 
@@ -1664,28 +1711,28 @@ class TableWriteMergeNode : public PlanNode {
       VELOX_USER_CHECK(
           outputType_.has_value(), "TableWriteMergeNode outputType is not set");
       VELOX_USER_CHECK(
-          aggregationNode_.has_value(),
-          "TableWriteMergeNode aggregationNode is not set");
-      VELOX_USER_CHECK(
           source_.has_value(), "TableWriteMergeNode source is not set");
 
       return std::make_shared<TableWriteMergeNode>(
-          id_.value(),
-          outputType_.value(),
-          aggregationNode_.value(),
-          source_.value());
+          id_.value(), outputType_.value(), columnStatsSpec_, source_.value());
     }
 
    private:
     std::optional<PlanNodeId> id_;
     std::optional<RowTypePtr> outputType_;
-    std::optional<AggregationNodePtr> aggregationNode_;
+    std::optional<ColumnStatsSpec> columnStatsSpec_;
     std::optional<PlanNodePtr> source_;
   };
 
-  /// Optional aggregation node for column statistics collection
-  AggregationNodePtr aggregationNode() const {
-    return aggregationNode_;
+  /// Returns true of this table write merge plan node has configured column
+  /// statistics collection.
+  bool hasColumnStatsSpec() const {
+    return columnStatsSpec_.has_value();
+  }
+
+  /// Optional spec for column statistics collection.
+  const std::optional<ColumnStatsSpec>& columnStatsSpec() const {
+    return columnStatsSpec_;
   }
 
   const std::vector<PlanNodePtr>& sources() const override {
@@ -1710,7 +1757,7 @@ class TableWriteMergeNode : public PlanNode {
  private:
   void addDetails(std::stringstream& stream) const override;
 
-  const AggregationNodePtr aggregationNode_;
+  const std::optional<ColumnStatsSpec> columnStatsSpec_;
   const std::vector<PlanNodePtr> sources_;
   const RowTypePtr outputType_;
 };
@@ -5397,5 +5444,16 @@ struct fmt::formatter<facebook::velox::core::TopNRowNumberNode::RankFunction>
       format_context& ctx) const {
     return formatter<std::string>::format(
         facebook::velox::core::TopNRowNumberNode::rankFunctionName(f), ctx);
+  }
+};
+
+template <>
+struct fmt::formatter<facebook::velox::core::AggregationNode::Step>
+    : formatter<std::string_view> {
+  auto format(
+      facebook::velox::core::AggregationNode::Step s,
+      format_context& ctx) const {
+    return formatter<std::string_view>::format(
+        facebook::velox::core::AggregationNode::toName(s), ctx);
   }
 };

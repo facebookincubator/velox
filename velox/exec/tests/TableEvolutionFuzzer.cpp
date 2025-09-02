@@ -17,6 +17,7 @@
 #include "velox/exec/tests/TableEvolutionFuzzer.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/dwio/common/tests/utils/FilterGenerator.h"
+#include "velox/dwio/dwrf/common/Config.h"
 #include "velox/exec/Cursor.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
@@ -67,6 +68,62 @@ VectorFuzzer::Options makeVectorFuzzerOptions() {
   options.vectorSize = kVectorSize;
   options.allowSlice = false;
   return options;
+}
+
+bool hasUnsupportedMapKey(const TypePtr& type) {
+  switch (type->kind()) {
+    case TypeKind::MAP: {
+      auto mapType = type->asMap();
+      // FlatMapColumnWriter only supports TINYINT, SMALLINT, INTEGER, BIGINT,
+      // VARCHAR, VARBINARY as KeyType
+      auto keyKind = mapType.keyType()->kind();
+      if (keyKind != TypeKind::TINYINT && keyKind != TypeKind::SMALLINT &&
+          keyKind != TypeKind::INTEGER && keyKind != TypeKind::BIGINT &&
+          keyKind != TypeKind::VARCHAR && keyKind != TypeKind::VARBINARY) {
+        return true;
+      }
+      return hasUnsupportedMapKey(mapType.valueType());
+    }
+    case TypeKind::ARRAY:
+      return hasUnsupportedMapKey(type->asArray().elementType());
+    case TypeKind::ROW: {
+      auto& rowType = type->asRow();
+      for (int i = 0; i < rowType.size(); ++i) {
+        if (hasUnsupportedMapKey(rowType.childAt(i))) {
+          return true;
+        }
+      }
+      return false;
+    }
+    default:
+      return false;
+  }
+}
+
+bool hasMapColumns(const RowTypePtr& schema) {
+  VLOG(1) << "Checking if schema has map columns";
+  for (int i = 0; i < schema->size(); ++i) {
+    if (schema->childAt(i)->isMap()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool hasEmptyElement(const RowVectorPtr& data, int columnIndex) {
+  auto mapVector = data->childAt(columnIndex)->as<MapVector>();
+  if (!mapVector) {
+    return true;
+  }
+
+  // Check if any map entry is empty (null or size = 0)
+  auto sizes = mapVector->sizes();
+  for (int j = 0; j < mapVector->size(); ++j) {
+    if (mapVector->isNullAt(j) || sizes->as<vector_size_t>()[j] == 0) {
+      return true; // Found an empty map
+    }
+  }
+  return false; // No empty maps found
 }
 
 } // namespace
@@ -431,7 +488,7 @@ VectorPtr TableEvolutionFuzzer::liftToType(
 
 void TableEvolutionFuzzer::run() {
   ScopedOOMInjector oomInjectorWritePath(
-      []() -> bool { return folly::Random::oneIn(10); },
+      [this]() -> bool { return folly::Random::oneIn(10, rng_); },
       10); // Check the condition every 10 ms.
   if (FLAGS_enable_oom_injection_write_path) {
     oomInjectorWritePath.enable();
@@ -562,7 +619,7 @@ void TableEvolutionFuzzer::run() {
       makeScanTask(rowType, std::move(expectedSplits), pushownConfig, true);
 
   ScopedOOMInjector oomInjectorReadPath(
-      []() -> bool { return folly::Random::oneIn(10); },
+      [this]() -> bool { return folly::Random::oneIn(10, rng_); },
       10); // Check the condition every 10 ms.
   if (FLAGS_enable_oom_injection_read_path) {
     oomInjectorReadPath.enable();
@@ -735,22 +792,90 @@ std::unique_ptr<TaskCursor> TableEvolutionFuzzer::makeWriteTask(
     const Setup& setup,
     const RowVectorPtr& data,
     const std::string& outputDir,
-    const std::vector<column_index_t>& bucketColumnIndices) {
+    const std::vector<column_index_t>& bucketColumnIndices,
+    FuzzerGenerator& rng,
+    bool enableFlatMap) {
   auto builder = PlanBuilder().values({data});
+
+  // Create serdeParameters using proper dwrf::Config for flatmap configuration
+  std::unordered_map<std::string, std::string> serdeParameters;
+
+  if (hasMapColumns(setup.schema)) {
+    // Find all top-level map column indices that support flatmap
+    std::vector<uint32_t> supportedMapColumnIndices;
+
+    for (int i = 0; i < setup.schema->size(); ++i) {
+      if (setup.schema->childAt(i)->isMap()) {
+        // Check if this specific map column has any empty elements
+        if (hasEmptyElement(data, i)) {
+          continue;
+        }
+
+        if (!hasUnsupportedMapKey(setup.schema->childAt(i))) {
+          // %50 chance to enable flatmap for this map column.
+          if (enableFlatMap && folly::Random::oneIn(2, rng)) {
+            supportedMapColumnIndices.push_back(static_cast<uint32_t>(i));
+          }
+        }
+      }
+    }
+
+    if (!supportedMapColumnIndices.empty()) {
+      auto config = std::make_shared<dwrf::Config>();
+      config->set(dwrf::Config::FLATTEN_MAP, true);
+      config->set<const std::vector<uint32_t>>(
+          dwrf::Config::MAP_FLAT_COLS, supportedMapColumnIndices);
+
+      // Convert to serdeParameters
+      auto configParams = config->toSerdeParams();
+      serdeParameters.insert(configParams.begin(), configParams.end());
+    } else {
+      LOG(INFO)
+          << "No map columns support flatmap, skipping flatmap configuration";
+    }
+  }
+
   if (bucketColumnIndices.empty()) {
-    builder.tableWrite(outputDir, setup.fileFormat);
+    if (!serdeParameters.empty()) {
+      builder.tableWrite(
+          outputDir,
+          /*partitionBy=*/{},
+          /*bucketCount=*/0,
+          /*bucketedBy=*/{},
+          /*sortBy=*/{},
+          setup.fileFormat,
+          /*aggregates=*/{},
+          /*connectorId=*/PlanBuilder::kHiveDefaultConnectorId,
+          serdeParameters);
+    } else {
+      builder.tableWrite(outputDir, setup.fileFormat);
+    }
   } else {
     std::vector<std::string> bucketColumnNames;
     bucketColumnNames.reserve(bucketColumnIndices.size());
     for (auto i : bucketColumnIndices) {
       bucketColumnNames.push_back(setup.schema->nameOf(i));
     }
-    builder.tableWrite(
-        outputDir,
-        /*partitionBy=*/{},
-        setup.bucketCount(),
-        bucketColumnNames,
-        setup.fileFormat);
+    if (!serdeParameters.empty()) {
+      builder.tableWrite(
+          outputDir,
+          /*partitionBy=*/{},
+          setup.bucketCount(),
+          bucketColumnNames,
+          /*sortBy=*/{},
+          setup.fileFormat,
+          /*aggregates=*/{},
+          /*connectorId=*/PlanBuilder::kHiveDefaultConnectorId,
+          serdeParameters);
+    } else {
+      builder.tableWrite(
+          outputDir,
+          /*partitionBy=*/{},
+          setup.bucketCount(),
+          bucketColumnNames,
+          /*sortBy=*/{},
+          setup.fileFormat);
+    }
   }
   CursorParameters params;
   params.serialExecution = true;
@@ -865,8 +990,8 @@ void TableEvolutionFuzzer::createWriteTasks(
     }
     auto actualDir = fmt::format("{}/actual_{}", tableOutputRootDirPath, i);
     VELOX_CHECK(std::filesystem::create_directory(actualDir));
-    writeTasks[2 * i] =
-        makeWriteTask(testSetups[i], data, actualDir, bucketColumnIndices);
+    writeTasks[2 * i] = makeWriteTask(
+        testSetups[i], data, actualDir, bucketColumnIndices, rng_, false);
 
     if (i == config_.evolutionCount - 1) {
       finalExpectedData = std::move(data);
@@ -878,7 +1003,12 @@ void TableEvolutionFuzzer::createWriteTasks(
         liftToType(data, testSetups.back().schema));
 
     writeTasks[2 * i + 1] = makeWriteTask(
-        testSetups.back(), expectedData, expectedDir, bucketColumnIndices);
+        testSetups.back(),
+        expectedData,
+        expectedDir,
+        bucketColumnIndices,
+        rng_,
+        false);
   }
 }
 

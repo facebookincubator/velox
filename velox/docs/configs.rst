@@ -914,6 +914,12 @@ These semantics are similar to the `Apache Hadoop-Aws module <https://hadoop.apa
      - string
      -
      - The GCS maximum time allowed to retry transient errors.
+   * - hive.gcs.auth.access-token-provider
+     - string
+     -
+     - A custom OAuth credential provider, if specified, will be used to create the client in favor of other
+       authentication mechanisms.
+       The provider must be registered using "registerGcsOAuthCredentialsProvider" before it can be used.
 
 ``Azure Blob Storage Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -927,12 +933,15 @@ These semantics are similar to the `Apache Hadoop-Aws module <https://hadoop.apa
      - Description
    * - fs.azure.account.auth.type.<storage-account>.dfs.core.windows.net
      - string
-     - SharedKey
+     -
      - Specifies the authentication mechanism to use for Azure storage accounts.
        **Allowed values:** "SharedKey", "OAuth", "SAS".
        "SharedKey": Uses the storage account name and key for authentication.
        "OAuth": Utilizes OAuth tokens for secure authentication.
        "SAS": Employs Shared Access Signatures for granular access control.
+       To create Azure clients with the configured authentication type, the caller must
+       register the corresponding Azure client provider from the configuration by calling
+       `registerAzureClientProvider`.
    * - fs.azure.account.key.<storage-account>.dfs.core.windows.net
      - string
      -
@@ -987,6 +996,14 @@ Spark-specific Configuration
      - Type
      - Default Value
      - Description
+   * - spark.ansi_enabled
+     - bool
+     - false
+     - If true, Spark function's behavior is ANSI-compliant, e.g. throws runtime exception instead
+       of returning null on invalid inputs.
+       Note: This feature is still under development to achieve full ANSI compliance. Users can
+       refer to the Spark function documentation to verify the current support status of a specific
+       function.
    * - spark.legacy_size_of_null
      - bool
      - true
