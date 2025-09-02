@@ -20,7 +20,10 @@
 #include <velox/core/ITypedExpr.h>
 #include <velox/core/PlanFragment.h>
 #include <velox/core/PlanNode.h>
-#include "velox/connectors/hive/HiveDataSink.h"
+#include "velox/connectors/Connector.h"
+#include "velox/connectors/ConnectorNames.h"
+#include "velox/connectors/RegisterConnectorFactories.h"
+#include "velox/dwio/common/Options.h"
 #include "velox/parse/ExpressionsParser.h"
 #include "velox/parse/IExpr.h"
 #include "velox/parse/PlanNodeIdGenerator.h"
@@ -95,7 +98,9 @@ class PlanBuilder {
   explicit PlanBuilder(
       std::shared_ptr<core::PlanNodeIdGenerator> planNodeIdGenerator,
       memory::MemoryPool* pool = nullptr)
-      : planNodeIdGenerator_{std::move(planNodeIdGenerator)}, pool_{pool} {}
+      : planNodeIdGenerator_{std::move(planNodeIdGenerator)}, pool_{pool} {
+    connector::registerConnectorFactories();
+  }
 
   /// Constructor with no required parameters suitable for creating
   /// straight-line (e.g. no joins) query plans.
@@ -111,9 +116,13 @@ class PlanBuilder {
       memory::MemoryPool* pool = nullptr)
       : planNode_(std::move(initialPlanNode)),
         planNodeIdGenerator_{std::move(planNodeIdGenerator)},
-        pool_{pool} {}
+        pool_{pool} {
+    connector::registerConnectorFactories();
+  }
 
-  virtual ~PlanBuilder() = default;
+  virtual ~PlanBuilder() {
+    connector::unregisterConnectorFactories();
+  }
 
   static constexpr const std::string_view kHiveDefaultConnectorId{"test-hive"};
   static constexpr const std::string_view kTpchDefaultConnectorId{"test-tpch"};
@@ -146,7 +155,9 @@ class PlanBuilder {
       const std::vector<std::string>& subfieldFilters = {},
       const std::string& remainingFilter = "",
       const RowTypePtr& dataColumns = nullptr,
-      const connector::ColumnHandleMap& assignments = {});
+      const connector::ColumnHandleMap& assignments = {},
+      const std::string& connectorName = connector::kHiveConnectorName,
+      const std::string& connectorId = std::string(kHiveDefaultConnectorId));
 
   /// Add a TableScanNode to scan a Hive table.
   ///
@@ -176,7 +187,9 @@ class PlanBuilder {
       const std::vector<std::string>& subfieldFilters = {},
       const std::string& remainingFilter = "",
       const RowTypePtr& dataColumns = nullptr,
-      const connector::ColumnHandleMap& assignments = {});
+      const connector::ColumnHandleMap& assignments = {},
+      const std::string& connectorName = connector::kHiveConnectorName,
+      const std::string& connectorId = std::string(kHiveDefaultConnectorId));
 
   /// Add a TableScanNode to scan a Hive table with direct SubfieldFilters.
   ///
@@ -189,7 +202,9 @@ class PlanBuilder {
       const RowTypePtr& outputType,
       const PushdownConfig& pushdownConfig,
       const RowTypePtr& dataColumns = nullptr,
-      const connector::ColumnHandleMap& assignments = {});
+      const connector::ColumnHandleMap& assignments = {},
+      const std::string& connectorName = connector::kHiveConnectorName,
+      const std::string& connectorId = std::string(kHiveDefaultConnectorId));
 
   /// Add a TableScanNode to scan a TPC-H table.
   ///
@@ -229,7 +244,15 @@ class PlanBuilder {
   /// builder arguments will be ignored.
   class TableScanBuilder {
    public:
-    TableScanBuilder(PlanBuilder& builder) : planBuilder_(builder) {}
+    TableScanBuilder(
+        PlanBuilder& builder,
+        const std::string& connectorName = connector::kHiveConnectorName,
+        const std::string& connectorId = std::string(kHiveDefaultConnectorId))
+        : planBuilder_(builder),
+          connectorName_(connectorName),
+          connectorId_(connectorId) {
+      connectorFactory_ = connector::getConnectorFactory(connectorName);
+    }
 
     /// @param tableName The name of the table to scan.
     TableScanBuilder& tableName(std::string tableName) {
@@ -337,7 +360,9 @@ class PlanBuilder {
 
     PlanBuilder& planBuilder_;
     std::string tableName_{"hive_table"};
-    std::string connectorId_{kHiveDefaultConnectorId};
+    std::string connectorName_;
+    std::string connectorId_;
+    std::shared_ptr<connector::ConnectorFactory> connectorFactory_;
     RowTypePtr outputType_;
     core::ExprPtr remainingFilter_;
     RowTypePtr dataColumns_;
@@ -449,7 +474,15 @@ class PlanBuilder {
   /// Uses the Hive connector by default.
   class TableWriterBuilder {
    public:
-    explicit TableWriterBuilder(PlanBuilder& builder) : planBuilder_(builder) {}
+    explicit TableWriterBuilder(
+        PlanBuilder& builder,
+        const std::string& connectorName = connector::kHiveConnectorName,
+        const std::string& connectorId = std::string(kHiveDefaultConnectorId))
+        : planBuilder_(builder),
+          connectorName_(connectorName),
+          connectorId_(connectorId) {
+      connectorFactory_ = connector::getConnectorFactory(connectorName);
+    }
 
     /// @param outputType The schema that will be written to the output file. It
     /// may reference a subset or change the order of columns from the input
@@ -513,11 +546,15 @@ class PlanBuilder {
       return *this;
     }
 
-    /// @param sortBy Specifies the sort by columns.
-    TableWriterBuilder& sortBy(
-        std::vector<std::shared_ptr<const connector::hive::HiveSortingColumn>>
-            sortBy) {
-      sortBy_ = std::move(sortBy);
+    TableWriterBuilder& sortColumns(
+        const std::vector<std::string>& sortColumns) {
+      sortColumns_ = sortColumns;
+      return *this;
+    }
+
+    TableWriterBuilder& sortOrders(
+        const std::vector<core::SortOrder>& sortOrders) {
+      sortOrders_ = sortOrders;
       return *this;
     }
 
@@ -579,15 +616,17 @@ class PlanBuilder {
     RowTypePtr outputType_;
     std::string outputDirectoryPath_;
     std::string outputFileName_;
-    std::string connectorId_{kHiveDefaultConnectorId};
+    std::string connectorName_;
+    std::string connectorId_;
+    std::shared_ptr<connector::ConnectorFactory> connectorFactory_;
     std::shared_ptr<core::InsertTableHandle> insertHandle_;
 
     std::vector<std::string> partitionBy_;
     int32_t bucketCount_{0};
     std::vector<std::string> bucketedBy_;
     std::vector<std::string> aggregates_;
-    std::vector<std::shared_ptr<const connector::hive::HiveSortingColumn>>
-        sortBy_;
+    std::vector<std::string> sortColumns_;
+    std::vector<core::SortOrder> sortOrders_;
 
     std::unordered_map<std::string, std::string> serdeParameters_;
     std::shared_ptr<dwio::common::WriterOptions> options_;
@@ -822,8 +861,8 @@ class PlanBuilder {
       const std::vector<std::string>& partitionBy,
       int32_t bucketCount,
       const std::vector<std::string>& bucketedBy,
-      const std::vector<
-          std::shared_ptr<const connector::hive::HiveSortingColumn>>& sortBy,
+      const std::vector<std::string>& sortColumns,
+      const std::vector<core::SortOrder>& sortOrders,
       const dwio::common::FileFormat fileFormat =
           dwio::common::FileFormat::DWRF,
       const std::vector<std::string>& aggregates = {},
@@ -1182,18 +1221,14 @@ class PlanBuilder {
   /// current plan node).
   PlanBuilder& localPartition(const std::vector<std::string>& keys);
 
-  /// A convenience method to add a LocalPartitionNode with hive partition
+  /// A convenience method to add a LocalPartitionNode with connector partition
   /// function.
   PlanBuilder& localPartition(
       int numBuckets,
       const std::vector<column_index_t>& channels,
-      const std::vector<VectorPtr>& constValues);
-
-  /// A convenience method to add a LocalPartitionNode with a single source (the
-  /// current plan node) and hive bucket property.
-  PlanBuilder& localPartitionByBucket(
-      const std::shared_ptr<connector::hive::HiveBucketProperty>&
-          bucketProperty);
+      const std::vector<VectorPtr>& constValues,
+      const std::string& connectorName = connector::kHiveConnectorName,
+      const std::string& connectorId = std::string(kHiveDefaultConnectorId));
 
   /// Add a LocalPartitionNode to partition the input using batch-level
   /// round-robin. Number of partitions is determined at runtime based on
