@@ -835,6 +835,15 @@ void addPrecomputedColumns(
           stream,
           cudf::get_current_device_resource_ref());
       input_table_columns.emplace_back(std::move(newColumn));
+    } else if (ins_name.rfind("fill", 0) == 0) {
+      auto scalarIndex =
+          std::stoi(ins_name.substr(5)); // "fill " is 5 characters
+      auto newColumn = cudf::make_column_from_scalar(
+          *static_cast<cudf::string_scalar*>(scalars[scalarIndex].get()),
+          input_table_columns[dependent_column_index]->size(),
+          stream,
+          cudf::get_current_device_resource_ref());
+      input_table_columns.emplace_back(std::move(newColumn));
     } else if (ins_name == "nested_column") {
       auto newColumn = std::make_unique<cudf::column>(
           input_table_columns[dependent_column_index]->view().child(

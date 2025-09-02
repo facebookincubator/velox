@@ -307,29 +307,6 @@ core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
     subfieldFiltersMap_.clear();
   }
 
-  // Create AND tree of subfieldExprs as combined_subfield_filter.
-  // replace every 2 subfieldExpr with a single AND node, until we have a single
-  // node.
-  while (subfieldExprs.size() > 1) {
-    std::vector<core::TypedExprPtr> combinedSubfieldExprs;
-    combinedSubfieldExprs.reserve(subfieldExprs.size() / 2 + 1);
-    for (size_t i = 0; i < subfieldExprs.size(); i += 2) {
-      if (i + 1 < subfieldExprs.size()) {
-        auto andCallExpr = std::make_shared<const core::CallTypedExpr>(
-            BOOLEAN(),
-            std::vector<core::TypedExprPtr>{
-                subfieldExprs[i], subfieldExprs[i + 1]},
-            "and");
-        combinedSubfieldExprs.push_back(andCallExpr);
-      } else {
-        combinedSubfieldExprs.push_back(subfieldExprs[i]);
-      }
-    }
-    subfieldExprs = std::move(combinedSubfieldExprs);
-  }
-  core::TypedExprPtr subfieldFilterExpr =
-      subfieldExprs.empty() ? nullptr : subfieldExprs[0];
-
   core::TypedExprPtr remainingFilterExpr;
   if (remainingFilter_) {
     remainingFilterExpr = core::Expressions::inferTypes(
