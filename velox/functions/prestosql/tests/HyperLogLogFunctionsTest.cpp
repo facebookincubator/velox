@@ -16,6 +16,7 @@
 #include "velox/common/hyperloglog/SparseHll.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/functions/prestosql/types/HyperLogLogType.h"
+#include "velox/functions/prestosql/types/P4HyperLogLogType.h"
 #define XXH_INLINE_ALL
 #include <xxhash.h>
 
@@ -55,19 +56,22 @@ class HyperLogLogFunctionsTest : public functions::test::FunctionBaseTest {
 
 TEST_F(HyperLogLogFunctionsTest, cardinalitySignatures) {
   auto signatures = getSignatureStrings("cardinality");
-  ASSERT_LE(3, signatures.size());
+  ASSERT_LE(4, signatures.size());
 
   ASSERT_EQ(1, signatures.count("(map(__user_T1,__user_T2)) -> bigint"));
   ASSERT_EQ(1, signatures.count("(array(__user_T1)) -> bigint"));
   ASSERT_EQ(1, signatures.count("(hyperloglog) -> bigint"));
+  ASSERT_EQ(1, signatures.count("(p4hyperloglog) -> bigint"));
 }
 
 TEST_F(HyperLogLogFunctionsTest, emptyApproxSetSignatures) {
   auto signatures = getSignatureStrings("empty_approx_set");
-  ASSERT_EQ(2, signatures.size());
+  ASSERT_EQ(4, signatures.size());
 
   ASSERT_EQ(1, signatures.count("(constant double) -> hyperloglog"));
+  ASSERT_EQ(1, signatures.count("(constant double) -> p4hyperloglog"));
   ASSERT_EQ(1, signatures.count("() -> hyperloglog"));
+  ASSERT_EQ(1, signatures.count("() -> p4hyperloglog"));
 }
 
 TEST_F(HyperLogLogFunctionsTest, cardinalitySparse) {
@@ -108,6 +112,21 @@ TEST_F(HyperLogLogFunctionsTest, emptyApproxSet) {
       0,
       evaluateOnce<int64_t>(
           "cardinality(empty_approx_set(0.1))", makeRowVector(ROW({}), 1)));
+}
+
+TEST_F(HyperLogLogFunctionsTest, p4HyperLogLogCardinality) {
+  const auto cardinality = [&](const std::optional<std::string>& input) {
+    return evaluateOnce<int64_t>("cardinality(c0)", P4HYPERLOGLOG(), input);
+  };
+
+  // Test with dense HLL (P4HyperLogLog should work with dense format)
+  DenseHll denseHll{12, &allocator_};
+  for (int i = 0; i < 10'000; i++) {
+    denseHll.insertHash(hashOne(i));
+  }
+
+  auto serialized = serialize(denseHll);
+  EXPECT_EQ(denseHll.cardinality(), cardinality(serialized));
 }
 
 } // namespace
