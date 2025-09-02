@@ -527,14 +527,6 @@ class ConnectorQueryCtx {
     selectiveNimbleReaderEnabled_ = value;
   }
 
-  bool rowSizeTrackingEnabled() const {
-    return rowSizeTrackingEnabled_;
-  }
-
-  void setRowSizeTrackingEnabled(bool value) {
-    rowSizeTrackingEnabled_ = value;
-  }
-
   std::shared_ptr<filesystems::TokenProvider> fsTokenProvider() const {
     return fsTokenProvider_;
   }
@@ -557,7 +549,6 @@ class ConnectorQueryCtx {
   const folly::CancellationToken cancellationToken_;
   const std::shared_ptr<filesystems::TokenProvider> fsTokenProvider_;
   bool selectiveNimbleReaderEnabled_{false};
-  bool rowSizeTrackingEnabled_{true};
 };
 
 class ConnectorMetadata;
