@@ -67,7 +67,7 @@ std::optional<std::string> toTextStr<Timestamp>(Timestamp val) {
 TextWriter::TextWriter(
     RowTypePtr schema,
     std::unique_ptr<dwio::common::FileSink> sink,
-    const std::shared_ptr<text::WriterOptions>& options,
+    const std::shared_ptr<WriterOptions>& options,
     const SerDeOptions& serDeOptions)
     : schema_(std::move(schema)),
       bufferedWriterSink_(
@@ -78,7 +78,8 @@ TextWriter::TextWriter(
                       "{}.text_writer_node.{}",
                       options->memoryPool->name(),
                       folly::to<std::string>(folly::Random::rand64()))),
-              options->defaultFlushCount)),
+              options->defaultFlushCount,
+              options)),
       headerLineCount_(options->headerLineCount),
       serDeOptions_(serDeOptions) {
   VELOX_CHECK_LE(headerLineCount_, 1, "Header line count must be <= 1");
@@ -135,10 +136,10 @@ void TextWriter::write(const VectorPtr& data) {
         bufferedWriterSink_->write((char)serDeOptions_.separators[0]);
       }
 
-      std::string escapedcolName =
+      std::string escapedColName =
           addEscapeChar(std::string(schema_->nameOf(col)), 0);
       bufferedWriterSink_->write(
-          escapedcolName.data(), escapedcolName.length());
+          escapedColName.data(), escapedColName.length());
     }
 
     bufferedWriterSink_->write((char)serDeOptions_.newLine);

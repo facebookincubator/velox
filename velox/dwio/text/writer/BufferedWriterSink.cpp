@@ -15,17 +15,28 @@
  */
 
 #include "velox/dwio/text/writer/BufferedWriterSink.h"
+#include "velox/dwio/common/BufferUtil.h"
+#include "velox/dwio/common/Options.h"
 
 namespace facebook::velox::text {
 
 BufferedWriterSink::BufferedWriterSink(
     std::unique_ptr<dwio::common::FileSink> sink,
     std::shared_ptr<memory::MemoryPool> pool,
-    uint64_t flushBufferSize)
+    uint64_t flushBufferSize,
+    const std::shared_ptr<dwio::common::WriterOptions>& options)
     : sink_(std::move(sink)),
       pool_(std::move(pool)),
       flushBufferSize_(flushBufferSize),
-      buf_(std::make_unique<dwio::common::DataBuffer<char>>(*pool_)) {
+      buf_(std::make_unique<dwio::common::DataBuffer<char>>(*pool_)),
+      options_(options),
+      compressor_(nullptr) {
+  if (options_ && options_->compressionKind.has_value()) {
+    compressor_ = dwio::common::compression::createCompressor(
+        options_->compressionKind.value(),
+        getTextCompressionOptions(options_->compressionKind.value()));
+  }
+
   reserveBuffer();
 }
 
@@ -41,7 +52,7 @@ void BufferedWriterSink::write(char value) {
 }
 
 void BufferedWriterSink::write(const char* data, uint64_t size) {
-  // TODO Add logic for when size is larger than flushCount_
+  // TODO: Handle case when size is greater than flushBufferSize_
   VELOX_CHECK_GE(
       flushBufferSize_,
       size,
@@ -58,6 +69,20 @@ void BufferedWriterSink::flush() {
     return;
   }
 
+  if (!options_ || !options_->compressionKind.has_value() ||
+      options_->compressionKind.value() == common::CompressionKind_NONE) {
+    sink_->write(std::move(*buf_));
+    reserveBuffer();
+    return;
+  }
+
+  dwio::common::ensureCapacity<char>(
+      compressionBufferPtr_, buf_->size(), pool_.get(), false, false);
+  char* dest = compressionBufferPtr_->asMutable<char>();
+  const auto compressedSize =
+      compressor_->compress(buf_->data(), dest, buf_->size());
+  buf_->clear();
+  buf_->append(buf_->size(), dest, compressedSize);
   sink_->write(std::move(*buf_));
   reserveBuffer();
 }
