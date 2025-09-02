@@ -15,8 +15,6 @@
  */
 
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/connectors/hive/HiveConnector.h"
-#include "velox/connectors/hive/TableHandle.h"
 #include "velox/connectors/tpcds/TpcdsConnector.h"
 #include "velox/connectors/tpch/TpchConnector.h"
 #include "velox/core/PartitionFunction.h"
@@ -37,7 +35,6 @@
 
 using namespace facebook::velox;
 using namespace facebook::velox::connector;
-using namespace facebook::velox::connector::hive;
 
 namespace facebook::velox::exec::test {
 namespace {
@@ -51,23 +48,6 @@ core::TypedExprPtr parseExpr(
   return core::Expressions::inferTypes(untyped, rowType, pool);
 }
 
-std::shared_ptr<HiveBucketProperty> buildHiveBucketProperty(
-    const RowTypePtr rowType,
-    int32_t bucketCount,
-    const std::vector<std::string>& bucketColumns,
-    const std::vector<std::shared_ptr<const HiveSortingColumn>>& sortBy) {
-  std::vector<TypePtr> bucketTypes;
-  bucketTypes.reserve(bucketColumns.size());
-  for (const auto& bucketColumn : bucketColumns) {
-    bucketTypes.push_back(rowType->childAt(rowType->getChildIdx(bucketColumn)));
-  }
-  return std::make_shared<HiveBucketProperty>(
-      HiveBucketProperty::Kind::kHiveCompatible,
-      bucketCount,
-      bucketColumns,
-      bucketTypes,
-      sortBy);
-}
 } // namespace
 
 PlanBuilder& PlanBuilder::tableScan(
@@ -75,8 +55,11 @@ PlanBuilder& PlanBuilder::tableScan(
     const std::vector<std::string>& subfieldFilters,
     const std::string& remainingFilter,
     const RowTypePtr& dataColumns,
-    const connector::ColumnHandleMap& assignments) {
-  return TableScanBuilder(*this)
+    const connector::ColumnHandleMap& assignments,
+    const std::string& connectorName,
+    const std::string& connectorId) {
+  return TableScanBuilder(*this, connectorName)
+      .connectorId(connectorId)
       .filtersAsNode(filtersAsNode_ ? planNodeIdGenerator_ : nullptr)
       .outputType(outputType)
       .assignments(assignments)
@@ -93,14 +76,16 @@ PlanBuilder& PlanBuilder::tableScan(
     const std::vector<std::string>& subfieldFilters,
     const std::string& remainingFilter,
     const RowTypePtr& dataColumns,
-    const connector::ColumnHandleMap& assignments) {
-  return TableScanBuilder(*this)
+    const connector::ColumnHandleMap& assignments,
+    const std::string& connectorName,
+    const std::string& connectorId) {
+  return TableScanBuilder(*this, connectorName)
+      .connectorId(connectorId)
       .filtersAsNode(filtersAsNode_ ? planNodeIdGenerator_ : nullptr)
       .tableName(tableName)
       .outputType(outputType)
       .columnAliases(columnAliases)
       .dataColumns(dataColumns)
-
       .subfieldFilters(subfieldFilters)
       .remainingFilter(remainingFilter)
       .assignments(assignments)
@@ -111,8 +96,11 @@ PlanBuilder& PlanBuilder::tableScanWithPushDown(
     const RowTypePtr& outputType,
     const PushdownConfig& pushdownConfig,
     const RowTypePtr& dataColumns,
-    const connector::ColumnHandleMap& assignments) {
-  return TableScanBuilder(*this)
+    const connector::ColumnHandleMap& assignments,
+    const std::string& connectorName,
+    const std::string& connectorId) {
+  return TableScanBuilder(*this, connectorName)
+      .connectorId(connectorId)
       .filtersAsNode(filtersAsNode_ ? planNodeIdGenerator_ : nullptr)
       .outputType(outputType)
       .assignments(assignments)
@@ -260,29 +248,28 @@ void addConjunct(
 
 core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
   VELOX_CHECK_NOT_NULL(outputType_, "outputType must be specified");
+  VELOX_CHECK_NOT_NULL(
+      connectorFactory_, "connectorFactory_ must be specified");
   std::unordered_map<std::string, core::TypedExprPtr> typedMapping;
+  std::vector<std::shared_ptr<const connector::ColumnHandle>> columnHandles;
   bool hasAssignments = !(assignments_.empty());
   for (uint32_t i = 0; i < outputType_->size(); ++i) {
     const auto& name = outputType_->nameOf(i);
     const auto& type = outputType_->childAt(i);
 
-    std::string hiveColumnName = name;
+    std::string columnName = name;
     auto it = columnAliases_.find(name);
     if (it != columnAliases_.end()) {
-      hiveColumnName = it->second;
+      columnName = it->second;
       typedMapping.emplace(
-          name,
-          std::make_shared<core::FieldAccessTypedExpr>(type, hiveColumnName));
+          name, std::make_shared<core::FieldAccessTypedExpr>(type, columnName));
     }
 
     if (!hasAssignments) {
-      assignments_.insert(
-          {name,
-           std::make_shared<HiveColumnHandle>(
-               hiveColumnName,
-               HiveColumnHandle::ColumnType::kRegular,
-               type,
-               type)});
+      auto columnHandle =
+          connectorFactory_->makeColumnHandle(connectorId_, columnName, type);
+      columnHandles.push_back(columnHandle);
+      assignments_.insert({name, columnHandle});
     }
   }
 
@@ -313,13 +300,29 @@ core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
   }
 
   if (!tableHandle_) {
-    tableHandle_ = std::make_shared<HiveTableHandle>(
-        connectorId_,
-        tableName_,
-        true,
-        std::move(subfieldFiltersMap_),
-        remainingFilterExpr,
-        dataColumns_);
+    // Build connector-specific table handle through the ObjectFactory.
+    folly::dynamic options = folly::dynamic::object();
+    options["filterPushdownEnabled"] = true;
+
+    // Serialize subfield filters
+    if (!subfieldFiltersMap_.empty()) {
+      folly::dynamic sfs = folly::dynamic::object();
+      for (const auto& entry : subfieldFiltersMap_) {
+        const auto& subfield = entry.first;
+        const auto& filter = entry.second;
+        sfs[subfield.toString()] = velox::ISerializable::serialize(*filter);
+      }
+      options["subfieldFilters"] = std::move(sfs);
+    }
+
+    // Serialize remaining filters
+    if (remainingFilterExpr) {
+      options["remainingFilter"] =
+          velox::ISerializable::serialize(*remainingFilterExpr);
+    }
+
+    tableHandle_ = connectorFactory_->makeTableHandle(
+        connectorId_, tableName_, columnHandles, options);
   }
   core::PlanNodePtr result = std::make_shared<core::TableScanNode>(
       id, outputType_, tableHandle_, assignments_);
@@ -340,51 +343,69 @@ core::PlanNodePtr PlanBuilder::TableWriterBuilder::build(core::PlanNodeId id) {
   // upstream operator.
   auto outputType = outputType_ ? outputType_ : upstreamNode->outputType();
 
-  // If insertHandle_ is not specified, build a HiveInsertTableHandle along with
-  // columnHandles, bucketProperty and locationHandle.
+  // If insertHandle_ is not specified, build a ConnectorInsertTableHandle along
+  // with columnHandles, bucketProperty and locationHandle.
   if (!insertHandle_) {
     // Create column handles.
-    std::vector<std::shared_ptr<const connector::hive::HiveColumnHandle>>
-        columnHandles;
+    std::vector<std::shared_ptr<const connector::ColumnHandle>> columnHandles;
     for (auto i = 0; i < outputType->size(); ++i) {
       const auto column = outputType->nameOf(i);
+      folly::dynamic options = folly::dynamic::object();
+
       const bool isPartitionKey =
           std::find(partitionBy_.begin(), partitionBy_.end(), column) !=
           partitionBy_.end();
-      columnHandles.push_back(
-          std::make_shared<connector::hive::HiveColumnHandle>(
-              column,
-              isPartitionKey
-                  ? connector::hive::HiveColumnHandle::ColumnType::kPartitionKey
-                  : connector::hive::HiveColumnHandle::ColumnType::kRegular,
-              outputType->childAt(i),
-              outputType->childAt(i)));
+      options["columnType"] = isPartitionKey ? "partitionkey" : "regular";
+      auto columnHandle = connectorFactory_->makeColumnHandle(
+          connectorId_, column, outputType->childAt(i), options);
+      columnHandles.push_back(columnHandle);
     }
 
-    auto locationHandle = std::make_shared<connector::hive::LocationHandle>(
-        outputDirectoryPath_,
-        outputDirectoryPath_,
-        connector::hive::LocationHandle::TableType::kNew,
-        outputFileName_);
+    // 2) Create a connector-specific LocationHandle (e.g. HiveLocationHandle).
+    folly::dynamic locationHandleOptions = folly::dynamic::object();
+    locationHandleOptions["targetPath"] = outputDirectoryPath_;
+    locationHandleOptions["writePath"] = outputDirectoryPath_;
+    locationHandleOptions["targetFileName"] = outputFileName_;
+    auto locationHandle = connectorFactory_->makeLocationHandle(
+        connectorId_,
+        connector::ConnectorLocationHandle::TableType::kNew,
+        locationHandleOptions);
 
-    std::shared_ptr<HiveBucketProperty> bucketProperty;
+    folly::dynamic insertTableOptions = folly::dynamic::object();
+    insertTableOptions["storageFormat"] = static_cast<int>(fileFormat_);
+    insertTableOptions["compressionKind"] = static_cast<int>(compressionKind_);
+    if (!serdeParameters_.empty()) {
+      insertTableOptions["serdeParameters"] =
+          ISerializable::serialize(serdeParameters_);
+    }
+    if (options_) {
+      insertTableOptions["writerOptions"] = options_->serialize();
+    }
+    insertTableOptions["ensureFiles"] = ensureFiles_;
+
     if (bucketCount_ != 0) {
-      bucketProperty = buildHiveBucketProperty(
-          outputType, bucketCount_, bucketedBy_, sortBy_);
+      folly::dynamic bucketProperty = folly::dynamic::object();
+      std::vector<TypePtr> bucketTypes;
+      bucketTypes.reserve(bucketedBy_.size());
+      for (const auto& bucketColumn : bucketedBy_) {
+        bucketTypes.push_back(
+            outputType->childAt(outputType->getChildIdx(bucketColumn)));
+      }
+      bucketProperty["kind"] = 0l;
+      bucketProperty["bucketCount"] = bucketCount_;
+      bucketProperty["bucketedBy"] = ISerializable::serialize(bucketedBy_);
+      bucketProperty["bucketedTypes"] = ISerializable::serialize(bucketTypes);
+      bucketProperty["sortColumns"] = ISerializable::serialize(sortColumns_);
+      bucketProperty["sortOrders"] = ISerializable::serialize(sortOrders_);
+
+      insertTableOptions["bucketProperty"] = std::move(bucketProperty);
     }
 
-    auto hiveHandle = std::make_shared<connector::hive::HiveInsertTableHandle>(
-        columnHandles,
-        locationHandle,
-        fileFormat_,
-        bucketProperty,
-        compressionKind_,
-        serdeParameters_,
-        options_,
-        ensureFiles_);
+    auto connectorInsertTableHandle = connectorFactory_->makeInsertTableHandle(
+        connectorId_, columnHandles, locationHandle, insertTableOptions);
 
-    insertHandle_ =
-        std::make_shared<core::InsertTableHandle>(connectorId_, hiveHandle);
+    insertHandle_ = std::make_shared<core::InsertTableHandle>(
+        connectorId_, connectorInsertTableHandle);
   }
 
   std::optional<core::ColumnStatsSpec> columnStatsSpec;
@@ -709,7 +730,8 @@ PlanBuilder& PlanBuilder::tableWrite(
     const std::vector<std::string>& partitionBy,
     int32_t bucketCount,
     const std::vector<std::string>& bucketedBy,
-    const std::vector<std::shared_ptr<const HiveSortingColumn>>& sortBy,
+    const std::vector<std::string>& sortColumns,
+    const std::vector<core::SortOrder>& sortOrders,
     const dwio::common::FileFormat fileFormat,
     const std::vector<std::string>& aggregates,
     const std::string_view& connectorId,
@@ -727,7 +749,8 @@ PlanBuilder& PlanBuilder::tableWrite(
       .partitionBy(partitionBy)
       .bucketCount(bucketCount)
       .bucketedBy(bucketedBy)
-      .sortBy(sortBy)
+      .sortColumns(sortColumns)
+      .sortOrders(sortOrders)
       .fileFormat(fileFormat)
       .aggregates(aggregates)
       .connectorId(connectorId)
@@ -1299,6 +1322,35 @@ core::PartitionFunctionSpecPtr createPartitionFunctionSpec(
   }
 }
 
+core::PartitionFunctionSpecPtr createConnectorPartitionFunctionSpec(
+    int numBuckets,
+    const std::vector<column_index_t>& channels,
+    const std::vector<VectorPtr>& constValues,
+    const std::string& connectorName = connector::kHiveConnectorName,
+    const std::string& connectorId =
+        std::string(PlanBuilder::kHiveDefaultConnectorId)) {
+  folly::dynamic opts = folly::dynamic::object();
+  opts["numBuckets"] = numBuckets;
+  opts["keyChannels"] = ISerializable::serialize(channels);
+
+  if (!constValues.empty()) {
+    std::vector<velox::core::ConstantTypedExpr> constExprs;
+    constExprs.reserve(constValues.size());
+    for (const auto& v : constValues) {
+      VELOX_CHECK_NOT_NULL(v);
+      constExprs.emplace_back(v); // wrap VectorPtr as ConstantTypedExpr
+    }
+    opts["constants"] = velox::ISerializable::serialize(constExprs);
+  }
+
+  // Ask the connector factory to build the spec.
+  auto connectorFactory = connector::getConnectorFactory(connectorName);
+  auto connectorPartitionSpec =
+      connectorFactory->makePartitionFunctionSpec(connectorId, opts);
+
+  return connectorPartitionSpec;
+}
+
 RowTypePtr concat(const RowTypePtr& a, const RowTypePtr& b) {
   std::vector<std::string> names = a->names();
   std::vector<TypePtr> types = a->children();
@@ -1464,15 +1516,16 @@ PlanBuilder& PlanBuilder::scaleWriterlocalPartition(
   for (const auto& key : keys) {
     keyIndices.push_back(planNode_->outputType()->getChildIdx(key));
   }
-  auto hivePartitionFunctionFactory =
-      std::make_shared<HivePartitionFunctionSpec>(
-          1009, keyIndices, std::vector<VectorPtr>{});
+
+  auto connectorPartitionSpec = createConnectorPartitionFunctionSpec(
+      1009, keyIndices, std::vector<VectorPtr>{});
   planNode_ = std::make_shared<core::LocalPartitionNode>(
       nextPlanNodeId(),
       core::LocalPartitionNode::Type::kRepartition,
       true,
-      hivePartitionFunctionFactory,
+      connectorPartitionSpec,
       std::vector{planNode_});
+
   VELOX_CHECK(!planNode_->supportsBarrier());
   return *this;
 }
@@ -1480,39 +1533,17 @@ PlanBuilder& PlanBuilder::scaleWriterlocalPartition(
 PlanBuilder& PlanBuilder::localPartition(
     int numBuckets,
     const std::vector<column_index_t>& bucketChannels,
-    const std::vector<VectorPtr>& constValues) {
-  auto hivePartitionFunctionFactory =
-      std::make_shared<HivePartitionFunctionSpec>(
-          numBuckets, bucketChannels, constValues);
-  planNode_ = std::make_shared<core::LocalPartitionNode>(
-      nextPlanNodeId(),
-      core::LocalPartitionNode::Type::kRepartition,
-      /*scaleWriter=*/false,
-      std::move(hivePartitionFunctionFactory),
-      std::vector<core::PlanNodePtr>{planNode_});
-  VELOX_CHECK(planNode_->supportsBarrier());
-  return *this;
-}
+    const std::vector<VectorPtr>& constValues,
+    const std::string& connectorName,
+    const std::string& connectorId) {
+  auto connectorPartitionSpec = createConnectorPartitionFunctionSpec(
+      numBuckets, bucketChannels, constValues, connectorName, connectorId);
 
-PlanBuilder& PlanBuilder::localPartitionByBucket(
-    const std::shared_ptr<connector::hive::HiveBucketProperty>&
-        bucketProperty) {
-  VELOX_CHECK_NOT_NULL(planNode_, "LocalPartition cannot be the source node");
-  std::vector<column_index_t> bucketChannels;
-  for (const auto& bucketColumn : bucketProperty->bucketedBy()) {
-    bucketChannels.push_back(
-        planNode_->outputType()->getChildIdx(bucketColumn));
-  }
-  auto hivePartitionFunctionFactory =
-      std::make_shared<HivePartitionFunctionSpec>(
-          bucketProperty->bucketCount(),
-          bucketChannels,
-          std::vector<VectorPtr>{});
   planNode_ = std::make_shared<core::LocalPartitionNode>(
       nextPlanNodeId(),
       core::LocalPartitionNode::Type::kRepartition,
       /*scaleWriter=*/false,
-      std::move(hivePartitionFunctionFactory),
+      std::move(connectorPartitionSpec),
       std::vector<core::PlanNodePtr>{planNode_});
   VELOX_CHECK(planNode_->supportsBarrier());
   return *this;

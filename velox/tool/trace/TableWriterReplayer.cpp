@@ -16,6 +16,7 @@
 
 #include <folly/executors/IOThreadPoolExecutor.h>
 
+#include "velox/connectors/hive/HiveDataSink.h"
 #include "velox/exec/TableWriter.h"
 #include "velox/exec/TraceUtil.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"

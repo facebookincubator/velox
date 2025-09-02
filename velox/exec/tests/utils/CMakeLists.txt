@@ -43,6 +43,8 @@ target_link_libraries(
   velox_vector_test_lib
   velox_vector_fuzzer
   velox_temp_path
+  velox_connector
+  velox_registered_connector_factories
   velox_cursor
   velox_core
   velox_exception
