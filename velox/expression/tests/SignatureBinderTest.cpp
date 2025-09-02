@@ -1123,7 +1123,7 @@ TEST(SignatureBinderTest, coercions) {
       /*allowCoercion*/ true);
 }
 
-TEST_F(SignatureBinderTest, homogeneous_rows) {
+TEST(SignatureBinderTest, homogeneous_rows) {
   // row(T, …) -> boolean - tests homogeneous row binding
   {
     auto signature = exec::FunctionSignatureBuilder()
