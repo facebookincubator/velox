@@ -130,6 +130,7 @@ TEST_F(BasicTableWriterTestBase, structAsMap) {
                       0,
                       {},
                       {},
+                      {},
                       dwio::common::FileFormat::DWRF,
                       {},
                       PlanBuilder::kHiveDefaultConnectorId,
@@ -2942,10 +2943,8 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, reclaimFromSortTableWriter) {
                   {"c0"},
                   4,
                   {"c1"},
-                  {
-                      std::make_shared<HiveSortingColumn>(
-                          "c2", core::SortOrder{false, false}),
-                  })
+                  {"c2"},
+                  {core::SortOrder{false, false}})
               .project({TableWriteTraits::rowCountColumnName()})
               .singleAggregation(
                   {},
@@ -3340,10 +3339,8 @@ DEBUG_ONLY_TEST_F(
               {"c0"},
               4,
               {"c1"},
-              {
-                  std::make_shared<HiveSortingColumn>(
-                      "c2", core::SortOrder{false, false}),
-              })
+              {"c2"},
+              {core::SortOrder{false, false}})
           .project({TableWriteTraits::rowCountColumnName()})
           .singleAggregation(
               {},

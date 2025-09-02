@@ -842,7 +842,8 @@ std::unique_ptr<TaskCursor> TableEvolutionFuzzer::makeWriteTask(
           /*partitionBy=*/{},
           /*bucketCount=*/0,
           /*bucketedBy=*/{},
-          /*sortBy=*/{},
+          /*sortColumns=*/{},
+          /*sortBys=*/{},
           setup.fileFormat,
           /*aggregates=*/{},
           /*connectorId=*/PlanBuilder::kHiveDefaultConnectorId,
@@ -862,7 +863,8 @@ std::unique_ptr<TaskCursor> TableEvolutionFuzzer::makeWriteTask(
           /*partitionBy=*/{},
           setup.bucketCount(),
           bucketColumnNames,
-          /*sortBy=*/{},
+          /*sortColumns=*/{},
+          /*sortBys=*/{},
           setup.fileFormat,
           /*aggregates=*/{},
           /*connectorId=*/PlanBuilder::kHiveDefaultConnectorId,
@@ -873,7 +875,8 @@ std::unique_ptr<TaskCursor> TableEvolutionFuzzer::makeWriteTask(
           /*partitionBy=*/{},
           setup.bucketCount(),
           bucketColumnNames,
-          /*sortBy=*/{},
+          /*sortColumns=*/{},
+          /*sortBys=*/{},
           setup.fileFormat);
     }
   }

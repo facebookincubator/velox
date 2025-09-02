@@ -100,6 +100,7 @@ class GcsMultipleEndpointsTest : public testing::Test,
                         0,
                         {},
                         {},
+                        {},
                         dwio::common::FileFormat::PARQUET,
                         {},
                         connectorId)

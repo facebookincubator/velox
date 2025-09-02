@@ -314,6 +314,7 @@ TEST_F(PlanBuilderTest, commitStrategyParameter) {
         0,
         {},
         {},
+        {},
         dwio::common::FileFormat::DWRF,
         {},
         PlanBuilder::kHiveDefaultConnectorId,
