@@ -48,15 +48,12 @@ struct AbsFunction {
     if constexpr (std::is_integral_v<T>) {
       if (FOLLY_UNLIKELY(a == std::numeric_limits<T>::min())) {
         if (ansiEnabled_) {
-          // In ANSI mode, throw an overflow error
+          // In ANSI mode, throws an overflow error
           VELOX_USER_FAIL("Arithmetic overflow: abs({})", a);
-        } else {
-          // To be compatible with Spark's ANSI off mode, when the input is
-          // negative minimum value, returns the same value as input instead of
-          // throwing an error.
-          result = a;
-          return;
         }
+        // In ANSI off mode, returns the same negative minimum value
+        result = a;
+        return;
       }
     }
     result = std::abs(a);

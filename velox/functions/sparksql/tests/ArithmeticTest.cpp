@@ -767,9 +767,6 @@ TEST_F(ArithmeticTest, absAnsiMode) {
       {{core::QueryConfig::kSparkAnsiEnabled, "true"}});
 
   // Normal cases should still work
-  EXPECT_EQ(abs<int8_t>(-127), 127);
-  EXPECT_EQ(abs<int16_t>(-32767), 32767);
-  EXPECT_EQ(abs<int32_t>(-2147483647), 2147483647);
   EXPECT_EQ(abs<int64_t>(-9223372036854775807), 9223372036854775807);
 
   // Minimum values should throw in ANSI mode

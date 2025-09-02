@@ -7,7 +7,7 @@ Mathematical Functions
     Returns the absolute value of ``x``. When ``x`` is negative minimum
     value of integral type returns the same value as ``x`` following
     the behavior when Spark ANSI mode is disabled and throws exception
-    when spark ansi mode is enabled.
+    when Spark ANSI mode is enabled.
 
 .. spark:function:: acos(x) -> double
 
