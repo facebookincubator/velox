@@ -54,5 +54,5 @@ velox/experimental/cudf/ @bdice @karthikeyann @devavret @mhaseeb123
 # Caching
 # velox/common/caching/ @majetideepak
 
-# Spark Functions
+# # Spark Functions
 # velox/functions/sparksql/ @jinchengchenghh @rui-mo @zhli1142015
