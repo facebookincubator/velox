@@ -31,5 +31,8 @@ void registerHyperLogFunctions(const std::string& prefix) {
       Constant<double>>({prefix + "empty_approx_set"});
   registerFunction<EmptyApproxSetFunction, HyperLogLog>(
       {prefix + "empty_approx_set"});
+
+  registerStatefulVectorFunction(
+      prefix + "merge_hll", mergeHllSignatures(), makeMergeHll);
 }
 } // namespace facebook::velox::functions
