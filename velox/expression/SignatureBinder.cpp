@@ -253,6 +253,72 @@ bool SignatureBinderBase::tryBind(
   }
 
   const auto& params = typeSignature.parameters();
+  
+  // Handle homogeneous row case: row(T, ...)
+  if (typeSignature.isHomogeneousRow() && typeName == "ROW") {
+    VELOX_CHECK_EQ(params.size(), 1, "Homogeneous row must have exactly one parameter");
+    
+    // Actual type must be a ROW with k >= 0 children
+    const auto& actualParams = actualType->parameters();
+    
+    if (actualParams.empty()) {
+      // Empty row case - bind the type variable to any type (we'll use UNKNOWN)
+      const auto& typeParam = params[0];
+      const auto& paramBaseName = typeParam.baseName();
+      if (variables().count(paramBaseName)) {
+        typeVariablesBindings_[paramBaseName] = UNKNOWN();
+        return true;
+      }
+    }
+    
+    // All children must unify to the same type variable T
+    const auto& typeParam = params[0];
+    const auto& paramBaseName = typeParam.baseName();
+    
+    // First, try to bind all actual parameters to the type variable
+    std::vector<TypePtr> actualChildTypes;
+    for (const auto& actualParam : actualParams) {
+      if (actualParam.kind != TypeParameterKind::kType) {
+        return false; // Only type parameters supported for homogeneous rows
+      }
+      actualChildTypes.push_back(actualParam.type);
+    }
+    
+    if (actualChildTypes.empty()) {
+      return true; // Empty row is valid
+    }
+    
+    // Check if this is a type variable that needs binding
+    if (variables().count(paramBaseName)) {
+      // Find the greatest common supertype of all actual child types
+      auto commonType = actualChildTypes[0];
+      for (size_t i = 1; i < actualChildTypes.size(); ++i) {
+        // Try to find common supertype - use the logic similar to arrays
+        // For now, require all types to be exactly the same
+        if (!commonType->equivalent(*actualChildTypes[i])) {
+          return false; // All children must be the same type for homogeneous rows
+        }
+      }
+      
+      // Bind the type variable to the common type
+      if (typeVariablesBindings_.count(paramBaseName)) {
+        // Variable already bound, check consistency
+        return typeVariablesBindings_[paramBaseName]->equivalent(*commonType);
+      } else {
+        typeVariablesBindings_[paramBaseName] = commonType;
+        return true;
+      }
+    } else {
+      // Not a type variable, try to bind each child to the concrete type
+      for (const auto& childType : actualChildTypes) {
+        if (!tryBind(typeParam, childType)) {
+          return false;
+        }
+      }
+      return true;
+    }
+  }
+
   // Type Parameters can recurse.
   if (params.size() != actualType->parameters().size()) {
     return false;

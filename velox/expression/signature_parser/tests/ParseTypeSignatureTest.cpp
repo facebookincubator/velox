@@ -259,6 +259,43 @@ TEST_F(ParseTypeSignatureTest, row) {
 
   // Single double quote is an error.
   EXPECT_THROW(parseTypeSignature("row(\"a\"b\" INTEGER)"), VeloxRuntimeError);
+
+  // Test homogeneous row syntax with ellipsis
+  {
+    auto signature = parseTypeSignature("row(varchar, …)");
+    ASSERT_EQ(signature.baseName(), "row");
+    ASSERT_EQ(signature.parameters().size(), 1);
+    ASSERT_TRUE(signature.hasVariadicLastParam());
+    ASSERT_TRUE(signature.isHomogeneousRow());
+    ASSERT_EQ(signature.toString(), "row(varchar, …)");
+    
+    auto field0 = signature.parameters()[0];
+    ASSERT_EQ(field0.baseName(), "varchar");
+    ASSERT_FALSE(field0.hasVariadicLastParam());
+  }
+
+  // Test homogeneous row with three-dot syntax
+  {
+    auto signature = parseTypeSignature("row(integer, ...)");
+    ASSERT_EQ(signature.baseName(), "row");
+    ASSERT_EQ(signature.parameters().size(), 1);
+    ASSERT_TRUE(signature.hasVariadicLastParam());
+    ASSERT_TRUE(signature.isHomogeneousRow());
+    ASSERT_EQ(signature.toString(), "row(integer, …)");
+  }
+
+  // Test homogeneous row with named field
+  {
+    auto signature = parseTypeSignature("row(name varchar, …)");
+    ASSERT_EQ(signature.baseName(), "row");
+    ASSERT_EQ(signature.parameters().size(), 1);
+    ASSERT_TRUE(signature.hasVariadicLastParam());
+    ASSERT_TRUE(signature.isHomogeneousRow());
+    
+    auto field0 = signature.parameters()[0];
+    ASSERT_EQ(field0.baseName(), "varchar");
+    ASSERT_EQ(field0.rowFieldName(), "name");
+  }
 }
 
 TEST_F(ParseTypeSignatureTest, tdigest) {
@@ -285,6 +322,11 @@ TEST_F(ParseTypeSignatureTest, roundTrip) {
   ASSERT_EQ(
       roundTrip("row(map(K,V),map(bigint,array(double)))"),
       "row(map(K,V),map(bigint,array(double)))");
+      
+  // Test homogeneous row round-trip parsing
+  ASSERT_EQ(roundTrip("row(T, …)"), "row(T, …)");
+  ASSERT_EQ(roundTrip("row(varchar, ...)"), "row(varchar, …)"); // ASCII dots convert to Unicode
+  ASSERT_EQ(roundTrip("row(bigint, …)"), "row(bigint, …)");
 }
 
 TEST_F(ParseTypeSignatureTest, invalidSignatures) {
