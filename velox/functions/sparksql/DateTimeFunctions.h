@@ -973,7 +973,7 @@ struct SecondsToTimestampFunction {
       }
 
       // Scale to microseconds and truncate toward zero.
-      const double microsD = static_cast<double>(secondsD) * 1'000'000.0;
+      const double microsD = secondsD * Timestamp::kMicrosecondsInSecond;
       const int64_t micros = static_cast<int64_t>(microsD);
 
       // Split into whole seconds and remaining microseconds.
@@ -984,7 +984,8 @@ struct SecondsToTimestampFunction {
         remainingMicros += util::kMicrosPerSec;
       }
 
-      const int64_t nano = remainingMicros * 1'000;
+      const int64_t nano =
+          remainingMicros * Timestamp::kNanosecondsInMicrosecond;
       result = Timestamp(wholeSeconds, nano);
     }
   }
@@ -994,8 +995,10 @@ struct SecondsToTimestampFunction {
       static_cast<double>(std::numeric_limits<int64_t>::max());
   static constexpr double kMinMicrosD =
       static_cast<double>(std::numeric_limits<int64_t>::min());
-  static constexpr double kMaxSecondsD = kMaxMicrosD / 1'000'000.0;
-  static constexpr double kMinSecondsD = kMinMicrosD / 1'000'000.0;
+  static constexpr double kMaxSecondsD =
+      kMaxMicrosD / Timestamp::kMicrosecondsInSecond;
+  static constexpr double kMinSecondsD =
+      kMinMicrosD / Timestamp::kMicrosecondsInSecond;
 
   // Cutoff values are based on Java's Long.MAX_VALUE and Long.MIN_VALUE.
   static constexpr int64_t kMaxSeconds = 9223372036854LL;

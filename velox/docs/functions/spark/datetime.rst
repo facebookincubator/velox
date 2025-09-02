@@ -321,8 +321,8 @@ These functions support TIMESTAMP and DATE input types.
     For integral types (TINYINT, SMALLINT, INTEGER, BIGINT), the function directly
     converts the number of seconds to a timestamp. For floating-point types
     (FLOAT, DOUBLE), the function scales the input to microseconds, truncates
-    towards zero, and saturates the result to the minimum and maximum values of
-    Spark's `timestamp_seconds`.::
+    towards zero, and saturates the result to the minimum and maximum values allowed
+    in Spark.::
 
         SELECT timestamp_seconds(1230219000); -- '2008-12-25 15:30:00'
         SELECT timestamp_seconds(1230219000.123); -- '2008-12-25 15:30:00.123'
