@@ -17,6 +17,7 @@
 #include "velox/functions/prestosql/HyperLogLogFunctions.h"
 #include "velox/functions/prestosql/types/HyperLogLogRegistration.h"
 #include "velox/functions/prestosql/types/P4HyperLogLogRegistration.h"
+#include "velox/functions/prestosql/types/P4HyperLogLogType.h"
 
 namespace facebook::velox::functions {
 
@@ -26,12 +27,20 @@ void registerHyperLogFunctions(const std::string& prefix) {
 
   registerFunction<CardinalityFunction, int64_t, HyperLogLog>(
       {prefix + "cardinality"});
+  registerFunction<CardinalityFunction, int64_t, P4HyperLogLog>(
+      {prefix + "cardinality"});
 
   registerFunction<
       EmptyApproxSetWithMaxErrorFunction,
       HyperLogLog,
       Constant<double>>({prefix + "empty_approx_set"});
+  registerFunction<
+      EmptyApproxSetWithMaxErrorFunction,
+      P4HyperLogLog,
+      Constant<double>>({prefix + "empty_approx_set"});
   registerFunction<EmptyApproxSetFunction, HyperLogLog>(
+      {prefix + "empty_approx_set"});
+  registerFunction<EmptyApproxSetFunction, P4HyperLogLog>(
       {prefix + "empty_approx_set"});
 }
 } // namespace facebook::velox::functions
