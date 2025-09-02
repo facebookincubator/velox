@@ -19,6 +19,7 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/type/Type.h"
+#include "velox/type/parser/ParserUtil.h"
 
 namespace facebook::velox::exec {
 
@@ -93,14 +94,6 @@ size_t findNextComma(const std::string& str, size_t start) {
 }
 
 namespace {
-/// Returns true only if 'str' contains digits.
-bool isPositiveInteger(const std::string& str) {
-  return !str.empty() &&
-      std::find_if(str.begin(), str.end(), [](unsigned char c) {
-        return !std::isdigit(c);
-      }) == str.end();
-}
-
 void validateBaseTypeAndCollectTypeParams(
     const std::unordered_map<std::string, SignatureVariable>& variables,
     const TypeSignature& arg,
