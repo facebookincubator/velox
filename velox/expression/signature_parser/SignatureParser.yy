@@ -32,7 +32,7 @@
 %token YYEOF         0
 
 %nterm <std::shared_ptr<exec::TypeSignature>> special_type function_type decimal_type row_type array_type map_type
-%nterm <std::shared_ptr<exec::TypeSignature>> type named_type
+%nterm <std::shared_ptr<exec::TypeSignature>> type named_type row_homogeneous_pattern
 %nterm <std::vector<exec::TypeSignature>> type_list type_list_opt_names
 %nterm <std::vector<std::string>> type_with_spaces
 
@@ -78,17 +78,22 @@ type_list_opt_names : named_type                           { $$.push_back(*($1))
                     ;
 
 row_type : ROW LPAREN type_list_opt_names RPAREN  { $$ = std::make_shared<exec::TypeSignature>("row", $3); }
-         | ROW LPAREN type COMMA ELLIPSIS RPAREN { $$ = std::make_shared<exec::TypeSignature>("row", std::vector<exec::TypeSignature>{*($3)}, std::nullopt, true); }
-         | ROW LPAREN QUOTED_ID type COMMA ELLIPSIS RPAREN {
-             std::string fieldName = $3;
-             fieldName.erase(0, 1);
-             fieldName.pop_back();
-             $$ = std::make_shared<exec::TypeSignature>("row", std::vector<exec::TypeSignature>{exec::TypeSignature($4->baseName(), $4->parameters(), fieldName)}, std::nullopt, true);
-           }
-         | ROW LPAREN WORD type COMMA ELLIPSIS RPAREN {
-             $$ = std::make_shared<exec::TypeSignature>("row", std::vector<exec::TypeSignature>{exec::TypeSignature($4->baseName(), $4->parameters(), $3)}, std::nullopt, true);
-           }
+         | ROW LPAREN row_homogeneous_pattern RPAREN { $$ = $3; }
          ;
+
+row_homogeneous_pattern : type COMMA ELLIPSIS { 
+                           $$ = std::make_shared<exec::TypeSignature>("row", std::vector<exec::TypeSignature>{*($1)}, std::nullopt, true); 
+                         }
+                       | QUOTED_ID type COMMA ELLIPSIS { 
+                           std::string fieldName = $1; 
+                           fieldName.erase(0, 1); 
+                           fieldName.pop_back(); 
+                           $$ = std::make_shared<exec::TypeSignature>("row", std::vector<exec::TypeSignature>{exec::TypeSignature($2->baseName(), $2->parameters(), fieldName)}, std::nullopt, true); 
+                         }
+                       | WORD type COMMA ELLIPSIS { 
+                           $$ = std::make_shared<exec::TypeSignature>("row", std::vector<exec::TypeSignature>{exec::TypeSignature($2->baseName(), $2->parameters(), $1)}, std::nullopt, true); 
+                         }
+                       ;
 
 array_type : ARRAY LPAREN type RPAREN             { $$ = std::make_shared<exec::TypeSignature>(exec::TypeSignature("array", { *($3) })); }
            | ARRAY LPAREN type_with_spaces RPAREN { $$ = std::make_shared<exec::TypeSignature>(exec::TypeSignature("array", { *inferTypeWithSpaces($3) })); }
