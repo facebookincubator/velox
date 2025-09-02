@@ -1134,24 +1134,25 @@ TEST_F(SignatureBinderTest, homogeneous_rows) {
 
     // Should succeed for row(bigint)
     testSignatureBinder(signature, {ROW({BIGINT()})}, BOOLEAN());
-    
+
     // Should succeed for row(bigint,bigint,bigint)
-    testSignatureBinder(signature, {ROW({BIGINT(), BIGINT(), BIGINT()})}, BOOLEAN());
-    
+    testSignatureBinder(
+        signature, {ROW({BIGINT(), BIGINT(), BIGINT()})}, BOOLEAN());
+
     // Should succeed for row(varchar,varchar)
     testSignatureBinder(signature, {ROW({VARCHAR(), VARCHAR()})}, BOOLEAN());
-    
+
     // Should succeed for row() (empty)
     testSignatureBinder(signature, {ROW({})}, BOOLEAN());
-    
+
     // Should fail for row(bigint,varchar) - mixed types
     assertCannotResolve(signature, {ROW({BIGINT(), VARCHAR()})});
-    
+
     // Should fail for non-row types
     assertCannotResolve(signature, {BIGINT()});
     assertCannotResolve(signature, {ARRAY(BIGINT())});
   }
-  
+
   // Test with multiple homogeneous row arguments
   {
     auto signature = exec::FunctionSignatureBuilder()
@@ -1162,12 +1163,14 @@ TEST_F(SignatureBinderTest, homogeneous_rows) {
                          .build();
 
     // Should succeed when both arguments have same element type
-    testSignatureBinder(signature, 
-        {ROW({BIGINT(), BIGINT()}), ROW({BIGINT(), BIGINT(), BIGINT()})}, 
+    testSignatureBinder(
+        signature,
+        {ROW({BIGINT(), BIGINT()}), ROW({BIGINT(), BIGINT(), BIGINT()})},
         BIGINT()); // Return type is just the common element type T
-    
+
     // Should fail when arguments have different element types
-    assertCannotResolve(signature, {ROW({BIGINT(), BIGINT()}), ROW({VARCHAR(), VARCHAR()})});
+    assertCannotResolve(
+        signature, {ROW({BIGINT(), BIGINT()}), ROW({VARCHAR(), VARCHAR()})});
   }
 }
 

@@ -79,14 +79,14 @@ type_list_opt_names : named_type                           { $$.push_back(*($1))
 
 row_type : ROW LPAREN type_list_opt_names RPAREN  { $$ = std::make_shared<exec::TypeSignature>("row", $3); }
          | ROW LPAREN type COMMA ELLIPSIS RPAREN { $$ = std::make_shared<exec::TypeSignature>("row", std::vector<exec::TypeSignature>{*($3)}, std::nullopt, true); }
-         | ROW LPAREN QUOTED_ID type COMMA ELLIPSIS RPAREN { 
-             std::string fieldName = $3; 
-             fieldName.erase(0, 1); 
-             fieldName.pop_back(); 
-             $$ = std::make_shared<exec::TypeSignature>("row", std::vector<exec::TypeSignature>{exec::TypeSignature($4->baseName(), $4->parameters(), fieldName)}, std::nullopt, true); 
+         | ROW LPAREN QUOTED_ID type COMMA ELLIPSIS RPAREN {
+             std::string fieldName = $3;
+             fieldName.erase(0, 1);
+             fieldName.pop_back();
+             $$ = std::make_shared<exec::TypeSignature>("row", std::vector<exec::TypeSignature>{exec::TypeSignature($4->baseName(), $4->parameters(), fieldName)}, std::nullopt, true);
            }
-         | ROW LPAREN WORD type COMMA ELLIPSIS RPAREN { 
-             $$ = std::make_shared<exec::TypeSignature>("row", std::vector<exec::TypeSignature>{exec::TypeSignature($4->baseName(), $4->parameters(), $3)}, std::nullopt, true); 
+         | ROW LPAREN WORD type COMMA ELLIPSIS RPAREN {
+             $$ = std::make_shared<exec::TypeSignature>("row", std::vector<exec::TypeSignature>{exec::TypeSignature($4->baseName(), $4->parameters(), $3)}, std::nullopt, true);
            }
          ;
 
