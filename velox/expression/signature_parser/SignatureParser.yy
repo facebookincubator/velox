@@ -7,7 +7,7 @@
 %require "3.0.4"
 %language "C++"
 
-%define parser_class_name {Parser}
+%define api.parser.class {Parser}
 %define api.namespace {facebook::velox::exec}
 %define api.value.type variant
 %parse-param {Scanner* scanner}
@@ -31,8 +31,10 @@
 %token <std::string> WORD VARIABLE QUOTED_ID DECIMAL
 %token YYEOF         0
 
+%expect 1
+
 %nterm <std::shared_ptr<exec::TypeSignature>> special_type function_type decimal_type row_type array_type map_type
-%nterm <std::shared_ptr<exec::TypeSignature>> type named_type row_homogeneous_pattern
+%nterm <std::shared_ptr<exec::TypeSignature>> type named_type type_or_named type_list_with_ellipsis
 %nterm <std::vector<exec::TypeSignature>> type_list type_list_opt_names
 %nterm <std::vector<std::string>> type_with_spaces
 
@@ -60,6 +62,10 @@ named_type : QUOTED_ID type          { $1.erase(0, 1); $1.pop_back(); $$ = std::
            | type_with_spaces        { $$ = inferTypeWithSpaces($1, true); }
            ;
 
+type_or_named : type       { $$ = $1; }
+              | named_type { $$ = $1; }
+              ;
+
 type_with_spaces : type_with_spaces WORD { $1.push_back($2); $$ = std::move($1); }
                  | WORD WORD             { $$.push_back($1); $$.push_back($2); }
                  ;
@@ -71,29 +77,16 @@ type_list : type                   { $$.push_back(*($1)); }
           | type_list COMMA type   { $1.push_back(*($3)); $$ = std::move($1); }
           ;
 
-type_list_opt_names : named_type                           { $$.push_back(*($1)); }
-                    | type_list_opt_names COMMA named_type { $1.push_back(*($3)); $$ = std::move($1); }
-                    | type                                 { $$.push_back(*($1)); }
-                    | type_list_opt_names COMMA type       { $1.push_back(*($3)); $$ = std::move($1); }
+type_list_opt_names : type_or_named                               { $$.push_back(*($1)); }
+                    | type_list_opt_names COMMA type_or_named { $1.push_back(*($3)); $$ = std::move($1); }
                     ;
 
-row_type : ROW LPAREN type_list_opt_names RPAREN  { $$ = std::make_shared<exec::TypeSignature>("row", $3); }
-         | ROW LPAREN row_homogeneous_pattern RPAREN { $$ = $3; }
-         ;
+type_list_with_ellipsis : type_list_opt_names                    { $$ = std::make_shared<exec::TypeSignature>("row", $1); }
+                        | type_or_named COMMA ELLIPSIS           { $$ = std::make_shared<exec::TypeSignature>("row", std::vector<exec::TypeSignature>{*($1)}, std::nullopt, true); }
+                        ;
 
-row_homogeneous_pattern : type COMMA ELLIPSIS { 
-                           $$ = std::make_shared<exec::TypeSignature>("row", std::vector<exec::TypeSignature>{*($1)}, std::nullopt, true); 
-                         }
-                       | QUOTED_ID type COMMA ELLIPSIS { 
-                           std::string fieldName = $1; 
-                           fieldName.erase(0, 1); 
-                           fieldName.pop_back(); 
-                           $$ = std::make_shared<exec::TypeSignature>("row", std::vector<exec::TypeSignature>{exec::TypeSignature($2->baseName(), $2->parameters(), fieldName)}, std::nullopt, true); 
-                         }
-                       | WORD type COMMA ELLIPSIS { 
-                           $$ = std::make_shared<exec::TypeSignature>("row", std::vector<exec::TypeSignature>{exec::TypeSignature($2->baseName(), $2->parameters(), $1)}, std::nullopt, true); 
-                         }
-                       ;
+row_type : ROW LPAREN type_list_with_ellipsis RPAREN { $$ = $3; }
+         ;
 
 array_type : ARRAY LPAREN type RPAREN             { $$ = std::make_shared<exec::TypeSignature>(exec::TypeSignature("array", { *($3) })); }
            | ARRAY LPAREN type_with_spaces RPAREN { $$ = std::make_shared<exec::TypeSignature>(exec::TypeSignature("array", { *inferTypeWithSpaces($3) })); }
