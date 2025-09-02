@@ -27,7 +27,7 @@
     #define yylex(x) scanner->lex(x)
 }
 
-%token               LPAREN RPAREN COMMA ARRAY MAP ROW FUNCTION
+%token               LPAREN RPAREN COMMA ARRAY MAP ROW FUNCTION ELLIPSIS
 %token <std::string> WORD VARIABLE QUOTED_ID DECIMAL
 %token YYEOF         0
 
@@ -78,6 +78,8 @@ type_list_opt_names : named_type                           { $$.push_back(*($1))
                     ;
 
 row_type : ROW LPAREN type_list_opt_names RPAREN  { $$ = std::make_shared<exec::TypeSignature>("row", $3); }
+         | ROW LPAREN type COMMA ELLIPSIS RPAREN { $$ = std::make_shared<exec::TypeSignature>("row", std::vector<exec::TypeSignature>{*($3)}, std::nullopt, true); }
+         | ROW LPAREN named_type COMMA ELLIPSIS RPAREN { $$ = std::make_shared<exec::TypeSignature>("row", std::vector<exec::TypeSignature>{*($3)}, std::nullopt, true); }
          ;
 
 array_type : ARRAY LPAREN type RPAREN             { $$ = std::make_shared<exec::TypeSignature>(exec::TypeSignature("array", { *($3) })); }
