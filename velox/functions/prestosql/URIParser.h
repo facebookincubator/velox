@@ -16,9 +16,11 @@
 #pragma once
 
 #include <boost/regex.hpp>
+#include <re2/re2.h>
 #include "velox/type/StringView.h"
 
 namespace facebook::velox::functions {
+
 namespace detail {
 FOLLY_ALWAYS_INLINE StringView submatch(const boost::cmatch& match, int idx) {
   const auto& sub = match[idx];
@@ -58,25 +60,34 @@ std::optional<StringView> extractParameter(
     const StringView& query,
     const TString& param) {
   if (!query.empty()) {
-    // Parse query string.
-    static const boost::regex kQueryParamRegex(
+    // Parse query string using RE2.
+    static const RE2 kQueryParamRegex(
         "(^|&)" // start of query or start of parameter "&"
         "([^=&]*)=?" // parameter name and "=" if value is expected
         "([^&]*)" // parameter value (allows "=" to appear)
-        "(?=(&|$))" // forward reference, next should be end of query or
-                    // start of next parameter
     );
 
-    const boost::cregex_iterator begin(
-        query.data(), query.data() + query.size(), kQueryParamRegex);
-    boost::cregex_iterator end;
+    re2::StringPiece input(query.data(), query.size());
+    re2::StringPiece matches[4]; // Group 0 (full match) + 3 capturing groups
+    size_t pos = 0;
 
-    for (auto it = begin; it != end; ++it) {
-      if (it->length(2) != 0 && (*it)[2].matched) { // key shouldnt be empty.
-        auto key = detail::submatch((*it), 2);
+    while (pos < input.size() &&
+           kQueryParamRegex.Match(
+               input, pos, input.size(), RE2::UNANCHORED, matches, 4)) {
+      // Check if key (group 2) is not empty and matched
+      if (matches[2].size() > 0) {
+        StringView key(matches[2].data(), matches[2].size());
         if (param.compare(key) == 0) {
-          return detail::submatch((*it), 3);
+          // Return the value (group 3)
+          return StringView(matches[3].data(), matches[3].size());
         }
+      }
+
+      // Move past this match to continue searching
+      pos = matches[0].end() - input.data();
+      if (pos == matches[0].data() - input.data()) {
+        // Avoid infinite loop on zero-width matches
+        ++pos;
       }
     }
   }
