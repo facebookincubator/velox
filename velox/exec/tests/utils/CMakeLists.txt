@@ -14,11 +14,11 @@
 
 add_library(velox_temp_path TempFilePath.cpp TempDirectoryPath.cpp)
 
-target_link_libraries(
-  velox_temp_path velox_exception)
+target_link_libraries(velox_temp_path velox_exception)
 
 add_library(
   velox_exec_test_lib
+  AggregationResolver.cpp
   AssertQueryBuilder.cpp
   ArbitratorTestUtil.cpp
   HiveConnectorTestBase.cpp
@@ -34,7 +34,8 @@ add_library(
   TpchQueryBuilder.cpp
   VectorTestUtil.cpp
   PortUtil.cpp
-  SerializedPageUtil.cpp)
+  SerializedPageUtil.cpp
+)
 
 target_link_libraries(
   velox_exec_test_lib
@@ -56,9 +57,11 @@ target_link_libraries(
   velox_type_fbhive
   velox_hive_connector
   velox_tpch_connector
+  velox_tpcds_connector
   velox_presto_serializer
   velox_functions_prestosql
-  velox_aggregates)
+  velox_aggregates
+)
 
 if(VELOX_ENABLE_CUDF)
   target_compile_definitions(velox_exec_test_lib PRIVATE VELOX_ENABLE_CUDF)

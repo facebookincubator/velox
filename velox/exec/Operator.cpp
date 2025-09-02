@@ -72,6 +72,8 @@ OperatorCtx::createConnectorQueryCtx(
       task->queryCtx()->fsTokenProvider());
   connectorQueryCtx->setSelectiveNimbleReaderEnabled(
       driverCtx_->queryConfig().selectiveNimbleReaderEnabled());
+  connectorQueryCtx->setRowSizeTrackingEnabled(
+      driverCtx_->queryConfig().rowSizeTrackingEnabled());
   return connectorQueryCtx;
 }
 
@@ -145,7 +147,7 @@ void Operator::maybeSetTracer() {
       opTraceDirPath,
       operatorCtx_->driverCtx()->queryConfig().opTraceDirectoryCreateConfig());
 
-  if (operatorType() == "TableScan") {
+  if (dynamic_cast<SourceOperator*>(this) != nullptr) {
     setupSplitTracer(opTraceDirPath);
   } else {
     setupInputTracer(opTraceDirPath);

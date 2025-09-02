@@ -1338,6 +1338,18 @@ TEST_F(TableScanTest, batchSize) {
     EXPECT_GT(opStats.outputPositions / opStats.outputVectors, 1);
     EXPECT_LT(opStats.outputPositions / opStats.outputVectors, numRows);
   }
+  {
+    SCOPED_TRACE("Projection");
+    plan = PlanBuilder().tableScan(ROW({}, {}), {}, "", rowType).planNode();
+    auto task = AssertQueryBuilder(plan)
+                    .splits(makeHiveConnectorSplits({filePath}))
+                    .config(
+                        QueryConfig::kPreferredOutputBatchBytes,
+                        std::to_string(1 + numRows / 8))
+                    .assertResults(makeRowVector(ROW({}, {}), numRows));
+    const auto opStats = task->taskStats().pipelineStats[0].operatorStats[0];
+    EXPECT_EQ(opStats.outputVectors, 1);
+  }
 }
 
 // Test that adding the same split with the same sequence id does not cause
@@ -5090,6 +5102,34 @@ TEST_F(TableScanTest, flatMapReadOffset) {
       .split(split)
       .config(QueryConfig::kMaxOutputBatchRows, "1")
       .assertResults(expected);
+}
+
+TEST_F(TableScanTest, flatMapKeyTypeEvolution) {
+  auto vector =
+      makeRowVector({makeMapVector<int32_t, int64_t>({{{1, 2}, {3, 4}}})});
+  auto config = std::make_shared<dwrf::Config>();
+  config->set(dwrf::Config::FLATTEN_MAP, true);
+  config->set<const std::vector<uint32_t>>(dwrf::Config::MAP_FLAT_COLS, {0});
+  auto file = TempFilePath::create();
+  writeToFile(file->getPath(), {vector}, config);
+  auto split = makeHiveConnectorSplit(file->getPath());
+  auto schema = ROW({"c0"}, {MAP(BIGINT(), BIGINT())});
+  {
+    SCOPED_TRACE("Read as map");
+    auto plan = PlanBuilder().tableScan(schema).planNode();
+    auto expected =
+        makeRowVector({makeMapVector<int64_t, int64_t>({{{1, 2}, {3, 4}}})});
+    AssertQueryBuilder(plan).split(split).assertResults(expected);
+  }
+  {
+    SCOPED_TRACE("Read as struct");
+    auto readSchema = ROW({"c0"}, {ROW({"1", "3"}, {BIGINT(), BIGINT()})});
+    auto plan = PlanBuilder().tableScan(readSchema, {}, "", schema).planNode();
+    auto expected = makeRowVector({makeRowVector(
+        {"1", "3"},
+        {makeConstant<int64_t>(2, 1), makeConstant<int64_t>(4, 1)})});
+    AssertQueryBuilder(plan).split(split).assertResults(expected);
+  }
 }
 
 TEST_F(TableScanTest, dynamicFilters) {

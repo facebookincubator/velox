@@ -25,7 +25,8 @@ add_library(
   ExpressionEvaluator.cpp
   ToCudf.cpp
   Utilities.cpp
-  VeloxCudfInterop.cpp)
+  VeloxCudfInterop.cpp
+)
 
 target_link_libraries(
   velox_cudf_exec
@@ -37,6 +38,7 @@ target_link_libraries(
     velox_common_base
     velox_cudf_vector
     velox_cudf_parquet_connector
-    velox_exec)
+    velox_exec
+)
 
 target_compile_options(velox_cudf_exec PRIVATE -Wno-missing-field-initializers)

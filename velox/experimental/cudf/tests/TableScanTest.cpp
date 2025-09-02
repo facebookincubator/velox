@@ -180,7 +180,7 @@ TEST_F(TableScanTest, allColumns) {
   createDuckDbTable(vectors);
   auto plan = tableScanNode();
 
-  std::string const duckDbSql = "SELECT * FROM tmp";
+  const std::string duckDbSql = "SELECT * FROM tmp";
 
   // Helper to test scan all columns for the given splits
   auto testScanAllColumns =
@@ -191,10 +191,13 @@ TEST_F(TableScanTest, allColumns) {
                         .splits(splits)
                         .assertResults(duckDbSql);
 
+        // A quick sanity check for memory usage reporting. Check that peak
+        // total memory usage for the project node is > 0.
         auto planStats = toPlanStats(task->taskStats());
         auto scanNodeId = plan->id();
         auto it = planStats.find(scanNodeId);
         ASSERT_TRUE(it != planStats.end());
+        ASSERT_TRUE(it->second.peakMemoryBytes > 0);
 
         //  Verifies there is no dynamic filter stats.
         ASSERT_TRUE(it->second.dynamicFilterStats.empty());

@@ -777,6 +777,22 @@ PlanNodePtr ValuesNode::create(const folly::dynamic& obj, void* context) {
       obj["repeatTimes"].asInt());
 }
 
+// static
+RowTypePtr AbstractProjectNode::makeOutputType(
+    const std::vector<std::string>& names,
+    const std::vector<TypedExprPtr>& projections) {
+  VELOX_USER_CHECK_EQ(names.size(), projections.size());
+
+  std::vector<TypePtr> types;
+  types.reserve(projections.size());
+  for (const auto& projection : projections) {
+    types.push_back(projection->type());
+  }
+
+  auto namesCopy = names;
+  return ROW(std::move(namesCopy), std::move(types));
+}
+
 void AbstractProjectNode::addDetails(std::stringstream& stream) const {
   stream << "expressions: ";
   for (auto i = 0; i < projections_.size(); i++) {
@@ -857,7 +873,11 @@ class SummarizeExprVisitor : public ITypedExprVisitor {
   void visit(const FieldAccessTypedExpr& expr, ITypedExprVisitorContext& ctx)
       const override {
     auto& myCtx = static_cast<Context&>(ctx);
-    myCtx.expressionCounts()["field"]++;
+    if (expr.isInputColumn()) {
+      myCtx.expressionCounts()["field"]++;
+    } else {
+      myCtx.expressionCounts()["dereference"]++;
+    }
     visitInputs(expr, ctx);
   }
 
@@ -986,6 +1006,12 @@ void AbstractProjectNode::addSummaryDetails(
   SummarizeExprVisitor::Context exprCtx;
   SummarizeExprVisitor visitor;
   for (const auto& projection : projections_) {
+    // Skip identity projections.
+    if (projection->isFieldAccessKind() &&
+        projection->asUnchecked<FieldAccessTypedExpr>()->isInputColumn()) {
+      continue;
+    }
+
     projection->accept(visitor, exprCtx);
   }
 
@@ -1000,12 +1026,17 @@ void AbstractProjectNode::addSummaryDetails(
   std::vector<size_t> dereferences;
   dereferences.reserve(numFields);
 
+  std::vector<size_t> constants;
+  constants.reserve(numFields);
+
   for (auto i = 0; i < numFields; ++i) {
     const auto& expr = projections_[i];
-    if (dynamic_cast<const DereferenceTypedExpr*>(expr.get())) {
+    if (expr->isDereferenceKind()) {
       dereferences.push_back(i);
+    } else if (expr->isConstantKind()) {
+      constants.push_back(i);
     } else {
-      auto fae = dynamic_cast<const FieldAccessTypedExpr*>(expr.get());
+      auto fae = expr->asUnchecked<FieldAccessTypedExpr>();
       if (fae == nullptr) {
         projections.push_back(i);
       } else if (!fae->isInputColumn()) {
@@ -1015,33 +1046,53 @@ void AbstractProjectNode::addSummaryDetails(
   }
 
   // projections: 4 out of 10
-  stream << indentation << "projections: " << projections.size() << " out of "
-         << numFields << std::endl;
-  {
-    const auto cnt =
-        std::min(options.project.maxProjections, projections.size());
-    appendProjections(
-        indentation + "   ",
-        *this,
-        projections,
-        cnt,
-        stream,
-        options.maxLength);
+  if (!projections.empty()) {
+    stream << indentation << "projections: " << projections.size() << " out of "
+           << numFields << std::endl;
+    {
+      const auto cnt =
+          std::min(options.project.maxProjections, projections.size());
+      appendProjections(
+          indentation + "   ",
+          *this,
+          projections,
+          cnt,
+          stream,
+          options.maxLength);
+    }
   }
 
   // dereferences: 2 out of 10
-  stream << indentation << "dereferences: " << dereferences.size() << " out of "
-         << numFields << std::endl;
-  {
-    const auto cnt =
-        std::min(options.project.maxDereferences, dereferences.size());
-    appendProjections(
-        indentation + "   ",
-        *this,
-        dereferences,
-        cnt,
-        stream,
-        options.maxLength);
+  if (!dereferences.empty()) {
+    stream << indentation << "dereferences: " << dereferences.size()
+           << " out of " << numFields << std::endl;
+    {
+      const auto cnt =
+          std::min(options.project.maxDereferences, dereferences.size());
+      appendProjections(
+          indentation + "   ",
+          *this,
+          dereferences,
+          cnt,
+          stream,
+          options.maxLength);
+    }
+  }
+
+  // constants: 1 out of 10
+  if (!constants.empty()) {
+    stream << indentation << "constant projections: " << constants.size()
+           << " out of " << numFields << std::endl;
+    {
+      const auto cnt = std::min(options.project.maxConstants, constants.size());
+      appendProjections(
+          indentation + "   ",
+          *this,
+          constants,
+          cnt,
+          stream,
+          options.maxLength);
+    }
   }
 }
 
@@ -1092,11 +1143,11 @@ std::vector<TypedExprPtr> flattenExprs(
   for (auto& group : exprs) {
     result.insert(result.end(), group.begin(), group.end());
   }
-  auto sourceType = input->outputType();
+
+  const auto& sourceType = input->outputType();
   for (auto& name : moreNames) {
-    auto idx = sourceType->getChildIdx(name);
-    result.push_back(
-        std::make_shared<FieldAccessTypedExpr>(sourceType->childAt(idx), name));
+    result.push_back(std::make_shared<FieldAccessTypedExpr>(
+        sourceType->findChild(name), name));
   }
   return result;
 }
@@ -1105,26 +1156,35 @@ std::vector<TypedExprPtr> flattenExprs(
 ParallelProjectNode::ParallelProjectNode(
     const PlanNodeId& id,
     std::vector<std::string> names,
-    std::vector<std::vector<TypedExprPtr>> exprs,
+    std::vector<std::vector<TypedExprPtr>> exprGroups,
     std::vector<std::string> noLoadIdentities,
     PlanNodePtr input)
     : AbstractProjectNode(
           id,
           allNames(names, noLoadIdentities),
-          flattenExprs(exprs, noLoadIdentities, input),
+          flattenExprs(exprGroups, noLoadIdentities, input),
           input),
       exprNames_(std::move(names)),
-      exprs_(std::move(exprs)),
-      noLoadIdentities_(std::move(noLoadIdentities)) {}
+      exprGroups_(std::move(exprGroups)),
+      noLoadIdentities_(std::move(noLoadIdentities)) {
+  VELOX_USER_CHECK(!exprNames_.empty());
+  VELOX_USER_CHECK(!exprGroups_.empty());
+
+  for (const auto& group : exprGroups_) {
+    VELOX_USER_CHECK(!group.empty());
+  }
+}
 
 void ParallelProjectNode::addDetails(std::stringstream& stream) const {
   AbstractProjectNode::addDetails(stream);
   stream << " Parallel expr groups: ";
   int32_t start = 0;
-  for (auto i = 0; i < exprs_.size(); ++i) {
-    stream << fmt::format("[{}-{}]", start, start + exprs_[i].size() - 1)
-           << (i < exprs_.size() - 1 ? ", " : "");
-    start += exprs_[i].size();
+  for (auto i = 0; i < exprGroups_.size(); ++i) {
+    if (i > 0) {
+      stream << ", ";
+    }
+    stream << fmt::format("[{}-{}]", start, start + exprGroups_[i].size() - 1);
+    start += exprGroups_[i].size();
   }
   stream << std::endl;
 }
@@ -1132,7 +1192,7 @@ void ParallelProjectNode::addDetails(std::stringstream& stream) const {
 folly::dynamic ParallelProjectNode::serialize() const {
   auto obj = PlanNode::serialize();
   obj["names"] = ISerializable::serialize(exprNames_);
-  obj["projections"] = ISerializable::serialize(exprs_);
+  obj["projections"] = ISerializable::serialize(exprGroups_);
   obj["noLoadIdentities"] = ISerializable::serialize(noLoadIdentities_);
   return obj;
 }
@@ -2584,12 +2644,48 @@ void TableWriteNode::addDetails(std::stringstream& stream) const {
   stream << insertTableHandle_->connectorInsertTableHandle()->toString();
 }
 
+folly::dynamic ColumnStatsSpec::serialize() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["groupingKeys"] = ISerializable::serialize(groupingKeys);
+  obj["aggregationStep"] = AggregationNode::toName(aggregationStep);
+  obj["aggregateNames"] = ISerializable::serialize(aggregateNames);
+  obj["aggregates"] = folly::dynamic::array;
+  for (const auto& aggregate : aggregates) {
+    obj["aggregates"].push_back(aggregate.serialize());
+  }
+  return obj;
+}
+
+// static
+ColumnStatsSpec ColumnStatsSpec::create(
+    const folly::dynamic& obj,
+    void* context) {
+  auto groupingKeys = deserializeFields(obj["groupingKeys"], context);
+  const auto aggregationStep =
+      AggregationNode::toStep(obj["aggregationStep"].asString());
+  auto aggregateNames = ISerializable::deserialize<std::vector<std::string>>(
+      obj["aggregateNames"]);
+
+  std::vector<AggregationNode::Aggregate> aggregates;
+  aggregates.reserve(obj["aggregates"].size());
+  for (const auto& aggregate : obj["aggregates"]) {
+    aggregates.push_back(
+        AggregationNode::Aggregate::deserialize(aggregate, context));
+  }
+
+  return ColumnStatsSpec{
+      std::move(groupingKeys),
+      aggregationStep,
+      std::move(aggregateNames),
+      std::move(aggregates)};
+}
+
 folly::dynamic TableWriteNode::serialize() const {
   auto obj = PlanNode::serialize();
   obj["columns"] = columns_->serialize();
   obj["columnNames"] = ISerializable::serialize(columnNames_);
-  if (aggregationNode_ != nullptr) {
-    obj["aggregationNode"] = aggregationNode_->serialize();
+  if (columnStatsSpec_.has_value()) {
+    obj["columnStatsSpec"] = columnStatsSpec_->serialize();
   }
   obj["connectorId"] = insertTableHandle_->connectorId();
   obj["connectorInsertTableHandle"] =
@@ -2625,11 +2721,15 @@ PlanNodePtr TableWriteNode::create(const folly::dynamic& obj, void* context) {
   auto outputType = deserializeRowType(obj["outputType"]);
   auto commitStrategy =
       connector::stringToCommitStrategy(obj["commitStrategy"].asString());
+  std::optional<ColumnStatsSpec> columnStatsSpec;
+  if (obj.count("columnStatsSpec") != 0) {
+    columnStatsSpec = ColumnStatsSpec::create(obj["columnStatsSpec"], context);
+  }
   return std::make_shared<TableWriteNode>(
       id,
       columns,
       columnNames,
-      std::move(aggregationNode),
+      std::move(columnStatsSpec),
       std::make_shared<InsertTableHandle>(
           connectorId, connectorInsertTableHandle),
       hasPartitioningScheme,
@@ -2644,8 +2744,8 @@ folly::dynamic TableWriteMergeNode::serialize() const {
   auto obj = PlanNode::serialize();
   VELOX_CHECK_EQ(
       sources_.size(), 1, "TableWriteMergeNode can only have one source");
-  if (aggregationNode_ != nullptr) {
-    obj["aggregationNode"] = aggregationNode_->serialize();
+  if (columnStatsSpec_.has_value()) {
+    obj["columnStatsSpec"] = columnStatsSpec_->serialize();
   }
   obj["outputType"] = outputType_->serialize();
   return obj;
@@ -2663,13 +2763,15 @@ PlanNodePtr TableWriteMergeNode::create(
     void* context) {
   auto id = obj["id"].asString();
   auto outputType = deserializeRowType(obj["outputType"]);
-  AggregationNodePtr aggregationNode;
-  if (obj.count("aggregationNode") != 0) {
-    aggregationNode = ISerializable::deserialize<AggregationNode>(
-        obj["aggregationNode"], context);
+  std::optional<ColumnStatsSpec> columnStatsSpec;
+  if (obj.count("columnStatsSpec") != 0) {
+    columnStatsSpec = ColumnStatsSpec::create(obj["columnStatsSpec"], context);
   }
   return std::make_shared<TableWriteMergeNode>(
-      id, outputType, aggregationNode, deserializeSingleSource(obj, context));
+      id,
+      outputType,
+      std::move(columnStatsSpec),
+      deserializeSingleSource(obj, context));
 }
 
 MergeExchangeNode::MergeExchangeNode(
@@ -3206,7 +3308,7 @@ void PlanNode::toString(
     const std::function<void(
         const PlanNodeId& planNodeId,
         const std::string& indentation,
-        std::stringstream& stream)>& addContext) const {
+        std::ostream& stream)>& addContext) const {
   const std::string indentation(indentationSize, ' ');
 
   stream << indentation << "-- " << name() << "[" << id() << "]";
@@ -3221,10 +3323,8 @@ void PlanNode::toString(
   stream << std::endl;
 
   if (addContext) {
-    auto contextIndentation = indentation + "   ";
-    stream << contextIndentation;
+    const auto contextIndentation = indentation + "   ";
     addContext(id(), contextIndentation, stream);
-    stream << std::endl;
   }
 
   if (recursive) {
