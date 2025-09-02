@@ -735,58 +735,60 @@ TEST_F(ArithmeticTest, checkedDivide) {
 }
 
 TEST_F(ArithmeticTest, abs) {
-  EXPECT_EQ(abs<int8_t>(-127), 127);
+  for (const auto& ansiEnabled : {"false", "true"}) {
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{core::QueryConfig::kSparkAnsiEnabled, ansiEnabled}});
+
+    EXPECT_EQ(abs<int8_t>(-127), 127);
+    EXPECT_EQ(abs<int16_t>(-32767), 32767);
+    EXPECT_EQ(abs<int32_t>(-2147483647), 2147483647);
+    EXPECT_EQ(abs<int64_t>(-9223372036854775807), 9223372036854775807);
+
+    EXPECT_EQ(abs<float>(-99999.9999f), 99999.9999f);
+    EXPECT_EQ(
+        abs<float>(std::numeric_limits<float>::lowest()),
+        std::numeric_limits<float>::max());
+    EXPECT_EQ(abs<double>(-99999.9999), 99999.9999);
+    EXPECT_EQ(
+        abs<double>(std::numeric_limits<double>::lowest()),
+        std::numeric_limits<double>::max());
+  }
+}
+
+TEST_F(ArithmeticTest, absMinValueOverflow) {
+  //Test abs with ANSI off.
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
+
   EXPECT_EQ(
       abs<int8_t>(std::numeric_limits<int8_t>::min()),
       std::numeric_limits<int8_t>::min());
-  EXPECT_EQ(abs<int16_t>(-32767), 32767);
   EXPECT_EQ(
       abs<int16_t>(std::numeric_limits<int16_t>::min()),
       std::numeric_limits<int16_t>::min());
-  EXPECT_EQ(abs<int32_t>(-2147483647), 2147483647);
   EXPECT_EQ(
       abs<int32_t>(std::numeric_limits<int32_t>::min()),
       std::numeric_limits<int32_t>::min());
-  EXPECT_EQ(abs<int64_t>(-9223372036854775807), 9223372036854775807);
   EXPECT_EQ(
       abs<int64_t>(std::numeric_limits<int64_t>::min()),
       std::numeric_limits<int64_t>::min());
-  EXPECT_EQ(abs<float>(-99999.9999f), 99999.9999f);
-  EXPECT_EQ(
-      abs<float>(std::numeric_limits<float>::lowest()),
-      std::numeric_limits<float>::max());
-  EXPECT_EQ(abs<double>(-99999.9999), 99999.9999);
-  EXPECT_EQ(
-      abs<double>(std::numeric_limits<double>::lowest()),
-      std::numeric_limits<double>::max());
-}
 
-TEST_F(ArithmeticTest, absAnsiMode) {
-  // Enable ANSI mode
+  //Test abs with ANSI on.
   queryCtx_->testingOverrideConfigUnsafe(
       {{core::QueryConfig::kSparkAnsiEnabled, "true"}});
 
-  // Normal cases should still work
-  EXPECT_EQ(abs<int64_t>(-9223372036854775807), 9223372036854775807);
-
-  // Minimum values should throw in ANSI mode
-  EXPECT_THROW(abs<int8_t>(std::numeric_limits<int8_t>::min()), VeloxUserError);
   EXPECT_THROW(
-      abs<int16_t>(std::numeric_limits<int16_t>::min()), VeloxUserError);
+      abs<int8_t>(std::numeric_limits<int8_t>::min()),
+      VeloxUserError);
   EXPECT_THROW(
-      abs<int32_t>(std::numeric_limits<int32_t>::min()), VeloxUserError);
+      abs<int16_t>(std::numeric_limits<int16_t>::min()),
+      VeloxUserError);
   EXPECT_THROW(
-      abs<int64_t>(std::numeric_limits<int64_t>::min()), VeloxUserError);
-
-  // Floating point should still work normally (no overflow for floats)
-  EXPECT_EQ(abs<float>(-99999.9999f), 99999.9999f);
-  EXPECT_EQ(
-      abs<float>(std::numeric_limits<float>::lowest()),
-      std::numeric_limits<float>::max());
-  EXPECT_EQ(abs<double>(-99999.9999), 99999.9999);
-  EXPECT_EQ(
-      abs<double>(std::numeric_limits<double>::lowest()),
-      std::numeric_limits<double>::max());
+      abs<int32_t>(std::numeric_limits<int32_t>::min()),
+      VeloxUserError);
+  EXPECT_THROW(
+      abs<int64_t>(std::numeric_limits<int64_t>::min()),
+      VeloxUserError);
 }
 
 class LogNTest : public SparkFunctionBaseTest {
