@@ -122,7 +122,7 @@ This is the behavior when the proxy settings are enabled:
 5. Use . or \*. to indicate domain suffix matching, e.g. `.foobar.com` will
    match `test.foobar.com` or `foo.foobar.com`.
 
-HDfs Storage adapter
+HDFS Storage adapter
 ********************************
 
 Velox currently supports HDFS by dynamically loading libhdfs.so from the environment's ${HADOOP_HOME}/native/lib directory. If you prefer to use libhdfs3 instead, you can create a symbolic link from libhdfs.so to libhdfs3.so within the same directory.
