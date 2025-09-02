@@ -756,7 +756,7 @@ TEST_F(ArithmeticTest, abs) {
 }
 
 TEST_F(ArithmeticTest, absMinValueOverflow) {
-  //Test abs with ANSI off.
+  // Test abs with ANSI off.
   queryCtx_->testingOverrideConfigUnsafe(
       {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
 
@@ -773,22 +773,17 @@ TEST_F(ArithmeticTest, absMinValueOverflow) {
       abs<int64_t>(std::numeric_limits<int64_t>::min()),
       std::numeric_limits<int64_t>::min());
 
-  //Test abs with ANSI on.
+  // Test abs with ANSI on.
   queryCtx_->testingOverrideConfigUnsafe(
       {{core::QueryConfig::kSparkAnsiEnabled, "true"}});
 
+  EXPECT_THROW(abs<int8_t>(std::numeric_limits<int8_t>::min()), VeloxUserError);
   EXPECT_THROW(
-      abs<int8_t>(std::numeric_limits<int8_t>::min()),
-      VeloxUserError);
+      abs<int16_t>(std::numeric_limits<int16_t>::min()), VeloxUserError);
   EXPECT_THROW(
-      abs<int16_t>(std::numeric_limits<int16_t>::min()),
-      VeloxUserError);
+      abs<int32_t>(std::numeric_limits<int32_t>::min()), VeloxUserError);
   EXPECT_THROW(
-      abs<int32_t>(std::numeric_limits<int32_t>::min()),
-      VeloxUserError);
-  EXPECT_THROW(
-      abs<int64_t>(std::numeric_limits<int64_t>::min()),
-      VeloxUserError);
+      abs<int64_t>(std::numeric_limits<int64_t>::min()), VeloxUserError);
 }
 
 class LogNTest : public SparkFunctionBaseTest {
