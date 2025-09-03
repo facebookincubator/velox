@@ -31,6 +31,8 @@
 %token <std::string> WORD VARIABLE QUOTED_ID DECIMAL
 %token YYEOF         0
 
+%expect 2
+
 %nterm <std::shared_ptr<exec::TypeSignature>> special_type function_type decimal_type row_type array_type map_type
 %nterm <std::shared_ptr<exec::TypeSignature>> type named_type
 %nterm <std::vector<exec::TypeSignature>> type_list type_list_opt_names
