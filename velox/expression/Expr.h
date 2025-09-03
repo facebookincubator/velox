@@ -881,7 +881,7 @@ std::unique_ptr<ExprSet> makeExprSetFromFlag(
 VectorPtr tryEvaluateConstantExpression(
     const core::TypedExprPtr& expr,
     memory::MemoryPool* pool,
-    const std::shared_ptr<core::QueryCtx>& queryCtx,
+    core::QueryCtx* queryCtx,
     bool suppressEvaluationFailures = false);
 
 /// Returns a string representation of the expression trees annotated with

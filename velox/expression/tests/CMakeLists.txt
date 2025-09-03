@@ -23,6 +23,7 @@ add_executable(
   CustomTypeTest.cpp
   ExprCompilerTest.cpp
   ExprEncodingsTest.cpp
+  ExprOptimizerTest.cpp
   ExprRewriteRegistryTest.cpp
   ExprStatsTest.cpp
   ExprTest.cpp
