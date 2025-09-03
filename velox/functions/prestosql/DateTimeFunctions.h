@@ -1529,6 +1529,33 @@ struct CurrentDateFunction {
 };
 
 template <typename T>
+struct LocalTimeFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  int64_t millisOfDay_{0};
+
+  static constexpr int64_t kMillisInDay = 24LL * 60 * 60 * 1000;
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config) {
+    auto ts = Timestamp::now();
+    int64_t epochMs = ts.toMillis();
+
+    auto timeZoneKey = tz::getTimeZoneID(config.sessionTimezone(), true);
+    const auto* zone = tz::locateZone(timeZoneKey);
+
+    auto localMs = zone->to_local(std::chrono::milliseconds{epochMs}).count();
+
+    millisOfDay_ = localMs % kMillisInDay;
+  }
+
+  FOLLY_ALWAYS_INLINE void call(out_type<int64_t>& result) {
+    result = millisOfDay_;
+  }
+};
+
+template <typename T>
 struct TimeZoneHourFunction : public TimestampWithTimezoneSupport<T> {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 

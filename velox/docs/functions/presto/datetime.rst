@@ -177,6 +177,10 @@ Date and Time Functions
 
     Returns ``timestamp`` as a UNIX timestamp.
 
+.. function:: localtime -> bigint
+
+    Returns the current time as of the start of the query.
+
 Truncation Function
 -------------------
 
