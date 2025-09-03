@@ -20,9 +20,12 @@
 #include "velox/type/Type.h"
 
 namespace facebook::velox {
+/// velox/type/parser has been moved to velox/functions/prestosql/types/parser.
+/// This file is for backward compatibility and will be removed once Presto is
+/// updated with the new Velox version.
 
-/// Parses a type string in Presto format to Velox type.
-/// Example type strings:
+/// Parses a type string in Presto format to
+/// Velox type. Example type strings:
 ///    row(col0 bigint, varchar)
 ///    array(bigint)
 ///    map(bigint, array(bigint))

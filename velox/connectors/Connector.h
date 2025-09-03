@@ -94,8 +94,10 @@ class ColumnHandle : public ISerializable {
  public:
   virtual ~ColumnHandle() = default;
 
-  virtual const std::string& name() const {
-    VELOX_UNSUPPORTED();
+  virtual const std::string& name() const = 0;
+
+  virtual std::string toString() const {
+    return name();
   }
 
   folly::dynamic serialize() const override;
@@ -119,33 +121,29 @@ class ConnectorTableHandle : public ISerializable {
 
   virtual ~ConnectorTableHandle() = default;
 
-  virtual std::string toString() const {
-    VELOX_NYI();
-  }
-
   const std::string& connectorId() const {
     return connectorId_;
   }
 
-  /// Returns the connector-dependent table name. Used with
-  /// ConnectorMetadata. Implementations need to supply a definition
-  /// to work with metadata.
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
   virtual const std::string& name() const {
-    VELOX_UNSUPPORTED();
+    VELOX_NYI();
   }
+#else
+  /// Returns the table name.
+  virtual const std::string& name() const = 0;
+#endif
 
   /// Returns true if the connector table handle supports index lookup.
   virtual bool supportsIndexLookup() const {
     return false;
   }
 
+  virtual std::string toString() const {
+    return name();
+  }
+
   virtual folly::dynamic serialize() const override;
-
-  static ConnectorTableHandlePtr create(
-      const folly::dynamic& obj,
-      void* context);
-
-  static void registerSerDe();
 
  protected:
   folly::dynamic serializeBase(std::string_view name) const;
@@ -527,6 +525,14 @@ class ConnectorQueryCtx {
     selectiveNimbleReaderEnabled_ = value;
   }
 
+  bool rowSizeTrackingEnabled() const {
+    return rowSizeTrackingEnabled_;
+  }
+
+  void setRowSizeTrackingEnabled(bool value) {
+    rowSizeTrackingEnabled_ = value;
+  }
+
   std::shared_ptr<filesystems::TokenProvider> fsTokenProvider() const {
     return fsTokenProvider_;
   }
@@ -549,13 +555,17 @@ class ConnectorQueryCtx {
   const folly::CancellationToken cancellationToken_;
   const std::shared_ptr<filesystems::TokenProvider> fsTokenProvider_;
   bool selectiveNimbleReaderEnabled_{false};
+  bool rowSizeTrackingEnabled_{true};
 };
 
 class ConnectorMetadata;
 
 class Connector {
  public:
-  explicit Connector(const std::string& id) : id_(id) {}
+  explicit Connector(
+      const std::string& id,
+      std::shared_ptr<const config::ConfigBase> config = nullptr)
+      : id_(id), config_(std::move(config)) {}
 
   virtual ~Connector() = default;
 
@@ -563,9 +573,8 @@ class Connector {
     return id_;
   }
 
-  virtual const std::shared_ptr<const config::ConfigBase>& connectorConfig()
-      const {
-    VELOX_NYI("connectorConfig is not supported yet");
+  const std::shared_ptr<const config::ConfigBase>& connectorConfig() const {
+    return config_;
   }
 
   /// Returns true if this connector would accept a filter dynamically
@@ -675,6 +684,7 @@ class Connector {
   static void unregisterTracker(cache::ScanTracker* tracker);
 
   const std::string id_;
+  const std::shared_ptr<const config::ConfigBase> config_;
 
   static folly::Synchronized<
       std::unordered_map<std::string_view, std::weak_ptr<cache::ScanTracker>>>
