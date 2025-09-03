@@ -13,21 +13,20 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#pragma once
+#include "velox/core/Expressions.h"
+#include "velox/core/QueryCtx.h"
 
 namespace facebook::velox::expression {
 
-inline constexpr const char* kAnd = "and";
-inline constexpr const char* kOr = "or";
-inline constexpr const char* kPlus = "plus";
-inline constexpr const char* kMultiply = "multiply";
-inline constexpr const char* kSwitch = "switch";
-inline constexpr const char* kIf = "if";
-inline constexpr const char* kCoalesce = "coalesce";
-inline constexpr const char* kCast = "cast";
-inline constexpr const char* kTryCast = "try_cast";
-inline constexpr const char* kTry = "try";
-inline constexpr const char* kRowConstructor = "row_constructor";
-inline constexpr const char* kFail = "fail";
-
+/// Optimizes expression through a combination of constant folding and rewrites.
+/// Constant folds all possible subtrees of the expression and the expression
+/// itself, if possible, then rewrites the folded expression. If an exception
+/// (i.e VeloxUserError) is encountered during constant folding, a fail
+/// expression with the error message will be returned instead of the original
+/// expression when 'replaceEvalErrorWithFailExpr' is set to 'true'.
+core::TypedExprPtr optimize(
+    const core::TypedExprPtr& expr,
+    core::QueryCtx* queryCtx,
+    memory::MemoryPool* pool,
+    bool replaceEvalErrorWithFailExpr);
 } // namespace facebook::velox::expression
