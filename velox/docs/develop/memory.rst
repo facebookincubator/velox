@@ -184,42 +184,101 @@ Here is the code block from Prestissimo that initializes the Velox memory system
   :linenos:
 
    void PrestoServer::initializeVeloxMemory() {
-     auto* systemConfig = SystemConfig::instance();
-     const uint64_t memoryGb = systemConfig->systemMemoryGb();
-     MemoryManagerOptions options;
-     options.allocatorCapacity = memoryGb << 30;
-     options.useMmapAllocator = systemConfig->useMmapAllocator();
-     if (!systemConfig->memoryArbitratorKind().empty()) {
-       options.arbitratorKind = systemConfig->memoryArbitratorKind();
-       const uint64_t queryMemoryGb = systemConfig->queryMemoryGb();
-       options.queryMemoryCapacity = queryMemoryGb << 30;
-       ...
-     }
-     memory::initializeMemoryManager(options);
+     // Get system configuration and memory settings
+     systemConfig = SystemConfig::instance()
+     memoryGb = systemConfig->systemMemoryGb()
 
-     if (systemConfig->asyncDataCacheEnabled()) {
-       ...
-       cache_ = std::make_shared<cache::AsyncDataCache>(
-          memoryManager()->allocator(), memoryBytes, std::move(ssd));
-     }
-     ...
+     // Configure memory manager options
+     MemoryManagerOptions options
+     options.allocatorCapacity = memoryGb << 30
+
+     // Configure memory allocator type
+     if systemConfig->useMmapAllocator():
+       options.useMmapAllocator = true
+
+     // Configure memory leak detection and usage tracking
+     options.checkUsageLeak = systemConfig->enableMemoryLeakCheck()
+     options.trackDefaultUsage = systemConfig->enableSystemMemoryPoolUsageTracking()
+     options.coreOnAllocationFailureEnabled = systemConfig->coreOnAllocationFailureEnabled()
+
+     // Configure memory arbitrator if enabled
+     if systemConfig->memoryArbitratorKind() is not empty:
+       options.arbitratorKind = systemConfig->memoryArbitratorKind()
+       queryMemoryGb = systemConfig->queryMemoryGb()
+
+       // Validate query memory does not exceed system memory
+       VALIDATE queryMemoryGb <= memoryGb
+       options.arbitratorCapacity = queryMemoryGb << 30
+
+       // Configure shared arbitrator reserved memory
+       sharedArbitratorReservedMemoryGb = convert systemConfig->sharedArbitratorReservedCapacity() to GB
+       VALIDATE sharedArbitratorReservedMemoryGb <= queryMemoryGb
+
+       options.largestSizeClassPages = systemConfig->largestSizeClassPages()
+       options.arbitrationStateCheckCb = memoryArbitrationStateCheck callback
+
+       // Configure shared arbitrator extra configurations
+       options.extraArbitratorConfigs = {
+         ReservedCapacity: systemConfig->sharedArbitratorReservedCapacity(),
+         MemoryPoolInitialCapacity: systemConfig->sharedArbitratorMemoryPoolInitialCapacity(),
+         MemoryPoolReservedCapacity: systemConfig->sharedArbitratorMemoryPoolReservedCapacity(),
+         MaxMemoryArbitrationTime: systemConfig->sharedArbitratorMaxMemoryArbitrationTime(),
+         MemoryPoolMinFreeCapacity: systemConfig->sharedArbitratorMemoryPoolMinFreeCapacity(),
+         MemoryPoolMinFreeCapacityPct: systemConfig->sharedArbitratorMemoryPoolMinFreeCapacityPct(),
+         GlobalArbitrationEnabled: systemConfig->sharedArbitratorGlobalArbitrationEnabled(),
+         FastExponentialGrowthCapacityLimit: systemConfig->sharedArbitratorFastExponentialGrowthCapacityLimit(),
+         SlowCapacityGrowPct: systemConfig->sharedArbitratorSlowCapacityGrowPct(),
+         CheckUsageLeak: systemConfig->enableMemoryLeakCheck(),
+         MemoryPoolAbortCapacityLimit: systemConfig->sharedArbitratorMemoryPoolAbortCapacityLimit(),
+         MemoryPoolMinReclaimBytes: systemConfig->sharedArbitratorMemoryPoolMinReclaimBytes(),
+         MemoryReclaimThreadsHwMultiplier: systemConfig->sharedArbitratorMemoryReclaimThreadsHwMultiplier(),
+         GlobalArbitrationMemoryReclaimPct: systemConfig->sharedArbitratorGlobalArbitrationMemoryReclaimPct(),
+         GlobalArbitrationAbortTimeRatio: systemConfig->sharedArbitratorGlobalArbitrationAbortTimeRatio(),
+         GlobalArbitrationWithoutSpill: systemConfig->sharedArbitratorGlobalArbitrationWithoutSpill()
+       }
+
+     // Initialize the memory manager with configured options
+     memory::initializeMemoryManager(options)
+
+     // Set up async data cache if enabled
+     if systemConfig->asyncDataCacheEnabled():
+       ssd = setupSsdCache()
+       cacheOptions = {
+         maxSsdWriteRatio: systemConfig->asyncCacheMaxSsdWriteRatio(),
+         ssdSavableRatio: systemConfig->asyncCacheSsdSavableRatio(),
+         minSsdSavableBytes: systemConfig->asyncCacheMinSsdSavableBytes()
+       }
+       cache_ = AsyncDataCache::create(memoryManager()->allocator(), ssd, cacheOptions)
+       AsyncDataCache::setInstance(cache_)
+
+       // Configure cache TTL if enabled
+       if isCacheTtlEnabled():
+         CacheTTLController::create(cache_)
+     else:
+       VALIDATE systemConfig->asyncCacheSsdGb() == 0
    }
 
-* L5: set the memory allocator capacity (system memory limit) from
-  the Prestissimo system config
-* L6: set the memory allocator type from the Prestissimo system config. If
-  *useMmapAllocator* is true, we use *MmapAllocator*, otherwise use
-  *MallocAllocator*. `Memory Allocator section <#memory-allocator>`_ describes these two
-  types of allocators
-* L8: set the memory arbitrator kind from the Prestissimo system config.
-  Currently, we only support the *“SHARED”* arbitrator kind (see `memory arbitrator section <#memory-arbitrator>`_).
-  *“NOOP”* arbitrator kind will be deprecated soon (`#8220 <https://github.com/facebookincubator/velox/issues/8220>`_)
-* L10: set the memory arbitrator capacity (query memory limit) from the
-  Prestissimo system config
-* L13: creates the process-wide memory manager which creates memory
-  allocator and arbitrator inside based on MemoryManagerOptions initialized from previous steps
-* L15-19: creates the file cache if it is enabled in Prestissimo system
-  config
+* L3-4: get system configuration instance and extract system memory size in GB
+* L7-8: configure memory allocator capacity (system memory limit) from system config
+* L11-12: configure memory allocator type - use MmapAllocator if enabled, otherwise MallocAllocator.
+* L15-17: configure memory leak detection, usage tracking, and core dump on allocation failure
+* L20-38: configure memory arbitrator if enabled:
+
+  - Set arbitrator kind and validate query memory limits
+  - Configure shared arbitrator reserved memory with validation
+  - Set largest size class pages and arbitration state check callback
+  - Configure comprehensive shared arbitrator parameters including capacity settings, arbitration timing,
+    growth parameters, leak checking, reclaim settings, and global arbitration controls
+
+* L41: initialize the process-wide memory manager with all configured options
+* L44-58: set up async data cache if enabled:
+
+  - Create SSD cache if available
+  - Configure cache options (write ratios, savable ratios, minimum bytes)
+  - Create and initialize AsyncDataCache instance
+  - Set up cache TTL controller if TTL is enabled
+
+* L59-60: validate that SSD cache is disabled when async data cache is disabled
 
 Memory Pool
 -----------
