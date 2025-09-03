@@ -31,11 +31,12 @@
 %token <std::string> WORD VARIABLE QUOTED_ID DECIMAL
 %token YYEOF         0
 
-%expect 2
+%expect 0
 
 %nterm <std::shared_ptr<exec::TypeSignature>> special_type function_type decimal_type row_type array_type map_type
 %nterm <std::shared_ptr<exec::TypeSignature>> type named_type
 %nterm <std::vector<exec::TypeSignature>> type_list type_list_opt_names
+%nterm <bool> row_ellipsis_opt
 %nterm <std::vector<std::string>> type_with_spaces
 
 %%
@@ -79,10 +80,25 @@ type_list_opt_names : named_type                           { $$.push_back(*($1))
                     | type_list_opt_names COMMA type       { $1.push_back(*($3)); $$ = std::move($1); }
                     ;
 
-row_type : ROW LPAREN type_list_opt_names RPAREN      { $$ = std::make_shared<exec::TypeSignature>("row", $3); }
-         | ROW LPAREN type COMMA ELLIPSIS RPAREN { $$ = std::make_shared<exec::TypeSignature>("row", std::vector<exec::TypeSignature>{*($3)}, std::nullopt, true); }
-         | ROW LPAREN named_type COMMA ELLIPSIS RPAREN { $$ = std::make_shared<exec::TypeSignature>("row", std::vector<exec::TypeSignature>{*($3)}, std::nullopt, true); }
-         ;
+// Factor row fields and an optional trailing ", ..." to avoid ambiguity between
+// heterogeneous rows and homogeneous rows with ellipsis.
+row_type : ROW LPAREN type_list_opt_names row_ellipsis_opt RPAREN
+                     {
+                         if ($4) {
+                             // Homogeneous row: require a single element to define the repeated field type.
+                             VELOX_CHECK(!($3).empty(), "row(T, ...) requires at least one element");
+                             VELOX_CHECK((($3).size() == 1), "row(T, ...) must have exactly one element, got {}", ($3).size());
+                             $$ = std::make_shared<exec::TypeSignature>("row", std::vector<exec::TypeSignature>{($3)[0]}, std::nullopt, true);
+                         } else {
+                             // Heterogeneous row with explicit field list.
+                             $$ = std::make_shared<exec::TypeSignature>("row", $3);
+                         }
+                     }
+                 ;
+
+row_ellipsis_opt : /* empty */     { $$ = false; }
+                                 | COMMA ELLIPSIS  { $$ = true; }
+                                 ;
 
 array_type : ARRAY LPAREN type RPAREN             { $$ = std::make_shared<exec::TypeSignature>(exec::TypeSignature("array", { *($3) })); }
            | ARRAY LPAREN type_with_spaces RPAREN { $$ = std::make_shared<exec::TypeSignature>(exec::TypeSignature("array", { *inferTypeWithSpaces($3) })); }
