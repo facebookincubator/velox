@@ -26,5 +26,6 @@ inline constexpr const char* kCast = "cast";
 inline constexpr const char* kTryCast = "try_cast";
 inline constexpr const char* kTry = "try";
 inline constexpr const char* kRowConstructor = "row_constructor";
+inline constexpr const char* kFail = "fail";
 
 } // namespace facebook::velox::expression

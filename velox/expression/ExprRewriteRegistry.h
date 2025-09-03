@@ -17,6 +17,7 @@
 
 #include <folly/Synchronized.h>
 #include "velox/core/Expressions.h"
+#include "velox/core/QueryCtx.h"
 
 namespace facebook::velox::expression {
 
@@ -27,18 +28,27 @@ using ExpressionRewrite =
 
 class ExprRewriteRegistry {
  public:
-  /// Appends a 'rewrite' to 'expressionRewrites'.
-  ///
-  /// The logic that applies re-writes is very simple and assumes that all
-  /// rewrites are independent. For each expression, rewrites are applied in the
-  /// order they were registered. The first rewrite that returns non-null result
-  /// terminates the re-write for that particular expression.
+  /// Adds a 'rewrite' to registry.
   void registerRewrite(ExpressionRewrite rewrite);
 
   /// Clears the registry to remove all registered rewrites.
   void clear();
 
-  core::TypedExprPtr rewrite(const core::TypedExprPtr& expr);
+  /// Applies re-writes to expression with a simple logic that assumes all
+  /// rewrites are independent. Rewrites are applied to the expression in order
+  /// they were registered. The first rewrite that returns non-null result
+  /// terminates the re-write for the expression. After rewrites are applied,
+  /// the expression is constant folded recursively in a bottom-up manner when
+  /// 'enableConstantFolding' is 'true'. If a VeloxUserError is encountered
+  /// during constant folding, a fail expression with the error message can be
+  /// returned instead of the original expression by setting the argument
+  /// 'replaceEvalErrorWithFailExpr' to 'true'.
+  core::TypedExprPtr rewrite(
+      const core::TypedExprPtr& expr,
+      core::QueryCtx* queryCtx,
+      memory::MemoryPool* pool,
+      bool enableConstantFolding = true,
+      bool replaceEvalErrorWithFailExpr = false);
 
   static ExprRewriteRegistry& instance() {
     static ExprRewriteRegistry kInstance;

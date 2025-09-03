@@ -16,8 +16,37 @@
 
 #include "velox/expression/ExprUtils.h"
 #include "velox/core/Expressions.h"
+#include "velox/expression/ExprConstants.h"
 
 namespace facebook::velox::expression::utils {
+
+namespace {
+
+// Helper function to constant fold the expression and return a fail expression
+// in case constant folding throws an exception.
+core::TypedExprPtr tryConstantFold(
+    const core::TypedExprPtr& expr,
+    core::QueryCtx* queryCtx,
+    memory::MemoryPool* pool,
+    bool replaceEvalErrorWithFailExpr) {
+  try {
+    if (auto results =
+            exec::tryEvaluateConstantExpression(expr, pool, queryCtx, false)) {
+      return std::make_shared<core::ConstantTypedExpr>(results);
+    }
+    // Return the expression unevaluated.
+    return expr;
+  } catch (VeloxUserError& e) {
+    if (replaceEvalErrorWithFailExpr) {
+      return std::make_shared<core::CallTypedExpr>(
+          UNKNOWN(),
+          kFail,
+          std::make_shared<core::ConstantTypedExpr>(VARCHAR(), e.what()));
+    }
+    return expr;
+  }
+}
+} // namespace
 
 bool isCall(const core::TypedExprPtr& expr, const std::string& name) {
   if (expr->isCallKind()) {
@@ -47,6 +76,49 @@ bool allInputTypesEquivalent(const core::TypedExprPtr& expr) {
     }
   }
   return true;
+}
+
+core::TypedExprPtr constantFold(
+    const core::TypedExprPtr& expr,
+    core::QueryCtx* queryCtx,
+    memory::MemoryPool* pool,
+    bool replaceEvaluationErrWithFailFunction) {
+  std::vector<core::TypedExprPtr> foldedInputs;
+  for (const auto& input : expr->inputs()) {
+    foldedInputs.push_back(constantFold(
+        input, queryCtx, pool, replaceEvaluationErrWithFailFunction));
+  }
+
+  core::TypedExprPtr result;
+  if (const auto* callExpr = expr->asUnchecked<core::CallTypedExpr>()) {
+    result = std::make_shared<core::CallTypedExpr>(
+        callExpr->type(), foldedInputs, callExpr->name());
+  } else if (const auto* castExpr = expr->asUnchecked<core::CastTypedExpr>()) {
+    result = std::make_shared<core::CastTypedExpr>(
+        expr->type(), foldedInputs, castExpr->isTryCast());
+  } else if (
+      const auto* lambdaExpr = expr->asUnchecked<core::LambdaTypedExpr>()) {
+    const auto foldedBody = constantFold(
+        lambdaExpr->body(),
+        queryCtx,
+        pool,
+        replaceEvaluationErrWithFailFunction);
+    result = std::make_shared<core::LambdaTypedExpr>(
+        lambdaExpr->signature(), foldedBody);
+  } else if (
+      const auto constantExpr =
+          std::dynamic_pointer_cast<const core::ConstantTypedExpr>(expr)) {
+    return constantExpr;
+  } else if (
+      const auto field =
+          std::dynamic_pointer_cast<const core::FieldAccessTypedExpr>(expr)) {
+    return field;
+  } else {
+    result = expr;
+  }
+
+  return tryConstantFold(
+      result, queryCtx, pool, replaceEvaluationErrWithFailFunction);
 }
 
 } // namespace facebook::velox::expression::utils

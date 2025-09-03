@@ -47,4 +47,15 @@ void flattenInput(
     const std::string& flattenCall,
     std::vector<core::TypedExprPtr>& flat);
 
+/// Evaluates the expression to a constant if possible, otherwise constant folds
+/// all possible subtrees of the expression. If a VeloxUserError is encountered
+/// during constant folding, a fail expression with the error message will be
+/// returned instead of the original expression when the argument
+/// 'replaceEvalErrorWithFailExpr' is set to 'true'.
+core::TypedExprPtr constantFold(
+    const core::TypedExprPtr& expr,
+    core::QueryCtx* queryCtx,
+    memory::MemoryPool* pool,
+    bool replaceEvalErrorWithFailExpr = false);
+
 } // namespace facebook::velox::expression::utils
