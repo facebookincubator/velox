@@ -124,7 +124,7 @@ TEST_F(FunctionSignatureBuilderTest, typeParamTests) {
           .returnType("integer")
           .argumentType("row(..., varchar)")
           .build(),
-      "Failed to parse type signature [row(..., varchar)]: syntax error, unexpected COMMA");
+      "Failed to parse type signature [row(..., varchar)]: syntax error, unexpected ELLIPSIS");
 
   // Type params cant have type params.
   VELOX_ASSERT_THROW(
