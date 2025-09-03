@@ -31,8 +31,7 @@ TEST_F(ExprRewriteRegistryTest, basic) {
       };
   registry.registerRewrite(testRewrite);
 
-  auto input =
-      std::make_shared<core::ConstantTypedExpr>(BIGINT(), variant(123));
+  auto input = std::make_shared<core::ConstantTypedExpr>(BIGINT(), 123LL);
   const auto rewritten = registry.rewrite(input);
   ASSERT_TRUE(rewritten->isCallKind());
   ASSERT_TRUE(rewritten->type()->isBigint());
