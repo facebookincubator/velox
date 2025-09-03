@@ -17,10 +17,10 @@
 #pragma once
 
 #include <boost/regex.hpp>
-#include <type/Conversions.h>
 #include "velox/functions/Macros.h"
 #include "velox/functions/lib/JsonUtil.h"
 #include "velox/functions/prestosql/json/SIMDJsonUtil.h"
+#include "velox/type/Conversions.h"
 
 namespace facebook::velox::functions::sparksql {
 
