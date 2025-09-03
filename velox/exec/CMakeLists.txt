@@ -26,6 +26,7 @@ velox_add_library(
   BlockingReason.cpp
   CallbackSink.cpp
   ContainerRowSerde.cpp
+  ColumnStatsCollector.cpp
   DistinctAggregations.cpp
   Driver.cpp
   EnforceSingleRow.cpp
@@ -55,6 +56,8 @@ velox_add_library(
   MergeSource.cpp
   NestedLoopJoinBuild.cpp
   NestedLoopJoinProbe.cpp
+  SpatialJoinBuild.cpp
+  SpatialJoinProbe.cpp
   Operator.cpp
   OperatorUtils.cpp
   OrderBy.cpp
@@ -99,7 +102,8 @@ velox_add_library(
   Window.cpp
   WindowBuild.cpp
   WindowFunction.cpp
-  WindowPartition.cpp)
+  WindowPartition.cpp
+)
 
 velox_link_libraries(
   velox_exec
@@ -112,7 +116,8 @@ velox_link_libraries(
   velox_common_base
   velox_test_util
   velox_arrow_bridge
-  velox_common_compression)
+  velox_common_compression
+)
 
 velox_add_library(velox_cursor Cursor.cpp)
 velox_link_libraries(
@@ -126,7 +131,8 @@ velox_link_libraries(
   velox_type_fbhive
   velox_presto_serializer
   velox_functions_prestosql
-  velox_aggregates)
+  velox_aggregates
+)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(fuzzer)

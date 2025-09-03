@@ -751,7 +751,12 @@ struct StGeometryTypeFunction {
     std::unique_ptr<geos::geom::Geometry> geosGeometry =
         geospatial::GeometryDeserializer::deserialize(input);
 
-    result = geosGeometry->getGeometryType();
+    if (geosGeometry->getGeometryTypeId() ==
+        geos::geom::GeometryTypeId::GEOS_GEOMETRYCOLLECTION) {
+      result = "ST_GeomCollection";
+    } else {
+      result = "ST_" + geosGeometry->getGeometryType();
+    }
 
     return Status::OK();
   }
@@ -1736,6 +1741,31 @@ struct GeometryFromGeoJsonFunction {
     auto reader = geos::io::GeoJSONReader();
     auto geosGeometry = reader.read(geometry);
     geospatial::GeometrySerializer::serialize(*geosGeometry, result);
+  }
+};
+
+template <typename T>
+struct GreatCircleDistanceFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE Status call(
+      out_type<double>& result,
+      const arg_type<double>& lat1,
+      const arg_type<double>& long1,
+      const arg_type<double>& lat2,
+      const arg_type<double>& long2) {
+    Status status = geospatial::validateLatitudeLongitude(lat1, long1);
+    if (FOLLY_UNLIKELY(!status.ok())) {
+      return status;
+    }
+
+    status = geospatial::validateLatitudeLongitude(lat2, long2);
+    if (FOLLY_UNLIKELY(!status.ok())) {
+      return status;
+    }
+
+    result = BingTileType::greatCircleDistance(lat1, long1, lat2, long2);
+    return status;
   }
 };
 

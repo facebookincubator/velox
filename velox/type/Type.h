@@ -16,6 +16,7 @@
 #pragma once
 
 #include <folly/CPortability.h>
+#include <folly/Hash.h>
 #include <folly/Random.h>
 #include <folly/Range.h>
 #include <folly/dynamic.h>
@@ -33,6 +34,7 @@
 #include <vector>
 
 #include <velox/common/Enums.h>
+#include "velox/common/base/BitUtil.h"
 #include "velox/common/base/ClassName.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/Macros.h"
@@ -388,14 +390,31 @@ struct TypeFactory;
 class Type;
 using TypePtr = std::shared_ptr<const Type>;
 
-/// A struct which represents the parameters for a BigintEnumType.
+/// Represents the parameters for a BigintEnumType.
 /// Consists of the name of the enum and a map of string keys to bigint values.
 struct LongEnumParameter {
+  LongEnumParameter() = default;
+
+  LongEnumParameter(
+      std::string enumName,
+      std::unordered_map<std::string, int64_t> enumValuesMap)
+      : name(std::move(enumName)), valuesMap(std::move(enumValuesMap)) {}
+
+  bool operator==(const LongEnumParameter& other) const {
+    return name == other.name && valuesMap == other.valuesMap;
+  }
+
+  folly::dynamic serializeEnumParameter() const;
+
+  struct Hash {
+    size_t operator()(const LongEnumParameter& param) const;
+  };
+
   std::string name;
   std::unordered_map<std::string, int64_t> valuesMap;
 };
 
-/// A struct which represents the parameters for a VarcharEnumType.
+/// Represents the parameters for a VarcharEnumType.
 /// Consists of the name of the enum and a map of string keys to string values.
 struct VarcharEnumParameter {
   std::string name;
@@ -457,21 +476,21 @@ struct TypeParameter {
         rowFieldName{std::nullopt} {}
 
   /// Creates kLongEnumLiteral parameter.
-  explicit TypeParameter(const LongEnumParameter& _longEnumParameter)
+  explicit TypeParameter(LongEnumParameter _longEnumParameter)
       : kind{TypeParameterKind::kLongEnumLiteral},
         type{nullptr},
         longLiteral{std::nullopt},
-        longEnumLiteral{_longEnumParameter},
+        longEnumLiteral{std::move(_longEnumParameter)},
         varcharEnumLiteral(std::nullopt),
         rowFieldName{std::nullopt} {}
 
   /// Creates kVarcharEnumLiteral parameter.
-  explicit TypeParameter(const VarcharEnumParameter& _varcharEnumParameter)
+  explicit TypeParameter(VarcharEnumParameter _varcharEnumParameter)
       : kind{TypeParameterKind::kVarcharEnumLiteral},
         type{nullptr},
         longLiteral{std::nullopt},
         longEnumLiteral{std::nullopt},
-        varcharEnumLiteral{_varcharEnumParameter},
+        varcharEnumLiteral{std::move(_varcharEnumParameter)},
         rowFieldName{std::nullopt} {}
 };
 
@@ -1536,16 +1555,51 @@ struct TypeFactory<TypeKind::ROW> {
   }
 };
 
+/// Returns an array of 'elementType'.
+///
+/// Example: ARRAY(INTEGER()).
 ArrayTypePtr ARRAY(TypePtr elementType);
 
+/// Returns a map of 'keyType' and 'valueType'.
+///
+/// Example: MAP(INTEGER(), REAL()).
+MapTypePtr MAP(TypePtr keyType, TypePtr valueType);
+
+/// Returns a struct with specified field names and types. Number of 'names'
+/// must match number of 'types'. Empty 'names' and 'types' are allowed.
+///
+/// Example: ROW({"a", "b", "c"}, {INTEGER(), BIGINT(), VARCHAR()}).
 RowTypePtr ROW(std::vector<std::string> names, std::vector<TypePtr> types);
 
+/// Returns a homogenous struct where all fields have the same type.
+///
+/// Example:
+///
+///   ROW({"a", "b", "c"}, REAL()) is a shortcut for
+///     ROW({"a", "b", "c"}, {REAL(), REAL(), REAL()}).
+RowTypePtr ROW(std::vector<std::string> names, const TypePtr& childType);
+
+RowTypePtr ROW(
+    std::initializer_list<std::string> names,
+    const TypePtr& childType);
+
+/// Creates a RowType from list of (name, type) pairs.
+///
+/// Example: ROW({{"a", INTEGER()}, {"b", BIGINT()}, {"c", VARCHAR()}}).
 RowTypePtr ROW(
     std::initializer_list<std::pair<const std::string, TypePtr>>&& pairs);
 
-RowTypePtr ROW(std::vector<TypePtr>&& types);
+/// Returns a struct with a single field.
+///
+/// Example: ROW("a", BIGINT()) is a shortcut for ROW({{"a", BIGINT()}}).
+RowTypePtr ROW(std::string name, TypePtr type);
 
-MapTypePtr MAP(TypePtr keyType, TypePtr valType);
+/// Returns anonymoous struct where field names are empty.
+///
+/// Examples:
+///    ROW({INTEGER(), BIGINT(), VARCHAR()})
+///    ROW({}) // Struct with no fields.
+RowTypePtr ROW(std::vector<TypePtr>&& types);
 
 std::shared_ptr<const FunctionType> FUNCTION(
     std::vector<TypePtr>&& argumentTypes,
