@@ -19,8 +19,7 @@ add_executable(velox_cudf_table_scan_test Main.cpp TableScanTest.cpp)
 add_executable(velox_cudf_table_write_test Main.cpp TableWriteTest.cpp)
 add_executable(velox_cudf_local_partition_test Main.cpp LocalPartitionTest.cpp)
 add_executable(velox_cudf_filter_project_test Main.cpp FilterProjectTest.cpp)
-add_executable(velox_cudf_subfield_filter_ast_test Main.cpp
-                                                   SubfieldFilterAstTest.cpp)
+add_executable(velox_cudf_subfield_filter_ast_test Main.cpp SubfieldFilterAstTest.cpp)
 add_executable(velox_cudf_limit_test Main.cpp LimitTest.cpp)
 
 # target_compile_definitions(velox_cudf_hash_join_test PRIVATE -g -O0)
@@ -74,7 +73,8 @@ add_test(
 add_test(
   NAME velox_cudf_subfield_filter_ast_test
   COMMAND velox_cudf_subfield_filter_ast_test
-  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
 
 add_test(
   NAME velox_cudf_limit_test
@@ -180,7 +180,8 @@ target_link_libraries(
   velox_exec_test_lib
   velox_test_util
   gtest
-  gtest_main)
+  gtest_main
+)
 
 target_link_libraries(
   velox_cudf_limit_test
