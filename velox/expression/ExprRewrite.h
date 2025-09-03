@@ -16,6 +16,7 @@
 #pragma once
 
 #include "velox/core/Expressions.h"
+#include "velox/core/QueryCtx.h"
 
 namespace facebook::velox::expression {
 
@@ -26,6 +27,11 @@ using ExpressionRewrite =
 
 /// Applies all registered expression rewrites to `expr` sequentially, returns
 /// the rewritten expression.
-core::TypedExprPtr rewriteExpression(const core::TypedExprPtr& expr);
+core::TypedExprPtr rewriteExpression(
+    const core::TypedExprPtr& expr,
+    core::QueryCtx* queryCtx,
+    memory::MemoryPool* pool,
+    bool enableConstantFolding = true,
+    bool replaceEvaluationErrWithFailFunction = false);
 
 } // namespace facebook::velox::expression
