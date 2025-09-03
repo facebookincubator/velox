@@ -564,7 +564,8 @@ void WriterOptions::processConfigs(
     parquetWriteTimestampUnit =
         getTimestampUnit(session, kParquetSessionWriteTimestampUnit).has_value()
         ? getTimestampUnit(session, kParquetSessionWriteTimestampUnit)
-        : getTimestampUnit(connectorConfig, kParquetHiveConnectorWriteTimestampUnit);
+        : getTimestampUnit(
+              connectorConfig, kParquetHiveConnectorWriteTimestampUnit);
   }
   if (!parquetWriteTimestampTimeZone) {
     parquetWriteTimestampTimeZone = parquetWriterOptions->sessionTimezoneName;
