@@ -150,6 +150,13 @@ struct PlanSummaryOptions {
   };
 
   AggregateOptions aggregate = {};
+
+  // Options that apply specifically to FILTER nodes.
+  struct FilterOptions {
+    size_t maxConditions = 50;
+  };
+
+  FilterOptions filter = {};
 };
 
 class PlanNode : public ISerializable {
