@@ -83,9 +83,12 @@ std::vector<AggregateInfo> toAggregateInfo(
     }
 
     info.distinct = aggregate.distinct;
-    info.intermediateType = resolveAggregateFunction(
-                                aggregate.call->name(), aggregate.rawInputTypes)
-                                .second;
+    if (aggregate.resultTypeResolvable) {
+      info.intermediateType =
+          resolveAggregateFunction(
+              aggregate.call->name(), aggregate.rawInputTypes)
+              .second;
+    }
 
     // Setup aggregation mask: convert the Variable Reference name to the
     // channel (projection) index, if there is a mask.
