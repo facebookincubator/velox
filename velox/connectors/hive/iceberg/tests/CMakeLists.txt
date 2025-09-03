@@ -11,7 +11,11 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-add_library(velox_dwio_iceberg_reader_benchmark_lib IcebergSplitReaderBenchmark.cpp)
+add_library(
+  velox_dwio_iceberg_reader_benchmark_lib
+  IcebergSplitReaderBenchmark.cpp
+  IcebergReadTestBase.cpp
+)
 target_link_libraries(
   velox_dwio_iceberg_reader_benchmark_lib
   velox_exec_test_lib
@@ -37,7 +41,12 @@ if(VELOX_ENABLE_BENCHMARKS)
 endif()
 
 if(NOT VELOX_DISABLE_GOOGLETEST)
-  add_executable(velox_hive_iceberg_test IcebergReadTest.cpp IcebergSplitReaderBenchmarkTest.cpp)
+  add_executable(
+    velox_hive_iceberg_test
+    IcebergReadPositionalDeleteTest.cpp
+    IcebergReadEqualityDeleteTest.cpp
+    IcebergSplitReaderBenchmarkTest.cpp
+  )
   add_test(velox_hive_iceberg_test velox_hive_iceberg_test)
 
   target_link_libraries(
