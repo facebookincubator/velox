@@ -2,7 +2,7 @@
 Spark Functions
 ***********************
 
-The semantics of Spark functions match Spark 3.5 with ANSI OFF.
+The semantics of Spark functions align with Spark 3.5 in ANSI OFF mode. A function is marked as ANSI compliant if it adheres to ANSI standards. 
 
 .. toctree::
     :maxdepth: 1
