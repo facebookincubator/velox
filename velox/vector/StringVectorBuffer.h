@@ -41,7 +41,7 @@ class StringVectorBuffer {
 
   /// Appends a byte to the buffer.
   void appendByte(int8_t value);
-  
+
   /// Appends a sequence of bytes to the buffer.
   void appendBytes(const int8_t* data, size_t size);
 

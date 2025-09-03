@@ -33,7 +33,7 @@ void StringVectorBuffer::appendByte(int8_t value) {
   rawBuffer_[currentPosition_++] = value;
 }
 
-void StringVectorBuffer::appendBytes(const int8_t *data, size_t size) {
+void StringVectorBuffer::appendBytes(const int8_t* data, size_t size) {
   if (size == 0) {
     return;
   }
