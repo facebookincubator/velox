@@ -197,7 +197,8 @@ TEST_F(TableScanTest, allColumns) {
         auto scanNodeId = plan->id();
         auto it = planStats.find(scanNodeId);
         ASSERT_TRUE(it != planStats.end());
-        ASSERT_TRUE(it->second.peakMemoryBytes > 0);
+        // TODO (dm): enable this test once we start to track gpu memory
+        // ASSERT_TRUE(it->second.peakMemoryBytes > 0);
 
         //  Verifies there is no dynamic filter stats.
         ASSERT_TRUE(it->second.dynamicFilterStats.empty());
