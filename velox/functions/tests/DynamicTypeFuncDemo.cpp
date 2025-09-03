@@ -145,7 +145,7 @@ void runDynamicTypeTest(
 
 void runDynamicTypeDemo() {
   // Initialize Velox
-  memory::MemoryManager::initialize(memory::MemoryManagerOptions{});
+  memory::MemoryManager::initialize(memory::MemoryManager::Options{});
   registerDynamicTypeFunction();
   parse::registerTypeResolver();
   auto pool = memory::MemoryManager::getInstance()->addLeafPool();
