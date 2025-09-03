@@ -222,6 +222,10 @@ class HashBuild final : public Operator {
   // not.
   const bool needProbedFlagSpill_;
 
+  // Indicates whether drop duplicate rows. Rows containing duplicate keys
+  // can be removed for left semi and anti join.
+  const bool dropDuplicates_;
+
   std::shared_ptr<HashJoinBridge> joinBridge_;
 
   tsan_atomic<bool> exceededMaxSpillLevelLimit_{false};
@@ -276,10 +280,6 @@ class HashBuild final : public Operator {
   // True if this is a build side of an anti or left semi project join and has
   // at least one entry with null join keys.
   bool joinHasNullKeys_{false};
-
-  // Indicates whether drop duplicate rows. Rows containing duplicate keys
-  // can be removed for left semi and anti join.
-  const bool dropDuplicates_;
 
   // Whether to abandon building a HashTable without duplicates in HashBuild
   // addInput phase for left semi/anti join.
