@@ -68,7 +68,7 @@ class DistinctAggregations {
   // @param indices Indices into 'groups' of the new entries.
   void initializeNewGroups(
       char** groups,
-      folly::Range<const vector_size_t*> indices) {
+      std::span<const vector_size_t> indices) {
     initializeNewGroupsInternal(groups, indices);
 
     for (auto index : indices) {
@@ -88,7 +88,7 @@ class DistinctAggregations {
 
   /// Computes aggregations and stores results in the specified 'result' vector.
   virtual void extractValues(
-      folly::Range<char**> groups,
+      std::span<char*> groups,
       const RowVectorPtr& result) = 0;
 
  protected:
@@ -99,7 +99,7 @@ class DistinctAggregations {
   // @param indices Indices into 'groups' of the new entries.
   virtual void initializeNewGroupsInternal(
       char** groups,
-      folly::Range<const vector_size_t*> indices) = 0;
+      std::span<const vector_size_t> indices) = 0;
 
   bool isInitialized(char* group) const {
     return group[initializedByte_] & initializedMask_;

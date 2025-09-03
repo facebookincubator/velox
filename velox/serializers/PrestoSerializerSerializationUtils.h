@@ -102,7 +102,7 @@ inline void writeInt64(OutputStream* out, int64_t value) {
 
 std::string_view typeToEncodingName(const TypePtr& type);
 
-inline int32_t rangesTotalSize(const folly::Range<const IndexRange*>& ranges) {
+inline int32_t rangesTotalSize(const std::span<const IndexRange>& ranges) {
   int32_t total = 0;
   for (auto& range : ranges) {
     total += range.size;
@@ -118,7 +118,7 @@ inline int32_t rangesTotalSize(const folly::Range<const IndexRange*>& ranges) {
 // 'stream' is non-null, writes the lengths and nulls for the array/map into
 // 'stream'.
 int32_t rowsToRanges(
-    folly::Range<const vector_size_t*> rows,
+    std::span<const vector_size_t> rows,
     const uint64_t* rawNulls,
     const vector_size_t* offsets,
     const vector_size_t* sizes,
@@ -131,7 +131,7 @@ int32_t rowsToRanges(
 template <typename T>
 vector_size_t computeSelectedIndices(
     const DictionaryVector<T>* dictionaryVector,
-    const folly::Range<const IndexRange*>& ranges,
+    const std::span<const IndexRange>& ranges,
     Scratch& scratch,
     vector_size_t* selectedIndices) {
   // Create a bit set to track which values in the Dictionary are used.
@@ -358,13 +358,13 @@ inline FlushSizes flushStreams(
 
 void serializeColumn(
     const VectorPtr& vector,
-    const folly::Range<const IndexRange*>& ranges,
+    const std::span<const IndexRange>& ranges,
     VectorStream* stream,
     Scratch& scratch);
 
 void serializeColumn(
     const VectorPtr& vector,
-    const folly::Range<const vector_size_t*>& rows,
+    const std::span<const vector_size_t>& rows,
     VectorStream* stream,
     Scratch& scratch);
 } // namespace facebook::velox::serializer::presto::detail

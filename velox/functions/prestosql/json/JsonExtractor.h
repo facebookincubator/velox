@@ -18,7 +18,6 @@
 
 #include <string>
 
-#include "folly/Range.h"
 #include "folly/dynamic.h"
 
 namespace facebook::velox::functions {

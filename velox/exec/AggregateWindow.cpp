@@ -108,7 +108,7 @@ class AggregateWindowFunction : public exec::WindowFunction {
     // group row.
     if (aggregateInitialized_) {
       std::vector<char*> singleGroupRowVector = {rawSingleGroupRow_};
-      aggregate_->destroy(folly::Range(singleGroupRowVector.data(), 1));
+      aggregate_->destroy(std::span(singleGroupRowVector.data(), 1));
     }
   }
 

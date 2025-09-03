@@ -209,7 +209,7 @@ class HashTableTest : public testing::TestWithParam<bool>,
       allInserted.insert(
           allInserted.end(), lookup->hits.begin(), lookup->hits.end());
 
-      table->erase(folly::Range<char**>(&allInserted[numErased], eraseSize));
+      table->erase(std::span<char*>(&allInserted[numErased], eraseSize));
       numErased += eraseSize;
     }
     int32_t batchStart = 0;
@@ -521,7 +521,7 @@ class HashTableTest : public testing::TestWithParam<bool>,
         rowOfKey_[i] = nullptr;
       }
     }
-    topTable_->erase(folly::Range<char**>(toErase.data(), toErase.size()));
+    topTable_->erase(std::span<char*>(toErase.data(), toErase.size()));
   }
 
   void testListNullKeyRows(
@@ -881,10 +881,10 @@ TEST_P(HashTableTest, listJoinResultsSize) {
   std::vector<vector_size_t> inputRowsBuf;
   inputRowsBuf.resize(kNumRows);
   auto inputRows =
-      folly::Range(static_cast<vector_size_t*>(inputRowsBuf.data()), kNumRows);
+      std::span(static_cast<vector_size_t*>(inputRowsBuf.data()), kNumRows);
   std::vector<char*> outputRowsBuf;
   outputRowsBuf.resize(kNumRows);
-  auto outputRows = folly::Range(outputRowsBuf.data(), kNumRows);
+  auto outputRows = std::span(outputRowsBuf.data(), kNumRows);
 
   HashLookup lookup(table->hashers(), pool());
   lookup.rows.reserve(kNumRows);

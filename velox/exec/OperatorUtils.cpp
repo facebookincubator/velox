@@ -486,7 +486,7 @@ void aggregateOperatorRuntimeStats(
   }
 }
 
-folly::Range<vector_size_t*> initializeRowNumberMapping(
+std::span<vector_size_t> initializeRowNumberMapping(
     BufferPtr& mapping,
     vector_size_t size,
     memory::MemoryPool* pool) {
@@ -494,7 +494,7 @@ folly::Range<vector_size_t*> initializeRowNumberMapping(
       mapping->size() < sizeof(vector_size_t) * size) {
     mapping = allocateIndices(size, pool);
   }
-  return folly::Range(mapping->asMutable<vector_size_t>(), size);
+  return std::span(mapping->asMutable<vector_size_t>(), size);
 }
 
 void projectChildren(

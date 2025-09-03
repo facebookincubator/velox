@@ -80,7 +80,7 @@ int32_t WaveTestSplitReader::canAdvance(WaveStream& stream) {
 void WaveTestSplitReader::schedule(WaveStream& waveStream, int32_t maxRows) {
   auto numRows = std::min<int32_t>(maxRows, available());
   scheduledRows_ = numRows;
-  auto rowSet = folly::Range<const int32_t*>(iota(numRows, rows_), numRows);
+  auto rowSet = std::span<const int32_t>(iota(numRows, rows_), numRows);
   std::unique_ptr<ReadStream> exe(reinterpret_cast<ReadStream*>(
       waveStream.recycleExecutable(nullptr, 0).release()));
   if (exe) {

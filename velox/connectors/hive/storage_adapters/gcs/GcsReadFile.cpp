@@ -77,7 +77,7 @@ class GcsReadFile::Impl {
 
   uint64_t preadv(
       uint64_t offset,
-      const std::vector<folly::Range<char*>>& buffers,
+      const std::vector<std::span<char>>& buffers,
       std::atomic<uint64_t>& bytesRead,
       filesystems::File::IoStats* stats = nullptr) const {
     // 'buffers' contains Ranges(data, size)  with some gaps (data = nullptr) in
@@ -170,7 +170,7 @@ std::string GcsReadFile::pread(
 }
 uint64_t GcsReadFile::preadv(
     uint64_t offset,
-    const std::vector<folly::Range<char*>>& buffers,
+    const std::vector<std::span<char>>& buffers,
     filesystems::File::IoStats* stats) const {
   return impl_->preadv(offset, buffers, bytesRead_, stats);
 }

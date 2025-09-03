@@ -58,7 +58,7 @@ TEST_F(ReadFileInputStreamTest, LocalReadFile) {
   }
   ASSERT_GT(regions.size(), IOV_MAX);
 
-  std::vector<folly::Range<char*>> buffers;
+  std::vector<std::span<char>> buffers;
   std::vector<folly::IOBuf> iobufs(regions.size());
 
   readStream->vread(regions, {iobufs.data(), iobufs.size()}, LogType::TEST);

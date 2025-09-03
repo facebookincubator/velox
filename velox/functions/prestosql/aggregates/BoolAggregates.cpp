@@ -66,7 +66,7 @@ class BoolAndOrAggregate : public SimpleNumericAggregate<bool, bool, bool> {
  protected:
   void initializeNewGroupsInternal(
       char** groups,
-      folly::Range<const vector_size_t*> indices) override {
+      std::span<const vector_size_t> indices) override {
     setAllNulls(groups, indices);
     for (auto i : indices) {
       *value<bool>(groups[i]) = initialValue_;

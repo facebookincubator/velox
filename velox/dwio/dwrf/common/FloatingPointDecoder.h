@@ -127,7 +127,7 @@ class FloatingPointDecoder {
              !hasFilter &&
             !hasHook >
                 (nulls,
-                 folly::Range<const int32_t*>(rows, numRows),
+                 std::span<const int32_t>(rows, numRows),
                  *innerVector,
                  *outerVector,
                  (hasFilter || hasHook) ? nullptr : visitor.rawNulls(numRows),
@@ -142,8 +142,8 @@ class FloatingPointDecoder {
         }
       }
       dwio::common::fixedWidthScan<TFile, filterOnly, true>(
-          innerVector ? folly::Range<const int32_t*>(*innerVector)
-                      : folly::Range<const int32_t*>(rows, outerVector->size()),
+          innerVector ? std::span<const int32_t>(*innerVector)
+                      : std::span<const int32_t>(rows, outerVector->size()),
           outerVector->data(),
           visitor.rawValues(numRows),
           hasFilter ? visitor.outputRows(numRows) : nullptr,
@@ -156,7 +156,7 @@ class FloatingPointDecoder {
       skip<false>(tailSkip, 0, nullptr);
     } else {
       dwio::common::fixedWidthScan<TFile, filterOnly, false>(
-          folly::Range<const int32_t*>(rows, numRows),
+          std::span<const int32_t>(rows, numRows),
           hasHook ? velox::iota(numRows, visitor.innerNonNullRows()) : nullptr,
           visitor.rawValues(numRows),
           hasFilter ? visitor.outputRows(numRows) : nullptr,

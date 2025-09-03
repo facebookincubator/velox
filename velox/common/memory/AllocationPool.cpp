@@ -21,10 +21,10 @@
 
 namespace facebook::velox::memory {
 
-folly::Range<char*> AllocationPool::rangeAt(int32_t index) const {
+std::span<char> AllocationPool::rangeAt(int32_t index) const {
   if (index < allocations_.size()) {
     auto run = allocations_[index].runAt(0);
-    return folly::Range<char*>(
+    return std::span<char>(
         run.data<char>(),
         run.data<char>() == startOfRun_ ? currentOffset_ : run.numBytes());
   }
@@ -32,7 +32,7 @@ folly::Range<char*> AllocationPool::rangeAt(int32_t index) const {
   if (largeIndex < largeAllocations_.size()) {
     auto range = largeAllocations_[largeIndex].hugePageRange().value();
     if (range.data() == startOfRun_) {
-      return folly::Range<char*>(range.data(), currentOffset_);
+      return std::span<char>(range.data(), currentOffset_);
     }
     return range;
   }

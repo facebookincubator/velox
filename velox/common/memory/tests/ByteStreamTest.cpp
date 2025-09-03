@@ -430,7 +430,7 @@ TEST_F(ByteStreamTest, unalignedWrite) {
   stream.appendStringView(std::string_view("x"));
   int128_t data{};
   // This only crashes in opt mode.
-  stream.append<int128_t>(folly::Range(&data, 1));
+  stream.append<int128_t>(std::span(&data, 1));
   ASSERT_EQ(stream.size(), kSize);
 }
 

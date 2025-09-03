@@ -336,7 +336,7 @@ size_t VectorStream::serializedSize() {
 }
 
 template <>
-void VectorStream::append(folly::Range<const Timestamp*> values) {
+void VectorStream::append(std::span<const Timestamp> values) {
   if (opts_.useLosslessTimestamp) {
     for (auto& value : values) {
       appendOne(value.getSeconds());
@@ -350,7 +350,7 @@ void VectorStream::append(folly::Range<const Timestamp*> values) {
 }
 
 template <>
-void VectorStream::append(folly::Range<const bool*> values) {
+void VectorStream::append(std::span<const bool> values) {
   // A bool constant is serialized via this. Accessing consecutive
   // elements via bool& does not work, hence the flat serialization is
   // specialized one level above this.
@@ -359,7 +359,7 @@ void VectorStream::append(folly::Range<const bool*> values) {
 }
 
 template <>
-void VectorStream::append(folly::Range<const int128_t*> values) {
+void VectorStream::append(std::span<const int128_t> values) {
   for (auto& value : values) {
     int128_t val = value;
     if (isLongDecimal_) {
@@ -369,7 +369,7 @@ void VectorStream::append(folly::Range<const int128_t*> values) {
     } else if (isIpAddress_) {
       val = reverseIpAddressByteOrder(value);
     }
-    values_.append<int128_t>(folly::Range(&val, 1));
+    values_.append<int128_t>(std::span(&val, 1));
   }
 }
 

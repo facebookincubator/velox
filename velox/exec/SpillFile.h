@@ -232,7 +232,7 @@ class SpillWriter : public SpillWriterBase {
   /// Returns the size to write.
   uint64_t write(
       const RowVectorPtr& rows,
-      const folly::Range<IndexRange*>& indices);
+      const std::span<IndexRange>& indices);
 
   std::vector<std::string> testingSpilledFilePaths() const;
 

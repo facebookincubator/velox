@@ -119,7 +119,7 @@ class FirstLastAggregateBase
 
   void initializeNewGroupsInternal(
       char** groups,
-      folly::Range<const vector_size_t*> indices) override {
+      std::span<const vector_size_t> indices) override {
     Aggregate::setAllNulls(groups, indices);
 
     for (auto i : indices) {
@@ -127,7 +127,7 @@ class FirstLastAggregateBase
     }
   }
 
-  void destroyInternal(folly::Range<char**> groups) override {
+  void destroyInternal(std::span<char*> groups) override {
     if constexpr (!numeric) {
       for (auto group : groups) {
         if (BaseAggregate::isInitialized(group)) {

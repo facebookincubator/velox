@@ -104,7 +104,7 @@ class UnsafeRowSerializerTest : public ::testing::Test,
     } else {
       Scratch scratch;
       serializer->append(
-          rowVector, folly::Range(ranges.data(), numRows), scratch);
+          rowVector, std::span(ranges.data(), numRows), scratch);
     }
 
     auto size = serializer->maxSerializedSize();

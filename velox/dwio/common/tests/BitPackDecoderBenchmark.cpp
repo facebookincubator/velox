@@ -34,7 +34,7 @@
 using namespace folly;
 using namespace facebook::velox;
 
-using RowSet = folly::Range<const facebook::velox::vector_size_t*>;
+using RowSet = std::span<const facebook::velox::vector_size_t>;
 
 static const uint64_t kNumValues = 1024768 * 8;
 

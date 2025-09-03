@@ -36,11 +36,11 @@ class AggregateCompanionFunctionBase : public Aggregate {
 
   bool isFixedSize() const override final;
 
-  void destroy(folly::Range<char**> groups) override final;
+  void destroy(std::span<char*> groups) override final;
 
   void initializeNewGroups(
       char** groups,
-      folly::Range<const vector_size_t*> indices) override final;
+      std::span<const vector_size_t> indices) override final;
 
   void addRawInput(
       char** groups,
@@ -84,9 +84,9 @@ class AggregateCompanionFunctionBase : public Aggregate {
 
   void initializeNewGroupsInternal(
       char** groups,
-      folly::Range<const vector_size_t*> indices) override final;
+      std::span<const vector_size_t> indices) override final;
 
-  void destroyInternal(folly::Range<char**> groups) override final;
+  void destroyInternal(std::span<char*> groups) override final;
 
   std::unique_ptr<Aggregate> fn_;
 };

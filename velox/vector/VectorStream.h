@@ -15,7 +15,6 @@
  */
 #pragma once
 
-#include <folly/Range.h>
 
 #include "velox/common/base/RuntimeMetrics.h"
 #include "velox/common/compression/Compression.h"
@@ -66,19 +65,19 @@ class IterativeVectorSerializer {
   /// Serialize a subset of rows in a vector.
   virtual void append(
       const RowVectorPtr& vector,
-      const folly::Range<const IndexRange*>& ranges,
+      const std::span<const IndexRange>& ranges,
       Scratch& scratch) = 0;
 
   virtual void append(
       const RowVectorPtr& vector,
-      const folly::Range<const IndexRange*>& ranges) {
+      const std::span<const IndexRange>& ranges) {
     Scratch scratch;
     append(vector, ranges, scratch);
   }
 
   virtual void append(
       const RowVectorPtr& vector,
-      const folly::Range<const vector_size_t*>& rows,
+      const std::span<const vector_size_t>& rows,
       Scratch& scratch) {
     VELOX_UNSUPPORTED("{}", __FUNCTION__);
   }
@@ -88,19 +87,19 @@ class IterativeVectorSerializer {
 
   virtual void append(
       const row::CompactRow& compactRow,
-      const folly::Range<const vector_size_t*>& rows,
+      const std::span<const vector_size_t>& rows,
       const std::vector<vector_size_t>& sizes) {
     VELOX_UNSUPPORTED("{}", __FUNCTION__);
   }
 
   virtual void append(
       const row::UnsafeRowFast& unsafeRow,
-      const folly::Range<const vector_size_t*>& rows,
+      const std::span<const vector_size_t>& rows,
       const std::vector<vector_size_t>& sizes) {
     VELOX_UNSUPPORTED("{}", __FUNCTION__);
   }
 
-  // True if supports append with folly::Range<vector_size_t*>.
+  // True if supports append with std::span<vector_size_t>.
   virtual bool supportsAppendRows() const {
     return false;
   }
@@ -155,13 +154,13 @@ class BatchVectorSerializer {
   /// Serializes a subset of rows in a vector.
   virtual void serialize(
       const RowVectorPtr& vector,
-      const folly::Range<const IndexRange*>& ranges,
+      const std::span<const IndexRange>& ranges,
       Scratch& scratch,
       OutputStream* stream) = 0;
 
   virtual void serialize(
       const RowVectorPtr& vector,
-      const folly::Range<const IndexRange*>& ranges,
+      const std::span<const IndexRange>& ranges,
       OutputStream* stream) {
     Scratch scratch;
     serialize(vector, ranges, scratch, stream);
@@ -169,7 +168,7 @@ class BatchVectorSerializer {
 
   virtual void estimateSerializedSize(
       VectorPtr vector,
-      const folly::Range<const IndexRange*>& ranges,
+      const std::span<const IndexRange>& ranges,
       vector_size_t** sizes,
       Scratch& scratch) = 0;
 
@@ -239,7 +238,7 @@ class VectorSerde {
 
   virtual void estimateSerializedSize(
       const BaseVector* /*vector*/,
-      const folly::Range<const vector_size_t*>& /*rows*/,
+      const std::span<const vector_size_t>& /*rows*/,
       vector_size_t** /*sizes*/,
       Scratch& /*scratch*/) {
     VELOX_UNSUPPORTED("{}", __FUNCTION__);
@@ -249,7 +248,7 @@ class VectorSerde {
   /// '*sizes[i]'.
   virtual void estimateSerializedSize(
       const BaseVector* /*vector*/,
-      const folly::Range<const IndexRange*>& /*ranges*/,
+      const std::span<const IndexRange>& /*ranges*/,
       vector_size_t** /*sizes*/,
       Scratch& /*scratch*/) {
     VELOX_UNSUPPORTED("{}", __FUNCTION__);
@@ -257,7 +256,7 @@ class VectorSerde {
 
   virtual void estimateSerializedSize(
       const BaseVector* vector,
-      const folly::Range<const IndexRange*>& ranges,
+      const std::span<const IndexRange>& ranges,
       vector_size_t** sizes) {
     Scratch scratch;
     estimateSerializedSize(vector, ranges, sizes, scratch);
@@ -265,14 +264,14 @@ class VectorSerde {
 
   virtual void estimateSerializedSize(
       const row::CompactRow* /*compactRow*/,
-      const folly::Range<const vector_size_t*>& /*rows*/,
+      const std::span<const vector_size_t>& /*rows*/,
       vector_size_t** /*sizes*/) {
     VELOX_UNSUPPORTED("{}", __FUNCTION__);
   }
 
   virtual void estimateSerializedSize(
       const row::UnsafeRowFast* /*unsafeRow*/,
-      const folly::Range<const vector_size_t*>& /*rows*/,
+      const std::span<const vector_size_t>& /*rows*/,
       vector_size_t** /*sizes*/) {
     VELOX_UNSUPPORTED("{}", __FUNCTION__);
   }
@@ -392,21 +391,21 @@ class VectorStreamGroup : public StreamArena {
   /// Increments sizes[i] for each ith row in 'rows' in 'vector'.
   static void estimateSerializedSize(
       const BaseVector* vector,
-      const folly::Range<const vector_size_t*>& rows,
+      const std::span<const vector_size_t>& rows,
       VectorSerde* serde,
       vector_size_t** sizes,
       Scratch& scratch);
 
   static void estimateSerializedSize(
       const BaseVector* vector,
-      const folly::Range<const IndexRange*>& ranges,
+      const std::span<const IndexRange>& ranges,
       VectorSerde* serde,
       vector_size_t** sizes,
       Scratch& scratch);
 
   static inline void estimateSerializedSize(
       const BaseVector* vector,
-      const folly::Range<const IndexRange*>& ranges,
+      const std::span<const IndexRange>& ranges,
       VectorSerde* serde,
       vector_size_t** sizes) {
     Scratch scratch;
@@ -415,43 +414,43 @@ class VectorStreamGroup : public StreamArena {
 
   static void estimateSerializedSize(
       const row::CompactRow* compactRow,
-      const folly::Range<const vector_size_t*>& rows,
+      const std::span<const vector_size_t>& rows,
       VectorSerde* serde,
       vector_size_t** sizes);
 
   static void estimateSerializedSize(
       const row::UnsafeRowFast* unsafeRow,
-      const folly::Range<const vector_size_t*>& rows,
+      const std::span<const vector_size_t>& rows,
       VectorSerde* serde,
       vector_size_t** sizes);
 
   void append(
       const RowVectorPtr& vector,
-      const folly::Range<const IndexRange*>& ranges,
+      const std::span<const IndexRange>& ranges,
       Scratch& scratch);
 
   void append(
       const RowVectorPtr& vector,
-      const folly::Range<const IndexRange*>& ranges) {
+      const std::span<const IndexRange>& ranges) {
     Scratch scratch;
     append(vector, ranges, scratch);
   }
 
   void append(
       const RowVectorPtr& vector,
-      const folly::Range<const vector_size_t*>& rows,
+      const std::span<const vector_size_t>& rows,
       Scratch& scratch);
 
   void append(const RowVectorPtr& vector);
 
   void append(
       const row::CompactRow& compactRow,
-      const folly::Range<const vector_size_t*>& rows,
+      const std::span<const vector_size_t>& rows,
       const std::vector<vector_size_t>& sizes);
 
   void append(
       const row::UnsafeRowFast& unsafeRow,
-      const folly::Range<const vector_size_t*>& rows,
+      const std::span<const vector_size_t>& rows,
       const std::vector<vector_size_t>& sizes);
 
   // Writes the contents to 'stream' in wire format.

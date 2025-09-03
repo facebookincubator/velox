@@ -73,12 +73,12 @@ TEST_F(GcsFileSystemTest, readFile) {
   char buff1[10];
   char buff2[20];
   char buff3[30];
-  std::vector<folly::Range<char*>> buffers = {
-      folly::Range<char*>(buff1, 10),
-      folly::Range<char*>(nullptr, 20),
-      folly::Range<char*>(buff2, 20),
-      folly::Range<char*>(nullptr, 30),
-      folly::Range<char*>(buff3, 30)};
+  std::vector<std::span<char>> buffers = {
+      std::span<char>(buff1, 10),
+      std::span<char>(nullptr, 20),
+      std::span<char>(buff2, 20),
+      std::span<char>(nullptr, 30),
+      std::span<char>(buff3, 30)};
   ASSERT_EQ(10 + 20 + 20 + 30 + 30, readFile->preadv(0, buffers));
   ASSERT_EQ(std::string_view(buff1, sizeof(buff1)), kLoremIpsum.substr(0, 10));
   ASSERT_EQ(std::string_view(buff2, sizeof(buff2)), kLoremIpsum.substr(30, 20));

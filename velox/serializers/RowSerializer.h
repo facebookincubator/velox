@@ -51,7 +51,7 @@ class RowSerializer : public IterativeVectorSerializer {
 
   void append(
       const RowVectorPtr& vector,
-      const folly::Range<const IndexRange*>& ranges,
+      const std::span<const IndexRange>& ranges,
       Scratch& /*scratch*/) override {
     size_t totalSize = 0;
     const auto totalRows = std::accumulate(
@@ -93,7 +93,7 @@ class RowSerializer : public IterativeVectorSerializer {
 
   void append(
       const Serializer& compactRow,
-      const folly::Range<const vector_size_t*>& rows,
+      const std::span<const vector_size_t>& rows,
       const std::vector<vector_size_t>& sizes) override {
     size_t totalSize = 0;
     for (const auto row : rows) {
@@ -196,7 +196,7 @@ class RowSerializer : public IterativeVectorSerializer {
  protected:
   virtual void serializeRanges(
       const Serializer& rowSerializer,
-      const folly::Range<const IndexRange*>& ranges,
+      const std::span<const IndexRange>& ranges,
       char* rawBuffer,
       const std::vector<vector_size_t>& /*rowSize*/) {
     size_t offset = 0;

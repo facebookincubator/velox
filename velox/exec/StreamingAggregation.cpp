@@ -184,13 +184,13 @@ RowVectorPtr StreamingAggregation::createOutput(size_t numGroups) {
 
   if (sortedAggregations_) {
     sortedAggregations_->extractValues(
-        folly::Range<char**>(groups_.data(), numGroups), output);
+        std::span<char*>(groups_.data(), numGroups), output);
   }
 
   for (const auto& aggregation : distinctAggregations_) {
     if (aggregation != nullptr) {
       aggregation->extractValues(
-          folly::Range<char**>(groups_.data(), numGroups), output);
+          std::span<char*>(groups_.data(), numGroups), output);
     }
   }
 

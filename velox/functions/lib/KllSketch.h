@@ -18,9 +18,9 @@
 
 #include <functional>
 #include <random>
+#include <span>
 
 #include "folly/Random.h"
-#include "folly/Range.h"
 
 namespace facebook::velox::functions::kll {
 namespace detail {
@@ -31,8 +31,8 @@ struct View {
   size_t n;
   T minValue;
   T maxValue;
-  folly::Range<const T*> items;
-  folly::Range<const uint32_t*> levels;
+  std::span<const T> items;
+  std::span<const uint32_t> levels;
 
   uint8_t numLevels() const {
     return levels.size() - 1;
@@ -86,11 +86,11 @@ struct KllSketch {
   void compact();
 
   /// Merge this sketch with values from multiple other sketches.
-  /// @tparam Iter Iterator type dereferenceable to the same type as this sketch
+  /// @tparam Value Value type castable to the same type as this sketch
   ///  (KllSketch<T, Allocator, Compare>)
   /// @param sketches Range of sketches to be merged to this one
-  template <typename Iter>
-  void merge(const folly::Range<Iter>& sketches);
+  template <typename Value>
+  void merge(const std::span<Value>& sketches);
 
   /// Merge with another sketch.
   void merge(const KllSketch<T, Allocator, Compare>& other);
@@ -104,20 +104,20 @@ struct KllSketch {
 
   /// Estimate the values of the given quantiles.  This is more
   /// efficient than calling estimateQuantile(double) repeatedly.
-  /// @tparam Iter Iterator type dereferenceable to double
+  /// @tparam Value Value type castable to double
   /// @param quantiles Range of quantiles in [0, 1] to be estimated
-  template <typename Iter>
+  template <typename Value>
   std::vector<T, Allocator> estimateQuantiles(
-      const folly::Range<Iter>& quantiles) const;
+      const std::span<Value>& quantiles) const;
 
   /// Estimate the values of the given quantiles.  This is more
   /// efficient than calling estimateQuantile(double) repeatedly.
-  /// @tparam Iter Iterator type dereferenceable to double
+  /// @tparam Value Value type castable to double
   /// @param quantiles Range of quantiles in [0, 1] to be estimated
   /// @param out Pre-allocated memory to hold the result, must be at least as
   ///  large as `quantiles`
-  template <typename Iter>
-  void estimateQuantiles(const folly::Range<Iter>& quantiles, T* out) const;
+  template <typename Value>
+  void estimateQuantiles(const std::span<Value>& quantiles, T* out) const;
 
   /// The total number of values being added to the sketch.
   size_t totalCount() const {
@@ -154,11 +154,11 @@ struct KllSketch {
       uint32_t seed = folly::Random::rand32());
 
   /// Merge this sketch with values from multiple other deserialized sketches.
-  /// @tparam Iter Iterator type dereferenceable to `const char*`, which
+  /// @tparam Value Value type castable to char, which
   ///  represents a deserialized sketch
   /// @param sketches Range of sketches to be merged to this one
-  template <typename Iter>
-  void mergeDeserialized(const folly::Range<Iter>& sketches);
+  template <typename Value>
+  void mergeDeserialized(const std::span<Value>& sketches);
 
   /// Merge with another deserialized sketch.  This is more efficient
   /// than deserialize then merge.
@@ -168,7 +168,7 @@ struct KllSketch {
   std::vector<std::pair<T, uint64_t>> getFrequencies() const;
 
   /// Internal API, do not use outside Velox.
-  void mergeViews(const folly::Range<const detail::View<T>*>& views);
+  void mergeViews(const std::span<const detail::View<T>>& views);
 
   /// Internal API, do not use outside Velox.
   detail::View<T> toView() const;

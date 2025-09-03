@@ -22,7 +22,7 @@ namespace facebook::velox::serializer::spark {
 
 void UnsafeRowVectorSerde::estimateSerializedSize(
     const row::UnsafeRowFast* unsafeRow,
-    const folly::Range<const vector_size_t*>& rows,
+    const std::span<const vector_size_t>& rows,
     vector_size_t** sizes) {
   return unsafeRow->serializedRowSizes(rows, sizes);
 }

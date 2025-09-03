@@ -77,7 +77,7 @@ class LeadLagFunction : public exec::WindowFunction {
       }
     }
 
-    auto rowNumbersRange = folly::Range(rowNumbers_.data(), numRows);
+    auto rowNumbersRange = std::span(rowNumbers_.data(), numRows);
     partition_->extractColumn(
         valueIndex_, rowNumbersRange, resultOffset, result);
 
@@ -266,7 +266,7 @@ class LeadLagFunction : public exec::WindowFunction {
 
       partition_->extractColumn(
           defaultValueIndex_.value(),
-          folly::Range(
+          std::span(
               defaultValueRowNumbers.data(), defaultValueRowNumbers.size()),
           0,
           defaultValues_);

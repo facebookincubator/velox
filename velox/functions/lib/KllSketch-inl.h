@@ -245,7 +245,7 @@ void read(const char* data, size_t& offset, T& out) {
 }
 
 template <typename T>
-void readRange(const char* data, size_t& offset, folly::Range<const T*>& out) {
+void readRange(const char* data, size_t& offset, std::span<const T>& out) {
   size_t size;
   read(data, offset, size);
   auto bytes = sizeof(T) * size;
@@ -526,23 +526,23 @@ std::vector<std::pair<T, uint64_t>> KllSketch<T, A, C>::getFrequencies() const {
 template <typename T, typename A, typename C>
 T KllSketch<T, A, C>::estimateQuantile(double fraction) const {
   T ans;
-  estimateQuantiles(folly::Range(&fraction, 1), &ans);
+  estimateQuantiles(std::span(&fraction, 1), &ans);
   return ans;
 }
 
 template <typename T, typename A, typename C>
-template <typename Iter>
+template <typename Value>
 std::vector<T, A> KllSketch<T, A, C>::estimateQuantiles(
-    const folly::Range<Iter>& fractions) const {
+    const std::span<Value>& fractions) const {
   std::vector<T, A> ans(fractions.size(), T{}, allocator_);
   estimateQuantiles(fractions, ans.data());
   return ans;
 }
 
 template <typename T, typename A, typename C>
-template <typename Iter>
+template <typename Value>
 void KllSketch<T, A, C>::estimateQuantiles(
-    const folly::Range<Iter>& fractions,
+    const std::span<Value>& fractions,
     T* out) const {
   VELOX_USER_CHECK_GT(n_, 0, "estimateQuantiles called on empty sketch");
   auto entries = getFrequencies();
@@ -579,7 +579,7 @@ void KllSketch<T, A, C>::estimateQuantiles(
 
 template <typename T, typename A, typename C>
 void KllSketch<T, A, C>::mergeViews(
-    const folly::Range<const detail::View<T>*>& others) {
+    const std::span<const detail::View<T>>& others) {
   auto newN = n_;
   for (auto& other : others) {
     if (other.n == 0) {
@@ -698,12 +698,12 @@ void KllSketch<T, A, C>::mergeViews(
 template <typename T, typename A, typename C>
 void KllSketch<T, A, C>::merge(const KllSketch<T, A, C>& other) {
   detail::View<T> view = other.toView();
-  mergeViews(folly::Range(&view, 1));
+  mergeViews(std::span(&view, 1));
 }
 
 template <typename T, typename A, typename C>
-template <typename Iter>
-void KllSketch<T, A, C>::merge(const folly::Range<Iter>& others) {
+template <typename Value>
+void KllSketch<T, A, C>::merge(const std::span<Value>& others) {
   std::vector<detail::View<T>> views;
   views.reserve(others.size());
   for (auto& other : others) {
@@ -716,12 +716,12 @@ template <typename T, typename A, typename C>
 void KllSketch<T, A, C>::mergeDeserialized(const char* data) {
   detail::View<T> view;
   view.deserialize(data);
-  return mergeViews(folly::Range(&view, 1));
+  return mergeViews(std::span(&view, 1));
 }
 
 template <typename T, typename A, typename C>
-template <typename Iter>
-void KllSketch<T, A, C>::mergeDeserialized(const folly::Range<Iter>& others) {
+template <typename Value>
+void KllSketch<T, A, C>::mergeDeserialized(const std::span<Value>& others) {
   std::vector<detail::View<T>> views;
   views.reserve(others.size());
   for (auto& other : others) {

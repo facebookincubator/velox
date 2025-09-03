@@ -416,14 +416,14 @@ class MapUnionSumAggregate : public exec::Aggregate {
  protected:
   void initializeNewGroupsInternal(
       char** groups,
-      folly::Range<const vector_size_t*> indices) override {
+      std::span<const vector_size_t> indices) override {
     setAllNulls(groups, indices);
     for (auto index : indices) {
       new (groups[index] + offset_) AccumulatorType{resultType_, allocator_};
     }
   }
 
-  void destroyInternal(folly::Range<char**> groups) override {
+  void destroyInternal(std::span<char*> groups) override {
     if constexpr (std::is_same_v<K, StringView>) {
       for (auto* group : groups) {
         if (isInitialized(group) && !isNull(group)) {

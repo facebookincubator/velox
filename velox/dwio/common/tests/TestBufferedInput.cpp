@@ -46,8 +46,8 @@ class ReadFileMock : public ::facebook::velox::ReadFile {
   MOCK_METHOD(
       uint64_t,
       preadv,
-      (folly::Range<const Region*> regions,
-       folly::Range<folly::IOBuf*> iobufs,
+      (std::span<const Region> regions,
+       std::span<folly::IOBuf> iobufs,
        facebook::velox::filesystems::File::IoStats* stats),
       (const, override));
 };
@@ -85,8 +85,8 @@ void expectPreadvs(
       .Times(1)
       .WillOnce(
           [content, reads](
-              folly::Range<const Region*> regions,
-              folly::Range<folly::IOBuf*> iobufs,
+              std::span<const Region> regions,
+              std::span<folly::IOBuf> iobufs,
               facebook::velox::filesystems::File::IoStats* stats) -> uint64_t {
             EXPECT_EQ(regions.size(), reads.size());
             uint64_t length = 0;

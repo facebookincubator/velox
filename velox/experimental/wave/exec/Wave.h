@@ -375,7 +375,7 @@ struct Executable {
       std::vector<Transfer>&& transfers,
       WaveStream& stream);
 
-  virtual void ensureLazyArrived(folly::Range<const OperandId*> operands) {
+  virtual void ensureLazyArrived(std::span<const OperandId> operands) {
     VELOX_UNREACHABLE(
         "A table scan executable is expected to override this "
         "or always produce all columns");
@@ -764,8 +764,8 @@ class WaveStream {
   // depending on more than one Wave, adds dependency via events. Each program
   // [i]is dimensioned to have  sizes[i] max intermediates/results.
   void startWave(
-      folly::Range<Executable**> programs,
-      folly::Range<int32_t*> sizes);
+      std::span<Executable*> programs,
+      std::span<int32_t> sizes);
 
   GpuArena& arena() {
     return *arena_;
@@ -818,7 +818,7 @@ class WaveStream {
   int32_t getOutput(
       int32_t operatorId,
       memory::MemoryPool& pool,
-      folly::Range<const OperandId*> operands,
+      std::span<const OperandId> operands,
       VectorPtr* vectors);
 
   Executable* operandExecutable(OperandId id) {
@@ -839,8 +839,8 @@ class WaveStream {
   /// markLaunch(). Takes ownership of 'executables', which are moved out of the
   /// unique_ptrs.
   void installExecutables(
-      folly::Range<std::unique_ptr<Executable>*> executables,
-      std::function<void(Stream*, folly::Range<Executable**>)> launch);
+      std::span<std::unique_ptr<Executable>> executables,
+      std::function<void(Stream*, std::span<Executable*>)> launch);
 
   /// The callback from installExecutables must call this to establish relation
   /// of stream and executable before returning. Normally, the executable is
@@ -898,7 +898,7 @@ class WaveStream {
       int32_t key,
       int32_t nthlaunch,
       int32_t inputRows,
-      folly::Range<Executable**> exes,
+      std::span<Executable*> exes,
       int32_t blocksPerExe,
       const LaunchControl* inputStatus,
       Stream* stream);

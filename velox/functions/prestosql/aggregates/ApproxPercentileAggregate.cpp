@@ -116,7 +116,7 @@ struct KllSketchAccumulator {
   }
 
   void append(const KllView<T>& view) {
-    sketch_.mergeViews(folly::Range(&view, 1));
+    sketch_.mergeViews(std::span(&view, 1));
   }
 
   void append(const std::vector<KllView<T>>& views) {
@@ -175,7 +175,7 @@ struct KllSketchAccumulator {
             functions::kll::KllSketch<T, Allocator, Compare>::fromRepeatedValue(
                 x, n, sketch_.k(), allocator, getRandomSeed(fixedRandomSeed)));
       }
-      sketch.merge(folly::Range(sketches.begin(), sketches.end()));
+      sketch.merge(std::span(sketches.begin(), sketches.end()));
     }
   }
 
@@ -232,7 +232,7 @@ class ApproxPercentileAggregate : public exec::Aggregate {
     }
 
     if (percentiles_ && percentiles_->isArray) {
-      folly::Range percentiles(
+      std::span percentiles(
           percentiles_->values.begin(), percentiles_->values.end());
       auto arrayResult = (*result)->asUnchecked<ArrayVector>();
       vector_size_t elementsCount = 0;
@@ -485,7 +485,7 @@ class ApproxPercentileAggregate : public exec::Aggregate {
  protected:
   void initializeNewGroupsInternal(
       char** groups,
-      folly::Range<const vector_size_t*> indices) override {
+      std::span<const vector_size_t> indices) override {
     exec::Aggregate::setAllNulls(groups, indices);
     for (auto i : indices) {
       auto group = groups[i];
@@ -494,7 +494,7 @@ class ApproxPercentileAggregate : public exec::Aggregate {
     }
   }
 
-  void destroyInternal(folly::Range<char**> groups) override {
+  void destroyInternal(std::span<char*> groups) override {
     for (auto group : groups) {
       if (isInitialized(group)) {
         value<KllSketchAccumulator<T>>(group)->~KllSketchAccumulator<T>();

@@ -94,7 +94,7 @@ class S3ReadFile ::Impl {
 
   uint64_t preadv(
       uint64_t offset,
-      const std::vector<folly::Range<char*>>& buffers,
+      const std::vector<std::span<char>>& buffers,
       File::IoStats* stats) const {
     // 'buffers' contains Ranges(data, size)  with some gaps (data = nullptr) in
     // between. This call must populate the ranges (except gap ranges)
@@ -196,7 +196,7 @@ std::string S3ReadFile::pread(
 
 uint64_t S3ReadFile::preadv(
     uint64_t offset,
-    const std::vector<folly::Range<char*>>& buffers,
+    const std::vector<std::span<char>>& buffers,
     filesystems::File::IoStats* stats) const {
   return impl_->preadv(offset, buffers, stats);
 }

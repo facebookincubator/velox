@@ -184,17 +184,17 @@ class BaseStatsReporter {
   /// Add the given value to a quantile metric.
   virtual void addDynamicQuantileMetricValue(
       const std::string& key,
-      folly::Range<const folly::StringPiece*> subkeys,
+      std::span<const folly::StringPiece> subkeys,
       size_t value = 1) const = 0;
 
   virtual void addDynamicQuantileMetricValue(
       const char* key,
-      folly::Range<const folly::StringPiece*> subkeys,
+      std::span<const folly::StringPiece> subkeys,
       size_t value = 1) const = 0;
 
   virtual void addDynamicQuantileMetricValue(
       folly::StringPiece key,
-      folly::Range<const folly::StringPiece*> subkeys,
+      std::span<const folly::StringPiece> subkeys,
       size_t value = 1) const = 0;
 
   /// Return the aggregated metrics in a serialized string format.
@@ -280,17 +280,17 @@ class DummyStatsReporter : public BaseStatsReporter {
 
   void addDynamicQuantileMetricValue(
       const std::string& /* key */,
-      folly::Range<const folly::StringPiece*> /* subkeys */,
+      std::span<const folly::StringPiece> /* subkeys */,
       size_t /* value */) const override {}
 
   void addDynamicQuantileMetricValue(
       const char* /* key */,
-      folly::Range<const folly::StringPiece*> /* subkeys */,
+      std::span<const folly::StringPiece> /* subkeys */,
       size_t /* value */) const override {}
 
   void addDynamicQuantileMetricValue(
       folly::StringPiece /* key */,
-      folly::Range<const folly::StringPiece*> /* subkeys */,
+      std::span<const folly::StringPiece> /* subkeys */,
       size_t /* value */) const override {}
 
   std::string fetchMetrics() override {
@@ -323,7 +323,7 @@ std::vector<size_t> slidingWindowsSeconds(Args... args) {
 }
 
 /// Helper class that stores subkeys in a member array and converts to
-/// folly::Range. This is a temporary object that lives just for the duration of
+/// std::span. This is a temporary object that lives just for the duration of
 /// the macro call.
 template <size_t N>
 class subkeys {
@@ -334,9 +334,9 @@ class subkeys {
   subkeys(Args&&... args)
       : pieces_{folly::StringPiece(std::forward<Args>(args))...} {}
 
-  /// Conversion operator to folly::Range<const folly::StringPiece*>
-  operator folly::Range<const folly::StringPiece*>() const {
-    return folly::Range<const folly::StringPiece*>(
+  /// Conversion operator to std::span<const folly::StringPiece>
+  operator std::span<const folly::StringPiece>() const {
+    return std::span<const folly::StringPiece>(
         pieces_.data(), pieces_.size());
   }
 };

@@ -26,7 +26,7 @@ namespace facebook::velox::serializer::presto::detail {
 template <TypeKind Kind>
 void estimateFlatSerializedSize(
     const BaseVector* vector,
-    const folly::Range<const IndexRange*>& ranges,
+    const std::span<const IndexRange>& ranges,
     vector_size_t** sizes) {
   const auto valueSize = vector->type()->cppSizeInBytes();
   if (vector->mayHaveNulls()) {
@@ -52,13 +52,13 @@ void estimateFlatSerializedSize(
 
 void estimateFlatSerializedSizeVarcharOrVarbinary(
     const BaseVector* vector,
-    const folly::Range<const IndexRange*>& ranges,
+    const std::span<const IndexRange>& ranges,
     vector_size_t** sizes);
 
 template <>
 inline void estimateFlatSerializedSize<TypeKind::VARCHAR>(
     const BaseVector* vector,
-    const folly::Range<const IndexRange*>& ranges,
+    const std::span<const IndexRange>& ranges,
     vector_size_t** sizes) {
   estimateFlatSerializedSizeVarcharOrVarbinary(vector, ranges, sizes);
 }
@@ -66,7 +66,7 @@ inline void estimateFlatSerializedSize<TypeKind::VARCHAR>(
 template <>
 inline void estimateFlatSerializedSize<TypeKind::VARBINARY>(
     const BaseVector* vector,
-    const folly::Range<const IndexRange*>& ranges,
+    const std::span<const IndexRange>& ranges,
     vector_size_t** sizes) {
   estimateFlatSerializedSizeVarcharOrVarbinary(vector, ranges, sizes);
 }
@@ -74,25 +74,25 @@ inline void estimateFlatSerializedSize<TypeKind::VARBINARY>(
 template <>
 inline void estimateFlatSerializedSize<TypeKind::OPAQUE>(
     const BaseVector*,
-    const folly::Range<const IndexRange*>&,
+    const std::span<const IndexRange>&,
     vector_size_t**) {
   VELOX_FAIL("Opaque type support is not implemented.");
 }
 
 void estimateSerializedSizeInt(
     const BaseVector* vector,
-    const folly::Range<const IndexRange*>& ranges,
+    const std::span<const IndexRange>& ranges,
     vector_size_t** sizes,
     Scratch& scratch);
 
 void estimateSerializedSizeInt(
     const BaseVector* vector,
-    const folly::Range<const vector_size_t*>& rows,
+    const std::span<const vector_size_t>& rows,
     vector_size_t** sizes,
     Scratch& scratch);
 
 void estimateWrapperSerializedSize(
-    const folly::Range<const IndexRange*>& ranges,
+    const std::span<const IndexRange>& ranges,
     vector_size_t** sizes,
     const BaseVector* wrapper,
     Scratch& scratch);
@@ -100,7 +100,7 @@ void estimateWrapperSerializedSize(
 template <TypeKind Kind>
 void estimateDictionarySerializedSize(
     const VectorPtr& vector,
-    const folly::Range<const IndexRange*>& ranges,
+    const std::span<const IndexRange>& ranges,
     vector_size_t** sizes,
     Scratch& scratch) {
   VELOX_CHECK_EQ(vector->encoding(), VectorEncoding::Simple::DICTIONARY);
@@ -124,7 +124,7 @@ void estimateDictionarySerializedSize(
         selectedIndicesHolder.get(dictionaryVector->valueVector()->size());
     auto numUsed = computeSelectedIndices(
         dictionaryVector,
-        ranges.subpiece(rangeIndex, 1),
+        ranges.subspan(rangeIndex, 1),
         scratch,
         mutableSelectedIndices);
     for (int i = 0; i < numUsed; i++) {
@@ -148,7 +148,7 @@ void estimateDictionarySerializedSize(
 template <TypeKind Kind>
 void estimateConstantSerializedSize(
     const VectorPtr& vector,
-    const folly::Range<const IndexRange*>& ranges,
+    const std::span<const IndexRange>& ranges,
     vector_size_t** sizes,
     Scratch& scratch) {
   VELOX_CHECK(vector->encoding() == VectorEncoding::Simple::CONSTANT);
@@ -184,7 +184,7 @@ void expandRepeatedRanges(
     const BaseVector* vector,
     const vector_size_t* rawOffsets,
     const vector_size_t* rawSizes,
-    const folly::Range<const IndexRange*>& ranges,
+    const std::span<const IndexRange>& ranges,
     vector_size_t** sizes,
     std::vector<IndexRange>* childRanges,
     std::vector<vector_size_t*>* childSizes);

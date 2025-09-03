@@ -52,7 +52,7 @@ using BufferPtr = boost::intrusive_ptr<Buffer>;
 // NOTE: References to sizes represent number of bytes.
 class Buffer {
  public:
-  // Even though some buffer elements like StringView or folly::Range have a
+  // Even though some buffer elements like StringView or std::span have a
   // non-trivial constructor, they don't really allocate any memory and we take
   // liberty of not calling it occasionally - we treat them as an almost POD
   // type. Thus the conditions are: trivial destructor (no resources to release)

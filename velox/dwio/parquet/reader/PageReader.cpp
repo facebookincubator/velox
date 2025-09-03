@@ -886,7 +886,7 @@ PageReader::readNulls(int32_t numValues, BufferPtr& buffer) {
   return buffer->as<uint64_t>();
 }
 
-void PageReader::startVisit(folly::Range<const vector_size_t*> rows) {
+void PageReader::startVisit(std::span<const vector_size_t> rows) {
   visitorRows_ = rows.data();
   numVisitorRows_ = rows.size();
   currentVisitorRow_ = 0;
@@ -898,7 +898,7 @@ bool PageReader::rowsForPage(
     dwio::common::SelectiveColumnReader& reader,
     bool hasFilter,
     bool mayProduceNulls,
-    folly::Range<const vector_size_t*>& rows,
+    std::span<const vector_size_t>& rows,
     const uint64_t* FOLLY_NULLABLE& nulls) {
   if (currentVisitorRow_ == numVisitorRows_) {
     return false;
@@ -948,14 +948,14 @@ bool PageReader::rowsForPage(
     numToVisit = numVisitorRows_ - currentVisitorRow_;
   } else {
     // Find the last row in the rows to visit that is on this page.
-    auto rangeLeft = folly::Range<const int32_t*>(
+    auto rangeLeft = std::span<const int32_t>(
         visitorRows_ + currentVisitorRow_,
         numVisitorRows_ - currentVisitorRow_);
     auto it =
         std::lower_bound(rangeLeft.begin(), rangeLeft.end(), firstOnNextPage);
     assert(it != rangeLeft.end());
     assert(it != rangeLeft.begin());
-    numToVisit = it - (visitorRows_ + currentVisitorRow_);
+    numToVisit = std::to_address(it) - (visitorRows_ + currentVisitorRow_);
   }
   // If the page did not change and this is the first call, we can return a view
   // on the original visitor rows.
@@ -963,7 +963,7 @@ bool PageReader::rowsForPage(
     nulls =
         readNulls(visitorRows_[numToVisit - 1] + 1, reader.nullsInReadRange());
     rowNumberBias_ = 0;
-    rows = folly::Range<const vector_size_t*>(visitorRows_, numToVisit);
+    rows = std::span<const vector_size_t>(visitorRows_, numToVisit);
   } else {
     // We scale row numbers to be relative to first on this page.
     auto pageOffset = rowOfPage_ - visitBase_;
@@ -985,8 +985,7 @@ bool PageReader::rowsForPage(
       copy += xsimd::batch<int32_t>::size;
     }
     nulls = readNulls(rowsCopy_->back() + 1, reader.nullsInReadRange());
-    rows = folly::Range<const vector_size_t*>(
-        rowsCopy_->data(), rowsCopy_->size());
+    rows = std::span<const vector_size_t>(rowsCopy_->data(), rowsCopy_->size());
   }
   reader.prepareNulls(rows, nulls != nullptr, currentVisitorRow_);
   currentVisitorRow_ += numToVisit;

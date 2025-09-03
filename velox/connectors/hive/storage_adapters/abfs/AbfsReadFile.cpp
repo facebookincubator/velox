@@ -71,7 +71,7 @@ class AbfsReadFile::Impl {
 
   uint64_t preadv(
       uint64_t offset,
-      const std::vector<folly::Range<char*>>& buffers,
+      const std::vector<std::span<char>>& buffers,
       File::IoStats* stats) const {
     size_t length = 0;
     auto size = buffers.size();
@@ -92,8 +92,8 @@ class AbfsReadFile::Impl {
   }
 
   uint64_t preadv(
-      folly::Range<const common::Region*> regions,
-      folly::Range<folly::IOBuf*> iobufs,
+      std::span<const common::Region> regions,
+      std::span<folly::IOBuf> iobufs,
       File::IoStats* stats) const {
     size_t length = 0;
     VELOX_CHECK_EQ(regions.size(), iobufs.size());
@@ -175,14 +175,14 @@ std::string AbfsReadFile::pread(
 
 uint64_t AbfsReadFile::preadv(
     uint64_t offset,
-    const std::vector<folly::Range<char*>>& buffers,
+    const std::vector<std::span<char>>& buffers,
     File::IoStats* stats) const {
   return impl_->preadv(offset, buffers, stats);
 }
 
 uint64_t AbfsReadFile::preadv(
-    folly::Range<const common::Region*> regions,
-    folly::Range<folly::IOBuf*> iobufs,
+    std::span<const common::Region> regions,
+    std::span<folly::IOBuf> iobufs,
     File::IoStats* stats) const {
   return impl_->preadv(regions, iobufs, stats);
 }

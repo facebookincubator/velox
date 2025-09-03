@@ -274,8 +274,8 @@ class BaseHashTable {
   virtual int32_t listJoinResults(
       JoinResultIterator& iter,
       bool includeMisses,
-      folly::Range<vector_size_t*> inputRows,
-      folly::Range<char**> hits,
+      std::span<vector_size_t> inputRows,
+      std::span<char*> hits,
       uint64_t maxBytes) = 0;
 
   /// Returns rows with 'probed' flag unset. Used by the right/full join.
@@ -373,7 +373,7 @@ class BaseHashTable {
 
   /// Removes 'rows' from the hash table and its RowContainer. 'rows' must exist
   /// and be unique.
-  virtual void erase(folly::Range<char**> rows) = 0;
+  virtual void erase(std::span<char*> rows) = 0;
 
   /// Returns a brief description for use in debugging.
   virtual std::string toString() = 0;
@@ -433,7 +433,7 @@ class BaseHashTable {
   /// pointed to by 'rows'. If an entry in 'rows' is null, sets corresponding
   /// row in 'result' to null.
   virtual void extractColumn(
-      folly::Range<char* const*> rows,
+      std::span<char* const> rows,
       int32_t columnIndex,
       const VectorPtr& result) = 0;
 
@@ -530,8 +530,8 @@ class HashTable : public BaseHashTable {
   int32_t listJoinResults(
       JoinResultIterator& iter,
       bool includeMisses,
-      folly::Range<vector_size_t*> inputRows,
-      folly::Range<char**> hits,
+      std::span<vector_size_t> inputRows,
+      std::span<char*> hits,
       uint64_t maxBytes) override;
 
   int32_t listNotProbedRows(
@@ -596,7 +596,7 @@ class HashTable : public BaseHashTable {
       int8_t spillInputStartPartitionBit,
       bool disableRangeArrayHash = false) override;
 
-  void erase(folly::Range<char**> rows) override;
+  void erase(std::span<char*> rows) override;
 
   /// Moves the contents of 'tables' into 'this' and prepares 'this'
   /// for use in hash join probe. A hash join build side is prepared as
@@ -665,7 +665,7 @@ class HashTable : public BaseHashTable {
   void checkConsistency() const;
 
   void extractColumn(
-      folly::Range<char* const*> rows,
+      std::span<char* const> rows,
       int32_t columnIndex,
       const VectorPtr& result) override {
     RowContainer::extractColumn(
@@ -782,8 +782,8 @@ class HashTable : public BaseHashTable {
   int32_t listJoinResultsFastPath(
       JoinResultIterator& iter,
       bool includeMisses,
-      folly::Range<vector_size_t*> inputRows,
-      folly::Range<char**> hits,
+      std::span<vector_size_t> inputRows,
+      std::span<char*> hits,
       uint64_t maxBytes);
 
   // Tries to use as many range hashers as can in a normalized key situation.
@@ -897,7 +897,7 @@ class HashTable : public BaseHashTable {
   // made from this, without recomputing the normalized key. Returns false if
   // the hash keys are not mappable via the VectorHashers.
   bool hashRows(
-      folly::Range<char**> rows,
+      std::span<char*> rows,
       bool initNormalizedKeys,
       raw_vector<uint64_t>& hashes);
 
@@ -961,7 +961,7 @@ class HashTable : public BaseHashTable {
 
   // Erases the entries of rows from the hash table and its RowContainer.
   // 'hashes' must be computed according to 'hashMode_'.
-  void eraseWithHashes(folly::Range<char**> rows, uint64_t* hashes);
+  void eraseWithHashes(std::span<char*> rows, uint64_t* hashes);
 
   // Returns the percentage of values to reserve for new keys in range
   // or distinct mode VectorHashers in a group by hash table. 0 for

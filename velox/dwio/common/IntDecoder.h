@@ -17,7 +17,6 @@
 #pragma once
 
 #include <folly/Likely.h>
-#include <folly/Range.h>
 #include <folly/Varint.h>
 #include "velox/common/base/Nulls.h"
 #include "velox/common/encode/Coding.h"

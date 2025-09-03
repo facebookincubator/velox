@@ -194,7 +194,7 @@ class NoisySumGaussianAggregate : public exec::Aggregate {
  protected:
   void initializeNewGroupsInternal(
       char** groups,
-      folly::Range<const vector_size_t*> indices) override {
+      std::span<const vector_size_t> indices) override {
     // Initialize the accumulator for each group
     for (auto i : indices) {
       *value<AccumulatorType>(groups[i]) = AccumulatorType();

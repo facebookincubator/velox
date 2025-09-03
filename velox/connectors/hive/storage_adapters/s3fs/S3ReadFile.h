@@ -44,7 +44,7 @@ class S3ReadFile : public ReadFile {
 
   uint64_t preadv(
       uint64_t offset,
-      const std::vector<folly::Range<char*>>& buffers,
+      const std::vector<std::span<char>>& buffers,
       filesystems::File::IoStats* stats = nullptr) const final;
 
   uint64_t size() const final;

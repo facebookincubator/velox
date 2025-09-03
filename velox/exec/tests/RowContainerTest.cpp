@@ -178,8 +178,8 @@ class RowContainerTest : public exec::test::RowContainerTestBase {
       for (int i = 0; i < size - offset; i++) {
         rowNumbers[i] = i + offset;
       }
-      folly::Range<const vector_size_t*> rowNumbersRange =
-          folly::Range(rowNumbers.data(), size - offset);
+      std::span<const vector_size_t> rowNumbersRange =
+          std::span(rowNumbers.data(), size - offset);
       container.extractColumn(
           rows.data(), rowNumbersRange, column, offset, result);
       testEqualVectors(result, expected, offset, offset);
@@ -262,8 +262,8 @@ class RowContainerTest : public exec::test::RowContainerTestBase {
       }
 
       auto result = BaseVector::create(expected->type(), size, pool_.get());
-      folly::Range<const vector_size_t*> rowNumbersRange =
-          folly::Range(rowNumbers.data(), rowNumbersSize);
+      std::span<const vector_size_t> rowNumbersRange =
+          std::span(rowNumbers.data(), rowNumbersSize);
       container.extractColumn(
           input.data(), rowNumbersRange, column, offset, result);
       verifyResults(result, offset);
@@ -286,7 +286,7 @@ class RowContainerTest : public exec::test::RowContainerTestBase {
     for (int i = 0; i < size; i++) {
       rowNumbers[i] = i % 3;
     }
-    auto rowNumbersRange = folly::Range(rowNumbers.data(), size);
+    auto rowNumbersRange = std::span(rowNumbers.data(), size);
 
     auto result = BaseVector::create(expected->type(), size, pool_.get());
     container.extractColumn(rows.data(), rowNumbersRange, column, 0, result);
@@ -317,7 +317,7 @@ class RowContainerTest : public exec::test::RowContainerTestBase {
         rowNumbers[i] = i;
       }
     }
-    auto rowNumbersRange = folly::Range(rowNumbers.data(), size);
+    auto rowNumbersRange = std::span(rowNumbers.data(), size);
 
     auto result = BaseVector::create(expected->type(), size, pool_.get());
     container.extractColumn(rows.data(), rowNumbersRange, column, 0, result);
@@ -1158,7 +1158,7 @@ TEST_F(RowContainerTest, types) {
     std::vector<uint64_t> rowHashes(kNumRows);
     data->hash(
         column,
-        folly::Range<char**>(rows.data(), rows.size()),
+        std::span<char*>(rows.data(), rows.size()),
         false,
         rowHashes.data());
 
@@ -1322,7 +1322,7 @@ TEST_F(RowContainerTest, erase) {
   for (auto i = 0; i < rows.size(); i += 2) {
     erased.push_back(rows[i]);
   }
-  data->eraseRows(folly::Range<char**>(erased.data(), erased.size()));
+  data->eraseRows(std::span<char*>(erased.data(), erased.size()));
   RowContainerTestHelper(data.get()).checkConsistency();
 
   std::vector<char*> remaining(data->numRows());
@@ -1636,7 +1636,7 @@ TEST_F(RowContainerTest, partition) {
     partitionRows[partition].push_back(rows[i]);
   }
   partitions->appendPartitions(
-      folly::Range<const uint8_t*>(rowPartitions.data(), kNumRows));
+      std::span<const uint8_t>(rowPartitions.data(), kNumRows));
   for (auto partition = 0; partition < kNumPartitions; ++partition) {
     std::vector<char*> result(partitionRows[partition].size() + 10);
     iter.reset();
@@ -1819,21 +1819,21 @@ TEST_F(RowContainerTest, mixedFree) {
   ASSERT_EQ(
       kNumRows,
       data1->findRows(
-          folly::Range<char**>(rows.data(), rows.size()), result1.data()));
+          std::span<char*>(rows.data(), rows.size()), result1.data()));
   for (auto i = 0; i < kNumRows * 2; i += 2) {
     ASSERT_EQ(rows[i], result1[i / 2]);
   }
   ASSERT_EQ(
       kNumRows,
       data2->findRows(
-          folly::Range<char**>(rows.data(), rows.size()), result2.data()));
+          std::span<char*>(rows.data(), rows.size()), result2.data()));
   for (auto i = 1; i < kNumRows * 2; i += 2) {
     ASSERT_EQ(rows[i], result2[i / 2]);
   }
 
   // We erase all rows from both containers and check there are no corruptions.
-  data1->eraseRows(folly::Range<char**>(result1.data(), kNumRows));
-  data2->eraseRows(folly::Range<char**>(result2.data(), kNumRows));
+  data1->eraseRows(std::span<char*>(result1.data(), kNumRows));
+  data2->eraseRows(std::span<char*>(result2.data(), kNumRows));
   EXPECT_EQ(0, data1->numRows());
   EXPECT_EQ(0, data2->numRows());
   RowContainerTestHelper(data1.get()).checkConsistency();
@@ -1854,7 +1854,7 @@ TEST_F(RowContainerTest, unknown) {
 
   std::vector<uint64_t> hashes(size, 0);
   rowContainer->hash(
-      0, folly::Range(rows.data(), rows.size()), false /*mix*/, hashes.data());
+      0, std::span(rows.data(), rows.size()), false /*mix*/, hashes.data());
   for (auto hash : hashes) {
     ASSERT_EQ(BaseVector::kNullHash, hash);
   }
@@ -1862,7 +1862,7 @@ TEST_F(RowContainerTest, unknown) {
   // Fill in hashes with sequential numbers: 0, 1, 2,..
   std::iota(hashes.begin(), hashes.end(), 0);
   rowContainer->hash(
-      0, folly::Range(rows.data(), rows.size()), true /*mix*/, hashes.data());
+      0, std::span(rows.data(), rows.size()), true /*mix*/, hashes.data());
   for (auto i = 0; i < size; ++i) {
     ASSERT_EQ(bits::hashMix(i, BaseVector::kNullHash), hashes[i]);
   }
@@ -1930,7 +1930,7 @@ TEST_F(RowContainerTest, nans) {
   // Verify that the hashes are equal.
   std::vector<uint64_t> hashes(size, 0);
   rowContainer->hash(
-      0, folly::Range(rows.data(), rows.size()), false /*mix*/, hashes.data());
+      0, std::span(rows.data(), rows.size()), false /*mix*/, hashes.data());
   for (auto hash : hashes) {
     ASSERT_EQ(kNaNHash, hash);
   }
@@ -1938,7 +1938,7 @@ TEST_F(RowContainerTest, nans) {
   // Fill in hashes with sequential numbers: 0, 1, 2,..
   std::iota(hashes.begin(), hashes.end(), 0);
   rowContainer->hash(
-      0, folly::Range(rows.data(), rows.size()), true /*mix*/, hashes.data());
+      0, std::span(rows.data(), rows.size()), true /*mix*/, hashes.data());
   for (auto i = 0; i < size; ++i) {
     ASSERT_EQ(bits::hashMix(i, kNaNHash), hashes[i]);
   }
@@ -2017,7 +2017,7 @@ TEST_F(RowContainerTest, partialWriteComplexTypedRow) {
   // No write at all.
   auto row = rowContainer->newRow();
   rowContainer->initializeFields(row);
-  rowContainer->eraseRows(folly::Range<char**>(&row, 1));
+  rowContainer->eraseRows(std::span<char*>(&row, 1));
 
   row = rowContainer->newRow();
   rowContainer->initializeFields(row);
@@ -2033,7 +2033,7 @@ TEST_F(RowContainerTest, partialWriteComplexTypedRow) {
   rowContainer->initializeRow(row, true);
 
   rowContainer->initializeFields(row);
-  rowContainer->eraseRows(folly::Range<char**>(&row, 1));
+  rowContainer->eraseRows(std::span<char*>(&row, 1));
 }
 
 TEST_F(RowContainerTest, extractSerializedRow) {
@@ -2078,7 +2078,7 @@ TEST_F(RowContainerTest, extractSerializedRow) {
     auto serialized = BaseVector::create<FlatVector<StringView>>(
         VARBINARY(), data->size(), pool());
     rowContainer.extractSerializedRows(
-        folly::Range(rows.data(), rows.size()), serialized);
+        std::span(rows.data(), rows.size()), serialized);
 
     for (int col = 0; col < rowType->size(); ++col) {
       ASSERT_EQ(rowContainer.columnHasNulls(col), expectedColumnHasNulls[col]);
@@ -2130,7 +2130,7 @@ DEBUG_ONLY_TEST_F(RowContainerTest, eraseAfterOomStoringString) {
   // If the StringView was placed in the row before the memory was
   // allocated in the container's string allocator, this will fail
   // attempting to free a string the allocator doesn't own.
-  rowContainer->eraseRows(folly::Range<char**>(rows.data(), numRows));
+  rowContainer->eraseRows(std::span<char*>(rows.data(), numRows));
 }
 
 TEST_F(RowContainerTest, hugeIntStoreWithNulls) {
@@ -2276,7 +2276,7 @@ TEST_F(RowContainerTest, store) {
     }
     for (int i = 0; i < rowContainer->columnTypes().size(); ++i) {
       DecodedVector decoded(*rowVector->childAt(i), allRows);
-      rowContainer->store(decoded, folly::Range(rows.data(), kNumRows), i);
+      rowContainer->store(decoded, std::span(rows.data(), kNumRows), i);
     }
     ASSERT_EQ(rowContainer->numRows(), kNumRows);
     for (int i = 0; i < rowContainer->columnTypes().size(); ++i) {
@@ -2431,7 +2431,7 @@ TEST_F(RowContainerTest, isNanAt) {
   }
   for (int j = 0; j < rowContainer->columnTypes().size(); ++j) {
     DecodedVector decoded(*rowVector->childAt(j), allRows);
-    rowContainer->store(decoded, folly::Range(rows.data(), kNumRows), j);
+    rowContainer->store(decoded, std::span(rows.data(), kNumRows), j);
   }
 
   for (int i = 0; i < kNumRows; ++i) {
@@ -2548,7 +2548,7 @@ TEST_F(RowContainerTest, invalidatedColumnStats) {
             rowContainer->setAllNull(rows[0]);
           },
           [](RowContainer* rowContainer, std::vector<char*>& rows) {
-            rowContainer->eraseRows(folly::Range(rows.data(), rows.size()));
+            rowContainer->eraseRows(std::span(rows.data(), rows.size()));
           }};
   for (auto& invalidateFunc : invalidateFuncs) {
     std::vector<char*> rows(kNumRows);
@@ -2675,7 +2675,7 @@ TEST_F(RowContainerTest, storeAndCollectColumnStats) {
   }
   for (int i = 0; i < rowContainer->columnTypes().size(); ++i) {
     DecodedVector decoded(*rowVector->childAt(i), allRows);
-    rowContainer->store(decoded, folly::Range(rows.data(), kNumRows), i);
+    rowContainer->store(decoded, std::span(rows.data(), kNumRows), i);
   }
 
   ASSERT_EQ(rowContainer->numRows(), kNumRows);
@@ -2692,7 +2692,7 @@ TEST_F(RowContainerTest, storeAndCollectColumnStats) {
     }
   }
 
-  rowContainer->eraseRows(folly::Range(rows.data(), 10)); // there are 2 nulls
+  rowContainer->eraseRows(std::span(rows.data(), 10)); // there are 2 nulls
   for (int i = 0; i < rowContainer->columnTypes().size(); ++i) {
     const auto stats = rowContainer->columnStats(i).value();
     EXPECT_EQ(stats.nonNullCount(), 849);

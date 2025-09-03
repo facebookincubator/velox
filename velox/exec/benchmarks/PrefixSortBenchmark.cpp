@@ -86,7 +86,7 @@ class TestCase {
     for (auto column = 0; column < data->childrenSize(); ++column) {
       DecodedVector decoded(*data->childAt(column));
       rowContainer()->store(
-          decoded, folly::Range(rows_.data(), numRows), column);
+          decoded, std::span(rows_.data(), numRows), column);
     }
   }
 

@@ -27,7 +27,7 @@ class MockVectorSerde : public VectorSerde {
 
   void estimateSerializedSize(
       const BaseVector* /*vector*/,
-      const folly::Range<const IndexRange*>& ranges,
+      const std::span<const IndexRange>& ranges,
       vector_size_t** sizes) override {}
 
   std::unique_ptr<IterativeVectorSerializer> createIterativeSerializer(

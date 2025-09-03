@@ -70,7 +70,7 @@ class VectorMap {
   /// must be owned if insertToAlphabet is true.
   void addMultiple(
       BaseVector& vector,
-      folly::Range<const vector_size_t*> rows,
+      std::span<const vector_size_t> rows,
       bool insertToAlphabet,
       vector_size_t* ids);
 

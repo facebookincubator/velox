@@ -101,7 +101,7 @@ void SortBuffer::addInput(const VectorPtr& input) {
         *inputRow->childAt(columnProjection.outputChannel), allRows);
     data_->store(
         decoded,
-        folly::Range(rows.data(), input->size()),
+        std::span(rows.data(), input->size()),
         columnProjection.inputChannel);
   }
   numInputRows_ += allRows.size();

@@ -96,34 +96,33 @@ void readData(
   char head[12];
   char middle[4];
   char tail[7];
-  std::vector<folly::Range<char*>> buffers = {
-      folly::Range<char*>(head, sizeof(head)),
-      folly::Range<char*>(nullptr, (char*)(uint64_t)500000),
-      folly::Range<char*>(middle, sizeof(middle)),
-      folly::Range<char*>(
-          nullptr,
-          (char*)(uint64_t)(15 + kOneMB - 500000 - sizeof(head) -
-                            sizeof(middle) - sizeof(tail))),
-      folly::Range<char*>(tail, sizeof(tail))};
+  std::vector<std::span<char>> buffers = {
+      std::span<char>(head, sizeof(head)),
+      std::span<char>((char*)nullptr, (size_t)500000),
+      std::span<char>(middle, sizeof(middle)),
+      std::span<char>(
+          (char*)nullptr,
+          (size_t)(15 + kOneMB - 500000 - sizeof(head) - sizeof(middle) -
+                   sizeof(tail))),
+      std::span<char>(tail, sizeof(tail))};
   ASSERT_EQ(15 + kOneMB, readFile->preadv(0, buffers));
   ASSERT_EQ(std::string_view(head, sizeof(head)), "aaaaabbbbbcc");
   ASSERT_EQ(std::string_view(middle, sizeof(middle)), "cccc");
   ASSERT_EQ(std::string_view(tail, sizeof(tail)), "ccddddd");
   if (testReadAsync) {
-    std::vector<folly::Range<char*>> buffers1 = {
-        folly::Range<char*>(head, sizeof(head)),
-        folly::Range<char*>(nullptr, (char*)(uint64_t)500000)};
+    std::vector<std::span<char>> buffers1 = {
+        std::span<char>(head, sizeof(head)),
+        std::span<char>((char*)nullptr, (size_t)500000)};
     auto future1 = readFile->preadvAsync(0, buffers1);
     const auto offset1 = sizeof(head) + 500000;
-    std::vector<folly::Range<char*>> buffers2 = {
-        folly::Range<char*>(middle, sizeof(middle)),
-        folly::Range<char*>(
-            nullptr,
-            (char*)(uint64_t)(15 + kOneMB - offset1 - sizeof(middle) -
-                              sizeof(tail)))};
+    std::vector<std::span<char>> buffers2 = {
+        std::span<char>(middle, sizeof(middle)),
+        std::span<char>(
+            (char*)nullptr,
+            (size_t)(15 + kOneMB - offset1 - sizeof(middle) - sizeof(tail)))};
     auto future2 = readFile->preadvAsync(offset1, buffers2);
-    std::vector<folly::Range<char*>> buffers3 = {
-        folly::Range<char*>(tail, sizeof(tail))};
+    std::vector<std::span<char>> buffers3 = {
+        std::span<char>(tail, sizeof(tail))};
     const auto offset2 = 15 + kOneMB - sizeof(tail);
     auto future3 = readFile->preadvAsync(offset2, buffers3);
     ASSERT_EQ(offset1, future1.wait().value());
@@ -524,8 +523,8 @@ class FaultyFsTest : public ::testing::Test {
     if (!useReadv) {
       file->pread(0, buffer_.size(), readBuf.data());
     } else {
-      std::vector<folly::Range<char*>> buffers;
-      buffers.push_back(folly::Range<char*>(readBuf.data(), buffer_.size()));
+      std::vector<std::span<char>> buffers;
+      buffers.push_back(std::span<char>(readBuf.data(), buffer_.size()));
       file->preadv(0, buffers);
     }
     for (int i = 0; i < buffer_.size(); ++i) {

@@ -109,7 +109,7 @@ bool SpillerBase::fillSpillRuns(RowContainerIterator* iterator) {
       }
 
       // Calculate hashes for this batch of spill candidates.
-      auto rowSet = folly::Range<char**>(rows.data(), numRows);
+      auto rowSet = std::span<char*>(rows.data(), numRows);
 
       if (!isSinglePartition) {
         for (auto i = 0; i < container_->keyTypes().size(); ++i) {
@@ -275,7 +275,7 @@ int64_t SpillerBase::extractSpillVector(
         break;
       }
     }
-    extractSpill(folly::Range(&rows[nextBatchIndex], numRows), spillVector);
+    extractSpill(std::span(&rows[nextBatchIndex], numRows), spillVector);
     nextBatchIndex += numRows;
   }
   updateSpillExtractVectorTime(extractNs);
@@ -283,7 +283,7 @@ int64_t SpillerBase::extractSpillVector(
 }
 
 void SpillerBase::extractSpill(
-    folly::Range<char**> rows,
+    std::span<char*> rows,
     RowVectorPtr& resultPtr) {
   if (resultPtr == nullptr) {
     resultPtr = BaseVector::create<RowVector>(

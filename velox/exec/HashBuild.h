@@ -344,7 +344,7 @@ class HashBuildSpiller : public SpillerBase {
   }
 
  private:
-  void extractSpill(folly::Range<char**> rows, RowVectorPtr& resultPtr)
+  void extractSpill(std::span<char*> rows, RowVectorPtr& resultPtr)
       override;
 
   bool needSort() const override {

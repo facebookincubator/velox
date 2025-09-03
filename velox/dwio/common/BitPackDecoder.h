@@ -20,12 +20,11 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/vector/TypeAliases.h"
 
-#include <folly/Range.h>
 #include <xsimd/config/xsimd_config.hpp>
 
 namespace facebook::velox::dwio::common {
 
-using RowSet = folly::Range<const facebook::velox::vector_size_t*>;
+using RowSet = std::span<const facebook::velox::vector_size_t>;
 
 static constexpr const uint64_t kPdepMask8[] = {
     0x0000000000000000,

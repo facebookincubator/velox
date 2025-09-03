@@ -22,7 +22,6 @@
 #include <string>
 #include <vector>
 
-#include <folly/Range.h>
 #include "velox/type/Type.h"
 
 namespace facebook::velox::type::fbhive {

@@ -231,7 +231,7 @@ TEST_F(SimdUtilTest, gatherBits) {
   }
   simd::gatherBits(
       &source,
-      folly::Range<int32_t*>(bitIndices.data(), bitIndices.size()),
+      std::span<int32_t>(bitIndices.data(), bitIndices.size()),
       &result);
   for (auto i = 0; i < bitIndices.size(); ++i) {
     EXPECT_EQ(
@@ -255,7 +255,7 @@ TEST_F(SimdUtilTest, transpose) {
     std::vector<int32_t> result32(kMaxSize + 1, -1);
     simd::transpose(
         data32.data(),
-        folly::Range<const int32_t*>(indices.data(), size),
+        std::span<const int32_t>(indices.data(), size),
         result32.data());
     for (auto i = 0; i < size; ++i) {
       EXPECT_EQ(data32[indices[i]], result32[i]);
@@ -266,7 +266,7 @@ TEST_F(SimdUtilTest, transpose) {
     std::vector<int64_t> result64(kMaxSize + 1, -1);
     simd::transpose(
         data64.data(),
-        folly::Range<const int32_t*>(indices.data(), size),
+        std::span<const int32_t>(indices.data(), size),
         result64.data());
     for (auto i = 0; i < size; ++i) {
       EXPECT_EQ(data64[indices[i]], result64[i]);

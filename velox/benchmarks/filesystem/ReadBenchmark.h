@@ -166,24 +166,24 @@ class ReadBenchmark {
                               this,
                               capturedPromise = std::move(promise)]() {
                 auto& scratch = getScratch(rangeSize);
-                std::vector<folly::Range<char*>> ranges;
+                std::vector<std::span<char>> ranges;
                 for (auto start = 0; start < rangeSize; start += size + gap) {
                   ranges.push_back(
-                      folly::Range<char*>(scratch.buffer.data() + start, size));
+                      std::span<char>(scratch.buffer.data() + start, size));
                   if (gap && start + gap < rangeSize) {
-                    ranges.push_back(folly::Range<char*>(nullptr, gap));
+                    ranges.push_back(std::span<char>(nullptr, gap));
                   }
                 }
                 readFile_->preadv(offset, ranges);
                 capturedPromise->setValue(true);
               });
             } else {
-              std::vector<folly::Range<char*>> ranges;
+              std::vector<std::span<char>> ranges;
               for (auto start = 0; start < rangeSize; start += size + gap) {
-                ranges.push_back(folly::Range<char*>(
+                ranges.push_back(std::span<char>(
                     globalScratch.buffer.data() + start, size));
                 if (gap && start + gap < rangeSize) {
-                  ranges.push_back(folly::Range<char*>(nullptr, gap));
+                  ranges.push_back(std::span<char>(nullptr, gap));
                 }
               }
               readFile_->preadv(offset, ranges);

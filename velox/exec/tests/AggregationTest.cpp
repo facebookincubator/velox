@@ -103,7 +103,7 @@ class AggregateFunc : public Aggregate {
  protected:
   void initializeNewGroupsInternal(
       char** /*groups*/,
-      folly::Range<const vector_size_t*> /*indices*/) override {}
+      std::span<const vector_size_t> /*indices*/) override {}
 };
 
 void checkSpillStats(PlanNodeStats& stats, bool expectedSpill) {
@@ -3996,11 +3996,11 @@ class TestAggregate : public Aggregate {
  protected:
   void initializeNewGroupsInternal(
       char** /*groups*/,
-      folly::Range<const vector_size_t*> /*indices*/) override {
+      std::span<const vector_size_t> /*indices*/) override {
     VELOX_UNSUPPORTED("This shouldn't get called.");
   }
 
-  void destroyInternal(folly::Range<char**> groups) override {
+  void destroyInternal(std::span<char*> groups) override {
     destroyCalled = true;
     destroyAccumulators<TestAccumulator>(groups);
   }
@@ -4016,10 +4016,10 @@ TEST_F(AggregationTest, destroyAfterPartialInitialization) {
             // call eraseRows.
       1, // alignment
       INTEGER(), // spillType,
-      [](folly::Range<char**>, VectorPtr&) {
+      [](std::span<char*>, VectorPtr&) {
         VELOX_UNSUPPORTED("This shouldn't get called.");
       },
-      [&agg](folly::Range<char**> groups) { agg.destroy(groups); });
+      [&agg](std::span<char*> groups) { agg.destroy(groups); });
 
   RowContainer rows(
       {}, // keyTypes

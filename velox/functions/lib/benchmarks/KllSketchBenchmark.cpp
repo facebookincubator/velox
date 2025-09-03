@@ -117,7 +117,7 @@ void mergeKllSketch(int iters, int maxSize, int count) {
   }
   assert(sketches.size() >= 2); // get rid of the lint warning
   for (int i = 0; i < iters; ++i) {
-    sketches[0].merge(folly::Range(&sketches[1], count - 1));
+    sketches[0].merge(std::span(&sketches[1], count - 1));
   }
 }
 

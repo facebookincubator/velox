@@ -424,8 +424,8 @@ void Executable::startTransfer(
   copyData(exe->transfers);
   auto* device = waveStream.device();
   waveStream.installExecutables(
-      folly::Range(&exe, 1),
-      [&](Stream* stream, folly::Range<Executable**> executables) {
+      std::span(&exe, 1),
+      [&](Stream* stream, std::span<Executable*> executables) {
         for (auto& transfer : executables[0]->transfers) {
           stream->prefetch(device, transfer.to, transfer.size);
           waveStream.stats().bytesToDevice += transfer.size;
@@ -449,8 +449,8 @@ std::unique_ptr<Executable> WaveStream::recycleExecutable(
 }
 
 void WaveStream::installExecutables(
-    folly::Range<std::unique_ptr<Executable>*> executables,
-    std::function<void(Stream*, folly::Range<Executable**>)> launch) {
+    std::span<std::unique_ptr<Executable>> executables,
+    std::function<void(Stream*, std::span<Executable*>)> launch) {
   folly::F14FastMap<
       OperandSet,
       std::vector<Executable*>,
@@ -486,7 +486,7 @@ void WaveStream::installExecutables(
   // the events.
   folly::F14FastMap<int32_t, Event*> streamEvents;
   for (auto& [ids, exeVector] : dependences) {
-    folly::Range<Executable**> exes(exeVector.data(), exeVector.size());
+    std::span<Executable*> exes(exeVector.data(), exeVector.size());
     std::vector<Stream*> required;
     ids.forEach([&](int32_t id) { required.push_back(streams_[id].get()); });
     if (required.size() == 1) {
@@ -770,7 +770,7 @@ LaunchControl* WaveStream::prepareProgramLaunch(
     int32_t key,
     int32_t nthLaunch,
     int32_t inputRows,
-    folly::Range<Executable**> exes,
+    std::span<Executable*> exes,
     int32_t inputBlocksPerExe,
     const LaunchControl* inputControl,
     Stream* stream) {
@@ -966,7 +966,7 @@ LaunchControl* WaveStream::prepareProgramLaunch(
 int32_t WaveStream::getOutput(
     int32_t operatorId,
     memory::MemoryPool& pool,
-    folly::Range<const OperandId*> operands,
+    std::span<const OperandId> operands,
     VectorPtr* vectors) {
   checkExecutables();
   auto it = launchControl_.find(operatorId);

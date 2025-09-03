@@ -148,7 +148,7 @@ class SumDataSizeForStatsAggregate
 
     getVectorSerde()->estimateSerializedSize(
         vector.get(),
-        folly::Range(rowIndices_.data(), rowIndices_.size()),
+        std::span(rowIndices_.data(), rowIndices_.size()),
         rowSizePtrs_.data());
   }
 
@@ -166,7 +166,7 @@ class SumDataSizeForStatsAggregate
 
   void initializeNewGroupsInternal(
       char** groups,
-      folly::Range<const vector_size_t*> indices) override {
+      std::span<const vector_size_t> indices) override {
     exec::Aggregate::setAllNulls(groups, indices);
     for (auto index : indices) {
       *BaseAggregate ::value<int64_t>(groups[index]) = 0;

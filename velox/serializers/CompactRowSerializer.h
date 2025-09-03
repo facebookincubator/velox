@@ -26,7 +26,7 @@ class CompactRowVectorSerde : public VectorSerde {
 
   void estimateSerializedSize(
       const row::CompactRow* compactRow,
-      const folly::Range<const vector_size_t*>& rows,
+      const std::span<const vector_size_t>& rows,
       vector_size_t** sizes) override;
 
   /// This method is not used in production code. It is only used to

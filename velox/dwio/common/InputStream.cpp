@@ -35,7 +35,7 @@ using ::facebook::velox::common::Region;
 namespace facebook::velox::dwio::common {
 
 namespace {
-int64_t totalBufferSize(const std::vector<folly::Range<char*>>& buffers) {
+int64_t totalBufferSize(const std::vector<std::span<char>>& buffers) {
   int64_t bufferSize = 0;
   for (auto& buffer : buffers) {
     bufferSize += buffer.size();
@@ -45,7 +45,7 @@ int64_t totalBufferSize(const std::vector<folly::Range<char*>>& buffers) {
 } // namespace
 
 folly::SemiFuture<uint64_t> InputStream::readAsync(
-    const std::vector<folly::Range<char*>>& buffers,
+    const std::vector<std::span<char>>& buffers,
     uint64_t offset,
     LogType logType) {
   try {
@@ -97,7 +97,7 @@ void ReadFileInputStream::read(
 }
 
 void ReadFileInputStream::read(
-    const std::vector<folly::Range<char*>>& buffers,
+    const std::vector<std::span<char>>& buffers,
     uint64_t offset,
     LogType logType) {
   const int64_t bufferSize = totalBufferSize(buffers);
@@ -114,7 +114,7 @@ void ReadFileInputStream::read(
 }
 
 folly::SemiFuture<uint64_t> ReadFileInputStream::readAsync(
-    const std::vector<folly::Range<char*>>& buffers,
+    const std::vector<std::span<char>>& buffers,
     uint64_t offset,
     LogType logType) {
   const int64_t bufferSize = totalBufferSize(buffers);
@@ -127,13 +127,13 @@ bool ReadFileInputStream::hasReadAsync() const {
 }
 
 void ReadFileInputStream::vread(
-    folly::Range<const velox::common::Region*> regions,
-    folly::Range<folly::IOBuf*> iobufs,
+    std::span<const velox::common::Region> regions,
+    std::span<folly::IOBuf> iobufs,
     const LogType purpose) {
   VELOX_CHECK_GT(regions.size(), 0, "regions to read can't be empty");
   const size_t length = std::accumulate(
-      regions.cbegin(),
-      regions.cend(),
+      regions.begin(),
+      regions.end(),
       size_t(0),
       [&](size_t acc, const auto& r) { return acc + r.length; });
   logRead(regions[0].offset, length, purpose);

@@ -471,7 +471,7 @@ VectorPtr BaseVector::createInternal(
 // static
 void BaseVector::setNulls(
     uint64_t* rawNulls,
-    const folly::Range<const CopyRange*>& ranges,
+    const std::span<const CopyRange>& ranges,
     bool isNull) {
   const auto nullBits = isNull ? bits::kNull : bits::kNotNull;
   applyToEachRange(
@@ -484,7 +484,7 @@ void BaseVector::setNulls(
 void BaseVector::copyNulls(
     uint64_t* targetRawNulls,
     const uint64_t* sourceRawNulls,
-    const folly::Range<const CopyRange*>& ranges) {
+    const std::span<const CopyRange>& ranges) {
   applyToEachRange(ranges, [&](auto targetIndex, auto sourceIndex, auto count) {
     bits::copyBits(
         sourceRawNulls, sourceIndex, targetRawNulls, targetIndex, count);

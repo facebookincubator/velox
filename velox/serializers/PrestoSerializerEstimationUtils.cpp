@@ -23,7 +23,7 @@ namespace {
 template <TypeKind Kind>
 void estimateFlattenedConstantSerializedSize(
     const BaseVector* vector,
-    const folly::Range<const IndexRange*>& ranges,
+    const std::span<const IndexRange>& ranges,
     vector_size_t** sizes,
     Scratch& scratch) {
   VELOX_CHECK_EQ(vector->encoding(), VectorEncoding::Simple::CONSTANT);
@@ -47,7 +47,7 @@ void estimateFlattenedConstantSerializedSize(
 
 void estimateBiasedSerializedSize(
     const BaseVector* vector,
-    const folly::Range<const IndexRange*>& ranges,
+    const std::span<const IndexRange>& ranges,
     vector_size_t** sizes) {
   auto valueSize = vector->type()->cppSizeInBytes();
   if (vector->mayHaveNulls()) {
@@ -67,7 +67,7 @@ void estimateBiasedSerializedSize(
 template <TypeKind Kind>
 void estimateFlatSerializedSize(
     const BaseVector* vector,
-    const folly::Range<const vector_size_t*>& rows,
+    const std::span<const vector_size_t>& rows,
     vector_size_t** sizes,
     Scratch& scratch) {
   const auto valueSize = vector->type()->cppSizeInBytes();
@@ -90,7 +90,7 @@ void estimateFlatSerializedSize(
 
 void estimateFlatSerializedSizeVarcharOrVarbinary(
     const BaseVector* vector,
-    const folly::Range<const vector_size_t*>& rows,
+    const std::span<const vector_size_t>& rows,
     vector_size_t** sizes,
     Scratch& scratch) {
   const auto numRows = rows.size();
@@ -118,7 +118,7 @@ void estimateFlatSerializedSizeVarcharOrVarbinary(
 template <>
 void estimateFlatSerializedSize<TypeKind::VARCHAR>(
     const BaseVector* vector,
-    const folly::Range<const vector_size_t*>& rows,
+    const std::span<const vector_size_t>& rows,
     vector_size_t** sizes,
     Scratch& scratch) {
   estimateFlatSerializedSizeVarcharOrVarbinary(vector, rows, sizes, scratch);
@@ -127,7 +127,7 @@ void estimateFlatSerializedSize<TypeKind::VARCHAR>(
 template <>
 void estimateFlatSerializedSize<TypeKind::VARBINARY>(
     const BaseVector* vector,
-    const folly::Range<const vector_size_t*>& rows,
+    const std::span<const vector_size_t>& rows,
     vector_size_t** sizes,
     Scratch& scratch) {
   estimateFlatSerializedSizeVarcharOrVarbinary(vector, rows, sizes, scratch);
@@ -136,7 +136,7 @@ void estimateFlatSerializedSize<TypeKind::VARBINARY>(
 template <>
 void estimateFlatSerializedSize<TypeKind::OPAQUE>(
     const BaseVector*,
-    const folly::Range<const vector_size_t*>&,
+    const std::span<const vector_size_t>&,
     vector_size_t**,
     Scratch&) {
   VELOX_FAIL("Opaque type support is not implemented.");
@@ -145,7 +145,7 @@ void estimateFlatSerializedSize<TypeKind::OPAQUE>(
 template <TypeKind Kind>
 void estimateFlattenedConstantSerializedSize(
     const BaseVector* vector,
-    const folly::Range<const vector_size_t*>& rows,
+    const std::span<const vector_size_t>& rows,
     vector_size_t** sizes,
     Scratch& scratch) {
   VELOX_CHECK_EQ(vector->encoding(), VectorEncoding::Simple::CONSTANT);
@@ -161,7 +161,7 @@ void estimateFlattenedConstantSerializedSize(
     const vector_size_t singleRow = constantVector->wrappedIndex(0);
     estimateSerializedSizeInt(
         values,
-        folly::Range<const vector_size_t*>(&singleRow, 1),
+        std::span<const vector_size_t>(&singleRow, 1),
         &sizePtr,
         scratch);
   } else if constexpr (std::is_same_v<T, StringView>) {
@@ -173,7 +173,7 @@ void estimateFlattenedConstantSerializedSize(
 }
 
 void estimateWrapperSerializedSize(
-    const folly::Range<const vector_size_t*>& rows,
+    const std::span<const vector_size_t>& rows,
     vector_size_t** sizes,
     const BaseVector* wrapper,
     Scratch& scratch) {
@@ -208,14 +208,14 @@ void estimateWrapperSerializedSize(
 
   estimateSerializedSizeInt(
       wrapped,
-      folly::Range<const vector_size_t*>(innerRows, numInner),
+      std::span<const vector_size_t>(innerRows, numInner),
       innerSizes,
       scratch);
 }
 
 void estimateBiasedSerializedSize(
     const BaseVector* vector,
-    const folly::Range<const vector_size_t*>& rows,
+    const std::span<const vector_size_t>& rows,
     vector_size_t** sizes,
     Scratch& scratch) {
   VELOX_UNSUPPORTED();
@@ -224,7 +224,7 @@ void estimateBiasedSerializedSize(
 
 void estimateFlatSerializedSizeVarcharOrVarbinary(
     const BaseVector* vector,
-    const folly::Range<const IndexRange*>& ranges,
+    const std::span<const IndexRange>& ranges,
     vector_size_t** sizes) {
   auto strings = static_cast<const FlatVector<StringView>*>(vector);
   auto rawNulls = strings->rawNulls();
@@ -246,7 +246,7 @@ void estimateFlatSerializedSizeVarcharOrVarbinary(
 
 void estimateSerializedSizeInt(
     const BaseVector* vector,
-    const folly::Range<const IndexRange*>& ranges,
+    const std::span<const IndexRange>& ranges,
     vector_size_t** sizes,
     Scratch& scratch) {
   switch (vector->encoding()) {
@@ -294,7 +294,7 @@ void estimateSerializedSizeInt(
         if (child) {
           estimateSerializedSizeInt(
               child.get(),
-              folly::Range(childRanges.data(), childRanges.size()),
+              std::span(childRanges.data(), childRanges.size()),
               childSizes.data(),
               scratch);
         }
@@ -350,7 +350,7 @@ void estimateSerializedSizeInt(
 }
 
 void estimateWrapperSerializedSize(
-    const folly::Range<const IndexRange*>& ranges,
+    const std::span<const IndexRange>& ranges,
     vector_size_t** sizes,
     const BaseVector* wrapper,
     Scratch& scratch) {
@@ -377,7 +377,7 @@ void expandRepeatedRanges(
     const BaseVector* vector,
     const vector_size_t* rawOffsets,
     const vector_size_t* rawSizes,
-    const folly::Range<const IndexRange*>& ranges,
+    const std::span<const IndexRange>& ranges,
     vector_size_t** sizes,
     std::vector<IndexRange>* childRanges,
     std::vector<vector_size_t*>* childSizes) {
@@ -406,7 +406,7 @@ void expandRepeatedRanges(
 
 void estimateSerializedSizeInt(
     const BaseVector* vector,
-    const folly::Range<const vector_size_t*>& rows,
+    const std::span<const vector_size_t>& rows,
     vector_size_t** sizes,
     Scratch& scratch) {
   const auto numRows = rows.size();
@@ -463,7 +463,7 @@ void estimateSerializedSizeInt(
         }
         simd::transpose(
             rows.data(),
-            folly::Range<const vector_size_t*>(mutableInnerRows, numInner),
+            std::span<const vector_size_t>(mutableInnerRows, numInner),
             mutableInnerRows);
         innerRows = mutableInnerRows;
       }
@@ -473,7 +473,7 @@ void estimateSerializedSizeInt(
         if (child) {
           estimateSerializedSizeInt(
               child.get(),
-              folly::Range(innerRows, numInner),
+              std::span(innerRows, numInner),
               innerSizes,
               scratch);
         }
@@ -499,12 +499,12 @@ void estimateSerializedSizeInt(
       }
       estimateSerializedSizeInt(
           mapVector->mapKeys().get(),
-          folly::Range<const IndexRange*>(rangeHolder.get(), numRanges),
+          std::span<const IndexRange>(rangeHolder.get(), numRanges),
           sizesHolder.get(),
           scratch);
       estimateSerializedSizeInt(
           mapVector->mapValues().get(),
-          folly::Range<const IndexRange*>(rangeHolder.get(), numRanges),
+          std::span<const IndexRange>(rangeHolder.get(), numRanges),
           sizesHolder.get(),
           scratch);
       break;
@@ -528,7 +528,7 @@ void estimateSerializedSizeInt(
       }
       estimateSerializedSizeInt(
           arrayVector->elements().get(),
-          folly::Range<const IndexRange*>(rangeHolder.get(), numRanges),
+          std::span<const IndexRange>(rangeHolder.get(), numRanges),
           sizesHolder.get(),
           scratch);
       break;

@@ -488,7 +488,7 @@ class MinMaxByAggregateBase : public exec::Aggregate {
 
   void initializeNewGroupsInternal(
       char** groups,
-      folly::Range<const vector_size_t*> indices) override {
+      std::span<const vector_size_t> indices) override {
     exec::Aggregate::setAllNulls(groups, indices);
     for (const vector_size_t i : indices) {
       auto group = groups[i];
@@ -513,7 +513,7 @@ class MinMaxByAggregateBase : public exec::Aggregate {
     }
   }
 
-  void destroyInternal(folly::Range<char**> groups) override {
+  void destroyInternal(std::span<char*> groups) override {
     for (auto group : groups) {
       if (isInitialized(group)) {
         if constexpr (std::is_same_v<

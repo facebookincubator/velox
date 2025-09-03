@@ -265,20 +265,20 @@ namespace {
 void appendRanges(
     memory::Allocation& allocation,
     size_t length,
-    std::vector<folly::Range<char*>>& buffers) {
+    std::vector<std::span<char>>& buffers) {
   uint64_t offsetInRuns = 0;
   for (int i = 0; i < allocation.numRuns(); ++i) {
     auto run = allocation.runAt(i);
     const uint64_t bytes = memory::AllocationTraits::pageBytes(run.numPages());
     const uint64_t readSize = std::min(bytes, length - offsetInRuns);
-    buffers.push_back(folly::Range<char*>(run.data<char>(), readSize));
+    buffers.push_back(std::span<char>(run.data<char>(), readSize));
     offsetInRuns += readSize;
   }
 }
 } // namespace
 
 std::vector<cache::CachePin> DirectCoalescedLoad::loadData(bool prefetch) {
-  std::vector<folly::Range<char*>> buffers;
+  std::vector<std::span<char>> buffers;
   int64_t lastEnd = requests_[0].region.offset;
   int64_t size = 0;
   int64_t overread = 0;
@@ -286,10 +286,9 @@ std::vector<cache::CachePin> DirectCoalescedLoad::loadData(bool prefetch) {
   for (auto& request : requests_) {
     const auto& region = request.region;
     if (region.offset > lastEnd) {
-      buffers.push_back(folly::Range<char*>(
-          nullptr,
-          reinterpret_cast<char*>(
-              static_cast<uint64_t>(region.offset - lastEnd))));
+      buffers.emplace_back(
+          static_cast<char*>(nullptr),
+          static_cast<size_t>(region.offset - lastEnd));
       overread += buffers.back().size();
     }
 
@@ -309,7 +308,7 @@ std::vector<cache::CachePin> DirectCoalescedLoad::loadData(bool prefetch) {
     } else {
       request.loadSize = region.length;
       request.tinyData.resize(region.length);
-      buffers.push_back(folly::Range(request.tinyData.data(), region.length));
+      buffers.emplace_back(request.tinyData.data(), region.length);
     }
     lastEnd = region.offset + request.loadSize;
     size += request.loadSize;

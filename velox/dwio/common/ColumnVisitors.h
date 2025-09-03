@@ -484,7 +484,7 @@ class ColumnVisitor {
 
   // Use for replacing all rows with non-null rows for fast path with processRun
   // and processRle.
-  void setRows(folly::Range<const int32_t*> newRows) {
+  void setRows(std::span<const int32_t> newRows) {
     rows_ = newRows.data();
     numRows_ = newRows.size();
   }
@@ -1468,7 +1468,7 @@ class DirectRleColumnVisitor
         std::is_same_v<typename super::Extract, DropValues>;
 
     dwio::common::processFixedWidthRun<T, filterOnly, scatter, isDense>(
-        folly::Range<const vector_size_t*>(super::rows_, super::numRows_),
+        std::span<const vector_size_t>(super::rows_, super::numRows_),
         super::rowIndex_,
         numInput,
         scatterRows,

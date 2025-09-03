@@ -135,7 +135,7 @@ class EncodingTest : public testing::Test, public velox::test::VectorTestBase {
 
     VectorMap map2(vector->type(), pool_.get());
     raw_vector<vector_size_t> temp;
-    folly::Range<const vector_size_t*> rows(
+    std::span<const vector_size_t> rows(
         iota(vector->size(), temp), vector->size());
     map2.addMultiple(*vector, rows, true, indices->asMutable<vector_size_t>());
     EXPECT_EQ(expectDistincts, map2.size());

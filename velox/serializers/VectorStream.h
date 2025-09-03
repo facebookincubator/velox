@@ -118,7 +118,7 @@ class VectorStream {
   template <typename LengthFunc>
   void appendLengths(
       const uint64_t* nulls,
-      folly::Range<const vector_size_t*> rows,
+      std::span<const vector_size_t> rows,
       int32_t numNonNull,
       LengthFunc lengthFunc) {
     const auto numRows = rows.size();
@@ -140,13 +140,13 @@ class VectorStream {
   }
 
   template <typename T>
-  void append(folly::Range<const T*> values) {
+  void append(std::span<const T> values) {
     values_.append(values);
   }
 
   template <typename T>
   void appendOne(const T& value) {
-    append(folly::Range(&value, 1));
+    append(std::span(&value, 1));
   }
 
   bool isDictionaryStream() const {
@@ -226,7 +226,7 @@ class VectorStream {
 };
 
 template <>
-inline void VectorStream::append(folly::Range<const StringView*> values) {
+inline void VectorStream::append(std::span<const StringView> values) {
   for (auto& value : values) {
     auto size = value.size();
     appendLength(size);
@@ -235,11 +235,11 @@ inline void VectorStream::append(folly::Range<const StringView*> values) {
 }
 
 template <>
-void VectorStream::append(folly::Range<const Timestamp*> values);
+void VectorStream::append(std::span<const Timestamp> values);
 
 template <>
-void VectorStream::append(folly::Range<const bool*> values);
+void VectorStream::append(std::span<const bool> values);
 
 template <>
-void VectorStream::append(folly::Range<const int128_t*> values);
+void VectorStream::append(std::span<const int128_t> values);
 } // namespace facebook::velox::serializer::presto::detail

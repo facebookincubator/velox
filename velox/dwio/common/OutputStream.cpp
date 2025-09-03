@@ -25,7 +25,7 @@ bool BufferedOutputStream::Next(
   // Try resize the buffer, if failed, flush it to make room
   if (!tryResize(buffer, size, 0, increment)) {
     flushAndReset(
-        buffer, size, 0, {folly::Range(buffer_.data(), buffer_.size())});
+        buffer, size, 0, {std::span(buffer_.data(), buffer_.size())});
   }
   return true;
 }
@@ -41,7 +41,7 @@ void BufferedOutputStream::BackUp(int32_t count) {
 uint64_t BufferedOutputStream::flush() {
   const uint64_t dataSize = buffer_.size();
   if (dataSize > 0) {
-    bufferHolder_.take(folly::Range(buffer_.data(), buffer_.size()));
+    bufferHolder_.take(std::span(buffer_.data(), buffer_.size()));
     // resize to 0 is needed to make sure size() returns correct value
     buffer_.resize(0);
   }

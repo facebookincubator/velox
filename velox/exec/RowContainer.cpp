@@ -56,11 +56,11 @@ Accumulator::Accumulator(Aggregate* aggregate, TypePtr spillType)
       alignment_{aggregate->accumulatorAlignmentSize()},
       spillType_{std::move(spillType)},
       spillExtractFunction_{
-          [aggregate](folly::Range<char**> groups, VectorPtr& result) {
+          [aggregate](std::span<char*> groups, VectorPtr& result) {
             aggregate->extractAccumulators(
                 groups.data(), groups.size(), &result);
           }},
-      destroyFunction_{[aggregate](folly::Range<char**> groups) {
+      destroyFunction_{[aggregate](std::span<char*> groups) {
         aggregate->destroy(groups);
       }} {
   VELOX_CHECK_NOT_NULL(aggregate);
@@ -72,9 +72,9 @@ Accumulator::Accumulator(
     bool usesExternalMemory,
     int32_t alignment,
     TypePtr spillType,
-    std::function<void(folly::Range<char**> groups, VectorPtr& result)>
+    std::function<void(std::span<char*> groups, VectorPtr& result)>
         spillExtractFunction,
-    std::function<void(folly::Range<char**> groups)> destroyFunction)
+    std::function<void(std::span<char*> groups)> destroyFunction)
     : isFixedSize_{isFixedSize},
       fixedSize_{fixedSize},
       usesExternalMemory_{usesExternalMemory},
@@ -99,7 +99,7 @@ int32_t Accumulator::alignment() const {
   return alignment_;
 }
 
-void Accumulator::destroy(folly::Range<char**> groups) {
+void Accumulator::destroy(std::span<char*> groups) {
   destroyFunction_(groups);
 }
 
@@ -108,7 +108,7 @@ const TypePtr& Accumulator::spillType() const {
 }
 
 void Accumulator::extractForSpill(
-    folly::Range<char**> groups,
+    std::span<char*> groups,
     VectorPtr& result) const {
   spillExtractFunction_(groups, result);
 }
@@ -296,7 +296,7 @@ void RowContainer::setAllNull(char* row) {
 
 char* RowContainer::initializeRow(char* row, bool reuse) {
   if (reuse) {
-    auto rows = folly::Range<char**>(&row, 1);
+    auto rows = std::span<char*>(&row, 1);
     freeVariableWidthFields(rows);
     freeAggregates(rows);
     VELOX_CHECK_EQ(nextOffset_, 0);
@@ -335,7 +335,7 @@ void RowContainer::removeOrUpdateRowColumnStats(
   invalidateMinMaxColumnStats();
 }
 
-void RowContainer::eraseRows(folly::Range<char**> rows) {
+void RowContainer::eraseRows(std::span<char*> rows) {
   freeRowsExtraMemory(rows);
   for (auto* row : rows) {
     VELOX_CHECK(!bits::isBitSet(row, freeFlagOffset_), "Double free of row");
@@ -348,8 +348,8 @@ void RowContainer::eraseRows(folly::Range<char**> rows) {
   numFreeRows_ += rows.size();
 }
 
-int32_t RowContainer::findRows(folly::Range<char**> rows, char** result) const {
-  raw_vector<folly::Range<char*>> ranges(pool());
+int32_t RowContainer::findRows(std::span<char*> rows, char** result) const {
+  raw_vector<std::span<char>> ranges(pool());
   ranges.resize(rows_.numRanges());
   for (auto i = 0; i < rows_.numRanges(); ++i) {
     ranges[i] = rows_.rangeAt(i);
@@ -391,7 +391,7 @@ int32_t RowContainer::findRows(folly::Range<char**> rows, char** result) const {
   return numRows;
 }
 
-void RowContainer::freeVariableWidthFields(folly::Range<char**> rows) {
+void RowContainer::freeVariableWidthFields(std::span<char*> rows) {
   for (auto i = 0; i < types_.size(); ++i) {
     switch (typeKinds_[i]) {
       case TypeKind::VARCHAR:
@@ -410,13 +410,13 @@ void RowContainer::freeVariableWidthFields(folly::Range<char**> rows) {
   }
 }
 
-void RowContainer::freeAggregates(folly::Range<char**> rows) {
+void RowContainer::freeAggregates(std::span<char*> rows) {
   for (auto& accumulator : accumulators_) {
     accumulator.destroy(rows);
   }
 }
 
-void RowContainer::freeRowsExtraMemory(folly::Range<char**> rows) {
+void RowContainer::freeRowsExtraMemory(std::span<char*> rows) {
   freeVariableWidthFields(rows);
   freeAggregates(rows);
   numRows_ -= rows.size();
@@ -540,7 +540,7 @@ void RowContainer::store(
 
 void RowContainer::store(
     const DecodedVector& decoded,
-    folly::Range<char**> rows,
+    std::span<char*> rows,
     int32_t column) {
   VELOX_CHECK_GE(decoded.size(), rows.size());
   const bool isKey = column < keyTypes_.size();
@@ -675,7 +675,7 @@ int32_t RowContainer::storeVariableSizeAt(
 }
 
 void RowContainer::extractSerializedRows(
-    folly::Range<char**> rows,
+    std::span<char*> rows,
     const VectorPtr& result) const {
   // The format of the extracted row is: null bytes followed by keys and
   // dependent columns. Fixed-width columns are serialized into fixed number of
@@ -873,7 +873,7 @@ void RowContainer::hashTyped(
     const Type* type,
     RowColumn column,
     bool nullable,
-    folly::Range<char**> rows,
+    std::span<char*> rows,
     bool mix,
     uint64_t* result) const {
   using T = typename KindToFlatVector<Kind>::HashRowType;
@@ -913,7 +913,7 @@ void RowContainer::hashTyped(
 
 void RowContainer::hash(
     int32_t column,
-    folly::Range<char**> rows,
+    std::span<char*> rows,
     bool mix,
     uint64_t* result) const {
   if (typeKinds_[column] == TypeKind::UNKNOWN) {
@@ -959,7 +959,7 @@ void RowContainer::clear() {
     std::vector<char*> rows(kBatch);
     RowContainerIterator iter;
     while (auto numRows = listRows(&iter, kBatch, rows.data())) {
-      freeRowsExtraMemory(folly::Range<char**>(rows.data(), numRows));
+      freeRowsExtraMemory(std::span<char*>(rows.data(), numRows));
     }
   }
   hasDuplicateRows_ = false;
@@ -1218,7 +1218,7 @@ RowPartitions::RowPartitions(int32_t numRows, memory::MemoryPool& pool)
   }
 }
 
-void RowPartitions::appendPartitions(folly::Range<const uint8_t*> partitions) {
+void RowPartitions::appendPartitions(std::span<const uint8_t> partitions) {
   int32_t toAdd = partitions.size();
   int index = 0;
   VELOX_CHECK_LE(size_ + toAdd, capacity_);

@@ -76,7 +76,7 @@ PartitionStreamingWindowBuild::nextPartition() {
     const auto numPreviousPartitionRows =
         partitionStartRows_[currentPartition_];
     data_->eraseRows(
-        folly::Range<char**>(sortedRows_.data(), numPreviousPartitionRows));
+        std::span<char*>(sortedRows_.data(), numPreviousPartitionRows));
     sortedRows_.erase(
         sortedRows_.begin(), sortedRows_.begin() + numPreviousPartitionRows);
     sortedRows_.shrink_to_fit();
@@ -88,7 +88,7 @@ PartitionStreamingWindowBuild::nextPartition() {
 
   const auto partitionSize = partitionStartRows_[currentPartition_ + 1] -
       partitionStartRows_[currentPartition_];
-  const auto partition = folly::Range(
+  const auto partition = std::span(
       sortedRows_.data() + partitionStartRows_[currentPartition_],
       partitionSize);
 

@@ -112,7 +112,7 @@ void HashStringAllocator::clear() {
 
     for (int64_t blockOffset = 0; blockOffset < rangeSize;
          blockOffset += kHugePageSize) {
-      auto blockRange = folly::Range<char*>(
+      auto blockRange = std::span<char>(
           range.data() + blockOffset,
           std::min<int64_t>(rangeSize, kHugePageSize));
       const auto size = blockRange.size() - simd::kPadding;
@@ -557,7 +557,7 @@ void HashStringAllocator::ensureAvailable(int32_t bytes, Position& position) {
   static char data[128];
   while (bytes > 0) {
     const auto written = std::min<size_t>(bytes, sizeof(data));
-    stream.append(folly::StringPiece(data, written));
+    stream.append(std::span{data, written});
     bytes -= written;
   }
   position = finishWrite(stream, 0).first;
@@ -660,7 +660,7 @@ std::string HashStringAllocator::toString() const {
     // page size and contain one arena per huge page.
     for (int64_t subRangeStart = 0; subRangeStart < topRangeSize;
          subRangeStart += kHugePageSize) {
-      auto range = folly::Range<char*>(
+      auto range = std::span<char>(
           topRange.data() + subRangeStart,
           std::min<int64_t>(topRangeSize, kHugePageSize));
       auto size = range.size() - simd::kPadding;
@@ -693,7 +693,7 @@ int64_t HashStringAllocator::checkConsistency() const {
     // page size and contain one arena per huge page.
     for (int64_t subRangeStart = 0; subRangeStart < topRangeSize;
          subRangeStart += kHugePageSize) {
-      auto range = folly::Range<char*>(
+      auto range = std::span<char>(
           topRange.data() + subRangeStart,
           std::min<int64_t>(topRangeSize, kHugePageSize));
       const auto size = range.size() - simd::kPadding;

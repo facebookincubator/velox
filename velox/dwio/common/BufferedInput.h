@@ -235,15 +235,15 @@ class BufferedInput {
 
   void readToBuffer(
       uint64_t offset,
-      folly::Range<char*> allocated,
+      std::span<char> allocated,
       const LogType logType);
 
-  folly::Range<char*> allocate(const velox::common::Region& region) {
+  std::span<char> allocate(const velox::common::Region& region) {
     // Save the file offset and the buffer to which we'll read it
     offsets_.push_back(region.offset);
     buffers_.emplace_back(
         allocPool_->allocateFixed(region.length), region.length);
-    return folly::Range<char*>(buffers_.back().data(), region.length);
+    return std::span<char>(buffers_.back().data(), region.length);
   }
 
   bool useVRead() const;
@@ -266,7 +266,7 @@ class BufferedInput {
   std::vector<uint64_t> offsets_;
 
   // Buffers allocated for reading each Region.
-  std::vector<folly::Range<char*>> buffers_;
+  std::vector<std::span<char>> buffers_;
 
   // Maps the position in which the Region was originally enqueued to the
   // position that it went to after sorting and merging. Thus this maps from the

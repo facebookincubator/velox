@@ -194,7 +194,7 @@ class TestReporter : public BaseStatsReporter {
 
   void addDynamicQuantileMetricValue(
       const std::string& key,
-      folly::Range<const folly::StringPiece*> subkeys,
+      std::span<const folly::StringPiece> subkeys,
       size_t value) const override {
     std::lock_guard<std::mutex> l(m);
     // Check if the pattern was registered, if not silently ignore
@@ -215,14 +215,14 @@ class TestReporter : public BaseStatsReporter {
 
   void addDynamicQuantileMetricValue(
       const char* key,
-      folly::Range<const folly::StringPiece*> subkeys,
+      std::span<const folly::StringPiece> subkeys,
       size_t value) const override {
     addDynamicQuantileMetricValue(std::string(key), subkeys, value);
   }
 
   void addDynamicQuantileMetricValue(
       folly::StringPiece key,
-      folly::Range<const folly::StringPiece*> subkeys,
+      std::span<const folly::StringPiece> subkeys,
       size_t value) const override {
     addDynamicQuantileMetricValue(std::string(key), subkeys, value);
   }

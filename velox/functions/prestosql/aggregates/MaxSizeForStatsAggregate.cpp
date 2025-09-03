@@ -168,7 +168,7 @@ class MaxSizeForStatsAggregate
 
     getVectorSerde()->estimateSerializedSize(
         vector.get(),
-        folly::Range(elementIndices_.data(), elementIndices_.size()),
+        std::span(elementIndices_.data(), elementIndices_.size()),
         elementSizePtrs_.data());
   }
 
@@ -195,7 +195,7 @@ class MaxSizeForStatsAggregate
 
   void initializeNewGroupsInternal(
       char** groups,
-      folly::Range<const vector_size_t*> indices) override {
+      std::span<const vector_size_t> indices) override {
     exec::Aggregate::setAllNulls(groups, indices);
     for (auto i : indices) {
       *BaseAggregate ::value<int64_t>(groups[i]) = 0;

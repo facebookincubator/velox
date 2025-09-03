@@ -288,7 +288,7 @@ void FlatVector<T>::copyValuesAndNulls(
 template <typename T>
 void FlatVector<T>::copyRanges(
     const BaseVector* source,
-    const folly::Range<const BaseVector::CopyRange*>& ranges) {
+    const std::span<const BaseVector::CopyRange>& ranges) {
   if (source->typeKind() == TypeKind::UNKNOWN) {
     BaseVector::setNulls(BaseVector::mutableRawNulls(), ranges, true);
     return;

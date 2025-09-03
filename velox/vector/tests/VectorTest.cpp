@@ -856,17 +856,17 @@ class VectorTest : public testing::Test, public velox::test::VectorTestBase {
     VectorStreamGroup::estimateSerializedSize(
         source.get(), oddIndices, nullptr, oddSizePointers.data());
     even.append(
-        sourceRow, folly::Range(evenIndices.data(), evenIndices.size() / 2));
+        sourceRow, std::span(evenIndices.data(), evenIndices.size() / 2));
     even.append(
         sourceRow,
-        folly::Range(
+        std::span(
             &evenIndices[evenIndices.size() / 2],
             evenIndices.size() - evenIndices.size() / 2));
     odd.append(
-        sourceRow, folly::Range(oddIndices.data(), oddIndices.size() / 2));
+        sourceRow, std::span(oddIndices.data(), oddIndices.size() / 2));
     odd.append(
         sourceRow,
-        folly::Range(
+        std::span(
             &oddIndices[oddIndices.size() / 2],
             oddIndices.size() - oddIndices.size() / 2));
 
@@ -2666,7 +2666,7 @@ TEST_F(VectorTest, testCopyWithZeroCount) {
         vector->copy(vector.get(), vector->size() + 1, vector->size() + 1, 0));
 
     BaseVector::CopyRange range{vector->size() + 1, vector->size() + 1, 0};
-    ASSERT_NO_THROW(vector->copyRanges(vector.get(), folly::Range(&range, 1)));
+    ASSERT_NO_THROW(vector->copyRanges(vector.get(), std::span(&range, 1)));
 
     ASSERT_NO_THROW(vector->copyRanges(
         vector.get(), std::vector<BaseVector::CopyRange>{range, range, range}));
@@ -3077,7 +3077,7 @@ TEST_F(VectorTest, rowCopyRangesWithGap) {
   ranges[1].sourceIndex = 0;
   ranges[1].count = 1;
   target->copyRanges(
-      source.get(), folly::Range(std::begin(ranges), std::end(ranges)));
+      source.get(), std::span(std::begin(ranges), std::end(ranges)));
   auto expected = makeRowVector({makeFlatVector<int64_t>({5, 2, 4})});
   test::assertEqualVectors(expected, target);
 }
@@ -3910,7 +3910,7 @@ TEST_F(VectorTest, mapUpdateConstant) {
   auto update = BaseVector::wrapInConstant(
       base->size(), 0, makeMapVector<int64_t, int64_t>({{{2, 2}}}));
   DecodedVector decoded(*update);
-  auto actual = base->update(folly::Range(&decoded, 1));
+  auto actual = base->update(std::span(&decoded, 1));
   auto expected = makeNullableMapVector<int64_t, int64_t>({
       {{{2, 2}, {1, 1}}},
       {{{2, 2}}},
@@ -3933,7 +3933,7 @@ TEST_F(VectorTest, mapUpdateDictionary) {
       makeIndices({0, 0, 1, 1, 0}),
       makeMapVector<int64_t, int64_t>({{{2, 2}}, {}}));
   DecodedVector decoded(*update);
-  auto actual = base->update(folly::Range(&decoded, 1));
+  auto actual = base->update(std::span(&decoded, 1));
   auto expected = makeNullableMapVector<int64_t, int64_t>({
       {{{2, 2}, {1, 1}}},
       {{{2, 2}}},

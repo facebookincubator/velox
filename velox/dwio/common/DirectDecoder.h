@@ -159,7 +159,7 @@ class DirectDecoder : public IntDecoder<isSigned> {
     auto rows = visitor.rows();
     auto numRows = visitor.numRows();
     auto numNonNull = numRows;
-    auto rowsAsRange = folly::Range<const int32_t*>(rows, numRows);
+    auto rowsAsRange = std::span<const int32_t>(rows, numRows);
     auto data = visitor.rawValues(numRows);
     if (hasNulls) {
       int32_t tailSkip = 0;
@@ -207,8 +207,8 @@ class DirectDecoder : public IntDecoder<isSigned> {
         }
         this->template skip<false>(tailSkip, 0, nullptr);
         auto dataRows = innerVector
-            ? folly::Range<const int*>(innerVector->data(), innerVector->size())
-            : folly::Range<const int32_t*>(rows, outerVector->size());
+            ? std::span<const int>(innerVector->data(), innerVector->size())
+            : std::span<const int32_t>(rows, outerVector->size());
         dwio::common::processFixedWidthRun<T, filterOnly, true, Visitor::dense>(
             dataRows,
             0,
@@ -222,8 +222,8 @@ class DirectDecoder : public IntDecoder<isSigned> {
       } else {
         dwio::common::fixedWidthScan<T, filterOnly, true>(
             innerVector
-                ? folly::Range<const int32_t*>(*innerVector)
-                : folly::Range<const int32_t*>(rows, outerVector->size()),
+                ? std::span<const int32_t>(*innerVector)
+                : std::span<const int32_t>(rows, outerVector->size()),
             outerVector->data(),
             visitor.rawValues(numRows),
             hasFilter ? visitor.outputRows(numRows) : nullptr,
@@ -241,7 +241,7 @@ class DirectDecoder : public IntDecoder<isSigned> {
           super::bulkRead(numRows, visitor.rawValues(numRows));
         } else {
           super::bulkReadRows(
-              folly::Range<const int32_t*>(rows, numRows),
+              std::span<const int32_t>(rows, numRows),
               visitor.rawValues(numRows));
         }
         dwio::common::

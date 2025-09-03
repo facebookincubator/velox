@@ -164,7 +164,7 @@ class RowVector : public BaseVector {
 
   void copyRanges(
       const BaseVector* source,
-      const folly::Range<const CopyRange*>& ranges) override;
+      const std::span<const CopyRange>& ranges) override;
 
   VectorPtr testingCopyPreserveEncodings(
       velox::memory::MemoryPool* pool = nullptr) const override {
@@ -426,7 +426,7 @@ struct ArrayVectorBase : BaseVector {
 
   void copyRangesImpl(
       const BaseVector* source,
-      const folly::Range<const CopyRange*>& ranges,
+      const std::span<const CopyRange>& ranges,
       VectorPtr* targetValues,
       VectorPtr* targetKeys);
 
@@ -505,7 +505,7 @@ class ArrayVector : public ArrayVectorBase {
 
   void copyRanges(
       const BaseVector* source,
-      const folly::Range<const CopyRange*>& ranges) override;
+      const std::span<const CopyRange>& ranges) override;
 
   VectorPtr testingCopyPreserveEncodings(
       velox::memory::MemoryPool* pool = nullptr) const override {
@@ -648,7 +648,7 @@ class MapVector : public ArrayVectorBase {
 
   void copyRanges(
       const BaseVector* source,
-      const folly::Range<const CopyRange*>& ranges) override;
+      const std::span<const CopyRange>& ranges) override;
 
   VectorPtr testingCopyPreserveEncodings(
       velox::memory::MemoryPool* pool = nullptr) const override {
@@ -720,7 +720,7 @@ class MapVector : public ArrayVectorBase {
 
   /// Same as the other `update' but can handle encodings on inputs.
   std::shared_ptr<MapVector> update(
-      const folly::Range<DecodedVector*>& others) const;
+      const std::span<DecodedVector>& others) const;
 
  protected:
   void resetDataDependentFlags(const SelectivityVector* rows) override {
@@ -739,7 +739,7 @@ class MapVector : public ArrayVectorBase {
 
   template <TypeKind kKeyTypeKind>
   std::shared_ptr<MapVector> updateImpl(
-      const folly::Range<DecodedVector*>& others) const;
+      const std::span<DecodedVector>& others) const;
 
   VectorPtr keys_;
   VectorPtr values_;

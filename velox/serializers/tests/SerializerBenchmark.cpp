@@ -111,7 +111,7 @@ class SerializerBenchmark : public VectorTestBase {
         for (auto repeat = 0; repeat < numRepeat; ++repeat) {
           group->append(
               rowVector,
-              folly::Range(
+              std::span(
                   indexRanges[selIdx].data(), indexRanges[selIdx].size()),
               scratch);
         }
@@ -125,7 +125,7 @@ class SerializerBenchmark : public VectorTestBase {
         for (auto repeat = 0; repeat < numRepeat; ++repeat) {
           group->append(
               rowVector,
-              folly::Range(
+              std::span(
                   rowSets[selIdx].data(), rowSets[selIdx].size() - kPad),
               scratch);
         }

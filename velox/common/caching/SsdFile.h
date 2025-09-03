@@ -432,7 +432,7 @@ class SsdFile {
   bool growOrEvictLocked();
 
   // Reads the backing file with ReadFile::preadv().
-  void read(uint64_t offset, const std::vector<folly::Range<char*>>& buffers);
+  void read(uint64_t offset, const std::vector<std::span<char>>& buffers);
 
   // Verifies that 'entry' has the data at 'run'.
   void verifyWrite(AsyncDataCacheEntry& entry, SsdRun run);

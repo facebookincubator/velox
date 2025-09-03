@@ -50,7 +50,7 @@ struct RowPointers {
     }
   }
 
-  void read(folly::Range<char**> rows) {
+  void read(std::span<char*> rows) {
     HashStringAllocator::InputStream stream(firstBlock);
 
     for (auto i = 0; i < size; ++i) {
@@ -148,10 +148,10 @@ Accumulator SortedAggregations::accumulator() const {
       false,
       1,
       ARRAY(VARBINARY()),
-      [this](folly::Range<char**> groups, VectorPtr& result) {
+      [this](std::span<char*> groups, VectorPtr& result) {
         extractForSpill(groups, result);
       },
-      [this](folly::Range<char**> groups) {
+      [this](std::span<char*> groups) {
         for (auto* group : groups) {
           auto* accumulator = reinterpret_cast<RowPointers*>(group + offset_);
           accumulator->free(*allocator_);
@@ -160,7 +160,7 @@ Accumulator SortedAggregations::accumulator() const {
 }
 
 void SortedAggregations::extractForSpill(
-    folly::Range<char**> groups,
+    std::span<char*> groups,
     VectorPtr& result) const {
   auto* arrayVector = result->as<ArrayVector>();
   arrayVector->resize(groups.size());
@@ -184,14 +184,14 @@ void SortedAggregations::extractForSpill(
   for (auto i = 0; i < groups.size(); ++i) {
     auto* accumulator = reinterpret_cast<RowPointers*>(groups[i] + offset_);
     accumulator->read(
-        folly::Range(groupRows.data() + offset, accumulator->size));
+        std::span(groupRows.data() + offset, accumulator->size));
     offset += accumulator->size;
   }
 
   auto& elementsVector = arrayVector->elements();
   elementsVector->resize(offset);
   inputData_->extractSerializedRows(
-      folly::Range(groupRows.data(), groupRows.size()), elementsVector);
+      std::span(groupRows.data(), groupRows.size()), elementsVector);
 }
 
 void SortedAggregations::clear() {
@@ -200,7 +200,7 @@ void SortedAggregations::clear() {
 
 void SortedAggregations::initializeNewGroups(
     char** groups,
-    folly::Range<const vector_size_t*> indices) {
+    std::span<const vector_size_t> indices) {
   for (auto i : indices) {
     groups[i][nullByte_] |= nullMask_;
     new (groups[i] + offset_) RowPointers();
@@ -350,7 +350,7 @@ vector_size_t SortedAggregations::extractSingleGroup(
       if (aggregate.mask) {
         inputData_->extractColumn(
             groupRows.data(),
-            folly::Range(rowNumbers.data(), rowNumbers.size()),
+            std::span(rowNumbers.data(), rowNumbers.size()),
             columnIndex,
             0, // resultOffset
             inputVectors[i]);
@@ -365,7 +365,7 @@ vector_size_t SortedAggregations::extractSingleGroup(
 }
 
 void SortedAggregations::extractValues(
-    folly::Range<char**> groups,
+    std::span<char*> groups,
     const RowVectorPtr& result) {
   raw_vector<int32_t> indices(pool_);
   SelectivityVector rows;
@@ -386,7 +386,7 @@ void SortedAggregations::extractValues(
       }
 
       groupRows.resize(accumulator->size);
-      accumulator->read(folly::Range(groupRows.data(), groupRows.size()));
+      accumulator->read(std::span(groupRows.data(), groupRows.size()));
 
       sortSingleGroup(groupRows, sortingSpec);
 
@@ -432,7 +432,7 @@ void SortedAggregations::extractValues(
       // in a well formed state.
       aggregate->function->initializeNewGroups(
           groups.data(),
-          folly::Range<const int32_t*>(
+          std::span<const int32_t>(
               iota(groups.size(), indices), groups.size()));
     }
   }

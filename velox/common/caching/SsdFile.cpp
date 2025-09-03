@@ -227,7 +227,7 @@ CoalesceIoStats SsdFile::load(
           int32_t /*begin*/,
           int32_t /*end*/,
           uint64_t offset,
-          const std::vector<folly::Range<char*>>& buffers) {
+          const std::vector<std::span<char>>& buffers) {
         read(offset, buffers);
       });
 
@@ -242,7 +242,7 @@ CoalesceIoStats SsdFile::load(
 
 void SsdFile::read(
     uint64_t offset,
-    const std::vector<folly::Range<char*>>& buffers) {
+    const std::vector<std::span<char>>& buffers) {
   process::TraceContext trace("SsdFile::read");
   readFile_->preadv(offset, buffers);
 }

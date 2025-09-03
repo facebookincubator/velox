@@ -453,14 +453,14 @@ class ComplexTypeModeAggregate : public Aggregate {
  protected:
   void initializeNewGroupsInternal(
       char** groups,
-      folly::Range<const vector_size_t*> indices) override {
+      std::span<const vector_size_t> indices) override {
     for (auto index : indices) {
       new (groups[index] + offset_)
           ComplexTypeAccumulator{inputType_, allocator_};
     }
   }
 
-  void destroyInternal(folly::Range<char**> groups) override {
+  void destroyInternal(std::span<char*> groups) override {
     for (auto* group : groups) {
       if (isInitialized(group) && !isNull(group)) {
         value<ComplexTypeAccumulator>(group)->free(*allocator_);

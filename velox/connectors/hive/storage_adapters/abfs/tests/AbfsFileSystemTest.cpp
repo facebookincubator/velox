@@ -143,10 +143,10 @@ void readData(ReadFile* readFile) {
 
   char buff1[10];
   char buff2[10];
-  std::vector<folly::Range<char*>> buffers = {
-      folly::Range<char*>(buff1, 10),
-      folly::Range<char*>(nullptr, kOneMB - 5),
-      folly::Range<char*>(buff2, 10)};
+  std::vector<std::span<char>> buffers = {
+      std::span<char>(buff1, 10),
+      std::span<char>(nullptr, kOneMB - 5),
+      std::span<char>(buff2, 10)};
   ASSERT_EQ(10 + kOneMB - 5 + 10, readFile->preadv(0, buffers));
   ASSERT_EQ(std::string_view(buff1, sizeof(buff1)), "aaaaabbbbb");
   ASSERT_EQ(std::string_view(buff2, sizeof(buff2)), "cccccddddd");

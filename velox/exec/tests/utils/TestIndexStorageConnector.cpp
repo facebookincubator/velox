@@ -155,8 +155,8 @@ core::TypedExprPtr toJoinConditionExpr(
 // 'result'. Reuses 'result' children where possible.
 void extractColumns(
     BaseHashTable* table,
-    folly::Range<char* const*> rows,
-    folly::Range<const IdentityProjection*> projections,
+    std::span<char* const> rows,
+    std::span<const IdentityProjection> projections,
     memory::MemoryPool* pool,
     const std::vector<TypePtr>& resultTypes,
     std::vector<VectorPtr>& resultVectors) {
@@ -367,7 +367,7 @@ TestIndexSource::ResultIterator::next(
 }
 
 void TestIndexSource::ResultIterator::extractLookupColumns(
-    folly::Range<char* const*> rows,
+    std::span<char* const> rows,
     RowVectorPtr& result) {
   if (result == nullptr) {
     result = BaseVector::create<RowVector>(
@@ -439,8 +439,8 @@ TestIndexSource::ResultIterator::syncLookup(vector_size_t size) {
     auto numOut = source_->indexTable()->table->listJoinResults(
         *lookupResultIter_,
         /*includeMisses=*/true,
-        folly::Range(rawInputRowMapping_, size),
-        folly::Range(rawOutputRowMapping_, size),
+        std::span(rawInputRowMapping_, size),
+        std::span(rawOutputRowMapping_, size),
         // TODO: support max bytes output later.
         /*maxBytes=*/std::numeric_limits<uint64_t>::max());
     outputRowMapping_->setSize(numOut * sizeof(char*));
@@ -472,7 +472,7 @@ TestIndexSource::ResultIterator::syncLookup(vector_size_t size) {
     outputRowMapping_->setSize(numHits * sizeof(char*));
     inputHitIndices_->setSize(numHits * sizeof(vector_size_t));
     extractLookupColumns(
-        folly::Range<char* const*>(rawOutputRowMapping_, numHits),
+        std::span<char* const>(rawOutputRowMapping_, numHits),
         lookupOutput_);
     VELOX_CHECK_EQ(lookupOutput_->size(), numHits);
     VELOX_CHECK_EQ(inputHitIndices_->size() / sizeof(vector_size_t), numHits);
@@ -524,7 +524,7 @@ RowVectorPtr TestIndexSource::ResultIterator::createConditionInput() {
 
   extractColumns(
       source_->indexTable()->table.get(),
-      folly::Range<char* const*>(rawOutputRowMapping_, numRows),
+      std::span<char* const>(rawOutputRowMapping_, numRows),
       source_->conditionTableProjections_,
       source_->pool_.get(),
       source_->conditionInputType_->children(),

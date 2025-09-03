@@ -70,7 +70,7 @@ std::string ReadFile::pread(
 
 uint64_t ReadFile::preadv(
     uint64_t offset,
-    const std::vector<folly::Range<char*>>& buffers,
+    const std::vector<std::span<char>>& buffers,
     filesystems::File::IoStats* stats) const {
   auto fileSize = size();
   uint64_t numRead = 0;
@@ -90,8 +90,8 @@ uint64_t ReadFile::preadv(
 }
 
 uint64_t ReadFile::preadv(
-    folly::Range<const common::Region*> regions,
-    folly::Range<folly::IOBuf*> iobufs,
+    std::span<const common::Region> regions,
+    std::span<folly::IOBuf> iobufs,
     filesystems::File::IoStats* stats) const {
   VELOX_CHECK_EQ(regions.size(), iobufs.size());
   uint64_t length = 0;
@@ -209,7 +209,7 @@ std::string_view LocalReadFile::pread(
 
 uint64_t LocalReadFile::preadv(
     uint64_t offset,
-    const std::vector<folly::Range<char*>>& buffers,
+    const std::vector<std::span<char>>& buffers,
     filesystems::File::IoStats* stats) const {
   // Dropped bytes sized so that a typical dropped range of 50K is not
   // too many iovecs.
@@ -266,7 +266,7 @@ uint64_t LocalReadFile::preadv(
 
 folly::SemiFuture<uint64_t> LocalReadFile::preadvAsync(
     uint64_t offset,
-    const std::vector<folly::Range<char*>>& buffers,
+    const std::vector<std::span<char>>& buffers,
     filesystems::File::IoStats* stats) const {
   if (!executor_) {
     return ReadFile::preadvAsync(offset, buffers, stats);

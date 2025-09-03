@@ -133,17 +133,17 @@ class S3TestReporter : public BaseStatsReporter {
 
   void addDynamicQuantileMetricValue(
       const std::string& /* key */,
-      folly::Range<const folly::StringPiece*> /* subkeys */,
+      std::span<const folly::StringPiece> /* subkeys */,
       size_t /* value */) const override {}
 
   void addDynamicQuantileMetricValue(
       const char* /* key */,
-      folly::Range<const folly::StringPiece*> /* subkeys */,
+      std::span<const folly::StringPiece> /* subkeys */,
       size_t /* value */) const override {}
 
   void addDynamicQuantileMetricValue(
       folly::StringPiece /* key */,
-      folly::Range<const folly::StringPiece*> /* subkeys */,
+      std::span<const folly::StringPiece> /* subkeys */,
       size_t /* value */) const override {}
 
   std::string fetchMetrics() override {

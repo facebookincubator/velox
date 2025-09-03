@@ -19,7 +19,6 @@
 #define XXH_INLINE_ALL
 #include <xxhash.h> // @manual=third-party//xxHash:xxhash
 
-#include <folly/Range.h>
 #include <cstdint>
 #include "velox/common/memory/HashStringAllocator.h"
 #include "velox/functions/lib/sfm/MersenneTwisterRandomizationStrategy.h"

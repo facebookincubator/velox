@@ -133,7 +133,7 @@ class ArbitraryAggregate : public SimpleNumericAggregate<T, T, T> {
  protected:
   void initializeNewGroupsInternal(
       char** groups,
-      folly::Range<const vector_size_t*> indices) override {
+      std::span<const vector_size_t> indices) override {
     exec::Aggregate::setAllNulls(groups, indices);
   }
 
@@ -289,7 +289,7 @@ class NonNumericArbitrary : public exec::Aggregate {
       char** groups,
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
-      const folly::Range<const vector_size_t*>& groupBoundaries) override {
+      const std::span<const vector_size_t>& groupBoundaries) override {
     VELOX_CHECK(clusteredInput_);
     decoded_.decode(*args[0]);
     vector_size_t groupStart = 0;
@@ -373,7 +373,7 @@ class NonNumericArbitrary : public exec::Aggregate {
   // accumulator has its own flag.
   void initializeNewGroupsInternal(
       char** groups,
-      folly::Range<const vector_size_t*> indices) override {
+      std::span<const vector_size_t> indices) override {
     for (auto i : indices) {
       if (clusteredInput_) {
         new (groups[i] + offset_) ClusteredNonNumericAccumulator();
@@ -383,7 +383,7 @@ class NonNumericArbitrary : public exec::Aggregate {
     }
   }
 
-  void destroyInternal(folly::Range<char**> groups) override {
+  void destroyInternal(std::span<char*> groups) override {
     for (auto group : groups) {
       if (isInitialized(group)) {
         if (clusteredInput_) {

@@ -16,7 +16,6 @@
 
 #include "velox/expression/StringWriter.h"
 #include <glog/logging.h>
-#include "folly/Range.h"
 #include "gtest/gtest.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/expression/VectorWriters.h"

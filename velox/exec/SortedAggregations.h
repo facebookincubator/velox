@@ -67,7 +67,7 @@ class SortedAggregations {
 
   void initializeNewGroups(
       char** groups,
-      folly::Range<const vector_size_t*> indices);
+      std::span<const vector_size_t> indices);
 
   void addInput(char** groups, const RowVectorPtr& input);
 
@@ -80,7 +80,7 @@ class SortedAggregations {
 
   /// Sorts input row for the specified groups, computes aggregations and stores
   /// results in the specified 'result' vector.
-  void extractValues(folly::Range<char**> groups, const RowVectorPtr& result);
+  void extractValues(std::span<char*> groups, const RowVectorPtr& result);
 
   uint64_t inputRowBytes() const {
     return inputData_->allocatedBytes();
@@ -111,7 +111,7 @@ class SortedAggregations {
       const AggregateInfo& aggregate,
       std::vector<VectorPtr>& inputVectors);
 
-  void extractForSpill(folly::Range<char**> groups, VectorPtr& result) const;
+  void extractForSpill(std::span<char*> groups, VectorPtr& result) const;
 
   struct Hash {
     static uint64_t hashSortOrder(const core::SortOrder& sortOrder) {

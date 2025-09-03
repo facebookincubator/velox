@@ -214,7 +214,7 @@ void FileInputStream::maybeIssueReadahead() {
   if (size == 0) {
     return;
   }
-  std::vector<folly::Range<char*>> ranges;
+  std::vector<std::span<char>> ranges;
   ranges.emplace_back(nextBuffer()->asMutable<char>(), size);
   readAheadWait_ = file_->preadvAsync(fileOffset_, ranges);
   VELOX_CHECK(readAheadWait_.valid());

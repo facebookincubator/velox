@@ -405,7 +405,7 @@ class DwioCoalescedLoad : public DwioCoalescedLoadBase {
             int32_t /*begin*/,
             int32_t /*end*/,
             uint64_t offset,
-            const std::vector<folly::Range<char*>>& buffers) {
+            const std::vector<std::span<char>>& buffers) {
           input_->read(buffers, offset, LogType::FILE);
         });
     updateStats(stats, prefetch, false);

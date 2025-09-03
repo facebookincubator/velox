@@ -88,7 +88,7 @@ class PrestoVectorSerde : public VectorSerde {
   /// '*sizes[i]'.
   void estimateSerializedSize(
       const BaseVector* vector,
-      const folly::Range<const IndexRange*>& ranges,
+      const std::span<const IndexRange>& ranges,
       vector_size_t** sizes,
       Scratch& scratch) override;
 
@@ -96,7 +96,7 @@ class PrestoVectorSerde : public VectorSerde {
   /// '*sizes[i]'.
   void estimateSerializedSize(
       const BaseVector* vector,
-      const folly::Range<const vector_size_t*>& rows,
+      const std::span<const vector_size_t>& rows,
       vector_size_t** sizes,
       Scratch& scratch) override;
 

@@ -72,7 +72,7 @@ class SpillerBase {
   // Extracts the keys, dependents or accumulators for 'rows' into '*result'.
   // Creates '*results' in spillPool() if nullptr. Used from Spiller and
   // RowContainerSpillMergeStream.
-  virtual void extractSpill(folly::Range<char**> rows, RowVectorPtr& resultPtr);
+  virtual void extractSpill(std::span<char*> rows, RowVectorPtr& resultPtr);
 
   virtual bool needSort() const = 0;
 

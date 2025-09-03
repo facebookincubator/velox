@@ -269,7 +269,7 @@ class LocalPartition : public Operator {
 
   void copy(
       const RowVectorPtr& input,
-      const folly::Range<const BaseVector::CopyRange*>& ranges,
+      const std::span<const BaseVector::CopyRange>& ranges,
       VectorPtr& target);
 
   const uint64_t singlePartitionBufferSize_;

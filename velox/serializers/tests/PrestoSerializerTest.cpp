@@ -108,7 +108,7 @@ class PrestoSerializerTest
     }
     serde_->estimateSerializedSize(
         rowVector.get(),
-        folly::Range(rows.data(), numRows),
+        std::span(rows.data(), numRows),
         rawRowSizes.data(),
         scratch);
   }
@@ -133,8 +133,8 @@ class PrestoSerializerTest
       const RowVectorPtr& rowVector,
       std::ostream* output,
       const serializer::presto::PrestoVectorSerde::PrestoOptions* serdeOptions,
-      std::optional<folly::Range<const IndexRange*>> indexRanges = std::nullopt,
-      std::optional<folly::Range<const vector_size_t*>> rows = std::nullopt,
+      std::optional<std::span<const IndexRange>> indexRanges = std::nullopt,
+      std::optional<std::span<const vector_size_t>> rows = std::nullopt,
       std::unique_ptr<IterativeVectorSerializer>* reuseSerializer = nullptr,
       std::unique_ptr<StreamArena>* reuseArena = nullptr) {
     auto streamInitialSize = output->tellp();
@@ -177,7 +177,7 @@ class PrestoSerializerTest
       IndexRange range{0, rowVector->size()};
       serde_->estimateSerializedSize(
           rowVector.get(),
-          folly::Range<const IndexRange*>(&range, 1),
+          std::span<const IndexRange>(&range, 1),
           &sizes,
           scratch);
       serializer->append(rowVector);
@@ -377,7 +377,7 @@ class PrestoSerializerTest
       std::unique_ptr<IterativeVectorSerializer>* reuseSerializer,
       std::unique_ptr<StreamArena>* reuseArena) {
     std::ostringstream out;
-    auto rows = folly::Range<const vector_size_t*>(
+    auto rows = std::span<const vector_size_t>(
         indices->as<vector_size_t>(), indices->size() / sizeof(vector_size_t));
     auto stats = serialize(
         rowVector,
@@ -967,7 +967,7 @@ TEST_P(PrestoSerializerTest, serializeNoRowsSelected) {
       arena.get(),
       &paramOptions);
 
-  serializer->append(rowVector, folly::Range(&noRows, 1));
+  serializer->append(rowVector, std::span(&noRows, 1));
   serializer->flush(&output);
 
   auto expected = makeEmptyTestVector();
@@ -1420,7 +1420,7 @@ TEST_P(PrestoSerializerTest, serializeNoRowsSelectedBatchVectorSerializer) {
             {{"65", 66}, {"67", 68}}})});
   const IndexRange noRows{0, 0};
 
-  serializer->serialize(rowVector, folly::Range(&noRows, 1), &output);
+  serializer->serialize(rowVector, std::span(&noRows, 1), &output);
 
   auto expected = makeEmptyTestVector();
   auto rowType = asRowType(expected->type());

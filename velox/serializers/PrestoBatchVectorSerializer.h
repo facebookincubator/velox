@@ -31,13 +31,13 @@ class PrestoBatchVectorSerializer : public BatchVectorSerializer {
 
   void serialize(
       const RowVectorPtr& vector,
-      const folly::Range<const IndexRange*>& ranges,
+      const std::span<const IndexRange>& ranges,
       Scratch& scratch,
       OutputStream* stream) override;
 
   void estimateSerializedSize(
       VectorPtr vector,
-      const folly::Range<const IndexRange*>& ranges,
+      const std::span<const IndexRange>& ranges,
       vector_size_t** sizes,
       Scratch& scratch) override {
     estimateSerializedSizeImpl(vector, ranges, sizes, scratch);
@@ -46,7 +46,7 @@ class PrestoBatchVectorSerializer : public BatchVectorSerializer {
  private:
   void estimateSerializedSizeImpl(
       const VectorPtr& vector,
-      const folly::Range<const IndexRange*>& ranges,
+      const std::span<const IndexRange>& ranges,
       vector_size_t** sizes,
       Scratch& scratch);
 

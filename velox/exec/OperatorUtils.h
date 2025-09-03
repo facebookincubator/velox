@@ -164,9 +164,9 @@ void aggregateOperatorRuntimeStats(
 
 /// Allocates 'mapping' to fit at least 'size' indices and initializes them to
 /// zero if 'mapping' is either: nullptr, not unique or cannot fit 'size'.
-/// Returns 'mapping' as folly::Range<vector_size_t*>. Can be used by operator
+/// Returns 'mapping' as std::span<vector_size_t>. Can be used by operator
 /// to initialize / resize reusable state across batches of processing.
-folly::Range<vector_size_t*> initializeRowNumberMapping(
+std::span<vector_size_t> initializeRowNumberMapping(
     BufferPtr& mapping,
     vector_size_t size,
     memory::MemoryPool* pool);

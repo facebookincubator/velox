@@ -63,8 +63,8 @@ namespace {
 // 'result'. Reuses 'result' children where possible.
 void extractColumns(
     BaseHashTable* table,
-    folly::Range<char* const*> rows,
-    folly::Range<const IdentityProjection*> projections,
+    std::span<char* const> rows,
+    std::span<const IdentityProjection> projections,
     memory::MemoryPool* pool,
     const std::vector<TypePtr>& resultTypes,
     std::vector<VectorPtr>& resultVectors) {
@@ -854,7 +854,7 @@ void HashProbe::fillOutput(vector_size_t size) {
   } else {
     extractColumns(
         table_.get(),
-        folly::Range<char* const*>(outputTableRows_->as<char*>(), size),
+        std::span<char* const>(outputTableRows_->as<char*>(), size),
         tableOutputProjections_,
         pool(),
         outputType_->children(),
@@ -900,7 +900,7 @@ RowVectorPtr HashProbe::getBuildSideOutput() {
 
   extractColumns(
       table_.get(),
-      folly::Range<char**>(outputTableRows, numOut),
+      std::span<char*>(outputTableRows, numOut),
       tableOutputProjections_,
       pool(),
       outputType_->children(),
@@ -1159,8 +1159,8 @@ RowVectorPtr HashProbe::getOutputInternal(bool toSpillOutput) {
       numOut = table_->listJoinResults(
           *resultIter_,
           joinIncludesMissesFromLeft(joinType_),
-          folly::Range(mapping.data(), outputBatchSize),
-          folly::Range(outputTableRows, outputBatchSize),
+          std::span(mapping.data(), outputBatchSize),
+          std::span(outputTableRows, outputBatchSize),
           operatorCtx_->driverCtx()->queryConfig().preferredOutputBatchBytes());
     }
 
@@ -1240,7 +1240,7 @@ RowVectorPtr HashProbe::createFilterInput(vector_size_t size) {
 
   extractColumns(
       table_.get(),
-      folly::Range<char* const*>(outputTableRows_->as<char*>(), size),
+      std::span<char* const>(outputTableRows_->as<char*>(), size),
       filterTableProjections_,
       pool(),
       filterInputType_->children(),
@@ -1344,7 +1344,7 @@ void HashProbe::applyFilterOnTableRowsForNullAwareJoin(
     filterTableInputRows_.resizeFill(numRows, true);
     for (auto& projection : filterTableProjections_) {
       table_->extractColumn(
-          folly::Range<char* const*>(data, numRows),
+          std::span<char* const>(data, numRows),
           projection.inputChannel,
           filterTableInput_->childAt(projection.outputChannel));
     }

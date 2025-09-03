@@ -280,7 +280,7 @@ bool isAllNullVector(const BaseVector& vector) {
 
 void RowVector::copyRanges(
     const BaseVector* source,
-    const folly::Range<const CopyRange*>& ranges) {
+    const std::span<const CopyRange>& ranges) {
   if (ranges.empty()) {
     return;
   }
@@ -481,7 +481,7 @@ void RowVector::updateContainsLazyNotLoaded() const {
 
 void ArrayVectorBase::copyRangesImpl(
     const BaseVector* source,
-    const folly::Range<const BaseVector::CopyRange*>& ranges,
+    const std::span<const BaseVector::CopyRange>& ranges,
     VectorPtr* targetValues,
     VectorPtr* targetKeys) {
   if (isAllNullVector(*source)) {
@@ -1004,8 +1004,8 @@ std::optional<int32_t> compareArrays(
 std::optional<int32_t> compareArrays(
     const BaseVector& left,
     const BaseVector& right,
-    folly::Range<const vector_size_t*> leftRange,
-    folly::Range<const vector_size_t*> rightRange,
+    std::span<const vector_size_t> leftRange,
+    std::span<const vector_size_t> rightRange,
     CompareFlags flags) {
   if (flags.equalsOnly && leftRange.size() != rightRange.size()) {
     // return early if not caring about collation order.
@@ -1239,7 +1239,7 @@ void ArrayVector::validate(const VectorValidateOptions& options) const {
 
 void ArrayVector::copyRanges(
     const BaseVector* source,
-    const folly::Range<const CopyRange*>& ranges) {
+    const std::span<const CopyRange>& ranges) {
   copyRangesImpl(source, ranges, &elements_, nullptr);
 }
 
@@ -1433,7 +1433,7 @@ BufferPtr MapVector::elementIndices() const {
   BufferPtr buffer =
       AlignedBuffer::allocate<vector_size_t>(numElements, BaseVector::pool_);
   auto data = buffer->asMutable<vector_size_t>();
-  auto range = folly::Range(data, numElements);
+  auto range = std::span(data, numElements);
   std::iota(range.begin(), range.end(), 0);
   return buffer;
 }
@@ -1558,7 +1558,7 @@ void MapVector::validate(const VectorValidateOptions& options) const {
 
 void MapVector::copyRanges(
     const BaseVector* source,
-    const folly::Range<const CopyRange*>& ranges) {
+    const std::span<const CopyRange>& ranges) {
   copyRangesImpl(source, ranges, &values_, &keys_);
 }
 
@@ -1639,7 +1639,7 @@ class UpdateMapRow<void> {
 
 template <TypeKind kKeyTypeKind>
 MapVectorPtr MapVector::updateImpl(
-    const folly::Range<DecodedVector*>& others) const {
+    const std::span<DecodedVector>& others) const {
   auto newNulls = nulls();
   for (auto& other : others) {
     if (!other.nulls()) {
@@ -1752,7 +1752,7 @@ MapVectorPtr MapVector::updateImpl(
 }
 
 MapVectorPtr MapVector::update(
-    const folly::Range<DecodedVector*>& others) const {
+    const std::span<DecodedVector>& others) const {
   VELOX_CHECK(!others.empty());
   VELOX_CHECK_LT(others.size(), std::numeric_limits<int8_t>::max());
   for (auto& other : others) {
@@ -1767,7 +1767,7 @@ MapVectorPtr MapVector::update(const std::vector<MapVectorPtr>& others) const {
   for (auto& other : others) {
     decoded.emplace_back(*other);
   }
-  return update(folly::Range(decoded.data(), decoded.size()));
+  return update(std::span(decoded.data(), decoded.size()));
 }
 
 void RowVector::appendNulls(vector_size_t numberOfRows) {

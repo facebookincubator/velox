@@ -52,7 +52,7 @@ class FlatMapVectorTest : public testing::Test, public VectorTestBase {
         makeFlatMapVectorFromJson<int64_t, int32_t>(sourceData);
     baseFlatMap->copyRanges(
         sourceFlatMap.get(),
-        folly::Range<const BaseVector::CopyRange*>{ranges});
+        std::span<const BaseVector::CopyRange>{ranges});
 
     // Validate that the updated flat map matches the expectation.
     auto expectedFlatMap =

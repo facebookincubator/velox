@@ -21,7 +21,7 @@ namespace facebook::velox::simd {
 
 void gatherBits(
     const uint64_t* bits,
-    folly::Range<const int32_t*> indexRange,
+    std::span<const int32_t> indexRange,
     uint64_t* result) {
   constexpr int32_t kStep = xsimd::batch<int32_t>::size;
   const auto size = indexRange.size();
