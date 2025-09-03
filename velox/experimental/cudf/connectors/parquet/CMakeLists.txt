@@ -23,6 +23,7 @@ add_library(
   OBJECT
   ParquetConfig.cpp
   ParquetConnector.cpp
+  CudfHiveConnector.cpp
   ParquetConnectorSplit.cpp
   ParquetDataSource.cpp
   ParquetDataSink.cpp
