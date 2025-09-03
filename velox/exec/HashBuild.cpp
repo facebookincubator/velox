@@ -63,10 +63,10 @@ HashBuild::HashBuild(
       joinType_{joinNode_->joinType()},
       nullAware_{joinNode_->isNullAware()},
       needProbedFlagSpill_{needRightSideJoin(joinType_)},
+      dropDuplicates_(joinNode_->canDropDuplicates()),
       joinBridge_(operatorCtx_->task()->getHashJoinBridgeLocked(
           operatorCtx_->driverCtx()->splitGroupId,
           planNodeId())),
-      dropDuplicates_(joinNode_->canDropDuplicates()),
       keyChannelMap_(joinNode_->rightKeys().size()),
       abandonBuildNoDupHashMinRows_(
           driverCtx->queryConfig().abandonBuildNoDupHashMinRows()),

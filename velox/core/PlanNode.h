@@ -3051,8 +3051,8 @@ class AbstractJoinNode : public PlanNode {
     return isInnerJoin() || isLeftJoin() || isAntiJoin();
   }
 
-  // Indicates if this joinNode can drop duplicate rows with same join key.
-  // For left semi and anti join, it is not necessary to store duplicate rows.
+  /// Indicates if this joinNode can drop duplicate rows with same join key.
+  /// For left semi and anti join, it is not necessary to store duplicate rows.
   bool canDropDuplicates() const {
     // Left semi and anti join with no extra filter only needs to know whether
     // there is a match. Hence, no need to store entries with duplicate keys.
