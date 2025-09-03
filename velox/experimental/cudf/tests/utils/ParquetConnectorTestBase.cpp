@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/connectors/parquet/CudfHiveConnector.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/tests/utils/ParquetConnectorTestBase.h"
@@ -76,8 +77,8 @@ void ParquetConnectorTestBase::SetUp() {
 
   // Register Hive connector factory and connector
   facebook::velox::connector::registerConnectorFactory(
-      std::make_shared<
-          facebook::velox::connector::hive::HiveConnectorFactory>());
+      std::make_shared<facebook::velox::cudf_velox::connector::parquet::
+                           CudfHiveConnectorFactory>());
   auto hiveConnector =
       facebook::velox::connector::getConnectorFactory("hive")->newConnector(
           "hive",
