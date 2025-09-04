@@ -29,7 +29,5 @@ class ConcatWsCallToSpecialForm : public exec::FunctionCallToSpecialForm {
       std::vector<exec::ExprPtr>&& args,
       bool trackCpuUsage,
       const core::QueryConfig& config) override;
-
-  static constexpr const char* kConcatWs = "concat_ws";
 };
 } // namespace facebook::velox::functions::sparksql

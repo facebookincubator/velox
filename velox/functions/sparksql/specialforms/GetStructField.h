@@ -36,8 +36,6 @@ class GetStructFieldCallToSpecialForm : public exec::FunctionCallToSpecialForm {
       std::vector<exec::ExprPtr>&& args,
       bool trackCpuUsage,
       const core::QueryConfig& config) override;
-
-  static constexpr const char* kGetStructField = "get_struct_field";
 };
 
 } // namespace facebook::velox::functions::sparksql

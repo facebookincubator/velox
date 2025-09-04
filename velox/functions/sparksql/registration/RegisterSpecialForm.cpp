@@ -26,36 +26,39 @@
 #include "velox/functions/sparksql/specialforms/SparkCastExpr.h"
 
 namespace facebook::velox::functions {
-void registerSparkSpecialFormFunctions() {
-  VELOX_REGISTER_VECTOR_FUNCTION(
-      udf_concat_row, exec::RowConstructorCallToSpecialForm::kRowConstructor);
+
+static void registerSparkSpecialFormFunctions() {
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_concat_row, expression::kRowConstructor);
 }
 
 namespace sparksql {
+
 void registerSpecialFormGeneralFunctions(const std::string& prefix) {
   exec::registerFunctionCallToSpecialForms();
-  exec::registerFunctionCallToSpecialForm(
-      MakeDecimalCallToSpecialForm::kMakeDecimal,
+  registerFunctionCallToSpecialForm(
+      expression::old::kMakeDecimal,
       std::make_unique<MakeDecimalCallToSpecialForm>());
-  exec::registerFunctionCallToSpecialForm(
-      DecimalRoundCallToSpecialForm::kRoundDecimal,
+  registerFunctionCallToSpecialForm(
+      expression::old::kRoundDecimal,
       std::make_unique<DecimalRoundCallToSpecialForm>());
-  exec::registerFunctionCallToSpecialForm(
-      AtLeastNNonNullsCallToSpecialForm::kAtLeastNNonNulls,
+  registerFunctionCallToSpecialForm(
+      expression::old::kAtLeastNNonNulls,
       std::make_unique<AtLeastNNonNullsCallToSpecialForm>());
   registerSparkSpecialFormFunctions();
   registerFunctionCallToSpecialForm(
       expression::kCast, std::make_unique<SparkCastCallToSpecialForm>());
   registerFunctionCallToSpecialForm(
       expression::kTryCast, std::make_unique<SparkTryCastCallToSpecialForm>());
-  exec::registerFunctionCallToSpecialForm(
-      FromJsonCallToSpecialForm::kFromJson,
+  registerFunctionCallToSpecialForm(
+      expression::old::kFromJson,
       std::make_unique<FromJsonCallToSpecialForm>());
   registerFunctionCallToSpecialForm(
-      "get_struct_field", std::make_unique<GetStructFieldCallToSpecialForm>());
+      expression::old::kGetStructField,
+      std::make_unique<GetStructFieldCallToSpecialForm>());
   registerFunctionCallToSpecialForm(
-      GetArrayStructFieldsCallToSpecialForm::kGetArrayStructFields,
+      expression::old::kGetArrayStructFields,
       std::make_unique<GetArrayStructFieldsCallToSpecialForm>());
 }
+
 } // namespace sparksql
 } // namespace facebook::velox::functions

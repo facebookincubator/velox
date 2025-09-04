@@ -22,6 +22,7 @@
 #include <utility>
 
 #include "velox/expression/EvalCtx.h"
+#include "velox/expression/ExprConstants.h"
 #include "velox/expression/SpecialForm.h"
 #include "velox/expression/VectorWriters.h"
 #include "velox/functions/lib/string/StringCore.h"
@@ -850,7 +851,7 @@ exec::ExprPtr FromJsonCallToSpecialForm::constructSpecialForm(
       std::move(args),
       func,
       exec::VectorFunctionMetadata{},
-      kFromJson,
+      expression::old::kFromJson,
       trackCpuUsage);
 }
 } // namespace facebook::velox::functions::sparksql

@@ -16,6 +16,7 @@
 
 #include "velox/functions/sparksql/specialforms/GetStructField.h"
 #include "velox/expression/ConstantExpr.h"
+#include "velox/expression/ExprConstants.h"
 #include "velox/vector/ComplexVector.h"
 
 namespace facebook::velox::functions::sparksql {
@@ -104,7 +105,7 @@ exec::ExprPtr GetStructFieldCallToSpecialForm::constructSpecialForm(
       std::move(args),
       std::move(getStructFieldFunction),
       exec::VectorFunctionMetadata{},
-      kGetStructField,
+      expression::old::kGetStructField,
       trackCpuUsage);
 }
 } // namespace facebook::velox::functions::sparksql

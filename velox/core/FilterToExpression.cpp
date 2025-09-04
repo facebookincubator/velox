@@ -16,6 +16,7 @@
 
 #include "velox/core/FilterToExpression.h"
 #include "velox/core/Expressions.h"
+#include "velox/expression/ExprConstants.h"
 
 namespace facebook::velox::core {
 
@@ -30,7 +31,8 @@ core::TypedExprPtr createBooleanExpr(
   } else if (conditions.size() == 1) {
     return conditions[0];
   } else {
-    return std::make_shared<CallTypedExpr>(BOOLEAN(), conditions, "and");
+    return std::make_shared<CallTypedExpr>(
+        BOOLEAN(), conditions, expression::kAnd);
   }
 }
 
@@ -43,11 +45,11 @@ core::TypedExprPtr handleNullAllowed(
     bool nullAllowed) {
   if (nullAllowed) {
     // If nullAllowed=true: (expression) OR (field IS NULL)
-    auto isNullExpr =
-        std::make_shared<CallTypedExpr>(BOOLEAN(), "is_null", subfieldExpr);
+    auto isNullExpr = std::make_shared<CallTypedExpr>(
+        BOOLEAN(), expression::kIsNull, subfieldExpr);
 
     return std::make_shared<CallTypedExpr>(
-        BOOLEAN(), "or", expression, isNullExpr);
+        BOOLEAN(), expression::kOr, expression, isNullExpr);
   } else {
     // If nullAllowed=false: just return the expression
     return expression;
@@ -125,12 +127,13 @@ core::TypedExprPtr filterToExpr(
 
     case common::FilterKind::kIsNull:
       return std::make_shared<CallTypedExpr>(
-          BOOLEAN(), "is_null", subfieldExpr);
+          BOOLEAN(), expression::kIsNull, subfieldExpr);
 
     case common::FilterKind::kIsNotNull: {
-      auto isNullExpr =
-          std::make_shared<CallTypedExpr>(BOOLEAN(), "is_null", subfieldExpr);
-      return std::make_shared<CallTypedExpr>(BOOLEAN(), "not", isNullExpr);
+      auto isNullExpr = std::make_shared<CallTypedExpr>(
+          BOOLEAN(), expression::kIsNull, subfieldExpr);
+      return std::make_shared<CallTypedExpr>(
+          BOOLEAN(), expression::bug::kNot, isNullExpr);
     }
 
     case common::FilterKind::kBoolValue: {
@@ -139,7 +142,7 @@ core::TypedExprPtr filterToExpr(
           BOOLEAN(), variant(boolFilter->testBool(true)));
 
       auto eqExpr = std::make_shared<CallTypedExpr>(
-          BOOLEAN(), "eq", subfieldExpr, boolValue);
+          BOOLEAN(), expression::bug::kEq, subfieldExpr, boolValue);
 
       return handleNullAllowed(eqExpr, subfieldExpr, boolFilter->nullAllowed());
     }
@@ -164,7 +167,7 @@ core::TypedExprPtr filterToExpr(
               variant(static_cast<int32_t>(rangeFilter->lower())));
 
           conditions.push_back(std::make_shared<CallTypedExpr>(
-              BOOLEAN(), "gte", subfieldExpr, lower));
+              BOOLEAN(), expression::bug::kGte, subfieldExpr, lower));
         }
 
         // Handle upper bound
@@ -174,7 +177,7 @@ core::TypedExprPtr filterToExpr(
               variant(static_cast<int32_t>(rangeFilter->upper())));
 
           conditions.push_back(std::make_shared<CallTypedExpr>(
-              BOOLEAN(), "lte", subfieldExpr, upper));
+              BOOLEAN(), expression::bug::kLte, subfieldExpr, upper));
         }
 
         auto rangeExpr = createBooleanExpr(conditions);
@@ -223,17 +226,17 @@ core::TypedExprPtr filterToExpr(
         if (rangeFilter->lower() == rangeFilter->upper()) {
           // Single value comparison
           rangeExpr = std::make_shared<CallTypedExpr>(
-              BOOLEAN(), "eq", subfieldExpr, lower);
+              BOOLEAN(), expression::bug::kEq, subfieldExpr, lower);
         } else {
           // Range comparison
           auto greaterOrEqual = std::make_shared<CallTypedExpr>(
-              BOOLEAN(), "gte", subfieldExpr, lower);
+              BOOLEAN(), expression::bug::kGte, subfieldExpr, lower);
 
           auto lessOrEqual = std::make_shared<CallTypedExpr>(
-              BOOLEAN(), "lte", subfieldExpr, upper);
+              BOOLEAN(), expression::bug::kLte, subfieldExpr, upper);
 
           rangeExpr = std::make_shared<CallTypedExpr>(
-              BOOLEAN(), "and", greaterOrEqual, lessOrEqual);
+              BOOLEAN(), expression::kAnd, greaterOrEqual, lessOrEqual);
         }
 
         return handleNullAllowed(
@@ -253,8 +256,8 @@ core::TypedExprPtr filterToExpr(
       auto rangeExpr = filterToExpr(subfield, nonNegatedFilter, rowType, pool);
 
       // Create NOT range expression
-      auto notRangeExpr =
-          std::make_shared<CallTypedExpr>(BOOLEAN(), "not", rangeExpr);
+      auto notRangeExpr = std::make_shared<CallTypedExpr>(
+          BOOLEAN(), expression::bug::kNot, rangeExpr);
 
       return handleNullAllowed(notRangeExpr, subfieldExpr, nullAllowed);
     }
@@ -284,10 +287,10 @@ core::TypedExprPtr filterToExpr(
 
         if (doubleFilter->lowerExclusive()) {
           conditions.push_back(std::make_shared<CallTypedExpr>(
-              BOOLEAN(), "gt", subfieldExpr, lower));
+              BOOLEAN(), expression::bug::kGt, subfieldExpr, lower));
         } else {
           conditions.push_back(std::make_shared<CallTypedExpr>(
-              BOOLEAN(), "gte", subfieldExpr, lower));
+              BOOLEAN(), expression::bug::kGte, subfieldExpr, lower));
         }
       }
 
@@ -310,10 +313,10 @@ core::TypedExprPtr filterToExpr(
 
         if (doubleFilter->upperExclusive()) {
           conditions.push_back(std::make_shared<CallTypedExpr>(
-              BOOLEAN(), "lt", subfieldExpr, upper));
+              BOOLEAN(), expression::bug::kLt, subfieldExpr, upper));
         } else {
           conditions.push_back(std::make_shared<CallTypedExpr>(
-              BOOLEAN(), "lte", subfieldExpr, upper));
+              BOOLEAN(), expression::bug::kLte, subfieldExpr, upper));
         }
       }
 
@@ -337,10 +340,10 @@ core::TypedExprPtr filterToExpr(
 
         if (floatFilter->lowerExclusive()) {
           conditions.push_back(std::make_shared<CallTypedExpr>(
-              BOOLEAN(), "gt", subfieldExpr, lower));
+              BOOLEAN(), expression::bug::kGt, subfieldExpr, lower));
         } else {
           conditions.push_back(std::make_shared<CallTypedExpr>(
-              BOOLEAN(), "gte", subfieldExpr, lower));
+              BOOLEAN(), expression::bug::kGte, subfieldExpr, lower));
         }
       }
 
@@ -353,10 +356,10 @@ core::TypedExprPtr filterToExpr(
 
         if (floatFilter->upperExclusive()) {
           conditions.push_back(std::make_shared<CallTypedExpr>(
-              BOOLEAN(), "lt", subfieldExpr, upper));
+              BOOLEAN(), expression::bug::kLt, subfieldExpr, upper));
         } else {
           conditions.push_back(std::make_shared<CallTypedExpr>(
-              BOOLEAN(), "lte", subfieldExpr, upper));
+              BOOLEAN(), expression::bug::kLte, subfieldExpr, upper));
         }
       }
 
@@ -377,10 +380,10 @@ core::TypedExprPtr filterToExpr(
 
         if (bytesFilter->isLowerExclusive()) {
           conditions.push_back(std::make_shared<CallTypedExpr>(
-              BOOLEAN(), "gt", subfieldExpr, lower));
+              BOOLEAN(), expression::bug::kGt, subfieldExpr, lower));
         } else {
           conditions.push_back(std::make_shared<CallTypedExpr>(
-              BOOLEAN(), "gte", subfieldExpr, lower));
+              BOOLEAN(), expression::bug::kGte, subfieldExpr, lower));
         }
       }
 
@@ -390,10 +393,10 @@ core::TypedExprPtr filterToExpr(
 
         if (bytesFilter->isUpperExclusive()) {
           conditions.push_back(std::make_shared<CallTypedExpr>(
-              BOOLEAN(), "lt", subfieldExpr, upper));
+              BOOLEAN(), expression::bug::kLt, subfieldExpr, upper));
         } else {
           conditions.push_back(std::make_shared<CallTypedExpr>(
-              BOOLEAN(), "lte", subfieldExpr, upper));
+              BOOLEAN(), expression::bug::kLte, subfieldExpr, upper));
         }
       }
 
@@ -452,10 +455,10 @@ core::TypedExprPtr filterToExpr(
       }
 
       auto arrayExpr = std::make_shared<CallTypedExpr>(
-          ARRAY(subfieldType), valueExprs, "array_constructor");
+          ARRAY(subfieldType), valueExprs, expression::bug::kArrayConstructor);
 
       auto inExpr = std::make_shared<CallTypedExpr>(
-          BOOLEAN(), "in", subfieldExpr, arrayExpr);
+          BOOLEAN(), expression::kIn, subfieldExpr, arrayExpr);
 
       // Optimization: Add range check (field >= min AND field <= max) before IN
       // check
@@ -490,16 +493,16 @@ core::TypedExprPtr filterToExpr(
 
       // Create range check: field >= min AND field <= max
       auto gteMinExpr = std::make_shared<CallTypedExpr>(
-          BOOLEAN(), "gte", subfieldExpr, minConstant);
+          BOOLEAN(), expression::bug::kGte, subfieldExpr, minConstant);
       auto lteMaxExpr = std::make_shared<CallTypedExpr>(
-          BOOLEAN(), "lte", subfieldExpr, maxConstant);
+          BOOLEAN(), expression::bug::kLte, subfieldExpr, maxConstant);
       auto rangeCheckExpr = std::make_shared<CallTypedExpr>(
-          BOOLEAN(), "and", gteMinExpr, lteMaxExpr);
+          BOOLEAN(), expression::kAnd, gteMinExpr, lteMaxExpr);
 
       // Combine range check with IN check: (field >= min AND field <= max) AND
       // (field IN values)
       auto optimizedInExpr = std::make_shared<CallTypedExpr>(
-          BOOLEAN(), "and", rangeCheckExpr, inExpr);
+          BOOLEAN(), expression::kAnd, rangeCheckExpr, inExpr);
 
       return handleNullAllowed(optimizedInExpr, subfieldExpr, nullAllowed);
     }
@@ -515,8 +518,8 @@ core::TypedExprPtr filterToExpr(
       auto inExpr = filterToExpr(subfield, nonNegatedFilter, rowType, pool);
 
       // Create NOT IN expression
-      auto notInExpr =
-          std::make_shared<CallTypedExpr>(BOOLEAN(), "not", inExpr);
+      auto notInExpr = std::make_shared<CallTypedExpr>(
+          BOOLEAN(), expression::bug::kNot, inExpr);
 
       return handleNullAllowed(notInExpr, subfieldExpr, nullAllowed);
     }
@@ -531,8 +534,8 @@ core::TypedExprPtr filterToExpr(
       auto inExpr = filterToExpr(subfield, nonNegatedFilter, rowType, pool);
 
       // Create NOT IN expression
-      auto notInExpr =
-          std::make_shared<CallTypedExpr>(BOOLEAN(), "not", inExpr);
+      auto notInExpr = std::make_shared<CallTypedExpr>(
+          BOOLEAN(), expression::bug::kNot, inExpr);
 
       return handleNullAllowed(notInExpr, subfieldExpr, nullAllowed);
     }
@@ -549,10 +552,10 @@ core::TypedExprPtr filterToExpr(
       }
 
       auto arrayExpr = std::make_shared<CallTypedExpr>(
-          ARRAY(subfieldType), valueExprs, "array_constructor");
+          ARRAY(subfieldType), valueExprs, expression::bug::kArrayConstructor);
 
       auto inExpr = std::make_shared<CallTypedExpr>(
-          BOOLEAN(), "in", subfieldExpr, arrayExpr);
+          BOOLEAN(), expression::kIn, subfieldExpr, arrayExpr);
 
       return handleNullAllowed(
           inExpr, subfieldExpr, bytesFilter->nullAllowed());
@@ -570,8 +573,8 @@ core::TypedExprPtr filterToExpr(
       auto inExpr = filterToExpr(subfield, nonNegatedFilter, rowType, pool);
 
       // Create NOT IN expression
-      auto notInExpr =
-          std::make_shared<CallTypedExpr>(BOOLEAN(), "not", inExpr);
+      auto notInExpr = std::make_shared<CallTypedExpr>(
+          BOOLEAN(), expression::bug::kNot, inExpr);
 
       return handleNullAllowed(notInExpr, subfieldExpr, nullAllowed);
     }
@@ -587,17 +590,17 @@ core::TypedExprPtr filterToExpr(
       if (timestampFilter->isSingleValue()) {
         // Single value comparison
         rangeExpr = std::make_shared<CallTypedExpr>(
-            BOOLEAN(), "eq", subfieldExpr, lower);
+            BOOLEAN(), expression::bug::kEq, subfieldExpr, lower);
       } else {
         // Range comparison
         auto greaterOrEqual = std::make_shared<CallTypedExpr>(
-            BOOLEAN(), "gte", subfieldExpr, lower);
+            BOOLEAN(), expression::bug::kGte, subfieldExpr, lower);
 
         auto lessOrEqual = std::make_shared<CallTypedExpr>(
-            BOOLEAN(), "lte", subfieldExpr, upper);
+            BOOLEAN(), expression::bug::kLte, subfieldExpr, upper);
 
         rangeExpr = std::make_shared<CallTypedExpr>(
-            BOOLEAN(), "and", greaterOrEqual, lessOrEqual);
+            BOOLEAN(), expression::kAnd, greaterOrEqual, lessOrEqual);
       }
 
       return handleNullAllowed(
@@ -615,7 +618,8 @@ core::TypedExprPtr filterToExpr(
         rangeExprs.push_back(rangeExpr);
       }
 
-      return std::make_shared<CallTypedExpr>(BOOLEAN(), rangeExprs, "or");
+      return std::make_shared<CallTypedExpr>(
+          BOOLEAN(), rangeExprs, expression::kOr);
     }
 
     case common::FilterKind::kMultiRange: {
@@ -629,7 +633,8 @@ core::TypedExprPtr filterToExpr(
         filterExprs.push_back(filterExpr);
       }
 
-      return std::make_shared<CallTypedExpr>(BOOLEAN(), filterExprs, "or");
+      return std::make_shared<CallTypedExpr>(
+          BOOLEAN(), filterExprs, expression::kOr);
     }
 
     case common::FilterKind::kNegatedBytesRange: {
@@ -644,8 +649,8 @@ core::TypedExprPtr filterToExpr(
       auto rangeExpr = filterToExpr(subfield, nonNegatedFilter, rowType, pool);
 
       // Create NOT range expression
-      auto notRangeExpr =
-          std::make_shared<CallTypedExpr>(BOOLEAN(), "not", rangeExpr);
+      auto notRangeExpr = std::make_shared<CallTypedExpr>(
+          BOOLEAN(), expression::bug::kNot, rangeExpr);
 
       return handleNullAllowed(notRangeExpr, subfieldExpr, nullAllowed);
     }
