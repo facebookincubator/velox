@@ -144,7 +144,7 @@ TEST_F(TableScanTest, directBufferInputRawInputBytes) {
   ASSERT_GT(getTableScanRuntimeStats(task)["ioWaitWallNanos"].sum, 0);
 }
 
-TEST_F(TableScanTest, pendingCoalescedIoWhenTaskFailed) {
+DEBUG_ONLY_TEST_F(TableScanTest, pendingCoalescedIoWhenTaskFailed) {
   gflags::FlagSaver gflagSaver;
   // Always trigger prefetch.
   FLAGS_cache_prefetch_min_pct = 0;
