@@ -85,8 +85,6 @@ class TextReader : public dwio::common::Reader {
 
   uint64_t getFileLength() const;
 
-  uint64_t getMemoryUse();
-
  private:
   ReaderOptions options_;
   mutable std::shared_ptr<const TypeWithId> typeWithId_;
