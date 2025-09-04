@@ -26,6 +26,8 @@ set(
 
 velox_resolve_dependency_url(ROARING)
 
+set(ENABLE_ROARING_TESTS OFF)
+
 FetchContent_Declare(
   roaring
   URL ${VELOX_ROARING_SOURCE_URL}
