@@ -207,18 +207,12 @@ TextRowReader::TextRowReader(
      * uInt (unsigned int), blockSize is set to std::numeric_limits<unsigned
      * int>::max() for full compatibility.
      */
-    const auto blockSize =
-        (contents_->compression == CompressionKind::CompressionKind_ZLIB ||
-         contents_->compression == CompressionKind::CompressionKind_GZIP)
-        ? std::numeric_limits<unsigned int>::max()
-        : std::numeric_limits<uint64_t>::max();
-
     contents_->inputStream = contents_->input->loadCompleteFile();
     auto name = contents_->inputStream->getName();
     contents_->decompressedInputStream = createDecompressor(
         contents_->compression,
         std::move(contents_->inputStream),
-        blockSize,
+        common::kDefaultCompressionBlockSize,
         contents_->pool,
         contents_->compressionOptions,
         fmt::format("Text Reader: Stream {}", name),
