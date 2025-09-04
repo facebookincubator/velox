@@ -18,8 +18,10 @@
 #include "velox/common/hyperloglog/DenseHll.h"
 #include "velox/common/hyperloglog/HllUtils.h"
 #include "velox/common/hyperloglog/SparseHll.h"
+#include "velox/core/QueryConfig.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/prestosql/types/HyperLogLogType.h"
+#include "velox/functions/prestosql/types/P4HyperLogLogType.h"
 
 namespace facebook::velox::functions {
 
@@ -27,9 +29,8 @@ template <typename T>
 struct CardinalityFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE bool call(
-      int64_t& result,
-      const arg_type<HyperLogLog>& hll) {
+  template <typename THll>
+  FOLLY_ALWAYS_INLINE bool call(int64_t& result, const THll& hll) {
     using common::hll::DenseHll;
     using common::hll::SparseHll;
 
@@ -47,6 +48,23 @@ struct EmptyApproxSetFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE bool call(out_type<HyperLogLog>& result) {
+    static const std::string kEmpty =
+        common::hll::SparseHll::serializeEmpty(12);
+
+    result.resize(kEmpty.size());
+    memcpy(result.data(), kEmpty.data(), kEmpty.size());
+    return true;
+  }
+};
+
+template <typename T>
+struct EmptyApproxSetP4Function {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE bool call(out_type<P4HyperLogLog>& result) {
+    // Use SparseHll empty serialization
+    // CardinalityFunction can handle Sparse and Dense formats regardless of the
+    // type.
     static const std::string kEmpty =
         common::hll::SparseHll::serializeEmpty(12);
 
@@ -75,6 +93,34 @@ struct EmptyApproxSetWithMaxErrorFunction {
 
   FOLLY_ALWAYS_INLINE bool call(
       out_type<HyperLogLog>& result,
+      double /*maxStandardError*/) {
+    result.resize(serialized_.size());
+    memcpy(result.data(), serialized_.data(), serialized_.size());
+    return true;
+  }
+};
+
+template <typename T>
+struct EmptyApproxSetWithMaxErrorP4Function {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+  std::string serialized_;
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& /*config*/,
+      const double* maxStandardError) {
+    VELOX_USER_CHECK_NOT_NULL(
+        maxStandardError,
+        "empty_approx_set function requires constant value for maxStandardError argument");
+    common::hll::checkMaxStandardError(*maxStandardError);
+
+    // Use SparseHll format for empty P4HyperLogLog
+    serialized_ = common::hll::SparseHll::serializeEmpty(
+        common::hll::toIndexBitLength(*maxStandardError));
+  }
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<P4HyperLogLog>& result,
       double /*maxStandardError*/) {
     result.resize(serialized_.size());
     memcpy(result.data(), serialized_.data(), serialized_.size());
