@@ -91,11 +91,23 @@ bool CompileState::compile() {
   };
 
   const bool isParquetConnectorRegistered =
-      facebook::velox::connector::getAllConnectors().count("test-parquet") > 0;
+      facebook::velox::connector::getAllConnectors().count(kCudfParquetConnectorId) > 0;
   auto isTableScanSupported =
-      [isParquetConnectorRegistered](const exec::Operator* op) {
-        return isAnyOf<exec::TableScan>(op) && isParquetConnectorRegistered &&
-            cudfTableScanEnabled();
+      [isParquetConnectorRegistered, getPlanNode](const exec::Operator* op) {
+        if (!isAnyOf<exec::TableScan>(op) || !isParquetConnectorRegistered ||
+            !cudfTableScanEnabled()) {
+              return false;
+            }
+        auto node = std::dynamic_pointer_cast<const core::TableScanNode>(
+        getPlanNode(op->planNodeId()));
+        if (!node) {
+          return false;
+        }
+        // Cudf connector only supports parquet format and not support partitions until now.
+        if (node->tableHandle()->connectorId() != kCudfParquetConnectorId) {
+          return false;
+        }
+        return true;
       };
 
   auto isFilterProjectSupported = [](const exec::Operator* op) {
