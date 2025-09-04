@@ -101,6 +101,13 @@ class DirectCoalescedLoad : public cache::CoalescedLoad {
     return size;
   }
 
+  void cancel() override {
+    CoalescedLoad::cancel();
+    for (auto &request : requests_) {
+      pool_->freeNonContiguous(request.data);
+    }
+  }
+
  private:
   const std::shared_ptr<IoStatistics> ioStats_;
   const std::shared_ptr<filesystems::File::IoStats> fsStats_;
