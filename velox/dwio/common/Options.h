@@ -282,6 +282,22 @@ class RowReaderOptions {
     scanSpec_ = std::move(scanSpec);
   }
 
+  folly::Executor* ioExecutor() const {
+    return ioExecutor_;
+  }
+
+  void setIOExecutor(folly::Executor* const ioExecutor) {
+    ioExecutor_ = ioExecutor;
+  }
+
+  const size_t parallelUnitLoadCount() const {
+    return parallelUnitLoadCount_;
+  }
+
+  void setParallelUnitLoadCount(size_t parallelUnitLoadCount) {
+    parallelUnitLoadCount_ = parallelUnitLoadCount;
+  }
+
   const std::shared_ptr<velox::common::MetadataFilter>& metadataFilter() const {
     return metadataFilter_;
   }
@@ -434,6 +450,7 @@ class RowReaderOptions {
   bool preloadStripe_;
   bool projectSelectedType_;
   bool returnFlatVector_ = false;
+  size_t parallelUnitLoadCount_ = 0;
   ErrorTolerance errorTolerance_;
   std::shared_ptr<ColumnSelector> selector_;
   RowTypePtr requestedType_;
@@ -446,7 +463,8 @@ class RowReaderOptions {
   // Whether to generate FlatMapVectors when reading flat maps from the file. By
   // default, converts flat maps in the file to MapVectors.
   bool preserveFlatMapsInMemory_ = false;
-
+  // Optional io executor to enable parallel unit loader.
+  folly::Executor* ioExecutor_;
   // Optional executors to enable internal reader parallelism.
   // 'decodingExecutor' allow parallelising the vector decoding process.
   // 'ioExecutor' enables parallelism when performing file system read
