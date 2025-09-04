@@ -218,8 +218,7 @@ void DirectBufferedInput::readRegions(
     for (auto i = 0; i < coalescedLoads_.size(); ++i) {
       auto& load = coalescedLoads_[i];
       if (load->state() == CoalescedLoad::State::kPlanned) {
-        AsyncLoadHolder loadHolder{
-            .load = load, .pool = pool_->shared_from_this()};
+        AsyncLoadHolder loadHolder{.load = load};
         executor_->add([asyncLoad = std::move(loadHolder)]() {
           process::TraceContext trace("Read Ahead");
           VELOX_CHECK_NOT_NULL(asyncLoad.load);
@@ -286,10 +285,11 @@ std::vector<cache::CachePin> DirectCoalescedLoad::loadData(bool prefetch) {
   for (auto& request : requests_) {
     const auto& region = request.region;
     if (region.offset > lastEnd) {
-      buffers.push_back(folly::Range<char*>(
-          nullptr,
-          reinterpret_cast<char*>(
-              static_cast<uint64_t>(region.offset - lastEnd))));
+      buffers.push_back(
+          folly::Range<char*>(
+              nullptr,
+              reinterpret_cast<char*>(
+                  static_cast<uint64_t>(region.offset - lastEnd))));
       overread += buffers.back().size();
     }
 
