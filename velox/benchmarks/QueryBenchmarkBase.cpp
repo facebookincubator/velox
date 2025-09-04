@@ -114,7 +114,39 @@ DEFINE_int32(
     "prefetch. 1 means prefetch the next row group before decoding "
     "the current one");
 
-DEFINE_int32(split_preload_per_driver, 2, "Prefetch split metadata");
+DEFINE_uint64(
+    cudf_chunk_read_limit,
+    0,
+    "Output table chunk read limit for cudf::parquet_chunked_reader.");
+
+DEFINE_uint64(
+    cudf_pass_read_limit,
+    0,
+    "Pass read limit for cudf::parquet_chunked_reader.");
+
+DEFINE_int32(
+    cudf_gpu_batch_size_rows,
+    100000,
+    "Preferred output batch size in rows for cudf operators.");
+
+DEFINE_int32(split_preload_per_driver, 1, "Prefetch split metadata");
+
+DEFINE_int64(
+    preferred_output_batch_bytes,
+    10 << 20,
+    "Preferred output batch size in bytes");
+
+DEFINE_uint64(
+    max_partial_aggregation_memory,
+    10 << 20,
+    "Maximum memory usage for partial aggregation");
+
+DEFINE_int32(
+    preferred_output_batch_rows,
+    1024,
+    "Preferred output batch size in rows");
+
+DEFINE_int32(max_output_batch_rows, 10'000, "Max output batch size in rows");
 
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
@@ -256,6 +288,14 @@ QueryBenchmarkBase::run(const TpchPlan& tpchPlan) {
       params.planNode = tpchPlan.plan;
       params.queryConfigs[core::QueryConfig::kMaxSplitPreloadPerDriver] =
           std::to_string(FLAGS_split_preload_per_driver);
+      params.queryConfigs[core::QueryConfig::kPreferredOutputBatchBytes] =
+          std::to_string(FLAGS_preferred_output_batch_bytes);
+      params.queryConfigs[core::QueryConfig::kPreferredOutputBatchRows] =
+          std::to_string(FLAGS_preferred_output_batch_rows);
+      params.queryConfigs[core::QueryConfig::kMaxOutputBatchRows] =
+          std::to_string(FLAGS_max_output_batch_rows);
+      params.queryConfigs[core::QueryConfig::kMaxPartialAggregationMemory] =
+          std::to_string(FLAGS_max_partial_aggregation_memory);
       const int numSplitsPerFile = FLAGS_num_splits_per_file;
 
       auto addSplits = [&](TaskCursor* taskCursor) {

@@ -36,6 +36,10 @@ namespace {
 
 using namespace facebook::velox;
 
+bool isFloatingPointType(const TypePtr& type) {
+  return type->kind() != TypeKind::REAL && type->kind() != TypeKind::DOUBLE;
+}
+
 #define DEFINE_SIMPLE_AGGREGATOR(Name, name, KIND)                            \
   struct Name##Aggregator : cudf_velox::CudfHashAggregation::Aggregator {     \
     Name##Aggregator(                                                         \

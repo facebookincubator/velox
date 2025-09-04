@@ -17,15 +17,8 @@
 #pragma once
 
 #include "velox/experimental/cudf/connectors/parquet/ParquetConfig.h"
-#include "velox/experimental/cudf/connectors/parquet/ParquetDataSink.h"
-#include "velox/experimental/cudf/connectors/parquet/ParquetDataSource.h"
-#include "velox/experimental/cudf/connectors/parquet/ParquetTableHandle.h"
 
 #include "velox/connectors/Connector.h"
-
-#include <cudf/io/parquet.hpp>
-#include <cudf/io/types.hpp>
-#include <cudf/types.hpp>
 
 namespace facebook::velox::cudf_velox::connector::parquet {
 

@@ -81,6 +81,7 @@ m4/lt~obsolete.m4
 #m4/
 build/
 _build/
+.cache/
 .ccache/
 ccache/
 #*.m4
@@ -309,7 +310,7 @@ third_party/imdb/data
 .last_format
 # Benchmarks
 .last_benchmarked_commit
-benchmark_results/
+benchmark_results*
 duckdb_unittest_tempdir/
 grammar.y.tmp
 src/amalgamation/
@@ -327,3 +328,9 @@ scripts/bm-report/report.html
 scripts/bm-report/result
 dist/
 wheelhouse/
+
+# Custom ignores
+aws-sdk-cpp
+cufile.log
+velox-tpch-*-data
+xsimd

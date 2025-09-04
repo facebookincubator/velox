@@ -33,6 +33,8 @@ class CudfLocalPartition : public exec::Operator, public NvtxHelper {
     return fmt::format("CudfLocalPartition({})", numPartitions_);
   }
 
+  void recordOutputStats(RowVectorPtr& input);
+
   void addInput(RowVectorPtr input) override;
 
   RowVectorPtr getOutput() override {

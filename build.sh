@@ -1,3 +1,4 @@
+#!/bin/bash
 # Copyright (c) Facebook, Inc. and its affiliates.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -11,18 +12,20 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-list(APPEND CMAKE_PREFIX_PATH "${CUDAToolkit_LIBRARY_DIR}/cmake")
-find_package(Thrust REQUIRED)
-find_package(CUB REQUIRED)
-find_package(Thrust REQUIRED)
 
-add_executable(velox_gpu_hash_table_test HashTableTest.cu)
-target_link_libraries(
-  velox_gpu_hash_table_test
-  Folly::folly
-  gflags::gflags
-  glog::glog
-  CUB::CUB
-  Thrust::Thrust
-  CUDA::cudart
-)
+set -euo pipefail
+
+# Run this to launch the CUDA container:
+# docker-compose run -e NUM_THREADS=$(nproc) --rm adapters-cuda /bin/bash
+# Then invoke ./build.sh to build with GPU support and run tests.
+
+# Run a GPU build and test
+pushd "$(dirname ${0})"
+
+CUDA_ARCHITECTURES="native" EXTRA_CMAKE_FLAGS="-DVELOX_ENABLE_ARROW=ON -DVELOX_ENABLE_PARQUET=ON -DVELOX_ENABLE_BENCHMARKS=ON -DVELOX_ENABLE_BENCHMARKS_BASIC=ON" make cudf
+
+cd _build/release
+
+ctest -R cudf -V
+
+popd

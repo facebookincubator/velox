@@ -1,3 +1,23 @@
+> [!IMPORTANT]
+> # Experimental RAPIDS cuDF Backend for Velox
+> This repository is a fork of
+> [Velox](https://github.com/facebookincubator/velox) with support for [RAPIDS
+> cuDF](https://github.com/rapidsai/cudf/) as a GPU-accelerated Velox backend.
+> We are working to upstream the contents of this repository to the Velox
+> public repository. That effort is
+> tracked in [Velox issue
+> #12412](https://github.com/facebookincubator/velox/issues/12412), with a
+> description of the high level design and merge plan for upstreaming this
+> work.
+>
+> ### Quickstart
+> This repository contains scripts for quickly building and running Velox with
+> the cuDF backend. To launch the CUDA container:
+> ```
+> docker-compose run -e NUM_THREADS=$(nproc) --rm adapters-cuda /bin/bash
+> ```
+> Then invoke `./build.sh` to build Velox with cuDF support and run tests.
+
 <img src="static/logo.svg" alt="Velox logo" width="50%" align="center" />
 
 Velox is a composable execution engine distributed as an open source C++

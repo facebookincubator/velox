@@ -22,31 +22,37 @@
 # Only users that have write access to the repo can be added as owners.
 # See the official docs for more details on syntax and precedence of rules: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners#example-of-a-codeowners-file
 
+# Velox-cuDF codeowners
+* @rapidsai/velox-cudf-codeowners
+
 # Build & CI
-CMake/ @assignUser @majetideepak
-/CMakeLists.txt @assignUser
-*.cmake @majetideepak
-**/CMakeLists.txt @majetideepak
-scripts/ @assignUser @majetideepak
-.github/ @assignUser @majetideepak
+# CMake/ @assignUser @majetideepak
+# /CMakeLists.txt @assignUser
+# *.cmake @majetideepak
+# **/CMakeLists.txt @majetideepak
+# scripts/ @assignUser @majetideepak
+# .github/ @assignUser @majetideepak
 
 # Breeze
-velox/experimental/breeze @dreveman
+#velox/experimental/breeze @dreveman
+
+# cuDF
+velox/experimental/cudf @bdice @karthikeyann @devavret
 
 # cuDF
 velox/experimental/cudf/ @bdice @karthikeyann @devavret @mhaseeb123
 
 # Parquet
-velox/dwio/parquet/ @majetideepak
+#velox/dwio/parquet/ @majetideepak
 
 # Storage Adapters
-velox/connectors/hive/storage_adapters/ @majetideepak
+#velox/connectors/hive/storage_adapters/ @majetideepak
 
 # Connectors
-velox/connectors/ @majetideepak
+#velox/connectors/ @majetideepak
 
 # Caching
-velox/common/caching/ @majetideepak
+# velox/common/caching/ @majetideepak
 
-# Spark Functions
-velox/functions/sparksql/ @jinchengchenghh @rui-mo @zhli1142015
+# # Spark Functions
+# velox/functions/sparksql/ @jinchengchenghh @rui-mo @zhli1142015

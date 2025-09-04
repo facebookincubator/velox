@@ -33,6 +33,7 @@ services:
     environment:
       NUM_THREADS: ${NUM_THREADS:-8} # default value for NUM_THREADS
       CCACHE_DIR: /velox/.ccache
+      CMAKE_EXPORT_COMPILE_COMMANDS: 1
     volumes:
       - .:/velox:delegated
     working_dir: /velox

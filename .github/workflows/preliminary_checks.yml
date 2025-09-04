@@ -14,12 +14,9 @@
 name: Run Checks
 
 on:
-  pull_request:
-    types:
-      - opened
-      - reopened
-      - edited
-      - synchronize
+  push:
+    branches:
+      - pull-request/[0-9]+
 
 permissions:
   contents: read
@@ -38,22 +35,22 @@ jobs:
       - uses: actions/setup-python@3542bca2639a428e1796aaa6a2ffef0c0f575566 # v3.1.4
       - uses: pre-commit/action@2c7b3805fd2a0fd8c1884dcaebf91fc102a13ecd # v3.0.1
 
-  title-check:
-    name: PR Title Format
-    runs-on: ubuntu-latest
-    steps:
-      - shell: python
-        env:
-          title: '${{ github.event.pull_request.title }}'
-        run: |
-          import re
-          import os
-          title = os.environ["title"]
-          title_re = r"^(feat|fix|build|test|docs|refactor|misc)(\(.+\))?!?: ([A-Z].+)[^.]$"
-          match = re.search(title_re, title)
+  # title-check:
+  #   name: PR Title Format
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - shell: python
+  #       env:
+  #         title: '${{ github.event.pull_request.title }}'
+  #       run: |
+  #         import re
+  #         import os
+  #         title = os.environ["title"]
+  #         title_re = r"^(feat|fix|build|test|docs|refactor|misc)(\(.+\))?!?: ([A-Z].+)[^.]$"
+  #         match = re.search(title_re, title)
 
-          if match is None:
-            print("::error::Please follow conventional commit guidelines in commit titles as described in CONTRIBUTING.md: https://github.com/facebookincubator/velox/blob/main/CONTRIBUTING.md#commit-messages")
-            exit(1)
-          else:
-            exit(0)
+  #         if match is None:
+  #           print("::error::Please follow conventional commit guidelines in commit titles as described in CONTRIBUTING.md: https://github.com/facebookincubator/velox/blob/main/CONTRIBUTING.md#commit-messages")
+  #           exit(1)
+  #         else:
+  #           exit(0)

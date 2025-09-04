@@ -34,6 +34,10 @@
 #include "velox/parse/Expressions.h"
 #include "velox/parse/TypeResolver.h"
 
+#include "velox/experimental/cudf/connectors/parquet/ParquetTableHandle.h"
+#include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/tests/utils/ParquetConnectorTestBase.h"
+
 using namespace facebook::velox;
 using namespace facebook::velox::connector;
 using namespace facebook::velox::connector::hive;
@@ -289,6 +293,7 @@ core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
 
   const RowTypePtr& parseType = dataColumns_ ? dataColumns_ : outputType_;
 
+  std::vector<core::TypedExprPtr> subfieldExprs;
   core::TypedExprPtr filterNodeExpr;
 
   if (filtersAsNode_) {
