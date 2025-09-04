@@ -26,7 +26,6 @@
 #include <stdio.h>
 #include <string.h>
 #ifndef VMS
-#include <sys/types.h>
 #endif
 #if defined(SUN)
 #include <unistd.h>
