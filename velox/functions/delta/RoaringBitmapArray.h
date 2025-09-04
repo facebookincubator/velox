@@ -16,9 +16,10 @@
 
 #pragma once
 
-#include <core/QueryConfig.h>
+#include "velox/core/QueryConfig.h"
+#include "velox/functions/Macros.h"
+
 #include <folly/CPortability.h>
-#include <functions/Macros.h>
 #include <roaring.hh>
 
 namespace facebook::velox::functions::delta {

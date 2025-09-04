@@ -15,9 +15,9 @@
  */
 
 #include "velox/functions/delta/RoaringBitmapArray.h"
+#include "velox/common/base/Exceptions.h"
 #include "velox/common/base/IOUtils.h"
 
-#include <common/base/Exceptions.h>
 #include <folly/Likely.h>
 #include <cstdint>
 #include <limits>
