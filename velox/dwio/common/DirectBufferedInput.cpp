@@ -285,11 +285,10 @@ std::vector<cache::CachePin> DirectCoalescedLoad::loadData(bool prefetch) {
   for (auto& request : requests_) {
     const auto& region = request.region;
     if (region.offset > lastEnd) {
-      buffers.push_back(
-          folly::Range<char*>(
-              nullptr,
-              reinterpret_cast<char*>(
-                  static_cast<uint64_t>(region.offset - lastEnd))));
+      buffers.push_back(folly::Range<char*>(
+          nullptr,
+          reinterpret_cast<char*>(
+              static_cast<uint64_t>(region.offset - lastEnd))));
       overread += buffers.back().size();
     }
 
