@@ -91,24 +91,26 @@ bool CompileState::compile() {
   };
 
   const bool isParquetConnectorRegistered =
-      facebook::velox::connector::getAllConnectors().count(kCudfParquetConnectorId) > 0;
-  auto isTableScanSupported =
-      [isParquetConnectorRegistered, getPlanNode](const exec::Operator* op) {
-        if (!isAnyOf<exec::TableScan>(op) || !isParquetConnectorRegistered ||
-            !cudfTableScanEnabled()) {
-              return false;
-            }
-        auto node = std::dynamic_pointer_cast<const core::TableScanNode>(
+      facebook::velox::connector::getAllConnectors().count(
+          kCudfParquetConnectorId) > 0;
+  auto isTableScanSupported = [isParquetConnectorRegistered,
+                               getPlanNode](const exec::Operator* op) {
+    if (!isAnyOf<exec::TableScan>(op) || !isParquetConnectorRegistered ||
+        !cudfTableScanEnabled()) {
+      return false;
+    }
+    auto node = std::dynamic_pointer_cast<const core::TableScanNode>(
         getPlanNode(op->planNodeId()));
-        if (!node) {
-          return false;
-        }
-        // Cudf connector only supports parquet format and not support partitions until now.
-        if (node->tableHandle()->connectorId() != kCudfParquetConnectorId) {
-          return false;
-        }
-        return true;
-      };
+    if (!node) {
+      return false;
+    }
+    // Cudf connector only supports parquet format and not support partitions
+    // until now.
+    if (node->tableHandle()->connectorId() != kCudfParquetConnectorId) {
+      return false;
+    }
+    return true;
+  };
 
   auto isFilterProjectSupported = [](const exec::Operator* op) {
     if (auto filterProjectOp = dynamic_cast<const exec::FilterProject*>(op)) {
