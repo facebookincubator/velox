@@ -16,6 +16,7 @@
 
 #include "velox/functions/sparksql/specialforms/DecimalRound.h"
 #include "velox/expression/ConstantExpr.h"
+#include "velox/expression/ExprConstants.h"
 
 namespace facebook::velox::functions::sparksql {
 namespace {
@@ -252,7 +253,7 @@ exec::ExprPtr DecimalRoundCallToSpecialForm::constructSpecialForm(
       std::move(args),
       std::move(decimalRound),
       exec::VectorFunctionMetadata{},
-      kRoundDecimal,
+      expression::old::kRoundDecimal,
       trackCpuUsage);
 }
 } // namespace facebook::velox::functions::sparksql

@@ -28,6 +28,7 @@
 #include "velox/expression/TryExpr.h"
 
 namespace facebook::velox::exec {
+
 void registerFunctionCallToSpecialForms() {
   registerFunctionCallToSpecialForm(
       expression::kAnd,
@@ -37,18 +38,20 @@ void registerFunctionCallToSpecialForms() {
   registerFunctionCallToSpecialForm(
       expression::kTryCast, std::make_unique<TryCastCallToSpecialForm>());
   registerFunctionCallToSpecialForm(
-      expression::kCoalesce, std::make_unique<CoalesceCallToSpecialForm>());
+      expression::old::kCoalesce,
+      std::make_unique<CoalesceCallToSpecialForm>());
   registerFunctionCallToSpecialForm(
-      expression::kIf, std::make_unique<IfCallToSpecialForm>());
+      expression::old::kIf, std::make_unique<IfCallToSpecialForm>());
   registerFunctionCallToSpecialForm(
       expression::kOr,
       std::make_unique<ConjunctCallToSpecialForm>(false /* isAnd */));
   registerFunctionCallToSpecialForm(
-      expression::kSwitch, std::make_unique<SwitchCallToSpecialForm>());
+      expression::old::kSwitch, std::make_unique<SwitchCallToSpecialForm>());
   registerFunctionCallToSpecialForm(
-      expression::kTry, std::make_unique<TryCallToSpecialForm>());
+      expression::old::kTry, std::make_unique<TryCallToSpecialForm>());
   registerFunctionCallToSpecialForm(
-      RowConstructorCallToSpecialForm::kRowConstructor,
+      expression::kRowConstructor,
       std::make_unique<RowConstructorCallToSpecialForm>());
 }
+
 } // namespace facebook::velox::exec

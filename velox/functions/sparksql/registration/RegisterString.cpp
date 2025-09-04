@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/expression/ExprConstants.h"
 #include "velox/expression/SpecialFormRegistry.h"
 #include "velox/functions/lib/Re2Functions.h"
 #include "velox/functions/lib/UpperLower.h"
@@ -147,7 +148,7 @@ void registerStringFunctions(const std::string& prefix) {
       Varchar,
       Varchar>({prefix + "mask"});
   registerFunctionCallToSpecialForm(
-      ConcatWsCallToSpecialForm::kConcatWs,
+      expression::old::kConcatWs,
       std::make_unique<ConcatWsCallToSpecialForm>());
   registerFunction<LuhnCheckFunction, bool, Varchar>({prefix + "luhn_check"});
 

@@ -31,8 +31,6 @@ class FromJsonCallToSpecialForm : public exec::FunctionCallToSpecialForm {
       std::vector<exec::ExprPtr>&& args,
       bool trackCpuUsage,
       const core::QueryConfig& config) override;
-
-  static constexpr const char* kFromJson = "from_json";
 };
 
 } // namespace facebook::velox::functions::sparksql

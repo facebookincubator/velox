@@ -15,6 +15,7 @@
  */
 #include "velox/functions/sparksql/ConcatWs.h"
 #include "velox/expression/ConstantExpr.h"
+#include "velox/expression/ExprConstants.h"
 #include "velox/expression/VectorFunction.h"
 
 namespace facebook::velox::functions::sparksql {
@@ -383,7 +384,7 @@ exec::ExprPtr ConcatWsCallToSpecialForm::constructSpecialForm(
       std::move(args),
       std::move(concatWsFunction),
       exec::VectorFunctionMetadataBuilder().defaultNullBehavior(false).build(),
-      kConcatWs,
+      expression::old::kConcatWs,
       trackCpuUsage);
 }
 

@@ -29,7 +29,5 @@ class AtLeastNNonNullsCallToSpecialForm
       std::vector<exec::ExprPtr>&& args,
       bool trackCpuUsage,
       const core::QueryConfig& config) override;
-
-  static constexpr const char* kAtLeastNNonNulls = "at_least_n_non_nulls";
 };
 } // namespace facebook::velox::functions::sparksql

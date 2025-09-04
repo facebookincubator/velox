@@ -16,6 +16,7 @@
 #include "velox/functions/sparksql/specialforms/GetArrayStructFields.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/Expressions.h"
+#include "velox/expression/ExprConstants.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -32,7 +33,7 @@ class GetArrayStructFieldsTest : public SparkFunctionBaseTest {
       const VectorPtr& expected) {
     auto expr = std::make_shared<const core::CallTypedExpr>(
         expected->type(),
-        GetArrayStructFieldsCallToSpecialForm::kGetArrayStructFields,
+        facebook::velox::expression::old::kGetArrayStructFields,
         std::make_shared<const core::FieldAccessTypedExpr>(input->type(), "c0"),
         std::make_shared<core::ConstantTypedExpr>(INTEGER(), variant(ordinal)));
 

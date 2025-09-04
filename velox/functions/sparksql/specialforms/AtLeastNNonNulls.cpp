@@ -16,6 +16,7 @@
 
 #include "velox/functions/sparksql/specialforms/AtLeastNNonNulls.h"
 #include "velox/expression/ConstantExpr.h"
+#include "velox/expression/ExprConstants.h"
 #include "velox/expression/SpecialForm.h"
 
 using namespace facebook::velox::exec;
@@ -33,7 +34,7 @@ class AtLeastNNonNullsExpr : public SpecialForm {
             SpecialFormKind::kCustom,
             std::move(type),
             std::move(inputs),
-            AtLeastNNonNullsCallToSpecialForm::kAtLeastNNonNulls,
+            expression::old::kAtLeastNNonNulls,
             true,
             trackCpuUsage),
         n_(n) {}

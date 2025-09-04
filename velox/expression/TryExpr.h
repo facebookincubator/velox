@@ -29,7 +29,7 @@ class TryExpr : public SpecialForm {
             SpecialFormKind::kTry,
             std::move(type),
             {std::move(input)},
-            expression::kTry,
+            expression::old::kTry,
             false /* supportsFlatNoNullsFastPath */,
             false /* trackCpuUsage */) {}
 

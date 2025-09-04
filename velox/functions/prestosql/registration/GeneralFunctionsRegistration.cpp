@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/expression/ExprConstants.h"
 #include "velox/expression/RegisterSpecialForm.h"
 #include "velox/functions/Registerer.h"
 #include "velox/functions/lib/IsNull.h"
@@ -69,17 +70,16 @@ extern void registerElementAtFunction(
     const std::string& name,
     bool enableCaching);
 
-// Special form functions don't have any prefix.
-void registerAllSpecialFormGeneralFunctions() {
+void registerAllSpecialFormGeneralFunctions(const std::string& prefix) {
   exec::registerFunctionCallToSpecialForms();
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_in, "in");
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_in, expression::kIn);
   registerFunction<
       GenericInPredicateFunction,
       bool,
       Generic<T1>,
-      Variadic<Generic<T1>>>({"in"});
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_concat_row, "row_constructor");
-  registerIsNullFunction("is_null");
+      Variadic<Generic<T1>>>({expression::kIn});
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_concat_row, expression::kRowConstructor);
+  registerIsNullFunction(expression::kIsNull);
 }
 
 void registerGeneralFunctions(const std::string& prefix) {
@@ -101,7 +101,7 @@ void registerGeneralFunctions(const std::string& prefix) {
 
   registerFailFunction({prefix + "fail"});
 
-  registerAllSpecialFormGeneralFunctions();
+  registerAllSpecialFormGeneralFunctions(prefix);
 }
 
 } // namespace facebook::velox::functions

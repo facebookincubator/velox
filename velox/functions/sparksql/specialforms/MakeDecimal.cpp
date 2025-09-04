@@ -16,6 +16,7 @@
 
 #include "velox/functions/sparksql/specialforms/MakeDecimal.h"
 #include "velox/expression/ConstantExpr.h"
+#include "velox/expression/ExprConstants.h"
 
 namespace facebook::velox::functions::sparksql {
 namespace {
@@ -183,7 +184,7 @@ exec::ExprPtr MakeDecimalCallToSpecialForm::constructSpecialForm(
       std::move(args),
       createMakeDecimal(type, nullOnOverflow),
       exec::VectorFunctionMetadata{},
-      kMakeDecimal,
+      expression::old::kMakeDecimal,
       trackCpuUsage);
 }
 } // namespace facebook::velox::functions::sparksql

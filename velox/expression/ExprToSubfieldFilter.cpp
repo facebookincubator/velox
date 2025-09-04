@@ -17,6 +17,7 @@
 #include "velox/expression/ExprToSubfieldFilter.h"
 
 #include "velox/expression/Expr.h"
+#include "velox/expression/ExprConstants.h"
 
 using namespace facebook::velox;
 
@@ -477,47 +478,47 @@ PrestoExprToSubfieldFilterParser::leafCallToSubfieldFilter(
 
   const auto* leftSide = call.inputs()[0].get();
 
-  if (call.name() == "eq") {
+  if (call.name() == expression::bug::kEq) {
     if (toSubfield(leftSide, subfield)) {
       return negated ? makeNotEqualFilter(call.inputs()[1], evaluator)
                      : makeEqualFilter(call.inputs()[1], evaluator);
     }
-  } else if (call.name() == "neq") {
+  } else if (call.name() == expression::bug::kNeq) {
     if (toSubfield(leftSide, subfield)) {
       return negated ? makeEqualFilter(call.inputs()[1], evaluator)
                      : makeNotEqualFilter(call.inputs()[1], evaluator);
     }
-  } else if (call.name() == "lte") {
+  } else if (call.name() == expression::bug::kLte) {
     if (toSubfield(leftSide, subfield)) {
       return negated ? makeGreaterThanFilter(call.inputs()[1], evaluator)
                      : makeLessThanOrEqualFilter(call.inputs()[1], evaluator);
     }
-  } else if (call.name() == "lt") {
+  } else if (call.name() == expression::bug::kLt) {
     if (toSubfield(leftSide, subfield)) {
       return negated ? makeGreaterThanOrEqualFilter(call.inputs()[1], evaluator)
                      : makeLessThanFilter(call.inputs()[1], evaluator);
     }
-  } else if (call.name() == "gte") {
+  } else if (call.name() == expression::bug::kGte) {
     if (toSubfield(leftSide, subfield)) {
       return negated
           ? makeLessThanFilter(call.inputs()[1], evaluator)
           : makeGreaterThanOrEqualFilter(call.inputs()[1], evaluator);
     }
-  } else if (call.name() == "gt") {
+  } else if (call.name() == expression::bug::kGt) {
     if (toSubfield(leftSide, subfield)) {
       return negated ? makeLessThanOrEqualFilter(call.inputs()[1], evaluator)
                      : makeGreaterThanFilter(call.inputs()[1], evaluator);
     }
-  } else if (call.name() == "between") {
+  } else if (call.name() == expression::bug::kBetween) {
     if (toSubfield(leftSide, subfield)) {
       return makeBetweenFilter(
           call.inputs()[1], call.inputs()[2], evaluator, negated);
     }
-  } else if (call.name() == "in") {
+  } else if (call.name() == expression::kIn) {
     if (toSubfield(leftSide, subfield)) {
       return makeInFilter(call.inputs()[1], evaluator, negated);
     }
-  } else if (call.name() == "is_null") {
+  } else if (call.name() == expression::kIsNull) {
     if (toSubfield(leftSide, subfield)) {
       if (negated) {
         return isNotNull();
@@ -532,7 +533,7 @@ std::pair<common::Subfield, std::unique_ptr<common::Filter>> toSubfieldFilter(
     const core::TypedExprPtr& expr,
     core::ExpressionEvaluator* evaluator) {
   if (auto call = asCall(expr.get())) {
-    if (call->name() == "or") {
+    if (call->name() == expression::kOr) {
       auto left = toSubfieldFilter(call->inputs()[0], evaluator);
       auto right = toSubfieldFilter(call->inputs()[1], evaluator);
       VELOX_CHECK(left.first == right.first);
@@ -542,7 +543,7 @@ std::pair<common::Subfield, std::unique_ptr<common::Filter>> toSubfieldFilter(
     }
     common::Subfield subfield;
     std::unique_ptr<common::Filter> filter;
-    if (call->name() == "not") {
+    if (call->name() == expression::bug::kNot) {
       if (auto* inner = asCall(call->inputs()[0].get())) {
         filter =
             ExprToSubfieldFilterParser::getInstance()->leafCallToSubfieldFilter(

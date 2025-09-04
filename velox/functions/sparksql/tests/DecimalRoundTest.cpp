@@ -16,6 +16,7 @@
 
 #include "velox/functions/sparksql/specialforms/DecimalRound.h"
 #include "velox/core/Expressions.h"
+#include "velox/expression/ExprConstants.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 
 namespace facebook::velox::functions::sparksql::test {
@@ -54,7 +55,7 @@ class DecimalRoundTest : public SparkFunctionBaseTest {
     return std::make_shared<const core::CallTypedExpr>(
         DECIMAL(resultPrecision, resultScale),
         std::move(inputs),
-        DecimalRoundCallToSpecialForm::kRoundDecimal);
+        expression::old::kRoundDecimal);
   }
 
   void testDecimalRound(

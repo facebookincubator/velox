@@ -43,7 +43,5 @@ class DecimalRoundCallToSpecialForm : public exec::FunctionCallToSpecialForm {
   /// with Spark version after 3.3.
   static std::pair<uint8_t, uint8_t>
   getResultPrecisionScale(uint8_t precision, uint8_t scale, int32_t roundScale);
-
-  static constexpr const char* kRoundDecimal = "decimal_round";
 };
 } // namespace facebook::velox::functions::sparksql

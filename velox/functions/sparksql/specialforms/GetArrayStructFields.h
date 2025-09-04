@@ -32,9 +32,6 @@ class GetArrayStructFieldsCallToSpecialForm
       std::vector<exec::ExprPtr>&& args,
       bool trackCpuUsage,
       const core::QueryConfig& config) override;
-
-  static constexpr const char* kGetArrayStructFields =
-      "get_array_struct_fields";
 };
 
 } // namespace facebook::velox::functions::sparksql
