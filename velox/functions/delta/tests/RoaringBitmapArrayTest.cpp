@@ -14,10 +14,9 @@
  * limitations under the License.
  */
 
-#include <functions/Registerer.h>
-#include <functions/delta/RoaringBitmapArray.h>
-
+#include "velox/functions/delta/RoaringBitmapArray.h"
 #include "velox/core/Expressions.h"
+#include "velox/functions/Registerer.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
