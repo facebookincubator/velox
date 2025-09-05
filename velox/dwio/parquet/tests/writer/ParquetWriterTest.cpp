@@ -26,6 +26,10 @@
 #include "velox/dwio/parquet/RegisterParquetWriter.h" // @manual
 #include "velox/dwio/parquet/reader/PageReader.h"
 #include "velox/dwio/parquet/tests/ParquetTestBase.h"
+#include "velox/dwio/parquet/writer/Writer.h"
+#include "velox/dwio/parquet/writer/arrow/Metadata.h"
+#include "velox/dwio/parquet/writer/arrow/Schema.h"
+#include "velox/dwio/parquet/writer/arrow/tests/FileReader.h"
 #include "velox/exec/Cursor.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -950,6 +954,122 @@ TEST_F(ParquetWriterTest, dictionaryEncodedVector) {
 
   writeToFile(makeRowVector({wrappedVector}));
 };
+
+class ParquetWriterFieldIdTest : public ParquetWriterTest,
+                                 public ::testing::WithParamInterface<bool> {
+ protected:
+  static void SetUpTestCase() {}
+};
+
+TEST_P(ParquetWriterFieldIdTest, fieldIds) {
+  // Schema with various complex types to test field ID assignment:
+  // - "p": BIGINT (primitive type).
+  // - "s": ROW (structure) with nested fields "x" (INTEGER) and "y" (VARCHAR).
+  // - "a": ARRAY of INTEGER.
+  // - "m": MAP from VARCHAR keys to INTEGER values.
+  auto schema =
+      ROW({"p", "s", "a", "m"},
+          {BIGINT(),
+           ROW({"x", "y"}, {INTEGER(), VARCHAR()}),
+           ARRAY(INTEGER()),
+           MAP(VARCHAR(), INTEGER())});
+  constexpr int32_t kRows = 10;
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>(kRows, [](auto row) { return row; }),
+      makeRowVector(
+          {makeFlatVector<int32_t>(kRows, [](auto row) { return row; }),
+           makeFlatVector<std::string>(kRows, [](auto) { return "z"; })}),
+      makeArrayVector<int32_t>(std::vector<std::vector<int32_t>>(kRows, {3})),
+      makeMapVector<std::string, int32_t>(
+          std::vector<
+              std::vector<std::pair<std::string, std::optional<int32_t>>>>(
+              kRows, {{{"k", 4}}})),
+  });
+
+  auto sink = std::make_unique<MemorySink>(
+      4 * 1024 * 1024,
+      dwio::common::FileSink::Options{.pool = leafPool_.get()});
+  auto* sinkPtr = sink.get();
+
+  parquet::WriterOptions writerOptions;
+  writerOptions.memoryPool = leafPool_.get();
+
+  if (GetParam()) {
+    // Provide Parquet field IDs aligned with the Velox schema tree.
+    // p -> 10.
+    // s -> 20, children: x -> 21, y -> 22.
+    // a -> 30, list element -> 31.
+    // m -> 40, children: key -> 41, value -> 42.
+    std::vector<ParquetFieldId> fieldIds{
+        ParquetFieldId{10, {}},
+        ParquetFieldId{20, {ParquetFieldId{21, {}}, ParquetFieldId{22, {}}}},
+        ParquetFieldId{30, {ParquetFieldId{31, {}}}},
+        ParquetFieldId{40, {ParquetFieldId{41, {}}, ParquetFieldId{42, {}}}},
+    };
+    writerOptions.parquetFieldIds =
+        std::make_shared<std::vector<ParquetFieldId>>(fieldIds);
+  }
+
+  auto writer = std::make_unique<parquet::Writer>(
+      std::move(sink), writerOptions, rootPool_, schema);
+  writer->write(data);
+  writer->close();
+
+  std::string_view sinkData(sinkPtr->data(), sinkPtr->size());
+  auto readFile = std::make_shared<InMemoryReadFile>(sinkData);
+  auto input = std::make_unique<BufferedInput>(readFile, *leafPool_.get());
+  dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+  auto parquetReader =
+      std::make_unique<ParquetReader>(std::move(input), readerOptions);
+  EXPECT_EQ(parquetReader->numberOfRows(), kRows);
+  auto veloxRowType = parquetReader->rowType();
+  EXPECT_EQ(*veloxRowType, *schema);
+
+  auto arrowBufferReader = std::make_shared<::arrow::io::BufferReader>(
+      std::make_shared<::arrow::Buffer>(
+          reinterpret_cast<const uint8_t*>(sinkData.data()), sinkData.size()));
+
+  auto fileReader = parquet::arrow::ParquetFileReader::Open(arrowBufferReader);
+  auto metadata = fileReader->metadata();
+  auto* descr = metadata->schema();
+  auto* root = descr->group_node();
+
+  ASSERT_EQ(root->field_count(), 4);
+
+  auto exp = [&](int32_t expectedFieldId) {
+    return GetParam() ? expectedFieldId : -1;
+  };
+
+  // Top-level field IDs.
+  EXPECT_EQ(root->field(0)->field_id(), exp(10));
+  EXPECT_EQ(root->field(1)->field_id(), exp(20));
+  EXPECT_EQ(root->field(2)->field_id(), exp(30));
+  EXPECT_EQ(root->field(3)->field_id(), exp(40));
+
+  using GroupNode = parquet::arrow::schema::GroupNode;
+  auto* s = static_cast<const GroupNode*>(root->field(1).get());
+  EXPECT_EQ(s->field(0)->field_id(), exp(21));
+  EXPECT_EQ(s->field(1)->field_id(), exp(22));
+
+  auto* a = static_cast<const GroupNode*>(root->field(2).get());
+  // LIST logical group has one repeated child (the array entries); dive once
+  // more to the element.
+  auto* listEntries = a->field(0).get();
+  auto* listGroup = static_cast<const GroupNode*>(listEntries);
+  auto* element = listGroup->field(0).get();
+  EXPECT_EQ(element->field_id(), exp(31));
+
+  auto* m = static_cast<const GroupNode*>(root->field(3).get());
+  auto* keyValue = m->field(0).get();
+  auto* keyValueGroup = static_cast<const GroupNode*>(keyValue);
+  EXPECT_EQ(keyValueGroup->field(0)->field_id(), exp(41));
+  EXPECT_EQ(keyValueGroup->field(1)->field_id(), exp(42));
+}
+
+VELOX_INSTANTIATE_TEST_SUITE_P(
+    ParquetWriterFieldIdTests,
+    ParquetWriterFieldIdTest,
+    ::testing::Values(false, true));
 
 } // namespace
 
