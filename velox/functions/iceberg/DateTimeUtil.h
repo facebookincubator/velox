@@ -38,7 +38,7 @@ FOLLY_ALWAYS_INLINE int32_t epochMonth(int32_t daysSinceEpoch) {
 // Extract a timestamp month, as months from 1970-01-01.
 FOLLY_ALWAYS_INLINE int32_t epochMonth(Timestamp ts) {
   const std::tm tm = functions::getDateTime(ts, nullptr);
-  return (functions::getYear(tm)- 1970) * 12 + tm.tm_mon;
+  return (functions::getYear(tm) - 1970) * 12 + tm.tm_mon;
 }
 
 // Extract a date day, as days from 1970-01-01.

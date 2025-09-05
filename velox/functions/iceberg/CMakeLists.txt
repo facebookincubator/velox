@@ -21,14 +21,18 @@ velox_add_library(
   BucketFunction.cpp
   DateTimeFunctions.cpp
   Register.cpp
-  Truncate.cpp)
+  Truncate.cpp
+)
 
-velox_link_libraries(velox_functions_iceberg velox_functions_iceberg_hash
-                     velox_functions_lib Folly::folly)
+velox_link_libraries(
+  velox_functions_iceberg
+  velox_functions_iceberg_hash
+  velox_functions_lib
+  Folly::folly
+)
 
 if(NOT VELOX_MONO_LIBRARY)
-  set_property(TARGET velox_functions_iceberg PROPERTY JOB_POOL_COMPILE
-                                                       high_memory_pool)
+  set_property(TARGET velox_functions_iceberg PROPERTY JOB_POOL_COMPILE high_memory_pool)
 endif()
 
 if(${VELOX_BUILD_TESTING})
