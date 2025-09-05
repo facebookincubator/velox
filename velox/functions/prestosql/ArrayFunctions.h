@@ -610,6 +610,78 @@ struct ArrayFrequencyFunction {
   folly::F14FastMap<arg_type<T>, int> frequencyCount_;
 };
 
+// Array<Varchar> to handle nested arrays
+template <typename TExecParams>
+struct ArrayFrequencyFunction<TExecParams, Array<Varchar>> {
+  VELOX_DEFINE_FUNCTION_TYPES(TExecParams);
+
+  // Helper struct to hash Array<Varchar>
+  struct ArrayVarcharKey {
+    std::vector<std::optional<std::string>> elements;
+
+    ArrayVarcharKey() = default;
+
+    explicit ArrayVarcharKey(const arg_type<Array<Varchar>>& array) {
+      for (const auto& item : array) {
+        if (item.has_value()) {
+          elements.emplace_back(item.value().getString());
+        } else {
+          elements.emplace_back(std::nullopt);
+        }
+      }
+    }
+
+    bool operator==(const ArrayVarcharKey& other) const {
+      return elements == other.elements;
+    }
+  };
+
+  struct ArrayVarcharKeyHasher {
+    std::size_t operator()(const ArrayVarcharKey& key) const {
+      std::size_t hash = 0;
+      for (const auto& elem : key.elements) {
+        if (elem.has_value()) {
+          hash = folly::hash::hash_combine(
+              hash, std::hash<std::string>{}(elem.value()));
+        } else {
+          hash =
+              folly::hash::hash_combine(hash, std::size_t{0}); // hash for null
+        }
+      }
+      return hash;
+    }
+  };
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<velox::Map<Array<Varchar>, int>>& out,
+      arg_type<velox::Array<Array<Varchar>>> inputArray) {
+    frequencyCount_.clear();
+
+    // Count frequencies using hashable keys
+    for (const auto& item : inputArray.skipNulls()) {
+      ArrayVarcharKey key(item);
+      frequencyCount_[key]++;
+    }
+
+    // Generate output in deterministic order based on input array
+    for (const auto& item : inputArray.skipNulls()) {
+      ArrayVarcharKey key(item);
+      auto it = frequencyCount_.find(key);
+      if (it != frequencyCount_.end()) {
+        auto [keyWriter, valueWriter] = out.add_item();
+        // Use copy_from to properly handle string buffer management
+        keyWriter.copy_from(item);
+        valueWriter = it->second;
+        frequencyCount_.erase(it);
+      }
+    }
+  }
+
+ private:
+  folly::F14FastMap<ArrayVarcharKey, int, ArrayVarcharKeyHasher>
+      frequencyCount_;
+};
+
 template <typename TExecParams, typename T>
 struct ArrayNormalizeFunction {
   VELOX_DEFINE_FUNCTION_TYPES(TExecParams);
