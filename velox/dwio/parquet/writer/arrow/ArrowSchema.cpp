@@ -346,14 +346,6 @@ static Status GetTimestampMetadata(
 
 static constexpr char FIELD_ID_KEY[] = "PARQUET:field_id";
 
-std::shared_ptr<::arrow::KeyValueMetadata> FieldIdMetadata(int field_id) {
-  if (field_id >= 0) {
-    return ::arrow::key_value_metadata({FIELD_ID_KEY}, {ToChars(field_id)});
-  } else {
-    return nullptr;
-  }
-}
-
 int FieldIdFromMetadata(
     const std::shared_ptr<const ::arrow::KeyValueMetadata>& metadata) {
   if (!metadata) {
@@ -676,7 +668,7 @@ Status GroupToStruct(
       node.name(),
       struct_type,
       node.is_optional(),
-      FieldIdMetadata(node.field_id()));
+      fieldIdMetadata(node.field_id()));
   out->level_info = current_levels;
   return Status::OK();
 }
@@ -761,14 +753,14 @@ Status MapToSchemaField(
       group.name(),
       ::arrow::struct_({key_field->field, value_field->field}),
       /*nullable=*/false,
-      FieldIdMetadata(key_value.field_id()));
+      fieldIdMetadata(key_value.field_id()));
   key_value_field->level_info = current_levels;
 
   out->field = ::arrow::field(
       group.name(),
       std::make_shared<::arrow::MapType>(key_value_field->field),
       group.is_optional(),
-      FieldIdMetadata(group.field_id()));
+      fieldIdMetadata(group.field_id()));
   out->level_info = current_levels;
   // At this point current levels contains the def level for this list,
   // we need to reset to the prior parent.
@@ -854,7 +846,7 @@ Status ListToSchemaField(
         list_node.name(),
         type,
         /*nullable=*/false,
-        FieldIdMetadata(list_node.field_id()));
+        fieldIdMetadata(list_node.field_id()));
     RETURN_NOT_OK(PopulateLeaf(
         column_index, item_field, current_levels, ctx, out, child_field));
   }
@@ -862,7 +854,7 @@ Status ListToSchemaField(
       group.name(),
       ::arrow::list(child_field->field),
       group.is_optional(),
-      FieldIdMetadata(group.field_id()));
+      fieldIdMetadata(group.field_id()));
   out->level_info = current_levels;
   // At this point current levels contains the def level for this list,
   // we need to reset to the prior parent.
@@ -898,7 +890,7 @@ Status GroupToSchemaField(
         node.name(),
         ::arrow::list(out->children[0].field),
         /*nullable=*/false,
-        FieldIdMetadata(node.field_id()));
+        fieldIdMetadata(node.field_id()));
 
     ctx->LinkParent(&out->children[0], out);
     out->level_info = current_levels;
@@ -961,7 +953,7 @@ Status NodeToSchemaField(
           node.name(),
           ::arrow::list(child_field),
           /*nullable=*/false,
-          FieldIdMetadata(node.field_id()));
+          fieldIdMetadata(node.field_id()));
       out->level_info = current_levels;
       // At this point current_levels has consider this list the ancestor so
       // restore the actual ancestor.
@@ -976,7 +968,7 @@ Status NodeToSchemaField(
               node.name(),
               type,
               node.is_optional(),
-              FieldIdMetadata(node.field_id())),
+              fieldIdMetadata(node.field_id())),
           current_levels,
           ctx,
           parent,
@@ -1222,6 +1214,14 @@ Result<bool> ApplyOriginalMetadata(
 }
 
 } // namespace
+
+std::shared_ptr<::arrow::KeyValueMetadata> fieldIdMetadata(int field_id) {
+  if (field_id >= 0) {
+    return ::arrow::key_value_metadata({FIELD_ID_KEY}, {ToChars(field_id)});
+  } else {
+    return nullptr;
+  }
+}
 
 Status FieldToNode(
     const std::shared_ptr<Field>& field,
