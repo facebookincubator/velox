@@ -140,6 +140,7 @@ jobs:
           else
             head_main=$INPUT_REF
           fi
+          echo "Test of different actor: ${{ github.actor }}"
           echo "Determined SHA: $head_main"
           echo "head_main=$head_main" >> $GITHUB_OUTPUT
 
