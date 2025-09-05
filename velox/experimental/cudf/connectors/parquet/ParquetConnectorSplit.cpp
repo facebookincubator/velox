@@ -22,7 +22,7 @@ namespace facebook::velox::cudf_velox::connector::parquet {
 
 namespace {
 std::string stripFilePrefix(const std::string& targetPath) {
-  const std::string prefix = "file://";
+  const std::string prefix = "file:";
   if (targetPath.rfind(prefix, 0) == 0) {
     return targetPath.substr(prefix.length());
   }
