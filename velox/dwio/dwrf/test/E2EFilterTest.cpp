@@ -242,6 +242,7 @@ TEST_F(E2EFilterTest, floatAndDouble) {
 }
 
 TEST_F(E2EFilterTest, stringDirect) {
+#ifdef __AVX2__
   testutil::TestValue::enable();
   bool coverage[2][2]{};
   SCOPED_TESTVALUE_SET(
@@ -268,9 +269,13 @@ TEST_F(E2EFilterTest, stringDirect) {
   ASSERT_TRUE(coverage[1][0]);
   ASSERT_TRUE(coverage[1][1]);
 #endif
+#else
+  GTEST_SKIP() << "Skipping test until supporting non-AVX2 machine can also pass the unit test";
+#endif
 }
 
 TEST_F(E2EFilterTest, stringDictionary) {
+#ifdef __AVX2__
   testWithTypes(
       "string_val:string,"
       "string_val_2:string",
@@ -283,6 +288,9 @@ TEST_F(E2EFilterTest, stringDictionary) {
       20,
       true,
       true);
+#else
+  GTEST_SKIP() << "Skipping test until supporting non-AVX2 machine can also pass the unit test";
+#endif
 }
 
 TEST_F(E2EFilterTest, timestamp) {
