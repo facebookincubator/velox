@@ -150,6 +150,30 @@ struct PlanSummaryOptions {
   };
 
   AggregateOptions aggregate = {};
+
+  // Options that apply specifically to FILTER nodes.
+  struct FilterOptions {
+    size_t maxConditions = 50;
+  };
+
+  FilterOptions filter = {};
+
+  // Options that apply specifically to TABLESCAN nodes.
+  struct TableScanOptions {
+    size_t maxConditions = 50;
+  };
+
+  TableScanOptions tableScan = {};
+
+  // Options for Velox stats reporting.
+  struct VeloxStatsOptions {
+    bool includeInputStats = false;
+    bool includeRuntimeStats = false;
+  };
+
+  VeloxStatsOptions veloxStats = {};
+
+  bool shouldPrintFullSummary = false;
 };
 
 class PlanNode : public ISerializable {
