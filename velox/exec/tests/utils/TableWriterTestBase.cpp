@@ -672,36 +672,36 @@ PlanNodePtr TableWriterTestBase::createInsertPlanForBucketTable(
     std::optional<ColumnStatsSpec> columnStatsSpec) {
   // Since we might do column rename, so generate bucket property based on
   // the data type from 'inputPlan'.
-  std::vector<std::string> bucketColumns;
-  bucketColumns.reserve(bucketProperty->bucketedBy().size());
+  std::vector<std::string> bucketColumns(bucketProperty->bucketedBy().size());
+  std::vector<column_index_t> bucketChannels(
+      bucketProperty->bucketedBy().size());
   for (int i = 0; i < bucketProperty->bucketedBy().size(); ++i) {
-    bucketColumns.push_back(inputRowType->names()[tableRowType->getChildIdx(
-        bucketProperty->bucketedBy()[i])]);
+    auto index = tableRowType->getChildIdx(bucketProperty->bucketedBy()[i]);
+    bucketColumns.push_back(inputRowType->names()[index]);
+    bucketChannels.push_back(index);
   }
-  auto localPartitionBucketProperty = std::make_shared<HiveBucketProperty>(
-      bucketProperty->kind(),
-      bucketProperty->bucketCount(),
-      bucketColumns,
-      bucketProperty->bucketedTypes(),
-      bucketProperty->sortedBy());
-  auto insertPlan =
-      inputPlan.localPartitionByBucket(localPartitionBucketProperty)
-          .addNode(addTableWriter(
-              inputRowType,
-              tableRowType->names(),
-              std::nullopt,
-              createInsertTableHandle(
-                  tableRowType,
-                  outputTableType,
-                  outputDirectoryPath,
-                  partitionedBy,
-                  bucketProperty,
-                  compressionKind),
-              false,
-              outputCommitStrategy))
-          .capturePlanNodeId(tableWriteNodeId_)
-          .localPartition({})
-          .tableWriteMerge();
+
+  auto insertPlan = inputPlan
+                        .localPartition(
+                            bucketProperty->bucketCount(),
+                            bucketChannels,
+                            std::vector<VectorPtr>{})
+                        .addNode(addTableWriter(
+                            inputRowType,
+                            tableRowType->names(),
+                            std::nullopt,
+                            createInsertTableHandle(
+                                tableRowType,
+                                outputTableType,
+                                outputDirectoryPath,
+                                partitionedBy,
+                                bucketProperty,
+                                compressionKind),
+                            false,
+                            outputCommitStrategy))
+                        .capturePlanNodeId(tableWriteNodeId_)
+                        .localPartition({})
+                        .tableWriteMerge();
   if (aggregateResult) {
     insertPlan.project({TableWriteTraits::rowCountColumnName()})
         .singleAggregation(

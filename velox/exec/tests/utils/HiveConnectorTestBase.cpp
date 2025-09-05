@@ -19,6 +19,7 @@
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/file/tests/FaultyFileSystem.h"
 #include "velox/connectors/hive/HiveConnector.h"
+#include "velox/connectors/hive/HiveObjectFactory.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/dwio/dwrf/RegisterDwrfReader.h"
 #include "velox/dwio/dwrf/RegisterDwrfWriter.h"
@@ -38,6 +39,8 @@ void HiveConnectorTestBase::SetUp() {
   OperatorTestBase::SetUp();
   connector::registerConnectorFactory(
       std::make_shared<connector::hive::HiveConnectorFactory>());
+  connector::registerConnectorObjectFactory(
+      std::make_shared<connector::hive::HiveObjectFactory>(pool_));
   auto hiveConnector =
       connector::getConnectorFactory(
           connector::hive::HiveConnectorFactory::kHiveConnectorName)

@@ -102,6 +102,7 @@ class S3MultipleEndpoints : public S3Test, public ::test::VectorTestBase {
                         0,
                         {},
                         {},
+                        {},
                         dwio::common::FileFormat::PARQUET,
                         {},
                         connectorId)
