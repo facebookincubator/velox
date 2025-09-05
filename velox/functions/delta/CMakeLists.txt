@@ -18,7 +18,7 @@ velox_link_libraries(
   velox_functions_delta_impl
   velox_common_base
   velox_functions_lib
-  velox_expressionp
+  velox_expression
   velox_functions_util
   Folly::folly
   Roaring::roaring
