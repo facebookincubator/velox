@@ -1113,6 +1113,10 @@ class AggregationNode : public PlanNode {
     /// aggregating.
     bool distinct{false};
 
+    /// Indicates whether the result type is resolvable from the intermediate
+    /// type.
+    bool resultTypeResolvable{true};
+
     folly::dynamic serialize() const;
 
     static Aggregate deserialize(const folly::dynamic& obj, void* context);

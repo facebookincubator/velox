@@ -26,6 +26,7 @@
 #include "velox/common/testutil/TestValue.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/Aggregate.h"
+#include "velox/exec/AggregateCompanionSignatures.h"
 #include "velox/exec/GroupingSet.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/PrefixSort.h"
@@ -548,6 +549,92 @@ TEST_F(AggregationTest, missingLambdaFunction) {
   params.planNode = plan;
   VELOX_ASSERT_THROW(
       readCursor(params), "Aggregate function not registered: missing-lambda");
+}
+
+TEST_F(AggregationTest, companionWithUnresolvableType) {
+  const std::string kFunctionName = "test_aggregate";
+  auto inputType = DECIMAL(18, 6);
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3}, inputType),
+  });
+
+  registerAggregateFunction(
+      kFunctionName,
+      {AggregateFunctionSignatureBuilder()
+           .integerVariable("a_precision")
+           .integerVariable("a_scale")
+           .integerVariable("i_precision", "min(38, a_precision + 10)")
+           .integerVariable("r_precision", "min(38, a_precision + 4)")
+           .integerVariable("r_scale", "min(38, a_scale + 4)")
+           .argumentType("DECIMAL(a_precision, a_scale)")
+           .intermediateType("ROW(DECIMAL(i_precision, a_scale), bigint)")
+           .returnType("DECIMAL(r_precision, r_scale)")
+           .build()},
+      [&](core::AggregationNode::Step /*step*/,
+          const std::vector<TypePtr>& /*argTypes*/,
+          const TypePtr& /*resultType*/,
+          const core::QueryConfig& /*config*/)
+          -> std::unique_ptr<exec::Aggregate> { VELOX_NYI("Unimplemented"); },
+      /*registerCompanionFunctions=*/true,
+      /*overwrite=*/true);
+
+  auto makePlan = [&](const core::CallTypedExprPtr& aggExpr) {
+    return PlanBuilder()
+        .values({data})
+        .addNode([&](auto nodeId, auto source) -> core::PlanNodePtr {
+          std::vector<TypePtr> rawInputTypes;
+          for (const auto& input : aggExpr->inputs()) {
+            rawInputTypes.push_back(input->type());
+          }
+
+          std::vector<core::AggregationNode::Aggregate> aggregates{
+              {aggExpr,
+               rawInputTypes,
+               nullptr,
+               {},
+               {},
+               /*distinct=*/false,
+               /*resultTypeResolvable=*/false}};
+
+          return std::make_shared<core::AggregationNode>(
+              nodeId,
+              core::AggregationNode::Step::kFinal,
+              std::vector<core::FieldAccessTypedExprPtr>{},
+              std::vector<core::FieldAccessTypedExprPtr>{},
+              std::vector<std::string>{"agg"},
+              aggregates,
+              false,
+              std::move(source));
+        })
+        .planNode();
+  };
+
+  CursorParameters params;
+  auto intermediateType = ROW({"c0", "c1"}, {DECIMAL(28, 6), BIGINT()});
+  std::vector<core::TypedExprPtr> inputs = {
+      std::make_shared<core::FieldAccessTypedExpr>(DECIMAL(18, 6), "c0")};
+  params.planNode = makePlan(std::make_shared<core::CallTypedExpr>(
+      intermediateType,
+      inputs,
+      CompanionSignatures::partialFunctionName(kFunctionName)));
+  VELOX_ASSERT_THROW(readCursor(params), "Unimplemented");
+
+  inputs = {
+      std::make_shared<core::FieldAccessTypedExpr>(intermediateType, "c0")};
+  params.planNode = makePlan(std::make_shared<core::CallTypedExpr>(
+      intermediateType,
+      inputs,
+      CompanionSignatures::mergeFunctionName(kFunctionName)));
+  VELOX_ASSERT_THROW(readCursor(params), "Unimplemented");
+
+  auto resultType = DECIMAL(22, 10);
+  inputs = {
+      std::make_shared<core::FieldAccessTypedExpr>(intermediateType, "c0")};
+  params.planNode = makePlan(std::make_shared<core::CallTypedExpr>(
+      resultType,
+      inputs,
+      CompanionSignatures::mergeExtractFunctionName(kFunctionName)));
+  VELOX_ASSERT_THROW(readCursor(params), "Unimplemented");
 }
 
 TEST_F(AggregationTest, DISABLED_resultTypeMismatch) {
