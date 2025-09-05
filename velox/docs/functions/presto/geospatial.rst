@@ -73,6 +73,28 @@ Geometry Constructors
 
     Returns a geometry type polygon object from WKT representation.
 
+.. function:: ST_LineFromText(wkt: varchar) -> linestring: Geometry
+
+    Returns a geometry type linestring object from WKT representation.
+    An error is returned if the input WKT represents a valid non-LineString
+    geometry. Null input returns null output.
+
+.. function:: ST_LineString(points: array(Geometry)) -> linestring: Geometry
+
+    Returns a LineString formed from an array of points. If there are fewer
+    than two non-empty points in the input array, an empty LineString will
+    be returned. Throws an exception if any element in the array is null or
+    empty or same as the previous one. The returned geometry may not be simple,
+    e.g. may self-intersect or may contain duplicate vertexes depending on the
+    input.
+
+.. function:: ST_MultiPoint(points: array(Geometry)) -> multipoint: Geometry
+
+    Returns a MultiPoint geometry object formed from the specified points.
+    Return null if input array is empty. Throws an exception if any element
+    in the array is null or empty. The returned geometry may not be simple
+    and may contain duplicate points if input array has duplicates.
+
 Spatial Predicates
 ------------------
 
