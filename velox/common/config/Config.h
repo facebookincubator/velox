@@ -23,6 +23,7 @@
 
 #include "folly/Conv.h"
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/config/IConfig.h"
 
 namespace facebook::velox::config {
 
@@ -47,7 +48,7 @@ std::chrono::duration<double> toDuration(const std::string& str);
 
 /// The concrete config class should inherit the config base and define all the
 /// entries.
-class ConfigBase {
+class ConfigBase : public IConfig {
  public:
   template <typename T>
   struct Entry {
@@ -111,6 +112,8 @@ class ConfigBase {
                                   : entry.defaultVal;
   }
 
+  std::optional<std::any> Get(const std::string& key) const override;
+
   template <typename T>
   std::optional<T> get(
       const std::string& key,
@@ -118,7 +121,7 @@ class ConfigBase {
                                                           auto value) {
         return folly::to<T>(value);
       }) const {
-    auto val = get(key);
+    auto val = getValue(key);
     if (val.has_value()) {
       return toT(key, val.value());
     } else {
@@ -134,7 +137,7 @@ class ConfigBase {
                                                           auto value) {
         return folly::to<T>(value);
       }) const {
-    auto val = get(key);
+    auto val = getValue(key);
     if (val.has_value()) {
       return toT(key, val.value());
     } else {
@@ -144,16 +147,17 @@ class ConfigBase {
 
   bool valueExists(const std::string& key) const;
 
-  const std::unordered_map<std::string, std::string>& rawConfigs() const;
+  bool Has(const std::string& key) const override;
 
-  std::unordered_map<std::string, std::string> rawConfigsCopy() const;
+  const std::unordered_map<std::string, std::string>& rawConfigs() const;
+  std::unordered_map<std::string, std::string> rawConfigsCopy() const override;
 
  protected:
   mutable std::shared_mutex mutex_;
   std::unordered_map<std::string, std::string> configs_;
 
  private:
-  std::optional<std::string> get(const std::string& key) const;
+  std::optional<std::string> getValue(const std::string& key) const;
 
   const bool mutable_;
 };

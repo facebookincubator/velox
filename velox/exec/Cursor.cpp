@@ -152,7 +152,7 @@ class TaskCursorBase : public TaskCursor {
       static std::atomic<uint64_t> cursorQueryId{0};
       queryCtx_ = core::QueryCtx::create(
           executor_.get(),
-          core::QueryConfig({}),
+          core::QueryConfig(),
           std::
               unordered_map<std::string, std::shared_ptr<config::ConfigBase>>{},
           cache::AsyncDataCache::getInstance(),
