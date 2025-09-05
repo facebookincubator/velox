@@ -47,6 +47,7 @@ target_link_libraries(
   velox_dwio_parquet_writer
   velox_dwio_parquet_reader
   velox_dwio_common_test_utils
+  velox_dwio_arrow_parquet_writer_test_lib
   velox_caching
   velox_link_libs
   Boost::regex
