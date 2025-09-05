@@ -16,6 +16,7 @@
 
 #include <string>
 
+#include "velox/expression/ExprRewriteRegistry.h"
 #include "velox/functions/Registerer.h"
 #include "velox/functions/lib/ArrayRemoveNullFunction.h"
 #include "velox/functions/lib/ArrayShuffle.h"
@@ -167,7 +168,7 @@ void registerArrayFunctions(const std::string& prefix) {
 
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_flatten, prefix + "flatten");
 
-  exec::registerExpressionRewrite([prefix](const auto& expr) {
+  expression::registerRewrite([prefix](const auto& expr) {
     return rewriteArraySortCall(prefix, expr);
   });
 
