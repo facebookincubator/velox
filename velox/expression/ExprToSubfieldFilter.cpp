@@ -17,6 +17,7 @@
 #include "velox/expression/ExprToSubfieldFilter.h"
 
 #include "velox/expression/Expr.h"
+#include "velox/expression/ExprConstants.h"
 
 using namespace facebook::velox;
 
@@ -513,11 +514,11 @@ PrestoExprToSubfieldFilterParser::leafCallToSubfieldFilter(
       return makeBetweenFilter(
           call.inputs()[1], call.inputs()[2], evaluator, negated);
     }
-  } else if (call.name() == "in") {
+  } else if (call.name() == expression::kIn) {
     if (toSubfield(leftSide, subfield)) {
       return makeInFilter(call.inputs()[1], evaluator, negated);
     }
-  } else if (call.name() == "is_null") {
+  } else if (call.name() == expression::kIsNull) {
     if (toSubfield(leftSide, subfield)) {
       if (negated) {
         return isNotNull();
@@ -532,7 +533,7 @@ std::pair<common::Subfield, std::unique_ptr<common::Filter>> toSubfieldFilter(
     const core::TypedExprPtr& expr,
     core::ExpressionEvaluator* evaluator) {
   if (auto call = asCall(expr.get())) {
-    if (call->name() == "or") {
+    if (call->name() == expression::kOr) {
       auto left = toSubfieldFilter(call->inputs()[0], evaluator);
       auto right = toSubfieldFilter(call->inputs()[1], evaluator);
       VELOX_CHECK(left.first == right.first);
