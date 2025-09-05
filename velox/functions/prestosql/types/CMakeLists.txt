@@ -11,20 +11,28 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+add_subdirectory(parser)
 velox_add_library(
   velox_presto_types
+  BigintEnumRegistration.cpp
+  BigintEnumType.cpp
   BingTileRegistration.cpp
   BingTileType.cpp
+  EnumTypeBase.cpp
   HyperLogLogRegistration.cpp
   IPAddressRegistration.cpp
   IPPrefixRegistration.cpp
   JsonCastOperator.cpp
   JsonRegistration.cpp
+  QDigestRegistration.cpp
   SfmSketchRegistration.cpp
   TDigestRegistration.cpp
-  QDigestRegistration.cpp
   TimestampWithTimeZoneRegistration.cpp
-  UuidRegistration.cpp)
+  UuidRegistration.cpp
+  VarcharEnumRegistration.cpp
+  VarcharEnumType.cpp
+)
 if(VELOX_ENABLE_GEO)
   velox_sources(velox_presto_types PRIVATE GeometryRegistration.cpp)
 endif()
@@ -38,7 +46,8 @@ velox_link_libraries(
   velox_functions_json
   velox_functions_lib_date_time_formatter
   velox_constrained_input_generators
-  velox_presto_types_fuzzer_utils)
+  velox_presto_types_fuzzer_utils
+)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)

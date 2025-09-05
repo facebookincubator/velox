@@ -19,7 +19,7 @@
 #include "velox/functions/lib/QuantileDigest.h"
 #include "velox/functions/lib/TDigest.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
-#include "velox/functions/prestosql/aggregates/sfm/SfmSketch.h"
+#include "velox/functions/lib/sfm/SfmSketch.h"
 #include "velox/functions/prestosql/types/QDigestRegistration.h"
 #include "velox/functions/prestosql/types/QDigestType.h"
 #include "velox/functions/prestosql/types/SfmSketchRegistration.h"
@@ -31,7 +31,7 @@ using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::functions::aggregate::test;
 using namespace facebook::velox::functions::qdigest;
-using SfmSketchIn = facebook::velox::functions::aggregate::SfmSketch;
+using SfmSketchIn = facebook::velox::functions::sfm::SfmSketch;
 
 namespace facebook::velox::aggregate::test {
 namespace {
@@ -159,9 +159,7 @@ class MergeAggregateTest : public AggregationTestBase {
     auto fieldAccess =
         std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c0");
     auto fromBase64 = std::make_shared<core::CallTypedExpr>(
-        VARBINARY(),
-        std::vector<core::TypedExprPtr>{fieldAccess},
-        "from_base64");
+        VARBINARY(), "from_base64", fieldAccess);
     auto castToDigest =
         std::make_shared<core::CastTypedExpr>(digestType, fromBase64, true);
     auto aggResultAccess =
@@ -169,9 +167,7 @@ class MergeAggregateTest : public AggregationTestBase {
     auto castToVarbinary = std::make_shared<core::CastTypedExpr>(
         VARBINARY(), aggResultAccess, true);
     auto toBase64 = std::make_shared<core::CallTypedExpr>(
-        VARCHAR(),
-        std::vector<core::TypedExprPtr>{castToVarbinary},
-        "to_base64");
+        VARCHAR(), "to_base64", castToVarbinary);
 
     return PlanBuilder()
         .values({input})
@@ -341,7 +337,7 @@ TEST_F(MergeAggregateTest, mergeQDigestOneNullMatchJava) {
 
 TEST_F(MergeAggregateTest, mergeSfmSketch) {
   registerSfmSketchType();
-  using SfmSketch = functions::aggregate::SfmSketch;
+  using SfmSketch = functions::sfm::SfmSketch;
   HashStringAllocator allocator_{pool_.get()};
 
   // non-private sketch1: values [1, 2, 3]

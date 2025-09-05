@@ -139,6 +139,11 @@ class QueryConfig {
   static constexpr const char* kLocalExchangePartitionBufferPreserveEncoding =
       "local_exchange_partition_buffer_preserve_encoding";
 
+  /// Maximum number of vectors buffered in each local merge source before
+  /// blocking to wait for consumers.
+  static constexpr const char* kLocalMergeSourceQueueSize =
+      "local_merge_source_queue_size";
+
   /// Maximum size in bytes to accumulate in ExchangeQueue. Enforced
   /// approximately, not strictly.
   static constexpr const char* kMaxExchangeBufferSize =
@@ -364,6 +369,13 @@ class QueryConfig {
   static constexpr const char* kPrestoArrayAggIgnoreNulls =
       "presto.array_agg.ignore_nulls";
 
+  /// If true, Spark function's behavior is ANSI-compliant, e.g. throws runtime
+  /// exception instead of returning null on invalid inputs.
+  /// Note: This feature is still under development to achieve full ANSI
+  /// compliance. Users can refer to the Spark function documentation to verify
+  /// the current support status of a specific function.
+  static constexpr const char* kSparkAnsiEnabled = "spark.ansi_enabled";
+
   /// The default number of expected items for the bloomfilter.
   static constexpr const char* kSparkBloomFilterExpectedNumItems =
       "spark.bloom_filter.expected_num_items";
@@ -523,9 +535,18 @@ class QueryConfig {
   static constexpr const char* kDebugMemoryPoolNameRegex =
       "debug_memory_pool_name_regex";
 
+  /// Warning threshold in bytes for debug memory pools. When set to a
+  /// non-zero value, a warning will be logged once per memory pool when
+  /// allocations cause the pool to exceed this threshold. This is useful for
+  /// identifying memory usage patterns during debugging. Requires allocation
+  /// tracking to be enabled via `debug_memory_pool_name_regex` for the pool. A
+  /// value of 0 means no warning threshold is enforced.
+  static constexpr const char* kDebugMemoryPoolWarnThresholdBytes =
+      "debug_memory_pool_warn_threshold_bytes";
+
   /// Some lambda functions over arrays and maps are evaluated in batches of the
   /// underlying elements that comprise the arrays/maps. This is done to make
-  /// the batch size managable as array vectors can have thousands of elements
+  /// the batch size manageable as array vectors can have thousands of elements
   /// each and hit scaling limits as implementations typically expect
   /// BaseVectors to a couple of thousand entries. This lets up tune those batch
   /// sizes.
@@ -695,6 +716,12 @@ class QueryConfig {
     return get<std::string>(kDebugMemoryPoolNameRegex, "");
   }
 
+  uint64_t debugMemoryPoolWarnThresholdBytes() const {
+    return config::toCapacity(
+        get<std::string>(kDebugMemoryPoolWarnThresholdBytes, "0B"),
+        config::CapacityUnit::BYTE);
+  }
+
   std::optional<uint32_t> debugAggregationApproxPercentileFixedRandomSeed()
       const {
     return get<uint32_t>(kDebugAggregationApproxPercentileFixedRandomSeed);
@@ -794,6 +821,10 @@ class QueryConfig {
   bool localExchangePartitionBufferPreserveEncoding() const {
     /// Trying to preserve encoding can be expensive. Disabled by default.
     return get<bool>(kLocalExchangePartitionBufferPreserveEncoding, false);
+  }
+
+  uint32_t localMergeSourceQueueSize() const {
+    return get<uint32_t>(kLocalMergeSourceQueueSize, 2);
   }
 
   uint64_t maxExchangeBufferSize() const {
@@ -1016,6 +1047,10 @@ class QueryConfig {
 
   bool prestoArrayAggIgnoreNulls() const {
     return get<bool>(kPrestoArrayAggIgnoreNulls, false);
+  }
+
+  bool sparkAnsiEnabled() const {
+    return get<bool>(kSparkAnsiEnabled, false);
   }
 
   int64_t sparkBloomFilterExpectedNumItems() const {

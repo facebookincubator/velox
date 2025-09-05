@@ -26,6 +26,7 @@
 #include "velox/common/file/tests/FaultyFileSystem.h"
 #include "velox/common/memory/MemoryArbitrator.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/exec/Exchange.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/TableScan.h"
@@ -40,6 +41,7 @@
 #include <fmt/ranges.h>
 
 using namespace facebook::velox;
+using namespace facebook::velox::connector;
 using namespace facebook::velox::core;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
@@ -180,21 +182,61 @@ TEST_F(TableScanTest, allColumns) {
 
   createDuckDbTable(vectors);
   auto plan = tableScanNode();
-  auto task = assertQuery(plan, {filePath}, "SELECT * FROM tmp");
 
-  // A quick sanity check for memory usage reporting. Check that peak total
-  // memory usage for the project node is > 0.
-  auto planStats = toPlanStats(task->taskStats());
-  auto scanNodeId = plan->id();
-  auto it = planStats.find(scanNodeId);
-  ASSERT_TRUE(it != planStats.end());
-  ASSERT_TRUE(it->second.peakMemoryBytes > 0);
+  const std::string duckDbSql = "SELECT * FROM tmp";
 
-  //  Verifies there is no dynamic filter stats.
-  ASSERT_TRUE(it->second.dynamicFilterStats.empty());
+  // Helper to test scan all columns for the given splits
+  auto testScanAllColumns =
+      [&](const std::vector<std::shared_ptr<
+              facebook::velox::connector::ConnectorSplit>>& splits) {
+        auto task = AssertQueryBuilder(duckDbQueryRunner_)
+                        .plan(plan)
+                        .splits(splits)
+                        .assertResults(duckDbSql);
 
-  // TODO: We are not writing any customStats yet so disable this check
-  // ASSERT_LT(0, it->second.customStats.at("ioWaitWallNanos").sum);
+        // A quick sanity check for memory usage reporting. Check that peak
+        // total memory usage for the project node is > 0.
+        auto planStats = toPlanStats(task->taskStats());
+        auto scanNodeId = plan->id();
+        auto it = planStats.find(scanNodeId);
+        ASSERT_TRUE(it != planStats.end());
+        ASSERT_TRUE(it->second.peakMemoryBytes > 0);
+
+        //  Verifies there is no dynamic filter stats.
+        ASSERT_TRUE(it->second.dynamicFilterStats.empty());
+
+        // TODO: We are not writing any customStats yet so disable this check
+        // ASSERT_LT(0, it->second.customStats.at("ioWaitWallNanos").sum);
+      };
+
+  // Test scan all columns with ParquetConnectorSplits
+  {
+    auto splits = makeParquetConnectorSplits({filePath});
+    testScanAllColumns(splits);
+  }
+
+  // Test scan all columns with HiveConnectorSplits
+  {
+    // Lambda to create HiveConnectorSplits from file paths
+    auto makeHiveConnectorSplits =
+        [&](const std::vector<std::shared_ptr<
+                facebook::velox::exec::test::TempFilePath>>& filePaths) {
+          std::vector<
+              std::shared_ptr<facebook::velox::connector::ConnectorSplit>>
+              splits;
+          for (const auto& filePath : filePaths) {
+            splits.push_back(
+                hive::HiveConnectorSplitBuilder(filePath->getPath())
+                    .connectorId(kParquetConnectorId)
+                    .fileFormat(dwio::common::FileFormat::PARQUET)
+                    .build());
+          }
+          return splits;
+        };
+
+    auto splits = makeHiveConnectorSplits({filePath});
+    testScanAllColumns(splits);
+  }
 }
 
 TEST_F(TableScanTest, skipRowsNumRows) {
@@ -329,27 +371,18 @@ TEST_F(TableScanTest, filterPushdown) {
   // c1 >= 0 or null and c3 is true
   auto c1Expr = std::make_shared<core::CallTypedExpr>(
       BOOLEAN(),
-      std::vector<core::TypedExprPtr>{
-          std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "c1"),
-          std::make_shared<core::ConstantTypedExpr>(BIGINT(), int64_t(0)),
-      },
-      "gte");
+      "gte",
+      std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "c1"),
+      std::make_shared<core::ConstantTypedExpr>(BIGINT(), int64_t(0)));
 
   auto c3Expr = std::make_shared<core::CallTypedExpr>(
       BOOLEAN(),
-      std::vector<core::TypedExprPtr>{
-          std::make_shared<core::FieldAccessTypedExpr>(BOOLEAN(), "c3"),
-          std::make_shared<core::ConstantTypedExpr>(BOOLEAN(), true),
-      },
-      "eq");
+      "eq",
+      std::make_shared<core::FieldAccessTypedExpr>(BOOLEAN(), "c3"),
+      std::make_shared<core::ConstantTypedExpr>(BOOLEAN(), true));
 
-  auto subfieldFilterExpr = std::make_shared<core::CallTypedExpr>(
-      BOOLEAN(),
-      std::vector<core::TypedExprPtr>{
-          c1Expr,
-          c3Expr,
-      },
-      "and");
+  auto subfieldFilterExpr =
+      std::make_shared<core::CallTypedExpr>(BOOLEAN(), "and", c1Expr, c3Expr);
   auto tableHandle = makeTableHandle(
       "parquet_table", rowType, true, std::move(subfieldFilterExpr), nullptr);
 

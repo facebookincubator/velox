@@ -456,8 +456,8 @@ TEST_F(AggregationTest, missingFunctionOrSignature) {
       BIGINT(), inputs, "missing-function");
   auto wrongInputTypes =
       std::make_shared<core::CallTypedExpr>(BIGINT(), inputs, "test_aggregate");
-  auto missingInputs = std::make_shared<core::CallTypedExpr>(
-      BIGINT(), std::vector<core::TypedExprPtr>{}, "test_aggregate");
+  auto missingInputs =
+      std::make_shared<core::CallTypedExpr>(BIGINT(), "test_aggregate");
 
   auto makePlan = [&](const core::CallTypedExprPtr& aggExpr) {
     return PlanBuilder()
@@ -518,9 +518,7 @@ TEST_F(AggregationTest, missingLambdaFunction) {
       std::make_shared<core::LambdaTypedExpr>(
           ROW({"a", "b"}, {BIGINT(), BIGINT()}),
           std::make_shared<core::CallTypedExpr>(
-              BIGINT(),
-              std::vector<core::TypedExprPtr>{field("a"), field("b")},
-              "multiply")),
+              BIGINT(), "multiply", field("a"), field("b"))),
   };
 
   auto plan = PlanBuilder()
@@ -1982,10 +1980,10 @@ DEBUG_ONLY_TEST_F(AggregationTest, minSpillableMemoryReservation) {
         "facebook::velox::exec::GroupingSet::addInputForActiveRows",
         std::function<void(exec::GroupingSet*)>(
             ([&](exec::GroupingSet* groupingSet) {
-              memory::MemoryPool& pool = groupingSet->testingPool();
+              memory::MemoryPool* pool = groupingSet->testingPool();
               const auto availableReservationBytes =
-                  pool.availableReservation();
-              const auto currentUsedBytes = pool.usedBytes();
+                  pool->availableReservation();
+              const auto currentUsedBytes = pool->usedBytes();
               // Verifies we always have min reservation after ensuring the
               // input.
               ASSERT_GE(
@@ -3029,7 +3027,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimDuringNonReclaimableSection) {
           if (!testData.nonReclaimableInput) {
             return;
           }
-          if (groupSet->testingPool().usedBytes() == 0) {
+          if (groupSet->testingPool()->usedBytes() == 0) {
             return;
           }
           if (!injectNonReclaimableSectionOnce.exchange(false)) {

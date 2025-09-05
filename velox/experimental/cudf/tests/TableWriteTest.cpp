@@ -57,15 +57,15 @@ constexpr uint64_t kQueryMemoryCapacity = 512 * MB;
 
 namespace {
 
-static std::shared_ptr<core::AggregationNode> generateAggregationNode(
+static std::shared_ptr<core::AggregationNode> generateColumnStatsSpec(
     const std::string& name,
     const std::vector<core::FieldAccessTypedExprPtr>& groupingKeys,
     AggregationNode::Step step,
     const PlanNodePtr& source) {
   core::TypedExprPtr inputField =
       std::make_shared<const core::FieldAccessTypedExpr>(BIGINT(), name);
-  auto callExpr = std::make_shared<const core::CallTypedExpr>(
-      BIGINT(), std::vector<core::TypedExprPtr>{inputField}, "min");
+  auto callExpr =
+      std::make_shared<const core::CallTypedExpr>(BIGINT(), "min", inputField);
   std::vector<std::string> aggregateNames = {"min"};
   std::vector<core::AggregationNode::Aggregate> aggregates = {
       core::AggregationNode::Aggregate{

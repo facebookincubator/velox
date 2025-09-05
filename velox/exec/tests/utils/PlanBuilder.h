@@ -29,6 +29,10 @@ namespace facebook::velox::tpch {
 enum class Table : uint8_t;
 }
 
+namespace facebook::velox::tpcds {
+enum class Table : uint8_t;
+}
+
 namespace facebook::velox::exec::test {
 
 struct PushdownConfig {
@@ -113,6 +117,8 @@ class PlanBuilder {
 
   static constexpr const std::string_view kHiveDefaultConnectorId{"test-hive"};
   static constexpr const std::string_view kTpchDefaultConnectorId{"test-tpch"};
+  static constexpr const std::string_view kTpcdsDefaultConnectorId{
+      "test-tpcds"};
 
   ///
   /// TableScan
@@ -200,6 +206,19 @@ class PlanBuilder {
       double scaleFactor = 1,
       std::string_view connectorId = kTpchDefaultConnectorId,
       const std::string& filter = "");
+
+  /// Add a TableScanNode to scan a TPC-DS table.
+  ///
+  /// @param tpcdsTableHandle The handle that specifies the target TPC-DS table
+  /// and scale factor.
+  /// @param columnNames The columns to be returned from that table.
+  /// @param scaleFactor The TPC-DS scale factor.
+  /// @param connectorId The TPC-DS connector id.
+  PlanBuilder& tpcdsTableScan(
+      tpcds::Table table,
+      std::vector<std::string> columnNames,
+      double scaleFactor = 0.01,
+      std::string_view connectorId = kTpcdsDefaultConnectorId);
 
   /// Helper class to build a custom TableScanNode.
   /// Uses a planBuilder instance to get the next plan id, memory pool, and
@@ -742,16 +761,15 @@ class PlanBuilder {
           connector::CommitStrategy::kNoCommit);
 
   /// Add a TableWriteMergeNode.
-  PlanBuilder& tableWriteMerge(
-      const core::AggregationNodePtr& aggregationNode = nullptr);
+  PlanBuilder& tableWriteMerge();
 
   /// Add an AggregationNode representing partial aggregation with the
   /// specified grouping keys, aggregates and optional masks.
   ///
-  /// Aggregates are specified as function calls over unmodified input columns,
-  /// e.g. sum(a), avg(b), min(c). SQL statement AS can be used to specify names
-  /// for the aggregation result columns. In the absence of AS statement, result
-  /// columns are named a0, a1, a2, etc.
+  /// Aggregates are specified as function calls over unmodified input
+  /// columns, e.g. sum(a), avg(b), min(c). SQL statement AS can be used to
+  /// specify names for the aggregation result columns. In the absence of AS
+  /// statement, result columns are named a0, a1, a2, etc.
   ///
   /// For example,
   ///
@@ -761,8 +779,8 @@ class PlanBuilder {
   ///
   ///     partialAggregation({"k1", "k2"}, {"min(a) AS min_a", "max(b)"})
   ///
-  /// will produce output columns k1, k2, min_a and a1, assuming the names of
-  /// the first two input columns are k1 and k2.
+  /// will produce output columns k1, k2, min_a and a1, assuming the names
+  /// of the first two input columns are k1 and k2.
   PlanBuilder& partialAggregation(
       const std::vector<std::string>& groupingKeys,
       const std::vector<std::string>& aggregates,
@@ -1192,6 +1210,21 @@ class PlanBuilder {
   /// right sides.
   PlanBuilder& nestedLoopJoin(
       const core::PlanNodePtr& right,
+      const std::vector<std::string>& outputLayout,
+      core::JoinType joinType = core::JoinType::kInner);
+
+  /// Add a SpatialJoinNode to join two inputs using spatial join condition.
+  ///
+  /// @param right Right-side input. Typically, to reduce memory usage, the
+  /// smaller input is placed on the right-side.
+  /// @param joinCondition SQL expression as the spatial join condition. Can
+  /// use columns from both probe and build sides of the join.
+  /// @param outputLayout Output layout consisting of columns from probe and
+  /// build sides.
+  /// @param joinType Type of the join: inner (only one supported for now
+  PlanBuilder& spatialJoin(
+      const core::PlanNodePtr& right,
+      const std::string& joinCondition,
       const std::vector<std::string>& outputLayout,
       core::JoinType joinType = core::JoinType::kInner);
 

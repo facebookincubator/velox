@@ -43,8 +43,8 @@ bool isColumnNameRequiringEscaping(const std::string& name) {
   return !RE2::FullMatch(name, re);
 }
 
-folly::F14FastMap<TypeKind, std::string> typeKindNames() {
-  static const folly::F14FastMap<TypeKind, std::string> kNames = {
+const auto& typeKindNames() {
+  static const folly::F14FastMap<TypeKind, std::string_view> kNames = {
       {TypeKind::BOOLEAN, "BOOLEAN"},
       {TypeKind::TINYINT, "TINYINT"},
       {TypeKind::SMALLINT, "SMALLINT"},
@@ -64,7 +64,6 @@ folly::F14FastMap<TypeKind, std::string> typeKindNames() {
       {TypeKind::OPAQUE, "OPAQUE"},
       {TypeKind::INVALID, "INVALID"},
   };
-
   return kNames;
 }
 } // namespace
@@ -104,7 +103,88 @@ namespace {
 std::vector<TypePtr> deserializeChildTypes(const folly::dynamic& obj) {
   return velox::ISerializable::deserialize<std::vector<Type>>(obj["cTypes"]);
 }
+
+template <typename TValue>
+folly::dynamic serializeEnumParam(
+    const std::string& name,
+    const std::unordered_map<std::string, TValue>& valuesMap) {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["enumName"] = name;
+  folly::dynamic follyMap = folly::dynamic::object;
+  for (const auto& [key, value] : valuesMap) {
+    follyMap[key] = value;
+  }
+  obj["valuesMap"] = follyMap;
+  return obj;
+}
+
+template <typename TValue>
+TypeParameter deserializeEnumParam(const folly::dynamic& obj) {
+  auto enumName = obj["enumName"].asString();
+  VELOX_CHECK(obj["valuesMap"].isObject());
+  auto valuesMap = obj["valuesMap"];
+
+  // Construct the values map
+  std::unordered_map<std::string, TValue> map;
+  for (const auto& item : valuesMap.items()) {
+    std::string key = item.first.asString();
+    if constexpr (std::is_same_v<TValue, int64_t>) {
+      int64_t value = item.second.asInt();
+      map.emplace(std::move(key), value);
+    } else if constexpr (std::is_same_v<TValue, std::string>) {
+      std::string value = item.second.asString();
+      map.emplace(std::move(key), std::move(value));
+    } else {
+      VELOX_UNREACHABLE(
+          "Only int64_t and std::string value types are supported for enum types.");
+    }
+  }
+
+  // Construct the corresponding TypeParameter
+  if constexpr (std::is_same_v<TValue, int64_t>) {
+    return TypeParameter(LongEnumParameter(enumName, map));
+  } else if constexpr (std::is_same_v<TValue, std::string>) {
+    return TypeParameter(VarcharEnumParameter(enumName, map));
+  }
+  VELOX_UNREACHABLE(
+      "Only int64_t and std::string value types are supported for enum types.");
+}
+
+template <typename TParameter>
+size_t hashEnumParam(const TParameter& param) {
+  uint64_t nameHash = folly::Hash{}(param.name);
+
+  // Hash each key-value pair and combine using commutativeHashMix
+  // to ensure order independence.
+  uint64_t mapHash = facebook::velox::bits::kNullHash;
+  for (const auto& [key, value] : param.valuesMap) {
+    const auto elementHash = facebook::velox::bits::hashMix(
+        folly::Hash{}(key), folly::Hash{}(value));
+    mapHash = facebook::velox::bits::commutativeHashMix(mapHash, elementHash);
+  }
+
+  // Combine name hash with map hash.
+  return facebook::velox::bits::hashMix(nameHash, mapHash);
+}
 } // namespace
+
+folly::dynamic LongEnumParameter::serialize() const {
+  return serializeEnumParam<int64_t>(name, valuesMap);
+}
+
+size_t LongEnumParameter::Hash::operator()(
+    const LongEnumParameter& param) const {
+  return hashEnumParam<LongEnumParameter>(param);
+}
+
+folly::dynamic VarcharEnumParameter::serialize() const {
+  return serializeEnumParam<std::string>(name, valuesMap);
+}
+
+size_t VarcharEnumParameter::Hash::operator()(
+    const VarcharEnumParameter& param) const {
+  return hashEnumParam<VarcharEnumParameter>(param);
+}
 
 TypePtr Type::create(const folly::dynamic& obj) {
   if (obj.find("ref") != obj.items().end()) {
@@ -124,9 +204,18 @@ TypePtr Type::create(const folly::dynamic& obj) {
   // Checks if 'typeName' specifies a custom type.
   if (customTypeExists(typeName)) {
     std::vector<TypeParameter> params;
-    params.reserve(childTypes.size());
-    for (auto& child : childTypes) {
-      params.emplace_back(child);
+    if (obj.find("cTypes") != obj.items().end()) {
+      params.reserve(childTypes.size());
+      for (auto& child : childTypes) {
+        params.emplace_back(child);
+      }
+    }
+    if (obj.find("kLongEnumParam") != obj.items().end()) {
+      params.emplace_back(deserializeEnumParam<int64_t>(obj["kLongEnumParam"]));
+    }
+    if (obj.find("kVarcharEnumParam") != obj.items().end()) {
+      params.emplace_back(
+          deserializeEnumParam<std::string>(obj["kVarcharEnumParam"]));
     }
     return getCustomType(typeName, params);
   }
@@ -336,14 +425,23 @@ template <typename T>
 std::string makeFieldNotFoundErrorMessage(
     const T& name,
     const std::vector<std::string>& availableNames) {
+  static constexpr auto kMaxFields = 50;
+
+  const auto numAvailable = availableNames.size();
+
   std::stringstream errorMessage;
   errorMessage << "Field not found: " << name << ". Available fields are: ";
-  for (auto i = 0; i < availableNames.size(); ++i) {
+  for (auto i = 0; i < numAvailable && i < kMaxFields; ++i) {
     if (i > 0) {
       errorMessage << ", ";
     }
     errorMessage << availableNames[i];
   }
+
+  if (numAvailable > kMaxFields) {
+    errorMessage << ", ..." << (numAvailable - kMaxFields) << " more";
+  }
+
   errorMessage << ".";
   return errorMessage.str();
 }
@@ -808,31 +906,48 @@ ArrayTypePtr ARRAY(TypePtr elementType) {
   return TypeFactory<TypeKind::ARRAY>::create(std::move(elementType));
 }
 
+MapTypePtr MAP(TypePtr keyType, TypePtr valueType) {
+  return TypeFactory<TypeKind::MAP>::create(
+      std::move(keyType), std::move(valueType));
+}
+
 RowTypePtr ROW(std::vector<std::string> names, std::vector<TypePtr> types) {
   return TypeFactory<TypeKind::ROW>::create(std::move(names), std::move(types));
 }
 
+RowTypePtr ROW(std::vector<std::string> names, const TypePtr& childType) {
+  const auto cnt = names.size();
+  return ROW(std::move(names), std::vector(cnt, childType));
+}
+
+RowTypePtr ROW(
+    std::initializer_list<std::string> names,
+    const TypePtr& childType) {
+  const auto cnt = names.size();
+  return TypeFactory<TypeKind::ROW>::create(
+      std::vector(names), std::vector(cnt, childType));
+}
+
+RowTypePtr ROW(std::string name, TypePtr type) {
+  return ROW({{std::move(name), std::move(type)}});
+}
+
 RowTypePtr ROW(
     std::initializer_list<std::pair<const std::string, TypePtr>>&& pairs) {
-  std::vector<TypePtr> types;
   std::vector<std::string> names;
-  types.reserve(pairs.size());
+  std::vector<TypePtr> types;
   names.reserve(pairs.size());
-  for (auto& p : pairs) {
-    types.push_back(p.second);
-    names.push_back(p.first);
+  types.reserve(pairs.size());
+  for (const auto& [name, type] : pairs) {
+    names.push_back(name);
+    types.push_back(type);
   }
   return TypeFactory<TypeKind::ROW>::create(std::move(names), std::move(types));
 }
 
 RowTypePtr ROW(std::vector<TypePtr>&& types) {
   std::vector<std::string> names(types.size(), "");
-  return TypeFactory<TypeKind::ROW>::create(std::move(names), std::move(types));
-}
-
-MapTypePtr MAP(TypePtr keyType, TypePtr valType) {
-  return TypeFactory<TypeKind::MAP>::create(
-      std::move(keyType), std::move(valType));
+  return ROW(std::move(names), std::move(types));
 }
 
 std::shared_ptr<const FunctionType> FUNCTION(
