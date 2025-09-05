@@ -146,10 +146,10 @@ document describes each memory component in detail.</p>
 physical memory allocations for both query memory allocated through memory pool
 and cache memory allocated through the file cache. It ensures the total
 allocated memory is within the system memory limit (specified by
-<em>MemoryManagerOptions::allocatorCapacity</em>). The memory manager also creates a
+<em>MemoryManager::Options::allocatorCapacity</em>). The memory manager also creates a
 memory arbitrator instance to arbitrate the memory capacity among running
 queries. It ensures the total allocated query memory capacity is within the
-query memory limit (specified by <em>MemoryManagerOptions::arbitratorCapacity</em>). The
+query memory limit (specified by <em>MemoryManager::Options::arbitratorCapacity</em>). The
 memory arbitrator also prevents each individual query running out of its
 per-query memory limit (specified by <em>QueryConfig::query_max_memory_per_node</em>) by
 reclaiming overused memory through <a class="reference external" href="https://facebookincubator.github.io/velox/develop/spilling.html">disk spilling</a> (refer to <a class="reference external" href="#memory-arbitrator">memory arbitrator
@@ -187,8 +187,8 @@ allocator guarantees the actual allocated memory are within the system memory
 limit no matter if it is for system operation or for user query execution. In
 practice, we shall reserve some space from the memory allocator to compensate
 for such system memory usage. We can do that by configuring the query
-memory limit (<em>MemoryManagerOptions::arbitratorCapacity</em>) to be smaller than the system memory
-limit (<em>MemoryManagerOptions::allocatorCapacity</em>) (refer to <a class="reference external" href="#server-oom-prevention">OOM prevention section</a>
+memory limit (<em>MemoryManager::Options::arbitratorCapacity</em>) to be smaller than the system memory
+limit (<em>MemoryManager::Options::allocatorCapacity</em>) (refer to <a class="reference external" href="#server-oom-prevention">OOM prevention section</a>
 for detail).</p>
 <section id="memory-system-setup">
 <h3>Memory System Setup<a class="headerlink" href="#memory-system-setup" title="Link to this heading">¶</a></h3>
@@ -196,7 +196,7 @@ for detail).</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="linenos"> 1</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">PrestoServer::initializeVeloxMemory</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
 <span class="linenos"> 2</span><span class="w">   </span><span class="k">auto</span><span class="o">*</span><span class="w"> </span><span class="n">systemConfig</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SystemConfig</span><span class="o">::</span><span class="n">instance</span><span class="p">();</span>
 <span class="linenos"> 3</span><span class="w">   </span><span class="k">const</span><span class="w"> </span><span class="kt">uint64_t</span><span class="w"> </span><span class="n">memoryGb</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">systemConfig</span><span class="o">-&gt;</span><span class="n">systemMemoryGb</span><span class="p">();</span>
-<span class="linenos"> 4</span><span class="w">   </span><span class="n">MemoryManagerOptions</span><span class="w"> </span><span class="n">options</span><span class="p">;</span>
+<span class="linenos"> 4</span><span class="w">   </span><span class="n">MemoryManager</span><span class="o">::</span><span class="n">Options</span><span class="w"> </span><span class="n">options</span><span class="p">;</span>
 <span class="linenos"> 5</span><span class="w">   </span><span class="n">options</span><span class="p">.</span><span class="n">allocatorCapacity</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">memoryGb</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="mi">30</span><span class="p">;</span>
 <span class="linenos"> 6</span><span class="w">   </span><span class="n">options</span><span class="p">.</span><span class="n">useMmapAllocator</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">systemConfig</span><span class="o">-&gt;</span><span class="n">useMmapAllocator</span><span class="p">();</span>
 <span class="linenos"> 7</span><span class="w">   </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="n">systemConfig</span><span class="o">-&gt;</span><span class="n">memoryArbitratorKind</span><span class="p">().</span><span class="n">empty</span><span class="p">())</span><span class="w"> </span><span class="p">{</span>
@@ -229,7 +229,7 @@ Currently, we only support the <em>“SHARED”</em> arbitrator kind (see <a cla
 <li><p>L10: set the memory arbitrator capacity (query memory limit) from the
 Prestissimo system config</p></li>
 <li><p>L13: creates the process-wide memory manager which creates memory
-allocator and arbitrator inside based on MemoryManagerOptions initialized from previous steps</p></li>
+allocator and arbitrator inside based on MemoryManager::Options initialized from previous steps</p></li>
 <li><p>L15-19: creates the file cache if it is enabled in Prestissimo system
 config</p></li>
 </ul>
@@ -535,7 +535,7 @@ different query systems. As for now, we implement <em>SharedArbitrator</em> for 
 Prestissimo and Prestissimo-on-Spark. <a class="reference external" href="https://github.com/apache/incubator-gluten">Gluten</a> implements its own memory
 arbitrator to integrate with the <a class="reference external" href="https://www.linkedin.com/pulse/apache-spark-memory-management-deep-dive-deepak-rajak/">Spark memory system</a>. <em>SharedArbitrator</em>
 ensures the total allocated memory capacity is within the query memory limit
-(<em>MemoryManagerOptions::arbitratorCapacity</em>), and also ensures each individual
+(<em>MemoryManager::Options::arbitratorCapacity</em>), and also ensures each individual
 query’s capacity is within the per-query memory limit (<em>MemoryPool::maxCapacity_</em>).
 When a query needs to grow its capacity, <em>SharedArbitrator</em> either reclaims the
 used memory from the query itself if it has exceeded its max memory capacity,
@@ -681,7 +681,7 @@ control on RSS. We haven’t yet confirmed whether <em>MmapAllocator</em> works 
 than <em>MallocAllocator</em>, but we are able to run a sizable Prestissimo workload
 using it. We will compare that workload using two allocators to determine which
 one is better in the future. Users can choose the allocator for their
-application by setting <em>MemoryManagerOptions::useMmapAllocator</em> (see
+application by setting <em>MemoryManager::Options::useMmapAllocator</em> (see
 <a class="reference external" href="#memory-system-setup">memory system setup section</a> for example).</p>
 <section id="non-contiguous-allocation">
 <h3>Non-Contiguous Allocation<a class="headerlink" href="#non-contiguous-allocation" title="Link to this heading">¶</a></h3>
