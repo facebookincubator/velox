@@ -175,7 +175,7 @@ class TableScanTest : public virtual ParquetConnectorTestBase {
            REAL()})};
 };
 
-TEST_F(TableScanTest, allColumns) {
+TEST_F(TableScanTest, allColumnsWithRowBounds) {
   auto vectors = makeVectors(10, 1'000);
   auto filePath = TempFilePath::create();
   writeToFile(filePath->getPath(), vectors, "c");
@@ -183,7 +183,10 @@ TEST_F(TableScanTest, allColumns) {
   createDuckDbTable(vectors);
   auto plan = tableScanNode();
 
-  const std::string duckDbSql = "SELECT * FROM tmp";
+  const std::string duckDbSql = "SELECT * FROM tmp LIMIT 100 OFFSET 10";
+  constexpr uint64_t start = 10;
+  constexpr uint64_t length = 100;
+  constexpr int64_t splitWeight = 0;
 
   // Helper to test scan all columns for the given splits
   auto testScanAllColumns =
@@ -211,8 +214,9 @@ TEST_F(TableScanTest, allColumns) {
 
   // Test scan all columns with ParquetConnectorSplits
   {
-    auto splits = makeParquetConnectorSplits({filePath});
-    testScanAllColumns(splits);
+    auto split = makeParquetConnectorSplit(
+        filePath->getPath(), start, length, splitWeight);
+    testScanAllColumns({split});
   }
 
   // Test scan all columns with HiveConnectorSplits
@@ -220,7 +224,9 @@ TEST_F(TableScanTest, allColumns) {
     // Lambda to create HiveConnectorSplits from file paths
     auto makeHiveConnectorSplits =
         [&](const std::vector<std::shared_ptr<
-                facebook::velox::exec::test::TempFilePath>>& filePaths) {
+                facebook::velox::exec::test::TempFilePath>>& filePaths,
+            uint64_t start = 0,
+            uint64_t length = std::numeric_limits<uint64_t>::max()) {
           std::vector<
               std::shared_ptr<facebook::velox::connector::ConnectorSplit>>
               splits;
@@ -234,42 +240,9 @@ TEST_F(TableScanTest, allColumns) {
           return splits;
         };
 
-    auto splits = makeHiveConnectorSplits({filePath});
+    auto splits = makeHiveConnectorSplits({filePath}, start, length);
     testScanAllColumns(splits);
   }
-}
-
-TEST_F(TableScanTest, skipRowsNumRows) {
-  auto vectors = makeVectors(10, 1'000);
-  auto filePath = TempFilePath::create();
-  writeToFile(filePath->getPath(), vectors, "c");
-
-  createDuckDbTable(vectors);
-  auto plan = tableScanNode();
-
-  auto constexpr start = 10;
-  auto constexpr length = 100;
-  auto split =
-      cudf_velox::exec::test::ParquetConnectorSplitBuilder(filePath->getPath())
-          .start(start)
-          .length(length)
-          .build();
-
-  auto task = assertQuery(plan, split, "SELECT * FROM tmp LIMIT 100 OFFSET 10");
-
-  // A quick sanity check for memory usage reporting. Check that peak total
-  // memory usage for the project node is > 0.
-  auto planStats = toPlanStats(task->taskStats());
-  auto scanNodeId = plan->id();
-  auto it = planStats.find(scanNodeId);
-  ASSERT_TRUE(it != planStats.end());
-  ASSERT_TRUE(it->second.peakMemoryBytes > 0);
-
-  //  Verifies there is no dynamic filter stats.
-  ASSERT_TRUE(it->second.dynamicFilterStats.empty());
-
-  // TODO: We are not writing any customStats yet so disable this check
-  // ASSERT_LT(0, it->second.customStats.at("ioWaitWallNanos").sum);
 }
 
 TEST_F(TableScanTest, directBufferInputRawInputBytes) {

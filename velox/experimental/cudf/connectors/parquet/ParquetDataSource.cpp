@@ -265,6 +265,8 @@ void ParquetDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
           "Unsupported file format for conversion from HiveConnectorSplit to cuDF ParquetConnectorSplit");
       return ParquetConnectorSplitBuilder(hiveSplit->filePath)
           .connectorId(hiveSplit->connectorId)
+          .start(hiveSplit->start)
+          .length(hiveSplit->length)
           .splitWeight(hiveSplit->splitWeight)
           .build();
     } else {
