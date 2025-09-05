@@ -186,10 +186,9 @@ TEST_F(TableScanTest, allColumnsWithRowBounds) {
   const std::string duckDbSql = "SELECT * FROM tmp LIMIT 100 OFFSET 10";
   constexpr uint64_t start = 10;
   constexpr uint64_t length = 100;
-  constexpr int64_t splitWeight = 0;
 
-  // Helper to test scan all columns for the given splits
-  auto testScanAllColumns =
+  // Helper to test scan all columns with row bounds for the given splits
+  auto testScanColumnsWithRowBounds =
       [&](const std::vector<std::shared_ptr<
               facebook::velox::connector::ConnectorSplit>>& splits) {
         auto task = AssertQueryBuilder(duckDbQueryRunner_)
@@ -214,9 +213,8 @@ TEST_F(TableScanTest, allColumnsWithRowBounds) {
 
   // Test scan all columns with ParquetConnectorSplits
   {
-    auto split = makeParquetConnectorSplit(
-        filePath->getPath(), start, length, splitWeight);
-    testScanAllColumns({split});
+    auto split = makeParquetSplit(filePath->getPath(), start, length);
+    testScanColumnsWithRowBounds({split});
   }
 
   // Test scan all columns with HiveConnectorSplits
@@ -241,7 +239,7 @@ TEST_F(TableScanTest, allColumnsWithRowBounds) {
         };
 
     auto splits = makeHiveConnectorSplits({filePath}, start, length);
-    testScanAllColumns(splits);
+    testScanColumnsWithRowBounds(splits);
   }
 }
 
