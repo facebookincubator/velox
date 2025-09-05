@@ -35,3 +35,5 @@ FetchContent_Declare(
 )
 
 FetchContent_MakeAvailable(roaring)
+
+add_library(Roaring::roaring ALIAS roaring)

@@ -14,7 +14,14 @@
 
 velox_add_library(velox_functions_delta_impl RoaringBitmapArray.cpp)
 
-velox_link_libraries(velox_functions_delta_impl velox_common_base velox_functions_util roaring)
+velox_link_libraries(
+        velox_functions_delta_impl
+        velox_common_base
+        velox_functions_lib
+        velox_expressionp
+        velox_functions_util
+        Folly::folly
+        Roaring::roaring)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
