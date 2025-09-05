@@ -421,6 +421,6 @@ function uv_install {
 }
 
 function install_roaring {
-  wget_and_untar https://github.com/RoaringBitmap/CRoaring/archive/refs/tags/v"${VELOX_ROARING_VERSION}".tar.gz roaring
+  wget_and_untar https://github.com/RoaringBitmap/CRoaring/archive/refs/tags/v"${ROARING_VERSION}".tar.gz roaring
   cmake_install_dir roaring -DENABLE_ROARING_TESTS=OFF
 }
