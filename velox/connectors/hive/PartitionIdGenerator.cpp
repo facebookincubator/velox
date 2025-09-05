@@ -29,10 +29,10 @@ PartitionIdGenerator::PartitionIdGenerator(
     uint32_t maxPartitions,
     memory::MemoryPool* pool,
     bool partitionPathAsLowerCase)
-    : pool_(pool),
-      partitionChannels_(std::move(partitionChannels)),
+    : partitionChannels_(std::move(partitionChannels)),
       maxPartitions_(maxPartitions),
-      partitionPathAsLowerCase_(partitionPathAsLowerCase) {
+      partitionPathAsLowerCase_(partitionPathAsLowerCase),
+      pool_(pool) {
   VELOX_USER_CHECK(
       !partitionChannels_.empty(), "There must be at least one partition key.");
   for (auto channel : partitionChannels_) {
@@ -59,6 +59,19 @@ PartitionIdGenerator::PartitionIdGenerator(
   for (auto& key : partitionValues_->children()) {
     key->resize(maxPartitions_);
   }
+}
+
+PartitionIdGenerator::PartitionIdGenerator(
+    std::vector<column_index_t> partitionChannels,
+    uint32_t maxPartitions,
+    memory::MemoryPool* pool,
+    bool partitionPathAsLowerCase)
+    : partitionChannels_(std::move(partitionChannels)),
+      maxPartitions_(maxPartitions),
+      partitionPathAsLowerCase_(partitionPathAsLowerCase),
+      pool_(pool) {
+  VELOX_USER_CHECK(
+      !partitionChannels_.empty(), "There must be at least one partition key.");
 }
 
 void PartitionIdGenerator::run(
@@ -170,7 +183,7 @@ void PartitionIdGenerator::updateValueToPartitionIdMapping() {
 }
 
 void PartitionIdGenerator::savePartitionValues(
-    uint64_t partitionId,
+    uint32_t partitionId,
     const RowVectorPtr& input,
     vector_size_t row) {
   for (auto i = 0; i < partitionChannels_.size(); ++i) {

@@ -88,6 +88,13 @@ class LambdaFlushPolicy : public DefaultFlushPolicy {
   std::function<bool()> lambda_;
 };
 
+// Settings for specifying Parquet field IDs during write operations.
+// Used to explicitly control field ID assignment in the Parquet schema.
+struct ParquetFieldId {
+  int32_t fieldId;
+  std::vector<ParquetFieldId> children;
+};
+
 struct WriterOptions : public dwio::common::WriterOptions {
   // Growth ratio passed to ArrowDataBufferSink. The default value is a
   // heuristic borrowed from
@@ -115,6 +122,8 @@ struct WriterOptions : public dwio::common::WriterOptions {
   std::optional<std::string> createdBy;
 
   std::shared_ptr<arrow::MemoryPool> arrowMemoryPool;
+
+  std::shared_ptr<std::vector<ParquetFieldId>> parquetFieldIds;
 
   // Parsing session and hive configs.
 
@@ -213,6 +222,8 @@ class Writer : public dwio::common::Writer {
   std::shared_ptr<ArrowDataBufferSink> stream_;
 
   std::shared_ptr<ArrowContext> arrowContext_;
+
+  std::shared_ptr<std::vector<ParquetFieldId>> parquetFieldIds_;
 
   std::unique_ptr<DefaultFlushPolicy> flushPolicy_;
 
