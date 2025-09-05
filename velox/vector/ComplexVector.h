@@ -722,6 +722,69 @@ class MapVector : public ArrayVectorBase {
   std::shared_ptr<MapVector> update(
       const folly::Range<DecodedVector*>& others) const;
 
+  struct ToRowVectorOptions {
+    // The list of keys to extract from each map. The type should be the same as
+    // the value type in the map. Should be the same size as 'outputFieldNames'.
+    // Cannot be empty.
+    std::vector<variant> keysToProject;
+
+    // The names to assign to the corresponding fields in the output RowVector.
+    // Should be the same size as 'keysToProject'.
+    std::vector<std::string> outputFieldNames;
+
+    // When set to false, if the map is null, a key is missing, or the
+    // value is null, the output field will also be null.
+    // If set to true, replaces null output values with type-specific defaults
+    // like for primitive types, they will be set to the c++ default initialized
+    // value, like 0 for INTEGER and empty string for VARCHAR. For Array/Map
+    // they will be set to an empty array or map. Not supported for ROW or
+    // UNKNOWN types.
+    bool replaceNulls{false};
+
+    // Only valid if replaceNulls is false. If set to true, a null map will
+    // result in a null row in the output. Otherwise, the top level row will not
+    // be null but every field in the output row will be null.
+    bool allowTopLevelNulls{false};
+
+    // If true, duplicate keys are allowed and the last value is used.
+    bool throwOnDuplicateKeys{true};
+  };
+
+  /// Retrieves the specified keys and their associated values from each row of
+  /// a vector of Map type (can be wrapped in dictionary or constant), returning
+  /// a RowVector where each field corresponds to a key and contains its
+  /// respective value. For each row in the MapVector, the function extracts the
+  /// values associated with the specified keys and assigns them to the
+  /// corresponding fields in the output RowVector. If the map is null, a key is
+  /// missing, or the value is null, the output field will also be null. If
+  /// 'replaceNulls' is set to true, these nulls are replaced with default
+  /// values appropriate for the value type.
+
+  /// Extracts the specified keys and their corresponding values from each row
+  /// in a vector of Map type.
+  /// The input MapVector may be wrapped in a dictionary or constant wrapper.
+  /// Returns a RowVector where each field corresponds to one of the specified
+  /// keys, containing its associated value. For each row in the MapVector:
+  ///   - The function looks up the value associated with the specified keys and
+  ///   assigns them to the corresponding fields in the output RowVector
+  ///   - If a key is missing, or the value is null, the
+  ///   corresponding output field will be null.
+  ///   - If 'options.replaceNulls' is true, any null output fields are replaced
+  ///   with default values suitable for their type.
+  ///   - If 'options.allowTopLevelNulls' is true, a null map will result in a
+  ///   null row, otherwise the top level row will not be null but every field
+  ///   in the output row will be null.
+  ///   - If 'options.throwOnDuplicateKeys' is true, duplicate keys are not
+  ///   allowed and an exception will be thrown. Otherwise, the last value is
+  ///   used.
+  ///
+  /// Note: Only keys of types SMALLINT, INTEGER, and BIGINT are currently
+  /// supported. TODO: Support other key types.
+  static VectorPtr toRowVector(
+      const BaseVector& map,
+      const ToRowVectorOptions& options,
+      const SelectivityVector& rows);
+
  protected:
   void resetDataDependentFlags(const SelectivityVector* rows) override {
     BaseVector::resetDataDependentFlags(rows);

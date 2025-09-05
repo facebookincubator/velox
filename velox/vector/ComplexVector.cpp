@@ -23,6 +23,7 @@
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/DecodedVector.h"
 #include "velox/vector/FlatMapVector.h"
+#include "velox/vector/FlatVector.h"
 #include "velox/vector/LazyVector.h"
 #include "velox/vector/SimpleVector.h"
 
@@ -1779,6 +1780,263 @@ void RowVector::appendNulls(vector_size_t numberOfRows) {
   const vector_size_t oldSize = BaseVector::length_;
   BaseVector::resize(newSize, false);
   bits::fillBits(mutableRawNulls(), oldSize, newSize, bits::kNull);
+}
+
+namespace {
+template <typename KeyType>
+std::vector<VectorPtr> toRowVectorComplexImpl(
+    const BaseVector& vector,
+    const folly::F14FastMap<KeyType, size_t>& keyToIndex,
+    bool replaceNulls,
+    bool throwOnDuplicateKeys,
+    const SelectivityVector& rows) {
+  DecodedVector decodedMap(vector);
+  auto mapBase = decodedMap.base()->asUnchecked<MapVector>();
+  DecodedVector decodedKeys(*mapBase->mapKeys());
+  DecodedVector decodedValues(*mapBase->mapValues());
+  auto valueType = mapBase->mapValues()->type();
+  auto* offsets = mapBase->rawOffsets();
+  auto* sizes = mapBase->rawSizes();
+
+  if (replaceNulls) {
+    auto valueKind = valueType->kind();
+    VELOX_USER_CHECK(
+        valueKind == TypeKind::MAP || valueKind == TypeKind::ARRAY,
+        "Unsupported type for replacing nulls: {}",
+        valueType->toString());
+  }
+
+  std::vector<VectorPtr> children;
+  children.reserve(keyToIndex.size());
+  for (size_t i = 0; i < keyToIndex.size(); ++i) {
+    children.push_back(
+        BaseVector::create(valueType, rows.end(), mapBase->pool()));
+    auto& child = children.back();
+    // Prefill all with nulls or default values.
+    if (replaceNulls) {
+      auto arrayVectorBase = child->asUnchecked<ArrayVectorBase>();
+      VELOX_CHECK_NOT_NULL(arrayVectorBase);
+      auto* rawOffsets = arrayVectorBase->mutableOffsets(child->size())
+                             ->asMutable<vector_size_t>();
+      auto* rawSizes = arrayVectorBase->mutableSizes(child->size())
+                           ->asMutable<vector_size_t>();
+      std::fill(rawOffsets, rawOffsets + child->size(), 0);
+      std::fill(rawSizes, rawSizes + child->size(), 0);
+    } else {
+      auto rawNulls = children.back()->mutableRawNulls();
+      bits::fillBits(rawNulls, 0, child->size(), bits::kNull);
+    }
+  }
+
+  std::vector<bool> visited(keyToIndex.size());
+  std::vector<std::vector<BaseVector::CopyRange>> copyRangesFromBase(
+      keyToIndex.size());
+  rows.applyToSelected([&](vector_size_t row) INLINE_LAMBDA {
+    std::fill(visited.begin(), visited.end(), false);
+    if (!decodedMap.isNullAt(row)) {
+      auto decodedIndex = decodedMap.index(row);
+      auto offset = offsets[decodedIndex];
+      auto size = sizes[decodedIndex];
+      for (auto j = offset; j < offset + size; ++j) {
+        if (decodedKeys.isNullAt(j) || decodedValues.isNullAt(j)) {
+          continue;
+        }
+        auto key = decodedKeys.valueAt<KeyType>(j);
+        auto it = keyToIndex.find(key);
+        if (it == keyToIndex.end()) {
+          continue;
+        }
+        auto index = it->second;
+        VELOX_USER_CHECK(
+            !throwOnDuplicateKeys || !visited[index],
+            "Duplicate keys not allowed: {}",
+            key);
+        visited[index] = true;
+        copyRangesFromBase[index].push_back({decodedValues.index(j), row, 1});
+      }
+    }
+  });
+  for (size_t i = 0; i < children.size(); ++i) {
+    children[i]->copyRanges(decodedValues.base(), copyRangesFromBase[i]);
+  }
+  return children;
+}
+
+template <typename KeyType, TypeKind ValueKind>
+std::vector<VectorPtr> toRowVectorFlatPrimitiveImpl(
+    const BaseVector& vector,
+    const folly::F14FastMap<KeyType, size_t>& keyToIndex,
+    bool replaceNulls,
+    bool throwOnDuplicateKeys,
+    const SelectivityVector& rows) {
+  if constexpr (ValueKind == TypeKind::UNKNOWN) {
+    if (replaceNulls) {
+      VELOX_USER_FAIL(
+          "Unsupported type for replacing nulls: {}",
+          TypeTraits<ValueKind>::TypeTraits::name);
+    }
+  }
+  DecodedVector decodedMap(vector);
+  auto mapBase = decodedMap.base()->asUnchecked<MapVector>();
+  DecodedVector decodedKeys(*mapBase->mapKeys());
+  DecodedVector decodedValues(*mapBase->mapValues());
+  auto* offsets = mapBase->rawOffsets();
+  auto* sizes = mapBase->rawSizes();
+
+  auto valueType = mapBase->mapValues()->type();
+  std::vector<VectorPtr> children;
+  children.reserve(keyToIndex.size());
+  using ValueType = typename TypeTraits<ValueKind>::NativeType;
+  std::vector<FlatVector<ValueType>*> flatChildren;
+  static const ValueType defaultValue = ValueType();
+  for (size_t i = 0; i < keyToIndex.size(); ++i) {
+    children.push_back(
+        BaseVector::create(valueType, rows.end(), mapBase->pool()));
+    flatChildren.push_back(children.back()->asFlatVector<ValueType>());
+    // Prefill all with nulls or default values.
+    if (replaceNulls) {
+      auto* rawValues = flatChildren.back()->mutableRawValues();
+      std::fill(
+          rawValues, rawValues + flatChildren.back()->size(), defaultValue);
+    } else {
+      auto* rawNulls = flatChildren.back()->mutableRawNulls();
+      bits::fillBits(rawNulls, 0, flatChildren.back()->size(), bits::kNull);
+    }
+    VELOX_CHECK_NOT_NULL(flatChildren.back());
+  }
+
+  std::vector<bool> visited(keyToIndex.size());
+  rows.applyToSelected([&](vector_size_t row) INLINE_LAMBDA {
+    if (decodedMap.isNullAt(row)) {
+      return;
+    }
+    auto decodedIndex = decodedMap.index(row);
+    auto offset = offsets[decodedIndex];
+    auto size = sizes[decodedIndex];
+    std::fill(visited.begin(), visited.end(), false);
+    for (auto j = offset; j < offset + size; ++j) {
+      if (decodedKeys.isNullAt(j) || decodedValues.isNullAt(j)) {
+        continue;
+      }
+      auto key = decodedKeys.valueAt<KeyType>(j);
+      auto it = keyToIndex.find(key);
+      if (it == keyToIndex.end()) {
+        continue;
+      }
+      auto index = it->second;
+      VELOX_USER_CHECK(
+          !throwOnDuplicateKeys || !visited[index],
+          "Duplicate keys not allowed: {}",
+          key);
+      visited[index] = true;
+      auto value = decodedValues.valueAt<ValueType>(j);
+      flatChildren[index]->set(row, value);
+    }
+  });
+  return children;
+}
+
+template <TypeKind KeyKind>
+VectorPtr toRowVectorImpl(
+    const BaseVector& vector,
+    const MapVector::ToRowVectorOptions& options,
+    const SelectivityVector& rows) {
+  using KeyType = typename TypeTraits<KeyKind>::NativeType;
+  folly::F14FastMap<KeyType, size_t> lookup;
+  lookup.reserve(options.keysToProject.size());
+  for (size_t i = 0; i < options.keysToProject.size(); ++i) {
+    auto key = options.keysToProject[i].value<KeyKind>();
+    bool ok = lookup.insert({key, i}).second;
+    // Key must be unique.
+    VELOX_USER_CHECK(ok, "Duplicate keys not allowed: {}", key);
+  }
+
+  std::vector<VectorPtr> children;
+  auto valueType = vector.type()->asMap().valueType();
+  if (valueType->isPrimitiveType() && valueType->kind() != TypeKind::UNKNOWN) {
+    children = VELOX_DYNAMIC_SCALAR_TEMPLATE_TYPE_DISPATCH(
+        toRowVectorFlatPrimitiveImpl,
+        KeyType,
+        valueType->kind(),
+        vector,
+        lookup,
+        options.replaceNulls,
+        options.throwOnDuplicateKeys,
+        rows);
+  } else {
+    switch (valueType->kind()) {
+      case TypeKind::OPAQUE:
+        children = toRowVectorFlatPrimitiveImpl<KeyType, TypeKind::OPAQUE>(
+            vector,
+            lookup,
+            options.replaceNulls,
+            options.throwOnDuplicateKeys,
+            rows);
+        break;
+      case TypeKind::UNKNOWN:
+        children = toRowVectorFlatPrimitiveImpl<KeyType, TypeKind::UNKNOWN>(
+            vector,
+            lookup,
+            options.replaceNulls,
+            options.throwOnDuplicateKeys,
+            rows);
+        break;
+      case TypeKind::ARRAY:
+      case TypeKind::MAP:
+      case TypeKind::ROW:
+        children = toRowVectorComplexImpl<KeyType>(
+            vector,
+            lookup,
+            options.replaceNulls,
+            options.throwOnDuplicateKeys,
+            rows);
+        break;
+      default:
+        VELOX_FAIL("Unsupported type: {}", valueType->kindName());
+    }
+  }
+
+  auto outputNulls = (!options.replaceNulls && options.allowTopLevelNulls)
+      ? vector.nulls()
+      : nullptr;
+  return std::make_shared<RowVector>(
+      vector.pool(),
+      ROW(options.outputFieldNames, valueType),
+      std::move(outputNulls),
+      rows.end(),
+      std::move(children));
+}
+} // namespace
+
+VectorPtr MapVector::toRowVector(
+    const BaseVector& map,
+    const ToRowVectorOptions& options,
+    const SelectivityVector& rows) {
+  VELOX_USER_CHECK_EQ(map.type()->kind(), TypeKind::MAP);
+  VELOX_USER_CHECK(!options.keysToProject.empty());
+  VELOX_USER_CHECK_EQ(
+      options.keysToProject.size(), options.outputFieldNames.size());
+
+  // Ensure that the key type and variant type are the same.
+  const auto& keyType = map.type()->asMap().keyType();
+  for (auto& key : options.keysToProject) {
+    VELOX_USER_CHECK_EQ(
+        keyType->kind(),
+        key.kind(),
+        "Key type and the type of keys to project are not the same");
+    VELOX_USER_CHECK(!key.isNull(), "Keys to project cannot contain null");
+  }
+
+  if (keyType == SMALLINT()) {
+    return toRowVectorImpl<TypeKind::SMALLINT>(map, options, rows);
+  } else if (keyType == INTEGER()) {
+    return toRowVectorImpl<TypeKind::INTEGER>(map, options, rows);
+  } else if (keyType == BIGINT()) {
+    return toRowVectorImpl<TypeKind::BIGINT>(map, options, rows);
+  }
+  VELOX_NYI(
+      "Only SMALLINT, INTEGER, BIGINT keys are currently supported, instead got {}",
+      keyType->kindName());
 }
 
 } // namespace facebook::velox
