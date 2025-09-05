@@ -45,6 +45,7 @@ velox_add_library(
   MetadataFilter.cpp
   Options.cpp
   OutputStream.cpp
+  ParallelUnitLoader.cpp
   ParallelFor.cpp
   Range.cpp
   Reader.cpp

@@ -612,6 +612,7 @@ void configureRowReaderOptions(
     const std::shared_ptr<const HiveConnectorSplit>& hiveSplit,
     const std::shared_ptr<const HiveConfig>& hiveConfig,
     const config::ConfigBase* sessionProperties,
+    folly::Executor* const ioExecutor,
     dwio::common::RowReaderOptions& rowReaderOptions) {
   auto skipRowsIt =
       tableParameters.find(dwio::common::TableParameter::kSkipHeaderLineCount);
@@ -619,6 +620,7 @@ void configureRowReaderOptions(
     rowReaderOptions.setSkipRows(folly::to<uint64_t>(skipRowsIt->second));
   }
   rowReaderOptions.setScanSpec(scanSpec);
+  rowReaderOptions.setIOExecutor(ioExecutor);
   rowReaderOptions.setMetadataFilter(std::move(metadataFilter));
   rowReaderOptions.setRequestedType(rowType);
   rowReaderOptions.range(hiveSplit->start, hiveSplit->length);
@@ -627,6 +629,8 @@ void configureRowReaderOptions(
         hiveConfig->readTimestampUnit(sessionProperties)));
     rowReaderOptions.setPreserveFlatMapsInMemory(
         hiveConfig->preserveFlatMapsInMemory(sessionProperties));
+    rowReaderOptions.setParallelUnitLoadCount(
+        hiveConfig->parallelUnitLoadCount(sessionProperties));
   }
   rowReaderOptions.setSerdeParameters(hiveSplit->serdeParameters);
 }
