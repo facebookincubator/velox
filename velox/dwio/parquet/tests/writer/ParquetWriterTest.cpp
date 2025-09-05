@@ -26,6 +26,10 @@
 #include "velox/dwio/parquet/RegisterParquetWriter.h" // @manual
 #include "velox/dwio/parquet/reader/PageReader.h"
 #include "velox/dwio/parquet/tests/ParquetTestBase.h"
+#include "velox/dwio/parquet/writer/Writer.h"
+#include "velox/dwio/parquet/writer/arrow/Metadata.h"
+#include "velox/dwio/parquet/writer/arrow/Schema.h"
+#include "velox/dwio/parquet/writer/arrow/tests/FileReader.h"
 #include "velox/exec/Cursor.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -950,6 +954,155 @@ TEST_F(ParquetWriterTest, dictionaryEncodedVector) {
 
   writeToFile(makeRowVector({wrappedVector}));
 };
+
+TEST_F(ParquetWriterTest, withoutFieldIds) {
+  auto schema =
+      ROW({"a", "b", "c", "m"},
+          {BIGINT(),
+           ROW({"x", "y"}, {INTEGER(), VARCHAR()}),
+           ARRAY(INTEGER()),
+           MAP(VARCHAR(), INTEGER())});
+
+  auto arrVec = makeArrayVector<int32_t>({{3}});
+  auto mapVec = makeMapVector<StringView, int32_t>({{{StringView("k"), 4}}});
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>(1, [](auto) { return 1; }),
+      makeRowVector(
+          {makeFlatVector<int32_t>(1, [](auto) { return 2; }),
+           makeFlatVector<StringView>(
+               1, [](auto) { return StringView("z"); })}),
+      arrVec,
+      mapVec,
+  });
+
+  auto sink = std::make_unique<MemorySink>(
+      4 * 1024 * 1024,
+      dwio::common::FileSink::Options{.pool = leafPool_.get()});
+  auto* sinkPtr = sink.get();
+
+  parquet::WriterOptions writerOptions;
+  writerOptions.memoryPool = leafPool_.get();
+
+  auto writer = std::make_unique<parquet::Writer>(
+      std::move(sink), writerOptions, rootPool_, schema);
+  writer->write(data);
+  writer->close();
+
+  std::string_view sinkData(sinkPtr->data(), sinkPtr->size());
+  auto readFile = std::make_shared<InMemoryReadFile>(sinkData);
+  auto input = std::make_unique<BufferedInput>(readFile, *leafPool_.get());
+  dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+  auto veloxReader =
+      std::make_unique<ParquetReader>(std::move(input), readerOptions);
+  EXPECT_EQ(veloxReader->numberOfRows(), 1);
+  auto veloxRowType = veloxReader->rowType();
+  EXPECT_EQ(*veloxRowType, *schema);
+
+  auto arrowBufferReader = std::make_shared<::arrow::io::BufferReader>(
+      std::make_shared<::arrow::Buffer>(
+          reinterpret_cast<const uint8_t*>(sinkData.data()), sinkData.size()));
+
+  auto fileReader = parquet::arrow::ParquetFileReader::Open(arrowBufferReader);
+  auto metadata = fileReader->metadata();
+  auto* descr = metadata->schema();
+  auto* root = descr->group_node();
+
+  ASSERT_EQ(root->field_count(), 4);
+
+  // All field IDs should be -1 (not set).
+  EXPECT_EQ(root->field(0)->field_id(), -1);
+  EXPECT_EQ(root->field(1)->field_id(), -1);
+  EXPECT_EQ(root->field(2)->field_id(), -1);
+  EXPECT_EQ(root->field(3)->field_id(), -1);
+}
+
+TEST_F(ParquetWriterTest, withFieldIds) {
+  auto schema =
+      ROW({"a", "b", "c", "m"},
+          {BIGINT(),
+           ROW({"x", "y"}, {INTEGER(), VARCHAR()}),
+           ARRAY(INTEGER()),
+           MAP(VARCHAR(), INTEGER())});
+
+  auto arrVec = makeArrayVector<int32_t>({{3}});
+  auto mapVec = makeMapVector<StringView, int32_t>({{{StringView("k"), 4}}});
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>(1, [](auto) { return 1; }),
+      makeRowVector(
+          {makeFlatVector<int32_t>(1, [](auto) { return 2; }),
+           makeFlatVector<StringView>(
+               1, [](auto) { return StringView("z"); })}),
+      arrVec,
+      mapVec,
+  });
+
+  auto sink = std::make_unique<MemorySink>(
+      4 * 1024 * 1024,
+      dwio::common::FileSink::Options{.pool = leafPool_.get()});
+  auto* sinkPtr = sink.get();
+
+  parquet::WriterOptions writerOptions;
+  writerOptions.memoryPool = leafPool_.get();
+
+  // Provide Parquet field IDs aligned with the Velox schema tree.
+  std::vector<ParquetFieldId> fieldIds{
+      ParquetFieldId{10, {}},
+      ParquetFieldId{20, {ParquetFieldId{21, {}}, ParquetFieldId{22, {}}}},
+      ParquetFieldId{30, {ParquetFieldId{31, {}}}},
+      ParquetFieldId{40, {ParquetFieldId{41, {}}, ParquetFieldId{42, {}}}},
+  };
+  writerOptions.parquetFieldIds =
+      std::make_shared<std::vector<ParquetFieldId>>(fieldIds);
+
+  auto writer = std::make_unique<parquet::Writer>(
+      std::move(sink), writerOptions, rootPool_, schema);
+  writer->write(data);
+  writer->close();
+
+  std::string_view sinkData(sinkPtr->data(), sinkPtr->size());
+  auto readFile = std::make_shared<InMemoryReadFile>(sinkData);
+  auto input = std::make_unique<BufferedInput>(readFile, *leafPool_.get());
+  dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+  auto veloxReader =
+      std::make_unique<ParquetReader>(std::move(input), readerOptions);
+  EXPECT_EQ(veloxReader->numberOfRows(), 1);
+  auto veloxRowType = veloxReader->rowType();
+  EXPECT_EQ(*veloxRowType, *schema);
+
+  auto arrowBufferReader = std::make_shared<::arrow::io::BufferReader>(
+      std::make_shared<::arrow::Buffer>(
+          reinterpret_cast<const uint8_t*>(sinkData.data()), sinkData.size()));
+
+  auto fileReader = parquet::arrow::ParquetFileReader::Open(arrowBufferReader);
+  auto metadata = fileReader->metadata();
+  auto* descr = metadata->schema();
+  auto* root = descr->group_node();
+
+  ASSERT_EQ(root->field_count(), 4);
+
+  // Top-level field IDs.
+  EXPECT_EQ(root->field(0)->field_id(), 10);
+  EXPECT_EQ(root->field(1)->field_id(), 20);
+  EXPECT_EQ(root->field(2)->field_id(), 30);
+  EXPECT_EQ(root->field(3)->field_id(), 40);
+
+  using GroupNode = parquet::arrow::schema::GroupNode;
+  auto* b = static_cast<const GroupNode*>(root->field(1).get());
+  EXPECT_EQ(b->field(0)->field_id(), 21);
+  EXPECT_EQ(b->field(1)->field_id(), 22);
+
+  auto* c = static_cast<const GroupNode*>(root->field(2).get());
+  auto* listEntries = c->field(0).get();
+  auto* listGroup = static_cast<const GroupNode*>(listEntries);
+  auto* element = listGroup->field(0).get();
+  EXPECT_EQ(element->field_id(), 31);
+
+  auto* m = static_cast<const GroupNode*>(root->field(3).get());
+  auto* keyValue = m->field(0).get();
+  auto* keyValueGroup = static_cast<const GroupNode*>(keyValue);
+  EXPECT_EQ(keyValueGroup->field(0)->field_id(), 41);
+  EXPECT_EQ(keyValueGroup->field(1)->field_id(), 42);
+}
 
 } // namespace
 
