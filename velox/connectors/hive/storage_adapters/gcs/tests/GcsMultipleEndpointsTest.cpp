@@ -22,8 +22,8 @@
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/storage_adapters/gcs/RegisterGcsFileSystem.h"
 #include "velox/connectors/hive/storage_adapters/gcs/tests/GcsEmulator.h"
-#include "velox/dwio/parquet/RegisterParquetReader.h"
-#include "velox/dwio/parquet/RegisterParquetWriter.h"
+#include "velox/dwio/RegisterReaders.h"
+#include "velox/dwio/RegisterWriters.h"
 #include "velox/exec/TableWriter.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -54,8 +54,8 @@ class GcsMultipleEndpointsTest : public testing::Test,
 
     connector::registerConnectorFactory(
         std::make_shared<connector::hive::HiveConnectorFactory>());
-    parquet::registerParquetReaderFactory();
-    parquet::registerParquetWriterFactory();
+    dwio::registerReaderFactories();
+    dwio::registerWriterFactories();
   }
 
   void registerConnectors(
@@ -82,8 +82,8 @@ class GcsMultipleEndpointsTest : public testing::Test,
   }
 
   void TearDown() override {
-    parquet::unregisterParquetReaderFactory();
-    parquet::unregisterParquetWriterFactory();
+    dwio::unregisterReaderFactories();
+    dwio::unregisterWriterFactories();
     connector::unregisterConnectorFactory(
         connector::hive::HiveConnectorFactory::kHiveConnectorName);
   }
