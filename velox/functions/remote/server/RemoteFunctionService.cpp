@@ -15,10 +15,11 @@
  */
 
 #include "velox/functions/remote/server/RemoteFunctionService.h"
-#include "velox/common/base/Exceptions.h"
+#include "velox/core/Expressions.h"
 #include "velox/expression/Expr.h"
 #include "velox/functions/remote/if/GetSerde.h"
 #include "velox/type/fbhive/HiveTypeParser.h"
+#include "velox/vector/FlatVector.h"
 #include "velox/vector/VectorStream.h"
 
 namespace facebook::velox::functions {
@@ -102,7 +103,7 @@ void RemoteFunctionServiceHandler::handleErrors(
       BufferPtr(),
       numRows,
       std::vector<VectorPtr>{flatVector});
-  result->errorPayload_ref() =
+  result->errorPayload() =
       rowVectorToIOBuf(errorRowVector, *pool_, serde.get());
 }
 
@@ -148,10 +149,10 @@ void RemoteFunctionServiceHandler::invokeFunction(
   auto outputRowVector = std::make_shared<RowVector>(
       pool_.get(), ROW({outputType}), BufferPtr(), numRows, expressionResult);
 
-  auto result = response.result_ref();
-  result->rowCount_ref() = outputRowVector->size();
-  result->pageFormat_ref() = serdeFormat;
-  result->payload_ref() =
+  auto result = response.result();
+  result->rowCount() = outputRowVector->size();
+  result->pageFormat() = serdeFormat;
+  result->payload() =
       rowVectorToIOBuf(outputRowVector, rows.end(), *pool_, serde.get());
 
   auto evalErrors = evalCtx.errors();

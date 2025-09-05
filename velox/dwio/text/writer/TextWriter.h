@@ -28,6 +28,8 @@ using dwio::common::SerDeOptions;
 
 struct WriterOptions : public dwio::common::WriterOptions {
   int64_t defaultFlushCount = 10 << 10;
+  uint8_t headerLineCount =
+      0; // number of lines in the header, currently only support 0 or 1
 };
 
 /// Encodes Velox vectors in TextFormat and writes into a FileSink.
@@ -70,9 +72,12 @@ class TextWriter : public dwio::common::Writer {
       uint8_t depth,
       std::optional<uint8_t> delimiter);
 
+  std::string addEscapeChar(std::string&& dataToWrite, uint8_t depth);
+
   const RowTypePtr schema_;
   const std::unique_ptr<BufferedWriterSink> bufferedWriterSink_;
 
+  uint8_t headerLineCount_;
   SerDeOptions serDeOptions_;
 };
 

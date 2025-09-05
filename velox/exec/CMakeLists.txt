@@ -23,6 +23,7 @@ velox_add_library(
   AggregateWindow.cpp
   ArrowStream.cpp
   AssignUniqueId.cpp
+  BlockingReason.cpp
   CallbackSink.cpp
   ContainerRowSerde.cpp
   DistinctAggregations.cpp
@@ -62,6 +63,7 @@ velox_add_library(
   OperatorTraceReader.cpp
   OperatorTraceScan.cpp
   OperatorTraceWriter.cpp
+  ParallelProject.cpp
   TaskTraceReader.cpp
   TaskTraceWriter.cpp
   Trace.cpp

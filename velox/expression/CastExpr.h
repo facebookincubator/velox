@@ -90,6 +90,7 @@ class CastExpr : public SpecialForm {
       bool isTryCast,
       std::shared_ptr<CastHooks> hooks)
       : SpecialForm(
+            SpecialFormKind::kCast,
             type,
             std::vector<ExprPtr>({expr}),
             isTryCast ? kTryCast.data() : kCast.data(),
@@ -308,7 +309,7 @@ class CastExpr : public SpecialForm {
   }
 
   bool setNullInResultAtError() const {
-    return isTryCast() && inTopLevel;
+    return isTryCast() && (inTopLevel || hooks_->applyTryCastRecursively());
   }
 
   CastOperatorPtr getCastOperator(const TypePtr& type);

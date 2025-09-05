@@ -61,6 +61,7 @@ const char* const kNoisyAvgGaussian = "noisy_avg_gaussian";
 const char* const kNoisyCountIfGaussian = "noisy_count_if_gaussian";
 const char* const kNoisyCountGaussian = "noisy_count_gaussian";
 const char* const kNoisySumGaussian = "noisy_sum_gaussian";
+const char* const kNumericHistogram = "numeric_histogram";
 const char* const kReduceAgg = "reduce_agg";
 const char* const kRegrIntercept = "regr_intercept";
 const char* const kRegrSlop = "regr_slope";
@@ -84,4 +85,8 @@ const char* const kVarPop = "var_pop";
 const char* const kVarSamp = "var_samp";
 const char* const kMaxSizeForStats = "max_data_size_for_stats";
 const char* const kSumDataSizeForStats = "sum_data_size_for_stats";
+const char* const kNoisyApproxSetSfm = "noisy_approx_set_sfm";
+const char* const kNoisyApproxDistinctSfm = "noisy_approx_distinct_sfm";
+const char* const kNoisyApproxSetSfmFromIndexAndZeros =
+    "noisy_approx_set_sfm_from_index_and_zeros";
 } // namespace facebook::velox::aggregate

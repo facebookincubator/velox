@@ -35,6 +35,7 @@ add_executable(
   VectorPrinterTest.cpp
   VectorSaverTest.cpp
   VectorStreamTest.cpp
+  VectorStreamGroupTest.cpp
   VectorTest.cpp
   VectorTestUtils.cpp
   VectorToStringTest.cpp)
@@ -43,18 +44,15 @@ add_test(velox_vector_test velox_vector_test)
 
 target_link_libraries(
   velox_vector_test
+  velox_time
+  velox_vector_fuzzer
   velox_vector_test_lib
   velox_buffer
-  velox_vector
-  velox_vector_fuzzer
   velox_serialization
-  velox_memory
   velox_presto_serializer
   velox_presto_types
   velox_temp_path
-  velox_test_util
   velox_type_test_lib
-  velox_vector_fuzzer
   Boost::atomic
   Boost::context
   Boost::date_time

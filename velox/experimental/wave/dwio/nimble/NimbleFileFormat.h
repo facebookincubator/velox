@@ -18,11 +18,11 @@
 
 #include <string_view>
 #include <vector>
+#include "velox/experimental/wave/common/Buffer.h"
 #include "velox/experimental/wave/dwio/FormatData.h"
 #include "velox/experimental/wave/dwio/decode/DecodeStep.h"
 #include "velox/experimental/wave/dwio/nimble/Encoding.h"
 #include "velox/experimental/wave/dwio/nimble/Types.h"
-#include "velox/experimental/wave/vector/WaveVector.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox::wave {
@@ -30,7 +30,11 @@ namespace facebook::velox::wave {
 // Base class for all Nimble encodings
 class NimbleEncoding {
  public:
-  explicit NimbleEncoding(std::string_view encodingData);
+  explicit NimbleEncoding(std::string_view encodingData, bool encodeNulls);
+  explicit NimbleEncoding(
+      facebook::wave::nimble::EncodingType encodingType,
+      facebook::wave::nimble::DataType dataType,
+      uint32_t numValues);
 
   virtual ~NimbleEncoding() = default;
 
@@ -91,7 +95,9 @@ class NimbleEncoding {
   virtual NimbleEncoding* nullsEncoding();
   virtual NimbleEncoding* nonNullsEncoding();
 
-  static std::unique_ptr<NimbleEncoding> create(std::string_view encodingData);
+  static std::unique_ptr<NimbleEncoding> create(
+      std::string_view encodingData,
+      bool encodeNulls);
 
   // Check if the encoding is ready to be decoded
   bool isDecoded() const {
@@ -102,13 +108,33 @@ class NimbleEncoding {
   }
   bool isReadyToDecode() const;
 
+  // Populates the encoding-specific members and does necessary preparation
+  // required by decoding.
   virtual std::unique_ptr<GpuDecode> makeStep(
+      ColumnOp& op,
+      const ColumnOp* previousFilter,
+      ReadStream& stream,
+      SplitStaging& staging,
+      ResultStaging& deviceStaging,
+      BufferId bufferId,
+      const NimbleEncoding& rootEncoding,
+      int32_t blockIdx,
+      int32_t resultOffset) = 0;
+
+  // Specially used for dealing with the null bitmasks. If an encoding
+  // (currently only trivial, but may be more in the future) encodes null
+  // bitmask rather than regular values, it needs to call this function.
+  virtual std::unique_ptr<GpuDecode> makeStepNulls(
       ColumnOp& op,
       ReadStream& stream,
       SplitStaging& staging,
+      ResultStaging& deviceStaging,
       BufferId bufferId,
       const NimbleEncoding& rootEncoding,
-      int32_t blockIdx) = 0;
+      int32_t blockIdx,
+      int32_t offset = 0) {
+    return nullptr;
+  }
 
   void* deviceEncodedDataPtr() const {
     return deviceEncodedData_;
@@ -118,17 +144,38 @@ class NimbleEncoding {
     return &deviceEncodedData_;
   }
 
+  facebook::velox::wave::WaveBufferPtr decodedResultBuffer() const {
+    return decodedResultBuffer_;
+  }
+
+  char* nulls() const {
+    return nulls_;
+  }
+
+  int32_t* numNonNull() const {
+    return numNonNull_;
+  }
+
  protected:
   facebook::velox::TypePtr nimbleDataTypeToVeloxType(
       facebook::wave::nimble::DataType nimbleDataType) const;
-  std::unique_ptr<GpuDecode>
-  makeStepCommon(ColumnOp& op, ReadStream& stream, int32_t blockIdx);
+
+  // Populates the shared members of GpuDecode of different encodings.
+  std::unique_ptr<GpuDecode> makeStepCommon(
+      ColumnOp& op,
+      const ColumnOp* previousFilter,
+      ReadStream& stream,
+      ResultStaging& deviceStaging,
+      int32_t blockIdx,
+      bool isRoot,
+      bool processFilter,
+      int32_t resultOffset);
   void getDeviceEncodingInput(
       SplitStaging& staging,
       BufferId bufferId,
       const NimbleEncoding& rootEncoding,
       const void* hostPtr,
-      const void*& devicePtr);
+      const void** devicePtr);
 
  protected:
   std::string_view encodingData_;
@@ -137,7 +184,14 @@ class NimbleEncoding {
   uint32_t numValues_;
   std::vector<std::unique_ptr<NimbleEncoding>> children_;
   void* deviceEncodedData_{nullptr};
+  facebook::velox::wave::WaveBufferPtr decodedResultBuffer_;
   bool decoded_{false};
+  char* nulls_{nullptr};
+  bool stagedNulls_{false};
+  int32_t* numNonNull_{nullptr};
+
+  // true if this encoding encodes the null bitmask from Nullable
+  bool encodeNulls_{false};
 
  private:
   NimbleEncoding* createChildEncodingByIndex(uint8_t childIndex);
@@ -146,64 +200,110 @@ class NimbleEncoding {
 // Dictionary encoding subclass
 class NimbleDictionaryEncoding : public NimbleEncoding {
  public:
-  explicit NimbleDictionaryEncoding(std::string_view encodingData);
+  explicit NimbleDictionaryEncoding(
+      std::string_view encodingData,
+      bool encodeNulls);
 
   NimbleEncoding* alphabetEncoding() override;
   NimbleEncoding* indicesEncoding() override;
   std::unique_ptr<GpuDecode> makeStep(
       ColumnOp& op,
+      const ColumnOp* previousFilter,
       ReadStream& stream,
       SplitStaging& staging,
+      ResultStaging& deviceStaging,
       BufferId bufferId,
       const NimbleEncoding& rootEncoding,
-      int32_t blockIdx) override;
+      int32_t blockIdx,
+      int32_t resultOffset) override;
 };
 
 // Trivial encoding subclass
 class NimbleTrivialEncoding : public NimbleEncoding {
  public:
-  explicit NimbleTrivialEncoding(std::string_view encodingData);
+  explicit NimbleTrivialEncoding(
+      std::string_view encodingData,
+      bool encodeNulls);
 
   NimbleEncoding* lengthsEncoding() override;
   std::unique_ptr<GpuDecode> makeStep(
       ColumnOp& op,
+      const ColumnOp* previousFilter,
       ReadStream& stream,
       SplitStaging& staging,
+      ResultStaging& deviceStaging,
       BufferId bufferId,
       const NimbleEncoding& rootEncoding,
-      int32_t blockIdx) override;
+      int32_t blockIdx,
+      int32_t offset = 0) override;
+  std::unique_ptr<GpuDecode> makeStepNulls(
+      ColumnOp& op,
+      ReadStream& stream,
+      SplitStaging& staging,
+      ResultStaging& deviceStaging,
+      BufferId bufferId,
+      const NimbleEncoding& rootEncoding,
+      int32_t blockIdx,
+      int32_t resultOffset) override;
 };
 
 // RLE encoding subclass
 class NimbleRLEEncoding : public NimbleEncoding {
  public:
-  explicit NimbleRLEEncoding(std::string_view encodingData);
+  explicit NimbleRLEEncoding(std::string_view encodingData, bool encodeNulls);
 
   NimbleEncoding* runLengthsEncoding() override;
   NimbleEncoding* runValuesEncoding() override;
   std::unique_ptr<GpuDecode> makeStep(
       ColumnOp& op,
+      const ColumnOp* previousFilter,
       ReadStream& stream,
       SplitStaging& staging,
+      ResultStaging& deviceStaging,
       BufferId bufferId,
       const NimbleEncoding& rootEncoding,
-      int32_t blockIdx) override;
+      int32_t blockIdx,
+      int32_t resultOffset) override;
 };
 
 // Nullable encoding subclass
 class NimbleNullableEncoding : public NimbleEncoding {
  public:
-  explicit NimbleNullableEncoding(std::string_view encodingData);
+  explicit NimbleNullableEncoding(
+      std::string_view encodingData,
+      bool encodeNulls);
 
   NimbleEncoding* nullsEncoding() override;
   NimbleEncoding* nonNullsEncoding() override;
   std::unique_ptr<GpuDecode> makeStep(
       ColumnOp& op,
+      const ColumnOp* previousFilter,
       ReadStream& stream,
       SplitStaging& staging,
+      ResultStaging& deviceStaging,
       BufferId bufferId,
       const NimbleEncoding& rootEncoding,
-      int32_t blockIdx) override;
+      int32_t blockIdx,
+      int32_t resultOffset) override;
+};
+
+class NimbleFilterEncoding : public NimbleEncoding {
+ public:
+  explicit NimbleFilterEncoding(
+      facebook::wave::nimble::DataType dataType,
+      uint32_t numValues,
+      bool hasNulls);
+
+  std::unique_ptr<GpuDecode> makeStep(
+      ColumnOp& op,
+      const ColumnOp* previousFilter,
+      ReadStream& stream,
+      SplitStaging& staging,
+      ResultStaging& deviceStaging,
+      BufferId bufferId,
+      const NimbleEncoding& rootEncoding,
+      int32_t blockIdx,
+      int32_t resultOffset) override;
 };
 
 class NimbleChunk {

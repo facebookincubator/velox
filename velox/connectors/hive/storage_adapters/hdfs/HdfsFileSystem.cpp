@@ -129,11 +129,11 @@ HdfsServiceEndpoint HdfsFileSystem::getServiceEndpoint(
     // Fall back to get a fixed endpoint from config.
     auto hdfsHost = config->get<std::string>("hive.hdfs.host");
     VELOX_CHECK(
-        hdfsHost.hasValue(),
+        hdfsHost.has_value(),
         "hdfsHost is empty, configuration missing for hdfs host");
     auto hdfsPort = config->get<std::string>("hive.hdfs.port");
     VELOX_CHECK(
-        hdfsPort.hasValue(),
+        hdfsPort.has_value(),
         "hdfsPort is empty, configuration missing for hdfs port");
     return HdfsServiceEndpoint{*hdfsHost, *hdfsPort};
   }
@@ -152,7 +152,20 @@ HdfsServiceEndpoint HdfsFileSystem::getServiceEndpoint(
 }
 
 void HdfsFileSystem::remove(std::string_view path) {
-  VELOX_UNSUPPORTED("Does not support removing files from hdfs");
+  // Only remove the scheme for hdfs path.
+  if (path.find(kScheme) == 0) {
+    path.remove_prefix(kScheme.length());
+    if (auto index = path.find('/')) {
+      path.remove_prefix(index);
+    }
+  }
+
+  VELOX_CHECK_EQ(
+      impl_->hdfsShim()->Delete(impl_->hdfsClient(), path.data(), 0),
+      0,
+      "Cannot delete file : {} in HDFS, error is : {}",
+      path,
+      impl_->hdfsShim()->GetLastExceptionRootCause());
 }
 
 std::vector<std::string> HdfsFileSystem::list(std::string_view path) {
@@ -245,6 +258,24 @@ void HdfsFileSystem::rename(
       "Cannot rename file from {} to {} in HDFS, error is : {}",
       path,
       newPath,
+      impl_->hdfsShim()->GetLastExceptionRootCause());
+}
+
+void HdfsFileSystem::rmdir(std::string_view path) {
+  // Only remove the scheme for hdfs path.
+  if (path.find(kScheme) == 0) {
+    path.remove_prefix(kScheme.length());
+    if (auto index = path.find('/')) {
+      path.remove_prefix(index);
+    }
+  }
+
+  VELOX_CHECK_EQ(
+      impl_->hdfsShim()->Delete(
+          impl_->hdfsClient(), path.data(), /*recursive=*/true),
+      0,
+      "Cannot remove directory {} recursively in HDFS, error is : {}",
+      path,
       impl_->hdfsShim()->GetLastExceptionRootCause());
 }
 

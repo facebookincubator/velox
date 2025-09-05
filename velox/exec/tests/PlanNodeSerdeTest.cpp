@@ -89,6 +89,26 @@ class PlanNodeSerdeTest : public testing::Test,
     }
   }
 
+  void topNRankSerdeTest(std::string_view function) {
+    auto plan = PlanBuilder()
+                    .values({data_})
+                    .topNRank(function, {}, {"c0", "c2"}, 10, false)
+                    .planNode();
+    testSerde(plan);
+
+    plan = PlanBuilder()
+               .values({data_})
+               .topNRank(function, {}, {"c0", "c2"}, 10, true)
+               .planNode();
+    testSerde(plan);
+
+    plan = PlanBuilder()
+               .values({data_})
+               .topNRank(function, {"c0"}, {"c1", "c2"}, 10, false)
+               .planNode();
+    testSerde(plan);
+  }
+
   std::vector<RowVectorPtr> data_;
 };
 
@@ -439,6 +459,23 @@ TEST_F(PlanNodeSerdeTest, project) {
   testSerde(plan);
 }
 
+TEST_F(PlanNodeSerdeTest, parallelProjet) {
+  auto plan = PlanBuilder()
+                  .values({data_})
+                  .parallelProject({{"c0 + 1", "c0 * 2"}, {"c1 + 1", "c1 * 2"}})
+                  .planNode();
+
+  testSerde(plan);
+
+  plan = PlanBuilder()
+             .values({data_})
+             .parallelProject(
+                 {{"c0 + 1", "c0 * 2"}, {"c1 + 1", "c1 * 2"}}, {"c2", "c3"})
+             .planNode();
+
+  testSerde(plan);
+}
+
 TEST_F(PlanNodeSerdeTest, hashJoin) {
   auto probe = makeRowVector(
       {"t0", "t1", "t2", "t3"},
@@ -634,23 +671,15 @@ TEST_F(PlanNodeSerdeTest, scan) {
 }
 
 TEST_F(PlanNodeSerdeTest, topNRowNumber) {
-  auto plan = PlanBuilder()
-                  .values({data_})
-                  .topNRowNumber({}, {"c0", "c2"}, 10, false)
-                  .planNode();
-  testSerde(plan);
+  topNRankSerdeTest("row_number");
+}
 
-  plan = PlanBuilder()
-             .values({data_})
-             .topNRowNumber({}, {"c0", "c2"}, 10, true)
-             .planNode();
-  testSerde(plan);
+TEST_F(PlanNodeSerdeTest, topNRank) {
+  topNRankSerdeTest("rank");
+}
 
-  plan = PlanBuilder()
-             .values({data_})
-             .topNRowNumber({"c0"}, {"c1", "c2"}, 10, false)
-             .planNode();
-  testSerde(plan);
+TEST_F(PlanNodeSerdeTest, topNDenseRank) {
+  topNRankSerdeTest("dense_rank");
 }
 
 TEST_F(PlanNodeSerdeTest, write) {

@@ -16,7 +16,6 @@
 
 #include "velox/parse/QueryPlanner.h"
 #include "velox/duckdb/conversion/DuckConversion.h"
-#include "velox/expression/ScopedVarSetter.h"
 #include "velox/parse/DuckLogicalOperator.h"
 
 #include <duckdb.hpp> // @manual
@@ -383,6 +382,7 @@ PlanNodePtr toVeloxPlan(
   auto columnBindings = logicalProjection.GetColumnBindings();
 
   std::vector<std::string> names;
+  names.reserve(projections.size());
   for (auto i = 0; i < projections.size(); ++i) {
     names.push_back(queryContext.nextColumnName("_p"));
   }
@@ -480,6 +480,7 @@ PlanNodePtr toVeloxPlan(
   }
 
   std::vector<std::string> names;
+  names.reserve(aggregates.size());
   for (auto i = 0; i < aggregates.size(); ++i) {
     names.push_back(queryContext.nextColumnName("_a"));
   }
@@ -503,7 +504,7 @@ PlanNodePtr toVeloxPlan(
   VeloxColumnProjections projections(queryContext);
   std::vector<FieldAccessTypedExprPtr> keys;
   std::vector<SortOrder> sortOrder;
-  auto source = sources[0];
+  const auto& source = sources[0];
   for (auto& order : logicalOrder.orders) {
     keys.push_back(
         projections.toFieldAccess(*order.expression, source->outputType()));
@@ -708,8 +709,6 @@ PlanNodePtr toVeloxPlan(
     QueryContext& queryContext) {
   std::vector<PlanNodePtr> sources;
 
-  ScopedVarSetter isDelim(
-      &queryContext.isInDelimJoin, queryContext.isInDelimJoin);
   if (plan.type == ::duckdb::LogicalOperatorType::LOGICAL_DELIM_JOIN) {
     queryContext.isInDelimJoin = true;
   }

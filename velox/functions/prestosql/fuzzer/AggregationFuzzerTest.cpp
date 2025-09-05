@@ -41,6 +41,7 @@
 #include "velox/functions/prestosql/fuzzer/NoisyCountResultVerifier.h"
 #include "velox/functions/prestosql/fuzzer/NoisySumInputGenerator.h"
 #include "velox/functions/prestosql/fuzzer/NoisySumResultVerifier.h"
+#include "velox/functions/prestosql/fuzzer/NumericHistogramInputGenerator.h"
 #include "velox/functions/prestosql/fuzzer/QDigestAggInputGenerator.h"
 #include "velox/functions/prestosql/fuzzer/QDigestAggResultVerifier.h"
 #include "velox/functions/prestosql/fuzzer/TDigestAggregateInputGenerator.h"
@@ -98,6 +99,7 @@ getCustomInputGenerators() {
        std::make_shared<NoisyCountIfInputGenerator>()},
       {"noisy_count_gaussian", std::make_shared<NoisyCountInputGenerator>()},
       {"noisy_sum_gaussian", std::make_shared<NoisySumInputGenerator>()},
+      {"numeric_histogram", std::make_shared<NumericHistogramInputGenerator>()},
   };
 }
 
@@ -149,8 +151,13 @@ int main(int argc, char** argv) {
       "max_data_size_for_stats",
       "any_value",
       // Skip non-deterministic functions.
+      "noisy_approx_set_sfm",
+      "noisy_approx_distinct_sfm",
+      "noisy_approx_set_sfm_from_index_and_zeros",
       // https://github.com/facebookincubator/velox/issues/13547
       "merge",
+      // https://github.com/facebookincubator/velox/issues/14423
+      "numeric_histogram",
   };
 
   static const std::unordered_set<std::string> functionsRequireSortedInput = {

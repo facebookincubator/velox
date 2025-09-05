@@ -33,6 +33,7 @@ namespace facebook::velox::exec::test {
 
 struct PushdownConfig {
   common::SubfieldFilters subfieldFiltersMap;
+  std::string remainingFilter;
 };
 
 /// A builder class with fluent API for building query plans. Plans are built
@@ -175,14 +176,12 @@ class PlanBuilder {
   ///
   /// @param outputType List of column names and types to read from the table.
   /// @param PushdownConfig Contains pushdown configs for the table scan.
-  /// @param remainingFilter SQL expression for the additional conjunct.
   /// @param dataColumns Optional data columns that may differ from outputType.
   /// @param assignments Optional ColumnHandles.
 
   PlanBuilder& tableScanWithPushDown(
       const RowTypePtr& outputType,
       const PushdownConfig& pushdownConfig,
-      const std::string& remainingFilter = "",
       const RowTypePtr& dataColumns = nullptr,
       const connector::ColumnHandleMap& assignments = {});
 
@@ -193,11 +192,14 @@ class PlanBuilder {
   /// @param columnNames The columns to be returned from that table.
   /// @param scaleFactor The TPC-H scale factor.
   /// @param connectorId The TPC-H connector id.
+  /// @param filter Optional SQL expression to filter the data at the connector
+  /// level.
   PlanBuilder& tpchTableScan(
       tpch::Table table,
       std::vector<std::string> columnNames,
       double scaleFactor = 1,
-      std::string_view connectorId = kTpchDefaultConnectorId);
+      std::string_view connectorId = kTpchDefaultConnectorId,
+      const std::string& filter = "");
 
   /// Helper class to build a custom TableScanNode.
   /// Uses a planBuilder instance to get the next plan id, memory pool, and
@@ -318,7 +320,6 @@ class PlanBuilder {
     std::string tableName_{"hive_table"};
     std::string connectorId_{kHiveDefaultConnectorId};
     RowTypePtr outputType_;
-    std::vector<core::ExprPtr> subfieldFilters_;
     core::ExprPtr remainingFilter_;
     RowTypePtr dataColumns_;
     std::unordered_map<std::string, std::string> columnAliases_;
@@ -525,8 +526,8 @@ class PlanBuilder {
       bool parallelizable = false,
       size_t repeatTimes = 1);
 
-  PlanBuilder& filtersAsNode(bool _filtersAsNode) {
-    filtersAsNode_ = _filtersAsNode;
+  PlanBuilder& filtersAsNode(bool filtersAsNode) {
+    filtersAsNode_ = filtersAsNode;
     return *this;
   }
 
@@ -590,6 +591,22 @@ class PlanBuilder {
   /// will produce projected columns named sum_ab, c and p2.
   PlanBuilder& project(const std::vector<std::string>& projections);
 
+  /// Add a ParallelProjectNode using groups of independent SQL expressions.
+  ///
+  /// @param projectionGroups One or more groups of expressions that depend on
+  /// disjunct sets of inputs.
+  /// @param noLoadColumn Optional columns to pass through as is without
+  /// loading. These columns must be distinct from the set of columns used in
+  /// 'projectionGroups'.
+  PlanBuilder& parallelProject(
+      const std::vector<std::vector<std::string>>& projectionGroups,
+      const std::vector<std::string>& noLoadColumns = {});
+
+  /// Add a LazyDereferenceNode to the plan.
+  /// @param projections Same format as in `project`, but can only contain
+  /// field/subfield accesses.
+  PlanBuilder& lazyDereference(const std::vector<std::string>& projections);
+
   /// Add a ProjectNode to keep all existing columns and append more columns
   /// using specified expressions.
   /// @param newColumns A list of one or more expressions to use for computing
@@ -601,6 +618,7 @@ class PlanBuilder {
   /// the type.
   PlanBuilder& projectExpressions(
       const std::vector<core::ExprPtr>& projections);
+
   PlanBuilder& projectExpressions(
       const std::vector<core::TypedExprPtr>& projections);
 
@@ -1200,6 +1218,9 @@ class PlanBuilder {
   /// condition column from left side or a constant but at least one of them
   /// must not be constant. They all have the same type.
   /// @param joinType Type of the join supported: inner, left.
+  /// @param includeMatchColumn if true, 'outputLayout' should include a boolean
+  /// column at the end to indicate if a join output row has a match or not.
+  /// This only applies for left join.
   ///
   /// See hashJoin method for the description of the other parameters.
   PlanBuilder& indexLookupJoin(
@@ -1207,6 +1228,7 @@ class PlanBuilder {
       const std::vector<std::string>& rightKeys,
       const core::TableScanNodePtr& right,
       const std::vector<std::string>& joinConditions,
+      bool includeMatchColumn,
       const std::vector<std::string>& outputLayout,
       core::JoinType joinType = core::JoinType::kInner);
 
@@ -1273,9 +1295,18 @@ class PlanBuilder {
       std::optional<int32_t> limit = std::nullopt,
       bool generateRowNumber = true);
 
-  /// Add a TopNRowNumberNode to compute single row_number window function with
-  /// a limit applied to sorted partitions.
+  /// Add a TopNRowNumberNode to compute row_number
+  /// function with a limit applied to sorted partitions.
   PlanBuilder& topNRowNumber(
+      const std::vector<std::string>& partitionKeys,
+      const std::vector<std::string>& sortingKeys,
+      int32_t limit,
+      bool generateRowNumber);
+
+  /// Add a TopNRowNumberNode to compute row_number, rank or dense_rank window
+  /// function with a limit applied to sorted partitions.
+  PlanBuilder& topNRank(
+      std::string_view function,
       const std::vector<std::string>& partitionKeys,
       const std::vector<std::string>& sortingKeys,
       int32_t limit,

@@ -436,6 +436,7 @@ bool CompileState::tryPlanOperator(
     step->state = state;
     step->id = atoi(node->id().c_str());
     segments_.back().steps.push_back(step);
+    step->joinType = node->joinType();
     auto expand = makeStep<JoinExpand>();
     step->expand = expand;
     expand->nthWrap = wrapId_++;
@@ -842,10 +843,10 @@ void CompileState::planSegment(
       }
       bool needNewKernel = false;
       auto* node = segment.planNode;
-      if (auto* scan = dynamic_cast<const core::TableScanNode*>(node)) {
+      if (dynamic_cast<const core::TableScanNode*>(node)) {
         candidate.currentBox->steps.push_back(segment.steps[0]);
         needNewKernel = true;
-      } else if (auto* values = dynamic_cast<const core::ValuesNode*>(node)) {
+      } else if (dynamic_cast<const core::ValuesNode*>(node)) {
         candidate.currentBox->steps.push_back(segment.steps[0]);
         needNewKernel = true;
       } else if (

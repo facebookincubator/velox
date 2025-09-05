@@ -13,7 +13,7 @@
 # limitations under the License.
 cmake_minimum_required(VERSION 3.28)
 message(STATUS "Building using CMake version: ${CMAKE_VERSION}")
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED TRUE)
 set(CMAKE_CXX_EXTENSIONS ON) # Big Int is an extension
 message(STATUS "CXX standard: ${CMAKE_CXX_STANDARD}")
@@ -131,6 +131,7 @@ option(VELOX_ENABLE_HIVE_CONNECTOR "Build Hive connector." ON)
 option(VELOX_ENABLE_TPCH_CONNECTOR "Build TPC-H connector." ON)
 option(VELOX_ENABLE_PRESTO_FUNCTIONS "Build Presto SQL functions." ON)
 option(VELOX_ENABLE_SPARK_FUNCTIONS "Build Spark SQL functions." ON)
+option(VELOX_ENABLE_ICEBERG_FUNCTIONS "Build Iceberg functions." ON)
 option(VELOX_ENABLE_EXPRESSION "Build expression." ON)
 option(
   VELOX_ENABLE_EXAMPLES
@@ -143,7 +144,7 @@ option(VELOX_ENABLE_ABFS "Build Abfs Connector" OFF)
 option(VELOX_ENABLE_HDFS "Build Hdfs Connector" OFF)
 option(VELOX_ENABLE_PARQUET "Enable Parquet support" ON)
 option(VELOX_ENABLE_ARROW "Enable Arrow support" OFF)
-option(VELOX_ENABLE_GEO "Enable Geospatial support" ON)
+option(VELOX_ENABLE_GEO "Enable Geospatial support" OFF)
 option(VELOX_ENABLE_REMOTE_FUNCTIONS "Enable remote function support" OFF)
 option(VELOX_ENABLE_CCACHE "Use ccache if installed." ON)
 option(VELOX_ENABLE_COMPRESSION_LZ4 "Enable Lz4 compression support." OFF)
@@ -231,6 +232,9 @@ endif()
 if(VELOX_ENABLE_FAISS)
   velox_set_source(faiss)
   velox_resolve_dependency(faiss)
+  if(NOT TARGET FAISS::faiss)
+    add_library(FAISS::faiss ALIAS faiss)
+  endif()
 endif()
 
 if(DEFINED ENV{INSTALL_PREFIX})
@@ -325,6 +329,20 @@ endif()
 # Required so velox code can be used in a dynamic library
 set(CMAKE_POSITION_INDEPENDENT_CODE TRUE)
 
+# For C++20 support we need GNU GCC11 (or later versions) or Clang/AppleClang 15
+# (or later versions) to get support for the used features.
+if(NOT
+   (("${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU" AND ${CMAKE_CXX_COMPILER_VERSION}
+                                                   VERSION_GREATER_EQUAL 11)
+    OR (("${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang"
+         OR "${CMAKE_CXX_COMPILER_ID}" STREQUAL "AppleClang")
+        AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 15)))
+  message(
+    FATAL_ERROR
+      "Unsupported compiler ${CMAKE_CXX_COMPILER_ID} with version ${CMAKE_CXX_COMPILER_VERSION} found."
+  )
+endif()
+
 execute_process(
   COMMAND
     bash -c
@@ -385,6 +403,11 @@ if(ENABLE_ALL_WARNINGS)
          -Wno-unused-result \
          -Wno-format-overflow \
          -Wno-strict-aliasing")
+    # Avoid compiler bug for GCC 12.2.1
+    # https://gcc.gnu.org/bugzilla/show_bug.cgi?id=105329
+    if(CMAKE_CXX_COMPILER_VERSION VERSION_EQUAL "12.2.1")
+      string(APPEND KNOWN_COMPILER_SPECIFIC_WARNINGS " -Wno-restrict")
+    endif()
   endif()
 
   set(KNOWN_WARNINGS
@@ -576,13 +599,6 @@ endif()
 
 # GCC needs to link a library to enable std::filesystem.
 if("${CMAKE_CXX_COMPILER_ID}" MATCHES "GNU")
-
-  # Ensure we have gcc at least 9+.
-  if(CMAKE_CXX_COMPILER_VERSION LESS 9.0)
-    message(
-      FATAL_ERROR "VELOX requires gcc > 9. Found ${CMAKE_CXX_COMPILER_VERSION}")
-  endif()
-
   # Find Threads library
   find_package(Threads REQUIRED)
 endif()

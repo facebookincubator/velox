@@ -21,6 +21,7 @@ velox_add_library(
   ArrayContains.cpp
   ArrayDistinct.cpp
   ArrayDuplicates.cpp
+  ArrayFlatten.cpp
   ArrayIntersectExcept.cpp
   ArrayAndMapMatch.cpp
   ArrayMinMaxBy.cpp
@@ -45,6 +46,7 @@ velox_add_library(
   Reverse.cpp
   RowFunction.cpp
   Sequence.cpp
+  SfmSketchFunctions.cpp
   SimpleComparisonMatcher.cpp
   Split.cpp
   SplitToMap.cpp

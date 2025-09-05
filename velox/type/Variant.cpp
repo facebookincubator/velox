@@ -17,23 +17,19 @@
 #include "velox/type/Variant.h"
 #include <cfloat>
 #include "folly/json.h"
+#include "velox/common/base/BitUtil.h"
 #include "velox/common/encode/Base64.h"
 #include "velox/type/DecimalUtil.h"
 #include "velox/type/FloatingPointUtil.h"
-#include "velox/type/HugeInt.h"
 
 namespace facebook::velox {
 
 namespace {
-const folly::json::serialization_opts& getOpts() {
-  static const folly::json::serialization_opts opts_ = []() {
-    folly::json::serialization_opts opts;
-    opts.sort_keys = true;
-    return opts;
-  }();
-  return opts_;
-}
-} // namespace
+
+bool dispatchDynamicVariantEquality(
+    const Variant& a,
+    const Variant& b,
+    const bool& enableNullEqualsNull);
 
 template <bool nullEqualsNull>
 bool evaluateNullEquality(const Variant& a, const Variant& b) {
@@ -44,6 +40,9 @@ bool evaluateNullEquality(const Variant& a, const Variant& b) {
   }
   return false;
 }
+
+template <TypeKind KIND>
+struct VariantEquality;
 
 // scalars
 template <TypeKind KIND>
@@ -163,6 +162,7 @@ bool dispatchDynamicVariantEquality(
   return VELOX_DYNAMIC_TYPE_DISPATCH_METHOD(
       VariantEquality, equals<false>, a.kind(), a, b);
 }
+} // namespace
 
 std::string encloseWithQuote(std::string str) {
   constexpr auto kDoubleQuote = '"';
@@ -252,13 +252,95 @@ std::string Variant::toString(const TypePtr& type) const {
     case TypeKind::FUNCTION:
     case TypeKind::UNKNOWN:
     case TypeKind::INVALID:
-      VELOX_NYI();
+      return toJson(type);
   }
 
-  VELOX_UNSUPPORTED(
-      "Given type {} is not supported in Variant::toString()",
-      mapTypeKindToName(kind_));
+  folly::assume_unreachable();
 }
+
+namespace {
+
+std::string toStringAsVectorImpl(const TypePtr& type, const Variant& value);
+
+template <TypeKind Kind>
+std::string toStringAsVectorNoNull(const TypePtr& type, const Variant& value) {
+  using T = typename TypeTraits<Kind>::NativeType;
+
+  return type->template valueToString<T>(T(value.value<Kind>()));
+}
+
+template <>
+std::string toStringAsVectorNoNull<TypeKind::OPAQUE>(
+    const TypePtr& type,
+    const Variant& value) {
+  return "<opaque>";
+}
+
+template <>
+std::string toStringAsVectorNoNull<TypeKind::ARRAY>(
+    const TypePtr& type,
+    const Variant& value) {
+  const auto& arrayValue = value.value<TypeKind::ARRAY>();
+  const auto& elementType = type->childAt(0);
+
+  return stringifyTruncatedElementList(
+      arrayValue.size(), [&](auto& out, auto i) {
+        out << toStringAsVectorImpl(elementType, arrayValue.at(i));
+      });
+}
+
+template <>
+std::string toStringAsVectorNoNull<TypeKind::MAP>(
+    const TypePtr& type,
+    const Variant& value) {
+  const auto& mapValue = value.value<TypeKind::MAP>();
+  const auto& keyType = type->childAt(0);
+  const auto& valueType = type->childAt(1);
+
+  auto it = mapValue.begin();
+
+  return stringifyTruncatedElementList(mapValue.size(), [&](auto& out, auto i) {
+    out << toStringAsVectorImpl(keyType, it->first) << " => "
+        << toStringAsVectorImpl(valueType, it->second);
+    ++it;
+  });
+}
+
+template <>
+std::string toStringAsVectorNoNull<TypeKind::ROW>(
+    const TypePtr& type,
+    const Variant& value) {
+  const auto size = type->size();
+
+  const auto& rowValue = value.value<TypeKind::ROW>();
+  VELOX_CHECK_EQ(size, rowValue.size());
+
+  return stringifyTruncatedElementList(size, [&](auto& out, auto i) {
+    out << toStringAsVectorImpl(type->childAt(i), rowValue.at(i));
+  });
+}
+
+std::string toStringAsVectorImpl(const TypePtr& type, const Variant& value) {
+  if (value.isNull()) {
+    return "null";
+  }
+
+  return VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
+      toStringAsVectorNoNull, type->kind(), type, value);
+}
+
+} // namespace
+
+std::string Variant::toStringAsVector(const TypePtr& type) const {
+  return toStringAsVectorImpl(type, *this);
+}
+
+namespace {
+const folly::json::serialization_opts& getOpts() {
+  static const folly::json::serialization_opts kOpts;
+  return kOpts;
+}
+} // namespace
 
 std::string Variant::toJson(const TypePtr& type) const {
   // todo(youknowjack): consistent story around std::stringifying, converting,
@@ -819,24 +901,21 @@ uint64_t Variant::hash() const {
 
 template <>
 uint64_t Variant::hash<TypeKind::ARRAY>() const {
-  auto& arrayVariant = value<TypeKind::ARRAY>();
-  auto hasher = folly::Hash{};
-  uint64_t hash = 0;
-  for (int32_t i = 0; i < arrayVariant.size(); i++) {
-    hash =
-        folly::hash::hash_combine_generic(hasher, hash, arrayVariant[i].hash());
+  const auto& arrayVariant = value<TypeKind::ARRAY>();
+  uint64_t hash = bits::kNullHash;
+  for (int32_t i = 0; i < arrayVariant.size(); ++i) {
+    hash = bits::hashMix(hash, arrayVariant[i].hash());
   }
   return hash;
 }
 
 template <>
 uint64_t Variant::hash<TypeKind::ROW>() const {
-  auto hasher = folly::Hash{};
-  uint64_t hash = 0;
-  auto& rowVariant = value<TypeKind::ROW>();
-  for (int32_t i = 0; i < rowVariant.size(); i++) {
-    hash =
-        folly::hash::hash_combine_generic(hasher, hash, rowVariant[i].hash());
+  const auto& rowVariant = value<TypeKind::ROW>();
+  uint64_t hash = bits::kNullHash;
+  for (int32_t i = 0; i < rowVariant.size(); ++i) {
+    const auto childHash = rowVariant[i].hash();
+    hash = (i == 0 ? childHash : bits::hashMix(hash, childHash));
   }
   return hash;
 }
@@ -849,23 +928,18 @@ uint64_t Variant::hash<TypeKind::TIMESTAMP>() const {
 
 template <>
 uint64_t Variant::hash<TypeKind::MAP>() const {
-  auto hasher = folly::Hash{};
-
   const auto& mapVariant = value<TypeKind::MAP>();
-
-  // Map is already sorted by key.
-  uint64_t hash = 0;
+  uint64_t hash = bits::kNullHash;
   for (const auto& [key, value] : mapVariant) {
-    hash = folly::hash::hash_combine_generic(hasher, hash, key.hash());
-    hash = folly::hash::hash_combine_generic(hasher, hash, value.hash());
+    const auto elementHash = bits::hashMix(key.hash(), value.hash());
+    hash = bits::commutativeHashMix(hash, elementHash);
   }
-
   return hash;
 }
 
 uint64_t Variant::hash() const {
   if (isNull()) {
-    return folly::Hash{}(static_cast<int32_t>(kind_));
+    return bits::kNullHash;
   }
 
   return VELOX_DYNAMIC_TYPE_DISPATCH_ALL(hash, kind_);
@@ -1025,6 +1099,141 @@ void Variant::verifyArrayElements(const std::vector<Variant>& inputs) {
             "All array elements must be of the same kind");
       }
     }
+  }
+}
+
+bool Variant::equalsWithNullEqualsNull(const Variant& other) const {
+  if (other.kind_ != this->kind_) {
+    return false;
+  }
+  return dispatchDynamicVariantEquality(*this, other, true);
+}
+
+TypePtr Variant::inferType() const {
+  switch (kind_) {
+    case TypeKind::MAP: {
+      TypePtr keyType;
+      TypePtr valueType;
+      if (!isNull()) {
+        const auto& m = map();
+        for (const auto& [key, value] : m) {
+          if (keyType == nullptr && !key.isNull()) {
+            keyType = key.inferType();
+          }
+          if (valueType == nullptr && !value.isNull()) {
+            valueType = value.inferType();
+          }
+          if (keyType && valueType) {
+            break;
+          }
+        }
+      }
+      return MAP(
+          keyType ? keyType : UNKNOWN(), valueType ? valueType : UNKNOWN());
+    }
+    case TypeKind::ROW: {
+      std::vector<TypePtr> children;
+      if (!isNull()) {
+        const auto& r = row();
+        children.reserve(r.size());
+        for (auto& v : r) {
+          children.push_back(v.inferType());
+        }
+      }
+      return ROW(std::move(children));
+    }
+    case TypeKind::ARRAY: {
+      TypePtr elementType = UNKNOWN();
+      if (!isNull()) {
+        const auto& a = array();
+        if (!a.empty()) {
+          elementType = a.at(0).inferType();
+        }
+      }
+      return ARRAY(std::move(elementType));
+    }
+    case TypeKind::OPAQUE: {
+      if (isNull()) {
+        return UNKNOWN();
+      }
+      return value<TypeKind::OPAQUE>().type;
+    }
+    case TypeKind::UNKNOWN: {
+      return UNKNOWN();
+    }
+    default:
+      return createScalarType(kind_);
+  }
+}
+
+bool Variant::isTypeCompatible(const TypePtr& type) const {
+  if (kind_ == TypeKind::UNKNOWN) {
+    return true;
+  }
+
+  if (kind_ != type->kind()) {
+    return false;
+  }
+
+  switch (kind_) {
+    case TypeKind::ARRAY: {
+      if (!isNull()) {
+        const auto& a = array();
+        if (!a.empty()) {
+          if (!a[0].isTypeCompatible(type->childAt(0))) {
+            return false;
+          }
+        }
+      }
+
+      return true;
+    }
+    case TypeKind::MAP: {
+      if (!isNull()) {
+        bool keyTypeChecked = false;
+        bool valueTypeChecked = false;
+
+        const auto& m = map();
+        for (auto& [key, value] : m) {
+          if (!keyTypeChecked && !key.isNull()) {
+            if (!key.isTypeCompatible(type->childAt(0))) {
+              return false;
+            }
+            keyTypeChecked = true;
+          }
+          if (!valueTypeChecked && !value.isNull()) {
+            if (!value.isTypeCompatible(type->childAt(1))) {
+              return false;
+            }
+            valueTypeChecked = true;
+          }
+
+          if (keyTypeChecked && valueTypeChecked) {
+            break;
+          }
+        }
+      }
+
+      return true;
+    }
+    case TypeKind::ROW: {
+      if (!isNull()) {
+        const auto& r = row();
+        if (r.size() != type->size()) {
+          return false;
+        }
+
+        for (auto i = 0; i < r.size(); ++i) {
+          if (!r[i].isTypeCompatible(type->childAt(i))) {
+            return false;
+          }
+        }
+      }
+
+      return true;
+    }
+    default:
+      return true;
   }
 }
 

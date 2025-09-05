@@ -61,6 +61,7 @@ class HdfsFileSystem : public FileSystem {
       std::string_view path,
       const FileOptions& options = {}) override;
 
+  // Deletes the hdfs files.
   void remove(std::string_view path) override;
 
   void rename(
@@ -76,9 +77,7 @@ class HdfsFileSystem : public FileSystem {
   void mkdir(std::string_view path, const DirectoryOptions& options = {})
       override;
 
-  void rmdir(std::string_view path) override {
-    VELOX_UNSUPPORTED("rmdir for HDFS not implemented");
-  }
+  void rmdir(std::string_view path) override;
 
   static bool isHdfsFile(std::string_view filename);
 

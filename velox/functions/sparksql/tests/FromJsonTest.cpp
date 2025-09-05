@@ -13,29 +13,15 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include <limits>
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
+#include "velox/functions/sparksql/tests/JsonTestUtil.h"
 
 using namespace facebook::velox::test;
 
 namespace facebook::velox::functions::sparksql::test {
 namespace {
-constexpr float kNaNFloat = std::numeric_limits<float>::quiet_NaN();
-constexpr float kInfFloat = std::numeric_limits<float>::infinity();
-constexpr double kNaNDouble = std::numeric_limits<double>::quiet_NaN();
-constexpr double kInfDouble = std::numeric_limits<double>::infinity();
-
 class FromJsonTest : public SparkFunctionBaseTest {
  protected:
-  core::CallTypedExprPtr createFromJson(const TypePtr& outputType) {
-    std::vector<core::TypedExprPtr> inputs = {
-        std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c0")};
-
-    return std::make_shared<const core::CallTypedExpr>(
-        outputType, std::move(inputs), "from_json");
-  }
-
   void testFromJson(const VectorPtr& input, const VectorPtr& expected) {
     auto expr = createFromJson(expected->type());
     testEncodings(expr, {input}, expected);
@@ -233,6 +219,32 @@ TEST_F(FromJsonTest, basicDate) {
   testFromJson(input, makeRowVector({"a"}, {expected}));
 }
 
+TEST_F(FromJsonTest, basicShortDecimal) {
+  auto expected = makeNullableFlatVector<int64_t>(
+      {53210, -100, std::nullopt, std::nullopt}, DECIMAL(7, 2));
+  auto input = makeFlatVector<std::string>(
+      {R"({"a": "5.321E2"})",
+       R"({"a": -1})",
+       R"({"a": 55555555555555555555.5555})",
+       R"({"a": "+1BD"})"});
+  testFromJson(input, makeRowVector({"a"}, {expected}));
+}
+
+TEST_F(FromJsonTest, basicLongDecimal) {
+  auto expected = makeNullableFlatVector<int128_t>(
+      {53210000,
+       -100000,
+       HugeInt::build(0xffff, 0xffffffffffffffff),
+       std::nullopt},
+      DECIMAL(38, 5));
+  auto input = makeFlatVector<std::string>(
+      {R"({"a": "5.321E2"})",
+       R"({"a": -1})",
+       R"({"a": 12089258196146291747.06175})",
+       R"({"a": "+1BD"})"});
+  testFromJson(input, makeRowVector({"a"}, {expected}));
+}
+
 TEST_F(FromJsonTest, basicString) {
   auto expected = makeNullableFlatVector<StringView>(
       {"1", "2.0", "true", "{\"b\": \"test\"}", "[1, 2]"});
@@ -387,15 +399,11 @@ TEST_F(FromJsonTest, structWrongData) {
 
 TEST_F(FromJsonTest, invalidType) {
   auto primitiveTypeOutput = makeFlatVector<int64_t>({2, 2, 3});
-  auto decimalOutput = makeFlatVector<int64_t>({2, 2, 3}, DECIMAL(16, 7));
   auto mapOutput =
       makeMapVector<int64_t, int64_t>({{{1, 1}}, {{2, 2}}, {{3, 3}}});
   auto input = makeFlatVector<std::string>({R"(2)", R"({2)", R"({3)"});
   VELOX_ASSERT_USER_THROW(
       testFromJson(input, primitiveTypeOutput), "Unsupported type BIGINT.");
-  VELOX_ASSERT_USER_THROW(
-      testFromJson(input, makeRowVector({"a"}, {decimalOutput})),
-      "Unsupported type ROW<a:DECIMAL(16, 7)>");
   VELOX_ASSERT_USER_THROW(
       testFromJson(input, mapOutput), "Unsupported type MAP<BIGINT,BIGINT>.");
 }
