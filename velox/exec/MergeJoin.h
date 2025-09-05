@@ -235,6 +235,12 @@ class MergeJoin : public Operator {
   // right.
   bool addToOutputForRightJoin();
 
+ private:
+  // Template function to consolidate addToOutputForLeftJoin and
+  // addToOutputForRightJoin
+  template <bool IsLeftJoin>
+  bool addToOutputImpl();
+
   // Tries to add one row of output by writing to the indices of the output
   // dictionaries. By default, this operator returns dictionaries wrapped around
   // the input columns from the left and right. If `isRightFlattened_`, the
@@ -305,6 +311,31 @@ class MergeJoin : public Operator {
     return rightRowIndex_ == rightInput_->size();
   }
 
+  // Tries to complete incomplete matches on both left and right sides.
+  // Returns true if both matches are complete, false if more input is needed.
+  bool advanceMatch();
+
+  // Tries to complete an incomplete match on the left side by finding the end
+  // of matching key sequence. Returns true if complete, false if more input
+  // needed.
+  bool advanceLeftMatch();
+
+  // Tries to complete an incomplete match on the right side by finding the end
+  // of matching key sequence. Returns true if complete, false if more input
+  // needed.
+  bool advanceRightMatch();
+
+  // Template function to consolidate advanceLeftMatch and advanceRightMatch
+  // logic. Uses compile-time template parameter to handle left vs right
+  // differences.
+  template <bool IsLeft>
+  bool advanceMatchImpl();
+
+  // Handles output generation when only one side of the join has data
+  // available. Processes unmatched rows for outer joins when the other side is
+  // exhausted.
+  RowVectorPtr handleSingleSideOutput();
+
   // Properly resizes and produces the current output vector if one is
   // available.
   RowVectorPtr produceOutput() {
@@ -330,6 +361,16 @@ class MergeJoin : public Operator {
   // method. For an anti join without a filter, we must specifically exclude
   // rows from the left side that have a match on the right.
   RowVectorPtr filterOutputForAntiJoin(const RowVectorPtr& output);
+
+  // Clears the current left input batch (input_) by setting it to nullptr.
+  // Called when the left batch has been fully processed or when resetting
+  // state during match processing.
+  void clearLeftInput();
+
+  // Clears the current right input batch (rightInput_) by setting it to
+  // nullptr. Called when the right batch has been fully processed or when
+  // resetting state during match processing.
+  void clearRightInput();
 
   // As we populate the results of the join, we track whether a given
   // output row is a result of a match between left and right sides or a miss.
