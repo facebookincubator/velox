@@ -59,7 +59,8 @@ class SignatureVariable {
       ParameterType type,
       bool knownTypesOnly = false,
       bool orderableTypesOnly = false,
-      bool comparableTypesOnly = false);
+      bool comparableTypesOnly = false,
+      bool nonDecimalNumericTypeOnly = false);
 
   const std::string& name() const {
     return name_;
@@ -84,6 +85,11 @@ class SignatureVariable {
     return comparableTypesOnly_;
   }
 
+  bool nonDecimalNumericTypeOnly() const {
+    VELOX_USER_CHECK(isTypeParameter());
+    return nonDecimalNumericTypeOnly_;
+  }
+
   bool isTypeParameter() const {
     return type_ == ParameterType::kTypeParameter;
   }
@@ -101,7 +107,8 @@ class SignatureVariable {
         constraint_ == rhs.constraint_ &&
         knownTypesOnly_ == rhs.knownTypesOnly_ &&
         orderableTypesOnly_ == rhs.orderableTypesOnly_ &&
-        comparableTypesOnly_ == rhs.comparableTypesOnly_;
+        comparableTypesOnly_ == rhs.comparableTypesOnly_ &&
+        nonDecimalNumericTypeOnly_ == rhs.nonDecimalNumericTypeOnly_;
   }
 
  private:
@@ -113,6 +120,7 @@ class SignatureVariable {
   bool knownTypesOnly_ = false;
   bool orderableTypesOnly_ = false;
   bool comparableTypesOnly_ = false;
+  bool nonDecimalNumericTypeOnly_ = false;
 };
 
 class FunctionSignature {
@@ -407,6 +415,9 @@ class AggregateFunctionSignatureBuilder {
       const std::string& name);
 
   AggregateFunctionSignatureBuilder& comparableTypeVariable(
+      const std::string& name);
+
+  AggregateFunctionSignatureBuilder& nonDecimalNumericTypeVariable(
       const std::string& name);
 
   AggregateFunctionSignatureBuilder& integerVariable(
