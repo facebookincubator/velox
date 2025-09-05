@@ -16,7 +16,7 @@ cuDF supports Linux but not Windows or MacOS, and requires CUDA 12.0+ with a com
 
 The cuDF backend is included in Velox builds when the [VELOX_ENABLE_CUDF](https://github.com/facebookincubator/velox/blob/43df50c4f24bcbfa96f5739c072ab0894d41cf4c/CMakeLists.txt#L455)  flag is set. The `adapters-cuda` service in Velox's [docker-compose.yml](https://github.com/facebookincubator/velox/blob/43df50c4f24bcbfa96f5739c072ab0894d41cf4c/docker-compose.yml#L69) is an excellent starting point for Velox builds with cuDF. 
 
-1. Use `docker-compose` to run an `adapters-cuda` image.
+1. Use `docker compose` to run an `adapters-cuda` image.
 ```
 $ docker compose -f docker-compose.yml run -e NUM_THREADS=64 --rm -v "$(pwd):/velox" adapters-cuda /bin/bash
 ```
@@ -45,13 +45,13 @@ Many of tests for cuDF are "operator tests" which confirm correct execution of s
 
 Velox-cuDF also includes "function tests" which cover the behavior of shared functions that could be called in multiple operators. Velox-cuDF function tests assess the correctness of functions using one or more cuDF API calls to provide the output. [SubfieldFilterAstTest](https://github.com/facebookincubator/velox/blob/99a04b94eed42d1c35ae99101da3bf77b31652e8/velox/experimental/cudf/tests/SubfieldFilterAstTest.cpp#L158) includes several examples of function tests. Please note that unit tests for cuDF APIs are included in [cudf/cpp/tests](https://github.com/rapidsai/cudf/tree/branch-25.10/cpp/tests) rather than Velox.
 
-#### Fuzz testing
+#### Fuzz tests
 
 Velox includes components for "fuzz testing" to ensure robustness of Velox operators. For instance, the [Join Fuzzer](https://github.com/facebookincubator/velox/blob/99a04b94eed42d1c35ae99101da3bf77b31652e8/velox/docs/develop/testing/join-fuzzer.rst) executes a random join type with random inputs and compares the Velox results with a reference query engine. Fuzz testing tools have been used for cuDF operator development, but fuzz testing for cuDF is yet integrated into Velox mainline.
 
 ### Benchmarking Velox with cuDF
 
-Benchmarking Velox-cuDF will run as part of nightly automation workflows (outside of CI). Velox's cuDF backend can execute the hand-built query plans located at [TpchQueryBuilder](https://github.com/facebookincubator/velox/blob/43df50c4f24bcbfa96f5739c072ab0894d41cf4c/velox/exec/tests/utils/TpchQueryBuilder.cpp). Velox [PR 13695](https://github.com/facebookincubator/velox/pull/13695) includes changes to extend Velox benchmarks to the cuDF backend. Please note that the hand-built query plans require the data set to have floating-point types in place of the fixed-point types defined in the standard. Further development of Velox's TpchQueryBuilder benchmark could allow correct behavior with both fixed-point and floating-point types.
+Benchmarking Velox-cuDF will run as part of nightly automation workflows (outside of CI). Velox's cuDF backend can execute the hand-built query plans located at [TpchQueryBuilder](https://github.com/facebookincubator/velox/blob/43df50c4f24bcbfa96f5739c072ab0894d41cf4c/velox/exec/tests/utils/TpchQueryBuilder.cpp). Velox [PR 13695](https://github.com/facebookincubator/velox/pull/13695) includes changes to extend Velox benchmarks to the cuDF backend. Please note that the hand-built query plans require the data set to have floating-point types in place of the fixed-point types defined in the standard. Further development of Velox's TpchBenchmark could allow correct behavior with both fixed-point and floating-point types.
 
 ## Contributing
 
