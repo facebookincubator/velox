@@ -15,7 +15,6 @@
  */
 #pragma once
 
-#include <folly/Range.h>
 #include <folly/base64.h>
 #include <gtest/gtest.h>
 #include <numeric>
@@ -34,7 +33,7 @@ class QuantileDigestTestBase : public testing::Test {
 
   template <typename QuantileDigest, bool testSum = true>
   static void checkQuantiles(
-      folly::Range<const double*> values,
+      std::span<const double> values,
       QuantileDigest& digest,
       double sumError,
       double rankError) {

@@ -19,7 +19,6 @@
 #include <fmt/format.h>
 #include <string>
 
-#include "folly/Range.h"
 #include "velox/common/caching/ScanTracker.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/StreamIdentifier.h"

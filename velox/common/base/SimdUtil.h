@@ -486,7 +486,7 @@ inline void storeLeading(
 template <typename TData, typename TIndex, typename A = xsimd::default_arch>
 inline void transpose(
     const TData* input,
-    folly::Range<const TIndex*> indices,
+    std::span<const TIndex> indices,
     TData* output) {
   constexpr int32_t kBatch = xsimd::batch<TData>::size;
   const auto size = indices.size();
@@ -510,7 +510,7 @@ inline void transpose(
 /// byte is not full the trailing bits are undefined.
 void gatherBits(
     const uint64_t* bits,
-    folly::Range<const int32_t*> indices,
+    std::span<const int32_t> indices,
     uint64_t* result);
 
 // Adds 'bytes' bytes to an address of arbitrary type.

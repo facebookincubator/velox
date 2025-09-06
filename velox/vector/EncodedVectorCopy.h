@@ -58,7 +58,7 @@ struct EncodedVectorCopyOptions {
 void encodedVectorCopy(
     const EncodedVectorCopyOptions& options,
     const VectorPtr& source,
-    const folly::Range<const BaseVector::CopyRange*>& ranges,
+    const std::span<const BaseVector::CopyRange>& ranges,
     VectorPtr& target);
 
 } // namespace facebook::velox

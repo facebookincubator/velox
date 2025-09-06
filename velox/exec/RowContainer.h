@@ -38,9 +38,9 @@ class Accumulator {
       bool usesExternalMemory,
       int32_t alignment,
       TypePtr spillType,
-      std::function<void(folly::Range<char**> groups, VectorPtr& result)>
+      std::function<void(std::span<char*> groups, VectorPtr& result)>
           spillExtractFunction,
-      std::function<void(folly::Range<char**> groups)> destroyFunction);
+      std::function<void(std::span<char*> groups)> destroyFunction);
 
   explicit Accumulator(Aggregate* aggregate, TypePtr spillType);
 
@@ -54,9 +54,9 @@ class Accumulator {
 
   const TypePtr& spillType() const;
 
-  void extractForSpill(folly::Range<char**> groups, VectorPtr& result) const;
+  void extractForSpill(std::span<char*> groups, VectorPtr& result) const;
 
-  void destroy(folly::Range<char**> groups);
+  void destroy(std::span<char*> groups);
 
  private:
   const bool isFixedSize_;
@@ -64,8 +64,8 @@ class Accumulator {
   const bool usesExternalMemory_;
   const int32_t alignment_;
   const TypePtr spillType_;
-  std::function<void(folly::Range<char**>, VectorPtr&)> spillExtractFunction_;
-  std::function<void(folly::Range<char**> groups)> destroyFunction_;
+  std::function<void(std::span<char*>, VectorPtr&)> spillExtractFunction_;
+  std::function<void(std::span<char*> groups)> destroyFunction_;
 };
 
 using normalized_key_t = uint64_t;
@@ -108,7 +108,7 @@ class RowPartitions {
 
   /// Appends 'partitions' to the end of 'this'. Throws if adding more than the
   /// capacity given at construction.
-  void appendPartitions(folly::Range<const uint8_t*> partitions);
+  void appendPartitions(std::span<const uint8_t> partitions);
 
   auto& allocation() const {
     return allocation_;
@@ -262,7 +262,7 @@ class RowContainer {
   /// The number of flags (bits) per accumulator, one for null and one for
   /// initialized.
   static constexpr size_t kNumAccumulatorFlags = 2;
-  using Eraser = std::function<void(folly::Range<char**> rows)>;
+  using Eraser = std::function<void(std::span<char*> rows)>;
 
   /// 'keyTypes' gives the type of row and use 'allocator' for bulk
   /// allocation.
@@ -337,12 +337,12 @@ class RowContainer {
 
   /// Adds 'rows' to the free rows list and frees any associated variable length
   /// data.
-  void eraseRows(folly::Range<char**> rows);
+  void eraseRows(std::span<char*> rows);
 
   /// Copies elements of 'rows' where the char* points to a row inside 'this' to
   /// 'result' and returns the number copied. 'result' should have space for
   /// 'rows.size()'.
-  int32_t findRows(folly::Range<char**> rows, char** result) const;
+  int32_t findRows(std::span<char*> rows, char** result) const;
 
   void incrementRowSize(char* row, uint64_t bytes) {
     uint32_t* ptr = reinterpret_cast<uint32_t*>(row + rowSizeOffset_);
@@ -374,7 +374,7 @@ class RowContainer {
   /// 'columnIndex' column of 'rows'.
   void store(
       const DecodedVector& decoded,
-      folly::Range<char**> rows,
+      std::span<char*> rows,
       int32_t columnIndex);
 
   HashStringAllocator& stringAllocator() {
@@ -394,7 +394,7 @@ class RowContainer {
   ///
   /// Used for spilling as it is more efficient than converting from row to
   /// columnar format.
-  void extractSerializedRows(folly::Range<char**> rows, const VectorPtr& result)
+  void extractSerializedRows(std::span<char*> rows, const VectorPtr& result)
       const;
 
   /// Copies serialized row produced by 'extractSerializedRow' into the
@@ -447,7 +447,7 @@ class RowContainer {
   /// correctly.
   static void extractColumn(
       const char* const* rows,
-      folly::Range<const vector_size_t*> rowNumbers,
+      std::span<const vector_size_t> rowNumbers,
       RowColumn col,
       bool columnHasNulls,
       vector_size_t resultOffset,
@@ -504,7 +504,7 @@ class RowContainer {
   /// null.
   void extractColumn(
       const char* const* rows,
-      folly::Range<const vector_size_t*> rowNumbers,
+      std::span<const vector_size_t> rowNumbers,
       int32_t columnIndex,
       const vector_size_t resultOffset,
       const VectorPtr& result) const {
@@ -757,7 +757,7 @@ class RowContainer {
   /// the hash with the existing value in 'result'.
   void hash(
       int32_t columnIndex,
-      folly::Range<char**> rows,
+      std::span<char*> rows,
       bool mix,
       uint64_t* result) const;
 
@@ -926,7 +926,7 @@ class RowContainer {
   template <TypeKind Kind>
   static void extractColumnTyped(
       const char* const* rows,
-      folly::Range<const vector_size_t*> rowNumbers,
+      std::span<const vector_size_t> rowNumbers,
       int32_t numRows,
       RowColumn column,
       bool columnHasNulls,
@@ -956,7 +956,7 @@ class RowContainer {
   template <bool useRowNumbers, TypeKind Kind>
   static void extractColumnTypedInternal(
       const char* const* rows,
-      folly::Range<const vector_size_t*> rowNumbers,
+      std::span<const vector_size_t> rowNumbers,
       int32_t numRows,
       RowColumn column,
       bool columnHasNulls,
@@ -1055,7 +1055,7 @@ class RowContainer {
   template <TypeKind Kind>
   inline void storeWithNullsBatch(
       const DecodedVector& decoded,
-      folly::Range<char**> rows,
+      std::span<char*> rows,
       bool isKey,
       int32_t offset,
       int32_t nullByte,
@@ -1071,7 +1071,7 @@ class RowContainer {
   template <TypeKind Kind>
   inline void storeNoNullsBatch(
       const DecodedVector& decoded,
-      folly::Range<char**> rows,
+      std::span<char*> rows,
       bool isKey,
       int32_t offset,
       int32_t column) {
@@ -1084,7 +1084,7 @@ class RowContainer {
   template <bool useRowNumbers, typename T>
   static void extractValuesWithNulls(
       const char* const* rows,
-      folly::Range<const vector_size_t*> rowNumbers,
+      std::span<const vector_size_t> rowNumbers,
       int32_t numRows,
       int32_t offset,
       int32_t nullByte,
@@ -1123,7 +1123,7 @@ class RowContainer {
   template <bool useRowNumbers, typename T>
   static void extractValuesNoNulls(
       const char* const* rows,
-      folly::Range<const vector_size_t*> rowNumbers,
+      std::span<const vector_size_t> rowNumbers,
       int32_t numRows,
       int32_t offset,
       int32_t resultOffset,
@@ -1163,7 +1163,7 @@ class RowContainer {
       const Type* type,
       RowColumn column,
       bool nullable,
-      folly::Range<char**> rows,
+      std::span<char*> rows,
       bool mix,
       uint64_t* result) const;
 
@@ -1362,7 +1362,7 @@ class RowContainer {
   template <bool useRowNumbers>
   static void extractComplexType(
       const char* const* rows,
-      folly::Range<const vector_size_t*> rowNumbers,
+      std::span<const vector_size_t> rowNumbers,
       int32_t numRows,
       RowColumn column,
       int32_t resultOffset,
@@ -1431,7 +1431,7 @@ class RowContainer {
   template <typename FieldType>
   void freeVariableWidthFieldsAtColumn(
       size_t column_index,
-      folly::Range<char**> rows) {
+      std::span<char*> rows) {
     static_assert(
         std::is_same_v<FieldType, StringView> ||
         std::is_same_v<FieldType, std::string_view>);
@@ -1458,12 +1458,12 @@ class RowContainer {
 
   // Free any variable-width fields associated with the 'rows' and zero out
   // complex-typed field in 'rows'.
-  void freeVariableWidthFields(folly::Range<char**> rows);
+  void freeVariableWidthFields(std::span<char*> rows);
 
   // Free any aggregates associated with the 'rows'.
-  void freeAggregates(folly::Range<char**> rows);
+  void freeAggregates(std::span<char*> rows);
 
-  void freeRowsExtraMemory(folly::Range<char**> rows);
+  void freeRowsExtraMemory(std::span<char*> rows);
 
   inline void updateColumnStats(
       const DecodedVector& decoded,
@@ -1659,7 +1659,7 @@ inline void RowContainer::storeNoNulls<TypeKind::HUGEINT>(
 template <>
 inline void RowContainer::extractColumnTyped<TypeKind::OPAQUE>(
     const char* const* /*rows*/,
-    folly::Range<const vector_size_t*> /*rowNumbers*/,
+    std::span<const vector_size_t> /*rowNumbers*/,
     int32_t /*numRows*/,
     RowColumn /*column*/,
     bool /*columnHasNulls*/,
@@ -1689,7 +1689,7 @@ inline void RowContainer::extractColumn(
 
 inline void RowContainer::extractColumn(
     const char* const* rows,
-    folly::Range<const vector_size_t*> rowNumbers,
+    std::span<const vector_size_t> rowNumbers,
     RowColumn column,
     bool columnHasNulls,
     int32_t resultOffset,

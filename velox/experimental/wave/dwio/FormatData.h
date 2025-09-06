@@ -16,7 +16,6 @@
 
 #pragma once
 
-#include <folly/Range.h>
 #include "velox/common/base/Semaphore.h"
 #include "velox/common/caching/AsyncDataCache.h"
 #include "velox/common/file/Region.h"
@@ -164,7 +163,7 @@ class SplitStaging {
   StagingSet dependsOn_;
 };
 
-using RowSet = folly::Range<const int32_t*>;
+using RowSet = std::span<const int32_t>;
 class ColumnReader;
 
 /// Information that allows a column to be read in parallel independent thread

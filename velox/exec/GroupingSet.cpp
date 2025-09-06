@@ -621,12 +621,12 @@ bool GroupingSet::getGlobalAggregationOutput(
   }
 
   if (sortedAggregations_) {
-    sortedAggregations_->extractValues(folly::Range(groups, 1), result);
+    sortedAggregations_->extractValues(std::span(groups, 1), result);
   }
 
   for (const auto& aggregation : distinctAggregations_) {
     if (aggregation != nullptr) {
-      aggregation->extractValues(folly::Range(groups, 1), result);
+      aggregation->extractValues(std::span(groups, 1), result);
     }
   }
 
@@ -701,7 +701,7 @@ void GroupingSet::destroyGlobalAggregations() {
     auto& function = aggregates_[i].function;
     if (function->accumulatorUsesExternalMemory()) {
       auto* groups = lookup_->hits.data();
-      function->destroy(folly::Range(groups, 1));
+      function->destroy(std::span(groups, 1));
     }
   }
 }
@@ -768,13 +768,13 @@ bool GroupingSet::getOutput(
     return false;
   }
   extractGroups(
-      table_->rows(), folly::Range<char**>(groups.data(), numGroups), result);
+      table_->rows(), std::span<char*>(groups.data(), numGroups), result);
   return true;
 }
 
 void GroupingSet::extractGroups(
     RowContainer* rowContainer,
-    folly::Range<char**> groups,
+    std::span<char*> groups,
     const RowVectorPtr& result) {
   result->resize(groups.size());
   if (groups.empty()) {
@@ -1327,12 +1327,12 @@ void GroupingSet::initializeRow(SpillMergeStream& stream, char* row) {
       continue;
     }
     aggregate.function->initializeNewGroups(
-        &row, folly::Range<const vector_size_t*>(&zero, 1));
+        &row, std::span<const vector_size_t>(&zero, 1));
   }
 
   if (sortedAggregations_ != nullptr) {
     sortedAggregations_->initializeNewGroups(
-        &row, folly::Range<const vector_size_t*>(&zero, 1));
+        &row, std::span<const vector_size_t>(&zero, 1));
   }
 }
 
@@ -1344,7 +1344,7 @@ void GroupingSet::extractSpillResult(const RowVectorPtr& result) {
         &iter, rows.size(), RowContainer::kUnlimited, rows.data());
   }
   extractGroups(
-      mergeRows_.get(), folly::Range<char**>(rows.data(), rows.size()), result);
+      mergeRows_.get(), std::span<char*>(rows.data(), rows.size()), result);
   clearMergeRows();
 }
 
@@ -1502,7 +1502,7 @@ void GroupingSet::toIntermediate(
         &aggregateVector);
   }
   if (intermediateRows_) {
-    intermediateRows_->eraseRows(folly::Range<char**>(
+    intermediateRows_->eraseRows(std::span<char*>(
         intermediateGroups_.data(), intermediateGroups_.size()));
   }
 

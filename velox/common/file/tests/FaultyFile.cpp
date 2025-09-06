@@ -47,7 +47,7 @@ std::string_view FaultyReadFile::pread(
 
 uint64_t FaultyReadFile::preadv(
     uint64_t offset,
-    const std::vector<folly::Range<char*>>& buffers,
+    const std::vector<std::span<char>>& buffers,
     filesystems::File::IoStats* stats) const {
   if (injectionHook_ != nullptr) {
     FaultFileReadvOperation op(path_, offset, buffers);
@@ -61,7 +61,7 @@ uint64_t FaultyReadFile::preadv(
 
 folly::SemiFuture<uint64_t> FaultyReadFile::preadvAsync(
     uint64_t offset,
-    const std::vector<folly::Range<char*>>& buffers,
+    const std::vector<std::span<char>>& buffers,
     filesystems::File::IoStats* stats) const {
   // TODO: add fault injection for async read later.
   if (delegatedFile_->hasPreadvAsync() || executor_ == nullptr) {

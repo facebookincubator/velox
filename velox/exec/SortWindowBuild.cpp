@@ -339,7 +339,7 @@ void SortWindowBuild::loadNextPartitionFromSpill() {
 std::shared_ptr<WindowPartition> SortWindowBuild::nextPartition() {
   if (merge_ != nullptr) {
     VELOX_CHECK(!sortedRows_.empty(), "No window partitions available");
-    auto partition = folly::Range(sortedRows_.data(), sortedRows_.size());
+    auto partition = std::span(sortedRows_.data(), sortedRows_.size());
     return std::make_shared<WindowPartition>(
         data_.get(), partition, inversedInputChannels_, sortKeyInfo_);
   }
@@ -355,7 +355,7 @@ std::shared_ptr<WindowPartition> SortWindowBuild::nextPartition() {
   // There is partition data available now.
   auto partitionSize = partitionStartRows_[currentPartition_ + 1] -
       partitionStartRows_[currentPartition_];
-  auto partition = folly::Range(
+  auto partition = std::span(
       sortedRows_.data() + partitionStartRows_[currentPartition_],
       partitionSize);
   return std::make_shared<WindowPartition>(

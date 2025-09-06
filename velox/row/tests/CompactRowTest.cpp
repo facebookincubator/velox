@@ -78,7 +78,7 @@ class CompactRowTest : public ::testing::Test, public VectorTestBase {
       serializedRowSizesPtr[i] = &serializedRowSizes[i];
     }
     row.serializedRowSizes(
-        folly::Range(rows.data(), numRows), serializedRowSizesPtr.data());
+        std::span(rows.data(), numRows), serializedRowSizesPtr.data());
     for (auto i = 0; i < numRows; ++i) {
       // The serialized row includes the size of the row.
       ASSERT_EQ(serializedRowSizes[i], row.rowSize(i) + sizeof(uint32_t));

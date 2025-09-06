@@ -135,7 +135,7 @@ class CountAggregate : public SimpleNumericAggregate<bool, int64_t, int64_t> {
  protected:
   void initializeNewGroupsInternal(
       char** groups,
-      folly::Range<const vector_size_t*> indices) override {
+      std::span<const vector_size_t> indices) override {
     for (auto i : indices) {
       // result of count is never null
       *value<int64_t>(groups[i]) = static_cast<int64_t>(0);

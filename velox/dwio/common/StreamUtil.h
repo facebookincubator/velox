@@ -21,7 +21,7 @@
 namespace facebook::velox {
 // Corresponds to declaration in LazyVector.h but repeated here to avoid
 // dependency.
-using RowSet = folly::Range<const int32_t*>;
+using RowSet = std::span<const int32_t>;
 } // namespace facebook::velox
 
 namespace facebook::velox::dwio::common {
@@ -143,13 +143,13 @@ inline void readContiguous(
 }
 
 // Returns the number of elements in rows that are < limit.
-inline int32_t numBelow(folly::Range<const int32_t*> rows, int32_t limit) {
+inline int32_t numBelow(std::span<const int32_t> rows, int32_t limit) {
   return std::lower_bound(rows.begin(), rows.end(), limit) - rows.begin();
 }
 
 template <typename T, typename SingleValue, typename SparseRange>
 inline void loopOverBuffers(
-    folly::Range<const int32_t*> rows,
+    std::span<const int32_t> rows,
     int32_t initialRow,
     SeekableInputStream& input,
     const char*& bufferStart,
@@ -163,7 +163,7 @@ inline void loopOverBuffers(
     auto numRowsInBuffer = rows.back() - rowOffset < available
         ? rows.size() - rowIndex
         : numBelow(
-              folly::Range<const int32_t*>(
+              std::span<const int32_t>(
                   &rows[rowIndex], rows.size() - rowIndex),
               rowOffset + available);
 
@@ -200,7 +200,7 @@ inline void loopOverBuffers(
 
 template <typename T, typename TResult>
 inline void readRows(
-    folly::Range<const int32_t*> rows,
+    std::span<const int32_t> rows,
     int32_t initialRow,
     SeekableInputStream& input,
     TResult* output,

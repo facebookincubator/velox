@@ -127,9 +127,9 @@ void Project::schedule(WaveStream& stream, int32_t maxRows) {
     }
     auto blocksPerExe = bits::roundUp(maxRows, kBlockSize) / kBlockSize;
     auto* data = exes.data();
-    auto range = folly::Range(data, data + exes.size());
+    auto range = std::span(data, data + exes.size());
     stream.installExecutables(
-        range, [&](Stream* out, folly::Range<Executable**> exes) {
+        range, [&](Stream* out, std::span<Executable*> exes) {
           LaunchControl* inputControl = nullptr;
           if (!isSource()) {
             inputControl = driver_->inputControl(stream, id_);

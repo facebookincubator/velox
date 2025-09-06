@@ -26,7 +26,6 @@
 #include <glog/logging.h>
 
 #include <folly/FBString.h>
-#include <folly/Range.h>
 
 namespace facebook::velox::strings {
 

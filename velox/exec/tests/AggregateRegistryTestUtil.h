@@ -88,7 +88,7 @@ class AggregateFunc : public exec::Aggregate {
  protected:
   void initializeNewGroupsInternal(
       char** /*groups*/,
-      folly::Range<const vector_size_t*> /*indices*/) override {}
+      std::span<const vector_size_t> /*indices*/) override {}
 };
 
 inline bool registerAggregateFunc(

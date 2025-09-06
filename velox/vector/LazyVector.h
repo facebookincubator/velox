@@ -24,10 +24,10 @@ namespace facebook::velox {
 // set. This is logically interchangeable with
 // SelectivityVector. Since column reading does not have frequent bit
 // operations but always loops over often sparse positions, an array
-// of positions is more convenient. folly::Range is also faster to
+// of positions is more convenient. std::span is also faster to
 // pass and access than the indirections and smart pointers that may
 // be involved in SelectivityVector.
-using RowSet = folly::Range<const vector_size_t*>;
+using RowSet = std::span<const vector_size_t>;
 
 // Defines a per-value callback to apply to values when loading a
 // LazyVector. This enables pushing down an arbitrary operation into

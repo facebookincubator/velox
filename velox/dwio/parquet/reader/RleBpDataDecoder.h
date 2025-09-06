@@ -107,7 +107,7 @@ class RleBpDataDecoder : public facebook::velox::parquet::RleBpDecoder {
         !std::is_same_v<typename Visitor::HookType, dwio::common::NoHook>;
     auto rows = visitor.rows();
     auto numRows = visitor.numRows();
-    auto rowsAsRange = folly::Range<const int32_t*>(rows, numRows);
+    auto rowsAsRange = std::span<const int32_t>(rows, numRows);
     if (hasNulls) {
       raw_vector<int32_t>* innerVector = nullptr;
       auto outerVector = &visitor.outerNonNullRows();
@@ -123,7 +123,7 @@ class RleBpDataDecoder : public facebook::velox::parquet::RleBpDecoder {
           }
         }
         bulkScan<hasFilter, hasHook, true>(
-            folly::Range<const int32_t*>(rows, outerVector->size()),
+            std::span<const int32_t>(rows, outerVector->size()),
             outerVector->data(),
             visitor);
       } else {
@@ -180,7 +180,7 @@ class RleBpDataDecoder : public facebook::velox::parquet::RleBpDecoder {
     facebook::velox::dwio::common::unpack(
         reinterpret_cast<const uint64_t*>(super::bufferStart_),
         bitOffset_,
-        folly::Range<const int32_t*>(rows + rowIndex, numRows),
+        std::span<const int32_t>(rows + rowIndex, numRows),
         currentRow,
         bitWidth_,
         super::bufferEnd_,
@@ -216,7 +216,7 @@ class RleBpDataDecoder : public facebook::velox::parquet::RleBpDecoder {
     if (rows[numRows - 1] - currentRow < remainingValues_) {
       return std::pair(numRows - rowIndex, rows[numRows - 1] - currentRow + 1);
     }
-    auto range = folly::Range<const int32_t*>(
+    auto range = std::span<const int32_t>(
         rows + rowIndex,
         std::min<int32_t>(remainingValues_, numRows - rowIndex));
     auto endOfRun = currentRow + remainingValues_;
@@ -226,7 +226,7 @@ class RleBpDataDecoder : public facebook::velox::parquet::RleBpDecoder {
 
   template <bool hasFilter, bool hasHook, bool scatter, typename Visitor>
   void bulkScan(
-      folly::Range<const int32_t*> nonNullRows,
+      std::span<const int32_t> nonNullRows,
       const int32_t* scatterRows,
       Visitor& visitor) {
     auto numAllRows = visitor.numRows();

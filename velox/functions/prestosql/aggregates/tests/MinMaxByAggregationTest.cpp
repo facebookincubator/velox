@@ -163,7 +163,7 @@ class MinMaxByAggregationTestBase : public AggregationTestBase {
   template <typename T>
   FlatVectorPtr<T> buildDataVector(
       vector_size_t size,
-      folly::Range<const int*> values = {}) {
+      std::span<const int> values = {}) {
     if (values.empty()) {
       return makeFlatVector<T>(size, [](auto row) { return row - 3; });
     } else {
@@ -201,7 +201,7 @@ class MinMaxByAggregationTestBase : public AggregationTestBase {
   VectorPtr buildDataVector(
       TypeKind kind,
       vector_size_t size,
-      folly::Range<const int*> values);
+      std::span<const int> values);
 
   RowTypePtr rowType_;
   // Specify the number of values in each typed data vector in
@@ -214,7 +214,7 @@ class MinMaxByAggregationTestBase : public AggregationTestBase {
 template <>
 FlatVectorPtr<int128_t> MinMaxByAggregationTestBase::buildDataVector(
     vector_size_t size,
-    folly::Range<const int*> values) {
+    std::span<const int> values) {
   if (values.empty()) {
     return makeFlatVector<int128_t>(
         size, [](auto row) { return HugeInt::build(row - 3, row - 3); });
@@ -231,7 +231,7 @@ FlatVectorPtr<int128_t> MinMaxByAggregationTestBase::buildDataVector(
 template <>
 FlatVectorPtr<StringView> MinMaxByAggregationTestBase::buildDataVector(
     vector_size_t size,
-    folly::Range<const int*> values) {
+    std::span<const int> values) {
   std::string value;
   if (values.empty()) {
     return makeFlatVector<StringView>(
@@ -253,7 +253,7 @@ FlatVectorPtr<StringView> MinMaxByAggregationTestBase::buildDataVector(
 template <>
 FlatVectorPtr<Timestamp> MinMaxByAggregationTestBase::buildDataVector(
     vector_size_t size,
-    folly::Range<const int*> values) {
+    std::span<const int> values) {
   if (values.empty()) {
     return makeFlatVector<Timestamp>(
         size, [](auto row) { return Timestamp(row - 3, 123'000'000); });
@@ -267,7 +267,7 @@ FlatVectorPtr<Timestamp> MinMaxByAggregationTestBase::buildDataVector(
 template <>
 FlatVectorPtr<bool> MinMaxByAggregationTestBase::buildDataVector(
     vector_size_t size,
-    folly::Range<const int*> values) {
+    std::span<const int> values) {
   if (values.empty()) {
     return makeFlatVector<bool>(
         size, [](auto row) { return row % 2 == 0 ? true : false; });
@@ -281,7 +281,7 @@ FlatVectorPtr<bool> MinMaxByAggregationTestBase::buildDataVector(
 VectorPtr MinMaxByAggregationTestBase::buildDataVector(
     TypeKind kind,
     vector_size_t size,
-    folly::Range<const int*> values) {
+    std::span<const int> values) {
   switch (kind) {
     case TypeKind::BOOLEAN:
       return buildDataVector<bool>(size, values);
@@ -677,7 +677,7 @@ TEST_P(
     auto comparisonVector = buildDataVector(
         GetParam().comparisonType,
         kBatchSize,
-        folly::range<const int*>(rawValues, rawValues + kBatchSize));
+        std::span<const int>(rawValues, rawValues + kBatchSize));
     rawValues += kBatchSize;
     rowVectors.push_back(makeRowVector({valueVector, comparisonVector}));
   }
@@ -1113,7 +1113,7 @@ TEST_P(
     auto comparisonVector = buildDataVector(
         GetParam().comparisonType,
         kBatchSize,
-        folly::range<const int*>(rawValues, rawValues + kBatchSize));
+        std::span<const int>(rawValues, rawValues + kBatchSize));
     rawValues += kBatchSize;
     rowVectors.push_back(
         makeRowVector({valueVector, comparisonVector, groupByVector}));

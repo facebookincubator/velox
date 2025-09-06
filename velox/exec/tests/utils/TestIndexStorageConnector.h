@@ -227,7 +227,7 @@ class TestIndexSource : public connector::IndexSource,
     // Extracts the lookup result columns from the index table and return in
     // 'result'.
     void extractLookupColumns(
-        folly::Range<char* const*> rows,
+        std::span<char* const> rows,
         RowVectorPtr& result);
 
     // Inokved to trigger async lookup using background executor and return the

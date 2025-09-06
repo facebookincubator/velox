@@ -1316,7 +1316,7 @@ void AggregationTestBase::testIncrementalAggregation(
 
     // Destroy accumulators to avoid memory leak.
     if (func->accumulatorUsesExternalMemory()) {
-      func->destroy(folly::Range(groups.data(), 1));
+      func->destroy(std::span(groups.data(), 1));
     }
 
     velox::test::assertEqualVectors(result1, result2);
@@ -1361,7 +1361,7 @@ VectorPtr AggregationTestBase::testStreaming(
   func->extractAccumulators(groups.data(), 1, &intermediate);
   // Destroy accumulators to avoid memory leak.
   if (func->accumulatorUsesExternalMemory()) {
-    func->destroy(folly::Range(groups.data(), 1));
+    func->destroy(std::span(groups.data(), 1));
   }
 
   // Create a new function picking up the intermediate result.
@@ -1387,7 +1387,7 @@ VectorPtr AggregationTestBase::testStreaming(
   func2->extractValues(groups.data(), 1, &result);
   // Destroy accumulators to avoid memory leak.
   if (func2->accumulatorUsesExternalMemory()) {
-    func2->destroy(folly::Range(groups.data(), 1));
+    func2->destroy(std::span(groups.data(), 1));
   }
 
   return result;

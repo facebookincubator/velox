@@ -500,7 +500,7 @@ class SpillerTest : public exec::test::RowContainerTestBase {
     // Setup temporary row to check spilling partition number.
     char* testRow = rowContainer_->newRow();
     std::vector<char*> testRows(1, testRow);
-    const auto testRowSet = folly::Range<char**>(testRows.data(), 1);
+    const auto testRowSet = std::span<char*>(testRows.data(), 1);
     std::vector<uint64_t> hashes(1);
 
     int numFilledRows = 0;
@@ -567,7 +567,7 @@ class SpillerTest : public exec::test::RowContainerTestBase {
     // Calculate a hash for every key in 'rows'.
     for (auto i = 0; i < keys.size(); ++i) {
       rowContainer_->hash(
-          i, folly::Range<char**>(rows_.data(), numRows), i > 0, hashes.data());
+          i, std::span<char*>(rows_.data(), numRows), i > 0, hashes.data());
     }
 
     partitions_.resize(numPartitions_);

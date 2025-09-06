@@ -557,7 +557,7 @@ To manipulate the null flags:
 
       // Sets null flag for all specified groups to true.
       // For any given group, this method can be called at most once.
-      void setAllNulls(char** groups, folly::Range<const vector_size_t*> indices);
+      void setAllNulls(char** groups, std::span<const vector_size_t> indices);
 
       inline bool clearNull(char* group);
 
@@ -573,7 +573,7 @@ Once you have accumulatorFixedWidthSize(), the next method to implement is initi
       // @param indices Indices into 'groups' of the new entries.
       virtual void initializeNewGroupsInternal(
           char** groups,
-          folly::Range<const vector_size_t*> indices) = 0;
+          std::span<const vector_size_t> indices) = 0;
 
 This method is called by the HashAggregation operator every time it encounters new combinations of the grouping keys. This method should initialize the accumulators for the new groups. For example, partial “count” and “sum” aggregates would set the accumulators to zero. Many aggregate functions would set null flags to true by calling the exec::Aggregate::setAllNulls(groups, indices) helper method.
 

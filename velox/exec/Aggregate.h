@@ -140,7 +140,7 @@ class Aggregate {
   // @param indices Indices into 'groups' of the new entries.
   virtual void initializeNewGroups(
       char** groups,
-      folly::Range<const vector_size_t*> indices) {
+      std::span<const vector_size_t> indices) {
     initializeNewGroupsInternal(groups, indices);
 
     for (auto index : indices) {
@@ -196,7 +196,7 @@ class Aggregate {
       char** /*groups*/,
       const SelectivityVector& /*rows*/,
       const std::vector<VectorPtr>& /*args*/,
-      const folly::Range<const vector_size_t*>& /*groupBoundaries*/) {
+      const std::span<const vector_size_t>& /*groupBoundaries*/) {
     VELOX_NYI("Unimplemented: {} {}", typeid(*this).name(), __func__);
   }
 
@@ -297,7 +297,7 @@ class Aggregate {
 
   // Frees any out of line storage for the accumulator in
   // 'groups' and marks the aggregate as uninitialized.
-  virtual void destroy(folly::Range<char**> groups) {
+  virtual void destroy(std::span<char*> groups) {
     destroyInternal(groups);
 
     for (auto* group : groups) {
@@ -361,11 +361,11 @@ class Aggregate {
   // @param indices Indices into 'groups' of the new entries.
   virtual void initializeNewGroupsInternal(
       char** groups,
-      folly::Range<const vector_size_t*> indices) = 0;
+      std::span<const vector_size_t> indices) = 0;
 
   // Frees any out of line storage for the accumulator in
   // 'groups'. No-op for fixed length accumulators.
-  virtual void destroyInternal(folly::Range<char**> groups) {}
+  virtual void destroyInternal(std::span<char*> groups) {}
 
   // Helper function to pass single input argument directly as intermediate
   // result.
@@ -392,7 +392,7 @@ class Aggregate {
 
   // Sets null flag for all specified groups to true.
   // For any given group, this method can be called at most once.
-  void setAllNulls(char** groups, folly::Range<const vector_size_t*> indices) {
+  void setAllNulls(char** groups, std::span<const vector_size_t> indices) {
     for (auto i : indices) {
       groups[i][nullByte_] |= nullMask_;
     }
@@ -439,7 +439,7 @@ class Aggregate {
   }
 
   template <typename T>
-  void destroyAccumulators(folly::Range<char**> groups) const {
+  void destroyAccumulators(std::span<char*> groups) const {
     for (auto group : groups) {
       destroyAccumulator<T>(group);
     }

@@ -23,7 +23,6 @@
 
 #include <fmt/format.h>
 #include <folly/Format.h>
-#include <folly/Range.h>
 #include <folly/container/F14Map.h>
 
 #include "velox/buffer/Buffer.h"
@@ -442,7 +441,7 @@ class BaseVector {
   /// Sets null flags for each row in 'ranges' to 'isNull'.
   static void setNulls(
       uint64_t* rawNulls,
-      const folly::Range<const CopyRange*>& ranges,
+      const std::span<const CopyRange>& ranges,
       bool isNull);
 
   /// Copies null flags for each row in 'ranges' from 'sourceRawNulls' to
@@ -450,7 +449,7 @@ class BaseVector {
   static void copyNulls(
       uint64_t* targetRawNulls,
       const uint64_t* sourceRawNulls,
-      const folly::Range<const CopyRange*>& ranges);
+      const std::span<const CopyRange>& ranges);
 
   static int32_t
   countNulls(const BufferPtr& nulls, vector_size_t begin, vector_size_t end) {
@@ -526,7 +525,7 @@ class BaseVector {
       return;
     }
     CopyRange range{sourceIndex, targetIndex, count};
-    copyRanges(source, folly::Range(&range, 1));
+    copyRanges(source, std::span(&range, 1));
   }
 
   /// Converts SelectivityVector into a list of CopyRanges having sourceIndex ==
@@ -538,7 +537,7 @@ class BaseVector {
   /// multiple times, especially for ARRAY, MAP, and VARCHAR.
   virtual void copyRanges(
       const BaseVector* /*source*/,
-      const folly::Range<const CopyRange*>& /*ranges*/) {
+      const std::span<const CopyRange>& /*ranges*/) {
     VELOX_UNSUPPORTED("Can only copy into flat or complex vectors");
   }
 
@@ -1022,7 +1021,7 @@ class BaseVector {
 /// sourceIndex.
 template <typename TFunc>
 void applyToEachRow(
-    const folly::Range<const BaseVector::CopyRange*>& ranges,
+    const std::span<const BaseVector::CopyRange>& ranges,
     const TFunc& func) {
   for (const auto& range : ranges) {
     for (auto i = 0; i < range.count; ++i) {
@@ -1036,7 +1035,7 @@ void applyToEachRow(
 /// and count.
 template <typename TFunc>
 void applyToEachRange(
-    const folly::Range<const BaseVector::CopyRange*>& ranges,
+    const std::span<const BaseVector::CopyRange>& ranges,
     const TFunc& func) {
   for (const auto& range : ranges) {
     func(range.targetIndex, range.sourceIndex, range.count);

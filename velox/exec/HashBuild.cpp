@@ -1220,7 +1220,7 @@ void HashBuildSpiller::spill(
 }
 
 void HashBuildSpiller::extractSpill(
-    folly::Range<char**> rows,
+    std::span<char*> rows,
     facebook::velox::RowVectorPtr& resultPtr) {
   if (resultPtr == nullptr) {
     resultPtr = BaseVector::create<RowVector>(

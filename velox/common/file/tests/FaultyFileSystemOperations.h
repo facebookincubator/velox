@@ -126,13 +126,13 @@ struct FaultFileReadOperation : FaultFileOperation {
 /// Fault injection parameters for file readv API.
 struct FaultFileReadvOperation : FaultFileOperation {
   const uint64_t offset;
-  const std::vector<folly::Range<char*>>& buffers;
+  const std::vector<std::span<char>>& buffers;
   uint64_t readBytes{0};
 
   FaultFileReadvOperation(
       const std::string& _path,
       uint64_t _offset,
-      const std::vector<folly::Range<char*>>& _buffers)
+      const std::vector<std::span<char>>& _buffers)
       : FaultFileOperation(FaultFileOperation::Type::kReadv, _path),
         offset(_offset),
         buffers(_buffers) {}

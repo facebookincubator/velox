@@ -18,6 +18,7 @@
 
 #include <exception>
 #include <string>
+#include <span>
 
 #include <folly/Exception.h>
 #include <folly/FixedString.h>

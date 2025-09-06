@@ -52,7 +52,7 @@ class AllocationPool {
   /// returns the hugepage aligned range of contiguous huge pages in the range.
   /// For the last range, i.e. the one allocations come from, the size is the
   /// distance from start to first byte after last allocation.
-  folly::Range<char*> rangeAt(int32_t index) const;
+  std::span<char> rangeAt(int32_t index) const;
 
   int64_t currentOffset() const {
     return currentOffset_;

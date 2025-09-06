@@ -126,7 +126,7 @@ RowVectorPtr TestNimbleReader::read() {
   std::vector<OperandId> operandIds;
   operandIds.resize(nonNullOutputChildrenIds_.size());
   std::iota(operandIds.begin(), operandIds.end(), 1);
-  folly::Range<const int32_t*> operandIdRange(
+  std::span<const int32_t> operandIdRange(
       operandIds.data(), operandIds.size());
   std::vector<VectorPtr> nonNullOutputChildren;
   nonNullOutputChildren.resize(nonNullOutputChildrenIds_.size());

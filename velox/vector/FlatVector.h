@@ -264,12 +264,12 @@ class FlatVector final : public SimpleVector<T> {
       return;
     }
     BaseVector::CopyRange range{sourceIndex, targetIndex, count};
-    copyRanges(source, folly::Range(&range, 1));
+    copyRanges(source, std::span(&range, 1));
   }
 
   void copyRanges(
       const BaseVector* source,
-      const folly::Range<const BaseVector::CopyRange*>& ranges) override;
+      const std::span<const BaseVector::CopyRange>& ranges) override;
 
   VectorPtr testingCopyPreserveEncodings(
       velox::memory::MemoryPool* pool = nullptr) const override {

@@ -66,7 +66,7 @@ class FirstLastValueFunction : public exec::WindowFunction {
     }
 
     setRowNumbersForEmptyFrames(validRows);
-    auto rowNumbersRange = folly::Range(rowNumbers_.data(), numRows);
+    auto rowNumbersRange = std::span(rowNumbers_.data(), numRows);
     partition_->extractColumn(
         valueIndex_, rowNumbersRange, resultOffset, result);
   }

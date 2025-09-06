@@ -19,7 +19,7 @@ namespace facebook::velox::exec {
 
 WindowPartition::WindowPartition(
     RowContainer* data,
-    const folly::Range<char**>& rows,
+    const std::span<char*>& rows,
     const std::vector<column_index_t>& inputMapping,
     const std::vector<std::pair<column_index_t, core::SortOrder>>& sortKeyInfo,
     bool partial,
@@ -40,7 +40,7 @@ WindowPartition::WindowPartition(
 
 WindowPartition::WindowPartition(
     RowContainer* data,
-    const folly::Range<char**>& rows,
+    const std::span<char*>& rows,
     const std::vector<column_index_t>& inputMapping,
     const std::vector<std::pair<column_index_t, core::SortOrder>>& sortKeyInfo)
     : WindowPartition(data, rows, inputMapping, sortKeyInfo, false, true) {}
@@ -54,13 +54,13 @@ WindowPartition::WindowPartition(
 void WindowPartition::addRows(const std::vector<char*>& rows) {
   checkPartial();
   rows_.insert(rows_.end(), rows.begin(), rows.end());
-  partition_ = folly::Range(rows_.data(), rows_.size());
+  partition_ = std::span(rows_.data(), rows_.size());
 }
 
 void WindowPartition::eraseRows(vector_size_t numRows) {
   checkPartial();
   VELOX_CHECK_GE(data_->numRows(), numRows);
-  data_->eraseRows(folly::Range<char**>(rows_.data(), numRows));
+  data_->eraseRows(std::span<char*>(rows_.data(), numRows));
 }
 
 void WindowPartition::removeProcessedRows(vector_size_t numRows) {
@@ -75,7 +75,7 @@ void WindowPartition::removeProcessedRows(vector_size_t numRows) {
   }
 
   rows_.erase(rows_.begin(), rows_.begin() + numRows);
-  partition_ = folly::Range(rows_.data(), rows_.size());
+  partition_ = std::span(rows_.data(), rows_.size());
   startRow_ += numRows;
 }
 
@@ -90,7 +90,7 @@ vector_size_t WindowPartition::numRowsForProcessing(
 
 void WindowPartition::extractColumn(
     int32_t columnIndex,
-    folly::Range<const vector_size_t*> rowNumbers,
+    std::span<const vector_size_t> rowNumbers,
     vector_size_t resultOffset,
     const VectorPtr& result) const {
   RowContainer::extractColumn(
@@ -208,7 +208,7 @@ vector_size_t WindowPartition::findPeerRowEndIndex(
 
 void WindowPartition::removePreviousRow() {
   VELOX_CHECK_NOT_NULL(previousRow_);
-  data_->eraseRows(folly::Range<char**>(&previousRow_, 1));
+  data_->eraseRows(std::span<char*>(&previousRow_, 1));
   previousRow_ = nullptr;
 }
 

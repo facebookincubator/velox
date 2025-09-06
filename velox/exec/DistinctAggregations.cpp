@@ -44,10 +44,10 @@ class TypedDistinctAggregations : public DistinctAggregations {
         false, // usesExternalMemory
         1, // alignment
         nullptr,
-        [](folly::Range<char**> /*groups*/, VectorPtr& /*result*/) {
+        [](std::span<char*> /*groups*/, VectorPtr& /*result*/) {
           VELOX_UNREACHABLE();
         },
-        [this](folly::Range<char**> groups) {
+        [this](std::span<char*> groups) {
           for (auto* group : groups) {
             if (!isInitialized(group)) {
               continue;
@@ -92,7 +92,7 @@ class TypedDistinctAggregations : public DistinctAggregations {
     inputForAccumulator_.reset();
   }
 
-  void extractValues(folly::Range<char**> groups, const RowVectorPtr& result)
+  void extractValues(std::span<char*> groups, const RowVectorPtr& result)
       override {
     SelectivityVector rows;
     for (auto i = 0; i < aggregates_.size(); ++i) {
@@ -132,7 +132,7 @@ class TypedDistinctAggregations : public DistinctAggregations {
       raw_vector<int32_t> indices(pool_);
       aggregate.function->initializeNewGroups(
           groups.data(),
-          folly::Range<const int32_t*>(
+          std::span<const int32_t>(
               iota(groups.size(), indices), groups.size()));
     }
   }
@@ -140,7 +140,7 @@ class TypedDistinctAggregations : public DistinctAggregations {
  protected:
   void initializeNewGroupsInternal(
       char** groups,
-      folly::Range<const vector_size_t*> indices) override {
+      std::span<const vector_size_t> indices) override {
     for (auto i : indices) {
       groups[i][nullByte_] |= nullMask_;
       new (groups[i] + offset_) AccumulatorType(inputType_, allocator_);

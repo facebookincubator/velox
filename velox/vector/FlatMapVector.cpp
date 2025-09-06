@@ -471,7 +471,7 @@ std::optional<int32_t> FlatMapVector::compare(
 void FlatMapVector::copyInMapRanges(
     column_index_t targetChannel,
     const uint64_t* sourceInMaps,
-    const folly::Range<const BaseVector::CopyRange*>& ranges) {
+    const std::span<const BaseVector::CopyRange>& ranges) {
   auto* targetInMaps = mutableRawInMapsAt(targetChannel);
 
   // This means that the key being copied exists in all maps from both source
@@ -512,7 +512,7 @@ void FlatMapVector::copyInMapRanges(
 
 void FlatMapVector::copyRanges(
     const BaseVector* source,
-    const folly::Range<const CopyRange*>& ranges) {
+    const std::span<const CopyRange>& ranges) {
   if (ranges.empty()) {
     return;
   }

@@ -39,7 +39,7 @@ PrestoIterativeVectorSerializer::PrestoIterativeVectorSerializer(
 
 void PrestoIterativeVectorSerializer::append(
     const RowVectorPtr& vector,
-    const folly::Range<const IndexRange*>& ranges,
+    const std::span<const IndexRange>& ranges,
     Scratch& scratch) {
   const auto numNewRows = rangesTotalSize(ranges);
   if (numNewRows == 0) {
@@ -53,7 +53,7 @@ void PrestoIterativeVectorSerializer::append(
 
 void PrestoIterativeVectorSerializer::append(
     const RowVectorPtr& vector,
-    const folly::Range<const vector_size_t*>& rows,
+    const std::span<const vector_size_t>& rows,
     Scratch& scratch) {
   const auto numNewRows = rows.size();
   if (numNewRows == 0) {

@@ -110,7 +110,7 @@ void writeNulls(
 
 void writeNulls(
     const BaseVector& values,
-    folly::Range<const vector_size_t*> indices,
+    std::span<const vector_size_t> indices,
     ByteOutputStream& out) {
   auto size = indices.size();
   for (auto i = 0; i < size; i += 64) {
@@ -142,7 +142,7 @@ void serializeArray(
 
 void serializeArray(
     const BaseVector& elements,
-    folly::Range<const vector_size_t*> indices,
+    std::span<const vector_size_t> indices,
     ByteOutputStream& out,
     const ContainerRowSerdeOptions& options) {
   out.appendOne<int32_t>(indices.size());
@@ -551,7 +551,7 @@ template <bool elementTypeProvidesCustomComparison>
 std::optional<int32_t> compareArrayIndices(
     ByteInputStream& left,
     const BaseVector& elements,
-    folly::Range<const vector_size_t*> rightIndices,
+    std::span<const vector_size_t> rightIndices,
     CompareFlags flags) {
   int32_t leftSize = left.read<int32_t>();
   int32_t rightSize = rightIndices.size();

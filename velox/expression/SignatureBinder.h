@@ -138,7 +138,7 @@ class SignatureBinder : private SignatureBinderBase {
   // Try resolve types for all specified signatures. Return empty list if some
   // signatures cannot be resolved.
   std::vector<TypePtr> tryResolveTypes(
-      const folly::Range<const TypeSignature*>& typeSignatures) {
+      const std::span<const TypeSignature>& typeSignatures) {
     std::vector<TypePtr> types;
     for (const auto& signature : typeSignatures) {
       auto type = tryResolveType(signature);

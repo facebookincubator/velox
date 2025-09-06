@@ -223,7 +223,7 @@ class ArrayAggAggregate : public exec::Aggregate {
       char** groups,
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
-      const folly::Range<const vector_size_t*>& groupBoundaries) override {
+      const std::span<const vector_size_t>& groupBoundaries) override {
     VELOX_CHECK(clusteredInput_);
     decodedElements_.decode(*args[0]);
     vector_size_t groupStart = 0;
@@ -329,7 +329,7 @@ class ArrayAggAggregate : public exec::Aggregate {
  protected:
   void initializeNewGroupsInternal(
       char** groups,
-      folly::Range<const vector_size_t*> indices) override {
+      std::span<const vector_size_t> indices) override {
     for (auto index : indices) {
       if (clusteredInput_) {
         new (groups[index] + offset_) ClusteredAccumulator();
@@ -339,7 +339,7 @@ class ArrayAggAggregate : public exec::Aggregate {
     }
   }
 
-  void destroyInternal(folly::Range<char**> groups) override {
+  void destroyInternal(std::span<char*> groups) override {
     for (auto group : groups) {
       if (isInitialized(group)) {
         if (clusteredInput_) {

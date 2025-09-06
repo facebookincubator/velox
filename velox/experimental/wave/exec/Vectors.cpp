@@ -48,11 +48,11 @@ void ensureWaveVector(
 }
 
 void ensureVectors(
-    folly::Range<vector_size_t*> sizes,
+    std::span<vector_size_t> sizes,
     const std::vector<TypePtr>& types,
-    folly::Range<bool*> nullable,
+    std::span<bool> nullable,
     std::vector<WaveVectorPtr> vectors,
-    folly::Range<Operand*> operands,
+    std::span<Operand> operands,
     GpuArena& arena) {
   if (vectors.size() < operands.size()) {
     vectors.resize(operands.size());
@@ -107,7 +107,7 @@ void transferVector(
 }
 
 void vectorsToDevice(
-    folly::Range<const BaseVector**> source,
+    std::span<const BaseVector*> source,
     const OperandSet& ids,
     WaveStream& stream) {
   std::vector<Transfer> transfers;

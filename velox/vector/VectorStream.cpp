@@ -32,7 +32,7 @@ class DefaultBatchVectorSerializer : public BatchVectorSerializer {
 
   void serialize(
       const RowVectorPtr& vector,
-      const folly::Range<const IndexRange*>& ranges,
+      const std::span<const IndexRange>& ranges,
       Scratch& scratch,
       OutputStream* stream) override {
     size_t numRows = 0;
@@ -49,7 +49,7 @@ class DefaultBatchVectorSerializer : public BatchVectorSerializer {
 
   void estimateSerializedSize(
       VectorPtr vector,
-      const folly::Range<const IndexRange*>& ranges,
+      const std::span<const IndexRange>& ranges,
       vector_size_t** sizes,
       Scratch& scratch) override {
     serde_->estimateSerializedSize(vector.get(), ranges, sizes, scratch);
@@ -78,14 +78,14 @@ getNamedVectorSerdeImpl() {
 void IterativeVectorSerializer::append(const RowVectorPtr& vector) {
   const IndexRange allRows{0, vector->size()};
   Scratch scratch;
-  append(vector, folly::Range(&allRows, 1), scratch);
+  append(vector, std::span(&allRows, 1), scratch);
 }
 
 void BatchVectorSerializer::serialize(
     const RowVectorPtr& vector,
     OutputStream* stream) {
   const IndexRange allRows{0, vector->size()};
-  serialize(vector, folly::Range(&allRows, 1), stream);
+  serialize(vector, std::span(&allRows, 1), stream);
 }
 
 std::unique_ptr<BatchVectorSerializer> VectorSerde::createBatchSerializer(
@@ -186,14 +186,14 @@ void VectorStreamGroup::createStreamTree(
 
 void VectorStreamGroup::append(
     const RowVectorPtr& vector,
-    const folly::Range<const IndexRange*>& ranges,
+    const std::span<const IndexRange>& ranges,
     Scratch& scratch) {
   serializer_->append(vector, ranges, scratch);
 }
 
 void VectorStreamGroup::append(
     const RowVectorPtr& vector,
-    const folly::Range<const vector_size_t*>& rows,
+    const std::span<const vector_size_t>& rows,
     Scratch& scratch) {
   serializer_->append(vector, rows, scratch);
 }
@@ -204,14 +204,14 @@ void VectorStreamGroup::append(const RowVectorPtr& vector) {
 
 void VectorStreamGroup::append(
     const row::CompactRow& compactRow,
-    const folly::Range<const vector_size_t*>& rows,
+    const std::span<const vector_size_t>& rows,
     const std::vector<vector_size_t>& sizes) {
   serializer_->append(compactRow, rows, sizes);
 }
 
 void VectorStreamGroup::append(
     const row::UnsafeRowFast& unsafeRow,
-    const folly::Range<const vector_size_t*>& rows,
+    const std::span<const vector_size_t>& rows,
     const std::vector<vector_size_t>& sizes) {
   serializer_->append(unsafeRow, rows, sizes);
 }
@@ -223,7 +223,7 @@ void VectorStreamGroup::flush(OutputStream* out) {
 // static
 void VectorStreamGroup::estimateSerializedSize(
     const BaseVector* vector,
-    const folly::Range<const IndexRange*>& ranges,
+    const std::span<const IndexRange>& ranges,
     VectorSerde* serde,
     vector_size_t** sizes,
     Scratch& scratch) {
@@ -237,7 +237,7 @@ void VectorStreamGroup::estimateSerializedSize(
 // static
 void VectorStreamGroup::estimateSerializedSize(
     const BaseVector* vector,
-    const folly::Range<const vector_size_t*>& rows,
+    const std::span<const vector_size_t>& rows,
     VectorSerde* serde,
     vector_size_t** sizes,
     Scratch& scratch) {
@@ -251,7 +251,7 @@ void VectorStreamGroup::estimateSerializedSize(
 // static
 void VectorStreamGroup::estimateSerializedSize(
     const row::CompactRow* compactRow,
-    const folly::Range<const vector_size_t*>& rows,
+    const std::span<const vector_size_t>& rows,
     VectorSerde* serde,
     vector_size_t** sizes) {
   if (serde == nullptr) {
@@ -264,7 +264,7 @@ void VectorStreamGroup::estimateSerializedSize(
 // static
 void VectorStreamGroup::estimateSerializedSize(
     const row::UnsafeRowFast* unsafeRow,
-    const folly::Range<const vector_size_t*>& rows,
+    const std::span<const vector_size_t>& rows,
     VectorSerde* serde,
     vector_size_t** sizes) {
   if (serde == nullptr) {
@@ -306,7 +306,7 @@ folly::IOBuf rowVectorToIOBuf(
 
   IndexRange range{0, rangeEnd};
   Scratch scratch;
-  streamGroup->append(rowVector, folly::Range<IndexRange*>(&range, 1), scratch);
+  streamGroup->append(rowVector, std::span<IndexRange>(&range, 1), scratch);
 
   IOBufOutputStream stream(pool);
   streamGroup->flush(&stream);

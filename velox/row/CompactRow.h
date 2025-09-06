@@ -28,7 +28,7 @@ class CompactRow {
   ///
   /// TODO: optimizes using columnar serialization size calculation.
   void serializedRowSizes(
-      const folly::Range<const vector_size_t*>& rows,
+      const std::span<const vector_size_t>& rows,
       vector_size_t** sizes) const;
 
   /// Returns row size if all fields are fixed width. Return std::nullopt if

@@ -16,7 +16,6 @@
 
 #pragma once
 
-#include <folly/Range.h>
 #include <folly/io/IOBuf.h>
 
 #include <array>

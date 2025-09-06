@@ -22,7 +22,6 @@
 #include <string>
 #include <vector>
 
-#include <folly/Range.h>
 #include <folly/container/F14Set.h>
 
 #include "velox/common/base/Exceptions.h"

@@ -164,7 +164,7 @@ class SimpleNumericMaxAggregate : public SimpleNumericMinMaxAggregate<T> {
  protected:
   void initializeNewGroupsInternal(
       char** groups,
-      folly::Range<const vector_size_t*> indices) override {
+      std::span<const vector_size_t> indices) override {
     exec::Aggregate::setAllNulls(groups, indices);
     for (auto i : indices) {
       *exec::Aggregate::value<T>(groups[i]) = kInitialValue_;
@@ -278,7 +278,7 @@ class SimpleNumericMinAggregate : public SimpleNumericMinMaxAggregate<T> {
 
   void initializeNewGroupsInternal(
       char** groups,
-      folly::Range<const vector_size_t*> indices) override {
+      std::span<const vector_size_t> indices) override {
     exec::Aggregate::setAllNulls(groups, indices);
     for (auto i : indices) {
       *exec::Aggregate::value<T>(groups[i]) = kInitialValue_;
@@ -464,14 +464,14 @@ class MinMaxAggregateBase : public exec::Aggregate {
 
   void initializeNewGroupsInternal(
       char** groups,
-      folly::Range<const vector_size_t*> indices) override {
+      std::span<const vector_size_t> indices) override {
     exec::Aggregate::setAllNulls(groups, indices);
     for (auto i : indices) {
       new (groups[i] + offset_) SingleValueAccumulator();
     }
   }
 
-  void destroyInternal(folly::Range<char**> groups) override {
+  void destroyInternal(std::span<char*> groups) override {
     for (auto group : groups) {
       if (isInitialized(group)) {
         value<SingleValueAccumulator>(group)->destroy(allocator_);

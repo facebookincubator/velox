@@ -62,7 +62,7 @@ TEST_F(TDigestTest, addElementsRandomized) {
   }
   digest.compress(positions);
   std::sort(std::begin(values), std::end(values));
-  CHECK_QUANTILES(folly::Range(values, N), digest, kSumError, kRankError);
+  CHECK_QUANTILES(std::span(values, N), digest, kSumError, kRankError);
 }
 
 TEST_F(TDigestTest, fewElements) {
@@ -209,7 +209,7 @@ TEST_F(TDigestTest, deserializeJava) {
     double values[101];
     values[0] = 0;
     std::fill(values + 1, values + 101, 1);
-    CHECK_QUANTILES(folly::Range(values, 101), digest, kSumError, kRankError);
+    CHECK_QUANTILES(std::span(values, 101), digest, kSumError, kRankError);
   }
   {
     SCOPED_TRACE(
@@ -323,7 +323,7 @@ TEST_F(TDigestTest, normalDistribution) {
     }
     digest.compress(positions);
     std::sort(values, values + N);
-    CHECK_QUANTILES(folly::Range(values, N), digest, kSumError, kRankError);
+    CHECK_QUANTILES(std::span(values, N), digest, kSumError, kRankError);
   }
 }
 

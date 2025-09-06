@@ -205,7 +205,7 @@ class TDigestAggregate : public exec::Aggregate {
  protected:
   void initializeNewGroupsInternal(
       char** groups,
-      folly::Range<const vector_size_t*> indices) override {
+      std::span<const vector_size_t> indices) override {
     exec::Aggregate::setAllNulls(groups, indices);
     for (auto i : indices) {
       auto group = groups[i];
@@ -213,7 +213,7 @@ class TDigestAggregate : public exec::Aggregate {
     }
   }
 
-  void destroyInternal(folly::Range<char**> groups) override {
+  void destroyInternal(std::span<char*> groups) override {
     for (auto group : groups) {
       if (isInitialized(group)) {
         value<TDigestAccumulator>(group)->~TDigestAccumulator();

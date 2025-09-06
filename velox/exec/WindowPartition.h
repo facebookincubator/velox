@@ -42,7 +42,7 @@ class WindowPartition {
   /// get peer rows from the input partition.
   WindowPartition(
       RowContainer* data,
-      const folly::Range<char**>& rows,
+      const std::span<char*>& rows,
       const std::vector<column_index_t>& inputMapping,
       const std::vector<std::pair<column_index_t, core::SortOrder>>&
           sortKeyInfo);
@@ -92,7 +92,7 @@ class WindowPartition {
   /// array from the partition input data.
   void extractColumn(
       int32_t columnIndex,
-      folly::Range<const vector_size_t*> rowNumbers,
+      std::span<const vector_size_t> rowNumbers,
       vector_size_t resultOffset,
       const VectorPtr& result) const;
 
@@ -174,7 +174,7 @@ class WindowPartition {
  private:
   WindowPartition(
       RowContainer* data,
-      const folly::Range<char**>& rows,
+      const std::span<char*>& rows,
       const std::vector<column_index_t>& inputMapping,
       const std::vector<std::pair<column_index_t, core::SortOrder>>&
           sortKeyInfo,
@@ -249,11 +249,11 @@ class WindowPartition {
   // Points to the input rows for partial partition.
   std::vector<char*> rows_;
 
-  // folly::Range is for the partition rows iterator provided by the
+  // std::span is for the partition rows iterator provided by the
   // Window operator. The pointers are to rows from a RowContainer owned
   // by the operator. We can assume these are valid values for the lifetime
   // of WindowPartition.
-  folly::Range<char**> partition_;
+  std::span<char*> partition_;
 
   // Indicates if a partial partition has received all the input rows. For a
   // non-partial partition, this is always true.

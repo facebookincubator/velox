@@ -111,9 +111,9 @@ size_t DirectInputStream::positionSize() const {
 }
 
 namespace {
-std::vector<folly::Range<char*>>
+std::vector<std::span<char>>
 makeRanges(size_t size, memory::Allocation& data, std::string& tinyData) {
-  std::vector<folly::Range<char*>> buffers;
+  std::vector<std::span<char>> buffers;
   if (data.numPages() > 0) {
     buffers.reserve(data.numRuns());
     uint64_t offsetInRuns = 0;
@@ -121,11 +121,11 @@ makeRanges(size_t size, memory::Allocation& data, std::string& tinyData) {
       auto run = data.runAt(i);
       uint64_t bytes = memory::AllocationTraits::pageBytes(run.numPages());
       uint64_t readSize = std::min(bytes, size - offsetInRuns);
-      buffers.push_back(folly::Range<char*>(run.data<char>(), readSize));
+      buffers.push_back(std::span<char>(run.data<char>(), readSize));
       offsetInRuns += readSize;
     }
   } else {
-    buffers.push_back(folly::Range<char*>(tinyData.data(), size));
+    buffers.push_back(std::span<char>(tinyData.data(), size));
   }
   return buffers;
 }

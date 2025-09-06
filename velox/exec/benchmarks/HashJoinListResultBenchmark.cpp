@@ -467,7 +467,7 @@ class HashTableListJoinResultBenchmark : public VectorTestBase {
               resultsIter,
               false,
               mapping,
-              folly::Range(outputTableRows.data(), outputTableRows.size()),
+              std::span(outputTableRows.data(), outputTableRows.size()),
               std::numeric_limits<uint64_t>::max());
         }
       }
@@ -495,13 +495,13 @@ class HashTableListJoinResultBenchmark : public VectorTestBase {
         resultIter,
         false,
         mapping,
-        folly::Range(outputTableRows.data(), outputTableRows.size()),
+        std::span(outputTableRows.data(), outputTableRows.size()),
         std::numeric_limits<uint64_t>::max());
     uint64_t eraseClocks{0};
     {
       ClockTimer timer(eraseClocks);
       topTable_->rows()->eraseRows(
-          folly::Range<char**>(outputTableRows.data(), num));
+          std::span<char*>(outputTableRows.data(), num));
     }
     eraseTime_ = eraseClocks;
   }

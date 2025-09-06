@@ -171,10 +171,10 @@ void CacheInputStream::setRemainingBytes(uint64_t remainingBytes) {
 }
 
 namespace {
-std::vector<folly::Range<char*>> makeRanges(
+std::vector<std::span<char>> makeRanges(
     cache::AsyncDataCacheEntry* entry,
     size_t length) {
-  std::vector<folly::Range<char*>> buffers;
+  std::vector<std::span<char>> buffers;
   if (entry->tinyData() == nullptr) {
     auto& allocation = entry->data();
     buffers.reserve(allocation.numRuns());
@@ -183,11 +183,11 @@ std::vector<folly::Range<char*>> makeRanges(
       auto run = allocation.runAt(i);
       uint64_t bytes = run.numPages() * memory::AllocationTraits::kPageSize;
       uint64_t readSize = std::min(bytes, length - offsetInRuns);
-      buffers.push_back(folly::Range<char*>(run.data<char>(), readSize));
+      buffers.push_back(std::span<char>(run.data<char>(), readSize));
       offsetInRuns += readSize;
     }
   } else {
-    buffers.push_back(folly::Range<char*>(entry->tinyData(), entry->size()));
+    buffers.push_back(std::span<char>(entry->tinyData(), entry->size()));
   }
   return buffers;
 }

@@ -16,7 +16,6 @@
 
 #include "velox/buffer/Buffer.h"
 
-#include "folly/Range.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/type/StringView.h"
@@ -32,7 +31,7 @@ namespace velox {
 
 static_assert(Buffer::is_pod_like_v<int64_t>, "");
 static_assert(Buffer::is_pod_like_v<StringView>, "");
-static_assert(Buffer::is_pod_like_v<folly::Range<const char*>>, "");
+static_assert(Buffer::is_pod_like_v<std::span<const char>>, "");
 static_assert(Buffer::is_pod_like_v<velox::Range<const char*>>, "");
 static_assert(!Buffer::is_pod_like_v<std::shared_ptr<int>>, "");
 

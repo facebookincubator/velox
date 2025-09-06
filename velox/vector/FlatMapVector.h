@@ -305,7 +305,7 @@ class FlatMapVector : public BaseVector {
   /// Copy the ranges defined by `ranges` from source into `this`.
   void copyRanges(
       const BaseVector* source,
-      const folly::Range<const CopyRange*>& ranges) override;
+      const std::span<const CopyRange>& ranges) override;
 
   void ensureWritable(const SelectivityVector& rows) override;
 
@@ -371,7 +371,7 @@ class FlatMapVector : public BaseVector {
   void copyInMapRanges(
       column_index_t targetChannel,
       const uint64_t* sourceInMaps,
-      const folly::Range<const BaseVector::CopyRange*>& ranges);
+      const std::span<const BaseVector::CopyRange>& ranges);
 
   /// Compares a map in this Vector with a map in a MapVector.
   std::optional<int32_t> compareToMap(

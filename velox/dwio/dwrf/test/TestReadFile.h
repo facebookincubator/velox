@@ -58,7 +58,7 @@ class TestReadFile : public velox::ReadFile {
 
   uint64_t preadv(
       uint64_t offset,
-      const std::vector<folly::Range<char*>>& buffers,
+      const std::vector<std::span<char>>& buffers,
       filesystems::File::IoStats* stats = nullptr) const override {
     auto res = ReadFile::preadv(offset, buffers, stats);
     if (stats) {

@@ -88,7 +88,7 @@ class InputStream {
    * @param offset the position in the stream to read from.
    */
   virtual void read(
-      const std::vector<folly::Range<char*>>& buffers,
+      const std::vector<std::span<char>>& buffers,
       uint64_t offset,
       LogType logType) {
     uint64_t bufferOffset = 0;
@@ -103,7 +103,7 @@ class InputStream {
   /// Like read() with the same arguments but returns the result or
   /// exception via SemiFuture. Use only if hasReadAsync() is true.
   virtual folly::SemiFuture<uint64_t> readAsync(
-      const std::vector<folly::Range<char*>>& buffers,
+      const std::vector<std::span<char>>& buffers,
       uint64_t offset,
       LogType logType);
 
@@ -120,8 +120,8 @@ class InputStream {
    * range named at `iobufs`, which must have the same size as `regions`.
    */
   virtual void vread(
-      folly::Range<const velox::common::Region*> regions,
-      folly::Range<folly::IOBuf*> iobufs,
+      std::span<const velox::common::Region> regions,
+      std::span<folly::IOBuf> iobufs,
       const LogType purpose) = 0;
 
   const std::string& getName() const;
@@ -158,20 +158,20 @@ class ReadFileInputStream final : public InputStream {
   void read(void*, uint64_t, uint64_t, LogType) override;
 
   void read(
-      const std::vector<folly::Range<char*>>& buffers,
+      const std::vector<std::span<char>>& buffers,
       uint64_t offset,
       LogType logType) override;
 
   folly::SemiFuture<uint64_t> readAsync(
-      const std::vector<folly::Range<char*>>& buffers,
+      const std::vector<std::span<char>>& buffers,
       uint64_t offset,
       LogType logType) override;
 
   bool hasReadAsync() const override;
 
   void vread(
-      folly::Range<const velox::common::Region*> regions,
-      folly::Range<folly::IOBuf*> iobufs,
+      std::span<const velox::common::Region> regions,
+      std::span<folly::IOBuf> iobufs,
       const LogType purpose) override;
 
   const std::shared_ptr<velox::ReadFile>& getReadFile() const {

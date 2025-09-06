@@ -129,7 +129,7 @@ vector_size_t VectorMap::addOne(
     sizes[0] = &alphabetSizes_[newIndex];
     getVectorSerde()->estimateSerializedSize(
         alphabet_,
-        folly::Range<const vector_size_t*>(sizeIndices, 1),
+        std::span<const vector_size_t>(sizeIndices, 1),
         sizes,
         scratch);
   }
@@ -146,7 +146,7 @@ vector_size_t VectorMap::addOne(
 
 void VectorMap::addMultiple(
     BaseVector& vector,
-    folly::Range<const vector_size_t*> rows,
+    std::span<const vector_size_t> rows,
     bool insertToAlphabet,
     vector_size_t* ids) {
   auto size = rows.size();

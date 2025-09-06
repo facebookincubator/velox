@@ -23,7 +23,7 @@
 namespace facebook::velox::serializer::presto::detail {
 void PrestoBatchVectorSerializer::serialize(
     const RowVectorPtr& vector,
-    const folly::Range<const IndexRange*>& ranges,
+    const std::span<const IndexRange>& ranges,
     Scratch& scratch,
     OutputStream* stream) {
   VELOX_CHECK_NOT_NULL(vector, "Vector to serialize is null.");
@@ -79,7 +79,7 @@ void PrestoBatchVectorSerializer::serialize(
 
 void PrestoBatchVectorSerializer::estimateSerializedSizeImpl(
     const VectorPtr& vector,
-    const folly::Range<const IndexRange*>& ranges,
+    const std::span<const IndexRange>& ranges,
     vector_size_t** sizes,
     Scratch& scratch) {
   switch (vector->encoding()) {
@@ -151,7 +151,7 @@ void PrestoBatchVectorSerializer::estimateSerializedSizeImpl(
         if (child) {
           estimateSerializedSizeImpl(
               child,
-              folly::Range(childRanges.data(), childRanges.size()),
+              std::span(childRanges.data(), childRanges.size()),
               childSizes.data(),
               scratch);
         }

@@ -319,7 +319,7 @@ class RleDecoderV1 : public dwio::common::IntDecoder<isSigned> {
         !std::is_same_v<typename Visitor::HookType, dwio::common::NoHook>;
     auto rows = visitor.rows();
     auto numRows = visitor.numRows();
-    auto rowsAsRange = folly::Range<const int32_t*>(rows, numRows);
+    auto rowsAsRange = std::span<const int32_t>(rows, numRows);
     if (hasNulls) {
       raw_vector<int32_t>* innerVector = nullptr;
       auto outerVector = &visitor.outerNonNullRows();
@@ -330,7 +330,7 @@ class RleDecoderV1 : public dwio::common::IntDecoder<isSigned> {
           return;
         }
         bulkScan<hasFilter, hasHook, true>(
-            folly::Range<const int32_t*>(rows, outerVector->size()),
+            std::span<const int32_t>(rows, outerVector->size()),
             outerVector->data(),
             visitor);
       } else {
@@ -377,7 +377,7 @@ class RleDecoderV1 : public dwio::common::IntDecoder<isSigned> {
       super::bulkRead(numRows, values + numValues);
     } else {
       super::bulkReadRows(
-          folly::Range<const int32_t*>(rows + rowIndex, numRows),
+          std::span<const int32_t>(rows + rowIndex, numRows),
           values + numValues,
           currentRow);
     }
@@ -413,7 +413,7 @@ class RleDecoderV1 : public dwio::common::IntDecoder<isSigned> {
       return std::pair(numRows - rowIndex, rows[numRows - 1] - currentRow + 1);
     }
 
-    const auto range = folly::Range<const int32_t*>(
+    const auto range = std::span<const int32_t>(
         rows + rowIndex,
         std::min<int32_t>(remainingValues_, numRows - rowIndex));
     const auto endOfRun = currentRow + remainingValues_;
@@ -423,7 +423,7 @@ class RleDecoderV1 : public dwio::common::IntDecoder<isSigned> {
 
   template <bool hasFilter, bool hasHook, bool scatter, typename Visitor>
   void bulkScan(
-      folly::Range<const int32_t*> nonNullRows,
+      std::span<const int32_t> nonNullRows,
       const int32_t* scatterRows,
       Visitor& visitor) {
     auto numAllRows = visitor.numRows();

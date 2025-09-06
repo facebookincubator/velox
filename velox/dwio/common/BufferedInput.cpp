@@ -30,7 +30,7 @@ namespace facebook::velox::dwio::common {
 static_assert(std::is_move_constructible<BufferedInput>());
 
 namespace {
-void copyIOBufToMemory(folly::IOBuf&& iobuf, folly::Range<char*> allocated) {
+void copyIOBufToMemory(folly::IOBuf&& iobuf, std::span<char> allocated) {
   folly::io::Cursor cursor(&iobuf);
   VELOX_CHECK_EQ(cursor.totalLength(), allocated.size(), "length mismatch.");
   cursor.pull(allocated.data(), allocated.size());
@@ -80,7 +80,7 @@ void BufferedInput::load(const LogType logType) {
 
 void BufferedInput::readToBuffer(
     uint64_t offset,
-    folly::Range<char*> allocated,
+    std::span<char> allocated,
     const LogType logType) {
   uint64_t usec = 0;
   {

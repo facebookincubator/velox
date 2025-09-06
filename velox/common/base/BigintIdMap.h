@@ -16,7 +16,6 @@
 
 #pragma once
 
-#include <folly/Range.h>
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/SimdUtil.h"
 #include "velox/common/memory/HashStringAllocator.h"

@@ -143,7 +143,7 @@ class SumAggregateBase
 
   void initializeNewGroupsInternal(
       char** groups,
-      folly::Range<const vector_size_t*> indices) override {
+      std::span<const vector_size_t> indices) override {
     exec::Aggregate::setAllNulls(groups, indices);
     for (auto i : indices) {
       *exec::Aggregate::value<TAccumulator>(groups[i]) = 0;

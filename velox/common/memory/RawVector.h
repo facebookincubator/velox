@@ -16,7 +16,6 @@
 
 #pragma once
 
-#include <folly/Range.h>
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/SimdUtil.h"
 #include "velox/common/memory/MemoryPool.h"
@@ -127,8 +126,8 @@ class raw_vector {
     data_[size_++] = x;
   }
 
-  operator folly::Range<const T*>() const {
-    return folly::Range<const T*>(data(), size());
+  operator std::span<const T>() const {
+    return std::span<const T>(data(), size());
   }
 
   void clear() {

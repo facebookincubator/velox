@@ -31,12 +31,12 @@ class PrestoIterativeVectorSerializer : public IterativeVectorSerializer {
 
   void append(
       const RowVectorPtr& vector,
-      const folly::Range<const IndexRange*>& ranges,
+      const std::span<const IndexRange>& ranges,
       Scratch& scratch) override;
 
   void append(
       const RowVectorPtr& vector,
-      const folly::Range<const vector_size_t*>& rows,
+      const std::span<const vector_size_t>& rows,
       Scratch& scratch) override;
 
   size_t maxSerializedSize() const override;

@@ -968,7 +968,7 @@ CoalesceIoStats readPins(
         int32_t begin,
         int32_t end,
         uint64_t offset,
-        const std::vector<folly::Range<char*>>& buffers)> readFunc);
+        const std::vector<std::span<char>>& buffers)> readFunc);
 
 } // namespace facebook::velox::cache
 

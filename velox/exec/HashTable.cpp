@@ -791,7 +791,7 @@ void HashTable<ignoreNullKeys>::checkSize(
 
 template <bool ignoreNullKeys>
 bool HashTable<ignoreNullKeys>::hashRows(
-    folly::Range<char**> rows,
+    std::span<char*> rows,
     bool initNormalizedKeys,
     raw_vector<uint64_t>& hashes) {
   if (rows.empty()) {
@@ -990,7 +990,7 @@ void HashTable<ignoreNullKeys>::parallelJoinBuild() {
     auto& overflows = overflowPerPartition[i];
     hashes.resize(overflows.size());
     hashRows(
-        folly::Range<char**>(overflows.data(), overflows.size()),
+        std::span<char*>(overflows.data(), overflows.size()),
         false,
         hashes);
     auto table = i == 0 ? this : otherTables_[i - 1].get();
@@ -1032,7 +1032,7 @@ void HashTable<ignoreNullKeys>::partitionRows(
   RowContainerIterator iter;
   while (auto numRows = subtable.rows_->listRows(
              &iter, kBatch, RowContainer::kUnlimited, rows.data())) {
-    hashRows(folly::Range<char**>(rows.data(), numRows), true, hashes);
+    hashRows(std::span<char*>(rows.data(), numRows), true, hashes);
     VELOX_DCHECK_EQ(
         0,
         buildPartitionBounds_.capacity() %
@@ -1044,7 +1044,7 @@ void HashTable<ignoreNullKeys>::partitionRows(
           index, buildPartitionBounds_.data(), buildPartitionBounds_.size());
     }
     rowPartitions.appendPartitions(
-        folly::Range<const uint8_t*>(partitions.data(), numRows));
+        std::span<const uint8_t>(partitions.data(), numRows));
   }
 }
 
@@ -1066,7 +1066,7 @@ void HashTable<ignoreNullKeys>::buildJoinPartition(
     RowContainerIterator iter;
     while (const auto numRows = table->rows_->listPartitionRows(
                iter, partition, kBatch, *rowPartitions[i], rows.data())) {
-      hashRows(folly::Range(rows.data(), numRows), false, hashes);
+      hashRows(std::span(rows.data(), numRows), false, hashes);
       insertForJoin(rows.data(), hashes.data(), numRows, &partitionInfo);
       table->numParallelBuildRows_ += numRows;
     }
@@ -1079,7 +1079,7 @@ bool HashTable<ignoreNullKeys>::insertBatch(
     int32_t numGroups,
     raw_vector<uint64_t>& hashes,
     bool initNormalizedKeys) {
-  if (!hashRows(folly::Range(groups, numGroups), initNormalizedKeys, hashes)) {
+  if (!hashRows(std::span(groups, numGroups), initNormalizedKeys, hashes)) {
     return false;
   }
   if (isJoinBuild_) {
@@ -1785,8 +1785,8 @@ template <bool ignoreNullKeys>
 int32_t HashTable<ignoreNullKeys>::listJoinResults(
     JoinResultIterator& iter,
     bool includeMisses,
-    folly::Range<vector_size_t*> inputRows,
-    folly::Range<char**> hits,
+    std::span<vector_size_t> inputRows,
+    std::span<char*> hits,
     uint64_t maxBytes) {
   VELOX_CHECK_LE(inputRows.size(), hits.size());
 
@@ -1850,8 +1850,8 @@ template <bool ignoreNullKeys>
 int32_t HashTable<ignoreNullKeys>::listJoinResultsFastPath(
     JoinResultIterator& iter,
     bool includeMisses,
-    folly::Range<vector_size_t*> inputRows,
-    folly::Range<char**> hits,
+    std::span<vector_size_t> inputRows,
+    std::span<char*> hits,
     uint64_t maxBytes) {
   int32_t numOut = 0;
   const auto maxOut = std::min(
@@ -2010,7 +2010,7 @@ int32_t HashTable<true>::listNullKeyRows(
 }
 
 template <bool ignoreNullKeys>
-void HashTable<ignoreNullKeys>::erase(folly::Range<char**> rows) {
+void HashTable<ignoreNullKeys>::erase(std::span<char*> rows) {
   auto numRows = rows.size();
   raw_vector<uint64_t> hashes(pool_);
   hashes.resize(numRows);
@@ -2037,7 +2037,7 @@ void HashTable<ignoreNullKeys>::erase(folly::Range<char**> rows) {
 
 template <bool ignoreNullKeys>
 void HashTable<ignoreNullKeys>::eraseWithHashes(
-    folly::Range<char**> rows,
+    std::span<char*> rows,
     uint64_t* hashes) {
   auto numRows = rows.size();
   if (hashMode_ == HashMode::kArray) {
@@ -2074,10 +2074,10 @@ void HashTable<ignoreNullKeys>::eraseWithHashes(
       const auto numContainerRows =
           other->rows()->findRows(rows, containerRows.data());
       other->rows()->eraseRows(
-          folly::Range(containerRows.data(), numContainerRows));
+          std::span(containerRows.data(), numContainerRows));
     }
     const auto numContainerRows = rows_->findRows(rows, containerRows.data());
-    rows_->eraseRows(folly::Range(containerRows.data(), numContainerRows));
+    rows_->eraseRows(std::span(containerRows.data(), numContainerRows));
   } else {
     rows_->eraseRows(rows);
   }

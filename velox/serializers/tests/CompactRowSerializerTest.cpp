@@ -124,12 +124,12 @@ class CompactRowSerializerTest : public ::testing::Test,
             compactRow.get(), rows, serializedRowSizesPtr.data());
         serializer->append(
             *compactRow,
-            folly::Range(rows.data(), rows.size()),
+            std::span(rows.data(), rows.size()),
             serializedRowSizes);
       }
     } else {
       serializer->append(
-          rowVector, folly::Range(ranges.data(), ranges.size()), scratch);
+          rowVector, std::span(ranges.data(), ranges.size()), scratch);
     }
     auto size = serializer->maxSerializedSize();
     OStreamOutputStream out(output);

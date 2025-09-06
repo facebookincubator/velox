@@ -25,7 +25,6 @@
 
 #include <fmt/format.h>
 #include <folly/Random.h>
-#include <folly/Range.h>
 #include <gflags/gflags.h>
 #include <gmock/gmock-matchers.h>
 #include <gtest/gtest.h>
@@ -1185,7 +1184,7 @@ TEST_P(MemoryAllocatorTest, allocateBytes) {
 
   // We fill 'data' with random size allocations. Each is filled with its index
   // in 'data' cast to char.
-  std::vector<folly::Range<char*>> data(kNumAllocs);
+  std::vector<std::span<char>> data(kNumAllocs);
   uint64_t expectedNumMallocBytes = 0;
   uint64_t expectedTotalBytes = 0;
   for (auto counter = 0; counter < data.size() * 4; ++counter) {
@@ -1208,7 +1207,7 @@ TEST_P(MemoryAllocatorTest, allocateBytes) {
             ((MmapAllocator*)instance_)->numMallocBytes());
       }
     }
-    data[index] = folly::Range<char*>(
+    data[index] = std::span<char>(
         reinterpret_cast<char*>(instance_->allocateBytes(bytes)), bytes);
     expectedTotalBytes += bytes;
     if (useMmap_ && bytes == sizes[0]) {
@@ -1329,7 +1328,7 @@ TEST_P(MemoryAllocatorTest, allocateZeroFilled) {
 
   // We fill 'data' with random size allocations. Each is filled with its index
   // in 'data' cast to char.
-  std::vector<folly::Range<char*>> data(kNumAllocs);
+  std::vector<std::span<char>> data(kNumAllocs);
   for (auto counter = 0; counter < data.size() * 4; ++counter) {
     int32_t index = folly::Random::rand32(rng) % kNumAllocs;
     int32_t bytes = sizes[folly::Random::rand32() % sizes.size()];
@@ -1347,7 +1346,7 @@ TEST_P(MemoryAllocatorTest, allocateZeroFilled) {
     if (bytes % alignment != 0) {
       alignment = 0;
     }
-    data[index] = folly::Range<char*>(
+    data[index] = std::span<char>(
         reinterpret_cast<char*>(instance_->allocateZeroFilled(bytes)), bytes);
     for (auto& byte : data[index]) {
       ASSERT_EQ(byte, 0);

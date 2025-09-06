@@ -23,7 +23,7 @@
 
 namespace facebook::velox {
 // Same as in LazyVector.h.
-using RowSet = folly::Range<const int32_t*>;
+using RowSet = std::span<const int32_t>;
 namespace common {
 class AlwaysTrue;
 template <typename TFilter, typename T>
@@ -154,7 +154,7 @@ template <
     typename TFilter,
     typename THook>
 void fixedWidthScan(
-    folly::Range<const int32_t*> rows,
+    std::span<const int32_t> rows,
     const int32_t* scatterRows,
     void* voidValues,
     int32_t* filterHits,
@@ -466,7 +466,7 @@ template <
     typename TFilter,
     typename THook>
 void processFixedWidthRun(
-    folly::Range<const int32_t*> rows,
+    std::span<const int32_t> rows,
     int32_t rowIndex,
     int32_t numInput,
     const int32_t* scatterRows,

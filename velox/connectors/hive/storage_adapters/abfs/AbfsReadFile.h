@@ -44,12 +44,12 @@ class AbfsReadFile final : public ReadFile {
 
   uint64_t preadv(
       uint64_t offset,
-      const std::vector<folly::Range<char*>>& buffers,
+      const std::vector<std::span<char>>& buffers,
       File::IoStats* stats = nullptr) const final;
 
   uint64_t preadv(
-      folly::Range<const common::Region*> regions,
-      folly::Range<folly::IOBuf*> iobufs,
+      std::span<const common::Region> regions,
+      std::span<folly::IOBuf> iobufs,
       File::IoStats* stats = nullptr) const final;
 
   uint64_t size() const final;

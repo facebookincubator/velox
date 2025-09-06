@@ -236,7 +236,7 @@ class PageReader {
   // last row touched on a previous call to skip() or
   // readWithVisitor(). This is the first row of the first data page
   // if first call.
-  void startVisit(folly::Range<const vector_size_t*> rows);
+  void startVisit(std::span<const vector_size_t> rows);
 
   // Seeks to the next page in a range given by startVisit().  Returns
   // true if there are unprocessed rows in the set given to
@@ -256,7 +256,7 @@ class PageReader {
       dwio::common::SelectiveColumnReader& reader,
       bool hasFilter,
       bool mayProduceNulls,
-      folly::Range<const vector_size_t*>& rows,
+      std::span<const vector_size_t>& rows,
       const uint64_t* FOLLY_NULLABLE& nulls);
 
   // Calls the visitor, specialized on the data type since not all visitors
@@ -541,9 +541,9 @@ void PageReader::readWithVisitor(Visitor& visitor) {
   auto rows = visitor.rows();
   auto numRows = visitor.numRows();
   auto& reader = visitor.reader();
-  startVisit(folly::Range<const vector_size_t*>(rows, numRows));
+  startVisit(std::span<const vector_size_t>(rows, numRows));
   rowsCopy_ = &visitor.rowsCopy();
-  folly::Range<const vector_size_t*> pageRows;
+  std::span<const vector_size_t> pageRows;
   const uint64_t* nulls = nullptr;
   bool isMultiPage = false;
   while (rowsForPage(reader, hasFilter, mayProduceNulls, pageRows, nulls)) {

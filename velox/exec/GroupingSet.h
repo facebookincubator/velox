@@ -213,7 +213,7 @@ class GroupingSet {
   // otherwise.
   void extractGroups(
       RowContainer* container,
-      folly::Range<char**> groups,
+      std::span<char*> groups,
       const RowVectorPtr& result);
 
   // Produces output in if spilling has occurred. First produces data

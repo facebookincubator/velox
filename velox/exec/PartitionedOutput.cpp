@@ -94,7 +94,7 @@ BlockingReason Destination::advance(
     current_->createStreamTree(rowType, rowsInCurrent_, serdeOptions_);
   }
 
-  const auto rows = folly::Range(&rows_[firstRow], rowIdx_ - firstRow);
+  const auto rows = std::span(&rows_[firstRow], rowIdx_ - firstRow);
   if (serde_->kind() == VectorSerde::Kind::kCompactRow) {
     VELOX_CHECK_NOT_NULL(outputCompactRow);
     current_->append(*outputCompactRow, rows, sizes);
@@ -288,7 +288,7 @@ void PartitionedOutput::estimateRowSizes() {
   std::fill(rowSize_.begin(), rowSize_.end(), 0);
   raw_vector<vector_size_t> storage(pool());
   const auto numbers = iota(numInput, storage);
-  const auto rows = folly::Range(numbers, numInput);
+  const auto rows = std::span(numbers, numInput);
   if (serde_->kind() == VectorSerde::Kind::kCompactRow) {
     VELOX_CHECK_NOT_NULL(outputCompactRow_);
     serde_->estimateSerializedSize(

@@ -23,7 +23,7 @@
 namespace facebook::velox::wave {
 
 void vectorsToDevice(
-    folly::Range<const BaseVector**> source,
+    std::span<const BaseVector*> source,
     const OperandSet& ids,
     WaveStream& stream);
 
@@ -37,11 +37,11 @@ void ensureWaveVector(
 /// Allocates or resizes WaveVectors / Operands given types, size and
 /// nullability.
 void ensureVectors(
-    folly::Range<vector_size_t*> sizes,
+    std::span<vector_size_t> sizes,
     const std::vector<TypePtr>& types,
-    folly::Range<bool*> nullable,
+    std::span<bool> nullable,
     std::vector<WaveVectorPtr> vectors,
-    folly::Range<Operand*> operands,
+    std::span<Operand> operands,
     GpuArena& arena);
 
 void ensureWaveVector(

@@ -235,7 +235,7 @@ void SpillWriter::flushBuffer(
 
 uint64_t SpillWriter::write(
     const RowVectorPtr& rows,
-    const folly::Range<IndexRange*>& indices) {
+    const std::span<IndexRange>& indices) {
   return writeWithBufferControl([&]() {
     if (batch_ == nullptr) {
       serializer::presto::PrestoVectorSerde::PrestoOptions options = {

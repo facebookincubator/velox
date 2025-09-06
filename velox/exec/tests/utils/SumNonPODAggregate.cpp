@@ -121,7 +121,7 @@ class SumNonPODAggregate : public Aggregate {
  protected:
   void initializeNewGroupsInternal(
       char** groups,
-      folly::Range<const velox::vector_size_t*> indices) override {
+      std::span<const velox::vector_size_t> indices) override {
     for (auto i : indices) {
       char* group = value<char>(groups[i]);
       VELOX_CHECK_EQ(reinterpret_cast<uintptr_t>(group) % alignment_, 0);
@@ -129,7 +129,7 @@ class SumNonPODAggregate : public Aggregate {
     }
   }
 
-  void destroyInternal(folly::Range<char**> groups) override {
+  void destroyInternal(std::span<char*> groups) override {
     for (auto group : groups) {
       if (isInitialized(group)) {
         value<NonPODInt64>(group)->~NonPODInt64();

@@ -64,13 +64,13 @@ void Values::schedule(WaveStream& stream, int32_t maxRows) {
     stream.setNullable(*stream.operandAt(id), sources[counter]->mayHaveNulls());
     ++counter;
   });
-  folly::Range<Executable**> empty(nullptr, nullptr);
+  std::span<Executable*> empty(nullptr, nullptr);
   auto numBlocks = bits::roundUp(data->size(), kBlockSize) / kBlockSize;
   stream.setNumRows(data->size());
   stream.prepareProgramLaunch(
       id_, 0, data->size(), empty, numBlocks, nullptr, nullptr);
   vectorsToDevice(
-      folly::Range(sources.data(), sources.size()), outputIds_, stream);
+      std::span(sources.data(), sources.size()), outputIds_, stream);
 }
 
 std::string Values::toString() const {

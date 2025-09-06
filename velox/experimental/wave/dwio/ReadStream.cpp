@@ -401,8 +401,8 @@ void ReadStream::launch(
   WaveStats& stats = waveStream->stats();
   bool firstLaunch = true;
   waveStream->installExecutables(
-      folly::Range<UniqueExe*>(reinterpret_cast<UniqueExe*>(&readStream), 1),
-      [&](Stream* stream, folly::Range<Executable**> exes) {
+      std::span<UniqueExe*>(reinterpret_cast<UniqueExe>(&readStream), 1),
+      [&](Stream* stream, std::span<Executable*> exes) {
         auto* readStream = reinterpret_cast<ReadStream*>(exes[0]);
         bool needSync = false;
         bool griddizedHere = false;

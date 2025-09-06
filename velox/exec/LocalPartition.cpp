@@ -419,7 +419,7 @@ RowVectorPtr LocalPartition::wrapChildren(
 
 void LocalPartition::copy(
     const RowVectorPtr& input,
-    const folly::Range<const BaseVector::CopyRange*>& ranges,
+    const std::span<const BaseVector::CopyRange>& ranges,
     VectorPtr& target) {
   if (ranges.empty()) {
     return;
@@ -465,7 +465,7 @@ RowVectorPtr LocalPartition::processPartition(
 
     copy(
         input,
-        folly::Range{copyRanges_.data(), static_cast<size_t>(size)},
+        std::span{copyRanges_.data(), static_cast<size_t>(size)},
         partitionBuffer);
 
     if (partitionBuffer &&

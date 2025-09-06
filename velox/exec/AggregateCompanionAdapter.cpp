@@ -60,12 +60,12 @@ void AggregateCompanionFunctionBase::setAllocatorInternal(
   fn_->setAllocator(allocator);
 }
 
-void AggregateCompanionFunctionBase::destroy(folly::Range<char**> groups) {
+void AggregateCompanionFunctionBase::destroy(std::span<char*> groups) {
   fn_->destroy(groups);
 }
 
 void AggregateCompanionFunctionBase::destroyInternal(
-    folly::Range<char**> groups) {
+    std::span<char*> groups) {
   fn_->destroy(groups);
 }
 
@@ -75,13 +75,13 @@ void AggregateCompanionFunctionBase::clearInternal() {
 
 void AggregateCompanionFunctionBase::initializeNewGroups(
     char** groups,
-    folly::Range<const vector_size_t*> indices) {
+    std::span<const vector_size_t> indices) {
   fn_->initializeNewGroups(groups, indices);
 }
 
 void AggregateCompanionFunctionBase::initializeNewGroupsInternal(
     char** groups,
-    folly::Range<const vector_size_t*> indices) {
+    std::span<const vector_size_t> indices) {
   fn_->initializeNewGroups(groups, indices);
 }
 
@@ -242,7 +242,7 @@ void AggregateCompanionAdapter::ExtractFunction::apply(
   context.moveOrCopyResult(localResult, rows, result);
 
   if (fn_->accumulatorUsesExternalMemory()) {
-    fn_->destroy(folly::Range(groups, groupCount));
+    fn_->destroy(std::span(groups, groupCount));
   }
 }
 

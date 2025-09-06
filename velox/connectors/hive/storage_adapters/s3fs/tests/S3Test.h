@@ -81,15 +81,15 @@ class S3Test : public testing::Test {
     char head[12];
     char middle[4];
     char tail[7];
-    std::vector<folly::Range<char*>> buffers = {
-        folly::Range<char*>(head, sizeof(head)),
-        folly::Range<char*>(nullptr, (char*)(uint64_t)500000),
-        folly::Range<char*>(middle, sizeof(middle)),
-        folly::Range<char*>(
+    std::vector<std::span<char>> buffers = {
+        std::span<char>(head, sizeof(head)),
+        std::span<char>(nullptr, (char*)(uint64_t)500000),
+        std::span<char>(middle, sizeof(middle)),
+        std::span<char>(
             nullptr,
             (char*)(uint64_t)(15 + kOneMB - 500000 - sizeof(head) -
                               sizeof(middle) - sizeof(tail))),
-        folly::Range<char*>(tail, sizeof(tail))};
+        std::span<char>(tail, sizeof(tail))};
     ASSERT_EQ(15 + kOneMB, readFile->preadv(0, buffers));
     ASSERT_EQ(std::string_view(head, sizeof(head)), "aaaaabbbbbcc");
     ASSERT_EQ(std::string_view(middle, sizeof(middle)), "cccc");

@@ -503,7 +503,7 @@ TypedExprPtr Expressions::tryResolveCallWithLambdas(
       const auto& lambdaSignature = signature->argumentTypeAt(i);
       const auto& params = lambdaSignature.parameters();
       const auto lambdaTypes = binder.tryResolveTypes(
-          folly::Range(params.data(), params.size() - 1));
+          std::span(params.data(), params.size() - 1));
 
       children[i] = inferTypes(
           callExpr->inputAt(i), inputRow, lambdaTypes, pool, complexConstants);

@@ -35,7 +35,6 @@
 #include <string_view>
 
 #include <folly/Executor.h>
-#include <folly/Range.h>
 #include <folly/futures/Future.h>
 
 #include "velox/common/base/Exceptions.h"
@@ -81,7 +80,7 @@ class ReadFile {
   // This method should be thread safe.
   virtual uint64_t preadv(
       uint64_t /*offset*/,
-      const std::vector<folly::Range<char*>>& /*buffers*/,
+      const std::vector<std::span<char>>& /*buffers*/,
       filesystems::File::IoStats* stats = nullptr) const;
 
   // Vectorized read API. Implementations can coalesce and parallelize.
@@ -99,8 +98,8 @@ class ReadFile {
   //
   // This method should be thread safe.
   virtual uint64_t preadv(
-      folly::Range<const common::Region*> regions,
-      folly::Range<folly::IOBuf*> iobufs,
+      std::span<const common::Region> regions,
+      std::span<folly::IOBuf> iobufs,
       filesystems::File::IoStats* stats = nullptr) const;
 
   /// Like preadv but may execute asynchronously and returns the read size or
@@ -113,7 +112,7 @@ class ReadFile {
   /// This method should be thread safe.
   virtual folly::SemiFuture<uint64_t> preadvAsync(
       uint64_t offset,
-      const std::vector<folly::Range<char*>>& buffers,
+      const std::vector<std::span<char>>& buffers,
       filesystems::File::IoStats* stats = nullptr) const {
     try {
       return folly::SemiFuture<uint64_t>(preadv(offset, buffers, stats));
@@ -317,12 +316,12 @@ class LocalReadFile final : public ReadFile {
 
   uint64_t preadv(
       uint64_t offset,
-      const std::vector<folly::Range<char*>>& buffers,
+      const std::vector<std::span<char>>& buffers,
       filesystems::File::IoStats* stats = nullptr) const final;
 
   folly::SemiFuture<uint64_t> preadvAsync(
       uint64_t offset,
-      const std::vector<folly::Range<char*>>& buffers,
+      const std::vector<std::span<char>>& buffers,
       filesystems::File::IoStats* stats = nullptr) const override;
 
   bool hasPreadvAsync() const override {

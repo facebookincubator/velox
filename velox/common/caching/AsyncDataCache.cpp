@@ -658,7 +658,7 @@ CacheStats CacheStats::operator-(const CacheStats& other) const {
 AsyncDataCache::AsyncDataCache(
     memory::MemoryAllocator* allocator,
     std::unique_ptr<SsdCache> ssdCache)
-    : AsyncDataCache({}, allocator, std::move(ssdCache)){};
+    : AsyncDataCache({}, allocator, std::move(ssdCache)) {};
 
 AsyncDataCache::AsyncDataCache(
     const Options& options,
@@ -875,8 +875,8 @@ bool AsyncDataCache::canTryAllocate(
     return true;
   }
   return numPages - acquired.numPages() <=
-      (memory::AllocationTraits::numPages(allocator_->capacity())) -
-      allocator_->numAllocated();
+      (memory::AllocationTraits::numPages(
+          allocator_->capacity()))-allocator_->numAllocated();
 }
 
 void AsyncDataCache::backoff(int32_t counter) {
@@ -1030,8 +1030,8 @@ CoalesceIoStats readPins(
         int32_t begin,
         int32_t end,
         uint64_t offset,
-        const std::vector<folly::Range<char*>>& buffers)> readFunc) {
-  return coalesceIo<CachePin, folly::Range<char*>>(
+        const std::vector<std::span<char>>& buffers)> readFunc) {
+  return coalesceIo<CachePin, std::span<char>>(
       pins,
       maxGap,
       rangesPerIo,
@@ -1041,31 +1041,31 @@ CoalesceIoStats readPins(
         return std::max<int32_t>(
             1, pins[index].checkedEntry()->data().numRuns());
       },
-      [&](const CachePin& pin, std::vector<folly::Range<char*>>& ranges) {
+      [&](const CachePin& pin, std::vector<std::span<char>>& ranges) {
         auto* entry = pin.checkedEntry();
         auto& data = entry->data();
         uint64_t offsetInRuns = 0;
         auto size = entry->size();
         if (data.numPages() == 0) {
           ranges.push_back(
-              folly::Range<char*>(pin.checkedEntry()->tinyData(), size));
+              std::span<char>(pin.checkedEntry()->tinyData(), size));
           offsetInRuns = size;
         } else {
           for (int i = 0; i < data.numRuns(); ++i) {
             const auto run = data.runAt(i);
             const uint64_t bytes = run.numBytes();
             const uint64_t readSize = std::min(bytes, size - offsetInRuns);
-            ranges.push_back(folly::Range<char*>(run.data<char>(), readSize));
+            ranges.push_back(std::span<char>(run.data<char>(), readSize));
             offsetInRuns += readSize;
           }
         }
         VELOX_CHECK_EQ(offsetInRuns, size);
       },
-      [&](int32_t size, std::vector<folly::Range<char*>>& ranges) {
-        // This hack allows us to store the size of the gap in the Range,
+      [&](int32_t size, std::vector<std::span<char>>& ranges) {
+        // This hack allows us to store the size of the gap in the span,
         // without actually allocating a buffer for it.
-        ranges.push_back(folly::Range<char*>(
-            nullptr, reinterpret_cast<char*>(static_cast<uint64_t>(size))));
+        ranges.emplace_back(
+            static_cast<char*>(nullptr), static_cast<size_t>(size));
       },
       std::move(readFunc));
 }

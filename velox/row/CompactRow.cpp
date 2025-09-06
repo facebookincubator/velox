@@ -329,7 +329,7 @@ int32_t CompactRow::rowRowSize(vector_size_t index) const {
 }
 
 void CompactRow::serializedRowSizes(
-    const folly::Range<const vector_size_t*>& rows,
+    const std::span<const vector_size_t>& rows,
     vector_size_t** sizes) const {
   if (const auto fixedRowSize =
           row::CompactRow::fixedRowSize(asRowType(decoded_.base()->type()))) {

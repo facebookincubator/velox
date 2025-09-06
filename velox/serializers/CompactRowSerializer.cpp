@@ -34,7 +34,7 @@ class CompactRowVectorSerializer : public RowSerializer<row::CompactRow> {
  private:
   void serializeRanges(
       const row::CompactRow& row,
-      const folly::Range<const IndexRange*>& ranges,
+      const std::span<const IndexRange>& ranges,
       char* rawBuffer,
       const std::vector<vector_size_t>& rowSize) override {
     size_t offset = 0;
@@ -67,7 +67,7 @@ class CompactRowVectorSerializer : public RowSerializer<row::CompactRow> {
 
 void CompactRowVectorSerde::estimateSerializedSize(
     const row::CompactRow* compactRow,
-    const folly::Range<const vector_size_t*>& rows,
+    const std::span<const vector_size_t>& rows,
     vector_size_t** sizes) {
   compactRow->serializedRowSizes(rows, sizes);
 }

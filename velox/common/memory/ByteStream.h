@@ -351,18 +351,18 @@ class ByteOutputStream {
   }
 
   template <typename T>
-  void append(folly::Range<const T*> values) {
+  void append(std::span<T> values) {
     static_assert(
         std::is_trivially_copyable_v<T> ||
-        std::is_same_v<T, std::shared_ptr<void>>);
+        std::is_same_v<T, const std::shared_ptr<void>>);
 
-    if (std::is_same_v<T, std::shared_ptr<void>>) {
+    if (std::is_same_v<T, const std::shared_ptr<void>>) {
       VELOX_FAIL("Cannot serialize OPAQUE data");
     }
 
     if (current_->position + sizeof(T) * values.size() > current_->size) {
       appendStringView(std::string_view(
-          reinterpret_cast<const char*>(&values[0]),
+          reinterpret_cast<const char*>(values.data()),
           values.size() * sizeof(T)));
       return;
     }
@@ -432,7 +432,7 @@ class ByteOutputStream {
 
   template <typename T>
   void appendOne(const T& value) {
-    append(folly::Range(&value, 1));
+    append(std::span(&value, 1));
   }
 
   void flush(OutputStream* stream);

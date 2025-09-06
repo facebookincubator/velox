@@ -94,7 +94,7 @@ PrestoVectorSerde::PrestoOptions toPrestoOptions(
 
 void PrestoVectorSerde::estimateSerializedSize(
     const BaseVector* vector,
-    const folly::Range<const IndexRange*>& ranges,
+    const std::span<const IndexRange>& ranges,
     vector_size_t** sizes,
     Scratch& scratch) {
   detail::estimateSerializedSizeInt(
@@ -103,7 +103,7 @@ void PrestoVectorSerde::estimateSerializedSize(
 
 void PrestoVectorSerde::estimateSerializedSize(
     const BaseVector* vector,
-    const folly::Range<const vector_size_t*>& rows,
+    const std::span<const vector_size_t>& rows,
     vector_size_t** sizes,
     Scratch& scratch) {
   detail::estimateSerializedSizeInt(
@@ -245,7 +245,7 @@ void PrestoVectorSerde::serializeSingleColumn(
       vector->size(),
       prestoOptions);
   Scratch scratch;
-  serializeColumn(vector, folly::Range(&range, 1), stream.get(), scratch);
+  serializeColumn(vector, std::span(&range, 1), stream.get(), scratch);
 
   PrestoOutputStreamListener listener;
   OStreamOutputStream outputStream(output, &listener);

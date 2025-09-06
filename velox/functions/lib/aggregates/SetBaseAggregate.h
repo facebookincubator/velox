@@ -197,7 +197,7 @@ class SetBaseAggregate : public exec::Aggregate {
 
   void initializeNewGroupsInternal(
       char** groups,
-      folly::Range<const vector_size_t*> indices) override {
+      std::span<const vector_size_t> indices) override {
     const auto& type = resultType()->childAt(0);
     exec::Aggregate::setAllNulls(groups, indices);
     for (auto i : indices) {
@@ -205,7 +205,7 @@ class SetBaseAggregate : public exec::Aggregate {
     }
   }
 
-  void destroyInternal(folly::Range<char**> groups) override {
+  void destroyInternal(std::span<char*> groups) override {
     for (auto* group : groups) {
       if (isInitialized(group) && !isNull(group)) {
         value(group)->free(*allocator_);

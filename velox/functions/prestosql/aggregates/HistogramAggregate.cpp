@@ -525,14 +525,14 @@ class HistogramAggregate : public exec::Aggregate {
  protected:
   void initializeNewGroupsInternal(
       char** groups,
-      folly::Range<const vector_size_t*> indices) override {
+      std::span<const vector_size_t> indices) override {
     const auto& type = resultType()->childAt(0);
     for (auto index : indices) {
       new (groups[index] + offset_) AccumulatorType{type, allocator_};
     }
   }
 
-  void destroyInternal(folly::Range<char**> groups) override {
+  void destroyInternal(std::span<char*> groups) override {
     for (auto* group : groups) {
       if (isInitialized(group) && !isNull(group)) {
         value<AccumulatorType>(group)->free(*allocator_);

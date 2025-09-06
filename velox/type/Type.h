@@ -18,7 +18,6 @@
 #include <folly/CPortability.h>
 #include <folly/Hash.h>
 #include <folly/Random.h>
-#include <folly/Range.h>
 #include <folly/dynamic.h>
 
 #include <cstdint>

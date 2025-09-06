@@ -28,7 +28,7 @@ namespace {
 void copyImpl(
     const EncodedVectorCopyOptions& options,
     const VectorPtr& source,
-    const folly::Range<const BaseVector::CopyRange*>& ranges,
+    const std::span<const BaseVector::CopyRange>& ranges,
     VectorPtr& target,
     bool targetMutable);
 
@@ -36,7 +36,7 @@ void copyImpl(
 // ranges.
 vector_size_t targetSize(
     vector_size_t size,
-    const folly::Range<const BaseVector::CopyRange*>& ranges) {
+    const std::span<const BaseVector::CopyRange>& ranges) {
   for (auto& range : ranges) {
     size = std::max(size, range.targetIndex + range.count);
   }
@@ -46,7 +46,7 @@ vector_size_t targetSize(
 // Calculate the expected target size for a newly created target (no old
 // existing target vector).
 vector_size_t newTargetSize(
-    const folly::Range<const BaseVector::CopyRange*>& ranges) {
+    const std::span<const BaseVector::CopyRange>& ranges) {
   vector_size_t size = 0;
   vector_size_t minIndex = std::numeric_limits<vector_size_t>::max();
   for (auto& range : ranges) {
@@ -73,7 +73,7 @@ BufferPtr tryReuse(const BufferPtr& source, vector_size_t size) {
 
 void fillIndices(
     vector_size_t value,
-    const folly::Range<const BaseVector::CopyRange*>& ranges,
+    const std::span<const BaseVector::CopyRange>& ranges,
     vector_size_t* target) {
   for (auto& range : ranges) {
     auto* t = target + range.targetIndex;
@@ -83,7 +83,7 @@ void fillIndices(
 
 void copyIndices(
     const vector_size_t* source,
-    const folly::Range<const BaseVector::CopyRange*>& ranges,
+    const std::span<const BaseVector::CopyRange>& ranges,
     vector_size_t shift,
     vector_size_t* target) {
   for (auto& range : ranges) {
@@ -102,7 +102,7 @@ template <typename MutableNulls>
 void setSourceNullsImpl(
     const uint64_t* source,
     const uint64_t* target,
-    const folly::Range<const BaseVector::CopyRange*>& ranges,
+    const std::span<const BaseVector::CopyRange>& ranges,
     MutableNulls&& mutableNulls) {
   if (source) {
     BaseVector::copyNulls(mutableNulls(), source, ranges);
@@ -114,7 +114,7 @@ void setSourceNullsImpl(
 void setSourceNulls(
     const uint64_t* source,
     const uint64_t* target,
-    const folly::Range<const BaseVector::CopyRange*>& ranges,
+    const std::span<const BaseVector::CopyRange>& ranges,
     uint64_t* mutableNulls) {
   setSourceNullsImpl(source, target, ranges, [&] { return mutableNulls; });
 }
@@ -122,7 +122,7 @@ void setSourceNulls(
 void setSourceNulls(
     const uint64_t* source,
     BaseVector& target,
-    const folly::Range<const BaseVector::CopyRange*>& ranges) {
+    const std::span<const BaseVector::CopyRange>& ranges) {
   setSourceNullsImpl(source, target.rawNulls(), ranges, [&] {
     return target.mutableRawNulls();
   });
@@ -134,7 +134,7 @@ BufferPtr combineNulls(
     const uint64_t* target,
     vector_size_t oldTargetSize,
     const uint64_t* source,
-    const folly::Range<const BaseVector::CopyRange*>& ranges) {
+    const std::span<const BaseVector::CopyRange>& ranges) {
   auto nulls = allocateNulls(size, pool);
   auto* rawNulls = nulls->asMutable<uint64_t>();
   if (target) {
@@ -148,7 +148,7 @@ BufferPtr newNulls(
     vector_size_t size,
     memory::MemoryPool* pool,
     const uint64_t* source,
-    const folly::Range<const BaseVector::CopyRange*>& ranges) {
+    const std::span<const BaseVector::CopyRange>& ranges) {
   if (!source) {
     return nullptr;
   }
@@ -176,7 +176,7 @@ vector_size_t baseSize(DecodedVector& dictionary) {
 template <typename NextTargetBaseIndex>
 std::vector<BaseVector::CopyRange> toBaseRangesImpl(
     const DecodedVector& source,
-    const folly::Range<const BaseVector::CopyRange*>& outer,
+    const std::span<const BaseVector::CopyRange>& outer,
     vector_size_t* indices,
     NextTargetBaseIndex&& nextTargetBaseIndex) {
   VELOX_DCHECK(!source.isConstantMapping());
@@ -220,7 +220,7 @@ std::vector<BaseVector::CopyRange> toBaseRangesImpl(
 
 std::vector<BaseVector::CopyRange> toBaseRanges(
     const DecodedVector& source,
-    const folly::Range<const BaseVector::CopyRange*>& outer,
+    const std::span<const BaseVector::CopyRange>& outer,
     vector_size_t targetBaseIndexStart,
     vector_size_t* indices) {
   auto targetBaseIndex = targetBaseIndexStart - 1;
@@ -230,7 +230,7 @@ std::vector<BaseVector::CopyRange> toBaseRanges(
 
 std::vector<BaseVector::CopyRange> toBaseRanges(
     const DecodedVector& source,
-    const folly::Range<const BaseVector::CopyRange*>& ranges,
+    const std::span<const BaseVector::CopyRange>& ranges,
     const DecodedVector& target,
     vector_size_t* indices) {
   std::vector<uint64_t> targetOverwritten(bits::nwords(target.size()));
@@ -278,7 +278,7 @@ std::vector<BaseVector::CopyRange> toBaseRanges(
 
 std::vector<BaseVector::CopyRange> toNestedRanges(
     const ArrayVectorBase& source,
-    const folly::Range<const BaseVector::CopyRange*>& outer,
+    const std::span<const BaseVector::CopyRange>& outer,
     vector_size_t targetNestedStart,
     vector_size_t* newOffsets,
     vector_size_t* newSizes) {
@@ -327,12 +327,12 @@ std::vector<BaseVector::CopyRange> compactNestedRanges(
     vector_size_t* newSizes) {
   BaseVector::CopyRange range{0, 0, vector.size()};
   return toNestedRanges(
-      vector, folly::Range(&range, 1), 0, newOffsets, newSizes);
+      vector, std::span(&range, 1), 0, newOffsets, newSizes);
 }
 
 void compactNestedVector(
     const EncodedVectorCopyOptions& options,
-    const folly::Range<const BaseVector::CopyRange*>& ranges,
+    const std::span<const BaseVector::CopyRange>& ranges,
     VectorPtr& vector,
     bool mutableVector) {
   if (mutableVector) {
@@ -374,7 +374,7 @@ VectorPtr newConstantImpl(
   } else {
     VectorPtr targetBase;
     BaseVector::CopyRange range = {source.index(0), 0, 1};
-    copyImpl(options, sourceBase, folly::Range(&range, 1), targetBase, false);
+    copyImpl(options, sourceBase, std::span(&range, 1), targetBase, false);
     return std::make_shared<ConstantVector<T>>(
         options.pool, size, 0, std::move(targetBase));
   }
@@ -383,7 +383,7 @@ VectorPtr newConstantImpl(
 VectorPtr newConstant(
     const EncodedVectorCopyOptions& options,
     const VectorPtr& source,
-    const folly::Range<const BaseVector::CopyRange*>& ranges,
+    const std::span<const BaseVector::CopyRange>& ranges,
     DecodedVector& decodedSource,
     const VectorPtr& sourceBase) {
   auto size = newTargetSize(ranges);
@@ -406,7 +406,7 @@ VectorPtr newConstant(
 
 VectorPtr newDictionary(
     const EncodedVectorCopyOptions& options,
-    const folly::Range<const BaseVector::CopyRange*>& ranges,
+    const std::span<const BaseVector::CopyRange>& ranges,
     DecodedVector& decodedSource,
     const VectorPtr& sourceBase) {
   auto size = newTargetSize(ranges);
@@ -432,7 +432,7 @@ VectorPtr newDictionary(
 VectorPtr newFlat(
     const EncodedVectorCopyOptions& options,
     const VectorPtr& source,
-    const folly::Range<const BaseVector::CopyRange*>& ranges) {
+    const std::span<const BaseVector::CopyRange>& ranges) {
   if (options.reuseSource && ranges.size() == 1) {
     if (ranges[0].sourceIndex == 0 && ranges[0].count == source->size()) {
       return source;
@@ -450,7 +450,7 @@ VectorPtr newFlat(
 VectorPtr newRow(
     const EncodedVectorCopyOptions& options,
     const RowVector& source,
-    const folly::Range<const BaseVector::CopyRange*>& ranges) {
+    const std::span<const BaseVector::CopyRange>& ranges) {
   auto size = newTargetSize(ranges);
   auto nulls = newNulls(size, options.pool, source.rawNulls(), ranges);
   std::vector<VectorPtr> children(source.childrenSize());
@@ -464,7 +464,7 @@ VectorPtr newRow(
 VectorPtr newMap(
     const EncodedVectorCopyOptions& options,
     const MapVector& source,
-    const folly::Range<const BaseVector::CopyRange*>& ranges) {
+    const std::span<const BaseVector::CopyRange>& ranges) {
   auto size = newTargetSize(ranges);
   auto nulls = newNulls(size, options.pool, source.rawNulls(), ranges);
   auto offsets = allocateIndices(size, options.pool);
@@ -492,7 +492,7 @@ VectorPtr newMap(
 VectorPtr newArray(
     const EncodedVectorCopyOptions& options,
     const ArrayVector& source,
-    const folly::Range<const BaseVector::CopyRange*>& ranges) {
+    const std::span<const BaseVector::CopyRange>& ranges) {
   auto size = newTargetSize(ranges);
   auto nulls = newNulls(size, options.pool, source.rawNulls(), ranges);
   auto offsets = allocateIndices(size, options.pool);
@@ -518,7 +518,7 @@ VectorPtr newArray(
 void copyIntoFlat(
     const EncodedVectorCopyOptions& options,
     const VectorPtr& source,
-    const folly::Range<const BaseVector::CopyRange*>& ranges,
+    const std::span<const BaseVector::CopyRange>& ranges,
     VectorPtr& target,
     bool targetMutable) {
   auto size = targetSize(target->size(), ranges);
@@ -537,7 +537,7 @@ void copyIntoFlat(
 
 void copyIntoConstant(
     const EncodedVectorCopyOptions& options,
-    const folly::Range<const BaseVector::CopyRange*>& ranges,
+    const std::span<const BaseVector::CopyRange>& ranges,
     const VectorPtr& source,
     DecodedVector& decodedSource,
     const VectorPtr& sourceBase,
@@ -587,7 +587,7 @@ void copyIntoConstant(
 
 void copyIntoDictionary(
     const EncodedVectorCopyOptions& options,
-    const folly::Range<const BaseVector::CopyRange*>& ranges,
+    const std::span<const BaseVector::CopyRange>& ranges,
     DecodedVector& decodedSource,
     const VectorPtr& sourceBase,
     DecodedVector& decodedTarget,
@@ -643,7 +643,7 @@ void copyIntoDictionary(
 void copyIntoRow(
     const EncodedVectorCopyOptions& options,
     const RowVector& source,
-    const folly::Range<const BaseVector::CopyRange*>& ranges,
+    const std::span<const BaseVector::CopyRange>& ranges,
     VectorPtr& target,
     bool targetMutable) {
   const auto size = targetSize(target->size(), ranges);
@@ -692,7 +692,7 @@ void copyIntoRow(
 void copyIntoMap(
     const EncodedVectorCopyOptions& options,
     const MapVector& source,
-    const folly::Range<const BaseVector::CopyRange*>& ranges,
+    const std::span<const BaseVector::CopyRange>& ranges,
     VectorPtr& target,
     bool targetMutable) {
   const auto size = targetSize(target->size(), ranges);
@@ -781,7 +781,7 @@ void copyIntoMap(
 void copyIntoArray(
     const EncodedVectorCopyOptions& options,
     const ArrayVector& source,
-    const folly::Range<const BaseVector::CopyRange*>& ranges,
+    const std::span<const BaseVector::CopyRange>& ranges,
     VectorPtr& target,
     bool targetMutable) {
   const auto size = targetSize(target->size(), ranges);
@@ -857,7 +857,7 @@ void copyIntoComplex(
     const EncodedVectorCopyOptions& options,
     DecodedVector& decodedSource,
     const VectorPtr& sourceBase,
-    const folly::Range<const BaseVector::CopyRange*>& ranges,
+    const std::span<const BaseVector::CopyRange>& ranges,
     VectorPtr& target,
     bool targetMutable) {
   if (decodedSource.isIdentityMapping()) {
@@ -909,7 +909,7 @@ void copyIntoComplex(
     baseRange.count = sourceBase->size();
   }
   copyImpl(
-      options, sourceBase, folly::Range(&baseRange, 1), target, targetMutable);
+      options, sourceBase, std::span(&baseRange, 1), target, targetMutable);
   target = BaseVector::wrapInDictionary(
       std::move(nulls), std::move(indices), size, target);
 }
@@ -917,7 +917,7 @@ void copyIntoComplex(
 void copyIntoLazy(
     const EncodedVectorCopyOptions& options,
     const VectorPtr& source,
-    const folly::Range<const BaseVector::CopyRange*>& ranges,
+    const std::span<const BaseVector::CopyRange>& ranges,
     VectorPtr& target,
     bool targetMutable) {
   auto* lazyTarget = target->asUnchecked<LazyVector>();
@@ -939,7 +939,7 @@ void copyIntoLazy(
 void copyIntoExisting(
     const EncodedVectorCopyOptions& options,
     const VectorPtr& source,
-    const folly::Range<const BaseVector::CopyRange*>& ranges,
+    const std::span<const BaseVector::CopyRange>& ranges,
     DecodedVector& decodedSource,
     const VectorPtr& sourceBase,
     VectorPtr& target,
@@ -998,7 +998,7 @@ void copyIntoExisting(
 void copyImpl(
     const EncodedVectorCopyOptions& options,
     const VectorPtr& source,
-    const folly::Range<const BaseVector::CopyRange*>& ranges,
+    const std::span<const BaseVector::CopyRange>& ranges,
     VectorPtr& target,
     bool targetMutable) {
   if (ranges.empty()) {
@@ -1061,7 +1061,7 @@ void copyImpl(
 void encodedVectorCopy(
     const EncodedVectorCopyOptions& options,
     const VectorPtr& source,
-    const folly::Range<const BaseVector::CopyRange*>& ranges,
+    const std::span<const BaseVector::CopyRange>& ranges,
     VectorPtr& target) {
   if (options.reuseSource) {
     VELOX_CHECK(source->pool() == options.pool);

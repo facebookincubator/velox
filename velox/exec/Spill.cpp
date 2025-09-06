@@ -171,7 +171,7 @@ uint64_t SpillState::appendToPartition(
   updateSpilledInputBytes(bytes);
 
   IndexRange range{0, rows->size()};
-  return partitionWriter(id)->write(rows, folly::Range<IndexRange*>(&range, 1));
+  return partitionWriter(id)->write(rows, std::span<IndexRange>(&range, 1));
 }
 
 SpillWriter* SpillState::partitionWriter(const SpillPartitionId& id) const {

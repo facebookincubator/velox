@@ -320,7 +320,7 @@ class DecimalAggregate : public exec::Aggregate {
  protected:
   void initializeNewGroupsInternal(
       char** groups,
-      folly::Range<const vector_size_t*> indices) override {
+      std::span<const vector_size_t> indices) override {
     setAllNulls(groups, indices);
     for (auto i : indices) {
       new (groups[i] + offset_) LongDecimalWithOverflowState();
