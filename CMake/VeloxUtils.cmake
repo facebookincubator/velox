@@ -36,7 +36,10 @@ function(pyvelox_add_module TARGET)
     ${TARGET}
     PROPERTIES INSTALL_RPATH "${_origin}/;${CMAKE_BINARY_DIR}/lib" INSTALL_RPATH_USE_LINK_PATH TRUE
   )
-  install(TARGETS ${TARGET} LIBRARY DESTINATION pyvelox COMPONENT pyvelox_libraries)
+  install(
+    TARGETS ${TARGET}
+    LIBRARY DESTINATION pyvelox COMPONENT pyvelox_libraries EXCLUDE_FROM_ALL
+  )
 endfunction()
 
 # TODO use file sets
@@ -89,7 +92,10 @@ function(velox_add_library TARGET)
     if(TARGET velox)
       # Target already exists, append sources to it.
       target_sources(velox PRIVATE ${ARGN})
-      install(TARGETS velox LIBRARY DESTINATION pyvelox COMPONENT pyvelox_libraries)
+      install(
+        TARGETS velox
+        LIBRARY DESTINATION pyvelox COMPONENT pyvelox_libraries EXCLUDE_FROM_ALL
+      )
     else()
       set(_type STATIC)
       if(VELOX_BUILD_SHARED)
