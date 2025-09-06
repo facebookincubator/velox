@@ -20,6 +20,16 @@
 
 namespace facebook::velox::cudf_velox::connector::parquet {
 
+namespace {
+std::string stripFilePrefix(const std::string& targetPath) {
+  const std::string prefix = "file:";
+  if (targetPath.rfind(prefix, 0) == 0) {
+    return targetPath.substr(prefix.length());
+  }
+  return targetPath;
+}
+} // namespace
+
 std::string ParquetConnectorSplit::toString() const {
   return fmt::format("Parquet: {}", filePath);
 }
@@ -38,6 +48,23 @@ std::shared_ptr<ParquetConnectorSplit> ParquetConnectorSplit::create(
 
   return std::make_shared<ParquetConnectorSplit>(
       connectorId, filePath, splitWeight);
+}
+
+ParquetConnectorSplit::ParquetConnectorSplit(
+    const std::string& connectorId,
+    const std::string& _filePath,
+    int64_t _splitWeight)
+    : facebook::velox::connector::ConnectorSplit(connectorId, _splitWeight),
+      filePath(stripFilePrefix(_filePath)),
+      cudfSourceInfo({filePath}) {
+  VELOX_CHECK(
+      start <=
+          static_cast<uint64_t>(std::numeric_limits<cudf::size_type>::max()),
+      "ParquetConnectorSplit `start` must be less than or equal to 2^31");
+  VELOX_CHECK(
+      length <=
+          static_cast<uint64_t>(std::numeric_limits<cudf::size_type>::max()),
+      "ParquetConnectorSplit `length` must be less than or equal to 2^31");
 }
 
 } // namespace facebook::velox::cudf_velox::connector::parquet

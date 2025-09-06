@@ -35,10 +35,7 @@ struct ParquetConnectorSplit
   ParquetConnectorSplit(
       const std::string& connectorId,
       const std::string& _filePath,
-      int64_t _splitWeight = 0)
-      : facebook::velox::connector::ConnectorSplit(connectorId, _splitWeight),
-        filePath(_filePath),
-        cudfSourceInfo({filePath}) {}
+      int64_t _splitWeight = 0);
 
   std::string toString() const override;
   std::string getFileName() const;
