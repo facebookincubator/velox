@@ -11,8 +11,15 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-sphinx
-sphinx-tabs
-breathe
-sphinx_rtd_theme
-chardet
+
+add_executable(velox_text_reader_test TextReaderTest.cpp)
+
+add_test(
+  NAME velox_text_reader_test
+  COMMAND velox_text_reader_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+target_link_libraries(velox_text_reader_test velox_dwio_text_reader_register ${TEST_LINK_LIBS})
+
+file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/examples DESTINATION ${CMAKE_CURRENT_BINARY_DIR})

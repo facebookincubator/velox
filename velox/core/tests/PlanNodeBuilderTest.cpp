@@ -123,6 +123,10 @@ class TestConnectorTableHandleForLookupJoin
   explicit TestConnectorTableHandleForLookupJoin(std::string connectorId)
       : connector::ConnectorTableHandle(std::move(connectorId)) {}
 
+  const std::string& name() const override {
+    VELOX_NYI();
+  }
+
   bool supportsIndexLookup() const override {
     return true;
   }
@@ -255,14 +259,30 @@ TEST_F(PlanNodeBuilderTest, projectNode) {
   verify(node2);
 }
 
+class DummyTableHandle : public connector::ConnectorTableHandle {
+ public:
+  DummyTableHandle(const std::string& connectorId)
+      : connector::ConnectorTableHandle(connectorId) {}
+
+  const std::string& name() const override {
+    VELOX_NYI();
+  }
+};
+
+class DummyColumnHandle : public connector::ColumnHandle {
+ public:
+  const std::string& name() const override {
+    VELOX_NYI();
+  }
+};
+
 TEST_F(PlanNodeBuilderTest, tableScanNode) {
   const PlanNodeId id = "table_scan_node_id";
   const RowTypePtr outputType = ROW({"c0", "c1"}, {INTEGER(), VARCHAR()});
-  const auto tableHandle =
-      std::make_shared<connector::ConnectorTableHandle>("connector_id");
+  const auto tableHandle = std::make_shared<DummyTableHandle>("connector_id");
   const connector::ColumnHandleMap assignments{
-      {"c0", std::make_shared<connector::ColumnHandle>()},
-      {"c1", std::make_shared<connector::ColumnHandle>()}};
+      {"c0", std::make_shared<DummyColumnHandle>()},
+      {"c1", std::make_shared<DummyColumnHandle>()}};
 
   const auto verify = [&](const std::shared_ptr<const TableScanNode>& node) {
     EXPECT_EQ(node->id(), id);
@@ -295,8 +315,7 @@ TEST_F(PlanNodeBuilderTest, aggregationNode) {
   const std::vector<std::string> aggregateNames{"a0"};
   const std::vector<AggregationNode::Aggregate> aggregates{
       AggregationNode::Aggregate{
-          .call = std::make_shared<core::CallTypedExpr>(
-              INTEGER(), std::vector<TypedExprPtr>{}, "sum"),
+          .call = std::make_shared<core::CallTypedExpr>(INTEGER(), "sum"),
           .rawInputTypes = {INTEGER()}}};
   const std::vector<vector_size_t> globalGroupingSets{0};
   const std::optional<FieldAccessTypedExprPtr> groupId{
@@ -751,7 +770,7 @@ TEST_F(PlanNodeBuilderTest, indexLookupJoinNode) {
           .outputType(ROW({"c1"}, {VARCHAR()}))
           .tableHandle(std::make_shared<TestConnectorTableHandleForLookupJoin>(
               "connector_id"))
-          .assignments({{"c1", std::make_shared<connector::ColumnHandle>()}})
+          .assignments({{"c1", std::make_shared<DummyColumnHandle>()}})
           .build();
   const auto outputType = ROW({"c0"}, {BIGINT()});
 
@@ -1060,8 +1079,7 @@ TEST_F(PlanNodeBuilderTest, windowNode) {
   const bool inputsSorted = true;
 
   // Create a dummy window function.
-  const auto functionCall = std::make_shared<CallTypedExpr>(
-      BIGINT(), std::vector<TypedExprPtr>{}, "rank");
+  const auto functionCall = std::make_shared<CallTypedExpr>(BIGINT(), "rank");
   WindowNode::Frame frame{
       WindowNode::WindowType::kRows,
       WindowNode::BoundType::kUnboundedPreceding,
