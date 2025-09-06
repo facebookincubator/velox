@@ -48,6 +48,13 @@ struct TimestampToStringOptions {
   /// '2000-01-01 12:21:56.129000' becomes '2000-01-01 12:21:56.129'.
   bool skipTrailingZeros = false;
 
+  /// Whether to skip trailing zeros of second part. E.g. when true,
+  /// '2000-01-01 12:21:00' becomes '2000-01-01 12:21'.
+  /// '2000-01-01 12:21:00.000' becomes '2000-01-01 12:21'.
+  /// '2000-01-01 12:21:00.123', '2000-01-01 12:21:00.100',
+  /// '2000-01-01 12:21:10' will not be impacted by this option.
+  bool skipTrailingZeroSeconds = false;
+
   /// Whether padding zeros are added when the digits of year is less than 4.
   /// E.g. when true, '1-01-01 05:17:32.000' becomes '0001-01-01 05:17:32.000',
   /// '-03-24 13:20:00.000' becomes '0000-03-24 13:20:00.000', and '-1-11-29
