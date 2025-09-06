@@ -1165,6 +1165,10 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
     return makeArrowArray(holder.buffers, 3, length, nullCount);
   }
 
+  bool is64Offsets(const char* format) {
+    return format != nullptr && (format[0] == 'U' || format[0] == 'Z');
+  }
+
   // Takes a vector with input data, generates an input ArrowArray and Velox
   // Vector (using vector maker). Then converts ArrowArray into Velox vector and
   // assert that both Velox vectors are semantically the same.
@@ -1175,9 +1179,7 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
     ArrowContextHolder holder;
     auto arrowArray = [&] {
       if constexpr (std::is_same_v<TInput, std::string>) {
-        bool const is64Offsets =
-            format != nullptr && (format[0] == 'U' || format[0] == 'Z');
-        if (is64Offsets) {
+        if (is64Offsets(format)) {
           return fillArrowArray<int64_t>(inputValues, holder);
         }
       }
@@ -1185,7 +1187,7 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
     }();
 
     // for format U or Z, the offsets buffer is int64_t
-    if (format != nullptr && (format[0] == 'U' || format[0] == 'Z')) {
+    if (is64Offsets(format)) {
       EXPECT_EQ(arrowArray.n_buffers, 3);
       EXPECT_EQ(
           holder.offsets->size(), (inputValues.size() + 1) * sizeof(int64_t));
