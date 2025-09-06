@@ -1118,12 +1118,10 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
     return makeArrowArray(holder.buffers, 2, length, nullCount);
   }
 
-  ArrowArray fillArrowArray(
+  template <typename TOffsets = int32_t>
+  ArrowArray fillArrowArrayString(
       const std::vector<std::optional<std::string>>& inputValues,
-      ArrowContextHolder& holder,
-      const char* format = nullptr) {
-    bool const is32 =
-        format == nullptr || (format[0] != 'U' && format[0] != 'Z');
+      ArrowContextHolder& holder) {
     int64_t length = inputValues.size();
     int64_t nullCount = 0;
 
@@ -1136,20 +1134,13 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
     }
 
     holder.nulls = AlignedBuffer::allocate<uint64_t>(length, pool_.get());
-    holder.offsets = is32
-        ? AlignedBuffer::allocate<int32_t>(length + 1, pool_.get())
-        : AlignedBuffer::allocate<int64_t>(length + 1, pool_.get());
+    holder.offsets = AlignedBuffer::allocate<TOffsets>(length + 1, pool_.get());
     holder.values = AlignedBuffer::allocate<char>(bufferSize, pool_.get());
 
     auto rawNulls = holder.nulls->asMutable<uint64_t>();
-    auto rawOffsets = holder.offsets->asMutable<int32_t>();
-    auto rawOffsets64 = holder.offsets->asMutable<int64_t>();
+    auto rawOffsets = holder.offsets->asMutable<TOffsets>();
     auto rawValues = holder.values->asMutable<char>();
-    if (is32) {
-      *rawOffsets = 0;
-    } else {
-      *rawOffsets64 = 0;
-    }
+    *rawOffsets = 0;
 
     holder.buffers[2] = (length == 0) ? nullptr : (const void*)rawValues;
     holder.buffers[1] = (length == 0) ? nullptr : (const void*)rawOffsets;
@@ -1158,31 +1149,31 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
       if (inputValues[i] == std::nullopt) {
         bits::setNull(rawNulls, i);
         nullCount++;
-        if (is32) {
-          *(rawOffsets + 1) = *rawOffsets;
-          ++rawOffsets;
-        } else {
-          *(rawOffsets64 + 1) = *rawOffsets64;
-          ++rawOffsets64;
-        }
+        *(rawOffsets + 1) = *rawOffsets;
+        ++rawOffsets;
       } else {
         bits::clearNull(rawNulls, i);
         const auto& val = *inputValues[i];
 
         std::memcpy(rawValues, val.data(), val.size());
         rawValues += val.size();
-        if (is32) {
-          *(rawOffsets + 1) = *rawOffsets + val.size();
-          ++rawOffsets;
-        } else {
-          *(rawOffsets64 + 1) = *rawOffsets64 + val.size();
-          ++rawOffsets64;
-        }
+        *(rawOffsets + 1) = *rawOffsets + val.size();
+        ++rawOffsets;
       }
     }
 
     holder.buffers[0] = (length == 0) ? nullptr : (const void*)rawNulls;
     return makeArrowArray(holder.buffers, 3, length, nullCount);
+  }
+
+  ArrowArray fillArrowArray(
+      const std::vector<std::optional<std::string>>& inputValues,
+      ArrowContextHolder& holder,
+      const char* format = nullptr) {
+    bool const is64Offsets =
+        format != nullptr && (format[0] == 'U' || format[0] == 'Z');
+    return is64Offsets ? fillArrowArrayString<int64_t>(inputValues, holder)
+                       : fillArrowArrayString<int32_t>(inputValues, holder);
   }
 
   // Takes a vector with input data, generates an input ArrowArray and Velox
