@@ -14,6 +14,9 @@
  * limitations under the License.
  */
 
+#include <boost/math/constants/constants.hpp>
+#include <common/base/tests/GTestUtils.h>
+
 #include "velox/common/file/FileSystems.h"
 #include "velox/exec/Merge.h"
 #include "velox/exec/MergeSource.h"
@@ -419,4 +422,46 @@ TEST_F(MergerTest, spillMerger) {
     const auto expectedResults = makeExpectedResults(inputs, 16);
     checkResults(expectedResults, results);
   }
+}
+
+TEST_F(MergerTest, spillMergerException) {
+  struct TestSetting {
+    size_t maxOutputRows;
+    size_t numSources;
+    size_t queueSize;
+
+    std::string debugString() const {
+      return fmt::format(
+          "maxOutputRows:{}, numStreams:{}, queueSize:{}",
+          maxOutputRows,
+          numSources,
+          queueSize);
+    }
+  };
+  std::vector<TestSetting> testSettings;
+  for (size_t maxOutputRows : {1, 7, 16}) {
+    for (size_t numSources : {1, 3, 8}) {
+      for (size_t queueSize : {1, 2}) {
+        testSettings.push_back({maxOutputRows, numSources, queueSize});
+      }
+    }
+  }
+  testSettings.push_back({32, 3, 2});
+  testSettings.push_back({1024, 8, 2});
+
+  std::atomic_int cnt{0};
+  const auto errorMessage = "SpillMerger::readFromSpillFileStream fail";
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::SpillMerger::readFromSpillFileStream",
+      std::function<void(void*)>([&](void* /*unused*/) {
+        if (cnt++ == 3) {
+          VELOX_FAIL("SpillMerger::readFromSpillFileStream fail");
+        }
+      }));
+  const auto sources = createMergeSources(5, 2);
+  auto [inputs, filesGroup] = generateInputs(5, 16);
+
+  const auto spillMerger = createSpillMerger(std::move(filesGroup), 100, 2);
+  spillMerger->start();
+  VELOX_ASSERT_THROW(getOutputFromSpillMerger(spillMerger.get()), errorMessage);
 }

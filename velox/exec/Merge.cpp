@@ -565,6 +565,9 @@ RowVectorPtr SpillMerger::getOutput(
     bool& atEnd) const {
   TestValue::adjust(
       "facebook::velox::exec::SpillMerger::getOutput", &sourceBlockingFutures);
+  if (*error_.rlock() != nullptr) {
+    std::rethrow_exception(*error_.rlock());
+  }
   sourceMerger_->isBlocked(sourceBlockingFutures);
   if (!sourceBlockingFutures.empty()) {
     return nullptr;
@@ -628,49 +631,69 @@ void SpillMerger::asyncReadFromSpillFileStream(
     LOG(ERROR) << "SpillMerger is destroyed, abandon reading from batch stream";
     return;
   }
-  merger->readFromSpillFileStream(streamIdx);
+  merger->readFromSpillFileStream(mergeHolder, streamIdx);
 }
 
-void SpillMerger::readFromSpillFileStream(size_t streamIdx) {
-  RowVectorPtr vector;
-  ContinueFuture future{ContinueFuture::makeEmpty()};
-  if (!batchStreams_[streamIdx]->nextBatch(vector)) {
-    VELOX_CHECK_NULL(vector);
+void SpillMerger::readFromSpillFileStream(
+    const std::weak_ptr<SpillMerger>& mergeHolder,
+    size_t streamIdx) {
+  try {
+    TestValue::adjust(
+        "facebook::velox::exec::SpillMerger::readFromSpillFileStream",
+        static_cast<void*>(0));
+    const auto merger = mergeHolder.lock();
+    if (merger == nullptr) {
+      LOG(ERROR)
+          << "SpillMerger is destroyed, abandon reading from batch stream";
+      return;
+    }
+
+    RowVectorPtr vector;
+    ContinueFuture future{ContinueFuture::makeEmpty()};
+    if (!batchStreams_[streamIdx]->nextBatch(vector)) {
+      VELOX_CHECK_NULL(vector);
+      sources_[streamIdx]->enqueue(nullptr, &future);
+      VELOX_CHECK(!future.valid());
+      return;
+    }
+    const auto blockingReason =
+        sources_[streamIdx]->enqueue(std::move(vector), &future);
+    // TODO: add async error handling.
+    if (blockingReason == BlockingReason::kNotBlocked) {
+      VELOX_CHECK(!future.valid());
+      readFromSpillFileStream(mergeHolder, streamIdx);
+    } else {
+      VELOX_CHECK(future.valid());
+      std::move(future)
+          .via(executor_)
+          .thenValue([this, mergeHolder, streamIdx](folly::Unit) {
+            readFromSpillFileStream(mergeHolder, streamIdx);
+          })
+          .thenError(
+              folly::tag_t<std::exception>{},
+              [streamIdx](const std::exception& e) {
+                LOG(ERROR) << "Stop the " << streamIdx
+                           << "th batch stream producer on error: " << e.what();
+              });
+    }
+  } catch (...) {
+    *error_.wlock() = std::current_exception();
+    batchStreams_[streamIdx].reset();
+    ContinueFuture future{ContinueFuture::makeEmpty()};
     sources_[streamIdx]->enqueue(nullptr, &future);
-    VELOX_CHECK(!future.valid());
-    return;
-  }
-  const auto blockingReason =
-      sources_[streamIdx]->enqueue(std::move(vector), &future);
-  // TODO: add async error handling.
-  if (blockingReason == BlockingReason::kNotBlocked) {
-    VELOX_CHECK(!future.valid());
-    executor_->add(
-        [mergeHolder = std::weak_ptr(shared_from_this()), streamIdx]() {
-          asyncReadFromSpillFileStream(mergeHolder, streamIdx);
-        });
-  } else {
-    VELOX_CHECK(future.valid());
-    std::move(future)
-        .via(executor_)
-        .thenValue([mergeHolder = std::weak_ptr(shared_from_this()),
-                    streamIdx](folly::Unit) {
-          asyncReadFromSpillFileStream(mergeHolder, streamIdx);
-        })
-        .thenError(
-            folly::tag_t<std::exception>{},
-            [streamIdx](const std::exception& e) {
-              LOG(ERROR) << "Stop the " << streamIdx
-                         << "th batch stream producer on error: " << e.what();
-            });
   }
 }
 
 void SpillMerger::scheduleAsyncSpillFileStreamReads() {
   VELOX_CHECK_EQ(batchStreams_.size(), sources_.size());
   for (auto i = 0; i < batchStreams_.size(); ++i) {
-    executor_->add(
-        [&, streamIdx = i]() { readFromSpillFileStream(streamIdx); });
+    executor_->add([&, streamIdx = i]() {
+      try {
+        readFromSpillFileStream(std::weak_ptr(shared_from_this()), streamIdx);
+      } catch (...) {
+        *error_.wlock() = std::current_exception();
+      }
+    });
   }
 }
 

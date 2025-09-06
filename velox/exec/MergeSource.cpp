@@ -124,10 +124,13 @@ class LocalMergeSource : public MergeSource {
 
       if (data_.empty()) {
         if (atEnd_) {
+          LOG(ERROR) << "Macduan atEnd";
           return BlockingReason::kNotBlocked;
         }
+
         consumerPromises_.emplace_back("LocalMergeSourceQueue::next");
         *future = consumerPromises_.back().getSemiFuture();
+        LOG(ERROR) << "Macduan kWaitForProducer";
         return BlockingReason::kWaitForProducer;
       }
 
@@ -136,6 +139,7 @@ class LocalMergeSource : public MergeSource {
       // advance to next batch.
       data_.pop_front();
 
+      LOG(ERROR) << "Macduan notifyProducers";
       notifyProducers(notification);
       return BlockingReason::kNotBlocked;
     }
@@ -146,6 +150,7 @@ class LocalMergeSource : public MergeSource {
         ScopedPromiseNotification& notification) {
       if (!input) {
         atEnd_ = true;
+        LOG(ERROR) << "Macduan enqueue atEnd notify consumers";
         notifyConsumers(notification);
         return BlockingReason::kNotBlocked;
       }
@@ -157,13 +162,16 @@ class LocalMergeSource : public MergeSource {
       }
 
       data_.push_back(input);
+      LOG(ERROR) << "Macduan notify consumers";
       notifyConsumers(notification);
 
       if (data_.full()) {
         producerPromises_.emplace_back("LocalMergeSourceQueue::enqueue");
         *future = producerPromises_.back().getSemiFuture();
+        LOG(ERROR) << "Macduan enqueue wait consumers";
         return BlockingReason::kWaitForConsumer;
       }
+      LOG(ERROR) << "Macduan enqueue kNotBlocked";
       return BlockingReason::kNotBlocked;
     }
 
