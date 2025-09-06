@@ -1087,8 +1087,7 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
   template <typename T>
   ArrowArray fillArrowArray(
       const std::vector<std::optional<T>>& inputValues,
-      ArrowContextHolder& holder,
-      const char* format = nullptr) {
+      ArrowContextHolder& holder) {
     using TArrow = typename VeloxToArrowType<T>::type;
     int64_t length = inputValues.size();
     int64_t nullCount = 0;
@@ -1119,7 +1118,7 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
   }
 
   template <typename TOffsets = int32_t>
-  ArrowArray fillArrowArrayString(
+  ArrowArray fillArrowArray(
       const std::vector<std::optional<std::string>>& inputValues,
       ArrowContextHolder& holder) {
     int64_t length = inputValues.size();
@@ -1166,16 +1165,6 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
     return makeArrowArray(holder.buffers, 3, length, nullCount);
   }
 
-  ArrowArray fillArrowArray(
-      const std::vector<std::optional<std::string>>& inputValues,
-      ArrowContextHolder& holder,
-      const char* format = nullptr) {
-    bool const is64Offsets =
-        format != nullptr && (format[0] == 'U' || format[0] == 'Z');
-    return is64Offsets ? fillArrowArrayString<int64_t>(inputValues, holder)
-                       : fillArrowArrayString<int32_t>(inputValues, holder);
-  }
-
   // Takes a vector with input data, generates an input ArrowArray and Velox
   // Vector (using vector maker). Then converts ArrowArray into Velox vector and
   // assert that both Velox vectors are semantically the same.
@@ -1184,7 +1173,16 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
       const char* format,
       const std::vector<std::optional<TInput>>& inputValues) {
     ArrowContextHolder holder;
-    auto arrowArray = fillArrowArray(inputValues, holder, format);
+    auto arrowArray = [&] {
+      if constexpr (std::is_same_v<TInput, std::string>) {
+        bool const is64Offsets =
+            format != nullptr && (format[0] == 'U' || format[0] == 'Z');
+        if (is64Offsets) {
+          return fillArrowArray<int64_t>(inputValues, holder);
+        }
+      }
+      return fillArrowArray(inputValues, holder);
+    }();
 
     // for format U or Z, the offsets buffer is int64_t
     if (format != nullptr && (format[0] == 'U' || format[0] == 'Z')) {
