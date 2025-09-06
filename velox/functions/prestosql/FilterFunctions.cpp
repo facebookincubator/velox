@@ -190,9 +190,11 @@ class MapFilterFunction : public FilterFunctionBase {
     // Flatten inMap buffer.
     auto* mutableFlattedInMap = flattenedInMap->asMutable<uint64_t>();
     bits::fillBits(mutableFlattedInMap, 0, inMapSize, false);
-    auto* mutableInMap = inMap->asMutable<uint64_t>();
+    auto* mutableInMap = inMap ? inMap->asMutable<uint64_t>() : nullptr;
     rows.applyToSelected([&](vector_size_t row) {
-      if (bits::isBitSet(mutableInMap, decodedIndices[row])) {
+      // If inMap is null, short circuit and set bit because key is present in
+      // all rows.
+      if (!inMap || bits::isBitSet(mutableInMap, decodedIndices[row])) {
         bits::setBit(mutableFlattedInMap, decodedIndices[row]);
       }
     });
@@ -224,9 +226,14 @@ class MapFilterFunction : public FilterFunctionBase {
     auto numRows = rows.size();
     BufferPtr decodedIndices =
         AlignedBuffer::allocate<vector_size_t>(numRows, flatMap.pool());
+    BufferPtr nulls = allocateNulls(numRows, flatMap.pool());
     auto mutableIndices = decodedIndices->asMutable<vector_size_t>();
+    auto rawNulls = nulls->asMutable<uint64_t>();
     for (int i = 0; i < decodedMap.size(); i++) {
       mutableIndices[i] = decodedMap.indices()[i];
+      if (decodedMap.isNullAt(i)) {
+        bits::setNull(rawNulls, i, true);
+      }
     }
 
     // Result map fields
@@ -309,7 +316,7 @@ class MapFilterFunction : public FilterFunctionBase {
     auto localResult = std::make_shared<FlatMapVector>(
         context.pool(),
         outputType,
-        nullptr,
+        flatMap.nulls(),
         flatMap.size(),
         BaseVector::wrapInDictionary(
             BufferPtr(nullptr), filteredKeysIndices, numDistinct, distinctKeys),
@@ -322,7 +329,7 @@ class MapFilterFunction : public FilterFunctionBase {
     } else {
       context.moveOrCopyResult(
           BaseVector::wrapInDictionary(
-              nullptr, decodedIndices, decodedMap.size(), localResult),
+              std::move(nulls), decodedIndices, decodedMap.size(), localResult),
           rows,
           result);
     }
