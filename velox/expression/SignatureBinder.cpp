@@ -301,6 +301,81 @@ bool SignatureBinderBase::tryBind(
   }
 
   const auto& params = typeSignature.parameters();
+
+  // Handle homogeneous row case: row(T, ...)
+  if (typeSignature.isHomogeneousRow() && typeName == "ROW") {
+    VELOX_CHECK_EQ(
+        params.size(), 1, "Homogeneous row must have exactly one parameter");
+
+    // Actual type must be a ROW with k >= 0 children
+    const auto& actualParams = actualType->parameters();
+
+    // All children must unify to the same type variable T
+    const auto& typeParam = params[0];
+    const auto& paramBaseName = typeParam.baseName();
+
+    // First, try to bind all actual parameters to the type variable
+    std::vector<TypePtr> actualChildTypes;
+    for (const auto& actualParam : actualParams) {
+      if (actualParam.kind != TypeParameterKind::kType) {
+        // Only type parameters supported for homogeneous rows.
+        return false;
+      }
+      if (!actualParam.type) {
+        return false;
+      }
+      actualChildTypes.push_back(actualParam.type);
+    }
+
+    if (actualChildTypes.empty()) {
+      return true; // Empty row is valid
+    }
+
+    // Defensive: check that none of the child types are null
+    for (const auto& t : actualChildTypes) {
+      if (!t) {
+        return false;
+      }
+    }
+
+    if (variables().count(paramBaseName)) {
+      auto commonType = actualChildTypes[0];
+      if (!commonType) {
+        return false;
+      }
+      for (size_t i = 1; i < actualChildTypes.size(); ++i) {
+        if (!actualChildTypes[i]) {
+          return false;
+        }
+        if (!commonType->equivalent(*actualChildTypes[i])) {
+          return false;
+        }
+      }
+
+      if (typeVariablesBindings_.count(paramBaseName)) {
+        auto existing = typeVariablesBindings_[paramBaseName];
+        if (!existing) {
+          return false;
+        }
+        return existing->equivalent(*commonType);
+      } else {
+        typeVariablesBindings_[paramBaseName] = commonType;
+        return true;
+      }
+    } else {
+      for (const auto& childType : actualChildTypes) {
+        if (!childType) {
+          return false;
+        }
+        if (!tryBind(typeParam, childType)) {
+          // TODO Allow coercions for complex types.
+          return false;
+        }
+      }
+      return true;
+    }
+  }
+
   // Type Parameters can recurse.
   if (params.size() != actualType->parameters().size()) {
     return false;
