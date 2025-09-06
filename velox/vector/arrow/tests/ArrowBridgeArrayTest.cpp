@@ -1186,6 +1186,13 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
     ArrowContextHolder holder;
     auto arrowArray = fillArrowArray(inputValues, holder, format);
 
+    // for format U or Z, the offsets buffer is int64_t
+    if (format != nullptr && (format[0] == 'U' || format[0] == 'Z')) {
+      EXPECT_EQ(arrowArray.n_buffers, 3);
+      EXPECT_EQ(
+          holder.offsets->size(), (inputValues.size() + 1) * sizeof(int64_t));
+    }
+
     auto arrowSchema = makeArrowSchema(format);
     auto output = importFromArrow(arrowSchema, arrowArray, pool_.get());
     if constexpr (
