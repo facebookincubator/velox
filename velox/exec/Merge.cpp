@@ -632,37 +632,41 @@ void SpillMerger::asyncReadFromSpillFileStream(
 }
 
 void SpillMerger::readFromSpillFileStream(size_t streamIdx) {
-  RowVectorPtr vector;
-  ContinueFuture future{ContinueFuture::makeEmpty()};
-  if (!batchStreams_[streamIdx]->nextBatch(vector)) {
-    VELOX_CHECK_NULL(vector);
-    sources_[streamIdx]->enqueue(nullptr, &future);
-    VELOX_CHECK(!future.valid());
-    return;
-  }
-  const auto blockingReason =
-      sources_[streamIdx]->enqueue(std::move(vector), &future);
-  // TODO: add async error handling.
-  if (blockingReason == BlockingReason::kNotBlocked) {
-    VELOX_CHECK(!future.valid());
-    executor_->add(
-        [mergeHolder = std::weak_ptr(shared_from_this()), streamIdx]() {
-          asyncReadFromSpillFileStream(mergeHolder, streamIdx);
-        });
-  } else {
-    VELOX_CHECK(future.valid());
-    std::move(future)
-        .via(executor_)
-        .thenValue([mergeHolder = std::weak_ptr(shared_from_this()),
-                    streamIdx](folly::Unit) {
-          asyncReadFromSpillFileStream(mergeHolder, streamIdx);
-        })
-        .thenError(
-            folly::tag_t<std::exception>{},
-            [streamIdx](const std::exception& e) {
-              LOG(ERROR) << "Stop the " << streamIdx
-                         << "th batch stream producer on error: " << e.what();
-            });
+  try {
+    RowVectorPtr vector;
+    ContinueFuture future{ContinueFuture::makeEmpty()};
+    if (!batchStreams_[streamIdx]->nextBatch(vector)) {
+      VELOX_CHECK_NULL(vector);
+      sources_[streamIdx]->enqueue(nullptr, &future);
+      VELOX_CHECK(!future.valid());
+      return;
+    }
+    const auto blockingReason =
+        sources_[streamIdx]->enqueue(std::move(vector), &future);
+
+    if (blockingReason == BlockingReason::kNotBlocked) {
+      VELOX_CHECK(!future.valid());
+      executor_->add(
+          [mergeHolder = std::weak_ptr(shared_from_this()), streamIdx]() {
+            asyncReadFromSpillFileStream(mergeHolder, streamIdx);
+          });
+    } else {
+      VELOX_CHECK(future.valid());
+      std::move(future).via(executor_).thenTry(
+          [mergeHolder = std::weak_ptr(shared_from_this()),
+           streamIdx](folly::Try<folly::Unit>&& s) {
+            if (const auto merger = mergeHolder.lock()) {
+              if (s.hasException()) {
+                *merger->error_.wlock() =
+                    std::make_exception_ptr(s.exception());
+              } else {
+                asyncReadFromSpillFileStream(mergeHolder, streamIdx);
+              }
+            }
+          });
+    }
+  } catch (...) {
+    *error_.wlock() = std::current_exception();
   }
 }
 
