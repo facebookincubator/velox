@@ -18,7 +18,6 @@ target_link_libraries(
   velox_tpch_benchmark_lib
   velox_query_benchmark
   velox_aggregates
-  velox_cudf_exec
   velox_exec
   velox_exec_test_lib
   velox_dwio_common
