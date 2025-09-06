@@ -19,7 +19,6 @@
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/connectors/tpcds/TpcdsConnector.h"
 #include "velox/connectors/tpch/TpchConnector.h"
-#include "velox/core/FilterToExpression.h"
 #include "velox/duckdb/conversion/DuckParser.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/HashPartitionFunction.h"
@@ -27,16 +26,13 @@
 #include "velox/exec/TableWriter.h"
 #include "velox/exec/WindowFunction.h"
 #include "velox/exec/tests/utils/AggregationResolver.h"
+#include "velox/exec/tests/utils/FilterToExpression.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/expression/SignatureBinder.h"
 #include "velox/expression/VectorReaders.h"
 #include "velox/parse/Expressions.h"
 #include "velox/parse/TypeResolver.h"
-
-#include "velox/experimental/cudf/connectors/parquet/ParquetTableHandle.h"
-#include "velox/experimental/cudf/exec/ToCudf.h"
-#include "velox/experimental/cudf/tests/utils/ParquetConnectorTestBase.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::connector;
@@ -256,9 +252,7 @@ void addConjunct(
     conjunction = conjunct;
   } else {
     conjunction = std::make_shared<core::CallTypedExpr>(
-        BOOLEAN(),
-        std::vector<core::TypedExprPtr>{conjunction, conjunct},
-        "and");
+        BOOLEAN(), "and", conjunction, conjunct);
   }
 }
 } // namespace
@@ -293,12 +287,11 @@ core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
 
   const RowTypePtr& parseType = dataColumns_ ? dataColumns_ : outputType_;
 
-  std::vector<core::TypedExprPtr> subfieldExprs;
   core::TypedExprPtr filterNodeExpr;
 
   if (filtersAsNode_) {
     for (const auto& [subfield, filter] : subfieldFiltersMap_) {
-      auto filterExpr = core::filterToExpr(
+      auto filterExpr = core::test::filterToExpr(
           subfield, filter.get(), parseType, planBuilder_.pool_);
 
       addConjunct(filterExpr, filterNodeExpr);
@@ -788,9 +781,8 @@ PlanBuilder& PlanBuilder::tableWriteMerge() {
       core::AggregationNode::Aggregate aggregate = writerSpec.aggregates[i];
       aggregate.call = std::make_shared<core::CallTypedExpr>(
           aggregate.call->type(),
-          std::vector<core::TypedExprPtr>{
-              field(inputType, writerSpec.aggregateNames[i])},
-          aggregate.call->name());
+          aggregate.call->name(),
+          field(inputType, writerSpec.aggregateNames[i]));
       aggregates.push_back(std::move(aggregate));
       aggregateNames.push_back(fmt::format("a{}", i));
     }
@@ -1736,6 +1728,30 @@ PlanBuilder& PlanBuilder::nestedLoopJoin(
   }
 
   planNode_ = std::make_shared<core::NestedLoopJoinNode>(
+      nextPlanNodeId(),
+      joinType,
+      std::move(joinConditionExpr),
+      std::move(planNode_),
+      right,
+      outputType);
+  VELOX_CHECK(!planNode_->supportsBarrier());
+  return *this;
+}
+
+PlanBuilder& PlanBuilder::spatialJoin(
+    const core::PlanNodePtr& right,
+    const std::string& joinCondition,
+    const std::vector<std::string>& outputLayout,
+    core::JoinType joinType) {
+  VELOX_CHECK_NOT_NULL(planNode_, "SpatialJoin cannot be the source node");
+  auto resultType = concat(planNode_->outputType(), right->outputType());
+  auto outputType = extract(resultType, outputLayout);
+
+  VELOX_CHECK(!joinCondition.empty(), "SpatialJoin condition cannot be empty");
+  core::TypedExprPtr joinConditionExpr =
+      parseExpr(joinCondition, resultType, options_, pool_);
+
+  planNode_ = std::make_shared<core::SpatialJoinNode>(
       nextPlanNodeId(),
       joinType,
       std::move(joinConditionExpr),

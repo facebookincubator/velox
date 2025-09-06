@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 list(APPEND CMAKE_PREFIX_PATH "${CUDAToolkit_LIBRARY_DIR}/cmake")
-find_package(Thrust REQUIRED)
 find_package(CUB REQUIRED)
 find_package(Thrust REQUIRED)
 

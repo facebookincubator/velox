@@ -56,6 +56,8 @@ velox_add_library(
   MergeSource.cpp
   NestedLoopJoinBuild.cpp
   NestedLoopJoinProbe.cpp
+  SpatialJoinBuild.cpp
+  SpatialJoinProbe.cpp
   Operator.cpp
   OperatorUtils.cpp
   OrderBy.cpp
@@ -65,6 +67,7 @@ velox_add_library(
   OperatorTraceScan.cpp
   OperatorTraceWriter.cpp
   ParallelProject.cpp
+  TaskStructs.cpp
   TaskTraceReader.cpp
   TaskTraceWriter.cpp
   Trace.cpp

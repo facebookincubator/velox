@@ -39,7 +39,7 @@ hiveConnectorMetadataFactories() {
 HiveConnector::HiveConnector(
     const std::string& id,
     std::shared_ptr<const config::ConfigBase> config,
-    folly::Executor* executor)
+    folly::Executor* ioExecutor)
     : Connector(id, std::move(config)),
       hiveConfig_(std::make_shared<HiveConfig>(connectorConfig())),
       fileHandleFactory_(
@@ -47,8 +47,8 @@ HiveConnector::HiveConnector(
               ? std::make_unique<SimpleLRUCache<FileHandleKey, FileHandle>>(
                     hiveConfig_->numCacheFileHandles())
               : nullptr,
-          std::make_unique<FileHandleGenerator>(config)),
-      executor_(executor) {
+          std::make_unique<FileHandleGenerator>(hiveConfig_->config())),
+      ioExecutor_(ioExecutor) {
   if (hiveConfig_->isFileHandleCacheEnabled()) {
     LOG(INFO) << "Hive connector " << connectorId()
               << " created with maximum of "
@@ -77,7 +77,7 @@ std::unique_ptr<DataSource> HiveConnector::createDataSource(
       tableHandle,
       columnHandles,
       &fileHandleFactory_,
-      executor_,
+      ioExecutor_,
       connectorQueryCtx,
       hiveConfig_);
 }

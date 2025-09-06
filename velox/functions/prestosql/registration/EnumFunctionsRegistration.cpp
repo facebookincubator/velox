@@ -17,15 +17,22 @@
 #include "velox/functions/Registerer.h"
 #include "velox/functions/prestosql/EnumFunctions.h"
 #include "velox/functions/prestosql/types/BigintEnumRegistration.h"
-#include "velox/functions/prestosql/types/BigintEnumType.h"
+#include "velox/functions/prestosql/types/VarcharEnumRegistration.h"
 #include "velox/type/SimpleFunctionApi.h"
 
 namespace facebook::velox::functions {
 
 void registerEnumFunctions(const std::string& prefix) {
   registerBigintEnumType();
+  registerVarcharEnumType();
 
-  registerFunction<EnumKeyFunction, Varchar, BigintEnum<E1>>(
-      {prefix + "enum_key"});
+  registerFunction<
+      ParameterBinder<EnumKeyFunction, BigintEnumTypePtr>,
+      Varchar,
+      BigintEnum<E1>>({prefix + "enum_key"});
+  registerFunction<
+      ParameterBinder<EnumKeyFunction, VarcharEnumTypePtr>,
+      Varchar,
+      VarcharEnum<E1>>({prefix + "enum_key"});
 }
 } // namespace facebook::velox::functions

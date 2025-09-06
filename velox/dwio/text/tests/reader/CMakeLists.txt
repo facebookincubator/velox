@@ -1,4 +1,3 @@
-#!/bin/bash
 # Copyright (c) Facebook, Inc. and its affiliates.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -12,16 +11,15 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-set -e
 
-if [ ! -d "xsimd" ]; then
-  git clone https://github.com/xtensor-stack/xsimd --recurse-submodules
-fi
-cd xsimd
+add_executable(velox_text_reader_test TextReaderTest.cpp)
 
-mkdir -p build
-cd build
+add_test(
+  NAME velox_text_reader_test
+  COMMAND velox_text_reader_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
 
-cmake ../
-cmake --build . --config=Debug
-cmake --install . --config=Debug
+target_link_libraries(velox_text_reader_test velox_dwio_text_reader_register ${TEST_LINK_LIBS})
+
+file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/examples DESTINATION ${CMAKE_CURRENT_BINARY_DIR})

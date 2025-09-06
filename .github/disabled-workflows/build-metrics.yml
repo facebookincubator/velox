@@ -42,7 +42,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [linux-amd64-cpu8]
+        runner: [16-core-ubuntu]
         type: [debug, release]
         link-type: [shared, static]
     defaults:

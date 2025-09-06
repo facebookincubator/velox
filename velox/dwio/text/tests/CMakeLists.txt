@@ -25,4 +25,6 @@ set(
   glog::glog
 )
 
+add_subdirectory(reader)
+
 add_subdirectory(writer)
