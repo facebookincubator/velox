@@ -255,6 +255,11 @@ class SelectiveFlatMapAsMapReader : public SelectiveStructColumnReaderBase {
                 scanSpec,
                 dwio::common::flatmap::FlatMapOutput::kMap)) {}
 
+  void setIsTopLevel() override {
+    // Children are not considered top level since this is materialized as MAP.
+    SelectiveColumnReader::setIsTopLevel();
+  }
+
   void read(int64_t offset, const RowSet& rows, const uint64_t* incomingNulls)
       override {
     flatMap_.read(offset, rows, incomingNulls);
@@ -360,7 +365,8 @@ createSelectiveFlatMapColumnReader(
     const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
     DwrfParams& params,
     common::ScanSpec& scanSpec) {
-  auto kind = fileType->childAt(0)->type()->kind();
+  VELOX_DCHECK(requestedType->isMap());
+  auto kind = requestedType->childAt(0)->kind();
   switch (kind) {
     case TypeKind::TINYINT:
       return createReader<int8_t>(

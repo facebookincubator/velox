@@ -46,6 +46,10 @@ if [[ ${VERSION} =~ "20.04" ]]; then
   export CXX=/usr/bin/g++-11
 fi
 
+if lscpu | grep -q "sve"; then
+  $SUDO apt install -y gcc-12 g++-12
+fi
+
 function install_clang15 {
   if [[ ! ${VERSION} =~ "22.04" && ! ${VERSION} =~ "24.04" ]]; then
     echo "Warning: using the Clang configuration is for Ubuntu 22.04 and 24.04. Errors might occur."
@@ -54,7 +58,7 @@ function install_clang15 {
   if [[ ${VERSION} =~ "22.04" ]]; then
     CLANG_PACKAGE_LIST="${CLANG_PACKAGE_LIST} gcc-12 g++-12 libc++-12-dev"
   fi
-  ${SUDO} apt install "${CLANG_PACKAGE_LIST}" -y
+  ${SUDO} apt install ${CLANG_PACKAGE_LIST} -y
 }
 
 # For Ubuntu 20.04 we need add the toolchain PPA to get access to gcc11.

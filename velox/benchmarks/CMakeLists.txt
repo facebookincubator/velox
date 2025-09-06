@@ -11,9 +11,10 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-add_subdirectory(basic)
 
-set(velox_benchmark_deps
+if(${VELOX_BUILD_TEST_UTILS})
+  set(
+    velox_benchmark_deps
     velox_type
     velox_vector
     velox_vector_fuzzer
@@ -26,40 +27,47 @@ set(velox_benchmark_deps
     Folly::follybenchmark
     ${DOUBLE_CONVERSION}
     gflags::gflags
-    glog::glog)
+    glog::glog
+  )
 
-add_library(velox_benchmark_builder ExpressionBenchmarkBuilder.cpp)
-target_link_libraries(
-  velox_benchmark_builder ${velox_benchmark_deps})
-# This is a workaround for the use of VectorTestBase.h which includes gtest.h
-target_link_libraries(
-  velox_benchmark_builder GTest::gtest)
+  add_library(velox_benchmark_builder ExpressionBenchmarkBuilder.cpp)
+  target_link_libraries(velox_benchmark_builder ${velox_benchmark_deps})
+
+  # This is a workaround for the use of VectorTestBase.h which includes gtest.h
+  target_link_libraries(velox_benchmark_builder GTest::gtest)
+
+  add_library(velox_query_benchmark QueryBenchmarkBase.cpp)
+
+  target_link_libraries(
+    velox_query_benchmark
+    velox_aggregates
+    velox_connector
+    velox_exec
+    velox_exec_test_lib
+    velox_dwio_common
+    velox_dwio_common_exception
+    velox_dwio_parquet_reader
+    velox_dwio_common_test_utils
+    velox_exception
+    velox_memory
+    velox_process
+    velox_serialization
+    velox_encode
+    velox_type
+    velox_type_fbhive
+    velox_caching
+    velox_vector_test_lib
+    Folly::folly
+    Folly::follybenchmark
+    fmt::fmt
+  )
+endif()
+
+if(${VELOX_ENABLE_BENCHMARKS_BASIC})
+  add_subdirectory(basic)
+endif()
 
 if(${VELOX_ENABLE_BENCHMARKS})
   add_subdirectory(tpch)
   add_subdirectory(filesystem)
 endif()
-
-add_library(velox_query_benchmark QueryBenchmarkBase.cpp)
-target_link_libraries(
-  velox_query_benchmark
-  velox_aggregates
-  velox_connector
-  velox_exec
-  velox_exec_test_lib
-  velox_dwio_common
-  velox_dwio_common_exception
-  velox_dwio_parquet_reader
-  velox_dwio_common_test_utils
-  velox_exception
-  velox_memory
-  velox_process
-  velox_serialization
-  velox_encode
-  velox_type
-  velox_type_fbhive
-  velox_caching
-  velox_vector_test_lib
-  Folly::folly
-  Folly::follybenchmark
-  fmt::fmt)

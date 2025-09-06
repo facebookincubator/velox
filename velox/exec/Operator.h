@@ -17,11 +17,11 @@
 
 #include <folly/Synchronized.h>
 #include "velox/core/PlanNode.h"
+#include "velox/core/QueryCtx.h"
 #include "velox/exec/Driver.h"
 #include "velox/exec/JoinBridge.h"
 #include "velox/exec/OperatorStats.h"
 #include "velox/exec/OperatorTraceWriter.h"
-#include "velox/type/Filter.h"
 
 namespace facebook::velox::exec {
 
@@ -657,6 +657,15 @@ class Operator : public BaseRuntimeStatWriter {
   /// True if the input and output rows have exactly the same fields, i.e. one
   /// could copy directly from input to output if no cardinality change.
   bool isIdentityProjection_ = false;
+
+  /// Returns true if the driver should yield execution to prevent getting
+  /// stuck in long processing loops that exceed their allocated CPU time
+  /// slice limits. Operators should call this method as yield points during
+  /// time-consuming operations to allow other tasks to be scheduled and
+  /// maintain system responsiveness.
+  bool shouldYield() const {
+    return operatorCtx_->driverCtx()->driver->shouldYield();
+  }
 
  private:
   // Setup 'inputTracer_' to record the processed input vectors.

@@ -35,14 +35,12 @@ struct FancyInt {
 };
 
 class FancyIntType : public OpaqueType {
-  FancyIntType() : OpaqueType(std::type_index(typeid(FancyInt))) {}
+  FancyIntType() : OpaqueType{std::type_index(typeid(FancyInt))} {}
 
  public:
-  static const std::shared_ptr<const FancyIntType>& get() {
-    static const std::shared_ptr<const FancyIntType> instance{
-        new FancyIntType()};
-
-    return instance;
+  static std::shared_ptr<const FancyIntType> get() {
+    static const FancyIntType kInstance;
+    return {std::shared_ptr<const FancyIntType>{}, &kInstance};
   }
 
   std::string toString() const override {
@@ -238,6 +236,8 @@ TEST_F(CustomTypeTest, getCustomTypeNames) {
       "TDIGEST",
       "QDIGEST",
       "SFMSKETCH",
+      "BIGINT_ENUM",
+      "VARCHAR_ENUM",
   };
 #ifdef VELOX_ENABLE_GEO
   expectedTypes.insert("GEOMETRY");
@@ -279,6 +279,19 @@ TEST_F(CustomTypeTest, nullConstant) {
         checkNullConstant(
             type, fmt::format("QDIGEST({})", parameter->toString()));
       }
+    } else if (name == "BIGINT_ENUM") {
+      LongEnumParameter moodInfo(
+          "test.enum.mood", {{"CURIOUS", -2}, {"HAPPY", 0}});
+      auto type = getCustomType(name, {TypeParameter(moodInfo)});
+      checkNullConstant(
+          type, "test.enum.mood:BigintEnum({\"CURIOUS\": -2, \"HAPPY\": 0})");
+    } else if (name == "VARCHAR_ENUM") {
+      VarcharEnumParameter colorInfo(
+          "test.enum.color", {{"RED", "red"}, {"BLUE", "blue"}});
+      auto type = getCustomType(name, {TypeParameter(colorInfo)});
+      checkNullConstant(
+          type,
+          "test.enum.color:VarcharEnum({\"BLUE\": \"blue\", \"RED\": \"red\"})");
     } else {
       auto type = getCustomType(name, {});
       checkNullConstant(type, type->toString());

@@ -20,6 +20,7 @@
 
 #include "velox/functions/lib/DateTimeFormatter.h"
 #include "velox/functions/lib/TimeUtils.h"
+#include "velox/functions/sparksql/TimestampUtils.h"
 #include "velox/type/TimestampConversion.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
@@ -170,7 +171,8 @@ struct UnixTimestampParseFunction {
     if (dateTimeResult.hasError()) {
       return false;
     }
-    (*dateTimeResult).timestamp.toGMT(*getTimeZone(*dateTimeResult));
+    toGMTWithGapCorrection(
+        (*dateTimeResult).timestamp, *getTimeZone(*dateTimeResult));
     result = (*dateTimeResult).timestamp.getSeconds();
     return true;
   }
@@ -254,7 +256,8 @@ struct UnixTimestampParseWithFormatFunction
     if (dateTimeResult.hasError()) {
       return false;
     }
-    (*dateTimeResult).timestamp.toGMT(*this->getTimeZone(*dateTimeResult));
+    toGMTWithGapCorrection(
+        (*dateTimeResult).timestamp, *this->getTimeZone(*dateTimeResult));
     result = (*dateTimeResult).timestamp.getSeconds();
     return true;
   }
@@ -267,7 +270,7 @@ struct UnixTimestampParseWithFormatFunction
 
   FOLLY_ALWAYS_INLINE void call(int64_t& result, const arg_type<Date>& input) {
     auto timestamp = Timestamp::fromDate(input);
-    timestamp.toGMT(*this->sessionTimeZone_);
+    toGMTWithGapCorrection(timestamp, *this->sessionTimeZone_);
 
     int64_t seconds = timestamp.getSeconds();
     // Spark converts days as microseconds and then divide it by 10e6 to get
@@ -372,7 +375,7 @@ struct ToUtcTimestampFunction {
         : tz::locateZone(std::string_view(timezone), false);
     VELOX_USER_CHECK_NOT_NULL(
         fromTimezone, "Unknown time zone: '{}'", timezone);
-    result.toGMT(*fromTimezone);
+    toGMTWithGapCorrection(result, *fromTimezone);
   }
 
  private:
@@ -456,7 +459,8 @@ struct GetTimestampFunction {
     if (dateTimeResult.hasError()) {
       return false;
     }
-    (*dateTimeResult).timestamp.toGMT(*getTimeZone(*dateTimeResult));
+    toGMTWithGapCorrection(
+        (*dateTimeResult).timestamp, *getTimeZone(*dateTimeResult));
     result = (*dateTimeResult).timestamp;
     return true;
   }
@@ -979,6 +983,42 @@ struct TimestampDiffFunction {
         timestamp2,
         sessionTimeZone_,
         /*respectLastDay=*/false);
+  }
+
+ private:
+  const tz::TimeZone* sessionTimeZone_ = nullptr;
+  std::optional<DateTimeUnit> unit_ = std::nullopt;
+};
+
+template <typename T>
+struct TimestampAddFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const arg_type<Varchar>* unitString,
+      const int32_t* /*value*/,
+      const arg_type<Timestamp>* /*timestamp*/) {
+    VELOX_USER_CHECK_NOT_NULL(unitString);
+    std::string unitStr(*unitString);
+    folly::toLowerAscii(unitStr);
+    if (unitStr == "dayofyear") {
+      unit_ = DateTimeUnit::kDay;
+    } else {
+      unit_ = fromDateTimeUnitString(
+          *unitString, /*throwIfInvalid=*/true, /*allowMicro=*/true);
+    }
+    sessionTimeZone_ = getTimeZoneFromConfig(config);
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Timestamp>& result,
+      const arg_type<Varchar>& /*unitString*/,
+      const int32_t value,
+      const arg_type<Timestamp>& timestamp) {
+    const auto unit = unit_.value();
+    result = addToTimestamp(unit, value, timestamp, sessionTimeZone_);
   }
 
  private:

@@ -70,14 +70,14 @@ class BaseVector {
   BaseVector(const BaseVector&) = delete;
   BaseVector& operator=(const BaseVector&) = delete;
 
-  static constexpr uint64_t kNullHash = 1;
+  static constexpr uint64_t kNullHash = bits::kNullHash;
 
   BaseVector(
       velox::memory::MemoryPool* pool,
       TypePtr type,
       VectorEncoding::Simple encoding,
       BufferPtr nulls,
-      size_t length,
+      vector_size_t length,
       std::optional<vector_size_t> distinctValueCount = std::nullopt,
       std::optional<vector_size_t> nullCount = std::nullopt,
       std::optional<ByteCount> representedByteCount = std::nullopt,
@@ -847,6 +847,9 @@ class BaseVector {
   }
 
   static constexpr std::string_view kNullValueString = "null";
+
+  /// Returns the value at specified index as a Variant.
+  Variant variantAt(vector_size_t index) const;
 
   /// Returns string representation of the value in the specified row.
   virtual std::string toString(vector_size_t index) const;

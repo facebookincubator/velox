@@ -42,7 +42,7 @@ CompressionKind TableWriterTestBase::TestParam::compressionKind() const {
 }
 
 bool TableWriterTestBase::TestParam::multiDrivers() const {
-  return (value >> 40) != 0;
+  return (value & (1L << 40)) != 0;
 }
 
 FileFormat TableWriterTestBase::TestParam::fileFormat() const {
@@ -71,7 +71,7 @@ bool TableWriterTestBase::TestParam::scaleWriter() const {
 
 std::string TableWriterTestBase::TestParam::toString() const {
   return fmt::format(
-      "FileFormat[{}] TestMode[{}] commitStrategy[{}] bucketKind[{}] bucketSort[{}] multiDrivers[{}] compression[{}] scaleWriter[{}]",
+      "FileFormat_{}_TestMode_{}_commitStrategy_{}_bucketKind_{}_bucketSort_{}_multiDrivers_{}_compression_{}_scaleWriter_{}",
       dwio::common::toString((fileFormat())),
       testModeString(testMode()),
       commitStrategyToString(commitStrategy()),
@@ -91,35 +91,26 @@ std::string TableWriterTestBase::testModeString(TestMode mode) {
     case TestMode::kBucketed:
       return "BUCKETED";
     case TestMode::kOnlyBucketed:
-      return "BUCKETED (NOT PARTITIONED)";
+      return "BUCKETED_WITHOUT_PARTITION";
   }
   VELOX_UNREACHABLE();
 }
 
 // static
-std::shared_ptr<core::AggregationNode>
-TableWriterTestBase::generateAggregationNode(
+core::ColumnStatsSpec TableWriterTestBase::generateColumnStatsSpec(
     const std::string& name,
     const std::vector<core::FieldAccessTypedExprPtr>& groupingKeys,
-    AggregationNode::Step step,
-    const PlanNodePtr& source) {
+    AggregationNode::Step step) {
   core::TypedExprPtr inputField =
       std::make_shared<const core::FieldAccessTypedExpr>(BIGINT(), name);
-  auto callExpr = std::make_shared<const core::CallTypedExpr>(
-      BIGINT(), std::vector<core::TypedExprPtr>{inputField}, "min");
+  auto callExpr =
+      std::make_shared<const core::CallTypedExpr>(BIGINT(), "min", inputField);
   std::vector<std::string> aggregateNames = {"min"};
   std::vector<core::AggregationNode::Aggregate> aggregates = {
       core::AggregationNode::Aggregate{
           callExpr, {{BIGINT()}}, nullptr, {}, {}}};
-  return std::make_shared<core::AggregationNode>(
-      core::PlanNodeId(),
-      step,
-      groupingKeys,
-      std::vector<core::FieldAccessTypedExprPtr>{},
-      aggregateNames,
-      aggregates,
-      false, // ignoreNullKeys
-      source);
+  return core::ColumnStatsSpec{
+      std::move(groupingKeys), step, aggregateNames, aggregates};
 }
 
 // static.
@@ -127,7 +118,7 @@ std::function<PlanNodePtr(std::string, PlanNodePtr)>
 TableWriterTestBase::addTableWriter(
     const RowTypePtr& inputColumns,
     const std::vector<std::string>& tableColumnNames,
-    const std::shared_ptr<core::AggregationNode>& aggregationNode,
+    const std::optional<core::ColumnStatsSpec>& columnStatsSpec,
     const std::shared_ptr<core::InsertTableHandle>& insertHandle,
     bool hasPartitioningScheme,
     connector::CommitStrategy commitStrategy) {
@@ -137,10 +128,10 @@ TableWriterTestBase::addTableWriter(
         nodeId,
         inputColumns,
         tableColumnNames,
-        aggregationNode,
+        columnStatsSpec,
         insertHandle,
         hasPartitioningScheme,
-        TableWriteTraits::outputType(aggregationNode),
+        TableWriteTraits::outputType(columnStatsSpec),
         commitStrategy,
         std::move(source));
   };
@@ -550,7 +541,7 @@ PlanNodePtr TableWriterTestBase::createInsertPlan(
     const connector::hive::LocationHandle::TableType& outputTableType,
     const CommitStrategy& outputCommitStrategy,
     bool aggregateResult,
-    std::shared_ptr<core::AggregationNode> aggregationNode) {
+    const std::optional<ColumnStatsSpec>& columnStatsSpec) {
   return createInsertPlan(
       inputPlan,
       inputPlan.planNode()->outputType(),
@@ -563,7 +554,7 @@ PlanNodePtr TableWriterTestBase::createInsertPlan(
       outputTableType,
       outputCommitStrategy,
       aggregateResult,
-      aggregationNode);
+      columnStatsSpec);
 }
 
 PlanNodePtr TableWriterTestBase::createInsertPlan(
@@ -578,7 +569,7 @@ PlanNodePtr TableWriterTestBase::createInsertPlan(
     const connector::hive::LocationHandle::TableType& outputTableType,
     const CommitStrategy& outputCommitStrategy,
     bool aggregateResult,
-    std::shared_ptr<core::AggregationNode> aggregationNode) {
+    const std::optional<ColumnStatsSpec>& columnStatsSpec) {
   if (numTableWriters == 1) {
     return createInsertPlanWithSingleWriter(
         inputPlan,
@@ -591,7 +582,7 @@ PlanNodePtr TableWriterTestBase::createInsertPlan(
         outputTableType,
         outputCommitStrategy,
         aggregateResult,
-        aggregationNode);
+        columnStatsSpec);
   } else if (bucketProperty_ == nullptr) {
     return createInsertPlanWithForNonBucketedTable(
         inputPlan,
@@ -603,7 +594,7 @@ PlanNodePtr TableWriterTestBase::createInsertPlan(
         outputTableType,
         outputCommitStrategy,
         aggregateResult,
-        aggregationNode);
+        columnStatsSpec);
   } else {
     return createInsertPlanForBucketTable(
         inputPlan,
@@ -616,7 +607,7 @@ PlanNodePtr TableWriterTestBase::createInsertPlan(
         outputTableType,
         outputCommitStrategy,
         aggregateResult,
-        aggregationNode);
+        columnStatsSpec);
   }
 }
 
@@ -631,7 +622,7 @@ PlanNodePtr TableWriterTestBase::createInsertPlanWithSingleWriter(
     const connector::hive::LocationHandle::TableType& outputTableType,
     const CommitStrategy& outputCommitStrategy,
     bool aggregateResult,
-    std::shared_ptr<core::AggregationNode> aggregationNode) {
+    std::optional<ColumnStatsSpec> columnStatsSpec) {
   const bool addScaleWriterExchange =
       scaleWriter_ && (bucketProperty != nullptr);
   auto insertPlan = inputPlan;
@@ -647,7 +638,7 @@ PlanNodePtr TableWriterTestBase::createInsertPlanWithSingleWriter(
       .addNode(addTableWriter(
           inputRowType,
           tableRowType->names(),
-          aggregationNode,
+          columnStatsSpec,
           createInsertTableHandle(
               tableRowType,
               outputTableType,
@@ -658,14 +649,6 @@ PlanNodePtr TableWriterTestBase::createInsertPlanWithSingleWriter(
           false,
           outputCommitStrategy))
       .capturePlanNodeId(tableWriteNodeId_);
-  if (addScaleWriterExchange) {
-    if (!partitionedBy.empty()) {
-      insertPlan.scaleWriterlocalPartition(
-          inputColumnNames(partitionedBy, tableRowType, inputRowType));
-    } else {
-      insertPlan.scaleWriterlocalPartitionRoundRobin();
-    }
-  }
   if (aggregateResult) {
     insertPlan.project({TableWriteTraits::rowCountColumnName()})
         .singleAggregation(
@@ -686,7 +669,7 @@ PlanNodePtr TableWriterTestBase::createInsertPlanForBucketTable(
     const connector::hive::LocationHandle::TableType& outputTableType,
     const CommitStrategy& outputCommitStrategy,
     bool aggregateResult,
-    std::shared_ptr<core::AggregationNode> aggregationNode) {
+    std::optional<ColumnStatsSpec> columnStatsSpec) {
   // Since we might do column rename, so generate bucket property based on
   // the data type from 'inputPlan'.
   std::vector<std::string> bucketColumns;
@@ -706,7 +689,7 @@ PlanNodePtr TableWriterTestBase::createInsertPlanForBucketTable(
           .addNode(addTableWriter(
               inputRowType,
               tableRowType->names(),
-              nullptr,
+              std::nullopt,
               createInsertTableHandle(
                   tableRowType,
                   outputTableType,
@@ -752,7 +735,7 @@ PlanNodePtr TableWriterTestBase::createInsertPlanWithForNonBucketedTable(
     const connector::hive::LocationHandle::TableType& outputTableType,
     const CommitStrategy& outputCommitStrategy,
     bool aggregateResult,
-    std::shared_ptr<core::AggregationNode> aggregationNode) {
+    std::optional<ColumnStatsSpec> columnStatsSpec) {
   auto insertPlan = inputPlan;
   if (scaleWriter_) {
     if (!partitionedBy.empty()) {
@@ -766,7 +749,7 @@ PlanNodePtr TableWriterTestBase::createInsertPlanWithForNonBucketedTable(
       .addNode(addTableWriter(
           inputRowType,
           tableRowType->names(),
-          nullptr,
+          std::nullopt,
           createInsertTableHandle(
               tableRowType,
               outputTableType,

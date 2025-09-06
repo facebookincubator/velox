@@ -13,30 +13,15 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include <limits>
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/core/Expressions.h"
-#include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
+#include "velox/functions/sparksql/tests/JsonTestUtil.h"
 
 using namespace facebook::velox::test;
 
 namespace facebook::velox::functions::sparksql::test {
 namespace {
-constexpr float kNaNFloat = std::numeric_limits<float>::quiet_NaN();
-constexpr float kInfFloat = std::numeric_limits<float>::infinity();
-constexpr double kNaNDouble = std::numeric_limits<double>::quiet_NaN();
-constexpr double kInfDouble = std::numeric_limits<double>::infinity();
-
 class FromJsonTest : public SparkFunctionBaseTest {
  protected:
-  core::CallTypedExprPtr createFromJson(const TypePtr& outputType) {
-    std::vector<core::TypedExprPtr> inputs = {
-        std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c0")};
-
-    return std::make_shared<const core::CallTypedExpr>(
-        outputType, std::move(inputs), "from_json");
-  }
-
   void testFromJson(const VectorPtr& input, const VectorPtr& expected) {
     auto expr = createFromJson(expected->type());
     testEncodings(expr, {input}, expected);
@@ -125,8 +110,9 @@ TEST_F(FromJsonTest, basicFloat) {
       {1.0,          2.0,          -3.4028235E38, 3.4028235E38, -kInfFloat,
        kInfFloat,    0.0,          0.0,           std::nullopt, std::nullopt,
        std::nullopt, std::nullopt, std::nullopt,  std::nullopt, std::nullopt,
-       std::nullopt, kNaNFloat,    -kInfFloat,    -kInfFloat,   kInfFloat,
-       kInfFloat,    kInfFloat});
+       std::nullopt, kNaNFloat,    kNaNFloat,     -kInfFloat,   -kInfFloat,
+       -kInfFloat,   -kInfFloat,   kInfFloat,     kInfFloat,    kInfFloat,
+       kInfFloat,    kInfFloat,    kInfFloat});
   auto input = makeFlatVector<std::string>(
       {R"({"a": 1})",
        R"({"a": 2.0})",
@@ -145,11 +131,17 @@ TEST_F(FromJsonTest, basicFloat) {
        R"({"a": .e10})", // Missing digits.
        R"({"a": -.})", // Missing digits entirely.
        R"({"a": "NaN"})",
+       R"({"a": NaN})",
        R"({"a": "-Infinity"})",
+       R"({"a": -Infinity})",
        R"({"a": "-INF"})",
+       R"({"a": -INF})",
        R"({"a": "+Infinity"})",
+       R"({"a": +Infinity})",
        R"({"a": "Infinity"})",
-       R"({"a": "+INF"})"});
+       R"({"a": Infinity})",
+       R"({"a": "+INF"})",
+       R"({"a": +INF})"});
   testFromJson(input, makeRowVector({"a"}, {expected}));
 }
 
@@ -172,8 +164,14 @@ TEST_F(FromJsonTest, basicDouble) {
        std::nullopt,
        std::nullopt,
        kNaNDouble,
+       kNaNDouble,
        -kInfDouble,
        -kInfDouble,
+       -kInfDouble,
+       -kInfDouble,
+       kInfDouble,
+       kInfDouble,
+       kInfDouble,
        kInfDouble,
        kInfDouble,
        kInfDouble});
@@ -195,11 +193,17 @@ TEST_F(FromJsonTest, basicDouble) {
        R"({"a": .e10})", // Missing digits.
        R"({"a": -.})", // Missing digits entirely.
        R"({"a": "NaN"})",
+       R"({"a": NaN})",
        R"({"a": "-Infinity"})",
+       R"({"a": -Infinity})",
        R"({"a": "-INF"})",
+       R"({"a": -INF})",
        R"({"a": "+Infinity"})",
+       R"({"a": +Infinity})",
        R"({"a": "Infinity"})",
-       R"({"a": "+INF"})"});
+       R"({"a": Infinity})",
+       R"({"a": "+INF"})",
+       R"({"a": +INF})"});
   testFromJson(input, makeRowVector({"a"}, {expected}));
 }
 

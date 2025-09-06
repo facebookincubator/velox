@@ -885,7 +885,7 @@ TEST_P(MultiFragmentTest, mergeExchangeWithSpill) {
   core::PlanNodeId partitionNodeId;
   std::unordered_map<std::string, std::string> spillMergeConfigs{
       {"spill_enabled", "true"},
-      {"local_merge_enabled", "true"},
+      {"local_merge_spill_enabled", "true"},
       {"local_merge_max_num_merge_sources", "3"}};
   std::vector<core::PlanNodeId> localMergeNodeIds;
   for (int numPartialSortTasks = 0; numPartialSortTasks < 2;
@@ -2414,7 +2414,7 @@ DEBUG_ONLY_TEST_P(
   std::thread failThread([&]() {
     try {
       VELOX_FAIL("Test terminate task");
-    } catch (const VeloxException& e) {
+    } catch (const VeloxException&) {
       task->setError(std::current_exception());
     }
   });
@@ -2487,8 +2487,8 @@ DEBUG_ONLY_TEST_P(MultiFragmentTest, mergeWithEarlyTermination) {
   mergeIsBlockedReady.store(true);
   mergeIsBlockedWait.notifyAll();
 
-  ASSERT_TRUE(waitForTaskCompletion(partialSortTask.get(), 1'000'000'000));
-  ASSERT_TRUE(waitForTaskAborted(finalSortTask.get(), 1'000'000'000));
+  ASSERT_TRUE(waitForTaskCompletion(partialSortTask.get(), 30'000'000));
+  ASSERT_TRUE(waitForTaskAborted(finalSortTask.get(), 30'000'000));
 }
 
 class DataFetcher {
@@ -2820,7 +2820,7 @@ TEST_P(MultiFragmentTest, earlyTaskFailure) {
     if (internalFailure) {
       try {
         VELOX_FAIL("memoryAbortTest");
-      } catch (const VeloxRuntimeError& e) {
+      } catch (const VeloxRuntimeError&) {
         finalSortTask->pool()->abort(std::current_exception());
       }
     } else {

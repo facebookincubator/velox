@@ -78,6 +78,11 @@ class DummySourceNode final : public core::PlanNode {
 };
 
 void registerDummySourceSerDe();
+
+std::unordered_map<std::string, TraceNodeFactory>& traceNodeRegistry() {
+  static std::unordered_map<std::string, TraceNodeFactory> registry;
+  return registry;
+}
 } // namespace
 
 void createTraceDirectory(
@@ -109,7 +114,13 @@ void createTraceDirectory(
 std::string getQueryTraceDirectory(
     const std::string& traceDir,
     const std::string& queryId) {
-  return fmt::format("{}/{}", traceDir, queryId);
+  // Remove trailing slash from traceDir if present
+  std::string normalizedTraceDir = traceDir;
+  if (!normalizedTraceDir.empty() && normalizedTraceDir.back() == '/') {
+    normalizedTraceDir.pop_back();
+  }
+
+  return fmt::format("{}/{}", normalizedTraceDir, queryId);
 }
 
 std::string getTaskTraceDirectory(
@@ -123,8 +134,9 @@ std::string getTaskTraceDirectory(
     const std::string& traceDir,
     const std::string& queryId,
     const std::string& taskId) {
-  return fmt::format(
-      "{}/{}", getQueryTraceDirectory(traceDir, queryId), taskId);
+  auto queryTraceDir = getQueryTraceDirectory(traceDir, queryId);
+
+  return fmt::format("{}/{}", queryTraceDir, taskId);
 }
 
 std::string getTaskTraceMetaFilePath(const std::string& taskTraceDir) {
@@ -284,7 +296,11 @@ bool canTrace(const std::string& operatorType) {
       "PartitionedOutput",
       "TableScan",
       "TableWrite"};
-  return kSupportedOperatorTypes.count(operatorType) > 0;
+  if (kSupportedOperatorTypes.count(operatorType) > 0 ||
+      traceNodeRegistry().count(operatorType) > 0) {
+    return true;
+  }
+  return false;
 }
 
 core::PlanNodePtr getTraceNode(
@@ -391,6 +407,7 @@ core::PlanNodePtr getTraceNode(
         indexLookupJoinNode->leftKeys(),
         indexLookupJoinNode->rightKeys(),
         indexLookupJoinNode->joinConditions(),
+        indexLookupJoinNode->includeMatchColumn(),
         std::make_shared<DummySourceNode>(
             indexLookupJoinNode->sources().front()->outputType()), // Probe side
         indexLookupJoinNode->lookupSource(), // Index side
@@ -412,10 +429,10 @@ core::PlanNodePtr getTraceNode(
         nodeId,
         tableWriteNode->columns(),
         tableWriteNode->columnNames(),
-        tableWriteNode->aggregationNode(),
+        tableWriteNode->columnStatsSpec(),
         tableWriteNode->insertTableHandle(),
         tableWriteNode->hasPartitioningScheme(),
-        TableWriteTraits::outputType(tableWriteNode->aggregationNode()),
+        TableWriteTraits::outputType(tableWriteNode->columnStatsSpec()),
         tableWriteNode->commitStrategy(),
         std::make_shared<DummySourceNode>(
             tableWriteNode->sources().front()->outputType()));
@@ -434,8 +451,22 @@ core::PlanNodePtr getTraceNode(
             unnestNode->sources().front()->outputType()));
   }
 
+  for (const auto& factory : traceNodeRegistry()) {
+    if (auto node = factory.second(traceNode, nodeId)) {
+      return node;
+    }
+  }
+
   VELOX_UNSUPPORTED(
       fmt::format("Unsupported trace node: {}", traceNode->name()));
+}
+
+void registerTraceNodeFactory(
+    const std::string& operatorType,
+    TraceNodeFactory&& factory) {
+  auto& registry = traceNodeRegistry();
+  VELOX_CHECK_EQ(registry.count(operatorType), 0);
+  registry.emplace(operatorType, std::move(factory));
 }
 
 void registerDummySourceSerDe() {

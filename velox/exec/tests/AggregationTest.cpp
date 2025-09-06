@@ -384,14 +384,15 @@ class AggregationTest : public OperatorTestBase {
   }
 
   RowTypePtr rowType_{
-      ROW({"c0", "c1", "c2", "c3", "c4", "c5", "c6"},
+      ROW({"c0", "c1", "c2", "c3", "c4", "c5", "c6", "c7"},
           {BIGINT(),
            SMALLINT(),
            INTEGER(),
            BIGINT(),
            REAL(),
            DOUBLE(),
-           VARCHAR()})};
+           VARCHAR(),
+           TIMESTAMP()})};
   folly::Random::DefaultGenerator rng_;
   memory::MemoryReclaimer::Stats reclaimerStats_;
   VectorFuzzer::Options fuzzerOpts_{
@@ -399,6 +400,8 @@ class AggregationTest : public OperatorTestBase {
       .nullRatio = 0,
       .stringLength = 1024,
       .stringVariableLength = false,
+      .timestampPrecision =
+          VectorFuzzer::Options::TimestampPrecision::kMicroSeconds,
       .allowLazyVector = false};
 };
 
@@ -453,8 +456,8 @@ TEST_F(AggregationTest, missingFunctionOrSignature) {
       BIGINT(), inputs, "missing-function");
   auto wrongInputTypes =
       std::make_shared<core::CallTypedExpr>(BIGINT(), inputs, "test_aggregate");
-  auto missingInputs = std::make_shared<core::CallTypedExpr>(
-      BIGINT(), std::vector<core::TypedExprPtr>{}, "test_aggregate");
+  auto missingInputs =
+      std::make_shared<core::CallTypedExpr>(BIGINT(), "test_aggregate");
 
   auto makePlan = [&](const core::CallTypedExprPtr& aggExpr) {
     return PlanBuilder()
@@ -515,9 +518,7 @@ TEST_F(AggregationTest, missingLambdaFunction) {
       std::make_shared<core::LambdaTypedExpr>(
           ROW({"a", "b"}, {BIGINT(), BIGINT()}),
           std::make_shared<core::CallTypedExpr>(
-              BIGINT(),
-              std::vector<core::TypedExprPtr>{field("a"), field("b")},
-              "multiply")),
+              BIGINT(), "multiply", field("a"), field("b"))),
   };
 
   auto plan = PlanBuilder()
@@ -709,6 +710,20 @@ TEST_F(AggregationTest, singleStringKeyDistinct) {
   createDuckDbTable(vectors);
   testSingleKey<StringView>(vectors, "c6", false, true);
   testSingleKey<StringView>(vectors, "c6", true, true);
+}
+
+TEST_F(AggregationTest, singleTimestampKey) {
+  auto vectors = createVectors(100, rowType_, fuzzerOpts_);
+  createDuckDbTable(vectors);
+  testSingleKey<StringView>(vectors, "c7", false, false);
+  testSingleKey<StringView>(vectors, "c7", true, false);
+}
+
+TEST_F(AggregationTest, singleTimestampKeyDistinct) {
+  auto vectors = createVectors(100, rowType_, fuzzerOpts_);
+  createDuckDbTable(vectors);
+  testSingleKey<StringView>(vectors, "c7", false, true);
+  testSingleKey<StringView>(vectors, "c7", true, true);
 }
 
 TEST_F(AggregationTest, multiKey) {
@@ -1965,10 +1980,10 @@ DEBUG_ONLY_TEST_F(AggregationTest, minSpillableMemoryReservation) {
         "facebook::velox::exec::GroupingSet::addInputForActiveRows",
         std::function<void(exec::GroupingSet*)>(
             ([&](exec::GroupingSet* groupingSet) {
-              memory::MemoryPool& pool = groupingSet->testingPool();
+              memory::MemoryPool* pool = groupingSet->testingPool();
               const auto availableReservationBytes =
-                  pool.availableReservation();
-              const auto currentUsedBytes = pool.usedBytes();
+                  pool->availableReservation();
+              const auto currentUsedBytes = pool->usedBytes();
               // Verifies we always have min reservation after ensuring the
               // input.
               ASSERT_GE(
@@ -3012,7 +3027,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimDuringNonReclaimableSection) {
           if (!testData.nonReclaimableInput) {
             return;
           }
-          if (groupSet->testingPool().usedBytes() == 0) {
+          if (groupSet->testingPool()->usedBytes() == 0) {
             return;
           }
           if (!injectNonReclaimableSectionOnce.exchange(false)) {

@@ -134,9 +134,8 @@ AbstractOperand* CompileState::fieldToOperand(Subfield& field, Scope* scope) {
   if (op) {
     return markUse(op);
   }
-  auto* name =
-      &reinterpret_cast<common::Subfield::NestedField*>(field.path()[0].get())
-           ->name();
+
+  auto* name = &field.baseName();
   VELOX_CHECK_EQ(topScopes_.size(), renames_.size());
   for (int32_t i = renames_.size() - 1; i >= 0; --i) {
     auto* op = topScopes_[i].findValue(Value(&field));
@@ -843,10 +842,10 @@ void CompileState::planSegment(
       }
       bool needNewKernel = false;
       auto* node = segment.planNode;
-      if (auto* scan = dynamic_cast<const core::TableScanNode*>(node)) {
+      if (dynamic_cast<const core::TableScanNode*>(node)) {
         candidate.currentBox->steps.push_back(segment.steps[0]);
         needNewKernel = true;
-      } else if (auto* values = dynamic_cast<const core::ValuesNode*>(node)) {
+      } else if (dynamic_cast<const core::ValuesNode*>(node)) {
         candidate.currentBox->steps.push_back(segment.steps[0]);
         needNewKernel = true;
       } else if (

@@ -331,12 +331,18 @@ TypePtr sanitizeTryResolveType(
     const exec::TypeSignature& typeSignature,
     const std::unordered_map<std::string, SignatureVariable>& variables,
     const std::unordered_map<std::string, TypePtr>& typeVariablesBindings,
-    std::unordered_map<std::string, int>& integerVariablesBindings) {
+    std::unordered_map<std::string, int>& integerVariablesBindings,
+    const std::unordered_map<std::string, LongEnumParameter>&
+        longEnumParameterVariablesBindings,
+    const std::unordered_map<std::string, VarcharEnumParameter>&
+        varcharEnumParameterVariablesBindings) {
   return sanitize(SignatureBinder::tryResolveType(
       typeSignature,
       variables,
       typeVariablesBindings,
-      integerVariablesBindings));
+      integerVariablesBindings,
+      longEnumParameterVariablesBindings,
+      varcharEnumParameterVariablesBindings));
 }
 
 void setupMemory(

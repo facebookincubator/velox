@@ -213,6 +213,8 @@ std::unordered_set<std::string> skipFunctions = {
     "st_union",
     "st_point",
     "st_points",
+    "st_interiorrings",
+    "st_geometries",
     "st_x",
     "st_y",
     "st_isvalid",
@@ -239,6 +241,14 @@ std::unordered_set<std::string> skipFunctions = {
     "st_xmin",
     "st_ymax",
     "st_ymin",
+    "line_locate_point",
+    "line_interpolate_point",
+    "flatten_geometry_collections",
+    "expand_envelope",
+    "bing_tile_polygon",
+    "geometry_as_geojson",
+    "geometry_from_geojson",
+    "great_circle_distance",
 };
 
 std::unordered_set<std::string> skipFunctionsSOT = {
@@ -376,11 +386,13 @@ std::unordered_set<std::string> skipFunctionsSOT = {
     "inverse_chi_squared_cdf", // https://github.com/facebookincubator/velox/issues/13788
     "bing_tile_children", // Velox limits the max zoom shift
                           // https://github.com/facebookincubator/velox/pull/13604
+    "enum_key", // Requires a custom input generator
     // Not registered
     "array_sum_propagate_element_null",
     // Skipping until the new signature is merged and released in Presto:
     // https://github.com/prestodb/presto/pull/25521
     "xxhash64(varbinary,bigint) -> varbinary",
+    "map_keys_by_top_n_values", // https://github.com/facebookincubator/velox/issues/14374
     "$internal$canonicalize",
     "$internal$contains",
 };

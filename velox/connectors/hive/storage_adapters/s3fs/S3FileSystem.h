@@ -64,12 +64,11 @@ class S3FileSystem : public FileSystem {
     VELOX_UNSUPPORTED("remove for S3 not implemented");
   }
 
+  // Renames the path.
   void rename(
       std::string_view path,
       std::string_view newPath,
-      bool overWrite = false) override {
-    VELOX_UNSUPPORTED("rename for S3 not implemented");
-  }
+      bool overWrite = false) override;
 
   /// Checks that the path exists.
   bool exists(std::string_view path) override;
@@ -78,9 +77,7 @@ class S3FileSystem : public FileSystem {
   std::vector<std::string> list(std::string_view path) override;
 
   void mkdir(std::string_view path, const DirectoryOptions& options = {})
-      override {
-    VELOX_UNSUPPORTED("mkdir for S3 not implemented");
-  }
+      override;
 
   void rmdir(std::string_view path) override {
     VELOX_UNSUPPORTED("rmdir for S3 not implemented");

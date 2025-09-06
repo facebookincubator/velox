@@ -20,7 +20,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/type/tests/utils/CustomTypesForTesting.h"
 
-using namespace facebook::velox;
+namespace facebook::velox {
 
 namespace {
 void testSerDe(const Variant& value) {
@@ -29,7 +29,6 @@ void testSerDe(const Variant& value) {
 
   ASSERT_EQ(value, copy);
 }
-} // namespace
 
 TEST(VariantTest, arrayInferType) {
   EXPECT_EQ(*ARRAY(UNKNOWN()), *Variant(TypeKind::ARRAY).inferType());
@@ -341,9 +340,10 @@ TEST(VariantTest, mapWithNaNKey) {
     mapVariant.insert({Variant(1.2), Variant(2)});
     mapVariant.insert({Variant(12.4), Variant(3)});
     EXPECT_EQ(
-        "[{\"key\":1.2,\"value\":2},{\"key\":12.4,\"value\":3},{\"key\":\"NaN\",\"value\":1}]",
+        R"([{"key":1.2,"value":2},{"key":12.4,"value":3},{"key":"NaN","value":1}])",
         Variant::map(mapVariant).toJson(mapType));
   }
+
   {
     // NaN added in the middle of insertions.
     std::map<Variant, Variant> mapVariant;
@@ -351,7 +351,7 @@ TEST(VariantTest, mapWithNaNKey) {
     mapVariant.insert({Variant(KNan), Variant(1)});
     mapVariant.insert({Variant(12.4), Variant(3)});
     EXPECT_EQ(
-        "[{\"key\":1.2,\"value\":2},{\"key\":12.4,\"value\":3},{\"key\":\"NaN\",\"value\":1}]",
+        R"([{"key":1.2,"value":2},{"key":12.4,"value":3},{"key":"NaN","value":1}])",
         Variant::map(mapVariant).toJson(mapType));
   }
 }
@@ -375,12 +375,12 @@ TEST(VariantTest, serialize) {
 
   // Non-null values.
   testSerDe(Variant(true));
-  testSerDe(Variant((int8_t)12));
-  testSerDe(Variant((int16_t)1234));
-  testSerDe(Variant((int32_t)12345));
-  testSerDe(Variant((int64_t)1234567));
-  testSerDe(Variant((float)1.2));
-  testSerDe(Variant((double)1.234));
+  testSerDe(Variant(static_cast<int8_t>(12)));
+  testSerDe(Variant(static_cast<int16_t>(1234)));
+  testSerDe(Variant(static_cast<int32_t>(12345)));
+  testSerDe(Variant(static_cast<int64_t>(1234567)));
+  testSerDe(Variant(static_cast<float>(1.2f)));
+  testSerDe(Variant(static_cast<double>(1.234)));
   testSerDe(Variant("This is a test."));
   testSerDe(Variant::binary("This is a test."));
   testSerDe(Variant(Timestamp(1, 2)));
@@ -432,7 +432,7 @@ TEST_F(VariantSerializationTest, opaqueToJson) {
   const auto type = value_.inferType();
 
   const auto expected =
-      R"(Opaque<type:OPAQUE<SerializableClass>,value:"{"name":"test_class","value":false}">)";
+      R"(Opaque<type:OPAQUE<facebook::velox::(anonymous namespace)::SerializableClass>,value:"{"name":"test_class","value":false}">)";
   EXPECT_EQ(value_.toJson(type), expected);
   EXPECT_EQ(value_.toString(type), expected);
 }
@@ -446,15 +446,15 @@ TEST(VariantFloatingToJsonTest, normalTest) {
   EXPECT_EQ(
       Variant::create<float>(std::numeric_limits<float>::infinity())
           .toJson(REAL()),
-      "\"Infinity\"");
+      R"("Infinity")");
   EXPECT_EQ(
       Variant::create<double>(std::numeric_limits<double>::infinity())
           .toJson(DOUBLE()),
-      "\"Infinity\"");
+      R"("Infinity")");
 
   // NaN
-  EXPECT_EQ(Variant::create<float>(0.0 / 0.0).toJson(REAL()), "\"NaN\"");
-  EXPECT_EQ(Variant::create<double>(0.0 / 0.0).toJson(DOUBLE()), "\"NaN\"");
+  EXPECT_EQ(Variant::create<float>(0.0 / 0.0).toJson(REAL()), R"("NaN")");
+  EXPECT_EQ(Variant::create<double>(0.0 / 0.0).toJson(DOUBLE()), R"("NaN")");
 }
 
 TEST(VariantTest, opaqueSerializationNotRegistered) {
@@ -483,7 +483,7 @@ TEST(VariantTest, toJsonRow) {
 
   rowType = ROW({{"c0", DECIMAL(20, 1)}, {"c1", BOOLEAN()}, {"c3", VARCHAR()}});
   EXPECT_EQ(
-      "[1234567890.1,true,\"test works fine\"]",
+      R"([1234567890.1,true,"test works fine"])",
       Variant::row({static_cast<int128_t>(12345678901),
                     Variant((bool)true),
                     Variant((std::string) "test works fine")})
@@ -502,10 +502,9 @@ TEST(VariantTest, toJsonRow) {
   VELOX_ASSERT_THROW(
       Variant::row(
           {static_cast<int128_t>(123456789),
-           Variant((
-               std::
-                   string) "test confirms Variant child count is greater than expected"),
-           Variant((bool)false)})
+           Variant(
+               "test confirms Variant child count is greater than expected"),
+           Variant(false)})
           .toJson(rowType),
       "(3 vs. 1) Wrong number of fields in a struct in Variant::toJson");
 
@@ -514,9 +513,8 @@ TEST(VariantTest, toJsonRow) {
   VELOX_ASSERT_THROW(
       Variant::row(
           {static_cast<int128_t>(12345678912),
-           Variant((
-               std::
-                   string) "test confirms Variant child count is lesser than expected")})
+           Variant(
+               "test confirms Variant child count is lesser than expected")})
           .toJson(rowType),
       "(2 vs. 3) Wrong number of fields in a struct in Variant::toJson");
 
@@ -559,25 +557,24 @@ TEST(VariantTest, toJsonArray) {
 TEST(VariantTest, toJsonMap) {
   auto mapType = MAP(VARCHAR(), DECIMAL(6, 3));
   std::map<Variant, Variant> mapValue = {
-      {(std::string) "key1", 235499LL}, {(std::string) "key2", 123456LL}};
+      {"key1", 235499LL}, {"key2", 123456LL}};
   EXPECT_EQ(
-      "[{\"key\":\"key1\",\"value\":235.499},{\"key\":\"key2\",\"value\":123.456}]",
+      R"([{"key":"key1","value":235.499},{"key":"key2","value":123.456}])",
       Variant::map(mapValue).toJson(mapType));
 
   mapType = MAP(VARCHAR(), DECIMAL(20, 3));
   mapValue = {
-      {(std::string) "key1", static_cast<int128_t>(45464562323423)},
-      {(std::string) "key2", static_cast<int128_t>(12334581232456)}};
+      {"key1", static_cast<int128_t>(45464562323423)},
+      {"key2", static_cast<int128_t>(12334581232456)}};
   EXPECT_EQ(
-      "[{\"key\":\"key1\",\"value\":45464562323.423},{\"key\":\"key2\",\"value\":12334581232.456}]",
+      R"([{"key":"key1","value":45464562323.423},{"key":"key2","value":12334581232.456}])",
       Variant::map(mapValue).toJson(mapType));
 
   // Map Variant tests that contains NULL variants.
   mapValue = {
       {Variant::null(TypeKind::VARCHAR), Variant::null(TypeKind::HUGEINT)}};
   EXPECT_EQ(
-      "[{\"key\":null,\"value\":null}]",
-      Variant::map(mapValue).toJson(mapType));
+      R"([{"key":null,"value":null}])", Variant::map(mapValue).toJson(mapType));
 }
 
 TEST(VariantTest, typeWithCustomComparison) {
@@ -653,3 +650,299 @@ TEST(VariantTest, toString) {
       Variant::row({1, 2, 3}).toString(ROW({INTEGER(), INTEGER(), INTEGER()})),
       "[1,2,3]");
 }
+
+template <typename T>
+void testPrimitiveGetter(T v) {
+  auto value = Variant(v);
+  EXPECT_FALSE(value.isNull());
+  EXPECT_EQ(value.value<T>(), value);
+}
+
+TEST(VariantTest, primitiveGetters) {
+  testPrimitiveGetter<bool>(true);
+  testPrimitiveGetter<int32_t>(10);
+  testPrimitiveGetter<int64_t>(10);
+  testPrimitiveGetter<float>(1.2);
+  testPrimitiveGetter<double>(1.2);
+}
+
+template <typename T>
+void testArrayGetter(const std::vector<T>& inputs) {
+  std::vector<Variant> variants;
+  variants.reserve(inputs.size());
+  for (const auto& v : inputs) {
+    variants.emplace_back(v);
+  }
+
+  auto value = Variant::array(variants);
+
+  EXPECT_FALSE(value.isNull());
+
+  {
+    auto variantItems = value.array();
+    EXPECT_EQ(variantItems.size(), inputs.size());
+    for (auto i = 0; i < inputs.size(); ++i) {
+      EXPECT_FALSE(variantItems.at(i).isNull());
+      EXPECT_EQ(variantItems.at(i).template value<T>(), inputs.at(i));
+    }
+  }
+
+  {
+    auto primitiveItems = value.template array<T>();
+    EXPECT_EQ(primitiveItems, inputs);
+  }
+
+  {
+    auto primitiveItems = value.template nullableArray<T>();
+    EXPECT_EQ(primitiveItems.size(), inputs.size());
+    for (auto i = 0; i < inputs.size(); ++i) {
+      EXPECT_TRUE(primitiveItems.at(i).has_value());
+      EXPECT_EQ(primitiveItems.at(i).value(), inputs.at(i));
+    }
+  }
+}
+
+template <typename T>
+void testNullableArrayGetter(const std::vector<std::optional<T>>& inputs) {
+  std::vector<Variant> variants;
+  variants.reserve(inputs.size());
+  for (const auto& v : inputs) {
+    if (v.has_value()) {
+      variants.emplace_back(v.value());
+    } else {
+      variants.emplace_back(Variant::null(CppToType<T>::typeKind));
+    }
+  }
+
+  auto value = Variant::array(variants);
+  EXPECT_FALSE(value.isNull());
+
+  auto primitiveItems = value.template nullableArray<T>();
+  EXPECT_EQ(primitiveItems, inputs);
+}
+
+TEST(VariantTest, arrayGetter) {
+  testArrayGetter<bool>({true, false, true});
+  testArrayGetter<int32_t>({1, 2, 3});
+  testArrayGetter<int64_t>({1, 2, 3});
+  testArrayGetter<float>({1.2, 2.3, 3.4});
+  testArrayGetter<double>({1.2, 2.3, 3.4});
+
+  testNullableArrayGetter<bool>({true, false, std::nullopt});
+  testNullableArrayGetter<int32_t>({1, 2, std::nullopt, 4});
+  testNullableArrayGetter<int64_t>({1, 2, std::nullopt, 4});
+  testNullableArrayGetter<float>({1.1, 2.2, std::nullopt});
+  testNullableArrayGetter<double>({1.1, 2.2, std::nullopt});
+}
+
+template <typename K, typename V>
+void testMapGetter(const std::map<K, V>& inputs) {
+  std::map<Variant, Variant> variants;
+  for (const auto& [k, v] : inputs) {
+    variants.emplace(k, v);
+  }
+
+  auto value = Variant::map(variants);
+
+  EXPECT_FALSE(value.isNull());
+
+  {
+    auto variantItems = value.map();
+    EXPECT_EQ(variantItems.size(), inputs.size());
+
+    auto expectedIt = inputs.begin();
+    for (auto it = variantItems.begin(); it != variantItems.end(); it++) {
+      auto [k, v] = *it;
+
+      EXPECT_FALSE(k.isNull());
+      EXPECT_FALSE(v.isNull());
+      EXPECT_EQ(k.template value<K>(), (*expectedIt).first);
+      EXPECT_EQ(v.template value<V>(), (*expectedIt).second);
+      expectedIt++;
+    }
+  }
+
+  {
+    auto primitiveItems = value.template map<K, V>();
+    EXPECT_EQ(primitiveItems, inputs);
+  }
+
+  {
+    auto primitiveItems = value.template nullableMap<K, V>();
+    EXPECT_EQ(primitiveItems.size(), inputs.size());
+
+    auto expectedIt = inputs.begin();
+    for (auto it = primitiveItems.begin(); it != primitiveItems.end(); it++) {
+      auto [k, v] = *it;
+
+      EXPECT_TRUE(v.has_value());
+      EXPECT_EQ(k, (*expectedIt).first);
+      EXPECT_EQ(v.value(), (*expectedIt).second);
+      expectedIt++;
+    }
+  }
+}
+
+template <typename K, typename V>
+void testNullableMapGetter(const std::map<K, std::optional<V>>& inputs) {
+  std::map<Variant, Variant> variants;
+  for (const auto& [k, v] : inputs) {
+    if (v.has_value()) {
+      variants.emplace(k, v.value());
+    } else {
+      variants.emplace(k, Variant::null(CppToType<V>::typeKind));
+    }
+  }
+
+  auto value = Variant::map(variants);
+  EXPECT_FALSE(value.isNull());
+
+  auto primitiveItems = value.template nullableMap<K, V>();
+  EXPECT_EQ(primitiveItems, inputs);
+}
+
+TEST(VariantTest, mapGetter) {
+  testMapGetter<int32_t, float>({{1, 1.2}, {2, 2.3}, {3, 3.4}});
+  testMapGetter<int8_t, double>({{1, 1.2}, {2, 2.3}, {3, 3.4}});
+
+  testNullableMapGetter<int32_t, float>(
+      {{1, 1.2}, {2, std::nullopt}, {3, 3.4}});
+  testNullableMapGetter<int8_t, double>(
+      {{1, 1.2}, {2, 2.3}, {3, std::nullopt}});
+}
+
+template <typename T>
+void testArrayOfArraysGetter(const std::vector<std::vector<T>>& inputs) {
+  std::vector<Variant> variants;
+  variants.reserve(inputs.size());
+
+  for (const auto& input : inputs) {
+    std::vector<Variant> innerVariants;
+    innerVariants.reserve(input.size());
+    for (const auto& v : input) {
+      innerVariants.emplace_back(v);
+    }
+    variants.emplace_back(Variant::array(innerVariants));
+  }
+
+  auto value = Variant::array(variants);
+  EXPECT_FALSE(value.isNull());
+
+  {
+    auto primitiveItems = value.template arrayOfArrays<T>();
+    EXPECT_EQ(primitiveItems, inputs);
+  }
+}
+
+TEST(VariantTest, arrayOfArraysGetter) {
+  testArrayOfArraysGetter<int32_t>({{1, 2}, {3, 4, 5}, {}});
+  testArrayOfArraysGetter<double>({{1.1, 2.2}, {}, {3.3}});
+}
+
+template <typename K, typename V>
+void testMapOfArraysGetter(const std::map<K, std::vector<V>>& inputs) {
+  std::map<Variant, Variant> variants;
+
+  for (const auto& [k, input] : inputs) {
+    std::vector<Variant> innerVariants;
+    innerVariants.reserve(input.size());
+    for (const auto& v : input) {
+      innerVariants.emplace_back(v);
+    }
+    variants.emplace(k, Variant::array(innerVariants));
+  }
+
+  auto value = Variant::map(variants);
+  EXPECT_FALSE(value.isNull());
+
+  {
+    auto primitiveItems = value.template mapOfArrays<K, V>();
+    EXPECT_EQ(primitiveItems, inputs);
+  }
+}
+
+TEST(VariantTest, mapOfArraysGetter) {
+  testMapOfArraysGetter<int32_t, float>(
+      {{1, {1.1f, 2.2f}}, {2, {3.3f}}, {3, {}}});
+  testMapOfArraysGetter<std::string, int64_t>(
+      {{"a", {1, 2}}, {"b", {}}, {"c", {3}}});
+}
+
+template <typename T>
+void testNullableArrayOfArraysGetter(
+    const std::vector<std::optional<std::vector<std::optional<T>>>>& inputs) {
+  std::vector<Variant> variants;
+  variants.reserve(inputs.size());
+  for (const auto& arrOpt : inputs) {
+    if (!arrOpt.has_value()) {
+      variants.emplace_back(Variant::null(TypeKind::ARRAY));
+    } else {
+      std::vector<Variant> innerVariants;
+      innerVariants.reserve(arrOpt->size());
+      for (const auto& vOpt : *arrOpt) {
+        if (vOpt.has_value()) {
+          innerVariants.emplace_back(*vOpt);
+        } else {
+          innerVariants.emplace_back(Variant::null(CppToType<T>::typeKind));
+        }
+      }
+      variants.emplace_back(Variant::array(innerVariants));
+    }
+  }
+  auto value = Variant::array(variants);
+  EXPECT_FALSE(value.isNull());
+  auto primitiveItems = value.template nullableArrayOfArrays<T>();
+  EXPECT_EQ(primitiveItems, inputs);
+}
+
+TEST(VariantTest, nullableArrayOfArraysGetter) {
+  testNullableArrayOfArraysGetter<int32_t>(
+      {std::nullopt,
+       std::vector<std::optional<int32_t>>{1, std::nullopt, 3},
+       std::vector<std::optional<int32_t>>{},
+       std::vector<std::optional<int32_t>>{std::nullopt, 2}});
+  testNullableArrayOfArraysGetter<double>(
+      {std::vector<std::optional<double>>{1.1, std::nullopt},
+       std::nullopt,
+       std::vector<std::optional<double>>{3.3}});
+}
+
+template <typename K, typename V>
+void testNullableMapOfArraysGetter(
+    const std::map<K, std::optional<std::vector<std::optional<V>>>>& inputs) {
+  std::map<Variant, Variant> variants;
+  for (const auto& [k, arrOpt] : inputs) {
+    if (!arrOpt.has_value()) {
+      variants.emplace(k, Variant::null(TypeKind::ARRAY));
+    } else {
+      std::vector<Variant> innerVariants;
+      innerVariants.reserve(arrOpt->size());
+      for (const auto& vOpt : *arrOpt) {
+        if (vOpt.has_value()) {
+          innerVariants.emplace_back(*vOpt);
+        } else {
+          innerVariants.emplace_back(Variant::null(CppToType<V>::typeKind));
+        }
+      }
+      variants.emplace(k, Variant::array(innerVariants));
+    }
+  }
+  auto value = Variant::map(variants);
+  EXPECT_FALSE(value.isNull());
+  auto primitiveItems = value.template nullableMapOfArrays<K, V>();
+  EXPECT_EQ(primitiveItems, inputs);
+}
+
+TEST(VariantTest, nullableMapOfArraysGetter) {
+  testNullableMapOfArraysGetter<int32_t, float>(
+      {{1, std::nullopt},
+       {2, std::vector<std::optional<float>>{1.1f, std::nullopt}},
+       {3, std::vector<std::optional<float>>{}}});
+  testNullableMapOfArraysGetter<std::string, int64_t>(
+      {{"a", std::vector<std::optional<int64_t>>{1, std::nullopt}},
+       {"b", std::nullopt},
+       {"c", std::vector<std::optional<int64_t>>{3}}});
+}
+
+} // namespace
+} // namespace facebook::velox

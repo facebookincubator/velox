@@ -118,6 +118,11 @@ bool CompileState::compile() {
     if (!CudfHashJoinProbe::isSupportedJoinType(planNode->joinType())) {
       return false;
     }
+    // disabling null-aware anti join with filter until we implement it right
+    if (planNode->joinType() == core::JoinType::kAnti and
+        planNode->isNullAware() and planNode->filter()) {
+      return false;
+    }
     return true;
   };
 
@@ -316,6 +321,8 @@ void registerCudf(const CudfOptions& options) {
   if (!options.cudfEnabled) {
     return;
   }
+
+  registerBuiltinFunctions(options.prefix());
 
   CUDF_FUNC_RANGE();
   cudaFree(nullptr); // Initialize CUDA context at startup

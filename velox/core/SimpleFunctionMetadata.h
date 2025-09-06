@@ -288,6 +288,32 @@ struct TypeAnalysis<LongDecimal<P, S>> {
   }
 };
 
+template <typename E>
+struct TypeAnalysis<facebook::velox::BigintEnumT<E>> {
+  void run(TypeAnalysisResults& results) {
+    results.stats.concreteCount++;
+
+    const auto e = E::name();
+    results.out << fmt::format("bigint_enum({})", e);
+    results.addVariable(exec::SignatureVariable(
+        e, std::nullopt, exec::ParameterType::kEnumParameter));
+    results.physicalType = BIGINT();
+  }
+};
+
+template <typename E>
+struct TypeAnalysis<facebook::velox::VarcharEnumT<E>> {
+  void run(TypeAnalysisResults& results) {
+    results.stats.concreteCount++;
+
+    const auto e = E::name();
+    results.out << fmt::format("varchar_enum({})", e);
+    results.addVariable(exec::SignatureVariable(
+        e, std::nullopt, exec::ParameterType::kEnumParameter));
+    results.physicalType = VARCHAR();
+  }
+};
+
 template <typename K, typename V>
 struct TypeAnalysis<Map<K, V>> {
   void run(TypeAnalysisResults& results) {
@@ -374,6 +400,24 @@ struct TypeAnalysis<CustomType<T, providesCustomComparison>> {
     TypeAnalysisResults tmp;
     TypeAnalysis<typename T::type>().run(tmp);
     results.physicalType = tmp.physicalType;
+  }
+};
+
+template <typename E>
+struct TypeAnalysis<BigintEnum<E>> {
+  void run(TypeAnalysisResults& results) {
+    // Need to call the TypeAnalysis on T, not T::type for BigintEnum type (on
+    // BigintEnumT, not Bigint).
+    TypeAnalysis<facebook::velox::BigintEnumT<E>>().run(results);
+  }
+};
+
+template <typename E>
+struct TypeAnalysis<VarcharEnum<E>> {
+  void run(TypeAnalysisResults& results) {
+    // Need to call the TypeAnalysis on T, not T::type for VarcharEnum type (on
+    // VarcharEnumT, not Varchar).
+    TypeAnalysis<facebook::velox::VarcharEnumT<E>>().run(results);
   }
 };
 
@@ -598,11 +642,12 @@ class SimpleFunctionMetadata : public ISimpleFunctionMetadata {
         ...);
 
     for (const auto& constraint : constraints) {
-      VELOX_CHECK(
-          !constraint.constraint().empty(),
-          "Constraint must be set for variable {}",
-          constraint.name());
-
+      if (constraint.isIntegerParameter()) {
+        VELOX_CHECK(
+            !constraint.constraint().empty(),
+            "Constraint must be set for variable {}",
+            constraint.name());
+      }
       results.variablesInformation.erase(constraint.name());
       results.variablesInformation.emplace(constraint.name(), constraint);
     }

@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/expression/VectorFunction.h"
+#include "velox/functions/prestosql/types/BigintEnumType.h"
 #include "velox/functions/prestosql/types/BingTileType.h"
 #include "velox/functions/prestosql/types/GeometryType.h"
 #include "velox/functions/prestosql/types/HyperLogLogType.h"
@@ -24,6 +25,7 @@
 #include "velox/functions/prestosql/types/TDigestType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/functions/prestosql/types/UuidType.h"
+#include "velox/functions/prestosql/types/VarcharEnumType.h"
 
 namespace facebook::velox::functions {
 namespace {
@@ -59,7 +61,11 @@ std::string typeName(const TypePtr& type) {
       if (isBingTileType(type)) {
         return "bingtile";
       }
+      if (isBigintEnumType(*type)) {
+        return asBigintEnum(type)->enumName();
+      }
       return "bigint";
+
     case TypeKind::HUGEINT: {
       if (isUuidType(type)) {
         return "uuid";
@@ -81,6 +87,9 @@ std::string typeName(const TypePtr& type) {
     case TypeKind::VARCHAR:
       if (isJsonType(type)) {
         return "json";
+      }
+      if (isVarcharEnumType(*type)) {
+        return asVarcharEnum(type)->enumName();
       }
       return "varchar";
     case TypeKind::VARBINARY:

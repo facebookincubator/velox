@@ -15,7 +15,6 @@
  */
 
 #include "velox/common/base/StatsReporter.h"
-#include <folly/Singleton.h>
 #include <folly/init/Init.h>
 #include <gtest/gtest.h>
 #include <cstdint>
@@ -23,6 +22,7 @@
 #include "velox/common/base/Counters.h"
 #include "velox/common/base/PeriodicStatsReporter.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/base/tests/StatsReporterUtils.h"
 #include "velox/common/caching/AsyncDataCache.h"
 #include "velox/common/caching/CacheTTLController.h"
 #include "velox/common/caching/SsdCache.h"
@@ -30,107 +30,73 @@
 
 namespace facebook::velox {
 
-class TestReporter : public BaseStatsReporter {
- public:
-  mutable std::mutex m;
-  mutable std::map<std::string, size_t> counterMap;
-  mutable std::unordered_map<std::string, StatType> statTypeMap;
-  mutable std::unordered_map<std::string, std::vector<int32_t>>
-      histogramPercentilesMap;
-
-  void clear() {
-    std::lock_guard<std::mutex> l(m);
-    counterMap.clear();
-    statTypeMap.clear();
-    histogramPercentilesMap.clear();
-  }
-
-  void registerMetricExportType(const char* key, StatType statType)
-      const override {
-    statTypeMap[key] = statType;
-  }
-
-  void registerMetricExportType(folly::StringPiece key, StatType statType)
-      const override {
-    statTypeMap[key.str()] = statType;
-  }
-
-  void registerHistogramMetricExportType(
-      const char* key,
-      int64_t /* bucketWidth */,
-      int64_t /* min */,
-      int64_t /* max */,
-      const std::vector<int32_t>& pcts) const override {
-    histogramPercentilesMap[key] = pcts;
-  }
-
-  void registerHistogramMetricExportType(
-      folly::StringPiece key,
-      int64_t /* bucketWidth */,
-      int64_t /* min */,
-      int64_t /* max */,
-      const std::vector<int32_t>& pcts) const override {
-    histogramPercentilesMap[key.str()] = pcts;
-  }
-
-  void addMetricValue(const std::string& key, const size_t value)
-      const override {
-    std::lock_guard<std::mutex> l(m);
-    counterMap[key] += value;
-  }
-
-  void addMetricValue(const char* key, const size_t value) const override {
-    std::lock_guard<std::mutex> l(m);
-    counterMap[key] += value;
-  }
-
-  void addMetricValue(folly::StringPiece key, size_t value) const override {
-    std::lock_guard<std::mutex> l(m);
-    counterMap[key.str()] += value;
-  }
-
-  void addHistogramMetricValue(const std::string& key, size_t value)
-      const override {
-    std::lock_guard<std::mutex> l(m);
-    counterMap[key] = std::max(counterMap[key], value);
-  }
-
-  void addHistogramMetricValue(const char* key, size_t value) const override {
-    std::lock_guard<std::mutex> l(m);
-    counterMap[key] = std::max(counterMap[key], value);
-  }
-
-  void addHistogramMetricValue(folly::StringPiece key, size_t value)
-      const override {
-    std::lock_guard<std::mutex> l(m);
-    counterMap[key.str()] = std::max(counterMap[key.str()], value);
-  }
-
-  std::string fetchMetrics() override {
-    std::stringstream ss;
-    ss << "[";
-    auto sep = "";
-    for (const auto& [key, value] : counterMap) {
-      ss << sep << key << ":" << value;
-      sep = ",";
-    }
-    ss << "]";
-    return ss.str();
-  }
+struct QuantileConfig {
+  std::vector<StatType> statTypes;
+  std::vector<double> percentiles;
+  std::vector<size_t> slidingWindows;
 };
+
+inline QuantileConfig createStandardConfig() {
+  return {{StatType::AVG, StatType::COUNT}, {0.5, 0.95}, {60, 600}};
+}
 
 class StatsReporterTest : public testing::Test {
  protected:
   void SetUp() override {
+    // Set the registered flag to true so macros will work
+    BaseStatsReporter::registered = true;
     reporter_ = std::dynamic_pointer_cast<TestReporter>(
         folly::Singleton<BaseStatsReporter>::try_get());
     reporter_->clear();
   }
   void TearDown() override {
     reporter_->clear();
+    // Reset the registered flag
+    BaseStatsReporter::registered = false;
   }
 
+ public:
   std::shared_ptr<TestReporter> reporter_;
+
+  void verifyQuantileRegistration(
+      const std::string& key,
+      const QuantileConfig& config) {
+    EXPECT_TRUE(reporter_->quantileStatTypesMap.count(key));
+    EXPECT_EQ(config.statTypes, reporter_->quantileStatTypesMap[key]);
+    EXPECT_EQ(config.percentiles, reporter_->quantilePercentilesMap[key]);
+    EXPECT_EQ(config.slidingWindows, reporter_->quantileSlidingWindowsMap[key]);
+  }
+
+  void verifyDynamicQuantileRegistration(
+      const std::string& pattern,
+      const QuantileConfig& config) {
+    EXPECT_TRUE(reporter_->dynamicQuantileStatTypesMap.count(pattern));
+    EXPECT_EQ(
+        config.statTypes, reporter_->dynamicQuantileStatTypesMap[pattern]);
+    EXPECT_EQ(
+        config.percentiles, reporter_->dynamicQuantilePercentilesMap[pattern]);
+    EXPECT_EQ(
+        config.slidingWindows,
+        reporter_->dynamicQuantileSlidingWindowsMap[pattern]);
+  }
+
+  template <typename KeyType>
+  void registerAndVerifyQuantile(
+      KeyType key,
+      const QuantileConfig& config = createStandardConfig()) {
+    reporter_->registerQuantileMetricExportType(
+        key, config.statTypes, config.percentiles, config.slidingWindows);
+    verifyQuantileRegistration(std::string(key), config);
+  }
+
+  template <typename KeyType>
+  void registerAndVerifyDynamicQuantile(
+      KeyType pattern,
+      const QuantileConfig& config = createStandardConfig()) {
+    reporter_->registerDynamicQuantileMetricExportType(
+        pattern, config.statTypes, config.percentiles, config.slidingWindows);
+    verifyDynamicQuantileRegistration(std::string(pattern), config);
+  }
 };
 
 TEST_F(StatsReporterTest, trivialReporter) {
@@ -610,6 +576,326 @@ TEST_F(PeriodicStatsReporterTest, allNullOption) {
       startPeriodicStatsReporter(options),
       "The periodic stats reporter has already started.");
   ASSERT_NO_THROW(stopPeriodicStatsReporter());
+}
+
+TEST_F(StatsReporterTest, registerQuantileMetricExportType) {
+  QuantileConfig config = {
+      {StatType::AVG, StatType::SUM, StatType::COUNT},
+      {0.5, 0.95, 0.99},
+      {60, 600}};
+  registerAndVerifyQuantile("test_quantile_stat", config);
+}
+
+TEST_F(StatsReporterTest, quantileRegistrationWithValues) {
+  // Test registration and value addition (covers all key types via templates)
+  const char* charKey = "test_quantile_char";
+  std::string stringKey = "test_quantile_string";
+  folly::StringPiece spKey("test_quantile_sp");
+
+  QuantileConfig config1 = {
+      {StatType::AVG, StatType::COUNT}, {0.5, 0.95}, {60, 600}};
+  QuantileConfig config2 = {
+      {StatType::SUM, StatType::COUNT}, {0.75, 0.99}, {300}};
+  QuantileConfig config3 = {{StatType::RATE}, {0.75, 0.90}, {3600}};
+
+  registerAndVerifyQuantile(charKey, config1);
+  registerAndVerifyQuantile(stringKey, config2);
+  registerAndVerifyQuantile(spKey, config3);
+
+  // Test value addition
+  reporter_->addQuantileMetricValue(charKey, 100);
+  reporter_->addQuantileMetricValue(charKey, 50);
+  EXPECT_EQ(150, reporter_->counterMap[std::string(charKey)]);
+
+  reporter_->addQuantileMetricValue(stringKey, 200);
+  reporter_->addQuantileMetricValue(stringKey, 300);
+  EXPECT_EQ(500, reporter_->counterMap[stringKey]);
+
+  reporter_->addQuantileMetricValue(spKey, 25);
+  reporter_->addQuantileMetricValue(spKey, 75);
+  EXPECT_EQ(100, reporter_->counterMap[std::string(spKey)]);
+}
+
+TEST_F(StatsReporterTest, multipleQuantileStats) {
+  QuantileConfig config1 = {{StatType::AVG}, {0.5}, {60}};
+  QuantileConfig config2 = {
+      {StatType::COUNT, StatType::SUM}, {0.95, 0.99, 0.999}, {300, 900}};
+
+  registerAndVerifyQuantile("metric1", config1);
+  registerAndVerifyQuantile("metric2", config2);
+}
+
+TEST_F(StatsReporterTest, emptyVectors) {
+  // Test registration with empty vectors (should be allowed)
+  std::vector<StatType> emptyStatTypes;
+  std::vector<double> emptyPercentiles;
+  std::vector<size_t> emptySlidingWindows;
+
+  EXPECT_NO_THROW(reporter_->registerQuantileMetricExportType(
+      "empty_metric", emptyStatTypes, emptyPercentiles, emptySlidingWindows));
+
+  EXPECT_TRUE(reporter_->quantileStatTypesMap.count("empty_metric"));
+  EXPECT_TRUE(reporter_->quantileStatTypesMap["empty_metric"].empty());
+  EXPECT_TRUE(reporter_->quantilePercentilesMap["empty_metric"].empty());
+  EXPECT_TRUE(reporter_->quantileSlidingWindowsMap["empty_metric"].empty());
+}
+
+TEST_F(StatsReporterTest, quantileStatMacros) {
+  DEFINE_QUANTILE_STAT(
+      "macro_test_stat",
+      statTypes(StatType::AVG, StatType::COUNT),
+      percentiles(0.5, 0.95, 0.99),
+      slidingWindowsSeconds(60, 600));
+
+  QuantileConfig expectedConfig = {
+      {StatType::AVG, StatType::COUNT}, {0.5, 0.95, 0.99}, {60, 600}};
+  verifyQuantileRegistration("macro_test_stat", expectedConfig);
+
+  RECORD_QUANTILE_STAT_VALUE("macro_test_stat", 100);
+  RECORD_QUANTILE_STAT_VALUE("macro_test_stat", 50);
+  RECORD_QUANTILE_STAT_VALUE("macro_test_stat"); // Default value of 1
+
+  EXPECT_EQ(151, reporter_->counterMap["macro_test_stat"]);
+}
+
+TEST_F(StatsReporterTest, dynamicQuantileRegistrationWithValues) {
+  // Test registration and value addition for different key types
+  const char* charPattern = "test_metric_char.{}.{}";
+  std::string stringPattern = "test_metric_string.{}.{}";
+  folly::StringPiece spPattern("test_metric_sp.{}.{}");
+
+  QuantileConfig config1 = {{StatType::AVG}, {0.95}, {300}};
+  QuantileConfig config2 = {{StatType::COUNT}, {0.5}, {60}};
+  QuantileConfig config3 = {{StatType::SUM}, {0.5, 0.99}, {60, 600}};
+
+  registerAndVerifyDynamicQuantile(charPattern, config1);
+  registerAndVerifyDynamicQuantile(stringPattern, config2);
+  registerAndVerifyDynamicQuantile(spPattern, config3);
+
+  auto subkeys1 = subkeys("db1", "table1");
+  auto subkeys2 = subkeys("server1", "endpoint1");
+  auto subkeys3 = subkeys("region1", "service1");
+
+  reporter_->addDynamicQuantileMetricValue(charPattern, subkeys1, 50);
+  reporter_->addDynamicQuantileMetricValue(charPattern, subkeys1, 150);
+  EXPECT_EQ(200, reporter_->counterMap["test_metric_char.db1.table1"]);
+
+  reporter_->addDynamicQuantileMetricValue(stringPattern, subkeys2, 100);
+  reporter_->addDynamicQuantileMetricValue(stringPattern, subkeys2, 200);
+  EXPECT_EQ(300, reporter_->counterMap["test_metric_string.server1.endpoint1"]);
+
+  reporter_->addDynamicQuantileMetricValue(spPattern, subkeys3, 75);
+  reporter_->addDynamicQuantileMetricValue(spPattern, subkeys3, 125);
+  EXPECT_EQ(200, reporter_->counterMap["test_metric_sp.region1.service1"]);
+}
+
+TEST_F(StatsReporterTest, dynamicQuantileRegistrationOnly) {
+  // Test registration without values (registration-only test)
+  QuantileConfig config = {
+      {StatType::AVG, StatType::COUNT}, {0.5, 0.95}, {60, 600}};
+  const char* pattern = "registration_test.{}.{}";
+
+  registerAndVerifyDynamicQuantile(pattern, config);
+
+  // Verify registration worked but no values recorded yet
+  EXPECT_EQ(0, reporter_->counterMap.count("registration_test.key1.key2"));
+}
+
+TEST_F(StatsReporterTest, dynamicQuantileMetricUnregisteredPattern) {
+  // Try to add a value for a dynamic quantile metric that was never registered
+  // This should silently ignore the value (not crash)
+  auto subkeyValues = subkeys("unregistered", "pattern");
+  EXPECT_NO_THROW(reporter_->addDynamicQuantileMetricValue(
+      "unregistered_pattern.{}.{}", subkeyValues, 42));
+
+  // Verify no value was recorded
+  EXPECT_EQ(
+      0,
+      reporter_->counterMap.count("unregistered_pattern.unregistered.pattern"));
+}
+
+struct DynamicQuantilePatternTestCase {
+  std::string testName;
+  std::function<void(StatsReporterTest*)> testFunc;
+};
+
+class DynamicQuantilePatternTest
+    : public StatsReporterTest,
+      public testing::WithParamInterface<DynamicQuantilePatternTestCase> {};
+
+TEST_P(DynamicQuantilePatternTest, PatternScenarios) {
+  const auto& testCase = GetParam();
+  testCase.testFunc(this);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    PatternScenarios,
+    DynamicQuantilePatternTest,
+    testing::Values(
+        DynamicQuantilePatternTestCase{
+            "DefaultValue",
+            [](StatsReporterTest* test) {
+              test->reporter_->registerDynamicQuantileMetricExportType(
+                  "default_value_metric.{}",
+                  statTypes(StatType::COUNT),
+                  percentiles(0.5),
+                  slidingWindowsSeconds(60));
+
+              auto subkeyValues = subkeys("test");
+              test->reporter_->addDynamicQuantileMetricValue(
+                  "default_value_metric.{}", subkeyValues, 1);
+              test->reporter_->addDynamicQuantileMetricValue(
+                  "default_value_metric.{}", subkeyValues, 1);
+              test->reporter_->addDynamicQuantileMetricValue(
+                  "default_value_metric.{}", subkeyValues, 1);
+
+              EXPECT_EQ(
+                  3, test->reporter_->counterMap["default_value_metric.test"]);
+            }},
+        DynamicQuantilePatternTestCase{
+            "MultiplePatterns",
+            [](StatsReporterTest* test) {
+              test->reporter_->registerDynamicQuantileMetricExportType(
+                  "pattern1.{}.{}",
+                  statTypes(StatType::AVG),
+                  percentiles(0.5),
+                  slidingWindowsSeconds(60));
+
+              test->reporter_->registerDynamicQuantileMetricExportType(
+                  "pattern2.{}.{}.{}",
+                  statTypes(StatType::COUNT, StatType::SUM),
+                  percentiles(0.95, 0.99, 0.999),
+                  slidingWindowsSeconds(300, 900));
+
+              auto subkeys2 = subkeys("key1", "key2");
+              auto subkeys3 = subkeys("key1", "key2", "key3");
+
+              test->reporter_->addDynamicQuantileMetricValue(
+                  "pattern1.{}.{}", subkeys2, 100);
+              test->reporter_->addDynamicQuantileMetricValue(
+                  "pattern2.{}.{}.{}", subkeys3, 200);
+
+              EXPECT_EQ(100, test->reporter_->counterMap["pattern1.key1.key2"]);
+              EXPECT_EQ(
+                  200, test->reporter_->counterMap["pattern2.key1.key2.key3"]);
+            }},
+        DynamicQuantilePatternTestCase{
+            "ComplexPattern",
+            [](StatsReporterTest* test) {
+              test->reporter_->registerDynamicQuantileMetricExportType(
+                  "complex.{}.latency.{}.p95",
+                  statTypes(StatType::AVG, StatType::COUNT),
+                  percentiles(0.95, 0.99),
+                  slidingWindowsSeconds(60, 300, 3600));
+
+              auto subkeyValues = subkeys("http_server", "endpoint_api");
+              test->reporter_->addDynamicQuantileMetricValue(
+                  "complex.{}.latency.{}.p95", subkeyValues, 150);
+              test->reporter_->addDynamicQuantileMetricValue(
+                  "complex.{}.latency.{}.p95", subkeyValues, 200);
+
+              EXPECT_EQ(
+                  350,
+                  test->reporter_->counterMap
+                      ["complex.http_server.latency.endpoint_api.p95"]);
+            }},
+        DynamicQuantilePatternTestCase{
+            "SingleSubkey",
+            [](StatsReporterTest* test) {
+              test->reporter_->registerDynamicQuantileMetricExportType(
+                  "single_sub.{}",
+                  statTypes(StatType::RATE),
+                  percentiles(0.75),
+                  slidingWindowsSeconds(600));
+
+              auto subkeyValues = subkeys("single_value");
+              test->reporter_->addDynamicQuantileMetricValue(
+                  "single_sub.{}", subkeyValues, 300);
+
+              EXPECT_EQ(
+                  300, test->reporter_->counterMap["single_sub.single_value"]);
+            }},
+        DynamicQuantilePatternTestCase{
+            "MultipleInstances",
+            [](StatsReporterTest* test) {
+              test->reporter_->registerDynamicQuantileMetricExportType(
+                  "instance_test.{}.{}",
+                  statTypes(StatType::SUM),
+                  percentiles(0.5),
+                  slidingWindowsSeconds(60));
+
+              auto subkeys1 = subkeys("instance1", "metric1");
+              auto subkeys2 = subkeys("instance2", "metric2");
+              auto subkeys3 = subkeys("instance1", "metric2");
+
+              test->reporter_->addDynamicQuantileMetricValue(
+                  "instance_test.{}.{}", subkeys1, 100);
+              test->reporter_->addDynamicQuantileMetricValue(
+                  "instance_test.{}.{}", subkeys2, 200);
+              test->reporter_->addDynamicQuantileMetricValue(
+                  "instance_test.{}.{}", subkeys3, 300);
+              test->reporter_->addDynamicQuantileMetricValue(
+                  "instance_test.{}.{}", subkeys1, 50);
+
+              EXPECT_EQ(
+                  150,
+                  test->reporter_
+                      ->counterMap["instance_test.instance1.metric1"]);
+              EXPECT_EQ(
+                  200,
+                  test->reporter_
+                      ->counterMap["instance_test.instance2.metric2"]);
+              EXPECT_EQ(
+                  300,
+                  test->reporter_
+                      ->counterMap["instance_test.instance1.metric2"]);
+            }}));
+
+TEST_F(StatsReporterTest, dynamicQuantileMetricEmptyVectors) {
+  // Test registration with empty vectors (should be allowed)
+  std::vector<StatType> emptyStatTypes;
+  std::vector<double> emptyPercentiles;
+  std::vector<size_t> emptySlidingWindows;
+
+  EXPECT_NO_THROW(reporter_->registerDynamicQuantileMetricExportType(
+      "empty_metric.{}",
+      emptyStatTypes,
+      emptyPercentiles,
+      emptySlidingWindows));
+
+  EXPECT_TRUE(reporter_->dynamicQuantileStatTypesMap.count("empty_metric.{}"));
+  EXPECT_TRUE(
+      reporter_->dynamicQuantileStatTypesMap["empty_metric.{}"].empty());
+  EXPECT_TRUE(
+      reporter_->dynamicQuantilePercentilesMap["empty_metric.{}"].empty());
+  EXPECT_TRUE(
+      reporter_->dynamicQuantileSlidingWindowsMap["empty_metric.{}"].empty());
+
+  // Try to use the empty pattern
+  auto subkeyValues = subkeys("test");
+  EXPECT_NO_THROW(reporter_->addDynamicQuantileMetricValue(
+      "empty_metric.{}", subkeyValues, 100));
+}
+
+TEST_F(StatsReporterTest, dynamicQuantileStatMacros) {
+  DEFINE_DYNAMIC_QUANTILE_STAT(
+      "macro_test.{}.{}",
+      statTypes(StatType::AVG, StatType::COUNT),
+      percentiles(0.5, 0.95, 0.99),
+      slidingWindowsSeconds(60, 600));
+
+  QuantileConfig expectedConfig = {
+      {StatType::AVG, StatType::COUNT}, {0.5, 0.95, 0.99}, {60, 600}};
+  verifyDynamicQuantileRegistration("macro_test.{}.{}", expectedConfig);
+
+  RECORD_DYNAMIC_QUANTILE_STAT_VALUE(
+      "macro_test.{}.{}", subkeys("service", "method"), 100);
+  RECORD_DYNAMIC_QUANTILE_STAT_VALUE(
+      "macro_test.{}.{}", subkeys("service", "method"), 50);
+  RECORD_DYNAMIC_QUANTILE_STAT_VALUE(
+      "macro_test.{}.{}", subkeys("service", "method")); // Default value of 1
+
+  EXPECT_EQ(151, reporter_->counterMap["macro_test.service.method"]);
 }
 
 // Registering to folly Singleton with intended reporter type

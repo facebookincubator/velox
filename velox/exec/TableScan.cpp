@@ -364,9 +364,17 @@ bool TableScan::getSplit() {
     // The AsyncSource returns a unique_ptr to a shared_ptr. The unique_ptr
     // will be nullptr if there was a cancellation.
     numReadyPreloadedSplits_ += connectorSplit->dataSource->hasValue();
+    auto startTimeNs = getCurrentTimeNano();
     auto preparedDataSource = connectorSplit->dataSource->move();
-    stats_.wlock()->getOutputTiming.add(
-        connectorSplit->dataSource->prepareTiming());
+    auto endTimeNs = getCurrentTimeNano();
+    stats_.wlock()->addRuntimeStat(
+        "waitForPreloadSplitNanos",
+        RuntimeCounter(endTimeNs - startTimeNs, RuntimeCounter::Unit::kNanos));
+    stats_.wlock()->addRuntimeStat(
+        "preloadSplitPrepareTimeNanos",
+        RuntimeCounter(
+            connectorSplit->dataSource->prepareTiming().wallNanos,
+            RuntimeCounter::Unit::kNanos));
     if (!preparedDataSource) {
       // There must be a cancellation.
       VELOX_CHECK(operatorCtx_->task()->isCancelled());
@@ -458,8 +466,8 @@ void TableScan::preload(
 }
 
 void TableScan::checkPreload() {
-  auto* executor = connector_->executor();
-  if (maxSplitPreloadPerDriver_ == 0 || !executor ||
+  auto* ioExecutor = connector_->ioExecutor();
+  if (maxSplitPreloadPerDriver_ == 0 || !ioExecutor ||
       !connector_->supportsSplitPreload()) {
     return;
   }
@@ -468,11 +476,11 @@ void TableScan::checkPreload() {
         maxSplitPreloadPerDriver_;
     if (!splitPreloader_) {
       splitPreloader_ =
-          [executor,
+          [ioExecutor,
            this](const std::shared_ptr<connector::ConnectorSplit>& split) {
             preload(split);
 
-            executor->add([connectorSplit = split]() mutable {
+            ioExecutor->add([connectorSplit = split]() mutable {
               connectorSplit->dataSource->prepare();
               connectorSplit.reset();
             });

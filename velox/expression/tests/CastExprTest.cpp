@@ -2525,8 +2525,8 @@ TEST_F(CastExprTest, castAsCall) {
   auto input = makeRowVector({makeNullableFlatVector(inputValues)});
   core::TypedExprPtr inputField =
       std::make_shared<const core::FieldAccessTypedExpr>(INTEGER(), "c0");
-  core::TypedExprPtr callExpr = std::make_shared<const core::CallTypedExpr>(
-      DOUBLE(), std::vector<core::TypedExprPtr>{inputField}, "cast");
+  core::TypedExprPtr callExpr =
+      std::make_shared<const core::CallTypedExpr>(DOUBLE(), "cast", inputField);
 
   auto result = evaluate(callExpr, input);
   auto expected = makeNullableFlatVector(outputValues);
@@ -2827,13 +2827,15 @@ TEST_F(CastExprTest, intervalDayTimeToVarchar) {
       "Cast from VARCHAR to INTERVAL DAY TO SECOND is not supported");
 }
 
-class BigintTypeWithCustomComparisonCastOperator : public exec::CastOperator {
- public:
-  static const std::shared_ptr<const CastOperator>& get() {
-    static const std::shared_ptr<const CastOperator> instance{
-        new BigintTypeWithCustomComparisonCastOperator()};
+class BigintTypeWithCustomComparisonCastOperator final
+    : public exec::CastOperator {
+  BigintTypeWithCustomComparisonCastOperator() = default;
 
-    return instance;
+ public:
+  static std::shared_ptr<const CastOperator> get() {
+    VELOX_CONSTEXPR_SINGLETON BigintTypeWithCustomComparisonCastOperator
+        kInstance;
+    return {std::shared_ptr<const CastOperator>{}, &kInstance};
   }
 
   bool isSupportedFromType(const TypePtr& other) const override {
@@ -2861,9 +2863,6 @@ class BigintTypeWithCustomComparisonCastOperator : public exec::CastOperator {
       VectorPtr& result) const override {
     VELOX_FAIL("Cast from BigintTypeWithCustomComparison should not be called");
   }
-
- private:
-  BigintTypeWithCustomComparisonCastOperator() = default;
 };
 
 class BigintTypeWithCustomComparisonTypeFactory : public CustomTypeFactory {

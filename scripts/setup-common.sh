@@ -96,7 +96,13 @@ function install_fbthrift {
 function install_duckdb {
   if $BUILD_DUCKDB; then
     wget_and_untar https://github.com/duckdb/duckdb/archive/refs/tags/"${DUCKDB_VERSION}".tar.gz duckdb
-    cmake_install_dir duckdb -DBUILD_UNITTESTS=OFF -DENABLE_SANITIZER=OFF -DENABLE_UBSAN=OFF -DBUILD_SHELL=OFF -DEXPORT_DLL_SYMBOLS=OFF -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}"
+    # DuckDB uses git commands to retrieve version information during the build,
+    # which works with git clone. To prevent incorrectly using the parent project's
+    # git version when building from a tarball, we define GIT_COMMIT_HASH to skip
+    # that.
+    cmake_install_dir duckdb \
+      -DGIT_COMMIT_HASH="6536a77" -DBUILD_UNITTESTS=OFF -DENABLE_SANITIZER=OFF -DENABLE_UBSAN=OFF \
+      -DBUILD_SHELL=OFF -DEXPORT_DLL_SYMBOLS=OFF -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}"
   fi
 }
 
@@ -232,7 +238,7 @@ function install_stemmer {
   wget_and_untar https://snowballstem.org/dist/libstemmer_c-"${STEMMER_VERSION}".tar.gz stemmer
   (
     cd "${DEPENDENCY_DIR}"/stemmer || exit
-    sed -i '/CPPFLAGS=-Iinclude/ s/$/ -fPIC/' Makefile
+    sed -i='' '/CPPFLAGS=-Iinclude/ s/$/ -fPIC/' Makefile
     make clean && make "-j${NPROC}"
     ${SUDO} cp libstemmer.a "${INSTALL_PREFIX}"/lib/
     ${SUDO} cp include/libstemmer.h "${INSTALL_PREFIX}"/include/

@@ -61,11 +61,11 @@ HiveDataSource::HiveDataSource(
     const connector::ConnectorTableHandlePtr& tableHandle,
     const connector::ColumnHandleMap& columnHandles,
     FileHandleFactory* fileHandleFactory,
-    folly::Executor* executor,
+    folly::Executor* ioExecutor,
     const ConnectorQueryCtx* connectorQueryCtx,
     const std::shared_ptr<HiveConfig>& hiveConfig)
     : fileHandleFactory_(fileHandleFactory),
-      executor_(executor),
+      ioExecutor_(ioExecutor),
       connectorQueryCtx_(connectorQueryCtx),
       hiveConfig_(hiveConfig),
       pool_(connectorQueryCtx->memoryPool()),
@@ -217,7 +217,7 @@ std::unique_ptr<SplitReader> HiveDataSource::createSplitReader() {
       ioStats_,
       fsStats_,
       fileHandleFactory_,
-      executor_,
+      ioExecutor_,
       scanSpec_);
 }
 
@@ -432,7 +432,7 @@ std::unordered_map<std::string, RuntimeCounter> HiveDataSource::runtimeStats() {
        {"totalScanTime",
         RuntimeCounter(
             ioStats_->totalScanTime(), RuntimeCounter::Unit::kNanos)},
-       {"totalRemainingFilterTime",
+       {Connector::kTotalRemainingFilterTime,
         RuntimeCounter(
             totalRemainingFilterTime_.load(std::memory_order_relaxed),
             RuntimeCounter::Unit::kNanos)},
@@ -550,7 +550,7 @@ std::shared_ptr<wave::WaveDataSource> HiveDataSource::toWaveDataSource() {
         readerOutputType_,
         &partitionKeys_,
         fileHandleFactory_,
-        executor_,
+        ioExecutor_,
         connectorQueryCtx_,
         hiveConfig_,
         ioStats_,
