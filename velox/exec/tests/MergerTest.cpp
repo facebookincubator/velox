@@ -450,13 +450,12 @@ TEST_F(MergerTest, spillMergerException) {
   testSettings.push_back({1024, 8, 2});
 
   std::atomic_int cnt{0};
-  const auto errorMessage = "SpillMerger::readFromSpillFileStream fail";
+  const auto errorMessage = "ConcatFilesSpillBatchStream::nextBatch fail";
   SCOPED_TESTVALUE_SET(
-      "facebook::velox::exec::SpillMerger::readFromSpillFileStream",
+      "facebook::velox::exec::ConcatFilesSpillBatchStream::nextBatch",
       std::function<void(void*)>([&](void* /*unused*/) {
         if (cnt++ == 3) {
-          // LOG(ERROR) << "Throw SpillMerger::readFromSpillFileStream fail";
-          VELOX_FAIL("SpillMerger::readFromSpillFileStream fail");
+          VELOX_FAIL("ConcatFilesSpillBatchStream::nextBatch fail");
         }
       }));
   const auto sources = createMergeSources(5, 2);

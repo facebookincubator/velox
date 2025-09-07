@@ -735,7 +735,7 @@ DEBUG_ONLY_TEST_F(MergeTest, localMergeAbort) {
           }));
 
   SCOPED_TESTVALUE_SET(
-      "facebook::velox::exec::SpillMerger::asyncReadFromSpillFileStream",
+      "facebook::velox::exec::SpillMerger::readFromSpillFileStream",
       std::function<void(void*)>([&](void* /*unused*/) {
         if (cnt++ == 2) {
           blocked = true;

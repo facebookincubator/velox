@@ -625,28 +625,10 @@ std::unique_ptr<SourceMerger> SpillMerger::createSourceMerger(
       type, std::move(streams), maxOutputBatchRows, maxOutputBatchBytes, pool);
 }
 
-// static.
-void SpillMerger::asyncReadFromSpillFileStream(
-    const std::weak_ptr<SpillMerger>& mergeHolder,
-    size_t streamIdx) {
-  TestValue::adjust(
-      "facebook::velox::exec::SpillMerger::asyncReadFromSpillFileStream",
-      static_cast<void*>(0));
-  const auto merger = mergeHolder.lock();
-  if (merger == nullptr) {
-    LOG(ERROR) << "SpillMerger is destroyed, abandon reading from batch stream";
-    return;
-  }
-  merger->readFromSpillFileStream(mergeHolder, streamIdx);
-}
-
 void SpillMerger::readFromSpillFileStream(
     const std::weak_ptr<SpillMerger>& mergeHolder,
     size_t streamIdx) {
   try {
-    TestValue::adjust(
-        "facebook::velox::exec::SpillMerger::readFromSpillFileStream",
-        static_cast<void*>(0));
     const auto merger = mergeHolder.lock();
     if (merger == nullptr) {
       LOG(ERROR)
@@ -656,7 +638,7 @@ void SpillMerger::readFromSpillFileStream(
 
     if (*error_.rlock() != nullptr) {
       ContinueFuture future{ContinueFuture::makeEmpty()};
-      LOG(ERROR) << "MACDUAN " << streamIdx << " th source end, push null.";
+      LOG(ERROR) << "Stop the " << streamIdx << " th source on error.";
       sources_[streamIdx]->enqueue(nullptr, &future);
       return;
     }
@@ -664,46 +646,36 @@ void SpillMerger::readFromSpillFileStream(
     RowVectorPtr vector;
     ContinueFuture future{ContinueFuture::makeEmpty()};
     if (!batchStreams_[streamIdx]->nextBatch(vector)) {
-      LOG(ERROR) << "MACDUAN " << streamIdx
-                 << " th source reach th end, push null.";
-
       VELOX_CHECK_NULL(vector);
       sources_[streamIdx]->enqueue(nullptr, &future);
       VELOX_CHECK(!future.valid());
       return;
     }
+
     const auto blockingReason =
         sources_[streamIdx]->enqueue(std::move(vector), &future);
-    // TODO: add async error handling.
     if (blockingReason == BlockingReason::kNotBlocked) {
       VELOX_CHECK(!future.valid());
       readFromSpillFileStream(mergeHolder, streamIdx);
     } else {
       VELOX_CHECK(future.valid());
-      std::move(future).via(executor_).thenTry([this, mergeHolder, streamIdx](
-                                                   folly::Try<folly::Unit>&&
-                                                       t) {
-        const auto merger = mergeHolder.lock();
-        if (merger == nullptr) {
-          LOG(ERROR)
-              << "SpillMerger is destroyed, abandon reading from batch stream";
-          return;
-        }
-        if (t.hasException()) {
-          LOG(ERROR) << "Stop the " << streamIdx
-                     << "th batch stream producer on error: "
-                     << t.exception().what();
-          *error_.wlock() = std::make_exception_ptr(t.exception());
-          ContinueFuture future{ContinueFuture::makeEmpty()};
-          sources_[streamIdx]->enqueue(nullptr, &future);
-        } else {
-          readFromSpillFileStream(mergeHolder, streamIdx);
-        }
-      });
+      std::move(future).via(executor_).thenTry(
+          [this, mergeHolder, streamIdx](folly::Try<folly::Unit>&& t) {
+            const auto merger = mergeHolder.lock();
+            if (merger == nullptr) {
+              return;
+            }
+            if (t.hasException()) {
+              LOG(ERROR) << "Stop the " << streamIdx << " th source on error.";
+              *error_.wlock() = std::make_exception_ptr(t.exception());
+              ContinueFuture future{ContinueFuture::makeEmpty()};
+              sources_[streamIdx]->enqueue(nullptr, &future);
+            } else {
+              readFromSpillFileStream(mergeHolder, streamIdx);
+            }
+          });
     }
   } catch (const std::exception& e) {
-    LOG(ERROR) << "MACDUAN " << streamIdx << " th catch exception. "
-               << e.what();
     *error_.wlock() = std::current_exception();
     readFromSpillFileStream(mergeHolder, streamIdx);
   }
@@ -713,11 +685,7 @@ void SpillMerger::scheduleAsyncSpillFileStreamReads() {
   VELOX_CHECK_EQ(batchStreams_.size(), sources_.size());
   for (auto i = 0; i < batchStreams_.size(); ++i) {
     executor_->add([&, streamIdx = i]() {
-      try {
-        readFromSpillFileStream(std::weak_ptr(shared_from_this()), streamIdx);
-      } catch (...) {
-        *error_.wlock() = std::current_exception();
-      }
+      readFromSpillFileStream(std::weak_ptr(shared_from_this()), streamIdx);
     });
   }
 }

@@ -124,7 +124,6 @@ class LocalMergeSource : public MergeSource {
 
       if (data_.empty()) {
         if (atEnd_) {
-          LOG(ERROR) << "Macduan atEnd";
           return BlockingReason::kNotBlocked;
         }
 
