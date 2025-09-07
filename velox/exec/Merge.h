@@ -302,7 +302,7 @@ class SpillMerger : public std::enable_shared_from_this<SpillMerger> {
 
   RowVectorPtr getOutput(
       std::vector<ContinueFuture>& sourceBlockingFutures,
-      bool& atEnd) const;
+      bool& atEnd);
 
  private:
   static std::vector<std::shared_ptr<MergeSource>> createMergeSources(

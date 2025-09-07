@@ -562,7 +562,7 @@ void SpillMerger::start() {
 
 RowVectorPtr SpillMerger::getOutput(
     std::vector<ContinueFuture>& sourceBlockingFutures,
-    bool& atEnd) const {
+    bool& atEnd) {
   TestValue::adjust(
       "facebook::velox::exec::SpillMerger::getOutput", &sourceBlockingFutures);
   if (*error_.rlock() != nullptr) {
@@ -664,23 +664,33 @@ void SpillMerger::readFromSpillFileStream(
       readFromSpillFileStream(mergeHolder, streamIdx);
     } else {
       VELOX_CHECK(future.valid());
-      std::move(future)
-          .via(executor_)
-          .thenValue([this, mergeHolder, streamIdx](folly::Unit) {
-            readFromSpillFileStream(mergeHolder, streamIdx);
-          })
-          .thenError(
-              folly::tag_t<std::exception>{},
-              [streamIdx](const std::exception& e) {
-                LOG(ERROR) << "Stop the " << streamIdx
-                           << "th batch stream producer on error: " << e.what();
-              });
+      std::move(future).via(executor_).thenTry([this, mergeHolder, streamIdx](
+                                                   folly::Try<folly::Unit>&&
+                                                       t) {
+        const auto merger = mergeHolder.lock();
+        if (merger == nullptr) {
+          LOG(ERROR)
+              << "SpillMerger is destroyed, abandon reading from batch stream";
+          return;
+        }
+        if (t.hasException()) {
+          LOG(ERROR) << "Stop the " << streamIdx
+                     << "th batch stream producer on error: "
+                     << t.exception().what();
+          *error_.wlock() = std::make_exception_ptr(t.exception());
+          ContinueFuture future{ContinueFuture::makeEmpty()};
+          sources_[streamIdx]->enqueue(nullptr, &future);
+          future.wait();
+        } else {
+          readFromSpillFileStream(mergeHolder, streamIdx);
+        }
+      });
     }
   } catch (...) {
     *error_.wlock() = std::current_exception();
-    batchStreams_[streamIdx].reset();
     ContinueFuture future{ContinueFuture::makeEmpty()};
     sources_[streamIdx]->enqueue(nullptr, &future);
+    future.wait();
   }
 }
 
