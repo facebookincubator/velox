@@ -426,7 +426,7 @@ const std::vector<TypeParameter>* RowType::ensureParameters() const {
           oldParameters,
           newParameters.get(),
           std::memory_order_acq_rel,
-          std::memory_order_acquire)) {
+          std::memory_order_acquire)) [[unlikely]] {
     return oldParameters;
   }
 
@@ -437,7 +437,8 @@ const RowType::NameToIndex* RowType::ensureNameToIndex() const {
   auto newNameToIndex = std::make_unique<NameToIndex>();
   newNameToIndex->reserve(names_.size());
   for (uint32_t i = 0; const auto& name : names_) {
-    if (auto* oldNameToIndex = nameToIndex_.load(std::memory_order_acquire)) {
+    if (auto* oldNameToIndex = nameToIndex_.load(std::memory_order_acquire))
+        [[unlikely]] {
       return oldNameToIndex;
     }
     newNameToIndex->emplace(NameIndex{name, i++});
@@ -448,7 +449,7 @@ const RowType::NameToIndex* RowType::ensureNameToIndex() const {
           oldNameToIndex,
           newNameToIndex.get(),
           std::memory_order_acq_rel,
-          std::memory_order_acquire)) {
+          std::memory_order_acquire)) [[unlikely]] {
     return oldNameToIndex;
   }
 
