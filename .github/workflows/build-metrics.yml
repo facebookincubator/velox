@@ -36,7 +36,7 @@ permissions:
 jobs:
   metrics:
     name: Linux ${{ matrix.link-type }} - ${{ matrix.type }} with adapters
-    if: ${{ github.repository == 'facebookincubator/velox' }}
+    if: false # ${{ github.repository == 'facebookincubator/velox' }}
     runs-on: ${{ matrix.runner }}
     container: ghcr.io/facebookincubator/velox-dev:adapters
     strategy:
@@ -142,7 +142,7 @@ jobs:
       contents: write
     runs-on: ubuntu-latest
     name: Generate and Upload Build Metric Report
-    needs: metrics
+    # needs: metrics
     steps:
       - name: Checkout
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
