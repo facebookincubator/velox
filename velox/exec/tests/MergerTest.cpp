@@ -455,6 +455,7 @@ TEST_F(MergerTest, spillMergerException) {
       "facebook::velox::exec::SpillMerger::readFromSpillFileStream",
       std::function<void(void*)>([&](void* /*unused*/) {
         if (cnt++ == 3) {
+          // LOG(ERROR) << "Throw SpillMerger::readFromSpillFileStream fail";
           VELOX_FAIL("SpillMerger::readFromSpillFileStream fail");
         }
       }));

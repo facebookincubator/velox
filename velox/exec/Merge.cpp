@@ -565,14 +565,20 @@ RowVectorPtr SpillMerger::getOutput(
     bool& atEnd) {
   TestValue::adjust(
       "facebook::velox::exec::SpillMerger::getOutput", &sourceBlockingFutures);
-  if (*error_.rlock() != nullptr) {
-    std::rethrow_exception(*error_.rlock());
-  }
   sourceMerger_->isBlocked(sourceBlockingFutures);
   if (!sourceBlockingFutures.empty()) {
     return nullptr;
   }
-  return sourceMerger_->getOutput(sourceBlockingFutures, atEnd);
+  auto output = sourceMerger_->getOutput(sourceBlockingFutures, atEnd);
+  if (atEnd) {
+    if (*error_.rlock() != nullptr) {
+      sourceMerger_.reset();
+      batchStreams_.clear();
+      sources_.clear();
+      std::rethrow_exception(*error_.rlock());
+    }
+  }
+  return output;
 }
 
 std::vector<std::shared_ptr<MergeSource>> SpillMerger::createMergeSources(
@@ -648,9 +654,19 @@ void SpillMerger::readFromSpillFileStream(
       return;
     }
 
+    if (*error_.rlock() != nullptr) {
+      ContinueFuture future{ContinueFuture::makeEmpty()};
+      LOG(ERROR) << "MACDUAN " << streamIdx << " th source end, push null.";
+      sources_[streamIdx]->enqueue(nullptr, &future);
+      return;
+    }
+
     RowVectorPtr vector;
     ContinueFuture future{ContinueFuture::makeEmpty()};
     if (!batchStreams_[streamIdx]->nextBatch(vector)) {
+      LOG(ERROR) << "MACDUAN " << streamIdx
+                 << " th source reach th end, push null.";
+
       VELOX_CHECK_NULL(vector);
       sources_[streamIdx]->enqueue(nullptr, &future);
       VELOX_CHECK(!future.valid());
@@ -680,17 +696,16 @@ void SpillMerger::readFromSpillFileStream(
           *error_.wlock() = std::make_exception_ptr(t.exception());
           ContinueFuture future{ContinueFuture::makeEmpty()};
           sources_[streamIdx]->enqueue(nullptr, &future);
-          future.wait();
         } else {
           readFromSpillFileStream(mergeHolder, streamIdx);
         }
       });
     }
-  } catch (...) {
+  } catch (const std::exception& e) {
+    LOG(ERROR) << "MACDUAN " << streamIdx << " th catch exception. "
+               << e.what();
     *error_.wlock() = std::current_exception();
-    ContinueFuture future{ContinueFuture::makeEmpty()};
-    sources_[streamIdx]->enqueue(nullptr, &future);
-    future.wait();
+    readFromSpillFileStream(mergeHolder, streamIdx);
   }
 }
 
