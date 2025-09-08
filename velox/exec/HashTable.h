@@ -313,16 +313,17 @@ class BaseHashTable {
       folly::Executor* executor = nullptr,
       bool dropDuplicates = false) = 0;
 
-  /// The hash table used for join build in left semi and anti join does not
-  /// retain duplicate join keys by default. This is achieved by constructing
-  /// the hash table in the addInput phase to eliminate duplicate join keys.
-  /// When the percentage of duplicate data is small, it will adaptively adjust
-  /// to not build the hash table in the addInput phase. Instead, it operates
-  /// like other join types by reading all the data before building the hash
-  /// table. This function is used to indicate that the join hash table will not
-  /// be built during the addInput phase, and the input data will also not be
-  /// deduplicated.
-  virtual void joinTableMayHaveDuplicates() = 0;
+  /// The hash table used for join build in left semi and anti join may not
+  /// retain duplicate join keys when allowDuplicates_ is false. This is
+  /// achieved by constructing the hash table in the addInput phase to eliminate
+  /// duplicate join keys. When the percentage of duplicate data is small, it
+  /// will adaptively adjust to not build the hash table in the addInput phase.
+  /// Instead, it operates like other join types by reading all the data before
+  /// building the hash table. This function is used to change the behavior of
+  /// building hash table, if allowDuplicates is true, the join hash table will
+  /// not be built during the addInput phase, and the input data will also not
+  /// be deduplicated, but it will not impact the containing row container.
+  virtual void setAllowDuplicates(bool allowDuplicates) = 0;
 
   /// Returns the memory footprint in bytes for any data structures
   /// owned by 'this'.
@@ -599,8 +600,8 @@ class HashTable : public BaseHashTable {
     return hasDuplicates_.check();
   }
 
-  void joinTableMayHaveDuplicates() override {
-    allowDuplicates_ = true;
+  void setAllowDuplicates(const bool allowDuplicates) override {
+    allowDuplicates_ = allowDuplicates;
   }
 
   HashMode hashMode() const override {
