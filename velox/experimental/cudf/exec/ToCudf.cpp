@@ -17,6 +17,7 @@
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnector.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveDataSource.h"
+#include "velox/experimental/cudf/exec/CudfAssignUniqueId.h"
 #include "velox/experimental/cudf/exec/CudfConversion.h"
 #include "velox/experimental/cudf/exec/CudfFilterProject.h"
 #include "velox/experimental/cudf/exec/CudfHashAggregation.h"
@@ -31,6 +32,7 @@
 #include "folly/Conv.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/TableHandle.h"
+#include "velox/exec/AssignUniqueId.h"
 #include "velox/exec/Driver.h"
 #include "velox/exec/FilterProject.h"
 #include "velox/exec/HashAggregation.h"
@@ -149,7 +151,8 @@ bool CompileState::compile(bool force_replace) {
                    exec::HashAggregation,
                    exec::Limit,
                    exec::LocalPartition,
-                   exec::LocalExchange>(op) ||
+                   exec::LocalExchange,
+                   exec::AssignUniqueId>(op) ||
             isFilterProjectSupported(op) || isJoinSupported(op) ||
             isTableScanSupported(op);
       };
@@ -166,7 +169,8 @@ bool CompileState::compile(bool force_replace) {
                exec::OrderBy,
                exec::HashAggregation,
                exec::Limit,
-               exec::LocalPartition>(op) ||
+               exec::LocalPartition,
+               exec::AssignUniqueId>(op) ||
         isFilterProjectSupported(op) || isJoinSupported(op);
   };
   auto producesGpuOutput = [isFilterProjectSupported,
@@ -176,7 +180,8 @@ bool CompileState::compile(bool force_replace) {
                exec::OrderBy,
                exec::HashAggregation,
                exec::Limit,
-               exec::LocalExchange>(op) ||
+               exec::LocalExchange,
+               exec::AssignUniqueId>(op) ||
         isFilterProjectSupported(op) ||
         (isAnyOf<exec::HashProbe>(op) && isJoinSupported(op)) ||
         (isTableScanSupported(op));
@@ -297,6 +302,18 @@ bool CompileState::compile(bool force_replace) {
     } else if (
         auto localExchangeOp = dynamic_cast<exec::LocalExchange*>(oper)) {
       keepOperator = 1;
+    } else if (
+        auto assignUniqueIdOp = dynamic_cast<exec::AssignUniqueId*>(oper)) {
+      auto planNode = std::dynamic_pointer_cast<const core::AssignUniqueIdNode>(
+          getPlanNode(assignUniqueIdOp->planNodeId()));
+      VELOX_CHECK(planNode != nullptr);
+      replaceOp.push_back(std::make_unique<CudfAssignUniqueId>(
+          id,
+          ctx,
+          planNode,
+          planNode->taskUniqueId(),
+          planNode->uniqueIdCounter()));
+      replaceOp.back()->initialize();
     }
 
     if (producesGpuOutput(oper) and
