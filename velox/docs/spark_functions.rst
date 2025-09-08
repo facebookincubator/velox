@@ -2,10 +2,11 @@
 Spark Functions
 ***********************
 
-The semantics of Spark functions align with Spark 3.5. In the function descriptions,
-a function is marked as *ANSI compliant* if it adheres to ANSI standard, subject to
-the ``spark.ansi_enabled`` configuration. Otherwise, it simply follows Spark's semantics
-in ANSI OFF mode.
+The semantics of Spark functions align with
+`Spark 3.5 <https://spark.apache.org/docs/3.5.0/api/sql/index.html>`_.
+In the function descriptions, a function is marked as *ANSI compliant*
+if it adheres to ANSI standard, subject to the :doc:`spark.ansi_enabled <configs>`
+configuration. Otherwise, it simply follows Spark's semantics in ANSI OFF mode.
 
 .. toctree::
     :maxdepth: 1
