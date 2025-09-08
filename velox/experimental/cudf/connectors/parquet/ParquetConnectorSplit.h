@@ -30,8 +30,9 @@ struct ParquetConnectorSplit
     : public facebook::velox::connector::ConnectorSplit {
   const std::string filePath;
   const dwio::common::FileFormat fileFormat{dwio::common::FileFormat::PARQUET};
-  const uint64_t start;
-  const uint64_t length;
+  const uint64_t start; // Represents the number of rows to skip or row offset
+  const uint64_t
+      length; // Represents the number of rows to read after `start` rows
   const cudf::io::source_info cudfSourceInfo;
 
   /// These represent columns like $file_size, $file_modified_time that are
@@ -53,10 +54,9 @@ struct ParquetConnectorSplit
         cudfSourceInfo({filePath}),
         infoColumns(_infoColumns) {
     VELOX_USER_CHECK(
-        start <=
-            static_cast<uint64_t>(std::numeric_limits<int64_t>::max()),
+        start <= static_cast<uint64_t>(std::numeric_limits<int64_t>::max()),
         "ParquetConnectorSplit `start` (rows to skip) must be less than or equal to INT64_MAX");
-        VELOX_USER_CHECK(
+    VELOX_USER_CHECK(
         length <=
             static_cast<uint64_t>(std::numeric_limits<cudf::size_type>::max()),
         "ParquetConnectorSplit `length` (rows to read after skipping) must be less than or equal to 2^31");
@@ -107,8 +107,7 @@ class ParquetConnectorSplitBuilder {
 
   ParquetConnectorSplitBuilder& start(uint64_t start) {
     VELOX_USER_CHECK(
-        start <=
-            static_cast<uint64_t>(std::numeric_limits<int64_t>::max()),
+        start <= static_cast<uint64_t>(std::numeric_limits<int64_t>::max()),
         "ParquetConnectorSplit `start` (rows to skip) must be less than or equal to INT64_MAX");
     start_ = start;
     return *this;
@@ -131,8 +130,10 @@ class ParquetConnectorSplitBuilder {
  private:
   const std::string filePath_;
   std::string connectorId_;
-  uint64_t start_{0};
-  uint64_t length_{std::numeric_limits<cudf::size_type>::max()};
+  uint64_t start_{0}; // represents rows to skip or row offset
+  uint64_t length_{
+      std::numeric_limits<cudf::size_type>::max()}; // represents rows to read
+                                                    // after `start_` rows
   int64_t splitWeight_{0};
   std::unordered_map<std::string, std::string> infoColumns_ = {};
 };
