@@ -28,7 +28,7 @@ class IcebergFunctionBaseTest
     FunctionBaseTest::SetUpTestCase();
     registerFunctions("");
   }
-  
+
   void SetUp() override {
     options_.parseDecimalAsDouble = false;
   }

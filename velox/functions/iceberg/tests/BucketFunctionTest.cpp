@@ -27,7 +27,6 @@ namespace {
 
 class BucketFunctionTest
     : public functions::iceberg::test::IcebergFunctionBaseTest {
-
  protected:
   template <typename T>
   std::optional<int32_t> bucket(

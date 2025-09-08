@@ -25,7 +25,6 @@ namespace facebook::velox::functions::iceberg {
 namespace {
 class TruncateTest : public facebook::velox::functions::iceberg::test::
                          IcebergFunctionBaseTest {
-
  protected:
   template <typename T>
   std::optional<T> truncate(
