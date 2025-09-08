@@ -83,7 +83,7 @@ W_WEB_SALES_TBL* mk_web_sales_master(
    */
 
   r->ws_sold_date_sk = mk_join(WS_SOLD_DATE_SK, DATET, 1, dsdGenContext);
-  r->ws_sold_time_sk = mk_join(WS_SOLD_TIME_SK, TIME, 1, dsdGenContext);
+  r->ws_sold_time_sk = mk_join(WS_SOLD_TIME_SK, TIMET, 1, dsdGenContext);
   r->ws_bill_customer_sk =
       mk_join(WS_BILL_CUSTOMER_SK, CUSTOMER, 1, dsdGenContext);
   r->ws_bill_cdemo_sk =

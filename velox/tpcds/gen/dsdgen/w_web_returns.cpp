@@ -92,7 +92,8 @@ int mk_w_web_returns(void* row, ds_key_t index, DSDGenContext& dsdGenContext) {
    * mk_join, based on sales date */
   r->wr_returned_date_sk =
       mk_join(WR_RETURNED_DATE_SK, DATET, sale->ws_ship_date_sk, dsdGenContext);
-  r->wr_returned_time_sk = mk_join(WR_RETURNED_TIME_SK, TIME, 1, dsdGenContext);
+  r->wr_returned_time_sk =
+      mk_join(WR_RETURNED_TIME_SK, TIMET, 1, dsdGenContext);
 
   /* most items are returned by the people they were shipped to, but some are
    * returned by other folks

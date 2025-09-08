@@ -101,7 +101,7 @@ W_CATALOG_SALES_TBL* mk_catalog_sales_master(
 
   r->cs_sold_date_sk = dsdGenContext.jDate;
   r->cs_sold_time_sk =
-      mk_join(CS_SOLD_TIME_SK, TIME, r->cs_call_center_sk, dsdGenContext);
+      mk_join(CS_SOLD_TIME_SK, TIMET, r->cs_call_center_sk, dsdGenContext);
   r->cs_call_center_sk = (r->cs_sold_date_sk == -1)
       ? -1
       : mk_join(

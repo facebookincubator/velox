@@ -75,7 +75,7 @@ W_STORE_SALES_TBL* mk_master_store_sales(
   }
 
   r->ss_sold_store_sk = mk_join(SS_SOLD_STORE_SK, STORE, 1, dsdGenContext);
-  r->ss_sold_time_sk = mk_join(SS_SOLD_TIME_SK, TIME, 1, dsdGenContext);
+  r->ss_sold_time_sk = mk_join(SS_SOLD_TIME_SK, TIMET, 1, dsdGenContext);
   r->ss_sold_date_sk = mk_join(SS_SOLD_DATE_SK, DATET, 1, dsdGenContext);
   r->ss_sold_customer_sk =
       mk_join(SS_SOLD_CUSTOMER_SK, CUSTOMER, 1, dsdGenContext);

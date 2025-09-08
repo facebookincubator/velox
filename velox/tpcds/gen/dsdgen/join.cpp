@@ -441,7 +441,7 @@ ds_key_t mk_join(
           dsdGenContext);
       return (
           date_join(nFromTable, from_col, join_count, nYear, dsdGenContext));
-    case TIME:
+    case TIMET:
       return (time_join(nFromTable, from_col, join_count, dsdGenContext));
       /* the rest of the tables use standard, uniform joins */
     default:

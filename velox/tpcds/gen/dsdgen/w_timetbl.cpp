@@ -48,7 +48,7 @@ int mk_w_time(void* info_arr, ds_key_t index, DSDGenContext& dsdGenContext) {
   /* begin locals declarations */
   int nTemp;
   struct W_TIME_TBL* r;
-  tdef* pT = getSimpleTdefsByNumber(TIME, dsdGenContext);
+  tdef* pT = getSimpleTdefsByNumber(TIMET, dsdGenContext);
 
   r = &dsdGenContext.g_w_time;
 
@@ -67,7 +67,7 @@ int mk_w_time(void* info_arr, ds_key_t index, DSDGenContext& dsdGenContext) {
   dist_member(&r->t_sub_shift, "hours", r->t_hour + 1, 4, dsdGenContext);
   dist_member(&r->t_meal_time, "hours", r->t_hour + 1, 5, dsdGenContext);
 
-  void* info = append_info_get(info_arr, TIME);
+  void* info = append_info_get(info_arr, TIMET);
   append_row_start(info);
   append_key(T_TIME_SK, info, r->t_time_sk);
   append_varchar(T_TIME_ID, info, r->t_time_id);
