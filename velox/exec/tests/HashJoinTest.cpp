@@ -6543,8 +6543,8 @@ TEST_F(HashJoinTest, semiJoinAbandonBuildNoDupHashEarly) {
                   .planNode();
 
   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
-      .config(core::QueryConfig::kAbandonBuildNoDupHashMinRows, "1")
-      .config(core::QueryConfig::kAbandonBuildNoDupHashMinPct, "10")
+      .config(core::QueryConfig::kAbandonHashBuildDedupMinRows, "1")
+      .config(core::QueryConfig::kAbandonHashBuildDedupMinPct, "10")
       .planNode(plan)
       .referenceQuery(
           "SELECT t.c0, t.c1, EXISTS (SELECT * FROM u WHERE t.c0 = u.c0) FROM t")
@@ -6569,8 +6569,8 @@ TEST_F(HashJoinTest, antiJoinAbandonBuildNoDupHashEarly) {
         });
   });
   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
-      .config(core::QueryConfig::kAbandonBuildNoDupHashMinRows, "1")
-      .config(core::QueryConfig::kAbandonBuildNoDupHashMinPct, "10")
+      .config(core::QueryConfig::kAbandonHashBuildDedupMinRows, "1")
+      .config(core::QueryConfig::kAbandonHashBuildDedupMinPct, "10")
       .numDrivers(numDrivers_)
       .probeKeys({"t0"})
       .probeVectors(std::vector<RowVectorPtr>(probeVectors))
@@ -6626,8 +6626,8 @@ TEST_F(HashJoinTest, semiJoinDeduplicateResetCapacity) {
                   .planNode();
 
   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
-      .config(core::QueryConfig::kAbandonBuildNoDupHashMinRows, "10")
-      .config(core::QueryConfig::kAbandonBuildNoDupHashMinPct, "50")
+      .config(core::QueryConfig::kAbandonHashBuildDedupMinRows, "10")
+      .config(core::QueryConfig::kAbandonHashBuildDedupMinPct, "50")
       .numDrivers(1)
       .checkSpillStats(false)
       .planNode(plan)

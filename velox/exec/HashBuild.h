@@ -283,7 +283,7 @@ class HashBuild final : public Operator {
 
   // Whether to abandon building a HashTable without duplicates in HashBuild
   // addInput phase for left semi/anti join.
-  bool abandonBuildNoDupHash_{false};
+  bool abandonHashBuildDedup_{false};
 
   // The type used to spill hash table which might attach a boolean column to
   // record the probed flag if 'needProbedFlagSpill_' is true.
@@ -333,12 +333,12 @@ class HashBuild final : public Operator {
 
   // Minimum number of rows to see before deciding to give up build no
   // duplicates hash table.
-  const int32_t abandonBuildNoDupHashMinRows_;
+  const int32_t abandonHashBuildDedupMinRows_;
 
   // Min unique rows pct for give up build no duplicates hash table. If more
   // than this many rows are unique, build hash table in addInput phase is not
   // worthwhile.
-  const int32_t abandonBuildNoDupHashMinPct_;
+  const int32_t abandonHashBuildDedupMinPct_;
 };
 
 inline std::ostream& operator<<(std::ostream& os, HashBuild::State state) {
