@@ -55,25 +55,27 @@ struct ParquetConnectorSplit
         infoColumns(_infoColumns) {
     VELOX_USER_CHECK(
         start <= static_cast<uint64_t>(std::numeric_limits<int64_t>::max()),
-        "ParquetConnectorSplit `start` (rows to skip) must be less than or equal to INT64_MAX");
+        "ParquetConnectorSplit `start` (rows to skip) must be less than or equal to INT64_MAX. Filepath: {}",
+        filePath_);
     VELOX_USER_CHECK(
         length <=
             static_cast<uint64_t>(std::numeric_limits<cudf::size_type>::max()),
-        "ParquetConnectorSplit `length` (rows to read after skipping) must be less than or equal to 2^31");
+        "ParquetConnectorSplit `length` (rows to read after skipping) must be less than or equal to 2^31. Filepath: {}",
+        filePath_);
   }
 
   std::string toString() const override;
   std::string getFileName() const;
 
-  const cudf::io::source_info& getCudfSourceInfo() const {
+  const cudf::io::source_info& cudfSourceInfo() const {
     return cudfSourceInfo;
   }
 
-  uint64_t getNumRows() const {
+  uint64_t numRows() const {
     return length;
   }
 
-  uint64_t getSkipRows() const {
+  uint64_t skipRows() const {
     return start;
   }
 
@@ -108,7 +110,8 @@ class ParquetConnectorSplitBuilder {
   ParquetConnectorSplitBuilder& start(uint64_t start) {
     VELOX_USER_CHECK(
         start <= static_cast<uint64_t>(std::numeric_limits<int64_t>::max()),
-        "ParquetConnectorSplit `start` (rows to skip) must be less than or equal to INT64_MAX");
+        "ParquetConnectorSplit `start` (rows to skip) must be less than or equal to INT64_MAX. Filepath: {}",
+        filePath_);
     start_ = start;
     return *this;
   }
@@ -117,7 +120,8 @@ class ParquetConnectorSplitBuilder {
     VELOX_USER_CHECK(
         length <=
             static_cast<uint64_t>(std::numeric_limits<cudf::size_type>::max()),
-        "ParquetConnectorSplit `length` (rows to read after skipping) must be less than or equal to 2^31");
+        "ParquetConnectorSplit `length` (rows to read after skipping) must be less than or equal to 2^31. Filepath: {}",
+        filePath_);
     length_ = length;
     return *this;
   }
