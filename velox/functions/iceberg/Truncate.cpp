@@ -22,8 +22,14 @@
 namespace facebook::velox::functions::iceberg {
 namespace {
 // truncate(width, input) -> truncatedValue
-// For numeric values, it truncates towards zero to the nearest multiple of
-// width. For string values, it truncates to at most width characters.
+// For numeric values, truncate to the nearest lower multiple of width works
+// consistently for both positive and negative values of input, even in
+// languages where the % operator can return a negative remainder. The width is
+// used to truncate decimal values is applied using unscaled value to avoid
+// additional (and potentially conflicting) parameters. For string values, it
+// truncates a valid UTF-8 string with no more than width code points. In
+// contrast to strings, binary values do not have an assumed encoding and are
+// truncated to width bytes.
 template <typename TExec>
 struct TruncateFunction {
   VELOX_DEFINE_FUNCTION_TYPES(TExec);
@@ -44,6 +50,7 @@ struct TruncateFunction {
   template <typename T>
   FOLLY_ALWAYS_INLINE Status call(T& out, int32_t width, T input) {
     VELOX_USER_RETURN_LE(width, 0, "Invalid truncate width");
+    // Truncate to the nearest lower multiple of width.
     out = input - ((input % width) + width) % width;
     return Status::OK();
   }

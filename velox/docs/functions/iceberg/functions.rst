@@ -25,8 +25,8 @@ Refer to `Iceberg documenation <https://iceberg.apache.org/spec/#partition-trans
 
 .. iceberg:function:: truncate(width, input) -> same type as input
    Returns the truncated value of the input based on the specified width.
-   For numeric values, the truncate function is: input - (((inpu % width) + width) % width).
-   The ``width`` is used to truncate decimal values is applied using the scale of the decimal column to avoid additional (and potentially conflicting) parameters.
+   For numeric values, truncate to the nearest lower multiple of ``width``, the truncate function is: input - (((input % width) + width) % width).
+   The ``width`` is used to truncate decimal values is applied using unscaled value to avoid additional (and potentially conflicting) parameters.
    For string values, it truncates a valid UTF-8 string with no more than ``width`` code points.
    In contrast to strings, binary values do not have an assumed encoding and are truncated to ``width`` bytes.
 
