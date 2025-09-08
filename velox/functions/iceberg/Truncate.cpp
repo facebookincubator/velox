@@ -44,7 +44,6 @@ struct TruncateFunction {
   template <typename T>
   FOLLY_ALWAYS_INLINE Status call(T& out, int32_t width, T input) {
     VELOX_USER_RETURN_LE(width, 0, "Invalid truncate width");
-    // Truncates towards zero to the nearest multiple of width.
     out = input - ((input % width) + width) % width;
     return Status::OK();
   }
