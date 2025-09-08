@@ -27,10 +27,6 @@ namespace {
 
 class BucketFunctionTest
     : public functions::iceberg::test::IcebergFunctionBaseTest {
- public:
-  BucketFunctionTest() {
-    options_.parseDecimalAsDouble = false;
-  }
 
  protected:
   template <typename T>

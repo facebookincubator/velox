@@ -25,10 +25,6 @@ namespace facebook::velox::functions::iceberg {
 namespace {
 class TruncateTest : public facebook::velox::functions::iceberg::test::
                          IcebergFunctionBaseTest {
- public:
-  TruncateTest() {
-    options_.parseDecimalAsDouble = false;
-  }
 
  protected:
   template <typename T>
@@ -77,7 +73,7 @@ TEST_F(TruncateTest, smallInt) {
   EXPECT_EQ(truncate<int16_t>(10, -5), -10);
   EXPECT_EQ(truncate<int16_t>(10, -10), -10);
   EXPECT_EQ(truncate<int16_t>(10, -11), -20);
-
+  EXPECT_EQ(truncate<int16_t>(7, 22), 21);
   EXPECT_EQ(truncate<int16_t>(2, -1), -2);
   EXPECT_EQ(truncate<int16_t>(10, std::nullopt), std::nullopt);
 }

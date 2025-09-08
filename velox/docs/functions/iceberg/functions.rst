@@ -25,15 +25,19 @@ Refer to `Iceberg documenation <https://iceberg.apache.org/spec/#partition-trans
 
 .. iceberg:function:: truncate(width, input) -> same type as input
    Returns the truncated value of the input based on the specified width.
-   For numeric values, it truncates towards zero to the nearest multiple of ``width``.
-   For string values, it truncates to at most ``width`` characters.
+   For numeric values, the truncate function is: input - (((inpu % width) + width) % width).
+   The ``width`` is used to truncate decimal values is applied using the scale of the decimal column to avoid additional (and potentially conflicting) parameters.
+   For string values, it truncates a valid UTF-8 string with no more than ``width`` code points.
+   In contrast to strings, binary values do not have an assumed encoding and are truncated to ``width`` bytes.
 
    Argument ``width`` must be a positive integer.
-   Supported types for ``input`` are: SHORTINT, TYNYINT, SMALLINT, INTEGER, BIGINT, DECIMAL, VARCHAR, VARBINARY.
-
-   ::
+   Supported types for ``input`` are: SHORTINT, TYNYINT, SMALLINT, INTEGER, BIGINT, DECIMAL, VARCHAR, VARBINARY. ::
 
        SELECT truncate(10, 11); -- 10
+       SELECT truncate(10, -11); -- -20
+       SELECT truncate(7, 22); -- 21
+       SELECT truncate(0, 11); -- throw
+       SELECT truncate(-3, 11); -- throw
        SELECT truncate(4, 'iceberg'); -- 'iceb'
        SELECT truncate(1, '测试'); -- 测
        SELECT truncate(6, '测试'); -- 测试
