@@ -22,3 +22,19 @@ Refer to `Iceberg documenation <https://iceberg.apache.org/spec/#partition-trans
    Supported types for ``input`` are INTEGER, BIGINT, DECIMAL, DATE, TIMESTAMP, VARCHAR, VARBINARY. ::
        SELECT bucket(128, 'abcd'); -- 4
        SELECT bucket(100, 34L); -- 79
+
+.. iceberg:function:: truncate(width, input) -> same type as input
+   Returns the truncated value of the input based on the specified width.
+   For numeric values, it truncates towards zero to the nearest multiple of ``width``.
+   For string values, it truncates to at most ``width`` characters.
+
+   Argument ``width`` must be a positive integer.
+   Supported types for ``input`` are: SHORTINT, TYNYINT, SMALLINT, INTEGER, BIGINT, DECIMAL, VARCHAR, VARBINARY.
+
+   ::
+
+       SELECT truncate(10, 11); -- 10
+       SELECT truncate(4, 'iceberg'); -- 'iceb'
+       SELECT truncate(1, '测试'); -- 测
+       SELECT truncate(6, '测试'); -- 测试
+       SELECT truncate(6, cast('测试' as binary)); -- 测试_
