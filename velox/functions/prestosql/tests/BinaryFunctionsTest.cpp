@@ -866,4 +866,26 @@ TEST_F(BinaryFunctionsTest, murmur3_x64_128) {
   EXPECT_EQ(murmur3_x64_128(std::nullopt), std::nullopt);
 }
 
+TEST_F(BinaryFunctionsTest, hashCodeFunctionVarbinary) {
+  const auto hashCode = [&](std::optional<std::string> value) {
+    return evaluateOnce<int64_t>(
+        "hash_code_internal(c0)", VARBINARY(), std::move(value));
+  };
+
+  EXPECT_EQ(std::nullopt, hashCode(std::nullopt));
+
+  EXPECT_EQ(-1205034819632174695, hashCode(""));
+  EXPECT_EQ(4952883123889572249, hashCode("abc"));
+  EXPECT_EQ(-1843406881296486760, hashCode("ABC"));
+  EXPECT_EQ(-2731884271685740652, hashCode("string to hash_code as param"));
+  EXPECT_EQ(6332497344822543626, hashCode("special characters %_@"));
+  EXPECT_EQ(-3364246049109667261, hashCode("    leading space"));
+  // Unicode characters
+  EXPECT_EQ(-7331673579364787606, hashCode("café"));
+  // String with null bytes
+  EXPECT_EQ(160339756714205673, hashCode("abc\\x00def"));
+  // Non-ASCII strings
+  EXPECT_EQ(8176744303664166369, hashCode("日本語"));
+}
+
 } // namespace

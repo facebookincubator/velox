@@ -65,6 +65,17 @@ struct XxHash64Function {
   }
 };
 
+/// hash_code(varbinary) → bigint
+template <typename T>
+struct HashCodeVarbinaryFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE
+  void call(out_type<int64_t>& result, const arg_type<Varbinary>& input) {
+    result = XXH64(input.data(), input.size(), 0);
+  }
+};
+
 /// md5(varbinary) → varbinary
 template <typename T>
 struct Md5Function {

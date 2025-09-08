@@ -22,6 +22,7 @@
 #include "velox/functions/lib/DateTimeFormatter.h"
 #include "velox/functions/lib/TimeUtils.h"
 #include "velox/functions/prestosql/DateTimeImpl.h"
+#include "velox/functions/prestosql/HashCodeUtils.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/TimestampConversion.h"
 #include "velox/type/Type.h"
@@ -1685,6 +1686,18 @@ struct XxHash64TimestampFunction {
     // Use the milliseconds representation of the timestamp
     auto timestamp_millis = input.toMillis();
     result = XXH64(&timestamp_millis, sizeof(timestamp_millis), 0);
+  }
+};
+
+/// hash_code(timestamp) → bigint
+template <typename T>
+struct HashCodeTimestampFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE
+  void call(out_type<int64_t>& result, const arg_type<Timestamp>& input) {
+    auto timestamp_millis = input.toMillis();
+    result = HashCodeUtils::hashInteger<int64_t>(timestamp_millis);
   }
 };
 
