@@ -16,7 +16,13 @@
 
 #pragma once
 
+#include "folly/concurrency/ConcurrentHashMap.h"
+#include "velox/common/file/FileSystems.h"
+
 namespace facebook::velox::filesystems {
+
+extern folly::ConcurrentHashMap<std::string, std::shared_ptr<FileSystem>>
+    registeredFilesystems;
 
 // Register the HDFS.
 void registerHdfsFileSystem();

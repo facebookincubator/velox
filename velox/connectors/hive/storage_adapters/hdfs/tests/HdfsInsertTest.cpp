@@ -47,6 +47,10 @@ class HdfsInsertTest : public testing::Test, public InsertTest {
   }
 
   void TearDown() override {
+    for (const auto& [_, filesystem] :
+         facebook::velox::filesystems::registeredFilesystems) {
+      filesystem->close();
+    }
     InsertTest::TearDown();
     miniCluster->stop();
   }

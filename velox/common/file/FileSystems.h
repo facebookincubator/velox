@@ -179,6 +179,8 @@ class FileSystem {
       std::string_view path,
       const FileOptions& options = {}) = 0;
 
+  virtual void close() {}
+
   /// Deletes the file at 'path'. Throws on error.
   virtual void remove(std::string_view path) = 0;
 
