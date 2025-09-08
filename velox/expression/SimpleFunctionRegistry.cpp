@@ -131,7 +131,8 @@ SimpleFunctionRegistry::getFunctionSignaturesAndMetadata(
         VectorFunctionMetadata metadata{
             false,
             functions[0]->getMetadata().isDeterministic(),
-            functions[0]->getMetadata().defaultNullBehavior()};
+            functions[0]->getMetadata().defaultNullBehavior(),
+        functions[0]->getMetadata().isFastPath()};
         result.emplace_back(
             std::pair<VectorFunctionMetadata, const FunctionSignature*>{
                 metadata, &signature});

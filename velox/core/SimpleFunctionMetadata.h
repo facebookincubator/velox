@@ -51,6 +51,18 @@ struct udf_is_default_ascii_behavior<
     util::detail::void_t<decltype(T::is_default_ascii_behavior)>>
     : std::integral_constant<bool, T::is_default_ascii_behavior> {};
 
+// Function implementation does not correspond to fast-path, unless annotated
+// otherwise in simple function implementation (only in cases where the function
+// also has a generic implementation).
+template <class T, class = void>
+struct udf_is_fast_path : std::false_type {};
+
+template <class T>
+struct udf_is_fast_path<
+    T,
+    util::detail::void_t<decltype(T::is_fast_path)>>
+    : std::integral_constant<bool, T::is_fast_path> {};
+
 // If a UDF doesn't declare a default help(),
 template <class T, class = void>
 struct udf_help {
@@ -431,6 +443,7 @@ class ISimpleFunctionMetadata {
   virtual std::string getName() const = 0;
   virtual bool isDeterministic() const = 0;
   virtual bool defaultNullBehavior() const = 0;
+  virtual bool isFastPath() const = 0;
   virtual uint32_t priority() const = 0;
   virtual const std::shared_ptr<exec::FunctionSignature> signature() const = 0;
   virtual const TypePtr& resultPhysicalType() const = 0;
@@ -543,6 +556,10 @@ class SimpleFunctionMetadata : public ISimpleFunctionMetadata {
 
   bool isDeterministic() const final {
     return udf_is_deterministic<Fun>();
+  }
+
+  bool isFastPath() const final {
+    return udf_is_fast_path<Fun>();
   }
 
   bool defaultNullBehavior() const final {
@@ -956,6 +973,10 @@ class UDFHolder {
 
   bool isDeterministic() const {
     return udf_is_deterministic<Fun>();
+  }
+
+  bool isFastPath() const {
+    return udf_is_fast_path<Fun>();
   }
 
   static constexpr bool isVariadic() {

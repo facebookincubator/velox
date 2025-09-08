@@ -26,6 +26,8 @@ template <typename TExec, typename Key>
 struct MapSubsetPrimitiveFunction {
   VELOX_DEFINE_FUNCTION_TYPES(TExec);
 
+  static constexpr bool is_fast_path = true;
+
   void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& /*config*/,
@@ -92,6 +94,8 @@ struct MapSubsetPrimitiveFunction {
 template <typename TExec>
 struct MapSubsetVarcharFunction {
   VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  static constexpr bool is_fast_path = true;
 
   void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,

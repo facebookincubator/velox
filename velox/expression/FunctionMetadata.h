@@ -41,6 +41,11 @@ struct VectorFunctionMetadata {
   /// for which all arguments are not null.
   bool defaultNullBehavior{true};
 
+  /// Applicable for simple functions only. Indicates if the corresponding
+  /// simple function implementation is an optimized fast-path. Used for
+  /// deduplication of function signatures reported by Presto sidecar.
+  bool isFastPath{false};
+
   /// Indicates if this is a companion function.
   bool companionFunction{false};
 };
