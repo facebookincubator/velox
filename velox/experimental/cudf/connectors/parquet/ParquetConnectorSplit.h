@@ -52,14 +52,14 @@ struct ParquetConnectorSplit
         length(_length),
         cudfSourceInfo({filePath}),
         infoColumns(_infoColumns) {
-    VELOX_CHECK(
+    VELOX_USER_CHECK(
         start <=
-            static_cast<uint64_t>(std::numeric_limits<cudf::size_type>::max()),
-        "ParquetConnectorSplit `start` must be less than or equal to 2^31");
-    VELOX_CHECK(
+            static_cast<uint64_t>(std::numeric_limits<int64_t>::max()),
+        "ParquetConnectorSplit `start` (rows to skip) must be less than or equal to INT64_MAX");
+        VELOX_USER_CHECK(
         length <=
             static_cast<uint64_t>(std::numeric_limits<cudf::size_type>::max()),
-        "ParquetConnectorSplit `length` must be less than or equal to 2^31");
+        "ParquetConnectorSplit `length` (rows to read after skipping) must be less than or equal to 2^31");
   }
 
   std::string toString() const override;
@@ -106,21 +106,21 @@ class ParquetConnectorSplitBuilder {
   }
 
   ParquetConnectorSplitBuilder& start(uint64_t start) {
-    VELOX_CHECK(
+    VELOX_USER_CHECK(
         start <=
-            static_cast<uint64_t>(std::numeric_limits<cudf::size_type>::max()),
-        "ParquetConnectorSplit `start` must be less than or equal to 2^31");
+            static_cast<uint64_t>(std::numeric_limits<int64_t>::max()),
+        "ParquetConnectorSplit `start` (rows to skip) must be less than or equal to INT64_MAX");
     start_ = start;
     return *this;
   }
 
   ParquetConnectorSplitBuilder& length(uint64_t length) {
-    VELOX_CHECK(
+    VELOX_USER_CHECK(
         length <=
             static_cast<uint64_t>(std::numeric_limits<cudf::size_type>::max()),
-        "ParquetConnectorSplit `length` must be less than or equal to 2^31");
+        "ParquetConnectorSplit `length` (rows to read after skipping) must be less than or equal to 2^31");
     length_ = length;
-    return *twhis;
+    return *this;
   }
 
   std::shared_ptr<ParquetConnectorSplit> build() const {
