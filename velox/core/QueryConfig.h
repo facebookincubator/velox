@@ -1263,6 +1263,14 @@ class QueryConfig {
     return std::any_cast<T>(value.value());
   }
 
+  std::any get(const std::string& key, const std::any& defaultValue) const {
+    auto value = config_->Get(key);
+    if (!value.has_value()) {
+      return defaultValue;
+    }
+    return value.value();
+  }
+
   /// Test-only method to override the current query config properties.
   /// It is not thread safe.
   void testingOverrideConfigUnsafe(
