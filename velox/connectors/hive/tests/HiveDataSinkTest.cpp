@@ -608,7 +608,7 @@ TEST_F(HiveDataSinkTest, decimalPartition) {
   auto dataSink = createDataSink(
       rowType,
       outputDirectory->getPath(),
-      dwio::common::FileFormat::PARQUET,
+      dwio::common::FileFormat::DWRF,
       {"c2"});
   auto stats = dataSink->stats();
   ASSERT_TRUE(stats.empty()) << stats.toString();
@@ -637,7 +637,7 @@ TEST_F(HiveDataSinkTest, decimalPartition) {
     auto path = listFiles(rootPath + "/c2=" + value)[0];
     splits.push_back(
         makeHiveConnectorSplits(
-            path, 1, dwio::common::FileFormat::PARQUET, partitionKeys)
+            path, 1, dwio::common::FileFormat::DWRF, partitionKeys)
             .back());
   };
   partitionPath("0.0001");
