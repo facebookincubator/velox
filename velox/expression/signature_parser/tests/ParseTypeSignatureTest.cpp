@@ -284,18 +284,8 @@ TEST_F(ParseTypeSignatureTest, row) {
     ASSERT_EQ(signature.toString(), "row(integer, …)");
   }
 
-  // Test homogeneous row with named field
-  {
-    auto signature = parseTypeSignature("row(name varchar, …)");
-    ASSERT_EQ(signature.baseName(), "row");
-    ASSERT_EQ(signature.parameters().size(), 1);
-    ASSERT_TRUE(signature.hasVariadicLastParam());
-    ASSERT_TRUE(signature.isHomogeneousRow());
-
-    auto field0 = signature.parameters()[0];
-    ASSERT_EQ(field0.baseName(), "varchar");
-    ASSERT_EQ(field0.rowFieldName(), "name");
-  }
+  // Test that homogeneous row with named field is rejected
+  EXPECT_THROW(parseTypeSignature("row(name varchar, …)"), VeloxRuntimeError);
 }
 
 TEST_F(ParseTypeSignatureTest, tdigest) {
