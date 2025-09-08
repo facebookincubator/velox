@@ -68,10 +68,10 @@ HashBuild::HashBuild(
           operatorCtx_->driverCtx()->splitGroupId,
           planNodeId())),
       keyChannelMap_(joinNode_->rightKeys().size()),
-      abandonBuildNoDupHashMinRows_(
-          driverCtx->queryConfig().abandonBuildNoDupHashMinRows()),
-      abandonBuildNoDupHashMinPct_(
-          driverCtx->queryConfig().abandonBuildNoDupHashMinPct()) {
+      abandonHashBuildDedupMinRows_(
+          driverCtx->queryConfig().abandonHashBuildDedupMinRows()),
+      abandonHashBuildDedupMinPct_(
+          driverCtx->queryConfig().abandonHashBuildDedupMinPct()) {
   VELOX_CHECK(pool()->trackUsage());
   VELOX_CHECK_NOT_NULL(joinBridge_);
 
@@ -183,11 +183,11 @@ void HashBuild::setupTable() {
   }
   lookup_ = std::make_unique<HashLookup>(table_->hashers(), pool());
   analyzeKeys_ = table_->hashMode() != BaseHashTable::HashMode::kHash;
-  if (abandonBuildNoDupHashMinPct_ == 0) {
+  if (abandonHashBuildDedupMinPct_ == 0) {
     // Building a HashTable without duplicates is disabled if
     // abandonBuildNoDupHashMinPct_ is 0.
-    abandonBuildNoDupHash_ = true;
-    table_->joinTableMayHaveDuplicates();
+    abandonHashBuildDedup_ = true;
+    table_->setAllowDuplicates(true);
   }
 }
 
@@ -387,7 +387,7 @@ void HashBuild::addInput(RowVectorPtr input) {
     return;
   }
 
-  if (dropDuplicates_ && !abandonBuildNoDupHash_) {
+  if (dropDuplicates_ && !abandonHashBuildDedup_) {
     const bool abandonEarly = abandonBuildNoDupHashEarly(table_->numDistinct());
     numHashInputRows_ += activeRows_.countSelected();
     if (abandonEarly) {
@@ -395,8 +395,8 @@ void HashBuild::addInput(RowVectorPtr input) {
       // that was previously inserted into the hash table is already in the
       // RowContainer.
       addRuntimeStat("abandonBuildNoDupHash", RuntimeCounter(1));
-      abandonBuildNoDupHash_ = true;
-      table_->joinTableMayHaveDuplicates();
+      abandonHashBuildDedup_ = true;
+      table_->setAllowDuplicates(true);
     } else {
       table_->prepareForGroupProbe(
           *lookup_,
@@ -1280,7 +1280,7 @@ void HashBuildSpiller::extractSpill(
 
 bool HashBuild::abandonBuildNoDupHashEarly(int64_t numDistinct) const {
   VELOX_CHECK(dropDuplicates_);
-  return numHashInputRows_ > abandonBuildNoDupHashMinRows_ &&
-      numDistinct / numHashInputRows_ >= abandonBuildNoDupHashMinPct_ / 100;
+  return numHashInputRows_ > abandonHashBuildDedupMinRows_ &&
+      100 * numDistinct / numHashInputRows_ >= abandonHashBuildDedupMinPct_;
 }
 } // namespace facebook::velox::exec
