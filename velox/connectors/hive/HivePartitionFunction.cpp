@@ -63,6 +63,8 @@ inline int32_t hashDecimal<int128_t>(int128_t value, uint8_t scale) {
   if (isNegative) {
     hash = -hash;
   }
+  // Ignore the overflow to align with java implementation, only for lint error
+  // fix.
   __builtin_mul_overflow(hash, 31, &hash);
   return hash + scale;
 }
