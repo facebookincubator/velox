@@ -127,6 +127,9 @@ jobs:
           BASE_REF: ${{ github.base_ref }}
           HEAD_REF: ${{ github.head_ref }}
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_REPO_FULL_NAME:    ${{ github.event.pull_request.head.repo.full_name }}
+          PR_REPO_ORGANIZATION: ${{ github.event.pull_request.head.repo.organization.login }}
         id: get-merge-base
         run: |
           if [ '${{ github.event_name == 'push' }}' == "true" ]; then
@@ -134,6 +137,10 @@ jobs:
             head_main=$(gh api -q '.parents.[0].sha' '/repos/facebookincubator/velox/commits/${{ github.sha }}')
           elif [ '${{ github.event_name == 'pull_request' }}' == "true" ]; then
             # Get the merge base from the api
+            echo "PR_AUTHOR:HEAD_REF $PR_AUTHOR:$HEAD_REF"
+            echo "PR_HEAD_REF $PR_HEAD_REF"
+            echo "PR_REPO_FULL_NAME $PR_REPO_FULL_NAME"
+            echo "PR_REPO_ORGANIZATION $PR_REPO_ORGANIZATION"
             head_main=$(gh api -q '.merge_base_commit.sha' \
               /repos/facebookincubator/velox/compare/facebookincubator:$BASE_REF...$PR_AUTHOR:$HEAD_REF \
             )
