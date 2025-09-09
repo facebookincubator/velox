@@ -63,7 +63,8 @@ inline int32_t hashDecimal<int128_t>(int128_t value, uint8_t scale) {
   if (isNegative) {
     hash = -hash;
   }
-  return hash * 31 + scale;
+  __builtin_mul_overflow(hash, 31, &hash);
+  return hash + scale;
 }
 
 #if defined(__has_feature)
