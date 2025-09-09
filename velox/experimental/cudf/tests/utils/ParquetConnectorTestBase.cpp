@@ -40,6 +40,8 @@
 
 namespace facebook::velox::cudf_velox::exec::test {
 
+constexpr const char* kCudfHiveConnectorId = "hive";
+
 namespace {
 
 void fillColumnNames(
@@ -64,6 +66,8 @@ void fillColumnNames(
 
 } // namespace
 
+using facebook::velox::connector::hive::HiveConnectorFactory;
+
 ParquetConnectorTestBase::ParquetConnectorTestBase() {
   filesystems::registerLocalFileSystem();
   tests::utils::registerFaultyFileSystem();
@@ -80,11 +84,13 @@ void ParquetConnectorTestBase::SetUp() {
       std::make_shared<facebook::velox::cudf_velox::connector::parquet::
                            CudfHiveConnectorFactory>());
   auto hiveConnector =
-      facebook::velox::connector::getConnectorFactory("hive")->newConnector(
-          "hive",
-          std::make_shared<facebook::velox::config::ConfigBase>(
-              std::unordered_map<std::string, std::string>()),
-          ioExecutor_.get());
+      facebook::velox::connector::getConnectorFactory(
+          HiveConnectorFactory::kHiveConnectorName)
+          ->newConnector(
+              kCudfHiveConnectorId,
+              std::make_shared<facebook::velox::config::ConfigBase>(
+                  std::unordered_map<std::string, std::string>()),
+              ioExecutor_.get());
   facebook::velox::connector::registerConnector(hiveConnector);
   dwio::common::registerFileSinks();
 }
@@ -93,18 +99,20 @@ void ParquetConnectorTestBase::TearDown() {
   // Make sure all pending loads are finished or cancelled before unregister
   // connector.
   ioExecutor_.reset();
-  facebook::velox::connector::unregisterConnector("hive");
-  facebook::velox::connector::unregisterConnectorFactory("hive");
+  facebook::velox::connector::unregisterConnector(kCudfHiveConnectorId);
+  facebook::velox::connector::unregisterConnectorFactory(
+      HiveConnectorFactory::kHiveConnectorName);
   facebook::velox::cudf_velox::unregisterCudf();
   OperatorTestBase::TearDown();
 }
 
 void ParquetConnectorTestBase::resetParquetConnector(
     const std::shared_ptr<const facebook::velox::config::ConfigBase>& config) {
-  facebook::velox::connector::unregisterConnector("hive");
+  facebook::velox::connector::unregisterConnector(kCudfHiveConnectorId);
   auto hiveConnector =
-      facebook::velox::connector::getConnectorFactory("hive")->newConnector(
-          "hive", config, ioExecutor_.get());
+      facebook::velox::connector::getConnectorFactory(
+          HiveConnectorFactory::kHiveConnectorName)
+          ->newConnector(kCudfHiveConnectorId, config, ioExecutor_.get());
   facebook::velox::connector::registerConnector(hiveConnector);
 }
 
@@ -247,7 +255,7 @@ ParquetConnectorTestBase::makeParquetConnectorSplits(
   for (int i = 0; i < splitCount; i++) {
     auto split =
         facebook::velox::connector::hive::HiveConnectorSplitBuilder(filePath)
-            .connectorId("hive")
+            .connectorId(kCudfHiveConnectorId)
             .fileFormat(facebook::velox::dwio::common::FileFormat::PARQUET)
             .build();
     splits.push_back(std::move(split));
@@ -260,7 +268,7 @@ ParquetConnectorTestBase::makeParquetConnectorSplit(
     const std::string& filePath,
     int64_t splitWeight) {
   return facebook::velox::connector::hive::HiveConnectorSplitBuilder(filePath)
-      .connectorId("hive")
+      .connectorId(kCudfHiveConnectorId)
       .fileFormat(facebook::velox::dwio::common::FileFormat::PARQUET)
       .splitWeight(splitWeight)
       .build();
