@@ -119,7 +119,7 @@ class IcebergSplitReaderBenchmark {
   std::unique_ptr<dwrf::Writer> writer_;
   dwio::common::RuntimeStatistics runtimeStats_;
 
-  dwio::common::FileFormat fileFomat_{dwio::common::FileFormat::DWRF};
+  dwio::common::FileFormat fileFormat_{dwio::common::FileFormat::DWRF};
   const std::string kHiveConnectorId = "hive-iceberg";
 };
 

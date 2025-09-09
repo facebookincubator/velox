@@ -219,7 +219,7 @@ class HiveIcebergTest : public HiveConnectorTestBase {
           IcebergDeleteFile icebergDeleteFile(
               FileContent::kPositionalDeletes,
               deleteFilePath,
-              fileFomat_,
+              fileFormat_,
               deleteFilePaths[deleteFileName].first,
               testing::internal::GetFileSize(
                   std::fopen(deleteFilePath.c_str(), "r")));
@@ -270,7 +270,7 @@ class HiveIcebergTest : public HiveConnectorTestBase {
       splits.emplace_back(std::make_shared<HiveIcebergSplit>(
           kHiveConnectorId,
           dataFilePath,
-          fileFomat_,
+          fileFormat_,
           i * splitSize,
           splitSize,
           partitionKeys,
@@ -306,7 +306,7 @@ class HiveIcebergTest : public HiveConnectorTestBase {
     IcebergDeleteFile icebergDeleteFile(
         FileContent::kPositionalDeletes,
         deleteFilePath->getPath(),
-        fileFomat_,
+        fileFormat_,
         deletedPositionSize,
         testing::internal::GetFileSize(
             std::fopen(deleteFilePath->getPath().c_str(), "r")));
@@ -557,7 +557,7 @@ class HiveIcebergTest : public HiveConnectorTestBase {
     return PlanBuilder(pool_.get()).tableScan(rowType_).planNode();
   }
 
-  dwio::common::FileFormat fileFomat_{dwio::common::FileFormat::DWRF};
+  dwio::common::FileFormat fileFormat_{dwio::common::FileFormat::DWRF};
 
   RowTypePtr rowType_{ROW({"c0"}, {BIGINT()})};
   std::shared_ptr<IcebergMetadataColumn> pathColumn_ =
