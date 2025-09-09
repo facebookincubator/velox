@@ -499,10 +499,6 @@ struct hash<facebook::velox::exec::TypeSignature> {
     for (const auto& parameter : key.parameters()) {
       val = val * 31 + this->operator()(parameter);
     }
-    if (key.rowFieldName().has_value()) {
-      val = val * 31 + std::hash<std::string>{}(*key.rowFieldName());
-    }
-    val = val * 31 + std::hash<bool>{}(key.hasVariadicArity());
     return val;
   }
 };
