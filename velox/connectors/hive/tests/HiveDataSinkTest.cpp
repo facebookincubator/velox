@@ -635,10 +635,9 @@ TEST_F(HiveDataSinkTest, decimalPartition) {
   auto partitionPath = [&](std::string value) {
     partitionKeys["c2"] = value;
     auto path = listFiles(rootPath + "/c2=" + value)[0];
-    splits.push_back(
-        makeHiveConnectorSplits(
-            path, 1, dwio::common::FileFormat::DWRF, partitionKeys)
-            .back());
+    splits.push_back(makeHiveConnectorSplits(
+                         path, 1, dwio::common::FileFormat::DWRF, partitionKeys)
+                         .back());
   };
   partitionPath("0.0001");
   partitionPath("0.0340");
