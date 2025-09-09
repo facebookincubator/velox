@@ -22,6 +22,7 @@ using namespace facebook::velox;
 
 namespace facebook::velox::functions::iceberg {
 namespace {
+
 class DateTimeFunctionsTest
     : public functions::iceberg::test::IcebergFunctionBaseTest {};
 
