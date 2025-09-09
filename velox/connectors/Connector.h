@@ -16,6 +16,7 @@
 #pragma once
 
 #include "folly/CancellationToken.h"
+#include "velox/common/Enums.h"
 #include "velox/common/base/AsyncSource.h"
 #include "velox/common/base/PrefixSortConfig.h"
 #include "velox/common/base/RuntimeMetrics.h"
@@ -125,14 +126,8 @@ class ConnectorTableHandle : public ISerializable {
     return connectorId_;
   }
 
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  virtual const std::string& name() const {
-    VELOX_NYI();
-  }
-#else
   /// Returns the table name.
   virtual const std::string& name() const = 0;
-#endif
 
   /// Returns true if the connector table handle supports index lookup.
   virtual bool supportsIndexLookup() const {
@@ -178,21 +173,10 @@ enum class CommitStrategy {
   /// No more commit actions are needed.
   kNoCommit,
   /// Task level commit is needed.
-  kTaskCommit
+  kTaskCommit,
 };
 
-/// Return a string encoding of the given commit strategy.
-std::string commitStrategyToString(CommitStrategy commitStrategy);
-
-FOLLY_ALWAYS_INLINE std::ostream& operator<<(
-    std::ostream& os,
-    CommitStrategy strategy) {
-  os << commitStrategyToString(strategy);
-  return os;
-}
-
-/// Return a commit strategy of the given string encoding.
-CommitStrategy stringToCommitStrategy(const std::string& strategy);
+VELOX_DECLARE_ENUM_NAME(CommitStrategy);
 
 /// Writes data received from table writer operator into different partitions
 /// based on the specific table layout. The actual implementation doesn't need
@@ -668,6 +652,14 @@ class Connector {
       const std::string& scanId,
       int32_t loadQuantum);
 
+  /// Returns the IOExecutor used by the connector. It is used to run async IO
+  /// operations by the connector.
+  virtual folly::Executor* ioExecutor() const {
+    return nullptr;
+  }
+
+  // This is for backward compatibility, todo: remove after verax repo is
+  // updated
   virtual folly::Executor* executor() const {
     return nullptr;
   }
@@ -732,6 +724,10 @@ std::shared_ptr<ConnectorFactory> getConnectorFactory(
 /// Throws if connector with the same ID is already present. Always returns
 /// true. The return value makes it easy to use with FB_ANONYMOUS_VARIABLE.
 bool registerConnector(std::shared_ptr<Connector> connector);
+
+/// Returns true if a connector with the specified ID has been registered, false
+/// otherwise.
+bool hasConnector(const std::string& connectorId);
 
 /// Removes the connector with specified ID from the registry. Returns true
 /// if connector was removed and false if connector didn't exist.

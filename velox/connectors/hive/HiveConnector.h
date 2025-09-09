@@ -65,8 +65,8 @@ class HiveConnector : public Connector {
       ConnectorQueryCtx* connectorQueryCtx,
       CommitStrategy commitStrategy) override;
 
-  folly::Executor* executor() const override {
-    return executor_;
+  folly::Executor* ioExecutor() const override {
+    return ioExecutor_;
   }
 
   FileHandleCacheStats fileHandleCacheStats() {
@@ -79,10 +79,12 @@ class HiveConnector : public Connector {
     return fileHandleFactory_.clearCache();
   }
 
+  static void registerSerDe();
+
  protected:
   const std::shared_ptr<HiveConfig> hiveConfig_;
   FileHandleFactory fileHandleFactory_;
-  folly::Executor* executor_;
+  folly::Executor* ioExecutor_;
   std::shared_ptr<ConnectorMetadata> metadata_;
 };
 
@@ -146,14 +148,14 @@ class HivePartitionFunctionSpec : public core::PartitionFunctionSpec {
       const folly::dynamic& obj,
       void* context);
 
+  static void registerSerDe();
+
  private:
   const int numBuckets_;
   const std::vector<int> bucketToPartition_;
   const std::vector<column_index_t> channels_;
   const std::vector<VectorPtr> constValues_;
 };
-
-void registerHivePartitionFunctionSerDe();
 
 /// Hook for connecting metadata functions to a HiveConnector. Each registered
 /// factory is called after initializing a HiveConnector until one of these
