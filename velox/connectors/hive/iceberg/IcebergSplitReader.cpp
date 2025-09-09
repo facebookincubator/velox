@@ -16,6 +16,7 @@
 
 #include "velox/connectors/hive/iceberg/IcebergSplitReader.h"
 
+#include "velox/connectors/hive/iceberg/EqualityDeleteFileReader.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
 #include "velox/dwio/common/BufferUtil.h"

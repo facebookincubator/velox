@@ -20,6 +20,21 @@ namespace facebook::velox::connector::hive::iceberg {
 using namespace facebook::velox::exec;
 using namespace facebook::velox::core;
 
+std::unique_ptr<common::Filter> createNegatedBytesValuesFilter(
+    const VectorPtr& valuesVector,
+    vector_size_t offset,
+    vector_size_t size) {
+  auto [values, hasNull] =
+      facebook::velox::common::deDuplicateValues<std::string, StringView>(
+          valuesVector, offset, size);
+
+  VELOX_USER_CHECK(
+      !values.empty() || hasNull,
+      "NOT IN filter must contain at least one non-null value");
+
+  return std::make_unique<common::NegatedBytesValues>(values, !hasNull);
+}
+
 template <typename T>
 std::unique_ptr<common::Filter> createNegatedBigintValuesFilter(
     const VectorPtr& valuesVector,
@@ -66,8 +81,8 @@ std::unique_ptr<common::Filter> createNotInFilter(
       break;
     case TypeKind::VARCHAR:
     case TypeKind::VARBINARY:
-      // TODO: createNegatedBytesValuesFilter is not implemented yet.
-      VELOX_NYI("createNegatedBytesValuesFilter is not implemented yet");
+      filter = createNegatedBytesValuesFilter(elements, offset, size);
+      break;
     case TypeKind::REAL:
     case TypeKind::DOUBLE:
     case TypeKind::UNKNOWN:
