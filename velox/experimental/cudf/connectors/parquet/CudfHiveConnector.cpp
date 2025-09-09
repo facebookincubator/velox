@@ -48,7 +48,7 @@ std::unique_ptr<DataSource> CudfHiveConnector::createDataSource(
         outputType,
         tableHandle,
         columnHandles,
-        executor_,
+        ioExecutor_,
         connectorQueryCtx,
         parquetConfig_);
   }
@@ -58,7 +58,7 @@ std::unique_ptr<DataSource> CudfHiveConnector::createDataSource(
       tableHandle,
       columnHandles,
       &fileHandleFactory_,
-      executor_,
+      ioExecutor_,
       connectorQueryCtx,
       hiveConfig_);
 }
