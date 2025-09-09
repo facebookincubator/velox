@@ -190,16 +190,20 @@ struct GetJsonObjectFunction {
         }
         return false;
       }
-      case simdjson::ondemand::json_type::object: {
-        // For nested case, e.g., for "{"my": {"hello": 10}}", "$.my" will
-        // return an object type.
-        ss << rawResult;
-        result.append(ss.str());
-        return true;
-      }
+      case simdjson::ondemand::json_type::object:
       case simdjson::ondemand::json_type::array: {
-        ss << rawResult;
-        result.append(ss.str());
+        std::string_view jsonString;
+        simdjson::to_json_string(rawResult).get(jsonString);
+        // Spark's GetJsonObjectEvaluator never enables pretty printing.
+        // We should minify the JSON string to respect Spark's behavior.
+        std::vector<char> buffer(jsonString.size());
+        size_t outLength;
+        simdjson::error_code err = simdjson::minify(
+            jsonString.data(), jsonString.size(), buffer.data(), outLength);
+        if (err) {
+          return false;
+        }
+        result.append(std::string_view(buffer.data(), outLength));
         return true;
       }
       default:
