@@ -45,9 +45,9 @@ class SparseHllTest : public ::testing::Test {
       const std::vector<T>& left,
       const std::vector<T>& right,
       bool serialized) {
-    SparseHll hllLeft{&allocator_};
-    SparseHll hllRight{&allocator_};
-    SparseHll expected{&allocator_};
+    SparseHll<> hllLeft{&allocator_};
+    SparseHll<> hllRight{&allocator_};
+    SparseHll<> expected{&allocator_};
 
     for (auto value : left) {
       auto hash = hashOne(value);
@@ -77,16 +77,16 @@ class SparseHllTest : public ::testing::Test {
 
     auto hllLeftSerialized = serialize(11, hllLeft);
     ASSERT_EQ(
-        SparseHll::cardinality(hllLeftSerialized.data()),
+        SparseHllUtils::cardinality(hllLeftSerialized.data()),
         expected.cardinality());
   }
 
-  SparseHll roundTrip(SparseHll& hll) {
+  SparseHll<> roundTrip(SparseHll<>& hll) {
     auto serialized = serialize(11, hll);
-    return SparseHll(serialized.data(), &allocator_);
+    return SparseHll<>(serialized.data(), &allocator_);
   }
 
-  std::string serialize(int8_t indexBitLength, const SparseHll& sparseHll) {
+  std::string serialize(int8_t indexBitLength, const SparseHll<>& sparseHll) {
     auto size = sparseHll.serializedSize();
     std::string serialized;
     serialized.resize(size);
@@ -94,7 +94,7 @@ class SparseHllTest : public ::testing::Test {
     return serialized;
   }
 
-  std::string serialize(DenseHll& denseHll) {
+  std::string serialize(DenseHll<>& denseHll) {
     auto size = denseHll.serializedSize();
     std::string serialized;
     serialized.resize(size);
@@ -108,7 +108,7 @@ class SparseHllTest : public ::testing::Test {
 };
 
 TEST_F(SparseHllTest, basic) {
-  SparseHll sparseHll{&allocator_};
+  SparseHll<> sparseHll{&allocator_};
   for (int i = 0; i < 1'000; i++) {
     auto value = i % 17;
     auto hash = hashOne(value);
@@ -123,11 +123,11 @@ TEST_F(SparseHllTest, basic) {
   ASSERT_EQ(17, deserialized.cardinality());
 
   auto serialized = serialize(11, sparseHll);
-  ASSERT_EQ(17, SparseHll::cardinality(serialized.data()));
+  ASSERT_EQ(17, SparseHllUtils::cardinality(serialized.data()));
 }
 
 TEST_F(SparseHllTest, highCardinality) {
-  SparseHll sparseHll{&allocator_};
+  SparseHll<> sparseHll{&allocator_};
   for (int i = 0; i < 1'000; i++) {
     auto hash = hashOne(i);
     sparseHll.insertHash(hash);
@@ -141,7 +141,7 @@ TEST_F(SparseHllTest, highCardinality) {
   ASSERT_EQ(1'000, deserialized.cardinality());
 
   auto serialized = serialize(11, sparseHll);
-  ASSERT_EQ(1'000, SparseHll::cardinality(serialized.data()));
+  ASSERT_EQ(1'000, SparseHllUtils::cardinality(serialized.data()));
 }
 
 namespace {
@@ -179,7 +179,7 @@ class SparseHllToDenseTest : public ::testing::TestWithParam<int8_t> {
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
   }
 
-  std::string serialize(DenseHll& denseHll) {
+  std::string serialize(DenseHll<>& denseHll) {
     auto size = denseHll.serializedSize();
     std::string serialized;
     serialized.resize(size);
@@ -195,15 +195,15 @@ class SparseHllToDenseTest : public ::testing::TestWithParam<int8_t> {
 TEST_P(SparseHllToDenseTest, toDense) {
   int8_t indexBitLength = GetParam();
 
-  SparseHll sparseHll{&allocator_};
-  DenseHll expectedHll{indexBitLength, &allocator_};
+  SparseHll<> sparseHll{&allocator_};
+  DenseHll<> expectedHll{indexBitLength, &allocator_};
   for (int i = 0; i < 1'000; i++) {
     auto hash = hashOne(i);
     sparseHll.insertHash(hash);
     expectedHll.insertHash(hash);
   }
 
-  DenseHll denseHll{indexBitLength, &allocator_};
+  DenseHll<> denseHll{indexBitLength, &allocator_};
   sparseHll.toDense(denseHll);
   ASSERT_EQ(denseHll.cardinality(), expectedHll.cardinality());
   ASSERT_EQ(serialize(denseHll), serialize(expectedHll));
@@ -213,11 +213,11 @@ TEST_P(SparseHllToDenseTest, testNumberOfZeros) {
   auto indexBitLength = GetParam();
   for (int i = 0; i < 64 - indexBitLength; ++i) {
     auto hash = 1ull << i;
-    SparseHll sparseHll(&allocator_);
+    SparseHll<> sparseHll(&allocator_);
     sparseHll.insertHash(hash);
-    DenseHll expectedHll(indexBitLength, &allocator_);
+    DenseHll<> expectedHll(indexBitLength, &allocator_);
     expectedHll.insertHash(hash);
-    DenseHll denseHll(indexBitLength, &allocator_);
+    DenseHll<> denseHll(indexBitLength, &allocator_);
     sparseHll.toDense(denseHll);
     ASSERT_EQ(serialize(denseHll), serialize(expectedHll));
   }
