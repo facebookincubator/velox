@@ -426,6 +426,24 @@ Supported types are: TINYINT, SMALLINT, INTEGER and BIGINT.:</p>
 </dd></dl>
 
 <dl class="spark function">
+<dt class="sig sig-object spark" id="timestamp_seconds">
+<span class="sig-name descname"><span class="pre">timestamp_seconds</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">timestamp</span></span></span><a class="headerlink" href="#timestamp_seconds" title="Link to this definition">¶</a></dt>
+<dd><p>Returns timestamp from the number of seconds (can be fractional) since UTC epoch.
+Supported types are: TINYINT, SMALLINT, INTEGER, BIGINT, FLOAT, and DOUBLE.
+For integral types (TINYINT, SMALLINT, INTEGER, BIGINT), the function directly
+converts the number of seconds to a timestamp. For floating-point types
+(FLOAT, DOUBLE), the function scales the input to microseconds, truncates
+towards zero, and saturates the result to the minimum and maximum values allowed
+in Spark.:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">timestamp_seconds</span><span class="p">(</span><span class="mi">1230219000</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;2008-12-25 15:30:00&#39;</span>
+<span class="n">SELECT</span> <span class="n">timestamp_seconds</span><span class="p">(</span><span class="mf">1230219000.123</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;2008-12-25 15:30:00.123&#39;</span>
+<span class="n">SELECT</span> <span class="n">timestamp_seconds</span><span class="p">(</span><span class="n">double</span><span class="p">(</span><span class="mf">1.1234567</span><span class="p">));</span> <span class="o">--</span> <span class="s1">&#39;1970-01-01 00:00:01.123456&#39;</span>
+<span class="n">SELECT</span> <span class="n">timestamp_seconds</span><span class="p">(</span><span class="nb">float</span><span class="p">(</span><span class="mf">3.4028235E+38</span><span class="p">));</span> <span class="o">--</span> <span class="s1">&#39;+294247-01-10 04:00:54.775807&#39;</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="spark function">
 <dt class="sig sig-object spark">
 <span class="sig-name descname"><span class="pre">to_unix_timestamp</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">date</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span></dt>
 <dd><blockquote>
@@ -681,6 +699,7 @@ returned for invalid format; otherwise, exception is thrown.</p>
 <li><a class="reference internal" href="#timestampdiff"><code class="docutils literal notranslate"><span class="pre">timestampdiff()</span></code></a></li>
 <li><a class="reference internal" href="#timestamp_micros"><code class="docutils literal notranslate"><span class="pre">timestamp_micros()</span></code></a></li>
 <li><a class="reference internal" href="#timestamp_millis"><code class="docutils literal notranslate"><span class="pre">timestamp_millis()</span></code></a></li>
+<li><a class="reference internal" href="#timestamp_seconds"><code class="docutils literal notranslate"><span class="pre">timestamp_seconds()</span></code></a></li>
 <li><a class="reference internal" href="#to_unix_timestamp"><code class="docutils literal notranslate"><span class="pre">to_unix_timestamp()</span></code></a></li>
 <li><a class="reference internal" href="#to_utc_timestamp"><code class="docutils literal notranslate"><span class="pre">to_utc_timestamp()</span></code></a></li>
 <li><a class="reference internal" href="#trunc"><code class="docutils literal notranslate"><span class="pre">trunc()</span></code></a></li>
