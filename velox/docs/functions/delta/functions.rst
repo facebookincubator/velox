@@ -1,5 +1,5 @@
 *****************
-Delta Functions
+Delta Lake Functions
 *****************
 
 Here is a list of all scalar Delta Lake functions available in Velox.
