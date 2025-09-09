@@ -24,6 +24,7 @@
 #include "velox/experimental/cudf/exec/CudfLimit.h"
 #include "velox/experimental/cudf/exec/CudfLocalPartition.h"
 #include "velox/experimental/cudf/exec/CudfOrderBy.h"
+#include "velox/experimental/cudf/exec/CudfTopN.h"
 #include "velox/experimental/cudf/exec/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
@@ -40,6 +41,7 @@
 #include "velox/exec/Operator.h"
 #include "velox/exec/OrderBy.h"
 #include "velox/exec/TableScan.h"
+#include "velox/exec/TopN.h"
 
 #include <cudf/detail/nvtx/ranges.hpp>
 
@@ -146,6 +148,7 @@ bool CompileState::compile(bool force_replace) {
           const exec::Operator* op) {
         return isAnyOf<
                    exec::OrderBy,
+                   exec::TopN,
                    exec::HashAggregation,
                    exec::Limit,
                    exec::LocalPartition,
@@ -164,6 +167,7 @@ bool CompileState::compile(bool force_replace) {
                           isJoinSupported](const exec::Operator* op) {
     return isAnyOf<
                exec::OrderBy,
+               exec::TopN,
                exec::HashAggregation,
                exec::Limit,
                exec::LocalPartition>(op) ||
@@ -174,6 +178,7 @@ bool CompileState::compile(bool force_replace) {
                             isTableScanSupported](const exec::Operator* op) {
     return isAnyOf<
                exec::OrderBy,
+               exec::TopN,
                exec::HashAggregation,
                exec::Limit,
                exec::LocalExchange>(op) ||
@@ -252,6 +257,12 @@ bool CompileState::compile(bool force_replace) {
           getPlanNode(orderByOp->planNodeId()));
       VELOX_CHECK(planNode != nullptr);
       replaceOp.push_back(std::make_unique<CudfOrderBy>(id, ctx, planNode));
+      replaceOp.back()->initialize();
+    } else if (auto topNOp = dynamic_cast<exec::TopN*>(oper)) {
+      auto planNode = std::dynamic_pointer_cast<const core::TopNNode>(
+          getPlanNode(topNOp->planNodeId()));
+      VELOX_CHECK(planNode != nullptr);
+      replaceOp.push_back(std::make_unique<CudfTopN>(id, ctx, planNode));
       replaceOp.back()->initialize();
     } else if (auto hashAggOp = dynamic_cast<exec::HashAggregation*>(oper)) {
       auto planNode = std::dynamic_pointer_cast<const core::AggregationNode>(
