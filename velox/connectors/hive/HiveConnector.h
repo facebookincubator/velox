@@ -49,9 +49,15 @@ class HiveConnector : public Connector {
       const connector::ColumnHandleMap& columnHandles,
       ConnectorQueryCtx* connectorQueryCtx) override;
 
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
   bool supportsSplitPreload() override {
     return true;
   }
+#else
+  bool supportsSplitPreload() const override {
+    return true;
+  }
+#endif
 
   std::unique_ptr<DataSink> createDataSink(
       RowTypePtr inputType,
@@ -59,8 +65,8 @@ class HiveConnector : public Connector {
       ConnectorQueryCtx* connectorQueryCtx,
       CommitStrategy commitStrategy) override;
 
-  folly::Executor* executor() const override {
-    return executor_;
+  folly::Executor* ioExecutor() const override {
+    return ioExecutor_;
   }
 
   FileHandleCacheStats fileHandleCacheStats() {
@@ -76,7 +82,7 @@ class HiveConnector : public Connector {
  protected:
   const std::shared_ptr<HiveConfig> hiveConfig_;
   FileHandleFactory fileHandleFactory_;
-  folly::Executor* executor_;
+  folly::Executor* ioExecutor_;
   std::shared_ptr<ConnectorMetadata> metadata_;
 };
 

@@ -525,14 +525,6 @@ class ConnectorQueryCtx {
     selectiveNimbleReaderEnabled_ = value;
   }
 
-  bool rowSizeTrackingEnabled() const {
-    return rowSizeTrackingEnabled_;
-  }
-
-  void setRowSizeTrackingEnabled(bool value) {
-    rowSizeTrackingEnabled_ = value;
-  }
-
   std::shared_ptr<filesystems::TokenProvider> fsTokenProvider() const {
     return fsTokenProvider_;
   }
@@ -555,7 +547,6 @@ class ConnectorQueryCtx {
   const folly::CancellationToken cancellationToken_;
   const std::shared_ptr<filesystems::TokenProvider> fsTokenProvider_;
   bool selectiveNimbleReaderEnabled_{false};
-  bool rowSizeTrackingEnabled_{true};
 };
 
 class ConnectorMetadata;
@@ -599,9 +590,15 @@ class Connector {
   /// ConnectorSplit in addSplit(). If so, TableScan can preload splits
   /// so that file opening and metadata operations are off the Driver'
   /// thread.
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
   virtual bool supportsSplitPreload() {
     return false;
   }
+#else
+  virtual bool supportsSplitPreload() const {
+    return false;
+  }
+#endif
 
   /// Returns true if the connector supports index lookup, otherwise false.
   virtual bool supportsIndexLookup() const {
@@ -671,6 +668,14 @@ class Connector {
       const std::string& scanId,
       int32_t loadQuantum);
 
+  /// Returns the IOExecutor used by the connector. It is used to run async IO
+  /// operations by the connector.
+  virtual folly::Executor* ioExecutor() const {
+    return nullptr;
+  }
+
+  // This is for backward compatibility, todo: remove after verax repo is
+  // updated
   virtual folly::Executor* executor() const {
     return nullptr;
   }

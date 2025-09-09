@@ -276,6 +276,39 @@ TEST_F(MapFilterTest, lambdaSelectivityVector) {
   assertEqualVectors(expected, result[0]);
 }
 
+TEST_F(MapFilterTest, fuzzFlatMap) {
+  auto options = VectorFuzzer::Options();
+  options.allowFlatMapVector = true;
+  VectorFuzzer fuzzer(options, execCtx_.pool());
+  constexpr vector_size_t size = 100;
+  auto num_iterations = 100;
+  while (num_iterations--) {
+    auto flatMap = fuzzer.fuzzFlatMap(INTEGER(), INTEGER(), size);
+
+    // Convert to a regular map vector.
+    auto map = flatMap->as<FlatMapVector>()->toMapVector();
+
+    // Wrap in a row vector for evaluation.
+    auto dataFlat = makeRowVector({"c0"}, {flatMap});
+    auto dataMap = makeRowVector({"c0"}, {map});
+
+    // Try a few different filters.
+    std::vector<std::string> filters = {
+        "(k, v) -> (v IS NOT NULL)",
+        "(k, v) -> (k % 2 = 0)",
+        "(k, v) -> (v > 50)",
+        "(k, v) -> (k < 5 OR v IS NULL)",
+    };
+
+    for (const auto& filter : filters) {
+      auto expr = fmt::format("map_filter(c0, {})", filter);
+      auto resultFlat = evaluate(expr, dataFlat);
+      auto resultMap = evaluate(expr, dataMap);
+      assertEqualVectors(resultMap, resultFlat);
+    }
+  }
+}
+
 TEST_F(MapFilterTest, fromFlatMapEncodings) {
   // Case 1: Verify value filter
   assertEqualVectors(
@@ -530,6 +563,35 @@ TEST_F(MapFilterTest, fromFlatMapEncodingsWrappedInConstant) {
                   "{}",
                   "{1:10, 2:20, 3:30, 4:40, 5:50}",
               }))})));
+}
+
+TEST_F(MapFilterTest, fromFlatMapEncodingsWithNullInMaps) {
+  auto distinctKeys = makeFlatVector<int32_t>({1, 2, 3});
+  std::vector<VectorPtr> mapValues(distinctKeys->size());
+  mapValues[0] = makeFlatVector<int32_t>({10, 10, 10});
+  mapValues[1] = makeFlatVector<int32_t>({20, 20, 20});
+  mapValues[2] = makeFlatVector<int32_t>({30, 30, 30});
+  std::vector<BufferPtr> inMaps(distinctKeys->size());
+  inMaps[1] =
+      AlignedBuffer::allocate<bool>(distinctKeys->size(), pool_.get(), 0);
+  FlatMapVectorPtr flatMap = std::make_shared<FlatMapVector>(
+      pool_.get(),
+      MAP(INTEGER(), INTEGER()),
+      nullptr,
+      distinctKeys->size(),
+      distinctKeys,
+      mapValues,
+      inMaps);
+
+  // Will fail without inMap null check during
+  // MapFilterFunction::buildInMapSelectivityVector
+  assertEqualVectors(
+      makeFlatMapVectorFromJson<int32_t, int32_t>({
+          "{1:10, 3:30}",
+          "{1:10, 3:30}",
+          "{1:10, 3:30}",
+      }),
+      evaluate("map_filter(c0, (k, v) -> true)", makeRowVector({flatMap})));
 }
 
 TEST_F(MapFilterTest, try) {
