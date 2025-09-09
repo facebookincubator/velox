@@ -81,12 +81,12 @@ type_list_opt_names : named_type                           { $$.push_back(*($1))
                     ;
 
 // Factor row fields and an optional trailing ", ..." to avoid ambiguity between
-// heterogeneous rows and homogeneous rows with ellipsis.
+// heterogeneous rows and homogeneous rows with ...
 row_type : ROW LPAREN type_list_opt_names row_ellipsis_opt RPAREN
                      {
                          if ($4) {
                              // Homogeneous row: require a single element to define the repeated field type.
-                             VELOX_CHECK(!($3).empty(), "row(T, ...) requires at exactly one element");
+                             VELOX_CHECK(!($3).empty(), "row(T, ...) requires exactly one element");
                              VELOX_CHECK((($3).size() == 1), "row(T, ...) must have exactly one element, got {}", ($3).size());
                              VELOX_CHECK(!($3)[0].rowFieldName().has_value(), "row(T, ...) does not support named fields; use row(T, ...) only");
                              $$ = std::make_shared<exec::TypeSignature>("row", std::vector<exec::TypeSignature>{($3)[0]}, std::nullopt, true);

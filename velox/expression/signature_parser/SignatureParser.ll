@@ -67,7 +67,6 @@ ROW               (ROW|STRUCT)
 "("                return Parser::token::LPAREN;
 ")"                return Parser::token::RPAREN;
 ","                return Parser::token::COMMA;
-"…"                return Parser::token::ELLIPSIS;
 "..."              return Parser::token::ELLIPSIS;
 (ARRAY)            return Parser::token::ARRAY;
 (MAP)              return Parser::token::MAP;

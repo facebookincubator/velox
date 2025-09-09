@@ -260,14 +260,14 @@ TEST_F(ParseTypeSignatureTest, row) {
   // Single double quote is an error.
   EXPECT_THROW(parseTypeSignature("row(\"a\"b\" INTEGER)"), VeloxRuntimeError);
 
-  // Test homogeneous row syntax with ellipsis
+  // Test homogeneous row syntax with three dots
   {
-    auto signature = parseTypeSignature("row(varchar, …)");
+    auto signature = parseTypeSignature("row(varchar, ...)");
     ASSERT_EQ(signature.baseName(), "row");
     ASSERT_EQ(signature.parameters().size(), 1);
     ASSERT_TRUE(signature.hasVariadicArity());
     ASSERT_TRUE(signature.isHomogeneousRow());
-    ASSERT_EQ(signature.toString(), "row(varchar, …)");
+    ASSERT_EQ(signature.toString(), "row(varchar, ...)");
 
     auto field0 = signature.parameters()[0];
     ASSERT_EQ(field0.baseName(), "varchar");
@@ -281,11 +281,11 @@ TEST_F(ParseTypeSignatureTest, row) {
     ASSERT_EQ(signature.parameters().size(), 1);
     ASSERT_TRUE(signature.hasVariadicArity());
     ASSERT_TRUE(signature.isHomogeneousRow());
-    ASSERT_EQ(signature.toString(), "row(integer, …)");
+    ASSERT_EQ(signature.toString(), "row(integer, ...)");
   }
 
   // Test that homogeneous row with named field is rejected
-  EXPECT_THROW(parseTypeSignature("row(name varchar, …)"), VeloxRuntimeError);
+  EXPECT_THROW(parseTypeSignature("row(name varchar, ...)"), VeloxRuntimeError);
 }
 
 TEST_F(ParseTypeSignatureTest, tdigest) {
@@ -314,11 +314,9 @@ TEST_F(ParseTypeSignatureTest, roundTrip) {
       "row(map(K,V),map(bigint,array(double)))");
 
   // Test homogeneous row round-trip parsing
-  ASSERT_EQ(roundTrip("row(T, …)"), "row(T, …)");
-  ASSERT_EQ(
-      roundTrip("row(varchar, ...)"),
-      "row(varchar, …)"); // ASCII dots convert to Unicode
-  ASSERT_EQ(roundTrip("row(bigint, …)"), "row(bigint, …)");
+  ASSERT_EQ(roundTrip("row(T, ...)") , "row(T, ...)");
+  ASSERT_EQ(roundTrip("row(varchar, ...)") , "row(varchar, ...)");
+  ASSERT_EQ(roundTrip("row(bigint, ...)") , "row(bigint, ...)");
 }
 
 TEST_F(ParseTypeSignatureTest, invalidSignatures) {
