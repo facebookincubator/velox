@@ -1207,12 +1207,10 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
     case common::FilterKind::kBoolValue: {
       auto* boolValue = static_cast<const common::BoolValue*>(&filter);
       auto matchesTrue = boolValue->testBool(true);
-      scalars.emplace_back(
-          std::make_unique<cudf::numeric_scalar<bool>>(
-              matchesTrue, true, stream, mr));
-      auto const& matchesBoolExpr = tree.push(
-          cudf::ast::literal{
-              *static_cast<cudf::numeric_scalar<bool>*>(scalars.back().get())});
+      scalars.emplace_back(std::make_unique<cudf::numeric_scalar<bool>>(
+          matchesTrue, true, stream, mr));
+      auto const& matchesBoolExpr = tree.push(cudf::ast::literal{
+          *static_cast<cudf::numeric_scalar<bool>*>(scalars.back().get())});
       return tree.push(Operation{Op::EQUAL, columnRef, matchesBoolExpr});
     }
 
