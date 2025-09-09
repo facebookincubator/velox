@@ -27,21 +27,21 @@
 #pragma once
 #include <folly/Singleton.h>
 #include <folly/Synchronized.h>
+#include <algorithm>
 #include <cstdint>
+#include <iostream>
 #include <string>
 #include <unordered_map>
-#include "algorithm"
-#include "columns.h"
-#include "config.h"
-#include "iostream"
-#include "tables.h"
-#include "vector"
+#include <vector>
+#include "velox/tpcds/gen/dsdgen/include/columns.h"
+#include "velox/tpcds/gen/dsdgen/include/config.h"
+#include "velox/tpcds/gen/dsdgen/include/tables.h"
 
 #ifndef STREAMS_H
 #define STREAMS_H
 #endif
-#include "constants.h"
-#include "tables.h"
+#include "velox/tpcds/gen/dsdgen/include/constants.h"
+#include "velox/tpcds/gen/dsdgen/include/tables.h"
 
 #ifndef R_DIST_H
 #define R_DIST_H

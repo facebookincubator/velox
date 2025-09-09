@@ -24,21 +24,21 @@
  * THE TPC SOFTWARE IS AVAILABLE WITHOUT CHARGE FROM TPC.
  */
 
-#include "w_web_returns.h"
+#include "velox/tpcds/gen/dsdgen/include/w_web_returns.h"
 #include <stdio.h>
-#include "build_support.h"
-#include "config.h"
-#include "date.h"
-#include "decimal.h"
-#include "error_msg.h"
-#include "genrand.h"
-#include "misc.h"
-#include "nulls.h"
-#include "porting.h"
-#include "pricing.h"
-#include "tables.h"
-#include "tdefs.h"
-#include "w_web_sales.h"
+#include "velox/tpcds/gen/dsdgen/include/build_support.h"
+#include "velox/tpcds/gen/dsdgen/include/config.h"
+#include "velox/tpcds/gen/dsdgen/include/date.h"
+#include "velox/tpcds/gen/dsdgen/include/decimal.h"
+#include "velox/tpcds/gen/dsdgen/include/error_msg.h"
+#include "velox/tpcds/gen/dsdgen/include/genrand.h"
+#include "velox/tpcds/gen/dsdgen/include/misc.h"
+#include "velox/tpcds/gen/dsdgen/include/nulls.h"
+#include "velox/tpcds/gen/dsdgen/include/porting.h"
+#include "velox/tpcds/gen/dsdgen/include/pricing.h"
+#include "velox/tpcds/gen/dsdgen/include/tables.h"
+#include "velox/tpcds/gen/dsdgen/include/tdefs.h"
+#include "velox/tpcds/gen/dsdgen/include/w_web_sales.h"
 
 /*
  * Routine: mk_web_returns()

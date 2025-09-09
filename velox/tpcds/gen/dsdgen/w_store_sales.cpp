@@ -24,24 +24,24 @@
  * THE TPC SOFTWARE IS AVAILABLE WITHOUT CHARGE FROM TPC.
  */
 
-#include "w_store_sales.h"
+#include "velox/tpcds/gen/dsdgen/include/w_store_sales.h"
 
-#include "append_info.h"
-#include "build_support.h"
-#include "columns.h"
-#include "config.h"
-#include "constants.h"
-#include "decimal.h"
-#include "genrand.h"
-#include "nulls.h"
-#include "parallel.h"
-#include "permute.h"
-#include "porting.h"
-#include "scaling.h"
-#include "scd.h"
-#include "tables.h"
-#include "tdefs.h"
-#include "w_store_returns.h"
+#include "velox/tpcds/gen/dsdgen/include/append_info.h"
+#include "velox/tpcds/gen/dsdgen/include/build_support.h"
+#include "velox/tpcds/gen/dsdgen/include/columns.h"
+#include "velox/tpcds/gen/dsdgen/include/config.h"
+#include "velox/tpcds/gen/dsdgen/include/constants.h"
+#include "velox/tpcds/gen/dsdgen/include/decimal.h"
+#include "velox/tpcds/gen/dsdgen/include/genrand.h"
+#include "velox/tpcds/gen/dsdgen/include/nulls.h"
+#include "velox/tpcds/gen/dsdgen/include/parallel.h"
+#include "velox/tpcds/gen/dsdgen/include/permute.h"
+#include "velox/tpcds/gen/dsdgen/include/porting.h"
+#include "velox/tpcds/gen/dsdgen/include/scaling.h"
+#include "velox/tpcds/gen/dsdgen/include/scd.h"
+#include "velox/tpcds/gen/dsdgen/include/tables.h"
+#include "velox/tpcds/gen/dsdgen/include/tdefs.h"
+#include "velox/tpcds/gen/dsdgen/include/w_store_returns.h"
 
 // ds_key_t
 // skipDays(int nTable, ds_key_t* pRemainder, DSDGenContext& dsdGenContext);

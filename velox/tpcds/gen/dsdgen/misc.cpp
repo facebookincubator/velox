@@ -30,8 +30,8 @@
 #include <stdio.h>
 #include <time.h>
 #include <cstdint>
-#include "config.h"
-#include "porting.h"
+#include "velox/tpcds/gen/dsdgen/include/config.h"
+#include "velox/tpcds/gen/dsdgen/include/porting.h"
 #ifndef USE_STDLIB_H
 #include <malloc.h>
 #endif
@@ -41,13 +41,13 @@
 #endif /* AIX */
 #include <sys/stat.h>
 #include <sys/types.h>
-#include "date.h"
-#include "decimal.h"
-#include "dist.h"
-#include "genrand.h"
-#include "misc.h"
-#include "r_params.h"
-#include "tdefs.h"
+#include "velox/tpcds/gen/dsdgen/include/date.h"
+#include "velox/tpcds/gen/dsdgen/include/decimal.h"
+#include "velox/tpcds/gen/dsdgen/include/dist.h"
+#include "velox/tpcds/gen/dsdgen/include/genrand.h"
+#include "velox/tpcds/gen/dsdgen/include/misc.h"
+#include "velox/tpcds/gen/dsdgen/include/r_params.h"
+#include "velox/tpcds/gen/dsdgen/include/tdefs.h"
 
 static const char* alpha_num =
     "0123456789abcdefghijklmnopqrstuvwxyz ABCDEFGHIJKLMNOPQRSTUVWXYZ,";
