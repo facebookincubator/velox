@@ -265,13 +265,13 @@ TEST_F(ParseTypeSignatureTest, row) {
     auto signature = parseTypeSignature("row(varchar, …)");
     ASSERT_EQ(signature.baseName(), "row");
     ASSERT_EQ(signature.parameters().size(), 1);
-    ASSERT_TRUE(signature.hasVariadicLastParam());
+    ASSERT_TRUE(signature.hasVariadicArity());
     ASSERT_TRUE(signature.isHomogeneousRow());
     ASSERT_EQ(signature.toString(), "row(varchar, …)");
 
     auto field0 = signature.parameters()[0];
     ASSERT_EQ(field0.baseName(), "varchar");
-    ASSERT_FALSE(field0.hasVariadicLastParam());
+    ASSERT_FALSE(field0.hasVariadicArity());
   }
 
   // Test homogeneous row with three-dot syntax
@@ -279,7 +279,7 @@ TEST_F(ParseTypeSignatureTest, row) {
     auto signature = parseTypeSignature("row(integer, ...)");
     ASSERT_EQ(signature.baseName(), "row");
     ASSERT_EQ(signature.parameters().size(), 1);
-    ASSERT_TRUE(signature.hasVariadicLastParam());
+    ASSERT_TRUE(signature.hasVariadicArity());
     ASSERT_TRUE(signature.isHomogeneousRow());
     ASSERT_EQ(signature.toString(), "row(integer, …)");
   }
