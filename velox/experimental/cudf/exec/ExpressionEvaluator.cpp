@@ -24,7 +24,6 @@
 #include "velox/vector/ConstantVector.h"
 #include "velox/vector/VectorTypeUtils.h"
 
-#include <cudf/ast/expressions.hpp>
 #include <cudf/column/column_factories.hpp>
 #include <cudf/datetime.hpp>
 #include <cudf/lists/count_elements.hpp>
@@ -34,7 +33,6 @@
 #include <cudf/strings/slice.hpp>
 #include <cudf/strings/split/split.hpp>
 #include <cudf/table/table.hpp>
-#include <cudf/table/table_view.hpp>
 #include <cudf/transform.hpp>
 
 #include <limits>

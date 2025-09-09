@@ -22,7 +22,6 @@ add_library(
   velox_cudf_parquet_connector
   OBJECT
   ParquetConfig.cpp
-  ParquetConnector.cpp
   CudfHiveConnector.cpp
   ParquetConnectorSplit.cpp
   ParquetDataSource.cpp

@@ -20,8 +20,6 @@
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/core/PlanNode.h"
 
-#include <functional>
-
 namespace facebook::velox::dwio::common {
 class DataSink;
 class DataSource;

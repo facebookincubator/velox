@@ -268,9 +268,9 @@ void ParquetDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
           "Unsupported file format for conversion from HiveConnectorSplit to ParquetConnectorSplit");
       // Remove "file:" prefix from the file path if present
       std::string cleanedPath = hiveSplit->filePath;
-      constexpr std::string_view filePrefix = "file:";
-      if (cleanedPath.compare(0, filePrefix.size(), filePrefix) == 0) {
-        cleanedPath = cleanedPath.substr(filePrefix.size());
+      constexpr std::string_view kFilePrefix = "file:";
+      if (cleanedPath.compare(0, kFilePrefix.size(), kFilePrefix) == 0) {
+        cleanedPath = cleanedPath.substr(kFilePrefix.size());
       }
       return ParquetConnectorSplitBuilder(cleanedPath)
           .connectorId(hiveSplit->connectorId)

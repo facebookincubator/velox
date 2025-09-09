@@ -46,17 +46,7 @@ class CudfHiveConnector final : public hive::HiveConnector {
     return false;
   }
 
-  // TODO (dm): What config to be returned from here?
-  // const std::shared_ptr<const ConfigBase>& connectorConfig() const override {
-  //   return parquetConfig_->config();
-  // }
-
-  // TODO (dm): Add data sink
-  // std::unique_ptr<DataSink> createDataSink(
-  //     RowTypePtr inputType,
-  //     ConnectorInsertTableHandlePtr connectorInsertTableHandle,
-  //     ConnectorQueryCtx* connectorQueryCtx,
-  //     CommitStrategy commitStrategy) override final;
+  // TODO (dm): Re-add data sink
 
  protected:
   // TODO (dm): rename parquetconfig

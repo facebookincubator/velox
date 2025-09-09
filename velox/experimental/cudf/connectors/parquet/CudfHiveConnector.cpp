@@ -29,9 +29,7 @@ CudfHiveConnector::CudfHiveConnector(
     std::shared_ptr<const facebook::velox::config::ConfigBase> config,
     folly::Executor* executor)
     : hive::HiveConnector(id, config, executor),
-      parquetConfig_(std::make_shared<ParquetConfig>(config)) {
-  LOG(INFO) << "cudf::Parquet connector " << connectorId() << " created.";
-}
+      parquetConfig_(std::make_shared<ParquetConfig>(config)) {}
 
 std::unique_ptr<DataSource> CudfHiveConnector::createDataSource(
     const RowTypePtr& outputType,
@@ -63,25 +61,7 @@ std::unique_ptr<DataSource> CudfHiveConnector::createDataSource(
       hiveConfig_);
 }
 
-// TODO (dm): Add data sink
-// std::unique_ptr<DataSink> CudfHiveConnector::createDataSink(
-//     RowTypePtr inputType,
-//     ConnectorInsertTableHandlePtr connectorInsertTableHandle,
-//     ConnectorQueryCtx* connectorQueryCtx,
-//     CommitStrategy /*commitStrategy*/) {
-//   auto parquetInsertHandle =
-//       std::dynamic_pointer_cast<const ParquetInsertTableHandle>(
-//           connectorInsertTableHandle);
-//   VELOX_CHECK_NOT_NULL(
-//       parquetInsertHandle, "Parquet connector expecting parquet write
-//       handle!");
-//   return std::make_unique<ParquetDataSink>(
-//       inputType,
-//       parquetInsertHandle,
-//       connectorQueryCtx,
-//       CommitStrategy::kNoCommit,
-//       parquetConfig_);
-// }
+// TODO (dm): Re-add data sink
 
 std::shared_ptr<Connector> CudfHiveConnectorFactory::newConnector(
     const std::string& id,
