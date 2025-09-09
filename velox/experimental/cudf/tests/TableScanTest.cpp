@@ -336,6 +336,7 @@ TEST_F(TableScanTest, filterPushdown) {
                   int64_t(0), std::numeric_limits<int64_t>::max(), true))
           .add("c3", std::make_unique<common::BoolValue>(true, false))
           .build();
+
   auto tableHandle = makeTableHandle(
       "parquet_table", rowType, true, std::move(subfieldFilters), nullptr);
 

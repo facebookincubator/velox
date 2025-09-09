@@ -74,7 +74,7 @@ std::string TableWriterTestBase::TestParam::toString() const {
       "FileFormat_{}_TestMode_{}_commitStrategy_{}_bucketKind_{}_bucketSort_{}_multiDrivers_{}_compression_{}_scaleWriter_{}",
       dwio::common::toString((fileFormat())),
       testModeString(testMode()),
-      commitStrategyToString(commitStrategy()),
+      CommitStrategyName::toName(commitStrategy()),
       HiveBucketProperty::kindString(bucketKind()),
       bucketSort(),
       multiDrivers(),
@@ -103,8 +103,8 @@ core::ColumnStatsSpec TableWriterTestBase::generateColumnStatsSpec(
     AggregationNode::Step step) {
   core::TypedExprPtr inputField =
       std::make_shared<const core::FieldAccessTypedExpr>(BIGINT(), name);
-  auto callExpr = std::make_shared<const core::CallTypedExpr>(
-      BIGINT(), std::vector<core::TypedExprPtr>{inputField}, "min");
+  auto callExpr =
+      std::make_shared<const core::CallTypedExpr>(BIGINT(), "min", inputField);
   std::vector<std::string> aggregateNames = {"min"};
   std::vector<core::AggregationNode::Aggregate> aggregates = {
       core::AggregationNode::Aggregate{
