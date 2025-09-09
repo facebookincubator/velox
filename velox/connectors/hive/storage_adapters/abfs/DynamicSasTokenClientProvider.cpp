@@ -24,42 +24,42 @@ namespace {
 
 constexpr int64_t kDefaultSasTokenRenewPeriod = 120; // in seconds
 
-Azure::DateTime getExpiry(const std::string& token) {
+Azure::DateTime getExpiry(const std::string_view& token) {
   if (token.empty()) {
     return Azure::DateTime::clock::time_point::min();
   }
 
-  const std::string signedExpiry = "se=";
-  const int32_t signedExpiryLen = 3;
+  static constexpr std::string_view kSignedExpiry{"se="};
+  static constexpr int32_t kSignedExpiryLen = 3;
 
-  auto start = token.find(signedExpiry);
+  auto start = token.find(kSignedExpiry);
   if (start == std::string::npos) {
     return Azure::DateTime::clock::time_point::min();
   }
-  start += signedExpiryLen;
+  start += kSignedExpiryLen;
 
   auto end = token.find("&", start);
-  std::string seValue = (end == std::string::npos)
-      ? token.substr(start)
-      : token.substr(start, end - start);
+  auto seValue = (end == std::string::npos)
+      ? std::string(token.substr(start))
+      : std::string(token.substr(start, end - start));
 
   seValue = Azure::Core::Url::Decode(seValue);
   auto seDate =
       Azure::DateTime::Parse(seValue, Azure::DateTime::DateFormat::Rfc3339);
 
-  const std::string signedKeyExpiry = "ske=";
-  const int32_t signedKeyExpiryLen = 4;
+  static constexpr std::string_view kSignedKeyExpiry = "ske=";
+  static constexpr int32_t kSignedKeyExpiryLen = 4;
 
-  start = token.find(signedKeyExpiry);
+  start = token.find(kSignedKeyExpiry);
   if (start == std::string::npos) {
     return seDate;
   }
-  start += signedKeyExpiryLen;
+  start += kSignedKeyExpiryLen;
 
   end = token.find("&", start);
-  std::string skeValue = (end == std::string::npos)
-      ? token.substr(start)
-      : token.substr(start, end - start);
+  auto skeValue = (end == std::string::npos)
+      ? std::string(token.substr(start))
+      : std::string(token.substr(start, end - start));
 
   skeValue = Azure::Core::Url::Decode(skeValue);
   auto skeDate =
@@ -127,7 +127,7 @@ class DynamicSasTokenDataLakeFileClient final : public AzureDataLakeFileClient {
   DataLakeFileClient* getWriteClient() {
     if (writeClient_ == nullptr ||
         isNearExpiry(writeSasExpiration_, sasTokenRenewPeriod_)) {
-      const auto sas = sasKeyGenerator_->getSasToken(
+      const auto& sas = sasKeyGenerator_->getSasToken(
           abfsPath_->fileSystem(), abfsPath_->filePath(), kAbfsWriteOperation);
       writeSasExpiration_ = getExpiry(sas);
       writeClient_ = std::make_unique<DataLakeFileClient>(
@@ -139,7 +139,7 @@ class DynamicSasTokenDataLakeFileClient final : public AzureDataLakeFileClient {
   DataLakeFileClient* getReadClient() {
     if (readClient_ == nullptr ||
         isNearExpiry(readSasExpiration_, sasTokenRenewPeriod_)) {
-      const auto sas = sasKeyGenerator_->getSasToken(
+      const auto& sas = sasKeyGenerator_->getSasToken(
           abfsPath_->fileSystem(), abfsPath_->filePath(), kAbfsReadOperation);
       readSasExpiration_ = getExpiry(sas);
       readClient_ = std::make_unique<DataLakeFileClient>(
@@ -184,7 +184,7 @@ class DynamicSasTokenBlobClient : public AzureBlobClient {
   BlobClient* getBlobClient() {
     if (blobClient_ == nullptr ||
         isNearExpiry(sasExpiration_, sasTokenRenewPeriod_)) {
-      const auto sas = sasTokenProvider_->getSasToken(
+      const auto& sas = sasTokenProvider_->getSasToken(
           abfsPath_->fileSystem(), abfsPath_->filePath(), kAbfsReadOperation);
       sasExpiration_ = getExpiry(sas);
       blobClient_ = std::make_unique<Azure::Storage::Blobs::BlobClient>(
