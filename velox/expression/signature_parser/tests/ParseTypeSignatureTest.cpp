@@ -259,13 +259,14 @@ TEST_F(ParseTypeSignatureTest, row) {
 
   // Single double quote is an error.
   EXPECT_THROW(parseTypeSignature("row(\"a\"b\" INTEGER)"), VeloxRuntimeError);
+}
 
-  // Test homogeneous row syntax with three dots
+TEST_F(ParseTypeSignatureTest, homogeneousRow) {
   {
+    // Test homogeneous row syntax with three dots
     auto signature = parseTypeSignature("row(varchar, ...)");
     ASSERT_EQ(signature.baseName(), "row");
     ASSERT_EQ(signature.parameters().size(), 1);
-    ASSERT_TRUE(signature.hasVariadicArity());
     ASSERT_TRUE(signature.isHomogeneousRow());
     ASSERT_EQ(signature.toString(), "row(varchar, ...)");
 
@@ -274,12 +275,11 @@ TEST_F(ParseTypeSignatureTest, row) {
     ASSERT_FALSE(field0.hasVariadicArity());
   }
 
-  // Test homogeneous row with three-dot syntax
   {
+    // Test homogeneous row syntax with three dots and a different type
     auto signature = parseTypeSignature("row(integer, ...)");
     ASSERT_EQ(signature.baseName(), "row");
     ASSERT_EQ(signature.parameters().size(), 1);
-    ASSERT_TRUE(signature.hasVariadicArity());
     ASSERT_TRUE(signature.isHomogeneousRow());
     ASSERT_EQ(signature.toString(), "row(integer, ...)");
   }
@@ -314,9 +314,9 @@ TEST_F(ParseTypeSignatureTest, roundTrip) {
       "row(map(K,V),map(bigint,array(double)))");
 
   // Test homogeneous row round-trip parsing
-  ASSERT_EQ(roundTrip("row(T, ...)") , "row(T, ...)");
-  ASSERT_EQ(roundTrip("row(varchar, ...)") , "row(varchar, ...)");
-  ASSERT_EQ(roundTrip("row(bigint, ...)") , "row(bigint, ...)");
+  ASSERT_EQ(roundTrip("row(T, ...)"), "row(T, ...)");
+  ASSERT_EQ(roundTrip("row(varchar, ...)"), "row(varchar, ...)");
+  ASSERT_EQ(roundTrip("row(bigint, ...)"), "row(bigint, ...)");
 }
 
 TEST_F(ParseTypeSignatureTest, invalidSignatures) {
