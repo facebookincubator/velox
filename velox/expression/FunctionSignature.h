@@ -502,7 +502,7 @@ struct hash<facebook::velox::exec::TypeSignature> {
     if (key.rowFieldName().has_value()) {
       val = val * 31 + std::hash<std::string>{}(*key.rowFieldName());
     }
-    val = val * 31 + std::hash<bool>{}(key.hasVariadicLastParam());
+    val = val * 31 + std::hash<bool>{}(key.hasVariadicArity());
     return val;
   }
 };
