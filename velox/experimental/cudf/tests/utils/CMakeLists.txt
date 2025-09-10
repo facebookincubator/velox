@@ -30,6 +30,6 @@ target_link_libraries(
   velox_parse_parser
   velox_duckdb_conversion
   velox_file_test_utils
-  velox_cudf_parquet_connector
+  velox_cudf_hive_connector
   velox_aggregates
 )
