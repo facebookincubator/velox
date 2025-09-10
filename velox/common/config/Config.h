@@ -23,6 +23,7 @@
 
 #include "folly/Conv.h"
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/config/IConfig.h"
 
 namespace facebook::velox::config {
 
@@ -47,7 +48,7 @@ std::chrono::duration<double> toDuration(const std::string& str);
 
 /// The concrete config class should inherit the config base and define all the
 /// entries.
-class ConfigBase {
+class ConfigBase : public IConfig {
  public:
   template <typename T>
   struct Entry {
@@ -111,49 +112,18 @@ class ConfigBase {
                                   : entry.defaultVal;
   }
 
-  template <typename T>
-  std::optional<T> get(
-      const std::string& key,
-      std::function<T(std::string, std::string)> toT = [](auto /* unused */,
-                                                          auto value) {
-        return folly::to<T>(value);
-      }) const {
-    auto val = get(key);
-    if (val.has_value()) {
-      return toT(key, val.value());
-    } else {
-      return std::nullopt;
-    }
-  }
-
-  template <typename T>
-  T get(
-      const std::string& key,
-      const T& defaultValue,
-      std::function<T(std::string, std::string)> toT = [](auto /* unused */,
-                                                          auto value) {
-        return folly::to<T>(value);
-      }) const {
-    auto val = get(key);
-    if (val.has_value()) {
-      return toT(key, val.value());
-    } else {
-      return defaultValue;
-    }
-  }
-
   bool valueExists(const std::string& key) const;
 
   const std::unordered_map<std::string, std::string>& rawConfigs() const;
 
-  std::unordered_map<std::string, std::string> rawConfigsCopy() const;
+  std::unordered_map<std::string, std::string> rawConfigsCopy() const final;
 
  protected:
   mutable std::shared_mutex mutex_;
   std::unordered_map<std::string, std::string> configs_;
 
  private:
-  std::optional<std::string> get(const std::string& key) const;
+  std::optional<std::string> get(const std::string& key) const final;
 
   const bool mutable_;
 };
