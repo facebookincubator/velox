@@ -15,13 +15,8 @@
  */
 #pragma once
 
-/// This file contains string literals for function names.
-/// These literals listed in single place to explicitly list functions that
-/// names used once even in case when user specify some prefix on registration.
-
 namespace facebook::velox::expression {
 
-/// These functions registered without prefix and velox code rely on this.
 inline constexpr const char* kAnd = "and";
 inline constexpr const char* kOr = "or";
 inline constexpr const char* kSwitch = "switch";
