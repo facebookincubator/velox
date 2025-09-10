@@ -777,13 +777,13 @@ TEST_F(ArithmeticTest, absMinValueOverflow) {
   queryCtx_->testingOverrideConfigUnsafe(
       {{core::QueryConfig::kSparkAnsiEnabled, "true"}});
 
-  EXPECT_THROW(abs<int8_t>(std::numeric_limits<int8_t>::min()), VeloxUserError);
-  EXPECT_THROW(
-      abs<int16_t>(std::numeric_limits<int16_t>::min()), VeloxUserError);
-  EXPECT_THROW(
-      abs<int32_t>(std::numeric_limits<int32_t>::min()), VeloxUserError);
-  EXPECT_THROW(
-      abs<int64_t>(std::numeric_limits<int64_t>::min()), VeloxUserError);
+  VELOX_ASSERT_THROW(abs<int8_t>(std::numeric_limits<int8_t>::min()), "Arithmetic overflow");
+  VELOX_ASSERT_THROW(
+      abs<int16_t>(std::numeric_limits<int16_t>::min()), "Arithmetic overflow");
+  VELOX_ASSERT_THROW(
+      abs<int32_t>(std::numeric_limits<int32_t>::min()), "Arithmetic overflow");
+  VELOX_ASSERT_THROW(
+      abs<int64_t>(std::numeric_limits<int64_t>::min()), "Arithmetic overflow");
 }
 
 class LogNTest : public SparkFunctionBaseTest {

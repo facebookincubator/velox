@@ -33,31 +33,35 @@ template <typename TExec>
 struct AbsFunction {
   VELOX_DEFINE_FUNCTION_TYPES(TExec);
 
-  bool ansiEnabled_ = false;
-
   template <typename TInput>
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& config,
       const TInput* /*a*/) {
-    ansiEnabled_ = config.sparkAnsiEnabled();
+    ansiEnabled = config.sparkAnsiEnabled();
   }
 
   template <typename T>
-  FOLLY_ALWAYS_INLINE void call(T& result, const T& a) {
+  FOLLY_ALWAYS_INLINE Status call(T& result, const T& a) {
     if constexpr (std::is_integral_v<T>) {
       if (FOLLY_UNLIKELY(a == std::numeric_limits<T>::min())) {
-        if (ansiEnabled_) {
-          // In ANSI mode, throws an overflow error.
-          VELOX_USER_FAIL("Arithmetic overflow: abs({})", a);
+        if (ansiEnabled) {
+          // In ANSI mode, returns an overflow error.
+          if (threadSkipErrorDetails()) {
+            return Status::UserError();
+          }
+          return Status::UserError("Arithmetic overflow: abs({})", a);
         }
         // In ANSI off mode, returns the same negative minimum value.
         result = a;
-        return;
+        return Status::OK();
       }
     }
     result = std::abs(a);
+    return Status::OK();
   }
+
+  bool ansiEnabled = false;
 };
 
 template <typename T>
