@@ -20,9 +20,9 @@
 namespace facebook::velox::functions::sparksql {
 
 namespace {
-const std::string eq = "equalto";
-const std::string lt = "lessthan";
-const std::string gt = "greaterthan";
+inline const std::string eq = "equalto";
+inline const std::string lt = "lessthan";
+inline const std::string gt = "greaterthan";
 } // namespace
 
 class SparkComparisonMatcher : public ComparisonMatcher {
