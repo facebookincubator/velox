@@ -5494,3 +5494,21 @@ TEST_F(DateTimeFunctionsTest, xxHash64FunctionTimestamp) {
   EXPECT_EQ(
       7585368295023641328, xxhash64(parseTimestamp("1900-01-01 00:00:00.000")));
 }
+
+TEST_F(DateTimeFunctionsTest, currentTimezone) {
+  {
+    setQueryTimeZone("Asia/Kolkata");
+    auto tz = evaluateOnce<std::string>(
+        "current_timezone()", makeRowVector(ROW({}), 1));
+    ASSERT_TRUE(tz.has_value());
+    EXPECT_EQ(tz.value(), "Asia/Kolkata");
+  }
+
+  {
+    setQueryTimeZone("America/New_York");
+    auto tz = evaluateOnce<std::string>(
+        "current_timezone()", makeRowVector(ROW({}), 1));
+    ASSERT_TRUE(tz.has_value());
+    EXPECT_EQ(tz.value(), "America/New_York");
+  }
+}
