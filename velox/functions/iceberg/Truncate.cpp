@@ -42,9 +42,7 @@ struct TruncateFunction {
       const core::QueryConfig& /*config*/,
       const int32_t* /*width*/,
       const arg_type<Varchar>* /*input*/) {
-    if (inputTypes[1]->kind() == TypeKind::VARBINARY) {
-      inputIsVarbinary = true;
-    }
+    inputIsVarbinary_ = inputTypes[1]->isVarbinary();
   }
 
   template <typename T>
@@ -60,7 +58,7 @@ struct TruncateFunction {
       int32_t width,
       const arg_type<Varchar>& input) {
     VELOX_USER_RETURN_LE(width, 0, "Invalid truncate width");
-    const auto truncatedwidth = inputIsVarbinary
+    const auto truncatedwidth = inputIsVarbinary_
         ? stringImpl::cappedByteLength<true>(input, width)
         : stringImpl::cappedByteLength<false>(input, width);
     result = StringView(input.data(), truncatedwidth);
@@ -78,7 +76,7 @@ struct TruncateFunction {
   }
 
  private:
-  bool inputIsVarbinary = false;
+  bool inputIsVarbinary_ = false;
 };
 } // namespace
 

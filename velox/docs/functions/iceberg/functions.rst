@@ -36,8 +36,8 @@ Refer to `Iceberg documenation <https://iceberg.apache.org/spec/#partition-trans
        SELECT truncate(10, 11); -- 10
        SELECT truncate(10, -11); -- -20
        SELECT truncate(7, 22); -- 21
-       SELECT truncate(0, 11); -- throw
-       SELECT truncate(-3, 11); -- throw
+       SELECT truncate(0, 11); -- error: Reason: (0 vs. 0) Invalid truncate width\nExpression: width <= 0
+       SELECT truncate(-3, 11); -- error: Reason: (-3 vs. 0) Invalid truncate width\nExpression: width <= 0
        SELECT truncate(4, 'iceberg'); -- 'iceb'
        SELECT truncate(1, '测试'); -- 测
        SELECT truncate(6, '测试'); -- 测试
