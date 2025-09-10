@@ -18,8 +18,6 @@
 #include "velox/functions/iceberg/tests/IcebergFunctionBaseTest.h"
 #include "velox/type/Timestamp.h"
 
-using namespace facebook::velox;
-
 namespace facebook::velox::functions::iceberg {
 namespace {
 
