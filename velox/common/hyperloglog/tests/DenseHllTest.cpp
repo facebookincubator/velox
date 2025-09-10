@@ -40,16 +40,16 @@ class DenseHllTest : public ::testing::TestWithParam<int8_t> {
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
   }
 
-  DenseHll roundTrip(DenseHll& hll) {
+  DenseHll<> roundTrip(DenseHll<>& hll) {
     auto size = hll.serializedSize();
     std::string serialized;
     serialized.resize(size);
     hll.serialize(serialized.data());
 
-    return DenseHll(serialized.data(), &allocator_);
+    return DenseHll<>(serialized.data(), &allocator_);
   }
 
-  std::string serialize(DenseHll& denseHll) {
+  std::string serialize(DenseHll<>& denseHll) {
     auto size = denseHll.serializedSize();
     std::string serialized;
     serialized.resize(size);
@@ -72,9 +72,9 @@ class DenseHllTest : public ::testing::TestWithParam<int8_t> {
       const std::vector<T>& left,
       const std::vector<T>& right,
       bool serialized) {
-    DenseHll hllLeft{indexBitLength, &allocator_};
-    DenseHll hllRight{indexBitLength, &allocator_};
-    DenseHll expected{indexBitLength, &allocator_};
+    DenseHll<> hllLeft{indexBitLength, &allocator_};
+    DenseHll<> hllRight{indexBitLength, &allocator_};
+    DenseHll<> expected{indexBitLength, &allocator_};
 
     for (auto value : left) {
       auto hash = hashOne(value);
@@ -100,7 +100,7 @@ class DenseHllTest : public ::testing::TestWithParam<int8_t> {
 
     auto hllLeftSerialized = serialize(hllLeft);
     ASSERT_EQ(
-        DenseHll::cardinality(hllLeftSerialized.data()),
+        DenseHllUtils::cardinality(hllLeftSerialized.data()),
         expected.cardinality());
   }
 
@@ -112,7 +112,7 @@ class DenseHllTest : public ::testing::TestWithParam<int8_t> {
 TEST_P(DenseHllTest, basic) {
   int8_t indexBitLength = GetParam();
 
-  DenseHll denseHll{indexBitLength, &allocator_};
+  DenseHll<> denseHll{indexBitLength, &allocator_};
   for (int i = 0; i < 1'000; i++) {
     auto value = i % 17;
     auto hash = hashOne(value);
@@ -131,17 +131,17 @@ TEST_P(DenseHllTest, basic) {
 
   ASSERT_EQ(expectedCardinality, denseHll.cardinality());
 
-  DenseHll deserialized = roundTrip(denseHll);
+  DenseHll<> deserialized = roundTrip(denseHll);
   ASSERT_EQ(expectedCardinality, deserialized.cardinality());
 
   auto serialized = serialize(denseHll);
-  ASSERT_EQ(expectedCardinality, DenseHll::cardinality(serialized.data()));
+  ASSERT_EQ(expectedCardinality, DenseHllUtils::cardinality(serialized.data()));
 }
 
 TEST_P(DenseHllTest, highCardinality) {
   int8_t indexBitLength = GetParam();
 
-  DenseHll denseHll{indexBitLength, &allocator_};
+  DenseHll<> denseHll{indexBitLength, &allocator_};
   for (int i = 0; i < 10'000'000; i++) {
     auto hash = hashOne(i);
     denseHll.insertHash(hash);
@@ -151,11 +151,12 @@ TEST_P(DenseHllTest, highCardinality) {
     ASSERT_NEAR(10'000'000, denseHll.cardinality(), 150'000);
   }
 
-  DenseHll deserialized = roundTrip(denseHll);
+  DenseHll<> deserialized = roundTrip(denseHll);
   ASSERT_EQ(denseHll.cardinality(), deserialized.cardinality());
 
   auto serialized = serialize(denseHll);
-  ASSERT_EQ(denseHll.cardinality(), DenseHll::cardinality(serialized.data()));
+  ASSERT_EQ(
+      denseHll.cardinality(), DenseHllUtils::cardinality(serialized.data()));
 }
 
 namespace {
@@ -181,9 +182,9 @@ TEST_P(DenseHllTest, canDeserialize) {
 
   for (folly::StringPiece& invalidString : invalidStrings) {
     auto invalidHll = Base64::decode(invalidString);
-    EXPECT_TRUE(DenseHll::canDeserialize(invalidHll.c_str()));
+    EXPECT_TRUE(DenseHllUtils::canDeserialize(invalidHll.c_str()));
     EXPECT_FALSE(
-        DenseHll::canDeserialize(invalidHll.c_str(), invalidHll.length()));
+        DenseHllUtils::canDeserialize(invalidHll.c_str(), invalidHll.length()));
   }
 
   std::vector<folly::StringPiece> validStrings{
@@ -192,8 +193,9 @@ TEST_P(DenseHllTest, canDeserialize) {
 
   for (folly::StringPiece& validString : validStrings) {
     auto validHll = Base64::decode(validString);
-    EXPECT_TRUE(DenseHll::canDeserialize(validHll.c_str()));
-    EXPECT_TRUE(DenseHll::canDeserialize(validHll.c_str(), validHll.length()));
+    EXPECT_TRUE(DenseHllUtils::canDeserialize(validHll.c_str()));
+    EXPECT_TRUE(
+        DenseHllUtils::canDeserialize(validHll.c_str(), validHll.length()));
   }
 }
 

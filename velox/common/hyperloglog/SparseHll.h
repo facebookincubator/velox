@@ -14,19 +14,32 @@
  * limitations under the License.
  */
 #pragma once
+#include <type_traits>
 #include "velox/common/hyperloglog/DenseHll.h"
 #include "velox/common/memory/HashStringAllocator.h"
+#include "velox/common/memory/MemoryPool.h"
 
 namespace facebook::velox::common::hll {
+
+// Forward declarations for static utility functions
+namespace SparseHllUtils {
+/// Returns cardinality estimate from the specified serialized digest.
+int64_t cardinality(const char* serialized);
+/// Returns true if 'input' has Presto SparseV2 format.
+bool canDeserialize(const char* input);
+std::string serializeEmpty(int8_t indexBitLength);
+int8_t deserializeIndexBitLength(const char* input);
+} // namespace SparseHllUtils
+
 /// HyperLogLog implementation using sparse storage layout.
 /// It uses 26-bit buckets and provides high accuracy for low cardinalities.
 /// Memory usage: 4 bytes for each observed bucket.
+template <typename Allocator = HashStringAllocator*>
 class SparseHll {
  public:
-  explicit SparseHll(HashStringAllocator* allocator)
-      : entries_{StlAllocator<uint32_t>(allocator)} {}
+  explicit SparseHll(Allocator allocator);
 
-  SparseHll(const char* serialized, HashStringAllocator* allocator);
+  SparseHll(const char* serialized, Allocator allocator);
 
   void setSoftMemoryLimit(uint32_t softMemoryLimit) {
     softNumEntriesLimit_ = softMemoryLimit / 4;
@@ -42,16 +55,8 @@ class SparseHll {
 
   int64_t cardinality() const;
 
-  /// Returns cardinality estimate from the specified serialized digest.
-  static int64_t cardinality(const char* serialized);
-
   /// Serializes internal state using Presto SparseV2 format.
   void serialize(int8_t indexBitLength, char* output) const;
-
-  static std::string serializeEmpty(int8_t indexBitLength);
-
-  /// Returns true if 'input' has Presto SparseV2 format.
-  static bool canDeserialize(const char* input);
 
   /// Returns the size of the serialized state without serialising.
   int32_t serializedSize() const;
@@ -63,7 +68,8 @@ class SparseHll {
   void mergeWith(const char* serialized);
 
   /// Merges state into provided instance of DenseHll.
-  void toDense(DenseHll& denseHll) const;
+  template <typename DenseAllocator>
+  void toDense(DenseHll<DenseAllocator>& denseHll) const;
 
   /// Returns current memory usage.
   int32_t inMemorySize() const;
@@ -84,8 +90,14 @@ class SparseHll {
   /// A list of observed buckets. Each entry is a 32 bit integer encoding 26-bit
   /// bucket and 6-bit value (number of zeros in the input hash after the bucket
   /// + 1).
-  std::vector<uint32_t, StlAllocator<uint32_t>> entries_;
-
+  Allocator allocator_;
+  std::vector<
+      uint32_t,
+      typename std::conditional_t<
+          std::is_same_v<Allocator, HashStringAllocator*>,
+          StlAllocator<uint32_t>,
+          memory::StlAllocator<uint32_t>>>
+      entries_;
   /// Number of entries that can be stored before reaching soft memory limit.
   uint32_t softNumEntriesLimit_{0};
 };
