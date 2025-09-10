@@ -49,7 +49,7 @@ CudfTopN::CudfTopN(
         exec::exprToChannel(topNNode->sortingKeys()[i].get(), outputType_);
     VELOX_CHECK(
         channel != kConstantChannel,
-        "OrderBy doesn't allow constant sorting keys");
+        "TopN doesn't allow constant sorting keys");
     sortKeys_.push_back(channel);
     isSortingKey[channel] = true;
     auto const& sortingOrder = topNNode->sortingOrders()[i];
