@@ -31,7 +31,7 @@ std::string TypeSignature::toString() const {
   out << baseName_;
   if (!parameters_.empty()) {
     if (baseName_ == "row" && parameters_.size() == 1 && variadicArity_) {
-      out << "(" << parameters_[0].toString() << ", …)";
+      out << "(" << parameters_[0].toString() << ", ... )";
     } else {
       out << "(" << folly::join(",", parameters_) << ")";
     }
