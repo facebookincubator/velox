@@ -4,21 +4,21 @@ Velox-cuDF is a Velox extension module that uses the cuDF library to implement a
 
 ## How Velox and cuDF work together
 
-Velox-cuDF uses the [DriverAdapter](https://github.com/facebookincubator/velox/blob/2a9c9043264a60c9a1b01324f8371c64bd095af9/velox/experimental/cudf/exec/ToCudf.cpp#L293) interface to rewrite query plans for GPU execution. Generally the cuDF DriverAdapter replaces operators one-to-one. For end-to-end GPU execution where cuDF replaces all of the Velox CPU operators, cuDF relies on Velox's [pipeline-based execution model](https://facebookincubator.github.io/velox/develop/task.html) to separate stages of execution, partition the work across drivers, and schedule concurrent work on the GPU.
+Velox-cuDF implements the Velox [DriverAdapter](https://github.com/facebookincubator/velox/blob/d9f953cd23880f29593534f1ba9031c6cea8ba06/velox/exec/Driver.h#L695) interface as [CudfDriverAdapter](https://github.com/facebookincubator/velox/blob/226b92cefedce4b8a484bfc351260edbd3d2e501/velox/experimental/cudf/exec/ToCudf.cpp#L301) to rewrite query plans for GPU execution. Generally the cuDF DriverAdapter replaces operators one-to-one. For end-to-end GPU execution where cuDF replaces all of the Velox CPU operators, cuDF relies on Velox's [pipeline-based execution model](https://facebookincubator.github.io/velox/develop/task.html) to separate stages of execution, partition the work across drivers, and schedule concurrent work on the GPU.
 
 For more information please refer to our blog: "[Extending Velox - GPU Acceleration with cuDF](https://velox-lib.io/blog/extending-velox-with-cudf)."
 
 ## Getting started with Velox-cuDF
 
-cuDF supports Linux but not Windows or MacOS, and requires CUDA 12.0+ with a compatible NVIDIA driver. cuDF runs on NVIDIA GPUs with Volta architecture or better (Compute Capability >=7.0). Please refer to cuDF's [readme](https://github.com/rapidsai/cudf) and [developer guide](https://github.com/rapidsai/cudf/blob/branch-25.10/cpp/doxygen/developer_guide/DEVELOPER_GUIDE.md) for more information.
+cuDF supports Linux and WSL2 but not Windows or MacOS. cuDF also has minimum CUDA version, NVIDIA driver and GPU architecture requirements which can be found in the [RAPIDS Installation Guide](https://docs.rapids.ai/install/). Please refer to cuDF's [readme](https://github.com/rapidsai/cudf) and [developer guide](https://github.com/rapidsai/cudf/blob/branch-25.10/cpp/doxygen/developer_guide/DEVELOPER_GUIDE.md) for more information.
 
 ### Building Velox with cuDF
 
-The cuDF backend is included in Velox builds when the [VELOX_ENABLE_CUDF](https://github.com/facebookincubator/velox/blob/43df50c4f24bcbfa96f5739c072ab0894d41cf4c/CMakeLists.txt#L455)  flag is set. The `adapters-cuda` service in Velox's [docker-compose.yml](https://github.com/facebookincubator/velox/blob/43df50c4f24bcbfa96f5739c072ab0894d41cf4c/docker-compose.yml#L69) is an excellent starting point for Velox builds with cuDF. 
+The cuDF backend is included in Velox builds when the [VELOX_ENABLE_CUDF](https://github.com/facebookincubator/velox/blob/43df50c4f24bcbfa96f5739c072ab0894d41cf4c/CMakeLists.txt#L455) CMake option is set. The `adapters-cuda` service in Velox's [docker-compose.yml](https://github.com/facebookincubator/velox/blob/43df50c4f24bcbfa96f5739c072ab0894d41cf4c/docker-compose.yml#L69) is an excellent starting point for Velox builds with cuDF.
 
 1. Use `docker compose` to run an `adapters-cuda` image.
 ```
-$ docker compose -f docker-compose.yml run -e NUM_THREADS=64 --rm -v "$(pwd):/velox" adapters-cuda /bin/bash
+$ docker compose -f docker-compose.yml run -e NUM_THREADS=8 --rm -v "$(pwd):/velox" adapters-cuda /bin/bash
 ```
 2. Once inside the image, build cuDF with the following flags:
 ```
@@ -30,6 +30,8 @@ $ cd _build/release
 $ ctest -R cudf -V
 ```
 
+Velox-cuDF builds are not yet included in Velox CI. The build step for cuDF does not require the worker to have a GPU, so adding a Velox-cuDF build step to Velox CI is compatible with the existing runners.
+
 ### Testing Velox with cuDF
 
 The Velox-cuDF tests in [experimental/cudf/tests](https://github.com/facebookincubator/velox/blob/main/velox/experimental/cudf/tests) include several types of tests:
@@ -39,7 +41,7 @@ The Velox-cuDF tests in [experimental/cudf/tests](https://github.com/facebookinc
 
 #### Operator tests
 
-Many of tests for cuDF are "operator tests" which confirm correct execution of simple query plans. cuDF's operator tests use the cuDF `DriverAdapter` to modify the test plan with GPU operators before executing it. The operator tests for cuDF include both tests that assert successful GPU operator replacement, and tests that pass with CPU fallback. 
+Many of the tests for cuDF are "operator tests" which confirm correct execution of simple query plans. cuDF's operator tests use `CudfDriverAdapter` to modify the test plan with GPU operators before executing it. The operator tests for cuDF include both tests that assert successful GPU operator replacement, and tests that pass with CPU fallback.
 
 #### Function tests
 
@@ -47,11 +49,13 @@ Velox-cuDF also includes "function tests" which cover the behavior of shared fun
 
 #### Fuzz tests
 
-Velox includes components for "fuzz testing" to ensure robustness of Velox operators. For instance, the [Join Fuzzer](https://github.com/facebookincubator/velox/blob/99a04b94eed42d1c35ae99101da3bf77b31652e8/velox/docs/develop/testing/join-fuzzer.rst) executes a random join type with random inputs and compares the Velox results with a reference query engine. Fuzz testing tools have been used for cuDF operator development, but fuzz testing for cuDF is yet integrated into Velox mainline.
+Velox includes components for "fuzz testing" to ensure robustness of Velox operators. For instance, the [Join Fuzzer](https://github.com/facebookincubator/velox/blob/99a04b94eed42d1c35ae99101da3bf77b31652e8/velox/docs/develop/testing/join-fuzzer.rst) executes a random join type with random inputs and compares the Velox results with a reference query engine. Fuzz testing tools have been used for cuDF operator development, but fuzz testing for cuDF is not yet integrated into Velox mainline.
 
 ### Benchmarking Velox with cuDF
 
-Benchmarking Velox-cuDF will run as part of nightly automation workflows (outside of CI). Velox's cuDF backend can execute the hand-built query plans located at [TpchQueryBuilder](https://github.com/facebookincubator/velox/blob/43df50c4f24bcbfa96f5739c072ab0894d41cf4c/velox/exec/tests/utils/TpchQueryBuilder.cpp). Velox [PR 13695](https://github.com/facebookincubator/velox/pull/13695) includes changes to extend Velox benchmarks to the cuDF backend. Please note that the hand-built query plans require the data set to have floating-point types in place of the fixed-point types defined in the standard. Further development of Velox's TpchBenchmark could allow correct behavior with both fixed-point and floating-point types.
+Velox's [TpchBenchmark](https://github.com/facebookincubator/velox/blob/d9f953cd23880f29593534f1ba9031c6cea8ba06/velox/benchmarks/tpch/TpchBenchmark.cpp) is derived from [TPC-H](https://www.tpc.org/tpch/) and provides a convenient tool for  benchmarking Velox's performance with OLAP (Online Analytical Processing) workloads. Velox-cuDF includes GPU operators for the hand-built query plans located in [TpchQueryBuilder](https://github.com/facebookincubator/velox/blob/43df50c4f24bcbfa96f5739c072ab0894d41cf4c/velox/exec/tests/utils/TpchQueryBuilder.cpp). Velox [PR 13695](https://github.com/facebookincubator/velox/pull/13695) extends Velox's TpchBenchmark to the cuDF backend.
+
+Please note that Velox's hand-built query plans require the data set to have floating-point types in place of the fixed-point types defined in the standard. Further development of Velox's TpchBenchmark could allow correct behavior with both fixed-point and floating-point types.
 
 ## Contributing
 
