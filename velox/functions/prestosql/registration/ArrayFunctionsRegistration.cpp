@@ -336,6 +336,13 @@ void registerArrayFunctions(const std::string& prefix) {
   registerArrayFrequencyFunctions<Date>(prefix);
   registerArrayFrequencyFunctions<Varchar>(prefix);
 
+  // Register nested array support using explicit registration since
+  // Array<Varchar> specialization doesn't fit the template pattern
+  registerFunction<
+      ParameterBinder<ArrayFrequencyFunction, Array<Varchar>>,
+      Map<Array<Varchar>, int>,
+      Array<Array<Varchar>>>({prefix + "array_frequency"});
+
   registerArrayNormalizeFunctions<int8_t>(prefix);
   registerArrayNormalizeFunctions<int16_t>(prefix);
   registerArrayNormalizeFunctions<int32_t>(prefix);
