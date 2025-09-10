@@ -2034,7 +2034,7 @@ PlanBuilder& PlanBuilder::unnest(
     const std::vector<std::string>& replicateColumns,
     const std::vector<std::string>& unnestColumns,
     const std::optional<std::string>& ordinalColumn,
-    const std::optional<std::string>& emptyUnnestValueName) {
+    const std::optional<std::string>& markerName) {
   VELOX_CHECK_NOT_NULL(planNode_, "Unnest cannot be the source node");
   std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>>
       replicateFields;
@@ -2070,7 +2070,7 @@ PlanBuilder& PlanBuilder::unnest(
       unnestFields,
       unnestNames,
       ordinalColumn,
-      emptyUnnestValueName,
+      markerName,
       planNode_);
   VELOX_CHECK(planNode_->supportsBarrier());
   return *this;
@@ -2528,5 +2528,43 @@ core::TypedExprPtr PlanBuilder::inferTypes(
   VELOX_CHECK_NOT_NULL(planNode_);
   return core::Expressions::inferTypes(
       untypedExpr, planNode_->outputType(), pool_);
+}
+
+core::PlanNodePtr PlanBuilder::IndexLookupJoinBuilder::build(
+    const core::PlanNodeId& id) {
+  VELOX_CHECK_NOT_NULL(
+      planBuilder_.planNode_, "IndexLookupJoin cannot be the source node");
+  auto inputType =
+      concat(planBuilder_.planNode_->outputType(), indexSource_->outputType());
+  if (includeMatchColumn_) {
+    auto names = inputType->names();
+    names.push_back(outputLayout_.back());
+    auto types = inputType->children();
+    types.push_back(BOOLEAN());
+    inputType = ROW(std::move(names), std::move(types));
+  }
+  auto outputType = extract(inputType, outputLayout_);
+  auto leftKeyFields =
+      PlanBuilder::fields(planBuilder_.planNode_->outputType(), leftKeys_);
+  auto rightKeyFields =
+      PlanBuilder::fields(indexSource_->outputType(), rightKeys_);
+
+  std::vector<core::IndexLookupConditionPtr> joinConditionPtrs{};
+  joinConditionPtrs.reserve(joinConditions_.size());
+  for (const auto& joinCondition : joinConditions_) {
+    joinConditionPtrs.push_back(PlanBuilder::parseIndexJoinCondition(
+        joinCondition, inputType, planBuilder_.pool_));
+  }
+
+  return std::make_shared<core::IndexLookupJoinNode>(
+      id,
+      joinType_,
+      std::move(leftKeyFields),
+      std::move(rightKeyFields),
+      std::move(joinConditionPtrs),
+      includeMatchColumn_,
+      std::move(planBuilder_.planNode_),
+      indexSource_,
+      std::move(outputType));
 }
 } // namespace facebook::velox::exec::test

@@ -361,6 +361,83 @@ class PlanBuilder {
     return *tableScanBuilder_;
   }
 
+  /// Helper class to build a custom IndexLookupJoinNode.
+  class IndexLookupJoinBuilder {
+   public:
+    explicit IndexLookupJoinBuilder(PlanBuilder& builder)
+        : planBuilder_(builder) {}
+
+    /// @param leftKeys Join keys from the table scan side, the preceding plan
+    /// node. Cannot be empty.
+    IndexLookupJoinBuilder& leftKeys(std::vector<std::string> leftKeys) {
+      leftKeys_ = std::move(leftKeys);
+      return *this;
+    }
+
+    /// @param rightKeys Join keys from the index lookup side, the plan node
+    /// specified in 'right' parameter. The number and types of left and right
+    /// keys must be the same.
+    IndexLookupJoinBuilder& rightKeys(std::vector<std::string> rightKeys) {
+      rightKeys_ = std::move(rightKeys);
+      return *this;
+    }
+
+    /// @param indexSource The right input source with index lookup support.
+    IndexLookupJoinBuilder& indexSource(
+        const core::TableScanNodePtr& indexSource) {
+      indexSource_ = indexSource;
+      return *this;
+    }
+
+    IndexLookupJoinBuilder& joinConditions(
+        std::vector<std::string> joinConditions) {
+      joinConditions_ = std::move(joinConditions);
+      return *this;
+    }
+
+    IndexLookupJoinBuilder& includeMatchColumn(bool includeMatchColumn) {
+      includeMatchColumn_ = includeMatchColumn;
+      return *this;
+    }
+
+    IndexLookupJoinBuilder& outputLayout(
+        std::vector<std::string> outputLayout) {
+      outputLayout_ = std::move(outputLayout);
+      return *this;
+    }
+
+    /// @param joinType Type of the join supported: inner, left.
+    IndexLookupJoinBuilder& joinType(core::JoinType joinType) {
+      joinType_ = joinType;
+      return *this;
+    }
+
+    /// Stop the IndexLookupJoinBuilder.
+    PlanBuilder& endIndexLookupJoin() {
+      planBuilder_.planNode_ = build(planBuilder_.nextPlanNodeId());
+      return planBuilder_;
+    }
+
+   private:
+    /// Build the plan node IndexLookupJoinNode.
+    core::PlanNodePtr build(const core::PlanNodeId& id);
+
+    PlanBuilder& planBuilder_;
+    std::vector<std::string> leftKeys_;
+    std::vector<std::string> rightKeys_;
+    core::TableScanNodePtr indexSource_;
+    std::vector<std::string> joinConditions_;
+    bool includeMatchColumn_{false};
+    std::vector<std::string> outputLayout_;
+    core::JoinType joinType_{core::JoinType::kInner};
+  };
+
+  /// Start an IndexLookupJoinBuilder.
+  IndexLookupJoinBuilder& startIndexLookupJoin() {
+    indexLookupJoinBuilder_.reset(new IndexLookupJoinBuilder(*this));
+    return *indexLookupJoinBuilder_;
+  }
+
   ///
   /// TableWriter
   ///
@@ -1283,16 +1360,16 @@ class PlanBuilder {
   /// @param ordinalColumn An optional name for the 'ordinal' column to produce.
   /// This column contains the index of the element of the unnested array or
   /// map. If not specified, the output will not contain this column.
-  /// @param emptyUnnestValueName An optional name for the
-  /// 'emptyUnnestValue' column to produce. This column contains a boolean
-  /// indicating if the output row has empty unnest value or not. If not
-  /// specified, the output will not contain this column and the unnest operator
-  /// also skips producing output rows with empty unnest value.
+  /// @param markerName An optional name for the marker column to produce.
+  /// This column contains a boolean indicating whether the output row has
+  /// non-empty unnested value. If not specified, the output will not contain
+  /// this column and the unnest operator also skips producing output rows
+  /// with empty unnest value.
   PlanBuilder& unnest(
       const std::vector<std::string>& replicateColumns,
       const std::vector<std::string>& unnestColumns,
       const std::optional<std::string>& ordinalColumn = std::nullopt,
-      const std::optional<std::string>& emptyUnnestValueName = std::nullopt);
+      const std::optional<std::string>& markerName = std::nullopt);
 
   /// Add a WindowNode to compute one or more windowFunctions.
   /// @param windowFunctions A list of one or more window function SQL like
@@ -1524,6 +1601,7 @@ class PlanBuilder {
   core::PlanNodePtr planNode_;
   parse::ParseOptions options_;
   std::shared_ptr<TableScanBuilder> tableScanBuilder_;
+  std::shared_ptr<IndexLookupJoinBuilder> indexLookupJoinBuilder_;
   std::shared_ptr<TableWriterBuilder> tableWriterBuilder_;
 
  private:
