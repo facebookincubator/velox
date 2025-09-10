@@ -139,12 +139,12 @@ std::unordered_map<std::string, std::string> ConfigBase::rawConfigsCopy()
 }
 
 std::optional<std::string> ConfigBase::get(const std::string& key) const {
-  std::optional<std::string> val;
-  std::shared_lock<std::shared_mutex> l(mutex_);
+  std::shared_lock l{mutex_};
   auto it = configs_.find(key);
-  if (it != configs_.end()) {
-    val = it->second;
+  if (it == configs_.end()) {
+    return std::nullopt;
   }
-  return val;
+  return it->second;
 }
+
 } // namespace facebook::velox::config
