@@ -67,16 +67,13 @@ ParquetConnectorTestBase::ParquetConnectorTestBase() {
 
 void ParquetConnectorTestBase::SetUp() {
   OperatorTestBase::SetUp();
-  facebook::velox::connector::registerConnectorFactory(
-      std::make_shared<connector::parquet::ParquetConnectorFactory>());
-  auto parquetConnector =
-      facebook::velox::connector::getConnectorFactory(
-          connector::parquet::ParquetConnectorFactory::kParquetConnectorName)
-          ->newConnector(
-              kParquetConnectorId,
-              std::make_shared<facebook::velox::config::ConfigBase>(
-                  std::unordered_map<std::string, std::string>()),
-              ioExecutor_.get());
+  facebook::velox::cudf_velox::connector::parquet::ParquetConnectorFactory
+      factory;
+  auto parquetConnector = factory.newConnector(
+      kParquetConnectorId,
+      std::make_shared<facebook::velox::config::ConfigBase>(
+          std::unordered_map<std::string, std::string>()),
+      ioExecutor_.get());
   facebook::velox::connector::registerConnector(parquetConnector);
   dwio::common::registerFileSinks();
 }
@@ -86,20 +83,17 @@ void ParquetConnectorTestBase::TearDown() {
   // connector.
   ioExecutor_.reset();
   facebook::velox::connector::unregisterConnector(kParquetConnectorId);
-  facebook::velox::connector::unregisterConnectorFactory(
-      facebook::velox::cudf_velox::connector::parquet::ParquetConnectorFactory::
-          kParquetConnectorName);
   OperatorTestBase::TearDown();
 }
 
 void ParquetConnectorTestBase::resetParquetConnector(
     const std::shared_ptr<const facebook::velox::config::ConfigBase>& config) {
   facebook::velox::connector::unregisterConnector(kParquetConnectorId);
+
+  facebook::velox::cudf_velox::connector::parquet::ParquetConnectorFactory
+      factory;
   auto parquetConnector =
-      facebook::velox::connector::getConnectorFactory(
-          facebook::velox::cudf_velox::connector::parquet::
-              ParquetConnectorFactory::kParquetConnectorName)
-          ->newConnector(kParquetConnectorId, config, ioExecutor_.get());
+      factory.newConnector(kParquetConnectorId, config, ioExecutor_.get());
   facebook::velox::connector::registerConnector(parquetConnector);
 }
 
