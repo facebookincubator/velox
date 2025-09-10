@@ -102,10 +102,14 @@ class DirectCoalescedLoad : public cache::CoalescedLoad {
   }
 
   void cancel() override {
-    CoalescedLoad::cancel();
+    folly::SemiFuture<bool> waitFuture(false);
+    if (!loadOrFuture(&waitFuture)) {
+      waitFuture.wait();
+    }
     for (auto& request : requests_) {
       pool_->freeNonContiguous(request.data);
     }
+    CoalescedLoad::cancel();
   }
 
  private:
