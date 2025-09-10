@@ -116,7 +116,7 @@ void CudfTopN::addInput(RowVectorPtr input) {
       topNBatches_.begin(),
       topNBatches_.end(),
       0,
-      [](int32_t sum, const auto& batch) { return sum + batch->size(); });
+      [](int32_t sum, const auto& batch) { return sum + (batch ? batch->size() : 0); });
   if (topNBatches_.size() >= kBatchSize_ and totalSize >= count_) {
     auto stream = cudfGlobalStreamPool().get_stream();
     auto mr = cudf::get_current_device_resource_ref();
