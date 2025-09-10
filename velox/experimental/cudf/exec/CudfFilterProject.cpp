@@ -136,7 +136,6 @@ void CudfFilterProject::filter(
   auto filterColumns = filterEvaluator_.compute(
       inputTableColumns, stream, cudf::get_current_device_resource_ref());
   auto filterColumn = filterColumns[0]->view();
-
   bool shouldApplyFilter = [&]() {
     if (filterColumn.has_nulls()) {
       return true;
