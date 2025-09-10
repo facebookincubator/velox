@@ -23,12 +23,6 @@ add_executable(velox_cudf_filter_project_test Main.cpp FilterProjectTest.cpp)
 add_executable(velox_cudf_subfield_filter_ast_test Main.cpp SubfieldFilterAstTest.cpp)
 add_executable(velox_cudf_limit_test Main.cpp LimitTest.cpp)
 
-# target_compile_definitions(velox_cudf_hash_join_test PRIVATE -g -O0)
-set_property(
-  SOURCE HashJoinTest.cpp AggregationTest.cpp
-  APPEND
-  PROPERTY COMPILE_FLAGS "-g -O0")
-
 add_test(
   NAME velox_cudf_hash_join_test
   COMMAND velox_cudf_hash_join_test
