@@ -14,17 +14,17 @@
  * limitations under the License.
  */
 
-#include "velox/experimental/cudf/connectors/parquet/ParquetConfig.h"
-#include "velox/experimental/cudf/connectors/parquet/ParquetTableHandle.h"
+#include "velox/experimental/cudf/connectors/hive/CudfHiveConfig.h"
+#include "velox/experimental/cudf/connectors/hive/CudfHiveTableHandle.h"
 #include "velox/experimental/cudf/exec/CudfConversion.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
-#include "velox/experimental/cudf/tests/utils/ParquetConnectorTestBase.h"
+#include "velox/experimental/cudf/tests/utils/CudfHiveConnectorTestBase.h"
 
 #include "velox/benchmarks/tpch/TpchBenchmark.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 
-#include <experimental/cudf/connectors/parquet/CudfHiveConnector.h>
+#include <experimental/cudf/connectors/hive/CudfHiveConnector.h>
 
 DECLARE_int64(max_coalesced_bytes);
 DECLARE_string(max_coalesced_distance_bytes);
@@ -63,32 +63,32 @@ class CudfTpchBenchmark : public TpchBenchmark {
       connector::unregisterConnector(
           facebook::velox::exec::test::kHiveConnectorId);
 
-      // Add new values into the parquet configuration...
-      auto parquetConfigurationValues =
+      // Add new values into the cudfHive configuration...
+      auto cudfHiveConfigurationValues =
           std::unordered_map<std::string, std::string>();
-      parquetConfigurationValues
-          [cudf_velox::connector::parquet::ParquetConfig::kMaxChunkReadLimit] =
+      cudfHiveConfigurationValues
+          [cudf_velox::connector::hive::CudfHiveConfig::kMaxChunkReadLimit] =
               std::to_string(FLAGS_cudf_chunk_read_limit);
-      parquetConfigurationValues
-          [cudf_velox::connector::parquet::ParquetConfig::kMaxPassReadLimit] =
+      cudfHiveConfigurationValues
+          [cudf_velox::connector::hive::CudfHiveConfig::kMaxPassReadLimit] =
               std::to_string(FLAGS_cudf_pass_read_limit);
-      parquetConfigurationValues[cudf_velox::connector::parquet::ParquetConfig::
-                                     kAllowMismatchedParquetSchemas] =
+      cudfHiveConfigurationValues[cudf_velox::connector::hive::CudfHiveConfig::
+                                      kAllowMismatchedCudfHiveSchemas] =
           std::to_string(true);
-      auto parquetProperties = std::make_shared<const config::ConfigBase>(
-          std::move(parquetConfigurationValues));
+      auto cudfHiveProperties = std::make_shared<const config::ConfigBase>(
+          std::move(cudfHiveConfigurationValues));
 
-      // Create parquet connector with config...
+      // Create cudfHive connector with config...
       connector::registerConnectorFactory(
           std::make_shared<
-              cudf_velox::connector::parquet::CudfHiveConnectorFactory>());
+              cudf_velox::connector::hive::CudfHiveConnectorFactory>());
       auto cudfHiveConnector =
           connector::getConnectorFactory(
               facebook::velox::connector::hive::HiveConnectorFactory::
                   kHiveConnectorName)
               ->newConnector(
                   facebook::velox::exec::test::kHiveConnectorId,
-                  parquetProperties,
+                  cudfHiveProperties,
                   ioExecutor_.get());
       connector::registerConnector(cudfHiveConnector);
     }
@@ -104,15 +104,16 @@ class CudfTpchBenchmark : public TpchBenchmark {
 
   std::shared_ptr<config::ConfigBase> makeConnectorProperties() override {
     auto cfg = TpchBenchmark::makeConnectorProperties();
-    using ParqCfg = cudf_velox::connector::parquet::ParquetConfig;
+    using CudfHiveCfg = cudf_velox::connector::hive::CudfHiveConfig;
 
     // CuDF-specific properties.
     cfg->set(
-        ParqCfg::kMaxChunkReadLimit,
+        CudfHiveCfg::kMaxChunkReadLimit,
         std::to_string(FLAGS_cudf_chunk_read_limit));
     cfg->set(
-        ParqCfg::kMaxPassReadLimit, std::to_string(FLAGS_cudf_pass_read_limit));
-    cfg->set(ParqCfg::kAllowMismatchedParquetSchemas, "true");
+        CudfHiveCfg::kMaxPassReadLimit,
+        std::to_string(FLAGS_cudf_pass_read_limit));
+    cfg->set(CudfHiveCfg::kAllowMismatchedCudfHiveSchemas, "true");
 
     return cfg;
   }
@@ -122,7 +123,7 @@ class CudfTpchBenchmark : public TpchBenchmark {
       int32_t numSplitsPerFile,
       const exec::test::TpchPlan& plan) override {
     // TODO (dm): Figure out a way to enforce 1 split per file in
-    // ParquetDataSource outside of this benchmark
+    // CudfHiveDataSource outside of this benchmark
     if (FLAGS_velox_cudf_table_scan) {
       // TODO (dm): Instead of this, we can maybe use
       // makeHiveConnectorSplits(vector<shared_ptr<TempFilePath>>& filePaths)
