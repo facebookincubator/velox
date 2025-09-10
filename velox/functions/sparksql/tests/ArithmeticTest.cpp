@@ -777,7 +777,8 @@ TEST_F(ArithmeticTest, absMinValueOverflow) {
   queryCtx_->testingOverrideConfigUnsafe(
       {{core::QueryConfig::kSparkAnsiEnabled, "true"}});
 
-  VELOX_ASSERT_THROW(abs<int8_t>(std::numeric_limits<int8_t>::min()), "Arithmetic overflow");
+  VELOX_ASSERT_THROW(
+    abs<int8_t>(std::numeric_limits<int8_t>::min()), "Arithmetic overflow");
   VELOX_ASSERT_THROW(
       abs<int16_t>(std::numeric_limits<int16_t>::min()), "Arithmetic overflow");
   VELOX_ASSERT_THROW(
