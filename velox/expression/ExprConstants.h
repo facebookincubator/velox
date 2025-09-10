@@ -15,16 +15,24 @@
  */
 #pragma once
 
+/// This file contains string literals for function names.
+/// These literals listed in single place to explicitly list functions that
+/// names used once even in case when user specify some prefix on registration.
+
 namespace facebook::velox::expression {
 
-constexpr const char* kAnd = "and";
-constexpr const char* kOr = "or";
-constexpr const char* kSwitch = "switch";
-constexpr const char* kIf = "if";
-constexpr const char* kFail = "fail";
-constexpr const char* kCoalesce = "coalesce";
-constexpr const char* kCast = "cast";
-constexpr const char* kTryCast = "try_cast";
-constexpr const char* kTry = "try";
+/// These functions registered without prefix and velox code rely on this.
+inline constexpr const char* kAnd = "and";
+inline constexpr const char* kOr = "or";
+inline constexpr const char* kSwitch = "switch";
+inline constexpr const char* kIf = "if";
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+inline constexpr const char* kFail = "fail";
+#endif
+inline constexpr const char* kCoalesce = "coalesce";
+inline constexpr const char* kCast = "cast";
+inline constexpr const char* kTryCast = "try_cast";
+inline constexpr const char* kTry = "try";
+inline constexpr const char* kRowConstructor = "row_constructor";
 
 } // namespace facebook::velox::expression

@@ -29,6 +29,8 @@ class RowConstructorCallToSpecialForm : public FunctionCallToSpecialForm {
       bool trackCpuUsage,
       const core::QueryConfig& config) override;
 
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
   static constexpr const char* kRowConstructor = "row_constructor";
+#endif
 };
 } // namespace facebook::velox::exec
