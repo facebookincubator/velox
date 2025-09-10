@@ -378,6 +378,7 @@ void SplitReader::createRowReader(
       hiveSplit_,
       hiveConfig_,
       connectorQueryCtx_->sessionProperties(),
+      ioExecutor_,
       baseRowReaderOpts_);
   baseRowReader_ = baseReader_->createRowReader(baseRowReaderOpts_);
 }
