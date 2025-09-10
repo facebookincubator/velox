@@ -29,6 +29,49 @@ using namespace facebook::velox;
 using namespace facebook::velox::common::hll;
 using namespace facebook::velox::encoding;
 
+template <typename TAllocator = HashStringAllocator>
+class Foo {
+ public:
+  template <typename U>
+  using TStlAllocator = TAllocator::template TStlAllocator<U>;
+
+  Foo(TAllocator* allocator)
+      : deltas_{TStlAllocator<int8_t>(allocator)},
+        overflowBuckets_(TStlAllocator<uint16_t>(allocator)) {}
+
+  void doSomething() {
+    for (auto i = 0; i < 10; i++) {
+      deltas_.push_back(i);
+      overflowBuckets_.push_back(i * 2);
+    }
+
+    LOG(ERROR) << folly::join(", ", deltas_);
+    LOG(ERROR) << folly::join(", ", overflowBuckets_);
+  }
+
+ private:
+  std::vector<int8_t, TStlAllocator<int8_t>> deltas_;
+  std::vector<uint16_t, TStlAllocator<uint16_t>> overflowBuckets_;
+};
+
+TEST(Xxx, xxx) {
+  memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
+
+  std::shared_ptr<memory::MemoryPool> pool{
+      memory::memoryManager()->addLeafPool()};
+  HashStringAllocator allocator{pool.get()};
+
+  {
+    Foo<> foo{&allocator};
+    foo.doSomething();
+  }
+
+  {
+    Foo<memory::MemoryPool> foo{pool.get()};
+    foo.doSomething();
+  }
+}
+
 template <typename T>
 uint64_t hashOne(T value) {
   return XXH64(&value, sizeof(value), 0);
