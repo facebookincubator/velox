@@ -24,6 +24,8 @@
 #include <xxhash.h>
 
 #include "velox/common/encode/Base64.h"
+#include "velox/common/memory/HashStringAllocator.h"
+#include "velox/common/memory/MemoryPool.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::common::hll;
@@ -40,16 +42,16 @@ class DenseHllTest : public ::testing::TestWithParam<int8_t> {
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
   }
 
-  DenseHll roundTrip(DenseHll& hll) {
+  DenseHll<> roundTrip(DenseHll<>& hll) {
     auto size = hll.serializedSize();
     std::string serialized;
     serialized.resize(size);
     hll.serialize(serialized.data());
 
-    return DenseHll(serialized.data(), &allocator_);
+    return DenseHll<>(serialized.data(), &allocator_);
   }
 
-  std::string serialize(DenseHll& denseHll) {
+  std::string serialize(DenseHll<>& denseHll) {
     auto size = denseHll.serializedSize();
     std::string serialized;
     serialized.resize(size);
@@ -72,9 +74,9 @@ class DenseHllTest : public ::testing::TestWithParam<int8_t> {
       const std::vector<T>& left,
       const std::vector<T>& right,
       bool serialized) {
-    DenseHll hllLeft{indexBitLength, &allocator_};
-    DenseHll hllRight{indexBitLength, &allocator_};
-    DenseHll expected{indexBitLength, &allocator_};
+    DenseHll<> hllLeft{indexBitLength, &allocator_};
+    DenseHll<> hllRight{indexBitLength, &allocator_};
+    DenseHll<> expected{indexBitLength, &allocator_};
 
     for (auto value : left) {
       auto hash = hashOne(value);
@@ -100,7 +102,7 @@ class DenseHllTest : public ::testing::TestWithParam<int8_t> {
 
     auto hllLeftSerialized = serialize(hllLeft);
     ASSERT_EQ(
-        DenseHll::cardinality(hllLeftSerialized.data()),
+        DenseHlls::cardinality(hllLeftSerialized.data()),
         expected.cardinality());
   }
 
@@ -112,7 +114,7 @@ class DenseHllTest : public ::testing::TestWithParam<int8_t> {
 TEST_P(DenseHllTest, basic) {
   int8_t indexBitLength = GetParam();
 
-  DenseHll denseHll{indexBitLength, &allocator_};
+  DenseHll<> denseHll{indexBitLength, &allocator_};
   for (int i = 0; i < 1'000; i++) {
     auto value = i % 17;
     auto hash = hashOne(value);
@@ -131,17 +133,17 @@ TEST_P(DenseHllTest, basic) {
 
   ASSERT_EQ(expectedCardinality, denseHll.cardinality());
 
-  DenseHll deserialized = roundTrip(denseHll);
+  DenseHll<> deserialized = roundTrip(denseHll);
   ASSERT_EQ(expectedCardinality, deserialized.cardinality());
 
   auto serialized = serialize(denseHll);
-  ASSERT_EQ(expectedCardinality, DenseHll::cardinality(serialized.data()));
+  ASSERT_EQ(expectedCardinality, DenseHlls::cardinality(serialized.data()));
 }
 
 TEST_P(DenseHllTest, highCardinality) {
   int8_t indexBitLength = GetParam();
 
-  DenseHll denseHll{indexBitLength, &allocator_};
+  DenseHll<> denseHll{indexBitLength, &allocator_};
   for (int i = 0; i < 10'000'000; i++) {
     auto hash = hashOne(i);
     denseHll.insertHash(hash);
@@ -151,11 +153,11 @@ TEST_P(DenseHllTest, highCardinality) {
     ASSERT_NEAR(10'000'000, denseHll.cardinality(), 150'000);
   }
 
-  DenseHll deserialized = roundTrip(denseHll);
+  DenseHll<> deserialized = roundTrip(denseHll);
   ASSERT_EQ(denseHll.cardinality(), deserialized.cardinality());
 
   auto serialized = serialize(denseHll);
-  ASSERT_EQ(denseHll.cardinality(), DenseHll::cardinality(serialized.data()));
+  ASSERT_EQ(denseHll.cardinality(), DenseHlls::cardinality(serialized.data()));
 }
 
 namespace {
@@ -181,9 +183,9 @@ TEST_P(DenseHllTest, canDeserialize) {
 
   for (folly::StringPiece& invalidString : invalidStrings) {
     auto invalidHll = Base64::decode(invalidString);
-    EXPECT_TRUE(DenseHll::canDeserialize(invalidHll.c_str()));
+    EXPECT_TRUE(DenseHlls::canDeserialize(invalidHll.c_str()));
     EXPECT_FALSE(
-        DenseHll::canDeserialize(invalidHll.c_str(), invalidHll.length()));
+        DenseHlls::canDeserialize(invalidHll.c_str(), invalidHll.length()));
   }
 
   std::vector<folly::StringPiece> validStrings{
@@ -192,8 +194,8 @@ TEST_P(DenseHllTest, canDeserialize) {
 
   for (folly::StringPiece& validString : validStrings) {
     auto validHll = Base64::decode(validString);
-    EXPECT_TRUE(DenseHll::canDeserialize(validHll.c_str()));
-    EXPECT_TRUE(DenseHll::canDeserialize(validHll.c_str(), validHll.length()));
+    EXPECT_TRUE(DenseHlls::canDeserialize(validHll.c_str()));
+    EXPECT_TRUE(DenseHlls::canDeserialize(validHll.c_str(), validHll.length()));
   }
 }
 
@@ -229,3 +231,72 @@ INSTANTIATE_TEST_SUITE_P(
     DenseHllTest,
     DenseHllTest,
     ::testing::Values(4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16));
+
+// Test with non-default memory pool allocator
+class DenseHllMemoryPoolTest : public ::testing::Test {
+ protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
+  }
+
+  std::string serialize(DenseHll<memory::StlAllocator<uint8_t>>& denseHll) {
+    auto size = denseHll.serializedSize();
+    std::string serialized;
+    serialized.resize(size);
+    denseHll.serialize(serialized.data());
+    return serialized;
+  }
+
+  std::shared_ptr<memory::MemoryPool> pool_{
+      memory::memoryManager()->addLeafPool()};
+};
+
+TEST_F(DenseHllMemoryPoolTest, basicMemoryPool) {
+  // Test basic functionality
+  const int8_t indexBitLength = 11;
+  memory::StlAllocator<uint8_t> allocator{*pool_};
+  common::hll::DenseHll<memory::StlAllocator<uint8_t>> denseHll{
+      indexBitLength, allocator};
+
+  for (int i = 0; i < 1'000; i++) {
+    auto value = i % 17;
+    auto hash = hashOne(value);
+    denseHll.insertHash(hash);
+  }
+
+  ASSERT_EQ(17, denseHll.cardinality());
+
+  // Test serialization
+  auto serialized = serialize(denseHll);
+  ASSERT_EQ(17, common::hll::DenseHlls::cardinality(serialized.data()));
+
+  // Test deserialization
+  common::hll::DenseHll<memory::StlAllocator<uint8_t>> deserialized{
+      serialized.data(), allocator};
+  ASSERT_EQ(17, deserialized.cardinality());
+}
+
+TEST_F(DenseHllMemoryPoolTest, mergeWithMemoryPool) {
+  // Test merge
+  const int8_t indexBitLength = 11;
+  memory::StlAllocator<uint8_t> allocator{*pool_};
+  common::hll::DenseHll<memory::StlAllocator<uint8_t>> hllLeft{
+      indexBitLength, allocator};
+  common::hll::DenseHll<memory::StlAllocator<uint8_t>> hllRight{
+      indexBitLength, allocator};
+  common::hll::DenseHll<memory::StlAllocator<uint8_t>> expected{
+      indexBitLength, allocator};
+
+  for (int i = 0; i < 100; i++) {
+    hllLeft.insertHash(hashOne(i));
+    expected.insertHash(hashOne(i));
+  }
+  for (int i = 50; i < 150; i++) {
+    hllRight.insertHash(hashOne(i));
+    expected.insertHash(hashOne(i));
+  }
+
+  auto serialized = serialize(hllRight);
+  hllLeft.mergeWith(serialized.data());
+  ASSERT_EQ(hllLeft.cardinality(), expected.cardinality());
+}
