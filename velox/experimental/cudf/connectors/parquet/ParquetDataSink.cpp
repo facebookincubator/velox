@@ -142,7 +142,7 @@ ParquetDataSink::ParquetDataSink(
       (commitStrategy_ == CommitStrategy::kNoCommit) ||
           (commitStrategy_ == CommitStrategy::kTaskCommit),
       "Unsupported commit strategy: {}",
-      CommitStrategyName::toName(commitStrategy_));
+      commitStrategyToString(commitStrategy_));
 
   const auto& writerOptions = dynamic_cast<ParquetWriterOptions*>(
       insertTableHandle_->writerOptions().get());
