@@ -18,9 +18,6 @@
 #include "velox/core/Expressions.h"
 #include "velox/functions/iceberg/tests/IcebergFunctionBaseTest.h"
 
-// using namespace facebook::velox;
-// using namespace facebook::velox::exec;
-
 namespace facebook::velox::functions::iceberg {
 namespace {
 class TruncateTest : public facebook::velox::functions::iceberg::test::
