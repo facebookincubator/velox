@@ -12,11 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(velox_cudf_parquet_config CudfHiveConfig.cpp)
+add_library(velox_cudf_hive_config CudfHiveConfig.cpp)
 
-set_target_properties(velox_cudf_parquet_config PROPERTIES CUDA_ARCHITECTURES native)
+set_target_properties(velox_cudf_hive_config PROPERTIES CUDA_ARCHITECTURES native)
 
-target_link_libraries(velox_cudf_parquet_config velox_core velox_exception cudf::cudf)
+target_link_libraries(velox_cudf_hive_config velox_core velox_exception cudf::cudf)
 
 add_library(
   velox_cudf_hive_connector
