@@ -42,10 +42,6 @@ class DateTimeFunctionsTest : public SparkFunctionBaseTest {
   static constexpr int8_t kMaxTinyint = std::numeric_limits<int8_t>::max();
   static constexpr int64_t kMinBigint = std::numeric_limits<int64_t>::min();
   static constexpr int64_t kMaxBigint = std::numeric_limits<int64_t>::max();
-  static constexpr float kLowestFloat = std::numeric_limits<float>::lowest();
-  static constexpr float kMaxFloat = std::numeric_limits<float>::max();
-  static constexpr double kLowestDouble = std::numeric_limits<double>::lowest();
-  static constexpr double kMaxDouble = std::numeric_limits<double>::max();
 
  protected:
   void setQueryTimeZone(const std::string& timeZone) {
@@ -1208,11 +1204,17 @@ TEST_F(DateTimeFunctionsTest, secondsToTimestamp) {
       secondsToTimestamp<float>(1.1234567),
       parseTimestamp("1970-01-01 00:00:01.123456"));
   EXPECT_EQ(
-      secondsToTimestamp<float>(kMaxFloat),
+      secondsToTimestamp<float>(std::numeric_limits<float>::max()),
       parseTimestamp("+294247-01-10 04:00:54.775807"));
   EXPECT_EQ(
-      secondsToTimestamp<float>(kLowestFloat),
+      secondsToTimestamp<float>(std::numeric_limits<float>::lowest()),
       parseTimestamp("-290308-12-21 19:59:05.224192"));
+  EXPECT_EQ(
+      secondsToTimestamp<float>(std::numeric_limits<float>::quiet_NaN()),
+      std::nullopt);
+  EXPECT_EQ(
+      secondsToTimestamp<float>(std::numeric_limits<float>::infinity()),
+      std::nullopt);
 
   // Tests using double seconds as input.
   EXPECT_EQ(
@@ -1249,11 +1251,17 @@ TEST_F(DateTimeFunctionsTest, secondsToTimestamp) {
       secondsToTimestamp<double>(1.1234567),
       parseTimestamp("1970-01-01 00:00:01.123456"));
   EXPECT_EQ(
-      secondsToTimestamp<double>(kLowestDouble),
+      secondsToTimestamp<double>(std::numeric_limits<double>::lowest()),
       parseTimestamp("-290308-12-21 19:59:05.224192"));
   EXPECT_EQ(
-      secondsToTimestamp<double>(kMaxDouble),
+      secondsToTimestamp<double>(std::numeric_limits<double>::max()),
       parseTimestamp("+294247-01-10 04:00:54.775807"));
+  EXPECT_EQ(
+      secondsToTimestamp<double>(std::numeric_limits<double>::quiet_NaN()),
+      std::nullopt);
+  EXPECT_EQ(
+      secondsToTimestamp<double>(std::numeric_limits<double>::infinity()),
+      std::nullopt);
 }
 
 TEST_F(DateTimeFunctionsTest, timestampToMicros) {
