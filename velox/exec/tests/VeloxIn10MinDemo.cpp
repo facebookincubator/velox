@@ -14,7 +14,9 @@
  * limitations under the License.
  */
 #include <folly/init/Init.h>
+
 #include "velox/common/memory/Memory.h"
+#include "velox/connectors/ConnectorNames.h"
 #include "velox/connectors/tpch/TpchConnector.h"
 #include "velox/connectors/tpch/TpchConnectorSplit.h"
 #include "velox/core/Expressions.h"
@@ -53,8 +55,7 @@ class VeloxIn10MinDemo : public VectorTestBase {
 
     // Create and register a TPC-H connector.
     auto tpchConnector =
-        connector::getConnectorFactory(
-            connector::tpch::TpchConnectorFactory::kTpchConnectorName)
+        connector::getConnectorFactory(connector::kTpchConnectorName)
             ->newConnector(
                 kTpchConnectorId,
                 std::make_shared<config::ConfigBase>(
@@ -64,8 +65,7 @@ class VeloxIn10MinDemo : public VectorTestBase {
 
   ~VeloxIn10MinDemo() {
     connector::unregisterConnector(kTpchConnectorId);
-    connector::unregisterConnectorFactory(
-        connector::tpch::TpchConnectorFactory::kTpchConnectorName);
+    connector::unregisterConnectorFactory(connector::kTpchConnectorName);
   }
 
   /// Parse SQL expression into a typed expression tree using DuckDB SQL parser.
