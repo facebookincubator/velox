@@ -21,9 +21,6 @@ inline constexpr const char* kAnd = "and";
 inline constexpr const char* kOr = "or";
 inline constexpr const char* kSwitch = "switch";
 inline constexpr const char* kIf = "if";
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-inline constexpr const char* kFail = "fail";
-#endif
 inline constexpr const char* kCoalesce = "coalesce";
 inline constexpr const char* kCast = "cast";
 inline constexpr const char* kTryCast = "try_cast";
