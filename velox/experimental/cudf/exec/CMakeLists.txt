@@ -38,7 +38,7 @@ target_link_libraries(
     velox_common_base
     velox_cudf_vector
     velox_exec
-    velox_cudf_parquet_connector
+    velox_cudf_hive_connector
 )
 
 target_compile_options(velox_cudf_exec PRIVATE -Wno-missing-field-initializers)

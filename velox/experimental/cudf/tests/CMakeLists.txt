@@ -143,7 +143,7 @@ target_link_libraries(
 target_link_libraries(
   velox_cudf_table_scan_test
   velox_cudf_exec_test_lib
-  velox_cudf_parquet_connector
+  velox_cudf_hive_connector
   velox_exec
   velox_exec_test_lib
   velox_test_util
@@ -155,7 +155,7 @@ target_link_libraries(
 # target_link_libraries(
 #   velox_cudf_table_write_test
 #   velox_cudf_exec_test_lib
-#   velox_cudf_parquet_connector
+#   velox_cudf_hive_connector
 #   velox_exec
 #   velox_exec_test_lib
 #   velox_test_util
