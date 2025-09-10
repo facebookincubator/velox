@@ -142,12 +142,6 @@ cudf::ast::expression const& createAstTree(
     std::vector<PrecomputeInstruction>& leftPrecomputeInstructions,
     std::vector<PrecomputeInstruction>& rightPrecomputeInstructions);
 
-void addPrecomputedColumns(
-    std::vector<std::unique_ptr<cudf::column>>& inputTableColumns,
-    const std::vector<PrecomputeInstruction>& precomputeInstructions,
-    const std::vector<std::unique_ptr<cudf::scalar>>& scalars,
-    rmm::cuda_stream_view stream);
-
 // Convert subfield filters to cudf AST
 cudf::ast::expression const& createAstFromSubfieldFilter(
     const common::Subfield& subfield,
