@@ -41,7 +41,7 @@ class CompileState {
 
   // Replaces sequences of Operators in the Driver given at construction with
   // cuDF equivalents. Returns true if the Driver was changed.
-  bool compile();
+  bool compile(bool force_replace);
 
   const exec::DriverFactory& driverFactory_;
   exec::Driver& driver_;
@@ -68,6 +68,15 @@ class CudfOptions {
   // The initial percent of GPU memory to allocate for memory resource for one
   // thread.
   int memoryPercent;
+  const bool force_replace;
+
+  CudfOptions(bool force_repl)
+      : cudfEnabled(FLAGS_velox_cudf_enabled),
+        cudfMemoryResource(FLAGS_velox_cudf_memory_resource),
+        cudfTableScan(FLAGS_velox_cudf_table_scan),
+        memoryPercent(50),
+        force_replace{force_repl},
+        prefix_("") {}
 
  private:
   CudfOptions()
@@ -75,6 +84,7 @@ class CudfOptions {
         cudfMemoryResource(FLAGS_velox_cudf_memory_resource),
         cudfTableScan(FLAGS_velox_cudf_table_scan),
         memoryPercent(50),
+        force_replace{false},
         prefix_("") {}
   CudfOptions(const CudfOptions&) = delete;
   CudfOptions& operator=(const CudfOptions&) = delete;
