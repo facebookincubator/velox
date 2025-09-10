@@ -183,4 +183,9 @@ class TpcdsConnectorFactory : public ConnectorFactory {
   // TODO: Add object makers like makeTableHandle, makeColumnHandle, etc.
 };
 
+bool registerTpchConnectorFactory(
+    std::unique_ptr<TpcdsConnectorFactory> factory);
+
+bool unregisterTpcdsConnectorFactory();
+
 } // namespace facebook::velox::connector::tpcds

@@ -193,4 +193,8 @@ class HivePartitionFunctionSpec : public core::PartitionFunctionSpec {
   const std::vector<VectorPtr> constValues_;
 };
 
+bool registerHiveConnectorFactory(std::unique_ptr<HiveConnectorFactory>);
+
+bool unregisterHiveConnectorFactory();
+
 } // namespace facebook::velox::connector::hive

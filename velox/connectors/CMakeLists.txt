@@ -32,3 +32,9 @@ endif()
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()
+
+add_library(velox_registered_connector_factories STATIC RegisterConnectorFactories.cpp)
+target_link_libraries(
+  velox_registered_connector_factories
+  PUBLIC $<$<BOOL:${VELOX_ENABLE_PARQUET}>:velox_dwio_parquet_reader> velox_dwio_common
+)
