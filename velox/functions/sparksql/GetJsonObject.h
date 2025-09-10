@@ -142,12 +142,10 @@ struct GetJsonObjectFunction {
   bool extractStringResult(
       simdjson::simdjson_result<simdjson::ondemand::value> rawResult,
       out_type<Varchar>& result) {
-    std::stringstream ss;
     switch (rawResult.type()) {
       // For number and bool types, we need to explicitly get the value
-      // for specific types instead of using `ss << rawResult`. Thus, we
-      // can make simdjson's internal parsing position moved and then we
-      // can check the validity of ending character.
+      // for specific types. Thus, we can make simdjson's internal parsing
+      // position moved and then we can check the validity of ending character.
       case simdjson::ondemand::json_type::number: {
         switch (rawResult.get_number_type()) {
           case simdjson::ondemand::number_type::floating_point_number: {
