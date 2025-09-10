@@ -70,7 +70,8 @@ extern void registerElementAtFunction(
     const std::string& name,
     bool enableCaching);
 
-void registerAllSpecialFormGeneralFunctions(const std::string& prefix) {
+// Special form functions don't have any prefix.
+void registerAllSpecialFormGeneralFunctions() {
   exec::registerFunctionCallToSpecialForms();
   VELOX_REGISTER_VECTOR_FUNCTION(udf_in, "in");
   registerFunction<
@@ -101,7 +102,7 @@ void registerGeneralFunctions(const std::string& prefix) {
 
   registerFailFunction({prefix + "fail"});
 
-  registerAllSpecialFormGeneralFunctions(prefix);
+  registerAllSpecialFormGeneralFunctions();
 }
 
 } // namespace facebook::velox::functions
