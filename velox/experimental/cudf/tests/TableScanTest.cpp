@@ -14,12 +14,12 @@
  * limitations under the License.
  */
 
-#include "velox/experimental/cudf/connectors/parquet/ParquetConfig.h"
-#include "velox/experimental/cudf/connectors/parquet/ParquetConnector.h"
-#include "velox/experimental/cudf/connectors/parquet/ParquetConnectorSplit.h"
-#include "velox/experimental/cudf/connectors/parquet/ParquetDataSource.h"
-#include "velox/experimental/cudf/connectors/parquet/ParquetTableHandle.h"
-#include "velox/experimental/cudf/tests/utils/ParquetConnectorTestBase.h"
+#include "velox/experimental/cudf/connectors/hive/CudfHiveConfig.h"
+#include "velox/experimental/cudf/connectors/hive/CudfHiveConnector.h"
+#include "velox/experimental/cudf/connectors/hive/CudfHiveConnectorSplit.h"
+#include "velox/experimental/cudf/connectors/hive/CudfHiveDataSource.h"
+#include "velox/experimental/cudf/connectors/hive/CudfHiveTableHandle.h"
+#include "velox/experimental/cudf/tests/utils/CudfHiveConnectorTestBase.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/tests/FaultyFile.h"
@@ -53,16 +53,16 @@ using namespace facebook::velox::cudf_velox;
 using namespace facebook::velox::cudf_velox::exec;
 using namespace facebook::velox::cudf_velox::exec::test;
 
-class TableScanTest : public virtual ParquetConnectorTestBase {
+class TableScanTest : public virtual CudfHiveConnectorTestBase {
  protected:
   void SetUp() override {
-    ParquetConnectorTestBase::SetUp();
+    CudfHiveConnectorTestBase::SetUp();
     ExchangeSource::factories().clear();
     ExchangeSource::registerFactory(createLocalExchangeSource);
   }
 
   static void SetUpTestCase() {
-    ParquetConnectorTestBase::SetUpTestCase();
+    CudfHiveConnectorTestBase::SetUpTestCase();
   }
 
   std::vector<RowVectorPtr> makeVectors(
@@ -70,11 +70,11 @@ class TableScanTest : public virtual ParquetConnectorTestBase {
       int32_t rowsPerVector,
       const RowTypePtr& rowType = nullptr) {
     auto inputs = rowType ? rowType : rowType_;
-    return ParquetConnectorTestBase::makeVectors(inputs, count, rowsPerVector);
+    return CudfHiveConnectorTestBase::makeVectors(inputs, count, rowsPerVector);
   }
 
-  Split makeParquetSplit(std::string path, int64_t splitWeight = 0) {
-    return Split(makeParquetConnectorSplit(std::move(path), splitWeight));
+  Split makeCudfHiveSplit(std::string path, int64_t splitWeight = 0) {
+    return Split(makeCudfHiveConnectorSplit(std::move(path), splitWeight));
   }
 
   std::shared_ptr<Task> assertQuery(
@@ -96,7 +96,7 @@ class TableScanTest : public virtual ParquetConnectorTestBase {
       const PlanNodePtr& plan,
       const std::vector<std::shared_ptr<TempFilePath>>& filePaths,
       const std::string& duckDbSql) {
-    return ParquetConnectorTestBase::assertQuery(plan, filePaths, duckDbSql);
+    return CudfHiveConnectorTestBase::assertQuery(plan, filePaths, duckDbSql);
   }
 
   // Run query with spill enabled.
@@ -109,7 +109,7 @@ class TableScanTest : public virtual ParquetConnectorTestBase {
         .spillDirectory(spillDirectory)
         .config(core::QueryConfig::kSpillEnabled, false)
         .config(core::QueryConfig::kAggregationSpillEnabled, false)
-        .splits(makeParquetConnectorSplits(filePaths))
+        .splits(makeCudfHiveConnectorSplits(filePaths))
         .assertResults(duckDbSql);
   }
 
@@ -134,17 +134,20 @@ class TableScanTest : public virtual ParquetConnectorTestBase {
 
   static std::unordered_map<std::string, RuntimeMetric>
   getTableScanRuntimeStats(const std::shared_ptr<Task>& task) {
-    VELOX_NYI("RuntimeStats not yet implemented for the cudf ParquetConnector");
+    VELOX_NYI(
+        "RuntimeStats not yet implemented for the cudf CudfHiveConnector");
     // return task->taskStats().pipelineStats[0].operatorStats[0].runtimeStats;
   }
 
   static int64_t getSkippedStridesStat(const std::shared_ptr<Task>& task) {
-    VELOX_NYI("RuntimeStats not yet implemented for the cudf ParquetConnector");
+    VELOX_NYI(
+        "RuntimeStats not yet implemented for the cudf CudfHiveConnector");
     // return getTableScanRuntimeStats(task)["skippedStrides"].sum;
   }
 
   static int64_t getSkippedSplitsStat(const std::shared_ptr<Task>& task) {
-    VELOX_NYI("RuntimeStats not yet implemented for the cudf ParquetConnector");
+    VELOX_NYI(
+        "RuntimeStats not yet implemented for the cudf CudfHiveConnector");
     // return getTableScanRuntimeStats(task)["skippedSplits"].sum;
   }
 
@@ -207,9 +210,9 @@ TEST_F(TableScanTest, allColumns) {
         // ASSERT_LT(0, it->second.customStats.at("ioWaitWallNanos").sum);
       };
 
-  // Test scan all columns with ParquetConnectorSplits
+  // Test scan all columns with CudfHiveConnectorSplits
   {
-    auto splits = makeParquetConnectorSplits({filePath});
+    auto splits = makeCudfHiveConnectorSplits({filePath});
     testScanAllColumns(splits);
   }
 
@@ -226,7 +229,7 @@ TEST_F(TableScanTest, allColumns) {
             splits.push_back(
                 facebook::velox::connector::hive::HiveConnectorSplitBuilder(
                     filePath->getPath())
-                    .connectorId("hive")
+                    .connectorId(kCudfHiveConnectorId)
                     .fileFormat(dwio::common::FileFormat::PARQUET)
                     .build());
           }
@@ -268,7 +271,7 @@ TEST_F(TableScanTest, directBufferInputRawInputBytes) {
 
   auto task = AssertQueryBuilder(duckDbQueryRunner_)
                   .plan(plan)
-                  .splits(makeParquetConnectorSplits({filePath}))
+                  .splits(makeCudfHiveConnectorSplits({filePath}))
                   .queryCtx(queryCtx)
                   .assertResults("SELECT c0, c2 FROM tmp");
 
@@ -279,11 +282,11 @@ TEST_F(TableScanTest, directBufferInputRawInputBytes) {
   auto it = planStats.find(scanNodeId);
   ASSERT_TRUE(it != planStats.end());
   auto rawInputBytes = it->second.rawInputBytes;
-  // Reduced from 500 to 400 as cudf Parquet writer seems to be writing smaller
+  // Reduced from 500 to 400 as cudf CudfHive writer seems to be writing smaller
   // files.
   ASSERT_GE(rawInputBytes, 400);
 
-  // TableScan runtime stats not available with Parquet connector yet
+  // TableScan runtime stats not available with CudfHive connector yet
 #if 0
   auto overreadBytes =
   getTableScanRuntimeStats(task).at("overreadBytes").sum;
@@ -336,6 +339,7 @@ TEST_F(TableScanTest, filterPushdown) {
                   int64_t(0), std::numeric_limits<int64_t>::max(), true))
           .add("c3", std::make_unique<common::BoolValue>(true, false))
           .build();
+
   auto tableHandle = makeTableHandle(
       "parquet_table", rowType, true, std::move(subfieldFilters), nullptr);
 

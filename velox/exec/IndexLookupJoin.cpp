@@ -199,10 +199,7 @@ void IndexLookupJoin::ensureInputLoaded(const InputBatchState& batch) {
   VELOX_CHECK_GT(numInputBatches(), 0);
   // Ensure each input vector are lazy loaded before process next batch. This is
   // to ensure the ordered lazy materialization in the source readers.
-  auto& input = batch.input;
-  for (auto i = 0; i < input->childrenSize(); ++i) {
-    input->childAt(i)->loadedVector();
-  }
+  loadColumns(batch.input, *operatorCtx_->execCtx());
 }
 
 void IndexLookupJoin::initInputBatches() {
@@ -782,7 +779,7 @@ void IndexLookupJoin::fillOutputMatchRows(
     return;
   }
   VELOX_CHECK_NOT_NULL(rawMatchValues_);
-  bits::fillBits(rawMatchValues_, offset, size, match);
+  bits::fillBits(rawMatchValues_, offset, offset + size, match);
 }
 
 RowVectorPtr IndexLookupJoin::produceOutputForLeftJoin(

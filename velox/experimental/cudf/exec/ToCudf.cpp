@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#include "velox/experimental/cudf/connectors/parquet/CudfHiveConnector.h"
-#include "velox/experimental/cudf/connectors/parquet/ParquetDataSource.h"
+#include "velox/experimental/cudf/connectors/hive/CudfHiveConnector.h"
+#include "velox/experimental/cudf/connectors/hive/CudfHiveDataSource.h"
 #include "velox/experimental/cudf/exec/CudfConversion.h"
 #include "velox/experimental/cudf/exec/CudfFilterProject.h"
 #include "velox/experimental/cudf/exec/CudfHashAggregation.h"
@@ -103,7 +103,7 @@ bool CompileState::compile() {
     auto const& connector = velox::connector::getConnector(
         tableScanNode->tableHandle()->connectorId());
     auto cudfHiveConnector = std::dynamic_pointer_cast<
-        facebook::velox::cudf_velox::connector::parquet::CudfHiveConnector>(
+        facebook::velox::cudf_velox::connector::hive::CudfHiveConnector>(
         connector);
     if (!cudfHiveConnector) {
       return false;

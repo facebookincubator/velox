@@ -24,7 +24,6 @@
 #include "velox/vector/ConstantVector.h"
 #include "velox/vector/VectorTypeUtils.h"
 
-#include <cudf/ast/expressions.hpp>
 #include <cudf/column/column_factories.hpp>
 #include <cudf/datetime.hpp>
 #include <cudf/lists/count_elements.hpp>
@@ -34,7 +33,6 @@
 #include <cudf/strings/slice.hpp>
 #include <cudf/strings/split/split.hpp>
 #include <cudf/table/table.hpp>
-#include <cudf/table/table_view.hpp>
 #include <cudf/transform.hpp>
 
 #include <limits>
@@ -1324,7 +1322,7 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
   // First, create column reference from subfield
   // For now, only support simple field references
   if (subfield.path().empty() ||
-      subfield.path()[0]->kind() != common::kNestedField) {
+      subfield.path()[0]->kind() != common::SubfieldKind::kNestedField) {
     VELOX_FAIL(
         "Only simple field references are supported in subfield filters");
   }
