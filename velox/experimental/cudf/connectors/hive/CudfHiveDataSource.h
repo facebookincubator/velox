@@ -16,8 +16,8 @@
 
 #pragma once
 
-#include "velox/experimental/cudf/connectors/parquet/ParquetConfig.h"
-#include "velox/experimental/cudf/connectors/parquet/ParquetConnectorSplit.h"
+#include "velox/experimental/cudf/connectors/hive/CudfHiveConfig.h"
+#include "velox/experimental/cudf/connectors/hive/CudfHiveConnectorSplit.h"
 #include "velox/experimental/cudf/exec/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
 
@@ -31,19 +31,19 @@
 #include <cudf/io/parquet.hpp>
 #include <cudf/io/types.hpp>
 
-namespace facebook::velox::cudf_velox::connector::parquet {
+namespace facebook::velox::cudf_velox::connector::hive {
 
 using namespace facebook::velox::connector;
 
-class ParquetDataSource : public DataSource, public NvtxHelper {
+class CudfHiveDataSource : public DataSource, public NvtxHelper {
  public:
-  ParquetDataSource(
+  CudfHiveDataSource(
       const RowTypePtr& outputType,
       const ConnectorTableHandlePtr& tableHandle,
       const ColumnHandleMap& columnHandles,
       folly::Executor* executor,
       const ConnectorQueryCtx* connectorQueryCtx,
-      const std::shared_ptr<ParquetConfig>& ParquetConfig);
+      const std::shared_ptr<CudfHiveConfig>& CudfHiveConfig);
 
   void addSplit(std::shared_ptr<ConnectorSplit> split) override;
 
@@ -51,7 +51,8 @@ class ParquetDataSource : public DataSource, public NvtxHelper {
       column_index_t /*outputChannel*/,
       const std::shared_ptr<facebook::velox::common::Filter>& /*filter*/)
       override {
-    VELOX_NYI("Dynamic filters not yet implemented by cudf::ParquetConnector.");
+    VELOX_NYI(
+        "Dynamic filters not yet implemented by cudf::CudfHiveConnector.");
   }
 
   std::optional<RowVectorPtr> next(
@@ -89,22 +90,23 @@ class ParquetDataSource : public DataSource, public NvtxHelper {
   }
   RowVectorPtr emptyOutput_;
 
-  std::shared_ptr<ParquetConnectorSplit> split_;
-  std::shared_ptr<const hive::HiveTableHandle> tableHandle_;
+  std::shared_ptr<CudfHiveConnectorSplit> split_;
+  std::shared_ptr<const ::facebook::velox::connector::hive::HiveTableHandle>
+      tableHandle_;
 
-  const std::shared_ptr<ParquetConfig> parquetConfig_;
+  const std::shared_ptr<CudfHiveConfig> parquetConfig_;
 
   folly::Executor* const executor_;
   const ConnectorQueryCtx* const connectorQueryCtx_;
 
   memory::MemoryPool* const pool_;
 
-  // cuDF Parquet reader stuff.
+  // cuDF CudfHive reader stuff.
   cudf::io::parquet_reader_options readerOptions_;
   std::unique_ptr<cudf::io::chunked_parquet_reader> splitReader_;
   rmm::cuda_stream_view stream_;
 
-  // Table column names read from the Parquet file
+  // Table column names read from the CudfHive file
   std::vector<std::string> columnNames_;
 
   // Output type from file reader.  This is different from outputType_ that it
@@ -146,4 +148,4 @@ class ParquetDataSource : public DataSource, public NvtxHelper {
   static void totalScanTimeCalculator(void* userData);
 };
 
-} // namespace facebook::velox::cudf_velox::connector::parquet
+} // namespace facebook::velox::cudf_velox::connector::hive

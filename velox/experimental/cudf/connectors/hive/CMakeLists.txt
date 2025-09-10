@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(velox_cudf_parquet_config ParquetConfig.cpp)
+add_library(velox_cudf_parquet_config CudfHiveConfig.cpp)
 
 set_target_properties(velox_cudf_parquet_config PROPERTIES CUDA_ARCHITECTURES native)
 
@@ -21,12 +21,12 @@ target_link_libraries(velox_cudf_parquet_config velox_core velox_exception cudf:
 add_library(
   velox_cudf_parquet_connector
   OBJECT
-  ParquetConfig.cpp
+  CudfHiveConfig.cpp
   CudfHiveConnector.cpp
-  ParquetConnectorSplit.cpp
-  ParquetDataSource.cpp
-  ParquetDataSink.cpp
-  ParquetTableHandle.cpp
+  CudfHiveConnectorSplit.cpp
+  CudfHiveDataSource.cpp
+  CudfHiveDataSink.cpp
+  CudfHiveTableHandle.cpp
 )
 
 set_target_properties(velox_cudf_parquet_connector PROPERTIES CUDA_ARCHITECTURES native)

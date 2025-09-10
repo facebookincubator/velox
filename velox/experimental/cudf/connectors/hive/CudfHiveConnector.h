@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include "velox/experimental/cudf/connectors/parquet/ParquetConfig.h"
+#include "velox/experimental/cudf/connectors/hive/CudfHiveConfig.h"
 
 #include "velox/connectors/hive/HiveConnector.h"
 
@@ -24,12 +24,13 @@
 #include <cudf/io/types.hpp>
 #include <cudf/types.hpp>
 
-namespace facebook::velox::cudf_velox::connector::parquet {
+namespace facebook::velox::cudf_velox::connector::hive {
 
 using namespace facebook::velox::connector;
 using namespace facebook::velox::config;
 
-class CudfHiveConnector final : public hive::HiveConnector {
+class CudfHiveConnector final
+    : public ::facebook::velox::connector::hive::HiveConnector {
  public:
   CudfHiveConnector(
       const std::string& id,
@@ -50,15 +51,18 @@ class CudfHiveConnector final : public hive::HiveConnector {
 
  protected:
   // TODO (dm): rename parquetconfig
-  const std::shared_ptr<ParquetConfig> parquetConfig_;
+  const std::shared_ptr<CudfHiveConfig> cudfHiveConfig_;
 };
 
-class CudfHiveConnectorFactory : public hive::HiveConnectorFactory {
+class CudfHiveConnectorFactory
+    : public ::facebook::velox::connector::hive::HiveConnectorFactory {
  public:
-  CudfHiveConnectorFactory() : hive::HiveConnectorFactory() {}
+  CudfHiveConnectorFactory()
+      : ::facebook::velox::connector::hive::HiveConnectorFactory() {}
 
   explicit CudfHiveConnectorFactory(const char* connectorName)
-      : hive::HiveConnectorFactory(connectorName) {}
+      : ::facebook::velox::connector::hive::HiveConnectorFactory(
+            connectorName) {}
 
   std::shared_ptr<Connector> newConnector(
       const std::string& id,
@@ -67,4 +71,4 @@ class CudfHiveConnectorFactory : public hive::HiveConnectorFactory {
       folly::Executor* cpuExecutor = nullptr) override;
 };
 
-} // namespace facebook::velox::cudf_velox::connector::parquet
+} // namespace facebook::velox::cudf_velox::connector::hive

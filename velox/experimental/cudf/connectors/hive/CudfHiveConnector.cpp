@@ -14,13 +14,13 @@
  * limitations under the License.
  */
 
-#include "velox/experimental/cudf/connectors/parquet/CudfHiveConnector.h"
-#include "velox/experimental/cudf/connectors/parquet/ParquetDataSource.h"
+#include "velox/experimental/cudf/connectors/hive/CudfHiveConnector.h"
+#include "velox/experimental/cudf/connectors/hive/CudfHiveDataSource.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 
 #include "velox/connectors/hive/HiveDataSource.h"
 
-namespace facebook::velox::cudf_velox::connector::parquet {
+namespace facebook::velox::cudf_velox::connector::hive {
 
 using namespace facebook::velox::connector;
 
@@ -28,30 +28,30 @@ CudfHiveConnector::CudfHiveConnector(
     const std::string& id,
     std::shared_ptr<const facebook::velox::config::ConfigBase> config,
     folly::Executor* executor)
-    : hive::HiveConnector(id, config, executor),
-      parquetConfig_(std::make_shared<ParquetConfig>(config)) {}
+    : ::facebook::velox::connector::hive::HiveConnector(id, config, executor),
+      cudfHiveConfig_(std::make_shared<CudfHiveConfig>(config)) {}
 
 std::unique_ptr<DataSource> CudfHiveConnector::createDataSource(
     const RowTypePtr& outputType,
     const ConnectorTableHandlePtr& tableHandle,
     const ColumnHandleMap& columnHandles,
     ConnectorQueryCtx* connectorQueryCtx) {
-  // If it's parquet then return ParquetDataSource
+  // If it's parquet then return CudfHiveDataSource
   // If it's not parquet then return HiveDataSource
   // TODO (dm): Make this ^^^ happen
   // Problem: this information is in split, not table handle
 
   if (cudfIsRegistered()) {
-    return std::make_unique<ParquetDataSource>(
+    return std::make_unique<CudfHiveDataSource>(
         outputType,
         tableHandle,
         columnHandles,
         ioExecutor_,
         connectorQueryCtx,
-        parquetConfig_);
+        cudfHiveConfig_);
   }
 
-  return std::make_unique<hive::HiveDataSource>(
+  return std::make_unique<::facebook::velox::connector::hive::HiveDataSource>(
       outputType,
       tableHandle,
       columnHandles,
@@ -71,4 +71,4 @@ std::shared_ptr<Connector> CudfHiveConnectorFactory::newConnector(
   return std::make_shared<CudfHiveConnector>(id, config, ioExecutor);
 }
 
-} // namespace facebook::velox::cudf_velox::connector::parquet
+} // namespace facebook::velox::cudf_velox::connector::hive
