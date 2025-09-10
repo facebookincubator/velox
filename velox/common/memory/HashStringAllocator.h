@@ -27,6 +27,9 @@
 
 namespace facebook::velox {
 
+template <class T>
+struct StlAllocator;
+
 /// Implements an arena backed by memory::Allocation. This is for backing
 /// ByteOutputStream or for allocating single blocks. Blocks can be individually
 /// freed. Adjacent frees are coalesced and free blocks are kept in a free list.
@@ -49,6 +52,9 @@ class HashStringAllocator : public StreamArena {
   /// Sizes larger than this will come direct from pool().
   static constexpr int32_t kMaxAlloc =
       memory::AllocationTraits::kPageSize / 4 * 3;
+
+  template <typename T>
+  using TStlAllocator = StlAllocator<T>;
 
   class Header {
    public:
