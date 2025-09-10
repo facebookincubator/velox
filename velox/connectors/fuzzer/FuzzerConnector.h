@@ -145,4 +145,9 @@ class FuzzerConnectorFactory : public ConnectorFactory {
   // TODO: Add object makers like makeTableHandle, makeColumnHandle, etc.
 };
 
+bool registerFuzzerConnectorFactory(
+    std::unique_ptr<FuzzerConnectorFactory> factory);
+
+bool unregisterFuzzerConnectorFactory();
+
 } // namespace facebook::velox::connector::fuzzer

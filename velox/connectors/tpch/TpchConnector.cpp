@@ -15,6 +15,8 @@
  */
 
 #include "velox/connectors/tpch/TpchConnector.h"
+
+#include "velox/connectors/ConnectorNames.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/expression/Expr.h"
 #include "velox/tpch/gen/TpchGen.h"
@@ -28,6 +30,15 @@ TpchConnector::TpchConnector(
     std::shared_ptr<const config::ConfigBase> config,
     folly::Executor* /*executor*/)
     : Connector(id, std::move(config)) {}
+
+bool registerTpchConnectorFactory(
+    std::unique_ptr<TpchConnectorFactory> factory) {
+  connector::registerConnectorFactory(std::move(factory));
+}
+
+bool unregisterTpcdsConnectorFactory() {
+  connector::unregisterConnectorFactory(connector::kTpchConnectorName);
+}
 
 namespace {
 

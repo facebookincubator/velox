@@ -16,6 +16,7 @@
 
 #include "velox/connectors/hive/HiveConnector.h"
 
+#include "velox/connectors/ConnectorNames.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveDataSink.h"
 #include "velox/connectors/hive/HiveDataSource.h"
@@ -586,6 +587,12 @@ void HivePartitionFunctionSpec::registerSerDe() {
   auto& registry = DeserializationWithContextRegistryForSharedPtr();
   registry.Register(
       "HivePartitionFunctionSpec", HivePartitionFunctionSpec::deserialize);
+}
+
+bool registerHiveConnectorMetadataFactory(
+    std::unique_ptr<HiveConnectorMetadataFactory> factory) {
+  hiveConnectorMetadataFactories().push_back(std::move(factory));
+  return true;
 }
 
 } // namespace facebook::velox::connector::hive

@@ -16,6 +16,7 @@
 
 #include <fmt/format.h>
 
+#include "velox/connectors/ConnectorNames.h"
 #include "velox/connectors/tpcds/TpcdsConnector.h"
 #include "velox/tpcds/gen/DSDGenIterator.h"
 
@@ -138,4 +139,14 @@ std::optional<RowVectorPtr> TpcdsDataSource::next(
 
   return projectOutputColumns(outputVector);
 }
+
+bool registerTpcdsConnectorFactory(
+    std::unique_ptr<TpcdsConnectorFactory> factory) {
+  connector::registerConnectorFactory(std::move(factory));
+}
+
+bool unregisterTpcdsConnectorFactory() {
+  connector::unregisterConnectorFactory(connector::kTpcdsConnectorName);
+}
+
 } // namespace facebook::velox::connector::tpcds

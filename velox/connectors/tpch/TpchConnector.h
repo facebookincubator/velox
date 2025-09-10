@@ -201,4 +201,9 @@ class TpchConnectorFactory : public ConnectorFactory {
   }
 };
 
+bool registerTpchConnectorFactory(
+    std::unique_ptr<TpchConnectorFactory> factory);
+
+bool unregisterTpcdsConnectorFactory();
+
 } // namespace facebook::velox::connector::tpch
