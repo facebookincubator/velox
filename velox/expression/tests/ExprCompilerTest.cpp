@@ -193,12 +193,10 @@ TEST_F(ExprCompilerTest, concatStringFlattening) {
       {field("a"), concatCall({field("b"), field("c")}), field("d")});
   ASSERT_EQ("concat(a, b, c, d)", compile(expression)->toString());
 
-  // Constant folding happens after flattening.
+  // Inner concatCall is constant folded during expression rewrite.
   expression = concatCall(
       {field("a"), concatCall({varchar("---"), varchar("...")}), field("b")});
-  ASSERT_EQ(
-      "concat(a, ---:VARCHAR, ...:VARCHAR, b)",
-      compile(expression)->toString());
+  ASSERT_EQ("concat(a, ---...:VARCHAR, b)", compile(expression)->toString());
 }
 
 TEST_F(ExprCompilerTest, concatArrayFlattening) {
