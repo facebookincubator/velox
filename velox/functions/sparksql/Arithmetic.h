@@ -38,14 +38,14 @@ struct AbsFunction {
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& config,
       const TInput* /*a*/) {
-    ansiEnabled = config.sparkAnsiEnabled();
+    ansiEnabled_ = config.sparkAnsiEnabled();
   }
 
   template <typename T>
   FOLLY_ALWAYS_INLINE Status call(T& result, const T& a) {
     if constexpr (std::is_integral_v<T>) {
       if (FOLLY_UNLIKELY(a == std::numeric_limits<T>::min())) {
-        if (ansiEnabled) {
+        if (ansiEnabled_) {
           // In ANSI mode, returns an overflow error.
           if (threadSkipErrorDetails()) {
             return Status::UserError();
@@ -61,7 +61,8 @@ struct AbsFunction {
     return Status::OK();
   }
 
-  bool ansiEnabled = false;
+ private:
+  bool ansiEnabled_ = false;
 };
 
 template <typename T>
