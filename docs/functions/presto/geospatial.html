@@ -692,6 +692,16 @@ given zoom level. Empty inputs return an empty array, and null inputs return
 null.</p>
 </dd></dl>
 
+<dl class="py function">
+<dt class="sig sig-object py" id="geometry_to_dissolved_bing_tiles">
+<span class="sig-name descname"><span class="pre">geometry_to_dissolved_bing_tiles</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry:</span> <span class="pre">Geometry</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">max_zoom_level:</span> <span class="pre">tinyint)</span> <span class="pre">-&gt;</span> <span class="pre">tile:</span> <span class="pre">array(BingTile</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#geometry_to_dissolved_bing_tiles" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the minimum set of Bing tiles that fully covers a given geometry at a
+given zoom level, recursively dissolving full sets of children into parents.
+This results in a smaller array of tiles of different zoom levels.
+For example, if the non-dissolved covering is [“00”, “01”, “02”, “03”, “10”],
+the dissolved covering would be [“0”, “10”]. Zoom levels from 0 to 23 are supported.</p>
+</dd></dl>
+
 </section>
 </section>
 
@@ -794,6 +804,7 @@ null.</p>
 <li><a class="reference internal" href="#id5"><code class="docutils literal notranslate"><span class="pre">bing_tile_children()</span></code></a></li>
 <li><a class="reference internal" href="#bing_tile_quadkey"><code class="docutils literal notranslate"><span class="pre">bing_tile_quadkey()</span></code></a></li>
 <li><a class="reference internal" href="#geometry_to_bing_tiles"><code class="docutils literal notranslate"><span class="pre">geometry_to_bing_tiles()</span></code></a></li>
+<li><a class="reference internal" href="#geometry_to_dissolved_bing_tiles"><code class="docutils literal notranslate"><span class="pre">geometry_to_dissolved_bing_tiles()</span></code></a></li>
 </ul>
 </li>
 </ul>
