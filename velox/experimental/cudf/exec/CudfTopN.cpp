@@ -148,7 +148,6 @@ RowVectorPtr CudfTopN::getOutput() {
 
   finished_ = noMoreInput_ && topNBatches_.empty();
   return resultTable;
-  // TBD: is batching needed? if so, then we need to batch the resultTable.
 }
 
 void CudfTopN::noMoreInput() {
