@@ -525,7 +525,7 @@ class ApproxPercentileAggregate : public exec::Aggregate {
         result->setNull(i, true);
       } else {
         if (rawNulls) {
-          bits::clearBit(rawNulls, i);
+          bits::setNull(rawNulls, i, false);
         }
         extractFunction(accumulator->getSketch(), result, i);
       }
