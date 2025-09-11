@@ -17,6 +17,7 @@
 #pragma once
 
 #include <map>
+#include <optional>
 
 #include <fmt/format.h>
 #include <folly/Conv.h>
@@ -493,6 +494,16 @@ class Variant {
     return value<CppToType<T>::typeKind>();
   }
 
+  /// Same as value<T>() but returns std::nullopt if the value is null.
+  /// Otherwise, returns the value wrapped in std::optional.
+  template <typename T>
+  std::optional<T> maybeValue() const {
+    if (isNull()) {
+      return std::nullopt;
+    }
+    return value<T>();
+  }
+
   bool isNull() const {
     return ptr_ == nullptr;
   }
@@ -550,11 +561,7 @@ class Variant {
 
     std::map<K, std::optional<V>> values;
     for (const auto& [k, v] : variants) {
-      if (v.isNull()) {
-        values.emplace(k.template value<K>(), std::nullopt);
-      } else {
-        values.emplace(k.template value<K>(), v.template value<V>());
-      }
+      values.emplace(k.template value<K>(), v.template maybeValue<V>());
     }
 
     return values;
@@ -624,11 +631,7 @@ class Variant {
     values.reserve(variants.size());
 
     for (const auto& v : variants) {
-      if (v.isNull()) {
-        values.emplace_back(std::nullopt);
-      } else {
-        values.emplace_back(v.template value<T>());
-      }
+      values.emplace_back(v.template maybeValue<T>());
     }
 
     return values;
