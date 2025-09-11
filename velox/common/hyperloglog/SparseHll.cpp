@@ -34,9 +34,8 @@ inline uint32_t decodeValue(uint32_t entry) {
   return entry & ((1 << kValueBitLength) - 1);
 }
 
-int searchIndex(
-    uint32_t index,
-    const std::vector<uint32_t, StlAllocator<uint32_t>>& entries) {
+template <typename VectorType>
+int searchIndex(int32_t index, const VectorType& entries) {
   int low = 0;
   int high = entries.size() - 1;
 
@@ -69,7 +68,77 @@ common::InputByteStream initializeInputStream(const char* serialized) {
 }
 } // namespace
 
-bool SparseHll::insertHash(uint64_t hash) {
+// Static utility functions implementation
+int64_t SparseHlls::cardinality(const char* serialized) {
+  static const int kTotalBuckets = 1 << kIndexBitLength;
+
+  auto stream = initializeInputStream(serialized);
+  auto size = stream.read<int16_t>();
+
+  int zeroBuckets = kTotalBuckets - size;
+  return std::round(linearCounting(zeroBuckets, kTotalBuckets));
+}
+
+std::string SparseHlls::serializeEmpty(int8_t indexBitLength) {
+  static const size_t kSize = 4;
+
+  std::string serialized;
+  serialized.resize(kSize);
+
+  common::OutputByteStream stream(serialized.data());
+  stream.appendOne(kPrestoSparseV2);
+  stream.appendOne(indexBitLength);
+  stream.appendOne(static_cast<int16_t>(0));
+  return serialized;
+}
+
+bool SparseHlls::canDeserialize(const char* input) {
+  return *reinterpret_cast<const int8_t*>(input) == kPrestoSparseV2;
+}
+
+int8_t SparseHlls::deserializeIndexBitLength(const char* input) {
+  common::InputByteStream stream(input);
+  stream.read<int8_t>(); // Skip version
+  return stream.read<int8_t>(); // Return indexBitLength
+}
+
+// Template method implementations
+template <typename Allocator>
+SparseHll<Allocator>::SparseHll(Allocator allocator)
+    : allocator_(allocator), entries_{[&]() {
+        if constexpr (std::is_same_v<Allocator, HashStringAllocator*>) {
+          return StlAllocator<uint32_t>(allocator);
+        } else {
+          return memory::StlAllocator<uint32_t>(allocator.pool);
+        }
+      }()} {}
+
+template <typename Allocator>
+SparseHll<Allocator>::SparseHll(const char* serialized, Allocator allocator)
+    : allocator_(allocator), entries_{[&]() {
+        if constexpr (std::is_same_v<Allocator, HashStringAllocator*>) {
+          return StlAllocator<uint32_t>(allocator);
+        } else {
+          return memory::StlAllocator<uint32_t>(allocator.pool);
+        }
+      }()} {
+  common::InputByteStream stream(serialized);
+  auto version = stream.read<int8_t>();
+  VELOX_CHECK_EQ(kPrestoSparseV2, version);
+
+  // Skip indexBitLength from serialized data - we use fixed kIndexBitLength
+  // internally
+  stream.read<int8_t>();
+
+  auto size = stream.read<int16_t>();
+  entries_.resize(size);
+  for (auto i = 0; i < size; i++) {
+    entries_[i] = stream.read<uint32_t>();
+  }
+}
+
+template <typename Allocator>
+bool SparseHll<Allocator>::insertHash(uint64_t hash) {
   auto index = computeIndex(hash, kIndexBitLength);
   auto value = numberOfLeadingZeros(hash, kIndexBitLength);
 
@@ -88,29 +157,21 @@ bool SparseHll::insertHash(uint64_t hash) {
   return overLimit();
 }
 
-int64_t SparseHll::cardinality() const {
+template <typename Allocator>
+int64_t SparseHll<Allocator>::cardinality() const {
   // Estimate the cardinality using linear counting over the theoretical
   // 2^kIndexBitLength buckets available due to the fact that we're
   // recording the raw leading kIndexBitLength of the hash. This produces
   // much better precision while in the sparse regime.
-  static const int kTotalBuckets = 1 << kIndexBitLength;
+  const int kTotalBuckets = 1 << kIndexBitLength;
 
   int zeroBuckets = kTotalBuckets - entries_.size();
   return std::round(linearCounting(zeroBuckets, kTotalBuckets));
 }
 
-// static
-int64_t SparseHll::cardinality(const char* serialized) {
-  static const int kTotalBuckets = 1 << kIndexBitLength;
-
-  auto stream = initializeInputStream(serialized);
-  auto size = stream.read<int16_t>();
-
-  int zeroBuckets = kTotalBuckets - size;
-  return std::round(linearCounting(zeroBuckets, kTotalBuckets));
-}
-
-void SparseHll::serialize(int8_t indexBitLength, char* output) const {
+template <typename Allocator>
+void SparseHll<Allocator>::serialize(int8_t indexBitLength, char* output)
+    const {
   common::OutputByteStream stream(output);
   stream.appendOne(kPrestoSparseV2);
   stream.appendOne(indexBitLength);
@@ -120,48 +181,21 @@ void SparseHll::serialize(int8_t indexBitLength, char* output) const {
   }
 }
 
-// static
-std::string SparseHll::serializeEmpty(int8_t indexBitLength) {
-  static const size_t kSize = 4;
-
-  std::string serialized;
-  serialized.resize(kSize);
-
-  common::OutputByteStream stream(serialized.data());
-  stream.appendOne(kPrestoSparseV2);
-  stream.appendOne(indexBitLength);
-  stream.appendOne(static_cast<int16_t>(0));
-  return serialized;
-}
-
-// static
-bool SparseHll::canDeserialize(const char* input) {
-  return *reinterpret_cast<const int8_t*>(input) == kPrestoSparseV2;
-}
-
-int32_t SparseHll::serializedSize() const {
+template <typename Allocator>
+int32_t SparseHll<Allocator>::serializedSize() const {
   return 1 /* version */
       + 1 /* indexBitLength */
       + 2 /* number of entries */
       + entries_.size() * 4;
 }
 
-int32_t SparseHll::inMemorySize() const {
+template <typename Allocator>
+int32_t SparseHll<Allocator>::inMemorySize() const {
   return sizeof(uint32_t) * entries_.size();
 }
 
-SparseHll::SparseHll(const char* serialized, HashStringAllocator* allocator)
-    : entries_{StlAllocator<uint32_t>(allocator)} {
-  auto stream = initializeInputStream(serialized);
-
-  auto size = stream.read<int16_t>();
-  entries_.resize(size);
-  for (auto i = 0; i < size; i++) {
-    entries_[i] = stream.read<uint32_t>();
-  }
-}
-
-void SparseHll::mergeWith(const SparseHll& other) {
+template <typename Allocator>
+void SparseHll<Allocator>::mergeWith(const SparseHll<Allocator>& other) {
   auto size = other.entries_.size();
   // This check prevents merge aggregation from being performed on
   // empty_approx_set(), an empty HyperLogLog. The merge function typically does
@@ -171,7 +205,8 @@ void SparseHll::mergeWith(const SparseHll& other) {
   }
 }
 
-void SparseHll::mergeWith(const char* serialized) {
+template <typename Allocator>
+void SparseHll<Allocator>::mergeWith(const char* serialized) {
   auto stream = initializeInputStream(serialized);
 
   auto size = stream.read<int16_t>();
@@ -184,11 +219,25 @@ void SparseHll::mergeWith(const char* serialized) {
   }
 }
 
-void SparseHll::mergeWith(size_t otherSize, const uint32_t* otherEntries) {
+template <typename Allocator>
+void SparseHll<Allocator>::mergeWith(
+    size_t otherSize,
+    const uint32_t* otherEntries) {
   VELOX_CHECK_GT(otherSize, 0);
 
   auto size = entries_.size();
-  std::vector<uint32_t> merged(size + otherSize);
+
+  // Create vector with appropriate allocator
+  auto makeAllocator = [&]() {
+    if constexpr (std::is_same_v<Allocator, HashStringAllocator*>) {
+      return StlAllocator<uint32_t>(allocator_);
+    } else {
+      return memory::StlAllocator<uint32_t>(allocator_.pool);
+    }
+  };
+
+  auto merged = std::vector<uint32_t, decltype(makeAllocator())>(
+      size + otherSize, makeAllocator());
 
   int pos = 0;
   int leftPos = 0;
@@ -223,7 +272,8 @@ void SparseHll::mergeWith(size_t otherSize, const uint32_t* otherEntries) {
   }
 }
 
-void SparseHll::verify() const {
+template <typename Allocator>
+void SparseHll<Allocator>::verify() const {
   if (entries_.size() <= 1) {
     return;
   }
@@ -236,11 +286,12 @@ void SparseHll::verify() const {
   }
 }
 
-void SparseHll::toDense(DenseHll& denseHll) const {
+template <typename Allocator>
+template <typename DenseAllocator>
+void SparseHll<Allocator>::toDense(DenseHll<DenseAllocator>& denseHll) const {
   auto indexBitLength = denseHll.indexBitLength();
 
-  for (auto i = 0; i < entries_.size(); i++) {
-    auto entry = entries_[i];
+  for (auto entry : entries_) {
     auto index = entry >> (32 - indexBitLength);
     auto shiftedValue = entry << indexBitLength;
     auto zeros = shiftedValue == 0 ? 32 : __builtin_clz(shiftedValue);
@@ -256,5 +307,22 @@ void SparseHll::toDense(DenseHll& denseHll) const {
     denseHll.insert(index, zeros + 1);
   }
 }
+
+// Explicit template instantiation for HashStringAllocator* (default)
+template class SparseHll<HashStringAllocator*>;
+// Explicit template instantiation for memory::StlAllocator<uint8_t>
+template class SparseHll<memory::StlAllocator<uint8_t>>;
+
+// Explicit template instantiation for toDense with HashStringAllocator*
+template void SparseHll<HashStringAllocator*>::toDense<HashStringAllocator*>(
+    DenseHll<HashStringAllocator*>& denseHll) const;
+template void
+SparseHll<HashStringAllocator*>::toDense<memory::StlAllocator<uint8_t>>(
+    DenseHll<memory::StlAllocator<uint8_t>>& denseHll) const;
+template void SparseHll<memory::StlAllocator<uint8_t>>::toDense<
+    HashStringAllocator*>(DenseHll<HashStringAllocator*>& denseHll) const;
+template void SparseHll<memory::StlAllocator<uint8_t>>::toDense<
+    memory::StlAllocator<uint8_t>>(
+    DenseHll<memory::StlAllocator<uint8_t>>& denseHll) const;
 
 } // namespace facebook::velox::common::hll

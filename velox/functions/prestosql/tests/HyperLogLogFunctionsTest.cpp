@@ -34,14 +34,14 @@ class HyperLogLogFunctionsTest : public functions::test::FunctionBaseTest {
  protected:
   static std::string serialize(
       int8_t indexBitLength,
-      const SparseHll& sparseHll) {
+      const SparseHll<>& sparseHll) {
     std::string serialized;
     serialized.resize(sparseHll.serializedSize());
     sparseHll.serialize(indexBitLength, serialized.data());
     return serialized;
   }
 
-  static std::string serialize(DenseHll& denseHll) {
+  static std::string serialize(DenseHll<>& denseHll) {
     std::string serialized;
     serialized.resize(denseHll.serializedSize());
     denseHll.serialize(serialized.data());

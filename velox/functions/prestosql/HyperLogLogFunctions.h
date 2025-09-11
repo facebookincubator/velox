@@ -18,6 +18,7 @@
 #include "velox/common/hyperloglog/DenseHll.h"
 #include "velox/common/hyperloglog/HllUtils.h"
 #include "velox/common/hyperloglog/SparseHll.h"
+#include "velox/core/QueryConfig.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/prestosql/types/HyperLogLogType.h"
 
@@ -30,13 +31,10 @@ struct CardinalityFunction {
   FOLLY_ALWAYS_INLINE bool call(
       int64_t& result,
       const arg_type<HyperLogLog>& hll) {
-    using common::hll::DenseHll;
-    using common::hll::SparseHll;
-
-    if (SparseHll::canDeserialize(hll.data())) {
-      result = SparseHll::cardinality(hll.data());
+    if (common::hll::SparseHlls::canDeserialize(hll.data())) {
+      result = common::hll::SparseHlls::cardinality(hll.data());
     } else {
-      result = DenseHll::cardinality(hll.data());
+      result = common::hll::DenseHlls::cardinality(hll.data());
     }
     return true;
   }
@@ -48,7 +46,7 @@ struct EmptyApproxSetFunction {
 
   FOLLY_ALWAYS_INLINE bool call(out_type<HyperLogLog>& result) {
     static const std::string kEmpty =
-        common::hll::SparseHll::serializeEmpty(12);
+        common::hll::SparseHlls::serializeEmpty(12);
 
     result.resize(kEmpty.size());
     memcpy(result.data(), kEmpty.data(), kEmpty.size());
@@ -69,7 +67,7 @@ struct EmptyApproxSetWithMaxErrorFunction {
         maxStandardError,
         "empty_approx_set function requires constant value for maxStandardError argument");
     common::hll::checkMaxStandardError(*maxStandardError);
-    serialized_ = common::hll::SparseHll::serializeEmpty(
+    serialized_ = common::hll::SparseHlls::serializeEmpty(
         common::hll::toIndexBitLength(*maxStandardError));
   }
 
