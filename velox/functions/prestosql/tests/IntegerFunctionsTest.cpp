@@ -20,7 +20,14 @@ using namespace facebook::velox;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::functions::test;
 
-class IntegerFunctionsTest : public FunctionBaseTest {};
+class IntegerFunctionsTest : public FunctionBaseTest {
+ protected:
+  template <typename T>
+  std::optional<int64_t> hashCode(std::optional<T> value) {
+    return evaluateOnce<int64_t>("hash_code_internal(c0)", value);
+  }
+};
+
 TEST_F(IntegerFunctionsTest, xxHash64FunctionBigInt) {
   const auto xxhash64 = [&](std::optional<int64_t> value) {
     return evaluateOnce<int64_t>("xxhash64_internal(c0)", BIGINT(), value);
@@ -79,4 +86,59 @@ TEST_F(IntegerFunctionsTest, xxHash64FunctionTinyInt) {
   // int8_t max and min
   EXPECT_EQ(3642125596470818657, xxhash64(127));
   EXPECT_EQ(-2392536786243718838, xxhash64(-128));
+}
+
+TEST_F(IntegerFunctionsTest, hashCodeFunctionBigint) {
+  EXPECT_EQ(std::nullopt, hashCode<int64_t>(std::nullopt));
+  EXPECT_EQ(0, hashCode<int64_t>(0));
+  EXPECT_EQ(9155312661752487122, hashCode<int64_t>(1));
+  EXPECT_EQ(-6507640756101998425, hashCode<int64_t>(-1));
+  EXPECT_EQ(6845023471056522234, hashCode<int64_t>(-128));
+  EXPECT_EQ(1951949442083825868, hashCode<int64_t>(-127));
+  EXPECT_EQ(695722463566662829, hashCode<int64_t>(127));
+  EXPECT_EQ(7899085683235324083, hashCode<int64_t>(255));
+  EXPECT_EQ(-4530432376425028794, hashCode<int64_t>(-32768));
+  EXPECT_EQ(7178104282075517491, hashCode<int64_t>(32768));
+  EXPECT_EQ(7848567808049036557, hashCode<int64_t>(65535));
+  EXPECT_EQ(516552589260593319, hashCode<int64_t>(INT64_MAX));
+  EXPECT_EQ(7024193345362591744, hashCode<int64_t>(INT64_MIN));
+}
+
+TEST_F(IntegerFunctionsTest, hashCodeFunctionInteger) {
+  EXPECT_EQ(std::nullopt, hashCode<int32_t>(std::nullopt));
+  EXPECT_EQ(0, hashCode<int32_t>(0));
+  EXPECT_EQ(9155312661752487122, hashCode<int32_t>(1));
+  EXPECT_EQ(-6507640756101998425, hashCode<int32_t>(-1));
+  EXPECT_EQ(6845023471056522234, hashCode<int32_t>(-128));
+  EXPECT_EQ(1951949442083825868, hashCode<int32_t>(-127));
+  EXPECT_EQ(695722463566662829, hashCode<int32_t>(127));
+  EXPECT_EQ(7899085683235324083, hashCode<int32_t>(255));
+  EXPECT_EQ(-4530432376425028794, hashCode<int32_t>(-32768));
+  EXPECT_EQ(7178104282075517491, hashCode<int32_t>(32768));
+  EXPECT_EQ(7848567808049036557, hashCode<int32_t>(65535));
+  EXPECT_EQ(-3072160283202506188, hashCode<int32_t>(INT32_MAX));
+  EXPECT_EQ(-3072160283202506188, hashCode<int32_t>(INT32_MIN));
+}
+
+TEST_F(IntegerFunctionsTest, hashCodeFunctionSmallint) {
+  EXPECT_EQ(std::nullopt, hashCode<int16_t>(std::nullopt));
+  EXPECT_EQ(0, hashCode<int16_t>(0));
+  EXPECT_EQ(9155312661752487122, hashCode<int16_t>(1));
+  EXPECT_EQ(-6507640756101998425, hashCode<int16_t>(-1));
+  EXPECT_EQ(6845023471056522234, hashCode<int16_t>(-128));
+  EXPECT_EQ(1951949442083825868, hashCode<int16_t>(-127));
+  EXPECT_EQ(695722463566662829, hashCode<int16_t>(127));
+  EXPECT_EQ(7899085683235324083, hashCode<int16_t>(255));
+  EXPECT_EQ(670463525973519066, hashCode<int16_t>(INT16_MAX));
+  EXPECT_EQ(-4530432376425028794, hashCode<int16_t>(INT16_MIN));
+}
+
+TEST_F(IntegerFunctionsTest, hashCodeFunctionTinyint) {
+  EXPECT_EQ(std::nullopt, hashCode<int8_t>(std::nullopt));
+  EXPECT_EQ(0, hashCode<int8_t>(0));
+  EXPECT_EQ(9155312661752487122, hashCode<int8_t>(1));
+  EXPECT_EQ(-6507640756101998425, hashCode<int8_t>(-1));
+  EXPECT_EQ(1951949442083825868, hashCode<int8_t>(-127));
+  EXPECT_EQ(6845023471056522234, hashCode<int8_t>(INT8_MIN));
+  EXPECT_EQ(6845023471056522234, hashCode<int8_t>(INT8_MAX));
 }

@@ -25,6 +25,10 @@ void registerSimpleFunctions(const std::string& prefix) {
       {prefix + "xxhash64_internal"});
   registerFunction<XxHash64DoubleFunction, int64_t, double>(
       {prefix + "xxhash64_internal"});
+  registerFunction<HashCodeRealFunction, int64_t, float>(
+      {prefix + "hash_code_internal"});
+  registerFunction<HashCodeDoubleFunction, int64_t, double>(
+      {prefix + "hash_code_internal"});
 }
 } // namespace
 

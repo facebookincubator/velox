@@ -44,6 +44,8 @@ void registerSimpleFunctions(const std::string& prefix) {
       {prefix + "spooky_hash_v2_32"});
   registerFunction<SpookyHashV264Function, Varbinary, Varbinary>(
       {prefix + "spooky_hash_v2_64"});
+  registerFunction<HashCodeVarbinaryFunction, int64_t, Varbinary>(
+      {prefix + "hash_code_internal"});
 
   registerFunction<ToHexFunction, Varchar, Varbinary>({prefix + "to_hex"});
   registerFunction<FromHexFunction, Varbinary, Varchar>({prefix + "from_hex"});

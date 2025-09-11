@@ -672,4 +672,15 @@ struct XxHash64StringFunction {
   }
 };
 
+/// hash_code(varchar) → bigint
+template <typename T>
+struct HashCodeStringFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE
+  void call(out_type<int64_t>& result, const arg_type<Varchar>& input) {
+    result = XXH64(input.data(), input.size(), 0);
+  }
+};
+
 } // namespace facebook::velox::functions
