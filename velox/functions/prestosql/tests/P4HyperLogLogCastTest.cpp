@@ -14,34 +14,60 @@
  * limitations under the License.
  */
 #include "velox/functions/prestosql/tests/CastBaseTest.h"
+#include "velox/functions/prestosql/types/HyperLogLogType.h"
 #include "velox/functions/prestosql/types/P4HyperLogLogType.h"
 
 using namespace facebook::velox;
 
 class P4HyperLogLogCastTest : public functions::test::CastBaseTest {};
 
-TEST_F(P4HyperLogLogCastTest, toP4HyperLogLog) {
+TEST_F(P4HyperLogLogCastTest, nullValues) {
+  auto nullData = std::vector<std::optional<StringView>>{
+      std::nullopt, std::nullopt, std::nullopt, std::nullopt};
+
+  // VARBINARY from/to P4HYPERLOGLOG
   testCast<StringView, StringView>(
-      VARBINARY(),
-      P4HYPERLOGLOG(),
-      {"aaa"_sv, ""_sv, std::nullopt},
-      {"aaa"_sv, ""_sv, std::nullopt});
+      VARBINARY(), P4HYPERLOGLOG(), nullData, nullData);
   testCast<StringView, StringView>(
-      VARBINARY(),
-      P4HYPERLOGLOG(),
-      {std::nullopt, std::nullopt, std::nullopt, std::nullopt},
-      {std::nullopt, std::nullopt, std::nullopt, std::nullopt});
+      P4HYPERLOGLOG(), VARBINARY(), nullData, nullData);
+
+  // HYPERLOGLOG from/to P4HYPERLOGLOG
+  testCast<StringView, StringView>(
+      HYPERLOGLOG(), P4HYPERLOGLOG(), nullData, nullData);
+  testCast<StringView, StringView>(
+      P4HYPERLOGLOG(), HYPERLOGLOG(), nullData, nullData);
 }
 
-TEST_F(P4HyperLogLogCastTest, fromP4HyperLogLog) {
+TEST_F(P4HyperLogLogCastTest, emptyValues) {
+  auto emptyData =
+      std::vector<std::optional<StringView>>{""_sv, ""_sv, ""_sv, ""_sv};
+
+  // VARBINARY from/to P4HYPERLOGLOG
   testCast<StringView, StringView>(
-      P4HYPERLOGLOG(),
-      VARBINARY(),
-      {"aaa"_sv, ""_sv, std::nullopt},
-      {"aaa"_sv, ""_sv, std::nullopt});
+      VARBINARY(), P4HYPERLOGLOG(), emptyData, emptyData);
   testCast<StringView, StringView>(
-      P4HYPERLOGLOG(),
-      VARBINARY(),
-      {std::nullopt, std::nullopt, std::nullopt, std::nullopt},
-      {std::nullopt, std::nullopt, std::nullopt, std::nullopt});
+      P4HYPERLOGLOG(), VARBINARY(), emptyData, emptyData);
+
+  // HYPERLOGLOG from/to P4HYPERLOGLOG
+  testCast<StringView, StringView>(
+      HYPERLOGLOG(), P4HYPERLOGLOG(), emptyData, emptyData);
+  testCast<StringView, StringView>(
+      P4HYPERLOGLOG(), HYPERLOGLOG(), emptyData, emptyData);
+}
+
+TEST_F(P4HyperLogLogCastTest, nonEmptyValues) {
+  auto testData = std::vector<std::optional<StringView>>{
+      "aaa"_sv, "test_hll_data"_sv, "xyz"_sv, std::nullopt};
+
+  // VARBINARY from/to P4HYPERLOGLOG
+  testCast<StringView, StringView>(
+      VARBINARY(), P4HYPERLOGLOG(), testData, testData);
+  testCast<StringView, StringView>(
+      P4HYPERLOGLOG(), VARBINARY(), testData, testData);
+
+  // HYPERLOGLOG from/to P4HYPERLOGLOG
+  testCast<StringView, StringView>(
+      HYPERLOGLOG(), P4HYPERLOGLOG(), testData, testData);
+  testCast<StringView, StringView>(
+      P4HYPERLOGLOG(), HYPERLOGLOG(), testData, testData);
 }
