@@ -1187,14 +1187,20 @@ TEST(SignatureBinderTest, homogeneous_row_map) {
 }
 
 TEST(SignatureBinderTest, homogeneous_row_return_type_not_allowed) {
-  // Negative test: row(T, ...) as return type should throw
-  auto signature = exec::FunctionSignatureBuilder()
-                       .typeVariable("T")
-                       .returnType("row(T, ...)")
-                       .argumentType("bigint")
-                       .build();
-
-  assertCannotResolve(signature, {BIGINT()});
+  // Negative test: constructing or binding a function with homogeneous row
+  // return is invalid.
+  EXPECT_THROW(
+      {
+        auto signature = exec::FunctionSignatureBuilder()
+                             .typeVariable("T")
+                             .returnType("row(T, ...)")
+                             .argumentType("bigint")
+                             .build();
+        // If build unexpectedly succeeds without throwing, still assert bind
+        // fails.
+        assertCannotResolve(signature, {BIGINT()});
+      },
+      VeloxUserError);
 }
 
 } // namespace
