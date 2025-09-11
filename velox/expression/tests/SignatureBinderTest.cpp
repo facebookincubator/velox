@@ -1124,12 +1124,12 @@ TEST(SignatureBinderTest, coercions) {
 }
 
 TEST(SignatureBinderTest, homogeneous_rows) {
-  // row(T, …) -> boolean - tests homogeneous row binding
+  // row(T, ...) -> boolean - tests homogeneous row binding
   {
     auto signature = exec::FunctionSignatureBuilder()
                          .typeVariable("T")
                          .returnType("boolean")
-                         .argumentType("row(T, …)")
+                         .argumentType("row(T, ...)")
                          .build();
 
     testSignatureBinder(signature, {ROW({BIGINT()})}, BOOLEAN());
@@ -1152,8 +1152,8 @@ TEST(SignatureBinderTest, homogeneous_rows) {
     auto signature = exec::FunctionSignatureBuilder()
                          .typeVariable("T")
                          .returnType("T")
-                         .argumentType("row(T, …)")
-                         .argumentType("row(T, …)")
+                         .argumentType("row(T, ...)")
+                         .argumentType("row(T, ...)")
                          .build();
 
     testSignatureBinder(
