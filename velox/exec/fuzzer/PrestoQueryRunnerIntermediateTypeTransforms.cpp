@@ -22,6 +22,7 @@
 #include "velox/functions/prestosql/types/BingTileType.h"
 #include "velox/functions/prestosql/types/HyperLogLogType.h"
 #include "velox/functions/prestosql/types/JsonType.h"
+#include "velox/functions/prestosql/types/P4HyperLogLogType.h"
 #include "velox/functions/prestosql/types/QDigestType.h"
 #include "velox/functions/prestosql/types/SfmSketchType.h"
 #include "velox/functions/prestosql/types/TDigestType.h"
@@ -50,6 +51,9 @@ intermediateTypeTransforms() {
           {HYPERLOGLOG(),
            std::make_shared<IntermediateTypeTransformUsingCast>(
                HYPERLOGLOG(), VARBINARY())},
+          {P4HYPERLOGLOG(),
+           std::make_shared<IntermediateTypeTransformUsingCast>(
+               P4HYPERLOGLOG(), VARBINARY())},
           {TDIGEST(DOUBLE()),
            std::make_shared<IntermediateTypeTransformUsingCast>(
                TDIGEST(DOUBLE()), VARBINARY())},
