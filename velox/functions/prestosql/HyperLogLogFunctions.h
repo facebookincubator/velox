@@ -27,9 +27,8 @@ template <typename T>
 struct CardinalityFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE bool call(
-      int64_t& result,
-      const arg_type<HyperLogLog>& hll) {
+  template <typename THll>
+  FOLLY_ALWAYS_INLINE bool call(int64_t& result, const THll& hll) {
     using common::hll::DenseHll;
     using common::hll::SparseHll;
 
