@@ -832,11 +832,17 @@ void MemoryPoolImpl::reserveThreadSafe(uint64_t size, bool reserveOnly) {
     try {
       incrementReservationThreadSafe(this, increment);
     } catch (const std::exception&) {
+      std::exception_ptr exception;
+      if (FOLLY_UNLIKELY(debugEnabled())) {
+        exception = wrapExceptionDbg(std::current_exception());
+      } else {
+        exception = std::current_exception();
+      }
       // When race with concurrent memory reservation free, we might end up
       // with unused reservation but no used reservation if a retry memory
       // reservation attempt run into memory capacity exceeded error.
       releaseThreadSafe(0, false);
-      std::rethrow_exception(std::current_exception());
+      std::rethrow_exception(exception);
     }
   }
 
@@ -1312,6 +1318,36 @@ void MemoryPoolImpl::leakCheckDbg() {
       "[MemoryPool] Leak check failed for '{}' pool - {}",
       name_,
       dumpRecordsDbg()));
+}
+
+std::exception_ptr MemoryPoolImpl::wrapExceptionDbg(
+    std::exception_ptr exception) {
+  VELOX_CHECK(debugEnabled());
+  try {
+    std::rethrow_exception(std::move(exception));
+  } catch (const VeloxRuntimeError& veloxError) {
+    if (veloxError.errorCode() == error_code::kMemCapExceeded) {
+      auto wrappedMessage = fmt::format(
+          "{}\n\n"
+          "Memory pool '{}' - {}",
+          veloxError.message(),
+          name_,
+          dumpRecordsDbg());
+      return std::make_exception_ptr(VeloxRuntimeError(
+          veloxError.file(),
+          veloxError.line(),
+          veloxError.function(),
+          veloxError.failingExpression(),
+          wrappedMessage,
+          veloxError.errorSource(),
+          veloxError.errorCode(),
+          veloxError.isRetriable(),
+          veloxError.exceptionName()));
+    }
+    return std::current_exception();
+  } catch (...) {
+    return std::current_exception();
+  }
 }
 
 std::string MemoryPoolImpl::dumpRecordsDbg() {

@@ -1003,6 +1003,10 @@ class MemoryPoolImpl : public MemoryPool {
   // pool is enabled.
   void leakCheckDbg();
 
+  // Wraps message of memory capacity exceeded exception with debug allocation
+  // records if debug mode of this memory pool is enabled.
+  std::exception_ptr wrapExceptionDbg(std::exception_ptr exception);
+
   // Dump the recorded call sites of the memory allocations in
   // 'debugAllocRecords_' to the string.
   std::string dumpRecordsDbg();
