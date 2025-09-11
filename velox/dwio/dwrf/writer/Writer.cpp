@@ -903,6 +903,7 @@ std::unique_ptr<dwio::common::Writer> DwrfWriterFactory::createWriter(
   auto dwrfOptions = std::dynamic_pointer_cast<dwrf::WriterOptions>(options);
   VELOX_CHECK_NOT_NULL(
       dwrfOptions, "DWRF writer factory expected a DWRF WriterOptions object.");
+  addThreadLocalRuntimeStat("dwrfWriterCount", RuntimeCounter(1));
   return std::make_unique<Writer>(std::move(sink), *dwrfOptions);
 }
 

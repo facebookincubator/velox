@@ -16,6 +16,7 @@
 
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 
+#include "fb_velox/nimble/writer/NimbleWriter.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/file/tests/FaultyFileSystem.h"
 #include "velox/connectors/hive/HiveConnector.h"
@@ -46,6 +47,7 @@ void HiveConnectorTestBase::SetUp() {
   dwio::common::registerFileSinks();
   dwrf::registerDwrfReaderFactory();
   dwrf::registerDwrfWriterFactory();
+  nimble::registerNimbleWriterFactory();
   text::registerTextReaderFactory();
 }
 
@@ -55,6 +57,7 @@ void HiveConnectorTestBase::TearDown() {
   ioExecutor_.reset();
   dwrf::unregisterDwrfReaderFactory();
   dwrf::unregisterDwrfWriterFactory();
+  nimble::unregisterNimbleWriterFactory();
   connector::unregisterConnector(kHiveConnectorId);
   text::unregisterTextReaderFactory();
   OperatorTestBase::TearDown();

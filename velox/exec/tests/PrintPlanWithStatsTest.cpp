@@ -353,6 +353,82 @@ TEST_F(PrintPlanWithStatsTest, tableWriterWithTableScan) {
        {"      dataSourceLazyCpuNanos\\s+sum: .+, count: .+, min: .+, max: .+"},
        {"      dataSourceLazyInputBytes\\s+sum: .+, count: .+, min: .+, max: .+"},
        {"      dataSourceLazyWallNanos\\s+sum: .+, count: .+, min: .+, max: .+"},
+       {"      dwrfWriterCount\\s+sum: .+, count: 1, min: .+, max: .+"},
+       {"      numWrittenFiles\\s+sum: .+, count: 1, min: .+, max: .+"},
+       {"      runningAddInputWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
+       {"      runningFinishWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
+       {"      runningGetOutputWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
+       {"      runningWallNanos\\s+sum: .+, count: 1, min: .+, max: .+, avg: .+"},
+       {"      stripeSize\\s+sum: .+, count: 1, min: .+, max: .+"},
+       {"      writeIOWallNanos\\s+sum: .+, count: 1, min: .+, max: .+, avg: .+"},
+       {R"(  -- TableScan\[0\]\[table: hive_table\] -> c0:BIGINT, c1:INTEGER, c2:SMALLINT, c3:REAL, c4:DOUBLE, c5:VARCHAR)"},
+       {R"(     Input: 100 rows \(.+\), Output: 100 rows \(.+\), Cpu time: .+, Blocked wall time: .+, Peak memory: .+, Memory allocations: .+, Threads: 1, Splits: 1, CPU breakdown: B/I/O/F (.+/.+/.+/.+))"},
+       {"        connectorSplitSize[ ]* sum: .+, count: .+, min: .+, max: .+"},
+       {"        dataSourceAddSplitWallNanos[ ]* sum: .+, count: 1, min: .+, max: .+"},
+       {"        dataSourceReadWallNanos[ ]* sum: .+, count: .+, min: .+, max: .+"},
+       {"        footerBufferOverread[ ]* sum: .+, count: 1, min: .+, max: .+"},
+       {"        ioWaitWallNanos      [ ]* sum: .+, count: .+ min: .+, max: .+"},
+       {"        maxSingleIoWaitWallNanos[ ]*sum: .+, count: 1, min: .+, max: .+"},
+       {"        numPrefetch      [ ]* sum: .+, count: .+, min: .+, max: .+"},
+       {"        numRamRead       [ ]* sum: 7, count: 1, min: 7, max: 7, avg: 7"},
+       {"        numStorageRead   [ ]* sum: .+, count: 1, min: .+, max: .+"},
+       {"        numStripes[ ]* sum: .+, count: 1, min: .+, max: .+"},
+       {"        overreadBytes[ ]* sum: 0B, count: 1, min: 0B, max: 0B, avg: 0B"},
+
+       {"        prefetchBytes    [ ]* sum: .+, count: 1, min: .+, max: .+"},
+       {"        processedSplits  [ ]* sum: 1, count: 1, min: 1, max: 1, avg: 1"},
+       {"        processedStrides [ ]* sum: 1, count: 1, min: 1, max: 1, avg: 1"},
+       {"        preloadedSplits[ ]+sum: .+, count: .+, min: .+, max: .+",
+        true},
+       {"        ramReadBytes     [ ]* sum: .+, count: 1, min: .+, max: .+"},
+       {"        readyPreloadedSplits[ ]+sum: .+, count: .+, min: .+, max: .+",
+        true},
+       {"        runningAddInputWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
+       {"        runningFinishWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
+       {"        runningGetOutputWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
+       {"        storageReadBytes [ ]* sum: .+, count: 1, min: .+, max: .+"},
+       {"        totalRemainingFilterWallNanos\\s+sum: .+, count: .+, min: .+, max: .+"},
+       {"        totalScanTime    [ ]* sum: .+, count: .+, min: .+, max: .+"}});
+}
+
+TEST_F(PrintPlanWithStatsTest, nimbleTableWriterWithTableScan) {
+  RowTypePtr rowType{
+      ROW({"c0", "c1", "c2", "c3", "c4", "c5"},
+          {BIGINT(), INTEGER(), SMALLINT(), REAL(), DOUBLE(), VARCHAR()})};
+  auto vectors = makeVectors(rowType, 10, 10);
+
+  const auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), vectors);
+  const auto writeDir = TempDirectoryPath::create();
+
+  auto writePlan =
+      PlanBuilder()
+          .tableScan(rowType)
+          .tableWrite(writeDir->getPath(), dwio::common::FileFormat::NIMBLE)
+          .planNode();
+
+  std::shared_ptr<exec::Task> task;
+  AssertQueryBuilder(writePlan)
+      .splits(makeHiveConnectorSplits({filePath}))
+      .copyResults(pool(), task);
+  ensureTaskCompletion(task.get());
+  compareOutputs(
+      ::testing::UnitTest::GetInstance()->current_test_info()->name(),
+      printPlanWithStats(*writePlan, task->taskStats()),
+      {{R"(-- TableWrite\[1\]\[.+InsertTableHandle .+)"},
+       {"   Output: .+, Physical written output: .+, Cpu time: .+, Blocked wall time: .+, Peak memory: .+, Memory allocations: .+, Threads: 1, CPU breakdown: B/I/O/F (.+/.+/.+/.+)"},
+       {R"(  -- TableScan\[0\]\[table: hive_table\] -> c0:BIGINT, c1:INTEGER, c2:SMALLINT, c3:REAL, c4:DOUBLE, c5:VARCHAR)"},
+       {R"(     Input: 100 rows \(.+\), Output: 100 rows \(.+\), Cpu time: .+, Blocked wall time: .+, Peak memory: .+, Memory allocations: .+, Threads: 1, Splits: 1, CPU breakdown: B/I/O/F (.+/.+/.+/.+))"}});
+
+  compareOutputs(
+      ::testing::UnitTest::GetInstance()->current_test_info()->name(),
+      printPlanWithStats(*writePlan, task->taskStats(), true),
+      {{R"(-- TableWrite\[1\]\[.+InsertTableHandle .+)"},
+       {"   Output: .+, Physical written output: .+, Cpu time: .+, Blocked wall time: .+, Peak memory: .+, Memory allocations: .+, Threads: 1, CPU breakdown: B/I/O/F (.+/.+/.+/.+)"},
+       {"      dataSourceLazyCpuNanos\\s+sum: .+, count: .+, min: .+, max: .+"},
+       {"      dataSourceLazyInputBytes\\s+sum: .+, count: .+, min: .+, max: .+"},
+       {"      dataSourceLazyWallNanos\\s+sum: .+, count: .+, min: .+, max: .+"},
+       {"      nimbleWriterCount\\s+sum: .+, count: 1, min: .+, max: .+"},
        {"      numWrittenFiles\\s+sum: .+, count: 1, min: .+, max: .+"},
        {"      runningAddInputWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
        {"      runningFinishWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
