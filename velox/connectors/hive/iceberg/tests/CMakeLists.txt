@@ -56,6 +56,7 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     GTest::gtest
     GTest::gtest_main
   )
+
   if(VELOX_ENABLE_PARQUET)
     target_link_libraries(velox_hive_iceberg_test velox_dwio_parquet_reader)
 
