@@ -56,24 +56,10 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     GTest::gtest
     GTest::gtest_main
   )
+
   if(VELOX_ENABLE_PARQUET)
     target_link_libraries(velox_hive_iceberg_test velox_dwio_parquet_reader)
 
     file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/examples DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
   endif()
-endif()
-
-if(VELOX_ENABLE_BENCHMARKS)
-  add_executable(
-    iceberg_insert_benchmark IcebergInsertBenchmark.cpp
-                             IcebergInsertBenchmarkMain.cpp IcebergTestBase.cpp)
-
-  target_link_libraries(
-    iceberg_insert_benchmark
-    velox_hive_iceberg_splitreader
-    velox_dwio_parquet_reader
-    velox_dwio_parquet_writer
-    velox_vector_test_lib
-    velox_exec_test_lib
-    Folly::follybenchmark)
 endif()

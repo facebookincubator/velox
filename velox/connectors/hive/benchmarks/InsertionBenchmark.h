@@ -17,72 +17,61 @@
 
 #include <folly/Benchmark.h>
 #include "velox/connectors/hive/HiveConfig.h"
-#include "velox/connectors/hive/iceberg/IcebergDataSink.h"
+#include "velox/connectors/hive/HiveDataSink.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
 
-namespace facebook::velox::iceberg::insert::test {
-
-struct PartitionField {
-  int32_t id;
-  connector::hive::iceberg::TransformType type;
-  std::optional<int32_t> parameter;
-};
+namespace facebook::velox::connector::hive::insert::test {
 
 struct BenchmarkStats {
   std::chrono::microseconds duration;
   int64_t memoryUsedMB;
   int64_t peakMemoryMB;
+  int64_t filesWritten;
+  int64_t rowsWritten;
 };
 
-class IcebergInsertBenchmark {
- public:
-  IcebergInsertBenchmark();
-  ~IcebergInsertBenchmark();
+struct ComparisonStats {
+  BenchmarkStats hiveStats;
+  BenchmarkStats icebergStats;
+  double hiveToIcebergRatio;
+};
 
-  BenchmarkStats runBenchmark(
+class HiveInsertBenchmark {
+ public:
+  RowTypePtr rowType_;
+  HiveInsertBenchmark();
+  ~HiveInsertBenchmark();
+
+  ComparisonStats runComparisonBenchmark(
       const TypePtr& dataType,
-      connector::hive::iceberg::TransformType transformType,
-      std::optional<int32_t> parameter,
       uint32_t numRows);
+
+  std::vector<RowVectorPtr> createTestDataWithSeed(
+      const TypePtr& dataType,
+      int32_t numBatches,
+      vector_size_t rowsPerBatch,
+      bool seed);
+
+  BenchmarkStats writeWithHiveDataSink(
+      const std::vector<RowVectorPtr>& batches);
 
  private:
   void setUp();
   void tearDown();
 
-  std::vector<RowVectorPtr> createTestData(
-      int32_t numBatches,
-      vector_size_t rowsPerBatch);
-
-  std::shared_ptr<connector::hive::iceberg::IcebergDataSink>
-  createIcebergDataSink(
-      const RowTypePtr& rowType,
-      const std::string& outputDirectoryPath,
-      const std::vector<PartitionField>& partitionFields);
-
-  void writeWithIcebergDataSink(
-      const std::vector<RowVectorPtr>& batches,
-      const std::vector<PartitionField>& partitionFields);
+  std::shared_ptr<HiveDataSink> createHiveDataSink(
+      const std::string& outputDirectoryPath);
 
   std::shared_ptr<exec::test::TempDirectoryPath> testDir_;
-  RowTypePtr rowType_;
   std::shared_ptr<memory::MemoryPool> rootPool_;
   std::shared_ptr<memory::MemoryPool> opPool_;
   std::shared_ptr<memory::MemoryPool> connectorPool_;
   std::shared_ptr<config::ConfigBase> connectorSessionProperties_;
-  std::shared_ptr<connector::hive::HiveConfig> connectorConfig_;
-  std::unique_ptr<connector::ConnectorQueryCtx> connectorQueryCtx_;
-  std::unique_ptr<VectorFuzzer> fuzzer_;
+  std::shared_ptr<HiveConfig> connectorConfig_;
+  std::unique_ptr<ConnectorQueryCtx> connectorQueryCtx_;
   std::unique_ptr<velox::test::VectorMaker> vectorMaker_;
 };
 
-void run(
-    unsigned int iters,
-    const TypePtr& dataType,
-    connector::hive::iceberg::TransformType transformType,
-    std::optional<int32_t> parameter,
-    uint32_t numRows,
-    folly::UserCounters& counters);
-
-} // namespace facebook::velox::iceberg::insert::test
+} // namespace facebook::velox::connector::hive::insert::test

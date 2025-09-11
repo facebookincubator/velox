@@ -13,85 +13,15 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/connectors/hive/iceberg/tests/IcebergInsertBenchmark.h"
-#include "velox/common/file/FileSystems.h"
-#include "velox/connectors/hive/HiveConnectorUtil.h"
-#include "velox/connectors/hive/iceberg/PartitionSpec.h"
-#include "velox/dwio/parquet/RegisterParquetWriter.h"
-#include "velox/type/Type.h"
 
-namespace facebook::velox::iceberg::insert::test {
+#include "velox/connectors/hive/benchmarks/IcebergInsertBenchmark.h"
 
-IcebergInsertBenchmark::IcebergInsertBenchmark() {
-  setUp();
-}
+namespace facebook::velox::connector::hive::benchmark {
 
-IcebergInsertBenchmark::~IcebergInsertBenchmark() {
-  tearDown();
-}
+constexpr int32_t kMaxPartitions = 128;
 
-void IcebergInsertBenchmark::setUp() {
-  filesystems::registerLocalFileSystem();
-  parquet::registerParquetWriterFactory();
-  dwio::common::registerFileSinks();
-  Type::registerSerDe();
-
-  testDir_ = exec::test::TempDirectoryPath::create();
-  rootPool_ =
-      memory::memoryManager()->addRootPool("IcebergInsertBenchmark", 1L << 30);
-  opPool_ = rootPool_->addLeafChild("operator");
-  connectorPool_ = rootPool_->addAggregateChild("connector");
-  connectorSessionProperties_ = std::make_shared<config::ConfigBase>(
-      std::unordered_map<std::string, std::string>(), true);
-  connectorConfig_ = std::make_shared<connector::hive::HiveConfig>(
-      std::make_shared<config::ConfigBase>(
-          std::unordered_map<std::string, std::string>()));
-  connectorQueryCtx_ = std::make_unique<connector::ConnectorQueryCtx>(
-      opPool_.get(),
-      connectorPool_.get(),
-      connectorSessionProperties_.get(),
-      nullptr,
-      common::PrefixSortConfig(),
-      nullptr,
-      nullptr,
-      "queryBenchmark",
-      "taskBenchmark",
-      "planNodeBenchmark",
-      0,
-      "");
-
-  VectorFuzzer::Options fuzzerOptions;
-  fuzzerOptions.vectorSize = 100;
-  fuzzerOptions.nullRatio = 0.0;
-  fuzzerOptions.stringVariableLength = true;
-  fuzzer_ = std::make_unique<VectorFuzzer>(fuzzerOptions, opPool_.get());
-  vectorMaker_ = std::make_unique<velox::test::VectorMaker>(opPool_.get());
-}
-
-void IcebergInsertBenchmark::tearDown() {
-  vectorMaker_.reset();
-  fuzzer_.reset();
-  connectorQueryCtx_.reset();
-  connectorPool_.reset();
-  opPool_.reset();
-  rootPool_.reset();
-}
-
-std::vector<RowVectorPtr> IcebergInsertBenchmark::createTestData(
-    int32_t numBatches,
-    vector_size_t rowsPerBatch) {
-  std::vector<RowVectorPtr> batches;
-  batches.reserve(numBatches);
-  for (auto i = 0; i < numBatches; ++i) {
-    auto batch = fuzzer_->fuzzRow(rowType_, rowsPerBatch);
-    batches.push_back(batch);
-  }
-
-  return batches;
-}
-
-void addColumnHandles(
-    const RowTypePtr& rowType,
+void IcebergInsertBenchmark::addIcebergColumnHandles(
+    const RowTypePtr& rowType_,
     const std::vector<PartitionField>& partitionFields,
     std::vector<
         std::shared_ptr<const connector::hive::iceberg::IcebergColumnHandle>>&
@@ -110,10 +40,10 @@ void addColumnHandles(
     int32_t currentId = columnOrdinal++;
     std::vector<connector::hive::iceberg::IcebergNestedField> children;
     if (type->isRow()) {
-      auto rowType = asRowType(type);
-      for (auto i = 0; i < rowType->size(); ++i) {
+      auto rowType_ = asRowType(type);
+      for (auto i = 0; i < rowType_->size(); ++i) {
         children.push_back(
-            collectNestedField(rowType->childAt(i), columnOrdinal));
+            collectNestedField(rowType_->childAt(i), columnOrdinal));
       }
     } else if (type->isArray()) {
       auto arrayType = std::dynamic_pointer_cast<const ArrayType>(type);
@@ -133,9 +63,9 @@ void addColumnHandles(
   };
 
   int32_t startIndex = 1;
-  for (auto i = 0; i < rowType->size(); ++i) {
-    auto columnName = rowType->nameOf(i);
-    auto type = rowType->childAt(i);
+  for (auto i = 0; i < rowType_->size(); ++i) {
+    auto columnName = rowType_->nameOf(i);
+    auto type = rowType_->childAt(i);
     auto field = collectNestedField(type, startIndex);
     columnHandles.push_back(
         std::make_shared<connector::hive::iceberg::IcebergColumnHandle>(
@@ -159,17 +89,25 @@ IcebergInsertBenchmark::createIcebergDataSink(
   std::vector<
       std::shared_ptr<const connector::hive::iceberg::IcebergColumnHandle>>
       columnHandles;
-  addColumnHandles(rowType, partitionFields, columnHandles);
+  addIcebergColumnHandles(rowType, partitionFields, columnHandles);
 
   auto locationHandle = std::make_shared<connector::hive::LocationHandle>(
       outputDirectoryPath,
       outputDirectoryPath,
       connector::hive::LocationHandle::TableType::kNew);
 
+  std::vector<connector::hive::iceberg::IcebergPartitionSpec::Field> specFields;
+  for (const auto& field : partitionFields) {
+    specFields.push_back(
+        {rowType->nameOf(field.id),
+         rowType->childAt(field.id),
+         field.type,
+         field.parameter});
+  }
+
   auto partitionSpec =
       std::make_shared<connector::hive::iceberg::IcebergPartitionSpec>(
-          1,
-          std::vector<connector::hive::iceberg::IcebergPartitionSpec::Field>{});
+          1, specFields);
 
   auto tableHandle =
       std::make_shared<connector::hive::iceberg::IcebergInsertTableHandle>(
@@ -194,7 +132,6 @@ void IcebergInsertBenchmark::writeWithIcebergDataSink(
     const std::vector<PartitionField>& partitionFields) {
   auto dataSink =
       createIcebergDataSink(rowType_, testDir_->getPath(), partitionFields);
-
   for (const auto& batch : batches) {
     dataSink->appendData(batch);
   }
@@ -209,13 +146,13 @@ BenchmarkStats IcebergInsertBenchmark::runBenchmark(
     std::optional<int32_t> parameter,
     uint32_t numRows) {
   rowType_ = ROW(
-      {{"id", BIGINT()},
+      {{"partition_col", dataType},
+       {"id", BIGINT()},
        {"image", VARBINARY()},
        {"yes", BOOLEAN()},
        {"level", SMALLINT()},
        {"days", INTEGER()},
        {"date", DATE()},
-       {"partition_col", dataType},
        {"data", VARCHAR()},
        {"timestamp", TIMESTAMP()},
        {"price", DOUBLE()},
@@ -226,16 +163,17 @@ BenchmarkStats IcebergInsertBenchmark::runBenchmark(
   const uint32_t rowsPerBatch = numRows / numBatches;
   auto initialMemory = rootPool_->usedBytes();
 
-  auto batches = createTestData(numBatches, rowsPerBatch);
+  auto batches =
+      createTestData(dataType, numBatches, rowsPerBatch, kMaxPartitions);
   std::vector<PartitionField> partitionFields;
-  partitionFields.push_back({1, transformType, parameter});
+  partitionFields.push_back({0, transformType, parameter});
 
   auto start = std::chrono::high_resolution_clock::now();
   writeWithIcebergDataSink(batches, partitionFields);
   auto end = std::chrono::high_resolution_clock::now();
 
   auto duration =
-      std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+      std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
   auto finalMemory = rootPool_->usedBytes();
   auto peakMemory = rootPool_->peakBytes();
 
@@ -255,9 +193,9 @@ void run(
   IcebergInsertBenchmark benchmark;
   auto stats =
       benchmark.runBenchmark(dataType, transformType, parameter, numRows);
-  counters["Elapsed"] = stats.duration.count() / 1000;
+  counters["Elapsed (Milli)"] = stats.duration.count();
   counters["MemoryMB"] = stats.memoryUsedMB;
   counters["PeakMB"] = stats.peakMemoryMB;
 }
 
-} // namespace facebook::velox::iceberg::insert::test
+} // namespace facebook::velox::connector::hive::benchmark

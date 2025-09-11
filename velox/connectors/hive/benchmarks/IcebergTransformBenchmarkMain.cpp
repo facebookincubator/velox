@@ -13,15 +13,17 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #include <folly/Benchmark.h>
 #include <folly/init/Init.h>
 #include <gflags/gflags.h>
-#include "velox/connectors/hive/iceberg/tests/IcebergInsertBenchmark.h"
+
+#include "velox/connectors/hive/benchmarks/IcebergTransformBenchmark.h"
 
 DEFINE_int32(vector_size, 100000, "Number of rows to benchmark");
 
 using namespace facebook::velox;
-using namespace facebook::velox::iceberg::insert::test;
+using namespace facebook::velox::connector::hive::benchmark;
 
 #define IDENTITY_BENCHMARKS(_type_, _name_, _rows_)                \
   BENCHMARK_COUNTERS(run_Identity_##_name_##_##_rows_, counters) { \
