@@ -16,6 +16,8 @@
 
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnectorSplit.h"
 
+#include <cudf/io/types.hpp>
+
 #include <string>
 
 namespace facebook::velox::cudf_velox::connector::hive {

@@ -18,9 +18,13 @@
 
 #include "velox/connectors/Connector.h"
 #include "velox/dwio/common/Options.h"
+namespace cudf {
+namespace io {
+struct source_info;
+}
+} // namespace cudf
 
-#include <cudf/io/types.hpp>
-
+#include <memory>
 #include <string>
 
 namespace facebook::velox::cudf_velox::connector::hive {
@@ -30,7 +34,7 @@ struct CudfHiveConnectorSplit
   const std::string filePath;
   const facebook::velox::dwio::common::FileFormat fileFormat{
       facebook::velox::dwio::common::FileFormat::PARQUET};
-  const cudf::io::source_info cudfSourceInfo;
+  const std::unique_ptr<cudf::io::source_info> cudfSourceInfo;
 
   CudfHiveConnectorSplit(
       const std::string& connectorId,
@@ -38,13 +42,13 @@ struct CudfHiveConnectorSplit
       int64_t _splitWeight = 0)
       : facebook::velox::connector::ConnectorSplit(connectorId, _splitWeight),
         filePath(_filePath),
-        cudfSourceInfo({filePath}) {}
+        cudfSourceInfo(std::make_unique<cudf::io::source_info>(filePath)) {}
 
   std::string toString() const override;
   std::string getFileName() const;
 
   const cudf::io::source_info& getCudfSourceInfo() const {
-    return cudfSourceInfo;
+    return *cudfSourceInfo;
   }
 
   static std::shared_ptr<CudfHiveConnectorSplit> create(
