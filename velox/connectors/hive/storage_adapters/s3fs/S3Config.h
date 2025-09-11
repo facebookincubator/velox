@@ -76,10 +76,10 @@ class S3Config {
     kRetryMode,
     kUseProxyFromEnv,
     kCredentialsProvider,
-    KS3UploadPartAsync,
-    kS3PartUploadSize,
-    KS3WriteFileSemaphoreNum,
-    KS3UploadThreads,
+    KUploadPartAsync,
+    kPartUploadSize,
+    KMaxConcurrentUploadNum,
+    KUploadThreads,
     kEnd
   };
 
@@ -118,13 +118,13 @@ class S3Config {
              std::make_pair("use-proxy-from-env", "false")},
             {Keys::kCredentialsProvider,
              std::make_pair("aws-credentials-provider", std::nullopt)},
-            {Keys::KS3UploadPartAsync,
+            {Keys::KUploadPartAsync,
              std::make_pair("upload-part-async", "false")},
-            {Keys::kS3PartUploadSize,
+            {Keys::kPartUploadSize,
              std::make_pair("part-upload-size", std::nullopt)},
-            {Keys::KS3WriteFileSemaphoreNum,
-             std::make_pair("write-file-semaphore-num", std::nullopt)},
-            {Keys::KS3UploadThreads,
+            {Keys::KMaxConcurrentUploadNum,
+             std::make_pair("max-concurrent-upload-num", std::nullopt)},
+            {Keys::KUploadThreads,
              std::make_pair("upload-threads", std::nullopt)},
         };
     return config;
@@ -256,20 +256,20 @@ class S3Config {
   }
 
   bool uploadPartAsync() const {
-    auto value = config_.find(Keys::KS3UploadPartAsync)->second.value();
+    auto value = config_.find(Keys::KUploadPartAsync)->second.value();
     return folly::to<bool>(value);
   }
 
   std::optional<int32_t> partUploadSize() const {
-    auto val = config_.find(Keys::kS3PartUploadSize)->second;
+    auto val = config_.find(Keys::kPartUploadSize)->second;
     if (val.has_value()) {
       return folly::to<uint32_t>(val.value());
     }
     return std::optional<uint32_t>();
   }
 
-  std::optional<int32_t> writeFileSemaphoreNum() const {
-    auto val = config_.find(Keys::KS3WriteFileSemaphoreNum)->second;
+  std::optional<int32_t> maxConcurrentUploadNum() const {
+    auto val = config_.find(Keys::KMaxConcurrentUploadNum)->second;
     if (val.has_value()) {
       return folly::to<uint32_t>(val.value());
     }
@@ -277,7 +277,7 @@ class S3Config {
   }
 
   std::optional<int32_t> uploadThreads() const {
-    auto val = config_.find(Keys::KS3UploadThreads)->second;
+    auto val = config_.find(Keys::KUploadThreads)->second;
     if (val.has_value()) {
       return folly::to<uint32_t>(val.value());
     }
