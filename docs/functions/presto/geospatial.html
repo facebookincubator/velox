@@ -260,6 +260,16 @@ Empty geometries will return an empty polygon. Negative or NaN distances will
 return an error. Positive infinity distances may lead to undefined results.</p>
 </dd></dl>
 
+<dl class="py function">
+<dt class="sig sig-object py" id="geometry_union">
+<span class="sig-name descname"><span class="pre">geometry_union</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometries</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">array</span><span class="p"><span class="pre">(</span></span><span class="pre">Geometry</span><span class="p"><span class="pre">)</span></span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">union:</span> <span class="pre">Geometry</span></span></span><a class="headerlink" href="#geometry_union" title="Link to this definition">¶</a></dt>
+<dd><p>Returns a geometry that represents the point set union of the input geometries.
+Performance of this function, in conjunction with array_agg() to first
+aggregate the input geometries, may be better than geometry_union_agg(),
+at the expense of higher memory utilization. Null elements in the input
+array are ignored. Empty array input returns null.</p>
+</dd></dl>
+
 </section>
 <section id="accessors">
 <h2>Accessors<a class="headerlink" href="#accessors" title="Link to this heading">¶</a></h2>
@@ -747,6 +757,7 @@ the dissolved covering would be [“0”, “10”]. Zoom levels from 0 to 23 ar
 <li><a class="reference internal" href="#ST_Envelope"><code class="docutils literal notranslate"><span class="pre">ST_Envelope()</span></code></a></li>
 <li><a class="reference internal" href="#ST_ExteriorRing"><code class="docutils literal notranslate"><span class="pre">ST_ExteriorRing()</span></code></a></li>
 <li><a class="reference internal" href="#expand_envelope"><code class="docutils literal notranslate"><span class="pre">expand_envelope()</span></code></a></li>
+<li><a class="reference internal" href="#geometry_union"><code class="docutils literal notranslate"><span class="pre">geometry_union()</span></code></a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#accessors">Accessors</a><ul>
