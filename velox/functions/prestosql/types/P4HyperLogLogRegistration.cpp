@@ -16,12 +16,139 @@
 
 #include "velox/functions/prestosql/types/P4HyperLogLogRegistration.h"
 
+#include "velox/common/hyperloglog/DenseHll.h"
+#include "velox/common/hyperloglog/SparseHll.h"
+#include "velox/common/memory/HashStringAllocator.h"
+#include "velox/expression/CastExpr.h"
+#include "velox/functions/prestosql/types/HyperLogLogType.h"
 #include "velox/functions/prestosql/types/P4HyperLogLogType.h"
 #include "velox/functions/prestosql/types/fuzzer_utils/P4HyperLogLogInputGenerator.h"
-#include "velox/type/Type.h"
 
 namespace facebook::velox {
 namespace {
+
+class P4HyperLogLogCastOperator : public exec::CastOperator {
+ public:
+  bool isSupportedFromType(const TypePtr& other) const override {
+    return other->kind() == TypeKind::VARBINARY ||
+        other->equivalent(*HYPERLOGLOG());
+  }
+
+  bool isSupportedToType(const TypePtr& other) const override {
+    return other->kind() == TypeKind::VARBINARY ||
+        other->equivalent(*HYPERLOGLOG());
+  }
+
+  void castTo(
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const SelectivityVector& rows,
+      const TypePtr& resultType,
+      VectorPtr& result) const override {
+    context.ensureWritable(rows, P4HYPERLOGLOG(), result);
+
+    if (input.type()->kind() == TypeKind::VARBINARY) {
+      // Cast from VARBINARY to P4HYPERLOGLOG - direct copy
+      directCopy(input, context, rows, *result);
+    } else if (input.type()->equivalent(*HYPERLOGLOG())) {
+      // Cast from HYPERLOGLOG to P4HYPERLOGLOG - sparse to dense conversion
+      castFromHyperLogLog(input, context, rows, *result);
+    } else {
+      VELOX_UNSUPPORTED(
+          "Cast from {} to P4HyperLogLog not supported",
+          input.type()->toString());
+    }
+  }
+
+  void castFrom(
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const SelectivityVector& rows,
+      const TypePtr& resultType,
+      VectorPtr& result) const override {
+    context.ensureWritable(rows, resultType, result);
+
+    if (resultType->kind() == TypeKind::VARBINARY ||
+        resultType->equivalent(*HYPERLOGLOG())) {
+      // Cast to VARBINARY or HYPERLOGLOG - direct copy
+      directCopy(input, context, rows, *result);
+    } else {
+      VELOX_UNSUPPORTED(
+          "Cast from P4HyperLogLog to {} not supported",
+          resultType->toString());
+    }
+  }
+
+ private:
+  // Simple direct copy for VARBINARY conversions
+  static void directCopy(
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const SelectivityVector& rows,
+      BaseVector& result) {
+    auto* flatResult = result.as<FlatVector<StringView>>();
+    const auto* inputVector = input.as<SimpleVector<StringView>>();
+
+    context.applyToSelectedNoThrow(rows, [&](auto row) {
+      const auto data = inputVector->valueAt(row);
+      exec::StringWriter writer(flatResult, row);
+      writer.resize(data.size());
+      if (data.size() > 0 && data.data() != nullptr) {
+        memcpy(writer.data(), data.data(), data.size());
+      }
+      writer.finalize();
+    });
+  }
+
+  // The meaningful conversion: HYPERLOGLOG to P4HYPERLOGLOG (sparse to dense)
+  static void castFromHyperLogLog(
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const SelectivityVector& rows,
+      BaseVector& result) {
+    auto* flatResult = result.as<FlatVector<StringView>>();
+    const auto* hllInput = input.as<SimpleVector<StringView>>();
+
+    auto* pool = context.pool();
+    HashStringAllocator allocator{pool};
+
+    context.applyToSelectedNoThrow(rows, [&](auto row) {
+      const auto hllData = hllInput->valueAt(row);
+      exec::StringWriter writer(flatResult, row);
+
+      if (hllData.size() == 0 || hllData.data() == nullptr) {
+        writer.resize(0);
+        writer.finalize();
+        return;
+      }
+
+      using common::hll::SparseHll;
+      using common::hll::DenseHll;
+
+      if (SparseHll::canDeserialize(hllData.data())) {
+        // Input is sparse - convert to dense
+        SparseHll sparseHll(hllData.data(), &allocator);
+
+        // Use default index bit length of 12
+        int8_t indexBitLength = 12;
+        DenseHll denseHll(indexBitLength, &allocator);
+        sparseHll.toDense(denseHll);
+
+        int32_t serializedSize = denseHll.serializedSize();
+        writer.resize(serializedSize);
+        denseHll.serialize(writer.data());
+      } else if (DenseHll::canDeserialize(hllData.data())) {
+        writer.resize(hllData.size());
+        memcpy(writer.data(), hllData.data(), hllData.size());
+      } else {
+        VELOX_USER_FAIL("Invalid HyperLogLog format");
+      }
+
+      writer.finalize();
+    });
+  }
+};
+
 class P4HyperLogLogTypeFactory : public CustomTypeFactory {
  public:
   TypePtr getType(const std::vector<TypeParameter>& parameters) const override {
@@ -29,9 +156,8 @@ class P4HyperLogLogTypeFactory : public CustomTypeFactory {
     return P4HYPERLOGLOG();
   }
 
-  // P4HyperLogLog should be treated as Varbinary during type castings.
   exec::CastOperatorPtr getCastOperator() const override {
-    return nullptr;
+    return std::make_shared<P4HyperLogLogCastOperator>();
   }
 
   AbstractInputGeneratorPtr getInputGenerator(
