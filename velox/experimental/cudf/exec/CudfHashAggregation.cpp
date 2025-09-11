@@ -537,8 +537,7 @@ auto toAggregators(
     auto const companionStep = getCompanionStep(kind, step);
     const auto originalName = getOriginalName(kind);
     const auto resultType = exec::isPartialOutput(companionStep)
-        ? exec::resolveAggregateFunction(originalName, aggregate.rawInputTypes)
-              .second
+        ? exec::resolveIntermediateType(originalName, aggregate.rawInputTypes)
         : outputType->childAt(numKeys + i);
 
     aggregators.push_back(createAggregator(
@@ -567,8 +566,7 @@ auto toIntermediateAggregators(
     auto const companionStep = getCompanionStep(kind, step);
     if (exec::isPartialOutput(companionStep)) {
       const auto resultType =
-          exec::resolveAggregateFunction(originalName, aggregate.rawInputTypes)
-              .second;
+          exec::resolveIntermediateType(originalName, aggregate.rawInputTypes);
       aggregators.push_back(createAggregator(
           step, kind, inputIndex, constant, isGlobal, resultType));
     } else {
