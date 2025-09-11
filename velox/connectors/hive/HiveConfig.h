@@ -197,6 +197,12 @@ class HiveConfig {
   static constexpr const char* kPreserveFlatMapsInMemorySession =
       "hive.preserve_flat_maps_in_memory";
 
+  /// Controls the writer mode, whether the fanout mode writer is enabled,
+  /// default value is true, setting to false means clustered mode.
+  /// Currently applies only to the Iceberg writer.
+  static constexpr const char* kFanoutEnabled = "fanout-enabled";
+  static constexpr const char* kFanoutEnabledSession = "fanout_enabled";
+
   InsertExistingPartitionsBehavior insertExistingPartitionsBehavior(
       const config::ConfigBase* session) const;
 
@@ -282,6 +288,9 @@ class HiveConfig {
   /// Whether to preserve flat maps in memory as FlatMapVectors instead of
   /// converting them to MapVectors.
   bool preserveFlatMapsInMemory(const config::ConfigBase* session) const;
+
+  /// Return if fanout writer mode is enabled.
+  bool fanoutEnabled(const config::ConfigBase* session) const;
 
   HiveConfig(std::shared_ptr<const config::ConfigBase> config) {
     VELOX_CHECK_NOT_NULL(
