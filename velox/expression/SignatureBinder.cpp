@@ -110,6 +110,10 @@ bool SignatureBinder::tryBind(
   const auto& formalArgs = signature_.argumentTypes();
   const auto formalArgsCnt = formalArgs.size();
 
+  if (signature_.returnType().isHomogeneousRow()) {
+    return false;
+  }
+
   if (signature_.variableArity()) {
     if (actualTypes_.size() < formalArgsCnt - 1) {
       return false;

@@ -1166,5 +1166,36 @@ TEST(SignatureBinderTest, homogeneous_rows) {
   }
 }
 
+TEST(SignatureBinderTest, homogeneous_row_map) {
+  // Positive test: (row(T,...), row(U,...)) -> map(T,U)
+  auto signature = exec::FunctionSignatureBuilder()
+                       .typeVariable("T")
+                       .typeVariable("U")
+                       .returnType("map(T,U)")
+                       .argumentType("row(T, ...)")
+                       .argumentType("row(U, ...)")
+                       .build();
+
+  testSignatureBinder(
+      signature,
+      {ROW({BIGINT(), BIGINT()}), ROW({VARCHAR(), VARCHAR(), VARCHAR()})},
+      MAP(BIGINT(), VARCHAR()));
+
+  // Should not bind if element types differ
+  assertCannotResolve(
+      signature, {ROW({BIGINT(), BIGINT()}), ROW({BIGINT(), VARCHAR()})});
+}
+
+TEST(SignatureBinderTest, homogeneous_row_return_type_not_allowed) {
+  // Negative test: row(T, ...) as return type should throw
+  auto signature = exec::FunctionSignatureBuilder()
+                       .typeVariable("T")
+                       .returnType("row(T, ...)")
+                       .argumentType("bigint")
+                       .build();
+
+  assertCannotResolve(signature, {BIGINT()});
+}
+
 } // namespace
 } // namespace facebook::velox::exec::test
