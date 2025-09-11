@@ -120,9 +120,8 @@ std::vector<AggregateInfo> ColumnStatsCollector::createAggregates(
       }
     }
     VELOX_CHECK(!aggregate.distinct);
-    info.intermediateType = resolveAggregateFunction(
-                                aggregate.call->name(), aggregate.rawInputTypes)
-                                .second;
+    info.intermediateType = resolveIntermediateType(
+        aggregate.call->name(), aggregate.rawInputTypes);
     // Column stats collection doesn't support aggregation mask.
     VELOX_CHECK_NULL(aggregate.mask);
     info.mask = std::nullopt;
