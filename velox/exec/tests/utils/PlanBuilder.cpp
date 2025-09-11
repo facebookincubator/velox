@@ -34,6 +34,12 @@
 #include "velox/parse/Expressions.h"
 #include "velox/parse/TypeResolver.h"
 
+#ifdef VELOX_ENABLE_CUDF2
+#include "velox/experimental/cudf/connectors/parquet/ParquetTableHandle.h"
+#include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/tests/utils/ParquetConnectorTestBase.h"
+#endif
+
 using namespace facebook::velox;
 using namespace facebook::velox::connector;
 using namespace facebook::velox::connector::hive;
@@ -289,7 +295,12 @@ core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
 
   core::TypedExprPtr filterNodeExpr;
 
-  if (filtersAsNode_) {
+  bool useCudf = false;
+#ifdef VELOX_ENABLE_CUDF2
+  useCudf = true;
+#endif
+
+  if (filtersAsNode_ || useCudf) {
     for (const auto& [subfield, filter] : subfieldFiltersMap_) {
       auto filterExpr = core::test::filterToExpr(
           subfield, filter.get(), parseType, planBuilder_.pool_);
@@ -312,13 +323,30 @@ core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
   }
 
   if (!tableHandle_) {
-    tableHandle_ = std::make_shared<HiveTableHandle>(
-        connectorId_,
-        tableName_,
-        true,
-        std::move(subfieldFiltersMap_),
-        remainingFilterExpr,
-        dataColumns_);
+    tableHandle_ = [&]() -> std::shared_ptr<connector::ConnectorTableHandle> {
+#ifdef VELOX_ENABLE_CUDF2
+      if (facebook::velox::cudf_velox::cudfIsRegistered() &&
+          facebook::velox::connector::getAllConnectors().count(
+              cudf_velox::exec::test::kParquetConnectorId) > 0 &&
+          facebook::velox::cudf_velox::cudfTableScanEnabled()) {
+        return std::make_shared<
+            cudf_velox::connector::parquet::ParquetTableHandle>(
+            cudf_velox::exec::test::kParquetConnectorId,
+            tableName_,
+            filterNodeExpr != nullptr,
+            filtersAsNode_ ? nullptr : std::move(filterNodeExpr),
+            remainingFilterExpr,
+            dataColumns_);
+      }
+#endif
+      return std::make_shared<HiveTableHandle>(
+          connectorId_,
+          tableName_,
+          true,
+          std::move(subfieldFiltersMap_),
+          remainingFilterExpr,
+          dataColumns_);
+    }();
   }
   core::PlanNodePtr result = std::make_shared<core::TableScanNode>(
       id, outputType_, tableHandle_, assignments_);

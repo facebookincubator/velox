@@ -55,9 +55,10 @@ class QueryBenchmarkBase {
  public:
   virtual ~QueryBenchmarkBase() = default;
   virtual void initialize();
-  void shutdown();
+  virtual void shutdown();
   std::pair<std::unique_ptr<exec::TaskCursor>, std::vector<RowVectorPtr>> run(
-      const exec::test::TpchPlan& tpchPlan);
+      const exec::test::TpchPlan& tpchPlan,
+      const std::unordered_map<std::string, std::string>& queryConfigs = {});
 
   virtual std::vector<std::shared_ptr<connector::ConnectorSplit>> listSplits(
       const std::string& path,
@@ -80,6 +81,8 @@ class QueryBenchmarkBase {
   void runCombinations(int32_t level);
 
   void runAllCombinations();
+
+  virtual std::shared_ptr<config::ConfigBase> makeConnectorProperties();
 
  protected:
   std::unique_ptr<folly::IOThreadPoolExecutor> ioExecutor_;

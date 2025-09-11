@@ -19,6 +19,7 @@
 #include "velox/connectors/Connector.h"
 #include "velox/core/Expressions.h"
 #include "velox/expression/Expr.h"
+#include "velox/type/Filter.h"
 #include "velox/type/Type.h"
 
 #include <cudf/types.hpp>
@@ -26,19 +27,19 @@
 #include <string>
 #include <vector>
 
-namespace facebook::velox::cudf_velox::connector::parquet {
+namespace facebook::velox::cudf_velox::connector::hive {
 
 using namespace facebook::velox::connector;
 
-// Parquet column handle only needs the column name (all columns are generated
+// CudfHive column handle only needs the column name (all columns are generated
 // in the same way).
-class ParquetColumnHandle : public ColumnHandle {
+class CudfHiveColumnHandle : public ColumnHandle {
  public:
-  explicit ParquetColumnHandle(
+  explicit CudfHiveColumnHandle(
       const std::string& name,
       const TypePtr type,
       const cudf::data_type cudfDataType,
-      std::vector<ParquetColumnHandle> children = {})
+      std::vector<CudfHiveColumnHandle> children = {})
       : name_(name),
         type_(type),
         cudfDataType_(cudfDataType),
@@ -56,7 +57,7 @@ class ParquetColumnHandle : public ColumnHandle {
     return cudfDataType_;
   }
 
-  const std::vector<ParquetColumnHandle>& children() const {
+  const std::vector<CudfHiveColumnHandle>& children() const {
     return children_;
   }
 
@@ -66,12 +67,12 @@ class ParquetColumnHandle : public ColumnHandle {
   const std::string name_;
   const TypePtr type_;
   const cudf::data_type cudfDataType_;
-  const std::vector<ParquetColumnHandle> children_;
+  const std::vector<CudfHiveColumnHandle> children_;
 };
 
-class ParquetTableHandle : public ConnectorTableHandle {
+class CudfHiveTableHandle : public ConnectorTableHandle {
  public:
-  ParquetTableHandle(
+  CudfHiveTableHandle(
       std::string connectorId,
       const std::string& tableName,
       bool filterPushdownEnabled,
@@ -89,6 +90,10 @@ class ParquetTableHandle : public ConnectorTableHandle {
 
   const core::TypedExprPtr& subfieldFilterExpr() const {
     return subfieldFilterExpr_;
+  }
+
+  const common::SubfieldFilters& subfieldFilters() const {
+    return subfieldFilters_;
   }
 
   const core::TypedExprPtr& remainingFilter() const {
@@ -111,9 +116,10 @@ class ParquetTableHandle : public ConnectorTableHandle {
   const bool filterPushdownEnabled_;
   // This expression is used for predicate pushdown.
   const core::TypedExprPtr subfieldFilterExpr_;
+  const common::SubfieldFilters subfieldFilters_;
   // This expression is used for post-scan filtering.
   const core::TypedExprPtr remainingFilter_;
   const RowTypePtr dataColumns_;
 };
 
-} // namespace facebook::velox::cudf_velox::connector::parquet
+} // namespace facebook::velox::cudf_velox::connector::hive

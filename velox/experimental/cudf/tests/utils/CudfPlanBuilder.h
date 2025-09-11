@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#include "velox/experimental/cudf/connectors/parquet/ParquetDataSink.h"
-#include "velox/experimental/cudf/tests/utils/ParquetConnectorTestBase.h"
+#include "velox/experimental/cudf/connectors/hive/CudfHiveDataSink.h"
+#include "velox/experimental/cudf/tests/utils/CudfHiveConnectorTestBase.h"
 
 #include "velox/dwio/common/Options.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -33,21 +33,21 @@ using namespace facebook::velox::common::test;
 using namespace facebook::velox::common::testutil;
 using namespace facebook::velox::dwio::common;
 
-// Adds a TableWriter node to write all input columns into a Parquet table.
+// Adds a TableWriter node to write all input columns into a CudfHive table.
 std::function<PlanNodePtr(std::string, PlanNodePtr)> addCudfTableWriter(
     const RowTypePtr& inputColumns,
     const std::vector<std::string>& tableColumnNames,
-    const std::shared_ptr<core::AggregationNode>& aggregationNode,
+    const std::optional<core::ColumnStatsSpec>& columnStatsSpec,
     const std::shared_ptr<core::InsertTableHandle>& insertHandle,
     facebook::velox::connector::CommitStrategy commitStrategy =
         facebook::velox::connector::CommitStrategy::kNoCommit);
 
 /// Adds a TableWriteNode to write all input columns into an un-partitioned
-/// un-bucketed Parquet table without compression.
+/// un-bucketed CudfHive table without compression.
 ///
 /// @param outputDirectoryPath Path to a directory to write data to.
 /// @param fileFormat File format to use for the written data.
-/// @param aggregationNode AggregationNode for column statistics collection
+/// @param columnStatsSpec ColumnStatsSpec for column statistics collection
 /// during write.
 /// @param polymorphic options object to be passed to the writer.
 /// write, supported aggregation types vary for different column types.
@@ -63,16 +63,16 @@ std::function<PlanNodePtr(std::string, PlanNodePtr)> cudfTableWrite(
     const std::string& outputDirectoryPath,
     const dwio::common::FileFormat fileFormat =
         dwio::common::FileFormat::PARQUET,
-    const std::shared_ptr<core::AggregationNode>& aggregationNode = nullptr,
+    const std::optional<core::ColumnStatsSpec>& columnStatsSpec = std::nullopt,
     const std::shared_ptr<dwio::common::WriterOptions>& options = nullptr,
     const std::string& outputFileName = "");
 
-/// Adds a TableWriteNode to write all input columns into Parquet
+/// Adds a TableWriteNode to write all input columns into CudfHive
 /// table with compression.
 ///
 /// @param outputDirectoryPath Path to a directory to write data to.
 /// @param fileFormat File format to use for the written data.
-/// @param aggregationNode AggregationNode for column statistics collection
+/// @param columnStatsSpec ColumnStatsSpec for column statistics collection
 /// during write.
 /// @param connectorId Name used to register the connector.
 /// @param serdeParameters Additional parameters passed to the writer.
@@ -87,8 +87,8 @@ std::function<PlanNodePtr(std::string, PlanNodePtr)> cudfTableWrite(
 std::function<PlanNodePtr(std::string, PlanNodePtr)> cudfTableWrite(
     const std::string& outputDirectoryPath,
     const dwio::common::FileFormat fileFormat,
-    const std::shared_ptr<core::AggregationNode>& aggregationNode,
-    const std::string_view& connectorId = kParquetConnectorId,
+    const std::optional<core::ColumnStatsSpec>& columnStatsSpec,
+    const std::string_view& connectorId = kCudfHiveConnectorId,
     const std::unordered_map<std::string, std::string>& serdeParameters = {},
     const std::shared_ptr<dwio::common::WriterOptions>& options = nullptr,
     const std::string& outputFileName = "",
