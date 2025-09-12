@@ -18,7 +18,6 @@ target_link_libraries(
   velox_vector
   Folly::folly
   Folly::follybenchmark
-  fmt::fmt
 )
 # This is a workaround for the use of VectorTestUtils.h which include gtest.h
 target_link_libraries(velox_vector_hash_all_benchmark GTest::gtest)

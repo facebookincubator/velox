@@ -52,7 +52,6 @@ target_link_libraries(
   Folly::folly
   gflags::gflags
   glog::glog
-  fmt::fmt
   CUDA::cudart
 )
 
@@ -93,7 +92,6 @@ if(${VELOX_ENABLE_BENCHMARKS})
     Folly::follybenchmark
     gflags::gflags
     glog::glog
-    fmt::fmt
     CUDA::cudart
   )
 endif()

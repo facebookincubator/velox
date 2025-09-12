@@ -13,4 +13,4 @@
 # limitations under the License.
 
 velox_add_library(velox_tpcds_append_info append_info-c.cpp)
-velox_link_libraries(velox_tpcds_append_info PRIVATE velox_vector fmt::fmt)
+velox_link_libraries(velox_tpcds_append_info PRIVATE velox_vector)

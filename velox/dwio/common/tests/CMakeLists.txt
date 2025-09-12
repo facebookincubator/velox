@@ -70,7 +70,6 @@ target_link_libraries(
   GTest::gtest_main
   GTest::gmock
   glog::glog
-  fmt::fmt
   protobuf::libprotobuf
 )
 

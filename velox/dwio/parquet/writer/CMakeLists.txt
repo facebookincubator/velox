@@ -23,5 +23,4 @@ velox_link_libraries(
   velox_dwio_common
   velox_arrow_bridge
   arrow
-  fmt::fmt
 )

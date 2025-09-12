@@ -52,7 +52,7 @@ Getting Started
    .. code-block:: cmake
 
       add_library(name_of_dynamic_fn SHARED TestFunction.cpp)
-      target_link_libraries(name_of_dynamic_fn PRIVATE fmt::fmt Folly::folly glog::glog xsimd)
+      target_link_libraries(name_of_dynamic_fn PRIVATE Folly::folly glog::glog xsimd)
 
       if(APPLE)
       set(COMMON_LIBRARY_LINK_OPTIONS "-Wl,-undefined,dynamic_lookup")
@@ -65,7 +65,7 @@ Getting Started
    Additional details:
 
    - **Required Libraries**:
-      - The `fmt::fmt`, `Folly::folly`, and `xsimd` libraries are required for all necessary symbols to be defined when loading `TestFunction.cpp` dynamically.
+      - The `Folly::folly`, and `xsimd` libraries are required for all necessary symbols to be defined when loading `TestFunction.cpp` dynamically.
       - The `glog::glog` library is required on macOS but optional on Linux.
 
    - **Linking Options**:

@@ -179,7 +179,6 @@ target_link_libraries(
   Folly::folly
   gflags::gflags
   glog::glog
-  fmt::fmt
 )
 
 target_link_libraries(
@@ -217,7 +216,6 @@ target_link_libraries(
   Folly::folly
   gflags::gflags
   glog::glog
-  fmt::fmt
 )
 
 add_executable(

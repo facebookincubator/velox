@@ -32,7 +32,7 @@ add_library(
 
 target_compile_definitions(dbgen PRIVATE DBNAME=dss MAC ORACLE TPCH)
 target_include_directories(dbgen PRIVATE include)
-target_link_libraries(dbgen PRIVATE fmt::fmt Folly::folly)
+target_link_libraries(dbgen PRIVATE Folly::folly)
 
 # Suppress warnings when compiling dbgen.
 target_compile_options(dbgen PRIVATE -w)

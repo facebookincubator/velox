@@ -24,8 +24,7 @@ velox_include_directories(
 velox_link_libraries(
   velox_tpcds_gen
   PUBLIC velox_memory velox_tpcds_append_info
-  PRIVATE velox_vector velox_tpcds_dsdgen fmt::fmt
-)
+  PRIVATE velox_vector velox_tpcds_dsdgen)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)

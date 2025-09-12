@@ -52,7 +52,6 @@ target_link_libraries(
     Boost::filesystem
     Boost::headers
     Folly::folly
-    fmt::fmt
     gflags::gflags
     GTest::gtest
     GTest::gmock

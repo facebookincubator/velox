@@ -59,7 +59,6 @@ if(${VELOX_BUILD_TEST_UTILS})
     velox_vector_test_lib
     Folly::folly
     Folly::follybenchmark
-    fmt::fmt
   )
 endif()
 

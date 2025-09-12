@@ -25,7 +25,6 @@ add_library(
 target_link_libraries(
   velox_dwio_common_test_utils
   Folly::folly
-  fmt::fmt
   glog::glog
   GTest::gtest
   velox_dwio_common

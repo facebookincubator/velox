@@ -27,7 +27,6 @@ velox_link_libraries(
   velox_dwio_common
   velox_dwio_common_compression
   arrow
-  fmt::fmt
   Folly::folly
   Snappy::snappy
   thrift
