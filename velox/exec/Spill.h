@@ -33,6 +33,24 @@
 #include "velox/vector/VectorStream.h"
 
 namespace facebook::velox::exec {
+
+class SpillMergeStream;
+
+namespace utils {
+/// Merge sort with the mergeTree and gatherCopy the results into target.
+/// 'target' is the result RowVector, and the copying starts from row #0 up to
+/// row #target.size(). 'mergeTree' is the data source. 'count' is the actual
+/// row count that is copied to target. 'bufferSources' and
+/// 'bufferSourceIndices' are buffering vectors that could be reused across
+/// callings.
+void gatherMerge(
+    RowVector* target,
+    TreeOfLosers<SpillMergeStream>* mergeTree,
+    int32_t& count,
+    std::vector<const RowVector*>& bufferSources,
+    std::vector<vector_size_t>& bufferSourceIndices);
+} // namespace utils
+
 class VectorHasher;
 
 /// A source of sorted spilled RowVectors coming either from a file or memory.
@@ -78,6 +96,15 @@ class SpillMergeStream : public MergeStream {
     VELOX_CHECK(!closed_);
     ensureDecodedValid(index);
     return decoded_[index];
+  }
+
+  // Returns the estimated row size based on the vector received from the
+  // merge source.
+  std::optional<int64_t> estimateRowSize() const {
+    if (rowVector_ == nullptr || rowVector_->size() == 0) {
+      return std::nullopt;
+    }
+    return rowVector_->estimateFlatSize() / rowVector_->size();
   }
 
  protected:
@@ -489,6 +516,22 @@ class SpillPartition {
       uint64_t bufferSize,
       memory::MemoryPool* pool,
       folly::Synchronized<common::SpillStats>* spillStats);
+
+  /// Create an ordered stream reader from this spill partition. If the
+  /// partition has more than #numMaxMergeFiles files, the files will be
+  /// pre-merged recursively to make sure the final ordered reader reads no
+  /// more than #numMaxMergeFiles files. This behavior is to avoid OOM problem
+  /// when opening and reading too many files at the same time. If
+  /// #numMaxMergeFiles < 2, the merge way is unlimited.
+  std::unique_ptr<TreeOfLosers<SpillMergeStream>>
+  createOrderedReaderWithPreMerge(
+      uint32_t numMaxMergeFiles,
+      uint64_t readBufferSize,
+      uint64_t writeBufferSize,
+      const common::UpdateAndCheckSpillLimitCB& updateAndCheckSpillLimitCb,
+      memory::MemoryPool* pool,
+      folly::Synchronized<common::SpillStats>* spillStats,
+      const std::string& fileCreateConfig);
 
   std::string toString() const;
 
