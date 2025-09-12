@@ -19,12 +19,10 @@ pkg_search_module(Roaring_PC QUIET roaring)
 find_library(Roaring_LIBRARY NAMES roaring HINTS ${Roaring_PC_LIBDIR} ${Roaring_PC_LIBRARY_DIRS})
 
 find_path(
-  Roaring_INCLUDE_BASE_DIR
+  Roaring_INCLUDE_DIR
   NAMES "roaring/roaring.h"
   HINTS ${Roaring_PC_INCLUDEDIR}/include ${Roaring_PC_INCLUDE_DIRS}
 )
-
-set(Roaring_INCLUDE_DIR ${Roaring_INCLUDE_BASE_DIR}/roaring)
 
 mark_as_advanced(Roaring_LIBRARY Roaring_INCLUDE_DIR)
 

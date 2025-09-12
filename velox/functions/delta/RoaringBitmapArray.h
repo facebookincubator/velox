@@ -20,7 +20,7 @@
 #include "velox/functions/Macros.h"
 
 #include <folly/CPortability.h>
-#include <roaring.hh>
+#include <roaring/roaring.hh>
 
 namespace facebook::velox::functions::delta {
 
