@@ -16,6 +16,7 @@
 #include "velox/exec/Window.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/PartitionStreamingWindowBuild.h"
+#include "velox/exec/RegionSortWindowBuild.h"
 #include "velox/exec/RowsStreamingWindowBuild.h"
 #include "velox/exec/SortWindowBuild.h"
 #include "velox/exec/Task.h"
@@ -55,17 +56,32 @@ Window::Window(
           windowNode, pool(), spillConfig, &nonReclaimableSection_);
     }
   } else {
-    windowBuild_ = std::make_unique<SortWindowBuild>(
-        windowNode,
-        pool(),
-        common::PrefixSortConfig{
-            driverCtx->queryConfig().prefixSortNormalizedKeyMaxBytes(),
-            driverCtx->queryConfig().prefixSortMinRows(),
-            driverCtx->queryConfig().prefixSortMaxStringPrefixLength()},
-        spillConfig,
-        &nonReclaimableSection_,
-        &stats_,
-        spillStats_.get());
+    auto regionNum = operatorCtx_->driverCtx()->queryConfig().windowRegionNum();
+    if (regionNum > 1) {
+      windowBuild_ = std::make_unique<RegionSortWindowBuild>(
+          windowNode,
+          regionNum,
+          pool(),
+          common::PrefixSortConfig{
+              driverCtx->queryConfig().prefixSortNormalizedKeyMaxBytes(),
+              driverCtx->queryConfig().prefixSortMinRows(),
+              driverCtx->queryConfig().prefixSortMaxStringPrefixLength()},
+          spillConfig,
+          &nonReclaimableSection_,
+          spillStats_.get());
+    } else {
+      windowBuild_ = std::make_unique<SortWindowBuild>(
+          windowNode,
+          pool(),
+          common::PrefixSortConfig{
+              driverCtx->queryConfig().prefixSortNormalizedKeyMaxBytes(),
+              driverCtx->queryConfig().prefixSortMinRows(),
+              driverCtx->queryConfig().prefixSortMaxStringPrefixLength()},
+          spillConfig,
+          &nonReclaimableSection_,
+          &stats_,
+          spillStats_.get());
+    }
   }
 }
 

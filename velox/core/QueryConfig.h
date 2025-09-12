@@ -490,6 +490,10 @@ class QueryConfig {
   static constexpr const char* kDriverCpuTimeSliceLimitMs =
       "driver_cpu_time_slice_limit_ms";
 
+  // todo: decide where to place this; add anno.
+  static constexpr const char* kWindowRegionNum =
+      "window_region_num";
+
   /// Maximum number of bytes to use for the normalized key in prefix-sort. Use
   /// 0 to disable prefix-sort.
   static constexpr const char* kPrefixSortNormalizedKeyMaxBytes =
@@ -1224,6 +1228,10 @@ class QueryConfig {
 
   uint32_t driverCpuTimeSliceLimitMs() const {
     return get<uint32_t>(kDriverCpuTimeSliceLimitMs, 0);
+  }
+
+  uint32_t windowRegionNum() const {
+    return get<uint32_t>(kWindowRegionNum, 1);
   }
 
   uint32_t prefixSortNormalizedKeyMaxBytes() const {
