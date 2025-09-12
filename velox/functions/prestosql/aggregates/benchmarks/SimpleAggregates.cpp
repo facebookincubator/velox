@@ -184,43 +184,43 @@ void doRun(uint32_t, const std::string& key, const std::string& aggregate) {
       doRun,                                       \
       _name_##_INTEGER_##_key_,                    \
       #_key_,                                      \
-      fmt::format("{}(i32)", (#_name_)));          \
+      std::format("{}(i32)", (#_name_)));          \
   BENCHMARK_NAMED_PARAM(                           \
       doRun,                                       \
       _name_##_BIGINT_##_key_,                     \
       #_key_,                                      \
-      fmt::format("{}(i64)", (#_name_)));          \
+      std::format("{}(i64)", (#_name_)));          \
   BENCHMARK_NAMED_PARAM(                           \
       doRun,                                       \
       _name_##_REAL_##_key_,                       \
       #_key_,                                      \
-      fmt::format("{}(f32)", (#_name_)));          \
+      std::format("{}(f32)", (#_name_)));          \
   BENCHMARK_NAMED_PARAM(                           \
       doRun,                                       \
       _name_##_DOUBLE_##_key_,                     \
       #_key_,                                      \
-      fmt::format("{}(f64)", (#_name_)));          \
+      std::format("{}(f64)", (#_name_)));          \
   BENCHMARK_DRAW_LINE();                           \
   BENCHMARK_NAMED_PARAM(                           \
       doRun,                                       \
       _name_##_INTEGER_NULLS_##_key_,              \
       #_key_,                                      \
-      fmt::format("{}(i32_halfnull)", (#_name_))); \
+      std::format("{}(i32_halfnull)", (#_name_))); \
   BENCHMARK_NAMED_PARAM(                           \
       doRun,                                       \
       _name_##_BIGINT_NULLS_##_key_,               \
       #_key_,                                      \
-      fmt::format("{}(i64_halfnull)", (#_name_))); \
+      std::format("{}(i64_halfnull)", (#_name_))); \
   BENCHMARK_NAMED_PARAM(                           \
       doRun,                                       \
       _name_##_REAL_NULLS_##_key_,                 \
       #_key_,                                      \
-      fmt::format("{}(f32_halfnull)", (#_name_))); \
+      std::format("{}(f32_halfnull)", (#_name_))); \
   BENCHMARK_NAMED_PARAM(                           \
       doRun,                                       \
       _name_##_DOUBLE_NULLS_##_key_,               \
       #_key_,                                      \
-      fmt::format("{}(f64_halfnull)", (#_name_))); \
+      std::format("{}(f64_halfnull)", (#_name_))); \
   BENCHMARK_DRAW_LINE();                           \
   BENCHMARK_DRAW_LINE();
 

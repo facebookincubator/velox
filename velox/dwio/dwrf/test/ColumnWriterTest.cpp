@@ -104,7 +104,7 @@ class TestStripeStreams : public StripeStreamsBase {
     }
     if (!stream || stream->isSuppressed()) {
       if (throwIfNotFound) {
-        DWIO_RAISE(fmt::format("stream {} not found", si.toString()));
+        DWIO_RAISE(std::format("stream {} not found", si.toString()));
       } else {
         return nullptr;
       }
@@ -173,7 +173,7 @@ class TestStripeStreams : public StripeStreamsBase {
   bool getUseVInts(const DwrfStreamIdentifier& streamId) const override {
     DWIO_ENSURE(
         context_.hasStream(streamId),
-        fmt::format("Stream not found: {}", streamId.toString()));
+        std::format("Stream not found: {}", streamId.toString()));
     return context_.getConfig(Config::USE_VINTS);
   }
 

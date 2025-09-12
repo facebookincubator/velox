@@ -41,7 +41,7 @@ namespace facebook::velox::wave {
 template <typename StreamType, typename MsgType>
 inline void TR(StreamType&& stream, const MsgType& msg) {
   if (FLAGS_wave_trace_stream) {
-    std::cout << fmt::format(
+    std::cout << std::format(
         "St{}: {}\n", std::forward<StreamType>(stream)->streamIdx(), msg);
   }
 }

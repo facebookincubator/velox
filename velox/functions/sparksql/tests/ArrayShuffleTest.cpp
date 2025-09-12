@@ -31,7 +31,7 @@ class ArrayShuffleTest : public SparkFunctionBaseTest {
       int32_t partitionId = 0) {
     setSparkPartitionId(partitionId);
     assertEqualVectors(
-        evaluate(fmt::format("shuffle(c0, {})", seed), makeRowVector({input})),
+        evaluate(std::format("shuffle(c0, {})", seed), makeRowVector({input})),
         expected);
   }
 

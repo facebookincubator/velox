@@ -53,7 +53,7 @@ class QDigestType final : public VarbinaryType {
   }
 
   std::string toString() const override {
-    return fmt::format("QDIGEST({})", parameters_[0].type->toString());
+    return std::format("QDIGEST({})", parameters_[0].type->toString());
   }
 
   folly::dynamic serialize() const override {

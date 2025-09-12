@@ -35,7 +35,7 @@ class CentralMomentsAggregationTest
       const std::string& aggName,
       const RowVectorPtr& data,
       int32_t groupSize) {
-    auto partialAgg = fmt::format("{0}(c1)", aggName);
+    auto partialAgg = std::format("{0}(c1)", aggName);
 
     double coefficient{1.0};
     if (aggName == "skewness") {
@@ -45,7 +45,7 @@ class CentralMomentsAggregationTest
       // correctness of the result in UT.
       coefficient = duckDBCoefficient(groupSize);
     }
-    auto sql = fmt::format(
+    auto sql = std::format(
         "SELECT c0, {0} * {1}(c1) FROM tmp GROUP BY 1", coefficient, aggName);
 
     testAggregations({data}, {"c0"}, {partialAgg}, sql);
@@ -56,14 +56,14 @@ class CentralMomentsAggregationTest
       const RowVectorPtr& data,
       int32_t groupSize) {
     VELOX_CHECK(groupSize >= 3);
-    auto partialAgg = fmt::format("{0}(c1)", aggName);
+    auto partialAgg = std::format("{0}(c1)", aggName);
 
     double coefficient{1.0};
     if (aggName == "skewness") {
       coefficient = duckDBCoefficient(groupSize);
     }
     auto sql =
-        fmt::format("SELECT {0} * {1}(c1) FROM tmp", coefficient, aggName);
+        std::format("SELECT {0} * {1}(c1) FROM tmp", coefficient, aggName);
 
     testAggregations({data}, {}, {partialAgg}, sql);
   }
@@ -72,7 +72,7 @@ class CentralMomentsAggregationTest
       const std::string& aggName,
       const RowVectorPtr& data,
       const std::vector<RowVectorPtr>& expectedResult) {
-    auto partialAgg = fmt::format("{0}(c0)", aggName);
+    auto partialAgg = std::format("{0}(c0)", aggName);
     testAggregations({data}, {}, {partialAgg}, expectedResult);
   }
 

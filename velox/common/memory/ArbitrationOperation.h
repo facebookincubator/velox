@@ -150,7 +150,7 @@ std::ostream& operator<<(std::ostream& out, ArbitrationOperation::State state);
 } // namespace facebook::velox::memory
 
 template <>
-struct fmt::formatter<facebook::velox::memory::ArbitrationOperation::State>
+struct std::formatter<facebook::velox::memory::ArbitrationOperation::State>
     : formatter<std::string> {
   auto format(
       facebook::velox::memory::ArbitrationOperation::State state,

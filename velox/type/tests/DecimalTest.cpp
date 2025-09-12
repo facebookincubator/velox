@@ -27,7 +27,7 @@ void assertRescaleFloatingPoint(
     TInput value,
     const TypePtr& type,
     int128_t expectedValue) {
-  SCOPED_TRACE(fmt::format("value: {}, type: {}", value, type->toString()));
+  SCOPED_TRACE(std::format("value: {}, type: {}", value, type->toString()));
   const auto [precision, scale] = getDecimalPrecisionScale(*type);
   int128_t actualValue;
   Status status;
@@ -65,7 +65,7 @@ void assertRescaleFloatingPointFail(
     TInput value,
     const TypePtr& type,
     const std::string& expectedErrorMessage) {
-  SCOPED_TRACE(fmt::format("value: {}, type: {}", value, type->toString()));
+  SCOPED_TRACE(std::format("value: {}, type: {}", value, type->toString()));
   const auto [precision, scale] = getDecimalPrecisionScale(*type);
   if (precision > ShortDecimalType::kMaxPrecision) {
     int128_t result;
@@ -135,7 +135,7 @@ void testCastFromString(
     int toScale,
     const std::vector<T>& expectedUnscaleValues) {
   for (int i = 0; i < inputs.size(); ++i) {
-    SCOPED_TRACE(fmt::format(
+    SCOPED_TRACE(std::format(
         "Index: {}, input: {}, expectedUnscaleValue: {}.",
         i,
         inputs[i],
@@ -328,7 +328,7 @@ TEST(DecimalTest, valueInPrecisionRange) {
 
 TEST(DecimalTest, computeAverage) {
   auto validateSameValues = [](int128_t value, int64_t maxCount) {
-    SCOPED_TRACE(fmt::format("value={} maxCount={}", value, maxCount));
+    SCOPED_TRACE(std::format("value={} maxCount={}", value, maxCount));
     int128_t sum = 0;
     int64_t overflow = 0;
     for (int64_t i = 1; i <= maxCount; ++i) {

@@ -234,7 +234,7 @@ TEST_F(PartitionIdGeneratorTest, limitOfPartitionNumber) {
 
   VELOX_ASSERT_THROW(
       idGenerator.run(input, ids),
-      fmt::format("Exceeded limit of {} distinct partitions.", maxPartitions));
+      std::format("Exceeded limit of {} distinct partitions.", maxPartitions));
 }
 
 TEST_F(PartitionIdGeneratorTest, timestampPartitionKeyComparasion) {
@@ -364,7 +364,7 @@ TEST_F(PartitionIdGeneratorTest, supportedPartitionKeyTypes) {
       VELOX_ASSERT_THROW(
           PartitionIdGenerator(
               asRowType(input->type()), {i}, 100, pool(), true),
-          fmt::format(
+          std::format(
               "Unsupported partition type: {}.",
               input->childAt(i)->type()->toString()));
     }

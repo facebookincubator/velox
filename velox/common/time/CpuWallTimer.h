@@ -42,7 +42,7 @@ struct CpuWallTiming {
   }
 
   std::string toString() const {
-    return fmt::format(
+    return std::format(
         "count: {}, wallTime: {}, cpuTime: {}",
         count,
         succinctNanos(wallNanos),

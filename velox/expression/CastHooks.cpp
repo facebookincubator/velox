@@ -18,8 +18,8 @@
 
 namespace facebook::velox::exec {
 
-fmt::underlying_t<PolicyType> format_as(PolicyType f) {
-  return fmt::underlying(f);
+std::underlying_t<PolicyType> format_as(PolicyType f) {
+  return std::underlying(f);
 }
 
 } // namespace facebook::velox::exec

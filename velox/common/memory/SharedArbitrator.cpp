@@ -58,21 +58,21 @@ namespace {
   }
 
 #define MEM_POOL_CAP_EXCEEDED(errorMessage, requestPool) \
-  VELOX_MEM_POOL_CAP_EXCEEDED(fmt::format(               \
+  VELOX_MEM_POOL_CAP_EXCEEDED(std::format(               \
       "Exceeded memory pool capacity. {}\n{}\n\n{}",     \
       errorMessage,                                      \
       this->toString(),                                  \
       requestPool->toString(true)));
 
 #define LOCAL_MEM_ARBITRATION_FAILED(errorMessage, requestPool) \
-  VELOX_MEM_ARBITRATION_FAILED(fmt::format(                     \
+  VELOX_MEM_ARBITRATION_FAILED(std::format(                     \
       "Local arbitration failure. {}\n{}\n\n{}",                \
       errorMessage,                                             \
       this->toString(),                                         \
       requestPool->toString(true)));
 
 #define GLOBAL_MEM_ARBITRATION_FAILED(errorMessage, requestPool) \
-  VELOX_MEM_ARBITRATION_FAILED(fmt::format(                      \
+  VELOX_MEM_ARBITRATION_FAILED(std::format(                      \
       "Global arbitration failure. {}\n{}\n\n{}",                \
       errorMessage,                                              \
       this->toString(),                                          \
@@ -433,7 +433,7 @@ SharedArbitrator::~SharedArbitrator() {
   shutdown();
 
   if (freeNonReservedCapacity_ + freeReservedCapacity_ != capacity_) {
-    const std::string errMsg = fmt::format(
+    const std::string errMsg = std::format(
         "Unexpected free capacity leak in arbitrator: freeNonReservedCapacity_[{}] + freeReservedCapacity_[{}] != capacity_[{}])\\n{}",
         freeNonReservedCapacity_,
         freeReservedCapacity_,
@@ -894,7 +894,7 @@ void SharedArbitrator::growCapacity(ArbitrationOperation& op) {
 
   if (!ensureCapacity(op)) {
     MEM_POOL_CAP_EXCEEDED(
-        fmt::format(
+        std::format(
             "Can't grow {} capacity with {}. This will exceed its max capacity "
             "{}, current capacity {}.",
             op.participant()->name(),
@@ -918,7 +918,7 @@ void SharedArbitrator::growCapacity(ArbitrationOperation& op) {
     if (op.participant()->reclaimableUsedCapacity() <
         participantConfig_.minReclaimBytes) {
       LOCAL_MEM_ARBITRATION_FAILED(
-          fmt::format(
+          std::format(
               "Reclaimable used capacity {} is less than min reclaim bytes {}",
               succinctBytes(op.participant()->reclaimableUsedCapacity()),
               succinctBytes(participantConfig_.minReclaimBytes)),
@@ -940,7 +940,7 @@ void SharedArbitrator::growCapacity(ArbitrationOperation& op) {
     RETURN_IF_TRUE(maybeGrowFromSelf(op));
     if (!growWithFreeCapacity(op)) {
       LOCAL_MEM_ARBITRATION_FAILED(
-          fmt::format(
+          std::format(
               "Failed to arbitrate enough memory for requestor {} with {} "
               "request bytes due to insufficient global memory resources.",
               op.participant()->name(),
@@ -971,7 +971,7 @@ void SharedArbitrator::startAndWaitGlobalArbitration(ArbitrationOperation& op) {
     } else {
       arbitrationWait = std::make_unique<ArbitrationWait>(
           &op,
-          ContinuePromise{fmt::format(
+          ContinuePromise{std::format(
               "{} wait for memory arbitration with {} request bytes",
               op.participant()->name(),
               succinctBytes(op.requestBytes()))});
@@ -1010,7 +1010,7 @@ void SharedArbitrator::startAndWaitGlobalArbitration(ArbitrationOperation& op) {
       checkIfAborted(op);
       checkIfTimeout(op);
       GLOBAL_MEM_ARBITRATION_FAILED(
-          fmt::format(
+          std::format(
               "Failed to arbitrate enough memory for requestor {} with {} "
               "request bytes due to insufficient global memory resources.",
               op.participant()->name(),
@@ -1133,13 +1133,13 @@ uint64_t SharedArbitrator::getGlobalArbitrationTarget() {
 void SharedArbitrator::checkIfAborted(ArbitrationOperation& op) {
   if (op.participant()->aborted()) {
     VELOX_MEM_POOL_ABORTED(
-        fmt::format("Memory pool {} aborted", op.participant()->name()));
+        std::format("Memory pool {} aborted", op.participant()->name()));
   }
 }
 
 void SharedArbitrator::checkIfTimeout(ArbitrationOperation& op) {
   if (FOLLY_UNLIKELY(op.hasTimeout())) {
-    VELOX_MEM_ARBITRATION_TIMEOUT(fmt::format(
+    VELOX_MEM_ARBITRATION_TIMEOUT(std::format(
         "Memory arbitration timed out on memory pool: {} after running {}",
         op.participant()->name(),
         succinctNanos(op.executionTimeNs())));
@@ -1354,7 +1354,7 @@ uint64_t SharedArbitrator::reclaimUsedMemoryByAbort(bool force) {
   // after abort operation.
   const auto currentCapacity = victim.participant->pool()->capacity();
   try {
-    VELOX_MEM_POOL_ABORTED(fmt::format(
+    VELOX_MEM_POOL_ABORTED(std::format(
         "Memory pool aborted to reclaim used memory, current capacity {}, "
         "requesting capacity from global arbitration {} memory pool "
         "stats:\n{}\n{}",
@@ -1408,7 +1408,7 @@ uint64_t SharedArbitrator::reclaim(
                       << " numNonReclaimableAttempts "
                       << stats.numNonReclaimableAttempts;
   if (reclaimedBytes == 0) {
-    FB_LOG_EVERY_MS(WARNING, 1'000) << fmt::format(
+    FB_LOG_EVERY_MS(WARNING, 1'000) << std::format(
         "Nothing reclaimed from memory pool {} with reclaim target {},  memory pool stats:\n{}\n{}",
         participant->name(),
         succinctBytes(targetBytes),
@@ -1548,7 +1548,7 @@ MemoryArbitrator::Stats SharedArbitrator::statsLocked() const {
 
 std::string SharedArbitrator::toString() const {
   std::lock_guard<std::mutex> l(stateMutex_);
-  return fmt::format(
+  return std::format(
       "ARBITRATOR[{} CAPACITY[{}] STATS[{}] CONFIG[{}]]",
       kind_,
       succinctBytes(capacity_),

@@ -50,7 +50,7 @@ inline std::string errorMessage(const std::string& str) {
 }
 
 template <typename... Args>
-std::string errorMessage(fmt::string_view fmt, const Args&... args) {
-  return fmt::vformat(fmt, fmt::make_format_args(args...));
+std::string errorMessage(std::string_view fmt, const Args&... args) {
+  return std::vformat(fmt, std::make_format_args(args...));
 }
 } // namespace facebook::velox

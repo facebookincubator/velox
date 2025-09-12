@@ -348,7 +348,7 @@ bool TableScan::getSplit() {
         connectorQueryCtx_.get());
   }
 
-  debugString_ = fmt::format(
+  debugString_ = std::format(
       "Split [{}] Task {}",
       connectorSplit->toString(),
       operatorCtx_->task()->taskId());
@@ -440,7 +440,7 @@ void TableScan::preload(
           return nullptr;
         }
         auto debugString =
-            fmt::format("Split {} Task {}", split->toString(), task->taskId());
+            std::format("Split {} Task {}", split->toString(), task->taskId());
         ExceptionContextSetter exceptionContext(
             {[](VeloxException::Type /*exceptionType*/, auto* debugString) {
                return *static_cast<std::string*>(debugString);

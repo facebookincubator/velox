@@ -56,7 +56,7 @@ PrintTime::~PrintTime() {
 
 std::string WaveTime::toString() const {
   if (micros < 20) {
-    return fmt::format("{} ({} clocks)", succinctNanos(micros * 1000), clocks);
+    return std::format("{} ({} clocks)", succinctNanos(micros * 1000), clocks);
   }
   return succinctNanos(micros * 1000);
 }
@@ -1178,15 +1178,15 @@ std::string WaveStream::toString() const {
   }
   out << "}";
   if (hostReturnEvent_) {
-    out << fmt::format("hostReturnEvent={}", hostReturnEvent_->query())
+    out << std::format("hostReturnEvent={}", hostReturnEvent_->query())
         << std::endl;
   }
   for (auto i = 0; i < streams_.size(); ++i) {
-    out << fmt::format(
+    out << std::format(
         "stream {} {}, ",
         streams_[i]->userData(),
-        lastEvent_[i] ? fmt::format("event={}", lastEvent_[i]->query())
-                      : fmt::format("no event"));
+        lastEvent_[i] ? std::format("event={}", lastEvent_[i]->query())
+                      : std::format("no event"));
   }
   return out.str();
 }
@@ -1336,21 +1336,21 @@ std::unique_ptr<Executable> Program::getExecutable(
 
 std::string AbstractOperand::toString() const {
   if (constant) {
-    return fmt::format(
+    return std::format(
         "<literal {} {}>", constant->toString(0), type->toString());
   }
   const char* nulls = notNull ? "NN"
       : conditionalNonNull    ? "CN"
       : sourceNullable        ? "SN"
                               : "?";
-  return fmt::format("<{} {}: {} {}>", id, label, nulls, type->toString());
+  return std::format("<{} {}: {} {}>", id, label, nulls, type->toString());
 }
 
 std::string Executable::toString() const {
   std::stringstream out;
   out << "{Exe "
-      << (stream ? fmt::format("stream {}", stream->userData())
-                 : fmt::format(" no stream "))
+      << (stream ? std::format("stream {}", stream->userData())
+                 : std::format(" no stream "))
       << " produces ";
   bool first = true;
   outputOperands.forEach([&](auto id) {

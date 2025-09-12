@@ -142,7 +142,7 @@ class WindowPrefixSortBenchmark : public HiveConnectorTestBase {
     }
 
     lastRunPrefixSort_ = prefixSort;
-    std::string functionSql = fmt::format(
+    std::string functionSql = std::format(
         "{} over (partition by {} order by k_sort)", aggregate, key);
 
     core::PlanNodeId tableScanPlanId;
@@ -232,42 +232,42 @@ void doPrefixSortRun(
       doSortRun,                                   \
       _name_##_INTEGER_##_key_,                    \
       #_key_,                                      \
-      fmt::format("{}(i32)", (#_name_)));          \
+      std::format("{}(i32)", (#_name_)));          \
   BENCHMARK_NAMED_PARAM(                           \
       doPrefixSortRun,                             \
       _name_##_INTEGER_##_key_,                    \
       #_key_,                                      \
-      fmt::format("{}(i32)", (#_name_)));          \
+      std::format("{}(i32)", (#_name_)));          \
   BENCHMARK_NAMED_PARAM(                           \
       doSortRun,                                   \
       _name_##_REAL_##_key_,                       \
       #_key_,                                      \
-      fmt::format("{}(f32)", (#_name_)));          \
+      std::format("{}(f32)", (#_name_)));          \
   BENCHMARK_NAMED_PARAM(                           \
       doPrefixSortRun,                             \
       _name_##_REAL_##_key_,                       \
       #_key_,                                      \
-      fmt::format("{}(f32)", (#_name_)));          \
+      std::format("{}(f32)", (#_name_)));          \
   BENCHMARK_NAMED_PARAM(                           \
       doSortRun,                                   \
       _name_##_INTEGER_NULLS_##_key_,              \
       #_key_,                                      \
-      fmt::format("{}(i32_halfnull)", (#_name_))); \
+      std::format("{}(i32_halfnull)", (#_name_))); \
   BENCHMARK_NAMED_PARAM(                           \
       doPrefixSortRun,                             \
       _name_##_INTEGER_NULLS_##_key_,              \
       #_key_,                                      \
-      fmt::format("{}(i32_halfnull)", (#_name_))); \
+      std::format("{}(i32_halfnull)", (#_name_))); \
   BENCHMARK_NAMED_PARAM(                           \
       doSortRun,                                   \
       _name_##_REAL_NULLS_##_key_,                 \
       #_key_,                                      \
-      fmt::format("{}(f32_halfnull)", (#_name_))); \
+      std::format("{}(f32_halfnull)", (#_name_))); \
   BENCHMARK_NAMED_PARAM(                           \
       doPrefixSortRun,                             \
       _name_##_REAL_NULLS_##_key_,                 \
       #_key_,                                      \
-      fmt::format("{}(f32_halfnull)", (#_name_))); \
+      std::format("{}(f32_halfnull)", (#_name_))); \
   BENCHMARK_DRAW_LINE();                           \
   BENCHMARK_DRAW_LINE();
 
@@ -275,43 +275,43 @@ void doPrefixSortRun(
   BENCHMARK_NAMED_PARAM(                                 \
       doSortRun,                                         \
       _name_##_BIGINT_##_key1_##_key2_,                  \
-      fmt::format("{},{}", (#_key1_), (#_key2_)),        \
-      fmt::format("{}(i64)", (#_name_)));                \
+      std::format("{},{}", (#_key1_), (#_key2_)),        \
+      std::format("{}(i64)", (#_name_)));                \
   BENCHMARK_NAMED_PARAM(                                 \
       doPrefixSortRun,                                   \
       _name_##_BIGINT_##_key1_##_key2_,                  \
-      fmt::format("{},{}", (#_key1_), (#_key2_)),        \
-      fmt::format("{}(i64)", (#_name_)));                \
+      std::format("{},{}", (#_key1_), (#_key2_)),        \
+      std::format("{}(i64)", (#_name_)));                \
   BENCHMARK_NAMED_PARAM(                                 \
       doSortRun,                                         \
       _name_##_BIGINT_NULLS_##_key1_##_key2_,            \
-      fmt::format("{},{}", (#_key1_), (#_key2_)),        \
-      fmt::format("{}(i64_halfnull)", (#_name_)));       \
+      std::format("{},{}", (#_key1_), (#_key2_)),        \
+      std::format("{}(i64_halfnull)", (#_name_)));       \
   BENCHMARK_NAMED_PARAM(                                 \
       doPrefixSortRun,                                   \
       _name_##_BIGINT_NULLS_##_key1_##_key2_,            \
-      fmt::format("{},{}", (#_key1_), (#_key2_)),        \
-      fmt::format("{}(i64_halfnull)", (#_name_)));       \
+      std::format("{},{}", (#_key1_), (#_key2_)),        \
+      std::format("{}(i64_halfnull)", (#_name_)));       \
   BENCHMARK_NAMED_PARAM(                                 \
       doSortRun,                                         \
       _name_##_DOUBLE_##_key1_##_key2_,                  \
-      fmt::format("{},{}", (#_key1_), (#_key2_)),        \
-      fmt::format("{}(f64)", (#_name_)));                \
+      std::format("{},{}", (#_key1_), (#_key2_)),        \
+      std::format("{}(f64)", (#_name_)));                \
   BENCHMARK_NAMED_PARAM(                                 \
       doPrefixSortRun,                                   \
       _name_##_DOUBLE_##_key1_##_key2_,                  \
-      fmt::format("{},{}", (#_key1_), (#_key2_)),        \
-      fmt::format("{}(f64)", (#_name_)));                \
+      std::format("{},{}", (#_key1_), (#_key2_)),        \
+      std::format("{}(f64)", (#_name_)));                \
   BENCHMARK_NAMED_PARAM(                                 \
       doSortRun,                                         \
       _name_##_DOUBLE_NULLS_##_key1_##_key2_,            \
-      fmt::format("{},{}", (#_key1_), (#_key2_)),        \
-      fmt::format("{}(f64_halfnull)", (#_name_)));       \
+      std::format("{},{}", (#_key1_), (#_key2_)),        \
+      std::format("{}(f64_halfnull)", (#_name_)));       \
   BENCHMARK_NAMED_PARAM(                                 \
       doPrefixSortRun,                                   \
       _name_##_DOUBLE_NULLS_##_key1_##_key2_,            \
-      fmt::format("{},{}", (#_key1_), (#_key2_)),        \
-      fmt::format("{}(f64_halfnull)", (#_name_)));       \
+      std::format("{},{}", (#_key1_), (#_key2_)),        \
+      std::format("{}(f64_halfnull)", (#_name_)));       \
   BENCHMARK_DRAW_LINE();                                 \
   BENCHMARK_DRAW_LINE();
 

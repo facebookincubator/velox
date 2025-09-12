@@ -104,7 +104,7 @@ FOLLY_ALWAYS_INLINE std::ostream& operator<<(
 } // namespace facebook::velox::dwio::common
 
 template <>
-struct fmt::formatter<facebook::velox::dwio::common::Writer::State>
+struct std::formatter<facebook::velox::dwio::common::Writer::State>
     : formatter<std::string> {
   auto format(
       facebook::velox::dwio::common::Writer::State s,

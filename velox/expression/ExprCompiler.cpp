@@ -370,12 +370,12 @@ ExprPtr compileCall(
 
   if (vectorFunctionSignatures.has_value()) {
     for (const auto& signature : vectorFunctionSignatures.value()) {
-      signatures.push_back(fmt::format("({})", signature->toString()));
+      signatures.push_back(std::format("({})", signature->toString()));
     }
   }
 
   for (const auto& signature : simpleFunctionSignatures) {
-    signatures.push_back(fmt::format("({})", signature->toString()));
+    signatures.push_back(std::format("({})", signature->toString()));
   }
 
   if (signatures.empty()) {

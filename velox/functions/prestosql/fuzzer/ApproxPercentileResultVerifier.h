@@ -137,7 +137,7 @@ class ApproxPercentileResultVerifier : public ResultVerifier {
       }
     }
     if (verifyWindow_ && numNonNull != allRanges_->size()) {
-      LOG(ERROR) << fmt::format(
+      LOG(ERROR) << std::format(
           "Expected result contains {} non-null rows while the actual result contains {}.",
           allRanges_->size(),
           numNonNull);
@@ -249,8 +249,8 @@ class ApproxPercentileResultVerifier : public ResultVerifier {
     const auto rowType = asRowType(input[0]->type());
 
     std::vector<std::string> projections = groupingKeys_;
-    projections.push_back(fmt::format("{} as x", valueField));
-    projections.push_back(fmt::format(
+    projections.push_back(std::format("{} as x", valueField));
+    projections.push_back(std::format(
         "{} as w",
         weightField.has_value() ? weightField.value() : "1::bigint"));
 
@@ -266,22 +266,22 @@ class ApproxPercentileResultVerifier : public ResultVerifier {
     std::string partitionByClause;
     if (!groupingKeys_.empty()) {
       partitionByClause =
-          fmt::format("partition by {}", folly::join(", ", groupingKeys_));
+          std::format("partition by {}", folly::join(", ", groupingKeys_));
     }
 
     std::vector<std::string> windowCalls = {
         // Compute the sum of all the weights.
-        fmt::format(
+        std::format(
             "sum(w) OVER ({} order by x range between unbounded preceding and unbounded following) as total",
             partitionByClause),
         // Compute the sum of the weights in the current frame.
-        fmt::format(
+        std::format(
             "sum(w) OVER ({} order by x range between current row and current row) "
             "as sum",
             partitionByClause),
         // Compute the sum of the weights of all frames up to and including the
         // current frame.
-        fmt::format(
+        std::format(
             "sum(w) OVER ({} order by x range between unbounded preceding and current row) "
             "as prefix_sum",
             partitionByClause),
@@ -301,7 +301,7 @@ class ApproxPercentileResultVerifier : public ResultVerifier {
             {"min(lower) as min_pct", "max(upper) as max_pct"})
         .project(append(
             groupingKeys_,
-            {fmt::format("x as {}", name_), "min_pct", "max_pct"}));
+            {std::format("x as {}", name_), "min_pct", "max_pct"}));
 
     auto plan = planBuilder.planNode();
     return AssertQueryBuilder(plan).copyResults(input[0]->pool());
@@ -444,9 +444,9 @@ class ApproxPercentileResultVerifier : public ResultVerifier {
       }
     }
     projections.push_back("row_number");
-    projections.push_back(fmt::format("{} as x", valueField));
+    projections.push_back(std::format("{} as x", valueField));
     projections.push_back(
-        fmt::format("{} as w", weighted ? weightField.value() : "1::bigint"));
+        std::format("{} as w", weighted ? weightField.value() : "1::bigint"));
     // Names of columns, which could be offset columns in case of kRange frames,
     // or frame bounds, should be projected.
     static const std::unordered_set<std::string> kKBoundColumnNames = {
@@ -466,7 +466,7 @@ class ApproxPercentileResultVerifier : public ResultVerifier {
     auto partitionByKeysWithRowNumber =
         getPartitionByClause(append(groupingKeys_, {"row_number"}));
     planBuilder
-        .window({fmt::format("multimap_agg(x, w) over ({}) as bucket", frame)})
+        .window({std::format("multimap_agg(x, w) over ({}) as bucket", frame)})
         .project(append(
             groupingKeys_,
             {"row_number",
@@ -475,13 +475,13 @@ class ApproxPercentileResultVerifier : public ResultVerifier {
         .project(append(
             groupingKeys_, {"row_number", "bucket_k", "bucket_v as weight"}))
         .window(
-            {fmt::format(
+            {std::format(
                  "sum(weight) over ({} order by bucket_k asc rows between unbounded preceding and unbounded following) as cnt",
                  partitionByKeysWithRowNumber),
-             fmt::format(
+             std::format(
                  "sum(weight) over ({} order by bucket_k asc rows between unbounded preceding and 1 preceding) as order_min",
                  partitionByKeysWithRowNumber),
-             fmt::format(
+             std::format(
                  "sum(weight) over ({} order by bucket_k asc rows between unbounded preceding and current row) as order_max",
                  partitionByKeysWithRowNumber)})
         .project(append(
@@ -501,13 +501,13 @@ class ApproxPercentileResultVerifier : public ResultVerifier {
 
       planBuilder
           .appendColumns(
-              {fmt::format("sequence(1, {}) as seq", percentiles_.size())})
+              {std::format("sequence(1, {}) as seq", percentiles_.size())})
           .unnest(
               append(groupingKeys_, {"row_number", "expected", "cnt"}), {"seq"})
           .project(append(
               groupingKeys_,
               {"row_number",
-               fmt::format("cast(null as {}) as actual_e", ss.str()),
+               std::format("cast(null as {}) as actual_e", ss.str()),
                "seq_e as pct_index",
                "expected",
                "cnt"}));
@@ -518,7 +518,7 @@ class ApproxPercentileResultVerifier : public ResultVerifier {
       planBuilder.project(append(
           groupingKeys_,
           {"row_number",
-           fmt::format("cast(null as {}) as actual", ss.str()),
+           std::format("cast(null as {}) as actual", ss.str()),
            "expected",
            "cnt"}));
     }
@@ -598,7 +598,7 @@ class ApproxPercentileResultVerifier : public ResultVerifier {
       expectedSource =
           PlanBuilder(planNodeIdGenerator)
               .values({allRanges_})
-              .appendColumns({fmt::format(
+              .appendColumns({std::format(
                   "sequence(0, {}) as s", percentiles_.size() - 1)})
               .unnest(
                   append(groupingKeys_, {name_, "min_pct", "max_pct"}),
@@ -615,7 +615,7 @@ class ApproxPercentileResultVerifier : public ResultVerifier {
                          .project(append(
                              groupingKeys_,
                              {
-                                 fmt::format("{}_e as {}", name_, name_),
+                                 std::format("{}_e as {}", name_, name_),
                                  "null::double as min_pct",
                                  "null::double as max_pct",
                                  "pct_index - 1 as pct_index",
@@ -718,8 +718,8 @@ class ApproxPercentileResultVerifier : public ResultVerifier {
               .project(append(
                   groupingKeys_,
                   {"row_number",
-                   fmt::format("{} as actual", name_),
-                   fmt::format("cast(null as {}) as expected", expectedTypeSql),
+                   std::format("{} as actual", name_),
+                   std::format("cast(null as {}) as expected", expectedTypeSql),
                    "cast(null as bigint) as cnt"}))
               .unnest(
                   append(groupingKeys_, {"row_number", "expected", "cnt"}),
@@ -744,7 +744,7 @@ class ApproxPercentileResultVerifier : public ResultVerifier {
               .filter("actual = expected_k")
               .project(append(
                   groupingKeys_,
-                  {fmt::format("actual as {}", name_),
+                  {std::format("actual as {}", name_),
                    "pct_index - 1 as pct_index",
                    "cast(expected_v.c1 as double) / cast(cnt as double) as min_pct",
                    "cast(expected_v.c2 as double) / cast(cnt as double) as max_pct"}))
@@ -757,8 +757,8 @@ class ApproxPercentileResultVerifier : public ResultVerifier {
               .project(append(
                   groupingKeys_,
                   {"row_number",
-                   fmt::format("{} as actual", name_),
-                   fmt::format("cast(null as {}) as expected", expectedTypeSql),
+                   std::format("{} as actual", name_),
+                   std::format("cast(null as {}) as expected", expectedTypeSql),
                    "cast(null as bigint) as cnt"}))
               .planNode();
 
@@ -774,7 +774,7 @@ class ApproxPercentileResultVerifier : public ResultVerifier {
               .filter("actual = expected_k")
               .project(append(
                   groupingKeys_,
-                  {fmt::format("actual as {}", name_),
+                  {std::format("actual as {}", name_),
                    "0 as pct_index",
                    "cast(expected_v.c1 as double) / cast(cnt as double) as min_pct",
                    "cast(expected_v.c2 as double) / cast(cnt as double) as max_pct"}))

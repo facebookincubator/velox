@@ -32,7 +32,7 @@ class URLFunctionsTest : public functions::test::FunctionBaseTest {
     const auto extractFn = [&](const std::string& fn,
                                const std::optional<std::string>& a) {
       return evaluateOnce<std::string>(
-          fmt::format("url_extract_{}(c0)", fn), a);
+          std::format("url_extract_{}(c0)", fn), a);
     };
 
     const auto extractPort = [&](const std::optional<std::string>& a) {

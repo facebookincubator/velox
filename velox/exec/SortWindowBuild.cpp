@@ -169,7 +169,7 @@ void SortWindowBuild::ensureSortFits() {
     }
   }
 
-  LOG(WARNING) << fmt::format(
+  LOG(WARNING) << std::format(
       "Failed to reserve {} for sort window build from memory pool {}, usage: {}, reservation: {}",
       succinctBytes(sortBufferToReserve),
       pool_->name(),

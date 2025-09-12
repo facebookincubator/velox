@@ -101,7 +101,7 @@ class ArraySortTest : public FunctionBaseTest,
       const VectorPtr expectedDescResult;
 
       const std::string debugString() const {
-        return fmt::format(
+        return std::format(
             "\ntype: {}\ninputVector: {}\nexpectedResult: {}",
             GetParam(),
             inputVector->toString(0, inputVector->size()),
@@ -553,24 +553,24 @@ TEST_F(ArraySortTest, lambda) {
   auto testAsc = [&](const std::string& name, const std::string& lambdaExpr) {
     SCOPED_TRACE(name);
     SCOPED_TRACE(lambdaExpr);
-    auto result = evaluate(fmt::format("{}(c0, {})", name, lambdaExpr), data);
+    auto result = evaluate(std::format("{}(c0, {})", name, lambdaExpr), data);
     assertEqualVectors(sortedAsc, result);
 
     SelectivityVector firstRow(1);
     result =
-        evaluate(fmt::format("{}(c0, {})", name, lambdaExpr), data, firstRow);
+        evaluate(std::format("{}(c0, {})", name, lambdaExpr), data, firstRow);
     assertEqualVectors(sortedAsc->slice(0, 1), result);
   };
 
   auto testDesc = [&](const std::string& name, const std::string& lambdaExpr) {
     SCOPED_TRACE(name);
     SCOPED_TRACE(lambdaExpr);
-    auto result = evaluate(fmt::format("{}(c0, {})", name, lambdaExpr), data);
+    auto result = evaluate(std::format("{}(c0, {})", name, lambdaExpr), data);
     assertEqualVectors(sortedDesc, result);
 
     SelectivityVector firstRow(1);
     result =
-        evaluate(fmt::format("{}(c0, {})", name, lambdaExpr), data, firstRow);
+        evaluate(std::format("{}(c0, {})", name, lambdaExpr), data, firstRow);
     assertEqualVectors(sortedDesc->slice(0, 1), result);
   };
 
@@ -615,9 +615,9 @@ TEST_F(ArraySortTest, failOnMapTypeSort) {
       ARRAY(MAP(BIGINT(), VARCHAR())), 8, pool())});
   auto testFail = [&](const std::string& name) {
     VELOX_ASSERT_THROW(
-        evaluate(fmt::format("{}(c0, x -> x)", name), data), kErrorMessage);
+        evaluate(std::format("{}(c0, x -> x)", name), data), kErrorMessage);
     VELOX_ASSERT_THROW(
-        evaluate(fmt::format("{}(c0)", name), data), kErrorMessage);
+        evaluate(std::format("{}(c0)", name), data), kErrorMessage);
   };
 
   testFail("array_sort");
@@ -652,12 +652,12 @@ TEST_F(ArraySortTest, failOnArrayNullCompare) {
   });
 
   for (const auto& name : {"array_sort", "array_sort_desc"}) {
-    evaluate(fmt::format("{}(c0)", name), noNullCompareBatch);
+    evaluate(std::format("{}(c0)", name), noNullCompareBatch);
     VELOX_ASSERT_THROW(
-        evaluate(fmt::format("{}(c0)", name), nullCompareBatch1),
+        evaluate(std::format("{}(c0)", name), nullCompareBatch1),
         kErrorMessage);
     VELOX_ASSERT_THROW(
-        evaluate(fmt::format("{}(c0)", name), nullCompareBatch2),
+        evaluate(std::format("{}(c0)", name), nullCompareBatch2),
         kErrorMessage);
   }
 
@@ -701,12 +701,12 @@ TEST_F(ArraySortTest, failOnRowNullCompare) {
   });
 
   for (const auto& name : {"array_sort", "array_sort_desc"}) {
-    evaluate(fmt::format("{}(c0)", name), noNullCompareBatch);
+    evaluate(std::format("{}(c0)", name), noNullCompareBatch);
     VELOX_ASSERT_THROW(
-        evaluate(fmt::format("{}(c0)", name), nullCompareBatch1),
+        evaluate(std::format("{}(c0)", name), nullCompareBatch1),
         kErrorMessage);
     VELOX_ASSERT_THROW(
-        evaluate(fmt::format("{}(c0)", name), nullCompareBatch2),
+        evaluate(std::format("{}(c0)", name), nullCompareBatch2),
         kErrorMessage);
   }
 

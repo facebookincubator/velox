@@ -33,7 +33,7 @@ class SplitToMultiMapTest : public functions::test::FunctionBaseTest {
     });
 
     auto result = evaluate(
-        fmt::format(
+        std::format(
             "split_to_multimap(c0, '{}', '{}')",
             entryDelimiter,
             keyValueDelimiter),
@@ -65,7 +65,7 @@ class SplitToMultiMapTest : public functions::test::FunctionBaseTest {
     auto splitToMultiMap = [&](const std::string& entryDelimiter,
                                const std::string& keyValueDelimiter) {
       evaluate(
-          fmt::format(
+          std::format(
               "split_to_multimap(c0, '{}', '{}')",
               entryDelimiter,
               keyValueDelimiter),
@@ -215,7 +215,7 @@ TEST_F(SplitToMultiMapTest, testNullInArgsShouldReturnNull) {
   });
 
   auto result = evaluate(
-      fmt::format("split_to_multimap(c0, '{}', '{}')", ',', ':'), data);
+      std::format("split_to_multimap(c0, '{}', '{}')", ',', ':'), data);
 
   velox::test::assertEqualVectors(nullMapVector, result);
 
@@ -225,7 +225,7 @@ TEST_F(SplitToMultiMapTest, testNullInArgsShouldReturnNull) {
   });
 
   result =
-      evaluate(fmt::format("split_to_multimap(c0, null, '{}')", ':'), data);
+      evaluate(std::format("split_to_multimap(c0, null, '{}')", ':'), data);
   velox::test::assertEqualVectors(nullMapVector, result);
 
   // Test3:  null key-value delimiter
@@ -234,7 +234,7 @@ TEST_F(SplitToMultiMapTest, testNullInArgsShouldReturnNull) {
   });
 
   result =
-      evaluate(fmt::format("split_to_multimap(c0, '{}', null)", ':'), data);
+      evaluate(std::format("split_to_multimap(c0, '{}', null)", ':'), data);
   velox::test::assertEqualVectors(nullMapVector, result);
 
   // Test4 :  null entry delimiter and key-value delimiter
@@ -242,7 +242,7 @@ TEST_F(SplitToMultiMapTest, testNullInArgsShouldReturnNull) {
       makeNullableFlatVector<std::string>({"1:10,2:20,1:30"}),
   });
 
-  result = evaluate(fmt::format("split_to_multimap(c0, null, null)"), data);
+  result = evaluate(std::format("split_to_multimap(c0, null, null)"), data);
   velox::test::assertEqualVectors(nullMapVector, result);
 }
 

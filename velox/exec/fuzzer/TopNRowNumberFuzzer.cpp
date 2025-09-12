@@ -86,7 +86,7 @@ TopNRowNumberFuzzer::generateKeys(const std::string& prefix) {
   std::vector<std::string> keys;
   std::vector<TypePtr> types;
   for (auto i = 0; i < numKeys; ++i) {
-    keys.push_back(fmt::format("{}{}", prefix, i));
+    keys.push_back(std::format("{}{}", prefix, i));
     types.push_back(vectorFuzzer_.randOrderableType(kKeyTypes, 1));
   }
 
@@ -210,7 +210,7 @@ RowNumberFuzzerBase::PlanWithSplits TopNRowNumberFuzzer::makePlanWithTableScan(
                   .planNode();
 
   const std::vector<Split> splits = test::makeSplits(
-      input, fmt::format("{}/topn_row_number", tableDir), writerPool_);
+      input, std::format("{}/topn_row_number", tableDir), writerPool_);
   return PlanWithSplits{plan, splits};
 }
 

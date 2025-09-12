@@ -278,7 +278,7 @@ TEST_F(CustomTypeTest, nullConstant) {
            std::vector<TypePtr>{BIGINT(), DOUBLE(), REAL()}) {
         auto type = getCustomType(name, {TypeParameter(parameter)});
         checkNullConstant(
-            type, fmt::format("QDIGEST({})", parameter->toString()));
+            type, std::format("QDIGEST({})", parameter->toString()));
       }
     } else if (name == "BIGINT_ENUM") {
       LongEnumParameter moodInfo(

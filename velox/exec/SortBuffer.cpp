@@ -321,7 +321,7 @@ void SortBuffer::ensureSortFits() {
     }
   }
 
-  LOG(WARNING) << fmt::format(
+  LOG(WARNING) << std::format(
       "Failed to reserve {} for memory pool {}, usage: {}, reservation: {}",
       succinctBytes(sortBufferToReserve),
       pool_->name(),

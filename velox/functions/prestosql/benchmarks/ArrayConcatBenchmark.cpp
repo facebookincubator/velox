@@ -56,7 +56,7 @@ int main(int argc, char** argv) {
 
           benchmarkBuilder
               .addBenchmarkSet(
-                  fmt::format(
+                  std::format(
                       "array_concat_{}_{}",
                       elementType->toString(),
                       options.containerLength),

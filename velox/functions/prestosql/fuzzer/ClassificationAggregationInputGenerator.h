@@ -32,7 +32,7 @@ class ClassificationAggregationInputGenerator : public InputGenerator {
 
     VELOX_CHECK(
         types.size() == 3 || types.size() == 4,
-        fmt::format("Unexpected types count:{}", types.size()));
+        std::format("Unexpected types count:{}", types.size()));
 
     VELOX_CHECK(
         types[0]->isBigint(), "Unexpected type: {}", types[0]->toString());

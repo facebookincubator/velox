@@ -51,7 +51,7 @@ int main(int argc, char** argv) {
           fuzzer.fuzzFlat(inputType)};
       benchmarkBuilder
           .addBenchmarkSet(
-              fmt::format(
+              std::format(
                   "Dict#{}#{}\%null", inputType->toString(), nullRatio * 100),
               fuzzer.fuzzRow(
                   std::move(childrenVectors), {"c0", "c1"}, opts.vectorSize))
@@ -61,7 +61,7 @@ int main(int argc, char** argv) {
           .withIterations(100);
       benchmarkBuilder
           .addBenchmarkSet(
-              fmt::format(
+              std::format(
                   "Flat#{}#{}\%null", inputType->toString(), nullRatio * 100),
               ROW({"c0", "c1"}, {inputType, inputType}))
           .withFuzzerOptions(opts)

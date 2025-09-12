@@ -73,7 +73,7 @@ void RuntimeMetric::printMetric(std::ostream& stream) const {
 std::string RuntimeMetric::toString() const {
   switch (unit) {
     case RuntimeCounter::Unit::kNanos:
-      return fmt::format(
+      return std::format(
           "sum:{}, count:{}, min:{}, max:{}, avg: {}",
           succinctNanos(sum),
           count,
@@ -81,7 +81,7 @@ std::string RuntimeMetric::toString() const {
           succinctNanos(max),
           succinctNanos(count == 0 ? 0 : sum / count));
     case RuntimeCounter::Unit::kBytes:
-      return fmt::format(
+      return std::format(
           "sum:{}, count:{}, min:{}, max:{}, avg: {}",
           succinctBytes(sum),
           count,
@@ -91,7 +91,7 @@ std::string RuntimeMetric::toString() const {
     case RuntimeCounter::Unit::kNone:
       [[fallthrough]];
     default:
-      return fmt::format(
+      return std::format(
           "sum:{}, count:{}, min:{}, max:{}, avg: {}",
           sum,
           count,

@@ -120,7 +120,7 @@ std::string getQueryTraceDirectory(
     normalizedTraceDir.pop_back();
   }
 
-  return fmt::format("{}/{}", normalizedTraceDir, queryId);
+  return std::format("{}/{}", normalizedTraceDir, queryId);
 }
 
 std::string getTaskTraceDirectory(
@@ -136,23 +136,23 @@ std::string getTaskTraceDirectory(
     const std::string& taskId) {
   auto queryTraceDir = getQueryTraceDirectory(traceDir, queryId);
 
-  return fmt::format("{}/{}", queryTraceDir, taskId);
+  return std::format("{}/{}", queryTraceDir, taskId);
 }
 
 std::string getTaskTraceMetaFilePath(const std::string& taskTraceDir) {
-  return fmt::format("{}/{}", taskTraceDir, TraceTraits::kTaskMetaFileName);
+  return std::format("{}/{}", taskTraceDir, TraceTraits::kTaskMetaFileName);
 }
 
 std::string getNodeTraceDirectory(
     const std::string& taskTraceDir,
     const std::string& nodeId) {
-  return fmt::format("{}/{}", taskTraceDir, nodeId);
+  return std::format("{}/{}", taskTraceDir, nodeId);
 }
 
 std::string getPipelineTraceDirectory(
     const std::string& nodeTraceDir,
     uint32_t pipelineId) {
-  return fmt::format("{}/{}", nodeTraceDir, pipelineId);
+  return std::format("{}/{}", nodeTraceDir, pipelineId);
 }
 
 std::string getOpTraceDirectory(
@@ -168,19 +168,19 @@ std::string getOpTraceDirectory(
     const std::string& nodeTraceDir,
     uint32_t pipelineId,
     uint32_t driverId) {
-  return fmt::format("{}/{}/{}", nodeTraceDir, pipelineId, driverId);
+  return std::format("{}/{}/{}", nodeTraceDir, pipelineId, driverId);
 }
 
 std::string getOpTraceInputFilePath(const std::string& opTraceDir) {
-  return fmt::format("{}/{}", opTraceDir, OperatorTraceTraits::kInputFileName);
+  return std::format("{}/{}", opTraceDir, OperatorTraceTraits::kInputFileName);
 }
 
 std::string getOpTraceSplitFilePath(const std::string& opTraceDir) {
-  return fmt::format("{}/{}", opTraceDir, OperatorTraceTraits::kSplitFileName);
+  return std::format("{}/{}", opTraceDir, OperatorTraceTraits::kSplitFileName);
 }
 
 std::string getOpTraceSummaryFilePath(const std::string& opTraceDir) {
-  return fmt::format(
+  return std::format(
       "{}/{}", opTraceDir, OperatorTraceTraits::kSummaryFileName);
 }
 
@@ -458,7 +458,7 @@ core::PlanNodePtr getTraceNode(
   }
 
   VELOX_UNSUPPORTED(
-      fmt::format("Unsupported trace node: {}", traceNode->name()));
+      std::format("Unsupported trace node: {}", traceNode->name()));
 }
 
 void registerTraceNodeFactory(

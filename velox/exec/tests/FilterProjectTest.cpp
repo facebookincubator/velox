@@ -398,7 +398,7 @@ TEST_F(FilterProjectTest, barrier) {
     int numOutputRows;
 
     std::string toString() const {
-      return fmt::format(
+      return std::format(
           "barrierExecution {}, numOutputRows {}",
           barrierExecution,
           numOutputRows);

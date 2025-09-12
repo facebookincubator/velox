@@ -177,7 +177,7 @@ TEST_P(AllWriterCompressionTest, compression) {
       compressionKind_ == CompressionKind::CompressionKind_MAX) {
     VELOX_ASSERT_THROW(
         writeFooter(*schema),
-        fmt::format(
+        std::format(
             "Unsupported compression type: {}",
             compressionKindToString(compressionKind_)));
     return;

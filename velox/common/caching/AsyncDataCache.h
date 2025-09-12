@@ -973,7 +973,7 @@ CoalesceIoStats readPins(
 } // namespace facebook::velox::cache
 
 template <>
-struct fmt::formatter<facebook::velox::cache::CoalescedLoad::State>
+struct std::formatter<facebook::velox::cache::CoalescedLoad::State>
     : formatter<int> {
   auto format(
       facebook::velox::cache::CoalescedLoad::State s,

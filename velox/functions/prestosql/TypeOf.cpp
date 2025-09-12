@@ -56,7 +56,7 @@ std::string typeName(const TypePtr& type) {
       }
       if (type->isDecimal()) {
         const auto& shortDecimal = type->asShortDecimal();
-        return fmt::format(
+        return std::format(
             "decimal({},{})", shortDecimal.precision(), shortDecimal.scale());
       }
       if (isBingTileType(type)) {
@@ -78,7 +78,7 @@ std::string typeName(const TypePtr& type) {
           "Expected decimal type. Got: {}",
           type->toString());
       const auto& longDecimal = type->asLongDecimal();
-      return fmt::format(
+      return std::format(
           "decimal({},{})", longDecimal.precision(), longDecimal.scale());
     }
     case TypeKind::REAL:
@@ -119,9 +119,9 @@ std::string typeName(const TypePtr& type) {
     case TypeKind::TIMESTAMP:
       return "timestamp";
     case TypeKind::ARRAY:
-      return fmt::format("array({})", typeName(type->childAt(0)));
+      return std::format("array({})", typeName(type->childAt(0)));
     case TypeKind::MAP:
-      return fmt::format(
+      return std::format(
           "map({}, {})",
           typeName(type->childAt(0)),
           typeName(type->childAt(1)));

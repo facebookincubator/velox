@@ -364,7 +364,7 @@ class ExprEncodingsTest
       const std::string& text,
       std::function<std::optional<T>(int32_t)> reference) {
     for (auto clearCache : {false, true}) {
-      SCOPED_TRACE(fmt::format("clearCache: {}", clearCache));
+      SCOPED_TRACE(std::format("clearCache: {}", clearCache));
 
       const auto source = {parseExpression(text, testDataType_)};
       auto exprSet = std::make_unique<exec::ExprSet>(source, execCtx_.get());
@@ -394,7 +394,7 @@ class ExprEncodingsTest
         exprSet->eval(rows, context, result);
 
         SCOPED_TRACE(text);
-        SCOPED_TRACE(fmt::format("[{} - {})", begin, end));
+        SCOPED_TRACE(std::format("[{} - {})", begin, end));
         assertEqualRows(expectedResult, result[0], rows);
 
         if (clearCache) {
@@ -418,7 +418,7 @@ class ExprEncodingsTest
         exprSet->eval(0, 1, false, rows, context, result);
 
         SCOPED_TRACE(text);
-        SCOPED_TRACE(fmt::format("[{} - {})", begin, end));
+        SCOPED_TRACE(std::format("[{} - {})", begin, end));
         assertEqualRows(expectedResult, result[0], rows);
 
         if (clearCache) {
@@ -455,7 +455,7 @@ class ExprEncodingsTest
       std::vector<VectorPtr> result(1);
 
       SCOPED_TRACE(text);
-      SCOPED_TRACE(fmt::format("[{} - {})", begin, end));
+      SCOPED_TRACE(std::format("[{} - {})", begin, end));
       ASSERT_THROW(exprs.eval(rows, context, result), VeloxException);
     }
 
@@ -467,7 +467,7 @@ class ExprEncodingsTest
       std::vector<VectorPtr> result(1);
 
       SCOPED_TRACE(text);
-      SCOPED_TRACE(fmt::format("[{} - {})", begin, end));
+      SCOPED_TRACE(std::format("[{} - {})", begin, end));
       ASSERT_THROW(
           exprs.eval(0, 1, false, rows, context, result), VeloxException);
     }

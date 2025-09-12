@@ -46,12 +46,12 @@ void AggregateGenerator::loadArgs(
         ->generateMain(state, syncLabel);
   }
   state.ensureOperand(update.args[0]);
-  state.generated() << fmt::format("  sync{}: ;\n", syncLabel);
+  state.generated() << std::format("  sync{}: ;\n", syncLabel);
 }
 
 void maybeEnterCheck(std::stringstream& out, int32_t ord) {
   if (FLAGS_hash_tb_check) {
-    out << fmt::format(
+    out << std::format(
         "  if (threadIdx.x == 0 && shared->nthBlock == 0) {{"
         "auto*dbgState = reinterpret_cast<DeviceAggregation*>(shared->states[{}]); atomicAdd(&dbgState->debugActiveBlockCounter, 1); }}\n",
         ord);
@@ -60,7 +60,7 @@ void maybeEnterCheck(std::stringstream& out, int32_t ord) {
 
 void maybeLeaveCheck(std::stringstream& out, int32_t ord) {
   if (FLAGS_hash_tb_check) {
-    out << fmt::format(
+    out << std::format(
         "  if (threadIdx.x == 0 && shared->nthBlock == shared->numRowsPerThread -1) {{ "
         "auto*dbgState = reinterpret_cast<DeviceAggregation*>(shared->states[{}]); atomicAdd(&dbgState->debugActiveBlockCounter, -1); }}\n",
         ord);
@@ -75,7 +75,7 @@ std::string makeAggregateRow(CompileState& state, const AggregateProbe& probe) {
       << std::endl;
   int32_t numNullable = probe.keys.size() + probe.updates.size();
   for (auto n = 0; n < numNullable; n += 32) {
-    out << fmt::format("  uint32_t nulls{};\n", n / 32);
+    out << std::format("  uint32_t nulls{};\n", n / 32);
   }
   makeKeyMembers(probe.keys, "key", out);
   for (auto i = 0; i < probe.updates.size(); ++i) {
@@ -172,7 +172,7 @@ void makeAggregateOps(
     out << "  uint64_t __device__ hash(int32_t /*i*/) const { return hashNumber; }\n";
     makeRowHash(state, probe.keys, true, probe.id);
     out << replaceAll(
-        aggregateOpsBoilerPlate, "$I$", fmt::format("{}", probe.id));
+        aggregateOpsBoilerPlate, "$I$", std::format("{}", probe.id));
   }
   out << "};\n\n";
 
@@ -251,26 +251,26 @@ void makeNonGroupedAggregation(
     const AggregateProbe& probe,
     int32_t syncLabel) {
   auto& out = state.generated();
-  out << fmt::format("  sync{}:\n", syncLabel);
+  out << std::format("  sync{}:\n", syncLabel);
   state.declareNamed("DeviceAggregation* state;");
   state.declareNamed("uint32_t accNulls;");
-  out << fmt::format(
+  out << std::format(
       "  state =\n"
       "    reinterpret_cast<DeviceAggregation*>(shared->states[{}]);\n",
       state.stateOrdinal(*probe.state));
-  state.declareNamed(fmt::format("HashRow{}* row;", probe.id));
+  state.declareNamed(std::format("HashRow{}* row;", probe.id));
   out << "  row = reinterpret_cast<HashRow" << probe.id
       << "*>(state->singleRow);\n";
   for (auto i = 0; i < probe.updates.size(); i += 32) {
     out << "  if (threadIdx.x == 0) {\n"
-        << fmt::format("  accNulls = row->nulls{};\n", i / 32) << "  }\n";
+        << std::format("  accNulls = row->nulls{};\n", i / 32) << "  }\n";
     std::vector<const AggregateUpdate*> deferred;
     int32_t currentAccNulls = -1;
     auto emitUpdates = [&](bool flush) {
       if (flush || deferred.size() > 4) {
         for (auto& update : deferred) {
           if (update->accumulatorIdx / 32 != currentAccNulls) {
-            out << fmt::format(
+            out << std::format(
                 "  accNulls = row->nulls{};\n", update->accumulatorIdx / 32);
             currentAccNulls = update->accumulatorIdx / 32;
           }
@@ -302,17 +302,17 @@ void makeAggregateProbe(
   auto& out = state.generated();
   state.declareNamed("uint64_t hash;");
   makeHash(state, probe.keys, true, "");
-  state.declareNamed(fmt::format("AggregateOps{} ops;", probe.id));
+  state.declareNamed(std::format("AggregateOps{} ops;", probe.id));
   out << "  ops = AggregateOps" << probe.id << "(hash, shared);\n";
   state.declareNamed("DeviceAggregation* state;");
   state.declareNamed("uint32_t keyNulls;");
-  out << fmt::format(
+  out << std::format(
       "  state =\n"
       "    reinterpret_cast<DeviceAggregation*>(shared->states[{}]);\n",
       stateOrd);
   state.declareNamed("GpuHashTable* table;");
   out << "  table = reinterpret_cast<GpuHashTable*>(state->table);\n";
-  out << fmt::format(" sync{}:\n", syncLabel);
+  out << std::format(" sync{}:\n", syncLabel);
   maybeEnterCheck(out, stateOrd);
   out << "  shared->status->errors[threadIdx.x] = laneStatus;\n";
   out << "  table->updatingProbe<HashRow" << probe.id
@@ -332,7 +332,7 @@ void makeAggregateProbe(
       << ");\n"
       // Must load 'state' and 'table' here because thread 0 might have
       // been inactive on entry and have 'table' uninited.
-      << fmt::format(
+      << std::format(
              "  state =\n"
              "    reinterpret_cast<DeviceAggregation*>(shared->states[{}]);\n",
              stateOrd)
@@ -364,7 +364,7 @@ void makeReadAggregation(
     // Case with no grouping.
     out << "  if (threadIdx.x != 0) { laneStatus = ErrorCode::kInactive; goto sync"
         << syncLabel << "; } else {\n"
-        << fmt::format(
+        << std::format(
                "  state =\n"
                "    reinterpret_cast<DeviceAggregation*>(shared->states[{}]);\n",
                stateOrdinal);
@@ -375,14 +375,14 @@ void makeReadAggregation(
         << "  }\n";
     return;
   }
-  out << fmt::format(
+  out << std::format(
       "  state =\n"
       "    reinterpret_cast<DeviceAggregation*>(shared->states[{}]);\n",
       stateOrdinal);
 
   state.declareNamed("int32_t rowIdx;");
   state.declareNamed("int32_t numRows;");
-  state.declareNamed(fmt::format("HashRow{}* readRow;", id));
+  state.declareNamed(std::format("HashRow{}* readRow;", id));
   out << "  rowIdx = blockBase + threadIdx.x + 1;\n"
          "  numRows = state->resultRowPointers[shared->streamIdx][0];\n"
          "  if (rowIdx <= numRows) {\n"
@@ -397,7 +397,7 @@ void makeReadAggregation(
   for (auto i = 0; i < read.probe->keys.size(); ++i) {
     out << extractColumn(
         "readRow",
-        fmt::format("key{}", i),
+        std::format("key{}", i),
         i,
         state.ordinal(*read.keys[i]),
         *read.keys[i]);

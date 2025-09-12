@@ -50,7 +50,7 @@ struct TpchConnectorSplit : public connector::ConnectorSplit {
 } // namespace facebook::velox::connector::tpch
 
 template <>
-struct fmt::formatter<facebook::velox::connector::tpch::TpchConnectorSplit>
+struct std::formatter<facebook::velox::connector::tpch::TpchConnectorSplit>
     : formatter<std::string> {
   auto format(
       facebook::velox::connector::tpch::TpchConnectorSplit s,
@@ -60,7 +60,7 @@ struct fmt::formatter<facebook::velox::connector::tpch::TpchConnectorSplit>
 };
 
 template <>
-struct fmt::formatter<
+struct std::formatter<
     std::shared_ptr<facebook::velox::connector::tpch::TpchConnectorSplit>>
     : formatter<std::string> {
   auto format(

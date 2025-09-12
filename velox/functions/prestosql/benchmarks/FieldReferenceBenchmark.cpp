@@ -28,7 +28,7 @@ using namespace facebook::velox::functions;
 std::vector<std::string> getColumnNames(int children) {
   std::vector<std::string> result;
   for (int i = 0; i < children; ++i) {
-    result.push_back(fmt::format("{}{}", 'c', i));
+    result.push_back(std::format("{}{}", 'c', i));
   }
   return result;
 }
@@ -59,7 +59,7 @@ int main(int argc, char** argv) {
   auto createSet = [&](bool withNulls, RowTypePtr& inputType) {
     benchmarkBuilder
         .addBenchmarkSet(
-            fmt::format("dereference_{}", withNulls ? "nulls" : "nullfree"),
+            std::format("dereference_{}", withNulls ? "nulls" : "nullfree"),
             inputType)
         .withFuzzerOptions(
             {.vectorSize = 1000, .nullRatio = withNulls ? 0.2 : 0})

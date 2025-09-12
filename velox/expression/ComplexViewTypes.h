@@ -1114,7 +1114,7 @@ class GenericView : public ViewWithComparison<GenericView> {
   typename VectorReader<ToType>::exec_in_t castTo() const {
     VELOX_DCHECK(
         CastTypeChecker<ToType>::check(type()),
-        fmt::format(
+        std::format(
             "castTo type is not compatible with type of vector, vector type is {}",
             type()->toString()));
 
@@ -1165,7 +1165,7 @@ class GenericView : public ViewWithComparison<GenericView> {
           VELOX_USER_CHECK(
               std::type_index(**castTypeInfo_) ==
                   std::type_index(*requestedTypeId),
-              fmt::format(
+              std::format(
                   "Not allowed to cast to the two types {} and {} within the same batch."
                   "Consider creating a new type set to allow it.",
                   typeid(B).name(),

@@ -93,7 +93,7 @@ TEST_F(TraceHistoryTest, multiThread) {
     ASSERT_EQ(result.entries[0].line, kStartLine + 3);
     ASSERT_EQ(result.entries[1].line, kStartLine + 4);
     ASSERT_STREQ(result.entries[0].label, "Test");
-    ASSERT_EQ(result.entries[1].label, fmt::format("Test {}", threadIndex));
+    ASSERT_EQ(result.entries[1].label, std::format("Test {}", threadIndex));
     for (auto& entry : result.entries) {
       ASSERT_LE(timeLow, entry.time);
       ASSERT_LE(entry.time, timeHigh);

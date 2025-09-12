@@ -257,7 +257,7 @@ class WaveBenchmark : public QueryBenchmarkBase {
         float passRatio = FLAGS_filter_pass_pct / 100.0;
         std::vector<std::string> scanFilters;
         for (auto i = 0; i < FLAGS_num_column_filters; ++i) {
-          scanFilters.push_back(fmt::format(
+          scanFilters.push_back(std::format(
               "c{} < {}", i, static_cast<int64_t>(specs_[i].mod * passRatio)));
         }
         auto builder =
@@ -266,7 +266,7 @@ class WaveBenchmark : public QueryBenchmarkBase {
         for (auto i = FLAGS_num_column_filters;
              i < FLAGS_num_column_filters + FLAGS_num_expr_filters;
              ++i) {
-          builder = builder.filter(fmt::format(
+          builder = builder.filter(std::format(
               "c{} + 1 < {}",
               i,
               static_cast<int64_t>(specs_[i].mod * passRatio)));
@@ -277,15 +277,15 @@ class WaveBenchmark : public QueryBenchmarkBase {
         std::vector<std::string> keys;
         for (auto i = 0; i < type_->size(); ++i) {
           if (i < FLAGS_num_keys) {
-            keyProjections.push_back(fmt::format(
+            keyProjections.push_back(std::format(
                 "(c{} / {}) % {} as c{}",
                 i,
                 specs_[i].roundUp,
                 FLAGS_key_mod,
                 i));
-            keys.push_back(fmt::format("c{}", i));
+            keys.push_back(std::format("c{}", i));
           } else {
-            keyProjections.push_back(fmt::format("c{}", i));
+            keyProjections.push_back(std::format("c{}", i));
           }
         }
         if (!keys.empty()) {
@@ -295,24 +295,24 @@ class WaveBenchmark : public QueryBenchmarkBase {
         if (FLAGS_num_arithmetic > 0) {
           std::vector<std::string> projects;
           for (auto c = 0; c < type_->size(); ++c) {
-            std::string expr = fmt::format("c{} ", c);
+            std::string expr = std::format("c{} ", c);
             for (auto i = 0; i < FLAGS_num_arithmetic; ++i) {
-              expr += fmt::format(" + c{}", c);
+              expr += std::format(" + c{}", c);
             }
-            expr += fmt::format(" as f{}", c);
+            expr += std::format(" as f{}", c);
             projects.push_back(std::move(expr));
-            aggInputs.push_back(fmt::format("f{}", c));
+            aggInputs.push_back(std::format("f{}", c));
           }
           builder = builder.project(std::move(projects));
         } else {
           for (auto i = 0; i < type_->size(); ++i) {
-            aggInputs.push_back(fmt::format("c{}", i));
+            aggInputs.push_back(std::format("c{}", i));
           }
         }
 
         std::vector<std::string> aggs;
         for (auto i = FLAGS_num_keys; i < aggInputs.size(); ++i) {
-          aggs.push_back(fmt::format("sum({})", aggInputs[i]));
+          aggs.push_back(std::format("sum({})", aggInputs[i]));
         }
 
         if (!keys.empty() && !FLAGS_wave) {
@@ -329,7 +329,7 @@ class WaveBenchmark : public QueryBenchmarkBase {
           }
           auto aggType = builder.planNode()->outputType();
           auto sumCounts =
-              fmt::format("sum({})", aggType->nameOf(aggType->size() - 1));
+              std::format("sum({})", aggType->nameOf(aggType->size() - 1));
           builder.singleAggregation({}, {"sum(1)", sumCounts});
         }
         plan.plan = builder.planNode();
@@ -413,12 +413,12 @@ class WaveBenchmark : public QueryBenchmarkBase {
         }
       }
       runStats.rawInputBytes = rawInputBytes;
-      out << fmt::format(
+      out << std::format(
                  "Execution time: {}",
                  succinctMillis(
                      stats.executionEndTimeMs - stats.executionStartTimeMs))
           << std::endl;
-      out << fmt::format(
+      out << std::format(
                  "Splits total: {}, finished: {}",
                  stats.numTotalSplits,
                  stats.numFinishedSplits)
@@ -433,7 +433,7 @@ class WaveBenchmark : public QueryBenchmarkBase {
     std::vector<std::string> names;
     std::vector<TypePtr> types;
     for (auto i = 0; i < FLAGS_num_columns; ++i) {
-      names.push_back(fmt::format("c{}", i));
+      names.push_back(std::format("c{}", i));
       types.push_back(BIGINT());
     }
     return ROW(std::move(names), std::move(types));

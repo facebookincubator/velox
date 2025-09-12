@@ -261,7 +261,7 @@ class EncodingKey {
   }
 
   std::string toString() const {
-    return fmt::format("[node={}, sequence={}]", node_, sequence_);
+    return std::format("[node={}, sequence={}]", node_, sequence_);
   }
 
   DwrfStreamIdentifier forKind(const proto::Stream_Kind kind) const;
@@ -392,7 +392,7 @@ class DwrfStreamIdentifier : public dwio::common::StreamIdentifier {
   }
 
   std::string toString() const override {
-    return fmt::format(
+    return std::format(
         "[id={}, node={}, sequence={}, column={}, kind={}]",
         id_,
         encodingKey_.node(),
@@ -462,8 +462,8 @@ constexpr int32_t RLE_MAX_LITERAL_SIZE = 128;
 } // namespace facebook::velox::dwrf
 
 template <>
-struct fmt::formatter<facebook::velox::dwrf::StreamKind>
-    : fmt::formatter<std::string> {
+struct std::formatter<facebook::velox::dwrf::StreamKind>
+    : std::formatter<std::string> {
   auto format(
       const facebook::velox::dwrf::StreamKind& kind,
       format_context& ctx) const {

@@ -88,7 +88,7 @@ class LocalExchangeQueue {
         partition_{partition} {}
 
   std::string toString() const {
-    return fmt::format("LocalExchangeQueue({})", partition_);
+    return std::format("LocalExchangeQueue({})", partition_);
   }
 
   void addProducer();
@@ -176,7 +176,7 @@ class LocalExchange : public SourceOperator {
       int partition);
 
   std::string toString() const override {
-    return fmt::format("LocalExchange({})", partition_);
+    return std::format("LocalExchange({})", partition_);
   }
 
   bool startDrain() override {
@@ -211,7 +211,7 @@ class LocalPartition : public Operator {
       bool eagerFlush);
 
   std::string toString() const override {
-    return fmt::format("LocalPartition({})", numPartitions_);
+    return std::format("LocalPartition({})", numPartitions_);
   }
 
   void addInput(RowVectorPtr input) override;

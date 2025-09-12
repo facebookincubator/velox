@@ -66,7 +66,7 @@ static_assert(std::is_trivial_v<IdMap<StringView>>);
 template <typename T, typename H>
 void IdMap<T, H>::init(int capacity, T* values, int32_t* ids) {
   if ((capacity & (capacity - 1)) != 0) {
-    waveError(fmt::format("Capacity must be power of two, got {}", capacity));
+    waveError(std::format("Capacity must be power of two, got {}", capacity));
   }
   if ((uintptr_t)values % sizeof(T) != 0) {
     waveError("Values buffer must be aligned");

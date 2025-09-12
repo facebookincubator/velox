@@ -24,11 +24,11 @@ using namespace facebook::velox::exec::test;
 namespace {
 
 std::string min(const std::string& column) {
-  return fmt::format("min({})", column);
+  return std::format("min({})", column);
 }
 
 std::string max(const std::string& column) {
-  return fmt::format("max({})", column);
+  return std::format("max({})", column);
 }
 
 class MinMaxTest : public functions::aggregate::test::AggregationTestBase {
@@ -62,7 +62,7 @@ class MinMaxTest : public functions::aggregate::test::AggregationTestBase {
 
     // Global aggregation.
     testAggregations(
-        vectors, {}, {agg(c1)}, fmt::format("SELECT {} FROM tmp", agg(c1)));
+        vectors, {}, {agg(c1)}, std::format("SELECT {} FROM tmp", agg(c1)));
 
     // Group by aggregation.
     testAggregations(
@@ -71,12 +71,12 @@ class MinMaxTest : public functions::aggregate::test::AggregationTestBase {
         },
         {"p0"},
         {agg(c1)},
-        fmt::format("SELECT c0 % 10, {} FROM tmp GROUP BY 1", agg(c1)));
+        std::format("SELECT c0 % 10, {} FROM tmp GROUP BY 1", agg(c1)));
 
     // Masked aggregations.
     auto maskedAgg = agg(c1) + " filter (where mask)";
     testAggregations(
-        vectors, {}, {maskedAgg}, fmt::format("SELECT {} FROM tmp", maskedAgg));
+        vectors, {}, {maskedAgg}, std::format("SELECT {} FROM tmp", maskedAgg));
 
     testAggregations(
         [&](auto& builder) {
@@ -84,7 +84,7 @@ class MinMaxTest : public functions::aggregate::test::AggregationTestBase {
         },
         {"p0"},
         {maskedAgg},
-        fmt::format("SELECT c0 % 10, {} FROM tmp GROUP BY 1", maskedAgg));
+        std::format("SELECT c0 % 10, {} FROM tmp GROUP BY 1", maskedAgg));
 
     // Encodings: use filter to wrap aggregation inputs in a dictionary.
     testAggregations(
@@ -95,7 +95,7 @@ class MinMaxTest : public functions::aggregate::test::AggregationTestBase {
         },
         {"p0"},
         {agg(c1)},
-        fmt::format(
+        std::format(
             "SELECT c0 % 11, {} FROM tmp WHERE c0 % 2 = 0 GROUP BY 1",
             agg(c1)));
 
@@ -103,7 +103,7 @@ class MinMaxTest : public functions::aggregate::test::AggregationTestBase {
         [&](auto& builder) { builder.values(vectors).filter("c0 % 2 = 0"); },
         {},
         {agg(c1)},
-        fmt::format("SELECT {} FROM tmp WHERE c0 % 2 = 0", agg(c1)));
+        std::format("SELECT {} FROM tmp WHERE c0 % 2 = 0", agg(c1)));
   }
 
   template <typename T>

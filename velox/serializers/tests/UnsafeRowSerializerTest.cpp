@@ -421,7 +421,7 @@ TEST_P(UnsafeRowSerializerTest, types) {
   auto seed = folly::Random::rand32();
 
   LOG(ERROR) << "Seed: " << seed;
-  SCOPED_TRACE(fmt::format("seed: {}", seed));
+  SCOPED_TRACE(std::format("seed: {}", seed));
   VectorFuzzer fuzzer(opts, pool_.get(), seed);
 
   auto data = fuzzer.fuzzInputRow(rowType);

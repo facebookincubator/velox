@@ -1110,7 +1110,7 @@ class StlAllocator {
 } // namespace facebook::velox::memory
 
 template <>
-struct fmt::formatter<facebook::velox::memory::MemoryPool::Kind>
+struct std::formatter<facebook::velox::memory::MemoryPool::Kind>
     : formatter<std::string> {
   auto format(facebook::velox::memory::MemoryPool::Kind s, format_context& ctx)
       const {

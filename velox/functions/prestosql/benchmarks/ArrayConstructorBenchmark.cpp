@@ -58,7 +58,7 @@ int main(int argc, char** argv) {
 
     benchmarkBuilder
         .addBenchmarkSet(
-            fmt::format(
+            std::format(
                 "array_constructor_{}_{}{}",
                 mapTypeKindToName(type->kind()),
                 withNulls ? "nulls" : "nullfree",

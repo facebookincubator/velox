@@ -37,7 +37,7 @@ std::string formatDateFilter(
   auto suffix = isDwrf ? "" : "::DATE";
 
   if (!lowerBound.empty() && !upperBound.empty()) {
-    return fmt::format(
+    return std::format(
         "{} between {}{} and {}{}",
         stringDate,
         lowerBound,
@@ -45,9 +45,9 @@ std::string formatDateFilter(
         upperBound,
         suffix);
   } else if (!lowerBound.empty()) {
-    return fmt::format("{} > {}{}", stringDate, lowerBound, suffix);
+    return std::format("{} > {}{}", stringDate, lowerBound, suffix);
   } else if (!upperBound.empty()) {
-    return fmt::format("{} < {}{}", stringDate, upperBound, suffix);
+    return std::format("{} < {}{}", stringDate, upperBound, suffix);
   }
 
   VELOX_FAIL(
@@ -2486,11 +2486,11 @@ TpchPlan TpchQueryBuilder::getIoMeterPlan(int columnPct) const {
   for (auto i = 0; i < selectedRowType->size(); ++i) {
     if (selectedRowType->childAt(i)->kind() == TypeKind::VARCHAR) {
       projectExprs.push_back(
-          fmt::format("length({}) as l{}", selectedRowType->nameOf(i), i));
-      aggregates.push_back(fmt::format("max(l{})", i));
+          std::format("length({}) as l{}", selectedRowType->nameOf(i), i));
+      aggregates.push_back(std::format("max(l{})", i));
     } else {
       projectExprs.push_back(selectedRowType->nameOf(i));
-      aggregates.push_back(fmt::format("max({})", selectedRowType->nameOf(i)));
+      aggregates.push_back(std::format("max({})", selectedRowType->nameOf(i)));
     }
   }
 

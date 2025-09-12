@@ -273,28 +273,28 @@ class PreprocBenchmark : public functions::test::FunctionBenchmarkBase {
     switch (config) {
       case RunConfig::Basic:
         if (withNulls) {
-          return fmt::format(
+          return std::format(
               "clamp(0.05::REAL * (20.5::REAL + if(c0 is Null , cast (null as real), if(floor(c0) = {}::REAL, 1::REAL, 0::REAL))), (-10.0)::REAL, 10.0::REAL)",
               n);
         } else {
-          return fmt::format(
+          return std::format(
               "clamp(0.05::REAL * (20.5::REAL + if(floor(c0) = {}::REAL, 1::REAL, 0::REAL)), (-10.0)::REAL, 10.0::REAL)",
               n);
         }
       case RunConfig::Simple:
-        return fmt::format(
+        return std::format(
             "clamp(0.05::REAL * (20.5::REAL + if(simple_eq(floor(c0) ,{}::REAL), 1::REAL, 0::REAL)), (-10.0)::REAL, 10.0::REAL)",
             n);
       case RunConfig::OneHot:
-        return fmt::format(
+        return std::format(
             "clamp(0.05::REAL * (20.5::REAL + one_hot(c0, {}::REAL)), (-10.0)::REAL, 10.0::REAL)",
             n);
       case RunConfig::VectorAndOneHot:
-        return fmt::format(
+        return std::format(
             "clamp(mult_v(0.05::REAL, add_v(20.5::REAL, one_hot(c0, {}::REAL))), (-10.0)::REAL, 10.0::REAL)",
             n);
       case RunConfig::AllFused:
-        return fmt::format("all_fused(c0 , {}::REAL)", n);
+        return std::format("all_fused(c0 , {}::REAL)", n);
     }
     return "";
   }

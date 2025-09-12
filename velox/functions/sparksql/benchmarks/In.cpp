@@ -53,7 +53,7 @@ int in_int(int iters, int inListSize, const std::string& functionName) {
     if (i > 0) {
       exprStr += ", ";
     }
-    exprStr += fmt::format(
+    exprStr += std::format(
         "{}", simpleVector->valueAt(folly::Random::rand32() % opts.vectorSize));
   }
   exprStr += "))";
@@ -91,7 +91,7 @@ int in_str(int iters, int inListSize, const std::string& functionName) {
     if (i > 0) {
       exprStr += ", ";
     }
-    exprStr += fmt::format(
+    exprStr += std::format(
         "'{}'",
         simpleVector->valueAt(folly::Random::rand32() % opts.vectorSize));
   }

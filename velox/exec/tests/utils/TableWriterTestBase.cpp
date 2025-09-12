@@ -70,7 +70,7 @@ bool TableWriterTestBase::TestParam::scaleWriter() const {
 }
 
 std::string TableWriterTestBase::TestParam::toString() const {
-  return fmt::format(
+  return std::format(
       "FileFormat_{}_TestMode_{}_commitStrategy_{}_bucketKind_{}_bucketSort_{}_multiDrivers_{}_compression_{}_scaleWriter_{}",
       dwio::common::toString((fileFormat())),
       testModeString(testMode()),
@@ -653,7 +653,7 @@ PlanNodePtr TableWriterTestBase::createInsertPlanWithSingleWriter(
     insertPlan.project({TableWriteTraits::rowCountColumnName()})
         .singleAggregation(
             {},
-            {fmt::format("sum({})", TableWriteTraits::rowCountColumnName())});
+            {std::format("sum({})", TableWriteTraits::rowCountColumnName())});
   }
   return insertPlan.planNode();
 }
@@ -706,7 +706,7 @@ PlanNodePtr TableWriterTestBase::createInsertPlanForBucketTable(
     insertPlan.project({TableWriteTraits::rowCountColumnName()})
         .singleAggregation(
             {},
-            {fmt::format("sum({})", TableWriteTraits::rowCountColumnName())});
+            {std::format("sum({})", TableWriteTraits::rowCountColumnName())});
   }
   return insertPlan.planNode();
 }
@@ -766,7 +766,7 @@ PlanNodePtr TableWriterTestBase::createInsertPlanWithForNonBucketedTable(
     insertPlan.project({TableWriteTraits::rowCountColumnName()})
         .singleAggregation(
             {},
-            {fmt::format("sum({})", TableWriteTraits::rowCountColumnName())});
+            {std::format("sum({})", TableWriteTraits::rowCountColumnName())});
   }
   return insertPlan.planNode();
 }
@@ -816,7 +816,7 @@ void TableWriterTestBase::verifyUnbucketedFilePath(
   if (commitStrategy_ == CommitStrategy::kNoCommit) {
     ASSERT_TRUE(RE2::FullMatch(
         filePath.filename().string(),
-        fmt::format(
+        std::format(
             "test_cursor.+_[0-{}]_{}_.+",
             numTableWriterCount_ - 1,
             tableWriteNodeId_)))
@@ -824,7 +824,7 @@ void TableWriterTestBase::verifyUnbucketedFilePath(
   } else {
     ASSERT_TRUE(RE2::FullMatch(
         filePath.filename().string(),
-        fmt::format(
+        std::format(
             ".tmp.velox.test_cursor.+_[0-{}]_{}_.+",
             numTableWriterCount_ - 1,
             tableWriteNodeId_)))
@@ -880,7 +880,7 @@ void TableWriterTestBase::verifyPartitionedDirPath(
   std::string regex(targetDir);
   bool matched{false};
   for (int i = 0; i < partitionedBy_.size(); ++i) {
-    regex = fmt::format("{}/{}=.+", regex, partitionedBy_[i]);
+    regex = std::format("{}/{}=.+", regex, partitionedBy_[i]);
     if (RE2::FullMatch(dirPath.string(), regex)) {
       matched = true;
       break;
@@ -919,7 +919,7 @@ void TableWriterTestBase::verifyPartitionedFilesData(
   HiveConnectorTestBase::assertQuery(
       PlanBuilder().tableScan(rowType_).planNode(),
       {makeHiveConnectorSplits(filePaths)},
-      fmt::format(
+      std::format(
           "SELECT c2, c3, c4, c5 FROM tmp WHERE {}",
           partitionNameToPredicate(getPartitionDirNames(dirPath))));
 }

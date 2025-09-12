@@ -283,7 +283,7 @@ TEST_F(PrefixSortTest, fuzz) {
 
   auto runFuzzTest = [&](double nullRatio) {
     for (const auto& type : keyTypes) {
-      SCOPED_TRACE(fmt::format("{}", type->toString()));
+      SCOPED_TRACE(std::format("{}", type->toString()));
       VectorFuzzer fuzzer(
           {.vectorSize = 10'240, .nullRatio = nullRatio}, pool());
       RowVectorPtr data = fuzzer.fuzzRow(ROW({type}));
@@ -318,7 +318,7 @@ TEST_F(PrefixSortTest, fuzzMulti) {
       auto type1 = fuzzer.randType(keyTypes, 0);
       auto type2 = fuzzer.randType(keyTypes, 0);
 
-      SCOPED_TRACE(fmt::format("{}, {}", type1->toString(), type2->toString()));
+      SCOPED_TRACE(std::format("{}, {}", type1->toString(), type2->toString()));
       auto data = fuzzer.fuzzRow(ROW({type1, type2, VARCHAR()}));
 
       testPrefixSort({kAsc, kAsc}, data);
@@ -388,11 +388,11 @@ TEST_F(PrefixSortTest, optimizeSortKeysOrder) {
     std::vector<column_index_t> expectedSortedKeyChannels;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "inputType {}, keyChannels {}, expectedSortedKeyChannels {}",
           inputType->toString(),
-          fmt::join(keyChannels, ":"),
-          fmt::join(expectedSortedKeyChannels, ":"));
+          std::join(keyChannels, ":"),
+          std::join(expectedSortedKeyChannels, ":"));
     }
   } testSettings[] = {
       {ROW({BIGINT(), BIGINT()}), {0, 1}, {0, 1}},

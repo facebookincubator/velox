@@ -47,7 +47,7 @@ gcsFileSystemGenerator() {
         std::string bucket;
         std::string object;
         setBucketAndKeyFromGcsPath(file, bucket, object);
-        auto cacheKey = fmt::format(
+        auto cacheKey = std::format(
             "{}-{}",
             properties->get<std::string>(
                 connector::hive::HiveConfig::kGcsEndpoint,

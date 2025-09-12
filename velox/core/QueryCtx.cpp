@@ -70,7 +70,7 @@ QueryCtx::QueryCtx(
   // We attach a monotonically increasing sequence number to ensure the pool
   // name is unique.
   static std::atomic<int64_t> seqNum{0};
-  return fmt::format("query.{}.{}", queryId.c_str(), seqNum++);
+  return std::format("query.{}.{}", queryId.c_str(), seqNum++);
 }
 
 void QueryCtx::maybeSetReclaimer() {
@@ -86,7 +86,7 @@ void QueryCtx::updateSpilledBytesAndCheckLimit(uint64_t bytes) {
   const auto numSpilledBytes = numSpilledBytes_.fetch_add(bytes) + bytes;
   if (queryConfig_.maxSpillBytes() > 0 &&
       numSpilledBytes > queryConfig_.maxSpillBytes()) {
-    VELOX_SPILL_LIMIT_EXCEEDED(fmt::format(
+    VELOX_SPILL_LIMIT_EXCEEDED(std::format(
         "Query exceeded per-query local spill limit of {}",
         succinctBytes(queryConfig_.maxSpillBytes())));
   }
@@ -95,7 +95,7 @@ void QueryCtx::updateSpilledBytesAndCheckLimit(uint64_t bytes) {
 void QueryCtx::updateTracedBytesAndCheckLimit(uint64_t bytes) {
   if (numTracedBytes_.fetch_add(bytes) + bytes >=
       queryConfig_.queryTraceMaxBytes()) {
-    VELOX_TRACE_LIMIT_EXCEEDED(fmt::format(
+    VELOX_TRACE_LIMIT_EXCEEDED(std::format(
         "Query exceeded per-query local trace limit of {}",
         succinctBytes(queryConfig_.queryTraceMaxBytes())));
   }

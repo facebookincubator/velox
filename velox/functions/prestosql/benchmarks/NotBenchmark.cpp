@@ -51,7 +51,7 @@ class NotBenchmark : public functions::test::FunctionBenchmarkBase {
         [](auto row) { return row % 2 == 1; },
         VectorMaker::nullEvery(5))});
     auto exprSet = compileExpression(
-        fmt::format("{}(c0)", functionName), evenFalse->type());
+        std::format("{}(c0)", functionName), evenFalse->type());
     suspender.dismiss();
 
     doRun(exprSet, evenFalse);

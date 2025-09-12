@@ -412,7 +412,7 @@ std::vector<std::string> WriterFuzzer::generateColumns(
       boost::random::uniform_int_distribution<uint32_t>(1, maxNumColumns)(rng_);
   std::vector<std::string> columns;
   for (auto i = offset; i < numColumns; ++i) {
-    columns.push_back(fmt::format("{}{}", prefix, i));
+    columns.push_back(std::format("{}{}", prefix, i));
 
     // Pick random, possibly complex, type.
     types.push_back(vectorFuzzer_.randType(dataTypes, maxDepth));
@@ -744,8 +744,8 @@ void WriterFuzzer::comparePartitionAndBucket(
     VELOX_CHECK(
         partitionNames == referencePartitionNames,
         "Velox and reference DB output partitions don't match. Velox: [{}], Presto: [{}]",
-        fmt::join(partitionNames, ", "),
-        fmt::join(referencePartitionNames, ", "));
+        std::join(partitionNames, ", "),
+        std::join(referencePartitionNames, ", "));
   } else if (partitionNameAndFileCount != referencedPartitionNameAndFileCount) {
     std::vector<std::string> partitionNameAndFileCountStrs;
     std::vector<std::string> referencedPartitionNameAndFileCountStrs;
@@ -756,17 +756,17 @@ void WriterFuzzer::comparePartitionAndBucket(
 
     for (const auto& p : partitionNameAndFileCount) {
       partitionNameAndFileCountStrs.push_back(
-          fmt::format("'{}': {}", p.first, p.second));
+          std::format("'{}': {}", p.first, p.second));
     }
     for (const auto& p : referencedPartitionNameAndFileCount) {
       referencedPartitionNameAndFileCountStrs.push_back(
-          fmt::format("'{}': {}", p.first, p.second));
+          std::format("'{}': {}", p.first, p.second));
     }
 
     VELOX_FAIL(
         "Velox and reference DB output partition and bucket don't match. Velox: {{{}}}, Presto: {{{}}}",
-        fmt::join(partitionNameAndFileCountStrs, ", "),
-        fmt::join(referencedPartitionNameAndFileCountStrs, ", "));
+        std::join(partitionNameAndFileCountStrs, ", "),
+        std::join(referencedPartitionNameAndFileCountStrs, ", "));
   }
 }
 

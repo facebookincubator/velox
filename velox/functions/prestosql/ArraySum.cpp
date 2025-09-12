@@ -287,7 +287,7 @@ std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
   for (const auto& [argType, returnType] : typePairs) {
     signatures.emplace_back(exec::FunctionSignatureBuilder()
                                 .returnType(returnType)
-                                .argumentType(fmt::format("array({})", argType))
+                                .argumentType(std::format("array({})", argType))
                                 .build());
   }
   return signatures;

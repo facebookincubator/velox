@@ -306,7 +306,7 @@ struct AbstractInstruction {
   OpCode opCode;
 
   virtual std::string toString() const {
-    return fmt::format("OpCode {}", static_cast<int32_t>(opCode));
+    return std::format("OpCode {}", static_cast<int32_t>(opCode));
   }
 
   int32_t serial{-1};

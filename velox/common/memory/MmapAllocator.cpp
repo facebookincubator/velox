@@ -67,7 +67,7 @@ bool MmapAllocator::allocateNonContiguousWithoutRetry(
 
   if (numAllocated_ + sizeMix.totalPages > capacity_ ||
       testingHasInjectedFailure(InjectedFailure::kCap)) {
-    const std::string errorMsg = fmt::format(
+    const std::string errorMsg = std::format(
         "Exceeded memory allocator limit when allocating {} pages with "
         "capacity of {} pages",
         sizeMix.totalPages,
@@ -78,7 +78,7 @@ bool MmapAllocator::allocateNonContiguousWithoutRetry(
   }
   if (numAllocated_.fetch_add(sizeMix.totalPages) + sizeMix.totalPages >
       capacity_) {
-    const std::string errorMsg = fmt::format(
+    const std::string errorMsg = std::format(
         "Exceeding memory allocator limit when allocating {} pages with "
         "capacity of {} pages",
         sizeMix.totalPages,
@@ -110,7 +110,7 @@ bool MmapAllocator::allocateNonContiguousWithoutRetry(
     if (!success) {
       // This does not normally happen since any size class can accommodate
       // all the capacity. 'allocatedPages_' must be out of sync.
-      const std::string errorMsg = fmt::format(
+      const std::string errorMsg = std::format(
           "Failed allocation in size class {} for {} pages",
           i,
           sizeMix.sizeCounts[i]);
@@ -130,7 +130,7 @@ bool MmapAllocator::allocateNonContiguousWithoutRetry(
     return true;
   }
 
-  const std::string errorMsg = fmt::format(
+  const std::string errorMsg = std::format(
       "Could not advise away enough for {} pages for total allocation "
       "of {} pages",
       newMapsNeeded,
@@ -290,7 +290,7 @@ bool MmapAllocator::allocateContiguousImpl(
   if (newPages > 0 &&
       (numAllocated > capacity_ ||
        testingHasInjectedFailure(InjectedFailure::kCap))) {
-    const std::string errorMsg = fmt::format(
+    const std::string errorMsg = std::format(
         "Exceeded memory allocator limit when allocating {} new pages for "
         "total allocation of {} pages, the memory allocator capacity is"
         " {} pages, the allocated pages is {}",
@@ -308,7 +308,7 @@ bool MmapAllocator::allocateContiguousImpl(
   const int64_t numToMap = numPages - numCollateralUnmap;
   if (numToMap > 0) {
     if (!ensureEnoughMappedPages(numToMap)) {
-      const std::string errorMsg = fmt::format(
+      const std::string errorMsg = std::format(
           "Could not advise away enough for {} pages for total allocation "
           "of {} pages",
           numToMap,
@@ -341,7 +341,7 @@ bool MmapAllocator::allocateContiguousImpl(
     }
   }
   if (data == nullptr || data == MAP_FAILED) {
-    const std::string errorMsg = fmt::format(
+    const std::string errorMsg = std::format(
         "Mmap failed with {} pages use MmapArena {}, errno {}, Mmap Allocator: {}",
         numPages,
         (useMmapArena_ ? "true" : "false"),
@@ -393,7 +393,7 @@ bool MmapAllocator::growContiguousWithoutRetry(
   auto numAllocated = numAllocated_.fetch_add(increment) + increment;
   if (numAllocated > capacity_ ||
       testingHasInjectedFailure(InjectedFailure::kCap)) {
-    const std::string errorMsg = fmt::format(
+    const std::string errorMsg = std::format(
         "Exceeded memory allocator limit when allocating {} new pages for "
         "total allocation of {} pages, the memory allocator capacity is"
         " {} pages, the allocated pages is {}",
@@ -410,7 +410,7 @@ bool MmapAllocator::growContiguousWithoutRetry(
   // Check if need to advise away
   if (testingHasInjectedFailure(InjectedFailure::kMmap) ||
       !ensureEnoughMappedPages(increment)) {
-    const std::string errorMsg = fmt::format(
+    const std::string errorMsg = std::format(
         "Could not advise away enough for {} pages for growing allocation "
         "of {} pages",
         increment,

@@ -43,14 +43,14 @@ class RegexFunctionsTest : public test::SparkFunctionBaseTest {
   std::optional<bool> rlike(
       std::optional<std::string> str,
       std::string pattern) {
-    return evaluateOnce<bool>(fmt::format("rlike(c0, '{}')", pattern), str);
+    return evaluateOnce<bool>(std::format("rlike(c0, '{}')", pattern), str);
   }
 
   std::optional<std::string> regexp_extract(
       std::optional<std::string> str,
       std::string pattern) {
     return evaluateOnce<std::string>(
-        fmt::format("regexp_extract(c0, '{}')", pattern), str);
+        std::format("regexp_extract(c0, '{}')", pattern), str);
   }
 
   std::string testRegexpReplace(
@@ -61,11 +61,11 @@ class RegexFunctionsTest : public test::SparkFunctionBaseTest {
     auto result = [&] {
       if (!position) {
         return evaluateOnce<std::string>(
-            fmt::format("regexp_replace(c0, '{}', '{}')", pattern, replace),
+            std::format("regexp_replace(c0, '{}', '{}')", pattern, replace),
             input);
       } else {
         return evaluateOnce<std::string>(
-            fmt::format(
+            std::format(
                 "regexp_replace(c0, '{}', '{}', {})",
                 pattern,
                 replace,
@@ -132,12 +132,12 @@ class RegexFunctionsTest : public test::SparkFunctionBaseTest {
       auto positionIntVector = makeFlatVector<int32_t>(*position);
 
       result = evaluate<SimpleVector<StringView>>(
-          fmt::format("regexp_replace(c0, '{}', c1, c2)", pattern),
+          std::format("regexp_replace(c0, '{}', c1, c2)", pattern),
           makeRowVector(
               {inputStringVector, replaceStringVector, positionIntVector}));
     } else {
       result = evaluate<SimpleVector<StringView>>(
-          fmt::format("regexp_replace(c0, '{}', c1)", pattern),
+          std::format("regexp_replace(c0, '{}', c1)", pattern),
           makeRowVector({inputStringVector, replaceStringVector}));
     }
     return result;

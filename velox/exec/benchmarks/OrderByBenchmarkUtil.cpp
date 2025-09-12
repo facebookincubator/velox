@@ -42,7 +42,7 @@ void addBenchmark(
     const OrderByBenchmarkFunction& benchmarkFunc) {
   for (auto batchSize : batchSizes) {
     for (auto i = 0; i < rowTypes.size(); ++i) {
-      const auto benchmarkName = fmt::format(
+      const auto benchmarkName = std::format(
           "{}_{}_{}_{}k", prefix, numKeys[i], keyName, batchSize / 1000.0);
       benchmarkFunc(
           benchmarkName, batchSize, rowTypes[i], iterations, numKeys[i]);

@@ -23,7 +23,7 @@ BigintEnumType::BigintEnumType(const LongEnumParameter& parameters)
     : EnumTypeBase<int64_t, LongEnumParameter, BigintType>(parameters) {}
 
 std::string BigintEnumType::toString() const {
-  return fmt::format("{}:BigintEnum({})", name_, flippedMapToString());
+  return std::format("{}:BigintEnum({})", name_, flippedMapToString());
 }
 
 BigintEnumTypePtr BigintEnumType::get(const LongEnumParameter& parameter) {

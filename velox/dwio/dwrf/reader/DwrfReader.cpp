@@ -286,7 +286,7 @@ DwrfRowReader::DwrfRowReader(
 
   // Validate the requested type is compatible with what's in the file
   std::function<std::string()> createExceptionContext = [&]() {
-    return fmt::format(
+    return std::format(
         "The schema loaded in the reader does not match the schema in the file footer."
         "Input Name: {},\n"
         "File Footer Schema (without partition columns): {},\n"

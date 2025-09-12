@@ -493,7 +493,7 @@ class ScaleWriterLocalPartitionTest : public HiveConnectorTestBase {
     std::vector<std::string> orderByKeys;
     orderByKeys.reserve(rowType_->size());
     for (const auto& name : rowType_->names()) {
-      orderByKeys.push_back(fmt::format("{} ASC NULLS FIRST", name));
+      orderByKeys.push_back(std::format("{} ASC NULLS FIRST", name));
     }
     AssertQueryBuilder queryBuilder(PlanBuilder()
                                         .values(inputVectors)
@@ -589,7 +589,7 @@ TEST_F(ScaleWriterLocalPartitionTest, unpartitionBasic) {
     bool expectedRebalance;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "numProducers {}, numConsumers {}, rebalanceProcessBytesThreshold {}, scaleWriterRebalanceMaxMemoryUsageRatio {}, holdBufferBytes {}, producerBufferedMemoryRatio {}, consumerBufferedMemoryRatio {}, expectedRebalance {}",
           numProducers,
           numConsumers,
@@ -714,7 +714,7 @@ TEST_P(ScaleWriterLocalPartitionTestParametrized, unpartitionFuzzer) {
   const uint32_t maxExchanegBufferSize = 2 << 20;
 
   for (bool fastConsumer : {false, true}) {
-    SCOPED_TRACE(fmt::format("fastConsumer: {}", fastConsumer));
+    SCOPED_TRACE(std::format("fastConsumer: {}", fastConsumer));
     Operator::unregisterAllOperators();
 
     auto testController = std::make_shared<TestExchangeController>(
@@ -792,7 +792,7 @@ TEST_F(ScaleWriterLocalPartitionTest, partitionBasic) {
     bool expectedRebalance;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "numProducers {}, numConsumers {}, numPartitionsPerWriter {}, rebalanceProcessBytesThreshold {}, scaleWriterRebalanceMaxMemoryUsageRatio {}, holdBufferBytes {}, partitionKeys {}, producerBufferedMemoryRatio {}, consumerBufferedMemoryRatio {}, expectedRebalance {}",
           numProducers,
           numConsumers,
@@ -945,7 +945,7 @@ TEST_P(ScaleWriterLocalPartitionTestParametrized, partitionFuzzer) {
   const uint32_t maxExchanegBufferSize = 2 << 20;
 
   for (bool fastConsumer : {false, true}) {
-    SCOPED_TRACE(fmt::format("fastConsumer: {}", fastConsumer));
+    SCOPED_TRACE(std::format("fastConsumer: {}", fastConsumer));
     Operator::unregisterAllOperators();
 
     auto testController = std::make_shared<TestExchangeController>(

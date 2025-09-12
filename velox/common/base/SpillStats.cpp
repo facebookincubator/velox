@@ -146,7 +146,7 @@ void SpillStats::reset() {
 }
 
 std::string SpillStats::toString() const {
-  return fmt::format(
+  return std::format(
       "spillRuns[{}] spilledInputBytes[{}] spilledBytes[{}] spilledRows[{}] "
       "spilledPartitions[{}] spilledFiles[{}] spillFillTimeNanos[{}] "
       "spillSortTimeNanos[{}] spillExtractVectorTime[{}] spillSerializationTimeNanos[{}] spillWrites[{}] "

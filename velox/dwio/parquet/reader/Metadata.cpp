@@ -356,7 +356,7 @@ std::string FileMetaDataPtr::keyValueMetadataValue(
       return thriftFileMetaDataPtr(ptr_)->key_value_metadata[i].value;
     }
   }
-  VELOX_FAIL(fmt::format("Input key {} is not in the key value metadata", key));
+  VELOX_FAIL(std::format("Input key {} is not in the key value metadata", key));
 }
 
 std::string FileMetaDataPtr::createdBy() const {

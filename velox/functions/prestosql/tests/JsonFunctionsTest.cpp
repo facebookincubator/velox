@@ -269,7 +269,7 @@ TEST_F(JsonFunctionsTest, jsonParse) {
   EXPECT_EQ(jsonParse(R"("abc")"), R"("abc")");
   EXPECT_EQ(jsonParse("\"abc\u4FE1\""), "\"abc\u4FE1\"");
   auto utf32cp = folly::codePointToUtf8(U'😀');
-  testJsonParse(fmt::format("\"{}\"", utf32cp), R"("\uD83D\uDE00")");
+  testJsonParse(std::format("\"{}\"", utf32cp), R"("\uD83D\uDE00")");
   EXPECT_EQ(jsonParse(R"([1, 2, 3])"), "[1,2,3]");
   EXPECT_EQ(jsonParse(R"({"k1": "v1" })"), R"({"k1":"v1"})");
   EXPECT_EQ(jsonParse(R"(["k1", "v1"])"), R"(["k1","v1"])");
@@ -692,8 +692,8 @@ TEST_F(JsonFunctionsTest, isJsonScalar) {
 
 TEST_F(JsonFunctionsTest, isJsonScalarBadJsons) {
   for (const auto& badReplacement : badReplacements_) {
-    std::string js = fmt::format(
-        fmt::runtime(
+    std::string js = std::format(
+        std::runtime(
             "{{\"hands_v1\": {}, \"over_occlusion_rate\": 0.0358322490205352}}"),
         badReplacement);
     EXPECT_THROW(isJsonScalar(js), VeloxUserError);
@@ -721,8 +721,8 @@ TEST_F(JsonFunctionsTest, jsonArrayLength) {
   EXPECT_EQ(jsonArrayLength(R"((})"), std::nullopt);
 
   for (const auto& badReplacement : badReplacements_) {
-    std::string js = fmt::format(
-        fmt::runtime(
+    std::string js = std::format(
+        std::runtime(
             "{{\"hands_v1\": {}, \"over_occlusion_rate\": 0.0358322490205352}}"),
         badReplacement);
     EXPECT_EQ(jsonArrayLength(js), std::nullopt);
@@ -780,8 +780,8 @@ TEST_F(JsonFunctionsTest, jsonArrayGet) {
 
   // Test it fails on bad jsons
   for (const auto& badReplacement : badReplacements_) {
-    std::string js = fmt::format(
-        fmt::runtime(
+    std::string js = std::format(
+        std::runtime(
             "{{\"hands_v1\": {}, \"over_occlusion_rate\": 0.0358322490205352}}"),
         badReplacement);
     EXPECT_EQ(arrayGet(js.data(), 1, JSON()), std::nullopt);
@@ -995,8 +995,8 @@ TEST_F(JsonFunctionsTest, jsonArrayContainsMalformed) {
       std::nullopt);
 
   for (const auto& badReplacement : badReplacements_) {
-    std::string js = fmt::format(
-        fmt::runtime(
+    std::string js = std::format(
+        std::runtime(
             "{{\"hands_v1\": {}, \"over_occlusion_rate\": 0.0358322490205352}}"),
         badReplacement);
     EXPECT_EQ(jsonArrayContains<std::string>(js, {""}), std::nullopt);
@@ -1019,8 +1019,8 @@ TEST_F(JsonFunctionsTest, jsonSize) {
       3);
 
   for (const auto& badReplacement : badReplacements_) {
-    std::string js = fmt::format(
-        fmt::runtime(
+    std::string js = std::format(
+        std::runtime(
             "{{\"hands_v1\": {}, \"over_occlusion_rate\": 0.0358322490205352}}"),
         badReplacement);
     EXPECT_EQ(jsonSize(js, "$.k1"), std::nullopt);

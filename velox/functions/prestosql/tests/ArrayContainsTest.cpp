@@ -385,7 +385,7 @@ TEST_F(ArrayContainsTest, arrayCheckNulls) {
         BaseVector::wrapInConstant(data->size(), 0, searchBase);
     std::string call = internal ? "\"$internal$contains\"" : "contains";
     const auto result = evaluate(
-        fmt::format("{}(c0, c1)", call), makeRowVector({data, searchConstant}));
+        std::format("{}(c0, c1)", call), makeRowVector({data, searchConstant}));
     return result->template asFlatVector<bool>()->valueAt(0);
   };
 
@@ -459,7 +459,7 @@ TEST_F(ArrayContainsTest, rowCheckNulls) {
         BaseVector::wrapInConstant(data->size(), 0, searchBase);
     std::string call = internal ? "\"$internal$contains\"" : "contains";
     const auto result = evaluate(
-        fmt::format("{}(c0, c1)", call), makeRowVector({data, searchConstant}));
+        std::format("{}(c0, c1)", call), makeRowVector({data, searchConstant}));
     return result->asFlatVector<bool>()->valueAt(0);
   };
 

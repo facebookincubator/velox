@@ -1008,7 +1008,7 @@ class AddSuffixFunction : public exec::VectorFunction {
     auto localResult = std::dynamic_pointer_cast<FlatVector<StringView>>(
         BaseVector::create(VARCHAR(), rows.end(), context.pool()));
     rows.applyToSelected([&](auto row) {
-      auto value = fmt::format("{}{}", input->valueAt(row).str(), suffix_);
+      auto value = std::format("{}{}", input->valueAt(row).str(), suffix_);
       localResult->set(row, StringView(value));
       return true;
     });
@@ -2617,7 +2617,7 @@ TEST_F(ExprTest, constantEqualsNullConsistency) {
 // of a Vector.
 TEST_F(ExprTest, constantToStringEqualsHashConsistency) {
   auto testValue = [&](const TypePtr& type, const Variant& value) {
-    SCOPED_TRACE(fmt::format(
+    SCOPED_TRACE(std::format(
         "Type: {}, Value: {}", type->toString(), value.toJson(type)));
 
     auto a = std::make_shared<core::ConstantTypedExpr>(type, value);
@@ -3748,7 +3748,7 @@ TEST_P(ParameterizedExprTest, maskErrorByNull) {
   VectorPtr firstCoalesceResult;
   for (auto& permutation : permutations) {
     result = evaluate(
-        fmt::format(
+        std::format(
             "try((100 / c{}) + (100 / c{}) + (100 / c{}))",
             permutation[0],
             permutation[1],
@@ -3760,7 +3760,7 @@ TEST_P(ParameterizedExprTest, maskErrorByNull) {
       assertEqualVectors(firstResult, result);
     }
     auto coalesceResult = evaluate(
-        fmt::format(
+        std::format(
             "try(coalesce((100 / c{}) + (100 / c{}) + (100 / c{}), 9999))",
             permutation[0],
             permutation[1],
@@ -4630,7 +4630,7 @@ TEST_P(ParameterizedExprTest, extractSubfields) {
       {"c1[1]", "c2"});
 }
 auto makeRow = [](const std::string& fieldName) {
-  return fmt::format(
+  return std::format(
       "cast(row_constructor(1) as struct({} BOOLEAN))", fieldName);
 };
 
@@ -4678,12 +4678,12 @@ TEST_P(ParameterizedExprTest, lazyHandlingByDereference) {
 
 TEST_P(ParameterizedExprTest, switchRowInputTypesAreTheSame) {
   assertErrorSimplified(
-      fmt::format("switch(c0, {},  {})", makeRow("f1"), makeRow("f2")),
+      std::format("switch(c0, {},  {})", makeRow("f1"), makeRow("f2")),
       makeFlatVector<bool>(1),
       "Else clause of a SWITCH statement must have the same type as 'then' clauses. Expected ROW<f1:BOOLEAN>, but got ROW<f2:BOOLEAN>.");
 
   assertErrorSimplified(
-      fmt::format("if(c0, {},  {})", makeRow("f1"), makeRow("f2")),
+      std::format("if(c0, {},  {})", makeRow("f1"), makeRow("f2")),
       {makeFlatVector<bool>(1)},
       "Else clause of a SWITCH statement must have the same type as 'then' clauses. Expected ROW<f1:BOOLEAN>, but got ROW<f2:BOOLEAN>.");
 
@@ -4708,12 +4708,12 @@ TEST_P(ParameterizedExprTest, switchRowInputTypesAreTheSame) {
 
 TEST_P(ParameterizedExprTest, coalesceRowInputTypesAreTheSame) {
   auto makeRow = [](const std::string& fieldName) {
-    return fmt::format(
+    return std::format(
         "cast(row_constructor(1) as struct({} BOOLEAN))", fieldName);
   };
 
   assertErrorSimplified(
-      fmt::format("coalesce({},  {})", makeRow("f1"), makeRow("f2")),
+      std::format("coalesce({},  {})", makeRow("f1"), makeRow("f2")),
       makeFlatVector<bool>(1),
       "Inputs to coalesce must have the same type. Expected ROW<f1:BOOLEAN>, but got ROW<f2:BOOLEAN>.");
 

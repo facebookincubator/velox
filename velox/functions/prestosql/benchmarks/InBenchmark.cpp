@@ -66,7 +66,7 @@ class InBenchmark : public functions::test::FunctionBenchmarkBase {
       inList << ", " << i * 2;
     }
 
-    auto sql = fmt::format("c0 IN ({})", inList.str());
+    auto sql = std::format("c0 IN ({})", inList.str());
     auto exprSet = compileExpression(sql, data->type());
     suspender.dismiss();
 

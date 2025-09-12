@@ -238,7 +238,7 @@ class CallNullFreeBenchmark : public functions::test::FunctionBenchmarkBase {
     auto arrayVector = makeData()->childAt(0);
     auto rowVector = vectorMaker_.rowVector({arrayVector});
     auto exprSet = compileExpression(
-        fmt::format("{}(c0)", functionName), rowVector->type());
+        std::format("{}(c0)", functionName), rowVector->type());
     suspender.dismiss();
 
     return doRun(exprSet, rowVector);
@@ -281,9 +281,9 @@ class CallNullFreeBenchmark : public functions::test::FunctionBenchmarkBase {
 
     for (const auto& name : functions) {
       auto other =
-          compileExpression(fmt::format("{}(c0)", name), input->type());
+          compileExpression(std::format("{}(c0)", name), input->type());
       if (!hasSameResults(fastResult, other, input)) {
-        VELOX_UNREACHABLE(fmt::format("testing failed at function {}", name));
+        VELOX_UNREACHABLE(std::format("testing failed at function {}", name));
       }
     }
   }

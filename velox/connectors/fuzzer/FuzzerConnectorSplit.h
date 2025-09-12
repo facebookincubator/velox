@@ -30,7 +30,7 @@ struct FuzzerConnectorSplit : public connector::ConnectorSplit {
 } // namespace facebook::velox::connector::fuzzer
 
 template <>
-struct fmt::formatter<facebook::velox::connector::fuzzer::FuzzerConnectorSplit>
+struct std::formatter<facebook::velox::connector::fuzzer::FuzzerConnectorSplit>
     : formatter<std::string> {
   auto format(
       facebook::velox::connector::fuzzer::FuzzerConnectorSplit s,
@@ -40,7 +40,7 @@ struct fmt::formatter<facebook::velox::connector::fuzzer::FuzzerConnectorSplit>
 };
 
 template <>
-struct fmt::formatter<
+struct std::formatter<
     std::shared_ptr<facebook::velox::connector::fuzzer::FuzzerConnectorSplit>>
     : formatter<std::string> {
   auto format(

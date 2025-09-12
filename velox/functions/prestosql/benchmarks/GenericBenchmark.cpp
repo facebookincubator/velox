@@ -122,7 +122,7 @@ int main(int argc, char** argv) {
 
   benchmarkBuilder
       .addBenchmarkSet(
-          fmt::format("array_sum"),
+          std::format("array_sum"),
           ROW({"c0", "c1"}, {ARRAY(BIGINT()), ARRAY(DOUBLE())}))
       .addExpression("full_generic_int", "full_generic_sum(c0)")
       .addExpression("generic_input_int", "generic_input_sum(c0)")

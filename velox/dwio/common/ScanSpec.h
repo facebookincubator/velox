@@ -514,7 +514,7 @@ bool testFilter(
 } // namespace facebook
 
 template <>
-struct fmt::formatter<facebook::velox::common::ScanSpec::ColumnType>
+struct std::formatter<facebook::velox::common::ScanSpec::ColumnType>
     : formatter<std::string_view> {
   auto format(
       facebook::velox::common::ScanSpec::ColumnType columnType,

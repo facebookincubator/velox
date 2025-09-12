@@ -63,7 +63,7 @@ TEST_F(MemoryArbitrationTest, stats) {
       "reclaimedFreeCapacity 95.37MB reclaimedUsedCapacity 9.77KB "
       "maxCapacity 0B freeCapacity 1.95KB freeReservedCapacity 1000B");
   ASSERT_EQ(
-      fmt::format("{}", stats),
+      std::format("{}", stats),
       "numRequests 2 numRunning 0 numSucceded 0 numAborted 3 numFailures 100 numNonReclaimableAttempts 0 "
       "reclaimedFreeCapacity 95.37MB reclaimedUsedCapacity 9.77KB "
       "maxCapacity 0B freeCapacity 1.95KB freeReservedCapacity 1000B");
@@ -174,7 +174,7 @@ TEST_F(MemoryArbitrationTest, memoryPoolCapacityOnCreation) {
     uint64_t expectedPoolCapacityOnCreation;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "freeNonReservedCapacity {} freeReservedCapacity {} poolMaxCapacity {} poolInitCapacity {} poolReservedCapacity {} expectedPoolCapacityOnCreation {}",
           freeNonReservedCapacity,
           freeReservedCapacity,
@@ -427,7 +427,7 @@ TEST_F(MemoryReclaimerTest, common) {
     bool doAllocation;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "numChildren {} numGrandchildren {} doAllocation{}",
           numChildren,
           numGrandchildren,

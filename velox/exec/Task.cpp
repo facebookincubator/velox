@@ -231,7 +231,7 @@ std::string executionModeString(Task::ExecutionMode mode) {
     case Task::ExecutionMode::kParallel:
       return "Parallel";
     default:
-      return fmt::format("Unknown {}", static_cast<int>(mode));
+      return std::format("Unknown {}", static_cast<int>(mode));
   }
 }
 
@@ -252,7 +252,7 @@ std::string taskStateString(TaskState state) {
     case TaskState::kFailed:
       return "Failed";
     default:
-      return fmt::format("UNKNOWN[{}]", static_cast<int>(state));
+      return std::format("UNKNOWN[{}]", static_cast<int>(state));
   }
 }
 
@@ -601,7 +601,7 @@ uint64_t Task::driverCpuTimeSliceLimitMs() const {
 void Task::initTaskPool() {
   VELOX_CHECK_NULL(pool_);
   pool_ = queryCtx_->pool()->addAggregateChild(
-      fmt::format("task.{}", taskId_.c_str()), createTaskReclaimer());
+      std::format("task.{}", taskId_.c_str()), createTaskReclaimer());
 }
 
 velox::memory::MemoryPool* Task::getOrAddNodePool(
@@ -610,7 +610,7 @@ velox::memory::MemoryPool* Task::getOrAddNodePool(
     return nodePools_[planNodeId];
   }
   childPools_.push_back(pool_->addAggregateChild(
-      fmt::format("node.{}", planNodeId), createNodeReclaimer([&]() {
+      std::format("node.{}", planNodeId), createNodeReclaimer([&]() {
         return exec::ParallelMemoryReclaimer::create(
             queryCtx_->spillExecutor());
       })));
@@ -624,12 +624,12 @@ memory::MemoryPool* Task::getOrAddJoinNodePool(
     uint32_t splitGroupId) {
   const std::string nodeId = splitGroupId == kUngroupedGroupId
       ? planNodeId
-      : fmt::format("{}[{}]", planNodeId, splitGroupId);
+      : std::format("{}[{}]", planNodeId, splitGroupId);
   if (nodePools_.count(nodeId) == 1) {
     return nodePools_[nodeId];
   }
   childPools_.push_back(pool_->addAggregateChild(
-      fmt::format("node.{}", nodeId), createNodeReclaimer([&]() {
+      std::format("node.{}", nodeId), createNodeReclaimer([&]() {
         // Set join reclaimer lower priority as cost of reclaiming join is high.
         return HashJoinMemoryReclaimer::create(
             getHashJoinBridgeLocked(splitGroupId, planNodeId));
@@ -681,7 +681,7 @@ velox::memory::MemoryPool* Task::addOperatorPool(
   } else {
     nodePool = getOrAddNodePool(planNodeId);
   }
-  childPools_.push_back(nodePool->addLeafChild(fmt::format(
+  childPools_.push_back(nodePool->addLeafChild(std::format(
       "op.{}.{}.{}.{}", planNodeId, pipelineId, driverId, operatorType)));
   return childPools_.back().get();
 }
@@ -693,7 +693,7 @@ velox::memory::MemoryPool* Task::addConnectorPoolLocked(
     const std::string& operatorType,
     const std::string& connectorId) {
   auto* nodePool = getOrAddNodePool(planNodeId);
-  childPools_.push_back(nodePool->addAggregateChild(fmt::format(
+  childPools_.push_back(nodePool->addAggregateChild(std::format(
       "op.{}.{}.{}.{}.{}",
       planNodeId,
       pipelineId,
@@ -710,7 +710,7 @@ velox::memory::MemoryPool* Task::addMergeSourcePool(
   std::lock_guard<std::timed_mutex> l(mutex_);
   auto* nodePool = getOrAddNodePool(planNodeId);
   childPools_.push_back(nodePool->addLeafChild(
-      fmt::format(
+      std::format(
           "mergeExchangeClient.{}.{}.{}", planNodeId, pipelineId, sourceId),
       true,
       createExchangeClientReclaimer()));
@@ -722,7 +722,7 @@ velox::memory::MemoryPool* Task::addExchangeClientPool(
     uint32_t pipelineId) {
   auto* nodePool = getOrAddNodePool(planNodeId);
   childPools_.push_back(nodePool->addLeafChild(
-      fmt::format("exchangeClient.{}.{}", planNodeId, pipelineId),
+      std::format("exchangeClient.{}.{}", planNodeId, pipelineId),
       true,
       createExchangeClientReclaimer()));
   return childPools_.back().get();
@@ -2230,7 +2230,7 @@ bool Task::allPeersFinished(
   if (future != nullptr) {
     state.drivers.push_back(callerShared);
     state.allPeersFinishedPromises.emplace_back(
-        fmt::format("Task::allPeersFinished {}", taskId_));
+        std::format("Task::allPeersFinished {}", taskId_));
     *future = state.allPeersFinishedPromises.back().getSemiFuture();
   }
   return false;
@@ -2385,7 +2385,7 @@ std::string Task::shortId(const std::string& id) {
     return id;
   }
   auto hash = std::hash<std::string_view>()(std::string_view(str, dot - str));
-  return fmt::format("tk:{}", hash & 0xffff);
+  return std::format("tk:{}", hash & 0xffff);
 }
 
 ContinueFuture Task::terminate(TaskState terminalState) {
@@ -2794,7 +2794,7 @@ ContinueFuture Task::stateChangeFuture(uint64_t maxWaitMicros) {
     return ContinueFuture();
   }
   auto [promise, future] = makeVeloxContinuePromiseContract(
-      fmt::format("Task::stateChangeFuture {}", taskId_));
+      std::format("Task::stateChangeFuture {}", taskId_));
   stateChangePromises_.emplace_back(std::move(promise));
   if (maxWaitMicros > 0) {
     return std::move(future).within(std::chrono::microseconds(maxWaitMicros));
@@ -2808,10 +2808,10 @@ ContinueFuture Task::taskCompletionFuture() {
   // this no longer is running.
   if (not isRunningLocked()) {
     return makeFinishFutureLocked(
-        fmt::format("Task::taskCompletionFuture {}", taskId_).data());
+        std::format("Task::taskCompletionFuture {}", taskId_).data());
   }
   auto [promise, future] = makeVeloxContinuePromiseContract(
-      fmt::format("Task::taskCompletionFuture {}", taskId_));
+      std::format("Task::taskCompletionFuture {}", taskId_));
   taskCompletionPromises_.emplace_back(std::move(promise));
   return std::move(future);
 }
@@ -2819,7 +2819,7 @@ ContinueFuture Task::taskCompletionFuture() {
 ContinueFuture Task::taskDeletionFuture() {
   std::lock_guard<std::timed_mutex> l(mutex_);
   auto [promise, future] = makeVeloxContinuePromiseContract(
-      fmt::format("Task::taskDeletionFuture {}", taskId_));
+      std::format("Task::taskDeletionFuture {}", taskId_));
   taskDeletionPromises_.emplace_back(std::move(promise));
   return std::move(future);
 }
@@ -3686,7 +3686,7 @@ bool Task::DriverBlockingState::blocked(ContinueFuture* future) {
     return false;
   }
   auto [blockPromise, blockFuture] =
-      makeVeloxContinuePromiseContract(fmt::format(
+      makeVeloxContinuePromiseContract(std::format(
           "DriverBlockingState {} from task {}",
           driver_->driverCtx()->driverId,
           driver_->task()->taskId()));

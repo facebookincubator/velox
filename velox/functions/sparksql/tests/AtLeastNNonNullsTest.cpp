@@ -35,9 +35,9 @@ TEST_F(AtLeastNNonNullsTest, basic) {
   auto testAtLeastNNonNulls = [&](int32_t n,
                                   const std::vector<VectorPtr>& input,
                                   const VectorPtr& expected) {
-    std::string func = fmt::format("at_least_n_non_nulls({}", n);
+    std::string func = std::format("at_least_n_non_nulls({}", n);
     for (auto i = 0; i < input.size(); ++i) {
-      func += fmt::format(", c{}", i);
+      func += std::format(", c{}", i);
     }
     func += ")";
     const auto result = evaluate(func, makeRowVector(input));

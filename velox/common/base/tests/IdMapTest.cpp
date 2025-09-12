@@ -89,7 +89,7 @@ class IdMapTest : public testing::Test {
     std::vector<int64_t> data;
     testData(size, range, data);
     auto result = test(data);
-    std::cout << fmt::format(
+    std::cout << std::format(
                      "Size={} range={} clocks IdMap={} F14={} ({}%)",
                      size,
                      range,

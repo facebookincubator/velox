@@ -294,8 +294,8 @@ HiveConnectorTestBase::makeHiveConnectorSplit(
     uint64_t start,
     uint64_t length) {
   return HiveConnectorSplitBuilder(filePath)
-      .infoColumn("$file_size", fmt::format("{}", fileSize))
-      .infoColumn("$file_modified_time", fmt::format("{}", fileModifiedTime))
+      .infoColumn("$file_size", std::format("{}", fileSize))
+      .infoColumn("$file_modified_time", std::format("{}", fileModifiedTime))
       .start(start)
       .length(length)
       .build();

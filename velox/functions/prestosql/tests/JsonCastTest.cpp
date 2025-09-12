@@ -258,7 +258,7 @@ TEST_F(JsonCastTest, fromInvalidUtf8) {
   testCastToJson<StringView>(
       VARCHAR(), {StringView(invalidString)}, {"\"\\uFFFD\""});
 
-  invalidString = fmt::format("head_{}_tail", fromBytes({0xBF}));
+  invalidString = std::format("head_{}_tail", fromBytes({0xBF}));
   testCastToJson<StringView>(
       VARCHAR(), {StringView(invalidString)}, {"\"head_\\uFFFD_tail\""});
 }
@@ -273,7 +273,7 @@ TEST_F(JsonCastTest, fromVarchar) {
       }
     }
     std::string asciiString = folly::join("", asciiCharacters);
-    std::string expected = fmt::format("\"{}\"", asciiString);
+    std::string expected = std::format("\"{}\"", asciiString);
     testCastToJson<StringView>(
         VARCHAR(), {StringView(asciiString)}, {StringView(expected)});
 
@@ -292,7 +292,7 @@ TEST_F(JsonCastTest, fromVarchar) {
       }
     }
     std::string utf8String = folly::join("", charactersInUtf8);
-    std::string expected = fmt::format("\"{}\"", utf8String);
+    std::string expected = std::format("\"{}\"", utf8String);
     testCastToJson<StringView>(
         VARCHAR(), {StringView(utf8String)}, {StringView(expected)});
   }
@@ -311,7 +311,7 @@ TEST_F(JsonCastTest, fromVarchar) {
     }
     std::string utf8String = folly::join("", charactersInUtf8);
     std::string expected =
-        fmt::format("\"{}\"", folly::join("", charactersInUtf16));
+        std::format("\"{}\"", folly::join("", charactersInUtf16));
     testCastToJson<StringView>(
         VARCHAR(), {StringView(utf8String)}, {StringView(expected)});
   }

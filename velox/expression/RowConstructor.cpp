@@ -27,7 +27,7 @@ TypePtr RowConstructorCallToSpecialForm::resolveType(
   std::vector<TypePtr> types(numInput);
   for (auto i = 0; i < numInput; i++) {
     types[i] = argTypes[i];
-    names[i] = fmt::format("c{}", i + 1);
+    names[i] = std::format("c{}", i + 1);
   }
   return ROW(std::move(names), std::move(types));
 }

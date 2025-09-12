@@ -274,7 +274,7 @@ struct hash<::facebook::velox::common::Subfield> {
 } // namespace std
 
 template <>
-struct fmt::formatter<::facebook::velox::common::Subfield>
+struct std::formatter<::facebook::velox::common::Subfield>
     : formatter<std::string> {
   auto format(const ::facebook::velox::common::Subfield& s, format_context& ctx)
       const {
@@ -283,7 +283,7 @@ struct fmt::formatter<::facebook::velox::common::Subfield>
 };
 
 template <>
-struct fmt::formatter<::facebook::velox::common::SubfieldKind>
+struct std::formatter<::facebook::velox::common::SubfieldKind>
     : formatter<int> {
   auto format(
       const ::facebook::velox::common::SubfieldKind& s,

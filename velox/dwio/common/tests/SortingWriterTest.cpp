@@ -96,7 +96,7 @@ class SortingWriterTest : public testing::Test,
          makeFlatVector<int32_t>(
              numRows, [numRows](vector_size_t row) { return numRows - row; }),
          makeFlatVector<std::string>(numRows, [](vector_size_t row) {
-           return fmt::format("row_{}", row);
+           return std::format("row_{}", row);
          })});
   }
 

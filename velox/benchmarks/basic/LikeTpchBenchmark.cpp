@@ -47,7 +47,7 @@ enum class TpchBenchmarkCase {
 }
 
 template <>
-struct fmt::formatter<TpchBenchmarkCase> : fmt::formatter<int> {
+struct std::formatter<TpchBenchmarkCase> : std::formatter<int> {
   auto format(const TpchBenchmarkCase& s, format_context& ctx) const {
     return formatter<int>::format(static_cast<int>(s), ctx);
   }
@@ -127,7 +127,7 @@ class LikeFunctionsBenchmark : public FunctionBaseTest,
         return tpchSupplier->childAt(6);
       }
       default:
-        VELOX_FAIL(fmt::format(
+        VELOX_FAIL(std::format(
             "Tpch data generation for case {} is not supported", tpchCase));
     }
   }
@@ -136,7 +136,7 @@ class LikeFunctionsBenchmark : public FunctionBaseTest,
     folly::BenchmarkSuspender kSuspender;
     const auto input = getTpchData(tpchCase);
     const auto data = makeRowVector({input});
-    auto likeExpression = fmt::format("like(c0, '{}')", patternString);
+    auto likeExpression = std::format("like(c0, '{}')", patternString);
     auto rowType = std::dynamic_pointer_cast<const RowType>(data->type());
     exec::ExprSet exprSet =
         FunctionBenchmarkBase::compileExpression(likeExpression, rowType);
@@ -158,7 +158,7 @@ class LikeFunctionsBenchmark : public FunctionBaseTest,
     auto patternString = generatePattern(patternKind, input[0].str());
     std::vector<std::string> patternVector(FLAGS_vector_size, patternString);
     const auto data = makeRowVector({inputFuzzer_});
-    auto likeExpression = fmt::format("like(c0, '{}')", patternString);
+    auto likeExpression = std::format("like(c0, '{}')", patternString);
     auto rowType = std::dynamic_pointer_cast<const RowType>(data->type());
     exec::ExprSet exprSet =
         FunctionBenchmarkBase::compileExpression(likeExpression, rowType);

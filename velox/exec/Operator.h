@@ -723,7 +723,7 @@ class SourceOperator : public Operator {
 } // namespace facebook::velox::exec
 
 template <>
-struct fmt::formatter<std::thread::id> : formatter<std::string> {
+struct std::formatter<std::thread::id> : formatter<std::string> {
   auto format(std::thread::id s, format_context& ctx) const {
     std::ostringstream oss;
     oss << s;

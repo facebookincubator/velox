@@ -40,7 +40,7 @@ std::vector<double> linspace(int len) {
 
 std::string getDataFilePath(const std::string& name) {
   return velox::test::getDataFilePath(
-      "velox/functions/lib/tests", fmt::format("data/{}", name));
+      "velox/functions/lib/tests", std::format("data/{}", name));
 }
 
 void insertRandomData(int seed, int n, KllSketch<double>& kll, double* values) {
@@ -236,7 +236,7 @@ TEST_F(KllSketchTest, serialize) {
 #if 0
   // Enable this to write serialization to a file for backward compatibility
   // test.
-  auto path = getDataFilePath(fmt::format("kll-ver-{}", detail::kVersion));
+  auto path = getDataFilePath(std::format("kll-ver-{}", detail::kVersion));
   std::ofstream output(path);
   output.write(data.data(), data.size());
   ASSERT_FALSE(output.fail());
@@ -259,9 +259,9 @@ TEST_F(KllSketchTest, deserialize) {
     return KllSketch<double>::deserialize(data.data());
   };
   auto currentVersion =
-      readFile(getDataFilePath(fmt::format("kll-ver-{}", detail::kVersion)));
+      readFile(getDataFilePath(std::format("kll-ver-{}", detail::kVersion)));
   for (int version = 1; version < detail::kVersion; ++version) {
-    auto path = getDataFilePath(fmt::format("kll-ver-{}", version));
+    auto path = getDataFilePath(std::format("kll-ver-{}", version));
     SCOPED_TRACE(path);
     auto oldVersion = readFile(path);
     auto q = linspace(M);

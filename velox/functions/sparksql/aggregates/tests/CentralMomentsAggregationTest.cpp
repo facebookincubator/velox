@@ -38,7 +38,7 @@ class CentralMomentsAggregationTest : public AggregationTestBase {
       bool legacy = false) {
     auto plan = PlanBuilder()
                     .values({input})
-                    .singleAggregation({}, {fmt::format("spark_{}(c0)", agg)})
+                    .singleAggregation({}, {std::format("spark_{}(c0)", agg)})
                     .planNode();
     AssertQueryBuilder(plan)
         .config(

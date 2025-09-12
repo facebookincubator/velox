@@ -76,7 +76,7 @@ inline std::string statTypeString(StatType stat) {
     case StatType::HISTOGRAM:
       return "Histogram";
     default:
-      return fmt::format("UNKNOWN: {}", static_cast<int>(stat));
+      return std::format("UNKNOWN: {}", static_cast<int>(stat));
   }
 }
 

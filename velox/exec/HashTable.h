@@ -1110,7 +1110,7 @@ class HashTable : public BaseHashTable {
 } // namespace facebook::velox::exec
 
 template <>
-struct fmt::formatter<facebook::velox::exec::BaseHashTable::HashMode>
+struct std::formatter<facebook::velox::exec::BaseHashTable::HashMode>
     : formatter<std::string> {
   auto format(
       facebook::velox::exec::BaseHashTable::HashMode s,

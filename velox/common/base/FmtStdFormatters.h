@@ -29,7 +29,7 @@
 #include <vector>
 
 template <typename Char>
-struct fmt::formatter<std::errc, Char>
+struct std::formatter<std::errc, Char>
     : formatter<std::underlying_type<std::errc>::type, Char> {
   template <typename FormatContext>
   auto format(std::errc v, FormatContext& ctx) const -> decltype(ctx.out()) {
@@ -46,10 +46,10 @@ struct fmt::formatter<std::errc, Char>
 // Backport from fmt 10.1.1 see fmtlib/fmt#3574
 // Formats std::atomic
 template <typename T, typename Char>
-struct fmt::formatter<
+struct std::formatter<
     std::atomic<T>,
     Char,
-    std::enable_if_t<fmt::is_formattable<T, Char>::value>>
+    std::enable_if_t<std::is_formattable<T, Char>::value>>
     : formatter<T, Char> {
   template <typename FormatContext>
   auto format(const std::atomic<T>& v, FormatContext& ctx) const
@@ -62,7 +62,7 @@ struct fmt::formatter<
 #if FMT_VERSION < 100100
 // Backport from fmt 10.1 see fmtlib/fmt#3570
 // Formats std::vector<bool>
-namespace fmt::detail {
+namespace std::detail {
 template <typename T, typename Enable = void>
 struct has_flip : std::false_type {};
 
@@ -86,16 +86,16 @@ struct is_bit_reference_like<std::__bit_const_reference<C>> {
 };
 
 #endif
-} // namespace fmt::detail
+} // namespace std::detail
 
 // We can't use std::vector<bool, Allocator>::reference and
 // std::bitset<N>::reference because the compiler can't deduce Allocator and N
 // in partial specialization.
 template <typename BitRef, typename Char>
-struct fmt::formatter<
+struct std::formatter<
     BitRef,
     Char,
-    std::enable_if_t<fmt::detail::is_bit_reference_like<BitRef>::value>>
+    std::enable_if_t<std::detail::is_bit_reference_like<BitRef>::value>>
     : formatter<bool, Char> {
   template <typename FormatContext>
   FMT_CONSTEXPR auto format(const BitRef& v, FormatContext& ctx) const

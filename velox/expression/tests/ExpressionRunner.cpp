@@ -47,7 +47,7 @@ RowVectorPtr createRowVector(
   std::vector<TypePtr> types;
   types.reserve(n);
   for (auto i = 0; i < n; ++i) {
-    names.push_back(fmt::format("_col{}", i));
+    names.push_back(std::format("_col{}", i));
     types.push_back(vectors[i]->type());
   }
 
@@ -327,7 +327,7 @@ void ExpressionRunner::run(
       auto results = evaluateAndPrintResults(
           *exprSet, testCase.inputVector, rows, execCtx);
       if (!storeResultPath.empty()) {
-        auto fileName = fmt::format("resultVector_{}", i);
+        auto fileName = std::format("resultVector_{}", i);
         saveResults(results, storeResultPath, fileName);
       }
     }

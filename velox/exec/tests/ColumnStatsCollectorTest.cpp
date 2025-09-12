@@ -79,7 +79,7 @@ class ColumnStatsCollectorTest : public OperatorTestBase {
       if (untypedExpr.expr->alias().has_value()) {
         names.push_back(untypedExpr.expr->alias().value());
       } else {
-        names.push_back(fmt::format("a{}", i));
+        names.push_back(std::format("a{}", i));
       }
     }
     VELOX_CHECK_EQ(aggs.size(), names.size());
@@ -164,7 +164,7 @@ TEST_F(ColumnStatsCollectorTest, basic) {
     bool hasNulls;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "groupingKeys: {}, aggregates: {}, {}, hasNulls: {}",
           folly::join(",", groupingKeys),
           folly::join(",", aggregates),

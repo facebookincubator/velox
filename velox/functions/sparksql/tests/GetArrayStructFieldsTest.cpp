@@ -154,7 +154,7 @@ TEST_F(GetArrayStructFieldsTest, invalidOrdinal) {
 
   VELOX_ASSERT_USER_THROW(
       testGetArrayStructFields(data, 2, makeArrayVector(offsets, colInt)),
-      fmt::format("(2 vs. 1) Invalid ordinal 2 for struct with 1 fields."));
+      std::format("(2 vs. 1) Invalid ordinal 2 for struct with 1 fields."));
 }
 
 } // namespace

@@ -43,7 +43,7 @@ struct ExprStats {
   }
 
   std::string toString() const {
-    return fmt::format(
+    return std::format(
         "timing: {}, numProcessedRows: {}, numProcessedVectors: {}, defaultNullRowsSkipped: {}",
         timing.toString(),
         numProcessedRows,

@@ -155,7 +155,7 @@ Expected<std::unique_ptr<Codec>> Codec::create(
   }
   VELOX_RETURN_UNEXPECTED_IF(
       codec == nullptr,
-      Status::Invalid(fmt::format(
+      Status::Invalid(std::format(
           "Support for codec '{}' is either not built or not implemented.",
           compressionKindToString(kind))));
 

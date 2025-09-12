@@ -512,7 +512,7 @@ TEST_F(WindowTest, nagativeFrameArg) {
           // Partition key.
           keys,
           makeFlatVector<std::string>(
-              size, [](auto row) { return fmt::format("{}", row + 20); }),
+              size, [](auto row) { return std::format("{}", row + 20); }),
           makeFlatVector<int32_t>(size, [](auto row) { return row; }),
           // Sorting key.
           makeFlatVector<int64_t>(size, [](auto row) { return row; }),
@@ -526,10 +526,10 @@ TEST_F(WindowTest, nagativeFrameArg) {
 
     std::string debugString() const {
       if (fragmentStart[0] == '-') {
-        return fmt::format(
+        return std::format(
             "Window frame {} offset must not be negative", fragmentStart);
       } else {
-        return fmt::format(
+        return std::format(
             "Window frame {} offset must not be negative", fragmentEnd);
       }
     }
@@ -545,14 +545,14 @@ TEST_F(WindowTest, nagativeFrameArg) {
     auto plan =
         PlanBuilder()
             .values(split(data, 10))
-            .window({fmt::format(
+            .window({std::format(
                 "regr_count(c0, c1) over (partition by p0, p1 order by row_number ROWS between {} PRECEDING and {} FOLLOWING)",
                 startOffset,
                 endOffset)})
             .planNode();
     VELOX_ASSERT_USER_THROW(
         AssertQueryBuilder(plan, duckDbQueryRunner_)
-            .assertResults(fmt::format(
+            .assertResults(std::format(
                 "SELECT *, regr_count(c0, c1) over (partition by p0, p1 order by row_number  ROWS between {} PRECEDING and {} FOLLOWING) from tmp",
                 startOffset,
                 endOffset)),
@@ -645,7 +645,7 @@ DEBUG_ONLY_TEST_F(WindowTest, reserveMemorySort) {
 
   for (const auto [usePrefixSort, spillEnabled, enableSpillPrefixSort] :
        testSettings) {
-    SCOPED_TRACE(fmt::format(
+    SCOPED_TRACE(std::format(
         "usePrefixSort: {}, spillEnabled: {}, enableSpillPrefixSort: {}",
         usePrefixSort,
         spillEnabled,
@@ -713,13 +713,13 @@ TEST_F(WindowTest, NaNFrameBound) {
           if (startBound == "following" && endBound == "preceding") {
             continue;
           }
-          frames.push_back(fmt::format(
+          frames.push_back(std::format(
               "{} over (order by s0 {} range between off0 {} and off1 {})",
               call,
               order,
               startBound,
               endBound));
-          frames.push_back(fmt::format(
+          frames.push_back(std::format(
               "{} over (order by s0 {} range between off1 {} and off0 {})",
               call,
               order,

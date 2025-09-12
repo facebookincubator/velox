@@ -823,7 +823,7 @@ class BigintRange final : public Filter {
   std::unique_ptr<Filter> mergeWith(const Filter* other) const final;
 
   std::string toString() const override {
-    return fmt::format(
+    return std::format(
         "BigintRange: [{}, {}] {}",
         lower_,
         upper_,
@@ -963,7 +963,7 @@ class HugeintRange final : public Filter {
   }
 
   std::string toString() const override {
-    return fmt::format(
+    return std::format(
         "HugeintRange: [{}, {}] {}",
         lower_,
         upper_,
@@ -1044,7 +1044,7 @@ class BigintValuesUsingHashTable final : public Filter {
   }
 
   std::string toString() const override {
-    return fmt::format(
+    return std::format(
         "BigintValuesUsingHashTable: [{}, {}] {}",
         min_,
         max_,
@@ -1255,7 +1255,7 @@ class NegatedBigintValuesUsingHashTable final : public Filter {
   }
 
   std::string toString() const override {
-    return fmt::format(
+    return std::format(
         "NegatedBigintValuesUsingHashTable: [{}, {}] {}",
         nonNegated_->min(),
         nonNegated_->max(),
@@ -1550,7 +1550,7 @@ class FloatingPointRange final : public AbstractRange {
 
  private:
   std::string toString(const std::string& name) const {
-    return fmt::format(
+    return std::format(
         "{}: {}{}, {}{} {}",
         name,
         (lowerExclusive_ || lowerUnbounded_) ? "(" : "[",
@@ -1733,7 +1733,7 @@ class BytesRange final : public AbstractRange {
   }
 
   std::string toString() const override {
-    return fmt::format(
+    return std::format(
         "BytesRange: {}{}, {}{} {}",
         (lowerUnbounded_ || lowerExclusive_) ? "(" : "[",
         lowerUnbounded_ ? "..." : lower_,
@@ -1949,7 +1949,7 @@ class TimestampRange : public Filter {
   }
 
   std::string toString() const override {
-    return fmt::format(
+    return std::format(
         "TimestampRange: [{}, {}] {}",
         lower_.toString(),
         upper_.toString(),

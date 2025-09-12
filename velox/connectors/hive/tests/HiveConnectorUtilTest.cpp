@@ -270,7 +270,7 @@ TEST_F(HiveConnectorUtilTest, cacheRetention) {
     bool expectedNoCacheRetention;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "splitCacheable {}, expectedNoCacheRetention {}",
           splitCacheable,
           expectedNoCacheRetention);

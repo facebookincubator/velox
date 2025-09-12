@@ -21,12 +21,12 @@
 namespace facebook::velox::filesystems {
 
 std::string AzuriteServer::URI() const {
-  return fmt::format(
+  return std::format(
       "abfs://{}@{}.dfs.core.windows.net/", container_, account_);
 }
 
 std::string AzuriteServer::fileURI() const {
-  return fmt::format(
+  return std::format(
       "abfs://{}@{}.dfs.core.windows.net/{}", container_, account_, file_);
 }
 
@@ -34,7 +34,7 @@ std::string AzuriteServer::fileURI() const {
 // Specify configOverride map to update the default config map.
 std::shared_ptr<const config::ConfigBase> AzuriteServer::hiveConfig(
     const std::unordered_map<std::string, std::string> configOverride) const {
-  auto endpoint = fmt::format("http://127.0.0.1:{}/{}", port_, account_);
+  auto endpoint = std::format("http://127.0.0.1:{}/{}", port_, account_);
   std::unordered_map<std::string, std::string> config(
       {{"fs.azure.account.key.test.dfs.core.windows.net", key_},
        {kAzureBlobEndpoint, endpoint}});
@@ -78,8 +78,8 @@ bool AzuriteServer::isRunning() {
 
 // requires azurite executable to be on the PATH
 AzuriteServer::AzuriteServer(int64_t port) : port_(port) {
-  std::string dataLocation = fmt::format("/tmp/azurite_{}", port);
-  std::string logFilePath = fmt::format("/tmp/azurite/azurite_{}.log", port);
+  std::string dataLocation = std::format("/tmp/azurite_{}", port);
+  std::string logFilePath = std::format("/tmp/azurite/azurite_{}.log", port);
   std::printf(
       "Launch azurite instance with port - %s, data location - %s, log file path - %s\n",
       std::to_string(port).c_str(),
@@ -96,7 +96,7 @@ AzuriteServer::AzuriteServer(int64_t port) : port_(port) {
   };
   env_ = (boost::process::environment)boost::this_process::environment();
   env_["PATH"] = env_["PATH"].to_string() + std::string(kAzuriteSearchPath);
-  env_["AZURITE_ACCOUNTS"] = fmt::format("{}:{}", account_, key_);
+  env_["AZURITE_ACCOUNTS"] = std::format("{}:{}", account_, key_);
   auto path = env_["PATH"].to_vector();
   exePath_ = boost::process::search_path(
       kAzuriteServerExecutableName,

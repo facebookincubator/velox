@@ -131,7 +131,7 @@ struct FilterNode {
   }
 
   std::string toString() const {
-    return fmt::format(
+    return std::format(
         "[node={},column={},name={},expression={},pkey={}]",
         node,
         column,

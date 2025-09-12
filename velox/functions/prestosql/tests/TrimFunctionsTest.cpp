@@ -129,13 +129,13 @@ TEST_F(TrimFunctionsTest, whitespaces) {
     EXPECT_EQ("", ltrim(s));
     EXPECT_EQ("", rtrim(s));
 
-    auto withSuffix = fmt::format("{}suffix", s);
+    auto withSuffix = std::format("{}suffix", s);
 
     EXPECT_EQ("suffix", trim(withSuffix));
     EXPECT_EQ("suffix", ltrim(withSuffix));
     EXPECT_EQ(withSuffix, rtrim(withSuffix));
 
-    auto withPrefix = fmt::format("prefix{}", s);
+    auto withPrefix = std::format("prefix{}", s);
 
     EXPECT_EQ("prefix", trim(withPrefix));
     EXPECT_EQ(withPrefix, ltrim(withPrefix));

@@ -61,7 +61,7 @@ class ConfigBase {
               auto converted = folly::tryTo<T>(v);
               VELOX_CHECK(
                   converted.hasValue(),
-                  fmt::format(
+                  std::format(
                       "Invalid configuration for key '{}'. Value '{}' cannot be converted to type {}.",
                       k,
                       v,

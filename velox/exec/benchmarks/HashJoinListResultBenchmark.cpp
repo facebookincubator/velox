@@ -86,9 +86,9 @@ struct HashTableBenchmarkParams {
                                                  : "normalized key";
     std::stringstream distStr;
     for (auto dist : keyRepeatTimesDistribution) {
-      distStr << fmt::format("{}%:{};", dist.first, dist.second);
+      distStr << std::format("{}%:{};", dist.first, dist.second);
     }
-    title = fmt::format(
+    title = std::format(
         "{},probe:{},buildDist:{}", modeString, probeSize, distStr.str());
     if (runErase) {
       title += ",withErase";
@@ -138,9 +138,9 @@ struct HashTableBenchmarkParams {
   std::string toString() const {
     std::stringstream distStr;
     for (auto dist : keyRepeatTimesDistribution) {
-      distStr << fmt::format("{}%:{}; ", dist.first, dist.second);
+      distStr << std::format("{}%:{}; ", dist.first, dist.second);
     }
-    return fmt::format(
+    return std::format(
         "HashTableSize:{}, BuildInputSize:{}, ProbeInputSize:{}, ExpectHashMode:{}, KeyRepeatTimesDistribution: {}",
         hashTableSize,
         buildSize,
@@ -211,7 +211,7 @@ class HashTableListJoinResultBenchmark : public VectorTestBase {
     tablePools.reserve(params.numTables);
     for (int i = 0; i < params_.numTables; ++i) {
       tablePools.push_back(
-          tableAggregatePool->addLeafChild(fmt::format("table{}", i)));
+          tableAggregatePool->addLeafChild(std::format("table{}", i)));
     }
     params_ = params;
     HashTableBenchmarkResult result;

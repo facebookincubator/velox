@@ -111,7 +111,7 @@ void FunctionBaseTest::testEncodings(
     }
     auto encodedRow = makeRowVector(encodedInputs);
 
-    SCOPED_TRACE(fmt::format("Dictionary: {}", encodedRow->toString()));
+    SCOPED_TRACE(std::format("Dictionary: {}", encodedRow->toString()));
 
     auto indices = makeIndices(dictionarySize, indexAt);
     auto nulls =
@@ -128,7 +128,7 @@ void FunctionBaseTest::testEncodings(
     }
     auto constantRow = makeRowVector(constantInputs);
 
-    SCOPED_TRACE(fmt::format("Constant: {}", constantRow->toString()));
+    SCOPED_TRACE(std::format("Constant: {}", constantRow->toString()));
 
     auto expectedResult = BaseVector::wrapInConstant(100, row, expected);
     velox::test::assertEqualVectors(

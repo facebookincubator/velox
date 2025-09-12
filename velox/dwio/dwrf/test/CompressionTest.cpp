@@ -395,13 +395,13 @@ TEST_P(CompressionTest, getCompressionBufferOOM) {
     bool hasSink;
 
     std::string debugString() const {
-      return fmt::format("oomOnNextCall:{} hasSink:{}", oomOnNextCall, hasSink);
+      return std::format("oomOnNextCall:{} hasSink:{}", oomOnNextCall, hasSink);
     }
   } testSettings[] = {
       {true, true}, {true, false}, {false, true}, {false, false}};
 
   for (const auto& testData : testSettings) {
-    SCOPED_TRACE(fmt::format(
+    SCOPED_TRACE(std::format(
         "{} compression {}",
         testData.debugString(),
         compressionKindToString(kind_)));

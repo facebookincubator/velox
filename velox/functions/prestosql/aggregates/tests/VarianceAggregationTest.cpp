@@ -25,12 +25,12 @@ namespace {
 
 // Replace the given query's placeholders '{0}' with the given aggregation name.
 std::string genAggrQuery(const char* query, const char* aggrName) {
-  return fmt::format(fmt::runtime(query), aggrName);
+  return std::format(std::runtime(query), aggrName);
 }
 
 // Helper generates aggregation over column string.
 std::string genAggr(const char* aggrName, const char* colName) {
-  return fmt::format("{}({})", aggrName, colName);
+  return std::format("{}({})", aggrName, colName);
 }
 
 // Macro to make it even shorter (assumes we have 'aggrName' var on the stack).

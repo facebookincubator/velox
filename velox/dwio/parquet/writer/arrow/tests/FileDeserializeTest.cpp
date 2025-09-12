@@ -1009,7 +1009,7 @@ class TestParquetFileReader : public ::testing::Test {
     uint64_t fileSize = std::move(input)->getReadFile()->size();
     VELOX_ASSERT_THROW(
         std::make_unique<ParquetReader>(std::move(input), readerOptions),
-        fmt::format("({} vs. 12) Parquet file is too small", fileSize));
+        std::format("({} vs. 12) Parquet file is too small", fileSize));
   }
 };
 
@@ -1078,7 +1078,7 @@ TEST_F(TestParquetFileReader, IncompleteMetadata) {
 
   VELOX_ASSERT_THROW(
       std::make_unique<ParquetReader>(std::move(input), readerOptions),
-      fmt::format("({} vs. {})", footerLength + 12, fileSize));
+      std::format("({} vs. {})", footerLength + 12, fileSize));
 }
 
 } // namespace facebook::velox::parquet::arrow

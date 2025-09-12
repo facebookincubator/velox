@@ -566,7 +566,7 @@ static void __matches(std::istream& __input, std::string_view __expected) {
     const auto rules = __binary_find(__rules, rule_name);
     if (rules == std::end(__rules))
       std::__throw_runtime_error(
-          (fmt::format("corrupt tzdb: rule '{}' does not exist", rule_name)).c_str());
+          (std::format("corrupt tzdb: rule '{}' does not exist", rule_name)).c_str());
     size_t numForeverRules = 0;
     std::pair<std::vector<__rule>::const_iterator, std::vector<__rule>::const_iterator>& foreverRules = __result.__forever_rules;
     for (auto iter = rules->second.cbegin(); iter < rules->second.cend(); ++iter) {
@@ -587,7 +587,7 @@ static void __matches(std::istream& __input, std::string_view __expected) {
 
     if (numForeverRules > 0) {
       if (numForeverRules != 2) {
-        throw std::runtime_error(fmt::format("Found {} forever rules for time zone rule {}, expected 2", numForeverRules, rule_name));
+        throw std::runtime_error(std::format("Found {} forever rules for time zone rule {}, expected 2", numForeverRules, rule_name));
       }
 
       __result.__has_forever_rules = true;

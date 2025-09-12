@@ -33,11 +33,11 @@ WriterContext::WriterContext(
     : config_{config},
       pool_{std::move(pool)},
       dictionaryPool_{
-          pool_->addLeafChild(fmt::format("{}.dictionary", pool_->name()))},
+          pool_->addLeafChild(std::format("{}.dictionary", pool_->name()))},
       outputStreamPool_{
-          pool_->addLeafChild(fmt::format("{}.compression", pool_->name()))},
+          pool_->addLeafChild(std::format("{}.compression", pool_->name()))},
       generalPool_{
-          pool_->addLeafChild(fmt::format("{}.general", pool_->name()))},
+          pool_->addLeafChild(std::format("{}.general", pool_->name()))},
       indexEnabled_{getConfig(Config::CREATE_INDEX)},
       indexStride_{getConfig(Config::ROW_INDEX_STRIDE)},
       compression_{getConfig(Config::COMPRESSION)},
@@ -68,7 +68,7 @@ WriterContext::WriterContext(
     handler_ = std::make_unique<encryption::EncryptionHandler>();
   }
   validateConfigs();
-  VLOG(2) << fmt::format(
+  VLOG(2) << std::format(
       "Compression config: {}", common::compressionKindToString(compression_));
 }
 

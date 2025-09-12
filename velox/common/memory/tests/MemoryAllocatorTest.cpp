@@ -139,9 +139,9 @@ class MemoryAllocatorTest : public testing::TestWithParam<int> {
 #ifdef linux
     auto pid = getpid();
     system(
-        fmt::format("ps -eo 'pid,vsize,rss' |grep \"${}\" >/tmp/{}", pid, pid)
+        std::format("ps -eo 'pid,vsize,rss' |grep \"${}\" >/tmp/{}", pid, pid)
             .c_str());
-    std::ifstream in(fmt::format("/tmp/{}", pid));
+    std::ifstream in(std::format("/tmp/{}", pid));
     std::string line;
     std::getline(in, line);
     int32_t resultPid;
@@ -825,7 +825,7 @@ TEST_P(MemoryAllocatorTest, nonContiguousFailure) {
     MachinePageCount numNewPages;
     MemoryAllocator::InjectedFailure injectedFailure;
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "numOldPages:{}, numNewPages:{}, injectedFailure:{}",
           static_cast<uint64_t>(numOldPages),
           static_cast<uint64_t>(numNewPages),
@@ -909,7 +909,7 @@ TEST_P(MemoryAllocatorTest, nonContiguousFailure) {
   auto dummyReservationCB = [](int64_t /*bytes*/, bool /*preAllocation*/) {};
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(
-        fmt::format("{}, useMmap:{}", testData.debugString(), useMmap_));
+        std::format("{}, useMmap:{}", testData.debugString(), useMmap_));
     if ((testData.injectedFailure ==
          MemoryAllocator::InjectedFailure::kMadvise) &&
         !useMmap_) {
@@ -942,7 +942,7 @@ TEST_P(MemoryAllocatorTest, allocContiguous) {
     MachinePageCount newContiguousPages;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "nonContiguousPages:{} oldContiguousPages:{} newContiguousPages:{}",
           nonContiguousPages,
           oldContiguousPages,
@@ -960,7 +960,7 @@ TEST_P(MemoryAllocatorTest, allocContiguous) {
       {200, 0, 100},
       {100, 0, 200}};
   for (const auto& testData : testSettings) {
-    SCOPED_TRACE(fmt::format("{} useMmap{}", testData.debugString(), useMmap_));
+    SCOPED_TRACE(std::format("{} useMmap{}", testData.debugString(), useMmap_));
     setupAllocator();
     Allocation allocation;
     if (testData.nonContiguousPages != 0) {
@@ -1019,7 +1019,7 @@ TEST_P(MemoryAllocatorTest, allocContiguousFail) {
     MemoryAllocator::InjectedFailure injectedFailure;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "nonContiguousPages:{} oldContiguousPages:{} newContiguousPages:{} injectedFailure:{}",
           nonContiguousPages,
           oldContiguousPages,
@@ -1061,7 +1061,7 @@ TEST_P(MemoryAllocatorTest, allocContiguousFail) {
       continue;
     }
     SCOPED_TRACE(
-        fmt::format("{} useMmap {}", testData.debugString(), useMmap_));
+        std::format("{} useMmap {}", testData.debugString(), useMmap_));
     setupAllocator();
     Allocation allocation;
     if (testData.nonContiguousPages != 0) {
@@ -1255,7 +1255,7 @@ TEST_P(MemoryAllocatorTest, allocateBytesWithAlignment) {
     uint16_t alignment;
     bool expectSuccess;
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "allocateBytes:{} alignment:{}, expectSuccess:{}",
           allocateBytes,
           alignment,
@@ -1296,7 +1296,7 @@ TEST_P(MemoryAllocatorTest, allocateBytesWithAlignment) {
       {MemoryAllocator::kMaxAlignment / 2, 0, false}};
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(
-        fmt::format("UseMmap: {}, {}", useMmap_, testData.debugString()));
+        std::format("UseMmap: {}, {}", useMmap_, testData.debugString()));
 
     if (testData.expectSuccess) {
       auto* ptr =
@@ -1756,7 +1756,7 @@ TEST_F(MmapArenaTest, managedMmapArenasFree) {
     int expectedNumOfAreanas;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "allocSizes:{} freeIndexes:{} postFreeAllocSizes:{} postAllocFeeeIndexes:{} expectedNumOfAreanas:{}",
           folly::join(',', allocSizes),
           folly::join(',', freeIndexes),

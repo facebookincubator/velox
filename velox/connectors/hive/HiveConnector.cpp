@@ -143,7 +143,7 @@ std::string HivePartitionFunctionSpec::toString() const {
     }
   }
 
-  return fmt::format("HIVE(({}) buckets: {})", keys.str(), numBuckets_);
+  return std::format("HIVE(({}) buckets: {})", keys.str(), numBuckets_);
 }
 
 folly::dynamic HivePartitionFunctionSpec::serialize() const {

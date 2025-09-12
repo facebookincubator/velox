@@ -69,7 +69,7 @@ class ExchangeSource : public std::enable_shared_from_this<ExchangeSource> {
     const std::vector<int64_t> remainingBytes;
 
     std::string toString() const {
-      return fmt::format(
+      return std::format(
           "bytes {}, atEnd {}, remainingBytes {}",
           succinctBytes(bytes),
           atEnd ? "true" : "false",

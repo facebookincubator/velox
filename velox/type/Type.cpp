@@ -1287,7 +1287,7 @@ std::string IntervalYearMonthType::valueToString(int32_t value) const {
     sign = "-";
     longValue = -longValue;
   }
-  oss << fmt::format("{}{}-{}", sign, longValue / 12, longValue % 12);
+  oss << std::format("{}{}-{}", sign, longValue / 12, longValue % 12);
   return oss.str();
 }
 

@@ -166,7 +166,7 @@ struct CompareFlags {
       case CompareFlags::NullHandlingMode::kNullAsIndeterminate:
         return "NullAsIndeterminate";
       default:
-        return fmt::format(
+        return std::format(
             "Unknown Null Handling mode {}", static_cast<int>(mode));
     }
   }
@@ -179,7 +179,7 @@ struct CompareFlags {
   }
 
   std::string toString() const {
-    return fmt::format(
+    return std::format(
         "[NullFirst[{}] Ascending[{}] EqualsOnly[{}] NullHandleMode[{}]]",
         nullsFirst,
         ascending,

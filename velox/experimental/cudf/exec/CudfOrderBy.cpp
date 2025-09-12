@@ -35,7 +35,7 @@ CudfOrderBy::CudfOrderBy(
       NvtxHelper(
           nvtx3::rgb{64, 224, 208}, // Turquoise
           operatorId,
-          fmt::format("[{}]", orderByNode->id())),
+          std::format("[{}]", orderByNode->id())),
       orderByNode_(orderByNode) {
   sortKeys_.reserve(orderByNode->sortingKeys().size());
   columnOrder_.reserve(orderByNode->sortingKeys().size());

@@ -89,7 +89,7 @@ struct PlanFragment {
 } // namespace facebook::velox::core
 
 template <>
-struct fmt::formatter<facebook::velox::core::ExecutionStrategy>
+struct std::formatter<facebook::velox::core::ExecutionStrategy>
     : formatter<int> {
   auto format(
       const facebook::velox::core::ExecutionStrategy& s,

@@ -32,7 +32,7 @@ void cuCheck(CUresult result, const char* file, int32_t line) {
   if (result != CUDA_SUCCESS) {
     const char* str;
     cuGetErrorString(result, &str);
-    waveError(fmt::format("Cuda error: {}:{} {}", file, line, str));
+    waveError(std::format("Cuda error: {}:{} {}", file, line, str));
   }
 }
 
@@ -41,7 +41,7 @@ void cudaCheck(cudaError_t err, const char* file, int line) {
     return;
   }
   waveError(
-      fmt::format("Cuda error: {}:{} {}", file, line, cudaGetErrorString(err)));
+      std::format("Cuda error: {}:{} {}", file, line, cudaGetErrorString(err)));
 }
 
 void cudaCheckFatal(cudaError_t err, const char* file, int line) {
@@ -49,13 +49,13 @@ void cudaCheckFatal(cudaError_t err, const char* file, int line) {
     return;
   }
   auto error =
-      fmt::format("Cuda error: {}:{} {}", file, line, cudaGetErrorString(err));
+      std::format("Cuda error: {}:{} {}", file, line, cudaGetErrorString(err));
   std::cerr << err << std::endl;
   exit(1);
 }
 
 std::string Device::toString() const {
-  return fmt::format(
+  return std::format(
       "Device {}: {} {}.{} global {}MB {} SMs, {}K shmem/SM, {}K L2",
       deviceId,
       model,
@@ -91,7 +91,7 @@ Device* setDriverDevice(int32_t deviceId) {
     driverInited = true;
   }
   if (deviceId >= contexts.size()) {
-    waveError(fmt::format("Bad device id {}", deviceId));
+    waveError(std::format("Bad device id {}", deviceId));
   }
   if (contexts[deviceId] != nullptr) {
     cuCtxSetCurrent(contexts[deviceId]);
@@ -392,7 +392,7 @@ void fillMemory(uint64_t* ptr, int32_t numWords, int32_t seed, bool isDevice) {
 }
 
 std::string AllocationRange::toString(int32_t rowSize) {
-  return fmt::format(
+  return std::format(
       "<Range: {} Fixed cap={} rows fixd avail={} rows total cap={}B >",
       (fixedFull ? "full" : ""),
       (stringOffset - firstRowOffset) / rowSize,
@@ -401,7 +401,7 @@ std::string AllocationRange::toString(int32_t rowSize) {
 }
 
 std::string HashPartitionAllocator::toString() {
-  return fmt::format(
+  return std::format(
       "<allocator avail {} rows : {} {}>",
       availableFixed() / rowSize,
       ranges[0].toString(rowSize),

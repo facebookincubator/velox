@@ -901,7 +901,7 @@ IExprWindowFunction parseWindowExpr(
 }
 
 std::string OrderByClause::toString() const {
-  return fmt::format(
+  return std::format(
       "{} {} NULLS {}",
       expr->toString(),
       (ascending ? "ASC" : "DESC"),

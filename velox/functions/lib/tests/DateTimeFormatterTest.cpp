@@ -650,7 +650,7 @@ TEST_F(JodaDateTimeFormatterTest, parseJodaMonth) {
   // Ensure MMM and MMMM specifiers consume both short- and long-form month
   // names
   for (int i = 0; i < 12; i++) {
-    const auto timestampString = fmt::format("2000-{}-01", i + 1);
+    const auto timestampString = std::format("2000-{}-01", i + 1);
     const auto timestamp = fromTimestampString(StringView(timestampString));
     EXPECT_EQ(timestamp, parseJoda(monthsShort[i], "MMM").timestamp);
     EXPECT_EQ(timestamp, parseJoda(monthsFull[i], "MMM").timestamp);

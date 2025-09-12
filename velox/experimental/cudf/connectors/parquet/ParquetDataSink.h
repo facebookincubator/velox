@@ -363,7 +363,7 @@ FOLLY_ALWAYS_INLINE std::ostream& operator<<(
 } // namespace facebook::velox::cudf_velox::connector::parquet
 
 template <>
-struct fmt::formatter<
+struct std::formatter<
     facebook::velox::cudf_velox::connector::parquet::ParquetDataSink::State>
     : formatter<std::string> {
   auto format(
@@ -377,7 +377,7 @@ struct fmt::formatter<
 };
 
 template <>
-struct fmt::formatter<
+struct std::formatter<
     facebook::velox::cudf_velox::connector::parquet::LocationHandle::TableType>
     : formatter<int> {
   auto format(

@@ -256,7 +256,7 @@ TEST(TestType, typeCompatibilityWithErrorMessage) {
     return exceptionContext;
   };
 
-  std::string expectedMsg = fmt::format(
+  std::string expectedMsg = std::format(
       "{}, From Kind: {}, To Kind: {}", exceptionContext, "INTEGER", "REAL");
   EXPECT_THROW(
       {

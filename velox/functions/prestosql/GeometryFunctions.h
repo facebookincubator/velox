@@ -133,7 +133,7 @@ struct StPointFunction {
       const arg_type<double>& x,
       const arg_type<double>& y) {
     if (!std::isfinite(x) || !std::isfinite(y)) {
-      return Status::UserError(fmt::format(
+      return Status::UserError(std::format(
           "ST_Point requires finite coordinates, got x={} y={}", x, y));
     }
     GEOS_TRY(
@@ -606,7 +606,7 @@ struct StXFunction {
         geospatial::GeometryDeserializer::deserialize(geometry);
     if (geosGeometry->getGeometryTypeId() !=
         geos::geom::GeometryTypeId::GEOS_POINT) {
-      VELOX_USER_FAIL(fmt::format(
+      VELOX_USER_FAIL(std::format(
           "ST_X requires a Point geometry, found {}",
           geosGeometry->getGeometryType()));
     }
@@ -630,7 +630,7 @@ struct StYFunction {
         geospatial::GeometryDeserializer::deserialize(geometry);
     if (geosGeometry->getGeometryTypeId() !=
         geos::geom::GeometryTypeId::GEOS_POINT) {
-      VELOX_USER_FAIL(fmt::format(
+      VELOX_USER_FAIL(std::format(
           "ST_Y requires a Point geometry, found {}",
           geosGeometry->getGeometryType()));
     }
@@ -776,7 +776,7 @@ struct StDistanceFunction {
         geospatial::GeometryDeserializer::deserialize(geometry2);
 
     if (geosGeometry1->getSRID() != geosGeometry2->getSRID()) {
-      VELOX_USER_FAIL(fmt::format(
+      VELOX_USER_FAIL(std::format(
           "Input geometries must have the same spatial reference, found {} and {}",
           geosGeometry1->getSRID(),
           geosGeometry2->getSRID()));
@@ -1263,7 +1263,7 @@ struct StBufferFunction {
       const arg_type<Geometry>& geometry,
       const arg_type<double>& distance) {
     if (distance < 0) {
-      VELOX_USER_FAIL(fmt::format(
+      VELOX_USER_FAIL(std::format(
           "Provided distance must not be negative. Provided distance: {}",
           distance));
     }
@@ -1415,7 +1415,7 @@ struct StNumPointsFunction {
       }
       return static_cast<int32_t>(polygonPointCount);
     }
-    VELOX_FAIL(fmt::format(
+    VELOX_FAIL(std::format(
         "Unexpected failure in ST_NumPoints: geometry type {}",
         geometry.getGeometryType()));
   }
@@ -1484,14 +1484,14 @@ struct LineLocatePointFunction {
     auto lineType = line->getGeometryTypeId();
     if (lineType != geos::geom::GeometryTypeId::GEOS_LINESTRING &&
         lineType != geos::geom::GeometryTypeId::GEOS_MULTILINESTRING) {
-      VELOX_USER_FAIL(fmt::format(
+      VELOX_USER_FAIL(std::format(
           "First argument to line_locate_point must be a LineString or a MultiLineString. Got: {}",
           line->getGeometryType()));
     }
 
     auto pointType = point->getGeometryTypeId();
     if (pointType != geos::geom::GeometryTypeId::GEOS_POINT) {
-      VELOX_USER_FAIL(fmt::format(
+      VELOX_USER_FAIL(std::format(
           "Second argument to line_locate_point must be a Point. Got: {}",
           point->getGeometryType()));
     }
@@ -1516,7 +1516,7 @@ struct LineInterpolatePointFunction {
       const arg_type<Geometry>& inputLine,
       const arg_type<double>& fraction) {
     if (!(0.0 <= fraction && fraction <= 1.0)) {
-      return Status::UserError(fmt::format(
+      return Status::UserError(std::format(
           "line_interpolate_point: Fraction must be between 0 and 1, but is {}",
           fraction));
     }

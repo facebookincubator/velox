@@ -161,9 +161,9 @@ HiveDataSource::HiveDataSource(
     }
     remainingFilterSubfields_ = remainingFilterExpr->extractSubfields();
     if (VLOG_IS_ON(1)) {
-      VLOG(1) << fmt::format(
+      VLOG(1) << std::format(
           "Extracted subfields from remaining filter: [{}]",
-          fmt::join(remainingFilterSubfields_, ", "));
+          std::join(remainingFilterSubfields_, ", "));
     }
     for (auto& subfield : remainingFilterSubfields_) {
       const auto& name = getColumnName(subfield);

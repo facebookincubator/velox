@@ -27,7 +27,7 @@ using namespace facebook::velox::connector;
 
 std::string ParquetColumnHandle::toString() const {
   std::ostringstream out;
-  out << fmt::format(
+  out << std::format(
       "ParquetColumnHandle [name: {}, Type: {},", name_, type_->toString());
   return out.str();
 }

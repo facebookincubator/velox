@@ -933,11 +933,11 @@ void HashBuild::addRuntimeStats() {
     hashers[i]->cardinality(0, asRange, asDistinct);
     if (asRange != VectorHasher::kRangeTooLarge) {
       lockedStats->addRuntimeStat(
-          fmt::format("rangeKey{}", i), RuntimeCounter(asRange));
+          std::format("rangeKey{}", i), RuntimeCounter(asRange));
     }
     if (asDistinct != VectorHasher::kRangeTooLarge) {
       lockedStats->addRuntimeStat(
-          fmt::format("distinctKey{}", i), RuntimeCounter(asDistinct));
+          std::format("distinctKey{}", i), RuntimeCounter(asDistinct));
     }
   }
 
@@ -1051,7 +1051,7 @@ std::string HashBuild::stateName(State state) {
     case State::kFinish:
       return "FINISH";
     default:
-      return fmt::format("UNKNOWN: {}", static_cast<int>(state));
+      return std::format("UNKNOWN: {}", static_cast<int>(state));
   }
 }
 

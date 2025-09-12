@@ -111,7 +111,7 @@ class IExpr {
       return name;
     }
 
-    return fmt::format("{} AS {}", std::move(name), alias_.value());
+    return std::format("{} AS {}", std::move(name), alias_.value());
   }
 
   bool compareAliasAndInputs(const IExpr& other) const {

@@ -38,7 +38,7 @@ class SerializerBenchmark : public VectorTestBase {
     uint64_t rrTime{0};
 
     std::string toString() {
-      return fmt::format(
+      return std::format(
           "{} of {} {} bit {}%null: {} ir / {} rr",
           numSelected,
           vectorSize,

@@ -217,7 +217,7 @@ class MockMemoryPool : public velox::memory::MemoryPool {
   }
 
   std::string toString(bool /* unused */) const override {
-    return fmt::format(
+    return std::format(
         "Mock Memory Pool[{}]",
         velox::memory::MemoryAllocator::kindString(allocator_->kind()));
   }

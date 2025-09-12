@@ -36,7 +36,7 @@ bool DataSink::Stats::empty() const {
 }
 
 std::string DataSink::Stats::toString() const {
-  return fmt::format(
+  return std::format(
       "numWrittenBytes {} numWrittenFiles {} {}",
       succinctBytes(numWrittenBytes),
       numWrittenFiles,

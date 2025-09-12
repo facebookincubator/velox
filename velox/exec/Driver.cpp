@@ -58,7 +58,7 @@ std::string addContextOnException(
     return "";
   }
   auto* op = static_cast<Operator*>(arg);
-  return fmt::format("Operator: {}", op->toString());
+  return std::format("Operator: {}", op->toString());
 }
 
 std::exception_ptr makeException(
@@ -121,7 +121,7 @@ std::optional<common::SpillConfig> DriverCtx::makeSpillConfig(
     return task->getOrCreateSpillDirectory();
   };
   const auto& spillFilePrefix =
-      fmt::format("{}_{}_{}", pipelineId, driverId, operatorId);
+      std::format("{}_{}_{}", pipelineId, driverId, operatorId);
   common::UpdateAndCheckSpillLimitCB updateAndCheckSpillLimitCb =
       [this](uint64_t bytes) {
         task->queryCtx()->updateSpilledBytesAndCheckLimit(bytes);
@@ -222,7 +222,7 @@ std::string stopReasonString(StopReason reason) {
     case StopReason::kAtEnd:
       return "AT_END";
     default:
-      return fmt::format("UNKNOWN_REASON {}", static_cast<int>(reason));
+      return std::format("UNKNOWN_REASON {}", static_cast<int>(reason));
   }
 }
 
@@ -354,9 +354,9 @@ size_t OpCallStatusRaw::callDuration() const {
     Operator* op,
     const char* operatorMethod) {
   return op
-      ? fmt::format(
+      ? std::format(
             "{}.{}::{}", op->operatorType(), op->planNodeId(), operatorMethod)
-      : fmt::format("null::{}", operatorMethod);
+      : std::format("null::{}", operatorMethod);
 }
 
 CpuWallTiming Driver::processLazyIoStats(
@@ -1221,7 +1221,7 @@ StopReason Driver::blockDriver(
 }
 
 std::string Driver::label() const {
-  return fmt::format("<Driver {}:{}>", task()->taskId(), ctx_->driverId);
+  return std::format("<Driver {}:{}>", task()->taskId(), ctx_->driverId);
 }
 
 DriverThreadContext* driverThreadContext() {

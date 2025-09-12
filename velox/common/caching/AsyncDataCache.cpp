@@ -129,7 +129,7 @@ void AsyncDataCacheEntry::initialize(FileCacheKey key) {
     } else {
       // No memory to cover 'this'.
       release();
-      VELOX_CACHE_ERROR(fmt::format(
+      VELOX_CACHE_ERROR(std::format(
           "Failed to allocate {} pages for cache: {}",
           sizePages,
           cache->allocator()->getAndClearFailureMessage()));
@@ -143,7 +143,7 @@ void AsyncDataCacheEntry::makeEvictable() {
 }
 
 std::string AsyncDataCacheEntry::toString() const {
-  return fmt::format(
+  return std::format(
       "<entry key:{}:{} size {} pins {}>",
       key_.fileNum.id(),
       key_.offset,
@@ -824,7 +824,7 @@ bool AsyncDataCache::makeSpace(
     }
   }
   memory::setCacheFailureMessage(
-      fmt::format("Failed to evict from cache state: {}", toString(false)));
+      std::format("Failed to evict from cache state: {}", toString(false)));
   return false;
 }
 

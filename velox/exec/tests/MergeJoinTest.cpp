@@ -60,7 +60,7 @@ class MergeJoinTest : public HiveConnectorTestBase {
           makeIndicesInReverse(key->size()),
           key->size(),
           makeFlatVector<std::string>(key->size(), [startRow](auto row) {
-            return fmt::format("{}", (startRow + row) * 10);
+            return std::format("{}", (startRow + row) * 10);
           }));
       data.push_back(makeRowVector({key, payload, constPayload, dictPayload}));
       startRow += key->size();
@@ -644,12 +644,12 @@ TEST_F(MergeJoinTest, leftAndRightJoinFilter) {
           "t_c1 + u_c1 < 100"}) {
       assertQuery(
           makeCursorParameters(leftPlan(filter), batchSize),
-          fmt::format(
+          std::format(
               "SELECT t_c0, t_c1, u_c1 FROM t LEFT JOIN u ON t_c0 = u_c0 AND {}",
               filter));
       assertQuery(
           makeCursorParameters(rightPlan(filter), batchSize),
-          fmt::format(
+          std::format(
               "SELECT t_c0, t_c1, u_c1 FROM u RIGHT JOIN t ON t_c0 = u_c0 AND {}",
               filter));
     }
@@ -821,7 +821,7 @@ TEST_F(MergeJoinTest, lazyVectors) {
       makeFlatVector<StringView>(
           30'000,
           [](auto row) {
-            return StringView::makeInline(fmt::format("{}   string", row % 43));
+            return StringView::makeInline(std::format("{}   string", row % 43));
           }),
   });
 
@@ -870,7 +870,7 @@ TEST_F(MergeJoinTest, lazyVectors) {
     AssertQueryBuilder(op, duckDbQueryRunner_)
         .split(rightScanId, makeHiveConnectorSplit(rightFile->getPath()))
         .split(leftScanId, makeHiveConnectorSplit(leftFile->getPath()))
-        .assertResults(fmt::format(
+        .assertResults(std::format(
             "SELECT c0, rc0, c1, rc1, c2, c3 FROM t {} JOIN u "
             "ON t.c0 = u.rc0 AND c1 + rc1 < 30",
             core::JoinTypeName::toName(joinType)));
@@ -1542,7 +1542,7 @@ TEST_F(MergeJoinTest, complexTypedFilter) {
         for (size_t outputBatchSize : {1000, 1024, 13}) {
           assertQuery(
               makeCursorParameters(plan, outputBatchSize),
-              fmt::format(
+              std::format(
                   "SELECT {} FROM t LEFT JOIN u ON t_c0 = u_c0 AND {}",
                   outputs,
                   queryFilter));
@@ -1731,7 +1731,7 @@ TEST_F(MergeJoinTest, barrier) {
                 core::JoinType::kInner)
             .planNode();
     for (const auto hasBarrier : {false, true}) {
-      SCOPED_TRACE(fmt::format("hasBarrier {}", hasBarrier));
+      SCOPED_TRACE(std::format("hasBarrier {}", hasBarrier));
       AssertQueryBuilder queryBuilder(plan, duckDbQueryRunner_);
       queryBuilder.barrierExecution(hasBarrier).serialExecution(true);
       queryBuilder.split(
@@ -1773,7 +1773,7 @@ TEST_F(MergeJoinTest, barrier) {
                 core::JoinType::kFull)
             .planNode();
     for (const auto hasBarrier : {false, true}) {
-      SCOPED_TRACE(fmt::format("hasBarrier {}", hasBarrier));
+      SCOPED_TRACE(std::format("hasBarrier {}", hasBarrier));
       AssertQueryBuilder queryBuilder(plan, duckDbQueryRunner_);
       queryBuilder.barrierExecution(hasBarrier).serialExecution(true);
       queryBuilder.split(
@@ -1815,7 +1815,7 @@ TEST_F(MergeJoinTest, barrier) {
                 core::JoinType::kRight)
             .planNode();
     for (const auto hasBarrier : {false, true}) {
-      SCOPED_TRACE(fmt::format("hasBarrier {}", hasBarrier));
+      SCOPED_TRACE(std::format("hasBarrier {}", hasBarrier));
       AssertQueryBuilder queryBuilder(plan, duckDbQueryRunner_);
       queryBuilder.barrierExecution(hasBarrier).serialExecution(true);
       queryBuilder.split(
@@ -1857,7 +1857,7 @@ TEST_F(MergeJoinTest, barrier) {
                 core::JoinType::kLeft)
             .planNode();
     for (const auto hasBarrier : {true}) {
-      SCOPED_TRACE(fmt::format("hasBarrier {}", hasBarrier));
+      SCOPED_TRACE(std::format("hasBarrier {}", hasBarrier));
       AssertQueryBuilder queryBuilder(plan, duckDbQueryRunner_);
       queryBuilder.barrierExecution(hasBarrier).serialExecution(true);
       queryBuilder.split(
@@ -1899,7 +1899,7 @@ TEST_F(MergeJoinTest, barrier) {
                 core::JoinType::kAnti)
             .planNode();
     for (const auto hasBarrier : {true}) {
-      SCOPED_TRACE(fmt::format("hasBarrier {}", hasBarrier));
+      SCOPED_TRACE(std::format("hasBarrier {}", hasBarrier));
       AssertQueryBuilder queryBuilder(plan, duckDbQueryRunner_);
       queryBuilder.barrierExecution(hasBarrier).serialExecution(true);
       queryBuilder.split(

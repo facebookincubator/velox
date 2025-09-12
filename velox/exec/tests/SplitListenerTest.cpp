@@ -116,12 +116,12 @@ class SplitListenerTest : public HiveConnectorTestBase {
         makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 2, 3, 4, 5})});
     directory_ = TempDirectoryPath::create();
     auto directoryPath = directory_->getPath();
-    auto tablePath = fmt::format("{}/t", directoryPath);
+    auto tablePath = std::format("{}/t", directoryPath);
     auto fs = filesystems::getFileSystem(tablePath, {});
     fs->mkdir(tablePath);
     // Write the table three times to make multiple splits.
     for (auto i = 0; i < 3; ++i) {
-      auto filePath = fmt::format("{}/f{}", tablePath, i);
+      auto filePath = std::format("{}/f{}", tablePath, i);
       writeToFile(filePath, table);
       filePaths_.emplace_back(filePath);
     }

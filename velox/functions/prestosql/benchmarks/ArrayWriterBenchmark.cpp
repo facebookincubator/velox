@@ -170,7 +170,7 @@ class ArrayWriterBenchmark : public functions::test::FunctionBenchmarkBase {
     folly::BenchmarkSuspender suspender;
     auto input = makeInput();
     auto exprSet =
-        compileExpression(fmt::format("{}(c0)", functionName), input->type());
+        compileExpression(std::format("{}(c0)", functionName), input->type());
     suspender.dismiss();
 
     doRun(exprSet, input);
@@ -213,9 +213,9 @@ class ArrayWriterBenchmark : public functions::test::FunctionBenchmarkBase {
 
     for (const auto& name : functions) {
       auto other =
-          compileExpression(fmt::format("{}(c0)", name), input->type());
+          compileExpression(std::format("{}(c0)", name), input->type());
       if (!hasSameResults(exprSetRef, other, input)) {
-        VELOX_UNREACHABLE(fmt::format("testing failed at function {}", name));
+        VELOX_UNREACHABLE(std::format("testing failed at function {}", name));
       }
     }
   }

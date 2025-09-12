@@ -75,7 +75,7 @@ TEST_P(ConcurrentCounterTest, multithread) {
   numThreads.push_back(std::thread::hardware_concurrency());
   numThreads.push_back(std::thread::hardware_concurrency() * 2);
   for (int numThreads : numThreads) {
-    SCOPED_TRACE(fmt::format("numThreads: {}", numThreads));
+    SCOPED_TRACE(std::format("numThreads: {}", numThreads));
     counter_->testingClear();
     ASSERT_EQ(counter_->read(), 0);
 

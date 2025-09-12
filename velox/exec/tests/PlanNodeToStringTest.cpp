@@ -596,7 +596,7 @@ TEST_F(PlanNodeToStringTest, partitionedOutput) {
            VectorSerde::Kind::kPresto,
            VectorSerde::Kind::kCompactRow,
            VectorSerde::Kind::kUnsafeRow}) {
-    SCOPED_TRACE(fmt::format("serdeKind: {}", serdeKind));
+    SCOPED_TRACE(std::format("serdeKind: {}", serdeKind));
     auto plan =
         PlanBuilder()
             .values({data_})
@@ -605,7 +605,7 @@ TEST_F(PlanNodeToStringTest, partitionedOutput) {
 
     ASSERT_EQ("-- PartitionedOutput[1]\n", plan->toString());
     ASSERT_EQ(
-        fmt::format(
+        std::format(
             "-- PartitionedOutput[1][partitionFunction: HASH(c0) with 4 partitions {}] -> c0:SMALLINT, c1:INTEGER, c2:BIGINT\n",
             serdeKind),
         plan->toString(true, false));
@@ -617,7 +617,7 @@ TEST_F(PlanNodeToStringTest, partitionedOutput) {
 
     ASSERT_EQ("-- PartitionedOutput[1]\n", plan->toString());
     ASSERT_EQ(
-        fmt::format(
+        std::format(
             "-- PartitionedOutput[1][BROADCAST {}] -> c0:SMALLINT, c1:INTEGER, c2:BIGINT\n",
             serdeKind),
         plan->toString(true, false));
@@ -629,7 +629,7 @@ TEST_F(PlanNodeToStringTest, partitionedOutput) {
 
     ASSERT_EQ("-- PartitionedOutput[1]\n", plan->toString());
     ASSERT_EQ(
-        fmt::format(
+        std::format(
             "-- PartitionedOutput[1][SINGLE {}] -> c0:SMALLINT, c1:INTEGER, c2:BIGINT\n",
             serdeKind),
         plan->toString(true, false));
@@ -642,7 +642,7 @@ TEST_F(PlanNodeToStringTest, partitionedOutput) {
 
     ASSERT_EQ("-- PartitionedOutput[1]\n", plan->toString());
     ASSERT_EQ(
-        fmt::format(
+        std::format(
             "-- PartitionedOutput[1][partitionFunction: HASH(c1, c2) with 5 partitions replicate nulls and any {}] -> c0:SMALLINT, c1:INTEGER, c2:BIGINT\n",
             serdeKind),
         plan->toString(true, false));
@@ -666,7 +666,7 @@ TEST_F(PlanNodeToStringTest, partitionedOutput) {
                .planNode();
     ASSERT_EQ("-- PartitionedOutput[1]\n", plan->toString());
     ASSERT_EQ(
-        fmt::format(
+        std::format(
             "-- PartitionedOutput[1][partitionFunction: HIVE((1, 2) buckets: 4) with 2 partitions {}] -> c0:SMALLINT, c1:INTEGER, c2:BIGINT\n",
             serdeKind),
         plan->toString(true, false));
@@ -702,7 +702,7 @@ TEST_F(PlanNodeToStringTest, exchange) {
            VectorSerde::Kind::kPresto,
            VectorSerde::Kind::kCompactRow,
            VectorSerde::Kind::kUnsafeRow}) {
-    SCOPED_TRACE(fmt::format("serdeKind: {}", serdeKind));
+    SCOPED_TRACE(std::format("serdeKind: {}", serdeKind));
 
     auto plan = PlanBuilder()
                     .exchange(ROW({"a", "b"}, {BIGINT(), VARCHAR()}), serdeKind)
@@ -710,7 +710,7 @@ TEST_F(PlanNodeToStringTest, exchange) {
 
     ASSERT_EQ("-- Exchange[0]\n", plan->toString());
     ASSERT_EQ(
-        fmt::format("-- Exchange[0][{}] -> a:BIGINT, b:VARCHAR\n", serdeKind),
+        std::format("-- Exchange[0][{}] -> a:BIGINT, b:VARCHAR\n", serdeKind),
         plan->toString(true, false));
   }
 }
@@ -720,7 +720,7 @@ TEST_F(PlanNodeToStringTest, mergeExchange) {
            VectorSerde::Kind::kPresto,
            VectorSerde::Kind::kCompactRow,
            VectorSerde::Kind::kUnsafeRow}) {
-    SCOPED_TRACE(fmt::format("serdeKind: {}", serdeKind));
+    SCOPED_TRACE(std::format("serdeKind: {}", serdeKind));
 
     auto plan =
         PlanBuilder()
@@ -730,7 +730,7 @@ TEST_F(PlanNodeToStringTest, mergeExchange) {
 
     ASSERT_EQ("-- MergeExchange[0]\n", plan->toString());
     ASSERT_EQ(
-        fmt::format(
+        std::format(
             "-- MergeExchange[0][a ASC NULLS LAST, {}] -> a:BIGINT, b:VARCHAR\n",
             serdeKind),
         plan->toString(true, false));
@@ -939,7 +939,7 @@ void topNRankPlanNodeToStringTest(std::string_view function) {
 
   ASSERT_EQ("-- TopNRowNumber[1]\n", plan->toString());
   ASSERT_EQ(
-      fmt::format(
+      std::format(
           "-- TopNRowNumber[1][{} order by (a DESC NULLS LAST) limit 10] -> a:BIGINT, b:VARCHAR\n",
           function),
       plan->toString(true, false));
@@ -951,7 +951,7 @@ void topNRankPlanNodeToStringTest(std::string_view function) {
 
   ASSERT_EQ("-- TopNRowNumber[1]\n", plan->toString());
   ASSERT_EQ(
-      fmt::format(
+      std::format(
           "-- TopNRowNumber[1][{} order by (a DESC NULLS LAST) limit 10] -> a:BIGINT, b:VARCHAR, row_number:BIGINT\n",
           function),
       plan->toString(true, false));
@@ -963,7 +963,7 @@ void topNRankPlanNodeToStringTest(std::string_view function) {
 
   ASSERT_EQ("-- TopNRowNumber[1]\n", plan->toString());
   ASSERT_EQ(
-      fmt::format(
+      std::format(
           "-- TopNRowNumber[1][{} partition by (a) order by (b ASC NULLS LAST) limit 10] -> a:BIGINT, b:VARCHAR\n",
           function),
       plan->toString(true, false));

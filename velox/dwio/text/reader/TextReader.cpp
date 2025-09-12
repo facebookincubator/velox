@@ -221,7 +221,7 @@ TextRowReader::TextRowReader(
         blockSize,
         contents_->pool,
         contents_->compressionOptions,
-        fmt::format("Text Reader: Stream {}", name),
+        std::format("Text Reader: Stream {}", name),
         nullptr,
         true,
         contents_->fileLength);

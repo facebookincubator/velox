@@ -75,7 +75,7 @@ TEST_P(UnnestTest, arrayWithIdentityMap) {
     int32_t expectedOutputBatches;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "vectorSize: {}, arraySize: {}, outputBatchSize: {}, expectedOutputBatches: {}",
           vectorSize,
           arraySize,
@@ -135,7 +135,7 @@ TEST_P(UnnestTest, arrayWithoutIdentityMap) {
     int32_t expectedOutputBatches;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "vectorSize: {}, arraySize1: {}, arraySize2: {}, outputBatchSize: {}, expectedOutputBatches: {}",
           vectorSize,
           arraySize1,
@@ -365,7 +365,7 @@ TEST_P(UnnestTest, arrayWithMarker) {
     RowVectorPtr expected;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "hasOrdinality: {}, hasEmptyUnnestValue: {}, input: {}, expected: {}",
           hasOrdinality,
           hasEmptyUnnestValue,
@@ -519,7 +519,7 @@ TEST_P(UnnestTest, mapWithMarker) {
     RowVectorPtr expected;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "hasOrdinality: {}, hasEmptyUnnestValue: {}, input: {}, expected: {}",
           hasOrdinality,
           hasEmptyUnnestValue,
@@ -869,7 +869,7 @@ TEST_P(UnnestTest, barrier) {
     int numOutputRows;
 
     std::string toString() const {
-      return fmt::format(
+      return std::format(
           "barrierExecution {}, numOutputRows {}",
           barrierExecution,
           numOutputRows);
@@ -939,7 +939,7 @@ TEST_P(UnnestTest, spiltOutput) {
     int expectedNumOutputExectors;
 
     std::string toString() const {
-      return fmt::format(
+      return std::format(
           "produceSingleOutput {}, expectedNumOutputExectors {}",
           produceSingleOutput,
           expectedNumOutputExectors);
@@ -969,5 +969,5 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
     UnnestTest,
     testing::ValuesIn(/*batchSize*/ {2, 17, 33, 512}),
     [](const testing::TestParamInfo<int32_t>& info) {
-      return fmt::format("outputBatchSize_{}", info.param);
+      return std::format("outputBatchSize_{}", info.param);
     });

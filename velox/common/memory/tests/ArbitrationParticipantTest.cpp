@@ -120,7 +120,7 @@ class MockTask : public std::enable_shared_from_this<MockTask> {
  public:
   MockTask(MemoryManager* manager, uint64_t capacity)
       : root_(manager->addRootPool(
-            fmt::format("TaskPool-{}", taskId_++),
+            std::format("TaskPool-{}", taskId_++),
             capacity)),
         pool_(root_->addLeafChild("MockOperator")) {}
 
@@ -440,7 +440,7 @@ TEST_F(ArbitrationParticipantTest, config) {
     std::string expectedToString;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "initCapacity {}, minCapacity {}, fastExponentialGrowthCapacityLimit {}, slowCapacityGrowRatio {}, minFreeCapacity {}, minFreeCapacityRatio {}, minReclaimBytes {}, minReclaimPct {}, expectedError {}, expectedToString: {}",
           succinctBytes(initCapacity),
           succinctBytes(minCapacity),
@@ -637,7 +637,7 @@ TEST_F(ArbitrationParticipantTest, getGrowTargets) {
     uint64_t expectedMinGrowTarget;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "minCapacity {}, fastExponentialGrowthCapacityLimit {}, slowCapacityGrowRatio {}, capacity {}, requestBytes {}, expectedMaxGrowTarget {}, expectedMinGrowTarget {}",
           succinctBytes(minCapacity),
           succinctBytes(fastExponentialGrowthCapacityLimit),
@@ -797,7 +797,7 @@ TEST_F(ArbitrationParticipantTest, reclaimableFreeCapacityAndShrink) {
     uint64_t expectedFreeCapacity;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "minCapacity {}, minFreeCapacity {}, minFreeCapacityRatio {}, capacity {}, usedBytes {}, peakBytes {}, expectedFreeCapacity {}",
           succinctBytes(minCapacity),
           succinctBytes(minFreeCapacity),
@@ -842,7 +842,7 @@ TEST_F(ArbitrationParticipantTest, reclaimableFreeCapacityAndShrink) {
     SCOPED_TRACE(testData.debugString());
 
     for (bool reclaimAll : {false, true}) {
-      SCOPED_TRACE(fmt::format("reclaimAll {}", reclaimAll));
+      SCOPED_TRACE(std::format("reclaimAll {}", reclaimAll));
       auto task = createTask(kMemoryCapacity);
       const auto config = arbitrationConfig(
           testData.minCapacity,
@@ -920,7 +920,7 @@ TEST_F(ArbitrationParticipantTest, reclaimableUsedCapacityAndReclaim) {
     uint64_t expectedUsedBytes;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "minCapacity {}, minFreeCapacity {}, minFreeCapacityRatio {}, capacity {}, usedBytes {}, peakBytes {}, expectedReclaimableUsedBytes {}, expectedActualReclaimedBytes {}, expectedUsedBytes {}",
           succinctBytes(minCapacity),
           succinctBytes(minFreeCapacity),
@@ -1071,7 +1071,7 @@ TEST_F(ArbitrationParticipantTest, checkCapacityGrowth) {
     bool expectedGrowth;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "maxCapacity {}, capacity {}, requestBytes {}, expectedGrowth {}",
           succinctBytes(maxCapacity),
           succinctBytes(capacity),
@@ -1111,7 +1111,7 @@ TEST_F(ArbitrationParticipantTest, grow) {
     uint64_t expectedCapacityAfterGrowth;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "maxCapacity {}, capacity {}, usedBytes {}, growthBytes {}, reservationBytes {}, expectedFailure {}, expectedReservationBytes {}, expectedCapacityAfterGrowth {}",
           succinctBytes(maxCapacity),
           succinctBytes(capacity),
@@ -1217,7 +1217,7 @@ TEST_F(ArbitrationParticipantTest, shrink) {
     uint64_t expectedFreeCapacity;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "maxCapacity {}, minCapacity {}, capacity {}, usedBytes {}, expectedFreeCapacity {}",
           succinctBytes(maxCapacity),
           succinctBytes(minCapacity),
@@ -1240,7 +1240,7 @@ TEST_F(ArbitrationParticipantTest, shrink) {
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
     for (bool reclaimAll : {false, true}) {
-      SCOPED_TRACE(fmt::format("reclaimAll {}", reclaimAll));
+      SCOPED_TRACE(std::format("reclaimAll {}", reclaimAll));
 
       auto task = createTask(testData.maxCapacity);
       const auto config =
@@ -1289,7 +1289,7 @@ TEST_F(ArbitrationParticipantTest, abort) {
     uint64_t expectedReclaimCapacity;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "maxCapacity {}, minCapacity {}, capacity {}, usedBytes {}, expectedReclaimCapacity {}",
           succinctBytes(maxCapacity),
           succinctBytes(minCapacity),

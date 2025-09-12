@@ -70,7 +70,7 @@ namespace facebook::velox::exec {
 namespace {
 
 std::string makePercentageString(size_t value, size_t total) {
-  return fmt::format("{} ({:.2f}%)", value, (double)value / total * 100);
+  return std::format("{} ({:.2f}%)", value, (double)value / total * 100);
 }
 
 class JoinFuzzer {
@@ -269,7 +269,7 @@ std::vector<RowVectorPtr> JoinFuzzer::generateProbeInput(
   // Add up to 3 payload columns.
   const auto numPayload = randInt(0, 3);
   for (auto i = 0; i < numPayload; ++i) {
-    names.push_back(fmt::format("tp{}", i + keyNames.size()));
+    names.push_back(std::format("tp{}", i + keyNames.size()));
     types.push_back(vectorFuzzer_.randType(
         referenceQueryRunner_->supportedScalarTypes(), /*maxDepth=*/2));
   }
@@ -303,7 +303,7 @@ std::vector<RowVectorPtr> JoinFuzzer::generateBuildInput(
   // Add up to 3 payload columns.
   const auto numPayload = randInt(0, 3);
   for (auto i = 0; i < numPayload; ++i) {
-    names.push_back(fmt::format("bp{}", i + buildKeys.size()));
+    names.push_back(std::format("bp{}", i + buildKeys.size()));
     types.push_back(vectorFuzzer_.randType(
         referenceQueryRunner_->supportedScalarTypes(), /*maxDepth=*/2));
   }
@@ -361,7 +361,7 @@ RowVectorPtr JoinFuzzer::execute(
   LOG(INFO) << "Executing query plan with "
             << executionStrategyToString(plan.executionStrategy)
             << (plan.executionStrategy == core::ExecutionStrategy::kGrouped
-                    ? fmt::format(
+                    ? std::format(
                           "({})",
                           plan.mixedGroupedExecution ? "mixed" : "unmixed")
                     : "")
@@ -607,23 +607,23 @@ void JoinFuzzer::verify(core::JoinType joinType) {
     if (vectorFuzzer_.coinToss(0.5)) {
       keyTypes.push_back(BOOLEAN());
       filter = vectorFuzzer_.coinToss(0.5)
-          ? fmt::format("t{} = true", keyTypes.size() - 1)
-          : fmt::format("u{} = true", keyTypes.size() - 1);
+          ? std::format("t{} = true", keyTypes.size() - 1)
+          : std::format("u{} = true", keyTypes.size() - 1);
     } else {
       keyTypes.push_back(INTEGER());
       filter = vectorFuzzer_.coinToss(0.5)
-          ? fmt::format("t{} % {} = 0", keyTypes.size() - 1, randInt(1, 9))
-          : fmt::format("u{} % {} = 0", keyTypes.size() - 1, randInt(1, 9));
+          ? std::format("t{} % {} = 0", keyTypes.size() - 1, randInt(1, 9))
+          : std::format("u{} % {} = 0", keyTypes.size() - 1, randInt(1, 9));
     }
   }
 
   const auto tableScanDir = exec::test::TempDirectoryPath::create();
   auto localFs = filesystems::getFileSystem(tableScanDir->getPath(), nullptr);
   std::string probePath =
-      fmt::format("{}/{}", tableScanDir->getPath(), "probe");
+      std::format("{}/{}", tableScanDir->getPath(), "probe");
   localFs->mkdir(probePath);
   std::string buildPath =
-      fmt::format("{}/{}", tableScanDir->getPath(), "build");
+      std::format("{}/{}", tableScanDir->getPath(), "build");
   localFs->mkdir(buildPath);
 
   std::vector<std::string> probeKeys = test::makeNames("t", keyTypes.size());

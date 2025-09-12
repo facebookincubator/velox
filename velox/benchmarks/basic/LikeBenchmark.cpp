@@ -57,11 +57,11 @@ int main(int argc, char** argv) {
 
       if (row % 2 == 0) {
         if (padAtHead && padAtTail) {
-          return fmt::format("{}{}{}", padding, content, padding);
+          return std::format("{}{}{}", padding, content, padding);
         } else if (padAtHead) {
-          return fmt::format("{}{}", padding, content);
+          return std::format("{}{}", padding, content);
         } else if (padAtTail) {
-          return fmt::format("{}{}", content, padding);
+          return std::format("{}{}", content, padding);
         } else {
           return content;
         }

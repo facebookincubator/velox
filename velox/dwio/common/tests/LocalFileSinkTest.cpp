@@ -42,7 +42,7 @@ class LocalFileSinkTest : public testing::Test {
     ASSERT_FALSE(fs::exists(filePath.string()));
 
     auto localFileSink = FileSink::create(
-        fmt::format("file:{}", filePath.string()), {.pool = pool_.get()});
+        std::format("file:{}", filePath.string()), {.pool = pool_.get()});
     ASSERT_TRUE(localFileSink->isBuffered());
     localFileSink->close();
 
@@ -68,14 +68,14 @@ TEST_F(LocalFileSinkTest, existFileCheck) {
   auto filePath = fs::path(root->getPath()) / "xxx/yyy/zzz/test_file.ext";
 
   auto localFileSink = FileSink::create(
-      fmt::format("file:{}", filePath.string()), {.pool = pool_.get()});
+      std::format("file:{}", filePath.string()), {.pool = pool_.get()});
   ASSERT_TRUE(localFileSink->isBuffered());
   localFileSink->close();
   EXPECT_TRUE(fs::exists(filePath.string()));
 
   VELOX_ASSERT_THROW(
       FileSink::create(
-          fmt::format("file:{}", filePath.string()), {.pool = pool_.get()}),
+          std::format("file:{}", filePath.string()), {.pool = pool_.get()}),
       "File exists");
 }
 

@@ -541,7 +541,7 @@ void registerDecimalBinary(
 
 // Used in function registration to generate the string to cap value at 38.
 std::string bounded(const std::string& value) {
-  return fmt::format("({}) <= 38 ? ({}) : 38", value, value);
+  return std::format("({}) <= 38 ? ({}) : 38", value, value);
 }
 
 std::vector<exec::SignatureVariable> makeConstraints(
@@ -549,7 +549,7 @@ std::vector<exec::SignatureVariable> makeConstraints(
     const std::string& rScale,
     bool allowPrecisionLoss) {
   std::string finalScale = allowPrecisionLoss
-      ? fmt::format(
+      ? std::format(
             "({}) <= 38 ? ({}) : max(({}) - ({}) + 38, min(({}), 6))",
             rPrecision,
             rScale,
@@ -560,24 +560,24 @@ std::vector<exec::SignatureVariable> makeConstraints(
   return {
       exec::SignatureVariable(
           P3::name(),
-          fmt::format(
-              "min(38, {r_precision})", fmt::arg("r_precision", rPrecision)),
+          std::format(
+              "min(38, {r_precision})", std::arg("r_precision", rPrecision)),
           exec::ParameterType::kIntegerParameter),
       exec::SignatureVariable(
           S3::name(), finalScale, exec::ParameterType::kIntegerParameter)};
 }
 
 std::pair<std::string, std::string> getAddSubtractResultPrecisionScale() {
-  std::string rPrecision = fmt::format(
+  std::string rPrecision = std::format(
       "max({a_precision} - {a_scale}, {b_precision} - {b_scale}) + max({a_scale}, {b_scale}) + 1",
-      fmt::arg("a_precision", P1::name()),
-      fmt::arg("b_precision", P2::name()),
-      fmt::arg("a_scale", S1::name()),
-      fmt::arg("b_scale", S2::name()));
-  std::string rScale = fmt::format(
+      std::arg("a_precision", P1::name()),
+      std::arg("b_precision", P2::name()),
+      std::arg("a_scale", S1::name()),
+      std::arg("b_scale", S2::name()));
+  std::string rScale = std::format(
       "max({a_scale}, {b_scale})",
-      fmt::arg("a_scale", S1::name()),
-      fmt::arg("b_scale", S2::name()));
+      std::arg("a_scale", S1::name()),
+      std::arg("b_scale", S2::name()));
   return {rPrecision, rScale};
 }
 
@@ -606,23 +606,23 @@ template <typename TExec>
 using DivideFunctionDenyPrecisionLoss = DecimalDivideFunction<TExec, false>;
 
 std::vector<exec::SignatureVariable> getDivideConstraintsDenyPrecisionLoss() {
-  std::string wholeDigits = fmt::format(
+  std::string wholeDigits = std::format(
       "min(38, {a_precision} - {a_scale} + {b_scale})",
-      fmt::arg("a_precision", P1::name()),
-      fmt::arg("a_scale", S1::name()),
-      fmt::arg("b_scale", S2::name()));
-  std::string fractionDigits = fmt::format(
+      std::arg("a_precision", P1::name()),
+      std::arg("a_scale", S1::name()),
+      std::arg("b_scale", S2::name()));
+  std::string fractionDigits = std::format(
       "min(38, max(6, {a_scale} + {b_precision} + 1))",
-      fmt::arg("a_scale", S1::name()),
-      fmt::arg("b_precision", P2::name()));
+      std::arg("a_scale", S1::name()),
+      std::arg("b_precision", P2::name()));
   std::string diff = wholeDigits + " + " + fractionDigits + " - 38";
   std::string newFractionDigits =
-      fmt::format("({}) - ({}) / 2 - 1", fractionDigits, diff);
-  std::string newWholeDigits = fmt::format("38 - ({})", newFractionDigits);
+      std::format("({}) - ({}) / 2 - 1", fractionDigits, diff);
+  std::string newWholeDigits = std::format("38 - ({})", newFractionDigits);
   return {
       exec::SignatureVariable(
           P3::name(),
-          fmt::format(
+          std::format(
               "({}) > 0 ? ({}) : ({})",
               diff,
               bounded(newWholeDigits + " + " + newFractionDigits),
@@ -630,7 +630,7 @@ std::vector<exec::SignatureVariable> getDivideConstraintsDenyPrecisionLoss() {
           exec::ParameterType::kIntegerParameter),
       exec::SignatureVariable(
           S3::name(),
-          fmt::format(
+          std::format(
               "({}) > 0 ? ({}) : ({})",
               diff,
               bounded(newFractionDigits),
@@ -639,16 +639,16 @@ std::vector<exec::SignatureVariable> getDivideConstraintsDenyPrecisionLoss() {
 }
 
 std::vector<exec::SignatureVariable> getDivideConstraintsAllowPrecisionLoss() {
-  std::string rPrecision = fmt::format(
+  std::string rPrecision = std::format(
       "{a_precision} - {a_scale} + {b_scale} + max(6, {a_scale} + {b_precision} + 1)",
-      fmt::arg("a_precision", P1::name()),
-      fmt::arg("b_precision", P2::name()),
-      fmt::arg("a_scale", S1::name()),
-      fmt::arg("b_scale", S2::name()));
-  std::string rScale = fmt::format(
+      std::arg("a_precision", P1::name()),
+      std::arg("b_precision", P2::name()),
+      std::arg("a_scale", S1::name()),
+      std::arg("b_scale", S2::name()));
+  std::string rScale = std::format(
       "max(6, {a_scale} + {b_precision} + 1)",
-      fmt::arg("a_scale", S1::name()),
-      fmt::arg("b_precision", P2::name()));
+      std::arg("a_scale", S1::name()),
+      std::arg("b_precision", P2::name()));
   return makeConstraints(rPrecision, rScale, true);
 }
 
@@ -693,14 +693,14 @@ void registerDecimalSubtract(const std::string& prefix) {
 }
 
 void registerDecimalMultiply(const std::string& prefix) {
-  std::string rPrecision = fmt::format(
+  std::string rPrecision = std::format(
       "{a_precision} + {b_precision} + 1",
-      fmt::arg("a_precision", P1::name()),
-      fmt::arg("b_precision", P2::name()));
-  std::string rScale = fmt::format(
+      std::arg("a_precision", P1::name()),
+      std::arg("b_precision", P2::name()));
+  std::string rScale = std::format(
       "{a_scale} + {b_scale}",
-      fmt::arg("a_scale", S1::name()),
-      fmt::arg("b_scale", S2::name()));
+      std::arg("a_scale", S1::name()),
+      std::arg("b_scale", S2::name()));
   registerDecimalBinary<MultiplyFunctionAllowPrecisionLoss>(
       prefix + "multiply", makeConstraints(rPrecision, rScale, true));
   registerDecimalBinary<MultiplyFunctionDenyPrecisionLoss>(

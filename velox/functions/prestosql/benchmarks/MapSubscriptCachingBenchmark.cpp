@@ -88,7 +88,7 @@ int main(int argc, char** argv) {
 
     columns.push_back(indicesVector);
 
-    auto name = fmt::format(
+    auto name = std::format(
         "{}_{}_{}", mapType->childAt(0)->toString(), mapLength, baseVectorSize);
 
     benchmarkBuilder.addBenchmarkSet(name, vm.rowVector(columns))

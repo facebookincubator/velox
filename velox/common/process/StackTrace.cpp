@@ -99,7 +99,7 @@ const std::vector<std::string>& StackTrace::toStrVector() const {
       if (folly::StringPiece(framename).startsWith(*myname)) {
         continue; // ignore frames in the StackTrace class
       }
-      btVector_.push_back(fmt::format("# {:<2d} {}", frame++, framename));
+      btVector_.push_back(std::format("# {:<2d} {}", frame++, framename));
     }
   });
   return btVector_;

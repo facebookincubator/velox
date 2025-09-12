@@ -28,7 +28,7 @@ std::string probeOperatorStateName(ProbeOperatorState state) {
     case ProbeOperatorState::kFinish:
       return "FINISH";
     default:
-      return fmt::format("UNKNOWN: {}", static_cast<int>(state));
+      return std::format("UNKNOWN: {}", static_cast<int>(state));
   }
 }
 

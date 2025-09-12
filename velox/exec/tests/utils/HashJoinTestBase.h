@@ -442,7 +442,7 @@ class HashJoinBuilder {
       int buildParallelize;
 
       std::string debugString() const {
-        return fmt::format(
+        return std::format(
             "probeParallelize: {}, buildParallelize: {}",
             probeParallelize,
             buildParallelize);
@@ -467,7 +467,7 @@ class HashJoinBuilder {
     }
 
     for (const auto& testData : testSettings) {
-      SCOPED_TRACE(fmt::format(
+      SCOPED_TRACE(std::format(
           "{} numDrivers: {}", testData.debugString(), numDrivers_));
       auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
       std::shared_ptr<const core::HashJoinNode> joinNode;
@@ -548,7 +548,7 @@ class HashJoinBuilder {
       const std::vector<TypePtr>& keyTypes,
       const std::string& namePrefix) {
     std::vector<std::string> names = makeKeyNames(keyTypes.size(), namePrefix);
-    names.push_back(fmt::format("{}data", namePrefix));
+    names.push_back(std::format("{}data", namePrefix));
 
     std::vector<TypePtr> types = keyTypes;
     types.push_back(VARCHAR());
@@ -561,7 +561,7 @@ class HashJoinBuilder {
       const std::string& prefix) {
     std::vector<std::string> names;
     for (int i = 0; i < cnt; ++i) {
-      names.push_back(fmt::format("{}k{}", prefix, i));
+      names.push_back(std::format("{}k{}", prefix, i));
     }
     return names;
   }
@@ -644,7 +644,7 @@ class HashJoinBuilder {
     builder.queryCtx(queryCtx);
 
     SCOPED_TRACE(
-        injectSpill ? fmt::format("With Max Spill Level: {}", maxSpillLevel)
+        injectSpill ? std::format("With Max Spill Level: {}", maxSpillLevel)
                     : "Without Spill");
     ASSERT_EQ(memory::spillMemoryPool()->stats().usedBytes, 0);
     const uint64_t peakSpillMemoryUsage =

@@ -309,7 +309,7 @@ TEST_F(ArrayTopNTest, complexInput) {
                   int32_t size,
                   const VectorPtr& expectedArrayVector) {
     auto result = evaluate(
-        fmt::format("array_top_n(c0, INTEGER '{}')", size),
+        std::format("array_top_n(c0, INTEGER '{}')", size),
         makeRowVector({inputArrayVector}));
     assertEqualVectors(expectedArrayVector, result);
   };

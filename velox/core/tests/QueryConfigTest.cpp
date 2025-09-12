@@ -64,7 +64,7 @@ TEST_F(QueryConfigTest, taskWriterCountConfig) {
     int expectedPartitionedWriterCounter;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "numWriterCounter[{}] numPartitionedWriterCounter[{}] expectedWriterCounter[{}] expectedPartitionedWriterCounter[{}]",
           numWriterCounter.value_or(0),
           numPartitionedWriterCounter.value_or(0),

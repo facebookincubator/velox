@@ -157,14 +157,14 @@ bool readSystemHeaders(std::map<std::string, std::string>& headers) {
 }
 
 void saveSystemHeaders(std::map<std::string, std::string>& map) {
-  std::ofstream out(fmt::format("/tmp/h.{}", getpid()));
+  std::ofstream out(std::format("/tmp/h.{}", getpid()));
   for (auto& pair : map) {
     out << pair.first << std::endl
         << pair.second.size() << std::endl
         << pair.second;
   }
   out.close();
-  system(fmt::format(" mv /tmp/h.{} /tmp/wavesystemheaders.txt", getpid())
+  system(std::format(" mv /tmp/h.{} /tmp/wavesystemheaders.txt", getpid())
              .c_str());
 }
 
@@ -253,7 +253,7 @@ void ensureInit() {
     }
   }
   if (!hasArch) {
-    waveNvrtcFlags.push_back(fmt::format(
+    waveNvrtcFlags.push_back(std::format(
         "--gpu-architecture=compute_{}{}", device->major, device->minor));
   }
   ::jitify::detail::detect_and_add_cuda_arch(waveNvrtcFlags);
@@ -363,7 +363,7 @@ std::shared_ptr<CompiledModule> CompiledModule::create(const KernelSpec& spec) {
       &module, ptx.data(), sizeof(values) / sizeof(void*), options, values);
   if (loadResult != CUDA_SUCCESS) {
     LOG(ERROR) << "Load error " << errorSize << " " << infoSize;
-    waveError(fmt::format("Error in load module: {} {}", info, error));
+    waveError(std::format("Error in load module: {} {}", info, error));
   }
   std::vector<CUfunction> funcs;
   for (auto& name : loweredNames) {

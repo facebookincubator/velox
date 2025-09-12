@@ -119,7 +119,7 @@ void SpillState::validateSpillBytesSize(uint64_t bytes) {
   static constexpr uint64_t kMaxSpillBytesPerWrite =
       std::numeric_limits<int32_t>::max();
   if (bytes >= kMaxSpillBytesPerWrite) {
-    VELOX_GENERIC_SPILL_FAILURE(fmt::format(
+    VELOX_GENERIC_SPILL_FAILURE(std::format(
         "Spill bytes will overflow. Bytes {}, kMaxSpillBytesPerWrite: {}",
         bytes,
         kMaxSpillBytesPerWrite));
@@ -155,7 +155,7 @@ uint64_t SpillState::appendToPartition(
               std::static_pointer_cast<const RowType>(rows->type()),
               sortingKeys_,
               compressionKind_,
-              fmt::format(
+              std::format(
                   "{}/{}-spill-{}", spillDir, fileNamePrefix_, id.encodedId()),
               targetFileSize_,
               writeBufferSize_,
@@ -267,7 +267,7 @@ std::vector<std::unique_ptr<SpillPartition>> SpillPartition::split(
 }
 
 std::string SpillPartition::toString() const {
-  return fmt::format(
+  return std::format(
       "SPILLED PARTITION[ID:{} FILES:{} SIZE:{}]",
       id_.toString(),
       files_.size(),
@@ -454,7 +454,7 @@ bool ConcatFilesSpillBatchStream::nextBatch(RowVectorPtr& batch) {
 SpillPartitionId::SpillPartitionId(uint32_t partitionNumber)
     : encodedId_(partitionNumber) {
   if (FOLLY_UNLIKELY(partitionNumber >= (1 << kMaxPartitionBits))) {
-    VELOX_FAIL(fmt::format(
+    VELOX_FAIL(std::format(
         "Partition number {} exceeds max partition number {}",
         partitionNumber,
         1 << kMaxPartitionBits));
@@ -466,7 +466,7 @@ SpillPartitionId::SpillPartitionId(
     uint32_t partitionNumber) {
   const auto childSpillLevel = parent.spillLevel() + 1;
   if (FOLLY_UNLIKELY(childSpillLevel > kMaxSpillLevel)) {
-    VELOX_FAIL(fmt::format(
+    VELOX_FAIL(std::format(
         "Spill level {} exceeds max spill level {}",
         childSpillLevel,
         kMaxSpillLevel));

@@ -64,7 +64,7 @@ struct Converter {
 
   template <typename TFrom>
   static Expected<TTo> tryCast(TFrom) {
-    static const std::string kErrorMessage = fmt::format(
+    static const std::string kErrorMessage = std::format(
         "Conversion to {} is not supported", TypeTraits<KIND>::name);
 
     return folly::makeUnexpected(Status::UserError(kErrorMessage));
@@ -259,7 +259,7 @@ struct Converter<
 
   template <typename From>
   static Expected<T> tryCast(const From&) {
-    static const std::string kErrorMessage = fmt::format(
+    static const std::string kErrorMessage = std::format(
         "Conversion to {} is not supported", TypeTraits<KIND>::name);
 
     return folly::makeUnexpected(Status::UserError(kErrorMessage));
@@ -590,14 +590,14 @@ struct Converter<TypeKind::VARCHAR, void, TPolicy> {
       }
       if ((val > -10'000'000 && val <= -0.001) ||
           (val >= 0.001 && val < 10'000'000) || val == 0.0) {
-        auto str = fmt::format("{}", val);
+        auto str = std::format("{}", val);
         normalizeStandardNotation(str);
         return str;
       }
       // Precision of float is at most 8 significant decimal digits. Precision
       // of double is at most 17 significant decimal digits.
       auto str =
-          fmt::format(std::is_same_v<T, float> ? "{:.7E}" : "{:.16E}", val);
+          std::format(std::is_same_v<T, float> ? "{:.7E}" : "{:.16E}", val);
       normalizeScientificNotation(str);
       return str;
     }

@@ -126,7 +126,7 @@ Table fromTableName(std::string_view tableName) {
     return it->second;
   }
   throw std::invalid_argument(
-      fmt::format("Invalid TPC-H table name: '{}'", tableName));
+      std::format("Invalid TPC-H table name: '{}'", tableName));
 }
 
 size_t getRowCount(Table table, double scaleFactor) {

@@ -49,7 +49,7 @@ TEST(HiveTypeSerializer, unregisteredOpaque) {
   std::shared_ptr<const Type> type = OPAQUE<Foo>();
   VELOX_ASSERT_THROW(
       HiveTypeSerializer::serialize(type),
-      fmt::format(
+      std::format(
           "Could not find type index '{}'. Did you call registerOpaqueType?",
           type->asOpaque().typeIndex().name()));
 }

@@ -311,12 +311,12 @@ VectorPtr MinMaxByAggregationTestBase::buildDataVector(
 
 template <typename T>
 std::string asSql(T value) {
-  return fmt::format("'{}'", value);
+  return std::format("'{}'", value);
 }
 
 template <>
 std::string asSql(Timestamp value) {
-  return fmt::format("epoch_ms({})", value.toMillis());
+  return std::format("epoch_ms({})", value.toMillis());
 }
 
 template <>
@@ -390,16 +390,16 @@ class MinMaxByGlobalByAggregationTest
       const std::string& valueColumnName,
       const std::string& comparisonColumnName) {
     const std::string funcName = aggName == kMaxBy ? "max" : "min";
-    const std::string verifyDuckDbSql = fmt::format(
+    const std::string verifyDuckDbSql = std::format(
         "SELECT {} FROM tmp WHERE {} = ( SELECT {} ({}) FROM tmp) LIMIT 1",
         valueColumnName,
         comparisonColumnName,
         funcName,
         comparisonColumnName);
-    const std::string aggregate = fmt::format(
+    const std::string aggregate = std::format(
         "{}({}, {})", aggName, valueColumnName, comparisonColumnName);
     SCOPED_TRACE(
-        fmt::format("{}\nverifyDuckDbSql: {}", aggregate, verifyDuckDbSql));
+        std::format("{}\nverifyDuckDbSql: {}", aggregate, verifyDuckDbSql));
     testAggregations(vectors, {}, {aggregate}, {}, verifyDuckDbSql);
   }
 
@@ -410,7 +410,7 @@ class MinMaxByGlobalByAggregationTest
       const std::string verifyDuckDbSql;
 
       const std::string debugString() const {
-        return fmt::format(
+        return std::format(
             "\ninputRowVector: {}\n{}\nverifyDuckDbSql: {}",
             inputRowVector->toString(),
             inputRowVector->toString(0, inputRowVector->size()),
@@ -421,7 +421,7 @@ class MinMaxByGlobalByAggregationTest
         {makeRowVector(
              {makeConstant(std::optional<T>(dataAt<T>(0)), 5),
               makeConstant(std::optional<U>(dataAt<U>(0)), 5)}),
-         fmt::format("SELECT {}", asSql(dataAt<T>(0)))},
+         std::format("SELECT {}", asSql(dataAt<T>(0)))},
 
         {makeRowVector(
              {makeNullableFlatVector<T>(
@@ -449,7 +449,7 @@ class MinMaxByGlobalByAggregationTest
         {makeRowVector(
              {makeNullableFlatVector<T>({dataAt<T>(4), std::nullopt}),
               makeConstant(std::optional<U>(kMax<U>), 2)}),
-         fmt::format("SELECT {}", asSql(dataAt<T>(4)))},
+         std::format("SELECT {}", asSql(dataAt<T>(4)))},
 
         // Regular cases.
         {makeRowVector(
@@ -464,14 +464,14 @@ class MinMaxByGlobalByAggregationTest
                   {dataAt<T>(0), dataAt<T>(3), std::nullopt, dataAt<T>(4)}),
               makeNullableFlatVector<U>(
                   {dataAt<U>(1), std::nullopt, dataAt<U>(2), dataAt<U>(3)})}),
-         fmt::format("SELECT {}", asSql(dataAt<T>(0)))},
+         std::format("SELECT {}", asSql(dataAt<T>(0)))},
 
         {makeRowVector(
              {makeNullableFlatVector<T>(
                   {dataAt<T>(0), dataAt<T>(3), std::nullopt, dataAt<T>(4)}),
               makeNullableFlatVector<U>(
                   {dataAt<U>(4), std::nullopt, dataAt<U>(2), dataAt<U>(1)})}),
-         fmt::format("SELECT {}", asSql(dataAt<T>(4)))},
+         std::format("SELECT {}", asSql(dataAt<T>(4)))},
 
         {makeRowVector(
              {makeNullableFlatVector<T>(
@@ -485,7 +485,7 @@ class MinMaxByGlobalByAggregationTest
                   {dataAt<T>(0), std::nullopt, dataAt<T>(3), dataAt<T>(4)}),
               makeNullableFlatVector<U>(
                   {dataAt<U>(2), std::nullopt, dataAt<U>(1), dataAt<U>(4)})}),
-         fmt::format("SELECT {}", asSql(dataAt<T>(3)))}};
+         std::format("SELECT {}", asSql(dataAt<T>(3)))}};
     for (const auto& testData : testSettings) {
       SCOPED_TRACE(testData.debugString());
       // Skip testing with TableScan because the result for some testData
@@ -506,7 +506,7 @@ class MinMaxByGlobalByAggregationTest
       const std::string verifyDuckDbSql;
 
       const std::string debugString() const {
-        return fmt::format(
+        return std::format(
             "\ninputRowVector: {}\n{}\nverifyDuckDbSql: {}",
             inputRowVector->toString(),
             inputRowVector->toString(0, inputRowVector->size()),
@@ -517,7 +517,7 @@ class MinMaxByGlobalByAggregationTest
         {makeRowVector(
              {makeConstant(std::optional<T>(dataAt<T>(0)), 5),
               makeConstant(std::optional<U>(dataAt<U>(0)), 5)}),
-         fmt::format("SELECT {}", asSql(dataAt<T>(0)))},
+         std::format("SELECT {}", asSql(dataAt<T>(0)))},
 
         {makeRowVector(
              {makeNullableFlatVector<T>(
@@ -545,7 +545,7 @@ class MinMaxByGlobalByAggregationTest
         {makeRowVector(
              {makeNullableFlatVector<T>({dataAt<T>(4), std::nullopt}),
               makeConstant(std::optional<U>(kLowest<U>), 2)}),
-         fmt::format("SELECT {}", asSql(dataAt<T>(4)))},
+         std::format("SELECT {}", asSql(dataAt<T>(4)))},
 
         // Regular cases.
         {makeRowVector(
@@ -560,14 +560,14 @@ class MinMaxByGlobalByAggregationTest
                   {dataAt<T>(0), dataAt<T>(3), std::nullopt, dataAt<T>(4)}),
               makeNullableFlatVector<U>(
                   {dataAt<U>(2), std::nullopt, dataAt<U>(1), dataAt<U>(0)})}),
-         fmt::format("SELECT {}", asSql(dataAt<T>(0)))},
+         std::format("SELECT {}", asSql(dataAt<T>(0)))},
 
         {makeRowVector(
              {makeNullableFlatVector<T>(
                   {dataAt<T>(0), dataAt<T>(3), std::nullopt, dataAt<T>(4)}),
               makeNullableFlatVector<U>(
                   {dataAt<U>(1), std::nullopt, dataAt<U>(3), dataAt<U>(4)})}),
-         fmt::format("SELECT {}", asSql(dataAt<T>(4)))},
+         std::format("SELECT {}", asSql(dataAt<T>(4)))},
 
         {makeRowVector(
              {makeNullableFlatVector<T>(
@@ -581,7 +581,7 @@ class MinMaxByGlobalByAggregationTest
                   {dataAt<T>(0), std::nullopt, dataAt<T>(3), dataAt<T>(4)}),
               makeNullableFlatVector<U>(
                   {dataAt<U>(1), std::nullopt, dataAt<U>(4), dataAt<U>(0)})}),
-         fmt::format("SELECT {}", asSql(dataAt<T>(3)))}};
+         std::format("SELECT {}", asSql(dataAt<T>(3)))}};
     for (const auto& testData : testSettings) {
       SCOPED_TRACE(testData.debugString());
       // Skip testing with TableScan because the result for some testData
@@ -706,23 +706,23 @@ class MinMaxByGroupByAggregationTest
       const std::string& comparisonColumnName,
       const std::string& groupByColumnName) {
     const std::string funcName = aggName == kMaxBy ? "max" : "min";
-    const std::string aggregate = fmt::format(
+    const std::string aggregate = std::format(
         "{}({}, {})", aggName, valueColumnName, comparisonColumnName);
     std::string verifyDuckDbSql;
     if (GetParam().valueType == TypeKind::BOOLEAN) {
-      verifyDuckDbSql = fmt::format(
+      verifyDuckDbSql = std::format(
           "SELECT {}, CAST({} as BOOLEAN) FROM tmp GROUP BY {}",
           groupByColumnName,
           aggregate,
           groupByColumnName);
     } else {
-      verifyDuckDbSql = fmt::format(
+      verifyDuckDbSql = std::format(
           "SELECT {}, {} FROM tmp GROUP BY {}",
           groupByColumnName,
           aggregate,
           groupByColumnName);
     }
-    SCOPED_TRACE(fmt::format(
+    SCOPED_TRACE(std::format(
         "{} GROUP BY {}\nverifyDuckDbSql: {}",
         aggregate,
         groupByColumnName,
@@ -738,7 +738,7 @@ class MinMaxByGroupByAggregationTest
       const std::string verifyDuckDbSql;
 
       const std::string debugString() const {
-        return fmt::format(
+        return std::format(
             "\ninputRowVector: {}\n{}\nverifyDuckDbSql: {}",
             inputRowVector->toString(),
             inputRowVector->toString(0, inputRowVector->size()),
@@ -750,7 +750,7 @@ class MinMaxByGroupByAggregationTest
              {makeConstant(std::optional<T>(dataAt<T>(0)), 6),
               makeConstant(std::optional<U>(dataAt<U>(0)), 6),
               makeConstant(std::optional<int32_t>(dataAt<int32_t>(0)), 6)}),
-         fmt::format(
+         std::format(
              "SELECT {}, {}", asSql(dataAt<int32_t>(0)), asSql(dataAt<T>(0)))},
 
         {makeRowVector(
@@ -763,7 +763,7 @@ class MinMaxByGroupByAggregationTest
                    dataAt<T>(4)}),
               makeConstant(std::optional<U>(dataAt<U>(0)), 6),
               makeConstant(std::optional<int32_t>(dataAt<int32_t>(0)), 6)}),
-         fmt::format("SELECT {}, NULL", asSql(dataAt<int32_t>(0)))},
+         std::format("SELECT {}, NULL", asSql(dataAt<int32_t>(0)))},
 
         // All null cases.
         {makeRowVector(
@@ -782,7 +782,7 @@ class MinMaxByGroupByAggregationTest
                    dataAt<int32_t>(1),
                    dataAt<int32_t>(2),
                    dataAt<int32_t>(2)})}),
-         fmt::format(
+         std::format(
              "VALUES ({}, NULL), ({}, NULL), ({}, NULL)",
              dataAt<int32_t>(0),
              dataAt<int32_t>(1),
@@ -804,7 +804,7 @@ class MinMaxByGroupByAggregationTest
                    dataAt<int32_t>(1),
                    dataAt<int32_t>(2),
                    dataAt<int32_t>(2)})}),
-         fmt::format(
+         std::format(
              "VALUES ({}, NULL), ({}, NULL), ({}, NULL)",
              dataAt<int32_t>(0),
              dataAt<int32_t>(1),
@@ -833,7 +833,7 @@ class MinMaxByGroupByAggregationTest
                    dataAt<int32_t>(2),
                    dataAt<int32_t>(1),
                    dataAt<int32_t>(0)})}),
-         fmt::format(
+         std::format(
              "VALUES ({}, {}), ({}, NULL), ({}, {})",
              asSql(dataAt<int32_t>(0)),
              asSql(dataAt<T>(0)),
@@ -863,7 +863,7 @@ class MinMaxByGroupByAggregationTest
                    dataAt<int32_t>(1),
                    dataAt<int32_t>(2),
                    dataAt<int32_t>(2)})}),
-         fmt::format(
+         std::format(
              "VALUES ({}, NULL), ({}, {}), ({}, {})",
              asSql(dataAt<int32_t>(0)),
              asSql(dataAt<int32_t>(1)),
@@ -890,7 +890,7 @@ class MinMaxByGroupByAggregationTest
       const std::string verifyDuckDbSql;
 
       const std::string debugString() const {
-        return fmt::format(
+        return std::format(
             "\ninputRowVector: {}\n{}\nverifyDuckDbSql: {}",
             inputRowVector->toString(),
             inputRowVector->toString(0, inputRowVector->size()),
@@ -902,7 +902,7 @@ class MinMaxByGroupByAggregationTest
              {makeConstant(std::optional<T>(dataAt<T>(0)), 6),
               makeConstant(std::optional<U>(dataAt<U>(0)), 6),
               makeConstant(std::optional<int32_t>(dataAt<int32_t>(0)), 6)}),
-         fmt::format(
+         std::format(
              "SELECT {}, {}", asSql(dataAt<int32_t>(0)), asSql(dataAt<T>(0)))},
         {makeRowVector(
              {makeNullableFlatVector<T>(
@@ -914,7 +914,7 @@ class MinMaxByGroupByAggregationTest
                    dataAt<T>(4)}),
               makeConstant(std::optional<U>(dataAt<U>(0)), 6),
               makeConstant(std::optional<int32_t>(dataAt<int32_t>(0)), 6)}),
-         fmt::format("SELECT {}, NULL", asSql(dataAt<int32_t>(0)))},
+         std::format("SELECT {}, NULL", asSql(dataAt<int32_t>(0)))},
 
         // All null cases.
         {makeRowVector(
@@ -933,7 +933,7 @@ class MinMaxByGroupByAggregationTest
                    dataAt<int32_t>(1),
                    dataAt<int32_t>(2),
                    dataAt<int32_t>(2)})}),
-         fmt::format(
+         std::format(
              "VALUES ({}, NULL), ({}, NULL), ({}, NULL)",
              asSql(dataAt<int32_t>(0)),
              asSql(dataAt<int32_t>(1)),
@@ -955,7 +955,7 @@ class MinMaxByGroupByAggregationTest
                    dataAt<int32_t>(1),
                    dataAt<int32_t>(2),
                    dataAt<int32_t>(2)})}),
-         fmt::format(
+         std::format(
              "VALUES ({}, NULL), ({}, NULL), ({}, NULL)",
              asSql(dataAt<int32_t>(0)),
              asSql(dataAt<int32_t>(1)),
@@ -984,7 +984,7 @@ class MinMaxByGroupByAggregationTest
                    dataAt<int32_t>(2),
                    dataAt<int32_t>(1),
                    dataAt<int32_t>(0)})}),
-         fmt::format(
+         std::format(
              "VALUES ({}, NULL), ({}, {}), ({}, {})",
              asSql(dataAt<int32_t>(0)),
              asSql(dataAt<int32_t>(1)),
@@ -1014,7 +1014,7 @@ class MinMaxByGroupByAggregationTest
                    dataAt<int32_t>(1),
                    dataAt<int32_t>(2),
                    dataAt<int32_t>(2)})}),
-         fmt::format(
+         std::format(
              "VALUES ({}, NULL), ({}, {}), ({}, {})",
              asSql(dataAt<int32_t>(0)),
              asSql(dataAt<int32_t>(1)),
@@ -2067,10 +2067,10 @@ std::vector<std::string> makeStrings(vector_size_t size) {
   for (auto i = 0; i < size; ++i) {
     if (i % 7 == 0) {
       // Short (inline) string.
-      s.push_back(fmt::format("s{}", i));
+      s.push_back(std::format("s{}", i));
     } else {
       // Long (non-inline string).
-      s.push_back(fmt::format("Non-inline string #{}...", i));
+      s.push_back(std::format("Non-inline string #{}...", i));
     }
   }
   return s;
@@ -2354,12 +2354,12 @@ TEST_F(MinMaxByNTest, peakMemory) {
       makeFlatVector<std::string>(
           1'000,
           [](auto row) {
-            return fmt::format("this is a very long string for row {}", row);
+            return std::format("this is a very long string for row {}", row);
           }),
       makeFlatVector<std::string>(
           1'000,
           [](auto row) {
-            return fmt::format(
+            return std::format(
                 "this is another very long string for row {}", row);
           }),
   });

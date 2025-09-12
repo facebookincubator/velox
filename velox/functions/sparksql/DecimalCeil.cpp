@@ -50,10 +50,10 @@ void registerDecimalCeil(const std::string& prefix) {
   std::vector<exec::SignatureVariable> constraints = {
       exec::SignatureVariable(
           P2::name(),
-          fmt::format(
+          std::format(
               "min(38, {p} - {s} + min({s}, 1))",
-              fmt::arg("p", P1::name()),
-              fmt::arg("s", S1::name())),
+              std::arg("p", P1::name()),
+              std::arg("s", S1::name())),
           exec::ParameterType::kIntegerParameter),
       exec::SignatureVariable(
           S2::name(), "0", exec::ParameterType::kIntegerParameter),

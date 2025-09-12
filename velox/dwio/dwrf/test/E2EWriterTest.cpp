@@ -1746,7 +1746,7 @@ DEBUG_ONLY_TEST_F(E2EWriterTest, memoryReclaimOnWrite) {
   }
   const common::SpillConfig spillConfig = getSpillConfig(10, 20);
   for (bool enableReclaim : {false, true}) {
-    SCOPED_TRACE(fmt::format("enableReclaim {}", enableReclaim));
+    SCOPED_TRACE(std::format("enableReclaim {}", enableReclaim));
 
     auto config = std::make_shared<dwrf::Config>();
     config->set<uint64_t>(dwrf::Config::STRIPE_SIZE, 1L << 30);
@@ -1873,7 +1873,7 @@ DEBUG_ONLY_TEST_F(E2EWriterTest, memoryReclaimOnFlush) {
   }
   const common::SpillConfig spillConfig = getSpillConfig(10, 20);
   for (bool enableReclaim : {false, true}) {
-    SCOPED_TRACE(fmt::format("enableReclaim {}", enableReclaim));
+    SCOPED_TRACE(std::format("enableReclaim {}", enableReclaim));
 
     auto config = std::make_shared<dwrf::Config>();
     config->set<uint64_t>(dwrf::Config::STRIPE_SIZE, 1L << 30);
@@ -1964,7 +1964,7 @@ TEST_F(E2EWriterTest, memoryReclaimAfterClose) {
     bool expectedNonReclaimableAttempt;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "canReclaim: {}, abort: {}, expectedNonReclaimableAttempt: {}",
           canReclaim,
           abort,
@@ -2056,7 +2056,7 @@ DEBUG_ONLY_TEST_F(E2EWriterTest, memoryReclaimDuringInit) {
 
   const common::SpillConfig spillConfig = getSpillConfig(10, 20);
   for (const auto& reclaimable : {false, true}) {
-    SCOPED_TRACE(fmt::format("reclaimable {}", reclaimable));
+    SCOPED_TRACE(std::format("reclaimable {}", reclaimable));
 
     auto config = std::make_shared<dwrf::Config>();
     config->set<uint64_t>(dwrf::Config::STRIPE_SIZE, 1L << 30);
@@ -2140,7 +2140,7 @@ DEBUG_ONLY_TEST_F(E2EWriterTest, memoryReclaimThreshold) {
   }
   const std::vector<uint64_t> writerFlushThresholdSizes = {0, 1L << 30};
   for (uint64_t writerFlushThresholdSize : writerFlushThresholdSizes) {
-    SCOPED_TRACE(fmt::format(
+    SCOPED_TRACE(std::format(
         "writerFlushThresholdSize {}",
         succinctBytes(writerFlushThresholdSize)));
 

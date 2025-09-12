@@ -203,13 +203,13 @@ class TestReporter : public BaseStatsReporter {
       return;
     }
 
-    // Substitute placeholders in the key pattern with subkeys using fmt::format
+    // Substitute placeholders in the key pattern with subkeys using std::format
     std::string formattedKey;
-    fmt::dynamic_format_arg_store<fmt::format_context> store;
+    std::dynamic_format_arg_store<std::format_context> store;
     for (const auto& subkey : subkeys) {
       store.push_back(subkey);
     }
-    formattedKey = fmt::vformat(key, store);
+    formattedKey = std::vformat(key, store);
     counterMap[formattedKey] += value;
   }
 

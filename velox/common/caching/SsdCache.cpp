@@ -60,7 +60,7 @@ SsdCache::SsdCache(const Config& config)
       bits::roundUp(config.maxBytes, sizeQuantum) / sizeQuantum;
   for (auto i = 0; i < numShards_; ++i) {
     const auto fileConfig = SsdFile::Config(
-        fmt::format("{}{}", filePrefix_, i),
+        std::format("{}{}", filePrefix_, i),
         i,
         fileMaxRegions,
         config.checkpointIntervalBytes / config.numShards,
@@ -134,7 +134,7 @@ void SsdCache::write(std::vector<CachePin> pins) {
       if (--writesInProgress_ == 0) {
         // Typically occurs every few GB. Allows detecting unusually slow rates
         // from failing devices.
-        VELOX_SSD_CACHE_LOG(INFO) << fmt::format(
+        VELOX_SSD_CACHE_LOG(INFO) << std::format(
             "Wrote {}, {} bytes/s",
             succinctBytes(bytes),
             static_cast<float>(bytes) / (getCurrentTimeMicro() - startTimeUs));

@@ -114,14 +114,14 @@ class Re2FunctionsTest : public test::FunctionBaseTest {
       std::optional<bool> expected,
       const std::string& errorMessage = "") {
     {
-      SCOPED_TRACE(fmt::format("Input: '{}', pattern: '{}'", input, pattern));
+      SCOPED_TRACE(std::format("Input: '{}', pattern: '{}'", input, pattern));
 
       // Test literal path.
       auto eval = [&]() {
         return evaluateOnce<bool>(
             escape.has_value()
-                ? fmt::format("like(c0, '{}', '{}')", pattern, escape.value())
-                : fmt::format("like(c0, '{}')", pattern),
+                ? std::format("like(c0, '{}', '{}')", pattern, escape.value())
+                : std::format("like(c0, '{}')", pattern),
             std::optional<std::string>{input});
       };
 
@@ -528,7 +528,7 @@ TEST_F(Re2FunctionsTest, likeDeterminePatternKind) {
         PatternMetadata patternMetadata =
             determinePatternKind(pattern, std::nullopt);
 
-        SCOPED_TRACE(fmt::format(
+        SCOPED_TRACE(std::format(
             "pattern: '{}', length: {}, actualLength: {}",
             pattern,
             length,
@@ -540,7 +540,7 @@ TEST_F(Re2FunctionsTest, likeDeterminePatternKind) {
   auto testPatternString = [&](std::string_view pattern,
                                PatternKind patternKind,
                                std::string_view fixedPattern) {
-    SCOPED_TRACE(fmt::format(
+    SCOPED_TRACE(std::format(
         "pattern: '{}', fixedPattern: '{}'", pattern, fixedPattern));
 
     PatternMetadata patternMetadata =
@@ -1409,17 +1409,17 @@ TEST_F(Re2FunctionsTest, likeRegexLimit) {
                              vector_size_t idx) -> std::string {
     switch (patternKind) {
       case PatternKind::kExactlyN:
-        return fmt::format("{:_<{}}", "", idx + 1);
+        return std::format("{:_<{}}", "", idx + 1);
       case PatternKind::kAtLeastN:
-        return fmt::format("{:%<{}}", "", idx + 1);
+        return std::format("{:%<{}}", "", idx + 1);
       case PatternKind::kFixed:
-        return fmt::format("abc{}", idx);
+        return std::format("abc{}", idx);
       case PatternKind::kPrefix:
-        return fmt::format("abc{}%%", idx);
+        return std::format("abc{}%%", idx);
       case PatternKind::kSuffix:
-        return fmt::format("%%{}abc", idx);
+        return std::format("%%{}abc", idx);
       case PatternKind::kSubstring:
-        return fmt::format("%%abc{}%%%", idx);
+        return std::format("%%abc{}%%%", idx);
       default:
         VELOX_UNREACHABLE("like is not optimized for pattern {}", patternKind);
     }
@@ -1451,7 +1451,7 @@ TEST_F(Re2FunctionsTest, likeRegexLimit) {
   // Over maxCompiledRegexes, all require regex, will fail.
   for (auto i = 0; i < aboveMaxCompiledRegexes; i++) {
     std::string localPattern =
-        fmt::format("b%[0-9]+.*{}.*{}.*[0-9]+", 'c' + i, 'c' + i);
+        std::format("b%[0-9]+.*{}.*{}.*[0-9]+", 'c' + i, 'c' + i);
     flatPattern->set(i, StringView(localPattern));
   }
 
@@ -1526,14 +1526,14 @@ TEST_F(Re2FunctionsTest, limit) {
   auto data = makeRowVector({
       makeFlatVector<std::string>(
           aboveMaxCompiledRegexes,
-          [](auto row) { return fmt::format("Apples and oranges {}", row); }),
+          [](auto row) { return std::format("Apples and oranges {}", row); }),
       makeFlatVector<std::string>(
           aboveMaxCompiledRegexes,
-          [](auto row) { return fmt::format("Apples (.*) oranges {}", row); }),
+          [](auto row) { return std::format("Apples (.*) oranges {}", row); }),
       makeFlatVector<std::string>(
           aboveMaxCompiledRegexes,
           [&](auto row) {
-            return fmt::format(
+            return std::format(
                 "Apples (.*) oranges {}", row % maxCompiledRegexes);
           }),
   });

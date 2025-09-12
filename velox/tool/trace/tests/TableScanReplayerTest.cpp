@@ -99,7 +99,7 @@ class TableScanReplayerTest : public HiveConnectorTestBase {
 TEST_F(TableScanReplayerTest, runner) {
   const auto vectors = makeVectors(10, 100);
   const auto testDir = TempDirectoryPath::create();
-  const auto traceRoot = fmt::format("{}/{}", testDir->getPath(), "traceRoot");
+  const auto traceRoot = std::format("{}/{}", testDir->getPath(), "traceRoot");
   const auto fs = filesystems::getFileSystem(testDir->getPath(), nullptr);
   const int numSplits{5};
   std::vector<std::shared_ptr<TempFilePath>> splitFiles;
@@ -168,7 +168,7 @@ TEST_F(TableScanReplayerTest, runner) {
 TEST_F(TableScanReplayerTest, basic) {
   const auto vectors = makeVectors(10, 100);
   const auto testDir = TempDirectoryPath::create();
-  const auto traceRoot = fmt::format("{}/{}", testDir->getPath(), "traceRoot");
+  const auto traceRoot = std::format("{}/{}", testDir->getPath(), "traceRoot");
   const auto fs = filesystems::getFileSystem(testDir->getPath(), nullptr);
   std::vector<std::shared_ptr<TempFilePath>> splitFiles;
   for (int i = 0; i < 5; ++i) {
@@ -235,7 +235,7 @@ TEST_F(TableScanReplayerTest, basic) {
 TEST_F(TableScanReplayerTest, columnPrunning) {
   const auto vectors = makeVectors(10, 100);
   const auto testDir = TempDirectoryPath::create();
-  const auto traceRoot = fmt::format("{}/{}", testDir->getPath(), "traceRoot");
+  const auto traceRoot = std::format("{}/{}", testDir->getPath(), "traceRoot");
   const auto fs = filesystems::getFileSystem(testDir->getPath(), nullptr);
   std::vector<std::shared_ptr<TempFilePath>> splitFiles;
   for (int i = 0; i < 5; ++i) {
@@ -313,7 +313,7 @@ TEST_F(TableScanReplayerTest, subfieldPrunning) {
       AssertQueryBuilder(plan).split(split).copyResults(pool());
 
   const auto testDir = TempDirectoryPath::create();
-  const auto traceRoot = fmt::format("{}/{}", testDir->getPath(), "traceRoot");
+  const auto traceRoot = std::format("{}/{}", testDir->getPath(), "traceRoot");
   std::shared_ptr<Task> task;
   auto traceResult =
       AssertQueryBuilder(plan)
@@ -344,7 +344,7 @@ TEST_F(TableScanReplayerTest, subfieldPrunning) {
 TEST_F(TableScanReplayerTest, concurrent) {
   const auto vectors = makeVectors(2, 10);
   const auto testDir = TempDirectoryPath::create();
-  const auto traceRoot = fmt::format("{}/{}", testDir->getPath(), "traceRoot");
+  const auto traceRoot = std::format("{}/{}", testDir->getPath(), "traceRoot");
   const auto fs = filesystems::getFileSystem(testDir->getPath(), nullptr);
   std::vector<std::shared_ptr<TempFilePath>> splitFiles;
   for (int i = 0; i < 2; ++i) {

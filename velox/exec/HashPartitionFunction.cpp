@@ -143,7 +143,7 @@ std::string HashPartitionFunctionSpec::toString() const {
     }
   }
 
-  return fmt::format("HASH({})", keys.str());
+  return std::format("HASH({})", keys.str());
 }
 
 folly::dynamic HashPartitionFunctionSpec::serialize() const {

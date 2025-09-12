@@ -24,7 +24,7 @@ using namespace facebook::velox;
 namespace facebook::velox::connector::tpcds {
 
 std::string TpcdsTableHandle::toString() const {
-  return fmt::format(
+  return std::format(
       "table: {}, scale factor: {}", toTableName(table_), scaleFactor_);
 }
 

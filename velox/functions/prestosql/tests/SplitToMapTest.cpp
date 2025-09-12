@@ -182,7 +182,7 @@ TEST_F(SplitToMapTest, invalidInput) {
                         const std::string& keyValueDelimiter,
                         RowVectorPtr data) {
     evaluate(
-        fmt::format(
+        std::format(
             "split_to_map(c0, '{}', '{}')", entryDelimiter, keyValueDelimiter),
         data);
   };
@@ -190,9 +190,9 @@ TEST_F(SplitToMapTest, invalidInput) {
   auto trySplitToMap = [&](const std::string& entryDelimiter,
                            const std::string& keyValueDelimiter,
                            const RowVectorPtr& data) {
-    SCOPED_TRACE(fmt::format("{} {}", entryDelimiter, keyValueDelimiter));
+    SCOPED_TRACE(std::format("{} {}", entryDelimiter, keyValueDelimiter));
     auto result = evaluate(
-        fmt::format(
+        std::format(
             "try(split_to_map(c0, '{}', '{}'))",
             entryDelimiter,
             keyValueDelimiter),
@@ -239,7 +239,7 @@ TEST_F(SplitToMapTest, lambda) {
     });
 
     return evaluate(
-        fmt::format("split_to_map(c0, ',', ':', {})", lambda), rowVector);
+        std::format("split_to_map(c0, ',', ':', {})", lambda), rowVector);
   };
 
   // No duplicate keys.
@@ -278,13 +278,13 @@ TEST_F(SplitToMapTest, testNullArg) {
   });
 
   auto result =
-      evaluate(fmt::format("split_to_map(c0, '{}', null)", ':'), data);
+      evaluate(std::format("split_to_map(c0, '{}', null)", ':'), data);
   velox::test::assertEqualVectors(nullMapVector, result);
 
-  result = evaluate(fmt::format("split_to_map(c0, null, '{}')", ','), data);
+  result = evaluate(std::format("split_to_map(c0, null, '{}')", ','), data);
   velox::test::assertEqualVectors(nullMapVector, result);
 
-  result = evaluate(fmt::format("split_to_map(c0, null, null)"), data);
+  result = evaluate(std::format("split_to_map(c0, null, null)"), data);
   velox::test::assertEqualVectors(nullMapVector, result);
 }
 } // namespace

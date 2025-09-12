@@ -531,7 +531,7 @@ TEST_F(StringTest, repeat) {
   const auto stringRepeat = [&](const std::optional<std::string>& str,
                                 const std::optional<int32_t>& times) {
     return evaluateOnce<std::string>(
-        fmt::format("{}(c0, c1)", "repeat"), str, times);
+        std::format("{}(c0, c1)", "repeat"), str, times);
   };
 
   EXPECT_EQ(stringRepeat("hh", 2), "hhhh");

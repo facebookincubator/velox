@@ -168,7 +168,7 @@ class CardinalityBenchmark : public functions::test::FunctionBenchmarkBase {
     folly::BenchmarkSuspender suspender;
     auto data = generateData(false);
     auto exprSet = compileExpression(
-        fmt::format("if(c1, 5, {}(c0))", functionName),
+        std::format("if(c1, 5, {}(c0))", functionName),
         asRowType(data->type()));
     suspender.dismiss();
 

@@ -33,7 +33,7 @@ std::ostream& operator<<(std::ostream& os, const Counter& c) {
 }
 
 template <>
-struct fmt::formatter<Counter> {
+struct std::formatter<Counter> {
   constexpr auto parse(format_parse_context& ctx) {
     return ctx.begin();
   }
@@ -41,7 +41,7 @@ struct fmt::formatter<Counter> {
   template <typename FormatContext>
   auto format(const Counter& c, FormatContext& ctx) const {
     auto x = c.counter++;
-    return fmt::format_to(ctx.out(), "{}", x);
+    return std::format_to(ctx.out(), "{}", x);
   }
 };
 
@@ -106,7 +106,7 @@ void testExceptionTraceCollectionControl(bool userException, bool enabled) {
           false);
     }
   } catch (VeloxException& e) {
-    SCOPED_TRACE(fmt::format(
+    SCOPED_TRACE(std::format(
         "enabled: {}, user flag: {}, sys flag: {}",
         enabled,
         FLAGS_velox_exception_user_stacktrace_enabled,
@@ -170,7 +170,7 @@ void testExceptionTraceCollectionRateControl(
             false);
       }
     } catch (VeloxException& e) {
-      SCOPED_TRACE(fmt::format(
+      SCOPED_TRACE(std::format(
           "userException: {}, hasRateLimit: {}, user limit: {}ms, sys limit: {}ms",
           userException,
           hasRateLimit,
@@ -477,19 +477,19 @@ TEST(ExceptionTest, expressionString) {
 
   verifyVeloxException(
       [&]() { VELOX_CHECK_EQ(i, j); },
-      fmt::format(msgTemplate, "i == j", "1 vs. 100"));
+      std::format(msgTemplate, "i == j", "1 vs. 100"));
 
   verifyVeloxException(
       [&]() { VELOX_CHECK_NE(i, 1); },
-      fmt::format(msgTemplate, "i != 1", "1 vs. 1"));
+      std::format(msgTemplate, "i != 1", "1 vs. 1"));
 
   verifyVeloxException(
       [&]() { VELOX_CHECK_LT(i + j, j); },
-      fmt::format(msgTemplate, "i + j < j", "101 vs. 100"));
+      std::format(msgTemplate, "i + j < j", "101 vs. 100"));
 
   verifyVeloxException(
       [&]() { VELOX_CHECK_GE(i + j * 2, 1000); },
-      fmt::format(msgTemplate, "i + j * 2 >= 1000", "201 vs. 1000"));
+      std::format(msgTemplate, "i + j * 2 >= 1000", "201 vs. 1000"));
 }
 
 TEST(ExceptionTest, notImplemented) {
@@ -518,7 +518,7 @@ TEST(ExceptionTest, errorCode) {
 
   verifyVeloxException(
       [&]() { VELOX_FAIL(); },
-      fmt::format(
+      std::format(
           "Exception: {}"
           "\nError Source: {}"
           "\nError Code: {}"
@@ -533,7 +533,7 @@ TEST(ExceptionTest, errorCode) {
 
   verifyVeloxException(
       [&]() { VELOX_USER_FAIL(); },
-      fmt::format(
+      std::format(
           "Exception: {}"
           "\nError Source: {}"
           "\nError Code: {}"
@@ -574,11 +574,11 @@ TEST(ExceptionTest, context) {
     ++(*arg->callCount);
     switch (exceptionType) {
       case facebook::velox::VeloxException::Type::kUser:
-        return fmt::format("User error: {}", arg->message);
+        return std::format("User error: {}", arg->message);
       case facebook::velox::VeloxException::Type::kSystem:
-        return fmt::format("System error: {}", arg->message);
+        return std::format("System error: {}", arg->message);
       default:
-        return fmt::format("Unexpected error type: {}", arg->message);
+        return std::format("Unexpected error type: {}", arg->message);
     }
   };
 
@@ -924,11 +924,11 @@ TEST(ExceptionTest, wrappedExceptionWithContext) {
     auto data = static_cast<char*>(untypedArg);
     switch (exceptionType) {
       case facebook::velox::VeloxException::Type::kUser:
-        return fmt::format("User error: {}", data);
+        return std::format("User error: {}", data);
       case facebook::velox::VeloxException::Type::kSystem:
-        return fmt::format("System error: {}", data);
+        return std::format("System error: {}", data);
       default:
-        return fmt::format("Unexpected error type: {}", data);
+        return std::format("Unexpected error type: {}", data);
     }
   };
 
@@ -991,10 +991,10 @@ TEST(ExceptionTest, wrappedExceptionWithContext) {
 
 TEST(ExceptionTest, exceptionMacroInlining) {
   // Verify that the right formatting method is inlined when using _VELOX_THROW
-  // macro. This test can be removed if fmt::vformat changes behavior and starts
+  // macro. This test can be removed if std::vformat changes behavior and starts
   // ignoring extra brackets.
 
-  // The following string should throw an error when passed to fmt::vformat.
+  // The following string should throw an error when passed to std::vformat.
   std::string errorStr = "This {} {is a test.";
   // Inlined with the method that directly returns the std::string input.
   try {
@@ -1011,7 +1011,7 @@ TEST(ExceptionTest, exceptionMacroInlining) {
   }
 
   // Inlined with the method that passes the errorStr and the next argument via
-  // fmt::vformat. Should throw format_error.
+  // std::vformat. Should throw format_error.
   try {
     VELOX_USER_FAIL(errorStr, "definitely");
   } catch (const std::exception& e) {

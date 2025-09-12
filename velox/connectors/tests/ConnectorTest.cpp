@@ -75,17 +75,17 @@ TEST_F(ConnectorTest, getAllConnectors) {
     registerConnector(
         getConnectorFactory(TestConnectorFactory::kConnectorFactoryName)
             ->newConnector(
-                fmt::format("connector-{}", i),
+                std::format("connector-{}", i),
                 std::make_shared<config::ConfigBase>(
                     std::unordered_map<std::string, std::string>())));
   }
   const auto& connectors = getAllConnectors();
   EXPECT_EQ(connectors.size(), numConnectors);
   for (int32_t i = 0; i < numConnectors; i++) {
-    EXPECT_EQ(connectors.count(fmt::format("connector-{}", i)), 1);
+    EXPECT_EQ(connectors.count(std::format("connector-{}", i)), 1);
   }
   for (int32_t i = 0; i < numConnectors; i++) {
-    unregisterConnector(fmt::format("connector-{}", i));
+    unregisterConnector(std::format("connector-{}", i));
   }
   EXPECT_EQ(getAllConnectors().size(), 0);
   EXPECT_TRUE(

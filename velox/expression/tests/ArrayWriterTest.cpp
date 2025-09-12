@@ -76,7 +76,7 @@ class ArrayWriterTest : public functions::test::FunctionBaseTest {
     registerFunction<Func, Array<T>, int64_t>({testFunctionName});
 
     auto result = evaluate(
-        fmt::format("{}(c0)", testFunctionName),
+        std::format("{}(c0)", testFunctionName),
         makeRowVector(
             {makeFlatVector<int64_t>({1, 2, 3, 4, 5, 6, 7, 8, 9, 10})}));
 

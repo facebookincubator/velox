@@ -417,9 +417,9 @@ void AggregationTest::setTestKey(
     chars[0] = (value % 64) + 32;
     chars[1] = ((value / 64) % 64) + 32;
   } else {
-    chars = fmt::format("{}", value);
+    chars = std::format("{}", value);
     for (int i = 2; i < multiplier; ++i) {
-      chars = chars + fmt::format("{}", i * value);
+      chars = chars + std::format("{}", i * value);
     }
   }
   vector->set(row, StringView(chars));
@@ -642,7 +642,7 @@ TEST_F(AggregationTest, manyGlobalAggregations) {
 
   std::vector<std::string> aggregates;
   for (int i = 0; i < rowType->size(); i++) {
-    aggregates.push_back(fmt::format("sum({})", rowType->nameOf(i)));
+    aggregates.push_back(std::format("sum({})", rowType->nameOf(i)));
   }
 
   auto op = PlanBuilder()
@@ -654,7 +654,7 @@ TEST_F(AggregationTest, manyGlobalAggregations) {
 
   aggregates.clear();
   for (int i = 0; i < rowType->size(); i++) {
-    aggregates.push_back(fmt::format("sum(distinct {})", rowType->nameOf(i)));
+    aggregates.push_back(std::format("sum(distinct {})", rowType->nameOf(i)));
   }
 
   op = PlanBuilder()
@@ -670,7 +670,7 @@ TEST_F(AggregationTest, manyGlobalAggregations) {
   createDuckDbTable(vectors);
   aggregates.clear();
   for (int i = 0; i < rowType->size(); i++) {
-    aggregates.push_back(fmt::format(
+    aggregates.push_back(std::format(
         "array_agg({} ORDER BY {})", rowType->nameOf(i), rowType->nameOf(i)));
   }
 
@@ -1129,7 +1129,7 @@ TEST_F(AggregationTest, partialAggregationMemoryLimitIncrease) {
     bool expectedPartialAggregationMemoryLimitIncrease;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "initialPartialMemoryLimit: {}, extendedPartialMemoryLimit: {}, expectedPartialOutputFlush: {}, expectedPartialAggregationMemoryLimitIncrease: {}",
           initialPartialMemoryLimit,
           extendedPartialMemoryLimit,
@@ -1707,7 +1707,7 @@ TEST_F(AggregationTest, outputBatchSizeCheckWithSpill) {
     uint32_t expectedNumOutputVectors;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "smallInput: {} maxOutputRows: {}, maxOutputBytes: {}, expectedNumOutputVectors: {}",
           smallInput,
           maxOutputRows,
@@ -1788,7 +1788,7 @@ TEST_F(AggregationTest, outputBatchSizeCheckWithSpillForOrderedAggr) {
     uint32_t expectedNumOutputVectors;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "maxOutputRows: {}, maxOutputBytes: {}, expectedNumOutputVectors: {}",
           maxOutputRows,
           succinctBytes(maxOutputBytes),
@@ -1902,7 +1902,7 @@ TEST_F(AggregationTest, outputBatchSizeCheckWithoutSpill) {
     uint32_t expectedNumOutputVectors;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "smallInput: {} maxOutputRows: {}, maxOutputBytes: {}, expectedNumOutputVectors: {}",
           smallInput,
           maxOutputRows,
@@ -1973,7 +1973,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, minSpillableMemoryReservation) {
   createDuckDbTable(batches);
 
   for (int32_t minSpillableReservationPct : {5, 50, 100}) {
-    SCOPED_TRACE(fmt::format(
+    SCOPED_TRACE(std::format(
         "minSpillableReservationPct: {}", minSpillableReservationPct));
 
     SCOPED_TESTVALUE_SET(
@@ -2157,7 +2157,7 @@ TEST_F(AggregationTest, spillPrefixSortOptimization) {
     uint32_t expectedNumPrefixSortKeys;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "prefixSortSpillEnabled {}, maxNormalizedKeyBytes {}, minNumRows {}, expectedNumPrefixSortKeys {}",
           prefixSortSpillEnabled,
           maxNormalizedKeyBytes,
@@ -2451,7 +2451,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimDuringInputProcessing) {
     bool expectedReclaimable;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "triggerCondition {}, spillEnabled {}, expectedReclaimable {}",
           triggerCondition,
           spillEnabled,
@@ -2723,7 +2723,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimDuringAllocation) {
 
   const std::vector<bool> enableSpillings = {false, true};
   for (const auto enableSpilling : enableSpillings) {
-    SCOPED_TRACE(fmt::format("enableSpilling {}", enableSpilling));
+    SCOPED_TRACE(std::format("enableSpilling {}", enableSpilling));
 
     auto tempDirectory = exec::test::TempDirectoryPath::create();
     auto queryCtx = core::QueryCtx::create(executor_.get());
@@ -2849,7 +2849,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimDuringOutputProcessing) {
 
   const std::vector<bool> enableSpillings = {false, true};
   for (const auto enableSpilling : enableSpillings) {
-    SCOPED_TRACE(fmt::format("enableSpilling {}", enableSpilling));
+    SCOPED_TRACE(std::format("enableSpilling {}", enableSpilling));
 
     auto tempDirectory = exec::test::TempDirectoryPath::create();
     auto queryCtx = core::QueryCtx::create(executor_.get());
@@ -2985,7 +2985,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimDuringNonReclaimableSection) {
     bool nonReclaimableInput;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "enableSpilling {}, nonReclaimableInput {}",
           enableSpilling,
           nonReclaimableInput);
@@ -2994,7 +2994,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimDuringNonReclaimableSection) {
       {true, false}, {true, true}, {false, false}, {false, true}};
 
   for (const auto& testData : testSettings) {
-    SCOPED_TRACE(fmt::format("testData {}", testData.debugString()));
+    SCOPED_TRACE(std::format("testData {}", testData.debugString()));
 
     auto tempDirectory = exec::test::TempDirectoryPath::create();
     auto queryCtx = core::QueryCtx::create(executor_.get());
@@ -3147,7 +3147,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimWithEmptyAggregationTable) {
 
   const std::vector<bool> enableSpillings = {false, true};
   for (const auto enableSpilling : enableSpillings) {
-    SCOPED_TRACE(fmt::format("enableSpilling {}", enableSpilling));
+    SCOPED_TRACE(std::format("enableSpilling {}", enableSpilling));
 
     auto tempDirectory = exec::test::TempDirectoryPath::create();
     auto queryCtx = core::QueryCtx::create(executor_.get());
@@ -3274,7 +3274,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, abortDuringOutputProcessing) {
     int numDrivers;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "abortFromRootMemoryPool {} numDrivers {}",
           abortFromRootMemoryPool,
           numDrivers);
@@ -3338,7 +3338,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, abortDuringInputgProcessing) {
     int numDrivers;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "abortFromRootMemoryPool {} numDrivers {}",
           abortFromRootMemoryPool,
           numDrivers);
@@ -3627,7 +3627,7 @@ TEST_F(AggregationTest, maxSpillBytes) {
     int32_t maxSpilledBytes;
     bool expectedExceedLimit;
     std::string debugString() const {
-      return fmt::format("maxSpilledBytes {}", maxSpilledBytes);
+      return std::format("maxSpilledBytes {}", maxSpilledBytes);
     }
   } testSettings[] = {{1 << 30, false}, {1, true}, {0, false}};
 
@@ -3662,7 +3662,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimFromAggregation) {
       createVectors(numInputs, rowType_, fuzzerOpts_);
   createDuckDbTable(vectors);
   for (const auto maxSpillRunRows : std::vector<uint32_t>({32, 1UL << 30})) {
-    SCOPED_TRACE(fmt::format("maxSpillRunRows {}", maxSpillRunRows));
+    SCOPED_TRACE(std::format("maxSpillRunRows {}", maxSpillRunRows));
 
     std::atomic_int inputCount{0};
     SCOPED_TESTVALUE_SET(
@@ -3716,7 +3716,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimFromDistinctAggregation) {
       createVectors(numInputs, rowType_, fuzzerOpts_);
   createDuckDbTable(vectors);
   for (const auto maxSpillRunRows : std::vector<uint32_t>({32, 1UL << 30})) {
-    SCOPED_TRACE(fmt::format("maxSpillRunRows {}", maxSpillRunRows));
+    SCOPED_TRACE(std::format("maxSpillRunRows {}", maxSpillRunRows));
 
     std::atomic_int inputCount{0};
     SCOPED_TESTVALUE_SET(

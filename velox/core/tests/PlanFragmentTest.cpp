@@ -90,7 +90,7 @@ TEST_F(PlanFragmentTest, orderByCanSpill) {
     bool expectedCanSpill;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "spillingEnabled:{} orderByEnabled:{} expectedCanSpill:{}",
           spillingEnabled,
           orderByEnabled,
@@ -147,7 +147,7 @@ TEST_F(PlanFragmentTest, aggregationCanSpill) {
     bool expectedCanSpill;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "aggregationStep:{} isSpillEnabled:{} isAggregationSpillEnabled:{} "
           "isDistinct:{} hasPreAggregation:{} expectedCanSpill:{}",
           AggregationNode::toName(aggregationStep),
@@ -220,7 +220,7 @@ TEST_F(PlanFragmentTest, hashJoin) {
     bool expectedCanSpill;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "joinType:{} isNullAware:{} hasFilter:{} isSpillEnabled:{} isJoinSpillEnabled:{} expectedCanSpill:{}",
           joinType,
           isNullAware,

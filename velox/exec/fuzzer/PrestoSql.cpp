@@ -59,7 +59,7 @@ std::string joinConditionAsSql(const core::AbstractJoinNode& joinNode) {
 
 std::optional<std::string> toJoinSourceSql(std::optional<std::string>&& sql) {
   return sql.has_value() && sql->find(" ") != std::string::npos
-      ? fmt::format("({})", *sql)
+      ? std::format("({})", *sql)
       : sql;
 }
 
@@ -75,9 +75,9 @@ void appendComma(int32_t i, std::stringstream& sql) {
 std::string toTypeSql(const TypePtr& type) {
   switch (type->kind()) {
     case TypeKind::ARRAY:
-      return fmt::format("ARRAY({})", toTypeSql(type->childAt(0)));
+      return std::format("ARRAY({})", toTypeSql(type->childAt(0)));
     case TypeKind::MAP:
-      return fmt::format(
+      return std::format(
           "MAP({}, {})",
           toTypeSql(type->childAt(0)),
           toTypeSql(type->childAt(1)));
@@ -139,7 +139,7 @@ void toCallInputsSql(
         sql << field->name();
       } else {
         toCallInputsSql(field->inputs(), sql);
-        sql << fmt::format(".{}", field->name());
+        sql << std::format(".{}", field->name());
       }
     } else if (
         auto call =
@@ -211,7 +211,7 @@ std::string toCallSql(const core::CallTypedExprPtr& call) {
     VELOX_CHECK_EQ(
         call->inputs().size(), 1, "Expected one argument to a unary operator");
     sql << "(";
-    sql << fmt::format("{} ", unaryOperators.at(call->name()));
+    sql << std::format("{} ", unaryOperators.at(call->name()));
     toCallInputsSql({call->inputs()[0]}, sql);
     sql << ")";
   } else if (binaryOperators.count(call->name()) > 0) {
@@ -221,7 +221,7 @@ std::string toCallSql(const core::CallTypedExprPtr& call) {
         "Expected two arguments to a binary operator");
     sql << "(";
     toCallInputsSql({call->inputs()[0]}, sql);
-    sql << fmt::format(" {} ", binaryOperators.at(call->name()));
+    sql << std::format(" {} ", binaryOperators.at(call->name()));
     toCallInputsSql({call->inputs()[1]}, sql);
     sql << ")";
   } else if (call->name() == "is_null" || call->name() == "not_null") {
@@ -231,7 +231,7 @@ std::string toCallSql(const core::CallTypedExprPtr& call) {
         1,
         "Expected one argument to function 'is_null' or 'not_null'");
     toCallInputsSql({call->inputs()[0]}, sql);
-    sql << fmt::format(" is{} null", call->name() == "not_null" ? " not" : "");
+    sql << std::format(" is{} null", call->name() == "not_null" ? " not" : "");
     sql << ")";
   } else if (call->name() == "in") {
     VELOX_CHECK_GE(
@@ -272,7 +272,7 @@ std::string toCallSql(const core::CallTypedExprPtr& call) {
     const auto& inputs = call->inputs();
     for (auto i = 0; i < inputs.size(); ++i) {
       if (i > 0) {
-        sql << fmt::format(" {} ", call->name());
+        sql << std::format(" {} ", call->name());
       }
       toCallInputsSql({inputs[i]}, sql);
     }
@@ -354,7 +354,7 @@ std::string toCastSql(const core::CastTypedExpr& cast) {
 std::string toConcatSql(const core::ConcatTypedExpr& concat) {
   std::stringstream input;
   toCallInputsSql(concat.inputs(), input);
-  return fmt::format(
+  return std::format(
       "cast(row({}) as {})", input.str(), toTypeSql(concat.type()));
 }
 
@@ -387,7 +387,7 @@ std::string toConstantSql(const core::ConstantTypedExpr& constant) {
   if (constant.isNull()) {
     // Syntax like BIGINT 'null' for typed null is not supported, so use cast
     // instead.
-    sql << fmt::format("cast(null as {})", typeSql);
+    sql << std::format("cast(null as {})", typeSql);
   } else if (type->isVarchar() || type->isVarbinary()) {
     // Escape single quote in string literals used in SQL texts.
     if (type->isVarbinary()) {
@@ -395,13 +395,13 @@ std::string toConstantSql(const core::ConstantTypedExpr& constant) {
     }
     sql << std::quoted(getConstantValue<std::string>(constant), '\'', '\'');
   } else if (type->isIntervalYearMonth()) {
-    sql << fmt::format("INTERVAL '{}' YEAR TO MONTH", constant.toString());
+    sql << std::format("INTERVAL '{}' YEAR TO MONTH", constant.toString());
   } else if (type->isIntervalDayTime()) {
-    sql << fmt::format("INTERVAL '{}' DAY TO SECOND", constant.toString());
+    sql << std::format("INTERVAL '{}' DAY TO SECOND", constant.toString());
   } else if (type->isBigint()) {
     sql << getConstantValue<int64_t>(constant);
   } else if (type->isPrimitiveType()) {
-    sql << fmt::format("{} '{}'", typeSql, constant.toString());
+    sql << std::format("{} '{}'", typeSql, constant.toString());
   } else {
     VELOX_NYI(
         "Constant expressions of {} are not supported yet.", type->toString());

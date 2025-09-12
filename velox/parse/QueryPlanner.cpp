@@ -36,7 +36,7 @@ class ColumnNameGenerator {
  public:
   std::string next(const std::string& prefix = "_c") {
     if (names_.count(prefix)) {
-      auto name = fmt::format("{}{}", prefix, nextId_++);
+      auto name = std::format("{}{}", prefix, nextId_++);
       names_.insert(name);
       return name;
     }
@@ -617,7 +617,7 @@ PlanNodePtr toVeloxPlan(
     case JoinType::kAnti:
       break;
     case JoinType::kLeftSemiProject:
-      names.push_back(fmt::format("exists{}", joinNodeId));
+      names.push_back(std::format("exists{}", joinNodeId));
       types.push_back(BOOLEAN());
       break;
     default:

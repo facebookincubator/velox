@@ -28,8 +28,8 @@ RowTypePtr DataSetBuilder::makeRowType(
     const std::string& columns,
     bool wrapInStruct) {
   std::string schema = wrapInStruct
-      ? fmt::format("struct<{},struct_val:struct<{}>>", columns, columns)
-      : fmt::format("struct<{}>", columns);
+      ? std::format("struct<{},struct_val:struct<{}>>", columns, columns)
+      : std::format("struct<{}>", columns);
   type::fbhive::HiveTypeParser parser;
   return std::dynamic_pointer_cast<const RowType>(parser.parse(schema));
 }
@@ -178,17 +178,17 @@ DataSetBuilder& DataSetBuilder::withStringDistributionForField(
       if (counter % 2251 < 100 || cardinality == 1) {
         // Run of 100 ascending values every 2251 rows. If cardinality is 1, the
         // value is repeated here.
-        value = fmt::format("s{}", counter % cardinality);
+        value = std::format("s{}", counter % cardinality);
         strings->set(row, StringView(value));
       } else if (counter % 100 > 90 && row > 0) {
         // Sequence of 10 identical values every 100 rows.
         strings->copy(strings, row, row - 1, 1);
       } else if (addOneOffs && counter % 234 == 0) {
-        value = fmt::format(
+        value = std::format(
             "s{}", folly::Random::rand32(rng_) % (111 * cardinality));
         strings->set(row, StringView(value));
       } else {
-        value = fmt::format("s{}", folly::Random::rand32(rng_) % cardinality);
+        value = std::format("s{}", folly::Random::rand32(rng_) % cardinality);
         strings->set(row, StringView(value));
       }
       ++counter;
@@ -208,7 +208,7 @@ DataSetBuilder& DataSetBuilder::withUniqueStringsForField(
         continue;
       }
       std::string value = strings->valueAt(row);
-      value += fmt::format("{}", row);
+      value += std::format("{}", row);
       strings->set(row, StringView(value));
     }
   }
@@ -295,7 +295,7 @@ DataSetBuilder& DataSetBuilder::makeMapStringValues(
         nextOffset = offsets[0];
         for (auto i = 0; i < size; ++i) {
           if (i == nextOffset) {
-            std::string str = fmt::format("dictEncoded{}", i % 3);
+            std::string str = std::format("dictEncoded{}", i % 3);
             values->set(i, StringView(str));
             if (nullCounter++ % 4 == 0) {
               values->setNull(i, true);

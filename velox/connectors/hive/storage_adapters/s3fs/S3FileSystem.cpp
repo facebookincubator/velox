@@ -169,7 +169,7 @@ struct AwsInstance {
       std::optional<std::string_view> logLocation) {
     awsOptions_.loggingOptions.logLevel = inferS3LogLevel(logLevel);
     if (logLocation.has_value()) {
-      logPrefix_ = fmt::format(
+      logPrefix_ = std::format(
           "{}{}{}",
           logLocation.value(),
           logLocation.value().back() == '/' ? "" : "/",

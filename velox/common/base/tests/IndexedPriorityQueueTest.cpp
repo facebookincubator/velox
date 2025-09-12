@@ -51,7 +51,7 @@ class IndexedPriorityQueueTest : public testing::Test {
       IndexedPriorityQueue<T, MaxQueue>& queue,
       int numIterations,
       std::mt19937& rng) {
-    SCOPED_TRACE(fmt::format("MaxQueue: ", MaxQueue));
+    SCOPED_TRACE(std::format("MaxQueue: ", MaxQueue));
     std::unordered_map<uint32_t, uint64_t> valuePriorities;
     for (auto i = 0; i < numIterations; ++i) {
       const uint32_t value = folly::Random::rand32(100, rng);

@@ -34,7 +34,7 @@ void testTraceCollectionSwitchControl(bool enabled) {
   try {
     throw LoggedException("Test error message");
   } catch (VeloxException& e) {
-    SCOPED_TRACE(fmt::format(
+    SCOPED_TRACE(std::format(
         "enabled: {}, user flag: {}, sys flag: {}",
         enabled,
         FLAGS_velox_exception_user_stacktrace_enabled,

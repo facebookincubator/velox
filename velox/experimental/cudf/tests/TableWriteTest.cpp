@@ -133,7 +133,7 @@ struct TestParam {
   }
 
   std::string toString() const {
-    return fmt::format(
+    return std::format(
         "FileFormat[{}] TestMode[{}] commitStrategy[{}] multiDrivers[{}] compression[{}]",
         dwio::common::toString((fileFormat())),
         testModeString(testMode()),
@@ -469,7 +469,7 @@ class TableWriteTest : public ParquetConnectorTestBase {
       insertPlan.project({TableWriteTraits::rowCountColumnName()})
           .singleAggregation(
               {},
-              {fmt::format("sum({})", TableWriteTraits::rowCountColumnName())});
+              {std::format("sum({})", TableWriteTraits::rowCountColumnName())});
     }
     return insertPlan.planNode();
   }
@@ -527,7 +527,7 @@ class TableWriteTest : public ParquetConnectorTestBase {
     if (commitStrategy_ == CommitStrategy::kNoCommit) {
       ASSERT_TRUE(RE2::FullMatch(
           filePath.filename().string(),
-          fmt::format(
+          std::format(
               "test_cursor.+_[0-{}]_{}_.+",
               numTableWriterCount_ - 1,
               tableWriteNodeId_)))
@@ -535,7 +535,7 @@ class TableWriteTest : public ParquetConnectorTestBase {
     } else {
       ASSERT_TRUE(RE2::FullMatch(
           filePath.filename().string(),
-          fmt::format(
+          std::format(
               ".tmp.velox.test_cursor.+_[0-{}]_{}_.+",
               numTableWriterCount_ - 1,
               tableWriteNodeId_)))
@@ -646,7 +646,7 @@ TEST_F(BasicTableWriteTest, roundTrip) {
              .planNode();
 
   auto copy = AssertQueryBuilder(plan)
-                  .split(makeParquetConnectorSplit(fmt::format(
+                  .split(makeParquetConnectorSplit(std::format(
                       "{}/{}", targetDirectoryPath->getPath(), writeFileName)))
                   .copyResults(pool());
   assertEqualResults({data}, {copy});
@@ -681,7 +681,7 @@ TEST_F(BasicTableWriteTest, targetFileName) {
              .planNode();
   AssertQueryBuilder(plan)
       .split(makeParquetConnectorSplit(
-          fmt::format("{}/{}", directory->getPath(), kFileName)))
+          std::format("{}/{}", directory->getPath(), kFileName)))
       .assertResults(data);
 }
 
@@ -764,7 +764,7 @@ TEST_P(UnpartitionedTableWriterTest, immutableSettings) {
     bool expectedInsertSuccees;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "dataType:{}, immutableFilesEnabled:{}, operationSuccess:{}",
           dataType,
           immutableFilesEnabled,

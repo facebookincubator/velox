@@ -611,7 +611,7 @@ CudfHashAggregation::CudfHashAggregation(
       NvtxHelper(
           nvtx3::rgb{34, 139, 34}, // Forest Green
           operatorId,
-          fmt::format("[{}]", aggregationNode->id())),
+          std::format("[{}]", aggregationNode->id())),
       aggregationNode_(aggregationNode),
       isPartialOutput_(
           exec::isPartialOutput(aggregationNode->step()) &&

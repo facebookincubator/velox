@@ -140,7 +140,7 @@ void compareVectors(
       rowsInput.has_value() ? *rowsInput : SelectivityVector(left->size());
 
   rows.applyToSelected([&](vector_size_t row) {
-    VLOG(1) << fmt::format(
+    VLOG(1) << std::format(
         "At {} [ {} vs {} ]", row, left->toString(row), right->toString(row));
   });
   VLOG(1) << "===================";

@@ -54,7 +54,7 @@ ParquetDataSource::ParquetDataSource(
     : NvtxHelper(
           nvtx3::rgb{80, 171, 241}, // Parquet blue,
           std::nullopt,
-          fmt::format("[{}]", tableHandle->name())),
+          std::format("[{}]", tableHandle->name())),
       parquetConfig_(parquetConfig),
       executor_(executor),
       connectorQueryCtx_(connectorQueryCtx),

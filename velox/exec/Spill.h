@@ -354,7 +354,7 @@ struct hash<::facebook::velox::exec::SpillPartitionId> {
 } // namespace std
 
 template <>
-struct fmt::formatter<facebook::velox::exec::SpillPartitionId>
+struct std::formatter<facebook::velox::exec::SpillPartitionId>
     : formatter<std::string> {
   auto format(facebook::velox::exec::SpillPartitionId s, format_context& ctx)
       const {

@@ -109,7 +109,7 @@ struct TestParam {
         joinType(_joinType) {}
 
   std::string toString() const {
-    return fmt::format(
+    return std::format(
         "{}|{}|{}|{}",
         typeName(type),
         poolSize,
@@ -331,7 +331,7 @@ class SpillerTest : public exec::test::RowContainerTestBase {
       bool ascending = true,
       bool makeError = false,
       uint64_t readBufferSize = 1 << 20) {
-    SCOPED_TRACE(fmt::format(
+    SCOPED_TRACE(std::format(
         "spillType: {} numDuplicates: {} outputBatchSize: {} ascending: {} makeError: {}",
         typeName(type_),
         numDuplicates,
@@ -865,7 +865,7 @@ class SpillerTest : public exec::test::RowContainerTestBase {
       ss << partitionId.toString() << " ";
     }
     ss << "]";
-    SCOPED_TRACE(fmt::format(
+    SCOPED_TRACE(std::format(
         "Param: {}, numSpillers: {}, numBatchRows: {}, numAppendBatches: {}, targetFileSize: {}, spillPartitionIdSet: {}",
         param_.toString(),
         numSpillers,
@@ -1417,7 +1417,7 @@ TEST_P(HashJoinBuildOnly, writeBufferSize) {
   std::vector<uint64_t> writeBufferSizes = {0 /*, 4'000'000'000*/};
   for (const auto writeBufferSize : writeBufferSizes) {
     SCOPED_TRACE(
-        fmt::format("writeBufferSize {}", succinctBytes(writeBufferSize)));
+        std::format("writeBufferSize {}", succinctBytes(writeBufferSize)));
     setupSpillData(numKeys_, 1'000, 1, nullptr, {});
     setupSpiller(4'000'000'000, writeBufferSize, false);
     spill(
@@ -1507,7 +1507,7 @@ TEST_P(AggregationOutputOnly, basic) {
     uint64_t maxSpillRunRows;
     uint64_t readBufferSize;
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "spillRowOffset {}, maxSpillRunRows {}, readBufferSize {}",
           spillRowOffset,
           maxSpillRunRows,
@@ -1627,7 +1627,7 @@ TEST_P(SortOutputOnly, basic) {
     int readBufferSize;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "numSpillRows {}, readBufferSize {}",
           numSpillRows,
           succinctBytes(readBufferSize));
@@ -1732,7 +1732,7 @@ TEST_P(MaxSpillRunTest, basic) {
     uint64_t maxSpillRunRows;
     uint8_t expectedNumFiles;
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "maxSpillRunRows {}, expectedNumFiles {}",
           maxSpillRunRows,
           expectedNumFiles);

@@ -29,7 +29,7 @@ class RandTest : public SparkFunctionBaseTest {
   std::optional<double> rand(int32_t seed, int32_t partitionIndex = 0) {
     setSparkPartitionId(partitionIndex);
     return evaluateOnce<double>(
-        fmt::format("rand({})", seed), makeRowVector(ROW({}), 1));
+        std::format("rand({})", seed), makeRowVector(ROW({}), 1));
   }
 
   std::optional<double> randWithNullSeed(int32_t partitionIndex = 0) {
@@ -45,7 +45,7 @@ class RandTest : public SparkFunctionBaseTest {
 
   VectorPtr randWithBatchInput(int32_t seed, int32_t partitionIndex = 0) {
     setSparkPartitionId(partitionIndex);
-    auto exprSet = compileExpression(fmt::format("rand({})", seed), ROW({}));
+    auto exprSet = compileExpression(std::format("rand({})", seed), ROW({}));
     return evaluate(*exprSet, makeRowVector(ROW({}), 20));
   }
 

@@ -70,7 +70,7 @@ std::string MemoryAllocator::kindString(Kind kind) {
     case Kind::kMmap:
       return "MMAP";
     default:
-      return fmt::format("UNKNOWN: {}", static_cast<int>(kind));
+      return std::format("UNKNOWN: {}", static_cast<int>(kind));
   }
 }
 
@@ -386,7 +386,7 @@ std::string Stats::toString() const {
     totalBytes += sizes[i].totalBytes;
     totalAllocations += sizes[i].numAllocations;
   }
-  out << fmt::format(
+  out << std::format(
       "Alloc: {}MB {} Gigaclocks Allocations={}, advised={} MB\n",
       totalBytes >> 20,
       totalClocks >> 30,
@@ -404,7 +404,7 @@ std::string Stats::toString() const {
     if (sizes[i].clocks() < 1000000) {
       break;
     }
-    out << fmt::format(
+    out << std::format(
         "Size {}K: {}MB {} Megaclocks {} Allocations\n",
         sizes[i].size * 4,
         sizes[i].totalBytes >> 20,
@@ -448,7 +448,7 @@ std::string MemoryAllocator::getAndClearFailureMessage() {
       return getAndClearCacheFailureMessage();
     }
     allocatorErrMsg =
-        fmt::format("{} {}", allocatorErrMsg, getAndClearCacheFailureMessage());
+        std::format("{} {}", allocatorErrMsg, getAndClearCacheFailureMessage());
   }
   return allocatorErrMsg;
 }
@@ -501,7 +501,7 @@ void MemoryAllocator::getTracingHooks(
     std::stringstream out;
     out << std::endl
         << std::endl
-        << fmt::format(
+        << std::format(
                "user%={} sys%={} minflt/s={}, io={} MB/s\n",
                100 * u / elapsed,
                100 * s / elapsed,

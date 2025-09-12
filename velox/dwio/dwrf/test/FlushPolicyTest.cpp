@@ -125,7 +125,7 @@ TEST_F(DefaultFlushPolicyTest, AdditionalCriteriaTest) {
             // StripeProgress is not used in this test.
             dwio::common::StripeProgress{},
             testCase.dictionarySize))
-        << fmt::format(
+        << std::format(
                "flushStripe = {}, overMemoryBudget = {}, dictionarySize = {}",
                testCase.flushStripe,
                testCase.overMemoryBudget,
@@ -179,7 +179,7 @@ TEST_F(DefaultFlushPolicyTest, EarlyDictionaryEvaluation) {
             /*overMemoryBudget=*/false,
             testCase.stripeProgress,
             testCase.dictionarySize))
-        << fmt::format(
+        << std::format(
                "flushStripe = {}, stripeSizeThreshold = {}, estimatedStripeSize = {}, dictionarySizeThreshold = {}, dictionarySize = {}",
                testCase.flushStripe,
                testCase.stripeSizeThreshold,

@@ -49,7 +49,7 @@ int main(int argc, char** argv) {
     for (auto& inputType : inputTypes) {
       benchmarkBuilder
           .addBenchmarkSet(
-              fmt::format(
+              std::format(
                   "hash#{}#{}\%nulls", inputType->toString(), nullRatio * 100),
               ROW({"c0"}, {inputType}))
           .withFuzzerOptions({.vectorSize = 4096, .nullRatio = nullRatio})

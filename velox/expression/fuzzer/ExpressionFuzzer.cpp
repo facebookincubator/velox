@@ -371,24 +371,24 @@ ExpressionFuzzer::ExpressionFuzzer(
   auto unsupportedFunctions = totalFunctions - supportedFunctions_.size();
   auto unsupportedFunctionSignatures =
       totalFunctionSignatures - supportedFunctionSignatures;
-  LOG(INFO) << fmt::format(
+  LOG(INFO) << std::format(
       "Total candidate functions: {} ({} signatures)",
       totalFunctions,
       totalFunctionSignatures);
-  LOG(INFO) << fmt::format(
+  LOG(INFO) << std::format(
       "Functions with at least one supported signature: {} ({:.2f}%)",
       supportedFunctions_.size(),
       static_cast<double>(supportedFunctions_.size()) / totalFunctions * 100);
-  LOG(INFO) << fmt::format(
+  LOG(INFO) << std::format(
       "Functions with no supported signature: {} ({:.2f}%)",
       unsupportedFunctions,
       static_cast<double>(unsupportedFunctions) / totalFunctions * 100);
-  LOG(INFO) << fmt::format(
+  LOG(INFO) << std::format(
       "Supported function signatures: {} ({:.2f}%)",
       supportedFunctionSignatures,
       static_cast<double>(supportedFunctionSignatures) /
           totalFunctionSignatures * 100);
-  LOG(INFO) << fmt::format(
+  LOG(INFO) << std::format(
       "Unsupported function signatures: {} ({:.2f}%)",
       unsupportedFunctionSignatures,
       static_cast<double>(unsupportedFunctionSignatures) /
@@ -559,7 +559,7 @@ core::TypedExprPtr ExpressionFuzzer::generateArgColumn(const TypePtr& arg) {
   if (!reuseColumn) {
     state_.inputRowTypes_.emplace_back(arg);
     state_.inputRowNames_.emplace_back(
-        fmt::format("c{}", state_.inputRowTypes_.size() - 1));
+        std::format("c{}", state_.inputRowTypes_.size() - 1));
     state_.customInputGenerators_.emplace_back(nullptr);
     listOfCandidateCols.push_back(state_.inputRowNames_.back());
     return std::make_shared<core::FieldAccessTypedExpr>(
@@ -637,7 +637,7 @@ core::TypedExprPtr ExpressionFuzzer::generateArgFunction(const TypePtr& arg) {
 
   for (auto i = 0; i < arg->size() - 1; ++i) {
     args.push_back(arg->childAt(i));
-    names.push_back(fmt::format("__a{}", i));
+    names.push_back(std::format("__a{}", i));
     inputs.push_back(std::make_shared<core::FieldAccessTypedExpr>(
         args.back(), names.back()));
   }
@@ -1123,7 +1123,7 @@ TypePtr ExpressionFuzzer::generateRandomRowTypeWithReferencedField(
     } else {
       fieldTypes[i] = vectorFuzzer_->randType(supportedScalarTypes_);
     }
-    fieldNames[i] = fmt::format("row_field{}", i);
+    fieldNames[i] = std::format("row_field{}", i);
   }
   return ROW(std::move(fieldNames), std::move(fieldTypes));
 }
@@ -1139,7 +1139,7 @@ core::TypedExprPtr ExpressionFuzzer::generateDereferenceExpression(
   return std::make_shared<core::FieldAccessTypedExpr>(
       returnType,
       inputExpressions[0],
-      fmt::format("row_field{}", referencedIndex));
+      std::format("row_field{}", referencedIndex));
 }
 
 TypePtr ExpressionFuzzer::fuzzReturnType() {
@@ -1178,7 +1178,7 @@ RowTypePtr ExpressionFuzzer::fuzzRowReturnType(size_t size, char prefix) {
   std::vector<std::string> names;
   for (int i = 0; i < size; i++) {
     children.push_back(fuzzReturnType());
-    names.push_back(fmt::format("{}{}", prefix, i));
+    names.push_back(std::format("{}{}", prefix, i));
   }
   return ROW(std::move(names), std::move(children));
 }

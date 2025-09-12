@@ -121,7 +121,7 @@ TEST(SpillStatsTest, spillStats) {
       "spillReadBytes[2.00KB] spillReads[10] spillReadTimeNanos[100ns] "
       "spillReadDeserializationTimeNanos[100ns]");
   ASSERT_EQ(
-      fmt::format("{}", stats2),
+      std::format("{}", stats2),
       "spillRuns[100] spilledInputBytes[2.00KB] spilledBytes[1.00KB] "
       "spilledRows[1031] spilledPartitions[1025] spilledFiles[1026] "
       "spillFillTimeNanos[1.03us] spillSortTimeNanos[1.03us] spillExtractVectorTime[1.03us] "

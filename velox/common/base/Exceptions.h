@@ -234,7 +234,7 @@ DECLARE_CHECK_FAIL_TEMPLATES(::facebook::velox::VeloxRuntimeError)
       _VELOX_USER_CHECK_IMPL, expr1, expr2, op, ##__VA_ARGS__)
 
 // For all below macros, an additional message can be passed using a
-// format string and arguments, as with `fmt::format`.
+// format string and arguments, as with `std::format`.
 #define VELOX_CHECK(expr, ...) _VELOX_CHECK_IMPL(expr, #expr, ##__VA_ARGS__)
 #define VELOX_CHECK_GT(e1, e2, ...) _VELOX_CHECK_OP(e1, e2, >, ##__VA_ARGS__)
 #define VELOX_CHECK_GE(e1, e2, ...) _VELOX_CHECK_OP(e1, e2, >=, ##__VA_ARGS__)
@@ -337,7 +337,7 @@ DECLARE_CHECK_FAIL_TEMPLATES(::facebook::velox::VeloxRuntimeError)
 DECLARE_CHECK_FAIL_TEMPLATES(::facebook::velox::VeloxUserError)
 
 // For all below macros, an additional message can be passed using a
-// format string and arguments, as with `fmt::format`.
+// format string and arguments, as with `std::format`.
 #define VELOX_USER_CHECK(expr, ...) \
   _VELOX_USER_CHECK_IMPL(expr, #expr, ##__VA_ARGS__)
 #define VELOX_USER_CHECK_GT(e1, e2, ...) \

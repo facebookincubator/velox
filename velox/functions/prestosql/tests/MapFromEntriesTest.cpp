@@ -59,8 +59,8 @@ class MapFromEntriesTest : public FunctionBaseTest {
       const std::string& funcArg = "C0",
       bool wrappedWithTry = false) {
     const std::string expr = wrappedWithTry
-        ? fmt::format("try(map_from_entries({}))", funcArg)
-        : fmt::format("map_from_entries({})", funcArg);
+        ? std::format("try(map_from_entries({}))", funcArg)
+        : std::format("map_from_entries({})", funcArg);
     auto result = evaluate<MapVector>(expr, makeRowVector(input));
     assertEqualVectors(expected, result);
   }

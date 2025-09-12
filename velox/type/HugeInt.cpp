@@ -49,20 +49,20 @@ int128_t HugeInt::parse(const std::string& str) {
     // it more robust.
     int128_t cur = str[idx] - '0';
     if ((result > max / 10)) {
-      VELOX_FAIL(fmt::format("{} is out of range of int128_t", str));
+      VELOX_FAIL(std::format("{} is out of range of int128_t", str));
     }
 
     int128_t num = cur - (max % 10);
     if (result == (max / 10)) {
       if (negative) {
         if (num > 1) {
-          VELOX_FAIL(fmt::format("{} is out of range of int128_t", str));
+          VELOX_FAIL(std::format("{} is out of range of int128_t", str));
         } else if (num == 1) {
           return min;
         }
       } else {
         if (num > 0) {
-          VELOX_FAIL(fmt::format("{} is out of range of int128_t", str));
+          VELOX_FAIL(std::format("{} is out of range of int128_t", str));
         } else if (num == 0) {
           return max;
         }

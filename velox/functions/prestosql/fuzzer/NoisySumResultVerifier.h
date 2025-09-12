@@ -88,11 +88,11 @@ class NoisySumResultVerifier : public ResultVerifier {
     // outputs.
     clipInput(deduplicatedInput);
 
-    auto sumCall = fmt::format("sum({})", aggregateColumn_);
+    auto sumCall = std::format("sum({})", aggregateColumn_);
 
     // If distinct is false, mask has not been applied yet.
     if (aggregate.mask != nullptr && !aggregate.distinct) {
-      sumCall += fmt::format(" filter (where {})", aggregate.mask->name());
+      sumCall += std::format(" filter (where {})", aggregate.mask->name());
     }
 
     core::PlanNodePtr plan = PlanBuilder()
@@ -125,7 +125,7 @@ class NoisySumResultVerifier : public ResultVerifier {
                             .planNode();
 
     // Combine expected and actual results by grouping keys using map_agg
-    auto mapAgg = fmt::format("map_agg(label, {}) as m", name_);
+    auto mapAgg = std::format("map_agg(label, {}) as m", name_);
     auto plan = PlanBuilder(planNodeIdGenerator)
                     .localPartition({}, {expectedSource, actualSource})
                     .singleAggregation(groupingKeys_, {mapAgg})
@@ -173,7 +173,7 @@ class NoisySumResultVerifier : public ResultVerifier {
 
       // Check if actual value is within expected +/- allowedDifference
       if (difference < lowerBound || difference > upperBound) {
-        LOG(ERROR) << fmt::format(
+        LOG(ERROR) << std::format(
             "noisy_sum_gaussian result is outside the expected range.\n"
             "  Group: {}\n"
             "  Actual: {}\n"
@@ -195,7 +195,7 @@ class NoisySumResultVerifier : public ResultVerifier {
     if (numGroups >= 50) {
       const auto maxFailures = static_cast<int>(allowedFailureRate * numGroups);
       if (failures > maxFailures) {
-        LOG(ERROR) << fmt::format(
+        LOG(ERROR) << std::format(
             "Too many failures: {} out of {} groups (max allowed: {})",
             failures,
             numGroups,
@@ -240,12 +240,12 @@ class NoisySumResultVerifier : public ResultVerifier {
     std::string partitionBy;
     if (!partitionKeys.empty()) {
       partitionBy =
-          fmt::format("partition by {}", fmt::join(partitionKeys, ", "));
+          std::format("partition by {}", std::join(partitionKeys, ", "));
     }
 
     // Use row_number() window function to identify first occurrence of each
     // unique combination, then filter to keep only those rows(row number = 1)
-    auto windowExpr = fmt::format("row_number() over ({}) as rn", partitionBy);
+    auto windowExpr = std::format("row_number() over ({}) as rn", partitionBy);
 
     auto builder = PlanBuilder(planNodeIdGenerator).values(input);
 

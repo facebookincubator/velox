@@ -57,9 +57,9 @@ class TpchTableHandle : public ConnectorTableHandle {
     VELOX_CHECK_GE(scaleFactor, 0, "Tpch scale factor must be non-negative");
     auto sf = static_cast<int>(scaleFactor_);
     if (sf > 0) {
-      name_ = fmt::format("sf{}.{}", sf, velox::tpch::toTableName(table));
+      name_ = std::format("sf{}.{}", sf, velox::tpch::toTableName(table));
     } else {
-      name_ = fmt::format("tiny.{}", velox::tpch::toTableName(table));
+      name_ = std::format("tiny.{}", velox::tpch::toTableName(table));
     }
   }
 

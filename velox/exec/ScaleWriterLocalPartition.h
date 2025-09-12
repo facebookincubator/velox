@@ -32,7 +32,7 @@ class ScaleWriterPartitioningLocalPartition : public LocalPartition {
       const std::shared_ptr<const core::LocalPartitionNode>& planNode);
 
   std::string toString() const override {
-    return fmt::format(
+    return std::format(
         "ScaleWriterPartitioningLocalPartition({})", numPartitions_);
   }
 

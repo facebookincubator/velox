@@ -362,7 +362,7 @@ class HashBuildSpiller : public SpillerBase {
 } // namespace facebook::velox::exec
 
 template <>
-struct fmt::formatter<facebook::velox::exec::HashBuild::State>
+struct std::formatter<facebook::velox::exec::HashBuild::State>
     : formatter<std::string> {
   auto format(facebook::velox::exec::HashBuild::State s, format_context& ctx)
       const {

@@ -360,7 +360,7 @@ Writer::Writer(
     : Writer{
           std::move(sink),
           options,
-          options.memoryPool->addAggregateChild(fmt::format(
+          options.memoryPool->addAggregateChild(std::format(
               "writer_node_{}",
               folly::to<std::string>(folly::Random::rand64()))),
           std::move(schema)} {}

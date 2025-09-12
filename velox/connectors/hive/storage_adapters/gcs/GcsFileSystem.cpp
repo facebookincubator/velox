@@ -292,7 +292,7 @@ void GcsFileSystem::rename(
   if (!copyStats.ok()) {
     checkGcsStatus(
         copyStats.status(),
-        fmt::format(
+        std::format(
             "Failed to rename for GCS object {}/{}",
             originBucket,
             originObject),
@@ -305,7 +305,7 @@ void GcsFileSystem::rename(
   if (!delStatus.ok()) {
     checkGcsStatus(
         delStatus,
-        fmt::format(
+        std::format(
             "Failed to delete for GCS object {}/{} after copy when renaming. And the copied object is at {}/{}",
             originBucket,
             originObject,
@@ -333,7 +333,7 @@ void GcsFileSystem::mkdir(
 
   checkGcsStatus(
       status.status(),
-      fmt::format("Failed to mkdir for GCS object {}/{}", bucket, object),
+      std::format("Failed to mkdir for GCS object {}/{}", bucket, object),
       bucket,
       object);
 }
@@ -350,14 +350,14 @@ void GcsFileSystem::rmdir(std::string_view path) {
   for (auto&& metadata : impl_->getClient()->ListObjects(bucket)) {
     checkGcsStatus(
         metadata.status(),
-        fmt::format("Failed to rmdir for GCS object {}/{}", bucket, object),
+        std::format("Failed to rmdir for GCS object {}/{}", bucket, object),
         bucket,
         object);
 
     auto status = impl_->getClient()->DeleteObject(bucket, metadata->name());
     checkGcsStatus(
         metadata.status(),
-        fmt::format(
+        std::format(
             "Failed to delete for GCS object {}/{} when rmdir.",
             bucket,
             metadata->name()),

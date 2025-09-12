@@ -268,7 +268,7 @@ std::tuple<const char*, uint64_t> BufferedInput::readInternal(
           (offset - bufferOffset) + length,
           buffer.size(),
           "Invalid readOffset for read Internal ",
-          fmt::format(
+          std::format(
               "{} {} {} {}", offset, bufferOffset, length, buffer.size()));
       return std::make_tuple(buffer.data() + (offset - bufferOffset), length);
     }

@@ -98,7 +98,7 @@ class InsertTest : public velox::test::VectorTestBase {
     // Read from 'writeFileName' and verify the data matches the original.
     plan = exec::test::PlanBuilder().tableScan(rowType).planNode();
 
-    auto filePath = fmt::format("{}{}", outputDirectory, writeFileName);
+    auto filePath = std::format("{}{}", outputDirectory, writeFileName);
     const int64_t fileSize = fileWriteInfos[0]["fileSize"].asInt();
     auto split = exec::test::HiveConnectorSplitBuilder(filePath)
                      .fileFormat(dwio::common::FileFormat::PARQUET)

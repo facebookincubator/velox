@@ -210,7 +210,7 @@ TEST_F(EvalErrorsTest, copyError) {
 TEST_F(EvalErrorsTest, copyErrorWithDetails) {
   EvalErrors other(pool(), 10);
   for (auto i = 0; i < 20; i += 2) {
-    other.setError(i, makeVeloxException(fmt::format("Test error at {}", i)));
+    other.setError(i, makeVeloxException(std::format("Test error at {}", i)));
   }
 
   ASSERT_EQ(other.countErrors(), 10);
@@ -284,7 +284,7 @@ TEST_F(EvalErrorsTest, copyErrors) {
 TEST_F(EvalErrorsTest, copyAllErrors) {
   EvalErrors other(pool(), 10);
   for (auto i = 0; i < 20; i += 2) {
-    other.setError(i, makeVeloxException(fmt::format("Test error at {}", i)));
+    other.setError(i, makeVeloxException(std::format("Test error at {}", i)));
   }
 
   ASSERT_EQ(other.countErrors(), 10);
@@ -305,7 +305,7 @@ TEST_F(EvalErrorsTest, copyAllErrors) {
       VELOX_ASSERT_THROW(errors.throwIfErrorAt(i), "Some other error");
     } else {
       VELOX_ASSERT_THROW(
-          errors.throwIfErrorAt(i), fmt::format("Test error at {}", i));
+          errors.throwIfErrorAt(i), std::format("Test error at {}", i));
     }
   }
 

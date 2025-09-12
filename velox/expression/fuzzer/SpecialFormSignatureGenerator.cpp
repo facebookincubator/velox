@@ -196,14 +196,14 @@ SpecialFormSignatureGenerator::getSignaturesForCast() const {
     auto to = signatures[i]->returnType().baseName();
 
     signatures.push_back(makeCastSignature(
-        fmt::format("array({})", from), fmt::format("array({})", to)));
+        std::format("array({})", from), std::format("array({})", to)));
 
     signatures.push_back(makeCastSignature(
-        fmt::format("map(varchar, {})", from),
-        fmt::format("map(varchar, {})", to)));
+        std::format("map(varchar, {})", from),
+        std::format("map(varchar, {})", to)));
 
     signatures.push_back(makeCastSignature(
-        fmt::format("row({})", from), fmt::format("row({})", to)));
+        std::format("row({})", from), std::format("row({})", to)));
   }
   return signatures;
 }

@@ -109,7 +109,7 @@ TEST_F(TreeOfLosersTest, allDuplicates) {
   const int kNumStreams = 20;
   const uint32_t kValue = 10;
   for (bool testNextEqual : {false, true}) {
-    SCOPED_TRACE(fmt::format("testNextEqual: {}", testNextEqual));
+    SCOPED_TRACE(std::format("testNextEqual: {}", testNextEqual));
     std::vector<std::unique_ptr<TestingStream>> mergeStreams;
     for (int i = 0; i < kNumStreams; ++i) {
       std::vector<uint32_t> streamNumbers;
@@ -148,7 +148,7 @@ TEST_F(TreeOfLosersTest, allSorted) {
   const int kNumStreams = 20;
   const uint32_t kStartValue = 10;
   for (bool testNextEqual : {false, true}) {
-    SCOPED_TRACE(fmt::format("testNextEqual: {}", testNextEqual));
+    SCOPED_TRACE(std::format("testNextEqual: {}", testNextEqual));
     std::vector<std::unique_ptr<TestingStream>> mergeStreams;
     for (int i = 0; i < kNumStreams; ++i) {
       std::vector<uint32_t> streamNumbers;
@@ -181,7 +181,7 @@ TEST_F(TreeOfLosersTest, allSorted) {
 TEST_F(TreeOfLosersTest, allEmpty) {
   for (bool testNextEqual : {false, true}) {
     for (int numStreams : {0, 1, 5, 100}) {
-      SCOPED_TRACE(fmt::format(
+      SCOPED_TRACE(std::format(
           "numStreams: {}, testNextEqual", numStreams, testNextEqual));
       std::vector<std::unique_ptr<TestingStream>> mergeStreams;
       for (int i = 0; i < numStreams; ++i) {
@@ -211,7 +211,7 @@ TEST_F(TreeOfLosersTest, randomWithDuplicates) {
     for (int iter = 0; iter < 10; ++iter) {
       const int numCount = std::max<int>(1, folly::Random::rand32(1000'000));
       const int numStreams = std::max<int>(3, folly::Random::rand32(100));
-      SCOPED_TRACE(fmt::format(
+      SCOPED_TRACE(std::format(
           "iter: {}, testNextEqual: {}, numCount: {}, numStreams: {}",
           iter,
           testNextEqual,

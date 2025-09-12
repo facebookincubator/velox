@@ -852,7 +852,7 @@ void addSignatures(
     const std::string& returnType,
     std::vector<std::shared_ptr<exec::AggregateFunctionSignature>>&
         signatures) {
-  auto intermediateType = fmt::format(
+  auto intermediateType = std::format(
       "row(array(double), boolean, double, integer, bigint, {0}, {0}, array({0}), array(integer))",
       inputType);
   signatures.push_back(exec::AggregateFunctionSignatureBuilder()
@@ -898,7 +898,7 @@ void registerApproxPercentileAggregate(
     addSignatures(
         inputType,
         "array(double)",
-        fmt::format("array({})", inputType),
+        std::format("array({})", inputType),
         signatures);
   }
   auto name = prefix + kApproxPercentile;

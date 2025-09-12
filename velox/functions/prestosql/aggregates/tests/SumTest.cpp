@@ -107,7 +107,7 @@ TEST_F(SumTest, sumFloat) {
 
 TEST_F(SumTest, sumDoubleAndFloat) {
   for (int iter = 0; iter < 3; ++iter) {
-    SCOPED_TRACE(fmt::format("test iterations: {}", iter));
+    SCOPED_TRACE(std::format("test iterations: {}", iter));
     auto rowType = ROW({"c0", "c1", "c2"}, {REAL(), DOUBLE(), INTEGER()});
     auto vectors = makeVectors(rowType, 1000, 10);
 

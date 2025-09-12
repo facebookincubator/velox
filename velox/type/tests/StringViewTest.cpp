@@ -187,7 +187,7 @@ TEST(StringView, linearSearch) {
   std::vector<StringView> stringViews(kSize);
   // Distinct values with sizes from 0 to 50.
   for (auto i = 0; i < 1000; ++i) {
-    std::string string = fmt::format("{}-", i);
+    std::string string = std::format("{}-", i);
     int32_t numRepeats = 1 + i % 10;
     auto item = string;
     for (auto repeat = 0; repeat < numRepeats; ++repeat) {

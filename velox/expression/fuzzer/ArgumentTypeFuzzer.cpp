@@ -126,13 +126,13 @@ void ArgumentTypeFuzzer::determineUnboundedEnumVariables(
       // and when enum_key function is removed from the fuzzer skip list.
       int numValues = rand32(0, 20);
       std::string enumName =
-          fmt::format("test.enum.{}{}", paramName, numValues);
+          std::format("test.enum.{}{}", paramName, numValues);
       if (typeName == "bigint_enum" &&
           longEnumParameterBindings_.find(paramName) ==
               longEnumParameterBindings_.end()) {
         std::unordered_map<std::string, int64_t> enumValues;
         for (int i = 0; i < numValues; i++) {
-          std::string key = fmt::format("VALUE{}", i);
+          std::string key = std::format("VALUE{}", i);
           enumValues[key] = i;
         }
         LongEnumParameter enumParam(enumName, enumValues);
@@ -143,7 +143,7 @@ void ArgumentTypeFuzzer::determineUnboundedEnumVariables(
               varcharEnumParameterBindings_.end()) {
         std::unordered_map<std::string, std::string> enumValues;
         for (int i = 0; i < numValues; i++) {
-          std::string key = fmt::format("VALUE{}", i);
+          std::string key = std::format("VALUE{}", i);
           enumValues[key] = key;
         }
         VarcharEnumParameter enumParam(enumName, enumValues);

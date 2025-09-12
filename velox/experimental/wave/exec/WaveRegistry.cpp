@@ -60,7 +60,7 @@ FunctionDefinition WaveRegistry::makeDefinition(
   replaced = replaceAll(replaced, "$R$", cudaTypeName(*returnType));
   for (auto i = 0; i < key.types.size(); ++i) {
     replaced = replaceAll(
-        replaced, fmt::format("${}$", i + 1), cudaTypeName(*key.types[i]));
+        replaced, std::format("${}$", i + 1), cudaTypeName(*key.types[i]));
   }
   return {replaced, entry.includeLine};
 }
@@ -76,7 +76,7 @@ bool WaveRegistry::registerMessage(int32_t key, std::string message) {
 std::string WaveRegistry::message(int32_t key) {
   auto it = messages_.find(key);
   if (it == messages_.end()) {
-    return fmt::format("No message for code {}", key);
+    return std::format("No message for code {}", key);
   }
   return it->second;
 }

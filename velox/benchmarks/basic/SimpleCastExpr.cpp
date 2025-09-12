@@ -139,7 +139,7 @@ BENCHMARK(castStructFewFieldsRenameSmall) {
   folly::BenchmarkSuspender suspender;
   auto oldType = buildStructType([](int) { return ""; }, INTEGER(), 3);
   auto newType = buildStructType(
-      [](int i) { return fmt::format("col{}", i); }, INTEGER(), 3);
+      [](int i) { return std::format("col{}", i); }, INTEGER(), 3);
   suspender.dismiss();
 
   benchmark->runSmall(oldType, newType);
@@ -149,7 +149,7 @@ BENCHMARK(castStructFewFieldsRenameMedium) {
   folly::BenchmarkSuspender suspender;
   auto oldType = buildStructType([](int) { return ""; }, INTEGER(), 3);
   auto newType = buildStructType(
-      [](int i) { return fmt::format("col{}", i); }, INTEGER(), 3);
+      [](int i) { return std::format("col{}", i); }, INTEGER(), 3);
   suspender.dismiss();
 
   benchmark->runMedium(oldType, newType);
@@ -159,7 +159,7 @@ BENCHMARK(castStructFewFieldsRenameLarge) {
   folly::BenchmarkSuspender suspender;
   auto oldType = buildStructType([](int) { return ""; }, INTEGER(), 3);
   auto newType = buildStructType(
-      [](int i) { return fmt::format("col{}", i); }, INTEGER(), 3);
+      [](int i) { return std::format("col{}", i); }, INTEGER(), 3);
   suspender.dismiss();
 
   benchmark->runLarge(oldType, newType);
@@ -169,7 +169,7 @@ BENCHMARK(castStructManyFieldsRenameSmall) {
   folly::BenchmarkSuspender suspender;
   auto oldType = buildStructType([](int) { return ""; }, INTEGER(), 1000);
   auto newType = buildStructType(
-      [](int i) { return fmt::format("col{}", i); }, INTEGER(), 1000);
+      [](int i) { return std::format("col{}", i); }, INTEGER(), 1000);
   suspender.dismiss();
 
   benchmark->runSmall(oldType, newType);
@@ -179,7 +179,7 @@ BENCHMARK(castStructManyFieldsRenameMedium) {
   folly::BenchmarkSuspender suspender;
   auto oldType = buildStructType([](int) { return ""; }, INTEGER(), 1000);
   auto newType = buildStructType(
-      [](int i) { return fmt::format("col{}", i); }, INTEGER(), 1000);
+      [](int i) { return std::format("col{}", i); }, INTEGER(), 1000);
   suspender.dismiss();
 
   benchmark->runMedium(oldType, newType);
@@ -189,7 +189,7 @@ BENCHMARK(castStructManyFieldsRenameLarge) {
   folly::BenchmarkSuspender suspender;
   auto oldType = buildStructType([](int) { return ""; }, INTEGER(), 1000);
   auto newType = buildStructType(
-      [](int i) { return fmt::format("col{}", i); }, INTEGER(), 1000);
+      [](int i) { return std::format("col{}", i); }, INTEGER(), 1000);
   suspender.dismiss();
 
   benchmark->runLarge(oldType, newType);
@@ -199,7 +199,7 @@ BENCHMARK(castStructFewFieldsNestedCastSmall) {
   folly::BenchmarkSuspender suspender;
   auto oldType = buildStructType([](int) { return ""; }, INTEGER(), 3);
   auto newType = buildStructType(
-      [](int i) { return fmt::format("col{}", i); }, BIGINT(), 3);
+      [](int i) { return std::format("col{}", i); }, BIGINT(), 3);
   suspender.dismiss();
 
   benchmark->runSmall(oldType, newType);
@@ -209,7 +209,7 @@ BENCHMARK(castStructFewFieldsNestedCastMedium) {
   folly::BenchmarkSuspender suspender;
   auto oldType = buildStructType([](int) { return ""; }, INTEGER(), 3);
   auto newType = buildStructType(
-      [](int i) { return fmt::format("col{}", i); }, BIGINT(), 3);
+      [](int i) { return std::format("col{}", i); }, BIGINT(), 3);
   suspender.dismiss();
 
   benchmark->runMedium(oldType, newType);
@@ -219,7 +219,7 @@ BENCHMARK(castStructFewFieldsNestedCastLarge) {
   folly::BenchmarkSuspender suspender;
   auto oldType = buildStructType([](int) { return ""; }, INTEGER(), 3);
   auto newType = buildStructType(
-      [](int i) { return fmt::format("col{}", i); }, BIGINT(), 3);
+      [](int i) { return std::format("col{}", i); }, BIGINT(), 3);
   suspender.dismiss();
 
   benchmark->runLarge(oldType, newType);
@@ -229,7 +229,7 @@ BENCHMARK(castStructManyFieldsNestedCastSmall) {
   folly::BenchmarkSuspender suspender;
   auto oldType = buildStructType([](int) { return ""; }, INTEGER(), 1000);
   auto newType = buildStructType(
-      [](int i) { return fmt::format("col{}", i); }, BIGINT(), 1000);
+      [](int i) { return std::format("col{}", i); }, BIGINT(), 1000);
   suspender.dismiss();
 
   benchmark->runSmall(oldType, newType);
@@ -239,7 +239,7 @@ BENCHMARK(castStructManyFieldsNestedCastMedium) {
   folly::BenchmarkSuspender suspender;
   auto oldType = buildStructType([](int) { return ""; }, INTEGER(), 1000);
   auto newType = buildStructType(
-      [](int i) { return fmt::format("col{}", i); }, BIGINT(), 1000);
+      [](int i) { return std::format("col{}", i); }, BIGINT(), 1000);
   suspender.dismiss();
 
   benchmark->runMedium(oldType, newType);

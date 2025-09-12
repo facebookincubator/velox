@@ -1434,7 +1434,7 @@ TEST_F(SimpleFunctionTest, decimalsWithConstraints) {
       {"decimal_plus_two"},
       {exec::SignatureVariable(
           P2::name(),
-          fmt::format("{a_precision} + 1", fmt::arg("a_precision", P1::name())),
+          std::format("{a_precision} + 1", std::arg("a_precision", P1::name())),
           exec::ParameterType::kIntegerParameter)});
 
   auto signatures = registry.getFunctionSignatures("decimal_plus_two");
@@ -1460,12 +1460,12 @@ TEST_F(SimpleFunctionTest, decimalsWithConstraints) {
       {
           exec::SignatureVariable(
               P2::name(),
-              fmt::format(
-                  "{a_precision} + 1", fmt::arg("a_precision", P1::name())),
+              std::format(
+                  "{a_precision} + 1", std::arg("a_precision", P1::name())),
               exec::ParameterType::kIntegerParameter),
           exec::SignatureVariable(
               S2::name(),
-              fmt::format("{a_scale} + 1", fmt::arg("a_scale", S1::name())),
+              std::format("{a_scale} + 1", std::arg("a_scale", S1::name())),
               exec::ParameterType::kIntegerParameter),
       });
 
@@ -1641,7 +1641,7 @@ TEST_F(SimpleFunctionTest, toDebugString) {
       {functionName},
       {exec::SignatureVariable(
           P2::name(),
-          fmt::format("{a_precision} + 1", fmt::arg("a_precision", P1::name())),
+          std::format("{a_precision} + 1", std::arg("a_precision", P1::name())),
           exec::ParameterType::kIntegerParameter)});
 
   auto resolved = exec::simpleFunctions().resolveFunction(

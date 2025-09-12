@@ -139,7 +139,7 @@ std::vector<std::string> readFunctionNamesFromFile(
 std::string toFuncLink(
     const std::string& name,
     const std::string& domain = "") {
-  return fmt::format("{}:func:`{}`", domain, name);
+  return std::format("{}:func:`{}`", domain, name);
 }
 
 int maxLength(const std::vector<std::string>& names) {

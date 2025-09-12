@@ -60,7 +60,7 @@ class TestIndexTableHandle : public connector::ConnectorTableHandle {
   ~TestIndexTableHandle() override = default;
 
   std::string toString() const override {
-    return fmt::format(
+    return std::format(
         "IndexTableHandle: num of rows: {}, asyncLookup: {}",
         indexTable_ ? indexTable_->table->rows()->numRows() : 0,
         asyncLookup_);

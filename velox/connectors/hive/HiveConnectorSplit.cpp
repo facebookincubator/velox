@@ -20,14 +20,14 @@ namespace facebook::velox::connector::hive {
 
 std::string HiveConnectorSplit::toString() const {
   if (tableBucketNumber.has_value()) {
-    return fmt::format(
+    return std::format(
         "Hive: {} {} - {} {}",
         filePath,
         start,
         length,
         tableBucketNumber.value());
   }
-  return fmt::format("Hive: {} {} - {}", filePath, start, length);
+  return std::format("Hive: {} {} - {}", filePath, start, length);
 }
 
 uint64_t HiveConnectorSplit::size() const {

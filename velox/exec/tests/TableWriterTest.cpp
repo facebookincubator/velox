@@ -94,7 +94,7 @@ TEST_F(BasicTableWriterTestBase, roundTrip) {
   plan = PlanBuilder().tableScan(rowType).planNode();
 
   auto copy = AssertQueryBuilder(plan)
-                  .split(makeHiveConnectorSplit(fmt::format(
+                  .split(makeHiveConnectorSplit(std::format(
                       "{}/{}", targetDirectoryPath->getPath(), writeFileName)))
                   .copyResults(pool());
   assertEqualResults({data}, {copy});
@@ -185,7 +185,7 @@ TEST_F(BasicTableWriterTestBase, targetFileName) {
   plan = PlanBuilder().tableScan(asRowType(data->type())).planNode();
   AssertQueryBuilder(plan)
       .split(makeHiveConnectorSplit(
-          fmt::format("{}/{}", directory->getPath(), kFileName)))
+          std::format("{}/{}", directory->getPath(), kFileName)))
       .assertResults(data);
 }
 
@@ -869,7 +869,7 @@ TEST_P(AllTableWriterTest, constantVectors) {
       connector::hive::LocationHandle::TableType::kNew,
       commitStrategy_);
 
-  assertQuery(op, fmt::format("SELECT {}", size));
+  assertQuery(op, std::format("SELECT {}", size));
 
   if (partitionedBy_.size() > 0) {
     auto newOutputType = getNonPartitionsColumns(partitionedBy_, tableSchema_);
@@ -1026,7 +1026,7 @@ TEST_P(PartitionedTableWriterTest, specialPartitionName) {
                 [&](auto row) {
                   // special character
                   return StringView::makeInline(
-                      fmt::format("str_{}{}", row, charsToEscape.at(row % 15)));
+                      std::format("str_{}{}", row, charsToEscape.at(row % 15)));
                 }),
             makeFlatVector<int64_t>(
                 numPartitions, [&](auto row) { return row + 1000; }),
@@ -1036,7 +1036,7 @@ TEST_P(PartitionedTableWriterTest, specialPartitionName) {
                 numPartitions,
                 [&](auto row) {
                   return StringView::makeInline(
-                      fmt::format("bucket_{}", row * 3));
+                      std::format("bucket_{}", row * 3));
                 }),
         });
   });
@@ -1083,7 +1083,7 @@ TEST_P(PartitionedTableWriterTest, specialPartitionName) {
       "%5E"};
   for (auto i = 0; i < numPartitions; ++i) {
     // url encoded
-    auto partitionName = fmt::format(
+    auto partitionName = std::format(
         "p0={}/p1=str_{}{}", i, i, expectedCharsAfterEscape.at(i % 15));
     expectedPartitionDirectories.emplace(
         fs::path(outputDirectory->getPath()) / partitionName);
@@ -1112,7 +1112,7 @@ TEST_P(PartitionedTableWriterTest, multiplePartitions) {
             makeFlatVector<StringView>(
                 numPartitions,
                 [&](auto row) {
-                  return StringView::makeInline(fmt::format("str_{}", row));
+                  return StringView::makeInline(std::format("str_{}", row));
                 }),
             makeFlatVector<int64_t>(
                 numPartitions, [&](auto row) { return row + 1000; }),
@@ -1122,7 +1122,7 @@ TEST_P(PartitionedTableWriterTest, multiplePartitions) {
                 numPartitions,
                 [&](auto row) {
                   return StringView::makeInline(
-                      fmt::format("bucket_{}", row * 3));
+                      std::format("bucket_{}", row * 3));
                 }),
         });
   });
@@ -1154,7 +1154,7 @@ TEST_P(PartitionedTableWriterTest, multiplePartitions) {
   std::set<std::string> expectedPartitionDirectories;
   std::set<std::string> partitionNames;
   for (auto i = 0; i < numPartitions; i++) {
-    auto partitionName = fmt::format("p0={}/p1=str_{}", i, i);
+    auto partitionName = std::format("p0={}/p1=str_{}", i, i);
     partitionNames.emplace(partitionName);
     expectedPartitionDirectories.emplace(
         fs::path(outputDirectory->getPath()) / partitionName);
@@ -1169,7 +1169,7 @@ TEST_P(PartitionedTableWriterTest, multiplePartitions) {
     assertQuery(
         PlanBuilder().tableScan(newOutputType).planNode(),
         makeHiveConnectorSplits(*iterPartitionDirectory),
-        fmt::format(
+        std::format(
             "SELECT c0, c1, c3, c5 FROM tmp WHERE {}",
             partitionNameToPredicate(*iterPartitionName, partitionTypes)));
     // In case of unbucketed partitioned table, one single file is written to
@@ -1198,12 +1198,12 @@ TEST_P(PartitionedTableWriterTest, singlePartition) {
         {makeFlatVector<StringView>(
              1'000,
              [&](auto row) {
-               return StringView::makeInline(fmt::format("str_{}", row));
+               return StringView::makeInline(std::format("str_{}", row));
              }),
          makeConstant((int64_t)365, 1'000),
          makeFlatVector<float>(1'000, [&](auto row) { return row + 33.23; }),
          makeFlatVector<StringView>(1'000, [&](auto row) {
-           return StringView::makeInline(fmt::format("bucket_{}", row * 3));
+           return StringView::makeInline(std::format("bucket_{}", row * 3));
          })});
   });
   createDuckDbTable(vectors);
@@ -1317,7 +1317,7 @@ TEST_P(PartitionedTableWriterTest, maxPartitions) {
          makeFlatVector<float>(
              numPartitions, [&](auto row) { return row + 33.23; }),
          makeFlatVector<StringView>(numPartitions, [&](auto row) {
-           return StringView::makeInline(fmt::format("bucket_{}", row * 3));
+           return StringView::makeInline(std::format("bucket_{}", row * 3));
          })});
   } else {
     vector = makeRowVector(
@@ -1325,7 +1325,7 @@ TEST_P(PartitionedTableWriterTest, maxPartitions) {
         {makeFlatVector<int64_t>(4'000, [&](auto /*unused*/) { return 0; }),
          makeFlatVector<float>(4'000, [&](auto row) { return row + 33.23; }),
          makeFlatVector<StringView>(4'000, [&](auto row) {
-           return StringView::makeInline(fmt::format("bucket_{}", row * 3));
+           return StringView::makeInline(std::format("bucket_{}", row * 3));
          })});
   };
 
@@ -1349,7 +1349,7 @@ TEST_P(PartitionedTableWriterTest, maxPartitions) {
                 HiveConfig::kMaxPartitionsPerWritersSession,
                 folly::to<std::string>(maxPartitions))
             .copyResults(pool()),
-        fmt::format(
+        std::format(
             "Exceeded limit of {} distinct partitions.", maxPartitions));
   } else {
     VELOX_ASSERT_THROW(
@@ -1466,7 +1466,7 @@ TEST_P(UnpartitionedTableWriterTest, runtimeStatsCheck) {
     int expectedNumStripes;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "numInputVectors: {}, maxStripeSize: {}, expectedNumStripes: {}",
           numInputVectors,
           maxStripeSize,
@@ -1537,7 +1537,7 @@ TEST_P(UnpartitionedTableWriterTest, immutableSettings) {
     bool expectedInsertSuccees;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "dataType:{}, immutablePartitionsEnabled:{}, operationSuccess:{}",
           dataType,
           immutablePartitionsEnabled,
@@ -1637,7 +1637,7 @@ TEST_P(BucketedTableOnlyWriteTest, bucketCountLimit) {
     bool expectedError;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "bucketCount:{} expectedError:{}", bucketCount, expectedError);
     }
   } testSettings[] = {
@@ -1727,7 +1727,7 @@ TEST_P(BucketedTableOnlyWriteTest, mismatchedBucketTypes) {
       commitStrategy_);
   VELOX_ASSERT_THROW(
       AssertQueryBuilder(plan).copyResults(pool()),
-      fmt::format(
+      std::format(
           "Input column {} type {} doesn't match bucket type {}",
           bucketProperty_->bucketedBy()[0],
           oldType->toString(),
@@ -1789,15 +1789,15 @@ TEST_P(AllTableWriterTest, tableWriteOutputCheck) {
       } else {
         std::string partitionDirRe;
         for (const auto& partitionBy : partitionedBy_) {
-          partitionDirRe += fmt::format("/{}=.+", partitionBy);
+          partitionDirRe += std::format("/{}=.+", partitionBy);
         }
         ASSERT_TRUE(RE2::FullMatch(
             obj["targetPath"].asString(),
-            fmt::format("{}{}", outputDirectory->getPath(), partitionDirRe)))
+            std::format("{}{}", outputDirectory->getPath(), partitionDirRe)))
             << obj["targetPath"].asString();
         ASSERT_TRUE(RE2::FullMatch(
             obj["writePath"].asString(),
-            fmt::format("{}{}", outputDirectory->getPath(), partitionDirRe)))
+            std::format("{}{}", outputDirectory->getPath(), partitionDirRe)))
             << obj["writePath"].asString();
       }
       numRows += obj["rowCount"].asInt();
@@ -1835,7 +1835,7 @@ TEST_P(AllTableWriterTest, tableWriteOutputCheck) {
     if (!commitContextVector->isNullAt(i)) {
       ASSERT_TRUE(RE2::FullMatch(
           commitContextVector->valueAt(i).getString(),
-          fmt::format(".*{}.*", CommitStrategyName::toName(commitStrategy_))))
+          std::format(".*{}.*", CommitStrategyName::toName(commitStrategy_))))
           << commitContextVector->valueAt(i);
     }
   }
@@ -2380,7 +2380,7 @@ DEBUG_ONLY_TEST_P(
       commitStrategy_);
 
   VELOX_ASSERT_THROW(
-      assertQuery(op, fmt::format("SELECT {}", numRows)),
+      assertQuery(op, std::format("SELECT {}", numRows)),
       "Aborted for external error");
 }
 
@@ -2448,7 +2448,7 @@ TEST_P(BucketSortOnlyTableWriterTest, sortWriterSpill) {
 
   const auto spillStats = globalSpillStats();
   auto task =
-      assertQueryWithWriterConfigs(op, fmt::format("SELECT {}", 5 * 500), true);
+      assertQueryWithWriterConfigs(op, std::format("SELECT {}", 5 * 500), true);
   if (partitionedBy_.size() > 0) {
     rowType_ = getNonPartitionsColumns(partitionedBy_, rowType_);
     verifyTableWriterOutput(outputDirectory->getPath(), rowType_);
@@ -2484,7 +2484,7 @@ DEBUG_ONLY_TEST_P(BucketSortOnlyTableWriterTest, outputBatchRows) {
 
     // TODO: add output size check with spilling enabled
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "maxOutputRows: {}, maxOutputBytes: {}, expectedOutputCount: {}",
           maxOutputRows,
           maxOutputBytes,
@@ -2518,14 +2518,14 @@ DEBUG_ONLY_TEST_P(BucketSortOnlyTableWriterTest, outputBatchRows) {
           {makeFlatVector<StringView>(
                1'000,
                [&](auto row) {
-                 return StringView::makeInline(fmt::format("str_{}", row));
+                 return StringView::makeInline(std::format("str_{}", row));
                }),
            makeConstant((int64_t)365, 1'000),
            makeConstant((int32_t)365, 1'000),
            makeFlatVector<float>(1'000, [&](auto row) { return row + 33.23; }),
            makeFlatVector<double>(1'000, [&](auto row) { return row + 33.23; }),
            makeFlatVector<StringView>(1'000, [&](auto row) {
-             return StringView::makeInline(fmt::format("bucket_{}", row * 3));
+             return StringView::makeInline(std::format("bucket_{}", row * 3));
            })});
     });
     createDuckDbTable(vectors);
@@ -2571,14 +2571,14 @@ DEBUG_ONLY_TEST_P(BucketSortOnlyTableWriterTest, yield) {
         {makeFlatVector<StringView>(
              1'000,
              [&](auto row) {
-               return StringView::makeInline(fmt::format("str_{}", row));
+               return StringView::makeInline(std::format("str_{}", row));
              }),
          makeConstant((int64_t)365, 1'000),
          makeConstant((int32_t)365, 1'000),
          makeFlatVector<float>(1'000, [&](auto row) { return row + 33.23; }),
          makeFlatVector<double>(1'000, [&](auto row) { return row + 33.23; }),
          makeFlatVector<StringView>(1'000, [&](auto row) {
-           return StringView::makeInline(fmt::format("bucket_{}", row * 3));
+           return StringView::makeInline(std::format("bucket_{}", row * 3));
          })});
   });
   createDuckDbTable(vectors);
@@ -2588,7 +2588,7 @@ DEBUG_ONLY_TEST_P(BucketSortOnlyTableWriterTest, yield) {
     bool expectedYield;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "flushTimeSliceLimitMs: {}, expectedYield: {}",
           flushTimeSliceLimitMs,
           expectedYield);
@@ -2652,7 +2652,7 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
     [](const testing::TestParamInfo<uint64_t>& info) {
       const auto testParams =
           static_cast<TableWriterTestBase::TestParam>(info.param);
-      return fmt::format(
+      return std::format(
           "UnpartitionedTableWriterTest_{}", testParams.toString());
     });
 
@@ -2663,7 +2663,7 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
     [](const testing::TestParamInfo<uint64_t>& info) {
       const auto testParams =
           static_cast<TableWriterTestBase::TestParam>(info.param);
-      return fmt::format(
+      return std::format(
           "BucketedUnpartitionedTableWriterTest_{}", testParams.toString());
     });
 
@@ -2674,7 +2674,7 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
     [](const testing::TestParamInfo<uint64_t>& info) {
       const auto testParams =
           static_cast<TableWriterTestBase::TestParam>(info.param);
-      return fmt::format(
+      return std::format(
           "PartitionedTableWriterTest_{}", testParams.toString());
     });
 
@@ -2685,7 +2685,7 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
     [](const testing::TestParamInfo<uint64_t>& info) {
       const auto testParams =
           static_cast<TableWriterTestBase::TestParam>(info.param);
-      return fmt::format(
+      return std::format(
           "BucketedTableOnlyWriteTest_{}", testParams.toString());
     });
 
@@ -2696,7 +2696,7 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
     [](const testing::TestParamInfo<uint64_t>& info) {
       const auto testParams =
           static_cast<TableWriterTestBase::TestParam>(info.param);
-      return fmt::format("AllTableWriterTest_{}", testParams.toString());
+      return std::format("AllTableWriterTest_{}", testParams.toString());
     });
 
 VELOX_INSTANTIATE_TEST_SUITE_P(
@@ -2706,7 +2706,7 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
     [](const testing::TestParamInfo<uint64_t>& info) {
       const auto testParams =
           static_cast<TableWriterTestBase::TestParam>(info.param);
-      return fmt::format(
+      return std::format(
           "PartitionedWithoutBucketTableWriterTest_{}", testParams.toString());
     });
 
@@ -2717,7 +2717,7 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
     [](const testing::TestParamInfo<uint64_t>& info) {
       const auto testParams =
           static_cast<TableWriterTestBase::TestParam>(info.param);
-      return fmt::format(
+      return std::format(
           "BucketSortOnlyTableWriterTest_{}", testParams.toString());
     });
 
@@ -2765,7 +2765,7 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, reclaimFromTableWriter) {
 
   for (bool writerSpillEnabled : {false, true}) {
     {
-      SCOPED_TRACE(fmt::format("writerSpillEnabled: {}", writerSpillEnabled));
+      SCOPED_TRACE(std::format("writerSpillEnabled: {}", writerSpillEnabled));
       auto queryPool = memory::memoryManager()->addRootPool(
           "reclaimFromTableWriter", kQueryMemoryCapacity);
       auto* arbitrator = memory::memoryManager()->arbitrator();
@@ -2813,7 +2813,7 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, reclaimFromTableWriter) {
               .project({TableWriteTraits::rowCountColumnName()})
               .singleAggregation(
                   {},
-                  {fmt::format(
+                  {std::format(
                       "sum({})", TableWriteTraits::rowCountColumnName())})
               .planNode();
       {
@@ -2829,7 +2829,7 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, reclaimFromTableWriter) {
                 // in test.
                 .config(core::QueryConfig::kWriterFlushThresholdBytes, 0)
                 .plan(std::move(writerPlan))
-                .assertResults(fmt::format("SELECT {}", numRows));
+                .assertResults(std::format("SELECT {}", numRows));
         auto planStats = toPlanStats(task->taskStats());
         auto& tableWriteStats =
             planStats.at(tableWriteNodeId).operatorStats.at("TableWrite");
@@ -2884,7 +2884,7 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, reclaimFromSortTableWriter) {
 
   for (bool writerSpillEnabled : {false, true}) {
     {
-      SCOPED_TRACE(fmt::format("writerSpillEnabled: {}", writerSpillEnabled));
+      SCOPED_TRACE(std::format("writerSpillEnabled: {}", writerSpillEnabled));
       auto queryPool = memory::memoryManager()->addRootPool(
           "reclaimFromSortTableWriter", kQueryMemoryCapacity);
       auto* arbitrator = memory::memoryManager()->arbitrator();
@@ -2939,7 +2939,7 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, reclaimFromSortTableWriter) {
               .project({TableWriteTraits::rowCountColumnName()})
               .singleAggregation(
                   {},
-                  {fmt::format(
+                  {std::format(
                       "sum({})", TableWriteTraits::rowCountColumnName())})
               .planNode();
 
@@ -2953,7 +2953,7 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, reclaimFromSortTableWriter) {
           // test.
           .config(core::QueryConfig::kWriterFlushThresholdBytes, 0)
           .plan(std::move(writerPlan))
-          .assertResults(fmt::format("SELECT {}", numRows));
+          .assertResults(std::format("SELECT {}", numRows));
 
       ASSERT_EQ(
           arbitrator->stats().numFailures,
@@ -2994,7 +2994,7 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, writerFlushThreshold) {
   const std::vector<TestParam> testParams{
       {0, 0}, {0, 1UL << 30}, {64UL << 20, 1UL << 30}};
   for (const auto& testParam : testParams) {
-    SCOPED_TRACE(fmt::format(
+    SCOPED_TRACE(std::format(
         "bytesToReserve: {}, writerFlushThreshold: {}",
         succinctBytes(testParam.bytesToReserve),
         succinctBytes(testParam.writerFlushThreshold)));
@@ -3057,7 +3057,7 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, writerFlushThreshold) {
             .project({TableWriteTraits::rowCountColumnName()})
             .singleAggregation(
                 {},
-                {fmt::format(
+                {std::format(
                     "sum({})", TableWriteTraits::rowCountColumnName())})
             .planNode();
 
@@ -3071,7 +3071,7 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, writerFlushThreshold) {
             core::QueryConfig::kWriterFlushThresholdBytes,
             testParam.writerFlushThreshold)
         .plan(std::move(writerPlan))
-        .assertResults(fmt::format("SELECT {}", numRows));
+        .assertResults(std::format("SELECT {}", numRows));
 
     ASSERT_EQ(
         arbitrator->stats().numFailures,
@@ -3140,7 +3140,7 @@ DEBUG_ONLY_TEST_F(
           .project({TableWriteTraits::rowCountColumnName()})
           .singleAggregation(
               {},
-              {fmt::format("sum({})", TableWriteTraits::rowCountColumnName())})
+              {std::format("sum({})", TableWriteTraits::rowCountColumnName())})
           .planNode();
 
   const auto spillDirectory = TempDirectoryPath::create();
@@ -3162,7 +3162,7 @@ DEBUG_ONLY_TEST_F(
           dwrf::Config::kOrcWriterMaxDictionaryMemorySession,
           "1GB")
       .plan(std::move(writerPlan))
-      .assertResults(fmt::format("SELECT {}", numRows));
+      .assertResults(std::format("SELECT {}", numRows));
 
   ASSERT_EQ(arbitrator->stats().numFailures, numPrevArbitrationFailures + 1);
   ASSERT_EQ(
@@ -3237,7 +3237,7 @@ DEBUG_ONLY_TEST_F(
           .project({TableWriteTraits::rowCountColumnName()})
           .singleAggregation(
               {},
-              {fmt::format("sum({})", TableWriteTraits::rowCountColumnName())})
+              {std::format("sum({})", TableWriteTraits::rowCountColumnName())})
           .planNode();
 
   const auto spillDirectory = TempDirectoryPath::create();
@@ -3258,7 +3258,7 @@ DEBUG_ONLY_TEST_F(
           dwrf::Config::kOrcWriterMaxDictionaryMemorySession,
           "1GB")
       .plan(std::move(writerPlan))
-      .assertResults(fmt::format("SELECT {}", numRows));
+      .assertResults(std::format("SELECT {}", numRows));
 
   ASSERT_EQ(
       arbitrator->stats().numNonReclaimableAttempts,
@@ -3337,7 +3337,7 @@ DEBUG_ONLY_TEST_F(
           .project({TableWriteTraits::rowCountColumnName()})
           .singleAggregation(
               {},
-              {fmt::format("sum({})", TableWriteTraits::rowCountColumnName())})
+              {std::format("sum({})", TableWriteTraits::rowCountColumnName())})
           .planNode();
 
   const auto spillStats = common::globalSpillStats();
@@ -3360,7 +3360,7 @@ DEBUG_ONLY_TEST_F(
           dwrf::Config::kOrcWriterMaxDictionaryMemorySession,
           "1GB")
       .plan(std::move(writerPlan))
-      .assertResults(fmt::format("SELECT {}", numRows));
+      .assertResults(std::format("SELECT {}", numRows));
 
   ASSERT_EQ(arbitrator->stats().numFailures, numPrevArbitrationFailures + 1);
   ASSERT_EQ(
@@ -3600,7 +3600,7 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, tableWriteReclaimOnClose) {
           .tableWrite(outputDirectory->getPath())
           .singleAggregation(
               {},
-              {fmt::format("sum({})", TableWriteTraits::rowCountColumnName())})
+              {std::format("sum({})", TableWriteTraits::rowCountColumnName())})
           .planNode();
 
   AssertQueryBuilder(duckDbQueryRunner_)
@@ -3620,7 +3620,7 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, tableWriteReclaimOnClose) {
           dwrf::Config::kOrcWriterMaxDictionaryMemorySession,
           "1GB")
       .plan(std::move(writerPlan))
-      .assertResults(fmt::format("SELECT {}", numRows));
+      .assertResults(std::format("SELECT {}", numRows));
 
   waitForAllTasksToBeDeleted();
 }

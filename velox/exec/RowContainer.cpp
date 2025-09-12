@@ -121,7 +121,7 @@ int32_t RowContainer::combineAlignments(int32_t a, int32_t b) {
 }
 
 std::string RowContainerIterator::toString() const {
-  return fmt::format(
+  return std::format(
       "[allocationIndex:{} rowOffset:{} rowNumber:{}]",
       allocationIndex,
       rowOffset,

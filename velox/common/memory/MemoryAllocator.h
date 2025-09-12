@@ -524,8 +524,8 @@ class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
 std::ostream& operator<<(std::ostream& out, const MemoryAllocator::Kind& kind);
 } // namespace facebook::velox::memory
 template <>
-struct fmt::formatter<facebook::velox::memory::MemoryAllocator::InjectedFailure>
-    : fmt::formatter<int> {
+struct std::formatter<facebook::velox::memory::MemoryAllocator::InjectedFailure>
+    : std::formatter<int> {
   auto format(
       facebook::velox::memory::MemoryAllocator::InjectedFailure s,
       format_context& ctx) const {

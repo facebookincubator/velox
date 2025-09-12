@@ -696,13 +696,13 @@ std::string onTopLevelException(VeloxException::Type exceptionType, void* arg) {
     basePath = FLAGS_velox_save_input_on_expression_system_failure_path.c_str();
   }
   if (strlen(basePath) == 0) {
-    return fmt::format("Top-level Expression: {}", context->expr()->toString());
+    return std::format("Top-level Expression: {}", context->expr()->toString());
   }
 
   // Save input vector to a file.
   context->persistDataAndSql(basePath);
 
-  return fmt::format(
+  return std::format(
       "Top-level Expression: {}. Input data: {}. SQL expression: {}."
       " All SQL expressions: {}. ",
       context->expr()->toString(),

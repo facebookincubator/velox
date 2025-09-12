@@ -138,7 +138,7 @@ class ExchangeBenchmark : public VectorTestBase {
     BENCHMARK_SUSPEND {
       assert(!vectors.empty());
       configSettings_[core::QueryConfig::kMaxPartitionedOutputBufferSize] =
-          fmt::format("{}", FLAGS_exchange_buffer_mb << 20);
+          std::format("{}", FLAGS_exchange_buffer_mb << 20);
       const auto iteration = ++iteration_;
 
       // leafPlan: PartitionedOutput/kPartitioned(1) <-- Values(0)
@@ -246,7 +246,7 @@ class ExchangeBenchmark : public VectorTestBase {
       std::vector<std::string> aggregates = {"count(1)"};
       auto& rowType = vectors[0]->type()->as<TypeKind::ROW>();
       for (auto i = 1; i < rowType.size(); ++i) {
-        aggregates.push_back(fmt::format("checksum({})", rowType.nameOf(i)));
+        aggregates.push_back(std::format("checksum({})", rowType.nameOf(i)));
       }
 
       // plan: Agg/kSingle(4) <-- LocalPartition/Gather(3) <-- Agg/kGather(2)
@@ -276,7 +276,7 @@ class ExchangeBenchmark : public VectorTestBase {
               exec::test::AssertQueryBuilder(plan)
                   .config(
                       core::QueryConfig::kMaxLocalExchangeBufferSize,
-                      fmt::format("{}", FLAGS_local_exchange_buffer_mb << 20))
+                      std::format("{}", FLAGS_local_exchange_buffer_mb << 20))
                   .maxDrivers(taskWidth)
                   .assertResults(expected);
           {
@@ -330,7 +330,7 @@ class ExchangeBenchmark : public VectorTestBase {
 
   static std::string
   makeTaskId(int32_t iteration, const std::string& prefix, int num) {
-    return fmt::format("local://{}-{}-{}", iteration, prefix, num);
+    return std::format("local://{}-{}-{}", iteration, prefix, num);
   }
 
   std::shared_ptr<Task> makeTask(
@@ -392,7 +392,7 @@ void runBenchmarks() {
   // Add enough columns of different types to make a 10K row batch be
   // flat_batch_mb in flat size.
   while (flatSize * 10000 < static_cast<int64_t>(FLAGS_flat_batch_mb) << 20) {
-    flatNames.push_back(fmt::format("c{}", flatNames.size()));
+    flatNames.push_back(std::format("c{}", flatNames.size()));
     assert(!flatNames.empty());
     flatTypes.push_back(typeSelection[flatTypes.size() % typeSelection.size()]);
     if (flatTypes.back()->isFixedWidth()) {

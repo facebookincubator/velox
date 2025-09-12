@@ -61,7 +61,7 @@ class HdfsFileSystemTest : public testing::Test {
     configurationValues.insert(
         {"hive.hdfs.port", std::string(miniCluster->nameNodePort())});
     fullDestinationPath_ =
-        fmt::format("{}{}", miniCluster->url(), kDestinationPath);
+        std::format("{}{}", miniCluster->url(), kDestinationPath);
   }
 
   void SetUp() override {
@@ -78,7 +78,7 @@ class HdfsFileSystemTest : public testing::Test {
   static std::unique_ptr<WriteFile> openFileForWrite(std::string_view path) {
     auto config = std::make_shared<const config::ConfigBase>(
         std::unordered_map<std::string, std::string>(configurationValues));
-    auto hdfsFilePath = fmt::format("{}{}", miniCluster->url(), path);
+    auto hdfsFilePath = std::format("{}{}", miniCluster->url(), path);
     auto hdfsFileSystem = filesystems::getFileSystem(hdfsFilePath, config);
     return hdfsFileSystem->openFileForWrite(path);
   }

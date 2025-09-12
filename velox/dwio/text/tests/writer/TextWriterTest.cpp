@@ -101,7 +101,7 @@ TEST_F(TextWriterTest, write) {
 
   const auto tempPath = tempPath_->getPath();
   const auto filename = "test_text_writer.txt";
-  auto filePath = fs::path(fmt::format("{}/{}", tempPath, filename));
+  auto filePath = fs::path(std::format("{}/{}", tempPath, filename));
   auto sink = std::make_unique<dwio::common::LocalFileSink>(
       filePath, dwio::common::FileSink::Options{.pool = leafPool_.get()});
   auto writer = std::make_unique<TextWriter>(
@@ -210,7 +210,7 @@ TEST_F(TextWriterTest, verifyWriteWithTextReader) {
 
   const auto tempPath = tempPath_->getPath();
   const auto filename = "test_text_writer.txt";
-  auto filePath = fs::path(fmt::format("{}/{}", tempPath, filename));
+  auto filePath = fs::path(std::format("{}/{}", tempPath, filename));
   auto sink = std::make_unique<dwio::common::LocalFileSink>(
       filePath.string(),
       dwio::common::FileSink::Options{.pool = leafPool_.get()});
@@ -322,7 +322,7 @@ TEST_F(TextWriterTest, mapAndArrayComplexTypes) {
   writerOptions.memoryPool = rootPool_.get();
   const auto tempPath = tempPath_->getPath();
   const auto filename = "test_text_writer.txt";
-  auto filePath = fs::path(fmt::format("{}/{}", tempPath, filename));
+  auto filePath = fs::path(std::format("{}/{}", tempPath, filename));
 
   auto sink = std::make_unique<dwio::common::LocalFileSink>(
       filePath.string(),
@@ -473,7 +473,7 @@ TEST_F(TextWriterTest, verifyMapAndArrayComplexTypesWithTextReader) {
   WriterOptions writerOptions;
   writerOptions.memoryPool = rootPool_.get();
   auto filePath =
-      fs::path(fmt::format("{}/test_text_writer.txt", tempPath_->getPath()));
+      fs::path(std::format("{}/test_text_writer.txt", tempPath_->getPath()));
 
   auto sink = std::make_unique<dwio::common::LocalFileSink>(
       filePath.string(),
@@ -585,7 +585,7 @@ TEST_F(TextWriterTest, arrayTypes) {
   const auto tempPath = tempPath_->getPath();
   const auto filename = "test_array_writer.txt";
 
-  auto filePath = fs::path(fmt::format("{}/{}", tempPath, filename));
+  auto filePath = fs::path(std::format("{}/{}", tempPath, filename));
 
   auto sink = std::make_unique<dwio::common::LocalFileSink>(
       filePath, dwio::common::FileSink::Options{.pool = leafPool_.get()});
@@ -666,7 +666,7 @@ TEST_F(TextWriterTest, verifyArrayTypesWithTextReader) {
   const auto tempPath = tempPath_->getPath();
   const auto filename = "test_array_writer.txt";
 
-  auto filePath = fs::path(fmt::format("{}/{}", tempPath, filename));
+  auto filePath = fs::path(std::format("{}/{}", tempPath, filename));
 
   auto sink = std::make_unique<dwio::common::LocalFileSink>(
       filePath, dwio::common::FileSink::Options{.pool = leafPool_.get()});
@@ -786,7 +786,7 @@ TEST_F(TextWriterTest, mapTypes) {
   const auto tempPath = tempPath_->getPath();
   const auto filename = "test_map_writer.txt";
 
-  auto filePath = fs::path(fmt::format("{}/{}", tempPath, filename));
+  auto filePath = fs::path(std::format("{}/{}", tempPath, filename));
   auto sink = std::make_unique<dwio::common::LocalFileSink>(
       filePath, dwio::common::FileSink::Options{.pool = leafPool_.get()});
 
@@ -905,7 +905,7 @@ TEST_F(TextWriterTest, verifyMapTypesWithTextReader) {
   const auto tempPath = tempPath_->getPath();
   const auto filename = "test_map_writer.txt";
 
-  auto filePath = fs::path(fmt::format("{}/{}", tempPath, filename));
+  auto filePath = fs::path(std::format("{}/{}", tempPath, filename));
   auto sink = std::make_unique<dwio::common::LocalFileSink>(
       filePath, dwio::common::FileSink::Options{.pool = leafPool_.get()});
 
@@ -979,7 +979,7 @@ TEST_F(TextWriterTest, nestedRowTypes) {
   const auto tempPath = tempPath_->getPath();
   const auto filename = "test_nested_row_writer.txt";
 
-  auto filePath = fs::path(fmt::format("{}/{}", tempPath, filename));
+  auto filePath = fs::path(std::format("{}/{}", tempPath, filename));
   auto sink = std::make_unique<dwio::common::LocalFileSink>(
       filePath, dwio::common::FileSink::Options{.pool = leafPool_.get()});
 
@@ -1058,7 +1058,7 @@ TEST_F(TextWriterTest, verifyNestedRowTypesWithTextReader) {
   const auto tempPath = tempPath_->getPath();
   const auto filename = "test_nested_row_writer.txt";
 
-  auto filePath = fs::path(fmt::format("{}/{}", tempPath, filename));
+  auto filePath = fs::path(std::format("{}/{}", tempPath, filename));
   auto sink = std::make_unique<dwio::common::LocalFileSink>(
       filePath, dwio::common::FileSink::Options{.pool = leafPool_.get()});
 
@@ -1205,7 +1205,7 @@ TEST_F(TextWriterTest, DISABLED_deeplyNestedComplexTypes) {
 
   const auto tempPath = tempPath_->getPath();
   const auto filename = "test_text_writer.txt";
-  auto filePath = fs::path(fmt::format("{}/{}", tempPath, filename));
+  auto filePath = fs::path(std::format("{}/{}", tempPath, filename));
   auto sink = std::make_unique<dwio::common::LocalFileSink>(
       filePath.string(),
       dwio::common::FileSink::Options{.pool = leafPool_.get()});
@@ -1271,7 +1271,7 @@ TEST_F(TextWriterTest, abort) {
 
   const auto tempPath = tempPath_->getPath();
   const auto filename = "test_text_writer_abort.txt";
-  auto filePath = fs::path(fmt::format("{}/{}", tempPath, filename));
+  auto filePath = fs::path(std::format("{}/{}", tempPath, filename));
 
   auto sink = std::make_unique<dwio::common::LocalFileSink>(
       filePath.string(),
@@ -1349,7 +1349,7 @@ TEST_F(TextWriterTest, tripleNestedArraysWithCustomDelimiters) {
 
   const auto tempPath = tempPath_->getPath();
   const auto filename = "test_text_writer.txt";
-  auto filePath = fs::path(fmt::format("{}/{}", tempPath, filename));
+  auto filePath = fs::path(std::format("{}/{}", tempPath, filename));
   auto sink = std::make_unique<dwio::common::LocalFileSink>(
       filePath.string(),
       dwio::common::FileSink::Options{.pool = leafPool_.get()});
@@ -1445,7 +1445,7 @@ TEST_F(
   writerOptions.memoryPool = rootPool_.get();
 
   auto filePath =
-      fs::path(fmt::format("{}/test_text_writer.txt", tempPath_->getPath()));
+      fs::path(std::format("{}/test_text_writer.txt", tempPath_->getPath()));
   auto sink = std::make_unique<dwio::common::LocalFileSink>(
       filePath.string(),
       dwio::common::FileSink::Options{.pool = leafPool_.get()});
@@ -1506,7 +1506,7 @@ TEST_F(TextWriterTest, simpleEscapeCharTest) {
 
   const auto tempPath = tempPath_->getPath();
   const auto filename = "test_escape_writer.txt";
-  auto filePath = fs::path(fmt::format("{}/{}", tempPath, filename));
+  auto filePath = fs::path(std::format("{}/{}", tempPath, filename));
 
   auto sink = std::make_unique<dwio::common::LocalFileSink>(
       filePath, dwio::common::FileSink::Options{.pool = leafPool_.get()});
@@ -1567,7 +1567,7 @@ TEST_F(TextWriterTest, verifySimpleEscapeCharTestWithTextReader) {
 
   const auto tempPath = tempPath_->getPath();
   const auto filename = "test_escape_writer.txt";
-  auto filePath = fs::path(fmt::format("{}/{}", tempPath, filename));
+  auto filePath = fs::path(std::format("{}/{}", tempPath, filename));
 
   auto sink = std::make_unique<dwio::common::LocalFileSink>(
       filePath, dwio::common::FileSink::Options{.pool = leafPool_.get()});
@@ -1638,7 +1638,7 @@ TEST_F(TextWriterTest, customEscapeCharTest) {
 
   const auto tempPath = tempPath_->getPath();
   const auto filename = "test_escape_writer.txt";
-  auto filePath = fs::path(fmt::format("{}/{}", tempPath, filename));
+  auto filePath = fs::path(std::format("{}/{}", tempPath, filename));
 
   auto sink = std::make_unique<dwio::common::LocalFileSink>(
       filePath, dwio::common::FileSink::Options{.pool = leafPool_.get()});
@@ -1699,7 +1699,7 @@ TEST_F(TextWriterTest, verifyCustomEscapeCharTestWithTextReader) {
 
   const auto tempPath = tempPath_->getPath();
   const auto filename = "test_escape_writer.txt";
-  auto filePath = fs::path(fmt::format("{}/{}", tempPath, filename));
+  auto filePath = fs::path(std::format("{}/{}", tempPath, filename));
 
   auto sink = std::make_unique<dwio::common::LocalFileSink>(
       filePath, dwio::common::FileSink::Options{.pool = leafPool_.get()});
@@ -1765,7 +1765,7 @@ TEST_F(TextWriterTest, headerTest) {
 
   const auto tempPath = tempPath_->getPath();
   const auto filename = "test_header_writer.txt";
-  auto filePath = fs::path(fmt::format("{}/{}", tempPath, filename));
+  auto filePath = fs::path(std::format("{}/{}", tempPath, filename));
 
   auto sink = std::make_unique<dwio::common::LocalFileSink>(
       filePath, dwio::common::FileSink::Options{.pool = leafPool_.get()});
@@ -1828,7 +1828,7 @@ TEST_F(TextWriterTest, verifyHeaderTestWithTextReader) {
 
   const auto tempPath = tempPath_->getPath();
   const auto filename = "test_header_writer.txt";
-  auto filePath = fs::path(fmt::format("{}/{}", tempPath, filename));
+  auto filePath = fs::path(std::format("{}/{}", tempPath, filename));
 
   auto sink = std::make_unique<dwio::common::LocalFileSink>(
       filePath, dwio::common::FileSink::Options{.pool = leafPool_.get()});

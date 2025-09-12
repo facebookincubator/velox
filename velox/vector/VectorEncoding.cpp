@@ -37,7 +37,7 @@ Simple mapNameToSimple(const std::string& name) {
 
   if (vecNameMap.find(name) == vecNameMap.end()) {
     throw std::invalid_argument(
-        fmt::format("Specified vector encoding is not found : {}", name));
+        std::format("Specified vector encoding is not found : {}", name));
   }
   return vecNameMap[name];
 }

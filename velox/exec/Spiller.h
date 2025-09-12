@@ -112,7 +112,7 @@ class SpillerBase {
     }
 
     std::string toString() const {
-      return fmt::format(
+      return std::format(
           "[{} ROWS {} BYTES {}]",
           rows.size(),
           numBytes,

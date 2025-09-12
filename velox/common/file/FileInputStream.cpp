@@ -227,7 +227,7 @@ void FileInputStream::updateStats(uint64_t readBytes, uint64_t readTimeNs) {
 }
 
 std::string FileInputStream::toString() const {
-  return fmt::format(
+  return std::format(
       "file (offset {}/size {}) current (position {}/ size {})",
       succinctBytes(fileOffset_),
       succinctBytes(fileSize_),
@@ -246,7 +246,7 @@ bool FileInputStream::Stats::operator==(
 }
 
 std::string FileInputStream::Stats::toString() const {
-  return fmt::format(
+  return std::format(
       "numReads: {}, readBytes: {}, readTimeNs: {}",
       numReads,
       succinctBytes(readBytes),

@@ -121,7 +121,7 @@ class IPPrefixCastOperator : public exec::CastOperator {
           (v6Addr.isIPv4Mapped()) ? v6Addr.createIPv4().str() : v6Addr.str();
 
       // Format of string is {ipString}/{mask}
-      auto stringRet = fmt::format("{}/{}", ipString, prefixVal);
+      auto stringRet = std::format("{}/{}", ipString, prefixVal);
 
       // Write the string to the result vector
       exec::StringWriter result(flatResult, row);

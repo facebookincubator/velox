@@ -83,7 +83,7 @@ std::vector<std::shared_ptr<MemoryPool>> createSharedLeafMemoryPools(
   leafPools.reserve(numSharedPools);
   for (size_t i = 0; i < numSharedPools; ++i) {
     leafPools.emplace_back(
-        sysPool.addLeafChild(fmt::format("{}{}", kSysSharedLeafNamePrefix, i)));
+        sysPool.addLeafChild(std::format("{}{}", kSysSharedLeafNamePrefix, i)));
   }
   return leafPools;
 }
@@ -182,7 +182,7 @@ MemoryManager::~MemoryManager() {
   arbitrator_->shutdown();
 
   if (pools_.size() != 0) {
-    const auto errMsg = fmt::format(
+    const auto errMsg = std::format(
         "pools_.size() != 0 ({} vs {}). There are unexpected alive memory "
         "pools allocated by user on memory manager destruction:\n{}",
         pools_.size(),
@@ -284,7 +284,7 @@ std::shared_ptr<MemoryPool> MemoryManager::addRootPool(
   std::string poolName = name;
   if (poolName.empty()) {
     static std::atomic<int64_t> poolId{0};
-    poolName = fmt::format("default_root_{}", poolId++);
+    poolName = std::format("default_root_{}", poolId++);
   }
 
   MemoryPool::Options options;
@@ -321,7 +321,7 @@ std::shared_ptr<MemoryPool> MemoryManager::addLeafPool(
   std::string poolName = name;
   if (poolName.empty()) {
     static std::atomic<int64_t> poolId{0};
-    poolName = fmt::format("default_leaf_{}", poolId++);
+    poolName = std::format("default_leaf_{}", poolId++);
   }
   return sysRoot_->addLeafChild(poolName, threadSafe, nullptr);
 }

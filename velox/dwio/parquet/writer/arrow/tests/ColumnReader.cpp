@@ -62,8 +62,8 @@ namespace bit_util = arrow::bit_util;
 
 namespace facebook::velox::parquet::arrow {
 
-fmt::underlying_t<Type::type> format_as(Type::type type) {
-  return fmt::underlying(type);
+std::underlying_t<Type::type> format_as(Type::type type) {
+  return std::underlying(type);
 }
 
 namespace {

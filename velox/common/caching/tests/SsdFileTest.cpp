@@ -98,7 +98,7 @@ class SsdFileTest : public testing::Test {
       bool checksumReadVerificationEnabled = false,
       bool disableFileCow = false) {
     SsdFile::Config config(
-        fmt::format("{}/ssdtest", tempDirectory_->getPath()),
+        std::format("{}/ssdtest", tempDirectory_->getPath()),
         0, // shardId
         bits::roundUp(ssdBytes, SsdFile::kRegionSize) / SsdFile::kRegionSize,
         checkpointIntervalBytes,
@@ -392,7 +392,7 @@ TEST_F(SsdFileTest, writeAndRead) {
 
   // Test cache writes with different iobufs sizes.
   for (int numPins : {0, 1, IOV_MAX - 1, IOV_MAX, IOV_MAX + 1}) {
-    SCOPED_TRACE(fmt::format("numPins: {}", numPins));
+    SCOPED_TRACE(std::format("numPins: {}", numPins));
     auto pins = makePins(fileName_.id(), 0, 4096, 4096, 4096 * numPins);
     EXPECT_EQ(pins.size(), numPins);
     ssdFile_->write(pins);
@@ -531,7 +531,7 @@ TEST_F(SsdFileTest, fileCorruption) {
   // Corrupt the SSD file, initialize the cache from checkpoint without read
   // verification.
   ssdFile_->checkpoint(true);
-  corruptSsdFile(fmt::format("{}/ssdtest", tempDirectory_->getPath()));
+  corruptSsdFile(std::format("{}/ssdtest", tempDirectory_->getPath()));
   initializeSsdFile(kSsdSize, checkpointIntervalBytes, true, false);
   // Cache can be loaded but the data of the last part is corrupted.
   EXPECT_EQ(checkEntries({allEntries.begin(), allEntries.begin() + 100}), 100);
@@ -586,7 +586,7 @@ TEST_F(SsdFileTest, recoverFromCheckpointWithChecksum) {
     bool expectedCheckpointOnRecovery;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "writeEnabled {}, readVerificationEnabled {}, writeEnabledOnRecovery {}, readVerificationEnabledOnRecovery {}, expectedReadVerificationEnabled {}, expectedReadVerificationEnabledOnRecovery {}, expectedCheckpointOnRecovery {}",
           writeEnabled,
           readVerificationEnabled,

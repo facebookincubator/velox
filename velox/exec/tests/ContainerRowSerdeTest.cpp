@@ -579,14 +579,14 @@ TEST_F(ContainerRowSerdeTest, fuzzCompare) {
     fuzzer.reSeed(seed);
 
     {
-      SCOPED_TRACE(fmt::format("seed: {}, ARRAY", seed));
+      SCOPED_TRACE(std::format("seed: {}, ARRAY", seed));
       auto elements = fuzzer.fuzz(BIGINT());
       auto arrayVector = makeArrayVector(offsets, elements);
       testCompare(arrayVector);
     }
 
     {
-      SCOPED_TRACE(fmt::format("seed: {}, MAP", seed));
+      SCOPED_TRACE(std::format("seed: {}, MAP", seed));
       auto keys = fuzzer.fuzz(BIGINT());
       auto values = fuzzer.fuzz(BIGINT());
       auto mapVector = makeMapVector(offsets, keys, values);
@@ -594,7 +594,7 @@ TEST_F(ContainerRowSerdeTest, fuzzCompare) {
     }
 
     {
-      SCOPED_TRACE(fmt::format("seed: {}, ROW", seed));
+      SCOPED_TRACE(std::format("seed: {}, ROW", seed));
       std::vector<VectorPtr> children{
           fuzzer.fuzz(BIGINT()),
           fuzzer.fuzz(BIGINT()),

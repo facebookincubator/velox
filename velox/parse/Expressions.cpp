@@ -38,11 +38,11 @@ std::string escapeName(const std::string& name) {
 
 std::string FieldAccessExpr::toString() const {
   if (isRootColumn()) {
-    return appendAliasIfExists(fmt::format("\"{}\"", escapeName(name_)));
+    return appendAliasIfExists(std::format("\"{}\"", escapeName(name_)));
   }
 
   return appendAliasIfExists(
-      fmt::format("dot({},\"{}\")", input()->toString(), escapeName(name_)));
+      std::format("dot({},\"{}\")", input()->toString(), escapeName(name_)));
 }
 
 bool CallExpr::operator==(const IExpr& other) const {

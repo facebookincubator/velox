@@ -939,7 +939,7 @@ void testGetDistributionFunction() {
   std::vector<double> expectedCdfCumulativeProbability = {
       0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1, 1};
   for (auto i = 0; i < cdf1.size(); i++) {
-    SCOPED_TRACE(fmt::format("non-clip round: {}", i));
+    SCOPED_TRACE(std::format("non-clip round: {}", i));
     EXPECT_NEAR(
         cdf1[i].cumulativeProbability,
         expectedCdfCumulativeProbability[i],
@@ -957,7 +957,7 @@ void testGetDistributionFunction() {
   std::vector<double> expectedCdfCumulativeProbability2 = {
       0.5, 0.6, 0.7, 0.8, 0.9, 1, 1};
   for (auto i = 0; i < cdf2.size(); i++) {
-    SCOPED_TRACE(fmt::format("clip lower round: {}", i));
+    SCOPED_TRACE(std::format("clip lower round: {}", i));
     EXPECT_NEAR(
         cdf2[i].cumulativeProbability,
         expectedCdfCumulativeProbability2[i],
@@ -975,7 +975,7 @@ void testGetDistributionFunction() {
   std::vector<double> expectedCdfCumulativeProbability3 = {
       0, 0.1, 0.2, 0.3, 0.4, 1.0};
   for (auto i = 0; i < cdf3.size(); i++) {
-    SCOPED_TRACE(fmt::format("clip upper round: {}", i));
+    SCOPED_TRACE(std::format("clip upper round: {}", i));
     EXPECT_NEAR(
         cdf3[i].cumulativeProbability,
         expectedCdfCumulativeProbability3[i],

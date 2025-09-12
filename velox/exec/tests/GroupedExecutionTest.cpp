@@ -159,7 +159,7 @@ TEST_F(GroupedExecutionTest, groupedExecutionErrors) {
       Task::ExecutionMode::kParallel);
   VELOX_ASSERT_THROW(
       task->start(3, 1),
-      fmt::format(
+      std::format(
           "Grouped execution leaf node {} is not a leaf node in any pipeline",
           projectNodeId));
 
@@ -177,7 +177,7 @@ TEST_F(GroupedExecutionTest, groupedExecutionErrors) {
       Task::ExecutionMode::kParallel);
   VELOX_ASSERT_THROW(
       task->start(3, 1),
-      fmt::format(
+      std::format(
           "Grouped execution leaf node {} is not a leaf node in any pipeline",
           projectNodeId));
 
@@ -195,7 +195,7 @@ TEST_F(GroupedExecutionTest, groupedExecutionErrors) {
       Task::ExecutionMode::kParallel);
   VELOX_ASSERT_THROW(
       task->start(3, 1),
-      fmt::format(
+      std::format(
           "Grouped execution leaf node {} not found or it is not a leaf node",
           localPartitionNodeId));
 }
@@ -338,7 +338,7 @@ TEST_F(GroupedExecutionTest, hashJoinWithMixedGroupedExecution) {
     }
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "mode {}, joinType {}, supported {}",
           modeToString(mode),
           core::JoinTypeName::toName(joinType),
@@ -447,7 +447,7 @@ TEST_F(GroupedExecutionTest, hashJoinWithMixedGroupedExecution) {
       if (!testData.supported) {
         VELOX_ASSERT_THROW(
             task->start(3, 1),
-            fmt::format(
+            std::format(
                 "Hash join currently does not support mixed grouped execution for join type {}",
                 core::JoinTypeName::toName(testData.joinType)));
         continue;
@@ -582,7 +582,7 @@ DEBUG_ONLY_TEST_F(
     bool expectedSpill;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "enableSpill {}, mixedExecutionMode {}, groupConcurrency {}, expectedNumDrivers {}, expectedSpill {}",
           enableSpill,
           mixedExecutionMode,
@@ -1026,7 +1026,7 @@ TEST_F(GroupedExecutionTest, groupedExecutionWithHashAndNestedLoopJoin) {
       int numSplitGroupJoinNodes{0};
       task->pool()->visitChildren([&](memory::MemoryPool* childPool) -> bool {
         if (folly::StringPiece(childPool->name())
-                .startsWith(fmt::format("node.{}[", joinNodeId))) {
+                .startsWith(std::format("node.{}[", joinNodeId))) {
           ++numSplitGroupJoinNodes;
           std::vector<std::string> parts;
           folly::split(".", childPool->name(), parts);

@@ -57,7 +57,7 @@ static std::string checkAndReturnFilePath(
     const std::string_view& fileName,
     const std::string& flagName) {
   auto path =
-      fmt::format("{}/{}", FLAGS_aggregation_fuzzer_repro_path, fileName);
+      std::format("{}/{}", FLAGS_aggregation_fuzzer_repro_path, fileName);
   if (fs::exists(path)) {
     LOG(INFO) << "Using " << flagName << " = " << path;
     return path;

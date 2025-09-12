@@ -35,7 +35,7 @@ void Allocation::append(uint8_t* address, MachinePageCount numPages) {
       runs_.empty() || address != runs_.back().data(),
       "Appending a duplicate address into a PageRun");
   if (FOLLY_UNLIKELY(numPages > Allocation::PageRun::kMaxPagesInRun)) {
-    VELOX_MEM_ALLOC_ERROR(fmt::format(
+    VELOX_MEM_ALLOC_ERROR(std::format(
         "The number of pages to append {} exceeds the PageRun limit {}",
         numPages,
         Allocation::PageRun::kMaxPagesInRun));
@@ -73,7 +73,7 @@ void Allocation::findRun(uint64_t offset, int32_t* index, int32_t* offsetInRun)
 }
 
 std::string Allocation::toString() const {
-  return fmt::format(
+  return std::format(
       "Allocation[numPages:{}, numRuns:{}, pool:{}]",
       numPages_,
       runs_.size(),
@@ -124,7 +124,7 @@ std::optional<folly::Range<char*>> ContiguousAllocation::hugePageRange() const {
 }
 
 std::string ContiguousAllocation::toString() const {
-  return fmt::format(
+  return std::format(
       "ContiguousAllocation[data:{}, size:{}, maxSize: {}, pool:{}]",
       data_,
       size_,

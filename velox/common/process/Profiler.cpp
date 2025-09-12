@@ -82,7 +82,7 @@ void checkSafe(const std::string& str) {
 }
 
 void testWritable(const std::string& dir) {
-  auto testPath = fmt::format("{}/test", dir);
+  auto testPath = std::format("{}/test", dir);
   int32_t fd =
       open(testPath.c_str(), O_RDWR | O_CREAT, S_IRWXU | S_IRWXG | S_IRWXO);
   if (fd < 0) {
@@ -127,7 +127,7 @@ void Profiler::copyToResult(const std::string* data) {
     resultSize = std::min<int32_t>(data->size(), 400000);
   } else {
     testWritable(FLAGS_profiler_tmp_dir);
-    auto reportFile = fmt::format("{}/perf", FLAGS_profiler_tmp_dir);
+    auto reportFile = std::format("{}/perf", FLAGS_profiler_tmp_dir);
     int32_t fd = open(reportFile.c_str(), O_RDONLY);
     if (fd < 0) {
       LOG(ERROR) << "PROFILE: << Could not open report file at " << reportFile;
@@ -142,7 +142,7 @@ void Profiler::copyToResult(const std::string* data) {
 
   std::string dt = timeString(nowSeconds());
   auto target =
-      fmt::format("{}/prof-{}-{}-{}", resultPath_, hostname, dt, getpid());
+      std::format("{}/prof-{}-{}-{}", resultPath_, hostname, dt, getpid());
   try {
     try {
       fileSystem_->remove(target);
@@ -153,7 +153,7 @@ void Profiler::copyToResult(const std::string* data) {
     auto now = nowSeconds();
     auto elapsed = (now - sampleStartTime_);
     auto cpu = cpuSeconds();
-    out->append(fmt::format(
+    out->append(std::format(
         "Profile from {} to {} at {}% CPU\n\n",
 
         timeString(sampleStartTime_),
@@ -191,7 +191,7 @@ std::thread Profiler::startSample() {
     // and killing it with SIGINT produces a corrupt perf.data
     // file. The perf.data file generated when called via system() is
     // good, though. Unsolved mystery.
-    system(fmt::format(
+    system(std::format(
                "(cd {}; /usr/bin/perf record --pid {} {};"
                "perf report --sort symbol > perf ;"
                "sed --in-place 's/          / /'g perf;"

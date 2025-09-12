@@ -50,7 +50,7 @@ struct TpcdsConnectorSplit : public velox::connector::ConnectorSplit {
 } // namespace facebook::velox::connector::tpcds
 
 template <>
-struct fmt::formatter<facebook::velox::connector::tpcds::TpcdsConnectorSplit>
+struct std::formatter<facebook::velox::connector::tpcds::TpcdsConnectorSplit>
     : formatter<std::string> {
   auto format(
       facebook::velox::connector::tpcds::TpcdsConnectorSplit s,
@@ -60,7 +60,7 @@ struct fmt::formatter<facebook::velox::connector::tpcds::TpcdsConnectorSplit>
 };
 
 template <>
-struct fmt::formatter<
+struct std::formatter<
     std::shared_ptr<facebook::velox::connector::tpcds::TpcdsConnectorSplit>>
     : formatter<std::string> {
   auto format(

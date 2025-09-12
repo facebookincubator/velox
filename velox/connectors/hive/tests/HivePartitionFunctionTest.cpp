@@ -402,7 +402,7 @@ TEST_F(HivePartitionFunctionTest, mapEntriesEncoded) {
 
   // Dictionary encode the keys and values.
   auto mapKeys = makeFlatVector<std::string>(
-      elementsSize, [](auto row) { return fmt::format("key_{}", row); });
+      elementsSize, [](auto row) { return std::format("key_{}", row); });
   // Produces indices: [0, 3, 6, 9, 2, 5, 8, 1, 4, 7]
   auto keyIndices =
       makeIndices(elementsSize, [](auto row) { return (row * 3) % 10; });
@@ -520,7 +520,7 @@ TEST_F(HivePartitionFunctionTest, rowFieldsEncoded) {
   auto col2Indices = makeIndices(size, [](auto row) { return (row * 3) % 5; });
   auto encodedCol2 = wrapInDictionary(col2Indices, col2);
   auto col3 = makeFlatVector<std::string>(
-      size, [](auto row) { return fmt::format("{}", row + 20); });
+      size, [](auto row) { return std::format("{}", row + 20); });
   auto col3Indices = makeIndicesInReverse(size);
   auto encodedCol3 = wrapInDictionary(col3Indices, col3);
 

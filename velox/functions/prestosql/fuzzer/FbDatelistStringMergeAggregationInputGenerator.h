@@ -34,7 +34,7 @@ class FbDatelistStringMergeAggregationInputGenerator : public InputGenerator {
 
     VELOX_CHECK(
         types.size() == 1,
-        fmt::format("Unexpected types count:{}", types.size()));
+        std::format("Unexpected types count:{}", types.size()));
 
     VELOX_CHECK(
         types[0]->isVarchar(), "Unexpected type: {}", types[0]->toString());

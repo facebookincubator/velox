@@ -98,7 +98,7 @@ int main(int argc, char** argv) {
     }
     totalUsec += usec;
   }
-  std::cout << fmt::format(
+  std::cout << std::format(
                    "{} repeats {} bytes {} threads: {} usec {} GB/s",
                    FLAGS_repeats,
                    bytes,

@@ -147,7 +147,7 @@ class AsyncDataCacheTest : public ::testing::TestWithParam<TestParam> {
         tempDirectory_ = exec::test::TempDirectoryPath::create();
       }
       SsdCache::Config config(
-          fmt::format("{}/cache", tempDirectory_->getPath()),
+          std::format("{}/cache", tempDirectory_->getPath()),
           ssdBytes,
           kNumSsdShards,
           ssdExecutor(),
@@ -176,7 +176,7 @@ class AsyncDataCacheTest : public ::testing::TestWithParam<TestParam> {
         std::make_unique<test::AsyncDataCacheTestHelper>(cache_.get());
     if (filenames_.empty()) {
       for (auto i = 0; i < kNumFiles; ++i) {
-        auto name = fmt::format("testing_file_{}", i);
+        auto name = std::format("testing_file_{}", i);
         filenames_.push_back(StringIdLease(fileIds(), name));
       }
     }
@@ -254,7 +254,7 @@ class AsyncDataCacheTest : public ::testing::TestWithParam<TestParam> {
       const int32_t numWords =
           memory::AllocationTraits::pageBytes(run.numPages()) / sizeof(void*);
       for (int32_t offset = 0; offset < numWords; ++offset) {
-        ASSERT_EQ(ptr[offset], expectedSequence + offset) << fmt::format(
+        ASSERT_EQ(ptr[offset], expectedSequence + offset) << std::format(
             "{} {} + {}", entry.toString(), expectedSequence + offset, offset);
         bytesChecked += sizeof(int64_t);
         if (bytesChecked >= numBytes) {
@@ -895,7 +895,7 @@ TEST_P(AsyncDataCacheTest, DISABLED_ssd) {
 
   cache_->ssdCache()->clear();
   // We cut the tail off one of the cache shards.
-  corruptFile(fmt::format("{}/cache0.cpt", tempDirectory_->getPath()));
+  corruptFile(std::format("{}/cache0.cpt", tempDirectory_->getPath()));
   // We open the cache from checkpoint. Reading checks the data integrity, here
   // we check that more data was read than written.
   initializeCache(kRamBytes, kSsdBytes);
@@ -914,7 +914,7 @@ TEST_P(AsyncDataCacheTest, invalidSsdPath) {
   SsdCache::Config config(testPath, ssdBytes, 4, ssdExecutor(), ssdBytes / 20);
   VELOX_ASSERT_THROW(
       SsdCache(config),
-      fmt::format(
+      std::format(
           "Ssd path '{}' does not start with '/' that points to local file system.",
           testPath));
 }
@@ -1089,7 +1089,7 @@ TEST_P(AsyncDataCacheTest, shrinkCache) {
   std::vector<StringIdLease> fileLeases;
   for (int i = 0; i < numEntries; ++i) {
     fileLeases.emplace_back(
-        StringIdLease(fileIds(), fmt::format("shrinkCacheFile{}", i)));
+        StringIdLease(fileIds(), std::format("shrinkCacheFile{}", i)));
     tinyCacheKeys.emplace_back(RawFileCacheKey{fileLeases.back().id(), 0});
     largeCacheKeys.emplace_back(
         RawFileCacheKey{fileLeases.back().id(), kLargeDataSize});
@@ -1101,7 +1101,7 @@ TEST_P(AsyncDataCacheTest, shrinkCache) {
     bool releaseAll;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "shrinkAll {}, hasSsd {}, releaseAll {}",
           shrinkAll,
           hasSsd,
@@ -1222,7 +1222,7 @@ TEST_P(AsyncDataCacheTest, shutdown) {
   initializeMemoryManager(kRamBytes);
 
   for (const auto asyncShutdown : {false, true}) {
-    SCOPED_TRACE(fmt::format("asyncShutdown {}", asyncShutdown));
+    SCOPED_TRACE(std::format("asyncShutdown {}", asyncShutdown));
     // Initialize cache with a big checkpointIntervalBytes, giving eviction log
     // chance to survive.
     initializeCache(
@@ -1386,7 +1386,7 @@ TEST_P(AsyncDataCacheTest, makeEvictable) {
   constexpr uint64_t kSsdBytes = 512UL << 20;
   constexpr int kDataSize = 4096;
   for (const bool evictable : {false, true}) {
-    SCOPED_TRACE(fmt::format("evictable: {}", evictable));
+    SCOPED_TRACE(std::format("evictable: {}", evictable));
     initializeCache(kRamBytes, kSsdBytes);
     const int numEntries{10};
     std::vector<CachePin> cachePins;
@@ -1454,7 +1454,7 @@ TEST_P(AsyncDataCacheTest, ssdWriteOptions) {
     bool expectedSaveToSsd;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "maxWriteRatio {}, ssdSavableRatio {}, minSsdSavableBytes {}, expectedSaveToSsd {}",
           maxWriteRatio,
           ssdSavableRatio,
@@ -1507,7 +1507,7 @@ TEST_P(AsyncDataCacheTest, appendSsdSaveable) {
     bool appendAll;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "maxWriteRatio {}, ssdSavableRatio {}, minSsdSavableBytes {}, appendAll {}",
           maxWriteRatio,
           ssdSavableRatio,

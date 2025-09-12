@@ -155,13 +155,13 @@ class TpchSpeedTest {
 
   std::string printThroughput(size_t bytesPerSec) {
     if (bytesPerSec < 1'000) {
-      return fmt::format("{} b/s", bytesPerSec);
+      return std::format("{} b/s", bytesPerSec);
     } else if (bytesPerSec < 1'000'000) {
-      return fmt::format("{} kB/s", bytesPerSec / 1'000);
+      return std::format("{} kB/s", bytesPerSec / 1'000);
     } else if (bytesPerSec < 1'000'000'000) {
-      return fmt::format("{} MB/s", bytesPerSec / 1'000'000);
+      return std::format("{} MB/s", bytesPerSec / 1'000'000);
     } else {
-      return fmt::format("{} GB/s", bytesPerSec / 1'000'000'000);
+      return std::format("{} GB/s", bytesPerSec / 1'000'000'000);
     }
   }
 

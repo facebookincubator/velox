@@ -54,8 +54,8 @@ TEST(StatusTest, testToString) {
   ASSERT_EQ(fileError.toString(), ss.str());
 
   // Check that fmt has the right specializations.
-  ASSERT_EQ(fileError.toString(), fmt::format("{}", fileError));
-  ASSERT_EQ("Unknown error", fmt::format("{}", StatusCode::kUnknownError));
+  ASSERT_EQ(fileError.toString(), std::format("{}", fileError));
+  ASSERT_EQ("Unknown error", std::format("{}", StatusCode::kUnknownError));
 }
 
 TEST(StatusTest, andStatus) {

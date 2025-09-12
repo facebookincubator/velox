@@ -103,7 +103,7 @@ std::vector<Split> makeSplits(
     const std::shared_ptr<memory::MemoryPool>& writerPool) {
   std::vector<Split> splits;
   for (auto i = 0; i < inputs.size(); ++i) {
-    const std::string filePath = fmt::format("{}/{}", path, i);
+    const std::string filePath = std::format("{}/{}", path, i);
     writeToFile(filePath, inputs[i], writerPool.get());
     splits.push_back(makeSplit(filePath));
   }
@@ -156,7 +156,7 @@ std::vector<std::string> makeNames(const std::string& prefix, size_t n) {
   std::vector<std::string> names;
   names.reserve(n);
   for (auto i = 0; i < n; ++i) {
-    names.push_back(fmt::format("{}{}", prefix, i));
+    names.push_back(std::format("{}{}", prefix, i));
   }
   return names;
 }
@@ -308,7 +308,7 @@ TypePtr sanitize(const TypePtr& type) {
       const auto& childNames = asRowType(type)->names();
       std::vector<std::string> fieldNames;
       for (auto i = 0; i < children.size(); ++i) {
-        const auto defaultName = fmt::format("f{}", i);
+        const auto defaultName = std::format("f{}", i);
         fieldNames.push_back(
             childNames[i].empty() ? defaultName : childNames[i]);
       }

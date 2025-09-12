@@ -3745,8 +3745,8 @@ std::ostream& operator<<(std::ostream& out, const FileCryptoMetaData& obj);
 } // namespace facebook::velox::parquet::thrift
 
 template <>
-struct fmt::formatter<facebook::velox::parquet::thrift::Type::type>
-    : fmt::formatter<std::string_view> {
+struct std::formatter<facebook::velox::parquet::thrift::Type::type>
+    : std::formatter<std::string_view> {
   auto format(
       const facebook::velox::parquet::thrift::Type::type& s,
       format_context& ctx) const {
@@ -3756,8 +3756,8 @@ struct fmt::formatter<facebook::velox::parquet::thrift::Type::type>
 };
 
 template <>
-struct fmt::formatter<facebook::velox::parquet::thrift::CompressionCodec::type>
-    : fmt::formatter<std::string_view> {
+struct std::formatter<facebook::velox::parquet::thrift::CompressionCodec::type>
+    : std::formatter<std::string_view> {
   auto format(
       const facebook::velox::parquet::thrift::CompressionCodec::type& s,
       format_context& ctx) const {
@@ -3767,8 +3767,8 @@ struct fmt::formatter<facebook::velox::parquet::thrift::CompressionCodec::type>
 };
 
 template <>
-struct fmt::formatter<facebook::velox::parquet::thrift::ConvertedType::type>
-    : fmt::formatter<std::string_view> {
+struct std::formatter<facebook::velox::parquet::thrift::ConvertedType::type>
+    : std::formatter<std::string_view> {
   auto format(
       const facebook::velox::parquet::thrift::ConvertedType::type& s,
       format_context& ctx) const {
@@ -3778,9 +3778,9 @@ struct fmt::formatter<facebook::velox::parquet::thrift::ConvertedType::type>
 };
 
 template <>
-struct fmt::formatter<
+struct std::formatter<
     facebook::velox::parquet::thrift::FieldRepetitionType::type>
-    : fmt::formatter<std::string_view> {
+    : std::formatter<std::string_view> {
   auto format(
       const facebook::velox::parquet::thrift::FieldRepetitionType::type& s,
       format_context& ctx) const {
@@ -3790,8 +3790,8 @@ struct fmt::formatter<
 };
 
 template <>
-struct fmt::formatter<facebook::velox::parquet::thrift::Encoding::type>
-    : fmt::formatter<std::string_view> {
+struct std::formatter<facebook::velox::parquet::thrift::Encoding::type>
+    : std::formatter<std::string_view> {
   auto format(
       const facebook::velox::parquet::thrift::Encoding::type& s,
       format_context& ctx) const {
@@ -3801,8 +3801,8 @@ struct fmt::formatter<facebook::velox::parquet::thrift::Encoding::type>
 };
 
 template <>
-struct fmt::formatter<facebook::velox::parquet::thrift::PageType::type>
-    : fmt::formatter<std::string_view> {
+struct std::formatter<facebook::velox::parquet::thrift::PageType::type>
+    : std::formatter<std::string_view> {
   auto format(
       const facebook::velox::parquet::thrift::PageType::type& s,
       format_context& ctx) const {
@@ -3812,8 +3812,8 @@ struct fmt::formatter<facebook::velox::parquet::thrift::PageType::type>
 };
 
 template <>
-struct fmt::formatter<facebook::velox::parquet::thrift::BoundaryOrder::type>
-    : fmt::formatter<std::string_view> {
+struct std::formatter<facebook::velox::parquet::thrift::BoundaryOrder::type>
+    : std::formatter<std::string_view> {
   auto format(
       const facebook::velox::parquet::thrift::BoundaryOrder::type& s,
       format_context& ctx) const {

@@ -668,7 +668,7 @@ class VectorTest : public testing::Test, public velox::test::VectorTestBase {
       int level,
       vector_size_t offset,
       vector_size_t length) {
-    SCOPED_TRACE(fmt::format(
+    SCOPED_TRACE(std::format(
         "testSlice encoding={} offset={} length={}",
         vec->encoding(),
         offset,
@@ -1592,7 +1592,7 @@ TEST_F(VectorTest, rowResize) {
 TEST_F(VectorTest, rowPrepareForReuse) {
   const int oldSize = 10;
   for (const int newSize : {10, 20, 5, 0}) {
-    SCOPED_TRACE(fmt::format("oldSize {}, newSize {}", oldSize, newSize));
+    SCOPED_TRACE(std::format("oldSize {}, newSize {}", oldSize, newSize));
     auto rowVector = makeRowVector(
         {makeFlatVector<int32_t>(10), makeFlatVector<int64_t>(10)});
     ASSERT_EQ(rowVector->size(), 10);
@@ -1876,7 +1876,7 @@ class VectorCreateConstantTest : public VectorTest {
   }
 
   void verifyConstantToString(const TypePtr& type, const VectorPtr& constant) {
-    auto expectedStr = fmt::format(
+    auto expectedStr = std::format(
         "[CONSTANT {}: {} elements, {}]",
         type->toString(),
         size_,
@@ -1904,7 +1904,7 @@ class VectorCreateConstantTest : public VectorTest {
       ASSERT_TRUE(simpleVector->isNullAt(i));
     }
 
-    auto expectedStr = fmt::format(
+    auto expectedStr = std::format(
         "[CONSTANT {}: {} elements, null]", type->toString(), size_);
     EXPECT_EQ(expectedStr, baseVector->toString());
     for (auto i = 1; i < baseVector->size(); ++i) {
@@ -3711,7 +3711,7 @@ TEST_F(VectorTest, setType) {
 
     VELOX_ASSERT_RUNTIME_THROW(
         vector->setType(invalidNewType),
-        fmt::format(
+        std::format(
             "Cannot change vector type from {} to {}. The old and new types can be different logical types, but the underlying physical types must match.",
             newType->toString(),
             invalidNewType->toString()));

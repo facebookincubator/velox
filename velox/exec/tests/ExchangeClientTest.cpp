@@ -254,7 +254,7 @@ TEST_P(ExchangeClientTest, flowControl) {
   // Make 10 tasks.
   std::vector<std::shared_ptr<Task>> tasks;
   for (auto i = 0; i < 10; ++i) {
-    auto taskId = fmt::format("local://t{}", i);
+    auto taskId = std::format("local://t{}", i);
     auto task = makeTask(taskId);
 
     bufferManager_->initializeTask(
@@ -437,7 +437,7 @@ TEST_P(ExchangeClientTest, sourceTimeout) {
   ASSERT_FALSE(atEnd);
 
   for (auto i = 0; i < kNumSources; ++i) {
-    client->addRemoteTaskId(fmt::format("local://{}", i));
+    client->addRemoteTaskId(std::format("local://{}", i));
   }
   client->noMoreRemoteTasks();
 
@@ -524,7 +524,7 @@ TEST_P(ExchangeClientTest, callNextAfterClose) {
   ASSERT_FALSE(atEnd);
 
   for (auto i = 0; i < kNumSources; ++i) {
-    client->addRemoteTaskId(fmt::format("local://{}", i));
+    client->addRemoteTaskId(std::format("local://{}", i));
   }
   client->noMoreRemoteTasks();
 

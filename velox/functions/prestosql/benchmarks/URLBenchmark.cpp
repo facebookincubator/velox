@@ -195,7 +195,7 @@ class UrlBenchmark : public functions::test::FunctionBenchmarkBase {
         size,
         [&](auto row) {
           // construct some pseudo random url
-          url = fmt::format(
+          url = std::format(
               "http://somehost{}.com:8080/somepath{}/p.php?k1={}#Refi",
               row,
               row % 2,
@@ -211,7 +211,7 @@ class UrlBenchmark : public functions::test::FunctionBenchmarkBase {
 
     auto queryString = isParameter ? "{}(c0, c1)" : "{}(c0)";
     auto exprSet = compileExpression(
-        fmt::format(fmt::runtime(queryString), fnName), rowVector->type());
+        std::format(std::runtime(queryString), fnName), rowVector->type());
 
     suspender.dismiss();
 

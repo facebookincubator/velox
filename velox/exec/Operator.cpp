@@ -384,10 +384,10 @@ void Operator::recordBlockingTime(uint64_t start, BlockingReason reason) {
   auto lockedStats = stats_.wlock();
   lockedStats->blockedWallNanos += wallNanos;
   lockedStats->addRuntimeStat(
-      fmt::format("blocked{}WallNanos", blockReason),
+      std::format("blocked{}WallNanos", blockReason),
       RuntimeCounter(wallNanos, RuntimeCounter::Unit::kNanos));
   lockedStats->addRuntimeStat(
-      fmt::format("blocked{}Times", blockReason), RuntimeCounter(1));
+      std::format("blocked{}Times", blockReason), RuntimeCounter(1));
 }
 
 void Operator::recordSpillStats() {

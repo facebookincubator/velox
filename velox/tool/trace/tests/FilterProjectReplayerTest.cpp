@@ -90,7 +90,7 @@ class FilterProjectReplayerTest : public HiveConnectorTestBase {
       memory::MemoryPool* writerPool) {
     std::vector<Split> splits;
     for (auto i = 0; i < 4; ++i) {
-      const std::string filePath = fmt::format("{}/{}", path, i);
+      const std::string filePath = std::format("{}/{}", path, i);
       writeToFile(filePath, inputs);
       splits.emplace_back(makeHiveConnectorSplit(filePath));
     }
@@ -128,7 +128,7 @@ class FilterProjectReplayerTest : public HiveConnectorTestBase {
                  .planNode();
     }
     const std::vector<Split> splits = makeSplits(
-        input_, fmt::format("{}/splits", testDir_->getPath()), pool());
+        input_, std::format("{}/splits", testDir_->getPath()), pool());
     return PlanWithSplits{plan, splits};
   }
 
@@ -152,13 +152,13 @@ TEST_F(FilterProjectReplayerTest, filterProject) {
     uint32_t maxDrivers;
 
     std::string debugString() const {
-      return fmt::format("maxDrivers: {}", maxDrivers);
+      return std::format("maxDrivers: {}", maxDrivers);
     }
   } testSettings[]{{1}, {4}, {8}};
 
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
-    const auto traceRoot = fmt::format("{}/{}", testDir_->getPath(), "basic");
+    const auto traceRoot = std::format("{}/{}", testDir_->getPath(), "basic");
     const auto tracePlanWithSplits = createPlan(PlanMode::FilterProject);
     std::shared_ptr<Task> task;
     AssertQueryBuilder traceBuilder(tracePlanWithSplits.plan);
@@ -193,7 +193,7 @@ TEST_F(FilterProjectReplayerTest, filterOnly) {
   AssertQueryBuilder builder(planWithSplits.plan);
   const auto result = builder.splits(planWithSplits.splits).copyResults(pool());
 
-  const auto traceRoot = fmt::format("{}/{}", testDir_->getPath(), "filter");
+  const auto traceRoot = std::format("{}/{}", testDir_->getPath(), "filter");
   const auto tracePlanWithSplits = createPlan(PlanMode::FilterOnly);
   std::shared_ptr<Task> task;
   AssertQueryBuilder traceBuilder(tracePlanWithSplits.plan);
@@ -227,7 +227,7 @@ TEST_F(FilterProjectReplayerTest, projectOnly) {
   AssertQueryBuilder builder(planWithSplits.plan);
   const auto result = builder.splits(planWithSplits.splits).copyResults(pool());
 
-  const auto traceRoot = fmt::format("{}/{}", testDir_->getPath(), "project");
+  const auto traceRoot = std::format("{}/{}", testDir_->getPath(), "project");
   const auto tracePlanWithSplits = createPlan(PlanMode::ProjectOnly);
   std::shared_ptr<Task> task;
   AssertQueryBuilder traceBuilder(tracePlanWithSplits.plan);
@@ -311,7 +311,7 @@ TEST_F(FilterProjectReplayerTest, dryRun) {
   auto result = builder.splits(planWithSplits.splits).copyResults(pool(), task);
   ASSERT_EQ(result->size(), 1780);
 
-  const auto traceRoot = fmt::format("{}/{}", testDir_->getPath(), "filter");
+  const auto traceRoot = std::format("{}/{}", testDir_->getPath(), "filter");
   const auto tracePlanWithSplits = createPlan(PlanMode::FilterOnly);
   std::shared_ptr<Task> taskWithTrace;
   AssertQueryBuilder traceBuilder(tracePlanWithSplits.plan);

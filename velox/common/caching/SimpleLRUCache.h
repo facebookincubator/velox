@@ -67,7 +67,7 @@ struct SimpleLRUCacheStats {
   size_t numLookups{0};
 
   std::string toString() const {
-    return fmt::format(
+    return std::format(
         "{{\n"
         "  maxSize: {}\n"
         "  expireDurationMs: {}\n"

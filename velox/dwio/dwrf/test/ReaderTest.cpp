@@ -1330,7 +1330,7 @@ TEST_F(TestReader, testMismatchSchemaIncompatible) {
   for (auto& t : types) {
     std::shared_ptr<const RowType> reqType =
         std::dynamic_pointer_cast<const RowType>(
-            HiveTypeParser().parse(fmt::format("struct<col0:{}>", t)));
+            HiveTypeParser().parse(std::format("struct<col0:{}>", t)));
     EXPECT_THROW(
         ColumnSelector cs(reqType, rowType), facebook::velox::VeloxUserError);
   }

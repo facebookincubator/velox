@@ -23,7 +23,7 @@ std::shared_ptr<const RowType> VectorMaker::rowType(
     std::vector<std::shared_ptr<const Type>>&& types) {
   std::vector<std::string> names;
   for (int32_t i = 0; i < types.size(); ++i) {
-    names.push_back(fmt::format("c{}", i));
+    names.push_back(std::format("c{}", i));
   }
   return ROW(std::move(names), std::move(types));
 }
@@ -31,7 +31,7 @@ std::shared_ptr<const RowType> VectorMaker::rowType(
 RowVectorPtr VectorMaker::rowVector(const std::vector<VectorPtr>& children) {
   std::vector<std::string> names;
   for (int32_t i = 0; i < children.size(); ++i) {
-    names.push_back(fmt::format("c{}", i));
+    names.push_back(std::format("c{}", i));
   }
 
   return rowVector(std::move(names), children);

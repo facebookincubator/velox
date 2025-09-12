@@ -346,7 +346,7 @@ TEST_F(MemoryManagerTest, defaultMemoryManager) {
   for (int i = 0; i < 32; ++i) {
     ASSERT_THAT(
         managerA.toString(true),
-        testing::HasSubstr(fmt::format(
+        testing::HasSubstr(std::format(
             "__sys_shared_leaf__{} usage 0B reserved 0B peak 0B\n", i)));
   }
 }
@@ -506,7 +506,7 @@ TEST_F(MemoryManagerTest, alignmentOptionCheck) {
     bool expectedSuccess;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "alignment:{}, expectedSuccess:{}", alignment, expectedSuccess);
     }
   } testSettings[] = {
@@ -568,7 +568,7 @@ TEST_F(MemoryManagerTest, concurrentPoolAccess) {
           }
         } else {
           const std::string name =
-              fmt::format("concurrentPoolAccess{}", poolId++);
+              std::format("concurrentPoolAccess{}", poolId++);
           std::shared_ptr<MemoryPool> poolToAdd;
           if (folly::Random().oneIn(2)) {
             poolToAdd = manager.addLeafPool(name);
@@ -607,7 +607,7 @@ TEST_F(MemoryManagerTest, quotaEnforcement) {
     bool expectedMemoryExceedError;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "memoryQuotaBytes:{} smallAllocationBytes:{} largeAllocationPages:{} expectedMemoryExceedError:{}",
           succinctBytes(memoryQuotaBytes),
           succinctBytes(smallAllocationBytes),
@@ -625,7 +625,7 @@ TEST_F(MemoryManagerTest, quotaEnforcement) {
     SCOPED_TRACE(testData.debugString());
     const std::vector<bool> contiguousAllocations = {false, true};
     for (const auto contiguousAlloc : contiguousAllocations) {
-      SCOPED_TRACE(fmt::format("contiguousAlloc {}", contiguousAlloc));
+      SCOPED_TRACE(std::format("contiguousAlloc {}", contiguousAlloc));
       const int alignment = 32;
       MemoryManager::Options options;
       options.alignment = alignment;

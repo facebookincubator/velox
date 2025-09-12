@@ -60,23 +60,23 @@ class OrderByTest : public OperatorTestBase {
     auto keyIndex = input[0]->type()->asRow().getChildIdx(key);
     auto plan = PlanBuilder()
                     .values(input)
-                    .orderBy({fmt::format("{} ASC NULLS LAST", key)}, false)
+                    .orderBy({std::format("{} ASC NULLS LAST", key)}, false)
                     .capturePlanNodeId(orderById)
                     .planNode();
     runTest(
         plan,
         orderById,
-        fmt::format("SELECT * FROM tmp ORDER BY {} NULLS LAST", key),
+        std::format("SELECT * FROM tmp ORDER BY {} NULLS LAST", key),
         {keyIndex});
 
     plan = PlanBuilder()
                .values(input)
-               .orderBy({fmt::format("{} DESC NULLS FIRST", key)}, false)
+               .orderBy({std::format("{} DESC NULLS FIRST", key)}, false)
                .planNode();
     runTest(
         plan,
         orderById,
-        fmt::format("SELECT * FROM tmp ORDER BY {} DESC NULLS FIRST", key),
+        std::format("SELECT * FROM tmp ORDER BY {} DESC NULLS FIRST", key),
         {keyIndex});
   }
 
@@ -89,26 +89,26 @@ class OrderByTest : public OperatorTestBase {
     auto plan = PlanBuilder()
                     .values(input)
                     .filter(filter)
-                    .orderBy({fmt::format("{} ASC NULLS LAST", key)}, false)
+                    .orderBy({std::format("{} ASC NULLS LAST", key)}, false)
                     .capturePlanNodeId(orderById)
                     .planNode();
     runTest(
         plan,
         orderById,
-        fmt::format(
+        std::format(
             "SELECT * FROM tmp WHERE {} ORDER BY {} NULLS LAST", filter, key),
         {keyIndex});
 
     plan = PlanBuilder()
                .values(input)
                .filter(filter)
-               .orderBy({fmt::format("{} DESC NULLS FIRST", key)}, false)
+               .orderBy({std::format("{} DESC NULLS FIRST", key)}, false)
                .capturePlanNodeId(orderById)
                .planNode();
     runTest(
         plan,
         orderById,
-        fmt::format(
+        std::format(
             "SELECT * FROM tmp WHERE {} ORDER BY {} DESC NULLS FIRST",
             filter,
             key),
@@ -132,15 +132,15 @@ class OrderByTest : public OperatorTestBase {
         auto plan = PlanBuilder()
                         .values(input)
                         .orderBy(
-                            {fmt::format("{} {}", key1, sortOrderSqls[i]),
-                             fmt::format("{} {}", key2, sortOrderSqls[j])},
+                            {std::format("{} {}", key1, sortOrderSqls[i]),
+                             std::format("{} {}", key2, sortOrderSqls[j])},
                             false)
                         .capturePlanNodeId(orderById)
                         .planNode();
         runTest(
             plan,
             orderById,
-            fmt::format(
+            std::format(
                 "SELECT * FROM tmp ORDER BY {} {}, {} {}",
                 key1,
                 sortOrderSqls[i],
@@ -328,7 +328,7 @@ TEST_F(OrderByTest, outputBatchRows) {
 
     // TODO: add output size check with spilling enabled
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "numRowsPerBatch:{}, preferredOutBatchBytes:{}, maxOutBatchRows:{}, expectedOutputVectors:{}",
           numRowsPerBatch,
           preferredOutBatchBytes,
@@ -363,7 +363,7 @@ TEST_F(OrderByTest, outputBatchRows) {
     core::PlanNodeId orderById;
     auto plan = PlanBuilder()
                     .values(rowVectors)
-                    .orderBy({fmt::format("{} ASC NULLS LAST", "c0")}, false)
+                    .orderBy({std::format("{} ASC NULLS LAST", "c0")}, false)
                     .capturePlanNodeId(orderById)
                     .planNode();
     auto queryCtx = core::QueryCtx::create(executor_.get());

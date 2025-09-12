@@ -26,7 +26,7 @@ class ArrayAllMatchTest : public functions::test::LambdaParameterizedBaseTest {
       const std::vector<std::optional<bool>>& expected,
       const std::string& lambdaExpr,
       const VectorPtr& input) {
-    auto expression = fmt::format("all_match(c0, x -> ({}))", lambdaExpr);
+    auto expression = std::format("all_match(c0, x -> ({}))", lambdaExpr);
     testAllMatchExpr(expected, expression, makeRowVector({input}));
   }
 
@@ -35,7 +35,7 @@ class ArrayAllMatchTest : public functions::test::LambdaParameterizedBaseTest {
       const std::vector<std::optional<bool>>& expected,
       const std::string& lambdaExpr,
       const std::vector<std::vector<std::optional<T>>>& input) {
-    auto expression = fmt::format("all_match(c0, x -> ({}))", lambdaExpr);
+    auto expression = std::format("all_match(c0, x -> ({}))", lambdaExpr);
     testAllMatchExpr(
         expected, expression, makeRowVector({makeNullableArrayVector(input)}));
   }

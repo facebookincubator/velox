@@ -60,7 +60,7 @@ void ConstantExpr::evalSpecialFormSimplified(
 }
 
 std::string ConstantExpr::toString(bool /*recursive*/) const {
-  return fmt::format(
+  return std::format(
       "{}:{}", sharedConstantValue_->toString(0), type()->toString());
 }
 
@@ -102,9 +102,9 @@ void appendSqlString(const std::string& value, std::ostream& out) {
 std::string toSqlType(const TypePtr& type) {
   switch (type->kind()) {
     case TypeKind::ARRAY:
-      return fmt::format("{}[]", toSqlType(type->childAt(0)));
+      return std::format("{}[]", toSqlType(type->childAt(0)));
     case TypeKind::MAP:
-      return fmt::format(
+      return std::format(
           "MAP({}, {})",
           toSqlType(type->childAt(0)),
           toSqlType(type->childAt(1)));

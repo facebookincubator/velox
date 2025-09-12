@@ -28,7 +28,7 @@ dwio::common::FileFormat toFileFormat(std::string formatString) {
 
   if (format == dwio::common::FileFormat::UNKNOWN) {
     throw std::runtime_error(
-        fmt::format("Unknown file format: {}", formatString));
+        std::format("Unknown file format: {}", formatString));
   }
   return format;
 }
@@ -40,7 +40,7 @@ PyFile::PyFile(std::string filePath, std::string formatString)
       fileFormat_(toFileFormat(std::move(formatString))) {}
 
 std::string PyFile::toString() const {
-  return fmt::format("{} ({})", filePath_, fileFormat_);
+  return std::format("{} ({})", filePath_, fileFormat_);
 }
 
 PyType PyFile::getSchema() {

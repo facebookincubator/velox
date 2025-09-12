@@ -34,13 +34,13 @@ namespace facebook::velox::functions::geospatial {
     func                                                         \
   } catch (const geos::util::UnsupportedOperationException& e) { \
     return Status::UnknownError(                                 \
-        fmt::format("Internal geometry error: {}", e.what()));   \
+        std::format("Internal geometry error: {}", e.what()));   \
   } catch (const geos::util::AssertionFailedException& e) {      \
     return Status::UnknownError(                                 \
-        fmt::format("Internal geometry error: {}", e.what()));   \
+        std::format("Internal geometry error: {}", e.what()));   \
   } catch (const geos::util::GEOSException& e) {                 \
     return Status::UserError(                                    \
-        fmt::format("{}: {}", user_error_message, e.what()));    \
+        std::format("{}: {}", user_error_message, e.what()));    \
   }
 
 /// Utility macro used to wrap GEOS library calls in a try-catch block,
@@ -49,11 +49,11 @@ namespace facebook::velox::functions::geospatial {
   try {                                                                    \
     func                                                                   \
   } catch (const geos::util::UnsupportedOperationException& e) {           \
-    VELOX_USER_FAIL(fmt::format("Internal geometry error: {}", e.what())); \
+    VELOX_USER_FAIL(std::format("Internal geometry error: {}", e.what())); \
   } catch (const geos::util::AssertionFailedException& e) {                \
-    VELOX_FAIL(fmt::format("Internal geometry error: {}", e.what()));      \
+    VELOX_FAIL(std::format("Internal geometry error: {}", e.what()));      \
   } catch (const geos::util::GEOSException& e) {                           \
-    VELOX_FAIL(fmt::format("{}: {}", user_error_message, e.what()));       \
+    VELOX_FAIL(std::format("{}: {}", user_error_message, e.what()));       \
   }
 
 class GeometryCollectionIterator {
@@ -112,10 +112,10 @@ FOLLY_ALWAYS_INLINE Status validateType(
     std::string callerFunctionName) {
   geos::geom::GeometryTypeId type = geometry.getGeometryTypeId();
   if (!std::count(validTypes.begin(), validTypes.end(), type)) {
-    return Status::UserError(fmt::format(
+    return Status::UserError(std::format(
         "{} only applies to {}. Input type is: {}",
         callerFunctionName,
-        fmt::join(getGeosTypeNames(validTypes), " or "),
+        std::join(getGeosTypeNames(validTypes), " or "),
         getGeosTypeToStringIdentifier().at(type)));
   }
   return Status::OK();

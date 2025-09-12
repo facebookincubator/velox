@@ -51,7 +51,7 @@ struct IntegerVariable {
   }
 
   static std::string name() {
-    return fmt::format("i{}", id);
+    return std::format("i{}", id);
   }
 };
 
@@ -71,7 +71,7 @@ struct EnumVariable {
   }
 
   static std::string name() {
-    return fmt::format("E{}", id);
+    return std::format("E{}", id);
   }
 };
 

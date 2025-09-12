@@ -26,7 +26,7 @@ std::string formatDecimal(uint8_t scale, int128_t unscaledValue) {
   const bool isFraction = (scale > 0);
   if (unscaledValue == 0) {
     if (isFraction) {
-      return fmt::format("{:.{}f}", 0.0, scale);
+      return std::format("{:.{}f}", 0.0, scale);
     }
     return "0";
   }
@@ -49,7 +49,7 @@ std::string formatDecimal(uint8_t scale, int128_t unscaledValue) {
     fractionString += fraction;
   }
 
-  return fmt::format(
+  return std::format(
       "{}{}{}", isNegative ? "-" : "", integralPart, fractionString);
 }
 } // namespace

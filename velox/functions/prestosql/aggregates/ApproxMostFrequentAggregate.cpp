@@ -491,8 +491,8 @@ void registerApproxMostFrequentAggregate(
         "json"}) {
     signatures.push_back(
         exec::AggregateFunctionSignatureBuilder()
-            .returnType(fmt::format("map({},bigint)", valueType))
-            .intermediateType(fmt::format(
+            .returnType(std::format("map({},bigint)", valueType))
+            .intermediateType(std::format(
                 "row(bigint, bigint, array({}), array(bigint))", valueType))
             .argumentType("bigint")
             .argumentType(valueType)

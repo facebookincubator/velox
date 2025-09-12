@@ -100,7 +100,7 @@ class NestedLoopJoinTest : public HiveConnectorTestBase {
 
     for (const auto joinType : joinTypes_) {
       for (const auto& comparison : comparisons_) {
-        SCOPED_TRACE(fmt::format(
+        SCOPED_TRACE(std::format(
             "maxDrivers:{} joinType:{} comparison:{}",
             std::to_string(numDrivers),
             core::JoinTypeName::toName(joinType),
@@ -115,15 +115,15 @@ class NestedLoopJoinTest : public HiveConnectorTestBase {
                         .values(buildVectors)
                         .localPartition({buildKeyName_})
                         .planNode(),
-                    fmt::format(fmt::runtime(joinConditionStr_), comparison),
+                    std::format(std::runtime(joinConditionStr_), comparison),
                     outputLayout_,
                     joinType)
                 .planNode();
 
         assertQuery(
             params,
-            fmt::format(
-                fmt::runtime(queryStr_),
+            std::format(
+                std::runtime(queryStr_),
                 core::JoinTypeName::toName(joinType),
                 comparison));
       }
@@ -144,7 +144,7 @@ class NestedLoopJoinTest : public HiveConnectorTestBase {
   };
   std::vector<std::string> outputLayout_{probeKeyName_, buildKeyName_};
   std::string joinConditionStr_{probeKeyName_ + " {} " + buildKeyName_};
-  std::string queryStr_{fmt::format(
+  std::string queryStr_{std::format(
       "SELECT {0}, {1} FROM t {{}} JOIN u ON t.{0} {{}} u.{1}",
       probeKeyName_,
       buildKeyName_)};
@@ -377,7 +377,7 @@ TEST_F(NestedLoopJoinTest, outerJoinWithoutCondition) {
 
     assertQuery(
         op,
-        fmt::format(
+        std::format(
             "SELECT count(*) FROM t {} join u on 1",
             core::JoinTypeName::toName(joinType)));
   };
@@ -742,7 +742,7 @@ DEBUG_ONLY_TEST_F(NestedLoopJoinTest, longBatchDurationYield) {
     uint32_t numGetOutputCalls;
     bool hasDelay;
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "numGetOutputCalls: {}, needSleep: {}", numGetOutputCalls, hasDelay);
     }
   } testSettings[] = {{0, false}, {0, true}};

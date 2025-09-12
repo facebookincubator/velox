@@ -317,7 +317,7 @@ MemoryArbitrationFuzzer::generatePartitionKeys() {
   std::vector<std::string> names;
   std::vector<TypePtr> types;
   for (auto i = 0; i < numKeys; ++i) {
-    names.push_back(fmt::format("c{}", i));
+    names.push_back(std::format("c{}", i));
     types.push_back(vectorFuzzer_.randType(/*maxDepth=*/1));
   }
   return std::make_pair(names, types);
@@ -340,7 +340,7 @@ std::vector<RowVectorPtr> MemoryArbitrationFuzzer::generateInput(
   // Add up to 3 payload columns.
   const auto numPayload = randInt(0, 3);
   for (auto i = 0; i < numPayload; ++i) {
-    names.push_back(fmt::format("tp{}", i + keyNames.size()));
+    names.push_back(std::format("tp{}", i + keyNames.size()));
     types.push_back(vectorFuzzer_.randType(2 /*maxDepth*/));
   }
 
@@ -379,7 +379,7 @@ std::vector<RowVectorPtr> MemoryArbitrationFuzzer::generateBuildInput(
   // Add up to 3 payload columns.
   const auto numPayload = randInt(0, 3);
   for (auto i = 0; i < numPayload; ++i) {
-    names.push_back(fmt::format("bp{}", i + buildKeys.size()));
+    names.push_back(std::format("bp{}", i + buildKeys.size()));
     types.push_back(vectorFuzzer_.randType(2 /*maxDepth*/));
   }
 
@@ -526,9 +526,9 @@ MemoryArbitrationFuzzer::hashJoinPlans(const std::string& tableDir) {
   const auto probeInput = generateProbeInput(probeKeys, keyTypes);
   const auto buildInput = generateBuildInput(probeInput, probeKeys, buildKeys);
   const std::vector<Split> probeScanSplits = test::makeSplits(
-      probeInput, fmt::format("{}/probe", tableDir), writerPool_);
+      probeInput, std::format("{}/probe", tableDir), writerPool_);
   const std::vector<Split> buildScanSplits = test::makeSplits(
-      buildInput, fmt::format("{}/build", tableDir), writerPool_);
+      buildInput, std::format("{}/build", tableDir), writerPool_);
 
   std::vector<PlanWithSplits> totalPlans;
   for (const auto& joinType : kJoinTypes) {
@@ -558,7 +558,7 @@ MemoryArbitrationFuzzer::aggregatePlans(const std::string& tableDir) {
   const auto aggregateInput = generateAggregateInput(groupingKeys, keyTypes);
   const std::vector<std::string> aggregates{"count(1)"};
   const std::vector<Split> splits = test::makeSplits(
-      aggregateInput, fmt::format("{}/aggregate", tableDir), writerPool_);
+      aggregateInput, std::format("{}/aggregate", tableDir), writerPool_);
 
   std::vector<PlanWithSplits> plans;
   const auto inputRowType = asRowType(aggregateInput[0]->type());
@@ -663,7 +663,7 @@ MemoryArbitrationFuzzer::rowNumberPlans(const std::string& tableDir) {
   }
 
   const std::vector<Split> splits = test::makeSplits(
-      input, fmt::format("{}/row_number", tableDir), writerPool_);
+      input, std::format("{}/row_number", tableDir), writerPool_);
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   core::PlanNodeId scanId;
@@ -697,7 +697,7 @@ MemoryArbitrationFuzzer::orderByPlans(const std::string& tableDir) {
   }
 
   const std::vector<Split> splits = test::makeSplits(
-      input, fmt::format("{}/order_by", tableDir), writerPool_);
+      input, std::format("{}/order_by", tableDir), writerPool_);
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   core::PlanNodeId scanId;
@@ -813,7 +813,7 @@ void MemoryArbitrationFuzzer::verify() {
     queryThreads.emplace_back([&, spillDirectory, i, seed]() {
       FuzzerGenerator rng(seed);
       while (!stop) {
-        const auto queryId = fmt::format("{}{}", kQueryIdPrefix, queryCount++);
+        const auto queryId = std::format("{}{}", kQueryIdPrefix, queryCount++);
         queryTaskAbortRequestMap.insert(queryId, false);
         try {
           const auto queryCtx = test::newQueryCtx(
@@ -833,7 +833,7 @@ void MemoryArbitrationFuzzer::verify() {
             auto res = builder.configs(queryConfigsWithSpill_)
                            .spillDirectory(
                                spillDirectory->getPath() +
-                               fmt::format("/{}/{}", i, queryId))
+                               std::format("/{}/{}", i, queryId))
                            .queryCtx(queryCtx)
                            .copyResults(pool_.get());
           } else {

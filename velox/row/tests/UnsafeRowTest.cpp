@@ -56,7 +56,7 @@ class UnsafeRowTest : public ::testing::Test, public VectorTestBase {
       auto seed = folly::Random::rand32();
 
       LOG(INFO) << "seed: " << seed;
-      SCOPED_TRACE(fmt::format("seed: {}", seed));
+      SCOPED_TRACE(std::format("seed: {}", seed));
 
       fuzzer.reSeed(seed);
       const auto& inputVector = fuzzer.fuzzInputRow(rowType);

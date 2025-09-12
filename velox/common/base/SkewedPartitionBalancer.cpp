@@ -286,7 +286,7 @@ std::vector<uint32_t> SkewedPartitionRebalancer::findSkewedMinTasks(
 }
 
 std::string SkewedPartitionRebalancer::Stats::toString() const {
-  return fmt::format(
+  return std::format(
       "numBalanceTriggers {}, numScaledPartitions {}",
       numBalanceTriggers,
       numScaledPartitions);

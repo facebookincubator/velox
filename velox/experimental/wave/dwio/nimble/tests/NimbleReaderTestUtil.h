@@ -44,7 +44,7 @@ struct FilterSpec {
       case common::FilterKind::kBigintRange: {
         auto bigIntRangeFilter =
             std::dynamic_pointer_cast<common::BigintRange>(this->filter);
-        return fmt::format(
+        return std::format(
             "{} BETWEEN {} AND {}",
             name,
             bigIntRangeFilter->lower(),

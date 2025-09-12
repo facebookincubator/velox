@@ -192,7 +192,7 @@ std::string HashRun::toString() const {
   for (auto& score : sorted) {
     out << std::endl
         << "  * "
-        << fmt::format(
+        << std::format(
                " {}={:.2f} rps {:.2f} GB/s {} us {:.2f}x",
                score.first,
                numRows / (score.second / 1e6),

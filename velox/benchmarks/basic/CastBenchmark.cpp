@@ -37,7 +37,7 @@ int main(int argc, char** argv) {
   auto invalidInput = vectorMaker.flatVector<std::string>(
       vectorSize, [](auto /*row*/) { return "$"; });
   auto validDoubleStringInput = vectorMaker.flatVector<std::string>(
-      vectorSize, [](auto row) { return fmt::format("{}.12345678910", row); });
+      vectorSize, [](auto row) { return std::format("{}.12345678910", row); });
   auto validNaNInput = vectorMaker.flatVector<std::string>(
       vectorSize, [](auto /*row*/) { return "NaN"; });
   auto validInfinityInput = vectorMaker.flatVector<std::string>(
@@ -84,9 +84,9 @@ int main(int argc, char** argv) {
       });
   auto validDateStrings = vectorMaker.flatVector<std::string>(
       vectorSize,
-      [](auto row) { return fmt::format("2024-05-{:02d}", 1 + row % 30); });
+      [](auto row) { return std::format("2024-05-{:02d}", 1 + row % 30); });
   auto invalidDateStrings = vectorMaker.flatVector<std::string>(
-      vectorSize, [](auto row) { return fmt::format("2024-05...{}", row); });
+      vectorSize, [](auto row) { return std::format("2024-05...{}", row); });
 
   benchmarkBuilder
       .addBenchmarkSet(

@@ -117,7 +117,7 @@ class MockTask : public std::enable_shared_from_this<MockTask> {
   void
   initTaskPool(MemoryManager* manager, uint64_t capacity, int32_t priority) {
     root_ = manager->addRootPool(
-        fmt::format("RootPool-{}", poolId_++),
+        std::format("RootPool-{}", poolId_++),
         capacity,
         MemoryReclaimer::create(shared_from_this(), priority));
   }
@@ -410,7 +410,7 @@ MockMemoryOperator* MockTask::addMemoryOp(
     ArbitrationInjectionCallback arbitrationInjectCb) {
   ops_.push_back(std::make_shared<MockMemoryOperator>());
   pools_.push_back(root_->addLeafChild(
-      fmt::format("MockTask{}", poolId_++),
+      std::format("MockTask{}", poolId_++),
       true,
       std::make_unique<MockMemoryOperator::MemoryReclaimer>(
           ops_.back(),
@@ -1021,7 +1021,7 @@ TEST_F(MockSharedArbitrationTest, shrinkPools) {
     bool expectedAbortAfterShrink{false};
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "capacity: {}, reclaimable: {}, allocateBytes: {}, expectedCapacityAfterShrink: {}, expectedUsagedAfterShrink: {}, expectedAbortAfterShrink: {}",
           succinctBytes(capacity),
           reclaimable,
@@ -1049,7 +1049,7 @@ TEST_F(MockSharedArbitrationTest, shrinkPools) {
         tasksOss << testTask.debugString();
         tasksOss << "], \n";
       }
-      return fmt::format(
+      return std::format(
           "\ntestName: {}\n testTasks: \n[{}], \ntargetBytes: {}, expectedReclaimedCapacity: {}, expectedReclaimedUsedBytes: {}, "
           "allowSpill: {}, allowAbort: {}",
           testName,
@@ -1590,7 +1590,7 @@ TEST_F(MockSharedArbitrationTest, badNonReclaimableQuery) {
     bool expectedAbortAfterArbitration;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "reclaimable: {}, badQuery: {}, allocateBytes: {}, expectedCapacityAfterArbitration: {}, expectedUsagedAfterArbitration: {}, expectedAbortAfterArbitration: {}",
           reclaimable,
           badQuery,
@@ -1617,7 +1617,7 @@ TEST_F(MockSharedArbitrationTest, badNonReclaimableQuery) {
         tasksOss << testTask.debugString();
         tasksOss << "], \n";
       }
-      return fmt::format("testTasks: \n{}", tasksOss.str());
+      return std::format("testTasks: \n{}", tasksOss.str());
     }
   } testSettings[] = {
       {{{true,
@@ -2089,7 +2089,7 @@ TEST_F(MockSharedArbitrationTest, globalArbitrationBySpillWithPriority) {
     int32_t priority;
     bool expectSpill;
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "capacity {}, priority {}, expectSpill {}",
           succinctBytes(capacity),
           priority,
@@ -2108,7 +2108,7 @@ TEST_F(MockSharedArbitrationTest, globalArbitrationBySpillWithPriority) {
       for (const auto& task : tasks) {
         ss << task.debugString() << ", ";
       }
-      return fmt::format(
+      return std::format(
           "testName {}, shrinkBytes {}, tasks [{}]",
           testName,
           shrinkBytes,
@@ -2325,7 +2325,7 @@ DEBUG_ONLY_TEST_F(MockSharedArbitrationTest, multipleGlobalRuns) {
 TEST_F(MockSharedArbitrationTest, globalArbitrationEnableCheck) {
   for (bool globalArbitrationEnabled : {false, true}) {
     SCOPED_TRACE(
-        fmt::format("globalArbitrationEnabled: {}", globalArbitrationEnabled));
+        std::format("globalArbitrationEnabled: {}", globalArbitrationEnabled));
     const int64_t memoryCapacity = 512 << 20;
     const uint64_t memoryPoolInitCapacity = memoryCapacity / 2;
     setupMemory(
@@ -2371,7 +2371,7 @@ TEST_F(MockSharedArbitrationTest, singlePoolShrinkWithoutArbitration) {
     bool expectThrow;
     uint64_t expectedCapacity;
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "memoryPoolReservedBytes {}, "
           "memoryPoolMinFreeCapacity {}, "
           "memoryPoolMinFreeCapacityPct {}, "
@@ -2435,7 +2435,7 @@ TEST_F(MockSharedArbitrationTest, singlePoolGrowWithoutArbitration) {
     uint64_t fastExponentialGrowthCapacityLimit;
     double slowCapacityGrowPct;
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "fastExponentialGrowthCapacityLimit {}, "
           "slowCapacityGrowPct {}",
           succinctBytes(fastExponentialGrowthCapacityLimit),
@@ -2509,7 +2509,7 @@ TEST_F(MockSharedArbitrationTest, maxCapacityReserve) {
     bool expectedError;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "memCapacity {}, reservedCapacity {}, poolInitCapacity {}, poolReservedCapacity {}, poolMaxCapacity {}, expectedPoolInitCapacity {}, expectedError {}",
           succinctBytes(memCapacity),
           succinctBytes(reservedCapacity),
@@ -2561,7 +2561,7 @@ TEST_F(MockSharedArbitrationTest, ensureMemoryPoolMaxCapacity) {
     bool expectedReclaimFromOther;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "poolMaxCapacity {} isReclaimable {} allocatedBytes {} requestBytes {} hasOtherTask {} otherAllocatedBytes {} expectedSuccess {} expectedReclaimFromOther {}",
           succinctBytes(poolMaxCapacity),
           isReclaimable,
@@ -2727,7 +2727,7 @@ TEST_F(MockSharedArbitrationTest, ensureNodeMaxCapacity) {
     bool expectedReclaimedBytes;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "nodeCapacity {} poolMaxCapacity {} isReclaimable {} "
           "allocatedBytes {} requestBytes {} expectedSuccess {} "
           "expectedReclaimedBytes {}",
@@ -2916,7 +2916,7 @@ TEST_F(MockSharedArbitrationTest, memoryPoolAbortCapacityLimit) {
     bool expectedAbort{false};
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "capacity: {}, expectedAbort: {}",
           succinctBytes(capacity),
           expectedAbort);
@@ -2936,7 +2936,7 @@ TEST_F(MockSharedArbitrationTest, memoryPoolAbortCapacityLimit) {
         tasksOss << testTask.debugString();
         tasksOss << "], \n";
       }
-      return fmt::format(
+      return std::format(
           "testTasks: \n[{}]\nmemoryPoolAbortCapacityLimit: {}, targetBytes: {}, expectedReclaimedUsedBytes: {}",
           tasksOss.str(),
           succinctBytes(memoryPoolAbortCapacityLimit),
@@ -3254,7 +3254,7 @@ TEST_F(MockSharedArbitrationTest, minReclaimBytes) {
     bool expectedAbortAfterReclaim{false};
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "capacity: {}, expectedCapacityAfterReclaim: {}, expectedUsagedAfterReclaim: {}, expectedAbortAfterReclaim: {}",
           succinctBytes(capacity),
           succinctBytes(expectedCapacityAfterReclaim),
@@ -3276,7 +3276,7 @@ TEST_F(MockSharedArbitrationTest, minReclaimBytes) {
         tasksOss << testTask.debugString();
         tasksOss << "], \n";
       }
-      return fmt::format(
+      return std::format(
           "testTasks: \n[{}]\nminReclaimBytes: {}\ntargetBytes: {}\nexpectedAbortAfterReclaim: {}",
           tasksOss.str(),
           succinctBytes(minReclaimBytes),
@@ -3465,7 +3465,7 @@ TEST_F(MockSharedArbitrationTest, globalArbitrationReclaimPct) {
     uint64_t expectedUsagedAfterReclaim;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "capacity: {}, expectedCapacityAfterReclaim: {}, expectedUsagedAfterReclaim: {}",
           succinctBytes(capacity),
           succinctBytes(expectedCapacityAfterReclaim),
@@ -3485,7 +3485,7 @@ TEST_F(MockSharedArbitrationTest, globalArbitrationReclaimPct) {
         tasksOss << testTask.debugString();
         tasksOss << "], \n";
       }
-      return fmt::format(
+      return std::format(
           "testTasks: \n[{}], \reclaimPct: {}, targetBytes: {}",
           tasksOss.str(),
           reclaimPct,
@@ -3632,7 +3632,7 @@ TEST_F(MockSharedArbitrationTest, singlePoolGrowCapacityWithArbitration) {
   const std::vector<bool> isLeafReclaimables = {false, true};
   const int64_t memoryCapacity = 128 * MB;
   for (const auto isLeafReclaimable : isLeafReclaimables) {
-    SCOPED_TRACE(fmt::format("isLeafReclaimable {}", isLeafReclaimable));
+    SCOPED_TRACE(std::format("isLeafReclaimable {}", isLeafReclaimable));
     setupMemory({.memoryCapacity = memoryCapacity});
     auto* op = addMemoryOp(nullptr, isLeafReclaimable);
     op->allocate(memoryCapacity);
@@ -3707,7 +3707,7 @@ TEST_F(MockSharedArbitrationTest, singlePoolGrowCapacityFailedWithAbort) {
 TEST_F(MockSharedArbitrationTest, arbitrateWithCapacityShrink) {
   const std::vector<bool> isLeafReclaimables = {true, false};
   for (const auto isLeafReclaimable : isLeafReclaimables) {
-    SCOPED_TRACE(fmt::format("isLeafReclaimable {}", isLeafReclaimable));
+    SCOPED_TRACE(std::format("isLeafReclaimable {}", isLeafReclaimable));
     setupMemory({});
     auto* reclaimedOp = addMemoryOp(nullptr, isLeafReclaimable);
     const int reclaimedOpCapacity = kMemoryCapacity * 2 / 3;
@@ -3744,7 +3744,7 @@ TEST_F(MockSharedArbitrationTest, arbitrateWithMemoryReclaim) {
   const uint64_t memoryPoolAbortCapacityLimit = 256 * MB;
   const std::vector<bool> isLeafReclaimables = {true, false};
   for (const auto isLeafReclaimable : isLeafReclaimables) {
-    SCOPED_TRACE(fmt::format("isLeafReclaimable {}", isLeafReclaimable));
+    SCOPED_TRACE(std::format("isLeafReclaimable {}", isLeafReclaimable));
     setupMemory(
         {.memoryCapacity = memoryCapacity,
          .reservedMemoryCapacity = reservedMemoryCapacity,
@@ -3884,7 +3884,7 @@ DEBUG_ONLY_TEST_F(MockSharedArbitrationTest, reclaimWithNoCandidate) {
 
 TEST_F(MockSharedArbitrationTest, arbitrateBySelfMemoryReclaim) {
   for (const auto isLeafReclaimable : {true, false}) {
-    SCOPED_TRACE(fmt::format("isLeafReclaimable {}", isLeafReclaimable));
+    SCOPED_TRACE(std::format("isLeafReclaimable {}", isLeafReclaimable));
     const uint64_t memCapacity = 128 * MB;
     const uint64_t reservedCapacity = 8 * MB;
     const uint64_t poolReservedCapacity = 4 * MB;
@@ -3925,7 +3925,7 @@ TEST_F(MockSharedArbitrationTest, noAbortOnRequestWhenArbitrationFails) {
     bool maybeReserve;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "initialAllocationSize {}, failedAllocationSize {}, maybeReserve {}",
           initialAllocationSize,
           failedAllocationSize,
@@ -3995,7 +3995,7 @@ DEBUG_ONLY_TEST_F(MockSharedArbitrationTest, orderedArbitration) {
     bool sameSize;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "freeCapacity {}, sameSize {}", freeCapacity, sameSize);
     }
   } testSettings[] = {
@@ -4251,7 +4251,7 @@ TEST_F(MockSharedArbitrationTest, arbitrationFailure) {
     bool expectedRequestorAborted;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "requestorCapacity {} requestorRequestBytes {} otherCapacity {} expectedAllocationSuccess {} expectedRequestorAborted {}",
           succinctBytes(requestorCapacity),
           succinctBytes(requestorRequestBytes),
@@ -4317,7 +4317,7 @@ TEST_F(
     arbitrationFailureOnNonReclaimableQueryWithGlobalArbitrationDisabled) {
   const int64_t memoryCapacity = 128 * MB;
   for (bool hasMinReclaimBytes : {false, true}) {
-    SCOPED_TRACE(fmt::format("hasMinReclaimBytes {}", hasMinReclaimBytes));
+    SCOPED_TRACE(std::format("hasMinReclaimBytes {}", hasMinReclaimBytes));
     // Set min reclaim bytes to avoid reclaim from itself before fail the
     // arbitration.
     setupMemory(

@@ -67,7 +67,7 @@ class TryBenchmark : public functions::test::FunctionBenchmarkBase {
 
     std::string expression = "c0 + c1";
     for (vector_size_t i = 2; i < numArgs; ++i) {
-      expression += fmt::format(" + c{}", i);
+      expression += std::format(" + c{}", i);
     }
 
     auto exprSet = compileExpression(expression, rowVector->type());
@@ -82,9 +82,9 @@ class TryBenchmark : public functions::test::FunctionBenchmarkBase {
 
     std::string expression = "c0 + c1";
     for (vector_size_t i = 2; i < numArgs; ++i) {
-      expression += fmt::format(" + c{}", i);
+      expression += std::format(" + c{}", i);
     }
-    expression = fmt::format("try({})", expression);
+    expression = std::format("try({})", expression);
 
     auto exprSet = compileExpression(expression, rowVector->type());
     suspender.dismiss();
@@ -98,7 +98,7 @@ class TryBenchmark : public functions::test::FunctionBenchmarkBase {
 
     std::string expression = "try(c0 + c1)";
     for (vector_size_t i = 2; i < numArgs; ++i) {
-      expression = fmt::format("try({} + c{})", expression, i);
+      expression = std::format("try({} + c{})", expression, i);
     }
 
     auto exprSet = compileExpression(expression, rowVector->type());

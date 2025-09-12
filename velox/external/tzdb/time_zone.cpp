@@ -113,7 +113,7 @@ using __sys_info_result = folly::Expected<__sys_info, date::sys_seconds>;
         case 'z': {
           if (__continuation.__format.size() != 2)
             std::__throw_runtime_error(
-                fmt::format(
+                std::format(
                     "corrupt tzdb FORMAT field: %z should be the entire contents, instead contains '{}'",
                     __continuation.__format)
                     .c_str());
@@ -125,19 +125,19 @@ using __sys_info_result = folly::Expected<__sys_info, date::sys_seconds>;
             __result += '+';
 
           if (__offset.minutes() != 0min)
-            fmt::format_to(
+            std::format_to(
                 std::back_inserter(__result),
                 "{:%H}{:%M}",
                 __offset.hours(),
                 __offset.minutes());
           else
-            fmt::format_to(
+            std::format_to(
                 std::back_inserter(__result), "{:%H}", __offset.hours());
         } break;
 
         default:
           std::__throw_runtime_error(
-              fmt::format(
+              std::format(
                   "corrupt tzdb FORMAT field: invalid sequence '%{}' found, expected %s or %z",
                   __c)
                   .c_str());
@@ -156,7 +156,7 @@ using __sys_info_result = folly::Expected<__sys_info, date::sys_seconds>;
       __result.push_back(__c);
     } else {
       std::__throw_runtime_error(
-          fmt::format(
+          std::format(
               "corrupt tzdb FORMAT field: invalid character '{}' found, expected +, -, or an alphanumeric value",
               __c)
               .c_str());

@@ -69,9 +69,9 @@ class HdfsReadFile::Impl {
       : driver_(driver), hdfsClient_(hdfs), filePath_(path) {
     fileInfo_ = driver_->GetPathInfo(hdfsClient_, filePath_.data());
     if (fileInfo_ == nullptr) {
-      auto error = fmt::format(
+      auto error = std::format(
           "FileNotFoundException: Path {} does not exist.", filePath_);
-      auto errMsg = fmt::format(
+      auto errMsg = std::format(
           "Unable to get file path info for file: {}. got error: {}",
           filePath_,
           error);

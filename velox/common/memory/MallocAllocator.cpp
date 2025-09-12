@@ -56,7 +56,7 @@ bool MallocAllocator::allocateNonContiguousWithoutRetry(
   const auto totalBytes = AllocationTraits::pageBytes(sizeMix.totalPages);
   if (testingHasInjectedFailure(InjectedFailure::kCap) ||
       !incrementUsage(totalBytes)) {
-    const auto errorMsg = fmt::format(
+    const auto errorMsg = std::format(
         "Exceeded memory allocator limit when allocating {} new pages"
         ", the memory allocator capacity is {}, the allocated bytes is {}",
         sizeMix.totalPages,
@@ -85,7 +85,7 @@ bool MallocAllocator::allocateNonContiguousWithoutRetry(
     }
     if (ptr == nullptr) {
       // Failed to allocate memory from memory.
-      const auto errorMsg = fmt::format(
+      const auto errorMsg = std::format(
           "Malloc failed to allocate {} of memory while allocating for "
           "non-contiguous allocation of {} pages",
           succinctBytes(AllocationTraits::pageBytes(numSizeClassPages)),
@@ -162,7 +162,7 @@ bool MallocAllocator::allocateContiguousImpl(
   const auto totalBytes = AllocationTraits::pageBytes(numPages);
   if (testingHasInjectedFailure(InjectedFailure::kCap) ||
       !incrementUsage(totalBytes)) {
-    const auto errorMsg = fmt::format(
+    const auto errorMsg = std::format(
         "Exceeded memory allocator limit when allocating {} new pages, the "
         "memory allocator capacity is {}",
         numPages,
@@ -240,7 +240,7 @@ bool MallocAllocator::growContiguousWithoutRetry(
     MachinePageCount increment,
     ContiguousAllocation& allocation) {
   if (!incrementUsage(AllocationTraits::pageBytes(increment))) {
-    const auto errorMsg = fmt::format(
+    const auto errorMsg = std::format(
         "Exceeded memory allocator limit when allocating {} new pages for "
         "total allocation of {} pages, the memory allocator capacity is {}",
         increment,
@@ -264,7 +264,7 @@ void* MallocAllocator::allocateBytesWithoutRetry(
     uint64_t bytes,
     uint16_t alignment) {
   if (!incrementUsage(bytes)) {
-    auto errorMsg = fmt::format(
+    auto errorMsg = std::format(
         "Failed to allocateBytes {}: Exceeded memory allocator "
         "limit of {}",
         succinctBytes(bytes),
@@ -291,7 +291,7 @@ void* MallocAllocator::allocateBytesWithoutRetry(
 
 void* MallocAllocator::allocateZeroFilledWithoutRetry(uint64_t bytes) {
   if (!incrementUsage(bytes)) {
-    auto errorMsg = fmt::format(
+    auto errorMsg = std::format(
         "Failed to allocateZeroFilled {}: Exceeded memory allocator "
         "limit of {}",
         succinctBytes(bytes),

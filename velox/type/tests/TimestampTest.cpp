@@ -117,19 +117,19 @@ TEST(TimestampTest, arithmeticOverflow) {
   Timestamp ts1(positiveSecond, nano);
   VELOX_ASSERT_THROW(
       ts1.toMillis(),
-      fmt::format(
+      std::format(
           "Could not convert Timestamp({}, {}) to milliseconds",
           positiveSecond,
           nano));
   VELOX_ASSERT_THROW(
       ts1.toMicros(),
-      fmt::format(
+      std::format(
           "Could not convert Timestamp({}, {}) to microseconds",
           positiveSecond,
           nano));
   VELOX_ASSERT_THROW(
       ts1.toNanos(),
-      fmt::format(
+      std::format(
           "Could not convert Timestamp({}, {}) to nanoseconds",
           positiveSecond,
           nano));
@@ -137,19 +137,19 @@ TEST(TimestampTest, arithmeticOverflow) {
   Timestamp ts2(negativeSecond, 0);
   VELOX_ASSERT_THROW(
       ts2.toMillis(),
-      fmt::format(
+      std::format(
           "Could not convert Timestamp({}, {}) to milliseconds",
           negativeSecond,
           0));
   VELOX_ASSERT_THROW(
       ts2.toMicros(),
-      fmt::format(
+      std::format(
           "Could not convert Timestamp({}, {}) to microseconds",
           negativeSecond,
           0));
   VELOX_ASSERT_THROW(
       ts2.toNanos(),
-      fmt::format(
+      std::format(
           "Could not convert Timestamp({}, {}) to nanoseconds",
           negativeSecond,
           0));
@@ -279,7 +279,7 @@ std::string toStringAlt(
 }
 
 bool checkUtcToEpoch(int year, int mon, int mday, int hour, int min, int sec) {
-  SCOPED_TRACE(fmt::format(
+  SCOPED_TRACE(std::format(
       "{}-{:02}-{:02} {:02}:{:02}:{:02}", year, mon, mday, hour, min, sec));
   std::tm tm{};
   tm.tm_sec = sec;
@@ -389,7 +389,7 @@ TEST(TimestampTest, overflow) {
   Timestamp t(std::numeric_limits<int64_t>::max(), 0);
   VELOX_ASSERT_THROW(
       t.toTimePointMs(false),
-      fmt::format(
+      std::format(
           "Could not convert Timestamp({}, {}) to milliseconds",
           std::numeric_limits<int64_t>::max(),
           0));
@@ -444,7 +444,7 @@ TEST(TimestampTest, randomEpochToUtc) {
   std::tm expected{};
   for (int i = 0; i < 10'000; ++i) {
     auto epoch = dist(gen);
-    SCOPED_TRACE(fmt::format("epoch={}", epoch));
+    SCOPED_TRACE(std::format("epoch={}", epoch));
     if (gmtime_r(&epoch, &expected)) {
       ASSERT_TRUE(Timestamp::epochToCalendarUtc(epoch, actual));
       checkTm(actual, expected);
@@ -479,7 +479,7 @@ void testTmToString(
     for (int i = 0; i < 10'000; ++i) {
       auto epoch = dist(gen);
       auto nanos = nanosDist(gen);
-      SCOPED_TRACE(fmt::format(
+      SCOPED_TRACE(std::format(
           "epoch={}, nanos={}, mode={}, precision={}",
           epoch,
           nanos,

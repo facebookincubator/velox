@@ -454,8 +454,8 @@ FOLLY_ALWAYS_INLINE std::string prepareRegexpReplaceReplacement(
 
     RE2::GlobalReplace(
         &newReplacement,
-        fmt::format(R"(\${{{}}})", std::string(groupName[1])),
-        fmt::format("${}", groupIter->second));
+        std::format(R"(\${{{}}})", std::string(groupName[1])),
+        std::format("${}", groupIter->second));
   }
 
   // Convert references to numbered capturing groups from $g to \g.
@@ -482,7 +482,7 @@ FOLLY_ALWAYS_INLINE std::string prepareRegexpReplaceReplacement(
 } // namespace facebook::velox::functions
 
 template <>
-struct fmt::formatter<facebook::velox::functions::PatternKind>
+struct std::formatter<facebook::velox::functions::PatternKind>
     : formatter<int> {
   auto format(facebook::velox::functions::PatternKind s, format_context& ctx)
       const {

@@ -295,7 +295,7 @@ class BlockTest : public testing::Test {
           bits::isBitSet(reference.data(), i), bits::isBitSet(resultAsChar, i));
     }
 
-    std::cout << fmt::format(
+    std::cout << std::format(
                      "scatterBits {} {}% set: cpu1t {} Mb/s gpu256t {} Mb/s",
                      numBits,
                      setPct,
@@ -426,7 +426,7 @@ TEST_F(BlockTest, partition) {
           run->partitionedRows);
       stream.wait();
       auto time = getCurrentTimeMicro() - startMicros;
-      std::cout << fmt::format(
+      std::cout << std::format(
                        "Partition {} batch={}  fanout={}  rate={} Mrows/s",
                        kNumPartitionBlocks,
                        rows,

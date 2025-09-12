@@ -31,7 +31,7 @@ namespace facebook::velox::exec::test {
 // Supports 'compare' API.
 class TransformResultVerifier : public ResultVerifier {
  public:
-  // @param transform fmt::format-compatible SQL expression to use to transform
+  // @param transform std::format-compatible SQL expression to use to transform
   // aggregation results before comparison. The string must have a single
   // placeholder for the column name that contains aggregation results. For
   // example, "array_sort({})".
@@ -58,7 +58,7 @@ class TransformResultVerifier : public ResultVerifier {
       const std::string& aggregateName) override {
     projections_ = groupingKeys;
     projections_.push_back(
-        fmt::format(fmt::runtime(transform_), aggregateName));
+        std::format(std::runtime(transform_), aggregateName));
   }
 
   bool compare(const RowVectorPtr& result, const RowVectorPtr& altResult)

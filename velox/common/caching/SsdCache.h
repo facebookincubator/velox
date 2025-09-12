@@ -72,7 +72,7 @@ class SsdCache {
     folly::Executor* executor;
 
     std::string toString() const {
-      return fmt::format(
+      return std::format(
           "{} shards, capacity {}, checkpoint size {}, file cow {}, checksum {}, read verification {}",
           numShards,
           succinctBytes(maxBytes),

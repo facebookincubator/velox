@@ -670,7 +670,7 @@ TEST_F(TableScanTest, subfieldPruningRemainingFilterStruct) {
        ++outputColumn) {
     for (int filterColumn = kWholeColumn; filterColumn <= kSubfieldOnly;
          ++filterColumn) {
-      SCOPED_TRACE(fmt::format("{} {}", outputColumn, filterColumn));
+      SCOPED_TRACE(std::format("{} {}", outputColumn, filterColumn));
       connector::ColumnHandleMap assignments;
       assignments["d"] = std::make_shared<HiveColumnHandle>(
           "d", HiveColumnHandle::ColumnType::kRegular, BIGINT(), BIGINT());
@@ -755,7 +755,7 @@ TEST_F(TableScanTest, subfieldPruningRemainingFilterMap) {
        ++outputColumn) {
     for (int filterColumn = kWholeColumn; filterColumn <= kSubfieldOnly;
          ++filterColumn) {
-      SCOPED_TRACE(fmt::format("{} {}", outputColumn, filterColumn));
+      SCOPED_TRACE(std::format("{} {}", outputColumn, filterColumn));
       connector::ColumnHandleMap assignments;
       assignments["a"] = std::make_shared<HiveColumnHandle>(
           "a", HiveColumnHandle::ColumnType::kRegular, BIGINT(), BIGINT());
@@ -1278,7 +1278,7 @@ TEST_F(TableScanTest, batchSize) {
 
   std::vector<std::string> names;
   for (int i = 0; i < numColumns; i++) {
-    names.push_back(fmt::format("c{}", i));
+    names.push_back(std::format("c{}", i));
   }
   auto rowType =
       ROW(std::move(names), std::vector<TypePtr>(numColumns, BIGINT()));
@@ -1444,7 +1444,7 @@ TEST_F(TableScanTest, splitDoubleRead) {
 TEST_F(TableScanTest, multipleSplits) {
   std::vector<int32_t> numPrefetchSplits = {0, 2};
   for (const auto& numPrefetchSplit : numPrefetchSplits) {
-    SCOPED_TRACE(fmt::format("numPrefetchSplit {}", numPrefetchSplit));
+    SCOPED_TRACE(std::format("numPrefetchSplit {}", numPrefetchSplit));
     auto filePaths = makeFilePaths(100);
     auto vectors = makeVectors(100, 100);
     for (int32_t i = 0; i < vectors.size(); i++) {
@@ -1905,7 +1905,7 @@ TEST_F(TableScanTest, partitionedTableDateKey) {
 
     std::string partitionValueStr = "'" + partitionValue + "'";
     assertQuery(
-        op, split, fmt::format("SELECT {}, * FROM tmp", partitionValueStr));
+        op, split, std::format("SELECT {}, * FROM tmp", partitionValueStr));
   }
 }
 
@@ -1963,7 +1963,7 @@ TEST_F(TableScanTest, partitionedTableTimestampKey) {
                   kReadTimestampPartitionValueAsLocalTimeSession,
               asLocalTime ? "true" : "false")
           .splits({split})
-          .assertResults(fmt::format(
+          .assertResults(std::format(
               "SELECT {}, * FROM tmp", asLocalTime ? tsValueAsLocal : tsValue));
     };
 
@@ -1990,7 +1990,7 @@ TEST_F(TableScanTest, partitionedTableTimestampKey) {
                   kReadTimestampPartitionValueAsLocalTimeSession,
               asLocalTime ? "true" : "false")
           .splits({split})
-          .assertResults(fmt::format(
+          .assertResults(std::format(
               "SELECT c0, {}, c1 FROM tmp",
               asLocalTime ? tsValueAsLocal : tsValue));
     };
@@ -2017,7 +2017,7 @@ TEST_F(TableScanTest, partitionedTableTimestampKey) {
                   kReadTimestampPartitionValueAsLocalTimeSession,
               asLocalTime ? "true" : "false")
           .splits({split})
-          .assertResults(fmt::format(
+          .assertResults(std::format(
               "SELECT c0, c1, {} FROM tmp",
               asLocalTime ? tsValueAsLocal : tsValue));
     };
@@ -2044,7 +2044,7 @@ TEST_F(TableScanTest, partitionedTableTimestampKey) {
                   kReadTimestampPartitionValueAsLocalTimeSession,
               asLocalTime ? "true" : "false")
           .splits({split})
-          .assertResults(fmt::format(
+          .assertResults(std::format(
               "SELECT {} FROM tmp", asLocalTime ? tsValueAsLocal : tsValue));
     };
     expect(true);
@@ -2092,7 +2092,7 @@ TEST_F(TableScanTest, partitionedTableTimestampKey) {
                   kReadTimestampPartitionValueAsLocalTimeSession,
               asLocalTime ? "true" : "false")
           .splits({split})
-          .assertResults(fmt::format(
+          .assertResults(std::format(
               "SELECT {}, * FROM tmp", asLocalTime ? tsValueAsLocal : tsValue));
     };
     expect(true);
@@ -2488,7 +2488,7 @@ TEST_F(TableScanTest, statsBasedSkippingWithoutDecompression) {
   strings.reserve(size);
   for (auto i = 0; i < size; i++) {
     strings.emplace_back(
-        fmt::format("com.facebook.presto.orc.stream.{:05}", i));
+        std::format("com.facebook.presto.orc.stream.{:05}", i));
   }
 
   auto rowVector = makeRowVector({makeFlatVector(strings)});
@@ -2529,7 +2529,7 @@ TEST_F(TableScanTest, filterBasedSkippingWithoutDecompression) {
   strings.reserve(size);
   for (auto i = 0; i < size; i++) {
     strings.emplace_back(
-        fmt::format("com.facebook.presto.orc.stream.{:05}", i));
+        std::format("com.facebook.presto.orc.stream.{:05}", i));
   }
 
   auto rowVector = makeRowVector(
@@ -2856,12 +2856,12 @@ TEST_F(TableScanTest, path) {
                 .endTableScan()
                 .planNode();
   assertQuery(
-      op, {filePath}, fmt::format("SELECT '{}', * FROM tmp", pathValue));
+      op, {filePath}, std::format("SELECT '{}', * FROM tmp", pathValue));
 
   // use $path in a filter, but don't project it out
   auto tableHandle = makeTableHandle(
       common::SubfieldFilters{},
-      parseExpr(fmt::format("\"{}\" = '{}'", kPath, pathValue), typeWithPath));
+      parseExpr(std::format("\"{}\" = '{}'", kPath, pathValue), typeWithPath));
   op = PlanBuilder()
            .startTableScan()
            .outputType(rowType)
@@ -2879,7 +2879,7 @@ TEST_F(TableScanTest, path) {
            .endTableScan()
            .planNode();
   assertQuery(
-      op, {filePath}, fmt::format("SELECT '{}', * FROM tmp", pathValue));
+      op, {filePath}, std::format("SELECT '{}', * FROM tmp", pathValue));
 }
 
 TEST_F(TableScanTest, fileSizeAndModifiedTime) {
@@ -2899,8 +2899,8 @@ TEST_F(TableScanTest, fileSizeAndModifiedTime) {
   assignments[kSize] = synthesizedColumn(kSize, BIGINT());
   assignments[kModifiedTime] = synthesizedColumn(kModifiedTime, BIGINT());
 
-  auto fileSizeValue = fmt::format("{}", filePath->fileSize());
-  auto fileTimeValue = fmt::format("{}", filePath->fileModifiedTime());
+  auto fileSizeValue = std::format("{}", filePath->fileSize());
+  auto fileTimeValue = std::format("{}", filePath->fileModifiedTime());
 
   // Select and project both '$file_size', '$file_modified_time'.
   auto op = PlanBuilder()
@@ -2913,7 +2913,7 @@ TEST_F(TableScanTest, fileSizeAndModifiedTime) {
   assertQuery(
       op,
       {filePath},
-      fmt::format("SELECT *, {}, {} FROM tmp", fileSizeValue, fileTimeValue));
+      std::format("SELECT *, {}, {} FROM tmp", fileSizeValue, fileTimeValue));
 
   auto filterTest = [&](const std::string& filter) {
     auto tableHandle = makeTableHandle(
@@ -2945,11 +2945,11 @@ TEST_F(TableScanTest, fileSizeAndModifiedTime) {
     assertQuery(
         op,
         {filePath},
-        fmt::format("SELECT *, {}, {} FROM tmp", fileSizeValue, fileTimeValue));
+        std::format("SELECT *, {}, {} FROM tmp", fileSizeValue, fileTimeValue));
   };
 
-  filterTest(fmt::format("\"{}\" = {}", kSize, fileSizeValue));
-  filterTest(fmt::format("\"{}\" = {}", kModifiedTime, fileTimeValue));
+  filterTest(std::format("\"{}\" = {}", kSize, fileSizeValue));
+  filterTest(std::format("\"{}\" = {}", kModifiedTime, fileTimeValue));
 }
 
 TEST_F(TableScanTest, bucket) {
@@ -3017,7 +3017,7 @@ TEST_F(TableScanTest, bucket) {
     assertQuery(
         op,
         hsplit,
-        fmt::format(
+        std::format(
             "SELECT {}, * FROM tmp where c0 = {}", bucketValue, bucketValue));
 
     // Filter on bucket column, but don't project it out
@@ -3034,7 +3034,7 @@ TEST_F(TableScanTest, bucket) {
     assertQuery(
         op,
         hsplit,
-        fmt::format("SELECT * FROM tmp where c0 = {}", bucketValue));
+        std::format("SELECT * FROM tmp where c0 = {}", bucketValue));
   }
 }
 
@@ -3804,7 +3804,7 @@ TEST_F(TableScanTest, remainingFilterConstantResult) {
           makeFlatVector<StringView>(
               size,
               [](auto row) {
-                return StringView::makeInline(fmt::format("{}", row % 23));
+                return StringView::makeInline(std::format("{}", row % 23));
               }),
       }),
       makeRowVector({
@@ -4023,7 +4023,7 @@ TEST_F(TableScanTest, aggregationPushdownSchemaEvolution) {
                   const TypePtr& schemaType,
                   const std::vector<const char*>& aggs) {
     SCOPED_TRACE(
-        fmt::format("{} to {}", dataType->toString(), schemaType->toString()));
+        std::format("{} to {}", dataType->toString(), schemaType->toString()));
     constexpr int kSize = 1000;
     auto vectors =
         makeVectors(1, kSize, ROW({"c0", "c1"}, {TINYINT(), dataType}));
@@ -4034,13 +4034,13 @@ TEST_F(TableScanTest, aggregationPushdownSchemaEvolution) {
       SCOPED_TRACE(agg);
       auto plan = PlanBuilder()
                       .tableScan(ROW({"c0", "c1"}, {TINYINT(), schemaType}))
-                      .singleAggregation({"c0"}, {fmt::format("{}(c1)", agg)})
+                      .singleAggregation({"c0"}, {std::format("{}(c1)", agg)})
                       .planNode();
       auto it = duckDbAgg.find(agg);
       auto task = assertQuery(
           plan,
           {filePath},
-          fmt::format(
+          std::format(
               "SELECT c0, {}(c1) FROM tmp GROUP BY 1",
               it == duckDbAgg.end() ? agg : it->second));
       auto stats = task->taskStats();
@@ -4697,7 +4697,7 @@ TEST_F(TableScanTest, filterMissingFields) {
   });
   auto test = [&](const std::vector<std::string>& subfieldFilters,
                   int expectedSize) {
-    SCOPED_TRACE(fmt::format("{}", fmt::join(subfieldFilters, " AND ")));
+    SCOPED_TRACE(std::format("{}", std::join(subfieldFilters, " AND ")));
     auto plan = PlanBuilder()
                     .tableScan(ROW({}, {}), subfieldFilters, "", schema)
                     .planNode();
@@ -4736,7 +4736,7 @@ TEST_F(TableScanTest, tableScanProjections) {
   auto testQueryRow = [&](const std::vector<int32_t>& projections) {
     std::vector<std::string> cols;
     for (auto projection : projections) {
-      cols.push_back(fmt::format("c{}", projection));
+      cols.push_back(std::format("c{}", projection));
     }
     auto scanRowType = ROW(
         std::move(cols), std::vector<TypePtr>(projections.size(), BIGINT()));
@@ -5424,7 +5424,7 @@ TEST_F(TableScanTest, noCacheRetention) {
     bool expectSplitCached;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "splitCacheable {}, expectSplitCached {}",
           splitCacheable,
           expectSplitCached);
@@ -5618,7 +5618,7 @@ TEST_F(TableScanTest, rowId) {
       split->rowIdProperties = {
           .metadataVersion = i,
           .partitionId = 2 * i,
-          .tableGuid = fmt::format("table-guid-{}", i),
+          .tableGuid = std::format("table-guid-{}", i),
       };
       query.split(split);
       auto rowGroupId = split->getFileName();
@@ -5737,7 +5737,7 @@ TEST_F(TableScanTest, statsBasedFilterReorderDisabled) {
   createDuckDbTable(vectors);
 
   for (auto disableReoder : {false}) {
-    SCOPED_TRACE(fmt::format("disableReoder {}", disableReoder));
+    SCOPED_TRACE(std::format("disableReoder {}", disableReoder));
     auto* cache = cache::AsyncDataCache::getInstance();
     cache->clear();
 
@@ -6007,7 +6007,7 @@ TEST_F(TableScanTest, textfileLarge) {
 
   // Helper function to generate column data
   auto generateColumnData = [](int row, int col) {
-    return fmt::format("row{}_col{}_padding_data_to_increase_size", row, col);
+    return std::format("row{}_col{}_padding_data_to_increase_size", row, col);
   };
 
   // Helper function to generate CSV row
@@ -6017,7 +6017,7 @@ TEST_F(TableScanTest, textfileLarge) {
     for (int col = 0; col < kNumCols; ++col) {
       cols.push_back(generateColumnData(row, col));
     }
-    return fmt::format("{}\n", fmt::join(cols, ","));
+    return std::format("{}\n", std::join(cols, ","));
   };
 
   // Create expected result (only first row since split limit is 10 bytes)
@@ -6033,7 +6033,7 @@ TEST_F(TableScanTest, textfileLarge) {
   columnVectors.reserve(kNumCols);
 
   for (int col = 0; col < kNumCols; ++col) {
-    columnNames.push_back(fmt::format("c{}", col));
+    columnNames.push_back(std::format("c{}", col));
     columnVectors.push_back(makeFlatVector<std::string>({expectedRow[col]}));
   }
 

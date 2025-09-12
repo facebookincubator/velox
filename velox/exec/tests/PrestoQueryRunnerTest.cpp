@@ -202,7 +202,7 @@ TEST_F(PrestoQueryRunnerTest, toSql) {
     queryRunnerContext->windowFrames_[id] = {frameClause};
     EXPECT_EQ(
         queryRunner->toSql(plan),
-        fmt::format(
+        std::format(
             "SELECT c0, c1, c2, first_value(c0) OVER (PARTITION BY c1 ORDER BY c2 ASC NULLS LAST {}) as w0 FROM (tmp)",
             frameClause));
 
@@ -221,7 +221,7 @@ TEST_F(PrestoQueryRunnerTest, toSql) {
     queryRunnerContext->windowFrames_[id] = {firstValueFrame, lastValueFrame};
     EXPECT_EQ(
         queryRunner->toSql(plan),
-        fmt::format(
+        std::format(
             "SELECT c0, c1, c2, first_value(c0) OVER (PARTITION BY c1 ORDER BY c2 DESC NULLS FIRST {}) as w0, last_value(c0) OVER (PARTITION BY c1 ORDER BY c2 DESC NULLS FIRST {}) as w1 FROM (tmp)",
             firstValueFrame,
             lastValueFrame));

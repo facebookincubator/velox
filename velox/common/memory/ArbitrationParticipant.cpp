@@ -30,7 +30,7 @@ namespace facebook::velox::memory {
 using namespace facebook::velox::memory;
 
 std::string ArbitrationParticipant::Config::toString() const {
-  return fmt::format(
+  return std::format(
       "initCapacity {}, minCapacity {}, fastExponentialGrowthCapacityLimit {}, slowCapacityGrowRatio {}, minFreeCapacity {}, minFreeCapacityRatio {}, minReclaimBytes {}, minReclaimPct {}",
       succinctBytes(initCapacity),
       succinctBytes(minCapacity),
@@ -223,7 +223,7 @@ void ArbitrationParticipant::startArbitration(ArbitrationOperation* op) {
       op->setState(ArbitrationOperation::State::kWaiting);
       WaitOp waitOp{
           op,
-          ContinuePromise{fmt::format(
+          ContinuePromise{std::format(
               "Wait for arbitration on {}", op->participant()->name())}};
       waitPromise = waitOp.waitPromise.getSemiFuture();
       waitOps_.emplace_back(std::move(waitOp));
@@ -386,7 +386,7 @@ size_t ArbitrationParticipant::numWaitingOps() const {
 }
 
 std::string ArbitrationParticipant::Stats::toString() const {
-  return fmt::format(
+  return std::format(
       "numRequests: {}, numReclaims: {}, numShrinks: {}, numGrows: {}, reclaimedBytes: {}, growBytes: {}, aborted: {}, duration: {}",
       numRequests,
       numReclaims,
@@ -417,7 +417,7 @@ ArbitrationCandidate::ArbitrationCandidate(
       reclaimableFreeCapacity(participant->reclaimableFreeCapacity()) {}
 
 std::string ArbitrationCandidate::toString() const {
-  return fmt::format(
+  return std::format(
       "{} RECLAIMABLE_USED_CAPACITY {} RECLAIMABLE_FREE_CAPACITY {}",
       participant->name(),
       succinctBytes(reclaimableUsedCapacity),
@@ -441,7 +441,7 @@ ArbitrationTimedLock::ArbitrationTimedLock(
     uint64_t timeoutNs)
     : mutex_(mutex) {
   if (!mutex_.try_lock_for(std::chrono::nanoseconds(timeoutNs))) {
-    VELOX_MEM_ARBITRATION_TIMEOUT(fmt::format(
+    VELOX_MEM_ARBITRATION_TIMEOUT(std::format(
         "Memory arbitration lock timed out when reclaiming from arbitration participant."));
   }
 }

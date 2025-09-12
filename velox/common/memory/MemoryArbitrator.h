@@ -100,7 +100,7 @@ class MemoryArbitrator {
       for (const auto& extraConfig : extraConfigs) {
         ss << extraConfig.first << "=" << extraConfig.second << ";";
       }
-      return fmt::format(
+      return std::format(
           "kind={};capacity={};arbitrationStateCheckCb={};{}",
           kind,
           succinctBytes(capacity),
@@ -563,7 +563,7 @@ void testingRunArbitration(
 
 #if FMT_VERSION < 100100
 template <>
-struct fmt::formatter<facebook::velox::memory::MemoryArbitrator::Stats>
+struct std::formatter<facebook::velox::memory::MemoryArbitrator::Stats>
     : formatter<std::string> {
   auto format(
       facebook::velox::memory::MemoryArbitrator::Stats s,

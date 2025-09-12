@@ -35,8 +35,8 @@ class EntropyAggregationTest : public AggregationTestBase {
       const std::vector<RowVectorPtr>& data,
       const std::string& veloxAggKey,
       const std::string& duckDBAggKey) {
-    auto partialAgg = fmt::format("entropy({0})", veloxAggKey);
-    std::string sql = fmt::format(
+    auto partialAgg = std::format("entropy({0})", veloxAggKey);
+    std::string sql = std::format(
         "SELECT c0, entropy({0}) FROM tmp GROUP BY 1", duckDBAggKey);
     testAggregations(data, {"c0"}, {partialAgg}, sql);
   }
@@ -45,8 +45,8 @@ class EntropyAggregationTest : public AggregationTestBase {
       const std::vector<RowVectorPtr>& data,
       const std::string& veloxAggKey,
       const std::string& duckDBAggKey) {
-    auto partialAgg = fmt::format("entropy({0})", veloxAggKey);
-    std::string sql = fmt::format("SELECT entropy({0}) FROM tmp", duckDBAggKey);
+    auto partialAgg = std::format("entropy({0})", veloxAggKey);
+    std::string sql = std::format("SELECT entropy({0}) FROM tmp", duckDBAggKey);
 
     testAggregations(data, {}, {partialAgg}, sql);
   }

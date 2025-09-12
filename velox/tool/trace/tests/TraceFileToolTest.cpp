@@ -111,7 +111,7 @@ class TraceFileToolTest : public HiveConnectorTestBase {
       memory::MemoryPool* writerPool) {
     std::vector<Split> splits;
     for (auto i = 0; i < 4; ++i) {
-      const std::string filePath = fmt::format("{}/{}", path, i);
+      const std::string filePath = std::format("{}/{}", path, i);
       writeToFile(filePath, inputs);
       splits.emplace_back(makeHiveConnectorSplit(filePath));
     }
@@ -128,9 +128,9 @@ class TraceFileToolTest : public HiveConnectorTestBase {
       const std::vector<RowVectorPtr>& buildInput) {
     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
     const std::vector<Split> probeSplits =
-        makeSplits(probeInput, fmt::format("{}/probe", tableDir), pool());
+        makeSplits(probeInput, std::format("{}/probe", tableDir), pool());
     const std::vector<Split> buildSplits =
-        makeSplits(buildInput, fmt::format("{}/build", tableDir), pool());
+        makeSplits(buildInput, std::format("{}/build", tableDir), pool());
     core::PlanNodeId probeScanId;
     core::PlanNodeId buildScanId;
     const auto outputColumns = concat(
@@ -175,7 +175,7 @@ class TraceFileToolTest : public HiveConnectorTestBase {
   const std::shared_ptr<TempDirectoryPath> testDir_ =
       TempDirectoryPath::create();
   const std::string tableDir_ =
-      fmt::format("{}/{}", testDir_->getPath(), "table");
+      std::format("{}/{}", testDir_->getPath(), "table");
 };
 
 TEST_F(TraceFileToolTest, basic) {
@@ -187,7 +187,7 @@ TEST_F(TraceFileToolTest, basic) {
       probeInput_,
       buildInput_);
   const auto traceRoot =
-      fmt::format("{}/{}/traceRoot", testDir_->getPath(), "basic");
+      std::format("{}/{}/traceRoot", testDir_->getPath(), "basic");
   std::shared_ptr<Task> task;
   auto tracePlanWithSplits = createPlan(
       tableDir_,
@@ -216,7 +216,7 @@ TEST_F(TraceFileToolTest, basic) {
     std::string traceTaskId;
 
     std::string debugString() const {
-      return fmt::format("queryId={}, taskId={}", traceQueryId, traceTaskId);
+      return std::format("queryId={}, taskId={}", traceQueryId, traceTaskId);
     }
   } testSettings[]{
       {"", ""},

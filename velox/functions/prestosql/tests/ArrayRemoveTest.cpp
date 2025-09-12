@@ -183,7 +183,7 @@ TEST_F(ArrayRemoveTest, arrayWithComplexTypes) {
     std::string nestedArray =
         "array_constructor(array_constructor(null::bigint, 1))";
     auto result = evaluate(
-        fmt::format(
+        std::format(
             "array_remove({}, array_constructor(null::bigint, 2))",
             nestedArray),
         makeRowVector({makeFlatVector<int32_t>(1)}));

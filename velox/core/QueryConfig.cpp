@@ -41,7 +41,7 @@ void QueryConfig::validateConfig() {
         tz::getTimeZoneID(
             config_->get<std::string>(QueryConfig::kSessionTimezone).value(),
             false) != -1,
-        fmt::format(
+        std::format(
             "session '{}' set with invalid value '{}'",
             QueryConfig::kSessionTimezone,
             config_->get<std::string>(QueryConfig::kSessionTimezone).value()));

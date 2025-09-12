@@ -330,7 +330,7 @@ struct IPPrefixCollapseFunction {
 
       VELOX_USER_CHECK(
           prefixLength >= 0 && prefixLength <= ipVersionMaxBits,
-          fmt::format(
+          std::format(
               "Recieved invalid ipprefix:{} prefix length: {}",
               firstIpAddress,
               prefixLength));
@@ -423,7 +423,7 @@ struct IPPrefixSubnetsFunction {
 
     if (newPrefixLength < 0 || (inputIsIpV4 && newPrefixLength > 32) ||
         (!inputIsIpV4 && newPrefixLength > 128)) {
-      VELOX_USER_FAIL(fmt::format(
+      VELOX_USER_FAIL(std::format(
           "Invalid prefix length for IPv{}: {}",
           inputIsIpV4 ? 4 : 6,
           newPrefixLength));

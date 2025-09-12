@@ -101,7 +101,7 @@ void DirectInputStream::seekToPosition(PositionProvider& seekPosition) {
 }
 
 std::string DirectInputStream::getName() const {
-  return fmt::format(
+  return std::format(
       "DirectInputStream {} of {}", offsetInRegion_, region_.length);
 }
 

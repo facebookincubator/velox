@@ -111,7 +111,7 @@ TEST_F(GetStructFieldTest, invalidOrdinal) {
   // Get string field.
   VELOX_ASSERT_THROW(
       testGetStructField(data, 4, colString),
-      fmt::format(
+      std::format(
           "(4 vs. 3) Invalid ordinal. Should be smaller than the children size of input row vector."));
 }
 

@@ -77,7 +77,7 @@ class SortOrder {
   bool operator==(const SortOrder& other) const = default;
 
   std::string toString() const {
-    return fmt::format(
+    return std::format(
         "{} NULLS {}",
         (ascending_ ? "ASC" : "DESC"),
         (nullsFirst_ ? "FIRST" : "LAST"));
@@ -5421,7 +5421,7 @@ class PlanNodeVisitor {
 } // namespace facebook::velox::core
 
 template <>
-struct fmt::formatter<facebook::velox::core::PartitionedOutputNode::Kind>
+struct std::formatter<facebook::velox::core::PartitionedOutputNode::Kind>
     : formatter<std::string_view> {
   auto format(
       facebook::velox::core::PartitionedOutputNode::Kind s,
@@ -5432,14 +5432,14 @@ struct fmt::formatter<facebook::velox::core::PartitionedOutputNode::Kind>
 };
 
 template <>
-struct fmt::formatter<facebook::velox::core::JoinType> : formatter<int> {
+struct std::formatter<facebook::velox::core::JoinType> : formatter<int> {
   auto format(facebook::velox::core::JoinType s, format_context& ctx) const {
     return formatter<int>::format(static_cast<int>(s), ctx);
   }
 };
 
 template <>
-struct fmt::formatter<facebook::velox::core::TopNRowNumberNode::RankFunction>
+struct std::formatter<facebook::velox::core::TopNRowNumberNode::RankFunction>
     : formatter<std::string> {
   auto format(
       facebook::velox::core::TopNRowNumberNode::RankFunction f,
@@ -5450,7 +5450,7 @@ struct fmt::formatter<facebook::velox::core::TopNRowNumberNode::RankFunction>
 };
 
 template <>
-struct fmt::formatter<facebook::velox::core::AggregationNode::Step>
+struct std::formatter<facebook::velox::core::AggregationNode::Step>
     : formatter<std::string_view> {
   auto format(
       facebook::velox::core::AggregationNode::Step s,

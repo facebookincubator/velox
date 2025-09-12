@@ -163,7 +163,7 @@ class ReferenceQueryRunner {
 
   /// Returns the name of the values node table in the form t_<id>.
   static std::string getTableName(const core::ValuesNode& valuesNode) {
-    return fmt::format("t_{}", valuesNode.id());
+    return std::format("t_{}", valuesNode.id());
   }
 
  protected:

@@ -53,7 +53,7 @@ struct TestParam {
         hasNullKeys(_hasNullKeys) {}
 
   std::string toString() const {
-    return fmt::format(
+    return std::format(
         "asyncLookup={}, numPrefetches={}, serialExecution={}, hasNullKeys={}",
         asyncLookup,
         numPrefetches,
@@ -419,7 +419,7 @@ TEST_P(IndexLookupJoinTest, equalJoin) {
     std::string duckDbVerifySql;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "keyCardinalities: {}, numProbeBatches: {}, numRowsPerProbeBatch: {}, matchPct: {}, "
           "scanOutputColumns: {}, outputColumns: {}, joinType: {},"
           " duckDbVerifySql: {}",
@@ -840,7 +840,7 @@ TEST_P(IndexLookupJoinTest, betweenJoinCondition) {
     std::string duckDbVerifySql;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "keyCardinalities: {}, numProbeBatches: {}, numProbeRowsPerBatch: {}, betweenCondition: {}, betweenMatchPct: {}, lookupOutputColumns: {}, outputColumns: {}, joinType: {}, duckDbVerifySql: {}",
           folly::join(",", keyCardinalities),
           numProbeBatches,
@@ -1313,7 +1313,7 @@ TEST_P(IndexLookupJoinTest, inJoinCondition) {
     std::string duckDbVerifySql;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "keyCardinalities: {}: numProbeBatches: {}, numProbeRowsPerBatch: {}, inCondition: {}, inMatchPct: {}, lookupOutputColumns: {}, outputColumns: {}, joinType: {}, duckDbVerifySql: {}",
           folly::join(",", keyCardinalities),
           numProbeBatches,
@@ -1652,7 +1652,7 @@ TEST_P(IndexLookupJoinTest, prefixKeysEqualJoin) {
     std::string duckDbVerifySql;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "keyCardinalities: {}, numProbeBatches: {}, numRowsPerProbeBatch: {}, matchPct: {}, numKeysToUse: {}, "
           "scanOutputColumns: {}, outputColumns: {}, joinType: {},"
           " duckDbVerifySql: {}",
@@ -1717,7 +1717,7 @@ TEST_P(IndexLookupJoinTest, prefixKeysEqualJoin) {
     // Generate probe vectors with only the prefix of keys
     std::vector<std::string> probeKeys;
     for (int i = 0; i < testData.numKeysToUse; ++i) {
-      probeKeys.push_back(fmt::format("t{}", i));
+      probeKeys.push_back(std::format("t{}", i));
     }
 
     auto probeVectors = generateProbeInput(
@@ -1755,8 +1755,8 @@ TEST_P(IndexLookupJoinTest, prefixKeysEqualJoin) {
     std::vector<std::string> leftKeys;
     std::vector<std::string> rightKeys;
     for (int i = 0; i < testData.numKeysToUse; ++i) {
-      leftKeys.push_back(fmt::format("t{}", i));
-      rightKeys.push_back(fmt::format("u{}", i));
+      leftKeys.push_back(std::format("t{}", i));
+      rightKeys.push_back(std::format("u{}", i));
     }
 
     auto plan = makeLookupPlan(
@@ -1807,7 +1807,7 @@ TEST_P(IndexLookupJoinTest, prefixKeysbetweenJoinCondition) {
     std::string duckDbVerifySql;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "keyCardinalities: {}, numProbeBatches: {}, numProbeRowsPerBatch: {}, betweenCondition: {}, betweenMatchPct: {}, "
           "lookupOutputColumns: {}, outputColumns: {}, joinType: {}, duckDbVerifySql: {}",
           folly::join(",", keyCardinalities),
@@ -1945,7 +1945,7 @@ TEST_P(IndexLookupJoinTest, prefixInJoinCondition) {
     std::string duckDbVerifySql;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "keyCardinalities: {}: numProbeBatches: {}, numProbeRowsPerBatch: {}, inCondition: {}, inMatchPct: {}, lookupOutputColumns: {}, outputColumns: {}, joinType: {}, duckDbVerifySql: {}",
           folly::join(",", keyCardinalities),
           numProbeBatches,
@@ -2220,7 +2220,7 @@ TEST_P(IndexLookupJoinTest, outputBatchSizeWithInnerJoin) {
     int numExpectedOutputBatch;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "numProbeBatches: {}, numRowsPerProbeBatch: {}, maxBatchRows: {}, splitOutput: {}, numExpectedOutputBatch: {}",
           numProbeBatches,
           numRowsPerProbeBatch,
@@ -2329,7 +2329,7 @@ TEST_P(IndexLookupJoinTest, outputBatchSizeWithLeftJoin) {
     int numExpectedOutputBatch;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "numProbeBatches: {}, numRowsPerProbeBatch: {}, maxBatchRows: {}, splitOutput: {}, numExpectedOutputBatch: {}",
           numProbeBatches,
           numRowsPerProbeBatch,
@@ -2573,7 +2573,7 @@ TEST_P(IndexLookupJoinTest, barrier) {
     bool barrierExecution;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "numPrefetches {}, barrierExecution {}",
           numPrefetches,
           barrierExecution);
@@ -2801,7 +2801,7 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
     IndexLookupJoinTest,
     testing::ValuesIn(IndexLookupJoinTest::getTestParams()),
     [](const testing::TestParamInfo<TestParam>& info) {
-      return fmt::format(
+      return std::format(
           "{}_{}prefetches_{}_{}",
           info.param.asyncLookup ? "async" : "sync",
           info.param.numPrefetches,

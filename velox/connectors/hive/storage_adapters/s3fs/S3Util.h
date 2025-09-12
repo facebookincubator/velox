@@ -162,7 +162,7 @@ inline std::string getRequestID(
   {                                                                                                                             \
     if (!outcome.IsSuccess()) {                                                                                                 \
       auto error = outcome.GetError();                                                                                          \
-      auto errMsg = fmt::format(                                                                                                \
+      auto errMsg = std::format(                                                                                                \
           "{} due to: '{}'. Path:'{}', SDK Error Type:{}, HTTP Status Code:{}, S3 Service:'{}', Message:'{}', RequestID:'{}'.", \
           errorMsgPrefix,                                                                                                       \
           getErrorStringFromS3Error(error),                                                                                     \
@@ -173,7 +173,7 @@ inline std::string getRequestID(
           error.GetMessage(),                                                                                                   \
           getRequestID(error.GetResponseHeaders()));                                                                            \
       if (IsRetryableHttpResponseCode(error.GetResponseCode())) {                                                               \
-        auto retryHint = fmt::format(                                                                                           \
+        auto retryHint = std::format(                                                                                           \
             " Request failed after retrying {} times. Try increasing the value of 'hive.s3.max-attempts'.",                     \
             outcome.GetRetryCount());                                                                                           \
         errMsg.append(retryHint);                                                                                               \
@@ -236,7 +236,7 @@ class StringViewStream : Aws::Utils::Stream::PreallocatedStreamBuf,
 } // namespace facebook::velox::filesystems
 
 template <>
-struct fmt::formatter<Aws::Http::HttpResponseCode> : formatter<int> {
+struct std::formatter<Aws::Http::HttpResponseCode> : formatter<int> {
   auto format(Aws::Http::HttpResponseCode s, format_context& ctx) {
     return formatter<int>::format(static_cast<int>(s), ctx);
   }

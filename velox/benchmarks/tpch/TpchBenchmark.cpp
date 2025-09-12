@@ -90,12 +90,12 @@ class TpchBenchmark : public QueryBenchmarkBase {
         }
       }
       runStats.rawInputBytes = rawInputBytes;
-      out << fmt::format(
+      out << std::format(
                  "Execution time: {}",
                  succinctMillis(
                      stats.executionEndTimeMs - stats.executionStartTimeMs))
           << std::endl;
-      out << fmt::format(
+      out << std::format(
                  "Splits total: {}, finished: {}",
                  stats.numTotalSplits,
                  stats.numFinishedSplits)

@@ -1121,7 +1121,7 @@ class FormatValue<facebook::velox::VectorEncoding::Simple> {
 } // namespace folly
 
 template <>
-struct fmt::formatter<facebook::velox::VectorEncoding::Simple> {
+struct std::formatter<facebook::velox::VectorEncoding::Simple> {
   constexpr auto parse(format_parse_context& ctx) {
     return ctx.begin();
   }
@@ -1130,7 +1130,7 @@ struct fmt::formatter<facebook::velox::VectorEncoding::Simple> {
   auto format(
       const facebook::velox::VectorEncoding::Simple& x,
       FormatContext& ctx) const {
-    return fmt::format_to(
+    return std::format_to(
         ctx.out(), "{}", facebook::velox::VectorEncoding::mapSimpleToName(x));
   }
 };

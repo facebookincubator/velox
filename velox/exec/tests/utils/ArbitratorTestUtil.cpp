@@ -317,7 +317,7 @@ core::PlanNodePtr writePlan(
       .values(vectors)
       .tableWrite(outputDirPath)
       .singleAggregation(
-          {}, {fmt::format("sum({})", TableWriteTraits::rowCountColumnName())})
+          {}, {std::format("sum({})", TableWriteTraits::rowCountColumnName())})
       .capturePlanNodeId(writeNodeId)
       .planNode();
 }

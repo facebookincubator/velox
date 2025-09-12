@@ -44,7 +44,7 @@ class TDigestType final : public VarbinaryType {
   }
 
   std::string toString() const override {
-    return fmt::format("TDIGEST({})", parameters_[0].type->toString());
+    return std::format("TDIGEST({})", parameters_[0].type->toString());
   }
 
   folly::dynamic serialize() const override {

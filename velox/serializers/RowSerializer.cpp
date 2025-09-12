@@ -59,7 +59,7 @@ void RowGroupHeader::write(char* out) {
 }
 
 std::string RowGroupHeader::debugString() const {
-  return fmt::format(
+  return std::format(
       "uncompressedSize: {}, compressedSize: {}, compressed: {}",
       succinctBytes(uncompressedSize),
       succinctBytes(compressedSize),

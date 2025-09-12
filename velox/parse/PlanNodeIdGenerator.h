@@ -27,7 +27,7 @@ class PlanNodeIdGenerator {
   explicit PlanNodeIdGenerator(int startId = 0) : nextId_{startId} {}
 
   std::string next() {
-    return fmt::format("{}", nextId_++);
+    return std::format("{}", nextId_++);
   }
 
   void reset(int startId = 0) {

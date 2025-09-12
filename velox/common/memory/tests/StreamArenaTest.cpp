@@ -57,7 +57,7 @@ TEST_F(StreamArenaTest, newRange) {
     uint64_t expectedContiguousAllocationSize;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "requestRangeSizes[{}]\nexpectedRangeSizes[{}]\nexpectedNonContiguousAllocationSize[{}]\nexpectedContiguousAllocationSize[{}]\n",
           folly::join(",", requestRangeSizes),
           folly::join(",", expectedRangeSizes),

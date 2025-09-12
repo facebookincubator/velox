@@ -152,10 +152,10 @@ void CacheInputStream::seekToPosition(PositionProvider& seekPosition) {
 
 std::string CacheInputStream::getName() const {
   std::string result =
-      fmt::format("CacheInputStream {} of {}", position_, region_.length);
+      std::format("CacheInputStream {} of {}", position_, region_.length);
   const auto ssdFile = ssdFileName();
   if (!ssdFile.empty()) {
-    result += fmt::format(" ssdFile={}", ssdFile);
+    result += std::format(" ssdFile={}", ssdFile);
   }
   return result;
 }
@@ -283,7 +283,7 @@ bool CacheInputStream::loadFromSsd(
   }
 
   if (ssdPin.run().size() < entry.size()) {
-    LOG(INFO) << fmt::format(
+    LOG(INFO) << std::format(
         "IOERR: Ssd entry for {} shorter than requested {}",
         entry.toString(),
         ssdPin.run().size());
@@ -303,7 +303,7 @@ bool CacheInputStream::loadFromSsd(
   } catch (const std::exception& e) {
     LOG(ERROR) << "IOERR: Failed SSD loadSync " << entry.toString() << ' '
                << e.what() << process::TraceContext::statusLine()
-               << fmt::format(
+               << std::format(
                       "stream region {} {}b, start of load {} file {}",
                       region_.offset,
                       region_.length,

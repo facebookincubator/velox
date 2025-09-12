@@ -100,7 +100,7 @@ class NthValueTest : public WindowTestBase {
 
     bool createTable = true;
     for (auto i = 4; i < vectors->childrenSize(); i++) {
-      auto col = fmt::format("c{}", i);
+      auto col = std::format("c{}", i);
       // Add the type specific column in sort order in overClauses to impose a
       // deterministic output row order in the tests.
       auto newOverClause = overClause + ", " + col;
@@ -110,33 +110,33 @@ class NthValueTest : public WindowTestBase {
       // returning null in those cases.
       WindowTestBase::testWindowFunction(
           {vectors},
-          fmt::format("nth_value({}, 1)", col),
+          std::format("nth_value({}, 1)", col),
           {newOverClause},
           kFrameClauses,
           createTable);
       createTable = false;
       WindowTestBase::testWindowFunction(
           {vectors},
-          fmt::format("nth_value({}, 7)", col),
+          std::format("nth_value({}, 7)", col),
           {newOverClause},
           kFrameClauses,
           createTable);
       WindowTestBase::testWindowFunction(
           {vectors},
-          fmt::format("nth_value({}, c2)", col),
+          std::format("nth_value({}, c2)", col),
           {newOverClause},
           kFrameClauses,
           createTable);
 
       WindowTestBase::testWindowFunction(
           {vectors},
-          fmt::format("first_value({})", col),
+          std::format("first_value({})", col),
           {newOverClause},
           kFrameClauses,
           createTable);
       WindowTestBase::testWindowFunction(
           {vectors},
-          fmt::format("last_value({})", col),
+          std::format("last_value({})", col),
           {newOverClause},
           kFrameClauses,
           createTable);
@@ -242,14 +242,14 @@ TEST_F(NthValueTest, invalidFrames) {
       {vectors},
       "nth_value(c0, 5)",
       overClause,
-      fmt::format("rows between {} preceding and current row", offset),
-      fmt::format("Window frame {} offset must not be negative", offset));
+      std::format("rows between {} preceding and current row", offset),
+      std::format("Window frame {} offset must not be negative", offset));
   assertWindowFunctionError(
       {vectors},
       "nth_value(c0, 5)",
       overClause,
       "rows between c2 preceding and current row",
-      fmt::format("Window frame {} offset must not be negative", offset));
+      std::format("Window frame {} offset must not be negative", offset));
 }
 
 TEST_F(NthValueTest, int32FrameOffset) {

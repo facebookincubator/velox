@@ -24,7 +24,7 @@ namespace {
 // Constructs the faulty file path based on the delegated read file 'path'. It
 // pre-appends the faulty file system scheme.
 inline std::string faultyPath(const std::string& path) {
-  return fmt::format("{}{}", FaultyFileSystem::scheme(), path);
+  return std::format("{}{}", FaultyFileSystem::scheme(), path);
 }
 
 std::function<bool(std::string_view)> schemeMatcher() {

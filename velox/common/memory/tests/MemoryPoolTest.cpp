@@ -53,7 +53,7 @@ struct TestParam {
       : useMmap(_useMmap), useCache(_useCache), threadSafe(_threadSafe) {}
 
   std::string toString() const {
-    return fmt::format(
+    return std::format(
         "useMmap{} useCache{} threadSafe{}", useMmap, useCache, threadSafe);
   }
 };
@@ -669,7 +669,7 @@ TEST_P(MemoryPoolTest, allocateZeroFilled) {
   for (const auto& numEntries : numEntriesVector) {
     for (const auto& sizeEach : sizeEachVector) {
       SCOPED_TRACE(
-          fmt::format("numEntries{}, sizeEach{}", numEntries, sizeEach));
+          std::format("numEntries{}, sizeEach{}", numEntries, sizeEach));
       void* ptr = pool->allocateZeroFilled(numEntries, sizeEach);
       uint8_t* bytes = reinterpret_cast<uint8_t*>(ptr);
       for (int32_t i = 0; i < numEntries * sizeEach; ++i) {
@@ -692,7 +692,7 @@ TEST_P(MemoryPoolTest, alignmentCheck) {
       MemoryAllocator::kMinAlignment * 2,
       MemoryAllocator::kMaxAlignment};
   for (const auto& alignment : alignments) {
-    SCOPED_TRACE(fmt::format("alignment:{}", alignment));
+    SCOPED_TRACE(std::format("alignment:{}", alignment));
     MemoryManager::Options options;
     options.alignment = alignment;
     options.allocatorCapacity = kDefaultCapacity;
@@ -757,7 +757,7 @@ TEST_P(MemoryPoolTest, memoryCapExceptions) {
         if (useMmap_) {
           if (useCache_) {
             ASSERT_EQ(
-                fmt::format(
+                std::format(
                     "allocate failed with 128.00MB from Memory Pool["
                     "static_quota LEAF root[MemoryCapExceptions] "
                     "parent[MemoryCapExceptions] MMAP track-usage {}]<max "
@@ -775,7 +775,7 @@ TEST_P(MemoryPoolTest, memoryCapExceptions) {
                 ex.message());
           } else {
             ASSERT_EQ(
-                fmt::format(
+                std::format(
                     "allocate failed with 128.00MB from Memory Pool["
                     "static_quota LEAF root[MemoryCapExceptions] "
                     "parent[MemoryCapExceptions] MMAP track-usage {}]<max "
@@ -791,7 +791,7 @@ TEST_P(MemoryPoolTest, memoryCapExceptions) {
         } else {
           if (useCache_) {
             ASSERT_EQ(
-                fmt::format(
+                std::format(
                     "allocate failed with 128.00MB from Memory Pool"
                     "[static_quota LEAF root[MemoryCapExceptions] "
                     "parent[MemoryCapExceptions] MALLOC track-usage {}]"
@@ -809,7 +809,7 @@ TEST_P(MemoryPoolTest, memoryCapExceptions) {
                 ex.message());
           } else {
             ASSERT_EQ(
-                fmt::format(
+                std::format(
                     "allocate failed with 128.00MB from Memory Pool"
                     "[static_quota LEAF root[MemoryCapExceptions] "
                     "parent[MemoryCapExceptions] MALLOC track-usage {}]"
@@ -1068,7 +1068,7 @@ TEST_P(MemoryPoolTest, contiguousAllocate) {
   struct {
     MachinePageCount numAllocPages;
     std::string debugString() const {
-      return fmt::format("numAllocPages:{}", numAllocPages);
+      return std::format("numAllocPages:{}", numAllocPages);
     }
   } testSettings[] = {
       {largestSizeClass},
@@ -1178,12 +1178,12 @@ TEST_P(MemoryPoolTest, nonContiguousAllocate) {
   auto pool = manager->addLeafPool("nonContiguousAllocate");
   const auto& sizeClasses = manager->allocator()->sizeClasses();
   for (const auto& sizeClass : sizeClasses) {
-    SCOPED_TRACE(fmt::format("sizeClass:{}", sizeClass));
+    SCOPED_TRACE(std::format("sizeClass:{}", sizeClass));
     struct {
       MachinePageCount numAllocPages;
       MachinePageCount minSizeClass;
       std::string debugString() const {
-        return fmt::format(
+        return std::format(
             "numAllocPages:{}, minSizeClass:{}", numAllocPages, minSizeClass);
       }
     } testSettings[] = {
@@ -1359,7 +1359,7 @@ TEST_P(MemoryPoolTest, nonContiguousAllocateWithOldAllocation) {
     MachinePageCount numOldPages;
     MachinePageCount numNewPages;
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "numOldPages:{}, numNewPages:{}", numOldPages, numNewPages);
     }
   } testSettings[] = {
@@ -1396,7 +1396,7 @@ TEST_P(MemoryPoolTest, persistentNonContiguousAllocateFailure) {
     MachinePageCount numNewPages;
     MemoryAllocator::InjectedFailure injectedFailure;
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "numOldPages:{}, numNewPages:{}, injectedFailure:{}",
           static_cast<uint64_t>(numOldPages),
           static_cast<uint64_t>(numNewPages),
@@ -1462,7 +1462,7 @@ TEST_P(MemoryPoolTest, persistentNonContiguousAllocateFailure) {
                        MemoryAllocator::InjectedFailure::kMadvise},
                       {200, 100, MemoryAllocator::InjectedFailure::kMadvise}};
   for (const auto& testData : testSettings) {
-    SCOPED_TRACE(fmt::format(
+    SCOPED_TRACE(std::format(
         "{}, useMmap:{}, useCache:{}",
         testData.debugString(),
         useMmap_,
@@ -1500,7 +1500,7 @@ TEST_P(MemoryPoolTest, transientNonContiguousAllocateFailure) {
     MachinePageCount expectedAllocatedPages;
     MemoryAllocator::InjectedFailure injectedFailure;
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "numOldPages:{}, numNewPages:{}, expectedAllocatedPages:{}, injectedFailure:{}",
           numOldPages,
           numNewPages,
@@ -1584,7 +1584,7 @@ TEST_P(MemoryPoolTest, transientNonContiguousAllocateFailure) {
        MemoryAllocator::InjectedFailure::kMadvise},
       {200, 100, 100, MemoryAllocator::InjectedFailure::kMadvise}};
   for (const auto& testData : testSettings) {
-    SCOPED_TRACE(fmt::format(
+    SCOPED_TRACE(std::format(
         "{}, useMmap:{}, useCache:{}",
         testData.debugString(),
         useMmap_,
@@ -1627,7 +1627,7 @@ TEST_P(MemoryPoolTest, contiguousAllocateWithOldAllocation) {
     MachinePageCount numOldPages;
     MachinePageCount numNewPages;
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "numOldPages:{}, numNewPages:{}", numOldPages, numNewPages);
     }
   } testSettings[] = {
@@ -1666,7 +1666,7 @@ TEST_P(MemoryPoolTest, persistentContiguousAllocateFailure) {
     MachinePageCount numNewPages;
     MemoryAllocator::InjectedFailure injectedFailure;
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "numOldPages:{}, numNewPages:{}, injectedFailure:{}",
           numOldPages,
           numNewPages,
@@ -1784,7 +1784,7 @@ TEST_P(MemoryPoolTest, transientContiguousAllocateFailure) {
     MachinePageCount numNewPages;
     MemoryAllocator::InjectedFailure injectedFailure;
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "numOldPages:{}, numNewPages:{}, injectedFailure:{}",
           numOldPages,
           numNewPages,
@@ -1866,7 +1866,7 @@ TEST_P(MemoryPoolTest, transientContiguousAllocateFailure) {
                        Allocation::PageRun::kMaxPagesInRun / 2,
                        MemoryAllocator::InjectedFailure::kMadvise}};
   for (const auto& testData : testSettings) {
-    SCOPED_TRACE(fmt::format(
+    SCOPED_TRACE(std::format(
         "{}, useCache:{} , useMmap:{}",
         testData.debugString(),
         useCache_,
@@ -1937,7 +1937,7 @@ TEST_P(MemoryPoolTest, persistentContiguousGrowAllocateFailure) {
     MemoryAllocator::InjectedFailure injectedFailure;
     std::string expectedErrorMessage;
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "numInitialPages:{}, numGrowPages:{}, injectedFailure:{}, expectedErrorMessage:{}",
           numInitialPages,
           numGrowPages,
@@ -2008,7 +2008,7 @@ TEST_P(MemoryPoolTest, transientContiguousGrowAllocateFailure) {
     MachinePageCount numGrowPages;
     MemoryAllocator::InjectedFailure injectedFailure;
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "numInitialPages:{}, numGrowPages:{}, injectedFailure:{}",
           numInitialPages,
           numGrowPages,
@@ -2024,7 +2024,7 @@ TEST_P(MemoryPoolTest, transientContiguousGrowAllocateFailure) {
                       {10, 100, MemoryAllocator::InjectedFailure::kMadvise},
                       {100, 10, MemoryAllocator::InjectedFailure::kMadvise}};
   for (const auto& testData : testSettings) {
-    SCOPED_TRACE(fmt::format(
+    SCOPED_TRACE(std::format(
         "{}, useCache:{} , useMmap:{}",
         testData.debugString(),
         useCache_,
@@ -2175,7 +2175,7 @@ TEST_P(MemoryPoolTest, mmapAllocatorCapAllocationError) {
     bool expectedFailure;
     bool persistentErrorInjection;
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "allocateBytes {}, expectFailure {}, persistentErrorInjection {}",
           allocateBytes,
           expectedFailure,
@@ -2228,7 +2228,7 @@ TEST_P(MemoryPoolTest, mmapAllocatorCapAllocationZeroFilledError) {
     bool expectedFailure;
     bool persistentErrorInjection;
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "numEntries {}, sizeEach {}, expectFailure {}, persistentErrorInjection {}",
           numEntries,
           sizeEach,
@@ -2283,7 +2283,7 @@ TEST_P(MemoryPoolTest, mmapAllocatorCapReallocateError) {
     bool expectedFailure;
     bool persistentErrorInjection;
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "allocateBytes {}, expectFailure {}, persistentErrorInjection {}",
           allocateBytes,
           expectedFailure,
@@ -2482,7 +2482,7 @@ TEST_P(MemoryPoolTest, concurrentUpdateToDifferentPools) {
   std::vector<std::shared_ptr<MemoryPool>> childPools;
   for (int32_t i = 0; i < kNumThreads; ++i) {
     childPools.push_back(root->addLeafChild(
-        fmt::format("{}", i), i % 2 ? isLeafThreadSafe_ : !isLeafThreadSafe_));
+        std::format("{}", i), i % 2 ? isLeafThreadSafe_ : !isLeafThreadSafe_));
   }
 
   folly::Random::DefaultGenerator rng;
@@ -2532,7 +2532,7 @@ TEST_P(MemoryPoolTest, concurrentUpdatesToTheSamePool) {
   const int32_t kNumChildPools = 2;
   std::vector<std::shared_ptr<MemoryPool>> childPools;
   for (int32_t i = 0; i < kNumChildPools; ++i) {
-    childPools.push_back(root->addLeafChild(fmt::format("{}", i)));
+    childPools.push_back(root->addLeafChild(std::format("{}", i)));
   }
 
   folly::Random::DefaultGenerator rng;
@@ -2622,7 +2622,7 @@ TEST_P(MemoryPoolTest, concurrentPoolStructureAccess) {
           std::lock_guard<std::mutex> l(lock);
           if (pools.empty() || folly::Random().oneIn(5)) {
             auto pool = root->addLeafChild(
-                fmt::format("{}{}", kPoolNamePrefix, poolId++));
+                std::format("{}{}", kPoolNamePrefix, poolId++));
             pools.push_back(pool);
             continue;
           }
@@ -2638,7 +2638,7 @@ TEST_P(MemoryPoolTest, concurrentPoolStructureAccess) {
         if (pool->kind() == MemoryPool::Kind::kAggregate &&
             !folly::Random().oneIn(3)) {
           const std::string name =
-              fmt::format("{}{}", kPoolNamePrefix, poolId++);
+              std::format("{}{}", kPoolNamePrefix, poolId++);
           auto childPool = folly::Random().oneIn(4)
               ? pool->addLeafChild(
                     name,
@@ -2891,7 +2891,7 @@ TEST_P(MemoryPoolTest, shrinkAndGrowAPIs) {
   std::vector<uint64_t> capacities = {kMaxMemory, 128 * MB};
   const int allocationSize = 8 * MB;
   for (const auto& capacity : capacities) {
-    SCOPED_TRACE(fmt::format("capacity {}", succinctBytes(capacity)));
+    SCOPED_TRACE(std::format("capacity {}", succinctBytes(capacity)));
     auto rootPool = manager.addRootPool("shrinkAPIs.Root", capacity);
     auto aggregationPool = rootPool->addAggregateChild("shrinkAPIs.Aggregate");
     auto leafPool = aggregationPool->addLeafChild("shrinkAPIs");
@@ -3077,7 +3077,7 @@ TEST_P(MemoryPoolTest, reclaimAPIsWithDefaultReclaimer) {
     bool hasReclaimer;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "numChildren {} numGrandchildren {} doAllocation{} hasReclaimer {}",
           numChildren,
           numGrandchildren,
@@ -3166,13 +3166,13 @@ TEST_P(MemoryPoolTest, usageTrackerOptionTest) {
   ASSERT_TRUE(root->threadSafe());
   ASSERT_EQ(
       child->toString(),
-      fmt::format(
+      std::format(
           "Memory Pool[usageTrackerOptionTest LEAF root[usageTrackerOptionTest] parent[usageTrackerOptionTest] {} track-usage {}]<unlimited max capacity unlimited capacity used 0B available 0B reservation [used 0B, reserved 0B, min 0B] counters [allocs 0, frees 0, reserves 0, releases 0, collisions 0])>",
           useMmap_ ? "MMAP" : "MALLOC",
           isLeafThreadSafe_ ? "thread-safe" : "non-thread-safe"));
   ASSERT_EQ(
       root->toString(),
-      fmt::format(
+      std::format(
           "Memory Pool[usageTrackerOptionTest AGGREGATE root[usageTrackerOptionTest] parent[null] {} track-usage thread-safe]<unlimited max capacity unlimited capacity used 0B available 0B reservation [used 0B, reserved 0B, min 0B] counters [allocs 0, frees 0, reserves 0, releases 0, collisions 0])>",
           useMmap_ ? "MMAP" : "MALLOC"));
 }
@@ -3193,7 +3193,7 @@ TEST_P(MemoryPoolTest, statsAndToString) {
       "usedBytes:1.00KB reservedBytes:1.00MB peakBytes:1.00KB cumulativeBytes:1.00KB numAllocs:1 numFrees:0 numReserves:0 numReleases:0 numShrinks:0 numReclaims:0 numCollisions:0 numCapacityGrowths:0");
   ASSERT_EQ(
       leafChild1->toString(),
-      fmt::format(
+      std::format(
           "Memory Pool[leaf-child1 LEAF root[stats] parent[stats] {} track-usage {}]<max capacity 4.00GB capacity 4.00GB used 1.00KB available 1023.00KB reservation [used 1.00KB, reserved 1.00MB, min 0B] counters [allocs 1, frees 0, reserves 0, releases 0, collisions 0])>",
           useMmap_ ? "MMAP" : "MALLOC",
           isLeafThreadSafe_ ? "thread-safe" : "non-thread-safe"));
@@ -3202,7 +3202,7 @@ TEST_P(MemoryPoolTest, statsAndToString) {
       "usedBytes:0B reservedBytes:0B peakBytes:0B cumulativeBytes:0B numAllocs:0 numFrees:0 numReserves:0 numReleases:0 numShrinks:0 numReclaims:0 numCollisions:0 numCapacityGrowths:0");
   ASSERT_EQ(
       leafChild1->toString(),
-      fmt::format(
+      std::format(
           "Memory Pool[leaf-child1 LEAF root[stats] parent[stats] {} track-usage {}]<max capacity 4.00GB capacity 4.00GB used 1.00KB available 1023.00KB reservation [used 1.00KB, reserved 1.00MB, min 0B] counters [allocs 1, frees 0, reserves 0, releases 0, collisions 0])>",
           useMmap_ ? "MMAP" : "MALLOC",
           isLeafThreadSafe_ ? "thread-safe" : "non-thread-safe"));
@@ -3632,7 +3632,7 @@ TEST_P(MemoryPoolTest, quantizedSize) {
     uint64_t quantizedSize;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "inputSize {} quantizedSize {}",
           succinctBytes(inputSize),
           succinctBytes(quantizedSize));
@@ -3693,7 +3693,7 @@ TEST_P(MemoryPoolTest, abortAPI) {
   MemoryManager& manager = *getMemoryManager();
   std::vector<uint64_t> capacities = {kMaxMemory, 128 * MB};
   for (const auto& capacity : capacities) {
-    SCOPED_TRACE(fmt::format("capacity {}", succinctBytes(capacity)));
+    SCOPED_TRACE(std::format("capacity {}", succinctBytes(capacity)));
     {
       auto rootPool = manager.addRootPool("abortAPI", capacity);
       ASSERT_FALSE(rootPool->aborted());
@@ -3924,7 +3924,7 @@ TEST_P(MemoryPoolTest, abort) {
   // Allocation from an aborted memory pool.
   std::vector<bool> hasReclaimers = {false, true};
   for (bool hasReclaimer : hasReclaimers) {
-    SCOPED_TRACE(fmt::format("hasReclaimer {}", hasReclaimer));
+    SCOPED_TRACE(std::format("hasReclaimer {}", hasReclaimer));
     {
       auto rootPool = manager.addRootPool(
           "abort",
@@ -4042,7 +4042,7 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
     MemoryPoolTest,
     testing::ValuesIn(MemoryPoolTest::getTestParams()),
     [](const testing::TestParamInfo<TestParam>& info) {
-      return fmt::format(
+      return std::format(
           "{}_{}_{}",
           info.param.threadSafe ? "threadsafe" : "nontheadsafe",
           info.param.useCache ? "withCache" : "withoutCache",

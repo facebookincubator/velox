@@ -265,7 +265,7 @@ const char* exportArrowFormatStr(
   if (type->isDecimal()) {
     // Decimal types encode the precision, scale values.
     const auto& [precision, scale] = getDecimalPrecisionScale(*type);
-    formatBuffer = fmt::format("d:{},{}", precision, scale);
+    formatBuffer = std::format("d:{},{}", precision, scale);
     return formatBuffer.c_str();
   }
 

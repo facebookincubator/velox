@@ -231,7 +231,7 @@ class GpuDecoderTest : public ::testing::Test {
       op.scatter = scatter.get();
     }
     testCase(
-        fmt::format(
+        std::format(
             "copy plan {} numValues={} useScatter={}",
             sizeof(T) * 8,
             numValues,
@@ -380,11 +380,11 @@ class GpuDecoderTest : public ::testing::Test {
 
     std::string selection;
     if (opts.everyNth != 1 || opts.selectivity != 1) {
-      selection = fmt::format(
+      selection = std::format(
           "look at {} select {}", 1 / opts.everyNth, opts.selectivity);
     }
     testCase(
-        fmt::format(
+        std::format(
             "bitpack dictplan {} -> {} numValues={} useScatter={} {}",
             bitWidth,
             sizeof(T) * 8,

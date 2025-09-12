@@ -104,7 +104,7 @@ std::string VectorSerde::kindName(Kind kind) {
       return "UnsafeRow";
   }
   VELOX_UNREACHABLE(
-      fmt::format("Unknown vector serde kind: {}", static_cast<int32_t>(kind)));
+      std::format("Unknown vector serde kind: {}", static_cast<int32_t>(kind)));
 }
 
 VectorSerde::Kind VectorSerde::kindByName(const std::string& kindName) {

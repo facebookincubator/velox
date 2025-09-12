@@ -119,7 +119,7 @@ class FunctionResolutionTest : public functions::test::FunctionBaseTest {
  protected:
   void checkResults(const std::string& func, int32_t expected) {
     auto results = evaluateOnce<int32_t, int32_t, int32_t>(
-        fmt::format("{}(c0, c1)", func), 1, 2);
+        std::format("{}(c0, c1)", func), 1, 2);
     ASSERT_EQ(results.value(), expected);
   }
 };

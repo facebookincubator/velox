@@ -102,7 +102,7 @@ class ApproxPercentileTest : public AggregationTestBase {
       double percentile,
       double accuracy,
       std::optional<T> expectedResult) {
-    SCOPED_TRACE(fmt::format(
+    SCOPED_TRACE(std::format(
         "weighted={} percentile={} accuracy={}",
         weights != nullptr,
         percentile,
@@ -119,25 +119,25 @@ class ApproxPercentileTest : public AggregationTestBase {
         (std::is_same<T, float>::value && isnan(expectedResult.value())) ||
         (std::is_same<T, double>::value && isnan(expectedResult.value()))) {
       expected = "SELECT 'NaN'";
-      expectedArray = fmt::format("SELECT ARRAY[{0},{0},{0}]", "'NaN'");
+      expectedArray = std::format("SELECT ARRAY[{0},{0},{0}]", "'NaN'");
     } else if (
         (std::is_same<T, float>::value &&
          expectedResult.value() == std::numeric_limits<float>::infinity()) ||
         (std::is_same<T, double>::value &&
          expectedResult.value() == std::numeric_limits<double>::infinity())) {
       expected = "SELECT 'INFINITY'";
-      expectedArray = fmt::format("SELECT ARRAY[{0},{0},{0}]", "'INFINITY'");
+      expectedArray = std::format("SELECT ARRAY[{0},{0},{0}]", "'INFINITY'");
     } else if (
         (std::is_same<T, float>::value &&
          expectedResult.value() == -std::numeric_limits<float>::infinity()) ||
         (std::is_same<T, double>::value &&
          expectedResult.value() == -std::numeric_limits<double>::infinity())) {
       expected = "SELECT '-INFINITY'";
-      expectedArray = fmt::format("SELECT ARRAY[{0},{0},{0}]", "'-INFINITY'");
+      expectedArray = std::format("SELECT ARRAY[{0},{0},{0}]", "'-INFINITY'");
     } else {
-      expected = fmt::format("SELECT {}", expectedResult.value());
+      expected = std::format("SELECT {}", expectedResult.value());
       expectedArray =
-          fmt::format("SELECT ARRAY[{0},{0},{0}]", expectedResult.value());
+          std::format("SELECT ARRAY[{0},{0},{0}]", expectedResult.value());
     }
 
     enableTestStreaming();

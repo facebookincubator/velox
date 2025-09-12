@@ -117,7 +117,7 @@ class HashJoinReplayerTest : public HiveConnectorTestBase {
       memory::MemoryPool* writerPool) {
     std::vector<Split> splits;
     for (auto i = 0; i < 4; ++i) {
-      const std::string filePath = fmt::format("{}/{}", path, i);
+      const std::string filePath = std::format("{}/{}", path, i);
       writeToFile(filePath, inputs);
       splits.emplace_back(makeHiveConnectorSplit(filePath));
     }
@@ -134,9 +134,9 @@ class HashJoinReplayerTest : public HiveConnectorTestBase {
       const std::vector<RowVectorPtr>& buildInput) {
     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
     const std::vector<Split> probeSplits =
-        makeSplits(probeInput, fmt::format("{}/probe", tableDir), pool());
+        makeSplits(probeInput, std::format("{}/probe", tableDir), pool());
     const std::vector<Split> buildSplits =
-        makeSplits(buildInput, fmt::format("{}/build", tableDir), pool());
+        makeSplits(buildInput, std::format("{}/build", tableDir), pool());
     core::PlanNodeId probeScanId;
     core::PlanNodeId buildScanId;
     const auto outputColumns = concat(
@@ -181,7 +181,7 @@ class HashJoinReplayerTest : public HiveConnectorTestBase {
   const std::shared_ptr<TempDirectoryPath> testDir_ =
       TempDirectoryPath::create();
   const std::string tableDir_ =
-      fmt::format("{}/{}", testDir_->getPath(), "table");
+      std::format("{}/{}", testDir_->getPath(), "table");
 };
 
 TEST_F(HashJoinReplayerTest, basic) {
@@ -199,7 +199,7 @@ TEST_F(HashJoinReplayerTest, basic) {
   const auto result = builder.copyResults(pool());
 
   const auto traceRoot =
-      fmt::format("{}/{}/traceRoot/", testDir_->getPath(), "basic");
+      std::format("{}/{}/traceRoot/", testDir_->getPath(), "basic");
   std::shared_ptr<Task> task;
   auto tracePlanWithSplits = createPlan(
       tableDir_,
@@ -240,7 +240,7 @@ TEST_F(HashJoinReplayerTest, partialDriverIds) {
   const std::shared_ptr<TempDirectoryPath> testDir =
       TempDirectoryPath::create(true);
   const std::string tableDir =
-      fmt::format("{}/{}", testDir->getPath(), "table");
+      std::format("{}/{}", testDir->getPath(), "table");
   const auto planWithSplits = createPlan(
       tableDir,
       core::JoinType::kInner,
@@ -255,7 +255,7 @@ TEST_F(HashJoinReplayerTest, partialDriverIds) {
   const auto result = builder.copyResults(pool());
 
   const auto traceRoot =
-      fmt::format("{}/{}/traceRoot/", testDir->getPath(), "basic");
+      std::format("{}/{}/traceRoot/", testDir->getPath(), "basic");
   std::shared_ptr<Task> task;
   auto tracePlanWithSplits = createPlan(
       tableDir,
@@ -322,7 +322,7 @@ TEST_F(HashJoinReplayerTest, partialDriverIds) {
 
 TEST_F(HashJoinReplayerTest, runner) {
   const auto testDir = TempDirectoryPath::create();
-  const auto traceRoot = fmt::format("{}/{}", testDir->getPath(), "traceRoot");
+  const auto traceRoot = std::format("{}/{}", testDir->getPath(), "traceRoot");
   std::shared_ptr<Task> task;
   auto tracePlanWithSplits = createPlan(
       tableDir_,
@@ -411,9 +411,9 @@ DEBUG_ONLY_TEST_F(HashJoinReplayerTest, hashBuildSpill) {
   const auto result = builder.copyResults(pool());
 
   const auto traceRoot =
-      fmt::format("{}/{}/traceRoot/", testDir_->getPath(), "hash_build_spill");
+      std::format("{}/{}/traceRoot/", testDir_->getPath(), "hash_build_spill");
   const auto spillDir =
-      fmt::format("{}/{}/spillDir/", testDir_->getPath(), "hash_build_spill");
+      std::format("{}/{}/spillDir/", testDir_->getPath(), "hash_build_spill");
   std::shared_ptr<Task> task;
   auto tracePlanWithSplits = createPlan(
       tableDir_,
@@ -490,9 +490,9 @@ DEBUG_ONLY_TEST_F(HashJoinReplayerTest, hashProbeSpill) {
   const auto result = builder.copyResults(pool());
 
   const auto traceRoot =
-      fmt::format("{}/{}/traceRoot/", testDir_->getPath(), "hash_probe_spill");
+      std::format("{}/{}/traceRoot/", testDir_->getPath(), "hash_probe_spill");
   const auto spillDir =
-      fmt::format("{}/{}/spillDir/", testDir_->getPath(), "hash_probe_spill");
+      std::format("{}/{}/spillDir/", testDir_->getPath(), "hash_probe_spill");
   std::shared_ptr<Task> task;
   auto tracePlanWithSplits = createPlan(
       tableDir_,

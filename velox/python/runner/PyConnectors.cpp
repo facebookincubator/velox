@@ -59,7 +59,7 @@ void registerTpch(
 void unregister(const std::string& connectorId) {
   if (!facebook::velox::connector::unregisterConnector(connectorId)) {
     throw std::runtime_error(
-        fmt::format("Unable to unregister connector '{}'", connectorId));
+        std::format("Unable to unregister connector '{}'", connectorId));
   }
   connectorRegistry().erase(connectorId);
 }

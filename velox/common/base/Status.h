@@ -411,8 +411,8 @@ class [[nodiscard]] Status {
  private:
   template <typename... Args>
   static Status
-  fromArgs(StatusCode code, fmt::string_view fmt, Args&&... args) {
-    return Status(code, fmt::vformat(fmt, fmt::make_format_args(args...)));
+  fromArgs(StatusCode code, std::string_view fmt, Args&&... args) {
+    return Status(code, std::vformat(fmt, std::make_format_args(args...)));
   }
 
   static Status fromArgs(StatusCode code) {
@@ -575,7 +575,7 @@ void Status::moveFrom(Status& s) {
       _VELOX_USER_RETURN_IMPL, expr1, expr2, op, ##__VA_ARGS__)
 
 // For all below macros, an additional message can be passed using a
-// format string and arguments, as with `fmt::format`.
+// format string and arguments, as with `std::format`.
 #define VELOX_USER_RETURN(expr, ...) \
   _VELOX_USER_RETURN_IMPL(expr, #expr, ##__VA_ARGS__)
 #define VELOX_USER_RETURN_GT(e1, e2, ...) \
@@ -654,15 +654,15 @@ using Expected = folly::Expected<T, Status>;
 } // namespace facebook::velox
 
 template <>
-struct fmt::formatter<facebook::velox::Status> : fmt::formatter<std::string> {
+struct std::formatter<facebook::velox::Status> : std::formatter<std::string> {
   auto format(const facebook::velox::Status& s, format_context& ctx) const {
     return formatter<std::string>::format(s.toString(), ctx);
   }
 };
 
 template <>
-struct fmt::formatter<facebook::velox::StatusCode>
-    : fmt::formatter<std::string_view> {
+struct std::formatter<facebook::velox::StatusCode>
+    : std::formatter<std::string_view> {
   auto format(facebook::velox::StatusCode code, format_context& ctx) const {
     return formatter<std::string_view>::format(
         facebook::velox::toString(code), ctx);

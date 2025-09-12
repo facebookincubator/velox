@@ -97,7 +97,7 @@ std::string SsdPin::toString() const {
   if (empty()) {
     return "<empty SsdPin>";
   }
-  return fmt::format(
+  return std::format(
       "SsdPin(shard {} offset {} size {})",
       file_->shardId(),
       run_.offset(),
@@ -664,7 +664,7 @@ void SsdFile::deleteFile(std::unique_ptr<WriteFile> file) {
   } catch (const std::exception& e) {
     ++stats_.deleteMetaFileErrors;
     VELOX_SSD_CACHE_LOG(ERROR)
-        << fmt::format("Error in deleting file {}: {}", filePath, e.what());
+        << std::format("Error in deleting file {}: {}", filePath, e.what());
   }
 }
 
@@ -844,7 +844,7 @@ void SsdFile::initializeCheckpoint() {
         fs_->openFileForWrite(checkpointPath, writeFileOptions);
   } catch (const std::exception& e) {
     ++stats_.writeCheckpointErrors;
-    VELOX_SSD_CACHE_LOG(ERROR) << fmt::format(
+    VELOX_SSD_CACHE_LOG(ERROR) << std::format(
         "Could not initilize checkpoint file {} for writing: {}: ",
         checkpointPath,
         e.what());
@@ -971,7 +971,7 @@ void SsdFile::readCheckpoint() {
     // Either the checkpoint file is corrupted or the file is just created, we
     // can start here and the writer threads will create the checkpoint file
     // later on flush
-    VELOX_SSD_CACHE_LOG(WARNING) << fmt::format(
+    VELOX_SSD_CACHE_LOG(WARNING) << std::format(
         "Error opening checkpoint file {}: Starting without checkpoint",
         e.what());
     return;
@@ -981,7 +981,7 @@ void SsdFile::readCheckpoint() {
   const auto checkpoinHasChecksum =
       isChecksumEnabledOnCheckpointVersion(versionMagic);
   if (checksumEnabled_ && !checkpoinHasChecksum) {
-    VELOX_SSD_CACHE_LOG(WARNING) << fmt::format(
+    VELOX_SSD_CACHE_LOG(WARNING) << std::format(
         "Starting shard {} without checkpoint: checksum is enabled but the checkpoint was made without checksum, so skip the checkpoint recovery, checkpoint file {}",
         shardId_,
         checkpointPath);
@@ -1078,7 +1078,7 @@ void SsdFile::readCheckpoint() {
   for (const auto regionSize : regionSizes_) {
     cachedBytes += regionSize;
   }
-  VELOX_SSD_CACHE_LOG(INFO) << fmt::format(
+  VELOX_SSD_CACHE_LOG(INFO) << std::format(
       "Starting shard {} from checkpoint with {} entries, {} cached data, {} regions with {} free, with checksum write {}, read verification {}, checkpoint file {}",
       shardId_,
       entries_.size(),

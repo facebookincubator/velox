@@ -604,7 +604,7 @@ class HashStringAllocator::InputStream : public ByteInputStream {
   }
 
   std::string toString() const final {
-    return fmt::format(
+    return std::format(
         "HashStringAllocator::InputStream: begin_={} header_={} range_={}",
         begin_->toString(),
         header_->toString(),

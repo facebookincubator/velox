@@ -158,7 +158,7 @@ class ComparisonsTest : public SparkFunctionBaseTest {
       const std::vector<VectorPtr>& input,
       const VectorPtr& expectedResult) {
     auto actual = evaluate<SimpleVector<bool>>(
-        fmt::format("{}(c0, c1)", functionName), makeRowVector(input));
+        std::format("{}(c0, c1)", functionName), makeRowVector(input));
     facebook::velox::test::assertEqualVectors(expectedResult, actual);
   }
 
@@ -430,7 +430,7 @@ TEST_F(ComparisonsTest, testdictionary) {
 
   auto rowVector = makeRowVector({lhsVector, rhsVector});
   auto result = evaluate<SimpleVector<bool>>(
-      fmt::format("{}(c0, c1)", "greaterthan"), rowVector);
+      std::format("{}(c0, c1)", "greaterthan"), rowVector);
   // Result : false, null, false, null, false.
   facebook::velox::test::assertEqualVectors(
       result,
@@ -442,7 +442,7 @@ TEST_F(ComparisonsTest, testdictionary) {
   // Rhs: const 100.
   // Lessthanorequal result : true, null, true, null, true.
   auto constResult = evaluate<SimpleVector<bool>>(
-      fmt::format("{}(c0, c1)", "lessthanorequal"), testConstVector);
+      std::format("{}(c0, c1)", "lessthanorequal"), testConstVector);
   facebook::velox::test::assertEqualVectors(
       constResult,
       makeFlatVector<bool>(5, [](auto row) { return true; }, nullEvery(2, 1)));
@@ -452,7 +452,7 @@ TEST_F(ComparisonsTest, testdictionary) {
   auto testConstVector1 =
       makeRowVector({makeConstantDic(constVector), makeDictionary(lhs)});
   auto constResult1 = evaluate<SimpleVector<bool>>(
-      fmt::format("{}(c0, c1)", "greaterthanorequal"), testConstVector1);
+      std::format("{}(c0, c1)", "greaterthanorequal"), testConstVector1);
   facebook::velox::test::assertEqualVectors(
       constResult1,
       makeFlatVector<bool>(5, [](auto row) { return true; }, nullEvery(2, 1)));
@@ -678,8 +678,8 @@ TEST_F(ComparisonsTest, notSupportedTypes) {
   auto testFails = [&](const std::string& func, const VectorPtr& vector) {
     VELOX_ASSERT_USER_THROW(
         evaluate<SimpleVector<bool>>(
-            fmt::format("{}(c1, c0)", func), makeRowVector({vector, vector})),
-        fmt::format(
+            std::format("{}(c1, c0)", func), makeRowVector({vector, vector})),
+        std::format(
             "Scalar function signature is not supported: {}({}, {})",
             func,
             vector->type()->toString(),

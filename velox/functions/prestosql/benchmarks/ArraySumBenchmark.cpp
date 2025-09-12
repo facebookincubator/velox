@@ -39,7 +39,7 @@ int main(int argc, char** argv) {
   auto createSet = [&](bool withNulls) {
     benchmarkBuilder
         .addBenchmarkSet(
-            fmt::format("array_sum_{}", withNulls ? "nulls" : "nullfree"),
+            std::format("array_sum_{}", withNulls ? "nulls" : "nullfree"),
             inputType)
         .withFuzzerOptions(
             {.vectorSize = 1000, .nullRatio = withNulls ? 0.2 : 0})

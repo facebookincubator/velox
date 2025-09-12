@@ -50,7 +50,7 @@ struct FlushPolicyTestCase {
   const int64_t memoryBudget = std::numeric_limits<int64_t>::max();
 
   std::string debugString() const {
-    return fmt::format(
+    return std::format(
         "inputStripeSize {}, dictSize {}, inputNumStripesLower {}, inputNumStripesUpper {}, seed {}, memoryBudget {}",
         stripeSize,
         dictSize,

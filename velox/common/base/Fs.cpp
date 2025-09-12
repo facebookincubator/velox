@@ -37,7 +37,7 @@ bool generateFileDirectory(const char* dirPath) {
 std::optional<std::string> generateTempFilePath(
     const char* basePath,
     const char* prefix) {
-  auto path = fmt::format("{}/velox_{}_XXXXXX", basePath, prefix);
+  auto path = std::format("{}/velox_{}_XXXXXX", basePath, prefix);
   auto fd = mkstemp(path.data());
   if (fd == -1) {
     return std::nullopt;
@@ -48,7 +48,7 @@ std::optional<std::string> generateTempFilePath(
 std::optional<std::string> generateTempFolderPath(
     const char* basePath,
     const char* prefix) {
-  auto path = fmt::format("{}/velox_{}_XXXXXX", basePath, prefix);
+  auto path = std::format("{}/velox_{}_XXXXXX", basePath, prefix);
   auto createdPath = mkdtemp(path.data());
   if (createdPath == nullptr) {
     return std::nullopt;

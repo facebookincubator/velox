@@ -52,7 +52,7 @@ class FileInputStreamTest : public testing::Test {
       uint64_t streamSize,
       uint32_t bufferSize = 1024) {
     const auto filePath =
-        fmt::format("{}/{}", tempDirPath_->getPath(), fileId_++);
+        std::format("{}/{}", tempDirPath_->getPath(), fileId_++);
     auto writeFile = fs_->openFileForWrite(filePath);
     std::vector<std::uint8_t> buffer(streamSize);
     for (int i = 0; i < streamSize; ++i) {
@@ -80,7 +80,7 @@ TEST_F(FileInputStreamTest, stats) {
     size_t bufferSize;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "streamSize {}, bufferSize {}", streamSize, bufferSize);
     }
   } testSettings[] = {

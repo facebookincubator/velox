@@ -457,7 +457,7 @@ void readIPPrefixValues(
 
   VELOX_DCHECK(
       (ipprefixBytesSum % ipaddress::kIPPrefixBytes) == 0,
-      fmt::format(
+      std::format(
           "Total sum of ipprefix bytes:{} is not divisible by:{}. rows:{} numNulls:{} totalSize:{}",
           ipprefixBytesSum,
           ipaddress::kIPPrefixBytes,
@@ -467,14 +467,14 @@ void readIPPrefixValues(
 
   VELOX_DCHECK(
       result->size() >= numNulls,
-      fmt::format(
+      std::format(
           "IPPrefix received more nulls:{} than total num of rows:{}.",
           result->size(),
           numNulls));
 
   VELOX_DCHECK(
       (ipprefixBytesSum == ((size - numNulls) * ipaddress::kIPPrefixBytes)),
-      fmt::format(
+      std::format(
           "IPPrefix received invalid number of non-null bytes. Got:{} Expected:{} rows:{} numNulls:{} totalSize:{} numIncomingNulls={} resultOffset={}.",
           ipprefixBytesSum,
           (size - numNulls) * ipaddress::kIPPrefixBytes,
