@@ -15,6 +15,7 @@
  */
 
 #include "velox/functions/lib/SimpleComparisonMatcher.h"
+#include "velox/expression/ExprConstants.h"
 
 namespace facebook::velox::functions {
 
@@ -31,7 +32,8 @@ bool Matcher::allMatch(
 
 bool IfMatcher::match(const core::TypedExprPtr& expr) {
   if (auto call = dynamic_cast<const core::CallTypedExpr*>(expr.get())) {
-    if (call->name() == "if" && allMatch(call->inputs(), inputMatchers_)) {
+    if (call->name() == expression::kIf &&
+        allMatch(call->inputs(), inputMatchers_)) {
       return true;
     }
   }
