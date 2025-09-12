@@ -33,7 +33,7 @@ class TypeSignature {
   /// @param rowFieldName if this type signature is a field of another parent
   /// row type, it can optionally have a name. E.g. `row(id bigint)` would have
   /// "id" set as rowFieldName in the "bigint" parameter.
-  /// @param variadicArity indicates if the parameter is variadic.
+  /// @param variadicArity indicates if the last parameter is variadic.
   TypeSignature(
       std::string baseName,
       std::vector<TypeSignature> parameters,
