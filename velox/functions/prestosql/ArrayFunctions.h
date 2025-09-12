@@ -610,6 +610,100 @@ struct ArrayFrequencyFunction {
   folly::F14FastMap<arg_type<T>, int> frequencyCount_;
 };
 
+// Array<Varchar> to handle nested arrays
+template <typename TExecParams>
+struct ArrayFrequencyFunction<TExecParams, Array<Varchar>> {
+  VELOX_DEFINE_FUNCTION_TYPES(TExecParams);
+
+  // Helper struct to store array reference with its hash
+  struct ArrayVarcharEntry {
+    arg_type<Array<Varchar>> arrayRef;
+    std::size_t hash;
+    int frequency;
+
+    ArrayVarcharEntry(const arg_type<Array<Varchar>>& array, std::size_t h)
+        : arrayRef(array), hash(h), frequency(1) {}
+  };
+
+  // Hash function for Array<Varchar> without copying strings
+  std::size_t computeArrayHash(const arg_type<Array<Varchar>>& array) {
+    std::size_t hash = 0;
+    for (const auto& item : array) {
+      if (item.has_value()) {
+        // Hash the StringView directly without copying
+        const auto& stringView = item.value();
+        hash = folly::hash::hash_combine(
+            hash,
+            folly::hash::hash_range(stringView.begin(), stringView.end()));
+      } else {
+        hash = folly::hash::hash_combine(hash, std::size_t{0}); // hash for null
+      }
+    }
+    return hash;
+  }
+
+  // Compare two Array<Varchar> for equality without copying strings
+  bool arraysEqual(
+      const arg_type<Array<Varchar>>& a,
+      const arg_type<Array<Varchar>>& b) {
+    if (a.size() != b.size()) {
+      return false;
+    }
+    for (size_t i = 0; i < a.size(); ++i) {
+      if (a[i].has_value() != b[i].has_value()) {
+        return false;
+      }
+      if (a[i].has_value()) {
+        if (a[i].value().compare(b[i].value()) != 0) {
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<velox::Map<Array<Varchar>, int>>& out,
+      arg_type<velox::Array<Array<Varchar>>> inputArray) {
+    std::vector<ArrayVarcharEntry> entries;
+
+    // Count frequencies using hash-based lookup without string copies
+    for (const auto& item : inputArray.skipNulls()) {
+      std::size_t itemHash = computeArrayHash(item);
+
+      // Look for existing entry with same hash
+      bool found = false;
+      for (auto& entry : entries) {
+        if (entry.hash == itemHash && arraysEqual(entry.arrayRef, item)) {
+          entry.frequency++;
+          found = true;
+          break;
+        }
+      }
+
+      if (!found) {
+        entries.emplace_back(item, itemHash);
+      }
+    }
+
+    // Generate output in deterministic order based on input array
+    for (const auto& item : inputArray.skipNulls()) {
+      std::size_t itemHash = computeArrayHash(item);
+
+      for (auto it = entries.begin(); it != entries.end(); ++it) {
+        if (it->hash == itemHash && arraysEqual(it->arrayRef, item)) {
+          auto [keyWriter, valueWriter] = out.add_item();
+          // Use copy_from to properly handle string buffer management
+          keyWriter.copy_from(item);
+          valueWriter = it->frequency;
+          entries.erase(it);
+          break;
+        }
+      }
+    }
+  }
+};
+
 template <typename TExecParams, typename T>
 struct ArrayNormalizeFunction {
   VELOX_DEFINE_FUNCTION_TYPES(TExecParams);
