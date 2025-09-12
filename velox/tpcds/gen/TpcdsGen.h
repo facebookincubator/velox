@@ -17,6 +17,7 @@
 #pragma once
 
 #include "velox/common/memory/Memory.h"
+#include "velox/common/Enums.h"
 
 namespace facebook::velox {
 class RowVector;
@@ -84,8 +85,10 @@ static const auto tables = {
     tpcds::Table::TBL_WEB_SALES,
     tpcds::Table::TBL_WEB_SITE};
 
-/// Returns table name as a string.
-std::string toTableName(Table table);
+VELOX_DECLARE_ENUM_NAME(Table);
+
+/// Returns table name as a const reference to avoid copying.
+const std::string& toTableName(Table table);
 
 /// Returns the schema (RowType) for a particular TPC-DS table.
 const velox::RowTypePtr getTableSchema(Table table);
