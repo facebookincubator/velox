@@ -234,6 +234,11 @@ struct Varchar {
   Varchar() {}
 };
 
+struct Time {
+ private:
+  Time() {}
+};
+
 // Type to use for inputs and outputs of simple functions with BigintEnum types.
 // E.g. arg_type<BigintEnum<E1>> and out_type<BigintEnum<E1>>.
 template <typename E>
@@ -354,18 +359,24 @@ template <>
 struct SimpleTypeTrait<Varbinary> : public TypeTraits<TypeKind::VARBINARY> {};
 
 template <>
-struct SimpleTypeTrait<Date> : public SimpleTypeTrait<int32_t> {
+struct SimpleTypeTrait<Date> : public TypeTraits<TypeKind::INTEGER> {
   static constexpr const char* name = "DATE";
 };
 
 template <>
-struct SimpleTypeTrait<IntervalDayTime> : public SimpleTypeTrait<int64_t> {
+struct SimpleTypeTrait<IntervalDayTime> : public TypeTraits<TypeKind::BIGINT> {
   static constexpr const char* name = "INTERVAL DAY TO SECOND";
 };
 
 template <>
-struct SimpleTypeTrait<IntervalYearMonth> : public SimpleTypeTrait<int32_t> {
+struct SimpleTypeTrait<IntervalYearMonth>
+    : public TypeTraits<TypeKind::INTEGER> {
   static constexpr const char* name = "INTERVAL YEAR TO MONTH";
+};
+
+template <>
+struct SimpleTypeTrait<Time> : public TypeTraits<TypeKind::BIGINT> {
+  static constexpr const char* name = "TIME";
 };
 
 template <typename T, bool comparable, bool orderable>
