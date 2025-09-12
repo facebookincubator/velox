@@ -36,4 +36,6 @@ FetchContent_Declare(
 
 FetchContent_MakeAvailable(roaring)
 
-add_library(Roaring::roaring ALIAS roaring)
+if(NOT TARGET Roaring::roaring)
+  add_library(Roaring::roaring ALIAS roaring)
+endif()
