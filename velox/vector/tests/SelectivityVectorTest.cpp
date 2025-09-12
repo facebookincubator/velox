@@ -360,6 +360,47 @@ TEST(SelectivityVectorTest, iterator) {
   EXPECT_EQ(count, bits::countBits(&contiguous[0], 0, 240));
 }
 
+TEST(SelectivityVectorTest, selectivityIteratorCopyConstructor) {
+  SelectivityVector vector(10);
+  vector.clearAll();
+  vector.setValid(1, true);
+  vector.setValid(3, true);
+  vector.setValid(5, true);
+  vector.setValid(7, true);
+  vector.updateBounds();
+
+  // Test non-advanced iterator
+  SelectivityIterator iter1(vector);
+  SelectivityIterator iter1Copy(iter1);
+
+  auto collectValues = [](SelectivityIterator& iter) {
+    std::vector<vector_size_t> values;
+    vector_size_t row;
+    while (iter.next(row)) {
+      values.push_back(row);
+    }
+    return values;
+  };
+
+  EXPECT_EQ(collectValues(iter1), std::vector<vector_size_t>({1, 3, 5, 7}));
+  EXPECT_EQ(collectValues(iter1Copy), std::vector<vector_size_t>({1, 3, 5, 7}));
+
+  // Test 2: Copy partially-advanced iterator
+  SelectivityIterator iter2(vector);
+  vector_size_t row;
+
+  iter2.next(row); // consumes 1
+  iter2.next(row); // consumes 3
+
+  SelectivityIterator iter2copy(iter2);
+
+  EXPECT_EQ(collectValues(iter2), std::vector<vector_size_t>({5, 7}));
+  EXPECT_EQ(collectValues(iter2copy), std::vector<vector_size_t>({5, 7}));
+
+  SelectivityIterator iter3 = iter2copy;
+  EXPECT_EQ(collectValues(iter3), std::vector<vector_size_t>());
+}
+
 TEST(SelectivityVectorTest, resize) {
   SelectivityVector vector(64, false);
   vector.resize(128, /* value */ true);
