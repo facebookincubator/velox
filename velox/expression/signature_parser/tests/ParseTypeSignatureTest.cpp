@@ -191,7 +191,7 @@ TEST_F(ParseTypeSignatureTest, row) {
     ASSERT_EQ(signature.parameters().size(), 1);
   }
 
-  // test quoted row fields.
+  // TSest quoted row fields.
   {
     auto signature = parseTypeSignature("row(\"12col0\" v, l)");
     ASSERT_EQ(signature.baseName(), "row");
@@ -214,7 +214,7 @@ TEST_F(ParseTypeSignatureTest, row) {
     ASSERT_EQ(signature.parameters().size(), 2);
     ASSERT_FALSE(signature.rowFieldName().has_value());
     auto field0 = signature.parameters()[0];
-    ASSERT_EQ(field0.baseName(), "array");
+    ASSERT_EQ(field0.baseName(), "array");S
     ASSERT_EQ(field0.rowFieldName(), "field 0");
     ASSERT_EQ(field0.parameters().size(), 1);
     auto arrayElement = field0.parameters()[0];
@@ -263,20 +263,20 @@ TEST_F(ParseTypeSignatureTest, row) {
 
 TEST_F(ParseTypeSignatureTest, homogeneousRow) {
   {
-    // Test homogeneous row syntax with three dots
+    // Test homogeneous row syntax with three dots.
     auto signature = parseTypeSignature("row(varchar, ...)");
     ASSERT_EQ(signature.baseName(), "row");
     ASSERT_EQ(signature.parameters().size(), 1);
     ASSERT_TRUE(signature.isHomogeneousRow());
     ASSERT_EQ(signature.toString(), "row(varchar, ...)");
 
-    auto field0 = signature.parameters()[0];
-    ASSERT_EQ(field0.baseName(), "varchar");
-    ASSERT_FALSE(field0.hasVariadicArity());
+    auto field = signature.parameters()[0];
+    ASSERT_EQ(field.baseName(), "varchar");
+    ASSERT_FALSE(field.hasVariadicArity());
   }
 
   {
-    // Test homogeneous row syntax with three dots and a different type
+    // Test homogeneous row syntax with three dots and a different type.
     auto signature = parseTypeSignature("row(integer, ...)");
     ASSERT_EQ(signature.baseName(), "row");
     ASSERT_EQ(signature.parameters().size(), 1);
@@ -284,8 +284,8 @@ TEST_F(ParseTypeSignatureTest, homogeneousRow) {
     ASSERT_EQ(signature.toString(), "row(integer, ...)");
   }
 
-  // Test that homogeneous row with named field is rejected
-  EXPECT_THROW(parseTypeSignature("row(name varchar, ...)"), VeloxRuntimeError);
+  // Test that homogeneous row with named field is rejected.
+  VELOX_ASSERT_THROW(parseTypeSignature("row(name varchar, ...)"), VeloxRuntimeError);
 }
 
 TEST_F(ParseTypeSignatureTest, tdigest) {
@@ -308,12 +308,12 @@ TEST_F(ParseTypeSignatureTest, roundTrip) {
 
   ASSERT_EQ(roundTrip("function(S,R)"), "function(S,R)");
 
-  // Test a complex type as the second field in a row
+  // Test a complex type as the second field in a row.
   ASSERT_EQ(
       roundTrip("row(map(K,V),map(bigint,array(double)))"),
       "row(map(K,V),map(bigint,array(double)))");
 
-  // Test homogeneous row round-trip parsing
+  // Test homogeneous row round-trip parsing.
   ASSERT_EQ(roundTrip("row(T, ...)"), "row(T, ...)");
   ASSERT_EQ(roundTrip("row(varchar, ...)"), "row(varchar, ...)");
   ASSERT_EQ(roundTrip("row(bigint, ...)"), "row(bigint, ...)");
