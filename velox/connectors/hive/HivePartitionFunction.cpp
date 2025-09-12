@@ -56,17 +56,14 @@ inline int32_t hashDecimal<int128_t>(int128_t value, uint8_t scale) {
   words[2] = static_cast<int32_t>(absValue >> 32);
   words[3] = static_cast<int32_t>(absValue);
 
-  int32_t hash = 0;
+  uint32_t hash = 0;
   for (auto i = 0; i < 4; i++) {
     hash = 31 * hash + words[i];
   }
   if (isNegative) {
     hash = -hash;
   }
-  // Ignore the overflow to align with java implementation, only for lint error
-  // fix.
-  __builtin_mul_overflow(hash, 31, &hash);
-  return hash + scale;
+  return hash * 31 + scale;
 }
 
 #if defined(__has_feature)
