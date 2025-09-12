@@ -24,6 +24,10 @@
 #include "velox/expression/ExprConstants.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
 
+#include <boost/lexical_cast.hpp>
+#include <boost/uuid/uuid_generators.hpp>
+#include <boost/uuid/uuid_io.hpp>
+
 namespace facebook::velox::connector::hive {
 namespace {
 
@@ -923,4 +927,9 @@ core::TypedExprPtr extractFiltersFromRemainingFilter(
   }
   return expr;
 }
+
+std::string makeUuid() {
+  return boost::lexical_cast<std::string>(boost::uuids::random_generator()());
+}
+
 } // namespace facebook::velox::connector::hive
