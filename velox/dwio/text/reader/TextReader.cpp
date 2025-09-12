@@ -1052,8 +1052,26 @@ void TextRowReader::readElement(
               getInteger<int32_t>, data, insertionRow, delim);
           break;
         case TypeKind::INTEGER:
-          putValue<int32_t, int32_t>(
-              getInteger<int32_t>, data, insertionRow, delim);
+          if (reqT->isDate()) {
+            const std::string& s = getString(*this, isNull, delim);
+            if ((atEOF_ && atSOL_) || data == nullptr) {
+              return;
+            }
+            auto flatVector = data->asChecked<FlatVector<int32_t>>();
+            if (!flatVector) {
+              VELOX_FAIL(
+                  "Vector for column type does not match: expected FlatVector<int32_t>, got {}",
+                  data ? data->type()->toString() : "null");
+            }
+            if (s.empty()) {
+              flatVector->setNull(insertionRow, true);
+            } else {
+              flatVector->set(insertionRow, DATE()->toDays(s));
+            }
+          } else {
+            putValue<int32_t, int32_t>(
+                getInteger<int32_t>, data, insertionRow, delim);
+          }
           break;
         default:
           VELOX_FAIL(
@@ -1065,10 +1083,72 @@ void TextRowReader::readElement(
       break;
 
     case TypeKind::BIGINT:
-      putValue<int64_t, int64_t>(
-          getInteger<int64_t>, data, insertionRow, delim);
+      if (reqT->isShortDecimal()) {
+        const std::string& s = getString(*this, isNull, delim);
+        if ((atEOF_ && atSOL_) || data == nullptr) {
+          return;
+        }
+        auto flatVector = data->asChecked<FlatVector<int64_t>>();
+        if (!flatVector) {
+          VELOX_FAIL(
+              "Vector for column type does not match: expected FlatVector<int64_t>, got {}",
+              data ? data->type()->toString() : "null");
+        }
+        if (s.empty()) {
+          flatVector->setNull(insertionRow, true);
+        } else {
+          int64_t v = 0;
+          auto [precision, scale] = getDecimalPrecisionScale(*reqT);
+          auto status = DecimalUtil::castFromString(
+              StringView(s.data(), static_cast<int32_t>(s.size())),
+              precision,
+              scale,
+              v);
+          if (status.ok()) {
+            flatVector->set(insertionRow, v);
+          } else {
+            flatVector->setNull(insertionRow, true);
+          }
+        }
+      } else {
+        putValue<int64_t, int64_t>(
+            getInteger<int64_t>, data, insertionRow, delim);
+      }
       break;
 
+    case TypeKind::HUGEINT: {
+      const std::string& s = getString(*this, isNull, delim);
+      if ((atEOF_ && atSOL_) || data == nullptr) {
+        return;
+      }
+      auto flatVector = data->asChecked<FlatVector<int128_t>>();
+      if (!flatVector) {
+        VELOX_FAIL(
+            "Vector for column type does not match: expected FlatVector<int128_t>, got {}",
+            data ? data->type()->toString() : "null");
+      }
+      if (s.empty()) {
+        flatVector->setNull(insertionRow, true);
+        return;
+      }
+      if (reqT->isLongDecimal()) {
+        int128_t v = 0;
+        auto [precision, scale] = getDecimalPrecisionScale(*reqT);
+        auto status = DecimalUtil::castFromString(
+            StringView(s.data(), static_cast<int32_t>(s.size())),
+            precision,
+            scale,
+            v);
+        if (status.ok()) {
+          flatVector->set(insertionRow, v);
+        } else {
+          flatVector->setNull(insertionRow, true);
+        }
+      } else {
+        flatVector->set(insertionRow, HugeInt::parse(s));
+      }
+      break;
+    }
     case TypeKind::SMALLINT:
       switch (reqT->kind()) {
         case TypeKind::BIGINT:
