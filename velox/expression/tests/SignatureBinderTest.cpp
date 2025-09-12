@@ -1123,8 +1123,8 @@ TEST(SignatureBinderTest, coercions) {
       /*allowCoercion*/ true);
 }
 
-TEST(SignatureBinderTest, homogeneous_rows) {
-  // row(T, ...) -> boolean - tests homogeneous row binding
+TEST(SignatureBinderTest, homogeneousRow) {
+  // row(T, ...) -> boolean
   {
     auto signature = exec::FunctionSignatureBuilder()
                          .typeVariable("T")
@@ -1166,7 +1166,7 @@ TEST(SignatureBinderTest, homogeneous_rows) {
   }
 }
 
-TEST(SignatureBinderTest, homogeneous_row_map) {
+TEST(SignatureBinderTest, homogeneousRowsToMap) {
   // Positive test: (row(T,...), row(U,...)) -> map(T,U)
   auto signature = exec::FunctionSignatureBuilder()
                        .typeVariable("T")
@@ -1186,7 +1186,7 @@ TEST(SignatureBinderTest, homogeneous_row_map) {
       signature, {ROW({BIGINT(), BIGINT()}), ROW({BIGINT(), VARCHAR()})});
 }
 
-TEST(SignatureBinderTest, homogeneous_row_return_type_not_allowed) {
+TEST(SignatureBinderTest, homogeneousRowReturnType) {
   // Negative test: constructing or binding a function with homogeneous row
   // return is invalid.
   EXPECT_THROW(
@@ -1198,7 +1198,7 @@ TEST(SignatureBinderTest, homogeneous_row_return_type_not_allowed) {
                              .build();
         // If build unexpectedly succeeds without throwing, still assert bind
         // fails.
-        assertCannotResolve(signature, {BIGINT()});
+        VELOX_ASSERT_THROW(signature, {BIGINT()});
       },
       VeloxUserError);
 }
