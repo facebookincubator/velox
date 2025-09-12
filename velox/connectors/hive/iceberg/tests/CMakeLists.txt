@@ -37,7 +37,14 @@ if(VELOX_ENABLE_BENCHMARKS)
 endif()
 
 if(NOT VELOX_DISABLE_GOOGLETEST)
-  add_executable(velox_hive_iceberg_test IcebergReadTest.cpp IcebergSplitReaderBenchmarkTest.cpp)
+  add_executable(
+    velox_hive_iceberg_test
+    IcebergInsertTest.cpp
+    IcebergReadTest.cpp
+    IcebergSplitReaderBenchmarkTest.cpp
+    IcebergTestBase.cpp
+    Main.cpp
+  )
   add_test(velox_hive_iceberg_test velox_hive_iceberg_test)
 
   target_link_libraries(
@@ -49,6 +56,7 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     velox_dwio_common_exception
     velox_dwio_common_test_utils
     velox_vector_test_lib
+    velox_vector_fuzzer
     velox_exec
     velox_exec_test_lib
     Folly::folly
@@ -57,7 +65,11 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     GTest::gtest_main
   )
   if(VELOX_ENABLE_PARQUET)
-    target_link_libraries(velox_hive_iceberg_test velox_dwio_parquet_reader)
+    target_link_libraries(
+      velox_hive_iceberg_test
+      velox_dwio_parquet_writer
+      velox_dwio_parquet_reader
+    )
 
     file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/examples DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
   endif()

@@ -528,7 +528,8 @@ class HiveDataSink : public DataSink {
       CommitStrategy commitStrategy,
       const std::shared_ptr<const HiveConfig>& hiveConfig,
       uint32_t bucketCount,
-      std::unique_ptr<core::PartitionFunction> bucketFunction);
+      std::unique_ptr<core::PartitionFunction> bucketFunction,
+      const std::vector<column_index_t>& dataChannels);
 
   void appendData(RowVectorPtr input) override;
 
@@ -544,10 +545,13 @@ class HiveDataSink : public DataSink {
 
   bool canReclaim() const;
 
- private:
+ protected:
   // Validates the state transition from 'oldState' to 'newState'.
   void checkStateTransition(State oldState, State newState);
+
   void setState(State newState);
+
+  virtual std::vector<std::string> commitMessage() const;
 
   class WriterReclaimer : public exec::MemoryReclaimer {
    public:
@@ -613,7 +617,7 @@ class HiveDataSink : public DataSink {
   // Compute the partition id and bucket id for each row in 'input'.
   void computePartitionAndBucketIds(const RowVectorPtr& input);
 
-  // Get the HiveWriter corresponding to the row
+  // Get the hive writer id corresponding to the row
   // from partitionIds and bucketIds.
   FOLLY_ALWAYS_INLINE HiveWriterId getWriterId(size_t row) const;
 
@@ -621,9 +625,9 @@ class HiveDataSink : public DataSink {
   // to each corresponding (bucketed) partition based on the partition and
   // bucket ids calculated by 'computePartitionAndBucketIds'. The function also
   // ensures that there is a writer created for each (bucketed) partition.
-  void splitInputRowsAndEnsureWriters();
+  virtual void splitInputRowsAndEnsureWriters(RowVectorPtr input);
 
-  // Makes sure to create one writer for the given writer id. The function
+  // Makes sure the writer is created for the given writer id. The function
   // returns the corresponding index in 'writers_'.
   uint32_t ensureWriter(const HiveWriterId& id);
 
@@ -631,9 +635,21 @@ class HiveDataSink : public DataSink {
   // the newly created writer in 'writers_'.
   uint32_t appendWriter(const HiveWriterId& id);
 
+  virtual std::optional<std::string> getPartitionName(
+      const HiveWriterId& id) const;
+
   std::unique_ptr<facebook::velox::dwio::common::Writer>
   maybeCreateBucketSortWriter(
       std::unique_ptr<facebook::velox::dwio::common::Writer> writer);
+
+  std::string makePartitionDirectory(
+      const std::string& tableDirectory,
+      const std::optional<std::string>& partitionSubdirectory) const;
+
+  void
+  updatePartitionRows(uint32_t index, vector_size_t numRows, vector_size_t row);
+
+  void extendBuffersForPartitionedTables();
 
   HiveWriterParameters getWriterParameters(
       const std::optional<std::string>& partition,
