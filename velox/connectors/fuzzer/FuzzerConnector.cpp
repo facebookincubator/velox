@@ -15,6 +15,7 @@
  */
 
 #include "velox/connectors/fuzzer/FuzzerConnector.h"
+#include "velox/connectors/ConnectorNames.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
 namespace facebook::velox::connector::fuzzer {
@@ -67,6 +68,15 @@ std::optional<RowVectorPtr> FuzzerDataSource::next(
   completedRows_ += outputVector->size();
   completedBytes_ += outputVector->retainedSize();
   return outputVector;
+}
+
+bool registerFuzzerConnectorFactory(
+    std::unique_ptr<FuzzerConnectorFactory> factory) {
+  connector::registerConnectorFactory(std::move(factory));
+}
+
+bool unregisterFuzzerConnectorFactory() {
+  connector::unregisterConnectorFactory(connector::kFuzzerConnectorName);
 }
 
 } // namespace facebook::velox::connector::fuzzer

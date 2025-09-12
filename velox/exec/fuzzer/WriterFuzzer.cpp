@@ -26,6 +26,7 @@
 #include "velox/common/file/tests/FaultyFileSystem.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
+#include "velox/connectors/hive/HiveDataSink.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/exec/fuzzer/FuzzerUtil.h"
@@ -145,7 +146,10 @@ class WriterFuzzer {
       int32_t bucketCount,
       const std::vector<std::string>& bucketColumns,
       int32_t sortColumnOffset,
-      const std::vector<std::shared_ptr<const HiveSortingColumn>>& sortBy,
+      const std::vector<std::string>& sortColumnNames,
+      const std::vector<core::SortOrder>& sortOrders,
+      //      const std::vector<std::shared_ptr<const HiveSortingColumn>>&
+      //      sortBy,
       const std::shared_ptr<TempDirectoryPath>& outputDirectoryPath);
 
   // Generates table column handles based on table column properties
@@ -342,7 +346,9 @@ void WriterFuzzer::go() {
     int32_t bucketCount = 0;
     std::vector<std::string> bucketColumns;
     int32_t sortColumnOffset = 0;
-    std::vector<std::shared_ptr<const HiveSortingColumn>> sortBy;
+    //    std::vector<std::shared_ptr<const HiveSortingColumn>> sortBy;
+    std::vector<std::string> sortColumnNames;
+    std::vector<core::SortOrder> sortOrders;
 
     // Regular table columns
     generateColumns(5, "c", kRegularColumnTypes_, 2, names, types);
@@ -362,13 +368,11 @@ void WriterFuzzer::go() {
           auto [sortColumns, offset] =
               generateSortColumns(3, bucketColumns, names, types);
           sortColumnOffset -= offset;
-          sortBy.reserve(sortColumns.size());
-          for (const auto& sortByColumn : sortColumns) {
-            sortBy.push_back(std::make_shared<const HiveSortingColumn>(
-                sortByColumn,
-                kSortOrderTypes_.at(
-                    boost::random::uniform_int_distribution<uint32_t>(
-                        0, 1)(rng_))));
+          sortColumnNames = std::move(sortColumns);
+          sortOrders.reserve(sortColumnNames.size());
+          for (const auto& sortByColumn : sortColumnNames) {
+            sortOrders.push_back(kSortOrderTypes_.at(
+                boost::random::uniform_int_distribution<uint32_t>(0, 1)(rng_)));
           }
         }
       }
@@ -391,7 +395,8 @@ void WriterFuzzer::go() {
         bucketCount,
         bucketColumns,
         sortColumnOffset,
-        sortBy,
+        sortColumnNames,
+        sortOrders,
         outputDirPath);
 
     LOG(INFO) << "==============================> Done with iteration "
@@ -499,7 +504,9 @@ void WriterFuzzer::verifyWriter(
     const int32_t bucketCount,
     const std::vector<std::string>& bucketColumns,
     const int32_t sortColumnOffset,
-    const std::vector<std::shared_ptr<const HiveSortingColumn>>& sortBy,
+    const std::vector<std::string>& sortColumnNames,
+    const std::vector<core::SortOrder>& sortOrders,
+    //    const std::vector<std::shared_ptr<const HiveSortingColumn>>& sortBy,
     const std::shared_ptr<TempDirectoryPath>& outputDirectoryPath) {
   const auto plan = PlanBuilder()
                         .values(input)
@@ -508,7 +515,8 @@ void WriterFuzzer::verifyWriter(
                             partitionKeys,
                             bucketCount,
                             bucketColumns,
-                            sortBy)
+                            sortColumnNames,
+                            sortOrders)
                         .planNode();
 
   const auto maxDrivers =
@@ -588,13 +596,20 @@ void WriterFuzzer::verifyWriter(
   }
 
   // 4. Verifies sorting.
-  if (sortBy.size() > 0) {
-    const std::vector<std::string> sortColumnNames = {
-        names.begin() + sortColumnOffset,
-        names.begin() + sortColumnOffset + sortBy.size()};
+  if (sortColumnNames.size() > 0) {
+    //    const std::vector<std::string> sortColumnNames = {
+    //        names.begin() + sortColumnOffset,
+    //        names.begin() + sortColumnOffset + sortBy.size()};
     const std::vector<TypePtr> sortColumnTypes = {
         types.begin() + sortColumnOffset,
-        types.begin() + sortColumnOffset + sortBy.size()};
+        types.begin() + sortColumnOffset + sortColumnNames.size()};
+
+    std::vector<std::shared_ptr<const HiveSortingColumn>> sortBy;
+    sortBy.reserve(sortColumnNames.size());
+    for (size_t i = 0; i < sortColumnNames.size(); ++i) {
+      sortBy.emplace_back(std::make_shared<HiveSortingColumn>(
+          sortColumnNames[i], sortOrders[i]));
+    }
 
     // Read from each file and check if data is sorted as presto sorted
     // result.

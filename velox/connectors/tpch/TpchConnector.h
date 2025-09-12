@@ -34,7 +34,7 @@ class TpchColumnHandle : public ColumnHandle {
  public:
   explicit TpchColumnHandle(const std::string& name) : name_(name) {}
 
-  const std::string& name() const {
+  const std::string& name() const override {
     return name_;
   }
 
@@ -196,7 +196,14 @@ class TpchConnectorFactory : public ConnectorFactory {
       folly::Executor* ioExecutor = nullptr,
       folly::Executor* cpuExecutor = nullptr) override {
     return std::make_shared<TpchConnector>(id, config, ioExecutor);
+
+    // TODO: Add object makers like makeTableHandle, makeColumnHandle, etc.
   }
 };
+
+bool registerTpchConnectorFactory(
+    std::unique_ptr<TpchConnectorFactory> factory);
+
+bool unregisterTpcdsConnectorFactory();
 
 } // namespace facebook::velox::connector::tpch

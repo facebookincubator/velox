@@ -141,6 +141,13 @@ class FuzzerConnectorFactory : public ConnectorFactory {
       folly::Executor* cpuExecutor = nullptr) override {
     return std::make_shared<FuzzerConnector>(id, config, ioExecutor);
   }
+
+  // TODO: Add object makers like makeTableHandle, makeColumnHandle, etc.
 };
+
+bool registerFuzzerConnectorFactory(
+    std::unique_ptr<FuzzerConnectorFactory> factory);
+
+bool unregisterFuzzerConnectorFactory();
 
 } // namespace facebook::velox::connector::fuzzer
