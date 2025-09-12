@@ -121,11 +121,10 @@ class S3Config {
             {Keys::KUploadPartAsync,
              std::make_pair("upload-part-async", "false")},
             {Keys::kPartUploadSize,
-             std::make_pair("part-upload-size", std::nullopt)},
+             std::make_pair("part-upload-size", "10485760")},
             {Keys::KMaxConcurrentUploadNum,
-             std::make_pair("max-concurrent-upload-num", std::nullopt)},
-            {Keys::KUploadThreads,
-             std::make_pair("upload-threads", std::nullopt)},
+             std::make_pair("max-concurrent-upload-num", "4")},
+            {Keys::KUploadThreads, std::make_pair("upload-threads", "16")},
         };
     return config;
   }
@@ -260,28 +259,19 @@ class S3Config {
     return folly::to<bool>(value);
   }
 
-  std::optional<int32_t> partUploadSize() const {
-    auto val = config_.find(Keys::kPartUploadSize)->second;
-    if (val.has_value()) {
-      return folly::to<uint32_t>(val.value());
-    }
-    return std::optional<uint32_t>();
+  int32_t partUploadSize() const {
+    auto value = config_.find(Keys::kPartUploadSize)->second.value();
+    return folly::to<uint32_t>(value);
   }
 
-  std::optional<int32_t> maxConcurrentUploadNum() const {
-    auto val = config_.find(Keys::KMaxConcurrentUploadNum)->second;
-    if (val.has_value()) {
-      return folly::to<uint32_t>(val.value());
-    }
-    return std::optional<uint32_t>();
+  int32_t maxConcurrentUploadNum() const {
+    auto value = config_.find(Keys::KMaxConcurrentUploadNum)->second.value();
+    return folly::to<uint32_t>(value);
   }
 
-  std::optional<int32_t> uploadThreads() const {
-    auto val = config_.find(Keys::KUploadThreads)->second;
-    if (val.has_value()) {
-      return folly::to<uint32_t>(val.value());
-    }
-    return std::optional<uint32_t>();
+  int32_t uploadThreads() const {
+    auto value = config_.find(Keys::KUploadThreads)->second.value();
+    return folly::to<uint32_t>(value);
   }
 
  private:

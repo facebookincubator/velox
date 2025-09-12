@@ -41,17 +41,17 @@ class S3WriteFile::Impl {
       std::string_view path,
       Aws::S3::S3Client* client,
       memory::MemoryPool* pool,
-      std::shared_ptr<AsyncUploadInfo> asyncUploadInfo)
+      S3Config* s3Config)
       : client_(client), pool_(pool) {
     VELOX_CHECK_NOT_NULL(client);
     VELOX_CHECK_NOT_NULL(pool);
-    if (asyncUploadInfo) {
-      kPartUploadSize = asyncUploadInfo->partUploadSize.value();
+    kPartUploadSize = s3Config->partUploadSize();
+    if (s3Config->uploadPartAsync()) {
       maxConcurrentUploadNum_ = std::make_unique<folly::ThrottledLifoSem>(
-          asyncUploadInfo->maxConcurrentUploadNum.value());
+          s3Config->maxConcurrentUploadNum());
       if (!uploadThreadPool_) {
         uploadThreadPool_ = std::make_shared<folly::CPUThreadPoolExecutor>(
-            asyncUploadInfo->uploadThreads.value(),
+            s3Config->uploadThreads(),
             std::make_shared<folly::NamedThreadFactory>("upload-thread"));
       }
     } else {
@@ -232,25 +232,29 @@ class S3WriteFile::Impl {
   void uploadPart(const std::string_view part, bool isLast = false) {
     // Only the last part can be less than kPartUploadSize.
     VELOX_CHECK(isLast || (!isLast && (part.size() == kPartUploadSize)));
+    auto uploadCompletedPart = [&](const std::string_view partData) {
+      Aws::S3::Model::CompletedPart completedPart =
+          uploadPartSeq(uploadState_.id, ++uploadState_.partNumber, partData);
+      uploadState_.completedParts.push_back(std::move(completedPart));
+    };
     if (uploadThreadPool_) {
       // If this is the last part and no parts have been uploaded yet,
       // use the synchronous upload method.
       if (isLast && uploadState_.partNumber == 0) {
-        uploadPartSeq(uploadState_.id, ++uploadState_.partNumber, part);
+        uploadCompletedPart(part);
       } else {
         uploadPartAsync(part);
       }
     } else {
-      uploadPartSeq(uploadState_.id, ++uploadState_.partNumber, part);
+      uploadCompletedPart(part);
     }
   }
 
   // Common logic for uploading a part.
-  void uploadPartSeq(
+  Aws::S3::Model::CompletedPart uploadPartSeq(
       const Aws::String& uploadId,
       const int64_t partNumber,
-      const std::string_view part,
-      bool async = false) {
+      const std::string_view part) {
     Aws::S3::Model::UploadPartRequest request;
     request.SetBucket(bucket_);
     request.SetKey(key_);
@@ -276,12 +280,7 @@ class S3WriteFile::Impl {
     if (!result.GetChecksumCRC32().empty()) {
       completedPart.SetChecksumCRC32(result.GetChecksumCRC32());
     }
-    if (async) {
-      std::lock_guard<std::mutex> lock(uploadStateMutex_);
-      uploadState_.completedParts.push_back(std::move(completedPart));
-    } else {
-      uploadState_.completedParts.push_back(std::move(completedPart));
-    }
+    return completedPart;
   }
 
   // Upload the part asynchronously.
@@ -296,7 +295,10 @@ class S3WriteFile::Impl {
             maxConcurrentUploadNum_->post();
           };
           try {
-            uploadPartSeq(uploadState_.id, partNumber, *partStr, true);
+            Aws::S3::Model::CompletedPart completedPart =
+                uploadPartSeq(uploadState_.id, partNumber, *partStr);
+            std::lock_guard<std::mutex> lock(uploadStateMutex_);
+            uploadState_.completedParts.push_back(std::move(completedPart));
           } catch (const std::exception& e) {
             LOG(ERROR) << "Exception during async upload: " << e.what();
           } catch (...) {
@@ -329,8 +331,8 @@ S3WriteFile::S3WriteFile(
     std::string_view path,
     Aws::S3::S3Client* client,
     memory::MemoryPool* pool,
-    std::shared_ptr<AsyncUploadInfo> asyncUploadInfo) {
-  impl_ = std::make_shared<Impl>(path, client, pool, asyncUploadInfo);
+    S3Config* s3Config) {
+  impl_ = std::make_shared<Impl>(path, client, pool, s3Config);
 }
 
 void S3WriteFile::append(std::string_view data) {

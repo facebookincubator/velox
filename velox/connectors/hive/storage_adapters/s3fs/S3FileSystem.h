@@ -33,12 +33,6 @@ void finalizeS3();
 
 class S3Config;
 
-struct AsyncUploadInfo {
-  std::optional<int32_t> partUploadSize{10485760};
-  std::optional<int32_t> maxConcurrentUploadNum{4};
-  std::optional<int32_t> uploadThreads{16};
-};
-
 using AWSCredentialsProviderFactory =
     std::function<std::shared_ptr<Aws::Auth::AWSCredentialsProvider>(
         const S3Config& config)>;

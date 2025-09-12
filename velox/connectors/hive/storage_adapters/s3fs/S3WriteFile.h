@@ -18,7 +18,7 @@
 
 #include "velox/common/file/File.h"
 #include "velox/common/memory/MemoryPool.h"
-#include "velox/connectors/hive/storage_adapters/s3fs/S3FileSystem.h"
+#include "velox/connectors/hive/storage_adapters/s3fs/S3Config.h"
 
 namespace Aws::S3 {
 class S3Client;
@@ -52,7 +52,7 @@ class S3WriteFile : public WriteFile {
       std::string_view path,
       Aws::S3::S3Client* client,
       memory::MemoryPool* pool,
-      std::shared_ptr<AsyncUploadInfo> asyncUploadInfo);
+      S3Config* s3Config);
 
   /// Appends data to the end of the file.
   /// Uploads a part on reaching part size limit.
