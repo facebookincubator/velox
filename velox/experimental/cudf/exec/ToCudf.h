@@ -29,6 +29,7 @@ DECLARE_bool(velox_cudf_table_scan);
 namespace facebook::velox::cudf_velox {
 
 static const std::string kCudfAdapterName = "cuDF";
+static const std::string kCudfParquetConnectorId = "test-parquet";
 
 class CompileState {
  public:
