@@ -16,13 +16,13 @@
 #pragma once
 
 #include <assert.h>
-#include <fmt/format.h>
 #include <folly/CPortability.h>
 #include <folly/Likely.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <cstdint>
 #include <cstring>
+#include <format>
 #include <string_view>
 #include <vector>
 

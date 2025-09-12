@@ -16,7 +16,7 @@
 
 #include <re2/re2.h>
 
-#include <fmt/format.h>
+#include <format>
 #include "folly/experimental/EventCount.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/TestValue.h"

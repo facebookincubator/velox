@@ -13,9 +13,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include <fmt/format.h>
 #include <folly/Benchmark.h>
 #include <folly/init/Init.h>
+#include <format>
 #include <string>
 
 #include "velox/exec/Cursor.h"

@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-#include <fmt/core.h>
 #include <gtest/gtest.h>
 #include <algorithm>
 

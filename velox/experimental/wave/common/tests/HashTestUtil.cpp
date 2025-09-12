@@ -15,7 +15,7 @@
  */
 
 #include "velox/experimental/wave/common/tests/HashTestUtil.h"
-#include <fmt/format.h>
+#include <format>
 #include "velox/common/base/BitUtil.h"
 #include "velox/experimental/wave/common/Buffer.h"
 #include "velox/experimental/wave/common/GpuArena.h"

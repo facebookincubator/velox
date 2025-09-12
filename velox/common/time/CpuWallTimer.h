@@ -15,8 +15,8 @@
  */
 #pragma once
 
-#include <fmt/format.h>
 #include <chrono>
+#include <format>
 
 #include "velox/common/base/SuccinctPrinter.h"
 #include "velox/common/process/ProcessBase.h"

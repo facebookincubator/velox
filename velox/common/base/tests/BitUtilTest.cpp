@@ -21,11 +21,11 @@
 #include <unordered_set>
 
 #include <boost/crc.hpp>
-#include <fmt/format.h>
 #include <folly/Random.h>
 #include <folly/hash/Checksum.h>
 #include <gflags/gflags.h>
 #include <gtest/gtest.h>
+#include <format>
 
 DECLARE_bool(bmi2); // NOLINT
 

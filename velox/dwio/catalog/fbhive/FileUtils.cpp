@@ -18,7 +18,6 @@
 
 #include <bitset>
 
-#include <fmt/core.h>
 #include <folly/container/Array.h>
 
 #include "velox/common/base/Exceptions.h"

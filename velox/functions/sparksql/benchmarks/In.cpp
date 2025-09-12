@@ -15,11 +15,11 @@
  */
 #include <string>
 
-#include <fmt/format.h>
 #include <folly/Benchmark.h>
 #include <folly/Conv.h>
 #include <folly/Random.h>
 #include <folly/init/Init.h>
+#include <format>
 
 #include "velox/functions/lib/Re2Functions.h"
 #include "velox/functions/lib/benchmarks/FunctionBenchmarkBase.h"

@@ -17,8 +17,8 @@
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
 #include <boost/random/uniform_int_distribution.hpp>
-#include <fmt/format.h>
 #include <codecvt>
+#include <format>
 #include <locale>
 
 #include "velox/common/base/Exceptions.h"

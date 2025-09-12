@@ -28,7 +28,7 @@
 #include <thrift/protocol/TProtocol.h>
 #include <thrift/transport/TTransport.h>
 
-#include <fmt/format.h>
+#include <format>
 #include <functional>
 #include <iosfwd>
 #include <memory>

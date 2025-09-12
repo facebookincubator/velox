@@ -20,7 +20,7 @@
 #include <memory>
 #include <optional>
 
-#include <fmt/format.h>
+#include <format>
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/Portability.h"

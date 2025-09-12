@@ -21,10 +21,10 @@
 #include <string>
 #include <utility>
 
-#include <fmt/format.h>
 #include <folly/Format.h>
 #include <folly/Range.h>
 #include <folly/container/F14Map.h>
+#include <format>
 
 #include "velox/buffer/Buffer.h"
 #include "velox/common/base/BitUtil.h"

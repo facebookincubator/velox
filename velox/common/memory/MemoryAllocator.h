@@ -23,8 +23,8 @@
 #include <mutex>
 #include <unordered_set>
 
-#include <fmt/format.h>
 #include <gflags/gflags.h>
+#include <format>
 #include "velox/common/base/CheckedArithmetic.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/memory/Allocation.h"

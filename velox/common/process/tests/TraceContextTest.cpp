@@ -17,11 +17,11 @@
 #include "velox/common/process/TraceContext.h"
 #include "velox/common/process/TraceHistory.h"
 
-#include <fmt/format.h>
 #include <folly/futures/Promise.h>
 #include <folly/synchronization/Baton.h>
 #include <folly/synchronization/Latch.h>
 #include <gtest/gtest.h>
+#include <format>
 
 #include <thread>
 

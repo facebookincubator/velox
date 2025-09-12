@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include <fmt/format.h>
+#include <format>
 #include <folly/init/Init.h>
 #include <gflags/gflags.h>
 #include <gtest/gtest.h>

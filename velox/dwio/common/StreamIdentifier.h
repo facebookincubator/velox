@@ -16,7 +16,6 @@
 
 #pragma once
 
-#include <fmt/core.h>
 #include <cstdint>
 #include <limits>
 #include <string>

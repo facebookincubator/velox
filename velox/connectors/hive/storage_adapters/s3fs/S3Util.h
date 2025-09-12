@@ -23,8 +23,8 @@
 
 #include <aws/s3/S3Errors.h>
 #include <aws/s3/model/HeadObjectResult.h>
-#include <fmt/format.h>
 #include <folly/Uri.h>
+#include <format>
 
 #include "velox/common/base/Exceptions.h"
 

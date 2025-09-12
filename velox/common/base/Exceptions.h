@@ -19,7 +19,6 @@
 #include <memory>
 #include <sstream>
 
-#include <fmt/ostream.h>
 #include <folly/Preprocessor.h>
 
 #include "velox/common/base/ExceptionHelper.h"

@@ -16,13 +16,9 @@
 
 #pragma once
 
-#include <fmt/format.h>
-#if FMT_VERSION >= 100100
-#include <fmt/std.h>
-#endif
-
 #include <atomic>
 #include <bitset>
+#include <format>
 #include <string_view>
 #include <system_error>
 #include <type_traits>

@@ -16,7 +16,7 @@
 
 #include "velox/tpcds/gen/utils/append_info-c.h"
 
-#include <fmt/format.h>
+#include <format>
 #include "velox/tpcds/gen/dsdgen/include/append_info.h"
 #include "velox/tpcds/gen/dsdgen/include/config.h"
 #include "velox/tpcds/gen/dsdgen/include/date.h"

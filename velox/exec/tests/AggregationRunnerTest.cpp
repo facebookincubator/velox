@@ -14,11 +14,11 @@
  * limitations under the License.
  */
 
-#include <fmt/format.h>
 #include <folly/init/Init.h>
 #include <gflags/gflags.h>
 #include <glog/logging.h>
 #include <gtest/gtest.h>
+#include <format>
 #include "velox/common/base/Fs.h"
 #include "velox/exec/fuzzer/AggregationFuzzerRunner.h"
 #include "velox/exec/fuzzer/DuckQueryRunner.h"

@@ -15,7 +15,7 @@
  */
 
 #include <cuda_runtime.h>
-#include <fmt/format.h>
+#include <format>
 #include <iostream>
 #include "velox/experimental/wave/common/Cuda.h"
 #include "velox/experimental/wave/common/CudaUtil.cuh"

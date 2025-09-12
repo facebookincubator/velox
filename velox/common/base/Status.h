@@ -18,11 +18,10 @@
 
 #pragma once
 
+#include <format>
 #include <string>
 #include <utility>
 
-#include <fmt/format.h>
-#include <fmt/ostream.h>
 #include <folly/Expected.h>
 #include <folly/Likely.h>
 

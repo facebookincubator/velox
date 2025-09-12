@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include <fmt/format.h>
+#include <format>
 
 #include "velox/experimental/wave/common/Exception.h"
 #include "velox/experimental/wave/common/Hash.h"

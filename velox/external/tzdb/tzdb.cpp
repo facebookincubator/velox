@@ -15,7 +15,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
-#include <fmt/format.h>
+#include <format>
 #include <stdexcept>
 #include <string>
 #include <string_view>

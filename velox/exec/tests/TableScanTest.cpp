@@ -16,7 +16,6 @@
 #include <atomic>
 #include <shared_mutex>
 
-#include <fmt/ranges.h>
 #include <folly/experimental/EventCount.h>
 #include <folly/synchronization/Baton.h>
 #include <folly/synchronization/Latch.h>

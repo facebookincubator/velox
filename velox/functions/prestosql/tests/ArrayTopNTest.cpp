@@ -19,8 +19,8 @@
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 
-#include <fmt/format.h>
 #include <cstdint>
+#include <format>
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;

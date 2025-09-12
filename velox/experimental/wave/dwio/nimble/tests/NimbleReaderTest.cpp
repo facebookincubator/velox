@@ -15,9 +15,9 @@
  */
 
 #include <cuda_runtime.h> // @manual
-#include <fmt/format.h>
 #include <gflags/gflags.h>
 #include <gtest/gtest.h>
+#include <format>
 
 #include "dwio/nimble/encodings/EncodingLayout.h"
 #include "dwio/nimble/encodings/EncodingLayoutCapture.h"

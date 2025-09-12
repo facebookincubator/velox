@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 
-#include <fmt/format.h>
 #include <folly/init/Init.h>
 #include <chrono>
+#include <format>
 
 #include "velox/common/memory/Memory.h"
 #include "velox/connectors/tpch/TpchConnector.h"

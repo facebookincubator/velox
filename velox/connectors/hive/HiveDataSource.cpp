@@ -16,7 +16,6 @@
 
 #include "velox/connectors/hive/HiveDataSource.h"
 
-#include <fmt/ranges.h>
 #include <string>
 #include <unordered_map>
 

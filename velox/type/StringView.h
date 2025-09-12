@@ -25,7 +25,7 @@
 #include <folly/Range.h>
 #include <folly/dynamic.h>
 
-#include <fmt/format.h>
+#include <format>
 
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/Exceptions.h"

@@ -16,9 +16,9 @@
 #include <functional>
 #include <optional>
 
-#include <fmt/format.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <format>
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/lib/Re2Functions.h"

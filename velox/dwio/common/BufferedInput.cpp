@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include <fmt/format.h>
+#include <format>
 #include <numeric>
 #include <utility>
 

@@ -23,8 +23,8 @@
 #include "velox/connectors/hive/storage_adapters/gcs/GcsWriteFile.h"
 #include "velox/core/QueryConfig.h"
 
-#include <fmt/format.h>
 #include <glog/logging.h>
+#include <format>
 #include <memory>
 #include <stdexcept>
 

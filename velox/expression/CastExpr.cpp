@@ -16,7 +16,7 @@
 
 #include "velox/expression/CastExpr.h"
 
-#include <fmt/format.h>
+#include <format>
 #include <stdexcept>
 
 #include "velox/common/base/Exceptions.h"

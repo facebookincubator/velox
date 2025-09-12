@@ -15,8 +15,8 @@
  */
 
 #include "velox/python/file/PyFile.h"
-#include <fmt/format.h>
 #include <folly/String.h>
+#include <format>
 #include "velox/dwio/common/ReaderFactory.h"
 
 namespace facebook::velox::py {

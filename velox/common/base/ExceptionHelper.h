@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include <fmt/format.h>
+#include <format>
 #include <string>
 
 namespace facebook::velox {

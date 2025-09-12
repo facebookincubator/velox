@@ -527,8 +527,7 @@ diff --git a/fbcode/velox/external/tzdb/time_zone.cpp b/fbcode/velox/external/tz
  // These quirks often use a 12h interval; this is the scan interval of zdump,
  // which implies there are no sys_info objects with a duration of less than 12h.
  
-+#include <fmt/chrono.h>
-+#include <fmt/format.h>
++#include <format>
 +#include <folly/Expected.h>
  #include <algorithm>
 -#include <cctype>

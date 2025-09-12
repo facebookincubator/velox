@@ -15,7 +15,7 @@
  */
 #pragma once
 
-#include <fmt/format.h>
+#include <format>
 #include "velox/connectors/Connector.h"
 
 namespace facebook::velox::connector::tpch {

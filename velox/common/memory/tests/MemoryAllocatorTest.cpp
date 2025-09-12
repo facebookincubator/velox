@@ -23,12 +23,12 @@
 #include "velox/common/memory/SharedArbitrator.h"
 #include "velox/common/testutil/TestValue.h"
 
-#include <fmt/format.h>
 #include <folly/Random.h>
 #include <folly/Range.h>
 #include <gflags/gflags.h>
 #include <gmock/gmock-matchers.h>
 #include <gtest/gtest.h>
+#include <format>
 
 #ifdef linux
 #include <fstream>

@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include <fmt/format.h>
+#include <format>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"

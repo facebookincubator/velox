@@ -17,9 +17,9 @@
 #pragma once
 
 #include <cuda_runtime.h> // @manual
-#include <fmt/format.h>
 #include <gflags/gflags.h>
 #include <gtest/gtest.h>
+#include <format>
 
 #include "dwio/nimble/encodings/EncodingSelectionPolicy.h"
 #include "dwio/nimble/tablet/TabletReader.h"

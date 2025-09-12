@@ -34,8 +34,9 @@
 #include "velox/exec/tests/utils/VectorTestUtil.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
-#include <fmt/format.h>
 #include <re2/re2.h>
+
+#include <format>
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;

@@ -32,7 +32,6 @@
 #include "velox/vector/FlatVector.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
-#include <fmt/core.h>
 #include <array>
 #include <future>
 #include <memory>

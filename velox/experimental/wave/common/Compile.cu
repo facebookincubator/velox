@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include <fmt/format.h>
+#include <format>
 #include <gflags/gflags.h>
 #include <nvrtc.h>
 #include "velox/experimental/wave/common/Cuda.h"

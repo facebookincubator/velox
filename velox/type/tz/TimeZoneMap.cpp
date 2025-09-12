@@ -17,7 +17,6 @@
 #include "velox/type/tz/TimeZoneMap.h"
 
 #include <boost/algorithm/string.hpp>
-#include <fmt/core.h>
 #include <folly/container/F14Map.h>
 #include <folly/container/F14Set.h>
 

@@ -16,10 +16,10 @@
 
 #include <gtest/gtest.h>
 
-#include <fmt/format.h>
 #include <gmock/gmock.h>
 #include <re2/re2.h>
 #include <deque>
+#include <format>
 #include <vector>
 #include "folly/experimental/EventCount.h"
 #include "velox/common/base/tests/GTestUtils.h"

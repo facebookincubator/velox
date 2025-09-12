@@ -23,10 +23,10 @@
 #include <memory>
 #include <string>
 
-#include <fmt/format.h>
 #include <folly/Synchronized.h>
 #include <gflags/gflags.h>
 #include <glog/logging.h>
+#include <format>
 
 #include <velox/common/base/Exceptions.h>
 #include "folly/CPortability.h"

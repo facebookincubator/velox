@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 
-#include <fmt/format.h>
 #include <folly/Random.h>
 #include <gtest/gtest.h>
+#include <format>
 
 #include "velox/common/base/Exceptions.h"
 

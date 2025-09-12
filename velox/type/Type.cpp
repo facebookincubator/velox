@@ -17,9 +17,9 @@
 #include <velox/type/Type.h>
 
 #include <boost/algorithm/string.hpp>
-#include <fmt/format.h>
 #include <folly/Demangle.h>
 #include <re2/re2.h>
+#include <format>
 
 #include <sstream>
 #include <typeindex>

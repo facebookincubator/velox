@@ -16,7 +16,6 @@
 
 #include "velox/exec/Trace.h"
 
-#include <fmt/core.h>
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/SuccinctPrinter.h"

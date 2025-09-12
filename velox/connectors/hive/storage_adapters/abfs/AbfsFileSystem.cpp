@@ -16,9 +16,9 @@
 
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsFileSystem.h"
 
-#include <fmt/format.h>
 #include <folly/executors/IOThreadPoolExecutor.h>
 #include <glog/logging.h>
+#include <format>
 
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsPath.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsReadFile.h"

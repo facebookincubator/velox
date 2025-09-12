@@ -17,7 +17,7 @@
 #pragma once
 
 #include <azure/storage/common/storage_exception.hpp>
-#include <fmt/format.h>
+#include <format>
 #include "velox/common/file/File.h"
 
 namespace facebook::velox::filesystems {

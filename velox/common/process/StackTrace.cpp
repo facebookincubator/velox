@@ -27,10 +27,10 @@
 #include <algorithm>
 #include <fstream>
 
-#include <fmt/format.h>
 #include <folly/Indestructible.h>
 #include <folly/String.h>
 #include <folly/experimental/symbolizer/StackTrace.h>
+#include <format>
 
 #include "velox/common/process/ProcessBase.h"
 

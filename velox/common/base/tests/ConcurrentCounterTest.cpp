@@ -16,9 +16,9 @@
 
 #include "velox/common/base/ConcurrentCounter.h"
 
-#include <fmt/format.h>
 #include <folly/Random.h>
 #include <gtest/gtest.h>
+#include <format>
 #include "velox/common/base/tests/GTestUtils.h"
 
 namespace facebook::velox::common::test {

@@ -16,9 +16,9 @@
 
 #pragma once
 
-#include <fmt/format.h>
 #include <folly/Expected.h>
 #include <folly/compression/Compression.h>
+#include <format>
 #include <string>
 
 #include "velox/common/base/Status.h"

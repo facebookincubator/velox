@@ -18,7 +18,6 @@
 
 #include <stdexcept>
 
-#include <fmt/core.h>
 #include <folly/container/F14Map.h>
 
 namespace facebook::velox::VectorEncoding {

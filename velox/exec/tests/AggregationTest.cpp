@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 
-#include <fmt/format.h>
 #include <folly/Math.h>
 #include <re2/re2.h>
+#include <format>
 
 #include "folly/experimental/EventCount.h"
 #include "velox/common/base/tests/GTestUtils.h"

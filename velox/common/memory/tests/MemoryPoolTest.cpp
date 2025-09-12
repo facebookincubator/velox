@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 
-#include <fmt/format.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <format>
 
 #include "velox/common/base/CheckedArithmetic.h"
 #include "velox/common/base/tests/GTestUtils.h"
