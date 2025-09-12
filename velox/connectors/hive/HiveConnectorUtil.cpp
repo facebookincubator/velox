@@ -571,8 +571,10 @@ void configureReaderOptions(
       useColumnNamesForColumnMapping = false;
   }
 
-  readerOptions.setUseColumnNamesForColumnMapping(
-      useColumnNamesForColumnMapping);
+  readerOptions.setColumnMappingMode(
+      useColumnNamesForColumnMapping
+          ? dwio::common::ColumnMappingMode::kName
+          : dwio::common::ColumnMappingMode::kPosition);
   readerOptions.setFileSchema(fileSchema);
   readerOptions.setFooterEstimatedSize(hiveConfig->footerEstimatedSize());
   readerOptions.setFilePreloadThreshold(hiveConfig->filePreloadThreshold());
