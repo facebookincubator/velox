@@ -346,7 +346,8 @@ std::vector<std::unique_ptr<StreamLoader>> writeToNimbleAndGetStreamLoaders(
   writerOptions.minStreamChunkRawSize = 0;
   writerOptions.flushPolicyFactory = [] {
     return std::make_unique<LambdaFlushPolicy>(
-        [](const StripeProgress&) { return FlushDecision::Chunk; });
+        [](const StripeProgress&) { return FlushDecision::None; },
+        [](const StripeProgress&) { return ChunkDecision::Chunk; });
   };
 
   std::vector<std::unique_ptr<StreamLoader>> allStreamLoaders;
