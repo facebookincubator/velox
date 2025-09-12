@@ -1655,4 +1655,23 @@ TEST_F(SimpleFunctionTest, toDebugString) {
       "Priority: 999997\nDefaultNullBehavior: true");
 }
 
+template <typename T>
+struct TimePlusOneFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  void call(out_type<Time>& out, const arg_type<Time>& input) {
+    out = input + 1;
+  }
+};
+
+TEST_F(SimpleFunctionTest, timeTypeTest) {
+  registerFunction<TimePlusOneFunction, Time, Time>({"time_plus_one"});
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3}, TIME()),
+  });
+  auto result = evaluate("time_plus_one(c0)", data);
+  auto expected = makeFlatVector<int64_t>({2, 3, 4}, TIME());
+  assertEqualVectors(expected, result);
+}
+
 } // namespace
