@@ -1757,3 +1757,27 @@ TEST_F(ParquetReaderTest, fileColumnVarcharToMetadataColumnMismatchTest) {
     runVarcharColTest(type);
   }
 }
+
+TEST_F(ParquetReaderTest, parseReadByFieldId) {
+  // field_id.parquet contains 18 columns and 2 rows.
+  // Field IDs are 1-based; the first column has field_id = 1.
+  const std::string fieldIds(getExampleFilePath("field_id.parquet"));
+
+  dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+  // Test use field_id as column names for matching.
+  readerOptions.setColumnMappingMode(dwio::common::ColumnMappingMode::kFieldId);
+  auto outputRowType = ROW({"1", "2"}, {BIGINT(), BOOLEAN()});
+  readerOptions.setFileSchema(outputRowType);
+  readerOptions.setFileColumnNamesReadAsLowerCase(true);
+  auto reader = createReader(fieldIds, readerOptions);
+  EXPECT_EQ(reader->numberOfRows(), 2ULL);
+
+  auto type = reader->typeWithId();
+  EXPECT_EQ(type->size(), 2ULL);
+  auto col0 = type->childAt(0);
+  EXPECT_EQ(col0->type()->kind(), TypeKind::BIGINT);
+  auto col1 = type->childAt(1);
+  EXPECT_EQ(col1->type()->kind(), TypeKind::BOOLEAN);
+  EXPECT_EQ(type->childByName("1"), col0);
+  EXPECT_EQ(type->childByName("2"), col1);
+}

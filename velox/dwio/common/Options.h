@@ -491,11 +491,6 @@ class RowReaderOptions {
 
 enum class ColumnMappingMode { kPosition, kName, kFieldId };
 
-struct ParquetFieldIdBinding {
-  int32_t id;
-  std::vector<ParquetFieldIdBinding> children;
-};
-
 class ReaderOptions : public io::ReaderOptions {
  public:
   static constexpr uint64_t kDefaultFooterEstimatedSize = 1024 * 1024; // 1MB
@@ -565,17 +560,6 @@ class ReaderOptions : public io::ReaderOptions {
 
   ColumnMappingMode columnMappingMode() const {
     return columnMappingMode_;
-  }
-
-  ReaderOptions& setParquetFieldIds(
-      std::shared_ptr<std::vector<ParquetFieldIdBinding>> fieldIds) {
-    parquetFieldIds_ = std::move(fieldIds);
-    return *this;
-  }
-
-  const std::shared_ptr<const std::vector<ParquetFieldIdBinding>>&
-  parquetFieldIds() const {
-    return parquetFieldIds_;
   }
 
   ReaderOptions& setIOExecutor(std::shared_ptr<folly::Executor> executor) {
@@ -705,7 +689,6 @@ class ReaderOptions : public io::ReaderOptions {
   bool selectiveNimbleReaderEnabled_{false};
   bool allowEmptyFile_{false};
   ColumnMappingMode columnMappingMode_{ColumnMappingMode::kPosition};
-  std::shared_ptr<const std::vector<ParquetFieldIdBinding>> parquetFieldIds_;
 };
 
 struct WriterOptions {
