@@ -447,9 +447,9 @@ void JsonPathGenerator::generateImpl(std::string& path, const TypePtr& type) {
       return;
     case TypeKind::ARRAY:
       if (coinToss(rng_, 0.2)) {
-        path += fmt::format(".{}", generateRandomIndex());
+        path += std::format(".{}", generateRandomIndex());
       } else if (coinToss(rng_, 0.2)) {
-        path += fmt::format("[{}]", generateRandomIndex());
+        path += std::format("[{}]", generateRandomIndex());
         generateImpl(path, type->childAt(0));
       } else if (coinToss(rng_, 0.2)) {
         path += "[*]";
@@ -466,7 +466,7 @@ void JsonPathGenerator::generateImpl(std::string& path, const TypePtr& type) {
       const auto selectedField =
           rand<uint64_t>(rng_, 0, type->asRow().size() - 1);
       if (coinToss(rng_, 0.2)) {
-        path += fmt::format("[{}]", selectedField);
+        path += std::format("[{}]", selectedField);
         generateImpl(path, type->childAt(selectedField));
       } else if (coinToss(rng_, 0.6)) {
         if (coinToss(rng_, 0.2)) {
@@ -491,10 +491,10 @@ void JsonPathGenerator::generateImpl(std::string& path, const TypePtr& type) {
           mapKeys_[rand<uint64_t>(rng_, 0, mapKeys_.size() - 1)].toString(
               type->childAt(0));
       if (coinToss(rng_, 0.1)) {
-        path += fmt::format("['{}']", selectedKey);
+        path += std::format("['{}']", selectedKey);
         generateImpl(path, type->childAt(1));
       } else if (coinToss(rng_, 0.1)) {
-        path += fmt::format("[\"{}\"]", selectedKey);
+        path += std::format("[\"{}\"]", selectedKey);
         generateImpl(path, type->childAt(1));
       } else if (coinToss(rng_, 0.1)) {
         path += "[*]";
@@ -503,11 +503,11 @@ void JsonPathGenerator::generateImpl(std::string& path, const TypePtr& type) {
         path += ".*";
         generateImpl(path, type->childAt(1));
       } else if (coinToss(rng_, 0.1)) {
-        path += fmt::format(".{}", selectedKey);
+        path += std::format(".{}", selectedKey);
         generateImpl(path, type->childAt(1));
       } else if (makeRandomVariation_ && coinToss(rng_, 0.1)) {
         // Intentionally test invalid json path.
-        path += fmt::format(".\"{}\"", selectedKey);
+        path += std::format(".\"{}\"", selectedKey);
         generateImpl(path, type->childAt(1));
       } else if (makeRandomVariation_ && coinToss(rng_, 0.1)) {
         // Intentionally test invalid json path.
@@ -515,7 +515,7 @@ void JsonPathGenerator::generateImpl(std::string& path, const TypePtr& type) {
         generateImpl(path, type->childAt(1));
       } else if (makeRandomVariation_ && coinToss(rng_, 0.1)) {
         // Intentionally test invalid json path.
-        path += fmt::format("[{}]", selectedKey);
+        path += std::format("[{}]", selectedKey);
         generateImpl(path, type->childAt(1));
       }
       return;
@@ -586,7 +586,7 @@ std::string CastVarcharInputGenerator::generateValidPrimitiveAsString() {
     }
     default:
       // cast from varchar doesn't support complex types
-      VELOX_FAIL_UNSUPPORTED_INPUT_UNCATCHABLE(fmt::format(
+      VELOX_FAIL_UNSUPPORTED_INPUT_UNCATCHABLE(std::format(
           "Type `{}` not supported for cast varchar custom generator",
           castToType_->kind()));
   }

@@ -18,7 +18,6 @@
 
 #include <bitset>
 
-#include <fmt/core.h>
 #include <folly/container/Array.h>
 
 #include "velox/common/base/Exceptions.h"
@@ -136,7 +135,7 @@ std::string FileUtils::escapePathName(const std::string& data) {
   ret.reserve(data.size() + countEscape(data) * HEX_WIDTH);
   std::for_each(data.begin(), data.end(), [&](auto& c) {
     if (shouldEscape(c)) {
-      ret += fmt::format("%{:02X}", c);
+      ret += std::format("%{:02X}", c);
     } else {
       ret += c;
     }

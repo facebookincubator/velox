@@ -484,7 +484,7 @@ void registerNumericHistogramAggregate(
   // REAL type in weight, though we don't support real weight in Presto
   const auto weightTypes = {"real", "double"};
   for (const auto& valueType : valueTypes) {
-    const auto returnType = fmt::format("map({}, {})", valueType, valueType);
+    const auto returnType = std::format("map({}, {})", valueType, valueType);
     signatures.push_back(exec::AggregateFunctionSignatureBuilder()
                              .returnType(returnType)
                              .intermediateType("varbinary")

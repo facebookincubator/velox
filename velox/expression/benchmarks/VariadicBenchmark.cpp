@@ -94,7 +94,7 @@ class VariadicBenchmark : public functions::test::FunctionBenchmarkBase {
     for (vector_size_t i = 0; i < numArgs; ++i) {
       args.emplace_back(
           vectorMaker_.flatVector<StringView>(size, [](vector_size_t row) {
-            return StringView::makeInline(fmt::format("{}", row));
+            return StringView::makeInline(std::format("{}", row));
           }));
     }
 
@@ -111,11 +111,11 @@ class VariadicBenchmark : public functions::test::FunctionBenchmarkBase {
         args += ", ";
       }
 
-      args += fmt::format("c{}", i);
+      args += std::format("c{}", i);
     }
 
     auto exprSet = compileExpression(
-        fmt::format("{}({})", functionName, args), rowVector->type());
+        std::format("{}({})", functionName, args), rowVector->type());
     suspender.dismiss();
 
     return doRun(exprSet, rowVector);
@@ -158,9 +158,9 @@ class VariadicBenchmark : public functions::test::FunctionBenchmarkBase {
 
     for (const auto& name : functions) {
       auto other = compileExpression(
-          fmt::format("{}(c0, c1, c2, c3, c4)", name), input->type());
+          std::format("{}(c0, c1, c2, c3, c4)", name), input->type());
       if (!hasSameResults(exprSetRef, other, input)) {
-        VELOX_UNREACHABLE(fmt::format("testing failed at function {}", name));
+        VELOX_UNREACHABLE(std::format("testing failed at function {}", name));
       }
     }
   }

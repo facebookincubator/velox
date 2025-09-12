@@ -14,11 +14,11 @@
  * limitations under the License.
  */
 
-#include <fmt/format.h>
 #include <folly/init/Init.h>
 #include <gflags/gflags.h>
 #include <glog/logging.h>
 #include <gtest/gtest.h>
+#include <format>
 #include "velox/common/base/Fs.h"
 #include "velox/exec/fuzzer/AggregationFuzzerRunner.h"
 #include "velox/exec/fuzzer/DuckQueryRunner.h"
@@ -57,7 +57,7 @@ static std::string checkAndReturnFilePath(
     const std::string_view& fileName,
     const std::string& flagName) {
   auto path =
-      fmt::format("{}/{}", FLAGS_aggregation_fuzzer_repro_path, fileName);
+      std::format("{}/{}", FLAGS_aggregation_fuzzer_repro_path, fileName);
   if (fs::exists(path)) {
     LOG(INFO) << "Using " << flagName << " = " << path;
     return path;

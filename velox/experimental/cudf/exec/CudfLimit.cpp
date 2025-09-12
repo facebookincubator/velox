@@ -34,7 +34,7 @@ CudfLimit::CudfLimit(
       NvtxHelper(
           nvtx3::rgb{112, 128, 144}, // Slate Gray
           operatorId,
-          fmt::format("[{}]", limitNode->id())),
+          std::format("[{}]", limitNode->id())),
       remainingOffset_{limitNode->offset()},
       remainingLimit_{limitNode->count()} {
   isIdentityProjection_ = true;

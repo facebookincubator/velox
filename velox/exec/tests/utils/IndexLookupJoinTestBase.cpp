@@ -319,7 +319,7 @@ void IndexLookupJoinTestBase::createDuckDbTable(
   std::vector<std::string> columnNames;
   columnNames.reserve(data[0]->type()->size());
   for (int i = 0; i < data[0]->type()->size(); ++i) {
-    columnNames.push_back(fmt::format("c{}", i));
+    columnNames.push_back(std::format("c{}", i));
   }
   std::vector<RowVectorPtr> duckDbInputs;
   duckDbInputs.reserve(data.size());

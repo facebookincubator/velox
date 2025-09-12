@@ -821,7 +821,7 @@ std::vector<MaterializedRow> materialize(const RowVectorPtr& vector) {
 void DuckDbQueryRunner::createTable(
     const std::string& name,
     const std::vector<RowVectorPtr>& data) {
-  auto query = fmt::format("DROP TABLE IF EXISTS {}", name);
+  auto query = std::format("DROP TABLE IF EXISTS {}", name);
   execute(query);
 
   auto& rowType = data[0]->type()->as<TypeKind::ROW>();
@@ -1540,7 +1540,7 @@ std::unordered_map<std::string, OperatorStats> toOperatorStats(
 } // namespace facebook::velox::exec::test
 
 template <>
-struct fmt::formatter<::duckdb::LogicalTypeId> : formatter<int> {
+struct std::formatter<::duckdb::LogicalTypeId> : formatter<int> {
   auto format(::duckdb::LogicalTypeId s, format_context& ctx) const {
     return formatter<int>::format(static_cast<int>(s), ctx);
   }

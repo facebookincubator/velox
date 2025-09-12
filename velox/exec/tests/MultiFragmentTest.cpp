@@ -85,11 +85,11 @@ class MultiFragmentTest : public HiveConnectorTestBase,
   }
 
   static std::string makeTaskId(const std::string& prefix, int num) {
-    return fmt::format("local://{}-{}", prefix, num);
+    return std::format("local://{}-{}", prefix, num);
   }
 
   static std::string makeBadTaskId(const std::string& prefix, int num) {
-    return fmt::format("bad://{}-{}", prefix, num);
+    return std::format("bad://{}-{}", prefix, num);
   }
 
   static exec::Consumer noopConsumer() {
@@ -333,7 +333,7 @@ TEST_P(MultiFragmentTest, aggregationSingleKey) {
 
   // Verify the created memory pools.
   for (int i = 0; i < tasks.size(); ++i) {
-    SCOPED_TRACE(fmt::format("task {}", tasks[i]->taskId()));
+    SCOPED_TRACE(std::format("task {}", tasks[i]->taskId()));
     int32_t numPools = 0;
     std::unordered_map<std::string, memory::MemoryPool*> poolsByName;
     std::vector<memory::MemoryPool*> pools;
@@ -1037,7 +1037,7 @@ TEST_P(MultiFragmentTest, noHashPartitionSkew) {
   const auto runConsumer = [&](int partition) {
     const auto expectedResult = makeRowVector({makeFlatVector<int64_t>(
         std::vector<int64_t>{expectedValues[partition]})});
-    SCOPED_TRACE(fmt::format("partition {}", partition));
+    SCOPED_TRACE(std::format("partition {}", partition));
     auto consumerTask =
         test::AssertQueryBuilder(consumerPlan)
             .split(remoteSplit(producerTaskId))
@@ -1123,7 +1123,7 @@ TEST_P(MultiFragmentTest, noHivePartitionSkew) {
     // Hive partition evenly distribute rows across nodes.
     const auto expectedResult =
         makeRowVector({makeFlatVector<int64_t>(std::vector<int64_t>{1'250})});
-    SCOPED_TRACE(fmt::format("partition {}", partition));
+    SCOPED_TRACE(std::format("partition {}", partition));
     auto consumerTask =
         test::AssertQueryBuilder(consumerPlan)
             .split(remoteSplit(producerTaskId))
@@ -2520,7 +2520,7 @@ class DataFetcher {
     }
 
     std::string toString() const {
-      return fmt::format(
+      return std::format(
           "numPackets {} numPages {} totalBytes {}",
           numPackets,
           numPages,
@@ -2670,10 +2670,10 @@ DEBUG_ONLY_TEST_P(MultiFragmentTest, maxBytes) {
   DataFetcher::Stats prevStats;
 
   auto test = [&](int64_t maxBytes) {
-    const auto taskId = fmt::format("test.{}", testIteration++);
+    const auto taskId = std::format("test.{}", testIteration++);
 
     SCOPED_TRACE(taskId);
-    SCOPED_TRACE(fmt::format("maxBytes: {}", maxBytes));
+    SCOPED_TRACE(std::format("maxBytes: {}", maxBytes));
 
     DataFetcher fetcher(taskId, 0, maxBytes);
 
@@ -2802,7 +2802,7 @@ TEST_P(MultiFragmentTest, earlyTaskFailure) {
           .partitionedOutput({}, 1, /*outputLayout=*/{}, GetParam().serdeKind)
           .planNode();
   for (bool internalFailure : {false, true}) {
-    SCOPED_TRACE(fmt::format("internalFailure: {}", internalFailure));
+    SCOPED_TRACE(std::format("internalFailure: {}", internalFailure));
 
     auto partialSortTask = makeTask(partialSortTaskId, partialSortPlan, 1);
     partialSortTask->start(1);
@@ -3087,12 +3087,12 @@ TEST_P(MultiFragmentTest, compression) {
 
   {
     SCOPED_TRACE(
-        fmt::format("compression kind {}", GetParam().compressionKind));
+        std::format("compression kind {}", GetParam().compressionKind));
     {
-      SCOPED_TRACE(fmt::format("minCompressionRatio 0.7"));
+      SCOPED_TRACE(std::format("minCompressionRatio 0.7"));
       test("local://t1", 0.7, false);
     }
-    SCOPED_TRACE(fmt::format("minCompressionRatio 0.0000001"));
+    SCOPED_TRACE(std::format("minCompressionRatio 0.0000001"));
     { test("local://t2", 0.0000001, true); }
   }
 }
@@ -3117,7 +3117,7 @@ TEST_P(MultiFragmentTest, scaledTableScan) {
     bool expectScaleUp;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "scaleEnabled {}, scaleUpMemoryUsageRatio {}, expectScaleUp {}",
           scaleEnabled,
           scaleUpMemoryUsageRatio,
@@ -3228,7 +3228,7 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
     MultiFragmentTest,
     testing::ValuesIn(MultiFragmentTest::getTestParams()),
     [](const testing::TestParamInfo<TestParam>& info) {
-      return fmt::format(
+      return std::format(
           "{}_{}",
           VectorSerde::kindName(info.param.serdeKind),
           compressionKindToString(info.param.compressionKind));

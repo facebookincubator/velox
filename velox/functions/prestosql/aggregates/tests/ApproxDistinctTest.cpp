@@ -44,13 +44,13 @@ class ApproxDistinctTest : public AggregationTestBase {
     testAggregations(
         {vectors},
         {},
-        {fmt::format("approx_distinct(c0, {})", maxStandardError)},
+        {std::format("approx_distinct(c0, {})", maxStandardError)},
         {expected});
     testAggregationsWithCompanion(
         {vectors},
         [](auto& /*builder*/) {},
         {},
-        {fmt::format("approx_distinct(c0, {})", maxStandardError)},
+        {std::format("approx_distinct(c0, {})", maxStandardError)},
         {{values->type(), DOUBLE()}},
         {},
         {expected});
@@ -63,7 +63,7 @@ class ApproxDistinctTest : public AggregationTestBase {
       testAggregations(
           {vectors},
           {},
-          {fmt::format("approx_set(c0, {})", maxStandardError)},
+          {std::format("approx_set(c0, {})", maxStandardError)},
           {"cardinality(a0)"},
           {expected});
     }

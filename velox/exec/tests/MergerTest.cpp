@@ -332,7 +332,7 @@ TEST_F(MergerTest, sourceMerger) {
     size_t queueSize;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "maxOutputRows:{}, maxOutputBytes:{}, numStreams:{}, queueSize:{}",
           maxOutputRows,
           succinctBytes(maxOutputBytes),
@@ -389,7 +389,7 @@ TEST_F(MergerTest, spillMerger) {
     size_t queueSize;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "maxOutputRows:{}, numStreams:{}, queueSize:{}",
           maxOutputRows,
           numSources,

@@ -19,8 +19,8 @@
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 
-#include <fmt/format.h>
 #include <cstdint>
+#include <format>
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
@@ -309,7 +309,7 @@ TEST_F(ArrayTopNTest, complexInput) {
                   int32_t size,
                   const VectorPtr& expectedArrayVector) {
     auto result = evaluate(
-        fmt::format("array_top_n(c0, INTEGER '{}')", size),
+        std::format("array_top_n(c0, INTEGER '{}')", size),
         makeRowVector({inputArrayVector}));
     assertEqualVectors(expectedArrayVector, result);
   };

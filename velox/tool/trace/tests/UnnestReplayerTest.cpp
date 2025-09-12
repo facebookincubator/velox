@@ -70,7 +70,7 @@ class UnnestReplayerTest : public HiveConnectorTestBase {
       const std::string& path) {
     std::vector<Split> splits;
     for (auto i = 0; i < 4; ++i) {
-      const std::string filePath = fmt::format("{}/{}", path, i);
+      const std::string filePath = std::format("{}/{}", path, i);
       writeToFile(filePath, inputs);
       splits.emplace_back(makeHiveConnectorSplit(filePath));
     }
@@ -103,7 +103,7 @@ class UnnestReplayerTest : public HiveConnectorTestBase {
                     .planNode();
 
     const std::vector<Split> splits =
-        makeSplits(input_, fmt::format("{}/splits", testDir_->getPath()));
+        makeSplits(input_, std::format("{}/splits", testDir_->getPath()));
     return PlanWithSplits{plan, scanId, splits};
   }
 
@@ -134,7 +134,7 @@ TEST_F(UnnestReplayerTest, test) {
 
   // Run the query with tracing enabled
   const auto traceRoot =
-      fmt::format("{}/{}/traceRoot/", testDir_->getPath(), "basic");
+      std::format("{}/{}/traceRoot/", testDir_->getPath(), "basic");
   std::shared_ptr<Task> task;
   auto tracePlanWithSplits = createPlan();
   AssertQueryBuilder traceBuilder(tracePlanWithSplits.plan);

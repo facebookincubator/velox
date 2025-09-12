@@ -18,11 +18,11 @@
 
 #include <deque>
 
-#include <fmt/format.h>
 #include <folly/GLog.h>
 #include <folly/chrono/Hardware.h>
 #include <folly/container/F14Set.h>
 #include <folly/futures/SharedPromise.h>
+#include <format>
 
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/CoalesceIo.h"
@@ -973,7 +973,7 @@ CoalesceIoStats readPins(
 } // namespace facebook::velox::cache
 
 template <>
-struct fmt::formatter<facebook::velox::cache::CoalescedLoad::State>
+struct std::formatter<facebook::velox::cache::CoalescedLoad::State>
     : formatter<int> {
   auto format(
       facebook::velox::cache::CoalescedLoad::State s,

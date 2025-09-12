@@ -286,7 +286,7 @@ AssertQueryBuilder::readCursor() {
       // activities to finish on AssertQueryBuilder dtor.
       static std::atomic<uint64_t> cursorQueryId{0};
       const std::string queryId =
-          fmt::format("TaskCursorQuery_{}", cursorQueryId++);
+          std::format("TaskCursorQuery_{}", cursorQueryId++);
       auto queryPool = memory::memoryManager()->addRootPool(
           queryId, params_.maxQueryCapacity);
       params_.queryCtx = core::QueryCtx::create(

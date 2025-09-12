@@ -26,7 +26,7 @@ class DynamicLinkTest : public FunctionBaseTest {};
 
 namespace {
 std::string getLibraryPath(const std::string& filename) {
-  return fmt::format(
+  return std::format(
       "{}/{}{}",
       VELOX_TEST_DYNAMIC_LIBRARY_PATH,
       filename,
@@ -234,7 +234,7 @@ TEST_F(DynamicLinkTest, dynamicLoadFuncNonDefaultRegistry) {
   // Testing missing default registry function name.
   VELOX_ASSERT_THROW(
       loadDynamicLibrary(libraryPath),
-      fmt::format(
+      std::format(
           "Couldn't find Velox registry symbol: {}: undefined symbol: registerExtensions",
           libraryPath));
 }

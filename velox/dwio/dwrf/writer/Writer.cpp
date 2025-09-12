@@ -213,7 +213,7 @@ Writer::Writer(
     : Writer{
           std::move(sink),
           options,
-          options.memoryPool->addAggregateChild(fmt::format(
+          options.memoryPool->addAggregateChild(std::format(
               "{}.dwrf.{}",
               options.memoryPool->name(),
               folly::to<std::string>(folly::Random::rand64())))} {}
@@ -259,7 +259,7 @@ void Writer::write(const VectorPtr& input) {
   if (FOLLY_UNLIKELY(
           estimatedInputMemoryBytes == 0 ||
           estimatedInputMemoryBytes > context.rawDataSizePerBatch())) {
-    VLOG(1) << fmt::format(
+    VLOG(1) << std::format(
         "Unpopulated or huge vector memory estimate! Micro write batch size {} rows. "
         "Input vector memory estimate {} bytes. Batching threshold {} bytes.",
         writeBatchSize,
@@ -462,7 +462,7 @@ bool Writer::shouldFlush(const WriterContext& context, size_t nextWriteRows) {
   const bool shouldFlush = overBudget || stripeProgressDecision ||
       dictionaryFlushDecision == FlushDecision::FLUSH_DICTIONARY;
   if (shouldFlush) {
-    VLOG(1) << fmt::format(
+    VLOG(1) << std::format(
         "overMemoryBudget: {}, dictionaryMemUsage: {}, outputStreamSize: {}, generalMemUsage: {}, estimatedStripeSize: {}",
         overBudget,
         context.getMemoryUsage(MemoryUsageCategory::DICTIONARY),
@@ -657,7 +657,7 @@ void Writer::flushStripe(bool close) {
   metrics.groupSize = 0;
   metrics.close = close;
 
-  VLOG(1) << fmt::format(
+  VLOG(1) << std::format(
       "Stripe {}: Flush overhead = {}, data length = {}, pre flush mem = {}, post flush mem = {}. Closing = {}",
       metrics.stripeIndex,
       metrics.flushOverhead,

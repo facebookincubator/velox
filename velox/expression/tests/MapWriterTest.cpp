@@ -13,7 +13,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include <fmt/core.h>
 #include <glog/logging.h>
 #include <gtest/gtest.h>
 #include <cstdint>
@@ -88,7 +87,7 @@ class MapWriterTest : public functions::test::FunctionBaseTest {
     registerFunction<Func, Map<T, T>, int64_t>({testFunctionName});
 
     auto result = evaluate(
-        fmt::format("{}(c0)", testFunctionName),
+        std::format("{}(c0)", testFunctionName),
         makeRowVector(
             {makeFlatVector<int64_t>({1, 2, 3, 4, 5, 6, 7, 8, 9, 10})}));
 

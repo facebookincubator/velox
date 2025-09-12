@@ -514,8 +514,8 @@ exec::AggregateRegistrationResult registerMinMax(
     // T, bigint -> row(array(T), bigint) -> array(T)
     signatures.push_back(
         exec::AggregateFunctionSignatureBuilder()
-            .returnType(fmt::format("array({})", type))
-            .intermediateType(fmt::format("row(bigint, array({}))", type))
+            .returnType(std::format("array({})", type))
+            .intermediateType(std::format("row(bigint, array({}))", type))
             .argumentType(type)
             .argumentType("bigint")
             .build());

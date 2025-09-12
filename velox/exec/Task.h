@@ -1502,7 +1502,7 @@ std::ostream& operator<<(std::ostream& out, Task::ExecutionMode mode);
 } // namespace facebook::velox::exec
 
 template <>
-struct fmt::formatter<facebook::velox::exec::Task::ExecutionMode>
+struct std::formatter<facebook::velox::exec::Task::ExecutionMode>
     : formatter<std::string> {
   auto format(facebook::velox::exec::Task::ExecutionMode m, format_context& ctx)
       const {

@@ -381,19 +381,16 @@ void registerDecimalPlusMinus(const std::string& name) {
   std::vector<exec::SignatureVariable> constraints = {
       exec::SignatureVariable(
           P3::name(),
-          fmt::format(
-              "min(38, max({a_precision} - {a_scale}, {b_precision} - {b_scale}) + max({a_scale}, {b_scale}) + 1)",
-              fmt::arg("a_precision", P1::name()),
-              fmt::arg("b_precision", P2::name()),
-              fmt::arg("a_scale", S1::name()),
-              fmt::arg("b_scale", S2::name())),
+          std::format(
+              "min(38, max({0} - {2}, {1} - {3}) + max({2}, {3}) + 1)",
+              P1::name(),
+              P2::name(),
+              S1::name(),
+              S2::name()),
           exec::ParameterType::kIntegerParameter),
       exec::SignatureVariable(
           S3::name(),
-          fmt::format(
-              "max({a_scale}, {b_scale})",
-              fmt::arg("a_scale", S1::name()),
-              fmt::arg("b_scale", S2::name())),
+          std::format("max({0}, {1})", S1::name(), S2::name()),
           exec::ParameterType::kIntegerParameter),
   };
 
@@ -414,18 +411,12 @@ void registerDecimalMultiply(const std::string& prefix) {
   std::vector<exec::SignatureVariable> constraints = {
       exec::SignatureVariable(
           P3::name(),
-          fmt::format(
-              "min(38, {a_precision} + {b_precision})",
-              fmt::arg("a_precision", P1::name()),
-              fmt::arg("b_precision", P2::name())),
+          std::format("min(38, {0} + {1})", P1::name(), P2::name()),
           exec::ParameterType::kIntegerParameter),
       exec::SignatureVariable(
           S3::name(),
           // Result type resolution fails if sum of input scales exceeds 38.
-          fmt::format(
-              "{a_scale} + {b_scale}",
-              fmt::arg("a_scale", S1::name()),
-              fmt::arg("b_scale", S2::name())),
+          std::format("{0} + {1}", S1::name(), S2::name()),
           exec::ParameterType::kIntegerParameter),
   };
 
@@ -437,18 +428,15 @@ void registerDecimalDivide(const std::string& prefix) {
   std::vector<exec::SignatureVariable> constraints = {
       exec::SignatureVariable(
           P3::name(),
-          fmt::format(
-              "min(38, {a_precision} + {b_scale} + max(0, {b_scale} - {a_scale}))",
-              fmt::arg("a_precision", P1::name()),
-              fmt::arg("a_scale", S1::name()),
-              fmt::arg("b_scale", S2::name())),
+          std::format(
+              "min(38, {0} + {2} + max(0, {2} - {1}))",
+              P1::name(),
+              S1::name(),
+              S2::name()),
           exec::ParameterType::kIntegerParameter),
       exec::SignatureVariable(
           S3::name(),
-          fmt::format(
-              "max({a_scale}, {b_scale})",
-              fmt::arg("a_scale", S1::name()),
-              fmt::arg("b_scale", S2::name())),
+          std::format("max({0}, {1})", S1::name(), S2::name()),
           exec::ParameterType::kIntegerParameter),
   };
 
@@ -473,19 +461,16 @@ void registerDecimalModulus(const std::string& prefix) {
   std::vector<exec::SignatureVariable> constraints = {
       exec::SignatureVariable(
           P3::name(),
-          fmt::format(
-              "min({b_precision} - {b_scale}, {a_precision} - {a_scale}) + max({a_scale}, {b_scale})",
-              fmt::arg("a_precision", P1::name()),
-              fmt::arg("a_scale", S1::name()),
-              fmt::arg("b_precision", P2::name()),
-              fmt::arg("b_scale", S2::name())),
+          std::format(
+              "min({2} - {3}, {0} - {1}) + max({1}, {3})",
+              P1::name(),
+              S1::name(),
+              P2::name(),
+              S2::name()),
           exec::ParameterType::kIntegerParameter),
       exec::SignatureVariable(
           S3::name(),
-          fmt::format(
-              "max({a_scale}, {b_scale})",
-              fmt::arg("a_scale", S1::name()),
-              fmt::arg("b_scale", S2::name())),
+          std::format("max({0}, {1})", S1::name(), S2::name()),
           exec::ParameterType::kIntegerParameter),
   };
 
@@ -536,10 +521,8 @@ void registerDecimalFloor(const std::string& prefix) {
   std::vector<exec::SignatureVariable> constraints = {
       exec::SignatureVariable(
           P2::name(),
-          fmt::format(
-              "min(38, {p} - {s} + min({s}, 1))",
-              fmt::arg("p", P1::name()),
-              fmt::arg("s", S1::name())),
+          std::format(
+              "min(38, {0} - {1} + min({1}, 1))", P1::name(), S1::name()),
           exec::ParameterType::kIntegerParameter),
       exec::SignatureVariable(
           S2::name(), "0", exec::ParameterType::kIntegerParameter),
@@ -567,10 +550,8 @@ void registerDecimalRound(const std::string& prefix) {
     std::vector<exec::SignatureVariable> constraints = {
         exec::SignatureVariable(
             P2::name(),
-            fmt::format(
-                "min(38, {p} - {s} + min({s}, 1))",
-                fmt::arg("p", P1::name()),
-                fmt::arg("s", S1::name())),
+            std::format(
+                "min(38, {0} - {1} + min({1}, 1))", P1::name(), S1::name()),
             exec::ParameterType::kIntegerParameter),
         exec::SignatureVariable(
             S2::name(), "0", exec::ParameterType::kIntegerParameter),
@@ -597,7 +578,7 @@ void registerDecimalRound(const std::string& prefix) {
     std::vector<exec::SignatureVariable> constraints = {
         exec::SignatureVariable(
             P2::name(),
-            fmt::format("min(38, {p} + 1)", fmt::arg("p", P1::name())),
+            std::format("min(38, {0} + 1)", P1::name()),
             exec::ParameterType::kIntegerParameter),
     };
 
@@ -626,10 +607,7 @@ void registerDecimalTruncate(const std::string& prefix) {
   std::vector<exec::SignatureVariable> constraints = {
       exec::SignatureVariable(
           P2::name(),
-          fmt::format(
-              "max({p} - {s}, 1)",
-              fmt::arg("p", P1::name()),
-              fmt::arg("s", S1::name())),
+          std::format("max({0} - {1}, 1)", P1::name(), S1::name()),
           exec::ParameterType::kIntegerParameter),
       exec::SignatureVariable(
           S2::name(), "0", exec::ParameterType::kIntegerParameter),

@@ -54,7 +54,7 @@ class RoundRobinPartitionFunctionSpec : public core::PartitionFunctionSpec {
 
   folly::dynamic serialize() const override {
     folly::dynamic obj = folly::dynamic::object;
-    obj["name"] = fmt::format("RoundRobinPartitionFunctionSpec");
+    obj["name"] = std::format("RoundRobinPartitionFunctionSpec");
     return obj;
   }
 

@@ -30,5 +30,4 @@ target_link_libraries(
   velox_memory
   Folly::folly
   Folly::follybenchmark
-  fmt::fmt
 )

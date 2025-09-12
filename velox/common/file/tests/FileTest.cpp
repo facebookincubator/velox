@@ -200,7 +200,7 @@ TEST_P(LocalFileTest, writeAndRead) {
     bool withOffset;
 
     std::string debugString() const {
-      return fmt::format("useIOBuf {}, withOffset {}", useIOBuf, withOffset);
+      return std::format("useIOBuf {}, withOffset {}", useIOBuf, withOffset);
     }
   } testSettings[] = {{false, false}, {true, false}, {false, true}};
   for (auto testData : testSettings) {
@@ -251,9 +251,9 @@ TEST_P(LocalFileTest, viaRegistry) {
 
 TEST_P(LocalFileTest, rename) {
   const auto tempFolder = ::exec::test::TempDirectoryPath::create(useFaultyFs_);
-  const auto a = fmt::format("{}/a", tempFolder->getPath());
-  const auto b = fmt::format("{}/b", tempFolder->getPath());
-  const auto newA = fmt::format("{}/newA", tempFolder->getPath());
+  const auto a = std::format("{}/a", tempFolder->getPath());
+  const auto b = std::format("{}/b", tempFolder->getPath());
+  const auto newA = std::format("{}/newA", tempFolder->getPath());
   const std::string data("aaaaa");
   auto localFs = filesystems::getFileSystem(a, nullptr);
   {
@@ -278,8 +278,8 @@ TEST_P(LocalFileTest, rename) {
 
 TEST_P(LocalFileTest, exists) {
   auto tempFolder = ::exec::test::TempDirectoryPath::create(useFaultyFs_);
-  auto a = fmt::format("{}/a", tempFolder->getPath());
-  auto b = fmt::format("{}/b", tempFolder->getPath());
+  auto a = std::format("{}/a", tempFolder->getPath());
+  auto b = std::format("{}/b", tempFolder->getPath());
   auto localFs = filesystems::getFileSystem(a, nullptr);
   {
     auto writeFile = localFs->openFileForWrite(a);
@@ -297,7 +297,7 @@ TEST_P(LocalFileTest, exists) {
 
 TEST_P(LocalFileTest, isDirectory) {
   auto tempFolder = ::exec::test::TempDirectoryPath::create(useFaultyFs_);
-  auto a = fmt::format("{}/a", tempFolder->getPath());
+  auto a = std::format("{}/a", tempFolder->getPath());
   auto localFs = filesystems::getFileSystem(a, nullptr);
   auto writeFile = localFs->openFileForWrite(a);
   ASSERT_TRUE(localFs->isDirectory(tempFolder->getPath()));
@@ -306,8 +306,8 @@ TEST_P(LocalFileTest, isDirectory) {
 
 TEST_P(LocalFileTest, list) {
   const auto tempFolder = ::exec::test::TempDirectoryPath::create(useFaultyFs_);
-  const auto a = fmt::format("{}/1", tempFolder->getPath());
-  const auto b = fmt::format("{}/2", tempFolder->getPath());
+  const auto a = std::format("{}/1", tempFolder->getPath());
+  const auto b = std::format("{}/2", tempFolder->getPath());
   auto localFs = filesystems::getFileSystem(a, nullptr);
   {
     auto writeFile = localFs->openFileForWrite(a);
@@ -380,7 +380,7 @@ TEST_P(LocalFileTest, mkdirFailIfPresent) {
   options.failIfExists = true;
   VELOX_ASSERT_THROW(
       localFs->mkdir(path, options),
-      fmt::format("Directory: {} already exists", localFs->extractPath(path)));
+      std::format("Directory: {} already exists", localFs->extractPath(path)));
 }
 
 TEST_P(LocalFileTest, mkdir) {
@@ -443,7 +443,7 @@ TEST_P(LocalFileTest, rmdir) {
 
 TEST_P(LocalFileTest, fileNotFound) {
   auto tempFolder = exec::test::TempDirectoryPath::create(useFaultyFs_);
-  auto path = fmt::format("{}/file", tempFolder->getPath());
+  auto path = std::format("{}/file", tempFolder->getPath());
   auto localFs = filesystems::getFileSystem(path, nullptr);
   VELOX_ASSERT_RUNTIME_THROW_CODE(
       localFs->openFileForRead(path),
@@ -490,8 +490,8 @@ class FaultyFsTest : public ::testing::Test {
     fs_ = std::dynamic_pointer_cast<tests::utils::FaultyFileSystem>(
         filesystems::getFileSystem(dir_->getPath(), {}));
     VELOX_CHECK_NOT_NULL(fs_);
-    readFilePath_ = fmt::format("{}/faultyTestReadFile", dir_->getPath());
-    writeFilePath_ = fmt::format("{}/faultyTestWriteFile", dir_->getPath());
+    readFilePath_ = std::format("{}/faultyTestReadFile", dir_->getPath());
+    writeFilePath_ = std::format("{}/faultyTestWriteFile", dir_->getPath());
     const int bufSize = 1024;
     buffer_.resize(bufSize);
     for (int i = 0; i < bufSize; ++i) {
@@ -656,14 +656,14 @@ TEST_F(FaultyFsTest, fileReadDelayInjection) {
 }
 
 TEST_F(FaultyFsTest, fileReadFaultHookInjection) {
-  const std::string path1 = fmt::format("{}/hookFile1", dir_->getPath());
+  const std::string path1 = std::format("{}/hookFile1", dir_->getPath());
   {
     auto writeFile = fs_->openFileForWrite(path1, {});
     writeData(writeFile.get());
     auto readFile = fs_->openFileForRead(path1, {});
     readData(readFile.get());
   }
-  const std::string path2 = fmt::format("{}/hookFile2", dir_->getPath());
+  const std::string path2 = std::format("{}/hookFile2", dir_->getPath());
   {
     auto writeFile = fs_->openFileForWrite(path2, {});
     writeData(writeFile.get());
@@ -760,8 +760,8 @@ TEST_F(FaultyFsTest, fileWriteDelayInjection) {
 }
 
 TEST_F(FaultyFsTest, fileWriteFaultHookInjection) {
-  const std::string path1 = fmt::format("{}/hookFile1", dir_->getPath());
-  const std::string path2 = fmt::format("{}/hookFile2", dir_->getPath());
+  const std::string path1 = std::format("{}/hookFile1", dir_->getPath());
+  const std::string path2 = std::format("{}/hookFile2", dir_->getPath());
   // Set to write fake data.
   fs_->setFileInjectionHook([&](FaultFileOperation* op) {
     // Only inject for write.

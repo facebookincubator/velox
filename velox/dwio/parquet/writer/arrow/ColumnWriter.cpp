@@ -68,12 +68,6 @@ using arrow::Status;
 using arrow::internal::checked_cast;
 using arrow::internal::checked_pointer_cast;
 
-namespace arrow {
-fmt::underlying_t<Type::type> format_as(Type::type type) {
-  return fmt::underlying(type);
-}
-}; // namespace arrow
-
 namespace facebook::velox::parquet::arrow {
 using util::CodecOptions;
 

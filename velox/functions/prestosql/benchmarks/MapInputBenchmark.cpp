@@ -330,7 +330,7 @@ class MapInputBenchmark : public functions::test::FunctionBenchmarkBase {
     folly::BenchmarkSuspender suspender;
     auto rowVector = makeMapDataMap();
     auto exprSet = compileExpression(
-        fmt::format("{}(c0)", functionName), rowVector->type());
+        std::format("{}(c0)", functionName), rowVector->type());
     suspender.dismiss();
 
     doRun(exprSet, rowVector);
@@ -340,7 +340,7 @@ class MapInputBenchmark : public functions::test::FunctionBenchmarkBase {
     folly::BenchmarkSuspender suspender;
     auto rowVector = makeDataNestedMap();
     auto exprSet = compileExpression(
-        fmt::format("{}(c0)", functionName), rowVector->type());
+        std::format("{}(c0)", functionName), rowVector->type());
     suspender.dismiss();
 
     doRun(exprSet, rowVector);

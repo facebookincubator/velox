@@ -30,7 +30,7 @@ inline std::string makeErrorMessage(
     vector_size_t row,
     const TypePtr& toType,
     const std::string& details = "") {
-  return fmt::format(
+  return std::format(
       "Cannot cast {} '{}' to {}. {}",
       input.type()->toString(),
       input.toString(row),

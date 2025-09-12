@@ -141,7 +141,7 @@ class TaskCursorBase : public TaskCursor {
       const CursorParameters& params,
       const std::shared_ptr<folly::Executor>& executor) {
     static std::atomic<int32_t> cursorId;
-    taskId_ = fmt::format("test_cursor_{}", ++cursorId);
+    taskId_ = std::format("test_cursor_{}", ++cursorId);
 
     if (params.queryCtx) {
       queryCtx_ = params.queryCtx;
@@ -158,7 +158,7 @@ class TaskCursorBase : public TaskCursor {
           cache::AsyncDataCache::getInstance(),
           nullptr,
           nullptr,
-          fmt::format("TaskCursorQuery_{}", cursorQueryId++));
+          std::format("TaskCursorQuery_{}", cursorQueryId++));
     }
 
     if (!params.queryConfigs.empty()) {

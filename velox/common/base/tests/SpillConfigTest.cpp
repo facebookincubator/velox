@@ -55,7 +55,7 @@ TEST_P(SpillConfigTest, spillLevel) {
     int32_t expectedLevel;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "bitOffset:{}, expectedLevel:{}", bitOffset, expectedLevel);
     }
   } testSettings[] = {
@@ -87,7 +87,7 @@ TEST_P(SpillConfigTest, spillLevelLimit) {
     bool expectedExceeds;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "startBitOffset:{}, numBits:{}, bitOffset:{}, maxSpillLevel:{}, expectedExceeds:{}",
           startBitOffset,
           numBits,
@@ -149,7 +149,7 @@ TEST_P(SpillConfigTest, spillableReservationPercentages) {
     bool expectedError;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "growthPct:{}, minPct:{}, expectedError:{}",
           growthPct,
           minPct,

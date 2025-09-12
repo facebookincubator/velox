@@ -54,7 +54,7 @@ class PeriodicStatsReporter {
     uint64_t spillStatsIntervalMs{60'000};
 
     std::string toString() const {
-      return fmt::format(
+      return std::format(
           "allocatorStatsIntervalMs:{}, cacheStatsIntervalMs:{}, "
           "arbitratorStatsIntervalMs:{}, spillStatsIntervalMs:{}",
           allocatorStatsIntervalMs,

@@ -28,7 +28,7 @@ class RegexpReplaceTest : public functions::test::FunctionBaseTest {
       const std::optional<std::string>& string,
       const std::string& pattern) {
     return evaluateOnce<std::string>(
-        fmt::format("regexp_replace(c0, '{}')", pattern), string);
+        std::format("regexp_replace(c0, '{}')", pattern), string);
   }
 
   std::optional<std::string> regexpReplace(
@@ -36,7 +36,7 @@ class RegexpReplaceTest : public functions::test::FunctionBaseTest {
       const std::string& pattern,
       const std::string& replacement) {
     return evaluateOnce<std::string>(
-        fmt::format("regexp_replace(c0, '{}', '{}')", pattern, replacement),
+        std::format("regexp_replace(c0, '{}', '{}')", pattern, replacement),
         string);
   }
 };
@@ -279,12 +279,12 @@ TEST_F(RegexpReplaceTest, limit) {
   auto data = makeRowVector(
       {makeFlatVector<std::string>(
            aboveMaxCompiledRegexes,
-           [](auto row) { return fmt::format("Apples and oranges {}", row); }),
+           [](auto row) { return std::format("Apples and oranges {}", row); }),
        makeFlatVector<std::string>(
            aboveMaxCompiledRegexes,
-           [](auto row) { return fmt::format("\\d+[ab]{}", row); }),
+           [](auto row) { return std::format("\\d+[ab]{}", row); }),
        makeFlatVector<std::string>(aboveMaxCompiledRegexes, [&](auto row) {
-         return fmt::format("Apples (.*) oranges {}", row % maxCompiledRegexes);
+         return std::format("Apples (.*) oranges {}", row % maxCompiledRegexes);
        })});
 
   VELOX_ASSERT_THROW(

@@ -61,7 +61,7 @@ VELOX_DECLARE_ENUM_NAME(BlockingReason);
 } // namespace facebook::velox::exec
 
 template <>
-struct fmt::formatter<facebook::velox::exec::BlockingReason>
+struct std::formatter<facebook::velox::exec::BlockingReason>
     : formatter<std::string_view> {
   auto format(facebook::velox::exec::BlockingReason b, format_context& ctx)
       const {

@@ -71,7 +71,7 @@ struct TestParam {
   }
 
   std::string toString() const {
-    return fmt::format(
+    return std::format(
         "compressionKind: {}, enablePrefixSort: {}",
         compressionKind,
         enablePrefixSort);
@@ -316,7 +316,7 @@ class SpillTest : public ::testing::TestWithParam<uint32_t>,
         RowVectorPtr dummyInput;
         VELOX_ASSERT_THROW(
             state_->appendToPartition(partitionId, dummyInput),
-            fmt::format("Partition {} is not spilled", partitionId.toString()));
+            std::format("Partition {} is not spilled", partitionId.toString()));
       }
       state_->setPartitionSpilled(partitionId);
       ASSERT_TRUE(state_->isPartitionSpilled(partitionId));
@@ -404,7 +404,7 @@ class SpillTest : public ::testing::TestWithParam<uint32_t>,
       const std::vector<CompareFlags>& compareFlags,
       uint64_t expectedNumSpilledFiles) {
     const int numRowsPerBatch = 1'000;
-    SCOPED_TRACE(fmt::format(
+    SCOPED_TRACE(std::format(
         "targetFileSize: {}, numPartitions: {}, numBatches: {}, numDuplicates: {}, nullsFirst: {}, ascending: {}",
         targetFileSize,
         numPartitions,
@@ -538,7 +538,7 @@ class SpillTest : public ::testing::TestWithParam<uint32_t>,
     ASSERT_GT(finalStats.spillDeserializationTimeNanos, 0);
     ASSERT_EQ(
         finalStats.toString(),
-        fmt::format(
+        std::format(
             "spillRuns[{}] spilledInputBytes[{}] spilledBytes[{}] spilledRows[{}] "
             "spilledPartitions[{}] spilledFiles[{}] spillFillTimeNanos[{}] "
             "spillSortTimeNanos[{}] spillExtractVectorTime[{}] spillSerializationTimeNanos[{}] spillWrites[{}] "
@@ -959,11 +959,11 @@ TEST_P(SpillTest, spillPartitionFunctionBasic) {
     columns.push_back(
         makeFlatVector<int64_t>(numRows, [](auto row) { return row; }));
     columns.push_back(makeFlatVector<std::string>(
-        numRows, [](auto row) { return fmt::format("key_{}", row); }));
+        numRows, [](auto row) { return std::format("key_{}", row); }));
     columns.push_back(makeFlatVector<std::string>(
-        numRows, [](auto row) { return fmt::format("key_{}_{}", row, row); }));
+        numRows, [](auto row) { return std::format("key_{}_{}", row, row); }));
     columns.push_back(makeFlatVector<std::string>(
-        numRows, [](auto row) { return fmt::format("val_{}", row); }));
+        numRows, [](auto row) { return std::format("val_{}", row); }));
     inputVectors.push_back(makeRowVector(columns));
   }
 
@@ -1030,7 +1030,7 @@ TEST_P(SpillTest, spillPartitionFunctionBasic) {
 
   for (const auto& data : testCases) {
     for (auto i = 0; i < inputVectors.size(); ++i) {
-      SCOPED_TRACE(fmt::format("Test case: {}, Input vector {}", data.name, i));
+      SCOPED_TRACE(std::format("Test case: {}, Input vector {}", data.name, i));
 
       SpillPartitionIdLookup lookup(
           data.partitionIds, data.startPartitionBit, data.numPartitionBits);
@@ -1129,7 +1129,7 @@ TEST_P(SpillTest, iterableSpillPartitionSet) {
     uint32_t maxNumInsertions;
 
     std::string debugString() {
-      return fmt::format(
+      return std::format(
           "maxPartitions: {}, maxNumInsertions: {}",
           maxPartitions,
           maxNumInsertions);
@@ -1210,7 +1210,7 @@ TEST_P(SpillTest, spillPartitionSet) {
       ASSERT_EQ(id, spillPartitions.back()->id());
       ASSERT_EQ(
           spillPartitions.back()->toString(),
-          fmt::format(
+          std::format(
               "SPILLED PARTITION[ID:{} FILES:0 SIZE:0B]", id.toString()));
       // Expect an empty reader.
       auto reader = spillPartitions.back()->createUnorderedReader(
@@ -1290,7 +1290,7 @@ TEST_P(SpillTest, spillPartitionSet) {
           expectedPartitionSizes[partitionId]);
       ASSERT_EQ(
           spillPartitions[partitionId]->toString(),
-          fmt::format(
+          std::format(
               "SPILLED PARTITION[ID:{} FILES:{} SIZE:{}]",
               partitionId.toString(),
               expectedPartitionFiles[partitionId],
@@ -1322,7 +1322,7 @@ TEST_P(SpillTest, spillPartitionSet) {
 
 TEST_P(SpillTest, spillPartitionSpilt) {
   for (int seed = 0; seed < 5; ++seed) {
-    SCOPED_TRACE(fmt::format("seed: {}", seed));
+    SCOPED_TRACE(std::format("seed: {}", seed));
     int numBatches = 50;
     std::vector<RowVectorPtr> batches;
     batches.reserve(numBatches);

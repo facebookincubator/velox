@@ -215,7 +215,7 @@ class HiveDataSinkTest : public exec::test::HiveConnectorTestBase {
     HiveConnectorTestBase::assertQuery(
         PlanBuilder().tableScan(rowType_).planNode(),
         splits,
-        fmt::format("SELECT * FROM tmp"));
+        std::format("SELECT * FROM tmp"));
   }
 
   void setConnectorQueryContext(
@@ -250,7 +250,7 @@ TEST_F(HiveDataSinkTest, hiveSortingColumn) {
     std::string expectedToString;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "sortColumn {} sortOrder {} badColumn {} exceptionString {} expectedToString {}",
           sortColumn,
           sortOrder.toString(),
@@ -600,7 +600,7 @@ TEST_F(HiveDataSinkTest, basicBucket) {
 
 TEST_F(HiveDataSinkTest, close) {
   for (bool empty : {true, false}) {
-    SCOPED_TRACE(fmt::format("Data sink is empty: {}", empty));
+    SCOPED_TRACE(std::format("Data sink is empty: {}", empty));
     const auto outputDirectory = TempDirectoryPath::create();
     auto dataSink = createDataSink(rowType_, outputDirectory->getPath());
 
@@ -638,7 +638,7 @@ TEST_F(HiveDataSinkTest, close) {
 
 TEST_F(HiveDataSinkTest, abort) {
   for (bool empty : {true, false}) {
-    SCOPED_TRACE(fmt::format("Data sink is empty: {}", empty));
+    SCOPED_TRACE(std::format("Data sink is empty: {}", empty));
     const auto outputDirectory = TempDirectoryPath::create();
     auto dataSink = createDataSink(rowType_, outputDirectory->getPath());
 
@@ -681,7 +681,7 @@ DEBUG_ONLY_TEST_F(HiveDataSinkTest, memoryReclaim) {
     bool expectedWriterReclaimed;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "format: {}, sortWriter: {}, writerSpillEnabled: {}, writerFlushThreshold: {}, expectedWriterReclaimEnabled: {}, expectedWriterReclaimed: {}",
           dwio::common::toString(format),
           sortWriter,
@@ -831,7 +831,7 @@ TEST_F(HiveDataSinkTest, memoryReclaimAfterClose) {
     bool expectedWriterReclaimEnabled;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "format: {}, sortWriter: {}, writerSpillEnabled: {}, close: {}, expectedWriterReclaimEnabled: {}",
           dwio::common::toString(format),
           sortWriter,

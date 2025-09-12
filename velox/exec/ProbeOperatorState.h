@@ -15,7 +15,7 @@
  */
 #pragma once
 
-#include <fmt/format.h>
+#include <format>
 #include <string>
 
 namespace facebook::velox::exec {
@@ -57,7 +57,7 @@ std::string probeOperatorStateName(ProbeOperatorState state);
 } // namespace facebook::velox::exec
 
 template <>
-struct fmt::formatter<facebook::velox::exec::ProbeOperatorState>
+struct std::formatter<facebook::velox::exec::ProbeOperatorState>
     : formatter<int> {
   auto format(facebook::velox::exec::ProbeOperatorState s, format_context& ctx)
       const {

@@ -49,14 +49,14 @@ TEST_P(BoolAndOrTest, basic) {
   const auto veloxName = GetParam().veloxName;
   const auto duckDbName = GetParam().duckDbName;
 
-  const auto partialAgg = fmt::format("{}(c1)", veloxName);
+  const auto partialAgg = std::format("{}(c1)", veloxName);
 
   // Global aggregation.
   testAggregations(
       vectors,
       {},
       {partialAgg},
-      fmt::format("SELECT {}(c1::TINYINT) FROM tmp", duckDbName));
+      std::format("SELECT {}(c1::TINYINT) FROM tmp", duckDbName));
 
   // Group by aggregation.
   testAggregations(
@@ -65,7 +65,7 @@ TEST_P(BoolAndOrTest, basic) {
       },
       {"p0"},
       {partialAgg},
-      fmt::format(
+      std::format(
           "SELECT c0 % 10, {}(c1::TINYINT) FROM tmp GROUP BY 1", duckDbName));
 
   // Encodings: use filter to wrap aggregation inputs in a dictionary.
@@ -75,7 +75,7 @@ TEST_P(BoolAndOrTest, basic) {
       },
       {"p0"},
       {partialAgg},
-      fmt::format(
+      std::format(
           "SELECT c0 % 11, {}(c1::TINYINT) FROM tmp WHERE c0 % 2 = 0 GROUP BY 1",
           duckDbName));
 
@@ -83,7 +83,7 @@ TEST_P(BoolAndOrTest, basic) {
       [&](auto& builder) { builder.values(vectors).filter("c0 % 2 = 0"); },
       {},
       {partialAgg},
-      fmt::format(
+      std::format(
           "SELECT {}(c1::TINYINT) FROM tmp WHERE c0 % 2 = 0", duckDbName));
 }
 

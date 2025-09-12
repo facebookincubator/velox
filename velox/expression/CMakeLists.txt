@@ -35,7 +35,6 @@ velox_add_library(
   velox_expression
   BooleanMix.cpp
   CastExpr.cpp
-  CastHooks.cpp
   CoalesceExpr.cpp
   ConjunctExpr.cpp
   ConstantExpr.cpp

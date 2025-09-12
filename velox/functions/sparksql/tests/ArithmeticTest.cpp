@@ -228,10 +228,10 @@ class ArithmeticTest : public SparkFunctionBaseTest {
       const std::optional<T> a,
       const std::optional<T> b,
       const std::string& errorMessage) {
-    auto res = evaluateOnce<T>(fmt::format("try({}(c0, c1))", func), a, b);
+    auto res = evaluateOnce<T>(std::format("try({}(c0, c1))", func), a, b);
     ASSERT_TRUE(!res.has_value());
     try {
-      evaluateOnce<T>(fmt::format("{}(c0, c1)", func), a, b);
+      evaluateOnce<T>(std::format("{}(c0, c1)", func), a, b);
       FAIL() << "Expected an error";
     } catch (const std::exception& e) {
       ASSERT_TRUE(

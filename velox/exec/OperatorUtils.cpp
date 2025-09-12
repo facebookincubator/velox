@@ -453,7 +453,7 @@ std::string makeOperatorSpillPath(
     int driverId,
     int32_t operatorId) {
   VELOX_CHECK(!spillDir.empty());
-  return fmt::format("{}/{}_{}_{}", spillDir, pipelineId, driverId, operatorId);
+  return std::format("{}/{}_{}_{}", spillDir, pipelineId, driverId, operatorId);
 }
 
 void setOperatorRuntimeStats(

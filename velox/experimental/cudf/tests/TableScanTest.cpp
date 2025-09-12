@@ -38,8 +38,6 @@
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/type/Type.h"
 
-#include <fmt/ranges.h>
-
 using namespace facebook::velox;
 using namespace facebook::velox::connector;
 using namespace facebook::velox::core;

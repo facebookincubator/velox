@@ -117,12 +117,12 @@ void MinMaxByResultVerifier::initialize(
   // it. So remove the x bucket for NULL y.
   std::string expectColumn;
   if (minMaxByN_) {
-    expectColumn = fmt::format(
+    expectColumn = std::format(
         "if ({} is null, cast(NULL as {}), expected) as expected",
         yColumn,
         aggregateTypeSql_);
   } else {
-    expectColumn = fmt::format(
+    expectColumn = std::format(
         "if ({} is null, cast(NULL as {}[]), expected) as expected",
         yColumn,
         aggregateTypeSql_);
@@ -133,7 +133,7 @@ void MinMaxByResultVerifier::initialize(
   // Aggregate buckets in order of y into a list per aggregation group.
   plan = plan.singleAggregation(
       groupingKeys,
-      {fmt::format(
+      {std::format(
           "array_agg(expected order by {} {} nulls last) as expected",
           yColumn,
           minBy_ ? "asc" : "desc")});
@@ -141,7 +141,7 @@ void MinMaxByResultVerifier::initialize(
   // Add a column of aggregateTypeSql_ of all nulls so that we can union the
   // expected list of buckets with the actual result in the verify method.
   auto nullColumn =
-      fmt::format("cast(NULL as {}) as {}", aggregateTypeSql_, aggregateName);
+      std::format("cast(NULL as {}) as {}", aggregateTypeSql_, aggregateName);
   auto finalProjectColumns = combine(groupingKeys, {nullColumn, "expected"});
   plan = plan.project(finalProjectColumns);
 
@@ -163,10 +163,10 @@ bool MinMaxByResultVerifier::verify(const RowVectorPtr& result) {
   std::string nullExpected;
   if (minMaxByN_) {
     nullExpected =
-        fmt::format("cast(NULL as {}[]) as expected", aggregateTypeSql_);
+        std::format("cast(NULL as {}[]) as expected", aggregateTypeSql_);
   } else {
     nullExpected =
-        fmt::format("cast(NULL as {}[][]) as expected", aggregateTypeSql_);
+        std::format("cast(NULL as {}[][]) as expected", aggregateTypeSql_);
   }
   auto actualSource = PlanBuilder(planNodeIdGenerator, result->pool())
                           .values({result})
@@ -209,7 +209,7 @@ bool MinMaxByResultVerifier::verify(const RowVectorPtr& result) {
             // Bring the actual and corresponding expected to the same row.
             .singleAggregation(
                 groupingKeys_,
-                {fmt::format("array_agg({}) as a", name_),
+                {std::format("array_agg({}) as a", name_),
                  "array_agg(expected) as e"})
             .project({"remove_nulls(a) as a", "remove_nulls(e) as e"})
             // If a or e becomes empty, it means the original actual or
@@ -218,10 +218,10 @@ bool MinMaxByResultVerifier::verify(const RowVectorPtr& result) {
             // element that is the original actual and expected, so extract
             // it.
             .project(
-                {fmt::format(
+                {std::format(
                      "if (cardinality(a) > 0, a[1], cast(NULL as {})) as a",
                      aggregateTypeSql_),
-                 fmt::format(
+                 std::format(
                      "if (cardinality(e) > 0, e[1], array[cast(NULL as {})]) as e",
                      aggregateTypeSql_)})
             .planNode();
@@ -234,16 +234,16 @@ bool MinMaxByResultVerifier::verify(const RowVectorPtr& result) {
             .localPartition({}, {expectedSource, actualSource})
             .singleAggregation(
                 groupingKeys_,
-                {fmt::format("array_agg({}) as a", name_),
+                {std::format("array_agg({}) as a", name_),
                  "array_agg(expected) as e"})
             .project({"remove_nulls(a) as a", "remove_nulls(e) as e"})
             // Wrap the actual result in an array so that it can use the same
             // check logic for 3-arg min_by/max_by subsequently.
             .project(
-                {fmt::format(
+                {std::format(
                      "array[switch(cardinality(a) > 0, a[1], cast(null as {}))] as a",
                      aggregateTypeSql_),
-                 fmt::format(
+                 std::format(
                      "switch(cardinality(e) > 0, e[1], array[cast(null as {}[])]) as e",
                      aggregateTypeSql_)})
             .planNode();
@@ -391,7 +391,7 @@ std::string MinMaxByResultVerifier::makeArrayAggCall(
 
   // Use $internal$array_agg to ensure we don't ignore input nulls since they
   // may affect the result of min_by/max_by.
-  std::string arrayAggCall = fmt::format(
+  std::string arrayAggCall = std::format(
       "\"$internal$array_agg\"({} {})", distinct, inputField->name());
   arrayAggCall += " as expected";
 

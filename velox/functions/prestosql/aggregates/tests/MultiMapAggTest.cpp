@@ -106,7 +106,7 @@ TEST_F(MultiMapAggTest, integerKeyGroupBy) {
 TEST_F(MultiMapAggTest, stringKeyGlobal) {
   std::vector<std::string> s(10);
   for (auto i = 0; i < 10; ++i) {
-    s[i] = std::string(StringView::kInlineSize + 5, '_') + fmt::format("{}", i);
+    s[i] = std::string(StringView::kInlineSize + 5, '_') + std::format("{}", i);
   }
   auto data = makeRowVector({
       makeFlatVector<std::string>(
@@ -141,7 +141,7 @@ TEST_F(MultiMapAggTest, stringKeyGlobal) {
 TEST_F(MultiMapAggTest, stringKeyGroupBy) {
   std::vector<std::string> s(10);
   for (auto i = 0; i < 10; ++i) {
-    s[i] = std::string(StringView::kInlineSize + 5, '_') + fmt::format("{}", i);
+    s[i] = std::string(StringView::kInlineSize + 5, '_') + std::format("{}", i);
   }
 
   auto data = makeRowVector({

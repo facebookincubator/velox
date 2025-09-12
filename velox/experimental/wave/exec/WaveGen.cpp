@@ -101,7 +101,7 @@ int32_t CompileState::declareVariable(const AbstractOperand& op) {
     return ord;
   }
   declared_.add(op.id);
-  declarations_ << fmt::format("{} r{};\n", cudaTypeName(*op.type), ord);
+  declarations_ << std::format("{} r{};\n", cudaTypeName(*op.type), ord);
   return ord;
 }
 
@@ -172,14 +172,14 @@ void NullCheck::generateMain(CompileState& state, int32_t /*syncLable*/) {
   for (auto* op : operands) {
     if (!op->inRegister && state.hasMoreReferences(op, endIdx + 1)) {
       if (isFirst) {
-        state.declareNamed(fmt::format("bool anyNull{};", label));
-        state.generated() << fmt::format("  anyNull{} = false;\n", label);
+        state.declareNamed(std::format("bool anyNull{};", label));
+        state.generated() << std::format("  anyNull{} = false;\n", label);
         isFirst = false;
       }
       auto& flags = state.flags(*op);
       bool mayWrap = state.mayWrap(flags.wrappedAt);
       auto ordinal = state.declareVariable(*op);
-      state.generated() << fmt::format(
+      state.generated() << std::format(
           "anyNull{} |= setRegisterNull(nulls{}, {}, !valueOrNull<{}>(operands, {}, blockBase, r{}));\n",
           label,
           ordinal / 32,
@@ -193,13 +193,13 @@ void NullCheck::generateMain(CompileState& state, int32_t /*syncLable*/) {
     }
   }
   if (!isFirst) {
-    state.generated() << fmt::format(
+    state.generated() << std::format(
         "if (anyNull{}) {{ goto end{};}}\n", label, label);
   }
   for (auto* op : lastUse) {
     if (op->inRegister) {
       auto ord = state.ordinal(*op);
-      state.generated() << fmt::format(
+      state.generated() << std::format(
           "if (isRegisterNull(nulls{}, {})) {{goto end{};}}\n",
           ord / 32,
           ord & 31,
@@ -210,7 +210,7 @@ void NullCheck::generateMain(CompileState& state, int32_t /*syncLable*/) {
 
     bool mayWrap = state.mayWrap(flags.wrappedAt);
     auto ord = state.declareVariable(*op);
-    state.generated() << fmt::format(
+    state.generated() << std::format(
         "if (!valueOrNull<{}>(operands, {}, blockBase, r{})) {{goto end{};}}\n",
         mayWrap ? "true" : "false",
         ord,
@@ -232,16 +232,16 @@ std::string NullCheck::toString() const {
 
 void EndNullCheck::generateMain(CompileState& state, int32_t /*syncLable*/) {
   auto ord = state.ordinal(*result);
-  state.generated() << fmt::format("goto skip{};\n", label)
-                    << fmt::format("end{}: \n", label);
+  state.generated() << std::format("goto skip{};\n", label)
+                    << std::format("end{}: \n", label);
   auto flags = state.flags(*result);
-  state.generated() << fmt::format(
+  state.generated() << std::format(
       "setRegisterNull(nulls{}, {}, true);\n", ord / 32, ord & 31, true);
   if (flags.needStore) {
-    state.generated() << fmt::format(
+    state.generated() << std::format(
         "setNull(operands, {}, blockBase, true);\n", ord);
   }
-  state.generated() << fmt::format("skip{}: ;\n", label);
+  state.generated() << std::format("skip{}: ;\n", label);
   state.setInsideNullPropagating(false);
 }
 
@@ -249,22 +249,22 @@ std::string CompileState::literalText(const AbstractOperand& op) {
   auto& constant = op.constant;
   switch (op.type->kind()) {
     case TypeKind::BIGINT:
-      return fmt::format(
+      return std::format(
           "{}LL", constant->as<SimpleVector<int64_t>>()->valueAt(0));
     case TypeKind::INTEGER:
-      return fmt::format(
+      return std::format(
           "{} ", constant->as<SimpleVector<int32_t>>()->valueAt(0));
     case TypeKind::SMALLINT:
-      return fmt::format(
+      return std::format(
           "{} ", constant->as<SimpleVector<int16_t>>()->valueAt(0));
     case TypeKind::TINYINT:
-      return fmt::format(
+      return std::format(
           "{} ", constant->as<SimpleVector<int8_t>>()->valueAt(0));
     case TypeKind::REAL:
-      return fmt::format(
+      return std::format(
           "{} ", constant->as<SimpleVector<float>>()->valueAt(0));
     case TypeKind::DOUBLE:
-      return fmt::format(
+      return std::format(
           "{} ", constant->as<SimpleVector<double>>()->valueAt(0));
     default:
       VELOX_NYI("Unsupported type");
@@ -277,13 +277,13 @@ void CompileState::generateOperand(const AbstractOperand& op) {
     return;
   }
   if (op.inRegister && insideNullPropagating_) {
-    generated_ << fmt::format(" r{} ", ordinal(op));
+    generated_ << std::format(" r{} ", ordinal(op));
     return;
   }
   if (op.notNull || insideNullPropagating_) {
     auto& flags = this->flags(op);
     bool mayWrap = this->mayWrap(flags.wrappedAt);
-    generated_ << fmt::format(
+    generated_ << std::format(
         "nonNullOperand<{}, {}>(operands, {}, blockBase)",
         cudaTypeName(*op.type),
         mayWrap,
@@ -296,7 +296,7 @@ void Compute::generateMain(CompileState& state, int32_t /*syncLable*/) {
   auto& flags = state.flags(*operand);
   auto ord = state.declareVariable(*operand);
   auto md = state.functionReferenced(operand);
-  state.generated() << fmt::format("r{} = {}(", ord, operand->expr->name());
+  state.generated() << std::format("r{} = {}(", ord, operand->expr->name());
   int32_t grid = 0;
   int32_t block = 0;
   auto tryLabel = state.tryErrorLabel();
@@ -308,7 +308,7 @@ void Compute::generateMain(CompileState& state, int32_t /*syncLable*/) {
     }
   }
   if (md.maySetShared || md.maySetStatus) {
-    state.generated() << fmt::format(
+    state.generated() << std::format(
                              "shared, laneStatus, {}, {}, {}",
                              tryLabel.has_value(),
                              grid,
@@ -325,18 +325,18 @@ void Compute::generateMain(CompileState& state, int32_t /*syncLable*/) {
   operand->inRegister = true;
   if (md.maySetStatus) {
     if (tryLabel.has_value()) {
-      state.generated() << fmt::format(
+      state.generated() << std::format(
           "  if (laneStatus != ErrorCode::kOk) {{ goto tryNull{};}}\n",
           tryLabel.value());
     } else {
-      state.generated() << fmt::format(
+      state.generated() << std::format(
           "  if (laneStatus != ErrorCode::kOk) {{ goto sync{}; }}\n",
           state.nextSyncLabel());
     }
   }
   if (flags.needStore) {
     operand->isStored = true;
-    state.generated() << fmt::format(
+    state.generated() << std::format(
         "flatResult<{}>(operands, {}, blockBase) = r{};\n",
         cudaTypeName(*operand->type),
         ord,
@@ -367,13 +367,13 @@ void CompileState::ensureOperand(AbstractOperand* op) {
   if (op->isStored) {
     auto ord = declareVariable(*op);
     if (op->notNull) {
-      generated_ << fmt::format(
+      generated_ << std::format(
           "  r{} = nonNullOperand<{}>(operands, {}, blockBase);\n",
           mayWrap,
           ord,
           ord);
     } else {
-      generated_ << fmt::format(
+      generated_ << std::format(
           "  loadValueOrNull<{}>(operands, {}, blockBase, r{}, nulls{});\n",
           mayWrap,
           ord,
@@ -395,7 +395,7 @@ std::string CompileState::isNull(const AbstractOperand* op) {
   }
   auto ord = ordinal(*op);
   if (op->inRegister) {
-    return fmt::format("(0 == (nulls{} & (1U << {})))", ord / 32, ord & 31);
+    return std::format("(0 == (nulls{} & (1U << {})))", ord / 32, ord & 31);
   }
   VELOX_FAIL("Expecting op in register");
 }
@@ -405,18 +405,18 @@ std::string CompileState::operandValue(const AbstractOperand* op) {
     return literalText(*op);
   }
   VELOX_CHECK(op->inRegister);
-  return fmt::format("r{}", ordinal(*op));
+  return std::format("r{}", ordinal(*op));
 }
 
 std::string CompileState::generateIsTrue(const AbstractOperand& op) {
   auto ord = ordinal(op);
   if (op.inRegister) {
     if (op.notNull) {
-      declareNamed(fmt::format("bool flag{};\n", ord));
-      generated_ << fmt::format("flag{} = r{}", ord, ord);
+      declareNamed(std::format("bool flag{};\n", ord));
+      generated_ << std::format("flag{} = r{}", ord, ord);
     } else {
-      declareNamed(fmt::format("bool flag{};\n", ord));
-      generated_ << fmt::format(
+      declareNamed(std::format("bool flag{};\n", ord));
+      generated_ << std::format(
           "flag{} = r{} && !isRegisterNull(nulls{}, {});\n",
           ord,
           ord,
@@ -427,15 +427,15 @@ std::string CompileState::generateIsTrue(const AbstractOperand& op) {
     auto& flags = this->flags(op);
     bool mayWrap = this->mayWrap(!flags.wrappedAt);
     if (op.notNull || insideNullPropagating_) {
-      declareNamed(fmt::format("bool flag{};\n", ord));
-      generated_ << fmt::format(
+      declareNamed(std::format("bool flag{};\n", ord));
+      generated_ << std::format(
           "flag{} = nonNullOperand<bool, {}>(operands, {}, blockBase)",
           ord,
           mayWrap,
           ord);
     } else {
-      declareNamed(fmt::format("bool flag{};\n", ord));
-      generated_ << fmt::format(
+      declareNamed(std::format("bool flag{};\n", ord));
+      generated_ << std::format(
           "if (!valueOrNull<{}, bool>(operands, {}, blockBase, flags{})) {{ flags{} = false; }};\n",
           mayWrap ? "true" : "false",
           ord,
@@ -443,7 +443,7 @@ std::string CompileState::generateIsTrue(const AbstractOperand& op) {
           ord);
     }
   }
-  return fmt::format("flag{}", ord);
+  return std::format("flag{}", ord);
 }
 
 FunctionMetadata CompileState::functionReferenced(const AbstractOperand* op) {
@@ -457,7 +457,7 @@ FunctionMetadata CompileState::functionReferenced(const AbstractOperand* op) {
 }
 
 void CompileState::addInclude(const std::string& path) {
-  auto line = fmt::format("#include \"{}\"", path);
+  auto line = std::format("#include \"{}\"", path);
   if (includes_.count(line) != 0) {
     return;
   }
@@ -519,7 +519,7 @@ int32_t CompileState::wrapLiteral(const WrapInfo& info, int32_t nthWrap) {
       }
     }
   }
-  generated_ << fmt::format("const OperandIndex wraps{}[] = {{", nthWrap);
+  generated_ << std::format("const OperandIndex wraps{}[] = {{", nthWrap);
   generated_ << initializedWrap << (ordinals.size() > 1 ? "," : "");
   for (auto i = 0; i < ordinals.size(); ++i) {
     if (ordinals[i] == initializedWrap) {
@@ -537,8 +537,8 @@ int32_t CompileState::wrapLiteral(const WrapInfo& info, int32_t nthWrap) {
 void Filter::generateMain(CompileState& state, int32_t syncLabel) {
   auto flagValue = state.generateIsTrue(*flag);
   auto& out = state.generated();
-  out << fmt::format(" sync{}:\n", syncLabel);
-  out << fmt::format(
+  out << std::format(" sync{}:\n", syncLabel);
+  out << std::format(
       "filterKernel({}, operands, {}, blockBase, shared, laneStatus);\n",
       flagValue,
       state.ordinal(*indices));
@@ -573,12 +573,12 @@ void CompileState::generateWrap(
   auto& out = generated_;
   if (info.needRewind) {
     out << operandIdArray(
-        *this, fmt::format("wraps{}", nthWrap), info.rewrapped);
+        *this, std::format("wraps{}", nthWrap), info.rewrapped);
     out << operandIdArray(
-        *this, fmt::format("idxs{}", nthWrap), info.wrapIndices);
+        *this, std::format("idxs{}", nthWrap), info.wrapIndices);
     out << operandIdArray(
-        *this, fmt::format("back{}", nthWrap), info.wrapBackup);
-    out << fmt::format(
+        *this, std::format("back{}", nthWrap), info.wrapBackup);
+    out << std::format(
         "wrapKernel({}, wraps{}, idxs{}, back{}, {}, {}, shared);\n",
         info.wrappedHere ? ordinal(*info.wrappedHere) : kEmpty,
         nthWrap,
@@ -588,7 +588,7 @@ void CompileState::generateWrap(
         ordinal(*indices));
   } else {
     auto numWraps = wrapLiteral(info, nthWrap);
-    out << fmt::format(
+    out << std::format(
         "wrapKernel(wraps{}, {}, {}, operands, blockBase, shared);\n",
         nthWrap,
         numWraps,
@@ -695,7 +695,7 @@ void writeDebugFile(const KernelSpec& spec) {
 }
 
 void CompileState::generateSkip() {
-  generated_ << fmt::format(
+  generated_ << std::format(
       "  if (laneStatus != ErrorCode::kOk) {{ goto sync{}; }}\n",
       nextSyncLabel_);
 }
@@ -744,14 +744,14 @@ ProgramKey CompileState::makeLevelText(
 
   VELOX_CHECK_EQ(1, level.size(), "Only one program per level supported");
   std::stringstream head;
-  auto kernelName = fmt::format("wavegen{}_{}", startNodeId_, ++kernelCounter_);
-  kernelEntryPoints_ = {fmt::format("facebook::velox::wave::{}", kernelName)};
+  auto kernelName = std::format("wavegen{}_{}", startNodeId_, ++kernelCounter_);
+  kernelEntryPoints_ = {std::format("facebook::velox::wave::{}", kernelName)};
   generated_ << "  GENERATED_PREAMBLE(0);\n";
   auto& params = currentCandidate_->levelParams[kernelSeq_];
   int32_t numRegs =
       params.input.size() + params.local.size() + params.output.size();
   for (auto i = 0; i < numRegs; i += 32) {
-    generated_ << fmt::format("  nulls{} = ~0;\n", i / 32);
+    generated_ << std::format("  nulls{} = ~0;\n", i / 32);
   }
 
   for (branchIdx_ = 0; branchIdx_ < level.size(); ++branchIdx_) {
@@ -772,7 +772,7 @@ ProgramKey CompileState::makeLevelText(
           generated_ << "if (shared->isContinue) {\n"
                      << checkLaneStatus() << "switch(shared->startLabel) {\n";
         }
-        generated_ << fmt::format(
+        generated_ << std::format(
             "case {}: {} goto continue{};\n",
             label.value(),
             step->preContinueCode(*this),
@@ -787,7 +787,7 @@ ProgramKey CompileState::makeLevelText(
         for (auto next = stepIdx_; next < box.steps.size(); ++next) {
           auto label = box.steps[next]->continueLabel();
           if (label.has_value() && box.steps[next]->autoContinueLabel()) {
-            generated_ << fmt::format(" continue{}:\n", label.value());
+            generated_ << std::format(" continue{}:\n", label.value());
           }
           if (box.steps[next]->isBarrier()) {
             break;
@@ -809,19 +809,19 @@ ProgramKey CompileState::makeLevelText(
       step->generateMain(*this, syncLabel);
     }
   }
-  generated_ << fmt::format("sync{}: ;\n", nextSyncLabel_);
+  generated_ << std::format("sync{}: ;\n", nextSyncLabel_);
   generated_ << " PROGRAM_EPILOGUE();\n}\n}\n";
   head
       << "#include \"velox/experimental/wave/exec/WaveCore.cuh\"\n"
       << includeText_.str() << std::endl
       << "namespace facebook::velox::wave {\n"
       << inlines_.str() << std::endl
-      << fmt::format(
+      << std::format(
              "void __global__ __launch_bounds__(1024) {}(KernelParams params) {{\n",
              kernelName);
 
   for (auto i = 0; i < numRegs; i += 32) {
-    head << fmt::format(" uint32_t nulls{};\n", i / 32);
+    head << std::format(" uint32_t nulls{};\n", i / 32);
   }
   head << declarations_.str();
   head << generated_.str();
@@ -847,7 +847,7 @@ ProgramKey CompileState::makeLevelText(
 
   spec.code = head.str();
   spec.entryPoints = std::move(kernelEntryPoints_);
-  spec.filePath = fmt::format("/tmp/{}.cu", kernelName);
+  spec.filePath = std::format("/tmp/{}.cu", kernelName);
   // Write the geneerated code to a file for debugger.
   writeDebugFile(spec);
 

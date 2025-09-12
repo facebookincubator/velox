@@ -1166,7 +1166,7 @@ exec::AggregateRegistrationResult registerMinMaxBy(
     signatures.push_back(exec::AggregateFunctionSignatureBuilder()
                              .typeVariable("V")
                              .returnType("array(V)")
-                             .intermediateType(fmt::format(
+                             .intermediateType(std::format(
                                  "row(bigint,array({}),array(V))", compareType))
                              .argumentType("V")
                              .argumentType(compareType)
@@ -1194,7 +1194,7 @@ exec::AggregateRegistrationResult registerMinMaxBy(
           const TypePtr& resultType,
           const core::QueryConfig& /*config*/)
           -> std::unique_ptr<exec::Aggregate> {
-        const std::string errorMessage = fmt::format(
+        const std::string errorMessage = std::format(
             "Unknown input types for {} ({}) aggregation: {}",
             name,
             mapAggregationStepToName(step),

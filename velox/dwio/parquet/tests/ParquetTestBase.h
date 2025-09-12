@@ -150,7 +150,7 @@ class ParquetTestBase : public testing::Test,
   std::unique_ptr<dwio::common::FileSink> createSink(
       const std::string& filePath) {
     auto sink = dwio::common::FileSink::create(
-        fmt::format("file:{}", filePath), {.pool = rootPool_.get()});
+        std::format("file:{}", filePath), {.pool = rootPool_.get()});
     EXPECT_TRUE(sink->isBuffered());
     EXPECT_TRUE(fs::exists(filePath));
     EXPECT_FALSE(sink->isClosed());

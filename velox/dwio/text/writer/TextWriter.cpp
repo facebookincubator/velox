@@ -72,7 +72,7 @@ TextWriter::TextWriter(
     : schema_(std::move(schema)),
       bufferedWriterSink_(std::make_unique<BufferedWriterSink>(
           std::move(sink),
-          options->memoryPool->addLeafChild(fmt::format(
+          options->memoryPool->addLeafChild(std::format(
               "{}.text_writer_node.{}",
               options->memoryPool->name(),
               folly::to<std::string>(folly::Random::rand64()))),

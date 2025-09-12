@@ -234,7 +234,7 @@ TEST_F(ConcatFilesSpillMergeStreamTest, basic) {
     size_t numStreams;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "maxOutputRows:{} numStreams:{}", maxOutputRows, numStreams);
     }
   } testSettings[] = {

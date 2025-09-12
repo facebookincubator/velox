@@ -853,7 +853,7 @@ class DecimalType : public ScalarType<KIND> {
   }
 
   std::string toString() const override {
-    return fmt::format("DECIMAL({}, {})", precision(), scale());
+    return std::format("DECIMAL({}, {})", precision(), scale());
   }
 
   folly::dynamic serialize() const override {
@@ -2496,7 +2496,7 @@ class FormatValue<
 } // namespace folly
 
 template <>
-struct fmt::formatter<facebook::velox::TypeKind> : fmt::formatter<string_view> {
+struct std::formatter<facebook::velox::TypeKind> : std::formatter<string_view> {
   template <typename FormatContext>
   auto format(facebook::velox::TypeKind k, FormatContext& ctx) const {
     return formatter<string_view>::format(
@@ -2505,11 +2505,11 @@ struct fmt::formatter<facebook::velox::TypeKind> : fmt::formatter<string_view> {
 };
 
 template <typename T>
-struct fmt::formatter<
+struct std::formatter<
     std::shared_ptr<T>,
     typename std::
         enable_if_t<std::is_base_of_v<facebook::velox::Type, T>, char>>
-    : fmt::formatter<string_view> {
+    : std::formatter<string_view> {
   template <typename FormatContext>
   auto format(const std::shared_ptr<T>& k, FormatContext& ctx) const {
     return formatter<string_view>::format(k->toString(), ctx);

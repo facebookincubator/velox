@@ -51,7 +51,7 @@ class StringAsciiUTFFunctionBenchmark
 
     auto rowVector = vectorMaker_.rowVector({vector});
     auto exprSet =
-        compileExpression(fmt::format("{}(c0)", fnName), rowVector->type());
+        compileExpression(std::format("{}(c0)", fnName), rowVector->type());
 
     suspender.dismiss();
 
@@ -111,7 +111,7 @@ class StringAsciiUTFFunctionBenchmark
         vectorMaker_.rowVector({stringVector, sizeVector, padStringVector});
 
     auto exprSet = compileExpression(
-        fmt::format("{}(c0, c1, c2)", fnName), rowVector->type());
+        std::format("{}(c0, c1, c2)", fnName), rowVector->type());
 
     suspender.dismiss();
     doRun(exprSet, rowVector);

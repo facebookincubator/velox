@@ -57,7 +57,7 @@ bool ScaledScanController::shouldStopLocked(
 
   VELOX_CHECK(!driverPromises_[driverIdx].has_value());
   auto [driverPromise, driverFuture] = makeVeloxContinuePromiseContract(
-      fmt::format("Table scan driver {} scale promise", driverIdx));
+      std::format("Table scan driver {} scale promise", driverIdx));
   driverPromises_[driverIdx] = std::move(driverPromise);
   *future = std::move(driverFuture);
   return true;
@@ -185,6 +185,6 @@ bool ScaledScanController::close() {
 }
 
 std::string ScaledScanController::Stats::toString() const {
-  return fmt::format("numRunningDrivers: {}", numRunningDrivers);
+  return std::format("numRunningDrivers: {}", numRunningDrivers);
 }
 } // namespace facebook::velox::exec

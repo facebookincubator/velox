@@ -296,7 +296,7 @@ class HashTableTest : public testing::Test {
       errorDelta += d < 0 ? -d : d;
     }
     if (numError) {
-      std::cout << fmt::format(
+      std::cout << std::format(
                        "{}: numError={} errorDelta={} errorSigned={}",
                        title,
                        numError,
@@ -449,7 +449,7 @@ TEST_F(HashTableTest, allocator) {
           reinterpret_cast<uint64_t>(row),
           allocator->base + allocator->capacity);
       auto it = uniques.find(row);
-      EXPECT_TRUE(it == uniques.end()) << fmt::format(
+      EXPECT_TRUE(it == uniques.end()) << std::format(
           "row {} is also at {} {}",
           reinterpret_cast<uint64_t>(row),
           it->second >> 24,
@@ -464,7 +464,7 @@ TEST_F(HashTableTest, allocator) {
           reinterpret_cast<uint64_t>(string),
           allocator->base + allocator->capacity);
       auto it = uniques.find(string);
-      EXPECT_TRUE(it == uniques.end()) << fmt::format(
+      EXPECT_TRUE(it == uniques.end()) << std::format(
           "String {} is also at {} {}",
           reinterpret_cast<uint64_t>(string),
           it->second >> 24,

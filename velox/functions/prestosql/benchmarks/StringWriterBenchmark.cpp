@@ -90,7 +90,7 @@ class StringWriterBenchmark : public functions::test::FunctionBenchmarkBase {
     folly::BenchmarkSuspender suspender;
     auto input = makeInput();
     auto exprSet =
-        compileExpression(fmt::format("{}(c0)", functionName), input->type());
+        compileExpression(std::format("{}(c0)", functionName), input->type());
     suspender.dismiss();
     return doRun(exprSet, input, n);
   }

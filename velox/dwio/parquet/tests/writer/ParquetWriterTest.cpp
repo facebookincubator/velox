@@ -288,7 +288,7 @@ TEST_F(ParquetWriterTest, dictionaryEncodingWithDictionaryPageSize) {
           incorrectEnableDictionaryConfigFromFile,
           incorrectEnableDictionarySessionProperties,
           true),
-      fmt::format(
+      std::format(
           "Invalid parquet writer enable dictionary option: Non-whitespace character found after end of conversion: \"{}\"",
           invalidEnableDictionaryValue.substr(1)));
 
@@ -312,7 +312,7 @@ TEST_F(ParquetWriterTest, dictionaryEncodingWithDictionaryPageSize) {
           incorrectDictionaryPageSizeConfigFromFile,
           incorrectDictionaryPageSizeSessionProperties,
           true),
-      fmt::format(
+      std::format(
           "Invalid capacity string '{}'", invalidDictionaryPageSizeValue));
 }
 
@@ -602,7 +602,7 @@ TEST_F(ParquetWriterTest, testPageSizeAndBatchSizeConfiguration) {
       testPageSizeAndBatchSizeToGetPageHeader(
           incorrectPageSizeConfigFromFile,
           incorrectPageSizeSessionPropertiesFromFile),
-      fmt::format(
+      std::format(
           "Invalid capacity string '{}'", invalidPageSizeAndBatchSizeValue))
 
   // Test incorrect batch size config
@@ -623,7 +623,7 @@ TEST_F(ParquetWriterTest, testPageSizeAndBatchSizeConfiguration) {
       testPageSizeAndBatchSizeToGetPageHeader(
           incorrectBatchSizeConfigFromFile,
           incorrectBatchSizeSessionPropertiesFromFile),
-      fmt::format(
+      std::format(
           "Invalid parquet writer batch size: Invalid leading character: \"{}\"",
           invalidPageSizeAndBatchSizeValue));
 }

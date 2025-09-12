@@ -37,7 +37,7 @@ CudfLocalPartition::CudfLocalPartition(
       NvtxHelper(
           nvtx3::rgb{255, 215, 0}, // Gold
           operatorId,
-          fmt::format("[{}]", planNode->id())),
+          std::format("[{}]", planNode->id())),
       queues_{
           ctx->task->getLocalExchangeQueues(ctx->splitGroupId, planNode->id())},
       numPartitions_{queues_.size()} {

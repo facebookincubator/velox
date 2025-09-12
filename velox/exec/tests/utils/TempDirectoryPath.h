@@ -57,7 +57,7 @@ class TempDirectoryPath {
       : enableFaultInjection_(enableFaultInjection),
         tempPath_(createTempDirectory()),
         path_(
-            enableFaultInjection_ ? fmt::format("faulty:{}", tempPath_)
+            enableFaultInjection_ ? std::format("faulty:{}", tempPath_)
                                   : tempPath_) {}
 
   const bool enableFaultInjection_{false};

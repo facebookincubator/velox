@@ -194,7 +194,7 @@ class IndexLookupJoinReplayerTest : public HiveConnectorTestBase {
       memory::MemoryPool* writerPool) {
     std::vector<Split> splits;
     for (auto i = 0; i < 4; ++i) {
-      const std::string filePath = fmt::format("{}/{}", path, i);
+      const std::string filePath = std::format("{}/{}", path, i);
       writeToFile(filePath, inputs);
       splits.emplace_back(makeHiveConnectorSplit(filePath));
     }
@@ -217,7 +217,7 @@ class IndexLookupJoinReplayerTest : public HiveConnectorTestBase {
   const std::shared_ptr<TempDirectoryPath> testDir_ =
       TempDirectoryPath::create();
   const std::string tableDir_ =
-      fmt::format("{}/{}", testDir_->getPath(), "table");
+      std::format("{}/{}", testDir_->getPath(), "table");
   const std::unique_ptr<folly::CPUThreadPoolExecutor> connectorCpuExecutor_{
       std::make_unique<folly::CPUThreadPoolExecutor>(128)};
 };
@@ -270,7 +270,7 @@ TEST_F(IndexLookupJoinReplayerTest, test) {
 
   // Create a trace directory
   const auto testDir = TempDirectoryPath::create();
-  const auto traceRoot = fmt::format("{}/{}", testDir->getPath(), "traceRoot");
+  const auto traceRoot = std::format("{}/{}", testDir->getPath(), "traceRoot");
   std::shared_ptr<Task> task;
 
   // Create a file for the probe data

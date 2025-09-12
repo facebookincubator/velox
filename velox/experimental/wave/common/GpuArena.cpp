@@ -280,7 +280,7 @@ std::string GpuSlab::freeLookupStr() {
 }
 
 std::string GpuSlab::toString() const {
-  return fmt::format(
+  return std::format(
       "GpuSlab[byteSize[{}] address[{}] freeBytes[{}] freeList[{}]]]",
       succinctBytes(byteSize_),
       reinterpret_cast<uint64_t>(address_),

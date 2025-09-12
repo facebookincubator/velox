@@ -100,7 +100,7 @@ class AggregationReplayerTest : public HiveConnectorTestBase {
     // Add up to 3 payload columns.
     const auto numPayload = randInt(1, 3);
     for (auto i = 0; i < numPayload; ++i) {
-      names.push_back(fmt::format("c{}", i + keyNames.size()));
+      names.push_back(std::format("c{}", i + keyNames.size()));
       types.push_back(vectorFuzzer_.randType(2 /*maxDepth*/));
     }
 
@@ -116,7 +116,7 @@ class AggregationReplayerTest : public HiveConnectorTestBase {
     std::vector<std::string> names;
     names.reserve(n);
     for (auto i = 0; i < n; ++i) {
-      names.push_back(fmt::format("{}{}", prefix, i));
+      names.push_back(std::format("{}{}", prefix, i));
     }
     return names;
   }
@@ -125,9 +125,9 @@ class AggregationReplayerTest : public HiveConnectorTestBase {
       const RowTypePtr& rowType,
       const std::string& prefix = "") {
     const std::vector<std::string> aggregates{
-        fmt::format("{}count(1)", prefix),
-        fmt::format("{}min(c1)", prefix),
-        fmt::format("{}count(c2),", prefix)};
+        std::format("{}count(1)", prefix),
+        std::format("{}min(c1)", prefix),
+        std::format("{}count(c2),", prefix)};
     std::vector<PlanWithName> plans;
     // Single aggregation plan.
     plans.emplace_back(
@@ -163,9 +163,9 @@ class AggregationReplayerTest : public HiveConnectorTestBase {
       const RowTypePtr& rowType,
       const std::string& prefix = "") {
     const std::vector<std::string> aggregates{
-        fmt::format("{}count(1)", prefix),
-        fmt::format("{}min(c1)", prefix),
-        fmt::format("{}count(c2),", prefix)};
+        std::format("{}count(1)", prefix),
+        std::format("{}min(c1)", prefix),
+        std::format("{}count(c2),", prefix)};
     std::vector<PlanWithName> plans;
     // Single aggregation plan.
     plans.emplace_back(
@@ -252,7 +252,7 @@ TEST_F(AggregationReplayerTest, hashAggregationTest) {
       const auto& plan = planWithName.plan;
       const auto testDir = TempDirectoryPath::create();
       const auto traceRoot =
-          fmt::format("{}/{}", testDir->getPath(), "traceRoot");
+          std::format("{}/{}", testDir->getPath(), "traceRoot");
       std::shared_ptr<Task> task;
       auto results =
           AssertQueryBuilder(plan)
@@ -318,7 +318,7 @@ TEST_F(AggregationReplayerTest, streamingAggregateTest) {
       const auto& plan = planWithName.plan;
       const auto testDir = TempDirectoryPath::create();
       const auto traceRoot =
-          fmt::format("{}/{}", testDir->getPath(), "traceRoot");
+          std::format("{}/{}", testDir->getPath(), "traceRoot");
       std::shared_ptr<Task> task;
       auto results =
           AssertQueryBuilder(plan)

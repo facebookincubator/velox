@@ -107,7 +107,7 @@ TEST_F(TDigestTest, unalignedSerialization) {
   ASSERT_NEAR(digest.sum(), 1.0 * N * (N - 1) / 2, kSumError);
   std::string buf(1 + digest.serializedByteSize(), '\0');
   for (int offset = 0; offset < 2; ++offset) {
-    SCOPED_TRACE(fmt::format("offset={}", offset));
+    SCOPED_TRACE(std::format("offset={}", offset));
     digest.serialize(buf.data() + offset);
     TDigest digest2;
     digest2.mergeDeserialized(positions, buf.data() + offset);
@@ -313,7 +313,7 @@ TEST_F(TDigestTest, normalDistribution) {
   double values[N];
   std::default_random_engine gen(common::testutil::getRandomSeed(42));
   for (double mean : {0, 1000}) {
-    SCOPED_TRACE(fmt::format("mean={}", mean));
+    SCOPED_TRACE(std::format("mean={}", mean));
     std::normal_distribution<> dist(mean, 1);
     TDigest digest;
     for (int i = 0; i < N; ++i) {
@@ -346,7 +346,7 @@ TEST_F(TDigestTest, merge) {
   std::vector<double> values;
   std::string buf;
   auto test = [&](int numDigests, int size, double mean, double stddev) {
-    SCOPED_TRACE(fmt::format(
+    SCOPED_TRACE(std::format(
         "numDigests={} size={} mean={} stddev={}",
         numDigests,
         size,

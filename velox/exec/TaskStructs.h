@@ -242,7 +242,7 @@ struct SplitGroupState {
 } // namespace facebook::velox::exec
 
 template <>
-struct fmt::formatter<facebook::velox::exec::TaskState>
+struct std::formatter<facebook::velox::exec::TaskState>
     : formatter<std::string> {
   auto format(facebook::velox::exec::TaskState state, format_context& ctx)
       const {

@@ -17,8 +17,8 @@
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
 #include <boost/random/uniform_int_distribution.hpp>
-#include <fmt/format.h>
 #include <codecvt>
+#include <format>
 #include <locale>
 
 #include "velox/common/base/Exceptions.h"
@@ -1252,7 +1252,7 @@ TypePtr randOrderableType(
   std::vector<std::string> names;
   std::vector<TypePtr> fields;
   for (int i = 0; i < numFields; ++i) {
-    names.push_back(fmt::format("f{}", i));
+    names.push_back(std::format("f{}", i));
     fields.push_back(randOrderableType(rng, scalarTypes, maxDepth - 1));
   }
   return ROW(std::move(names), std::move(fields));

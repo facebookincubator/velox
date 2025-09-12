@@ -38,11 +38,11 @@ std::string CodePosition::toString() const {
   if (empty()) {
     return "empty";
   }
-  return fmt::format("<K:{}, S:{}, B:{}>", kernelSeq, step, branchIdx);
+  return std::format("<K:{}, S:{}, B:{}>", kernelSeq, step, branchIdx);
 }
 
 std::string OperandFlags::toString() const {
-  return fmt::format(
+  return std::format(
       "{{flags: def={} first={} last={} wrap={} store={}}}",
       definedIn.toString(),
       firstUse.toString(),
@@ -1142,10 +1142,10 @@ void CompileState::markWraps(int32_t pipelineIdx) {
               wrap->rewrapped.push_back(operands_[id].get());
               if (wrap->needRewind) {
                 wrap->wrapBackup.push_back(newOperand(
-                    BIGINT(), fmt::format("wback_{}_{}", wrappedAt, id)));
+                    BIGINT(), std::format("wback_{}_{}", wrappedAt, id)));
                 wrap->wrapBackup.back()->elementPerTB = true;
                 wrap->wrapIndices.push_back(newOperand(
-                    INTEGER(), fmt::format("wback_{}_{}", wrappedAt, id)));
+                    INTEGER(), std::format("wback_{}_{}", wrappedAt, id)));
               }
             }
           }
@@ -1182,14 +1182,14 @@ std::string CompileState::segmentString() const {
 
 std::string Segment::toString() const {
   std::stringstream out;
-  out << fmt::format("Segment {}: ", static_cast<int32_t>(boundary))
+  out << std::format("Segment {}: ", static_cast<int32_t>(boundary))
       << std::endl;
   for (auto i = 0; i < steps.size(); ++i) {
     out << i << ": " << steps[i]->toString() << std::endl;
   }
   out << std::endl << "Results:" << std::endl;
   for (auto i = 0; i < topLevelDefined.size(); ++i) {
-    out << fmt::format(
+    out << std::format(
                "{}: {} as {}",
                i,
                topLevelDefined[i]->toString(),
@@ -1202,7 +1202,7 @@ std::string Segment::toString() const {
 std::string PipelineCandidate::toString() const {
   std::stringstream out;
   for (auto kernelSeq = 0; kernelSeq < steps.size(); ++kernelSeq) {
-    out << fmt::format(
+    out << std::format(
                "Kernel {} branches={}:", kernelSeq, steps[kernelSeq].size())
         << std::endl;
     out << "  Input=" << levelParams[kernelSeq].input.toString() << std::endl
@@ -1211,7 +1211,7 @@ std::string PipelineCandidate::toString() const {
     for (auto branchIdx = 0; branchIdx < steps[kernelSeq].size(); ++branchIdx) {
       auto& box = steps[kernelSeq][branchIdx];
       for (auto stepIdx = 0; stepIdx < box.steps.size(); ++stepIdx) {
-        out << fmt::format("  {}: {}", stepIdx, box.steps[stepIdx]->toString())
+        out << std::format("  {}: {}", stepIdx, box.steps[stepIdx]->toString())
             << std::endl;
       }
     }

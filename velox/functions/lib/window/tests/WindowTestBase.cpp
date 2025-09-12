@@ -33,7 +33,7 @@ WindowTestBase::QueryInfo WindowTestBase::buildWindowQuery(
     const std::string& overClause,
     const std::string& frameClause) {
   std::string functionSql =
-      fmt::format("{} over ({} {})", function, overClause, frameClause);
+      std::format("{} over ({} {})", function, overClause, frameClause);
   auto op = PlanBuilder()
                 .setParseOptions(options_)
                 .values(input)
@@ -43,7 +43,7 @@ WindowTestBase::QueryInfo WindowTestBase::buildWindowQuery(
   auto rowType = asRowType(input[0]->type());
   std::string columnsString = folly::join(", ", rowType->names());
   std::string querySql =
-      fmt::format("SELECT {}, {} FROM tmp", columnsString, functionSql);
+      std::format("SELECT {}, {} FROM tmp", columnsString, functionSql);
 
   return {op, functionSql, querySql};
 }
@@ -54,7 +54,7 @@ WindowTestBase::QueryInfo WindowTestBase::buildStreamingWindowQuery(
     const std::string& overClause,
     const std::string& frameClause) {
   std::string functionSql =
-      fmt::format("{} over ({} {})", function, overClause, frameClause);
+      std::format("{} over ({} {})", function, overClause, frameClause);
   std::vector<std::string> orderByClauses;
   auto windowExpr = duckdb::parseWindowExpr(functionSql, {});
 
@@ -79,7 +79,7 @@ WindowTestBase::QueryInfo WindowTestBase::buildStreamingWindowQuery(
   auto rowType = asRowType(input[0]->type());
   std::string columnsString = folly::join(", ", rowType->names());
   std::string querySql =
-      fmt::format("SELECT {}, {} FROM tmp", columnsString, functionSql);
+      std::format("SELECT {}, {} FROM tmp", columnsString, functionSql);
 
   return {plan, functionSql, querySql};
 }
@@ -172,7 +172,7 @@ void WindowTestBase::testWindowFunction(
             buildStreamingWindowQuery(input, function, overClause, frameClause);
       }
 
-      SCOPED_TRACE(fmt::format("Query #{}: {}", n, queryInfo.functionSql));
+      SCOPED_TRACE(std::format("Query #{}: {}", n, queryInfo.functionSql));
       assertQuery(queryInfo.planNode, queryInfo.querySql);
     }
   }
@@ -272,17 +272,17 @@ void WindowTestBase::rangeFrameTestImpl(
     }
     VELOX_CHECK(frame.value.has_value());
     if (frame.bound == BoundType::kPreceding) {
-      return fmt::format("{} PRECEDING", frame.value.value());
+      return std::format("{} PRECEDING", frame.value.value());
     }
-    return fmt::format("{} FOLLOWING", frame.value.value());
+    return std::format("{} FOLLOWING", frame.value.value());
   };
   std::string duckFrame = "range between " + duckFrameBound(startBound) +
       " and " + duckFrameBound(endBound);
 
   std::string veloxFunction =
-      fmt::format("{} over ({} {})", function, overClause, veloxFrame);
+      std::format("{} over ({} {})", function, overClause, veloxFrame);
   std::string duckFunction =
-      fmt::format("{} over ({} {})", function, overClause, duckFrame);
+      std::format("{} over ({} {})", function, overClause, duckFrame);
   auto op = PlanBuilder()
                 .setParseOptions(options_)
                 .values({vectors})
@@ -292,7 +292,7 @@ void WindowTestBase::rangeFrameTestImpl(
   auto rowType = asRowType(vectors->type());
   std::string columnsString = folly::join(", ", rowType->names());
   std::string querySql =
-      fmt::format("SELECT {}, {} FROM tmp", columnsString, duckFunction);
+      std::format("SELECT {}, {} FROM tmp", columnsString, duckFunction);
   SCOPED_TRACE(veloxFunction);
   assertQuery(op, querySql);
 }

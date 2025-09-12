@@ -512,7 +512,7 @@ RowVectorPtr IOBufToRowVector(
 } // namespace facebook::velox
 
 template <>
-struct fmt::formatter<facebook::velox::VectorSerde::Kind>
+struct std::formatter<facebook::velox::VectorSerde::Kind>
     : formatter<std::string> {
   auto format(facebook::velox::VectorSerde::Kind s, format_context& ctx) const {
     return formatter<std::string>::format(

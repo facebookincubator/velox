@@ -45,7 +45,7 @@ TEST_F(MakeTimestampTest, basic) {
                                         const std::string& timezone,
                                         const VectorPtr& expected) {
     auto result = evaluate(
-        fmt::format("make_timestamp(c0, c1, c2, c3, c4, c5, '{}')", timezone),
+        std::format("make_timestamp(c0, c1, c2, c3, c4, c5, '{}')", timezone),
         data);
     facebook::velox::test::assertEqualVectors(expected, result);
   };
@@ -204,13 +204,13 @@ TEST_F(MakeTimestampTest, invalidTimezone) {
   // Invalid constant time zone.
   setQueryTimeZone("GMT");
   for (auto timeZone : {"Invalid", ""}) {
-    SCOPED_TRACE(fmt::format("timezone: {}", timeZone));
+    SCOPED_TRACE(std::format("timezone: {}", timeZone));
     VELOX_ASSERT_USER_THROW(
         evaluate(
-            fmt::format(
+            std::format(
                 "make_timestamp(c0, c1, c2, c3, c4, c5, '{}')", timeZone),
             data),
-        fmt::format("Unknown time zone: '{}'", timeZone));
+        std::format("Unknown time zone: '{}'", timeZone));
   }
 
   // Invalid timezone from vector.

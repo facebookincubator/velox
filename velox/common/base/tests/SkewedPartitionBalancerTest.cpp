@@ -158,7 +158,7 @@ TEST_F(SkewedPartitionRebalancerTest, basic) {
   ASSERT_EQ(balancer->stats().numBalanceTriggers, 4);
   ASSERT_EQ(balancer->stats().numScaledPartitions, 4);
   for (int i = 0; i < helper.numPartitions(); ++i) {
-    SCOPED_TRACE(fmt::format("partition {}", i));
+    SCOPED_TRACE(std::format("partition {}", i));
     if (i == 0) {
       helper.verifyPartitionAssignment(0, {0, 1, 2, 3});
     } else if (i == 1) {
@@ -197,7 +197,7 @@ TEST_F(SkewedPartitionRebalancerTest, rebalanceCondition) {
   ASSERT_TRUE(helper.shouldRebalance());
   balancer->rebalance();
   for (int i = 0; i < helper.numPartitions(); ++i) {
-    SCOPED_TRACE(fmt::format("partition {}", i));
+    SCOPED_TRACE(std::format("partition {}", i));
     if (i == 0) {
       helper.verifyPartitionAssignment(0, {0, 1});
     } else if (i == 31) {
@@ -234,7 +234,7 @@ TEST_F(SkewedPartitionRebalancerTest, assignedTaskSelection) {
   ASSERT_EQ(balancer->stats().numBalanceTriggers, 1);
   ASSERT_EQ(balancer->stats().numScaledPartitions, 3);
   for (int i = 0; i < helper.numPartitions(); ++i) {
-    SCOPED_TRACE(fmt::format("partition {}", i));
+    SCOPED_TRACE(std::format("partition {}", i));
     if (i == 0) {
       helper.verifyPartitionAssignment(i, {0, 2});
     } else if (i == 15) {
@@ -247,7 +247,7 @@ TEST_F(SkewedPartitionRebalancerTest, assignedTaskSelection) {
   }
   for (int round = 0; round < 10; ++round) {
     for (int partition = 0; partition < helper.numPartitions(); ++partition) {
-      SCOPED_TRACE(fmt::format("partition {}, round {}", partition, round));
+      SCOPED_TRACE(std::format("partition {}, round {}", partition, round));
       if (partition == 0) {
         ASSERT_EQ(balancer->getTaskId(partition, round), round % 2 ? 2 : 0);
       } else if (partition == 15 || partition == 31) {
@@ -281,7 +281,7 @@ TEST_F(SkewedPartitionRebalancerTest, partitionScaleProcessBytesThreshold) {
   ASSERT_EQ(balancer->stats().numScaledPartitions, 1);
 
   for (int i = 0; i < helper.numPartitions(); ++i) {
-    SCOPED_TRACE(fmt::format("partition {}", i));
+    SCOPED_TRACE(std::format("partition {}", i));
     if (i == 0) {
       helper.verifyPartitionAssignment(i, {0, 1});
     } else {
@@ -316,7 +316,7 @@ TEST_F(SkewedPartitionRebalancerTest, skewTasksCondition) {
   ASSERT_EQ(balancer->stats().numScaledPartitions, 1);
 
   for (int i = 0; i < helper.numPartitions(); ++i) {
-    SCOPED_TRACE(fmt::format("partition {}", i));
+    SCOPED_TRACE(std::format("partition {}", i));
     if (i == 0) {
       helper.verifyPartitionAssignment(i, {0, 1});
     } else {
@@ -374,7 +374,7 @@ TEST_F(SkewedPartitionRebalancerTest, singleThreadFuzz) {
     SkewedPartitionRebalancerTestHelper helper(balancer.get());
     for (int iteration = 0; iteration < 1'000; ++iteration) {
       SCOPED_TRACE(
-          fmt::format("taskCount {}, iteration {}", taskCount, iteration));
+          std::format("taskCount {}, iteration {}", taskCount, iteration));
       const uint64_t processedBytes = 1 + folly::Random::rand32(512, rng);
       balancer->addProcessedBytes(processedBytes);
       const auto numPartitons = folly::Random::rand32(32, rng);
@@ -409,7 +409,7 @@ TEST_F(SkewedPartitionRebalancerTest, concurrentFuzz) {
         threads.emplace_back([&]() {
           std::mt19937 localRng{200};
           for (int iteration = 0; iteration < 1'000; ++iteration) {
-            SCOPED_TRACE(fmt::format(
+            SCOPED_TRACE(std::format(
                 "taskCount {}, iteration {}", taskCount, iteration));
             const uint64_t processedBytes =
                 1 + folly::Random::rand32(512, localRng);

@@ -1184,7 +1184,7 @@ void ParallelProjectNode::addDetails(std::stringstream& stream) const {
     if (i > 0) {
       stream << ", ";
     }
-    stream << fmt::format("[{}-{}]", start, start + exprGroups_[i].size() - 1);
+    stream << std::format("[{}-{}]", start, start + exprGroups_[i].size() - 1);
     start += exprGroups_[i].size();
   }
   stream << std::endl;
@@ -3006,7 +3006,7 @@ void PartitionedOutputNode::addDetails(std::stringstream& stream) const {
     if (numPartitions_ == 1) {
       stream << "SINGLE";
     } else {
-      stream << fmt::format(
+      stream << std::format(
           "partitionFunction: {} with {} partitions",
           partitionFunctionSpec_->toString(),
           numPartitions_);
@@ -3481,7 +3481,7 @@ void PlanNode::registerSerDe() {
 
 folly::dynamic PlanNode::serialize() const {
   folly::dynamic obj = folly::dynamic::object;
-  obj["name"] = fmt::format("{}Node", name());
+  obj["name"] = std::format("{}Node", name());
   obj["id"] = id_;
 
   if (!sources().empty()) {
@@ -3591,7 +3591,7 @@ folly::dynamic InIndexLookupCondition::serialize() const {
 }
 
 std::string InIndexLookupCondition::toString() const {
-  return fmt::format("{} IN {}", key->toString(), list->toString());
+  return std::format("{} IN {}", key->toString(), list->toString());
 }
 
 void InIndexLookupCondition::validate() const {
@@ -3634,7 +3634,7 @@ folly::dynamic BetweenIndexLookupCondition::serialize() const {
 }
 
 std::string BetweenIndexLookupCondition::toString() const {
-  return fmt::format(
+  return std::format(
       "{} BETWEEN {} AND {}",
       key->toString(),
       lower->toString(),
@@ -3689,7 +3689,7 @@ folly::dynamic EqualIndexLookupCondition::serialize() const {
 }
 
 std::string EqualIndexLookupCondition::toString() const {
-  return fmt::format("{} = {}", key->toString(), value->toString());
+  return std::format("{} = {}", key->toString(), value->toString());
 }
 
 IndexLookupConditionPtr EqualIndexLookupCondition::create(

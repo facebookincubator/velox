@@ -91,7 +91,7 @@ TEST_F(ConcatWsTest, stringArgs) {
   auto c0 = generateRandomString(20);
   auto c1 = generateRandomString(20);
   auto result = evaluate<SimpleVector<StringView>>(
-      fmt::format("concat_ws('-', '{}', '{}')", c0, c1), rows);
+      std::format("concat_ws('-', '{}', '{}')", c0, c1), rows);
   for (auto i = 0; i < 10; ++i) {
     EXPECT_EQ(result->valueAt(i), c0 + "-" + c1);
   }
@@ -113,7 +113,7 @@ TEST_F(ConcatWsTest, stringArgs) {
       }
     }
 
-    SCOPED_TRACE(fmt::format("Number of arguments: {}", argsCount));
+    SCOPED_TRACE(std::format("Number of arguments: {}", argsCount));
     testConcatWsFlatVector(inputTable, argsCount, "--testSep--");
     // Test with empty separator.
     testConcatWsFlatVector(inputTable, argsCount, "");

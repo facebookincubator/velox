@@ -40,7 +40,6 @@ if(VELOX_ENABLE_ABFS)
       Azure::azure-storage-files-datalake
       Folly::folly
       glog::glog
-      fmt::fmt
   )
 
   if(${VELOX_BUILD_TESTING})

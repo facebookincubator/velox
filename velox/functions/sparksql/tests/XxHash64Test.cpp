@@ -312,7 +312,7 @@ TEST_F(XxHash64Test, unknown) {
 TEST_F(XxHash64Test, hashSeed) {
   auto xxhash64WithSeed = [&](int64_t seed, const std::optional<int64_t>& arg) {
     return evaluateOnce<int64_t>(
-        fmt::format("xxhash64_with_seed({}, c0)", seed), arg);
+        std::format("xxhash64_with_seed({}, c0)", seed), arg);
   };
 
   static const auto kIntMin = std::numeric_limits<int32_t>::min();
@@ -338,7 +338,7 @@ TEST_F(XxHash64Test, hashSeedVarcharArgs) {
                               const std::optional<std::string>& arg1,
                               const std::optional<std::string>& arg2) {
     return evaluateOnce<int64_t>(
-        fmt::format("xxhash64_with_seed({}, c0, c1)", seed), arg1, arg2);
+        std::format("xxhash64_with_seed({}, c0, c1)", seed), arg1, arg2);
   };
 
   EXPECT_EQ(xxhash64WithSeed(42L, "hello", "world"), 7824066149349576922);

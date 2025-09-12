@@ -131,7 +131,7 @@ void checkTypeCompatibility(
     const FShouldRead& shouldRead,
     const std::function<std::string()>& exceptionMessageCreator) {
   if (shouldRead(to) && !isCompatible(from.kind(), kind(to))) {
-    VELOX_SCHEMA_MISMATCH_ERROR(fmt::format(
+    VELOX_SCHEMA_MISMATCH_ERROR(std::format(
         "{}, From Kind: {}, To Kind: {}",
         exceptionMessageCreator ? exceptionMessageCreator() : "Schema mismatch",
         mapTypeKindToName(from.kind()),

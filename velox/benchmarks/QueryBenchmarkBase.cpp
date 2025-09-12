@@ -34,7 +34,7 @@ bool validateDataFormat(const char* flagname, const std::string& value) {
     return true;
   }
   std::cout
-      << fmt::format(
+      << std::format(
              "Invalid value for --{}: {}. Allowed values are [\"parquet\", \"dwrf\"]",
              flagname,
              value)

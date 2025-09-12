@@ -239,13 +239,13 @@ class ZipFunction : public exec::VectorFunction {
       allTypeVars.reserve(i);
 
       for (int j = 0; j < i; j++) {
-        allTypeVars.emplace_back(fmt::format("E{:02d}", j));
+        allTypeVars.emplace_back(std::format("E{:02d}", j));
         builder.typeVariable(allTypeVars.back());
-        builder.argumentType(fmt::format("array({})", allTypeVars.back()));
+        builder.argumentType(std::format("array({})", allTypeVars.back()));
       }
 
       const auto returnType = folly::join(",", allTypeVars);
-      builder.returnType(fmt::format("array(row({}))", returnType));
+      builder.returnType(std::format("array(row({}))", returnType));
       signatures.emplace_back(builder.build());
     }
 

@@ -94,7 +94,6 @@ target_link_libraries(
   velox_dwio_dwrf_stripe_stream_test
   velox_link_libs
   Folly::folly
-  fmt::fmt
   lz4::lz4
   zstd::zstd
   ZLIB::ZLIB
@@ -108,7 +107,6 @@ target_link_libraries(
   velox_dwio_dwrf_stream_labels_test
   velox_link_libs
   Folly::folly
-  fmt::fmt
   lz4::lz4
   zstd::zstd
   ZLIB::ZLIB
@@ -122,7 +120,6 @@ target_link_libraries(
   velox_dwio_dwrf_stripe_dictionary_cache_test
   velox_link_libs
   Folly::folly
-  fmt::fmt
   lz4::lz4
   zstd::zstd
   ZLIB::ZLIB
@@ -354,7 +351,6 @@ add_test(velox_dwio_dwrf_byte_rle_test velox_dwio_dwrf_byte_rle_test)
 target_link_libraries(
   velox_dwio_dwrf_byte_rle_test
   velox_link_libs
-  fmt::fmt
   Folly::folly
   ${TEST_LINK_LIBS}
 )
@@ -365,7 +361,6 @@ add_test(velox_dwio_dwrf_byte_rle_encoder_test velox_dwio_dwrf_byte_rle_encoder_
 target_link_libraries(
   velox_dwio_dwrf_byte_rle_encoder_test
   velox_link_libs
-  fmt::fmt
   Folly::folly
   ${TEST_LINK_LIBS}
 )
@@ -391,7 +386,6 @@ add_test(velox_dwio_dwrf_int_direct_test velox_dwio_dwrf_int_direct_test)
 target_link_libraries(
   velox_dwio_dwrf_int_direct_test
   velox_link_libs
-  fmt::fmt
   Folly::folly
   ${TEST_LINK_LIBS}
 )
@@ -413,7 +407,6 @@ target_link_libraries(
   velox_dwio_dwrf_column_reader_test
   velox_link_libs
   Folly::folly
-  fmt::fmt
   ${TEST_LINK_LIBS}
 )
 
@@ -430,7 +423,6 @@ target_link_libraries(
   velox_vector_test_lib
   velox_link_libs
   Folly::folly
-  fmt::fmt
   lz4::lz4
   zstd::zstd
   ZLIB::ZLIB
@@ -446,7 +438,6 @@ target_link_libraries(
   velox_link_libs
   velox_test_util
   Folly::folly
-  fmt::fmt
   lz4::lz4
   zstd::zstd
   ZLIB::ZLIB
@@ -472,7 +463,6 @@ target_link_libraries(
   velox_vector_test_lib
   velox_link_libs
   Folly::folly
-  fmt::fmt
   lz4::lz4
   zstd::zstd
   ZLIB::ZLIB
@@ -487,7 +477,6 @@ target_link_libraries(
   velox_link_libs
   velox_dwrf_test_utils
   Folly::folly
-  fmt::fmt
   lz4::lz4
   zstd::zstd
   ZLIB::ZLIB
@@ -502,7 +491,6 @@ target_link_libraries(
   velox_dwrf_test_utils
   velox_link_libs
   Folly::folly
-  fmt::fmt
   lz4::lz4
   zstd::zstd
   ZLIB::ZLIB
@@ -519,7 +507,6 @@ target_link_libraries(
   velox_vector_test_lib
   velox_link_libs
   Folly::folly
-  fmt::fmt
   lz4::lz4
   zstd::zstd
   ZLIB::ZLIB
@@ -536,7 +523,6 @@ target_link_libraries(
   velox_vector_test_lib
   velox_link_libs
   Folly::folly
-  fmt::fmt
   lz4::lz4
   zstd::zstd
   ZLIB::ZLIB
@@ -550,7 +536,6 @@ target_link_libraries(
   velox_dwrf_test_utils
   velox_link_libs
   Folly::folly
-  fmt::fmt
   lz4::lz4
   zstd::zstd
   ZLIB::ZLIB
@@ -565,7 +550,6 @@ target_link_libraries(
   velox_dwrf_test_utils
   velox_link_libs
   Folly::folly
-  fmt::fmt
   lz4::lz4
   zstd::zstd
   ZLIB::ZLIB
@@ -580,7 +564,6 @@ target_link_libraries(
   velox_dwrf_test_utils
   velox_link_libs
   Folly::folly
-  fmt::fmt
   lz4::lz4
   zstd::zstd
   ZLIB::ZLIB
@@ -606,7 +589,6 @@ if(VELOX_ENABLE_BENCHMARKS)
     velox_dwio_dwrf_writer
     Folly::folly
     Folly::follybenchmark
-    fmt::fmt
   )
 endif()
 
@@ -620,7 +602,6 @@ target_link_libraries(
   velox_link_libs
   velox_temp_path
   Folly::folly
-  fmt::fmt
   lz4::lz4
   zstd::zstd
   ZLIB::ZLIB

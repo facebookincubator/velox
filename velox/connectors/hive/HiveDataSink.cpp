@@ -170,18 +170,18 @@ std::string computeBucketedFileName(
   const uint32_t kMaxBucketCountPadding =
       std::to_string(maxBucketCount - 1).size();
   const std::string bucketValueStr = std::to_string(bucket);
-  return fmt::format(
+  return std::format(
       "0{:0>{}}_0_{}", bucketValueStr, kMaxBucketCountPadding, queryId);
 }
 
 std::shared_ptr<memory::MemoryPool> createSinkPool(
     const std::shared_ptr<memory::MemoryPool>& writerPool) {
-  return writerPool->addLeafChild(fmt::format("{}.sink", writerPool->name()));
+  return writerPool->addLeafChild(std::format("{}.sink", writerPool->name()));
 }
 
 std::shared_ptr<memory::MemoryPool> createSortPool(
     const std::shared_ptr<memory::MemoryPool>& writerPool) {
-  return writerPool->addLeafChild(fmt::format("{}.sort", writerPool->name()));
+  return writerPool->addLeafChild(std::format("{}.sort", writerPool->name()));
 }
 
 uint64_t getFinishTimeSliceLimitMsFromHiveConfig(
@@ -209,18 +209,18 @@ const HiveWriterId& HiveWriterId::unpartitionedId() {
 
 std::string HiveWriterId::toString() const {
   if (partitionId.has_value() && bucketId.has_value()) {
-    return fmt::format("part[{}.{}]", partitionId.value(), bucketId.value());
+    return std::format("part[{}.{}]", partitionId.value(), bucketId.value());
   }
 
   if (partitionId.has_value() && !bucketId.has_value()) {
-    return fmt::format("part[{}]", partitionId.value());
+    return std::format("part[{}]", partitionId.value());
   }
 
   // This WriterId is used to add an identifier in the MemoryPools. This could
   // indicate unpart, but the bucket number needs to be disambiguated. So
   // creating a new label using bucket.
   if (!partitionId.has_value() && bucketId.has_value()) {
-    return fmt::format("bucket[{}]", bucketId.value());
+    return std::format("bucket[{}]", bucketId.value());
   }
 
   return "unpart";
@@ -268,7 +268,7 @@ std::shared_ptr<HiveSortingColumn> HiveSortingColumn::deserialize(
 }
 
 std::string HiveSortingColumn::toString() const {
-  return fmt::format(
+  return std::format(
       "[COLUMN[{}] ORDER[{}]]", sortColumn_, sortOrder_.toString());
 }
 
@@ -308,7 +308,7 @@ std::string HiveBucketProperty::kindString(Kind kind) {
     case Kind::kPrestoNative:
       return "PRESTO_NATIVE";
     default:
-      return fmt::format("UNKNOWN {}", static_cast<int>(kind));
+      return std::format("UNKNOWN {}", static_cast<int>(kind));
   }
 }
 
@@ -609,7 +609,7 @@ std::shared_ptr<memory::MemoryPool> HiveDataSink::createWriterPool(
     const HiveWriterId& writerId) {
   auto* connectorPool = connectorQueryCtx_->connectorMemoryPool();
   return connectorPool->addAggregateChild(
-      fmt::format("{}.{}", connectorPool->name(), writerId.toString()));
+      std::format("{}.{}", connectorPool->name(), writerId.toString()));
 }
 
 void HiveDataSink::setMemoryReclaimers(
@@ -1000,7 +1000,7 @@ std::pair<std::string, std::string> HiveInsertFileNameGenerator::gen(
     // targetFileName includes planNodeId and Uuid. As a result, different
     // table writers run by the same task driver or the same table writer
     // run in different task tries would have different targetFileNames.
-    targetFileName = fmt::format(
+    targetFileName = std::format(
         "{}_{}_{}_{}",
         connectorQueryCtx.taskId(),
         connectorQueryCtx.driverId(),
@@ -1009,13 +1009,13 @@ std::pair<std::string, std::string> HiveInsertFileNameGenerator::gen(
   }
   VELOX_CHECK(!targetFileName.empty());
   const std::string writeFileName = commitRequired
-      ? fmt::format(".tmp.velox.{}_{}", targetFileName, makeUuid())
+      ? std::format(".tmp.velox.{}_{}", targetFileName, makeUuid())
       : targetFileName;
   if (generateFileName &&
       insertTableHandle->storageFormat() == dwio::common::FileFormat::PARQUET) {
     return {
-        fmt::format("{}{}", targetFileName, ".parquet"),
-        fmt::format("{}{}", writeFileName, ".parquet")};
+        std::format("{}{}", targetFileName, ".parquet"),
+        std::format("{}{}", writeFileName, ".parquet")};
   }
   return {targetFileName, writeFileName};
 }
@@ -1197,7 +1197,7 @@ std::string HiveInsertTableHandle::toString() const {
 }
 
 std::string LocationHandle::toString() const {
-  return fmt::format(
+  return std::format(
       "LocationHandle [targetPath: {}, writePath: {}, tableType: {}, tableFileName: {}]",
       targetPath_,
       writePath_,

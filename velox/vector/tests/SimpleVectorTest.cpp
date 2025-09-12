@@ -17,7 +17,6 @@
 #include <algorithm>
 #include <functional>
 
-#include <fmt/core.h>
 #include <glog/logging.h>
 #include <gtest/gtest.h>
 

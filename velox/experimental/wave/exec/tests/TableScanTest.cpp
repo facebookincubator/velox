@@ -545,13 +545,13 @@ TEST_P(TableScanTest, scan3GroupBy) {
   auto plan = PlanBuilder(pool_.get())
                   .tableScan(type)
                   .singleAggregation({"c0"}, {"sum(1)", "sum(c1)"})
-                  .project({fmt::format("c0 % {} as c0", FLAGS_agg_mod2), "a0"})
+                  .project({std::format("c0 % {} as c0", FLAGS_agg_mod2), "a0"})
                   .singleAggregation({"c0"}, {"sum(1)", "sum(a0)"})
                   .planNode();
   auto task = assertQuery(
       plan,
       splits,
-      fmt::format(
+      std::format(
           "SELECT c0 % {}, sum(1), sum(a0) from (SELECT c0, sum(1) as a0, sum(c1), sum(c2), sum(c3), sum(rn) FROM tmp  group by c0) d group by c0 % {}",
           FLAGS_agg_mod2,
           FLAGS_agg_mod2));

@@ -14,7 +14,7 @@
 
 add_library(velox_wave_stream OperandSet.cpp Wave.cpp)
 
-target_link_libraries(velox_wave_stream Folly::folly fmt::fmt xsimd)
+target_link_libraries(velox_wave_stream Folly::folly xsimd)
 
 add_library(
   velox_wave_exec

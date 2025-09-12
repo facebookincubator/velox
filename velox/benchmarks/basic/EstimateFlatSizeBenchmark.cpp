@@ -70,7 +70,7 @@ class EstimateFlatSizeBenchmark
 
     // Create a mix of different types of children
     for (size_t i = 0; i < numRowChildren_; ++i) {
-      names.push_back(fmt::format("field{}", i));
+      names.push_back(std::format("field{}", i));
 
       // Create different types of children based on the index
       switch (i % 5) {

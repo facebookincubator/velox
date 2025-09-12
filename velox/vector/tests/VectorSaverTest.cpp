@@ -116,7 +116,7 @@ class VectorSaverTest : public testing::Test, public VectorTestBase {
   }
 
   void testRoundTrip(VectorFuzzer::Options options, const TypePtr& type) {
-    SCOPED_TRACE(fmt::format("seed: {}", seed_));
+    SCOPED_TRACE(std::format("seed: {}", seed_));
     VectorFuzzer fuzzer(options, pool(), seed_);
     testRoundTrip(fuzzer.fuzzFlat(type));
   }
@@ -468,7 +468,7 @@ TEST_F(VectorSaverTest, constantUnknown) {
 
 TEST_F(VectorSaverTest, constantMap) {
   auto opts = fuzzerOptions();
-  SCOPED_TRACE(fmt::format("seed: {}", seed_));
+  SCOPED_TRACE(std::format("seed: {}", seed_));
 
   VectorFuzzer fuzzer(opts, pool(), seed_);
   auto mapType = MAP(INTEGER(), VARCHAR());
@@ -481,7 +481,7 @@ TEST_F(VectorSaverTest, constantMap) {
 
 TEST_F(VectorSaverTest, constantArray) {
   auto opts = fuzzerOptions();
-  SCOPED_TRACE(fmt::format("seed: {}", seed_));
+  SCOPED_TRACE(std::format("seed: {}", seed_));
 
   VectorFuzzer fuzzer(opts, pool(), seed_);
   auto arrayType = ARRAY(BIGINT());
@@ -494,7 +494,7 @@ TEST_F(VectorSaverTest, constantArray) {
 
 TEST_F(VectorSaverTest, constantRow) {
   auto opts = fuzzerOptions();
-  SCOPED_TRACE(fmt::format("seed: {}", seed_));
+  SCOPED_TRACE(std::format("seed: {}", seed_));
 
   VectorFuzzer fuzzer(opts, pool(), seed_);
   auto rowType = ROW({"a", "b"}, {INTEGER(), REAL()});
@@ -548,7 +548,7 @@ TEST_F(VectorSaverTest, dictionaryBigint) {
 
 TEST_F(VectorSaverTest, dictionaryArray) {
   auto opts = fuzzerOptions();
-  SCOPED_TRACE(fmt::format("seed: {}", seed_));
+  SCOPED_TRACE(std::format("seed: {}", seed_));
 
   VectorFuzzer fuzzer(opts, pool(), seed_);
   auto flatVector = fuzzer.fuzzFlat(ARRAY(INTEGER()));
@@ -578,7 +578,7 @@ TEST_F(VectorSaverTest, dictionaryArray) {
 
 TEST_F(VectorSaverTest, dictionaryMap) {
   auto opts = fuzzerOptions();
-  SCOPED_TRACE(fmt::format("seed: {}", seed_));
+  SCOPED_TRACE(std::format("seed: {}", seed_));
 
   VectorFuzzer fuzzer(opts, pool(), seed_);
   auto flatVector = fuzzer.fuzzFlat(MAP(INTEGER(), VARCHAR()));
@@ -593,7 +593,7 @@ TEST_F(VectorSaverTest, dictionaryMap) {
 
 TEST_F(VectorSaverTest, dictionaryRow) {
   auto opts = fuzzerOptions();
-  SCOPED_TRACE(fmt::format("seed: {}", seed_));
+  SCOPED_TRACE(std::format("seed: {}", seed_));
 
   VectorFuzzer fuzzer(opts, pool(), seed_);
   auto flatVector =
@@ -610,7 +610,7 @@ TEST_F(VectorSaverTest, dictionaryRow) {
 TEST_F(VectorSaverTest, LazyVector) {
   auto opts = fuzzerOptions();
   opts.nullRatio = 0.5;
-  SCOPED_TRACE(fmt::format("seed: {}", seed_));
+  SCOPED_TRACE(std::format("seed: {}", seed_));
 
   VectorFuzzer fuzzer(opts, pool(), seed_);
   auto flatVector =

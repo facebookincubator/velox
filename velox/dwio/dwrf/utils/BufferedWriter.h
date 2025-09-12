@@ -92,7 +92,7 @@ class BufferedWriter {
   }
 
   std::string toString() const {
-    return fmt::format(
+    return std::format(
         "BufferedWriter[pos[{}] capacity[{}] closed[{}]]",
         pos_,
         capacity_,

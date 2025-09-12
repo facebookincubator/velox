@@ -166,7 +166,7 @@ TEST_F(OperatorTraceTest, traceData) {
     bool limitExceeded;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "maxTracedBytes: {}, numTracedBatches: {}, limitExceeded {}",
           maxTracedBytes,
           numTracedBatches,
@@ -364,7 +364,7 @@ TEST_F(OperatorTraceTest, task) {
     uint8_t expectedNumDirs;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "taskRegExpr: {}, expectedNumDirs: ", taskRegExpr, expectedNumDirs);
     }
   } testSettings[]{{".*", 1}, {"test_cursor_.*", 1}, {"xxx_yyy \\d+", 0}};
@@ -403,7 +403,7 @@ TEST_F(OperatorTraceTest, task) {
     assertEqualResults({result}, {expectedResult});
 
     const auto expectedDir =
-        fmt::format("{}/{}", outputDir->getPath(), task->taskId());
+        std::format("{}/{}", outputDir->getPath(), task->taskId());
     const auto fs = filesystems::getFileSystem(expectedDir, nullptr);
     const auto actaulDirs = fs->list(outputDir->getPath());
 
@@ -525,7 +525,7 @@ TEST_F(OperatorTraceTest, traceTableWriter) {
     bool limitExceeded;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "taskRegExpr: {}, maxTracedBytes: {}, numTracedBatches: {}, limitExceeded {}",
           taskRegExpr,
           maxTracedBytes,
@@ -550,7 +550,7 @@ TEST_F(OperatorTraceTest, traceTableWriter) {
                               .planNode();
     const auto testDir = TempDirectoryPath::create();
     const auto traceRoot =
-        fmt::format("{}/{}", testDir->getPath(), "traceRoot");
+        std::format("{}/{}", testDir->getPath(), "traceRoot");
     std::shared_ptr<Task> task;
     if (testData.limitExceeded) {
       VELOX_ASSERT_THROW(
@@ -630,7 +630,7 @@ TEST_F(OperatorTraceTest, filterProject) {
     bool limitExceeded;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "taskRegExpr: {}, maxTracedBytes: {}, numTracedBatches: {}, limitExceeded {}",
           taskRegExpr,
           maxTracedBytes,
@@ -656,7 +656,7 @@ TEST_F(OperatorTraceTest, filterProject) {
                               .planNode();
     const auto testDir = TempDirectoryPath::create();
     const auto traceRoot =
-        fmt::format("{}/{}", testDir->getPath(), "traceRoot");
+        std::format("{}/{}", testDir->getPath(), "traceRoot");
     std::shared_ptr<Task> task;
     if (testData.limitExceeded) {
       VELOX_ASSERT_THROW(
@@ -726,7 +726,7 @@ TEST_F(OperatorTraceTest, traceSplitRoundTrip) {
   constexpr auto numSplits = 5;
   const auto vectors = makeVectors(10, 100);
   const auto testDir = TempDirectoryPath::create();
-  const auto traceRoot = fmt::format("{}/{}", testDir->getPath(), "traceRoot");
+  const auto traceRoot = std::format("{}/{}", testDir->getPath(), "traceRoot");
   const auto fs = filesystems::getFileSystem(testDir->getPath(), nullptr);
   std::vector<std::shared_ptr<TempFilePath>> splitFiles;
   for (int i = 0; i < numSplits; ++i) {
@@ -793,7 +793,7 @@ TEST_F(OperatorTraceTest, traceSplitPartial) {
   constexpr auto numSplits = 3;
   const auto vectors = makeVectors(2, 100);
   const auto testDir = TempDirectoryPath::create();
-  const auto traceRoot = fmt::format("{}/{}", testDir->getPath(), "traceRoot");
+  const auto traceRoot = std::format("{}/{}", testDir->getPath(), "traceRoot");
   const auto fs = filesystems::getFileSystem(testDir->getPath(), nullptr);
   std::vector<std::shared_ptr<TempFilePath>> splitFiles;
   for (int i = 0; i < numSplits; ++i) {
@@ -838,7 +838,7 @@ TEST_F(OperatorTraceTest, traceSplitPartial) {
   const uint32_t crc32 = folly::crc32(
       reinterpret_cast<const uint8_t*>(split.data()), split.size());
   const auto splitInfoFile = fs->openFileForWrite(
-      fmt::format(
+      std::format(
           "{}/{}",
           traceDirPath->getPath(),
           OperatorTraceTraits::kSplitFileName),
@@ -882,7 +882,7 @@ TEST_F(OperatorTraceTest, traceSplitCorrupted) {
   constexpr auto numSplits = 3;
   const auto vectors = makeVectors(2, 100);
   const auto testDir = TempDirectoryPath::create();
-  const auto traceRoot = fmt::format("{}/{}", testDir->getPath(), "traceRoot");
+  const auto traceRoot = std::format("{}/{}", testDir->getPath(), "traceRoot");
   const auto fs = filesystems::getFileSystem(testDir->getPath(), nullptr);
   std::vector<std::shared_ptr<TempFilePath>> splitFiles;
   for (int i = 0; i < numSplits; ++i) {
@@ -927,7 +927,7 @@ TEST_F(OperatorTraceTest, traceSplitCorrupted) {
   const uint32_t crc32 = folly::crc32(
       reinterpret_cast<const uint8_t*>(split.data()), split.size());
   const auto splitInfoFile = fs->openFileForWrite(
-      fmt::format(
+      std::format(
           "{}/{}",
           traceDirPath->getPath(),
           OperatorTraceTraits::kSplitFileName),
@@ -993,7 +993,7 @@ TEST_F(OperatorTraceTest, hashJoin) {
     bool limitExceeded;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "taskRegExpr: {}, maxTracedBytes: {}, numTracedBatches: {}, limitExceeded {}",
           taskRegExpr,
           maxTracedBytes,
@@ -1028,7 +1028,7 @@ TEST_F(OperatorTraceTest, hashJoin) {
                               .planNode();
     const auto testDir = TempDirectoryPath::create();
     const auto traceRoot =
-        fmt::format("{}/{}", testDir->getPath(), "traceRoot");
+        std::format("{}/{}", testDir->getPath(), "traceRoot");
     std::shared_ptr<Task> task;
     if (testData.limitExceeded) {
       VELOX_ASSERT_THROW(
@@ -1114,7 +1114,7 @@ TEST_F(OperatorTraceTest, canTrace) {
     const bool canTrace;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "operatorType: {}, canTrace: {}", operatorType, canTrace);
     }
   } testSettings[] = {
@@ -1140,7 +1140,7 @@ TEST_F(OperatorTraceTest, hiveConnectorId) {
   constexpr auto numSplits = 2;
   const auto vectors = makeVectors(10, 10);
   const auto testDir = TempDirectoryPath::create();
-  const auto traceRoot = fmt::format("{}/{}", testDir->getPath(), "traceRoot");
+  const auto traceRoot = std::format("{}/{}", testDir->getPath(), "traceRoot");
   const auto fs = filesystems::getFileSystem(testDir->getPath(), nullptr);
   std::vector<std::shared_ptr<TempFilePath>> splitFiles;
   for (int i = 0; i < numSplits; ++i) {

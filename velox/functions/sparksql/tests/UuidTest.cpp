@@ -25,12 +25,12 @@ class UuidTest : public SparkFunctionBaseTest {
   std::optional<std::string> uuidOne(int64_t seed, int32_t partitionIndex) {
     setSparkPartitionId(partitionIndex);
     return evaluateOnce<std::string>(
-        fmt::format("uuid({})", seed), makeRowVector(ROW({}), 1));
+        std::format("uuid({})", seed), makeRowVector(ROW({}), 1));
   }
 
   VectorPtr uuidMany(int64_t seed, int32_t partitionIndex, int32_t batchSize) {
     setSparkPartitionId(partitionIndex);
-    auto exprSet = compileExpression(fmt::format("uuid({})", seed), ROW({}));
+    auto exprSet = compileExpression(std::format("uuid({})", seed), ROW({}));
     return evaluate(*exprSet, makeRowVector(ROW({}), batchSize));
   }
 };

@@ -338,7 +338,7 @@ TEST(DuckParserTest, interval) {
     auto value =
         INTERVAL_DAY_TIME()->valueToString(expr->value().value<int64_t>());
     if (expr->alias()) {
-      return fmt::format("{} AS {}", value, expr->alias().value());
+      return std::format("{} AS {}", value, expr->alias().value());
     }
 
     return value;
@@ -369,7 +369,7 @@ TEST(DuckParserTest, intervalYearMonth) {
     auto value =
         INTERVAL_YEAR_MONTH()->valueToString(expr->value().value<int32_t>());
     if (expr->alias()) {
-      return fmt::format("{} AS {}", value, expr->alias().value());
+      return std::format("{} AS {}", value, expr->alias().value());
     }
     return value;
   };
@@ -609,11 +609,11 @@ const std::string parseWindow(const std::string& expr) {
   }
   auto partitionString = windowExpr.partitionBy.empty()
       ? ""
-      : fmt::format("PARTITION BY {}", concatPartitions);
+      : std::format("PARTITION BY {}", concatPartitions);
 
   auto orderByString = toString(windowExpr.orderBy);
 
-  auto frameString = fmt::format(
+  auto frameString = std::format(
       "{} BETWEEN {}{} AND{} {}",
       windowTypeString(windowExpr.frame.type),
       (windowExpr.frame.startValue
@@ -624,7 +624,7 @@ const std::string parseWindow(const std::string& expr) {
                                  : ""),
       boundTypeString(windowExpr.frame.endType));
 
-  return fmt::format(
+  return std::format(
       "{} OVER ({} {} {})",
       windowExpr.functionCall->toString(),
       partitionString,

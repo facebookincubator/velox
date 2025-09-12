@@ -1014,7 +1014,7 @@ RowVectorPtr HashProbe::getOutputInternal(bool toSpillOutput) {
   }
   VELOX_CHECK(
       isRunning() || isWaitingForPeers(),
-      fmt::format("Invalid state {}", state_));
+      std::format("Invalid state {}", state_));
 
   if (!toSpillOutput) {
     // Avoid memory reservation if it is triggered by memory arbitration to

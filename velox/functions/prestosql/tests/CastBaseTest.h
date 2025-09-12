@@ -149,7 +149,7 @@ class CastBaseTest : public FunctionBaseTest {
       const TypePtr& fromType = CppToType<TFrom>::create(),
       const TypePtr& toType = CppToType<TTo>::create()) {
     auto result = evaluate(
-        fmt::format("cast(c0 as {})", typeString),
+        std::format("cast(c0 as {})", typeString),
         makeRowVector({makeNullableFlatVector(input, fromType)}));
     auto expected = makeNullableFlatVector<TTo>(expectedResult, toType);
     assertEqualVectors(expected, result);
@@ -170,7 +170,7 @@ class CastBaseTest : public FunctionBaseTest {
       const TypePtr& fromType = CppToType<TFrom>::create(),
       const TypePtr& toType = CppToType<TTo>::create()) {
     auto result = evaluate(
-        fmt::format("try_cast(c0 as {})", typeString),
+        std::format("try_cast(c0 as {})", typeString),
         makeRowVector({makeNullableFlatVector(input, fromType)}));
     auto expected = makeNullableFlatVector<TTo>(expectedResult, toType);
     assertEqualVectors(expected, result);
@@ -191,13 +191,13 @@ class CastBaseTest : public FunctionBaseTest {
     if (!isRunTimeThrow) {
       VELOX_ASSERT_USER_THROW(
           evaluate(
-              fmt::format("cast(c0 as {})", typeString),
+              std::format("cast(c0 as {})", typeString),
               makeRowVector({makeNullableFlatVector(input, fromType)})),
           expectedErrorMessage);
     } else {
       VELOX_ASSERT_RUNTIME_THROW(
           evaluate(
-              fmt::format("cast(c0 as {})", typeString),
+              std::format("cast(c0 as {})", typeString),
               makeRowVector({makeNullableFlatVector(input, fromType)})),
           expectedErrorMessage);
     }
@@ -209,7 +209,7 @@ class CastBaseTest : public FunctionBaseTest {
       std::optional<bool> isTryCast = std::nullopt) {
     const auto& fromType = input->type();
     const auto& toType = expected->type();
-    SCOPED_TRACE(fmt::format(
+    SCOPED_TRACE(std::format(
         "Cast from {} to {}", fromType->toString(), toType->toString()));
     const auto copy = createCopy(input);
     // Test with flat encoding.

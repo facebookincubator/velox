@@ -48,7 +48,7 @@ TEST_F(RuntimeMetricsTest, basic) {
   testMetric(rm1, 19, 3, 3, 11);
 
   ASSERT_EQ(
-      fmt::format(
+      std::format(
           "sum:{}, count:{}, min:{}, max:{}, avg: {}",
           rm1.sum,
           rm1.count,

@@ -75,7 +75,7 @@ std::vector<std::shared_ptr<SerializedPage>> ArbitraryBuffer::getPages(
 }
 
 std::string ArbitraryBuffer::toString() const {
-  return fmt::format(
+  return std::format(
       "[ARBITRARY_BUFFER PAGES[{}] NO MORE DATA[{}]]",
       pages_.size() - !!hasNoMoreData(),
       hasNoMoreData());

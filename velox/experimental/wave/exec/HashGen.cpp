@@ -33,7 +33,7 @@ void makeProbeKeyMembers(
     const std::vector<AbstractOperand*>& keys,
     std::stringstream& out) {
   for (auto n = 0; n < keys.size(); n += 32) {
-    out << fmt::format("  uint32_t nulls{};\n", n / 32);
+    out << std::format("  uint32_t nulls{};\n", n / 32);
   }
   for (auto i = 0; i < keys.size(); ++i) {
     auto* key = keys[i];
@@ -50,7 +50,7 @@ void makeHash(
   auto& out = state.generated();
   std::string idStr;
   if (id != -1) {
-    idStr = fmt::format("{}", id);
+    idStr = std::format("{}", id);
   }
   out << "  hash" << idStr << " = 1;\n";
   for (auto i = 0; i < keys.size(); ++i) {
@@ -58,7 +58,7 @@ void makeHash(
     state.ensureOperand(op);
     std::string stmt;
     if (!nullableKeys && !op->notNull) {
-      stmt = fmt::format(
+      stmt = std::format(
           "  if ({}) {{ goto nullKey; }}\n"
           "   hash{} = hashMix(hash{}, hashValue({}));\n",
           state.isNull(op),
@@ -67,16 +67,16 @@ void makeHash(
           state.operandValue(op));
     } else {
       if (!keys[i]->notNull) {
-        stmt = fmt::format(
+        stmt = std::format(
             "  if ({}) {{ $h$ = hashMix($h$, 13); }} else {{ $h$ = hashMix($h$, hashValue({})); }}\n",
             state.isNull(op),
             state.operandValue(op));
       } else {
-        stmt = fmt::format(
+        stmt = std::format(
             "  $h$ = hashMix($h$, hashValue({}));\n", state.operandValue(op));
       }
     }
-    out << replaceAll(stmt, "$h$", fmt::format("hash{}", idStr));
+    out << replaceAll(stmt, "$h$", std::format("hash{}", idStr));
   }
   if (!nullableKeys) {
     out << " goto hashDone;\n"
@@ -99,13 +99,13 @@ void makeCompareLambda(
   for (auto i = 0; i < keys.size(); ++i) {
     auto* op = keys[i];
     if (nullableKeys && !op->notNull) {
-      out << fmt::format(
+      out << std::format(
           "  if ({} != (0 == (keyNulls & (1U << {})))) return false;\n",
           state.isNull(op),
           i / 32,
           i & 31);
     }
-    out << fmt::format(
+    out << std::format(
         "  if ({} != row->key{}) return false;\n", state.operandValue(op), i);
   }
   out << "  return true;\n}\n";
@@ -118,7 +118,7 @@ std::string initRowNullFlags(
     const OpVector& keys) {
   std::stringstream inits;
   for (auto i = begin; i < end; ++i) {
-    inits << fmt::format(
+    inits << std::format(
         "({} ? 0 : {}U) {}",
         state.isNull(keys[i]),
         1U << i,
@@ -137,7 +137,7 @@ void makeInitGroupRow(
   int32_t numNullFlags = aggregates.size() + keys.size();
   for (auto i = 0; i < keys.size(); ++i) {
     auto* op = keys[i];
-    out << fmt::format(
+    out << std::format(
         "   if (!{}) {{ row->key{} = {};}}\n",
         state.isNull(op),
         i,
@@ -151,9 +151,9 @@ void makeInitGroupRow(
 
   VELOX_CHECK_LE(keys.size(), 32);
   for (auto i = 32; i < numNullFlags; i += 32) {
-    out << fmt::format("   row->nulls{} = 0;\n", i / 32);
+    out << std::format("   row->nulls{} = 0;\n", i / 32);
   }
-  out << fmt::format(
+  out << std::format(
       "  asDeviceAtomic<uint32_t>(&row->nulls0)->store(keyNulls = {}, cuda::memory_order_release);\n",
       initRowNullFlags(state, 0, keys.size(), keys));
   out << "}\n";
@@ -169,12 +169,12 @@ void makeRowHash(
       << "  uint64_t hash = 1;\n";
   for (auto i = 0; i < keys.size(); ++i) {
     if (nullableKeys) {
-      out << fmt::format(
+      out << std::format(
           "    if (0 == (row->nulls{} & (1U << {}))) {{ hash = hashMix(hash, 13); }} else {{",
           i / 32,
           i & 32);
     }
-    out << fmt::format("    hash = hashMix(hash, hashValue(row->key{}));\n", i);
+    out << std::format("    hash = hashMix(hash, hashValue(row->key{}));\n", i);
     if (nullableKeys) {
       out << "  }\n";
     }
@@ -191,7 +191,7 @@ std::string extractColumn(
   std::stringstream out;
   switch (result.type->kind()) {
     case TypeKind::BIGINT:
-      out << fmt::format(
+      out << std::format(
           "    flatResult<{}>(operands, {}, blockBase) = {}->{};\n",
           cudaTypeName(*result.type),
           ordinal,
@@ -202,7 +202,7 @@ std::string extractColumn(
       VELOX_NYI();
   }
   if (!result.notNull) {
-    out << fmt::format(
+    out << std::format(
         "  setNull(operands, {}, blockBase, ({}->nulls{} & (1U << {})) == 0);\n",
         ordinal,
         row,

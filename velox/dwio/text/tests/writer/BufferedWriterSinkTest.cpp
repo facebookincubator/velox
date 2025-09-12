@@ -47,7 +47,7 @@ TEST_F(BufferedWriterSinkTest, write) {
   const auto tempPath = tempPath_->getPath();
   const auto filename = "test_buffered_writer.txt";
 
-  auto filePath = fs::path(fmt::format("{}/{}", tempPath, filename));
+  auto filePath = fs::path(std::format("{}/{}", tempPath, filename));
   auto sink = std::make_unique<dwio::common::LocalFileSink>(
       filePath, dwio::common::FileSink::Options{.pool = leafPool_.get()});
 
@@ -66,7 +66,7 @@ TEST_F(BufferedWriterSinkTest, abort) {
   const auto tempPath = tempPath_->getPath();
   const auto filename = "test_buffered_abort.txt";
 
-  auto filePath = fs::path(fmt::format("{}/{}", tempPath, filename));
+  auto filePath = fs::path(std::format("{}/{}", tempPath, filename));
   auto sink = std::make_unique<dwio::common::LocalFileSink>(
       filePath, dwio::common::FileSink::Options{.pool = leafPool_.get()});
 

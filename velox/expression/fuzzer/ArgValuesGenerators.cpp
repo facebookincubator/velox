@@ -217,7 +217,7 @@ std::vector<core::TypedExprPtr> JsonExtractArgValuesGenerator::generate(
   for (auto i = 0; i < signature.args.size(); ++i) {
     state.inputRowTypes_.emplace_back(signature.args[i]);
     state.inputRowNames_.emplace_back(
-        fmt::format("c{}", state.inputRowTypes_.size() - 1));
+        std::format("c{}", state.inputRowTypes_.size() - 1));
     inputExpressions.push_back(std::make_shared<core::FieldAccessTypedExpr>(
         signature.args[i], state.inputRowNames_.back()));
   }

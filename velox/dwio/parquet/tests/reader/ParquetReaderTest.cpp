@@ -1737,7 +1737,7 @@ TEST_F(ParquetReaderTest, fileColumnVarcharToMetadataColumnMismatchTest) {
     readerOptions.setFileSchema(outputRowType);
     VELOX_ASSERT_THROW(
         createReader(sample, readerOptions),
-        fmt::format(
+        std::format(
             "Converted type VARCHAR is not allowed for requested type {}",
             requestedType->toString()));
   };

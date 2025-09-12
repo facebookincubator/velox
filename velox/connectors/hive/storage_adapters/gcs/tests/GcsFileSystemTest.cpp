@@ -142,7 +142,7 @@ TEST_F(GcsFileSystemTest, rename) {
 
   VELOX_ASSERT_THROW(
       gcfs.rename(gcsExistingFile, gcsExistingFile, false),
-      fmt::format(
+      std::format(
           "Failed to rename object {} to {} with as {} exists.",
           oldFile,
           oldFile,

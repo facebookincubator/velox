@@ -209,7 +209,7 @@ TEST_F(S3FileSystemTest, logLocation) {
     EXPECT_EQ(s3fs.getLogPrefix(), expected);
   };
 
-  const auto expected = fmt::format("{}{}", kLogLocation_, kDefaultPrefix);
+  const auto expected = std::format("{}{}", kLogLocation_, kDefaultPrefix);
   // Test is configured with the default.
   checkLogPrefix(expected);
 

@@ -727,8 +727,8 @@ ColumnReaderOptions makeColumnReaderOptions(const ReaderOptions& options);
 } // namespace facebook::velox::dwio::common
 
 template <>
-struct fmt::formatter<facebook::velox::dwio::common::FileFormat>
-    : fmt::formatter<std::string_view> {
+struct std::formatter<facebook::velox::dwio::common::FileFormat>
+    : std::formatter<std::string_view> {
   template <typename FormatContext>
   auto format(facebook::velox::dwio::common::FileFormat fmt, FormatContext& ctx)
       const {

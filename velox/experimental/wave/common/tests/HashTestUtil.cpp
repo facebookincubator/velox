@@ -15,7 +15,7 @@
  */
 
 #include "velox/experimental/wave/common/tests/HashTestUtil.h"
-#include <fmt/format.h>
+#include <format>
 #include "velox/common/base/BitUtil.h"
 #include "velox/experimental/wave/common/Buffer.h"
 #include "velox/experimental/wave/common/GpuArena.h"
@@ -192,7 +192,7 @@ std::string HashRun::toString() const {
   for (auto& score : sorted) {
     out << std::endl
         << "  * "
-        << fmt::format(
+        << std::format(
                " {}={:.2f} rps {:.2f} GB/s {} us {:.2f}x",
                score.first,
                numRows / (score.second / 1e6),

@@ -171,7 +171,7 @@ class StreamingAggregationTest : public HiveConnectorTestBase,
                     .planNode();
 
     for (const auto barrierExecution : {false, true}) {
-      SCOPED_TRACE(fmt::format("barrierExecution {}", barrierExecution));
+      SCOPED_TRACE(std::format("barrierExecution {}", barrierExecution));
       auto task =
           AssertQueryBuilder(plan, duckDbQueryRunner_)
               .splits(makeHiveConnectorSplits(tempFiles))
@@ -266,7 +266,7 @@ class StreamingAggregationTest : public HiveConnectorTestBase,
                       .capturePlanNodeId(aggregationNodeId)
                       .planNode();
       for (const auto barrierExecution : {false, true}) {
-        SCOPED_TRACE(fmt::format("barrierExecution {}", barrierExecution));
+        SCOPED_TRACE(std::format("barrierExecution {}", barrierExecution));
         auto task =
             AssertQueryBuilder(plan, duckDbQueryRunner_)
                 .splits(makeHiveConnectorSplits(tempFiles))
@@ -303,7 +303,7 @@ class StreamingAggregationTest : public HiveConnectorTestBase,
               .planNode();
 
       for (const auto barrierExecution : {false, true}) {
-        SCOPED_TRACE(fmt::format("barrierExecution {}", barrierExecution));
+        SCOPED_TRACE(std::format("barrierExecution {}", barrierExecution));
         auto task = AssertQueryBuilder(plan, duckDbQueryRunner_)
                         .splits(makeHiveConnectorSplits(tempFiles))
                         .serialExecution(true)
@@ -402,7 +402,7 @@ class StreamingAggregationTest : public HiveConnectorTestBase,
       keySql << ", c" << i;
     }
 
-    const auto sql = fmt::format(
+    const auto sql = std::format(
         "SELECT {}, count(1), min(c1), max(c1), sum(c1), sum(1) FROM tmp GROUP BY {}",
         keySql.str(),
         keySql.str());
@@ -445,7 +445,7 @@ class StreamingAggregationTest : public HiveConnectorTestBase,
         keySql << ", c" << i;
       }
 
-      const auto sql = fmt::format(
+      const auto sql = std::format(
           "SELECT {}, count(distinct c1), array_agg(c1), sum(1) FROM tmp GROUP BY {}",
           keySql.str(),
           keySql.str());
@@ -474,7 +474,7 @@ class StreamingAggregationTest : public HiveConnectorTestBase,
         keySql << ", c" << i;
       }
 
-      const auto sql = fmt::format("SELECT distinct {} FROM tmp", keySql.str());
+      const auto sql = std::format("SELECT distinct {} FROM tmp", keySql.str());
 
       config(AssertQueryBuilder(plan, duckDbQueryRunner_), outputBatchSize)
           .assertResults(sql);
@@ -519,13 +519,13 @@ class StreamingAggregationTest : public HiveConnectorTestBase,
         keySql << ", c" << i;
       }
 
-      const auto sql = fmt::format(
+      const auto sql = std::format(
           "SELECT {}, count(distinct c1), array_agg(c1), sum(1) FROM tmp GROUP BY {}",
           keySql.str(),
           keySql.str());
 
       for (const auto barrierExecution : {false, true}) {
-        SCOPED_TRACE(fmt::format("barrierExecution {}", barrierExecution));
+        SCOPED_TRACE(std::format("barrierExecution {}", barrierExecution));
         auto task = AssertQueryBuilder(plan, duckDbQueryRunner_)
                         .splits(makeHiveConnectorSplits(tempFiles))
                         .serialExecution(true)
@@ -564,10 +564,10 @@ class StreamingAggregationTest : public HiveConnectorTestBase,
         keySql << ", c" << i;
       }
 
-      const auto sql = fmt::format("SELECT distinct {} FROM tmp", keySql.str());
+      const auto sql = std::format("SELECT distinct {} FROM tmp", keySql.str());
 
       for (const auto barrierExecution : {false, true}) {
-        SCOPED_TRACE(fmt::format("barrierExecution {}", barrierExecution));
+        SCOPED_TRACE(std::format("barrierExecution {}", barrierExecution));
         auto task = AssertQueryBuilder(plan, duckDbQueryRunner_)
                         .splits(makeHiveConnectorSplits(tempFiles))
                         .serialExecution(true)
@@ -590,7 +590,7 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
     StreamingAggregationTest,
     testing::ValuesIn({0, 1, 64, std::numeric_limits<int32_t>::max()}),
     [](const testing::TestParamInfo<int32_t>& info) {
-      return fmt::format(
+      return std::format(
           "streamingMinOutputBatchSize_{}",
           info.param == std::numeric_limits<int32_t>::max()
               ? "inf"
@@ -817,7 +817,7 @@ TEST_P(StreamingAggregationTest, clusteredInput) {
            {19}}),
   });
   for (auto batchSize : {3, 20}) {
-    SCOPED_TRACE(fmt::format("batchSize={}", batchSize));
+    SCOPED_TRACE(std::format("batchSize={}", batchSize));
     config(AssertQueryBuilder(plan), batchSize).assertResults(expected);
   }
 }
@@ -855,7 +855,7 @@ TEST_P(StreamingAggregationTest, clusteredInputWithOutputSplit) {
            {19}}),
   });
   for (auto batchSize : {1, 3, 20}) {
-    SCOPED_TRACE(fmt::format("batchSize={}", batchSize));
+    SCOPED_TRACE(std::format("batchSize={}", batchSize));
     config(AssertQueryBuilder(planWithOverlap), batchSize)
         .assertResults(expectedWithOverlap);
   }
@@ -896,7 +896,7 @@ TEST_P(StreamingAggregationTest, clusteredInputWithOutputSplit) {
             {18},
             {19}})});
   for (auto batchSize : {1, 3, 20}) {
-    SCOPED_TRACE(fmt::format("batchSize={}", batchSize));
+    SCOPED_TRACE(std::format("batchSize={}", batchSize));
     config(AssertQueryBuilder(planWithoutOverlap), batchSize)
         .assertResults(expectedWithoutOverlap);
   }
@@ -936,7 +936,7 @@ TEST_P(StreamingAggregationTest, clusteredInputWithOutputSplit) {
             {18},
             {19}})});
   for (auto batchSize : {1, 3, 20}) {
-    SCOPED_TRACE(fmt::format("batchSize={}", batchSize));
+    SCOPED_TRACE(std::format("batchSize={}", batchSize));
     config(AssertQueryBuilder(mixedPlan), batchSize)
         .assertResults(expectedMixedResult);
   }
@@ -1000,7 +1000,7 @@ TEST_P(StreamingAggregationTest, clusteredInputWithNulls) {
              return false;
            })});
   for (auto batchSize : {20}) {
-    SCOPED_TRACE(fmt::format("batchSize={}", batchSize));
+    SCOPED_TRACE(std::format("batchSize={}", batchSize));
     config(AssertQueryBuilder(plan), batchSize).assertResults(expected);
   }
 }
@@ -1059,7 +1059,7 @@ TEST_P(StreamingAggregationTest, clusteredInputWithBarrier) {
     int numExpectedOutputBatches;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "batchSize={}, barrierExecution={}, numExpectedOutputBatches={}",
           batchSize,
           barrierExecution,

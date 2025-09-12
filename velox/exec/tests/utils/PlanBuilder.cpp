@@ -517,7 +517,7 @@ PlanBuilder& PlanBuilder::projectExpressions(
             dynamic_cast<const core::FieldAccessExpr*>(projections[i].get())) {
       projectNames.push_back(fieldExpr->name());
     } else {
-      projectNames.push_back(fmt::format("p{}", i));
+      projectNames.push_back(std::format("p{}", i));
     }
   }
   planNode_ = std::make_shared<core::ProjectNode>(
@@ -539,7 +539,7 @@ PlanBuilder& PlanBuilder::projectExpressions(
             dynamic_cast<const core::FieldAccessExpr*>(projections[i].get())) {
       projectNames.push_back(fieldExpr->name());
     } else {
-      projectNames.push_back(fmt::format("p{}", i));
+      projectNames.push_back(std::format("p{}", i));
     }
   }
   planNode_ = std::make_shared<core::ProjectNode>(
@@ -585,7 +585,7 @@ PlanBuilder& PlanBuilder::parallelProject(
               dynamic_cast<const core::FieldAccessExpr*>(typedExpr.get())) {
         names.push_back(fieldExpr->name());
       } else {
-        names.push_back(fmt::format("p{}", i));
+        names.push_back(std::format("p{}", i));
       }
 
       ++i;
@@ -615,7 +615,7 @@ PlanBuilder& PlanBuilder::lazyDereference(
             dynamic_cast<const core::FieldAccessExpr*>(expr.get())) {
       projectNames.push_back(fieldExpr->name());
     } else {
-      projectNames.push_back(fmt::format("p{}", i));
+      projectNames.push_back(std::format("p{}", i));
     }
   }
   planNode_ = std::make_shared<core::LazyDereferenceNode>(
@@ -784,7 +784,7 @@ PlanBuilder& PlanBuilder::tableWriteMerge() {
           aggregate.call->name(),
           field(inputType, writerSpec.aggregateNames[i]));
       aggregates.push_back(std::move(aggregate));
-      aggregateNames.push_back(fmt::format("a{}", i));
+      aggregateNames.push_back(std::format("a{}", i));
     }
     columnStatsSpec = core::ColumnStatsSpec{
         writerSpec.groupingKeys,
@@ -1009,7 +1009,7 @@ PlanBuilder::AggregatesAndNames PlanBuilder::createAggregateExpressionsAndNames(
     if (untypedExpr.expr->alias().has_value()) {
       names.push_back(untypedExpr.expr->alias().value());
     } else {
-      names.push_back(fmt::format("a{}", i));
+      names.push_back(std::format("a{}", i));
     }
   }
 
@@ -1592,7 +1592,7 @@ class RoundRobinRowPartitionFunctionSpec : public core::PartitionFunctionSpec {
 
   folly::dynamic serialize() const override {
     folly::dynamic obj = folly::dynamic::object;
-    obj["name"] = fmt::format("RoundRobinRowPartitionFunctionSpec");
+    obj["name"] = std::format("RoundRobinRowPartitionFunctionSpec");
     return obj;
   }
 
@@ -2311,7 +2311,7 @@ PlanBuilder& PlanBuilder::window(
     if (windowExpr.functionCall->alias().has_value()) {
       windowNames.push_back(windowExpr.functionCall->alias().value());
     } else {
-      windowNames.push_back(fmt::format("w{}", i++));
+      windowNames.push_back(std::format("w{}", i++));
     }
   }
 

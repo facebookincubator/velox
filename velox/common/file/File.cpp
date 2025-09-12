@@ -17,8 +17,8 @@
 #include "velox/common/file/File.h"
 #include "velox/common/base/Fs.h"
 
-#include <fmt/format.h>
 #include <glog/logging.h>
+#include <format>
 #include <memory>
 #include <stdexcept>
 

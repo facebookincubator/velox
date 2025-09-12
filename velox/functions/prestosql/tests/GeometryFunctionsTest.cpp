@@ -70,7 +70,7 @@ class GeometryFunctionsTest : public FunctionBaseTest {
       std::optional<std::string_view> rightWkt,
       bool expected) {
     std::optional<bool> actual = evaluateOnce<bool>(
-        fmt::format(
+        std::format(
             "{}(ST_GeometryFromText(c0), ST_GeometryFromText(c1))", relation),
         leftWkt,
         rightWkt);
@@ -90,7 +90,7 @@ class GeometryFunctionsTest : public FunctionBaseTest {
     // We are forced to make expectedWkt optional based on type signature, but
     // we always want to supply a value.
     std::optional<bool> actual = evaluateOnce<bool>(
-        fmt::format(
+        std::format(
             "ST_Equals({}(ST_GeometryFromText(c0), ST_GeometryFromText(c1)), ST_GeometryFromText(c2))",
             overlay),
         leftWkt,
@@ -3228,36 +3228,36 @@ TEST_F(GeometryFunctionsTest, testGeometryToBingTiles) {
   // Geometries at boundaries of tiles
   testGeometryToBingTilesFunc("POINT (0 0)", 1, {{"3"}});
   testGeometryToBingTilesFunc(
-      fmt::format("POINT ({} 0)", BingTileType::kMinLongitude), 1, {{"2"}});
+      std::format("POINT ({} 0)", BingTileType::kMinLongitude), 1, {{"2"}});
   testGeometryToBingTilesFunc(
-      fmt::format("POINT ({} 0)", BingTileType::kMaxLongitude), 1, {{"3"}});
+      std::format("POINT ({} 0)", BingTileType::kMaxLongitude), 1, {{"3"}});
   testGeometryToBingTilesFunc(
-      fmt::format("POINT (0 {})", BingTileType::kMinLatitude), 1, {{"3"}});
+      std::format("POINT (0 {})", BingTileType::kMinLatitude), 1, {{"3"}});
   testGeometryToBingTilesFunc(
-      fmt::format("POINT (0 {})", BingTileType::kMaxLatitude), 1, {{"1"}});
+      std::format("POINT (0 {})", BingTileType::kMaxLatitude), 1, {{"1"}});
   testGeometryToBingTilesFunc(
-      fmt::format(
+      std::format(
           "POINT ({} {})",
           BingTileType::kMinLongitude,
           BingTileType::kMinLatitude),
       1,
       {{"2"}});
   testGeometryToBingTilesFunc(
-      fmt::format(
+      std::format(
           "POINT ({} {})",
           BingTileType::kMinLongitude,
           BingTileType::kMaxLatitude),
       1,
       {{"0"}});
   testGeometryToBingTilesFunc(
-      fmt::format(
+      std::format(
           "POINT ({} {})",
           BingTileType::kMaxLongitude,
           BingTileType::kMaxLatitude),
       1,
       {{"1"}});
   testGeometryToBingTilesFunc(
-      fmt::format(
+      std::format(
           "POINT ({} {})",
           BingTileType::kMaxLongitude,
           BingTileType::kMinLatitude),
@@ -3268,28 +3268,28 @@ TEST_F(GeometryFunctionsTest, testGeometryToBingTiles) {
   testGeometryToBingTilesFunc("LINESTRING (0 -1, 0 -2)", 1, {{"3"}});
   testGeometryToBingTilesFunc("LINESTRING (0 1, 0 2)", 1, {{"1"}});
   testGeometryToBingTilesFunc(
-      fmt::format(
+      std::format(
           "LINESTRING ({} 1, {} 2)",
           BingTileType::kMinLongitude,
           BingTileType::kMinLongitude),
       1,
       {{"0"}});
   testGeometryToBingTilesFunc(
-      fmt::format(
+      std::format(
           "LINESTRING ({} -1, {} -2)",
           BingTileType::kMinLongitude,
           BingTileType::kMinLongitude),
       1,
       {{"2"}});
   testGeometryToBingTilesFunc(
-      fmt::format(
+      std::format(
           "LINESTRING ({} 1, {} 2)",
           BingTileType::kMaxLongitude,
           BingTileType::kMaxLongitude),
       1,
       {{"1"}});
   testGeometryToBingTilesFunc(
-      fmt::format(
+      std::format(
           "LINESTRING ({} -1, {} -2)",
           BingTileType::kMaxLongitude,
           BingTileType::kMaxLongitude),
@@ -3378,11 +3378,11 @@ TEST_F(GeometryFunctionsTest, testGeometryToBingTiles) {
       8,
       {{"22200000"}});
   testGeometryToBingTilesFunc(
-      fmt::format("POINT ({} 0)", BingTileType::kMinLongitude), 5, {{"20000"}});
+      std::format("POINT ({} 0)", BingTileType::kMinLongitude), 5, {{"20000"}});
   testGeometryToBingTilesFunc(
-      fmt::format("POINT (0 {})", BingTileType::kMaxLatitude), 5, {{"10000"}});
+      std::format("POINT (0 {})", BingTileType::kMaxLatitude), 5, {{"10000"}});
   testGeometryToBingTilesFunc(
-      fmt::format(
+      std::format(
           "POINT ({} {})",
           BingTileType::kMinLongitude,
           BingTileType::kMaxLatitude),
@@ -3498,36 +3498,36 @@ TEST_F(GeometryFunctionsTest, testGeometryToDissolvedBingTiles) {
   // Geometries at tile borders
   testGeometryToDissolvedBingTilesFunc("POINT (0 0)", 0, {{""}});
   testGeometryToDissolvedBingTilesFunc(
-      fmt::format("POINT ({} 0)", BingTileType::kMinLongitude), 0, {{""}});
+      std::format("POINT ({} 0)", BingTileType::kMinLongitude), 0, {{""}});
   testGeometryToDissolvedBingTilesFunc(
-      fmt::format("POINT ({} 0)", BingTileType::kMaxLongitude), 0, {{""}});
+      std::format("POINT ({} 0)", BingTileType::kMaxLongitude), 0, {{""}});
   testGeometryToDissolvedBingTilesFunc(
-      fmt::format("POINT (0 {})", BingTileType::kMinLatitude), 0, {{""}});
+      std::format("POINT (0 {})", BingTileType::kMinLatitude), 0, {{""}});
   testGeometryToDissolvedBingTilesFunc(
-      fmt::format("POINT (0 {})", BingTileType::kMaxLatitude), 0, {{""}});
+      std::format("POINT (0 {})", BingTileType::kMaxLatitude), 0, {{""}});
   testGeometryToDissolvedBingTilesFunc(
-      fmt::format(
+      std::format(
           "POINT ({} {})",
           BingTileType::kMinLongitude,
           BingTileType::kMinLatitude),
       0,
       {{""}});
   testGeometryToDissolvedBingTilesFunc(
-      fmt::format(
+      std::format(
           "POINT ({} {})",
           BingTileType::kMinLongitude,
           BingTileType::kMaxLatitude),
       0,
       {{""}});
   testGeometryToDissolvedBingTilesFunc(
-      fmt::format(
+      std::format(
           "POINT ({} {})",
           BingTileType::kMaxLongitude,
           BingTileType::kMaxLatitude),
       0,
       {{""}});
   testGeometryToDissolvedBingTilesFunc(
-      fmt::format(
+      std::format(
           "POINT ({} {})",
           BingTileType::kMaxLongitude,
           BingTileType::kMinLatitude),
@@ -3535,36 +3535,36 @@ TEST_F(GeometryFunctionsTest, testGeometryToDissolvedBingTiles) {
       {{""}});
   testGeometryToDissolvedBingTilesFunc("POINT (0 0)", 1, {{"3"}});
   testGeometryToDissolvedBingTilesFunc(
-      fmt::format("POINT ({} 0)", BingTileType::kMinLongitude), 1, {{"2"}});
+      std::format("POINT ({} 0)", BingTileType::kMinLongitude), 1, {{"2"}});
   testGeometryToDissolvedBingTilesFunc(
-      fmt::format("POINT ({} 0)", BingTileType::kMaxLongitude), 1, {{"3"}});
+      std::format("POINT ({} 0)", BingTileType::kMaxLongitude), 1, {{"3"}});
   testGeometryToDissolvedBingTilesFunc(
-      fmt::format("POINT (0 {})", BingTileType::kMinLatitude), 1, {{"3"}});
+      std::format("POINT (0 {})", BingTileType::kMinLatitude), 1, {{"3"}});
   testGeometryToDissolvedBingTilesFunc(
-      fmt::format("POINT (0 {})", BingTileType::kMaxLatitude), 1, {{"1"}});
+      std::format("POINT (0 {})", BingTileType::kMaxLatitude), 1, {{"1"}});
   testGeometryToDissolvedBingTilesFunc(
-      fmt::format(
+      std::format(
           "POINT ({} {})",
           BingTileType::kMinLongitude,
           BingTileType::kMinLatitude),
       1,
       {{"2"}});
   testGeometryToDissolvedBingTilesFunc(
-      fmt::format(
+      std::format(
           "POINT ({} {})",
           BingTileType::kMinLongitude,
           BingTileType::kMaxLatitude),
       1,
       {{"0"}});
   testGeometryToDissolvedBingTilesFunc(
-      fmt::format(
+      std::format(
           "POINT ({} {})",
           BingTileType::kMaxLongitude,
           BingTileType::kMaxLatitude),
       1,
       {{"1"}});
   testGeometryToDissolvedBingTilesFunc(
-      fmt::format(
+      std::format(
           "POINT ({} {})",
           BingTileType::kMaxLongitude,
           BingTileType::kMinLatitude),
@@ -3576,28 +3576,28 @@ TEST_F(GeometryFunctionsTest, testGeometryToDissolvedBingTiles) {
   testGeometryToDissolvedBingTilesFunc("LINESTRING (0 1, 0 2)", 1, {{"1"}});
 
   testGeometryToDissolvedBingTilesFunc(
-      fmt::format(
+      std::format(
           "LINESTRING ({} 1, {} 2)",
           BingTileType::kMinLongitude,
           BingTileType::kMinLongitude),
       1,
       {{"0"}});
   testGeometryToDissolvedBingTilesFunc(
-      fmt::format(
+      std::format(
           "LINESTRING ({} -1, {} -2)",
           BingTileType::kMinLongitude,
           BingTileType::kMinLongitude),
       1,
       {{"2"}});
   testGeometryToDissolvedBingTilesFunc(
-      fmt::format(
+      std::format(
           "LINESTRING ({} 1, {} 2)",
           BingTileType::kMaxLongitude,
           BingTileType::kMaxLongitude),
       1,
       {{"1"}});
   testGeometryToDissolvedBingTilesFunc(
-      fmt::format(
+      std::format(
           "LINESTRING ({} -1, {} -2)",
           BingTileType::kMaxLongitude,
           BingTileType::kMaxLongitude),

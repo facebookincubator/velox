@@ -100,12 +100,12 @@ cudf::io::compression_type getCompressionType(
 
 std::shared_ptr<memory::MemoryPool> createSinkPool(
     const std::shared_ptr<memory::MemoryPool>& writerPool) {
-  return writerPool->addLeafChild(fmt::format("{}.sink", writerPool->name()));
+  return writerPool->addLeafChild(std::format("{}.sink", writerPool->name()));
 }
 
 std::shared_ptr<memory::MemoryPool> createSortPool(
     const std::shared_ptr<memory::MemoryPool>& writerPool) {
-  return writerPool->addLeafChild(fmt::format("{}.sort", writerPool->name()));
+  return writerPool->addLeafChild(std::format("{}.sort", writerPool->name()));
 }
 
 } // namespace
@@ -185,7 +185,7 @@ ParquetDataSink::createCudfWriter(cudf::table_view cudfTable) {
   // Create a sink and writer
   const auto& locationHandle = insertTableHandle_->locationHandle();
   const auto targetFileName = locationHandle->targetFileName().empty()
-      ? fmt::format("{}{}", makeUuid(), ".parquet")
+      ? std::format("{}{}", makeUuid(), ".parquet")
       : locationHandle->targetFileName();
 
   auto writerParameters = ParquetWriterParameters(
@@ -200,7 +200,7 @@ ParquetDataSink::createCudfWriter(cudf::table_view cudfTable) {
 
   // Create writer options for the given sink
   const auto sinkInfo = cudf::io::sink_info(
-      fmt::format("{}/{}", locationHandle->targetPath(), targetFileName));
+      std::format("{}/{}", locationHandle->targetPath(), targetFileName));
   auto cudfWriterOptions =
       cudf::io::chunked_parquet_writer_options::builder(sinkInfo)
           .metadata(tableInputMetadata)
@@ -281,7 +281,7 @@ cudf::io::table_input_metadata ParquetDataSink::createCudfTableInputMetadata(
         // Warn if the mismatch in the number of child cols in Parquet
         // table_metadata and columnHandles
         if (colMeta.num_children() != childrenHandles.size()) {
-          LOG(WARNING) << fmt::format(
+          LOG(WARNING) << std::format(
               "({} vs {}): Unequal number of child columns in Parquet table_metadata and ColumnHandles",
               colMeta.num_children(),
               childrenHandles.size());
@@ -437,7 +437,7 @@ void ParquetDataSink::closeInternal() {
 std::shared_ptr<memory::MemoryPool> ParquetDataSink::createWriterPool() {
   auto* connectorPool = connectorQueryCtx_->connectorMemoryPool();
   return connectorPool->addAggregateChild(
-      fmt::format("{}.{}", connectorPool->name(), "parquet-writer"));
+      std::format("{}.{}", connectorPool->name(), "parquet-writer"));
 }
 
 void ParquetDataSink::makeWriterOptions(
@@ -546,7 +546,7 @@ void ParquetInsertTableHandle::registerSerDe() {
 }
 
 std::string LocationHandle::toString() const {
-  return fmt::format(
+  return std::format(
       "LocationHandle [targetPath: {}, tableType: {},",
       targetPath_,
       tableTypeName(tableType_));

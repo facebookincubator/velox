@@ -16,7 +16,6 @@
 
 #pragma once
 
-#include <fmt/core.h>
 #include <cstdint>
 #include <limits>
 #include <string>
@@ -46,7 +45,7 @@ class StreamIdentifier {
   }
 
   virtual std::string toString() const {
-    return fmt::format("[id={}]", id_);
+    return std::format("[id={}]", id_);
   }
 
   /// Returns a special value indicating a stream to be read load quantum by

@@ -121,7 +121,7 @@ class IPPrefixCastOperator : public exec::CastOperator {
           (v6Addr.isIPv4Mapped()) ? v6Addr.createIPv4().str() : v6Addr.str();
 
       // Format of string is {ipString}/{mask}
-      auto stringRet = fmt::format("{}/{}", ipString, prefixVal);
+      auto stringRet = std::format("{}/{}", ipString, prefixVal);
 
       // Write the string to the result vector
       exec::StringWriter result(flatResult, row);
@@ -170,7 +170,8 @@ class IPPrefixCastOperator : public exec::CastOperator {
 
     context.applyToSelectedNoThrow(rows, [&](auto row) {
       auto ipAddressStringView = decoded.valueAt<StringView>(row);
-      auto tryIpPrefix = ipaddress::tryParseIpPrefixString(ipAddressStringView);
+      auto tryIpPrefix = ipaddress::tryParseIpPrefixString(
+          std::string_view{ipAddressStringView});
       if (tryIpPrefix.hasError()) {
         context.setStatus(row, std::move(tryIpPrefix.error()));
         return;

@@ -41,7 +41,7 @@ std::string executionStrategyToString(ExecutionStrategy strategy) {
     case ExecutionStrategy::kUngrouped:
       return "UNGROUPED";
     default:
-      return fmt::format("UNKNOWN: {}", static_cast<int>(strategy));
+      return std::format("UNKNOWN: {}", static_cast<int>(strategy));
   }
 }
 } // namespace facebook::velox::core

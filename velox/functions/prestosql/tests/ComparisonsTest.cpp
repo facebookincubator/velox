@@ -371,7 +371,7 @@ TEST_F(ComparisonsTest, eqNeqDecimal) {
                            const VectorPtr& expectedResult,
                            const std::string& op) {
     auto actual = evaluate<SimpleVector<bool>>(
-        fmt::format("c0 {} c1", op), makeRowVector(inputs));
+        std::format("c0 {} c1", op), makeRowVector(inputs));
     test::assertEqualVectors(actual, expectedResult);
   };
 
@@ -833,7 +833,7 @@ TEST_F(ComparisonsTest, overflowTest) {
   auto rowVector = makeRowVector(
       {makeFlatVector(numRows, delta), makeFlatVector(numRows, delta)});
   auto result =
-      evaluate<SimpleVector<bool>>(fmt::format("{}(c0, c1)", "eq"), rowVector);
+      evaluate<SimpleVector<bool>>(std::format("{}(c0, c1)", "eq"), rowVector);
   for (auto i = 0; i < result->size(); ++i) {
     ASSERT_TRUE(result->valueAt(i));
   }
@@ -862,7 +862,7 @@ TEST_F(ComparisonsTest, nanComparison) {
                         const std::string& lhs,
                         const std::string& rhs) {
           return evaluate<SimpleVector<bool>>(
-              fmt::format("{}({}, {})", expr, lhs, rhs), rowVector);
+              std::format("{}({}, {})", expr, lhs, rhs), rowVector);
         };
 
         auto allFalse = makeFlatVector<bool>({false, false});
@@ -977,7 +977,7 @@ TEST_F(ComparisonsTest, TimestampWithTimezone) {
   auto input = makeRowVector({lhs, rhs});
 
   auto eval = [&](const std::string& expr) {
-    return evaluate<SimpleVector<bool>>(fmt::format("c0 {} c1", expr), input);
+    return evaluate<SimpleVector<bool>>(std::format("c0 {} c1", expr), input);
   };
 
   test::assertEqualVectors(
@@ -1150,7 +1150,7 @@ TEST_F(ComparisonsTest, TimestampWithTimezone) {
 
   test::assertEqualVectors(
       evaluate<SimpleVector<bool>>(
-          fmt::format("c0 between c1 and c2"), betweenInput),
+          std::format("c0 between c1 and c2"), betweenInput),
       makeFlatVector<bool>(
           {true,
            true,
@@ -1741,7 +1741,7 @@ struct ComparisonTypeOp {
   std::string sqlFunction{fnName};
 
   static std::string toString() {
-    return fmt::format("{}:{}", Tp().toString(), fnName);
+    return std::format("{}:{}", Tp().toString(), fnName);
   }
 };
 
@@ -1786,7 +1786,7 @@ class SimdComparisonsTest : public functions::test::FunctionBaseTest {
     auto rowVector = constantRhs ? makeRowVector({vector1, vector2})
                                  : makeRowVector({vector2, vector1});
     return evaluate<SimpleVector<bool>>(
-        fmt::format("{}(c0, c1)", sqlFn), rowVector);
+        std::format("{}(c0, c1)", sqlFn), rowVector);
   }
 
   void vectorComparisonImpl(
@@ -1795,7 +1795,7 @@ class SimdComparisonsTest : public functions::test::FunctionBaseTest {
     auto rowVector =
         makeRowVector({makeFlatVector<T>(lhs), makeFlatVector<T>(rhs)});
     auto result = evaluate<SimpleVector<bool>>(
-        fmt::format("{}(c0, c1)", sqlFn), rowVector);
+        std::format("{}(c0, c1)", sqlFn), rowVector);
 
     auto expectedResult = std::vector<bool>();
     expectedResult.reserve(lhs.size());
@@ -1875,7 +1875,7 @@ class SimdComparisonsTest : public functions::test::FunctionBaseTest {
 
     auto rowVector = makeRowVector({lhsVector, rhsVector});
     auto result = evaluate<SimpleVector<bool>>(
-        fmt::format("{}(c0, c1)", sqlFn), rowVector);
+        std::format("{}(c0, c1)", sqlFn), rowVector);
     auto expectedResult = std::vector<bool>();
     expectedResult.reserve(lhsVector->size());
     for (auto i = 0; i < lhsVector->size(); i++) {

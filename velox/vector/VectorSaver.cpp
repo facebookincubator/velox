@@ -797,7 +797,7 @@ std::string restoreStringFromFile(const char* filePath) {
 std::optional<std::string> generateFolderPath(
     const char* basePath,
     const char* prefix) {
-  auto path = fmt::format("{}/velox_{}_XXXXXX", basePath, prefix);
+  auto path = std::format("{}/velox_{}_XXXXXX", basePath, prefix);
   auto createdPath = mkdtemp(path.data());
   if (createdPath == nullptr) {
     return std::nullopt;
@@ -847,7 +847,7 @@ SelectivityVector restoreSelectivityVectorFromFile(const char* filePath) {
 } // namespace facebook::velox
 
 template <>
-struct fmt::formatter<facebook::velox::Encoding> : formatter<int> {
+struct std::formatter<facebook::velox::Encoding> : formatter<int> {
   auto format(facebook::velox::Encoding s, format_context& ctx) const {
     return formatter<int>::format(static_cast<int>(s), ctx);
   }

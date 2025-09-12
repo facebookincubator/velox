@@ -71,7 +71,7 @@ TEST_F(RowNumberTest, basic) {
         PlanBuilder().values({data}).rowNumber({"c0"}, limit).planNode();
     assertQuery(
         plan,
-        fmt::format(
+        std::format(
             "SELECT * FROM (SELECT *, row_number() over (partition by c0) as rn FROM tmp) "
             "WHERE rn <= {}",
             limit));
@@ -81,7 +81,7 @@ TEST_F(RowNumberTest, basic) {
         PlanBuilder().values({data}).rowNumber({"c0"}, limit, false).planNode();
     assertQuery(
         plan,
-        fmt::format(
+        std::format(
             "SELECT c0, c1 FROM (SELECT *, row_number() over (partition by c0) as rn FROM tmp) "
             "WHERE rn <= {}",
             limit));
@@ -117,7 +117,7 @@ TEST_F(RowNumberTest, noPartitionKeys) {
         PlanBuilder().values({data, data}).rowNumber({}, limit).planNode();
     assertQuery(
         plan,
-        fmt::format(
+        std::format(
             "SELECT * FROM (SELECT *, row_number() over () as rn FROM tmp) "
             "WHERE rn <= {}",
             limit));
@@ -129,7 +129,7 @@ TEST_F(RowNumberTest, noPartitionKeys) {
                .planNode();
     assertQuery(
         plan,
-        fmt::format(
+        std::format(
             "SELECT c0 FROM (SELECT *, row_number() over () as rn FROM tmp) "
             "WHERE rn <= {}",
             limit));
@@ -166,7 +166,7 @@ TEST_F(RowNumberTest, largeInput) {
         PlanBuilder().values({data, data}).rowNumber({"c0"}, limit).planNode();
     assertQuery(
         plan,
-        fmt::format(
+        std::format(
             "SELECT * FROM (SELECT *, row_number() over (partition by c0) as rn FROM tmp) "
             "WHERE rn <= {}",
             limit));
@@ -178,7 +178,7 @@ TEST_F(RowNumberTest, largeInput) {
                .planNode();
     assertQuery(
         plan,
-        fmt::format(
+        std::format(
             "SELECT c0, c1 FROM (SELECT *, row_number() over (partition by c0) as rn FROM tmp) "
             "WHERE rn <= {}",
             limit));
@@ -198,7 +198,7 @@ TEST_F(RowNumberTest, spill) {
     uint32_t spillPartitionBits;
 
     std::string debugString() const {
-      return fmt::format("SpillPartitionBits {}", spillPartitionBits);
+      return std::format("SpillPartitionBits {}", spillPartitionBits);
     }
   } testSettings[] = {{2}, {3}};
 
@@ -262,7 +262,7 @@ TEST_F(RowNumberTest, maxSpillBytes) {
     int32_t maxSpilledBytes;
     bool expectedExceedLimit;
     std::string debugString() const {
-      return fmt::format("maxSpilledBytes {}", maxSpilledBytes);
+      return std::format("maxSpilledBytes {}", maxSpilledBytes);
     }
   } testSettings[] = {{1 << 30, false}, {1 << 20, true}, {0, false}};
 
@@ -308,7 +308,7 @@ TEST_F(RowNumberTest, memoryUsage) {
     uint8_t numSpills;
 
     std::string debugString() const {
-      return fmt::format("numSpills {}", numSpills);
+      return std::format("numSpills {}", numSpills);
     }
   } testSettings[] = {{1}, {3}};
 
@@ -361,7 +361,7 @@ DEBUG_ONLY_TEST_F(RowNumberTest, spillOnlyDuringInputOrOutput) {
     uint32_t spillPartitionBits;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "Spill during {}, spillPartitionBits {}",
           spillInjectionPoint,
           spillPartitionBits);
@@ -434,7 +434,7 @@ DEBUG_ONLY_TEST_F(RowNumberTest, recursiveSpill) {
     int32_t maxSpillLevel;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "numSpills {}, maxSpillLevel {}", numSpills, maxSpillLevel);
     }
   } testSettings[] = {{2, 3}, {8, 4}};
@@ -526,7 +526,7 @@ TEST_F(RowNumberTest, spillWithYield) {
     uint32_t cpuTimeSliceLimitMs;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "numSpills {}, cpuTimeSliceLimitMs {}",
           numSpills,
           cpuTimeSliceLimitMs);

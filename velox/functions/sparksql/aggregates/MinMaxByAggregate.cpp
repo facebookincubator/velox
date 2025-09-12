@@ -117,7 +117,7 @@ exec::AggregateRegistrationResult registerMinMaxBy(
           const core::QueryConfig& /*config*/)
           -> std::unique_ptr<exec::Aggregate> {
         const auto isRawInput = exec::isRawInput(step);
-        const std::string errorMessage = fmt::format(
+        const std::string errorMessage = std::format(
             "Unknown input types for {} ({}) aggregation: {}",
             name,
             mapAggregationStepToName(step),

@@ -58,7 +58,7 @@ CudfFilterProject::CudfFilterProject(
       NvtxHelper(
           nvtx3::rgb{220, 20, 60}, // Crimson
           operatorId,
-          fmt::format("[{}]", project ? project->id() : filter->id())),
+          std::format("[{}]", project ? project->id() : filter->id())),
       hasFilter_(info.hasFilter),
       project_(project),
       filter_(filter) {

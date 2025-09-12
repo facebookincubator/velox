@@ -34,7 +34,7 @@ TEST_F(ArrayTrimTest, bigintArrays) {
                   const std::vector<int64_t>& expectedOutput) {
     auto input = makeArrayVector<int64_t>({inputArray});
     auto result = evaluate(
-        fmt::format("trim_array(c0, {})", size), makeRowVector({input}));
+        std::format("trim_array(c0, {})", size), makeRowVector({input}));
     auto expected = makeArrayVector<int64_t>({expectedOutput});
     assertEqualVectors(expected, result);
   };
@@ -61,7 +61,7 @@ TEST_F(ArrayTrimTest, simpleIntVector) {
                   int size,
                   const VectorPtr& expectedArrayVector) {
     auto result = evaluate(
-        fmt::format("trim_array(c0, {})", size),
+        std::format("trim_array(c0, {})", size),
         makeRowVector({inputArrayVector}));
     assertEqualVectors(expectedArrayVector, result);
   };
@@ -77,7 +77,7 @@ TEST_F(ArrayTrimTest, complexIntVector) {
                   int size,
                   const VectorPtr& expectedArrayVector) {
     auto result = evaluate(
-        fmt::format("trim_array(c0, {})", size),
+        std::format("trim_array(c0, {})", size),
         makeRowVector({inputArrayVector}));
     assertEqualVectors(expectedArrayVector, result);
   };

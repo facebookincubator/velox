@@ -93,7 +93,7 @@ TEST_F(ExpressionFuzzerUnitTest, restrictedLevelOfNesting) {
     for (int i = 0; i < 5000; ++i) {
       auto expression = fuzzer.fuzzExpression().expressions[0];
       EXPECT_LE(countLevelOfNesting(expression), std::max(1, maxLevelOfNesting))
-          << fmt::format(
+          << std::format(
                  "Expression {} exceeds max level of nesting {} (original {})",
                  expression->toString(),
                  std::max(1, maxLevelOfNesting),
@@ -196,7 +196,7 @@ TEST_F(ExpressionFuzzerUnitTest, exprBank) {
           continue;
         }
         EXPECT_LE(countLevelOfNesting(returned), requestedLevelOfNesting)
-            << fmt::format(
+            << std::format(
                    "Expression {} exceeds max level of nesting {}",
                    returned->toString(),
                    requestedLevelOfNesting);

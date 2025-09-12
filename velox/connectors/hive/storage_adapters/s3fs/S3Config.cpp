@@ -26,12 +26,12 @@ std::string S3Config::cacheKey(
     std::shared_ptr<const config::ConfigBase> config) {
   auto bucketEndpoint = bucketConfigKey(Keys::kEndpoint, bucket);
   if (config->valueExists(bucketEndpoint)) {
-    return fmt::format(
+    return std::format(
         "{}-{}", config->get<std::string>(bucketEndpoint).value(), bucket);
   }
   auto baseEndpoint = baseConfigKey(Keys::kEndpoint);
   if (config->valueExists(baseEndpoint)) {
-    return fmt::format(
+    return std::format(
         "{}-{}", config->get<std::string>(baseEndpoint).value(), bucket);
   }
   return std::string(bucket);

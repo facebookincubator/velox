@@ -627,7 +627,7 @@ TEST_P(EncodedVectorCopyTest, fuzzer) {
 #endif
   for (int i = 0; i < kNumIterations; ++i) {
     auto type = fuzzer.randType();
-    SCOPED_TRACE(fmt::format("i={} type={}", i, type->toString()));
+    SCOPED_TRACE(std::format("i={} type={}", i, type->toString()));
     auto source = fuzzer.fuzz(type);
     BaseVector::CopyRange range;
     range.sourceIndex = folly::Random::rand32(source->size() - 1, rng);

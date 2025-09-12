@@ -16,7 +16,7 @@
 
 #include "velox/tpcds/gen/utils/append_info-c.h"
 
-#include <fmt/format.h>
+#include <format>
 #include "velox/tpcds/gen/dsdgen/include/append_info.h"
 #include "velox/tpcds/gen/dsdgen/include/config.h"
 #include "velox/tpcds/gen/dsdgen/include/date.h"
@@ -117,7 +117,7 @@ void append_date(int32_t column, append_info info, int64_t value) {
     date_t dTemp;
     jtodt(&dTemp, (int)value);
     auto stringDate =
-        fmt::format("{}-{}-{}", dTemp.year, dTemp.month, dTemp.day);
+        std::format("{}-{}-{}", dTemp.year, dTemp.month, dTemp.day);
     auto date = DATE()->toDays(stringDate);
     append_info->children[append_info->colIndex]->asFlatVector<int32_t>()->set(
         append_info->rowIndex, date);

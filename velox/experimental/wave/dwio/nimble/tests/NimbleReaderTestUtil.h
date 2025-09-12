@@ -17,9 +17,9 @@
 #pragma once
 
 #include <cuda_runtime.h> // @manual
-#include <fmt/format.h>
 #include <gflags/gflags.h>
 #include <gtest/gtest.h>
+#include <format>
 
 #include "dwio/nimble/encodings/EncodingSelectionPolicy.h"
 #include "dwio/nimble/tablet/TabletReader.h"
@@ -44,7 +44,7 @@ struct FilterSpec {
       case common::FilterKind::kBigintRange: {
         auto bigIntRangeFilter =
             std::dynamic_pointer_cast<common::BigintRange>(this->filter);
-        return fmt::format(
+        return std::format(
             "{} BETWEEN {} AND {}",
             name,
             bigIntRangeFilter->lower(),

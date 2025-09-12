@@ -103,7 +103,7 @@ std::optional<std::string> geometryInvalidReason(
   const geos::operation::valid::TopologyValidationError*
       topologyValidationError = isValidOp.getValidationError();
   if (topologyValidationError != nullptr) {
-    return fmt::format(
+    return std::format(
         "Invalid {}: {}",
         geometry->getGeometryType(),
         topologyValidationError->getMessage());
@@ -137,11 +137,11 @@ std::optional<std::string> geometryInvalidReason(
       description = "Topology exception at or near";
       break;
     default:
-      return fmt::format(
+      return std::format(
           "Unknown Geometry type: {}", geometry->getGeometryType());
   }
   geos::geom::Coordinate nonSimpleLocation = isSimpleOp.getNonSimpleLocation();
-  return fmt::format(
+  return std::format(
       "Non-simple {}: {} ({} {})",
       geometry->getGeometryType(),
       description,
@@ -155,7 +155,7 @@ Status validateLatitudeLongitude(double latitude, double longitude) {
           longitude < BingTileType::kMinLongitude ||
           longitude > BingTileType::kMaxLongitude || std::isnan(latitude) ||
           std::isnan(longitude))) {
-    return Status::UserError(fmt::format(
+    return Status::UserError(std::format(
         "Latitude must be in range [{}, {}] and longitude must be in range [{}, {}]. Got latitude: {} and longitude: {}",
         kRealMinLatitude,
         kRealMaxLatitude,
@@ -175,7 +175,7 @@ FOLLY_ALWAYS_INLINE void checkLatitudeLongitudeBounds(
   if (FOLLY_UNLIKELY(
           latitude > BingTileType::kMaxLatitude ||
           latitude < BingTileType::kMinLatitude)) {
-    VELOX_USER_FAIL(fmt::format(
+    VELOX_USER_FAIL(std::format(
         "Latitude span for the geometry must be in [{:.2f}, {:.2f}] range",
         BingTileType::kMinLatitude,
         BingTileType::kMaxLatitude));
@@ -183,7 +183,7 @@ FOLLY_ALWAYS_INLINE void checkLatitudeLongitudeBounds(
   if (FOLLY_UNLIKELY(
           longitude > BingTileType::kMaxLongitude ||
           longitude < BingTileType::kMinLongitude)) {
-    VELOX_USER_FAIL(fmt::format(
+    VELOX_USER_FAIL(std::format(
         "Longitude span for the geometry must be in [{:.2f}, {:.2f}] range",
         BingTileType::kMinLongitude,
         BingTileType::kMaxLongitude));

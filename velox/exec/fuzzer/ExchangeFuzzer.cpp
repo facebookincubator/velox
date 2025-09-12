@@ -107,11 +107,11 @@ class ExchangeFuzzer : public VectorTestBase {
               << " exchange buffer=" << params.exchangeBufferBytes
               << " target batch=" << params.batchBytes;
     configSettings_[core::QueryConfig::kMaxPartitionedOutputBufferSize] =
-        fmt::format("{}", params.outputBufferBytes);
+        std::format("{}", params.outputBufferBytes);
     configSettings_[core::QueryConfig::kMaxExchangeBufferSize] =
-        fmt::format("{}", params.exchangeBufferBytes);
+        std::format("{}", params.exchangeBufferBytes);
     configSettings_[core::QueryConfig::kPreferredOutputBatchBytes] =
-        fmt::format("{}", params.batchBytes);
+        std::format("{}", params.batchBytes);
 
     const auto& rowType = vectors.front()->type()->as<TypeKind::ROW>();
     std::vector<std::string> aggregates;
@@ -469,7 +469,7 @@ class ExchangeFuzzer : public VectorTestBase {
     }
 
     auto filePath =
-        fmt::format("{}/exchange_fuzzer_repro.{}", FLAGS_repro_path, getpid());
+        std::format("{}/exchange_fuzzer_repro.{}", FLAGS_repro_path, getpid());
     std::ofstream out(filePath, std::ofstream::binary);
     out << params.numSourceTasks << " " << params.numDestinationTasks << " "
         << params.numDriversPerTask << " " << params.outputBufferBytes << " "
@@ -505,14 +505,14 @@ class ExchangeFuzzer : public VectorTestBase {
   std::vector<std::string> makeAggregates(const RowType& row, int firstColumn) {
     std::vector<std::string> aggregates;
     for (auto i = firstColumn; i < row.size(); ++i) {
-      aggregates.push_back(fmt::format("checksum({})", row.nameOf(i)));
+      aggregates.push_back(std::format("checksum({})", row.nameOf(i)));
     }
     return aggregates;
   }
 
   static std::string
   makeTaskId(int32_t iteration, const std::string& prefix, int num) {
-    return fmt::format("local://{}-{}-{}", iteration, prefix, num);
+    return std::format("local://{}-{}-{}", iteration, prefix, num);
   }
 
   std::shared_ptr<Task> makeTask(

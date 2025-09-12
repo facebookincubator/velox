@@ -21,11 +21,11 @@
 #include <unordered_set>
 
 #include <boost/crc.hpp>
-#include <fmt/format.h>
 #include <folly/Random.h>
 #include <folly/hash/Checksum.h>
 #include <gflags/gflags.h>
 #include <gtest/gtest.h>
+#include <format>
 
 DECLARE_bool(bmi2); // NOLINT
 
@@ -659,7 +659,7 @@ TEST_F(BitUtilTest, copyBitsBackward) {
   }
   auto test = [&](int source, int target, int size) {
     SCOPED_TRACE(
-        fmt::format("source={} target={} size={}", source, target, size));
+        std::format("source={} target={} size={}", source, target, size));
     auto data = origin;
     copyBitsBackward(data.data(), source, target, size);
     for (int i = 0; i < data.size() * 64; ++i) {
@@ -892,7 +892,7 @@ TEST_F(BitUtilTest, roundUp) {
     uint64_t expected;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "value: {}, factor: {}, expected: {}", value, factor, expected);
     }
   } testSettings[] = {
@@ -923,7 +923,7 @@ TEST_F(BitUtilTest, divRoundUp) {
     uint64_t expected;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "value: {}, factor: {}, expected: {}", value, factor, expected);
     }
   } testSettings[] = {

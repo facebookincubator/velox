@@ -175,7 +175,7 @@ void TableScan::preload(std::shared_ptr<connector::ConnectorSplit> split) {
           return nullptr;
         }
         auto debugString =
-            fmt::format("Split {} Task {}", split->toString(), task->taskId());
+            std::format("Split {} Task {}", split->toString(), task->taskId());
         ExceptionContextSetter exceptionContext(
             {[](VeloxException::Type /*exceptionType*/, auto* debugString) {
                return *static_cast<std::string*>(debugString);

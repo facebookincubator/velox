@@ -149,19 +149,19 @@ void SumTestBase::testAggregateOverflow(
   partialAggsToTest.push_back(
       {facebook::velox::exec::test::PlanBuilder()
            .values({overflowFlatVector})
-           .partialAggregation({}, {fmt::format("{}(c0)", function)})
+           .partialAggregation({}, {std::format("{}(c0)", function)})
            .planNode(),
        expectedFlatSum});
   partialAggsToTest.push_back(
       {facebook::velox::exec::test::PlanBuilder()
            .values({overflowConstantVector})
-           .partialAggregation({}, {fmt::format("{}(c0)", function)})
+           .partialAggregation({}, {std::format("{}(c0)", function)})
            .planNode(),
        expectedConstantSum});
   partialAggsToTest.push_back(
       {facebook::velox::exec::test::PlanBuilder()
            .values(overflowHybridVector)
-           .partialAggregation({}, {fmt::format("{}(c0)", function)})
+           .partialAggregation({}, {std::format("{}(c0)", function)})
            .planNode(),
        expectedHybridSum});
 
@@ -171,19 +171,19 @@ void SumTestBase::testAggregateOverflow(
   aggsToTest.push_back(
       {facebook::velox::exec::test::PlanBuilder()
            .values({overflowFlatVector})
-           .singleAggregation({}, {fmt::format("{}(c0)", function)})
+           .singleAggregation({}, {std::format("{}(c0)", function)})
            .planNode(),
        expectedFlatSum});
   aggsToTest.push_back(
       {facebook::velox::exec::test::PlanBuilder()
            .values({overflowConstantVector})
-           .singleAggregation({}, {fmt::format("{}(c0)", function)})
+           .singleAggregation({}, {std::format("{}(c0)", function)})
            .planNode(),
        expectedConstantSum});
   aggsToTest.push_back(
       {facebook::velox::exec::test::PlanBuilder()
            .values(overflowHybridVector)
-           .singleAggregation({}, {fmt::format("{}(c0)", function)})
+           .singleAggregation({}, {std::format("{}(c0)", function)})
            .planNode(),
        expectedHybridSum});
   // Final Aggregation (partial result in - final result out):
@@ -199,11 +199,11 @@ void SumTestBase::testAggregateOverflow(
                {},
                {facebook::velox::exec::test::PlanBuilder(planNodeIdGenerator)
                     .values({limitVector})
-                    .partialAggregation({}, {fmt::format("{}(c0)", function)})
+                    .partialAggregation({}, {std::format("{}(c0)", function)})
                     .planNode(),
                 facebook::velox::exec::test::PlanBuilder(planNodeIdGenerator)
                     .values({limitVector})
-                    .partialAggregation({}, {fmt::format("{}(c0)", function)})
+                    .partialAggregation({}, {std::format("{}(c0)", function)})
                     .planNode()})
            .finalAggregation()
            .planNode(),

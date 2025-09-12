@@ -50,7 +50,7 @@ void generateJsonTyped(
         std::is_same_v<T, double> || std::is_same_v<T, float>) {
       if constexpr (!legacyCast) {
         if (FOLLY_UNLIKELY(std::isinf(value) || std::isnan(value))) {
-          result.append(fmt::format(
+          result.append(std::format(
               "\"{}\"",
               util::Converter<TypeKind::VARCHAR>::tryCast(value).value()));
         } else {
@@ -306,7 +306,7 @@ struct AsJson {
   // Appends the json string of the value at i to a string writer.
   void append(vector_size_t i, exec::StringWriter& proxy) const {
     if (fieldName_.has_value()) {
-      proxy.append(fmt::format("\"{}\":", fieldName_.value()));
+      proxy.append(std::format("\"{}\":", fieldName_.value()));
     }
 
     if (decoded_->isNullAt(i)) {

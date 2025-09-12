@@ -340,7 +340,7 @@ TEST_F(DateTimeFunctionsTest, fromUnixtimeTzOffset) {
         "from_unixtime(c0, c1, c2)", epoch, hours, minutes);
 
     auto otherResult = evaluateOnce<int64_t>(
-        fmt::format("from_unixtime(c0, {}, {})", *hours, *minutes), epoch);
+        std::format("from_unixtime(c0, {}, {})", *hours, *minutes), epoch);
 
     VELOX_CHECK_EQ(result.value(), otherResult.value());
     return TimestampWithTimezone::unpack(result.value());
@@ -1574,7 +1574,7 @@ TEST_F(DateTimeFunctionsTest, extractFromIntervalDayTime) {
 
   auto extract = [&](const std::string& unit, int64_t millis) {
     return evaluateOnce<int64_t>(
-               fmt::format("{}(c0)", unit),
+               std::format("{}(c0)", unit),
                INTERVAL_DAY_TIME(),
                std::optional(millis))
         .value();
@@ -1592,7 +1592,7 @@ TEST_F(DateTimeFunctionsTest, extractFromIntervalYearMonth) {
 
   auto extract = [&](const std::string& unit, int32_t months) {
     return evaluateOnce<int64_t>(
-               fmt::format("{}(c0)", unit),
+               std::format("{}(c0)", unit),
                INTERVAL_YEAR_MONTH(),
                std::optional(months))
         .value();
@@ -1606,7 +1606,7 @@ TEST_F(DateTimeFunctionsTest, dateTrunc) {
   const auto dateTrunc = [&](const std::string& unit,
                              std::optional<Timestamp> timestamp) {
     return evaluateOnce<Timestamp>(
-        fmt::format("date_trunc('{}', c0)", unit), timestamp);
+        std::format("date_trunc('{}', c0)", unit), timestamp);
   };
 
   disableAdjustTimestampToTimezone();
@@ -1717,7 +1717,7 @@ TEST_F(DateTimeFunctionsTest, dateTruncDate) {
   const auto dateTrunc = [&](const std::string& unit,
                              std::optional<int32_t> date) {
     return evaluateOnce<int32_t>(
-        fmt::format("date_trunc('{}', c0)", unit), DATE(), date);
+        std::format("date_trunc('{}', c0)", unit), DATE(), date);
   };
 
   EXPECT_EQ(std::nullopt, dateTrunc("year", std::nullopt));
@@ -1754,7 +1754,7 @@ TEST_F(DateTimeFunctionsTest, dateTruncDateForWeek) {
   const auto dateTrunc = [&](const std::string& unit,
                              std::optional<int32_t> date) {
     return evaluateOnce<int32_t>(
-        fmt::format("date_trunc('{}', c0)", unit), DATE(), date);
+        std::format("date_trunc('{}', c0)", unit), DATE(), date);
   };
 
   // Date(19576) is 2023-08-07, which is Monday, should return Monday
@@ -1784,7 +1784,7 @@ TEST_F(DateTimeFunctionsTest, dateTruncTimeStampForWeek) {
   const auto dateTrunc = [&](const std::string& unit,
                              std::optional<Timestamp> timestamp) {
     return evaluateOnce<Timestamp>(
-        fmt::format("date_trunc('{}', c0)", unit), timestamp);
+        std::format("date_trunc('{}', c0)", unit), timestamp);
   };
 
   EXPECT_EQ(
@@ -1823,7 +1823,7 @@ TEST_F(DateTimeFunctionsTest, dateTruncTimeStampWithTimezoneForWeek) {
         TimestampWithTimezone::pack(
             TimestampWithTimezone(expectedTimestamp, timeZone.c_str())),
         evaluateOnce<int64_t>(
-            fmt::format("date_trunc('{}', c0)", truncUnit),
+            std::format("date_trunc('{}', c0)", truncUnit),
             TIMESTAMP_WITH_TIME_ZONE(),
             TimestampWithTimezone::pack(
                 TimestampWithTimezone(inputTimestamp, timeZone))));
@@ -1872,7 +1872,7 @@ TEST_F(DateTimeFunctionsTest, dateTruncTimeStampWithTimezoneStringForWeek) {
             makeRowVector({makeNullableFlatVector<StringView>(
                 {StringView{expectedTimestamp}})})),
         evaluate<FlatVector<int64_t>>(
-            fmt::format(
+            std::format(
                 "date_trunc('{}', parse_datetime(c0, 'YYYY-MM-dd+HH:mm:ssZZ'))",
                 truncUnit),
             makeRowVector({makeNullableFlatVector<StringView>(
@@ -1913,7 +1913,7 @@ TEST_F(DateTimeFunctionsTest, dateTruncTimestampWithTimezone) {
         TimestampWithTimezone::pack(
             TimestampWithTimezone(expectedTimestamp, timeZone.c_str())),
         evaluateOnce<int64_t>(
-            fmt::format("date_trunc('{}', c0)", truncUnit),
+            std::format("date_trunc('{}', c0)", truncUnit),
             TIMESTAMP_WITH_TIME_ZONE(),
             TimestampWithTimezone::pack(
                 TimestampWithTimezone(inputTimestamp, timeZone))));
@@ -2030,7 +2030,7 @@ TEST_F(DateTimeFunctionsTest, dateTruncTimestampWithTimezone) {
             makeRowVector({makeNullableFlatVector<StringView>(
                 {StringView{expectedTimestamp}})})),
         evaluate<FlatVector<int64_t>>(
-            fmt::format(
+            std::format(
                 "date_trunc('{}', parse_datetime(c0, 'YYYY-MM-dd+HH:mm:ssZZ'))",
                 truncUnit),
             makeRowVector({makeNullableFlatVector<StringView>(
@@ -2068,7 +2068,7 @@ TEST_F(DateTimeFunctionsTest, dateAddDate) {
                            std::optional<int32_t> value,
                            std::optional<int32_t> date) {
     return evaluateOnce<int32_t>(
-        fmt::format("date_add('{}', c0, c1)", unit),
+        std::format("date_add('{}', c0, c1)", unit),
         {INTEGER(), DATE()},
         value,
         date);
@@ -2125,7 +2125,7 @@ TEST_F(DateTimeFunctionsTest, dateAddTimestamp) {
                            std::optional<int32_t> value,
                            std::optional<Timestamp> timestamp) {
     return evaluateOnce<Timestamp>(
-        fmt::format("date_add('{}', c0, c1)", unit), value, timestamp);
+        std::format("date_add('{}', c0, c1)", unit), value, timestamp);
   };
 
   // Check null behaviors
@@ -2464,7 +2464,7 @@ TEST_F(DateTimeFunctionsTest, dateAddTimestampWithTimeZone) {
             makeRowVector({makeNullableFlatVector<StringView>(
                 {StringView{expectedTimestamp}})})),
         evaluate<FlatVector<int64_t>>(
-            fmt::format(
+            std::format(
                 "date_add('{}', {}, parse_datetime(c0, 'YYYY-MM-dd+HH:mm:ssZZ'))",
                 unit,
                 value),
@@ -2613,7 +2613,7 @@ TEST_F(DateTimeFunctionsTest, dateDiffDate) {
                             std::optional<int32_t> date1,
                             std::optional<int32_t> date2) {
     return evaluateOnce<int64_t>(
-        fmt::format("date_diff('{}', c0, c1)", unit),
+        std::format("date_diff('{}', c0, c1)", unit),
         {DATE(), DATE()},
         date1,
         date2);
@@ -2701,7 +2701,7 @@ TEST_F(DateTimeFunctionsTest, dateDiffTimestamp) {
                             std::optional<Timestamp> timestamp1,
                             std::optional<Timestamp> timestamp2) {
     return evaluateOnce<int64_t>(
-        fmt::format("date_diff('{}', c0, c1)", unit), timestamp1, timestamp2);
+        std::format("date_diff('{}', c0, c1)", unit), timestamp1, timestamp2);
   };
 
   // Check null behaviors
@@ -4211,7 +4211,7 @@ TEST_F(DateTimeFunctionsTest, dateFormatTimestampWithTimezone) {
       [&](const std::string& formatString,
           std::optional<TimestampWithTimezone> timestampWithTimezone) {
         return evaluateOnce<std::string>(
-            fmt::format("date_format(c0, '{}')", formatString),
+            std::format("date_format(c0, '{}')", formatString),
             TIMESTAMP_WITH_TIME_ZONE(),
             TimestampWithTimezone::pack(timestampWithTimezone));
       };

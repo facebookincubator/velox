@@ -134,7 +134,7 @@ class S3ReadFile ::Impl {
   }
 
   std::string getName() const {
-    return fmt::format("s3://{}/{}", bucket_, key_);
+    return std::format("s3://{}/{}", bucket_, key_);
   }
 
  private:

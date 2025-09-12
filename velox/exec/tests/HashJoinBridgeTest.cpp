@@ -166,7 +166,7 @@ class HashJoinBridgeTest : public testing::Test,
 
 TEST_P(HashJoinBridgeTest, withoutSpill) {
   for (const bool hasNullKeys : {false, true}) {
-    SCOPED_TRACE(fmt::format("hasNullKeys: {}", hasNullKeys));
+    SCOPED_TRACE(std::format("hasNullKeys: {}", hasNullKeys));
     auto futures = createEmptyFutures(numProbers_);
 
     auto joinBridge = createJoinBridge();
@@ -271,7 +271,7 @@ TEST_P(HashJoinBridgeTest, withSpill) {
     bool endWithNull;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "spillLevel:{}, endWithNull:{}", spillLevel, endWithNull);
     }
   } testSettings[] = {
@@ -574,7 +574,7 @@ TEST_P(HashJoinBridgeTest, isHashJoinMemoryPools) {
     bool isHashProbePool;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "poolName: {}, isHashBuildPool: {}, isHashProbePool: {}",
           poolName,
           isHashBuildPool,
@@ -622,7 +622,7 @@ TEST_P(HashJoinBridgeTest, hashJoinTableType) {
     RowTypePtr probeSourceType;
     RowTypePtr buildSourceType;
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "joinType {} probeKeyType {} buildKeyType {} probeSourceType {} buildSourceType {}",
           joinType,
           probeKeyType->toString(),
@@ -705,7 +705,7 @@ TEST(HashJoinBridgeTest, hashJoinTableSpillType) {
     RowTypePtr expectedTableSpillType;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "joinType: {}, expectedTableSpillType: {}",
           core::JoinTypeName::toName(joinType),
           expectedTableSpillType->toString());

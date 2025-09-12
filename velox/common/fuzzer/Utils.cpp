@@ -72,7 +72,7 @@ RowTypePtr randRowType(
   std::vector<std::string> names;
   std::vector<TypePtr> fields;
   for (int i = 0; i < numFields; ++i) {
-    names.push_back(fmt::format("f{}", i));
+    names.push_back(std::format("f{}", i));
     fields.push_back(
         randType(rng, scalarTypes, maxDepth, mapKeyTypes, mapValueTypes));
   }

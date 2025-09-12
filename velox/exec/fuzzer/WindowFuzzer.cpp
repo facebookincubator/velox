@@ -167,7 +167,7 @@ std::string WindowFuzzer::frameClauseString(
           frameBound =
               isStartBound ? kRangeOffsetColumns[0] : kRangeOffsetColumns[1];
         }
-        return fmt::format("{} {}", frameBound, boundTypeString);
+        return std::format("{} {}", frameBound, boundTypeString);
       }
       default:
         VELOX_UNREACHABLE("Unknown option for frame clause generation");
@@ -175,7 +175,7 @@ std::string WindowFuzzer::frameClauseString(
     }
   };
 
-  return fmt::format(
+  return std::format(
       " {} BETWEEN {} AND {}",
       core::WindowNode::toName(frameMetadata.windowType),
       frameType(frameMetadata.startBoundType, true),
@@ -523,7 +523,7 @@ void WindowFuzzer::go() {
             kBoundColumns,
             kRangeOffsetColumns);
       } catch (VeloxUserError& e) {
-        VLOG(2) << fmt::format(
+        VLOG(2) << std::format(
             "This iteration is not valid due to exception from addKRangeOffsetColumnsToInput: {}",
             e.message());
         continue;
@@ -609,7 +609,7 @@ void WindowFuzzer::testAlternativePlans(
     allKeys.emplace_back(key + " NULLS FIRST");
   }
   for (const auto& keyAndOrder : sortingKeysAndOrders) {
-    allKeys.emplace_back(fmt::format(
+    allKeys.emplace_back(std::format(
         "{} {}", keyAndOrder.key_, keyAndOrder.sortOrder_.toString()));
   }
 
@@ -621,7 +621,7 @@ void WindowFuzzer::testAlternativePlans(
              .projectExpressions(projections)
              .orderBy(allKeys, false)
              .streamingWindow(
-                 {fmt::format("{} over ({})", functionCall, frame)})
+                 {std::format("{} over ({})", functionCall, frame)})
              .planNode(),
          {}});
   }
@@ -643,7 +643,7 @@ void WindowFuzzer::testAlternativePlans(
              .tableScan(inputRowType)
              .projectExpressions(projections)
              .localPartition(partitionKeys)
-             .window({fmt::format("{} over ({})", functionCall, frame)})
+             .window({std::format("{} over ({})", functionCall, frame)})
              .planNode(),
          splits});
 #endif
@@ -655,7 +655,7 @@ void WindowFuzzer::testAlternativePlans(
                .projectExpressions(projections)
                .orderBy(allKeys, false)
                .streamingWindow(
-                   {fmt::format("{} over ({})", functionCall, frame)})
+                   {std::format("{} over ({})", functionCall, frame)})
                .planNode(),
            splits});
     }
@@ -733,7 +733,7 @@ bool WindowFuzzer::verifyWindow(
   auto plan = PlanBuilder()
                   .values(input)
                   .projectExpressions(projections)
-                  .window({fmt::format("{} over ({})", functionCall, frame)})
+                  .window({std::format("{} over ({})", functionCall, frame)})
                   .capturePlanNodeId(windowNodeId)
                   .planNode();
 

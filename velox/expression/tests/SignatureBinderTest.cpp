@@ -1043,8 +1043,8 @@ void testCoercions(
     const std::vector<TypePtr>& actualTypes,
     const std::vector<TypePtr>& expectedCoercions,
     const TypePtr& expectedReturnType) {
-  SCOPED_TRACE(fmt::format("Signature: {}", signature->toString()));
-  SCOPED_TRACE(fmt::format("Actual types: {}", toString(actualTypes)));
+  SCOPED_TRACE(std::format("Signature: {}", signature->toString()));
+  SCOPED_TRACE(std::format("Actual types: {}", toString(actualTypes)));
 
   exec::SignatureBinder binder(*signature, actualTypes);
 
@@ -1071,8 +1071,8 @@ void testNoCoercions(
     const exec::FunctionSignaturePtr& signature,
     const std::vector<TypePtr>& actualTypes,
     const TypePtr& expectedReturnType) {
-  SCOPED_TRACE(fmt::format("Signature: {}", signature->toString()));
-  SCOPED_TRACE(fmt::format("Actual types: {}", toString(actualTypes)));
+  SCOPED_TRACE(std::format("Signature: {}", signature->toString()));
+  SCOPED_TRACE(std::format("Actual types: {}", toString(actualTypes)));
 
   {
     exec::SignatureBinder binder(*signature, actualTypes);

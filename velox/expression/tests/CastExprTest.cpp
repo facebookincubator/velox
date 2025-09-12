@@ -114,7 +114,7 @@ class CastExprTest : public functions::test::CastBaseTest {
         testCast(
             makeFlatVector<int64_t>({0, tooSmall}, DECIMAL(10, 0)),
             makeFlatVector<NativeType>(0, 0)),
-        fmt::format(
+        std::format(
             "Cannot cast DECIMAL(10, 0) '-2147483649' to {}. Out of bounds.",
             TypeTraits<KIND>::name));
 
@@ -122,7 +122,7 @@ class CastExprTest : public functions::test::CastBaseTest {
         testCast(
             makeFlatVector<int128_t>({0, tooSmall}, DECIMAL(19, 0)),
             makeFlatVector<NativeType>(0, 0)),
-        fmt::format(
+        std::format(
             "Cannot cast DECIMAL(19, 0) '-2147483649' to {}. Out of bounds.",
             TypeTraits<KIND>::name));
 
@@ -130,7 +130,7 @@ class CastExprTest : public functions::test::CastBaseTest {
         testCast(
             makeFlatVector<int64_t>({0, tooBig}, DECIMAL(10, 0)),
             makeFlatVector<NativeType>(0, 0)),
-        fmt::format(
+        std::format(
             "Cannot cast DECIMAL(10, 0) '2147483648' to {}. Out of bounds.",
             TypeTraits<KIND>::name));
 
@@ -138,7 +138,7 @@ class CastExprTest : public functions::test::CastBaseTest {
         testCast(
             makeFlatVector<int128_t>({0, tooBig}, DECIMAL(19, 0)),
             makeFlatVector<NativeType>(0, 0)),
-        fmt::format(
+        std::format(
             "Cannot cast DECIMAL(19, 0) '2147483648' to {}. Out of bounds.",
             TypeTraits<KIND>::name));
   }
@@ -257,7 +257,7 @@ class CastExprTest : public functions::test::CastBaseTest {
         testCast(
             makeFlatVector<T>(std::vector<T>{std::numeric_limits<T>::min()}),
             makeFlatVector(std::vector<int64_t>{0}, DECIMAL(3, 1))),
-        fmt::format(
+        std::format(
             "Cannot cast {} '{}' to DECIMAL(3, 1)",
             CppToType<T>::name,
             std::to_string(std::numeric_limits<T>::min())));
@@ -265,13 +265,13 @@ class CastExprTest : public functions::test::CastBaseTest {
         testCast(
             makeFlatVector<T>(std::vector<T>{-100}),
             makeFlatVector(std::vector<int64_t>{0}, DECIMAL(17, 16))),
-        fmt::format(
+        std::format(
             "Cannot cast {} '-100' to DECIMAL(17, 16)", CppToType<T>::name));
     VELOX_ASSERT_THROW(
         testCast(
             makeFlatVector<T>(std::vector<T>{100}),
             makeFlatVector(std::vector<int64_t>{0}, DECIMAL(17, 16))),
-        fmt::format(
+        std::format(
             "Cannot cast {} '100' to DECIMAL(17, 16)", CppToType<T>::name));
   }
 
@@ -2053,7 +2053,7 @@ TEST_F(CastExprTest, varcharToDecimal) {
       VARCHAR(),
       DECIMAL(38, 0),
       {std::string(280, '9')},
-      fmt::format(
+      std::format(
           "Cannot cast VARCHAR '{}' to DECIMAL(38, 0). Value too large.",
           std::string(280, '9')));
 
@@ -2063,7 +2063,7 @@ TEST_F(CastExprTest, varcharToDecimal) {
       VARCHAR(),
       DECIMAL(38, 10),
       {fractionOverflow},
-      fmt::format(
+      std::format(
           "Cannot cast VARCHAR '{}' to DECIMAL(38, 10). Value too large.",
           fractionOverflow));
 
@@ -2072,7 +2072,7 @@ TEST_F(CastExprTest, varcharToDecimal) {
       VARCHAR(),
       DECIMAL(38, 38),
       {fractionRoundUp},
-      fmt::format(
+      std::format(
           "Cannot cast VARCHAR '{}' to DECIMAL(38, 38). Value too large.",
           fractionRoundUp));
 
@@ -2675,13 +2675,13 @@ TEST_F(CastExprTest, tryCastDoesNotHideInputsAndExistingErrors) {
                   const auto& data) {
     ASSERT_THROW(
         auto result = evaluate(
-            fmt::format("try_cast({} as {})", castExprThatThrow, type), data),
+            std::format("try_cast({} as {})", castExprThatThrow, type), data),
         VeloxException);
 
     ASSERT_NO_THROW(evaluate(
-        fmt::format("try (cast ({} as {}))", castExprThatThrow, type), data));
-    ASSERT_NO_THROW(evaluate(fmt::format("try_{}", castExprThatThrow), data));
-    ASSERT_NO_THROW(evaluate(fmt::format("try ({})", castExprThatThrow), data));
+        std::format("try (cast ({} as {}))", castExprThatThrow, type), data));
+    ASSERT_NO_THROW(evaluate(std::format("try_{}", castExprThatThrow), data));
+    ASSERT_NO_THROW(evaluate(std::format("try ({})", castExprThatThrow), data));
   };
 
   {

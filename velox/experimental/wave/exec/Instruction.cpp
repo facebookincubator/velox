@@ -33,7 +33,7 @@ std::string AdvanceResult::toString() const {
   if (empty()) {
     return "AdvanceResult::empty";
   }
-  return fmt::format(
+  return std::format(
       "AdvanceResult(.numRows={}, .isRetry={}, .sync={})",
       numRows,
       isRetry,
@@ -67,7 +67,7 @@ void restockAllocator(
   // If we can get rows by raising the row limit we do this first.
   int32_t adjustedSize = size - allocator->raiseRowLimits(size);
   if (adjustedSize <= 0) {
-    TR(fmt::format(
+    TR(std::format(
         "Found {} rows of existing space", size / allocator->rowSize));
     return;
   }
@@ -82,7 +82,7 @@ void restockAllocator(
       size,
       size,
       allocator->rowSize);
-  TR(fmt::format("Made range of {} rows", size / allocator->rowSize));
+  TR(std::format("Made range of {} rows", size / allocator->rowSize));
   if (allocator->ranges[0].empty()) {
     allocator->ranges[0] = std::move(newRange);
   } else {
@@ -101,7 +101,7 @@ void AggregateOperatorState::setSizesToSafe() {
   for (auto i = 0; i < numPartitions; ++i) {
     auto availableInAllocator = allocators[i].availableFixed() / rowSize;
     if (availableInAllocator > allowedPerPartition) {
-      TR(fmt::format(
+      TR(std::format(
           "Trim avail from {} to {} rows\n",
           availableInAllocator,
           allowedPerPartition));
@@ -164,7 +164,7 @@ void resupplyHashTable(
   int64_t increment = (rowSize * (newMaxDistinct - hashTable->numDistinct)) /
       (numPartitions == 1 ? 1.0 : numPartitions * 0.8);
   TR(&stream,
-     fmt::format(
+     std::format(
          "resupply: size={} newSize={} increment={} numFailed={} ht={}\n",
          numSlots(hashTable),
          newTableSize,
@@ -215,7 +215,7 @@ void resupplyHashTable(
   }
   deviceStream->wait();
   if (rehash) {
-    TR(&stream, fmt::format("rehashed {}\n", (void*)hashTable));
+    TR(&stream, std::format("rehashed {}\n", (void*)hashTable));
   }
   WaveStream::releaseStream(std::move(deviceStream));
 }
@@ -234,7 +234,7 @@ AdvanceResult AbstractAggregation::canAdvance(
     return {};
   }
   if (gridState->numDistinct) {
-    TR(&stream, fmt::format("agg need retry: card={}", gridState->numDistinct));
+    TR(&stream, std::format("agg need retry: card={}", gridState->numDistinct));
     stream.checkBlockStatuses();
     stream.clearGridStatus<AggregateReturn>(instructionStatus);
     // The hash table needs memory or rehash. Request a Task-wide break to
@@ -272,7 +272,7 @@ std::pair<int64_t, int64_t> countResultRows(
     auto bits = reinterpret_cast<uint64_t*>(range.base);
     int32_t numFree = bits::countBits(bits, 0, range.firstRowOffset * 8);
     if (numFree) {
-      TR(fmt::format("freeRows={}\n", numFree));
+      TR(std::format("freeRows={}\n", numFree));
     }
     auto n = ((range.rowOffset - range.firstRowOffset) / rowSize) - numFree;
     count += n;
@@ -513,7 +513,7 @@ void resupplyJoinTable(
   int64_t increment = (rowSize * (numFailed + 1000000)) *
       (numPartitions == 1 ? 1.0 : numPartitions * 0.8);
   TR(&stream,
-     fmt::format(
+     std::format(
          "resupply: increment ={} numFailed={} ht={}\n",
          increment,
          numFailed,
@@ -626,7 +626,7 @@ void AbstractHashBuild::pipelineFinished(WaveStream& stream, Program* program) {
   }
 
   deviceStream->wait();
-  TR(&stream, fmt::format("Built {}\n", (void*)hashTable));
+  TR(&stream, std::format("Built {}\n", (void*)hashTable));
   WaveStream::releaseStream(std::move(deviceStream));
   joinBridge->setHashTable(std::move(state), false);
 }

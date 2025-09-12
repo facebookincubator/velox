@@ -29,7 +29,7 @@ struct Coercion {
       return "null";
     }
 
-    return fmt::format("{} ({})", type->toString(), cost);
+    return std::format("{} ({})", type->toString(), cost);
   }
 
   void reset() {

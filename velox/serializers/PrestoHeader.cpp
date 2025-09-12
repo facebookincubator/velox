@@ -22,7 +22,7 @@ namespace facebook::velox::serializer::presto::detail {
     ByteInputStream* source) {
   if (source->remainingSize() < kHeaderSize) {
     return folly::makeUnexpected(Status::Invalid(
-        fmt::format("{} bytes for header", source->remainingSize())));
+        std::format("{} bytes for header", source->remainingSize())));
   }
   PrestoHeader header;
   header.numRows = source->read<int32_t>();
@@ -33,15 +33,15 @@ namespace facebook::velox::serializer::presto::detail {
 
   if (header.numRows < 0) {
     return folly::makeUnexpected(
-        Status::Invalid(fmt::format("negative numRows: {}", header.numRows)));
+        Status::Invalid(std::format("negative numRows: {}", header.numRows)));
   }
   if (header.uncompressedSize < 0) {
     return folly::makeUnexpected(Status::Invalid(
-        fmt::format("negative uncompressedSize: {}", header.uncompressedSize)));
+        std::format("negative uncompressedSize: {}", header.uncompressedSize)));
   }
   if (header.compressedSize < 0) {
     return folly::makeUnexpected(Status::Invalid(
-        fmt::format("negative compressedSize: {}", header.compressedSize)));
+        std::format("negative compressedSize: {}", header.compressedSize)));
   }
 
   return header;

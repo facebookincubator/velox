@@ -55,7 +55,7 @@ TEST_P(BufferedWriterTest, Basic) {
     int expectedFlushedBytes;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "addBytes:{}, expectedCrashed:{}, expectedFlushedBytes:{}",
           folly::join(",", addBytes),
           expectedCrashed,
@@ -169,7 +169,7 @@ TEST_P(BufferedWriterTest, bufferedWrite) {
     int end;
 
     std::string debugString() const {
-      return fmt::format("start:{}, end:{}", start, end);
+      return std::format("start:{}, end:{}", start, end);
     }
   } testSettings[] = {
       {0, 1023},

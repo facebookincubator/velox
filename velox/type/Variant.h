@@ -18,8 +18,8 @@
 
 #include <map>
 
-#include <fmt/format.h>
 #include <folly/Conv.h>
+#include <format>
 
 #include "folly/dynamic.h"
 #include "velox/common/base/Exceptions.h"

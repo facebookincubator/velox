@@ -307,7 +307,7 @@ void E2EFilterTestBase::testFilterSpecs(
       readWithFilter(
           spec, mutations, batches, hitRows, timeWithFilter, false, true);
     }
-    LOG(INFO) << fmt::format(
+    LOG(INFO) << std::format(
         "    {} hits in {} us, {} input rows/s\n",
         hitRows.size(),
         timeWithFilter,
@@ -491,7 +491,7 @@ void E2EFilterTestBase::testMetadataFilterImpl(
     core::ExpressionEvaluator* evaluator,
     const std::string& remainingFilter,
     std::function<bool(int64_t, int64_t)> validationFilter) {
-  SCOPED_TRACE(fmt::format("remainingFilter={}", remainingFilter));
+  SCOPED_TRACE(std::format("remainingFilter={}", remainingFilter));
   auto spec = std::make_shared<common::ScanSpec>("<root>");
   if (filter) {
     spec->getOrCreateChild(std::move(filterField))

@@ -63,7 +63,7 @@ std::optional<int> tryResolveLongLiteral(
 
   // Try to assign value based on constraints.
   // Check constraints and evaluate.
-  const auto calculation = fmt::format("{}={}", variable, constraints);
+  const auto calculation = std::format("{}={}", variable, constraints);
   expression::calculation::evaluate(calculation, integerVariablesBindings);
   VELOX_CHECK(
       integerVariablesBindings.count(variable),

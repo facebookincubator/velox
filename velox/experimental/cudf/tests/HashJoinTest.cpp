@@ -34,8 +34,9 @@
 #include "velox/exec/tests/utils/VectorTestUtil.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
-#include <fmt/format.h>
 #include <re2/re2.h>
+
+#include <format>
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
@@ -138,7 +139,7 @@ TEST_P(MultiThreadedHashJoinTest, testJoinWithSpillenabledCancellation) {
 TEST_P(MultiThreadedHashJoinTest, emptyBuild) {
   const std::vector<bool> finishOnEmptys = {false, true};
   for (const auto finishOnEmpty : finishOnEmptys) {
-    SCOPED_TRACE(fmt::format("finishOnEmpty: {}", finishOnEmpty));
+    SCOPED_TRACE(std::format("finishOnEmpty: {}", finishOnEmpty));
 
     HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .injectSpill(false)
@@ -362,7 +363,7 @@ TEST_P(MultiThreadedHashJoinTest, nullAwareAntiJoinWithNull) {
     double buildNullRatio;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "probeNullRatio: {}, buildNullRatio: {}",
           probeNullRatio,
           buildNullRatio);
@@ -559,7 +560,7 @@ TEST_P(MultiThreadedHashJoinTest, joinSidesDifferentSchema) {
 TEST_P(MultiThreadedHashJoinTest, innerJoinWithEmptyBuild) {
   const std::vector<bool> finishOnEmptys = {false, true};
   for (auto finishOnEmpty : finishOnEmptys) {
-    SCOPED_TRACE(fmt::format("finishOnEmpty: {}", finishOnEmpty));
+    SCOPED_TRACE(std::format("finishOnEmpty: {}", finishOnEmpty));
 
     std::vector<RowVectorPtr> probeVectors = makeBatches(5, [&](int32_t batch) {
       return makeRowVector({
@@ -631,7 +632,7 @@ TEST_P(MultiThreadedHashJoinTest, leftSemiJoinFilter) {
 TEST_P(MultiThreadedHashJoinTest, leftSemiJoinFilterWithEmptyBuild) {
   const std::vector<bool> finishOnEmptys = {false, true};
   for (const auto finishOnEmpty : finishOnEmptys) {
-    SCOPED_TRACE(fmt::format("finishOnEmpty: {}", finishOnEmpty));
+    SCOPED_TRACE(std::format("finishOnEmpty: {}", finishOnEmpty));
 
     std::vector<RowVectorPtr> probeVectors =
         makeBatches(10, [&](int32_t /*unused*/) {
@@ -743,7 +744,7 @@ TEST_P(MultiThreadedHashJoinTest, rightSemiJoinFilter) {
 TEST_P(MultiThreadedHashJoinTest, rightSemiJoinFilterWithEmptyBuild) {
   const std::vector<bool> finishOnEmptys = {false, true};
   for (const auto finishOnEmpty : finishOnEmptys) {
-    SCOPED_TRACE(fmt::format("finishOnEmpty: {}", finishOnEmpty));
+    SCOPED_TRACE(std::format("finishOnEmpty: {}", finishOnEmpty));
 
     // probeVectors size is greater than buildVector size.
     std::vector<RowVectorPtr> probeVectors =
@@ -1157,7 +1158,7 @@ TEST_P(MultiThreadedHashJoinTest, nullAwareAntiJoinWithFilter) {
 TEST_P(MultiThreadedHashJoinTest, nullAwareAntiJoinWithFilterAndEmptyBuild) {
   const std::vector<bool> finishOnEmptys = {false, true};
   for (const auto finishOnEmpty : finishOnEmptys) {
-    SCOPED_TRACE(fmt::format("finishOnEmpty: {}", finishOnEmpty));
+    SCOPED_TRACE(std::format("finishOnEmpty: {}", finishOnEmpty));
 
     auto probeVectors = makeBatches(4, [&](int32_t /*unused*/) {
       return makeRowVector(
@@ -1230,7 +1231,7 @@ TEST_P(MultiThreadedHashJoinTest, nullAwareAntiJoinWithFilterAndNullKey) {
 
   std::vector<std::string> filters({"u1 > t1", "u1 * t1 > 0"});
   for (const std::string& filter : filters) {
-    const auto referenceSql = fmt::format(
+    const auto referenceSql = std::format(
         "SELECT t.* FROM t WHERE t0 NOT IN (SELECT u0 FROM u WHERE {})",
         filter);
 
@@ -1290,7 +1291,7 @@ TEST_P(
 
   std::vector<std::string> filters({"u1 < t1", "u1 + t1 = 0"});
   for (const std::string& filter : filters) {
-    const auto referenceSql = fmt::format(
+    const auto referenceSql = std::format(
         "SELECT t.* FROM t WHERE t0 NOT IN (SELECT u0 FROM u WHERE {})",
         filter);
 
@@ -1475,7 +1476,7 @@ TEST_P(MultiThreadedHashJoinTest, antiJoin) {
         .joinType(core::JoinType::kAnti)
         .joinFilter(filter)
         .joinOutputLayout({"t0", "t1"})
-        .referenceQuery(fmt::format(
+        .referenceQuery(std::format(
             "SELECT t.* FROM t WHERE NOT EXISTS (SELECT * FROM u WHERE u.u0 = t.t0 AND {})",
             filter))
         .run();
@@ -1485,7 +1486,7 @@ TEST_P(MultiThreadedHashJoinTest, antiJoin) {
 TEST_P(MultiThreadedHashJoinTest, antiJoinWithFilterAndEmptyBuild) {
   const std::vector<bool> finishOnEmptys = {false, true};
   for (const auto finishOnEmpty : finishOnEmptys) {
-    SCOPED_TRACE(fmt::format("finishOnEmpty: {}", finishOnEmpty));
+    SCOPED_TRACE(std::format("finishOnEmpty: {}", finishOnEmpty));
 
     auto probeVectors = makeBatches(4, [&](int32_t /*unused*/) {
       return makeRowVector(
@@ -1674,7 +1675,7 @@ TEST_P(MultiThreadedHashJoinTest, nullStatsWithEmptyBuild) {
 TEST_P(MultiThreadedHashJoinTest, leftJoinWithEmptyBuild) {
   const std::vector<bool> finishOnEmptys = {false, true};
   for (const auto finishOnEmpty : finishOnEmptys) {
-    SCOPED_TRACE(fmt::format("finishOnEmpty: {}", finishOnEmpty));
+    SCOPED_TRACE(std::format("finishOnEmpty: {}", finishOnEmpty));
 
     // Left side keys are [0, 1, 2,..10].
     // Use 3-rd column as row number to allow for asserting the order of
@@ -2048,7 +2049,7 @@ TEST_P(MultiThreadedHashJoinTest, rightJoin) {
 TEST_P(MultiThreadedHashJoinTest, rightJoinWithEmptyBuild) {
   const std::vector<bool> finishOnEmptys = {false, true};
   for (const auto finishOnEmpty : finishOnEmptys) {
-    SCOPED_TRACE(fmt::format("finishOnEmpty: {}", finishOnEmpty));
+    SCOPED_TRACE(std::format("finishOnEmpty: {}", finishOnEmpty));
 
     // Left side keys are [0, 1, 2,..10].
     std::vector<RowVectorPtr> probeVectors = mergeBatches(
@@ -2287,7 +2288,7 @@ TEST_P(MultiThreadedHashJoinTest, fullJoin) {
 TEST_P(MultiThreadedHashJoinTest, fullJoinWithEmptyBuild) {
   const std::vector<bool> finishOnEmptys = {false, true};
   for (const auto finishOnEmpty : finishOnEmptys) {
-    SCOPED_TRACE(fmt::format("finishOnEmpty: {}", finishOnEmpty));
+    SCOPED_TRACE(std::format("finishOnEmpty: {}", finishOnEmpty));
 
     // Left side keys are [0, 1, 2,..10].
     std::vector<RowVectorPtr> probeVectors = mergeBatches(
@@ -3065,7 +3066,7 @@ TEST_F(HashJoinTest, semiProjectWithFilter) {
 
     HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .planNode(plan)
-        .referenceQuery(fmt::format(
+        .referenceQuery(std::format(
             "SELECT t0, t1, t0 IN (SELECT u0 FROM u WHERE {}) FROM t", filter))
         .injectSpill(false)
         .run();
@@ -3076,7 +3077,7 @@ TEST_F(HashJoinTest, semiProjectWithFilter) {
     // these values.
     HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .planNode(plan)
-        .referenceQuery(fmt::format(
+        .referenceQuery(std::format(
             "SELECT t0, t1, EXISTS (SELECT * FROM u WHERE (u0 is not null OR t0 is not null) AND u0 = t0 AND {}) FROM t",
             filter))
         .injectSpill(false)
@@ -3160,7 +3161,7 @@ TEST_F(HashJoinTest, leftSemiJoinWithExtraOutputCapacity) {
     SCOPED_TRACE("left semi filter join");
     std::string filter = "t1 = u1";
     runQuery(
-        fmt::format(
+        std::format(
             "SELECT t0, t1 FROM t WHERE EXISTS (SELECT u0 FROM u WHERE t0 = u0 AND {})",
             filter),
         filter,
@@ -3171,7 +3172,7 @@ TEST_F(HashJoinTest, leftSemiJoinWithExtraOutputCapacity) {
     SCOPED_TRACE("left semi project join");
     std::string filter = "t1 <> u1";
     runQuery(
-        fmt::format(
+        std::format(
             "SELECT t0, t1, t0 IN (SELECT u0 FROM u WHERE {}) FROM t", filter),
         filter,
         core::JoinType::kLeftSemiProject);
@@ -3386,7 +3387,7 @@ TEST_F(HashJoinTest, lazyVectors) {
          makeFlatVector<int64_t>(30'000, [](auto row) { return row % 23; }),
          makeFlatVector<int32_t>(30'000, [](auto row) { return row % 31; }),
          makeFlatVector<StringView>(30'000, [](auto row) {
-           return StringView::makeInline(fmt::format("{}   string", row % 43));
+           return StringView::makeInline(std::format("{}   string", row % 43));
          })});
   });
 
@@ -3670,7 +3671,7 @@ TEST_F(HashJoinTest, DISABLED_dynamicFilters) {
           .referenceQuery(
               "SELECT t.c0, t.c1 + 1, t.c1 + u.c1 FROM t, u WHERE t.c0 = u.c0")
           .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
-            SCOPED_TRACE(fmt::format("hasSpill:{}", hasSpill));
+            SCOPED_TRACE(std::format("hasSpill:{}", hasSpill));
             auto planStats = toPlanStats(task->taskStats());
             if (hasSpill) {
               // Dynamic filtering should be disabled with spilling triggered.
@@ -3713,7 +3714,7 @@ TEST_F(HashJoinTest, DISABLED_dynamicFilters) {
           .referenceQuery(
               "SELECT t.c0, t.c1 + 1 FROM t WHERE t.c0 IN (SELECT c0 FROM u)")
           .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
-            SCOPED_TRACE(fmt::format("hasSpill:{}", hasSpill));
+            SCOPED_TRACE(std::format("hasSpill:{}", hasSpill));
             auto planStats = toPlanStats(task->taskStats());
             if (hasSpill) {
               // Dynamic filtering should be disabled with spilling triggered.
@@ -3757,7 +3758,7 @@ TEST_F(HashJoinTest, DISABLED_dynamicFilters) {
           .referenceQuery(
               "SELECT u.c0, u.c1 + 1 FROM u WHERE u.c0 IN (SELECT c0 FROM t)")
           .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
-            SCOPED_TRACE(fmt::format("hasSpill:{}", hasSpill));
+            SCOPED_TRACE(std::format("hasSpill:{}", hasSpill));
             auto planStats = toPlanStats(task->taskStats());
             if (hasSpill) {
               // Dynamic filtering should be disabled with spilling triggered.
@@ -3800,7 +3801,7 @@ TEST_F(HashJoinTest, DISABLED_dynamicFilters) {
           .referenceQuery(
               "SELECT t.c0, t.c1 + 1, t.c1 + u.c1 FROM t RIGHT JOIN u ON t.c0 = u.c0")
           .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
-            SCOPED_TRACE(fmt::format("hasSpill:{}", hasSpill));
+            SCOPED_TRACE(std::format("hasSpill:{}", hasSpill));
             auto planStats = toPlanStats(task->taskStats());
             if (hasSpill) {
               // Dynamic filtering should be disabled with spilling triggered.
@@ -3850,7 +3851,7 @@ TEST_F(HashJoinTest, DISABLED_dynamicFilters) {
         .referenceQuery(
             "SELECT t.c0, t.c1 + 1, t.c1 + u.c1 FROM t, u WHERE t.c0 = u.c0")
         .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
-          SCOPED_TRACE(fmt::format("hasSpill:{}", hasSpill));
+          SCOPED_TRACE(std::format("hasSpill:{}", hasSpill));
           auto planStats = toPlanStats(task->taskStats());
           if (hasSpill) {
             // Dynamic filtering should be disabled with spilling triggered.
@@ -3891,7 +3892,7 @@ TEST_F(HashJoinTest, DISABLED_dynamicFilters) {
         .referenceQuery(
             "SELECT t.c1 + u.c1 FROM t, u WHERE t.c0 = u.c0 AND t.c0 < 500")
         .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
-          SCOPED_TRACE(fmt::format("hasSpill:{}", hasSpill));
+          SCOPED_TRACE(std::format("hasSpill:{}", hasSpill));
           auto planStats = toPlanStats(task->taskStats());
           if (hasSpill) {
             // Dynamic filtering should be disabled with spilling triggered.
@@ -3932,7 +3933,7 @@ TEST_F(HashJoinTest, DISABLED_dynamicFilters) {
         .makeInputSplits(makeInputSplits(probeScanId))
         .referenceQuery("SELECT t.c0, t.c1 + 1 FROM t, u WHERE t.c0 = u.c0")
         .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
-          SCOPED_TRACE(fmt::format("hasSpill:{}", hasSpill));
+          SCOPED_TRACE(std::format("hasSpill:{}", hasSpill));
           auto planStats = toPlanStats(task->taskStats());
           if (hasSpill) {
             // Dynamic filtering should be disabled with spilling triggered.
@@ -3974,7 +3975,7 @@ TEST_F(HashJoinTest, DISABLED_dynamicFilters) {
         .makeInputSplits(makeInputSplits(probeScanId))
         .referenceQuery("SELECT t.c0 FROM t JOIN u ON (t.c0 = u.c0)")
         .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
-          SCOPED_TRACE(fmt::format("hasSpill:{}", hasSpill));
+          SCOPED_TRACE(std::format("hasSpill:{}", hasSpill));
           auto planStats = toPlanStats(task->taskStats());
           if (hasSpill) {
             // Dynamic filtering should be disabled with spilling triggered.
@@ -4017,7 +4018,7 @@ TEST_F(HashJoinTest, DISABLED_dynamicFilters) {
         .referenceQuery(
             "SELECT t.c1 + 1 FROM t, u WHERE t.c0 = u.c0 AND t.c0 < 500")
         .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
-          SCOPED_TRACE(fmt::format("hasSpill:{}", hasSpill));
+          SCOPED_TRACE(std::format("hasSpill:{}", hasSpill));
           auto planStats = toPlanStats(task->taskStats());
           if (hasSpill) {
             // Dynamic filtering should be disabled with spilling triggered.
@@ -4063,7 +4064,7 @@ TEST_F(HashJoinTest, DISABLED_dynamicFilters) {
           .referenceQuery(
               "SELECT t.c1 + 1 FROM t, u WHERE t.c0 = u.c0 AND t.c0 < 200")
           .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
-            SCOPED_TRACE(fmt::format("hasSpill:{}", hasSpill));
+            SCOPED_TRACE(std::format("hasSpill:{}", hasSpill));
             auto planStats = toPlanStats(task->taskStats());
             if (hasSpill) {
               // Dynamic filtering should be disabled with spilling triggered.
@@ -4108,7 +4109,7 @@ TEST_F(HashJoinTest, DISABLED_dynamicFilters) {
           .referenceQuery(
               "SELECT t.c1 + 1 FROM t WHERE t.c0 IN (SELECT c0 FROM u) AND t.c0 < 200")
           .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
-            SCOPED_TRACE(fmt::format("hasSpill:{}", hasSpill));
+            SCOPED_TRACE(std::format("hasSpill:{}", hasSpill));
             auto planStats = toPlanStats(task->taskStats());
             if (hasSpill) {
               // Dynamic filtering should be disabled with spilling triggered.
@@ -4153,7 +4154,7 @@ TEST_F(HashJoinTest, DISABLED_dynamicFilters) {
           .referenceQuery(
               "SELECT u.c1 + 1 FROM u WHERE u.c0 IN (SELECT c0 FROM t) AND u.c0 < 200")
           .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
-            SCOPED_TRACE(fmt::format("hasSpill:{}", hasSpill));
+            SCOPED_TRACE(std::format("hasSpill:{}", hasSpill));
             auto planStats = toPlanStats(task->taskStats());
             if (hasSpill) {
               // Dynamic filtering should be disabled with spilling triggered.
@@ -4194,7 +4195,7 @@ TEST_F(HashJoinTest, DISABLED_dynamicFilters) {
           .referenceQuery(
               "SELECT t.c1 + 1 FROM (SELECT * FROM t WHERE t.c0 < 200) t RIGHT JOIN u ON t.c0 = u.c0")
           .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
-            SCOPED_TRACE(fmt::format("hasSpill:{}", hasSpill));
+            SCOPED_TRACE(std::format("hasSpill:{}", hasSpill));
             auto planStats = toPlanStats(task->taskStats());
             if (hasSpill) {
               // Dynamic filtering should be disabled with spilling triggered.
@@ -4481,7 +4482,7 @@ TEST_F(HashJoinTest, DISABLED_dynamicFiltersWithSkippedSplits) {
           .referenceQuery(
               "SELECT t.c0, t.c1 + 1, t.c1 + u.c1 FROM t, u WHERE t.c0 = u.c0 AND t.c2 > 0")
           .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
-            SCOPED_TRACE(fmt::format("hasSpill:{}", hasSpill));
+            SCOPED_TRACE(std::format("hasSpill:{}", hasSpill));
             if (hasSpill) {
               // Dynamic filtering should be disabled with spilling triggered.
               ASSERT_EQ(0, getFiltersProduced(task, 1).sum);
@@ -4523,7 +4524,7 @@ TEST_F(HashJoinTest, DISABLED_dynamicFiltersWithSkippedSplits) {
           .referenceQuery(
               "SELECT t.c0, t.c1 + 1 FROM t WHERE t.c0 IN (SELECT c0 FROM u) AND t.c2 > 0")
           .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
-            SCOPED_TRACE(fmt::format("hasSpill:{}", hasSpill));
+            SCOPED_TRACE(std::format("hasSpill:{}", hasSpill));
             if (hasSpill) {
               // Dynamic filtering should be disabled with spilling triggered.
               ASSERT_EQ(0, getFiltersProduced(task, 1).sum);
@@ -4566,7 +4567,7 @@ TEST_F(HashJoinTest, DISABLED_dynamicFiltersWithSkippedSplits) {
           .referenceQuery(
               "SELECT u.c0, u.c1 + 1 FROM u WHERE u.c0 IN (SELECT c0 FROM t WHERE t.c2 > 0)")
           .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
-            SCOPED_TRACE(fmt::format("hasSpill:{}", hasSpill));
+            SCOPED_TRACE(std::format("hasSpill:{}", hasSpill));
             if (hasSpill) {
               // Dynamic filtering should be disabled with spilling triggered.
               ASSERT_EQ(0, getFiltersProduced(task, 1).sum);
@@ -4894,7 +4895,7 @@ TEST_F(HashJoinTest, smallOutputBatchSize) {
 TEST_F(HashJoinTest, DISABLED_spillFileSize) {
   const std::vector<uint64_t> maxSpillFileSizes({0, 1, 1'000'000'000});
   for (const auto spillFileSize : maxSpillFileSizes) {
-    SCOPED_TRACE(fmt::format("spillFileSize: {}", spillFileSize));
+    SCOPED_TRACE(std::format("spillFileSize: {}", spillFileSize));
     HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .numDrivers(numDrivers_)
         .keyTypes({BIGINT()})
@@ -5120,7 +5121,7 @@ TEST_F(HashJoinTest, DISABLED_probeMemoryLimitOnBuildProjection) {
     std::vector<std::string> outputLayout;
     outputLayout.push_back("c0");
     for (int32_t i = 0; i < testParam.varSizeColumns.size(); i++) {
-      outputLayout.push_back(fmt::format("u_c{}", testParam.varSizeColumns[i]));
+      outputLayout.push_back(std::format("u_c{}", testParam.varSizeColumns[i]));
     }
     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
     auto plan = PlanBuilder(planNodeIdGenerator)
@@ -5175,7 +5176,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, reclaimDuringInputProcessing) {
     bool expectedReclaimable;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "triggerCondition {}, spillEnabled {}, expectedReclaimable {}",
           triggerCondition,
           spillEnabled,
@@ -5468,7 +5469,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, reclaimDuringAllocation) {
 
   const std::vector<bool> enableSpillings = {false, true};
   for (const auto enableSpilling : enableSpillings) {
-    SCOPED_TRACE(fmt::format("enableSpilling {}", enableSpilling));
+    SCOPED_TRACE(std::format("enableSpilling {}", enableSpilling));
 
     auto tempDirectory = exec::test::TempDirectoryPath::create();
     auto queryPool = memory::memoryManager()->addRootPool("", kMaxBytes);
@@ -5599,7 +5600,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, reclaimDuringOutputProcessing) {
 
   const std::vector<bool> enableSpillings = {false, true};
   for (const auto enableSpilling : enableSpillings) {
-    SCOPED_TRACE(fmt::format("enableSpilling {}", enableSpilling));
+    SCOPED_TRACE(std::format("enableSpilling {}", enableSpilling));
     auto tempDirectory = exec::test::TempDirectoryPath::create();
     auto queryPool = memory::memoryManager()->addRootPool(
         "", kMaxBytes, memory::MemoryReclaimer::create());
@@ -5863,7 +5864,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, hashBuildAbortDuringOutputProcessing) {
     int numDrivers;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "abortFromRootMemoryPool {} numDrivers {}",
           abortFromRootMemoryPool,
           numDrivers);
@@ -5939,7 +5940,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, hashBuildAbortDuringInputProcessing) {
     int numDrivers;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "abortFromRootMemoryPool {} numDrivers {}",
           abortFromRootMemoryPool,
           numDrivers);
@@ -6016,7 +6017,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, hashBuildAbortDuringAllocation) {
     int numDrivers;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "abortFromRootMemoryPool {} numDrivers {}",
           abortFromRootMemoryPool,
           numDrivers);
@@ -6094,7 +6095,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, hashProbeAbortDuringInputProcessing) {
     int numDrivers;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "abortFromRootMemoryPool {} numDrivers {}",
           abortFromRootMemoryPool,
           numDrivers);
@@ -6189,7 +6190,7 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
         .numDrivers(1)
         .config(
             core::QueryConfig::kPreferredOutputBatchRows, std::to_string(10))
-        .referenceQuery(fmt::format(
+        .referenceQuery(std::format(
             "SELECT t_k1, u_k1 from t left join u on t_k1 = u_k1 and {}",
             filter))
         .run();
@@ -6240,7 +6241,7 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatchMultipleBuildMatches) {
         .numDrivers(1)
         .config(
             core::QueryConfig::kPreferredOutputBatchRows, std::to_string(10))
-        .referenceQuery(fmt::format(
+        .referenceQuery(std::format(
             "SELECT t_k1, u_k1 from t left join u on t_k1 = u_k1 and {}",
             filter))
         .run();
@@ -6327,7 +6328,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, minSpillableMemoryReservation) {
                   .planNode();
 
   for (int32_t minSpillableReservationPct : {5, 50, 100}) {
-    SCOPED_TRACE(fmt::format(
+    SCOPED_TRACE(std::format(
         "minSpillableReservationPct: {}", minSpillableReservationPct));
 
     SCOPED_TESTVALUE_SET(
@@ -6474,7 +6475,7 @@ TEST_F(HashJoinTest, DISABLED_maxSpillBytes) {
     int32_t maxSpilledBytes;
     bool expectedExceedLimit;
     std::string debugString() const {
-      return fmt::format("maxSpilledBytes {}", maxSpilledBytes);
+      return std::format("maxSpilledBytes {}", maxSpilledBytes);
     }
   } testSettings[] = {{1 << 30, false}, {16 << 20, true}, {0, false}};
 
@@ -6531,7 +6532,7 @@ TEST_F(HashJoinTest, DISABLED_onlyHashBuildMaxSpillBytes) {
     int32_t maxSpilledBytes;
     bool expectedExceedLimit;
     std::string debugString() const {
-      return fmt::format("maxSpilledBytes {}", maxSpilledBytes);
+      return std::format("maxSpilledBytes {}", maxSpilledBytes);
     }
   } testSettings[] = {{1 << 30, false}, {16 << 20, true}, {0, false}};
 
@@ -7176,7 +7177,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, taskWaitTimeout) {
       runHashJoinTask(vectors, nullptr, false, numDrivers, pool(), false).data;
 
   for (uint64_t timeoutMs : {1'000, 30'000}) {
-    SCOPED_TRACE(fmt::format("timeout {}", succinctMillis(timeoutMs)));
+    SCOPED_TRACE(std::format("timeout {}", succinctMillis(timeoutMs)));
     auto memoryManager = createMemoryManager(512 << 20, 0, timeoutMs);
     auto queryCtx =
         newQueryCtx(memoryManager.get(), executor_.get(), queryMemoryCapacity);
@@ -7258,7 +7259,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, hashProbeSpill) {
     int probeOutputIndex;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "triggerBuildSpill: {}, afterNoMoreInput: {}, probeOutputIndex: {}",
           triggerBuildSpill,
           afterNoMoreInput,
@@ -7537,7 +7538,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, hashProbeSpillWhenOneOfProbeFinish) {
 DEBUG_ONLY_TEST_F(HashJoinTest, hashProbeSpillExceedLimit) {
   // If 'buildTriggerSpill' is true, then spilling is triggered by hash build.
   for (const bool buildTriggerSpill : {false, true}) {
-    SCOPED_TRACE(fmt::format("buildTriggerSpill {}", buildTriggerSpill));
+    SCOPED_TRACE(std::format("buildTriggerSpill {}", buildTriggerSpill));
 
     SCOPED_TESTVALUE_SET(
         "facebook::velox::common::memory::MemoryPoolImpl::maybeReserve",

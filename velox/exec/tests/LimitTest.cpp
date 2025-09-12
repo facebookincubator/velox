@@ -48,7 +48,7 @@ TEST_F(LimitTest, basic) {
   int64_t limit = (int64_t)(std::numeric_limits<int32_t>::max()) + 1000000;
   int64_t offset = (int64_t)(std::numeric_limits<int32_t>::max()) + 1000;
   assertQuery(
-      makePlan(0, limit), fmt::format("SELECT * FROM tmp LIMIT {}", limit));
+      makePlan(0, limit), std::format("SELECT * FROM tmp LIMIT {}", limit));
   assertQuery(makePlan(0, 1'234), "SELECT * FROM tmp LIMIT 1234");
 
   assertQuery(makePlan(17, 10), "SELECT * FROM tmp OFFSET 17 LIMIT 10");
@@ -56,11 +56,11 @@ TEST_F(LimitTest, basic) {
   assertQuery(makePlan(17, 2'000), "SELECT * FROM tmp OFFSET 17 LIMIT 2000");
   assertQuery(
       makePlan(offset, limit),
-      fmt::format("SELECT * FROM tmp OFFSET {} LIMIT {}", offset, limit));
+      std::format("SELECT * FROM tmp OFFSET {} LIMIT {}", offset, limit));
 
   assertQuery(
       makePlan(offset, 2000),
-      fmt::format("SELECT * FROM tmp OFFSET {} LIMIT 2000", offset));
+      std::format("SELECT * FROM tmp OFFSET {} LIMIT 2000", offset));
 
   assertQuery(makePlan(1'000, 145), "SELECT * FROM tmp OFFSET 1000 LIMIT 145");
   assertQuery(
@@ -116,7 +116,7 @@ TEST_F(LimitTest, partialLimitEagerFlush) {
   std::vector<RowVectorPtr> batches(
       10, makeRowVector({makeFlatVector(std::vector<int64_t>(1, 0))}));
   auto test = [&](bool projectInBetween) {
-    SCOPED_TRACE(fmt::format("projectInBetween={}", projectInBetween));
+    SCOPED_TRACE(std::format("projectInBetween={}", projectInBetween));
     CursorParameters params;
     auto builder = PlanBuilder().values(batches).limit(0, 10, true);
     if (projectInBetween) {
@@ -169,7 +169,7 @@ TEST_F(LimitTest, barrier) {
     int numExpectedOutputBatches;
 
     std::string toString() const {
-      return fmt::format(
+      return std::format(
           "barrierExecution {}, offset: {}, limit: {}, numExpectedBarriers: {}, numExpectedOutputRows: {}, numExpectedFinishedSplits: {}, numExpectedOutputBatches: {}",
           barrierExecution,
           offset,
@@ -315,7 +315,7 @@ TEST_F(LimitTest, barrier) {
                     .splits(makeHiveConnectorSplits(tempFiles))
                     .serialExecution(true)
                     .barrierExecution(testData.barrierExecution)
-                    .assertResults(fmt::format(
+                    .assertResults(std::format(
                         "SELECT * FROM tmp LIMIT {} OFFSET {}",
                         testData.limit,
                         testData.offset));

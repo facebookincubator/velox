@@ -28,7 +28,6 @@ velox_link_libraries(
     velox_type_fbhive
     velox_vector
     Folly::folly
-    fmt::fmt
 )
 
 add_subdirectory(common)

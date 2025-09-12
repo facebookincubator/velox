@@ -111,7 +111,7 @@ class S3MultipleEndpoints : public S3Test, public ::test::VectorTestBase {
       std::string outputDirectory,
       std::string connectorId) {
     auto writeFileName = tableWriteInfo[0]["writeFileName"].asString();
-    auto filePath = fmt::format("{}{}", outputDirectory, writeFileName);
+    auto filePath = std::format("{}{}", outputDirectory, writeFileName);
     const int64_t fileSize = tableWriteInfo[0]["fileSize"].asInt();
 
     return HiveConnectorSplitBuilder(filePath)

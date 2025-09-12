@@ -247,7 +247,7 @@ void buildScanSplitFromTableWriteResult(
     auto fileName = fragment["fileWriteInfos"][0]["writeFileName"].asString();
     auto hiveSplit = std::make_shared<connector::hive::HiveConnectorSplit>(
         TableEvolutionFuzzer::connectorId(),
-        fmt::format("{}/{}", fragment["writePath"].asString(), fileName),
+        std::format("{}/{}", fragment["writePath"].asString(), fileName),
         fileFormat);
     if (!tableBucket.has_value()) {
       splits.emplace_back(std::move(hiveSplit));
@@ -645,7 +645,7 @@ int TableEvolutionFuzzer::Setup::bucketCount() const {
 }
 
 std::string TableEvolutionFuzzer::makeNewName() {
-  return fmt::format("name_{}", ++sequenceNumber_);
+  return std::format("name_{}", ++sequenceNumber_);
 }
 
 TypePtr TableEvolutionFuzzer::makeNewType(int maxDepth) {
@@ -992,7 +992,7 @@ void TableEvolutionFuzzer::createWriteTasks(
     for (auto& child : data->children()) {
       BaseVector::flattenVector(child);
     }
-    auto actualDir = fmt::format("{}/actual_{}", tableOutputRootDirPath, i);
+    auto actualDir = std::format("{}/actual_{}", tableOutputRootDirPath, i);
     VELOX_CHECK(std::filesystem::create_directory(actualDir));
     writeTasks[2 * i] = makeWriteTask(
         testSetups[i], data, actualDir, bucketColumnIndices, rng_, true);
@@ -1001,7 +1001,7 @@ void TableEvolutionFuzzer::createWriteTasks(
       finalExpectedData = std::move(data);
       continue;
     }
-    auto expectedDir = fmt::format("{}/expected_{}", tableOutputRootDirPath, i);
+    auto expectedDir = std::format("{}/expected_{}", tableOutputRootDirPath, i);
     VELOX_CHECK(std::filesystem::create_directory(expectedDir));
     auto expectedData = std::static_pointer_cast<RowVector>(
         liftToType(data, testSetups.back().schema));

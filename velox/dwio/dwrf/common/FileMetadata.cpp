@@ -102,7 +102,7 @@ TypeKind TypeWrapper::kind() const {
     }
     case proto::orc::Type_Kind_CHAR:
     case proto::orc::Type_Kind_TIMESTAMP_INSTANT:
-      VELOX_FAIL(fmt::format(
+      VELOX_FAIL(std::format(
           "{} not supported yet.",
           proto::orc::Type_Kind_Name(orcPtr()->kind())));
     default:

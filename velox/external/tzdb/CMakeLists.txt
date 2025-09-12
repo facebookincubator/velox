@@ -18,4 +18,4 @@ velox_link_libraries(
   velox_external_tzdb
   velox_external_date
   Folly::folly
-  fmt::fmt)
+)

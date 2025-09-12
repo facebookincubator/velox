@@ -87,7 +87,7 @@ TEST_F(SimpleComparisonMatcherTest, basic) {
                          std::optional<bool> lessThan) {
     SCOPED_TRACE(expr);
     auto parsedExpr = parseExpression(
-        fmt::format("test_array_sort(a, (x, y) -> {})", expr), inputType);
+        std::format("test_array_sort(a, (x, y) -> {})", expr), inputType);
 
     auto lambdaExpr = std::dynamic_pointer_cast<const core::LambdaTypedExpr>(
         parsedExpr->inputs()[1]);

@@ -173,11 +173,11 @@ TEST_F(CountAggregationTest, distinct) {
     auto plan =
         PlanBuilder()
             .values({data})
-            .singleAggregation({}, {fmt::format("count(distinct {})", input)})
+            .singleAggregation({}, {std::format("count(distinct {})", input)})
             .planNode();
     AssertQueryBuilder(plan, duckDbQueryRunner_)
         .assertResults(
-            fmt::format("SELECT count(distinct {}) FROM tmp", input));
+            std::format("SELECT count(distinct {}) FROM tmp", input));
   };
 
   testGlobal("c1");
@@ -210,10 +210,10 @@ TEST_F(CountAggregationTest, distinct) {
     auto plan = PlanBuilder()
                     .values({data})
                     .singleAggregation(
-                        {"c0"}, {fmt::format("count(distinct {})", input)})
+                        {"c0"}, {std::format("count(distinct {})", input)})
                     .planNode();
     AssertQueryBuilder(plan, duckDbQueryRunner_)
-        .assertResults(fmt::format(
+        .assertResults(std::format(
             "SELECT c0, count(distinct {}) FROM tmp GROUP BY 1", input));
   };
 
@@ -278,7 +278,7 @@ void testGlobalAggregation(
   auto globalAggPlan =
       PlanBuilder()
           .values({input})
-          .singleAggregation({}, {fmt::format("count(distinct {})", col)})
+          .singleAggregation({}, {std::format("count(distinct {})", col)})
           .planNode();
   AssertQueryBuilder(globalAggPlan).assertResults(expected);
 }
@@ -291,7 +291,7 @@ void testSingleAggregation(
   auto groupByPlan =
       PlanBuilder()
           .values({input})
-          .singleAggregation(keys, {fmt::format("count(distinct {})", col)})
+          .singleAggregation(keys, {std::format("count(distinct {})", col)})
           .planNode();
   AssertQueryBuilder(groupByPlan).assertResults(expected);
 }

@@ -92,7 +92,7 @@ TEST_F(PlanNodeTest, sortOrder) {
     int expectedEqual;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "order1 {} order2 {} expectedEqual {}",
           order1.toString(),
           order2.toString(),

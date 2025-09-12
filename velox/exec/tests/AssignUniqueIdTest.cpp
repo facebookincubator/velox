@@ -202,7 +202,7 @@ TEST_F(AssignUniqueIdTest, barrier) {
                   .planNode();
 
   for (const auto barrierExecution : {false, true}) {
-    SCOPED_TRACE(fmt::format("barrierExecution {}", barrierExecution));
+    SCOPED_TRACE(std::format("barrierExecution {}", barrierExecution));
 
     std::shared_ptr<Task> task;
     auto result = AssertQueryBuilder(plan)

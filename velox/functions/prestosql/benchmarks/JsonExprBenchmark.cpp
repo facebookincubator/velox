@@ -322,7 +322,7 @@ class JsonBenchmark : public velox::functions::test::FunctionBenchmarkBase {
 
     auto rowVector = vectorMaker_.rowVector({jsonVector});
     auto exprSet =
-        compileExpression(fmt::format("{}(c0)", fnName), rowVector->type());
+        compileExpression(std::format("{}(c0)", fnName), rowVector->type());
     suspender.dismiss();
     doRun(iter, exprSet, rowVector);
   }
@@ -341,7 +341,7 @@ class JsonBenchmark : public velox::functions::test::FunctionBenchmarkBase {
 
     auto rowVector = vectorMaker_.rowVector({jsonVector, pathVector});
     auto exprSet =
-        compileExpression(fmt::format("{}(c0, c1)", fnName), rowVector->type());
+        compileExpression(std::format("{}(c0, c1)", fnName), rowVector->type());
     suspender.dismiss();
     doRun(iter, exprSet, rowVector);
   }
@@ -358,7 +358,7 @@ class JsonBenchmark : public velox::functions::test::FunctionBenchmarkBase {
 
     auto rowVector = vectorMaker_.rowVector({jsonVector, boolVector});
     auto exprSet =
-        compileExpression(fmt::format("{}(c0, c1)", fnName), rowVector->type());
+        compileExpression(std::format("{}(c0, c1)", fnName), rowVector->type());
     suspender.dismiss();
     doRun(iter, exprSet, rowVector);
   }

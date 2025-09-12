@@ -28,12 +28,12 @@ TEST(WriterFuzzerUtilTest, listFolders) {
   // Directory layout:
   // First layer:   dir1/   dir2/      dir3/    a
   // Second layer:  b       dir2_1/
-  const auto dir1 = fmt::format("{}/dir1", tempFolder->getPath());
-  const auto dir2 = fmt::format("{}/dir2", tempFolder->getPath());
-  const auto dir2_1 = fmt::format("{}/dir2/dir2_1", tempFolder->getPath());
-  const auto dir3 = fmt::format("{}/dir3", tempFolder->getPath());
-  const auto a = fmt::format("{}/a", tempFolder->getPath());
-  const auto b = fmt::format("{}/dir1/b", tempFolder->getPath());
+  const auto dir1 = std::format("{}/dir1", tempFolder->getPath());
+  const auto dir2 = std::format("{}/dir2", tempFolder->getPath());
+  const auto dir2_1 = std::format("{}/dir2/dir2_1", tempFolder->getPath());
+  const auto dir3 = std::format("{}/dir3", tempFolder->getPath());
+  const auto a = std::format("{}/a", tempFolder->getPath());
+  const auto b = std::format("{}/dir1/b", tempFolder->getPath());
 
   auto localFs = filesystems::getFileSystem(a, nullptr);
   {

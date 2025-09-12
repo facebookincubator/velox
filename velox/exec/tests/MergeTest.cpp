@@ -44,7 +44,7 @@ class MergeTest : public OperatorTestBase {
     std::vector<std::string> sortOrderSqls = {
         "NULLS LAST", "NULLS FIRST", "DESC NULLS FIRST", "DESC NULLS LAST"};
     for (const auto& sortOrderSql : sortOrderSqls) {
-      const auto orderByClause = fmt::format("{} {}", key, sortOrderSql);
+      const auto orderByClause = std::format("{} {}", key, sortOrderSql);
       auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
       auto plan = PlanBuilder(planNodeIdGenerator)
                       .localMerge(
@@ -98,9 +98,9 @@ class MergeTest : public OperatorTestBase {
     for (auto i = 0; i < sortOrders.size(); ++i) {
       for (auto j = 0; j < sortOrders.size(); ++j) {
         const std::vector<std::string> orderByClauses = {
-            fmt::format("{} {}", key1, sortOrderSqls[i]),
-            fmt::format("{} {}", key2, sortOrderSqls[j])};
-        const auto orderBySql = fmt::format(
+            std::format("{} {}", key1, sortOrderSqls[i]),
+            std::format("{} {}", key2, sortOrderSqls[j])};
+        const auto orderBySql = std::format(
             "ORDER BY {}, {}", orderByClauses[0], orderByClauses[1]);
         auto planNodeIdGenerator =
             std::make_shared<core::PlanNodeIdGenerator>();
@@ -148,7 +148,7 @@ class MergeTest : public OperatorTestBase {
         "NULLS LAST", "NULLS FIRST", "DESC NULLS FIRST", "DESC NULLS LAST"};
 
     for (const auto& sortOrderSql : sortOrderSqls) {
-      const auto orderByClause = fmt::format("{} {}", key, sortOrderSql);
+      const auto orderByClause = std::format("{} {}", key, sortOrderSql);
       const auto planNodeIdGenerator =
           std::make_shared<core::PlanNodeIdGenerator>();
       const std::shared_ptr<TempDirectoryPath> spillDirectory =
@@ -204,9 +204,9 @@ class MergeTest : public OperatorTestBase {
     for (auto i = 0; i < sortOrders.size(); ++i) {
       for (auto j = 0; j < sortOrders.size(); ++j) {
         const std::vector<std::string> orderByClauses = {
-            fmt::format("{} {}", key1, sortOrderSqls[i]),
-            fmt::format("{} {}", key2, sortOrderSqls[j])};
-        const auto orderBySql = fmt::format(
+            std::format("{} {}", key1, sortOrderSqls[i]),
+            std::format("{} {}", key2, sortOrderSqls[j])};
+        const auto orderBySql = std::format(
             "ORDER BY {}, {}", orderByClauses[0], orderByClauses[1]);
         const auto planNodeIdGenerator =
             std::make_shared<core::PlanNodeIdGenerator>();
@@ -282,7 +282,7 @@ class MergeTest : public OperatorTestBase {
     createDuckDbTable(duckInputs);
     auto keyIndex = inputVectors[0][0]->type()->asRow().getChildIdx("c0");
 
-    const auto orderByClause = fmt::format("{}", "c0");
+    const auto orderByClause = std::format("{}", "c0");
     const auto planNodeIdGenerator =
         std::make_shared<core::PlanNodeIdGenerator>();
     const std::shared_ptr<TempDirectoryPath> spillDirectory =
@@ -361,7 +361,7 @@ class MergeTest : public OperatorTestBase {
     createDuckDbTable(duckInputs);
     auto keyIndex = inputVectors[0][0]->type()->asRow().getChildIdx("c0");
 
-    const auto orderByClause = fmt::format("{}", "c0");
+    const auto orderByClause = std::format("{}", "c0");
     const auto planNodeIdGenerator =
         std::make_shared<core::PlanNodeIdGenerator>();
     const std::shared_ptr<TempDirectoryPath> spillDirectory =
@@ -474,7 +474,7 @@ TEST_F(MergeTest, localMergeSpill) {
     bool hasSpillExecutor;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "numInputSources {}, numInputBatches {}, inputBatchSize {}, maxNumMergeSources {}, maxOutputBatchRows {}, maxOutputBatchBytes {}, numExpectedOutputBatches {}, hasSpillExecutor {}",
           numInputSources,
           numInputBatches,
@@ -564,7 +564,7 @@ TEST_F(MergeTest, localMergeSpillPartialEmpty) {
   createDuckDbTable(vectors);
   auto keyIndex = vectors[0]->type()->asRow().getChildIdx("c0");
 
-  const auto orderByClause = fmt::format("{}", "c0");
+  const auto orderByClause = std::format("{}", "c0");
   const auto planNodeIdGenerator =
       std::make_shared<core::PlanNodeIdGenerator>();
   const std::shared_ptr<TempDirectoryPath> spillDirectory =
@@ -623,7 +623,7 @@ DEBUG_ONLY_TEST_F(MergeTest, localMergeSmallBatch) {
   createDuckDbTable(vectors);
   auto keyIndex = vectors[0]->type()->asRow().getChildIdx("c0");
 
-  const auto orderByClause = fmt::format("{}", "c0");
+  const auto orderByClause = std::format("{}", "c0");
   const auto planNodeIdGenerator =
       std::make_shared<core::PlanNodeIdGenerator>();
   const std::shared_ptr<TempDirectoryPath> spillDirectory =
@@ -698,7 +698,7 @@ DEBUG_ONLY_TEST_F(MergeTest, localMergeAbort) {
     inputVectors.push_back(std::move(vectors));
   }
 
-  const auto orderByClause = fmt::format("{}", "c0");
+  const auto orderByClause = std::format("{}", "c0");
   const auto planNodeIdGenerator =
       std::make_shared<core::PlanNodeIdGenerator>();
   const std::shared_ptr<TempDirectoryPath> spillDirectory =
@@ -879,7 +879,7 @@ TEST_F(MergeTest, localMergeOutputSizeWithoutSpill) {
     int numExpectedOutputBatches;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "numSources {}, numInputBatches {}, inputBatchSize {}, maxOutputBatchRows {}, maxOutputBatchBytes {}, numExpectedOutputBatches {}",
           numSources,
           numInputBatches,

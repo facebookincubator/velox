@@ -131,7 +131,7 @@ class NoopArbitrator : public MemoryArbitrator {
   }
 
   std::string toString() const override {
-    return fmt::format(
+    return std::format(
         "ARBIRTATOR[{} CAPACITY[{}]]",
         kind(),
         config_.capacity == kMaxMemory ? "UNLIMITED"
@@ -355,7 +355,7 @@ MemoryArbitrator::Stats::Stats(
       numNonReclaimableAttempts(_numNonReclaimableAttempts) {}
 
 std::string MemoryArbitrator::Stats::toString() const {
-  return fmt::format(
+  return std::format(
       "numRequests {} numRunning {} numSucceded {} numAborted {} numFailures {} numNonReclaimableAttempts {} reclaimedFreeCapacity {} reclaimedUsedCapacity {} maxCapacity {} freeCapacity {} freeReservedCapacity {}",
       numRequests,
       numRunning,
@@ -454,7 +454,7 @@ std::string MemoryArbitrationContext::typeName(
     case MemoryArbitrationContext::Type::kGlobal:
       return "GLOBAL";
     default:
-      return fmt::format("UNKNOWN {}", static_cast<int>(type));
+      return std::format("UNKNOWN {}", static_cast<int>(type));
   }
 }
 

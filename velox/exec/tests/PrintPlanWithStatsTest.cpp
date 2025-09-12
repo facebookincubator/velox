@@ -240,7 +240,7 @@ TEST_F(PrintPlanWithStatsTest, partialAggregateWithTableScan) {
 
   const std::vector<int32_t> numPrefetchSplits = {0, 2};
   for (const auto& numPrefetchSplit : numPrefetchSplits) {
-    SCOPED_TRACE(fmt::format("numPrefetchSplit {}", numPrefetchSplit));
+    SCOPED_TRACE(std::format("numPrefetchSplit {}", numPrefetchSplit));
     asyncDataCache_->clear();
     auto filePath = TempFilePath::create();
     writeToFile(filePath->getPath(), vectors);

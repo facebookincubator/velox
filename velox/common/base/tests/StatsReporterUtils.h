@@ -17,6 +17,7 @@
 #pragma once
 
 #include <fmt/args.h>
+#include <fmt/format.h>
 #include <cstdint>
 #include <map>
 #include <mutex>

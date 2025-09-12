@@ -104,7 +104,7 @@ class DateTimeBenchmark : public functions::test::FunctionBenchmarkBase {
     auto data = vectorMaker_.rowVector(
         {VectorFuzzer(opts, pool()).fuzzFlat(TIMESTAMP())});
     auto exprSet =
-        compileExpression(fmt::format("{}(c0)", functionName), data->type());
+        compileExpression(std::format("{}(c0)", functionName), data->type());
     suspender.dismiss();
 
     doRun(exprSet, data);
@@ -117,7 +117,7 @@ class DateTimeBenchmark : public functions::test::FunctionBenchmarkBase {
     auto data = vectorMaker_.rowVector(
         {VectorFuzzer(opts, pool()).fuzzFlat(TIMESTAMP())});
     auto exprSet = compileExpression(
-        fmt::format("date_trunc('{}', c0)", unit), data->type());
+        std::format("date_trunc('{}', c0)", unit), data->type());
     suspender.dismiss();
 
     doRun(exprSet, data);

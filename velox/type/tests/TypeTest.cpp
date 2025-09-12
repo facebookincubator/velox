@@ -364,12 +364,12 @@ TEST(TypeTest, dateFormat) {
     return DATE()->toString(DATE()->toDays(dateStr));
   };
 
-  EXPECT_EQ(fmt::format("{}", parseDate("2015-12-24")), "2015-12-24");
-  EXPECT_EQ(fmt::format("{}", parseDate("1970-01-01")), "1970-01-01");
-  EXPECT_EQ(fmt::format("{}", parseDate("2000-03-10")), "2000-03-10");
-  EXPECT_EQ(fmt::format("{}", parseDate("1945-05-20")), "1945-05-20");
-  EXPECT_EQ(fmt::format("{}", parseDate("2135-11-09")), "2135-11-09");
-  EXPECT_EQ(fmt::format("{}", parseDate("1812-04-15")), "1812-04-15");
+  EXPECT_EQ(std::format("{}", parseDate("2015-12-24")), "2015-12-24");
+  EXPECT_EQ(std::format("{}", parseDate("1970-01-01")), "1970-01-01");
+  EXPECT_EQ(std::format("{}", parseDate("2000-03-10")), "2000-03-10");
+  EXPECT_EQ(std::format("{}", parseDate("1945-05-20")), "1945-05-20");
+  EXPECT_EQ(std::format("{}", parseDate("2135-11-09")), "2135-11-09");
+  EXPECT_EQ(std::format("{}", parseDate("1812-04-15")), "1812-04-15");
 }
 
 TEST(TypeTest, map) {
@@ -492,7 +492,7 @@ TEST(TypeTest, wideRow) {
   std::vector<std::string> names;
   names.reserve(1'000);
   for (auto i = 0; i < 1'000; ++i) {
-    names.push_back(fmt::format("c{}", i));
+    names.push_back(std::format("c{}", i));
   }
 
   auto rowType = ROW(std::move(names), BIGINT());
@@ -507,7 +507,7 @@ TEST(TypeTest, serdeCache) {
   std::vector<std::string> names;
   names.reserve(100);
   for (auto i = 0; i < 100; ++i) {
-    names.push_back(fmt::format("c{}", i));
+    names.push_back(std::format("c{}", i));
   }
   std::vector<TypePtr> types(100, REAL());
   auto rowType = ROW(std::move(names), std::move(types));
@@ -571,7 +571,7 @@ TEST(TypeTest, rowParametersMultiThreaded) {
   std::vector<std::string> names;
   std::vector<TypePtr> types;
   for (int i = 0; i < 20'000; ++i) {
-    auto name = fmt::format("c{}", i);
+    auto name = std::format("c{}", i);
     names.push_back(name);
     types.push_back(ROW({name}, {BIGINT()}));
   }
@@ -598,7 +598,7 @@ TEST(TypeTest, rowHashKindMultiThreaded) {
   std::vector<std::string> names;
   std::vector<TypePtr> types;
   for (int i = 0; i < 20'000; ++i) {
-    auto name = fmt::format("c{}", i);
+    auto name = std::format("c{}", i);
     names.push_back(name);
     types.push_back(ROW({name}, {BIGINT()}));
   }

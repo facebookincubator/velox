@@ -484,7 +484,7 @@ class RowContainerTest : public exec::test::RowContainerTestBase {
       const VectorPtr& expected,
       std::optional<CompareFlags> flags) {
     // If no flags provided then it must be the default of {true, true}.
-    SCOPED_TRACE(fmt::format(
+    SCOPED_TRACE(std::format(
         "{}, ascending = {}, nullsFirst = {}",
         type->toString(),
         flags.has_value() ? flags.value().ascending : true,
@@ -572,7 +572,7 @@ class RowContainerTest : public exec::test::RowContainerTestBase {
           expected[index],
           rowContainer->equals<canHandleNulls>(
               row, rowContainer->columnAt(0), rhsDecoded, index))
-          << fmt::format(
+          << std::format(
                  "Mismatch at index {} with canHandleNulls {}",
                  index,
                  canHandleNulls);
@@ -922,7 +922,7 @@ void makeLargeString(int32_t approxSize, std::string& string) {
   while (string.size() < string.capacity() - 20) {
     auto size = string.size();
     auto number =
-        fmt::format("{}", (size + 1 + approxSize) * 0xc6a4a7935bd1e995L);
+        std::format("{}", (size + 1 + approxSize) * 0xc6a4a7935bd1e995L);
     string.resize(size + number.size());
     memcpy(&string[size], &number[0], number.size());
   }
@@ -1477,7 +1477,7 @@ TEST_F(RowContainerTest, estimateRowSize) {
       vectorMaker_.flatVector<int64_t>(numRows, [](auto row) { return row; });
   std::string str;
   auto dependent = vectorMaker_.flatVector<StringView>(numRows, [&](auto row) {
-    str = fmt::format("string - {}", row);
+    str = std::format("string - {}", row);
     return StringView(str);
   });
   SelectivityVector allRows(numRows);
@@ -2045,7 +2045,7 @@ TEST_F(RowContainerTest, extractSerializedRow) {
       pool());
 
   for (auto i = 0; i < 100; ++i) {
-    SCOPED_TRACE(fmt::format("Iteration #: {}", i));
+    SCOPED_TRACE(std::format("Iteration #: {}", i));
 
     auto rowType = fuzzer.randRowType();
     auto data = fuzzer.fuzzInputRow(rowType);
@@ -2241,7 +2241,7 @@ TEST_F(RowContainerTest, store) {
           kNumRows, [](auto row) { return row % 5; }, nullEvery(6)),
       makeFlatVector<std::string>(
           kNumRows,
-          [](auto row) { return fmt::format("abcdefg123_{}", row); },
+          [](auto row) { return std::format("abcdefg123_{}", row); },
           nullEvery(7)),
       makeFlatVector<int64_t>(
           kNumRows, [](auto row) { return row; }, nullEvery(8)),
@@ -2255,7 +2255,7 @@ TEST_F(RowContainerTest, store) {
   auto rowVectorNoNulls = makeRowVector({
       makeFlatVector<int64_t>(kNumRows, [](auto row) { return row % 5; }),
       makeFlatVector<std::string>(
-          kNumRows, [](auto row) { return fmt::format("abcdefg12_{}", row); }),
+          kNumRows, [](auto row) { return std::format("abcdefg12_{}", row); }),
       makeFlatVector<int64_t>(kNumRows, [](auto row) { return row; }),
       makeArrayVector<int64_t>(
           kNumRows,
@@ -2660,7 +2660,7 @@ TEST_F(RowContainerTest, storeAndCollectColumnStats) {
           kNumRows, [](auto row) { return row % 5; }, nullEvery(7)),
       makeFlatVector<std::string>(
           kNumRows,
-          [](auto row) { return fmt::format("abcdefg123_{}", row); },
+          [](auto row) { return std::format("abcdefg123_{}", row); },
           nullEvery(7)),
   });
 

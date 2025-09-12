@@ -34,7 +34,7 @@ class ArrayNGramsTest : public test::FunctionBaseTest {
         {inputArray});
     auto input = makeNullableArrayVector<T>(inputVec);
     auto result = evaluate(
-        fmt::format("ngrams(c0, {}::INTEGER)", n), makeRowVector({input}));
+        std::format("ngrams(c0, {}::INTEGER)", n), makeRowVector({input}));
 
     auto expected = makeNullableNestedArrayVector<T>({expectedOutput});
     assertEqualVectors(expected, result);

@@ -27,7 +27,7 @@ class MapMatchTest : public functions::test::LambdaParameterizedBaseTest {
       const std::string& lambda,
       const std::vector<std::optional<bool>>& expected) {
     const std::string expr =
-        fmt::format("{}(c0, x -> ({}))", functionName, lambda);
+        std::format("{}(c0, x -> ({}))", functionName, lambda);
 
     SCOPED_TRACE(expr);
     auto result = evaluateParameterized(expr, makeRowVector({input}));

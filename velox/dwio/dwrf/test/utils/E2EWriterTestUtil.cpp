@@ -136,7 +136,7 @@ namespace facebook::velox::dwrf {
       }
     }
   }
-  LOG(INFO) << fmt::format(
+  LOG(INFO) << std::format(
       "dict encoding distribution: {}/{}",
       dictEncodingCount,
       totalEncodingCount);

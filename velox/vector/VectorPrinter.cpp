@@ -48,7 +48,7 @@ class VectorPrinterBase {
 
   std::string summarize(vector_size_t index) const {
     if (decoded_.isNullAt(index)) {
-      return fmt::format("{} <null>", decoded_.base()->type()->toString());
+      return std::format("{} <null>", decoded_.base()->type()->toString());
     }
 
     return summarizeNonNull(index);
@@ -101,7 +101,7 @@ class PrimitiveVectorPrinter : public VectorPrinterBase {
     auto* base = decoded_.base();
     if (base->typeKind() == TypeKind::VARCHAR ||
         base->typeKind() == TypeKind::VARBINARY) {
-      return fmt::format(
+      return std::format(
           "{} size: {}",
           base->type()->toString(),
           decoded_.valueAt<StringView>(index).size());
@@ -152,7 +152,7 @@ class ArrayVectorPrinter : public VectorPrinterBase {
   std::string summarizeNonNull(vector_size_t index) const override {
     auto* base = decoded_.base();
     auto baseIndex = decoded_.index(index);
-    return fmt::format(
+    return std::format(
         "{} size: {}",
         base->type()->toString(),
         base->as<ArrayVector>()->sizeAt(baseIndex));
@@ -213,7 +213,7 @@ class MapVectorPrinter : public VectorPrinterBase {
   std::string summarizeNonNull(vector_size_t index) const override {
     auto* base = decoded_.base();
     auto baseIndex = decoded_.index(index);
-    return fmt::format(
+    return std::format(
         "{} size: {}",
         base->type()->toString(),
         base->as<MapVector>()->sizeAt(baseIndex));
@@ -429,7 +429,7 @@ class VectorVisitor {
 
     ctx.parentNodeId = ctx.parentNodeId.empty()
         ? std::to_string(ctx.nodeId)
-        : fmt::format("{}.{}", parentNodeId, ctx.nodeId);
+        : std::format("{}.{}", parentNodeId, ctx.nodeId);
 
     if (ctx.skipTopSummary) {
       ctx.skipTopSummary = false;

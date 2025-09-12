@@ -15,9 +15,9 @@
  */
 
 #include <cuda_runtime.h> // @manual
-#include <fmt/format.h>
 #include <gflags/gflags.h>
 #include <gtest/gtest.h>
+#include <format>
 
 #include "dwio/nimble/encodings/EncodingLayout.h"
 #include "dwio/nimble/encodings/EncodingLayoutCapture.h"
@@ -84,7 +84,7 @@ class NimbleReaderTest : public ::testing::Test,
 void compareEncodingTree(
     NimbleEncoding& encoding,
     EncodingLayout const& layout) {
-  SCOPED_TRACE(fmt::format(
+  SCOPED_TRACE(std::format(
       "Encoding: {}, #children: {}",
       toString(layout.encodingType()),
       encoding.childrenCount()));
@@ -363,7 +363,7 @@ TEST_F(NimbleReaderTest, loadMultiChunks) {
 
   std::vector<RowVectorPtr> chunks{chunk0, chunk1, chunk2};
   for (int i = 0; i < 3; i++) {
-    SCOPED_TRACE(fmt::format("i: {}", i));
+    SCOPED_TRACE(std::format("i: {}", i));
     ASSERT_TRUE(stream.hasNext());
     auto chunk = stream.nextChunk();
     auto encoding = NimbleChunk::parseEncodingFromChunk(chunk.chunkData());

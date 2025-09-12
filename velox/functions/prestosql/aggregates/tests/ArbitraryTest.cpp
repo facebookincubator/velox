@@ -491,7 +491,7 @@ TEST_F(ArbitraryTest, clusteredInput) {
       }
       auto plan = builder.finalAggregation().planNode();
       for (int32_t flushRows : {0, 1}) {
-        SCOPED_TRACE(fmt::format(
+        SCOPED_TRACE(std::format(
             "mask={} batchRows={} flushRows={}", mask, batchRows, flushRows));
         AssertQueryBuilder(plan, duckDbQueryRunner_)
             .config(core::QueryConfig::kPreferredOutputBatchRows, batchRows)

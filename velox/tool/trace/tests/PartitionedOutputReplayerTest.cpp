@@ -130,7 +130,7 @@ TEST_P(PartitionedOutputReplayerTest, defaultConsumer) {
       {makeFlatVector<int32_t>(1'000, [](auto row) { return row; }),
        makeFlatVector<int32_t>(1'000, [](auto row) { return row; })});
   const auto testDir = TempDirectoryPath::create();
-  const auto traceRoot = fmt::format("{}/{}", testDir->getPath(), "traceRoot");
+  const auto traceRoot = std::format("{}/{}", testDir->getPath(), "traceRoot");
   auto originalTask = createPartitionedOutputTask(
       {input},
       {"key"},
@@ -171,7 +171,7 @@ TEST_P(PartitionedOutputReplayerTest, basic) {
     uint32_t numPartitions;
     RowVectorPtr input;
     std::string debugString() {
-      return fmt::format(
+      return std::format(
           "testName {}, numPartitions {}, input type {}",
           testName,
           numPartitions,
@@ -202,13 +202,13 @@ TEST_P(PartitionedOutputReplayerTest, basic) {
     std::string planNodeId;
     const auto testDir = TempDirectoryPath::create();
     const auto traceRoot =
-        fmt::format("{}/{}", testDir->getPath(), "traceRoot");
+        std::format("{}/{}", testDir->getPath(), "traceRoot");
     auto originalTask = createPartitionedOutputTask(
         {testParam.input},
         {"key"},
         {"key", "value"},
         traceRoot,
-        fmt::format(
+        std::format(
             "local://test-partitioned-output-replayer-basic-{}",
             testParam.testName),
         testParam.numPartitions,

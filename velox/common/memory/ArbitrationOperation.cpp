@@ -57,7 +57,7 @@ std::string ArbitrationOperation::stateName(State state) {
     case State::kFinished:
       return "finished";
     default:
-      return fmt::format("unknown state: {}", static_cast<int>(state));
+      return std::format("unknown state: {}", static_cast<int>(state));
   }
 }
 

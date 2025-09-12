@@ -35,18 +35,18 @@ class IndexedPriorityQueueBenchmark {
     for (int i = 0; i < 2 * numValues; ++i) {
       priorities_[i] = folly::Random::rand32();
     }
-    folly::addBenchmark(__FILE__, fmt::format("{}_add", name), [this] {
+    folly::addBenchmark(__FILE__, std::format("{}_add", name), [this] {
       IndexedPriorityQueue<T, true> queue;
       return add(queue);
     });
-    folly::addBenchmark(__FILE__, fmt::format("{}_update", name), [this] {
+    folly::addBenchmark(__FILE__, std::format("{}_update", name), [this] {
       IndexedPriorityQueue<T, true> queue;
       BENCHMARK_SUSPEND {
         add(queue);
       }
       return update(queue);
     });
-    folly::addBenchmark(__FILE__, fmt::format("{}_pop", name), [this] {
+    folly::addBenchmark(__FILE__, std::format("{}_pop", name), [this] {
       IndexedPriorityQueue<T, true> queue;
       BENCHMARK_SUSPEND {
         add(queue);

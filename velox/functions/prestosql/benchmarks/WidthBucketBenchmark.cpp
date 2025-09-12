@@ -84,7 +84,7 @@ class WidthBucketBenchmark : public functions::test::FunctionBenchmarkBase {
     auto rowVector = vectorMaker_.rowVector(
         {operandVector, bound1Vector, bound2Vector, bucketCountVector});
     auto exprSet = compileExpression(
-        fmt::format("{}(c0, c1, c2, c3)", functionName), rowVector->type());
+        std::format("{}(c0, c1, c2, c3)", functionName), rowVector->type());
     suspender.dismiss();
 
     doRun(exprSet, rowVector);

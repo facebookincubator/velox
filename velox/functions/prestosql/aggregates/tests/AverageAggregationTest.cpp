@@ -78,21 +78,21 @@ TEST_F(AverageAggregationTest, avgConst) {
     testAggregations(
         vectors,
         {},
-        {fmt::format("{}(c1)", functionName),
-         fmt::format("{}(c2)", functionName)},
+        {std::format("{}(c1)", functionName),
+         std::format("{}(c2)", functionName)},
         "SELECT avg(c1), avg(c2) FROM tmp");
 
     testAggregations(
         vectors,
         {"c0"},
-        {fmt::format("{}(c1)", functionName),
-         fmt::format("{}(c2)", functionName)},
+        {std::format("{}(c1)", functionName),
+         std::format("{}(c2)", functionName)},
         "SELECT c0, avg(c1), avg(c2) FROM tmp group by c0");
 
     testAggregations(
         vectors,
         {},
-        {fmt::format("{}(c0)", functionName)},
+        {std::format("{}(c0)", functionName)},
         "SELECT avg(c0) FROM tmp");
 
     testAggregations(
@@ -100,7 +100,7 @@ TEST_F(AverageAggregationTest, avgConst) {
           builder.values(vectors).project({"c0 % 2 AS c0_mod_2", "c0"});
         },
         {"c0_mod_2"},
-        {fmt::format("{}(c0)", functionName)},
+        {std::format("{}(c0)", functionName)},
         "SELECT c0 % 2, avg(c0) FROM tmp group by 1");
   };
 
@@ -129,21 +129,21 @@ TEST_F(AverageAggregationTest, avgConstNull) {
     testAggregations(
         vectors,
         {},
-        {fmt::format("{}(c1)", functionName),
-         fmt::format("{}(c2)", functionName)},
+        {std::format("{}(c1)", functionName),
+         std::format("{}(c2)", functionName)},
         "SELECT avg(c1), avg(c2) FROM tmp");
 
     testAggregations(
         vectors,
         {"c0"},
-        {fmt::format("{}(c1)", functionName),
-         fmt::format("{}(c2)", functionName)},
+        {std::format("{}(c1)", functionName),
+         std::format("{}(c2)", functionName)},
         "SELECT c0, avg(c1), avg(c2) FROM tmp group by c0");
 
     testAggregations(
         vectors,
         {},
-        {fmt::format("{}(c0)", functionName)},
+        {std::format("{}(c0)", functionName)},
         "SELECT avg(c0) FROM tmp");
   };
 
@@ -172,15 +172,15 @@ TEST_F(AverageAggregationTest, avgNulls) {
     testAggregations(
         vectors,
         {},
-        {fmt::format("{}(c1)", functionName),
-         fmt::format("{}(c2)", functionName)},
+        {std::format("{}(c1)", functionName),
+         std::format("{}(c2)", functionName)},
         "SELECT avg(c1), avg(c2) FROM tmp");
 
     testAggregations(
         vectors,
         {"c0"},
-        {fmt::format("{}(c1)", functionName),
-         fmt::format("{}(c2)", functionName)},
+        {std::format("{}(c1)", functionName),
+         std::format("{}(c2)", functionName)},
         "SELECT c0, avg(c1), avg(c2) FROM tmp group by c0");
   };
 
@@ -195,10 +195,10 @@ TEST_F(AverageAggregationTest, avg) {
 
     // global aggregation
     std::vector<std::string> aggregates = {
-        fmt::format("{}(c1)", functionName),
-        fmt::format("{}(c2)", functionName),
-        fmt::format("{}(c4)", functionName),
-        fmt::format("{}(c5)", functionName)};
+        std::format("{}(c1)", functionName),
+        std::format("{}(c2)", functionName),
+        std::format("{}(c4)", functionName),
+        std::format("{}(c5)", functionName)};
     testAggregations(
         vectors,
         {},
@@ -217,7 +217,7 @@ TEST_F(AverageAggregationTest, avg) {
         "SELECT avg(c1), avg(c2), avg(c4), avg(c5) FROM tmp");
 
     // global aggregation; no input
-    aggregates = {fmt::format("{}(c0)", functionName)};
+    aggregates = {std::format("{}(c0)", functionName)};
     testAggregations(
         [&](auto& builder) { builder.values(vectors).filter("c0 % 2 = 5"); },
         {},
@@ -233,7 +233,7 @@ TEST_F(AverageAggregationTest, avg) {
         "SELECT null");
 
     // global aggregation over filter
-    aggregates = {fmt::format("{}(c1)", functionName)};
+    aggregates = {std::format("{}(c1)", functionName)};
     testAggregations(
         [&](auto& builder) { builder.values(vectors).filter("c0 % 5 = 3"); },
         {},
@@ -250,11 +250,11 @@ TEST_F(AverageAggregationTest, avg) {
 
     // group by
     aggregates = {
-        fmt::format("{}(c1)", functionName),
-        fmt::format("{}(c2)", functionName),
-        fmt::format("{}(c3)", functionName),
-        fmt::format("{}(c4)", functionName),
-        fmt::format("{}(c5)", functionName)};
+        std::format("{}(c1)", functionName),
+        std::format("{}(c2)", functionName),
+        std::format("{}(c3)", functionName),
+        std::format("{}(c4)", functionName),
+        std::format("{}(c5)", functionName)};
     testAggregations(
         [&](auto& builder) {
           builder.values(vectors).project(
@@ -282,7 +282,7 @@ TEST_F(AverageAggregationTest, avg) {
         "avg(c4), avg(c5) FROM tmp GROUP BY 1");
 
     // group by; no input
-    aggregates = {fmt::format("{}(c1)", functionName)};
+    aggregates = {std::format("{}(c1)", functionName)};
     testAggregations(
         [&](auto& builder) {
           builder.values(vectors)
@@ -305,7 +305,7 @@ TEST_F(AverageAggregationTest, avg) {
         "");
 
     // group by over filter
-    aggregates = {fmt::format("{}(c1)", functionName)};
+    aggregates = {std::format("{}(c1)", functionName)};
     testAggregations(
         [&](auto& builder) {
           builder.values(vectors)
@@ -342,7 +342,7 @@ TEST_F(AverageAggregationTest, overflow) {
         .singleAggregation(
             singleGroup ? std::vector<std::string>{}
                         : std::vector<std::string>{"c0"},
-            {fmt::format("{}(c1)", functionName)})
+            {std::format("{}(c1)", functionName)})
         .planNode();
   };
 
@@ -355,7 +355,7 @@ TEST_F(AverageAggregationTest, overflow) {
         .partialAggregation(
             singleGroup ? std::vector<std::string>{}
                         : std::vector<std::string>{"c0"},
-            {fmt::format("{}(c1)", functionName)})
+            {std::format("{}(c1)", functionName)})
         .intermediateAggregation()
         .finalAggregation()
         .planNode();
@@ -403,7 +403,7 @@ TEST_F(AverageAggregationTest, partialResults) {
     auto plan =
         PlanBuilder()
             .values({data})
-            .partialAggregation({}, {fmt::format("{}(c0)", functionName)})
+            .partialAggregation({}, {std::format("{}(c0)", functionName)})
             .planNode();
 
     assertQuery(plan, "SELECT row(4950, 100)");
@@ -678,17 +678,17 @@ TEST_F(AverageAggregationTest, companionFunctionsWithNonFlatAndLazyInputs) {
     testAggregations(
         {input},
         {"c0"},
-        {fmt::format("{}_merge_extract_double(c1)", functionName),
-         fmt::format("{}_merge_extract_double(c2)", functionName)},
+        {std::format("{}_merge_extract_double(c1)", functionName),
+         std::format("{}_merge_extract_double(c2)", functionName)},
         {expected});
     testAggregations(
         {input},
         {"c0"},
-        {fmt::format("{}_merge(c1)", functionName),
-         fmt::format("{}_merge(c2)", functionName)},
+        {std::format("{}_merge(c1)", functionName),
+         std::format("{}_merge(c2)", functionName)},
         {"c0",
-         fmt::format("{}_extract_double(a0)", functionName),
-         fmt::format("{}_extract_double(a1)", functionName)},
+         std::format("{}_extract_double(a0)", functionName),
+         std::format("{}_extract_double(a1)", functionName)},
         {expected});
 
     // Test global aggregations.
@@ -698,16 +698,16 @@ TEST_F(AverageAggregationTest, companionFunctionsWithNonFlatAndLazyInputs) {
     testAggregations(
         {input},
         {},
-        {fmt::format("{}_merge_extract_double(c1)", functionName),
-         fmt::format("{}_merge_extract_double(c2)", functionName)},
+        {std::format("{}_merge_extract_double(c1)", functionName),
+         std::format("{}_merge_extract_double(c2)", functionName)},
         {expected});
     testAggregations(
         {input},
         {},
-        {fmt::format("{}_merge(c1)", functionName),
-         fmt::format("{}_merge(c2)", functionName)},
-        {fmt::format("{}_extract_double(a0)", functionName),
-         fmt::format("{}_extract_double(a1)", functionName)},
+        {std::format("{}_merge(c1)", functionName),
+         std::format("{}_merge(c2)", functionName)},
+        {std::format("{}_extract_double(a0)", functionName),
+         std::format("{}_extract_double(a1)", functionName)},
         {expected});
   };
 
