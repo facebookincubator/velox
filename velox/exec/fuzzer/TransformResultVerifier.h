@@ -58,7 +58,7 @@ class TransformResultVerifier : public ResultVerifier {
       const std::string& aggregateName) override {
     projections_ = groupingKeys;
     projections_.push_back(
-        std::format(std::runtime(transform_), aggregateName));
+        std::vformat(transform_, std::make_format_args(aggregateName)));
   }
 
   bool compare(const RowVectorPtr& result, const RowVectorPtr& altResult)

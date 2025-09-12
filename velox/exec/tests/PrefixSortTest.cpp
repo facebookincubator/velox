@@ -391,8 +391,8 @@ TEST_F(PrefixSortTest, optimizeSortKeysOrder) {
       return std::format(
           "inputType {}, keyChannels {}, expectedSortedKeyChannels {}",
           inputType->toString(),
-          std::join(keyChannels, ":"),
-          std::join(expectedSortedKeyChannels, ":"));
+          folly::join(":", keyChannels),
+          folly::join(":", expectedSortedKeyChannels));
     }
   } testSettings[] = {
       {ROW({BIGINT(), BIGINT()}), {0, 1}, {0, 1}},

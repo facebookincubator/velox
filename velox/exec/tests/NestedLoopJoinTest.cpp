@@ -115,17 +115,17 @@ class NestedLoopJoinTest : public HiveConnectorTestBase {
                         .values(buildVectors)
                         .localPartition({buildKeyName_})
                         .planNode(),
-                    std::format(std::runtime(joinConditionStr_), comparison),
+                    std::vformat(
+                        joinConditionStr_, std::make_format_args(comparison)),
                     outputLayout_,
                     joinType)
                 .planNode();
 
+        const auto joinTypeStr = core::JoinTypeName::toName(joinType);
         assertQuery(
             params,
-            std::format(
-                std::runtime(queryStr_),
-                core::JoinTypeName::toName(joinType),
-                comparison));
+            std::vformat(
+                queryStr_, std::make_format_args(joinTypeStr, comparison)));
       }
     }
   }

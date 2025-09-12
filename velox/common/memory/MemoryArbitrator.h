@@ -269,10 +269,19 @@ class MemoryArbitrator {
   const Config config_;
 };
 
-/// Formatter for fmt.
-FOLLY_ALWAYS_INLINE std::string format_as(MemoryArbitrator::Stats stats) {
-  return stats.toString();
-}
+} // namespace facebook::velox::memory
+
+template <typename Char>
+struct std::formatter<facebook::velox::memory::MemoryArbitrator::Stats, Char>
+    : formatter<std::string_view, Char> {
+  auto format(
+      facebook::velox::memory::MemoryArbitrator::Stats s,
+      format_context& ctx) const {
+    return formatter<std::string_view, Char>::format(s.toString(), ctx);
+  }
+};
+
+namespace facebook::velox::memory {
 
 FOLLY_ALWAYS_INLINE std::ostream& operator<<(
     std::ostream& o,

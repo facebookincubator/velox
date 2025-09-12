@@ -115,7 +115,7 @@ FOLLY_ALWAYS_INLINE Status validateType(
     return Status::UserError(std::format(
         "{} only applies to {}. Input type is: {}",
         callerFunctionName,
-        std::join(getGeosTypeNames(validTypes), " or "),
+        folly::join(" or ", getGeosTypeNames(validTypes)),
         getGeosTypeToStringIdentifier().at(type)));
   }
   return Status::OK();

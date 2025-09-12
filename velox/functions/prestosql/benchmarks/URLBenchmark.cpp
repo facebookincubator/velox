@@ -211,7 +211,8 @@ class UrlBenchmark : public functions::test::FunctionBenchmarkBase {
 
     auto queryString = isParameter ? "{}(c0, c1)" : "{}(c0)";
     auto exprSet = compileExpression(
-        std::format(std::runtime(queryString), fnName), rowVector->type());
+        std::vformat(queryString, std::make_format_args(fnName)),
+        rowVector->type());
 
     suspender.dismiss();
 

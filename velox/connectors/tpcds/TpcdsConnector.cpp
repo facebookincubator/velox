@@ -96,9 +96,8 @@ RowVectorPtr TpcdsDataSource::projectOutputColumns(RowVectorPtr inputVector) {
 }
 
 void TpcdsDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
-  VELOX_CHECK_EQ(
+  VELOX_CHECK_NULL(
       currentSplit_,
-      nullptr,
       "Previous split has not been processed yet. Call next() to process the split.");
   currentSplit_ = std::dynamic_pointer_cast<tpcds::TpcdsConnectorSplit>(split);
   VELOX_CHECK(currentSplit_, "Wrong type of split for TpcdsDataSource.");

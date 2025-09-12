@@ -744,8 +744,8 @@ void WriterFuzzer::comparePartitionAndBucket(
     VELOX_CHECK(
         partitionNames == referencePartitionNames,
         "Velox and reference DB output partitions don't match. Velox: [{}], Presto: [{}]",
-        std::join(partitionNames, ", "),
-        std::join(referencePartitionNames, ", "));
+        folly::join(", ", partitionNames),
+        folly::join(", ", referencePartitionNames));
   } else if (partitionNameAndFileCount != referencedPartitionNameAndFileCount) {
     std::vector<std::string> partitionNameAndFileCountStrs;
     std::vector<std::string> referencedPartitionNameAndFileCountStrs;
@@ -765,8 +765,8 @@ void WriterFuzzer::comparePartitionAndBucket(
 
     VELOX_FAIL(
         "Velox and reference DB output partition and bucket don't match. Velox: {{{}}}, Presto: {{{}}}",
-        std::join(partitionNameAndFileCountStrs, ", "),
-        std::join(referencedPartitionNameAndFileCountStrs, ", "));
+        folly::join(", ", partitionNameAndFileCountStrs),
+        folly::join(", ", referencedPartitionNameAndFileCountStrs));
   }
 }
 

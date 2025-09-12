@@ -16,6 +16,8 @@
 #include "velox/expression/fuzzer/FuzzerToolkit.h"
 #include "velox/vector/VectorSaver.h"
 
+#include <fstream>
+
 namespace facebook::velox::fuzzer {
 
 namespace {

@@ -13,11 +13,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#pragma once
+
+#include <format>
 #include <optional>
 #include <sstream>
 #include <string>
-
-#pragma once
 
 namespace facebook::velox {
 

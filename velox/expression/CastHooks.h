@@ -28,8 +28,6 @@ enum PolicyType {
   SparkTryCastPolicy
 };
 
-std::underlying_t<PolicyType> format_as(PolicyType f);
-
 /// This class provides cast hooks to allow different behaviors of CastExpr and
 /// SparkCastExpr. The main purpose is to create customized cast implementation
 /// by taking full usage of existing cast expression.

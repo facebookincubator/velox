@@ -244,8 +244,7 @@ TEST_F(JsonExtractScalarTest, nanJson) {
 
   for (const auto& badReplacement : badReplacements) {
     std::string js = std::format(
-        std::runtime(
-            "{{\"hands_v1\": {}, \"over_occlusion_rate\": 0.0358322490205352}}"),
+        "{{\"hands_v1\": {}, \"over_occlusion_rate\": 0.0358322490205352}}",
         badReplacement);
     EXPECT_EQ(jsonExtractScalar(js, "$.over_occlusion_rate"), std::nullopt);
   }

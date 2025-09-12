@@ -16,6 +16,7 @@
 
 #include "velox/vector/VectorEncoding.h"
 
+#include <format>
 #include <stdexcept>
 
 #include <folly/container/F14Map.h>

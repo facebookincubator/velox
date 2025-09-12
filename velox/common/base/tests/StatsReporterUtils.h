@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <fmt/args.h>
+#include <fmt/format.h>
 #include <cstdint>
 #include <map>
 #include <mutex>
@@ -202,13 +204,13 @@ class TestReporter : public BaseStatsReporter {
       return;
     }
 
-    // Substitute placeholders in the key pattern with subkeys using std::format
+    // Substitute placeholders in the key pattern with subkeys using fmt::format
     std::string formattedKey;
-    std::dynamic_format_arg_store<std::format_context> store;
+    fmt::dynamic_format_arg_store<fmt::format_context> store;
     for (const auto& subkey : subkeys) {
       store.push_back(subkey);
     }
-    formattedKey = std::vformat(key, store);
+    formattedKey = fmt::vformat(key, store);
     counterMap[formattedKey] += value;
   }
 

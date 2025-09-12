@@ -283,11 +283,6 @@ static inline facebook::velox::parquet::thrift::Type::type ToThrift(
   return static_cast<facebook::velox::parquet::thrift::Type::type>(type);
 }
 
-static std::underlying_t<ConvertedType::type> format_as(
-    ConvertedType::type type) {
-  return std::underlying(type);
-}
-
 static inline facebook::velox::parquet::thrift::ConvertedType::type ToThrift(
     ConvertedType::type type) {
   // item 0 is NONE

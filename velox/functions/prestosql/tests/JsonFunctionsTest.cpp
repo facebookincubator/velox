@@ -693,8 +693,7 @@ TEST_F(JsonFunctionsTest, isJsonScalar) {
 TEST_F(JsonFunctionsTest, isJsonScalarBadJsons) {
   for (const auto& badReplacement : badReplacements_) {
     std::string js = std::format(
-        std::runtime(
-            "{{\"hands_v1\": {}, \"over_occlusion_rate\": 0.0358322490205352}}"),
+        "{{\"hands_v1\": {}, \"over_occlusion_rate\": 0.0358322490205352}}",
         badReplacement);
     EXPECT_THROW(isJsonScalar(js), VeloxUserError);
   }
@@ -722,8 +721,7 @@ TEST_F(JsonFunctionsTest, jsonArrayLength) {
 
   for (const auto& badReplacement : badReplacements_) {
     std::string js = std::format(
-        std::runtime(
-            "{{\"hands_v1\": {}, \"over_occlusion_rate\": 0.0358322490205352}}"),
+        "{{\"hands_v1\": {}, \"over_occlusion_rate\": 0.0358322490205352}}",
         badReplacement);
     EXPECT_EQ(jsonArrayLength(js), std::nullopt);
   }
@@ -781,8 +779,7 @@ TEST_F(JsonFunctionsTest, jsonArrayGet) {
   // Test it fails on bad jsons
   for (const auto& badReplacement : badReplacements_) {
     std::string js = std::format(
-        std::runtime(
-            "{{\"hands_v1\": {}, \"over_occlusion_rate\": 0.0358322490205352}}"),
+        "{{\"hands_v1\": {}, \"over_occlusion_rate\": 0.0358322490205352}}",
         badReplacement);
     EXPECT_EQ(arrayGet(js.data(), 1, JSON()), std::nullopt);
   }
@@ -996,8 +993,7 @@ TEST_F(JsonFunctionsTest, jsonArrayContainsMalformed) {
 
   for (const auto& badReplacement : badReplacements_) {
     std::string js = std::format(
-        std::runtime(
-            "{{\"hands_v1\": {}, \"over_occlusion_rate\": 0.0358322490205352}}"),
+        "{{\"hands_v1\": {}, \"over_occlusion_rate\": 0.0358322490205352}}",
         badReplacement);
     EXPECT_EQ(jsonArrayContains<std::string>(js, {""}), std::nullopt);
   }
@@ -1020,8 +1016,7 @@ TEST_F(JsonFunctionsTest, jsonSize) {
 
   for (const auto& badReplacement : badReplacements_) {
     std::string js = std::format(
-        std::runtime(
-            "{{\"hands_v1\": {}, \"over_occlusion_rate\": 0.0358322490205352}}"),
+        "{{\"hands_v1\": {}, \"over_occlusion_rate\": 0.0358322490205352}}",
         badReplacement);
     EXPECT_EQ(jsonSize(js, "$.k1"), std::nullopt);
   }

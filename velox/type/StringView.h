@@ -289,15 +289,13 @@ struct hasher<::facebook::velox::StringView> {
 
 } // namespace folly
 
-namespace fmt {
-template <>
-struct formatter<facebook::velox::StringView> : private formatter<string_view> {
-  using formatter<string_view>::parse;
+template <typename Char>
+struct std::formatter<facebook::velox::StringView, Char>
+    : private formatter<std::string_view, Char> {
+  using formatter<std::string_view, Char>::parse;
 
-  template <typename Context>
-  typename Context::iterator format(facebook::velox::StringView s, Context& ctx)
-      const {
-    return formatter<string_view>::format(string_view{s.data(), s.size()}, ctx);
+  template <typename FormatContext>
+  auto format(facebook::velox::StringView s, FormatContext& ctx) const {
+    return formatter<std::string_view>::format(std::string_view{s}, ctx);
   }
 };
-} // namespace fmt

@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <format>
 #include <functional>
 #include <map>
 #include <shared_mutex>
@@ -65,7 +66,7 @@ class ConfigBase {
                       "Invalid configuration for key '{}'. Value '{}' cannot be converted to type {}.",
                       k,
                       v,
-                      folly::demangle(typeid(T))));
+                      std::string_view{folly::demangle(typeid(T))}));
               return converted.value();
             })
         : key{_key}, defaultVal{_val}, toStr{_toStr}, toT{_toT} {}

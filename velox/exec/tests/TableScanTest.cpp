@@ -4696,7 +4696,7 @@ TEST_F(TableScanTest, filterMissingFields) {
   });
   auto test = [&](const std::vector<std::string>& subfieldFilters,
                   int expectedSize) {
-    SCOPED_TRACE(std::format("{}", std::join(subfieldFilters, " AND ")));
+    SCOPED_TRACE(folly::join(" AND ", subfieldFilters));
     auto plan = PlanBuilder()
                     .tableScan(ROW({}, {}), subfieldFilters, "", schema)
                     .planNode();
@@ -6016,7 +6016,7 @@ TEST_F(TableScanTest, textfileLarge) {
     for (int col = 0; col < kNumCols; ++col) {
       cols.push_back(generateColumnData(row, col));
     }
-    return std::format("{}\n", std::join(cols, ","));
+    return std::format("{}\n", folly::join(",", cols));
   };
 
   // Create expected result (only first row since split limit is 10 bytes)

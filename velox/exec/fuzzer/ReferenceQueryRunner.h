@@ -36,18 +36,34 @@ enum ReferenceQueryErrorCode {
   kReferenceQueryUnsupported
 };
 
-FOLLY_ALWAYS_INLINE std::string format_as(ReferenceQueryErrorCode errorCode) {
-  switch (errorCode) {
-    case ReferenceQueryErrorCode::kSuccess:
-      return "kSuccess";
-    case ReferenceQueryErrorCode::kReferenceQueryFail:
-      return "kReferenceQueryFail";
-    case ReferenceQueryErrorCode::kReferenceQueryUnsupported:
-      return "kReferenceQueryUnsupported";
-    default:
-      return "Unknown";
+} // namespace facebook::velox::exec::test
+
+template <typename Char>
+struct std::
+    formatter<facebook::velox::exec::test::ReferenceQueryErrorCode, Char>
+    : formatter<std::string_view, Char> {
+  using ReferenceQueryErrorCode =
+      facebook::velox::exec::test::ReferenceQueryErrorCode;
+
+  auto format(ReferenceQueryErrorCode errorCode, format_context& ctx) const {
+    std::string_view str = [&] {
+      switch (errorCode) {
+        case ReferenceQueryErrorCode::kSuccess:
+          return "kSuccess";
+        case ReferenceQueryErrorCode::kReferenceQueryFail:
+          return "kReferenceQueryFail";
+        case ReferenceQueryErrorCode::kReferenceQueryUnsupported:
+          return "kReferenceQueryUnsupported";
+        default:
+          return "Unknown";
+      }
+    }();
+
+    return formatter<std::string_view, Char>::format(str, ctx);
   }
-}
+};
+
+namespace facebook::velox::exec::test {
 
 /// Query runner that uses reference database, i.e. DuckDB, Presto, Spark.
 class ReferenceQueryRunner {

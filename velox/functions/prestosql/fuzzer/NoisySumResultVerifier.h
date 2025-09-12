@@ -240,7 +240,7 @@ class NoisySumResultVerifier : public ResultVerifier {
     std::string partitionBy;
     if (!partitionKeys.empty()) {
       partitionBy =
-          std::format("partition by {}", std::join(partitionKeys, ", "));
+          std::format("partition by {}", folly::join(", ", partitionKeys));
     }
 
     // Use row_number() window function to identify first occurrence of each

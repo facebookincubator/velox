@@ -32,11 +32,6 @@ using arrow::internal::checked_cast;
 
 namespace facebook::velox::parquet::arrow {
 
-std::underlying_t<LogicalType::TimeUnit::unit> format_as(
-    LogicalType::TimeUnit::unit unit) {
-  return std::underlying(unit);
-}
-
 bool IsCodecSupported(Compression::type codec) {
   switch (codec) {
     case Compression::UNCOMPRESSED:

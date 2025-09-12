@@ -16,6 +16,7 @@
 
 #include "velox/connectors/hive/HiveDataSource.h"
 
+#include <ranges>
 #include <string>
 #include <unordered_map>
 
@@ -160,9 +161,14 @@ HiveDataSource::HiveDataSource(
     }
     remainingFilterSubfields_ = remainingFilterExpr->extractSubfields();
     if (VLOG_IS_ON(1)) {
+      auto range = remainingFilterSubfields_ |
+          std::views::transform([](const auto& subfield) {
+                     return subfield.toString();
+                   });
       VLOG(1) << std::format(
           "Extracted subfields from remaining filter: [{}]",
-          std::join(remainingFilterSubfields_, ", "));
+          folly::join(
+              ", ", std::vector<std::string>(range.begin(), range.end())));
     }
     for (auto& subfield : remainingFilterSubfields_) {
       const auto& name = getColumnName(subfield);

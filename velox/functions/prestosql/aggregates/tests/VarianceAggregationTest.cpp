@@ -25,7 +25,7 @@ namespace {
 
 // Replace the given query's placeholders '{0}' with the given aggregation name.
 std::string genAggrQuery(const char* query, const char* aggrName) {
-  return std::format(std::runtime(query), aggrName);
+  return std::vformat(query, std::make_format_args(aggrName));
 }
 
 // Helper generates aggregation over column string.
