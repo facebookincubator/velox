@@ -689,7 +689,7 @@ struct StlAllocator {
   }
 
   template <class U>
-  explicit StlAllocator(const StlAllocator<U>& allocator)
+  StlAllocator(const StlAllocator<U>& allocator)
       : allocator_{allocator.allocator()} {
     VELOX_CHECK_NOT_NULL(allocator_);
   }
