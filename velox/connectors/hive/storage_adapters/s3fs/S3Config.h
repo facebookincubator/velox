@@ -76,6 +76,10 @@ class S3Config {
     kRetryMode,
     kUseProxyFromEnv,
     kCredentialsProvider,
+    KUploadPartAsync,
+    kPartUploadSize,
+    KMaxConcurrentUploadNum,
+    KUploadThreads,
     kEnd
   };
 
@@ -114,6 +118,13 @@ class S3Config {
              std::make_pair("use-proxy-from-env", "false")},
             {Keys::kCredentialsProvider,
              std::make_pair("aws-credentials-provider", std::nullopt)},
+            {Keys::KUploadPartAsync,
+             std::make_pair("upload-part-async", "false")},
+            {Keys::kPartUploadSize,
+             std::make_pair("part-upload-size", "10485760")},
+            {Keys::KMaxConcurrentUploadNum,
+             std::make_pair("max-concurrent-upload-num", "4")},
+            {Keys::KUploadThreads, std::make_pair("upload-threads", "16")},
         };
     return config;
   }
@@ -241,6 +252,26 @@ class S3Config {
 
   std::optional<std::string> credentialsProvider() const {
     return config_.find(Keys::kCredentialsProvider)->second;
+  }
+
+  bool uploadPartAsync() const {
+    auto value = config_.find(Keys::KUploadPartAsync)->second.value();
+    return folly::to<bool>(value);
+  }
+
+  int32_t partUploadSize() const {
+    auto value = config_.find(Keys::kPartUploadSize)->second.value();
+    return folly::to<uint32_t>(value);
+  }
+
+  int32_t maxConcurrentUploadNum() const {
+    auto value = config_.find(Keys::KMaxConcurrentUploadNum)->second.value();
+    return folly::to<uint32_t>(value);
+  }
+
+  int32_t uploadThreads() const {
+    auto value = config_.find(Keys::KUploadThreads)->second.value();
+    return folly::to<uint32_t>(value);
   }
 
  private:
