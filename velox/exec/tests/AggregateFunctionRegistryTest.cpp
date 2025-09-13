@@ -40,8 +40,8 @@ class AggregateFunctionRegistryTest : public testing::Test {
       const std::vector<TypePtr>& argTypes,
       const TypePtr& expectedFinalType,
       const TypePtr& expectedIntermediateType) {
-    auto [finalType, intermediateType] =
-        resolveAggregateFunction(name, argTypes);
+    auto finalType = resolveResultType(name, argTypes);
+    auto intermediateType = resolveIntermediateType(name, argTypes);
     EXPECT_EQ(*finalType, *expectedFinalType);
     EXPECT_EQ(*intermediateType, *expectedIntermediateType);
   }
@@ -67,23 +67,22 @@ TEST_F(AggregateFunctionRegistryTest, basic) {
 
 TEST_F(AggregateFunctionRegistryTest, wrongFunctionName) {
   VELOX_ASSERT_THROW(
-      resolveAggregateFunction("aggregate_func_nonexist", {BIGINT(), BIGINT()}),
+      resolveIntermediateType("aggregate_func_nonexist", {BIGINT(), BIGINT()}),
       "Aggregate function not registered: aggregate_func_nonexist");
   VELOX_ASSERT_THROW(
-      resolveAggregateFunction("aggregate_func_nonexist", {}),
+      resolveIntermediateType("aggregate_func_nonexist", {}),
       "Aggregate function not registered: aggregate_func_nonexist");
 }
 
 TEST_F(AggregateFunctionRegistryTest, wrongArgType) {
   VELOX_ASSERT_THROW(
-      resolveAggregateFunction("aggregate_func", {DOUBLE(), BIGINT()}),
+      resolveIntermediateType("aggregate_func", {DOUBLE(), BIGINT()}),
       "Aggregate function signature is not supported");
   VELOX_ASSERT_THROW(
-      resolveAggregateFunction("aggregate_func", {BIGINT()}),
+      resolveResultType("aggregate_func", {BIGINT()}),
       "Aggregate function signature is not supported");
   VELOX_ASSERT_THROW(
-      resolveAggregateFunction(
-          "aggregate_func", {BIGINT(), BIGINT(), BIGINT()}),
+      resolveResultType("aggregate_func", {BIGINT(), BIGINT(), BIGINT()}),
       "Aggregate function signature is not supported");
 }
 

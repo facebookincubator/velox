@@ -169,21 +169,35 @@ struct AggregateCompanionAdapter {
   };
 };
 
+/// In Velox, "Step" is a property of the aggregate operator, whereas in
+/// Spark, it is tied to individual aggregate functions. Spark executes
+/// aggregates using a mix of partial, intermediate, and final aggregate
+/// functions. To bridge the two systems, the planner translates Spark's
+/// aggregate modes into corresponding Velox companion functions and assigns
+/// the "single" step to Velox’s AggregationNode. These companion functions
+/// are intended for internal use within the aggregate operator and are not
+/// designed to be used as standalone functions, and their result types
+/// may not always be inferable from intermediate types. More details can be
+/// found in
+/// https://github.com/facebookincubator/velox/pull/11999#issuecomment-3274577979
+/// and https://github.com/facebookincubator/velox/issues/12830.
 class CompanionFunctionsRegistrar {
  public:
-  // Register the partial companion function for an aggregation function of
-  // `name` and `signatures`. When there is already a function of the same name,
-  // if `overwrite` is true, the registration is replaced. Otherwise, return
-  // false without overwriting the registry.
+  /// Register the partial companion function for an aggregate function of
+  /// `name` and `signatures`. When there is already a function of the same
+  /// name, if `overwrite` is true, the registration is replaced. Otherwise,
+  /// return false without overwriting the registry. This function supports
+  /// generating Spark compatible companion functions.
   static bool registerPartialFunction(
       const std::string& name,
       const std::vector<AggregateFunctionSignaturePtr>& signatures,
       const AggregateFunctionMetadata& metadata,
       bool overwrite = false);
 
-  // When there is already a function of the same name as the merge companion
-  // function, if `overwrite` is true, the registration is replaced. Otherwise,
-  // return false without overwriting the registry.
+  /// When there is already a function of the same name as the merge companion
+  /// function, if `overwrite` is true, the registration is replaced. Otherwise,
+  /// return false without overwriting the registry. This function supports
+  /// generating Spark compatible companion functions.
   static bool registerMergeFunction(
       const std::string& name,
       const std::vector<AggregateFunctionSignaturePtr>& signatures,
@@ -204,14 +218,16 @@ class CompanionFunctionsRegistrar {
       const std::vector<AggregateFunctionSignaturePtr>& signatures,
       bool overwrite = false);
 
-  // Similar to registerExtractFunction(), the result type of the original
-  // aggregation function is required to be resolvable given its intermediate
-  // type. If there are multiple signatures of the original aggregation function
-  // with the same intermediate type, register merge-extract functions with
+  /// If there are multiple signatures of the original aggregate function
+  /// with the same intermediate type, register merge-extract functions with
   // suffix of their result types in the function names for each of them. When
-  // there is already a function of the same name as the merge-extract companion
-  // function, if `overwrite` is true, the registration is replaced. Otherwise,
-  // return false without overwriting the registry.
+  /// there is already a function of the same name as the merge-extract
+  /// companion function, if `overwrite` is true, the registration is replaced.
+  /// Otherwise, return false without overwriting the registry. This function
+  /// supports generating Spark compatible companion functions only when the
+  /// return types are explicitly specified (typically in "single" or "final"
+  /// steps). It will throw an exception if return types are not provided and
+  /// cannot be resolved from the intermediate types.
   static bool registerMergeExtractFunction(
       const std::string& name,
       const std::vector<AggregateFunctionSignaturePtr>& signatures,
