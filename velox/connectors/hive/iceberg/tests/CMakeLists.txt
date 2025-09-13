@@ -37,25 +37,37 @@ if(VELOX_ENABLE_BENCHMARKS)
 endif()
 
 if(NOT VELOX_DISABLE_GOOGLETEST)
-  add_executable(velox_hive_iceberg_test IcebergReadTest.cpp IcebergSplitReaderBenchmarkTest.cpp)
+  add_library(velox_hive_iceberg_read_test_base IcebergReadTestBase.cpp)
+  target_link_libraries(
+    velox_hive_iceberg_read_test_base
+    velox_exec_test_lib
+    velox_exec
+    velox_hive_connector
+    Folly::folly
+  )
+
+  add_executable(
+    velox_hive_iceberg_test
+    IcebergReadPositionalDeleteTest.cpp
+    IcebergReadEqualityDeleteTest.cpp
+    IcebergSplitReaderBenchmarkTest.cpp
+  )
   add_test(velox_hive_iceberg_test velox_hive_iceberg_test)
 
   target_link_libraries(
     velox_hive_iceberg_test
+    velox_hive_iceberg_read_test_base
     velox_dwio_iceberg_reader_benchmark_lib
-    velox_hive_connector
     velox_hive_iceberg_splitreader
     velox_hive_partition_function
     velox_dwio_common_exception
     velox_dwio_common_test_utils
     velox_vector_test_lib
-    velox_exec
-    velox_exec_test_lib
-    Folly::folly
     Folly::follybenchmark
     GTest::gtest
     GTest::gtest_main
   )
+
   if(VELOX_ENABLE_PARQUET)
     target_link_libraries(velox_hive_iceberg_test velox_dwio_parquet_reader)
 
