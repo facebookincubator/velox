@@ -346,14 +346,6 @@ static Status GetTimestampMetadata(
 
 static constexpr char FIELD_ID_KEY[] = "PARQUET:field_id";
 
-std::shared_ptr<::arrow::KeyValueMetadata> FieldIdMetadata(int field_id) {
-  if (field_id >= 0) {
-    return ::arrow::key_value_metadata({FIELD_ID_KEY}, {ToChars(field_id)});
-  } else {
-    return nullptr;
-  }
-}
-
 int FieldIdFromMetadata(
     const std::shared_ptr<const ::arrow::KeyValueMetadata>& metadata) {
   if (!metadata) {
@@ -1221,6 +1213,14 @@ Result<bool> ApplyOriginalMetadata(
 }
 
 } // namespace
+
+std::shared_ptr<::arrow::KeyValueMetadata> FieldIdMetadata(int field_id) {
+  if (field_id >= 0) {
+    return ::arrow::key_value_metadata({FIELD_ID_KEY}, {ToChars(field_id)});
+  } else {
+    return nullptr;
+  }
+}
 
 Status FieldToNode(
     const std::shared_ptr<Field>& field,
