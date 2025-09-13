@@ -25,4 +25,9 @@ namespace facebook::velox::type {
 velox::RowTypePtr concatRowTypes(
     const std::vector<velox::RowTypePtr>& rowTypes);
 
+// Returns the common child type if 'type' is a Row where all children are
+// equivalent to each other. Returns nullptr otherwise. Empty rows return
+// nullptr as there is no child type to return.
+const velox::TypePtr isHomogeneousRow(const velox::TypePtr& type);
+
 } // namespace facebook::velox::type

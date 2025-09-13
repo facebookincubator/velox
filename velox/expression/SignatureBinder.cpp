@@ -19,6 +19,7 @@
 #include "velox/expression/SignatureBinder.h"
 #include "velox/expression/type_calculation/TypeCalculation.h"
 #include "velox/type/Type.h"
+#include "velox/type/TypeUtil.h"
 
 namespace facebook::velox::exec {
 namespace {
@@ -301,6 +302,61 @@ bool SignatureBinderBase::tryBind(
   }
 
   const auto& params = typeSignature.parameters();
+
+  // Handle homogeneous row case: row(T, ...)
+  if (typeSignature.isHomogeneousRow() && typeName == "ROW") {
+    VELOX_CHECK_EQ(
+        params.size(), 1, "Homogeneous row must have exactly one parameter");
+
+    // Actual type must be a ROW with k >= 0 children
+    const auto& actualParams = actualType->parameters();
+
+    // All children must unify to the same type variable T
+    const auto& typeParam = params[0];
+    const auto& paramBaseName = typeParam.baseName();
+
+    // First, try to bind all actual parameters to the type variable
+    std::vector<TypePtr> actualChildTypes;
+    for (const auto& actualParam : actualParams) {
+      if (actualParam.kind != TypeParameterKind::kType || !actualParam.type) {
+        // Only type parameters supported for homogeneous rows.
+        return false;
+      }
+      actualChildTypes.push_back(actualParam.type);
+    }
+
+    if (actualChildTypes.empty()) {
+      return true; // Empty row is valid
+    }
+
+    if (variables().count(paramBaseName)) {
+      // Ensure all children are equivalent; use helper.
+      auto commonType = velox::type::isHomogeneousRow(actualType);
+      if (!commonType) {
+        return false;
+      }
+
+      if (typeVariablesBindings_.count(paramBaseName)) {
+        auto existing = typeVariablesBindings_[paramBaseName];
+        if (!existing) {
+          return false;
+        }
+        return existing->equivalent(*commonType);
+      } else {
+        typeVariablesBindings_[paramBaseName] = commonType;
+        return true;
+      }
+    } else {
+      for (const auto& childType : actualChildTypes) {
+        if (!tryBind(typeParam, childType)) {
+          // TODO Allow coercions for complex types.
+          return false;
+        }
+      }
+      return true;
+    }
+  }
+
   // Type Parameters can recurse.
   if (params.size() != actualType->parameters().size()) {
     return false;

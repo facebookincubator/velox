@@ -33,4 +33,22 @@ velox::RowTypePtr concatRowTypes(
   return velox::ROW(std::move(columnNames), std::move(columnTypes));
 }
 
+const velox::TypePtr isHomogeneousRow(const velox::TypePtr& type) {
+  if (!type || type->kind() != velox::TypeKind::ROW) {
+    return nullptr;
+  }
+  auto row = velox::asRowType(type);
+  const auto& children = row->children();
+  if (children.empty()) {
+    return nullptr; // No child type to infer
+  }
+  const auto& first = children.front();
+  for (size_t i = 1; i < children.size(); ++i) {
+    if (!first->equivalent(*children[i])) {
+      return nullptr;
+    }
+  }
+  return first;
+}
+
 } // namespace facebook::velox::type
