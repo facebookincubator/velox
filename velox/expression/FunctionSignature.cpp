@@ -147,6 +147,12 @@ void validate(
     const std::vector<TypeSignature>& argumentTypes,
     const std::vector<bool>& constantArguments,
     const std::vector<TypeSignature>& additionalTypes = {}) {
+  // Disallow homogeneous row as a return type early so this error surfaces
+  // before other validation errors (e.g., unused type variables).
+  VELOX_USER_CHECK(
+      !returnType.isHomogeneousRow(),
+      "Homogeneous row cannot be used as a return type");
+
   std::unordered_set<std::string> usedVariables;
   // Validate the additional types, and collect the used variables.
   for (const auto& type : additionalTypes) {
@@ -166,11 +172,6 @@ void validate(
           "Some type variables are not used in the inputs");
     }
   }
-
-  // Disallow homogeneous row as a return type.
-  VELOX_USER_CHECK(
-      !returnType.isHomogeneousRow(),
-      "Homogeneous row cannot be used as a return type");
 
   validateBaseTypeAndCollectTypeParams(
       variables, returnType, usedVariables, true);
