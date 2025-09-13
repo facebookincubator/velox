@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 #include <gtest/gtest.h>
-
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/expression/signature_parser/SignatureParser.h"
 
 using namespace facebook::velox::exec;
@@ -214,7 +214,7 @@ TEST_F(ParseTypeSignatureTest, row) {
     ASSERT_EQ(signature.parameters().size(), 2);
     ASSERT_FALSE(signature.rowFieldName().has_value());
     auto field0 = signature.parameters()[0];
-    ASSERT_EQ(field0.baseName(), "array");S
+    ASSERT_EQ(field0.baseName(), "array");
     ASSERT_EQ(field0.rowFieldName(), "field 0");
     ASSERT_EQ(field0.parameters().size(), 1);
     auto arrayElement = field0.parameters()[0];
@@ -285,7 +285,9 @@ TEST_F(ParseTypeSignatureTest, homogeneousRow) {
   }
 
   // Test that homogeneous row with named field is rejected.
-  VELOX_ASSERT_THROW(parseTypeSignature("row(name varchar, ...)"), VeloxRuntimeError);
+  VELOX_ASSERT_RUNTIME_THROW(
+      parseTypeSignature("row(name varchar, ...)"),
+      "Homogeneous row cannot have a field name");
 }
 
 TEST_F(ParseTypeSignatureTest, tdigest) {

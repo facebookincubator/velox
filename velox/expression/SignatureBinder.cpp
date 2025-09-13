@@ -19,6 +19,7 @@
 #include "velox/expression/SignatureBinder.h"
 #include "velox/expression/type_calculation/TypeCalculation.h"
 #include "velox/type/Type.h"
+#include "velox/type/TypeUtil.h"
 
 namespace facebook::velox::exec {
 namespace {
@@ -270,11 +271,8 @@ bool SignatureBinderBase::tryBind(
     // First, try to bind all actual parameters to the type variable
     std::vector<TypePtr> actualChildTypes;
     for (const auto& actualParam : actualParams) {
-      if (actualParam.kind != TypeParameterKind::kType) {
+      if (actualParam.kind != TypeParameterKind::kType || !actualParam.type) {
         // Only type parameters supported for homogeneous rows.
-        return false;
-      }
-      if (!actualParam.type) {
         return false;
       }
       actualChildTypes.push_back(actualParam.type);
@@ -286,17 +284,10 @@ bool SignatureBinderBase::tryBind(
 
 
     if (variables().count(paramBaseName)) {
-      auto commonType = actualChildTypes[0];
+      // Ensure all children are equivalent; use helper.
+      auto commonType = velox::type::isHomogeneousRow(actualType);
       if (!commonType) {
         return false;
-      }
-      for (size_t i = 1; i < actualChildTypes.size(); ++i) {
-        if (!actualChildTypes[i]) {
-          return false;
-        }
-        if (!commonType->equivalent(*actualChildTypes[i])) {
-          return false;
-        }
       }
 
       if (typeVariablesBindings_.count(paramBaseName)) {
@@ -311,9 +302,6 @@ bool SignatureBinderBase::tryBind(
       }
     } else {
       for (const auto& childType : actualChildTypes) {
-        if (!childType) {
-          return false;
-        }
         if (!tryBind(typeParam, childType)) {
           // TODO Allow coercions for complex types.
           return false;
