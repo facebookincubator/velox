@@ -142,12 +142,10 @@ struct GetJsonObjectFunction {
   bool extractStringResult(
       simdjson::simdjson_result<simdjson::ondemand::value> rawResult,
       out_type<Varchar>& result) {
-    std::stringstream ss;
     switch (rawResult.type()) {
       // For number and bool types, we need to explicitly get the value
-      // for specific types instead of using `ss << rawResult`. Thus, we
-      // can make simdjson's internal parsing position moved and then we
-      // can check the validity of ending character.
+      // for specific types. Thus, we can make simdjson's internal parsing
+      // position moved and then we can check the validity of ending character.
       case simdjson::ondemand::json_type::number: {
         switch (rawResult.get_number_type()) {
           case simdjson::ondemand::number_type::floating_point_number: {
@@ -190,16 +188,20 @@ struct GetJsonObjectFunction {
         }
         return false;
       }
-      case simdjson::ondemand::json_type::object: {
-        // For nested case, e.g., for "{"my": {"hello": 10}}", "$.my" will
-        // return an object type.
-        ss << rawResult;
-        result.append(ss.str());
-        return true;
-      }
+      case simdjson::ondemand::json_type::object:
       case simdjson::ondemand::json_type::array: {
-        ss << rawResult;
-        result.append(ss.str());
+        std::string_view jsonString;
+        simdjson::to_json_string(rawResult).get(jsonString);
+        // Spark's GetJsonObjectEvaluator never enables pretty printing.
+        // We should minify the JSON string to respect Spark's behavior.
+        std::vector<char> buffer(jsonString.size());
+        size_t outLength;
+        simdjson::error_code err = simdjson::minify(
+            jsonString.data(), jsonString.size(), buffer.data(), outLength);
+        if (err) {
+          return false;
+        }
+        result.append(std::string_view(buffer.data(), outLength));
         return true;
       }
       default:
