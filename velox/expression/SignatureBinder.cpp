@@ -111,7 +111,6 @@ bool SignatureBinder::tryBind(
   const auto& formalArgs = signature_.argumentTypes();
   const auto formalArgsCnt = formalArgs.size();
 
-
   if (signature_.variableArity()) {
     if (actualTypes_.size() < formalArgsCnt - 1) {
       return false;
@@ -281,7 +280,6 @@ bool SignatureBinderBase::tryBind(
     if (actualChildTypes.empty()) {
       return true; // Empty row is valid
     }
-
 
     if (variables().count(paramBaseName)) {
       // Ensure all children are equivalent; use helper.
