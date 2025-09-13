@@ -1199,12 +1199,12 @@ TEST(SignatureBinderTest, homogeneousRowReturnType) {
   // Negative test: constructing or binding a function with homogeneous row
   // return is invalid.
   VELOX_ASSERT_USER_THROW(
-   (exec::FunctionSignatureBuilder()
-     .typeVariable("T")
-     .returnType("row(T, ...)")
-     .argumentType("bigint")
-     .build()),
-   "Homogeneous row cannot be used as a return type");
+      (exec::FunctionSignatureBuilder()
+           .typeVariable("T")
+           .returnType("row(T, ...)")
+           .argumentType("bigint")
+           .build()),
+      "Homogeneous row cannot be used as a return type");
 }
 
 } // namespace

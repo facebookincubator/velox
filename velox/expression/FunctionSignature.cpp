@@ -169,11 +169,11 @@ void validate(
 
   // Disallow homogeneous row as a return type.
   VELOX_USER_CHECK(
-    !returnType.isHomogeneousRow(),
-    "Homogeneous row cannot be used as a return type");
+      !returnType.isHomogeneousRow(),
+      "Homogeneous row cannot be used as a return type");
 
   validateBaseTypeAndCollectTypeParams(
-    variables, returnType, usedVariables, true);
+      variables, returnType, usedVariables, true);
 
   VELOX_USER_CHECK_EQ(
       usedVariables.size(),
