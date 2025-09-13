@@ -110,9 +110,6 @@ bool SignatureBinder::tryBind(
   const auto& formalArgs = signature_.argumentTypes();
   const auto formalArgsCnt = formalArgs.size();
 
-  if (signature_.returnType().isHomogeneousRow()) {
-    return false;
-  }
 
   if (signature_.variableArity()) {
     if (actualTypes_.size() < formalArgsCnt - 1) {
@@ -287,12 +284,6 @@ bool SignatureBinderBase::tryBind(
       return true; // Empty row is valid
     }
 
-    // Defensive: check that none of the child types are null
-    for (const auto& t : actualChildTypes) {
-      if (!t) {
-        return false;
-      }
-    }
 
     if (variables().count(paramBaseName)) {
       auto commonType = actualChildTypes[0];

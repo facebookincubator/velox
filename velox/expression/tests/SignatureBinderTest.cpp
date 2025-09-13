@@ -1139,6 +1139,15 @@ TEST(SignatureBinderTest, homogeneousRow) {
 
     testSignatureBinder(signature, {ROW({VARCHAR(), VARCHAR()})}, BOOLEAN());
 
+    // Named row fields should also bind when types are homogeneous.
+    testSignatureBinder(
+        signature,
+        {ROW({{"first", VARCHAR()}, {"second", VARCHAR()}})},
+        BOOLEAN());
+
+    // Mixed named-row element types should fail to bind.
+    assertCannotResolve(signature, {ROW({{"x", BIGINT()}, {"y", VARCHAR()}})});
+
     testSignatureBinder(signature, {ROW({})}, BOOLEAN());
 
     assertCannotResolve(signature, {ROW({BIGINT(), VARCHAR()})});
@@ -1189,18 +1198,13 @@ TEST(SignatureBinderTest, homogeneousRowsToMap) {
 TEST(SignatureBinderTest, homogeneousRowReturnType) {
   // Negative test: constructing or binding a function with homogeneous row
   // return is invalid.
-  EXPECT_THROW(
-      {
-        auto signature = exec::FunctionSignatureBuilder()
-                             .typeVariable("T")
-                             .returnType("row(T, ...)")
-                             .argumentType("bigint")
-                             .build();
-        // If build unexpectedly succeeds without throwing, still assert bind
-        // fails.
-        VELOX_ASSERT_THROW(signature, {BIGINT()});
-      },
-      VeloxUserError);
+  VELOX_ASSERT_USER_THROW(
+   (exec::FunctionSignatureBuilder()
+     .typeVariable("T")
+     .returnType("row(T, ...)")
+     .argumentType("bigint")
+     .build()),
+   "Homogeneous row cannot be used as a return type");
 }
 
 } // namespace
