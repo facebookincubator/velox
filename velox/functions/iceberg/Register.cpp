@@ -16,8 +16,8 @@
 
 #include "velox/functions/iceberg/Register.h"
 #include "velox/functions/iceberg/BucketFunction.h"
-#include "velox/functions/iceberg/Truncate.h"
 #include "velox/functions/iceberg/DateTimeFunctions.h"
+#include "velox/functions/iceberg/Truncate.h"
 
 namespace facebook::velox::functions::iceberg {
 
