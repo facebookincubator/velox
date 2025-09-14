@@ -38,6 +38,8 @@ TEST_F(GetJsonObjectTest, basic) {
   EXPECT_EQ(getJsonObject(R"({"hello": -292222730})", "$.hello"), "-292222730");
   EXPECT_EQ(getJsonObject(R"({"my": {"hello": 3.5}})", "$.my.hello"), "3.5");
   EXPECT_EQ(getJsonObject(R"({"my": {"hello": true}})", "$.my.hello"), "true");
+  EXPECT_EQ(
+      getJsonObject(R"({"my": {"hello": True}})", "$.my.hello"), std::nullopt);
   EXPECT_EQ(getJsonObject(R"({"hello": ""})", "$.hello"), "");
   EXPECT_EQ(
       "0.0215434648799772",
@@ -45,7 +47,7 @@ TEST_F(GetJsonObjectTest, basic) {
   // Returns input json if json path is "$".
   EXPECT_EQ(
       getJsonObject(R"({"name": "Alice", "age": 5, "id": "001"})", "$"),
-      "{\"name\": \"Alice\", \"age\": 5, \"id\": \"001\"}");
+      "{\"name\":\"Alice\",\"age\":5,\"id\":\"001\"}");
   EXPECT_EQ(
       getJsonObject(R"({"name": "Alice", "age": 5, "id": "001"})", "$.age"),
       "5");
@@ -196,6 +198,20 @@ TEST_F(GetJsonObjectTest, number) {
           R"({"nested": {"num": -1234567890123456789012345678901234567890 }})",
           "$.nested.num"),
       "-1234567890123456789012345678901234567890");
+}
+
+TEST_F(GetJsonObjectTest, rootPath) {
+  EXPECT_EQ(getJsonObject(R"({"hello": "3.5"},)", "$"), "{\"hello\":\"3.5\"}");
+  EXPECT_EQ(getJsonObject(R"({"hello": "3.5",)", "$"), std::nullopt);
+  EXPECT_EQ(getJsonObject(R"({"hello": "3.5",})", "$"), std::nullopt);
+  EXPECT_EQ(
+      getJsonObject(R"(["hello", "world"],)", "$  "), "[\"hello\",\"world\"]");
+  EXPECT_EQ(getJsonObject(R"(["hello", "world",])", "$"), std::nullopt);
+  EXPECT_EQ(getJsonObject(R"(123)", "$"), "123");
+  EXPECT_EQ(getJsonObject(R"(2e-3)", "$"), "0.002");
+  EXPECT_EQ(getJsonObject(R"("123abc")", "$"), "123abc");
+  EXPECT_EQ(getJsonObject(R"(true)", "$ "), "true");
+  EXPECT_EQ(getJsonObject(R"(True)", "$"), std::nullopt);
 }
 
 } // namespace
