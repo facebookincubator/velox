@@ -14,17 +14,12 @@
  * limitations under the License.
  */
 
-#include "velox/functions/iceberg/Register.h"
-#include "velox/functions/iceberg/BucketFunction.h"
-#include "velox/functions/iceberg/Truncate.h"
-#include "velox/functions/iceberg/DateTimeFunctions.h"
+#pragma once
+
+#include <string>
 
 namespace facebook::velox::functions::iceberg {
 
-void registerFunctions(const std::string& prefix) {
-  registerBucketFunctions(prefix);
-  registerTruncateFunctions(prefix);
-  registerDateTimeFunctions(prefix);
-}
+void registerDateTimeFunctions(const std::string& prefix);
 
 } // namespace facebook::velox::functions::iceberg
