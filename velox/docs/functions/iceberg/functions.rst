@@ -23,6 +23,29 @@ Refer to `Iceberg documenation <https://iceberg.apache.org/spec/#partition-trans
        SELECT bucket(128, 'abcd'); -- 4
        SELECT bucket(100, 34L); -- 79
 
+.. iceberg:function:: days(input) -> integer
+   Returns the day of the month from a date or timestamp input, as days from 1970-01-01.
+
+   Supported types for ``input`` are: ``DATE``, ``TIMESTAMP``. ::
+
+       SELECT days(DATE '2017-12-01'); -- 17501
+       SELECT days(TIMESTAMP '2017-12-01 10:12:55.038194'); -- 17501
+
+.. iceberg:function:: hours(input) -> integer
+   Returns the hour from a timestamp input, as hours from 1970-01-01 00:00:00.
+
+   Supported types for ``input`` are: ``TIMESTAMP``. ::
+
+       SELECT hours(TIMESTAMP '2017-12-01 10:12:55.038194'); -- 420034
+
+.. iceberg:function:: months(input) -> integer
+   Returns the month from a date or timestamp input, as months from 1970-01-01.
+
+   Supported types for ``input`` are: ``DATE``, ``TIMESTAMP``. ::
+
+       SELECT months(DATE '2017-12-01'); -- 575
+       SELECT months(TIMESTAMP '2017-12-01 10:12:55.038194'); -- 575
+
 .. iceberg:function:: truncate(width, input) -> same type as input
 
    Returns the truncated value of the input based on the specified width.
@@ -43,3 +66,11 @@ Refer to `Iceberg documenation <https://iceberg.apache.org/spec/#partition-trans
        SELECT truncate(1, '测试'); -- 测
        SELECT truncate(6, '测试'); -- 测试
        SELECT truncate(6, cast('测试' as binary)); -- 测试_
+
+.. iceberg:function:: years(input) -> integer
+   Returns the year from a date or timestamp input, as years from 1970.
+
+   Supported types for ``input`` are: ``DATE``, ``TIMESTAMP``. ::
+
+       SELECT years(DATE '2017-12-01'); -- 47
+       SELECT years(TIMESTAMP '2017-12-01 10:12:55.038194'); -- 47
