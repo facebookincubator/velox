@@ -610,31 +610,27 @@ struct ArrayFrequencyFunction {
   folly::F14FastMap<arg_type<T>, int> frequencyCount_;
 };
 
-// Array<Varchar> to handle nested arrays
+// Generic implementation for nested arrays of any type
 template <typename TExecParams>
-struct ArrayFrequencyFunction<TExecParams, Array<Varchar>> {
+struct ArrayFrequencyFunction<TExecParams, Array<Generic<T1>>> {
   VELOX_DEFINE_FUNCTION_TYPES(TExecParams);
 
-  // Helper struct to store array reference with its hash
-  struct ArrayVarcharEntry {
-    arg_type<Array<Varchar>> arrayRef;
+  // Helper struct to store array reference with its hash to avoid copying
+  struct ArrayGenericEntry {
+    arg_type<Array<Generic<T1>>> arrayRef;
     std::size_t hash;
     int frequency;
 
-    ArrayVarcharEntry(const arg_type<Array<Varchar>>& array, std::size_t h)
+    ArrayGenericEntry(const arg_type<Array<Generic<T1>>>& array, std::size_t h)
         : arrayRef(array), hash(h), frequency(1) {}
   };
 
-  // Hash function for Array<Varchar> without copying strings
-  std::size_t computeArrayHash(const arg_type<Array<Varchar>>& array) {
+  // Hash function for Array<Generic<T1>> without copying
+  std::size_t computeArrayHash(const arg_type<Array<Generic<T1>>>& array) {
     std::size_t hash = 0;
     for (const auto& item : array) {
       if (item.has_value()) {
-        // Hash the StringView directly without copying
-        const auto& stringView = item.value();
-        hash = folly::hash::hash_combine(
-            hash,
-            folly::hash::hash_range(stringView.begin(), stringView.end()));
+        hash = folly::hash::hash_combine(hash, item.value().hash());
       } else {
         hash = folly::hash::hash_combine(hash, std::size_t{0}); // hash for null
       }
@@ -642,19 +638,28 @@ struct ArrayFrequencyFunction<TExecParams, Array<Varchar>> {
     return hash;
   }
 
-  // Compare two Array<Varchar> for equality without copying strings
+  // Compare two Array<Generic<T1>> for equality without copying
   bool arraysEqual(
-      const arg_type<Array<Varchar>>& a,
-      const arg_type<Array<Varchar>>& b) {
+      const arg_type<Array<Generic<T1>>>& a,
+      const arg_type<Array<Generic<T1>>>& b) {
+    static constexpr auto kEqualValueAtFlags = CompareFlags::equality(
+        CompareFlags::NullHandlingMode::kNullAsIndeterminate);
+
     if (a.size() != b.size()) {
       return false;
     }
+
     for (size_t i = 0; i < a.size(); ++i) {
       if (a[i].has_value() != b[i].has_value()) {
         return false;
       }
+
       if (a[i].has_value()) {
-        if (a[i].value().compare(b[i].value()) != 0) {
+        auto result = a[i].value().compare(b[i].value(), kEqualValueAtFlags);
+        VELOX_USER_CHECK(
+            result.has_value(),
+            "array_frequency does not support arrays with elements that are null or contain null");
+        if (result.value() != 0) {
           return false;
         }
       }
@@ -663,11 +668,11 @@ struct ArrayFrequencyFunction<TExecParams, Array<Varchar>> {
   }
 
   FOLLY_ALWAYS_INLINE void call(
-      out_type<velox::Map<Array<Varchar>, int>>& out,
-      arg_type<velox::Array<Array<Varchar>>> inputArray) {
-    std::vector<ArrayVarcharEntry> entries;
+      out_type<velox::Map<Array<Generic<T1>>, int>>& out,
+      arg_type<velox::Array<Array<Generic<T1>>>> inputArray) {
+    std::vector<ArrayGenericEntry> entries;
 
-    // Count frequencies using hash-based lookup without string copies
+    // Count frequencies using hash-based lookup without copying arrays
     for (const auto& item : inputArray.skipNulls()) {
       std::size_t itemHash = computeArrayHash(item);
 
@@ -693,7 +698,6 @@ struct ArrayFrequencyFunction<TExecParams, Array<Varchar>> {
       for (auto it = entries.begin(); it != entries.end(); ++it) {
         if (it->hash == itemHash && arraysEqual(it->arrayRef, item)) {
           auto [keyWriter, valueWriter] = out.add_item();
-          // Use copy_from to properly handle string buffer management
           keyWriter.copy_from(item);
           valueWriter = it->frequency;
           entries.erase(it);
