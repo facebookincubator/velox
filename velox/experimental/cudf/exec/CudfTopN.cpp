@@ -108,8 +108,9 @@ void CudfTopN::addInput(RowVectorPtr input) {
 
   auto cudfInput = std::dynamic_pointer_cast<CudfVector>(input);
   VELOX_CHECK_NOT_NULL(cudfInput);
-  // take topk of each input, add to batch. if kBatchSize batches, then concat
-  // and topk once. during getOutput, concat batches and topk once.
+  // Take topk of each input, add to batch.
+  // If got kBatchSize batches, concat batches and topk once.
+  // During getOutput, concat batches and topk once.
   topNBatches_.push_back(getTopKBatch(cudfInput, count_));
   // sum of sizes of topNBatches_ >= count_, then concat and topk once.
   auto totalSize = std::accumulate(
