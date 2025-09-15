@@ -18,7 +18,6 @@
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/tests/utils/CudfHiveConnectorTestBase.h"
-#include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/file/FileSystems.h"
@@ -26,7 +25,6 @@
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/dwio/common/FileSink.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
-#include "velox/dwio/dwrf/writer/FlushPolicy.h"
 #include "velox/exec/Driver.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 
