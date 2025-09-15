@@ -203,6 +203,9 @@ their corresponding physical type.</p>
 <tr class="row-odd"><td><p>INTERVAL YEAR TO MONTH</p></td>
 <td><p>INTEGER</p></td>
 </tr>
+<tr class="row-even"><td><p>TIME</p></td>
+<td><p>BIGINT</p></td>
+</tr>
 </tbody>
 </table>
 <p>DECIMAL type carries additional <cite>precision</cite>,
@@ -216,6 +219,8 @@ which store the unscaled value. For example, the unscaled value of decimal
 upto 38 precision, with a range of <span class="math notranslate nohighlight">\([-10^{38} + 1, +10^{38} - 1]\)</span>.</p>
 <p>All the three values, precision, scale, unscaled value are required to represent a
 decimal value.</p>
+<p>TIME type represents time in milliseconds from midnight UTC. Thus min/max value can  range from UTC-14:00 at 00:00:00 to UTC+14:00 at 23:59:59.999 modulo 24 hours.
+TIME type is backed by BIGINT physical type.</p>
 </section>
 <section id="custom-types">
 <h2>Custom Types<a class="headerlink" href="#custom-types" title="Link to this heading">¶</a></h2>
