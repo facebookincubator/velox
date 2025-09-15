@@ -45,7 +45,7 @@ class S3WriteFile::Impl {
       : client_(client), pool_(pool) {
     VELOX_CHECK_NOT_NULL(client);
     VELOX_CHECK_NOT_NULL(pool);
-    kPartUploadSize = s3Config->partUploadSize();
+    partUploadSize_ = s3Config->partUploadSize();
     if (s3Config->uploadPartAsync()) {
       maxConcurrentUploadNum_ = std::make_unique<folly::ThrottledLifoSem>(
           s3Config->maxConcurrentUploadNum());
@@ -56,12 +56,11 @@ class S3WriteFile::Impl {
       }
     } else {
       uploadThreadPool_ = nullptr;
-      maxConcurrentUploadNum_ = nullptr;
     }
 
     getBucketAndKeyFromPath(path, bucket_, key_);
     currentPart_ = std::make_unique<dwio::common::DataBuffer<char>>(*pool_);
-    currentPart_->reserve(kPartUploadSize);
+    currentPart_->reserve(partUploadSize_);
     // Check that the object doesn't exist, if it does throw an error.
     {
       Aws::S3::Model::HeadObjectRequest request;
@@ -123,7 +122,7 @@ class S3WriteFile::Impl {
   // Appends data to the end of the file.
   void append(std::string_view data) {
     VELOX_CHECK(!closed(), "File is closed");
-    if (data.size() + currentPart_->size() >= kPartUploadSize) {
+    if (data.size() + currentPart_->size() >= partUploadSize_) {
       upload(data);
     } else {
       // Append to current part.
@@ -135,9 +134,9 @@ class S3WriteFile::Impl {
   // No-op.
   void flush() {
     VELOX_CHECK(!closed(), "File is closed");
-    /// currentPartSize must be less than kPartUploadSize since
+    /// currentPartSize must be less than partUploadSize_ since
     /// append() would have already flushed after reaching kUploadPartSize.
-    VELOX_CHECK_LT(currentPart_->size(), kPartUploadSize);
+    VELOX_CHECK_LT(currentPart_->size(), partUploadSize_);
   }
 
   // Complete the multipart upload and close the file.
@@ -208,8 +207,8 @@ class S3WriteFile::Impl {
     Aws::String id;
   };
 
-  // Data can be smaller or larger than the kPartUploadSize.
-  // Complete the currentPart_ and upload kPartUploadSize chunks of data.
+  // Data can be smaller or larger than the partUploadSize_.
+  // Complete the currentPart_ and upload partUploadSize_ chunks of data.
   // Save the remaining into currentPart_.
   void upload(const std::string_view data) {
     auto dataPtr = data.data();
@@ -220,19 +219,19 @@ class S3WriteFile::Impl {
     uploadPart({currentPart_->data(), currentPart_->size()});
     dataPtr += remainingBufferSize;
     dataSize -= remainingBufferSize;
-    while (dataSize > kPartUploadSize) {
-      uploadPart({dataPtr, kPartUploadSize});
-      dataPtr += kPartUploadSize;
-      dataSize -= kPartUploadSize;
+    while (dataSize > partUploadSize_) {
+      uploadPart({dataPtr, partUploadSize_});
+      dataPtr += partUploadSize_;
+      dataSize -= partUploadSize_;
     }
     // Stash the remaining at the beginning of currentPart.
     currentPart_->unsafeAppend(0, dataPtr, dataSize);
   }
 
   void uploadPart(const std::string_view part, bool isLast = false) {
-    // Only the last part can be less than kPartUploadSize.
-    VELOX_CHECK(isLast || (!isLast && (part.size() == kPartUploadSize)));
-    auto uploadCompletedPart = [&](const std::string_view partData) {
+    // Only the last part can be less than partUploadSize_.
+    VELOX_CHECK(isLast || (!isLast && (part.size() == partUploadSize_)));
+    auto uploadPartSync = [&](const std::string_view partData) {
       Aws::S3::Model::CompletedPart completedPart =
           uploadPartSeq(uploadState_.id, ++uploadState_.partNumber, partData);
       uploadState_.completedParts.push_back(std::move(completedPart));
@@ -241,12 +240,12 @@ class S3WriteFile::Impl {
       // If this is the last part and no parts have been uploaded yet,
       // use the synchronous upload method.
       if (isLast && uploadState_.partNumber == 0) {
-        uploadCompletedPart(part);
+        uploadPartSync(part);
       } else {
         uploadPartAsync(part);
       }
     } else {
-      uploadCompletedPart(part);
+      uploadPartSync(part);
     }
   }
 
@@ -316,16 +315,12 @@ class S3WriteFile::Impl {
   UploadState uploadState_;
   std::mutex uploadStateMutex_;
   std::vector<folly::Future<folly::Unit>> futures_;
+  size_t partUploadSize_;
   // maxConcurrentUploadNum_ controls the concurrency of asynchronous uploads to
   // S3 for each S3WriteFile, preventing excessive memory usage.
   std::unique_ptr<folly::ThrottledLifoSem> maxConcurrentUploadNum_;
-  static std::shared_ptr<folly::CPUThreadPoolExecutor> uploadThreadPool_;
-  static size_t kPartUploadSize;
+  inline static std::shared_ptr<folly::CPUThreadPoolExecutor> uploadThreadPool_;
 };
-
-std::shared_ptr<folly::CPUThreadPoolExecutor>
-    S3WriteFile::Impl::uploadThreadPool_ = nullptr;
-size_t S3WriteFile::Impl::kPartUploadSize = 10 * 1024 * 1024;
 
 S3WriteFile::S3WriteFile(
     std::string_view path,

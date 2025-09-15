@@ -25,4 +25,5 @@ target_link_libraries(
   GTest::gtest
   Folly::folly
   Folly::follybenchmark
-  GTest::gtest_main)
+  GTest::gtest_main
+)
