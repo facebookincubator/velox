@@ -26,13 +26,15 @@ set(
 
 velox_resolve_dependency_url(ROARING)
 
-set(ENABLE_ROARING_TESTS OFF)
+block()
+  set(ENABLE_ROARING_TESTS OFF)
 
-FetchContent_Declare(
-  roaring
-  URL ${VELOX_ROARING_SOURCE_URL}
-  URL_HASH ${VELOX_ROARING_BUILD_SHA256_CHECKSUM}
-)
+  FetchContent_Declare(
+    roaring
+    URL ${VELOX_ROARING_SOURCE_URL}
+    URL_HASH ${VELOX_ROARING_BUILD_SHA256_CHECKSUM}
+  )
+endblock()
 
 FetchContent_MakeAvailable(roaring)
 
