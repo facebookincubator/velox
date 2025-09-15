@@ -30,7 +30,7 @@ $ cd _build/release
 $ ctest -R cudf -V
 ```
 
-Velox-cuDF builds are not yet included in Velox CI. The build step for cuDF does not require the worker to have a GPU, so adding a Velox-cuDF build step to Velox CI is compatible with the existing runners.
+Velox-cuDF builds are included in Velox CI as part of the [adapters build](https://github.com/facebookincubator/velox/blob/de31a3eb07b5ec3cbd1e6320a989fcb2ee1a95a7/.github/workflows/linux-build-base.yml#L85). The build step for cuDF does not require the worker to have a GPU, so adding a Velox-cuDF build step to Velox CI is compatible with the existing runners.
 
 ### Testing Velox with cuDF
 
