@@ -35,24 +35,14 @@ class RoaringBitmapArray {
 
   void serialize(char* buf) const;
 
-  void add(int64_t value);
+  Status add(int64_t value);
 
-  bool contains(int64_t value);
+  Status contains(bool& result, int64_t value);
 
   int64_t serializedSizeInBytes() const;
 
  private:
-  static void checkValue(int64_t value);
-
-  // Extracts the high 32 bits. The function doesn't check
-  // the input value internally. Call `checkValue` first
-  // before calling the function.
-  static int32_t highBytesUnsafe(int64_t value);
-
-  // Extracts the low 32 bits. The function doesn't check
-  // the input value internally. Call `checkValue` first
-  // before calling the function.
-  static int32_t lowBytesUnsafe(int64_t value);
+  static Status checkValue(int64_t value);
 
   static constexpr int32_t kPortableSerializationFormatMagicNumber{1681511377};
   std::vector<std::shared_ptr<roaring::Roaring>> bitmaps_{};
@@ -62,23 +52,23 @@ class RoaringBitmapArray {
   roaring::BulkContext* lastContext_{nullptr};
 };
 
-template <typename T>
+template <typename TExec>
 struct RoaringBitmapArrayContains {
-  VELOX_DEFINE_FUNCTION_TYPES(T);
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
 
   void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
-      const core::QueryConfig&,
+      const core::QueryConfig& /*config*/,
       const arg_type<Varbinary>* serialized,
-      const arg_type<int64_t>*) {
+      const arg_type<int64_t>* /*value*/) {
     if (serialized != nullptr) {
-      array_.deserialize(serialized->str().c_str());
+      array_.deserialize(serialized->str().data());
     }
   }
 
-  FOLLY_ALWAYS_INLINE void
+  FOLLY_ALWAYS_INLINE Status
   call(bool& result, const arg_type<Varbinary>&, const int64_t& input) {
-    result = array_.contains(input);
+    return array_.contains(result, input);
   }
 
  private:

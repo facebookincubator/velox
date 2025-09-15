@@ -25,6 +25,21 @@
 namespace facebook::velox::functions::delta {
 
 namespace {
+// Extracts the high 32 bits. The function doesn't check
+// the input value internally. Call `checkValue` first
+// before calling the function.
+int32_t highBytesUnsafe(int64_t value) {
+  return static_cast<int32_t>(value >> 32);
+}
+
+// Extracts the low 32 bits. The function doesn't check
+// the input value internally. Call `checkValue` first
+// before calling the function.
+int32_t lowBytesUnsafe(int64_t value) {
+  return static_cast<int32_t>(value & 0xFFFFFFFFLL);
+}
+
+// Composes the int64 value from high 32 bits and low 32 bits.
 int64_t composeFromHighLowBytes(int32_t high, int32_t low) {
   VELOX_CHECK_GE(high, 0);
   VELOX_CHECK_GE(low, 0);
@@ -42,59 +57,45 @@ void RoaringBitmapArray::deserialize(const char* serialized) {
   buckContexts_.clear();
   common::InputByteStream stream(serialized);
   const auto magicNumber = stream.read<int32_t>();
-  switch (magicNumber) {
-    case kPortableSerializationFormatMagicNumber: {
-      const auto numberOfBitmaps = stream.read<int64_t>();
-      VELOX_CHECK_GE(
-          numberOfBitmaps,
-          0,
-          "Invalid RoaringBitmapArray length ({} < 0)",
-          numberOfBitmaps);
-      VELOX_CHECK_LE(
-          numberOfBitmaps,
-          std::numeric_limits<int32_t>::max(),
-          "Invalid RoaringBitmapArray length ({} > {})",
-          numberOfBitmaps,
-          std::numeric_limits<int32_t>::max());
-      // The sparse bitmap array format uses the number as an array size lower
-      // bound.
-      const auto minimumArraySize = static_cast<int32_t>(numberOfBitmaps);
-      bitmaps_.reserve(minimumArraySize);
-      buckContexts_.reserve(minimumArraySize);
-      int32_t lastIndex = 0;
-      for (int32_t i = 0; i < numberOfBitmaps; ++i) {
-        const auto key = stream.read<int32_t>();
-        VELOX_CHECK_GE(
-            key, 0, "Invalid unsigned entry in RoaringBitmapArray ({})", key);
-        VELOX_CHECK_GE(
-            key,
-            lastIndex,
-            "Keys are required to be sorted in ascending order");
-        // Fill gaps in sparse data.
-        while (lastIndex < key) {
-          bitmaps_.emplace_back(std::make_shared<roaring::Roaring>());
-          buckContexts_.emplace_back(std::make_shared<roaring::BulkContext>());
-          ++lastIndex;
-        }
-        roaring::api::roaring_bitmap_t* r =
-            roaring::api::roaring_bitmap_portable_deserialize(
-                serialized + stream.offset());
-        VELOX_CHECK_NOT_NULL(r);
-        bitmaps_.emplace_back(std::make_shared<roaring::Roaring>(r));
-        buckContexts_.emplace_back(std::make_shared<roaring::BulkContext>());
-        ++lastIndex;
-        // Advances the stream for N bytes which is the serialized size of the
-        // previous read bitmap.
-        auto sizeToAdvance = bitmaps_.back()->getSizeInBytes();
-        for (size_t j = 0; j < sizeToAdvance; j++) {
-          stream.read<int8_t>();
-        }
-      }
-    } break;
-    default:
-      VELOX_NYI(
-          "Unexpected magic number in serialized roaring bitmap array: {}",
-          magicNumber);
+  VELOX_USER_CHECK_EQ(
+      magicNumber,
+      kPortableSerializationFormatMagicNumber,
+      "Unexpected magic number in serialized roaring bitmap array");
+  const auto numberOfBitmaps = stream.read<int64_t>();
+  VELOX_CHECK_GE(numberOfBitmaps, 0, "Invalid RoaringBitmapArray length");
+  VELOX_CHECK_LE(
+      numberOfBitmaps,
+      std::numeric_limits<int32_t>::max(),
+      "Invalid RoaringBitmapArray length");
+  // The sparse bitmap array format uses the number as an array size lower
+  // bound.
+  const auto minimumArraySize = static_cast<int32_t>(numberOfBitmaps);
+  bitmaps_.reserve(minimumArraySize);
+  buckContexts_.reserve(minimumArraySize);
+  int32_t lastIndex = 0;
+  for (auto i = 0; i < numberOfBitmaps; ++i) {
+    const auto key = stream.read<int32_t>();
+    VELOX_CHECK_GE(
+        key, 0, "Invalid unsigned entry in RoaringBitmapArray ({})", key);
+    VELOX_CHECK_GE(
+        key, lastIndex, "Keys are required to be sorted in ascending order");
+    // Fill gaps in sparse data.
+    while (lastIndex < key) {
+      bitmaps_.emplace_back(std::make_shared<roaring::Roaring>());
+      buckContexts_.emplace_back(std::make_shared<roaring::BulkContext>());
+      ++lastIndex;
+    }
+    roaring::api::roaring_bitmap_t* r =
+        roaring::api::roaring_bitmap_portable_deserialize(
+            serialized + stream.offset());
+    VELOX_CHECK_NOT_NULL(r);
+    bitmaps_.emplace_back(std::make_shared<roaring::Roaring>(r));
+    buckContexts_.emplace_back(std::make_shared<roaring::BulkContext>());
+    ++lastIndex;
+    // Advances the stream for N bytes which is the serialized size of the
+    // previous read bitmap.
+    auto sizeToAdvance = bitmaps_.back()->getSizeInBytes();
+    stream.read<int8_t>(sizeToAdvance);
   }
 }
 
@@ -102,7 +103,7 @@ void RoaringBitmapArray::serialize(char* buf) const {
   common::OutputByteStream stream(buf);
   stream.appendOne<int32_t>(kPortableSerializationFormatMagicNumber);
   stream.appendOne<int64_t>(bitmaps_.size());
-  for (size_t i = 0; i < bitmaps_.size(); ++i) {
+  for (auto i = 0; i < bitmaps_.size(); ++i) {
     stream.appendOne<int32_t>(i);
     const auto serializedSize = bitmaps_[i]->getSizeInBytes();
     // FIXME: The following code conducts an extra copy.
@@ -112,8 +113,11 @@ void RoaringBitmapArray::serialize(char* buf) const {
   }
 }
 
-void RoaringBitmapArray::add(int64_t value) {
-  checkValue(value);
+Status RoaringBitmapArray::add(int64_t value) {
+  auto valueCheck = checkValue(value);
+  if (FOLLY_UNLIKELY(!valueCheck.ok())) {
+    return valueCheck;
+  }
   const auto high = highBytesUnsafe(value);
   const auto low = lowBytesUnsafe(value);
   if (high >= bitmaps_.size()) {
@@ -125,18 +129,24 @@ void RoaringBitmapArray::add(int64_t value) {
   }
   auto bitmap = bitmaps_[high];
   bitmap->add(low);
+  return Status::OK();
 }
 
-bool RoaringBitmapArray::contains(int64_t value) {
-  checkValue(value);
+Status RoaringBitmapArray::contains(bool& result, int64_t value) {
+  auto valueCheck = checkValue(value);
+  if (FOLLY_UNLIKELY(!valueCheck.ok())) {
+    return valueCheck;
+  }
   const auto high = highBytesUnsafe(value);
   if (high >= bitmaps_.size()) {
-    return false;
+    result = false;
+    return Status::OK();
   }
   if (FOLLY_LIKELY(high == lastHighBytes_)) {
     // Fast path for ordered input.
     const auto low = lowBytesUnsafe(value);
-    return lastBitmap_->containsBulk(*lastContext_, low);
+    result = lastBitmap_->containsBulk(*lastContext_, low);
+    return Status::OK();
   }
   const auto highBitmap = bitmaps_[high];
   const auto highBuckContext = buckContexts_[high];
@@ -144,7 +154,8 @@ bool RoaringBitmapArray::contains(int64_t value) {
   lastHighBytes_ = high;
   lastBitmap_ = highBitmap.get();
   lastContext_ = highBuckContext.get();
-  return highBitmap->containsBulk(*highBuckContext, low);
+  result = highBitmap->containsBulk(*highBuckContext, low);
+  return Status::OK();
 }
 
 int64_t RoaringBitmapArray::serializedSizeInBytes() const {
@@ -164,21 +175,16 @@ int64_t RoaringBitmapArray::serializedSizeInBytes() const {
   return sum;
 }
 
-void RoaringBitmapArray::checkValue(int64_t value) {
-  VELOX_CHECK_GE(value, 0, "Invalid RoaringBitmapArray value ({}) >= 0", value);
-  VELOX_CHECK_LE(
+Status RoaringBitmapArray::checkValue(int64_t value) {
+  VELOX_USER_RETURN_GE(
+      value, 0, "Invalid RoaringBitmapArray value ({}) >= 0", value);
+  VELOX_USER_RETURN_LE(
       value,
       kMaxRepresentableValue,
       "Invalid RoaringBitmapArray value ({}) <= {}",
       value,
       kMaxRepresentableValue);
+  return Status::OK();
 }
 
-int32_t RoaringBitmapArray::highBytesUnsafe(int64_t value) {
-  return static_cast<int32_t>(value >> 32);
-}
-
-int32_t RoaringBitmapArray::lowBytesUnsafe(int64_t value) {
-  return static_cast<int32_t>(value & 0xFFFFFFFFLL);
-}
 } // namespace facebook::velox::functions::delta

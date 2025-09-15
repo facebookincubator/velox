@@ -22,7 +22,7 @@ add_test(
 
 target_link_libraries(
   velox_functions_delta_test
-  velox_functions_delta_impl
+  velox_functions_delta
   velox_vector_test_lib
   GTest::gtest
   GTest::gtest_main
