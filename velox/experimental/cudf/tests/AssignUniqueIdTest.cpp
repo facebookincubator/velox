@@ -193,7 +193,7 @@ TEST_F(AssignUniqueIdTest, taskUniqueIdLimit) {
       "(16777216 vs. 16777216) Unique 24-bit ID specified for AssignUniqueId exceeds the limit");
 }
 
-// TODO: Add test for barrier execution, other operators does support draining
-// yet.
+// TODO: Add test for barrier execution, other operators does not support
+// draining yet.
 } // namespace
 } // namespace facebook::velox::exec
