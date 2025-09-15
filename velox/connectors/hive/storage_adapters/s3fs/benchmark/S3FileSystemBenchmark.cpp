@@ -26,6 +26,7 @@
 
 namespace {
 using namespace facebook::velox::filesystems;
+
 class S3FileSystemBenchmark {
  public:
   S3FileSystemBenchmark() {
@@ -34,10 +35,12 @@ class S3FileSystemBenchmark {
     ioExecutor_ = std::make_unique<folly::IOThreadPoolExecutor>(3);
     filesystems::initializeS3("Info", kLogLocation_);
   }
+
   ~S3FileSystemBenchmark() {
     minioServer_->stop();
     filesystems::finalizeS3();
   }
+
   std::unique_ptr<MinioServer> minioServer_;
   std::unique_ptr<folly::IOThreadPoolExecutor> ioExecutor_;
   std::string_view kLogLocation_ = "/tmp/foobar/";
@@ -45,9 +48,11 @@ class S3FileSystemBenchmark {
   std::string localPath(const char* directory) {
     return minioServer_->path() + "/" + directory;
   }
+
   void addBucket(const char* bucket) {
     minioServer_->addBucket(bucket);
   }
+
   void
   run(const std::string& name, bool enableUploadPartAsync, int32_t size_MiB) {
     folly::BenchmarkSuspender suspender;
@@ -57,15 +62,15 @@ class S3FileSystemBenchmark {
     addBucket(bucketName);
     const auto s3File = s3URI(bucketName, file.c_str());
     auto hiveConfig = minioServer_->hiveConfig(
-        {{"hive.s3.upload-part-async",
+        {{"hive.s3.part-upload-async",
           enableUploadPartAsync ? "true" : "false"}});
     filesystems::S3FileSystem s3fs(bucketName, hiveConfig);
+
     suspender.dismiss();
     auto pool = memory::memoryManager()->addLeafPool("S3FileSystemBenchmark");
     auto writeFile =
         s3fs.openFileForWrite(s3File, {{}, pool.get(), std::nullopt});
     auto s3WriteFile = dynamic_cast<filesystems::S3WriteFile*>(writeFile.get());
-    // 1024
     std::string dataContent(1024, 'a');
 
     EXPECT_EQ(writeFile->size(), 0);

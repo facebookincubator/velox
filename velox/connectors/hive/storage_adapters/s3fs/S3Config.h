@@ -76,7 +76,7 @@ class S3Config {
     kRetryMode,
     kUseProxyFromEnv,
     kCredentialsProvider,
-    KUploadPartAsync,
+    KPartUploadAsync,
     kPartUploadSize,
     KMaxConcurrentUploadNum,
     KUploadThreads,
@@ -118,8 +118,8 @@ class S3Config {
              std::make_pair("use-proxy-from-env", "false")},
             {Keys::kCredentialsProvider,
              std::make_pair("aws-credentials-provider", std::nullopt)},
-            {Keys::KUploadPartAsync,
-             std::make_pair("upload-part-async", "false")},
+            {Keys::KPartUploadAsync,
+             std::make_pair("part-upload-async", "false")},
             {Keys::kPartUploadSize,
              std::make_pair("part-upload-size", "10485760")},
             {Keys::KMaxConcurrentUploadNum,
@@ -254,8 +254,8 @@ class S3Config {
     return config_.find(Keys::kCredentialsProvider)->second;
   }
 
-  bool uploadPartAsync() const {
-    auto value = config_.find(Keys::KUploadPartAsync)->second.value();
+  bool partUploadAsync() const {
+    auto value = config_.find(Keys::KPartUploadAsync)->second.value();
     return folly::to<bool>(value);
   }
 

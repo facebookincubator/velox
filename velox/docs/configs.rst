@@ -879,7 +879,7 @@ Each query can override the config by setting corresponding query session proper
      -
      - A custom credential provider, if specified, will be used to create the client in favor of other authentication mechanisms.
        The provider must be registered using "registerAWSCredentialsProvider" before it can be used.
-   * - hive.s3.upload-part-async
+   * - hive.s3.part-upload-async
      - bool
      - false
      - If true, enables asynchronous upload of parts for S3 multipart uploads.
