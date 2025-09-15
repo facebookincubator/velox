@@ -15,6 +15,7 @@
  */
 #include "velox/experimental/cudf/exec/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/exec/Validation.h"
 
 #include "velox/expression/ConstantExpr.h"
 #include "velox/expression/FieldReference.h"
@@ -286,8 +287,12 @@ bool canBeEvaluated(const std::shared_ptr<velox::exec::Expr>& expr) {
     return std::all_of(
         expr->inputs().begin(), expr->inputs().end(), canBeEvaluated);
   }
-  return std::dynamic_pointer_cast<velox::exec::FieldReference>(expr) !=
-      nullptr;
+  if (std::dynamic_pointer_cast<velox::exec::FieldReference>(expr) == nullptr) {
+    LOG_VALIDATION_MSG("The expression {} is not supported", name);
+    return false;
+  }
+
+  return true;
 }
 
 } // namespace detail
