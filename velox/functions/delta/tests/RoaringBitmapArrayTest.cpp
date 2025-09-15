@@ -56,29 +56,29 @@ class RoaringBitmapArrayTest : public functions::test::FunctionBaseTest {
 
 TEST_F(RoaringBitmapArrayTest, contains) {
   RoaringBitmapArray array{};
-  array.add(206LL);
-  array.add(10LL << 32 | 10LL);
-  EXPECT_TRUE(array.contains(206LL));
-  EXPECT_FALSE(array.contains(207LL));
-  EXPECT_TRUE(array.contains(10LL << 32 | 10LL));
-  EXPECT_FALSE(array.contains(11LL << 32 | 10LL));
-  EXPECT_FALSE(array.contains(10LL << 32 | 11LL));
+  array.addSafe(206LL);
+  array.addSafe(10LL << 32 | 10LL);
+  EXPECT_TRUE(array.containsSafe(206LL));
+  EXPECT_FALSE(array.containsSafe(207LL));
+  EXPECT_TRUE(array.containsSafe(10LL << 32 | 10LL));
+  EXPECT_FALSE(array.containsSafe(11LL << 32 | 10LL));
+  EXPECT_FALSE(array.containsSafe(10LL << 32 | 11LL));
 }
 
 TEST_F(RoaringBitmapArrayTest, serde) {
   RoaringBitmapArray array{};
-  array.add(206LL);
-  array.add(10LL << 32 | 10LL);
+  array.addSafe(206LL);
+  array.addSafe(10LL << 32 | 10LL);
   std::string data;
   data.resize(array.serializedSizeInBytes());
   array.serialize(data.data());
   RoaringBitmapArray deserialized{};
   deserialized.deserialize(data.data());
-  EXPECT_TRUE(deserialized.contains(206LL));
-  EXPECT_FALSE(deserialized.contains(207LL));
-  EXPECT_TRUE(deserialized.contains(10LL << 32 | 10LL));
-  EXPECT_FALSE(deserialized.contains(11LL << 32 | 10LL));
-  EXPECT_FALSE(deserialized.contains(10LL << 32 | 11LL));
+  EXPECT_TRUE(deserialized.containsSafe(206LL));
+  EXPECT_FALSE(deserialized.containsSafe(207LL));
+  EXPECT_TRUE(deserialized.containsSafe(10LL << 32 | 10LL));
+  EXPECT_FALSE(deserialized.containsSafe(11LL << 32 | 10LL));
+  EXPECT_FALSE(deserialized.containsSafe(10LL << 32 | 11LL));
 }
 
 TEST_F(RoaringBitmapArrayTest, bitmapContainsFunction) {

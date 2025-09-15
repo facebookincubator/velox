@@ -31,14 +31,29 @@ class RoaringBitmapArray {
  public:
   RoaringBitmapArray() = default;
 
+  /// Deserializes the bitmap array from a buffer.
   void deserialize(const char* serialized);
 
+  /// Serializes the bitmap into a buffer.
   void serialize(char* buf) const;
 
+  /// Adds an int64 value to the bitmap array. Returns an error
+  /// when the value is invalid.
   Status add(int64_t value);
 
+  /// Adds an int64 value to the bitmap array. Throws when the
+  /// value is invalid.
+  void addSafe(int64_t value);
+
+  /// Tests whether the value is in the bitmap array. Returns an error
+  /// when the value is invalid.
   Status contains(bool& result, int64_t value);
 
+  /// Tests whether the value is in the bitmap array. Throws when the
+  /// value is invalid.
+  bool containsSafe(int64_t value);
+
+  /// Returns the serialized size in bytes of the bitmap array.
   int64_t serializedSizeInBytes() const;
 
  private:

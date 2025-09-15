@@ -132,6 +132,10 @@ Status RoaringBitmapArray::add(int64_t value) {
   return Status::OK();
 }
 
+void RoaringBitmapArray::addSafe(int64_t value) {
+  VELOX_USER_CHECK(add(value).ok());
+}
+
 Status RoaringBitmapArray::contains(bool& result, int64_t value) {
   auto valueCheck = checkValue(value);
   if (FOLLY_UNLIKELY(!valueCheck.ok())) {
@@ -156,6 +160,12 @@ Status RoaringBitmapArray::contains(bool& result, int64_t value) {
   lastContext_ = highBuckContext.get();
   result = highBitmap->containsBulk(*highBuckContext, low);
   return Status::OK();
+}
+
+bool RoaringBitmapArray::containsSafe(int64_t value) {
+  bool result;
+  VELOX_USER_CHECK(contains(result, value).ok());
+  return result;
 }
 
 int64_t RoaringBitmapArray::serializedSizeInBytes() const {
