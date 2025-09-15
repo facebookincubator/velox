@@ -122,7 +122,7 @@ Status RoaringBitmapArray::add(int64_t value) {
   const auto low = lowBytesUnsafe(value);
   if (high >= bitmaps_.size()) {
     // Grows the bitmap array.
-    for (int32_t i = bitmaps_.size(); i <= high; ++i) {
+    for (auto i = bitmaps_.size(); i <= high; ++i) {
       bitmaps_.emplace_back(std::make_shared<roaring::Roaring>());
       buckContexts_.emplace_back(std::make_shared<roaring::BulkContext>());
     }
