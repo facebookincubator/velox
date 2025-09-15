@@ -22,8 +22,7 @@ namespace fecebook::velox::exec::test {
 using namespace facebook::velox::test;
 
 namespace {
-std::vector<std::string> appendMatchColumn(
-    const std::vector<std::string> columns) {
+std::vector<std::string> appendMarker(const std::vector<std::string> columns) {
   std::vector<std::string> resultColumns;
   resultColumns.reserve(columns.size() + 1);
   for (const auto& column : columns) {
@@ -114,7 +113,7 @@ std::vector<RowVectorPtr> IndexLookupJoinTestBase::generateProbeInput(
   if (equalMatchPct.has_value()) {
     VELOX_CHECK_GE(equalMatchPct.value(), 0);
     VELOX_CHECK_LE(equalMatchPct.value(), 100);
-    for (int i = 0, totalRows = 0; i < numBatches; ++i) {
+    for (int i = 0; i < numBatches; ++i) {
       std::vector<FlatVectorPtr<int64_t>> probeKeyVectors;
       for (int j = 0; j < probeJoinKeys.size(); ++j) {
         probeKeyVectors.push_back(BaseVector::create<FlatVector<int64_t>>(
@@ -123,9 +122,11 @@ std::vector<RowVectorPtr> IndexLookupJoinTestBase::generateProbeInput(
             pool.get()));
       }
       for (int row = 0; row < probeInputs[i]->size();
-           row += numDuplicateProbeRows, totalRows += numDuplicateProbeRows) {
-        if ((totalRows / numDuplicateProbeRows) % 100 < equalMatchPct.value()) {
-          const auto matchKeyRow = folly::Random::rand64(numTableRows);
+           row += numDuplicateProbeRows) {
+        const auto hit =
+            (folly::Random::rand32(rng_) % 100) < equalMatchPct.value();
+        if (hit) {
+          const auto matchKeyRow = folly::Random::rand32(numTableRows, rng_);
           for (int j = 0; j < probeJoinKeys.size(); ++j) {
             for (int k = 0; k < numDuplicateProbeRows; ++k) {
               if (probeKeyVectors[j]->isNullAt(row + k)) {
@@ -137,7 +138,7 @@ std::vector<RowVectorPtr> IndexLookupJoinTestBase::generateProbeInput(
           }
         } else {
           for (int j = 0; j < probeJoinKeys.size(); ++j) {
-            const auto randomValue = folly::Random::rand32() % 4096;
+            const auto randomValue = folly::Random::rand32(rng_) % 4096;
             for (int k = 0; k < numDuplicateProbeRows; ++k) {
               if (probeKeyVectors[j]->isNullAt(row + k)) {
                 continue;
@@ -257,7 +258,7 @@ PlanNodePtr IndexLookupJoinTestBase::makeLookupPlan(
     const std::vector<std::string>& leftKeys,
     const std::vector<std::string>& rightKeys,
     const std::vector<std::string>& joinConditions,
-    bool includeMatchColumn,
+    bool hasMarker,
     JoinType joinType,
     const std::vector<std::string>& outputColumns,
     PlanNodeId& joinNodeId) {
@@ -265,14 +266,15 @@ PlanNodePtr IndexLookupJoinTestBase::makeLookupPlan(
   VELOX_CHECK_LE(leftKeys.size(), keyType_->size());
   return PlanBuilder(planNodeIdGenerator, pool_.get())
       .values(probeVectors)
-      .indexLookupJoin(
-          leftKeys,
-          rightKeys,
-          indexScanNode,
-          joinConditions,
-          includeMatchColumn,
-          includeMatchColumn ? appendMatchColumn(outputColumns) : outputColumns,
-          joinType)
+      .startIndexLookupJoin()
+      .leftKeys(leftKeys)
+      .rightKeys(rightKeys)
+      .indexSource(indexScanNode)
+      .joinConditions(joinConditions)
+      .hasMarker(hasMarker)
+      .outputLayout(hasMarker ? appendMarker(outputColumns) : outputColumns)
+      .joinType(joinType)
+      .endIndexLookupJoin()
       .capturePlanNodeId(joinNodeId)
       .planNode();
 }
@@ -283,7 +285,8 @@ PlanNodePtr IndexLookupJoinTestBase::makeLookupPlan(
     const std::vector<std::string>& leftKeys,
     const std::vector<std::string>& rightKeys,
     const std::vector<std::string>& joinConditions,
-    bool includeMatchColumn,
+    const std::string& filter,
+    bool hasMarker,
     JoinType joinType,
     const std::vector<std::string>& outputColumns) {
   VELOX_CHECK_EQ(leftKeys.size(), rightKeys.size());
@@ -293,14 +296,16 @@ PlanNodePtr IndexLookupJoinTestBase::makeLookupPlan(
       .outputType(probeType_)
       .endTableScan()
       .captureScanNodeId(probeScanNodeId_)
-      .indexLookupJoin(
-          leftKeys,
-          rightKeys,
-          indexScanNode,
-          joinConditions,
-          includeMatchColumn,
-          includeMatchColumn ? appendMatchColumn(outputColumns) : outputColumns,
-          joinType)
+      .startIndexLookupJoin()
+      .leftKeys(leftKeys)
+      .rightKeys(rightKeys)
+      .indexSource(indexScanNode)
+      .joinConditions(joinConditions)
+      .filter(filter)
+      .hasMarker(hasMarker)
+      .outputLayout(hasMarker ? appendMarker(outputColumns) : outputColumns)
+      .joinType(joinType)
+      .endIndexLookupJoin()
       .capturePlanNodeId(joinNodeId_)
       .planNode();
 }
@@ -485,13 +490,16 @@ void IndexLookupJoinTestBase::verifyResultWithMatchColumn(
       rowResultWithMatchMatchColumn
           ->childAt(rowResultWithMatchMatchColumn->childrenSize() - 1)
           ->asFlatVector<bool>();
-
   for (int i = 0; i < resultWithMatchColumn->size(); ++i) {
-    if (matchColumn->valueAtFast(i)) {
-      continue;
-    }
-    for (const auto& lookupColumnVector : lookupColumnVectors) {
-      ASSERT_TRUE(lookupColumnVector->isNullAt(i));
+    const bool match = matchColumn->valueAt(i);
+    if (match) {
+      for (const auto& lookupColumnVector : lookupColumnVectors) {
+        ASSERT_FALSE(lookupColumnVector->isNullAt(i));
+      }
+    } else {
+      for (const auto& lookupColumnVector : lookupColumnVectors) {
+        ASSERT_TRUE(lookupColumnVector->isNullAt(i));
+      }
     }
   }
 }

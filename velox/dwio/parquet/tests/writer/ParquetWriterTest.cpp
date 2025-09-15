@@ -46,15 +46,11 @@ class ParquetWriterTest : public ParquetTestBase {
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
     testutil::TestValue::enable();
     filesystems::registerLocalFileSystem();
-    connector::registerConnectorFactory(
-        std::make_shared<connector::hive::HiveConnectorFactory>());
-    auto hiveConnector =
-        connector::getConnectorFactory(
-            connector::hive::HiveConnectorFactory::kHiveConnectorName)
-            ->newConnector(
-                kHiveConnectorId,
-                std::make_shared<config::ConfigBase>(
-                    std::unordered_map<std::string, std::string>()));
+    connector::hive::HiveConnectorFactory factory;
+    auto hiveConnector = factory.newConnector(
+        kHiveConnectorId,
+        std::make_shared<config::ConfigBase>(
+            std::unordered_map<std::string, std::string>()));
     connector::registerConnector(hiveConnector);
     parquet::registerParquetWriterFactory();
   }
@@ -826,7 +822,7 @@ TEST_F(ParquetWriterTest, parquetWriteWithArrowMemoryPool) {
 
 TEST_F(ParquetWriterTest, updateWriterOptionsFromHiveConfig) {
   std::unordered_map<std::string, std::string> configFromFile = {
-      {parquet::WriterOptions::kParquetSessionWriteTimestampUnit, "3"}};
+      {parquet::WriterOptions::kParquetHiveConnectorWriteTimestampUnit, "3"}};
   const config::ConfigBase connectorConfig(std::move(configFromFile));
   const config::ConfigBase connectorSessionProperties({});
 

@@ -19,6 +19,7 @@
 #include <folly/Hash.h>
 #include <folly/Random.h>
 #include <folly/Range.h>
+#include <folly/container/F14Set.h>
 #include <folly/dynamic.h>
 
 #include <cstdint>
@@ -653,6 +654,8 @@ class Type : public Tree<const TypePtr>, public velox::ISerializable {
 
   bool isIntervalDayTime() const;
 
+  bool isTime() const;
+
   bool isDate() const;
 
   bool containsUnknown() const;
@@ -898,6 +901,9 @@ class ShortDecimalType final : public DecimalType<TypeKind::BIGINT> {
 
 class LongDecimalType final : public DecimalType<TypeKind::HUGEINT> {
  public:
+  // Ensure toString from the parent is not hidden.
+  using DecimalType<TypeKind::HUGEINT>::toString;
+
   LongDecimalType(int precision, int scale)
       : DecimalType<TypeKind::HUGEINT>(precision, scale) {}
 
@@ -1091,6 +1097,34 @@ class MapType : public TypeBase<TypeKind::MAP> {
 using MapTypePtr = std::shared_ptr<const MapType>;
 
 class RowType : public TypeBase<TypeKind::ROW> {
+  // This Set<NameIndex> written only to decrease memory footprint.
+  // In general it can be replaced with Map<string_view, size_t>
+  struct NameIndex {
+    explicit NameIndex(std::string_view name, uint32_t index)
+        : data{name.data()},
+          size{static_cast<uint32_t>(name.size())},
+          index{index} {}
+
+    const char* data = nullptr;
+    uint32_t size = 0;
+
+    bool operator==(const NameIndex& other) const {
+      return size == other.size && std::memcmp(data, other.data, size) == 0;
+    }
+
+    uint32_t index = 0;
+  };
+
+  struct NameIndexHasher {
+    size_t operator()(const NameIndex& nameIndex) const {
+      folly::f14::DefaultHasher<std::string_view> hasher;
+      return hasher(std::string_view{nameIndex.data, nameIndex.size});
+    }
+  };
+
+  // TODO: Consider using absl::flat_hash_set instead.
+  using NameToIndex = folly::F14ValueSet<NameIndex, NameIndexHasher>;
+
  public:
   /// @param names Child names. Case sensitive. Can be empty. May contain
   /// duplicates.
@@ -1160,16 +1194,19 @@ class RowType : public TypeBase<TypeKind::ROW> {
   }
 
   const std::vector<TypeParameter>& parameters() const override {
-    auto* parameters = parameters_.load();
-    if (FOLLY_UNLIKELY(!parameters)) {
-      parameters = makeParameters().release();
-      std::vector<TypeParameter>* oldParameters = nullptr;
-      if (!parameters_.compare_exchange_strong(oldParameters, parameters)) {
-        delete parameters;
-        parameters = oldParameters;
-      }
+    const auto* parameters = parameters_.load(std::memory_order_acquire);
+    if (parameters) [[likely]] {
+      return *parameters;
     }
-    return *parameters;
+    return *ensureParameters();
+  }
+
+  const NameToIndex& nameToIndex() const {
+    const auto* nameToIndex = nameToIndex_.load(std::memory_order_acquire);
+    if (nameToIndex) [[likely]] {
+      return *nameToIndex;
+    }
+    return *ensureNameToIndex();
   }
 
   size_t hashKind() const override;
@@ -1178,11 +1215,13 @@ class RowType : public TypeBase<TypeKind::ROW> {
   bool equals(const Type& other) const override;
 
  private:
-  std::unique_ptr<std::vector<TypeParameter>> makeParameters() const;
+  const std::vector<TypeParameter>* ensureParameters() const;
+  const NameToIndex* ensureNameToIndex() const;
 
   const std::vector<std::string> names_;
   const std::vector<TypePtr> children_;
   mutable std::atomic<std::vector<TypeParameter>*> parameters_{nullptr};
+  mutable std::atomic<NameToIndex*> nameToIndex_{nullptr};
   mutable std::atomic_bool hashKindComputed_{false};
   mutable std::atomic_size_t hashKind_;
 };
@@ -1517,6 +1556,61 @@ FOLLY_ALWAYS_INLINE bool Type::isDate() const {
   // The pointers can be compared since DATE is a singleton.
   return this == DATE().get();
 }
+
+/// Represents TIME as a bigint (milliseconds since midnight).
+class TimeType final : public BigintType {
+  TimeType() = default;
+
+ public:
+  static std::shared_ptr<const TimeType> get() {
+    VELOX_CONSTEXPR_SINGLETON TimeType kInstance;
+    return {std::shared_ptr<const TimeType>{}, &kInstance};
+  }
+
+  bool equivalent(const Type& other) const override {
+    // Pointer comparison works since this type is a singleton.
+    return this == &other;
+  }
+
+  const char* name() const override {
+    return "TIME";
+  }
+
+  std::string toString() const override {
+    return name();
+  }
+
+  folly::dynamic serialize() const override;
+
+  static TypePtr deserialize(const folly::dynamic& /*obj*/) {
+    return TimeType::get();
+  }
+
+  bool isOrderable() const override {
+    return true;
+  }
+
+  bool isComparable() const override {
+    return true;
+  }
+};
+
+using TimeTypePtr = std::shared_ptr<const TimeType>;
+
+FOLLY_ALWAYS_INLINE TimeTypePtr TIME() {
+  return TimeType::get();
+}
+
+FOLLY_ALWAYS_INLINE bool Type::isTime() const {
+  // Pointer comparison works since this type is a singleton.
+  return (this == TIME().get());
+}
+
+// Type used for function registration.
+struct TimeT {
+  using type = int64_t; // Underlying storage as milliseconds since midnight
+  static constexpr const char* typeName = "time";
+};
 
 /// Used as T for SimpleVector subclasses that wrap another vector when
 /// the wrapped vector is of a complex type. Applies to

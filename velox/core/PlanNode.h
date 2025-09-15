@@ -3431,7 +3431,15 @@ class IndexLookupJoinNode : public AbstractJoinNode {
  public:
   /// @param joinType Specifies the lookup join type. Only INNER and LEFT joins
   /// are supported.
-  /// @param includeMatchColumn if true, the output type includes a boolean
+  /// @param leftKeys Left side join keys used for index lookup.
+  /// @param rightKeys Right side join keys that form the index prefix.
+  /// @param joinConditions Additional conditions for index lookup that can't
+  /// be converted into simple equality join conditions. These conditions use
+  /// columns from both left and right  and exactly one index column from
+  /// the right side.sides
+  /// @param filter Additional filter to apply on join results. This supports
+  /// filters that can't be converted into join conditions.
+  /// @param hasMarker if true, the output type includes a boolean
   /// column at the end to indicate if a join output row has a match or not.
   /// This only applies for left join.
   IndexLookupJoinNode(
@@ -3440,10 +3448,35 @@ class IndexLookupJoinNode : public AbstractJoinNode {
       const std::vector<FieldAccessTypedExprPtr>& leftKeys,
       const std::vector<FieldAccessTypedExprPtr>& rightKeys,
       const std::vector<IndexLookupConditionPtr>& joinConditions,
-      bool includeMatchColumn,
+      TypedExprPtr filter,
+      bool hasMarker,
       PlanNodePtr left,
       TableScanNodePtr right,
       RowTypePtr outputType);
+
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+  IndexLookupJoinNode(
+      const PlanNodeId& id,
+      JoinType joinType,
+      const std::vector<FieldAccessTypedExprPtr>& leftKeys,
+      const std::vector<FieldAccessTypedExprPtr>& rightKeys,
+      const std::vector<IndexLookupConditionPtr>& joinConditions,
+      bool hasMarker,
+      PlanNodePtr left,
+      TableScanNodePtr right,
+      RowTypePtr outputType)
+      : IndexLookupJoinNode(
+            id,
+            joinType,
+            leftKeys,
+            rightKeys,
+            joinConditions,
+            /*filter=*/nullptr,
+            hasMarker,
+            std::move(left),
+            std::move(right),
+            std::move(outputType)) {}
+#endif
 
   class Builder
       : public AbstractJoinNode::Builder<IndexLookupJoinNode, Builder> {
@@ -3453,16 +3486,27 @@ class IndexLookupJoinNode : public AbstractJoinNode {
     explicit Builder(const IndexLookupJoinNode& other)
         : AbstractJoinNode::Builder<IndexLookupJoinNode, Builder>(other) {
       joinConditions_ = other.joinConditions();
+      filter_ = other.filter();
+      hasMarker_ = other.hasMarker();
     }
 
+    /// Set lookup conditions for index lookup that can't be converted into
+    /// simple equality join conditions.
     Builder& joinConditions(
         std::vector<IndexLookupConditionPtr> joinConditions) {
       joinConditions_ = std::move(joinConditions);
       return *this;
     }
 
-    Builder& includeMatchColumn(bool includeMatchColumn) {
-      includeMatchColumn_ = includeMatchColumn;
+    /// Set additional filter to apply on join results.
+    Builder& filter(TypedExprPtr filter) {
+      filter_ = std::move(filter);
+      return *this;
+    }
+
+    /// Set whether to include a marker column for left joins.
+    Builder& hasMarker(bool hasMarker) {
+      hasMarker_ = hasMarker;
       return *this;
     }
 
@@ -3480,25 +3524,23 @@ class IndexLookupJoinNode : public AbstractJoinNode {
           right_.has_value(), "IndexLookupJoinNode right source is not set");
       VELOX_USER_CHECK(
           outputType_.has_value(), "IndexLookupJoinNode outputType is not set");
-      VELOX_USER_CHECK(
-          joinConditions_.has_value(),
-          "IndexLookupJoinNode join conditions are not set");
 
       return std::make_shared<IndexLookupJoinNode>(
           id_.value(),
           joinType_.value(),
           leftKeys_.value(),
           rightKeys_.value(),
-          joinConditions_.value(),
-          includeMatchColumn_,
+          joinConditions_,
+          filter_.value_or(nullptr),
+          hasMarker_,
           left_.value(),
           std::dynamic_pointer_cast<const TableScanNode>(right_.value()),
           outputType_.value());
     }
 
    private:
-    std::optional<std::vector<IndexLookupConditionPtr>> joinConditions_;
-    bool includeMatchColumn_;
+    std::vector<IndexLookupConditionPtr> joinConditions_;
+    bool hasMarker_;
   };
 
   bool supportsBarrier() const override {
@@ -3509,6 +3551,8 @@ class IndexLookupJoinNode : public AbstractJoinNode {
     return lookupSourceNode_;
   }
 
+  /// Returns the join conditions for index lookup that can't be converted into
+  /// simple equality join conditions.
   const std::vector<IndexLookupConditionPtr>& joinConditions() const {
     return joinConditions_;
   }
@@ -3517,8 +3561,9 @@ class IndexLookupJoinNode : public AbstractJoinNode {
     return "IndexLookupJoin";
   }
 
-  bool includeMatchColumn() const {
-    return includeMatchColumn_;
+  /// Returns whether this node includes a marker column for left joins.
+  bool hasMarker() const {
+    return hasMarker_;
   }
 
   void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
@@ -3534,11 +3579,16 @@ class IndexLookupJoinNode : public AbstractJoinNode {
  private:
   void addDetails(std::stringstream& stream) const override;
 
+  /// The table scan node that provides the lookup source for index operations.
   const TableScanNodePtr lookupSourceNode_;
 
+  /// Join conditions that can't be converted into simple equality join
+  /// conditions. These conditions involve columns from both left and right
+  /// sides and exactly one index column from the right side.
   const std::vector<IndexLookupConditionPtr> joinConditions_;
 
-  const bool includeMatchColumn_;
+  /// Whether to include a marker column for left joins to indicate matches.
+  const bool hasMarker_;
 };
 
 using IndexLookupJoinNodePtr = std::shared_ptr<const IndexLookupJoinNode>;
@@ -4245,17 +4295,17 @@ class UnnestNode : public PlanNode {
   /// names must appear in the same order as unnestVariables.
   /// @param ordinalityName Optional name for the ordinality columns. If not
   /// present, ordinality column is not produced.
-  /// @param emptyUnnestValueName Optional name for column which indicates an
-  /// output row has empty unnest value or not. If not present, emptyUnnestValue
-  /// column is not provided and the unnest operator also skips producing output
-  /// rows with empty unnest value.
+  /// @param markerName Optional name for column which indicates whether an
+  /// output row has non-empty unnested value. If not present, marker column is
+  /// not provided and the unnest operator also skips producing output rows
+  /// with empty unnest value.
   UnnestNode(
       const PlanNodeId& id,
       std::vector<FieldAccessTypedExprPtr> replicateVariables,
       std::vector<FieldAccessTypedExprPtr> unnestVariables,
       std::vector<std::string> unnestNames,
       std::optional<std::string> ordinalityName,
-      std::optional<std::string> emptyUnnestValueName,
+      std::optional<std::string> markerName,
       const PlanNodePtr& source);
 
   class Builder {
@@ -4304,9 +4354,8 @@ class UnnestNode : public PlanNode {
       return *this;
     }
 
-    Builder& emptyUnnestValueName(
-        std::optional<std::string> emptyUnnestValueName) {
-      emptyUnnestValueName_ = std::move(emptyUnnestValueName);
+    Builder& markerName(std::optional<std::string> markerName) {
+      markerName_ = std::move(markerName);
       return *this;
     }
 
@@ -4328,7 +4377,7 @@ class UnnestNode : public PlanNode {
           unnestVariables_.value(),
           unnestNames_.value(),
           ordinalityName_,
-          emptyUnnestValueName_,
+          markerName_,
           source_.value());
     }
 
@@ -4338,7 +4387,7 @@ class UnnestNode : public PlanNode {
     std::optional<std::vector<FieldAccessTypedExprPtr>> unnestVariables_;
     std::optional<std::vector<std::string>> unnestNames_;
     std::optional<std::string> ordinalityName_;
-    std::optional<std::string> emptyUnnestValueName_;
+    std::optional<std::string> markerName_;
     std::optional<PlanNodePtr> source_;
   };
 
@@ -4380,12 +4429,12 @@ class UnnestNode : public PlanNode {
     return ordinalityName_.has_value();
   }
 
-  const std::optional<std::string>& emptyUnnestValueName() const {
-    return emptyUnnestValueName_;
+  const std::optional<std::string>& markerName() const {
+    return markerName_;
   }
 
-  bool hasEmptyUnnestValue() const {
-    return emptyUnnestValueName_.has_value();
+  bool hasMarker() const {
+    return markerName_.has_value();
   }
 
   std::string_view name() const override {
@@ -4403,7 +4452,7 @@ class UnnestNode : public PlanNode {
   const std::vector<FieldAccessTypedExprPtr> unnestVariables_;
   const std::vector<std::string> unnestNames_;
   const std::optional<std::string> ordinalityName_;
-  const std::optional<std::string> emptyUnnestValueName_;
+  const std::optional<std::string> markerName_;
   const std::vector<PlanNodePtr> sources_;
   RowTypePtr outputType_;
 };

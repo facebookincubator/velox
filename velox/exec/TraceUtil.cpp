@@ -407,7 +407,8 @@ core::PlanNodePtr getTraceNode(
         indexLookupJoinNode->leftKeys(),
         indexLookupJoinNode->rightKeys(),
         indexLookupJoinNode->joinConditions(),
-        indexLookupJoinNode->includeMatchColumn(),
+        indexLookupJoinNode->filter(),
+        indexLookupJoinNode->hasMarker(),
         std::make_shared<DummySourceNode>(
             indexLookupJoinNode->sources().front()->outputType()), // Probe side
         indexLookupJoinNode->lookupSource(), // Index side
@@ -446,7 +447,7 @@ core::PlanNodePtr getTraceNode(
         unnestNode->unnestVariables(),
         unnestNode->unnestNames(),
         unnestNode->ordinalityName(),
-        unnestNode->emptyUnnestValueName(),
+        unnestNode->markerName(),
         std::make_shared<DummySourceNode>(
             unnestNode->sources().front()->outputType()));
   }
