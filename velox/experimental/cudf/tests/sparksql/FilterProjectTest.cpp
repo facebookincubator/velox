@@ -67,4 +67,23 @@ TEST_F(CudfFilterProjectTest, hashWithSeed) {
   });
   facebook::velox::test::assertEqualVectors(expected, hashResults);
 }
+
+TEST_F(CudfFilterProjectTest, hashWithSeedMultiColumns) {
+  auto input = makeFlatVector<int64_t>({INT64_MAX, INT64_MIN});
+  auto data = makeRowVector({input, input});
+  auto hashPlan = PlanBuilder()
+                      .setParseOptions(options_)
+                      .values({data})
+                      .project({"hash_with_seed(42, c0, c1) AS c2"})
+                      .planNode();
+  auto hashResults = AssertQueryBuilder(hashPlan).copyResults(pool());
+
+  auto expected = makeRowVector({
+      makeFlatVector<int32_t>({
+          1049813396,
+          1800792340,
+      }),
+  });
+  facebook::velox::test::assertEqualVectors(expected, hashResults);
+}
 } // namespace
