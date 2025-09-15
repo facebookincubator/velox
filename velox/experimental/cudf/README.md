@@ -1,6 +1,6 @@
 # Velox-cuDF
 
-Velox-cuDF is a Velox extension module that uses the cuDF library to implement a GPU-accelerated backend for executing Velox plans. [cuDF](https://github.com/rapidsai/cudf) is an open source library for GPU data processing, and Velox-cuDF integrates with "[libcudf](https://github.com/rapidsai/cudf/tree/branch-25.10/cpp)", the CUDA C++ core of cuDF. libcudf uses [Arrow](https://arrow.apache.org)-compatible data layouts and includes single-node, single-GPU algorithms for data processing.
+Velox-cuDF is a Velox extension module that uses the cuDF library to implement a GPU-accelerated backend for executing Velox plans. [cuDF](https://github.com/rapidsai/cudf) is an open source library for GPU data processing, and Velox-cuDF integrates with "[libcudf](https://github.com/rapidsai/cudf/tree/main/cpp)", the CUDA C++ core of cuDF. libcudf uses [Arrow](https://arrow.apache.org)-compatible data layouts and includes single-node, single-GPU algorithms for data processing.
 
 ## How Velox and cuDF work together
 
@@ -10,7 +10,7 @@ For more information please refer to our blog: "[Extending Velox - GPU Accelerat
 
 ## Getting started with Velox-cuDF
 
-cuDF supports Linux and WSL2 but not Windows or MacOS. cuDF also has minimum CUDA version, NVIDIA driver and GPU architecture requirements which can be found in the [RAPIDS Installation Guide](https://docs.rapids.ai/install/). Please refer to cuDF's [readme](https://github.com/rapidsai/cudf) and [developer guide](https://github.com/rapidsai/cudf/blob/branch-25.10/cpp/doxygen/developer_guide/DEVELOPER_GUIDE.md) for more information.
+cuDF supports Linux and WSL2 but not Windows or MacOS. cuDF also has minimum CUDA version, NVIDIA driver and GPU architecture requirements which can be found in the [RAPIDS Installation Guide](https://docs.rapids.ai/install/). Please refer to cuDF's [readme](https://github.com/rapidsai/cudf) and [developer guide](https://github.com/rapidsai/cudf/blob/main/cpp/doxygen/developer_guide/DEVELOPER_GUIDE.md) for more information.
 
 ### Building Velox with cuDF
 
