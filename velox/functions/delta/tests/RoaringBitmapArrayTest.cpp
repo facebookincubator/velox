@@ -83,8 +83,8 @@ TEST_F(RoaringBitmapArrayTest, serde) {
 
 TEST_F(RoaringBitmapArrayTest, bitmapContainsFunction) {
   RoaringBitmapArray array{};
-  array.add(206LL);
-  array.add(10LL << 32 | 10LL);
+  array.addSafe(206LL);
+  array.addSafe(10LL << 32 | 10LL);
   std::string data;
   data.resize(array.serializedSizeInBytes());
   array.serialize(data.data());

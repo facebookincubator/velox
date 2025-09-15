@@ -186,14 +186,9 @@ int64_t RoaringBitmapArray::serializedSizeInBytes() const {
 }
 
 Status RoaringBitmapArray::checkValue(int64_t value) {
-  VELOX_USER_RETURN_GE(
-      value, 0, "Invalid RoaringBitmapArray value ({}) >= 0", value);
-  VELOX_USER_RETURN_LE(
-      value,
-      kMaxRepresentableValue,
-      "Invalid RoaringBitmapArray value ({}) <= {}",
-      value,
-      kMaxRepresentableValue);
+  VELOX_USER_RETURN_LT(value, 0, "Invalid RoaringBitmapArray value");
+  VELOX_USER_RETURN_GT(
+      value, kMaxRepresentableValue, "Invalid RoaringBitmapArray value");
   return Status::OK();
 }
 
