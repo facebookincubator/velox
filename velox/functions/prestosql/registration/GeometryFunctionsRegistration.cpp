@@ -153,6 +153,8 @@ void registerAccessors(const std::string& prefix) {
       {{prefix + "geometry_as_geojson"}});
   registerFunction<GeometryFromGeoJsonFunction, Geometry, Varchar>(
       {{prefix + "geometry_from_geojson"}});
+  registerFunction<GeometryUnionFunction, Geometry, Array<Geometry>>(
+      {{prefix + "geometry_union"}});
   registerFunction<
       GeometryNearestPointsFunction,
       Array<Geometry>,
@@ -174,6 +176,16 @@ void registerAccessors(const std::string& prefix) {
 void registerBingTileGeometryFunctions(const std::string& prefix) {
   registerFunction<BingTilePolygonFunction, Geometry, BingTile>(
       {{prefix + "bing_tile_polygon"}});
+  registerFunction<
+      GeometryToBingTilesFunction,
+      Array<BingTile>,
+      Geometry,
+      int32_t>({{prefix + "geometry_to_bing_tiles"}});
+  registerFunction<
+      GeometryToDissolvedBingTilesFunction,
+      Array<BingTile>,
+      Geometry,
+      int32_t>({{prefix + "geometry_to_dissolved_bing_tiles"}});
 }
 
 } // namespace
