@@ -522,7 +522,7 @@ TEST_F(HdfsFileSystemTest, readFailures) {
   verifyFailures(driver, hdfs);
 }
 
-TEST_F(HdfsFileSystemTest, writeFilePreventsDoubleClose) {
+DEBUG_ONLY_TEST_F(HdfsFileSystemTest, writeFilePreventsDoubleClose) {
   common::testutil::TestValue::enable();
 
   int closeCallCount = 0;
@@ -536,11 +536,9 @@ TEST_F(HdfsFileSystemTest, writeFilePreventsDoubleClose) {
         }
       }));
 
-  const std::string_view path = "/test_double_close.txt";
-  auto writeFile = openFileForWrite(path);
+  auto writeFile = openFileForWrite("/test_double_close.txt");
 
-  const std::string_view data = "test data";
-  writeFile->append(data);
+  writeFile->append("test data");
   writeFile->flush();
 
   VELOX_ASSERT_THROW(writeFile->close(), "Failed to close hdfs file:");
