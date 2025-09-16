@@ -254,21 +254,28 @@ class S3Config {
     return config_.find(Keys::kCredentialsProvider)->second;
   }
 
+  /// If true, enables asynchronous upload of parts for S3 multipart uploads,
+  /// false otherwise.
   bool partUploadAsync() const {
     auto value = config_.find(Keys::KPartUploadAsync)->second.value();
     return folly::to<bool>(value);
   }
 
+  /// Return the size (in bytes) of each part for S3 multipart uploads.
   int32_t partUploadSize() const {
     auto value = config_.find(Keys::kPartUploadSize)->second.value();
     return folly::to<uint32_t>(value);
   }
 
+  /// Return the maximum number of concurrent uploads for S3 multipart uploads,
+  /// applicable only when asynchronous uploads are enabled.
   int32_t maxConcurrentUploadNum() const {
     auto value = config_.find(Keys::KMaxConcurrentUploadNum)->second.value();
     return folly::to<uint32_t>(value);
   }
 
+  /// Return the number of threads to use for S3 multipart uploads,
+  /// applicable only when asynchronous uploads are enabled.
   int32_t uploadThreads() const {
     auto value = config_.find(Keys::KUploadThreads)->second.value();
     return folly::to<uint32_t>(value);

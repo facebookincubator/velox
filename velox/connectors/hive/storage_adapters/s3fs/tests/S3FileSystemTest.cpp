@@ -240,168 +240,93 @@ TEST_F(S3FileSystemTest, mkdirAndRename) {
   ASSERT_FALSE(s3fs.exists(s3File));
 }
 
-TEST_F(S3FileSystemTest, writeFileAsync) {
-  const auto bucketName = "writedata";
-  const auto file = "test.txt";
-  const auto filename = localPath(bucketName) + "/" + file;
-  const auto s3File = s3URI(bucketName, file);
-
-  auto hiveConfig =
-      minioServer_->hiveConfig({{"hive.s3.part-upload-async", "true"}});
-  filesystems::S3FileSystem s3fs(bucketName, hiveConfig);
-
-  auto pool = memory::memoryManager()->addLeafPool("S3FileSystemTest");
-  auto writeFile =
-      s3fs.openFileForWrite(s3File, {{}, pool.get(), std::nullopt});
-  auto s3WriteFile = dynamic_cast<filesystems::S3WriteFile*>(writeFile.get());
-  std::string dataContent =
-      "Dance me to your beauty with a burning violin"
-      "Dance me through the panic till I'm gathered safely in"
-      "Lift me like an olive branch and be my homeward dove"
-      "Dance me to the end of love";
-
-  EXPECT_EQ(writeFile->size(), 0);
-  std::int64_t contentSize = dataContent.length();
-  // dataContent length is 178.
-  EXPECT_EQ(contentSize, 178);
-
-  // Append and flush a small batch of data.
-  writeFile->append(dataContent.substr(0, 10));
-  EXPECT_EQ(writeFile->size(), 10);
-  writeFile->append(dataContent.substr(10, contentSize - 10));
-  EXPECT_EQ(writeFile->size(), contentSize);
-  writeFile->flush();
-  // No parts must have been uploaded.
-  EXPECT_EQ(s3WriteFile->numPartsUploaded(), 0);
-
-  // Append data 178 * 100'000 ~ 16MiB.
-  // Should have 1 part in total with kUploadPartSize = 10MiB.
-  for (int i = 0; i < 100'000; ++i) {
-    writeFile->append(dataContent);
-  }
-  EXPECT_EQ(s3WriteFile->numPartsUploaded(), 1);
-  EXPECT_EQ(writeFile->size(), 100'001 * contentSize);
-
-  // Append a large data buffer 178 * 150'000 ~ 25MiB (2 parts).
-  std::vector<char> largeBuffer(contentSize * 150'000);
-  for (int i = 0; i < 150'000; ++i) {
-    memcpy(
-        largeBuffer.data() + (i * contentSize),
-        dataContent.data(),
-        contentSize);
-  }
-
-  writeFile->append({largeBuffer.data(), largeBuffer.size()});
-  EXPECT_EQ(writeFile->size(), 250'001 * contentSize);
-  // Total data = ~41 MB = 5 parts.
-  // But parts uploaded will be 4.
-  EXPECT_EQ(s3WriteFile->numPartsUploaded(), 4);
-
-  // Upload the last part.
-  writeFile->close();
-  EXPECT_EQ(s3WriteFile->numPartsUploaded(), 5);
-
-  VELOX_ASSERT_THROW(
-      writeFile->append(dataContent.substr(0, 10)), "File is closed");
-
-  auto readFile = s3fs.openFileForRead(s3File);
-  ASSERT_EQ(readFile->size(), contentSize * 250'001);
-  // Sample and verify every 1'000 dataContent chunks.
-  for (int i = 0; i < 250; ++i) {
-    ASSERT_EQ(
-        readFile->pread(i * (1'000 * contentSize), contentSize), dataContent);
-  }
-  // Verify the last chunk.
-  ASSERT_EQ(readFile->pread(contentSize * 250'000, contentSize), dataContent);
-
-  // Verify the S3 list function.
-  auto result = s3fs.list(s3File);
-
-  ASSERT_EQ(result.size(), 1);
-  ASSERT_TRUE(result[0] == file);
-
-  ASSERT_TRUE(s3fs.exists(s3File));
-}
-
 TEST_F(S3FileSystemTest, writeFileAndRead) {
   const auto bucketName = "writedata";
   const auto file = "test.txt";
   const auto filename = localPath(bucketName) + "/" + file;
   const auto s3File = s3URI(bucketName, file);
-
-  auto hiveConfig = minioServer_->hiveConfig();
-  filesystems::S3FileSystem s3fs(bucketName, hiveConfig);
   auto pool = memory::memoryManager()->addLeafPool("S3FileSystemTest");
-  auto writeFile =
-      s3fs.openFileForWrite(s3File, {{}, pool.get(), std::nullopt});
-  auto s3WriteFile = dynamic_cast<filesystems::S3WriteFile*>(writeFile.get());
-  std::string dataContent =
-      "Dance me to your beauty with a burning violin"
-      "Dance me through the panic till I'm gathered safely in"
-      "Lift me like an olive branch and be my homeward dove"
-      "Dance me to the end of love";
+  auto uploadPart = [&](bool uploadPartAsync) {
+    auto hiveConfig = minioServer_->hiveConfig();
+    auto hiveConfig = minioServer_->hiveConfig(
+        {{"hive.s3.part-upload-async", uploadPartAsync ? "true" : "false"}});
+    filesystems::S3FileSystem s3fs(bucketName, hiveConfig);
+    filesystems::S3FileSystem s3fs(bucketName, hiveConfig);
+    auto writeFile =
+        s3fs.openFileForWrite(s3File, {{}, pool.get(), std::nullopt});
+    auto s3WriteFile = dynamic_cast<filesystems::S3WriteFile*>(writeFile.get());
+    std::string dataContent =
+        "Dance me to your beauty with a burning violin"
+        "Dance me through the panic till I'm gathered safely in"
+        "Lift me like an olive branch and be my homeward dove"
+        "Dance me to the end of love";
 
-  EXPECT_EQ(writeFile->size(), 0);
-  std::int64_t contentSize = dataContent.length();
-  // dataContent length is 178.
-  EXPECT_EQ(contentSize, 178);
+    EXPECT_EQ(writeFile->size(), 0);
+    std::int64_t contentSize = dataContent.length();
+    // dataContent length is 178.
+    EXPECT_EQ(contentSize, 178);
 
-  // Append and flush a small batch of data.
-  writeFile->append(dataContent.substr(0, 10));
-  EXPECT_EQ(writeFile->size(), 10);
-  writeFile->append(dataContent.substr(10, contentSize - 10));
-  EXPECT_EQ(writeFile->size(), contentSize);
-  writeFile->flush();
-  // No parts must have been uploaded.
-  EXPECT_EQ(s3WriteFile->numPartsUploaded(), 0);
+    // Append and flush a small batch of data.
+    writeFile->append(dataContent.substr(0, 10));
+    EXPECT_EQ(writeFile->size(), 10);
+    writeFile->append(dataContent.substr(10, contentSize - 10));
+    EXPECT_EQ(writeFile->size(), contentSize);
+    writeFile->flush();
+    // No parts must have been uploaded.
+    EXPECT_EQ(s3WriteFile->numPartsUploaded(), 0);
 
-  // Append data 178 * 100'000 ~ 16MiB.
-  // Should have 1 part in total with kUploadPartSize = 10MiB.
-  for (int i = 0; i < 100'000; ++i) {
-    writeFile->append(dataContent);
-  }
-  EXPECT_EQ(s3WriteFile->numPartsUploaded(), 1);
-  EXPECT_EQ(writeFile->size(), 100'001 * contentSize);
+    // Append data 178 * 100'000 ~ 16MiB.
+    // Should have 1 part in total with kUploadPartSize = 10MiB.
+    for (int i = 0; i < 100'000; ++i) {
+      writeFile->append(dataContent);
+    }
+    EXPECT_EQ(s3WriteFile->numPartsUploaded(), 1);
+    EXPECT_EQ(writeFile->size(), 100'001 * contentSize);
 
-  // Append a large data buffer 178 * 150'000 ~ 25MiB (2 parts).
-  std::vector<char> largeBuffer(contentSize * 150'000);
-  for (int i = 0; i < 150'000; ++i) {
-    memcpy(
-        largeBuffer.data() + (i * contentSize),
-        dataContent.data(),
-        contentSize);
-  }
+    // Append a large data buffer 178 * 150'000 ~ 25MiB (2 parts).
+    std::vector<char> largeBuffer(contentSize * 150'000);
+    for (int i = 0; i < 150'000; ++i) {
+      memcpy(
+          largeBuffer.data() + (i * contentSize),
+          dataContent.data(),
+          contentSize);
+    }
 
-  writeFile->append({largeBuffer.data(), largeBuffer.size()});
-  EXPECT_EQ(writeFile->size(), 250'001 * contentSize);
-  // Total data = ~41 MB = 5 parts.
-  // But parts uploaded will be 4.
-  EXPECT_EQ(s3WriteFile->numPartsUploaded(), 4);
+    writeFile->append({largeBuffer.data(), largeBuffer.size()});
+    EXPECT_EQ(writeFile->size(), 250'001 * contentSize);
+    // Total data = ~41 MB = 5 parts.
+    // But parts uploaded will be 4.
+    EXPECT_EQ(s3WriteFile->numPartsUploaded(), 4);
 
-  // Upload the last part.
-  writeFile->close();
-  EXPECT_EQ(s3WriteFile->numPartsUploaded(), 5);
+    // Upload the last part.
+    writeFile->close();
+    EXPECT_EQ(s3WriteFile->numPartsUploaded(), 5);
 
-  VELOX_ASSERT_THROW(
-      writeFile->append(dataContent.substr(0, 10)), "File is closed");
+    VELOX_ASSERT_THROW(
+        writeFile->append(dataContent.substr(0, 10)), "File is closed");
 
-  auto readFile = s3fs.openFileForRead(s3File);
-  ASSERT_EQ(readFile->size(), contentSize * 250'001);
-  // Sample and verify every 1'000 dataContent chunks.
-  for (int i = 0; i < 250; ++i) {
-    ASSERT_EQ(
-        readFile->pread(i * (1'000 * contentSize), contentSize), dataContent);
-  }
-  // Verify the last chunk.
-  ASSERT_EQ(readFile->pread(contentSize * 250'000, contentSize), dataContent);
+    auto readFile = s3fs.openFileForRead(s3File);
+    ASSERT_EQ(readFile->size(), contentSize * 250'001);
+    // Sample and verify every 1'000 dataContent chunks.
+    for (int i = 0; i < 250; ++i) {
+      ASSERT_EQ(
+          readFile->pread(i * (1'000 * contentSize), contentSize), dataContent);
+    }
+    // Verify the last chunk.
+    ASSERT_EQ(readFile->pread(contentSize * 250'000, contentSize), dataContent);
 
-  // Verify the S3 list function.
-  auto result = s3fs.list(s3File);
+    // Verify the S3 list function.
+    auto result = s3fs.list(s3File);
 
-  ASSERT_EQ(result.size(), 1);
-  ASSERT_TRUE(result[0] == file);
+    ASSERT_EQ(result.size(), 1);
+    ASSERT_TRUE(result[0] == file);
 
-  ASSERT_TRUE(s3fs.exists(s3File));
+    ASSERT_TRUE(s3fs.exists(s3File));
+  };
+  // Upload parts synchronously.
+  uploadPart(false);
+  // Upload parts asynchronously.
+  uploadPart(true);
 }
 
 TEST_F(S3FileSystemTest, invalidConnectionSettings) {

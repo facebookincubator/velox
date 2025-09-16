@@ -27,16 +27,16 @@
 namespace {
 using namespace facebook::velox::filesystems;
 
-class S3FileSystemBenchmark {
+class S3AsyncUploadBenchmark {
  public:
-  S3FileSystemBenchmark() {
+  S3AsyncUploadBenchmark() {
     minioServer_ = std::make_unique<MinioServer>();
     minioServer_->start();
     ioExecutor_ = std::make_unique<folly::IOThreadPoolExecutor>(3);
     filesystems::initializeS3("Info", kLogLocation_);
   }
 
-  ~S3FileSystemBenchmark() {
+  ~S3AsyncUploadBenchmark() {
     minioServer_->stop();
     filesystems::finalizeS3();
   }
@@ -67,7 +67,7 @@ class S3FileSystemBenchmark {
     filesystems::S3FileSystem s3fs(bucketName, hiveConfig);
 
     suspender.dismiss();
-    auto pool = memory::memoryManager()->addLeafPool("S3FileSystemBenchmark");
+    auto pool = memory::memoryManager()->addLeafPool("S3AsyncUploadBenchmark");
     auto writeFile =
         s3fs.openFileForWrite(s3File, {{}, pool.get(), std::nullopt});
     auto s3WriteFile = dynamic_cast<filesystems::S3WriteFile*>(writeFile.get());
@@ -97,14 +97,14 @@ class S3FileSystemBenchmark {
   }
 };
 
-auto benchmark = S3FileSystemBenchmark();
+auto benchmark = S3AsyncUploadBenchmark();
 
-#define DEFINE_BENCHMARKS(size)                     \
-  BENCHMARK(non_async_upload_##size##M) {           \
-    benchmark.run("non_async_upload", false, size); \
-  }                                                 \
-  BENCHMARK_RELATIVE(async_upload_##size##M) {      \
-    benchmark.run("async_upload", true, size);      \
+#define DEFINE_BENCHMARKS(size)                \
+  BENCHMARK(sync_upload_##size##M) {           \
+    benchmark.run("sync_upload", false, size); \
+  }                                            \
+  BENCHMARK_RELATIVE(async_upload_##size##M) { \
+    benchmark.run("async_upload", true, size); \
   }
 
 DEFINE_BENCHMARKS(4)

@@ -236,16 +236,14 @@ class S3WriteFile::Impl {
           uploadPartSeq(uploadState_.id, ++uploadState_.partNumber, partData);
       uploadState_.completedParts.push_back(std::move(completedPart));
     };
-    if (uploadThreadPool_) {
-      // If this is the last part and no parts have been uploaded yet,
-      // use the synchronous upload method.
-      if (isLast && uploadState_.partNumber == 0) {
-        uploadPartSync(part);
-      } else {
-        uploadPartAsync(part);
-      }
-    } else {
+    // If this is the last part and no parts have been uploaded yet,
+    // use the synchronous upload method.
+    bool useSyncUpload =
+        !uploadThreadPool_ || (isLast && uploadState_.partNumber == 0);
+    if (useSyncUpload) {
       uploadPartSync(part);
+    } else {
+      uploadPartAsync(part);
     }
   }
 
