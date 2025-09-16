@@ -42,6 +42,8 @@ namespace facebook::velox::cudf_velox::exec::test {
 
 namespace {
 
+using namespace facebook::velox::cudf_velox;
+
 void fillColumnNames(
     cudf::io::table_input_metadata& tableMeta,
     const std::string& prefix) {
