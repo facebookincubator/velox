@@ -38,8 +38,6 @@ namespace facebook::velox::cudf_velox::exec::test {
 
 namespace {
 
-using namespace facebook::velox::cudf_velox;
-
 void fillColumnNames(
     cudf::io::table_input_metadata& tableMeta,
     const std::string& prefix) {
@@ -69,7 +67,8 @@ ParquetConnectorTestBase::ParquetConnectorTestBase() {
 
 void ParquetConnectorTestBase::SetUp() {
   OperatorTestBase::SetUp();
-  connector::parquet::ParquetConnectorFactory factory;
+  facebook::velox::cudf_velox::connector::parquet::ParquetConnectorFactory
+      factory;
   auto parquetConnector = factory.newConnector(
       kParquetConnectorId,
       std::make_shared<facebook::velox::config::ConfigBase>(
@@ -91,7 +90,8 @@ void ParquetConnectorTestBase::resetParquetConnector(
     const std::shared_ptr<const facebook::velox::config::ConfigBase>& config) {
   facebook::velox::connector::unregisterConnector(kParquetConnectorId);
 
-  connector::parquet::ParquetConnectorFactory factory;
+  facebook::velox::cudf_velox::connector::parquet::ParquetConnectorFactory
+      factory;
   auto parquetConnector =
       factory.newConnector(kParquetConnectorId, config, ioExecutor_.get());
   facebook::velox::connector::registerConnector(parquetConnector);
