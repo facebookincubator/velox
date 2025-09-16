@@ -22,18 +22,12 @@ namespace facebook::velox::parquet {
 
 class CryptoFactory {
  public:
-  static void initialize(
-      std::shared_ptr<DecryptionKeyRetriever> kmsClient,
-      const bool clacEnabled) {
-    instance_ = std::unique_ptr<CryptoFactory>(
-        new CryptoFactory(kmsClient, clacEnabled));
-  }
-  static CryptoFactory& getInstance() {
-    if (!instance_) {
-      initialize(nullptr, false);
-    }
-    return *instance_;
-  }
+
+  static CryptoFactory& getInstance();
+
+  static CryptoFactory& getInstance(
+    std::shared_ptr<DecryptionKeyRetriever> kmsClient,
+    bool clacEnabled);
 
   DecryptionKeyRetriever& getDecryptionKeyRetriever() {
     VELOX_USER_CHECK(kmsClient_, "DecryptionKeyRetriever not provided");
@@ -60,7 +54,6 @@ class CryptoFactory {
       const bool clacEnabled)
       : kmsClient_(kmsClient), clacEnabled_(clacEnabled) {}
 
-  static std::unique_ptr<CryptoFactory> instance_;
   std::shared_ptr<DecryptionKeyRetriever> kmsClient_;
   bool clacEnabled_;
 };

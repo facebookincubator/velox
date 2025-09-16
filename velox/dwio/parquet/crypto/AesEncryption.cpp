@@ -24,9 +24,13 @@
 
 namespace facebook::velox::parquet {
 
-constexpr int kGcmMode = 0;
-constexpr int kCtrMode = 1;
-constexpr int kCtrIvLength = 16;
+constexpr int32_t kGcmMode = 0;
+constexpr int32_t kCtrMode = 1;
+constexpr int32_t kCtrIvLength = 16;
+
+constexpr int32_t AES_128_KEY_LEN = 16;
+constexpr int32_t AES_192_KEY_LEN = 24;
+constexpr int32_t AES_256_KEY_LEN = 32;
 
 #define ENCRYPT_INIT(CTX, ALG)                                        \
   if (1 != EVP_EncryptInit_ex(CTX, ALG, nullptr, nullptr, nullptr)) { \
@@ -42,7 +46,7 @@ class AesDecryptor::AesDecryptorImpl {
  public:
   explicit AesDecryptorImpl(
       ParquetCipher::type algId,
-      int keyLen,
+      int32_t keyLen,
       bool metadata,
       bool containsLength);
 
@@ -50,15 +54,15 @@ class AesDecryptor::AesDecryptorImpl {
     wipeOut();
   }
 
-  int decrypt(
+  int32_t decrypt(
       const uint8_t* ciphertext,
-      int ciphertextLen,
+      int32_t ciphertextLen,
       const uint8_t* key,
-      int keyLen,
+      int32_t keyLen,
       const uint8_t* aad,
-      int aadLen,
+      int32_t aadLen,
       uint8_t* plaintext,
-      int plaintextLen);
+      int32_t plaintextLen);
 
   void wipeOut() {
     if (nullptr != ctx_) {
@@ -67,7 +71,7 @@ class AesDecryptor::AesDecryptorImpl {
     }
   }
 
-  [[nodiscard]] int plaintextLength(int ciphertextLen) const {
+  [[nodiscard]] int32_t plaintextLength(int32_t ciphertextLen) const {
     if (ciphertextLen < ciphertextSizeDelta_) {
       std::stringstream ss;
       ss << "Ciphertext length " << ciphertextLen
@@ -77,7 +81,7 @@ class AesDecryptor::AesDecryptorImpl {
     return ciphertextLen - ciphertextSizeDelta_;
   }
 
-  [[nodiscard]] int ciphertextLength(int plaintextLen) const {
+  [[nodiscard]] int32_t ciphertextLength(int32_t plaintextLen) const {
     if (plaintextLen < 0) {
       std::stringstream ss;
       ss << "Negative plaintext length " << plaintextLen;
@@ -88,60 +92,59 @@ class AesDecryptor::AesDecryptorImpl {
 
   /// Get the actual ciphertext length, inclusive of the length buffer length,
   /// and validate that the provided buffer size is large enough.
-  [[nodiscard]] int getCiphertextLength(
-      const uint8_t* ciphertext,
-      int ciphertextLen) const;
+  [[nodiscard]] int32_t getCiphertextLengthAndValidate(
+      const uint8_t* ciphertextBuffer,
+      int32_t bufferLen) const;
 
-  /// Get the actual ciphertext length, inclusive of the length buffer length,
-  /// without validation.
-  [[nodiscard]] int getCiphertextLengthWithoutValidation(
-      const uint8_t* ciphertext,
-      int ciphertextLen) const;
+  /// Get the actual ciphertext length, inclusive of the length buffer length.
+  [[nodiscard]] int32_t getCiphertextLength(
+      const uint8_t* ciphertextBuffer,
+      int32_t bufferLen) const;
 
  private:
   EVP_CIPHER_CTX* ctx_;
-  int aesMode_;
-  int keyLength_;
-  int ciphertextSizeDelta_;
-  int lengthBufferLength_;
+  int32_t aesMode_;
+  int32_t keyLength_;
+  int32_t ciphertextSizeDelta_;
+  int32_t lengthBufferLength_;
 
   int gcmDecrypt(
       const uint8_t* ciphertext,
-      int ciphertextLen,
+      int32_t ciphertextBufferLen,
       const uint8_t* key,
-      int keyLen,
+      int32_t keyBufferLen,
       const uint8_t* aad,
-      int aadLen,
+      int32_t aadBufferLen,
       uint8_t* plaintext,
-      int plaintextLen);
+      int32_t plaintextBufferLen);
 
-  int ctrDecrypt(
+  int32_t ctrDecrypt(
       const uint8_t* ciphertext,
-      int ciphertextLen,
+      int32_t ciphertextBufferLen,
       const uint8_t* key,
-      int keyLen,
+      int32_t keyBufferLen,
       uint8_t* plaintext,
-      int plaintextLen);
+      int32_t plaintextBufferLen);
 };
 
-int AesDecryptor::decrypt(
+int32_t AesDecryptor::decrypt(
     const uint8_t* ciphertext,
-    int ciphertextLen,
+    int32_t ciphertextBufferLen,
     const uint8_t* key,
-    int keyLen,
+    int32_t keyBufferLen,
     const uint8_t* aad,
-    int aadLen,
+    int32_t aadBufferLen,
     uint8_t* plaintext,
-    int plaintextLen) {
+    int32_t plaintextBufferLen) {
   return impl_->decrypt(
       ciphertext,
-      ciphertextLen,
+      ciphertextBufferLen,
       key,
-      keyLen,
+      keyBufferLen,
       aad,
-      aadLen,
+      aadBufferLen,
       plaintext,
-      plaintextLen);
+      plaintextBufferLen);
 }
 
 void AesDecryptor::wipeOut() {
@@ -152,7 +155,7 @@ AesDecryptor::~AesDecryptor() {}
 
 AesDecryptor::AesDecryptorImpl::AesDecryptorImpl(
     ParquetCipher::type algId,
-    int keyLen,
+    int32_t keyLen,
     bool metadata,
     bool containsLength) {
   ctx_ = nullptr;
@@ -165,7 +168,7 @@ AesDecryptor::AesDecryptorImpl::AesDecryptorImpl(
     aesMode_ = kCtrMode;
   }
 
-  if (16 != keyLen && 24 != keyLen && 32 != keyLen) {
+  if (AES_128_KEY_LEN != keyLen && AES_192_KEY_LEN != keyLen && AES_256_KEY_LEN != keyLen) {
     std::stringstream ss;
     ss << "Wrong key length: " << keyLen;
     throw CryptoException(ss.str());
@@ -180,20 +183,20 @@ AesDecryptor::AesDecryptorImpl::AesDecryptorImpl(
 
   if (kGcmMode == aesMode_) {
     // Init AES-GCM with specified key length
-    if (16 == keyLen) {
+    if (AES_128_KEY_LEN == keyLen) {
       DECRYPT_INIT(ctx_, EVP_aes_128_gcm());
-    } else if (24 == keyLen) {
+    } else if (AES_192_KEY_LEN == keyLen) {
       DECRYPT_INIT(ctx_, EVP_aes_192_gcm());
-    } else if (32 == keyLen) {
+    } else if (AES_256_KEY_LEN == keyLen) {
       DECRYPT_INIT(ctx_, EVP_aes_256_gcm());
     }
   } else {
     // Init AES-CTR with specified key length
-    if (16 == keyLen) {
+    if (AES_128_KEY_LEN == keyLen) {
       DECRYPT_INIT(ctx_, EVP_aes_128_ctr());
-    } else if (24 == keyLen) {
+    } else if (AES_192_KEY_LEN == keyLen) {
       DECRYPT_INIT(ctx_, EVP_aes_192_ctr());
-    } else if (32 == keyLen) {
+    } else if (AES_256_KEY_LEN == keyLen) {
       DECRYPT_INIT(ctx_, EVP_aes_256_ctr());
     }
   }
@@ -201,14 +204,14 @@ AesDecryptor::AesDecryptorImpl::AesDecryptorImpl(
 
 AesDecryptor::AesDecryptor(
     ParquetCipher::type algId,
-    int keyLen,
+    int32_t keyLen,
     bool metadata,
     bool containsLength)
-    : impl_{std::unique_ptr<AesDecryptorImpl>(
-          new AesDecryptorImpl(algId, keyLen, metadata, containsLength))} {}
+    : impl_{std::make_unique<AesDecryptorImpl>(
+          algId, keyLen, metadata, containsLength)} {}
 
 std::shared_ptr<AesDecryptor>
-AesDecryptor::make(ParquetCipher::type algId, int keyLen, bool metadata) {
+AesDecryptor::make(ParquetCipher::type algId, int32_t keyLen, bool metadata) {
   if (ParquetCipher::AES_GCM_V1 != algId &&
       ParquetCipher::AES_GCM_CTR_V1 != algId) {
     std::stringstream ss;
@@ -220,134 +223,103 @@ AesDecryptor::make(ParquetCipher::type algId, int keyLen, bool metadata) {
   return decryptor;
 }
 
-int AesDecryptor::plaintextLength(int ciphertextLen) const {
+int32_t AesDecryptor::plaintextLength(int32_t ciphertextLen) const {
   return impl_->plaintextLength(ciphertextLen);
 }
 
-int AesDecryptor::ciphertextLength(int plaintextLen) const {
+int32_t AesDecryptor::ciphertextLength(int32_t plaintextLen) const {
   return impl_->ciphertextLength(plaintextLen);
 }
 
-int AesDecryptor::getCiphertextLength(
+int32_t AesDecryptor::getCiphertextLengthAndValidate(
     const uint8_t* ciphertext,
-    int ciphertextLen) const {
+    int32_t ciphertextLen) const {
+  return impl_->getCiphertextLengthAndValidate(ciphertext, ciphertextLen);
+}
+
+int32_t AesDecryptor::getCiphertextLength(
+    const uint8_t* ciphertext,
+    int32_t ciphertextLen) const {
   return impl_->getCiphertextLength(ciphertext, ciphertextLen);
 }
 
-int AesDecryptor::getCiphertextLengthWithoutValidation(
-    const uint8_t* ciphertext,
-    int ciphertextLen) const {
-  return impl_->getCiphertextLengthWithoutValidation(ciphertext, ciphertextLen);
+int32_t AesDecryptor::AesDecryptorImpl::getCiphertextLengthAndValidate(
+    const uint8_t* ciphertextBuffer,
+    int32_t bufferLen) const {
+  int32_t ciphertextLength = getCiphertextLength(ciphertextBuffer, bufferLen);
+  if (bufferLen < ciphertextLength) {
+    std::stringstream ss;
+    ss << "Serialized ciphertext length "
+       << ciphertextLength
+       << " is greater than the provided ciphertext buffer length "
+       << bufferLen;
+    throw CryptoException(ss.str());
+  }
+  return ciphertextLength;
 }
 
-int AesDecryptor::AesDecryptorImpl::getCiphertextLength(
-    const uint8_t* ciphertext,
-    int ciphertextLen) const {
+int32_t AesDecryptor::AesDecryptorImpl::getCiphertextLength(
+    const uint8_t* ciphertextBuffer,
+    int32_t bufferLen) const {
   if (lengthBufferLength_ > 0) {
-    // Note: length_buffer_length_ must be either 0 or kBufferSizeLength
-    if (ciphertextLen < kBufferSizeLength) {
+    // Note: lengthBufferLength_ must be either 0 or kBufferSizeLength
+    if (bufferLen < kBufferSizeLength) {
       std::stringstream ss;
-      ss << "Ciphertext buffer length " << ciphertextLen
+      ss << "Ciphertext buffer length " << bufferLen
          << " is insufficient to read the ciphertext length." << " At least "
          << kBufferSizeLength << " bytes are required.";
       throw CryptoException(ss.str());
     }
 
     // Extract ciphertext length
-    int written_ciphertext_len = ((ciphertext[3] & 0xff) << 24) |
-        ((ciphertext[2] & 0xff) << 16) | ((ciphertext[1] & 0xff) << 8) |
-        ((ciphertext[0] & 0xff));
+    uint32_t writtenCiphertextLen = (static_cast<uint32_t>(ciphertextBuffer[3]) << 24) |
+                                    (static_cast<uint32_t>(ciphertextBuffer[2]) << 16) |
+                                    (static_cast<uint32_t>(ciphertextBuffer[1]) << 8) |
+                                    (static_cast<uint32_t>(ciphertextBuffer[0]));
 
-    if (written_ciphertext_len < 0) {
+    if (writtenCiphertextLen >
+        static_cast<uint32_t>(std::numeric_limits<int32_t>::max() -
+                              lengthBufferLength_)) {
       std::stringstream ss;
-      ss << "Negative ciphertext length " << written_ciphertext_len;
-      throw CryptoException(ss.str());
-    } else if (ciphertextLen < written_ciphertext_len + lengthBufferLength_) {
-      std::stringstream ss;
-      ss << "Serialized ciphertext length "
-         << (written_ciphertext_len + lengthBufferLength_)
-         << " is greater than the provided ciphertext buffer length "
-         << ciphertextLen;
+      ss << "Written ciphertext length " << writtenCiphertextLen
+         << " plus length buffer length " << lengthBufferLength_ << " overflows int32";
       throw CryptoException(ss.str());
     }
 
-    return written_ciphertext_len + lengthBufferLength_;
-  } else {
-    if (ciphertextLen >
-        static_cast<size_t>(std::numeric_limits<int32_t>::max())) {
-      std::stringstream ss;
-      ss << "Ciphertext buffer length " << ciphertextLen << " overflows int32";
-      throw CryptoException(ss.str());
-    }
-    return static_cast<int>(ciphertextLen);
+    return static_cast<int32_t>(writtenCiphertextLen) + lengthBufferLength_;
   }
+  return bufferLen;
 }
 
-int AesDecryptor::AesDecryptorImpl::getCiphertextLengthWithoutValidation(
+int32_t AesDecryptor::AesDecryptorImpl::gcmDecrypt(
     const uint8_t* ciphertext,
-    int ciphertextLen) const {
-  if (lengthBufferLength_ > 0) {
-    // Note: length_buffer_length_ must be either 0 or kBufferSizeLength
-    if (ciphertextLen < kBufferSizeLength) {
-      std::stringstream ss;
-      ss << "Ciphertext buffer length " << ciphertextLen
-         << " is insufficient to read the ciphertext length." << " At least "
-         << kBufferSizeLength << " bytes are required.";
-      throw CryptoException(ss.str());
-    }
-
-    // Extract ciphertext length
-    int written_ciphertext_len = ((ciphertext[3] & 0xff) << 24) |
-        ((ciphertext[2] & 0xff) << 16) | ((ciphertext[1] & 0xff) << 8) |
-        ((ciphertext[0] & 0xff));
-
-    if (written_ciphertext_len < 0) {
-      std::stringstream ss;
-      ss << "Negative ciphertext length " << written_ciphertext_len;
-      throw CryptoException(ss.str());
-    }
-
-    return written_ciphertext_len + lengthBufferLength_;
-  } else {
-    if (ciphertextLen >
-        static_cast<size_t>(std::numeric_limits<int32_t>::max())) {
-      std::stringstream ss;
-      ss << "Ciphertext buffer length " << ciphertextLen << " overflows int32";
-      throw CryptoException(ss.str());
-    }
-    return static_cast<int>(ciphertextLen);
-  }
-}
-
-int AesDecryptor::AesDecryptorImpl::gcmDecrypt(
-    const uint8_t* ciphertext,
-    int ciphertextLen,
+    int32_t ciphertextBufferLen,
     const uint8_t* key,
-    int keyLen,
+    int32_t keyBufferLen,
     const uint8_t* aad,
-    int aadLen,
+    int32_t aadBufferLen,
     uint8_t* plaintext,
-    int plaintextLen) {
+    int32_t plaintextBufferLen) {
   int len;
-  int plaintext_len;
+  int32_t plaintextLen;
 
   uint8_t tag[kGcmTagLength];
   memset(tag, 0, kGcmTagLength);
   uint8_t nonce[kNonceLength];
   memset(nonce, 0, kNonceLength);
 
-  int ciphertext_len = getCiphertextLength(ciphertext, ciphertextLen);
+  int32_t ciphertextLen = getCiphertextLengthAndValidate(ciphertext, ciphertextBufferLen);
 
-  if (plaintextLen < ciphertext_len - ciphertextSizeDelta_) {
+  if (plaintextBufferLen < ciphertextLen - ciphertextSizeDelta_) {
     std::stringstream ss;
-    ss << "Plaintext buffer length " << plaintextLen << " is insufficient "
-       << "for ciphertext length " << ciphertext_len;
+    ss << "Plaintext buffer length " << plaintextBufferLen << " is insufficient "
+       << "for ciphertext length " << ciphertextLen;
     throw CryptoException(ss.str());
   }
 
-  if (ciphertext_len < lengthBufferLength_ + kNonceLength + kGcmTagLength) {
+  if (ciphertextLen < lengthBufferLength_ + kNonceLength + kGcmTagLength) {
     std::stringstream ss;
-    ss << "Invalid ciphertext length " << ciphertext_len
+    ss << "Invalid ciphertext length " << ciphertextLen
        << ". Expected at least "
        << lengthBufferLength_ + kNonceLength + kGcmTagLength << "\n";
     throw CryptoException(ss.str());
@@ -359,8 +331,8 @@ int AesDecryptor::AesDecryptorImpl::gcmDecrypt(
       ciphertext + lengthBufferLength_ + kNonceLength,
       nonce);
   std::copy(
-      ciphertext + ciphertext_len - kGcmTagLength,
-      ciphertext + ciphertext_len,
+      ciphertext + ciphertextLen - kGcmTagLength,
+      ciphertext + ciphertextLen,
       tag);
 
   // Setting key and IV
@@ -369,8 +341,8 @@ int AesDecryptor::AesDecryptorImpl::gcmDecrypt(
   }
 
   // Setting additional authenticated data
-  if (aad && aadLen > 0 &&
-      (1 != EVP_DecryptUpdate(ctx_, nullptr, &len, aad, aadLen))) {
+  if (aad && aadBufferLen > 0 &&
+      (1 != EVP_DecryptUpdate(ctx_, nullptr, &len, aad, aadBufferLen))) {
     throw CryptoException("Couldn't set AAD");
   }
 
@@ -380,12 +352,12 @@ int AesDecryptor::AesDecryptorImpl::gcmDecrypt(
           plaintext,
           &len,
           ciphertext + lengthBufferLength_ + kNonceLength,
-          ciphertext_len - lengthBufferLength_ - kNonceLength -
+          ciphertextLen - lengthBufferLength_ - kNonceLength -
               kGcmTagLength)) {
     throw CryptoException("Failed decryption update gcm");
   }
 
-  plaintext_len = len;
+  plaintextLen = len;
 
   // Checking the tag (authentication)
   if (!EVP_CIPHER_CTX_ctrl(ctx_, EVP_CTRL_GCM_SET_TAG, kGcmTagLength, tag)) {
@@ -397,35 +369,35 @@ int AesDecryptor::AesDecryptorImpl::gcmDecrypt(
     throw CryptoException("Failed decryption finalization gcm");
   }
 
-  plaintext_len += len;
-  return plaintext_len;
+  plaintextLen += len;
+  return plaintextLen;
 }
 
-int AesDecryptor::AesDecryptorImpl::ctrDecrypt(
+int32_t AesDecryptor::AesDecryptorImpl::ctrDecrypt(
     const uint8_t* ciphertext,
-    int ciphertextLen,
+    int32_t ciphertextBufferLen,
     const uint8_t* key,
-    int keyLen,
+    int32_t keyBufferLen,
     uint8_t* plaintext,
-    int plaintextLen) {
+    int32_t plaintextBufferLen) {
   int len;
-  int plaintext_len;
+  int32_t plaintextLen;
 
   uint8_t iv[kCtrIvLength];
   memset(iv, 0, kCtrIvLength);
 
-  int ciphertext_len = getCiphertextLength(ciphertext, ciphertextLen);
+  int32_t ciphertextLen = getCiphertextLengthAndValidate(ciphertext, ciphertextBufferLen);
 
-  if (plaintextLen < ciphertextLen - ciphertextSizeDelta_) {
+  if (plaintextBufferLen < ciphertextBufferLen - ciphertextSizeDelta_) {
     std::stringstream ss;
-    ss << "Plaintext buffer length " << plaintextLen << " is insufficient "
-       << "for ciphertext length " << ciphertext_len;
+    ss << "Plaintext buffer length " << plaintextBufferLen << " is insufficient "
+       << "for ciphertext length " << ciphertextLen;
     throw CryptoException(ss.str());
   }
 
-  if (ciphertext_len < lengthBufferLength_ + kNonceLength) {
+  if (ciphertextLen < lengthBufferLength_ + kNonceLength) {
     std::stringstream ss;
-    ss << "Invalid ciphertext length " << ciphertext_len
+    ss << "Invalid ciphertext length " << ciphertextLen
        << ". Expected at least " << lengthBufferLength_ + kNonceLength << "\n";
     throw CryptoException(ss.str());
   }
@@ -452,50 +424,50 @@ int AesDecryptor::AesDecryptorImpl::ctrDecrypt(
           plaintext,
           &len,
           ciphertext + lengthBufferLength_ + kNonceLength,
-          ciphertext_len - lengthBufferLength_ - kNonceLength)) {
+          ciphertextLen - lengthBufferLength_ - kNonceLength)) {
     throw CryptoException("Failed decryption update ctr");
   }
 
-  plaintext_len = len;
+  plaintextLen = len;
 
   // Finalization
   if (1 != EVP_DecryptFinal_ex(ctx_, plaintext + len, &len)) {
     throw CryptoException("Failed decryption finalization ctr");
   }
 
-  plaintext_len += len;
-  return plaintext_len;
+  plaintextLen += len;
+  return plaintextLen;
 }
 
-int AesDecryptor::AesDecryptorImpl::decrypt(
+int32_t AesDecryptor::AesDecryptorImpl::decrypt(
     const uint8_t* ciphertext,
-    int ciphertextLen,
+    int32_t ciphertextBufferLen,
     const uint8_t* key,
-    int keyLen,
+    int32_t keyBufferLen,
     const uint8_t* aad,
-    int aadLen,
+    int32_t aadBufferLen,
     uint8_t* plaintext,
-    int plaintextLen) {
-  if (static_cast<size_t>(keyLength_) != keyLen) {
+    int32_t plaintextBufferLen) {
+  if (static_cast<size_t>(keyLength_) != keyBufferLen) {
     std::stringstream ss;
-    ss << "Wrong key length " << keyLen << ". Should be " << keyLength_;
+    ss << "Wrong key length " << keyBufferLen << ". Should be " << keyLength_;
     throw CryptoException(ss.str());
   }
 
   if (kGcmMode == aesMode_) {
     return gcmDecrypt(
         ciphertext,
-        ciphertextLen,
+        ciphertextBufferLen,
         key,
-        keyLen,
+        keyBufferLen,
         aad,
-        aadLen,
+        aadBufferLen,
         plaintext,
-        plaintextLen);
+        plaintextBufferLen);
   }
 
   return ctrDecrypt(
-      ciphertext, ciphertextLen, key, keyLen, plaintext, plaintextLen);
+      ciphertext, ciphertextBufferLen, key, keyBufferLen, plaintext, plaintextBufferLen);
 }
 
 static std::string shortToBytesLe(int16_t input) {
@@ -523,26 +495,26 @@ std::string createModuleAad(
     int16_t columnOrdinal,
     int16_t pageOrdinal) {
   CheckPageOrdinal(pageOrdinal);
-  int8_t type_ordinal_bytes[1];
-  type_ordinal_bytes[0] = moduleType;
-  std::string type_ordinal_bytes_str(
-      reinterpret_cast<char const*>(type_ordinal_bytes), 1);
+  int8_t typeOrdinalBytes[1];
+  typeOrdinalBytes[0] = moduleType;
+  std::string typeOrdinalBytesStr(
+      reinterpret_cast<char const*>(typeOrdinalBytes), 1);
   if (kFooter == moduleType) {
-    std::string result = fileAad + type_ordinal_bytes_str;
+    std::string result = fileAad + typeOrdinalBytesStr;
     return result;
   }
-  std::string row_group_ordinal_bytes = shortToBytesLe(rowGroupOrdinal);
-  std::string column_ordinal_bytes = shortToBytesLe(columnOrdinal);
+  std::string rowGroupOrdinalBytes = shortToBytesLe(rowGroupOrdinal);
+  std::string columnOrdinalBytes = shortToBytesLe(columnOrdinal);
   if (kDataPage != moduleType && kDataPageHeader != moduleType) {
     std::ostringstream out;
-    out << fileAad << type_ordinal_bytes_str << row_group_ordinal_bytes
-        << column_ordinal_bytes;
+    out << fileAad << typeOrdinalBytesStr << rowGroupOrdinalBytes
+        << columnOrdinalBytes;
     return out.str();
   }
-  std::string page_ordinal_bytes = shortToBytesLe(pageOrdinal);
+  std::string pageOrdinalBytes = shortToBytesLe(pageOrdinal);
   std::ostringstream out;
-  out << fileAad << type_ordinal_bytes_str << row_group_ordinal_bytes
-      << column_ordinal_bytes << page_ordinal_bytes;
+  out << fileAad << typeOrdinalBytesStr << rowGroupOrdinalBytes
+      << columnOrdinalBytes << pageOrdinalBytes;
   return out.str();
 }
 
