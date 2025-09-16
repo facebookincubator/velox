@@ -796,21 +796,7 @@ class Task : public std::enable_shared_from_this<Task> {
   /// Returns true if all the splits have finished.
   bool testingAllSplitsFinished();
 
- private:
-  // Hook of system-wide running task list.
-  struct TaskListEntry {
-    std::weak_ptr<Task> taskPtr;
-    folly::IntrusiveListHook listHook;
-  };
-  using TaskList =
-      folly::IntrusiveList<TaskListEntry, &TaskListEntry::listHook>;
-
-  // Returns the system-wide running task list.
-  FOLLY_EXPORT static TaskList& taskList();
-
-  // Returns the lock that protects the system-wide running task list.
-  FOLLY_EXPORT static folly::SharedMutex& taskListLock();
-
+ protected:
   Task(
       const std::string& taskId,
       core::PlanFragment planFragment,
@@ -823,6 +809,25 @@ class Task : public std::enable_shared_from_this<Task> {
 
   // Invoked to add this to the system-wide running task list on task creation.
   void addToTaskList();
+
+  // Invoked to initialize the memory pool for this task on creation.
+  void initTaskPool();
+
+ private:
+  // Hook of system-wide running task list.
+  struct TaskListEntry {
+    std::weak_ptr<Task> taskPtr;
+    folly::IntrusiveListHook listHook;
+  };
+
+  using TaskList =
+      folly::IntrusiveList<TaskListEntry, &TaskListEntry::listHook>;
+
+  // Returns the system-wide running task list.
+  FOLLY_EXPORT static TaskList& taskList();
+
+  // Returns the lock that protects the system-wide running task list.
+  FOLLY_EXPORT static folly::SharedMutex& taskListLock();
 
   // Invoked to remove this from the system-wide running task list on task
   // destruction.
@@ -865,9 +870,6 @@ class Task : public std::enable_shared_from_this<Task> {
   // Remove the spill directory, if the Task was creating it for potential
   // spilling.
   void removeSpillDirectoryIfExists();
-
-  // Invoked to initialize the memory pool for this task on creation.
-  void initTaskPool();
 
   // Creates a scaled scan controller for a given table scan node.
   void addScaledScanControllerLocked(
