@@ -16,7 +16,6 @@
 
 #include "velox/dwio/parquet/reader/PageReader.h"
 
-#include <glog/logging.h>
 #include "velox/common/testutil/TestValue.h"
 #include "velox/common/time/Timer.h"
 #include "velox/dwio/common/BufferUtil.h"
@@ -149,7 +148,7 @@ PageHeader PageReader::decryptPageHeader(
     const char* lengthData = readBytes(kBufferSizeLength, lengthBuffer);
 
     encryptedLength =
-        decryptor->getAesDecryptor()->getCiphertextLengthWithoutValidation(
+        decryptor->getAesDecryptor()->getCiphertextLength(
             reinterpret_cast<const uint8_t*>(lengthData), kBufferSizeLength);
 
     BufferPtr encryptedBuffer;
@@ -167,7 +166,7 @@ PageHeader PageReader::decryptPageHeader(
     pageData_ = pageBuffer_->as<char>();
   } else {
     encryptedLength =
-        decryptor->getAesDecryptor()->getCiphertextLengthWithoutValidation(
+        decryptor->getAesDecryptor()->getCiphertextLength(
             reinterpret_cast<const uint8_t*>(bufferStart_), kBufferSizeLength);
     pageData_ = readBytes(encryptedLength, pageBuffer_);
   }
@@ -337,7 +336,7 @@ int32_t PageReader::decryptPageData(
     std::shared_ptr<Decryptor> decryptor,
     std::string_view aad) {
   int32_t compressedPageSize{pageHeader.compressed_page_size};
-  int encryptedLength = decryptor->getAesDecryptor()->getCiphertextLength(
+  int encryptedLength = decryptor->getAesDecryptor()->getCiphertextLengthAndValidate(
       reinterpret_cast<const uint8_t*>(pageData_), compressedPageSize);
   VELOX_USER_CHECK(
       encryptedLength == compressedPageSize,

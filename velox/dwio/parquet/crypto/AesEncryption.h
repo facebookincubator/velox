@@ -26,8 +26,8 @@ struct ParquetCipher {
 // encryption size length
 constexpr int kBufferSizeLength = 4;
 
-constexpr int kGcmTagLength = 16;
-constexpr int kNonceLength = 12;
+constexpr int32_t kGcmTagLength = 16;
+constexpr int32_t kNonceLength = 12;
 
 // Module types
 constexpr int8_t kFooter = 0;
@@ -48,39 +48,41 @@ class AesDecryptor {
  public:
   explicit AesDecryptor(
       ParquetCipher::type algId,
-      int keyLen,
+      int32_t keyLen,
       bool metadata,
       bool containsLength = true);
 
   static std::shared_ptr<AesDecryptor>
-  make(ParquetCipher::type algId, int keyLen, bool metadata);
+  make(ParquetCipher::type algId, int32_t keyLen, bool metadata);
 
   ~AesDecryptor();
   void wipeOut();
 
-  [[nodiscard]] int plaintextLength(int ciphertextLen) const;
+  [[nodiscard]] int32_t plaintextLength(int32_t ciphertextLen) const;
 
-  [[nodiscard]] int ciphertextLength(int plaintextLen) const;
+  [[nodiscard]] int32_t ciphertextLength(int32_t plaintextLen) const;
 
-  int getCiphertextLength(const uint8_t* ciphertext, int ciphertextLen) const;
+  int32_t getCiphertextLengthAndValidate(
+      const uint8_t* ciphertextBuffer,
+      int32_t bufferLen) const;
 
-  int getCiphertextLengthWithoutValidation(
-      const uint8_t* ciphertext,
-      int ciphertextLen) const;
+  int32_t getCiphertextLength(
+      const uint8_t* ciphertextBuffer,
+      int32_t ciphertextLen) const;
 
   /// Decrypts ciphertext with the key and aad. Key length is passed only for
   /// validation. If different from value in constructor, exception will be
   /// thrown. The caller is responsible for ensuring that the plaintext buffer
   /// is at least as large as PlaintextLength(ciphertext_len).
-  int decrypt(
+  int32_t decrypt(
       const uint8_t* ciphertext,
-      int ciphertextLen,
+      int32_t ciphertextBufferLen,
       const uint8_t* key,
-      int keyLen,
+      int32_t keyBufferLen,
       const uint8_t* aad,
-      int aadLen,
+      int32_t aadBufferLen,
       uint8_t* plaintext,
-      int plaintextLen);
+      int32_t plaintextBufferLen);
 
  private:
   class AesDecryptorImpl;
