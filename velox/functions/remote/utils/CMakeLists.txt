@@ -12,6 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-velox_add_library(velox_functions_remote_utils RemoteFunctionServiceProvider.cpp)
+add_library(velox_functions_remote_utils RemoteFunctionServiceProvider.cpp)
 
-velox_link_libraries(velox_functions_remote_utils PUBLIC velox_functions_remote_server)
+target_link_libraries(velox_functions_remote_utils PUBLIC velox_functions_remote_server)
