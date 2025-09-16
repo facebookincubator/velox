@@ -20,10 +20,7 @@
 
 namespace facebook::velox::cudf_velox {
 
-DEFINE_bool(
-    velox_cudf_log_validation_failure,
-    true,
-    "Whether log the validation failure information");
+DECLARE_bool(velox_cudf_log_validation_failure);
 
 namespace detail {
 const char* extractFileName(const char* file) {
