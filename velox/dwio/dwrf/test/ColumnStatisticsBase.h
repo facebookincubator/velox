@@ -85,7 +85,7 @@ class ColumnStatisticsBase {
     // stats should be merged
     IntegerStatisticsBuilder target{options()};
     target.merge(*builder.build());
-    auto stats = as<dwio::common::IntegerColumnStatistics>(target.build());
+    auto stats = as<dwio::common::IntegerColumnStatistics<>>(target.build());
     EXPECT_EQ(3, stats->getNumberOfValues());
     EXPECT_EQ(1, stats->getMinimum());
     EXPECT_EQ(5, stats->getMaximum());
@@ -95,14 +95,14 @@ class ColumnStatisticsBase {
     builder.addValues(0);
     builder.addValues(6);
     target.merge(*builder.build());
-    stats = as<dwio::common::IntegerColumnStatistics>(target.build());
+    stats = as<dwio::common::IntegerColumnStatistics<>>(target.build());
     EXPECT_EQ(8, stats->getNumberOfValues());
     EXPECT_EQ(0, stats->getMinimum());
     EXPECT_EQ(6, stats->getMaximum());
     EXPECT_EQ(24, stats->getSum());
 
     target.merge(*builder.build());
-    stats = as<dwio::common::IntegerColumnStatistics>(target.build());
+    stats = as<dwio::common::IntegerColumnStatistics<>>(target.build());
     EXPECT_EQ(13, stats->getNumberOfValues());
     EXPECT_EQ(0, stats->getMinimum());
     EXPECT_EQ(6, stats->getMaximum());
@@ -110,7 +110,7 @@ class ColumnStatisticsBase {
 
     // add value
     target.addValues(100, 2);
-    stats = as<dwio::common::IntegerColumnStatistics>(target.build());
+    stats = as<dwio::common::IntegerColumnStatistics<>>(target.build());
     EXPECT_EQ(15, stats->getNumberOfValues());
     EXPECT_EQ(0, stats->getMinimum());
     EXPECT_EQ(100, stats->getMaximum());
@@ -130,13 +130,13 @@ class ColumnStatisticsBase {
       DwrfFormat format) {
     IntegerStatisticsBuilder target{options()};
     target.addValues(1, 5);
-    auto stats = as<dwio::common::IntegerColumnStatistics>(target.build());
+    auto stats = as<dwio::common::IntegerColumnStatistics<>>(target.build());
     EXPECT_EQ(5, stats->getSum());
 
     // merge missing stats
     target.merge(
         *buildColumnStatisticsFromProto(columnStatisticsWrapper, context()));
-    stats = as<dwio::common::IntegerColumnStatistics>(target.build());
+    stats = as<dwio::common::IntegerColumnStatistics<>>(target.build());
     EXPECT_EQ(stats, nullptr);
 
     // merge again
@@ -154,12 +154,12 @@ class ColumnStatisticsBase {
 
     target.merge(
         *buildColumnStatisticsFromProto(columnStatisticsWrapper, context()));
-    stats = as<dwio::common::IntegerColumnStatistics>(target.build());
+    stats = as<dwio::common::IntegerColumnStatistics<>>(target.build());
     EXPECT_EQ(stats, nullptr);
 
     // add again
     target.addValues(2);
-    stats = as<dwio::common::IntegerColumnStatistics>(target.build());
+    stats = as<dwio::common::IntegerColumnStatistics<>>(target.build());
     EXPECT_EQ(stats, nullptr);
   }
 
@@ -169,13 +169,13 @@ class ColumnStatisticsBase {
       DwrfFormat format) {
     IntegerStatisticsBuilder target{options()};
     target.addValues(1, 5);
-    auto stats = as<dwio::common::IntegerColumnStatistics>(target.build());
+    auto stats = as<dwio::common::IntegerColumnStatistics<>>(target.build());
     EXPECT_EQ(5, stats->getSum());
 
     // merge empty stats
     target.merge(
         *buildColumnStatisticsFromProto(columnStatisticsWrapper, context()));
-    stats = as<dwio::common::IntegerColumnStatistics>(target.build());
+    stats = as<dwio::common::IntegerColumnStatistics<>>(target.build());
     EXPECT_EQ(5, stats->getSum());
 
     // merge again
@@ -189,7 +189,7 @@ class ColumnStatisticsBase {
     }
     target.merge(
         *buildColumnStatisticsFromProto(columnStatisticsWrapper, context()));
-    stats = as<dwio::common::IntegerColumnStatistics>(target.build());
+    stats = as<dwio::common::IntegerColumnStatistics<>>(target.build());
     EXPECT_EQ(stats, nullptr);
   }
 
@@ -200,13 +200,13 @@ class ColumnStatisticsBase {
           target.reset();
           target.addValues(val1);
           auto stats =
-              as<dwio::common::IntegerColumnStatistics>(target.build());
+              as<dwio::common::IntegerColumnStatistics<>>(target.build());
           EXPECT_EQ(val1, stats->getMaximum());
           EXPECT_EQ(val1, stats->getMinimum());
           EXPECT_EQ(val1, stats->getSum());
 
           target.addValues(val2);
-          stats = as<dwio::common::IntegerColumnStatistics>(target.build());
+          stats = as<dwio::common::IntegerColumnStatistics<>>(target.build());
           EXPECT_EQ(max, stats->getMaximum());
           EXPECT_EQ(min, stats->getMinimum());
           EXPECT_FALSE(stats->getSum().has_value());
@@ -227,7 +227,7 @@ class ColumnStatisticsBase {
     // items
     target.reset();
     target.addValues(std::numeric_limits<int64_t>::max() / 10, 11);
-    auto stats = as<dwio::common::IntegerColumnStatistics>(target.build());
+    auto stats = as<dwio::common::IntegerColumnStatistics<>>(target.build());
     EXPECT_EQ(11, stats->getNumberOfValues());
     EXPECT_EQ(stats->getMaximum().value(), stats->getMinimum().value());
     EXPECT_FALSE(stats->getSum().has_value());
@@ -239,7 +239,7 @@ class ColumnStatisticsBase {
       IntegerStatisticsBuilder builder{options()};
       builder.addValues(val2);
       target.merge(builder);
-      stats = as<dwio::common::IntegerColumnStatistics>(target.build());
+      stats = as<dwio::common::IntegerColumnStatistics<>>(target.build());
       EXPECT_FALSE(stats->getSum().has_value());
     };
     testMergeOverflow(std::numeric_limits<int64_t>::min(), -1);
