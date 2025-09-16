@@ -57,9 +57,6 @@ class OpaqueCustomTypeRegister {
 
     static const TypePtr& get() {
       static const VeloxType kInstance;
-      // TODO: kInstancePtr needed to return const TypePtr& instead of TypePtr.
-      // In general it's not really necessary, but there's a lot of places that
-      // depends on this in fb internal repos. So for now we keep it like this.
       static const TypePtr kInstancePtr{TypePtr{}, &kInstance};
       return kInstancePtr;
     }
