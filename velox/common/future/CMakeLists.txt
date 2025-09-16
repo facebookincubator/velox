@@ -11,7 +11,4 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
-velox_add_library(velox_functions_remote_utils RemoteFunctionServiceProvider.cpp)
-
-velox_link_libraries(velox_functions_remote_utils PUBLIC velox_functions_remote_server)
+velox_install_library_headers()

@@ -12,9 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(velox_functions_remote_server RemoteFunctionService.cpp)
+velox_add_library(velox_functions_remote_server RemoteFunctionService.cpp)
 
-target_link_libraries(
+velox_link_libraries(
   velox_functions_remote_server
   PUBLIC remote_function_thrift velox_functions_remote_get_serde velox_type_fbhive velox_memory
 )
