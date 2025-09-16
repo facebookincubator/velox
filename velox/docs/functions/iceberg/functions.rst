@@ -24,6 +24,7 @@ Refer to `Iceberg documenation <https://iceberg.apache.org/spec/#partition-trans
        SELECT bucket(100, 34L); -- 79
 
 .. iceberg:function:: days(input) -> integer
+
    Returns the day of the month from a date or timestamp input, as days from 1970-01-01.
 
    Supported types for ``input`` are: ``DATE``, ``TIMESTAMP``. ::
@@ -32,6 +33,7 @@ Refer to `Iceberg documenation <https://iceberg.apache.org/spec/#partition-trans
        SELECT days(TIMESTAMP '2017-12-01 10:12:55.038194'); -- 17501
 
 .. iceberg:function:: hours(input) -> integer
+
    Returns the hour from a timestamp input, as hours from 1970-01-01 00:00:00.
 
    Supported types for ``input`` are: ``TIMESTAMP``. ::
@@ -39,6 +41,7 @@ Refer to `Iceberg documenation <https://iceberg.apache.org/spec/#partition-trans
        SELECT hours(TIMESTAMP '2017-12-01 10:12:55.038194'); -- 420034
 
 .. iceberg:function:: months(input) -> integer
+
    Returns the month from a date or timestamp input, as months from 1970-01-01.
 
    Supported types for ``input`` are: ``DATE``, ``TIMESTAMP``. ::
@@ -47,7 +50,7 @@ Refer to `Iceberg documenation <https://iceberg.apache.org/spec/#partition-trans
        SELECT months(TIMESTAMP '2017-12-01 10:12:55.038194'); -- 575
 
 .. iceberg:function:: truncate(width, input) -> same type as input
-
+    
    Returns the truncated value of the input based on the specified width.
    For numeric values, truncate to the nearest lower multiple of ``width``, the truncate function is: input - (((input % width) + width) % width).
    The ``width`` is used to truncate decimal values is applied using unscaled value to avoid additional (and potentially conflicting) parameters.
@@ -68,6 +71,7 @@ Refer to `Iceberg documenation <https://iceberg.apache.org/spec/#partition-trans
        SELECT truncate(6, cast('测试' as binary)); -- 测试_
 
 .. iceberg:function:: years(input) -> integer
+
    Returns the year from a date or timestamp input, as years from 1970.
 
    Supported types for ``input`` are: ``DATE``, ``TIMESTAMP``. ::
