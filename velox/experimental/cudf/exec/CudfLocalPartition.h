@@ -22,6 +22,11 @@
 
 namespace facebook::velox::cudf_velox {
 
+enum class PartitionFunctionType {
+  kHash,
+  kRoundRobin,
+};
+
 class CudfLocalPartition : public exec::Operator, public NvtxHelper {
  public:
   CudfLocalPartition(
@@ -59,6 +64,8 @@ class CudfLocalPartition : public exec::Operator, public NvtxHelper {
  protected:
   const std::vector<std::shared_ptr<exec::LocalExchangeQueue>> queues_;
   const size_t numPartitions_;
+  PartitionFunctionType partitionFunctionType_;
+  size_t counter_{0};
 
   std::vector<exec::BlockingReason> blockingReasons_;
   std::vector<ContinueFuture> futures_;

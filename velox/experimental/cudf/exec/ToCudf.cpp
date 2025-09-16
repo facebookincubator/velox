@@ -226,7 +226,18 @@ bool CompileState::compile() {
       auto planNode = std::dynamic_pointer_cast<const core::TableScanNode>(
           getPlanNode(oper->planNodeId()));
       VELOX_CHECK(planNode != nullptr);
+      auto scanOp = dynamic_cast<exec::TableScan*>(oper);
       keepOperator = 1;
+      // We don't make a new type of table scan operator but use the existing
+      // type. But we need to update the connector so we'll make a new plan node
+      // from the old one and use that to construct the new operator of the same
+      // type but with the updated connector
+      // auto newPlanNode = core::TableScanNode::Builder(*planNode)
+      //                        .id(planNode->id() + "-cudf")
+      //                        .build();
+      // replaceOp.push_back(
+      //     std::make_unique<exec::TableScan>(id, ctx, newPlanNode, "cudf"));
+      // replaceOp.back()->initialize();
     } else if (isJoinSupported(oper)) {
       if (auto joinBuildOp = dynamic_cast<exec::HashBuild*>(oper)) {
         auto planNode = std::dynamic_pointer_cast<const core::HashJoinNode>(

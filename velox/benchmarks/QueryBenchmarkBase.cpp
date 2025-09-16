@@ -116,6 +116,23 @@ DEFINE_int32(
 
 DEFINE_int32(split_preload_per_driver, 2, "Prefetch split metadata");
 
+DEFINE_int64(
+    preferred_output_batch_bytes,
+    10 << 20,
+    "Preferred output batch size in bytes");
+
+DEFINE_uint64(
+    max_partial_aggregation_memory,
+    10 << 20,
+    "Maximum memory usage for partial aggregation");
+
+DEFINE_int32(
+    preferred_output_batch_rows,
+    1024,
+    "Preferred output batch size in rows");
+
+DEFINE_int32(max_output_batch_rows, 10'000, "Max output batch size in rows");
+
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::dwio::common;
@@ -203,16 +220,7 @@ void QueryBenchmarkBase::initialize() {
   ioExecutor_ =
       std::make_unique<folly::IOThreadPoolExecutor>(FLAGS_num_io_threads);
 
-  // Add new values into the hive configuration...
-  auto configurationValues = std::unordered_map<std::string, std::string>();
-  configurationValues[connector::hive::HiveConfig::kMaxCoalescedBytes] =
-      std::to_string(FLAGS_max_coalesced_bytes);
-  configurationValues[connector::hive::HiveConfig::kMaxCoalescedDistance] =
-      FLAGS_max_coalesced_distance_bytes;
-  configurationValues[connector::hive::HiveConfig::kPrefetchRowGroups] =
-      std::to_string(FLAGS_parquet_prefetch_rowgroups);
-  auto properties = std::make_shared<const config::ConfigBase>(
-      std::move(configurationValues));
+  auto properties = makeConnectorProperties();
 
   // Create hive connector with config...
   connector::hive::HiveConnectorFactory factory;
@@ -221,6 +229,21 @@ void QueryBenchmarkBase::initialize() {
   connector::registerConnector(hiveConnector);
   parquet::registerParquetReaderFactory();
   dwrf::registerDwrfReaderFactory();
+}
+
+std::shared_ptr<config::ConfigBase>
+QueryBenchmarkBase::makeConnectorProperties() {
+  // Default behaviour identical to the original hard-coded version.
+  std::unordered_map<std::string, std::string> configurationValues;
+  configurationValues[connector::hive::HiveConfig::kMaxCoalescedBytes] =
+      std::to_string(FLAGS_max_coalesced_bytes);
+  configurationValues[connector::hive::HiveConfig::kMaxCoalescedDistance] =
+      FLAGS_max_coalesced_distance_bytes;
+  configurationValues[connector::hive::HiveConfig::kPrefetchRowGroups] =
+      std::to_string(FLAGS_parquet_prefetch_rowgroups);
+
+  return std::make_shared<config::ConfigBase>(
+      std::move(configurationValues), true);
 }
 
 std::vector<std::shared_ptr<connector::ConnectorSplit>>
@@ -244,15 +267,26 @@ void QueryBenchmarkBase::shutdown() {
 }
 
 std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>>
-QueryBenchmarkBase::run(const TpchPlan& tpchPlan) {
+QueryBenchmarkBase::run(
+    const TpchPlan& tpchPlan,
+    const std::unordered_map<std::string, std::string>& queryConfigs) {
   int32_t repeat = 0;
   try {
     for (;;) {
       CursorParameters params;
       params.maxDrivers = FLAGS_num_drivers;
       params.planNode = tpchPlan.plan;
+      params.queryConfigs = queryConfigs;
       params.queryConfigs[core::QueryConfig::kMaxSplitPreloadPerDriver] =
           std::to_string(FLAGS_split_preload_per_driver);
+      params.queryConfigs[core::QueryConfig::kPreferredOutputBatchBytes] =
+          std::to_string(FLAGS_preferred_output_batch_bytes);
+      params.queryConfigs[core::QueryConfig::kPreferredOutputBatchRows] =
+          std::to_string(FLAGS_preferred_output_batch_rows);
+      params.queryConfigs[core::QueryConfig::kMaxOutputBatchRows] =
+          std::to_string(FLAGS_max_output_batch_rows);
+      params.queryConfigs[core::QueryConfig::kMaxPartialAggregationMemory] =
+          std::to_string(FLAGS_max_partial_aggregation_memory);
       const int numSplitsPerFile = FLAGS_num_splits_per_file;
 
       auto addSplits = [&](TaskCursor* taskCursor) {
