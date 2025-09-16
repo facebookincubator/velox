@@ -17,6 +17,16 @@
 
 namespace facebook::velox::parquet {
 
-std::unique_ptr<CryptoFactory> CryptoFactory::instance_ = nullptr;
+CryptoFactory& CryptoFactory::getInstance() {
+  return getInstance(nullptr, false);
+}
+
+CryptoFactory& CryptoFactory::getInstance(
+    std::shared_ptr<DecryptionKeyRetriever> kmsClient,
+    bool clacEnabled) {
+  static const auto instance = std::unique_ptr<CryptoFactory>(
+      new CryptoFactory(kmsClient, clacEnabled));
+  return *instance;
+}
 
 }

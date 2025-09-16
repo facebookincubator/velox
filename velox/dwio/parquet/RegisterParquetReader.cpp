@@ -28,8 +28,8 @@ void registerParquetReaderFactory() {
 void registerParquetReaderFactory(bool clacEnabled) {
 #ifdef VELOX_ENABLE_PARQUET
   // Note, when adopting CLAC for decrypting encrypted parquet files,
-  // please provide and pass your own KMS client implementation
-  CryptoFactory::initialize(nullptr, clacEnabled);
+  // please provide and pass your own KMS client implementation.
+  CryptoFactory::getInstance(nullptr, clacEnabled);
   dwio::common::registerReaderFactory(std::make_shared<ParquetReaderFactory>());
 #endif
 }

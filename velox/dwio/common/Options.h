@@ -664,6 +664,7 @@ class ReaderOptions : public io::ReaderOptions {
   void setAllowEmptyFile(bool value) {
     allowEmptyFile_ = value;
   }
+
  private:
   uint64_t tailLocation_;
   FileFormat fileFormat_;
