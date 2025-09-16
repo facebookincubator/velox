@@ -955,8 +955,7 @@ RowVectorPtr CudfHashAggregation::getOutput() {
 
   auto stream = cudfGlobalStreamPool().get_stream();
 
-  auto tbl = inputs_.empty() ? makeEmptyTable(inputType_)
-                             : getConcatenatedTable(inputs_, stream);
+  auto tbl = getConcatenatedTable(inputs_, inputType_, stream);
 
   // Release input data after synchronizing.
   stream.synchronize();
