@@ -55,9 +55,13 @@ class OpaqueCustomTypeRegister {
    public:
     VeloxType() : OpaqueType(std::type_index(typeid(T))) {}
 
-    static TypePtr get() {
+    static const TypePtr& get() {
       static const VeloxType kInstance;
-      return {TypePtr{}, &kInstance};
+      // TODO: kInstancePtr needed to return const TypePtr& instead of TypePtr.
+      // In general it's not really necessary, but there's a lot of places that
+      // depends on this in fb internal repos. So for now we keep it like this.
+      static const TypePtr kInstancePtr{TypePtr{}, &kInstance};
+      return kInstancePtr;
     }
 
     static const std::shared_ptr<const exec::CastOperator>& getCastOperator() {
@@ -78,11 +82,11 @@ class OpaqueCustomTypeRegister {
     }
   };
 
-  static TypePtr singletonTypePtr() {
+  static const TypePtr& singletonTypePtr() {
     return VeloxType::get();
   }
 
-  static TypePtr get() {
+  static const TypePtr& get() {
     return VeloxType::get();
   }
 
