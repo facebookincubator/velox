@@ -11,11 +11,11 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-add_executable(velox_s3AsyncUpload_benchmark S3AsyncUploadBenchmark.cpp)
+add_executable(velox_s3asyncupload_benchmark S3AsyncUploadBenchmark.cpp)
 
-add_test(velox_s3AsyncUpload_benchmark velox_s3AsyncUpload_benchmark)
+add_test(velox_s3asyncupload_benchmark velox_s3asyncupload_benchmark)
 target_link_libraries(
-  velox_s3AsyncUpload_benchmark
+  velox_s3asyncupload_benchmark
   velox_file
   velox_s3fs
   velox_core
