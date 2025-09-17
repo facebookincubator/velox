@@ -804,7 +804,8 @@ class HashFunction : public CudfFunction {
   }
 
  private:
-  static cudf::table_view convertToTableView(std::vector<ColumnOrView>& inputColumns) {
+  static cudf::table_view convertToTableView(
+      std::vector<ColumnOrView>& inputColumns) {
     std::vector<cudf::column_view> columns;
     columns.reserve(inputColumns.size());
 
