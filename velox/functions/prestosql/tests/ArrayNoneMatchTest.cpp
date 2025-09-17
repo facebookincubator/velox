@@ -26,7 +26,7 @@ class ArrayNoneMatchTest : public functions::test::LambdaParameterizedBaseTest {
       const std::vector<std::optional<bool>>& expected,
       const std::string& lambdaExpr,
       const VectorPtr& input) {
-    auto expression = fmt::format("none_match(c0, x -> ({}))", lambdaExpr);
+    auto expression = std::format("none_match(c0, x -> ({}))", lambdaExpr);
     testNoneMatchExpr(expected, expression, makeRowVector({input}));
   }
 
@@ -35,7 +35,7 @@ class ArrayNoneMatchTest : public functions::test::LambdaParameterizedBaseTest {
       const std::vector<std::optional<bool>>& expected,
       const std::string& lambdaExpr,
       const std::vector<std::vector<std::optional<T>>>& input) {
-    auto expression = fmt::format("none_match(c0, x -> ({}))", lambdaExpr);
+    auto expression = std::format("none_match(c0, x -> ({}))", lambdaExpr);
     testNoneMatchExpr(
         expected, expression, makeRowVector({makeNullableArrayVector(input)}));
   }

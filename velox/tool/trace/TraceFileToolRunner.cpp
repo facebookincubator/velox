@@ -51,9 +51,9 @@ void TraceFileToolRunner::init() {
           "Trace query ID is empty but trace task ID is not empty");
       copyRootDir = sourceRootDir_;
     } else if (FLAGS_trace_task_id.empty()) {
-      copyRootDir = fmt::format("{}/{}", sourceRootDir_, FLAGS_trace_query_id);
+      copyRootDir = std::format("{}/{}", sourceRootDir_, FLAGS_trace_query_id);
     } else {
-      copyRootDir = fmt::format(
+      copyRootDir = std::format(
           "{}/{}/{}",
           sourceRootDir_,
           FLAGS_trace_query_id,
@@ -79,7 +79,7 @@ void TraceFileToolRunner::copyFiles() const {
   const auto prefixLen = sourceFs_->extractPath(sourceRootDir_).length();
   for (const auto& source : sourceFiles_) {
     const auto targetFile =
-        fmt::format("{}/{}", destRootDir_, source.substr(prefixLen));
+        std::format("{}/{}", destRootDir_, source.substr(prefixLen));
     const auto readFile = sourceFs_->openFileForRead(source);
     const auto writeFile = destFs_->openFileForWrite(
         targetFile,

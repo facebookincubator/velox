@@ -33,7 +33,7 @@ int main(int argc, char** argv) {
   for (auto nullRatio : {0.0, 0.1, 0.9}) {
     benchmarkBuilder
         .addBenchmarkSet(
-            fmt::format("compare#{}\%null", nullRatio * 100),
+            std::format("compare#{}\%null", nullRatio * 100),
             ROW({"c0", "c1"}, {DECIMAL(18, 6), DECIMAL(38, 16)}))
         .withFuzzerOptions({.vectorSize = 1000, .nullRatio = nullRatio})
         .addExpression("gt", "decimal_greaterthan(c0, c1)")

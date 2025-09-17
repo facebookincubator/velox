@@ -565,7 +565,7 @@ TEST_F(CompactRowTest, fuzz) {
     auto seed = folly::Random::rand32();
 
     LOG(INFO) << i << ": seed: " << seed;
-    SCOPED_TRACE(fmt::format("seed: {}", seed));
+    SCOPED_TRACE(std::format("seed: {}", seed));
 
     fuzzer.reSeed(seed);
     auto data = fuzzInputRow(fuzzer, rowType);

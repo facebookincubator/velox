@@ -466,7 +466,7 @@ TEST_P(CodecTest, getUncompressedLength) {
         codec->getUncompressedLength(compressed.data(), compressedLength)
             .error(),
         StatusCode::kInvalid,
-        fmt::format(
+        std::format(
             "getUncompressedLength is unsupported with {} format.",
             codec->name()));
   }
@@ -564,7 +564,7 @@ TEST(CodecTestInvalid, invalidKind) {
   VELOX_ASSERT_ERROR_STATUS(
       Codec::create(kind, kDefaultCompressionLevel).error(),
       StatusCode::kInvalid,
-      fmt::format(
+      std::format(
           "Support for codec '{}' is either not built or not implemented.",
           compressionKindToString(kind)));
 }

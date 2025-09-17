@@ -174,7 +174,7 @@ void TableScanTestBase::testPartitionedTableImpl(
   partitionValueStr =
       partitionValue.has_value() ? "'" + *partitionValue + "'" : "null";
   assertQuery(
-      op, split, fmt::format("SELECT {}, * FROM tmp", partitionValueStr));
+      op, split, std::format("SELECT {}, * FROM tmp", partitionValueStr));
 
   outputType = ROW({"c0", "pkey", "c1"}, {BIGINT(), partitionType, DOUBLE()});
   op = PlanBuilder()
@@ -184,7 +184,7 @@ void TableScanTestBase::testPartitionedTableImpl(
            .endTableScan()
            .planNode();
   assertQuery(
-      op, split, fmt::format("SELECT c0, {}, c1 FROM tmp", partitionValueStr));
+      op, split, std::format("SELECT c0, {}, c1 FROM tmp", partitionValueStr));
   outputType = ROW({"c0", "c1", "pkey"}, {BIGINT(), DOUBLE(), partitionType});
   op = PlanBuilder()
            .startTableScan()
@@ -193,7 +193,7 @@ void TableScanTestBase::testPartitionedTableImpl(
            .endTableScan()
            .planNode();
   assertQuery(
-      op, split, fmt::format("SELECT c0, c1, {} FROM tmp", partitionValueStr));
+      op, split, std::format("SELECT c0, c1, {} FROM tmp", partitionValueStr));
 
   // select only partition key
   assignments = {{"pkey", partitionKey("pkey", partitionType)}};
@@ -204,7 +204,7 @@ void TableScanTestBase::testPartitionedTableImpl(
            .assignments(assignments)
            .endTableScan()
            .planNode();
-  assertQuery(op, split, fmt::format("SELECT {} FROM tmp", partitionValueStr));
+  assertQuery(op, split, std::format("SELECT {} FROM tmp", partitionValueStr));
 }
 
 void TableScanTestBase::testPartitionedTable(

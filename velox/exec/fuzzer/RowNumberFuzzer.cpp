@@ -81,7 +81,7 @@ RowNumberFuzzer::generatePartitionKeys() {
   std::vector<std::string> names;
   std::vector<TypePtr> types;
   for (auto i = 0; i < numKeys; ++i) {
-    names.push_back(fmt::format("c{}", i));
+    names.push_back(std::format("c{}", i));
     types.push_back(vectorFuzzer_.randType(/*maxDepth=*/1));
   }
   return std::make_pair(names, types);
@@ -95,7 +95,7 @@ std::vector<RowVectorPtr> RowNumberFuzzer::generateInput(
   // Add up to 3 payload columns.
   const auto numPayload = randInt(0, 3);
   for (auto i = 0; i < numPayload; ++i) {
-    names.push_back(fmt::format("c{}", i + keyNames.size()));
+    names.push_back(std::format("c{}", i + keyNames.size()));
     types.push_back(vectorFuzzer_.randType(/*maxDepth=*/2));
   }
 
@@ -152,7 +152,7 @@ void RowNumberFuzzer::addPlansWithTableScan(
   }
 
   const std::vector<Split> inputSplits = test::makeSplits(
-      input, fmt::format("{}/row_number", tableDir), writerPool_);
+      input, std::format("{}/row_number", tableDir), writerPool_);
   altPlans.push_back(makePlanWithTableScan(
       asRowType(input[0]->type()), partitionKeys, inputSplits));
 }

@@ -48,7 +48,7 @@ std::string HiveConfig::insertExistingPartitionsBehaviorString(
     case InsertExistingPartitionsBehavior::kOverwrite:
       return "OVERWRITE";
     default:
-      return fmt::format("UNKNOWN BEHAVIOR {}", static_cast<int>(behavior));
+      return std::format("UNKNOWN BEHAVIOR {}", static_cast<int>(behavior));
   }
 }
 

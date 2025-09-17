@@ -37,8 +37,8 @@ class MinioServer {
   MinioServer() : tempPath_(::exec::test::TempDirectoryPath::create()) {
     constexpr auto kHostAddressTemplate = "127.0.0.1:{}";
     auto ports = facebook::velox::exec::test::getFreePorts(2);
-    connectionString_ = fmt::format(kHostAddressTemplate, ports[0]);
-    consoleAddress_ = fmt::format(kHostAddressTemplate, ports[1]);
+    connectionString_ = std::format(kHostAddressTemplate, ports[0]);
+    consoleAddress_ = std::format(kHostAddressTemplate, ports[1]);
   }
 
   void start();

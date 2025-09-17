@@ -234,11 +234,11 @@ std::tuple<std::string, std::string, std::string> getCompanionAggregates(
     const std::string& aggregateArgs,
     const std::vector<TypePtr>& argTypes) {
   VELOX_CHECK_EQ(companionFunctions.partial.size(), 1);
-  auto partialAggregate = fmt::format(
+  auto partialAggregate = std::format(
       "{}({})", companionFunctions.partial.front().functionName, aggregateArgs);
 
   VELOX_CHECK_EQ(companionFunctions.merge.size(), 1);
-  auto mergeAggregate = fmt::format(
+  auto mergeAggregate = std::format(
       "{}(a{})", companionFunctions.merge.front().functionName, index);
 
   // Construct the extract expression. Rename the result of the extract
@@ -246,7 +246,7 @@ std::tuple<std::string, std::string, std::string> getCompanionAggregates(
   // post-aggregation projections, if exist, can apply with no change.
   std::string extractExpression;
   if (companionFunctions.extract.size() == 1) {
-    extractExpression = fmt::format(
+    extractExpression = std::format(
         "{0}(a{1}) as a{1}",
         companionFunctions.extract.front().functionName,
         index);
@@ -255,7 +255,7 @@ std::tuple<std::string, std::string, std::string> getCompanionAggregates(
     auto extractFunctionName =
         getExtractFunctionNameWithSuffix(functionName, argTypes);
     extractExpression =
-        fmt::format("{0}(a{1}) as a{1}", extractFunctionName, index);
+        std::format("{0}(a{1}) as a{1}", extractFunctionName, index);
   }
   return std::make_tuple(partialAggregate, mergeAggregate, extractExpression);
 }

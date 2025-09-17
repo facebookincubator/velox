@@ -89,7 +89,6 @@ target_link_libraries(
   velox_exec_test_lib
   velox_expression_fuzzer_test_utility
   velox_expression_fuzzer
-  fmt::fmt
   GTest::gtest
   GTest::gtest_main
   GTest::gmock

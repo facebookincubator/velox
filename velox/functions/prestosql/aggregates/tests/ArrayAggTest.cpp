@@ -90,9 +90,9 @@ TEST_F(ArrayAggTest, groupBy) {
     testAggregations(
         batches,
         {"c0"},
-        {fmt::format("{}(a)", functionName)},
+        {std::format("{}(a)", functionName)},
         {"c0", "array_sort(a0)"},
-        fmt::format(
+        std::format(
             "SELECT c0, array_sort(array_agg(a) {}) FROM tmp GROUP BY c0",
             filter),
         makeConfig(ignoreNulls));
@@ -101,10 +101,10 @@ TEST_F(ArrayAggTest, groupBy) {
           batches,
           [](auto& /*builder*/) {},
           {"c0"},
-          {fmt::format("{}(a)", functionName)},
+          {std::format("{}(a)", functionName)},
           {{ARRAY(VARCHAR())}},
           {"c0", "array_sort(a0)"},
-          fmt::format(
+          std::format(
               "SELECT c0, array_sort(array_agg(a) {}) FROM tmp GROUP BY c0",
               filter),
           makeConfig(ignoreNulls));
@@ -116,9 +116,9 @@ TEST_F(ArrayAggTest, groupBy) {
     testAggregations(
         batches,
         {"c0"},
-        {fmt::format("{}(a)", functionName), "max(c0)"},
+        {std::format("{}(a)", functionName), "max(c0)"},
         {"c0", "array_sort(a0)", "a1"},
-        fmt::format(
+        std::format(
             "SELECT c0, array_sort(array_agg(a) {}), max(c0) FROM tmp GROUP BY c0",
             filter),
         makeConfig(ignoreNulls));
@@ -166,7 +166,7 @@ TEST_F(ArrayAggTest, sortGroupByWithAllNullsByMask) {
                   .singleAggregation(
                       {"c0"},
                       {
-                          fmt::format("{}(c1 ORDER BY c2 DESC)", "array_agg"),
+                          std::format("{}(c1 ORDER BY c2 DESC)", "array_agg"),
                           "sum(c1)",
                       },
                       {"m", "m"})
@@ -197,9 +197,9 @@ TEST_F(ArrayAggTest, sortedGroupBy) {
                 {"c0"},
                 {
                     "sum(c1)",
-                    fmt::format("{}(c1 ORDER BY c2 DESC)", functionName),
+                    std::format("{}(c1 ORDER BY c2 DESC)", functionName),
                     "avg(c1)",
-                    fmt::format("{}(c1 ORDER BY c3)", functionName),
+                    std::format("{}(c1 ORDER BY c3)", functionName),
                 })
             .planNode();
 
@@ -214,9 +214,9 @@ TEST_F(ArrayAggTest, sortedGroupBy) {
                .singleAggregation(
                    {"c0"},
                    {
-                       fmt::format("{}(c1 ORDER BY c2 DESC)", functionName),
+                       std::format("{}(c1 ORDER BY c2 DESC)", functionName),
                        "avg(c1)",
-                       fmt::format("{}(c2 ORDER BY c3)", functionName),
+                       std::format("{}(c2 ORDER BY c3)", functionName),
                        "sum(c1)",
                    })
                .planNode();
@@ -232,7 +232,7 @@ TEST_F(ArrayAggTest, sortedGroupBy) {
                .singleAggregation(
                    {"c0"},
                    {
-                       fmt::format("{}(c1 ORDER BY c2 DESC, c3)", functionName),
+                       std::format("{}(c1 ORDER BY c2 DESC, c3)", functionName),
                        "sum(c1)",
                    })
                .planNode();
@@ -248,8 +248,8 @@ TEST_F(ArrayAggTest, sortedGroupBy) {
                .singleAggregation(
                    {"c0"},
                    {
-                       fmt::format("{}(c1 ORDER BY c3)", functionName),
-                       fmt::format("{}(c2 ORDER BY c3)", functionName),
+                       std::format("{}(c1 ORDER BY c3)", functionName),
+                       std::format("{}(c2 ORDER BY c3)", functionName),
                        "sum(c1)",
                    })
                .planNode();
@@ -266,7 +266,7 @@ TEST_F(ArrayAggTest, sortedGroupBy) {
                .singleAggregation(
                    {"c0"},
                    {
-                       fmt::format("{}(c1 ORDER BY c2 DESC)", functionName),
+                       std::format("{}(c1 ORDER BY c2 DESC)", functionName),
                        "sum(c1)",
                    },
                    {"m", "m"})
@@ -297,19 +297,19 @@ TEST_F(ArrayAggTest, global) {
     testAggregations(
         vectors,
         {},
-        {fmt::format("{}(c0)", functionName)},
+        {std::format("{}(c0)", functionName)},
         {"array_sort(a0)"},
-        fmt::format("SELECT array_sort(array_agg(c0) {}) FROM tmp", filter),
+        std::format("SELECT array_sort(array_agg(c0) {}) FROM tmp", filter),
         makeConfig(ignoreNulls));
     if (testCompanionFunctions) {
       testAggregationsWithCompanion(
           vectors,
           [](auto& /*builder*/) {},
           {},
-          {fmt::format("{}(c0)", functionName)},
+          {std::format("{}(c0)", functionName)},
           {{INTEGER()}},
           {"array_sort(a0)"},
-          fmt::format("SELECT array_sort(array_agg(c0) {}) FROM tmp", filter),
+          std::format("SELECT array_sort(array_agg(c0) {}) FROM tmp", filter),
           makeConfig(ignoreNulls));
     }
   };
@@ -327,7 +327,7 @@ TEST_F(ArrayAggTest, globalNoData) {
                           bool testCompanionFunctions = true) {
     auto data = makeRowVector(ROW({"c0"}, {INTEGER()}), 0);
     testAggregations(
-        {data}, {}, {fmt::format("{}(c0)", functionName)}, "SELECT null");
+        {data}, {}, {std::format("{}(c0)", functionName)}, "SELECT null");
 
     std::vector<RowVectorPtr> allNulls = {
         makeRowVector({makeFlatVector<int32_t>(
@@ -338,18 +338,18 @@ TEST_F(ArrayAggTest, globalNoData) {
     testAggregations(
         allNulls,
         {},
-        {fmt::format("{}(c0)", functionName)},
-        fmt::format("SELECT array_agg(c0) {} FROM tmp", filter),
+        {std::format("{}(c0)", functionName)},
+        std::format("SELECT array_agg(c0) {} FROM tmp", filter),
         makeConfig(ignoreNulls));
     if (testCompanionFunctions) {
       testAggregationsWithCompanion(
           allNulls,
           [](auto& /*builder*/) {},
           {},
-          {fmt::format("{}(c0)", functionName)},
+          {std::format("{}(c0)", functionName)},
           {{INTEGER()}},
           {"array_sort(a0)"},
-          fmt::format("SELECT array_sort(array_agg(c0) {}) FROM tmp", filter),
+          std::format("SELECT array_sort(array_agg(c0) {}) FROM tmp", filter),
           makeConfig(ignoreNulls));
     }
   };
@@ -377,9 +377,9 @@ TEST_F(ArrayAggTest, sortedGlobal) {
                 {},
                 {
                     "sum(c0)",
-                    fmt::format("{}(c0 ORDER BY c1 DESC)", functionName),
+                    std::format("{}(c0 ORDER BY c1 DESC)", functionName),
                     "avg(c0)",
-                    fmt::format("{}(c0 ORDER BY c2)", functionName),
+                    std::format("{}(c0 ORDER BY c2)", functionName),
                 })
             .planNode();
 
@@ -394,9 +394,9 @@ TEST_F(ArrayAggTest, sortedGlobal) {
                    {},
                    {
                        "sum(c0)",
-                       fmt::format("{}(c0 ORDER BY c1 DESC)", functionName),
+                       std::format("{}(c0 ORDER BY c1 DESC)", functionName),
                        "avg(c0)",
-                       fmt::format("{}(c1 ORDER BY c2)", functionName),
+                       std::format("{}(c1 ORDER BY c2)", functionName),
                    })
                .planNode();
 
@@ -411,7 +411,7 @@ TEST_F(ArrayAggTest, sortedGlobal) {
                    {},
                    {
                        "sum(c0)",
-                       fmt::format("{}(c0 ORDER BY c1 DESC, c2)", functionName),
+                       std::format("{}(c0 ORDER BY c1 DESC, c2)", functionName),
                    })
                .planNode();
 
@@ -442,8 +442,8 @@ TEST_F(ArrayAggTest, sortedGlobalWithMask) {
                 {},
                 {
                     "sum(c0)",
-                    fmt::format("{}(c0 ORDER BY c1 DESC)", functionName),
-                    fmt::format("{}(c0 ORDER BY c2)", functionName),
+                    std::format("{}(c0 ORDER BY c1 DESC)", functionName),
+                    std::format("{}(c0 ORDER BY c2)", functionName),
                 },
                 {"", "m1", "m2"})
             .planNode();
@@ -460,8 +460,8 @@ TEST_F(ArrayAggTest, sortedGlobalWithMask) {
                    {},
                    {
                        "sum(c0)",
-                       fmt::format("{}(c0 ORDER BY c1 DESC)", functionName),
-                       fmt::format("{}(c0 ORDER BY c2)", functionName),
+                       std::format("{}(c0 ORDER BY c1 DESC)", functionName),
+                       std::format("{}(c0 ORDER BY c2)", functionName),
                    },
                    {
                        "",
@@ -481,8 +481,8 @@ TEST_F(ArrayAggTest, sortedGlobalWithMask) {
                    {},
                    {
                        "sum(c0)",
-                       fmt::format("{}(c0 ORDER BY c1 DESC)", functionName),
-                       fmt::format("{}(c0 ORDER BY c2)", functionName),
+                       std::format("{}(c0 ORDER BY c1 DESC)", functionName),
+                       std::format("{}(c0 ORDER BY c2)", functionName),
                    },
                    {"", "m1", "m2"})
                .planNode();
@@ -509,7 +509,7 @@ TEST_F(ArrayAggTest, mask) {
     testAggregations(
         split(data),
         {},
-        {fmt::format("{}(c0) FILTER (WHERE c1)", functionName)},
+        {std::format("{}(c0) FILTER (WHERE c1)", functionName)},
         "SELECT null");
 
     // Global aggregation with a non-constant mask.
@@ -521,7 +521,7 @@ TEST_F(ArrayAggTest, mask) {
     testAggregations(
         split(data),
         {},
-        {fmt::format("{}(c0) FILTER (WHERE c1)", functionName)},
+        {std::format("{}(c0) FILTER (WHERE c1)", functionName)},
         {"array_sort(a0)"},
         "SELECT [1, 3, 5]");
 
@@ -535,7 +535,7 @@ TEST_F(ArrayAggTest, mask) {
     testAggregations(
         split(data),
         {"c0"},
-        {fmt::format("{}(c1) FILTER (WHERE c2)", functionName)},
+        {std::format("{}(c1) FILTER (WHERE c2)", functionName)},
         "VALUES (10, null), (20, null)");
 
     // Group-by with a non-constant mask.
@@ -548,7 +548,7 @@ TEST_F(ArrayAggTest, mask) {
     testAggregations(
         split(data),
         {"c0"},
-        {fmt::format("{}(c1) FILTER (WHERE c2)", functionName)},
+        {std::format("{}(c1) FILTER (WHERE c2)", functionName)},
         {"c0", "array_sort(a0)"},
         "VALUES (10, [1, 3]), (20, [5])");
   };
@@ -586,7 +586,7 @@ TEST_F(ArrayAggTest, clusteredInput) {
       }
       auto plan = builder.finalAggregation().planNode();
       for (int32_t flushRows : {0, 1}) {
-        SCOPED_TRACE(fmt::format(
+        SCOPED_TRACE(std::format(
             "mask={} batchRows={} flushRows={}", mask, batchRows, flushRows));
         AssertQueryBuilder(plan, duckDbQueryRunner_)
             .config(core::QueryConfig::kPreferredOutputBatchRows, batchRows)

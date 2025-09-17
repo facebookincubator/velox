@@ -16,7 +16,7 @@
 
 #include "velox/dwio/dwrf/reader/ReaderBase.h"
 
-#include <fmt/format.h>
+#include <format>
 
 #include "velox/common/process/TraceContext.h"
 #include "velox/dwio/common/Mutation.h"

@@ -520,7 +520,7 @@ class TaskTest : public HiveConnectorTestBase {
           filePaths = {}) {
     static std::atomic_uint64_t taskId{0};
     auto task = Task::create(
-        fmt::format("single.execution.task.{}", taskId++),
+        std::format("single.execution.task.{}", taskId++),
         plan,
         0,
         core::QueryCtx::create(),
@@ -1648,7 +1648,7 @@ DEBUG_ONLY_TEST_F(TaskTest, findPeerOperators) {
 
   const std::vector<int> numDrivers = {1, 4};
   for (int numDriver : numDrivers) {
-    SCOPED_TRACE(fmt::format("numDriver {}", numDriver));
+    SCOPED_TRACE(std::format("numDriver {}", numDriver));
     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
     CursorParameters params;
     params.planNode = PlanBuilder(planNodeIdGenerator)
@@ -1956,7 +1956,7 @@ TEST_F(TaskTest, driverCreationMemoryAllocationCheck) {
           })
           .planFragment();
   for (bool singleThreadExecution : {false, true}) {
-    SCOPED_TRACE(fmt::format("singleThreadExecution: ", singleThreadExecution));
+    SCOPED_TRACE(std::format("singleThreadExecution: ", singleThreadExecution));
     auto badTask = Task::create(
         "driverCreationMemoryAllocationCheck",
         plan,
@@ -1999,11 +1999,11 @@ TEST_F(TaskTest, spillDirectoryCallback) {
 
   std::shared_ptr<Task> task = cursor->task();
   auto tmpRootDir = exec::test::TempDirectoryPath::create();
-  auto tmpParentSpillDir = fmt::format(
+  auto tmpParentSpillDir = std::format(
       "{}{}/parent_spill/",
       tests::utils::FaultyFileSystem::scheme(),
       tmpRootDir->getPath());
-  auto tmpSpillDir = fmt::format(
+  auto tmpSpillDir = std::format(
       "{}{}/parent_spill/spill/",
       tests::utils::FaultyFileSystem::scheme(),
       tmpRootDir->getPath());
@@ -2039,7 +2039,7 @@ TEST_F(TaskTest, spillDirectoryCallback) {
     auto mkdirOp =
         static_cast<tests::utils::FaultFileSystemMkdirOperation*>(op);
     if (mkdirOp->path ==
-        fmt::format("{}/parent_spill/", tmpRootDir->getPath())) {
+        std::format("{}/parent_spill/", tmpRootDir->getPath())) {
       parentDirectoryCreated = true;
       auto it = mkdirOp->options.values.find(
           filesystems::DirectoryOptions::kMakeDirectoryConfig.toString());
@@ -2047,7 +2047,7 @@ TEST_F(TaskTest, spillDirectoryCallback) {
       EXPECT_EQ(it->second, "dummy.config=123");
     }
     if (mkdirOp->path ==
-        fmt::format("{}/parent_spill/spill/", tmpRootDir->getPath())) {
+        std::format("{}/parent_spill/spill/", tmpRootDir->getPath())) {
       spillDirectoryCreated = true;
     }
     return;
@@ -3333,7 +3333,7 @@ DEBUG_ONLY_TEST_F(TaskTest, operatorShouldYieldMethod) {
   struct {
     bool hasDelay;
     std::string debugString() const {
-      return fmt::format("hasDelay: {}", hasDelay);
+      return std::format("hasDelay: {}", hasDelay);
     }
   } testSetting[]{{true}, {false}};
 

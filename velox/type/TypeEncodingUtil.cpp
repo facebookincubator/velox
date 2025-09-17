@@ -17,7 +17,7 @@
 #include "velox/type/TypeEncodingUtil.h"
 
 // #include <boost/algorithm/string.hpp>
-// #include <fmt/format.h>
+// #include <format>
 // #include <folly/Demangle.h>
 // #include <re2/re2.h>
 

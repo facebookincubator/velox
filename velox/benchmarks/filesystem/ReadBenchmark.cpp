@@ -64,7 +64,7 @@ std::shared_ptr<config::ConfigBase> readConfig(const std::string& filePath) {
   std::ifstream configFile(filePath);
   if (!configFile.is_open()) {
     throw std::runtime_error(
-        fmt::format("Couldn't open config file {} for reading.", filePath));
+        std::format("Couldn't open config file {} for reading.", filePath));
   }
 
   std::unordered_map<std::string, std::string> properties;

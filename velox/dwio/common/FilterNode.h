@@ -18,7 +18,7 @@
 
 #include <vector>
 
-#include <fmt/format.h>
+#include <format>
 
 #include "velox/dwio/common/exception/Exception.h"
 #include "velox/type/Type.h"
@@ -131,7 +131,7 @@ struct FilterNode {
   }
 
   std::string toString() const {
-    return fmt::format(
+    return std::format(
         "[node={},column={},name={},expression={},pkey={}]",
         node,
         column,

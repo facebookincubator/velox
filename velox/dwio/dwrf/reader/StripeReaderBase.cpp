@@ -74,7 +74,7 @@ std::unique_ptr<const StripeMetadata> StripeReaderBase::fetchStripe(
         LogType::STRIPE_FOOTER);
   }
 
-  const auto streamDebugInfo = fmt::format("Stripe {} Footer ", index);
+  const auto streamDebugInfo = std::format("Stripe {} Footer ", index);
 
   auto arena = std::make_shared<google::protobuf::Arena>();
 

@@ -115,7 +115,7 @@ TEST_F(WidthBucketArrayTest, successForConstantArray) {
   auto testWidthBucketArray = [&](const double operand,
                                   const std::string& bins,
                                   const int64_t expected) {
-    auto expression = fmt::format("width_bucket(c0, {})", bins);
+    auto expression = std::format("width_bucket(c0, {})", bins);
     auto oneRowResult = evaluate<SimpleVector<int64_t>>(
         expression, makeRowVector({makeConstant(operand, 1)}));
     assertEqualVectors(
@@ -150,7 +150,7 @@ TEST_F(WidthBucketArrayTest, failureForConstantArray) {
                          const std::string& expected_message) {
     VELOX_ASSERT_THROW(
         evaluate<SimpleVector<int64_t>>(
-            fmt::format("width_bucket(c0, {})", bins),
+            std::format("width_bucket(c0, {})", bins),
             makeRowVector({makeConstant(operand, 1)})),
         expected_message);
   };

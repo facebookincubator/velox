@@ -37,7 +37,7 @@ int64_t ByteRange::availableBytes() const {
 }
 
 std::string ByteRange::toString() const {
-  return fmt::format("[{} starting at {}]", succinctBytes(size), position);
+  return std::format("[{} starting at {}]", succinctBytes(size), position);
 }
 
 std::string BufferInputStream::toString() const {

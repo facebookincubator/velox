@@ -45,7 +45,6 @@ velox_link_libraries(
     velox_time
     velox_type
     Folly::folly
-    fmt::fmt
     gflags::gflags
     glog::glog
   PRIVATE velox_test_util re2::re2

@@ -145,7 +145,7 @@ TEST_F(ClassificationAggregationTest, basic) {
     for (const auto function : functions) {
       VELOX_ASSERT_THROW(
           runTest(
-              fmt::format("{}({}, {}, {})", function, bucket, "c0", "c1"),
+              std::format("{}({}, {}, {})", function, bucket, "c0", "c1"),
               input,
               expected),
           "Bucket count must be at least 2.0");
@@ -156,7 +156,7 @@ TEST_F(ClassificationAggregationTest, basic) {
   for (const auto function : functions) {
     VELOX_ASSERT_THROW(
         runTest(
-            fmt::format("{}(5, {}, {}, {})", function, "c0", "c1", -0.1),
+            std::format("{}(5, {}, {}, {})", function, "c0", "c1", -0.1),
             input,
             expected),
         "Weight must be non-negative.");
@@ -166,14 +166,14 @@ TEST_F(ClassificationAggregationTest, basic) {
   for (const auto function : functions) {
     VELOX_ASSERT_THROW(
         runTest(
-            fmt::format("{}({}, {}, {})", function, 5, "c0", -0.1),
+            std::format("{}({}, {}, {})", function, 5, "c0", -0.1),
             input,
             expected),
         "Prediction value must be between 0 and 1");
 
     VELOX_ASSERT_THROW(
         runTest(
-            fmt::format("{}({}, {}, {})", function, 5, "c0", 1.2),
+            std::format("{}({}, {}, {})", function, 5, "c0", 1.2),
             input,
             expected),
         "Prediction value must be between 0 and 1");

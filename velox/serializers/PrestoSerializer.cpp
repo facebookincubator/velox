@@ -142,7 +142,7 @@ void PrestoVectorSerde::deserialize(
   auto maybeHeader = detail::PrestoHeader::read(source);
   VELOX_CHECK(
       maybeHeader.hasValue(),
-      fmt::format(
+      std::format(
           "PrestoPage header is invalid: {}", maybeHeader.error().message()));
   auto const header = std::move(maybeHeader.value());
 

@@ -943,7 +943,7 @@ class StripeFooterWrapper : public ProtoWrapperBase {
 } // namespace facebook::velox::dwrf
 
 template <>
-struct fmt::formatter<facebook::velox::dwrf::DwrfFormat> : formatter<int> {
+struct std::formatter<facebook::velox::dwrf::DwrfFormat> : formatter<int> {
   auto format(facebook::velox::dwrf::DwrfFormat s, format_context& ctx) const {
     return formatter<int>::format(static_cast<int>(s), ctx);
   }

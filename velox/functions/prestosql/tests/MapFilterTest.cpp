@@ -301,7 +301,7 @@ TEST_F(MapFilterTest, fuzzFlatMap) {
     };
 
     for (const auto& filter : filters) {
-      auto expr = fmt::format("map_filter(c0, {})", filter);
+      auto expr = std::format("map_filter(c0, {})", filter);
       auto resultFlat = evaluate(expr, dataFlat);
       auto resultMap = evaluate(expr, dataMap);
       assertEqualVectors(resultMap, resultFlat);

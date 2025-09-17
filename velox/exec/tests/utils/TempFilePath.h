@@ -78,7 +78,7 @@ class TempFilePath {
       : enableFaultInjection_(enableFaultInjection),
         tempPath_(createTempFile(this)),
         path_(
-            enableFaultInjection_ ? fmt::format("faulty:{}", tempPath_)
+            enableFaultInjection_ ? std::format("faulty:{}", tempPath_)
                                   : tempPath_) {
     VELOX_CHECK_NE(fd_, -1);
   }

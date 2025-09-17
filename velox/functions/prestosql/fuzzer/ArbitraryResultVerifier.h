@@ -51,7 +51,7 @@ class ArbitraryResultVerifier : public ResultVerifier {
     std::vector<std::string> projectColumns = groupingKeys;
     // Add a column of aggregateTypeSql_ of all nulls so that we can union the
     // oracle result with the actual result.
-    projectColumns.push_back(fmt::format(
+    projectColumns.push_back(std::format(
         "cast(NULL as {}) as {}", aggregateTypeSql_, aggregateName));
     projectColumns.push_back("expected");
 
@@ -90,7 +90,7 @@ class ArbitraryResultVerifier : public ResultVerifier {
     auto actualSource =
         PlanBuilder(planNodeIdGenerator, result->pool())
             .values({result})
-            .appendColumns({fmt::format(
+            .appendColumns({std::format(
                 "cast(NULL as {}[]) as expected", aggregateTypeSql_)})
             .planNode();
 
@@ -108,7 +108,7 @@ class ArbitraryResultVerifier : public ResultVerifier {
             .localPartition({}, {expectedSource, actualSource})
             .singleAggregation(
                 groupingKeys_,
-                {fmt::format("array_agg({}) as a", name_),
+                {std::format("array_agg({}) as a", name_),
                  "array_agg(expected) as e"})
             .project({"remove_nulls(a) as a", "remove_nulls(e) as e"})
             .project(
@@ -140,10 +140,10 @@ class ArbitraryResultVerifier : public ResultVerifier {
     auto inputField = core::TypedExprs::asFieldAccess(args[0]);
     VELOX_CHECK_NOT_NULL(inputField);
 
-    std::string arrayAggCall = fmt::format("array_agg({})", inputField->name());
+    std::string arrayAggCall = std::format("array_agg({})", inputField->name());
 
     if (aggregate.mask != nullptr) {
-      arrayAggCall += fmt::format(" filter (where {})", aggregate.mask->name());
+      arrayAggCall += std::format(" filter (where {})", aggregate.mask->name());
     }
     arrayAggCall += " as expected";
 

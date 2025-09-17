@@ -666,7 +666,7 @@ TEST_F(GenericViewTest, castE2E) {
 
   auto test = [&](const std::string& args, const std::string& expected) {
     auto result = evaluate<SimpleVector<StringView>>(
-        fmt::format("to_string_cast({})", args),
+        std::format("to_string_cast({})", args),
         makeRowVector({makeFlatVector<int64_t>(1)}));
     ASSERT_EQ(result->valueAt(0).str(), expected);
   };
@@ -782,7 +782,7 @@ TEST_F(GenericViewTest, tryCastE2E) {
 
   auto test = [&](const std::string& args, const std::string& expected) {
     auto result = evaluate<SimpleVector<StringView>>(
-        fmt::format("to_string_try_cast({})", args),
+        std::format("to_string_try_cast({})", args),
         makeRowVector({makeFlatVector<int64_t>(1)}));
     ASSERT_EQ(result->valueAt(0).str(), expected);
   };
@@ -830,7 +830,7 @@ TEST_F(GenericViewTest, hasDuplicate) {
 
   auto test = [&](const std::string& arg, bool expected) {
     auto result = evaluate<SimpleVector<bool>>(
-        fmt::format("has_duplicate_func(array_constructor({}))", arg),
+        std::format("has_duplicate_func(array_constructor({}))", arg),
         makeRowVector({makeFlatVector<int64_t>(1)}));
     ASSERT_EQ(result->valueAt(0), expected);
   };

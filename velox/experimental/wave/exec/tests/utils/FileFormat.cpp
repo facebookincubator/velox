@@ -174,7 +174,7 @@ void printSums(uint64_t* bits, int32_t numBits) {
   int32_t cnt = 0;
   for (auto i = 0; i < bits::nwords(numBits) - 16; i += 16) {
     cnt += bits::countBits(bits, i * 64, (i + 16) * 64);
-    std::cout << fmt::format("{}: {}\n", (i + 16) * 64, cnt);
+    std::cout << std::format("{}: {}\n", (i + 16) * 64, cnt);
   }
 }
 
@@ -629,7 +629,7 @@ void Table::addStripes(
     std::shared_ptr<memory::MemoryPool> pool) {
   std::lock_guard<std::mutex> l(mutex_);
   for (auto& s : stripes) {
-    s->name = fmt::format("wavemock://{}/{}", name_, stripes_.size());
+    s->name = std::format("wavemock://{}/{}", name_, stripes_.size());
     allStripes_[s->name] = s.get();
     stripes_.push_back(std::move(s));
   }

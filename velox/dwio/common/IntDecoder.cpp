@@ -2413,7 +2413,7 @@ std::string codegenVarintMask(int end_byte, int len) {
 
 std::string codegenExtract(int end_byte, int len) {
   if (len > 1) {
-    return fmt::format(
+    return std::format(
         " bits::extractBits<uint64_t>(word, {})",
         codegenVarintMask(end_byte, len));
   }
@@ -2421,10 +2421,10 @@ std::string codegenExtract(int end_byte, int len) {
     return "static_cast<uint64_t>(static_cast<uint8_t>(word))";
   }
   int sourceByte = end_byte - len + 1;
-  std::string s = fmt::format("((word >> {}) & 0x7f)", sourceByte * 8);
+  std::string s = std::format("((word >> {}) & 0x7f)", sourceByte * 8);
   int targetByte = 1;
   for (sourceByte = sourceByte + 1; sourceByte <= end_byte; ++sourceByte) {
-    s += fmt::format(
+    s += std::format(
         " | ((word >> {}) & {})",
         sourceByte * 8 - targetByte * 7,
         0x7f << (targetByte * 7));
@@ -2456,10 +2456,10 @@ std::string endConditional(bool sparse) {
 
 std::string advanceCount(bool sparse, int32_t num_varints) {
   if (sparse) {
-    fmt::format("\n        row += {};", num_varints);
+    std::format("\n        row += {};", num_varints);
   }
   return "";
-  // return fmt::format("\n        n -= {};", num_varints);
+  // return std::format("\n        n -= {};", num_varints);
 }
 
 std::string codegenControlWordCase(
@@ -2467,7 +2467,7 @@ std::string codegenControlWordCase(
     int mask_len,
     bool sparse = false) {
   CHECK(control_bits < (1 << mask_len));
-  std::string s = fmt::format("      case {}ULL: {{", control_bits);
+  std::string s = std::format("      case {}ULL: {{", control_bits);
   int last_zero = -1;
   int num_varints = 0;
   bool postscript_generated = false;
@@ -2480,15 +2480,15 @@ std::string codegenControlWordCase(
       if (!sparse && next_bit <= 4 && last_zero == next_bit - 1 &&
           ((control_bits >> next_bit) & 0xf) == 0) {
         // There are up to 4 consecutive single byte vints.
-        s += fmt::format("\nunpack4x1(word >> {}, output);", next_bit * 8);
+        s += std::format("\nunpack4x1(word >> {}, output);", next_bit * 8);
         if (!carryover_used) {
-          s += fmt::format(
+          s += std::format(
               "\napplyCarryover(carryoverBits, carryover, output - 4);");
           carryover_used = true;
         }
         if (next_bit >= 3) {
           // Can be we wrote extra if byte 6 or 7 was not a single byte vint.
-          s += fmt::format(
+          s += std::format(
               "\nclipTrailingStores({}, controlBits, pos, output);", next_bit);
           postscript_generated = true;
         }
@@ -2497,13 +2497,13 @@ std::string codegenControlWordCase(
       } else {
         if (carryover_used) {
           s += startConditional(sparse);
-          s += fmt::format(
+          s += std::format(
               "\n        *output++ =  {};",
               codegenExtract(next_bit, next_bit - last_zero));
           s += endConditional(sparse);
         } else {
           s += startConditional(sparse);
-          s += fmt::format(
+          s += std::format(
               "\n        const uint64_t firstValue = "
               " {};",
               codegenExtract(next_bit, next_bit - last_zero));
@@ -2524,11 +2524,11 @@ std::string codegenControlWordCase(
   // at least 1 varint but not ending on one are all distinct cases.
   if (last_zero == -1) {
     s += startTrailingConditional(sparse);
-    s += fmt::format(
+    s += std::format(
         "\n        carryover |= "
         "bits::extractBits<uint64_t>(word, {}) << carryoverBits;",
         codegenVarintMask(mask_len - 1, mask_len));
-    s += fmt::format("\n        carryoverBits += {};", 7 * mask_len);
+    s += std::format("\n        carryoverBits += {};", 7 * mask_len);
     s += endConditional(sparse);
   } else if (last_zero >= mask_len - 1) {
     s += "\n        carryover = 0ULL;";
@@ -2538,10 +2538,10 @@ std::string codegenControlWordCase(
     }
   } else {
     s += startTrailingConditional(sparse);
-    s += fmt::format(
+    s += std::format(
         "\n        carryover = {};",
         codegenExtract(mask_len - 1, mask_len - 1 - last_zero));
-    s += fmt::format(
+    s += std::format(
         "\n        carryoverBits = {};", 7 * (mask_len - 1 - last_zero));
     s += endConditional(sparse);
     if (!postscript_generated) {

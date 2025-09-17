@@ -40,7 +40,7 @@ void checkGcsStatus(
     const std::string& bucket,
     const std::string& key) {
   if (!outcome.ok()) {
-    const auto errMsg = fmt::format(
+    const auto errMsg = std::format(
         "{} due to: Path:'{}', SDK Error Type:{}, GCS Status Code:{},  Message:'{}'",
         errorMsgPrefix,
         gcsURI(bucket, key),

@@ -85,7 +85,7 @@ class OrderByBenchmark {
     std::vector<std::string> keys;
     keys.reserve(test.numKeys);
     for (auto i = 0; i < test.numKeys; i++) {
-      keys.emplace_back(fmt::format("c{} ASC NULLS LAST", i));
+      keys.emplace_back(std::format("c{} ASC NULLS LAST", i));
     }
 
     return test::PlanBuilder()

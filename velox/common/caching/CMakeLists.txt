@@ -33,7 +33,6 @@ velox_link_libraries(
     velox_process
     velox_time
     Folly::folly
-    fmt::fmt
   PRIVATE velox_time
 )
 

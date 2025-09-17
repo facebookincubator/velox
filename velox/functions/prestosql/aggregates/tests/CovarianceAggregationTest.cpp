@@ -31,16 +31,16 @@ class CovarianceAggregationTest
   }
 
   void testGroupBy(const std::string& aggName, const RowVectorPtr& data) {
-    auto partialAgg = fmt::format("{}(c1, c2)", aggName);
+    auto partialAgg = std::format("{}(c1, c2)", aggName);
     auto sql =
-        fmt::format("SELECT c0, {}(c1, c2) FROM tmp GROUP BY 1", aggName);
+        std::format("SELECT c0, {}(c1, c2) FROM tmp GROUP BY 1", aggName);
 
     testAggregations({data}, {"c0"}, {partialAgg}, sql);
   }
 
   void testGlobalAgg(const std::string& aggName, const RowVectorPtr& data) {
-    auto partialAgg = fmt::format("{}(c1, c2)", aggName);
-    auto sql = fmt::format("SELECT {}(c1, c2) FROM tmp", aggName);
+    auto partialAgg = std::format("{}(c1, c2)", aggName);
+    auto sql = std::format("SELECT {}(c1, c2) FROM tmp", aggName);
 
     testAggregations({data}, {}, {partialAgg}, sql);
   }
@@ -48,8 +48,8 @@ class CovarianceAggregationTest
   void testDistinctGroupBy(
       const std::string& aggName,
       const RowVectorPtr& data) {
-    auto singleAgg = fmt::format("{}(distinct c1, c2)", aggName);
-    auto sql = fmt::format(
+    auto singleAgg = std::format("{}(distinct c1, c2)", aggName);
+    auto sql = std::format(
         "SELECT c0, {}(distinct c1, c2) FROM tmp GROUP BY 1", aggName);
     auto plan = PlanBuilder()
                     .values({data})
@@ -61,8 +61,8 @@ class CovarianceAggregationTest
   void testDistinctGlobalAgg(
       const std::string& aggName,
       const RowVectorPtr& data) {
-    auto singleAgg = fmt::format("{}(distinct c1, c2)", aggName);
-    auto sql = fmt::format("SELECT {}(distinct c1, c2) FROM tmp", aggName);
+    auto singleAgg = std::format("{}(distinct c1, c2)", aggName);
+    auto sql = std::format("SELECT {}(distinct c1, c2) FROM tmp", aggName);
     auto plan = PlanBuilder()
                     .values({data})
                     .singleAggregation({}, {singleAgg})

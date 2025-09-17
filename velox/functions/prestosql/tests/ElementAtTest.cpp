@@ -181,7 +181,7 @@ class ElementAtTest : public FunctionBaseTest {
 template <>
 void ElementAtTest::testVariableInputMap<StringView>() {
   auto toStr = [](size_t input) {
-    return StringView(fmt::format("str{}", input).c_str());
+    return StringView(std::format("str{}", input).c_str());
   };
 
   auto indicesVector = makeFlatVector<StringView>(
@@ -733,7 +733,7 @@ TEST_F(ElementAtTest, constantInputMap) {
 
     // String map value type.
     auto valueAt2 = [](vector_size_t idx) {
-      return StringView(fmt::format("str{}", idx % 5).c_str());
+      return StringView(std::format("str{}", idx % 5).c_str());
     };
     auto expectedValueAt2 = [](vector_size_t /* row */) {
       return StringView("str3");

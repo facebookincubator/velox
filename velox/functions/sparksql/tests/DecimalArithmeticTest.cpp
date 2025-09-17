@@ -45,7 +45,7 @@ class DecimalArithmeticTest : public SparkFunctionBaseTest {
     std::vector<core::TypedExprPtr> inputExprs;
     for (int i = 0; i < inputs.size(); ++i) {
       inputExprs.emplace_back(std::make_shared<core::FieldAccessTypedExpr>(
-          inputs[i]->type(), fmt::format("c{}", i)));
+          inputs[i]->type(), std::format("c{}", i)));
     }
     auto expr = std::make_shared<const core::CallTypedExpr>(
         expected->type(), std::move(inputExprs), functionName);

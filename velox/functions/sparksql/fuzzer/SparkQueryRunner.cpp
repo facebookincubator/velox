@@ -136,7 +136,7 @@ SparkQueryRunner::executeAndReturnVector(const core::PlanNodePtr& plan) {
         auto inputType = asRowType(input[0]->type());
         if (inputType->size() == 0) {
           inputMap[tableName] = {exec::test::makeNullRows(
-              input, fmt::format("{}x", tableName), pool())};
+              input, std::format("{}x", tableName), pool())};
         }
       }
 
@@ -150,7 +150,7 @@ SparkQueryRunner::executeAndReturnVector(const core::PlanNodePtr& plan) {
         writeToFile(filePath, input, writerPool.get());
         // Create temporary view for this table in Spark by reading the
         // generated Parquet file.
-        execute(fmt::format(
+        execute(std::format(
             "CREATE OR REPLACE TEMPORARY VIEW {} AS (SELECT * from parquet.`file://{}`);",
             tableName,
             filePath));

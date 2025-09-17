@@ -41,7 +41,7 @@ class BarrierTest : public testing::Test {
  protected:
   void testFunc(int32_t threadIdx) {
     auto barrierIdx = threadIdx / 10;
-    auto name = fmt::format("bar{}", barrierIdx);
+    auto name = std::format("bar{}", barrierIdx);
     auto barrier = WaveBarrier::get(name, 0, 0);
     message(threadIdx, "enter");
     barrier->enter();

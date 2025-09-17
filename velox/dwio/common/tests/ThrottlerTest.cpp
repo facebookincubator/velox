@@ -107,7 +107,7 @@ TEST_F(ThrottlerTest, throttle) {
   const uint64_t minThrottleBackoffMs = 1'000;
   const uint64_t maxThrottleBackoffMs = 2'000;
   for (const auto signal : kSignalTypes) {
-    SCOPED_TRACE(fmt::format("signal: {}", Throttler::signalTypeName(signal)));
+    SCOPED_TRACE(std::format("signal: {}", Throttler::signalTypeName(signal)));
 
     Throttler::testingReset();
     Throttler::init(Throttler::Config(
@@ -184,7 +184,7 @@ TEST_F(ThrottlerTest, expire) {
   const uint64_t minThrottleBackoffMs = 1'00;
   const uint64_t maxThrottleBackoffMs = 2'00;
   for (const auto signal : kSignalTypes) {
-    SCOPED_TRACE(fmt::format("signal: {}", Throttler::signalTypeName(signal)));
+    SCOPED_TRACE(std::format("signal: {}", Throttler::signalTypeName(signal)));
     Throttler::testingReset();
     Throttler::init(Throttler::Config(
         true,
@@ -509,7 +509,7 @@ TEST_F(ThrottlerTest, maxOfGlobalAndLocal) {
   const uint64_t minThrottleBackoffMs = 1'000;
   const uint64_t maxThrottleBackoffMs = 2'000;
   for (const bool localFirst : {false, true}) {
-    SCOPED_TRACE(fmt::format("localFirst: {}", localFirst));
+    SCOPED_TRACE(std::format("localFirst: {}", localFirst));
     Throttler::testingReset();
     Throttler::init(Throttler::Config(
         true, minThrottleBackoffMs, maxThrottleBackoffMs, 2.0, 2, 2));
@@ -646,13 +646,13 @@ TEST_F(ThrottlerTest, fuzz) {
   std::vector<std::string> directories;
   directories.reserve(numDirectories);
   for (int i = 0; i < numDirectories; ++i) {
-    directories.emplace_back(fmt::format("fuzz-{}", i));
+    directories.emplace_back(std::format("fuzz-{}", i));
   }
   const int numClusters = 128;
   std::vector<std::string> clusters;
   clusters.reserve(numClusters);
   for (int i = 0; i < numClusters; ++i) {
-    clusters.emplace_back(fmt::format("fuzz-{}", i));
+    clusters.emplace_back(std::format("fuzz-{}", i));
   }
 
   std::atomic_bool stopped{false};

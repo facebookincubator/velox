@@ -101,7 +101,7 @@ class CacheTest : public ::testing::Test {
       FLAGS_velox_ssd_odirect = false;
       tempDirectory_ = exec::test::TempDirectoryPath::create();
       const SsdCache::Config config(
-          fmt::format("{}/cache", tempDirectory_->getPath()),
+          std::format("{}/cache", tempDirectory_->getPath()),
           ssdBytes,
           1,
           executor_.get(),
@@ -193,7 +193,7 @@ class CacheTest : public ::testing::Test {
       StringIdLease& groupId) {
     std::lock_guard<std::mutex> l(mutex_);
     fileId = StringIdLease{fileIds(), path};
-    groupId = StringIdLease{fileIds(), fmt::format("group{}", fileId.id() / 2)};
+    groupId = StringIdLease{fileIds(), std::format("group{}", fileId.id() / 2)};
     auto it = pathToInput_.find(fileId.id());
     if (it != pathToInput_.end()) {
       return it->second;
@@ -411,7 +411,7 @@ class CacheTest : public ::testing::Test {
       int32_t stripeWindow = 8) {
     for (auto i = from; i < to; ++i) {
       readLoop(
-          fmt::format("{}{}", prefix, i),
+          std::format("{}{}", prefix, i),
           numColumns,
           readPct,
           readPctModulo,
@@ -651,7 +651,7 @@ TEST_F(CacheTest, singleFileThreads) {
   for (int i = 0; i < numThreads; ++i) {
     threads.push_back(std::thread([this, i]() {
       readLoop(
-          fmt::format("testfile{}", i),
+          std::format("testfile{}", i),
           10,
           70,
           10,
@@ -687,7 +687,7 @@ TEST_F(CacheTest, ssdThreads) {
         [i, this, threadStats = stats.back(), fsStat = fsStats.back()]() {
           for (auto counter = 0; counter < 4; ++counter) {
             readLoop(
-                fmt::format("testfile{}", i / 2),
+                std::format("testfile{}", i / 2),
                 10,
                 70,
                 10,
@@ -795,7 +795,7 @@ TEST_F(CacheTest, readAhead) {
       std::vector<std::unique_ptr<FileWithReadAhead>> files;
       auto firstFileNumber = threadIndex * kFilesPerThread;
       for (auto i = 0; i < kFilesPerThread; ++i) {
-        auto name = fmt::format("prefetch_{}", i + firstFileNumber);
+        auto name = std::format("prefetch_{}", i + firstFileNumber);
         files.push_back(std::make_unique<FileWithReadAhead>(
             name, cache_.get(), threadStats, fsStat, *pool_, executor_.get()));
       }
@@ -820,7 +820,7 @@ TEST_F(CacheTest, readAhead) {
                 break;
               }
               // Open a new file with a different unique name.
-              auto newName = fmt::format(
+              auto newName = std::format(
                   "prefetch_{}",
                   (static_cast<int64_t>(firstFileNumber) + i + i) * 1000000000 +
                       totalRead[i]);
@@ -861,7 +861,7 @@ TEST_F(CacheTest, noCacheRetention) {
     int readPct;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "noCacheRetention {}, hasSsdCache {}, readPct {}",
           noCacheRetention,
           hasSsdCache,
@@ -1028,7 +1028,7 @@ TEST_F(CacheTest, ssdReadVerification) {
   ASSERT_GT(ioStats_->ssdRead().sum(), 0);
 
   // Corrupt SSD cache file.
-  corruptSsdFile(fmt::format("{}/cache0", tempDirectory_->getPath()));
+  corruptSsdFile(std::format("{}/cache0", tempDirectory_->getPath()));
   // Clear memory cache to force ssd read.
   cache_->clear();
 

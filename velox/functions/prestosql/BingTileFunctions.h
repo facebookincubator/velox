@@ -25,10 +25,10 @@ namespace facebook::velox::functions {
 FOLLY_ALWAYS_INLINE Status checkBingTileZoom(int32_t zoom) {
   if (FOLLY_UNLIKELY(zoom < 0)) {
     return Status::UserError(
-        fmt::format("Bing tile zoom {} cannot be negative", zoom));
+        std::format("Bing tile zoom {} cannot be negative", zoom));
   }
   if (FOLLY_UNLIKELY(zoom > BingTileType::kBingTileMaxZoomLevel)) {
-    return Status::UserError(fmt::format(
+    return Status::UserError(std::format(
         "Bing tile zoom {} cannot be greater than max zoom {}",
         zoom,
         BingTileType::kBingTileMaxZoomLevel));
@@ -47,11 +47,11 @@ struct BingTileFunction {
       const arg_type<int32_t>& zoom) {
     if (FOLLY_UNLIKELY(x < 0)) {
       return Status::UserError(
-          fmt::format("Bing tile X coordinate {} cannot be negative", x));
+          std::format("Bing tile X coordinate {} cannot be negative", x));
     }
     if (FOLLY_UNLIKELY(y < 0)) {
       return Status::UserError(
-          fmt::format("Bing tile Y coordinate {} cannot be negative", y));
+          std::format("Bing tile Y coordinate {} cannot be negative", y));
     }
 
     Status zoomCheck = checkBingTileZoom(zoom);
@@ -69,7 +69,7 @@ struct BingTileFunction {
       if (reason.has_value()) {
         return Status::UserError(reason.value());
       } else {
-        return Status::UnknownError(fmt::format(
+        return Status::UnknownError(std::format(
             "Velox Error constructing BingTile from x {} y {} zoom {}; please report this.",
             x,
             y,
@@ -132,7 +132,7 @@ struct BingTileParentFunction {
     uint8_t tileZoom = BingTileType::bingTileZoom(tile);
     if (FOLLY_UNLIKELY(tileZoom == 0)) {
       return Status::UserError(
-          fmt::format("Cannot call bing_tile_parent on zoom 0 tile"));
+          std::format("Cannot call bing_tile_parent on zoom 0 tile"));
     }
     auto parent = BingTileType::bingTileParent(tileInt, tileZoom - 1);
     if (FOLLY_UNLIKELY(parent.hasError())) {
@@ -150,7 +150,7 @@ struct BingTileParentFunction {
     VELOX_DCHECK(BingTileType::isBingTileIntValid(tileInt));
     if (FOLLY_UNLIKELY(parentZoom < 0)) {
       return Status::UserError(
-          fmt::format("Cannot call bing_tile_parent with negative zoom"));
+          std::format("Cannot call bing_tile_parent with negative zoom"));
     }
     auto parent = BingTileType::bingTileParent(tileInt, parentZoom);
     if (FOLLY_UNLIKELY(parent.hasError())) {
@@ -165,7 +165,7 @@ struct BingTileParentFunction {
       const arg_type<BingTile>& tile,
       const arg_type<int32_t>& parentZoom) {
     if (FOLLY_UNLIKELY(parentZoom > BingTileType::kBingTileMaxZoomLevel)) {
-      return Status::UserError(fmt::format(
+      return Status::UserError(std::format(
           "newZoom {} is greater than max zoom {}",
           parentZoom,
           BingTileType::kBingTileMaxZoomLevel));
@@ -196,7 +196,7 @@ struct BingTileChildrenFunction {
     uint8_t tileZoom = BingTileType::bingTileZoom(tile);
     if (FOLLY_UNLIKELY(tileZoom >= BingTileType::kBingTileMaxZoomLevel)) {
       return Status::UserError(
-          fmt::format("Cannot call bing_tile_children on zoom 23 tile"));
+          std::format("Cannot call bing_tile_children on zoom 23 tile"));
     }
     auto childrenRes =
         BingTileType::bingTileChildren(tileInt, tileZoom + 1, maxZoomShift);

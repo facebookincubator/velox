@@ -466,8 +466,8 @@ TEST_F(VectorHasherTest, stringDistinctOverflow) {
         numRows, [&i, &stringVec, numRows](vector_size_t row) {
           const auto num = numRows * i + row;
           stringVec[row] = (row != 0)
-              ? fmt::format("abcdefghijabcdefghij{}", num)
-              : fmt::format("s{}", num);
+              ? std::format("abcdefghijabcdefghij{}", num)
+              : std::format("s{}", num);
           return StringView(stringVec[row]);
         }));
   }

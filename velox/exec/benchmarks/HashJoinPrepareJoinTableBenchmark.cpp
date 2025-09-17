@@ -65,7 +65,7 @@ struct HashTableBenchmarkParams {
       extraValue = 0;
     }
 
-    title = fmt::format(
+    title = std::format(
         "Size:{},parallel:{},withDup:{},{}",
         buildSize,
         numWays > 1,
@@ -103,7 +103,7 @@ struct HashTableBenchmarkParams {
   int32_t numFields;
 
   std::string toString() const {
-    return fmt::format(
+    return std::format(
         "HashTableSize:{}, BuildInputSize:{}, ExpectHashMode:{}",
         hashTableSize,
         buildSize,

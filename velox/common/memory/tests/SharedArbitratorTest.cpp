@@ -535,7 +535,7 @@ DEBUG_ONLY_TEST_P(SharedArbitrationTestWithThreadingModes, reclaimToOrderBy) {
   createDuckDbTable(vectors);
   std::vector<bool> sameQueries = {false, true};
   for (bool sameQuery : sameQueries) {
-    SCOPED_TRACE(fmt::format("sameQuery {}", sameQuery));
+    SCOPED_TRACE(std::format("sameQuery {}", sameQuery));
     const auto oldStats = arbitrator_->stats();
     std::shared_ptr<core::QueryCtx> fakeMemoryQueryCtx =
         newQueryCtx(memoryManager_.get(), executor_.get(), kMemoryCapacity);
@@ -636,7 +636,7 @@ DEBUG_ONLY_TEST_P(
   createDuckDbTable(vectors);
   std::vector<bool> sameQueries = {false, true};
   for (bool sameQuery : sameQueries) {
-    SCOPED_TRACE(fmt::format("sameQuery {}", sameQuery));
+    SCOPED_TRACE(std::format("sameQuery {}", sameQuery));
     const auto oldStats = arbitrator_->stats();
     std::shared_ptr<core::QueryCtx> fakeMemoryQueryCtx =
         newQueryCtx(memoryManager_.get(), executor_.get(), kMemoryCapacity);
@@ -738,7 +738,7 @@ DEBUG_ONLY_TEST_P(
   createDuckDbTable(vectors);
   std::vector<bool> sameQueries = {false, true};
   for (bool sameQuery : sameQueries) {
-    SCOPED_TRACE(fmt::format("sameQuery {}", sameQuery));
+    SCOPED_TRACE(std::format("sameQuery {}", sameQuery));
     const auto oldStats = arbitrator_->stats();
     std::shared_ptr<core::QueryCtx> fakeMemoryQueryCtx =
         newQueryCtx(memoryManager_.get(), executor_.get(), kMemoryCapacity);
@@ -1093,7 +1093,7 @@ DEBUG_ONLY_TEST_P(SharedArbitrationTestWithThreadingModes, runtimeStats) {
           .tableWrite(outputDirectory->getPath())
           .singleAggregation(
               {},
-              {fmt::format("sum({})", TableWriteTraits::rowCountColumnName())})
+              {std::format("sum({})", TableWriteTraits::rowCountColumnName())})
           .planNode();
   {
     const std::shared_ptr<Task> task =
@@ -1117,7 +1117,7 @@ DEBUG_ONLY_TEST_P(SharedArbitrationTestWithThreadingModes, runtimeStats) {
                 dwrf::Config::kOrcWriterMaxDictionaryMemorySession,
                 "1GB")
             .plan(std::move(writerPlan))
-            .assertResults(fmt::format("SELECT {}", numRows));
+            .assertResults(std::format("SELECT {}", numRows));
 
     auto stats = task->taskStats().pipelineStats.front().operatorStats;
     // TableWrite Operator's stripeSize runtime stats would be updated twice:
@@ -1143,7 +1143,7 @@ DEBUG_ONLY_TEST_P(
   createDuckDbTable(vectors);
 
   for (bool sameDriver : {false, true}) {
-    SCOPED_TRACE(fmt::format("sameDriver {}", sameDriver));
+    SCOPED_TRACE(std::format("sameDriver {}", sameDriver));
     std::shared_ptr<core::QueryCtx> queryCtx =
         newQueryCtx(memoryManager_.get(), executor_.get(), kMemoryCapacity);
     ASSERT_EQ(queryCtx->pool()->capacity(), 0);
@@ -1281,7 +1281,7 @@ TEST_P(
     uint64_t queryCapacity;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "totalCapacity = {}, queryCapacity = {}.",
           succinctBytes(totalCapacity),
           succinctBytes(queryCapacity));

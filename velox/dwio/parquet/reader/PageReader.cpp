@@ -137,7 +137,7 @@ const char* PageReader::decompressData(
       std::make_unique<dwio::common::SeekableArrayInputStream>(
           pageData, compressedSize, 0);
   auto streamDebugInfo =
-      fmt::format("Page Reader: Stream {}", inputStream_->getName());
+      std::format("Page Reader: Stream {}", inputStream_->getName());
   std::unique_ptr<dwio::common::SeekableInputStream> decompressedStream =
       dwio::common::compression::createDecompressor(
           codec_,

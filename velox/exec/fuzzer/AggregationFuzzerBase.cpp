@@ -153,7 +153,7 @@ bool AggregationFuzzerBase::addSignature(
       if (resolvedType->isRow()) {
         std::vector<std::string> names;
         for (auto i = 0; i < resolvedType->size(); ++i) {
-          names.push_back(fmt::format("field{}", i));
+          names.push_back(std::format("field{}", i));
         }
 
         std::vector<TypePtr> types = resolvedType->asRow().children();
@@ -214,7 +214,7 @@ std::vector<std::string> AggregationFuzzerBase::generateKeys(
   auto numKeys = boost::random::uniform_int_distribution<uint32_t>(1, 5)(rng_);
   std::vector<std::string> keys;
   for (auto i = 0; i < numKeys; ++i) {
-    keys.push_back(fmt::format("{}{}", prefix, i));
+    keys.push_back(std::format("{}{}", prefix, i));
 
     // Pick random, possibly complex, type.
     if (orderableGroupKeys_) {
@@ -260,7 +260,7 @@ std::vector<std::string> AggregationFuzzerBase::generateSortingKeys(
   }
 
   for (auto i = 0; i < numKeys.value(); ++i) {
-    keys.push_back(fmt::format("{}{}", prefix, i));
+    keys.push_back(std::format("{}{}", prefix, i));
     types.push_back(vectorFuzzer_.randOrderableType(sortingKeyTypes, maxDepth));
     names.push_back(keys.back());
   }
@@ -671,11 +671,11 @@ void AggregationFuzzerBase::Stats::print(size_t numIterations) const {
 }
 
 std::string printPercentageStat(size_t n, size_t total) {
-  return fmt::format("{} ({:.2f}%)", n, (double)n / total * 100);
+  return std::format("{} ({:.2f}%)", n, (double)n / total * 100);
 }
 
 void printStats(const AggregationFuzzerBase::FunctionsStats& stats) {
-  LOG(ERROR) << fmt::format(
+  LOG(ERROR) << std::format(
       "Total functions: {} ({} signatures)",
       stats.numFunctions,
       stats.numSignatures);
@@ -727,7 +727,7 @@ std::string makeFunctionCall(
 std::vector<std::string> makeNames(size_t n) {
   std::vector<std::string> names;
   for (auto i = 0; i < n; ++i) {
-    names.push_back(fmt::format("c{}", i));
+    names.push_back(std::format("c{}", i));
   }
   return names;
 }
@@ -750,7 +750,7 @@ folly::dynamic serialize(
             split.connectorSplit)
             ->filePath;
     if (filePaths.count(filePath) == 0) {
-      const auto newFilePath = fmt::format("{}/{}", dirPath, filePaths.size());
+      const auto newFilePath = std::format("{}/{}", dirPath, filePaths.size());
       fs::copy(filePath, newFilePath);
       filePaths.insert({filePath, newFilePath});
     }
@@ -780,7 +780,7 @@ void persistReproInfo(
   const auto dirPath = dirPathOptional.value();
 
   // Save plans and splits.
-  const std::string planPath = fmt::format("{}/{}", dirPath, kPlanNodeFileName);
+  const std::string planPath = std::format("{}/{}", dirPath, kPlanNodeFileName);
   std::unordered_map<std::string, std::string> filePaths;
   try {
     folly::dynamic array = folly::dynamic::array();

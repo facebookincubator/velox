@@ -83,7 +83,7 @@ struct ConnectorSplit : public ISerializable {
   virtual ~ConnectorSplit() {}
 
   virtual std::string toString() const {
-    return fmt::format(
+    return std::format(
         "[split: connector id {}, weight {}, cacheable {}]",
         connectorId,
         splitWeight,
@@ -413,7 +413,7 @@ class ConnectorQueryCtx {
         prefixSortConfig_(prefixSortConfig),
         expressionEvaluator_(std::move(expressionEvaluator)),
         cache_(cache),
-        scanId_(fmt::format("{}.{}", taskId, planNodeId)),
+        scanId_(std::format("{}.{}", taskId, planNodeId)),
         queryId_(queryId),
         taskId_(taskId),
         driverId_(driverId),

@@ -77,7 +77,7 @@ class StreamingAggregationBenchmark : public VectorTestBase {
                          false)
                      .planNode();
 
-    auto name = fmt::format(
+    auto name = std::format(
         "[{}]_{}_{}_groups",
         params.aggregate,
         params.payloadType->toString(),
@@ -123,7 +123,7 @@ class StreamingAggregationBenchmark : public VectorTestBase {
     names.reserve(totalCols);
     names.emplace_back("k0");
     for (auto i = 0; i < numPayloads; ++i) {
-      names.push_back(fmt::format("c{}", i));
+      names.push_back(std::format("c{}", i));
     }
 
     std::vector<RowVectorPtr> data;
@@ -156,7 +156,7 @@ class StreamingAggregationBenchmark : public VectorTestBase {
     std::vector<std::string> aggregates;
     aggregates.reserve(numPayloads);
     for (auto i = 0; i < numPayloads; ++i) {
-      aggregates.push_back(fmt::format("{}(c{})", aggregate, i));
+      aggregates.push_back(std::format("{}(c{})", aggregate, i));
     }
     return aggregates;
   }

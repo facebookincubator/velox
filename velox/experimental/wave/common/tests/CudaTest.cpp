@@ -126,7 +126,7 @@ struct RunStats {
   int32_t copyPerThread{0};
 
   std::string toString() const {
-    return fmt::format(
+    return std::format(
         "{} GB/s {} {}x{} rows ({}MB)  {} on thread, {} threads copy={}",
         gbs,
         mode,
@@ -493,7 +493,7 @@ struct RoundtripStats {
   }
 
   std::string toString() const {
-    return fmt::format(
+    return std::format(
         "{}: rps={:.2f} gips={:.4f}  mode={} threads={} micros={} avgus={:.2f} toDev={:.2f} GB/s toHost={:.2f} GB/s",
         id,
         (numThreads * numOps) / (micros / 1000000.0),
@@ -1575,12 +1575,12 @@ TEST_F(CudaTest, roundtripMatrix) {
   if (!FLAGS_roundtrip_ops.empty()) {
     std::vector<std::string> modes = {FLAGS_roundtrip_ops};
     roundtripTest(
-        fmt::format("{} GPU, {} repeats", modes[0], FLAGS_gpu_repeats),
+        std::format("{} GPU, {} repeats", modes[0], FLAGS_gpu_repeats),
         modes,
         false,
         FLAGS_gpu_repeats);
     roundtripTest(
-        fmt::format("{} CPU, {} repeats", modes[0], FLAGS_cpu_repeats),
+        std::format("{} CPU, {} repeats", modes[0], FLAGS_cpu_repeats),
         modes,
         true,
         FLAGS_cpu_repeats);
@@ -1691,7 +1691,7 @@ TEST_F(CudaTest, addRandom) {
       stream->wait();
     }
   }
-  std::cout << fmt::format(
+  std::cout << std::format(
                    "All {}, half warps {} half threads {}", time1, time2, time3)
             << std::endl;
 

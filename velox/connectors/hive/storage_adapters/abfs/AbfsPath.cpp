@@ -49,7 +49,7 @@ std::string AbfsPath::getUrl(bool withblobSuffix) const {
       accountNameWithSuffixForUrl.replace(startPos, 3, "blob");
     }
   }
-  return fmt::format(
+  return std::format(
       "{}{}/{}/{}",
       isHttps_ ? "https://" : "http://",
       accountNameWithSuffixForUrl,

@@ -39,7 +39,7 @@ struct RemoteConnectorSplit : public connector::ConnectorSplit {
   folly::dynamic serialize() const override;
 
   std::string toString() const override {
-    return fmt::format("Remote: {}", taskId);
+    return std::format("Remote: {}", taskId);
   }
 };
 

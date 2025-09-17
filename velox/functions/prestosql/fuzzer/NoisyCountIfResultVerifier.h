@@ -58,14 +58,14 @@ class NoisyCountIfResultVerifier : public ResultVerifier {
 
     std::string countIfCall;
     if (aggregate.distinct) {
-      countIfCall = fmt::format("count_if(DISTINCT {})", aggregateColumn_);
+      countIfCall = std::format("count_if(DISTINCT {})", aggregateColumn_);
     } else {
-      countIfCall = fmt::format("count_if({})", aggregateColumn_);
+      countIfCall = std::format("count_if({})", aggregateColumn_);
     }
 
     // Add filter if mask exists
     if (aggregate.mask != nullptr) {
-      countIfCall += fmt::format(" filter (where {})", aggregate.mask->name());
+      countIfCall += std::format(" filter (where {})", aggregate.mask->name());
     }
 
     // Execute plan to get expected result without noise
@@ -99,7 +99,7 @@ class NoisyCountIfResultVerifier : public ResultVerifier {
                             .planNode();
 
     // Combine expected and actual results by grouping keys using map_agg
-    auto mapAgg = fmt::format("map_agg(label, {}) as m", name_);
+    auto mapAgg = std::format("map_agg(label, {}) as m", name_);
     auto plan = PlanBuilder(planNodeIdGenerator)
                     .localPartition({}, {expectedSource, actualSource})
                     .singleAggregation(groupingKeys_, {mapAgg})
@@ -136,7 +136,7 @@ class NoisyCountIfResultVerifier : public ResultVerifier {
 
       // Check if actual value is within expected +/- allowedDifference
       if (difference < lowerBound || difference > upperBound) {
-        LOG(ERROR) << fmt::format(
+        LOG(ERROR) << std::format(
             "noisy_count_if_gaussian result is outside the expected range.\n"
             "  Group: {}\n"
             "  Actual: {}\n"
@@ -158,7 +158,7 @@ class NoisyCountIfResultVerifier : public ResultVerifier {
     if (numGroups >= 50) {
       const auto maxFailures = static_cast<int>(allowedFailureRate * numGroups);
       if (failures > maxFailures) {
-        LOG(ERROR) << fmt::format(
+        LOG(ERROR) << std::format(
             "Too many failures: {} out of {} groups (max allowed: {})",
             failures,
             numGroups,

@@ -63,7 +63,7 @@ struct Split {
     if (barrier) {
       return "BarrierSplit";
     } else {
-      return fmt::format(
+      return std::format(
           "Split: [{}] {}",
           hasConnectorSplit() ? connectorSplit->toString() : "NULL",
           groupId);

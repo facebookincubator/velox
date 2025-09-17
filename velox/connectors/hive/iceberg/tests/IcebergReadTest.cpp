@@ -104,7 +104,7 @@ class HiveIcebergTest : public HiveConnectorTestBase {
         std::multimap<std::string, std::vector<int64_t>>>
         deleteFilesForBaseDatafiles;
     for (int i = 0; i < deletePositionsVecs.size(); i++) {
-      std::string deleteFileName = fmt::format("delete_file_{}", i);
+      std::string deleteFileName = std::format("delete_file_{}", i);
       deleteFilesForBaseDatafiles[deleteFileName] = {
           {"data_file_1", deletePositionsVecs[i]}};
     }
@@ -120,7 +120,7 @@ class HiveIcebergTest : public HiveConnectorTestBase {
       int32_t splitCountPerFile = 1) {
     std::map<std::string, std::vector<int64_t>> rowGroupSizesForFiles;
     for (int32_t i = 0; i < fileCount; i++) {
-      std::string dataFileName = fmt::format("data_file_{}", i);
+      std::string dataFileName = std::format("data_file_{}", i);
       rowGroupSizesForFiles[dataFileName] = {rowCountPerFile};
     }
 
@@ -129,9 +129,9 @@ class HiveIcebergTest : public HiveConnectorTestBase {
         std::multimap<std::string, std::vector<int64_t>>>
         deleteFilesForBaseDatafiles;
     for (int i = 0; i < fileCount; i++) {
-      std::string deleteFileName = fmt::format("delete_file_{}", i);
+      std::string deleteFileName = std::format("delete_file_{}", i);
       deleteFilesForBaseDatafiles[deleteFileName] = {
-          {fmt::format("data_file_{}", i), deletePositions}};
+          {std::format("data_file_{}", i), deletePositions}};
     }
 
     assertPositionalDeletes(
@@ -513,7 +513,7 @@ class HiveIcebergTest : public HiveConnectorTestBase {
         numRowsInPreviousBaseFiles += baseFileSize.second;
       }
 
-      return fmt::format(
+      return std::format(
           "SELECT * FROM tmp WHERE c0 NOT IN ({})",
           makeNotInList(allDeleteValues));
     }

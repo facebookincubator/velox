@@ -726,7 +726,7 @@ FOLLY_ALWAYS_INLINE std::ostream& operator<<(
 } // namespace facebook::velox::connector::hive
 
 template <>
-struct fmt::formatter<facebook::velox::connector::hive::HiveDataSink::State>
+struct std::formatter<facebook::velox::connector::hive::HiveDataSink::State>
     : formatter<std::string> {
   auto format(
       facebook::velox::connector::hive::HiveDataSink::State s,
@@ -737,7 +737,7 @@ struct fmt::formatter<facebook::velox::connector::hive::HiveDataSink::State>
 };
 
 template <>
-struct fmt::formatter<
+struct std::formatter<
     facebook::velox::connector::hive::LocationHandle::TableType>
     : formatter<int> {
   auto format(

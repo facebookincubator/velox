@@ -2461,7 +2461,7 @@ std::unique_ptr<ColumnReader> buildByteRleColumnReader(
           RleDecoderFactory<DataT>::get(),
           std::move(flatMapContext));
     default:
-      DWIO_RAISE(fmt::format(
+      DWIO_RAISE(std::format(
           "Unsupported upcast to typekind: {}", requestedType->toString()));
   }
 }
@@ -2502,7 +2502,7 @@ std::unique_ptr<ColumnReader> buildTypedIntegerColumnReader(
           numBytes,
           std::move(flatMapContext));
     default:
-      DWIO_RAISE(fmt::format(
+      DWIO_RAISE(std::format(
           "Unsupported requested integral type: {}",
           requestedType->toString()));
   }

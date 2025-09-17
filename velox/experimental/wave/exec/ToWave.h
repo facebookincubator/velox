@@ -132,7 +132,7 @@ struct KernelStep {
   }
 
   virtual std::string toString() const {
-    return fmt::format("step {}\n", static_cast<int32_t>(kind()));
+    return std::format("step {}\n", static_cast<int32_t>(kind()));
   }
 
   /// Returns the dynamic shared memory needed by 'this'.

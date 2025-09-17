@@ -19,5 +19,4 @@ velox_link_libraries(
   velox_type_fbhive
   velox_dwio_common_compression
   velox_encode
-  fmt::fmt
 )

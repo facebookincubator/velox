@@ -76,9 +76,9 @@ HdfsMiniCluster::HdfsMiniCluster() {
   }
   constexpr auto kHostAddressTemplate = "hdfs://{}:{}";
   auto ports = facebook::velox::exec::test::getFreePorts(2);
-  nameNodePort_ = fmt::format("{}", ports[0]);
-  httpPort_ = fmt::format("{}", ports[1]);
-  filesystemUrl_ = fmt::format(kHostAddressTemplate, host(), nameNodePort_);
+  nameNodePort_ = std::format("{}", ports[0]);
+  httpPort_ = std::format("{}", ports[1]);
+  filesystemUrl_ = std::format(kHostAddressTemplate, host(), nameNodePort_);
   boost::filesystem::path hadoopHomeDirectory = exePath_;
   hadoopHomeDirectory.remove_leaf().remove_leaf();
   setupEnvironment(hadoopHomeDirectory.string());

@@ -149,7 +149,7 @@ class DriverTest : public OperatorTestBase {
 
     if (!project.empty()) {
       auto expressions = rowType->names();
-      expressions.push_back(fmt::format("{} AS expr", project));
+      expressions.push_back(std::format("{} AS expr", project));
 
       planBuilder.project(expressions);
     }
@@ -1188,7 +1188,7 @@ DEBUG_ONLY_TEST_F(DriverTest, driverSuspensionRaceWithTaskPause) {
     bool leaveSuspensionDuringPause;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "numDrivers:{} enterSuspensionAfterPauseStarted:{} leaveSuspensionDuringPause:{}",
           numDrivers,
           enterSuspensionAfterPauseStarted,
@@ -1309,7 +1309,7 @@ DEBUG_ONLY_TEST_F(DriverTest, driverSuspensionRaceWithTaskTerminate) {
     std::optional<StopReason> expectedLeaveSuspensionStopReason;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "numDrivers:{} enterSuspensionAfterTaskTerminated:{} abort {} expectedEnterSuspensionStopReason:{} expectedLeaveSuspensionStopReason:{}",
           numDrivers,
           enterSuspensionAfterTaskTerminated,
@@ -1387,7 +1387,7 @@ DEBUG_ONLY_TEST_F(DriverTest, driverSuspensionRaceWithTaskYield) {
     bool leaveSuspensionDuringTaskYielded;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "numDrivers:{} enterSuspensionAfterTaskYielded:{} leaveSuspensionDuringTaskYielded:{}",
           numDrivers,
           enterSuspensionAfterTaskYielded,
@@ -1567,7 +1567,7 @@ DEBUG_ONLY_TEST_F(DriverTest, driverCpuTimeSlicingCheck) {
 
   for (const auto& testParam : testParams) {
     SCOPED_TRACE(
-        fmt::format("hasCpuSliceLimit: {}", testParam.hasCpuTimeSliceLimit));
+        std::format("hasCpuSliceLimit: {}", testParam.hasCpuTimeSliceLimit));
     SCOPED_TESTVALUE_SET(
         "facebook::velox::exec::Values::getOutput",
         std::function<void(const exec::Values*)>(
@@ -1705,13 +1705,13 @@ TEST_F(OpCallStatusTest, basic) {
             ocs.formatCall(driver->findOperatorNoThrow(ocs.opId), ocs.method);
         EXPECT_EQ(
             formattedOpCall,
-            fmt::format("Values.{}::{}", firstNodeId, ocs.method));
+            std::format("Values.{}::{}", firstNodeId, ocs.method));
         // Check the correct format when operator is not found.
         ocs.method = "randomName";
         EXPECT_EQ(
             ocs.formatCall(
                 driver->findOperatorNoThrow(ocs.opId + 10), ocs.method),
-            fmt::format("null::{}", ocs.method));
+            std::format("null::{}", ocs.method));
 
         // Check that the task returns correct long running op call.
         std::vector<Task::OpCallInfo> stuckCalls;

@@ -143,7 +143,7 @@ class TableWriterReplayerTest : public HiveConnectorTestBase {
       insertPlan.project({TableWriteTraits::rowCountColumnName()})
           .singleAggregation(
               {},
-              {fmt::format("sum({})", TableWriteTraits::rowCountColumnName())});
+              {std::format("sum({})", TableWriteTraits::rowCountColumnName())});
     }
     return insertPlan.planNode();
   }
@@ -274,7 +274,7 @@ TEST_F(TableWriterReplayerTest, runner) {
                   .capturePlanNodeId(traceNodeId)
                   .planNode();
   const auto testDir = TempDirectoryPath::create();
-  const auto traceRoot = fmt::format("{}/{}", testDir->getPath(), "traceRoot");
+  const auto traceRoot = std::format("{}/{}", testDir->getPath(), "traceRoot");
   std::shared_ptr<Task> task;
   auto results =
       AssertQueryBuilder(plan)
@@ -345,7 +345,7 @@ TEST_F(TableWriterReplayerTest, basic) {
                   .capturePlanNodeId(planNodeId)
                   .planNode();
   const auto testDir = TempDirectoryPath::create();
-  const auto traceRoot = fmt::format("{}/{}", testDir->getPath(), "traceRoot");
+  const auto traceRoot = std::format("{}/{}", testDir->getPath(), "traceRoot");
   std::shared_ptr<Task> task;
   auto results =
       AssertQueryBuilder(plan)
@@ -382,7 +382,7 @@ TEST_F(TableWriterReplayerTest, basic) {
 
   const auto copy =
       AssertQueryBuilder(plan)
-          .split(makeHiveConnectorSplit(fmt::format(
+          .split(makeHiveConnectorSplit(std::format(
               "{}/{}", targetDirectoryPath->getPath(), writeFileName)))
           .copyResults(pool());
   assertEqualResults({data}, {copy});
@@ -407,7 +407,7 @@ TEST_F(TableWriterReplayerTest, partitionWrite) {
             makeFlatVector<StringView>(
                 numPartitions,
                 [&](auto row) {
-                  return StringView::makeInline(fmt::format("str_{}", row));
+                  return StringView::makeInline(std::format("str_{}", row));
                 }),
             makeFlatVector<int64_t>(
                 numPartitions, [&](auto row) { return row + 1000; }),
@@ -417,7 +417,7 @@ TEST_F(TableWriterReplayerTest, partitionWrite) {
                 numPartitions,
                 [&](auto row) {
                   return StringView::makeInline(
-                      fmt::format("bucket_{}", row * 3));
+                      std::format("bucket_{}", row * 3));
                 }),
         });
   });
@@ -445,7 +445,7 @@ TEST_F(TableWriterReplayerTest, partitionWrite) {
   std::set<std::string> expectedPartitionDirectories;
   std::set<std::string> partitionNames;
   for (auto i = 0; i < numPartitions; i++) {
-    auto partitionName = fmt::format("p0={}/p1=str_{}", i, i);
+    auto partitionName = std::format("p0={}/p1=str_{}", i, i);
     partitionNames.emplace(partitionName);
     expectedPartitionDirectories.emplace(
         fs::path(outputDirectory->getPath()) / partitionName);
@@ -463,7 +463,7 @@ TEST_F(TableWriterReplayerTest, partitionWrite) {
       nullptr,
       CompressionKind::CompressionKind_ZSTD);
   const auto testDir = TempDirectoryPath::create();
-  const auto traceRoot = fmt::format("{}/{}", testDir->getPath(), "traceRoot");
+  const auto traceRoot = std::format("{}/{}", testDir->getPath(), "traceRoot");
   const auto tableWriteNodeId = std::move(tableWriteNodeId_);
   std::shared_ptr<Task> task;
   AssertQueryBuilder(planWithTracing)

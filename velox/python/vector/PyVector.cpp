@@ -45,7 +45,7 @@ PyVector PyVector::childAt(vector_size_t idx) const {
   if (auto rowVector = std::dynamic_pointer_cast<RowVector>(vector_)) {
     return PyVector{rowVector->childAt(idx), pool_};
   }
-  throw std::runtime_error(fmt::format(
+  throw std::runtime_error(std::format(
       "Can only call child_at() on RowVector, but got '{}'", toString()));
 }
 

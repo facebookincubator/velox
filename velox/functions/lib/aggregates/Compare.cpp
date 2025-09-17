@@ -26,7 +26,7 @@ int32_t compare(
   auto result = accumulator->compare(decoded, index, compareFlags);
   VELOX_USER_CHECK(
       result.has_value(),
-      fmt::format(
+      std::format(
           "{} comparison not supported for values that contain nulls",
           mapTypeKindToName(decoded.base()->typeKind())));
   return result.value();

@@ -493,7 +493,7 @@ class MapColumnStatistics : public virtual ColumnStatistics {
     values.reserve(entryStatistics_.size());
     for (const auto& entry : entryStatistics_) {
       auto& stats = *entry.second;
-      values.push_back(fmt::format(
+      values.push_back(std::format(
           "{{ Key: {}, Stats: {},}}",
           entry.first.toString(),
           stats.toString()));

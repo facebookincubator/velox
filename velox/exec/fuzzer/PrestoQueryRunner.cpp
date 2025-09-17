@@ -356,32 +356,32 @@ std::string PrestoQueryRunner::createTable(
   std::stringstream nullValues;
   for (auto i = 0; i < inputType->size(); ++i) {
     appendComma(i, nullValues);
-    nullValues << fmt::format(
+    nullValues << std::format(
         "cast(null as {})", toTypeSql(inputType->childAt(i)));
   }
 
-  execute(fmt::format("DROP TABLE IF EXISTS {}", name));
+  execute(std::format("DROP TABLE IF EXISTS {}", name));
 
-  execute(fmt::format(
+  execute(std::format(
       "CREATE TABLE {}({}) WITH (format = 'DWRF') AS SELECT {}",
       name,
       folly::join(", ", inputType->names()),
       nullValues.str()));
 
   // Query Presto to find out table's location on disk.
-  auto results = execute(fmt::format("SELECT \"$path\" FROM {}", name));
+  auto results = execute(std::format("SELECT \"$path\" FROM {}", name));
 
   auto filePath = extractSingleValue<StringView>(results);
   auto tableDirectoryPath = fs::path(filePath).parent_path();
 
   // Delete the all-null row.
-  execute(fmt::format("DELETE FROM {}", name));
+  execute(std::format("DELETE FROM {}", name));
 
   return tableDirectoryPath;
 }
 
 void PrestoQueryRunner::cleanUp(const std::string& name) {
-  execute(fmt::format("DROP TABLE IF EXISTS {}", name));
+  execute(std::format("DROP TABLE IF EXISTS {}", name));
 }
 
 std::pair<
@@ -396,7 +396,7 @@ PrestoQueryRunner::executeAndReturnVector(const core::PlanNodePtr& plan) {
         auto inputType = asRowType(input[0]->type());
         if (inputType->size() == 0) {
           inputMap[tableName] = {
-              makeNullRows(input, fmt::format("{}x", tableName), pool())};
+              makeNullRows(input, std::format("{}x", tableName), pool())};
         }
       }
 
@@ -406,7 +406,7 @@ PrestoQueryRunner::executeAndReturnVector(const core::PlanNodePtr& plan) {
 
         // Create a new file in table's directory with fuzzer-generated data.
         auto filePath = fs::path(tableDirectoryPath)
-                            .append(fmt::format("{}.dwrf", tableName))
+                            .append(std::format("{}.dwrf", tableName))
                             .string()
                             .substr(strlen("file:"));
 
@@ -471,7 +471,7 @@ std::vector<RowVectorPtr> PrestoQueryRunner::execute(
 std::string PrestoQueryRunner::startQuery(
     const std::string& sql,
     const std::string& sessionProperty) {
-  auto uri = fmt::format("{}/v1/statement?binaryResults=true", coordinatorUri_);
+  auto uri = std::format("{}/v1/statement?binaryResults=true", coordinatorUri_);
   cpr::Url url{uri};
   cpr::Body body{sql};
   cpr::Header header(

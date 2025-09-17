@@ -26,11 +26,11 @@ namespace facebook::velox::functions::aggregate::sparksql::test {
 namespace {
 
 std::string min(const std::string& column) {
-  return fmt::format("spark_min({})", column);
+  return std::format("spark_min({})", column);
 }
 
 std::string max(const std::string& column) {
-  return fmt::format("spark_max({})", column);
+  return std::format("spark_max({})", column);
 }
 
 class MinMaxAggregationTest

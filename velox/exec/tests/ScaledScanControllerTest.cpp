@@ -73,7 +73,7 @@ TEST_F(ScaledScanControllerTest, basic) {
     uint32_t expectedNumRunningDrivers;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "queryCapacity {}, scaleUpMemoryUsageRatio {}, queryMemoryUsage {}, nodeMemoryUsage {}, nodePeakMemoryUsage {}, numDrivers {}, expectedNumRunningDrivers {}",
           succinctBytes(queryCapacity),
           scaleUpMemoryUsageRatio,
@@ -288,7 +288,7 @@ TEST_F(ScaledScanControllerTest, fuzzer) {
   const int numDrivers{4};
   std::vector<std::shared_ptr<memory::MemoryPool>> pools;
   for (int i = 0; i < numDrivers; ++i) {
-    pools.push_back(node->addLeafChild(fmt::format("fuzzer{}", i)));
+    pools.push_back(node->addLeafChild(std::format("fuzzer{}", i)));
   }
   auto controller =
       std::make_shared<ScaledScanController>(node.get(), numDrivers, 0.7);

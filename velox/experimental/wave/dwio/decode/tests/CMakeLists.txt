@@ -25,5 +25,4 @@ target_link_libraries(
   GTest::gtest
   GTest::gtest_main
   Folly::folly
-  fmt::fmt
 )

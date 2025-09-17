@@ -49,7 +49,7 @@ class AverageResultVerifier : public ResultVerifier {
     if (aggregate.call->type()->isIntervalDayTime()) {
       projections_ = groupingKeys;
       projections_.push_back(
-          fmt::format("cast(to_milliseconds({}) as double)", aggregateName));
+          std::format("cast(to_milliseconds({}) as double)", aggregateName));
     }
   }
 
@@ -64,7 +64,7 @@ class AverageResultVerifier : public ResultVerifier {
     if (function.functionCall->type()->isIntervalDayTime()) {
       projections_ = asRowType(input[0]->type())->names();
       projections_.push_back(
-          fmt::format("cast(to_milliseconds({}) as double)", windowName));
+          std::format("cast(to_milliseconds({}) as double)", windowName));
     }
   }
 

@@ -158,7 +158,7 @@ TEST_P(SortBufferTest, singleKey) {
       for (const auto sortCompareFlag : sortCompareFlags) {
         sortCompareFlagsStr << sortCompareFlag.toString();
       }
-      return fmt::format(
+      return std::format(
           "sortCompareFlags:{}, expectedResult:{}",
           sortCompareFlagsStr.str(),
           expectedResultStr);
@@ -288,7 +288,7 @@ TEST_P(SortBufferTest, DISABLED_randomData) {
       for (auto sortCompareFlag : sortCompareFlags) {
         sortCompareFlagsStr << sortCompareFlag.toString() << ";";
       }
-      return fmt::format(
+      return std::format(
           "inputType:{}, sortColumnIndices:{}, sortCompareFlags:{}",
           inputType,
           sortColumnIndicesStr,
@@ -364,7 +364,7 @@ TEST_P(SortBufferTest, batchOutput) {
       const std::string numInputRowsStr = folly::join(",", numInputRows);
       const std::string expectedOutputRowCountStr =
           folly::join(",", expectedOutputRowCount);
-      return fmt::format(
+      return std::format(
           "triggerSpill:{}, numInputRows:{}, maxOutputRows:{}, expectedOutputRowCount:{}",
           triggerSpill,
           numInputRowsStr,
@@ -458,7 +458,7 @@ TEST_P(SortBufferTest, spill) {
     bool spillTriggered;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "spillEnabled:{}, memoryReservationFailure:{}, triggerSpill:{}, spillTriggered:{}",
           spillEnabled,
           memoryReservationFailure,
@@ -676,7 +676,7 @@ DEBUG_ONLY_TEST_P(SortBufferTest, spillDuringOutput) {
 
 DEBUG_ONLY_TEST_P(SortBufferTest, reserveMemorySortGetOutput) {
   for (bool spillEnabled : {false, true}) {
-    SCOPED_TRACE(fmt::format("spillEnabled {}", spillEnabled));
+    SCOPED_TRACE(std::format("spillEnabled {}", spillEnabled));
 
     auto spillDirectory = exec::test::TempDirectoryPath::create();
     const auto spillConfig = getSpillConfig(spillDirectory->getPath());
@@ -735,7 +735,7 @@ DEBUG_ONLY_TEST_P(SortBufferTest, reserveMemorySort) {
   } testSettings[] = {{false, true}, {true, false}, {true, true}};
 
   for (const auto [usePrefixSort, spillEnabled] : testSettings) {
-    SCOPED_TRACE(fmt::format(
+    SCOPED_TRACE(std::format(
         "usePrefixSort: {}, spillEnabled: {}, ", usePrefixSort, spillEnabled));
     auto spillDirectory = exec::test::TempDirectoryPath::create();
     auto spillConfig = getSpillConfig(spillDirectory->getPath(), usePrefixSort);
@@ -781,7 +781,7 @@ TEST_P(SortBufferTest, emptySpill) {
       memory::memoryManager()->addLeafPool("emptySpillSource");
 
   for (bool hasPostSpillData : {false, true}) {
-    SCOPED_TRACE(fmt::format("hasPostSpillData {}", hasPostSpillData));
+    SCOPED_TRACE(std::format("hasPostSpillData {}", hasPostSpillData));
     auto spillDirectory = exec::test::TempDirectoryPath::create();
     auto spillConfig = getSpillConfig(spillDirectory->getPath());
     folly::Synchronized<common::SpillStats> spillStats;

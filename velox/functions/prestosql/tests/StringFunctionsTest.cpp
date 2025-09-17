@@ -279,7 +279,7 @@ class StringFunctionsTest : public FunctionBaseTest {
     }
 
     auto result = evaluate<SimpleVector<StringView>>(
-        fmt::format("{}(c0, c1, c2)", function),
+        std::format("{}(c0, c1, c2)", function),
         makeRowVector({argFirst, argSecond, argThird}));
     auto ascii = result->isAscii(rows);
     ASSERT_EQ(ascii, isAscii);
@@ -894,7 +894,7 @@ TEST_F(StringFunctionsTest, concat) {
       }
     }
 
-    SCOPED_TRACE(fmt::format("Number of arguments: {}", argsCount));
+    SCOPED_TRACE(std::format("Number of arguments: {}", argsCount));
     testConcatFlatVector(inputTable, argsCount);
   }
 
@@ -904,7 +904,7 @@ TEST_F(StringFunctionsTest, concat) {
     auto c0 = generateRandomString(20);
     auto c1 = generateRandomString(20);
     auto result = evaluate<SimpleVector<StringView>>(
-        fmt::format("concat('{}', '{}')", c0, c1), rows);
+        std::format("concat('{}', '{}')", c0, c1), rows);
     for (int i = 0; i < 10; ++i) {
       EXPECT_EQ(result->valueAt(i), c0 + c1);
     }
@@ -1087,15 +1087,15 @@ TEST_F(StringFunctionsTest, endsWith) {
 TEST_F(StringFunctionsTest, endsWithHasNull) {
   auto data =
       makeRowVector({makeNullableFlatVector<std::string>({std::nullopt})});
-  auto rest = evaluate(fmt::format("ends_with(c0, '{}')", ""), data);
+  auto rest = evaluate(std::format("ends_with(c0, '{}')", ""), data);
   ASSERT_TRUE(rest->isNullAt(0));
 
   data = makeRowVector({makeNullableFlatVector<std::string>({std::nullopt})});
-  rest = evaluate(fmt::format("ends_with(c0, null)"), data);
+  rest = evaluate(std::format("ends_with(c0, null)"), data);
   ASSERT_TRUE(rest->isNullAt(0));
 
   data = makeRowVector({makeNullableFlatVector<std::string>({"hello"})});
-  rest = evaluate(fmt::format("ends_with(c0, null)"), data);
+  rest = evaluate(std::format("ends_with(c0, null)"), data);
   ASSERT_TRUE(rest->isNullAt(0));
 }
 
@@ -1811,7 +1811,7 @@ TEST_F(StringFunctionsTest, ascinessOnDictionary) {
       BaseVector::wrapInDictionary(nulls, indices, size, flatVector);
 
   auto result = evaluate<SimpleVector<StringView>>(
-      fmt::format("multi_string_fn(c0, c1, c2)"),
+      std::format("multi_string_fn(c0, c1, c2)"),
       makeRowVector({dictionaryVector, searchVector, replaceVector}));
   SelectivityVector all(size);
   auto ascii = result->isAscii(all);
@@ -2235,7 +2235,7 @@ TEST_F(StringFunctionsTest, normalize) {
   const auto normalizeWithForm = [&](std::optional<std::string> string,
                                      const std::string& form) {
     return evaluateOnce<std::string>(
-        fmt::format("normalize(c0, '{}')", form), string);
+        std::format("normalize(c0, '{}')", form), string);
   };
 
   EXPECT_EQ(normalizeWithoutForm(std::nullopt), std::nullopt);

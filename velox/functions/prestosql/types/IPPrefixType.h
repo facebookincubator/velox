@@ -50,7 +50,7 @@ inline folly::Expected<int8_t, Status> tryIpPrefixLengthFromIPAddressType(
 }
 
 inline folly::Expected<std::pair<int128_t, int8_t>, Status>
-tryParseIpPrefixString(folly::StringPiece ipprefixString) {
+tryParseIpPrefixString(std::string_view ipprefixString) {
   // Ensure '/' is present
   if (ipprefixString.find('/') == std::string::npos) {
     return folly::makeUnexpected(

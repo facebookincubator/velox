@@ -42,7 +42,7 @@ class CompareBenchmark : public functions::test::FunctionBenchmarkBase {
     auto inputs = vectorMaker_.rowVector({makeData(), makeData()});
 
     auto exprSet = compileExpression(
-        fmt::format("c0 {} c1", functionName), inputs->type());
+        std::format("c0 {} c1", functionName), inputs->type());
     suspender.dismiss();
 
     return doRun(exprSet, inputs);

@@ -24,7 +24,7 @@ VarcharEnumType::VarcharEnumType(const VarcharEnumParameter& parameters)
 }
 
 std::string VarcharEnumType::toString() const {
-  return fmt::format("{}:VarcharEnum({})", name_, flippedMapToString());
+  return std::format("{}:VarcharEnum({})", name_, flippedMapToString());
 }
 
 VarcharEnumTypePtr VarcharEnumType::get(const VarcharEnumParameter& parameter) {

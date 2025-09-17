@@ -41,7 +41,7 @@ void Buffer::setMagic() {
 }
 
 std::string Buffer::toString() const {
-  return fmt::format(
+  return std::format(
       "<Buffer {} capacity={} ref={} pin={} dbg={}>",
       ptr_,
       capacity_,

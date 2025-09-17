@@ -271,7 +271,7 @@ std::string SplitReader::toString() const {
       partitionKeys_->begin(), partitionKeys_->end(), [&](const auto& column) {
         partitionKeys += " " + column.second->toString();
       });
-  return fmt::format(
+  return std::format(
       "SplitReader: hiveSplit_{} scanSpec_{} readerOutputType_{} partitionKeys_{} reader{} rowReader{}",
       hiveSplit_->toString(),
       scanSpec_->toString(),

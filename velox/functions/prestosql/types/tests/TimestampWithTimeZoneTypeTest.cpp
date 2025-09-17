@@ -59,7 +59,7 @@ TEST_F(TimestampWithTimeZoneTypeTest, pack) {
     auto millisUtc = millisUtcDis(randGen);
     auto timeZoneKey = timeZoneKeyDis(randGen);
     SCOPED_TRACE(
-        fmt::format("millisUtc={}, timeZoneKey={}", millisUtc, timeZoneKey));
+        std::format("millisUtc={}, timeZoneKey={}", millisUtc, timeZoneKey));
 
     auto packedTimeMillis = pack(millisUtc, timeZoneKey);
     ASSERT_EQ(unpackMillisUtc(packedTimeMillis), millisUtc);

@@ -88,7 +88,7 @@ class ParquetTpchTest : public testing::Test {
     for (const auto& table : tpch::tables) {
       auto tableName = toTableName(table);
       auto tableDirectory =
-          fmt::format("{}/{}", tempDirectory_->getPath(), tableName);
+          std::format("{}/{}", tempDirectory_->getPath(), tableName);
       auto tableSchema = tpch::getTableSchema(table);
       auto columnNames = tableSchema->names();
       auto plan = PlanBuilder()

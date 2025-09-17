@@ -38,7 +38,7 @@ std::string BaseHashTable::modeString(HashMode mode) {
     case HashMode::kNormalizedKey:
       return "NORMALIZED_KEY";
     default:
-      return fmt::format(
+      return std::format(
           "Unknown HashTable mode:{}", static_cast<int32_t>(mode));
   }
 }
@@ -1598,7 +1598,7 @@ std::string HashTable<ignoreNullKeys>::toString() {
   out << std::endl;
 
   if (kTrackLoads) {
-    out << fmt::format(
+    out << std::format(
                "{} probes {} tag loads {} row loads {} hits",
                numProbes_,
                numTagLoads_,
@@ -2131,7 +2131,7 @@ void populateLookupRows(
 } // namespace
 
 std::string BaseHashTable::RowsIterator::toString() const {
-  return fmt::format(
+  return std::format(
       "[hashTableIndex:{} rowContainerIter:{}",
       hashTableIndex_,
       rowContainerIterator_.toString());

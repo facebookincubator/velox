@@ -35,14 +35,14 @@ class TopNTest : public OperatorTestBase {
     auto sortOrderSqls = getSortOrderSqls();
 
     for (const auto& sortOrderSql : sortOrderSqls) {
-      auto sql = fmt::format("{} {}", key, sortOrderSql);
+      auto sql = std::format("{} {}", key, sortOrderSql);
 
       auto plan =
           PlanBuilder().values(input).topN({sql}, limit, false).planNode();
 
       assertQueryOrdered(
           plan,
-          fmt::format("SELECT * FROM tmp ORDER BY {} LIMIT {}", sql, limit),
+          std::format("SELECT * FROM tmp ORDER BY {} LIMIT {}", sql, limit),
           {keyIndex});
     }
   }
@@ -56,7 +56,7 @@ class TopNTest : public OperatorTestBase {
     auto sortOrderSqls = getSortOrderSqls();
 
     for (const auto& sortOrderSql : sortOrderSqls) {
-      auto sql = fmt::format("{} {}", key, sortOrderSql);
+      auto sql = std::format("{} {}", key, sortOrderSql);
 
       auto plan = PlanBuilder()
                       .values(input)
@@ -66,7 +66,7 @@ class TopNTest : public OperatorTestBase {
 
       assertQueryOrdered(
           plan,
-          fmt::format(
+          std::format(
               "SELECT * FROM tmp WHERE {} ORDER BY {} LIMIT 10", filter, sql),
           {keyIndex});
     }
@@ -84,8 +84,8 @@ class TopNTest : public OperatorTestBase {
 
     for (const auto& sortOrderSql1 : sortOrderSqls) {
       for (const auto& sortOrderSql2 : sortOrderSqls) {
-        auto sql1 = fmt::format("{} {}", key1, sortOrderSql1);
-        auto sql2 = fmt::format("{} {}", key2, sortOrderSql2);
+        auto sql1 = std::format("{} {}", key1, sortOrderSql1);
+        auto sql2 = std::format("{} {}", key2, sortOrderSql2);
 
         auto plan = PlanBuilder()
                         .values(input)
@@ -94,7 +94,7 @@ class TopNTest : public OperatorTestBase {
 
         assertQueryOrdered(
             plan,
-            fmt::format(
+            std::format(
                 "SELECT * FROM tmp ORDER BY {}, {} LIMIT {}",
                 sql1,
                 sql2,

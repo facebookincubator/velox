@@ -160,7 +160,7 @@ class NimbleReaderFuzzer {
     double selectivity{0.0};
 
     std::string toString() const {
-      return fmt::format(
+      return std::format(
           "\nTotal iterations tested: {}\n"
           "Avg. number of streams: {}\n"
           "Avg. number of nullables: {}\n"

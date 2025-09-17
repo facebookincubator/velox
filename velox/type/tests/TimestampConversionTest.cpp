@@ -240,7 +240,7 @@ TEST(DateTimeUtilTest, fromDateStringInvalid) {
     if (mode == ParseMode::kPrestoCast) {
       VELOX_ASSERT_THROW(
           parseDate(str, mode),
-          fmt::format(
+          std::format(
               "Unable to parse date value: \"{}\". "
               "Valid date string pattern is (YYYY-MM-DD), "
               "and can be prefixed with [+-]",
@@ -248,7 +248,7 @@ TEST(DateTimeUtilTest, fromDateStringInvalid) {
     } else if (mode == ParseMode::kSparkCast) {
       VELOX_ASSERT_THROW(
           parseDate(str, mode),
-          fmt::format(
+          std::format(
               "Unable to parse date value: \"{}\". "
               "Valid date string patterns include "
               "([y]y*, [y]y*-[m]m*, [y]y*-[m]m*-[d]d*, "
@@ -258,7 +258,7 @@ TEST(DateTimeUtilTest, fromDateStringInvalid) {
     } else if (mode == ParseMode::kIso8601) {
       VELOX_ASSERT_THROW(
           parseDate(str, mode),
-          fmt::format(
+          std::format(
               "Unable to parse date value: \"{}\". "
               "Valid date string patterns include "
               "([y]y*, [y]y*-[m]m*, [y]y*-[m]m*-[d]d*, "

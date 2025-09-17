@@ -29,7 +29,7 @@ std::string getFunctionName(
     const std::string& prefix,
     const std::string& functionName) {
   return prefix.empty() ? functionName
-                        : fmt::format("{}.{}", prefix, functionName);
+                        : std::format("{}.{}", prefix, functionName);
 }
 
 TypePtr deserializeType(const std::string& input) {
@@ -47,7 +47,7 @@ RowTypePtr deserializeArgTypes(const std::vector<std::string>& argTypes) {
 
   for (size_t i = 0; i < argCount; ++i) {
     argumentTypes.emplace_back(deserializeType(argTypes[i]));
-    typeNames.emplace_back(fmt::format("c{}", i));
+    typeNames.emplace_back(std::format("c{}", i));
   }
   return ROW(std::move(typeNames), std::move(argumentTypes));
 }

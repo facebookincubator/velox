@@ -53,7 +53,7 @@ class ChecksumAggregateTest : public AggregationTestBase {
     // DuckDB doesn't have checksum aggregation, so we will just pass in
     // expected values to compare.
     const auto expectedDuckDbSql =
-        fmt::format("VALUES (CAST(\'{}\' AS VARCHAR))", expectedChecksum);
+        std::format("VALUES (CAST(\'{}\' AS VARCHAR))", expectedChecksum);
 
     testAggregations(
         rowVectors, {}, {"checksum(c0)"}, {"to_base64(a0)"}, expectedDuckDbSql);
@@ -71,7 +71,7 @@ class ChecksumAggregateTest : public AggregationTestBase {
     std::vector<std::string> expectedResults;
     expectedResults.reserve(expectedChecksums.size());
     for (const auto& checksum : expectedChecksums) {
-      expectedResults.push_back(fmt::format("(\'{}\')", checksum));
+      expectedResults.push_back(std::format("(\'{}\')", checksum));
     }
 
     const auto expectedDuckDbSql =

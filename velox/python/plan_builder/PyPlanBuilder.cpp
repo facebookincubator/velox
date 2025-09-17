@@ -155,7 +155,7 @@ PyPlanBuilder& PyPlanBuilder::tableScan(
         // TODO: Assume for now they are fields in a flap map.
         for (const auto& subfield : values) {
           requiredSubfields.emplace_back(
-              fmt::format("{}[{}]", hiveName, subfield));
+              std::format("{}[{}]", hiveName, subfield));
         }
       }
 

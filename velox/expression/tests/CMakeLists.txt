@@ -84,7 +84,6 @@ target_link_libraries(
   Folly::folly
   gflags::gflags
   glog::glog
-  fmt::fmt
 )
 
 add_library(velox_expression_verifier ExpressionVerifier.cpp)

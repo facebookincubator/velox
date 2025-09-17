@@ -40,7 +40,7 @@ class CovarianceAggregatesTest : public AggregationTestBase {
     auto plan =
         PlanBuilder()
             .values({input})
-            .singleAggregation({}, {fmt::format("spark_{}(c0, c1)", agg)})
+            .singleAggregation({}, {std::format("spark_{}(c0, c1)", agg)})
             .planNode();
     AssertQueryBuilder(plan)
         .config(

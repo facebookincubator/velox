@@ -29,7 +29,7 @@ namespace {
 std::string localThrottleCacheKey(
     const std::string& cluster,
     const std::string& directory) {
-  return fmt::format("{}:{}", cluster, directory);
+  return std::format("{}:{}", cluster, directory);
 }
 } // namespace
 
@@ -54,7 +54,7 @@ Throttler::Config::Config(
       cacheTTLMs(_cacheTTLMs) {}
 
 std::string Throttler::Config::toString() const {
-  return fmt::format(
+  return std::format(
       "throttleEnabled:{} minThrottleBackoffMs:{} maxThrottleBackoffMs:{} backoffScaleFactor:{} minLocalThrottledSignals:{} minGlobalThrottledSignals:{} minNetworkThrottledSignals:{} maxCacheEntries:{} cacheTTLMs:{}",
       throttleEnabled,
       succinctMillis(minThrottleBackoffMs),
@@ -78,7 +78,7 @@ std::string Throttler::signalTypeName(SignalType type) {
     case SignalType::kNetwork:
       return "Network";
     default:
-      return fmt::format("Unknown Signal Type: {}", static_cast<int>(type));
+      return std::format("Unknown Signal Type: {}", static_cast<int>(type));
   }
 }
 

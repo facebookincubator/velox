@@ -50,11 +50,11 @@ class NoisyAvgResultVerifier : public NoisySumResultVerifier {
     // outputs.
     clipInput(deduplicatedInput);
 
-    auto sumCall = fmt::format("avg({})", aggregateColumn_);
+    auto sumCall = std::format("avg({})", aggregateColumn_);
 
     // If distinct is false, mask has not been applied yet.
     if (aggregate.mask != nullptr && !aggregate.distinct) {
-      sumCall += fmt::format(" filter (where {})", aggregate.mask->name());
+      sumCall += std::format(" filter (where {})", aggregate.mask->name());
     }
 
     core::PlanNodePtr plan = PlanBuilder()

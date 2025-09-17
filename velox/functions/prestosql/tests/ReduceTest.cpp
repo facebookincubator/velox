@@ -29,12 +29,12 @@ class ReduceTest : public functions::test::FunctionBaseTest {
     TestRuntimeStatWriter writer;
     RuntimeStatWriterScopeGuard guard(&writer);
     auto actual = evaluate(
-        fmt::format("reduce(c0, 10, (s, x) -> {}, s -> s)", lambdaBody), input);
+        std::format("reduce(c0, 10, (s, x) -> {}, s -> s)", lambdaBody), input);
     ASSERT_EQ(writer.stats().size(), 1);
     ASSERT_EQ(writer.stats()[0].first, "numReduceRewrite");
     ASSERT_EQ(writer.stats()[0].second.value, 1);
     auto expected = evaluate(
-        fmt::format("reduce(c0, 10, (s, x) -> {}, s -> 1 * s)", lambdaBody),
+        std::format("reduce(c0, 10, (s, x) -> {}, s -> 1 * s)", lambdaBody),
         input);
     ASSERT_EQ(writer.stats().size(), 1);
     ASSERT_EQ(writer.stats()[0].first, "numReduceRewrite");

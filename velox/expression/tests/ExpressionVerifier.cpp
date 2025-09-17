@@ -87,7 +87,7 @@ core::PlanNodePtr makeProjectionPlan(
     const std::vector<core::TypedExprPtr>& transformProjections) {
   std::vector<std::string> names{projections.size()};
   for (auto i = 0; i < names.size(); ++i) {
-    names[i] = fmt::format("p{}", i);
+    names[i] = std::format("p{}", i);
   }
 
   core::PlanNodePtr source = makeSourcePlan(input, transformProjections);
@@ -439,7 +439,7 @@ ExpressionVerifier::verify(
               if (!(defaultNull &&
                     referenceQueryRunner_->runnerType() ==
                         ReferenceQueryRunner::RunnerType::kPrestoQueryRunner)) {
-                LOG(ERROR) << fmt::format(
+                LOG(ERROR) << std::format(
                     "Only {} path threw exception",
                     exceptionCommonPtr ? "common" : "reference");
                 if (exceptionCommonPtr) {
@@ -655,7 +655,7 @@ void ExpressionVerifier::persistReproInfo(
   }
   // Saving input test cases
   for (int i = 0; i < inputTestCases.size(); i++) {
-    auto filePath = fmt::format(
+    auto filePath = std::format(
         "{}/{}_{}", dirPath->c_str(), kInputVectorFileNamePrefix, i);
     try {
       saveVectorToFile(inputTestCases[i].inputVector.get(), filePath.c_str());
@@ -666,7 +666,7 @@ void ExpressionVerifier::persistReproInfo(
       break;
     }
 
-    filePath = fmt::format(
+    filePath = std::format(
         "{}/{}_{}", dirPath->c_str(), kInputSelectivityVectorFileNamePrefix, i);
     try {
       saveSelectivityVectorToFile(
@@ -682,7 +682,7 @@ void ExpressionVerifier::persistReproInfo(
   // Saving the list of column indices that are to be wrapped in lazy.
   if (!inputRowMetadata.empty()) {
     inputRowMetadataPath =
-        fmt::format("{}/{}", dirPath->c_str(), kInputRowMetadataFileName);
+        std::format("{}/{}", dirPath->c_str(), kInputRowMetadataFileName);
     try {
       inputRowMetadata.saveToFile(inputRowMetadataPath.c_str());
     } catch (std::exception& e) {
@@ -692,7 +692,7 @@ void ExpressionVerifier::persistReproInfo(
 
   // Saving result vector
   if (resultVector) {
-    resultPath = fmt::format("{}/{}", dirPath->c_str(), kResultVectorFileName);
+    resultPath = std::format("{}/{}", dirPath->c_str(), kResultVectorFileName);
     try {
       saveVectorToFile(resultVector.get(), resultPath.c_str());
     } catch (std::exception& e) {
@@ -701,7 +701,7 @@ void ExpressionVerifier::persistReproInfo(
   }
 
   // Saving sql
-  sqlPath = fmt::format("{}/{}", dirPath->c_str(), kExpressionSqlFileName);
+  sqlPath = std::format("{}/{}", dirPath->c_str(), kExpressionSqlFileName);
   try {
     saveStringToFile(sql, sqlPath.c_str());
   } catch (std::exception& e) {
@@ -710,7 +710,7 @@ void ExpressionVerifier::persistReproInfo(
   // Saving complex constants
   if (!complexConstants.empty()) {
     complexConstantsPath =
-        fmt::format("{}/{}", dirPath->c_str(), kComplexConstantsFileName);
+        std::format("{}/{}", dirPath->c_str(), kComplexConstantsFileName);
     try {
       saveVectorToFile(
           VectorMaker(complexConstants[0]->pool())
@@ -799,7 +799,7 @@ class MinimalSubExpressionFinder {
           LOG(INFO) << "Minimal failure succeeded without lazy vectors";
         }
       }
-      LOG(INFO) << fmt::format(
+      LOG(INFO) << std::format(
           "Found minimal failing subexpression: {}", plan->toString());
       return true;
     }
@@ -822,7 +822,7 @@ class MinimalSubExpressionFinder {
     bool filledResult =
         verifyPlan(plan, inputTestCases, inputRowMetadata, result);
     if (emptyResult != filledResult) {
-      LOG(ERROR) << fmt::format(
+      LOG(ERROR) << std::format(
           "Different results for empty vs populated ! Empty result = {} filledResult = {}",
           emptyResult,
           filledResult);

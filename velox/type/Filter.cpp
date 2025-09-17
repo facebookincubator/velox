@@ -96,7 +96,7 @@ std::string Filter::toString() const {
       break;
   };
 
-  return fmt::format(
+  return std::format(
       "Filter({}, {}, {})",
       strKind,
       deterministic_ ? "deterministic" : "nondeterministic",

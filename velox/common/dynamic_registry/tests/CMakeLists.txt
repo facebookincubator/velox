@@ -24,7 +24,7 @@ add_library(velox_overload_int_function_dynamic SHARED DynamicIntFunctionOverloa
 add_library(velox_overload_varchar_function_dynamic SHARED DynamicVarcharFunctionOverload.cpp)
 add_library(velox_function_non_default_dynamic SHARED DynamicFunctionNonDefault.cpp)
 
-set(CMAKE_DYLIB_TEST_LINK_LIBRARIES fmt::fmt Folly::folly glog::glog xsimd)
+set(CMAKE_DYLIB_TEST_LINK_LIBRARIES Folly::folly glog::glog xsimd)
 
 target_link_libraries(velox_function_dynamic PRIVATE ${CMAKE_DYLIB_TEST_LINK_LIBRARIES})
 

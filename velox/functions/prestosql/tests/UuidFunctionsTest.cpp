@@ -165,7 +165,7 @@ TEST_F(UuidFunctionsTest, comparisons) {
                             const std::string& operation,
                             const std::optional<std::string>& rhs) {
     return evaluateOnce<bool>(
-        fmt::format("cast(c0 as uuid) {} cast(c1 as uuid)", operation),
+        std::format("cast(c0 as uuid) {} cast(c1 as uuid)", operation),
         lhs,
         rhs);
   };

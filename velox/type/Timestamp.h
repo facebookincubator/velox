@@ -494,24 +494,3 @@ struct hasher<::facebook::velox::Timestamp> {
 };
 
 } // namespace folly
-
-namespace fmt {
-template <>
-struct formatter<facebook::velox::TimestampToStringOptions::Precision>
-    : formatter<int> {
-  auto format(
-      facebook::velox::TimestampToStringOptions::Precision s,
-      format_context& ctx) const {
-    return formatter<int>::format(static_cast<int>(s), ctx);
-  }
-};
-template <>
-struct formatter<facebook::velox::TimestampToStringOptions::Mode>
-    : formatter<int> {
-  auto format(
-      facebook::velox::TimestampToStringOptions::Mode s,
-      format_context& ctx) const {
-    return formatter<int>::format(static_cast<int>(s), ctx);
-  }
-};
-} // namespace fmt

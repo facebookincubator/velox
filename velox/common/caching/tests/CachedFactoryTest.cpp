@@ -475,7 +475,7 @@ TEST(CachedFactoryTest, fuzzer) {
   const int testDurationMs = 5'000;
   const size_t expirationDurationMs = 1;
   for (const bool expireCache : {false, true}) {
-    SCOPED_TRACE(fmt::format("expireCache: {}", expireCache));
+    SCOPED_TRACE(std::format("expireCache: {}", expireCache));
     auto generator = std::make_unique<IdentityGenerator>();
     CachedFactory<int, int, IdentityGenerator> factory(
         std::make_unique<SimpleLRUCache<int, int>>(

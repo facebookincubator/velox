@@ -357,7 +357,7 @@ common::SpillStats SpillerBase::stats() const {
 }
 
 std::string SpillerBase::toString() const {
-  return fmt::format(
+  return std::format(
       "{}\t{}\tFINALIZED:{}", type(), rowType_->toString(), finalized_);
 }
 

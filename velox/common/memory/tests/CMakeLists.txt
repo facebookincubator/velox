@@ -46,7 +46,6 @@ target_link_libraries(
     velox_test_util
     velox_vector_fuzzer
     Folly::folly
-    fmt::fmt
     gflags::gflags
     glog::glog
     GTest::gmock

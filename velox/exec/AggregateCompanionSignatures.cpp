@@ -269,7 +269,7 @@ TypeSignature CompanionSignatures::normalizeTypeImpl(
   }
   // Variables to be renamed in consistent manner.
   if (allVariables.count(baseName)) {
-    auto normalizedName = fmt::format("T{}", renamedVariables.size());
+    auto normalizedName = std::format("T{}", renamedVariables.size());
     renamedVariables[baseName] = normalizedName;
     return TypeSignature{normalizedName, {}};
   }

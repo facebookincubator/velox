@@ -49,14 +49,14 @@ class NoisyCountResultVerifier : public NoisyCountIfResultVerifier {
 
     std::string countCall;
     if (aggregate.distinct) {
-      countCall = fmt::format("count(DISTINCT {})", aggregateColumn_);
+      countCall = std::format("count(DISTINCT {})", aggregateColumn_);
     } else {
-      countCall = fmt::format("count({})", aggregateColumn_);
+      countCall = std::format("count({})", aggregateColumn_);
     }
 
     // Add filter if mask exists
     if (aggregate.mask != nullptr) {
-      countCall += fmt::format(" filter (where {})", aggregate.mask->name());
+      countCall += std::format(" filter (where {})", aggregate.mask->name());
     }
 
     core::PlanNodePtr plan = PlanBuilder()

@@ -41,7 +41,7 @@ std::shared_ptr<WaveBarrier> WaveBarrier::get(
     const std::string& taskId,
     int32_t driverId,
     int32_t operatorId) {
-  auto id = fmt::format("{}:{}:{}", taskId, driverId, operatorId);
+  auto id = std::format("{}:{}:{}", taskId, driverId, operatorId);
   std::lock_guard<std::mutex> l(barriersMutex_);
   auto it = barriers_.find(id);
   if (it != barriers_.end()) {

@@ -96,7 +96,6 @@ target_link_libraries(
   gtest
   gtest_main
   Folly::folly
-  fmt::fmt
 )
 
 target_link_libraries(
@@ -107,7 +106,6 @@ target_link_libraries(
   velox_test_util
   gtest
   gtest_main
-  fmt::fmt
 )
 
 target_link_libraries(
@@ -119,7 +117,6 @@ target_link_libraries(
   velox_vector_fuzzer
   gtest
   gtest_main
-  fmt::fmt
 )
 
 target_link_libraries(
@@ -130,7 +127,6 @@ target_link_libraries(
   velox_test_util
   gtest
   gtest_main
-  fmt::fmt
 )
 
 target_link_libraries(
@@ -142,7 +138,6 @@ target_link_libraries(
   velox_test_util
   gtest
   gtest_main
-  fmt::fmt
 )
 
 target_link_libraries(
@@ -154,7 +149,6 @@ target_link_libraries(
   velox_test_util
   gtest
   gtest_main
-  fmt::fmt
 )
 
 target_link_libraries(

@@ -24,7 +24,7 @@ class StringToMapTest : public SparkFunctionBaseTest {
  protected:
   VectorPtr evaluateStringToMap(const std::vector<StringView>& inputs) {
     const std::string expr =
-        fmt::format("str_to_map(c0, '{}', '{}')", inputs[1], inputs[2]);
+        std::format("str_to_map(c0, '{}', '{}')", inputs[1], inputs[2]);
     return evaluate<MapVector>(
         expr, makeRowVector({makeFlatVector<StringView>({inputs[0]})}));
   }

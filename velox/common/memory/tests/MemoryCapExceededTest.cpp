@@ -47,7 +47,7 @@ bool someLineMatches(const std::string& text, const std::string& pattern) {
   std::stringstream in;
   in << text;
   std::string line;
-  auto exp = fmt::format(".*{}.*", pattern);
+  auto exp = std::format(".*{}.*", pattern);
   while (std::getline(in, line)) {
     if (RE2::FullMatch(line, exp)) {
       return true;

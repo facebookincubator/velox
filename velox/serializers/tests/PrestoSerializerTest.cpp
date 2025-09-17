@@ -742,7 +742,7 @@ class PrestoSerializerTest
     auto factor = alphabetSize <= numRows ? 2 : alphabetSize / numRows * 2;
     // String is variable length, so this ensures the data isn't flattened.
     auto base = makeFlatVector<std::string>(
-        alphabetSize, [](vector_size_t row) { return fmt::format("{}", row); });
+        alphabetSize, [](vector_size_t row) { return std::format("{}", row); });
     auto evenIndices = makeIndices(numRows, [alphabetSize, factor](auto row) {
       return (row * factor) % alphabetSize;
     });
@@ -1297,7 +1297,7 @@ TEST_P(PrestoSerializerTest, dictionaryEncodingTurnedOff) {
   auto bigintBase =
       makeFlatVector<int64_t>(32, [](vector_size_t row) { return row; });
   auto stringBase = makeFlatVector<std::string>(
-      32, [](vector_size_t row) { return fmt::format("{}", row); });
+      32, [](vector_size_t row) { return std::format("{}", row); });
   auto oneIndex = makeIndices(32, [](auto) { return 0; });
   auto quarterIndices = makeIndices(32, [](auto row) { return row % 8; });
   auto allButOneIndices = makeIndices(32, [](auto row) { return row % 31; });
@@ -1326,7 +1326,7 @@ TEST_P(PrestoSerializerTest, dictionaryEncodingTurnedOff) {
   });
 
   for (bool preserveEncodings : {false, true}) {
-    SCOPED_TRACE(fmt::format("preserveEncodings: {}", preserveEncodings));
+    SCOPED_TRACE(std::format("preserveEncodings: {}", preserveEncodings));
     auto exptectedTransformedEncoding = preserveEncodings
         ? VectorEncoding::Simple::DICTIONARY
         : VectorEncoding::Simple::FLAT;
@@ -1801,7 +1801,7 @@ TEST_F(PrestoSerializerTest, serdeSingleColumn) {
   auto seed = 0;
 
   LOG(ERROR) << "Seed: " << seed;
-  SCOPED_TRACE(fmt::format("seed: {}", seed));
+  SCOPED_TRACE(std::format("seed: {}", seed));
   VectorFuzzer fuzzer(opts, pool_.get(), seed);
   fuzzer.registerOpaqueTypeGenerator<Foo>([](FuzzerGenerator& rng) {
     int64_t id = boost::random::uniform_int_distribution<int64_t>(1, 10)(rng);
@@ -1811,7 +1811,7 @@ TEST_F(PrestoSerializerTest, serdeSingleColumn) {
       "Foo", Foo::serialize, Foo::deserialize);
 
   for (const auto& type : typesToTest) {
-    SCOPED_TRACE(fmt::format("Type: {}", type->toString()));
+    SCOPED_TRACE(std::format("Type: {}", type->toString()));
     auto data = fuzzer.fuzz(type);
 
     // Test deserializeSingleColumn() round trip with serialized data obtained
@@ -2025,7 +2025,7 @@ TEST_F(PrestoSerializerBatchEstimateSizeTest, flat) {
   testEstimateSerializedSize(flatDoubleVector, 256);
 
   auto flatStringVector = makeFlatVector<std::string>(
-      32, [](vector_size_t row) { return fmt::format("{}", row); });
+      32, [](vector_size_t row) { return std::format("{}", row); });
 
   // Strings are variable length, the first 10 are 1 byte each, the rest are 2
   // bytes.  Plus 4 bytes for the length of each string.

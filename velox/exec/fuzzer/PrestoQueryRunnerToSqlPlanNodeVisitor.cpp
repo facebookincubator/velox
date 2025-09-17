@@ -123,7 +123,7 @@ void PrestoQueryRunnerToSqlPlanNodeVisitor::visit(
         sql << field->name();
       } else {
         toCallInputsSql(field->inputs(), sql);
-        sql << fmt::format(".{}", field->name());
+        sql << std::format(".{}", field->name());
       }
     } else if (
         auto call =

@@ -712,10 +712,10 @@ TEST_F(DateTimeFunctionsTest, addMonths) {
 
   VELOX_ASSERT_THROW(
       addMonths("2023-07-10", kMin),
-      fmt::format("Integer overflow in add_months(2023-07-10, {})", kMin));
+      std::format("Integer overflow in add_months(2023-07-10, {})", kMin));
   VELOX_ASSERT_THROW(
       addMonths("2023-07-10", kMax),
-      fmt::format("Integer overflow in add_months(2023-07-10, {})", kMax));
+      std::format("Integer overflow in add_months(2023-07-10, {})", kMax));
 }
 
 TEST_F(DateTimeFunctionsTest, monthDate) {
@@ -750,7 +750,7 @@ TEST_F(DateTimeFunctionsTest, nextDay) {
     auto dayOfWeeks = makeNullableFlatVector<std::string>({dayOfWeek});
 
     auto result = evaluateOnce<int32_t>(
-        fmt::format("next_day(c0, '{}')", dayOfWeek),
+        std::format("next_day(c0, '{}')", dayOfWeek),
         makeRowVector({startDates}));
 
     auto anotherResult = evaluateOnce<int32_t>(
@@ -793,7 +793,7 @@ TEST_F(DateTimeFunctionsTest, getTimestamp) {
   const auto getTimestamp = [&](const std::optional<StringView>& dateString,
                                 const std::string& format) {
     return evaluateOnce<Timestamp>(
-        fmt::format("get_timestamp(c0, '{}')", format), dateString);
+        std::format("get_timestamp(c0, '{}')", format), dateString);
   };
 
   const auto getTimestampString =
@@ -1297,7 +1297,7 @@ TEST_F(DateTimeFunctionsTest, dateTrunc) {
   const auto dateTrunc = [&](const std::string& format,
                              std::optional<Timestamp> timestamp) {
     return evaluateOnce<Timestamp>(
-        fmt::format("date_trunc('{}', c0)", format), timestamp);
+        std::format("date_trunc('{}', c0)", format), timestamp);
   };
 
   EXPECT_EQ(std::nullopt, dateTrunc("second", std::nullopt));
@@ -1390,7 +1390,7 @@ TEST_F(DateTimeFunctionsTest, trunc) {
   const auto trunc = [&](std::optional<int32_t> date,
                          const std::string& format) {
     return evaluateOnce<int32_t>(
-        fmt::format("trunc(c0, '{}')", format), DATE(), date);
+        std::format("trunc(c0, '{}')", format), DATE(), date);
   };
 
   // Date(0) is 1970-01-01.
@@ -1417,7 +1417,7 @@ TEST_F(DateTimeFunctionsTest, timestampdiff) {
                                  std::optional<Timestamp> timestamp1,
                                  std::optional<Timestamp> timestamp2) {
     return evaluateOnce<int64_t>(
-        fmt::format("timestampdiff('{}', c0, c1)", unit),
+        std::format("timestampdiff('{}', c0, c1)", unit),
         timestamp1,
         timestamp2);
   };
@@ -1694,7 +1694,7 @@ TEST_F(DateTimeFunctionsTest, timestampadd) {
                                 std::optional<int32_t> value,
                                 std::optional<Timestamp> timestamp) {
     return evaluateOnce<Timestamp>(
-        fmt::format("timestampadd('{}', c0, c1)", unit), value, timestamp);
+        std::format("timestampadd('{}', c0, c1)", unit), value, timestamp);
   };
 
   // Check null behaviors.

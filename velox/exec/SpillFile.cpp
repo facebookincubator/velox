@@ -41,7 +41,7 @@ SpillWriteFile::SpillWriteFile(
     uint32_t id,
     const std::string& pathPrefix,
     const std::string& fileCreateConfig)
-    : id_(id), path_(fmt::format("{}-{}", pathPrefix, ordinalCounter_++)) {
+    : id_(id), path_(std::format("{}-{}", pathPrefix, ordinalCounter_++)) {
   auto fs = filesystems::getFileSystem(path_, nullptr);
   file_ = fs->openFileForWrite(
       path_,
@@ -102,7 +102,7 @@ SpillWriteFile* SpillWriter::ensureFile() {
   if (currentFile_ == nullptr) {
     currentFile_ = SpillWriteFile::create(
         nextFileId_++,
-        fmt::format("{}-{}", pathPrefix_, finishedFiles_.size()),
+        std::format("{}-{}", pathPrefix_, finishedFiles_.size()),
         fileCreateConfig_);
   }
   return currentFile_.get();

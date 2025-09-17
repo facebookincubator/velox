@@ -64,6 +64,6 @@ add_library(Folly::folly ALIAS folly)
 add_library(Folly::follybenchmark ALIAS follybenchmark)
 
 if(gflags_SOURCE STREQUAL "BUNDLED")
-  add_dependencies(folly glog::glog gflags::gflags fmt::fmt)
+  add_dependencies(folly glog::glog gflags::gflags)
 endif()
 set(CMAKE_CXX_FLAGS ${PREVIOUS_CMAKE_CXX_FLAGS})

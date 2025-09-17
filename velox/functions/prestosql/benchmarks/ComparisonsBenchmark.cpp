@@ -61,7 +61,7 @@ class ComparisonsBechmark
     folly::BenchmarkSuspender suspender;
     auto rowVector = createRowData(type);
     auto exprSet =
-        compileExpression(fmt::format("{}(c0, c1)", name), rowVector->type());
+        compileExpression(std::format("{}(c0, c1)", name), rowVector->type());
     suspender.dismiss();
 
     uint32_t cnt = 0;

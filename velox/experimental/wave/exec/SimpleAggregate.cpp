@@ -59,7 +59,7 @@ class SimpleAggregate : public AggregateGenerator {
 
   std::string generateInit(CompileState& state, const AggregateUpdate& update)
       const override {
-    return fmt::format("  row->acc{} = 0;\n", update.accumulatorIdx);
+    return std::format("  row->acc{} = 0;\n", update.accumulatorIdx);
   }
 
   bool hasAtomic() const override {
@@ -75,8 +75,8 @@ class SimpleAggregate : public AggregateGenerator {
     } else {
       auto nullIdx = update.accumulatorIdx + probe.keys.size();
       auto reduceName = "plus";
-      // fmt::format("plus<{}>", cudaTypeName(*update.args[0]->type));
-      state.generated() << fmt::format(
+      // std::format("plus<{}>", cudaTypeName(*update.args[0]->type));
+      state.generated() << std::format(
           "  simpleAccumulate(peers, leader, laneId, &row->acc{}, keyNulls, &row->nulls{}, {}, {}, {}, {});\n",
           update.accumulatorIdx,
           nullIdx / 32,
@@ -93,7 +93,7 @@ class SimpleAggregate : public AggregateGenerator {
       const AggregateUpdate& update) const override {
     auto& out = state.generated();
 
-    out << fmt::format(
+    out << std::format(
         "sumReduce<{}>({}, {}, laneStatus, accNulls, &row->acc{}, &row->nulls{}, {}, &shared->data);\n",
         cudaTypeName(*update.args[0]->type),
         state.operandValue(update.args[0]),
@@ -111,10 +111,10 @@ class SimpleAggregate : public AggregateGenerator {
     std::stringstream out;
     auto nullable = !update.args[0]->notNull;
     if (nullable) {
-      out << fmt::format("   if (!{}) {{\n", state.isNull(update.args[0]));
+      out << std::format("   if (!{}) {{\n", state.isNull(update.args[0]));
     }
     if (binaryFunc_ == "plus") {
-      out << fmt::format(
+      out << std::format(
           "      atomicAdd(reinterpret_cast<{}*>(&row->acc{}), {});\n",
           cudaAtomicTypeName(*update.args[0]->type),
           update.accumulatorIdx,
@@ -134,7 +134,7 @@ class SimpleAggregate : public AggregateGenerator {
       const AggregateUpdate& update) const override {
     auto ord = state.ordinal(*update.result);
     auto nthNull = update.accumulatorIdx + probe.keys.size();
-    return fmt::format(
+    return std::format(
         "   setNull(operands, {}, blockBase, (readRow->nulls{} & (1U << {})) == 0);\n"
         "    flatResult<{}>(operands, {}, blockBase) = readRow->acc{};\n",
         ord,

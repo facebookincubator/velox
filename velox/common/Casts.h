@@ -32,9 +32,9 @@ void ensureCastSucceeded(To* casted, From* original) {
         original, "If casted is nullptr, original must not be.");
     VELOX_FAIL(
         "Failed to cast from '{}' to '{}'. Object is of type '{}'.",
-        folly::demangle(typeid(From).name()),
-        folly::demangle(typeid(To).name()),
-        folly::demangle(typeid(*original).name()));
+        std::string_view{folly::demangle(typeid(From).name())},
+        std::string_view{folly::demangle(typeid(To).name())},
+        std::string_view{folly::demangle(typeid(*original).name())});
   }
 }
 

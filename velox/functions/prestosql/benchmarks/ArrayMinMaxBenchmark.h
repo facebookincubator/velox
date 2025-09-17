@@ -222,7 +222,7 @@ inline std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
     signatures.emplace_back(
         exec::FunctionSignatureBuilder()
             .returnType(typeName)
-            .argumentType(fmt::format("array({})", typeName))
+            .argumentType(std::format("array({})", typeName))
             .build());
   }
   return signatures;

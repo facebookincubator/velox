@@ -229,7 +229,7 @@ class ReadBenchmark {
         }
       }
     }
-    std::cout << fmt::format(
+    std::cout << std::format(
                      "{} MB/s {} {}",
                      (static_cast<float>(count) * size * repeats) / usec,
                      label,
@@ -240,7 +240,7 @@ class ReadBenchmark {
   void modes(int32_t size, int32_t gap, int32_t count) {
     int repeats =
         std::max<int32_t>(3, (FLAGS_measurement_size) / (size * count));
-    std::cout << fmt::format(
+    std::cout << std::format(
                      "Run: {} Gap: {} Count: {} Repeats: {}",
                      size,
                      gap,

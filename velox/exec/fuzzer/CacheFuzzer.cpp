@@ -198,7 +198,7 @@ void CacheFuzzer::initSourceDataFiles() {
   if (fileIds_.empty()) {
     for (auto i = 0; i < FLAGS_num_source_files; ++i) {
       const auto fileName =
-          fmt::format("{}/file_{}", sourceDataDir_->getPath(), i);
+          std::format("{}/file_{}", sourceDataDir_->getPath(), i);
       const size_t fileSize = getSourceFileBytes();
       auto writeFile = fs_->openFileForWrite(fileName);
       size_t writtenSize = 0;
@@ -331,7 +331,7 @@ void CacheFuzzer::initializeCache(bool restartCache) {
         enableChecksumReadVerification(restartCache);
 
     SsdCache::Config config(
-        fmt::format("{}/cache", cacheDataDir_->getPath()),
+        std::format("{}/cache", cacheDataDir_->getPath()),
         ssdCacheBytes,
         numSsdCacheShards,
         executor_.get(),
@@ -340,12 +340,12 @@ void CacheFuzzer::initializeCache(bool restartCache) {
         enableChecksum_,
         enableChecksumReadVerification_);
     ssdCache = std::make_unique<SsdCache>(config);
-    LOG(INFO) << fmt::format(
+    LOG(INFO) << std::format(
         "Initialized SSD cache with {} shards, {}, with checkpoint {}, checksum write {}, read verification {}",
         succinctBytes(ssdCacheBytes),
         numSsdCacheShards,
         checkpointIntervalBytes > 0
-            ? fmt::format("enabled({})", succinctBytes(checkpointIntervalBytes))
+            ? std::format("enabled({})", succinctBytes(checkpointIntervalBytes))
             : "disabled",
         enableChecksum_ ? "enabled" : "disabled",
         enableChecksumReadVerification_ ? "enabled" : "disabled");
@@ -362,7 +362,7 @@ void CacheFuzzer::initializeCache(bool restartCache) {
       std::move(ssdCache),
       {});
 
-  LOG(INFO) << fmt::format(
+  LOG(INFO) << std::format(
       "Initialized cache with {} memory space, {} SSD cache, {} file faulty injection",
       succinctBytes(memoryCacheBytes),
       ssdCacheBytes == 0 ? "with" : "without",

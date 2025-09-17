@@ -46,11 +46,11 @@ TEST(StringIdMapTest, rehash) {
   StringIdMap map;
   std::vector<StringIdLease> ids;
   for (auto i = 0; i < kCount; ++i) {
-    auto name = fmt::format("filename_{}", i);
+    auto name = std::format("filename_{}", i);
     ids.push_back(StringIdLease(map, name));
   }
   for (auto i = 0; i < kCount; ++i) {
-    auto name = fmt::format("filename_{}", i);
+    auto name = std::format("filename_{}", i);
     EXPECT_EQ(ids[i].id(), StringIdLease(map, name).id());
   }
 }

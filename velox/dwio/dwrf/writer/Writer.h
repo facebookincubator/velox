@@ -60,7 +60,7 @@ class Writer : public dwio::common::Writer {
       : Writer{
             std::move(sink),
             options,
-            parentPool.addAggregateChild(fmt::format(
+            parentPool.addAggregateChild(std::format(
                 "{}.dwrf_{}",
                 parentPool.name(),
                 folly::to<std::string>(folly::Random::rand64())))} {}

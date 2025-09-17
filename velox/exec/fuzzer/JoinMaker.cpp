@@ -147,7 +147,7 @@ std::string makeJoinFilter(
     if (i > 0) {
       filter += " AND ";
     }
-    filter += fmt::format("{} = {}", probeKeys[i], buildKeys[i]);
+    filter += std::format("{} = {}", probeKeys[i], buildKeys[i]);
   }
   return filter;
 }
@@ -183,7 +183,7 @@ const std::vector<Split>& JoinSource::groupedSplits(
   std::vector<exec::Split> splitsWithGroup;
   for (int32_t groupId = 0; groupId < numGroups; ++groupId) {
     for (auto i = 0; i < inputVectorsByGroup[groupId].size(); ++i) {
-      const std::string filePath = fmt::format(
+      const std::string filePath = std::format(
           "{}/grouped[{}].{}.{}", splitsDir_, groupId, numGroups, i);
       test::writeToFile(
           filePath, inputVectorsByGroup[groupId][i], writerPool_.get());
@@ -312,7 +312,7 @@ std::string JoinMaker::makeNestedLoopJoinFilter(
     const std::shared_ptr<JoinSource>& right) const {
   const std::string keysFilter = makeJoinFilter(left->keys(), right->keys());
   return filter_.empty() ? keysFilter
-                         : fmt::format("{} AND {}", keysFilter, filter_);
+                         : std::format("{} AND {}", keysFilter, filter_);
 }
 
 core::PlanNodePtr JoinMaker::makeHashJoinPlan(
@@ -610,7 +610,7 @@ core::JoinType flipJoinType(core::JoinType joinType) {
   auto flippedJoinType = tryFlipJoinType(joinType);
 
   if (!flippedJoinType.has_value()) {
-    VELOX_UNSUPPORTED(fmt::format("Unable to flip join type: {}", joinType));
+    VELOX_UNSUPPORTED(std::format("Unable to flip join type: {}", joinType));
   }
 
   return *flippedJoinType;

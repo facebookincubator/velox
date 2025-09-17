@@ -90,9 +90,9 @@ class BitwiseBenchmark : public functions::test::FunctionBenchmarkBase {
         : vectorMaker_.rowVector({vectorLeft, vectorRight});
     auto exprSet = logicalShift
         ? compileExpression(
-              fmt::format("{}(c0, c1, c2)", fnName), rowVector->type())
+              std::format("{}(c0, c1, c2)", fnName), rowVector->type())
         : compileExpression(
-              fmt::format("{}(c0, c1)", fnName), rowVector->type());
+              std::format("{}(c0, c1)", fnName), rowVector->type());
 
     suspender.dismiss();
 

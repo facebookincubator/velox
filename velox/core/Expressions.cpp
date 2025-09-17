@@ -484,10 +484,10 @@ std::string FieldAccessTypedExpr::toString() const {
   std::stringstream ss;
   ss << std::quoted(name(), '"', '"');
   if (inputs().empty()) {
-    return fmt::format("{}", ss.str());
+    return std::format("{}", ss.str());
   }
 
-  return fmt::format("{}[{}]", inputs()[0]->toString(), ss.str());
+  return std::format("{}[{}]", inputs()[0]->toString(), ss.str());
 }
 
 void FieldAccessTypedExpr::accept(
@@ -634,10 +634,10 @@ TypedExprPtr LambdaTypedExpr::create(const folly::dynamic& obj, void* context) {
 
 std::string CastTypedExpr::toString() const {
   if (isTryCast_) {
-    return fmt::format(
+    return std::format(
         "try_cast({} as {})", inputs()[0]->toString(), type()->toString());
   } else {
-    return fmt::format(
+    return std::format(
         "cast({} as {})", inputs()[0]->toString(), type()->toString());
   }
 }

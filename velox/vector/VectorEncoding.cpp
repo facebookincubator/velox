@@ -16,9 +16,9 @@
 
 #include "velox/vector/VectorEncoding.h"
 
+#include <format>
 #include <stdexcept>
 
-#include <fmt/core.h>
 #include <folly/container/F14Map.h>
 
 namespace facebook::velox::VectorEncoding {
@@ -37,7 +37,7 @@ Simple mapNameToSimple(const std::string& name) {
 
   if (vecNameMap.find(name) == vecNameMap.end()) {
     throw std::invalid_argument(
-        fmt::format("Specified vector encoding is not found : {}", name));
+        std::format("Specified vector encoding is not found : {}", name));
   }
   return vecNameMap[name];
 }

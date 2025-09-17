@@ -54,7 +54,7 @@ TEST_F(TopNRowNumberTest, basic) {
                     .planNode();
     assertQuery(
         plan,
-        fmt::format(
+        std::format(
             "SELECT * FROM (SELECT *, row_number() over (partition by c0 order by c1) as rn FROM tmp) "
             " WHERE rn <= {}",
             limit));
@@ -67,7 +67,7 @@ TEST_F(TopNRowNumberTest, basic) {
 
     assertQuery(
         plan,
-        fmt::format(
+        std::format(
             "SELECT c0, c1, c2 FROM (SELECT *, row_number() over (partition by c0 order by c1) as rn FROM tmp) "
             " WHERE rn <= {}",
             limit));
@@ -79,7 +79,7 @@ TEST_F(TopNRowNumberTest, basic) {
                .planNode();
     assertQuery(
         plan,
-        fmt::format(
+        std::format(
             "SELECT * FROM (SELECT *, row_number() over (order by c1) as rn FROM tmp) "
             " WHERE rn <= {}",
             limit));
@@ -115,7 +115,7 @@ TEST_F(TopNRowNumberTest, largeOutput) {
   auto spillDirectory = exec::test::TempDirectoryPath::create();
 
   auto testLimit = [&](auto limit) {
-    SCOPED_TRACE(fmt::format("Limit: {}", limit));
+    SCOPED_TRACE(std::format("Limit: {}", limit));
     core::PlanNodeId topNRowNumberId;
     auto plan = PlanBuilder()
                     .values(data)
@@ -123,7 +123,7 @@ TEST_F(TopNRowNumberTest, largeOutput) {
                     .capturePlanNodeId(topNRowNumberId)
                     .planNode();
 
-    auto sql = fmt::format(
+    auto sql = std::format(
         "SELECT * FROM (SELECT *, row_number() over (partition by p order by s) as rn FROM tmp) "
         " WHERE rn <= {}",
         limit);
@@ -159,7 +159,7 @@ TEST_F(TopNRowNumberTest, largeOutput) {
 
     AssertQueryBuilder(plan, duckDbQueryRunner_)
         .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
-        .assertResults(fmt::format(
+        .assertResults(std::format(
             "SELECT * FROM (SELECT *, row_number() over (order by s) as rn FROM tmp) "
             " WHERE rn <= {}",
             limit));
@@ -199,7 +199,7 @@ TEST_F(TopNRowNumberTest, manyPartitions) {
   auto spillDirectory = exec::test::TempDirectoryPath::create();
 
   auto testLimit = [&](auto limit, size_t outputBatchBytes = 1024) {
-    SCOPED_TRACE(fmt::format("Limit: {}", limit));
+    SCOPED_TRACE(std::format("Limit: {}", limit));
     core::PlanNodeId topNRowNumberId;
     auto plan = PlanBuilder()
                     .values(data)
@@ -207,7 +207,7 @@ TEST_F(TopNRowNumberTest, manyPartitions) {
                     .capturePlanNodeId(topNRowNumberId)
                     .planNode();
 
-    auto sql = fmt::format(
+    auto sql = std::format(
         "SELECT * FROM (SELECT *, row_number() over (partition by p order by s) as rn FROM tmp) "
         " WHERE rn <= {}",
         limit);
@@ -220,7 +220,7 @@ TEST_F(TopNRowNumberTest, manyPartitions) {
           AssertQueryBuilder(plan, duckDbQueryRunner_)
               .config(
                   core::QueryConfig::kPreferredOutputBatchBytes,
-                  fmt::format("{}", outputBatchBytes))
+                  std::format("{}", outputBatchBytes))
               .config(core::QueryConfig::kSpillEnabled, "true")
               .config(core::QueryConfig::kTopNRowNumberSpillEnabled, "true")
               .spillDirectory(spillDirectory->getPath())
@@ -270,7 +270,7 @@ TEST_F(TopNRowNumberTest, fewPartitions) {
   auto spillDirectory = exec::test::TempDirectoryPath::create();
 
   auto testLimit = [&](auto limit, size_t outputBatchBytes = 1024) {
-    SCOPED_TRACE(fmt::format("Limit: {}", limit));
+    SCOPED_TRACE(std::format("Limit: {}", limit));
     core::PlanNodeId topNRowNumberId;
     auto plan = PlanBuilder()
                     .values(data)
@@ -278,7 +278,7 @@ TEST_F(TopNRowNumberTest, fewPartitions) {
                     .capturePlanNodeId(topNRowNumberId)
                     .planNode();
 
-    auto sql = fmt::format(
+    auto sql = std::format(
         "SELECT * FROM (SELECT *, row_number() over (partition by p order by s) as rn FROM tmp) "
         " WHERE rn <= {}",
         limit);
@@ -291,7 +291,7 @@ TEST_F(TopNRowNumberTest, fewPartitions) {
           AssertQueryBuilder(plan, duckDbQueryRunner_)
               .config(
                   core::QueryConfig::kPreferredOutputBatchBytes,
-                  fmt::format("{}", outputBatchBytes))
+                  std::format("{}", outputBatchBytes))
               .config(core::QueryConfig::kSpillEnabled, "true")
               .config(core::QueryConfig::kTopNRowNumberSpillEnabled, "true")
               .spillDirectory(spillDirectory->getPath())
@@ -334,7 +334,7 @@ TEST_F(TopNRowNumberTest, abandonPartialEarly) {
         AssertQueryBuilder(plan, duckDbQueryRunner_)
             .config(
                 core::QueryConfig::kAbandonPartialTopNRowNumberMinRows,
-                fmt::format("{}", minRows))
+                std::format("{}", minRows))
             .config(core::QueryConfig::kAbandonPartialTopNRowNumberMinPct, "80")
             .assertResults(
                 "SELECT * FROM (SELECT *, row_number() over (partition by p order by s) as rn FROM tmp) "
@@ -416,7 +416,7 @@ TEST_F(TopNRowNumberTest, maxSpillBytes) {
     int32_t maxSpilledBytes;
     bool expectedExceedLimit;
     std::string debugString() const {
-      return fmt::format("maxSpilledBytes {}", maxSpilledBytes);
+      return std::format("maxSpilledBytes {}", maxSpilledBytes);
     }
   } testSettings[] = {{1 << 30, false}, {13 << 20, true}, {0, false}};
 

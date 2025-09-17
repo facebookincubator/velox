@@ -80,7 +80,7 @@ CudfFromVelox::CudfFromVelox(
       NvtxHelper(
           nvtx3::rgb{255, 140, 0}, // Orange
           operatorId,
-          fmt::format("[{}]", planNodeId)) {}
+          std::format("[{}]", planNodeId)) {}
 
 void CudfFromVelox::addInput(RowVectorPtr input) {
   VELOX_NVTX_OPERATOR_FUNC_RANGE();
@@ -172,7 +172,7 @@ CudfToVelox::CudfToVelox(
       NvtxHelper(
           nvtx3::rgb{148, 0, 211}, // Purple
           operatorId,
-          fmt::format("[{}]", planNodeId)) {}
+          std::format("[{}]", planNodeId)) {}
 
 bool CudfToVelox::isPassthroughMode() const {
   return operatorCtx_->driverCtx()->queryConfig().get<bool>(

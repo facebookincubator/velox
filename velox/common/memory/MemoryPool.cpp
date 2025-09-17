@@ -80,7 +80,7 @@ struct MemoryUsage {
   }
 
   std::string toString() const {
-    return fmt::format(
+    return std::format(
         "{} usage {} reserved {} peak {}",
         name,
         succinctBytes(currentUsage),
@@ -168,7 +168,7 @@ std::string capacityToString(int64_t capacity) {
 } // namespace
 
 std::string MemoryPool::Stats::toString() const {
-  return fmt::format(
+  return std::format(
       "usedBytes:{} reservedBytes:{} peakBytes:{} cumulativeBytes:{} numAllocs:{} numFrees:{} numReserves:{} numReleases:{} numShrinks:{} numReclaims:{} numCollisions:{} numCapacityGrowths:{}",
       succinctBytes(usedBytes),
       succinctBytes(reservedBytes),
@@ -250,7 +250,7 @@ std::string MemoryPool::kindString(Kind kind) {
     case Kind::kAggregate:
       return "AGGREGATE";
     default:
-      return fmt::format("UNKNOWN_{}", static_cast<int>(kind));
+      return std::format("UNKNOWN_{}", static_cast<int>(kind));
   }
 }
 
@@ -527,7 +527,7 @@ void* MemoryPoolImpl::allocate(
   void* buffer = allocator_->allocateBytes(alignedSize, alignment_);
   if (FOLLY_UNLIKELY(buffer == nullptr)) {
     release(alignedSize);
-    handleAllocationFailure(fmt::format(
+    handleAllocationFailure(std::format(
         "{} failed with {} from {} {}",
         __FUNCTION__,
         succinctBytes(size),
@@ -546,7 +546,7 @@ void* MemoryPoolImpl::allocateZeroFilled(int64_t numEntries, int64_t sizeEach) {
   void* buffer = allocator_->allocateZeroFilled(alignedSize);
   if (FOLLY_UNLIKELY(buffer == nullptr)) {
     release(alignedSize);
-    handleAllocationFailure(fmt::format(
+    handleAllocationFailure(std::format(
         "{} failed with {} entries and {} each from {} {}",
         __FUNCTION__,
         numEntries,
@@ -566,7 +566,7 @@ void* MemoryPoolImpl::reallocate(void* p, int64_t size, int64_t newSize) {
   void* newP = allocator_->allocateBytes(alignedNewSize, alignment_);
   if (FOLLY_UNLIKELY(newP == nullptr)) {
     release(alignedNewSize);
-    handleAllocationFailure(fmt::format(
+    handleAllocationFailure(std::format(
         "{} failed with new {} and old {} from {} {}",
         __FUNCTION__,
         succinctBytes(newSize),
@@ -615,7 +615,7 @@ void MemoryPoolImpl::allocateNonContiguous(
           },
           minSizeClass)) {
     VELOX_CHECK(out.empty());
-    handleAllocationFailure(fmt::format(
+    handleAllocationFailure(std::format(
         "{} failed with {} pages from {} {}",
         __FUNCTION__,
         numPages,
@@ -667,7 +667,7 @@ void MemoryPoolImpl::allocateContiguous(
           },
           maxPages)) {
     VELOX_CHECK(out.empty());
-    handleAllocationFailure(fmt::format(
+    handleAllocationFailure(std::format(
         "{} failed with {} pages from {} {}",
         __FUNCTION__,
         numPages,
@@ -700,7 +700,7 @@ void MemoryPoolImpl::growContiguous(
               release(allocBytes);
             }
           })) {
-    handleAllocationFailure(fmt::format(
+    handleAllocationFailure(std::format(
         "{} failed with {} pages from {} {}",
         __FUNCTION__,
         increment,
@@ -1214,7 +1214,7 @@ void MemoryPoolImpl::recordAllocDbg(const void* addr, uint64_t size) {
   }();
   if (usedBytes >= debugOptions_->debugPoolWarnThresholdBytes) {
     debugWarnThresholdExceeded_ = true;
-    VELOX_MEM_LOG(WARNING) << fmt::format(
+    VELOX_MEM_LOG(WARNING) << std::format(
         "[MemoryPool] Memory pool '{}' exceeded warning threshold of {} with allocation of {}, resulting in total size of {}.\n"
         "======== Allocation Stack ========\n"
         "{}\n"
@@ -1259,7 +1259,7 @@ void MemoryPoolImpl::recordFreeDbg(const void* addr, uint64_t size) {
   const auto allocRecord = allocResult->second;
   if (allocRecord.size != size) {
     const auto freeStackTrace = process::StackTrace().toString();
-    VELOX_FAIL(fmt::format(
+    VELOX_FAIL(std::format(
         "[MemoryPool] Trying to free {} bytes on an allocation of {} bytes.\n"
         "======== Allocation Stack ========\n"
         "{}\n"
@@ -1308,7 +1308,7 @@ void MemoryPoolImpl::leakCheckDbg() {
   if (debugAllocRecords_.empty()) {
     return;
   }
-  VELOX_FAIL(fmt::format(
+  VELOX_FAIL(std::format(
       "[MemoryPool] Leak check failed for '{}' pool - {}",
       name_,
       dumpRecordsDbg()));
@@ -1317,7 +1317,7 @@ void MemoryPoolImpl::leakCheckDbg() {
 std::string MemoryPoolImpl::dumpRecordsDbg() {
   VELOX_CHECK(debugEnabled());
   std::stringstream oss;
-  oss << fmt::format("Found {} allocations:\n", debugAllocRecords_.size());
+  oss << std::format("Found {} allocations:\n", debugAllocRecords_.size());
   struct AllocationStats {
     uint64_t size{0};
     uint64_t numAllocations{0};
@@ -1342,7 +1342,7 @@ std::string MemoryPoolImpl::dumpRecordsDbg() {
         return a.second.size > b.second.size;
       });
   for (const auto& pair : sortedRecords) {
-    oss << fmt::format(
+    oss << std::format(
         "======== {} allocations of {} total size ========\n{}\n",
         pair.second.numAllocations,
         succinctBytes(pair.second.size),

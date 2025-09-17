@@ -67,7 +67,6 @@ target_link_libraries(
   GTest::gmock
   Folly::folly
   glog::glog
-  fmt::fmt
   dl
 )
 
@@ -85,7 +84,6 @@ target_link_libraries(
   GTest::gtest_main
   Folly::folly
   glog::glog
-  fmt::fmt
 )
 
 add_executable(bias_vector_test BiasVectorTest.cpp)
@@ -100,5 +98,4 @@ target_link_libraries(
   GTest::gtest_main
   Folly::folly
   glog::glog
-  fmt::fmt
 )

@@ -182,7 +182,7 @@ std::string stringifyFloatingPointerValue(T val) {
 }
 
 void Variant::throwCheckIsKindError(TypeKind kind) const {
-  throw std::invalid_argument{fmt::format(
+  throw std::invalid_argument{std::format(
       "wrong kind! {} != {}",
       mapTypeKindToName(kind_),
       mapTypeKindToName(kind))};

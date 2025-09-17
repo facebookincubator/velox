@@ -123,7 +123,7 @@ class ApproxDistinctResultVerifier : public ResultVerifier {
           expectedSource, actualSource, planNodeIdGenerator, result->pool());
     }
 
-    auto mapAgg = fmt::format("map_agg(label, {}) as m", name_);
+    auto mapAgg = std::format("map_agg(label, {}) as m", name_);
     auto plan = PlanBuilder(planNodeIdGenerator)
                     .localPartition({}, {expectedSource, actualSource})
                     .singleAggregation(groupingKeys_, {mapAgg})
@@ -160,7 +160,7 @@ class ApproxDistinctResultVerifier : public ResultVerifier {
               std::abs(actualCnt - expectedCnt) * 1.0 / expectedCnt;
           if (gap > 2 * error_) {
             largeGaps.push_back(gap);
-            LOG(ERROR) << fmt::format(
+            LOG(ERROR) << std::format(
                 "approx_distinct(x, {}) is more than 2 stddev away from "
                 "count(distinct x). Difference: {}, approx_distinct: {}, "
                 "count(distinct): {}. This is unusual, but doesn't necessarily "
@@ -171,7 +171,7 @@ class ApproxDistinctResultVerifier : public ResultVerifier {
                 expectedCnt);
           }
         } else {
-          LOG(ERROR) << fmt::format(
+          LOG(ERROR) << std::format(
               "count(distinct x) returned 0, but approx_distinct(x, {}) is {}",
               error_,
               actualCnt);
@@ -197,7 +197,7 @@ class ApproxDistinctResultVerifier : public ResultVerifier {
       core::PlanNodePtr& actualSource,
       std::shared_ptr<core::PlanNodeIdGenerator>& planNodeIdGenerator,
       memory::MemoryPool* pool) {
-    auto mapAgg = fmt::format("map_agg(label, {}) as m", name_);
+    auto mapAgg = std::format("map_agg(label, {}) as m", name_);
 
     auto keys = groupingKeys_;
     keys.push_back("row_number");
@@ -235,7 +235,7 @@ class ApproxDistinctResultVerifier : public ResultVerifier {
           combined->children().back()->as<SimpleVector<double>>()->valueAt(i);
       if (gap > 2 * error_) {
         largeGaps.push_back(gap);
-        LOG(ERROR) << fmt::format(
+        LOG(ERROR) << std::format(
             "approx_distinct(x, {}) is more than 2 stddev away from "
             "count(distinct x) at {}. Difference: {}. This is unusual, but doesn't necessarily "
             "indicate a bug.",
@@ -245,7 +245,7 @@ class ApproxDistinctResultVerifier : public ResultVerifier {
       }
     }
     if (!checkError) {
-      LOG(WARNING) << fmt::format(
+      LOG(WARNING) << std::format(
           "{} groups have large errors that exceed the error bound, but we don't fail the verification because current numGroups = {} and error bound is {}.",
           largeGaps.size(),
           numGroups,
@@ -293,11 +293,11 @@ class ApproxDistinctResultVerifier : public ResultVerifier {
     VELOX_CHECK_NOT_NULL(inputField);
 
     std::string countDistinctCall =
-        fmt::format("count(distinct {})", inputField->name());
+        std::format("count(distinct {})", inputField->name());
 
     if (aggregate.mask != nullptr) {
       countDistinctCall +=
-          fmt::format(" filter (where {})", aggregate.mask->name());
+          std::format(" filter (where {})", aggregate.mask->name());
     }
 
     return countDistinctCall;
@@ -313,7 +313,7 @@ class ApproxDistinctResultVerifier : public ResultVerifier {
     VELOX_CHECK_NOT_NULL(inputField);
 
     std::string countDistinctCall =
-        fmt::format("\"$internal$count_distinct\"({})", inputField->name());
+        std::format("\"$internal$count_distinct\"({})", inputField->name());
 
     if (function.ignoreNulls) {
       countDistinctCall += " ignore nulls";
@@ -329,7 +329,7 @@ class ApproxDistinctResultVerifier : public ResultVerifier {
     for (auto& projectColumn : projectColumns) {
       if (projectColumn == name_) {
         projectColumn =
-            fmt::format("coalesce(cardinality({}), 0) as {}", name_, name_);
+            std::format("coalesce(cardinality({}), 0) as {}", name_, name_);
       }
     }
     return projectColumns;

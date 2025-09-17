@@ -64,7 +64,7 @@ class MemoryReclaimerTest : public OperatorTestBase {
 
 TEST_F(MemoryReclaimerTest, enterArbitrationTest) {
   for (const auto& underDriverContext : {false, true}) {
-    SCOPED_TRACE(fmt::format("underDriverContext: {}", underDriverContext));
+    SCOPED_TRACE(std::format("underDriverContext: {}", underDriverContext));
 
     auto reclaimer = exec::MemoryReclaimer::create();
     auto driver = Driver::testingCreate(
@@ -90,7 +90,7 @@ TEST_F(MemoryReclaimerTest, enterArbitrationTest) {
 
 TEST_F(MemoryReclaimerTest, abortTest) {
   for (const auto& leafPool : {false, true}) {
-    const std::string testName = fmt::format("leafPool: {}", leafPool);
+    const std::string testName = std::format("leafPool: {}", leafPool);
     SCOPED_TRACE(testName);
     auto rootPool = memory::memoryManager()->addRootPool(
         testName, kMaxMemory, exec::MemoryReclaimer::create());
@@ -346,7 +346,7 @@ TEST_F(MemoryReclaimerTest, reclaimerPriorities) {
         reclaimerCb,
         static_cast<int32_t>(folly::Random::rand32(10000)) - 5000);
     leafPools.push_back(rootPool->addLeafChild(
-        fmt::format("leaf-{}", i), true, std::move(reclaimer)));
+        std::format("leaf-{}", i), true, std::move(reclaimer)));
   }
 
   memory::ScopedMemoryArbitrationContext context(rootPool.get());
@@ -383,7 +383,7 @@ TEST_F(MemoryReclaimerTest, reclaimerPrioritiesWithZeroUsage) {
         reclaimerCb,
         i / 5);
     leafPools.push_back(rootPool->addLeafChild(
-        fmt::format("leaf-{}", i), true, std::move(reclaimer)));
+        std::format("leaf-{}", i), true, std::move(reclaimer)));
   }
 
   memory::ScopedMemoryArbitrationContext context(rootPool.get());
@@ -439,11 +439,11 @@ TEST_F(MemoryReclaimerTest, multiLevelReclaimerPriorities) {
   for (uint32_t i = 0; i < kNumAggrPools; i++) {
     if (i % 2 == 0) {
       aggrPools.push_back(rootPool->addAggregateChild(
-          fmt::format("serial-aggr-{}", poolIdx++),
+          std::format("serial-aggr-{}", poolIdx++),
           exec::MemoryReclaimer::create(kNumAggrPools - i)));
     } else {
       aggrPools.push_back(rootPool->addAggregateChild(
-          fmt::format("parallel-aggr-{}", poolIdx++),
+          std::format("parallel-aggr-{}", poolIdx++),
           exec::ParallelMemoryReclaimer::create(
               executor_.get(), kNumAggrPools - i)));
     }
@@ -451,7 +451,7 @@ TEST_F(MemoryReclaimerTest, multiLevelReclaimerPriorities) {
     const auto aggrPoolName = aggrPool->name();
     for (uint32_t j = 0; j < kNumLeafPerAggr; j++) {
       leafPools.push_back(aggrPools.back()->addLeafChild(
-          fmt::format("{}.leaf-{}", aggrPoolName, j),
+          std::format("{}.leaf-{}", aggrPoolName, j),
           true,
           MockMemoryReclaimer::create(
               kPoolMemoryBytes,

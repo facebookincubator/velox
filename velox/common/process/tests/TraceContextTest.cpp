@@ -17,11 +17,11 @@
 #include "velox/common/process/TraceContext.h"
 #include "velox/common/process/TraceHistory.h"
 
-#include <fmt/format.h>
 #include <folly/futures/Promise.h>
 #include <folly/synchronization/Baton.h>
 #include <folly/synchronization/Latch.h>
 #include <gtest/gtest.h>
+#include <format>
 
 #include <thread>
 
@@ -52,7 +52,7 @@ TEST_F(TraceContextTest, basic) {
     threads.emplace_back([&, i]() {
       {
         TraceContext trace1("process data");
-        TraceContext trace2(fmt::format("Process chunk {}", i), true);
+        TraceContext trace2(std::format("Process chunk {}", i), true);
         latches[0].count_down();
         batons[0][i].wait();
       }
@@ -65,7 +65,7 @@ TEST_F(TraceContextTest, basic) {
   ASSERT_EQ(1 + kNumThreads, status.size());
   ASSERT_EQ(kNumThreads, status.at("process data").numThreads);
   for (int i = 0; i < kNumThreads; ++i) {
-    ASSERT_EQ(1, status.at(fmt::format("Process chunk {}", i)).numThreads);
+    ASSERT_EQ(1, status.at(std::format("Process chunk {}", i)).numThreads);
   }
   for (int i = 0; i < kNumThreads; ++i) {
     batons[0][i].post();

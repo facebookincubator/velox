@@ -68,7 +68,7 @@ folly::dynamic HiveColumnHandle::serialize() const {
 
 std::string HiveColumnHandle::toString() const {
   std::ostringstream out;
-  out << fmt::format(
+  out << std::format(
       "HiveColumnHandle [name: {}, columnType: {}, dataType: {},",
       name_,
       columnTypeName(columnType_),

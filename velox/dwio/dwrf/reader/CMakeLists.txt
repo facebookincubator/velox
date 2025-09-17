@@ -43,5 +43,4 @@ velox_link_libraries(
   velox_caching
   velox_dwio_dwrf_utils
   velox_test_util
-  fmt::fmt
 )

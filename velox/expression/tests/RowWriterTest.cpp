@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-#include <fmt/core.h>
 #include <glog/logging.h>
 #include <gtest/gtest.h>
 #include <optional>
@@ -63,7 +62,7 @@ class RowWriterTest : public functions::test::FunctionBaseTest {
     registerFunction<FuncPrimitivesTest, Row<T...>, int64_t>({functionName});
 
     auto result = evaluate(
-        fmt::format("{}(c0)", functionName),
+        std::format("{}(c0)", functionName),
         makeRowVector(
             {makeFlatVector<int64_t>({1, 2, 3, 4, 5, 6, 7, 8, 9, 10})}));
 

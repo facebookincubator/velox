@@ -252,7 +252,7 @@ TEST_F(HashPartitionFunctionTest, spec) {
 
 TEST_F(HashPartitionFunctionTest, noKeyAndBitRange) {
   for (bool localExchange : {false, true}) {
-    SCOPED_TRACE(fmt::format("localExchange: {}", localExchange));
+    SCOPED_TRACE(std::format("localExchange: {}", localExchange));
     auto vector = makeRowVector({makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6})});
     auto rowType = asRowType(vector->type());
     const auto numRows{vector->size()};

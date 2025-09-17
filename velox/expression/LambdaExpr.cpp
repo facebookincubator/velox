@@ -213,7 +213,7 @@ std::string LambdaExpr::toString(bool recursive) const {
   inputs.pop_back();
   inputs.pop_back();
 
-  return fmt::format("({}) -> {}", inputs, body_->toString());
+  return std::format("({}) -> {}", inputs, body_->toString());
 }
 
 std::string LambdaExpr::toSql(std::vector<VectorPtr>* complexConstants) const {

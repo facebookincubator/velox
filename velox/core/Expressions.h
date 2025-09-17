@@ -360,7 +360,7 @@ class DereferenceTypedExpr : public ITypedExpr {
   }
 
   std::string toString() const override {
-    return fmt::format("{}[{}]", inputs()[0]->toString(), name());
+    return std::format("{}[{}]", inputs()[0]->toString(), name());
   }
 
   size_t localHash() const override {
@@ -479,7 +479,7 @@ class LambdaTypedExpr : public ITypedExpr {
       const override;
 
   std::string toString() const override {
-    return fmt::format(
+    return std::format(
         "lambda {} -> {}", signature_->toString(), body_->toString());
   }
 

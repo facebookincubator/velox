@@ -37,13 +37,13 @@ class SortingNetworkBenchmark {
     }
     data_.resize(totalLen);
     generateData();
-    folly::addBenchmark(__FILE__, fmt::format("{}_std", name), [this] {
+    folly::addBenchmark(__FILE__, std::format("{}_std", name), [this] {
       return run([](auto* indices, int len, auto lt) {
         std::sort(indices, indices + len, lt);
       });
     });
     folly::addBenchmark(
-        __FILE__, fmt::format("%{}_sorting_network", name), [this] {
+        __FILE__, std::format("%{}_sorting_network", name), [this] {
           return run([](auto* indices, int len, auto lt) {
             sortingNetwork(indices, len, lt);
           });

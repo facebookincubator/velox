@@ -60,7 +60,7 @@ std::shared_ptr<filesystems::test::HdfsMiniCluster>
 
 TEST_F(HdfsInsertTest, hdfsInsertTest) {
   const int64_t kExpectedRows = 1'000;
-  runInsertTest(fmt::format("{}/", miniCluster->url()), kExpectedRows, pool());
+  runInsertTest(std::format("{}/", miniCluster->url()), kExpectedRows, pool());
 }
 
 int main(int argc, char** argv) {

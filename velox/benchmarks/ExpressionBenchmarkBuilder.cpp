@@ -85,7 +85,7 @@ void ExpressionBenchmarkBuilder::registerBenchmarks() {
   // Generate input vectors if needed.
   for (auto& [setName, benchmarkSet] : benchmarkSets_) {
     for (auto& [exprName, exprSet] : benchmarkSet.expressions_) {
-      auto name = fmt::format("{}##{}", setName, exprName);
+      auto name = std::format("{}##{}", setName, exprName);
       auto& inputVector = benchmarkSet.inputRowVector_;
       auto times = benchmarkSet.iterations_;
       // The compiler does not allow capturing exprSet int the lambda.

@@ -37,7 +37,7 @@ class BitwiseTest : public functions::test::FunctionBaseTest {
       const std::string& fn,
       std::optional<T> a,
       std::optional<T> b) {
-    return evaluateOnce<int64_t>(fmt::format("{}(c0, c1)", fn), a, b);
+    return evaluateOnce<int64_t>(std::format("{}(c0, c1)", fn), a, b);
   }
 
   template <typename T>
@@ -136,7 +136,7 @@ TEST_F(BitwiseTest, bitCount) {
   auto assertInvalidBits = [this](int64_t num, int64_t bits) {
     VELOX_ASSERT_THROW(
         bitCount(num, bits),
-        fmt::format(
+        std::format(
             "Bits specified in bit_count "
             "must be between "
             "2 and 64, got {}",
@@ -146,7 +146,7 @@ TEST_F(BitwiseTest, bitCount) {
   auto assertNumberTooLarge = [this](int64_t num, int64_t bits) {
     VELOX_ASSERT_THROW(
         bitCount(num, bits),
-        fmt::format(
+        std::format(
             "Number must be representable "
             "with the bits specified. "
             "{} can not be "

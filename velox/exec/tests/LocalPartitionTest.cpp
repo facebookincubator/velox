@@ -545,7 +545,7 @@ TEST_F(LocalPartitionTest, blockingOnLocalExchangeQueue) {
     int64_t numBlocked;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "inputBatchBytes: {}, numBlocked: {}",
           input->estimateFlatSize(),
           numBlocked);
@@ -798,7 +798,7 @@ TEST_P(LocalPartitionTestParametrized, unionAllLocalExchange) {
   auto data1 = makeRowVector({"d0"}, {makeFlatVector<StringView>({"x"})});
   auto data2 = makeRowVector({"e0"}, {makeFlatVector<StringView>({"y"})});
   for (bool serialExecutionMode : {false, true}) {
-    SCOPED_TRACE(fmt::format("serialExecutionMode {}", serialExecutionMode));
+    SCOPED_TRACE(std::format("serialExecutionMode {}", serialExecutionMode));
     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
     AssertQueryBuilder queryBuilder(duckDbQueryRunner_);
     applyTestParameters(queryBuilder);
@@ -923,7 +923,7 @@ TEST_F(LocalPartitionTest, unionAllLocalExchangeWithInterDependency) {
   const auto data2 = makeRowVector({"e0"}, {makeFlatVector<StringView>({"y"})});
 
   for (bool serialExecutionMode : {false, true}) {
-    SCOPED_TRACE(fmt::format("serialExecutionMode {}", serialExecutionMode));
+    SCOPED_TRACE(std::format("serialExecutionMode {}", serialExecutionMode));
     Operator::unregisterAllOperators();
 
     std::mutex mutex;
@@ -1145,7 +1145,7 @@ TEST_F(LocalPartitionTest, barrier) {
                   .planNode();
 
   for (const auto hasBarrier : {false, true}) {
-    SCOPED_TRACE(fmt::format("hasBarrier {}", hasBarrier));
+    SCOPED_TRACE(std::format("hasBarrier {}", hasBarrier));
     AssertQueryBuilder queryBuilder(plan, duckDbQueryRunner_);
     queryBuilder.barrierExecution(hasBarrier).serialExecution(true);
     for (auto i = 0; i < numSources; ++i) {

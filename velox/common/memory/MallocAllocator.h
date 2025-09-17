@@ -206,7 +206,7 @@ class MallocAllocator : public MemoryAllocator {
     if (originalBytes - bytes < 0) {
       // In case of inconsistency while freeing memory, do not revert in this
       // case because free is guaranteed to happen.
-      VELOX_MEM_ALLOC_ERROR(fmt::format(
+      VELOX_MEM_ALLOC_ERROR(std::format(
           "Trying to free {} bytes, which is larger than current allocated "
           "bytes {}",
           bytes,

@@ -22,7 +22,6 @@ velox_link_libraries(
   velox_exec
   velox_expression
   velox_vector
-  fmt::fmt
 )
 
 if(${VELOX_BUILD_TESTING})

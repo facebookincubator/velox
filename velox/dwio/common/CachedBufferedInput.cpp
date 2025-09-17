@@ -311,7 +311,7 @@ class DwioCoalescedLoadBase : public cache::CoalescedLoad {
     for (const auto& request : requests_) {
       payload += request.size;
     }
-    return fmt::format(
+    return std::format(
         "<CoalescedLoad: {} entries, {} total {} extra>",
         requests_.size(),
         succinctBytes(total),

@@ -24,7 +24,7 @@ using dwio::common::SerDeOptions;
 
 uint64_t readFile(const std::string& path, const std::string& name) {
   const auto fs = filesystems::getFileSystem(path, nullptr);
-  auto filepath = fs::path(fmt::format("{}/{}", path, name));
+  auto filepath = fs::path(std::format("{}/{}", path, name));
   const auto& file = fs->openFileForRead(filepath.string());
 
   return file->size();
@@ -36,7 +36,7 @@ std::vector<std::vector<std::string>> parseTextFile(
     void* buffer,
     SerDeOptions serDeOptions) {
   const auto fs = filesystems::getFileSystem(path, nullptr);
-  auto filepath = fs::path(fmt::format("{}/{}", path, name));
+  auto filepath = fs::path(std::format("{}/{}", path, name));
   const auto& file = fs->openFileForRead(filepath.string());
 
   std::string line;

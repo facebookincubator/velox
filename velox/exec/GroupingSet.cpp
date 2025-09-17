@@ -986,7 +986,7 @@ RowTypePtr GroupingSet::makeSpillType() const {
 
   std::vector<std::string> names;
   for (auto i = 0; i < types.size(); ++i) {
-    names.push_back(fmt::format("s{}", i));
+    names.push_back(std::format("s{}", i));
   }
 
   return ROW(std::move(names), std::move(types));

@@ -399,7 +399,7 @@ class HashTableTest : public testing::TestWithParam<bool>,
             BaseVector::create<FlatVector<StringView>>(VARCHAR(), size, pool());
         for (auto row = 0; row < size; ++row) {
           auto string =
-              fmt::format("{}{}", baseString_, keySpacing_ * (sequence + row));
+              std::format("{}{}", baseString_, keySpacing_ * (sequence + row));
           // Make strings that overflow the inline limit for 1/10 of
           // the values after 10K,000. Datasets with only
           // range-encodable small strings can be made within the
@@ -1040,7 +1040,7 @@ DEBUG_ONLY_TEST_P(HashTableTest, nextBucketOffset) {
       uint64_t expectedNextOffset;
 
       std::string debugString() const {
-        return fmt::format(
+        return std::format(
             "offset {}, expectedNextOffsetError {}, expectedNextOffset {}",
             succinctBytes(offset),
             expectedNextOffsetError,
@@ -1281,7 +1281,7 @@ TEST(HashTableTest, tableInsertPartitionInfo) {
     PartitionBoundIndexType end;
 
     std::string debugString() const {
-      return fmt::format("start {}, end {}", start, end);
+      return std::format("start {}, end {}", start, end);
     }
   } badSettings[] = {
       {0, 0}, {-2, -1}, {-1, -1}, {-1, 0}, {-1, 1}, {32, 1}, {32, 32}};

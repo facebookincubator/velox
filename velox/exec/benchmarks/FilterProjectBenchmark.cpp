@@ -94,7 +94,7 @@ class FilterProjectBenchmark : public VectorTestBase {
     auto& type = data[0]->type()->as<TypeKind::ROW>();
     builder.values(data);
     for (auto level = 0; level < numStages; ++level) {
-      builder.filter(fmt::format(
+      builder.filter(std::format(
           "c0 >= {}",
           static_cast<int32_t>(
               1000000 - pow(passPct / 100.0, 1 + level) * 1000000)));
@@ -103,17 +103,17 @@ class FilterProjectBenchmark : public VectorTestBase {
       int32_t nthVarchar = 0;
 
       for (auto i = 1; i < type.size(); ++i) {
-        projections.push_back(fmt::format("c{}", i));
+        projections.push_back(std::format("c{}", i));
 
         switch (type.childAt(i)->kind()) {
           case TypeKind::BIGINT:
             if (nthBigint++ % numStages == level) {
-              projections.back() = fmt::format("c{} + 1 as c{}", i, i);
+              projections.back() = std::format("c{} + 1 as c{}", i, i);
             }
             break;
           case TypeKind::VARCHAR:
             if (nthVarchar++ % numStages == level) {
-              projections.back() = fmt::format(
+              projections.back() = std::format(
                   "substr(c{}, 1, if (length(c{}) > 2, length(c{}) - 1, 0)) as c{}",
                   i,
                   i,
@@ -131,15 +131,15 @@ class FilterProjectBenchmark : public VectorTestBase {
     std::vector<std::string> finalProjection;
     bool needFinalProjection = false;
     for (auto i = 0; i < type.size(); ++i) {
-      finalProjection.push_back(fmt::format("c{}", i));
+      finalProjection.push_back(std::format("c{}", i));
       switch (type.childAt(i)->kind()) {
         case TypeKind::BIGINT:
-          aggregates.push_back(fmt::format("max(c{})", i));
+          aggregates.push_back(std::format("max(c{})", i));
           break;
         case TypeKind::VARCHAR:
           needFinalProjection = true;
-          finalProjection.back() = fmt::format("length(c{}) as c{}", i, i);
-          aggregates.push_back(fmt::format("max(c{})", i));
+          finalProjection.back() = std::format("length(c{}) as c{}", i, i);
+          aggregates.push_back(std::format("max(c{})", i));
           break;
         default:
           break;

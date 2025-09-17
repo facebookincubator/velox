@@ -16,9 +16,9 @@
 
 #pragma once
 
-#include <fmt/format.h>
 #include <folly/Expected.h>
 #include <folly/compression/Compression.h>
+#include <format>
 #include <string>
 
 #include "velox/common/base/Status.h"
@@ -285,8 +285,8 @@ class StreamingDecompressor {
 } // namespace facebook::velox::common
 
 template <>
-struct fmt::formatter<facebook::velox::common::CompressionKind>
-    : fmt::formatter<std::string> {
+struct std::formatter<facebook::velox::common::CompressionKind>
+    : std::formatter<std::string> {
   auto format(
       const facebook::velox::common::CompressionKind& s,
       format_context& ctx) const {

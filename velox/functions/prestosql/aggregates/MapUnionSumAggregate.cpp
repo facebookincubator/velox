@@ -500,9 +500,9 @@ void registerMapUnionSumAggregate(
     signatures.push_back(
         exec::AggregateFunctionSignatureBuilder()
             .typeVariable("K")
-            .returnType(fmt::format("map(K,{})", valueType))
-            .intermediateType(fmt::format("map(K,{})", valueType))
-            .argumentType(fmt::format("map(K,{})", valueType))
+            .returnType(std::format("map(K,{})", valueType))
+            .intermediateType(std::format("map(K,{})", valueType))
+            .argumentType(std::format("map(K,{})", valueType))
             .build());
   }
 

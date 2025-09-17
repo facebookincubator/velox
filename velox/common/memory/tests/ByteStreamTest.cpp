@@ -186,7 +186,7 @@ TEST_F(ByteStreamTest, newRangeAllocation) {
     std::vector<int32_t> expectedAllocationCounts;
 
     std::string debugString() const {
-      return fmt::format(
+      return std::format(
           "newRangeSizes: {}\nexpectedStreamAllocatedBytes: {}\nexpectedArenaAllocationSizes: {}\nexpectedAllocationCount: {}\n",
           folly::join(",", newRangeSizes),
           folly::join(",", expectedStreamAllocatedBytes),
@@ -248,7 +248,7 @@ TEST_F(ByteStreamTest, newRangeAllocation) {
     byteStream.startWrite(0);
     for (int i = 0; i < testData.newRangeSizes.size(); ++i) {
       const auto newRangeSize = testData.newRangeSizes[i];
-      SCOPED_TRACE(fmt::format(
+      SCOPED_TRACE(std::format(
           "iteration {} allocation size {}",
           i,
           succinctBytes(testData.newRangeSizes[i])));
@@ -307,7 +307,7 @@ TEST_F(ByteStreamTest, bits) {
     bool negated;
 
     std::string debugString() const {
-      return fmt::format("reversed: {}, negated: {}", reversed, negated);
+      return std::format("reversed: {}, negated: {}", reversed, negated);
     }
   } testSettings[] = {
       {false, false}, {true, false}, {false, true}, {true, true}};
@@ -467,7 +467,7 @@ class InputByteStreamTest : public ByteStreamTest,
       return std::make_unique<BufferInputStream>(std::move(byteRanges));
     } else {
       const auto filePath =
-          fmt::format("{}/{}", tempDirPath_->getPath(), fileId_++);
+          std::format("{}/{}", tempDirPath_->getPath(), fileId_++);
       auto writeFile = fs_->openFileForWrite(filePath);
       for (auto& byteRange : byteRanges) {
         writeFile->append(std::string_view(
@@ -617,7 +617,7 @@ TEST_P(InputByteStreamTest, nextViewNegativeSize) {
 }
 
 TEST_P(InputByteStreamTest, view) {
-  SCOPED_TRACE(fmt::format("BufferInputStream: {}", GetParam()));
+  SCOPED_TRACE(std::format("BufferInputStream: {}", GetParam()));
   constexpr int32_t kBufferSize = 1024;
   uint8_t buffer[kBufferSize];
   constexpr int32_t kNumRanges = 10;

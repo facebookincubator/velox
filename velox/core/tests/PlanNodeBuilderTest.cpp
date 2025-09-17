@@ -83,7 +83,7 @@ class PlanNodeBuilderTest : public testing::Test, public test::VectorTestBase {
       if (untypedExpr.expr->alias().has_value()) {
         names.push_back(untypedExpr.expr->alias().value());
       } else {
-        names.push_back(fmt::format("a{}", i));
+        names.push_back(std::format("a{}", i));
       }
     }
     VELOX_CHECK_EQ(aggs.size(), names.size());

@@ -252,7 +252,7 @@ Expected<std::shared_ptr<DateTimeFormatter>> buildSimpleDateTimeFormatter(
 } // namespace facebook::velox::functions
 
 template <>
-struct fmt::formatter<facebook::velox::functions::DateTimeFormatterType>
+struct std::formatter<facebook::velox::functions::DateTimeFormatterType>
     : formatter<int> {
   auto format(
       facebook::velox::functions::DateTimeFormatterType s,
@@ -262,7 +262,7 @@ struct fmt::formatter<facebook::velox::functions::DateTimeFormatterType>
 };
 
 template <>
-struct fmt::formatter<facebook::velox::functions::DateTimeFormatSpecifier>
+struct std::formatter<facebook::velox::functions::DateTimeFormatSpecifier>
     : formatter<int> {
   auto format(
       facebook::velox::functions::DateTimeFormatSpecifier s,

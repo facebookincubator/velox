@@ -242,7 +242,7 @@ class FixedDoubleHistogram {
   getIndexForValue(int64_t bucketCount, double min, double max, double value) {
     VELOX_CHECK(
         value >= min && value <= max,
-        fmt::format(
+        std::format(
             "Value must be within range: {} [{}, {}]", value, min, max));
     return std::min(
         static_cast<int64_t>((bucketCount * (value - min)) / (max - min)),

@@ -199,7 +199,7 @@ std::string PlanNodeStats::toString(
   }
 
   out << ", CPU breakdown: B/I/O/F "
-      << fmt::format(
+      << std::format(
              "({}/{}/{}/{})",
              succinctNanos(isBlockedTiming.cpuNanos),
              succinctNanos(addInputTiming.cpuNanos),

@@ -241,7 +241,7 @@ struct TypeAnalysis<Generic<T, comparable, orderable>> {
     if constexpr (std::is_same_v<T, AnyType>) {
       results.out << "any";
     } else {
-      auto typeVariableName = fmt::format("__user_T{}", T::getId());
+      auto typeVariableName = std::format("__user_T{}", T::getId());
       results.out << typeVariableName;
       results.addVariable(exec::SignatureVariable(
           typeVariableName,
@@ -263,7 +263,7 @@ struct TypeAnalysis<ShortDecimal<P, S>> {
 
     const auto p = P::name();
     const auto s = S::name();
-    results.out << fmt::format("decimal({},{})", p, s);
+    results.out << std::format("decimal({},{})", p, s);
     results.addVariable(exec::SignatureVariable(
         p, std::nullopt, exec::ParameterType::kIntegerParameter));
     results.addVariable(exec::SignatureVariable(
@@ -279,7 +279,7 @@ struct TypeAnalysis<LongDecimal<P, S>> {
 
     const auto p = P::name();
     const auto s = S::name();
-    results.out << fmt::format("decimal({},{})", p, s);
+    results.out << std::format("decimal({},{})", p, s);
     results.addVariable(exec::SignatureVariable(
         p, std::nullopt, exec::ParameterType::kIntegerParameter));
     results.addVariable(exec::SignatureVariable(
@@ -294,7 +294,7 @@ struct TypeAnalysis<facebook::velox::BigintEnumT<E>> {
     results.stats.concreteCount++;
 
     const auto e = E::name();
-    results.out << fmt::format("bigint_enum({})", e);
+    results.out << std::format("bigint_enum({})", e);
     results.addVariable(exec::SignatureVariable(
         e, std::nullopt, exec::ParameterType::kEnumParameter));
     results.physicalType = BIGINT();
@@ -307,7 +307,7 @@ struct TypeAnalysis<facebook::velox::VarcharEnumT<E>> {
     results.stats.concreteCount++;
 
     const auto e = E::name();
-    results.out << fmt::format("varchar_enum({})", e);
+    results.out << std::format("varchar_enum({})", e);
     results.addVariable(exec::SignatureVariable(
         e, std::nullopt, exec::ParameterType::kEnumParameter));
     results.physicalType = VARCHAR();
@@ -447,7 +447,7 @@ class ISimpleFunctionMetadata {
     auto physicalArguments = argumentToString<TypePtr>(
         argPhysicalTypes(), signature()->variableArity());
 
-    return fmt::format(
+    return std::format(
         "Logical signature: ({}) -> {}\nPhysical signature: ({}) -> {}\n"
         "Priority: {}\nDefaultNullBehavior: {}",
         logicalArguments,
@@ -603,7 +603,7 @@ class SimpleFunctionMetadata : public ISimpleFunctionMetadata {
   }
 
   std::string helpMessage(const std::string& name) const final {
-    return fmt::format(
+    return std::format(
         "{} ({})",
         name,
         argumentToString<exec::TypeSignature>(

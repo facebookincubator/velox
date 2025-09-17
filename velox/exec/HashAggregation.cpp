@@ -228,10 +228,10 @@ void HashAggregation::updateRuntimeStats() {
   for (auto i = 0; i < hashers.size(); i++) {
     hashers[i]->cardinality(0, asRange, asDistinct);
     if (asRange != VectorHasher::kRangeTooLarge) {
-      runtimeStats[fmt::format("rangeKey{}", i)] = RuntimeMetric(asRange);
+      runtimeStats[std::format("rangeKey{}", i)] = RuntimeMetric(asRange);
     }
     if (asDistinct != VectorHasher::kRangeTooLarge) {
-      runtimeStats[fmt::format("distinctKey{}", i)] = RuntimeMetric(asDistinct);
+      runtimeStats[std::format("distinctKey{}", i)] = RuntimeMetric(asDistinct);
     }
   }
 

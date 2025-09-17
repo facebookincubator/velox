@@ -269,7 +269,7 @@ bool MmapArena::checkConsistency() const {
 }
 
 std::string MmapArena::toString() const {
-  return fmt::format(
+  return std::format(
       "MmapArena[byteSize[{}] address[{}] freeBytes[{}] freeList[{}]]]",
       succinctBytes(byteSize_),
       reinterpret_cast<uint64_t>(address_),

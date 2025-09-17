@@ -762,7 +762,7 @@ TEST_F(ParquetTableScanTest, rowIndex) {
   assertSelectWithAssignments(
       {kPath, "_tmp_metadata_row_index"},
       assignments,
-      fmt::format("SELECT {}, _tmp_metadata_row_index FROM tmp", kPath));
+      std::format("SELECT {}, _tmp_metadata_row_index FROM tmp", kPath));
 
   // case 2: file has `_tmp_metadata_row_index` column, then use user data
   // insteads of generating it.
@@ -1312,10 +1312,10 @@ TEST_F(ParquetTableScanTest, shortAndLongDecimalReadWithLargerPrecision) {
   for (int i = 1; i <= kSize; ++i) {
     if (i < 10) {
       longDecimalValues.emplace_back(
-          HugeInt::parse(fmt::format("1000000000000000000{}", i)));
+          HugeInt::parse(std::format("1000000000000000000{}", i)));
     } else {
       longDecimalValues.emplace_back(
-          HugeInt::parse(fmt::format("100000000000000000{}", i)));
+          HugeInt::parse(std::format("100000000000000000{}", i)));
     }
   }
 

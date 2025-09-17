@@ -227,7 +227,7 @@ TEST_F(PlanNodeSerdeTest, exchange) {
            VectorSerde::Kind::kPresto,
            VectorSerde::Kind::kCompactRow,
            VectorSerde::Kind::kUnsafeRow}) {
-    SCOPED_TRACE(fmt::format("serdeKind: {}", serdeKind));
+    SCOPED_TRACE(std::format("serdeKind: {}", serdeKind));
     auto plan = PlanBuilder()
                     .exchange(
                         ROW({"a", "b", "c"}, {BIGINT(), DOUBLE(), VARCHAR()}),
@@ -424,7 +424,7 @@ TEST_F(PlanNodeSerdeTest, partitionedOutput) {
            VectorSerde::Kind::kPresto,
            VectorSerde::Kind::kCompactRow,
            VectorSerde::Kind::kUnsafeRow}) {
-    SCOPED_TRACE(fmt::format("serdeKind: {}", serdeKind));
+    SCOPED_TRACE(std::format("serdeKind: {}", serdeKind));
 
     auto plan = PlanBuilder()
                     .values({data_})

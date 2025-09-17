@@ -90,7 +90,7 @@ struct HashTableBenchmarkParams {
   int32_t keySpacing{1};
 
   std::string toString() const {
-    return fmt::format(
+    return std::format(
         "{}: Rows={} Hit%={} NumProbes={}",
         title,
         buildSize,
@@ -377,7 +377,7 @@ class HashTableBenchmark : public VectorTestBase {
             VARCHAR(), size, pool_.get());
         for (auto row = 0; row < size; ++row) {
           auto string =
-              fmt::format("{}", params_.keySpacing * (sequence + row));
+              std::format("{}", params_.keySpacing * (sequence + row));
           // Make strings that overflow the inline limit for 1/10 of
           // the values after 10K,000. Datasets with only
           // range-encodable small strings can be made within the
@@ -482,7 +482,7 @@ class HashTableBenchmark : public VectorTestBase {
     clocksPerRow_ = probeTime.timeToDropValue() / numProbed;
 
     std::cout
-        << fmt::format(
+        << std::format(
                "Hashed: {} Probed: {} Hit: {} Hash time/row {} probe time/row {}",
                numHashed,
                numProbed,
@@ -560,7 +560,7 @@ class HashTableBenchmark : public VectorTestBase {
     clocksPerRow_ = probeTime.timeToDropValue() / numProbed;
 
     std::cout
-        << fmt::format(
+        << std::format(
                "F14set: Hashed: {} Probed: {} Hit: {} Hash time/row {} probe time/row {}",
                numHashed,
                numProbed,

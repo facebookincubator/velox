@@ -15,11 +15,11 @@
  */
 
 #include "velox/common/base/AsyncSource.h"
-#include <fmt/format.h>
 #include <folly/Random.h>
 #include <folly/Synchronized.h>
 #include <folly/synchronization/Baton.h>
 #include <gtest/gtest.h>
+#include <format>
 #include <thread>
 #include "velox/common/base/Exceptions.h"
 

@@ -137,7 +137,7 @@ std::optional<folly::Uri> S3ProxyConfigurationBuilder::build() {
   std::vector<std::string> endpointElements{};
   folly::split(':', s3Endpoint_, endpointElements);
   if (FOLLY_UNLIKELY(endpointElements.size() > 2)) {
-    LOG(ERROR) << fmt::format(
+    LOG(ERROR) << std::format(
         "Too many parts in S3 endpoint URI {} ", s3Endpoint_);
     return std::nullopt;
   }

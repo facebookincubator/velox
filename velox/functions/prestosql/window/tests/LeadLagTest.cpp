@@ -34,7 +34,7 @@ class LeadLagTest : public WindowTestBase,
   }
 
   std::string fn(const std::string& params) {
-    return fmt::format("{}({})", GetParam(), params);
+    return std::format("{}({})", GetParam(), params);
   }
 
   bool isLag() {
@@ -87,7 +87,7 @@ TEST_P(LeadLagTest, offset) {
   assertResults(fn("c0, c3"));
 
   // Large && CONSTANT offset.
-  assertResults(fn(fmt::format("c0, {}", largeOffset)));
+  assertResults(fn(std::format("c0, {}", largeOffset)));
 
   // Constant null offset. DuckDB returns incorrect results for this case. It
   // treats null offset as 0.
@@ -181,7 +181,7 @@ TEST_P(LeadLagTest, ignoreNullsInt64Offset) {
   assertResults(fn("c0, c1 IGNORE NULLS"));
 
   // Test the large offset which is a CONSTANT.
-  assertResults(fn(fmt::format("c0, {} IGNORE NULLS", largeOffset)));
+  assertResults(fn(std::format("c0, {} IGNORE NULLS", largeOffset)));
 }
 
 TEST_P(LeadLagTest, zeroOffset) {
