@@ -12,8 +12,7 @@ Mathematical Functions
         SELECT abs(-42); -- 42
         SELECT abs(3.14); -- 3.14
         SELECT abs(-128); -- 128 (with ANSI mode disabled)
-        SELECT abs(-128); throws overflow exception with ANSI mode enabled for TINYINT
-
+        SELECT abs(-128); -- Overflow exception (with ANSI mode enabled for TINYINT)
 .. spark:function:: acos(x) -> double
 
     Returns the inverse cosine (a.k.a. arc cosine) of ``x``.
