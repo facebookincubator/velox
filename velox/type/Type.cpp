@@ -263,6 +263,7 @@ void Type::registerSerDe() {
   registry.Register(
       "IntervalYearMonthType", IntervalYearMonthType::deserialize);
   registry.Register("DateType", DateType::deserialize);
+  registry.Register("TimeType", TimeType::deserialize);
 }
 
 std::string ArrayType::toString() const {
@@ -839,9 +840,6 @@ folly::dynamic FunctionType::serialize() const {
   return obj;
 }
 
-OpaqueType::OpaqueType(const std::type_index& typeIndex)
-    : typeIndex_(typeIndex) {}
-
 bool OpaqueType::equivalent(const Type& other) const {
   if (&other == this) {
     return true;
@@ -1346,6 +1344,7 @@ const SingletonTypeMap& singletonBuiltInTypes() {
       {"INTERVAL DAY TO SECOND", INTERVAL_DAY_TIME()},
       {"INTERVAL YEAR TO MONTH", INTERVAL_YEAR_MONTH()},
       {"DATE", DATE()},
+      {"TIME", TIME()},
       {"UNKNOWN", UNKNOWN()},
   };
   return kTypes;
@@ -1494,6 +1493,13 @@ std::string getOpaqueAliasForTypeId(std::type_index typeIndex) {
       "Could not find type index '{}'. Did you call registerOpaqueType?",
       typeIndex.name());
   return it->second;
+}
+
+folly::dynamic TimeType::serialize() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["name"] = "TimeType";
+  obj["type"] = name();
+  return obj;
 }
 
 std::string stringifyTruncatedElementList(

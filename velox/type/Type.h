@@ -654,6 +654,8 @@ class Type : public Tree<const TypePtr>, public velox::ISerializable {
 
   bool isIntervalDayTime() const;
 
+  bool isTime() const;
+
   bool isDate() const;
 
   bool containsUnknown() const;
@@ -1290,7 +1292,7 @@ class OpaqueType : public TypeBase<TypeKind::OPAQUE> {
   template <typename T>
   using DeserializeFunc = std::function<std::shared_ptr<T>(const std::string&)>;
 
-  explicit OpaqueType(const std::type_index& typeIndex);
+  explicit OpaqueType(std::type_index typeIndex) : typeIndex_{typeIndex} {}
 
   uint32_t size() const override {
     return 0;
@@ -1304,7 +1306,7 @@ class OpaqueType : public TypeBase<TypeKind::OPAQUE> {
 
   bool equivalent(const Type& other) const override;
 
-  const std::type_index& typeIndex() const {
+  std::type_index typeIndex() const {
     return typeIndex_;
   }
 
@@ -1554,6 +1556,60 @@ FOLLY_ALWAYS_INLINE bool Type::isDate() const {
   // The pointers can be compared since DATE is a singleton.
   return this == DATE().get();
 }
+
+/// Represents TIME as a bigint (milliseconds since midnight).
+class TimeType final : public BigintType {
+  TimeType() = default;
+
+ public:
+  static std::shared_ptr<const TimeType> get() {
+    VELOX_CONSTEXPR_SINGLETON TimeType kInstance;
+    return {std::shared_ptr<const TimeType>{}, &kInstance};
+  }
+
+  bool equivalent(const Type& other) const override {
+    // Pointer comparison works since this type is a singleton.
+    return this == &other;
+  }
+
+  const char* name() const override {
+    return "TIME";
+  }
+
+  std::string toString() const override {
+    return name();
+  }
+
+  folly::dynamic serialize() const override;
+
+  static TypePtr deserialize(const folly::dynamic& /*obj*/) {
+    return TimeType::get();
+  }
+
+  bool isOrderable() const override {
+    return true;
+  }
+
+  bool isComparable() const override {
+    return true;
+  }
+};
+
+using TimeTypePtr = std::shared_ptr<const TimeType>;
+
+FOLLY_ALWAYS_INLINE TimeTypePtr TIME() {
+  return TimeType::get();
+}
+
+FOLLY_ALWAYS_INLINE bool Type::isTime() const {
+  // Pointer comparison works since this type is a singleton.
+  return (this == TIME().get());
+}
+
+struct Time {
+ private:
+  Time() {}
+};
 
 /// Used as T for SimpleVector subclasses that wrap another vector when
 /// the wrapped vector is of a complex type. Applies to

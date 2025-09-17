@@ -170,7 +170,7 @@ void SplitReader::prepareSplit(
     return;
   }
 
-  createRowReader(std::move(metadataFilter), std::move(rowType));
+  createRowReader(std::move(metadataFilter), std::move(rowType), std::nullopt);
 }
 
 void SplitReader::setBucketConversion(
@@ -368,7 +368,8 @@ bool SplitReader::checkIfSplitIsEmpty(
 
 void SplitReader::createRowReader(
     std::shared_ptr<common::MetadataFilter> metadataFilter,
-    RowTypePtr rowType) {
+    RowTypePtr rowType,
+    std::optional<bool> rowSizeTrackingEnabled) {
   VELOX_CHECK_NULL(baseRowReader_);
   configureRowReaderOptions(
       hiveTableHandle_->tableParameters(),
@@ -379,6 +380,10 @@ void SplitReader::createRowReader(
       hiveConfig_,
       connectorQueryCtx_->sessionProperties(),
       baseRowReaderOpts_);
+  baseRowReaderOpts_.setTrackRowSize(
+      rowSizeTrackingEnabled.has_value()
+          ? *rowSizeTrackingEnabled
+          : connectorQueryCtx_->rowSizeTrackingEnabled());
   baseRowReader_ = baseReader_->createRowReader(baseRowReaderOpts_);
 }
 
