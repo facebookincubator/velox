@@ -71,8 +71,13 @@ class TableScanTest : public virtual ParquetConnectorTestBase {
     return ParquetConnectorTestBase::makeVectors(inputs, count, rowsPerVector);
   }
 
-  Split makeParquetSplit(std::string path, int64_t splitWeight = 0) {
-    return Split(makeParquetConnectorSplit(std::move(path), splitWeight));
+  Split makeParquetSplit(
+      std::string path,
+      uint64_t start,
+      uint64_t length,
+      int64_t splitWeight = 0) {
+    return Split(
+        makeParquetConnectorSplit(std::move(path), start, length, splitWeight));
   }
 
   std::shared_ptr<Task> assertQuery(
@@ -170,7 +175,7 @@ class TableScanTest : public virtual ParquetConnectorTestBase {
            REAL()})};
 };
 
-TEST_F(TableScanTest, allColumns) {
+TEST_F(TableScanTest, allColumnsWithRowBounds) {
   auto vectors = makeVectors(10, 1'000);
   auto filePath = TempFilePath::create();
   writeToFile(filePath->getPath(), vectors, "c");
@@ -178,10 +183,12 @@ TEST_F(TableScanTest, allColumns) {
   createDuckDbTable(vectors);
   auto plan = tableScanNode();
 
-  const std::string duckDbSql = "SELECT * FROM tmp";
+  const std::string duckDbSql = "SELECT * FROM tmp LIMIT 100 OFFSET 10";
+  constexpr uint64_t start = 10;
+  constexpr uint64_t length = 100;
 
-  // Helper to test scan all columns for the given splits
-  auto testScanAllColumns =
+  // Helper to test scan all columns with row bounds for the given splits
+  auto testScanColumnsWithRowBounds =
       [&](const std::vector<std::shared_ptr<
               facebook::velox::connector::ConnectorSplit>>& splits) {
         auto task = AssertQueryBuilder(duckDbQueryRunner_)
@@ -206,8 +213,8 @@ TEST_F(TableScanTest, allColumns) {
 
   // Test scan all columns with ParquetConnectorSplits
   {
-    auto splits = makeParquetConnectorSplits({filePath});
-    testScanAllColumns(splits);
+    auto split = makeParquetSplit(filePath->getPath(), start, length);
+    testScanColumnsWithRowBounds({split});
   }
 
   // Test scan all columns with HiveConnectorSplits
@@ -215,7 +222,9 @@ TEST_F(TableScanTest, allColumns) {
     // Lambda to create HiveConnectorSplits from file paths
     auto makeHiveConnectorSplits =
         [&](const std::vector<std::shared_ptr<
-                facebook::velox::exec::test::TempFilePath>>& filePaths) {
+                facebook::velox::exec::test::TempFilePath>>& filePaths,
+            uint64_t start = 0,
+            uint64_t length = std::numeric_limits<uint64_t>::max()) {
           std::vector<
               std::shared_ptr<facebook::velox::connector::ConnectorSplit>>
               splits;
@@ -229,8 +238,8 @@ TEST_F(TableScanTest, allColumns) {
           return splits;
         };
 
-    auto splits = makeHiveConnectorSplits({filePath});
-    testScanAllColumns(splits);
+    auto splits = makeHiveConnectorSplits({filePath}, start, length);
+    testScanColumnsWithRowBounds(splits);
   }
 }
 
