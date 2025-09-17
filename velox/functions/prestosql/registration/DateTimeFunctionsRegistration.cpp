@@ -291,6 +291,8 @@ void registerSimpleFunctions(const std::string& prefix) {
 
   registerFunction<ParseDurationFunction, IntervalDayTime, Varchar>(
       {prefix + "parse_duration"});
+
+  registerFunction<LocalTimeFunction, Time>({prefix + "localtime"});
 }
 } // namespace
 
