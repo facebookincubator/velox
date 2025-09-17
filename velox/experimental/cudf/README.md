@@ -34,10 +34,12 @@ Velox-cuDF builds are included in Velox CI as part of the [adapters build](https
 
 ### Testing Velox with cuDF
 
-The Velox-cuDF tests in [experimental/cudf/tests](https://github.com/facebookincubator/velox/blob/main/velox/experimental/cudf/tests) include several types of tests:
+Tests with Velox-cuDF can only be run on GPU-enabled hardware. The Velox-cuDF tests in [experimental/cudf/tests](https://github.com/facebookincubator/velox/blob/main/velox/experimental/cudf/tests) include several types of tests:
 * operator tests
 * function tests
 * fuzz tests (not yet implemented)
+
+The repo [rapidsai/velox-testing](https://github.com/rapidsai/velox-testing/) includes standard scripts for testing Velox-cuDF. Please refer to the [test_velox.sh](https://github.com/rapidsai/velox-testing/blob/main/velox/scripts/test_velox.sh) for running the Velox-cuDF unit tests. We plan to first develop GitHub Actions for GPU CI in [rapidsai/velox-testing](https://github.com/rapidsai/velox-testing/), and then later transition GPU-enabled GitHub Actions to Velox mainline.
 
 #### Operator tests
 
