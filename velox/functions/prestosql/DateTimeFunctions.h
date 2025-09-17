@@ -1732,4 +1732,27 @@ struct ParseDurationFunction {
   }
 };
 
+template <typename T>
+struct LocalTimeFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  static constexpr bool is_deterministic = false;
+
+  // LocalTime just returns the time from midnight in UTC.
+  FOLLY_ALWAYS_INLINE void call(out_type<Time>& result) {
+    auto now = Timestamp::now();
+
+    // Extract the time portion (milliseconds since midnight) from the timestamp
+    auto dateTime = getDateTime(now, nullptr);
+
+    // Calculate milliseconds since midnight
+    int64_t millsSinceMidnight =
+        static_cast<int64_t>(dateTime.tm_hour) * kMillisInHour +
+        static_cast<int64_t>(dateTime.tm_min) * kMillisInMinute +
+        static_cast<int64_t>(dateTime.tm_sec) * kMillisInSecond;
+
+    result = millsSinceMidnight;
+  }
+};
+
 } // namespace facebook::velox::functions
