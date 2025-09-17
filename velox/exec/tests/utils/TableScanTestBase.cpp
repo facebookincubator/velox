@@ -183,6 +183,9 @@ void TableScanTestBase::testPartitionedTableImpl(
            .assignments(assignments)
            .endTableScan()
            .planNode();
+  split = exec::test::HiveConnectorSplitBuilder(filePath)
+              .partitionKey("pkey", partitionValue)
+              .build();
   assertQuery(
       op, split, fmt::format("SELECT c0, {}, c1 FROM tmp", partitionValueStr));
   outputType = ROW({"c0", "c1", "pkey"}, {BIGINT(), DOUBLE(), partitionType});
@@ -192,6 +195,9 @@ void TableScanTestBase::testPartitionedTableImpl(
            .assignments(assignments)
            .endTableScan()
            .planNode();
+  split = exec::test::HiveConnectorSplitBuilder(filePath)
+              .partitionKey("pkey", partitionValue)
+              .build();
   assertQuery(
       op, split, fmt::format("SELECT c0, c1, {} FROM tmp", partitionValueStr));
 
@@ -204,6 +210,9 @@ void TableScanTestBase::testPartitionedTableImpl(
            .assignments(assignments)
            .endTableScan()
            .planNode();
+  split = exec::test::HiveConnectorSplitBuilder(filePath)
+              .partitionKey("pkey", partitionValue)
+              .build();
   assertQuery(op, split, fmt::format("SELECT {} FROM tmp", partitionValueStr));
 }
 
