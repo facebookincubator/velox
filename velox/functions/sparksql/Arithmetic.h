@@ -31,13 +31,11 @@ namespace facebook::velox::functions::sparksql {
 // The abs implementation is used for primitive types except for decimal type.
 template <typename TExec>
 struct AbsFunction {
-  VELOX_DEFINE_FUNCTION_TYPES(TExec);
-
-  template <typename TInput>
+  template <typename T>
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& config,
-      const TInput* /*a*/) {
+      const T* /*a*/) {
     ansiEnabled_ = config.sparkAnsiEnabled();
   }
 
