@@ -213,6 +213,58 @@ VectorPtr CastExpr::castFromIntervalDayTime(
   }
 }
 
+VectorPtr CastExpr::castFromTime(
+    const SelectivityVector& rows,
+    const BaseVector& input,
+    exec::EvalCtx& context,
+    const TypePtr& toType) {
+  VectorPtr castResult;
+  context.ensureWritable(rows, toType, castResult);
+  (*castResult).clearNulls(rows);
+
+  auto* inputFlatVector = input.as<SimpleVector<int64_t>>();
+  switch (toType->kind()) {
+    case TypeKind::VARCHAR: {
+      // Get session timezone
+      const auto* timeZone =
+          getTimeZoneFromConfig(context.execCtx()->queryCtx()->queryConfig());
+      const auto offsetInMillis = TIME()->getTimeZoneOffsetInMillis(timeZone);
+
+      auto* resultFlatVector = castResult->as<FlatVector<StringView>>();
+
+      Buffer* buffer = resultFlatVector->getBufferWithSpace(
+          rows.countSelected() * TimeType::kTimeToVarcharRowSize,
+          true /*exactSize*/);
+      char* rawBuffer = buffer->asMutable<char>() + buffer->size();
+
+      applyToSelectedNoThrowLocal(context, rows, castResult, [&](int row) {
+        try {
+          // Use timezone-aware conversion
+          auto output = TIME()->valueToString(
+              inputFlatVector->valueAt(row), rawBuffer, offsetInMillis);
+          resultFlatVector->setNoCopy(row, output);
+          rawBuffer += output.size();
+        } catch (const VeloxException& ue) {
+          if (!ue.isUserError()) {
+            throw;
+          }
+          VELOX_USER_FAIL(
+              makeErrorMessage(input, row, toType) + " " + ue.message());
+        } catch (const std::exception& e) {
+          VELOX_USER_FAIL(
+              makeErrorMessage(input, row, toType) + " " + e.what());
+        }
+      });
+
+      buffer->setSize(rawBuffer - buffer->asMutable<char>());
+      return castResult;
+    }
+    default:
+      VELOX_UNSUPPORTED(
+          "Cast from TIME to {} is not supported", toType->toString());
+  }
+}
+
 namespace {
 void propagateErrorsOrSetNulls(
     bool setNullInResultAtError,
@@ -650,6 +702,8 @@ void CastExpr::applyPeeled(
         "Cast from {} to {} is not supported",
         fromType->toString(),
         toType->toString());
+  } else if (fromType->isTime()) {
+    result = castFromTime(rows, input, context, toType);
   } else if (toType->isShortDecimal()) {
     result = applyDecimal<int64_t>(rows, input, context, fromType, toType);
   } else if (toType->isLongDecimal()) {
