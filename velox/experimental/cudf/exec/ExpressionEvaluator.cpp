@@ -804,17 +804,16 @@ class HashFunction : public CudfFunction {
   }
 
  private:
-
-cudf::table_view convertToTableView(std::vector<ColumnOrView>& inputColumns) {
+  cudf::table_view convertToTableView(std::vector<ColumnOrView>& inputColumns) {
     std::vector<cudf::column_view> columns;
     columns.reserve(inputColumns.size());
 
     for (auto& col : inputColumns) {
-        columns.push_back(asView(col));
+      columns.push_back(asView(col));
     }
 
     return cudf::table_view(columns);
-}
+  }
 
   uint32_t seedValue_;
 };
