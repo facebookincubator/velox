@@ -15,5 +15,8 @@
 add_executable(velox_cudf_tpch_benchmark CudfTpchBenchmark.cpp)
 
 target_link_libraries(
-  velox_cudf_tpch_benchmark velox_cudf_exec velox_cudf_exec_test_lib
-  velox_tpch_benchmark_lib)
+  velox_cudf_tpch_benchmark
+  velox_cudf_exec
+  velox_cudf_exec_test_lib
+  velox_tpch_benchmark_lib
+)
