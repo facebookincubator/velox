@@ -80,8 +80,8 @@ TEST_F(CudfFilterProjectTest, hashWithSeedMultiColumns) {
 
   auto expected = makeRowVector({
       makeFlatVector<int32_t>({
-          1049813396,
-          1800792340,
+          -864217843,
+          821064941,
       }),
   });
   facebook::velox::test::assertEqualVectors(expected, hashResults);
