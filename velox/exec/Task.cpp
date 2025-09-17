@@ -356,6 +356,9 @@ std::shared_ptr<Task> Task::create(
       std::move(onError)));
   task->initTaskPool();
   task->addToTaskList();
+  if (mode == Task::ExecutionMode::kSerial) {
+    task->initDriverFactory();
+  }
   return task;
 }
 
@@ -604,6 +607,47 @@ void Task::initTaskPool() {
       fmt::format("task.{}", taskId_.c_str()), createTaskReclaimer());
 }
 
+void Task::initDriverFactory() {
+  VELOX_CHECK_NULL(
+      consumerSupplier_,
+      "Serial execution mode doesn't support delivering results to a "
+      "callback");
+
+  taskStats_.executionStartTimeMs = getCurrentTimeMs();
+  LocalPlanner::plan(
+      planFragment_, nullptr, &driverFactories_, queryCtx_->queryConfig(), 1);
+  exchangeClients_.resize(driverFactories_.size());
+
+  // In Task::next() we always assume ungrouped execution.
+  for (const auto& factory : driverFactories_) {
+    VELOX_CHECK(
+        factory->supportsSerialExecution(),
+        "DriverFactory should supports serial execution");
+    numDriversUngrouped_ += factory->numDrivers;
+    numTotalDrivers_ += factory->numTotalDrivers;
+    taskStats_.pipelineStats.emplace_back(
+        factory->inputDriver, factory->outputDriver);
+  }
+
+  // Create drivers.
+  createSplitGroupStateLocked(kUngroupedGroupId);
+  std::vector<std::shared_ptr<Driver>> drivers =
+      createDriversLocked(kUngroupedGroupId);
+  if (pool_->reservedBytes() != 0) {
+    VELOX_FAIL(
+        "Unexpected memory pool allocations during task[{}] driver initialization: {}",
+        taskId_,
+        pool_->treeMemoryUsage());
+  }
+
+  drivers_ = std::move(drivers);
+  driverBlockingStates_.reserve(drivers_.size());
+  for (auto i = 0; i < drivers_.size(); ++i) {
+    driverBlockingStates_.emplace_back(
+        std::make_unique<DriverBlockingState>(drivers_[i].get()));
+  }
+}
+
 velox::memory::MemoryPool* Task::getOrAddNodePool(
     const core::PlanNodeId& planNodeId) {
   if (nodePools_.count(planNodeId) == 1) {
@@ -769,44 +813,8 @@ RowVectorPtr Task::next(ContinueFuture* future) {
     }
   }
 
-  // On first call, create the drivers.
-  if (driverFactories_.empty()) {
-    VELOX_CHECK_NULL(
-        consumerSupplier_,
-        "Serial execution mode doesn't support delivering results to a "
-        "callback");
-
-    taskStats_.executionStartTimeMs = getCurrentTimeMs();
-    LocalPlanner::plan(
-        planFragment_, nullptr, &driverFactories_, queryCtx_->queryConfig(), 1);
-    exchangeClients_.resize(driverFactories_.size());
-
-    // In Task::next() we always assume ungrouped execution.
-    for (const auto& factory : driverFactories_) {
-      VELOX_CHECK(factory->supportsSerialExecution());
-      numDriversUngrouped_ += factory->numDrivers;
-      numTotalDrivers_ += factory->numTotalDrivers;
-      taskStats_.pipelineStats.emplace_back(
-          factory->inputDriver, factory->outputDriver);
-    }
-
-    // Create drivers.
-    createSplitGroupStateLocked(kUngroupedGroupId);
-    std::vector<std::shared_ptr<Driver>> drivers =
-        createDriversLocked(kUngroupedGroupId);
-    if (pool_->reservedBytes() != 0) {
-      VELOX_FAIL(
-          "Unexpected memory pool allocations during task[{}] driver initialization: {}",
-          taskId_,
-          pool_->treeMemoryUsage());
-    }
-
-    drivers_ = std::move(drivers);
-    driverBlockingStates_.reserve(drivers_.size());
-    for (auto i = 0; i < drivers_.size(); ++i) {
-      driverBlockingStates_.emplace_back(
-          std::make_unique<DriverBlockingState>(drivers_[i].get()));
-    }
+  VELOX_CHECK(!driverFactories_.empty());
+  if (numDriversUnderBarrier_ == 0) {
     if (underBarrier()) {
       startDriverBarriersLocked();
     }

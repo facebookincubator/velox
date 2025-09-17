@@ -120,6 +120,7 @@ DEBUG_ONLY_TEST_F(ThreadDebugInfoDeathTest, withinTheCallingThread) {
       (task->next()),
       ".*Fatal signal handler. Query Id= TaskCursorQuery_0 Task Id= single.execution.task.0.*");
 #endif
+  task->requestCancel();
 }
 
 DEBUG_ONLY_TEST_F(ThreadDebugInfoDeathTest, noThreadContextSet) {

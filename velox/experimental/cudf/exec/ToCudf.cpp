@@ -367,4 +367,8 @@ bool cudfTableScanEnabled() {
   return CudfOptions::getInstance().cudfTableScan;
 }
 
+bool isCudfOperator(const exec::Operator* op) {
+  return isAnyOf<NvtxHelper>(op);
+}
+
 } // namespace facebook::velox::cudf_velox
