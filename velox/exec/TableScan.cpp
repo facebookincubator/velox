@@ -171,6 +171,7 @@ RowVectorPtr TableScan::getOutput() {
          },
          &debugString_});
 
+    checkPreload();
     if (needNewSplit_) {
       const auto hasNewSplit = getSplit();
       if (!hasNewSplit) {
@@ -204,7 +205,6 @@ RowVectorPtr TableScan::getOutput() {
       dataOptional = dataSource_->next(readBatchSize, blockingFuture_);
     }
 
-    checkPreload();
     {
       auto lockedStats = stats_.wlock();
       lockedStats->addRuntimeStat(
@@ -472,21 +472,19 @@ void TableScan::checkPreload() {
       !connector_->supportsSplitPreload()) {
     return;
   }
-  if (dataSource_->allPrefetchIssued()) {
-    maxPreloadedSplits_ = driverCtx_->task->numDrivers(driverCtx_->driver) *
-        maxSplitPreloadPerDriver_;
-    if (!splitPreloader_) {
-      splitPreloader_ =
-          [ioExecutor,
-           this](const std::shared_ptr<connector::ConnectorSplit>& split) {
-            preload(split);
+  maxPreloadedSplits_ = driverCtx_->task->numDrivers(driverCtx_->driver) *
+      maxSplitPreloadPerDriver_;
+  if (!splitPreloader_) {
+    splitPreloader_ =
+        [ioExecutor,
+         this](const std::shared_ptr<connector::ConnectorSplit>& split) {
+          preload(split);
 
-            ioExecutor->add([connectorSplit = split]() mutable {
-              connectorSplit->dataSource->prepare();
-              connectorSplit.reset();
-            });
-          };
-    }
+          ioExecutor->add([connectorSplit = split]() mutable {
+            connectorSplit->dataSource->prepare();
+            connectorSplit.reset();
+          });
+        };
   }
 }
 
