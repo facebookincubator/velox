@@ -14,12 +14,11 @@
  * limitations under the License.
  */
 
- #include "velox/experimental/cudf/exec/Validation.h"
+#include "velox/experimental/cudf/exec/Validation.h"
 
 namespace facebook::velox::cudf_velox {
- DEFINE_bool(
+DEFINE_bool(
     velox_cudf_log_validation_failure,
     true,
     "Whether log the validation failure information");
- }
- 
+}
