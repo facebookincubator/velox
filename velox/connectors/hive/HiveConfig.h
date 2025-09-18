@@ -197,6 +197,10 @@ class HiveConfig {
   static constexpr const char* kPreserveFlatMapsInMemorySession =
       "hive.preserve_flat_maps_in_memory";
 
+  static constexpr const char* kUser = "user";
+  static constexpr const char* kSource = "source";
+  static constexpr const char* kSchema = "schema";
+
   InsertExistingPartitionsBehavior insertExistingPartitionsBehavior(
       const config::ConfigBase* session) const;
 
@@ -282,6 +286,15 @@ class HiveConfig {
   /// Whether to preserve flat maps in memory as FlatMapVectors instead of
   /// converting them to MapVectors.
   bool preserveFlatMapsInMemory(const config::ConfigBase* session) const;
+
+  /// User of the query. Used for storage logging.
+  std::string user(const config::ConfigBase* session) const;
+
+  /// Source of the query. Used for storage access and logging.
+  std::string source(const config::ConfigBase* session) const;
+
+  /// Schema of the query. Used for storage logging.
+  std::string schema(const config::ConfigBase* session) const;
 
   HiveConfig(std::shared_ptr<const config::ConfigBase> config) {
     VELOX_CHECK_NOT_NULL(

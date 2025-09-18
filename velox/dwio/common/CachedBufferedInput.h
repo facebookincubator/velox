@@ -64,13 +64,17 @@ class CachedBufferedInput : public BufferedInput {
       std::shared_ptr<IoStatistics> ioStats,
       std::shared_ptr<filesystems::File::IoStats> fsStats,
       folly::Executor* executor,
-      const io::ReaderOptions& readerOptions)
+      const io::ReaderOptions& readerOptions,
+      folly::F14FastMap<std::string, std::string> fileReadOps = {})
       : BufferedInput(
             std::move(readFile),
             readerOptions.memoryPool(),
             metricsLog,
             ioStats.get(),
-            fsStats.get()),
+            fsStats.get(),
+            kMaxMergeDistance,
+            std::nullopt,
+            std::move(fileReadOps)),
         cache_(cache),
         fileNum_(std::move(fileNum)),
         tracker_(std::move(tracker)),
