@@ -236,7 +236,7 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
             velox::ContinueFuture* future) {
           auto queue = queueHolder.lock();
           if (queue == nullptr) {
-            LOG(ERROR) << "TaskQueue is null! TaskId: " << taskId;
+            LOG(ERROR) << "TaskQueue has been destroyed, taskId: " << taskId;
             return exec::BlockingReason::kNotBlocked;
           }
           VELOX_CHECK(
@@ -260,7 +260,7 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
           // unblocked.
           auto queue = queueHolder.lock();
           if (queue == nullptr) {
-            LOG(ERROR) << "TaskQueue is null! TaskId: " << taskId;
+            LOG(ERROR) << "TaskQueue has been destroyed, taskId: " << taskId;
             return;
           }
           queue->close();
