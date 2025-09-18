@@ -1138,5 +1138,89 @@ TEST(SignatureBinderTest, coercions) {
       /*allowCoercion*/ true);
 }
 
+TEST(SignatureBinderTest, homogeneousRow) {
+  // row(T, ...) -> boolean
+  {
+    auto signature = exec::FunctionSignatureBuilder()
+                         .typeVariable("T")
+                         .returnType("boolean")
+                         .argumentType("row(T, ...)")
+                         .build();
+
+    testSignatureBinder(signature, {ROW({BIGINT()})}, BOOLEAN());
+
+    testSignatureBinder(
+        signature, {ROW({BIGINT(), BIGINT(), BIGINT()})}, BOOLEAN());
+
+    testSignatureBinder(signature, {ROW({VARCHAR(), VARCHAR()})}, BOOLEAN());
+
+    // Named row fields should also bind when types are homogeneous.
+    testSignatureBinder(
+        signature,
+        {ROW({{"first", VARCHAR()}, {"second", VARCHAR()}})},
+        BOOLEAN());
+
+    // Mixed named-row element types should fail to bind.
+    assertCannotResolve(signature, {ROW({{"x", BIGINT()}, {"y", VARCHAR()}})});
+
+    testSignatureBinder(signature, {ROW({})}, BOOLEAN());
+
+    assertCannotResolve(signature, {ROW({BIGINT(), VARCHAR()})});
+
+    assertCannotResolve(signature, {BIGINT()});
+    assertCannotResolve(signature, {ARRAY(BIGINT())});
+  }
+
+  // Test with multiple homogeneous row arguments
+  {
+    auto signature = exec::FunctionSignatureBuilder()
+                         .typeVariable("T")
+                         .returnType("T")
+                         .argumentType("row(T, ...)")
+                         .argumentType("row(T, ...)")
+                         .build();
+
+    testSignatureBinder(
+        signature,
+        {ROW({BIGINT(), BIGINT()}), ROW({BIGINT(), BIGINT(), BIGINT()})},
+        BIGINT()); // Return type is just the common element type T
+
+    assertCannotResolve(
+        signature, {ROW({BIGINT(), BIGINT()}), ROW({VARCHAR(), VARCHAR()})});
+  }
+}
+
+TEST(SignatureBinderTest, homogeneousRowsToMap) {
+  // Positive test: (row(T,...), row(U,...)) -> map(T,U)
+  auto signature = exec::FunctionSignatureBuilder()
+                       .typeVariable("T")
+                       .typeVariable("U")
+                       .returnType("map(T,U)")
+                       .argumentType("row(T, ...)")
+                       .argumentType("row(U, ...)")
+                       .build();
+
+  testSignatureBinder(
+      signature,
+      {ROW({BIGINT(), BIGINT()}), ROW({VARCHAR(), VARCHAR(), VARCHAR()})},
+      MAP(BIGINT(), VARCHAR()));
+
+  // Should not bind if element types differ
+  assertCannotResolve(
+      signature, {ROW({BIGINT(), BIGINT()}), ROW({BIGINT(), VARCHAR()})});
+}
+
+TEST(SignatureBinderTest, homogeneousRowReturnType) {
+  // Negative test: constructing or binding a function with homogeneous row
+  // return is invalid.
+  VELOX_ASSERT_USER_THROW(
+      (exec::FunctionSignatureBuilder()
+           .typeVariable("T")
+           .returnType("row(T, ...)")
+           .argumentType("bigint")
+           .build()),
+      "Homogeneous row cannot be used as a return type");
+}
+
 } // namespace
 } // namespace facebook::velox::exec::test
