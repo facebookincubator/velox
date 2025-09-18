@@ -226,6 +226,7 @@ TypePtr Type::create(const folly::dynamic& obj) {
     case TypeKind::ROW: {
       VELOX_USER_CHECK(obj["names"].isArray());
       std::vector<std::string> names;
+      names.reserve(obj["names"].size());
       for (const auto& name : obj["names"]) {
         names.push_back(name.asString());
       }
