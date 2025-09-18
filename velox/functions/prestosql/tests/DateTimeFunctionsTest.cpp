@@ -5494,3 +5494,35 @@ TEST_F(DateTimeFunctionsTest, xxHash64FunctionTimestamp) {
   EXPECT_EQ(
       7585368295023641328, xxhash64(parseTimestamp("1900-01-01 00:00:00.000")));
 }
+
+TEST_F(DateTimeFunctionsTest, localTime) {
+  std::vector<std::string> timezones = {
+      "Asia/Kolkata", "America/New_York", "UTC"};
+
+  for (const auto& tzName : timezones) {
+    setQueryTimeZone(tzName);
+
+    auto resultOpt =
+        evaluateOnce<int64_t>("localtime()", makeRowVector(ROW({}), 1));
+
+    ASSERT_TRUE(resultOpt.has_value());
+    int64_t result = resultOpt.value();
+
+    ASSERT_GE(result, 0);
+    ASSERT_LT(result, 24LL * 60 * 60 * 1000);
+
+    auto ts = Timestamp::now();
+    int64_t epochMs = ts.toMillis();
+
+    auto tzKey = tz::getTimeZoneID(tzName, true);
+    const auto* zone = tz::locateZone(tzKey);
+    int64_t expectedLocalMs =
+        zone->to_local(std::chrono::milliseconds{epochMs}).count();
+    int64_t expectedMillisOfDay = expectedLocalMs % (24LL * 60 * 60 * 1000);
+
+    ASSERT_NEAR(
+        static_cast<double>(result),
+        static_cast<double>(expectedMillisOfDay),
+        100.0);
+  }
+}
