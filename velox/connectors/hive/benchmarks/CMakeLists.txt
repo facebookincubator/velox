@@ -32,3 +32,48 @@ target_link_libraries(
   Folly::follybenchmark
   fmt::fmt
 )
+
+add_executable(velox_insert_benchmark InsertionBenchmark.cpp InsertionBenchmarkMain.cpp)
+target_link_libraries(
+  velox_insert_benchmark
+  velox_exec_test_lib
+  velox_hive_connector
+  Folly::follybenchmark
+  fmt::fmt
+)
+
+add_executable(
+  velox_iceberg_insertion_benchmark
+  Benchmark.cpp
+  IcebergInsertBenchmark.cpp
+  IcebergInsertBenchmarkMain.cpp
+)
+
+target_link_libraries(
+  velox_iceberg_insertion_benchmark
+  velox_exec_test_lib
+  velox_hive_connector
+  Folly::follybenchmark
+  fmt::fmt
+)
+
+add_executable(
+  velox_iceberg_transform_benchmark
+  Benchmark.cpp
+  IcebergTransformBenchmark.cpp
+  IcebergTransformBenchmarkMain.cpp
+)
+
+target_link_libraries(
+  velox_iceberg_transform_benchmark
+  velox_exec_test_lib
+  velox_hive_connector
+  Folly::follybenchmark
+  fmt::fmt
+)
+
+if(VELOX_ENABLE_PARQUET)
+  target_link_libraries(velox_insert_benchmark velox_dwio_parquet_writer)
+  target_link_libraries(velox_iceberg_insertion_benchmark velox_dwio_parquet_writer)
+  target_link_libraries(velox_iceberg_transform_benchmark velox_dwio_parquet_writer)
+endif()
