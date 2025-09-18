@@ -1036,6 +1036,13 @@ This secret is required in conjunction with the client ID to authenticate the ap
 This endpoint is used to acquire access tokens for authenticating with Azure storage.
 The URL follows the format: <cite>https://login.microsoftonline.com/&lt;tenant-id&gt;/oauth2/token</cite>.</p></td>
 </tr>
+<tr class="row-even"><td><p>fs.azure.sas.token.renew.period.for.streams</p></td>
+<td><p>string</p></td>
+<td><p>120</p></td>
+<td><p>Specifies the period in seconds to re-use SAS tokens until the expiry is within this number of seconds.
+This configuration is used together with <cite>registerSasTokenProvider</cite> for dynamic SAS token renewal.
+When a SAS token is close to expiry, it will be renewed by getting a new token from the provider.</p></td>
+</tr>
 </tbody>
 </table>
 </section>
