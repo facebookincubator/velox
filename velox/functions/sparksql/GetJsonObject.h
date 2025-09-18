@@ -134,25 +134,23 @@ struct GetJsonObjectFunction {
   // - Removes trailing spaces after root symbol (e.g., "$ " -> "$")
   std::string normalizeJsonPath(StringView jsonPath) {
     // First, remove single quotes for bracket notation
-    const std::string& path = removeSingleQuotes(jsonPath);
+    std::string path = removeSingleQuotes(jsonPath);
     if (path == "-1") {
       return path;
     }
 
-    std::string normalized = path;
-
     // Use Boost regex to find and remove spaces after dots
     // Pattern: "dot + one or more spaces" -> "dot"
     static const boost::regex dotSpaceRegex("\\.\\s+");
-    normalized = boost::regex_replace(normalized, dotSpaceRegex, ".");
+    path = boost::regex_replace(path, dotSpaceRegex, ".");
 
     // Remove trailing spaces after $.
     // Pattern: "$ + one or more spaces" -> "$"
     static const boost::regex rootSpaceRegex("\\$\\s+$");
-    normalized = boost::regex_replace(normalized, rootSpaceRegex, "$");
+    path = boost::regex_replace(path, rootSpaceRegex, "$");
 
     // Skip the initial "$".
-    return normalized.erase(0, 1);
+    return path.erase(0, 1);
   }
 
   // Extracts a string representation from a simdjson result. Handles various
