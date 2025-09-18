@@ -223,6 +223,7 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
 
     // Captured as a shared_ptr by the consumer callback of task_.
     auto queue = queue_;
+    auto queueHolder = std::weak_ptr(queue_);
     task_ = Task::create(
         taskId_,
         std::move(planFragment_),
@@ -249,11 +250,13 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
           return queue->enqueue(std::move(copy), future);
         },
         0,
-        [queue](std::exception_ptr) {
+        [queueHolder](std::exception_ptr) {
           // onError close the queue to unblock producers and consumers.
           // moveNext will handle rethrowing the error once it's
           // unblocked.
-          queue->close();
+          if (const auto ptr = queueHolder.lock()) {
+            ptr->close();
+          }
         });
 
     if (!taskSpillDirectory_.empty()) {
