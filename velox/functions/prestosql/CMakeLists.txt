@@ -58,7 +58,6 @@ velox_add_library(
   TypeOf.cpp
   UpperLower.cpp
   URIParser.cpp
-  URLFunctions.cpp
   VectorArithmetic.cpp
   WidthBucketArray.cpp
   Zip.cpp
