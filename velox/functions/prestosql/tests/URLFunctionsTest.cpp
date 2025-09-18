@@ -553,6 +553,20 @@ TEST_F(URLFunctionsTest, extractParameter) {
       extractParam(
           "http://example.com/path1/p.php?k1=v1&k2=v2&k3%3Dv3.1%3Dv3.2%26k4=v4",
           "k3"));
+
+  // Test zero-width match edge case - parameters that could result in
+  // zero-width regex matches should not cause infinite loops
+  EXPECT_EQ(
+      std::nullopt,
+      extractParam("http://example.com/path1/p.php?&&&", "param"));
+  EXPECT_EQ(
+      "value",
+      extractParam("http://example.com/path1/p.php?&&&param=value", "param"));
+  // Test consecutive empty parameters
+  EXPECT_EQ(
+      std::nullopt,
+      extractParam("http://example.com/path1/p.php?&=&=&", "nonexistent"));
+  EXPECT_EQ("", extractParam("http://example.com/path1/p.php?key=", "key"));
 }
 
 TEST_F(URLFunctionsTest, urlEncode) {
