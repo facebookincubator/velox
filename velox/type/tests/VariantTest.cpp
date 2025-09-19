@@ -944,5 +944,57 @@ TEST(VariantTest, nullableMapOfArraysGetter) {
        {"c", std::vector<std::optional<int64_t>>{3}}});
 }
 
+TEST(VariantTest, maybeValueNull) {
+  // Test with null variants - should return nullopt
+  auto nullBool = Variant::null(TypeKind::BOOLEAN);
+  EXPECT_FALSE(nullBool.maybeValue<bool>().has_value());
+
+  auto nullInt = Variant::null(TypeKind::INTEGER);
+  EXPECT_FALSE(nullInt.maybeValue<int32_t>().has_value());
+
+  auto nullBigint = Variant::null(TypeKind::BIGINT);
+  EXPECT_FALSE(nullBigint.maybeValue<int64_t>().has_value());
+
+  auto nullString = Variant::null(TypeKind::VARCHAR);
+  EXPECT_FALSE(nullString.maybeValue<std::string_view>().has_value());
+}
+
+TEST(VariantTest, maybeValueNonNull) {
+  // Test with non-null variants - should return optional with value
+  auto boolVar = Variant(true);
+  auto boolResult = boolVar.maybeValue<bool>();
+  EXPECT_TRUE(boolResult.has_value());
+  EXPECT_EQ(boolResult.value(), true);
+
+  auto intVar = Variant(42);
+  auto intResult = intVar.maybeValue<int32_t>();
+  EXPECT_TRUE(intResult.has_value());
+  EXPECT_EQ(intResult.value(), 42);
+
+  auto bigintVar = Variant(123456789LL);
+  auto bigintResult = bigintVar.maybeValue<int64_t>();
+  EXPECT_TRUE(bigintResult.has_value());
+  EXPECT_EQ(bigintResult.value(), 123456789LL);
+
+  auto stringVar = Variant("hello");
+
+  // test both std::string_view and std::string
+  auto stringViewResult = stringVar.maybeValue<std::string_view>();
+  EXPECT_TRUE(stringViewResult.has_value());
+  EXPECT_EQ(stringViewResult.value(), "hello");
+
+  auto stringResult = stringVar.maybeValue<std::string>();
+  EXPECT_TRUE(stringResult.has_value());
+  EXPECT_EQ(stringResult.value().get(), "hello");
+
+  // Verify that std::string returns a reference wrapper, not a copy
+  static_assert(std::is_same_v<
+                decltype(stringResult),
+                std::optional<std::reference_wrapper<const std::string>>>);
+
+  // Verify that the reference points to the same memory
+  EXPECT_EQ(&stringVar.value<std::string>(), &stringResult.value().get());
+}
+
 } // namespace
 } // namespace facebook::velox
