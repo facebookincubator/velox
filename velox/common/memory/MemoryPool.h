@@ -1009,9 +1009,20 @@ class MemoryPoolImpl : public MemoryPool {
   // pool is enabled.
   void leakCheckDbg();
 
+  // Recursively collects allocation records from this memory pool and all its
+  // descendants in the tree, appending the formatted debug information to the
+  // output stream.
+  void treeAllocationRecordsDbg(std::stringstream& out) const;
+
+  // Wraps the message of a memory capacity exceeded exception with debug
+  // allocation records from all memory pools in the subtree. This function is
+  // called from the root memory pool.
+  std::exception_ptr wrapExceptionDbg(
+      const VeloxRuntimeError& veloxError) const;
+
   // Dump the recorded call sites of the memory allocations in
   // 'debugAllocRecords_' to the string.
-  std::string dumpRecordsDbg();
+  std::string dumpRecordsDbg() const;
 
   void handleAllocationFailure(const std::string& failureMessage);
 
@@ -1076,7 +1087,7 @@ class MemoryPoolImpl : public MemoryPool {
   std::atomic_uint64_t numCapacityGrowths_{0};
 
   // Mutex for 'debugAllocRecords_'.
-  std::mutex debugAllocMutex_;
+  mutable std::mutex debugAllocMutex_;
 
   // Map from address to 'AllocationRecord'.
   std::unordered_map<uint64_t, AllocationRecord> debugAllocRecords_;
