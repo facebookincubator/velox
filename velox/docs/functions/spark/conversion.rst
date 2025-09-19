@@ -132,7 +132,7 @@ Valid examples
   SELECT cast(cast(2147483648.90 as DECIMAL(12, 2)) as bigint); -- 2147483648
 
 From timestamp
-^^^^^^^^^^^^^
+^^^^^^^^^^^^^^
 
 Casting timestamp as integral types returns the number of seconds by converting timestamp as microseconds, dividing by the number of microseconds in a second, and then rounding down to the nearest second since the epoch (1970-01-01 00:00:00 UTC).
 
