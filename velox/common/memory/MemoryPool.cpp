@@ -881,9 +881,16 @@ void MemoryPoolImpl::growCapacity(MemoryPool* requestor, uint64_t size) {
   VELOX_CHECK(requestor->isLeaf());
   ++numCapacityGrowths_;
 
-  {
+  try {
     MemoryPoolArbitrationSection arbitrationSection(requestor);
     arbitrator_->growCapacity(this, size);
+  } catch (const VeloxRuntimeError& veloxError) {
+    if (FOLLY_UNLIKELY(
+            debugEnabled() &&
+            veloxError.errorCode() == error_code::kMemCapExceeded)) {
+      std::rethrow_exception(wrapExceptionDbg(veloxError));
+    }
+    throw;
   }
   // The memory pool might have been aborted during the time it leaves the
   // arbitration no matter the arbitration succeed or not.
@@ -1314,7 +1321,48 @@ void MemoryPoolImpl::leakCheckDbg() {
       dumpRecordsDbg()));
 }
 
-std::string MemoryPoolImpl::dumpRecordsDbg() {
+void MemoryPoolImpl::treeAllocationRecordsDbg(std::stringstream& out) const {
+  VELOX_CHECK(debugEnabled());
+  {
+    std::lock_guard<std::mutex> debugAllocLock(debugAllocMutex_);
+    if (!debugAllocRecords_.empty()) {
+      out << fmt::format("Memory pool '{}' - {}\n\n", name(), dumpRecordsDbg());
+    }
+  }
+  visitChildren([&out](MemoryPool* pool) {
+    toImpl(pool)->treeAllocationRecordsDbg(out);
+    return true;
+  });
+}
+
+std::exception_ptr MemoryPoolImpl::wrapExceptionDbg(
+    const VeloxRuntimeError& veloxError) const {
+  VELOX_CHECK(debugEnabled());
+  std::stringstream allocRecordsStream;
+  treeAllocationRecordsDbg(allocRecordsStream);
+  auto allocRecordsStr = allocRecordsStream.str();
+  if (allocRecordsStr.empty()) {
+    allocRecordsStr = "No allocation records found.";
+  }
+  const auto wrappedMessage = fmt::format(
+      "{}\n\n"
+      "======= Current Allocations ======\n"
+      "{}",
+      veloxError.message(),
+      std::move(allocRecordsStr));
+  return std::make_exception_ptr(VeloxRuntimeError(
+      veloxError.file(),
+      veloxError.line(),
+      veloxError.function(),
+      veloxError.failingExpression(),
+      wrappedMessage,
+      veloxError.errorSource(),
+      veloxError.errorCode(),
+      veloxError.isRetriable(),
+      veloxError.exceptionName()));
+}
+
+std::string MemoryPoolImpl::dumpRecordsDbg() const {
   VELOX_CHECK(debugEnabled());
   std::stringstream oss;
   oss << fmt::format("Found {} allocations:\n", debugAllocRecords_.size());
