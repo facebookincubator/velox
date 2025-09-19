@@ -16,6 +16,7 @@
 
 #include "velox/functions/sparksql/specialforms/SparkCastHooks.h"
 #include "velox/functions/lib/string/StringImpl.h"
+#include "velox/functions/sparksql/DecimalUtil.h"
 #include "velox/type/TimestampConversion.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
@@ -131,5 +132,23 @@ exec::PolicyType SparkCastHooks::getPolicy() const {
     return exec::PolicyType::SparkTryCastPolicy;
   }
   return exec::PolicyType::SparkCastPolicy;
+}
+
+size_t SparkCastHooks::applyCastFromDecimalToString(
+    int64_t unscaledValue,
+    int32_t scale,
+    int32_t maxSize,
+    char* const startPosition) const {
+  return DecimalUtil::castToString(
+      unscaledValue, scale, maxSize, startPosition);
+}
+
+size_t SparkCastHooks::applyCastFromDecimalToString(
+    int128_t unscaledValue,
+    int32_t scale,
+    int32_t maxSize,
+    char* const startPosition) const {
+  return DecimalUtil::castToString(
+      unscaledValue, scale, maxSize, startPosition);
 }
 } // namespace facebook::velox::functions::sparksql
