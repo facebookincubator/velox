@@ -35,9 +35,6 @@ std::string stripFilePrefix(const std::string& targetPath) {
 
 std::string CudfHiveConnectorSplit::toString() const {
   return fmt::format("CudfHive: {}", filePath);
-
-std::string ParquetConnectorSplit::toString() const {
-  return fmt::format("Parquet: {}", filePath);
 }
 
 std::string CudfHiveConnectorSplit::getFileName() const {

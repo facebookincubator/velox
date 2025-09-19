@@ -28,7 +28,6 @@ DECLARE_bool(velox_cudf_debug);
 namespace facebook::velox::cudf_velox {
 
 static const std::string kCudfAdapterName = "cuDF";
-static const std::string kCudfParquetConnectorId = "test-parquet";
 
 // QueryConfig key. Enable or disable cudf in task level.
 static const std::string kCudfEnabled = "cudf.enabled";
