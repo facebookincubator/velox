@@ -1082,4 +1082,31 @@ struct TimestampAddFunction {
   std::optional<DateTimeUnit> unit_ = std::nullopt;
 };
 
+template <typename T>
+struct MonthsBetweenFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const arg_type<Timestamp>* /*timestamp1*/,
+      const arg_type<Timestamp>* /*timestamp2*/,
+      const arg_type<bool>* /*roundOff*/) {
+    sessionTimeZone_ = getTimeZoneFromConfig(config);
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<double>& result,
+      const arg_type<Timestamp>& timestamp1,
+      const arg_type<Timestamp>& timestamp2,
+      const arg_type<bool>& roundOff) {
+    const auto dateTime1 = getDateTime(timestamp1, sessionTimeZone_);
+    const auto dateTime2 = getDateTime(timestamp2, sessionTimeZone_);
+    result = monthsBetween(dateTime1, dateTime2, roundOff);
+  }
+
+ private:
+  const tz::TimeZone* sessionTimeZone_ = nullptr;
+};
+
 } // namespace facebook::velox::functions::sparksql

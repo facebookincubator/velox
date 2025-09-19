@@ -1796,5 +1796,41 @@ TEST_F(DateTimeFunctionsTest, timestampadd) {
           10,
           Timestamp(1582970400, 500'999'999) /*2020-02-29 10:00:00.500*/));
 }
+
+TEST_F(DateTimeFunctionsTest, monthsBetween) {
+  const auto monthsBetween = [&](std::optional<Timestamp> timestamp1,
+                                 std::optional<Timestamp> timestamp2,
+                                 std::optional<bool> roundOff) {
+    return evaluateOnce<double>(
+        "months_between(c0, c1, c2)", timestamp1, timestamp2, roundOff);
+  };
+
+  EXPECT_EQ(
+      3.94959677,
+      monthsBetween(
+          parseTimestamp("1997-02-28 10:30:00"),
+          parseTimestamp("1996-10-30"),
+          true));
+  EXPECT_EQ(
+      3.9495967741935485,
+      monthsBetween(
+          parseTimestamp("1997-02-28 10:30:00"),
+          parseTimestamp("1996-10-30"),
+          false));
+  // `timestamp1` and `timestamp2` both are the last day of month.
+  EXPECT_EQ(
+      11,
+      monthsBetween(
+          parseTimestamp("1997-02-28 10:30:00"),
+          parseTimestamp("1996-03-31 11:00:00"),
+          true));
+  // `timestamp1` and `timestamp2` are on the same day of month.
+  EXPECT_EQ(
+      11,
+      monthsBetween(
+          parseTimestamp("1997-02-21 10:30:00"),
+          parseTimestamp("1996-03-21 11:00:00"),
+          true));
+}
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test
