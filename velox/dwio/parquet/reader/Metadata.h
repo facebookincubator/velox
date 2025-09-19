@@ -61,6 +61,13 @@ class ColumnChunkMetaDataPtr {
   /// Must check for its presence using hasDictionaryPageOffset().
   int64_t dictionaryPageOffset() const;
 
+  /// Check if bloom filter is available.
+  bool hasBloomFilter() const;
+
+  /// The bloom filter offset.
+  /// Must check for its presence using hasBloomFilter().
+  std::optional<int64_t> bloom_filter_offset() const;
+
   /// The compression.
   common::CompressionKind compression() const;
 

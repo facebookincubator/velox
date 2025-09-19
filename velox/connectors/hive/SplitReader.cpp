@@ -145,6 +145,31 @@ SplitReader::SplitReader(
 
 void SplitReader::configureReaderOptions(
     std::shared_ptr<velox::random::RandomSkipTracker> randomSkip) {
+  // Log ScanSpec being configured for reader
+  LOG(INFO) << "SplitReader configuring reader options for file: " << hiveSplit_->filePath;
+  if (scanSpec_) {
+    LOG(INFO) << "  ScanSpec hasFilter: " << scanSpec_->hasFilter();
+    // Log individual filters in the ScanSpec
+    std::function<void(const common::ScanSpec*, int)> logFilters =
+        [&](const common::ScanSpec* spec, int depth) {
+      std::string indent(depth * 2, ' ');
+      if (spec->filter()) {
+        LOG(INFO) << indent << "  Filter: " << spec->filter()->toString();
+      }
+      for (int i = 0; i < spec->numMetadataFilters(); ++i) {
+        auto filter = spec->metadataFilterAt(i);
+        LOG(INFO) << indent << "  MetadataFilter " << i << ": " << filter->toString();
+      }
+      for (auto& child : spec->children()) {
+        LOG(INFO) << indent << "Child: " << child->fieldName();
+        logFilters(child.get(), depth + 1);
+      }
+    };
+    logFilters(scanSpec_.get(), 0);
+  } else {
+    LOG(INFO) << "  ScanSpec is null!";
+  }
+
   hive::configureReaderOptions(
       hiveConfig_,
       connectorQueryCtx_,
@@ -219,6 +244,13 @@ uint64_t SplitReader::next(uint64_t size, VectorPtr& output) {
     mutation.randomSkip = baseReaderOpts_.randomSkip().get();
     numScanned = baseRowReader_->next(size, output, &mutation);
   }
+  // Log the raw input vs output rows for rawInputPositions debugging
+  uint64_t outputRows = output ? output->size() : 0;
+  LOG(INFO) << "SplitReader::next - File: " << (hiveSplit_ ? hiveSplit_->filePath : "unknown")
+            << ", numScanned (raw input): " << numScanned
+            << ", outputRows (after filtering): " << outputRows
+            << ", requested size: " << size;
+
   if (numScanned > 0 && output->size() > 0 && partitionFunction_) {
     applyBucketConversion(
         output, bucketConversionRows(*output->asChecked<RowVector>()));
@@ -371,6 +403,16 @@ void SplitReader::createRowReader(
     RowTypePtr rowType,
     std::optional<bool> rowSizeTrackingEnabled) {
   VELOX_CHECK_NULL(baseRowReader_);
+
+  // Log row reader options configuration
+  LOG(INFO) << "SplitReader creating row reader for file: " << hiveSplit_->filePath;
+  if (scanSpec_) {
+    LOG(INFO) << "  Configuring with ScanSpec hasFilter: " << scanSpec_->hasFilter();
+  }
+  if (metadataFilter) {
+    LOG(INFO) << "  MetadataFilter provided";
+  }
+
   configureRowReaderOptions(
       hiveTableHandle_->tableParameters(),
       scanSpec_,
@@ -380,11 +422,17 @@ void SplitReader::createRowReader(
       hiveConfig_,
       connectorQueryCtx_->sessionProperties(),
       baseRowReaderOpts_);
+<<<<<<< HEAD
   baseRowReaderOpts_.setTrackRowSize(
       rowSizeTrackingEnabled.has_value()
           ? *rowSizeTrackingEnabled
           : connectorQueryCtx_->rowSizeTrackingEnabled());
+=======
+
+  LOG(INFO) << "  Creating row reader with configured options";
+>>>>>>> 20c7dd067 (feat: support parquet dictionary filter based rowgroup skipping)
   baseRowReader_ = baseReader_->createRowReader(baseRowReaderOpts_);
+  LOG(INFO) << "  Row reader created successfully";
 }
 
 std::vector<TypePtr> SplitReader::adaptColumns(

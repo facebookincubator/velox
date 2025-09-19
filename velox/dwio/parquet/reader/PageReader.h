@@ -149,6 +149,28 @@ class PageReader {
     return sessionTimezone_;
   }
 
+  // Access the loaded dictionary for filtering purposes
+  const dwio::common::DictionaryValues& dictionary() const {
+    return dictionary_;
+  }
+
+  // Starts iterating over 'rows', which may span multiple pages. 'rows' are
+  // relative to current position, with 0 meaning the first
+  // unprocessed value in the current page, i.e. the row after the
+  // last row touched on a previous call to skip() or
+  // readWithVisitor(). This is the first row of the first data page
+  // if first call.
+  void startVisit(folly::Range<const vector_size_t*> rows);
+
+  // Seeks to page containing 'row'. Returns the number of rows to skip on
+  // the page to get to 'row'.  Clears the state and positions the stream and
+  // initializes a decoder for the found page. row kRepDefOnly means
+  // getting repdefs for the next page. If non-top level column, 'row'
+  // is interpreted in terms of leaf rows, including leaf
+  // nulls. Seeking ahead of pages covered by decodeRepDefs is not
+  // allowed for non-top level columns.
+  void seekToPage(int64_t row);
+
  private:
   // Indicates that we only want the repdefs for the next page. Used when
   // prereading repdefs with seekToPage.
@@ -173,15 +195,6 @@ class PageReader {
   // Makes a decoder based on 'encoding_' for bytes from ''pageData_' to
   // 'pageData_' + 'encodedDataSize_'.
   void makedecoder();
-
-  // Reads and skips pages until finding a data page that contains
-  // 'row'. Reads and sets 'rowOfPage_' and 'numRowsInPage_' and
-  // initializes a decoder for the found page. row kRepDefOnly means
-  // getting repdefs for the next page. If non-top level column, 'row'
-  // is interpreted in terms of leaf rows, including leaf
-  // nulls. Seeking ahead of pages covered by decodeRepDefs is not
-  // allowed for non-top level columns.
-  void seekToPage(int64_t row);
 
   // Preloads the repdefs for the column chunk. To avoid preloading,
   // would need a way too clone the input stream so that one stream
@@ -230,14 +243,6 @@ class PageReader {
     return data;
   }
 
-  // Starts iterating over 'rows', which may span multiple pages. 'rows' are
-  // relative to current position, with 0 meaning the first
-  // unprocessed value in the current page, i.e. the row after the
-  // last row touched on a previous call to skip() or
-  // readWithVisitor(). This is the first row of the first data page
-  // if first call.
-  void startVisit(folly::Range<const vector_size_t*> rows);
-
   // Seeks to the next page in a range given by startVisit().  Returns
   // true if there are unprocessed rows in the set given to
   // startVisit(). Seeks 'this' to the appropriate page and sets
@@ -275,6 +280,7 @@ class PageReader {
           (this->type_->type()->isShortDecimal() ? isDictionary() : true);
 
       if (isDictionary()) {
+        LOG(INFO) << "PageReader: Using DictionaryColumnVisitor for row filtering (with nulls) - RowGroup:" << rowGroupIndex_ << " PageOrdinal:" << pageOrdinal_ << " PageIndex:" << pageIndex_;
         auto dictVisitor = visitor.toDictionaryColumnVisitor();
         dictionaryIdDecoder_->readWithVisitor<true>(nulls, dictVisitor);
       } else if (encoding_ == thrift::Encoding::DELTA_BINARY_PACKED) {
@@ -286,6 +292,7 @@ class PageReader {
       }
     } else {
       if (isDictionary()) {
+        LOG(INFO) << "PageReader: Using DictionaryColumnVisitor for row filtering (without nulls) - RowGroup:" << rowGroupIndex_ << " PageOrdinal:" << pageOrdinal_ << " PageIndex:" << pageIndex_;
         auto dictVisitor = visitor.toDictionaryColumnVisitor();
         dictionaryIdDecoder_->readWithVisitor<false>(nullptr, dictVisitor);
       } else if (encoding_ == thrift::Encoding::DELTA_BINARY_PACKED) {
@@ -306,6 +313,7 @@ class PageReader {
   callDecoder(const uint64_t* nulls, bool& nullsFromFastPath, Visitor visitor) {
     if (nulls) {
       if (isDictionary()) {
+        // LOG(INFO) << "PageReader: Using StringDictionaryColumnVisitor for row filtering (with nulls) - RowGroup:" << rowGroupIndex_ << " PageOrdinal:" << pageOrdinal_ << " PageIndex:" << pageIndex_;
         nullsFromFastPath = dwio::common::useFastPath<Visitor, true>(visitor);
         auto dictVisitor = visitor.toStringDictionaryColumnVisitor();
         dictionaryIdDecoder_->readWithVisitor<true>(nulls, dictVisitor);
@@ -318,6 +326,7 @@ class PageReader {
       }
     } else {
       if (isDictionary()) {
+        LOG(INFO) << "PageReader: Using StringDictionaryColumnVisitor for row filtering (without nulls) - RowGroup:" << rowGroupIndex_ << " PageOrdinal:" << pageOrdinal_ << " PageIndex:" << pageIndex_;
         auto dictVisitor = visitor.toStringDictionaryColumnVisitor();
         dictionaryIdDecoder_->readWithVisitor<false>(nullptr, dictVisitor);
       } else if (encoding_ == thrift::Encoding::DELTA_BYTE_ARRAY) {

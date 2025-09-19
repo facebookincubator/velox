@@ -117,7 +117,18 @@ HiveTableHandle::HiveTableHandle(
       subfieldFilters_(std::move(subfieldFilters)),
       remainingFilter_(remainingFilter),
       dataColumns_(dataColumns),
-      tableParameters_(tableParameters) {}
+      tableParameters_(tableParameters) {
+  // Log domains/filters received from coordinator
+  LOG(INFO) << "HiveTableHandle created for table: " << tableName_
+            << ", filterPushdownEnabled: " << filterPushdownEnabled_
+            << ", subfieldFilters count: " << subfieldFilters_.size();
+  for (const auto& [subfield, filter] : subfieldFilters_) {
+    LOG(INFO) << "  SubfieldFilter: " << subfield.toString() << " -> " << filter->toString();
+  }
+  if (remainingFilter_) {
+    LOG(INFO) << "  RemainingFilter: " << remainingFilter_->toString();
+  }
+}
 
 std::string HiveTableHandle::toString() const {
   std::stringstream out;

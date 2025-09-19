@@ -530,6 +530,42 @@ void PageReader::makeFilterCache(dwio::common::ScanState& state) {
       dwio::common::FilterResult::kUnknown,
       state.filterCache.size());
   state.rawState.filterCache = state.filterCache.data();
+
+  // Debug: Log dictionary filter cache creation with context
+  LOG(INFO) << "PageReader::makeFilterCache - Created filter cache for dictionary with "
+            << state.dictionary.numValues << " values (RowGroup: " << rowOfPage_ / 10000
+            << ", Page offset: " << rowOfPage_ << ")";
+  if (state.dictionary.values && state.dictionary.numValues > 0) {
+    // For string dictionaries, log some sample values
+    if (type_->type()->isVarchar() && state.dictionary.strings) {
+      auto stringViews = state.dictionary.values->as<StringView>();
+      LOG(INFO) << "  Dictionary sample values:";
+      int samplesToShow = std::min(5, state.dictionary.numValues);
+      for (int i = 0; i < samplesToShow; ++i) {
+        LOG(INFO) << "    [" << i << "]: '" << stringViews[i].getString() << "'";
+      }
+      if (state.dictionary.numValues > 5) {
+        LOG(INFO) << "    ... and " << (state.dictionary.numValues - 5) << " more values";
+      }
+
+      // Search for the target value in the dictionary
+      std::string targetValue = "preview_expansion_global_split_final";
+      bool found = false;
+      int foundIndex = -1;
+      for (int i = 0; i < state.dictionary.numValues; ++i) {
+        if (stringViews[i].getString() == targetValue) {
+          found = true;
+          foundIndex = i;
+          break;
+        }
+      }
+      if (found) {
+        LOG(INFO) << "  TARGET VALUE FOUND: '" << targetValue << "' at dictionary index " << foundIndex;
+      } else {
+        LOG(INFO) << "  TARGET VALUE NOT FOUND: '" << targetValue << "' is not in this dictionary";
+      }
+    }
+  }
 }
 
 namespace {
@@ -887,6 +923,10 @@ PageReader::readNulls(int32_t numValues, BufferPtr& buffer) {
 }
 
 void PageReader::startVisit(folly::Range<const vector_size_t*> rows) {
+  // LOG(INFO) << "🚀 PageReader::startVisit called with " << rows.size() << " rows";
+  // if (rows.size() > 0) {
+  //   LOG(INFO) << "  First row: " << rows[0] << ", Last row: " << rows[rows.size()-1];
+  // }
   visitorRows_ = rows.data();
   numVisitorRows_ = rows.size();
   currentVisitorRow_ = 0;
@@ -900,7 +940,18 @@ bool PageReader::rowsForPage(
     bool mayProduceNulls,
     folly::Range<const vector_size_t*>& rows,
     const uint64_t* FOLLY_NULLABLE& nulls) {
+  // LOG(INFO) << "PageReader::rowsForPage - Page at offset " << rowOfPage_
+  //           << ", rows in page: " << numRowsInPage_
+  //           << ", hasFilter: " << hasFilter
+  //           << ", isDictionary: " << isDictionary();
+
+  // LOG(INFO) << "🔍 rowsForPage: currentVisitorRow_=" << currentVisitorRow_
+  //           << ", numVisitorRows_=" << numVisitorRows_
+  //           << ", visitBase_=" << visitBase_
+  //           << ", rowOfPage_=" << rowOfPage_
+  //           << ", numRowsInPage_=" << numRowsInPage_;
   if (currentVisitorRow_ == numVisitorRows_) {
+    // LOG(INFO) << "  No more visitor rows - returning false";
     return false;
   }
   int32_t numToVisit;
@@ -915,14 +966,22 @@ bool PageReader::rowsForPage(
   }
   auto& scanState = reader.scanState();
   if (isDictionary()) {
+    // LOG(INFO) << "  Page is DICTIONARY-ENCODED";
     if (scanState.dictionary.values != dictionary_.values) {
+      // LOG(INFO) << "  New dictionary detected - updating scan state";
       scanState.dictionary = dictionary_;
       if (hasFilter) {
+        // LOG(INFO) << "  Filter present - creating filter cache";
         makeFilterCache(scanState);
+      } else {
+        // LOG(INFO) << "  No filter - skipping filter cache creation";
       }
       scanState.updateRawState();
+    } else {
+      // LOG(INFO) << "  Same dictionary as previous page - reusing existing cache";
     }
   } else {
+    // LOG(INFO) << "  Page is NOT dictionary-encoded (plain encoding)";
     if (scanState.dictionary.values) {
       // If there are previous pages in the current read, nulls read
       // from them are in 'nullConcatenation_' Put this into the

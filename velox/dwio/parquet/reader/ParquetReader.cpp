@@ -16,6 +16,13 @@
 
 #include "velox/dwio/parquet/reader/ParquetReader.h"
 
+<<<<<<< HEAD
+=======
+#include <boost/algorithm/string.hpp>
+#include <glog/logging.h>
+#include <unordered_map>
+#include <thrift/TApplicationException.h>
+>>>>>>> 20c7dd067 (feat: support parquet dictionary filter based rowgroup skipping)
 #include <thrift/protocol/TCompactProtocol.h> //@manual
 
 #include "velox/dwio/parquet/reader/ParquetColumnReader.h"
@@ -1205,8 +1212,34 @@ class ParquetRowReader::Impl {
         readerBase_->fileMetaData(),
         readerBase->sessionTimezone(),
         options_.timestampPrecision());
+        readerBase_->sessionTimezone(),
+        options_.timestampPrecision(),
+        &readerBase_->bufferedInput());
     requestedType_ = options_.requestedType() ? options_.requestedType()
                                               : readerBase_->schema();
+
+    // Log ScanSpec filters received in Parquet reader
+    const auto& scanSpec = *options_.scanSpec();
+    LOG(INFO) << "ParquetRowReader received ScanSpec with hasFilter: " << scanSpec.hasFilter() << " for file: "
+              << readerBase_->bufferedInput().getReadFile()->getName();
+
+    std::function<void(const common::ScanSpec*, int)> logScanSpecFilters =
+        [&](const common::ScanSpec* spec, int depth) {
+      std::string indent(depth * 2, ' ');
+      LOG(INFO) << indent << "ScanSpec node: " << spec->fieldName() << " (hasFilter: " << spec->hasFilter() << ")";
+      if (spec->filter()) {
+        LOG(INFO) << indent << "  Filter: " << spec->filter()->toString();
+      }
+      for (int i = 0; i < spec->numMetadataFilters(); ++i) {
+        auto filter = spec->metadataFilterAt(i);
+        LOG(INFO) << indent << "  MetadataFilter " << i << ": " << filter->toString();
+      }
+      for (auto& child : spec->children()) {
+        logScanSpecFilters(child.get(), depth + 1);
+      }
+    };
+    logScanSpecFilters(&scanSpec, 0);
+
     columnReader_ = ParquetColumnReader::build(
         columnReaderOptions_,
         requestedType_,
@@ -1228,12 +1261,22 @@ class ParquetRowReader::Impl {
   }
 
   void filterRowGroups() {
+    LOG(INFO) << "ParquetRowReader filtering " << rowGroups_.size() << " row groups";
+
     rowGroupIds_.reserve(rowGroups_.size());
     firstRowOfRowGroup_.reserve(rowGroups_.size());
 
+    // Use regular row group filtering for now
+    // Dictionary-based filtering will be handled when dictionaries are naturally loaded during page reading
     ParquetData::FilterRowGroupsResult res;
     columnReader_->filterRowGroups(0, parquetStatsContext_, res);
+
+    LOG(INFO) << "  Column reader filtering completed, totalCount: " << res.totalCount;
+    LOG(INFO) << "  Filter result size: " << res.filterResult.size() << " words";
+    LOG(INFO) << "  Metadata filter results: " << res.metadataFilterResults.size();
+
     if (auto& metadataFilter = options_.metadataFilter()) {
+      LOG(INFO) << "  Applying metadata filter";
       metadataFilter->eval(res.metadataFilterResults, res.filterResult);
     }
 
@@ -1252,6 +1295,10 @@ class ParquetRowReader::Impl {
       auto isExcluded =
           (i < res.totalCount && bits::isBitSet(res.filterResult.data(), i));
       auto isEmpty = rowGroups_[i].num_rows == 0;
+
+      LOG(INFO) << "  RowGroup " << i << ": inRange=" << rowGroupInRange
+                << ", excluded=" << isExcluded << ", empty=" << isEmpty
+                << ", rows=" << rowGroups_[i].num_rows;
 
       // Add a row group to read if it is within range and not empty and not in
       // the excluded list.

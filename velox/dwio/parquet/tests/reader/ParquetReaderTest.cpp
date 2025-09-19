@@ -1756,4 +1756,297 @@ TEST_F(ParquetReaderTest, fileColumnVarcharToMetadataColumnMismatchTest) {
   for (const auto& type : types) {
     runVarcharColTest(type);
   }
+
+TEST_F(ParquetReaderTest, rowGroupFilteringReproduction) {
+  // Test for row group filtering issue reproduction
+  // Using production Parquet file to debug rawInputPositions metric
+
+  std::string filePath = "/home/user/fecc17ec-903d-47e5-b72e-63834d5b9e76-0_1086-2-19006_20250907002045338.parquet";
+
+  // Check if file exists, skip test if not available
+  std::ifstream file(filePath);
+  if (!file.good()) {
+    GTEST_SKIP() << "Production Parquet file not found: " << filePath;
+    return;
+  }
+
+  std::cout << "=== Row Group Filtering Reproduction Test ===" << std::endl;
+  std::cout << "File: " << filePath << std::endl;
+
+  // Create reader using the same pattern as other tests
+  dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+  auto reader = createReader(filePath, readerOptions);
+
+  auto numRows = reader->numberOfRows();
+  std::cout << "File has " << (numRows ? std::to_string(*numRows) : "unknown") << " total rows" << std::endl;
+
+  // Get the actual schema from the file
+  auto fileSchema = reader->typeWithId()->type();
+  std::cout << "File schema: " << fileSchema->toString() << std::endl;
+
+  // Cast to RowType for makeScanSpec
+  auto rowType = std::dynamic_pointer_cast<const RowType>(fileSchema);
+  if (!rowType) {
+    GTEST_SKIP() << "File schema is not a RowType: " << fileSchema->toString();
+    return;
+  }
+
+  // Create scan spec from the full file schema but only project msg.experiment_key
+  auto scanSpec = std::make_shared<common::ScanSpec>("<root>");
+
+  // Only add the msg.experiment_key path - this focuses the processing
+  auto* msgSpec = scanSpec->getOrCreateChild(common::Subfield("msg"));
+  auto* experimentKeySpec = msgSpec->getOrCreateChild(common::Subfield("experiment_key"));
+
+  // Create BytesRange filter to match production log: BytesRange: [preview_expansion_global_split_final, preview_expansion_global_split_final] no nulls
+  experimentKeySpec->setFilter(std::make_unique<common::BytesRange>(
+      "preview_expansion_global_split_final", // lower
+      false,                                  // lowerUnbounded
+      false,                                  // lowerExclusive
+      "preview_expansion_global_split_final", // upper
+      false,                                  // upperUnbounded
+      false,                                  // upperExclusive
+      false));                                // nullAllowed
+
+  RowReaderOptions rowReaderOpts;
+  rowReaderOpts.setScanSpec(scanSpec);
+  rowReaderOpts.setRequestedType(rowType);  // Use full file schema
+
+  // Enable verbose logging to see row group filtering details
+  FLAGS_v = 2;
+
+  std::cout << "Creating row reader with experiment_key filter..." << std::endl;
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+
+  // Read data and track metrics
+  VectorPtr result = BaseVector::create(rowType, 0, leafPool_.get());
+  uint64_t totalScanned = 0;
+  uint64_t totalReturned = 0;
+  int batchCount = 0;
+
+  std::cout << "=== Reading with filter ===" << std::endl;
+
+  while (true) {
+    uint64_t scanned = rowReader->next(10000, result);
+    if (scanned == 0) break;
+
+    batchCount++;
+    totalScanned += scanned;
+    totalReturned += result ? result->size() : 0;
+
+    std::cout << "Batch " << batchCount << ": scanned=" << scanned
+              << ", returned=" << (result ? result->size() : 0) << std::endl;
+
+    // Sample first batch results
+    if (result && result->size() > 0 && batchCount == 1) {
+      std::cout << "Sample results from first batch:" << std::endl;
+      std::cout << "  Result vector has " << result->size() << " rows" << std::endl;
+      std::cout << "  Result type: " << result->type()->toString() << std::endl;
+
+      // Try to access the nested experiment_key field
+      try {
+        auto resultRow = result->as<RowVector>();
+        if (resultRow && resultRow->childrenSize() > 1) {
+          auto msgVector = resultRow->childAt(1)->as<RowVector>();
+          if (msgVector && msgVector->childrenSize() > 5) {
+            auto experimentKeyVector = msgVector->childAt(5)->as<SimpleVector<StringView>>();
+            if (experimentKeyVector) {
+              int samplesToCheck = std::min(3, (int)result->size());
+              for (int i = 0; i < samplesToCheck; ++i) {
+                if (!experimentKeyVector->isNullAt(i)) {
+                  std::cout << "  Row " << i << ": experiment_key = '"
+                            << experimentKeyVector->valueAt(i).str() << "'" << std::endl;
+                }
+              }
+            }
+          }
+        }
+      } catch (const std::exception& e) {
+        std::cout << "  Could not access experiment_key field: " << e.what() << std::endl;
+      }
+    }
+
+    // Limit batches for test
+    if (batchCount >= 1000) {
+      std::cout << "Stopping after 1 batches..." << std::endl;
+      break;
+    }
+  }
+
+  std::cout << "=== FINAL RESULTS ===" << std::endl;
+  std::cout << "Total scanned (rawInputPositions equivalent): " << totalScanned << std::endl;
+  std::cout << "Total returned: " << totalReturned << std::endl;
+
+  if (totalScanned > 0) {
+    double efficiency = (totalReturned * 100.0) / totalScanned;
+    std::cout << "Filter efficiency: " << efficiency << "%" << std::endl;
+
+    // Analyze the results
+    if (totalScanned > 1000000) {  // 1M+ suggests poor row group filtering
+      std::cout << "⚠ WARNING: High scan count (" << totalScanned
+                << ") suggests row group filtering may not be working effectively!" << std::endl;
+      std::cout << "  This reproduces the 1.1T rawInputPositions issue you observed." << std::endl;
+    } else {
+      std::cout << "✓ Scan count suggests row group filtering is working properly." << std::endl;
+    }
+
+    if (efficiency < 1.0) {
+      std::cout << "⚠ Low efficiency (" << efficiency
+                << "%) indicates most scanned rows were filtered out." << std::endl;
+    }
+  }
+
+  std::cout << "=== Check logs above for ParquetData::filterRowGroups details ===" << std::endl;
+  std::cout << "Look for 'RowGroup X passed all filters' vs 'RowGroup X filtered out'" << std::endl;
+
+  // ENFORCE EXPECTED BEHAVIOR - FAIL TEST IF ROW GROUP FILTERING ISN'T WORKING
+  EXPECT_EQ(totalScanned, 7354138) << "Row group filtering should scan exactly 7354138 rows for preview_expansion_global_split_final filter. "
+                                   << "If this fails, row group filtering is not working correctly!";
+}
+
+TEST_F(ParquetReaderTest, rowGroupFilteringReproductionAllColumns) {
+  // Test for row group filtering issue reproduction - scan all columns
+  // Using production Parquet file to debug rawInputPositions metric
+
+  std::string filePath = "/home/user/fecc17ec-903d-47e5-b72e-63834d5b9e76-0_1086-2-19006_20250907002045338.parquet";
+
+  // Check if file exists, skip test if not available
+  std::ifstream file(filePath);
+  if (!file.good()) {
+    GTEST_SKIP() << "Production Parquet file not found: " << filePath;
+    return;
+  }
+
+  std::cout << "=== Row Group Filtering Reproduction Test (All Columns) ===" << std::endl;
+  std::cout << "File: " << filePath << std::endl;
+
+  // Create reader using the same pattern as other tests
+  dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+  auto reader = createReader(filePath, readerOptions);
+
+  auto numRows = reader->numberOfRows();
+  std::cout << "File has " << (numRows ? std::to_string(*numRows) : "unknown") << " total rows" << std::endl;
+
+  // Get the actual schema from the file
+  auto fileSchema = reader->typeWithId()->type();
+  std::cout << "File schema: " << fileSchema->toString() << std::endl;
+
+  // Cast to RowType for makeScanSpec
+  auto rowType = std::dynamic_pointer_cast<const RowType>(fileSchema);
+  if (!rowType) {
+    GTEST_SKIP() << "File schema is not a RowType: " << fileSchema->toString();
+    return;
+  }
+
+  // Create scan spec from the full file schema to scan all columns
+  auto scanSpec = makeScanSpec(rowType);
+
+  // Add filter to the msg.experiment_key path
+  auto* msgSpec = scanSpec->getOrCreateChild(common::Subfield("msg"));
+  auto* experimentKeySpec = msgSpec->getOrCreateChild(common::Subfield("experiment_key"));
+
+  // Create BytesRange filter to match production log: BytesRange: [preview_expansion_global_split_final, preview_expansion_global_split_final] no nulls
+  experimentKeySpec->setFilter(std::make_unique<common::BytesRange>(
+      "temp_val", // lower
+      false,                                  // lowerUnbounded
+      false,                                  // lowerExclusive
+      "temp_val", // upper
+      false,                                  // upperUnbounded
+      false,                                  // upperExclusive
+      false));                                // nullAllowed
+
+  RowReaderOptions rowReaderOpts;
+  rowReaderOpts.setScanSpec(scanSpec);
+  rowReaderOpts.setRequestedType(rowType);  // Use full file schema
+
+  // Enable verbose logging to see row group filtering details
+  FLAGS_v = 2;
+
+  std::cout << "Creating row reader with experiment_key filter..." << std::endl;
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+
+  // Read data and track metrics
+  VectorPtr result = BaseVector::create(rowType, 0, leafPool_.get());
+  uint64_t totalScanned = 0;
+  uint64_t totalReturned = 0;
+  int batchCount = 0;
+
+  std::cout << "=== Reading with filter ===" << std::endl;
+
+  while (true) {
+    uint64_t scanned = rowReader->next(10000, result);
+    if (scanned == 0) break;
+
+    batchCount++;
+    totalScanned += scanned;
+    totalReturned += result ? result->size() : 0;
+
+    std::cout << "Batch " << batchCount << ": scanned=" << scanned
+              << ", returned=" << (result ? result->size() : 0) << std::endl;
+
+    // Sample first batch results
+    if (result && result->size() > 0 && batchCount == 1) {
+      std::cout << "Sample results from first batch:" << std::endl;
+      std::cout << "  Result vector has " << result->size() << " rows" << std::endl;
+      std::cout << "  Result type: " << result->type()->toString() << std::endl;
+
+      // Try to access the nested experiment_key field
+      try {
+        auto resultRow = result->as<RowVector>();
+        if (resultRow && resultRow->childrenSize() > 1) {
+          auto msgVector = resultRow->childAt(1)->as<RowVector>();
+          if (msgVector && msgVector->childrenSize() > 5) {
+            auto experimentKeyVector = msgVector->childAt(5)->as<SimpleVector<StringView>>();
+            if (experimentKeyVector) {
+              int samplesToCheck = std::min(3, (int)result->size());
+              for (int i = 0; i < samplesToCheck; ++i) {
+                if (!experimentKeyVector->isNullAt(i)) {
+                  std::cout << "  Row " << i << ": experiment_key = '"
+                            << experimentKeyVector->valueAt(i).str() << "'" << std::endl;
+                }
+              }
+            }
+          }
+        }
+      } catch (const std::exception& e) {
+        std::cout << "  Could not access experiment_key field: " << e.what() << std::endl;
+      }
+    }
+
+    // Limit batches for test
+    if (batchCount >= 1000) {
+      std::cout << "Stopping after 1 batches..." << std::endl;
+      break;
+    }
+  }
+
+  std::cout << "=== FINAL RESULTS ===" << std::endl;
+  std::cout << "Total scanned (rawInputPositions equivalent): " << totalScanned << std::endl;
+  std::cout << "Total returned: " << totalReturned << std::endl;
+
+  if (totalScanned > 0) {
+    double efficiency = (totalReturned * 100.0) / totalScanned;
+    std::cout << "Filter efficiency: " << efficiency << "%" << std::endl;
+
+    // Analyze the results
+    if (totalScanned > 1000000) {  // 1M+ suggests poor row group filtering
+      std::cout << "⚠ WARNING: High scan count (" << totalScanned
+                << ") suggests row group filtering may not be working effectively!" << std::endl;
+      std::cout << "  This reproduces the 1.1T rawInputPositions issue you observed." << std::endl;
+    } else {
+      std::cout << "✓ Scan count suggests row group filtering is working properly." << std::endl;
+    }
+
+    if (efficiency < 1.0) {
+      std::cout << "⚠ Low efficiency (" << efficiency
+                << "%) indicates most scanned rows were filtered out." << std::endl;
+    }
+  }
+
+  std::cout << "=== Check logs above for ParquetData::filterRowGroups details ===" << std::endl;
+  std::cout << "Look for 'RowGroup X passed all filters' vs 'RowGroup X filtered out'" << std::endl;
+
+  // ENFORCE EXPECTED BEHAVIOR - FAIL TEST IF ROW GROUP FILTERING ISN'T WORKING
+  EXPECT_EQ(totalScanned, 0) << "Row group filtering should scan exactly 0 rows for temp_val filter (no matches expected). "
+                             << "If this fails, row group filtering is not working correctly!";
 }

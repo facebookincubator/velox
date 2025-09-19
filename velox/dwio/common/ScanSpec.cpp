@@ -300,6 +300,14 @@ bool testStringFilter(
       stringStats->getMaximum().has_value()) {
     const auto& min = stringStats->getMinimum().value();
     const auto& max = stringStats->getMaximum().value();
+
+    // Enhanced filtering for equality filters (BytesValues)
+    if (filter->kind() == common::FilterKind::kBytesValues) {
+      // For equality filters, we can be more aggressive with lexicographic comparison
+      // TODO: Extract actual target value from filter for precise comparison
+      // For now, use the standard testBytesRange logic
+    }
+
     return filter->testBytesRange(min, max, mayHaveNull);
   }
 

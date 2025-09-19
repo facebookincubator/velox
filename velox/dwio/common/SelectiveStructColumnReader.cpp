@@ -411,12 +411,15 @@ void SelectiveStructColumnReaderBase::read(
   // A struct reader may have a null/non-null filter
   if (scanSpec_->filter()) {
     const auto kind = scanSpec_->filter()->kind();
+    // LOG(INFO) << "  Applying struct filter: " << scanSpec_->filter()->toString();
     VELOX_CHECK(
         kind == velox::common::FilterKind::kIsNull ||
         kind == velox::common::FilterKind::kIsNotNull);
     filterNulls<int32_t>(
         activeRows, kind == velox::common::FilterKind::kIsNull, false);
+    // LOG(INFO) << "  After struct filtering - Output rows: " << outputRows_.size();
     if (outputRows_.empty()) {
+      // LOG(INFO) << "  All rows filtered out by struct filter";
       recordParentNullsInChildren(offset, rows);
       lazyVectorReadOffset_ = offset;
       readOffset_ = offset + rows.back() + 1;
@@ -427,9 +430,15 @@ void SelectiveStructColumnReaderBase::read(
 
   const auto& childSpecs = scanSpec_->children();
   VELOX_CHECK(!childSpecs.empty());
+  // LOG(INFO) << "  Processing " << childSpecs.size() << " child columns with " << activeRows.size() << " active rows";
+
   for (size_t i = 0; i < childSpecs.size(); ++i) {
     const auto& childSpec = childSpecs[i];
     VELOX_TRACE_HISTORY_PUSH("read %s", childSpec->fieldName().c_str());
+
+    // LOG(INFO) << "    Child[" << i << "]: " << childSpec->fieldName()
+    //           << ", hasFilter: " << (childSpec->hasFilter() ? 1 : 0)
+    //           << ", activeRows: " << activeRows.size();
 
     if (childSpec->deltaUpdate()) {
       // Will make LazyVector.
@@ -438,6 +447,7 @@ void SelectiveStructColumnReaderBase::read(
 
     if (isChildConstant(*childSpec)) {
       if (!testFilterOnConstant(*childSpec)) {
+        // LOG(INFO) << "      Child constant filter failed - filtering out all rows";
         activeRows = {};
         break;
       }
@@ -459,6 +469,7 @@ void SelectiveStructColumnReaderBase::read(
 
     advanceFieldReader(reader, offset);
     if (childSpec->hasFilter()) {
+      // LOG(INFO) << "      Reading child with filter - input rows: " << activeRows.size();
       {
         SelectivityTimer timer(childSpec->selectivity(), activeRows.size());
 
@@ -471,10 +482,13 @@ void SelectiveStructColumnReaderBase::read(
         activeRows = reader->outputRows();
         childSpec->selectivity().addOutput(activeRows.size());
       }
+      // LOG(INFO) << "      After filtering - output rows: " << activeRows.size();
       if (activeRows.empty()) {
+        // LOG(INFO) << "      All rows filtered out - stopping child processing";
         break;
       }
     } else {
+      // LOG(INFO) << "      Reading child without filter - rows: " << activeRows.size();
       reader->read(offset, activeRows, structNulls);
     }
   }

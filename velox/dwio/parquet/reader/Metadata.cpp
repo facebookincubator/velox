@@ -243,6 +243,18 @@ int64_t ColumnChunkMetaDataPtr::dictionaryPageOffset() const {
   return thriftColumnChunkPtr(ptr_)->meta_data.dictionary_page_offset;
 }
 
+bool ColumnChunkMetaDataPtr::hasBloomFilter() const {
+  return hasMetadata() &&
+      thriftColumnChunkPtr(ptr_)->meta_data.__isset.bloom_filter_offset;
+}
+
+std::optional<int64_t> ColumnChunkMetaDataPtr::bloom_filter_offset() const {
+  if (hasBloomFilter()) {
+    return thriftColumnChunkPtr(ptr_)->meta_data.bloom_filter_offset;
+  }
+  return std::nullopt;
+}
+
 common::CompressionKind ColumnChunkMetaDataPtr::compression() const {
   return thriftCodecToCompressionKind(
       thriftColumnChunkPtr(ptr_)->meta_data.codec);
