@@ -52,26 +52,38 @@ struct GetJsonObjectFunction {
     if (!checkJsonPath(jsonPath)) {
       return false;
     }
-    // jsonPath is "$".
-    if (jsonPath.size() == 1) {
-      result.append(json);
-      return true;
-    }
     simdjson::ondemand::document jsonDoc;
     simdjson::padded_string paddedJson(json.data(), json.size());
-    if (simdjsonParseIncomplete(paddedJson).get(jsonDoc)) {
-      return false;
-    }
     const auto formattedJsonPath =
         jsonPath_.has_value() ? jsonPath_.value() : normalizeJsonPath(jsonPath);
+    if (simdjsonParseIncomplete(paddedJson).get(jsonDoc) &&
+        !formattedJsonPath.empty()) {
+      // "$" path allows partial incomplete json.
+      // For any other path, return false on incomplete json.
+      return false;
+    }
     try {
+      // jsonPath is "$".
+      if (formattedJsonPath.empty()) {
+        if (jsonDoc.is_scalar()) {
+          // For scalar value, need to wrap it with a json object to make
+          // simdjson parse it correctly.
+          auto wrappedJson =
+              "{\"k\":" + std::string(json.data(), json.size()) + "}";
+          simdjson::padded_string paddedJson(
+              wrappedJson.data(), wrappedJson.size());
+          simdjsonParse(paddedJson).get(jsonDoc);
+          return extractStringResult(jsonDoc.at_path(".k"), result);
+        }
+        return extractStringResult(jsonDoc.get_value(), result);
+      }
       // Can return error result or throw exception possibly.
       auto rawResult = jsonDoc.at_path(formattedJsonPath);
       if (rawResult.error()) {
         return false;
       }
 
-      if (!extractStringResult(rawResult, result)) {
+      if (!extractStringResult(rawResult.value(), result)) {
         return false;
       }
     } catch (simdjson::simdjson_error&) {
@@ -89,10 +101,7 @@ struct GetJsonObjectFunction {
  private:
   FOLLY_ALWAYS_INLINE bool checkJsonPath(StringView jsonPath) {
     // Spark requires the first char in jsonPath is '$'.
-    if (jsonPath.empty() || jsonPath.data()[0] != '$') {
-      return false;
-    }
-    return true;
+    return !jsonPath.empty() && jsonPath.data()[0] == '$';
   }
 
   // Spark's json path requires field name surrounded by single quotes if it is
@@ -100,8 +109,7 @@ struct GetJsonObjectFunction {
   // such single quotes to adapt to simdjson lib, e.g., converts "['a']['b']" to
   // "[a][b]".
   std::string removeSingleQuotes(StringView jsonPath) {
-    // Skip the initial "$".
-    std::string result(jsonPath.data() + 1, jsonPath.size() - 1);
+    std::string result(jsonPath.data(), jsonPath.size());
     size_t pairEnd = 0;
     while (true) {
       auto pairBegin = result.find("['", pairEnd);
@@ -123,9 +131,10 @@ struct GetJsonObjectFunction {
   // Normalizes the JSON path to be Spark-compatible:
   // - Removes single quotes in bracket notation
   // - Removes spaces after dots (e.g., "$. a" -> "$.a")
+  // - Removes trailing spaces after root symbol (e.g., "$ " -> "$")
   std::string normalizeJsonPath(StringView jsonPath) {
     // First, remove single quotes for bracket notation
-    const std::string& path = removeSingleQuotes(jsonPath);
+    std::string path = removeSingleQuotes(jsonPath);
     if (path == "-1") {
       return path;
     }
@@ -133,21 +142,28 @@ struct GetJsonObjectFunction {
     // Use Boost regex to find and remove spaces after dots
     // Pattern: "dot + one or more spaces" -> "dot"
     static const boost::regex dotSpaceRegex("\\.\\s+");
-    return boost::regex_replace(path, dotSpaceRegex, ".");
+    path = boost::regex_replace(path, dotSpaceRegex, ".");
+
+    // Remove trailing spaces after $.
+    // Pattern: "$ + one or more spaces" -> "$"
+    static const boost::regex rootSpaceRegex("\\$\\s+$");
+    path = boost::regex_replace(path, rootSpaceRegex, "$");
+
+    // Skip the initial "$".
+    return path.erase(0, 1);
   }
 
   // Extracts a string representation from a simdjson result. Handles various
   // JSON types including numbers, booleans, strings, objects, and arrays.
   // Returns true if the conversion is successful. Otherwise, returns false.
   bool extractStringResult(
-      simdjson::simdjson_result<simdjson::ondemand::value> rawResult,
-      out_type<Varchar>& result) {
-    std::stringstream ss;
+      simdjson::ondemand::value rawResult,
+      out_type<Varchar>& result,
+      bool isScalar = true) {
     switch (rawResult.type()) {
       // For number and bool types, we need to explicitly get the value
-      // for specific types instead of using `ss << rawResult`. Thus, we
-      // can make simdjson's internal parsing position moved and then we
-      // can check the validity of ending character.
+      // for specific types. Thus, we can make simdjson's internal parsing
+      // position moved and then we can check the validity of ending character.
       case simdjson::ondemand::json_type::number: {
         switch (rawResult.get_number_type()) {
           case simdjson::ondemand::number_type::floating_point_number: {
@@ -185,21 +201,59 @@ struct GetJsonObjectFunction {
       case simdjson::ondemand::json_type::string: {
         std::string_view stringResult;
         if (!rawResult.get_string().get(stringResult)) {
-          result.append(stringResult);
+          if (!isScalar) {
+            // Non-scalar strings must be quoted to produce valid JSON output.
+            result.append("\"");
+            result.append(stringResult);
+            result.append("\"");
+          } else {
+            result.append(stringResult);
+          }
           return true;
         }
         return false;
       }
-      case simdjson::ondemand::json_type::object: {
-        // For nested case, e.g., for "{"my": {"hello": 10}}", "$.my" will
-        // return an object type.
-        ss << rawResult;
-        result.append(ss.str());
+      case simdjson::ondemand::json_type::array: {
+        result.append("[");
+        bool first = true;
+        for (auto element : rawResult.get_array()) {
+          if (element.error()) {
+            return false;
+          }
+          if (!first) {
+            result.append(",");
+          }
+          if (!extractStringResult(element.value(), result, false)) {
+            return false;
+          }
+          first = false;
+        }
+        result.append("]");
         return true;
       }
-      case simdjson::ondemand::json_type::array: {
-        ss << rawResult;
-        result.append(ss.str());
+      case simdjson::ondemand::json_type::object: {
+        result.append("{");
+        bool first = true;
+        for (auto field : rawResult.get_object()) {
+          if (field.error()) {
+            return false;
+          }
+          if (!first) {
+            result.append(",");
+          }
+          std::string_view key;
+          if (field.unescaped_key().get(key)) {
+            return false;
+          }
+          result.append("\"");
+          result.append(key);
+          result.append("\":");
+          if (!extractStringResult(field.value(), result, false)) {
+            return false;
+          }
+          first = false;
+        }
+        result.append("}");
         return true;
       }
       default:
