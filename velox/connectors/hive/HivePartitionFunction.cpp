@@ -32,8 +32,8 @@ inline int32_t hashDecimal(T value, uint8_t scale) {
   uint64_t absValue =
       isNegative ? -static_cast<uint64_t>(value) : static_cast<uint64_t>(value);
 
-  int32_t high = static_cast<int32_t>(absValue >> 32);
-  int32_t low = static_cast<int32_t>(absValue & 0xFFFFFFFF);
+  uint32_t high = absValue >> 32;
+  uint32_t low = absValue & 0xFFFFFFFF;
 
   uint32_t hash = 31 * high + low;
   if (isNegative) {
