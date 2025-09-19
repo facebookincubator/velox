@@ -22,6 +22,7 @@
 #include "velox/common/config/Config.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/core/QueryConfig.h"
+#include "velox/dwio/parquet/writer/arrow/ArrowSchema.h"
 #include "velox/dwio/parquet/writer/arrow/Properties.h"
 #include "velox/dwio/parquet/writer/arrow/Writer.h"
 #include "velox/exec/MemoryReclaimer.h"
@@ -193,47 +194,71 @@ void validateSchemaRecursive(const RowTypePtr& schema) {
   }
 }
 
-std::shared_ptr<::arrow::Field> updateFieldNameRecursive(
+std::shared_ptr<::arrow::Field> updateFieldNameAndIdRecursive(
     const std::shared_ptr<::arrow::Field>& field,
     const Type& type,
-    const std::string& name = "") {
+    const std::string& name = "",
+    const ParquetFieldId* fieldId = nullptr) {
+  std::shared_ptr<::arrow::Field> newField;
   if (type.isRow()) {
     auto& rowType = type.asRow();
-    auto newField = field->WithName(name);
+    newField = field->WithName(name);
     auto structType =
         std::dynamic_pointer_cast<::arrow::StructType>(newField->type());
     auto childrenSize = rowType.size();
     std::vector<std::shared_ptr<::arrow::Field>> newFields;
     newFields.reserve(childrenSize);
-    for (auto i = 0; i < childrenSize; i++) {
-      newFields.push_back(updateFieldNameRecursive(
-          structType->fields()[i], *rowType.childAt(i), rowType.nameOf(i)));
+    for (auto i = 0; i < childrenSize; ++i) {
+      VELOX_CHECK(!fieldId || i < fieldId->children.size());
+      const auto* childSetting = fieldId ? &fieldId->children.at(i) : nullptr;
+      newFields.push_back(updateFieldNameAndIdRecursive(
+          structType->fields()[i],
+          *rowType.childAt(i),
+          rowType.nameOf(i),
+          childSetting));
     }
-    return newField->WithType(::arrow::struct_(newFields));
+    newField = newField->WithType(::arrow::struct_(newFields));
   } else if (type.isArray()) {
-    auto newField = field->WithName(name);
+    newField = field->WithName(name);
     auto listType =
         std::dynamic_pointer_cast<::arrow::BaseListType>(newField->type());
     auto elementType = type.asArray().elementType();
     auto elementField = listType->value_field();
-    return newField->WithType(
-        ::arrow::list(updateFieldNameRecursive(elementField, *elementType)));
+    const auto* childSetting = fieldId ? &fieldId->children.at(0) : nullptr;
+    auto updatedElementField = updateFieldNameAndIdRecursive(
+        elementField, *elementType, name, childSetting);
+    newField = newField->WithType(::arrow::list(updatedElementField));
   } else if (type.isMap()) {
     auto mapType = type.asMap();
-    auto newField = field->WithName(name);
+    newField = field->WithName(name);
     auto arrowMapType =
         std::dynamic_pointer_cast<::arrow::MapType>(newField->type());
-    auto newKeyField =
-        updateFieldNameRecursive(arrowMapType->key_field(), *mapType.keyType());
-    auto newValueField = updateFieldNameRecursive(
-        arrowMapType->item_field(), *mapType.valueType());
-    return newField->WithType(
-        ::arrow::map(newKeyField->type(), newValueField->type()));
+    const auto* keySetting = fieldId ? &fieldId->children.at(0) : nullptr;
+    const auto* valueSetting = fieldId ? &fieldId->children.at(1) : nullptr;
+    auto newKeyField = updateFieldNameAndIdRecursive(
+        arrowMapType->key_field(),
+        *mapType.keyType(),
+        mapType.nameOf(0),
+        keySetting);
+    auto newValueField = updateFieldNameAndIdRecursive(
+        arrowMapType->item_field(),
+        *mapType.valueType(),
+        mapType.nameOf(1),
+        valueSetting);
+    newField = newField->WithType(
+        std::make_shared<::arrow::MapType>(newKeyField, newValueField));
   } else if (name != "") {
-    return field->WithName(name);
+    newField = field->WithName(name);
   } else {
-    return field;
+    newField = field;
   }
+
+  if (fieldId) {
+    newField =
+        newField->WithMetadata(arrow::arrow::FieldIdMetadata(fieldId->fieldId));
+  }
+
+  return newField;
 }
 
 std::optional<TimestampPrecision> getTimestampUnit(
@@ -351,6 +376,7 @@ Writer::Writer(
   setMemoryReclaimers();
   writeInt96AsTimestamp_ = options.writeInt96AsTimestamp;
   arrowMemoryPool_ = options.arrowMemoryPool;
+  parquetFieldIds_ = options.parquetFieldIds;
 }
 
 Writer::Writer(
@@ -445,9 +471,13 @@ void Writer::write(const VectorPtr& data) {
       "facebook::velox::parquet::Writer::write", arrowSchema.get());
   std::vector<std::shared_ptr<::arrow::Field>> newFields;
   auto childSize = schema_->size();
+  VELOX_CHECK(!parquetFieldIds_ || childSize == parquetFieldIds_->size());
   for (auto i = 0; i < childSize; i++) {
-    newFields.push_back(updateFieldNameRecursive(
-        arrowSchema->fields()[i], *schema_->childAt(i), schema_->nameOf(i)));
+    newFields.push_back(updateFieldNameAndIdRecursive(
+        arrowSchema->fields()[i],
+        *schema_->childAt(i),
+        schema_->nameOf(i),
+        parquetFieldIds_ ? &parquetFieldIds_->at(i) : nullptr));
   }
 
   PARQUET_ASSIGN_OR_THROW(
