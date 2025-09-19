@@ -33,7 +33,7 @@ inline int32_t hashDecimal(T value, uint8_t scale) {
       isNegative ? -static_cast<uint64_t>(value) : static_cast<uint64_t>(value);
 
   uint32_t high = absValue >> 32;
-  uint32_t low = absValue & 0xFFFFFFFF;
+  uint32_t low = absValue;
 
   uint32_t hash = 31 * high + low;
   if (isNegative) {
@@ -48,13 +48,13 @@ inline int32_t hashDecimal(T value, uint8_t scale) {
 // Returns java BigDecimal#hashCode()
 template <>
 inline int32_t hashDecimal<int128_t>(int128_t value, uint8_t scale) {
-  int32_t words[4];
+  uint32_t words[4];
   bool isNegative = value < 0;
   uint128_t absValue = isNegative ? -value : value;
-  words[0] = static_cast<int32_t>(absValue >> 96);
-  words[1] = static_cast<int32_t>(absValue >> 64);
-  words[2] = static_cast<int32_t>(absValue >> 32);
-  words[3] = static_cast<int32_t>(absValue);
+  words[0] = absValue >> 96;
+  words[1] = absValue >> 64;
+  words[2] = absValue >> 32;
+  words[3] = absValue;
 
   uint32_t hash = 0;
   for (auto i = 0; i < 4; i++) {
