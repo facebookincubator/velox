@@ -960,37 +960,40 @@ struct SecondsToTimestampFunction {
   VELOX_DEFINE_FUNCTION_TYPES(TExec);
 
   template <typename T>
-  FOLLY_ALWAYS_INLINE void call(out_type<Timestamp>& result, T seconds) {
+  FOLLY_ALWAYS_INLINE bool call(out_type<Timestamp>& result, T seconds) {
     if constexpr (std::is_integral_v<T>) {
       result = Timestamp(static_cast<int64_t>(seconds), 0);
+      return true;
     } else {
+      if (FOLLY_UNLIKELY(!std::isfinite(seconds))) {
+        return false;
+      }
+
       // Cast to double and check bounds to prevent ensuing overflow.
       const double secondsD = static_cast<double>(seconds);
 
       if (secondsD >= kMaxSecondsD) {
         result = Timestamp(kMaxSeconds, kMaxNanoseconds);
-        return;
-      }
-      if (secondsD <= kMinSecondsD) {
+      } else if (secondsD <= kMinSecondsD) {
         result = Timestamp(kMinSeconds, kMinNanoseconds);
-        return;
+      } else {
+        // Scale to microseconds and truncate toward zero.
+        const double microsD = secondsD * Timestamp::kMicrosecondsInSecond;
+        const int64_t micros = static_cast<int64_t>(microsD);
+
+        // Split into whole seconds and remaining microseconds.
+        int64_t wholeSeconds = micros / Timestamp::kMicrosecondsInSecond;
+        int64_t remainingMicros = micros % Timestamp::kMicrosecondsInSecond;
+        if (remainingMicros < 0) {
+          wholeSeconds -= 1;
+          remainingMicros += Timestamp::kMicrosecondsInSecond;
+        }
+
+        const int64_t nano =
+            remainingMicros * Timestamp::kNanosecondsInMicrosecond;
+        result = Timestamp(wholeSeconds, nano);
       }
-
-      // Scale to microseconds and truncate toward zero.
-      const double microsD = secondsD * Timestamp::kMicrosecondsInSecond;
-      const int64_t micros = static_cast<int64_t>(microsD);
-
-      // Split into whole seconds and remaining microseconds.
-      int64_t wholeSeconds = micros / util::kMicrosPerSec;
-      int64_t remainingMicros = micros % util::kMicrosPerSec;
-      if (remainingMicros < 0) {
-        wholeSeconds -= 1;
-        remainingMicros += util::kMicrosPerSec;
-      }
-
-      const int64_t nano =
-          remainingMicros * Timestamp::kNanosecondsInMicrosecond;
-      result = Timestamp(wholeSeconds, nano);
+      return true;
     }
   }
 
