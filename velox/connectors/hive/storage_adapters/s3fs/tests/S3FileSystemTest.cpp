@@ -175,7 +175,7 @@ TEST_F(S3FileSystemTest, noBackendServer) {
   minioServer_->stop();
   VELOX_ASSERT_THROW(
       s3fs.openFileForRead(kDummyPath),
-      "Failed to get metadata for S3 object due to: 'Network connection'. Path:'s3://dummy/foo.txt', SDK Error Type:99, HTTP Status Code:-1, S3 Service:'Unknown', Message:'curlCode: 7, Couldn't connect to server'");
+      "Failed to get metadata for S3 object due to: 'Network connection'. Path:'s3://dummy/foo.txt', SDK Error Type:99, HTTP Status Code:-1, S3 Service:'Unknown', Message:'curlCode: 7, Couldn't connect to server");
   // Start Minio again.
   minioServer_->start();
 }
