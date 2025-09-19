@@ -157,6 +157,15 @@ class ConcatFunction : public exec::VectorFunction {
             .argumentType("varchar")
             .variableArity("varchar")
             .build(),
+        exec::FunctionSignatureBuilder()
+            .returnType("varchar")
+            .integerVariable("x")
+            .integerVariable("y")
+            .integerVariable("z")
+            .argumentType("varchar(x)")
+            .argumentType("varchar(y)")
+            .variableArity("varchar(z)")
+            .build(),
         // varbinary, varbinary,.. -> varbinary
         exec::FunctionSignatureBuilder()
             .returnType("varbinary")

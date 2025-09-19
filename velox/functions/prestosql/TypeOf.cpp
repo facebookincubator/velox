@@ -91,6 +91,9 @@ std::string typeName(const TypePtr& type) {
       }
       if (isVarcharEnumType(*type)) {
         return asVarcharEnum(type)->enumName();
+      } else if (type->isVarcharN()) {
+        auto length = getVarcharLength(*type);
+        return fmt::format("varchar({})", length);
       }
       return "varchar";
     case TypeKind::VARBINARY:
