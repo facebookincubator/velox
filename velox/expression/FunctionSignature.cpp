@@ -189,17 +189,20 @@ SignatureVariable::SignatureVariable(
     ParameterType type,
     bool knownTypesOnly,
     bool orderableTypesOnly,
-    bool comparableTypesOnly)
+    bool comparableTypesOnly,
+    bool nonDecimalNumericTypeOnly)
     : name_{std::move(name)},
       constraint_(constraint.has_value() ? std::move(constraint.value()) : ""),
       type_{type},
       knownTypesOnly_(knownTypesOnly),
       orderableTypesOnly_(orderableTypesOnly),
-      comparableTypesOnly_(comparableTypesOnly) {
+      comparableTypesOnly_(comparableTypesOnly),
+      nonDecimalNumericTypeOnly_(nonDecimalNumericTypeOnly) {
   VELOX_CHECK(
-      !(knownTypesOnly_ || orderableTypesOnly_ || comparableTypesOnly_) ||
+      !(knownTypesOnly_ || orderableTypesOnly_ || comparableTypesOnly_ ||
+        nonDecimalNumericTypeOnly_) ||
           isTypeParameter(),
-      "Non-Type variables cannot have the knownTypesOnly/orderableTypesOnly/comparableTypesOnly constraint");
+      "Non-Type variables cannot have the knownTypesOnly/orderableTypesOnly/comparableTypesOnly/nonDecimalNumericTypeOnly constraint");
 
   VELOX_CHECK(
       (isIntegerParameter() || isEnumParameter() ||
@@ -323,7 +326,8 @@ AggregateFunctionSignatureBuilder::knownTypeVariable(const std::string& name) {
           ParameterType::kTypeParameter,
           /*knownTypesOnly*/ true,
           /*orderableTypesOnly*/ false,
-          /*comparableTypesOnly*/ false));
+          /*comparableTypesOnly*/ false,
+          /*nonDecimalNumericTypeOnly*/ false));
   return *this;
 }
 
@@ -338,7 +342,8 @@ AggregateFunctionSignatureBuilder::orderableTypeVariable(
           ParameterType::kTypeParameter,
           /*knownTypesOnly*/ false,
           /*orderableTypesOnly*/ true,
-          /*comparableTypesOnly*/ true));
+          /*comparableTypesOnly*/ true,
+          /*nonDecimalNumericTypeOnly*/ false));
   return *this;
 }
 
@@ -353,7 +358,24 @@ AggregateFunctionSignatureBuilder::comparableTypeVariable(
           ParameterType::kTypeParameter,
           /*knownTypesOnly*/ false,
           /*orderableTypesOnly*/ false,
-          /*comparableTypesOnly*/ true));
+          /*comparableTypesOnly*/ true,
+          /*nonDecimalNumericTypeOnly*/ false));
+  return *this;
+}
+
+AggregateFunctionSignatureBuilder&
+AggregateFunctionSignatureBuilder::nonDecimalNumericTypeVariable(
+    const std::string& name) {
+  addVariable(
+      variables_,
+      SignatureVariable(
+          name,
+          "",
+          ParameterType::kTypeParameter,
+          /*knownTypesOnly*/ false,
+          /*orderableTypesOnly*/ false,
+          /*comaprableTypesOnly*/ false,
+          /*nonDecimalNumericTypeOnly*/ true));
   return *this;
 }
 
