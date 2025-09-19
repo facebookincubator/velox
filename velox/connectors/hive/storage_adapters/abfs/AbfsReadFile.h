@@ -35,22 +35,30 @@ class AbfsReadFile final : public ReadFile {
       uint64_t offset,
       uint64_t length,
       void* buf,
-      File::IoStats* stats = nullptr) const final;
+      File::IoStats* stats = nullptr,
+      const folly::F14FastMap<std::string, std::string>& fileReadOps = {})
+      const final;
 
   std::string pread(
       uint64_t offset,
       uint64_t length,
-      File::IoStats* stats = nullptr) const final;
+      File::IoStats* stats = nullptr,
+      const folly::F14FastMap<std::string, std::string>& fileReadOps = {})
+      const final;
 
   uint64_t preadv(
       uint64_t offset,
       const std::vector<folly::Range<char*>>& buffers,
-      File::IoStats* stats = nullptr) const final;
+      File::IoStats* stats = nullptr,
+      const folly::F14FastMap<std::string, std::string>& fileReadOps = {})
+      const final;
 
   uint64_t preadv(
       folly::Range<const common::Region*> regions,
       folly::Range<folly::IOBuf*> iobufs,
-      File::IoStats* stats = nullptr) const final;
+      File::IoStats* stats = nullptr,
+      const folly::F14FastMap<std::string, std::string>& fileReadOps = {})
+      const final;
 
   uint64_t size() const final;
 

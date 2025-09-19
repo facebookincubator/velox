@@ -42,7 +42,9 @@ class TestReadFile : public velox::ReadFile {
       uint64_t offset,
       uint64_t length,
       void* buffer,
-      filesystems::File::IoStats* stats = nullptr) const override {
+      filesystems::File::IoStats* stats = nullptr,
+      const folly::F14FastMap<std::string, std::string>& fileReadOps = {})
+      const override {
     const uint64_t content = offset + seed_;
     const uint64_t available = std::min(length_ - offset, length);
     int fill;
@@ -59,8 +61,10 @@ class TestReadFile : public velox::ReadFile {
   uint64_t preadv(
       uint64_t offset,
       const std::vector<folly::Range<char*>>& buffers,
-      filesystems::File::IoStats* stats = nullptr) const override {
-    auto res = ReadFile::preadv(offset, buffers, stats);
+      filesystems::File::IoStats* stats = nullptr,
+      const folly::F14FastMap<std::string, std::string>& fileReadOps = {})
+      const override {
+    auto res = ReadFile::preadv(offset, buffers, stats, fileReadOps);
     if (stats) {
       stats->addCounter(
           "read",
