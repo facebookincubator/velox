@@ -22,7 +22,8 @@ using namespace facebook::velox::test;
 
 namespace facebook::velox::functions::sparksql::test {
 namespace {
-std::optional<std::vector<std::pair<int32_t, std::optional<int32_t>>>> O(
+std::optional<std::vector<std::pair<int32_t, std::optional<int32_t>>>>
+makeOptional(
     const std::vector<std::pair<int32_t, std::optional<int32_t>>>& vector) {
   return std::make_optional(vector);
 }
@@ -65,8 +66,8 @@ TEST_F(MapFromEntriesTest, nullMapEntries) {
             {{{1, 11}}},
         };
     auto input = makeArrayOfRowVector(data, rowType);
-    auto expected =
-        makeNullableMapVector<int32_t, int32_t>({std::nullopt, O({{1, 11}})});
+    auto expected = makeNullableMapVector<int32_t, int32_t>(
+        {std::nullopt, makeOptional({{1, 11}})});
     verifyMapFromEntries(input, expected);
   }
   {
