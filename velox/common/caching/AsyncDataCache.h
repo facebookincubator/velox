@@ -556,8 +556,10 @@ struct CacheStats {
 /// and other housekeeping.
 class CacheShard {
  public:
-  CacheShard(AsyncDataCache* cache, double maxWriteRatio)
-      : cache_(cache), maxWriteRatio_(maxWriteRatio) {}
+  static constexpr uint64_t kMinBytesToEvict = 8UL << 20; // 8MB
+
+  CacheShard(AsyncDataCache* cache, double maxWriteRatio, uint32_t maxEntries)
+      : cache_(cache), maxWriteRatio_(maxWriteRatio), maxEntries_(maxEntries) {}
 
   /// See AsyncDataCache::findOrCreate.
   CachePin findOrCreate(
@@ -646,8 +648,18 @@ class CacheShard {
 
   void tryAddFreeEntry(std::unique_ptr<AsyncDataCacheEntry>&& entry);
 
+  // Same as evict() but assumes the shard mutex is already held by the caller
+  // and does not attempt to save SSD-saveable entries to SSD cache. Used
+  // internally to avoid deadlock during eviction.
+  uint64_t evictLockedWithoutSaveToSsd(
+      uint64_t bytesToFree,
+      bool evictAllUnpinned,
+      memory::MachinePageCount pagesToAcquire,
+      memory::Allocation& acquiredAllocation);
+
   AsyncDataCache* const cache_;
   const double maxWriteRatio_;
+  const uint32_t maxEntries_;
 
   mutable std::mutex mutex_;
   folly::F14FastMap<RawFileCacheKey, AsyncDataCacheEntry*> entryMap_;
@@ -700,10 +712,12 @@ class AsyncDataCache : public memory::Cache {
     Options(
         double _maxWriteRatio = 0.7,
         double _ssdSavableRatio = 0.125,
-        int32_t _minSsdSavableBytes = 1 << 24)
+        int32_t _minSsdSavableBytes = 1 << 24,
+        uint32_t _maxEntries = 10'000'000)
         : maxWriteRatio(_maxWriteRatio),
           ssdSavableRatio(_ssdSavableRatio),
-          minSsdSavableBytes(_minSsdSavableBytes) {}
+          minSsdSavableBytes(_minSsdSavableBytes),
+          maxEntries(_maxEntries) {}
 
     /// The max ratio of the number of in-memory cache entries being written to
     /// SSD cache over the total number of cache entries. This is to control SSD
@@ -722,6 +736,11 @@ class AsyncDataCache : public memory::Cache {
     /// NOTE: we only write to SSD cache when both above conditions satisfy. The
     /// default is 16MB.
     int32_t minSsdSavableBytes;
+
+    /// Maximum number of cache entries allowed. A value of 0 means no limit.
+    /// When the limit is reached, old entries will be evicted to make space
+    /// for new ones.
+    uint32_t maxEntries;
   };
 
   AsyncDataCache(
