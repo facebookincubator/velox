@@ -497,6 +497,9 @@ class RowReaderOptions {
 };
 
 /// Options for creating a Reader.
+
+enum class ColumnMappingMode { kPosition, kName, kFieldId };
+
 class ReaderOptions : public io::ReaderOptions {
  public:
   static constexpr uint64_t kDefaultFooterEstimatedSize = 1024 * 1024; // 1MB
@@ -559,9 +562,13 @@ class ReaderOptions : public io::ReaderOptions {
     return *this;
   }
 
-  ReaderOptions& setUseColumnNamesForColumnMapping(bool flag) {
-    useColumnNamesForColumnMapping_ = flag;
+  ReaderOptions& setColumnMappingMode(ColumnMappingMode mode) {
+    columnMappingMode_ = mode;
     return *this;
+  }
+
+  ColumnMappingMode columnMappingMode() const {
+    return columnMappingMode_;
   }
 
   ReaderOptions& setIOExecutor(std::shared_ptr<folly::Executor> executor) {
@@ -631,7 +638,7 @@ class ReaderOptions : public io::ReaderOptions {
   }
 
   bool useColumnNamesForColumnMapping() const {
-    return useColumnNamesForColumnMapping_;
+    return columnMappingMode_ == ColumnMappingMode::kName;
   }
 
   const std::shared_ptr<random::RandomSkipTracker>& randomSkip() const {
@@ -683,7 +690,6 @@ class ReaderOptions : public io::ReaderOptions {
   uint64_t footerEstimatedSize_{kDefaultFooterEstimatedSize};
   uint64_t filePreloadThreshold_{kDefaultFilePreloadThreshold};
   bool fileColumnNamesReadAsLowerCase_{false};
-  bool useColumnNamesForColumnMapping_{false};
   std::shared_ptr<folly::Executor> ioExecutor_;
   std::shared_ptr<random::RandomSkipTracker> randomSkip_;
   std::shared_ptr<velox::common::ScanSpec> scanSpec_;
@@ -691,6 +697,7 @@ class ReaderOptions : public io::ReaderOptions {
   bool adjustTimestampToTimezone_{false};
   bool selectiveNimbleReaderEnabled_{false};
   bool allowEmptyFile_{false};
+  ColumnMappingMode columnMappingMode_{ColumnMappingMode::kPosition};
 };
 
 struct WriterOptions {
@@ -726,9 +733,9 @@ struct WriterOptions {
 
 // Options for creating a column reader.
 struct ColumnReaderOptions {
-  // Whether to map table field names to file field names using names, not
-  // indices.
-  bool useColumnNamesForColumnMapping_{false};
+  // Column-to-column mapping strategy between requested/table schema and file
+  // schema.
+  ColumnMappingMode columnMappingMode{ColumnMappingMode::kPosition};
 };
 
 ColumnReaderOptions makeColumnReaderOptions(const ReaderOptions& options);
