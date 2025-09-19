@@ -254,8 +254,8 @@ These functions support TIMESTAMP and DATE input types.
 
         SELECT months_between('1997-02-28 10:30:00', '1996-10-30', true); -- 3.94959677
         SELECT months_between('1997-02-28 10:30:00', '1996-10-30', false); -- 3.9495967741935485
-        SELECT months_between('1997-02-28 10:30:00', '1996-03-31 11:00:00', true); -- 11
-        SELECT months_between('1997-02-21 10:30:00', '1996-03-21 11:00:00', true); -- 11
+        SELECT months_between('1997-02-28 10:30:00', '1996-03-31 11:00:00', true); -- 11.0
+        SELECT months_between('1997-02-21 10:30:00', '1996-03-21 11:00:00', true); -- 11.0
 
 .. spark:function:: next_day(startDate, dayOfWeek) -> date
 

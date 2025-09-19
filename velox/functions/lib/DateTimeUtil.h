@@ -15,11 +15,7 @@
  */
 #pragma once
 
-#include "velox/external/date/date.h"
-#include "velox/functions/lib/DateTimeFormatter.h"
 #include "velox/functions/lib/TimeUtils.h"
-#include "velox/type/Timestamp.h"
-#include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox::functions {
 
@@ -375,12 +371,11 @@ FOLLY_ALWAYS_INLINE Timestamp addToTimestamp(
 }
 
 FOLLY_ALWAYS_INLINE bool isEndDayOfMonth(const std::tm& tm) {
-  const auto endDay = util::getMaxDayOfMonth(getYear(tm), getMonth(tm));
-  return tm.tm_mday == endDay;
+  return tm.tm_mday == util::getMaxDayOfMonth(getYear(tm), getMonth(tm));
 }
 
 FOLLY_ALWAYS_INLINE double
-monthsBetween(const std::tm& tm1, const std::tm& tm2, const bool roundOff) {
+monthsBetween(const std::tm& tm1, const std::tm& tm2, bool roundOff) {
   const double monthDiff =
       (tm1.tm_year - tm2.tm_year) * kMonthInYear + tm1.tm_mon - tm2.tm_mon;
   if (tm1.tm_mday == tm2.tm_mday ||

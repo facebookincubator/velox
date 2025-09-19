@@ -1082,9 +1082,9 @@ struct TimestampAddFunction {
   std::optional<DateTimeUnit> unit_ = std::nullopt;
 };
 
-template <typename T>
+template <typename TExec>
 struct MonthsBetweenFunction {
-  VELOX_DEFINE_FUNCTION_TYPES(T);
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
 
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,

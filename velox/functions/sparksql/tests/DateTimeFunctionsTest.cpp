@@ -1817,6 +1817,18 @@ TEST_F(DateTimeFunctionsTest, monthsBetween) {
           parseTimestamp("1997-02-28 10:30:00"),
           parseTimestamp("1996-10-30"),
           false));
+  EXPECT_EQ(
+      3.9495949074074073,
+      monthsBetween(
+          parseTimestamp("1997-02-28 10:30:00"),
+          parseTimestamp("1996-10-30 00:00:05"),
+          false));
+  EXPECT_EQ(
+      -3.9495949074074073,
+      monthsBetween(
+          parseTimestamp("1996-10-30 00:00:05"),
+          parseTimestamp("1997-02-28 10:30:00"),
+          false));
   // `timestamp1` and `timestamp2` both are the last day of month.
   EXPECT_EQ(
       11,
