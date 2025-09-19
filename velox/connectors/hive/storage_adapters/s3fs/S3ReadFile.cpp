@@ -24,6 +24,30 @@
 #include <aws/s3/model/GetObjectRequest.h>
 #include <aws/s3/model/HeadObjectRequest.h>
 
+namespace {
+bool isRetryableErrorFromClient(Aws::S3::S3Errors errorType) {
+  switch (errorType) {
+    case Aws::S3::S3Errors::INTERNAL_FAILURE:
+    case Aws::S3::S3Errors::UNKNOWN:
+      return true;
+    default:
+      return false;
+  }
+}
+bool shouldRetryRequest(
+    Aws::Client::AWSError<Aws::S3::S3Errors>& error,
+    uint32_t retries,
+    uint32_t maxErrorRetries) {
+  if (retries < maxErrorRetries && !error.ShouldRetry() &&
+      error.GetResponseCode() ==
+          Aws::Http::HttpResponseCode::REQUEST_NOT_MADE &&
+      isRetryableErrorFromClient(error.GetErrorType())) {
+    return true;
+  }
+  return false;
+}
+} // namespace
+
 namespace facebook::velox::filesystems {
 
 namespace {
@@ -40,8 +64,11 @@ Aws::IOStreamFactory AwsWriteableStreamFactory(void* data, int64_t nbytes) {
 
 class S3ReadFile ::Impl {
  public:
-  explicit Impl(std::string_view path, Aws::S3::S3Client* client)
-      : client_(client) {
+  explicit Impl(
+      std::string_view path,
+      Aws::S3::S3Client* client,
+      uint32_t maxClientRetries)
+      : client_(client), maxClientRetries_(maxClientRetries) {
     getBucketAndKeyFromPath(path, bucket_, key_);
   }
 
@@ -154,11 +181,22 @@ class S3ReadFile ::Impl {
         AwsWriteableStreamFactory(position, length));
     RECORD_METRIC_VALUE(kMetricS3ActiveConnections);
     RECORD_METRIC_VALUE(kMetricS3GetObjectCalls);
-    auto outcome = client_->GetObject(request);
-    if (!outcome.IsSuccess()) {
+    Aws::S3::Model::GetObjectOutcome outcome;
+    uint32_t retries = 0;
+    Aws::Client::AWSError<Aws::S3::S3Errors> getObjectError;
+
+    do {
+      outcome = client_->GetObject(request);
+      if (outcome.IsSuccess()) {
+        break;
+      }
+      getObjectError = outcome.GetError();
+      auto s3ClientRetryCount = outcome.GetRetryCount();
       RECORD_METRIC_VALUE(kMetricS3GetObjectErrors);
-    }
-    RECORD_METRIC_VALUE(kMetricS3GetObjectRetries, outcome.GetRetryCount());
+      retries += s3ClientRetryCount > 0 ? s3ClientRetryCount : 1;
+    } while (shouldRetryRequest(getObjectError, retries, maxClientRetries_));
+
+    RECORD_METRIC_VALUE(kMetricS3GetObjectRetries, retries);
     RECORD_METRIC_VALUE(kMetricS3ActiveConnections, -1);
     VELOX_CHECK_AWS_OUTCOME(outcome, "Failed to get S3 object", bucket_, key_);
   }
@@ -167,10 +205,14 @@ class S3ReadFile ::Impl {
   std::string bucket_;
   std::string key_;
   int64_t length_ = -1;
+  uint32_t maxClientRetries_;
 };
 
-S3ReadFile::S3ReadFile(std::string_view path, Aws::S3::S3Client* client) {
-  impl_ = std::make_shared<Impl>(path, client);
+S3ReadFile::S3ReadFile(
+    std::string_view path,
+    Aws::S3::S3Client* client,
+    uint32_t maxClientRetries) {
+  impl_ = std::make_shared<Impl>(path, client, maxClientRetries);
 }
 
 S3ReadFile::~S3ReadFile() = default;

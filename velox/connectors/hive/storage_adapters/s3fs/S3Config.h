@@ -76,6 +76,7 @@ class S3Config {
     kRetryMode,
     kUseProxyFromEnv,
     kCredentialsProvider,
+    kMaxClientRetries,
     kEnd
   };
 
@@ -114,6 +115,8 @@ class S3Config {
              std::make_pair("use-proxy-from-env", "false")},
             {Keys::kCredentialsProvider,
              std::make_pair("aws-credentials-provider", std::nullopt)},
+            {Keys::kMaxClientRetries,
+             std::make_pair("max-client-retries", "5")},
         };
     return config;
   }
@@ -224,6 +227,15 @@ class S3Config {
   /// Retry mode for a single http client.
   std::optional<std::string> retryMode() const {
     return config_.find(Keys::kRetryMode)->second;
+  }
+
+  /// Maximum retry attempts for a single http client.
+  std::optional<uint32_t> maxClientRetries() const {
+    auto val = config_.find(Keys::kMaxClientRetries)->second;
+    if (val.has_value()) {
+      return folly::to<uint32_t>(val.value());
+    }
+    return std::optional<uint32_t>();
   }
 
   bool useProxyFromEnv() const {
