@@ -1580,6 +1580,27 @@ class TimeType final : public BigintType {
     return name();
   }
 
+  /// Returns the time 'value' (milliseconds since midnight) formatted as
+  /// HH:MM:SS.mmm. For example, 43200000 (noon) would be represented as
+  /// 12:00:00.000.
+  /// If timezone is provided, the timezone displacement is added to the time
+  /// value.
+  StringView valueToString(
+      int64_t value,
+      char* const startPos,
+      const tz::TimeZone* timezone = nullptr) const;
+
+  /// Returns the time 'value' (milliseconds since midnight) formatted as
+  /// HH:MM:SS.mmm . It also takes an optional offset in milliseconds to be
+  /// added to this value
+  StringView valueToString(
+      int64_t value,
+      char* const startPos,
+      std::optional<int64_t> adjustedTimeZoneOffsetInMillis) const;
+
+  /// Return offsetInMillis for the given timezone.
+  int64_t getTimeZoneOffsetInMillis(const tz::TimeZone* timezone) const;
+
   folly::dynamic serialize() const override;
 
   static TypePtr deserialize(const folly::dynamic& /*obj*/) {
@@ -1593,6 +1614,10 @@ class TimeType final : public BigintType {
   bool isComparable() const override {
     return true;
   }
+
+  // When casting from TIME to varchar , the resultant varchar will always
+  // be 12 bytest long.
+  static const size_t kTimeToVarcharRowSize = 12;
 };
 
 using TimeTypePtr = std::shared_ptr<const TimeType>;

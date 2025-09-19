@@ -37,13 +37,11 @@ using TTimeZoneIndex = folly::F14FastMap<std::string, const TimeZone*>;
 // Defined in TimeZoneDatabase.cpp
 extern const std::vector<std::pair<int16_t, std::string>>& getTimeZoneEntries();
 
-namespace {
-
-// Returns the offset in minutes for a specific time zone offset in the
-// database. Do not call for tzID 0 (UTC / "+00:00").
-inline std::chrono::minutes getTimeZoneOffset(int16_t tzID) {
+std::chrono::minutes getTimeZoneOffset(int16_t tzID) {
   return std::chrono::minutes{(tzID <= 840) ? (tzID - 841) : (tzID - 840)};
 }
+
+namespace {
 
 const tzdb::time_zone* locateZoneImpl(std::string_view tz_name) {
   TestValue::adjust("facebook::velox::tz::locateZoneImpl", &tz_name);

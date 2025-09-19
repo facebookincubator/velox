@@ -67,6 +67,10 @@ int16_t getTimeZoneID(int32_t offsetMinutes);
 /// Returns all valid time zone IDs.
 std::vector<int16_t> getTimeZoneIDs();
 
+/// Returns the offset in minutes for a specific time zone offset in the
+/// database. Do not call for tzID 0 (UTC / "+00:00").
+std::chrono::minutes getTimeZoneOffset(int16_t tzID);
+
 // Validates that the time point can be safely used by the external date
 // library.
 template <typename T>

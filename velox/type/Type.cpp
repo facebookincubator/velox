@@ -26,6 +26,7 @@
 
 #include "velox/type/DecimalUtil.h"
 #include "velox/type/TimestampConversion.h"
+#include "velox/type/tz/TimeZoneMap.h"
 
 namespace std {
 template <>
@@ -1500,6 +1501,81 @@ folly::dynamic TimeType::serialize() const {
   obj["name"] = "TimeType";
   obj["type"] = name();
   return obj;
+}
+
+int64_t TimeType::getTimeZoneOffsetInMillis(
+    const tz::TimeZone* timezone) const {
+  int64_t timezoneOffsetMs = 0;
+  if (timezone != nullptr) {
+    // Check if this is an offset-based timezone (ID <= 1680)
+    if (timezone->id() > 0 && timezone->id() <= 1680) {
+      // Use the public getTimeZoneOffset function for offset-based timezones
+      auto offsetMinutes = tz::getTimeZoneOffset(timezone->id());
+      timezoneOffsetMs =
+          std::chrono::duration_cast<std::chrono::milliseconds>(offsetMinutes)
+              .count();
+    } else {
+      // For regular named timezones, calculate offset using current timestamp
+      auto now = Timestamp::now();
+      auto utcTime = now;
+      auto localTime = now;
+      localTime.toTimezone(*timezone);
+      timezoneOffsetMs = localTime.toMillis() - utcTime.toMillis();
+    }
+  }
+
+  return timezoneOffsetMs;
+}
+
+StringView TimeType::valueToString(
+    int64_t value,
+    char* const startPos,
+    const tz::TimeZone* timezone) const {
+  // TIME is represented as milliseconds since midnight
+  // Convert to hours:minutes:seconds.milliseconds format
+
+  return valueToString(value, startPos, getTimeZoneOffsetInMillis(timezone));
+}
+
+StringView TimeType::valueToString(
+    int64_t value,
+    char* const startPos,
+    std::optional<int64_t> adjustedTimeZoneOffsetInMillis) const {
+  int64_t adjustedValue{0};
+
+  if (adjustedTimeZoneOffsetInMillis.has_value()) {
+    adjustedValue = value + adjustedTimeZoneOffsetInMillis.value();
+
+    // Handle wrap-around for TIME values (TIME should be within a 24-hour
+    // period) If the adjusted time goes beyond 24 hours, wrap it around
+    adjustedValue = adjustedValue % 86400000;
+    if (adjustedValue < 0) {
+      adjustedValue += 86400000;
+    }
+  }
+
+  // Ensure the value is within valid TIME range
+  if (adjustedValue < 0 || adjustedValue >= 86400000) {
+    VELOX_USER_FAIL(
+        "TIME value {} is out of range [0, 86400000)", adjustedValue);
+  }
+
+  int64_t hours = adjustedValue / kMillisInHour;
+  int64_t remainingMs = adjustedValue % kMillisInHour;
+  int64_t minutes = remainingMs / kMillisInMinute;
+  remainingMs = remainingMs % kMillisInMinute;
+  int64_t seconds = remainingMs / kMillisInSecond;
+  int64_t millis = remainingMs % kMillisInSecond;
+
+  fmt::format_to_n(
+      startPos,
+      kTimeToVarcharRowSize,
+      "{:02d}:{:02d}:{:02d}.{:03d}",
+      hours,
+      minutes,
+      seconds,
+      millis);
+  return StringView{startPos, kTimeToVarcharRowSize};
 }
 
 std::string stringifyTruncatedElementList(

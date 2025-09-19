@@ -5494,3 +5494,29 @@ TEST_F(DateTimeFunctionsTest, xxHash64FunctionTimestamp) {
   EXPECT_EQ(
       7585368295023641328, xxhash64(parseTimestamp("1900-01-01 00:00:00.000")));
 }
+
+TEST_F(DateTimeFunctionsTest, localtime) {
+  const auto localtime = [&](const std::optional<std::string>& timeZone) {
+    if (timeZone.has_value()) {
+      setQueryTimeZone(timeZone.value());
+    }
+
+    auto rowVector = makeRowVector({});
+    rowVector->resize(1);
+    auto result = evaluate("localtime()", rowVector);
+    auto resultValue = result->asFlatVector<int64_t>();
+    return resultValue->valueAt(0);
+  };
+
+  auto utcVal = localtime(std::nullopt);
+  EXPECT_GT(utcVal, 0);
+
+  // Setting timezone shouldnt affect the millisUtc time returned.
+  auto localVal = localtime("America/Los_Angeles");
+  EXPECT_GT(localVal, 0);
+
+  EXPECT_GE(localVal, utcVal); // Local time should be greater than UTC time
+                               // since it ran immedieatly after
+  EXPECT_LT(localVal - utcVal, 1000); // Local time should be within 1 second of
+                                      // UTC time since it ran immedieatly after
+}
