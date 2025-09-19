@@ -412,6 +412,12 @@ class SelectivityIterator {
     index_ = begin / 64;
   }
 
+  SelectivityIterator(const SelectivityIterator& other)
+      : bits_(other.bits_),
+        current_(other.current_),
+        index_(other.index_),
+        end_(other.end_) {}
+
   inline bool next(vector_size_t& row) {
     while (current_ == 0) {
       if ((index_ + 1) * 64 >= end_) {
