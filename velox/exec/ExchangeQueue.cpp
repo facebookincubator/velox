@@ -31,6 +31,7 @@ SerializedPage::SerializedPage(
       numRows_(numRows),
       onDestructionCb_(onDestructionCb) {
   VELOX_CHECK_NOT_NULL(iobuf_);
+  ranges_.reserve(iobuf_->countChainElements());
   for (auto& buf : *iobuf_) {
     int32_t bufSize = buf.size();
     ranges_.push_back(ByteRange{
