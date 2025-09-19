@@ -116,7 +116,7 @@ class DictionaryVector : public SimpleVector<T> {
    * @param index at which to start the vector load
    * @return the vector of values starting at the given index
    */
-  xsimd::batch<T> loadSIMDValueBufferAt(size_t index) const;
+  simd::xbatch<T> loadSIMDValueBufferAt(size_t index) const;
 
   inline const BufferPtr& indices() const {
     return indices_;
