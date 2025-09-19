@@ -374,10 +374,10 @@ class MergeJoinTest : public HiveConnectorTestBase {
       RowVectorPtr& leftVectors,
       RowVectorPtr& rightVectors) {
     auto leftFile = TempFilePath::create();
-    writeToFile(leftFile->path, leftVectors);
+    writeToFile(leftFile->getPath(), leftVectors);
     createDuckDbTable("t", {leftVectors});
     auto rightFile = TempFilePath::create();
-    writeToFile(rightFile->path, rightVectors);
+    writeToFile(rightFile->getPath(), rightVectors);
     createDuckDbTable("u", {rightVectors});
     auto joinTypes = {
         core::JoinType::kInner,
@@ -387,7 +387,6 @@ class MergeJoinTest : public HiveConnectorTestBase {
     };
 
     for (auto joinType : joinTypes) {
-      LOG(ERROR) << "running " << joinTypeName(joinType);
       auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
       core::PlanNodeId leftScanId;
       core::PlanNodeId rightScanId;
@@ -408,16 +407,15 @@ class MergeJoinTest : public HiveConnectorTestBase {
                         joinType)
                     .planNode();
       AssertQueryBuilder(op, duckDbQueryRunner_)
-          .split(rightScanId, makeHiveConnectorSplit(rightFile->path))
-          .split(leftScanId, makeHiveConnectorSplit(leftFile->path))
+          .split(rightScanId, makeHiveConnectorSplit(rightFile->getPath()))
+          .split(leftScanId, makeHiveConnectorSplit(leftFile->getPath()))
           .assertResults(fmt::format(
               "SELECT * FROM t {} JOIN u "
               "ON t.c0 = u.rc0 AND t.c1 = u.rc1",
-              joinTypeName(joinType)));
+              core::JoinTypeName::toName(joinType)));
     }
     // change side
     for (auto joinType : joinTypes) {
-      LOG(ERROR) << "running " << joinTypeName(joinType);
       auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
       core::PlanNodeId leftScanId;
       core::PlanNodeId rightScanId;
@@ -437,15 +435,14 @@ class MergeJoinTest : public HiveConnectorTestBase {
                         joinType)
                     .planNode();
       AssertQueryBuilder(op, duckDbQueryRunner_)
-          .split(leftScanId, makeHiveConnectorSplit(rightFile->path))
-          .split(rightScanId, makeHiveConnectorSplit(leftFile->path))
+          .split(leftScanId, makeHiveConnectorSplit(rightFile->getPath()))
+          .split(rightScanId, makeHiveConnectorSplit(leftFile->getPath()))
           .assertResults(fmt::format(
               "SELECT * FROM u {} JOIN t "
               "ON u.rc0 = t.c0 AND u.rc1 = t.c1",
-              joinTypeName(joinType)));
+              core::JoinTypeName::toName(joinType)));
     }
     // anti join
-    LOG(ERROR) << "running anti join";
     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
     core::PlanNodeId leftScanId;
     core::PlanNodeId rightScanId;
@@ -466,13 +463,12 @@ class MergeJoinTest : public HiveConnectorTestBase {
                       core::JoinType::kAnti)
                   .planNode();
     AssertQueryBuilder(op, duckDbQueryRunner_)
-        .split(rightScanId, makeHiveConnectorSplit(rightFile->path))
-        .split(leftScanId, makeHiveConnectorSplit(leftFile->path))
+        .split(rightScanId, makeHiveConnectorSplit(rightFile->getPath()))
+        .split(leftScanId, makeHiveConnectorSplit(leftFile->getPath()))
         .assertResults(
             "SELECT * FROM t WHERE NOT exists (select * from u "
             "where t.c0 = u.rc0 AND t.c1 = u.rc1)");
     // anti join change side
-    LOG(ERROR) << "running anti join change side";
     planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
     op = PlanBuilder(planNodeIdGenerator)
              .tableScan(
@@ -491,8 +487,8 @@ class MergeJoinTest : public HiveConnectorTestBase {
                  core::JoinType::kAnti)
              .planNode();
     AssertQueryBuilder(op, duckDbQueryRunner_)
-        .split(leftScanId, makeHiveConnectorSplit(rightFile->path))
-        .split(rightScanId, makeHiveConnectorSplit(leftFile->path))
+        .split(leftScanId, makeHiveConnectorSplit(rightFile->getPath()))
+        .split(rightScanId, makeHiveConnectorSplit(leftFile->getPath()))
         .assertResults(
             "SELECT * FROM u WHERE NOT exists (select * from t "
             "where u.rc0 = t.c0 AND u.rc1 = t.c1)");
