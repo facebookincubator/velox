@@ -55,6 +55,9 @@ class HashStringAllocator : public StreamArena {
   static constexpr int32_t kMaxAlloc =
       memory::AllocationTraits::kPageSize / 4 * 3;
 
+  template <typename T>
+  using TStlAllocator = StlAllocator<T>;
+
   class Header {
    public:
     static constexpr uint32_t kFree = 1U << 31;

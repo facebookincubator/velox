@@ -166,6 +166,9 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
     std::optional<DebugOptions> debugOptions{std::nullopt};
   };
 
+  template <typename T>
+  using TStlAllocator = StlAllocator<T>;
+
   /// Constructs a named memory pool with specified 'name', 'parent' and 'kind'.
   ///
   /// NOTE: we can't create a memory pool with no 'parent' but has 'kind' of
@@ -1098,6 +1101,8 @@ class StlAllocator {
 
   template <typename U>
   /* implicit */ StlAllocator(const StlAllocator<U>& a) : pool{a.pool} {}
+
+  explicit StlAllocator(MemoryPool* pool) : pool{*pool} {}
 
   T* allocate(size_t n) {
     return static_cast<T*>(pool.allocate(checkedMultiply(n, sizeof(T))));
