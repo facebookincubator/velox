@@ -399,7 +399,9 @@ class MergeJoinTest : public HiveConnectorTestBase {
                         {"c0", "c1"},
                         {"rc0", "rc1"},
                         PlanBuilder(planNodeIdGenerator)
-                            .tableScan(ROW({"rc0", "rc1", "rc2"}, {VARCHAR(), VARCHAR(), VARCHAR()}))
+                            .tableScan(
+                                ROW({"rc0", "rc1", "rc2"},
+                                    {VARCHAR(), VARCHAR(), VARCHAR()}))
                             .capturePlanNodeId(rightScanId)
                             .planNode(),
                         "",
@@ -409,39 +411,46 @@ class MergeJoinTest : public HiveConnectorTestBase {
       AssertQueryBuilder(op, duckDbQueryRunner_)
           .split(rightScanId, makeHiveConnectorSplit(rightFile->getPath()))
           .split(leftScanId, makeHiveConnectorSplit(leftFile->getPath()))
-          .assertResults(fmt::format(
-              "SELECT * FROM t {} JOIN u "
-              "ON t.c0 = u.rc0 AND t.c1 = u.rc1",
-              core::JoinTypeName::toName(joinType)));
+          .assertResults(
+              fmt::format(
+                  "SELECT * FROM t {} JOIN u "
+                  "ON t.c0 = u.rc0 AND t.c1 = u.rc1",
+                  core::JoinTypeName::toName(joinType)));
     }
+
     // change side
     for (auto joinType : joinTypes) {
       auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
       core::PlanNodeId leftScanId;
       core::PlanNodeId rightScanId;
-      auto op = PlanBuilder(planNodeIdGenerator)
-                    .tableScan(
-                        ROW({"rc0", "rc1", "rc2"}, {VARCHAR(), VARCHAR(), VARCHAR()}))
-                    .capturePlanNodeId(leftScanId)
-                    .mergeJoin(
-                        {"rc0", "rc1"},
-                        {"c0", "c1"},
-                        PlanBuilder(planNodeIdGenerator)
-                            .tableScan(ROW({"c0", "c1", "c2", "c3"}, {VARCHAR(), VARCHAR(), VARCHAR(), VARCHAR()}))
-                            .capturePlanNodeId(rightScanId)
-                            .planNode(),
-                        "",
-                        {"rc0", "rc1", "rc2", "c0", "c1", "c2", "c3"},
-                        joinType)
-                    .planNode();
+      auto op =
+          PlanBuilder(planNodeIdGenerator)
+              .tableScan(
+                  ROW({"rc0", "rc1", "rc2"}, {VARCHAR(), VARCHAR(), VARCHAR()}))
+              .capturePlanNodeId(leftScanId)
+              .mergeJoin(
+                  {"rc0", "rc1"},
+                  {"c0", "c1"},
+                  PlanBuilder(planNodeIdGenerator)
+                      .tableScan(
+                          ROW({"c0", "c1", "c2", "c3"},
+                              {VARCHAR(), VARCHAR(), VARCHAR(), VARCHAR()}))
+                      .capturePlanNodeId(rightScanId)
+                      .planNode(),
+                  "",
+                  {"rc0", "rc1", "rc2", "c0", "c1", "c2", "c3"},
+                  joinType)
+              .planNode();
       AssertQueryBuilder(op, duckDbQueryRunner_)
           .split(leftScanId, makeHiveConnectorSplit(rightFile->getPath()))
           .split(rightScanId, makeHiveConnectorSplit(leftFile->getPath()))
-          .assertResults(fmt::format(
-              "SELECT * FROM u {} JOIN t "
-              "ON u.rc0 = t.c0 AND u.rc1 = t.c1",
-              core::JoinTypeName::toName(joinType)));
+          .assertResults(
+              fmt::format(
+                  "SELECT * FROM u {} JOIN t "
+                  "ON u.rc0 = t.c0 AND u.rc1 = t.c1",
+                  core::JoinTypeName::toName(joinType)));
     }
+
     // anti join
     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
     core::PlanNodeId leftScanId;
@@ -455,7 +464,9 @@ class MergeJoinTest : public HiveConnectorTestBase {
                       {"c0", "c1"},
                       {"rc0", "rc1"},
                       PlanBuilder(planNodeIdGenerator)
-                          .tableScan(ROW({"rc0", "rc1", "rc2"}, {VARCHAR(), VARCHAR(), VARCHAR()}))
+                          .tableScan(
+                              ROW({"rc0", "rc1", "rc2"},
+                                  {VARCHAR(), VARCHAR(), VARCHAR()}))
                           .capturePlanNodeId(rightScanId)
                           .planNode(),
                       "",
@@ -468,18 +479,20 @@ class MergeJoinTest : public HiveConnectorTestBase {
         .assertResults(
             "SELECT * FROM t WHERE NOT exists (select * from u "
             "where t.c0 = u.rc0 AND t.c1 = u.rc1)");
+
     // anti join change side
     planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
     op = PlanBuilder(planNodeIdGenerator)
              .tableScan(
-                 ROW({"rc0", "rc1", "rc2"},
-                     {VARCHAR(), VARCHAR(), VARCHAR()}))
+                 ROW({"rc0", "rc1", "rc2"}, {VARCHAR(), VARCHAR(), VARCHAR()}))
              .capturePlanNodeId(leftScanId)
              .mergeJoin(
                  {"rc0", "rc1"},
                  {"c0", "c1"},
                  PlanBuilder(planNodeIdGenerator)
-                     .tableScan(ROW({"c0", "c1", "c2", "c3"}, {VARCHAR(), VARCHAR(), VARCHAR(), VARCHAR()}))
+                     .tableScan(
+                         ROW({"c0", "c1", "c2", "c3"},
+                             {VARCHAR(), VARCHAR(), VARCHAR(), VARCHAR()}))
                      .capturePlanNodeId(rightScanId)
                      .planNode(),
                  "",
@@ -2105,16 +2118,20 @@ TEST_F(MergeJoinTest, antiJoinWithTwoJoinKeysInDifferentBatch) {
 TEST_F(MergeJoinTest, testJoinWithTwoKeysAndSecondColumnHasNulls) {
   auto left = makeRowVector(
       {"c0", "c1", "c2", "c3"},
-      {makeNullableFlatVector<StringView>({"202408", "202409", "202409", "202410"}),
+      {
+          makeNullableFlatVector<StringView>(
+              {"202408", "202409", "202409", "202410"}),
           makeNullableFlatVector<StringView>({"1", std::nullopt, "2", "3"}),
           makeNullableFlatVector<StringView>({"1", "2", "2", "3"}),
           makeNullableFlatVector<StringView>({"1", "2", "2", "3"}),
       });
   auto right = makeRowVector(
       {"rc0", "rc1", "rc2"},
-      {makeNullableFlatVector<StringView>({"202408", "202409", "202409", "202410"}),
+      {makeNullableFlatVector<StringView>(
+           {"202408", "202409", "202409", "202410"}),
        makeNullableFlatVector<StringView>({"1", std::nullopt, "2", "3"}),
        makeNullableFlatVector<StringView>({"1", std::nullopt, "2", "3"})});
+
   testJoinTwoKeysWithNulls(left, right);
   testJoinTwoKeysWithNulls(left, right);
 }
