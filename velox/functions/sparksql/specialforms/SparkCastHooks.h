@@ -78,6 +78,19 @@ class SparkCastHooks : public exec::CastHooks {
 
   exec::PolicyType getPolicy() const override;
 
+ protected:
+  size_t applyCastFromDecimalToString(
+      int64_t unscaledValue,
+      int32_t scale,
+      int32_t maxSize,
+      char* const startPosition) const override;
+
+  size_t applyCastFromDecimalToString(
+      int128_t unscaledValue,
+      int32_t scale,
+      int32_t maxSize,
+      char* const startPosition) const override;
+
  private:
   // Casts a number to a timestamp. The number is treated as the number of
   // seconds since the epoch (1970-01-01 00:00:00 UTC).
