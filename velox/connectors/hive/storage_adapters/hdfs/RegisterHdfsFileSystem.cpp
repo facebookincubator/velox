@@ -20,7 +20,6 @@
 #include "velox/common/config/Config.h"
 #include "velox/connectors/hive/storage_adapters/hdfs/HdfsFileSystem.h" // @manual
 #include "velox/connectors/hive/storage_adapters/hdfs/HdfsUtil.h" // @manual
-#include "velox/connectors/hive/storage_adapters/hdfs/RegisterHdfsFileSystem.h"
 #include "velox/dwio/common/FileSink.h"
 #endif
 
@@ -29,7 +28,7 @@ namespace facebook::velox::filesystems {
 #ifdef VELOX_ENABLE_HDFS
 std::mutex mtx;
 
-folly::ConcurrentHashMap<std::string, std::shared_ptr<FileSystem>>
+folly::ConcurrentHashMap<std::string, std::shared_ptr<HdfsFileSystem>>
     registeredFilesystems;
 
 std::function<std::shared_ptr<

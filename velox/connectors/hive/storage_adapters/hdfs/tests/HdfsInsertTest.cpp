@@ -17,6 +17,7 @@
 #include "gtest/gtest.h"
 
 #include "velox/common/memory/Memory.h"
+#include "velox/connectors/hive/storage_adapters/hdfs/HdfsFileSystem.h"
 #include "velox/connectors/hive/storage_adapters/hdfs/RegisterHdfsFileSystem.h"
 #include "velox/connectors/hive/storage_adapters/hdfs/tests/HdfsMiniCluster.h"
 #include "velox/connectors/hive/storage_adapters/test_common/InsertTest.h"
