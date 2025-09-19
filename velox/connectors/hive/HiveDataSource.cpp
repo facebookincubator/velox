@@ -124,9 +124,15 @@ HiveDataSource::HiveDataSource(
     checkColumnNameLowerCase(hiveTableHandle_->remainingFilter());
   }
 
+  // Log filters being extracted from HiveTableHandle
+  LOG(INFO) << "HiveDataSource extracting filters for table: " << hiveTableHandle_->tableName()
+            << ", original subfieldFilters count: " << hiveTableHandle_->subfieldFilters().size();
+
   for (const auto& [k, v] : hiveTableHandle_->subfieldFilters()) {
     filters_.emplace(k.clone(), v);
+    LOG(INFO) << "  Extracted SubfieldFilter: " << k.toString() << " -> " << v->toString();
   }
+
   double sampleRate = 1;
   auto remainingFilter = extractFiltersFromRemainingFilter(
       hiveTableHandle_->remainingFilter(),
@@ -134,6 +140,14 @@ HiveDataSource::HiveDataSource(
       false,
       filters_,
       sampleRate);
+
+  LOG(INFO) << "HiveDataSource after extraction - total filters count: " << filters_.size();
+  if (hiveTableHandle_->remainingFilter()) {
+    LOG(INFO) << "  Original remainingFilter: " << hiveTableHandle_->remainingFilter()->toString();
+  }
+  if (remainingFilter) {
+    LOG(INFO) << "  Processed remainingFilter: " << remainingFilter->toString();
+  }
   if (sampleRate != 1) {
     randomSkip_ = std::make_shared<random::RandomSkipTracker>(sampleRate);
   }

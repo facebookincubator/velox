@@ -356,6 +356,12 @@ std::shared_ptr<common::ScanSpec> makeScanSpec(
     const SpecialColumnNames& specialColumns,
     bool disableStatsBasedFilterReorder,
     memory::MemoryPool* pool) {
+  // Log filters being converted to ScanSpec
+  LOG(INFO) << "makeScanSpec creating ScanSpec with " << filters.size() << " filters";
+  for (const auto& [subfield, filter] : filters) {
+    LOG(INFO) << "  Input filter: " << subfield.toString() << " -> " << filter->toString();
+  }
+
   auto spec = std::make_shared<common::ScanSpec>("root");
   folly::F14FastMap<std::string, std::vector<const common::Subfield*>>
       filterSubfields;
@@ -427,6 +433,8 @@ std::shared_ptr<common::ScanSpec> makeScanSpec(
     }
   }
 
+  int filtersAdded = 0;
+  int filtersSkipped = 0;
   for (auto& pair : filters) {
     const auto name = pair.first.toString();
     // SelectiveColumnReader doesn't support constant columns with filters,
@@ -438,12 +446,19 @@ std::shared_ptr<common::ScanSpec> makeScanSpec(
     // TODO Remove this check when Presto is fixed to not specify a filter
     // on $path and $bucket column.
     if (isSynthesizedColumn(name, infoColumns)) {
+      LOG(INFO) << "  Skipping synthesized column filter: " << name;
+      filtersSkipped++;
       continue;
     }
     auto fieldSpec = spec->getOrCreateChild(pair.first);
     VELOX_CHECK_NULL(spec->filter());
     fieldSpec->setFilter(pair.second);
+    fieldSpec->addFilter(*pair.second);
+    LOG(INFO) << "  Added filter to ScanSpec: " << pair.first.toString() << " -> " << pair.second->toString();
+    filtersAdded++;
   }
+
+  LOG(INFO) << "makeScanSpec completed - added " << filtersAdded << " filters, skipped " << filtersSkipped << " synthesized column filters";
 
   if (disableStatsBasedFilterReorder) {
     spec->disableStatsBasedFilterReorder();

@@ -772,6 +772,7 @@ class DictionaryColumnVisitor
 
   FOLLY_ALWAYS_INLINE vector_size_t
   process(typename make_index<T>::type value, bool& atEnd) {
+    // LOG(INFO) << "📍 DictionaryColumnVisitor::process() called with value=" << static_cast<uint64_t>(value);
     if (!isInDict()) {
       // If reading fixed width values, the not in dictionary value will be read
       // as unsigned at the width of the type. Integer columns are signed, so
@@ -790,24 +791,35 @@ class DictionaryColumnVisitor
     const vector_size_t previous =
         isDense && TFilter::deterministic ? 0 : super::currentRow();
     const T valueInDictionary = dict()[value];
+    LOG(INFO) << "🔍 DICTIONARY VISITOR: hasFilter()=" << hasFilter()
+              << ", value=" << static_cast<uint64_t>(value);
     if constexpr (!hasFilter()) {
+      LOG(INFO) << "🔵 NO FILTER - passing value directly";
       super::filterPassed(valueInDictionary);
     } else {
       // check the dictionary cache
+      LOG(INFO) << "🔍 DICTIONARY FILTER: Processing value " << static_cast<uint64_t>(value)
+                << ", deterministic=" << TFilter::deterministic;
       if (TFilter::deterministic &&
           filterCache()[value] == FilterResult::kSuccess) {
+        LOG(INFO) << "🟢 DICTIONARY FILTER CACHE HIT (SUCCESS) for index " << static_cast<uint64_t>(value);
         super::filterPassed(valueInDictionary);
       } else if (
           TFilter::deterministic &&
           filterCache()[value] == FilterResult::kFailure) {
+        LOG(INFO) << "🔴 DICTIONARY FILTER CACHE HIT (FAILURE) for index " << static_cast<uint64_t>(value);
         super::filterFailed();
       } else {
+        LOG(INFO) << "🟡 DICTIONARY FILTER CACHE MISS for index " << static_cast<uint64_t>(value)
+                  << " filter: " << super::filter_.toString();
         if (velox::common::applyFilter(super::filter_, valueInDictionary)) {
+          LOG(INFO) << "  -> 🟢 Filter PASSED, caching result";
           super::filterPassed(valueInDictionary);
           if (TFilter::deterministic) {
             filterCache()[value] = FilterResult::kSuccess;
           }
         } else {
+          LOG(INFO) << "  -> 🔴 Filter FAILED, caching result";
           super::filterFailed();
           if (TFilter::deterministic) {
             filterCache()[value] = FilterResult::kFailure;
@@ -1219,6 +1231,7 @@ class StringDictionaryColumnVisitor
             values) {}
 
   FOLLY_ALWAYS_INLINE vector_size_t process(int32_t value, bool& atEnd) {
+    LOG(INFO) << "📍 StringDictionaryColumnVisitor::process() called with value=" << value;
     bool inStrideDict = !DictSuper::isInDict();
     auto index = value;
     if (inStrideDict) {
@@ -1226,7 +1239,10 @@ class StringDictionaryColumnVisitor
     }
     vector_size_t previous =
         isDense && TFilter::deterministic ? 0 : super::currentRow();
+    LOG(INFO) << "🔍 STRING DICTIONARY VISITOR: hasFilter()=" << DictSuper::hasFilter()
+              << ", index=" << index;
     if constexpr (!DictSuper::hasFilter()) {
+      LOG(INFO) << "🔵 STRING NO FILTER - passing index directly";
       super::filterPassed(index);
     } else {
       // check the dictionary cache
@@ -1537,6 +1553,8 @@ class StringColumnReadWithVisitorHelper {
 
   template <typename F>
   auto operator()(F&& readWithVisitor) {
+    // LOG(INFO) << "🚀 StringDictionaryColumnVisitor operator() called, rows_.size()=" << rows_.size()
+    //           << ", rows_.back()=" << (rows_.empty() ? -1 : rows_.back());
     const bool isDense = rows_.back() == rows_.size() - 1;
     if (reader_.scanSpec()->keepValues()) {
       if (auto* hook = reader_.scanSpec()->valueHook()) {
@@ -1588,7 +1606,10 @@ class StringColumnReadWithVisitorHelper {
     using FilterValueT =
         std::conditional_t<kDictionary, vector_size_t, StringView>;
     auto* filter = reader_.scanSpec()->filter();
+    // LOG(INFO) << "🔧 processFilter: filter=" << (filter ? "EXISTS" : "NULL")
+    //           << ", filter_kind=" << (filter ? static_cast<int>(filter->kind()) : -1);
     if (filter == nullptr) {
+      // LOG(INFO) << "🔧 No filter - using AlwaysTrue";
       readHelper<velox::common::AlwaysTrue, kIsDense>(
           &alwaysTrue(), extractValues, std::forward<F>(readWithVisitor));
       return;

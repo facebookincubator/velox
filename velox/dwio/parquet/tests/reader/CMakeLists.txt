@@ -115,6 +115,22 @@ target_link_libraries(
   ${TEST_LINK_LIBS}
 )
 
+add_executable(velox_rowgroup_filtering_repro_test RowGroupFilteringReproTest.cpp)
+add_test(
+  NAME velox_rowgroup_filtering_repro_test
+  COMMAND velox_rowgroup_filtering_repro_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(
+  velox_rowgroup_filtering_repro_test
+  velox_dwio_parquet_reader
+  velox_dwio_parquet_writer
+  velox_exec_test_lib
+  velox_exec
+  velox_hive_connector
+  velox_link_libs
+  velox_type_tz
+  ${TEST_LINK_LIBS})
+
 if(${VELOX_ENABLE_ARROW})
   add_executable(velox_dwio_parquet_rlebp_decoder_test RleBpDecoderTest.cpp)
   add_test(
