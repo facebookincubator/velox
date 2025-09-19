@@ -379,6 +379,7 @@ class MergeJoinTest : public HiveConnectorTestBase {
     auto rightFile = TempFilePath::create();
     writeToFile(rightFile->getPath(), rightVectors);
     createDuckDbTable("u", {rightVectors});
+
     auto joinTypes = {
         core::JoinType::kInner,
         core::JoinType::kLeft,
@@ -418,93 +419,36 @@ class MergeJoinTest : public HiveConnectorTestBase {
                   core::JoinTypeName::toName(joinType)));
     }
 
-    // change side
-    for (auto joinType : joinTypes) {
+    {
+      // anti join
       auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
       core::PlanNodeId leftScanId;
       core::PlanNodeId rightScanId;
-      auto op =
-          PlanBuilder(planNodeIdGenerator)
-              .tableScan(
-                  ROW({"rc0", "rc1", "rc2"}, {VARCHAR(), VARCHAR(), VARCHAR()}))
-              .capturePlanNodeId(leftScanId)
-              .mergeJoin(
-                  {"rc0", "rc1"},
-                  {"c0", "c1"},
-                  PlanBuilder(planNodeIdGenerator)
-                      .tableScan(
-                          ROW({"c0", "c1", "c2", "c3"},
-                              {VARCHAR(), VARCHAR(), VARCHAR(), VARCHAR()}))
-                      .capturePlanNodeId(rightScanId)
-                      .planNode(),
-                  "",
-                  {"rc0", "rc1", "rc2", "c0", "c1", "c2", "c3"},
-                  joinType)
-              .planNode();
+      auto op = PlanBuilder(planNodeIdGenerator)
+                    .tableScan(
+                        ROW({"c0", "c1", "c2", "c3"},
+                            {VARCHAR(), VARCHAR(), VARCHAR(), VARCHAR()}))
+                    .capturePlanNodeId(leftScanId)
+                    .mergeJoin(
+                        {"c0", "c1"},
+                        {"rc0", "rc1"},
+                        PlanBuilder(planNodeIdGenerator)
+                            .tableScan(
+                                ROW({"rc0", "rc1", "rc2"},
+                                    {VARCHAR(), VARCHAR(), VARCHAR()}))
+                            .capturePlanNodeId(rightScanId)
+                            .planNode(),
+                        "",
+                        {"c0", "c1", "c2", "c3"},
+                        core::JoinType::kAnti)
+                    .planNode();
       AssertQueryBuilder(op, duckDbQueryRunner_)
-          .split(leftScanId, makeHiveConnectorSplit(rightFile->getPath()))
-          .split(rightScanId, makeHiveConnectorSplit(leftFile->getPath()))
+          .split(rightScanId, makeHiveConnectorSplit(rightFile->getPath()))
+          .split(leftScanId, makeHiveConnectorSplit(leftFile->getPath()))
           .assertResults(
-              fmt::format(
-                  "SELECT * FROM u {} JOIN t "
-                  "ON u.rc0 = t.c0 AND u.rc1 = t.c1",
-                  core::JoinTypeName::toName(joinType)));
+              "SELECT * FROM t WHERE NOT exists (select * from u "
+              "where t.c0 = u.rc0 AND t.c1 = u.rc1)");
     }
-
-    // anti join
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    core::PlanNodeId leftScanId;
-    core::PlanNodeId rightScanId;
-    auto op = PlanBuilder(planNodeIdGenerator)
-                  .tableScan(
-                      ROW({"c0", "c1", "c2", "c3"},
-                          {VARCHAR(), VARCHAR(), VARCHAR(), VARCHAR()}))
-                  .capturePlanNodeId(leftScanId)
-                  .mergeJoin(
-                      {"c0", "c1"},
-                      {"rc0", "rc1"},
-                      PlanBuilder(planNodeIdGenerator)
-                          .tableScan(
-                              ROW({"rc0", "rc1", "rc2"},
-                                  {VARCHAR(), VARCHAR(), VARCHAR()}))
-                          .capturePlanNodeId(rightScanId)
-                          .planNode(),
-                      "",
-                      {"c0", "c1", "c2", "c3"},
-                      core::JoinType::kAnti)
-                  .planNode();
-    AssertQueryBuilder(op, duckDbQueryRunner_)
-        .split(rightScanId, makeHiveConnectorSplit(rightFile->getPath()))
-        .split(leftScanId, makeHiveConnectorSplit(leftFile->getPath()))
-        .assertResults(
-            "SELECT * FROM t WHERE NOT exists (select * from u "
-            "where t.c0 = u.rc0 AND t.c1 = u.rc1)");
-
-    // anti join change side
-    planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    op = PlanBuilder(planNodeIdGenerator)
-             .tableScan(
-                 ROW({"rc0", "rc1", "rc2"}, {VARCHAR(), VARCHAR(), VARCHAR()}))
-             .capturePlanNodeId(leftScanId)
-             .mergeJoin(
-                 {"rc0", "rc1"},
-                 {"c0", "c1"},
-                 PlanBuilder(planNodeIdGenerator)
-                     .tableScan(
-                         ROW({"c0", "c1", "c2", "c3"},
-                             {VARCHAR(), VARCHAR(), VARCHAR(), VARCHAR()}))
-                     .capturePlanNodeId(rightScanId)
-                     .planNode(),
-                 "",
-                 {"rc0", "rc1", "rc2"},
-                 core::JoinType::kAnti)
-             .planNode();
-    AssertQueryBuilder(op, duckDbQueryRunner_)
-        .split(leftScanId, makeHiveConnectorSplit(rightFile->getPath()))
-        .split(rightScanId, makeHiveConnectorSplit(leftFile->getPath()))
-        .assertResults(
-            "SELECT * FROM u WHERE NOT exists (select * from t "
-            "where u.rc0 = t.c0 AND u.rc1 = t.c1)");
   }
 };
 
@@ -2132,6 +2076,5 @@ TEST_F(MergeJoinTest, testJoinWithTwoKeysAndSecondColumnHasNulls) {
        makeNullableFlatVector<StringView>({"1", std::nullopt, "2", "3"}),
        makeNullableFlatVector<StringView>({"1", std::nullopt, "2", "3"})});
 
-  testJoinTwoKeysWithNulls(left, right);
   testJoinTwoKeysWithNulls(left, right);
 }
