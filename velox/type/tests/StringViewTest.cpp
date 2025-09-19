@@ -153,6 +153,40 @@ TEST(StringView, implicitConstructionAndConversion) {
     EXPECT_EQ(sv, "literal");
   };
   testOptionalConversion("literal");
+
+  // Conversion to and from std::string_view
+  StringView sv6("velox_string_view");
+  std::string_view stdView = sv6;
+  EXPECT_EQ(stdView, "velox_string_view");
+  EXPECT_EQ(stdView.data(), sv6.data());
+  EXPECT_EQ(stdView.size(), sv6.size());
+  std::string_view stdView2("std_string_view");
+  StringView sv7(stdView2);
+  EXPECT_EQ(sv7, "std_string_view");
+
+  // Conversion to and from folly::StringPiece
+  StringView sv8("velox_string_view");
+  folly::StringPiece fp = sv8;
+  EXPECT_EQ(fp, "velox_string_view");
+  EXPECT_EQ(fp.data(), sv8.data());
+  EXPECT_EQ(fp.size(), sv8.size());
+  folly::StringPiece fp2("folly_string_view");
+  StringView sv9(fp2);
+  EXPECT_EQ(sv9, "folly_string_view");
+
+  // Implicit conversion to std::string_view
+  auto testStringViewParam = [](std::string_view sv) {
+    EXPECT_EQ(sv, "sv_param_test");
+  };
+  StringView sv10("sv_param_test");
+  testStringViewParam(sv10);
+
+  // Implicit conversion to folly::StringPiece
+  auto testStringPieceParam = [](folly::StringPiece sp) {
+    EXPECT_EQ(sp, "fp_param_test");
+  };
+  StringView sv11("fp_param_test");
+  testStringPieceParam(sv11);
 }
 
 TEST(StringView, negativeSizes) {
