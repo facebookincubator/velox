@@ -40,10 +40,7 @@ struct CudfHiveConnectorSplit
   CudfHiveConnectorSplit(
       const std::string& connectorId,
       const std::string& _filePath,
-      int64_t _splitWeight = 0)
-      : facebook::velox::connector::ConnectorSplit(connectorId, _splitWeight),
-        filePath(_filePath),
-        cudfSourceInfo(std::make_unique<cudf::io::source_info>(filePath)) {}
+      int64_t _splitWeight = 0);
 
   std::string toString() const override;
   std::string getFileName() const;
