@@ -32,6 +32,15 @@ void registerSimpleFunctions(const std::string& prefix) {
 
   registerFunction<CombineHashFunction, int64_t, int64_t, int64_t>(
       {prefix + "combine_hash_internal"});
+
+  registerFunction<HashCodeBigintFunction, int64_t, int64_t>(
+      {prefix + "hash_code_internal"});
+  registerFunction<HashCodeIntegerFunction, int64_t, int32_t>(
+      {prefix + "hash_code_internal"});
+  registerFunction<HashCodeSmallintFunction, int64_t, int16_t>(
+      {prefix + "hash_code_internal"});
+  registerFunction<HashCodeTinyintFunction, int64_t, int8_t>(
+      {prefix + "hash_code_internal"});
 }
 } // namespace
 

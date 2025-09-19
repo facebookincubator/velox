@@ -19,6 +19,7 @@
 #include <xxhash.h>
 
 #include "velox/functions/Udf.h"
+#include "velox/functions/prestosql/HashCodeUtils.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox::functions {
@@ -87,6 +88,50 @@ struct CombineHashFunction {
     result = static_cast<int64_t>(
         31 * static_cast<uint64_t>(previousHashValue) +
         static_cast<uint64_t>(input));
+  }
+};
+
+/// hash_code(bigint) → bigint
+template <typename T>
+struct HashCodeBigintFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE
+  void call(out_type<int64_t>& result, const int64_t& input) {
+    result = HashCodeUtils::hashInteger<int64_t>(input);
+  }
+};
+
+/// hash_code(integer) → bigint
+template <typename T>
+struct HashCodeIntegerFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE
+  void call(out_type<int64_t>& result, const int32_t& input) {
+    result = HashCodeUtils::hashInteger<int32_t>(input);
+  }
+};
+
+/// hash_code(smallint) → bigint
+template <typename T>
+struct HashCodeSmallintFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE
+  void call(out_type<int64_t>& result, const int16_t& input) {
+    result = HashCodeUtils::hashInteger<int16_t>(input);
+  }
+};
+
+/// hash_code(tinyint) → bigint
+template <typename T>
+struct HashCodeTinyintFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE
+  void call(out_type<int64_t>& result, const int8_t& input) {
+    result = HashCodeUtils::hashInteger<int8_t>(input);
   }
 };
 

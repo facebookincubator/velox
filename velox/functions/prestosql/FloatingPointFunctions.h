@@ -19,6 +19,7 @@
 #include <xxhash.h>
 
 #include "velox/functions/Udf.h"
+#include "velox/functions/prestosql/HashCodeUtils.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox::functions {
@@ -46,6 +47,28 @@ struct XxHash64DoubleFunction {
   void call(out_type<int64_t>& result, const arg_type<double>& input) {
     // Hash the double value directly
     result = XXH64(&input, sizeof(input), 0);
+  }
+};
+
+/// hash_code(real) → bigint
+template <typename T>
+struct HashCodeRealFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE
+  void call(out_type<int64_t>& result, const arg_type<float>& input) {
+    result = HashCodeUtils::hashReal(input);
+  }
+};
+
+/// hash_code(double) → bigint
+template <typename T>
+struct HashCodeDoubleFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE
+  void call(out_type<int64_t>& result, const arg_type<double>& input) {
+    result = HashCodeUtils::hashDouble(input);
   }
 };
 

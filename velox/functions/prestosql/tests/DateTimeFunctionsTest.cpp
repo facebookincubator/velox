@@ -5494,3 +5494,27 @@ TEST_F(DateTimeFunctionsTest, xxHash64FunctionTimestamp) {
   EXPECT_EQ(
       7585368295023641328, xxhash64(parseTimestamp("1900-01-01 00:00:00.000")));
 }
+
+TEST_F(DateTimeFunctionsTest, hashCodeFunctionTimestamp) {
+  const auto hashCode = [&](std::optional<Timestamp> value) {
+    return evaluateOnce<int64_t>("hash_code_internal(c0)", value);
+  };
+
+  EXPECT_EQ(std::nullopt, hashCode(std::nullopt));
+
+  EXPECT_EQ(0, hashCode(parseTimestamp("1970-01-01 00:00:00.000")));
+  EXPECT_EQ(
+      9155312661752487122, hashCode(parseTimestamp("1970-01-01 00:00:00.001")));
+  EXPECT_EQ(
+      7397604632328768595, hashCode(parseTimestamp("2023-05-15 12:30:45.123")));
+  EXPECT_EQ(
+      -6288327804501791043,
+      hashCode(parseTimestamp("2023-05-15 12:30:45.456")));
+  EXPECT_NE(std::nullopt, hashCode(Timestamp::now()));
+  EXPECT_EQ(
+      -7046770406857882998,
+      hashCode(parseTimestamp("2050-12-31 23:59:59.999")));
+  EXPECT_EQ(
+      -5802362750313934913,
+      hashCode(parseTimestamp("1900-01-01 00:00:00.000")));
+}
