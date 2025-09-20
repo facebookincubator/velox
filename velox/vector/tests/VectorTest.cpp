@@ -4268,5 +4268,172 @@ TEST_F(VectorTest, estimateFlatSize) {
   // Test that the second call to prepareForReuse will not cause crash
   arrayVector->prepareForReuse();
 }
+
+TEST_F(VectorTest, transferOrCopyTo) {
+  auto rootPool = memory::memoryManager()->addRootPool("long-living");
+  auto pool = rootPool->addLeafChild("long-living leaf");
+
+  VectorPtr vector;
+  VectorPtr expected;
+
+  // Test primitive type.
+  {
+    auto localRootPool = memory::memoryManager()->addRootPool("short-living");
+    auto localPool = localRootPool->addLeafChild("short-living leaf");
+    test::VectorMaker maker{localPool.get()};
+    vector = maker.flatVector<int64_t>(
+        3, [](auto row) { return row; }, [](auto row) { return row == 2; });
+    expected = BaseVector::copy(*vector, pool.get());
+    vector->transferOrCopyTo(pool.get());
+  }
+  ASSERT_EQ(vector->pool(), pool.get());
+  test::assertEqualVectors(expected, vector);
+
+  // Test complex type.
+  {
+    auto localRootPool = memory::memoryManager()->addRootPool("short-living");
+    auto localPool = localRootPool->addLeafChild("short-living leaf");
+    test::VectorMaker maker{localPool.get()};
+    vector = maker.rowVector(
+        {maker.flatVector<double>(
+             3,
+             [](auto row) { return row; },
+             [](auto row) { return row == 2; }),
+         maker.constantVector<bool>({true, true, true}),
+         maker.dictionaryVector<int64_t>({1, std::nullopt, 1}),
+         maker.arrayVector<int64_t>(
+             3,
+             [](auto row) { return row; },
+             [](auto row) { return row; },
+             [](auto row) { return row == 0; },
+             [](auto row) { return row == 1; }),
+         maker.mapVector<int64_t, int64_t>(
+             3,
+             [](auto row) { return row; },
+             [](auto row) { return row; },
+             [](auto row) { return row + 1; },
+             [](auto row) { return row == 1; },
+             [](auto row) { return row == 2; })});
+    expected = BaseVector::copy(*vector, pool.get());
+    vector->transferOrCopyTo(pool.get());
+  }
+  ASSERT_EQ(vector->pool(), pool.get());
+  test::assertEqualVectors(expected, vector);
+
+  // Test with fuzzing.
+  // TODO: FlatMapVector doesn't support copy() yet. Add it later when it
+  // supports.
+  VectorFuzzer::Options options{
+      .nullRatio = 0.2,
+      .stringVariableLength = true,
+      .allowLazyVector = true,
+      .allowFlatMapVector = false};
+  const int kNumIterations = 500;
+  for (auto i = 0; i < kNumIterations; ++i) {
+    {
+      auto localRootPool = memory::memoryManager()->addRootPool("short-living");
+      auto localPool = localRootPool->addLeafChild("short-living leaf");
+
+      VectorFuzzer fuzzer{options, localPool.get(), 123};
+      auto type = fuzzer.randType();
+      vector = fuzzer.fuzz(type);
+      expected = BaseVector::copy(*vector, pool.get());
+      vector->transferOrCopyTo(pool.get());
+    }
+    ASSERT_EQ(vector->pool(), pool.get());
+    test::assertEqualVectors(expected, vector);
+  }
+
+  // Test complex-typed vectors with buffers from different pools.
+  VectorFuzzer fuzzer{options, pool.get(), 123};
+  for (auto i = 0; i < kNumIterations; ++i) {
+    {
+      auto localRootPool = memory::memoryManager()->addRootPool("short-living");
+      auto localPool = localRootPool->addLeafChild("short-living leaf");
+      VectorFuzzer localFuzzer{options, localPool.get(), 123};
+
+      auto type = fuzzer.randType();
+      auto elements = localFuzzer.fuzz(type);
+      auto arrays = fuzzer.fuzzArray(elements, 70);
+      fuzzer.setOptions({});
+      auto keys = fuzzer.fuzz(BIGINT());
+      fuzzer.setOptions(options);
+      auto maps = localFuzzer.fuzzMap(keys, arrays, 50);
+      vector = localFuzzer.fuzzRow({maps}, 50);
+
+      expected = BaseVector::copy(*vector, pool.get());
+      vector->transferOrCopyTo(pool.get());
+    }
+    ASSERT_EQ(vector->pool(), pool.get());
+    test::assertEqualVectors(expected, vector);
+  }
+
+  // Test memory pool with different allocator.
+  {
+    memory::MemoryManager anotherManager{memory::MemoryManager::Options{}};
+    auto anotherRootPool = anotherManager.addRootPool("another root pool");
+    auto anotherPool = anotherRootPool->addLeafChild("another leaf pool");
+    VectorFuzzer localFuzzer{options, anotherPool.get(), 789};
+
+    auto type = fuzzer.randType();
+    vector = fuzzer.fuzz(type);
+    expected = BaseVector::copy(*vector, pool.get());
+    vector->transferOrCopyTo(pool.get());
+  }
+  ASSERT_EQ(vector->pool(), pool.get());
+  test::assertEqualVectors(expected, vector);
+
+  // Test opaque vector.
+  {
+    auto localRootPool = memory::memoryManager()->addRootPool("short-living");
+    auto localPool = localRootPool->addLeafChild("short-living leaf");
+
+    auto type = OPAQUE<NonPOD>();
+    auto size = 100;
+    vector = BaseVector::create(type, size, localPool.get());
+    auto opaqueObj = std::make_shared<NonPOD>();
+    for (auto i = 0; i < size; ++i) {
+      vector->as<FlatVector<std::shared_ptr<void>>>()->set(i, opaqueObj);
+    }
+    expected = BaseVector::copy(*vector, pool.get());
+    vector->transferOrCopyTo(pool.get());
+  }
+  ASSERT_EQ(vector->pool(), pool.get());
+  test::assertEqualVectors(expected, vector);
+
+  auto testMemoryStats = [&options](size_t seed) {
+    auto localRoot1 = memory::memoryManager()->addRootPool("local root 1");
+    auto localLeaf1 = localRoot1->addLeafChild("local leaf 1");
+    auto localRoot2 = memory::memoryManager()->addRootPool("local root 2");
+    auto localLeaf2 = localRoot2->addLeafChild("local leaf 2");
+
+    EXPECT_EQ(localLeaf1->usedBytes(), 0);
+    EXPECT_EQ(localLeaf1->peakBytes(), 0);
+    EXPECT_EQ(localLeaf2->usedBytes(), 0);
+    EXPECT_EQ(localLeaf2->peakBytes(), 0);
+
+    VectorFuzzer fuzzer{options, localLeaf1.get(), seed};
+    auto size = fuzzer.randInRange(0, 10000);
+    auto type = fuzzer.randType();
+    auto vector = fuzzer.fuzz(type, size);
+    auto usedBytes = localLeaf1->usedBytes();
+    auto peakBytes = localLeaf1->peakBytes();
+
+    vector->transferOrCopyTo(localLeaf2.get());
+    EXPECT_LE(localLeaf2->usedBytes(), usedBytes);
+    EXPECT_LE(localLeaf2->peakBytes(), peakBytes);
+    if (localLeaf2->usedBytes() == 0) {
+      auto tmp = facebook::velox::isLazyNotLoaded(*vector) ||
+          vector->isConstantEncoding();
+      EXPECT_TRUE(tmp);
+    }
+    vector = nullptr;
+  };
+
+  for (auto i = 0; i < kNumIterations; ++i) {
+    testMemoryStats(kNumIterations * i + i);
+  }
+}
+
 } // namespace
 } // namespace facebook::velox
