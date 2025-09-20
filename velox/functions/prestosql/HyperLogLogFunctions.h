@@ -78,4 +78,149 @@ struct EmptyApproxSetWithMaxErrorFunction {
     return true;
   }
 };
+
+class MergeHllFunction : public exec::VectorFunction {
+ public:
+  static std::vector<exec::FunctionSignaturePtr> signatures() {
+    return {exec::FunctionSignatureBuilder()
+                .returnType("hyperloglog")
+                .argumentType("array(hyperloglog)")
+                .build()};
+  }
+
+  void apply(
+      const SelectivityVector& rows,
+      std::vector<VectorPtr>& args,
+      const TypePtr& outputType,
+      exec::EvalCtx& context,
+      VectorPtr& result) const override {
+    VELOX_CHECK_EQ(args.size(), 1);
+
+    context.ensureWritable(rows, outputType, result);
+    auto* flatResult = result->as<FlatVector<StringView>>();
+
+    exec::LocalDecodedVector arrayDecoder(context, *args[0], rows);
+    auto decodedArray = arrayDecoder.get();
+    auto baseArray = decodedArray->base()->as<ArrayVector>();
+    auto rawSizes = baseArray->rawSizes();
+    auto rawOffsets = baseArray->rawOffsets();
+    auto indices = decodedArray->indices();
+    auto arrayElements = baseArray->elements();
+    auto flatArrayElements = arrayElements->as<FlatVector<StringView>>();
+
+    memory::MemoryPool* memoryPool = context.pool();
+    using SparseHll = common::hll::SparseHll<memory::MemoryPool>;
+    using DenseHll = common::hll::DenseHll<memory::MemoryPool>;
+
+    rows.applyToSelected([&](vector_size_t row) {
+      if (decodedArray->isNullAt(row)) {
+        flatResult->setNull(row, true);
+        return;
+      }
+
+      auto arraySize = rawSizes[indices[row]];
+      auto arrayOffset = rawOffsets[indices[row]];
+
+      int8_t indexBitLength = -1;
+      bool isSparse = true;
+      std::optional<SparseHll> sparseHll;
+      std::optional<DenseHll> denseHll;
+
+      for (vector_size_t i = 0; i < arraySize; ++i) {
+        auto elementIndex = arrayOffset + i;
+        if (arrayElements->isNullAt(elementIndex)) {
+          continue;
+        }
+
+        auto hllData = flatArrayElements->valueAt(elementIndex);
+        if (hllData.empty()) {
+          continue;
+        }
+
+        bool isSparseHllData = false;
+        bool isDenseHllData = false;
+
+        if (indexBitLength < 0) {
+          if (common::hll::DenseHlls::canDeserialize(hllData.data())) {
+            isDenseHllData = true;
+            indexBitLength = common::hll::DenseHlls::deserializeIndexBitLength(
+                hllData.data());
+          } else if (common::hll::SparseHlls::canDeserialize(hllData.data())) {
+            isSparseHllData = true;
+            indexBitLength = common::hll::SparseHlls::deserializeIndexBitLength(
+                hllData.data());
+          }
+        } else {
+          isSparseHllData =
+              common::hll::SparseHlls::canDeserialize(hllData.data());
+          isDenseHllData = !isSparseHllData &&
+              common::hll::DenseHlls::canDeserialize(hllData.data());
+        }
+
+        if (isSparseHllData) {
+          auto cardinality =
+              common::hll::SparseHlls::cardinality(hllData.data());
+          if (cardinality == 0) {
+            continue;
+          }
+
+          if (isSparse) {
+            if (!sparseHll) {
+              sparseHll.emplace(memoryPool);
+              sparseHll->setSoftMemoryLimit(
+                  common::hll::DenseHlls::estimateInMemorySize(indexBitLength));
+            }
+
+            sparseHll->mergeWith(hllData.data());
+            if (sparseHll->overLimit()) {
+              denseHll.emplace(indexBitLength, memoryPool);
+              sparseHll->toDense(*denseHll);
+              sparseHll.reset();
+              isSparse = false;
+            }
+          } else {
+            SparseHll temp{hllData.data(), memoryPool};
+            temp.toDense(*denseHll);
+          }
+        } else if (common::hll::DenseHlls::canDeserialize(hllData.data())) {
+          auto hllIndexBitLength =
+              common::hll::DenseHlls::deserializeIndexBitLength(hllData.data());
+          VELOX_USER_CHECK_EQ(
+              indexBitLength,
+              hllIndexBitLength,
+              "Cannot merge HLLs with different indexBitLength: {} vs {}",
+              indexBitLength,
+              hllIndexBitLength);
+
+          if (isSparse) {
+            denseHll.emplace(indexBitLength, memoryPool);
+            if (sparseHll) {
+              sparseHll->toDense(*denseHll);
+              sparseHll.reset();
+            }
+            isSparse = false;
+          }
+          denseHll->mergeWith(hllData.data());
+        } else {
+          VELOX_USER_FAIL("Invalid HLL data format");
+        }
+      }
+
+      if (!sparseHll && !denseHll) {
+        flatResult->setNull(row, true);
+      } else if (isSparse) {
+        auto size = sparseHll->serializedSize();
+        char* buffer = flatResult->getRawStringBufferWithSpace(size);
+        sparseHll->serialize(indexBitLength, buffer);
+        flatResult->setNoCopy(row, StringView(buffer, size));
+      } else {
+        auto size = denseHll->serializedSize();
+        char* buffer = flatResult->getRawStringBufferWithSpace(size);
+        denseHll->serialize(buffer);
+        flatResult->setNoCopy(row, StringView(buffer, size));
+      }
+    });
+  }
+};
+
 } // namespace facebook::velox::functions

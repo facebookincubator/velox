@@ -19,8 +19,7 @@
 #define XXH_INLINE_ALL
 #include <xxhash.h>
 
-using facebook::velox::common::hll::DenseHll;
-using facebook::velox::common::hll::SparseHll;
+using namespace facebook::velox::common::hll;
 
 namespace facebook::velox {
 namespace {
@@ -52,7 +51,7 @@ class HyperLogLogFunctionsTest : public functions::test::FunctionBaseTest {
 
   std::shared_ptr<memory::MemoryPool> pool_{
       memory::memoryManager()->addLeafPool()};
-  HashStringAllocator allocator_{pool_.get()};
+  HashStringAllocator hsAllocator_{pool_.get()};
 };
 
 TEST_F(HyperLogLogFunctionsTest, cardinalitySignatures) {
@@ -77,7 +76,7 @@ TEST_F(HyperLogLogFunctionsTest, cardinalitySparse) {
     return evaluateOnce<int64_t>("cardinality(c0)", HYPERLOGLOG(), input);
   };
 
-  SparseHll<> sparseHll{&allocator_};
+  SparseHll<> sparseHll{&hsAllocator_};
   for (int i = 0; i < 1'000; i++) {
     sparseHll.insertHash(hashOne(i % 17));
   }
@@ -91,7 +90,7 @@ TEST_F(HyperLogLogFunctionsTest, cardinalityDense) {
     return evaluateOnce<int64_t>("cardinality(c0)", HYPERLOGLOG(), input);
   };
 
-  DenseHll<> denseHll{12, &allocator_};
+  DenseHll<> denseHll{12, &hsAllocator_};
   for (int i = 0; i < 10'000'000; i++) {
     denseHll.insertHash(hashOne(i));
   }
@@ -110,6 +109,77 @@ TEST_F(HyperLogLogFunctionsTest, emptyApproxSet) {
       0,
       evaluateOnce<int64_t>(
           "cardinality(empty_approx_set(0.1))", makeRowVector(ROW({}), 1)));
+}
+
+TEST_F(HyperLogLogFunctionsTest, mergeHll) {
+  // Test merging two HLL instances with different value ranges.
+  const int8_t indexBitLength = 12;
+
+  // Create sparse HLL with elements 0-9 using memory::MemoryPool
+  common::hll::SparseHll<memory::MemoryPool> sparseHll1{pool_.get()};
+  for (int i = 0; i < 10; i++) {
+    sparseHll1.insertHash(hashOne(i));
+  }
+  auto serialized1 = serialize(indexBitLength, sparseHll1);
+
+  // Create sparse HLL with elements 10-19 using memory::MemoryPool
+  common::hll::SparseHll<memory::MemoryPool> sparseHll2{pool_.get()};
+  for (int i = 10; i < 20; i++) {
+    sparseHll2.insertHash(hashOne(i));
+  }
+  auto serialized2 = serialize(indexBitLength, sparseHll2);
+
+  auto elements = makeFlatVector<StringView>(
+      {StringView(serialized1), StringView(serialized2)}, HYPERLOGLOG());
+  auto arrayVector = makeArrayVector({0, 2}, elements);
+
+  auto cardinalityValue = evaluateOnce<int64_t>(
+      "cardinality(merge_hll(c0))", makeRowVector({arrayVector}));
+
+  // Should be close to 20 unique elements
+  EXPECT_GE(cardinalityValue, 18);
+  EXPECT_LE(cardinalityValue, 22);
+}
+
+TEST_F(HyperLogLogFunctionsTest, mergeHllWithNull) {
+  const int8_t indexBitLength = 12;
+
+  common::hll::SparseHll<memory::MemoryPool> sparseHll{pool_.get()};
+  for (int i = 0; i < 10; i++) {
+    sparseHll.insertHash(hashOne(i));
+  }
+  auto serialized = serialize(indexBitLength, sparseHll);
+  auto elements = makeFlatVector<StringView>(
+      {StringView(serialized), StringView(), StringView(serialized)},
+      HYPERLOGLOG());
+  elements->setNull(1, true);
+  auto arrayVector = makeArrayVector({0, 3}, elements);
+
+  auto cardinalityValue = evaluateOnce<int64_t>(
+      "cardinality(merge_hll(c0))", makeRowVector({arrayVector}));
+  EXPECT_GE(cardinalityValue, 8);
+  EXPECT_LE(cardinalityValue, 12);
+}
+
+TEST_F(HyperLogLogFunctionsTest, mergeHllEmpty) {
+  auto input =
+      makeRowVector({makeArrayVector<StringView>({{}}, HYPERLOGLOG())});
+  auto result = evaluate("merge_hll(c0)", input);
+  ASSERT_TRUE(result->isNullAt(0));
+}
+
+TEST_F(HyperLogLogFunctionsTest, mergeHllNullArray) {
+  auto input = makeRowVector({makeNullableArrayVector<std::string>(
+      {std::nullopt}, ARRAY(HYPERLOGLOG()))});
+  auto result = evaluate("merge_hll(c0)", input);
+  ASSERT_TRUE(result->isNullAt(0));
+}
+
+TEST_F(HyperLogLogFunctionsTest, mergeHllAllNulls) {
+  auto input = makeRowVector({makeArrayVectorFromJson<std::string>(
+      {"[null, null, null]"}, ARRAY(HYPERLOGLOG()))});
+  auto result = evaluate("merge_hll(c0)", input);
+  ASSERT_TRUE(result->isNullAt(0));
 }
 
 } // namespace
