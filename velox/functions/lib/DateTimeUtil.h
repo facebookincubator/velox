@@ -15,7 +15,10 @@
  */
 #pragma once
 
-#include "velox/functions/lib/TimeUtils.h"
+#include "velox/external/date/date.h"
+#include "velox/functions/lib/DateTimeFormatter.h"
+#include "velox/type/Timestamp.h"
+#include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox::functions {
 
@@ -368,32 +371,6 @@ FOLLY_ALWAYS_INLINE Timestamp addToTimestamp(
     result = addToTimestamp(timestamp, unit, value);
   }
   return result;
-}
-
-FOLLY_ALWAYS_INLINE bool isEndDayOfMonth(const std::tm& tm) {
-  return tm.tm_mday == util::getMaxDayOfMonth(getYear(tm), getMonth(tm));
-}
-
-FOLLY_ALWAYS_INLINE double
-monthsBetween(const std::tm& tm1, const std::tm& tm2, bool roundOff) {
-  const double monthDiff =
-      (tm1.tm_year - tm2.tm_year) * kMonthInYear + tm1.tm_mon - tm2.tm_mon;
-  if (tm1.tm_mday == tm2.tm_mday ||
-      (isEndDayOfMonth(tm1) && isEndDayOfMonth(tm2))) {
-    return monthDiff;
-  }
-  const auto secondsInDay1 =
-      tm1.tm_hour * kSecondsInHour + tm1.tm_min * kSecondsInMinute + tm1.tm_sec;
-  const auto secondsInDay2 =
-      tm2.tm_hour * kSecondsInHour + tm2.tm_min * kSecondsInMinute + tm2.tm_sec;
-  const auto secondsDiff = (tm1.tm_mday - tm2.tm_mday) * kSecondsInDay +
-      secondsInDay1 - secondsInDay2;
-  const auto diff =
-      monthDiff + static_cast<double>(secondsDiff) / kSecondsInMonth;
-  if (roundOff) {
-    return round(diff * 1e8) / 1e8;
-  }
-  return diff;
 }
 
 } // namespace facebook::velox::functions
