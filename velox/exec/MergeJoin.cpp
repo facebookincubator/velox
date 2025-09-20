@@ -247,7 +247,9 @@ int32_t MergeJoin::compare(
     if (!compare.has_value()) {
       // The SQL semantics of Presto and Spark will always return false if
       // comparing a NULL value with any other value.
-      return -1;
+      // If right side is null, and left side is not null, should return 1
+      // So the following process will catch up rightInput_ with input_
+      return batch->childAt(keys[i])->isNullAt(index) ? -1 : 1;
     } else if (compare.value() != 0) {
       return compare.value();
     }
