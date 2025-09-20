@@ -695,4 +695,17 @@ MapVectorPtr FlatMapVector::toMapVector() const {
       sortedKeys_);
 }
 
+void FlatMapVector::transferOrCopyTo(velox::memory::MemoryPool* pool) {
+  BaseVector::transferOrCopyTo(pool);
+  distinctKeys_->transferOrCopyTo(pool);
+  for (auto& mapValue : mapValues_) {
+    mapValue->transferOrCopyTo(pool);
+  }
+  for (auto& inMap : inMaps_) {
+    if (!inMap->transferTo(pool)) {
+      inMap = AlignedBuffer::copy<uint64_t>(inMap, pool);
+    }
+  }
+}
+
 } // namespace facebook::velox
