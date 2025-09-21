@@ -165,6 +165,33 @@ class ConnectorInsertTableHandle : public ISerializable {
   }
 };
 
+class ConnectorLocationHandle : public ISerializable {
+ public:
+  enum class TableType { kNew, kExisting, kTemp };
+
+  ConnectorLocationHandle(const std::string& connectorId, TableType tableType)
+      : connectorId_{connectorId}, tableType_{tableType} {}
+
+  virtual ~ConnectorLocationHandle();
+
+  const std::string& connectorId() const {
+    return connectorId_;
+  }
+
+  /// New vs existing vs temp.
+  TableType tableType() const {
+    return tableType_;
+  }
+
+  virtual std::string toString() const = 0;
+
+  virtual folly::dynamic serialize() const = 0;
+
+ private:
+  const std::string connectorId_;
+  const TableType tableType_;
+};
+
 using ConnectorInsertTableHandlePtr =
     std::shared_ptr<const ConnectorInsertTableHandle>;
 
