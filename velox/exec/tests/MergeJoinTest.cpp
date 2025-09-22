@@ -412,11 +412,10 @@ class MergeJoinTest : public HiveConnectorTestBase {
       AssertQueryBuilder(op, duckDbQueryRunner_)
           .split(rightScanId, makeHiveConnectorSplit(rightFile->getPath()))
           .split(leftScanId, makeHiveConnectorSplit(leftFile->getPath()))
-          .assertResults(
-              fmt::format(
-                  "SELECT * FROM t {} JOIN u "
-                  "ON t.c0 = u.rc0 AND t.c1 = u.rc1",
-                  core::JoinTypeName::toName(joinType)));
+          .assertResults(fmt::format(
+              "SELECT * FROM t {} JOIN u "
+              "ON t.c0 = u.rc0 AND t.c1 = u.rc1",
+              core::JoinTypeName::toName(joinType)));
     }
 
     {
