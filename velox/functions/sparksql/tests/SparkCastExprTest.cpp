@@ -193,6 +193,68 @@ TEST_F(SparkCastExprTest, decimalToIntegral) {
   testDecimalToIntegralCasts<int8_t>();
 }
 
+TEST_F(SparkCastExprTest, decimalToVarchar) {
+  auto expect64 = [&](const std::vector<std::optional<int64_t>>& values,
+                      const TypePtr& type,
+                      const std::vector<std::optional<StringView>>& expected) {
+    testCast(
+        makeNullableFlatVector<int64_t>(values, type),
+        makeNullableFlatVector<StringView>(expected));
+  };
+
+  auto expect128 = [&](const std::vector<std::optional<int128_t>>& values,
+                       const TypePtr& type,
+                       const std::vector<std::optional<StringView>>& expected) {
+    testCast(
+        makeNullableFlatVector<int128_t>(values, type),
+        makeNullableFlatVector<StringView>(expected));
+  };
+
+  // Short decimal with scale > 0 (inlined).
+  expect64(
+      {123456789, -333333333, 0, 5, -9, std::nullopt},
+      DECIMAL(9, 2),
+      {"1234567.89", "-3333333.33", "0.00", "0.05", "-0.09", std::nullopt});
+
+  // Short decimal zero scale.
+  expect64({0}, DECIMAL(6, 0), {"0"});
+
+  // Short decimal extreme values (scientific notation for small magnitudes).
+  expect64(
+      {DecimalUtil::kShortDecimalMin,
+       -3,
+       0,
+       55,
+       DecimalUtil::kShortDecimalMax,
+       std::nullopt},
+      DECIMAL(18, 18),
+      {"-0.999999999999999999",
+       "-3E-18",
+       "0E-18",
+       "5.5E-17",
+       "0.999999999999999999",
+       std::nullopt});
+
+  // Long decimal.
+  expect128(
+      {DecimalUtil::kLongDecimalMin,
+       0,
+       DecimalUtil::kLongDecimalMax,
+       HugeInt::build(0xFFFFFFFFFFFFFFFFull, 0xFFFFFFFFFFFFFFFFull),
+       HugeInt::build(0xffff, 0xffffffffffffffff),
+       std::nullopt},
+      DECIMAL(38, 5),
+      {"-999999999999999999999999999999999.99999",
+       "0.00000",
+       "999999999999999999999999999999999.99999",
+       "-0.00001",
+       "12089258196146291747.06175",
+       std::nullopt});
+
+  // Long decimal zero scale.
+  expect128({0}, DECIMAL(25, 0), {"0"});
+}
+
 TEST_F(SparkCastExprTest, invalidDate) {
   testInvalidCast<int8_t>(
       "date", {12}, "Cast from TINYINT to DATE is not supported", TINYINT());
