@@ -980,6 +980,21 @@ void MemoryPoolImpl::decrementReservation(uint64_t size) noexcept {
   sanityCheckLocked();
 }
 
+std::string MemoryPoolImpl::toString(bool detail) const {
+  std::string result;
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    result = toStringLocked();
+  }
+  if (detail) {
+    result += "\n" + treeMemoryUsage();
+  }
+  if (FOLLY_UNLIKELY(debugEnabled())) {
+    result += "\n" + dumpRecordsDbg();
+  }
+  return result;
+}
+
 std::string MemoryPoolImpl::treeMemoryUsage(bool skipEmptyPool) const {
   if (parent_ != nullptr) {
     return parent_->treeMemoryUsage(skipEmptyPool);
@@ -1314,7 +1329,7 @@ void MemoryPoolImpl::leakCheckDbg() {
       dumpRecordsDbg()));
 }
 
-std::string MemoryPoolImpl::dumpRecordsDbg() {
+std::string MemoryPoolImpl::dumpRecordsDbg() const {
   VELOX_CHECK(debugEnabled());
   std::stringstream oss;
   oss << fmt::format("Found {} allocations:\n", debugAllocRecords_.size());

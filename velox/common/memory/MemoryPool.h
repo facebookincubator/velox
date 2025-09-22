@@ -679,17 +679,7 @@ class MemoryPoolImpl : public MemoryPool {
 
   void setDestructionCallback(const DestructionCallback& callback);
 
-  std::string toString(bool detail = false) const override {
-    std::string result;
-    {
-      std::lock_guard<std::mutex> l(mutex_);
-      result = toStringLocked();
-    }
-    if (detail) {
-      result += "\n" + treeMemoryUsage();
-    }
-    return result;
-  }
+  std::string toString(bool detail = false) const override;
 
   /// Detailed debug pool state printout by traversing the pool structure from
   /// the root memory pool.
@@ -1011,7 +1001,7 @@ class MemoryPoolImpl : public MemoryPool {
 
   // Dump the recorded call sites of the memory allocations in
   // 'debugAllocRecords_' to the string.
-  std::string dumpRecordsDbg();
+  std::string dumpRecordsDbg() const;
 
   void handleAllocationFailure(const std::string& failureMessage);
 

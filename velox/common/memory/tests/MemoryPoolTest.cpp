@@ -2726,12 +2726,23 @@ TEST(MemoryPoolTest, debugMode) {
                   ->addLeafChild("child");
   const auto& allocRecords = std::dynamic_pointer_cast<MemoryPoolImpl>(pool)
                                  ->testingDebugAllocRecords();
+
   std::vector<void*> smallAllocs;
+  smallAllocs.reserve(kNumIterations);
   for (int32_t i = 0; i < kNumIterations; i++) {
     smallAllocs.push_back(pool->allocate(kAllocSizes[0]));
   }
   EXPECT_EQ(allocRecords.size(), kNumIterations);
   checkAllocs(allocRecords, kAllocSizes[0]);
+
+  // Check toString() works with debug mode enabled
+  const auto poolString = pool->toString();
+  EXPECT_FALSE(poolString.empty());
+  EXPECT_TRUE(
+      poolString.find(
+          "======== 100 allocations of 12.50KB total size ========") !=
+      std::string::npos);
+
   for (int32_t i = 0; i < kNumIterations; i++) {
     pool->free(smallAllocs[i], kAllocSizes[0]);
   }
