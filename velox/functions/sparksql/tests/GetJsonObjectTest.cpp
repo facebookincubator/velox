@@ -47,7 +47,7 @@ TEST_F(GetJsonObjectTest, basic) {
   // Returns input json if json path is "$".
   EXPECT_EQ(
       getJsonObject(R"({"name": "Alice", "age": 5, "id": "001"})", "$"),
-      "{\"name\":\"Alice\",\"age\":5,\"id\":\"001\"}");
+      R"({"name":"Alice","age":5,"id":"001"})");
   EXPECT_EQ(
       getJsonObject(R"({"name": "Alice", "age": 5, "id": "001"})", "$.age"),
       "5");
@@ -84,19 +84,19 @@ TEST_F(GetJsonObjectTest, basic) {
       getJsonObject(
           R"({"my": {"info": {"name": "Alice", "age": "5", "id": "001"}}})",
           "$.my.info"),
-      "{\"name\":\"Alice\",\"age\":\"5\",\"id\":\"001\"}");
+      R"({"name":"Alice","age":"5","id":"001"})");
   EXPECT_EQ(
       getJsonObject(
           R"({"my": {"info": {"name": "Alice", "age": "5", "id": "001"}}})",
           "$['my']['info']"),
-      "{\"name\":\"Alice\",\"age\":\"5\",\"id\":\"001\"}");
+      R"({"name":"Alice","age":"5","id":"001"})");
 
   // Array as result.
   EXPECT_EQ(
       getJsonObject(
           R"([{"my": {"info": {"name": "Alice"}}}, {"other": ["v1", "v2"]}])",
           "$[1].other"),
-      "[\"v1\",\"v2\"]");
+      R"(["v1","v2"])");
   // Array element as result.
   EXPECT_EQ(
       getJsonObject(
@@ -163,7 +163,7 @@ TEST_F(GetJsonObjectTest, incompleteJson) {
       getJsonObject(
           R"({"my": {"info": {"name": "Alice", "age": "5", "id": "001"}}},)",
           "$['my']['info']"),
-      "{\"name\":\"Alice\",\"age\":\"5\",\"id\":\"001\"}");
+      R"({"name":"Alice","age":"5","id":"001"})");
 }
 
 TEST_F(GetJsonObjectTest, number) {
@@ -201,11 +201,11 @@ TEST_F(GetJsonObjectTest, number) {
 }
 
 TEST_F(GetJsonObjectTest, rootPath) {
-  EXPECT_EQ(getJsonObject(R"({"hello": "3.5"},)", "$"), "{\"hello\":\"3.5\"}");
+  EXPECT_EQ(getJsonObject(R"({"hello": "3.5"},)", "$"), R"({"hello":"3.5"})");
   EXPECT_EQ(getJsonObject(R"({"hello": "3.5",)", "$"), std::nullopt);
   EXPECT_EQ(getJsonObject(R"({"hello": "3.5",})", "$"), std::nullopt);
   EXPECT_EQ(
-      getJsonObject(R"(["hello", "world"],)", "$  "), "[\"hello\",\"world\"]");
+      getJsonObject(R"(["hello", "world"],)", "$  "), R"(["hello","world"])");
   EXPECT_EQ(getJsonObject(R"(["hello", "world",])", "$"), std::nullopt);
   EXPECT_EQ(getJsonObject(R"(123)", "$"), "123");
   EXPECT_EQ(getJsonObject(R"(2e-3)", "$"), "0.002");
