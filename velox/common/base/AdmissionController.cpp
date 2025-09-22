@@ -32,12 +32,10 @@ void AdmissionController::accept(uint64_t resourceUnits) {
   {
     std::lock_guard<std::mutex> l(mu_);
     if (unitsUsed_ + resourceUnits > config_.maxLimit) {
-      auto [unblockPromise, unblockFuture] = makeVeloxContinuePromiseContract();
       Request req;
       req.unitsRequested = resourceUnits;
-      req.promise = std::move(unblockPromise);
+      future = req.promise.getSemiFuture();
       queue_.push_back(std::move(req));
-      future = std::move(unblockFuture);
     } else {
       updatedValue = unitsUsed_ += resourceUnits;
     }
