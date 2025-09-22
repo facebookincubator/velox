@@ -650,6 +650,16 @@ VectorPtr createStringFlatVector(
   bool shouldAcquireStringBuffer = false;
 
   for (size_t i = 0; i < length; ++i) {
+    if constexpr (!std::is_same_v<TOffset, int32_t>) {
+      auto rowBytes = offsets[i + 1] - offsets[i];
+      VELOX_CHECK(
+          rowBytes >= std::numeric_limits<int32_t>::min() &&
+          rowBytes <= std::numeric_limits<int32_t>::max(),
+          "Offset difference (rowBytes = {}) out of int32_t range at index {}",
+          rowBytes,
+          i);
+    }
+
     rawStringViews[i] =
         StringView(values + offsets[i], offsets[i + 1] - offsets[i]);
     shouldAcquireStringBuffer |= !rawStringViews[i].isInline();
