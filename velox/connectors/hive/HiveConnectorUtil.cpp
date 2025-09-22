@@ -763,7 +763,8 @@ std::unique_ptr<dwio::common::BufferedInput> createBufferedInput(
     const ConnectorQueryCtx* connectorQueryCtx,
     std::shared_ptr<io::IoStatistics> ioStats,
     std::shared_ptr<filesystems::File::IoStats> fsStats,
-    folly::Executor* executor) {
+    folly::Executor* executor,
+    const folly::F14FastMap<std::string, std::string>& fileReadOps) {
   if (connectorQueryCtx->cache()) {
     return std::make_unique<dwio::common::CachedBufferedInput>(
         fileHandle.file,
@@ -776,7 +777,8 @@ std::unique_ptr<dwio::common::BufferedInput> createBufferedInput(
         ioStats,
         std::move(fsStats),
         executor,
-        readerOpts);
+        readerOpts,
+        fileReadOps);
   }
   if (readerOpts.fileFormat() == dwio::common::FileFormat::NIMBLE) {
     // Nimble streams (in case of single chunk) are compressed as whole and need
@@ -788,7 +790,10 @@ std::unique_ptr<dwio::common::BufferedInput> createBufferedInput(
         readerOpts.memoryPool(),
         dwio::common::MetricsLog::voidLog(),
         ioStats.get(),
-        fsStats.get());
+        fsStats.get(),
+        dwio::common::BufferedInput::kMaxMergeDistance,
+        std::nullopt,
+        fileReadOps);
   }
   return std::make_unique<dwio::common::DirectBufferedInput>(
       fileHandle.file,
@@ -800,7 +805,8 @@ std::unique_ptr<dwio::common::BufferedInput> createBufferedInput(
       std::move(ioStats),
       std::move(fsStats),
       executor,
-      readerOpts);
+      readerOpts,
+      fileReadOps);
 }
 
 namespace {

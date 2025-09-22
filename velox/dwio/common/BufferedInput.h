@@ -37,13 +37,15 @@ class BufferedInput {
       IoStatistics* stats = nullptr,
       filesystems::File::IoStats* fsStats = nullptr,
       uint64_t maxMergeDistance = kMaxMergeDistance,
-      std::optional<bool> wsVRLoad = std::nullopt)
+      std::optional<bool> wsVRLoad = std::nullopt,
+      folly::F14FastMap<std::string, std::string> fileReadOps = {})
       : BufferedInput(
             std::make_shared<ReadFileInputStream>(
                 std::move(readFile),
                 metricsLog,
                 stats,
-                fsStats),
+                fsStats,
+                std::move(fileReadOps)),
             pool,
             maxMergeDistance,
             wsVRLoad) {}

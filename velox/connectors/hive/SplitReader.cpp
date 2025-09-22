@@ -170,8 +170,9 @@ void SplitReader::configureReaderOptions(
 
 void SplitReader::prepareSplit(
     std::shared_ptr<common::MetadataFilter> metadataFilter,
-    dwio::common::RuntimeStatistics& runtimeStats) {
-  createReader();
+    dwio::common::RuntimeStatistics& runtimeStats,
+    const folly::F14FastMap<std::string, std::string>& fileReadOps) {
+  createReader(fileReadOps);
   if (emptySplit_) {
     return;
   }
@@ -293,7 +294,8 @@ std::string SplitReader::toString() const {
       static_cast<const void*>(baseRowReader_.get()));
 }
 
-void SplitReader::createReader() {
+void SplitReader::createReader(
+    const folly::F14FastMap<std::string, std::string>& fileReadOps) {
   VELOX_CHECK_NE(
       baseReaderOpts_.fileFormat(), dwio::common::FileFormat::UNKNOWN);
 
@@ -330,7 +332,8 @@ void SplitReader::createReader() {
       connectorQueryCtx_,
       ioStats_,
       fsStats_,
-      ioExecutor_);
+      ioExecutor_,
+      fileReadOps);
 
   baseReader_ = dwio::common::getReaderFactory(baseReaderOpts_.fileFormat())
                     ->createReader(std::move(baseFileInput), baseReaderOpts_);

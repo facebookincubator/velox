@@ -259,4 +259,18 @@ bool HiveConfig::preserveFlatMapsInMemory(
       config_->get<bool>(kPreserveFlatMapsInMemory, false));
 }
 
+std::string HiveConfig::user(const config::ConfigBase* session) const {
+  return session->get<std::string>(kUser, config_->get<std::string>(kUser, ""));
+}
+
+std::string HiveConfig::source(const config::ConfigBase* session) const {
+  return session->get<std::string>(
+      kSource, config_->get<std::string>(kSource, ""));
+}
+
+std::string HiveConfig::schema(const config::ConfigBase* session) const {
+  return session->get<std::string>(
+      kSchema, config_->get<std::string>(kSchema, ""));
+}
+
 } // namespace facebook::velox::connector::hive

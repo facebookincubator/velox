@@ -60,10 +60,11 @@ T getAttribute(
 std::string ReadFile::pread(
     uint64_t offset,
     uint64_t length,
-    filesystems::File::IoStats* stats) const {
+    filesystems::File::IoStats* stats,
+    const folly::F14FastMap<std::string, std::string>& fileReadOps) const {
   std::string buf;
   buf.resize(length);
-  auto res = pread(offset, length, buf.data(), stats);
+  auto res = pread(offset, length, buf.data(), stats, fileReadOps);
   buf.resize(res.size());
   return buf;
 }
@@ -71,7 +72,8 @@ std::string ReadFile::pread(
 uint64_t ReadFile::preadv(
     uint64_t offset,
     const std::vector<folly::Range<char*>>& buffers,
-    filesystems::File::IoStats* stats) const {
+    filesystems::File::IoStats* stats,
+    const folly::F14FastMap<std::string, std::string>& fileReadOps) const {
   auto fileSize = size();
   uint64_t numRead = 0;
   if (offset >= fileSize) {
@@ -81,7 +83,7 @@ uint64_t ReadFile::preadv(
     auto copySize = std::min<size_t>(range.size(), fileSize - offset);
     // NOTE: skip the gap in case of coalesce io.
     if (range.data() != nullptr) {
-      pread(offset, copySize, range.data(), stats);
+      pread(offset, copySize, range.data(), stats, fileReadOps);
     }
     offset += copySize;
     numRead += copySize;
@@ -92,14 +94,20 @@ uint64_t ReadFile::preadv(
 uint64_t ReadFile::preadv(
     folly::Range<const common::Region*> regions,
     folly::Range<folly::IOBuf*> iobufs,
-    filesystems::File::IoStats* stats) const {
+    filesystems::File::IoStats* stats,
+    const folly::F14FastMap<std::string, std::string>& fileReadOps) const {
   VELOX_CHECK_EQ(regions.size(), iobufs.size());
   uint64_t length = 0;
   for (size_t i = 0; i < regions.size(); ++i) {
     const auto& region = regions[i];
     auto& output = iobufs[i];
     output = folly::IOBuf(folly::IOBuf::CREATE, region.length);
-    pread(region.offset, region.length, output.writableData(), stats);
+    pread(
+        region.offset,
+        region.length,
+        output.writableData(),
+        stats,
+        fileReadOps);
     output.append(region.length);
     length += region.length;
   }
@@ -111,7 +119,8 @@ std::string_view InMemoryReadFile::pread(
     uint64_t offset,
     uint64_t length,
     void* buf,
-    filesystems::File::IoStats* stats) const {
+    filesystems::File::IoStats* stats,
+    const folly::F14FastMap<std::string, std::string>& fileReadOps) const {
   bytesRead_ += length;
   memcpy(buf, file_.data() + offset, length);
   return {static_cast<char*>(buf), length};
@@ -120,7 +129,8 @@ std::string_view InMemoryReadFile::pread(
 std::string InMemoryReadFile::pread(
     uint64_t offset,
     uint64_t length,
-    filesystems::File::IoStats* stats) const {
+    filesystems::File::IoStats* stats,
+    const folly::F14FastMap<std::string, std::string>& fileReadOps) const {
   bytesRead_ += length;
   return std::string(file_.data() + offset, length);
 }
@@ -202,7 +212,8 @@ std::string_view LocalReadFile::pread(
     uint64_t offset,
     uint64_t length,
     void* buf,
-    filesystems::File::IoStats* stats) const {
+    filesystems::File::IoStats* stats,
+    const folly::F14FastMap<std::string, std::string>& fileReadOps) const {
   preadInternal(offset, length, static_cast<char*>(buf));
   return {static_cast<char*>(buf), length};
 }
@@ -210,7 +221,8 @@ std::string_view LocalReadFile::pread(
 uint64_t LocalReadFile::preadv(
     uint64_t offset,
     const std::vector<folly::Range<char*>>& buffers,
-    filesystems::File::IoStats* stats) const {
+    filesystems::File::IoStats* stats,
+    const folly::F14FastMap<std::string, std::string>& fileReadOps) const {
   // Dropped bytes sized so that a typical dropped range of 50K is not
   // too many iovecs.
   static thread_local std::vector<char> droppedBytes(16 * 1024);
@@ -267,17 +279,20 @@ uint64_t LocalReadFile::preadv(
 folly::SemiFuture<uint64_t> LocalReadFile::preadvAsync(
     uint64_t offset,
     const std::vector<folly::Range<char*>>& buffers,
-    filesystems::File::IoStats* stats) const {
+    filesystems::File::IoStats* stats,
+    const folly::F14FastMap<std::string, std::string>& fileReadOps) const {
   if (!executor_) {
-    return ReadFile::preadvAsync(offset, buffers, stats);
+    return ReadFile::preadvAsync(offset, buffers, stats, fileReadOps);
   }
   auto [promise, future] = folly::makePromiseContract<uint64_t>();
   executor_->add([this,
                   _promise = std::move(promise),
                   _offset = offset,
                   _buffers = buffers,
-                  _stats = stats]() mutable {
-    auto delegateFuture = ReadFile::preadvAsync(_offset, _buffers, _stats);
+                  _stats = stats,
+                  _fileReadOps = fileReadOps]() mutable {
+    auto delegateFuture =
+        ReadFile::preadvAsync(_offset, _buffers, _stats, _fileReadOps);
     _promise.setTry(std::move(delegateFuture).getTry());
   });
   return std::move(future);
