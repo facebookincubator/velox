@@ -181,4 +181,41 @@ TEST_F(ArrayFrequencyTest, nestedArrayOfVarcharWithNulls) {
   // Row 3: Should have 1 entry: ["y", "z"] -> 1
   EXPECT_EQ(mapResult->sizeAt(3), 1);
 }
+
+TEST_F(ArrayFrequencyTest, nestedArrayOfIntegers) {
+  // Test generic implementation with nested arrays of integers
+  auto innerArrays = makeArrayVector<int64_t>({
+      {1, 2},
+      {1, 2}, // Duplicate
+      {3},
+      {}, // Empty array
+      {10, 20, 30},
+      {10, 20, 30}, // Duplicate
+  });
+
+  // [[1, 2], [1, 2], [3]] -> [1, 2] appears twice, [3] once
+  // [] -> empty outer array
+  // [[], [10, 20, 30], [10, 20, 30]] -> [] once, [10, 20, 30] twice
+  auto nestedArray = makeArrayVector({0, 3, 3, 6}, innerArrays);
+
+  auto result =
+      evaluate<BaseVector>("array_frequency(C0)", makeRowVector({nestedArray}));
+
+  EXPECT_EQ(result->type()->toString(), "MAP<ARRAY<BIGINT>,INTEGER>");
+  EXPECT_EQ(result->size(), nestedArray->size());
+  EXPECT_FALSE(result->isNullAt(0));
+  EXPECT_FALSE(result->isNullAt(1));
+  EXPECT_FALSE(result->isNullAt(2));
+
+  auto mapResult = result->as<MapVector>();
+
+  // Row 0: Should have 2 entries: [1, 2] -> 2, [3] -> 1
+  EXPECT_EQ(mapResult->sizeAt(0), 2);
+
+  // Row 1: Empty outer array should result in empty map
+  EXPECT_EQ(mapResult->sizeAt(1), 0);
+
+  // Row 2: Should have 2 entries: [] -> 1, [10, 20, 30] -> 2
+  EXPECT_EQ(mapResult->sizeAt(2), 2);
+}
 } // namespace facebook::velox::functions::test
