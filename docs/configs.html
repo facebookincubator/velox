@@ -497,6 +497,42 @@ trigger skewed partition rebalancing by scale writer exchange.</p></td>
 </tbody>
 </table>
 </section>
+<section id="connector-config">
+<h2>Connector Config<a class="headerlink" href="#connector-config" title="Link to this heading">¶</a></h2>
+<p>Connector config is initialized on velox runtime startup and is shared among queries as the default config across all connectors.
+Each query can override the config by setting corresponding query session properties such as in Prestissimo.</p>
+<table class="docutils align-default">
+<colgroup>
+<col style="width: 15.4%" />
+<col style="width: 15.4%" />
+<col style="width: 7.7%" />
+<col style="width: 7.7%" />
+<col style="width: 53.8%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>user</p></th>
+<th class="head"></th>
+<th class="head"><p>string</p></th>
+<th class="head"><p>“”</p></th>
+<th class="head"><p>The user of the query. Used for storage logging.</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>source</p></td>
+<td></td>
+<td><p>string</p></td>
+<td><p>“”</p></td>
+<td><p>The source of the query. Used for storage access and logging.</p></td>
+</tr>
+<tr class="row-odd"><td><p>schema</p></td>
+<td></td>
+<td><p>string</p></td>
+<td><p>“”</p></td>
+<td><p>The schema of the query. Used for storage logging.</p></td>
+</tr>
+</tbody>
+</table>
+</section>
 <section id="hive-connector">
 <h2>Hive Connector<a class="headerlink" href="#hive-connector" title="Link to this heading">¶</a></h2>
 <p>Hive Connector config is initialized on velox runtime startup and is shared among queries as the default config.
@@ -1218,6 +1254,7 @@ execution. This is used for crash debugging.</p></td>
 <li><a class="reference internal" href="#aggregation">Aggregation</a></li>
 <li><a class="reference internal" href="#table-scan">Table Scan</a></li>
 <li><a class="reference internal" href="#table-writer">Table Writer</a></li>
+<li><a class="reference internal" href="#connector-config">Connector Config</a></li>
 <li><a class="reference internal" href="#hive-connector">Hive Connector</a><ul>
 <li><a class="reference internal" href="#orc-file-format-configuration"><code class="docutils literal notranslate"><span class="pre">ORC</span> <span class="pre">File</span> <span class="pre">Format</span> <span class="pre">Configuration</span></code></a></li>
 <li><a class="reference internal" href="#parquet-file-format-configuration"><code class="docutils literal notranslate"><span class="pre">Parquet</span> <span class="pre">File</span> <span class="pre">Format</span> <span class="pre">Configuration</span></code></a></li>
