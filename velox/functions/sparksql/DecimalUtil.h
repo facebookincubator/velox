@@ -327,9 +327,10 @@ class DecimalUtil {
             std::make_error_code(exp.ec).message());
         writePosition = exp.ptr;
       } else {
-        uint128_t intPart = unscaledValue / getPowersOfTen(scale);
-        auto [position, errorCode] =
-            std::to_chars(writePosition, writePosition + maxSize, intPart);
+        auto [position, errorCode] = std::to_chars(
+            writePosition,
+            writePosition + maxSize,
+            unscaledValue / velox::DecimalUtil::kPowersOfTen[scale]);
         VELOX_DCHECK_EQ(
             errorCode,
             std::errc(),
@@ -339,7 +340,8 @@ class DecimalUtil {
 
         if (scale > 0) {
           *writePosition++ = '.';
-          uint128_t fraction = unscaledValue % getPowersOfTen(scale);
+          uint128_t fraction =
+              unscaledValue % velox::DecimalUtil::kPowersOfTen[scale];
           // Append leading zeros.
           int numLeadingZeros = std::max(scale - countDigits(fraction), 0);
           std::memset(writePosition, '0', numLeadingZeros);
