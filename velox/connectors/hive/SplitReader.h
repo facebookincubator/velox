@@ -80,7 +80,8 @@ class SplitReader {
   /// would be called only once per incoming split
   virtual void prepareSplit(
       std::shared_ptr<common::MetadataFilter> metadataFilter,
-      dwio::common::RuntimeStatistics& runtimeStats);
+      dwio::common::RuntimeStatistics& runtimeStats,
+      const folly::F14FastMap<std::string, std::string>& fileReadOps = {});
 
   virtual uint64_t next(uint64_t size, VectorPtr& output);
 
@@ -124,7 +125,8 @@ class SplitReader {
 
   /// Create the dwio::common::Reader object baseReader_, which will be used to
   /// read the data file's metadata and schema
-  void createReader();
+  void createReader(
+      const folly::F14FastMap<std::string, std::string>& fileReadOps = {});
 
   // Adjust the scan spec according to the current split, then return the
   // adapted row type.

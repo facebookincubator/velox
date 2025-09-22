@@ -26,6 +26,7 @@
 #include <utility>
 #include <vector>
 
+#include <folly/container/F14Map.h>
 #include "velox/common/file/File.h"
 #include "velox/common/file/Region.h"
 #include "velox/common/io/IoStatistics.h"
@@ -143,7 +144,8 @@ class ReadFileInputStream final : public InputStream {
       std::shared_ptr<velox::ReadFile>,
       const MetricsLogPtr& metricsLog = MetricsLog::voidLog(),
       IoStatistics* stats = nullptr,
-      filesystems::File::IoStats* fsStats = nullptr);
+      filesystems::File::IoStats* fsStats = nullptr,
+      folly::F14FastMap<std::string, std::string> fileReadOps = {});
 
   ~ReadFileInputStream() override = default;
 
@@ -179,6 +181,7 @@ class ReadFileInputStream final : public InputStream {
   }
 
  private:
+  const folly::F14FastMap<std::string, std::string> fileReadOps_;
   std::shared_ptr<velox::ReadFile> readFile_;
 };
 

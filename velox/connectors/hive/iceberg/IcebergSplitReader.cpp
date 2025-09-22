@@ -54,7 +54,8 @@ IcebergSplitReader::IcebergSplitReader(
 
 void IcebergSplitReader::prepareSplit(
     std::shared_ptr<common::MetadataFilter> metadataFilter,
-    dwio::common::RuntimeStatistics& runtimeStats) {
+    dwio::common::RuntimeStatistics& runtimeStats,
+    const folly::F14FastMap<std::string, std::string>& fileReadOps) {
   createReader();
   if (emptySplit_) {
     return;
