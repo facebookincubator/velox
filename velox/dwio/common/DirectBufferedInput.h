@@ -254,11 +254,21 @@ class DirectBufferedInput : public BufferedInput {
       bool prefetch,
       const std::vector<int32_t>& groupEnds);
 
+  // Holds the reference on the memory pool for async load in case of early task
+  // terminate.
   struct AsyncLoadHolder {
     std::shared_ptr<cache::CoalescedLoad> load;
+    std::shared_ptr<memory::MemoryPool> pool;
 
     ~AsyncLoadHolder() {
+      // Release the load reference before the memory pool reference.
+      // This is to make sure the memory pool is not destroyed before we free up
+      // the allocated buffers.
+      // This is to handle the case that the associated task has already
+      // destroyed before the async load is done. The async load holds
+      // the last reference to the memory pool in that case.
       load.reset();
+      pool.reset();
     }
   };
 

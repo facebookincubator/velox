@@ -218,7 +218,8 @@ void DirectBufferedInput::readRegions(
     for (auto i = 0; i < coalescedLoads_.size(); ++i) {
       auto& load = coalescedLoads_[i];
       if (load->state() == CoalescedLoad::State::kPlanned) {
-        AsyncLoadHolder loadHolder{.load = load};
+        AsyncLoadHolder loadHolder{
+          .load = load, .pool = pool_->shared_from_this()};
         executor_->add([asyncLoad = std::move(loadHolder)]() {
           process::TraceContext trace("Read Ahead");
           VELOX_CHECK_NOT_NULL(asyncLoad.load);
