@@ -654,7 +654,7 @@ VectorPtr createStringFlatVector(
       auto rowBytes = offsets[i + 1] - offsets[i];
       VELOX_CHECK(
           rowBytes >= std::numeric_limits<int32_t>::min() &&
-          rowBytes <= std::numeric_limits<int32_t>::max(),
+              rowBytes <= std::numeric_limits<int32_t>::max(),
           "Offset difference (rowBytes = {}) out of int32_t range at index {}",
           rowBytes,
           i);
