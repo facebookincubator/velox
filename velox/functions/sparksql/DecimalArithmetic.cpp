@@ -499,16 +499,12 @@ struct DecimalDivideFunction {
   uint8_t rPrecision_;
 };
 
-/// Decimal integral divide function implementation.
+// Decimal integral divide function implementation.
 struct DecimalIntegralDivideBase {
-  template <typename A, typename B>
-  void
-  initializeBase(const std::vector<TypePtr>& inputTypes, A* /*a*/, B* /*b*/) {
+  void initializeBase(const std::vector<TypePtr>& inputTypes) {
     auto [aPrecision, aScale] = getDecimalPrecisionScale(*inputTypes[0]);
-    auto [bPrecision, bScale] = getDecimalPrecisionScale(*inputTypes[1]);
-    auto [rPrecision, rScale] =
-        computeResultPrecisionScale(aPrecision, aScale, bPrecision, bScale);
-    rPrecision_ = rPrecision;
+    auto bScale = getDecimalPrecisionScale(*inputTypes[1]).second;
+    rPrecision_ = computeResultPrecision(aPrecision, aScale, bScale);
     aRescale_ = std::max<int8_t>(0, bScale - aScale);
     bRescale_ = std::max<int8_t>(0, aScale - bScale);
   }
@@ -545,16 +541,13 @@ struct DecimalIntegralDivideBase {
   }
 
  private:
-  static std::pair<uint8_t, uint8_t> computeResultPrecisionScale(
-      uint8_t aPrecision,
-      uint8_t aScale,
-      uint8_t bPrecision,
-      uint8_t bScale) {
+  static uint8_t
+  computeResultPrecision(uint8_t aPrecision, uint8_t aScale, uint8_t bScale) {
     auto intPrecision = aPrecision - aScale + bScale;
     if (intPrecision == 0) {
       intPrecision = 1;
     }
-    return DecimalUtil::bounded(intPrecision, 0);
+    return DecimalUtil::bounded(intPrecision, 0).first;
   }
 
  protected:
@@ -563,19 +556,17 @@ struct DecimalIntegralDivideBase {
   uint8_t rPrecision_;
 };
 
-/// Decimal integral divide function that returns null on division by zero or
-/// overflow.
+// Decimal integral divide function that returns null on division by zero or
+// overflow.
 template <typename TExec>
 struct DecimalIntegeralDivideFunction : DecimalIntegralDivideBase {
-  VELOX_DEFINE_FUNCTION_TYPES(TExec);
-
   template <typename A, typename B>
   void initialize(
       const std::vector<TypePtr>& inputTypes,
       const core::QueryConfig& /*config*/,
-      A* a,
-      B* b) {
-    initializeBase(inputTypes, a, b);
+      A* /*a*/,
+      B* /*b*/) {
+    initializeBase(inputTypes);
   }
 
   template <typename A, typename B>
@@ -587,19 +578,17 @@ struct DecimalIntegeralDivideFunction : DecimalIntegralDivideBase {
   }
 };
 
-/// Decimal integral divide function that returns error on division by zero or
-/// overflow.
+// Decimal integral divide function that returns error on division by zero or
+// overflow.
 template <typename TExec>
 struct CheckedDecimalIntegeralDivideFunction : DecimalIntegralDivideBase {
-  VELOX_DEFINE_FUNCTION_TYPES(TExec);
-
   template <typename A, typename B>
   void initialize(
       const std::vector<TypePtr>& inputTypes,
       const core::QueryConfig& /*config*/,
-      A* a,
-      B* b) {
-    initializeBase(inputTypes, a, b);
+      A* /*a*/,
+      B* /*b*/) {
+    initializeBase(inputTypes);
   }
 
   template <typename A, typename B>
