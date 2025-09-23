@@ -550,7 +550,7 @@ TEST_F(AggregationTest, missingLambdaFunction) {
       readCursor(params), "Aggregate function not registered: missing-lambda");
 }
 
-TEST_F(AggregationTest, DISABLED_resultTypeMismatch) {
+TEST_F(AggregationTest, outputTypeMismatch) {
   using Step = core::AggregationNode::Step;
 
   registerAggregateFunction(
