@@ -21,6 +21,7 @@
 #include "velox/dwio/common/CachedBufferedInput.h"
 #include "velox/dwio/common/DirectBufferedInput.h"
 #include "velox/expression/Expr.h"
+#include "velox/expression/ExprConstants.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
 
 namespace facebook::velox::connector::hive {
@@ -612,6 +613,7 @@ void configureRowReaderOptions(
     const std::shared_ptr<const HiveConnectorSplit>& hiveSplit,
     const std::shared_ptr<const HiveConfig>& hiveConfig,
     const config::ConfigBase* sessionProperties,
+    folly::Executor* const ioExecutor,
     dwio::common::RowReaderOptions& rowReaderOptions) {
   auto skipRowsIt =
       tableParameters.find(dwio::common::TableParameter::kSkipHeaderLineCount);
@@ -619,6 +621,7 @@ void configureRowReaderOptions(
     rowReaderOptions.setSkipRows(folly::to<uint64_t>(skipRowsIt->second));
   }
   rowReaderOptions.setScanSpec(scanSpec);
+  rowReaderOptions.setIOExecutor(ioExecutor);
   rowReaderOptions.setMetadataFilter(std::move(metadataFilter));
   rowReaderOptions.setRequestedType(rowType);
   rowReaderOptions.range(hiveSplit->start, hiveSplit->length);
@@ -627,6 +630,13 @@ void configureRowReaderOptions(
         hiveConfig->readTimestampUnit(sessionProperties)));
     rowReaderOptions.setPreserveFlatMapsInMemory(
         hiveConfig->preserveFlatMapsInMemory(sessionProperties));
+    rowReaderOptions.setParallelUnitLoadCount(
+        hiveConfig->parallelUnitLoadCount(sessionProperties));
+    // When parallel unit loader is enabled, all units would be loaded by
+    // ParallelUnitLoader, thus disable eagerFirstStripeLoad.
+    if (hiveConfig->parallelUnitLoadCount(sessionProperties) > 0) {
+      rowReaderOptions.setEagerFirstStripeLoad(false);
+    }
   }
   rowReaderOptions.setSerdeParameters(hiveSplit->serdeParameters);
 }
@@ -753,7 +763,8 @@ std::unique_ptr<dwio::common::BufferedInput> createBufferedInput(
     const ConnectorQueryCtx* connectorQueryCtx,
     std::shared_ptr<io::IoStatistics> ioStats,
     std::shared_ptr<filesystems::File::IoStats> fsStats,
-    folly::Executor* executor) {
+    folly::Executor* executor,
+    const folly::F14FastMap<std::string, std::string>& fileReadOps) {
   if (connectorQueryCtx->cache()) {
     return std::make_unique<dwio::common::CachedBufferedInput>(
         fileHandle.file,
@@ -766,7 +777,8 @@ std::unique_ptr<dwio::common::BufferedInput> createBufferedInput(
         ioStats,
         std::move(fsStats),
         executor,
-        readerOpts);
+        readerOpts,
+        fileReadOps);
   }
   if (readerOpts.fileFormat() == dwio::common::FileFormat::NIMBLE) {
     // Nimble streams (in case of single chunk) are compressed as whole and need
@@ -778,7 +790,10 @@ std::unique_ptr<dwio::common::BufferedInput> createBufferedInput(
         readerOpts.memoryPool(),
         dwio::common::MetricsLog::voidLog(),
         ioStats.get(),
-        fsStats.get());
+        fsStats.get(),
+        dwio::common::BufferedInput::kMaxMergeDistance,
+        std::nullopt,
+        fileReadOps);
   }
   return std::make_unique<dwio::common::DirectBufferedInput>(
       fileHandle.file,
@@ -790,7 +805,8 @@ std::unique_ptr<dwio::common::BufferedInput> createBufferedInput(
       std::move(ioStats),
       std::move(fsStats),
       executor,
-      readerOpts);
+      readerOpts,
+      fileReadOps);
 }
 
 namespace {
@@ -899,8 +915,8 @@ core::TypedExprPtr extractFiltersFromRemainingFilter(
     return inner ? replaceInputs(call, {inner}) : nullptr;
   }
 
-  if ((call->name() == "and" && !negated) ||
-      (call->name() == "or" && negated)) {
+  if ((call->name() == expression::kAnd && !negated) ||
+      (call->name() == expression::kOr && negated)) {
     auto lhs = extractFiltersFromRemainingFilter(
         call->inputs()[0], evaluator, negated, filters, sampleRate);
     auto rhs = extractFiltersFromRemainingFilter(

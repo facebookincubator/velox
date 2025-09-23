@@ -548,6 +548,31 @@ Table Writer
      - Minimum amount of data processed by all the logical table partitions to
        trigger skewed partition rebalancing by scale writer exchange.
 
+Connector Config
+----------------
+Connector config is initialized on velox runtime startup and is shared among queries as the default config across all connectors.
+Each query can override the config by setting corresponding query session properties such as in Prestissimo.
+
+.. list-table::
+   :widths: 20 20 10 10 70
+   :header-rows: 1
+
+   * - user
+     -
+     - string
+     - ""
+     - The user of the query. Used for storage logging.
+   * - source
+     -
+     - string
+     - ""
+     - The source of the query. Used for storage access and logging.
+   * - schema
+     -
+     - string
+     - ""
+     - The schema of the query. Used for storage logging.
+
 Hive Connector
 --------------
 Hive Connector config is initialized on velox runtime startup and is shared among queries as the default config.
@@ -685,7 +710,6 @@ Each query can override the config by setting corresponding query session proper
      - bool
      - false
      - Whether to preserve flat maps in memory as FlatMapVectors instead of converting them to MapVectors. This is only applied during data reading inside the DWRF and Nimble readers, not during downstream processing like expression evaluation etc.
-
 
 ``ORC File Format Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -970,6 +994,12 @@ These semantics are similar to the `Apache Hadoop-Aws module <https://hadoop.apa
      - Specifies the OAuth 2.0 token endpoint URL for the Azure AD application.
        This endpoint is used to acquire access tokens for authenticating with Azure storage.
        The URL follows the format: `https://login.microsoftonline.com/<tenant-id>/oauth2/token`.
+   * - fs.azure.sas.token.renew.period.for.streams
+     - string
+     - 120
+     - Specifies the period in seconds to re-use SAS tokens until the expiry is within this number of seconds.
+       This configuration is used together with `registerSasTokenProvider` for dynamic SAS token renewal.
+       When a SAS token is close to expiry, it will be renewed by getting a new token from the provider.
 
 Presto-specific Configuration
 -----------------------------
@@ -1000,7 +1030,7 @@ Spark-specific Configuration
      - bool
      - false
      - If true, Spark function's behavior is ANSI-compliant, e.g. throws runtime exception instead
-       of returning null on invalid inputs.
+       of returning null on invalid inputs. It affects only functions explicitly marked as "ANSI compliant".
        Note: This feature is still under development to achieve full ANSI compliance. Users can
        refer to the Spark function documentation to verify the current support status of a specific
        function.

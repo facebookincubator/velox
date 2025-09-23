@@ -1835,7 +1835,7 @@ TEST_P(AllTableWriterTest, tableWriteOutputCheck) {
     if (!commitContextVector->isNullAt(i)) {
       ASSERT_TRUE(RE2::FullMatch(
           commitContextVector->valueAt(i).getString(),
-          fmt::format(".*{}.*", commitStrategyToString(commitStrategy_))))
+          fmt::format(".*{}.*", CommitStrategyName::toName(commitStrategy_))))
           << commitContextVector->valueAt(i);
     }
   }
@@ -1855,7 +1855,7 @@ TEST_P(AllTableWriterTest, tableWriteOutputCheck) {
   auto obj = TableWriteTraits::getTableCommitContext(result);
   ASSERT_EQ(
       obj[TableWriteTraits::kCommitStrategyContextKey],
-      commitStrategyToString(commitStrategy_));
+      CommitStrategyName::toName(commitStrategy_));
   ASSERT_EQ(obj[TableWriteTraits::klastPageContextKey], true);
   ASSERT_EQ(obj[TableWriteTraits::kLifeSpanContextKey], "TaskWide");
 }
@@ -2025,7 +2025,7 @@ TEST_P(AllTableWriterTest, columnStatsDataTypes) {
   const auto distinctCountStatsVector =
       result->childAt(nextColumnStatsIndex++)->asFlatVector<StringView>();
   HashStringAllocator allocator{pool_.get()};
-  DenseHll denseHll{
+  DenseHll<> denseHll{
       std::string(distinctCountStatsVector->valueAt(0)).c_str(), &allocator};
   ASSERT_EQ(denseHll.cardinality(), 1000);
   const auto maxDataSizeStatsVector =

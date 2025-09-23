@@ -47,7 +47,6 @@ velox_add_library(
   RowFunction.cpp
   Sequence.cpp
   SfmSketchFunctions.cpp
-  SimpleComparisonMatcher.cpp
   Split.cpp
   SplitToMap.cpp
   StringFunctions.cpp
@@ -59,7 +58,6 @@ velox_add_library(
   TypeOf.cpp
   UpperLower.cpp
   URIParser.cpp
-  URLFunctions.cpp
   VectorArithmetic.cpp
   WidthBucketArray.cpp
   Zip.cpp

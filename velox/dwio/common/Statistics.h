@@ -18,6 +18,7 @@
 
 #include <folly/Hash.h>
 #include <folly/container/F14Map.h>
+#include "velox/dwio/common/UnitLoader.h"
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/RuntimeMetrics.h"
@@ -558,10 +559,14 @@ struct RuntimeStatistics {
 
   int64_t numStripes{0};
 
+  UnitLoaderStats unitLoaderStats;
   ColumnReaderStatistics columnReaderStatistics;
 
   std::unordered_map<std::string, RuntimeCounter> toMap() {
     std::unordered_map<std::string, RuntimeCounter> result;
+    for (const auto& [name, metric] : unitLoaderStats.stats()) {
+      result.emplace(name, RuntimeCounter(metric.sum, metric.unit));
+    }
     if (skippedSplits > 0) {
       result.emplace("skippedSplits", RuntimeCounter(skippedSplits));
     }

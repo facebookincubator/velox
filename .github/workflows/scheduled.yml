@@ -124,9 +124,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           INPUT_REF: ${{ inputs.ref || 'main' }}
-          HEAD_REF: ${{ github.head_ref }}
           BASE_REF: ${{ github.base_ref }}
-          ACTOR: ${{ github.actor }}
+          HEAD_REF: ${{ github.head_ref }}
+          PR_OWNER: ${{ github.event.pull_request.head.repo.owner.login }}
         id: get-merge-base
         run: |
           if [ '${{ github.event_name == 'push' }}' == "true" ]; then
@@ -135,12 +135,11 @@ jobs:
           elif [ '${{ github.event_name == 'pull_request' }}' == "true" ]; then
             # Get the merge base from the api
             head_main=$(gh api -q '.merge_base_commit.sha' \
-              /repos/facebookincubator/velox/compare/facebookincubator:$BASE_REF...$ACTOR:$HEAD_REF \
+              /repos/facebookincubator/velox/compare/facebookincubator:$BASE_REF...$PR_OWNER:$HEAD_REF \
             )
           else
             head_main=$INPUT_REF
           fi
-
           echo "Determined SHA: $head_main"
           echo "head_main=$head_main" >> $GITHUB_OUTPUT
 
@@ -173,7 +172,7 @@ jobs:
 
       - name: Checkout Main
         if: ${{ github.event_name != 'schedule' && steps.get-sig.outputs.stash-hit != 'true' }}
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           ref: ${{ steps.get-merge-base.outputs.head_main || 'main' }}
           path: velox_main
@@ -205,7 +204,7 @@ jobs:
           key: function-signatures-${{ steps.get-merge-base.outputs.head_main }}
 
       - name: Checkout Contender
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           path: velox
           ref: ${{ inputs.ref }}
@@ -469,7 +468,7 @@ jobs:
           name: presto
 
       - name: Checkout Repo
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           path: velox
           ref: ${{ inputs.ref }}
@@ -729,7 +728,7 @@ jobs:
           name: join
 
       - name: Checkout Repo
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           path: velox
           ref: ${{ inputs.ref }}
@@ -830,7 +829,7 @@ jobs:
           name: row_number
 
       - name: Checkout Repo
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           path: velox
           ref: ${{ inputs.ref }}
@@ -892,7 +891,7 @@ jobs:
           name: topn_row_number
 
       - name: Checkout Repo
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           path: velox
           ref: ${{ inputs.ref }}
@@ -1058,7 +1057,7 @@ jobs:
           name: aggregation
 
       - name: Checkout Repo
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           path: velox
           ref: ${{ inputs.ref }}
@@ -1122,7 +1121,7 @@ jobs:
           name: presto
 
       - name: Checkout Repo
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           path: velox
           ref: ${{ inputs.ref }}
@@ -1211,7 +1210,7 @@ jobs:
           name: aggregation
 
       - name: Checkout Repo
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           path: velox
           ref: ${{ inputs.ref }}
@@ -1309,7 +1308,7 @@ jobs:
           name: window
 
       - name: Checkout Repo
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           path: velox
           ref: ${{ inputs.ref }}
@@ -1373,7 +1372,7 @@ jobs:
           name: writer
 
       - name: Checkout Repo
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           path: velox
           ref: ${{ inputs.ref }}

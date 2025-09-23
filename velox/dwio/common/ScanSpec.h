@@ -149,7 +149,9 @@ class ScanSpec {
   }
 
   void setSubscript(int64_t subscript) {
-    subscript_ = subscript;
+    if (subscript_ != subscript) {
+      subscript_ = subscript;
+    }
   }
 
   // True if the value is returned from scan.  A runtime pushdown of a filter

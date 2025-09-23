@@ -57,13 +57,17 @@ class AbfsReadFile::Impl {
       uint64_t offset,
       uint64_t length,
       void* buffer,
-      File::IoStats* stats) const {
+      File::IoStats* stats,
+      const folly::F14FastMap<std::string, std::string>& fileReadOps) const {
     preadInternal(offset, length, static_cast<char*>(buffer));
     return {static_cast<char*>(buffer), length};
   }
 
-  std::string pread(uint64_t offset, uint64_t length, File::IoStats* stats)
-      const {
+  std::string pread(
+      uint64_t offset,
+      uint64_t length,
+      File::IoStats* stats,
+      const folly::F14FastMap<std::string, std::string>& fileReadOps) const {
     std::string result(length, 0);
     preadInternal(offset, length, result.data());
     return result;
@@ -72,7 +76,8 @@ class AbfsReadFile::Impl {
   uint64_t preadv(
       uint64_t offset,
       const std::vector<folly::Range<char*>>& buffers,
-      File::IoStats* stats) const {
+      File::IoStats* stats,
+      const folly::F14FastMap<std::string, std::string>& fileReadOps) const {
     size_t length = 0;
     auto size = buffers.size();
     for (auto& range : buffers) {
@@ -94,14 +99,20 @@ class AbfsReadFile::Impl {
   uint64_t preadv(
       folly::Range<const common::Region*> regions,
       folly::Range<folly::IOBuf*> iobufs,
-      File::IoStats* stats) const {
+      File::IoStats* stats,
+      const folly::F14FastMap<std::string, std::string>& fileReadOps) const {
     size_t length = 0;
     VELOX_CHECK_EQ(regions.size(), iobufs.size());
     for (size_t i = 0; i < regions.size(); ++i) {
       const auto& region = regions[i];
       auto& output = iobufs[i];
       output = folly::IOBuf(folly::IOBuf::CREATE, region.length);
-      pread(region.offset, region.length, output.writableData(), stats);
+      pread(
+          region.offset,
+          region.length,
+          output.writableData(),
+          stats,
+          fileReadOps);
       output.append(region.length);
       length += region.length;
     }
@@ -162,29 +173,33 @@ std::string_view AbfsReadFile::pread(
     uint64_t offset,
     uint64_t length,
     void* buffer,
-    File::IoStats* stats) const {
-  return impl_->pread(offset, length, buffer, stats);
+    File::IoStats* stats,
+    const folly::F14FastMap<std::string, std::string>& fileReadOps) const {
+  return impl_->pread(offset, length, buffer, stats, {});
 }
 
 std::string AbfsReadFile::pread(
     uint64_t offset,
     uint64_t length,
-    File::IoStats* stats) const {
-  return impl_->pread(offset, length, stats);
+    File::IoStats* stats,
+    const folly::F14FastMap<std::string, std::string>& fileReadOps) const {
+  return impl_->pread(offset, length, stats, {});
 }
 
 uint64_t AbfsReadFile::preadv(
     uint64_t offset,
     const std::vector<folly::Range<char*>>& buffers,
-    File::IoStats* stats) const {
-  return impl_->preadv(offset, buffers, stats);
+    File::IoStats* stats,
+    const folly::F14FastMap<std::string, std::string>& fileReadOps) const {
+  return impl_->preadv(offset, buffers, stats, {});
 }
 
 uint64_t AbfsReadFile::preadv(
     folly::Range<const common::Region*> regions,
     folly::Range<folly::IOBuf*> iobufs,
-    File::IoStats* stats) const {
-  return impl_->preadv(regions, iobufs, stats);
+    File::IoStats* stats,
+    const folly::F14FastMap<std::string, std::string>& fileReadOps) const {
+  return impl_->preadv(regions, iobufs, stats, {});
 }
 
 uint64_t AbfsReadFile::size() const {

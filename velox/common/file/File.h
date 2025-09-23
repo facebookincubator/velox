@@ -37,11 +37,14 @@
 #include <folly/Executor.h>
 #include <folly/Range.h>
 #include <folly/futures/Future.h>
+#include <folly/io/IOBuf.h>
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/file/Region.h"
 #include "velox/common/io/IoStatistics.h"
+
+#include <folly/container/F14Map.h>
 
 namespace facebook::velox {
 
@@ -61,7 +64,9 @@ class ReadFile {
       uint64_t offset,
       uint64_t length,
       void* buf,
-      filesystems::File::IoStats* stats = nullptr) const = 0;
+      filesystems::File::IoStats* stats = nullptr,
+      const folly::F14FastMap<std::string, std::string>& fileReadOps = {})
+      const = 0;
 
   // Same as above, but returns owned data directly.
   //
@@ -69,7 +74,9 @@ class ReadFile {
   virtual std::string pread(
       uint64_t offset,
       uint64_t length,
-      filesystems::File::IoStats* stats = nullptr) const;
+      filesystems::File::IoStats* stats = nullptr,
+      const folly::F14FastMap<std::string, std::string>& fileReadOps = {})
+      const;
 
   // Reads starting at 'offset' into the memory referenced by the
   // Ranges in 'buffers'. The buffers are filled left to right. A
@@ -82,7 +89,9 @@ class ReadFile {
   virtual uint64_t preadv(
       uint64_t /*offset*/,
       const std::vector<folly::Range<char*>>& /*buffers*/,
-      filesystems::File::IoStats* stats = nullptr) const;
+      filesystems::File::IoStats* stats = nullptr,
+      const folly::F14FastMap<std::string, std::string>& fileReadOps = {})
+      const;
 
   // Vectorized read API. Implementations can coalesce and parallelize.
   // The offsets don't need to be sorted.
@@ -101,7 +110,9 @@ class ReadFile {
   virtual uint64_t preadv(
       folly::Range<const common::Region*> regions,
       folly::Range<folly::IOBuf*> iobufs,
-      filesystems::File::IoStats* stats = nullptr) const;
+      filesystems::File::IoStats* stats = nullptr,
+      const folly::F14FastMap<std::string, std::string>& fileReadOps = {})
+      const;
 
   /// Like preadv but may execute asynchronously and returns the read size or
   /// exception via SemiFuture. Use hasPreadvAsync() to check if the
@@ -114,9 +125,12 @@ class ReadFile {
   virtual folly::SemiFuture<uint64_t> preadvAsync(
       uint64_t offset,
       const std::vector<folly::Range<char*>>& buffers,
-      filesystems::File::IoStats* stats = nullptr) const {
+      filesystems::File::IoStats* stats = nullptr,
+      const folly::F14FastMap<std::string, std::string>& fileReadOps = {})
+      const {
     try {
-      return folly::SemiFuture<uint64_t>(preadv(offset, buffers, stats));
+      return folly::SemiFuture<uint64_t>(
+          preadv(offset, buffers, stats, fileReadOps));
     } catch (const std::exception& e) {
       return folly::makeSemiFuture<uint64_t>(e);
     }
@@ -240,12 +254,16 @@ class InMemoryReadFile : public ReadFile {
       uint64_t offset,
       uint64_t length,
       void* buf,
-      filesystems::File::IoStats* stats = nullptr) const override;
+      filesystems::File::IoStats* stats = nullptr,
+      const folly::F14FastMap<std::string, std::string>& fileReadOps = {})
+      const override;
 
   std::string pread(
       uint64_t offset,
       uint64_t length,
-      filesystems::File::IoStats* stats) const override;
+      filesystems::File::IoStats* stats = nullptr,
+      const folly::F14FastMap<std::string, std::string>& fileReadOps = {})
+      const override;
 
   uint64_t size() const final {
     return file_.size();
@@ -311,19 +329,25 @@ class LocalReadFile final : public ReadFile {
       uint64_t offset,
       uint64_t length,
       void* buf,
-      filesystems::File::IoStats* stats = nullptr) const final;
+      filesystems::File::IoStats* stats = nullptr,
+      const folly::F14FastMap<std::string, std::string>& fileReadOps = {})
+      const final;
 
   uint64_t size() const final;
 
   uint64_t preadv(
       uint64_t offset,
       const std::vector<folly::Range<char*>>& buffers,
-      filesystems::File::IoStats* stats = nullptr) const final;
+      filesystems::File::IoStats* stats = nullptr,
+      const folly::F14FastMap<std::string, std::string>& fileReadOps = {})
+      const final;
 
   folly::SemiFuture<uint64_t> preadvAsync(
       uint64_t offset,
       const std::vector<folly::Range<char*>>& buffers,
-      filesystems::File::IoStats* stats = nullptr) const override;
+      filesystems::File::IoStats* stats = nullptr,
+      const folly::F14FastMap<std::string, std::string>& fileReadOps = {})
+      const override;
 
   bool hasPreadvAsync() const override {
     return executor_ != nullptr;

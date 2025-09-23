@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/connectors/hive/CudfHiveConnector.h"
+#include "velox/experimental/cudf/connectors/hive/CudfHiveDataSource.h"
 #include "velox/experimental/cudf/exec/CudfConversion.h"
 #include "velox/experimental/cudf/exec/CudfFilterProject.h"
 #include "velox/experimental/cudf/exec/CudfHashAggregation.h"
@@ -25,6 +27,8 @@
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 
+#include "velox/connectors/hive/HiveConnector.h"
+#include "velox/connectors/hive/TableHandle.h"
 #include "velox/exec/Driver.h"
 #include "velox/exec/FilterProject.h"
 #include "velox/exec/HashAggregation.h"
@@ -44,7 +48,6 @@
 DEFINE_bool(velox_cudf_enabled, true, "Enable cuDF-Velox acceleration");
 DEFINE_string(velox_cudf_memory_resource, "async", "Memory resource for cuDF");
 DEFINE_bool(velox_cudf_debug, false, "Enable debug printing");
-DEFINE_bool(velox_cudf_table_scan, true, "Enable cuDF table scan");
 
 namespace facebook::velox::cudf_velox {
 
@@ -57,7 +60,7 @@ bool isAnyOf(const Base* p) {
 
 } // namespace
 
-bool CompileState::compile() {
+bool CompileState::compile(bool force_replace) {
   auto operators = driver_.operators();
 
   if (FLAGS_velox_cudf_debug) {
@@ -90,13 +93,25 @@ bool CompileState::compile() {
     return driverFactory_.consumerNode;
   };
 
-  const bool isParquetConnectorRegistered =
-      facebook::velox::connector::getAllConnectors().count("test-parquet") > 0;
-  auto isTableScanSupported =
-      [isParquetConnectorRegistered](const exec::Operator* op) {
-        return isAnyOf<exec::TableScan>(op) && isParquetConnectorRegistered &&
-            cudfTableScanEnabled();
-      };
+  auto isTableScanSupported = [getPlanNode](const exec::Operator* op) {
+    if (!isAnyOf<exec::TableScan>(op)) {
+      return false;
+    }
+    auto tableScanNode = std::dynamic_pointer_cast<const core::TableScanNode>(
+        getPlanNode(op->planNodeId()));
+    VELOX_CHECK(tableScanNode != nullptr);
+    auto const& connector = velox::connector::getConnector(
+        tableScanNode->tableHandle()->connectorId());
+    auto cudfHiveConnector = std::dynamic_pointer_cast<
+        facebook::velox::cudf_velox::connector::hive::CudfHiveConnector>(
+        connector);
+    if (!cudfHiveConnector) {
+      return false;
+    }
+    // TODO (dm): we need to ask CudfHiveConnector whether this table handle is
+    // supported by it. It may choose to produce a HiveDatasource.
+    return true;
+  };
 
   auto isFilterProjectSupported = [](const exec::Operator* op) {
     if (auto filterProjectOp = dynamic_cast<const exec::FilterProject*>(op)) {
@@ -292,6 +307,35 @@ bool CompileState::compile() {
       replaceOp.back()->initialize();
     }
 
+    if (force_replace) {
+      if (FLAGS_velox_cudf_debug) {
+        std::printf(
+            "Operator: ID %d: %s, keepOperator = %d, replaceOp.size() = %ld\n",
+            oper->operatorId(),
+            oper->toString().c_str(),
+            keepOperator,
+            replaceOp.size());
+      }
+      auto shouldSupportGpuOperator =
+          [isFilterProjectSupported,
+           isTableScanSupported](const exec::Operator* op) {
+            return isAnyOf<
+                       exec::OrderBy,
+                       exec::TableScan,
+                       exec::HashAggregation,
+                       exec::Limit,
+                       exec::LocalPartition,
+                       exec::LocalExchange,
+                       exec::HashBuild,
+                       exec::HashProbe>(op) ||
+                isFilterProjectSupported(op);
+          };
+      VELOX_CHECK(
+          !(keepOperator == 0 && shouldSupportGpuOperator(oper) &&
+            replaceOp.empty()),
+          "Replacement with cuDF operator failed");
+    }
+
     if (not replaceOp.empty()) {
       // ReplaceOp, to-velox.
       operatorsOffset += replaceOp.size() - 1 + keepOperator;
@@ -319,14 +363,20 @@ bool CompileState::compile() {
 
 struct CudfDriverAdapter {
   std::shared_ptr<rmm::mr::device_memory_resource> mr_;
+  bool force_replace_;
 
-  CudfDriverAdapter(std::shared_ptr<rmm::mr::device_memory_resource> mr)
-      : mr_(mr) {}
+  CudfDriverAdapter(
+      std::shared_ptr<rmm::mr::device_memory_resource> mr,
+      bool force_replace)
+      : mr_(mr), force_replace_{force_replace} {}
 
   // Call operator needed by DriverAdapter
   bool operator()(const exec::DriverFactory& factory, exec::Driver& driver) {
+    if (!driver.driverCtx()->queryConfig().get<bool>(kCudfEnabled, true)) {
+      return false;
+    }
     auto state = CompileState(factory, driver);
-    auto res = state.compile();
+    auto res = state.compile(force_replace_);
     return res;
   }
 };
@@ -352,7 +402,7 @@ void registerCudf(const CudfOptions& options) {
 
   exec::Operator::registerOperator(
       std::make_unique<CudfHashJoinBridgeTranslator>());
-  CudfDriverAdapter cda{mr};
+  CudfDriverAdapter cda{mr, options.force_replace};
   exec::DriverAdapter cudfAdapter{kCudfAdapterName, {}, cda};
   exec::DriverFactory::registerAdapter(cudfAdapter);
   isCudfRegistered = true;
@@ -377,10 +427,6 @@ bool cudfIsRegistered() {
 
 bool cudfDebugEnabled() {
   return FLAGS_velox_cudf_debug;
-}
-
-bool cudfTableScanEnabled() {
-  return CudfOptions::getInstance().cudfTableScan;
 }
 
 } // namespace facebook::velox::cudf_velox
