@@ -25,6 +25,7 @@ add_library(
   PrestoQueryRunnerToSqlPlanNodeVisitor.cpp
   FuzzerUtil.cpp
   PrestoSql.cpp
+  VeloxQueryRunner.cpp
 )
 
 target_link_libraries(
@@ -43,6 +44,7 @@ target_link_libraries(
   velox_dwio_dwrf_writer
   velox_dwio_catalog_fbhive
   velox_dwio_faulty_file_sink
+  velox_local_runner_service_thrift
 )
 
 add_library(velox_aggregation_fuzzer_base AggregationFuzzerBase.cpp)
