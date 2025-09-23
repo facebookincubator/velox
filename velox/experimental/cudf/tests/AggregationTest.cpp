@@ -667,15 +667,15 @@ TEST_F(EmptyInputAggregationTest, groupedPartialFinalAggregation) {
   plan_ = PlanBuilder()
               .values({data_})
               .filter(filter_)
-              .partialAggregation({"c2"}, {"sum(c0)", "count(c1)", "max(c1)"})
+              .partialAggregation(
+                  {"c2"}, {"sum(c0)", "count(c1)", "max(c1)", "avg(c1)"})
               .finalAggregation()
               .planNode();
-  // TODO (dm): "avg(c1)"
 
   // should return empty result for partial-final aggregation
   assertQuery(
       plan_,
-      "SELECT c2, sum(c0), count(c1), max(c1) FROM tmp WHERE c0 > 10 GROUP BY c2");
+      "SELECT c2, sum(c0), count(c1), max(c1), avg(c1) FROM tmp WHERE c0 > 10 GROUP BY c2");
 }
 
 TEST_F(EmptyInputAggregationTest, globalPartialFinalAggregation) {
@@ -684,14 +684,15 @@ TEST_F(EmptyInputAggregationTest, globalPartialFinalAggregation) {
   plan_ = PlanBuilder()
               .values({data_})
               .filter(filter_)
-              .partialAggregation({}, {"sum(c0)", "count(c1)", "max(c1)"})
+              .partialAggregation(
+                  {}, {"sum(c0)", "count(c1)", "max(c1)", "avg(c1)"})
               .finalAggregation()
               .planNode();
-  // TODO (dm): "avg(c1)"
 
   // global partial-final aggregation should return 1 row with null/zero values
   assertQuery(
-      plan_, "SELECT sum(c0), count(c1), max(c1) FROM tmp WHERE c0 > 10");
+      plan_,
+      "SELECT sum(c0), count(c1), max(c1), avg(c1) FROM tmp WHERE c0 > 10");
 }
 
 } // namespace facebook::velox::exec::test
