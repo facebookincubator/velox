@@ -18,6 +18,8 @@
 
 #include "velox/common/base/ExceptionHelper.h"
 
+#include <gflags/gflags.h>
+
 namespace facebook::velox::cudf_velox {
 
 DECLARE_bool(velox_cudf_log_validation_failure);
