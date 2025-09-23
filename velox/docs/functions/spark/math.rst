@@ -83,6 +83,13 @@ Mathematical Functions
     Returns the result of adding x to y. The types of x and y must be the same.
     For integral types, overflow results in an error. Corresponds to Spark's operator ``+`` with ``failOnError`` as true.
 
+.. function:: checked_div(x, y) -> bigint
+
+    Returns the results of dividing (integer division performs truncation) x by y.
+    Supported types are DECIMAL and integral types. For DECIMAL types, x and y can have different precision and scale.
+    For integral types, x and y must have the same type.
+    Division by zero or overflow results in an error. Corresponds to Spark's operator ``div`` with ``failOnError`` as true.
+
 .. function:: checked_divide(x, y) -> [same as x]
 
     Returns the results of dividing x by y. The types of x and y must be the same.
@@ -117,6 +124,20 @@ Mathematical Functions
 .. spark:function:: degrees(x) -> double
 
     Converts angle x in radians to degrees.
+
+.. function:: div(x, y) -> bigint
+
+    Returns the results of dividing x by y. Performs the integer division truncates toward zero.
+    Supported types are DECIMAL and integral types. For DECIMAL types, x and y can have different precision and scale.
+    For integral types, x and y must have the same type.
+    Division by zero or overflow results in null. ::
+
+        SELECT 3 div 2; -- 1
+        SELECT 1L div 2L; -- 0
+        SELECT 3 div 0; -- NULL
+        SELECT CAST(1 as DECIMAL(17, 3)) div CAST(2 as DECIMAL(17, 3)); -- 0
+        SELECT CAST(200 as DECIMAL(20, 3)) div CAST(20 as DECIMAL(20, 2)); -- 1
+        SELECT CAST(1 as DECIMAL(20, 3)) div CAST(0 as DECIMAL(20, 3)); -- NULL
 
 .. spark:function:: divide(x, y) -> double
 

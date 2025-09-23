@@ -499,6 +499,127 @@ struct DecimalDivideFunction {
   uint8_t rPrecision_;
 };
 
+/// Decimal integral divide function implementation.
+struct DecimalIntegralDivideBase {
+  template <typename A, typename B>
+  void
+  initializeBase(const std::vector<TypePtr>& inputTypes, A* /*a*/, B* /*b*/) {
+    auto [aPrecision, aScale] = getDecimalPrecisionScale(*inputTypes[0]);
+    auto [bPrecision, bScale] = getDecimalPrecisionScale(*inputTypes[1]);
+    auto [rPrecision, rScale] =
+        computeResultPrecisionScale(aPrecision, aScale, bPrecision, bScale);
+    rPrecision_ = rPrecision;
+    aRescale_ = std::max<int8_t>(0, bScale - aScale);
+    bRescale_ = std::max<int8_t>(0, aScale - bScale);
+  }
+
+  template <typename A, typename B>
+  bool computeQuotient(int64_t& out, const A& a, const B& b) {
+    if (b == 0) {
+      return false;
+    }
+    // Determine sign and convert to absolute values.
+    bool isNegative = (a < 0) != (b < 0);
+    int128_t absA = std::abs(a);
+    int128_t absB = std::abs(b);
+
+    // Scale values, checking for overflow.
+    int128_t scaledA, scaledB;
+    if (__builtin_mul_overflow(
+            absA, velox::DecimalUtil::kPowersOfTen[aRescale_], &scaledA) ||
+        __builtin_mul_overflow(
+            absB, velox::DecimalUtil::kPowersOfTen[bRescale_], &scaledB)) {
+      return false;
+    }
+
+    if (scaledA < scaledB) {
+      out = 0;
+      return true;
+    }
+
+    int128_t quotient = scaledA / scaledB;
+    quotient = isNegative ? -quotient : quotient;
+
+    if (!velox::DecimalUtil::valueInPrecisionRange(quotient, rPrecision_)) {
+      return false;
+    }
+    out = static_cast<int64_t>(quotient);
+    return true;
+  }
+
+ private:
+  static std::pair<uint8_t, uint8_t> computeResultPrecisionScale(
+      uint8_t aPrecision,
+      uint8_t aScale,
+      uint8_t bPrecision,
+      uint8_t bScale) {
+    auto intPrecision = aPrecision - aScale + bScale;
+    if (intPrecision == 0) {
+      intPrecision = 1;
+    }
+    return DecimalUtil::bounded(intPrecision, 0);
+  }
+
+ protected:
+  uint8_t aRescale_;
+  uint8_t bRescale_;
+  uint8_t rPrecision_;
+};
+
+/// Decimal integral divide function that returns null on division by zero or
+/// overflow.
+template <typename TExec>
+struct DecimalIntegeralDivideFunction : DecimalIntegralDivideBase {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  template <typename A, typename B>
+  void initialize(
+      const std::vector<TypePtr>& inputTypes,
+      const core::QueryConfig& /*config*/,
+      A* a,
+      B* b) {
+    initializeBase(inputTypes, a, b);
+  }
+
+  template <typename A, typename B>
+  bool call(int64_t& out, const A& a, const B& b) {
+    return computeQuotient(out, a, b);
+  }
+};
+
+/// Decimal integral divide function that returns error on division by zero or
+/// overflow.
+template <typename TExec>
+struct CheckedDecimalIntegeralDivideFunction : DecimalIntegralDivideBase {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  template <typename A, typename B>
+  void initialize(
+      const std::vector<TypePtr>& inputTypes,
+      const core::QueryConfig& /*config*/,
+      A* a,
+      B* b) {
+    initializeBase(inputTypes, a, b);
+  }
+
+  template <typename A, typename B>
+  Status call(int64_t& out, const A& a, const B& b) {
+    if (b == 0) {
+      if (threadSkipErrorDetails()) {
+        return Status::UserError();
+      }
+      return Status::UserError("Division by zero");
+    }
+    if (!computeQuotient(out, a, b)) {
+      if (threadSkipErrorDetails()) {
+        return Status::UserError();
+      }
+      return Status::UserError("Overflow in integral divide");
+    }
+    return Status::OK();
+  }
+};
+
 template <template <class> typename Func>
 void registerDecimalBinary(
     const std::string& name,
@@ -672,6 +793,25 @@ void registerDecimalDivide(
       LongDecimal<P1, S1>,
       ShortDecimal<P2, S2>>({functionName}, constraints);
 }
+
+template <template <class> typename Func>
+void registerIntegralDecimalDivide(const std::string& functionName) {
+  // (short, short) -> int64_t
+  registerFunction<Func, int64_t, ShortDecimal<P1, S1>, ShortDecimal<P2, S2>>(
+      {functionName});
+
+  // (long, long) -> int64_t
+  registerFunction<Func, int64_t, LongDecimal<P1, S1>, LongDecimal<P2, S2>>(
+      {functionName});
+
+  // (short, long) -> int64_t
+  registerFunction<Func, int64_t, ShortDecimal<P1, S1>, LongDecimal<P2, S2>>(
+      {functionName});
+
+  // (long, short) -> int64_t
+  registerFunction<Func, int64_t, LongDecimal<P1, S1>, ShortDecimal<P2, S2>>(
+      {functionName});
+}
 } // namespace
 
 void registerDecimalAdd(const std::string& prefix) {
@@ -714,5 +854,11 @@ void registerDecimalDivide(const std::string& prefix) {
   registerDecimalDivide<DivideFunctionDenyPrecisionLoss>(
       prefix + "divide" + kDenyPrecisionLoss,
       getDivideConstraintsDenyPrecisionLoss());
+}
+
+void registerDecimalIntegeralDivide(const std::string& prefix) {
+  registerIntegralDecimalDivide<DecimalIntegeralDivideFunction>(prefix + "div");
+  registerIntegralDecimalDivide<CheckedDecimalIntegeralDivideFunction>(
+      prefix + "checked_div");
 }
 } // namespace facebook::velox::functions::sparksql
