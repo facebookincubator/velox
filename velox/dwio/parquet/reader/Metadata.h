@@ -163,9 +163,6 @@ class FileMetaDataPtr {
 
 size_t calculateColumnMetadataSize(const thrift::ColumnChunk& column);
 
-size_t analyzeFileMetadata(
-    const thrift::FileMetaData& metadata,
-    const std::string& filename,
-    uint64_t footerLength);
+size_t calculateFileMetadataSize(const thrift::FileMetaData& metadata);
 
 } // namespace facebook::velox::parquet

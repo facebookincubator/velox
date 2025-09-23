@@ -249,8 +249,7 @@ void ReaderBase::loadFileMetaData() {
   fileMetaData_ = std::make_unique<thrift::FileMetaData>();
   fileMetaData_->read(thriftProtocol.get());
   if (footerLength > options().parquetFooterTrackThriftMemoryThreshold()) {
-    thriftSize_ = analyzeFileMetadata(
-        *fileMetaData_, input_->getReadFile()->getName(), footerLength);
+    thriftSize_ = calculateFileMetadataSize(*fileMetaData_);
   }
 }
 

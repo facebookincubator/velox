@@ -1790,16 +1790,10 @@ TEST_F(ParquetReaderTest, readerWithSchema) {
 }
 
 TEST_F(ParquetReaderTest, thriftMemoryTrackingTest) {
-  // Test the thrift memory tracking functionality added in the top commit.
-  // This test verifies that when footer size exceeds the threshold,
-  // memory is properly tracked, reported during row reader creation,
-  // and freed in the destructor.
-
   const std::string sample(getExampleFilePath("sample.parquet"));
 
-  // Test with a very low threshold to trigger memory tracking
   dwio::common::ReaderOptions readerOptions{leafPool_.get()};
-  readerOptions.setParquetFooterTrackThriftMemoryThreshold(1); // 1 byte threshold
+  readerOptions.setParquetFooterTrackThriftMemoryThreshold(1);
   auto initialUsage = leafPool_->usedBytes();
   size_t memoryAfterRowReader = 0;
   {
@@ -1809,21 +1803,16 @@ TEST_F(ParquetReaderTest, thriftMemoryTrackingTest) {
     auto scanSpec = makeScanSpec(sampleSchema());
     rowReaderOpts.setScanSpec(scanSpec);
     auto rowReader = reader->createRowReader(rowReaderOpts);
-
-    // After row reader creation, memory should be tracked (reportAllocation called)
     memoryAfterRowReader = leafPool_->usedBytes();
     EXPECT_GT(memoryAfterRowReader, initialUsage);
     auto result = BaseVector::create(sampleSchema(), 0, leafPool_.get());
     rowReader->next(10, result);
     EXPECT_EQ(result->size(), 10);
 
-    // Memory should still be tracked after reading
     auto memoryAfterReading = leafPool_->usedBytes();
     EXPECT_GE(memoryAfterReading, memoryAfterRowReader);
   }
 
-  // After reader destruction, memory should be properly cleaned up via ~ReaderBase()
   auto finalUsage = leafPool_->usedBytes();
-  // The destructor should call pool_.reportFree(thriftSize_) to free the tracked memory
   EXPECT_EQ(finalUsage, initialUsage);
 }
