@@ -673,20 +673,10 @@ struct CheckedIntegeralDivideFunction {
 
   template <typename T>
   FOLLY_ALWAYS_INLINE Status call(int64_t& result, const T& a, const T& b) {
-    if (b == 0) {
-      if (threadSkipErrorDetails()) {
-        return Status::UserError();
-      }
-      return Status::UserError("Division by zero");
-    }
-    if constexpr (std::is_same_v<T, int64_t>) {
-      if (a == std::numeric_limits<int64_t>::min() && b == -1) {
-        if (threadSkipErrorDetails()) {
-          return Status::UserError();
-        }
-        return Status::UserError("Overflow in integral divide");
-      }
-    }
+    VELOX_USER_RETURN_EQ(b, 0, "Division by zero");
+    VELOX_USER_RETURN(
+        a == std::numeric_limits<int64_t>::min() && b == -1,
+        "Overflow in integral divide");
     result = a / b;
     return Status::OK();
   }
