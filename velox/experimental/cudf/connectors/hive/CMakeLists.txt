@@ -20,7 +20,6 @@ target_link_libraries(velox_cudf_hive_config velox_core velox_exception cudf::cu
 
 add_library(
   velox_cudf_hive_connector
-  OBJECT
   CudfHiveConfig.cpp
   CudfHiveConnector.cpp
   CudfHiveConnectorSplit.cpp
