@@ -184,6 +184,8 @@ class RowVector : public BaseVector {
         nullCount_);
   }
 
+  void transferOrCopyTo(velox::memory::MemoryPool* pool) override;
+
   uint64_t retainedSize() const override {
     auto size = BaseVector::retainedSize();
     for (auto& child : children_) {
@@ -372,6 +374,8 @@ struct ArrayVectorBase : BaseVector {
     sizes_->asMutable<vector_size_t>()[i] = size;
   }
 
+  void transferOrCopyTo(velox::memory::MemoryPool* pool) override;
+
   /// Check if there is any overlapping [offset, size] ranges.
   bool hasOverlappingRanges() const {
     std::vector<vector_size_t> indices;
@@ -521,6 +525,8 @@ class ArrayVector : public ArrayVectorBase {
         nullCount_);
   }
 
+  void transferOrCopyTo(velox::memory::MemoryPool* pool) override;
+
   uint64_t retainedSize() const override {
     return BaseVector::retainedSize() + offsets_->capacity() +
         sizes_->capacity() + elements_->retainedSize();
@@ -665,6 +671,8 @@ class MapVector : public ArrayVectorBase {
         nullCount_,
         sortedKeys_);
   }
+
+  void transferOrCopyTo(velox::memory::MemoryPool* pool) override;
 
   uint64_t retainedSize() const override {
     return BaseVector::retainedSize() + offsets_->capacity() +
