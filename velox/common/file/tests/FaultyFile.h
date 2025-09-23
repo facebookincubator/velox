@@ -29,7 +29,7 @@ class FaultyReadFile : public ReadFile {
       FileFaultInjectionHook injectionHook,
       folly::Executor* executor);
 
-  ~FaultyReadFile() override{};
+  ~FaultyReadFile() override {}
 
   uint64_t size() const override {
     return delegatedFile_->size();
@@ -39,12 +39,16 @@ class FaultyReadFile : public ReadFile {
       uint64_t offset,
       uint64_t length,
       void* buf,
-      filesystems::File::IoStats* stats = nullptr) const override;
+      filesystems::File::IoStats* stats = nullptr,
+      const folly::F14FastMap<std::string, std::string>& fileReadOps = {})
+      const override;
 
   uint64_t preadv(
       uint64_t offset,
       const std::vector<folly::Range<char*>>& buffers,
-      filesystems::File::IoStats* stats = nullptr) const override;
+      filesystems::File::IoStats* stats = nullptr,
+      const folly::F14FastMap<std::string, std::string>& fileReadOps = {})
+      const override;
 
   uint64_t memoryUsage() const override {
     return delegatedFile_->memoryUsage();
@@ -72,7 +76,9 @@ class FaultyReadFile : public ReadFile {
   folly::SemiFuture<uint64_t> preadvAsync(
       uint64_t offset,
       const std::vector<folly::Range<char*>>& buffers,
-      filesystems::File::IoStats* stats = nullptr) const override;
+      filesystems::File::IoStats* stats = nullptr,
+      const folly::F14FastMap<std::string, std::string>& fileReadOps = {})
+      const override;
 
  private:
   const std::string path_;
@@ -88,7 +94,7 @@ class FaultyWriteFile : public WriteFile {
       std::shared_ptr<WriteFile> delegatedFile,
       FileFaultInjectionHook injectionHook);
 
-  ~FaultyWriteFile() override{};
+  ~FaultyWriteFile() override {}
 
   void append(std::string_view data) override;
 

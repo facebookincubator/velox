@@ -54,7 +54,8 @@ IcebergSplitReader::IcebergSplitReader(
 
 void IcebergSplitReader::prepareSplit(
     std::shared_ptr<common::MetadataFilter> metadataFilter,
-    dwio::common::RuntimeStatistics& runtimeStats) {
+    dwio::common::RuntimeStatistics& runtimeStats,
+    const folly::F14FastMap<std::string, std::string>& fileReadOps) {
   createReader();
   if (emptySplit_) {
     return;
@@ -66,7 +67,7 @@ void IcebergSplitReader::prepareSplit(
     return;
   }
 
-  createRowReader(std::move(metadataFilter), std::move(rowType));
+  createRowReader(std::move(metadataFilter), std::move(rowType), std::nullopt);
 
   std::shared_ptr<const HiveIcebergSplit> icebergSplit =
       std::dynamic_pointer_cast<const HiveIcebergSplit>(hiveSplit_);

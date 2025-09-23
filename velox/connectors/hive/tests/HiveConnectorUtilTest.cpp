@@ -352,6 +352,7 @@ TEST_F(HiveConnectorUtilTest, configureSstRowReaderOptions) {
       /*hiveSplit=*/hiveSplit,
       /*hiveConfig=*/nullptr,
       /*sessionProperties=*/nullptr,
+      /*ioExecutor=*/nullptr,
       /*rowReaderOptions=*/rowReaderOpts);
 
   EXPECT_EQ(rowReaderOpts.serdeParameters(), hiveSplit->serdeParameters);
@@ -377,6 +378,7 @@ TEST_F(HiveConnectorUtilTest, configureRowReaderOptionsFromConfig) {
         /*hiveSplit=*/hiveSplit,
         /*hiveConfig=*/hiveConfig,
         /*sessionProperties=*/&sessionProperties,
+        /*ioExecutor=*/nullptr,
         /*rowReaderOptions=*/rowReaderOpts);
 
     EXPECT_FALSE(rowReaderOpts.preserveFlatMapsInMemory());
@@ -402,6 +404,7 @@ TEST_F(HiveConnectorUtilTest, configureRowReaderOptionsFromConfig) {
         /*hiveSplit=*/hiveSplit,
         /*hiveConfig=*/hiveConfig,
         /*sessionProperties=*/&sessionProperties,
+        /*ioExecutor=*/nullptr,
         /*rowReaderOptions=*/rowReaderOpts);
 
     EXPECT_TRUE(rowReaderOpts.preserveFlatMapsInMemory());
@@ -428,6 +431,7 @@ TEST_F(HiveConnectorUtilTest, configureRowReaderOptionsFromConfig) {
         /*hiveSplit=*/hiveSplit,
         /*hiveConfig=*/hiveConfig,
         /*sessionProperties=*/&sessionProperties,
+        /*ioExecutor=*/nullptr,
         /*rowReaderOptions=*/rowReaderOpts);
 
     EXPECT_TRUE(rowReaderOpts.preserveFlatMapsInMemory());
@@ -455,6 +459,7 @@ TEST_F(HiveConnectorUtilTest, configureRowReaderOptionsFromConfig) {
         /*hiveSplit=*/hiveSplit,
         /*hiveConfig=*/hiveConfig,
         /*sessionProperties=*/&sessionProperties,
+        /*ioExecutor=*/nullptr,
         /*rowReaderOptions=*/rowReaderOpts);
 
     EXPECT_TRUE(rowReaderOpts.preserveFlatMapsInMemory());

@@ -16,6 +16,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/PlanFragment.h"
 #include "velox/core/PlanNode.h"
+#include "velox/core/QueryConfig.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -71,45 +72,25 @@ class SpatialJoinTest : public OperatorTestBase {
       core::JoinType joinType,
       const std::vector<std::optional<std::string_view>>& expectedLeftWkts,
       const std::vector<std::optional<std::string_view>>& expectedRightWkts) {
-    runTestWithDrivers(
-        probeWkts,
-        buildWkts,
-        predicate,
-        joinType,
-        expectedLeftWkts,
-        expectedRightWkts,
-        1,
-        false);
-    runTestWithDrivers(
-        probeWkts,
-        buildWkts,
-        predicate,
-        joinType,
-        expectedLeftWkts,
-        expectedRightWkts,
-        1,
-        true);
-    runTestWithDrivers(
-        probeWkts,
-        buildWkts,
-        predicate,
-        joinType,
-        expectedLeftWkts,
-        expectedRightWkts,
-        4,
-        false);
-    runTestWithDrivers(
-        probeWkts,
-        buildWkts,
-        predicate,
-        joinType,
-        expectedLeftWkts,
-        expectedRightWkts,
-        4,
-        true);
+    for (bool separateProbeBatches : {false, true}) {
+      for (size_t maxBatchSize : {1024, 1}) {
+        for (int32_t maxDrivers : {1, 4}) {
+          runTestWithConfig(
+              probeWkts,
+              buildWkts,
+              predicate,
+              joinType,
+              expectedLeftWkts,
+              expectedRightWkts,
+              maxDrivers,
+              maxBatchSize,
+              separateProbeBatches);
+        }
+      }
+    }
   }
 
-  void runTestWithDrivers(
+  void runTestWithConfig(
       const std::vector<std::optional<std::string_view>>& probeWkts,
       const std::vector<std::optional<std::string_view>>& buildWkts,
       const std::string& predicate,
@@ -117,6 +98,7 @@ class SpatialJoinTest : public OperatorTestBase {
       const std::vector<std::optional<std::string_view>>& expectedLeftWkts,
       const std::vector<std::optional<std::string_view>>& expectedRightWkts,
       int32_t maxDrivers,
+      size_t maxBatchSize,
       bool separateBatches) {
     std::vector<std::optional<std::string>> probeWktsStr(
         probeWkts.begin(), probeWkts.end());
@@ -169,10 +151,24 @@ class SpatialJoinTest : public OperatorTestBase {
                  "ST_AsText(right_g) AS right_g"})
             .planNode();
     AssertQueryBuilder builder{plan};
-    builder.maxDrivers(maxDrivers).assertResults({expectedRows});
+    builder.maxDrivers(maxDrivers)
+        .config(core::QueryConfig::kPreferredOutputBatchRows, maxBatchSize)
+        .config(core::QueryConfig::kMaxOutputBatchRows, maxBatchSize)
+        .assertResults({expectedRows});
   }
 };
-TEST_F(SpatialJoinTest, simpleSpatialJoin) {
+
+TEST_F(SpatialJoinTest, testTrivialSpatialJoin) {
+  runTest(
+      {"POINT (1 1)"},
+      {"POINT (1 1)"},
+      "ST_Intersects(left_g, right_g)",
+      core::JoinType::kInner,
+      {"POINT (1 1)"},
+      {"POINT (1 1)"});
+}
+
+TEST_F(SpatialJoinTest, testSimpleSpatialInnerJoin) {
   runTest(
       {"POINT (1 1)", "POINT (1 2)"},
       {"POINT (1 1)", "POINT (2 1)"},
@@ -180,6 +176,9 @@ TEST_F(SpatialJoinTest, simpleSpatialJoin) {
       core::JoinType::kInner,
       {"POINT (1 1)"},
       {"POINT (1 1)"});
+}
+
+TEST_F(SpatialJoinTest, testSimpleSpatialLeftJoin) {
   runTest(
       {"POINT (1 1)", "POINT (1 2)"},
       {"POINT (1 1)", "POINT (2 1)"},
@@ -189,7 +188,19 @@ TEST_F(SpatialJoinTest, simpleSpatialJoin) {
       {"POINT (1 1)", std::nullopt});
 }
 
-TEST_F(SpatialJoinTest, selfSpatialJoin) {
+// Test geometries that don't intersect but their envelopes do.
+// Important to test spatial index
+TEST_F(SpatialJoinTest, simpleSpatialJoinEnvelopes) {
+  runTest(
+      {"POINT (0.5 0.6)", "POINT (0.5 0.5)", "LINESTRING (0 0.1, 0.9 1)"},
+      {"POLYGON ((0 0, 1 1, 1 0, 0 0))"},
+      "ST_Intersects(left_g, right_g)",
+      core::JoinType::kInner,
+      {"POINT (0.5 0.5)"},
+      {"POLYGON ((0 0, 1 1, 1 0, 0 0))"});
+}
+
+TEST_F(SpatialJoinTest, testSelfSpatialJoin) {
   std::vector<std::optional<std::string_view>> inputWkts = {
       kPolygonA, kPolygonB, kPolygonC, kPolygonD};
   std::vector<std::optional<std::string_view>> leftOutputWkts = {
@@ -298,6 +309,16 @@ TEST_F(SpatialJoinTest, pointPolygonSpatialJoin) {
       core::JoinType::kInner,
       pointOutputWkts,
       polygonOutputWkts);
+}
+
+TEST_F(SpatialJoinTest, simpleNullRowsJoin) {
+  runTest(
+      {"POINT (1 1)", std::nullopt, "POINT (1 2)"},
+      {"POINT (1 1)", "POINT (2 1)", std::nullopt},
+      "ST_Intersects(left_g, right_g)",
+      core::JoinType::kInner,
+      {"POINT (1 1)"},
+      {"POINT (1 1)"});
 }
 
 TEST_F(SpatialJoinTest, failOnGroupedExecution) {

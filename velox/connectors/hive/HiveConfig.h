@@ -146,6 +146,15 @@ class HiveConfig {
   /// meta data together. Optimization to decrease the small IO requests
   static constexpr const char* kFilePreloadThreshold = "file-preload-threshold";
 
+  /// When set to be larger than 0, parallel unit loader feature is enabled and
+  /// it configures how many units (e.g., stripes) we load in parallel.
+  /// When set to 0, parallel unit loader feature is disabled and on demand unit
+  /// loader would be used.
+  static constexpr const char* kParallelUnitLoadCount =
+      "parallel-unit-load-count";
+  static constexpr const char* kParallelUnitLoadCountSession =
+      "parallel_unit_load_count";
+
   /// Config used to create write files. This config is provided to underlying
   /// file system through hive connector and data sink. The config is free form.
   /// The form should be defined by the underlying file system.
@@ -197,6 +206,10 @@ class HiveConfig {
   static constexpr const char* kPreserveFlatMapsInMemorySession =
       "hive.preserve_flat_maps_in_memory";
 
+  static constexpr const char* kUser = "user";
+  static constexpr const char* kSource = "source";
+  static constexpr const char* kSchema = "schema";
+
   InsertExistingPartitionsBehavior insertExistingPartitionsBehavior(
       const config::ConfigBase* session) const;
 
@@ -234,6 +247,8 @@ class HiveConfig {
   int32_t maxCoalescedDistanceBytes(const config::ConfigBase* session) const;
 
   int32_t prefetchRowGroups() const;
+
+  size_t parallelUnitLoadCount(const config::ConfigBase* session) const;
 
   int32_t loadQuantum(const config::ConfigBase* session) const;
 
@@ -282,6 +297,15 @@ class HiveConfig {
   /// Whether to preserve flat maps in memory as FlatMapVectors instead of
   /// converting them to MapVectors.
   bool preserveFlatMapsInMemory(const config::ConfigBase* session) const;
+
+  /// User of the query. Used for storage logging.
+  std::string user(const config::ConfigBase* session) const;
+
+  /// Source of the query. Used for storage access and logging.
+  std::string source(const config::ConfigBase* session) const;
+
+  /// Schema of the query. Used for storage logging.
+  std::string schema(const config::ConfigBase* session) const;
 
   HiveConfig(std::shared_ptr<const config::ConfigBase> config) {
     VELOX_CHECK_NOT_NULL(

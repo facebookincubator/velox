@@ -59,7 +59,8 @@ class GcsReadFile::Impl {
       uint64_t length,
       void* buffer,
       std::atomic<uint64_t>& bytesRead,
-      filesystems::File::IoStats* stats = nullptr) const {
+      filesystems::File::IoStats* stats,
+      const folly::F14FastMap<std::string, std::string>& fileReadOps) const {
     preadInternal(offset, length, static_cast<char*>(buffer), bytesRead);
     return {static_cast<char*>(buffer), length};
   }
@@ -68,7 +69,8 @@ class GcsReadFile::Impl {
       uint64_t offset,
       uint64_t length,
       std::atomic<uint64_t>& bytesRead,
-      filesystems::File::IoStats* stats = nullptr) const {
+      filesystems::File::IoStats* stats,
+      const folly::F14FastMap<std::string, std::string>& fileReadOps) const {
     std::string result(length, 0);
     char* position = result.data();
     preadInternal(offset, length, position, bytesRead);
@@ -79,7 +81,8 @@ class GcsReadFile::Impl {
       uint64_t offset,
       const std::vector<folly::Range<char*>>& buffers,
       std::atomic<uint64_t>& bytesRead,
-      filesystems::File::IoStats* stats = nullptr) const {
+      filesystems::File::IoStats* stats,
+      const folly::F14FastMap<std::string, std::string>& fileReadOps) const {
     // 'buffers' contains Ranges(data, size)  with some gaps (data = nullptr) in
     // between. This call must populate the ranges (except gap ranges)
     // sequentially starting from 'offset'. If a range pointer is nullptr, the
@@ -158,21 +161,24 @@ std::string_view GcsReadFile::pread(
     uint64_t offset,
     uint64_t length,
     void* buffer,
-    filesystems::File::IoStats* stats) const {
-  return impl_->pread(offset, length, buffer, bytesRead_, stats);
+    filesystems::File::IoStats* stats,
+    const folly::F14FastMap<std::string, std::string>& fileReadOps) const {
+  return impl_->pread(offset, length, buffer, bytesRead_, stats, {});
 }
 
 std::string GcsReadFile::pread(
     uint64_t offset,
     uint64_t length,
-    filesystems::File::IoStats* stats) const {
-  return impl_->pread(offset, length, bytesRead_, stats);
+    filesystems::File::IoStats* stats,
+    const folly::F14FastMap<std::string, std::string>& fileReadOps) const {
+  return impl_->pread(offset, length, bytesRead_, stats, {});
 }
 uint64_t GcsReadFile::preadv(
     uint64_t offset,
     const std::vector<folly::Range<char*>>& buffers,
-    filesystems::File::IoStats* stats) const {
-  return impl_->preadv(offset, buffers, bytesRead_, stats);
+    filesystems::File::IoStats* stats,
+    const folly::F14FastMap<std::string, std::string>& fileReadOps) const {
+  return impl_->preadv(offset, buffers, bytesRead_, stats, {});
 }
 
 uint64_t GcsReadFile::size() const {

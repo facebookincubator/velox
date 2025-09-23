@@ -1292,7 +1292,7 @@ class OpaqueType : public TypeBase<TypeKind::OPAQUE> {
   template <typename T>
   using DeserializeFunc = std::function<std::shared_ptr<T>(const std::string&)>;
 
-  explicit OpaqueType(const std::type_index& typeIndex);
+  explicit OpaqueType(std::type_index typeIndex) : typeIndex_{typeIndex} {}
 
   uint32_t size() const override {
     return 0;
@@ -1306,7 +1306,7 @@ class OpaqueType : public TypeBase<TypeKind::OPAQUE> {
 
   bool equivalent(const Type& other) const override;
 
-  const std::type_index& typeIndex() const {
+  std::type_index typeIndex() const {
     return typeIndex_;
   }
 
@@ -1606,10 +1606,9 @@ FOLLY_ALWAYS_INLINE bool Type::isTime() const {
   return (this == TIME().get());
 }
 
-// Type used for function registration.
-struct TimeT {
-  using type = int64_t; // Underlying storage as milliseconds since midnight
-  static constexpr const char* typeName = "time";
+struct Time {
+ private:
+  Time() {}
 };
 
 /// Used as T for SimpleVector subclasses that wrap another vector when
