@@ -28,18 +28,27 @@ class FailTest : public functions::test::FunctionBaseTest {};
 
 TEST_F(FailTest, basic) {
   auto message = std::optional("test error message");
+  auto type = VARCHAR(strlen(message.value()));
   VELOX_ASSERT_USER_THROW(
       evaluateOnce<UnknownValue>("fail(c0)", message), message.value());
+  VELOX_ASSERT_USER_THROW(
+      evaluateOnce<UnknownValue>("fail(c0)", type, message), message.value());
 
-  EXPECT_EQ(std::nullopt, evaluateOnce<UnknownValue>("try(fail(c0))", message));
+  EXPECT_EQ(
+      std::nullopt,
+      evaluateOnceWithVarcharArgs<UnknownValue>("try(fail(c0))", message));
 
   VELOX_ASSERT_USER_THROW(
       evaluateOnce<UnknownValue>("fail(123::integer, c0)", message),
       message.value());
+  VELOX_ASSERT_USER_THROW(
+      evaluateOnce<UnknownValue>("fail(123::integer, c0)", type, message),
+      message.value());
 
   EXPECT_EQ(
       std::nullopt,
-      evaluateOnce<UnknownValue>("try(fail(123::integer, c0))", message));
+      evaluateOnceWithVarcharArgs<UnknownValue>(
+          "try(fail(123::integer, c0))", message));
 }
 
 TEST_F(FailTest, json) {
