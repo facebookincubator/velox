@@ -515,9 +515,6 @@ struct DecimalIntegralDivideBase {
 
   template <typename A, typename B>
   bool computeQuotient(int64_t& out, const A& a, const B& b) {
-    if (b == 0) {
-      return false;
-    }
     // Determine sign and convert to absolute values.
     bool isNegative = (a < 0) != (b < 0);
     int128_t absA = static_cast<int128_t>(a < 0 ? -a : a);
@@ -583,6 +580,9 @@ struct DecimalIntegeralDivideFunction : DecimalIntegralDivideBase {
 
   template <typename A, typename B>
   bool call(int64_t& out, const A& a, const B& b) {
+    if (b == 0) {
+      return false;
+    }
     return computeQuotient(out, a, b);
   }
 };
@@ -604,18 +604,9 @@ struct CheckedDecimalIntegeralDivideFunction : DecimalIntegralDivideBase {
 
   template <typename A, typename B>
   Status call(int64_t& out, const A& a, const B& b) {
-    if (b == 0) {
-      if (threadSkipErrorDetails()) {
-        return Status::UserError();
-      }
-      return Status::UserError("Division by zero");
-    }
-    if (!computeQuotient(out, a, b)) {
-      if (threadSkipErrorDetails()) {
-        return Status::UserError();
-      }
-      return Status::UserError("Overflow in integral divide");
-    }
+    VELOX_USER_RETURN_EQ(b, 0, "Division by zero");
+    VELOX_USER_RETURN(
+        !computeQuotient(out, a, b), "Overflow in integral divide");
     return Status::OK();
   }
 };
