@@ -70,6 +70,24 @@ class DecimalArithmeticTest : public SparkFunctionBaseTest {
     }
     return makeNullableFlatVector<int128_t>(numbers, type);
   }
+
+  template <typename T, typename U>
+  std::optional<int64_t> div(
+      const TypePtr& tType,
+      const TypePtr& uType,
+      std::optional<T> t,
+      std::optional<U> u) {
+    return evaluateOnce<int64_t>("div(c0, c1)", {tType, uType}, t, u);
+  }
+
+  template <typename T, typename U>
+  std::optional<int64_t> checked_div(
+      const TypePtr& tType,
+      const TypePtr& uType,
+      std::optional<T> t,
+      std::optional<U> u) {
+    return evaluateOnce<int64_t>("checked_div(c0, c1)", {tType, uType}, t, u);
+  }
 };
 
 TEST_F(DecimalArithmeticTest, add) {
@@ -717,62 +735,102 @@ TEST_F(DecimalArithmeticTest, ceil) {
 }
 
 TEST_F(DecimalArithmeticTest, div) {
-  testArithmeticFunction(
-      "div",
-      makeNullableFlatVector<int64_t>({0, 2, 1, std::nullopt, 4, 5, -4, -5, 5}),
-      {makeFlatVector<int64_t>(
-           {10, 24, 12, 20, 91, 100, -92, 100, -100}, DECIMAL(7, 1)),
-       makeFlatVector<int64_t>(
-           {200, 110, 110, 0, 200, 200, 200, -190, -190}, DECIMAL(8, 2))});
+  EXPECT_EQ((div<int64_t, int64_t>(DECIMAL(7, 1), DECIMAL(8, 2), 10, 200)), 0L);
+  EXPECT_EQ((div<int64_t, int64_t>(DECIMAL(7, 1), DECIMAL(8, 2), 24, 110)), 2L);
+  EXPECT_EQ((div<int64_t, int64_t>(DECIMAL(7, 1), DECIMAL(8, 2), 12, 110)), 1L);
+  EXPECT_EQ(
+      (div<int64_t, int64_t>(DECIMAL(7, 1), DECIMAL(8, 2), 20, 0)),
+      std::nullopt);
+  EXPECT_EQ((div<int64_t, int64_t>(DECIMAL(7, 1), DECIMAL(8, 2), 91, 200)), 4L);
+  EXPECT_EQ(
+      (div<int64_t, int64_t>(DECIMAL(7, 1), DECIMAL(8, 2), 100, 200)), 5L);
+  EXPECT_EQ(
+      (div<int64_t, int64_t>(DECIMAL(7, 1), DECIMAL(8, 2), -92, 200)), -4L);
+  EXPECT_EQ(
+      (div<int64_t, int64_t>(DECIMAL(7, 1), DECIMAL(8, 2), 100, -190)), -5L);
+  EXPECT_EQ(
+      (div<int64_t, int64_t>(DECIMAL(7, 1), DECIMAL(8, 2), -100, -190)), 5L);
 
-  testArithmeticFunction(
-      "div",
-      makeNullableFlatVector<int64_t>({0, 2, 1, std::nullopt, 0}),
-      {makeFlatVector<int64_t>({10, 24, 12, 20, 0}, DECIMAL(7, 1)),
-       makeNullableLongDecimalVector(
-           {"200", "110", "110", "0", "99999999999999999999999999999999999999"},
-           DECIMAL(38, 2))});
+  EXPECT_EQ(
+      (div<int64_t, int128_t>(DECIMAL(7, 1), DECIMAL(38, 2), 10, 200)), 0L);
+  EXPECT_EQ(
+      (div<int64_t, int128_t>(DECIMAL(7, 1), DECIMAL(38, 2), 24, 110)), 2L);
+  EXPECT_EQ(
+      (div<int64_t, int128_t>(DECIMAL(7, 1), DECIMAL(38, 2), 12, 110)), 1L);
+  EXPECT_EQ(
+      (div<int64_t, int128_t>(DECIMAL(7, 1), DECIMAL(38, 2), 20, 0L)),
+      std::nullopt);
+  EXPECT_EQ(
+      (div<int64_t, int128_t>(
+          DECIMAL(7, 1),
+          DECIMAL(38, 2),
+          0,
+          HugeInt::parse("99999999999999999999999999999999999999"))),
+      0L);
 
-  testArithmeticFunction(
-      "div",
-      makeNullableFlatVector<int64_t>(
-          {0, 2, 2, std::nullopt, 687399551400672280L}),
-      {makeNullableLongDecimalVector(
-           {"10", "25", "26", "20", "99999999999999999999999999999999999"},
-           DECIMAL(38, 1)),
-       makeFlatVector<int64_t>({20000, 11000, 11000, 0, 1}, DECIMAL(7, 4))});
+  EXPECT_EQ(
+      (div<int128_t, int64_t>(DECIMAL(38, 1), DECIMAL(7, 4), 10, 20000)), 0L);
+  EXPECT_EQ(
+      (div<int128_t, int64_t>(DECIMAL(38, 1), DECIMAL(7, 4), 25, 11000)), 2L);
+  EXPECT_EQ(
+      (div<int128_t, int64_t>(DECIMAL(38, 1), DECIMAL(7, 4), 26, 11000)), 2L);
+  EXPECT_EQ(
+      (div<int128_t, int64_t>(DECIMAL(38, 1), DECIMAL(7, 4), 20, 0L)),
+      std::nullopt);
+  EXPECT_EQ(
+      (div<int128_t, int64_t>(
+          DECIMAL(38, 1),
+          DECIMAL(7, 4),
+          HugeInt::parse("99999999999999999999999999999999999"),
+          1L)),
+      687399551400672280L);
 
-  testArithmeticFunction(
-      "div",
-      makeNullableFlatVector<int64_t>({4, 3, std::nullopt, std::nullopt}),
-      {makeNullableLongDecimalVector(
-           {"10", "10", "20", "99999999999999999999999999999999999999"},
-           DECIMAL(38, 0)),
-       makeFlatVector<int128_t>({2100000, 2900000, 0, 1}, DECIMAL(38, 6))});
+  EXPECT_EQ(
+      (div<int128_t, int128_t>(DECIMAL(38, 0), DECIMAL(38, 6), 10, 2100000)),
+      4L);
+  EXPECT_EQ(
+      (div<int128_t, int128_t>(DECIMAL(38, 0), DECIMAL(38, 6), 10, 2900000)),
+      3L);
+  EXPECT_EQ(
+      (div<int128_t, int128_t>(DECIMAL(38, 0), DECIMAL(38, 6), 20, 0)),
+      std::nullopt);
+  EXPECT_EQ(
+      (div<int128_t, int128_t>(
+          DECIMAL(38, 0),
+          DECIMAL(38, 6),
+          HugeInt::parse("99999999999999999999999999999999999999"),
+          1)),
+      std::nullopt);
 }
 
 TEST_F(DecimalArithmeticTest, checked_div) {
+  EXPECT_EQ(
+      (checked_div<int64_t, int64_t>(DECIMAL(7, 1), DECIMAL(8, 2), 10, 200)),
+      0L);
+  EXPECT_EQ(
+      (checked_div<int64_t, int128_t>(DECIMAL(7, 1), DECIMAL(38, 2), 12, 110)),
+      1L);
+  EXPECT_EQ(
+      (checked_div<int128_t, int64_t>(
+          DECIMAL(38, 1), DECIMAL(7, 4), 25, 11000)),
+      2L);
+  EXPECT_EQ(
+      (checked_div<int128_t, int128_t>(
+          DECIMAL(38, 0), DECIMAL(38, 6), 10, 2900000)),
+      3L);
+
   VELOX_ASSERT_USER_THROW(
-      testArithmeticFunction(
-          "checked_div",
-          makeNullableFlatVector<int64_t>({std::nullopt}),
-          {makeFlatVector<int64_t>({91}, DECIMAL(7, 1)),
-           makeFlatVector<int64_t>({0}, DECIMAL(8, 2))}),
+      (checked_div<int64_t, int64_t>(DECIMAL(7, 1), DECIMAL(8, 2), 91, 0)),
       "Division by zero");
   VELOX_ASSERT_USER_THROW(
-      testArithmeticFunction(
-          "checked_div",
-          makeNullableFlatVector<int64_t>({std::nullopt}),
-          {makeFlatVector<int128_t>({10}, DECIMAL(38, 1)),
-           makeFlatVector<int128_t>({0}, DECIMAL(38, 2))}),
+      (checked_div<int128_t, int128_t>(DECIMAL(37, 1), DECIMAL(38, 2), 91, 0)),
       "Division by zero");
   VELOX_ASSERT_USER_THROW(
-      testArithmeticFunction(
-          "checked_div",
-          makeNullableFlatVector<int64_t>({std::nullopt}),
-          {makeNullableLongDecimalVector(
-               {"99999999999999999999999999999999999999"}, DECIMAL(38, 0)),
-           makeFlatVector<int128_t>({1}, DECIMAL(38, 6))}),
+      (checked_div<int128_t, int128_t>(
+          DECIMAL(38, 0),
+          DECIMAL(38, 6),
+          HugeInt::parse("99999999999999999999999999999999999999"),
+          1)),
       "Overflow in integral divide");
 }
 } // namespace
