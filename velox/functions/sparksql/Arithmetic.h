@@ -642,10 +642,10 @@ struct CheckedDivideFunction {
   }
 };
 
+/// Implements integeral division with truncation towards zero.
+/// Returns Null if divisor is 0.
 template <typename TExec>
 struct IntegeralDivideFunction {
-  VELOX_DEFINE_FUNCTION_TYPES(TExec);
-
   template <typename T>
   FOLLY_ALWAYS_INLINE bool call(int64_t& result, const T& a, const T& b) {
     if (b == 0) {
@@ -667,10 +667,10 @@ struct IntegeralDivideFunction {
   }
 };
 
+/// Implements integeral division with truncation towards zero.
+/// Returns Error if divisor is 0 or overflow.
 template <typename TExec>
 struct CheckedIntegeralDivideFunction {
-  VELOX_DEFINE_FUNCTION_TYPES(TExec);
-
   template <typename T>
   FOLLY_ALWAYS_INLINE Status call(int64_t& result, const T& a, const T& b) {
     VELOX_USER_RETURN_EQ(b, 0, "Division by zero");
