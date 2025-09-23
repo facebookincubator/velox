@@ -40,6 +40,11 @@ class QueryConfig {
   /// name, e.g: "America/Los_Angeles".
   static constexpr const char* kSessionTimezone = "session_timezone";
 
+  /// Session start time in milliseconds since Unix epoch. This represents when
+  /// the query session began execution. Used for functions that need to know
+  /// the session start time (e.g., current_date, localtime).
+  static constexpr const char* kSessionStartTime = "start_time";
+
   /// If true, timezone-less timestamp conversions (e.g. string to timestamp,
   /// when the string does not specify a timezone) will be adjusted to the user
   /// provided session timezone (if any).
@@ -693,7 +698,8 @@ class QueryConfig {
   /// username.
   static constexpr const char* kClientTags = "client_tags";
 
-  /// Enable row size tracker as a fallback to file level row size estimates.
+  /// Enable (reader) row size tracker as a fallback to file level row size
+  /// estimates.
   static constexpr const char* kRowSizeTrackingEnabled =
       "row_size_tracking_enabled";
 
@@ -913,6 +919,12 @@ class QueryConfig {
 
   std::string sessionTimezone() const {
     return get<std::string>(kSessionTimezone, "");
+  }
+
+  /// Returns the session start time in milliseconds since Unix epoch.
+  /// If not set, returns 0 (or epoch).
+  int64_t sessionStartTimeMs() const {
+    return get<int64_t>(kSessionStartTime, 0);
   }
 
   bool exprEvalSimplified() const {

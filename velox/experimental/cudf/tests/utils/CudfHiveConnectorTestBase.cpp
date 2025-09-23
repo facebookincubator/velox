@@ -76,21 +76,17 @@ CudfHiveConnectorTestBase::CudfHiveConnectorTestBase() {
 void CudfHiveConnectorTestBase::SetUp() {
   OperatorTestBase::SetUp();
 
-  // Register cudf to enable the CudfHiveDataSource delegate
+  // Register cudf to enable the CudfDatasource creation from CudfHiveConnector
   facebook::velox::cudf_velox::registerCudf();
 
-  // Register Hive connector factory and connector
-  facebook::velox::connector::registerConnectorFactory(
-      std::make_shared<facebook::velox::cudf_velox::connector::hive::
-                           CudfHiveConnectorFactory>());
-  auto hiveConnector =
-      facebook::velox::connector::getConnectorFactory(
-          HiveConnectorFactory::kHiveConnectorName)
-          ->newConnector(
-              kCudfHiveConnectorId,
-              std::make_shared<facebook::velox::config::ConfigBase>(
-                  std::unordered_map<std::string, std::string>()),
-              ioExecutor_.get());
+  // Register Hive connector
+  facebook::velox::cudf_velox::connector::hive::CudfHiveConnectorFactory
+      factory;
+  auto hiveConnector = factory.newConnector(
+      kCudfHiveConnectorId,
+      std::make_shared<facebook::velox::config::ConfigBase>(
+          std::unordered_map<std::string, std::string>()),
+      ioExecutor_.get());
   facebook::velox::connector::registerConnector(hiveConnector);
   dwio::common::registerFileSinks();
 }
@@ -109,10 +105,11 @@ void CudfHiveConnectorTestBase::TearDown() {
 void CudfHiveConnectorTestBase::resetCudfHiveConnector(
     const std::shared_ptr<const facebook::velox::config::ConfigBase>& config) {
   facebook::velox::connector::unregisterConnector(kCudfHiveConnectorId);
+
+  facebook::velox::cudf_velox::connector::hive::CudfHiveConnectorFactory
+      factory;
   auto hiveConnector =
-      facebook::velox::connector::getConnectorFactory(
-          HiveConnectorFactory::kHiveConnectorName)
-          ->newConnector(kCudfHiveConnectorId, config, ioExecutor_.get());
+      factory.newConnector(kCudfHiveConnectorId, config, ioExecutor_.get());
   facebook::velox::connector::registerConnector(hiveConnector);
 }
 
