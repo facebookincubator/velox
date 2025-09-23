@@ -17,7 +17,6 @@
 
 #include <bitset>
 #include <cmath>
-#include <cstdint>
 #include <limits>
 #include <system_error>
 #include <type_traits>
