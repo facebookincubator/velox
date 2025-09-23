@@ -123,7 +123,21 @@ void CudfLocalPartition::recordOutputStats(RowVectorPtr& input) {
   }
 }
 
+void CudfLocalPartition::flushVectorPool() {
+  // We reuse the LocalExchangeQueue from the CPU implementation. That impl
+  // stores used vectors in a vector pool for the CPU LocalPartition to re-use.
+  // CudfLocalPartition does not need it and does not extract it. This results
+  // in unnecessary extension of the lifetimes of vectors that were exchanged,
+  // resulting in kind of a memory leak.
+  // This is a hack to forcefully flush the vector pools.
+
+  for (auto& queue : queues_) {
+    queue->getVector();
+  }
+}
+
 void CudfLocalPartition::addInput(RowVectorPtr input) {
+  flushVectorPool();
   VELOX_NVTX_OPERATOR_FUNC_RANGE();
   recordOutputStats(input);
   auto cudfVector = std::dynamic_pointer_cast<CudfVector>(input);
@@ -226,6 +240,7 @@ bool CudfLocalPartition::isFinished() {
   if (!futures_.empty() || !noMoreInput_) {
     return false;
   }
+  flushVectorPool();
 
   return true;
 }

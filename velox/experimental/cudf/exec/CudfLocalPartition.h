@@ -61,6 +61,9 @@ class CudfLocalPartition : public exec::Operator, public NvtxHelper {
   static bool shouldReplace(
       const std::shared_ptr<const core::LocalPartitionNode>& planNode);
 
+ private:
+  void flushVectorPool();
+
  protected:
   const std::vector<std::shared_ptr<exec::LocalExchangeQueue>> queues_;
   const size_t numPartitions_;
