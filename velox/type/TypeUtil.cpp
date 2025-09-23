@@ -33,18 +33,20 @@ velox::RowTypePtr concatRowTypes(
   return velox::ROW(std::move(columnNames), std::move(columnTypes));
 }
 
-const velox::TypePtr isHomogeneousRow(const velox::TypePtr& type) {
-  if (!type || type->kind() != velox::TypeKind::ROW) {
+velox::TypePtr tryGetHomogeneousRowChild(const velox::TypePtr& type) {
+  VELOX_DCHECK(type != nullptr);
+  if (type->kind() != velox::TypeKind::ROW) {
     return nullptr;
   }
-  auto row = velox::asRowType(type);
-  const auto& children = row->children();
-  if (children.empty()) {
+  auto childCount = type->size();
+  if (childCount == 0) {
     return nullptr; // No child type to infer
   }
-  const auto& first = children.front();
-  for (size_t i = 1; i < children.size(); ++i) {
-    if (!first->equivalent(*children[i])) {
+  auto first = type->childAt(0);
+  for (size_t i = 1; i < childCount; ++i) {
+    auto child = type->childAt(i);
+    // All child types must be exactly equal (not just equivalent).
+    if (!first->equals(*child)) {
       return nullptr;
     }
   }

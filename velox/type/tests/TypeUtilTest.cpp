@@ -35,5 +35,31 @@ TEST(TypeUtilTest, ConcatRowTypes) {
   EXPECT_EQ(type->toString(), expected->toString());
 }
 
+TEST(TypeUtilTest, tryGetHomogeneousRowChild_NonRow) {
+  auto t = velox::INTEGER();
+  auto child = tryGetHomogeneousRowChild(t);
+  ASSERT_EQ(child, nullptr);
+}
+
+TEST(TypeUtilTest, tryGetHomogeneousRowChild_EmptyRow) {
+  auto row = velox::ROW({}, {});
+  auto child = tryGetHomogeneousRowChild(row);
+  ASSERT_EQ(child, nullptr);
+}
+
+TEST(TypeUtilTest, tryGetHomogeneousRowChild_Homogeneous) {
+  auto row = velox::ROW(
+      {"c1", "c2", "c3"}, {velox::BIGINT(), velox::BIGINT(), velox::BIGINT()});
+  auto child = tryGetHomogeneousRowChild(row);
+  ASSERT_NE(child, nullptr);
+  ASSERT_TRUE(child->equals(*velox::BIGINT()));
+}
+
+TEST(TypeUtilTest, tryGetHomogeneousRowChild_Heterogeneous) {
+  auto row = velox::ROW({"c1", "c2"}, {velox::BIGINT(), velox::VARCHAR()});
+  auto child = tryGetHomogeneousRowChild(row);
+  ASSERT_EQ(child, nullptr);
+}
+
 } // namespace
 } // namespace facebook::velox::type

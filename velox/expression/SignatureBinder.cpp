@@ -256,36 +256,32 @@ bool SignatureBinderBase::tryBind(
   const auto& params = typeSignature.parameters();
 
   // Handle homogeneous row case: row(T, ...)
-  if (typeSignature.isHomogeneousRow() && typeName == "ROW") {
+  if (typeSignature.isHomogeneousRow()) {
     VELOX_CHECK_EQ(
         params.size(), 1, "Homogeneous row must have exactly one parameter");
-
-    // Actual type must be a ROW with k >= 0 children
-    const auto& actualParams = actualType->parameters();
 
     // All children must unify to the same type variable T
     const auto& typeParam = params[0];
     const auto& paramBaseName = typeParam.baseName();
 
-    // First, try to bind all actual parameters to the type variable
-    std::vector<TypePtr> actualChildTypes;
-    for (const auto& actualParam : actualParams) {
-      if (actualParam.kind != TypeParameterKind::kType || !actualParam.type) {
-        // Only type parameters supported for homogeneous rows.
+    // First, check and extract the common child type if homogeneous.
+    auto commonType = velox::type::tryGetHomogeneousRowChild(actualType);
+    if (!commonType) {
+      // If actual is an empty row, we still accept for variable case below.
+      // Distinguish empty row vs heterogeneous row by checking size().
+      if (actualType->kind() != TypeKind::ROW) {
         return false;
       }
-      actualChildTypes.push_back(actualParam.type);
-    }
-
-    if (actualChildTypes.empty()) {
-      return true; // Empty row is valid
+      if (actualType->size() > 0) {
+        return false; // Non-empty but not homogeneous
+      }
+      // Empty row: nothing to bind against; accept only if param is a type var.
     }
 
     if (variables().count(paramBaseName)) {
-      // Ensure all children are equivalent; use helper.
-      auto commonType = velox::type::isHomogeneousRow(actualType);
+      // If empty row, nothing to bind; accept.
       if (!commonType) {
-        return false;
+        return true;
       }
 
       if (typeVariablesBindings_.count(paramBaseName)) {
@@ -299,7 +295,17 @@ bool SignatureBinderBase::tryBind(
         return true;
       }
     } else {
-      for (const auto& childType : actualChildTypes) {
+      // Concrete param: must bind each child to the same concrete type param.
+      // For empty row, there is nothing to bind and that's acceptable.
+      if (!commonType && actualType->size() == 0) {
+        return true;
+      }
+      const auto& actualParams = actualType->parameters();
+      for (const auto& actualParam : actualParams) {
+        if (actualParam.kind != TypeParameterKind::kType || !actualParam.type) {
+          return false;
+        }
+        const auto& childType = actualParam.type;
         if (!tryBind(typeParam, childType)) {
           // TODO Allow coercions for complex types.
           return false;
