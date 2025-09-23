@@ -939,9 +939,6 @@ These semantics are similar to the `Apache Hadoop-Aws module <https://hadoop.apa
        "SharedKey": Uses the storage account name and key for authentication.
        "OAuth": Utilizes OAuth tokens for secure authentication.
        "SAS": Employs Shared Access Signatures for granular access control.
-       To create Azure clients with the configured authentication type, the caller must
-       register the corresponding Azure client provider from the configuration by calling
-       `registerAzureClientProvider`.
    * - fs.azure.account.key.<storage-account>.dfs.core.windows.net
      - string
      -
