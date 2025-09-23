@@ -18,7 +18,9 @@
 
 #include <azure/storage/common/storage_exception.hpp>
 #include <fmt/format.h>
+#include "velox/common/config/Config.h"
 #include "velox/common/file/File.h"
+#include "velox/connectors/hive/storage_adapters/abfs/AbfsPath.h"
 
 namespace facebook::velox::filesystems {
 namespace {
@@ -43,6 +45,28 @@ inline std::string throwStorageExceptionWithOperationDetails(
     VELOX_FILE_NOT_FOUND_ERROR(errMsg);
   }
   VELOX_FAIL(errMsg);
+}
+
+inline void extractCacheKeyFromConfig(
+    const config::ConfigBase& config,
+    std::string& accountName,
+    std::string& authenticationType) {
+  for (const auto& [key, value] : config.rawConfigs()) {
+    constexpr std::string_view authTypePrefix{kAzureAccountAuthType};
+    if (key.find(authTypePrefix) == 0) {
+      std::string_view skey = key;
+      // Extract the accountName after "fs.azure.account.auth.type.".
+      auto remaining = skey.substr(authTypePrefix.size() + 1);
+      auto dot = remaining.find(".");
+      VELOX_USER_CHECK_NE(
+          dot,
+          std::string_view::npos,
+          "Invalid Azure account auth type key: {}",
+          key);
+      accountName = std::string(remaining.substr(0, dot));
+      authenticationType = value;
+    }
+  }
 }
 
 } // namespace facebook::velox::filesystems

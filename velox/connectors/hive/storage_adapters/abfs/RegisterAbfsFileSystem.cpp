@@ -68,41 +68,29 @@ void registerAbfsFileSystem() {
 
 void registerAzureClientProvider(const config::ConfigBase& config) {
 #ifdef VELOX_ENABLE_ABFS
-  for (const auto& [key, value] : config.rawConfigs()) {
-    constexpr std::string_view authTypePrefix{kAzureAccountAuthType};
-    if (key.find(authTypePrefix) == 0) {
-      std::string_view skey = key;
-      // Extract the accountName after "fs.azure.account.auth.type.".
-      auto remaining = skey.substr(authTypePrefix.size() + 1);
-      auto dot = remaining.find(".");
-      VELOX_USER_CHECK_NE(
-          dot,
-          std::string_view::npos,
-          "Invalid Azure account auth type key: {}",
-          key);
-      auto accountName = std::string(remaining.substr(0, dot));
+  std::string accountName;
+  std::string authType;
+  extractCacheKeyFromConfig(config, accountName, authType);
 
-      if (value == kAzureSharedKeyAuthType) {
-        AzureClientProviderFactories::registerFactory(
-            accountName, [](const std::string&) {
-              return std::make_unique<SharedKeyAzureClientProvider>();
-            });
-      } else if (value == kAzureOAuthAuthType) {
-        AzureClientProviderFactories::registerFactory(
-            accountName, [](const std::string&) {
-              return std::make_unique<OAuthAzureClientProvider>();
-            });
-      } else if (value == kAzureSASAuthType) {
-        AzureClientProviderFactories::registerFactory(
-            accountName, [](const std::string&) {
-              return std::make_unique<FixedSasAzureClientProvider>();
-            });
-      } else {
-        VELOX_USER_FAIL(
-            "Unsupported auth type {}, supported auth types are SharedKey, OAuth and SAS.",
-            value);
-      }
-    }
+  if (authType == kAzureSharedKeyAuthType) {
+    AzureClientProviderFactories::registerFactory(
+        accountName, [](const std::string&) {
+          return std::make_unique<SharedKeyAzureClientProvider>();
+        });
+  } else if (authType == kAzureOAuthAuthType) {
+    AzureClientProviderFactories::registerFactory(
+        accountName, [](const std::string&) {
+          return std::make_unique<OAuthAzureClientProvider>();
+        });
+  } else if (authType == kAzureSASAuthType) {
+    AzureClientProviderFactories::registerFactory(
+        accountName, [](const std::string&) {
+          return std::make_unique<FixedSasAzureClientProvider>();
+        });
+  } else {
+    VELOX_USER_FAIL(
+        "Unsupported auth type {}, supported auth types are SharedKey, OAuth and SAS.",
+        authType);
   }
 #endif
 }
