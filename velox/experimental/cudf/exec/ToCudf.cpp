@@ -40,6 +40,7 @@
 #include "velox/exec/Limit.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/OrderBy.h"
+#include "velox/exec/StreamingAggregation.h"
 #include "velox/exec/TableScan.h"
 #include "velox/exec/TopN.h"
 
@@ -152,6 +153,7 @@ bool CompileState::compile(bool force_replace) {
                    exec::OrderBy,
                    exec::TopN,
                    exec::HashAggregation,
+                   exec::StreamingAggregation,
                    exec::Limit,
                    exec::LocalPartition,
                    exec::LocalExchange,
@@ -172,6 +174,7 @@ bool CompileState::compile(bool force_replace) {
                exec::OrderBy,
                exec::TopN,
                exec::HashAggregation,
+               exec::StreamingAggregation,
                exec::Limit,
                exec::LocalPartition,
                exec::AssignUniqueId>(op) ||
@@ -184,6 +187,7 @@ bool CompileState::compile(bool force_replace) {
                exec::OrderBy,
                exec::TopN,
                exec::HashAggregation,
+               exec::StreamingAggregation,
                exec::Limit,
                exec::LocalExchange,
                exec::AssignUniqueId>(op) ||
@@ -280,9 +284,11 @@ bool CompileState::compile(bool force_replace) {
       VELOX_CHECK(planNode != nullptr);
       replaceOp.push_back(std::make_unique<CudfTopN>(id, ctx, planNode));
       replaceOp.back()->initialize();
-    } else if (auto hashAggOp = dynamic_cast<exec::HashAggregation*>(oper)) {
+    } else if (
+        dynamic_cast<exec::HashAggregation*>(oper) or
+        dynamic_cast<exec::StreamingAggregation*>(oper)) {
       auto planNode = std::dynamic_pointer_cast<const core::AggregationNode>(
-          getPlanNode(hashAggOp->planNodeId()));
+          getPlanNode(oper->planNodeId()));
       VELOX_CHECK(planNode != nullptr);
       replaceOp.push_back(
           std::make_unique<CudfHashAggregation>(id, ctx, planNode));
@@ -361,6 +367,7 @@ bool CompileState::compile(bool force_replace) {
             return isAnyOf<
                        exec::OrderBy,
                        exec::HashAggregation,
+                       exec::StreamingAggregation,
                        exec::Limit,
                        exec::LocalPartition,
                        exec::LocalExchange,
