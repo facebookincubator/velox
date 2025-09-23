@@ -1580,6 +1580,12 @@ class TimeType final : public BigintType {
     return name();
   }
 
+  /// Returns the time 'value' (milliseconds since midnight) formatted as
+  /// HH:MM:SS.mmm .
+  /// It is the callers responsiblity to ensure that the value is in range
+  /// and converted to the right time zone.
+  StringView valueToString(int64_t value, char* const startPos) const;
+
   folly::dynamic serialize() const override;
 
   static TypePtr deserialize(const folly::dynamic& /*obj*/) {
@@ -1593,6 +1599,10 @@ class TimeType final : public BigintType {
   bool isComparable() const override {
     return true;
   }
+
+  // When casting from TIME to varchar , the resultant varchar will always
+  // be 12 bytes long (HH:MM:SS.mmm).
+  static const size_t kTimeToVarcharRowSize = 12;
 };
 
 using TimeTypePtr = std::shared_ptr<const TimeType>;
