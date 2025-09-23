@@ -15,6 +15,7 @@
  */
 
 #include "velox/functions/sparksql/DecimalArithmetic.h"
+#include <optional>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/Expressions.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
@@ -713,6 +714,66 @@ TEST_F(DecimalArithmeticTest, ceil) {
            -1000000000000000000,
            0},
           DECIMAL(19, 19))});
+}
+
+TEST_F(DecimalArithmeticTest, div) {
+  testArithmeticFunction(
+      "div",
+      makeNullableFlatVector<int64_t>({0, 2, 1, std::nullopt, 4, 5, -4, -5, 5}),
+      {makeFlatVector<int64_t>(
+           {10, 24, 12, 20, 91, 100, -92, 100, -100}, DECIMAL(7, 1)),
+       makeFlatVector<int64_t>(
+           {200, 110, 110, 0, 200, 200, 200, -190, -190}, DECIMAL(8, 2))});
+
+  testArithmeticFunction(
+      "div",
+      makeNullableFlatVector<int64_t>({0, 2, 1, std::nullopt, 0}),
+      {makeFlatVector<int64_t>({10, 24, 12, 20, 0}, DECIMAL(7, 1)),
+       makeNullableLongDecimalVector(
+           {"200", "110", "110", "0", "99999999999999999999999999999999999999"},
+           DECIMAL(38, 2))});
+
+  testArithmeticFunction(
+      "div",
+      makeNullableFlatVector<int64_t>(
+          {0, 2, 2, std::nullopt, 687399551400672280L}),
+      {makeNullableLongDecimalVector(
+           {"10", "25", "26", "20", "99999999999999999999999999999999999"},
+           DECIMAL(38, 1)),
+       makeFlatVector<int64_t>({20000, 11000, 11000, 0, 1}, DECIMAL(7, 4))});
+
+  testArithmeticFunction(
+      "div",
+      makeNullableFlatVector<int64_t>({4, 3, std::nullopt, std::nullopt}),
+      {makeNullableLongDecimalVector(
+           {"10", "10", "20", "99999999999999999999999999999999999999"},
+           DECIMAL(38, 0)),
+       makeFlatVector<int128_t>({2100000, 2900000, 0, 1}, DECIMAL(38, 6))});
+}
+
+TEST_F(DecimalArithmeticTest, checked_div) {
+  VELOX_ASSERT_USER_THROW(
+      testArithmeticFunction(
+          "checked_div",
+          makeNullableFlatVector<int64_t>({std::nullopt}),
+          {makeFlatVector<int64_t>({91}, DECIMAL(7, 1)),
+           makeFlatVector<int64_t>({0}, DECIMAL(8, 2))}),
+      "Division by zero");
+  VELOX_ASSERT_USER_THROW(
+      testArithmeticFunction(
+          "checked_div",
+          makeNullableFlatVector<int64_t>({std::nullopt}),
+          {makeFlatVector<int128_t>({10}, DECIMAL(38, 1)),
+           makeFlatVector<int128_t>({0}, DECIMAL(38, 2))}),
+      "Division by zero");
+  VELOX_ASSERT_USER_THROW(
+      testArithmeticFunction(
+          "checked_div",
+          makeNullableFlatVector<int64_t>({std::nullopt}),
+          {makeNullableLongDecimalVector(
+               {"99999999999999999999999999999999999999"}, DECIMAL(38, 0)),
+           makeFlatVector<int128_t>({1}, DECIMAL(38, 6))}),
+      "Overflow in integral divide");
 }
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test
