@@ -124,7 +124,10 @@ void CudfTopN::addInput(RowVectorPtr input) {
     auto stream = cudfGlobalStreamPool().get_stream();
     auto mr = cudf::get_current_device_resource_ref();
     auto result = getTopK(
-        getConcatenatedTable(topNBatches_, stream)->view(), count_, stream, mr);
+        getConcatenatedTable(topNBatches_, outputType_, stream)->view(),
+        count_,
+        stream,
+        mr);
     topNBatches_.clear();
     topNBatches_.push_back(std::make_shared<CudfVector>(
         pool(), outputType_, result->num_rows(), std::move(result), stream));
@@ -143,7 +146,10 @@ RowVectorPtr CudfTopN::getOutput() {
   auto stream = topNBatches_[0]->stream();
   auto mr = cudf::get_current_device_resource_ref();
   auto result = getTopK(
-      getConcatenatedTable(topNBatches_, stream)->view(), count_, stream, mr);
+      getConcatenatedTable(topNBatches_, outputType_, stream)->view(),
+      count_,
+      stream,
+      mr);
   topNBatches_.clear();
   auto const size = result->num_rows();
   auto resultTable = std::make_shared<CudfVector>(
