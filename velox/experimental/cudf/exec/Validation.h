@@ -25,7 +25,7 @@ namespace facebook::velox::cudf_velox {
 DECLARE_bool(velox_cudf_log_validation_failure);
 
 namespace detail {
-const char* extractFileName(const char* file) {
+inline const char* extractFileName(const char* file) {
   return strrchr(file, '/') ? strrchr(file, '/') + 1 : file;
 }
 } // namespace detail
