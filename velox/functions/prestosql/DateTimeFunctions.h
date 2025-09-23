@@ -1549,6 +1549,7 @@ struct CurrentTimestampFunction {
 
   FOLLY_ALWAYS_INLINE void call(out_type<TimestampWithTimezone>& result) {
     result = result_;
+  }
 };
 
 template <typename T>
