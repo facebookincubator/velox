@@ -153,6 +153,16 @@ For integral types, overflow results in an error. Corresponds to Spark’s opera
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="checked_div">
+<span class="sig-name descname"><span class="pre">checked_div</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y)</span> <span class="pre">-&gt;</span> <span class="pre">bigint</span> <span class="pre">(ANSI</span> <span class="pre">compliant</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#checked_div" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the result of integer division of x by y, truncating toward zero.
+Supported types are DECIMAL and integral types. For DECIMAL types, x and y can have different precision and scale.
+For integral types, x and y must have the same type.
+The result type is BIGINT for both DECIMAL and integral types.
+Division by zero or overflow results in an error. Corresponds to Spark’s operator <code class="docutils literal notranslate"><span class="pre">div</span></code> with <code class="docutils literal notranslate"><span class="pre">failOnError</span></code> as true.</p>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="checked_divide">
 <span class="sig-name descname"><span class="pre">checked_divide</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span><a class="headerlink" href="#checked_divide" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the results of dividing x by y. The types of x and y must be the same.
@@ -201,6 +211,23 @@ For integral types, overflow results in an error. Corresponds to Spark’s opera
 <dt class="sig sig-object spark" id="degrees">
 <span class="sig-name descname"><span class="pre">degrees</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#degrees" title="Link to this definition">¶</a></dt>
 <dd><p>Converts angle x in radians to degrees.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="div">
+<span class="sig-name descname"><span class="pre">div</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#div" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the results of dividing x by y. Performs the integer division truncates toward zero.
+Supported types are DECIMAL and integral types. For DECIMAL types, x and y can have different precision and scale.
+For integral types, x and y must have the same type.
+Division by zero or overflow results in null.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="mi">3</span> <span class="n">div</span> <span class="mi">2</span><span class="p">;</span> <span class="o">--</span> <span class="mi">1</span>
+<span class="n">SELECT</span> <span class="mi">1</span><span class="n">L</span> <span class="n">div</span> <span class="mi">2</span><span class="n">L</span><span class="p">;</span> <span class="o">--</span> <span class="mi">0</span>
+<span class="n">SELECT</span> <span class="mi">3</span> <span class="n">div</span> <span class="mi">0</span><span class="p">;</span> <span class="o">--</span> <span class="n">NULL</span>
+<span class="n">SELECT</span> <span class="n">CAST</span><span class="p">(</span><span class="mi">1</span> <span class="k">as</span> <span class="n">DECIMAL</span><span class="p">(</span><span class="mi">17</span><span class="p">,</span> <span class="mi">3</span><span class="p">))</span> <span class="n">div</span> <span class="n">CAST</span><span class="p">(</span><span class="mi">2</span> <span class="k">as</span> <span class="n">DECIMAL</span><span class="p">(</span><span class="mi">17</span><span class="p">,</span> <span class="mi">3</span><span class="p">));</span> <span class="o">--</span> <span class="mi">0</span>
+<span class="n">SELECT</span> <span class="n">CAST</span><span class="p">(</span><span class="mi">200</span> <span class="k">as</span> <span class="n">DECIMAL</span><span class="p">(</span><span class="mi">20</span><span class="p">,</span> <span class="mi">3</span><span class="p">))</span> <span class="n">div</span> <span class="n">CAST</span><span class="p">(</span><span class="mi">20</span> <span class="k">as</span> <span class="n">DECIMAL</span><span class="p">(</span><span class="mi">20</span><span class="p">,</span> <span class="mi">2</span><span class="p">));</span> <span class="o">--</span> <span class="mi">1</span>
+<span class="n">SELECT</span> <span class="n">CAST</span><span class="p">(</span><span class="mi">1</span> <span class="k">as</span> <span class="n">DECIMAL</span><span class="p">(</span><span class="mi">20</span><span class="p">,</span> <span class="mi">3</span><span class="p">))</span> <span class="n">div</span> <span class="n">CAST</span><span class="p">(</span><span class="mi">0</span> <span class="k">as</span> <span class="n">DECIMAL</span><span class="p">(</span><span class="mi">20</span><span class="p">,</span> <span class="mi">3</span><span class="p">));</span> <span class="o">--</span> <span class="n">NULL</span>
+</pre></div>
+</div>
 </dd></dl>
 
 <dl class="spark function">
@@ -553,6 +580,7 @@ Otherwise, the function will return NULL.</p>
 <li><a class="reference internal" href="#cbrt"><code class="docutils literal notranslate"><span class="pre">cbrt()</span></code></a></li>
 <li><a class="reference internal" href="#ceil"><code class="docutils literal notranslate"><span class="pre">ceil()</span></code></a></li>
 <li><a class="reference internal" href="#checked_add"><code class="docutils literal notranslate"><span class="pre">checked_add()</span></code></a></li>
+<li><a class="reference internal" href="#checked_div"><code class="docutils literal notranslate"><span class="pre">checked_div()</span></code></a></li>
 <li><a class="reference internal" href="#checked_divide"><code class="docutils literal notranslate"><span class="pre">checked_divide()</span></code></a></li>
 <li><a class="reference internal" href="#checked_multiply"><code class="docutils literal notranslate"><span class="pre">checked_multiply()</span></code></a></li>
 <li><a class="reference internal" href="#checked_subtract"><code class="docutils literal notranslate"><span class="pre">checked_subtract()</span></code></a></li>
@@ -561,6 +589,7 @@ Otherwise, the function will return NULL.</p>
 <li><a class="reference internal" href="#cot"><code class="docutils literal notranslate"><span class="pre">cot()</span></code></a></li>
 <li><a class="reference internal" href="#csc"><code class="docutils literal notranslate"><span class="pre">csc()</span></code></a></li>
 <li><a class="reference internal" href="#degrees"><code class="docutils literal notranslate"><span class="pre">degrees()</span></code></a></li>
+<li><a class="reference internal" href="#div"><code class="docutils literal notranslate"><span class="pre">div()</span></code></a></li>
 <li><a class="reference internal" href="#divide"><code class="docutils literal notranslate"><span class="pre">divide()</span></code></a></li>
 <li><a class="reference internal" href="#id3"><code class="docutils literal notranslate"><span class="pre">divide()</span></code></a></li>
 <li><a class="reference internal" href="#exp"><code class="docutils literal notranslate"><span class="pre">exp()</span></code></a></li>
