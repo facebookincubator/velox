@@ -520,8 +520,8 @@ struct DecimalIntegralDivideBase {
     }
     // Determine sign and convert to absolute values.
     bool isNegative = (a < 0) != (b < 0);
-    int128_t absA = std::abs(a);
-    int128_t absB = std::abs(b);
+    int128_t absA = static_cast<int128_t>(a < 0 ? -a : a);
+    int128_t absB = static_cast<int128_t>(b < 0 ? -b : b);
 
     // Scale values, checking for overflow.
     int128_t scaledA, scaledB;
