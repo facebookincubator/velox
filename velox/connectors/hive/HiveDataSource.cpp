@@ -214,7 +214,9 @@ std::unique_ptr<SplitReader> HiveDataSource::createSplitReader() {
       fsStats_,
       fileHandleFactory_,
       ioExecutor_,
-      scanSpec_);
+      scanSpec_,
+      expressionEvaluator_,
+      totalRemainingFilterTime_);
 }
 
 std::vector<column_index_t> HiveDataSource::setupBucketConversion() {
@@ -314,6 +316,7 @@ void HiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   }
 
   splitReader_ = createSplitReader();
+
   if (!bucketChannels.empty()) {
     splitReader_->setBucketConversion(std::move(bucketChannels));
   }
