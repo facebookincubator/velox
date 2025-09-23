@@ -83,11 +83,12 @@ Mathematical Functions
     Returns the result of adding x to y. The types of x and y must be the same.
     For integral types, overflow results in an error. Corresponds to Spark's operator ``+`` with ``failOnError`` as true.
 
-.. function:: checked_div(x, y) -> bigint
+.. function:: checked_div(x, y) -> bigint (ANSI compliant)
 
-    Returns the results of dividing (integer division performs truncation) x by y.
+    Returns the result of integer division of x by y, truncating toward zero.
     Supported types are DECIMAL and integral types. For DECIMAL types, x and y can have different precision and scale.
     For integral types, x and y must have the same type.
+    The result type is BIGINT for both DECIMAL and integral types.
     Division by zero or overflow results in an error. Corresponds to Spark's operator ``div`` with ``failOnError`` as true.
 
 .. function:: checked_divide(x, y) -> [same as x]
