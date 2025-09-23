@@ -17,6 +17,7 @@
 
 #include <bitset>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 #include <system_error>
 #include <type_traits>
@@ -620,6 +621,56 @@ struct CheckedDivideFunction {
           "Arithmetic overflow: {} / {}",
           a,
           b);
+    }
+    result = a / b;
+    return Status::OK();
+  }
+};
+
+template <typename TExec>
+struct IntegeralDivideFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  template <typename T>
+  FOLLY_ALWAYS_INLINE bool call(int64_t& result, const T& a, const T& b) {
+    if (b == 0) {
+      return false;
+    }
+    // In Java, Long.MIN_VALUE is -2^63 and Long.MAX_VALUE is 2^63 - 1.
+    // Dividing Long.MIN_VALUE by -1 overflows because the positive
+    // result (+2^63) cannot be represented in a signed 64-bit integer.
+    // Java integer arithmetic wraps around on overflow (two's complement),
+    // so Long.MIN_VALUE / -1 evaluates to Long.MIN_VALUE itself instead
+    // of throwing an exception.
+    if (a == std::numeric_limits<int64_t>::min() && b == -1) {
+      result = a;
+      return true;
+    }
+
+    result = a / b;
+    return true;
+  }
+};
+
+template <typename TExec>
+struct CheckedIntegeralDivideFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  template <typename T>
+  FOLLY_ALWAYS_INLINE Status call(int64_t& result, const T& a, const T& b) {
+    if (b == 0) {
+      if (threadSkipErrorDetails()) {
+        return Status::UserError();
+      }
+      return Status::UserError("Division by zero");
+    }
+    if constexpr (std::is_same_v<T, int64_t>) {
+      if (a == std::numeric_limits<int64_t>::min() && b == -1) {
+        if (threadSkipErrorDetails()) {
+          return Status::UserError();
+        }
+        return Status::UserError("Overflow in integral divide");
+      }
     }
     result = a / b;
     return Status::OK();
