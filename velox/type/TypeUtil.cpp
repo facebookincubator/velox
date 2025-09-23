@@ -45,8 +45,8 @@ velox::TypePtr tryGetHomogeneousRowChild(const velox::TypePtr& type) {
   auto first = type->childAt(0);
   for (size_t i = 1; i < childCount; ++i) {
     auto child = type->childAt(i);
-    // All child types must be exactly equal (not just equivalent).
-    if (!first->equals(*child)) {
+    // All child types must be exactly equal (use public operator==).
+    if (!(*first == *child)) {
       return nullptr;
     }
   }
