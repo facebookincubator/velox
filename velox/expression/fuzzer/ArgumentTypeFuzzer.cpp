@@ -168,6 +168,8 @@ void ArgumentTypeFuzzer::determineUnboundedTypeVariables() {
     // on variableInfo.
     if (variableInfo.orderableTypesOnly()) {
       bindings_[variableName] = randOrderableType();
+    } else if (variableInfo.nonDecimalNumericTypeOnly()) {
+      bindings_[variableName] = randNonDecimalNumericType();
     } else {
       bindings_[variableName] = randType();
     }
@@ -180,6 +182,12 @@ TypePtr ArgumentTypeFuzzer::randType() {
 
 TypePtr ArgumentTypeFuzzer::randOrderableType() {
   return velox::randOrderableType(rng_, scalarTypes_, 2);
+}
+
+TypePtr ArgumentTypeFuzzer::randNonDecimalNumericType() {
+  const static std::vector<TypePtr> nonDecimalNumericTypes = {
+      TINYINT(), SMALLINT(), INTEGER(), BIGINT(), REAL(), DOUBLE()};
+  return velox::randType(rng_, nonDecimalNumericTypes, 1);
 }
 
 bool ArgumentTypeFuzzer::fuzzArgumentTypes(uint32_t maxVariadicArgs) {
