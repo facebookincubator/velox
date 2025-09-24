@@ -24,6 +24,7 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/Status.h"
 #include "velox/type/CppToType.h"
+#include "velox/type/StringToFloatParser.h"
 #include "velox/type/TimestampConversion.h"
 #include "velox/type/Type.h"
 
@@ -501,7 +502,15 @@ struct Converter<
   }
 
   static Expected<T> tryCast(folly::StringPiece v) {
-    return tryCast<folly::StringPiece>(v);
+    T output;
+    auto status = StringToFloatParser::parse<T>(v, output);
+    if (!status.ok()) {
+      if (threadSkipErrorDetails()) {
+        return folly::makeUnexpected(Status::UserError());
+      }
+      return folly::makeUnexpected(Status::UserError("{}", status.message()));
+    }
+    return output;
   }
 
   static Expected<T> tryCast(const StringView& v) {

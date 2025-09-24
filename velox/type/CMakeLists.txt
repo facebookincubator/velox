@@ -26,6 +26,7 @@ velox_add_library(
   Filter.cpp
   FloatingPointUtil.cpp
   HugeInt.cpp
+  StringToFloatParser.cpp
   StringView.cpp
   StringView.h
   Subfield.cpp

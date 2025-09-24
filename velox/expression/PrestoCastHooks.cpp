@@ -127,12 +127,12 @@ Expected<T> doCastToFloatingPoint(const StringView& data) {
 
 Expected<float> PrestoCastHooks::castStringToReal(
     const StringView& data) const {
-  return doCastToFloatingPoint<float>(data);
+  return util::Converter<TypeKind::REAL>::tryCast(data);
 }
 
 Expected<double> PrestoCastHooks::castStringToDouble(
     const StringView& data) const {
-  return doCastToFloatingPoint<double>(data);
+  return util::Converter<TypeKind::DOUBLE>::tryCast(data);
 }
 
 StringView PrestoCastHooks::removeWhiteSpaces(const StringView& view) const {
