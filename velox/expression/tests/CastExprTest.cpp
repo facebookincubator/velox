@@ -27,6 +27,7 @@
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/type/Type.h"
 #include "velox/type/tests/utils/CustomTypesForTesting.h"
+#include "velox/type/tz/TimeZoneMap.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/TypeAliases.h"
 
@@ -2975,5 +2976,195 @@ TEST_F(CastExprTest, skipUnnecessaryChildrenOfComplexTypes) {
     testCast(mapVector, expectedMapVector);
   }
 }
+
+TEST_F(CastExprTest, timeToVarcharCast) {
+  {
+    // Test casting TIME to VARCHAR
+
+    // Test various TIME values (milliseconds since midnight)
+    // 0 = 00:00:00.000
+    // 3661000 = 01:01:01.000
+    // 43200000 = 12:00:00.000 (noon)
+    // 86399999 = 23:59:59.999
+    auto timeVector =
+        makeFlatVector<int64_t>({0, 3661000, 43200000, 86399999}, TIME());
+
+    auto result = evaluate<FlatVector<StringView>>(
+        "cast(c0 as varchar)", makeRowVector({timeVector}));
+
+    auto expected = makeFlatVector<StringView>(
+        {"00:00:00.000", "01:01:01.000", "12:00:00.000", "23:59:59.999"});
+
+    assertEqualVectors(expected, result);
+  }
+
+  {
+    // Test casting TIME to VARCHAR with nulls
+    auto timeVector = makeNullableFlatVector<int64_t>(
+        {0, std::nullopt, 43200000, std::nullopt}, TIME());
+
+    auto result = evaluate<FlatVector<StringView>>(
+        "cast(c0 as varchar)", makeRowVector({timeVector}));
+
+    auto expected = makeNullableFlatVector<StringView>(
+        {"00:00:00.000", std::nullopt, "12:00:00.000", std::nullopt});
+
+    assertEqualVectors(expected, result);
+  }
+
+  {
+    // Test try_cast for TIME to VARCHAR
+    auto timeVector = makeFlatVector<int64_t>({0, 43200000}, TIME());
+
+    auto result = evaluate<FlatVector<StringView>>(
+        "try_cast(c0 as varchar)", makeRowVector({timeVector}));
+
+    auto expected =
+        makeFlatVector<StringView>({"00:00:00.000", "12:00:00.000"});
+
+    assertEqualVectors(expected, result);
+  }
+
+  {
+    // Test across different time zones with America/Los_Angeles timezone
+
+    // Test various TIME values (milliseconds since midnight)
+    // Los Angeles is UTC-8 (standard time) or UTC-7 (daylight saving time)
+    auto timeVector = makeFlatVector<int64_t>(
+        {
+            0, // 00:00:00.000 UTC -> should adjust for timezone
+            3661000, // 01:01:01.000 UTC -> should adjust for timezone
+            43200000, // 12:00:00.000 UTC -> should adjust for timezone
+            86399999, // 23:59:59.999 UTC -> should adjust for timezone
+            25200000, // 07:00:00.000 UTC -> should adjust for timezone
+            72000000 // 20:00:00.000 UTC -> should adjust for timezone
+        },
+        TIME());
+
+    // With timezone displacement, the times should be adjusted
+    // Note: The exact expected values depend on the timezone implementation
+    // This test verifies that timezone-aware casting is working
+
+    {
+      // In Daylight savings time at session start time below.
+      setSessionStartTimeAndTimeZone(
+          1756710000000, "America/Los_Angeles"); // 2025-09-01T00:00:00.000
+
+      auto result = evaluate<FlatVector<StringView>>(
+          "cast(c0 as varchar)", makeRowVector({timeVector}));
+
+      auto expected = makeFlatVector<StringView>({
+          "17:00:00.000", // 00:00:00.000 - 7 hours = 17:00:00.000 (previous
+                          // day)
+          "18:01:01.000", // 01:01:01.000 - 7 hours = 18:01:01.000 (previous
+                          // day)
+          "05:00:00.000", // 12:00:00.000 - 7 hours = 05:00:00.000
+          "16:59:59.999", // 23:59:59.999 - 7 hours = 16:59:59.999
+          "00:00:00.000", // 07:00:00.000 - 7 hours = 00:00:00.000 (mid night)
+          "13:00:00.000" // 20:00:00.000 - 7 hours = 12:00:00.000
+      });
+
+      assertEqualVectors(expected, result);
+    }
+
+    {
+      // Not In Daylight savings time at session start time below.
+      setSessionStartTimeAndTimeZone(
+          1762761600000, "America/Los_Angeles"); // 025-11-10T00:00:00.000
+
+      auto result = evaluate<FlatVector<StringView>>(
+          "cast(c0 as varchar)", makeRowVector({timeVector}));
+
+      auto expected = makeFlatVector<StringView>({
+          "16:00:00.000", // 00:00:00.000 - 8 hours = 16:00:00.000 (previous
+                          // day)
+          "17:01:01.000", // 01:01:01.000 - 8 hours = 17:01:01.000 (previous
+                          // day)
+          "04:00:00.000", // 12:00:00.000 - 8 hours = 04:00:00.000
+          "15:59:59.999", // 23:59:59.999 - 8 hours = 15:59:59.999
+          "23:00:00.000", // 07:00:00.000 - 8 hours = 23:00:00.000 (previous
+                          // day)
+          "12:00:00.000" // 20:00:00.000 - 8 hours = 12:00:00.000
+      });
+
+      assertEqualVectors(expected, result);
+    }
+
+    {
+      // Try this again with a different timezone
+      setTimezone("Australia/Perth");
+
+      auto result = evaluate<FlatVector<StringView>>(
+          "cast(c0 as varchar)", makeRowVector({timeVector}));
+
+      // Perth is always UTC+8 (no daylight saving time)
+      auto expected = makeFlatVector<StringView>({
+          "08:00:00.000", // 00:00:00.000 + 8 hours
+          "09:01:01.000", // 01:01:01.000 + 8 hours
+          "20:00:00.000", // 12:00:00.000 + 8 hours
+          "07:59:59.999", // 23:59:59.999 + 8 hours (wraps around)
+          "15:00:00.000", // 07:00:00.000 + 8 hours
+          "04:00:00.000" // 20:00:00.000 + 8 hours (wraps around)
+      });
+
+      assertEqualVectors(expected, result);
+    }
+  }
+
+  {
+    // Test during daylight saving time , March 10, 2024 09:00:00 AM UTC
+    // Spring forward. The clock jumps forward 1 hour, from 2:00 AM to 3:00 AM.
+    setSessionStartTimeAndTimeZone(1710061200000, "America/Los_Angeles");
+
+    auto timeVector = makeFlatVector<int64_t>(
+        {
+            0, // 00:00:00.000 UTC -> should adjust for timezone
+            3661000, // 01:01:01.000 UTC -> should adjust for timezone
+            43200000, // 12:00:00.000 UTC -> should adjust for timezone
+            86399999, // 23:59:59.999 UTC -> should adjust for timezone
+            25200000, // 07:00:00.000 UTC -> should adjust for timezone
+            72000000 // 20:00:00.000 UTC -> should adjust for timezone
+        },
+        TIME());
+
+    auto result = evaluate<FlatVector<StringView>>(
+        "cast(c0 as varchar)", makeRowVector({timeVector}));
+
+    auto expected = makeFlatVector<StringView>({
+        "16:00:00.000", // 00:00:00.000 - 8 hours = 16:00:00.000 (previous
+                        // day)
+        "17:01:01.000", // 01:01:01.000 - 8 hours = 17:01:01.000 (previous
+                        // day)
+        "05:00:00.000", // 12:00:00.000 - 7 hours = 05:00:00.000
+        "16:59:59.999", // 23:59:59.999 - 7 hours = 16:59:59.999
+        "23:00:00.000", // 07:00:00.000 - 8 hours = 23:00:00.000 (previous
+                        // day)
+        "13:00:00.000" // 20:00:00.000 - 7 hours = 13:00:00.000
+    });
+
+    assertEqualVectors(expected, result);
+
+    // Fall Back. The clock jumps back 1 hour, from 2:00 AM to 1:00 AM.
+    setSessionStartTimeAndTimeZone(1730620800000, "America/Los_Angeles");
+
+    result = evaluate<FlatVector<StringView>>(
+        "cast(c0 as varchar)", makeRowVector({timeVector}));
+
+    expected = makeFlatVector<StringView>({
+        "17:00:00.000", // 00:00:00.000 - 7 hours = 17:00:00.000 (previous
+                        // day)
+        "18:01:01.000", // 01:01:01.000 - 7 hours = 18:01:01.000 (previous
+                        // day)
+        "04:00:00.000", // 12:00:00.000 - 8 hours = 04:00:00.000
+        "15:59:59.999", // 23:59:59.999 - 8 hours = 15:59:59.999
+        "00:00:00.000", // 07:00:00.000 - 7 hours = 00:00:00.000 (previous
+                        // day)
+        "12:00:00.000" // 20:00:00.000 - 8 hours = 12:00:00.000
+    });
+
+    assertEqualVectors(expected, result);
+  }
+}
+
 } // namespace
 } // namespace facebook::velox::test
