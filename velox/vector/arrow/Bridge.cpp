@@ -659,8 +659,7 @@ VectorPtr createStringFlatVector(
           i);
     }
 
-    rawStringViews[i] =
-        StringView(values + offsets[i], rowBytes);
+    rawStringViews[i] = StringView(values + offsets[i], rowBytes);
     shouldAcquireStringBuffer |= !rawStringViews[i].isInline();
   }
 
