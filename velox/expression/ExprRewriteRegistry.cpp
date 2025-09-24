@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/expression/ExprRewriteRegistry.h"
+#include "velox/expression/ExprUtils.h"
 #include "velox/expression/FunctionSignature.h"
 
 namespace facebook::velox::expression {
@@ -27,7 +28,11 @@ void ExprRewriteRegistry::clear() {
 }
 
 core::TypedExprPtr ExprRewriteRegistry::rewrite(
-    const core::TypedExprPtr& expr) {
+    const core::TypedExprPtr& expr,
+    core::QueryCtx* queryCtx,
+    memory::MemoryPool* pool,
+    bool enableConstantFolding,
+    bool replaceEvalErrorWithFailExpr) {
   core::TypedExprPtr result = expr;
   registry_.withRLock([&](const auto& list) {
     for (const auto& rewrite : list) {
@@ -39,6 +44,9 @@ core::TypedExprPtr ExprRewriteRegistry::rewrite(
     }
   });
 
-  return result;
+  return enableConstantFolding
+      ? utils::constantFold(
+            result, queryCtx, pool, replaceEvalErrorWithFailExpr)
+      : result;
 }
 } // namespace facebook::velox::expression
