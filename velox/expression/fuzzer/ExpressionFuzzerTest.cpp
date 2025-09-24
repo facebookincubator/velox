@@ -398,6 +398,8 @@ std::unordered_set<std::string> skipFunctionsSOT = {
     "map_keys_by_top_n_values", // https://github.com/facebookincubator/velox/issues/14374
     "$internal$canonicalize",
     "$internal$contains",
+    "localtime", // localtime cannot be called with paranthesis:
+                 // https://github.com/facebookincubator/velox/issues/14937
 };
 
 int main(int argc, char** argv) {
