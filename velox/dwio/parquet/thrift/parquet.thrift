@@ -37,7 +37,9 @@
  * File format description for the parquet file format
  */
 
-namespace cpp parquet.format
+include "thrift/annotation/thrift.thrift"
+
+namespace cpp2 facebook.velox.parquet.thrift
 namespace java org.apache.parquet.format
 
 /**
@@ -580,7 +582,12 @@ struct DataPageHeaderV2 {
   definition_levels_byte_length + repetition_levels_byte_length + 1 and compressed_page_size (included)
   is compressed with the compression_codec.
   If missing it is considered compressed */
-  7: optional bool is_compressed = 1;
+  // FBThrift rejects "optional" and default value. This annotation allows
+  // this usage but generated C++ code doesn't use the default value when
+  // "is_compressed" is missing. So our code must use
+  // is_compressed().value_or(true).
+  @thrift.AllowUnsafeOptionalCustomDefaultValue
+  7: optional bool is_compressed = true;
 
   /** optional statistics for the data in this page **/
   8: optional Statistics statistics;

@@ -324,8 +324,8 @@ endif()
 
 if(VELOX_ENABLE_PARQUET)
   add_definitions(-DVELOX_ENABLE_PARQUET)
-  # Native Parquet reader requires Apache Thrift and Arrow Parquet writer, which
-  # are included in Arrow.
+  # Native Parquet reader requires Arrow Parquet writer, which are
+  # included in Arrow.
   set(VELOX_ENABLE_ARROW ON)
 endif()
 
@@ -617,7 +617,7 @@ if(${VELOX_BUILD_TESTING})
   velox_resolve_dependency(gRPC)
 endif()
 
-if(VELOX_ENABLE_REMOTE_FUNCTIONS)
+if(VELOX_ENABLE_REMOTE_FUNCTIONS OR VELOX_ENABLE_PARQUET)
   # TODO: Move this to use resolve_dependency(). For some reason, FBThrift
   # requires clients to explicitly install fizz and wangle.
   find_package(fizz CONFIG REQUIRED)
