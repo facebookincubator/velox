@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <unordered_map>
 #include "velox/dwio/common/BufferUtil.h"
 #include "velox/dwio/parquet/reader/Metadata.h"
 #include "velox/dwio/parquet/reader/PageReader.h"
@@ -37,11 +38,13 @@ class ParquetParams : public dwio::common::FormatParams {
       dwio::common::ColumnReaderStatistics& stats,
       const FileMetaDataPtr metaData,
       const tz::TimeZone* sessionTimezone,
-      TimestampPrecision timestampPrecision)
+      TimestampPrecision timestampPrecision,
+      dwio::common::BufferedInput* bufferedInput = nullptr)
       : FormatParams(pool, stats),
         metaData_(metaData),
         sessionTimezone_(sessionTimezone),
-        timestampPrecision_(timestampPrecision) {}
+        timestampPrecision_(timestampPrecision),
+        bufferedInput_(bufferedInput) {}
   std::unique_ptr<dwio::common::FormatData> toFormatData(
       const std::shared_ptr<const dwio::common::TypeWithId>& type,
       const common::ScanSpec& scanSpec) override;
@@ -54,6 +57,7 @@ class ParquetParams : public dwio::common::FormatParams {
   const FileMetaDataPtr metaData_;
   const tz::TimeZone* sessionTimezone_;
   const TimestampPrecision timestampPrecision_;
+  dwio::common::BufferedInput* bufferedInput_;
 };
 
 /// Format-specific data created for each leaf column of a Parquet rowgroup.
@@ -71,6 +75,11 @@ class ParquetData : public dwio::common::FormatData {
         maxRepeat_(type_->maxRepeat_),
         rowsInRowGroup_(-1),
         sessionTimezone_(sessionTimezone) {}
+
+  /// Sets the BufferedInput for creating streams on demand (called before filtering)
+  void setBufferedInput(dwio::common::BufferedInput* input) {
+    bufferedInput_ = input;
+  }
 
   /// Prepares to read data for 'index'th row group.
   void enqueueRowGroup(uint32_t index, dwio::common::BufferedInput& input);
@@ -208,6 +217,28 @@ class ParquetData : public dwio::common::FormatData {
   /// stats in 'rowGroup'.
   bool rowGroupMatches(uint32_t rowGroupId, const common::Filter* filter);
 
+  /// Dictionary-based row group filtering (like Java Presto's dictionaryPredicatesMatch)
+  bool testFilterAgainstDictionary(
+      uint32_t rowGroupId,
+      const common::Filter* filter,
+      const ColumnChunkMetaDataPtr& columnChunk);
+
+  /// Presto's exact isOnlyDictionaryEncodingPages function from PR #4779
+  bool isOnlyDictionaryEncodingPagesImpl(const ColumnChunkMetaDataPtr& columnChunk);
+
+  /// Helper methods for EncodingStats analysis (like Java Presto)
+  bool hasDictionaryPages(const std::vector<thrift::PageEncodingStats>& stats);
+  bool hasNonDictionaryEncodedPages(const std::vector<thrift::PageEncodingStats>& stats);
+
+  /// Read dictionary page directly for row group filtering (like Presto's approach)
+  dwio::common::DictionaryValues readDictionaryPageForFiltering(
+      uint32_t rowGroupId,
+      const ColumnChunkMetaDataPtr& columnChunk);
+
+  /// Helper methods for dictionary page reading
+  std::unique_ptr<dwio::common::SeekableInputStream> getInputStream(
+      uint32_t rowGroupId, const ColumnChunkMetaDataPtr& columnChunk);
+
  protected:
   memory::MemoryPool& pool_;
   std::shared_ptr<const ParquetTypeWithId> type_;
@@ -216,11 +247,29 @@ class ParquetData : public dwio::common::FormatData {
   // ahead of first use, not at construction.
   std::vector<std::unique_ptr<dwio::common::SeekableInputStream>> streams_;
 
+  // BufferedInput reference for creating streams on demand
+  dwio::common::BufferedInput* bufferedInput_{nullptr};
+
   const uint32_t maxDefine_;
   const uint32_t maxRepeat_;
   int64_t rowsInRowGroup_;
   const tz::TimeZone* sessionTimezone_;
+
+  // Track current row group for shadow mode validation
+  mutable int64_t currentRowGroupId_{-1};
   std::unique_ptr<PageReader> reader_;
+
+  // Temporary dictionary storage for row group filtering
+  mutable dwio::common::DictionaryValues tempDictionary_;
+
+  // Shadow mode tracking for dictionary filtering validation
+  struct ShadowModeExclusion {
+    std::string filePath;
+    std::string filterString;
+    std::string columnName;
+    uint32_t columnIndex;
+  };
+  mutable std::unordered_map<uint32_t, ShadowModeExclusion> shadowModeExclusions_;
 
   // Nulls derived from leaf repdefs for non-leaf readers.
   BufferPtr presetNulls_;

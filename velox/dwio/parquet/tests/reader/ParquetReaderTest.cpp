@@ -18,6 +18,18 @@
 #include "velox/dwio/parquet/tests/ParquetTestBase.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
+#include "velox/dwio/common/MetadataFilter.h"
+#include "velox/parse/Expressions.h"
+#include "velox/parse/ExpressionsParser.h"
+#include "velox/parse/TypeResolver.h"
+#include "velox/core/Expressions.h"
+#include "velox/expression/Expr.h"
+#include "velox/functions/prestosql/registration/RegistrationFunctions.h"
+#include "common/encode/Base64.h"
+#include <csignal>
+#include <glog/logging.h>
+#include <execinfo.h>
+#include <cstdlib>
 
 using namespace facebook::velox;
 using namespace facebook::velox::common;
@@ -1743,17 +1755,266 @@ TEST_F(ParquetReaderTest, fileColumnVarcharToMetadataColumnMismatchTest) {
   };
 
   auto types = std::vector<TypePtr>{
-      SMALLINT(),
-      INTEGER(),
-      BIGINT(),
-      DECIMAL(10, 2),
-      REAL(),
-      DOUBLE(),
-      TIMESTAMP(),
-      DATE(),
-      VARBINARY()};
+    SMALLINT(),
+    INTEGER(),
+    BIGINT(),
+    DECIMAL(10, 2),
+    REAL(),
+    DOUBLE(),
+    TIMESTAMP(),
+    DATE(),
+    VARBINARY()};
 
   for (const auto& type : types) {
     runVarcharColTest(type);
   }
+}
+
+TEST_F(ParquetReaderTest, testCase2Repo) {
+
+  // ToDo: Figure out a way to upload to git (too large)
+  const std::string filePath("/home/user/testCase2.parquet");
+  std::ifstream file(filePath);
+  if (!file.good()) {
+    GTEST_SKIP() << "Production Parquet file not found: " << filePath;
+    return;
+  }
+  dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+  auto reader = createReader(filePath, readerOptions);
+  auto numRows = reader->numberOfRows();
+  auto fileSchema = reader->typeWithId()->type();
+  auto rowType = std::dynamic_pointer_cast<const RowType>(fileSchema);
+  if (!rowType) {
+    GTEST_SKIP() << "File schema is not a RowType: " << fileSchema->toString();
+    return;
+  }
+
+  auto scanSpec = std::make_shared<common::ScanSpec>("<root>");
+  auto* msgSpec = scanSpec->getOrCreateChild(common::Subfield("msg"));
+  auto* experimentKeySpec = msgSpec->getOrCreateChild(common::Subfield("experiment_key"));
+  experimentKeySpec->setFilter(std::make_unique<common::BytesRange>(
+      "preview_expansion_global_split_final", // lower
+      false,                                  // lowerUnbounded
+      false,                                  // lowerExclusive
+      "preview_expansion_global_split_final", // upper
+      false,                                  // upperUnbounded
+      false,                                  // upperExclusive
+      false));                                // nullAllowed
+
+  RowReaderOptions rowReaderOpts;
+  rowReaderOpts.setScanSpec(scanSpec);
+  rowReaderOpts.setRequestedType(rowType);  // Use full file schema
+  FLAGS_v = 4;
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+  // Read data and track metrics
+  VectorPtr result = BaseVector::create(rowType, 0, leafPool_.get());
+  uint64_t totalScanned = 0;
+  uint64_t totalReturned = 0;
+  int batchCount = 0;
+  while (true) {
+    uint64_t scanned = rowReader->next(10000, result);
+    if (scanned == 0) break;
+
+    batchCount++;
+    totalScanned += scanned;
+    totalReturned += result ? result->size() : 0;
+  }
+  // ENFORCE EXPECTED BEHAVIOR - FAIL TEST IF ROW GROUP FILTERING ISN'T WORKING
+  EXPECT_EQ(totalScanned, 7354138) << "Row group filtering should scan exactly 7354138 rows for preview_expansion_global_split_final filter. "
+                                   << "If this fails, row group filtering is not working correctly!";
+}
+
+TEST_F(ParquetReaderTest, testCase2RepoWithSkipping) {
+  // Test for row group filtering issue reproduction - scan all columns
+  // Using production Parquet file to debug rawInputPositions metric
+
+  // ToDo: Figure out a way to upload to git (too large)
+  const std::string filePath("/home/user/testCase2.parquet");
+  // Check if file exists, skip test if not available
+  std::ifstream file(filePath);
+  if (!file.good()) {
+    GTEST_SKIP() << "Production Parquet file not found: " << filePath;
+    return;
+  }
+  dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+  auto reader = createReader(filePath, readerOptions);
+  auto numRows = reader->numberOfRows();
+  auto fileSchema = reader->typeWithId()->type();
+  auto rowType = std::dynamic_pointer_cast<const RowType>(fileSchema);
+  auto scanSpec = makeScanSpec(rowType);
+  auto* msgSpec = scanSpec->getOrCreateChild(common::Subfield("msg"));
+  auto* experimentKeySpec = msgSpec->getOrCreateChild(common::Subfield("experiment_key"));
+  experimentKeySpec->setFilter(std::make_unique<common::BytesRange>(
+      "temp_val", // lower
+      false,                                  // lowerUnbounded
+      false,                                  // lowerExclusive
+      "temp_val", // upper
+      false,                                  // upperUnbounded
+      false,                                  // upperExclusive
+      false));                                // nullAllowed
+
+  RowReaderOptions rowReaderOpts;
+  rowReaderOpts.setScanSpec(scanSpec);
+  rowReaderOpts.setRequestedType(rowType);  // Use full file schema
+  // Enable verbose logging to see row group filtering details
+  FLAGS_v = 4;
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+
+  VectorPtr result = BaseVector::create(rowType, 0, leafPool_.get());
+  uint64_t totalScanned = 0;
+  uint64_t totalReturned = 0;
+  int batchCount = 0;
+
+
+  while (true) {
+    uint64_t scanned = rowReader->next(10000, result);
+    if (scanned == 0) break;
+
+    batchCount++;
+    totalScanned += scanned;
+    totalReturned += result ? result->size() : 0;
+  }
+  EXPECT_EQ(totalScanned, 0) << "Row group filtering should scan exactly 0 rows for temp_val filter (no matches expected). "
+                             << "If this fails, row group filtering is not working correctly!";
+}
+
+TEST_F(ParquetReaderTest, testCase1Repro) {
+  const std::string filePath("/home/user/testCase1.parquet");
+
+  // ToDo: Figure out a way to upload to git (too large)
+  std::ifstream file(filePath);
+  if (!file.good()) {
+    GTEST_SKIP() << "Production Parquet file not found: " << filePath;
+    return;
+  }
+  dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+  auto reader = createReader(filePath, readerOptions);
+
+  auto numRows = reader->numberOfRows();
+  auto fileSchema = reader->typeWithId()->type();
+  auto rowType = std::dynamic_pointer_cast<const RowType>(fileSchema);
+  auto scanSpec = std::make_shared<common::ScanSpec>("<root>");
+  auto* msgSpec = scanSpec->getOrCreateChild(common::Subfield("msg"));
+
+  auto* graphTypeSpec = msgSpec->getOrCreateChild(common::Subfield("graph_type"));
+  graphTypeSpec->setFilter(std::make_unique<common::BytesRange>(
+      "priced", false, false, "priced", false, false, false));
+
+  auto* environmentSpec = msgSpec->getOrCreateChild(common::Subfield("environment"));
+  environmentSpec->setFilter(std::make_unique<common::BytesRange>(
+      "production", false, false, "production", false, false, false));
+
+  auto* tenancySpec = msgSpec->getOrCreateChild(common::Subfield("tenancy"));
+  tenancySpec->setFilter(std::make_unique<common::BytesRange>(
+      "uber/production", false, false, "uber/production", false, false, false));
+
+  auto* regionIdSpec = msgSpec->getOrCreateChild(common::Subfield("region_id"));
+  regionIdSpec->setFilter(std::make_unique<common::BigintRange>(1021, 1021, false));
+
+  auto* flowIdSpec = msgSpec->getOrCreateChild(common::Subfield("flow_id"));
+  flowIdSpec->setFilter(std::make_unique<common::BytesRange>(
+      "primary", false, false, "primary", false, false, false));
+
+  auto* fifoQueueIdSpec = msgSpec->getOrCreateChild(common::Subfield("fifo_queue_id"));
+  fifoQueueIdSpec->setFilter(std::make_unique<common::IsNull>());
+
+  auto* vvidSpec = msgSpec->getOrCreateChild(common::Subfield("vvid"));
+  // FULL SIZE: Complete list from production query
+  std::vector<int64_t> vvidValues = {
+    20065449,9851,20078267,20067611,20068111,20058213,20040063,20058053,20079075,20011643,20043609,20022269,15153,20043361,10002320,10002070,20024163,20011315,20073399,20065033,20043599,9887,20058037,20068115,20064527,20004807,20077833,20055703,20070297,2029,20058215,20058177,3723,20057821,20070561,20070227,20058185,20077847,20049785,20002363,20021833,20022239,20021015,20007595,20065041,20066621,20056531,20078073,20043383,20022207,20010033,20005219,20047113,20037965,20022545,5407,20056273,20043699,10001886,20065367,20056575,20000233,20058223,20038879,20022277,20038883,20074517,20065447,20041755,20058219,20072777,20041393,20037963,20058139,20058643,20030309,20065047,20006961,20034915,11115,20053957,20047111,20022267,20078273,2077,20040059,20032045,20043417,20020347,20050119,20043163,20043455,20065161,20006799,11803,20056187,20034715,20047919,20058221,20037959,20077839,20042917,20040047,20050123,20058699,20047123,20077823,20065421,20058709,20078263,10002356,20065043,20039029,20006275,10001038,20078265,10004454,1977,20078105,20005345,20049897,20056565,20055739,20006271,20002011,20058143,20068135,20071825,20033323,10002424,20041391,468,20034469,20034925,20042919,20049893,20078271,20030333,20041385,20055711,20065579,20049895,20032133,20032041,20058147,20057823,9955,14325,20036451,20022265,20022425,20078075,20058705,20053827,20058159,20058711,20022279,20022217,20078101,20043177,20004795,20020689,20044115,14315,20079071,10003556,20065555,10004148,20075953,20065419,20065407,20078275,20077845,20066477,20070687,20041241,20057813,20034587,10002534,20029525,20078269,10000774,20061963,20034913,10003388,20061677,20006681,20022889,1931,20066257,20058641,20043175,6125,20061657,20058049,20043587,20023371,20036907,20008557,20058183,20064795,20023719,20033321,20056271,20065397,20058157,20058151,20041233,20037823,20077835,20022245,20058691,20079073
+  };
+  int64_t minVvid = *std::min_element(vvidValues.begin(), vvidValues.end());
+  int64_t maxVvid = *std::max_element(vvidValues.begin(), vvidValues.end());
+  vvidSpec->setFilter(std::make_unique<common::BigintValuesUsingHashTable>(
+      minVvid, maxVvid, vvidValues, false));
+
+  RowReaderOptions rowReaderOpts;
+  rowReaderOpts.setScanSpec(scanSpec);
+  rowReaderOpts.setRequestedType(rowType);
+
+  FLAGS_v = 4;
+
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+
+
+  // Read data and track metrics
+  VectorPtr result = BaseVector::create(rowType, 0, leafPool_.get());
+  uint64_t totalScanned = 0;
+  uint64_t totalReturned = 0;
+  int batchCount = 0;
+
+
+  while (true) {
+    uint64_t scanned = rowReader->next(50000, result);
+    if (scanned == 0) break;
+    batchCount++;
+    totalScanned += scanned;
+    totalReturned += result ? result->size() : 0;
+  }
+  EXPECT_EQ(totalScanned, 11697232) << "Row group filtering should scan exactly 11697232 rows for filters. "
+                                   << "If this fails, row group filtering is not working correctly!";
+}
+
+
+TEST_F(ParquetReaderTest, testCase3Repro) {
+  // ToDo: Figure out a way to upload to git (too large)
+  const std::string filePath("/home/user/test_wrong3.parquet");
+  std::ifstream file(filePath);
+  if (!file.good()) {
+    GTEST_SKIP() << "Production Parquet file not found: " << filePath;
+    return;
+  }
+  dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+  auto reader = createReader(filePath, readerOptions);
+  auto numRows = reader->numberOfRows();
+  auto fileSchema = reader->typeWithId()->type();
+  // Cast to RowType for makeScanSpec
+  auto rowType = std::dynamic_pointer_cast<const RowType>(fileSchema);
+
+  auto scanSpec = std::make_shared<common::ScanSpec>("<root>");
+  auto* nameSpec = scanSpec->getOrCreateChild(common::Subfield("name"));
+  auto* deletedAtSpec = scanSpec->getOrCreateChild(common::Subfield("deleted_at"));
+
+  // SQL Query reproduction: name IN (...) OR (name = 'GI_Rider_Clawback' AND deleted_at IS NULL)
+  std::vector<std::string> inValues = {
+    "GI_Rider_Clawback",  // This will be combined with deleted_at IS NULL via metadata filter
+    "GIM_30T_2022referralxp_treatment",
+    "GIM_Oct2022referralxp_treatment",
+    "GI_NORAM_FR-US-21-20"
+  };
+  nameSpec->setFilter(std::make_unique<common::BytesValues>(inValues, false));
+  parse::registerTypeResolver();
+  functions::prestosql::registerAllScalarFunctions();
+  std::string filterExpression =
+      "((name = 'GI_Rider_Clawback' AND deleted_at IS NULL) OR "
+      "name IN ('GIM_30T_2022referralxp_treatment','GIM_Oct2022referralxp_treatment','GI_NORAM_FR-US-21-20'))";
+
+  auto queryCtx = core::QueryCtx::create();
+  exec::SimpleExpressionEvaluator evaluator(queryCtx.get(), leafPool_.get());
+  auto untypedExpr = parse::parseExpr(filterExpression, {});
+  auto typedExpr = core::Expressions::inferTypes(untypedExpr, rowType, leafPool_.get());
+  auto metadataFilter = std::make_shared<MetadataFilter>(*scanSpec, *typedExpr, &evaluator);
+  RowReaderOptions rowReaderOpts;
+  rowReaderOpts.setScanSpec(scanSpec);
+  rowReaderOpts.setRequestedType(rowType);
+  rowReaderOpts.setMetadataFilter(metadataFilter);
+
+  FLAGS_v = 4;
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+  // Read data and track metrics
+  VectorPtr result = BaseVector::create(rowType, 0, leafPool_.get());
+  uint64_t totalScanned = 0;
+  uint64_t totalReturned = 0;
+  int batchCount = 0;
+
+  while (true) {
+    uint64_t scanned = rowReader->next(10000, result);
+    if (scanned == 0) break;
+
+    batchCount++;
+    totalScanned += scanned;
+    totalReturned += result ? result->size() : 0;
+  }
+  EXPECT_EQ(totalScanned, 21685041) << "Row group filtering should scan exactly 21685041 rows for filters. "
+                                   << "If this fails, row group filtering is not working correctly!";
 }

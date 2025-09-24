@@ -219,6 +219,18 @@ ColumnChunkMetaDataPtr::getColumnStatistics(
       thriftColumnChunkPtr(ptr_)->meta_data.statistics, *type, numRows);
 };
 
+bool ColumnChunkMetaDataPtr::hasEncodingStats() const {
+  return hasMetadata() && thriftColumnChunkPtr(ptr_)->meta_data.__isset.encoding_stats;
+}
+
+const std::vector<thrift::PageEncodingStats>& ColumnChunkMetaDataPtr::getEncodingStats() const {
+  return thriftColumnChunkPtr(ptr_)->meta_data.encoding_stats;
+}
+
+const std::vector<thrift::Encoding::type>& ColumnChunkMetaDataPtr::getEncoding() const {
+  return thriftColumnChunkPtr(ptr_)->meta_data.encodings;
+}
+
 std::string ColumnChunkMetaDataPtr::getColumnMetadataStatsMinValue() {
   VELOX_CHECK(hasStatistics());
   return thriftColumnChunkPtr(ptr_)->meta_data.statistics.min_value;
@@ -241,6 +253,18 @@ int64_t ColumnChunkMetaDataPtr::dataPageOffset() const {
 int64_t ColumnChunkMetaDataPtr::dictionaryPageOffset() const {
   VELOX_CHECK(hasDictionaryPageOffset());
   return thriftColumnChunkPtr(ptr_)->meta_data.dictionary_page_offset;
+}
+
+bool ColumnChunkMetaDataPtr::hasBloomFilter() const {
+  return hasMetadata() &&
+      thriftColumnChunkPtr(ptr_)->meta_data.__isset.bloom_filter_offset;
+}
+
+std::optional<int64_t> ColumnChunkMetaDataPtr::bloom_filter_offset() const {
+  if (hasBloomFilter()) {
+    return thriftColumnChunkPtr(ptr_)->meta_data.bloom_filter_offset;
+  }
+  return std::nullopt;
 }
 
 common::CompressionKind ColumnChunkMetaDataPtr::compression() const {

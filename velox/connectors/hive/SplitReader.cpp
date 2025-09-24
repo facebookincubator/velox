@@ -386,6 +386,7 @@ void SplitReader::createRowReader(
     RowTypePtr rowType,
     std::optional<bool> rowSizeTrackingEnabled) {
   VELOX_CHECK_NULL(baseRowReader_);
+
   configureRowReaderOptions(
       hiveTableHandle_->tableParameters(),
       scanSpec_,

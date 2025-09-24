@@ -18,6 +18,7 @@
 
 #include "velox/dwio/common/Statistics.h"
 #include "velox/dwio/common/compression/Compression.h"
+#include "velox/dwio/parquet/thrift/ParquetThriftTypes.h"
 
 namespace facebook::velox::parquet {
 
@@ -36,6 +37,13 @@ class ColumnChunkMetaDataPtr {
 
   /// Check the presence of the dictionary page offset in ColumnChunk metadata.
   bool hasDictionaryPageOffset() const;
+
+  bool hasEncodingStats() const;
+
+  const std::vector<thrift::PageEncodingStats>& getEncodingStats() const;
+
+  const std::vector<thrift::Encoding::type>& getEncoding() const;
+
 
   /// Return the ColumnChunk statistics.
   std::unique_ptr<dwio::common::ColumnStatistics> getColumnStatistics(
@@ -60,6 +68,13 @@ class ColumnChunkMetaDataPtr {
   /// The dictionary page offset.
   /// Must check for its presence using hasDictionaryPageOffset().
   int64_t dictionaryPageOffset() const;
+
+  /// Check if bloom filter is available.
+  bool hasBloomFilter() const;
+
+  /// The bloom filter offset.
+  /// Must check for its presence using hasBloomFilter().
+  std::optional<int64_t> bloom_filter_offset() const;
 
   /// The compression.
   common::CompressionKind compression() const;
