@@ -144,7 +144,9 @@ Date and Time Functions
 
 .. function:: from_unixtime(unixtime) -> timestamp
 
-    Returns the UNIX timestamp ``unixtime`` as a timestamp.
+    Returns the UNIX timestamp ``unixtime`` as a timestamp.  If no time 
+    zone is specified, the time is automatically converted to the time 
+    zone associated with the query.
 
 .. function:: from_unixtime(unixtime, string) -> timestamp with time zone
     :noindex:
