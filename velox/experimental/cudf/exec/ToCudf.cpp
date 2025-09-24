@@ -347,10 +347,7 @@ std::shared_ptr<rmm::mr::device_memory_resource> mr_;
 struct CudfDriverAdapter {
   bool force_replace_;
 
-  CudfDriverAdapter(
-      std::shared_ptr<rmm::mr::device_memory_resource> mr,
-      bool force_replace)
-      : force_replace_{force_replace} {}
+  CudfDriverAdapter(bool force_replace) : force_replace_{force_replace} {}
 
   // Call operator needed by DriverAdapter
   bool operator()(const exec::DriverFactory& factory, exec::Driver& driver) {
