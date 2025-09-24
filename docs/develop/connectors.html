@@ -133,7 +133,7 @@ This behavior is necessary to support the <cite>ignore_missing_files</cite> conf
 <p>S3 is supported using the <a class="reference external" href="https://github.com/aws/aws-sdk-cpp">AWS SDK for C++</a> library.
 S3 supported schemes are <cite>s3://</cite> (Amazon S3, Minio), <cite>s3a://</cite> (Hadoop 3.x), <cite>s3n://</cite> (Deprecated in Hadoop 3.x),
 <cite>oss://</cite> (Alibaba cloud storage), and <cite>cos://</cite>, <cite>cosn://</cite> (Tencent cloud storage).</p>
-<p>HDFS is supported using the
+<p>HDFS is supported using the <a class="reference external" href="https://github.com/apache/hadoop">Apache Hadoop libhdfs.so</a> and
 <a class="reference external" href="https://github.com/apache/hawq/tree/master/depends/libhdfs3">Apache Hawk libhdfs3</a> library. HDFS supported schemes
 are <cite>hdfs://</cite>.</p>
 <p>GCS is supported using the
@@ -162,6 +162,10 @@ lower case variables take precendence.</p></li>
 match <cite>test.foobar.com</cite> or <cite>foo.foobar.com</cite>.</p></li>
 </ol>
 </section>
+<section id="hdfs-storage-adapter">
+<h4>HDFS Storage adapter<a class="headerlink" href="#hdfs-storage-adapter" title="Link to this heading">¶</a></h4>
+<p>Velox currently supports HDFS by dynamically loading libhdfs.so from the environment’s ${HADOOP_HOME}/native/lib directory. If you prefer to use libhdfs3 instead, you can create a symbolic link from libhdfs.so to libhdfs3.so within the same directory.</p>
+</section>
 </section>
 </section>
 </section>
@@ -186,6 +190,7 @@ match <cite>test.foobar.com</cite> or <cite>foo.foobar.com</cite>.</p></li>
 <li><a class="reference internal" href="#hiveconnectorfactory">HiveConnectorFactory</a></li>
 <li><a class="reference internal" href="#storage-adapters">Storage Adapters</a><ul>
 <li><a class="reference internal" href="#s3-storage-adapter-using-a-proxy">S3 Storage adapter using a proxy</a></li>
+<li><a class="reference internal" href="#hdfs-storage-adapter">HDFS Storage adapter</a></li>
 </ul>
 </li>
 </ul>
