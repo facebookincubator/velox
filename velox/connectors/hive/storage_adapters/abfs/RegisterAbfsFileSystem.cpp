@@ -68,29 +68,29 @@ void registerAbfsFileSystem() {
 
 void registerAzureClientProvider(const config::ConfigBase& config) {
 #ifdef VELOX_ENABLE_ABFS
-  std::string accountName;
-  std::string authType;
-  extractCacheKeyFromConfig(config, accountName, authType);
 
-  if (authType == kAzureSharedKeyAuthType) {
-    AzureClientProviderFactories::registerFactory(
-        accountName, [](const std::string&) {
-          return std::make_unique<SharedKeyAzureClientProvider>();
-        });
-  } else if (authType == kAzureOAuthAuthType) {
-    AzureClientProviderFactories::registerFactory(
-        accountName, [](const std::string&) {
-          return std::make_unique<OAuthAzureClientProvider>();
-        });
-  } else if (authType == kAzureSASAuthType) {
-    AzureClientProviderFactories::registerFactory(
-        accountName, [](const std::string&) {
-          return std::make_unique<FixedSasAzureClientProvider>();
-        });
-  } else {
-    VELOX_USER_FAIL(
-        "Unsupported auth type {}, supported auth types are SharedKey, OAuth and SAS.",
-        authType);
+  for (const auto& [accountName, authType] :
+       extractCacheKeyFromConfig(config)) {
+    if (authType == kAzureSharedKeyAuthType) {
+      AzureClientProviderFactories::registerFactory(
+          accountName, [](const std::string&) {
+            return std::make_unique<SharedKeyAzureClientProvider>();
+          });
+    } else if (authType == kAzureOAuthAuthType) {
+      AzureClientProviderFactories::registerFactory(
+          accountName, [](const std::string&) {
+            return std::make_unique<OAuthAzureClientProvider>();
+          });
+    } else if (authType == kAzureSASAuthType) {
+      AzureClientProviderFactories::registerFactory(
+          accountName, [](const std::string&) {
+            return std::make_unique<FixedSasAzureClientProvider>();
+          });
+    } else {
+      VELOX_USER_FAIL(
+          "Unsupported auth type {}, supported auth types are SharedKey, OAuth and SAS.",
+          authType);
+    }
   }
 #endif
 }

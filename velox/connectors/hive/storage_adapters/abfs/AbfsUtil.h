@@ -18,15 +18,20 @@
 
 #include <azure/storage/common/storage_exception.hpp>
 #include <fmt/format.h>
-#include "velox/common/config/Config.h"
 #include "velox/common/file/File.h"
-#include "velox/connectors/hive/storage_adapters/abfs/AbfsPath.h"
 
 namespace facebook::velox::filesystems {
 namespace {
 constexpr std::string_view kAbfsScheme{"abfs://"};
 constexpr std::string_view kAbfssScheme{"abfss://"};
 } // namespace
+
+class ConfigBase;
+
+struct CacheKey {
+  std::string accountName;
+  std::string authType;
+};
 
 inline bool isAbfsFile(const std::string_view filename) {
   return filename.find(kAbfsScheme) == 0 || filename.find(kAbfssScheme) == 0;
@@ -47,26 +52,7 @@ inline std::string throwStorageExceptionWithOperationDetails(
   VELOX_FAIL(errMsg);
 }
 
-inline void extractCacheKeyFromConfig(
-    const config::ConfigBase& config,
-    std::string& accountName,
-    std::string& authenticationType) {
-  for (const auto& [key, value] : config.rawConfigs()) {
-    constexpr std::string_view authTypePrefix{kAzureAccountAuthType};
-    if (key.find(authTypePrefix) == 0) {
-      std::string_view skey = key;
-      // Extract the accountName after "fs.azure.account.auth.type.".
-      auto remaining = skey.substr(authTypePrefix.size() + 1);
-      auto dot = remaining.find(".");
-      VELOX_USER_CHECK_NE(
-          dot,
-          std::string_view::npos,
-          "Invalid Azure account auth type key: {}",
-          key);
-      accountName = std::string(remaining.substr(0, dot));
-      authenticationType = value;
-    }
-  }
-}
+std::vector<CacheKey> extractCacheKeyFromConfig(
+    const config::ConfigBase& config);
 
 } // namespace facebook::velox::filesystems
