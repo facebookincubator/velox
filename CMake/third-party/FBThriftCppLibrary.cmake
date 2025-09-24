@@ -59,6 +59,8 @@ function(add_fbthrift_cpp_library LIB_NAME THRIFT_FILE)
     "${output_dir}/gen-cpp2/${base}_data.h"
     "${output_dir}/gen-cpp2/${base}_data.cpp"
     "${output_dir}/gen-cpp2/${base}_types.cpp"
+    "${output_dir}/gen-cpp2/${base}_types_binary.cpp"
+    "${output_dir}/gen-cpp2/${base}_types_compact.cpp"
     "${output_dir}/gen-cpp2/${base}_metadata.cpp")
   foreach(service IN LISTS ARG_SERVICES)
     list(
@@ -106,14 +108,7 @@ function(add_fbthrift_cpp_library LIB_NAME THRIFT_FILE)
     MAIN_DEPENDENCY "${THRIFT_FILE}"
     DEPENDS ${ARG_DEPENDS} "${FBTHRIFT_COMPILER}")
 
-  # Now emit the library rule to compile the sources
-  if(BUILD_SHARED_LIBS)
-    set(LIB_TYPE SHARED)
-  else()
-    set(LIB_TYPE STATIC)
-  endif()
-
-  add_library("${LIB_NAME}" ${LIB_TYPE} ${generated_sources})
+  add_library("${LIB_NAME}" STATIC ${generated_sources})
 
   target_include_directories(
     "${LIB_NAME}" PUBLIC "$<BUILD_INTERFACE:${CMAKE_BINARY_DIR}>"
