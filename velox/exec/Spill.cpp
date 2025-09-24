@@ -404,7 +404,7 @@ void FileSpillMergeStream::buildPrefixBuffer() {
   if (decoded_.empty()) {
     decoded_.resize(sortLayout_.numNormalizedKeys);
   }
-  for (auto i = 0; i < decoded_.size(); ++i) {
+  for (auto i = 0; i < sortLayout_.numNormalizedKeys; ++i) {
     decoded_[i].decode(*rowVector_->childAt(i), rows_);
   }
   // The small dataset also triggers the prefix buffer build process because
