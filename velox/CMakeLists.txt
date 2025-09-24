@@ -59,6 +59,10 @@ endif()
 add_subdirectory(functions) # depends on md5 (postgresql)
 add_subdirectory(connectors)
 
+if(${VELOX_BUILD_LOCAL_RUNNER_SERVICE})
+  add_subdirectory(runner)
+endif()
+
 if(${VELOX_ENABLE_EXEC})
   add_subdirectory(exec)
 endif()

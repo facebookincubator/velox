@@ -166,6 +166,7 @@ option(VELOX_BUILD_VECTOR_TEST_UTILS "Builds Velox vector test utilities" OFF)
 option(VELOX_BUILD_PYTHON_PACKAGE "Builds Velox Python bindings" OFF)
 option(VELOX_PYTHON_LEGACY_ONLY "Build only the pyvelox module" OFF)
 option(VELOX_BUILD_RUNNER "Builds velox runner" ON)
+option(VELOX_BUILD_LOCAL_RUNNER_SERVICE "Builds local runner service for fuzzing" ON)
 option(
   VELOX_ENABLE_INT64_BUILD_PARTITION_BOUND
   "make buildPartitionBounds_ a vector int64 instead of int32 to avoid integer overflow when the hashtable has billions of records"
@@ -617,7 +618,7 @@ if(${VELOX_BUILD_TESTING})
   velox_resolve_dependency(gRPC)
 endif()
 
-if(VELOX_ENABLE_REMOTE_FUNCTIONS)
+if(VELOX_ENABLE_REMOTE_FUNCTIONS OR VELOX_BUILD_LOCAL_RUNNER_SERVICE)
   # TODO: Move this to use resolve_dependency(). For some reason, FBThrift
   # requires clients to explicitly install fizz and wangle.
   find_package(fizz CONFIG REQUIRED)
