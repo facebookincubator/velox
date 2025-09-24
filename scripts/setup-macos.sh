@@ -41,7 +41,7 @@ export OS_CXXFLAGS
 export CMAKE_POLICY_VERSION_MINIMUM="3.5"
 
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
-MACOS_VELOX_DEPS="bison flex gflags glog googletest icu4c libevent libsodium lz4 openssl protobuf@21 simdjson snappy xz xxhash zstd"
+MACOS_VELOX_DEPS="bison double-conversion fast_float flex gflags glog googletest icu4c libevent libsodium lz4 openssl protobuf@21 simdjson snappy xz xxhash zstd"
 
 MACOS_BUILD_DEPS="ninja cmake"
 
@@ -187,9 +187,6 @@ function install_velox_deps {
   run_and_time install_fbthrift
   run_and_time install_xsimd
   run_and_time install_stemmer
-  # We allow arrow to bundle thrift on MacOS due to issues with bison and flex.
-  # See https://github.com/facebook/fbthrift/pull/317 for an explanation.
-  # run_and_time install_thrift
   run_and_time install_arrow
   run_and_time install_duckdb_clang
   run_and_time install_geos

@@ -44,36 +44,35 @@ std::shared_ptr<FileMetaData> ConstructFakeMetaData(
   for (auto& page_index_ranges : row_group_ranges) {
     facebook::velox::parquet::thrift::ColumnChunk col_chunk;
     if (page_index_ranges.column_index_offset != -1) {
-      col_chunk.__set_column_index_offset(
-          page_index_ranges.column_index_offset);
+      col_chunk.column_index_offset() = page_index_ranges.column_index_offset;
     }
     if (page_index_ranges.column_index_length != -1) {
-      col_chunk.__set_column_index_length(
-          static_cast<int32_t>(page_index_ranges.column_index_length));
+      col_chunk.column_index_length() =
+          static_cast<int32_t>(page_index_ranges.column_index_length);
     }
     if (page_index_ranges.offset_index_offset != -1) {
-      col_chunk.__set_offset_index_offset(
-          page_index_ranges.offset_index_offset);
+      col_chunk.offset_index_offset() = page_index_ranges.offset_index_offset;
     }
     if (page_index_ranges.offset_index_length != -1) {
-      col_chunk.__set_offset_index_length(
-          static_cast<int32_t>(page_index_ranges.offset_index_length));
+      col_chunk.offset_index_length() =
+          static_cast<int32_t>(page_index_ranges.offset_index_length);
     }
-    row_group.columns.push_back(col_chunk);
+    col_chunk.meta_data().ensure();
+    row_group.columns()->push_back(col_chunk);
   }
 
   facebook::velox::parquet::thrift::FileMetaData metadata;
-  metadata.row_groups.push_back(row_group);
+  metadata.row_groups()->push_back(row_group);
 
-  metadata.schema.emplace_back();
+  metadata.schema()->emplace_back();
   schema::NodeVector fields;
   for (size_t i = 0; i < row_group_ranges.size(); ++i) {
     fields.push_back(schema::Int64(std::to_string(i)));
-    metadata.schema.emplace_back();
-    fields.back()->ToParquet(&metadata.schema.back());
+    metadata.schema()->emplace_back();
+    fields.back()->ToParquet(&metadata.schema()->back());
   }
   schema::GroupNode::Make("schema", Repetition::REPEATED, fields)
-      ->ToParquet(&metadata.schema.front());
+      ->ToParquet(&metadata.schema()->front());
 
   auto sink = CreateOutputStream();
   ThriftSerializer{}.Serialize(&metadata, sink.get());

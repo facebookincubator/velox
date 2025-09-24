@@ -432,7 +432,7 @@ class PageReader {
   raw_vector<uint64_t> leafNulls_;
 
   // Encoding of current page.
-  thrift::Encoding::type encoding_;
+  thrift::Encoding encoding_;
 
   // Row number of first value in current page from start of ColumnChunk.
   int64_t rowOfPage_{0};
@@ -456,7 +456,7 @@ class PageReader {
 
   // Dictionary contents.
   dwio::common::DictionaryValues dictionary_;
-  thrift::Encoding::type dictionaryEncoding_;
+  thrift::Encoding dictionaryEncoding_;
 
   // Offset of current page's header from start of ColumnChunk.
   uint64_t pageStart_{0};

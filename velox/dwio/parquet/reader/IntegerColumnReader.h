@@ -56,8 +56,8 @@ class IntegerColumnReader : public dwio::common::SelectiveIntegerColumnReader {
   void getValues(const RowSet& rows, VectorPtr* result) override {
     auto& fileType = static_cast<const ParquetTypeWithId&>(*fileType_);
     auto logicalType = fileType.logicalType_;
-    if (logicalType.has_value() && logicalType.value().__isset.INTEGER &&
-        !logicalType.value().INTEGER.isSigned) {
+    if (logicalType && logicalType->INTEGER() &&
+        !*logicalType->INTEGER()->isSigned()) {
       getUnsignedIntValues(rows, requestedType_, result);
     } else {
       getIntValues(rows, requestedType_, result);

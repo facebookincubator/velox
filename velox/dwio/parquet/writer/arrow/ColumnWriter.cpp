@@ -329,9 +329,9 @@ class SerializedPageWriter : public PageWriter {
     }
 
     facebook::velox::parquet::thrift::DictionaryPageHeader dict_page_header;
-    dict_page_header.__set_num_values(page.num_values());
-    dict_page_header.__set_encoding(ToThrift(page.encoding()));
-    dict_page_header.__set_is_sorted(page.is_sorted());
+    dict_page_header.num_values() = page.num_values();
+    dict_page_header.encoding() = ToThrift(page.encoding());
+    dict_page_header.is_sorted() = page.is_sorted();
 
     const uint8_t* output_data_buffer = compressed_data->data();
     int32_t output_data_len = static_cast<int32_t>(compressed_data->size());
@@ -348,17 +348,16 @@ class SerializedPageWriter : public PageWriter {
     }
 
     facebook::velox::parquet::thrift::PageHeader page_header;
-    page_header.__set_type(
-        facebook::velox::parquet::thrift::PageType::DICTIONARY_PAGE);
-    page_header.__set_uncompressed_page_size(
-        static_cast<int32_t>(uncompressed_size));
-    page_header.__set_compressed_page_size(
-        static_cast<int32_t>(output_data_len));
-    page_header.__set_dictionary_page_header(dict_page_header);
+    page_header.type() =
+        facebook::velox::parquet::thrift::PageType::DICTIONARY_PAGE;
+    page_header.uncompressed_page_size() =
+        static_cast<int32_t>(uncompressed_size);
+    page_header.compressed_page_size() = static_cast<int32_t>(output_data_len);
+    page_header.dictionary_page_header() = dict_page_header;
     if (page_checksum_verification_) {
       uint32_t crc32 =
           internal::crc32(/* prev */ 0, output_data_buffer, output_data_len);
-      page_header.__set_crc(static_cast<int32_t>(crc32));
+      page_header.crc() = static_cast<int32_t>(crc32);
     }
 
     PARQUET_ASSIGN_OR_THROW(int64_t start_pos, sink_->Tell());
@@ -449,15 +448,14 @@ class SerializedPageWriter : public PageWriter {
     }
 
     facebook::velox::parquet::thrift::PageHeader page_header;
-    page_header.__set_uncompressed_page_size(
-        static_cast<int32_t>(uncompressed_size));
-    page_header.__set_compressed_page_size(
-        static_cast<int32_t>(output_data_len));
+    page_header.uncompressed_page_size() =
+        static_cast<int32_t>(uncompressed_size);
+    page_header.compressed_page_size() = static_cast<int32_t>(output_data_len);
 
     if (page_checksum_verification_) {
       uint32_t crc32 =
           internal::crc32(/* prev */ 0, output_data_buffer, output_data_len);
-      page_header.__set_crc(static_cast<int32_t>(crc32));
+      page_header.crc() = static_cast<int32_t>(crc32);
     }
 
     if (page.type() == PageType::DATA_PAGE) {
@@ -515,47 +513,46 @@ class SerializedPageWriter : public PageWriter {
       facebook::velox::parquet::thrift::PageHeader& page_header,
       const DataPageV1& page) {
     facebook::velox::parquet::thrift::DataPageHeader data_page_header;
-    data_page_header.__set_num_values(page.num_values());
-    data_page_header.__set_encoding(ToThrift(page.encoding()));
-    data_page_header.__set_definition_level_encoding(
-        ToThrift(page.definition_level_encoding()));
-    data_page_header.__set_repetition_level_encoding(
-        ToThrift(page.repetition_level_encoding()));
+    data_page_header.num_values() = page.num_values();
+    data_page_header.encoding() = ToThrift(page.encoding());
+    data_page_header.definition_level_encoding() =
+        ToThrift(page.definition_level_encoding());
+    data_page_header.repetition_level_encoding() =
+        ToThrift(page.repetition_level_encoding());
 
     // Write page statistics only when page index is not enabled.
     if (column_index_builder_ == nullptr) {
-      data_page_header.__set_statistics(ToThrift(page.statistics()));
+      data_page_header.statistics() = ToThrift(page.statistics());
     }
 
-    page_header.__set_type(
-        facebook::velox::parquet::thrift::PageType::DATA_PAGE);
-    page_header.__set_data_page_header(data_page_header);
+    page_header.type() = facebook::velox::parquet::thrift::PageType::DATA_PAGE;
+    page_header.data_page_header() = data_page_header;
   }
 
   void SetDataPageV2Header(
       facebook::velox::parquet::thrift::PageHeader& page_header,
       const DataPageV2& page) {
     facebook::velox::parquet::thrift::DataPageHeaderV2 data_page_header;
-    data_page_header.__set_num_values(page.num_values());
-    data_page_header.__set_num_nulls(page.num_nulls());
-    data_page_header.__set_num_rows(page.num_rows());
-    data_page_header.__set_encoding(ToThrift(page.encoding()));
+    data_page_header.num_values() = page.num_values();
+    data_page_header.num_nulls() = page.num_nulls();
+    data_page_header.num_rows() = page.num_rows();
+    data_page_header.encoding() = ToThrift(page.encoding());
 
-    data_page_header.__set_definition_levels_byte_length(
-        page.definition_levels_byte_length());
-    data_page_header.__set_repetition_levels_byte_length(
-        page.repetition_levels_byte_length());
+    data_page_header.definition_levels_byte_length() =
+        page.definition_levels_byte_length();
+    data_page_header.repetition_levels_byte_length() =
+        page.repetition_levels_byte_length();
 
-    data_page_header.__set_is_compressed(page.is_compressed());
+    data_page_header.is_compressed() = page.is_compressed();
 
     // Write page statistics only when page index is not enabled.
     if (column_index_builder_ == nullptr) {
-      data_page_header.__set_statistics(ToThrift(page.statistics()));
+      data_page_header.statistics() = ToThrift(page.statistics());
     }
 
-    page_header.__set_type(
-        facebook::velox::parquet::thrift::PageType::DATA_PAGE_V2);
-    page_header.__set_data_page_header_v2(data_page_header);
+    page_header.type() =
+        facebook::velox::parquet::thrift::PageType::DATA_PAGE_V2;
+    page_header.data_page_header_v2() = data_page_header;
   }
 
   /// \brief Finish page index builders and update the stream offset to adjust

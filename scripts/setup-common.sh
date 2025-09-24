@@ -90,6 +90,16 @@ function install_fbthrift {
   # shellcheck disable=SC2034
   EXTRA_PKG_CXXFLAGS=" -DFOLLY_CFG_NO_COROUTINES"
   wget_and_untar https://github.com/facebook/fbthrift/archive/refs/tags/"${FB_OS_VERSION}".tar.gz fbthrift
+  # We can't use "git apply" here because this is a patch for FBThrift
+  # not Velox. "git apply" in Velox repository tries applying a patch
+  # to Velox.
+  if command -v patch >/dev/null 2>&1; then
+    (cd "${DEPENDENCY_DIR}/fbthrift" &&
+      curl -L https://github.com/facebook/fbthrift/pull/675.patch | patch -p1)
+  else
+    echo "https://github.com/facebook/fbthrift/pull/675 patch isn't applied."
+    echo "You need the 'patch' command to apply it."
+  fi
   cmake_install_dir fbthrift -Denable_tests=OFF -DBUILD_TESTS=OFF -DBUILD_SHARED_LIBS=OFF
 }
 
@@ -212,7 +222,6 @@ function install_arrow {
 
   cmake_install_dir arrow/cpp \
     -DARROW_PARQUET=OFF \
-    -DARROW_WITH_THRIFT=ON \
     -DARROW_WITH_LZ4=ON \
     -DARROW_WITH_SNAPPY=ON \
     -DARROW_WITH_ZLIB=ON \
@@ -227,33 +236,6 @@ function install_arrow {
     -DARROW_BUILD_STATIC=ON \
     -DBOOST_ROOT="$INSTALL_PREFIX" \
     $EXTRA_ARROW_OPTIONS
-}
-
-function install_thrift {
-  wget_and_untar https://github.com/apache/thrift/archive/"${THRIFT_VERSION}".tar.gz thrift
-
-  EXTRA_CXXFLAGS="-O3 -fPIC"
-  # Clang will generate warnings and they need to be suppressed, otherwise the build will fail.
-  if [[ ${USE_CLANG} != "false" ]]; then
-    EXTRA_CXXFLAGS="-O3 -fPIC -Wno-inconsistent-missing-override -Wno-unused-but-set-variable"
-  fi
-
-  CXX_FLAGS="$EXTRA_CXXFLAGS" cmake_install_dir thrift \
-    -DBUILD_SHARED_LIBS=OFF \
-    -DBUILD_COMPILER=ON \
-    -DBUILD_EXAMPLES=OFF \
-    -DBUILD_TUTORIALS=OFF \
-    -DCMAKE_DEBUG_POSTFIX= \
-    -DWITH_AS3=OFF \
-    -DWITH_CPP=ON \
-    -DWITH_C_GLIB=OFF \
-    -DWITH_JAVA=OFF \
-    -DWITH_JAVASCRIPT=OFF \
-    -DWITH_LIBEVENT=OFF \
-    -DWITH_NODEJS=OFF \
-    -DWITH_PYTHON=OFF \
-    -DWITH_QT5=OFF \
-    -DWITH_ZLIB=OFF
 }
 
 function install_stemmer {

@@ -93,7 +93,6 @@ if(${VELOX_ENABLE_PARQUET})
     velox_vector_test_lib
     Folly::follybenchmark
     arrow
-    thrift
   )
 endif()
 
