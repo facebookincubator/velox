@@ -38,6 +38,5 @@ velox_link_libraries(
   fmt::fmt
   arrow
   Snappy::snappy
-  thrift
   zstd::zstd
 )
