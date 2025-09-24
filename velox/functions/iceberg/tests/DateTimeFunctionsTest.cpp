@@ -25,7 +25,7 @@ class DateTimeFunctionsTest
     : public functions::iceberg::test::IcebergFunctionBaseTest {};
 
 TEST_F(DateTimeFunctionsTest, years) {
-  const auto years = [&](const StringView& ts) {
+  const auto years = [&](const std::string& ts) {
     return evaluateOnce<int32_t>(
         "years(c0)", std::make_optional<Timestamp>(parseTimestamp(ts)));
   };
@@ -33,7 +33,7 @@ TEST_F(DateTimeFunctionsTest, years) {
   EXPECT_EQ(0, years("1970-01-01 00:00:01.000001"));
   EXPECT_EQ(-1, years("1969-12-31 23:59:58.999999"));
 
-  const auto yearsDate = [&](const StringView& date) {
+  const auto yearsDate = [&](const std::string& date) {
     return evaluateOnce<int32_t>(
         "years(c0)", DATE(), std::make_optional<int32_t>(parseDate(date)));
   };
@@ -43,7 +43,7 @@ TEST_F(DateTimeFunctionsTest, years) {
 }
 
 TEST_F(DateTimeFunctionsTest, months) {
-  const auto months = [&](const StringView& ts) {
+  const auto months = [&](const std::string& ts) {
     return evaluateOnce<int32_t>(
         "months(c0)", std::make_optional<Timestamp>(parseTimestamp(ts)));
   };
@@ -51,7 +51,7 @@ TEST_F(DateTimeFunctionsTest, months) {
   EXPECT_EQ(0, months("1970-01-01 00:00:01.000001"));
   EXPECT_EQ(-1, months("1969-12-31 23:59:58.999999"));
 
-  const auto monthsDate = [&](const StringView& date) {
+  const auto monthsDate = [&](const std::string& date) {
     return evaluateOnce<int32_t>(
         "months(c0)", DATE(), std::make_optional<int32_t>(parseDate(date)));
   };
@@ -61,12 +61,12 @@ TEST_F(DateTimeFunctionsTest, months) {
 }
 
 TEST_F(DateTimeFunctionsTest, days) {
-  const auto days = [&](const StringView& ts) {
+  const auto days = [&](const std::string& ts) {
     return evaluateOnce<int32_t>(
         "days(c0)", std::make_optional<Timestamp>(parseTimestamp(ts)));
   };
 
-  const auto daysDate = [&](const StringView& date) {
+  const auto daysDate = [&](const std::string& date) {
     return evaluateOnce<int32_t>(
         "days(c0)", DATE(), std::make_optional<int32_t>(parseDate(date)));
   };
@@ -76,7 +76,7 @@ TEST_F(DateTimeFunctionsTest, days) {
 }
 
 TEST_F(DateTimeFunctionsTest, hours) {
-  const auto hours = [&](const StringView& ts) {
+  const auto hours = [&](const std::string& ts) {
     return evaluateOnce<int32_t>(
         "hours(c0)", std::make_optional<Timestamp>(parseTimestamp(ts)));
   };
