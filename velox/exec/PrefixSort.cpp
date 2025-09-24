@@ -302,6 +302,10 @@ void PrefixSortLayout::optimizeSortKeysOrder(
       });
 }
 
+bool PrefixSortLayout::canComparePartKeys() const {
+  return hasNonNormalizedKey || nonPrefixSortStartIndex < numNormalizedKeys;
+}
+
 void VectorPrefixEncoder::encode(
     const PrefixSortLayout& sortLayout,
     const std::vector<TypePtr>& keyTypes,
@@ -472,8 +476,7 @@ void PrefixSort::sortInternal(
           RuntimeCounter(
               sortLayout_.numNormalizedKeys, RuntimeCounter::Unit::kNone));
     }
-    if (sortLayout_.hasNonNormalizedKey ||
-        sortLayout_.nonPrefixSortStartIndex < sortLayout_.numNormalizedKeys) {
+    if (sortLayout_.canComparePartKeys()) {
       sortRunner.quickSort(
           prefixBufferStart, prefixBufferEnd, [&](char* lhs, char* rhs) {
             return comparePartNormalizedKeys(lhs, rhs);

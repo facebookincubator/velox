@@ -91,6 +91,8 @@ struct PrefixSortLayout {
   static void optimizeSortKeysOrder(
       const RowTypePtr& rowType,
       std::vector<IdentityProjection>& keyColumnProjections);
+
+  bool canComparePartKeys() const;
 };
 
 class VectorPrefixEncoder {

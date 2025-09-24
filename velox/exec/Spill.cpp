@@ -73,7 +73,7 @@ int32_t SpillMergeStream::compare(const MergeStream& other) const {
     VELOX_DCHECK_EQ(
         sortLayout_.normalizedBufferSize,
         otherStream.sortLayout_.normalizedBufferSize);
-    if (!sortLayout_.hasNonNormalizedKey) {
+    if (!sortLayout_.canComparePartKeys()) {
       return compareAllNormalizedKeys(
           rawPrefixBuffer_ + index_ * sortLayout_.normalizedBufferSize,
           otherStream.rawPrefixBuffer_ +
