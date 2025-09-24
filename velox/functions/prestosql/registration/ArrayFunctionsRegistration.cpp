@@ -340,6 +340,11 @@ void registerArrayFunctions(const std::string& prefix) {
   registerArrayFrequencyFunctions<Timestamp>(prefix);
   registerArrayFrequencyFunctions<Date>(prefix);
   registerArrayFrequencyFunctions<Varchar>(prefix);
+  // Register generic nested array support for array_frequency
+  registerFunction<
+      ParameterBinder<ArrayFrequencyFunction, Array<Generic<T1>>>,
+      Map<Array<Generic<T1>>, int>,
+      Array<Array<Generic<T1>>>>({prefix + "array_frequency"});
 
   registerArrayNormalizeFunctions<int8_t>(prefix);
   registerArrayNormalizeFunctions<int16_t>(prefix);
