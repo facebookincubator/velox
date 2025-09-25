@@ -28,9 +28,9 @@
 namespace facebook::velox::functions {
 
 inline constexpr int64_t kSecondsInMinute = 60;
-inline constexpr int64_t kSecondsInHour = 3600;
+inline constexpr int64_t kMinutesInHour = 60;
+inline constexpr int64_t kSecondsInHour = kSecondsInMinute * kMinutesInHour;
 inline constexpr int64_t kSecondsInDay = 86'400;
-inline constexpr int64_t kSecondsInMonth = kSecondsInDay * 31;
 inline constexpr int64_t kDaysInWeek = 7;
 extern const folly::F14FastMap<std::string, int8_t> kDayOfWeekNames;
 

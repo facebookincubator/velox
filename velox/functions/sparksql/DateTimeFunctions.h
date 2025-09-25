@@ -1127,11 +1127,14 @@ struct MonthsBetweenFunction {
     const auto diff =
         monthDiff + static_cast<double>(secondsDiff) / kSecondsInMonth;
     if (roundOff) {
-      return round(diff * 1e8) / 1e8;
+      return round(diff * kRoundingPrecision) / kRoundingPrecision;
     }
     return diff;
   }
 
+  // Precision factor for 8 decimal places rounding.
+  static constexpr int64_t kRoundingPrecision = 1e8;
+  static constexpr int64_t kSecondsInMonth = kSecondsInDay * 31;
   const tz::TimeZone* sessionTimeZone_ = nullptr;
 };
 
