@@ -16,15 +16,15 @@
 
 #pragma once
 
-#include <string>
-#include <optional>
-#include <unordered_map>
 #include <folly/Conv.h>
+#include <optional>
+#include <string>
+#include <unordered_map>
 
 namespace facebook::velox::config {
 
 class IConfig {
-public:
+ public:
   template <typename T>
   std::optional<T> get(
       const std::string& key,
@@ -32,41 +32,33 @@ public:
                                                           auto value) {
         return folly::to<T>(value);
       }) const {
-    auto val = get(key);
-    if (val.has_value()) {
-      return toT(key, val.value());
+    if (auto val = access(key)) {
+      return toT(key, *val);
     }
     return std::nullopt;
   }
 
-  // In case key doesn't exist default value will materialize
-  // from defaultValue. For example:
-  // 
-  // std::string_view some_default_value = ...
-  // std::string value = config->get(some_key, some_default_value);
-  //
-  // You won't create default_value in case config has the value
-  template <typename T, typename U>
+  template <typename T>
   T get(
       const std::string& key,
-      const U& defaultValue,
+      const T& defaultValue,
       std::function<T(std::string, std::string)> toT = [](auto /* unused */,
                                                           auto value) {
         return folly::to<T>(value);
       }) const {
-    auto val = get(key);
-    if (val.has_value()) {
-      return toT(key, val.value());
+    if (auto val = access(key)) {
+      return toT(key, *val);
     }
-    return T(defaultValue);
+    return defaultValue;
   }
 
-  virtual std::unordered_map<std::string, std::string> rawConfigsCopy() const = 0;
+  virtual std::unordered_map<std::string, std::string> rawConfigsCopy()
+      const = 0;
 
   virtual ~IConfig() = default;
 
-private:
-  virtual std::optional<std::string> get(const std::string& key) const = 0;
+ private:
+  virtual std::optional<std::string> access(const std::string& key) const = 0;
 };
 
 } // namespace facebook::velox::config
