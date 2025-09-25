@@ -173,7 +173,13 @@ jobs:
           source scripts/setup-ubuntu.sh
           install_apt_deps
           install_faiss_deps
-          # We can remove this once we bundle FBThrift.
+          # We can remove them once we bundle FBThrift.
+          install_boost
+          install_fast_float
+          install_folly
+          install_fizz
+          install_wangle
+          install_mvfst
           install_fbthrift
 
       - name: Clear CCache Statistics
