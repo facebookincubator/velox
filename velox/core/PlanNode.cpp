@@ -3431,6 +3431,25 @@ void PlanNode::toSkeletonString(
   }
 }
 
+// static
+const PlanNode* PlanNode::findFirstNode(
+    const PlanNode* root,
+    const std::function<bool(const PlanNode* node)>& predicate) {
+  VELOX_CHECK_NOT_NULL(root);
+  if (predicate(root)) {
+    return root;
+  }
+
+  // Recursively go further through the sources.
+  for (const auto& source : root->sources()) {
+    const auto* ret = PlanNode::findFirstNode(source.get(), predicate);
+    if (ret != nullptr) {
+      return ret;
+    }
+  }
+  return nullptr;
+}
+
 namespace {
 void collectLeafPlanNodeIds(
     const PlanNode& planNode,
