@@ -521,7 +521,7 @@ velox_resolve_dependency(
 )
 
 set(
-  BOOST_INCLUDE_LIBRARIES
+  BOOST_COMPONENTS
   atomic
   context
   date_time
@@ -530,9 +530,19 @@ set(
   regex
   thread
 )
+set(
+  BOOST_OPTIONAL_COMPONENTS
+  system # Boost.System is header only since Boost 1.89
+)
 
 velox_set_source(Boost)
-velox_resolve_dependency(Boost 1.77.0 MODULE COMPONENTS ${BOOST_INCLUDE_LIBRARIES} OPTIONAL_COMPONENTS system)
+velox_resolve_dependency(
+  Boost
+  1.77.0
+  MODULE
+  COMPONENTS ${BOOST_COMPONENTS}
+  OPTIONAL_COMPONENTS ${BOOST_OPTIONAL_COMPONENTS}
+)
 if(NOT Boost_SYSTEM_FOUND)
   add_library(Boost::system ALIAS Boost::headers)
 endif()
