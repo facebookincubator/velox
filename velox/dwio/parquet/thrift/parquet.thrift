@@ -586,8 +586,7 @@ struct DataPageHeaderV2 {
   // this usage but generated C++ code doesn't use the default value when
   // "is_compressed" is missing. So our code must use
   // is_compressed().value_or(true).
-  // This annotation is available since FBThrift v2025.08.18.00.
-  // @thrift.AllowUnsafeOptionalCustomDefaultValue
+  @thrift.AllowUnsafeOptionalCustomDefaultValue
   7: optional bool is_compressed = true;
 
   /** optional statistics for the data in this page **/
