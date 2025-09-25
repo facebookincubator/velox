@@ -30,13 +30,6 @@ if(POLICY CMP0135)
   set(CMAKE_POLICY_DEFAULT_CMP0135 NEW)
 endif()
 
-# Don't use FindBoost.cmake:
-# https://cmake.org/cmake/help/latest/policy/CMP0167.html
-if(POLICY CMP0167)
-  cmake_policy(SET CMP0167 NEW)
-  set(CMAKE_POLICY_DEFAULT_CMP0167 NEW)
-endif()
-
 # Set the project name.
 project(velox)
 
@@ -540,7 +533,7 @@ set(
 )
 
 velox_set_source(Boost)
-velox_resolve_dependency(Boost 1.77.0 COMPONENTS ${BOOST_INCLUDE_LIBRARIES})
+velox_resolve_dependency(Boost 1.77.0 CONFIG COMPONENTS ${BOOST_INCLUDE_LIBRARIES})
 
 velox_set_source(gflags)
 
