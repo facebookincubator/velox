@@ -13,10 +13,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include <folly/hash/Hash.h>
 
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/base/Hash.h"
 #include "velox/common/base/SimdUtil.h"
 #include "velox/vector/BuilderTypeUtils.h"
 #include "velox/vector/ConstantVector.h"
@@ -84,7 +84,7 @@ std::unique_ptr<SimpleVector<uint64_t>> FlatVector<T>::hashAll() const {
       AlignedBuffer::allocate<uint64_t>(BaseVector::length_, BaseVector::pool_);
   auto hashData = hashBuffer->asMutable<uint64_t>();
 
-  folly::hasher<T> hasher;
+  velox::hasher<T> hasher;
   if (!BaseVector::rawNulls_) {
     VELOX_DCHECK_NOT_NULL(rawValues_);
     for (len_type i = 0; i < BaseVector::length_; ++i) {

@@ -456,6 +456,13 @@ void toAppend(const ::facebook::velox::Timestamp& value, T* result) {
   result->append(value.toString());
 }
 
+template <>
+struct hasher<::facebook::velox::Timestamp> {
+  uint64_t operator()(::facebook::velox::Timestamp value) const {
+    return facebook::velox::bits::hashMix(value.getSeconds(), value.getNanos());
+  }
+};
+
 } // namespace facebook::velox
 
 namespace std {

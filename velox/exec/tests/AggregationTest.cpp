@@ -1682,6 +1682,10 @@ TEST_F(AggregationTest, outputBatchSizeCheckWithSpill) {
   const int vectorSize = 20;
   const std::string strValue(1L << 20, 'a');
 
+  const int spillPartitions = 4;
+  const int spillPartitionBits = 2;
+  const int groupByDistinctKeys = numVectors * vectorSize;
+
   std::vector<RowVectorPtr> largeVectors;
   std::vector<RowVectorPtr> smallVectors;
   for (int i = 0; i < numVectors; ++i) {
@@ -1715,19 +1719,23 @@ TEST_F(AggregationTest, outputBatchSizeCheckWithSpill) {
           expectedNumOutputVectors);
     }
   } testSettings[] = {
-      {true, 1000, 1000'000, 1},
-      {true, 10, 1000'000, 10},
-      {true, 1, 1000'000, 100},
-      {true, 1, 1, 100},
-      {true, 10, 1, 100},
-      {true, 100, 1, 100},
-      {true, 1000, 1, 100},
-      {false, 1000, 1, 100},
-      {false, 1000, 1000'000'000, 1},
-      {false, 100, 1000'000'000, 1},
-      {false, 10, 1000'000'000, 10},
-      {false, 1, 1000'000'000, 100},
-      {false, 1, 1, 100}};
+      {true, 1000, 1000'000, spillPartitions},
+      // the magic number of 22 depends of how unique values are distributed
+      // among spill partitions
+      {true, 5, 1000'000, 22},
+      {true, 1, 1000'000, groupByDistinctKeys},
+      {true, 1, 1, groupByDistinctKeys},
+      {true, 10, 1, groupByDistinctKeys},
+      {true, 100, 1, groupByDistinctKeys},
+      {true, 1000, 1, groupByDistinctKeys},
+      {false, 1000, 1, groupByDistinctKeys},
+      {false, 1000, 1000'000'000, spillPartitions},
+      {false, 100, 1000'000'000, spillPartitions},
+      // the magic number of 22 depends of how unique values are distributed
+      // among spill partitions
+      {false, 5, 1000'000'000, 22},
+      {false, 1, 1000'000'000, groupByDistinctKeys},
+      {false, 1, 1, groupByDistinctKeys}};
 
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
@@ -1753,6 +1761,9 @@ TEST_F(AggregationTest, outputBatchSizeCheckWithSpill) {
             .config(
                 QueryConfig::kMaxOutputBatchRows,
                 std::to_string(testData.maxOutputRows))
+            .config(
+                QueryConfig::kSpillNumPartitionBits,
+                std::to_string(spillPartitionBits))
             .plan(PlanBuilder()
                       .values(inputs)
                       .singleAggregation({"c0"}, {"array_agg(c1)"})
@@ -1772,10 +1783,15 @@ TEST_F(AggregationTest, outputBatchSizeCheckWithSpillForOrderedAggr) {
   const int vectorSize = 20;
   const std::string strValue(1L << 20, 'a'); // 1MB
 
+  const int groupByDistinctKeys = 7;
+  // We expect two different keys to land in one spiller partition
+  const int spillerPartitions = 6;
+
   std::vector<RowVectorPtr> vectors;
   for (int i = 0; i < numVectors; ++i) {
     vectors.push_back(makeRowVector(
-        {makeFlatVector<int32_t>(vectorSize, [&](auto row) { return row % 5; }),
+        {makeFlatVector<int32_t>(
+             vectorSize, [&](auto row) { return row % groupByDistinctKeys; }),
          makeFlatVector<StringView>(vectorSize, [&](auto /*unused*/) {
            return StringView(strValue);
          })}));
@@ -1795,9 +1811,18 @@ TEST_F(AggregationTest, outputBatchSizeCheckWithSpillForOrderedAggr) {
           expectedNumOutputVectors);
     }
   } testSettings[] = {
-      {1, std::numeric_limits<uint32_t>::max(), 5},
-      {std::numeric_limits<vector_size_t>::max(), 15L << 20, 5},
-      {std::numeric_limits<vector_size_t>::max(), 35L << 20, 3}};
+      // with no size limit each spiller partition produces a single vector
+      {std::numeric_limits<vector_size_t>::max(),
+       std::numeric_limits<uint32_t>::max(),
+       spillerPartitions},
+      // At most 1 row per vector (spiller partition with two output rows now
+      // produces two vectors instead of one)
+      {1, std::numeric_limits<uint32_t>::max(), groupByDistinctKeys},
+      // At most 1MB per vector. The actual vector is expected to be larger than
+      // 1MB, because a single row cannot be split
+      {std::numeric_limits<vector_size_t>::max(),
+       1L << 20,
+       groupByDistinctKeys}};
 
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());

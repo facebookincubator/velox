@@ -1146,7 +1146,8 @@ TEST(TypeTest, providesCustomComparison) {
       test::BIGINT_TYPE_WITH_CUSTOM_COMPARISON()->providesCustomComparison());
   EXPECT_EQ(0, test::BIGINT_TYPE_WITH_CUSTOM_COMPARISON()->compare(0, 0));
   EXPECT_EQ(
-      8633297058295171728, test::BIGINT_TYPE_WITH_CUSTOM_COMPARISON()->hash(0));
+      velox::hasher<uint64_t>{}(0),
+      test::BIGINT_TYPE_WITH_CUSTOM_COMPARISON()->hash(0));
 
   // BIGINT does not provide custom comparison so calling compare or hash on
   // it should fail.

@@ -911,10 +911,8 @@ uint64_t hashOne(ByteInputStream& stream, const Type* type) {
   if constexpr (typeProvidesCustomComparison) {
     return static_cast<const CanProvideCustomComparisonType<Kind>*>(type)->hash(
         value);
-  } else if constexpr (std::is_floating_point_v<T>) {
-    return util::floating_point::NaNAwareHash<T>()(value);
   } else {
-    return folly::hasher<T>()(value);
+    return velox::hasher<T>()(value);
   }
 }
 
@@ -924,7 +922,7 @@ template <
     std::enable_if_t<Kind == TypeKind::VARCHAR, int32_t> = 0>
 uint64_t hashOne(ByteInputStream& stream, const Type* /*type*/) {
   std::string storage;
-  return folly::hasher<StringView>()(readStringView(stream, storage));
+  return velox::hasher<StringView>()(readStringView(stream, storage));
 }
 
 template <
@@ -933,7 +931,7 @@ template <
     std::enable_if_t<Kind == TypeKind::VARBINARY, int32_t> = 0>
 uint64_t hashOne(ByteInputStream& stream, const Type* /*type*/) {
   std::string storage;
-  return folly::hasher<StringView>()(readStringView(stream, storage));
+  return velox::hasher<StringView>()(readStringView(stream, storage));
 }
 
 template <bool elementTypeProvidesCustomComparison, typename TFunc>

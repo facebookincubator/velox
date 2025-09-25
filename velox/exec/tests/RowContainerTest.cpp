@@ -1915,7 +1915,7 @@ TEST_F(RowContainerTest, unknown) {
 TEST_F(RowContainerTest, nans) {
   const static auto kNaN = std::numeric_limits<double>::quiet_NaN();
   const static auto kSNaN = std::numeric_limits<double>::signaling_NaN();
-  static const auto kNaNHash = folly::hasher<double>{}(kNaN);
+  static const auto kNaNHash = velox::hasher<double>{}(kNaN);
   std::vector<TypePtr> types = {DOUBLE()};
   auto rowContainer = std::make_unique<RowContainer>(types, pool_.get());
 

@@ -18,6 +18,7 @@
 #include <cfloat>
 #include "folly/json.h"
 #include "velox/common/base/BitUtil.h"
+#include "velox/common/base/Hash.h"
 #include "velox/common/encode/Base64.h"
 #include "velox/type/DecimalUtil.h"
 #include "velox/type/FloatingPointUtil.h"
@@ -881,22 +882,24 @@ bool Variant::equals(const Variant& other) const {
   return VELOX_DYNAMIC_TYPE_DISPATCH_ALL(equals, kind_, other);
 }
 
+// For opaque values, we hash the shared_ptr<void> which will hash the
+// underlying pointer.
+template <>
+struct hasher<facebook::velox::detail::OpaqueCapsule> {
+  uint64_t operator()(const facebook::velox::detail::OpaqueCapsule& key) const {
+    return hasher<std::shared_ptr<void>>{}(key.obj);
+  }
+};
+
 template <TypeKind KIND>
 uint64_t Variant::hash() const {
   using namespace facebook::velox::util::floating_point;
-  using T = typename TypeTraits<KIND>::NativeType;
-
   if constexpr (kindCanProvideCustomComparison<KIND>::value) {
     if (usesCustomComparison_) {
       return customComparisonType<KIND>()->hash(value<KIND>());
     }
   }
-
-  if constexpr (std::is_floating_point_v<T>) {
-    return NaNAwareHash<T>{}(value<KIND>());
-  }
-
-  return folly::Hash{}(value<KIND>());
+  return velox::Hash{}(value<KIND>());
 }
 
 template <>
@@ -923,7 +926,7 @@ uint64_t Variant::hash<TypeKind::ROW>() const {
 template <>
 uint64_t Variant::hash<TypeKind::TIMESTAMP>() const {
   auto timestampValue = value<TypeKind::TIMESTAMP>();
-  return folly::Hash{}(timestampValue.getSeconds(), timestampValue.getNanos());
+  return velox::Hash{}(timestampValue.getSeconds(), timestampValue.getNanos());
 }
 
 template <>
@@ -1238,16 +1241,3 @@ bool Variant::isTypeCompatible(const TypePtr& type) const {
 }
 
 } // namespace facebook::velox
-
-namespace folly {
-
-// For opaque values, we hash the shared_ptr<void> which will hash the
-// underlying pointer.
-template <>
-struct hasher<facebook::velox::detail::OpaqueCapsule> {
-  size_t operator()(const facebook::velox::detail::OpaqueCapsule& key) const {
-    return Hash()(key.obj);
-  }
-};
-
-} // namespace folly
