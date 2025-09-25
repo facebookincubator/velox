@@ -297,7 +297,8 @@ bool canBeEvaluated(const core::TypedExprPtr& expr) {
       const auto* call = expr->asUnchecked<core::CallTypedExpr>();
       const auto name =
           stripPrefix(call->name(), CudfOptions::getInstance().prefix());
-      if (supportedOps.count(name) || binaryOps.count(name) || unaryOps.count(name)) {
+      if (supportedOps.count(name) || binaryOps.count(name) ||
+          unaryOps.count(name)) {
         return std::all_of(
             call->inputs().begin(), call->inputs().end(), canBeEvaluated);
       }
@@ -316,7 +317,6 @@ bool canBeEvaluated(const core::TypedExprPtr& expr) {
       return false;
   }
 }
-
 
 } // namespace detail
 

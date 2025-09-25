@@ -58,15 +58,18 @@ bool isAnyOf(const Base* p) {
   return ((dynamic_cast<const Deriveds*>(p) != nullptr) || ...);
 }
 
-std::vector<core::TypedExprPtr> exprsAndProjection(const exec::FilterProject& op, const std::shared_ptr<const core::ProjectNode>& project) {
+std::vector<core::TypedExprPtr> exprsAndProjection(
+    const exec::FilterProject& op,
+    const std::shared_ptr<const core::ProjectNode>& project) {
   std::vector<core::TypedExprPtr> allExprs;
   if (op.filterNode()) {
     allExprs.push_back(op.filterNode()->filter());
   }
-  // identityProjections is always supported in cudf, so it is safe to add it to allExprs.
+  // identityProjections is always supported in cudf, so it is safe to add it to
+  // allExprs.
   if (project) {
     for (const auto& proj : project->projections()) {
-        allExprs.push_back(proj);
+      allExprs.push_back(proj);
     }
   }
   return allExprs;
@@ -271,7 +274,8 @@ bool CompileState::compile(bool force_replace) {
       auto filterProjectOp = dynamic_cast<exec::FilterProject*>(oper);
       auto projectPlanNode = std::dynamic_pointer_cast<const core::ProjectNode>(
           getPlanNode(filterProjectOp->planNodeId()));
-      // When filter and project both exist, the FilterProject planNodeId id is project node id, so we need FilterProject to report the FilterNode.
+      // When filter and project both exist, the FilterProject planNodeId id is
+      // project node id, so we need FilterProject to report the FilterNode.
       auto filterPlanNode = filterProjectOp->filterNode();
       VELOX_CHECK(projectPlanNode != nullptr or filterPlanNode != nullptr);
       replaceOp.push_back(std::make_unique<CudfFilterProject>(
