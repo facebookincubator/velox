@@ -627,7 +627,7 @@ cudf::ast::expression const& AstContext::pushExprToTree(
         addPrecomputeInstructionOnSide(0, 0, "cardinality", "", node);
 
     return tree.push(Operation{Op::CAST_TO_INT64, colRef});
-  else if (name == "round") {
+  } else if (name == "round") {
     auto node = CudfExpressionNode::create(expr);
     return addPrecomputeInstructionOnSide(0, 0, "round", "", node);
   } else if (name == "split") {
@@ -721,23 +721,32 @@ class CardinalityFunction : public CudfFunction {
 class RoundFunction : public CudfFunction {
  public:
   explicit RoundFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
-    VELOX_CHECK(expr->inputs().size() == 1, "round expects 1 input");
+    const auto argSize = expr->inputs().size();
+    VELOX_CHECK(argSize >= 1 && argSize <=2, "round expects 1 or 2 inputs");
+    auto stream = cudf::get_default_stream();
+    auto mr = cudf::get_current_device_resource_ref();
+    if (argSize == 2) {
+      auto scaleExpr = std::dynamic_pointer_cast<exec::ConstantExpr>(expr->inputs()[1]);
+      VELOX_CHECK_NOT_NULL(scaleExpr, "round scale must be a constant");
+      scale_ = scaleExpr->value()->as<SimpleVector<int32_t>>()->valueAt(0);
+    }
   }
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
-
-    auto result = cudf::round(
+    VELOX_CHECK(!inputColumns.empty(), "round expects first column is not literal");
+    return cudf::round_decimal(
         asView(inputColumns[0]),
-        /*decimal_places=*/0,
+        scale_,
         cudf::rounding_method::HALF_UP,
         stream,
-        mr);
-    return result;
+        mr);;
   }
 
+  private:
+    int32_t scale_ = 0;
 };
 
 
