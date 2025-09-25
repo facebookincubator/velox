@@ -68,7 +68,7 @@ set(
   uuid
   variant
 )
-list(APPEND BOOST_INCLUDE_LIBRARIES ${BOOST_HEADER_ONLY})
+list(APPEND BOOST_INCLUDE_LIBRARIES system ${BOOST_HEADER_ONLY})
 
 # The `headers` target is not created by Boost cmake and leads to a warning
 list(REMOVE_ITEM BOOST_INCLUDE_LIBRARIES headers)
