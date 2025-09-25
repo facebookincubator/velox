@@ -108,7 +108,7 @@ jobs:
 
       - name: Build
         run: |
-          cmake --build _build/$BUILD_TYPE -j $NJOBS
+          cmake --build _build/$BUILD_TYPE -j $NJOBS --verbose
           ccache -s
 
       - uses: apache/infrastructure-actions/stash/save@3354c1565d4b0e335b78a76aedd82153a9e144d4
