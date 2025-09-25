@@ -327,6 +327,10 @@ class SpillMerger : public std::enable_shared_from_this<SpillMerger> {
 
   void scheduleAsyncSpillFileStreamReads();
 
+  void setError(const std::exception_ptr& exception);
+
+  bool hasError() const;
+
   folly::Executor* const executor_;
   const std::shared_ptr<folly::Synchronized<common::SpillStats>> spillStats_;
   const std::shared_ptr<memory::MemoryPool> pool_;
@@ -334,7 +338,8 @@ class SpillMerger : public std::enable_shared_from_this<SpillMerger> {
   std::vector<std::shared_ptr<MergeSource>> sources_;
   std::vector<std::unique_ptr<BatchStream>> batchStreams_;
   std::unique_ptr<SourceMerger> sourceMerger_;
-  folly::Synchronized<std::exception_ptr> error_;
+  std::exception_ptr exception_ = nullptr;
+  mutable std::timed_mutex mutex_;
 };
 
 // LocalMerge merges its source's output into a single stream of
