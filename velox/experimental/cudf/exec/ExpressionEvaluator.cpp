@@ -335,6 +335,7 @@ const std::unordered_set<std::string> supportedOps = {
     "in",
     "cast",
     "switch",
+    "if",
     "year",
     "length",
     "substr",
