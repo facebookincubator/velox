@@ -116,6 +116,24 @@ TEST_F(PlanNodeTest, findNodeById) {
   ASSERT_EQ(PlanNode::findNodeById(project.get(), "4"), nullptr);
 }
 
+TEST_F(PlanNodeTest, is) {
+  auto values = std::make_shared<ValuesNode>("1", std::vector<RowVectorPtr>{});
+  auto project = std::make_shared<ProjectNode>(
+      "2",
+      std::vector<std::string>{"a", "b"},
+      std::vector<TypedExprPtr>{
+          std::make_shared<CallTypedExpr>(DOUBLE(), "rand"),
+          std::make_shared<CallTypedExpr>(DOUBLE(), "rand"),
+      },
+      values);
+
+  ASSERT_TRUE(values->is<ValuesNode>());
+  ASSERT_FALSE(values->is<ProjectNode>());
+
+  ASSERT_FALSE(project->is<ValuesNode>());
+  ASSERT_TRUE(project->is<ProjectNode>());
+}
+
 TEST_F(PlanNodeTest, sortOrder) {
   struct {
     SortOrder order1;
