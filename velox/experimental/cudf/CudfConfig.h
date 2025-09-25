@@ -16,33 +16,27 @@
 
 #pragma once
 
-#include "velox/exec/Driver.h"
-#include "velox/exec/Operator.h"
+#include <string>
 
 namespace facebook::velox::cudf_velox {
 
-class CompileState {
- public:
-  CompileState(const exec::DriverFactory& driverFactory, exec::Driver& driver)
-      : driverFactory_(driverFactory), driver_(driver) {}
+struct CudfConfig {
+  /// Singleton CudfConfig instance.
+  /// Clients must set the configs below before invoking registerCudf().
+  static CudfConfig& getInstance();
 
-  exec::Driver& driver() {
-    return driver_;
-  }
-
-  // Replaces sequences of Operators in the Driver given at construction with
-  // cuDF equivalents. Returns true if the Driver was changed.
-  bool compile(bool force_replace);
-
-  const exec::DriverFactory& driverFactory_;
-  exec::Driver& driver_;
+  /// Enable debug printing.
+  bool debugEnabled{false};
+  /// Memory resource for cuDF.
+  /// Possible values are (cuda, pool, async, arena, managed, managed_pool).
+  std::string memoryResource{"async"};
+  /// Register all the functions with the functionNamePrefix.
+  std::string functionNamePrefix;
+  /// The initial percent of GPU memory to allocate for memory resource for one
+  /// thread.
+  int memoryPercent{50};
+  /// Force replacement of operators. Throws an error if a replacement fails.
+  bool forceReplace{false};
 };
-
-/// Registers adapter to add cuDF operators to Drivers.
-void registerCudf();
-void unregisterCudf();
-
-/// Returns true if cuDF is registered.
-bool cudfIsRegistered();
 
 } // namespace facebook::velox::cudf_velox
