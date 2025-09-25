@@ -803,7 +803,7 @@ TEST_F(DecimalArithmeticTest, div) {
       std::nullopt);
 }
 
-TEST_F(DecimalArithmeticTest, checked_div) {
+TEST_F(DecimalArithmeticTest, checkedDiv) {
   EXPECT_EQ(
       (checked_div<int64_t, int64_t>(DECIMAL(7, 1), DECIMAL(8, 2), 10, 200)),
       0L);
