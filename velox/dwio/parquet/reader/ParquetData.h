@@ -231,7 +231,7 @@ class ParquetData : public dwio::common::FormatData {
   bool hasNonDictionaryEncodedPages(const std::vector<thrift::PageEncodingStats>& stats);
 
   /// Read dictionary page directly for row group filtering (like Presto's approach)
-  dwio::common::DictionaryValues readDictionaryPageForFiltering(
+  std::unique_ptr<dwio::common::DictionaryValues> readDictionaryPageForFiltering(
       uint32_t rowGroupId,
       const ColumnChunkMetaDataPtr& columnChunk);
 
@@ -258,18 +258,6 @@ class ParquetData : public dwio::common::FormatData {
   // Track current row group for shadow mode validation
   mutable int64_t currentRowGroupId_{-1};
   std::unique_ptr<PageReader> reader_;
-
-  // Temporary dictionary storage for row group filtering
-  mutable dwio::common::DictionaryValues tempDictionary_;
-
-  // Shadow mode tracking for dictionary filtering validation
-  struct ShadowModeExclusion {
-    std::string filePath;
-    std::string filterString;
-    std::string columnName;
-    uint32_t columnIndex;
-  };
-  mutable std::unordered_map<uint32_t, ShadowModeExclusion> shadowModeExclusions_;
 
   // Nulls derived from leaf repdefs for non-leaf readers.
   BufferPtr presetNulls_;

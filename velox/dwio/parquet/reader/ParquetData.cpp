@@ -254,21 +254,18 @@ bool ParquetData::testFilterAgainstDictionary(
     return true; // Conservative include for IsNull filters
   }
 
-  const dwio::common::DictionaryValues* finalDictionary = nullptr;
-  auto dictionaryValues = readDictionaryPageForFiltering(rowGroupId, columnChunk);
-  if (!dictionaryValues.values || dictionaryValues.numValues == 0) {
+  auto dictionaryPtr = readDictionaryPageForFiltering(rowGroupId, columnChunk);
+  if (!dictionaryPtr->values || dictionaryPtr->numValues == 0) {
     return true;
   }
 
-  tempDictionary_ = std::move(dictionaryValues);
-  finalDictionary = &tempDictionary_;
-
-  // Step 2: Test filter directly against dictionary values using dict() pattern
-  auto numValues = finalDictionary->numValues;
+  // Use the dictionary directly - no temp storage needed
+  auto numValues = dictionaryPtr->numValues;
+  const void* dictPtr = dictionaryPtr->values->as<void>();
 
   // Test if any dictionary value passes the filter
   auto testDict = [&]<typename T>() {
-    const T* dict = reinterpret_cast<const T*>(finalDictionary->values->as<void>());
+    const T* dict = reinterpret_cast<const T*>(dictPtr);
 
     // For larger dictionaries, we could use SIMD testValues() for better performance
     // For now, use simple scalar approach which is sufficient for typical dictionary sizes
@@ -300,14 +297,14 @@ bool ParquetData::testFilterAgainstDictionary(
 }
 
 // Read dictionary page directly for row group filtering (like Presto's dictionaryPredicatesMatch)
-dwio::common::DictionaryValues ParquetData::readDictionaryPageForFiltering(
+std::unique_ptr<dwio::common::DictionaryValues> ParquetData::readDictionaryPageForFiltering(
     uint32_t rowGroupId,
     const ColumnChunkMetaDataPtr& columnChunk) {
 
   // Create input stream for the column chunk
   auto inputStream = getInputStream(rowGroupId, columnChunk);
   if (!inputStream) {
-    return dwio::common::DictionaryValues{};
+    return std::make_unique<dwio::common::DictionaryValues>();
   }
 
   // Create PageReader - it will automatically handle dictionary loading
@@ -327,12 +324,12 @@ dwio::common::DictionaryValues ParquetData::readDictionaryPageForFiltering(
   if (pageHeader.type == thrift::PageType::DICTIONARY_PAGE) {
     pageReader->prepareDictionary(pageHeader);
   } else {
-    return dwio::common::DictionaryValues{};
+    return std::make_unique<dwio::common::DictionaryValues>();
   }
 
   // Get the dictionary data directly from PageReader
   const auto& dict = pageReader->dictionary();
-  return dict;
+  return std::make_unique<dwio::common::DictionaryValues>(dict);
 }
 // Helper method to get input stream for column chunk
 std::unique_ptr<dwio::common::SeekableInputStream> ParquetData::getInputStream(
