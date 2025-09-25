@@ -30,6 +30,13 @@ if(POLICY CMP0135)
   set(CMAKE_POLICY_DEFAULT_CMP0135 NEW)
 endif()
 
+# Don't use FindBoost.cmake:
+# https://cmake.org/cmake/help/latest/policy/CMP0167.html
+if(POLICY CMP0167)
+  cmake_policy(SET CMP0167 NEW)
+  set(CMAKE_POLICY_DEFAULT_CMP0167 NEW)
+endif()
+
 # Set the project name.
 project(velox)
 
