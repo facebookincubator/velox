@@ -262,20 +262,15 @@ class PlanNode : public ISerializable {
   /// Recursively checks the node tree for a first node that satisfy a given
   /// condition. Returns pointer to the node if found, nullptr if not.
   static const PlanNode* findFirstNode(
-      const PlanNode* node,
-      const std::function<bool(const PlanNode* node)>& predicate) {
-    if (predicate(node)) {
-      return node;
-    }
+      const PlanNode* root,
+      const std::function<bool(const PlanNode* node)>& predicate);
 
-    // Recursively go further through the sources.
-    for (const auto& source : node->sources()) {
-      const auto* ret = PlanNode::findFirstNode(source.get(), predicate);
-      if (ret != nullptr) {
-        return ret;
-      }
-    }
-    return nullptr;
+  /// @return PlanNode with matching ID or nullptr if not found.
+  static const PlanNode* findNodeById(
+      const PlanNode* root,
+      const PlanNodeId& id) {
+    return findFirstNode(
+        root, [&](const auto* node) { return node->id() == id; });
   }
 
  private:
