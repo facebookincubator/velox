@@ -533,7 +533,7 @@ set(
 )
 
 velox_set_source(Boost)
-velox_resolve_dependency(Boost 1.77.0 CONFIG COMPONENTS ${BOOST_INCLUDE_LIBRARIES})
+velox_resolve_dependency(Boost 1.77.0 MODULE COMPONENTS ${BOOST_INCLUDE_LIBRARIES})
 
 velox_set_source(gflags)
 
