@@ -38,6 +38,7 @@
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/ClassName.h"
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/base/Hash.h"
 #include "velox/common/base/Macros.h"
 #include "velox/common/serialization/Serializable.h"
 #include "velox/type/HugeInt.h"
@@ -2511,6 +2512,13 @@ std::string stringifyTruncatedElementList(
     size_t size,
     const std::function<void(std::stringstream&, size_t)>& stringifyElement,
     size_t limit = 5);
+
+template <>
+struct hasher<::facebook::velox::UnknownValue> {
+  uint64_t operator()(::facebook::velox::UnknownValue /* value */) const {
+    return 0;
+  }
+};
 
 } // namespace facebook::velox
 

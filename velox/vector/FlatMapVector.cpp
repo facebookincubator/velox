@@ -15,7 +15,6 @@
  */
 
 #include "velox/vector/FlatMapVector.h"
-#include <folly/hash/Hash.h>
 #include "velox/vector/FlatVector.h"
 
 namespace facebook::velox {
@@ -40,7 +39,7 @@ std::optional<column_index_t> getKeyChannelImpl(
       "Incompatible vector type for flat map vector keys: {}",
       distinctKeys->toString());
 
-  uint64_t hash = folly::hasher<T>{}(keyValue);
+  uint64_t hash = velox::hasher<T>{}(keyValue);
   auto range = keyToChannel.equal_range(hash);
 
   // Key hash wasn't found on the map.

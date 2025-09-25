@@ -651,12 +651,7 @@ VELOX_TYPED_TEST_SUITE(SimpleVectorUnaryTypedTest, SimpleTypes);
 
 TYPED_TEST(SimpleVectorUnaryTypedTest, hashAll) {
   LOG(INFO) << "hashAll: " << type_name<TypeParam>();
-  std::function<size_t(TypeParam)> hasher;
-  if constexpr (std::is_floating_point_v<TypeParam>) {
-    hasher = util::floating_point::NaNAwareHash<TypeParam>{};
-  } else {
-    hasher = folly::hasher<TypeParam>{};
-  }
+  std::function<size_t(TypeParam)> hasher = velox::hasher<TypeParam>{};
   auto hashTest = [&hasher](SimpleVector<TypeParam>* vector) {
     auto hashes = vector->hashAll();
     for (size_t i = 0; i < vector->size(); ++i) {

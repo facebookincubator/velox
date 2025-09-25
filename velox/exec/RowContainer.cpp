@@ -20,7 +20,6 @@
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/ContainerRowSerde.h"
 #include "velox/exec/Operator.h"
-#include "velox/type/FloatingPointUtil.h"
 
 namespace facebook::velox::exec {
 namespace {
@@ -891,7 +890,7 @@ void RowContainer::hashTyped(
       uint64_t hash;
       if constexpr (Kind == TypeKind::VARCHAR || Kind == TypeKind::VARBINARY) {
         hash =
-            folly::hasher<StringView>()(HashStringAllocator::contiguousString(
+            velox::hasher<StringView>()(HashStringAllocator::contiguousString(
                 valueAt<StringView>(row, offset), storage));
       } else if constexpr (
           Kind == TypeKind::ROW || Kind == TypeKind::ARRAY ||
@@ -901,10 +900,8 @@ void RowContainer::hashTyped(
       } else if constexpr (typeProvidesCustomComparison) {
         hash = static_cast<const CanProvideCustomComparisonType<Kind>*>(type)
                    ->hash(valueAt<T>(row, offset));
-      } else if constexpr (std::is_floating_point_v<T>) {
-        hash = util::floating_point::NaNAwareHash<T>()(valueAt<T>(row, offset));
       } else {
-        hash = folly::hasher<T>()(valueAt<T>(row, offset));
+        hash = velox::hasher<T>()(valueAt<T>(row, offset));
       }
       result[i] = mix ? bits::hashMix(result[i], hash) : hash;
     }

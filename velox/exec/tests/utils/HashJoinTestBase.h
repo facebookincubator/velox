@@ -621,6 +621,7 @@ class HashJoinBuilder {
     } else if (!spillDirectory_.empty()) {
       builder.spillDirectory(spillDirectory_);
       config(core::QueryConfig::kSpillEnabled, "true");
+      config(core::QueryConfig::kMaxSpillLevel, std::to_string(maxSpillLevel));
       config(core::QueryConfig::kJoinSpillEnabled, "true");
     } else {
       config(core::QueryConfig::kSpillEnabled, "false");

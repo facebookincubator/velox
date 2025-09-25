@@ -19,7 +19,6 @@
 #include "velox/common/base/Portability.h"
 #include "velox/common/base/SimdUtil.h"
 #include "velox/common/memory/HashStringAllocator.h"
-#include "velox/type/FloatingPointUtil.h"
 
 namespace facebook::velox::exec {
 
@@ -74,10 +73,8 @@ uint64_t hashOne(DecodedVector& decoded, vector_size_t index) {
       return static_cast<const CanProvideCustomComparisonType<Kind>*>(
                  decoded.base()->type().get())
           ->hash(value);
-    } else if constexpr (std::is_floating_point_v<T>) {
-      return util::floating_point::NaNAwareHash<T>()(value);
     } else {
-      return folly::hasher<T>()(value);
+      return velox::hasher<T>()(value);
     }
   }
 }
