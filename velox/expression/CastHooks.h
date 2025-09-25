@@ -76,5 +76,34 @@ class CastHooks {
 
   /// Converts boolean to timestamp type.
   virtual Expected<Timestamp> castBooleanToTimestamp(bool seconds) const = 0;
+
+  /// Converts decimal to string type.
+  template <typename FromNativeType>
+  size_t castFromDecimalToString(
+      FromNativeType unscaledValue,
+      int32_t scale,
+      int32_t maxSize,
+      char* const startPosition) const {
+    if constexpr (std::is_same_v<FromNativeType, int64_t>) {
+      return applyCastFromDecimalToString(
+          static_cast<int64_t>(unscaledValue), scale, maxSize, startPosition);
+    } else {
+      return applyCastFromDecimalToString(
+          static_cast<int128_t>(unscaledValue), scale, maxSize, startPosition);
+    }
+  };
+
+ protected:
+  virtual size_t applyCastFromDecimalToString(
+      int64_t unscaledValue,
+      int32_t scale,
+      int32_t maxSize,
+      char* const startPosition) const = 0;
+
+  virtual size_t applyCastFromDecimalToString(
+      int128_t unscaledValue,
+      int32_t scale,
+      int32_t maxSize,
+      char* const startPosition) const = 0;
 };
 } // namespace facebook::velox::exec
