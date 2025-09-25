@@ -174,6 +174,7 @@ jobs:
           install_apt_deps
           install_faiss_deps
           # We can remove them once we bundle FBThrift.
+          install_fmt
           install_boost
           install_fast_float
           install_folly
