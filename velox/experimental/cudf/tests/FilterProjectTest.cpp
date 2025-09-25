@@ -636,6 +636,19 @@ TEST_F(CudfFilterProjectTest, mixedInOperation) {
   testMixedInOperation(vectors);
 }
 
+TEST_F(CudfFilterProjectTest, round) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(DOUBLE(), 2, batchSize);
+  createDuckDbTable(vectors);
+
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .project({"round(c0) as c1"})
+                  .planNode();
+
+  assertQuery(plan, "SELECT round(c0) FROM tmp");
+}
+
 TEST_F(CudfFilterProjectTest, simpleFilter) {
   vector_size_t batchSize = 1000;
   auto vectors = makeVectors(rowType_, 2, batchSize);
