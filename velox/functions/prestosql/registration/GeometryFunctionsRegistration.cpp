@@ -35,6 +35,12 @@ void registerConstructors(const std::string& prefix) {
       {{prefix + "ST_AsBinary"}});
   registerFunction<StPointFunction, Geometry, double, double>(
       {{prefix + "ST_Point"}});
+  registerFunction<StLineFromTextFunction, Geometry, Varchar>(
+      {{prefix + "ST_LineFromText"}});
+  registerFunction<StLineStringFunction, Geometry, Array<Geometry>>(
+      {{prefix + "ST_LineString"}});
+  registerFunction<StMultiPointFunction, Geometry, Array<Geometry>>(
+      {{prefix + "ST_MultiPoint"}});
 }
 
 void registerRelationPredicates(const std::string& prefix) {
