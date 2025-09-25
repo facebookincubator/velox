@@ -82,6 +82,10 @@ class FilterProject : public Operator {
   /// tracking is enabled via query config.
   OperatorStats stats(bool clear) override;
 
+  std::shared_ptr<const core::FilterNode> filterNode() const {
+    return filter_;
+  }
+
  private:
   // Evaluate filter on all rows. Return number of rows that passed the filter.
   // Populate filterEvalCtx_.selectedBits and selectedIndices with the indices
