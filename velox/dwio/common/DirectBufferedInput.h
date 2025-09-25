@@ -103,7 +103,7 @@ class DirectCoalescedLoad : public cache::CoalescedLoad {
 
   void cancel() override {
     folly::SemiFuture<bool> waitFuture(false);
-    if (!loadOrFuture(&waitFuture)) {
+    if (state() == State::kLoading && !loadOrFuture(&waitFuture)) {
       waitFuture.wait();
     }
     for (auto& request : requests_) {
