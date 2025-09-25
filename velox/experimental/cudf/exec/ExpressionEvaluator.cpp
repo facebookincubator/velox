@@ -344,7 +344,6 @@ struct AstContext {
       const std::shared_ptr<CudfExpressionNode>& node = nullptr);
   cudf::ast::expression const& multipleInputsToPairWise(
       const std::shared_ptr<velox::exec::Expr>& expr);
-  static bool canBeEvaluated(const std::shared_ptr<velox::exec::Expr>& expr);
 };
 
 // Create tree from Expr
