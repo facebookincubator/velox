@@ -21,17 +21,21 @@
 
 namespace facebook::velox::core {
 
-/// A simple wrapper around velox::ConfigBase. Defines constants for query
+/// A simple wrapper around velox::IConfig. Defines constants for query
 /// config properties and accessor methods.
 /// Create per query context. Does not have a singleton instance.
 /// Does not allow altering properties on the fly. Only at creation time.
 class QueryConfig {
  public:
-  QueryConfig();
-
   explicit QueryConfig(std::unordered_map<std::string, std::string> values);
 
-  explicit QueryConfig(std::shared_ptr<const config::IConfig> config);
+  // This is needed only to resolve correct ctor for cases like
+  // QueryConfig{{}} or QueryConfig({}).
+  struct ConfigTag {};
+
+  explicit QueryConfig(
+      ConfigTag /*tag*/,
+      std::shared_ptr<const config::IConfig> config);
 
   /// Maximum memory that a query can use on a single host.
   static constexpr const char* kQueryMaxMemoryPerNode =
@@ -1275,9 +1279,9 @@ class QueryConfig {
     return get<std::string>(kClientTags, "");
   }
 
-  template <typename T, typename U>
-  T get(const std::string& key, const U& defaultValue) const {
-    return config_->get<T, U>(key, defaultValue);
+  template <typename T>
+  T get(const std::string& key, const T& defaultValue) const {
+    return config_->get<T>(key, defaultValue);
   }
 
   template <typename T>
@@ -1285,7 +1289,7 @@ class QueryConfig {
     return config_->get<T>(key);
   }
 
-  const std::shared_ptr<const config::IConfig>& getImpl() const {
+  const std::shared_ptr<const config::IConfig>& config() const {
     return config_;
   }
 

@@ -112,6 +112,8 @@ class ConfigBase : public IConfig {
                                   : entry.defaultVal;
   }
 
+  using IConfig::get;
+
   bool valueExists(const std::string& key) const;
 
   const std::unordered_map<std::string, std::string>& rawConfigs() const;
@@ -123,7 +125,7 @@ class ConfigBase : public IConfig {
   std::unordered_map<std::string, std::string> configs_;
 
  private:
-  std::optional<std::string> get(const std::string& key) const final;
+  std::optional<std::string> access(const std::string& key) const final;
 
   const bool mutable_;
 };
