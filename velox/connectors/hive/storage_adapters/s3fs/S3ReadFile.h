@@ -27,7 +27,10 @@ namespace facebook::velox::filesystems {
 /// Implementation of s3 read file.
 class S3ReadFile : public ReadFile {
  public:
-  S3ReadFile(std::string_view path, Aws::S3::S3Client* client);
+  S3ReadFile(
+      std::string_view path,
+      Aws::S3::S3Client* client,
+      uint32_t maxClientRetries);
 
   ~S3ReadFile() override;
 
