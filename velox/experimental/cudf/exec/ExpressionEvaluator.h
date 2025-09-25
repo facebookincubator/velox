@@ -183,8 +183,7 @@ class ExpressionEvaluator {
 
   void close();
 
-  static bool canBeEvaluated(
-      const std::vector<core::TypedExprPtr>& exprs);
+  static bool canBeEvaluated(const std::vector<core::TypedExprPtr>& exprs);
 
  private:
   std::vector<cudf::ast::tree> exprAst_;

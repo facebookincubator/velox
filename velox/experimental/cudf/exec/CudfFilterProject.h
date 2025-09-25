@@ -80,7 +80,7 @@ class CudfFilterProject : public exec::Operator, public NvtxHelper {
   Export exprsAndProjection() const {
     return Export{exprs_.get(), hasFilter_, &resultProjections_};
   }
-  
+
   bool allInputProcessed();
 
   // If true exprs_[0] is a filter and the other expressions are projections

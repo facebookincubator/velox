@@ -159,7 +159,6 @@ void CudfFilterProject::initialize() {
 }
 
 void CudfFilterProject::initializeFilterProject() {
-
   Operator::initialize();
 
   std::vector<core::TypedExprPtr> allExprs;
@@ -210,9 +209,9 @@ void CudfFilterProject::initializeFilterProject() {
     }
   }
 
-  // remove filter_ and project_ reset because it needs to be used in cudf initialize.
+  // remove filter_ and project_ reset because it needs to be used in cudf
+  // initialize.
 }
-
 
 void CudfFilterProject::addInput(RowVectorPtr input) {
   input_ = std::move(input);
