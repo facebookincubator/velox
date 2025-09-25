@@ -543,7 +543,7 @@ velox_resolve_dependency(
   COMPONENTS ${BOOST_COMPONENTS}
   OPTIONAL_COMPONENTS ${BOOST_OPTIONAL_COMPONENTS}
 )
-if(NOT Boost_SYSTEM_FOUND)
+if(NOT TARGET Boost::system)
   add_library(Boost::system ALIAS Boost::headers)
 endif()
 
