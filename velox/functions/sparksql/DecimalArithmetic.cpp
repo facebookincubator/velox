@@ -509,6 +509,10 @@ struct DecimalIntegralDivideBase {
     bRescale_ = std::max<int8_t>(0, aScale - bScale);
   }
 
+  // Computes the quotient of 'a' and 'b' and stores it in 'out'. Returns false
+  // if the result exceeds rPrecision_ or if overflow occurs during scaling.
+  // Following Spark's behavior, the result is truncated to int64_t and may be
+  // inaccurate if it exceeds int64_t range.
   template <typename A, typename B>
   bool computeQuotient(int64_t& out, const A& a, const B& b) {
     // Determine sign and convert to absolute values.
