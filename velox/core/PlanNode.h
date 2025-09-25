@@ -259,6 +259,16 @@ class PlanNode : public ISerializable {
   /// The name of the plan node, used in toString.
   virtual std::string_view name() const = 0;
 
+  template <typename T>
+  bool is() const {
+    return dynamic_cast<const T*>(this) != nullptr;
+  }
+
+  template <typename T>
+  const T* as() const {
+    return dynamic_cast<const T*>(this);
+  }
+
   /// Recursively checks the node tree for a first node that satisfy a given
   /// condition. Returns pointer to the node if found, nullptr if not.
   static const PlanNode* findFirstNode(
