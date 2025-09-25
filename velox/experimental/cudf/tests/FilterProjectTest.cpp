@@ -647,17 +647,17 @@ TEST_F(CudfFilterProjectTest, round) {
                   .planNode();
   AssertQueryBuilder(plan).assertResults(data);
   plan = PlanBuilder()
-                  .setParseOptions(options)
-                  .values({data})
-                  .project({"round(c0) as c1"})
-                  .planNode();
+             .setParseOptions(options)
+             .values({data})
+             .project({"round(c0) as c1"})
+             .planNode();
   AssertQueryBuilder(plan).assertResults(data);
 
   plan = PlanBuilder()
-                  .setParseOptions(options)
-                  .values({data})
-                  .project({"round(c0, -3) as c1"})
-                  .planNode();
+             .setParseOptions(options)
+             .values({data})
+             .project({"round(c0, -3) as c1"})
+             .planNode();
   auto expected = makeRowVector({makeFlatVector<int64_t>({4000, 456789000})});
   AssertQueryBuilder(plan).assertResults(expected);
 }
