@@ -82,7 +82,7 @@ class FilterProject : public Operator {
   /// tracking is enabled via query config.
   OperatorStats stats(bool clear) override;
 
-  std::shared_ptr<const core::FilterNode> filterNode() const {
+  const std::shared_ptr<const core::FilterNode>& filterNode() const {
     return filter_;
   }
 
