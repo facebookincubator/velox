@@ -25,16 +25,18 @@ struct CudfConfig {
   /// Clients must set the configs below before invoking registerCudf().
   static CudfConfig& getInstance();
 
+  /// Enable cudf by default.
+  /// Clients can disable here and enable it via the QueryConfig as well.
+  bool enabled{true};
   /// Enable debug printing.
   bool debugEnabled{false};
   /// Memory resource for cuDF.
   /// Possible values are (cuda, pool, async, arena, managed, managed_pool).
   std::string memoryResource{"async"};
+  /// The initial percent of GPU memory to allocate for memory resource.
+  int memoryPercent{50};
   /// Register all the functions with the functionNamePrefix.
   std::string functionNamePrefix;
-  /// The initial percent of GPU memory to allocate for memory resource for one
-  /// thread.
-  int memoryPercent{50};
   /// Force replacement of operators. Throws an error if a replacement fails.
   bool forceReplace{false};
 };

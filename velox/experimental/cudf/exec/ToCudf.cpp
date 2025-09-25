@@ -353,7 +353,8 @@ struct CudfDriverAdapter {
 
   // Call operator needed by DriverAdapter
   bool operator()(const exec::DriverFactory& factory, exec::Driver& driver) {
-    if (!driver.driverCtx()->queryConfig().get<bool>(kCudfEnabled, true)) {
+    if (!driver.driverCtx()->queryConfig().get<bool>(
+            kCudfEnabled, CudfConfig::getInstance().enabled)) {
       return false;
     }
     auto state = CompileState(factory, driver);
