@@ -19,7 +19,7 @@
 # The versions should match the declared versions in this file.
 
 # Build dependencies versions.
-FB_OS_VERSION="v2025.04.28.00"
+FB_OS_VERSION="v2025.09.22.00"
 FMT_VERSION="10.1.1"
 BOOST_VERSION="boost-1.84.0"
 ARROW_VERSION="15.0.0"
