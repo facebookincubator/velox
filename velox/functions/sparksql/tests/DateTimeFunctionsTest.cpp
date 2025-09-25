@@ -1840,6 +1840,12 @@ TEST_F(DateTimeFunctionsTest, monthsBetween) {
   EXPECT_EQ(
       11,
       monthsBetween(
+          parseTimestamp("1997-02-28 10:30:00"),
+          parseTimestamp("1996-03-28 11:00:00"),
+          true));
+  EXPECT_EQ(
+      11,
+      monthsBetween(
           parseTimestamp("1997-02-21 10:30:00"),
           parseTimestamp("1996-03-21 11:00:00"),
           true));
