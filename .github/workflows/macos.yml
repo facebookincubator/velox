@@ -73,6 +73,7 @@ jobs:
           # We can use Homebrew's FBThrift once Homebrew's Folly
           # enables 128bit integer support. We need to fix
           # https://github.com/facebook/folly/issues/1666 for it.
+          install_boost
           install_folly
           install_fizz
           install_wangle
