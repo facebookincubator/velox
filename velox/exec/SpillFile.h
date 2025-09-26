@@ -17,6 +17,7 @@
 #pragma once
 
 #include <folly/container/F14Set.h>
+#include <optional>
 
 #include "velox/common/base/SpillConfig.h"
 #include "velox/common/base/SpillStats.h"
@@ -34,9 +35,16 @@ using SpillSortKey = std::pair<column_index_t, CompareFlags>;
 
 /// Represents a spill file for writing the serialized spilled data into a disk
 /// file.
-class SpillWriteFile {
+class SerializedPageFile {
  public:
-  static std::unique_ptr<SpillWriteFile> create(
+  /// FileInfo struct containing the essential file information.
+  struct FileInfo {
+    uint32_t id;
+    std::string path;
+    uint64_t size;
+  };
+
+  static std::unique_ptr<SerializedPageFile> create(
       uint32_t id,
       const std::string& pathPrefix,
       const std::string& fileCreateConfig);
@@ -45,11 +53,14 @@ class SpillWriteFile {
     return id_;
   }
 
-  /// Returns the file size in bytes.
-  uint64_t size() const;
+  uint64_t size();
 
-  const std::string& path() const {
+  std::string path() const {
     return path_;
+  }
+
+  FileInfo fileInfo() const {
+    return {id_, path_, (file_ != nullptr ? file_->size() : size_)};
   }
 
   uint64_t write(std::unique_ptr<folly::IOBuf> iobuf);
@@ -64,19 +75,18 @@ class SpillWriteFile {
  private:
   static inline std::atomic<int32_t> ordinalCounter_{0};
 
-  SpillWriteFile(
+  SerializedPageFile(
       uint32_t id,
       const std::string& pathPrefix,
       const std::string& fileCreateConfig);
 
-  // The spill file id which is monotonically increasing and unique for each
-  // associated spill partition.
   const uint32_t id_;
+
   const std::string path_;
 
-  std::unique_ptr<WriteFile> file_;
-  // Byte size of the backing file. Set when finishing writing.
   uint64_t size_{0};
+
+  std::unique_ptr<WriteFile> file_;
 };
 
 /// Records info of a finished spill file which is used for read.
@@ -90,12 +100,131 @@ struct SpillFileInfo {
   common::CompressionKind compressionKind;
 };
 
+/// Used to write 'RowVector' as serialized page data to a sequence of files.
+class SerializedPageWriter {
+ public:
+  /// 'compressionKind' specifies the compression to use. 'pathPrefix' is a
+  /// file path prefix. 'targetFileSize' is the target byte size of a single
+  /// file. 'writeBufferSize' specifies the size limit of the buffered data
+  /// before write to file. 'fileCreateConfig' specifies the file layout on
+  /// remote storage which is storage system specific. 'serdeOptions' specifies
+  /// the serialization options to use. 'serde' specifies the VectorSerde
+  /// instance to use. 'pool' is used for buffering.
+  SerializedPageWriter(
+      const std::string& pathPrefix,
+      uint64_t targetFileSize,
+      uint64_t writeBufferSize,
+      const std::string& fileCreateConfig,
+      std::unique_ptr<VectorSerde::Options> serdeOptions,
+      VectorSerde* serde,
+      memory::MemoryPool* pool);
+
+  virtual ~SerializedPageWriter() = default;
+
+  /// Adds 'rows' for the positions in 'indices' into 'this'.
+  /// Returns the size to write.
+  uint64_t write(
+      const RowVectorPtr& rows,
+      const folly::Range<IndexRange*>& indices);
+
+  /// Closes the current output file if any. Subsequent calls to write will
+  /// start a new one.
+  void finishFile();
+
+  /// Returns the number of current finished files.
+  size_t numFinishedFiles() const;
+
+  /// Finishes this file writer and returns the written file info.
+  /// NOTE: we don't allow write to a file writer after finish.
+  std::vector<SerializedPageFile::FileInfo> finish();
+
+ protected:
+  // Invoked upon each flush.
+  virtual void updateAppendStats(
+      uint64_t /* numRows */,
+      uint64_t /* serializationTimeNs */) {}
+
+  // Invoked upon each write to disk.
+  virtual void updateWriteStats(
+      uint64_t /* writtenBytes */,
+      uint64_t /* flushTimeNs */,
+      uint64_t /* fileWriteTimeNs */) {}
+
+  // Invoked upon each file close.
+  virtual void updateFileStats(const SerializedPageFile::FileInfo& /* file */) {
+  }
+
+  FOLLY_ALWAYS_INLINE void checkNotFinished() const {
+    VELOX_CHECK(!finished_, "SerializedPageWriter has finished");
+  }
+
+  // Returns an open file for write. If there is no open file, then
+  // the function creates a new one. If the current open file exceeds the
+  // target file size limit, then it first closes the current one and then
+  // creates a new one. 'currentFile_' points to the current open file.
+  SerializedPageFile* ensureFile();
+
+  // Closes the current open file pointed by 'currentFile_'.
+  void closeFile();
+
+  // Writes data from 'batch_' to the current output file. Returns the actual
+  // written size.
+  uint64_t flush();
+
+  const std::string pathPrefix_;
+  const uint64_t targetFileSize_;
+  const uint64_t writeBufferSize_;
+  const std::string fileCreateConfig_;
+
+  const std::unique_ptr<VectorSerde::Options> serdeOptions_;
+  memory::MemoryPool* const pool_;
+  VectorSerde* const serde_;
+
+  bool finished_{false};
+  uint32_t nextFileId_{0};
+  std::unique_ptr<VectorStreamGroup> batch_;
+  std::unique_ptr<SerializedPageFile> currentFile_;
+  std::vector<SerializedPageFile::FileInfo> finishedFiles_;
+};
+
+/// Used to read the serialized page data from a single file generated by
+/// 'SerializedPageWriter'.
+class SerializedPageFileReader {
+ public:
+  SerializedPageFileReader(
+      const std::string& path,
+      uint64_t bufferSize,
+      const RowTypePtr& type,
+      VectorSerde* serde,
+      std::unique_ptr<VectorSerde::Options> readOptions,
+      memory::MemoryPool* pool);
+
+  virtual ~SerializedPageFileReader() = default;
+
+  bool nextBatch(RowVectorPtr& rowVector);
+
+ protected:
+  virtual void updateFinalStats() {};
+
+  virtual void updateSerializationTimeStats(uint64_t /* timeNs */){};
+
+  const std::unique_ptr<VectorSerde::Options> readOptions_;
+
+  memory::MemoryPool* const pool_;
+
+  VectorSerde* const serde_;
+
+  const RowTypePtr type_;
+
+  std::unique_ptr<common::FileInputStream> input_;
+};
+
 using SpillFiles = std::vector<SpillFileInfo>;
 
 /// Used to write the spilled data to a sequence of files for one partition. If
 /// data is sorted, each file is sorted. The globally sorted order is produced
 /// by merging the constituent files.
-class SpillWriter {
+class SpillWriter : public SerializedPageWriter {
  public:
   /// 'type' is a RowType describing the content. 'numSortKeys' is the number
   /// of leading columns on which the data is sorted. 'path' is a file path
@@ -120,25 +249,9 @@ class SpillWriter {
       memory::MemoryPool* pool,
       folly::Synchronized<common::SpillStats>* stats);
 
-  /// Adds 'rows' for the positions in 'indices' into 'this'. The indices
-  /// must produce a view where the rows are sorted if sorting is desired.
-  /// Consecutive calls must have sorted data so that the first row of the
-  /// next call is not less than the last row of the previous call.
-  /// Returns the size to write.
-  uint64_t write(
-      const RowVectorPtr& rows,
-      const folly::Range<IndexRange*>& indices);
-
-  /// Closes the current output file if any. Subsequent calls to write will
-  /// start a new one.
-  void finishFile();
-
-  /// Returns the number of current finished files.
-  size_t numFinishedFiles() const;
-
   /// Finishes this file writer and returns the written spill files info.
   ///
-  /// NOTE: we don't allow write to a spill writer after t
+  /// NOTE: we don't allow write to a spill writer after finish
   SpillFiles finish();
 
   std::vector<std::string> testingSpilledFilePaths() const;
@@ -146,55 +259,28 @@ class SpillWriter {
   std::vector<uint32_t> testingSpilledFileIds() const;
 
  private:
-  FOLLY_ALWAYS_INLINE void checkNotFinished() const {
-    VELOX_CHECK(!finished_, "SpillWriter has finished");
-  }
-
-  // Returns an open spill file for write. If there is no open spill file, then
-  // the function creates a new one. If the current open spill file exceeds the
-  // target file size limit, then it first closes the current one and then
-  // creates a new one. 'currentFile_' points to the current open spill file.
-  SpillWriteFile* ensureFile();
-
-  // Closes the current open spill file pointed by 'currentFile_'.
-  void closeFile();
-
-  // Writes data from 'batch_' to the current output file. Returns the actual
-  // written size.
-  uint64_t flush();
-
   // Invoked to increment the number of spilled files and the file size.
-  void updateSpilledFileStats(uint64_t fileSize);
+  void updateFileStats(const SerializedPageFile::FileInfo& fileInfo) override;
 
   // Invoked to update the number of spilled rows.
-  void updateAppendStats(uint64_t numRows, uint64_t serializationTimeUs);
+  void updateAppendStats(uint64_t numRows, uint64_t serializationTimeUs)
+      override;
 
   // Invoked to update the disk write stats.
   void updateWriteStats(
       uint64_t spilledBytes,
       uint64_t flushTimeUs,
-      uint64_t writeTimeUs);
+      uint64_t writeTimeUs) override;
 
   const RowTypePtr type_;
-  const std::vector<SpillSortKey> sortingKeys_;
-  const common::CompressionKind compressionKind_;
-  const std::string pathPrefix_;
-  const uint64_t targetFileSize_;
-  const uint64_t writeBufferSize_;
-  const std::string fileCreateConfig_;
 
-  // Updates the aggregated spill bytes of this query, and throws if exceeds
-  // the max spill bytes limit.
-  const common::UpdateAndCheckSpillLimitCB updateAndCheckSpillLimitCb_;
-  memory::MemoryPool* const pool_;
-  VectorSerde* const serde_;
+  const std::vector<SpillSortKey> sortingKeys_;
+
   folly::Synchronized<common::SpillStats>* const stats_;
 
-  bool finished_{false};
-  uint32_t nextFileId_{0};
-  std::unique_ptr<VectorStreamGroup> batch_;
-  std::unique_ptr<SpillWriteFile> currentFile_;
-  SpillFiles finishedFiles_;
+  // Updates the aggregated bytes of this query, and throws if exceeds
+  // the max bytes limit.
+  const common::UpdateAndCheckSpillLimitCB updateAndCheckLimitCb_;
 };
 
 /// Represents a spill file for read which turns the serialized spilled data
@@ -204,7 +290,7 @@ class SpillWriter {
 /// needs to remove the unused spill files at some point later. For example, a
 /// query Task deletes all the generated spill files in one operation using
 /// rmdir() call.
-class SpillReadFile {
+class SpillReadFile : public SerializedPageFileReader {
  public:
   static std::unique_ptr<SpillReadFile> create(
       const SpillFileInfo& fileInfo,
@@ -219,8 +305,6 @@ class SpillReadFile {
   const std::vector<SpillSortKey>& sortingKeys() const {
     return sortingKeys_;
   }
-
-  bool nextBatch(RowVectorPtr& rowVector);
 
   /// Returns the file size in bytes.
   uint64_t size() const {
@@ -243,24 +327,23 @@ class SpillReadFile {
       memory::MemoryPool* pool,
       folly::Synchronized<common::SpillStats>* stats);
 
-  // Invoked to record spill read stats at the end of read input.
-  void recordSpillStats();
+  // Records spill read stats at the end of read input.
+  void updateFinalStats() override;
+
+  void updateSerializationTimeStats(uint64_t timeNs) override;
 
   // The spill file id which is monotonically increasing and unique for each
   // associated spill partition.
   const uint32_t id_;
+
   const std::string path_;
+
   // The file size in bytes.
   const uint64_t size_;
-  // The data type of spilled data.
-  const RowTypePtr type_;
-  const std::vector<SpillSortKey> sortingKeys_;
-  const common::CompressionKind compressionKind_;
-  const serializer::presto::PrestoVectorSerde::PrestoOptions readOptions_;
-  memory::MemoryPool* const pool_;
-  VectorSerde* const serde_;
-  folly::Synchronized<common::SpillStats>* const stats_;
 
-  std::unique_ptr<common::FileInputStream> input_;
+  const std::vector<SpillSortKey> sortingKeys_;
+
+  folly::Synchronized<common::SpillStats>* const stats_;
 };
+
 } // namespace facebook::velox::exec
