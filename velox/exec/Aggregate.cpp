@@ -296,9 +296,8 @@ std::unique_ptr<Aggregate> Aggregate::create(
     const TypePtr& resultType,
     const core::QueryConfig& config) {
   // Validate output types.
-  const auto [finalType, intermediateType] =
-      resolveAggregateFunction(name, argTypes);
   if (isPartialOutput(step)) {
+    const auto& intermediateType = resolveIntermediateType(name, argTypes);
     VELOX_CHECK(
         resultType->equivalent(*intermediateType),
         "Intermediate type mismatch. Aggregate function: '{}', expected: {}, actual: {}",
@@ -306,12 +305,24 @@ std::unique_ptr<Aggregate> Aggregate::create(
         intermediateType->toString(),
         resultType->toString());
   } else {
-    VELOX_CHECK(
-        resultType->equivalent(*finalType),
-        "Final type mismatch. Aggregate function: '{}', expected: {}, actual: {}",
-        name,
-        finalType->toString(),
-        resultType->toString());
+    TypePtr finalType = nullptr;
+    try {
+      finalType = resolveResultType(name, argTypes);
+    } catch (const VeloxException& e) {
+      // If the result type cannot be resolved, it could be because the
+      // aggregate function is being used as part of an internal step of an
+      // aggregate operator rather than as a standalone function at the SQL
+      // level. In such cases, the caller should explicitly specify the result
+      // type.
+    }
+    if (finalType) {
+      VELOX_CHECK(
+          resultType->equivalent(*finalType),
+          "Final type mismatch. Aggregate function: '{}', expected: {}, actual: {}",
+          name,
+          finalType->toString(),
+          resultType->toString());
+    }
   }
   // Lookup the function in the new registry first.
   if (auto func = getAggregateFunctionEntry(name)) {
