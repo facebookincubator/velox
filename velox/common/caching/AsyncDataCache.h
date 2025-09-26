@@ -496,6 +496,10 @@ struct CacheStats {
   int64_t largePadding{0};
   /// Total number of entries.
   int32_t numEntries{0};
+  /// Total number of tiny entries.
+  int32_t numTinyEntries{0};
+  /// Total number of large entries.
+  int32_t numLargeEntries{0};
   /// Number of entries that do not cache anything.
   int32_t numEmptyEntries{0};
   /// Number of entries pinned for shared access.
