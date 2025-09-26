@@ -23,8 +23,8 @@ namespace facebook::velox::filesystems {
 std::vector<CacheKey> extractCacheKeyFromConfig(
     const config::ConfigBase& config) {
   std::vector<CacheKey> cacheKeys;
+  constexpr std::string_view authTypePrefix{kAzureAccountAuthType};
   for (const auto& [key, value] : config.rawConfigs()) {
-    constexpr std::string_view authTypePrefix{kAzureAccountAuthType};
     if (key.find(authTypePrefix) == 0) {
       std::string_view skey = key;
       // Extract the accountName after "fs.azure.account.auth.type.".
@@ -35,7 +35,7 @@ std::vector<CacheKey> extractCacheKeyFromConfig(
           std::string_view::npos,
           "Invalid Azure account auth type key: {}",
           key);
-      auto accountName = std::string(remaining.substr(0, dot));
+      std::string_view accountName = std::string(remaining.substr(0, dot));
       cacheKeys.emplace_back(CacheKey{accountName, value});
     }
   }

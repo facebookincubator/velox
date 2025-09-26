@@ -31,6 +31,9 @@ class ConfigBase;
 struct CacheKey {
   std::string accountName;
   std::string authType;
+
+  CacheKey(std::string_view accountName, std::string_view authType)
+      : accountName(accountName), authType(authType) {}
 };
 
 inline bool isAbfsFile(const std::string_view filename) {
