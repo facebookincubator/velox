@@ -70,6 +70,14 @@ jobs:
           source scripts/setup-macos.sh
           install_build_prerequisites
           install_velox_deps_from_brew
+          # We can use Homebrew's FBThrift once Homebrew's Folly
+          # enables 128bit integer support. We need to fix
+          # https://github.com/facebook/folly/issues/1666 for it.
+          install_folly
+          install_fizz
+          install_wangle
+          install_mvfst
+          install_fbthrift
           # Needed for faiss to find BLAS
           install_faiss_deps
           install_double_conversion
