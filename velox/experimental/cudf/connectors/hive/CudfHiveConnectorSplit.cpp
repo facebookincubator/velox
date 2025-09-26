@@ -19,6 +19,7 @@
 #include <cudf/io/types.hpp>
 
 #include <string>
+#include <unordered_map>
 
 namespace facebook::velox::cudf_velox::connector::hive {
 
@@ -41,23 +42,40 @@ std::string CudfHiveConnectorSplit::getFileName() const {
   return i == std::string::npos ? filePath : filePath.substr(i + 1);
 }
 
+uint64_t CudfHiveConnectorSplit::size() const {
+  return length;
+}
+
 CudfHiveConnectorSplit::CudfHiveConnectorSplit(
     const std::string& connectorId,
     const std::string& _filePath,
-    int64_t _splitWeight)
+    uint64_t _start,
+    uint64_t _length,
+    int64_t _splitWeight,
+    const std::unordered_map<std::string, std::string>& _infoColumns)
     : facebook::velox::connector::ConnectorSplit(connectorId, _splitWeight),
       filePath(stripFilePrefix(_filePath)),
-      cudfSourceInfo(std::make_unique<cudf::io::source_info>(filePath)) {}
+      start(_start),
+      length(_length),
+      cudfSourceInfo(std::make_unique<cudf::io::source_info>(filePath)),
+      infoColumns(_infoColumns) {}
 
 // static
 std::shared_ptr<CudfHiveConnectorSplit> CudfHiveConnectorSplit::create(
     const folly::dynamic& obj) {
   const auto connectorId = obj["connectorId"].asString();
-  const auto splitWeight = obj["splitWeight"].asInt();
   const auto filePath = obj["filePath"].asString();
+  const auto start = static_cast<uint64_t>(obj["start"].asInt());
+  const auto length = static_cast<uint64_t>(obj["length"].asInt());
+  const auto splitWeight = obj["splitWeight"].asInt();
+
+  std::unordered_map<std::string, std::string> infoColumns;
+  for (const auto& [key, value] : obj["infoColumns"].items()) {
+    infoColumns[key.asString()] = value.asString();
+  }
 
   return std::make_shared<CudfHiveConnectorSplit>(
-      connectorId, filePath, splitWeight);
+      connectorId, filePath, start, length, splitWeight, infoColumns);
 }
 
 } // namespace facebook::velox::cudf_velox::connector::hive
