@@ -51,6 +51,7 @@ extensions = [
     "pr",
     "spark",
     "iceberg",
+    "delta",
     "sphinx.ext.autodoc",
     "sphinx.ext.doctest",
     "sphinx.ext.mathjax",
