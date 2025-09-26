@@ -91,8 +91,6 @@ function install_fbthrift {
   EXTRA_PKG_CXXFLAGS=" -DFOLLY_CFG_NO_COROUTINES"
   wget_and_untar https://github.com/facebook/fbthrift/archive/refs/tags/"${FB_OS_VERSION}".tar.gz fbthrift
   cmake_install_dir fbthrift -Denable_tests=OFF -DBUILD_TESTS=OFF -DBUILD_SHARED_LIBS=OFF
-  echo "DEBUG: "
-  cat "${INSTALL_PREFIX}/lib/cmake/fbthrift/FBThriftTargets.cmake"
 }
 
 function install_duckdb {
