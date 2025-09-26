@@ -871,8 +871,10 @@ void exportFlat(
     case TypeKind::REAL:
     case TypeKind::DOUBLE:
     case TypeKind::TIMESTAMP:
-    case TypeKind::UNKNOWN:
       exportValues(vec, rows, options, out, pool, holder);
+      break;
+    case TypeKind::UNKNOWN:
+      // Keep out.n_children = 0 for UNKNOWN type.
       break;
     case TypeKind::VARCHAR:
     case TypeKind::VARBINARY:
@@ -1116,7 +1118,7 @@ void exportConstantValue(
         ? sizeof(StringView)
         : vec.type()->cppSizeInBytes();
 
-    valuesVector = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+    valuesVector = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
         createFlatVector,
         vec.typeKind(),
         pool,
