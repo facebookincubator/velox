@@ -382,200 +382,204 @@ NOTE: This applies only to MmapAllocator</p></td>
 <td><p>Max possible age of AsyncDataCache and SsdCache entries since the raw file
 was opened to load the cache.</p></td>
 </tr>
-<tr class="row-odd"><td><p>memory_cache_num_entries</p></td>
+<tr class="row-odd"><td><p>memory_cache_num_large_entries</p></td>
 <td><p>Avg</p></td>
-<td><p>Total number of cache entries.</p></td>
+<td><p>Total number of large cache entries.</p></td>
 </tr>
-<tr class="row-even"><td><p>memory_cache_num_empty_entries</p></td>
+<tr class="row-even"><td><p>memory_cache_num_tiny_entries</p></td>
+<td><p>Avg</p></td>
+<td><p>Total number of tiny cache entries.</p></td>
+</tr>
+<tr class="row-odd"><td><p>memory_cache_num_empty_entries</p></td>
 <td><p>Avg</p></td>
 <td><p>Total number of cache entries that do not cache anything.</p></td>
 </tr>
-<tr class="row-odd"><td><p>memory_cache_num_shared_entries</p></td>
+<tr class="row-even"><td><p>memory_cache_num_shared_entries</p></td>
 <td><p>Avg</p></td>
 <td><p>Total number of cache entries that are pinned for shared access.</p></td>
 </tr>
-<tr class="row-even"><td><p>memory_cache_num_exclusive_entries</p></td>
+<tr class="row-odd"><td><p>memory_cache_num_exclusive_entries</p></td>
 <td><p>Avg</p></td>
 <td><p>Total number of cache entries that are pinned for exclusive access.</p></td>
 </tr>
-<tr class="row-odd"><td><p>memory_cache_num_prefetched_entries</p></td>
+<tr class="row-even"><td><p>memory_cache_num_prefetched_entries</p></td>
 <td><p>Avg</p></td>
 <td><p>Total number of cache entries that are being or have been prefetched but
 have not been hit.</p></td>
 </tr>
-<tr class="row-even"><td><p>memory_cache_total_tiny_bytes</p></td>
+<tr class="row-odd"><td><p>memory_cache_total_tiny_bytes</p></td>
 <td><p>Avg</p></td>
 <td><p>Total number of bytes of the cached data that is much smaller than kTinyDataSize.</p></td>
 </tr>
-<tr class="row-odd"><td><p>memory_cache_total_large_bytes</p></td>
+<tr class="row-even"><td><p>memory_cache_total_large_bytes</p></td>
 <td><p>Avg</p></td>
 <td><p>Total number of bytes of the cached data excluding ‘memory_cache_total_tiny_bytes’</p></td>
 </tr>
-<tr class="row-even"><td><p>memory_cache_total_tiny_padding_bytes</p></td>
+<tr class="row-odd"><td><p>memory_cache_total_tiny_padding_bytes</p></td>
 <td><p>Avg</p></td>
 <td><p>Total unused capacity bytes in ‘memory_cache_total_tiny_bytes’.</p></td>
 </tr>
-<tr class="row-odd"><td><p>memory_cache_total_large_padding_bytes</p></td>
+<tr class="row-even"><td><p>memory_cache_total_large_padding_bytes</p></td>
 <td><p>Avg</p></td>
 <td><p>Total unused capacity bytes in ‘memory_cache_total_large_bytes’.</p></td>
 </tr>
-<tr class="row-even"><td><p>memory_cache_total_prefetched_bytes</p></td>
+<tr class="row-odd"><td><p>memory_cache_total_prefetched_bytes</p></td>
 <td><p>Avg</p></td>
 <td><p>Total bytes of cache entries in prefetch state.</p></td>
 </tr>
-<tr class="row-odd"><td><p>memory_cache_sum_evict_score</p></td>
+<tr class="row-even"><td><p>memory_cache_sum_evict_score</p></td>
 <td><p>Sum</p></td>
 <td><p>Sum of scores of evicted entries. This serves to infer an average lifetime
 for entries in cache.</p></td>
 </tr>
-<tr class="row-even"><td><p>memory_cache_num_hits</p></td>
+<tr class="row-odd"><td><p>memory_cache_num_hits</p></td>
 <td><p>Sum</p></td>
 <td><p>Number of hits (saved IO) since last counter retrieval. The first hit to a
 prefetched entry does not count.</p></td>
 </tr>
-<tr class="row-odd"><td><p>memory_cache_hit_bytes</p></td>
+<tr class="row-even"><td><p>memory_cache_hit_bytes</p></td>
 <td><p>Sum</p></td>
 <td><p>Amount of hit bytes (saved IO) since last counter retrieval. The first hit
 to a prefetched entry does not count.</p></td>
 </tr>
-<tr class="row-even"><td><p>memory_cache_num_new</p></td>
+<tr class="row-odd"><td><p>memory_cache_num_new</p></td>
 <td><p>Sum</p></td>
 <td><p>Number of new entries created since last counter retrieval.</p></td>
 </tr>
-<tr class="row-odd"><td><p>memory_cache_num_evicts</p></td>
+<tr class="row-even"><td><p>memory_cache_num_evicts</p></td>
 <td><p>Sum</p></td>
 <td><p>Number of times a valid entry was removed in order to make space, since
 last counter retrieval.</p></td>
 </tr>
-<tr class="row-even"><td><p>memory_cache_num_savable_evicts</p></td>
+<tr class="row-odd"><td><p>memory_cache_num_savable_evicts</p></td>
 <td><p>Sum</p></td>
 <td><p>Number of times a valid entry was removed in order to make space but has not
 been saved to SSD yet, since last counter retrieval.</p></td>
 </tr>
-<tr class="row-odd"><td><p>memory_cache_num_evict_checks</p></td>
+<tr class="row-even"><td><p>memory_cache_num_evict_checks</p></td>
 <td><p>Sum</p></td>
 <td><p>Number of entries considered for evicting, since last counter retrieval.</p></td>
 </tr>
-<tr class="row-even"><td><p>memory_cache_num_wait_exclusive</p></td>
+<tr class="row-odd"><td><p>memory_cache_num_wait_exclusive</p></td>
 <td><p>Sum</p></td>
 <td><p>Number of times a user waited for an entry to transit from exclusive to
 shared mode, since last counter retrieval.</p></td>
 </tr>
-<tr class="row-odd"><td><p>memory_cache_num_alloc_clocks</p></td>
+<tr class="row-even"><td><p>memory_cache_num_alloc_clocks</p></td>
 <td><p>Sum</p></td>
 <td><p>Clocks spent in allocating or freeing memory for backing cache entries,
 since last counter retrieval</p></td>
 </tr>
-<tr class="row-even"><td><p>memory_cache_num_aged_out_entries</p></td>
+<tr class="row-odd"><td><p>memory_cache_num_aged_out_entries</p></td>
 <td><p>Sum</p></td>
 <td><p>Number of AsyncDataCache entries that are aged out and evicted.
 given configured TTL.</p></td>
 </tr>
-<tr class="row-odd"><td><p>memory_cache_num_stale_entries</p></td>
+<tr class="row-even"><td><p>memory_cache_num_stale_entries</p></td>
 <td><p>Count</p></td>
 <td><p>Number of AsyncDataCache entries that are stale because of cache request
 size mismatch.</p></td>
 </tr>
-<tr class="row-even"><td><p>ssd_cache_cached_regions</p></td>
+<tr class="row-odd"><td><p>ssd_cache_cached_regions</p></td>
 <td><p>Avg</p></td>
 <td><p>Number of regions currently cached by SSD.</p></td>
 </tr>
-<tr class="row-odd"><td><p>ssd_cache_cached_entries</p></td>
+<tr class="row-even"><td><p>ssd_cache_cached_entries</p></td>
 <td><p>Avg</p></td>
 <td><p>Number of entries currently cached by SSD.</p></td>
 </tr>
-<tr class="row-even"><td><p>ssd_cache_cached_bytes</p></td>
+<tr class="row-odd"><td><p>ssd_cache_cached_bytes</p></td>
 <td><p>Avg</p></td>
 <td><p>Total bytes currently cached by SSD.</p></td>
 </tr>
-<tr class="row-odd"><td><p>ssd_cache_read_entries</p></td>
+<tr class="row-even"><td><p>ssd_cache_read_entries</p></td>
 <td><p>Sum</p></td>
 <td><p>Total number of entries read from SSD.</p></td>
 </tr>
-<tr class="row-even"><td><p>ssd_cache_read_bytes</p></td>
+<tr class="row-odd"><td><p>ssd_cache_read_bytes</p></td>
 <td><p>Sum</p></td>
 <td><p>Total number of bytes read from SSD.</p></td>
 </tr>
-<tr class="row-odd"><td><p>ssd_cache_written_entries</p></td>
+<tr class="row-even"><td><p>ssd_cache_written_entries</p></td>
 <td><p>Sum</p></td>
 <td><p>Total number of entries written to SSD.</p></td>
 </tr>
-<tr class="row-even"><td><p>ssd_cache_written_bytes</p></td>
+<tr class="row-odd"><td><p>ssd_cache_written_bytes</p></td>
 <td><p>Sum</p></td>
 <td><p>Total number of bytes written to SSD.</p></td>
 </tr>
-<tr class="row-odd"><td><p>ssd_cache_aged_out_entries</p></td>
+<tr class="row-even"><td><p>ssd_cache_aged_out_entries</p></td>
 <td><p>Sum</p></td>
 <td><p>Total number of SsdCache entries that are aged out and evicted given
 configured TTL.</p></td>
 </tr>
-<tr class="row-even"><td><p>ssd_cache_aged_out_regions</p></td>
+<tr class="row-odd"><td><p>ssd_cache_aged_out_regions</p></td>
 <td><p>Sum</p></td>
 <td><p>Total number of SsdCache regions that are aged out and evicted given
 configured TTL.</p></td>
 </tr>
-<tr class="row-odd"><td><p>ssd_cache_open_ssd_errors</p></td>
+<tr class="row-even"><td><p>ssd_cache_open_ssd_errors</p></td>
 <td><p>Sum</p></td>
 <td><p>Total number of SSD file open errors.</p></td>
 </tr>
-<tr class="row-even"><td><p>ssd_cache_open_checkpoint_errors</p></td>
+<tr class="row-odd"><td><p>ssd_cache_open_checkpoint_errors</p></td>
 <td><p>Sum</p></td>
 <td><p>Total number of SSD checkpoint file open errors.</p></td>
 </tr>
-<tr class="row-odd"><td><p>ssd_cache_open_log_errors</p></td>
+<tr class="row-even"><td><p>ssd_cache_open_log_errors</p></td>
 <td><p>Sum</p></td>
 <td><p>Total number of SSD evict log file open errors.</p></td>
 </tr>
-<tr class="row-even"><td><p>ssd_cache_delete_checkpoint_errors</p></td>
+<tr class="row-odd"><td><p>ssd_cache_delete_checkpoint_errors</p></td>
 <td><p>Sum</p></td>
 <td><p>Total number of errors while deleting SSD checkpoint files.</p></td>
 </tr>
-<tr class="row-odd"><td><p>ssd_cache_read_without_checksum</p></td>
+<tr class="row-even"><td><p>ssd_cache_read_without_checksum</p></td>
 <td><p>Sum</p></td>
 <td><p>Total number of SSD cache reads without checksum verification
 due to SSD cache request size mismatch</p></td>
 </tr>
-<tr class="row-even"><td><p>ssd_cache_grow_file_errors</p></td>
+<tr class="row-odd"><td><p>ssd_cache_grow_file_errors</p></td>
 <td><p>Sum</p></td>
 <td><p>Total number of errors while growing SSD cache files.</p></td>
 </tr>
-<tr class="row-odd"><td><p>ssd_cache_write_ssd_errors</p></td>
+<tr class="row-even"><td><p>ssd_cache_write_ssd_errors</p></td>
 <td><p>Sum</p></td>
 <td><p>Total number of error while writing to SSD cache files.</p></td>
 </tr>
-<tr class="row-even"><td><p>ssd_cache_write_ssd_dropped</p></td>
+<tr class="row-odd"><td><p>ssd_cache_write_ssd_dropped</p></td>
 <td><p>Sum</p></td>
 <td><p>Total number of writes dropped due to no cache space.</p></td>
 </tr>
-<tr class="row-odd"><td><p>ssd_cache_write_checkpoint_errors</p></td>
+<tr class="row-even"><td><p>ssd_cache_write_checkpoint_errors</p></td>
 <td><p>Sum</p></td>
 <td><p>Total number of errors while writing SSD checkpoint file.</p></td>
 </tr>
-<tr class="row-even"><td><p>ssd_cache_read_corruptions</p></td>
+<tr class="row-odd"><td><p>ssd_cache_read_corruptions</p></td>
 <td><p>Sum</p></td>
 <td><p>Total number of corrupted SSD data read detected by checksum.</p></td>
 </tr>
-<tr class="row-odd"><td><p>ssd_cache_read_ssd_errors</p></td>
+<tr class="row-even"><td><p>ssd_cache_read_ssd_errors</p></td>
 <td><p>Sum</p></td>
 <td><p>Total number of errors while reading from SSD cache files.</p></td>
 </tr>
-<tr class="row-even"><td><p>ssd_cache_read_checkpoint_errors</p></td>
+<tr class="row-odd"><td><p>ssd_cache_read_checkpoint_errors</p></td>
 <td><p>Sum</p></td>
 <td><p>Total number of errors while reading from SSD checkpoint files.</p></td>
 </tr>
-<tr class="row-odd"><td><p>ssd_cache_checkpoints_read</p></td>
+<tr class="row-even"><td><p>ssd_cache_checkpoints_read</p></td>
 <td><p>Sum</p></td>
 <td><p>Total number of checkpoints read.</p></td>
 </tr>
-<tr class="row-even"><td><p>ssd_cache_checkpoints_written</p></td>
+<tr class="row-odd"><td><p>ssd_cache_checkpoints_written</p></td>
 <td><p>Sum</p></td>
 <td><p>Total number of checkpoints written.</p></td>
 </tr>
-<tr class="row-odd"><td><p>ssd_cache_regions_evicted</p></td>
+<tr class="row-even"><td><p>ssd_cache_regions_evicted</p></td>
 <td><p>Sum</p></td>
 <td><p>Total number of cache regions evicted.</p></td>
 </tr>
-<tr class="row-even"><td><p>ssd_cache_recovered_entries</p></td>
+<tr class="row-odd"><td><p>ssd_cache_recovered_entries</p></td>
 <td><p>Sum</p></td>
 <td><p>Total number of cache entries recovered from checkpoint.</p></td>
 </tr>
