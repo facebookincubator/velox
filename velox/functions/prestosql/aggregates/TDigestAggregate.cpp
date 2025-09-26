@@ -355,8 +355,8 @@ void registerTDigestAggregate(
         return std::make_unique<TDigestAggregate<double>>(
             hasWeight, hasCompression, resultTypes);
       },
-      {true /*orderSensitive*/, false /*companionFunction*/},
-      false /*companionFunction*/,
+      {},
+      withCompanionFunctions,
       overwrite);
 }
 } // namespace facebook::velox::aggregate::prestosql

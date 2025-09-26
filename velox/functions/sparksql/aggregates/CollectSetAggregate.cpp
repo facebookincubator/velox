@@ -106,6 +106,7 @@ void registerCollectSetAggAggregate(
                 "Unsupported type {}", mapTypeKindToName(typeKind));
         }
       },
+      {.ignoreDuplicates = true},
       withCompanionFunctions,
       overwrite);
 }
