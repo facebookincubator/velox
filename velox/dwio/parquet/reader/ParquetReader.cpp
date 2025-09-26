@@ -16,6 +16,10 @@
 
 #include "velox/dwio/parquet/reader/ParquetReader.h"
 
+#include <boost/algorithm/string.hpp>
+#include <glog/logging.h>
+#include <unordered_map>
+#include <thrift/TApplicationException.h>
 #include <thrift/protocol/TCompactProtocol.h> //@manual
 
 #include "velox/dwio/parquet/reader/ParquetColumnReader.h"
@@ -1204,7 +1208,8 @@ class ParquetRowReader::Impl {
         columnReaderStats_,
         readerBase_->fileMetaData(),
         readerBase->sessionTimezone(),
-        options_.timestampPrecision());
+        options_.timestampPrecision(),
+        &readerBase_->bufferedInput());
     requestedType_ = options_.requestedType() ? options_.requestedType()
                                               : readerBase_->schema();
     columnReader_ = ParquetColumnReader::build(
@@ -1231,8 +1236,11 @@ class ParquetRowReader::Impl {
     rowGroupIds_.reserve(rowGroups_.size());
     firstRowOfRowGroup_.reserve(rowGroups_.size());
 
+    // Use regular row group filtering for now
+    // Dictionary-based filtering will be handled when dictionaries are naturally loaded during page reading
     ParquetData::FilterRowGroupsResult res;
     columnReader_->filterRowGroups(0, parquetStatsContext_, res);
+
     if (auto& metadataFilter = options_.metadataFilter()) {
       metadataFilter->eval(res.metadataFilterResults, res.filterResult);
     }
