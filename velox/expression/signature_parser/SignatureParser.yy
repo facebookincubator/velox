@@ -7,7 +7,7 @@
 %require "3.0.4"
 %language "C++"
 
-%define api.parser.class {Parser}
+%define parser_class_name {Parser}
 %define api.namespace {facebook::velox::exec}
 %define api.value.type variant
 %parse-param {Scanner* scanner}
