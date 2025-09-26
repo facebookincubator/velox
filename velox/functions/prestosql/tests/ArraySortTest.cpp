@@ -334,6 +334,7 @@ ArrayVectorPtr ArraySortTest::arrayVector<TestRowType>(
 }
 
 void ArraySortTest::SetUp() {
+  options_.parseIntegerAsBigint = false;
   for (const TypeKind type : kSupportedTypes) {
     switch (type) {
       case TypeKind::BOOLEAN:
