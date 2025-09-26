@@ -267,20 +267,21 @@ void CudfHiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
           hiveSplit->fileFormat,
           dwio::common::FileFormat::PARQUET,
           "Unsupported file format for conversion from HiveConnectorSplit to CudfHiveConnectorSplit");
-      VELOX_CHECK_EQ(
-          hiveSplit->start,
-          0,
-          "CudfHiveDataSource cannot process splits with non-zero offset");
       // Remove "file:" prefix from the file path if present
       std::string cleanedPath = hiveSplit->filePath;
       constexpr std::string_view kFilePrefix = "file:";
       if (cleanedPath.compare(0, kFilePrefix.size(), kFilePrefix) == 0) {
         cleanedPath = cleanedPath.substr(kFilePrefix.size());
       }
-      return CudfHiveConnectorSplitBuilder(cleanedPath)
-          .connectorId(hiveSplit->connectorId)
-          .splitWeight(hiveSplit->splitWeight)
-          .build();
+      auto cudfHiveSplitBuilder = CudfHiveConnectorSplitBuilder(cleanedPath)
+                                      .start(hiveSplit->start)
+                                      .length(hiveSplit->length)
+                                      .connectorId(hiveSplit->connectorId)
+                                      .splitWeight(hiveSplit->splitWeight);
+      for (auto const& infoColumn : hiveSplit->infoColumns) {
+        cudfHiveSplitBuilder.infoColumn(infoColumn.first, infoColumn.second);
+      }
+      return cudfHiveSplitBuilder.build();
     } else {
       VELOX_FAIL("Unsupported split type: {}", split->toString());
     }
@@ -314,7 +315,7 @@ CudfHiveDataSource::createSplitReader() {
   // Reader options
   auto readerOptions =
       cudf::io::parquet_reader_options::builder(split_->getCudfSourceInfo())
-          .skip_rows(parquetConfig_->skipRows())
+          .skip_bytes(split_->start)
           .use_pandas_metadata(parquetConfig_->isUsePandasMetadata())
           .use_arrow_schema(parquetConfig_->isUseArrowSchema())
           .allow_mismatched_pq_schemas(
@@ -322,9 +323,9 @@ CudfHiveDataSource::createSplitReader() {
           .timestamp_type(parquetConfig_->timestampType())
           .build();
 
-  // Set num_rows only if available
-  if (parquetConfig_->numRows().has_value()) {
-    readerOptions.set_num_rows(parquetConfig_->numRows().value());
+  // Set num_bytes only if available
+  if (split_->size() != std::numeric_limits<uint64_t>::max()) {
+    readerOptions.set_num_bytes(split_->size());
   }
 
   if (subfieldFilters_.size()) {
