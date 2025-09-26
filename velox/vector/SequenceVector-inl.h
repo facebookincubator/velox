@@ -62,8 +62,6 @@ void SequenceVector<T>::setInternalState() {
   }
   lengths_ = sequenceLengths_->as<vector_size_t>();
   lastIndexRangeEnd_ = lengths_[0];
-  BaseVector::inMemoryBytes_ += sequenceValues_->inMemoryBytes();
-  BaseVector::inMemoryBytes_ += sequenceLengths_->capacity();
 }
 
 template <typename T>

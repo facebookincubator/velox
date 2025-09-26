@@ -180,7 +180,6 @@ BaseVector::BaseVector(
       // second reference to an immutable 'nulls_'.
       nulls_->setSize(bytes);
     }
-    inMemoryBytes_ += nulls_->size();
   }
 }
 
