@@ -29,15 +29,15 @@ namespace {
 static const bool kDefaultUseLosslessTimestamp = true;
 } // namespace
 
-std::unique_ptr<SpillWriteFile> SpillWriteFile::create(
+std::unique_ptr<SerializedPageFile> SerializedPageFile::create(
     uint32_t id,
     const std::string& pathPrefix,
     const std::string& fileCreateConfig) {
-  return std::unique_ptr<SpillWriteFile>(
-      new SpillWriteFile(id, pathPrefix, fileCreateConfig));
+  return std::unique_ptr<SerializedPageFile>(
+      new SerializedPageFile(id, pathPrefix, fileCreateConfig));
 }
 
-SpillWriteFile::SpillWriteFile(
+SerializedPageFile::SerializedPageFile(
     uint32_t id,
     const std::string& pathPrefix,
     const std::string& fileCreateConfig)
@@ -52,21 +52,21 @@ SpillWriteFile::SpillWriteFile(
           std::nullopt});
 }
 
-void SpillWriteFile::finish() {
+void SerializedPageFile::finish() {
   VELOX_CHECK_NOT_NULL(file_);
   size_ = file_->size();
   file_->close();
   file_ = nullptr;
 }
 
-uint64_t SpillWriteFile::size() const {
+uint64_t SerializedPageFile::size() {
   if (file_ != nullptr) {
     return file_->size();
   }
   return size_;
 }
 
-uint64_t SpillWriteFile::write(std::unique_ptr<folly::IOBuf> iobuf) {
+uint64_t SerializedPageFile::write(std::unique_ptr<folly::IOBuf> iobuf) {
   auto writtenBytes = iobuf->computeChainDataLength();
   file_->append(std::move(iobuf));
   return writtenBytes;
@@ -83,108 +83,23 @@ SpillWriter::SpillWriter(
     common::UpdateAndCheckSpillLimitCB& updateAndCheckSpillLimitCb,
     memory::MemoryPool* pool,
     folly::Synchronized<common::SpillStats>* stats)
-    : type_(type),
+    : SerializedPageWriter(
+          pathPrefix,
+          targetFileSize,
+          writeBufferSize,
+          fileCreateConfig,
+          std::make_unique<
+              serializer::presto::PrestoVectorSerde::PrestoOptions>(
+              kDefaultUseLosslessTimestamp,
+              compressionKind,
+              0.8,
+              /*_nullsFirst=*/true),
+          getNamedVectorSerde(VectorSerde::Kind::kPresto),
+          pool),
+      type_(type),
       sortingKeys_(sortingKeys),
-      compressionKind_(compressionKind),
-      pathPrefix_(pathPrefix),
-      targetFileSize_(targetFileSize),
-      writeBufferSize_(writeBufferSize),
-      fileCreateConfig_(fileCreateConfig),
-      updateAndCheckSpillLimitCb_(updateAndCheckSpillLimitCb),
-      pool_(pool),
-      serde_(getNamedVectorSerde(VectorSerde::Kind::kPresto)),
-      stats_(stats) {}
-
-SpillWriteFile* SpillWriter::ensureFile() {
-  if ((currentFile_ != nullptr) && (currentFile_->size() > targetFileSize_)) {
-    closeFile();
-  }
-  if (currentFile_ == nullptr) {
-    currentFile_ = SpillWriteFile::create(
-        nextFileId_++,
-        fmt::format("{}-{}", pathPrefix_, finishedFiles_.size()),
-        fileCreateConfig_);
-  }
-  return currentFile_.get();
-}
-
-void SpillWriter::closeFile() {
-  if (currentFile_ == nullptr) {
-    return;
-  }
-  currentFile_->finish();
-  updateSpilledFileStats(currentFile_->size());
-  finishedFiles_.push_back(SpillFileInfo{
-      .id = currentFile_->id(),
-      .type = type_,
-      .path = currentFile_->path(),
-      .size = currentFile_->size(),
-      .sortingKeys = sortingKeys_,
-      .compressionKind = compressionKind_});
-  currentFile_.reset();
-}
-
-size_t SpillWriter::numFinishedFiles() const {
-  return finishedFiles_.size();
-}
-
-uint64_t SpillWriter::flush() {
-  if (batch_ == nullptr) {
-    return 0;
-  }
-
-  auto* file = ensureFile();
-  VELOX_CHECK_NOT_NULL(file);
-
-  IOBufOutputStream out(
-      *pool_, nullptr, std::max<int64_t>(64 * 1024, batch_->size()));
-  uint64_t flushTimeNs{0};
-  {
-    NanosecondTimer timer(&flushTimeNs);
-    batch_->flush(&out);
-  }
-  batch_.reset();
-
-  uint64_t writeTimeNs{0};
-  uint64_t writtenBytes{0};
-  auto iobuf = out.getIOBuf();
-  {
-    NanosecondTimer timer(&writeTimeNs);
-    writtenBytes = file->write(std::move(iobuf));
-  }
-  updateWriteStats(writtenBytes, flushTimeNs, writeTimeNs);
-  updateAndCheckSpillLimitCb_(writtenBytes);
-  return writtenBytes;
-}
-
-uint64_t SpillWriter::write(
-    const RowVectorPtr& rows,
-    const folly::Range<IndexRange*>& indices) {
-  checkNotFinished();
-
-  uint64_t timeNs{0};
-  {
-    NanosecondTimer timer(&timeNs);
-    if (batch_ == nullptr) {
-      serializer::presto::PrestoVectorSerde::PrestoOptions options = {
-          kDefaultUseLosslessTimestamp,
-          compressionKind_,
-          0.8,
-          /*_nullsFirst=*/true};
-      batch_ = std::make_unique<VectorStreamGroup>(pool_, serde_);
-      batch_->createStreamTree(
-          std::static_pointer_cast<const RowType>(rows->type()),
-          1'000,
-          &options);
-    }
-    batch_->append(rows, indices);
-  }
-  updateAppendStats(rows->size(), timeNs);
-  if (batch_->size() < writeBufferSize_) {
-    return 0;
-  }
-  return flush();
-}
+      stats_(stats),
+      updateAndCheckLimitCb_(updateAndCheckSpillLimitCb) {}
 
 void SpillWriter::updateAppendStats(
     uint64_t numRows,
@@ -206,34 +121,38 @@ void SpillWriter::updateWriteStats(
   ++statsLocked->spillWrites;
   common::updateGlobalSpillWriteStats(
       spilledBytes, flushTimeNs, fileWriteTimeNs);
+  updateAndCheckLimitCb_(spilledBytes);
 }
 
-void SpillWriter::updateSpilledFileStats(uint64_t fileSize) {
+void SpillWriter::updateFileStats(const SerializedPageFile::FileInfo& file) {
   ++stats_->wlock()->spilledFiles;
   addThreadLocalRuntimeStat(
-      "spillFileSize", RuntimeCounter(fileSize, RuntimeCounter::Unit::kBytes));
+      "spillFileSize", RuntimeCounter(file.size, RuntimeCounter::Unit::kBytes));
   common::incrementGlobalSpilledFiles();
 }
 
-void SpillWriter::finishFile() {
-  checkNotFinished();
-  flush();
-  closeFile();
-  VELOX_CHECK_NULL(currentFile_);
-}
-
 SpillFiles SpillWriter::finish() {
-  checkNotFinished();
-  auto finishGuard = folly::makeGuard([this]() { finished_ = true; });
-
-  finishFile();
-  return std::move(finishedFiles_);
+  const auto serializedPageFiles = SerializedPageWriter::finish();
+  SpillFiles spillFiles;
+  spillFiles.reserve(serializedPageFiles.size());
+  for (const auto& fileInfo : serializedPageFiles) {
+    spillFiles.push_back(SpillFileInfo{
+        .id = fileInfo.id,
+        .type = type_,
+        .path = fileInfo.path,
+        .size = fileInfo.size,
+        .sortingKeys = sortingKeys_,
+        .compressionKind = serdeOptions_->compressionKind});
+  }
+  return spillFiles;
 }
 
 std::vector<std::string> SpillWriter::testingSpilledFilePaths() const {
   checkNotFinished();
 
   std::vector<std::string> spilledFilePaths;
+  spilledFilePaths.reserve(
+      finishedFiles_.size() + (currentFile_ != nullptr ? 1 : 0));
   for (auto& file : finishedFiles_) {
     spilledFilePaths.push_back(file.path);
   }
@@ -283,44 +202,25 @@ SpillReadFile::SpillReadFile(
     common::CompressionKind compressionKind,
     memory::MemoryPool* pool,
     folly::Synchronized<common::SpillStats>* stats)
-    : id_(id),
+    : SerializedPageFileReader(
+          path,
+          bufferSize,
+          type,
+          getNamedVectorSerde(VectorSerde::Kind::kPresto),
+          std::make_unique<
+              serializer::presto::PrestoVectorSerde::PrestoOptions>(
+              kDefaultUseLosslessTimestamp,
+              compressionKind,
+              0.8,
+              /*_nullsFirst=*/true),
+          pool),
+      id_(id),
       path_(path),
       size_(size),
-      type_(type),
       sortingKeys_(sortingKeys),
-      compressionKind_(compressionKind),
-      readOptions_{
-          kDefaultUseLosslessTimestamp,
-          compressionKind_,
-          0.8,
-          /*_nullsFirst=*/true},
-      pool_(pool),
-      serde_(getNamedVectorSerde(VectorSerde::Kind::kPresto)),
-      stats_(stats) {
-  auto fs = filesystems::getFileSystem(path_, nullptr);
-  auto file = fs->openFileForRead(path_);
-  input_ = std::make_unique<common::FileInputStream>(
-      std::move(file), bufferSize, pool_);
-}
+      stats_(stats) {}
 
-bool SpillReadFile::nextBatch(RowVectorPtr& rowVector) {
-  if (input_->atEnd()) {
-    recordSpillStats();
-    return false;
-  }
-
-  uint64_t timeNs{0};
-  {
-    NanosecondTimer timer{&timeNs};
-    VectorStreamGroup::read(
-        input_.get(), pool_, type_, serde_, &rowVector, &readOptions_);
-  }
-  stats_->wlock()->spillDeserializationTimeNanos += timeNs;
-  common::updateGlobalSpillDeserializationTimeNs(timeNs);
-  return true;
-}
-
-void SpillReadFile::recordSpillStats() {
+void SpillReadFile::updateFinalStats() {
   VELOX_CHECK(input_->atEnd());
   const auto readStats = input_->stats();
   common::updateGlobalSpillReadStats(
@@ -329,5 +229,154 @@ void SpillReadFile::recordSpillStats() {
   lockedSpillStats->spillReads += readStats.numReads;
   lockedSpillStats->spillReadTimeNanos += readStats.readTimeNs;
   lockedSpillStats->spillReadBytes += readStats.readBytes;
+};
+
+void SpillReadFile::updateSerializationTimeStats(uint64_t timeNs) {
+  stats_->wlock()->spillDeserializationTimeNanos += timeNs;
+  common::updateGlobalSpillDeserializationTimeNs(timeNs);
+};
+
+SerializedPageWriter::SerializedPageWriter(
+    const std::string& pathPrefix,
+    uint64_t targetFileSize,
+    uint64_t writeBufferSize,
+    const std::string& fileCreateConfig,
+    std::unique_ptr<VectorSerde::Options> serdeOptions,
+    VectorSerde* serde,
+    memory::MemoryPool* pool)
+    : pathPrefix_(pathPrefix),
+      targetFileSize_(targetFileSize),
+      writeBufferSize_(writeBufferSize),
+      fileCreateConfig_(fileCreateConfig),
+      serdeOptions_(std::move(serdeOptions)),
+      pool_(pool),
+      serde_(serde) {}
+
+SerializedPageFile* SerializedPageWriter::ensureFile() {
+  if ((currentFile_ != nullptr) && (currentFile_->size() > targetFileSize_)) {
+    closeFile();
+  }
+  if (currentFile_ == nullptr) {
+    currentFile_ = SerializedPageFile::create(
+        nextFileId_++,
+        fmt::format("{}-{}", pathPrefix_, finishedFiles_.size()),
+        fileCreateConfig_);
+  }
+  return currentFile_.get();
+}
+
+void SerializedPageWriter::closeFile() {
+  if (currentFile_ == nullptr) {
+    return;
+  }
+  currentFile_->finish();
+  const auto& fileInfo = currentFile_->fileInfo();
+  updateFileStats(fileInfo);
+  finishedFiles_.push_back(fileInfo);
+  currentFile_.reset();
+}
+
+size_t SerializedPageWriter::numFinishedFiles() const {
+  return finishedFiles_.size();
+}
+
+uint64_t SerializedPageWriter::flush() {
+  if (batch_ == nullptr) {
+    return 0;
+  }
+
+  auto* file = ensureFile();
+  VELOX_CHECK_NOT_NULL(file);
+
+  IOBufOutputStream out(
+      *pool_, nullptr, std::max<int64_t>(64 * 1024, batch_->size()));
+  uint64_t flushTimeNs{0};
+  {
+    NanosecondTimer timer(&flushTimeNs);
+    batch_->flush(&out);
+  }
+  batch_.reset();
+
+  uint64_t writeTimeNs{0};
+  uint64_t writtenBytes{0};
+  auto iobuf = out.getIOBuf();
+  {
+    NanosecondTimer timer(&writeTimeNs);
+    writtenBytes = file->write(std::move(iobuf));
+  }
+  updateWriteStats(writtenBytes, flushTimeNs, writeTimeNs);
+  return writtenBytes;
+}
+
+uint64_t SerializedPageWriter::write(
+    const RowVectorPtr& rows,
+    const folly::Range<IndexRange*>& indices) {
+  checkNotFinished();
+
+  uint64_t timeNs{0};
+  {
+    NanosecondTimer timer(&timeNs);
+    if (batch_ == nullptr) {
+      batch_ = std::make_unique<VectorStreamGroup>(pool_, serde_);
+      batch_->createStreamTree(
+          std::static_pointer_cast<const RowType>(rows->type()),
+          1'000,
+          serdeOptions_.get());
+    }
+    batch_->append(rows, indices);
+  }
+  updateAppendStats(rows->size(), timeNs);
+  if (batch_->size() < writeBufferSize_) {
+    return 0;
+  }
+  return flush();
+}
+
+void SerializedPageWriter::finishFile() {
+  checkNotFinished();
+  flush();
+  closeFile();
+  VELOX_CHECK_NULL(currentFile_);
+}
+
+std::vector<SerializedPageFile::FileInfo> SerializedPageWriter::finish() {
+  checkNotFinished();
+  auto finishGuard = folly::makeGuard([this]() { finished_ = true; });
+
+  finishFile();
+  return std::move(finishedFiles_);
+}
+
+SerializedPageFileReader::SerializedPageFileReader(
+    const std::string& path,
+    uint64_t bufferSize,
+    const RowTypePtr& type,
+    VectorSerde* serde,
+    std::unique_ptr<VectorSerde::Options> readOptions,
+    memory::MemoryPool* pool)
+    : readOptions_(std::move(readOptions)),
+      pool_(pool),
+      serde_(serde),
+      type_(type) {
+  auto fs = filesystems::getFileSystem(path, nullptr);
+  auto file = fs->openFileForRead(path);
+  input_ = std::make_unique<common::FileInputStream>(
+      std::move(file), bufferSize, pool_);
+}
+
+bool SerializedPageFileReader::nextBatch(RowVectorPtr& rowVector) {
+  if (input_->atEnd()) {
+    updateFinalStats();
+    return false;
+  }
+
+  uint64_t timeNs{0};
+  {
+    NanosecondTimer timer{&timeNs};
+    VectorStreamGroup::read(
+        input_.get(), pool_, type_, serde_, &rowVector, readOptions_.get());
+  }
+  updateSerializationTimeStats(timeNs);
+  return true;
 }
 } // namespace facebook::velox::exec
