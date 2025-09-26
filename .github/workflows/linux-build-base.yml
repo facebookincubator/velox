@@ -192,18 +192,22 @@ jobs:
           VELOX_DEPENDENCY_SOURCE: BUNDLED
           ICU_SOURCE: SYSTEM
           MAKEFLAGS: NUM_THREADS=8 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=3
-          # We can remove "-DBoost_SOURCE=SYSTEM" and
-          # "-Dfolly_SOURCE=SYSTEM" once we add support for bundling
-          # FBThrift.
+          # We can remove "-DBoost_SOURCE=SYSTEM",
+          # "-Dfolly_SOURCE=SYSTEM" and "-Dgflags_SOURCE=SYSTEM" once
+          # we add support for bundling FBThrift.
           #
           # FBThrift has transitive Boost dependency. We can't mix
           # bundled Boost and system Boost.
           #
           # Recent FBThrift needs recent Folly.
+          #
+          # System FBThrift is built with system GFlags. We need to
+          # use system GFlags with system FBThrift.
           EXTRA_CMAKE_FLAGS: >-
             -DCMAKE_LINK_LIBRARIES_STRATEGY=REORDER_FREELY
             -DBoost_SOURCE=SYSTEM
             -Dfolly_SOURCE=SYSTEM
+            -Dgflags_SOURCE=SYSTEM
             -DVELOX_ENABLE_PARQUET=ON
             -DVELOX_ENABLE_EXAMPLES=ON
         run: |
