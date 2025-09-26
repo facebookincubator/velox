@@ -594,7 +594,7 @@ exec::AggregateRegistrationResult registerMinMax(
           }
         }
       },
-      {false /*orderSensitive*/, false /*companionFunction*/},
+      {.ignoreDuplicates = true, .orderSensitive = false},
       withCompanionFunctions,
       overwrite);
 }

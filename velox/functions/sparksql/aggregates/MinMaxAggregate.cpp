@@ -45,7 +45,7 @@ exec::AggregateRegistrationResult registerMin(
             TimestampPrecision::kMicroseconds);
         return factory(step, argTypes, resultType, config);
       },
-      {false /*orderSensitive*/},
+      {.orderSensitive = false},
       withCompanionFunctions,
       overwrite);
 }
@@ -75,7 +75,7 @@ exec::AggregateRegistrationResult registerMax(
             TimestampPrecision::kMicroseconds);
         return factory(step, argTypes, resultType, config);
       },
-      {false /*orderSensitive*/},
+      {.ignoreDuplicates = true, .orderSensitive = false},
       withCompanionFunctions,
       overwrite);
 }
