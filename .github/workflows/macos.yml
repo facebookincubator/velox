@@ -62,6 +62,12 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Cache ccache
+        uses: apache/infrastructure-actions/stash/restore@3354c1565d4b0e335b78a76aedd82153a9e144d4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-macos-1-${{ matrix.os }}
+
       - name: Install Dependencies
         env:
           HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: 'TRUE'
@@ -91,12 +97,6 @@ jobs:
             pipx install --force cmake==3.31
           fi
           echo "$INSTALL_PREFIX/bin" >> $GITHUB_PATH
-
-      - name: Cache ccache
-        uses: apache/infrastructure-actions/stash/restore@3354c1565d4b0e335b78a76aedd82153a9e144d4
-        with:
-          path: ${{ env.CCACHE_DIR }}
-          key: ccache-macos-1-${{ matrix.os }}
 
       - name: Configure Build
         env:
