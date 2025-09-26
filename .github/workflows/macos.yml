@@ -74,6 +74,7 @@ jobs:
           # enables 128bit integer support. We need to fix
           # https://github.com/facebook/folly/issues/1666 for it.
           install_boost
+          install_fmt
           install_folly
           install_fizz
           install_wangle
@@ -99,7 +100,6 @@ jobs:
 
       - name: Configure Build
         env:
-          fmt_SOURCE: BUNDLED #brew fmt11 is not supported
           faiss_SOURCE: BUNDLED #brew faiss is not supported
           CMAKE_POLICY_VERSION_MINIMUM: '3.5'
         run: |
