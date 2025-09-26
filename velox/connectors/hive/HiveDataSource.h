@@ -60,7 +60,7 @@ class HiveDataSource : public DataSource {
     return completedRows_;
   }
 
-  std::unordered_map<std::string, RuntimeCounter> runtimeStats() override;
+  std::unordered_map<std::string, RuntimeMetric> runtimeStats() override;
 
   bool allPrefetchIssued() const override {
     return splitReader_ && splitReader_->allPrefetchIssued();
