@@ -206,7 +206,7 @@ struct StringView {
   }
 
   operator std::string_view() && = delete;
-  explicit operator std::string_view() const& {
+  operator std::string_view() const& {
     return std::string_view(data(), size());
   }
 
