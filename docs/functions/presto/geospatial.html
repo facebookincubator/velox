@@ -123,6 +123,34 @@ error if <code class="docutils literal notranslate"><span class="pre">x</span></
 <dd><p>Returns a geometry type polygon object from WKT representation.</p>
 </dd></dl>
 
+<dl class="py function">
+<dt class="sig sig-object py" id="ST_LineFromText">
+<span class="sig-name descname"><span class="pre">ST_LineFromText</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">wkt</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">varchar</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">linestring:</span> <span class="pre">Geometry</span></span></span><a class="headerlink" href="#ST_LineFromText" title="Link to this definition">¶</a></dt>
+<dd><p>Returns a geometry type linestring object from WKT representation.
+An error is returned if the input WKT represents a valid non-LineString
+geometry. Null input returns null output.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="ST_LineString">
+<span class="sig-name descname"><span class="pre">ST_LineString</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">points</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">array</span><span class="p"><span class="pre">(</span></span><span class="pre">Geometry</span><span class="p"><span class="pre">)</span></span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">linestring:</span> <span class="pre">Geometry</span></span></span><a class="headerlink" href="#ST_LineString" title="Link to this definition">¶</a></dt>
+<dd><p>Returns a LineString formed from an array of points. If there are fewer
+than two non-empty points in the input array, an empty LineString will
+be returned. Throws an exception if any element in the array is null or
+empty or same as the previous one. The returned geometry may not be simple,
+e.g. may self-intersect or may contain duplicate vertexes depending on the
+input.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="ST_MultiPoint">
+<span class="sig-name descname"><span class="pre">ST_MultiPoint</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">points</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">array</span><span class="p"><span class="pre">(</span></span><span class="pre">Geometry</span><span class="p"><span class="pre">)</span></span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">multipoint:</span> <span class="pre">Geometry</span></span></span><a class="headerlink" href="#ST_MultiPoint" title="Link to this definition">¶</a></dt>
+<dd><p>Returns a MultiPoint geometry object formed from the specified points.
+Return null if input array is empty. Throws an exception if any element
+in the array is null or empty. The returned geometry may not be simple
+and may contain duplicate points if input array has duplicates.</p>
+</dd></dl>
+
 </section>
 <section id="spatial-predicates">
 <h2>Spatial Predicates<a class="headerlink" href="#spatial-predicates" title="Link to this heading">¶</a></h2>
@@ -734,6 +762,9 @@ the dissolved covering would be [“0”, “10”]. Zoom levels from 0 to 23 ar
 <li><a class="reference internal" href="#ST_AsBinary"><code class="docutils literal notranslate"><span class="pre">ST_AsBinary()</span></code></a></li>
 <li><a class="reference internal" href="#ST_Point"><code class="docutils literal notranslate"><span class="pre">ST_Point()</span></code></a></li>
 <li><a class="reference internal" href="#ST_Polygon"><code class="docutils literal notranslate"><span class="pre">ST_Polygon()</span></code></a></li>
+<li><a class="reference internal" href="#ST_LineFromText"><code class="docutils literal notranslate"><span class="pre">ST_LineFromText()</span></code></a></li>
+<li><a class="reference internal" href="#ST_LineString"><code class="docutils literal notranslate"><span class="pre">ST_LineString()</span></code></a></li>
+<li><a class="reference internal" href="#ST_MultiPoint"><code class="docutils literal notranslate"><span class="pre">ST_MultiPoint()</span></code></a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#spatial-predicates">Spatial Predicates</a><ul>
