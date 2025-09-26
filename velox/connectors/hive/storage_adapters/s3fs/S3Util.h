@@ -27,6 +27,7 @@
 #include <folly/Uri.h>
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/connectors/hive/storage_adapters/s3fs/S3Counters.h"
 
 #include <aws/core/utils/stream/PreallocatedStreamBuf.h>
 
@@ -80,6 +81,11 @@ inline bool isS3File(const std::string_view filename) {
   // TODO: Each prefix should be implemented as its own filesystem.
   return isS3AwsFile(filename) || isS3aFile(filename) || isS3nFile(filename) ||
       isOssFile(filename) || isCosFile(filename) || isCosNFile(filename);
+}
+
+inline std::string getS3RetryableErrorString(std::string errorType) {
+  std::string errorTypeString{kMetricS3RetryableErrorCount};
+  return errorTypeString + "(" + errorType + ")";
 }
 
 // The input `path` must not have the S3 prefix.

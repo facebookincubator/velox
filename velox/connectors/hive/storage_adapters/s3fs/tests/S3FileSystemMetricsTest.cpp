@@ -167,6 +167,7 @@ class S3FileSystemMetricsTest : public S3Test {
  protected:
   static void SetUpTestSuite() {
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
+    registerS3Metrics();
   }
 
   void SetUp() override {
@@ -181,23 +182,22 @@ class S3FileSystemMetricsTest : public S3Test {
     filesystems::finalizeS3();
   }
   std::shared_ptr<S3TestReporter> s3Reporter;
+  std::shared_ptr<memory::MemoryPool> pool_ =
+      memory::memoryManager()->addLeafPool("S3FileSystemMetricsTest");
 };
 
 } // namespace
 
 TEST_F(S3FileSystemMetricsTest, metrics) {
-  registerS3Metrics();
-
   const auto bucketName = "metrics";
   const auto file = "test.txt";
   const auto filename = localPath(bucketName) + "/" + file;
   const auto s3File = s3URI(bucketName, file);
   auto hiveConfig = minioServer_->hiveConfig();
   S3FileSystem s3fs(bucketName, hiveConfig);
-  auto pool = memory::memoryManager()->addLeafPool("S3FileSystemMetricsTest");
 
   auto writeFile =
-      s3fs.openFileForWrite(s3File, {{}, pool.get(), std::nullopt});
+      s3fs.openFileForWrite(s3File, {{}, pool_.get(), std::nullopt});
   EXPECT_EQ(1, s3Reporter->counterMap[std::string{kMetricS3MetadataCalls}]);
   EXPECT_EQ(1, s3Reporter->counterMap[std::string{kMetricS3GetMetadataErrors}]);
 
@@ -215,6 +215,38 @@ TEST_F(S3FileSystemMetricsTest, metrics) {
   EXPECT_EQ(2, s3Reporter->counterMap[std::string{kMetricS3MetadataCalls}]);
   readFile->pread(0, kDataContent.length());
   EXPECT_EQ(1, s3Reporter->counterMap[std::string{kMetricS3GetObjectCalls}]);
+}
+
+// This test takes two to three minutes to run.
+TEST_F(S3FileSystemMetricsTest, retryMetricTest) {
+  const auto bucketName = "metrics";
+  const auto file = "test.txt";
+  const auto filename = localPath(bucketName) + "/" + file;
+  const auto s3File = s3URI(bucketName, file);
+  auto hiveConfig =
+      minioServer_->hiveConfig({{"hive.s3.max-client-retries", "2"}});
+  S3FileSystem s3fs(bucketName, hiveConfig);
+
+  auto writeFile =
+      s3fs.openFileForWrite(s3File, {{}, pool_.get(), std::nullopt});
+  constexpr std::string_view kDataContent =
+      "Dance me to your beauty with a burning violin"
+      "Dance me through the panic till I'm gathered safely in"
+      "Lift me like an olive branch and be my homeward dove"
+      "Dance me to the end of love";
+  writeFile->append(kDataContent);
+  writeFile->close();
+  EXPECT_EQ(1, s3Reporter->counterMap[std::string{kMetricS3SuccessfulUploads}]);
+
+  auto readFile = s3fs.openFileForRead(s3File);
+  minioServer_->stop();
+  VELOX_ASSERT_THROW(
+      readFile->pread(0, kDataContent.length()),
+      "Failed to get S3 object due to: 'Network connection'. Path:'s3://metrics/test.txt', SDK Error Type:99, HTTP Status Code:-1, S3 Service:'Unknown', Message:'curlCode: 7, Couldn't connect to server', RequestID:''");
+  EXPECT_EQ(s3Reporter->counterMap[std::string{kMetricS3GetObjectRetries}], 0);
+  EXPECT_EQ(
+      s3Reporter->counterMap[getS3RetryableErrorString("Network connection")],
+      0);
 }
 
 } // namespace facebook::velox::filesystems
