@@ -28,6 +28,7 @@
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 
+#include "folly/Conv.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/exec/Driver.h"
@@ -47,7 +48,6 @@
 #include <iostream>
 
 static const std::string kCudfAdapterName = "cuDF";
-static const std::string kCudfEnabled = "cudf.enabled";
 
 namespace facebook::velox::cudf_velox {
 
@@ -352,7 +352,7 @@ struct CudfDriverAdapter {
   // Call operator needed by DriverAdapter
   bool operator()(const exec::DriverFactory& factory, exec::Driver& driver) {
     if (!driver.driverCtx()->queryConfig().get<bool>(
-            kCudfEnabled, CudfConfig::getInstance().enabled)) {
+            CudfConfig::kCudfEnabled, CudfConfig::getInstance().enabled)) {
       return false;
     }
     auto state = CompileState(factory, driver);
@@ -409,4 +409,27 @@ CudfConfig& CudfConfig::getInstance() {
   static CudfConfig instance;
   return instance;
 }
+
+void CudfConfig::initialize(
+    std::unordered_map<std::string, std::string>&& config) {
+  if (config.find(kCudfEnabled) != config.end()) {
+    enabled = folly::to<bool>(config[kCudfEnabled]);
+  }
+  if (config.find(kCudfDebugEnabled) != config.end()) {
+    debugEnabled = folly::to<bool>(config[kCudfDebugEnabled]);
+  }
+  if (config.find(kCudfMemoryResource) != config.end()) {
+    memoryResource = config[kCudfMemoryResource];
+  }
+  if (config.find(kCudfMemoryPercent) != config.end()) {
+    memoryPercent = folly::to<int32_t>(config[kCudfMemoryPercent]);
+  }
+  if (config.find(kCudfFunctionNamePrefix) != config.end()) {
+    functionNamePrefix = config[kCudfFunctionNamePrefix];
+  }
+  if (config.find(kCudfForceReplace) != config.end()) {
+    forceReplace = folly::to<bool>(config[kCudfForceReplace]);
+  }
+}
+
 } // namespace facebook::velox::cudf_velox
