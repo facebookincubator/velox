@@ -278,6 +278,13 @@ VectorPtr CastExpr::castFromTime(
       buffer->setSize(rawBuffer - buffer->asMutable<char>());
       return castResult;
     }
+    case TypeKind::BIGINT: {
+      auto* resultFlatVector = castResult->as<FlatVector<int64_t>>();
+      applyToSelectedNoThrowLocal(context, rows, castResult, [&](int row) {
+        resultFlatVector->set(row, inputFlatVector->valueAt(row));
+      });
+      return castResult;
+    }
     default:
       VELOX_UNSUPPORTED(
           "Cast from TIME to {} is not supported", toType->toString());

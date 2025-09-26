@@ -3166,5 +3166,54 @@ TEST_F(CastExprTest, timeToVarcharCast) {
   }
 }
 
+TEST_F(CastExprTest, timeToBigintCast) {
+  {
+    // Test casting TIME to BIGINT
+
+    // Test various TIME values (milliseconds since midnight)
+    // 0 = 00:00:00.000
+    // 3661000 = 01:01:01.000
+    // 43200000 = 12:00:00.000 (noon)
+    // 86399999 = 23:59:59.999
+    auto timeVector =
+        makeFlatVector<int64_t>({0, 3661000, 43200000, 86399999}, TIME());
+
+    auto result = evaluate<FlatVector<int64_t>>(
+        "cast(c0 as bigint)", makeRowVector({timeVector}));
+
+    // Should return the same values since TIME is already stored as int64_t
+    // milliseconds
+    auto expected = makeFlatVector<int64_t>({0, 3661000, 43200000, 86399999});
+
+    assertEqualVectors(expected, result);
+  }
+
+  {
+    // Test casting TIME to BIGINT with nulls
+    auto timeVector = makeNullableFlatVector<int64_t>(
+        {0, std::nullopt, 43200000, std::nullopt}, TIME());
+
+    auto result = evaluate<FlatVector<int64_t>>(
+        "cast(c0 as bigint)", makeRowVector({timeVector}));
+
+    auto expected = makeNullableFlatVector<int64_t>(
+        {0, std::nullopt, 43200000, std::nullopt});
+
+    assertEqualVectors(expected, result);
+  }
+
+  {
+    // Test try_cast for TIME to BIGINT
+    auto timeVector = makeFlatVector<int64_t>({0, 43200000}, TIME());
+
+    auto result = evaluate<FlatVector<int64_t>>(
+        "try_cast(c0 as bigint)", makeRowVector({timeVector}));
+
+    auto expected = makeFlatVector<int64_t>({0, 43200000});
+
+    assertEqualVectors(expected, result);
+  }
+}
+
 } // namespace
 } // namespace facebook::velox::test
