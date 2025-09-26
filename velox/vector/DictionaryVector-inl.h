@@ -53,11 +53,6 @@ void DictionaryVector<T>::setInternalState() {
     }
   }
   initialized_ = true;
-
-  BaseVector::inMemoryBytes_ =
-      BaseVector::nulls_ ? BaseVector::nulls_->capacity() : 0;
-  BaseVector::inMemoryBytes_ += indices_->capacity();
-  BaseVector::inMemoryBytes_ += dictionaryValues_->inMemoryBytes();
 }
 
 template <typename T>

@@ -66,7 +66,6 @@ class RowVector : public BaseVector {
             rowType->nameOf(i),
             i,
             type->childAt(i)->toString());
-        BaseVector::inMemoryBytes_ += child->inMemoryBytes();
       }
     }
     updateContainsLazyNotLoaded();
