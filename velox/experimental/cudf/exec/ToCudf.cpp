@@ -342,14 +342,12 @@ bool CompileState::compile(bool force_replace) {
   return replacementsMade;
 }
 
+std::shared_ptr<rmm::mr::device_memory_resource> mr_;
+
 struct CudfDriverAdapter {
-  std::shared_ptr<rmm::mr::device_memory_resource> mr_;
   bool force_replace_;
 
-  CudfDriverAdapter(
-      std::shared_ptr<rmm::mr::device_memory_resource> mr,
-      bool force_replace)
-      : mr_(mr), force_replace_{force_replace} {}
+  CudfDriverAdapter(bool force_replace) : force_replace_{force_replace} {}
 
   // Call operator needed by DriverAdapter
   bool operator()(const exec::DriverFactory& factory, exec::Driver& driver) {
@@ -380,16 +378,18 @@ void registerCudf(const CudfOptions& options) {
   const std::string mrMode = options.cudfMemoryResource;
   auto mr = cudf_velox::createMemoryResource(mrMode, options.memoryPercent);
   cudf::set_current_device_resource(mr.get());
+  mr_ = mr;
 
   exec::Operator::registerOperator(
       std::make_unique<CudfHashJoinBridgeTranslator>());
-  CudfDriverAdapter cda{mr, options.force_replace};
+  CudfDriverAdapter cda{options.force_replace};
   exec::DriverAdapter cudfAdapter{kCudfAdapterName, {}, cda};
   exec::DriverFactory::registerAdapter(cudfAdapter);
   isCudfRegistered = true;
 }
 
 void unregisterCudf() {
+  mr_ = nullptr;
   exec::DriverFactory::adapters.erase(
       std::remove_if(
           exec::DriverFactory::adapters.begin(),

@@ -19,6 +19,8 @@
 #include "velox/exec/Driver.h"
 #include "velox/exec/Operator.h"
 
+#include <rmm/mr/device/device_memory_resource.hpp>
+
 #include <gflags/gflags.h>
 
 DECLARE_bool(velox_cudf_enabled);
@@ -89,6 +91,8 @@ class CudfOptions {
   CudfOptions& operator=(const CudfOptions&) = delete;
   std::string prefix_;
 };
+
+extern std::shared_ptr<rmm::mr::device_memory_resource> mr_;
 
 /// Registers adapter to add cuDF operators to Drivers.
 void registerCudf(const CudfOptions& options = CudfOptions::getInstance());
