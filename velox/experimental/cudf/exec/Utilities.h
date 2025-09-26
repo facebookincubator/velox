@@ -56,4 +56,10 @@ createMemoryResource(std::string_view mode, int percent);
     const TypePtr& tableType,
     rmm::cuda_stream_view stream);
 
+[[nodiscard]] std::vector<std::unique_ptr<cudf::table>>
+getConcatenatedTableBatched(
+    std::vector<CudfVectorPtr>& tables,
+    const TypePtr& tableType,
+    rmm::cuda_stream_view stream);
+
 } // namespace facebook::velox::cudf_velox

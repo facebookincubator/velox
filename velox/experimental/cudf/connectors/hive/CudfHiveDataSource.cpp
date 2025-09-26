@@ -267,6 +267,10 @@ void CudfHiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
           hiveSplit->fileFormat,
           dwio::common::FileFormat::PARQUET,
           "Unsupported file format for conversion from HiveConnectorSplit to CudfHiveConnectorSplit");
+      VELOX_CHECK_EQ(
+          hiveSplit->start,
+          0,
+          "CudfHiveDataSource cannot process splits with non-zero offset");
       // Remove "file:" prefix from the file path if present
       std::string cleanedPath = hiveSplit->filePath;
       constexpr std::string_view kFilePrefix = "file:";
