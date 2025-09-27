@@ -109,11 +109,13 @@ void registerBitwiseAggregates(
     bool overwrite) {
   registerBitwise<BitwiseOrAggregate>(
       prefix + kBitwiseOr,
+      true,
       withCompanionFunctions,
       onlyPrestoSignatures,
       overwrite);
   registerBitwise<BitwiseAndAggregate>(
       prefix + kBitwiseAnd,
+      true,
       withCompanionFunctions,
       onlyPrestoSignatures,
       overwrite);

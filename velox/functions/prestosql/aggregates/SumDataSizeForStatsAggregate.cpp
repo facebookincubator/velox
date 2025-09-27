@@ -213,6 +213,7 @@ void registerSumDataSizeForStatsAggregate(
 
         return std::make_unique<SumDataSizeForStatsAggregate>(resultType);
       },
+      {.orderSensitive = false},
       withCompanionFunctions,
       overwrite);
 }
