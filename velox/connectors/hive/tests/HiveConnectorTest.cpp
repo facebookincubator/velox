@@ -21,6 +21,7 @@
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveConnectorUtil.h"
 #include "velox/connectors/hive/HiveDataSource.h"
+#include "velox/expression/ExprConstants.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
 
 namespace facebook::velox::connector::hive {
@@ -610,6 +611,26 @@ TEST_F(HiveConnectorTest, extractFiltersFromRemainingFilter) {
   ASSERT_TRUE(remaining);
   ASSERT_EQ(
       remaining->toString(), "not(lt(ROW[\"c2\"],cast(0 as DECIMAL(20, 0))))");
+
+  // parseExpr gives AND/OR with 2 arguments.  We need to construct the node
+  // manually to have more than 2.
+  expr = std::make_shared<core::CallTypedExpr>(
+      BOOLEAN(),
+      std::vector<core::TypedExprPtr>({
+          parseExpr("c0 > 0", rowType),
+          parseExpr("c1 > 0", rowType),
+          parseExpr("c2 > 0::decimal(20, 0)", rowType),
+      }),
+      expression::kAnd);
+  filters.clear();
+  remaining = extractFiltersFromRemainingFilter(
+      expr, &evaluator, false, filters, sampleRate);
+  ASSERT_EQ(sampleRate, 1);
+  ASSERT_EQ(filters.size(), 3);
+  ASSERT_TRUE(filters.contains(Subfield("c0")));
+  ASSERT_TRUE(filters.contains(Subfield("c1")));
+  ASSERT_TRUE(filters.contains(Subfield("c2")));
+  ASSERT_FALSE(remaining);
 }
 
 TEST_F(HiveConnectorTest, prestoTableSampling) {

@@ -165,12 +165,18 @@ std::unique_ptr<MetadataFilter::Node> MetadataFilter::Node::fromExpression(
     return nullptr;
   }
   if (call->name() == expression::kAnd) {
+    if (call->inputs().size() != 2) {
+      return nullptr;
+    }
     auto lhs = fromExpression(*call->inputs()[0], evaluator, negated);
     auto rhs = fromExpression(*call->inputs()[1], evaluator, negated);
     return negated ? OrNode::create(std::move(lhs), std::move(rhs))
                    : AndNode::create(std::move(lhs), std::move(rhs));
   }
   if (call->name() == expression::kOr) {
+    if (call->inputs().size() != 2) {
+      return nullptr;
+    }
     auto lhs = fromExpression(*call->inputs()[0], evaluator, negated);
     auto rhs = fromExpression(*call->inputs()[1], evaluator, negated);
     return negated ? AndNode::create(std::move(lhs), std::move(rhs))
