@@ -82,14 +82,7 @@ std::vector<AggregateInfo> toAggregateInfo(
       }
     }
     const auto& name = aggregate.call->name();
-    // 1. Ignore duplicates property
-    //    if aggregate function is not sensitive to duplicates.
-    // 2. Ignore sorting properties
-    //    if aggregate function is not sensitive to the order of inputs.
-    auto* entry = getAggregateFunctionEntry(name);
-    const auto& metadata = entry->metadata;
 
-    info.distinct = !metadata.ignoreDuplicates && aggregate.distinct;
     info.intermediateType =
         resolveAggregateFunction(name, aggregate.rawInputTypes).second;
 
@@ -120,6 +113,13 @@ std::vector<AggregateInfo> toAggregateInfo(
       info.function->setLambdaExpressions(lambdas, expressionEvaluator);
     }
 
+    // 1. Ignore duplicates property
+    //    if aggregate function is not sensitive to duplicates.
+    // 2. Ignore sorting properties
+    //    if aggregate function is not sensitive to the order of inputs.
+    auto* entry = getAggregateFunctionEntry(name);
+    const auto& metadata = entry->metadata;
+    info.distinct = !metadata.ignoreDuplicates && aggregate.distinct;
     if (metadata.orderSensitive) {
       // Sorting keys and orders.
       const auto numSortingKeys = aggregate.sortingKeys.size();
