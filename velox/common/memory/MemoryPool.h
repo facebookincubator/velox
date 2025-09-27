@@ -1010,7 +1010,12 @@ class MemoryPoolImpl : public MemoryPool {
 
   // Dump the recorded call sites of the memory allocations in
   // 'debugAllocRecords_' to the string.
-  std::string dumpRecordsDbg() const;
+  std::string dumpRecordsDbgLocked() const;
+
+  std::string dumpRecordsDbg() const {
+    std::lock_guard<std::mutex> l(debugAllocMutex_);
+    return dumpRecordsDbgLocked();
+  }
 
   void handleAllocationFailure(const std::string& failureMessage);
 
@@ -1075,7 +1080,7 @@ class MemoryPoolImpl : public MemoryPool {
   std::atomic_uint64_t numCapacityGrowths_{0};
 
   // Mutex for 'debugAllocRecords_'.
-  std::mutex debugAllocMutex_;
+  mutable std::mutex debugAllocMutex_;
 
   // Map from address to 'AllocationRecord'.
   std::unordered_map<uint64_t, AllocationRecord> debugAllocRecords_;
