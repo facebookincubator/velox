@@ -601,6 +601,38 @@ TEST_F(MergeTest, localMergeSpillPartialEmpty) {
   ASSERT_EQ(planStats.spilledRows, 120);
 }
 
+DEBUG_ONLY_TEST_F(MergeTest, localMergeSpillWithException) {
+  std::vector<RowVectorPtr> vectors;
+  for (int32_t i = 0; i < 9; ++i) {
+    constexpr vector_size_t batchSize = 137;
+    auto c0 = makeFlatVector<int64_t>(
+        batchSize, [&](auto row) { return batchSize * i + row; }, nullEvery(5));
+    auto c1 = makeFlatVector<int64_t>(
+        batchSize, [&](auto row) { return row; }, nullEvery(5));
+    auto c2 = makeFlatVector<double>(
+        batchSize, [](auto row) { return row * 0.1; }, nullEvery(11));
+    auto c3 = makeFlatVector<StringView>(batchSize, [](auto row) {
+      return StringView::makeInline(std::to_string(row));
+    });
+    vectors.push_back(makeRowVector({c0, c1, c2, c3}));
+  }
+  createDuckDbTable(vectors);
+
+  for (auto i = 0; i < 11; ++i) {
+    std::atomic_int cnt{0};
+    const auto errorMessage = "ConcatFilesSpillBatchStream::nextBatch fail";
+    SCOPED_TESTVALUE_SET(
+        "facebook::velox::exec::ConcatFilesSpillBatchStream::nextBatch",
+        std::function<void(void*)>([&](void* /*unused*/) {
+          if (cnt++ == i) {
+            VELOX_FAIL("ConcatFilesSpillBatchStream::nextBatch fail");
+          }
+        }));
+
+    VELOX_ASSERT_THROW(testSingleKeyWithSpill(vectors, "c0"), errorMessage);
+  }
+}
+
 DEBUG_ONLY_TEST_F(MergeTest, localMergeSmallBatch) {
   std::vector<RowVectorPtr> vectors;
   for (int32_t i = 0; i < 9; ++i) {

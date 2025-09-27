@@ -422,7 +422,7 @@ TEST_F(MergerTest, spillMerger) {
   }
 }
 
-TEST_F(MergerTest, spillMergerException) {
+DEBUG_ONLY_TEST_F(MergerTest, spillMergerException) {
   struct TestSetting {
     size_t maxOutputRows;
     size_t numSources;
@@ -442,7 +442,7 @@ TEST_F(MergerTest, spillMergerException) {
   SCOPED_TESTVALUE_SET(
       "facebook::velox::exec::ConcatFilesSpillBatchStream::nextBatch",
       std::function<void(void*)>([&](void* /*unused*/) {
-        if (cnt++ == 3) {
+        if (cnt++ == 11) {
           VELOX_FAIL("ConcatFilesSpillBatchStream::nextBatch fail");
         }
       }));
