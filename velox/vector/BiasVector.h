@@ -92,10 +92,6 @@ class BiasVector : public SimpleVector<T> {
   //    bias");
 
  public:
-  static constexpr bool can_simd =
-      (std::is_same_v<T, int64_t> || std::is_same_v<T, int32_t> ||
-       std::is_same_v<T, int16_t>);
-
   BiasVector(
       velox::memory::MemoryPool* pool,
       BufferPtr nulls,
@@ -122,15 +118,6 @@ class BiasVector : public SimpleVector<T> {
     SimpleVector<T>::checkElementSize();
     return valueAtFast(idx);
   }
-
-  /**
-   * Loads a SIMD vector of data at the virtual byteOffset given
-   * Note this method is implemented on each vector type, but is intentionally
-   * not virtual for performance reasons
-   *
-   * @param byteOffset - the byte offset to laod from
-   */
-  xsimd::batch<T> loadSIMDValueBufferAt(size_t index) const;
 
   std::unique_ptr<SimpleVector<uint64_t>> hashAll() const override;
 
@@ -182,13 +169,6 @@ class BiasVector : public SimpleVector<T> {
   }
 
  private:
-  template <typename U>
-  inline xsimd::batch<T> loadSIMDInternal(size_t byteOffset) const {
-    auto mem = reinterpret_cast<const U*>(
-        rawValues_ + byteOffset / sizeof(T) * sizeof(U));
-    return xsimd::batch<T>::load_unaligned(mem);
-  }
-
   TypeKind valueType_;
   BufferPtr values_;
   const uint8_t* rawValues_;
@@ -196,9 +176,6 @@ class BiasVector : public SimpleVector<T> {
   // Note: there is no 64 bit internal array as the largest number type we
   // support is 64 bit and all biasing requires a smaller internal type.
   T bias_;
-
-  // Used to debias several values at a time.
-  std::conditional_t<can_simd, xsimd::batch<T>, char> biasBuffer_;
 };
 
 template <typename T>
