@@ -19,6 +19,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <mutex>
 #include <vector>
 
 inline size_t count_trailing_zeros(uint64_t x) {
