@@ -14,9 +14,7 @@
  * limitations under the License.
  */
 
-#include <boost/math/constants/constants.hpp>
-#include <common/base/tests/GTestUtils.h>
-
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/exec/Merge.h"
 #include "velox/exec/MergeSource.h"
@@ -438,16 +436,6 @@ TEST_F(MergerTest, spillMergerException) {
           queueSize);
     }
   };
-  std::vector<TestSetting> testSettings;
-  for (size_t maxOutputRows : {1, 7, 16}) {
-    for (size_t numSources : {1, 3, 8}) {
-      for (size_t queueSize : {1, 2}) {
-        testSettings.push_back({maxOutputRows, numSources, queueSize});
-      }
-    }
-  }
-  testSettings.push_back({32, 3, 2});
-  testSettings.push_back({1024, 8, 2});
 
   std::atomic_int cnt{0};
   const auto errorMessage = "ConcatFilesSpillBatchStream::nextBatch fail";
@@ -458,10 +446,12 @@ TEST_F(MergerTest, spillMergerException) {
           VELOX_FAIL("ConcatFilesSpillBatchStream::nextBatch fail");
         }
       }));
-  const auto sources = createMergeSources(5, 2);
-  auto [inputs, filesGroup] = generateInputs(5, 16);
-
-  const auto spillMerger = createSpillMerger(std::move(filesGroup), 100, 2);
+  const auto numSources = 5;
+  const auto queueSize = 2;
+  const auto sources = createMergeSources(numSources, queueSize);
+  auto [inputs, filesGroup] = generateInputs(numSources, 16);
+  const auto spillMerger =
+      createSpillMerger(std::move(filesGroup), 100, queueSize);
   spillMerger->start();
   VELOX_ASSERT_THROW(getOutputFromSpillMerger(spillMerger.get()), errorMessage);
 }

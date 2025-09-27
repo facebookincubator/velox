@@ -331,6 +331,8 @@ class SpillMerger : public std::enable_shared_from_this<SpillMerger> {
 
   bool hasError() const;
 
+  void checkError();
+
   folly::Executor* const executor_;
   const std::shared_ptr<folly::Synchronized<common::SpillStats>> spillStats_;
   const std::shared_ptr<memory::MemoryPool> pool_;

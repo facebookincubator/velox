@@ -15,8 +15,9 @@
  */
 
 #include "velox/exec/Merge.h"
+#include <folly/Traits.h>
+#include <exception>
 #include "velox/common/testutil/TestValue.h"
-#include "velox/exec/OperatorUtils.h"
 #include "velox/exec/Task.h"
 
 using facebook::velox::common::testutil::TestValue;
@@ -571,12 +572,7 @@ RowVectorPtr SpillMerger::getOutput(
   }
   auto output = sourceMerger_->getOutput(sourceBlockingFutures, atEnd);
   if (atEnd) {
-    if (hasError()) {
-      sourceMerger_.reset();
-      batchStreams_.clear();
-      sources_.clear();
-      std::rethrow_exception(exception_);
-    }
+    checkError();
   }
   return output;
 }
@@ -640,6 +636,7 @@ void SpillMerger::readFromSpillFileStream(
       ContinueFuture future{ContinueFuture::makeEmpty()};
       LOG(ERROR) << "Stop the " << streamIdx << " th source on error.";
       sources_[streamIdx]->enqueue(nullptr, &future);
+      VELOX_CHECK(!future.valid());
       return;
     }
 
@@ -659,21 +656,23 @@ void SpillMerger::readFromSpillFileStream(
       readFromSpillFileStream(mergeHolder, streamIdx);
     } else {
       VELOX_CHECK(future.valid());
-      std::move(future).via(executor_).thenTry(
-          [this, mergeHolder, streamIdx](folly::Try<folly::Unit>&& t) {
-            const auto merger = mergeHolder.lock();
-            if (merger == nullptr) {
-              return;
-            }
-            if (t.hasException()) {
-              LOG(ERROR) << "Stop the " << streamIdx << " th source on error.";
-              setError(std::make_exception_ptr(t.exception()));
-              ContinueFuture future{ContinueFuture::makeEmpty()};
-              sources_[streamIdx]->enqueue(nullptr, &future);
-            } else {
-              readFromSpillFileStream(mergeHolder, streamIdx);
-            }
-          });
+      std::move(future)
+          .via(executor_)
+          .thenValue([this, mergeHolder, streamIdx](auto&&) {
+            readFromSpillFileStream(mergeHolder, streamIdx);
+          })
+          .thenError(
+              folly::tag_t<std::exception>{},
+              [this, mergeHolder, streamIdx](const std::exception& e) {
+                const auto merger = mergeHolder.lock();
+                if (merger != nullptr) {
+                  LOG(ERROR) << "Stop the " << streamIdx
+                             << " th source on error: " << e.what();
+                  setError(std::make_exception_ptr(e));
+                  ContinueFuture future{ContinueFuture::makeEmpty()};
+                  sources_[streamIdx]->enqueue(nullptr, &future);
+                }
+              });
     }
   } catch (const std::exception& e) {
     LOG(ERROR) << "The " << streamIdx << " th catch exception. " << e.what();
@@ -702,6 +701,15 @@ void SpillMerger::setError(const std::exception_ptr& exception) {
 bool SpillMerger::hasError() const {
   std::lock_guard l(mutex_);
   return exception_ != nullptr;
+}
+
+void SpillMerger::checkError() {
+  if (hasError()) {
+    sourceMerger_.reset();
+    batchStreams_.clear();
+    sources_.clear();
+    std::rethrow_exception(exception_);
+  }
 }
 
 LocalMerge::LocalMerge(
