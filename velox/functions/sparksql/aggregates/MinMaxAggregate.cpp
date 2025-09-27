@@ -45,7 +45,7 @@ exec::AggregateRegistrationResult registerMin(
             TimestampPrecision::kMicroseconds);
         return factory(step, argTypes, resultType, config);
       },
-      {.orderSensitive = false},
+      {.ignoreDuplicates = true, .orderSensitive = false},
       withCompanionFunctions,
       overwrite);
 }
