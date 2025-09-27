@@ -634,7 +634,6 @@ void SpillMerger::readFromSpillFileStream(
 
     if (hasError()) {
       ContinueFuture future{ContinueFuture::makeEmpty()};
-      LOG(ERROR) << "Stop the " << streamIdx << " th source on error.";
       sources_[streamIdx]->enqueue(nullptr, &future);
       VELOX_CHECK(!future.valid());
       return;
