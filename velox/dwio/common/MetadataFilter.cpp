@@ -68,85 +68,112 @@ class MetadataFilter::LeafNode : public Node {
   std::unique_ptr<Filter> filter_;
 };
 
-struct MetadataFilter::AndNode : Node {
+struct MetadataFilter::ConditionNode : Node {
   static std::unique_ptr<Node> create(
-      std::unique_ptr<Node> lhs,
-      std::unique_ptr<Node> rhs) {
-    if (!lhs) {
-      return rhs;
+      bool conjuction,
+      std::vector<std::unique_ptr<Node>> args);
+
+  static std::unique_ptr<Node> fromExpression(
+      const std::vector<core::TypedExprPtr>& inputs,
+      core::ExpressionEvaluator* evaluator,
+      bool conjunction,
+      bool negated) {
+    std::vector<std::unique_ptr<Node>> args;
+    for (const auto& input : inputs) {
+      if (auto node = Node::fromExpression(*input, evaluator, negated)) {
+        args.push_back(std::move(node));
+      }
     }
-    if (!rhs) {
-      return lhs;
-    }
-    return std::make_unique<AndNode>(std::move(lhs), std::move(rhs));
+    return create(conjunction ? !negated : negated, std::move(args));
   }
 
-  AndNode(std::unique_ptr<Node> lhs, std::unique_ptr<Node> rhs)
-      : lhs_(std::move(lhs)), rhs_(std::move(rhs)) {}
+  explicit ConditionNode(std::vector<std::unique_ptr<Node>> args)
+      : args_{std::move(args)} {}
 
-  void addToScanSpec(ScanSpec& scanSpec) const override {
-    lhs_->addToScanSpec(scanSpec);
-    rhs_->addToScanSpec(scanSpec);
-  }
-
-  uint64_t* eval(LeafResults& leafResults, int size) const override {
-    auto* l = lhs_->eval(leafResults, size);
-    auto* r = rhs_->eval(leafResults, size);
-    if (!l) {
-      return r;
+  void addToScanSpec(ScanSpec& scanSpec) const final {
+    for (const auto& arg : args_) {
+      arg->addToScanSpec(scanSpec);
     }
-    if (!r) {
-      return l;
+  }
+
+ protected:
+  std::string ToStringImpl(std::string_view prefix) const {
+    std::string result{prefix};
+    for (size_t i = 0; i < args_.size(); ++i) {
+      if (i != 0) {
+        result += ",";
+      }
+      result += args_[i]->toString();
     }
-    bits::orBits(l, r, 0, size);
-    return l;
+    result += ")";
+    return result;
   }
 
-  std::string toString() const override {
-    return "and(" + lhs_->toString() + "," + rhs_->toString() + ")";
-  }
-
- private:
-  std::unique_ptr<Node> lhs_;
-  std::unique_ptr<Node> rhs_;
+  std::vector<std::unique_ptr<Node>> args_;
 };
 
-struct MetadataFilter::OrNode : Node {
-  static std::unique_ptr<Node> create(
-      std::unique_ptr<Node> lhs,
-      std::unique_ptr<Node> rhs) {
-    if (!lhs || !rhs) {
-      return nullptr;
+struct MetadataFilter::AndNode final : ConditionNode {
+  using ConditionNode::ConditionNode;
+
+  uint64_t* eval(LeafResults& leafResults, int size) const final {
+    uint64_t* result = nullptr;
+    for (const auto& arg : args_) {
+      auto* a = arg->eval(leafResults, size);
+      if (!a) {
+        continue;
+      }
+      if (!result) {
+        result = a;
+      } else {
+        bits::orBits(result, a, 0, size);
+      }
     }
-    return std::make_unique<OrNode>(std::move(lhs), std::move(rhs));
+    return result;
   }
 
-  OrNode(std::unique_ptr<Node> lhs, std::unique_ptr<Node> rhs)
-      : lhs_(std::move(lhs)), rhs_(std::move(rhs)) {}
-
-  void addToScanSpec(ScanSpec& scanSpec) const override {
-    lhs_->addToScanSpec(scanSpec);
-    rhs_->addToScanSpec(scanSpec);
+  std::string toString() const final {
+    return ToStringImpl("and(");
   }
-
-  uint64_t* eval(LeafResults& leafResults, int size) const override {
-    auto* l = lhs_->eval(leafResults, size);
-    auto* r = rhs_->eval(leafResults, size);
-    if (!l || !r) {
-      return nullptr;
-    }
-    bits::andBits(l, r, 0, size);
-    return l;
-  }
-
-  std::string toString() const override {
-    return "or(" + lhs_->toString() + "," + rhs_->toString() + ")";
-  }
-
- private:
-  std::unique_ptr<Node> lhs_;
-  std::unique_ptr<Node> rhs_;
 };
+
+struct MetadataFilter::OrNode final : ConditionNode {
+  using ConditionNode::ConditionNode;
+
+  uint64_t* eval(LeafResults& leafResults, int size) const final {
+    uint64_t* result = nullptr;
+    for (const auto& arg : args_) {
+      auto* a = arg->eval(leafResults, size);
+      if (!a) {
+        return nullptr;
+      }
+      if (!result) {
+        result = a;
+      } else {
+        bits::andBits(result, a, 0, size);
+      }
+    }
+    return result;
+  }
+
+  std::string toString() const final {
+    return ToStringImpl("or(");
+  }
+};
+
+std::unique_ptr<MetadataFilter::Node> MetadataFilter::ConditionNode::create(
+    bool conjunction,
+    std::vector<std::unique_ptr<Node>> args) {
+  if (args.empty()) {
+    return nullptr;
+  }
+  if (args.size() == 1) {
+    return std::move(args[0]);
+  }
+  if (conjunction) {
+    return std::make_unique<AndNode>(std::move(args));
+  }
+  return std::make_unique<OrNode>(std::move(args));
+}
 
 namespace {
 
@@ -165,16 +192,12 @@ std::unique_ptr<MetadataFilter::Node> MetadataFilter::Node::fromExpression(
     return nullptr;
   }
   if (call->name() == expression::kAnd) {
-    auto lhs = fromExpression(*call->inputs()[0], evaluator, negated);
-    auto rhs = fromExpression(*call->inputs()[1], evaluator, negated);
-    return negated ? OrNode::create(std::move(lhs), std::move(rhs))
-                   : AndNode::create(std::move(lhs), std::move(rhs));
+    return ConditionNode::fromExpression(
+        call->inputs(), evaluator, true, negated);
   }
   if (call->name() == expression::kOr) {
-    auto lhs = fromExpression(*call->inputs()[0], evaluator, negated);
-    auto rhs = fromExpression(*call->inputs()[1], evaluator, negated);
-    return negated ? AndNode::create(std::move(lhs), std::move(rhs))
-                   : OrNode::create(std::move(lhs), std::move(rhs));
+    return ConditionNode::fromExpression(
+        call->inputs(), evaluator, false, negated);
   }
   if (call->name() == "not") {
     return fromExpression(*call->inputs()[0], evaluator, !negated);
