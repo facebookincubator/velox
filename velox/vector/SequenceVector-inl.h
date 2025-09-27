@@ -120,26 +120,6 @@ std::unique_ptr<SimpleVector<uint64_t>> SequenceVector<T>::hashAll() const {
 }
 
 template <typename T>
-xsimd::batch<T> SequenceVector<T>::loadSIMDValueBufferAt(
-    size_t byteOffset) const {
-  if constexpr (std::is_same_v<T, bool>) {
-    throw std::runtime_error(
-        "Sequence encoding only supports SIMD operations on integers");
-  } else {
-    constexpr int kBatchSize = xsimd::batch<T>::size;
-    auto startIndex = byteOffset / sizeof(T);
-    if (checkLoadRange(startIndex, kBatchSize)) {
-      return simd::setAll(valueAtFast(startIndex));
-    }
-    alignas(xsimd::default_arch::alignment()) T tmp[kBatchSize];
-    for (int i = 0; i < kBatchSize; ++i) {
-      tmp[i] = valueAtFast(startIndex + i);
-    }
-    return xsimd::load_aligned(tmp);
-  }
-}
-
-template <typename T>
 bool SequenceVector<T>::checkLoadRange(size_t index, size_t count) const {
   // If the entire range is below the sequence threshold then we can load
   // everything at once

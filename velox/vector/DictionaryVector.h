@@ -32,8 +32,6 @@ class DictionaryVector : public SimpleVector<T> {
   DictionaryVector(const DictionaryVector&) = delete;
   DictionaryVector& operator=(const DictionaryVector&) = delete;
 
-  static constexpr bool can_simd = std::is_same_v<T, int64_t>;
-
   // Creates dictionary vector using base vector (dictionaryValues) and a set
   // of indices (dictionaryIndexArray).
   //
@@ -107,16 +105,6 @@ class DictionaryVector : public SimpleVector<T> {
   }
 
   std::unique_ptr<SimpleVector<uint64_t>> hashAll() const override;
-
-  /**
-   * Loads a SIMD vector of data at the virtual byteOffset given
-   * Note this method is implemented on each vector type, but is intentionally
-   * not virtual for performance reasons
-   *
-   * @param index at which to start the vector load
-   * @return the vector of values starting at the given index
-   */
-  xsimd::batch<T> loadSIMDValueBufferAt(size_t index) const;
 
   inline const BufferPtr& indices() const {
     return indices_;

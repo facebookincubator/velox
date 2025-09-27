@@ -25,32 +25,6 @@
 
 namespace facebook::velox {
 
-// Here are some common intel intrsic operations. Please refer to
-// https://software.intel.com/sites/landingpage/IntrinsicsGuide for examples.
-
-// _mm256_set1_epi<64x|32|16|8>(x) => set a 256bit vector with all values of x
-//    at the requested bit width
-// _mm256_cmpeq_epi<64|32|16|8>(a, b) => compare a vector of 8, 16, 32 or 64bit
-//    values in a vector with another vector. Result is a vector of all 0xFF..
-//    if the slot is equal between the two vectors or 0x00... if the slot is not
-//    equal between the two vectors
-// _mm256_cmpgt_epi<64|32|16|8>(a, b) => compare a vector of 8, 16, 32 or 64bit
-//    values in a vector with another vector. Result is a vector of all 0xFF..
-//    if the slot in `a` is greater than the slot in `b` or 0x00... otherwise
-// _mm256_loadu_si256(addr) => load 256 bits at addr into a single 256b
-// _mm256_movemask_ps(mask) -> Set each bit of mask dst based on the
-//    most significant bit of the corresponding packed single-precision (32-bit)
-//    floating-point element in a.
-// _mm256_testc_si256 => Compute bitwise AND of 2 256 bit vectors (see comment
-// blocks below for examples)
-
-// uses the simd utilities to smooth out access to variable width intrinsics
-
-// cost factors for individual operations on different filter paths - these are
-// experimentally derived from micro-bench perf testing.
-const double SIMD_CMP_COST = 0.00000051;
-const double SET_CMP_COST = 0.000023;
-
 template <typename T>
 const T* FlatVector<T>::rawValues() const {
   return rawValues_;
@@ -65,16 +39,6 @@ T FlatVector<T>::valueAtFast(vector_size_t idx) const {
 template <typename T>
 Range<T> FlatVector<T>::asRange() const {
   return Range<T>(rawValues(), 0, BaseVector::length_);
-}
-
-template <typename T>
-xsimd::batch<T> FlatVector<T>::loadSIMDValueBufferAt(size_t byteOffset) const {
-  auto mem = reinterpret_cast<uint8_t*>(rawValues_) + byteOffset;
-  if constexpr (std::is_same_v<T, bool>) {
-    return xsimd::batch<T>(xsimd::load_unaligned(mem));
-  } else {
-    return xsimd::load_unaligned(reinterpret_cast<T*>(mem));
-  }
 }
 
 template <typename T>
@@ -111,21 +75,6 @@ std::unique_ptr<SimpleVector<uint64_t>> FlatVector<T>::hashAll() const {
       0 /*nullCount*/,
       false /*sorted*/,
       sizeof(uint64_t) * BaseVector::length_ /*representedBytes*/);
-}
-
-template <typename T>
-bool FlatVector<T>::useSimdEquality(size_t numCmpVals) const {
-  if constexpr (!std::is_integral_v<T>) {
-    return false;
-  } else {
-    // Uses a cost estimate for a SIMD comparison of a single comparison
-    // value vs. that of doing the fallback set lookup to determine
-    // whether or not to pursue the SIMD path or the fallback path.
-    auto fallbackCost = SET_CMP_COST * BaseVector::length_;
-    auto simdCost = SIMD_CMP_COST * numCmpVals * BaseVector::length_ /
-        xsimd::batch<T>::size;
-    return simdCost <= fallbackCost;
-  }
 }
 
 template <typename T>
