@@ -50,6 +50,7 @@ class MetadataFilter {
 
  private:
   struct Node;
+  struct ConditionNode;
   struct AndNode;
   struct OrNode;
 
