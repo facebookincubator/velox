@@ -437,8 +437,7 @@ std::unique_ptr<BatchStream> ConcatFilesSpillBatchStream::create(
 
 bool ConcatFilesSpillBatchStream::nextBatch(RowVectorPtr& batch) {
   TestValue::adjust(
-      "facebook::velox::exec::ConcatFilesSpillBatchStream::nextBatch",
-      static_cast<void*>(0));
+      "facebook::velox::exec::ConcatFilesSpillBatchStream::nextBatch", nullptr);
   VELOX_CHECK_NULL(batch);
   VELOX_CHECK(!atEnd_);
   for (; fileIndex_ < spillFiles_.size(); ++fileIndex_) {

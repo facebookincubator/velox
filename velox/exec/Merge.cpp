@@ -570,6 +570,9 @@ RowVectorPtr SpillMerger::getOutput(
   if (!sourceBlockingFutures.empty()) {
     return nullptr;
   }
+  // SpillMerger::getOutput waits for all readers to finish, reaches EOF,
+  // and rethrows any captured error. Centralizing error propagation here
+  // helps prevent potential resource leaks.
   auto output = sourceMerger_->getOutput(sourceBlockingFutures, atEnd);
   if (atEnd) {
     checkError();
@@ -625,16 +628,14 @@ void SpillMerger::readFromSpillFileStream(
     const std::weak_ptr<SpillMerger>& mergeHolder,
     size_t streamIdx) {
   TestValue::adjust(
-      "facebook::velox::exec::SpillMerger::readFromSpillFileStream",
-      static_cast<void*>(0));
-  try {
-    const auto merger = mergeHolder.lock();
-    if (merger == nullptr) {
-      LOG(ERROR)
-          << "SpillMerger is destroyed, abandon reading from batch stream";
-      return;
-    }
+      "facebook::velox::exec::SpillMerger::readFromSpillFileStream", nullptr);
+  const auto merger = mergeHolder.lock();
+  if (merger == nullptr) {
+    LOG(ERROR) << "SpillMerger is destroyed, abandon reading from batch stream";
+    return;
+  }
 
+  try {
     if (hasError()) {
       ContinueFuture future{ContinueFuture::makeEmpty()};
       sources_[streamIdx]->enqueue(nullptr, &future);
@@ -677,7 +678,8 @@ void SpillMerger::readFromSpillFileStream(
               });
     }
   } catch (const std::exception& e) {
-    LOG(ERROR) << "The " << streamIdx << " th catch exception. " << e.what();
+    LOG(ERROR) << "The " << streamIdx
+               << " spill stream failed with error: " << e.what();
     setError(std::current_exception());
     readFromSpillFileStream(mergeHolder, streamIdx);
   }
