@@ -624,6 +624,9 @@ std::unique_ptr<SourceMerger> SpillMerger::createSourceMerger(
 void SpillMerger::readFromSpillFileStream(
     const std::weak_ptr<SpillMerger>& mergeHolder,
     size_t streamIdx) {
+  TestValue::adjust(
+      "facebook::velox::exec::SpillMerger::readFromSpillFileStream",
+      static_cast<void*>(0));
   try {
     const auto merger = mergeHolder.lock();
     if (merger == nullptr) {
