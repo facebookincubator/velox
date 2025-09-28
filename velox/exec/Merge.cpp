@@ -624,6 +624,12 @@ std::unique_ptr<SourceMerger> SpillMerger::createSourceMerger(
       type, std::move(streams), maxOutputBatchRows, maxOutputBatchBytes, pool);
 }
 
+void SpillMerger::finishSource(size_t streamIdx) const {
+  ContinueFuture future{ContinueFuture::makeEmpty()};
+  sources_[streamIdx]->enqueue(nullptr, &future);
+  VELOX_CHECK(!future.valid());
+}
+
 void SpillMerger::readFromSpillFileStream(
     const std::weak_ptr<SpillMerger>& mergeHolder,
     size_t streamIdx) {
@@ -637,21 +643,18 @@ void SpillMerger::readFromSpillFileStream(
 
   try {
     if (hasError()) {
-      ContinueFuture future{ContinueFuture::makeEmpty()};
-      sources_[streamIdx]->enqueue(nullptr, &future);
-      VELOX_CHECK(!future.valid());
+      finishSource(streamIdx);
       return;
     }
 
     RowVectorPtr vector;
-    ContinueFuture future{ContinueFuture::makeEmpty()};
     if (!batchStreams_[streamIdx]->nextBatch(vector)) {
       VELOX_CHECK_NULL(vector);
-      sources_[streamIdx]->enqueue(nullptr, &future);
-      VELOX_CHECK(!future.valid());
+      finishSource(streamIdx);
       return;
     }
 
+    ContinueFuture future{ContinueFuture::makeEmpty()};
     const auto blockingReason =
         sources_[streamIdx]->enqueue(std::move(vector), &future);
     if (blockingReason == BlockingReason::kNotBlocked) {
@@ -672,8 +675,7 @@ void SpillMerger::readFromSpillFileStream(
                   LOG(ERROR) << "Stop the " << streamIdx
                              << " th source on error: " << e.what();
                   setError(std::make_exception_ptr(e));
-                  ContinueFuture future{ContinueFuture::makeEmpty()};
-                  sources_[streamIdx]->enqueue(nullptr, &future);
+                  finishSource(streamIdx);
                 }
               });
     }
@@ -681,7 +683,7 @@ void SpillMerger::readFromSpillFileStream(
     LOG(ERROR) << "The " << streamIdx
                << " spill stream failed with error: " << e.what();
     setError(std::current_exception());
-    readFromSpillFileStream(mergeHolder, streamIdx);
+    finishSource(streamIdx);
   }
 }
 

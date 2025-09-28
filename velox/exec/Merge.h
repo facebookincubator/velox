@@ -321,6 +321,8 @@ class SpillMerger : public std::enable_shared_from_this<SpillMerger> {
       uint64_t maxOutputBatchBytes,
       velox::memory::MemoryPool* pool);
 
+  void finishSource(size_t streamIdx) const;
+
   void readFromSpillFileStream(
       const std::weak_ptr<SpillMerger>& mergeHolder,
       size_t streamIdx);
