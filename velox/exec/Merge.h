@@ -327,7 +327,7 @@ class SpillMerger : public std::enable_shared_from_this<SpillMerger> {
 
   void scheduleAsyncSpillFileStreamReads();
 
-  // Sets `exception_` when an async reader throws.
+  // Sets 'exception_' when an async reader throws.
   void setError(const std::exception_ptr& exception);
 
   // Returns true if any async reader has thrown an exception.
