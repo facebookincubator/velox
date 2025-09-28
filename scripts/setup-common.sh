@@ -91,7 +91,7 @@ function install_fbthrift {
   EXTRA_PKG_CXXFLAGS=" -DFOLLY_CFG_NO_COROUTINES"
   wget_and_untar https://github.com/facebook/fbthrift/archive/refs/tags/"${FB_OS_VERSION}".tar.gz fbthrift
   (cd "${DEPENDENCY_DIR}/fbthrift" && \
-     curl -L https://github.com/facebook/fbthrift/pull/675.patch | patch -p1)
+     curl -L https://github.com/facebook/fbthrift/pull/675.patch | git apply)
   cmake_install_dir fbthrift -Denable_tests=OFF -DBUILD_TESTS=OFF -DBUILD_SHARED_LIBS=OFF
 }
 
