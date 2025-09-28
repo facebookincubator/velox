@@ -158,3 +158,10 @@ target_link_libraries(
   velox_vector_fuzzer
   Folly::follybenchmark
 )
+
+add_executable(velox_atomics_benchmark AtomicsBench.cpp)
+
+target_link_libraries(
+  velox_atomics_benchmark
+  Folly::follybenchmark
+)
