@@ -78,14 +78,18 @@ struct MetadataFilter::ConditionNode : Node {
       core::ExpressionEvaluator* evaluator,
       bool conjunction,
       bool negated) {
+    conjunction = conjunction ? !negated : negated;
     std::vector<std::unique_ptr<Node>> args;
     args.reserve(inputs.size());
     for (const auto& input : inputs) {
-      if (auto node = Node::fromExpression(*input, evaluator, negated)) {
+      auto node = Node::fromExpression(*input, evaluator, negated);
+      if (node) {
         args.push_back(std::move(node));
+      } else if (!conjunction) {
+        return nullptr;
       }
     }
-    return create(conjunction ? !negated : negated, std::move(args));
+    return create(conjunction, std::move(args));
   }
 
   explicit ConditionNode(std::vector<std::unique_ptr<Node>> args)
