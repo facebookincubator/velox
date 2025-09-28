@@ -15,7 +15,7 @@
 include(FBThriftCppLibrary)
 
 add_fbthrift_cpp_library(velox_dwio_parquet_thrift_raw parquet.thrift)
-velox_add_library(velox_dwio_parquet_thrift)
+add_library(velox_dwio_parquet_thrift INTERFACE)
 if(VELOX_MONO_LIBRARY)
   target_link_libraries(velox PRIVATE velox_dwio_parquet_thrift_raw)
 else()

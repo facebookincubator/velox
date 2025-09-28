@@ -153,7 +153,7 @@ function(velox_add_library TARGET)
         )
       endif()
     endif()
-    # create alias for compatability
+    # create alias for compatibility
     if(NOT TARGET ${TARGET})
       add_library(${TARGET} ALIAS velox)
     endif()
@@ -165,8 +165,6 @@ function(velox_add_library TARGET)
 endfunction()
 
 function(velox_link_libraries TARGET)
-  # TODO(assignUser): Handle scope keywords (they currently are empty calls all
-  # target_link_libraries(target PRIVATE))
   if(VELOX_MONO_LIBRARY)
     # These targets follow the velox_* name for consistency but are NOT actually
     # aliases to velox when building the mono lib and need to be linked
@@ -183,14 +181,16 @@ function(velox_link_libraries TARGET)
       velox_wave_vector
     )
 
+    set(type PUBLIC)
     foreach(_arg ${ARGN})
       list(FIND explicit_targets ${_arg} _explicit)
-      if(_explicit EQUAL -1 AND "${_arg}" MATCHES "^velox_*")
+      if("${_arg}" STREQUAL "PUBLIC" OR "${_arg}" STREQUAL "PRIVATE" OR "${_arg}" STREQUAL "INTERFACE")
+        set(type "${_arg}")
+      elseif(_explicit EQUAL -1 AND "${_arg}" MATCHES "^velox_*")
         message(DEBUG "\t\tDROP: ${_arg}")
       else()
         message(DEBUG "\t\tADDING: ${_arg}")
-        # TODO: We should use use specified PUBLIC/PRIVATE/INTERFACE.
-        target_link_libraries(velox PUBLIC ${_arg})
+        target_link_libraries(velox ${type} ${_arg})
       endif()
     endforeach()
   else()
