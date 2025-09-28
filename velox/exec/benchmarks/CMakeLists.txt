@@ -161,7 +161,4 @@ target_link_libraries(
 
 add_executable(velox_atomics_benchmark AtomicsBench.cpp)
 
-target_link_libraries(
-  velox_atomics_benchmark
-  Folly::follybenchmark
-)
+target_link_libraries(velox_atomics_benchmark Folly::follybenchmark)
