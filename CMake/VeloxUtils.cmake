@@ -165,7 +165,7 @@ function(velox_add_library TARGET)
 endfunction()
 
 function(velox_link_libraries TARGET)
-  # TODO(assignUser): Handle scope keywords (they currently are empty calls ala
+  # TODO(assignUser): Handle scope keywords (they currently are empty calls all
   # target_link_libraries(target PRIVATE))
   if(VELOX_MONO_LIBRARY)
     # These targets follow the velox_* name for consistency but are NOT actually
@@ -189,7 +189,8 @@ function(velox_link_libraries TARGET)
         message(DEBUG "\t\tDROP: ${_arg}")
       else()
         message(DEBUG "\t\tADDING: ${_arg}")
-        target_link_libraries(velox ${_arg})
+        # TODO: We should use use specified PUBLIC/PRIVATE/INTERFACE.
+        target_link_libraries(velox PUBLIC ${_arg})
       endif()
     endforeach()
   else()
