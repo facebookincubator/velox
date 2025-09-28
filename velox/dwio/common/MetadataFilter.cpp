@@ -79,6 +79,7 @@ struct MetadataFilter::ConditionNode : Node {
       bool conjunction,
       bool negated) {
     std::vector<std::unique_ptr<Node>> args;
+    args.reserve(inputs.size());
     for (const auto& input : inputs) {
       if (auto node = Node::fromExpression(*input, evaluator, negated)) {
         args.push_back(std::move(node));
