@@ -118,15 +118,6 @@ function(add_fbthrift_cpp_library LIB_NAME THRIFT_FILE)
     PUBLIC ${ARG_DEPENDS}
            Folly::folly
            FBThrift::thriftcpp2
-           # FBThrift::transport depends on FBThrift::thriftprotocol
-           # but FBThrift::transport doesn't have
-           # FBThrift::thriftprotocol dependency information. So
-           # FBThrift::transport may be linked after
-           # FBThrift::thriftprotocol. It causes an link error. We
-           # should fix FBThrift but we can avoid it by linking
-           # FBThrift::thriftprotocol after FBThrift::thriftcpp2
-           # explicitly.
-           FBThrift::thriftprotocol
            # TODO: these symbols require other dependencies that need to be
            # correctly handle by Velox's build system before they can be
            # enabled. mvfst::mvfst_server_async_tran mvfst::mvfst_server

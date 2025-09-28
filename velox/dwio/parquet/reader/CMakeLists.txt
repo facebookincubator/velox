@@ -28,10 +28,12 @@ velox_add_library(
   SemanticVersion.cpp
 )
 
+velox_link_libraries(velox_dwio_native_parquet_reader velox_dwio_parquet_common)
+if(NOT VELOX_MONO_LIBRARY)
+  target_link_libraries(velox_dwio_native_parquet_reader PRIVATE velox_dwio_parquet_thrift)
+endif()
 velox_link_libraries(
   velox_dwio_native_parquet_reader
-  velox_dwio_parquet_thrift
-  velox_dwio_parquet_common
   velox_type
   velox_dwio_common
   velox_dwio_common_compression

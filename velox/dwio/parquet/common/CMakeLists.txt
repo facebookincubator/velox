@@ -20,9 +20,16 @@ velox_add_library(
   LevelConversion.cpp
 )
 
+# velox_link_libraries() with VELOX_MONO_LIBRARY doesn't support
+# PUBLIC/PRIVATE/INTERFACE for now. We can reorganize
+# velox_link_libraries() with VELOX_MONO_LIBRARY later.
+if(VELOX_MONO_LIBRARY)
+  target_link_libraries(velox PRIVATE velox_dwio_parquet_thrift)
+else()
+  target_link_libraries(velox_dwio_parquet_common PRIVATE velox_dwio_parquet_thrift)
+endif()
 velox_link_libraries(
   velox_dwio_parquet_common
-  velox_dwio_parquet_thrift
   velox_type
   velox_dwio_common
   velox_dwio_common_compression
