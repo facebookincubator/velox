@@ -184,7 +184,11 @@ function(velox_link_libraries TARGET)
     set(type PUBLIC)
     foreach(_arg ${ARGN})
       list(FIND explicit_targets ${_arg} _explicit)
-      if("${_arg}" STREQUAL "PUBLIC" OR "${_arg}" STREQUAL "PRIVATE" OR "${_arg}" STREQUAL "INTERFACE")
+      if(
+        "${_arg}" STREQUAL "PUBLIC"
+        OR "${_arg}" STREQUAL "PRIVATE"
+        OR "${_arg}" STREQUAL "INTERFACE"
+      )
         set(type "${_arg}")
       elseif(_explicit EQUAL -1 AND "${_arg}" MATCHES "^velox_*")
         message(DEBUG "\t\tDROP: ${_arg}")
