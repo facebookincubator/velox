@@ -126,7 +126,6 @@ class LocalMergeSource : public MergeSource {
         if (atEnd_) {
           return BlockingReason::kNotBlocked;
         }
-
         consumerPromises_.emplace_back("LocalMergeSourceQueue::next");
         *future = consumerPromises_.back().getSemiFuture();
         return BlockingReason::kWaitForProducer;
