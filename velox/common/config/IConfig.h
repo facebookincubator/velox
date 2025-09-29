@@ -23,6 +23,9 @@
 
 namespace facebook::velox::config {
 
+// IConfig - Config interface used for read-only access to config.
+// The interface supports key-based value retrieval and
+// raw config duplication.
 class IConfig {
  public:
   template <typename T>
