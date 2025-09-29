@@ -95,7 +95,7 @@ function install_fbthrift {
   cat "${DEPENDENCY_DIR}/fbthrift/lib/cpp/CMakeLists.txt"
   cmake_install_dir fbthrift -Denable_tests=OFF -DBUILD_TESTS=OFF -DBUILD_SHARED_LIBS=OFF
   echo "DEBUG:"
-  cat "${INSTALL_PREFIX}/lib/cmake/fbthrift/FBThriftTargets.cmake"
+  cat "${INSTALL_PREFIX}/thrift/lib/cmake/fbthrift/FBThriftTargets.cmake"
 }
 
 function install_duckdb {
