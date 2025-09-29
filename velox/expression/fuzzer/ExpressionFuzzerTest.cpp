@@ -114,10 +114,15 @@ std::unordered_map<std::string, std::shared_ptr<ArgValuesGenerator>>
         {"quantile_at_value",
          std::make_shared<UnifiedDigestArgValuesGenerator>(
              "quantile_at_value")},
+        {"quantiles_at_values",
+         std::make_shared<TDigestArgValuesGenerator>("quantiles_at_values")},
         {"destructure_tdigest",
          std::make_shared<TDigestArgValuesGenerator>("destructure_tdigest")},
         {"trimmed_mean",
-         std::make_shared<TDigestArgValuesGenerator>("trimmed_mean")}};
+         std::make_shared<TDigestArgValuesGenerator>("trimmed_mean")},
+        {"merge_tdigest",
+         std::make_shared<TDigestArgValuesGenerator>("merge_tdigest")},
+};
 
 // TODO: List of the functions that at some point crash or fail and need to
 // be fixed before we can enable.
@@ -129,18 +134,10 @@ std::unordered_set<std::string> skipFunctions = {
     "merge_sfm", // Fuzzer can generate sketches of different sizes.
     "element_at",
     "width_bucket",
-    // Fuzzer and the underlying engine are confused about TDigest functions
-    // (since TDigest is a user defined type), and tries to pass a
-    // VARBINARY (since TDigest's implementation uses an
-    // alias to VARBINARY).
-    "value_at_quantile",
-    "values_at_quantiles",
-    "merge_tdigest",
-    "scale_tdigest",
-    "quantiles_at_values",
-    "construct_tdigest",
-    "destructure_tdigest",
-    "trimmed_mean",
+    // Digest functions
+    "values_at_quantiles", // Handle all quantiles should be non - null.
+    "construct_tdigest", // Handle valid inputs to create tdigest
+    "trimmed_mean", // Handle quantile constraints
     // Fuzzer cannot generate valid 'comparator' lambda.
     "array_sort(array(T),constant function(T,T,bigint)) -> array(T)",
     "array_sort(array(T),constant function(T,U)) -> array(T)",
@@ -403,6 +400,9 @@ std::unordered_set<std::string> skipFunctionsSOT = {
     "$internal$contains",
     "localtime", // localtime cannot be called with paranthesis:
                  // https://github.com/facebookincubator/velox/issues/14937
+    // Velox is more accurate than Presto, results are different
+    "merge_tdigest",
+    "scale_tdigest",
 };
 
 int main(int argc, char** argv) {
