@@ -90,6 +90,7 @@ function install_fbthrift {
   # shellcheck disable=SC2034
   EXTRA_PKG_CXXFLAGS=" -DFOLLY_CFG_NO_COROUTINES"
   wget_and_untar https://github.com/facebook/fbthrift/archive/refs/tags/"${FB_OS_VERSION}".tar.gz fbthrift
+  curl -L https://github.com/facebook/fbthrift/pull/675.patch
   (cd "${DEPENDENCY_DIR}/fbthrift" &&
     curl -L https://github.com/facebook/fbthrift/pull/675.patch | git apply)
   cat "${DEPENDENCY_DIR}/fbthrift/thrift/lib/cpp/CMakeLists.txt"
