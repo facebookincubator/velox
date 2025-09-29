@@ -1096,17 +1096,17 @@ void TextRowReader::readElement(
     case TypeKind::BIGINT:
       if (reqT->isShortDecimal()) {
         const std::string& str = getString(*this, isNull, delim);
-        auto [precision, scale] = getDecimalPrecisionScale(*reqT);
+        auto precisionScale = getDecimalPrecisionScale(*reqT);
         setValueFromString<int64_t>(
             str,
             data,
             insertionRow,
-            [precision, scale](const std::string& s) -> std::optional<int64_t> {
+            [precisionScale](const std::string& s) -> std::optional<int64_t> {
               int64_t v = 0;
               const auto status = DecimalUtil::castFromString(
                   StringView(s.data(), static_cast<int32_t>(s.size())),
-                  precision,
-                  scale,
+                  precisionScale.first,
+                  precisionScale.second,
                   v);
               return status.ok() ? std::optional<int64_t>(v) : std::nullopt;
             });
@@ -1119,18 +1119,17 @@ void TextRowReader::readElement(
     case TypeKind::HUGEINT: {
       const std::string& str = getString(*this, isNull, delim);
       if (reqT->isLongDecimal()) {
-        auto [precision, scale] = getDecimalPrecisionScale(*reqT);
+        auto precisionScale = getDecimalPrecisionScale(*reqT);
         setValueFromString<int128_t>(
             str,
             data,
             insertionRow,
-            [precision,
-             scale](const std::string& s) -> std::optional<int128_t> {
+            [precisionScale](const std::string& s) -> std::optional<int128_t> {
               int128_t v = 0;
               const auto status = DecimalUtil::castFromString(
                   StringView(s.data(), static_cast<int32_t>(s.size())),
-                  precision,
-                  scale,
+                  precisionScale.first,
+                  precisionScale.second,
                   v);
               return status.ok() ? std::optional<int128_t>(v) : std::nullopt;
             });
