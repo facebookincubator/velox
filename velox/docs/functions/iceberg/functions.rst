@@ -25,26 +25,20 @@ Refer to `Iceberg documenation <https://iceberg.apache.org/spec/#partition-trans
 
 .. iceberg:function:: days(input) -> integer
 
-   Returns the day of the month from a date or timestamp input, as days from 1970-01-01.
-
-   Supported types for ``input`` are: ``DATE``, ``TIMESTAMP``. ::
+   Returns the day of the month from a date or timestamp ``input``, as days from 1970-01-01. ::
 
        SELECT days(DATE '2017-12-01'); -- 17501
        SELECT days(TIMESTAMP '2017-12-01 10:12:55.038194'); -- 17501
 
 .. iceberg:function:: hours(input) -> integer
 
-   Returns the hour from a timestamp input, as hours from 1970-01-01 00:00:00.
-
-   Supported types for ``input`` are: ``TIMESTAMP``. ::
+   Returns the hour from a timestamp ``input``, as hours from 1970-01-01 00:00:00. ::
 
        SELECT hours(TIMESTAMP '2017-12-01 10:12:55.038194'); -- 420034
 
 .. iceberg:function:: months(input) -> integer
 
-   Returns the month from a date or timestamp input, as months from 1970-01-01.
-
-   Supported types for ``input`` are: ``DATE``, ``TIMESTAMP``. ::
+   Returns the month from a date or timestamp ``input``, as months from 1970-01-01. ::
 
        SELECT months(DATE '2017-12-01'); -- 575
        SELECT months(TIMESTAMP '2017-12-01 10:12:55.038194'); -- 575
@@ -72,9 +66,7 @@ Refer to `Iceberg documenation <https://iceberg.apache.org/spec/#partition-trans
 
 .. iceberg:function:: years(input) -> integer
 
-   Returns the year from a date or timestamp input, as years from 1970.
-
-   Supported types for ``input`` are: ``DATE``, ``TIMESTAMP``. ::
+   Returns the year from a date or timestamp ``input``, as years from 1970. ::
 
        SELECT years(DATE '2017-12-01'); -- 47
        SELECT years(TIMESTAMP '2017-12-01 10:12:55.038194'); -- 47
