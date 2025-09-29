@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/exec/Merge.h"
 #include "velox/exec/MergeSource.h"
@@ -419,4 +420,38 @@ TEST_F(MergerTest, spillMerger) {
     const auto expectedResults = makeExpectedResults(inputs, 16);
     checkResults(expectedResults, results);
   }
+}
+
+DEBUG_ONLY_TEST_F(MergerTest, spillMergerException) {
+  struct TestSetting {
+    size_t maxOutputRows;
+    size_t numSources;
+    size_t queueSize;
+
+    std::string debugString() const {
+      return fmt::format(
+          "maxOutputRows:{}, numStreams:{}, queueSize:{}",
+          maxOutputRows,
+          numSources,
+          queueSize);
+    }
+  };
+
+  std::atomic_int cnt{0};
+  const auto errorMessage = "ConcatFilesSpillBatchStream::nextBatch fail";
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::ConcatFilesSpillBatchStream::nextBatch",
+      std::function<void(void*)>([&](void* /*unused*/) {
+        if (cnt++ == 11) {
+          VELOX_FAIL("ConcatFilesSpillBatchStream::nextBatch fail");
+        }
+      }));
+  const auto numSources = 5;
+  const auto queueSize = 2;
+  const auto sources = createMergeSources(numSources, queueSize);
+  auto [inputs, filesGroup] = generateInputs(numSources, 16);
+  const auto spillMerger =
+      createSpillMerger(std::move(filesGroup), 100, queueSize);
+  spillMerger->start();
+  VELOX_ASSERT_THROW(getOutputFromSpillMerger(spillMerger.get()), errorMessage);
 }
