@@ -4057,5 +4057,144 @@ TEST_F(CastExprTest, timestampToTimeCast) {
 
   testCast(TIMESTAMP(), TIME(), realTimestamps, expectedRealTime);
 }
+
+TEST_F(CastExprTest, numericUpcast) {
+  auto testNumericUpcast = [&](const VectorPtr& input,
+                               const VectorPtr& expected) {
+    std::vector<core::TypedExprPtr> inputs = {
+        std::make_shared<const core::FieldAccessTypedExpr>(
+            input->type(), "c0")};
+    auto castExpr =
+        std::make_shared<core::CallTypedExpr>(expected->type(), inputs, "cast");
+
+    testEncodings(castExpr, {input}, expected);
+  };
+
+  auto vectorSize = 1'000;
+
+  // Cast from TINYINT to SMALLINT.
+  const auto tinyintVector = makeFlatVector<int8_t>(vectorSize, [](auto i) {
+    return i % std::numeric_limits<int8_t>::max();
+  });
+  testNumericUpcast(
+      tinyintVector, makeFlatVector<int16_t>(vectorSize, [](auto i) {
+        return i % std::numeric_limits<int8_t>::max();
+      }));
+
+  // Cast from TINYINT to INTEGER.
+  testNumericUpcast(
+      tinyintVector, makeFlatVector<int32_t>(vectorSize, [](auto i) {
+        return i % std::numeric_limits<int8_t>::max();
+      }));
+
+  // Cast from TINYINT to BIGINT.
+  testNumericUpcast(
+      tinyintVector, makeFlatVector<int64_t>(vectorSize, [](auto i) {
+        return i % std::numeric_limits<int8_t>::max();
+      }));
+
+  // Cast from TINYINT to REAL.
+  testNumericUpcast(
+      tinyintVector, makeFlatVector<float>(vectorSize, [](auto i) {
+        return static_cast<float>(i % std::numeric_limits<int8_t>::max());
+      }));
+
+  // Cast from TINYINT to DOUBLE.
+  testNumericUpcast(
+      tinyintVector, makeFlatVector<double>(vectorSize, [](auto i) {
+        return static_cast<double>(i % std::numeric_limits<int8_t>::max());
+      }));
+
+  // Cast from TINYINT to HUGEINT.
+  testNumericUpcast(
+      tinyintVector, makeFlatVector<int128_t>(vectorSize, [](auto i) {
+        return i % std::numeric_limits<int8_t>::max();
+      }));
+
+  // Cast from SMALLINT to INTEGER.
+  const auto smallintVector =
+      makeFlatVector<int16_t>(vectorSize, [](auto i) { return 1 + 2 * i; });
+  testNumericUpcast(
+      smallintVector,
+      makeFlatVector<int32_t>(vectorSize, [](auto i) { return 1 + 2 * i; }));
+
+  // Cast from SMALLINT to BIGINT.
+  testNumericUpcast(
+      smallintVector,
+      makeFlatVector<int64_t>(vectorSize, [](auto i) { return 1 + 2 * i; }));
+
+  // Cast from SMALLINT to REAL.
+  testNumericUpcast(
+      smallintVector, makeFlatVector<float>(vectorSize, [](auto i) {
+        return static_cast<float>(1 + 2 * i);
+      }));
+
+  // Cast from SMALLINT to DOUBLE.
+  testNumericUpcast(
+      smallintVector, makeFlatVector<double>(vectorSize, [](auto i) {
+        return static_cast<double>(1 + 2 * i);
+      }));
+
+  // Cast from SMALLINT to HUGEINT.
+  testNumericUpcast(
+      smallintVector, makeFlatVector<int128_t>(vectorSize, [](auto i) {
+        return static_cast<int128_t>(1 + 2 * i);
+      }));
+
+  // Cast from INTEGER to BIGINT.
+  const auto integerVector =
+      makeFlatVector<int32_t>(vectorSize, [](auto i) { return 1 + 2 * i; });
+  testNumericUpcast(
+      integerVector,
+      makeFlatVector<int64_t>(vectorSize, [](auto i) { return 1 + 2 * i; }));
+
+  // Cast from INTEGER to REAL.
+  testNumericUpcast(
+      integerVector,
+      makeFlatVector<float>(vectorSize, [](auto i) { return 1 + 2 * i; }));
+
+  // Cast from INTEGER to DOUBLE.
+  testNumericUpcast(
+      integerVector,
+      makeFlatVector<double>(vectorSize, [](auto i) { return 1 + 2 * i; }));
+
+  // Cast from INTEGER to HUGEINT.
+  testNumericUpcast(
+      integerVector, makeFlatVector<int128_t>(vectorSize, [](auto i) {
+        return static_cast<int128_t>(1 + 2 * i);
+      }));
+
+  // Cast from BIGINT to REAL.
+  testNumericUpcast(
+      makeFlatVector<int64_t>(vectorSize, [](auto i) { return 1 + 2 * i; }),
+      makeFlatVector<float>(vectorSize, [](auto i) { return 1 + 2 * i; }));
+
+  // Cast from BIGINT to DOUBLE.
+  testNumericUpcast(
+      makeFlatVector<int64_t>(vectorSize, [](auto i) { return 1 + 2 * i; }),
+      makeFlatVector<double>(vectorSize, [](auto i) { return 1 + 2 * i; }));
+
+  // Cast from BIGINT to HUGEINT.
+  testNumericUpcast(
+      makeFlatVector<int64_t>(vectorSize, [](auto i) { return 1 + 2 * i; }),
+      makeFlatVector<int128_t>(
+          vectorSize, [](auto i) { return static_cast<int128_t>(1 + 2 * i); }));
+
+  // Cast from HUGEINT to REAL.
+  testNumericUpcast(
+      makeFlatVector<int128_t>(vectorSize, [](auto i) { return 1 + 2 * i; }),
+      makeFlatVector<float>(vectorSize, [](auto i) { return 1 + 2 * i; }));
+
+  // Cast from HUGEINT to DOUBLE.
+  testNumericUpcast(
+      makeFlatVector<int128_t>(vectorSize, [](auto i) { return 1 + 2 * i; }),
+      makeFlatVector<double>(vectorSize, [](auto i) { return 1 + 2 * i; }));
+
+  // Cast from REAL to DOUBLE.
+  testNumericUpcast(
+      makeFlatVector<float>(vectorSize, [](auto i) { return 1.5f + 2 * i; }),
+      makeFlatVector<double>(vectorSize, [](auto i) { return 1.5 + 2 * i; }));
+}
+
 } // namespace
 } // namespace facebook::velox::test
