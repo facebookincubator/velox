@@ -22,7 +22,7 @@
 namespace facebook::velox::functions::iceberg {
 
 // years(input) -> years from 1970
-// The 'input' is date or timestamp.
+// Input is date or timestamp.
 template <typename TExec>
 struct YearsFunction {
   VELOX_DEFINE_FUNCTION_TYPES(TExec);
@@ -39,7 +39,7 @@ struct YearsFunction {
 };
 
 // months(input) -> months from 1970-01-01
-// The 'input' is date or timestamp.
+// Input is date or timestamp.
 template <typename TExec>
 struct MonthsFunction {
   VELOX_DEFINE_FUNCTION_TYPES(TExec);
@@ -56,7 +56,7 @@ struct MonthsFunction {
 };
 
 // days(input) -> days from 1970-01-01
-// The 'input' is date or timestamp.
+// Input is date or timestamp.
 template <typename TExec>
 struct DaysFunction {
   VELOX_DEFINE_FUNCTION_TYPES(TExec);
@@ -73,7 +73,7 @@ struct DaysFunction {
 };
 
 // hours(input) -> hours from 1970-01-01 00:00:00
-// The 'input' is timestamp.
+// Input is timestamp.
 template <typename TExec>
 struct HoursFunction {
   VELOX_DEFINE_FUNCTION_TYPES(TExec);
