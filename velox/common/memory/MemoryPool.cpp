@@ -1263,7 +1263,7 @@ void MemoryPoolImpl::recordAllocDbg(const void* addr, uint64_t size) {
         succinctBytes(size),
         succinctBytes(usedBytes),
         it->second.callStack.toString(),
-        dumpRecordsDbg());
+        dumpRecordsDbgLocked());
   }
 }
 
@@ -1352,7 +1352,7 @@ void MemoryPoolImpl::leakCheckDbg() {
       dumpRecordsDbg()));
 }
 
-std::string MemoryPoolImpl::dumpRecordsDbg() const {
+std::string MemoryPoolImpl::dumpRecordsDbgLocked() const {
   VELOX_CHECK(debugEnabled());
   std::stringstream oss;
   oss << fmt::format("Found {} allocations:\n", debugAllocRecords_.size());
