@@ -29,8 +29,8 @@ constexpr std::string_view kAbfssScheme{"abfss://"};
 class ConfigBase;
 
 struct CacheKey {
-  std::string accountName;
-  std::string authType;
+  const std::string accountName;
+  const std::string authType;
 
   CacheKey(std::string_view accountName, std::string_view authType)
       : accountName(accountName), authType(authType) {}

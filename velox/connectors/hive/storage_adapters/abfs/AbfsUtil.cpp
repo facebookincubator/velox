@@ -26,17 +26,15 @@ std::vector<CacheKey> extractCacheKeyFromConfig(
   constexpr std::string_view authTypePrefix{kAzureAccountAuthType};
   for (const auto& [key, value] : config.rawConfigs()) {
     if (key.find(authTypePrefix) == 0) {
-      std::string_view skey = key;
       // Extract the accountName after "fs.azure.account.auth.type.".
-      auto remaining = skey.substr(authTypePrefix.size() + 1);
+      auto remaining = std::string_view(key).substr(authTypePrefix.size() + 1);
       auto dot = remaining.find(".");
       VELOX_USER_CHECK_NE(
           dot,
           std::string_view::npos,
           "Invalid Azure account auth type key: {}",
           key);
-      std::string_view accountName = std::string(remaining.substr(0, dot));
-      cacheKeys.emplace_back(CacheKey{accountName, value});
+      cacheKeys.emplace_back(CacheKey{remaining.substr(0, dot), value});
     }
   }
   return cacheKeys;
