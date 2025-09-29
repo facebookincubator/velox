@@ -724,7 +724,7 @@ class RoundFunction : public CudfFunction {
     const auto argSize = expr->inputs().size();
     VELOX_CHECK(argSize >= 1 && argSize <= 2, "round expects 1 or 2 inputs");
     VELOX_CHECK_NULL(
-        std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[0]),
+        std::dynamic_pointer_cast<exec::ConstantExpr>(expr->inputs()[0]),
         "round expects first column is not literal");
     if (argSize == 2) {
       auto scaleExpr =
