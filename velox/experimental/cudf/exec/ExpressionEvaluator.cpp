@@ -606,7 +606,7 @@ cudf::ast::expression const& AstContext::pushExprToTree(
     } else {
       VELOX_FAIL("Unsupported type for cast operation");
     }
-  } else if (name == "switch") {
+  } else if (name == "switch" || name == "if") {
     VELOX_CHECK_EQ(len, 3);
     // check if input[1], input[2] are literals 1 and 0.
     // then simplify as typecast bool to int
