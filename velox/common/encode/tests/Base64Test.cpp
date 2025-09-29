@@ -42,86 +42,56 @@ TEST_F(Base64Test, fromBase64) {
 }
 
 TEST_F(Base64Test, calculateDecodedSizeProperSize) {
-  size_t encodedSize = 20;
-  EXPECT_EQ(
-      13,
-      Base64::calculateDecodedSize("SGVsbG8sIFdvcmxkIQ==", encodedSize)
-          .value());
-  EXPECT_EQ(18, encodedSize);
-
-  encodedSize = 18;
-  EXPECT_EQ(
-      13,
-      Base64::calculateDecodedSize("SGVsbG8sIFdvcmxkIQ", encodedSize).value());
-  EXPECT_EQ(18, encodedSize);
-
-  encodedSize = 21;
+  EXPECT_EQ(13, Base64::calculateDecodedSize("SGVsbG8sIFdvcmxkIQ==").value());
+  EXPECT_EQ(13, Base64::calculateDecodedSize("SGVsbG8sIFdvcmxkIQ").value());
   EXPECT_EQ(
       Status::UserError(
           "Base64::decode() - invalid input string: string length is not a multiple of 4."),
-      Base64::calculateDecodedSize("SGVsbG8sIFdvcmxkIQ===", encodedSize)
-          .error());
-
-  encodedSize = 32;
+      Base64::calculateDecodedSize("SGVsbG8sIFdvcmxkIQ===").error());
   EXPECT_EQ(
       23,
-      Base64::calculateDecodedSize(
-          "QmFzZTY0IGVuY29kaW5nIGlzIGZ1bi4=", encodedSize)
-          .value());
-  EXPECT_EQ(31, encodedSize);
-
-  encodedSize = 31;
+      Base64::calculateDecodedSize("QmFzZTY0IGVuY29kaW5nIGlzIGZ1bi4=").value());
   EXPECT_EQ(
       23,
-      Base64::calculateDecodedSize(
-          "QmFzZTY0IGVuY29kaW5nIGlzIGZ1bi4", encodedSize)
-          .value());
-  EXPECT_EQ(31, encodedSize);
-
-  encodedSize = 16;
-  EXPECT_EQ(
-      10,
-      Base64::calculateDecodedSize("MTIzNDU2Nzg5MA==", encodedSize).value());
-  EXPECT_EQ(14, encodedSize);
-
-  encodedSize = 14;
-  EXPECT_EQ(
-      10, Base64::calculateDecodedSize("MTIzNDU2Nzg5MA", encodedSize).value());
-  EXPECT_EQ(14, encodedSize);
+      Base64::calculateDecodedSize("QmFzZTY0IGVuY29kaW5nIGlzIGZ1bi4").value());
+  EXPECT_EQ(10, Base64::calculateDecodedSize("MTIzNDU2Nzg5MA==").value());
+  EXPECT_EQ(10, Base64::calculateDecodedSize("MTIzNDU2Nzg5MA").value());
 }
 
 TEST_F(Base64Test, checksPadding) {
-  EXPECT_TRUE(Base64::isPadded("ABC=", 4));
-  EXPECT_FALSE(Base64::isPadded("ABC", 3));
+  EXPECT_TRUE(Base64::isPadded("ABC="));
+  EXPECT_FALSE(Base64::isPadded("ABC"));
 }
 
 TEST_F(Base64Test, countsPaddingCorrectly) {
-  EXPECT_EQ(0, Base64::numPadding("ABC", 3));
-  EXPECT_EQ(1, Base64::numPadding("ABC=", 4));
-  EXPECT_EQ(2, Base64::numPadding("AB==", 4));
+  EXPECT_EQ(0, Base64::numPadding("ABC"));
+  EXPECT_EQ(1, Base64::numPadding("ABC="));
+  EXPECT_EQ(2, Base64::numPadding("AB=="));
 }
 
 TEST_F(Base64Test, calculateMimeDecodedSize) {
-  EXPECT_EQ(0, Base64::calculateMimeDecodedSize("", 0).value());
-  EXPECT_EQ(0, Base64::calculateMimeDecodedSize("#", 1).value());
-  EXPECT_EQ(3, Base64::calculateMimeDecodedSize("TWFu", 4).value());
-  EXPECT_EQ(1, Base64::calculateMimeDecodedSize("AQ==", 4).value());
-  EXPECT_EQ(2, Base64::calculateMimeDecodedSize("TWE=", 4).value());
-  EXPECT_EQ(3, Base64::calculateMimeDecodedSize("TWFu\r\n", 6).value());
-  EXPECT_EQ(3, Base64::calculateMimeDecodedSize("!TW!Fu!", 7).value());
-  EXPECT_EQ(1, Base64::calculateMimeDecodedSize("TQ", 2).value());
+  EXPECT_EQ(0, Base64::calculateMimeDecodedSize("").value());
+  EXPECT_EQ(0, Base64::calculateMimeDecodedSize("#").value());
+  EXPECT_EQ(3, Base64::calculateMimeDecodedSize("TWFu").value());
+  EXPECT_EQ(1, Base64::calculateMimeDecodedSize("AQ==").value());
+  EXPECT_EQ(2, Base64::calculateMimeDecodedSize("TWE=").value());
+  EXPECT_EQ(3, Base64::calculateMimeDecodedSize("TWFu\r\n").value());
+  EXPECT_EQ(3, Base64::calculateMimeDecodedSize("!TW!Fu!").value());
+  EXPECT_EQ(1, Base64::calculateMimeDecodedSize("TQ").value());
   EXPECT_EQ(
-      Base64::calculateMimeDecodedSize("A", 1).error(),
+      Base64::calculateMimeDecodedSize("A").error(),
       Status::UserError(
           "Input should at least have 2 bytes for base64 bytes."));
 }
 
 TEST_F(Base64Test, decodeMime) {
   auto decodeMime = [](const std::string& in) {
-    size_t decSize =
-        Base64::calculateMimeDecodedSize(in.data(), in.size()).value();
-    std::string out(decSize, '\0');
-    auto result = Base64::decodeMime(in.data(), in.size(), out.data());
+    const auto decSizeOpt = Base64::calculateMimeDecodedSize(in);
+
+    std::string out;
+    out.reserve(decSizeOpt.value());
+
+    auto result = Base64::decodeMime(std::string_view(in), out);
     if (!result.ok()) {
       VELOX_USER_FAIL(result.message());
     }
@@ -155,8 +125,9 @@ TEST_F(Base64Test, calculateMimeEncodedSize) {
 TEST_F(Base64Test, encodeMime) {
   auto encodeMime = [](const std::string& in) {
     size_t len = Base64::calculateMimeEncodedSize(in.size());
-    std::string out(len, '\0');
-    Base64::encodeMime(in.data(), in.size(), out.data());
+    std::string out;
+    out.reserve(len);
+    Base64::encodeMime(std::string_view(in.data(), in.size()), out);
     return out;
   };
   EXPECT_EQ("", encodeMime(""));
