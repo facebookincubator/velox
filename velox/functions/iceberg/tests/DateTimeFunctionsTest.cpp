@@ -16,7 +16,6 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/iceberg/tests/IcebergFunctionBaseTest.h"
-#include "velox/type/Timestamp.h"
 
 namespace facebook::velox::functions::iceberg {
 namespace {

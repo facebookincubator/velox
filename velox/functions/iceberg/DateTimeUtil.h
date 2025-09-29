@@ -51,7 +51,7 @@ FOLLY_ALWAYS_INLINE int32_t epochDay(Timestamp ts) {
 /// Extract a timestamp hour, as hours from 1970-01-01 00:00:00.
 FOLLY_ALWAYS_INLINE int32_t epochHour(Timestamp ts) {
   const auto seconds = ts.getSeconds();
-  return (seconds >= 0) ? seconds / 3600 : ((seconds + 1) / 3600) - 1;
+  return (seconds >= 0) ? seconds / 3'600 : ((seconds + 1) / 3'600) - 1;
 }
 
 } // namespace facebook::velox::functions::iceberg
