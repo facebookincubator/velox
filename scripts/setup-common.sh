@@ -298,7 +298,7 @@ function install_minio {
   ${SUDO} mv ./"${MINIO_BINARY_NAME}" "$INSTALL_PREFIX"/bin/
 }
 
-function install_gcs-sdk-cpp {
+function install_gcs_sdk_cpp {
   # Install gcs dependencies
   # https://github.com/googleapis/google-cloud-cpp/blob/main/doc/packaging.md#required-libraries
 
@@ -347,7 +347,7 @@ function install_gcs-sdk-cpp {
     -DGOOGLE_CLOUD_CPP_ENABLE=storage
 }
 
-function install_azure-storage-sdk-cpp {
+function install_azure_storage_sdk_cpp {
   # Disable VCPKG to install additional static dependencies under the VCPKG installed path
   # instead of using system pre-installed dependencies.
   export AZURE_SDK_DISABLE_AUTO_VCPKG=ON
