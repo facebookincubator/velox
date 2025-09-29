@@ -314,6 +314,15 @@ class CastExpr : public SpecialForm {
       exec::EvalCtx& context,
       const BaseVector& input);
 
+  // Casts basic numeric types to wider types.
+  template <TypeKind ToKind, TypeKind FromKind>
+  void applyNumericUpcast(
+      const SelectivityVector& rows,
+      const TypePtr& toType,
+      exec::EvalCtx& context,
+      const BaseVector& input,
+      VectorPtr& result);
+
   bool isTryCast() const {
     return isTryCast_;
   }
