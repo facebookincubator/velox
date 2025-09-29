@@ -1124,19 +1124,14 @@ void TextRowReader::readElement(
         return;
       }
 
-      // Allocate a blob buffer
-      size_t len = str.size();
-      const auto blen = encoding::Base64::calculateDecodedSize(str.data(), len);
-      varBinBuf_->resize(blen.value_or(0));
-
-      // decode from base64 to the blob buffer.
-      Status status = encoding::Base64::decode(
-          str.data(), str.size(), varBinBuf_->data(), blen.value_or(0));
+      // Decode from base64 to the blob buffer in one call.
+      std::string decodedStr;
+      Status status = encoding::Base64::decode(str, decodedStr);
 
       if (status.code() == StatusCode::kOK) {
-        flatVector->set(
-            insertionRow,
-            StringView(varBinBuf_->data(), static_cast<int32_t>(blen.value())));
+        varBinBuf_->resize(decodedStr.size());
+        std::memcpy(varBinBuf_->data(), decodedStr.data(), decodedStr.size());
+        flatVector->set(insertionRow, StringView(decodedStr));
       } else {
         // Not valid base64:  just copy as-is for compatibility.
         //
@@ -1148,16 +1143,12 @@ void TextRowReader::readElement(
         varBinBuf_->resize(str.size());
 
         VELOX_CHECK_NOT_NULL(str.data());
-
-        len = str.size();
         memcpy(varBinBuf_->data(), str.data(), str.size());
 
         // Use StringView, set(vector_size_t idx, T value) fails because
         // strlen(varBinBuf_->data()) is undefined due to lack of null
         // terminator
-        flatVector->set(
-            insertionRow,
-            StringView(varBinBuf_->data(), static_cast<int32_t>(str.size())));
+        flatVector->set(insertionRow, StringView(str));
       }
 
       if (isNull) {

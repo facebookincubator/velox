@@ -249,8 +249,9 @@ void TextWriter::writeCellValue(
     }
     case TypeKind::VARBINARY: {
       auto data = decodedColumnVector->valueAt<StringView>(row);
-      dataStr =
-          std::optional(encoding::Base64::encode(data.data(), data.size()));
+      dataStr = std::optional(
+          encoding::Base64::encode(
+              std::string_view(data.data(), data.size()), true));
       break;
     }
     case TypeKind::ARRAY: {

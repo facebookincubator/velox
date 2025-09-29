@@ -113,8 +113,7 @@ folly::dynamic ConstantTypedExpr::serialize() const {
     std::ostringstream out;
     saveVector(*valueVector_, out);
     auto serializedValue = out.str();
-    obj["valueVector"] = encoding::Base64::encode(
-        serializedValue.data(), serializedValue.size());
+    obj["valueVector"] = encoding::Base64::encode(serializedValue);
   } else {
     obj["value"] = value_.serialize();
   }

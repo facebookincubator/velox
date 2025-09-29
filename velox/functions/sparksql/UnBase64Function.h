@@ -32,14 +32,20 @@ struct UnBase64Function {
   // Returns a Status object indicating success or failure.
   FOLLY_ALWAYS_INLINE Status
   call(out_type<Varbinary>& result, const arg_type<Varchar>& input) {
-    auto decodedSize =
-        encoding::Base64::calculateMimeDecodedSize(input.data(), input.size());
+    auto decodedSize = encoding::Base64::calculateMimeDecodedSize(
+        std::string_view(input.data(), input.size()));
     if (decodedSize.hasError()) {
       return decodedSize.error();
     }
-    result.resize(decodedSize.value());
-    return encoding::Base64::decodeMime(
-        input.data(), input.size(), result.data());
+
+    std::string decodedStr;
+    auto status = encoding::Base64::decodeMime(
+        std::string_view(input.data(), input.size()), decodedStr);
+    if (status.ok()) {
+      result.resize(decodedSize.value());
+      std::memcpy(result.data(), decodedStr.data(), decodedStr.size());
+    }
+    return status;
   }
 };
 
