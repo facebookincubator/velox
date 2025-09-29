@@ -31,6 +31,7 @@
 #include <rmm/mr/device/managed_memory_resource.hpp>
 #include <rmm/mr/device/owning_wrapper.hpp>
 #include <rmm/mr/device/pool_memory_resource.hpp>
+#include <rmm/mr/device/prefetch_resource_adaptor.hpp>
 
 #include <common/base/Exceptions.h>
 
@@ -60,6 +61,13 @@ namespace {
   return std::make_shared<rmm::mr::managed_memory_resource>();
 }
 
+[[nodiscard]] auto makePrefetchManagedMr() {
+  auto managed_mr = std::make_shared<rmm::mr::managed_memory_resource>();
+  return std::make_shared<
+      rmm::mr::prefetch_resource_adaptor<rmm::mr::device_memory_resource>>(
+      managed_mr.get());
+}
+
 [[nodiscard]] auto makeArenaMr(int percent) {
   return rmm::mr::make_owning_wrapper<rmm::mr::arena_memory_resource>(
       makeCudaMr(), rmm::percent_of_free_device_memory(percent));
@@ -68,6 +76,16 @@ namespace {
 [[nodiscard]] auto makeManagedPoolMr(int percent) {
   return rmm::mr::make_owning_wrapper<rmm::mr::pool_memory_resource>(
       makeManagedMr(), rmm::percent_of_free_device_memory(percent));
+}
+
+[[nodiscard]] auto makePrefetchManagedPoolMr(int percent) {
+  auto managed_mr = std::make_shared<rmm::mr::managed_memory_resource>();
+  auto pool_mr = std::make_shared<
+      rmm::mr::pool_memory_resource<rmm::mr::device_memory_resource>>(
+      managed_mr.get(), rmm::percent_of_free_device_memory(percent));
+  return std::make_shared<
+      rmm::mr::prefetch_resource_adaptor<rmm::mr::device_memory_resource>>(
+      pool_mr.get());
 }
 } // namespace
 
@@ -86,9 +104,13 @@ std::shared_ptr<rmm::mr::device_memory_resource> createMemoryResource(
     return makeManagedMr();
   if (mode == "managed_pool")
     return makeManagedPoolMr(percent);
+  if (mode == "prefetch_managed")
+    return makePrefetchManagedMr();
+  if (mode == "prefetch_managed_pool")
+    return makePrefetchManagedPoolMr(percent);
   VELOX_FAIL(
       "Unknown memory resource mode: " + std::string(mode) +
-      "\nExpecting: cuda, pool, async, arena, managed, or managed_pool");
+      "\nExpecting: cuda, pool, async, arena, managed, prefetch_managed, managed_pool, prefetch_managed_pool");
 }
 
 cudf::detail::cuda_stream_pool& cudfGlobalStreamPool() {
