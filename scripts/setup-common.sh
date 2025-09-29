@@ -93,6 +93,8 @@ function install_fbthrift {
   (cd "${DEPENDENCY_DIR}/fbthrift" &&
     curl -L https://github.com/facebook/fbthrift/pull/675.patch | git apply)
   cmake_install_dir fbthrift -Denable_tests=OFF -DBUILD_TESTS=OFF -DBUILD_SHARED_LIBS=OFF
+  echo "DEBUG: "
+  cat "${INSTALL_PREFIX}/lib/cmake/fbthrift/FBThriftTargets.cmake"
 }
 
 function install_duckdb {
