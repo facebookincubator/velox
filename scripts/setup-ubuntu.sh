@@ -84,6 +84,7 @@ function install_build_prerequisites {
     ninja-build \
     checkinstall \
     git \
+    patch \
     pkg-config \
     libtool \
     wget
