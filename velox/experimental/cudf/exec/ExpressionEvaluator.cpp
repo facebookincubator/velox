@@ -845,6 +845,17 @@ class SwitchFunction : public CudfFunction {
         expr->inputs()[0]->type()->kind(),
         TypeKind::BOOLEAN,
         "The switch condition result type should be boolean");
+    bool hasNonLiteral = false;
+    for (const auto& expr : expr->inputs()) {
+      if (std::dynamic_pointer_cast<velox::exec::ConstantExpr>(expr)) {
+        continue;
+      }
+      hasNonLiteral = true;
+      break;
+    }
+    VELOX_CHECK(
+        hasNonLiteral,
+        "The switch expression should have at least 1 non-literal column");
   }
 
   // Maybe this is a common case, all the column requires to be column, though
@@ -853,7 +864,6 @@ class SwitchFunction : public CudfFunction {
       std::vector<ColumnOrView>& inputColumns,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
-    VELOX_CHECK(!inputColumns.empty());
     const auto numRows = asView(inputColumns[0]).size();
     std::vector<cudf::column_view> resolvedInputs;
     std::vector<std::unique_ptr<cudf::column>>
