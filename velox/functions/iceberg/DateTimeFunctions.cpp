@@ -94,4 +94,5 @@ void registerDateTimeFunctions(const std::string& prefix) {
   registerFunction<DaysFunction, int32_t, Date>({prefix + "days"});
   registerFunction<HoursFunction, int32_t, Timestamp>({prefix + "hours"});
 }
+
 } // namespace facebook::velox::functions::iceberg
