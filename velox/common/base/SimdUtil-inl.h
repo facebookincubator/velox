@@ -13,8 +13,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#pragma once
 
 #include <numeric>
+#include "velox/common/base/SimdUtil.h"
 
 #if XSIMD_WITH_NEON
 namespace xsimd::types {

@@ -13,10 +13,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#pragma once
 
 #include <folly/Conv.h>
 
 #include "velox/vector/BuilderTypeUtils.h"
+#include "velox/vector/SequenceVector.h"
 
 namespace facebook::velox {
 

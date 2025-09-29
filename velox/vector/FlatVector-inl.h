@@ -13,6 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#pragma once
+
 #include <folly/hash/Hash.h>
 
 #include "velox/common/base/BitUtil.h"
@@ -21,6 +23,7 @@
 #include "velox/vector/BuilderTypeUtils.h"
 #include "velox/vector/ConstantVector.h"
 #include "velox/vector/DecodedVector.h"
+#include "velox/vector/FlatVector.h"
 #include "velox/vector/TypeAliases.h"
 
 namespace facebook::velox {
