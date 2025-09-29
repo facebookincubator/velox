@@ -59,6 +59,16 @@ target_link_libraries(
   Folly::follybenchmark
 )
 
+add_executable(velox_sparksql_benchmarks_get_json_object GetJsonObjectBenchmark.cpp)
+target_link_libraries(
+  velox_sparksql_benchmarks_get_json_object
+  velox_functions_spark
+  velox_exec_test_lib
+  velox_parse_utils
+  Folly::folly
+  Folly::follybenchmark
+)
+
 add_executable(velox_sparksql_benchmarks_split SplitBenchmark.cpp)
 target_link_libraries(
   velox_sparksql_benchmarks_split
