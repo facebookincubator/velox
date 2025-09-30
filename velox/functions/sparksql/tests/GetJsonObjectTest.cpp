@@ -79,6 +79,8 @@ TEST_F(GetJsonObjectTest, basic) {
       getJsonObject(R"({"my": {"hello": true}})", "$.  my.  hello"), "true");
   EXPECT_EQ(
       getJsonObject(R"({"my": {"hello": true}})", "$.my.  hello"), "true");
+  EXPECT_EQ(getJsonObject(R"({"a$ ": {"b": 10}})", "$.a$ .b"), "10");
+  EXPECT_EQ(getJsonObject(R"({"a$. b": {"c": 10}})", "$.a$. b"), std::nullopt);
   // Json object as result.
   EXPECT_EQ(
       getJsonObject(

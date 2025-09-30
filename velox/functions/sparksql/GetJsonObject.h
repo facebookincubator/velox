@@ -16,7 +16,6 @@
 
 #pragma once
 
-#include <boost/regex.hpp>
 #include "velox/functions/Macros.h"
 #include "velox/functions/lib/JsonUtil.h"
 #include "velox/functions/prestosql/json/SIMDJsonUtil.h"
@@ -128,29 +127,77 @@ struct GetJsonObjectFunction {
     return result;
   }
 
-  // Normalizes the JSON path to be Spark-compatible:
-  // - Removes single quotes in bracket notation
-  // - Removes spaces after dots (e.g., "$. a" -> "$.a")
-  // - Removes trailing spaces after root symbol (e.g., "$ " -> "$")
+  // Normalizes the JSON path to be Spark-compatible.
+  //
+  // Rules applied:
+  // 1. Removes single quotes in bracket notation (e.g., "$['a']" -> "$[a]").
+  // 2. Removes spaces after dots (e.g., "$. a" -> "$.a").
+  // 3. Removes trailing spaces after root symbol (e.g., "$ " -> "$").
+  // 4. Invalid cases return "-1":
+  //    - Empty path or path not starting with '$'.
+  //    - Space between $ and dot (e.g., "$ .a").
+  //    - Consecutive dots (e.g., "$..a").
+  //    - Dot at the end (e.g., "$.a. ").
   std::string normalizeJsonPath(StringView jsonPath) {
     // First, remove single quotes for bracket notation
     std::string path = removeSingleQuotes(jsonPath);
-    if (path == "-1") {
-      return path;
+    if (path.empty() || path[0] != '$') {
+      return "-1";
     }
 
-    // Use Boost regex to find and remove spaces after dots
-    // Pattern: "dot + one or more spaces" -> "dot"
-    static const boost::regex dotSpaceRegex("\\.\\s+");
-    path = boost::regex_replace(path, dotSpaceRegex, ".");
+    enum State { kAfterDollar, kAfterDot, kToken } state = kAfterDollar;
 
-    // Remove trailing spaces after $.
-    // Pattern: "$ + one or more spaces" -> "$"
-    static const boost::regex rootSpaceRegex("\\$\\s+$");
-    path = boost::regex_replace(path, rootSpaceRegex, "$");
+    std::string normalized;
+    normalized.reserve(path.size() - 1);
 
-    // Skip the initial "$".
-    return path.erase(0, 1);
+    for (size_t i = 1; i < path.size(); ++i) {
+      const char c = path[i];
+      if (c == ' ') {
+        if (state == kToken) {
+          // Spaces within tokens are preserved.
+          normalized.push_back(c);
+        }
+        continue;
+      }
+      switch (state) {
+        case kAfterDollar: {
+          if (c == '.') {
+            state = kAfterDot;
+            if (path[i - 1] == ' ') {
+              // Spaces between '$' and '.' are invalid.
+              return "-1";
+            }
+          }
+          normalized.push_back(c);
+          break;
+        }
+        case kAfterDot: {
+          if (c == '.') {
+            // Consecutive dots are invalid.
+            return "-1";
+          }
+          normalized.push_back(c);
+          state = kToken;
+          break;
+        }
+        case kToken: {
+          if (c == '.') {
+            normalized.push_back(c);
+            state = kAfterDot;
+          } else {
+            normalized.push_back(c);
+          }
+          break;
+        }
+      }
+    }
+
+    if (state == kAfterDot) {
+      // Trailing dot is invalid.
+      return "-1";
+    }
+
+    return normalized;
   }
 
   // Extracts a string representation from a simdjson result. Handles various
