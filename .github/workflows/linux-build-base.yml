@@ -103,6 +103,7 @@ jobs:
             "-DVELOX_ENABLE_WAVE=ON"
             "-DVELOX_MONO_LIBRARY=ON"
             "-DVELOX_BUILD_SHARED=ON"
+            "-DVELOX_ENABLE_LOAD_SIMD_VALUE_BUFFER=ON"
           )
           if [[ "${USE_CLANG}" = "true" ]]; then
              scripts/setup-centos9.sh install_clang15; export CC=/usr/bin/clang-15; export CXX=/usr/bin/clang++-15; CUDA_FLAGS="-ccbin /usr/lib64/llvm15/bin/clang++-15";

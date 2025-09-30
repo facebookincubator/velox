@@ -25,6 +25,7 @@
 
 namespace facebook::velox {
 
+#ifdef VELOX_ENABLE_LOAD_SIMD_VALUE_BUFFER
 // Here are some common intel intrsic operations. Please refer to
 // https://software.intel.com/sites/landingpage/IntrinsicsGuide for examples.
 
@@ -48,8 +49,9 @@ namespace facebook::velox {
 
 // cost factors for individual operations on different filter paths - these are
 // experimentally derived from micro-bench perf testing.
-const double SIMD_CMP_COST = 0.00000051;
-const double SET_CMP_COST = 0.000023;
+static constexpr double SIMD_CMP_COST = 0.00000051;
+static constexpr double SET_CMP_COST = 0.000023;
+#endif
 
 template <typename T>
 const T* FlatVector<T>::rawValues() const {
@@ -67,6 +69,7 @@ Range<T> FlatVector<T>::asRange() const {
   return Range<T>(rawValues(), 0, BaseVector::length_);
 }
 
+#ifdef VELOX_ENABLE_LOAD_SIMD_VALUE_BUFFER
 template <typename T>
 xsimd::batch<T> FlatVector<T>::loadSIMDValueBufferAt(size_t byteOffset) const {
   auto mem = reinterpret_cast<uint8_t*>(rawValues_) + byteOffset;
@@ -76,6 +79,7 @@ xsimd::batch<T> FlatVector<T>::loadSIMDValueBufferAt(size_t byteOffset) const {
     return xsimd::load_unaligned(reinterpret_cast<T*>(mem));
   }
 }
+#endif
 
 template <typename T>
 std::unique_ptr<SimpleVector<uint64_t>> FlatVector<T>::hashAll() const {
@@ -113,6 +117,7 @@ std::unique_ptr<SimpleVector<uint64_t>> FlatVector<T>::hashAll() const {
       sizeof(uint64_t) * BaseVector::length_ /*representedBytes*/);
 }
 
+#ifdef VELOX_ENABLE_LOAD_SIMD_VALUE_BUFFER
 template <typename T>
 bool FlatVector<T>::useSimdEquality(size_t numCmpVals) const {
   if constexpr (!std::is_integral_v<T>) {
@@ -127,6 +132,7 @@ bool FlatVector<T>::useSimdEquality(size_t numCmpVals) const {
     return simdCost <= fallbackCost;
   }
 }
+#endif
 
 template <typename T>
 void FlatVector<T>::copyValuesAndNulls(

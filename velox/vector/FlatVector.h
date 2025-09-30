@@ -37,10 +37,12 @@ class FlatVector final : public SimpleVector<T> {
   FlatVector(const FlatVector&) = delete;
   FlatVector& operator=(const FlatVector&) = delete;
 
+#ifdef VELOX_ENABLE_LOAD_SIMD_VALUE_BUFFER
   static constexpr bool can_simd =
       (std::is_same_v<T, int64_t> || std::is_same_v<T, int32_t> ||
        std::is_same_v<T, int16_t> || std::is_same_v<T, int8_t> ||
        std::is_same_v<T, bool> || std::is_same_v<T, size_t>);
+#endif
 
   /// Minimum size of a string buffer. 32 KB value is chosen to ensure that a
   /// single buffer is sufficient for a "typical" vector: 1K rows, medium size
@@ -120,11 +122,13 @@ class FlatVector final : public SimpleVector<T> {
 
   std::unique_ptr<SimpleVector<uint64_t>> hashAll() const override;
 
+#ifdef VELOX_ENABLE_LOAD_SIMD_VALUE_BUFFER
   /// Loads a SIMD vector of data at the virtual byteOffset given
   /// Note this method is implemented on each vector type, but is intentionally
   /// not virtual for performance reasons.
   /// 'index' indicates the byte offset to load from
   xsimd::batch<T> loadSIMDValueBufferAt(size_t index) const;
+#endif
 
   /// dictionary vector makes internal usehere for SIMD functions
   template <typename X>
@@ -182,10 +186,12 @@ class FlatVector final : public SimpleVector<T> {
     return values_;
   }
 
+#ifdef VELOX_ENABLE_LOAD_SIMD_VALUE_BUFFER
   /// Returns true if this number of comparison values on this vector should use
   /// simd for equality constraint filtering, false to use standard set
   /// examination filtering.
   bool useSimdEquality(size_t numCmpVals) const;
+#endif
 
   /// Returns the raw values of this vector as a continuous array.
   const T* rawValues() const;

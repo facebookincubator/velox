@@ -167,6 +167,11 @@ option(VELOX_BUILD_PYTHON_PACKAGE "Builds Velox Python bindings" OFF)
 option(VELOX_PYTHON_LEGACY_ONLY "Build only the pyvelox module" OFF)
 option(VELOX_BUILD_RUNNER "Builds velox runner" ON)
 option(
+  VELOX_ENABLE_LOAD_SIMD_VALUE_BUFFER
+  "Build velox::VectorLike::loadSIMDValueBufferAt, it's legacy"
+  OFF
+)
+option(
   VELOX_ENABLE_INT64_BUILD_PARTITION_BOUND
   "make buildPartitionBounds_ a vector int64 instead of int32 to avoid integer overflow when the hashtable has billions of records"
   OFF
@@ -327,6 +332,10 @@ if(VELOX_ENABLE_PARQUET)
   # Native Parquet reader requires Apache Thrift and Arrow Parquet writer, which
   # are included in Arrow.
   set(VELOX_ENABLE_ARROW ON)
+endif()
+
+if(VELOX_ENABLE_LOAD_SIMD_VALUE_BUFFER)
+  add_definitions(-DVELOX_ENABLE_LOAD_SIMD_VALUE_BUFFER)
 endif()
 
 # make buildPartitionBounds_ a vector int64 instead of int32 to avoid integer
