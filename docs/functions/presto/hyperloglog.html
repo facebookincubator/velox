@@ -117,6 +117,16 @@ the range of <code class="docutils literal notranslate"><span class="pre">[0.004
 HyperLogLog structures.</p>
 </dd></dl>
 
+<dl class="py function">
+<dt class="sig sig-object py" id="merge_hll">
+<span class="sig-name descname"><span class="pre">merge_hll</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(HyperLogLog)</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">HyperLogLog</span></span></span><a class="headerlink" href="#merge_hll" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the <code class="docutils literal notranslate"><span class="pre">HyperLogLog</span></code> of the union of an array of <code class="docutils literal notranslate"><span class="pre">HyperLogLog</span></code> structures.</p>
+<ul class="simple">
+<li><p>Returns <code class="docutils literal notranslate"><span class="pre">NULL</span></code> if the input array is <code class="docutils literal notranslate"><span class="pre">NULL</span></code>, empty, or contains only <code class="docutils literal notranslate"><span class="pre">NULL</span></code> elements</p></li>
+<li><p>Ignores <code class="docutils literal notranslate"><span class="pre">NULL</span></code> elements and merges only valid <code class="docutils literal notranslate"><span class="pre">HyperLogLog</span></code> structures when the array contains a mix of <code class="docutils literal notranslate"><span class="pre">NULL</span></code> and non-null elements</p></li>
+</ul>
+</dd></dl>
+
 </section>
 </section>
 
@@ -137,6 +147,7 @@ HyperLogLog structures.</p>
 <li><a class="reference internal" href="#approx_set"><code class="docutils literal notranslate"><span class="pre">approx_set()</span></code></a></li>
 <li><a class="reference internal" href="#empty_approx_set"><code class="docutils literal notranslate"><span class="pre">empty_approx_set()</span></code></a></li>
 <li><a class="reference internal" href="#merge"><code class="docutils literal notranslate"><span class="pre">merge()</span></code></a></li>
+<li><a class="reference internal" href="#merge_hll"><code class="docutils literal notranslate"><span class="pre">merge_hll()</span></code></a></li>
 </ul>
 </li>
 </ul>

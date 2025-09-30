@@ -260,25 +260,6 @@ DATE, TIMESTAMP, TIMESTAMP WITH TIME ZONE.</p>
 <dd><p>Returns <code class="docutils literal notranslate"><span class="pre">timestamp</span></code> as a UNIX timestamp.</p>
 </dd></dl>
 
-<dl class="py function">
-<dt class="sig sig-object py" id="current_timestamp">
-<span class="sig-name descname"><span class="pre">current_timestamp</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">timestamp</span> <span class="pre">with</span> <span class="pre">time</span> <span class="pre">zone</span></span></span><a class="headerlink" href="#current_timestamp" title="Link to this definition">¶</a></dt>
-<dd></dd></dl>
-
-<dl class="py function">
-<dt class="sig sig-object py" id="now">
-<span class="sig-name descname"><span class="pre">now</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">timestamp</span> <span class="pre">with</span> <span class="pre">time</span> <span class="pre">zone</span></span></span><a class="headerlink" href="#now" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the current timestamp with session time zone applied.
-The timestamp is captured once at the start of query execution and remains
-constant throughout the query. This matches the standard SQL behavior for
-<code class="docutils literal notranslate"><span class="pre">CURRENT_TIMESTAMP</span></code> and <code class="docutils literal notranslate"><span class="pre">NOW()</span></code>.</p>
-<p>Example:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">current_timestamp</span><span class="p">;</span>  <span class="o">--</span> <span class="mi">2025</span><span class="o">-</span><span class="mi">07</span><span class="o">-</span><span class="mi">17</span> <span class="mi">14</span><span class="p">:</span><span class="mi">53</span><span class="p">:</span><span class="mf">12.123</span> <span class="n">Asia</span><span class="o">/</span><span class="n">Kolkata</span>
-<span class="n">SELECT</span> <span class="n">now</span><span class="p">();</span>              <span class="o">--</span> <span class="mi">2025</span><span class="o">-</span><span class="mi">07</span><span class="o">-</span><span class="mi">17</span> <span class="mi">14</span><span class="p">:</span><span class="mi">53</span><span class="p">:</span><span class="mf">12.123</span> <span class="n">Asia</span><span class="o">/</span><span class="n">Kolkata</span>
-</pre></div>
-</div>
-</dd></dl>
-
 </section>
 <section id="truncation-function">
 <h2>Truncation Function<a class="headerlink" href="#truncation-function" title="Link to this heading">¶</a></h2>
@@ -804,8 +785,6 @@ list of supported timezones follow the definition <a class="reference external" 
 <li><a class="reference internal" href="#to_iso8601"><code class="docutils literal notranslate"><span class="pre">to_iso8601()</span></code></a></li>
 <li><a class="reference internal" href="#to_milliseconds"><code class="docutils literal notranslate"><span class="pre">to_milliseconds()</span></code></a></li>
 <li><a class="reference internal" href="#to_unixtime"><code class="docutils literal notranslate"><span class="pre">to_unixtime()</span></code></a></li>
-<li><a class="reference internal" href="#current_timestamp"><code class="docutils literal notranslate"><span class="pre">current_timestamp()</span></code></a></li>
-<li><a class="reference internal" href="#now"><code class="docutils literal notranslate"><span class="pre">now()</span></code></a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#truncation-function">Truncation Function</a><ul>
