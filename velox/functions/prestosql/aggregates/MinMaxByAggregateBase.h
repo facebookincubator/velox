@@ -1128,10 +1128,10 @@ template <
         bool B1,
         class C,
         bool compareTypeUsesCustomComparison>
-class Aggregate,
+    class Aggregate,
     bool isMaxFunc,
     template <typename U, typename V>
-class NAggregate>
+    class NAggregate>
 exec::AggregateRegistrationResult registerMinMaxBy(
     const std::string& name,
     bool withCompanionFunctions,
