@@ -45,11 +45,6 @@ velox_link_libraries(
   velox_dwio_arrow_parquet_writer_lib
   velox_dwio_arrow_parquet_writer_util_lib
   velox_dwio_parquet_common
-)
-if(NOT VELOX_MONO_LIBRARY)
-  target_link_libraries(velox_dwio_arrow_parquet_writer_lib PRIVATE velox_dwio_parquet_thrift)
-endif()
-velox_link_libraries(
   velox_dwio_arrow_parquet_writer_lib
   velox_dwio_common
   velox_arrow_bridge
