@@ -356,7 +356,7 @@ void registerTDigestAggregate(
             hasWeight, hasCompression, resultTypes);
       },
       {},
-      false /*companionFunction*/,
+      withCompanionFunctions,
       overwrite);
 }
 } // namespace facebook::velox::aggregate::prestosql
