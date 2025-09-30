@@ -33,6 +33,10 @@ class InputExpr : public IExpr {
     return std::make_shared<InputExpr>();
   }
 
+  ExprPtr dropAlias() const override {
+    return std::make_shared<InputExpr>();
+  }
+
   bool operator==(const IExpr& other) const override {
     return other.is(Kind::kInput);
   }
@@ -49,12 +53,15 @@ class FieldAccessExpr : public IExpr {
   FieldAccessExpr(
       std::string name,
       std::optional<std::string> alias,
-      std::vector<ExprPtr>&& inputs =
-          std::vector<ExprPtr>{std::make_shared<const InputExpr>()})
+      std::vector<ExprPtr> inputs)
       : IExpr{IExpr::Kind::kFieldAccess, std::move(inputs), std::move(alias)},
         name_{std::move(name)} {
     VELOX_USER_CHECK_EQ(IExpr::inputs().size(), 1);
   }
+
+  FieldAccessExpr(std::string name, std::optional<std::string> alias)
+      : IExpr{IExpr::Kind::kFieldAccess, {std::make_shared<const InputExpr>()}, std::move(alias)},
+        name_{std::move(name)} {}
 
   const std::string& name() const {
     return name_;
@@ -72,6 +79,10 @@ class FieldAccessExpr : public IExpr {
         name_, alias(), std::move(newInputs));
   }
 
+  ExprPtr dropAlias() const override {
+    return std::make_shared<FieldAccessExpr>(name_, std::nullopt, inputs());
+  }
+
   bool operator==(const IExpr& other) const override;
 
   size_t localHash() const override;
@@ -85,11 +96,11 @@ class FieldAccessExpr : public IExpr {
 class CallExpr : public IExpr {
  public:
   CallExpr(
-      std::string&& funcName,
-      std::vector<ExprPtr>&& inputs,
+      std::string name,
+      std::vector<ExprPtr> inputs,
       std::optional<std::string> alias)
       : IExpr{IExpr::Kind::kCall, std::move(inputs), std::move(alias)},
-        name_{std::move(funcName)} {
+        name_{std::move(name)} {
     VELOX_USER_CHECK(!name_.empty());
   }
 
@@ -103,6 +114,10 @@ class CallExpr : public IExpr {
     VELOX_CHECK_EQ(newInputs.size(), inputs().size());
     return std::make_shared<CallExpr>(
         folly::copy(name()), std::move(newInputs), alias());
+  }
+
+  ExprPtr dropAlias() const override {
+    return std::make_shared<CallExpr>(name(), inputs(), std::nullopt);
   }
 
   bool operator==(const IExpr& other) const override;
@@ -136,6 +151,10 @@ class ConstantExpr : public IExpr,
   ExprPtr replaceInputs(std::vector<ExprPtr> newInputs) const override {
     VELOX_CHECK_EQ(newInputs.size(), 0);
     return std::make_shared<ConstantExpr>(type(), value(), alias());
+  }
+
+  ExprPtr dropAlias() const override {
+    return std::make_shared<ConstantExpr>(type(), value(), std::nullopt);
   }
 
   bool operator==(const IExpr& other) const override;
@@ -176,6 +195,11 @@ class CastExpr : public IExpr, public std::enable_shared_from_this<CastExpr> {
         type(), newInputs[0], isTryCast_, alias());
   }
 
+  ExprPtr dropAlias() const override {
+    return std::make_shared<CastExpr>(
+        type(), input(), isTryCast_, std::nullopt);
+  }
+
   bool operator==(const IExpr& other) const override;
 
   size_t localHash() const override;
@@ -211,6 +235,10 @@ class LambdaExpr : public IExpr,
 
   ExprPtr replaceInputs(std::vector<ExprPtr> newInputs) const override {
     VELOX_CHECK_EQ(newInputs.size(), 0);
+    return std::make_shared<LambdaExpr>(arguments(), body());
+  }
+
+  ExprPtr dropAlias() const override {
     return std::make_shared<LambdaExpr>(arguments(), body());
   }
 
