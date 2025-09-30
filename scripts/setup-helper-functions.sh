@@ -265,7 +265,8 @@ function cmake_install {
   COMPILER_FLAGS+=${EXTRA_PKG_CXXFLAGS}
 
   local CCACHE=
-  if command -v ccache >/dev/null 2>&1; then
+  if [ "${NAME}" != "duckdb" ] && command -v ccache >/dev/null 2>&1; then
+    # DuckDB sets ccache automatically in its CMakeLists.txt.
     CCACHE=ccache
   fi
   # CMAKE_POSITION_INDEPENDENT_CODE is required so that Velox can be built into dynamic libraries \
