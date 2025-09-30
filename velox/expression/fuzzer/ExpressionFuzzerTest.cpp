@@ -129,6 +129,8 @@ std::unordered_set<std::string> skipFunctions = {
     "merge_sfm", // Fuzzer can generate sketches of different sizes.
     "element_at",
     "width_bucket",
+    // Varbinary output can't be compared exactly with Java.
+    "merge_hll",
     // Fuzzer and the underlying engine are confused about TDigest functions
     // (since TDigest is a user defined type), and tries to pass a
     // VARBINARY (since TDigest's implementation uses an
