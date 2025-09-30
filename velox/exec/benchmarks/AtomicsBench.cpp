@@ -16,7 +16,6 @@
 
 #include <folly/Benchmark.h>
 #include <folly/init/Init.h>
-#include <folly/synchronization/SanitizeThread.h>
 #include <atomic>
 #include <thread>
 #include <vector>
