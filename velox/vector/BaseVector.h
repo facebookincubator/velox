@@ -294,11 +294,6 @@ class BaseVector {
     return representedByteCount_;
   }
 
-  /// @return the number of bytes required to hold this vector in memory
-  ByteCount inMemoryBytes() const {
-    return inMemoryBytes_;
-  }
-
   /// @return true if this vector has the same value at the given index as the
   /// other vector at the other vector's index (including if both are null),
   /// false otherwise
@@ -995,7 +990,6 @@ class BaseVector {
   std::optional<vector_size_t> distinctValueCount_;
   std::optional<ByteCount> representedByteCount_;
   std::optional<ByteCount> storageByteCount_;
-  ByteCount inMemoryBytes_ = 0;
 
  private:
   static VectorPtr createInternal(

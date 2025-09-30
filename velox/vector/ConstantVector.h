@@ -457,7 +457,6 @@ class ConstantVector final : public SimpleVector<T> {
   }
 
   void setValue(const std::string& string) {
-    BaseVector::inMemoryBytes_ += string.size();
     value_ = velox::to<decltype(value_)>(string);
     if constexpr (can_simd) {
       valueBuffer_ = simd::setAll(value_);
