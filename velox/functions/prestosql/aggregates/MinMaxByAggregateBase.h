@@ -1218,7 +1218,6 @@ exec::AggregateRegistrationResult registerMinMaxBy(
           }
         }
       },
-      {.ignoreDuplicates = true},
       withCompanionFunctions,
       overwrite);
 }
