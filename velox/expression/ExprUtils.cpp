@@ -17,8 +17,29 @@
 #include "velox/expression/ExprUtils.h"
 #include "velox/expression/ExprConstants.h"
 #include "velox/expression/FunctionSignature.h"
+#include "velox/vector/ConstantVector.h"
 
 namespace facebook::velox::expression::utils {
+
+ConstantEvalResult evalExprAsConstant(const core::TypedExprPtr& expr) {
+  if (expr->isConstantKind()) {
+    auto constantExpr = expr->asUnchecked<core::ConstantTypedExpr>();
+    if (constantExpr->isNull()) {
+      return ConstantEvalResult::kNull;
+    }
+    if (constantExpr->type()->isBoolean()) {
+      auto value = constantExpr->hasValueVector()
+          ? constantExpr->valueVector()->as<ConstantVector<bool>>()->valueAt(0)
+          : constantExpr->value().value<TypeKind::BOOLEAN>();
+      if (value) {
+        return ConstantEvalResult::kTrue;
+      }
+      return ConstantEvalResult::kFalse;
+    }
+    return ConstantEvalResult::kNonBoolConstant;
+  }
+  return ConstantEvalResult::kNotConstant;
+}
 
 bool isCall(const core::TypedExprPtr& expr, const std::string& name) {
   if (expr->isCallKind()) {

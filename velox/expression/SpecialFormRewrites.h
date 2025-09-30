@@ -13,22 +13,18 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#pragma once
+#include "velox/core/Expressions.h"
+#include "velox/core/QueryCtx.h"
 
 namespace facebook::velox::expression {
+core::TypedExprPtr rewriteConjunctExpression(const core::TypedExprPtr& input);
 
-inline constexpr const char* kAnd = "and";
-inline constexpr const char* kOr = "or";
-inline constexpr const char* kPlus = "plus";
-inline constexpr const char* kMultiply = "multiply";
-inline constexpr const char* kSwitch = "switch";
-inline constexpr const char* kIf = "if";
-inline constexpr const char* kCoalesce = "coalesce";
-inline constexpr const char* kCast = "cast";
-inline constexpr const char* kTryCast = "try_cast";
-inline constexpr const char* kTry = "try";
-inline constexpr const char* kRowConstructor = "row_constructor";
-inline constexpr const char* kFail = "fail";
-inline constexpr const char* kIn = "in";
+core::TypedExprPtr rewriteCoalesceExpression(const core::TypedExprPtr& input);
+
+core::TypedExprPtr rewriteIfExpression(const core::TypedExprPtr& input);
+
+core::TypedExprPtr rewriteSwitchExpression(const core::TypedExprPtr& input);
+
+core::TypedExprPtr rewriteInExpression(const core::TypedExprPtr& input);
 
 } // namespace facebook::velox::expression

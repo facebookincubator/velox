@@ -19,12 +19,24 @@
 
 namespace facebook::velox::expression::utils {
 
+/// Indicates the result of evaluating an expression to a boolean constant.
+enum class ConstantEvalResult {
+  kNotConstant = 0,
+  kNull,
+  kTrue,
+  kFalse,
+  kNonBoolConstant
+};
+
 /// Indicates the type of inputs of an expression.
 /// kAllConstant: All inputs are of constant kind.
 /// kAllField: All inputs are of field kind.
 /// kConstantOrField: All inputs are of either constant or field kind.
 /// kDefault: At least one input is not of constant or field kind.
 enum ExprInputsKind { kAllConstant = 0, kAllField, kConstantOrField, kDefault };
+
+/// Helper function to evaluate an expression to a boolean constant.
+ConstantEvalResult evalExprAsConstant(const core::TypedExprPtr& expr);
 
 /// Helper function to get ExprInputsKind for an expression.
 ExprInputsKind getExprInputsKind(const core::TypedExprPtr& expr);

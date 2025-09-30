@@ -21,13 +21,38 @@
 #include "velox/expression/CoalesceExpr.h"
 #include "velox/expression/ConjunctExpr.h"
 #include "velox/expression/ExprConstants.h"
+#include "velox/expression/ExprRewriteRegistry.h"
 #include "velox/expression/FunctionCallToSpecialForm.h"
 #include "velox/expression/RowConstructor.h"
 #include "velox/expression/SpecialFormRegistry.h"
+#include "velox/expression/SpecialFormRewrites.h"
 #include "velox/expression/SwitchExpr.h"
 #include "velox/expression/TryExpr.h"
 
 namespace facebook::velox::exec {
+
+void registerSpecialFormExpressionRewrites() {
+  expression::ExprRewriteRegistry::instance().registerRewrite(
+      [&](const core::TypedExprPtr& expr) {
+        return expression::rewriteConjunctExpression(expr);
+      });
+  expression::ExprRewriteRegistry::instance().registerRewrite(
+      [&](const core::TypedExprPtr& expr) {
+        return expression::rewriteCoalesceExpression(expr);
+      });
+  expression::ExprRewriteRegistry::instance().registerRewrite(
+      [&](const core::TypedExprPtr& expr) {
+        return expression::rewriteIfExpression(expr);
+      });
+  expression::ExprRewriteRegistry::instance().registerRewrite(
+      [&](const core::TypedExprPtr& expr) {
+        return expression::rewriteInExpression(expr);
+      });
+  expression::ExprRewriteRegistry::instance().registerRewrite(
+      [&](const core::TypedExprPtr& expr) {
+        return expression::rewriteSwitchExpression(expr);
+      });
+}
 
 void registerFunctionCallToSpecialForms() {
   registerFunctionCallToSpecialForm(
@@ -51,6 +76,7 @@ void registerFunctionCallToSpecialForms() {
   registerFunctionCallToSpecialForm(
       expression::kRowConstructor,
       std::make_unique<RowConstructorCallToSpecialForm>());
-}
 
+  registerSpecialFormExpressionRewrites();
+}
 } // namespace facebook::velox::exec
