@@ -355,7 +355,7 @@ void registerTDigestAggregate(
         return std::make_unique<TDigestAggregate<double>>(
             hasWeight, hasCompression, resultTypes);
       },
-      {true /*orderSensitive*/, false /*companionFunction*/},
+      {},
       withCompanionFunctions,
       overwrite);
 }
