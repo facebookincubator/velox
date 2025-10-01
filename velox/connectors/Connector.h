@@ -266,7 +266,15 @@ class DataSource {
   /// Returns the number of input rows processed so far.
   virtual uint64_t getCompletedRows() = 0;
 
-  virtual std::unordered_map<std::string, RuntimeCounter> runtimeStats() = 0;
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+  virtual std::unordered_map<std::string, RuntimeCounter> runtimeStats() {
+    return {};
+  }
+#endif
+
+  virtual std::unordered_map<std::string, RuntimeMetric> getRuntimeStats() {
+    return {};
+  }
 
   /// Returns true if 'this' has initiated all the prefetch this will initiate.
   /// This means that the caller should schedule next splits to prefetch in the

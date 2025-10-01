@@ -304,15 +304,15 @@ bool TableScan::getSplit() {
   if (!split.hasConnectorSplit()) {
     noMoreSplits_ = true;
     if (dataSource_) {
-      const auto connectorStats = dataSource_->runtimeStats();
+      const auto connectorStats = dataSource_->getRuntimeStats();
       auto lockedStats = stats_.wlock();
-      for (const auto& [name, counter] : connectorStats) {
+      for (const auto& [name, metric] : connectorStats) {
         if (FOLLY_UNLIKELY(lockedStats->runtimeStats.count(name) == 0)) {
-          lockedStats->runtimeStats.emplace(name, RuntimeMetric(counter.unit));
+          lockedStats->runtimeStats.emplace(name, RuntimeMetric(metric.unit));
         } else {
-          VELOX_CHECK_EQ(lockedStats->runtimeStats.at(name).unit, counter.unit);
+          VELOX_CHECK_EQ(lockedStats->runtimeStats.at(name).unit, metric.unit);
         }
-        lockedStats->runtimeStats.at(name).addValue(counter.value);
+        lockedStats->runtimeStats.at(name).merge(metric);
       }
     }
     return false;
