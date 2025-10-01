@@ -89,6 +89,7 @@ class HiveDataSinkTest : public exec::test::HiveConnectorTestBase {
     options.vectorSize = vectorSize;
     VectorFuzzer fuzzer(options, pool());
     std::vector<RowVectorPtr> vectors;
+    vectors.reserve(numVectors);
     for (int i = 0; i < numVectors; ++i) {
       vectors.push_back(fuzzer.fuzzInputRow(rowType_));
     }
@@ -1407,6 +1408,45 @@ TEST_F(HiveDataSinkTest, raceWithCacheEviction) {
 
   stop = true;
   cacheCleaner.get();
+}
+
+TEST_F(HiveDataSinkTest, featureReorderingConfigGracefulHandling) {
+  // Test that feature reordering config doesn't crash with DWRF format
+  // (where feature reordering has no effect but should be handled gracefully)
+  const auto outputDirectory = TempDirectoryPath::create();
+
+  std::unordered_map<std::string, std::string> serdeParameters;
+  serdeParameters["alpha.feature.reordering"] = "invalid_json";
+
+  auto insertTableHandle = makeHiveInsertTableHandle(
+      rowType_->names(),
+      rowType_->children(),
+      {}, // partitionedBy
+      nullptr, // bucketProperty
+      std::make_shared<LocationHandle>(
+          outputDirectory->getPath(),
+          outputDirectory->getPath(),
+          LocationHandle::TableType::kNew),
+      dwio::common::FileFormat::DWRF,
+      CompressionKind::CompressionKind_NONE,
+      serdeParameters,
+      nullptr, // writerOptions
+      false); // ensureFiles
+
+  // Should not throw with invalid config in DWRF format
+  auto dataSink = std::make_unique<HiveDataSink>(
+      rowType_,
+      insertTableHandle,
+      connectorQueryCtx_.get(),
+      CommitStrategy::kTaskCommit,
+      connectorConfig_);
+
+  const auto vectors = createVectors(10, 1);
+  dataSink->appendData(vectors[0]);
+  dataSink->finish();
+  auto partitionUpdates = dataSink->close();
+
+  ASSERT_EQ(partitionUpdates.size(), 1);
 }
 
 #ifdef VELOX_ENABLE_PARQUET
