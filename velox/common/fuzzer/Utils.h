@@ -167,6 +167,8 @@ inline Timestamp rand(FuzzerGenerator& rng, DataSpec /*dataSpec*/) {
 
 int32_t randDate(FuzzerGenerator& rng);
 
+int32_t randTime(FuzzerGenerator& rng);
+
 template <
     typename T,
     typename std::enable_if_t<std::is_arithmetic_v<T>, int> = 0>
