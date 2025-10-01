@@ -263,4 +263,31 @@ std::vector<std::unique_ptr<cudf::table>> getConcatenatedTableBatched(
   return outputTables;
 }
 
+CudaEvent::CudaEvent(unsigned int flags) {
+  cudaEvent_t ev{};
+  cudaEventCreateWithFlags(&ev, flags);
+  event_ = ev;
+}
+
+CudaEvent::~CudaEvent() {
+  if (event_ != nullptr) {
+    cudaEventDestroy(event_);
+    event_ = nullptr;
+  }
+}
+
+CudaEvent::CudaEvent(CudaEvent&& other) noexcept : event_(other.event_) {
+  other.event_ = nullptr;
+}
+
+const CudaEvent& CudaEvent::recordFrom(rmm::cuda_stream_view stream) const {
+  cudaEventRecord(event_, stream.value());
+  return *this;
+}
+
+const CudaEvent& CudaEvent::waitOn(rmm::cuda_stream_view stream) const {
+  cudaStreamWaitEvent(stream.value(), event_, 0);
+  return *this;
+}
+
 } // namespace facebook::velox::cudf_velox

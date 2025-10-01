@@ -36,6 +36,7 @@
 #include <cudf/scalar/scalar_factories.hpp>
 #include <cudf/stream_compaction.hpp>
 
+#include <rmm/cuda_stream_view.hpp>
 #include <rmm/device_uvector.hpp>
 #include <rmm/exec_policy.hpp>
 
@@ -86,6 +87,16 @@ std::optional<CudfHashJoinBridge::hash_type> CudfHashJoinBridge::hashOrFuture(
               << std::endl;
   }
   return std::nullopt;
+}
+
+void CudfHashJoinBridge::setBuildStream(rmm::cuda_stream_view buildStream) {
+  std::lock_guard<std::mutex> l(mutex_);
+  buildStream_ = buildStream;
+}
+
+std::optional<rmm::cuda_stream_view> CudfHashJoinBridge::getBuildStream() {
+  std::lock_guard<std::mutex> l(mutex_);
+  return buildStream_;
 }
 
 CudfHashJoinBuild::CudfHashJoinBuild(
@@ -236,6 +247,7 @@ void CudfHashJoinBuild::noMoreInput() {
   auto cudfHashJoinBridge =
       std::dynamic_pointer_cast<CudfHashJoinBridge>(joinBridge);
 
+  cudfHashJoinBridge->setBuildStream(stream);
   cudfHashJoinBridge->setHashTable(std::make_optional(
       std::make_pair(std::move(shared_tbls), std::move(hashObjects))));
 }
@@ -266,7 +278,8 @@ CudfHashJoinProbe::CudfHashJoinProbe(
           nvtx3::rgb{0, 128, 128}, // Teal
           operatorId,
           fmt::format("[{}]", joinNode->id())),
-      joinNode_(joinNode) {
+      joinNode_(joinNode),
+      cudaEvent_(std::make_unique<CudaEvent>(cudaEventDisableTiming)) {
   if (cudfDebugEnabled()) {
     std::cout << "CudfHashJoinProbe constructor" << std::endl;
   }
@@ -568,12 +581,30 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
     if (joinNode_->isInnerJoin()) {
       // left = probe, right = build
       VELOX_CHECK_NOT_NULL(hb);
+      if (buildStream_.has_value()) {
+        // Make build stream wait for probe tables to become valid
+        cudaEvent_->recordFrom(stream).waitOn(buildStream_.value());
+      }
       std::tie(leftJoinIndices, rightJoinIndices) = hb->inner_join(
-          leftTableView.select(leftKeyIndices_), std::nullopt, stream);
+          leftTableView.select(leftKeyIndices_),
+          std::nullopt,
+          buildStream_.has_value() ? buildStream_.value() : stream);
+      if (buildStream_.has_value()) {
+        // Make probe stream wait for join completion before using indices
+        cudaEvent_->recordFrom(buildStream_.value()).waitOn(stream);
+      }
     } else if (joinNode_->isLeftJoin()) {
       VELOX_CHECK_NOT_NULL(hb);
+      if (buildStream_.has_value()) {
+        cudaEvent_->recordFrom(stream).waitOn(buildStream_.value());
+      }
       std::tie(leftJoinIndices, rightJoinIndices) = hb->left_join(
-          leftTableView.select(leftKeyIndices_), std::nullopt, stream);
+          leftTableView.select(leftKeyIndices_),
+          std::nullopt,
+          buildStream_.has_value() ? buildStream_.value() : stream);
+      if (buildStream_.has_value()) {
+        cudaEvent_->recordFrom(buildStream_.value()).waitOn(stream);
+      }
     } else if (joinNode_->isRightJoin() && rightTables.size() == 1) {
       if (joinNode_->filter()) {
         std::tie(rightJoinIndices, leftJoinIndices) = cudf::mixed_left_join(
@@ -747,6 +778,10 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
       }
       joinedCols = std::move(filteredjoinedCols);
       auto cudfOutput = std::make_unique<cudf::table>(std::move(joinedCols));
+      if (buildStream_.has_value()) {
+        // Ensure any deallocation of join indices is ordered wrt probe gathers
+        cudaEvent_->recordFrom(stream).waitOn(buildStream_.value());
+      }
       stream.synchronize();
       input_.reset();
       finished_ = noMoreInput_;
@@ -782,6 +817,10 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
       joinedCols[rightColumnOutputIndices_[i]] = std::move(rightCols[i]);
     }
     cudfOutputs.push_back(std::make_unique<cudf::table>(std::move(joinedCols)));
+    if (buildStream_.has_value()) {
+      // Ensure deallocation of build table happens after probe gathers
+      cudaEvent_->recordFrom(stream).waitOn(buildStream_.value());
+    }
     stream.synchronize();
   }
 
@@ -838,6 +877,8 @@ exec::BlockingReason CudfHashJoinProbe::isBlocked(ContinueFuture* future) {
     return exec::BlockingReason::kWaitForJoinBuild;
   }
   hashObject_ = std::move(hashObject);
+
+  buildStream_ = cudfJoinBridge->getBuildStream();
 
   auto& rightTables = hashObject_.value().first;
   // should be rightTable->numDistinct() but it needs compute,

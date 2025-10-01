@@ -29,7 +29,13 @@
 #include <cudf/join/hash_join.hpp>
 #include <cudf/table/table.hpp>
 
+#include <rmm/cuda_stream_view.hpp>
+
+#include <memory>
+
 namespace facebook::velox::cudf_velox {
+
+class CudaEvent;
 
 class CudfHashJoinBridge : public exec::JoinBridge {
  public:
@@ -45,8 +51,14 @@ class CudfHashJoinBridge : public exec::JoinBridge {
 
   std::optional<hash_type> hashOrFuture(ContinueFuture* future);
 
+  // Store and retrieve the CUDA stream used for building the hash join.
+  void setBuildStream(rmm::cuda_stream_view buildStream);
+
+  std::optional<rmm::cuda_stream_view> getBuildStream();
+
  private:
   std::optional<hash_type> hashObject_;
+  std::optional<rmm::cuda_stream_view> buildStream_;
 };
 
 class CudfHashJoinBuild : public exec::Operator, public NvtxHelper {
@@ -136,6 +148,9 @@ class CudfHashJoinProbe : public exec::Operator, public NvtxHelper {
   // probe input from the sources have been processed. It prevents the exchange
   // hanging problem at the producer side caused by the early query finish.
   bool skipInput_{false};
+
+  std::optional<rmm::cuda_stream_view> buildStream_;
+  std::unique_ptr<CudaEvent> cudaEvent_;
 };
 
 class CudfHashJoinBridgeTranslator : public exec::Operator::PlanNodeTranslator {
