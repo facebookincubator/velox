@@ -455,7 +455,7 @@ jobs:
     name: Expression Fuzzer with Presto SOT
     needs: compile
     runs-on: ubuntu-latest
-    container: ghcr.io/facebookincubator/velox-dev:presto-java
+    container: ghcr.io/czentgr/czentgr-test:presto-java
     timeout-minutes: 120
     env:
       CCACHE_DIR: ${{ github.workspace }}/ccache/
