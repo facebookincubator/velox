@@ -64,7 +64,7 @@ Generic Configuration
      - bool
      - true
      - If true, the driver will collect the operator's input/output batch size through vector flat size estimation, otherwise not.
-     - We might turn this off in use cases which have very wide column width and batch size estimation has non-trivial cpu cost.
+       We might turn this off in use cases which have very wide column width and batch size estimation has non-trivial cpu cost.
    * - hash_adaptivity_enabled
      - bool
      - true
@@ -200,7 +200,6 @@ Generic Configuration
        be expensive (especially if operator stats are retrieved frequently) and this allows the user to
        explicitly enable it.
 
-.. _expression-evaluation-conf:
 
 Expression Evaluation Configuration
 -----------------------------------
