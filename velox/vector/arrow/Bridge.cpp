@@ -666,12 +666,25 @@ void exportValidityBitmap(
   }
 
   // Set null counts.
-  if (!rows.changed() && (vec.getNullCount() != std::nullopt)) {
-    out.null_count = *vec.getNullCount();
+  // For constant vectors, use cached count as it represents the logical null
+  // count. For other vectors, compute fresh count for the actual selection to
+  // ensure consistency with exportStrings. Cached counts may not reflect the
+  // current selection accurately.
+  if (vec.encoding() == VectorEncoding::Simple::CONSTANT &&
+      vec.getNullCount().has_value()) {
+    // For constant vectors, compute null count based on the constant value and
+    // selection size
+    if (vec.getNullCount().value() == 0) {
+      // Constant non-null vector: no nulls in any selection
+      out.null_count = 0;
+    } else {
+      // Constant null vector: all selected elements are null
+      out.null_count = rows.count();
+    }
   } else {
+    // For non-constant vectors, compute fresh count for the actual selection
     out.null_count = BaseVector::countNulls(nulls, rows.count());
   }
-
   if (out.null_count > 0) {
     holder.setBuffer(0, nulls);
   }

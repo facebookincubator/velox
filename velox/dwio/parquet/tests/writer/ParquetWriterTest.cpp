@@ -31,6 +31,7 @@
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
+#include "velox/vector/DecodedVector.h"
 
 namespace {
 
@@ -834,6 +835,88 @@ TEST_F(ParquetWriterTest, updateWriterOptionsFromHiveConfig) {
   ASSERT_EQ(
       options.parquetWriteTimestampUnit.value(),
       TimestampPrecision::kMilliseconds);
+}
+
+TEST_F(ParquetWriterTest, nullStringHandling) {
+  // WRITER_FIX: Test for null string bug fix
+  // This test verifies that null strings are correctly written as nulls
+  // and not converted to empty strings in Parquet files
+
+  const auto schema = ROW({"c0"}, {VARCHAR()});
+  constexpr int64_t kRows = 1000;
+
+  // Create test data with mix of nulls, empty strings, and non-empty strings
+  std::vector<std::optional<std::string>> testData;
+  testData.reserve(kRows);
+
+  for (int64_t i = 0; i < kRows; ++i) {
+    if (i % 4 == 0) {
+      testData.push_back(std::nullopt); // null
+    } else if (i % 4 == 1) {
+      testData.push_back(""); // empty string
+    } else if (i % 4 == 2) {
+      testData.push_back("hello_" + std::to_string(i)); // non-empty string
+    } else {
+      testData.push_back("world_" + std::to_string(i)); // non-empty string
+    }
+  }
+
+  // Count expected nulls and empty strings
+  size_t expectedNulls = 0;
+  size_t expectedEmptyStrings = 0;
+  for (const auto& item : testData) {
+    if (!item.has_value()) {
+      expectedNulls++;
+    } else if (item->empty()) {
+      expectedEmptyStrings++;
+    }
+  }
+
+  // Create Velox vector using makeNullableFlatVector with StringView
+  std::vector<std::optional<StringView>> stringViewTestData;
+  stringViewTestData.reserve(kRows);
+
+  for (int64_t i = 0; i < kRows; ++i) {
+    if (testData[i].has_value()) {
+      stringViewTestData.push_back(
+          StringView(testData[i]->data(), testData[i]->size()));
+    } else {
+      stringViewTestData.push_back(std::nullopt);
+    }
+  }
+
+  auto stringVector = makeNullableFlatVector<StringView>(stringViewTestData);
+
+  // Verify our test data setup
+  ASSERT_EQ(stringVector->getNullCount().value_or(0), expectedNulls);
+
+  // Create a RowVector with the correct schema
+  auto vector = makeRowVector({stringVector});
+
+  // Create an in-memory writer
+  auto sink = std::make_unique<MemorySink>(
+      200 * 1024 * 1024,
+      dwio::common::FileSink::Options{.pool = leafPool_.get()});
+  auto sinkPtr = sink.get();
+  parquet::WriterOptions writerOptions;
+  writerOptions.memoryPool = leafPool_.get();
+
+  auto writer = std::make_unique<parquet::Writer>(
+      std::move(sink), writerOptions, rootPool_, schema);
+  writer->write(vector);
+  writer->close();
+
+  // Read back the data to verify null handling
+  dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+  auto reader = createReaderInMemory(*sinkPtr, readerOptions);
+
+  ASSERT_EQ(reader->numberOfRows(), kRows);
+  ASSERT_EQ(*reader->rowType(), *schema);
+
+  auto rowReader = createRowReaderWithSchema(std::move(reader), schema);
+
+  // Use the standard vector comparison function to verify data integrity
+  assertReadWithReaderAndExpected(schema, *rowReader, vector, *leafPool_);
 }
 
 #ifdef VELOX_ENABLE_PARQUET
