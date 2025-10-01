@@ -19,13 +19,13 @@
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
-#include "velox/core/Expressions.h"
 #include "velox/core/PlanNode.h"
 #include "velox/exec/JoinBridge.h"
 #include "velox/exec/Operator.h"
 #include "velox/vector/ComplexVector.h"
 
 #include <cudf/ast/expressions.hpp>
+#include <cudf/column/column.hpp>
 #include <cudf/join/hash_join.hpp>
 #include <cudf/table/table.hpp>
 
@@ -151,6 +151,15 @@ class CudfHashJoinProbe : public exec::Operator, public NvtxHelper {
 
   std::optional<rmm::cuda_stream_view> buildStream_;
   std::unique_ptr<CudaEvent> cudaEvent_;
+
+  // Streaming right join state
+  // Per-build-table flags indicating whether a build row has had at least one
+  // left match.
+  std::vector<std::unique_ptr<cudf::column>> rightMatchedFlags_;
+
+  // For Right joins, only one driver collects the unmatched rows mask and
+  // emits. This value is set true only for that driver. See noMoreInput
+  bool isLastDriver_{false};
 };
 
 class CudfHashJoinBridgeTranslator : public exec::Operator::PlanNodeTranslator {

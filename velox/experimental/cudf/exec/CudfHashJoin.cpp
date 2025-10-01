@@ -21,7 +21,7 @@
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
-#include "velox/exec/Task.h"
+#include "velox/exec/Task.h" // NOLINT(misc-unused-headers)
 #include "velox/type/TypeUtil.h"
 
 #include <cudf/aggregation.hpp>
@@ -35,14 +35,13 @@
 #include <cudf/reduction.hpp>
 #include <cudf/scalar/scalar_factories.hpp>
 #include <cudf/stream_compaction.hpp>
+#include <cudf/unary.hpp>
 
 #include <rmm/cuda_stream_view.hpp>
 #include <rmm/device_uvector.hpp>
 #include <rmm/exec_policy.hpp>
 
 #include <nvtx3/nvtx3.hpp>
-#include <thrust/count.h>
-#include <thrust/sort.h>
 
 namespace facebook::velox::cudf_velox {
 
@@ -212,9 +211,12 @@ void CudfHashJoinBuild::noMoreInput() {
         buildType->getChildIdx(rightKeys[i]->name()));
   }
 
-  // Only need to construct hash_join object if it's an inner join or left join
+  // Only need to construct hash_join object if it's an inner join, left join or
+  // right join.
   // All other cases use a standalone function in cudf
-  bool buildHashJoin = (joinNode_->isInnerJoin() || joinNode_->isLeftJoin());
+  bool buildHashJoin =
+      (joinNode_->isInnerJoin() || joinNode_->isLeftJoin() ||
+       joinNode_->isRightJoin());
 
   std::vector<std::shared_ptr<cudf::hash_join>> hashObjects;
   for (auto i = 0; i < tbls.size(); i++) {
@@ -410,7 +412,7 @@ bool CudfHashJoinProbe::needsInput() const {
   if (cudfDebugEnabled()) {
     std::cout << "Calling CudfHashJoinProbe::needsInput" << std::endl;
   }
-  if (joinNode_->isRightJoin() || joinNode_->isRightSemiFilterJoin()) {
+  if (joinNode_->isRightSemiFilterJoin()) {
     return !noMoreInput_;
   }
   return !noMoreInput_ && !finished_ && input_ == nullptr;
@@ -433,14 +435,16 @@ void CudfHashJoinProbe::addInput(RowVectorPtr input) {
     auto lockedStats = stats_.wlock();
     lockedStats->numNullKeys += null_count;
   }
-  if (!joinNode_->isRightJoin() && !joinNode_->isRightSemiFilterJoin()) {
-    input_ = std::move(input);
+  if (joinNode_->isRightSemiFilterJoin()) {
+    // Queue inputs and process all at once
+    if (input->size() > 0) {
+      inputs_.push_back(std::move(cudfInput));
+    }
     return;
   }
 
-  // Queue inputs and process all at once
   if (input->size() > 0) {
-    inputs_.push_back(std::move(cudfInput));
+    input_ = std::move(input);
   }
 }
 
@@ -460,13 +464,6 @@ void CudfHashJoinProbe::noMoreInput() {
           planNodeId(), operatorCtx_->driver(), &future_, promises, peers)) {
     return;
   }
-  // Collect results from peers
-  for (auto& peer : peers) {
-    auto op = peer->findOperator(planNodeId());
-    auto* probe = dynamic_cast<CudfHashJoinProbe*>(op);
-    VELOX_CHECK_NOT_NULL(probe);
-    inputs_.insert(inputs_.end(), probe->inputs_.begin(), probe->inputs_.end());
-  }
 
   SCOPE_EXIT {
     // Realize the promises so that the other Drivers (which were not
@@ -476,6 +473,48 @@ void CudfHashJoinProbe::noMoreInput() {
       promise.setValue();
     }
   };
+
+  if (joinNode_->isRightJoin()) {
+    isLastDriver_ = true;
+    if (hashObject_.has_value()) {
+      auto stream = cudfGlobalStreamPool().get_stream();
+      for (auto& peer : peers) {
+        if (peer.get() == operatorCtx_->driver()) {
+          continue;
+        }
+        auto op = peer->findOperator(planNodeId());
+        auto* probe = dynamic_cast<CudfHashJoinProbe*>(op);
+        if (probe == nullptr) {
+          continue;
+        }
+        // Combine flags per partition using cuDF bitwise OR
+        // DM: This needs a relook. This is for when build side exceeds cudf
+        // size_type limits. In case of multiple right side chunks, I'm not sure
+        // if partitions to combine are in the same place p
+        for (size_t p = 0; p < rightMatchedFlags_.size(); ++p) {
+          auto or_result = cudf::binary_operation(
+              rightMatchedFlags_[p]->view(),
+              probe->rightMatchedFlags_[p]->view(),
+              cudf::binary_operator::BITWISE_OR,
+              cudf::data_type{cudf::type_id::BOOL8},
+              stream,
+              cudf::get_current_device_resource_ref());
+          rightMatchedFlags_[p] = std::move(or_result);
+        }
+      }
+      stream.synchronize();
+    }
+    return;
+  }
+
+  // Handling RightSemiFilterJoin
+  // Collect results from peers
+  for (auto& peer : peers) {
+    auto op = peer->findOperator(planNodeId());
+    auto* probe = dynamic_cast<CudfHashJoinProbe*>(op);
+    VELOX_CHECK_NOT_NULL(probe);
+    inputs_.insert(inputs_.end(), probe->inputs_.begin(), probe->inputs_.end());
+  }
 
   auto stream = cudfGlobalStreamPool().get_stream();
   auto tbl = getConcatenatedTable(
@@ -514,6 +553,70 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
   }
 
   if (!input_) {
+    // If no more input, emit unmatched-right rows if needed.
+    if (joinNode_->isRightJoin() && noMoreInput_ && !finished_ &&
+        isLastDriver_) {
+      auto& rightTables = hashObject_.value().first;
+      auto stream = cudfGlobalStreamPool().get_stream();
+      std::vector<std::unique_ptr<cudf::table>> toConcat;
+      for (size_t i = 0; i < rightTables.size(); ++i) {
+        auto& rightTable = rightTables[i];
+        auto n = rightTable->num_rows();
+        if (n == 0) {
+          continue;
+        }
+        auto& flags = rightMatchedFlags_[i];
+        // Build a boolean mask: unmatched = NOT(flags)
+        auto boolMask = cudf::unary_operation(
+            flags->view(), cudf::unary_operator::NOT, stream);
+
+        auto rightInput =
+            rightTable->view().select(rightColumnIndicesToGather_);
+        auto unmatchedRight =
+            cudf::apply_boolean_mask(rightInput, boolMask->view(), stream);
+        auto m = unmatchedRight->num_rows();
+        if (m == 0) {
+          continue;
+        }
+        // Build left null columns
+        std::vector<std::unique_ptr<cudf::column>> outCols(outputType_->size());
+        // Left side nulls (types derive from probe schema at the matching
+        // channel indices)
+        auto probeType = joinNode_->sources()[0]->outputType();
+        for (int li = 0; li < leftColumnOutputIndices_.size(); ++li) {
+          auto outIdx = leftColumnOutputIndices_[li];
+          auto probeChannel = leftColumnIndicesToGather_[li];
+          auto leftCudfType =
+              veloxToCudfTypeId(probeType->childAt(probeChannel));
+          auto nullScalar = cudf::make_default_constructed_scalar(
+              cudf::data_type{leftCudfType});
+          outCols[outIdx] = cudf::make_column_from_scalar(
+              *nullScalar, m, stream, cudf::get_current_device_resource_ref());
+        }
+        // Right side
+        auto rightCols = unmatchedRight->release();
+        for (int ri = 0; ri < rightColumnOutputIndices_.size(); ++ri) {
+          auto outIdx = rightColumnOutputIndices_[ri];
+          outCols[outIdx] = std::move(rightCols[ri]);
+        }
+        toConcat.push_back(std::make_unique<cudf::table>(std::move(outCols)));
+      }
+      // TODO (dm): We build multiple right chunks only when they are too large
+      // to fit in cudf::size_type. In case of a right join which doesn't have a
+      // lot of matches we'll get outCols of similar size. This concatenation
+      // will overflow. Try emitting result of one right chunk at a time.
+      if (!toConcat.empty()) {
+        auto out = concatenateTables(std::move(toConcat), stream);
+        finished_ = true;
+        auto size = out->num_rows();
+        if (out->num_columns() == 0 || size == 0) {
+          return nullptr;
+        }
+        return std::make_shared<CudfVector>(
+            pool(), outputType_, size, std::move(out), stream);
+      }
+      finished_ = true;
+    }
     return nullptr;
   }
   auto cudfInput = std::dynamic_pointer_cast<CudfVector>(input_);
@@ -578,7 +681,7 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
     auto rightTableView = rightTables[i]->view();
     auto& hb = hbs[i];
 
-    if (joinNode_->isInnerJoin()) {
+    if (joinNode_->isInnerJoin() || joinNode_->isRightJoin()) {
       // left = probe, right = build
       VELOX_CHECK_NOT_NULL(hb);
       if (buildStream_.has_value()) {
@@ -592,6 +695,28 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
       if (buildStream_.has_value()) {
         // Make probe stream wait for join completion before using indices
         cudaEvent_->recordFrom(buildStream_.value()).waitOn(stream);
+      } // For streaming right join without filter, mark matched rights now
+      if (joinNode_->isRightJoin() && !joinNode_->filter()) {
+        // Mark matched rights using scatter of true into flags at matching
+        // indices
+        // TODO (dm): Use a better implementation that doesn't require making a
+        // scalar and broadcasting. My cuDF foo is rusty
+        auto true_scalar = cudf::numeric_scalar<bool>(true, true, stream);
+        auto true_col = cudf::make_column_from_scalar(
+            true_scalar,
+            rightJoinIndices->size(),
+            stream,
+            cudf::get_current_device_resource_ref());
+        auto flags_table = cudf::table_view({rightMatchedFlags_[i]->view()});
+        auto rightIdxCol = cudf::column_view{
+            cudf::device_span<cudf::size_type const>{*rightJoinIndices}};
+        auto updated_flags_tbl = cudf::scatter(
+            cudf::table_view({true_col->view()}),
+            rightIdxCol,
+            flags_table,
+            stream,
+            cudf::get_current_device_resource_ref());
+        rightMatchedFlags_[i] = std::move(updated_flags_tbl->release()[0]);
       }
     } else if (joinNode_->isLeftJoin()) {
       VELOX_CHECK_NOT_NULL(hb);
@@ -706,7 +831,8 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
     std::vector<std::unique_ptr<cudf::column>> joinedCols;
 
     if (joinNode_->filter() &&
-        (joinNode_->isLeftJoin() || joinNode_->isInnerJoin())) {
+        (joinNode_->isLeftJoin() || joinNode_->isInnerJoin() ||
+         joinNode_->isRightJoin())) {
       auto leftResult =
           cudf::gather(leftTableView, leftIndicesCol, oobPolicy, stream);
       auto rightResult =
@@ -734,12 +860,42 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
       auto filterColumn = filterColumns[0]->mutable_view();
 
       // If filter is not all false, apply the filter
-      if (joinNode_->isInnerJoin()) {
+      if (joinNode_->isInnerJoin() or joinNode_->isRightJoin()) {
         // apply the filter
         auto filterTable = std::make_unique<cudf::table>(std::move(joinedCols));
         auto filteredTable =
             cudf::apply_boolean_mask(*filterTable, filterColumn, stream);
         joinedCols = filteredTable->release();
+
+        if (joinNode_->isRightJoin()) {
+          // For streaming right join, after applying filter, we record matched
+          // right indices
+          // filter rightJoinIndices with the same mask to update matched flags
+          auto rightIdxCol = cudf::column_view{rightIndicesSpan};
+          auto filteredIdxTable = cudf::apply_boolean_mask(
+              cudf::table_view{std::vector<cudf::column_view>{rightIdxCol}},
+              filterColumn,
+              stream);
+          auto filteredCols = filteredIdxTable->release();
+          auto filteredRightIdxCol = std::move(filteredCols[0]);
+
+          // TODO (dm): The below code is repeated from non-filter case. Find a
+          // way to consolidate in future
+          auto true_scalar = cudf::numeric_scalar<bool>(true, true, stream);
+          auto true_col = cudf::make_column_from_scalar(
+              true_scalar,
+              filteredRightIdxCol->size(),
+              stream,
+              cudf::get_current_device_resource_ref());
+          auto flags_table = cudf::table_view({rightMatchedFlags_[i]->view()});
+          auto updated_flags_tbl = cudf::scatter(
+              cudf::table_view({true_col->view()}),
+              filteredRightIdxCol->view(),
+              flags_table,
+              stream,
+              cudf::get_current_device_resource_ref());
+          rightMatchedFlags_[i] = std::move(updated_flags_tbl->release()[0]);
+        }
       } else if (joinNode_->isLeftJoin()) {
         joinedCols.clear(); // cleanup memory
         auto [leftJoinIndices2, rightJoinIndices2] = filtered_indices_again(
@@ -784,7 +940,8 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
       }
       stream.synchronize();
       input_.reset();
-      finished_ = noMoreInput_;
+      // For right join, we still need to emit unmatched-right rows at EOS
+      finished_ = noMoreInput_ && !joinNode_->isRightJoin();
       auto const size = cudfOutput->num_rows();
       if (cudfOutput->num_columns() == 0 or size == 0) {
         return nullptr;
@@ -825,7 +982,7 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
   }
 
   input_.reset();
-  finished_ = noMoreInput_;
+  finished_ = noMoreInput_ && !joinNode_->isRightJoin();
 
   auto cudfOutput = concatenateTables(std::move(cudfOutputs), stream);
   auto const size = cudfOutput->num_rows();
@@ -880,6 +1037,21 @@ exec::BlockingReason CudfHashJoinProbe::isBlocked(ContinueFuture* future) {
 
   buildStream_ = cudfJoinBridge->getBuildStream();
 
+  // Lazy initialize matched flags only when build side is done
+  if (joinNode_->isRightJoin()) {
+    auto& rightTablesInit = hashObject_.value().first;
+    rightMatchedFlags_.clear();
+    rightMatchedFlags_.reserve(rightTablesInit.size());
+    auto initStream = cudfGlobalStreamPool().get_stream();
+    for (auto& rt : rightTablesInit) {
+      auto n = rt->num_rows();
+      auto false_scalar = cudf::numeric_scalar<bool>(false, true, initStream);
+      auto flags_col = cudf::make_column_from_scalar(
+          false_scalar, n, initStream, cudf::get_current_device_resource_ref());
+      rightMatchedFlags_.push_back(std::move(flags_col));
+    }
+    initStream.synchronize();
+  }
   auto& rightTables = hashObject_.value().first;
   // should be rightTable->numDistinct() but it needs compute,
   // so we use num_rows()
