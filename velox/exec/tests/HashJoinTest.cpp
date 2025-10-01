@@ -7112,6 +7112,16 @@ DEBUG_ONLY_TEST_F(HashJoinTest, taskWaitTimeout) {
                 expectedResult),
             "Memory reclaim failed to wait");
       } else {
+        VELOX_ASSERT_THROW(
+            runHashJoinTask(
+                vectors,
+                queryCtx,
+                false,
+                numDrivers,
+                pool(),
+                true,
+                expectedResult),
+            "XXX");
         // We expect succeed on large time out or no timeout.
         const auto result = runHashJoinTask(
             vectors, queryCtx, false, numDrivers, pool(), true, expectedResult);
