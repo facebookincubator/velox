@@ -61,11 +61,10 @@ namespace {
   return std::make_shared<rmm::mr::managed_memory_resource>();
 }
 
+/// \brief Makes a prefetched<managed> resource
 [[nodiscard]] auto makePrefetchManagedMr() {
-  auto managed_mr = std::make_shared<rmm::mr::managed_memory_resource>();
-  return std::make_shared<
-      rmm::mr::prefetch_resource_adaptor<rmm::mr::device_memory_resource>>(
-      managed_mr.get());
+  return rmm::mr::make_owning_wrapper<rmm::mr::prefetch_resource_adaptor>(
+      makeManagedMr());
 }
 
 [[nodiscard]] auto makeArenaMr(int percent) {
@@ -78,15 +77,20 @@ namespace {
       makeManagedMr(), rmm::percent_of_free_device_memory(percent));
 }
 
+/// \brief Makes a prefetched<pool<managed>> resource
 [[nodiscard]] auto makePrefetchManagedPoolMr(int percent) {
-  auto managed_mr = std::make_shared<rmm::mr::managed_memory_resource>();
-  auto pool_mr = std::make_shared<
-      rmm::mr::pool_memory_resource<rmm::mr::device_memory_resource>>(
-      managed_mr.get(), rmm::percent_of_free_device_memory(percent));
-  return std::make_shared<
-      rmm::mr::prefetch_resource_adaptor<rmm::mr::device_memory_resource>>(
-      pool_mr.get());
+  return rmm::mr::make_owning_wrapper<rmm::mr::prefetch_resource_adaptor>(
+      makeManagedPoolMr(percent));
 }
+
+void enablePrefetching() {
+  cudf::experimental::prefetch::enable_prefetching("hash_join");
+  cudf::experimental::prefetch::enable_prefetching("gather");
+  cudf::experimental::prefetch::enable_prefetching("column_view::get_data");
+  cudf::experimental::prefetch::enable_prefetching(
+      "mutable_column_view::get_data");
+}
+
 } // namespace
 
 std::shared_ptr<rmm::mr::device_memory_resource> createMemoryResource(
@@ -104,10 +108,14 @@ std::shared_ptr<rmm::mr::device_memory_resource> createMemoryResource(
     return makeManagedMr();
   if (mode == "managed_pool")
     return makeManagedPoolMr(percent);
-  if (mode == "prefetch_managed")
+  if (mode == "prefetch_managed") {
+    enablePrefetching();
     return makePrefetchManagedMr();
-  if (mode == "prefetch_managed_pool")
+  }
+  if (mode == "prefetch_managed_pool") {
+    enablePrefetching();
     return makePrefetchManagedPoolMr(percent);
+  }
   VELOX_FAIL(
       "Unknown memory resource mode: " + std::string(mode) +
       "\nExpecting: cuda, pool, async, arena, managed, prefetch_managed, managed_pool, prefetch_managed_pool");
