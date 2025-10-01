@@ -113,6 +113,7 @@ TEST_F(VectorFuzzerTest, flatPrimitive) {
       VARCHAR(),
       VARBINARY(),
       DATE(),
+      TIME(),
       TIMESTAMP(),
       INTERVAL_DAY_TIME(),
       UNKNOWN(),
@@ -673,6 +674,109 @@ TEST_F(VectorFuzzerTest, timestamp) {
     }
   }
   ASSERT_TRUE(nanosFound);
+}
+
+TEST_F(VectorFuzzerTest, time) {
+  const size_t vectorSize = 1000;
+  VectorFuzzer::Options opts;
+  opts.vectorSize = vectorSize;
+  VectorFuzzer fuzzer(opts, pool());
+
+  // Test flat TIME vector.
+  auto timeVector = fuzzer.fuzzFlat(TIME());
+  ASSERT_EQ(VectorEncoding::Simple::FLAT, timeVector->encoding());
+  ASSERT_TRUE(timeVector->type()->isTime());
+  ASSERT_EQ(vectorSize, timeVector->size());
+
+  // Verify all TIME values are in valid range [0, 86400000).
+  // TIME is stored as milliseconds since midnight.
+  auto flatTimeVector = timeVector->as<FlatVector<int64_t>>();
+  for (size_t i = 0; i < vectorSize; ++i) {
+    if (!flatTimeVector->isNullAt(i)) {
+      auto timeValue = flatTimeVector->valueAt(i);
+      ASSERT_GE(timeValue, 0) << "TIME value should be >= 0";
+      ASSERT_LT(timeValue, 86400000)
+          << "TIME value should be < 86400000 (24 hours in milliseconds)";
+    }
+  }
+
+  // Test constant TIME vector.
+  auto constTimeVector = fuzzer.fuzzConstant(TIME(), vectorSize);
+  ASSERT_EQ(VectorEncoding::Simple::CONSTANT, constTimeVector->encoding());
+  ASSERT_TRUE(constTimeVector->type()->isTime());
+  ASSERT_EQ(vectorSize, constTimeVector->size());
+
+  // Verify constant TIME value is in valid range.
+  auto constVector = constTimeVector->as<ConstantVector<int64_t>>();
+  if (!constVector->isNullAt(0)) {
+    auto timeValue = constVector->valueAt(0);
+    ASSERT_GE(timeValue, 0) << "TIME value should be >= 0";
+    ASSERT_LT(timeValue, 86400000)
+        << "TIME value should be < 86400000 (24 hours in milliseconds)";
+  }
+
+  // Test dictionary TIME vector.
+  auto dictTimeVector =
+      fuzzer.fuzzDictionary(fuzzer.fuzzFlat(TIME(), 100), 500);
+  ASSERT_EQ(VectorEncoding::Simple::DICTIONARY, dictTimeVector->encoding());
+  ASSERT_TRUE(dictTimeVector->type()->isTime());
+
+  // Verify all TIME values in dictionary are in valid range.
+  auto dictVector = dictTimeVector->as<DictionaryVector<int64_t>>();
+  auto baseVector = dictVector->valueVector()->as<FlatVector<int64_t>>();
+  for (size_t i = 0; i < baseVector->size(); ++i) {
+    if (!baseVector->isNullAt(i)) {
+      auto timeValue = baseVector->valueAt(i);
+      ASSERT_GE(timeValue, 0) << "TIME value should be >= 0";
+      ASSERT_LT(timeValue, 86400000)
+          << "TIME value should be < 86400000 (24 hours in milliseconds)";
+    }
+  }
+
+  // Test TIME in complex types (ARRAY of TIME).
+  auto arrayTimeVector = fuzzer.fuzzFlat(ARRAY(TIME()));
+  ASSERT_EQ(VectorEncoding::Simple::ARRAY, arrayTimeVector->encoding());
+  auto arrayVector = arrayTimeVector->as<ArrayVector>();
+  auto elementsVector = arrayVector->elements()->as<FlatVector<int64_t>>();
+
+  for (size_t i = 0; i < elementsVector->size(); ++i) {
+    if (!elementsVector->isNullAt(i)) {
+      auto timeValue = elementsVector->valueAt(i);
+      ASSERT_GE(timeValue, 0) << "TIME value should be >= 0";
+      ASSERT_LT(timeValue, 86400000)
+          << "TIME value should be < 86400000 (24 hours in milliseconds)";
+    }
+  }
+
+  // Test TIME in MAP (MAP<TIME, BIGINT>).
+  auto mapTimeVector = fuzzer.fuzzFlat(MAP(TIME(), BIGINT()));
+  ASSERT_EQ(VectorEncoding::Simple::MAP, mapTimeVector->encoding());
+  auto mapVector = mapTimeVector->as<MapVector>();
+  auto keysVector = mapVector->mapKeys()->as<FlatVector<int64_t>>();
+
+  for (size_t i = 0; i < keysVector->size(); ++i) {
+    if (!keysVector->isNullAt(i)) {
+      auto timeValue = keysVector->valueAt(i);
+      ASSERT_GE(timeValue, 0) << "TIME value should be >= 0";
+      ASSERT_LT(timeValue, 86400000)
+          << "TIME value should be < 86400000 (24 hours in milliseconds)";
+    }
+  }
+
+  // Test TIME in ROW (ROW<TIME, VARCHAR>).
+  auto rowTimeVector = fuzzer.fuzzFlat(ROW({TIME(), VARCHAR()}));
+  ASSERT_EQ(VectorEncoding::Simple::ROW, rowTimeVector->encoding());
+  auto rowVector = rowTimeVector->as<RowVector>();
+  auto timeFieldVector = rowVector->childAt(0)->as<FlatVector<int64_t>>();
+
+  for (size_t i = 0; i < timeFieldVector->size(); ++i) {
+    if (!timeFieldVector->isNullAt(i)) {
+      auto timeValue = timeFieldVector->valueAt(i);
+      ASSERT_GE(timeValue, 0) << "TIME value should be >= 0";
+      ASSERT_LT(timeValue, 86400000)
+          << "TIME value should be < 86400000 (24 hours in milliseconds)";
+    }
+  }
 }
 
 TEST_F(VectorFuzzerTest, assorted) {
