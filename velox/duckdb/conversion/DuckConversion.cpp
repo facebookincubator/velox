@@ -79,6 +79,9 @@ LogicalType fromVeloxType(const TypePtr& type) {
       if (type->isIntervalDayTime()) {
         return LogicalType::INTERVAL;
       }
+      if (type->isTime()) {
+        return LogicalType::TIME;
+      }
       return LogicalType::BIGINT;
     case TypeKind::REAL:
       return LogicalType::FLOAT;
