@@ -71,10 +71,14 @@ function install_from_brew {
       exit 1
     )
   else
-    (brew install --formula "${pkg}" && echo "Installation of ${pkg} is successful" || brew upgrade --formula "$pkg") || (
-      echo "Failed to install ${pkg}"
-      exit 1
-    )
+    if command -v "${pkg}" &>/dev/null; then
+      echo "Skipping '${pkg}' already exists"
+    else
+      (brew install --formula "${pkg}" && echo "Installation of ${pkg} is successful" || brew upgrade --formula "$pkg") || (
+        echo "Failed to install ${pkg}"
+        exit 1
+      )
+    fi
   fi
 }
 
