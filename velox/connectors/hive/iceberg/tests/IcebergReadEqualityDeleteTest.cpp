@@ -827,12 +827,16 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
         TestParams{{TypeKind::SMALLINT}, {NullParam::kNoNulls}},
         TestParams{{TypeKind::INTEGER}, {NullParam::kNoNulls}},
         TestParams{{TypeKind::BIGINT}, {NullParam::kNoNulls}},
+        TestParams{{TypeKind::VARCHAR}, {NullParam::kNoNulls}},
+        TestParams{{TypeKind::VARBINARY}, {NullParam::kNoNulls}},
 
         // Single row tests - Partial nulls
         TestParams{{TypeKind::TINYINT}, {NullParam::kPartialNulls}},
         TestParams{{TypeKind::SMALLINT}, {NullParam::kPartialNulls}},
         TestParams{{TypeKind::INTEGER}, {NullParam::kPartialNulls}},
         TestParams{{TypeKind::BIGINT}, {NullParam::kPartialNulls}},
+        TestParams{{TypeKind::VARCHAR}, {NullParam::kPartialNulls}},
+        TestParams{{TypeKind::VARBINARY}, {NullParam::kPartialNulls}},
 
         // Single row tests - All nulls
         TestParams{{TypeKind::TINYINT}, {NullParam::kAllNulls}},
@@ -858,16 +862,33 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
         TestParams{
             {TypeKind::BIGINT, TypeKind::BIGINT},
             {NullParam::kNoNulls, NullParam::kNoNulls}},
+        TestParams{
+            {TypeKind::VARCHAR, TypeKind::VARCHAR},
+            {NullParam::kPartialNulls, NullParam::kAllNulls}},
+        TestParams{
+            {TypeKind::VARBINARY, TypeKind::VARBINARY},
+            {NullParam::kAllNulls, NullParam::kNoNulls}},
 
         // Mixed row type tests
         TestParams{
             {TypeKind::TINYINT, TypeKind::SMALLINT},
             {NullParam::kNoNulls, NullParam::kNoNulls}},
         TestParams{
+            {TypeKind::SMALLINT, TypeKind::VARCHAR},
+            {NullParam::kPartialNulls, NullParam::kNoNulls}},
+        TestParams{
+            {TypeKind::INTEGER, TypeKind::VARBINARY},
+            {NullParam::kAllNulls, NullParam::kPartialNulls}},
+        TestParams{
             {TypeKind::INTEGER, TypeKind::BIGINT},
             {NullParam::kAllNulls, NullParam::kPartialNulls}},
 
         // Three column mixed type tests
+        TestParams{
+            {TypeKind::INTEGER, TypeKind::VARCHAR, TypeKind::BIGINT},
+            {NullParam::kNoNulls,
+             NullParam::kPartialNulls,
+             NullParam::kNoNulls}},
         TestParams{
             {TypeKind::INTEGER, TypeKind::SMALLINT, TypeKind::BIGINT},
             {NullParam::kNoNulls,
