@@ -573,6 +573,7 @@ TEST_F(DecodedVectorTest, constantNull) {
   testConstantNull(ARRAY(INTEGER()));
   testConstantNull(MAP(INTEGER(), INTEGER()));
   testConstantNull(ROW({INTEGER()}));
+  testConstantNull(ROW({}));
 }
 
 TEST_F(DecodedVectorTest, constantComplexType) {
