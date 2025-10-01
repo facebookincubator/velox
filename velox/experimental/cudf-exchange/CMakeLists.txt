@@ -11,33 +11,33 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
 add_library(
-  velox_cudf_exec
-  CudfConversion.cpp
-  CudfFilterProject.cpp
-  CudfHashAggregation.cpp
-  CudfHashJoin.cpp
-  CudfLimit.cpp
-  CudfLocalPartition.cpp
-  CudfOrderBy.cpp
-  DebugUtil.cpp
-  ExpressionEvaluator.cpp
-  ToCudf.cpp
-  Utilities.cpp
-  VeloxCudfInterop.cpp)
+  velox_cudf_exchange OBJECT
+  CudfPartitionedOutput.cpp
+  CudfOutputQueueManager.cpp
+  CudfQueues.cpp
+  CudfExchange.cpp
+  CudfExchangeProtocol.cpp
+  CudfExchangeSource.cpp
+  CudfExchangeServer.cpp
+  CudfExchangeQueue.cpp
+  CudfExchangeClient.cpp
+  Communicator.cpp
+  Acceptor.cpp
+  EndpointRef.cpp)
 
 find_package(ucx REQUIRED)
 
 target_link_libraries(
-  velox_cudf_exec
-  PUBLIC cudf::cudf velox_cudf_exchange
+  velox_cudf_exchange
+  PUBLIC ucxx::ucxx ucx::ucp ucx::ucs
   PRIVATE
-    arrow
-    velox_arrow_bridge
-    velox_exception
-    velox_common_base
-    velox_cudf_vector
-    velox_exec)
+    cudf::cudf
+    CUDA::cudart
+    CUDA::cuda_driver
+    Folly::folly
+    velox_core)
 
-target_compile_options(velox_cudf_exec PRIVATE -Wno-missing-field-initializers)
+if(VELOX_BUILD_TESTING)
+  add_subdirectory(tests)
+endif()
