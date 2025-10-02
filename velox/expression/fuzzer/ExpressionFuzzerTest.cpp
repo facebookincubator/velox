@@ -257,6 +257,7 @@ std::unordered_set<std::string> skipFunctions = {
     "geometry_to_bing_tiles",
     "geometry_to_dissolved_bing_tiles",
     "geometry_union",
+    "localtime",
 };
 
 std::unordered_set<std::string> skipFunctionsSOT = {

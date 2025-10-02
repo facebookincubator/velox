@@ -182,6 +182,7 @@ TDIGEST                   VARBINARY
 QDIGEST                   VARBINARY
 BIGINT_ENUM               BIGINT
 VARCHAR_ENUM              VARCHAR
+TIME WITH TIME ZONE       BIGINT
 ========================  =====================
 
 TIMESTAMP WITH TIME ZONE represents a time point in milliseconds precision
@@ -246,6 +247,12 @@ Similar to BIGINT_ENUM, there is a static cache which stores instances of differ
 VarcharEnumParameter as the key.
 Casting is only permitted to and from VARCHAR type, and is case-sensitive. Casting between different enum types is not permitted.
 Comparison operations are only allowed between values of the same enum type.
+
+TIME WITH TIME ZONE represents time from midnight in milliseconds precision at a particular timezone.
+Its physical type is BIGINT. The high 52 bits of bigint store signed integer for milliseconds in UTC.
+The lower 12 bits store the time zone offsets minutes. This allows the time to be converted at any point of
+time without ambiguity of daylight savings time. Time zone offsets range from -14:00 hours to +14:00 hours.
+
 
 Spark Types
 ~~~~~~~~~~~~
