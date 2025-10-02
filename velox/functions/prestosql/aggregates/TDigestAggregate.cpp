@@ -289,10 +289,7 @@ class TDigestAggregate : public exec::Aggregate {
 };
 } // namespace
 
-void registerTDigestAggregate(
-    const std::string& prefix,
-    bool withCompanionFunctions,
-    bool overwrite) {
+void registerTDigestAggregate(const std::string& prefix, bool overwrite) {
   std::vector<std::shared_ptr<AggregateFunctionSignature>> signatures;
   for (const auto& signature :
        {AggregateFunctionSignatureBuilder()
@@ -356,7 +353,7 @@ void registerTDigestAggregate(
             hasWeight, hasCompression, resultTypes);
       },
       {},
-      withCompanionFunctions,
+      false /*registerCompanionFunctions*/,
       overwrite);
 }
 } // namespace facebook::velox::aggregate::prestosql
