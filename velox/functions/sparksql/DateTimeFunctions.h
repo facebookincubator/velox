@@ -1082,4 +1082,60 @@ struct TimestampAddFunction {
   std::optional<DateTimeUnit> unit_ = std::nullopt;
 };
 
+template <typename TExec>
+struct MonthsBetweenFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const arg_type<Timestamp>* /*timestamp1*/,
+      const arg_type<Timestamp>* /*timestamp2*/,
+      const arg_type<bool>* /*roundOff*/) {
+    sessionTimeZone_ = getTimeZoneFromConfig(config);
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<double>& result,
+      const arg_type<Timestamp>& timestamp1,
+      const arg_type<Timestamp>& timestamp2,
+      const arg_type<bool>& roundOff) {
+    const auto dateTime1 = getDateTime(timestamp1, sessionTimeZone_);
+    const auto dateTime2 = getDateTime(timestamp2, sessionTimeZone_);
+    result = monthsBetween(dateTime1, dateTime2, roundOff);
+  }
+
+ private:
+  FOLLY_ALWAYS_INLINE bool isEndDayOfMonth(const std::tm& tm) {
+    return tm.tm_mday == util::getMaxDayOfMonth(getYear(tm), getMonth(tm));
+  }
+
+  FOLLY_ALWAYS_INLINE double
+  monthsBetween(const std::tm& tm1, const std::tm& tm2, bool roundOff) {
+    const double monthDiff =
+        (tm1.tm_year - tm2.tm_year) * kMonthInYear + tm1.tm_mon - tm2.tm_mon;
+    if (tm1.tm_mday == tm2.tm_mday ||
+        (isEndDayOfMonth(tm1) && isEndDayOfMonth(tm2))) {
+      return monthDiff;
+    }
+    const auto secondsInDay1 = tm1.tm_hour * kSecondsInHour +
+        tm1.tm_min * kSecondsInMinute + tm1.tm_sec;
+    const auto secondsInDay2 = tm2.tm_hour * kSecondsInHour +
+        tm2.tm_min * kSecondsInMinute + tm2.tm_sec;
+    const auto secondsDiff = (tm1.tm_mday - tm2.tm_mday) * kSecondsInDay +
+        secondsInDay1 - secondsInDay2;
+    const auto diff =
+        monthDiff + static_cast<double>(secondsDiff) / kSecondsInMonth;
+    if (roundOff) {
+      return round(diff * kRoundingPrecision) / kRoundingPrecision;
+    }
+    return diff;
+  }
+
+  // Precision factor for 8 decimal places rounding.
+  static constexpr int64_t kRoundingPrecision = 1e8;
+  static constexpr int64_t kSecondsInMonth = kSecondsInDay * 31;
+  const tz::TimeZone* sessionTimeZone_ = nullptr;
+};
+
 } // namespace facebook::velox::functions::sparksql
