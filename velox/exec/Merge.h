@@ -15,11 +15,11 @@
  */
 #pragma once
 
+#include "velox/common/base/TreeOfLosers.h"
 #include "velox/exec/Exchange.h"
 #include "velox/exec/MergeSource.h"
 #include "velox/exec/Spill.h"
 #include "velox/exec/Spiller.h"
-#include "velox/exec/TreeOfLosers.h"
 
 namespace facebook::velox::exec {
 
