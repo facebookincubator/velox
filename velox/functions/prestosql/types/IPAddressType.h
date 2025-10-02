@@ -72,7 +72,7 @@ class IPAddressType final : public HugeintType {
   }
 
   uint64_t hash(const int128_t& value) const override {
-    return folly::hasher<int128_t>()(value);
+    return velox::hasher<int128_t>()(value);
   }
 
   bool equivalent(const Type& other) const override {

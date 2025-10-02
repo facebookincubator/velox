@@ -29,6 +29,7 @@
 
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/base/Hash.h"
 
 namespace facebook::velox {
 
@@ -267,6 +268,13 @@ struct StringView {
 inline StringView operator""_sv(const char* str, size_t len) {
   return StringView(str, len);
 }
+
+template <>
+struct hasher<::facebook::velox::StringView> {
+  uint64_t operator()(::facebook::velox::StringView view) const noexcept {
+    return facebook::velox::bits::hashBytes(1, view.data(), view.size());
+  }
+};
 
 } // namespace facebook::velox
 

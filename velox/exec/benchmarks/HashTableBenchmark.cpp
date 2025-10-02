@@ -28,6 +28,7 @@
 #include <gtest/gtest.h>
 #include <memory>
 
+#include "velox/common/base/Hash.h"
 #include "velox/common/process/Profiler.h"
 
 DEFINE_int64(custom_size, 0, "Custom number of entries");
@@ -593,7 +594,7 @@ class HashTableBenchmark : public VectorTestBase {
   struct F14TestHasher {
     // Same as mixNormalizedKey() in HashTable.cpp.
     size_t operator()(uint64_t* value) const {
-      return folly::hasher<uint64_t>()(value[-1]);
+      return facebook::velox::hasher<uint64_t>()(value[-1]);
     }
   };
 

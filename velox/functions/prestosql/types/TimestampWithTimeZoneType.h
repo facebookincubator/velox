@@ -81,7 +81,7 @@ class TimestampWithTimeZoneType final : public BigintType {
   }
 
   uint64_t hash(const int64_t& value) const override {
-    return folly::hasher<int64_t>()(unpackMillisUtc(value));
+    return velox::hasher<int64_t>()(unpackMillisUtc(value));
   }
 
   const char* name() const override {
