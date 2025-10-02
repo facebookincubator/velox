@@ -10,6 +10,7 @@ Velox Documentation
     functions
     spark_functions
     functions/iceberg/functions
+    functions/delta/functions
     configs
     monitoring
     bindings/python/index
