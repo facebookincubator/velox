@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "velox/type/SimpleFunctionApi.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox {
@@ -92,5 +93,12 @@ using TimeWithTimezoneTypePtr = std::shared_ptr<const TimeWithTimezoneType>;
 FOLLY_ALWAYS_INLINE TimeWithTimezoneTypePtr TIME_WITH_TIME_ZONE() {
   return TimeWithTimezoneType::get();
 }
+
+struct TimeWithTimezoneT {
+  using type = int64_t;
+  static constexpr const char* typeName = "time with time zone";
+};
+
+using TimeWithTimezone = CustomType<TimeWithTimezoneT>;
 
 } // namespace facebook::velox
