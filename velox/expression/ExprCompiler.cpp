@@ -105,9 +105,21 @@ std::optional<std::string> shouldFlatten(
   return std::nullopt;
 }
 
-ExprPtr getAlreadyCompiled(const ITypedExpr* expr, ExprDedupMap* visited) {
+ExprPtr getAlreadyCompiled(
+    const ITypedExpr* expr,
+    const core::QueryConfig& config,
+    ExprDedupMap* visited) {
   auto iter = visited->find(expr);
-  return iter == visited->end() ? nullptr : iter->second;
+  if (iter == visited->end()) {
+    return nullptr;
+  }
+
+  const ExprPtr& alreadyCompiled = iter->second;
+  if (alreadyCompiled->isDeterministic()) {
+    return alreadyCompiled;
+  }
+
+  return config.exprDedupNonDeterministic() ? alreadyCompiled : nullptr;
 }
 
 ExprPtr compileExpression(
@@ -226,7 +238,7 @@ std::shared_ptr<Expr> compileLambda(
   captureReferences.reserve(lambdaScope.capture.size());
   for (auto i = 0; i < lambdaScope.capture.size(); ++i) {
     auto expr = lambdaScope.captureFieldAccesses[i];
-    auto reference = getAlreadyCompiled(expr, &scope->visited);
+    auto reference = getAlreadyCompiled(expr, config, &scope->visited);
     if (!reference) {
       auto inner = lambdaScope.captureReferences[i];
       reference = std::make_shared<FieldReference>(
@@ -413,7 +425,8 @@ ExprPtr compileRewrittenExpression(
     memory::MemoryPool* pool,
     const std::unordered_set<std::string>& flatteningCandidates,
     bool enableConstantFolding) {
-  ExprPtr alreadyCompiled = getAlreadyCompiled(expr.get(), &scope->visited);
+  ExprPtr alreadyCompiled =
+      getAlreadyCompiled(expr.get(), config, &scope->visited);
   if (alreadyCompiled) {
     if (!alreadyCompiled->isMultiplyReferenced()) {
       scope->exprSet->addToReset(alreadyCompiled);
