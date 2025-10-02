@@ -480,8 +480,7 @@ inline void storeLeading(
 
 /// Stores elements of 'input' selected by 'indices' into 'output'. output[i] =
 /// input[indices[i]].
-/// Indices and output may be the same. May over-read indices but will not
-/// dereference indices that are not in range. Writes exactly indices.size()
+/// Indices and output may be the same. Writes exactly indices.size()
 /// elements of 'output'.
 template <typename TData, typename TIndex, typename A = xsimd::default_arch>
 inline void transpose(
@@ -497,12 +496,20 @@ inline void transpose(
   }
   if (i < size) {
     const auto numLeft = size - i;
+#if XSIMD_WITH_AVX2
     auto mask = simd::leadingMask<TData>(numLeft);
     auto indexBatch = loadGatherIndices<TData, TIndex>(indices.data() + i);
     const auto values = simd::maskGather<TData, TIndex>(
         xsimd::broadcast<TData>(0), mask, input, indexBatch);
     storeLeading<TData, A>(values, mask, numLeft, output + i);
+#else
+    #pragma unroll
+    for (uint32_t k = 0; k < numLeft; ++k) {
+	register uint32_t offset = i + k;
+	output[offset] = input[indices[offset]];
+    }
   }
+#endif
 }
 
 /// Gathers the bit from 'bits' for each bit offset in 'indices'. Stores the
