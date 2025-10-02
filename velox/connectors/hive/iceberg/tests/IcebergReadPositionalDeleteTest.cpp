@@ -14,47 +14,33 @@
  * limitations under the License.
  */
 
-#include "velox/common/base/tests/GTestUtils.h"
-#include "velox/common/file/FileSystems.h"
-#include "velox/connectors/hive/HiveConnectorSplit.h"
-#include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
+#include <folly/Singleton.h>
+
 #include "velox/connectors/hive/iceberg/IcebergMetadataColumns.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
+#include "velox/connectors/hive/iceberg/tests/IcebergTestBase.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h"
 #include "velox/exec/PlanNodeStats.h"
-#include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #ifdef VELOX_ENABLE_PARQUET
 #include "velox/dwio/parquet/RegisterParquetReader.h"
 #endif
 
-#include <folly/Singleton.h>
-
-using namespace facebook::velox::exec::test;
-using namespace facebook::velox::exec;
-using namespace facebook::velox::dwio::common;
-using namespace facebook::velox::test;
-
 namespace facebook::velox::connector::hive::iceberg {
 
-class HiveIcebergTest : public HiveConnectorTestBase {
+class IcebergReadPositionalDeleteTest : public IcebergTestBase {
  public:
   void SetUp() override {
-    HiveConnectorTestBase::SetUp();
+    IcebergTestBase::SetUp();
 #ifdef VELOX_ENABLE_PARQUET
     parquet::registerParquetReaderFactory();
 #endif
   }
 
-  HiveIcebergTest()
-      : config_{std::make_shared<facebook::velox::dwrf::Config>()} {
-    // Make the writers flush per batch so that we can create non-aligned
-    // RowGroups between the base data files and delete files
-    flushPolicyFactory_ = []() {
-      return std::make_unique<dwrf::LambdaFlushPolicy>([]() { return true; });
-    };
-  }
+ private:
+  RowTypePtr rowType_{ROW({"c0"}, {BIGINT()})};
 
+ protected:
   /// Create 1 base data file data_file_1 with 2 RowGroups of 10000 rows each.
   /// Also create 1 delete file delete_file_1 which contains delete positions
   /// for data_file_1.
@@ -116,7 +102,7 @@ class HiveIcebergTest : public HiveConnectorTestBase {
       const std::vector<int64_t>& deletePositions,
       int32_t fileCount,
       int32_t numPrefetchSplits,
-      int rowCountPerFile = rowCount,
+      int rowCountPerFile = rowCount_,
       int32_t splitCountPerFile = 1) {
     std::map<std::string, std::vector<int64_t>> rowGroupSizesForFiles;
     for (int32_t i = 0; i < fileCount; i++) {
@@ -141,6 +127,7 @@ class HiveIcebergTest : public HiveConnectorTestBase {
         splitCountPerFile);
   }
 
+  /// Generate random increasing values within a range for testing
   std::vector<int64_t> makeRandomIncreasingValues(int64_t begin, int64_t end) {
     VELOX_CHECK(begin < end);
 
@@ -155,15 +142,56 @@ class HiveIcebergTest : public HiveConnectorTestBase {
     return values;
   }
 
-  std::vector<int64_t> makeContinuousIncreasingValues(
-      int64_t begin,
-      int64_t end) {
-    std::vector<int64_t> values;
-    values.resize(end - begin);
-    std::iota(values.begin(), values.end(), begin);
-    return values;
-  }
+#ifdef VELOX_ENABLE_PARQUET
+  /// Create Parquet delete files and corresponding splits for testing
+  std::vector<std::shared_ptr<ConnectorSplit>> createParquetDeleteFileAndSplits(
+      const std::string& path,
+      const std::vector<int64_t>& deletePositionsVec,
+      int32_t deletedPositionSize,
+      const std::shared_ptr<TempFilePath>& deleteFilePath) {
+    writeToFile(
+        deleteFilePath->getPath(),
+        {makeRowVector(
+            {pathColumn_->name, posColumn_->name},
+            {
+                makeFlatVector<std::string>(
+                    static_cast<vector_size_t>(deletedPositionSize),
+                    [&](vector_size_t) { return path; }),
+                makeFlatVector<int64_t>(deletePositionsVec),
+            })},
+        config_,
+        flushPolicyFactory_);
 
+    IcebergDeleteFile icebergDeleteFile(
+        FileContent::kPositionalDeletes,
+        deleteFilePath->getPath(),
+        fileFormat_,
+        deletedPositionSize,
+        testing::internal::GetFileSize(
+            std::fopen(deleteFilePath->getPath().c_str(), "r")));
+    auto fileSize = filesystems::getFileSystem(path, nullptr)
+                        ->openFileForRead(path)
+                        ->size();
+
+    std::unordered_map<std::string, std::string> customSplitInfo{
+        {"table_format", "hive-iceberg"}};
+    std::unordered_map<std::string, std::optional<std::string>> partitionKeys;
+    return {std::make_shared<HiveIcebergSplit>(
+        kHiveConnectorId,
+        path,
+        dwio::common::FileFormat::PARQUET,
+        0,
+        fileSize,
+        partitionKeys,
+        std::nullopt,
+        customSplitInfo,
+        nullptr,
+        /*cacheable=*/true,
+        std::vector<IcebergDeleteFile>{icebergDeleteFile})};
+  }
+#endif
+
+  /// Main test assertion function for positional deletes
   /// @rowGroupSizesForFiles The key is the file name, and the value is a vector
   /// of RowGroup sizes
   /// @deleteFilesForBaseDatafiles The key is the delete file name, and the
@@ -190,8 +218,11 @@ class HiveIcebergTest : public HiveConnectorTestBase {
       int32_t splitCount = 1) {
     // Keep the reference to the deleteFilePath, otherwise the corresponding
     // file will be deleted.
+    IcebergTestBase::WriteDataFilesConfig config;
+    config.rowGroupSizesForFiles = rowGroupSizesForFiles;
+    config.useConfigAndFlushPolicy = true;
     std::map<std::string, std::shared_ptr<TempFilePath>> dataFilePaths =
-        writeDataFiles(rowGroupSizesForFiles);
+        writeDataFiles(config);
     std::unordered_map<
         std::string,
         std::pair<int64_t, std::shared_ptr<TempFilePath>>>
@@ -219,7 +250,7 @@ class HiveIcebergTest : public HiveConnectorTestBase {
           IcebergDeleteFile icebergDeleteFile(
               FileContent::kPositionalDeletes,
               deleteFilePath,
-              fileFomat_,
+              fileFormat_,
               deleteFilePaths[deleteFileName].first,
               testing::internal::GetFileSize(
                   std::fopen(deleteFilePath.c_str(), "r")));
@@ -234,7 +265,7 @@ class HiveIcebergTest : public HiveConnectorTestBase {
 
     std::string duckdbSql =
         getDuckDBQuery(rowGroupSizesForFiles, deleteFilesForBaseDatafiles);
-    auto plan = tableScanNode();
+    auto plan = tableScanNode(rowType_);
     auto task = HiveConnectorTestBase::assertQuery(
         plan, splits, duckdbSql, numPrefetchSplits);
 
@@ -245,124 +276,8 @@ class HiveIcebergTest : public HiveConnectorTestBase {
     ASSERT_TRUE(it->second.peakMemoryBytes > 0);
   }
 
-  const static int rowCount = 20000;
-
- protected:
-  std::shared_ptr<dwrf::Config> config_;
-  std::function<std::unique_ptr<dwrf::DWRFFlushPolicy>()> flushPolicyFactory_;
-
-  std::vector<std::shared_ptr<ConnectorSplit>> makeIcebergSplits(
-      const std::string& dataFilePath,
-      const std::vector<IcebergDeleteFile>& deleteFiles = {},
-      const std::unordered_map<std::string, std::optional<std::string>>&
-          partitionKeys = {},
-      const uint32_t splitCount = 1) {
-    std::unordered_map<std::string, std::string> customSplitInfo;
-    customSplitInfo["table_format"] = "hive-iceberg";
-
-    auto file = filesystems::getFileSystem(dataFilePath, nullptr)
-                    ->openFileForRead(dataFilePath);
-    const int64_t fileSize = file->size();
-    std::vector<std::shared_ptr<ConnectorSplit>> splits;
-    const uint64_t splitSize = std::floor((fileSize) / splitCount);
-
-    for (int i = 0; i < splitCount; ++i) {
-      splits.emplace_back(std::make_shared<HiveIcebergSplit>(
-          kHiveConnectorId,
-          dataFilePath,
-          fileFomat_,
-          i * splitSize,
-          splitSize,
-          partitionKeys,
-          std::nullopt,
-          customSplitInfo,
-          nullptr,
-          /*cacheable=*/true,
-          deleteFiles));
-    }
-
-    return splits;
-  }
-
-#ifdef VELOX_ENABLE_PARQUET
-  std::vector<std::shared_ptr<ConnectorSplit>> createParquetDeleteFileAndSplits(
-      const std::string& path,
-      const std::vector<int64_t>& deletePositionsVec,
-      int32_t deletedPositionSize,
-      const std::shared_ptr<TempFilePath>& deleteFilePath) {
-    writeToFile(
-        deleteFilePath->getPath(),
-        {makeRowVector(
-            {pathColumn_->name, posColumn_->name},
-            {
-                makeFlatVector<std::string>(
-                    static_cast<vector_size_t>(deletedPositionSize),
-                    [&](vector_size_t) { return path; }),
-                makeFlatVector<int64_t>(deletePositionsVec),
-            })},
-        config_,
-        flushPolicyFactory_);
-
-    IcebergDeleteFile icebergDeleteFile(
-        FileContent::kPositionalDeletes,
-        deleteFilePath->getPath(),
-        fileFomat_,
-        deletedPositionSize,
-        testing::internal::GetFileSize(
-            std::fopen(deleteFilePath->getPath().c_str(), "r")));
-    auto fileSize = filesystems::getFileSystem(path, nullptr)
-                        ->openFileForRead(path)
-                        ->size();
-
-    std::unordered_map<std::string, std::string> customSplitInfo{
-        {"table_format", "hive-iceberg"}};
-    std::unordered_map<std::string, std::optional<std::string>> partitionKeys;
-    return {std::make_shared<HiveIcebergSplit>(
-        kHiveConnectorId,
-        path,
-        dwio::common::FileFormat::PARQUET,
-        0,
-        fileSize,
-        partitionKeys,
-        std::nullopt,
-        customSplitInfo,
-        nullptr,
-        /*cacheable=*/true,
-        std::vector<IcebergDeleteFile>{icebergDeleteFile})};
-  }
-#endif
-
  private:
-  std::map<std::string, std::shared_ptr<TempFilePath>> writeDataFiles(
-      std::map<std::string, std::vector<int64_t>> rowGroupSizesForFiles) {
-    std::map<std::string, std::shared_ptr<TempFilePath>> dataFilePaths;
-
-    std::vector<RowVectorPtr> dataVectorsJoined;
-    dataVectorsJoined.reserve(rowGroupSizesForFiles.size());
-
-    int64_t startingValue = 0;
-    for (auto& dataFile : rowGroupSizesForFiles) {
-      dataFilePaths[dataFile.first] = TempFilePath::create();
-
-      // We make the values are continuously increasing even across base data
-      // files. This is to make constructing DuckDB queries easier
-      std::vector<RowVectorPtr> dataVectors =
-          makeVectors(dataFile.second, startingValue);
-      writeToFile(
-          dataFilePaths[dataFile.first]->getPath(),
-          dataVectors,
-          config_,
-          flushPolicyFactory_);
-
-      for (int i = 0; i < dataVectors.size(); i++) {
-        dataVectorsJoined.push_back(dataVectors[i]);
-      }
-    }
-
-    createDuckDbTable(dataVectorsJoined);
-    return dataFilePaths;
-  }
-
+  /// Write position delete files for the test data
   /// Input is like <"deleteFile1", <"dataFile1", {pos_RG1, pos_RG2,..}>,
   /// <"dataFile2", {pos_RG1, pos_RG2,..}>
   std::unordered_map<
@@ -422,24 +337,28 @@ class HiveIcebergTest : public HiveConnectorTestBase {
     return deleteFilePaths;
   }
 
-  std::vector<RowVectorPtr> makeVectors(
-      std::vector<int64_t> vectorSizes,
-      int64_t& startingValue) {
-    std::vector<RowVectorPtr> vectors;
-    vectors.reserve(vectorSizes.size());
-
-    vectors.reserve(vectorSizes.size());
-    for (int j = 0; j < vectorSizes.size(); j++) {
-      auto data = makeContinuousIncreasingValues(
-          startingValue, startingValue + vectorSizes[j]);
-      VectorPtr c0 = makeFlatVector<int64_t>(data);
-      vectors.push_back(makeRowVector({"c0"}, {c0}));
-      startingValue += vectorSizes[j];
+  /// Flatten and deduplicate delete position vectors
+  std::vector<int64_t> flattenAndDedup(
+      const std::vector<std::vector<int64_t>>& deletePositionVectors,
+      int64_t baseFileSize) {
+    std::vector<int64_t> deletePositionVector;
+    for (auto vec : deletePositionVectors) {
+      for (auto pos : vec) {
+        if (pos >= 0 && pos < baseFileSize) {
+          deletePositionVector.push_back(pos);
+        }
+      }
     }
 
-    return vectors;
+    std::sort(deletePositionVector.begin(), deletePositionVector.end());
+    auto last =
+        std::unique(deletePositionVector.begin(), deletePositionVector.end());
+    deletePositionVector.erase(last, deletePositionVector.end());
+
+    return deletePositionVector;
   }
 
+  /// Generate DuckDB query for test validation
   std::string getDuckDBQuery(
       const std::map<std::string, std::vector<int64_t>>& rowGroupSizesForFiles,
       const std::unordered_map<
@@ -468,7 +387,6 @@ class HiveIcebergTest : public HiveConnectorTestBase {
             rowGroup.second);
       }
     }
-
     // Flatten and deduplicate the delete position vectors in
     // deletePosVectorsForAllBaseFiles from previous step, and count the total
     // number of distinct delete positions for all base files
@@ -513,53 +431,12 @@ class HiveIcebergTest : public HiveConnectorTestBase {
         numRowsInPreviousBaseFiles += baseFileSize.second;
       }
 
+      std::string deleteValuesList = getListAsCSVString(allDeleteValues);
       return fmt::format(
-          "SELECT * FROM tmp WHERE c0 NOT IN ({})",
-          makeNotInList(allDeleteValues));
+          "SELECT * FROM tmp WHERE c0 NOT IN ({})", deleteValuesList);
     }
   }
 
-  std::vector<int64_t> flattenAndDedup(
-      const std::vector<std::vector<int64_t>>& deletePositionVectors,
-      int64_t baseFileSize) {
-    std::vector<int64_t> deletePositionVector;
-    for (auto vec : deletePositionVectors) {
-      for (auto pos : vec) {
-        if (pos >= 0 && pos < baseFileSize) {
-          deletePositionVector.push_back(pos);
-        }
-      }
-    }
-
-    std::sort(deletePositionVector.begin(), deletePositionVector.end());
-    auto last =
-        std::unique(deletePositionVector.begin(), deletePositionVector.end());
-    deletePositionVector.erase(last, deletePositionVector.end());
-
-    return deletePositionVector;
-  }
-
-  std::string makeNotInList(const std::vector<int64_t>& deletePositionVector) {
-    if (deletePositionVector.empty()) {
-      return "";
-    }
-
-    return std::accumulate(
-        deletePositionVector.begin() + 1,
-        deletePositionVector.end(),
-        std::to_string(deletePositionVector[0]),
-        [](const std::string& a, int64_t b) {
-          return a + ", " + std::to_string(b);
-        });
-  }
-
-  core::PlanNodePtr tableScanNode() {
-    return PlanBuilder(pool_.get()).tableScan(rowType_).planNode();
-  }
-
-  dwio::common::FileFormat fileFomat_{dwio::common::FileFormat::DWRF};
-
-  RowTypePtr rowType_{ROW({"c0"}, {BIGINT()})};
   std::shared_ptr<IcebergMetadataColumn> pathColumn_ =
       IcebergMetadataColumn::icebergDeleteFilePathColumn();
   std::shared_ptr<IcebergMetadataColumn> posColumn_ =
@@ -567,8 +444,11 @@ class HiveIcebergTest : public HiveConnectorTestBase {
 };
 
 /// This test creates one single data file and one delete file. The parameter
-/// passed to assertSingleBaseFileSingleDeleteFile is the delete positions.
-TEST_F(HiveIcebergTest, singleBaseFileSinglePositionalDeleteFile) {
+/// passed to assertSingleBaseFileSinglePositionalDelete is the delete
+/// positions.
+TEST_F(
+    IcebergReadPositionalDeleteTest,
+    singleBaseFileSinglePositionalDeleteFile) {
   folly::SingletonVault::singleton()->registrationComplete();
 
   assertSingleBaseFileSingleDeleteFile({{0, 1, 2, 3}});
@@ -581,8 +461,7 @@ TEST_F(HiveIcebergTest, singleBaseFileSinglePositionalDeleteFile) {
   // Delete 0 rows
   assertSingleBaseFileSingleDeleteFile({});
   // Delete all rows
-  assertSingleBaseFileSingleDeleteFile(
-      {makeContinuousIncreasingValues(0, 20000)});
+  assertSingleBaseFileSingleDeleteFile({makeSequenceValues<int64_t>(20000, 1)});
   // Delete rows that don't exist
   assertSingleBaseFileSingleDeleteFile({{20000, 29999}});
 }
@@ -591,7 +470,9 @@ TEST_F(HiveIcebergTest, singleBaseFileSinglePositionalDeleteFile) {
 /// delete positions. The parameter passed to
 /// assertSingleBaseFileSingleDeleteFile is the delete positions.for the middle
 /// base file.
-TEST_F(HiveIcebergTest, MultipleBaseFilesSinglePositionalDeleteFile) {
+TEST_F(
+    IcebergReadPositionalDeleteTest,
+    multipleBaseFilesSinglePositionalDeleteFile) {
   folly::SingletonVault::singleton()->registrationComplete();
 
   assertMultipleBaseFileSingleDeleteFile({0, 1, 2, 3});
@@ -599,17 +480,19 @@ TEST_F(HiveIcebergTest, MultipleBaseFilesSinglePositionalDeleteFile) {
   assertMultipleBaseFileSingleDeleteFile({10000, 10002, 19999});
   assertMultipleBaseFileSingleDeleteFile({10000, 10002, 19999});
   assertMultipleBaseFileSingleDeleteFile(
-      makeRandomIncreasingValues(0, rowCount));
+      makeRandomIncreasingValues(0, rowCount_));
   assertMultipleBaseFileSingleDeleteFile({});
   assertMultipleBaseFileSingleDeleteFile(
-      makeContinuousIncreasingValues(0, rowCount));
+      makeSequenceValues<int64_t>(rowCount_, 1));
 }
 
 /// This test creates one base data file/split with multiple delete files. The
 /// parameter passed to assertSingleBaseFileMultipleDeleteFiles is the vector of
 /// delete files. Each leaf vector represents the delete positions in that
 /// delete file.
-TEST_F(HiveIcebergTest, singleBaseFileMultiplePositionalDeleteFiles) {
+TEST_F(
+    IcebergReadPositionalDeleteTest,
+    singleBaseFileMultiplePositionalDeleteFiles) {
   folly::SingletonVault::singleton()->registrationComplete();
 
   // Delete row 0, 1, 2, 3 from the first batch out of two.
@@ -624,18 +507,18 @@ TEST_F(HiveIcebergTest, singleBaseFileMultiplePositionalDeleteFiles) {
        makeRandomIncreasingValues(10000, 20000),
        makeRandomIncreasingValues(5000, 15000)});
 
-  assertSingleBaseFileMultipleDeleteFiles(
-      {makeContinuousIncreasingValues(0, 10000),
-       makeContinuousIncreasingValues(10000, 20000)});
+  auto firstHalf = makeSequenceValues<int64_t>(10000);
+  auto secondHalf = makeSequenceValues<int64_t>(10000);
+  for (int i = 0; i < secondHalf.size(); i++) {
+    secondHalf[i] += 10000;
+  }
+  assertSingleBaseFileMultipleDeleteFiles({firstHalf, secondHalf});
 
   assertSingleBaseFileMultipleDeleteFiles(
-      {makeContinuousIncreasingValues(0, 10000),
-       makeContinuousIncreasingValues(10000, 20000),
-       makeRandomIncreasingValues(5000, 15000)});
+      {firstHalf, secondHalf, makeRandomIncreasingValues(5000, 15000)});
 
-  assertSingleBaseFileMultipleDeleteFiles(
-      {makeContinuousIncreasingValues(0, 20000),
-       makeContinuousIncreasingValues(0, 20000)});
+  auto allRows = makeSequenceValues<int64_t>(20000);
+  assertSingleBaseFileMultipleDeleteFiles({allRows, allRows});
 
   assertSingleBaseFileMultipleDeleteFiles(
       {makeRandomIncreasingValues(0, 20000),
@@ -647,7 +530,9 @@ TEST_F(HiveIcebergTest, singleBaseFileMultiplePositionalDeleteFiles) {
 
 /// This test creates 2 base data files, and 1 or 2 delete files, with unaligned
 /// RowGroup boundaries
-TEST_F(HiveIcebergTest, multipleBaseFileMultiplePositionalDeleteFiles) {
+TEST_F(
+    IcebergReadPositionalDeleteTest,
+    multipleBaseFileMultiplePositionalDeleteFiles) {
   folly::SingletonVault::singleton()->registrationComplete();
 
   std::map<std::string, std::vector<int64_t>> rowGroupSizesForFiles;
@@ -676,7 +561,7 @@ TEST_F(HiveIcebergTest, multipleBaseFileMultiplePositionalDeleteFiles) {
 
   // Delete all rows in data_file_1
   deleteFilesForBaseDatafiles["delete_file_1"] = {
-      {"data_file_1", makeContinuousIncreasingValues(0, 185)}};
+      {"data_file_1", makeSequenceValues<int64_t>(185)}};
   assertPositionalDeletes(rowGroupSizesForFiles, deleteFilesForBaseDatafiles);
   //
   // Delete non-existent rows from data_file_1
@@ -726,7 +611,7 @@ TEST_F(HiveIcebergTest, multipleBaseFileMultiplePositionalDeleteFiles) {
   assertPositionalDeletes(rowGroupSizesForFiles, deleteFilesForBaseDatafiles);
 }
 
-TEST_F(HiveIcebergTest, positionalDeletesMultipleSplits) {
+TEST_F(IcebergReadPositionalDeleteTest, positionalDeletesMultipleSplits) {
   folly::SingletonVault::singleton()->registrationComplete();
 
   assertMultipleSplits({1, 2, 3, 4}, 10, 5);
@@ -734,7 +619,7 @@ TEST_F(HiveIcebergTest, positionalDeletesMultipleSplits) {
   assertMultipleSplits({1, 2, 3, 4}, 10, 10);
   assertMultipleSplits({0, 9999, 10000, 19999}, 10, 3);
   assertMultipleSplits(makeRandomIncreasingValues(0, 20000), 10, 3);
-  assertMultipleSplits(makeContinuousIncreasingValues(0, 20000), 10, 3);
+  assertMultipleSplits(makeSequenceValues<int64_t>(20000), 10, 3);
   assertMultipleSplits({}, 10, 3);
 
   assertMultipleSplits({1, 2, 3, 4}, 10, 5, 30000, 3);
@@ -754,7 +639,7 @@ TEST_F(HiveIcebergTest, positionalDeletesMultipleSplits) {
   assertMultipleSplits({1000, 9000, 20000}, 1, 0, 20000, 3);
 }
 
-TEST_F(HiveIcebergTest, testPartitionedRead) {
+TEST_F(IcebergReadPositionalDeleteTest, testPartitionedRead) {
   RowTypePtr rowType{ROW({"c0", "ds"}, {BIGINT(), DateType::get()})};
   std::unordered_map<std::string, std::optional<std::string>> partitionKeys;
   // Iceberg API sets partition values for dates to daysSinceEpoch, so
@@ -835,7 +720,9 @@ TEST_F(HiveIcebergTest, testPartitionedRead) {
 }
 
 #ifdef VELOX_ENABLE_PARQUET
-TEST_F(HiveIcebergTest, testPositionalDeleteFileWithRowGroupFilter) {
+TEST_F(
+    IcebergReadPositionalDeleteTest,
+    testPositionalDeleteFileWithRowGroupFilter) {
   // This file contains three row groups, each with about 100 rows.
   // Each row group has min/max values: [200, 299], [0, 99], [100, 199].
   // The filter here is id >= 100, which will cause the parquet reader to filter
@@ -845,7 +732,7 @@ TEST_F(HiveIcebergTest, testPositionalDeleteFileWithRowGroupFilter) {
   // rows.
   auto path = test::getDataFilePath(
       "velox/connectors/hive/iceberg/test", "examples/three_groups.parquet");
-  const auto deletedPositionSize = 100;
+  constexpr auto deletedPositionSize = 100;
   std::vector<int64_t> deletePositionsVec(
       deletedPositionSize); // allocate 100 elements, [100, 199].
   std::iota(deletePositionsVec.begin(), deletePositionsVec.end(), 100);
