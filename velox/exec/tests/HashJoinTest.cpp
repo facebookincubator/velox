@@ -7113,7 +7113,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, taskWaitTimeout) {
             "Memory reclaim failed to wait");
       } else {
         // We expect succeed on large time out or no timeout.
-        QueryTypeResult result;
+        QueryTestResult result;
         ASSERT_NO_THROW({
           result = runHashJoinTask(
               vectors,
