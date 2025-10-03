@@ -15,6 +15,7 @@
  */
 #include "velox/experimental/cudf/exec/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
 #include "velox/expression/ConstantExpr.h"
 #include "velox/expression/FieldReference.h"
@@ -24,7 +25,9 @@
 #include "velox/vector/ConstantVector.h"
 #include "velox/vector/VectorTypeUtils.h"
 
+#include <cudf/binaryop.hpp>
 #include <cudf/column/column_factories.hpp>
+#include <cudf/copying.hpp>
 #include <cudf/datetime.hpp>
 #include <cudf/hashing.hpp>
 #include <cudf/lists/count_elements.hpp>
@@ -134,6 +137,68 @@ variant getVariant(const VectorPtr& vector, size_t atIndex = 0) {
   } else {
     return Variant();
   }
+}
+
+template <typename T>
+std::unique_ptr<cudf::scalar>
+makeScalarFromValue(const TypePtr& type, T value, bool isNull) {
+  auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
+
+  if constexpr (cudf::is_fixed_width<T>()) {
+    if (type->isDecimal()) {
+      VELOX_FAIL("Decimal not supported");
+    } else if (type->isIntervalYearMonth()) {
+      VELOX_FAIL("Interval year month not supported");
+    } else if (type->isIntervalDayTime()) {
+      using CudfDurationType = cudf::duration_ms;
+      if constexpr (std::is_same_v<T, CudfDurationType::rep>) {
+        return std::make_unique<cudf::duration_scalar<CudfDurationType>>(
+            value, !isNull, stream, mr);
+      }
+    } else if (type->isDate()) {
+      using CudfDateType = cudf::timestamp_D;
+      if constexpr (std::is_same_v<T, CudfDateType::rep>) {
+        return std::make_unique<cudf::timestamp_scalar<CudfDateType>>(
+            value, !isNull, stream, mr);
+      }
+    } else {
+      return std::make_unique<cudf::numeric_scalar<T>>(
+          value, !isNull, stream, mr);
+    }
+    VELOX_FAIL("Unsupported fixed-width scalar type");
+  } else if constexpr (std::is_same_v<T, StringView>) {
+    return std::make_unique<cudf::string_scalar>(
+        std::string_view(value.data(), value.size()), !isNull, stream, mr);
+  }
+  VELOX_NYI("Scalar creation not implemented for type " + type->toString());
+}
+
+template <TypeKind Kind>
+static std::unique_ptr<cudf::scalar> createCudfScalar(
+    const velox::VectorPtr& value) {
+  using T = typename TypeTraits<Kind>::NativeType;
+  auto vector = value->as<velox::ConstantVector<T>>();
+  return makeScalarFromValue<T>(
+      vector->type(), vector->value(), vector->isNullAt(0));
+}
+
+std::vector<std::unique_ptr<cudf::scalar>> collectScalars(
+    const std::shared_ptr<velox::exec::Expr>& expr) {
+  std::vector<std::unique_ptr<cudf::scalar>> scalars;
+  for (auto i = 0; i < expr->inputs().size(); ++i) {
+    const auto& input = expr->inputs()[i];
+    if (auto constExpr =
+            std::dynamic_pointer_cast<velox::exec::ConstantExpr>(input)) {
+      auto constValue = constExpr->value();
+      auto scalar = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+          createCudfScalar, constValue->typeKind(), constValue);
+      scalars.emplace_back(std::move(scalar));
+    } else {
+      scalars.emplace_back(nullptr);
+    }
+  }
+  return scalars;
 }
 
 cudf::ast::literal createLiteral(
@@ -270,6 +335,7 @@ const std::unordered_set<std::string> supportedOps = {
     "in",
     "cast",
     "switch",
+    "if",
     "year",
     "length",
     "substr",
@@ -540,7 +606,7 @@ cudf::ast::expression const& AstContext::pushExprToTree(
     } else {
       VELOX_FAIL("Unsupported type for cast operation");
     }
-  } else if (name == "switch") {
+  } else if (name == "switch" || name == "if") {
     VELOX_CHECK_EQ(len, 3);
     // check if input[1], input[2] are literals 1 and 0.
     // then simplify as typecast bool to int
@@ -562,7 +628,8 @@ cudf::ast::expression const& AstContext::pushExprToTree(
         c2->toString() == "0:INTEGER") {
       return pushExprToTree(expr->inputs()[0]);
     } else {
-      VELOX_NYI("Unsupported switch complex operation " + expr->toString());
+      auto node = CudfExpressionNode::create(expr);
+      return addPrecomputeInstructionOnSide(0, 0, "switch", "", node);
     }
   } else if (name == "year") {
     VELOX_CHECK_EQ(len, 1);
@@ -713,6 +780,119 @@ class CardinalityFunction : public CudfFunction {
   }
 };
 
+class BinaryFunction : public CudfFunction {
+ public:
+  BinaryFunction(
+      const std::shared_ptr<velox::exec::Expr>& expr,
+      cudf::binary_operator op)
+      : op_(op),
+        type_(cudf::data_type(cudf_velox::veloxToCudfTypeId(expr->type()))) {
+    VELOX_CHECK_EQ(
+        expr->inputs().size(), 2, "binary function expects exactly 2 inputs");
+    if (auto constExpr = std::dynamic_pointer_cast<velox::exec::ConstantExpr>(
+            expr->inputs()[0])) {
+      auto constValue = constExpr->value();
+      left_ = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+          createCudfScalar, constValue->typeKind(), constValue);
+    } else if (
+        auto constExpr = std::dynamic_pointer_cast<velox::exec::ConstantExpr>(
+            expr->inputs()[1])) {
+      auto constValue = constExpr->value();
+      right_ = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+          createCudfScalar, constValue->typeKind(), constValue);
+    }
+
+    VELOX_CHECK(
+        !(left_ != nullptr && right_ != nullptr),
+        "Not support both left and right are literals");
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    auto inputCol = asView(inputColumns[0]);
+    if (left_ == nullptr && right_ == nullptr) {
+      return cudf::binary_operation(
+          asView(inputColumns[0]),
+          asView(inputColumns[1]),
+          op_,
+          type_,
+          stream,
+          mr);
+    } else if (left_ == nullptr) {
+      return cudf::binary_operation(
+          asView(inputColumns[0]), *right_, op_, type_, stream, mr);
+    }
+    return cudf::binary_operation(
+        *left_, asView(inputColumns[0]), op_, type_, stream, mr);
+  }
+
+ private:
+  const cudf::binary_operator op_;
+  const cudf::data_type type_;
+  std::unique_ptr<cudf::scalar> left_;
+  std::unique_ptr<cudf::scalar> right_;
+};
+
+class SwitchFunction : public CudfFunction {
+ public:
+  SwitchFunction(const std::shared_ptr<velox::exec::Expr>& expr)
+      : constantScalars_(collectScalars(expr)) {
+    VELOX_CHECK_EQ(
+        expr->inputs().size(), 3, "case when expects exactly 3 inputs");
+    VELOX_CHECK_EQ(
+        expr->inputs()[0]->type()->kind(),
+        TypeKind::BOOLEAN,
+        "The switch condition result type should be boolean");
+    bool hasNonLiteral = false;
+    for (const auto& expr : expr->inputs()) {
+      if (std::dynamic_pointer_cast<velox::exec::ConstantExpr>(expr)) {
+        continue;
+      }
+      hasNonLiteral = true;
+      break;
+    }
+    VELOX_CHECK(
+        hasNonLiteral,
+        "The switch expression should have at least 1 non-literal column");
+  }
+
+  // Maybe this is a common case, all the column requires to be column, though
+  // it is literal. To refactor then if this is a common case.
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    const auto numRows = asView(inputColumns[0]).size();
+    std::vector<cudf::column_view> resolvedInputs;
+    std::vector<std::unique_ptr<cudf::column>>
+        constantColumns; // Reserve for memory.
+    for (auto i = 0, j = 0; i < constantScalars_.size(); ++i) {
+      if (constantScalars_[i] != nullptr) {
+        auto& scalar = *constantScalars_[i];
+        auto column =
+            cudf::make_column_from_scalar(scalar, numRows, stream, mr);
+        resolvedInputs.push_back(column->view());
+        constantColumns.push_back(std::move(column));
+      } else {
+        resolvedInputs.push_back(asView(inputColumns[j++]));
+      }
+    }
+
+    return cudf::copy_if_else(
+        resolvedInputs[1], // lhs (true branch)
+        resolvedInputs[2], // rhs (false branch)
+        resolvedInputs[0], // condition
+        stream,
+        mr);
+  }
+
+ private:
+  // If null, means is not constant.
+  std::vector<std::unique_ptr<cudf::scalar>> constantScalars_;
+};
+
 class SubstrFunction : public CudfFunction {
  public:
   SubstrFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
@@ -837,6 +1017,15 @@ bool registerCudfFunction(
   return true;
 }
 
+void registerCudfFunctions(
+    std::vector<std::string> aliases,
+    CudfFunctionFactory factory,
+    bool overwrite) {
+  for (const auto& name : aliases) {
+    registerCudfFunction(name, factory, overwrite);
+  }
+}
+
 std::shared_ptr<CudfFunction> createCudfFunction(
     const std::string& name,
     const std::shared_ptr<velox::exec::Expr>& expr) {
@@ -895,6 +1084,26 @@ bool registerBuiltinFunctions(const std::string& prefix) {
       "hash_with_seed",
       [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
         return std::make_shared<HashFunction>(expr);
+      });
+
+  registerCudfFunctions(
+      {prefix + "greaterthan", prefix + "gt"},
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<BinaryFunction>(
+            expr, cudf::binary_operator::GREATER);
+      });
+
+  registerCudfFunction(
+      prefix + "divide",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<BinaryFunction>(
+            expr, cudf::binary_operator::DIV);
+      });
+
+  registerCudfFunction(
+      prefix + "switch",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<SwitchFunction>(expr);
       });
 
   return true;
