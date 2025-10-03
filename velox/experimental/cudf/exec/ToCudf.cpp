@@ -206,6 +206,18 @@ bool CompileState::compile(bool force_replace) {
           id, planNode->outputType(), ctx, planNode->id() + "-from-velox"));
       replaceOp.back()->initialize();
     }
+    if (not replaceOp.empty()) {
+      // from-velox only, because need to inserted before current operator.
+      operatorsOffset += replaceOp.size();
+      [[maybe_unused]] auto replaced = driverFactory_.replaceOperators(
+          driver_,
+          replacingOperatorIndex,
+          replacingOperatorIndex,
+          std::move(replaceOp));
+      replacingOperatorIndex = operatorIndex + operatorsOffset;
+      replaceOp.clear();
+      replacementsMade = true;
+    }
 
     // This is used to denote if the current operator is kept or replaced.
     auto keepOperator = 0;
@@ -273,9 +285,15 @@ bool CompileState::compile(bool force_replace) {
       auto planNode = std::dynamic_pointer_cast<const core::LocalPartitionNode>(
           getPlanNode(localPartitionOp->planNodeId()));
       VELOX_CHECK(planNode != nullptr);
-      replaceOp.push_back(
-          std::make_unique<CudfLocalPartition>(id, ctx, planNode));
-      replaceOp.back()->initialize();
+      if (CudfLocalPartition::shouldReplace(planNode)) {
+        replaceOp.push_back(
+            std::make_unique<CudfLocalPartition>(id, ctx, planNode));
+        replaceOp.back()->initialize();
+      } else {
+        // Round Robin batch-wise Partitioning is supported by CPU operator with
+        // GPU Vector.
+        keepOperator = 1;
+      }
     } else if (
         auto localExchangeOp = dynamic_cast<exec::LocalExchange*>(oper)) {
       keepOperator = 1;
@@ -319,6 +337,7 @@ bool CompileState::compile(bool force_replace) {
     }
 
     if (not replaceOp.empty()) {
+      // ReplaceOp, to-velox.
       operatorsOffset += replaceOp.size() - 1 + keepOperator;
       [[maybe_unused]] auto replaced = driverFactory_.replaceOperators(
           driver_,
