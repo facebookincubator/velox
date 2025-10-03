@@ -76,6 +76,10 @@ class S3Config {
     kRetryMode,
     kUseProxyFromEnv,
     kCredentialsProvider,
+    KPartUploadAsync,
+    kPartUploadSize,
+    KMaxConcurrentUploadNum,
+    KUploadThreads,
     kEnd
   };
 
@@ -114,6 +118,13 @@ class S3Config {
              std::make_pair("use-proxy-from-env", "false")},
             {Keys::kCredentialsProvider,
              std::make_pair("aws-credentials-provider", std::nullopt)},
+            {Keys::KPartUploadAsync,
+             std::make_pair("part-upload-async", "false")},
+            {Keys::kPartUploadSize,
+             std::make_pair("part-upload-size", "10485760")},
+            {Keys::KMaxConcurrentUploadNum,
+             std::make_pair("max-concurrent-upload-num", "4")},
+            {Keys::KUploadThreads, std::make_pair("upload-threads", "16")},
         };
     return config;
   }
@@ -241,6 +252,33 @@ class S3Config {
 
   std::optional<std::string> credentialsProvider() const {
     return config_.find(Keys::kCredentialsProvider)->second;
+  }
+
+  /// If true, enables asynchronous upload of parts for S3 multipart uploads,
+  /// false otherwise.
+  bool partUploadAsync() const {
+    auto value = config_.find(Keys::KPartUploadAsync)->second.value();
+    return folly::to<bool>(value);
+  }
+
+  /// Return the size (in bytes) of each part for S3 multipart uploads.
+  int32_t partUploadSize() const {
+    auto value = config_.find(Keys::kPartUploadSize)->second.value();
+    return folly::to<uint32_t>(value);
+  }
+
+  /// Return the maximum number of concurrent uploads for S3 multipart uploads,
+  /// applicable only when asynchronous uploads are enabled.
+  int32_t maxConcurrentUploadNum() const {
+    auto value = config_.find(Keys::KMaxConcurrentUploadNum)->second.value();
+    return folly::to<uint32_t>(value);
+  }
+
+  /// Return the number of threads to use for S3 multipart uploads,
+  /// applicable only when asynchronous uploads are enabled.
+  int32_t uploadThreads() const {
+    auto value = config_.find(Keys::KUploadThreads)->second.value();
+    return folly::to<uint32_t>(value);
   }
 
  private:
