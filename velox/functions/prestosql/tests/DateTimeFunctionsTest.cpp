@@ -1575,6 +1575,26 @@ TEST_F(DateTimeFunctionsTest, millisecondTimestampWithTimezone) {
       millisecondTimestampWithTimezone(TimestampWithTimezone(-980, "+05:30")));
 }
 
+TEST_F(DateTimeFunctionsTest, millisecondTime) {
+  const auto millisecond = [&](std::optional<int64_t> time) {
+    return evaluateOnce<int64_t>("millisecond(c0)", TIME(), time);
+  };
+  EXPECT_EQ(std::nullopt, millisecond(std::nullopt));
+  // 00:00:00.000
+  EXPECT_EQ(0, millisecond(0));
+  // 00:00:01.000
+  EXPECT_EQ(0, millisecond(1000));
+  // 00:00:01.123
+  EXPECT_EQ(123, millisecond(1123));
+  // 00:00:02.456
+  EXPECT_EQ(456, millisecond(2456));
+  // 00:00:00.999
+  EXPECT_EQ(999, millisecond(999));
+  // 01:01:01.123 (1 hour + 1 minute
+  // + 1.123 seconds)
+  EXPECT_EQ(123, millisecond(3661123));
+}
+
 TEST_F(DateTimeFunctionsTest, extractFromIntervalDayTime) {
   const auto millis = 5 * kMillisInDay + 7 * kMillisInHour +
       11 * kMillisInMinute + 13 * kMillisInSecond + 17;
