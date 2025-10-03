@@ -87,6 +87,10 @@ class ExprCompilerTest : public testing::Test,
     return std::make_shared<core::ConstantTypedExpr>(VARCHAR(), variant(value));
   }
 
+  core::TypedExprPtr double_(double value) {
+    return std::make_shared<core::ConstantTypedExpr>(DOUBLE(), value);
+  }
+
   std::function<core::TypedExprPtr(const std::string& name)> makeField(
       const RowTypePtr& rowType) {
     return [&](const std::string& name) -> core::TypedExprPtr {
@@ -349,6 +353,68 @@ TEST_F(ExprCompilerTest, lambdaExpr) {
   ASSERT_EQ(exprSet->size(), 1);
   distinctFields = exprSet->expr(0)->distinctFields();
   ASSERT_EQ(distinctFields.size(), 2);
+}
+
+TEST_F(ExprCompilerTest, exprDeduplication) {
+  auto testExprDedup = [&](const core::TypedExprPtr& expression,
+                           bool shouldDedup,
+                           bool expectDedup,
+                           const std::string& description) {
+    std::unordered_map<std::string, std::string> configData(
+        {{core::QueryConfig::kExprDedupNonDeterministic,
+          shouldDedup ? "true" : "false"}});
+    auto queryCtx = velox::core::QueryCtx::create(
+        nullptr, core::QueryConfig(std::move(configData)));
+    auto execCtx = std::make_unique<core::ExecCtx>(pool_.get(), queryCtx.get());
+
+    auto exprSet = std::make_unique<ExprSet>(
+        std::vector<core::TypedExprPtr>{expression}, execCtx.get());
+
+    ASSERT_EQ(exprSet->size(), 1);
+    auto& expr = exprSet->expr(0);
+    auto& leftInput = expr->inputs()[0];
+    auto& rightInput = expr->inputs()[1];
+
+    if (expectDedup) {
+      EXPECT_EQ(leftInput.get(), rightInput.get()) << description;
+    } else {
+      EXPECT_NE(leftInput.get(), rightInput.get()) << description;
+    }
+  };
+
+  // Test deterministic expressions - should always be deduplicated regardless
+  // of config
+  auto rowType = ROW({"c0"}, {BIGINT()});
+  auto deterministicExpr = call(
+      "plus",
+      {call("plus", {makeField(rowType)("c0"), bigint(1)}),
+       call("plus", {makeField(rowType)("c0"), bigint(1)})});
+
+  testExprDedup(
+      deterministicExpr,
+      true,
+      true,
+      "Deterministic expressions should be deduplicated when config is true");
+  testExprDedup(
+      deterministicExpr,
+      false,
+      true,
+      "Deterministic expressions should always be deduplicated regardless of config");
+
+  // Test non-deterministic expressions - behavior depends on config
+  auto nonDeterministicExpr =
+      call("plus", {call("rand", {}), call("rand", {})});
+
+  testExprDedup(
+      nonDeterministicExpr,
+      true,
+      true,
+      "Non-deterministic expressions should be deduplicated when config is true");
+  testExprDedup(
+      nonDeterministicExpr,
+      false,
+      false,
+      "Non-deterministic expressions should NOT be deduplicated when config is false");
 }
 
 } // namespace facebook::velox::exec::test
