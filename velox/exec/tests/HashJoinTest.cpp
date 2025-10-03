@@ -7065,7 +7065,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, taskWaitTimeout) {
   const auto expectedResult =
       runHashJoinTask(vectors, nullptr, false, numDrivers, pool(), false).data;
 
-  for (uint64_t timeoutMs : {1'000, 300'000}) {
+  for (uint64_t timeoutMs : {1'000, 60'000}) {
     SCOPED_TRACE(fmt::format("timeout {}", succinctMillis(timeoutMs)));
     auto memoryManager = createMemoryManager(512 << 20, 0, timeoutMs);
     auto queryCtx =
