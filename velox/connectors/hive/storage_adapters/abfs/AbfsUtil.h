@@ -26,7 +26,7 @@ constexpr std::string_view kAbfsScheme{"abfs://"};
 constexpr std::string_view kAbfssScheme{"abfss://"};
 } // namespace
 
-class ConfigBase;
+class IConfig;
 
 struct CacheKey {
   const std::string accountName;
@@ -55,7 +55,6 @@ inline std::string throwStorageExceptionWithOperationDetails(
   VELOX_FAIL(errMsg);
 }
 
-std::vector<CacheKey> extractCacheKeyFromConfig(
-    const config::ConfigBase& config);
+std::vector<CacheKey> extractCacheKeyFromConfig(const config::IConfig& config);
 
 } // namespace facebook::velox::filesystems

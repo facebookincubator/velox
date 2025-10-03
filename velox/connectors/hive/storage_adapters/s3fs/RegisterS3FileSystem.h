@@ -26,13 +26,13 @@ class AWSCredentialsProvider;
 } // namespace Aws::Auth
 
 namespace facebook::velox::config {
-class ConfigBase;
+class IConfig;
 }
 
 namespace facebook::velox::filesystems {
 
 using CacheKeyFn = std::function<
-    std::string(std::shared_ptr<const config::ConfigBase>, std::string_view)>;
+    std::string(std::shared_ptr<const config::IConfig>, std::string_view)>;
 
 // Register the S3 filesystem.
 void registerS3FileSystem(CacheKeyFn cacheKeyFunc = nullptr);

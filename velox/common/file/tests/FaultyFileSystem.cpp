@@ -38,9 +38,9 @@ std::function<bool(std::string_view)> schemeMatcher() {
 folly::once_flag faultFilesystemInitOnceFlag;
 
 std::function<std::shared_ptr<
-    FileSystem>(std::shared_ptr<const config::ConfigBase>, std::string_view)>
+    FileSystem>(std::shared_ptr<const config::IConfig>, std::string_view)>
 fileSystemGenerator() {
-  return [](std::shared_ptr<const config::ConfigBase> properties,
+  return [](std::shared_ptr<const config::IConfig> properties,
             std::string_view /*unused*/) {
     // One instance of faulty FileSystem is sufficient. Initializes on first
     // access and reuse after that.

@@ -61,7 +61,7 @@ void HiveConnectorTestBase::TearDown() {
 }
 
 void HiveConnectorTestBase::resetHiveConnector(
-    const std::shared_ptr<const config::ConfigBase>& config) {
+    const std::shared_ptr<const config::IConfig>& config) {
   connector::unregisterConnector(kHiveConnectorId);
 
   connector::hive::HiveConnectorFactory factory;

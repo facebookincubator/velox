@@ -60,7 +60,7 @@ DEFINE_validator(path, &notEmpty);
 
 namespace facebook::velox {
 
-std::shared_ptr<config::ConfigBase> readConfig(const std::string& filePath) {
+std::shared_ptr<const config::IConfig> readConfig(const std::string& filePath) {
   std::ifstream configFile(filePath);
   if (!configFile.is_open()) {
     throw std::runtime_error(
@@ -108,7 +108,7 @@ void ReadBenchmark::initialize() {
     filesystems::registerGcsFileSystem();
     filesystems::registerHdfsFileSystem();
     filesystems::registerAbfsFileSystem();
-    std::shared_ptr<config::ConfigBase> config;
+    std::shared_ptr<const config::IConfig> config;
     if (!FLAGS_config.empty()) {
       config = readConfig(FLAGS_config);
     }
