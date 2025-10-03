@@ -21,7 +21,7 @@ namespace facebook::velox::filesystems {
 namespace {
 
 std::string cacheKeyFunc(
-    std::shared_ptr<const config::ConfigBase> config,
+    std::shared_ptr<const config::IConfig> config,
     std::string_view path) {
   return config->get<std::string>("hive.s3.endpoint").value();
 }

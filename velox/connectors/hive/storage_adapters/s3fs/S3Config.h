@@ -20,7 +20,7 @@
 #include "velox/common/base/Exceptions.h"
 
 namespace facebook::velox::config {
-class ConfigBase;
+class IConfig;
 }
 
 namespace facebook::velox::filesystems {
@@ -120,14 +120,14 @@ class S3Config {
 
   S3Config(
       std::string_view bucket,
-      std::shared_ptr<const config::ConfigBase> config);
+      std::shared_ptr<const config::IConfig> config);
 
   /// cacheKey is used as a key for the S3FileSystem instance map.
   /// This will be the bucket endpoint or the base endpoint if they exist plus
   /// bucket name.
   static std::string cacheKey(
       std::string_view bucket,
-      std::shared_ptr<const config::ConfigBase> config);
+      std::shared_ptr<const config::IConfig> config);
 
   /// Return the base config for the input Key.
   static std::string baseConfigKey(Keys key) {

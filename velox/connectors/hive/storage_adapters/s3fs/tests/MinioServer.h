@@ -54,7 +54,7 @@ class MinioServer {
     return tempPath_->getPath();
   }
 
-  std::shared_ptr<const config::ConfigBase> hiveConfig(
+  std::shared_ptr<const config::IConfig> hiveConfig(
       const std::unordered_map<std::string, std::string> configOverride = {})
       const {
     std::unordered_map<std::string, std::string> config({

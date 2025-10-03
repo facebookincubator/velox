@@ -32,7 +32,7 @@ constexpr std::string_view kFileScheme("file:");
 using RegisteredFileSystems = std::vector<std::pair<
     std::function<bool(std::string_view)>,
     std::function<std::shared_ptr<FileSystem>(
-        std::shared_ptr<const config::ConfigBase>,
+        std::shared_ptr<const config::IConfig>,
         std::string_view)>>>;
 
 RegisteredFileSystems& registeredFileSystems() {
@@ -46,14 +46,14 @@ RegisteredFileSystems& registeredFileSystems() {
 void registerFileSystem(
     std::function<bool(std::string_view)> schemeMatcher,
     std::function<std::shared_ptr<FileSystem>(
-        std::shared_ptr<const config::ConfigBase>,
+        std::shared_ptr<const config::IConfig>,
         std::string_view)> fileSystemGenerator) {
   registeredFileSystems().emplace_back(schemeMatcher, fileSystemGenerator);
 }
 
 std::shared_ptr<FileSystem> getFileSystem(
     std::string_view filePath,
-    std::shared_ptr<const config::ConfigBase> properties) {
+    std::shared_ptr<const config::IConfig> properties) {
   const auto& filesystems = registeredFileSystems();
   for (const auto& p : filesystems) {
     if (p.first(filePath)) {
@@ -81,7 +81,7 @@ folly::once_flag localFSInstantiationFlag;
 class LocalFileSystem : public FileSystem {
  public:
   LocalFileSystem(
-      std::shared_ptr<const config::ConfigBase> config,
+      std::shared_ptr<const config::IConfig> config,
       const FileSystemOptions& options)
       : FileSystem(config),
         executor_(
@@ -234,10 +234,10 @@ class LocalFileSystem : public FileSystem {
   }
 
   static std::function<std::shared_ptr<
-      FileSystem>(std::shared_ptr<const config::ConfigBase>, std::string_view)>
+      FileSystem>(std::shared_ptr<const config::IConfig>, std::string_view)>
   fileSystemGenerator(const FileSystemOptions& options) {
     return [options](
-               std::shared_ptr<const config::ConfigBase> properties,
+               std::shared_ptr<const config::IConfig> properties,
                std::string_view filePath) {
       // One instance of Local FileSystem is sufficient.
       // Initialize on first access and reuse after that.

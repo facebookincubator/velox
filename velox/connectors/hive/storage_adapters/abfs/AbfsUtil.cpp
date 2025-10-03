@@ -20,8 +20,7 @@
 
 namespace facebook::velox::filesystems {
 
-std::vector<CacheKey> extractCacheKeyFromConfig(
-    const config::ConfigBase& config) {
+std::vector<CacheKey> extractCacheKeyFromConfig(const config::IConfig& config) {
   std::vector<CacheKey> cacheKeys;
   constexpr std::string_view authTypePrefix{kAzureAccountAuthType};
   for (const auto& [key, value] : config.rawConfigs()) {

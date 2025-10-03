@@ -31,7 +31,8 @@ std::shared_ptr<core::QueryCtx> newQueryCtx(
     folly::Executor* executor,
     int64_t memoryCapacity,
     const std::string& queryId) {
-  std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>> configs;
+  std::unordered_map<std::string, std::shared_ptr<const config::IConfig>>
+      configs;
   std::shared_ptr<MemoryPool> pool =
       memoryManager->addRootPool("", memoryCapacity);
   auto queryCtx = core::QueryCtx::create(

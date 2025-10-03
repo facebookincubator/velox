@@ -46,7 +46,7 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
   static std::shared_ptr<QueryCtx> create(
       folly::Executor* executor = nullptr,
       QueryConfig&& queryConfig = QueryConfig{{}},
-      std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>
+      std::unordered_map<std::string, std::shared_ptr<const config::IConfig>>
           connectorConfigs = {},
       cache::AsyncDataCache* cache = cache::AsyncDataCache::getInstance(),
       std::shared_ptr<memory::MemoryPool> pool = nullptr,
@@ -76,7 +76,7 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
     return queryConfig_;
   }
 
-  config::ConfigBase* connectorSessionProperties(
+  const config::IConfig* connectorSessionProperties(
       const std::string& connectorId) const {
     auto it = connectorSessionProperties_.find(connectorId);
     if (it == connectorSessionProperties_.end()) {
@@ -85,7 +85,7 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
     return it->second.get();
   }
 
-  const std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>&
+  const std::unordered_map<std::string, std::shared_ptr<const config::IConfig>>&
   connectorSessionProperties() const {
     return connectorSessionProperties_;
   }
@@ -153,7 +153,7 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
   QueryCtx(
       folly::Executor* executor = nullptr,
       QueryConfig&& queryConfig = QueryConfig{{}},
-      std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>
+      std::unordered_map<std::string, std::shared_ptr<const config::IConfig>>
           connectorConfigs = {},
       cache::AsyncDataCache* cache = cache::AsyncDataCache::getInstance(),
       std::shared_ptr<memory::MemoryPool> pool = nullptr,
@@ -194,11 +194,10 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
     memory::MemoryPool* const pool_;
   };
 
-  static config::ConfigBase* getEmptyConfig() {
-    static const std::unique_ptr<config::ConfigBase> kEmptyConfig =
-        std::make_unique<config::ConfigBase>(
-            std::unordered_map<std::string, std::string>());
-    return kEmptyConfig.get();
+  static const config::IConfig* getEmptyConfig() {
+    static const config::ConfigBase kEmptyConfig{
+        std::unordered_map<std::string, std::string>{}};
+    return &kEmptyConfig;
   }
 
   void initPool(const std::string& queryId) {
@@ -222,7 +221,7 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
   folly::Executor* const spillExecutor_{nullptr};
   cache::AsyncDataCache* const cache_;
 
-  std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>
+  std::unordered_map<std::string, std::shared_ptr<const config::IConfig>>
       connectorSessionProperties_;
   std::shared_ptr<memory::MemoryPool> pool_;
   QueryConfig queryConfig_;

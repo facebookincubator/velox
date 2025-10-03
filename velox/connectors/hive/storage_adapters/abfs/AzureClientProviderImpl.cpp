@@ -86,7 +86,7 @@ class BlobClientWrapper : public AzureBlobClient {
 std::unique_ptr<AzureBlobClient>
 SharedKeyAzureClientProvider::getReadFileClient(
     const std::shared_ptr<AbfsPath>& abfsPath,
-    const config::ConfigBase& config) {
+    const config::IConfig& config) {
   init(abfsPath, config);
   auto client =
       std::make_unique<BlobClient>(BlobClient::CreateFromConnectionString(
@@ -97,7 +97,7 @@ SharedKeyAzureClientProvider::getReadFileClient(
 std::unique_ptr<AzureDataLakeFileClient>
 SharedKeyAzureClientProvider::getWriteFileClient(
     const std::shared_ptr<AbfsPath>& abfsPath,
-    const config::ConfigBase& config) {
+    const config::IConfig& config) {
   init(abfsPath, config);
   auto client = std::make_unique<DataLakeFileClient>(
       DataLakeFileClient::CreateFromConnectionString(
@@ -107,14 +107,14 @@ SharedKeyAzureClientProvider::getWriteFileClient(
 
 std::string SharedKeyAzureClientProvider::connectionString(
     const std::shared_ptr<AbfsPath>& abfsPath,
-    const config::ConfigBase& config) {
+    const config::IConfig& config) {
   init(abfsPath, config);
   return connectionString_;
 }
 
 void SharedKeyAzureClientProvider::init(
     const std::shared_ptr<AbfsPath>& abfsPath,
-    const config::ConfigBase& config) {
+    const config::IConfig& config) {
   auto credKey =
       fmt::format("{}.{}", kAzureAccountKey, abfsPath->accountNameWithSuffix());
   VELOX_USER_CHECK(config.valueExists(credKey), "Config {} not found", credKey);
@@ -137,7 +137,7 @@ void SharedKeyAzureClientProvider::init(
 
 std::unique_ptr<AzureBlobClient> OAuthAzureClientProvider::getReadFileClient(
     const std::shared_ptr<AbfsPath>& abfsPath,
-    const config::ConfigBase& config) {
+    const config::IConfig& config) {
   init(abfsPath, config);
   const auto url = abfsPath->getUrl(true);
   auto client = std::make_unique<BlobClient>(url, tokenCredential_);
@@ -147,7 +147,7 @@ std::unique_ptr<AzureBlobClient> OAuthAzureClientProvider::getReadFileClient(
 std::unique_ptr<AzureDataLakeFileClient>
 OAuthAzureClientProvider::getWriteFileClient(
     const std::shared_ptr<AbfsPath>& abfsPath,
-    const config::ConfigBase& config) {
+    const config::IConfig& config) {
   init(abfsPath, config);
   const auto url = abfsPath->getUrl(false);
   auto client = std::make_unique<DataLakeFileClient>(url, tokenCredential_);
@@ -157,14 +157,14 @@ OAuthAzureClientProvider::getWriteFileClient(
 std::pair<std::string, std::string>
 OAuthAzureClientProvider::tenantIdAndAuthorityHost(
     const std::shared_ptr<AbfsPath>& abfsPath,
-    const config::ConfigBase& config) {
+    const config::IConfig& config) {
   init(abfsPath, config);
   return {tenentId_, authorityHost_};
 }
 
 void OAuthAzureClientProvider::init(
     const std::shared_ptr<AbfsPath>& abfsPath,
-    const config::ConfigBase& config) {
+    const config::IConfig& config) {
   auto clientIdKey = fmt::format(
       "{}.{}", kAzureAccountOAuth2ClientId, abfsPath->accountNameWithSuffix());
   auto clientSecretKey = fmt::format(
@@ -203,7 +203,7 @@ void OAuthAzureClientProvider::init(
 
 std::unique_ptr<AzureBlobClient> FixedSasAzureClientProvider::getReadFileClient(
     const std::shared_ptr<AbfsPath>& abfsPath,
-    const config::ConfigBase& config) {
+    const config::IConfig& config) {
   init(abfsPath, config);
   const auto url = abfsPath->getUrl(true);
   auto client = std::make_unique<BlobClient>(fmt::format("{}?{}", url, sas_));
@@ -213,7 +213,7 @@ std::unique_ptr<AzureBlobClient> FixedSasAzureClientProvider::getReadFileClient(
 std::unique_ptr<AzureDataLakeFileClient>
 FixedSasAzureClientProvider::getWriteFileClient(
     const std::shared_ptr<AbfsPath>& abfsPath,
-    const config::ConfigBase& config) {
+    const config::IConfig& config) {
   init(abfsPath, config);
   const auto url = abfsPath->getUrl(false);
   auto client =
@@ -223,14 +223,14 @@ FixedSasAzureClientProvider::getWriteFileClient(
 
 std::string FixedSasAzureClientProvider::sas(
     const std::shared_ptr<AbfsPath>& abfsPath,
-    const config::ConfigBase& config) {
+    const config::IConfig& config) {
   init(abfsPath, config);
   return sas_;
 }
 
 void FixedSasAzureClientProvider::init(
     const std::shared_ptr<AbfsPath>& abfsPath,
-    const config::ConfigBase& config) {
+    const config::IConfig& config) {
   auto sasKey =
       fmt::format("{}.{}", kAzureSASKey, abfsPath->accountNameWithSuffix());
   VELOX_USER_CHECK(config.valueExists(sasKey), "Config {} not found", sasKey);

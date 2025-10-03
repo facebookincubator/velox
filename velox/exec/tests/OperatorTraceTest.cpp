@@ -290,7 +290,7 @@ TEST_F(OperatorTraceTest, traceMetadata) {
           {"key1", "value1"},
       };
   const auto expectedConnectorProperties =
-      std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>{
+      std::unordered_map<std::string, std::shared_ptr<const config::IConfig>>{
           {"test_trace",
            std::make_shared<config::ConfigBase>(
                std::unordered_map<std::string, std::string>{
@@ -385,7 +385,7 @@ TEST_F(OperatorTraceTest, task) {
         };
 
     const auto expectedConnectorProperties =
-        std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>{
+        std::unordered_map<std::string, std::shared_ptr<const config::IConfig>>{
             {"test_trace",
              std::make_shared<config::ConfigBase>(
                  std::unordered_map<std::string, std::string>{

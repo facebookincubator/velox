@@ -261,7 +261,7 @@ TEST_F(TableScanTest, directBufferInputRawInputBytes) {
                   .planNode();
 
   std::unordered_map<std::string, std::string> config;
-  std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>
+  std::unordered_map<std::string, std::shared_ptr<const config::IConfig>>
       connectorConfigs = {};
   auto queryCtx = core::QueryCtx::create(
       executor_.get(),
