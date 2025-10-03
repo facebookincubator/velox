@@ -139,6 +139,11 @@ VectorPtr fuzzConstantPrimitiveImpl(
   } else if (type->isLongDecimal()) {
     return std::make_shared<ConstantVector<int128_t>>(
         pool, size, false, type, randLongDecimal(type, rng));
+  } else if (type->isTime()) {
+    // TIME is stored as milliseconds since midnight.
+    // Valid range is [0, 86400000) (0 to 24 hours).
+    return std::make_shared<ConstantVector<int64_t>>(
+        pool, size, false, type, rand<int64_t>(rng, 0, 86399999));
   } else {
     return std::make_shared<ConstantVector<TCpp>>(
         pool, size, false, type, rand<TCpp>(rng, opts.dataSpec));
@@ -172,6 +177,10 @@ void fuzzFlatPrimitiveImpl(
                 VectorFuzzer::kMaxAllowedIntervalDayTime));
       } else if (vector->type()->isShortDecimal()) {
         flatVector->set(i, randShortDecimal(vector->type(), rng));
+      } else if (vector->type()->isTime()) {
+        // TIME is stored as milliseconds since midnight.
+        // Valid range is [0, 86400000) (0 to 24 hours).
+        flatVector->set(i, rand<TCpp>(rng, 0, 86399999));
       } else {
         flatVector->set(i, rand<TCpp>(rng, opts.dataSpec));
       }
@@ -1165,6 +1174,7 @@ const std::vector<TypePtr>& defaultScalarTypes() {
       VARBINARY(),
       TIMESTAMP(),
       DATE(),
+      TIME(),
       INTERVAL_DAY_TIME(),
   };
   return kScalarTypes;
