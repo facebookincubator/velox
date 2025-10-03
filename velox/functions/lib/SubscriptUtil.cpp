@@ -22,6 +22,7 @@
 #include "velox/common/memory/MemoryPool.h"
 #include "velox/functions/lib/SubscriptUtil.h"
 #include "velox/type/Type.h"
+#include "velox/vector/FlatMapVector.h"
 #include "velox/vector/TypeAliases.h"
 
 namespace facebook::velox::functions {
@@ -186,6 +187,48 @@ VectorPtr applyMapTyped(
       true /*flattenIfRedundant*/);
 }
 
+/// Decode arguments and transform result into a dictionaryVector where the
+/// dictionary maintains a mapping from a given row to the index of the input
+/// map value vector. This allows us to ensure that element_at is zero-copy.
+template <TypeKind kind>
+VectorPtr applyFlatMapTyped(
+    const SelectivityVector& rows,
+    const VectorPtr& mapArg,
+    const VectorPtr& indexArg,
+    exec::EvalCtx& context) {
+  using TKey = typename TypeTraits<kind>::NativeType;
+
+  // Decode FlatMapVector.
+  exec::LocalDecodedVector decoder(context, *mapArg, rows);
+  auto decoded = decoder.get();
+  auto flatMap = decoded->base()->as<FlatMapVector>();
+
+  // Define nulls and indices bufers.
+  BufferPtr indices =
+      AlignedBuffer::allocate<vector_size_t>(rows.size(), flatMap->pool());
+  BufferPtr nulls = allocateNulls(rows.size(), flatMap->pool());
+  auto mutableIndices = indices->asMutable<vector_size_t>();
+  auto rawNulls = nulls->asMutable<uint64_t>();
+  for (int i = 0; i < decoded->size(); i++) {
+    mutableIndices[i] = decoded->indices()[i];
+    if (decoded->isNullAt(i)) {
+      bits::setNull(rawNulls, i, true);
+    }
+  }
+
+  // Get index or elementAt vector (second argument).
+  exec::LocalDecodedVector indexHolder(context, *indexArg, rows);
+  auto elementAtIndices = indexHolder.get();
+  auto elementAt = elementAtIndices->valueAt<TKey>(0);
+
+  // Subscript can pass along very large elements vectors that can hold onto
+  // memory and copy operations on them can further put memory pressure. We
+  // try to flatten them if the dictionary layer is much smaller than the
+  // elements vector.
+  return BaseVector::wrapInDictionary(
+      std::move(nulls), indices, rows.end(), flatMap->projectKey(elementAt));
+}
+
 VectorPtr applyMapComplexType(
     const SelectivityVector& rows,
     const VectorPtr& mapArg,
@@ -333,6 +376,17 @@ VectorPtr MapSubscript::applyMap(
   bool triggerCaching = shouldTriggerCaching(mapArg);
   if (indexArg->type()->isPrimitiveType() &&
       !indexArg->type()->providesCustomComparison()) {
+    if (mapArg->encoding() == VectorEncoding::Simple::FLAT_MAP) {
+      // return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+      //     applyFlatMapTyped,
+      //     indexArg->typeKind(),
+      //     rows,
+      //     mapArg,
+      //     indexArg,
+      //     context);
+      return applyFlatMapTyped<TypeKind::BIGINT>(
+          rows, mapArg, indexArg, context);
+    }
     return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
         applyMapTyped,
         indexArg->typeKind(),

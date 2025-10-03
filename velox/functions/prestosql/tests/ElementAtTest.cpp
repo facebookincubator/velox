@@ -232,6 +232,42 @@ TEST_F(ElementAtTest, mapWithDictionaryKeys) {
   }
 }
 
+TEST_F(ElementAtTest, flatMapTest) {
+  facebook::velox::test::assertEqualVectors(
+      makeFlatVector<int32_t>({10}),
+      evaluate(
+          "element_at(c0, 1)",
+          makeRowVector({
+              makeFlatMapVectorFromJson<int64_t, int32_t>({
+                  "{1:10, 2:20, 4:40, 5:50, 6:60}",
+              }),
+          })));
+  facebook::velox::test::assertEqualVectors(
+      makeNullableFlatVector<int32_t>({10, 10, std::nullopt, std::nullopt}),
+      evaluate(
+          "element_at(c0, 1)",
+          makeRowVector({
+              makeFlatMapVectorFromJson<int64_t, int32_t>({
+                  "{1:10, 2:20, 4:40, 5:50}",
+                  "{1:10, 4:40}",
+                  "{}",
+                  "{2:20}",
+              }),
+          })));
+  facebook::velox::test::assertEqualVectors(
+      makeNullableFlatVector<int32_t>({40, 41, std::nullopt, 42}),
+      evaluate(
+          "element_at(c0, 4)",
+          makeRowVector({
+              makeFlatMapVectorFromJson<int64_t, int32_t>({
+                  "{1:10, 2:20, 4:40, 5:50}",
+                  "{1:10, 4:41}",
+                  "{}",
+                  "{2:20, 4:42}",
+              }),
+          })));
+}
+
 TEST_F(ElementAtTest, arrayWithDictionaryElements) {
   {
     auto elementsIndices = makeIndices({6, 5, 4, 3, 2, 1, 0});
