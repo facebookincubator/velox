@@ -144,7 +144,10 @@ Date and Time Functions
 
 .. function:: from_unixtime(unixtime) -> timestamp
 
-    Returns the UNIX timestamp ``unixtime`` as a timestamp.
+    Returns the UNIX timestamp ``unixtime`` as a timestamp.  If the
+    :doc:`adjust_timestamp_to_session_timezone <../../configs>` property is set
+    to true, then the timestamp is adjusted to the time zone specified in
+    :doc:`session_timezone <../../configs>`.
 
 .. function:: from_unixtime(unixtime, string) -> timestamp with time zone
     :noindex:
