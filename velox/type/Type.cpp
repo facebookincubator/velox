@@ -527,6 +527,11 @@ std::optional<uint32_t> RowType::getChildIdxIfExists(
   return std::nullopt;
 }
 
+bool RowType::containsDuplicatedName() const {
+  const auto& nameToIndex = this->nameToIndex();
+  return nameToIndex.size() != names_.size();
+}
+
 bool RowType::equivalent(const Type& other) const {
   if (&other == this) {
     return true;

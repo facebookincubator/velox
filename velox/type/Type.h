@@ -1167,6 +1167,9 @@ class RowType : public TypeBase<TypeKind::ROW> {
   /// name. Return std::nullopt if child with this name doesn't exist.
   std::optional<uint32_t> getChildIdxIfExists(std::string_view name) const;
 
+  /// Returns true if there is duplicated names in the row type.
+  bool containsDuplicatedName() const;
+
   /// Returns the name of the child at specified index.
   const std::string& nameOf(uint32_t idx) const {
     VELOX_CHECK_LT(idx, names_.size());
