@@ -15,13 +15,13 @@
 
 # Global arg default to share across stages
 ARG SPARK_VERSION=3.5.1
-ARG PRESTO_VERSION=0.293
+ARG PRESTO_VERSION=0.294
 
 #########################
 # Stage: Spark Download #
 #########################
 # This allows us to cache the (slow) download until we change Spark version
-FROM alpine:3.22 AS spark-download
+FROM ghcr.io/linuxcontainers/alpine:latest AS spark-download
 ARG SPARK_VERSION
 
 RUN wget -O spark.tgz https://archive.apache.org/dist/spark/spark-${SPARK_VERSION}/spark-${SPARK_VERSION}-bin-hadoop3.tgz
@@ -34,13 +34,13 @@ RUN tar -zxf spark.tgz
 # Stage: Presto Download #
 ##########################
 # This allows us to cache the (slow) download until we change version
-FROM alpine:3.22 AS presto-download
+FROM ghcr.io/linuxcontainers/alpine:latest AS presto-download
 ARG PRESTO_VERSION
 
 RUN wget -O presto-server.tar.gz \
     https://repo1.maven.org/maven2/com/facebook/presto/presto-server/${PRESTO_VERSION}/presto-server-${PRESTO_VERSION}.tar.gz
 RUN wget -O presto-cli \
-    https://repo1.maven.org/maven2/com/facebook/presto/presto-cli/${PRESTO_VERSION}/presto-cli-${PRESTO_VERSION}-executable.jar
+    https://github.com/prestodb/presto/releases/download/${PRESTO_VERSION}/presto-cli-${PRESTO_VERSION}-executable.jar
 
 RUN tar -xzf presto-server.tar.gz
 
