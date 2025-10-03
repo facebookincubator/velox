@@ -908,9 +908,9 @@ RowVectorPtr HashProbe::getBuildSideOutput() {
 
   if (isRightSemiProjectJoin(joinType_)) {
     // Populate 'match' column.
-    if (noInput_) {
+    if (noInput_ && nullAware_) {
       // Probe side is empty. All rows should return 'match = false', even ones
-      // with a null join key.
+      // with a null join key. (This applies to null-aware joins only.)
       matchColumn() = createConstantFalse(numOut, pool());
     } else {
       table_->rows()->extractProbedFlags(
