@@ -337,6 +337,14 @@ class HiveInsertTableHandle : public ConnectorInsertTableHandle {
 
   std::string toString() const override;
 
+  const std::vector<TypePtr> getColumnHandleDataTypes() const override {
+    std::vector<TypePtr> tableTypes;
+    for (const auto& i : inputColumns_) {
+      tableTypes.emplace_back(i->dataType());
+    }
+    return tableTypes;
+  }
+
  protected:
   const std::vector<std::shared_ptr<const HiveColumnHandle>> inputColumns_;
   const std::shared_ptr<const LocationHandle> locationHandle_;
