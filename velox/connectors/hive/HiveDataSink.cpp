@@ -682,7 +682,10 @@ bool HiveDataSink::finish() {
 std::vector<std::string> HiveDataSink::close() {
   setState(State::kClosed);
   closeInternal();
+  return commitMessage();
+}
 
+std::vector<std::string> HiveDataSink::commitMessage() const {
   std::vector<std::string> partitionUpdates;
   partitionUpdates.reserve(writerInfo_.size());
   for (int i = 0; i < writerInfo_.size(); ++i) {

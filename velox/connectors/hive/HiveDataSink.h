@@ -337,9 +337,11 @@ class HiveInsertTableHandle : public ConnectorInsertTableHandle {
 
   std::string toString() const override;
 
- private:
+ protected:
   const std::vector<std::shared_ptr<const HiveColumnHandle>> inputColumns_;
   const std::shared_ptr<const LocationHandle> locationHandle_;
+
+ private:
   const dwio::common::FileFormat storageFormat_;
   const std::shared_ptr<const HiveBucketProperty> bucketProperty_;
   const std::optional<common::CompressionKind> compressionKind_;
@@ -544,10 +546,18 @@ class HiveDataSink : public DataSink {
 
   bool canReclaim() const;
 
- private:
+ protected:
   // Validates the state transition from 'oldState' to 'newState'.
   void checkStateTransition(State oldState, State newState);
   void setState(State newState);
+
+  // Generates commit messages for all writers containing metadata about written
+  // files. Creates a JSON object for each writer with partition name,
+  // file paths, file names, data sizes, and row counts. This metadata is used
+  // by the coordinator to commit the transaction and update the metastore.
+  //
+  // @return Vector of JSON strings, one per writer.
+  virtual std::vector<std::string> commitMessage() const;
 
   class WriterReclaimer : public exec::MemoryReclaimer {
    public:
