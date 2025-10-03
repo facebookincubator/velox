@@ -16,23 +16,22 @@
 
 #pragma once
 
+#include "velox/experimental/cudf-exchange/CudfExchangeClient.h"
+
 #include "velox/exec/Driver.h"
 #include "velox/exec/Operator.h"
-
-#include <rmm/mr/device/device_memory_resource.hpp>
 
 #include <gflags/gflags.h>
 
 DECLARE_bool(velox_cudf_enabled);
 DECLARE_string(velox_cudf_memory_resource);
 DECLARE_bool(velox_cudf_debug);
+DECLARE_bool(velox_cudf_table_scan);
+DECLARE_bool(velox_cudf_exchange);
 
 namespace facebook::velox::cudf_velox {
 
 static const std::string kCudfAdapterName = "cuDF";
-
-// QueryConfig key. Enable or disable cudf in task level.
-static const std::string kCudfEnabled = "cudf.enabled";
 
 class CompileState {
  public:
@@ -45,10 +44,21 @@ class CompileState {
 
   // Replaces sequences of Operators in the Driver given at construction with
   // cuDF equivalents. Returns true if the Driver was changed.
-  bool compile(bool force_replace);
+  bool compile();
+
+  std::shared_ptr<cudf_exchange::CudfExchangeClient> createCudfExchangeClient(
+      const core::PlanNodeId& planNodeId,
+      const std::string& taskId,
+      const int destination,
+      const int32_t numberOfConsumers,
+      folly::Executor* executor);
 
   const exec::DriverFactory& driverFactory_;
   exec::Driver& driver_;
+  std::unordered_map<
+      core::PlanNodeId,
+      std::shared_ptr<cudf_exchange::CudfExchangeClient>>
+      cudfExchangeClientByPlanNode_;
 };
 
 class CudfOptions {
@@ -65,34 +75,36 @@ class CudfOptions {
   const std::string& prefix() const {
     return prefix_;
   }
+  void setShouldTransformLastOutput(bool newValue) {
+    transformLastOutput_ = newValue;
+  }
+
+  const bool shouldTransformLastOutput() const {
+    return transformLastOutput_;
+  }
 
   const bool cudfEnabled;
   const std::string cudfMemoryResource;
+  const bool cudfTableScan;
+  const bool cudfExchange;
   // The initial percent of GPU memory to allocate for memory resource for one
   // thread.
   int memoryPercent;
-  const bool force_replace;
-
-  CudfOptions(bool force_repl)
-      : cudfEnabled(FLAGS_velox_cudf_enabled),
-        cudfMemoryResource(FLAGS_velox_cudf_memory_resource),
-        memoryPercent(50),
-        force_replace{force_repl},
-        prefix_("") {}
 
  private:
   CudfOptions()
       : cudfEnabled(FLAGS_velox_cudf_enabled),
         cudfMemoryResource(FLAGS_velox_cudf_memory_resource),
+        cudfTableScan(FLAGS_velox_cudf_table_scan),
+        cudfExchange(FLAGS_velox_cudf_exchange),
         memoryPercent(50),
-        force_replace{false},
-        prefix_("") {}
+        prefix_(""),
+        transformLastOutput_(false) {}
   CudfOptions(const CudfOptions&) = delete;
   CudfOptions& operator=(const CudfOptions&) = delete;
   std::string prefix_;
+  bool transformLastOutput_;
 };
-
-extern std::shared_ptr<rmm::mr::device_memory_resource> mr_;
 
 /// Registers adapter to add cuDF operators to Drivers.
 void registerCudf(const CudfOptions& options = CudfOptions::getInstance());
@@ -105,5 +117,10 @@ bool cudfIsRegistered();
  * @brief Returns true if the velox_cudf_debug flag is set to true.
  */
 bool cudfDebugEnabled();
+
+/**
+ * @brief Returns true if the velox_cudf_table_scan flag is set to true.
+ */
+bool cudfTableScanEnabled();
 
 } // namespace facebook::velox::cudf_velox
