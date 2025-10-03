@@ -129,6 +129,14 @@ template <>
     return ::duckdb::Value::INTERVAL(0, days, microseconds);
   }
 
+  if (type->isTime()) {
+    // TIME is stored as milliseconds since midnight in Velox.
+    // DuckDB TIME is stored as microseconds since midnight.
+    const auto timeMillis = vector->as<SimpleVector<int64_t>>()->valueAt(index);
+    const int64_t timeMicros = timeMillis * 1000L;
+    return ::duckdb::Value::TIME(::duckdb::dtime_t(timeMicros));
+  }
+
   return ::duckdb::Value(vector->as<SimpleVector<T>>()->valueAt(index));
 }
 
@@ -441,6 +449,13 @@ std::vector<MaterializedRow> materialize(
       } else if (type->isDate()) {
         auto value = variant(::duckdb::Date::EpochDays(
             dataChunk->GetValue(j, i).GetValue<::duckdb::date_t>()));
+        row.push_back(value);
+      } else if (type->isTime()) {
+        // DuckDB TIME is in microseconds, Velox TIME is in milliseconds.
+        auto timeMicros =
+            dataChunk->GetValue(j, i).GetValue<::duckdb::dtime_t>().micros;
+        auto timeMillis = timeMicros / 1000L;
+        auto value = variant(timeMillis);
         row.push_back(value);
       } else {
         auto value = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
