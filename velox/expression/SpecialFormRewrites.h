@@ -13,31 +13,18 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/expression/ExprRewriteRegistry.h"
+#include "velox/core/Expressions.h"
+#include "velox/core/QueryCtx.h"
 
 namespace facebook::velox::expression {
+core::TypedExprPtr rewriteConjunctExpression(const core::TypedExprPtr& input);
 
-void ExprRewriteRegistry::registerRewrite(ExpressionRewrite rewrite) {
-  registry_.withWLock([&](auto& list) { list.push_back(std::move(rewrite)); });
-}
+core::TypedExprPtr rewriteCoalesceExpression(const core::TypedExprPtr& input);
 
-void ExprRewriteRegistry::clear() {
-  registry_.withWLock([&](auto& list) { list.clear(); });
-}
+core::TypedExprPtr rewriteIfExpression(const core::TypedExprPtr& input);
 
-core::TypedExprPtr ExprRewriteRegistry::rewrite(
-    const core::TypedExprPtr& expr) {
-  core::TypedExprPtr result = expr;
-  registry_.withRLock([&](const auto& list) {
-    for (const auto& rewrite : list) {
-      VELOX_CHECK_NOT_NULL(rewrite);
-      if (auto rewritten = (rewrite)(expr)) {
-        result = rewritten;
-        break;
-      }
-    }
-  });
+core::TypedExprPtr rewriteSwitchExpression(const core::TypedExprPtr& input);
 
-  return result;
-}
+core::TypedExprPtr rewriteInExpression(const core::TypedExprPtr& input);
+
 } // namespace facebook::velox::expression
