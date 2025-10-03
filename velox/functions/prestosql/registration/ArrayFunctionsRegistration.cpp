@@ -25,6 +25,7 @@
 #include "velox/functions/prestosql/ArrayConstructor.h"
 #include "velox/functions/prestosql/ArrayFunctions.h"
 #include "velox/functions/prestosql/ArraySort.h"
+#include "velox/functions/prestosql/ArraySubset.h"
 #include "velox/functions/prestosql/WidthBucketArray.h"
 #include "velox/functions/prestosql/types/JsonRegistration.h"
 
@@ -122,6 +123,15 @@ template <typename T>
 inline void registerArrayRemoveFunctions(const std::string& prefix) {
   registerFunction<ArrayRemoveFunction, Array<T>, Array<T>, T>(
       {prefix + "array_remove"});
+}
+
+template <typename T>
+inline void registerArraySubsetFunctions(const std::string& prefix) {
+  registerFunction<
+      ParameterBinder<ArraySubsetFunction, T>,
+      Array<T>,
+      Array<T>,
+      Array<int32_t>>({prefix + "array_subset"});
 }
 
 void registerInternalArrayFunctions() {
@@ -347,5 +357,28 @@ void registerArrayFunctions(const std::string& prefix) {
   registerArrayNormalizeFunctions<int64_t>(prefix);
   registerArrayNormalizeFunctions<float>(prefix);
   registerArrayNormalizeFunctions<double>(prefix);
+
+  registerArraySubsetFunctions<int8_t>(prefix);
+  registerArraySubsetFunctions<int16_t>(prefix);
+  registerArraySubsetFunctions<int32_t>(prefix);
+  registerArraySubsetFunctions<int64_t>(prefix);
+  registerArraySubsetFunctions<int128_t>(prefix);
+  registerArraySubsetFunctions<float>(prefix);
+  registerArraySubsetFunctions<double>(prefix);
+  registerArraySubsetFunctions<bool>(prefix);
+  registerArraySubsetFunctions<Timestamp>(prefix);
+  registerArraySubsetFunctions<Date>(prefix);
+  registerArraySubsetFunctions<Varbinary>(prefix);
+  registerArraySubsetFunctions<Generic<T1>>(prefix);
+  registerFunction<
+      ArraySubsetVarcharFunction,
+      Array<Varchar>,
+      Array<Varchar>,
+      Array<int32_t>>({prefix + "array_subset"});
+  registerFunction<
+      ArraySubsetGenericFunction,
+      Array<Generic<T1>>,
+      Array<Generic<T1>>,
+      Array<int32_t>>({prefix + "array_subset"});
 }
 } // namespace facebook::velox::functions
