@@ -286,8 +286,8 @@ struct ToBase64Function {
   FOLLY_ALWAYS_INLINE void call(
       out_type<Varchar>& result,
       const arg_type<Varbinary>& input) {
-    result.resize(encoding::Base64::calculateEncodedSize(input.size()));
-    encoding::Base64::encode(input.data(), input.size(), result.data());
+    result = encoding::Base64::encode(
+        std::string_view(input.data(), input.size()), true);
   }
 };
 
@@ -299,15 +299,14 @@ struct FromBase64Function {
   // same, but hard-coding one of them might be confusing.
   template <typename T>
   FOLLY_ALWAYS_INLINE Status call(out_type<Varbinary>& result, const T& input) {
-    auto inputSize = input.size();
-    auto decodedSize =
-        encoding::Base64::calculateDecodedSize(input.data(), inputSize);
-    if (decodedSize.hasError()) {
-      return decodedSize.error();
+    std::string decodedStr;
+    auto status = encoding::Base64::decode(
+        std::string_view(input.data(), input.size()), decodedStr);
+    if (status.ok()) {
+      result.resize(decodedStr.size());
+      std::memcpy(result.data(), decodedStr.data(), decodedStr.size());
     }
-    result.resize(decodedSize.value());
-    return encoding::Base64::decode(
-        input.data(), inputSize, result.data(), result.size());
+    return status;
   }
 };
 
@@ -316,15 +315,14 @@ struct FromBase64UrlFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
   FOLLY_ALWAYS_INLINE Status
   call(out_type<Varbinary>& result, const arg_type<Varchar>& input) {
-    auto inputSize = input.size();
-    auto decodedSize =
-        encoding::Base64::calculateDecodedSize(input.data(), inputSize);
-    if (decodedSize.hasError()) {
-      return decodedSize.error();
+    std::string decodedStr;
+    auto status = encoding::Base64::decodeUrl(
+        std::string_view(input.data(), input.size()), decodedStr);
+    if (status.ok()) {
+      result.resize(decodedStr.size());
+      std::memcpy(result.data(), decodedStr.data(), decodedStr.size());
     }
-    result.resize(decodedSize.value());
-    return encoding::Base64::decodeUrl(
-        input.data(), inputSize, result.data(), result.size());
+    return status;
   }
 };
 
@@ -335,8 +333,8 @@ struct ToBase64UrlFunction {
   FOLLY_ALWAYS_INLINE void call(
       out_type<Varchar>& result,
       const arg_type<Varbinary>& input) {
-    result.resize(encoding::Base64::calculateEncodedSize(input.size()));
-    encoding::Base64::encodeUrl(input.data(), input.size(), result.data());
+    result = encoding::Base64::encodeUrl(
+        std::string_view(input.data(), input.size()), true);
   }
 };
 
