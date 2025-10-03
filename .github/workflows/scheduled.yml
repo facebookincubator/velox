@@ -455,7 +455,7 @@ jobs:
     name: Expression Fuzzer with Presto SOT
     needs: compile
     runs-on: ubuntu-latest
-    container: ghcr.io/facebookincubator/velox-dev:presto-java
+    container: ghcr.io/czentgr/czentgr-test:presto-java
     timeout-minutes: 120
     env:
       CCACHE_DIR: ${{ github.workspace }}/ccache/
@@ -714,7 +714,7 @@ jobs:
   presto-java-join-fuzzer-run:
     name: Join Fuzzer
     runs-on: ubuntu-latest
-    container: ghcr.io/facebookincubator/velox-dev:presto-java
+    container: ghcr.io/czentgr/czentgr-test:presto-java
     needs: compile
     timeout-minutes: 120
     env:
@@ -814,7 +814,7 @@ jobs:
   presto-java-row-number-fuzzer-run:
     name: RowNumber Fuzzer
     runs-on: ubuntu-latest
-    container: ghcr.io/facebookincubator/velox-dev:presto-java
+    container: ghcr.io/czentgr/czentgr-test:presto-java
     needs: compile
     timeout-minutes: 120
     env:
@@ -878,7 +878,7 @@ jobs:
   presto-java-topn-row-number-fuzzer-run:
     name: TopNRowNumber Fuzzer
     runs-on: ubuntu-latest
-    container: ghcr.io/facebookincubator/velox-dev:presto-java
+    container: ghcr.io/czentgr/czentgr-test:presto-java
     needs: compile
     timeout-minutes: 120
     env:
@@ -1048,7 +1048,7 @@ jobs:
     name: Aggregation Fuzzer with Presto as source of truth
     needs: compile
     runs-on: ubuntu-latest
-    container: ghcr.io/facebookincubator/velox-dev:presto-java
+    container: ghcr.io/czentgr/czentgr-test:presto-java
     timeout-minutes: 120
     env:
       CCACHE_DIR: ${{ github.workspace }}/ccache/
@@ -1113,7 +1113,7 @@ jobs:
     name: Biased Expression Fuzzer with Only Added/Updated Functions and Presto as source of truth
     needs: compile
     runs-on: ubuntu-latest
-    container: ghcr.io/facebookincubator/velox-dev:presto-java
+    container: ghcr.io/czentgr/czentgr-test:presto-java
     timeout-minutes: 120
     if: ${{ needs.compile.outputs.presto_bias  == 'true' }}
     env:
@@ -1204,7 +1204,7 @@ jobs:
     name: Biased Aggregation Fuzzer with Presto as source of truth
     needs: compile
     runs-on: ubuntu-latest
-    container: ghcr.io/facebookincubator/velox-dev:presto-java
+    container: ghcr.io/czentgr/czentgr-test:presto-java
     timeout-minutes: 120
     if: ${{ needs.compile.outputs.presto_aggregate_bias  == 'true' }}
     env:
@@ -1305,7 +1305,7 @@ jobs:
     name: Window Fuzzer with Presto as source of truth
     needs: compile
     runs-on: ubuntu-latest
-    container: ghcr.io/facebookincubator/velox-dev:presto-java
+    container: ghcr.io/czentgr/czentgr-test:presto-java
     timeout-minutes: 120
     env:
       CCACHE_DIR: ${{ github.workspace }}/ccache/
@@ -1371,7 +1371,7 @@ jobs:
     name: Writer Fuzzer with Presto as source of truth
     needs: compile
     runs-on: ubuntu-latest
-    container: ghcr.io/facebookincubator/velox-dev:presto-java
+    container: ghcr.io/czentgr/czentgr-test:presto-java
     timeout-minutes: 120
     env:
       CCACHE_DIR: ${{ github.workspace }}/ccache/
