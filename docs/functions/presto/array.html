@@ -314,14 +314,32 @@ Throws if deciding the order of elements would require comparing nested null val
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="id0">
+<span class="sig-name descname"><span class="pre">array_sort_desc</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(T)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">function(T</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">U))</span> <span class="pre">-&gt;</span> <span class="pre">array(T</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#id0" title="Link to this definition">¶</a></dt>
 <dt class="sig sig-object py">
-<span class="sig-name descname"><span class="pre">array_sort_desc</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(T)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">function(T</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">U))</span> <span class="pre">-&gt;</span> <span class="pre">array(T</span></span></em><span class="sig-paren">)</span></dt>
+<span class="sig-name descname"><span class="pre">:noindex:</span></span></dt>
 <dd><p>Returns the array sorted by values computed using specified lambda in descending
 order. U must be an orderable type. Null elements will be placed at the end of
 the returned array. May throw if E is and ARRAY or ROW type and input values contain
 nested nulls. Throws if deciding the order of elements would require comparing nested
 null values.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">array_sort_desc</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="s1">&#39;cat&#39;</span><span class="p">,</span> <span class="s1">&#39;leopard&#39;</span><span class="p">,</span> <span class="s1">&#39;mouse&#39;</span><span class="p">],</span> <span class="n">x</span> <span class="o">-&gt;</span> <span class="n">length</span><span class="p">(</span><span class="n">x</span><span class="p">));</span> <span class="o">--</span> <span class="p">[</span><span class="s1">&#39;leopard&#39;</span><span class="p">,</span> <span class="s1">&#39;mouse&#39;</span><span class="p">,</span> <span class="s1">&#39;cat&#39;</span><span class="p">]</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="array_subset">
+<span class="sig-name descname"><span class="pre">array_subset</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(T)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">array(int))</span> <span class="pre">-&gt;</span> <span class="pre">array(T</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#array_subset" title="Link to this definition">¶</a></dt>
+<dd><p>Returns an array containing elements from the input array at the specified 1-based indices.
+Indices must be positive integers. Invalid indices (out of bounds, zero, or negative) are ignored.
+Null elements at valid indices are preserved in the output. Duplicate indices result in duplicate elements in the output.
+The output maintains the order of the indices array.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">array_subset</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">],</span> <span class="n">ARRAY</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">5</span><span class="p">]);</span> <span class="o">--</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">5</span><span class="p">]</span>
+<span class="n">SELECT</span> <span class="n">array_subset</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="s1">&#39;a&#39;</span><span class="p">,</span> <span class="s1">&#39;b&#39;</span><span class="p">,</span> <span class="s1">&#39;c&#39;</span><span class="p">],</span> <span class="n">ARRAY</span><span class="p">[</span><span class="mi">3</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">]);</span> <span class="o">--</span> <span class="p">[</span><span class="s1">&#39;c&#39;</span><span class="p">,</span> <span class="s1">&#39;a&#39;</span><span class="p">,</span> <span class="s1">&#39;b&#39;</span><span class="p">]</span>
+<span class="n">SELECT</span> <span class="n">array_subset</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="n">NULL</span><span class="p">,</span> <span class="mi">3</span><span class="p">],</span> <span class="n">ARRAY</span><span class="p">[</span><span class="mi">2</span><span class="p">]);</span> <span class="o">--</span> <span class="p">[</span><span class="n">NULL</span><span class="p">]</span>
+<span class="n">SELECT</span> <span class="n">array_subset</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">],</span> <span class="n">ARRAY</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">]);</span> <span class="o">--</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">]</span>
+<span class="n">SELECT</span> <span class="n">array_subset</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">],</span> <span class="n">ARRAY</span><span class="p">[</span><span class="mi">5</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">]);</span> <span class="o">--</span> <span class="p">[]</span>
 </pre></div>
 </div>
 </dd></dl>
@@ -631,6 +649,8 @@ longer array, before applying <code class="docutils literal notranslate"><span c
 <li><a class="reference internal" href="#array_remove"><code class="docutils literal notranslate"><span class="pre">array_remove()</span></code></a></li>
 <li><a class="reference internal" href="#array_sort"><code class="docutils literal notranslate"><span class="pre">array_sort()</span></code></a></li>
 <li><a class="reference internal" href="#array_sort_desc"><code class="docutils literal notranslate"><span class="pre">array_sort_desc()</span></code></a></li>
+<li><a class="reference internal" href="#id0"><code class="docutils literal notranslate"><span class="pre">array_sort_desc()</span></code></a></li>
+<li><a class="reference internal" href="#array_subset"><code class="docutils literal notranslate"><span class="pre">array_subset()</span></code></a></li>
 <li><a class="reference internal" href="#array_sum"><code class="docutils literal notranslate"><span class="pre">array_sum()</span></code></a></li>
 <li><a class="reference internal" href="#cardinality"><code class="docutils literal notranslate"><span class="pre">cardinality()</span></code></a></li>
 <li><a class="reference internal" href="#combinations"><code class="docutils literal notranslate"><span class="pre">combinations()</span></code></a></li>
