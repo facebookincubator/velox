@@ -19,9 +19,9 @@
 #include "velox/common/memory/Memory.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
+#include "velox/dwio/RegisterReaders.h"
+#include "velox/dwio/RegisterWriters.h"
 #include "velox/dwio/common/FileSink.h"
-#include "velox/dwio/dwrf/RegisterDwrfReader.h"
-#include "velox/dwio/dwrf/RegisterDwrfWriter.h"
 #include "velox/exec/Task.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -98,8 +98,8 @@ int main(int argc, char** argv) {
   // write protocol, in this case commit is not required:
   filesystems::registerLocalFileSystem();
   dwio::common::registerFileSinks();
-  dwrf::registerDwrfReaderFactory();
-  dwrf::registerDwrfWriterFactory();
+  dwio::registerReaderFactories();
+  dwio::registerWriterFactories();
 
   // Create a temporary dir to store the local file created. Note that this
   // directory is automatically removed when the `tempDir` object runs out of

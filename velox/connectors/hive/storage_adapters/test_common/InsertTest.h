@@ -19,8 +19,8 @@
 
 #include "velox/common/memory/Memory.h"
 #include "velox/connectors/hive/HiveConnector.h"
-#include "velox/dwio/parquet/RegisterParquetReader.h"
-#include "velox/dwio/parquet/RegisterParquetWriter.h"
+#include "velox/dwio/RegisterReaders.h"
+#include "velox/dwio/RegisterWriters.h"
 #include "velox/exec/TableWriter.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
@@ -39,14 +39,13 @@ class InsertTest : public velox::test::VectorTestBase {
         exec::test::kHiveConnectorId, hiveConfig, ioExecutor);
     connector::registerConnector(hiveConnector);
 
-    parquet::registerParquetReaderFactory();
-    parquet::registerParquetWriterFactory();
+    dwio::registerReaderFactories();
+    dwio::registerWriterFactories();
   }
 
   void TearDown() {
-    parquet::unregisterParquetReaderFactory();
-    parquet::unregisterParquetWriterFactory();
-
+    dwio::unregisterReaderFactories();
+    dwio::unregisterWriterFactories();
     connector::unregisterConnector(exec::test::kHiveConnectorId);
   }
 

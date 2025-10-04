@@ -20,8 +20,8 @@
 #include "velox/common/file/FileSystems.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
+#include "velox/dwio/RegisterReaders.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
-#include "velox/dwio/dwrf/RegisterDwrfReader.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
 #include "velox/exec/AggregateCompanionSignatures.h"
 #include "velox/exec/AggregateFunctionRegistry.h"
@@ -74,11 +74,11 @@ void AggregationTestBase::SetUp() {
       std::make_shared<config::ConfigBase>(
           std::unordered_map<std::string, std::string>()));
   connector::registerConnector(hiveConnector);
-  dwrf::registerDwrfReaderFactory();
+  dwio::registerReaderFactories();
 }
 
 void AggregationTestBase::TearDown() {
-  dwrf::unregisterDwrfReaderFactory();
+  dwio::unregisterReaderFactories();
   connector::unregisterConnector(kHiveConnectorId);
   OperatorTestBase::TearDown();
 }
