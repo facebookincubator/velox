@@ -21,16 +21,21 @@
 
 namespace facebook::velox::core {
 
-/// A simple wrapper around velox::ConfigBase. Defines constants for query
+/// A simple wrapper around velox::IConfig. Defines constants for query
 /// config properties and accessor methods.
 /// Create per query context. Does not have a singleton instance.
 /// Does not allow altering properties on the fly. Only at creation time.
 class QueryConfig {
  public:
-  explicit QueryConfig(
-      const std::unordered_map<std::string, std::string>& values);
+  explicit QueryConfig(std::unordered_map<std::string, std::string> values);
 
-  explicit QueryConfig(std::unordered_map<std::string, std::string>&& values);
+  // This is needed only to resolve correct ctor for cases like
+  // QueryConfig{{}} or QueryConfig({}).
+  struct ConfigTag {};
+
+  explicit QueryConfig(
+      ConfigTag /*tag*/,
+      std::shared_ptr<const config::IConfig> config);
 
   /// Maximum memory that a query can use on a single host.
   static constexpr const char* kQueryMaxMemoryPerNode =
@@ -1295,9 +1300,14 @@ class QueryConfig {
   T get(const std::string& key, const T& defaultValue) const {
     return config_->get<T>(key, defaultValue);
   }
+
   template <typename T>
   std::optional<T> get(const std::string& key) const {
-    return std::optional<T>(config_->get<T>(key));
+    return config_->get<T>(key);
+  }
+
+  const std::shared_ptr<const config::IConfig>& config() const {
+    return config_;
   }
 
   /// Test-only method to override the current query config properties.
@@ -1310,6 +1320,6 @@ class QueryConfig {
  private:
   void validateConfig();
 
-  std::unique_ptr<velox::config::ConfigBase> config_;
+  std::shared_ptr<const config::IConfig> config_;
 };
 } // namespace facebook::velox::core
