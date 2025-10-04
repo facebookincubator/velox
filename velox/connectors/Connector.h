@@ -703,8 +703,6 @@ class ConnectorFactory {
   const std::string name_;
 };
 
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-
 namespace detail {
 inline std::unordered_map<std::string, std::shared_ptr<ConnectorFactory>>&
 connectorFactories() {
@@ -755,8 +753,6 @@ inline std::shared_ptr<ConnectorFactory> getConnectorFactory(
       connectorName);
   return it->second;
 }
-
-#endif
 
 /// Adds connector instance to the registry using connector ID as the key.
 /// Throws if connector with the same ID is already present. Always returns
