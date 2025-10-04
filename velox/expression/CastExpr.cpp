@@ -309,18 +309,100 @@ VectorPtr CastExpr::castFromTime(
   }
 }
 
+VectorPtr CastExpr::castToTime(
+    const SelectivityVector& rows,
+    const BaseVector& input,
+    exec::EvalCtx& context,
+    const TypePtr& fromType) {
+  VectorPtr castResult;
+  context.ensureWritable(rows, TIME(), castResult);
+  (*castResult).clearNulls(rows);
+
+  switch (fromType->kind()) {
+    case TypeKind::VARCHAR: {
+      // Get session timezone
+      const auto* timeZone =
+          getTimeZoneFromConfig(context.execCtx()->queryCtx()->queryConfig());
+      // Get session start time
+      const auto startTimeMs =
+          context.execCtx()->queryCtx()->queryConfig().sessionStartTimeMs();
+      auto systemDay = std::chrono::milliseconds{startTimeMs} / kMillisInDay;
+
+      auto* inputVector = input.as<SimpleVector<StringView>>();
+      auto* resultFlatVector = castResult->as<FlatVector<int64_t>>();
+
+      applyToSelectedNoThrowLocal(context, rows, castResult, [&](int row) {
+        try {
+          const auto inputString = inputVector->valueAt(row);
+
+          // Parse the time string using the TimeType method
+          // This converts HH:MM:SS[.sss] format to milliseconds since midnight
+          int64_t parsedTimeMillis = TIME()->valueToTime(inputString);
+
+          // Validate time range (0 to 86399999 ms in a day)
+          if (parsedTimeMillis < 0 || parsedTimeMillis >= kMillisInDay) {
+            VELOX_USER_FAIL(
+                makeErrorMessage(input, row, TIME()) +
+                    " Time value {} is out of range",
+                parsedTimeMillis);
+          }
+
+          // Apply timezone conversion (reverse of TIME to VARCHAR)
+          // Interpret the parsed time as local time, convert to UTC
+          int64_t adjustedTime{0};
+          if (timeZone) {
+            // Create a local timestamp for the current day with the parsed time
+            auto localSystemTime =
+                systemDay.count() * kMillisInDay + parsedTimeMillis;
+
+            // Convert from local time to UTC
+            auto utcTime =
+                timeZone->to_sys(std::chrono::milliseconds{localSystemTime});
+            adjustedTime = (utcTime % kMillisInDay).count();
+          } else {
+            adjustedTime = parsedTimeMillis;
+          }
+
+          // Handle day wrapping
+          if (adjustedTime < 0) {
+            adjustedTime += kMillisInDay;
+          } else if (adjustedTime >= kMillisInDay) {
+            adjustedTime -= kMillisInDay;
+          }
+
+          resultFlatVector->set(row, adjustedTime);
+        } catch (const VeloxException& ue) {
+          if (!ue.isUserError()) {
+            throw;
+          }
+          VELOX_USER_FAIL(
+              makeErrorMessage(input, row, TIME()) + " " + ue.message());
+        } catch (const std::exception& e) {
+          VELOX_USER_FAIL(
+              makeErrorMessage(input, row, TIME()) + " " + e.what());
+        }
+      });
+
+      return castResult;
+    }
+    default:
+      VELOX_UNSUPPORTED(
+          "Cast from {} to TIME is not supported", fromType->toString());
+  }
+}
+
 namespace {
 void propagateErrorsOrSetNulls(
     bool setNullInResultAtError,
-    EvalCtx& context,
+    exec::EvalCtx& context,
     const SelectivityVector& nestedRows,
     const BufferPtr& elementToTopLevelRows,
     VectorPtr& result,
-    EvalErrorsPtr& oldErrors) {
+    exec::EvalErrorsPtr& oldErrors) {
   if (context.errors()) {
     if (setNullInResultAtError) {
-      // Errors in context.errors() should be translated to nulls in the top
-      // level rows.
+      // Errors in context.errors() should be translated to nulls in
+      // the top level rows.
       context.convertElementErrorsToTopLevelNulls(
           nestedRows, elementToTopLevelRows, result);
     } else {
@@ -347,8 +429,8 @@ VectorPtr CastExpr::applyMap(
     exec::EvalCtx& context,
     const MapType& fromType,
     const MapType& toType) {
-  // Cast input keys/values vector to output keys/values vector using their
-  // element selectivity vector
+  // Cast input keys/values vector to output keys/values vector using
+  // their element selectivity vector
 
   // Initialize nested rows
   auto mapKeys = input->mapKeys();
@@ -400,8 +482,8 @@ VectorPtr CastExpr::applyMap(
     }
   }
 
-  // Returned map vector should be addressable for every element, even those
-  // that are not selected.
+  // Returned map vector should be addressable for every element, even
+  // those that are not selected.
   BufferPtr sizes = input->sizes();
   if (newMapKeys->isConstantEncoding() && newMapValues->isConstantEncoding()) {
     // We extends size since that is cheap.
@@ -449,8 +531,8 @@ VectorPtr CastExpr::applyArray(
     exec::EvalCtx& context,
     const ArrayType& fromType,
     const ArrayType& toType) {
-  // Cast input array elements to output array elements based on their types
-  // using their linear selectivity vector
+  // Cast input array elements to output array elements based on their
+  // types using their linear selectivity vector
   auto arrayElements = input->elements();
 
   auto nestedRows =
@@ -473,8 +555,8 @@ VectorPtr CastExpr::applyArray(
         newElements);
   }
 
-  // Returned array vector should be addressable for every element, even those
-  // that are not selected.
+  // Returned array vector should be addressable for every element,
+  // even those that are not selected.
   BufferPtr sizes = input->sizes();
   if (newElements->isConstantEncoding()) {
     // If the newElements we extends its size since that is cheap.
@@ -519,8 +601,8 @@ VectorPtr CastExpr::applyRow(
   int numInputChildren = input->children().size();
   int numOutputChildren = toRowType.size();
 
-  // Extract the flag indicating matching of children must be done by name or
-  // position
+  // Extract the flag indicating matching of children must be done by
+  // name or position
   auto matchByName =
       context.execCtx()->queryCtx()->queryConfig().isMatchStructByName();
 
@@ -530,14 +612,16 @@ VectorPtr CastExpr::applyRow(
 
   EvalErrorsPtr oldErrors;
   if (setNullInResultAtError()) {
-    // We need to isolate errors that happen during the cast from previous
-    // errors since those translate to nulls, unlike exisiting errors.
+    // We need to isolate errors that happen during the cast from
+    // previous errors since those translate to nulls, unlike
+    // exisiting errors.
     context.swapErrors(oldErrors);
   }
 
   for (auto toChildrenIndex = 0; toChildrenIndex < numOutputChildren;
        toChildrenIndex++) {
-    // For each child, find the corresponding column index in the output
+    // For each child, find the corresponding column index in the
+    // output
     const auto& toFieldName = toRowType.nameOf(toChildrenIndex);
     bool matchNotFound = false;
 
@@ -711,8 +795,8 @@ void CastExpr::applyPeeled(
     };
 
     if (setNullInResultAtError()) {
-      // This can be optimized by passing setNullInResultAtError() to castTo and
-      // castFrom operations.
+      // This can be optimized by passing setNullInResultAtError() to
+      // castTo and castFrom operations.
 
       EvalErrorsPtr oldErrors;
       context.swapErrors(oldErrors);
@@ -748,6 +832,8 @@ void CastExpr::applyPeeled(
         toType->toString());
   } else if (fromType->isTime()) {
     result = castFromTime(rows, input, context, toType);
+  } else if (toType->isTime()) {
+    result = castToTime(rows, input, context, fromType);
   } else if (toType->isShortDecimal()) {
     result = applyDecimal<int64_t>(rows, input, context, fromType, toType);
   } else if (toType->isLongDecimal()) {
@@ -867,8 +953,8 @@ VectorPtr CastExpr::applyTimestampToVarcharCast(
     const auto stringView =
         Timestamp::tsToStringView(inputValue, options, rawBuffer);
     flatResult->setNoCopy(row, stringView);
-    // The result of both Presto and Spark contains more than 12 digits even
-    // when 'zeroPaddingYear' is disabled.
+    // The result of both Presto and Spark contains more than 12
+    // digits even when 'zeroPaddingYear' is disabled.
     VELOX_DCHECK(!stringView.isInline());
     rawBuffer += stringView.size();
   });
@@ -965,8 +1051,8 @@ void CastExpr::apply(
   context.moveOrCopyResult(localResult, *remainingRows, result);
   context.releaseVector(localResult);
 
-  // If there are nulls or rows that encountered errors in the input, add nulls
-  // to the result at the same rows.
+  // If there are nulls or rows that encountered errors in the input,
+  // add nulls to the result at the same rows.
   VELOX_CHECK_NOT_NULL(result);
   if (rawNulls || context.errors()) {
     EvalCtx::addNulls(
@@ -995,7 +1081,8 @@ void CastExpr::evalSpecialForm(
   } else {
     apply(rows, input, context, fromType, toType, result);
   }
-  // Return 'input' back to the vector pool in 'context' so it can be reused.
+  // Return 'input' back to the vector pool in 'context' so it can be
+  // reused.
   context.releaseVector(input);
 }
 

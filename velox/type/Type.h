@@ -1586,6 +1586,11 @@ class TimeType final : public BigintType {
   /// and converted to the right time zone.
   StringView valueToString(int64_t value, char* const startPos) const;
 
+  /// Parses a time string in HH:MM:SS[.sss] format and returns milliseconds
+  /// since midnight. It is the caller's responsibility to ensure that the
+  /// input string is valid and handle error conditions as needed.
+  int64_t valueToTime(const StringView& timeStr) const;
+
   folly::dynamic serialize() const override;
 
   static TypePtr deserialize(const folly::dynamic& /*obj*/) {

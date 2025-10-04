@@ -3269,5 +3269,250 @@ TEST_F(CastExprTest, timeToBigintCast) {
   }
 }
 
+TEST_F(CastExprTest, varcharToTimeCast) {
+  {
+    // Test casting VARCHAR to TIME with valid time strings
+    auto varcharVector = makeFlatVector<StringView>(
+        {"00:00:00.000",
+         "01:01:01.000",
+         "12:00:00.000",
+         "23:59:59.999",
+         "09:30:15.123",
+         "18:45:30.500"});
+
+    // Use makeCastExpr directly to avoid DuckDB parser issues
+    auto inputField =
+        std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c0");
+    auto castExpr = makeCastExpr(inputField, TIME(), false);
+    auto result = evaluate(castExpr, makeRowVector({varcharVector}));
+
+    // TIME is milliseconds since midnight
+    auto expected = makeFlatVector<int64_t>(
+        {
+            0, // 00:00:00.000
+            3661000, // 01:01:01.000 = 3600*1000 + 60*1000 + 1*1000
+            43200000, // 12:00:00.000 = 12*3600*1000
+            86399999, // 23:59:59.999 = 23*3600*1000 + 59*60*1000 + 59*1000 +
+                      // 999
+            34215123, // 09:30:15.123 = 9*3600*1000 + 30*60*1000 + 15*1000 + 123
+            67530500 // 18:45:30.500 = 18*3600*1000 + 45*60*1000 + 30*1000 + 500
+        },
+        TIME());
+
+    assertEqualVectors(expected, result);
+  }
+
+  {
+    // Test casting VARCHAR to TIME with nulls
+    auto varcharVector = makeNullableFlatVector<StringView>(
+        {"00:00:00.000", std::nullopt, "12:00:00.000", std::nullopt});
+
+    auto inputField =
+        std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c0");
+    auto castExpr = makeCastExpr(inputField, TIME(), false);
+    auto result = evaluate(castExpr, makeRowVector({varcharVector}));
+
+    auto expected = makeNullableFlatVector<int64_t>(
+        {0, std::nullopt, 43200000, std::nullopt}, TIME());
+
+    assertEqualVectors(expected, result);
+  }
+
+  {
+    // Test time formats without milliseconds
+    auto varcharVector =
+        makeFlatVector<StringView>({"00:00:00", "12:30:45", "23:59:59"});
+
+    auto inputField =
+        std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c0");
+    auto castExpr = makeCastExpr(inputField, TIME(), false);
+    auto result = evaluate(castExpr, makeRowVector({varcharVector}));
+
+    auto expected = makeFlatVector<int64_t>(
+        {
+            0, // 00:00:00
+            45045000, // 12:30:45 = 12*3600*1000 + 30*60*1000 + 45*1000
+            86399000 // 23:59:59 = 23*3600*1000 + 59*60*1000 + 59*1000
+        },
+        TIME());
+
+    assertEqualVectors(expected, result);
+  }
+
+  {
+    // Test try_cast with invalid formats
+    auto varcharVector = makeFlatVector<StringView>({
+        "00:00:00.000", // valid
+        "25:00:00.000", // invalid hour
+        "12:60:00.000", // invalid minute
+        "12:30:60.000", // invalid second
+        "invalid", // completely invalid
+        "12:30" // missing seconds
+    });
+
+    auto inputField =
+        std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c0");
+    auto tryCastExpr = makeCastExpr(inputField, TIME(), true);
+    auto result = evaluate(tryCastExpr, makeRowVector({varcharVector}));
+
+    auto expected = makeNullableFlatVector<int64_t>(
+        {
+            0, // valid
+            std::nullopt, // invalid hour
+            std::nullopt, // invalid minute
+            std::nullopt, // invalid second
+            std::nullopt, // completely invalid
+            std::nullopt // missing seconds
+        },
+        TIME());
+
+    assertEqualVectors(expected, result);
+  }
+
+  {
+    // Test edge cases with leading/trailing spaces (should be handled by
+    // parser)
+    auto varcharVector = makeFlatVector<StringView>({
+        " 12:30:45.123 ", // spaces should be handled
+        "12:30:45.123", // no spaces
+    });
+
+    auto inputField =
+        std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c0");
+    auto tryCastExpr = makeCastExpr(inputField, TIME(), true);
+    auto result = evaluate(tryCastExpr, makeRowVector({varcharVector}));
+
+    auto expected = makeNullableFlatVector<int64_t>(
+        {
+            45045123, // 12:30:45.123 with spaces handled
+            45045123 // 12:30:45.123 without spaces
+        },
+        TIME());
+
+    assertEqualVectors(expected, result);
+  }
+
+  {
+    // Test microsecond precision (should truncate to milliseconds)
+    auto varcharVector = makeFlatVector<StringView>({
+        "12:30:45.123456", // microseconds should be truncated
+        "12:30:45.123999", // microseconds should be truncated
+        "12:30:45.123" // exactly milliseconds
+    });
+
+    auto inputField =
+        std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c0");
+    auto castExpr = makeCastExpr(inputField, TIME(), false);
+    auto result = evaluate(castExpr, makeRowVector({varcharVector}));
+
+    auto expected = makeFlatVector<int64_t>(
+        {
+            45045123, // truncated to milliseconds
+            45045123, // truncated to milliseconds
+            45045123 // exact milliseconds
+        },
+        TIME());
+
+    assertEqualVectors(expected, result);
+  }
+
+  {
+    // Test timezone-aware VARCHAR to TIME casting with America/Los_Angeles
+    // timezone When casting VARCHAR to TIME, the string is interpreted as local
+    // time and converted to UTC (the reverse of TIME to VARCHAR)
+    setSessionStartTimeAndTimeZone(
+        1756710000000, "America/Los_Angeles"); // 2025-09-01T00:00:00.000 (DST)
+
+    auto varcharVector = makeFlatVector<StringView>({
+        "00:00:00.000", // Midnight local time
+        "07:00:00.000", // 7 AM local time
+        "12:00:00.000", // Noon local time
+        "23:59:59.999" // Just before midnight local time
+    });
+
+    auto inputField =
+        std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c0");
+    auto castExpr = makeCastExpr(inputField, TIME(), false);
+    auto result = evaluate(castExpr, makeRowVector({varcharVector}));
+
+    // During DST, LA is UTC-7, so local times are converted to UTC by adding 7
+    // hours
+    auto expected = makeFlatVector<int64_t>(
+        {
+            25200000, // 00:00:00.000 + 7 hours = 07:00:00.000 UTC
+            50400000, // 07:00:00.000 + 7 hours = 14:00:00.000 UTC
+            68400000, // 12:00:00.000 + 7 hours = 19:00:00.000 UTC
+            25199999, // 23:59:59.999 + 7 hours = 06:59:59.999 UTC (next day)
+        },
+        TIME());
+
+    assertEqualVectors(expected, result);
+  }
+
+  {
+    // Test with different timezone settings - during standard time (not DST)
+    setSessionStartTimeAndTimeZone(
+        1762761600000,
+        "America/Los_Angeles"); // 2025-11-10T00:00:00.000 (Standard Time)
+
+    auto varcharVector = makeFlatVector<StringView>({
+        "00:00:00.000", // Midnight local time
+        "08:00:00.000", // 8 AM local time
+        "12:00:00.000", // Noon local time
+        "23:59:59.999" // Just before midnight local time
+    });
+
+    auto inputField =
+        std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c0");
+    auto castExpr = makeCastExpr(inputField, TIME(), false);
+    auto result = evaluate(castExpr, makeRowVector({varcharVector}));
+
+    // During standard time, LA is UTC-8, so local times are converted to UTC by
+    // adding 8 hours
+    auto expected = makeFlatVector<int64_t>(
+        {
+            28800000, // 00:00:00.000 + 8 hours = 08:00:00.000 UTC
+            57600000, // 08:00:00.000 + 8 hours = 16:00:00.000 UTC
+            72000000, // 12:00:00.000 + 8 hours = 20:00:00.000 UTC
+            28799999, // 23:59:59.999 + 8 hours = 07:59:59.999 UTC (next day)
+        },
+        TIME());
+
+    assertEqualVectors(expected, result);
+  }
+
+  {
+    // Test with Australia/Perth timezone
+    setTimezone("Australia/Perth");
+
+    auto varcharVector = makeFlatVector<StringView>({
+        "00:00:00.000", // Midnight local time
+        "06:00:00.000", // 6 AM local time
+        "12:00:00.000", // Noon local time
+        "18:00:00.000" // 6 PM local time
+    });
+
+    auto inputField =
+        std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c0");
+    auto castExpr = makeCastExpr(inputField, TIME(), false);
+    auto result = evaluate(castExpr, makeRowVector({varcharVector}));
+
+    // Perth is UTC+8, so local times are converted to UTC by subtracting 8
+    // hours
+    auto expected = makeFlatVector<int64_t>(
+        {
+            57600000, // 00:00:00.000 - 8 hours = 16:00:00.000 UTC (previous
+                      // day)
+            79200000, // 06:00:00.000 - 8 hours = 22:00:00.000 UTC (previous
+                      // day)
+            14400000, // 12:00:00.000 - 8 hours = 04:00:00.000 UTC
+            36000000 // 18:00:00.000 - 8 hours = 10:00:00.000 UTC
+        },
+        TIME());
+
+    assertEqualVectors(expected, result);
+  }
+}
+
 } // namespace
 } // namespace facebook::velox::test
