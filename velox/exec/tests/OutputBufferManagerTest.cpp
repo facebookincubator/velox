@@ -109,7 +109,8 @@ class OutputBufferManagerTest : public testing::Test {
         std::move(planFragment),
         0,
         std::move(queryCtx),
-        Task::ExecutionMode::kParallel);
+        Task::ExecutionMode::kParallel,
+        exec::Consumer{});
 
     bufferManager_->initializeTask(task, kind, numDestinations, numDrivers);
     return task;

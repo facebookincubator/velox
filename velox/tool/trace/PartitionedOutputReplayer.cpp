@@ -140,7 +140,8 @@ RowVectorPtr PartitionedOutputReplayer::run(bool /*unused*/) {
       core::PlanFragment{createPlan()},
       0,
       createQueryContext(queryConfigs_, executor_.get()),
-      Task::ExecutionMode::kParallel);
+      Task::ExecutionMode::kParallel,
+      exec::Consumer{});
   task->start(driverIds_.size());
 
   consumeAllData(
