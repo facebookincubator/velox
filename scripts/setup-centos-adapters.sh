@@ -78,8 +78,8 @@ function install_s3 {
 function install_adapters {
   run_and_time install_adapters_deps_from_dnf
   run_and_time install_s3
-  run_and_time install_gcs-sdk-cpp
-  run_and_time install_azure-storage-sdk-cpp
+  run_and_time install_gcs_sdk_cpp
+  run_and_time install_azure_storage_sdk_cpp
   run_and_time install_hdfs_deps
 }
 
