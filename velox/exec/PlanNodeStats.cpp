@@ -59,6 +59,14 @@ PlanNodeStats& PlanNodeStats::operator+=(const PlanNodeStats& another) {
     }
   }
 
+  for (const auto& [name, exprStats] : another.expressionStats) {
+    auto const [it, inserted] =
+        this->expressionStats.try_emplace(name, exprStats);
+    if (!inserted) {
+      it->second.add(exprStats);
+    }
+  }
+
   // Populating number of drivers for plan nodes with multiple operators is not
   // useful. Each operator could have been executed in different pipelines with
   // different number of drivers.
