@@ -261,6 +261,7 @@ std::unordered_set<std::string> skipFunctions = {
 };
 
 std::unordered_set<std::string> skipFunctionsSOT = {
+    "array_subset", // Velox-only function, not available in Presto
     "noisy_empty_approx_set_sfm", // non-deterministic because of privacy.
     // https://github.com/facebookincubator/velox/issues/11034
     "cast(real) -> varchar",
@@ -331,6 +332,7 @@ std::unordered_set<std::string> skipFunctionsSOT = {
     "escape", // https://github.com/facebookincubator/velox/issues/12558
     "from_base64url", // https://github.com/facebookincubator/velox/issues/12562
     "array_top_n", // https://github.com/prestodb/presto/issues/24700
+    "array_subset",
     "codepoint", // https://github.com/facebookincubator/velox/issues/12598
     "in", // https://github.com/facebookincubator/velox/issues/12597
     "multimap_from_entries", // https://github.com/facebookincubator/velox/issues/12628
