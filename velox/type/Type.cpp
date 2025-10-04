@@ -1530,6 +1530,97 @@ StringView TimeType::valueToString(int64_t value, char* const startPos) const {
   return StringView{startPos, kTimeToVarcharRowSize};
 }
 
+int64_t TimeType::valueToTime(const StringView& timeStr) const {
+  size_t pos = 0;
+  int32_t hour = 0, minute = 0, second = 0, millis = 0;
+  const char* data = timeStr.data();
+
+  // Helper function to check if a character is a digit
+  auto isDigit = [](char c) { return c >= '0' && c <= '9'; };
+
+  // Helper function to parse a number from a string at a given position
+  auto parseNumber =
+      [&](int32_t& result, int32_t minDigits, int32_t maxDigits) -> bool {
+    result = 0;
+    int32_t digitCount = 0;
+
+    while (pos < timeStr.size() && isDigit(data[pos]) &&
+           digitCount < maxDigits) {
+      result = result * 10 + (data[pos] - '0');
+      pos++;
+      digitCount++;
+    }
+
+    return digitCount >= minDigits;
+  };
+
+  // Skip leading whitespace
+  while (pos < timeStr.size() && data[pos] == ' ') {
+    pos++;
+  }
+
+  // Parse hour (1-2 digits)
+  VELOX_USER_CHECK(
+      parseNumber(hour, 1, 2), "Failed to parse hour in time string");
+
+  // Expect ':'
+  if (pos < timeStr.size() && data[pos] == ':') {
+    pos++;
+  }
+
+  // Parse minute (1-2 digits)
+  VELOX_USER_CHECK(
+      parseNumber(minute, 1, 2), "Failed to parse minute in time string");
+
+  // Expect ':'
+  if (pos < timeStr.size() && data[pos] == ':') {
+    pos++;
+  }
+
+  // Parse second (1-2 digits)
+  VELOX_USER_CHECK(
+      parseNumber(second, 1, 2), "Failed to parse second in time string");
+
+  // Parse optional fractional seconds
+  if (pos < timeStr.size() && data[pos] == '.') {
+    pos++;
+    int32_t fractionalPart = 0;
+    int32_t fractionalDigits = 0;
+
+    // Parse up to 6 digits for microseconds, but only keep first 3 for
+    // milliseconds
+    while (pos < timeStr.size() && isDigit(data[pos]) && fractionalDigits < 6) {
+      if (fractionalDigits < 3) {
+        fractionalPart = fractionalPart * 10 + (data[pos] - '0');
+      }
+      pos++;
+      fractionalDigits++;
+    }
+
+    // Convert to milliseconds (pad with zeros if needed)
+    while (fractionalDigits < 3) {
+      fractionalPart *= 10;
+      fractionalDigits++;
+    }
+
+    millis = fractionalPart;
+  }
+
+  // Validate parsed components
+  VELOX_USER_CHECK(!(hour < 0 || hour > 23), "Invalid hour value: {}", hour);
+  VELOX_USER_CHECK(
+      !(minute < 0 || minute > 59), "Invalid minute value: {}", minute);
+  VELOX_USER_CHECK(
+      !(second < 0 || second > 59), "Invalid second value: {}", second);
+
+  // Convert to milliseconds since midnight
+  // It is the caller's responsibility to ensure that the value is in range
+  // and converted to the right time zone.
+  return static_cast<int64_t>(hour) * 3600000 +
+      static_cast<int64_t>(minute) * 60000 +
+      static_cast<int64_t>(second) * 1000 + static_cast<int64_t>(millis);
+}
+
 std::string stringifyTruncatedElementList(
     size_t size,
     const std::function<void(std::stringstream&, size_t)>& stringifyElement,
