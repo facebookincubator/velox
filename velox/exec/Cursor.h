@@ -71,6 +71,12 @@ struct CursorParameters {
   /// would be built from it.
   std::string spillDirectory;
 
+  /// Callback function to dynamically create or determine the spill directory
+  /// path at runtime. If provided, this callback is invoked when spilling is
+  /// needed and must return a valid directory path. This allows for dynamic
+  /// spill directory creation or path resolution based on runtime conditions.
+  std::function<std::string()> spillDirectoryCallback;
+
   bool copyResult = true;
 
   /// If true, use serial execution mode. Use parallel execution mode

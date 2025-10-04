@@ -135,7 +135,8 @@ int main(int argc, char** argv) {
       writerPlanFragment,
       /*destination=*/0,
       core::QueryCtx::create(executor.get()),
-      exec::Task::ExecutionMode::kSerial);
+      exec::Task::ExecutionMode::kSerial,
+      exec::Consumer{});
 
   // next() starts execution using the client thread. The loop pumps output
   // vectors out of the task (there are none in this query fragment).
@@ -165,7 +166,8 @@ int main(int argc, char** argv) {
       readPlanFragment,
       /*destination=*/0,
       core::QueryCtx::create(executor.get()),
-      exec::Task::ExecutionMode::kSerial);
+      exec::Task::ExecutionMode::kSerial,
+      exec::Consumer{});
 
   // Now that we have the query fragment and Task structure set up, we will
   // add data to it via `splits`.
