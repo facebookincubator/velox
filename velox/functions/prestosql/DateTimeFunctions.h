@@ -867,6 +867,10 @@ struct MillisecondFunction : public TimestampWithTimezoneSupport<T> {
     auto timestamp = this->toTimestamp(timestampWithTimezone);
     result = timestamp.getNanos() / Timestamp::kNanosecondsInMillisecond;
   }
+
+  FOLLY_ALWAYS_INLINE void call(int64_t& result, const arg_type<Time>& time) {
+    result = time % Timestamp::kMillisecondsInSecond;
+  }
 };
 
 template <typename T>
