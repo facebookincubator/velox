@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 
 #include "folly/experimental/EventCount.h"
@@ -54,8 +55,8 @@ class HashJoinTest : public HashJoinTestBase {
 
   void SetUp() override {
     HashJoinTestBase::SetUp();
-    auto options = cudf_velox::CudfOptions(true);
-    cudf_velox::registerCudf(std::move(options));
+    cudf_velox::CudfConfig::getInstance().forceReplace = true;
+    cudf_velox::registerCudf();
   }
 
   void TearDown() override {
