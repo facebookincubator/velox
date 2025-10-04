@@ -308,7 +308,7 @@ class AsyncDataCacheEntry {
   // True if 'this' is speculatively loaded. This is reset on first hit. Allows
   // catching a situation where prefetched entries get evicted before they are
   // hit.
-  bool isPrefetch_{false};
+  tsan_atomic<bool> isPrefetch_{false};
 
   // Sets after first use of a prefetched entry. Cleared by
   // getAndClearFirstUseFlag(). Does not require synchronization since used for
