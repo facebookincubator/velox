@@ -149,6 +149,31 @@ class PageReader {
     return sessionTimezone_;
   }
 
+  // Access the loaded dictionary for filtering purposes
+  const dwio::common::DictionaryValues& dictionary() const {
+    return dictionary_;
+  }
+
+  // Starts iterating over 'rows', which may span multiple pages. 'rows' are
+  // relative to current position, with 0 meaning the first
+  // unprocessed value in the current page, i.e. the row after the
+  // last row touched on a previous call to skip() or
+  // readWithVisitor(). This is the first row of the first data page
+  // if first call.
+  void startVisit(folly::Range<const vector_size_t*> rows);
+
+  // Seeks to page containing 'row'. Returns the number of rows to skip on
+  // the page to get to 'row'.  Clears the state and positions the stream and
+  // initializes a decoder for the found page. row kRepDefOnly means
+  // getting repdefs for the next page. If non-top level column, 'row'
+  // is interpreted in terms of leaf rows, including leaf
+  // nulls. Seeking ahead of pages covered by decodeRepDefs is not
+  // allowed for non-top level columns.
+  void seekToPage(int64_t row);
+
+  // Prepares dictionary from a dictionary page header
+  void prepareDictionary(const thrift::PageHeader& pageHeader);
+
  private:
   // Indicates that we only want the repdefs for the next page. Used when
   // prereading repdefs with seekToPage.
@@ -174,15 +199,6 @@ class PageReader {
   // 'pageData_' + 'encodedDataSize_'.
   void makedecoder();
 
-  // Reads and skips pages until finding a data page that contains
-  // 'row'. Reads and sets 'rowOfPage_' and 'numRowsInPage_' and
-  // initializes a decoder for the found page. row kRepDefOnly means
-  // getting repdefs for the next page. If non-top level column, 'row'
-  // is interpreted in terms of leaf rows, including leaf
-  // nulls. Seeking ahead of pages covered by decodeRepDefs is not
-  // allowed for non-top level columns.
-  void seekToPage(int64_t row);
-
   // Preloads the repdefs for the column chunk. To avoid preloading,
   // would need a way too clone the input stream so that one stream
   // reads ahead for repdefs and the other tracks the data. This is
@@ -202,7 +218,6 @@ class PageReader {
 
   void prepareDataPageV1(const thrift::PageHeader& pageHeader, int64_t row);
   void prepareDataPageV2(const thrift::PageHeader& pageHeader, int64_t row);
-  void prepareDictionary(const thrift::PageHeader& pageHeader);
   void makeDecoder();
 
   // For a non-top level leaf, reads the defs and sets 'leafNulls_' and
@@ -229,14 +244,6 @@ class PageReader {
     ptr += sizeof(T);
     return data;
   }
-
-  // Starts iterating over 'rows', which may span multiple pages. 'rows' are
-  // relative to current position, with 0 meaning the first
-  // unprocessed value in the current page, i.e. the row after the
-  // last row touched on a previous call to skip() or
-  // readWithVisitor(). This is the first row of the first data page
-  // if first call.
-  void startVisit(folly::Range<const vector_size_t*> rows);
 
   // Seeks to the next page in a range given by startVisit().  Returns
   // true if there are unprocessed rows in the set given to
@@ -318,6 +325,7 @@ class PageReader {
       }
     } else {
       if (isDictionary()) {
+        //  LOG(DEBUG) << "PageReader: Using StringDictionaryColumnVisitor for row filtering (without nulls) - RowGroup:" << rowGroupIndex_ << " PageOrdinal:" << pageOrdinal_ << " PageIndex:" << pageIndex_;
         auto dictVisitor = visitor.toStringDictionaryColumnVisitor();
         dictionaryIdDecoder_->readWithVisitor<false>(nullptr, dictVisitor);
       } else if (encoding_ == thrift::Encoding::DELTA_BYTE_ARRAY) {

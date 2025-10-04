@@ -426,7 +426,6 @@ std::shared_ptr<common::ScanSpec> makeScanSpec(
       subfieldSpecs.clear();
     }
   }
-
   for (auto& pair : filters) {
     const auto name = pair.first.toString();
     // SelectiveColumnReader doesn't support constant columns with filters,
@@ -444,7 +443,6 @@ std::shared_ptr<common::ScanSpec> makeScanSpec(
     VELOX_CHECK_NULL(spec->filter());
     fieldSpec->setFilter(pair.second);
   }
-
   if (disableStatsBasedFilterReorder) {
     spec->disableStatsBasedFilterReorder();
   }
