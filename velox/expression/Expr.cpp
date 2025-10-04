@@ -2126,10 +2126,10 @@ core::ExecCtx* SimpleExpressionEvaluator::ensureExecCtx() {
 VectorPtr tryEvaluateConstantExpression(
     const core::TypedExprPtr& expr,
     memory::MemoryPool* pool,
-    const std::shared_ptr<core::QueryCtx>& queryCtx,
+    core::QueryCtx* queryCtx,
     bool suppressEvaluationFailures) {
-  velox::core::ExecCtx execCtx{pool, queryCtx.get()};
-  velox::exec::ExprSet exprSet({expr}, &execCtx);
+  velox::core::ExecCtx execCtx{pool, queryCtx};
+  velox::exec::ExprSet exprSet({expr}, &execCtx, false);
 
   // The construction of ExprSet involves compiling and constant folding the
   // expression. If constant folding succeeded, then we get a ConstantExpr.
