@@ -219,9 +219,11 @@ class VectorSerde {
 
     Options(
         common::CompressionKind _compressionKind,
-        float _minCompressionRatio)
+        float _minCompressionRatio,
+        bool _disableCrc32c)
         : compressionKind(_compressionKind),
-          minCompressionRatio(_minCompressionRatio) {}
+          minCompressionRatio(_minCompressionRatio),
+          disableCrc32c(_disableCrc32c) {}
 
     virtual ~Options() = default;
 
@@ -231,6 +233,7 @@ class VectorSerde {
     /// than this causes subsequent compression attempts to be skipped. The more
     /// times compression misses the target the less frequently it is tried.
     float minCompressionRatio{0.8};
+    bool disableCrc32c{false};
   };
 
   Kind kind() const {

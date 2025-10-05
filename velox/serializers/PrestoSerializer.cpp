@@ -247,9 +247,14 @@ void PrestoVectorSerde::serializeSingleColumn(
   Scratch scratch;
   serializeColumn(vector, folly::Range(&range, 1), stream.get(), scratch);
 
-  PrestoOutputStreamListener listener;
-  OStreamOutputStream outputStream(output, &listener);
-  stream->flush(&outputStream);
+  if (opts->disableCrc32c) {
+    OStreamOutputStream outputStream(output, nullptr);
+    stream->flush(&outputStream);
+  } else {
+    PrestoOutputStreamListener listener;
+    OStreamOutputStream outputStream(output, &listener);
+    stream->flush(&outputStream);
+  }
 }
 
 // static
