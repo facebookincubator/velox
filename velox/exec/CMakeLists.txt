@@ -108,16 +108,17 @@ velox_add_library(
 
 velox_link_libraries(
   velox_exec
-  velox_file
+  velox_arrow_bridge
+  velox_common_base
+  velox_common_compression
   velox_core
-  velox_vector
   velox_connector
   velox_expression
+  velox_file
+  velox_presto_serializer
   velox_time
-  velox_common_base
   velox_test_util
-  velox_arrow_bridge
-  velox_common_compression
+  velox_vector
 )
 
 velox_add_library(velox_cursor Cursor.cpp)
