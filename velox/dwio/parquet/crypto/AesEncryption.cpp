@@ -87,6 +87,14 @@ class AesDecryptor::AesDecryptorImpl {
       ss << "Negative plaintext length " << plaintextLen;
       throw CryptoException(ss.str());
     }
+    if (plaintextLen >
+        std::numeric_limits<int32_t>::max() - ciphertextSizeDelta_) {
+      std::stringstream ss;
+      ss << "Plaintext length " << plaintextLen << " plus ciphertext size delta "
+         << ciphertextSizeDelta_ << " overflows int32";
+      throw CryptoException(ss.str());
+    }
+
     return plaintextLen + ciphertextSizeDelta_;
   }
 
@@ -285,8 +293,22 @@ int32_t AesDecryptor::AesDecryptorImpl::getCiphertextLength(
          << " plus length buffer length " << lengthBufferLength_ << " overflows int32";
       throw CryptoException(ss.str());
     }
+    if (bufferLen <
+        static_cast<size_t>(writtenCiphertextLen) + lengthBufferLength_) {
+      std::stringstream ss;
+      ss << "Serialized ciphertext length "
+         << (writtenCiphertextLen + lengthBufferLength_)
+         << " is greater than the provided ciphertext buffer length "
+         << bufferLen;
+      throw CryptoException(ss.str());
+    }
 
     return static_cast<int32_t>(writtenCiphertextLen) + lengthBufferLength_;
+  }
+  if (bufferLen > static_cast<size_t>(std::numeric_limits<int32_t>::max())) {
+    std::stringstream ss;
+    ss << "Ciphertext buffer length " << bufferLen << " overflows int32";
+    throw CryptoException(ss.str());
   }
   return bufferLen;
 }
@@ -338,6 +360,13 @@ int32_t AesDecryptor::AesDecryptorImpl::gcmDecrypt(
   // Setting key and IV
   if (1 != EVP_DecryptInit_ex(ctx_, nullptr, nullptr, key, nonce)) {
     throw CryptoException("Couldn't set key and IV");
+  }
+
+  // Setting additional authenticated data
+  if (aadBufferLen > static_cast<size_t>(std::numeric_limits<int>::max())) {
+    std::stringstream ss;
+    ss << "AAD size " << aadBufferLen << " overflows int";
+    throw CryptoException(ss.str());
   }
 
   // Setting additional authenticated data
