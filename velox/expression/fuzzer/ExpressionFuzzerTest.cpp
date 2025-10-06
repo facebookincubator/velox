@@ -267,6 +267,10 @@ std::unordered_set<std::string> skipFunctionsSOT = {
     "cast(real) -> varchar",
     "cast(row(real)) -> row(varchar)",
     "cast(double) -> varchar",
+    // P4HyperLogLog casts may not match between Velox and Presto (sparse vs.
+    // dense)
+    "cast(hyperloglog) -> p4hyperloglog",
+    "cast(p4hyperloglog) -> hyperloglog",
     "cast(row(double)) -> row(varchar)",
     "cast(array(double)) -> array(varchar)",
     "cast(array(real)) -> array(varchar)",
