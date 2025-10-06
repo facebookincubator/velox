@@ -25,6 +25,7 @@ add_library(
   ExpressionEvaluator.cpp
   ToCudf.cpp
   Utilities.cpp
+  Validation.cpp
   VeloxCudfInterop.cpp
 )
 
