@@ -191,6 +191,7 @@ const std::vector<TypePtr>& PrestoQueryRunner::supportedScalarTypes() const {
       VARCHAR(),
       VARBINARY(),
       TIMESTAMP(),
+      TIME(),
       TIMESTAMP_WITH_TIME_ZONE(),
   };
   return kScalarTypes;
@@ -199,7 +200,7 @@ const std::vector<TypePtr>& PrestoQueryRunner::supportedScalarTypes() const {
 // static
 bool PrestoQueryRunner::isSupportedDwrfType(const TypePtr& type) {
   if (type->isDate() || type->isIntervalDayTime() || type->isUnKnown() ||
-      isGeometryType(type)) {
+      type->isTime() || isGeometryType(type)) {
     return false;
   }
 
