@@ -195,6 +195,12 @@ SpecialFormSignatureGenerator::getSignaturesForCast() const {
   addCastFromVarcharSignature("date", signatures);
   addCastFromTimestampSignature("date", signatures);
 
+  // P4HyperLogLog cast signatures
+  signatures.push_back(makeCastSignature("varbinary", "p4hyperloglog"));
+  signatures.push_back(makeCastSignature("p4hyperloglog", "varbinary"));
+  signatures.push_back(makeCastSignature("hyperloglog", "p4hyperloglog"));
+  signatures.push_back(makeCastSignature("p4hyperloglog", "hyperloglog"));
+
   // For each supported translation pair T --> U, add signatures of array(T) -->
   // array(U), map(varchar, T) --> map(varchar, U), row(T) --> row(U).
   auto size = signatures.size();
