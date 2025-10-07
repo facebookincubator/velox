@@ -514,7 +514,7 @@ void Status::moveFrom(Status& s) {
 /// Return with given status if condition is met.
 #define VELOX_RETURN_IF(condition, status) \
   do {                                     \
-    if (condition) [[likely]] {       \
+    if (condition) [[unlikely]] {       \
       return (status);                     \
     }                                      \
   } while (0)
