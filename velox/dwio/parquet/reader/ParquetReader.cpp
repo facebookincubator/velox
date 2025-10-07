@@ -1236,16 +1236,11 @@ class ParquetRowReader::Impl {
     rowGroupIds_.reserve(rowGroups_.size());
     firstRowOfRowGroup_.reserve(rowGroups_.size());
 
-    // Use regular row group filtering for now
-    // Dictionary-based filtering will be handled when dictionaries are
-    // naturally loaded during page reading
     ParquetData::FilterRowGroupsResult res;
     columnReader_->filterRowGroups(0, parquetStatsContext_, res);
-
     if (auto& metadataFilter = options_.metadataFilter()) {
       metadataFilter->eval(res.metadataFilterResults, res.filterResult);
     }
-
     uint64_t rowNumber = 0;
     for (auto i = 0; i < rowGroups_.size(); i++) {
       VELOX_CHECK_GT(rowGroups_[i].columns.size(), 0);

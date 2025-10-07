@@ -123,10 +123,10 @@ HiveDataSource::HiveDataSource(
     checkColumnNameLowerCase(hiveTableHandle_->subfieldFilters(), infoColumns_);
     checkColumnNameLowerCase(hiveTableHandle_->remainingFilter());
   }
+
   for (const auto& [k, v] : hiveTableHandle_->subfieldFilters()) {
     filters_.emplace(k.clone(), v);
   }
-
   double sampleRate = 1;
   auto remainingFilter = extractFiltersFromRemainingFilter(
       hiveTableHandle_->remainingFilter(),
@@ -134,7 +134,6 @@ HiveDataSource::HiveDataSource(
       false,
       filters_,
       sampleRate);
-
   if (sampleRate != 1) {
     randomSkip_ = std::make_shared<random::RandomSkipTracker>(sampleRate);
   }

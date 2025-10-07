@@ -303,7 +303,6 @@ std::unique_ptr<dwio::common::DictionaryValues>
 ParquetData::readDictionaryPageForFiltering(
     uint32_t rowGroupId,
     const ColumnChunkMetaDataPtr& columnChunk) {
-  // Create input stream for the column chunk
   auto inputStream = getInputStream(rowGroupId, columnChunk);
   if (!inputStream) {
     return std::make_unique<dwio::common::DictionaryValues>();
@@ -326,12 +325,10 @@ ParquetData::readDictionaryPageForFiltering(
   } else {
     return std::make_unique<dwio::common::DictionaryValues>();
   }
-
-  // Get the dictionary data directly from PageReader
   const auto& dict = pageReader->dictionary();
   return std::make_unique<dwio::common::DictionaryValues>(dict);
 }
-// Helper method to get input stream for column chunk
+
 std::unique_ptr<dwio::common::SeekableInputStream> ParquetData::getInputStream(
     uint32_t rowGroupId,
     const ColumnChunkMetaDataPtr& columnChunk) {
