@@ -91,7 +91,8 @@ class ExchangeClientTest
         core::PlanFragment{plan},
         0,
         std::move(queryCtx),
-        Task::ExecutionMode::kParallel);
+        Task::ExecutionMode::kParallel,
+        exec::Consumer{});
   }
 
   int32_t enqueue(

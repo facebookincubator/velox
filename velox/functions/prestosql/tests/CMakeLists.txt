@@ -44,6 +44,7 @@ add_executable(
   ArrayRemoveTest.cpp
   ArrayShuffleTest.cpp
   ArraySortTest.cpp
+  ArraySubsetTest.cpp
   ArrayTopNTest.cpp
   ArraysOverlapTest.cpp
   ArraySumTest.cpp

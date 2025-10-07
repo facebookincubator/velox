@@ -537,11 +537,15 @@ void CacheShard::updateStats(CacheStats& stats) {
     }
 
     ++stats.numEntries;
-    stats.tinySize += entry->tinyData_.size();
-    stats.tinyPadding += entry->tinyData_.capacity() - entry->tinyData_.size();
     if (entry->tinyData_.empty()) {
       stats.largeSize += entry->size_;
       stats.largePadding += entry->data_.byteSize() - entry->size_;
+      ++stats.numLargeEntries;
+    } else {
+      stats.tinySize += entry->tinyData_.size();
+      stats.tinyPadding +=
+          entry->tinyData_.capacity() - entry->tinyData_.size();
+      ++stats.numTinyEntries;
     }
   }
   stats.numHit += numHit_;

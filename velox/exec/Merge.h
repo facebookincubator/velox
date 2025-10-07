@@ -15,11 +15,11 @@
  */
 #pragma once
 
+#include "velox/common/base/TreeOfLosers.h"
 #include "velox/exec/Exchange.h"
 #include "velox/exec/MergeSource.h"
 #include "velox/exec/Spill.h"
 #include "velox/exec/Spiller.h"
-#include "velox/exec/TreeOfLosers.h"
 
 namespace facebook::velox::exec {
 
@@ -302,7 +302,7 @@ class SpillMerger : public std::enable_shared_from_this<SpillMerger> {
 
   RowVectorPtr getOutput(
       std::vector<ContinueFuture>& sourceBlockingFutures,
-      bool& atEnd) const;
+      bool& atEnd);
 
  private:
   static std::vector<std::shared_ptr<MergeSource>> createMergeSources(
@@ -321,13 +321,22 @@ class SpillMerger : public std::enable_shared_from_this<SpillMerger> {
       uint64_t maxOutputBatchBytes,
       velox::memory::MemoryPool* pool);
 
-  static void asyncReadFromSpillFileStream(
+  void finishSource(size_t streamIdx) const;
+
+  void readFromSpillFileStream(
       const std::weak_ptr<SpillMerger>& mergeHolder,
       size_t streamIdx);
 
-  void readFromSpillFileStream(size_t streamIdx);
-
   void scheduleAsyncSpillFileStreamReads();
+
+  // Sets 'exception_' when an async reader throws.
+  void setError(const std::exception_ptr& exception);
+
+  // Returns true if any async reader has thrown an exception.
+  bool hasError() const;
+
+  // If any async reader has thrown an exception, rethrows it.
+  void checkError();
 
   folly::Executor* const executor_;
   const std::shared_ptr<folly::Synchronized<common::SpillStats>> spillStats_;
@@ -336,6 +345,8 @@ class SpillMerger : public std::enable_shared_from_this<SpillMerger> {
   std::vector<std::shared_ptr<MergeSource>> sources_;
   std::vector<std::unique_ptr<BatchStream>> batchStreams_;
   std::unique_ptr<SourceMerger> sourceMerger_;
+  mutable std::timed_mutex mutex_;
+  std::exception_ptr exception_ = nullptr;
 };
 
 // LocalMerge merges its source's output into a single stream of

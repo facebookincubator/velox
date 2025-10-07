@@ -418,60 +418,58 @@ void HiveDataSource::addDynamicFilter(
   }
 }
 
-std::unordered_map<std::string, RuntimeCounter> HiveDataSource::runtimeStats() {
-  auto res = runtimeStats_.toMap();
+std::unordered_map<std::string, RuntimeMetric>
+HiveDataSource::getRuntimeStats() {
+  auto res = runtimeStats_.toRuntimeMetricMap();
   res.insert(
-      {{"numPrefetch", RuntimeCounter(ioStats_->prefetch().count())},
+      {{"numPrefetch", RuntimeMetric(ioStats_->prefetch().count())},
        {"prefetchBytes",
-        RuntimeCounter(
+        RuntimeMetric(
             ioStats_->prefetch().sum(), RuntimeCounter::Unit::kBytes)},
        {"totalScanTime",
-        RuntimeCounter(
-            ioStats_->totalScanTime(), RuntimeCounter::Unit::kNanos)},
+        RuntimeMetric(ioStats_->totalScanTime(), RuntimeCounter::Unit::kNanos)},
        {Connector::kTotalRemainingFilterTime,
-        RuntimeCounter(
+        RuntimeMetric(
             totalRemainingFilterTime_.load(std::memory_order_relaxed),
             RuntimeCounter::Unit::kNanos)},
        {"ioWaitWallNanos",
-        RuntimeCounter(
+        RuntimeMetric(
             ioStats_->queryThreadIoLatency().sum() * 1000,
             RuntimeCounter::Unit::kNanos)},
        {"maxSingleIoWaitWallNanos",
-        RuntimeCounter(
+        RuntimeMetric(
             ioStats_->queryThreadIoLatency().max() * 1000,
             RuntimeCounter::Unit::kNanos)},
        {"overreadBytes",
-        RuntimeCounter(
+        RuntimeMetric(
             ioStats_->rawOverreadBytes(), RuntimeCounter::Unit::kBytes)}});
   if (ioStats_->read().count() > 0) {
-    res.insert({"numStorageRead", RuntimeCounter(ioStats_->read().count())});
+    res.insert({"numStorageRead", RuntimeMetric(ioStats_->read().count())});
     res.insert(
         {"storageReadBytes",
-         RuntimeCounter(ioStats_->read().sum(), RuntimeCounter::Unit::kBytes)});
+         RuntimeMetric(ioStats_->read().sum(), RuntimeCounter::Unit::kBytes)});
   }
   if (ioStats_->ssdRead().count() > 0) {
-    res.insert({"numLocalRead", RuntimeCounter(ioStats_->ssdRead().count())});
+    res.insert({"numLocalRead", RuntimeMetric(ioStats_->ssdRead().count())});
     res.insert(
         {"localReadBytes",
-         RuntimeCounter(
+         RuntimeMetric(
              ioStats_->ssdRead().sum(), RuntimeCounter::Unit::kBytes)});
   }
   if (ioStats_->ramHit().count() > 0) {
-    res.insert({"numRamRead", RuntimeCounter(ioStats_->ramHit().count())});
+    res.insert({"numRamRead", RuntimeMetric(ioStats_->ramHit().count())});
     res.insert(
         {"ramReadBytes",
-         RuntimeCounter(
+         RuntimeMetric(
              ioStats_->ramHit().sum(), RuntimeCounter::Unit::kBytes)});
   }
   if (numBucketConversion_ > 0) {
-    res.insert({"numBucketConversion", RuntimeCounter(numBucketConversion_)});
+    res.insert({"numBucketConversion", RuntimeMetric(numBucketConversion_)});
   }
 
   const auto fsStats = fsStats_->stats();
   for (const auto& storageStats : fsStats) {
-    res.emplace(
-        storageStats.first,
-        RuntimeCounter(storageStats.second.sum, storageStats.second.unit));
+    res.emplace(storageStats.first, storageStats.second);
   }
   return res;
 }

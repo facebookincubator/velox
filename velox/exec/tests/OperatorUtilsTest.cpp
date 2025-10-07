@@ -48,7 +48,8 @@ class OperatorUtilsTest : public OperatorTestBase {
         std::move(planFragment),
         0,
         core::QueryCtx::create(executor_.get()),
-        Task::ExecutionMode::kParallel);
+        Task::ExecutionMode::kParallel,
+        exec::Consumer{});
     driver_ = Driver::testingCreate();
     driverCtx_ = std::make_unique<DriverCtx>(task_, 0, 0, 0, 0);
     driverCtx_->driver = driver_.get();

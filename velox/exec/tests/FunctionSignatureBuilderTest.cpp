@@ -124,7 +124,7 @@ TEST_F(FunctionSignatureBuilderTest, typeParamTests) {
           .returnType("integer")
           .argumentType("row(..., varchar)")
           .build(),
-      "Failed to parse type signature [row(..., varchar)]: syntax error, unexpected COMMA");
+      "Failed to parse type signature [row(..., varchar)]: syntax error, unexpected ELLIPSIS");
 
   // Type params cant have type params.
   VELOX_ASSERT_THROW(
@@ -153,6 +153,23 @@ TEST_F(FunctionSignatureBuilderTest, anyInReturn) {
           .argumentType("T")
           .build(),
       "Type 'Any' cannot appear in return type");
+}
+
+TEST_F(FunctionSignatureBuilderTest, homogeneousRowInReturn) {
+  VELOX_ASSERT_USER_THROW(
+      exec::FunctionSignatureBuilder()
+          .typeVariable("T")
+          .returnType("row(T, ...)")
+          .argumentType("T")
+          .build(),
+      "Homogeneous row cannot appear in return type");
+
+  VELOX_ASSERT_USER_THROW(
+      exec::FunctionSignatureBuilder()
+          .returnType("array(row(bigint, ...))")
+          .argumentType("bigint")
+          .build(),
+      "Homogeneous row cannot appear in return type");
 }
 
 TEST_F(FunctionSignatureBuilderTest, scalarConstantFlags) {

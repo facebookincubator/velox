@@ -1102,9 +1102,13 @@ std::string Driver::toString() const {
   }
 
   out << "{Operators: ";
-  for (auto& op : operators_) {
-    out << op->toString() << ", ";
-  }
+  std::vector<std::string> opStrs;
+  opStrs.reserve(operators_.size());
+  std::ranges::transform(
+      operators_, std::back_inserter(opStrs), [](const auto& op) {
+        return op->toString();
+      });
+  out << folly::join(", ", opStrs);
   out << "}";
   const auto ocs = opCallStatus();
   if (!ocs.empty()) {

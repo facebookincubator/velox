@@ -18,6 +18,7 @@
 
 #include "velox/dwio/common/tests/utils/DataSetBuilder.h"
 #include "velox/expression/Expr.h"
+#include "velox/expression/ExprConstants.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/parse/Expressions.h"
@@ -491,15 +492,31 @@ void E2EFilterTestBase::testMetadataFilterImpl(
     core::ExpressionEvaluator* evaluator,
     const std::string& remainingFilter,
     std::function<bool(int64_t, int64_t)> validationFilter) {
-  SCOPED_TRACE(fmt::format("remainingFilter={}", remainingFilter));
+  SCOPED_TRACE(fmt::format("remainingFilter='{}'", remainingFilter));
+  auto untypedExpr = parse::parseExpr(remainingFilter, {});
+  auto typedExpr = core::Expressions::inferTypes(
+      untypedExpr, batches[0]->type(), leafPool_.get());
+  testMetadataFilterImpl(
+      batches,
+      std::move(filterField),
+      std::move(filter),
+      evaluator,
+      std::move(typedExpr),
+      std::move(validationFilter));
+}
+
+void E2EFilterTestBase::testMetadataFilterImpl(
+    const std::vector<RowVectorPtr>& batches,
+    common::Subfield filterField,
+    std::unique_ptr<common::Filter> filter,
+    core::ExpressionEvaluator* evaluator,
+    core::TypedExprPtr typedExpr,
+    std::function<bool(int64_t, int64_t)> validationFilter) {
   auto spec = std::make_shared<common::ScanSpec>("<root>");
   if (filter) {
     spec->getOrCreateChild(std::move(filterField))
         ->setFilter(std::move(filter));
   }
-  auto untypedExpr = parse::parseExpr(remainingFilter, {});
-  auto typedExpr = core::Expressions::inferTypes(
-      untypedExpr, batches[0]->type(), leafPool_.get());
   auto metadataFilter =
       std::make_shared<MetadataFilter>(*spec, *typedExpr, evaluator);
   auto specA = spec->getOrCreateChild(common::Subfield("a"));
@@ -621,6 +638,56 @@ void E2EFilterTestBase::testMetadataFilter() {
       [](int64_t a, int64_t) {
         return !!(a == 2 || a == 3 || a == 5 || a == 7);
       });
+  {
+    SCOPED_TRACE("remainingFilter='a == 1 or a == 3 or a == 8'");
+    auto typedExpr1 = core::Expressions::inferTypes(
+        parse::parseExpr("a == 1", {}), batches[0]->type(), leafPool_.get());
+    auto typedExpr2 = core::Expressions::inferTypes(
+        parse::parseExpr("a == 3", {}), batches[0]->type(), leafPool_.get());
+    auto typedExpr3 = core::Expressions::inferTypes(
+        parse::parseExpr("a == 8", {}), batches[0]->type(), leafPool_.get());
+
+    auto typedExpr = std::make_shared<core::CallTypedExpr>(
+        velox::BOOLEAN(),
+        std::vector{
+            std::move(typedExpr1),
+            std::move(typedExpr2),
+            std::move(typedExpr3),
+        },
+        expression::kOr);
+    testMetadataFilterImpl(
+        batches,
+        common::Subfield("a"),
+        nullptr,
+        &evaluator,
+        std::move(typedExpr),
+        [](int64_t a, int64_t) { return a == 1 || a == 3 || a == 8; });
+  }
+  {
+    SCOPED_TRACE("remainingFilter='a >= 1 and a <= 100 and a == 8'");
+    auto typedExpr1 = core::Expressions::inferTypes(
+        parse::parseExpr("a >= 1", {}), batches[0]->type(), leafPool_.get());
+    auto typedExpr2 = core::Expressions::inferTypes(
+        parse::parseExpr("a <= 100", {}), batches[0]->type(), leafPool_.get());
+    auto typedExpr3 = core::Expressions::inferTypes(
+        parse::parseExpr("b.c != 8", {}), batches[0]->type(), leafPool_.get());
+
+    auto typedExpr = std::make_shared<core::CallTypedExpr>(
+        velox::BOOLEAN(),
+        std::vector{
+            std::move(typedExpr1),
+            std::move(typedExpr2),
+            std::move(typedExpr3),
+        },
+        expression::kAnd);
+    testMetadataFilterImpl(
+        batches,
+        common::Subfield("a"),
+        nullptr,
+        &evaluator,
+        std::move(typedExpr),
+        [](int64_t a, int64_t c) { return a >= 1 && a <= 100 && c != 8; });
+  }
 
   {
     SCOPED_TRACE("Values not unique in row group");
