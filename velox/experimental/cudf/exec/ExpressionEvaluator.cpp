@@ -567,13 +567,8 @@ cudf::ast::expression const& AstContext::pushExprToTree(
       VELOX_NYI("Unsupported switch complex operation " + expr->toString());
     }
   } else if (name == "year") {
-    VELOX_CHECK_EQ(len, 1);
-
-    auto fieldExpr =
-        std::dynamic_pointer_cast<FieldReference>(expr->inputs()[0]);
-    VELOX_CHECK_NOT_NULL(fieldExpr, "Expression is not a field");
-
-    auto const& colRef = addPrecomputeInstruction(fieldExpr->name(), "year");
+    auto node = CudfExpressionNode::create(expr);
+    auto const& colRef = addPrecomputeInstructionOnSide(0, 0, "year", "", node);
     if (type->kind() == TypeKind::BIGINT) {
       // Presto returns int64.
       return tree.push(Operation{Op::CAST_TO_INT64, colRef});
@@ -584,41 +579,19 @@ cudf::ast::expression const& AstContext::pushExprToTree(
     }
 
   } else if (name == "length") {
-    VELOX_CHECK_EQ(len, 1);
-
-    auto fieldExpr =
-        std::dynamic_pointer_cast<FieldReference>(expr->inputs()[0]);
-    VELOX_CHECK_NOT_NULL(fieldExpr, "Expression is not a field");
-
-    auto const& colRef = addPrecomputeInstruction(fieldExpr->name(), "length");
-
+    auto node = CudfExpressionNode::create(expr);
+    auto const& colRef =
+        addPrecomputeInstructionOnSide(0, 0, "length", "", node);
     return tree.push(Operation{Op::CAST_TO_INT64, colRef});
   } else if (name == "lower") {
-    VELOX_CHECK_EQ(len, 1);
-
-    auto fieldExpr =
-        std::dynamic_pointer_cast<FieldReference>(expr->inputs()[0]);
-    VELOX_CHECK_NOT_NULL(fieldExpr, "Expression is not a field");
-    return addPrecomputeInstruction(fieldExpr->name(), "lower");
+    auto node = CudfExpressionNode::create(expr);
+    return addPrecomputeInstructionOnSide(0, 0, "lower", "", node);
   } else if (name == "substr") {
-    // Build a cudf expression node for recursive evaluation
     auto node = CudfExpressionNode::create(expr);
     return addPrecomputeInstructionOnSide(0, 0, "substr", "", node);
   } else if (name == "like") {
-    VELOX_CHECK_EQ(len, 2);
-
-    auto fieldExpr =
-        std::dynamic_pointer_cast<FieldReference>(expr->inputs()[0]);
-    VELOX_CHECK_NOT_NULL(fieldExpr, "Expression is not a field");
-    auto literalExpr =
-        std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[1]);
-    VELOX_CHECK_NOT_NULL(literalExpr, "Expression is not a literal");
-
-    createLiteral(literalExpr->value(), scalars);
-
-    std::string likeExpr = "like " + std::to_string(scalars.size() - 1);
-
-    return addPrecomputeInstruction(fieldExpr->name(), likeExpr);
+    auto node = CudfExpressionNode::create(expr);
+    return addPrecomputeInstructionOnSide(0, 0, "like", "", node);
   } else if (name == "cardinality") {
     VELOX_CHECK_EQ(len, 1);
     // Build a cudf expression node for recursive evaluation
@@ -857,6 +830,88 @@ class HashFunction : public CudfFunction {
   uint32_t seedValue_;
 };
 
+class YearFunction : public CudfFunction {
+ public:
+  explicit YearFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+    VELOX_CHECK_EQ(
+        expr->inputs().size(), 1, "year expects exactly 1 input column");
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    auto inputCol = asView(inputColumns[0]);
+    return cudf::datetime::extract_datetime_component(
+        inputCol, cudf::datetime::datetime_component::YEAR, stream, mr);
+  }
+};
+
+class LengthFunction : public CudfFunction {
+ public:
+  explicit LengthFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+    VELOX_CHECK_EQ(
+        expr->inputs().size(), 1, "length expects exactly 1 input column");
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    auto inputCol = asView(inputColumns[0]);
+    return cudf::strings::count_characters(inputCol, stream, mr);
+  }
+};
+
+class LowerFunction : public CudfFunction {
+ public:
+  explicit LowerFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+    VELOX_CHECK_EQ(
+        expr->inputs().size(), 1, "lower expects exactly 1 input column");
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    auto inputCol = asView(inputColumns[0]);
+    return cudf::strings::to_lower(inputCol, stream, mr);
+  }
+};
+
+class LikeFunction : public CudfFunction {
+ public:
+  explicit LikeFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+    using velox::exec::ConstantExpr;
+    VELOX_CHECK_EQ(expr->inputs().size(), 2, "like expects 2 inputs");
+
+    auto stream = cudf::get_default_stream();
+    auto mr = cudf::get_current_device_resource_ref();
+
+    auto patternExpr =
+        std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[1]);
+    VELOX_CHECK_NOT_NULL(patternExpr, "like pattern must be a constant");
+    pattern_ = std::make_unique<cudf::string_scalar>(
+        patternExpr->value()->toString(0), true, stream, mr);
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    auto inputCol = asView(inputColumns[0]);
+    return cudf::strings::like(
+        inputCol,
+        *pattern_,
+        cudf::string_scalar("", true, stream, mr),
+        stream,
+        mr);
+  }
+
+ private:
+  std::unique_ptr<cudf::string_scalar> pattern_;
+};
+
 std::unordered_map<std::string, CudfFunctionFactory>&
 getCudfFunctionRegistry() {
   static std::unordered_map<std::string, CudfFunctionFactory> registry;
@@ -939,6 +994,54 @@ bool registerBuiltinFunctions(const std::string& prefix) {
       prefix + "round",
       [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
         return std::make_shared<RoundFunction>(expr);
+      });
+
+  registerCudfFunction(
+      "year",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<YearFunction>(expr);
+      });
+
+  registerCudfFunction(
+      prefix + "year",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<YearFunction>(expr);
+      });
+
+  registerCudfFunction(
+      "length",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<LengthFunction>(expr);
+      });
+
+  registerCudfFunction(
+      prefix + "length",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<LengthFunction>(expr);
+      });
+
+  registerCudfFunction(
+      "lower",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<LowerFunction>(expr);
+      });
+
+  registerCudfFunction(
+      prefix + "lower",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<LowerFunction>(expr);
+      });
+
+  registerCudfFunction(
+      "like",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<LikeFunction>(expr);
+      });
+
+  registerCudfFunction(
+      prefix + "like",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<LikeFunction>(expr);
       });
 
   return true;
@@ -1024,36 +1127,7 @@ void addPrecomputedColumns(
       }
       continue;
     }
-    if (ins_name == "year") {
-      auto newColumn = cudf::datetime::extract_datetime_component(
-          inputTableColumns[dependent_column_index]->view(),
-          cudf::datetime::datetime_component::YEAR,
-          stream,
-          cudf::get_current_device_resource_ref());
-      inputTableColumns.emplace_back(std::move(newColumn));
-    } else if (ins_name == "length") {
-      auto newColumn = cudf::strings::count_characters(
-          inputTableColumns[dependent_column_index]->view(),
-          stream,
-          cudf::get_current_device_resource_ref());
-      inputTableColumns.emplace_back(std::move(newColumn));
-    } else if (ins_name == "lower") {
-      auto newColumn = cudf::strings::to_lower(
-          inputTableColumns[dependent_column_index]->view(),
-          stream,
-          cudf::get_current_device_resource_ref());
-      inputTableColumns.emplace_back(std::move(newColumn));
-    } else if (ins_name.rfind("like", 0) == 0) {
-      auto scalarIndex = std::stoi(ins_name.substr(4));
-      auto newColumn = cudf::strings::like(
-          inputTableColumns[dependent_column_index]->view(),
-          *static_cast<cudf::string_scalar*>(scalars[scalarIndex].get()),
-          cudf::string_scalar(
-              "", true, stream, cudf::get_current_device_resource_ref()),
-          stream,
-          cudf::get_current_device_resource_ref());
-      inputTableColumns.emplace_back(std::move(newColumn));
-    } else if (ins_name.rfind("fill", 0) == 0) {
+    if (ins_name.rfind("fill", 0) == 0) {
       auto scalarIndex =
           std::stoi(ins_name.substr(5)); // "fill " is 5 characters
       auto newColumn = cudf::make_column_from_scalar(
