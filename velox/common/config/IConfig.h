@@ -34,10 +34,10 @@ class IConfig {
   template <typename T>
   std::optional<T> get(
       const std::string& key,
-      std::function<T(std::string, std::string)> toT = [](auto /* unused */,
-                                                          auto value) {
-        return folly::to<T>(value);
-      }) const {
+      const std::function<T(std::string, std::string)>& toT =
+          [](auto /* unused */, auto value) {
+            return folly::to<T>(value);
+          }) const {
     if (auto val = access(key)) {
       return toT(key, *val);
     }
@@ -48,10 +48,10 @@ class IConfig {
   T get(
       const std::string& key,
       const T& defaultValue,
-      std::function<T(std::string, std::string)> toT = [](auto /* unused */,
-                                                          auto value) {
-        return folly::to<T>(value);
-      }) const {
+      const std::function<T(std::string, std::string)>& toT =
+          [](auto /* unused */, auto value) {
+            return folly::to<T>(value);
+          }) const {
     if (auto val = access(key)) {
       return toT(key, *val);
     }
