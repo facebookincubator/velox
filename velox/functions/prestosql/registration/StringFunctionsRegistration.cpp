@@ -44,6 +44,8 @@ void registerSimpleFunctions(const std::string& prefix) {
       {prefix + "hamming_distance"});
   registerFunction<LevenshteinDistanceFunction, int64_t, Varchar, Varchar>(
       {prefix + "levenshtein_distance"});
+  registerFunction<LongestCommonPrefixFunction, Varchar, Varchar, Varchar>(
+      {prefix + "longest_common_prefix"});
   registerFunction<LengthFunction, int64_t, Varchar>({prefix + "length"});
   registerFunction<XxHash64StringFunction, int64_t, Varchar>(
       {prefix + "xxhash64_internal"});

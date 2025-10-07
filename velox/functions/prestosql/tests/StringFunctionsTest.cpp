@@ -1818,6 +1818,40 @@ TEST_F(StringFunctionsTest, ascinessOnDictionary) {
   ASSERT_EQ(ascii && ascii.value(), true);
 }
 
+TEST_F(StringFunctionsTest, longestCommonPrefix) {
+  const auto longestCommonPrefix = [&](std::optional<std::string> left,
+                                       std::optional<std::string> right) {
+    return evaluateOnce<std::string>(
+        "longest_common_prefix(c0, c1)", left, std::move(right));
+  };
+
+  // Test basic cases
+  EXPECT_EQ(longestCommonPrefix("hello", "help"), "hel");
+  EXPECT_EQ(longestCommonPrefix("hello", "world"), "");
+  EXPECT_EQ(longestCommonPrefix("same", "same"), "same");
+  EXPECT_EQ(longestCommonPrefix("", "anything"), "");
+  EXPECT_EQ(longestCommonPrefix("anything", ""), "");
+  EXPECT_EQ(longestCommonPrefix("", ""), "");
+
+  // Test with Unicode
+  EXPECT_EQ(longestCommonPrefix("café", "cat"), "ca");
+  EXPECT_EQ(longestCommonPrefix("préfix", "prefix"), "pr");
+  EXPECT_EQ(longestCommonPrefix("🚀🌟", "🚀🔥"), "🚀");
+
+  // Test null cases
+  EXPECT_EQ(longestCommonPrefix(std::nullopt, "hello"), std::nullopt);
+  EXPECT_EQ(longestCommonPrefix("hello", std::nullopt), std::nullopt);
+  EXPECT_EQ(longestCommonPrefix(std::nullopt, std::nullopt), std::nullopt);
+
+  // Test different lengths
+  EXPECT_EQ(longestCommonPrefix("a", "abcdef"), "a");
+  EXPECT_EQ(longestCommonPrefix("abcdef", "a"), "a");
+
+  // Test partial Unicode matches
+  EXPECT_EQ(longestCommonPrefix("Ψ", "Ψmore"), "Ψ");
+  EXPECT_EQ(longestCommonPrefix("hellö", "hell"), "hell");
+}
+
 TEST_F(StringFunctionsTest, vectorAccessCheck) {
   using S = StringView;
 
