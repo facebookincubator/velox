@@ -325,7 +325,6 @@ class PageReader {
       }
     } else {
       if (isDictionary()) {
-        //  LOG(DEBUG) << "PageReader: Using StringDictionaryColumnVisitor for row filtering (without nulls) - RowGroup:" << rowGroupIndex_ << " PageOrdinal:" << pageOrdinal_ << " PageIndex:" << pageIndex_;
         auto dictVisitor = visitor.toStringDictionaryColumnVisitor();
         dictionaryIdDecoder_->readWithVisitor<false>(nullptr, dictVisitor);
       } else if (encoding_ == thrift::Encoding::DELTA_BYTE_ARRAY) {

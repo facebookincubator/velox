@@ -220,14 +220,17 @@ ColumnChunkMetaDataPtr::getColumnStatistics(
 };
 
 bool ColumnChunkMetaDataPtr::hasEncodingStats() const {
-  return hasMetadata() && thriftColumnChunkPtr(ptr_)->meta_data.__isset.encoding_stats;
+  return hasMetadata() &&
+      thriftColumnChunkPtr(ptr_)->meta_data.__isset.encoding_stats;
 }
 
-const std::vector<thrift::PageEncodingStats>& ColumnChunkMetaDataPtr::getEncodingStats() const {
+const std::vector<thrift::PageEncodingStats>&
+ColumnChunkMetaDataPtr::getEncodingStats() const {
   return thriftColumnChunkPtr(ptr_)->meta_data.encoding_stats;
 }
 
-const std::vector<thrift::Encoding::type>& ColumnChunkMetaDataPtr::getEncoding() const {
+const std::vector<thrift::Encoding::type>& ColumnChunkMetaDataPtr::getEncoding()
+    const {
   return thriftColumnChunkPtr(ptr_)->meta_data.encodings;
 }
 

@@ -18,9 +18,9 @@
 
 #include <boost/algorithm/string.hpp>
 #include <glog/logging.h>
-#include <unordered_map>
 #include <thrift/TApplicationException.h>
 #include <thrift/protocol/TCompactProtocol.h> //@manual
+#include <unordered_map>
 
 #include "velox/dwio/parquet/reader/ParquetColumnReader.h"
 #include "velox/dwio/parquet/reader/StructColumnReader.h"
@@ -1237,7 +1237,8 @@ class ParquetRowReader::Impl {
     firstRowOfRowGroup_.reserve(rowGroups_.size());
 
     // Use regular row group filtering for now
-    // Dictionary-based filtering will be handled when dictionaries are naturally loaded during page reading
+    // Dictionary-based filtering will be handled when dictionaries are
+    // naturally loaded during page reading
     ParquetData::FilterRowGroupsResult res;
     columnReader_->filterRowGroups(0, parquetStatsContext_, res);
 

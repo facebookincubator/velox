@@ -44,7 +44,6 @@ class ColumnChunkMetaDataPtr {
 
   const std::vector<thrift::Encoding::type>& getEncoding() const;
 
-
   /// Return the ColumnChunk statistics.
   std::unique_ptr<dwio::common::ColumnStatistics> getColumnStatistics(
       const TypePtr type,
