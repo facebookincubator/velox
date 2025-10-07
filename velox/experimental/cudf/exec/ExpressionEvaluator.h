@@ -123,7 +123,8 @@ struct CudfExpressionNode {
       std::vector<std::unique_ptr<cudf::column>>& inputTableColumns,
       const RowTypePtr& inputRowSchema,
       rmm::cuda_stream_view stream,
-      rmm::device_async_resource_ref mr);
+      rmm::device_async_resource_ref mr,
+      bool finalize = false);
 };
 
 cudf::ast::expression const& createAstTree(

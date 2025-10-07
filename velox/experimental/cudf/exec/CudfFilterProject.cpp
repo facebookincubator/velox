@@ -194,16 +194,6 @@ std::vector<std::unique_ptr<cudf::column>> CudfFilterProject::project(
     inputChannelCount[identity.inputChannel]--;
   }
 
-  for (auto i = 0; i < outputColumns.size(); ++i) {
-    const auto cudfOutputType =
-        cudf::data_type(cudf_velox::veloxToCudfTypeId(outputType_->childAt(i)));
-
-    if (outputColumns[i]->type() != cudfOutputType) {
-      outputColumns[i] =
-          cudf::cast(*(outputColumns[i]), cudfOutputType, stream);
-    }
-  }
-
   return outputColumns;
 }
 

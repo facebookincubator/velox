@@ -15,6 +15,7 @@
  */
 #include "velox/experimental/cudf/exec/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
 #include "velox/expression/ConstantExpr.h"
 #include "velox/expression/FieldReference.h"
@@ -36,6 +37,7 @@
 #include <cudf/strings/split/split.hpp>
 #include <cudf/table/table.hpp>
 #include <cudf/transform.hpp>
+#include <cudf/unary.hpp>
 
 #include <limits>
 #include <type_traits>
@@ -225,6 +227,12 @@ std::string stripPrefix(const std::string& input, const std::string& prefix) {
   return input;
 }
 } // namespace
+
+std::unordered_map<std::string, CudfFunctionFactory>&
+getCudfFunctionRegistry() {
+  static std::unordered_map<std::string, CudfFunctionFactory> registry;
+  return registry;
+}
 
 using Op = cudf::ast::ast_operator;
 const std::unordered_map<std::string, Op> prestoBinaryOps = {
@@ -566,50 +574,9 @@ cudf::ast::expression const& AstContext::pushExprToTree(
     } else {
       VELOX_NYI("Unsupported switch complex operation " + expr->toString());
     }
-  } else if (name == "year") {
+  } else if (getCudfFunctionRegistry().contains(name)) {
     auto node = CudfExpressionNode::create(expr);
-    auto const& colRef = addPrecomputeInstructionOnSide(0, 0, "year", "", node);
-    if (type->kind() == TypeKind::BIGINT) {
-      // Presto returns int64.
-      return tree.push(Operation{Op::CAST_TO_INT64, colRef});
-    } else {
-      // Cudf returns smallint while spark returns int, cast the output column
-      // in execution.
-      return colRef;
-    }
-
-  } else if (name == "length") {
-    auto node = CudfExpressionNode::create(expr);
-    auto const& colRef =
-        addPrecomputeInstructionOnSide(0, 0, "length", "", node);
-    return tree.push(Operation{Op::CAST_TO_INT64, colRef});
-  } else if (name == "lower") {
-    auto node = CudfExpressionNode::create(expr);
-    return addPrecomputeInstructionOnSide(0, 0, "lower", "", node);
-  } else if (name == "substr") {
-    auto node = CudfExpressionNode::create(expr);
-    return addPrecomputeInstructionOnSide(0, 0, "substr", "", node);
-  } else if (name == "like") {
-    auto node = CudfExpressionNode::create(expr);
-    return addPrecomputeInstructionOnSide(0, 0, "like", "", node);
-  } else if (name == "cardinality") {
-    VELOX_CHECK_EQ(len, 1);
-    // Build a cudf expression node for recursive evaluation
-    auto node = CudfExpressionNode::create(expr);
-    auto const& colRef =
-        addPrecomputeInstructionOnSide(0, 0, "cardinality", "", node);
-
-    return tree.push(Operation{Op::CAST_TO_INT64, colRef});
-  } else if (name == "round") {
-    auto node = CudfExpressionNode::create(expr);
-    return addPrecomputeInstructionOnSide(0, 0, "round", "", node);
-  } else if (name == "split") {
-    VELOX_CHECK_EQ(len, 3);
-    auto node = CudfExpressionNode::create(expr);
-    return addPrecomputeInstructionOnSide(0, 0, "split", "", node);
-  } else if (name == "hash_with_seed") {
-    auto node = CudfExpressionNode::create(expr);
-    return addPrecomputeInstructionOnSide(0, 0, "hash_with_seed", "", node);
+    return addPrecomputeInstructionOnSide(0, 0, name, "", node);
   } else if (auto fieldExpr = std::dynamic_pointer_cast<FieldReference>(expr)) {
     // Refer to the appropriate side
     const auto fieldName =
@@ -912,12 +879,6 @@ class LikeFunction : public CudfFunction {
   std::unique_ptr<cudf::string_scalar> pattern_;
 };
 
-std::unordered_map<std::string, CudfFunctionFactory>&
-getCudfFunctionRegistry() {
-  static std::unordered_map<std::string, CudfFunctionFactory> registry;
-  return registry;
-}
-
 bool registerCudfFunction(
     const std::string& name,
     CudfFunctionFactory factory,
@@ -1070,7 +1031,8 @@ ColumnOrView CudfExpressionNode::eval(
     std::vector<std::unique_ptr<cudf::column>>& inputTableColumns,
     const RowTypePtr& inputRowSchema,
     rmm::cuda_stream_view stream,
-    rmm::device_async_resource_ref mr) {
+    rmm::device_async_resource_ref mr,
+    bool finalize) {
   using velox::exec::FieldReference;
 
   if (auto fieldExpr = std::dynamic_pointer_cast<FieldReference>(expr)) {
@@ -1088,7 +1050,17 @@ ColumnOrView CudfExpressionNode::eval(
           subexpr->eval(inputTableColumns, inputRowSchema, stream, mr));
     }
 
-    return function->eval(inputColumns, stream, mr);
+    auto result = function->eval(inputColumns, stream, mr);
+    if (finalize &&
+        std::holds_alternative<std::unique_ptr<cudf::column>>(result)) {
+      const auto requestedType =
+          cudf::data_type(cudf_velox::veloxToCudfTypeId(expr->type()));
+      auto& owned = std::get<std::unique_ptr<cudf::column>>(result);
+      if (owned->type() != requestedType) {
+        owned = cudf::cast(*owned, requestedType, stream, mr);
+      }
+    }
+    return result;
   }
 
   VELOX_FAIL(
@@ -1115,7 +1087,8 @@ void addPrecomputedColumns(
           inputTableColumns,
           inputRowSchema,
           stream,
-          cudf::get_current_device_resource_ref());
+          cudf::get_current_device_resource_ref(),
+          /*finalize=*/true);
       if (std::holds_alternative<cudf::column_view>(result)) {
         inputTableColumns.emplace_back(std::make_unique<cudf::column>(
             std::get<cudf::column_view>(result),
