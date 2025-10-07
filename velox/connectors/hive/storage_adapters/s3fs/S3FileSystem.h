@@ -46,9 +46,7 @@ void registerCredentialsProvider(
 /// type of file can be constructed based on a filename.
 class S3FileSystem : public FileSystem {
  public:
-  S3FileSystem(
-      std::string_view bucketName,
-      const std::shared_ptr<const config::ConfigBase> config);
+  S3FileSystem(std::string_view bucketName, const config::ConfigPtr config);
 
   std::string name() const override;
 

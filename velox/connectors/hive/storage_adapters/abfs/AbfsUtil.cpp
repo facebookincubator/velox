@@ -20,11 +20,10 @@
 
 namespace facebook::velox::filesystems {
 
-std::vector<CacheKey> extractCacheKeyFromConfig(
-    const config::ConfigBase& config) {
+std::vector<CacheKey> extractCacheKeyFromConfig(const config::IConfig& config) {
   std::vector<CacheKey> cacheKeys;
   constexpr std::string_view authTypePrefix{kAzureAccountAuthType};
-  for (const auto& [key, value] : config.rawConfigs()) {
+  for (const auto& [key, value] : config.rawConfigsCopy()) {
     if (key.find(authTypePrefix) == 0) {
       // Extract the accountName after "fs.azure.account.auth.type.".
       auto remaining = std::string_view(key).substr(authTypePrefix.size() + 1);

@@ -25,8 +25,7 @@ namespace facebook::velox::core {
 std::shared_ptr<QueryCtx> QueryCtx::create(
     folly::Executor* executor,
     QueryConfig&& queryConfig,
-    std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>
-        connectorConfigs,
+    ConnectorConfigs connectorConfigs,
     cache::AsyncDataCache* cache,
     std::shared_ptr<memory::MemoryPool> pool,
     folly::Executor* spillExecutor,
@@ -64,21 +63,20 @@ std::shared_ptr<QueryCtx> QueryCtx::Builder::build() {
 QueryCtx::QueryCtx(
     folly::Executor* executor,
     QueryConfig&& queryConfig,
-    std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>
-        connectorSessionProperties,
+    ConnectorConfigs&& connectorConfigs,
     cache::AsyncDataCache* cache,
     std::shared_ptr<memory::MemoryPool> pool,
     folly::Executor* spillExecutor,
-    const std::string& queryId,
+    std::string&& queryId,
     std::shared_ptr<filesystems::TokenProvider> tokenProvider)
-    : queryId_(queryId),
-      executor_(executor),
-      spillExecutor_(spillExecutor),
-      cache_(cache),
-      connectorSessionProperties_(connectorSessionProperties),
-      pool_(std::move(pool)),
+    : queryId_{std::move(queryId)},
+      executor_{executor},
+      spillExecutor_{spillExecutor},
+      cache_{cache},
+      connectorSessionProperties_{std::move(connectorConfigs)},
+      pool_{std::move(pool)},
       queryConfig_{std::move(queryConfig)},
-      fsTokenProvider_(std::move(tokenProvider)) {
+      fsTokenProvider_{std::move(tokenProvider)} {
   initPool(queryId);
 }
 

@@ -302,12 +302,10 @@ TEST_F(OperatorTraceTest, traceMetadata) {
           {core::QueryConfig::kSpillNumPartitionBits, "17"},
           {"key1", "value1"},
       };
-  const auto expectedConnectorProperties =
-      std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>{
-          {"test_trace",
-           std::make_shared<config::ConfigBase>(
-               std::unordered_map<std::string, std::string>{
-                   {"cKey1", "cVal1"}})}};
+  const auto expectedConnectorProperties = core::ConnectorConfigs{
+      {"test_trace",
+       std::make_shared<config::ConfigBase>(
+           std::unordered_map<std::string, std::string>{{"cKey1", "cVal1"}})}};
   const auto queryCtx = core::QueryCtx::create(
       executor_.get(),
       core::QueryConfig(expectedQueryConfigs),
@@ -398,12 +396,11 @@ TEST_F(OperatorTraceTest, task) {
             {"key1", "value1"},
         };
 
-    const auto expectedConnectorProperties =
-        std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>{
-            {"test_trace",
-             std::make_shared<config::ConfigBase>(
-                 std::unordered_map<std::string, std::string>{
-                     {"cKey1", "cVal1"}})}};
+    const auto expectedConnectorProperties = core::ConnectorConfigs{
+        {"test_trace",
+         std::make_shared<config::ConfigBase>(
+             std::unordered_map<std::string, std::string>{
+                 {"cKey1", "cVal1"}})}};
     const auto queryCtx = core::QueryCtx::create(
         executor_.get(),
         core::QueryConfig(expectedQueryConfigs),

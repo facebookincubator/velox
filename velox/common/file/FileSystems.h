@@ -26,8 +26,14 @@
 
 namespace facebook::velox {
 namespace config {
+class IConfig;
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
 class ConfigBase;
-}
+using ConfigPtr = std::shared_ptr<const ConfigBase>;
+#else
+using ConfigPtr = std::shared_ptr<const IConfig>;
+#endif
+} // namespace config
 class ReadFile;
 class WriteFile;
 namespace filesystems::File {
@@ -160,8 +166,7 @@ class IoStats {
 /// An abstract FileSystem
 class FileSystem {
  public:
-  FileSystem(std::shared_ptr<const config::ConfigBase> config)
-      : config_(std::move(config)) {}
+  FileSystem(config::ConfigPtr config) : config_(std::move(config)) {}
   virtual ~FileSystem() = default;
 
   /// Returns the name of the File System
@@ -234,12 +239,12 @@ class FileSystem {
   }
 
  protected:
-  std::shared_ptr<const config::ConfigBase> config_;
+  config::ConfigPtr config_;
 };
 
 std::shared_ptr<FileSystem> getFileSystem(
     std::string_view filename,
-    std::shared_ptr<const config::ConfigBase> config);
+    config::ConfigPtr config);
 
 /// Returns true if filePath is supported by any registered file system,
 /// otherwise false.
@@ -252,9 +257,9 @@ bool isPathSupportedByRegisteredFileSystems(const std::string_view& filePath);
 /// generates the actual file system.
 void registerFileSystem(
     std::function<bool(std::string_view)> schemeMatcher,
-    std::function<std::shared_ptr<FileSystem>(
-        std::shared_ptr<const config::ConfigBase>,
-        std::string_view)> fileSystemGenerator);
+    std::function<
+        std::shared_ptr<FileSystem>(config::ConfigPtr, std::string_view)>
+        fileSystemGenerator);
 
 /// Register the local filesystem.
 void registerLocalFileSystem(

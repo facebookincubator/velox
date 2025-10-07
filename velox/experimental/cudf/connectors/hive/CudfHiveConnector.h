@@ -34,7 +34,7 @@ class CudfHiveConnector final
  public:
   CudfHiveConnector(
       const std::string& id,
-      std::shared_ptr<const ConfigBase> config,
+      config::ConfigPtr config,
       folly::Executor* executor);
 
   std::unique_ptr<DataSource> createDataSource(
@@ -70,7 +70,7 @@ class CudfHiveConnectorFactory
 
   std::shared_ptr<Connector> newConnector(
       const std::string& id,
-      std::shared_ptr<const ConfigBase> config,
+      config::ConfigPtr config,
       folly::Executor* ioExecutor = nullptr,
       folly::Executor* cpuExecutor = nullptr) override;
 };

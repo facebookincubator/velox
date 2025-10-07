@@ -42,7 +42,7 @@ void registerIcebergInternalFunctions(const std::string& prefix) {
 
 IcebergConnector::IcebergConnector(
     const std::string& id,
-    std::shared_ptr<const config::ConfigBase> config,
+    config::ConfigPtr config,
     folly::Executor* ioExecutor)
     : HiveConnector(id, config, ioExecutor),
       functionPrefix_(config->get<std::string>(

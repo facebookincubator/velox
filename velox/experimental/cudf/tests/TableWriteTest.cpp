@@ -795,7 +795,7 @@ TEST_P(UnpartitionedTableWriterTest, immutableSettings) {
     std::unordered_map<std::string, std::string> propFromFile{
         {"parquet.immutable-files",
          testData.immutableFilesEnabled ? "true" : "false"}};
-    std::shared_ptr<const config::ConfigBase> config{
+    config::ConfigPtr config{
         std::make_shared<config::ConfigBase>(std::move(propFromFile))};
     resetCudfHiveConnector(config);
 
