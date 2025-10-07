@@ -828,7 +828,7 @@ TypePtr ReaderBase::convertType(
         VELOX_CHECK_EQ(
             schemaElement.type,
             thrift::Type::INT64,
-            "{} converted type can only be set for value of thrift::Type::INT32",
+            "{} converted type can only be set for value of thrift::Type::INT64",
             schemaElement.converted_type);
         VELOX_CHECK(
             !requestedType ||
