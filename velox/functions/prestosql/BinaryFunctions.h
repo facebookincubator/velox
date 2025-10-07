@@ -21,6 +21,7 @@
 
 #include "folly/ssl/OpenSSLHash.h"
 #include "velox/common/base/BitUtil.h"
+#include "velox/common/encode/Base32.h"
 #include "velox/common/encode/Base64.h"
 #include "velox/common/hyperloglog/Murmur3Hash128.h"
 #include "velox/external/md5/md5.h"
@@ -308,6 +309,43 @@ struct FromBase64Function {
     result.resize(decodedSize.value());
     return encoding::Base64::decode(
         input.data(), inputSize, result.data(), result.size());
+  }
+};
+
+namespace {
+inline std::array<int, 256> base32CharMap() {
+  std::array<int, 256> map{};
+  map.fill(-1);
+  const std::string base32Chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+
+  for (size_t i = 0; i < base32Chars.size(); ++i) {
+    char upper = base32Chars[i];
+    char lower = std::tolower(upper);
+    map[static_cast<unsigned char>(upper)] = static_cast<int>(i);
+    map[static_cast<unsigned char>(lower)] = static_cast<int>(i);
+  }
+  return map;
+}
+
+static const std::array<int, 256> base32Map = base32CharMap();
+} // namespace
+
+template <typename TExec>
+struct FromBase32Function {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  // T can be either arg_type<Varchar> or arg_type<Varbinary>. These are the
+  // same, but hard-coding one of them might be confusing.
+  template <typename T>
+  FOLLY_ALWAYS_INLINE Status call(out_type<Varbinary>& result, const T& input) {
+    try {
+      auto decoded = encoding::Base32::decode(
+          folly::StringPiece(input.data(), input.size()));
+      result.setNoCopy(StringView(decoded));
+      return Status::OK();
+    } catch (const VeloxException& e) {
+      return Status::UserError("{}", e.message());
+    }
   }
 };
 
