@@ -197,7 +197,7 @@ class [[nodiscard]] Status {
   constexpr Status() noexcept : state_(nullptr) {}
 
   ~Status() noexcept {
-    if (FOLLY_UNLIKELY(state_ != nullptr)) {
+    if (state_ != nullptr) [[likely]] {
       deleteState();
     }
   }
@@ -514,7 +514,7 @@ void Status::moveFrom(Status& s) {
 /// Return with given status if condition is met.
 #define VELOX_RETURN_IF(condition, status) \
   do {                                     \
-    if (FOLLY_UNLIKELY(condition)) {       \
+    if (condition) [[likely]] {       \
       return (status);                     \
     }                                      \
   } while (0)
@@ -529,7 +529,7 @@ void Status::moveFrom(Status& s) {
 
 #define _VELOX_RETURN_IMPL(expr, exprStr, error, ...)                    \
   do {                                                                   \
-    if (FOLLY_UNLIKELY(expr)) {                                          \
+    if (expr) [[likely]] {                                          \
       if (::facebook::velox::threadSkipErrorDetails()) {                 \
         return error();                                                  \
       }                                                                  \
@@ -634,7 +634,7 @@ using Expected = folly::Expected<T, Status>;
 /// Return with given status wrapped in folly::Unexpected if condition is met.
 #define VELOX_RETURN_UNEXPECTED_IF(condition, status) \
   do {                                                \
-    if (FOLLY_UNLIKELY(condition)) {                  \
+    if (condition) [[likely]] {                  \
       return (::folly::makeUnexpected(status));       \
     }                                                 \
   } while (false)

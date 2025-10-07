@@ -617,8 +617,7 @@ SharedArbitrator::sortAndGroupSpillCandidates(
         [](const ArbitrationCandidate& lhs, const ArbitrationCandidate& rhs) {
           const auto* lhsReclaimer = lhs.participant->pool()->reclaimer();
           const auto* rhsReclaimer = rhs.participant->pool()->reclaimer();
-          if (FOLLY_UNLIKELY(
-                  lhsReclaimer == nullptr || rhsReclaimer == nullptr)) {
+          if (lhsReclaimer == nullptr || rhsReclaimer == nullptr) [[unlikely]] {
             VELOX_FAIL(
                 "Spill candidates must have memory reclaimer set. Left '{}', right '{}'",
                 lhs.participant->name(),
@@ -775,7 +774,7 @@ uint64_t SharedArbitrator::allocateCapacityLocked(
     uint64_t minAllocateBytes) {
   VELOX_CHECK_LE(requestBytes, maxAllocateBytes);
 
-  if (FOLLY_UNLIKELY(!globalArbitrationWaiters_.empty())) {
+  if (!globalArbitrationWaiters_.empty()) [[unlikely]] {
     if ((participantId > globalArbitrationWaiters_.begin()->first) &&
         (requestBytes > minAllocateBytes)) {
       return 0;
@@ -796,7 +795,7 @@ uint64_t SharedArbitrator::allocateCapacityLocked(
     reservedBytes =
         std::min(minAllocateBytes - nonReservedBytes, freeReservedCapacity);
   }
-  if (FOLLY_UNLIKELY(nonReservedBytes + reservedBytes < requestBytes)) {
+  if (nonReservedBytes + reservedBytes < requestBytes) [[unlikely]] {
     return 0;
   }
 
@@ -1138,7 +1137,7 @@ void SharedArbitrator::checkIfAborted(ArbitrationOperation& op) {
 }
 
 void SharedArbitrator::checkIfTimeout(ArbitrationOperation& op) {
-  if (FOLLY_UNLIKELY(op.hasTimeout())) {
+  if (op.hasTimeout()) [[unlikely]] {
     VELOX_MEM_ARBITRATION_TIMEOUT(fmt::format(
         "Memory arbitration timed out on memory pool: {} after running {}",
         op.participant()->name(),
@@ -1452,7 +1451,7 @@ uint64_t SharedArbitrator::abort(
 }
 
 void SharedArbitrator::freeCapacity(uint64_t bytes) {
-  if (FOLLY_UNLIKELY(bytes == 0)) {
+  if (bytes == 0) [[unlikely]] {
     return;
   }
   std::vector<ContinuePromise> globalArbitrationWaitResumes;
@@ -1470,8 +1469,7 @@ void SharedArbitrator::freeCapacityLocked(
     std::vector<ContinuePromise>& resumes) {
   freeReservedCapacityLocked(bytes);
   freeNonReservedCapacity_ += bytes;
-  if (FOLLY_UNLIKELY(
-          freeNonReservedCapacity_ + freeReservedCapacity_ > capacity_)) {
+  if (freeNonReservedCapacity_ + freeReservedCapacity_ > capacity_) [[unlikely]] {
     VELOX_FAIL(
         "Free capacity {}/{} is larger than the max capacity {}, {}",
         succinctBytes(freeNonReservedCapacity_),

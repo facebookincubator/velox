@@ -810,8 +810,8 @@ class MemoryPoolImpl : public MemoryPool {
     int32_t numAttempts{0};
     for (;; ++numAttempts) {
       int64_t increment = reservationSizeLocked(size);
-      if (FOLLY_LIKELY(increment == 0)) {
-        if (FOLLY_UNLIKELY(reserveOnly)) {
+      if (increment == 0) [[likely]] {
+        if (reserveOnly) [[unlikely]] {
           minReservationBytes_ = tsanAtomicValue(reservationBytes_);
         } else {
           usedReservationBytes_ += size;
@@ -829,7 +829,7 @@ class MemoryPoolImpl : public MemoryPool {
     // incrementReservation(). This should happen rarely in production
     // as the leaf tracker does quantized memory reservation so that we don't
     // expect high concurrency at the root memory pool.
-    if (FOLLY_UNLIKELY(numAttempts > 1)) {
+    if (numAttempts > 1) [[unlikely]] {
       numCollisions_ += numAttempts - 1;
     }
   }
@@ -893,7 +893,7 @@ class MemoryPoolImpl : public MemoryPool {
     VELOX_DCHECK_NOT_NULL(parent_);
 
     int64_t newQuantized;
-    if (FOLLY_UNLIKELY(releaseOnly)) {
+    if (releaseOnly) [[unlikely]] {
       VELOX_DCHECK_EQ(size, 0);
       if (minReservationBytes_ == 0) {
         return;
@@ -908,7 +908,7 @@ class MemoryPoolImpl : public MemoryPool {
     }
 
     const int64_t freeable = reservationBytes_ - newQuantized;
-    if (FOLLY_UNLIKELY(freeable > 0)) {
+    if (freeable > 0) [[unlikely]] {
       reservationBytes_ = newQuantized;
       sanityCheckLocked();
       toImpl(parent_)->decrementReservation(freeable);
@@ -919,10 +919,9 @@ class MemoryPoolImpl : public MemoryPool {
   void decrementReservation(uint64_t size) noexcept;
 
   FOLLY_ALWAYS_INLINE void sanityCheckLocked() const {
-    if (FOLLY_UNLIKELY(
-            (reservationBytes_ < usedReservationBytes_) ||
+    if ((reservationBytes_ < usedReservationBytes_) ||
             (reservationBytes_ < minReservationBytes_) ||
-            (usedReservationBytes_ < 0))) {
+            (usedReservationBytes_ < 0)) [[unlikely]] {
       VELOX_FAIL("Bad memory usage track state: {}", toStringLocked());
     }
   }

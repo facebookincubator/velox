@@ -60,7 +60,7 @@ Status::Status(StatusCode code) {
 }
 
 Status::Status(StatusCode code, std::string msg) {
-  if (FOLLY_UNLIKELY(code == StatusCode::kOK)) {
+  if (code == StatusCode::kOK) [[unlikely]]  {
     throw std::invalid_argument("Cannot construct ok status with message");
   }
   state_ = new State;
