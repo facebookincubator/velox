@@ -473,7 +473,7 @@ class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
       MachinePageCount minSizeClass) const;
 
   FOLLY_ALWAYS_INLINE bool testingHasInjectedFailure(InjectedFailure failure) {
-    if (injectedFailure_ != failure) [[likely]]  {
+    if (injectedFailure_ != failure) [[likely]] {
       return false;
     }
     if (!isPersistentFailureInjection_) {

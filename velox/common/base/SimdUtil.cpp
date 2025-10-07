@@ -27,7 +27,7 @@ void gatherBits(
   const auto size = indexRange.size();
   auto indices = indexRange.data();
   uint8_t* resultPtr = reinterpret_cast<uint8_t*>(result);
-  if (size < 5)[[likely]] {
+  if (size < 5) [[likely]] {
     uint8_t smallResult = 0;
     for (auto i = 0; i < size; ++i) {
       smallResult |= static_cast<uint8_t>(bits::isBitSet(bits, indices[i]))

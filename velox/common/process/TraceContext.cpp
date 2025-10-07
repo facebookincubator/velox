@@ -44,7 +44,7 @@ TraceContext::TraceContext(std::string label, bool isTemporary)
     auto res =
         snprintf(entry.label, entry.kLabelCapacity, "%s", label_.c_str());
 
-    if (res < 0) [[unlikely]]  {
+    if (res < 0) [[unlikely]] {
       entry.label[0] = '\0';
     }
   });
