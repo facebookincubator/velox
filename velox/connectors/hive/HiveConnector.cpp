@@ -31,7 +31,7 @@ namespace facebook::velox::connector::hive {
 
 HiveConnector::HiveConnector(
     const std::string& id,
-    std::shared_ptr<const config::ConfigBase> config,
+    std::shared_ptr<const config::IConfig> config,
     folly::Executor* ioExecutor)
     : Connector(id, std::move(config)),
       hiveConfig_(std::make_shared<HiveConfig>(connectorConfig())),

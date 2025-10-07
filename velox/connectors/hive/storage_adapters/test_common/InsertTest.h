@@ -32,7 +32,7 @@ namespace facebook::velox::test {
 class InsertTest : public velox::test::VectorTestBase {
  protected:
   void SetUp(
-      std::shared_ptr<const config::ConfigBase> hiveConfig,
+      std::shared_ptr<const config::IConfig> hiveConfig,
       folly::Executor* ioExecutor) {
     connector::hive::HiveConnectorFactory factory;
     auto hiveConnector = factory.newConnector(

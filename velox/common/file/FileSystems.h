@@ -26,7 +26,7 @@
 
 namespace facebook::velox {
 namespace config {
-class ConfigBase;
+class IConfig;
 }
 class ReadFile;
 class WriteFile;
@@ -160,7 +160,7 @@ class IoStats {
 /// An abstract FileSystem
 class FileSystem {
  public:
-  FileSystem(std::shared_ptr<const config::ConfigBase> config)
+  FileSystem(std::shared_ptr<const config::IConfig> config)
       : config_(std::move(config)) {}
   virtual ~FileSystem() = default;
 
@@ -234,12 +234,12 @@ class FileSystem {
   }
 
  protected:
-  std::shared_ptr<const config::ConfigBase> config_;
+  std::shared_ptr<const config::IConfig> config_;
 };
 
 std::shared_ptr<FileSystem> getFileSystem(
     std::string_view filename,
-    std::shared_ptr<const config::ConfigBase> config);
+    std::shared_ptr<const config::IConfig> config);
 
 /// Returns true if filePath is supported by any registered file system,
 /// otherwise false.
@@ -253,7 +253,7 @@ bool isPathSupportedByRegisteredFileSystems(const std::string_view& filePath);
 void registerFileSystem(
     std::function<bool(std::string_view)> schemeMatcher,
     std::function<std::shared_ptr<FileSystem>(
-        std::shared_ptr<const config::ConfigBase>,
+        std::shared_ptr<const config::IConfig>,
         std::string_view)> fileSystemGenerator);
 
 /// Register the local filesystem.

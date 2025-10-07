@@ -40,7 +40,7 @@ namespace facebook::velox::wave {
 class WaveDataSource;
 }
 namespace facebook::velox::config {
-class ConfigBase;
+class IConfig;
 }
 
 namespace facebook::velox::core {
@@ -400,7 +400,7 @@ class ConnectorQueryCtx {
   ConnectorQueryCtx(
       memory::MemoryPool* operatorPool,
       memory::MemoryPool* connectorPool,
-      const config::ConfigBase* sessionProperties,
+      const config::IConfig* sessionProperties,
       const common::SpillConfig* spillConfig,
       common::PrefixSortConfig prefixSortConfig,
       std::unique_ptr<core::ExpressionEvaluator> expressionEvaluator,
@@ -445,7 +445,7 @@ class ConnectorQueryCtx {
     return connectorPool_;
   }
 
-  const config::ConfigBase* sessionProperties() const {
+  const config::IConfig* sessionProperties() const {
     return sessionProperties_;
   }
 
@@ -531,7 +531,7 @@ class ConnectorQueryCtx {
  private:
   memory::MemoryPool* const operatorPool_;
   memory::MemoryPool* const connectorPool_;
-  const config::ConfigBase* const sessionProperties_;
+  const config::IConfig* const sessionProperties_;
   const common::SpillConfig* const spillConfig_;
   const common::PrefixSortConfig prefixSortConfig_;
   const std::unique_ptr<core::ExpressionEvaluator> expressionEvaluator_;
@@ -576,7 +576,7 @@ class Connector {
  public:
   explicit Connector(
       const std::string& id,
-      std::shared_ptr<const config::ConfigBase> config = nullptr)
+      std::shared_ptr<const config::IConfig> config = nullptr)
       : id_(id), config_(std::move(config)) {}
 
   virtual ~Connector() = default;
@@ -585,7 +585,7 @@ class Connector {
     return id_;
   }
 
-  const std::shared_ptr<const config::ConfigBase>& connectorConfig() const {
+  const std::shared_ptr<const config::IConfig>& connectorConfig() const {
     return config_;
   }
 
@@ -698,7 +698,7 @@ class Connector {
   static void unregisterTracker(cache::ScanTracker* tracker);
 
   const std::string id_;
-  const std::shared_ptr<const config::ConfigBase> config_;
+  const std::shared_ptr<const config::IConfig> config_;
 
   static folly::Synchronized<
       std::unordered_map<std::string_view, std::weak_ptr<cache::ScanTracker>>>

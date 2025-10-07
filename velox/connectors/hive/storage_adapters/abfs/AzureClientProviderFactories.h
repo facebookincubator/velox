@@ -49,14 +49,14 @@ class AzureClientProviderFactories {
   /// is registered for the account specified in `abfsPath`.
   static std::unique_ptr<AzureBlobClient> getReadFileClient(
       const std::shared_ptr<AbfsPath>& abfsPath,
-      const config::ConfigBase& config);
+      const config::IConfig& config);
 
   /// Uses the registered AzureClientProviderFactory to create an
   /// AzureDataLakeFileClient for file write operations. Throws exception if no
   /// factory is registered for the account specified in `abfsPath`.
   static std::unique_ptr<AzureDataLakeFileClient> getWriteFileClient(
       const std::shared_ptr<AbfsPath>& abfsPath,
-      const config::ConfigBase& config);
+      const config::IConfig& config);
 };
 
 } // namespace facebook::velox::filesystems

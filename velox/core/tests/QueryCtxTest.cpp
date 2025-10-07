@@ -31,7 +31,7 @@ TEST_F(QueryCtxTest, withSysRootPool) {
   auto queryCtx = QueryCtx::create(
       nullptr,
       QueryConfig{{}},
-      std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>{},
+      ConnectorConfigs{},
       nullptr,
       memory::deprecatedRootPool().shared_from_this());
   auto* queryPool = queryCtx->pool();

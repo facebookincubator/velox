@@ -237,7 +237,7 @@ std::shared_ptr<::arrow::Field> updateFieldNameRecursive(
 }
 
 std::optional<TimestampPrecision> getTimestampUnit(
-    const config::ConfigBase& config,
+    const config::IConfig& config,
     const char* configKey) {
   if (const auto unit = config.get<uint8_t>(configKey)) {
     VELOX_CHECK(
@@ -250,7 +250,7 @@ std::optional<TimestampPrecision> getTimestampUnit(
 }
 
 std::optional<std::string> getTimestampTimeZone(
-    const config::ConfigBase& config,
+    const config::IConfig& config,
     const char* configKey) {
   if (const auto timezone = config.get<std::string>(configKey)) {
     return timezone.value();
@@ -259,7 +259,7 @@ std::optional<std::string> getTimestampTimeZone(
 }
 
 std::optional<bool> isParquetEnableDictionary(
-    const config::ConfigBase& config,
+    const config::IConfig& config,
     const char* configKey) {
   try {
     if (const auto enableDictionary = config.get<bool>(configKey)) {
@@ -273,7 +273,7 @@ std::optional<bool> isParquetEnableDictionary(
 }
 
 std::optional<bool> getParquetDataPageVersion(
-    const config::ConfigBase& config,
+    const config::IConfig& config,
     const char* configKey) {
   if (const auto version = config.get<std::string>(configKey)) {
     if (version == "V1") {
@@ -288,7 +288,7 @@ std::optional<bool> getParquetDataPageVersion(
 }
 
 std::optional<int64_t> getParquetPageSize(
-    const config::ConfigBase& config,
+    const config::IConfig& config,
     const char* configKey) {
   if (const auto pageSize = config.get<std::string>(configKey)) {
     return config::toCapacity(pageSize.value(), config::CapacityUnit::BYTE);
@@ -297,7 +297,7 @@ std::optional<int64_t> getParquetPageSize(
 }
 
 std::optional<int64_t> getParquetBatchSize(
-    const config::ConfigBase& config,
+    const config::IConfig& config,
     const char* configKey) {
   try {
     if (const auto batchSize = config.get<int64_t>(configKey)) {
@@ -310,7 +310,7 @@ std::optional<int64_t> getParquetBatchSize(
 }
 
 std::optional<std::string> getParquetCreatedBy(
-    const config::ConfigBase& config,
+    const config::IConfig& config,
     const char* configKey) {
   if (config.get<std::string>(configKey).has_value()) {
     return config.get<std::string>(configKey).value();
@@ -556,8 +556,8 @@ ParquetWriterFactory::createWriterOptions() {
 }
 
 void WriterOptions::processConfigs(
-    const config::ConfigBase& connectorConfig,
-    const config::ConfigBase& session) {
+    const config::IConfig& connectorConfig,
+    const config::IConfig& session) {
   auto parquetWriterOptions = dynamic_cast<WriterOptions*>(this);
   VELOX_CHECK_NOT_NULL(
       parquetWriterOptions, "Expected a Parquet WriterOptions object.");

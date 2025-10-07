@@ -26,7 +26,7 @@ using namespace facebook::velox::connector;
 
 CudfHiveConnector::CudfHiveConnector(
     const std::string& id,
-    std::shared_ptr<const facebook::velox::config::ConfigBase> config,
+    std::shared_ptr<const facebook::velox::config::IConfig> config,
     folly::Executor* executor)
     : ::facebook::velox::connector::hive::HiveConnector(id, config, executor),
       cudfHiveConfig_(std::make_shared<CudfHiveConfig>(config)) {
@@ -67,7 +67,7 @@ std::unique_ptr<DataSource> CudfHiveConnector::createDataSource(
 
 std::shared_ptr<Connector> CudfHiveConnectorFactory::newConnector(
     const std::string& id,
-    std::shared_ptr<const facebook::velox::config::ConfigBase> config,
+    std::shared_ptr<const facebook::velox::config::IConfig> config,
     folly::Executor* ioExecutor,
     folly::Executor* cpuExecutor) {
   return std::make_shared<CudfHiveConnector>(id, config, ioExecutor);
