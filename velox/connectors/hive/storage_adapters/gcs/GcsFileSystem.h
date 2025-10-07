@@ -30,7 +30,7 @@ class GcsFileSystem : public FileSystem {
  public:
   explicit GcsFileSystem(
       const std::string& bucket,
-      std::shared_ptr<const config::ConfigBase> config);
+      std::shared_ptr<const config::IConfig> config);
 
   /// Initialize the google::cloud::storage::Client from the input Config
   /// parameters.

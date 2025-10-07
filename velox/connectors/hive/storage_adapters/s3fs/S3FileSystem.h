@@ -48,7 +48,7 @@ class S3FileSystem : public FileSystem {
  public:
   S3FileSystem(
       std::string_view bucketName,
-      const std::shared_ptr<const config::ConfigBase> config);
+      const std::shared_ptr<const config::IConfig> config);
 
   std::string name() const override;
 

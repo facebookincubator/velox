@@ -38,10 +38,10 @@ FileSystemMap& gcsFileSystems() {
 }
 
 std::function<std::shared_ptr<
-    FileSystem>(std::shared_ptr<const config::ConfigBase>, std::string_view)>
+    FileSystem>(std::shared_ptr<const config::IConfig>, std::string_view)>
 gcsFileSystemGenerator() {
   static auto filesystemGenerator =
-      [](std::shared_ptr<const config::ConfigBase> properties,
+      [](std::shared_ptr<const config::IConfig> properties,
          std::string_view filePath) {
         const auto file = gcsPath(filePath);
         std::string bucket;
