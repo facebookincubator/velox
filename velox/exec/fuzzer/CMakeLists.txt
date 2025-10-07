@@ -25,6 +25,7 @@ add_library(
   PrestoQueryRunnerToSqlPlanNodeVisitor.cpp
   FuzzerUtil.cpp
   PrestoSql.cpp
+  VeloxQueryRunner.cpp
 )
 
 target_link_libraries(
