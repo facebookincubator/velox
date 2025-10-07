@@ -682,7 +682,10 @@ bool HiveDataSink::finish() {
 std::vector<std::string> HiveDataSink::close() {
   setState(State::kClosed);
   closeInternal();
+  return commitMessage();
+}
 
+std::vector<std::string> HiveDataSink::commitMessage() const {
   std::vector<std::string> partitionUpdates;
   partitionUpdates.reserve(writerInfo_.size());
   for (int i = 0; i < writerInfo_.size(); ++i) {
@@ -846,8 +849,9 @@ uint32_t HiveDataSink::appendWriter(const HiveWriterId& id) {
   writer = maybeCreateBucketSortWriter(std::move(writer));
   writers_.emplace_back(std::move(writer));
   addThreadLocalRuntimeStat(
-      std::string(dwio::common::toString(insertTableHandle_->storageFormat())) +
-          "WriterCount",
+      fmt::format(
+          "{}WriterCount",
+          dwio::common::toString(insertTableHandle_->storageFormat())),
       RuntimeCounter(1));
   // Extends the buffer used for partition rows calculations.
   partitionSizes_.emplace_back(0);

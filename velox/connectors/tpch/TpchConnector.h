@@ -117,7 +117,7 @@ class TpchDataSource : public DataSource {
     return completedBytes_;
   }
 
-  std::unordered_map<std::string, RuntimeCounter> runtimeStats() override {
+  std::unordered_map<std::string, RuntimeMetric> getRuntimeStats() override {
     // TODO: Which stats do we want to expose here?
     return {};
   }

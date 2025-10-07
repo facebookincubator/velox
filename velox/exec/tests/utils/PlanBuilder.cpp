@@ -718,7 +718,8 @@ PlanBuilder& PlanBuilder::tableWrite(
     const common::CompressionKind compressionKind,
     const RowTypePtr& schema,
     const bool ensureFiles,
-    const connector::CommitStrategy commitStrategy) {
+    const connector::CommitStrategy commitStrategy,
+    std::shared_ptr<core::InsertTableHandle> insertTableHandle) {
   return TableWriterBuilder(*this)
       .outputDirectoryPath(outputDirectoryPath)
       .outputFileName(outputFileName)
@@ -735,6 +736,7 @@ PlanBuilder& PlanBuilder::tableWrite(
       .compressionKind(compressionKind)
       .ensureFiles(ensureFiles)
       .commitStrategy(commitStrategy)
+      .insertHandle(insertTableHandle)
       .endTableWriter();
 }
 

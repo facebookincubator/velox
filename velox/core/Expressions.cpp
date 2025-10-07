@@ -466,7 +466,7 @@ TypedExprPtr FieldAccessTypedExpr::rewriteInputNames(
   VELOX_CHECK_EQ(1, newInputs.size());
   // Only rewrite name if input in InputTypedExpr. Rewrite in other
   // cases(like dereference) is unsound.
-  if (!is_instance_of<InputTypedExpr>(newInputs[0])) {
+  if (!newInputs[0]->isInputKind()) {
     return std::make_shared<FieldAccessTypedExpr>(type(), newInputs[0], name_);
   }
   auto it = mapping.find(name_);

@@ -22,6 +22,16 @@
 
 namespace facebook::velox::cudf_velox::connector::hive {
 
+namespace {
+std::string stripFilePrefix(const std::string& targetPath) {
+  const std::string prefix = "file:";
+  if (targetPath.rfind(prefix, 0) == 0) {
+    return targetPath.substr(prefix.length());
+  }
+  return targetPath;
+}
+} // namespace
+
 std::string CudfHiveConnectorSplit::toString() const {
   return fmt::format("CudfHive: {}", filePath);
 }
@@ -30,6 +40,14 @@ std::string CudfHiveConnectorSplit::getFileName() const {
   const auto i = filePath.rfind('/');
   return i == std::string::npos ? filePath : filePath.substr(i + 1);
 }
+
+CudfHiveConnectorSplit::CudfHiveConnectorSplit(
+    const std::string& connectorId,
+    const std::string& _filePath,
+    int64_t _splitWeight)
+    : facebook::velox::connector::ConnectorSplit(connectorId, _splitWeight),
+      filePath(stripFilePrefix(_filePath)),
+      cudfSourceInfo(std::make_unique<cudf::io::source_info>(filePath)) {}
 
 // static
 std::shared_ptr<CudfHiveConnectorSplit> CudfHiveConnectorSplit::create(

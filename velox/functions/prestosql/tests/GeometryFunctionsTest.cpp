@@ -3963,3 +3963,192 @@ TEST_F(GeometryFunctionsTest, testGeometryUnion) {
   // Null elements in input array should be ignored
   testGeometryUnionFunc({{std::nullopt, "POINT (1 2)"}}, "POINT (1 2)");
 }
+
+TEST_F(GeometryFunctionsTest, testStLineFromText) {
+  const auto testStLineFromTextFunc =
+      [&](const std::optional<std::string>& wkt) {
+        auto res =
+            evaluateOnce<std::string>("ST_AsText(ST_LineFromText(c0))", wkt);
+
+        if (wkt.has_value()) {
+          ASSERT_TRUE(res.has_value());
+          ASSERT_EQ(wkt.value(), res.value());
+        } else {
+          ASSERT_FALSE(res.has_value());
+        }
+      };
+
+  testStLineFromTextFunc("LINESTRING EMPTY");
+  testStLineFromTextFunc("LINESTRING (1 1, 2 2, 1 3)");
+  VELOX_ASSERT_USER_THROW(
+      testStLineFromTextFunc("xyz"),
+      "Failed to parse WKT: ParseException: Unknown type: 'XYZ'");
+  VELOX_ASSERT_USER_THROW(
+      testStLineFromTextFunc("MULTILINESTRING EMPTY"),
+      "ST_LineFromText only applies to LineString. Input type is: MultiLineString");
+  VELOX_ASSERT_USER_THROW(
+      testStLineFromTextFunc("POLYGON ((1 1, 1 4, 4 4, 4 1, 1 1))"),
+      "ST_LineFromText only applies to LineString. Input type is: Polygon");
+  VELOX_ASSERT_USER_THROW(
+      testStLineFromTextFunc("LINESTRING (0 0)"),
+      "Failed to parse WKT: IllegalArgumentException: point array must contain 0 or >1 elements");
+  VELOX_ASSERT_USER_THROW(
+      testStLineFromTextFunc("LINESTRING (0 0, 1)"),
+      "Failed to parse WKT: ParseException: Expected number but encountered ')'");
+  testStLineFromTextFunc(std::nullopt);
+}
+
+TEST_F(GeometryFunctionsTest, testStLineString) {
+  const auto testStLineStringFunc = [&](const std::optional<std::vector<
+                                            std::optional<std::string>>>& wkts,
+                                        const std::optional<std::string>&
+                                            expected) {
+    auto arrayVec = makeNullableArrayVector<std::string>({{wkts}});
+    auto input = makeRowVector({arrayVec});
+    std::optional<std::string> result = evaluateOnce<std::string>(
+        "St_AsText(ST_LineString(transform(c0, x -> ST_GEOMETRYFROMTEXT(x))))",
+        input);
+
+    if (expected.has_value()) {
+      ASSERT_TRUE(result.has_value());
+      ASSERT_EQ(expected.value(), result.value());
+    } else {
+      ASSERT_FALSE(result.has_value());
+    }
+  };
+
+  // Happy cases
+  testStLineStringFunc(
+      {{"POINT (1 2)", "POINT (3 4)"}}, "LINESTRING (1 2, 3 4)");
+  testStLineStringFunc(
+      {{"POINT (1 2)", "POINT (3 4)", "POINT (5 6)"}},
+      "LINESTRING (1 2, 3 4, 5 6)");
+  testStLineStringFunc(
+      {{"POINT (1 2)", "POINT (3 4)", "POINT (5 6)", "POINT (7 8)"}},
+      "LINESTRING (1 2, 3 4, 5 6, 7 8)");
+
+  // < 2 Points returns empty
+  testStLineStringFunc({{"POINT (1 2)"}}, "LINESTRING EMPTY");
+  testStLineStringFunc({{}}, "LINESTRING EMPTY");
+  // Duplicate consecutive points throws exception
+  VELOX_ASSERT_USER_THROW(
+      testStLineStringFunc({{"POINT (1 2)", "POINT (1 2)"}}, std::nullopt),
+      "Repeated point sequence in ST_LineString: point 1,2 at index 1.");
+  // Only points can be passed
+  VELOX_ASSERT_USER_THROW(
+      testStLineStringFunc(
+          {{"POLYGON ((1 2, 3 4, 5 6, 1 2))", "POINT (1 2)"}}, std::nullopt),
+      "Non-point geometry in ST_LineString input at index 0.");
+  // Empty points are invalid
+  VELOX_ASSERT_USER_THROW(
+      testStLineStringFunc({{"POINT (1 2)", "POINT EMPTY"}}, std::nullopt),
+      "Empty point in ST_LineString input at index 1.");
+  VELOX_ASSERT_USER_THROW(
+      testStLineStringFunc(
+          {{"POINT (1 2)", "POINT EMPTY", "POINT (1 2)"}}, std::nullopt),
+      "Empty point in ST_LineString input at index 1.");
+  VELOX_ASSERT_USER_THROW(
+      testStLineStringFunc(
+          {{"POINT (1 2)", "POINT EMPTY", "POINT (1 2)", "POINT EMPTY"}},
+          std::nullopt),
+      "Empty point in ST_LineString input at index 1.");
+  VELOX_ASSERT_USER_THROW(
+      testStLineStringFunc({{"POINT EMPTY"}}, std::nullopt),
+      "Empty point in ST_LineString input at index 0.");
+
+  // Null elements in array are invalid
+  VELOX_ASSERT_USER_THROW(
+      testStLineStringFunc({{"POINT (1 2)", std::nullopt}}, std::nullopt),
+      "Invalid input to ST_LineString: input array contains null at index 1.");
+  VELOX_ASSERT_USER_THROW(
+      testStLineStringFunc({{std::nullopt, "POINT (1 2)"}}, std::nullopt),
+      "Invalid input to ST_LineString: input array contains null at index 0.");
+  VELOX_ASSERT_USER_THROW(
+      testStLineStringFunc(
+          std::vector<std::optional<std::string>>{std::nullopt}, std::nullopt),
+      "Invalid input to ST_LineString: input array contains null at index 0.");
+  VELOX_ASSERT_USER_THROW(
+      testStLineStringFunc(
+          std::vector<std::optional<std::string>>{std::nullopt, std::nullopt},
+          std::nullopt),
+      "Invalid input to ST_LineString: input array contains null at index 0.");
+}
+
+TEST_F(GeometryFunctionsTest, testStMultiPoint) {
+  const auto testStMultiPointFunc = [&](const std::optional<std::vector<
+                                            std::optional<std::string>>>& wkts,
+                                        const std::optional<std::string>&
+                                            expected) {
+    auto arrayVec = makeNullableArrayVector<std::string>({{wkts}});
+    auto input = makeRowVector({arrayVec});
+    std::optional<std::string> result = evaluateOnce<std::string>(
+        "St_AsText(ST_MultiPoint(transform(c0, x -> ST_GEOMETRYFROMTEXT(x))))",
+        input);
+
+    if (expected.has_value()) {
+      ASSERT_TRUE(result.has_value());
+      ASSERT_EQ(expected.value(), result.value());
+    } else {
+      ASSERT_FALSE(result.has_value());
+    }
+  };
+
+  // Happy cases
+  testStMultiPointFunc(
+      {{"POINT (1 2)", "POINT (3 4)"}}, "MULTIPOINT (1 2, 3 4)");
+  testStMultiPointFunc(
+      {{"POINT (1 2)", "POINT (3 4)", "POINT (5 6)"}},
+      "MULTIPOINT (1 2, 3 4, 5 6)");
+  testStMultiPointFunc(
+      {{"POINT (1 2)", "POINT (3 4)", "POINT (5 6)", "POINT (7 8)"}},
+      "MULTIPOINT (1 2, 3 4, 5 6, 7 8)");
+
+  // Duplicate points work
+  testStMultiPointFunc(
+      {{"POINT (1 2)", "POINT (1 2)"}}, "MULTIPOINT (1 2, 1 2)");
+  testStMultiPointFunc(
+      {{"POINT (1 2)", "POINT (3 4)", "POINT (1 2)"}},
+      "MULTIPOINT (1 2, 3 4, 1 2)");
+
+  // Single point
+  testStMultiPointFunc({{"POINT (1 2)"}}, "MULTIPOINT (1 2)");
+
+  // Empty array
+  testStMultiPointFunc({{}}, std::nullopt);
+
+  // Only points can be passed
+  VELOX_ASSERT_USER_THROW(
+      testStMultiPointFunc(
+          {{"POINT (7 8)", "LINESTRING (1 2, 3 4)"}}, std::nullopt),
+      "Non-point geometry in ST_MultiPoint input at index 1.");
+
+  VELOX_ASSERT_USER_THROW(
+      testStMultiPointFunc(
+          {{"POINT (7 8)", "MULTIPOINT ((1 2), (3 4))"}}, std::nullopt),
+      "Non-point geometry in ST_MultiPoint input at index 1.");
+
+  // Null elements in array are invalid
+  VELOX_ASSERT_USER_THROW(
+      testStMultiPointFunc({{"POINT (1 2)", std::nullopt}}, std::nullopt),
+      "Invalid input to ST_MultiPoint: input array contains null at index 1.");
+  VELOX_ASSERT_USER_THROW(
+      testStMultiPointFunc({{std::nullopt, "POINT (1 2)"}}, std::nullopt),
+      "Invalid input to ST_MultiPoint: input array contains null at index 0.");
+  VELOX_ASSERT_USER_THROW(
+      testStMultiPointFunc(
+          std::vector<std::optional<std::string>>{std::nullopt}, std::nullopt),
+      "Invalid input to ST_MultiPoint: input array contains null at index 0.");
+  VELOX_ASSERT_USER_THROW(
+      testStMultiPointFunc(
+          std::vector<std::optional<std::string>>{std::nullopt, std::nullopt},
+          std::nullopt),
+      "Invalid input to ST_MultiPoint: input array contains null at index 0.");
+
+  // Empty elements in array are invalid
+  VELOX_ASSERT_USER_THROW(
+      testStMultiPointFunc({{"POINT EMPTY"}}, std::nullopt),
+      "Empty point in ST_MultiPoint input at index 0.");
+  VELOX_ASSERT_USER_THROW(
+      testStMultiPointFunc({{"POINT (1 2)", "POINT EMPTY"}}, std::nullopt),
+      "Empty point in ST_MultiPoint input at index 1.");
+}

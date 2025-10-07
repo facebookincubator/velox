@@ -199,6 +199,10 @@ class Buffer {
         sizeof(T), is_pod_like_v<T>, buffer, offset, length);
   }
 
+  virtual bool transferTo(velox::memory::MemoryPool* /*pool*/) {
+    VELOX_NYI("{} unsupported", __FUNCTION__);
+  }
+
  protected:
   // Writes a magic word at 'capacity_'. No-op for a BufferView. The actual
   // logic is inside a separate virtual function, allowing override by derived
@@ -504,6 +508,42 @@ class AlignedBuffer : public Buffer {
     return newBuffer;
   }
 
+  template <typename T>
+  static BufferPtr copy(
+      const BufferPtr& buffer,
+      velox::memory::MemoryPool* pool) {
+    if (buffer == nullptr) {
+      return nullptr;
+    }
+
+    // The reason we use uint8_t is because mutableNulls()->size() will return
+    // in byte count. We also don't bother initializing since copyFrom will be
+    // overwriting anyway.
+    BufferPtr newBuffer;
+    if constexpr (std::is_same_v<T, bool>) {
+      newBuffer = AlignedBuffer::allocate<uint8_t>(buffer->size(), pool);
+    } else {
+      const auto numElements = checkedDivide(buffer->size(), sizeof(T));
+      newBuffer = AlignedBuffer::allocate<T>(numElements, pool);
+    }
+
+    newBuffer->copyFrom(buffer.get(), newBuffer->size());
+
+    return newBuffer;
+  }
+
+  bool transferTo(velox::memory::MemoryPool* pool) override {
+    if (pool_ == pool) {
+      return true;
+    }
+    if (pool_->transferTo(
+            pool, this, checkedPlus<size_t>(kPaddedSize, capacity_))) {
+      setPool(pool);
+      return true;
+    }
+    return false;
+  }
+
  protected:
   AlignedBuffer(velox::memory::MemoryPool* pool, size_t capacity)
       : Buffer(
@@ -542,6 +582,12 @@ class AlignedBuffer : public Buffer {
       memset(asMutable<char>() + oldBytes, 0xa1, capacity() - oldBytes);
 #endif
     }
+  }
+
+  void setPool(velox::memory::MemoryPool* pool) {
+    velox::memory::MemoryPool** poolPtr =
+        const_cast<velox::memory::MemoryPool**>(&pool_);
+    *poolPtr = pool;
   }
 
  protected:
@@ -607,6 +653,23 @@ class NonPODAlignedBuffer : public Buffer {
     for (int i = newN; i < oldN; ++i) {
       data[i].~T();
     }
+  }
+
+  bool transferTo(velox::memory::MemoryPool* pool) override {
+    if (pool_ == pool) {
+      return true;
+    }
+
+    if (pool_->transferTo(
+            pool,
+            this,
+            checkedPlus<size_t>(AlignedBuffer::kPaddedSize, capacity_))) {
+      velox::memory::MemoryPool** poolPtr =
+          const_cast<velox::memory::MemoryPool**>(&pool_);
+      *poolPtr = pool;
+      return true;
+    }
+    return false;
   }
 
  protected:
@@ -711,6 +774,13 @@ class BufferView : public Buffer {
 
   bool isView() const override {
     return true;
+  }
+
+  bool transferTo(velox::memory::MemoryPool* pool) override {
+    if (pool_ == pool) {
+      return true;
+    }
+    return false;
   }
 
  private:

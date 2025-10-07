@@ -66,5 +66,20 @@ TEST_F(ExprTest, hashMap) {
   }
 }
 
+TEST_F(ExprTest, dropAlias) {
+  EXPECT_EQ(parse("a + b")->dropAlias()->toString(), R"(plus("a","b"))");
+  EXPECT_EQ(parse("a + b as c")->dropAlias()->toString(), R"(plus("a","b"))");
+
+  EXPECT_EQ(
+      parse("cast(a as date)")->dropAlias()->toString(),
+      R"(cast("a" as DATE))");
+  EXPECT_EQ(
+      parse("cast(a as date) as b")->dropAlias()->toString(),
+      R"(cast("a" as DATE))");
+
+  EXPECT_EQ(parse("a + 10")->dropAlias()->toString(), R"(plus("a",10))");
+  EXPECT_EQ(parse("a + 10 as b")->dropAlias()->toString(), R"(plus("a",10))");
+}
+
 } // namespace
 } // namespace facebook::velox::core

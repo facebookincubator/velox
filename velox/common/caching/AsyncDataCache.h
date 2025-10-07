@@ -308,7 +308,7 @@ class AsyncDataCacheEntry {
   // True if 'this' is speculatively loaded. This is reset on first hit. Allows
   // catching a situation where prefetched entries get evicted before they are
   // hit.
-  bool isPrefetch_{false};
+  tsan_atomic<bool> isPrefetch_{false};
 
   // Sets after first use of a prefetched entry. Cleared by
   // getAndClearFirstUseFlag(). Does not require synchronization since used for
@@ -496,6 +496,10 @@ struct CacheStats {
   int64_t largePadding{0};
   /// Total number of entries.
   int32_t numEntries{0};
+  /// Total number of tiny entries.
+  int32_t numTinyEntries{0};
+  /// Total number of large entries.
+  int32_t numLargeEntries{0};
   /// Number of entries that do not cache anything.
   int32_t numEmptyEntries{0};
   /// Number of entries pinned for shared access.

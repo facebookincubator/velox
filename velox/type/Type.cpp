@@ -1502,6 +1502,34 @@ folly::dynamic TimeType::serialize() const {
   return obj;
 }
 
+StringView TimeType::valueToString(int64_t value, char* const startPos) const {
+  // Ensure the value is within valid TIME range
+  VELOX_USER_CHECK(
+      !(value < 0 || value >= 86400000),
+      "TIME value {} is out of range [0, 86400000)",
+      value);
+
+  int64_t hours = value / kMillisInHour;
+  int64_t remainingMs = value % kMillisInHour;
+  int64_t minutes = remainingMs / kMillisInMinute;
+  remainingMs = remainingMs % kMillisInMinute;
+  int64_t seconds = remainingMs / kMillisInSecond;
+  int64_t millis = remainingMs % kMillisInSecond;
+
+  // TIME is represented as milliseconds since midnight
+  // Convert to HH:mm:ss.SSS format
+
+  fmt::format_to_n(
+      startPos,
+      kTimeToVarcharRowSize,
+      "{:02d}:{:02d}:{:02d}.{:03d}",
+      hours,
+      minutes,
+      seconds,
+      millis);
+  return StringView{startPos, kTimeToVarcharRowSize};
+}
+
 std::string stringifyTruncatedElementList(
     size_t size,
     const std::function<void(std::stringstream&, size_t)>& stringifyElement,

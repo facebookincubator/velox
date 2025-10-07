@@ -1424,12 +1424,20 @@ TEST_P(SharedArbitrationTestWithThreadingModes, reserveReleaseCounters) {
 VELOX_INSTANTIATE_TEST_SUITE_P(
     SharedArbitrationTest,
     SharedArbitrationTestWithParallelExecutionModeOnly,
-    testing::ValuesIn(std::vector<TestParam>{{false}}));
+    testing::ValuesIn(std::vector<TestParam>{{false}}),
+    [](const testing::TestParamInfo<TestParam>& info) {
+      return fmt::format(
+          "{}", info.param.isSerialExecutionMode ? "serial" : "parallel");
+    });
 
 VELOX_INSTANTIATE_TEST_SUITE_P(
     SharedArbitrationTest,
     SharedArbitrationTestWithThreadingModes,
-    testing::ValuesIn(std::vector<TestParam>{{false}, {true}}));
+    testing::ValuesIn(std::vector<TestParam>{{false}, {true}}),
+    [](const testing::TestParamInfo<TestParam>& info) {
+      return fmt::format(
+          "{}", info.param.isSerialExecutionMode ? "serial" : "parallel");
+    });
 } // namespace facebook::velox::memory
 
 int main(int argc, char** argv) {

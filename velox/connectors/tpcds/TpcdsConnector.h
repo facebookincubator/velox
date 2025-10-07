@@ -102,7 +102,7 @@ class TpcdsDataSource : public velox::connector::DataSource {
     return completedBytes_;
   }
 
-  std::unordered_map<std::string, RuntimeCounter> runtimeStats() override {
+  std::unordered_map<std::string, RuntimeMetric> getRuntimeStats() override {
     return {};
   }
 

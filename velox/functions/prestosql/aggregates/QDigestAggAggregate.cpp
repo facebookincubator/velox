@@ -182,18 +182,18 @@ void registerQDigestAggAggregate(const std::string& prefix, bool overwrite) {
     const auto digestType = fmt::format("qdigest({})", type);
     signatures.push_back(exec::AggregateFunctionSignatureBuilder()
                              .returnType(digestType)
-                             .intermediateType(digestType)
+                             .intermediateType("varbinary")
                              .argumentType(type)
                              .build());
     signatures.push_back(exec::AggregateFunctionSignatureBuilder()
                              .returnType(digestType)
-                             .intermediateType(digestType)
+                             .intermediateType("varbinary")
                              .argumentType(type)
                              .argumentType("bigint")
                              .build());
     signatures.push_back(exec::AggregateFunctionSignatureBuilder()
                              .returnType(digestType)
-                             .intermediateType(digestType)
+                             .intermediateType("varbinary")
                              .argumentType(type)
                              .argumentType("bigint")
                              .argumentType("double")

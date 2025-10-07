@@ -84,7 +84,7 @@ class RemoteFunctionTest
 
   // Registers a few remote functions to be used in this test.
   void registerRemoteFunctions(RemoteFunctionServiceParams params) {
-    RemoteVectorFunctionMetadata metadata;
+    RemoteThriftVectorFunctionMetadata metadata;
     metadata.serdeFormat = GetParam();
     metadata.location = params.serverAddress;
 
@@ -103,7 +103,7 @@ class RemoteFunctionTest
                                .build()};
     registerRemoteFunction("remote_fail", failSignatures, metadata);
 
-    RemoteVectorFunctionMetadata wrongMetadata = metadata;
+    RemoteThriftVectorFunctionMetadata wrongMetadata = metadata;
     wrongMetadata.location = folly::SocketAddress(); // empty address.
     registerRemoteFunction("remote_wrong_port", plusSignatures, wrongMetadata);
 
@@ -167,17 +167,28 @@ TEST_P(RemoteFunctionTest, string) {
 }
 
 TEST_P(RemoteFunctionTest, tryException) {
-  // remote_divide throws if denominator is 0.
+  // `remote_divide` throws if denominator is 0.
   auto numeratorVector = makeFlatVector<double>({0, 1, 4, 9, 16});
   auto denominatorVector = makeFlatVector<double>({0, 1, 2, 3, 4});
-  auto data = makeRowVector({numeratorVector, denominatorVector});
+  auto inputData = makeRowVector({numeratorVector, denominatorVector});
+
+  auto executeRemote = [&]() {
+    return evaluate<SimpleVector<double>>("remote_divide(c0, c1)", inputData);
+  };
+
+  // Ensure it throws and the right exception is propagated.
+  EXPECT_THROW(executeRemote(), VeloxRuntimeError);
+  try {
+    executeRemote();
+  } catch (const VeloxRuntimeError& e) {
+    EXPECT_THAT(e.message(), testing::HasSubstr("division by zero"));
+  }
+
+  // Execute wih a try() to ensure exceptions are collected but not thrown.
   auto results =
-      evaluate<SimpleVector<double>>("TRY(remote_divide(c0, c1))", data);
-
+      evaluate<SimpleVector<double>>("TRY(remote_divide(c0, c1))", inputData);
+  auto expected = makeNullableFlatVector<double>({std::nullopt, 1, 2, 3, 4});
   ASSERT_EQ(results->size(), 5);
-  auto expected = makeFlatVector<double>({0 /* doesn't matter*/, 1, 2, 3, 4});
-  expected->setNull(0, true);
-
   assertEqualVectors(expected, results);
 }
 
@@ -216,8 +227,9 @@ TEST_P(RemoteFunctionTest, tryErrorCode) {
 TEST_P(RemoteFunctionTest, opaque) {
   // TODO: Support opaque type serialization in SPARK_UNSAFE_ROW
   if (GetParam() == remote::PageFormat::SPARK_UNSAFE_ROW) {
-    GTEST_SKIP()
+    LOG(WARNING)
         << "opaque type serialization not supported in SPARK_UNSAFE_ROW";
+    return;
   }
   auto inputVector = makeFlatVector<std::shared_ptr<void>>(
       2,

@@ -559,6 +559,24 @@ TextRowReader::getString(TextRowReader& th, bool& isNull, DelimType& delim) {
   return th.ownedString_;
 }
 
+template <class T>
+void TextRowReader::setValueFromString(
+    const std::string& str,
+    BaseVector* data,
+    vector_size_t insertionRow,
+    std::function<std::optional<T>(const std::string&)> convert) {
+  if ((atEOF_ && atSOL_) || data == nullptr) {
+    return;
+  }
+  auto flatVector = data->asChecked<FlatVector<T>>();
+  auto result = str.empty() ? std::nullopt : convert(str);
+  if (result) {
+    flatVector->set(insertionRow, *result);
+  } else {
+    flatVector->setNull(insertionRow, true);
+  }
+}
+
 uint8_t TextRowReader::getByte(DelimType& delim) {
   setNone(delim);
   auto v = getByteUnchecked(delim);
@@ -1052,8 +1070,19 @@ void TextRowReader::readElement(
               getInteger<int32_t>, data, insertionRow, delim);
           break;
         case TypeKind::INTEGER:
-          putValue<int32_t, int32_t>(
-              getInteger<int32_t>, data, insertionRow, delim);
+          if (reqT->isDate()) {
+            const std::string& str = getString(*this, isNull, delim);
+            setValueFromString<int32_t>(
+                str,
+                data,
+                insertionRow,
+                [](const std::string& s) -> std::optional<int32_t> {
+                  return DATE()->toDays(s);
+                });
+          } else {
+            putValue<int32_t, int32_t>(
+                getInteger<int32_t>, data, insertionRow, delim);
+          }
           break;
         default:
           VELOX_FAIL(
@@ -1065,10 +1094,61 @@ void TextRowReader::readElement(
       break;
 
     case TypeKind::BIGINT:
-      putValue<int64_t, int64_t>(
-          getInteger<int64_t>, data, insertionRow, delim);
+      if (reqT->isShortDecimal()) {
+        const std::string& str = getString(*this, isNull, delim);
+        auto decimalParams = getDecimalPrecisionScale(*reqT);
+        const auto precision = decimalParams.first;
+        const auto scale = decimalParams.second;
+        setValueFromString<int64_t>(
+            str,
+            data,
+            insertionRow,
+            [precision, scale](const std::string& s) -> std::optional<int64_t> {
+              int64_t v = 0;
+              const auto status = DecimalUtil::castFromString(
+                  StringView(s.data(), static_cast<int32_t>(s.size())),
+                  precision,
+                  scale,
+                  v);
+              return status.ok() ? std::optional<int64_t>(v) : std::nullopt;
+            });
+      } else {
+        putValue<int64_t, int64_t>(
+            getInteger<int64_t>, data, insertionRow, delim);
+      }
       break;
 
+    case TypeKind::HUGEINT: {
+      const std::string& str = getString(*this, isNull, delim);
+      if (reqT->isLongDecimal()) {
+        auto decimalParams = getDecimalPrecisionScale(*reqT);
+        const auto precision = decimalParams.first;
+        const auto scale = decimalParams.second;
+        setValueFromString<int128_t>(
+            str,
+            data,
+            insertionRow,
+            [precision,
+             scale](const std::string& s) -> std::optional<int128_t> {
+              int128_t v = 0;
+              const auto status = DecimalUtil::castFromString(
+                  StringView(s.data(), static_cast<int32_t>(s.size())),
+                  precision,
+                  scale,
+                  v);
+              return status.ok() ? std::optional<int128_t>(v) : std::nullopt;
+            });
+      } else {
+        setValueFromString<int128_t>(
+            str,
+            data,
+            insertionRow,
+            [](const std::string& s) -> std::optional<int128_t> {
+              return HugeInt::parse(s);
+            });
+      }
+      break;
+    }
     case TypeKind::SMALLINT:
       switch (reqT->kind()) {
         case TypeKind::BIGINT:

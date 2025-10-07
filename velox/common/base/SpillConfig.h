@@ -52,6 +52,13 @@ using GetSpillDirectoryPathCB = std::function<std::string_view()>;
 /// bytes exceed the set limit.
 using UpdateAndCheckSpillLimitCB = std::function<void(uint64_t)>;
 
+/// Specifies the options for spill to disk.
+struct SpillDiskOptions {
+  std::string spillDirPath;
+  bool spillDirCreated{true};
+  std::function<std::string()> spillDirCreateCb{nullptr};
+};
+
 /// Specifies the config for spilling.
 struct SpillConfig {
   SpillConfig() = default;

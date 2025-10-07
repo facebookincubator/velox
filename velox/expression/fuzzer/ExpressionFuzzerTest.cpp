@@ -129,6 +129,8 @@ std::unordered_set<std::string> skipFunctions = {
     "merge_sfm", // Fuzzer can generate sketches of different sizes.
     "element_at",
     "width_bucket",
+    // Varbinary output can't be compared exactly with Java.
+    "merge_hll",
     // Fuzzer and the underlying engine are confused about TDigest functions
     // (since TDigest is a user defined type), and tries to pass a
     // VARBINARY (since TDigest's implementation uses an
@@ -234,6 +236,9 @@ std::unordered_set<std::string> skipFunctions = {
     "st_envelope",
     "ST_EnvelopeAsPts",
     "st_buffer",
+    "st_linestring",
+    "st_linefromtext",
+    "st_multipoint",
     "geometry_invalid_reason",
     "geometry_nearest_points",
     "simplify_geometry",
@@ -252,9 +257,11 @@ std::unordered_set<std::string> skipFunctions = {
     "geometry_to_bing_tiles",
     "geometry_to_dissolved_bing_tiles",
     "geometry_union",
+    "localtime",
 };
 
 std::unordered_set<std::string> skipFunctionsSOT = {
+    "array_subset", // Velox-only function, not available in Presto
     "noisy_empty_approx_set_sfm", // non-deterministic because of privacy.
     // https://github.com/facebookincubator/velox/issues/11034
     "cast(real) -> varchar",
@@ -325,6 +332,7 @@ std::unordered_set<std::string> skipFunctionsSOT = {
     "escape", // https://github.com/facebookincubator/velox/issues/12558
     "from_base64url", // https://github.com/facebookincubator/velox/issues/12562
     "array_top_n", // https://github.com/prestodb/presto/issues/24700
+    "array_subset",
     "codepoint", // https://github.com/facebookincubator/velox/issues/12598
     "in", // https://github.com/facebookincubator/velox/issues/12597
     "multimap_from_entries", // https://github.com/facebookincubator/velox/issues/12628
@@ -398,6 +406,8 @@ std::unordered_set<std::string> skipFunctionsSOT = {
     "map_keys_by_top_n_values", // https://github.com/facebookincubator/velox/issues/14374
     "$internal$canonicalize",
     "$internal$contains",
+    "localtime", // localtime cannot be called with paranthesis:
+                 // https://github.com/facebookincubator/velox/issues/14937
 };
 
 int main(int argc, char** argv) {

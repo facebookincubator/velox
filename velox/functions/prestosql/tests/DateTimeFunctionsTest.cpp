@@ -84,6 +84,13 @@ class DateTimeFunctionsTest : public functions::test::FunctionBaseTest {
     });
   }
 
+  void setQuerySessionStartTime(int64_t sessionStartTime) {
+    queryCtx_->testingOverrideConfigUnsafe({
+        {core::QueryConfig::kSessionStartTime,
+         std::to_string(sessionStartTime)},
+    });
+  }
+
  public:
   // Helper class to manipulate timestamp with timezone types in tests. Provided
   // only for convenience.
@@ -5493,4 +5500,32 @@ TEST_F(DateTimeFunctionsTest, xxHash64FunctionTimestamp) {
   // Past time
   EXPECT_EQ(
       7585368295023641328, xxhash64(parseTimestamp("1900-01-01 00:00:00.000")));
+}
+
+TEST_F(DateTimeFunctionsTest, localtime) {
+  const auto localtime = [&](int64_t sessionStartTime,
+                             const std::optional<std::string>& timeZone) {
+    if (timeZone.has_value()) {
+      setSessionStartTimeAndTimeZone(sessionStartTime, timeZone.value());
+    } else {
+      setQuerySessionStartTime(sessionStartTime);
+    }
+
+    auto rowVector = makeRowVector({});
+    rowVector->resize(1);
+    auto result = evaluate("localtime()", rowVector);
+    DecodedVector decoded(*result);
+    return decoded.valueAt<int64_t>(0);
+  };
+
+  auto utcVal = localtime(0, std::nullopt);
+  EXPECT_EQ(utcVal, 0);
+
+  auto localVal =
+      localtime(1758499200000, "America/Los_Angeles"); // Midnight UTC
+  EXPECT_EQ(localVal, 0);
+
+  // Test during daylight saving time
+  localVal = localtime(1710061200000, "America/Los_Angeles");
+  EXPECT_EQ(localVal, 32400000); // 9 AM UTC
 }

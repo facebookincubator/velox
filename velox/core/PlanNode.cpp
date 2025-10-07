@@ -391,6 +391,10 @@ std::vector<FieldAccessTypedExprPtr> deserializeFields(
       array, context);
 }
 
+FieldAccessTypedExprPtr deserializeField(const folly::dynamic& obj) {
+  return ISerializable::deserialize<FieldAccessTypedExpr>(obj);
+}
+
 std::vector<std::string> deserializeStrings(const folly::dynamic& array) {
   return ISerializable::deserialize<std::vector<std::string>>(array);
 }
@@ -3075,12 +3079,55 @@ SpatialJoinNode::SpatialJoinNode(
     const PlanNodeId& id,
     JoinType joinType,
     TypedExprPtr joinCondition,
+    FieldAccessTypedExprPtr probeGeometry,
+    FieldAccessTypedExprPtr buildGeometry,
+    std::optional<FieldAccessTypedExprPtr> radius,
     PlanNodePtr left,
     PlanNodePtr right,
     RowTypePtr outputType)
     : PlanNode(id),
       joinType_(joinType),
       joinCondition_(std::move(joinCondition)),
+      probeGeometry_(std::move(probeGeometry)),
+      buildGeometry_(std::move(buildGeometry)),
+      radius_(std::move(radius)),
+      sources_({std::move(left), std::move(right)}),
+      outputType_(std::move(outputType)) {
+  VELOX_USER_CHECK(
+      isSupported(joinType_),
+      "The join type is not supported by spatial join: {}",
+      JoinTypeName::toName(joinType_));
+  VELOX_USER_CHECK(
+      joinCondition_ != nullptr,
+      "The join condition must not be null for spatial join");
+  VELOX_USER_CHECK_EQ(
+      sources_.size(), 2, "Must have 2 sources for spatial joins");
+  VELOX_USER_CHECK(
+      sources_[0] != nullptr, "Left source must not be null for spatial joins");
+  VELOX_USER_CHECK(
+      sources_[1] != nullptr,
+      "Right source must not be null for spatial joins");
+
+  checkJoinColumnNames(
+      sources_[0]->outputType(),
+      sources_[1]->outputType(),
+      outputType_,
+      outputType_->size());
+}
+
+SpatialJoinNode::SpatialJoinNode(
+    const PlanNodeId& id,
+    JoinType joinType,
+    TypedExprPtr joinCondition,
+    PlanNodePtr left,
+    PlanNodePtr right,
+    RowTypePtr outputType)
+    : PlanNode(id),
+      joinType_(joinType),
+      joinCondition_(std::move(joinCondition)),
+      probeGeometry_{},
+      buildGeometry_{},
+      radius_{},
       sources_({std::move(left), std::move(right)}),
       outputType_(std::move(outputType)) {
   VELOX_USER_CHECK(
@@ -3121,6 +3168,15 @@ void SpatialJoinNode::addDetails(std::stringstream& stream) const {
   if (joinCondition_) {
     stream << ", joinCondition: " << joinCondition_->toString();
   }
+  if (probeGeometry_) {
+    stream << ", probeGeometry: " << probeGeometry_.value()->name();
+  }
+  if (buildGeometry_) {
+    stream << ", buildGeometry: " << buildGeometry_.value()->name();
+  }
+  if (radius_) {
+    stream << ", radius: " << radius_.value()->name();
+  }
 }
 
 folly::dynamic SpatialJoinNode::serialize() const {
@@ -3130,6 +3186,15 @@ folly::dynamic SpatialJoinNode::serialize() const {
     obj["joinCondition"] = joinCondition_->serialize();
   }
   obj["outputType"] = outputType_->serialize();
+  if (probeGeometry_) {
+    obj["probeGeometry"] = probeGeometry_.value()->serialize();
+  }
+  if (buildGeometry_) {
+    obj["buildGeometry"] = buildGeometry_.value()->serialize();
+  }
+  if (radius_) {
+    obj["radius"] = radius_.value()->serialize();
+  }
   return obj;
 }
 
@@ -3150,6 +3215,36 @@ PlanNodePtr SpatialJoinNode::create(const folly::dynamic& obj, void* context) {
   }
 
   auto outputType = deserializeRowType(obj["outputType"]);
+  std::optional<FieldAccessTypedExprPtr> probeGeometry;
+  if (obj.count("probeGeometry")) {
+    probeGeometry = deserializeField(obj["probeGeometry"]);
+  }
+  std::optional<FieldAccessTypedExprPtr> buildGeometry;
+  if (obj.count("buildGeometry")) {
+    buildGeometry = deserializeField(obj["buildGeometry"]);
+  }
+  std::optional<FieldAccessTypedExprPtr> radius;
+  if (obj.count("radius")) {
+    radius = deserializeField(obj["radius"]);
+  }
+
+  VELOX_USER_CHECK(
+      (probeGeometry.has_value() && buildGeometry.has_value()) ||
+          (!probeGeometry.has_value() && !buildGeometry.has_value()),
+      "Either probe and build geometry must both be set, or neither");
+
+  if (probeGeometry.has_value() && buildGeometry.has_value()) {
+    return std::make_shared<SpatialJoinNode>(
+        deserializePlanNodeId(obj),
+        JoinTypeName::toJoinType(obj["joinType"].asString()),
+        joinCondition,
+        probeGeometry.value(),
+        buildGeometry.value(),
+        radius,
+        sources[0],
+        sources[1],
+        outputType);
+  }
 
   return std::make_shared<SpatialJoinNode>(
       deserializePlanNodeId(obj),
@@ -3429,6 +3524,25 @@ void PlanNode::toSkeletonString(
   for (const auto& source : sources()) {
     source->toSkeletonString(stream, indentationSize + 2);
   }
+}
+
+// static
+const PlanNode* PlanNode::findFirstNode(
+    const PlanNode* root,
+    const std::function<bool(const PlanNode* node)>& predicate) {
+  VELOX_CHECK_NOT_NULL(root);
+  if (predicate(root)) {
+    return root;
+  }
+
+  // Recursively go further through the sources.
+  for (const auto& source : root->sources()) {
+    const auto* ret = PlanNode::findFirstNode(source.get(), predicate);
+    if (ret != nullptr) {
+      return ret;
+    }
+  }
+  return nullptr;
 }
 
 namespace {

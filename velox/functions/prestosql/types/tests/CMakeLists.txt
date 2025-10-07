@@ -18,6 +18,7 @@ add_executable(
   HyperLogLogTypeTest.cpp
   JsonTypeTest.cpp
   TimestampWithTimeZoneTypeTest.cpp
+  TimeWithTimezoneTypeTest.cpp
   TDigestTypeTest.cpp
   QDigestTypeTest.cpp
   TypeTestBase.cpp

@@ -19,6 +19,7 @@
 #include "velox/expression/SignatureBinder.h"
 #include "velox/expression/type_calculation/TypeCalculation.h"
 #include "velox/type/Type.h"
+#include "velox/type/TypeUtil.h"
 
 namespace facebook::velox::exec {
 namespace {
@@ -301,6 +302,45 @@ bool SignatureBinderBase::tryBind(
   }
 
   const auto& params = typeSignature.parameters();
+
+  // Handle homogeneous row case: row(T, ...)
+  if (typeSignature.isHomogeneousRow()) {
+    VELOX_CHECK_EQ(
+        params.size(), 1, "Homogeneous row must have exactly one parameter");
+
+    if (actualType->kind() != TypeKind::ROW) {
+      return false;
+    }
+
+    if (actualType->size() == 0) {
+      // Empty row is always compatible with homogeneous row.
+      return true;
+    }
+
+    // All children must unify to the same type variable T
+    const auto& typeParam = params[0];
+    const auto& paramBaseName = typeParam.baseName();
+
+    // First, check and extract the common child type if homogeneous.
+    const auto actualChildType =
+        velox::type::tryGetHomogeneousRowChild(actualType);
+    if (!actualChildType) {
+      return false;
+    }
+
+    if (variables().count(paramBaseName)) {
+      auto it = typeVariablesBindings_.find(paramBaseName);
+      if (it != typeVariablesBindings_.end()) {
+        return it->second->equivalent(*actualChildType);
+      } else {
+        typeVariablesBindings_[paramBaseName] = actualChildType;
+        return true;
+      }
+    } else {
+      return tryBind(typeParam, actualChildType);
+    }
+  }
+
   // Type Parameters can recurse.
   if (params.size() != actualType->parameters().size()) {
     return false;

@@ -530,6 +530,9 @@ void Status::moveFrom(Status& s) {
 #define _VELOX_RETURN_IMPL(expr, exprStr, error, ...)                    \
   do {                                                                   \
     if (FOLLY_UNLIKELY(expr)) {                                          \
+      if (::facebook::velox::threadSkipErrorDetails()) {                 \
+        return error();                                                  \
+      }                                                                  \
       auto message = ::facebook::velox::errorMessage(__VA_ARGS__);       \
       return error(                                                      \
           ::facebook::velox::internal::generateError(message, exprStr)); \

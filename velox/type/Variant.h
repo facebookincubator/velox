@@ -427,6 +427,9 @@ class Variant {
   }
 
   std::string toJson(const TypePtr& type) const;
+
+  std::string toJson(const Type& type) const;
+
   std::string toJsonUnsafe(const TypePtr& type = nullptr) const;
 
   /// Used by python binding, do not change signature.

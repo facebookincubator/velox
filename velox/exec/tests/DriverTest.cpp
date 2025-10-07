@@ -1614,7 +1614,8 @@ DEBUG_ONLY_TEST_F(DriverTest, driverCpuTimeSlicingCheck) {
           0,
           core::QueryCtx::create(
               driverExecutor_.get(), core::QueryConfig{std::move(queryConfig)}),
-          testParam.executionMode);
+          testParam.executionMode,
+          exec::Consumer{});
       while (task->next() != nullptr) {
       }
     }
