@@ -200,7 +200,7 @@ DynamicSasTokenClientProvider::DynamicSasTokenClientProvider(
     const std::shared_ptr<SasTokenProvider>& sasTokenProvider)
     : AzureClientProvider(), sasTokenProvider_(sasTokenProvider) {}
 
-void DynamicSasTokenClientProvider::init(const config::ConfigBase& config) {
+void DynamicSasTokenClientProvider::init(const config::IConfig& config) {
   sasTokenRenewPeriod_ = config.get<int64_t>(
       kAzureSasTokenRenewPeriod, kDefaultSasTokenRenewPeriod);
 }
@@ -208,7 +208,7 @@ void DynamicSasTokenClientProvider::init(const config::ConfigBase& config) {
 std::unique_ptr<AzureBlobClient>
 DynamicSasTokenClientProvider::getReadFileClient(
     const std::shared_ptr<AbfsPath>& abfsPath,
-    const config::ConfigBase& config) {
+    const config::IConfig& config) {
   init(config);
   return std::make_unique<DynamicSasTokenBlobClient>(
       abfsPath, sasTokenProvider_, sasTokenRenewPeriod_);
@@ -217,7 +217,7 @@ DynamicSasTokenClientProvider::getReadFileClient(
 std::unique_ptr<AzureDataLakeFileClient>
 DynamicSasTokenClientProvider::getWriteFileClient(
     const std::shared_ptr<AbfsPath>& abfsPath,
-    const config::ConfigBase& config) {
+    const config::IConfig& config) {
   init(config);
   return std::make_unique<DynamicSasTokenDataLakeFileClient>(
       abfsPath, sasTokenProvider_, sasTokenRenewPeriod_);

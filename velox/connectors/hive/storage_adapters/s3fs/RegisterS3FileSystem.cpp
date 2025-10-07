@@ -49,7 +49,7 @@ FileSystemMap& fileSystems() {
 CacheKeyFn cacheKeyFunc;
 
 std::shared_ptr<FileSystem> fileSystemGenerator(
-    std::shared_ptr<const config::ConfigBase> properties,
+    config::ConfigPtr properties,
     std::string_view s3Path) {
   std::string cacheKey, bucketName, key;
   getBucketAndKeyFromPath(getPath(s3Path), bucketName, key);

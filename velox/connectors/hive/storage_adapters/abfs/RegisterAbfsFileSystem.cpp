@@ -33,7 +33,7 @@ namespace facebook::velox::filesystems {
 folly::once_flag abfsInitiationFlag;
 
 std::shared_ptr<FileSystem> abfsFileSystemGenerator(
-    std::shared_ptr<const config::ConfigBase> properties,
+    config::ConfigPtr properties,
     std::string_view filePath) {
   static std::shared_ptr<FileSystem> filesystem;
   folly::call_once(abfsInitiationFlag, [&properties]() {
@@ -66,7 +66,7 @@ void registerAbfsFileSystem() {
 #endif
 }
 
-void registerAzureClientProvider(const config::ConfigBase& config) {
+void registerAzureClientProvider(const config::IConfig& config) {
 #ifdef VELOX_ENABLE_ABFS
 
   for (const auto& [accountName, authType] :

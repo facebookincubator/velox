@@ -23,11 +23,9 @@
 
 namespace facebook::velox::config {
 
-/// IConfig - Read-only config interface
-/// for accessing key-value parameters.
-/// Supports value retrieval by key and
-/// duplication of the raw configuration data.
-/// Can be used by velox::QueryConfig to access
+/// IConfig - Read-only config interface for accessing key-value parameters.
+/// Supports value retrieval by key and duplication of the raw config data.
+/// Can be used by velox::QueryConfig or connector/file-system config to access
 /// externally managed system configuration.
 class IConfig {
  public:
@@ -66,5 +64,9 @@ class IConfig {
  private:
   virtual std::optional<std::string> access(const std::string& key) const = 0;
 };
+
+#ifndef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+using ConfigPtr = std::shared_ptr<const IConfig>;
+#endif
 
 } // namespace facebook::velox::config

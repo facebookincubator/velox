@@ -63,7 +63,7 @@ AzureClientProviderFactory AzureClientProviderFactories::getClientFactory(
 std::unique_ptr<AzureBlobClient>
 AzureClientProviderFactories::getReadFileClient(
     const std::shared_ptr<AbfsPath>& abfsPath,
-    const config::ConfigBase& config) {
+    const config::IConfig& config) {
   auto factory = getClientFactory(abfsPath->accountName());
   return factory(abfsPath->accountName())->getReadFileClient(abfsPath, config);
 }
@@ -71,7 +71,7 @@ AzureClientProviderFactories::getReadFileClient(
 std::unique_ptr<AzureDataLakeFileClient>
 AzureClientProviderFactories::getWriteFileClient(
     const std::shared_ptr<AbfsPath>& abfsPath,
-    const config::ConfigBase& config) {
+    const config::IConfig& config) {
   auto factory = getClientFactory(abfsPath->accountName());
   return factory(abfsPath->accountName())->getWriteFileClient(abfsPath, config);
 }

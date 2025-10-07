@@ -26,7 +26,7 @@ class AbfsReadFile::Impl {
   constexpr static uint64_t kReadConcurrency = 8;
 
  public:
-  explicit Impl(std::string_view path, const config::ConfigBase& config) {
+  explicit Impl(std::string_view path, const config::IConfig& config) {
     auto abfsPath = std::make_shared<AbfsPath>(path);
     filePath_ = abfsPath->filePath();
     fileClient_ =
@@ -150,7 +150,7 @@ class AbfsReadFile::Impl {
 
 AbfsReadFile::AbfsReadFile(
     std::string_view path,
-    const config::ConfigBase& config) {
+    const config::IConfig& config) {
   impl_ = std::make_shared<Impl>(path, config);
 }
 

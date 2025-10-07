@@ -28,7 +28,7 @@ class HdfsFileSystem::Impl {
  public:
   // Keep config here for possible use in the future.
   explicit Impl(
-      const config::ConfigBase* config,
+      const config::IConfig* config,
       const HdfsServiceEndpoint& endpoint) {
     auto status = filesystems::arrow::io::internal::ConnectLibHdfs(&driver_);
     if (!status.ok()) {
@@ -97,7 +97,7 @@ class HdfsFileSystem::Impl {
 };
 
 HdfsFileSystem::HdfsFileSystem(
-    const std::shared_ptr<const config::ConfigBase>& config,
+    const config::ConfigPtr& config,
     const HdfsServiceEndpoint& endpoint)
     : FileSystem(config) {
   impl_ = std::make_shared<Impl>(config.get(), endpoint);
@@ -140,7 +140,7 @@ bool HdfsFileSystem::isHdfsFile(const std::string_view filePath) {
 /// fixed one from configuration.
 HdfsServiceEndpoint HdfsFileSystem::getServiceEndpoint(
     const std::string_view filePath,
-    const config::ConfigBase* config) {
+    const config::IConfig* config) {
   if (filePath.find(kViewfsScheme) == 0) {
     return HdfsServiceEndpoint{"viewfs", "", true};
   }

@@ -199,7 +199,7 @@ TEST_F(S3MultipleEndpoints, bucketEndpoints) {
   const int64_t kExpectedRows = 1'000;
   const auto outputDirectory{filesystems::s3URI(kBucketName, "")};
 
-  auto configOverride = [](std::shared_ptr<const config::ConfigBase> config) {
+  auto configOverride = [](config::ConfigPtr config) {
     return std::unordered_map<std::string, std::string>{
         {"hive.s3.bucket.writedata.endpoint",
          config->get<std::string>("hive.s3.endpoint").value()},

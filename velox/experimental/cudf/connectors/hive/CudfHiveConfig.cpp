@@ -42,7 +42,7 @@ std::size_t CudfHiveConfig::maxChunkReadLimit() const {
 }
 
 std::size_t CudfHiveConfig::maxChunkReadLimitSession(
-    const config::ConfigBase* session) const {
+    const config::IConfig* session) const {
   // pass read limit = 0 means no limit
   return session->get<std::size_t>(
       kMaxChunkReadLimitSession,
@@ -55,7 +55,7 @@ std::size_t CudfHiveConfig::maxPassReadLimit() const {
 }
 
 std::size_t CudfHiveConfig::maxPassReadLimitSession(
-    const config::ConfigBase* session) const {
+    const config::IConfig* session) const {
   // pass read limit = 0 means no limit
   return session->get<std::size_t>(
       kMaxPassReadLimitSession,
@@ -67,7 +67,7 @@ bool CudfHiveConfig::isConvertStringsToCategories() const {
 }
 
 bool CudfHiveConfig::isConvertStringsToCategoriesSession(
-    const config::ConfigBase* session) const {
+    const config::IConfig* session) const {
   return session->get<bool>(
       kConvertStringsToCategoriesSession,
       config_->get<bool>(kConvertStringsToCategories, false));
@@ -78,7 +78,7 @@ bool CudfHiveConfig::isUsePandasMetadata() const {
 }
 
 bool CudfHiveConfig::isUsePandasMetadataSession(
-    const config::ConfigBase* session) const {
+    const config::IConfig* session) const {
   return session->get<bool>(
       kUsePandasMetadataSession, config_->get<bool>(kUsePandasMetadata, true));
 }
@@ -88,7 +88,7 @@ bool CudfHiveConfig::isUseArrowSchema() const {
 }
 
 bool CudfHiveConfig::isUseArrowSchemaSession(
-    const config::ConfigBase* session) const {
+    const config::IConfig* session) const {
   return session->get<bool>(
       kUseArrowSchemaSession, config_->get<bool>(kUseArrowSchema, true));
 }
@@ -98,7 +98,7 @@ bool CudfHiveConfig::isAllowMismatchedCudfHiveSchemas() const {
 }
 
 bool CudfHiveConfig::isAllowMismatchedCudfHiveSchemasSession(
-    const config::ConfigBase* session) const {
+    const config::IConfig* session) const {
   return session->get<bool>(
       kAllowMismatchedCudfHiveSchemasSession,
       config_->get<bool>(kAllowMismatchedCudfHiveSchemas, false));
@@ -118,7 +118,7 @@ cudf::data_type CudfHiveConfig::timestampType() const {
 }
 
 cudf::data_type CudfHiveConfig::timestampTypeSession(
-    const config::ConfigBase* session) const {
+    const config::IConfig* session) const {
   const auto unit = session->get<cudf::type_id>(
       kTimestampTypeSession,
       config_->get<cudf::type_id>(
@@ -138,7 +138,7 @@ bool CudfHiveConfig::useBufferedInput() const {
 }
 
 bool CudfHiveConfig::useBufferedInputSession(
-    const config::ConfigBase* session) const {
+    const config::IConfig* session) const {
   return session->get<bool>(
       kUseBufferedInputSession, config_->get<bool>(kUseBufferedInput, true));
 }
@@ -148,7 +148,7 @@ bool CudfHiveConfig::useExperimentalCudfReader() const {
 }
 
 bool CudfHiveConfig::useExperimentalCudfReaderSession(
-    const config::ConfigBase* session) const {
+    const config::IConfig* session) const {
   return session->get<bool>(
       kUseExperimentalCudfReaderSession,
       config_->get<bool>(kUseExperimentalCudfReader, false));
@@ -159,7 +159,7 @@ bool CudfHiveConfig::immutableFiles() const {
 }
 
 uint64_t CudfHiveConfig::sortWriterFinishTimeSliceLimitMs(
-    const config::ConfigBase* session) const {
+    const config::IConfig* session) const {
   return session->get<uint64_t>(
       kSortWriterFinishTimeSliceLimitMsSession,
       config_->get<uint64_t>(kSortWriterFinishTimeSliceLimitMs, 5'000));
@@ -170,7 +170,7 @@ bool CudfHiveConfig::writeTimestampsAsUTC() const {
 }
 
 bool CudfHiveConfig::writeTimestampsAsUTCSession(
-    const config::ConfigBase* session) const {
+    const config::IConfig* session) const {
   return session->get<bool>(
       kWriteTimestampsAsUTCSession,
       config_->get<bool>(kWriteTimestampsAsUTC, true));
@@ -181,7 +181,7 @@ bool CudfHiveConfig::writeArrowSchema() const {
 }
 
 bool CudfHiveConfig::writeArrowSchemaSession(
-    const config::ConfigBase* session) const {
+    const config::IConfig* session) const {
   return session->get<bool>(
       kWriteArrowSchemaSession, config_->get<bool>(kWriteArrowSchema, false));
 }
@@ -191,7 +191,7 @@ bool CudfHiveConfig::writev2PageHeaders() const {
 }
 
 bool CudfHiveConfig::writev2PageHeadersSession(
-    const config::ConfigBase* session) const {
+    const config::IConfig* session) const {
   return session->get<bool>(
       kWritev2PageHeadersSession,
       config_->get<bool>(kWritev2PageHeaders, false));

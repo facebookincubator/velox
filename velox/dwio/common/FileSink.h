@@ -37,8 +37,7 @@ class FileSink : public Closeable {
     bool bufferWrite{true};
     /// Connector properties are required to create a FileSink on FileSystems
     /// such as S3.
-    const std::shared_ptr<const config::ConfigBase>& connectorProperties{
-        nullptr};
+    const config::ConfigPtr& connectorProperties{nullptr};
     /// Config used to create sink files. This config is provided to underlying
     /// file system and the config is free form. The form should be defined by
     /// the underlying file system.
@@ -115,7 +114,7 @@ class FileSink : public Closeable {
       const std::function<uint64_t(const DataBuffer<char>&)>& callback);
 
   const std::string name_;
-  const std::shared_ptr<const config::ConfigBase> connectorProperties_;
+  const config::ConfigPtr connectorProperties_;
   memory::MemoryPool* const pool_;
   const MetricsLogPtr metricLogger_;
   IoStatistics* const stats_;

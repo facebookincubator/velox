@@ -128,8 +128,7 @@ std::shared_ptr<core::QueryCtx> OperatorReplayerBase::createQueryCtx() {
   auto queryPool = memory::memoryManager()->addRootPool(
       fmt::format("{}_replayer_{}", nodeName_, replayQueryId++),
       queryCapacity_);
-  std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>
-      connectorConfigs;
+  core::ConnectorConfigs connectorConfigs;
   for (auto& [connectorId, configs] : connectorConfigs_) {
     connectorConfigs.emplace(
         connectorId, std::make_shared<config::ConfigBase>(std::move(configs)));

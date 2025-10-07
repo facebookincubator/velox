@@ -28,8 +28,7 @@
 
 namespace facebook::velox::filesystems {
 
-AbfsFileSystem::AbfsFileSystem(std::shared_ptr<const config::ConfigBase> config)
-    : FileSystem(config) {
+AbfsFileSystem::AbfsFileSystem(config::ConfigPtr config) : FileSystem(config) {
   VELOX_CHECK_NOT_NULL(config.get());
 }
 

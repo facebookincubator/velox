@@ -20,8 +20,14 @@
 #include "velox/common/base/Exceptions.h"
 
 namespace facebook::velox::config {
+class IConfig;
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
 class ConfigBase;
-}
+using ConfigPtr = std::shared_ptr<const ConfigBase>;
+#else
+using ConfigPtr = std::shared_ptr<const IConfig>;
+#endif
+} // namespace facebook::velox::config
 
 namespace facebook::velox::connector::hive {
 
@@ -213,11 +219,11 @@ class HiveConfig {
   static constexpr const char* kSchema = "schema";
 
   InsertExistingPartitionsBehavior insertExistingPartitionsBehavior(
-      const config::ConfigBase* session) const;
+      const config::IConfig* session) const;
 
-  uint32_t maxPartitionsPerWriters(const config::ConfigBase* session) const;
+  uint32_t maxPartitionsPerWriters(const config::IConfig* session) const;
 
-  uint32_t maxBucketCount(const config::ConfigBase* session) const;
+  uint32_t maxBucketCount(const config::IConfig* session) const;
 
   bool immutablePartitions() const;
 
@@ -231,28 +237,27 @@ class HiveConfig {
 
   std::optional<std::string> gcsAuthAccessTokenProvider() const;
 
-  bool isOrcUseColumnNames(const config::ConfigBase* session) const;
+  bool isOrcUseColumnNames(const config::IConfig* session) const;
 
-  bool isParquetUseColumnNames(const config::ConfigBase* session) const;
+  bool isParquetUseColumnNames(const config::IConfig* session) const;
 
-  bool isFileColumnNamesReadAsLowerCase(
-      const config::ConfigBase* session) const;
+  bool isFileColumnNamesReadAsLowerCase(const config::IConfig* session) const;
 
-  bool isPartitionPathAsLowerCase(const config::ConfigBase* session) const;
+  bool isPartitionPathAsLowerCase(const config::IConfig* session) const;
 
-  bool allowNullPartitionKeys(const config::ConfigBase* session) const;
+  bool allowNullPartitionKeys(const config::IConfig* session) const;
 
-  bool ignoreMissingFiles(const config::ConfigBase* session) const;
+  bool ignoreMissingFiles(const config::IConfig* session) const;
 
-  int64_t maxCoalescedBytes(const config::ConfigBase* session) const;
+  int64_t maxCoalescedBytes(const config::IConfig* session) const;
 
-  int32_t maxCoalescedDistanceBytes(const config::ConfigBase* session) const;
+  int32_t maxCoalescedDistanceBytes(const config::IConfig* session) const;
 
   int32_t prefetchRowGroups() const;
 
-  size_t parallelUnitLoadCount(const config::ConfigBase* session) const;
+  size_t parallelUnitLoadCount(const config::IConfig* session) const;
 
-  int32_t loadQuantum(const config::ConfigBase* session) const;
+  int32_t loadQuantum(const config::IConfig* session) const;
 
   int32_t numCacheFileHandles() const;
 
@@ -264,57 +269,57 @@ class HiveConfig {
 
   std::string writeFileCreateConfig() const;
 
-  uint32_t sortWriterMaxOutputRows(const config::ConfigBase* session) const;
+  uint32_t sortWriterMaxOutputRows(const config::IConfig* session) const;
 
-  uint64_t sortWriterMaxOutputBytes(const config::ConfigBase* session) const;
+  uint64_t sortWriterMaxOutputBytes(const config::IConfig* session) const;
 
   uint64_t sortWriterFinishTimeSliceLimitMs(
-      const config::ConfigBase* session) const;
+      const config::IConfig* session) const;
 
-  uint64_t maxTargetFileSizeBytes(const config::ConfigBase* session) const;
+  uint64_t maxTargetFileSizeBytes(const config::IConfig* session) const;
 
   uint64_t footerEstimatedSize() const;
 
   uint64_t filePreloadThreshold() const;
 
   // Returns the timestamp unit used when reading timestamps from files.
-  uint8_t readTimestampUnit(const config::ConfigBase* session) const;
+  uint8_t readTimestampUnit(const config::IConfig* session) const;
 
   // Whether to read timestamp partition value as local time. If false, read as
   // UTC.
   bool readTimestampPartitionValueAsLocalTime(
-      const config::ConfigBase* session) const;
+      const config::IConfig* session) const;
 
   /// Returns true if the stats based filter reorder for read is disabled.
   bool readStatsBasedFilterReorderDisabled(
-      const config::ConfigBase* session) const;
+      const config::IConfig* session) const;
 
   /// Whether to preserve flat maps in memory as FlatMapVectors instead of
   /// converting them to MapVectors.
-  bool preserveFlatMapsInMemory(const config::ConfigBase* session) const;
+  bool preserveFlatMapsInMemory(const config::IConfig* session) const;
 
   /// User of the query. Used for storage logging.
-  std::string user(const config::ConfigBase* session) const;
+  std::string user(const config::IConfig* session) const;
 
   /// Source of the query. Used for storage access and logging.
-  std::string source(const config::ConfigBase* session) const;
+  std::string source(const config::IConfig* session) const;
 
   /// Schema of the query. Used for storage logging.
-  std::string schema(const config::ConfigBase* session) const;
+  std::string schema(const config::IConfig* session) const;
 
-  HiveConfig(std::shared_ptr<const config::ConfigBase> config) {
+  HiveConfig(config::ConfigPtr config) {
     VELOX_CHECK_NOT_NULL(
         config, "Config is null for HiveConfig initialization");
     config_ = std::move(config);
     // TODO: add sanity check
   }
 
-  const std::shared_ptr<const config::ConfigBase>& config() const {
+  const config::ConfigPtr& config() const {
     return config_;
   }
 
  private:
-  std::shared_ptr<const config::ConfigBase> config_;
+  config::ConfigPtr config_;
 };
 
 } // namespace facebook::velox::connector::hive

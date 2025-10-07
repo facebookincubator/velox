@@ -31,7 +31,7 @@ using namespace filesystems;
 /// file operation to the real file system underneath.
 class FaultyFileSystem : public FileSystem {
  public:
-  explicit FaultyFileSystem(std::shared_ptr<const config::ConfigBase> config)
+  explicit FaultyFileSystem(config::ConfigPtr config)
       : FileSystem(std::move(config)) {}
 
   ~FaultyFileSystem() override {}

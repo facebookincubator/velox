@@ -23,23 +23,19 @@ namespace facebook::velox::filesystems {
 
 std::string S3Config::cacheKey(
     std::string_view bucket,
-    std::shared_ptr<const config::ConfigBase> config) {
+    const config::ConfigPtr& config) {
   auto bucketEndpoint = bucketConfigKey(Keys::kEndpoint, bucket);
-  if (config->valueExists(bucketEndpoint)) {
-    return fmt::format(
-        "{}-{}", config->get<std::string>(bucketEndpoint).value(), bucket);
+  if (auto value = config->get<std::string>(bucketEndpoint)) {
+    return fmt::format("{}-{}", *value, bucket);
   }
   auto baseEndpoint = baseConfigKey(Keys::kEndpoint);
-  if (config->valueExists(baseEndpoint)) {
-    return fmt::format(
-        "{}-{}", config->get<std::string>(baseEndpoint).value(), bucket);
+  if (auto value = config->get<std::string>(baseEndpoint)) {
+    return fmt::format("{}-{}", *value, bucket);
   }
   return std::string(bucket);
 }
 
-S3Config::S3Config(
-    std::string_view bucket,
-    const std::shared_ptr<const config::ConfigBase> properties)
+S3Config::S3Config(std::string_view bucket, const config::ConfigPtr& properties)
     : bucket_(bucket) {
   for (int key = static_cast<int>(Keys::kBegin);
        key < static_cast<int>(Keys::kEnd);
@@ -52,16 +48,14 @@ S3Config::S3Config(
     // Set bucket S3 config "hive.s3.bucket.*" if present.
     std::stringstream bucketConfig;
     bucketConfig << kS3BucketPrefix << bucket << "." << configSuffix;
-    auto configVal = static_cast<std::optional<std::string>>(
-        properties->get<std::string>(bucketConfig.str()));
+    auto configVal = properties->get<std::string>(bucketConfig.str());
     if (configVal.has_value()) {
       config_[s3Key] = configVal.value();
     } else {
       // Set base config "hive.s3.*" if present.
       std::stringstream baseConfig;
       baseConfig << kS3Prefix << configSuffix;
-      configVal = static_cast<std::optional<std::string>>(
-          properties->get<std::string>(baseConfig.str()));
+      configVal = properties->get<std::string>(baseConfig.str());
       if (configVal.has_value()) {
         config_[s3Key] = configVal.value();
       } else {

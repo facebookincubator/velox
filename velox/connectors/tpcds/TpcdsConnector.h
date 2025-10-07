@@ -135,7 +135,7 @@ class TpcdsConnector final : public velox::connector::Connector {
  public:
   TpcdsConnector(
       const std::string& id,
-      std::shared_ptr<const config::ConfigBase> config,
+      config::ConfigPtr config,
       folly::Executor* FOLLY_NULLABLE /*executor*/)
       : Connector(id) {}
 
@@ -174,7 +174,7 @@ class TpcdsConnectorFactory : public ConnectorFactory {
 
   std::shared_ptr<Connector> newConnector(
       const std::string& id,
-      std::shared_ptr<const config::ConfigBase> config,
+      config::ConfigPtr config,
       folly::Executor* ioExecutor = nullptr,
       folly::Executor* cpuExecutor = nullptr) override {
     return std::make_shared<TpcdsConnector>(id, config, ioExecutor);
