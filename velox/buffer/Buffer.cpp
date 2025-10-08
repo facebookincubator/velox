@@ -20,7 +20,7 @@ namespace facebook::velox {
 
 namespace {
 struct BufferReleaser {
-  explicit BufferReleaser(const BufferPtr& parent) : parent_(parent) {}
+  explicit BufferReleaser(BufferPtr parent) : parent_{std::move(parent)} {}
   void addRef() const {}
   void release() const {}
 
