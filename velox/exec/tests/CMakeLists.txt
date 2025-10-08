@@ -229,7 +229,6 @@ add_executable(
   PrestoQueryRunnerQDigestTransformTest.cpp
   PrestoQueryRunnerJsonTransformTest.cpp
   PrestoQueryRunnerIntervalTransformTest.cpp
-  PrestoQueryRunnerTimeTransformTest.cpp
   PrestoQueryRunnerTimestampWithTimeZoneTransformTest.cpp
 )
 

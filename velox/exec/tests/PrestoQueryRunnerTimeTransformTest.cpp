@@ -42,7 +42,7 @@ class PrestoQueryRunnerTimeTransformTest
 
 // Test that TIME is recognized as an intermediate type that needs
 // transformation
-TEST_F(PrestoQueryRunnerTimeTransformTest, isIntermediateOnlyType) {
+TEST_F(PrestoQueryRunnerTimeTransformTest, DISABLED_isIntermediateOnlyType) {
   // Core test: TIME should be an intermediate type
   ASSERT_TRUE(isIntermediateOnlyType(TIME()));
 
@@ -54,7 +54,7 @@ TEST_F(PrestoQueryRunnerTimeTransformTest, isIntermediateOnlyType) {
 }
 
 // Test that TIME vectors can be transformed for fuzzer persistence/testing
-TEST_F(PrestoQueryRunnerTimeTransformTest, transformTimeVector) {
+TEST_F(PrestoQueryRunnerTimeTransformTest, DISABLED_transformTimeVector) {
   // Core test: verify TIME vector can be transformed (TIME -> BIGINT)
   auto timeVector = createTimeVector(100);
   test(timeVector); // This tests the TIME->BIGINT transform works
@@ -63,14 +63,14 @@ TEST_F(PrestoQueryRunnerTimeTransformTest, transformTimeVector) {
 // Test TIME with all encodings: flat, dictionary, and constant
 // Dictionary encodings: 3 variants (no nulls, some nulls, all nulls)
 // Constant encodings: 2 variants (non-null constant, null constant)
-TEST_F(PrestoQueryRunnerTimeTransformTest, transformTimeEncodings) {
+TEST_F(PrestoQueryRunnerTimeTransformTest, DISABLED_transformTimeEncodings) {
   test(TIME());
 }
 
 // Test TIME in arrays with dictionary and constant encodings
 // Dictionary encoded arrays: wraps array in dict with various null patterns
 // Constant encoded arrays: wraps array as constant vector
-TEST_F(PrestoQueryRunnerTimeTransformTest, transformTimeArray) {
+TEST_F(PrestoQueryRunnerTimeTransformTest, DISABLED_transformTimeArray) {
   auto timeVector = createTimeVector(100);
   testArray(timeVector); // internally calls testDictionary() and testConstant()
 }

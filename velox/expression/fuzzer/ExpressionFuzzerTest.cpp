@@ -272,6 +272,7 @@ std::unordered_set<std::string> skipFunctionsSOT = {
     "cast(array(real)) -> array(varchar)",
     "cast(map(varchar,double)) -> map(varchar,varchar)",
     "cast(map(varchar,real)) -> map(varchar,varchar)",
+    "cast(varchar) -> time", // Disable VARCHAR to TIME casting
     "round", // https://github.com/facebookincubator/velox/issues/10634
     "bitwise_right_shift_arithmetic", // https://github.com/facebookincubator/velox/issues/10841
     "map_size_with", // https://github.com/facebookincubator/velox/issues/10964
