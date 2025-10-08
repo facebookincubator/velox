@@ -147,6 +147,17 @@ void registerSimpleFunctions(const std::string& prefix) {
   registerTimestampPlusInterval<TimestampWithTimezone>({prefix + "plus"});
   registerTimestampMinusInterval<TimestampWithTimezone>({prefix + "minus"});
 
+  // Register Time + Interval and Interval + Time functions
+  registerFunction<TimePlusInterval, Time, Time, IntervalDayTime>(
+      {prefix + "plus"});
+
+  // Use optimized vector function for Time + IntervalYearMonth (identity
+  // function)
+  exec::registerVectorFunction(
+      prefix + "plus",
+      TimePlusIntervalYearMonthVectorFunction::signatures(),
+      std::make_unique<TimePlusIntervalYearMonthVectorFunction>());
+
   registerFunction<
       TimestampMinusFunction,
       IntervalDayTime,

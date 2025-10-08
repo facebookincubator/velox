@@ -19,6 +19,8 @@
 #include <boost/regex.hpp>
 #include <xxhash.h>
 #include <string_view>
+#include "velox/expression/DecodedArgs.h"
+#include "velox/expression/VectorFunction.h"
 #include "velox/functions/lib/DateTimeFormatter.h"
 #include "velox/functions/lib/TimeUtils.h"
 #include "velox/functions/prestosql/DateTimeImpl.h"
@@ -26,6 +28,9 @@
 #include "velox/type/TimestampConversion.h"
 #include "velox/type/Type.h"
 #include "velox/type/tz/TimeZoneMap.h"
+#include "velox/vector/BaseVector.h"
+#include "velox/vector/ConstantVector.h"
+#include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::functions {
 
@@ -531,6 +536,69 @@ struct TimestampPlusInterval {
  private:
   // Only set if the parameters are timestamp and IntervalYearMonth.
   const tz::TimeZone* sessionTimeZone_ = nullptr;
+};
+
+template <typename T>
+struct TimePlusInterval {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Time>& result,
+      const arg_type<Time>& time,
+      const arg_type<IntervalDayTime>& interval) {
+    result = addToTime(time, interval);
+  }
+};
+
+// Optimized vector function for Time + IntervalYearMonth
+// This case is special because result = time (identity function), allowing
+// for significant optimizations
+class TimePlusIntervalYearMonthVectorFunction : public exec::VectorFunction {
+ public:
+  void apply(
+      const SelectivityVector& rows,
+      std::vector<VectorPtr>& args,
+      const TypePtr& outputType,
+      exec::EvalCtx& context,
+      VectorPtr& result) const override {
+    auto& timeVector = args[0];
+
+    // Constant vector case
+    // If time input is constant, create constant result - no iteration!
+    if (timeVector->isConstantEncoding()) {
+      auto constantTime = timeVector->as<ConstantVector<int64_t>>();
+      if (constantTime->isNullAt(0)) {
+        result = BaseVector::createNullConstant(
+            outputType, rows.size(), context.pool());
+      } else {
+        auto value = constantTime->valueAt(0);
+        result = BaseVector::createConstant(
+            outputType, value, rows.size(), context.pool());
+      }
+      return;
+    }
+
+    // Single reference case
+    // If input vector is singly referenced, reuse it directly - zero copy!
+    if (!result && BaseVector::isVectorWritable(timeVector)) {
+      result = std::move(timeVector); // Move input to result - zero copy!
+      return;
+    }
+
+    // FALLBACK: Standard processing for other cases
+    context.ensureWritable(rows, outputType, result);
+    auto* flatResult = result->asFlatVector<int64_t>();
+    // Fast path for flat vectors - use FlatVector::copy for efficient copying
+    flatResult->copy(timeVector.get(), rows, nullptr);
+  }
+
+  static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
+    return {exec::FunctionSignatureBuilder()
+                .returnType("time")
+                .argumentType("time")
+                .argumentType("interval year to month")
+                .build()};
+  }
 };
 
 template <typename T>
