@@ -74,6 +74,30 @@ void VectorLoader::load(
 }
 
 void VectorLoader::load(
+    RowSet rows,
+    ValueHook* hook,
+    vector_size_t resultSize,
+    VectorPtr* result,
+    const TypePtr& type,
+    memory::MemoryPool* pool) {
+  // Pre-allocate based on estimated size to reduce malloc calls
+  if (*result == nullptr && resultSize > 0) {
+    *result = BaseVector::create(type, resultSize, pool);
+  }
+
+  {
+    LazyIoStatsRecorder recorder(result);
+    loadInternal(rows, hook, resultSize, result);
+  }
+  if (hook) {
+    // Record number of rows loaded directly into ValueHook bypassing
+    // materialization into vector. This counter can be used to understand
+    // whether aggregation pushdown is happening or not.
+    addThreadLocalRuntimeStat("loadedToValueHook", RuntimeCounter(rows.size()));
+  }
+}
+
+void VectorLoader::load(
     const SelectivityVector& rows,
     ValueHook* hook,
     vector_size_t resultSize,
@@ -95,6 +119,33 @@ void VectorLoader::load(
   simd::indicesOfSetBits(
       rows.allBits(), rows.begin(), rows.end(), positions.data());
   load(positions, hook, resultSize, result);
+}
+
+void VectorLoader::load(
+    const SelectivityVector& rows,
+    ValueHook* hook,
+    vector_size_t resultSize,
+    VectorPtr* result,
+    const TypePtr& type,
+    memory::MemoryPool* pool) {
+  if (rows.isAllSelected()) {
+    const auto& indices = DecodedVector::consecutiveIndices();
+    VELOX_DCHECK(!indices.empty());
+    if (rows.end() <= indices.size()) {
+      load(
+          RowSet(&indices[rows.begin()], rows.end() - rows.begin()),
+          hook,
+          resultSize,
+          result,
+          type,
+          pool);
+      return;
+    }
+  }
+  raw_vector<vector_size_t> positions(rows.countSelected(), pool);
+  simd::indicesOfSetBits(
+      rows.allBits(), rows.begin(), rows.end(), positions.data());
+  load(positions, hook, resultSize, result, type, pool);
 }
 
 VectorPtr LazyVector::slice(vector_size_t offset, vector_size_t length) const {
@@ -263,14 +314,20 @@ void LazyVector::load(RowSet rows, ValueHook* hook) const {
     return;
   }
 
-  // The loader expect structs to be pre-allocated.
-  if (!vector_ && type_->kind() == TypeKind::ROW) {
-    vector_ = BaseVector::create(type_, rows.back() + 1, pool_);
+  // Pre-allocate based on estimated size to reduce malloc calls
+  if (!vector_ && !rows.empty()) {
+    if (type_->kind() == TypeKind::ROW) {
+      // The loader expect structs to be pre-allocated with sufficient capacity
+      vector_ = BaseVector::create(type_, rows.back() + 1, pool_);
+    } else {
+      // Pre-allocate for other types to reduce malloc calls during loading
+      vector_ = BaseVector::create(type_, size(), pool_);
+    }
   }
 
   // We do not call prepareForReuse on vector_ in purpose, the loader handles
   // that.
-  loader_->load(rows, hook, size(), &vector_);
+  loader_->load(rows, hook, size(), &vector_, type_, pool_);
   if (!hook) {
     VELOX_CHECK_GE(vector_->size(), size());
   }
@@ -282,7 +339,7 @@ void LazyVector::loadVectorInternal() const {
       vector_ = BaseVector::create(type_, 0, pool_);
     }
     SelectivityVector allRows(BaseVector::length_);
-    loader_->load(allRows, nullptr, size(), &vector_, pool_);
+    loader_->load(allRows, nullptr, size(), &vector_, type_, pool_);
     VELOX_CHECK_NOT_NULL(vector_);
     if (vector_->encoding() == VectorEncoding::Simple::LAZY) {
       vector_ = vector_->asUnchecked<LazyVector>()->loadedVectorShared();

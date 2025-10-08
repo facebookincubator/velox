@@ -193,6 +193,16 @@ class VectorLoader {
       vector_size_t resultSize,
       VectorPtr* result);
 
+  // Signature with pre-allocation optimization.
+  // Pre-allocates the result vector if it's null to reduce malloc calls.
+  void load(
+      RowSet rows,
+      ValueHook* hook,
+      vector_size_t resultSize,
+      VectorPtr* result,
+      const TypePtr& type,
+      memory::MemoryPool* pool);
+
   // Converts 'rows' into a RowSet and calls load(). Provided for
   // convenience in loading LazyVectors in expression evaluation.
   void load(
@@ -200,6 +210,15 @@ class VectorLoader {
       ValueHook* hook,
       vector_size_t resultSize,
       VectorPtr* result,
+      memory::MemoryPool* pool);
+
+  // Signature with pre-allocation optimization for SelectivityVector.
+  void load(
+      const SelectivityVector& rows,
+      ValueHook* hook,
+      vector_size_t resultSize,
+      VectorPtr* result,
+      const TypePtr& type,
       memory::MemoryPool* pool);
 
   virtual bool supportsHook() const {
