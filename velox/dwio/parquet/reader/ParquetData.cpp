@@ -13,11 +13,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
+#include "velox/dwio/parquet/reader/ParquetData.h"
 #include <thrift/protocol/TCompactProtocol.h>
 #include <iomanip>
 #include "velox/dwio/parquet/thrift/ThriftTransport.h"
-#include "velox/dwio/parquet/reader/ParquetData.h"
 
 #include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/parquet/reader/ParquetStatsContext.h"
@@ -27,8 +26,7 @@ namespace facebook::velox::parquet {
 namespace {
 
 // Helper methods for EncodingStats analysis (like Java Presto)
-bool hasDictionaryPages(
-    const std::vector<thrift::PageEncodingStats>& stats) {
+bool hasDictionaryPages(const std::vector<thrift::PageEncodingStats>& stats) {
   for (const auto& pageStats : stats) {
     if (pageStats.page_type == thrift::PageType::DICTIONARY_PAGE) {
       return true;
@@ -244,7 +242,6 @@ bool ParquetData::isOnlyDictionaryEncodingPagesImpl(
 
   return false;
 }
-
 
 bool ParquetData::testFilterAgainstDictionary(
     uint32_t rowGroupId,

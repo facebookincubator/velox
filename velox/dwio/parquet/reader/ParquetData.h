@@ -225,10 +225,9 @@ class ParquetData : public dwio::common::FormatData {
       const common::Filter* filter,
       const ColumnChunkMetaDataPtr& columnChunk);
 
-  /// Presto's exact isOnlyDictionaryEncodingPages function from PR #4779
+  // Presto's exact isOnlyDictionaryEncodingPages function from PR #4779
   bool isOnlyDictionaryEncodingPagesImpl(
       const ColumnChunkMetaDataPtr& columnChunk);
-
 
   // Read dictionary page directly for row group filtering (like Presto's
   // approach)

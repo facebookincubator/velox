@@ -229,8 +229,8 @@ ColumnChunkMetaDataPtr::getEncodingStats() const {
   return thriftColumnChunkPtr(ptr_)->meta_data.encoding_stats;
 }
 
-const std::vector<thrift::Encoding::type>& ColumnChunkMetaDataPtr::getEncodings()
-    const {
+const std::vector<thrift::Encoding::type>&
+ColumnChunkMetaDataPtr::getEncodings() const {
   return thriftColumnChunkPtr(ptr_)->meta_data.encodings;
 }
 
