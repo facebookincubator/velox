@@ -14,16 +14,45 @@
  * limitations under the License.
  */
 
+#include <thrift/protocol/TCompactProtocol.h>
+#include <iomanip>
+#include "velox/dwio/parquet/thrift/ThriftTransport.h"
 #include "velox/dwio/parquet/reader/ParquetData.h"
 
 #include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/parquet/reader/ParquetStatsContext.h"
 
-#include <thrift/protocol/TCompactProtocol.h>
-#include <iomanip>
-#include "velox/dwio/parquet/thrift/ThriftTransport.h"
-
 namespace facebook::velox::parquet {
+
+namespace {
+
+// Helper methods for EncodingStats analysis (like Java Presto)
+bool hasDictionaryPages(
+    const std::vector<thrift::PageEncodingStats>& stats) {
+  for (const auto& pageStats : stats) {
+    if (pageStats.page_type == thrift::PageType::DICTIONARY_PAGE) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool hasNonDictionaryEncodedPages(
+    const std::vector<thrift::PageEncodingStats>& stats) {
+  for (const auto& pageStats : stats) {
+    if (pageStats.page_type == thrift::PageType::DATA_PAGE ||
+        pageStats.page_type == thrift::PageType::DATA_PAGE_V2) {
+      // Check if this data page uses non-dictionary encoding
+      if (pageStats.encoding != thrift::Encoding::PLAIN_DICTIONARY &&
+          pageStats.encoding != thrift::Encoding::RLE_DICTIONARY) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+} // namespace
 
 std::unique_ptr<dwio::common::FormatData> ParquetParams::toFormatData(
     const std::shared_ptr<const dwio::common::TypeWithId>& type,
@@ -188,7 +217,7 @@ bool ParquetData::isOnlyDictionaryEncodingPagesImpl(
   }
 
   // Fallback to v1 logic
-  auto encodings = columnChunk.getEncoding();
+  auto encodings = columnChunk.getEncodings();
   std::set<thrift::Encoding::type> encodingSet(
       encodings.begin(), encodings.end());
 
@@ -216,31 +245,6 @@ bool ParquetData::isOnlyDictionaryEncodingPagesImpl(
   return false;
 }
 
-// Helper methods for EncodingStats analysis (like Java Presto)
-bool ParquetData::hasDictionaryPages(
-    const std::vector<thrift::PageEncodingStats>& stats) {
-  for (const auto& pageStats : stats) {
-    if (pageStats.page_type == thrift::PageType::DICTIONARY_PAGE) {
-      return true;
-    }
-  }
-  return false;
-}
-
-bool ParquetData::hasNonDictionaryEncodedPages(
-    const std::vector<thrift::PageEncodingStats>& stats) {
-  for (const auto& pageStats : stats) {
-    if (pageStats.page_type == thrift::PageType::DATA_PAGE ||
-        pageStats.page_type == thrift::PageType::DATA_PAGE_V2) {
-      // Check if this data page uses non-dictionary encoding
-      if (pageStats.encoding != thrift::Encoding::PLAIN_DICTIONARY &&
-          pageStats.encoding != thrift::Encoding::RLE_DICTIONARY) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
 
 bool ParquetData::testFilterAgainstDictionary(
     uint32_t rowGroupId,
@@ -251,9 +255,6 @@ bool ParquetData::testFilterAgainstDictionary(
   }
 
   auto dictionaryPtr = readDictionaryPageForFiltering(rowGroupId, columnChunk);
-  if (!dictionaryPtr->values || dictionaryPtr->numValues == 0) {
-    return true;
-  }
 
   auto numValues = dictionaryPtr->numValues;
   const void* dictPtr = dictionaryPtr->values->as<void>();
@@ -332,11 +333,6 @@ ParquetData::readDictionaryPageForFiltering(
 std::unique_ptr<dwio::common::SeekableInputStream> ParquetData::getInputStream(
     uint32_t rowGroupId,
     const ColumnChunkMetaDataPtr& columnChunk) {
-  // Use existing stream if available
-  if (rowGroupId < streams_.size() && streams_[rowGroupId]) {
-    return std::move(streams_[rowGroupId]);
-  }
-
   // Create new stream using the same logic as enqueueRowGroup
   if (!bufferedInput_) {
     return nullptr;

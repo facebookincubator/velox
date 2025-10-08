@@ -218,8 +218,8 @@ class ParquetData : public dwio::common::FormatData {
   /// stats in 'rowGroup'.
   bool rowGroupMatches(uint32_t rowGroupId, const common::Filter* filter);
 
-  /// Dictionary-based row group filtering (like Java Presto's
-  /// dictionaryPredicatesMatch)
+  // Dictionary-based row group filtering (like Java Presto's
+  // dictionaryPredicatesMatch)
   bool testFilterAgainstDictionary(
       uint32_t rowGroupId,
       const common::Filter* filter,
@@ -229,19 +229,14 @@ class ParquetData : public dwio::common::FormatData {
   bool isOnlyDictionaryEncodingPagesImpl(
       const ColumnChunkMetaDataPtr& columnChunk);
 
-  /// Helper methods for EncodingStats analysis (like Java Presto)
-  bool hasDictionaryPages(const std::vector<thrift::PageEncodingStats>& stats);
-  bool hasNonDictionaryEncodedPages(
-      const std::vector<thrift::PageEncodingStats>& stats);
 
-  /// Read dictionary page directly for row group filtering (like Presto's
-  /// approach)
+  // Read dictionary page directly for row group filtering (like Presto's
+  // approach)
   std::unique_ptr<dwio::common::DictionaryValues>
   readDictionaryPageForFiltering(
       uint32_t rowGroupId,
       const ColumnChunkMetaDataPtr& columnChunk);
 
-  /// Helper methods for dictionary page reading
   std::unique_ptr<dwio::common::SeekableInputStream> getInputStream(
       uint32_t rowGroupId,
       const ColumnChunkMetaDataPtr& columnChunk);

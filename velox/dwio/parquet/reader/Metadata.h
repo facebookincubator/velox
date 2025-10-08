@@ -42,7 +42,7 @@ class ColumnChunkMetaDataPtr {
 
   const std::vector<thrift::PageEncodingStats>& getEncodingStats() const;
 
-  const std::vector<thrift::Encoding::type>& getEncoding() const;
+  const std::vector<thrift::Encoding::type>& getEncodings() const;
 
   /// Return the ColumnChunk statistics.
   std::unique_ptr<dwio::common::ColumnStatistics> getColumnStatistics(
@@ -67,13 +67,6 @@ class ColumnChunkMetaDataPtr {
   /// The dictionary page offset.
   /// Must check for its presence using hasDictionaryPageOffset().
   int64_t dictionaryPageOffset() const;
-
-  /// Check if bloom filter is available.
-  bool hasBloomFilter() const;
-
-  /// The bloom filter offset.
-  /// Must check for its presence using hasBloomFilter().
-  std::optional<int64_t> bloom_filter_offset() const;
 
   /// The compression.
   common::CompressionKind compression() const;

@@ -1784,6 +1784,19 @@ TEST_F(ParquetReaderTest, dictionaryEncodedComplexFilter) {
       ROW({"id", "region", "product", "amount"},
           {BIGINT(), VARCHAR(), VARCHAR(), DOUBLE()});
 
+  // Helper function to read all rows and return total count
+  auto readAllRows = [&](auto& rowReader) -> uint64_t {
+    VectorPtr result = BaseVector::create(rowType, 0, leafPool_.get());
+    uint64_t totalRows = 0;
+    while (true) {
+      uint64_t rows = rowReader->next(1000, result);
+      if (rows == 0)
+        break;
+      totalRows += rows;
+    }
+    return totalRows;
+  };
+
   // Test 1: Region filter
   {
     dwio::common::ReaderOptions readerOptions{leafPool_.get()};
@@ -1798,17 +1811,8 @@ TEST_F(ParquetReaderTest, dictionaryEncodedComplexFilter) {
     rowReaderOpts.setScanSpec(scanSpec);
     auto rowReader = reader->createRowReader(rowReaderOpts);
 
-    VectorPtr result = BaseVector::create(rowType, 0, leafPool_.get());
-    uint64_t totalRows = 0;
-    while (true) {
-      uint64_t rows = rowReader->next(1000, result);
-      if (rows == 0)
-        break;
-      totalRows += rows;
-    }
-
     // Rowgroup skipped
-    EXPECT_EQ(totalRows, 2000);
+    EXPECT_EQ(readAllRows(rowReader), 2000);
   }
 
   // Test 2: Product filter
@@ -1825,18 +1829,9 @@ TEST_F(ParquetReaderTest, dictionaryEncodedComplexFilter) {
     rowReaderOpts.setScanSpec(scanSpec);
     auto rowReader = reader->createRowReader(rowReaderOpts);
 
-    VectorPtr result = BaseVector::create(rowType, 0, leafPool_.get());
-    uint64_t totalRows = 0;
-    while (true) {
-      uint64_t rows = rowReader->next(1000, result);
-      if (rows == 0)
-        break;
-      totalRows += rows;
-    }
-
     // Should find matches across all row groups - NO row group skipping should
     // occur
-    EXPECT_EQ(totalRows, 3000);
+    EXPECT_EQ(readAllRows(rowReader), 3000);
   }
 
   // Test 3: Filter that matches no regions
@@ -1859,14 +1854,6 @@ TEST_F(ParquetReaderTest, dictionaryEncodedComplexFilter) {
     rowReaderOpts.setScanSpec(scanSpec);
     auto rowReader = reader->createRowReader(rowReaderOpts);
 
-    VectorPtr result = BaseVector::create(rowType, 0, leafPool_.get());
-    uint64_t totalRows = 0;
-    while (true) {
-      uint64_t rows = rowReader->next(1000, result);
-      if (rows == 0)
-        break;
-      totalRows += rows;
-    }
-    EXPECT_EQ(totalRows, 0);
+    EXPECT_EQ(readAllRows(rowReader), 0);
   }
 }
