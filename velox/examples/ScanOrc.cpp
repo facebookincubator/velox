@@ -19,15 +19,14 @@
 
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/memory/Memory.h"
+#include "velox/dwio/RegisterReaders.h"
 #include "velox/dwio/common/Reader.h"
 #include "velox/dwio/common/ReaderFactory.h"
-#include "velox/dwio/dwrf/RegisterDwrfReader.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/vector/BaseVector.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::dwio::common;
-using namespace facebook::velox::dwrf;
 
 // A temporary program that reads from ORC file and prints its content
 // Used to compare the ORC data read by DWRFReader against apache-orc repo.
@@ -42,7 +41,7 @@ int main(int argc, char** argv) {
   // To be able to read local files, we need to register the local file
   // filesystem. We also need to register the dwrf reader factory:
   filesystems::registerLocalFileSystem();
-  dwrf::registerDwrfReaderFactory();
+  dwio::registerReaderFactories();
   facebook::velox::memory::MemoryManager::initialize(
       facebook::velox::memory::MemoryManager::Options{});
   auto pool = facebook::velox::memory::memoryManager()->addLeafPool();

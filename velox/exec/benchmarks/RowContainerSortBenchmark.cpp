@@ -17,8 +17,10 @@
 #include <folly/Benchmark.h>
 #include <folly/init/Init.h>
 
+#include "velox/dwio/RegisterReaders.h"
+#include "velox/dwio/common/Options.h"
+#include "velox/dwio/common/ReaderFactory.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h"
-#include "velox/dwio/parquet/reader/ParquetReader.h"
 #include "velox/exec/RowContainer.h"
 #include "velox/external/timsort/TimSort.hpp"
 #include "velox/type/StringView.h"
@@ -51,26 +53,22 @@ std::shared_ptr<velox::common::ScanSpec> makeScanSpec(
   return scanSpec;
 }
 
-facebook::velox::parquet::ParquetReader createReader(
-    const std::string& path,
-    const facebook::velox::dwio::common::ReaderOptions& opts) {
-  return facebook::velox::parquet::ParquetReader(
-      std::make_unique<facebook::velox::dwio::common::BufferedInput>(
-          std::make_shared<LocalReadFile>(path), opts.memoryPool()),
-      opts);
-}
-
 std::vector<std::optional<StringView>> getDataFromFile() {
   const std::string sample(getExampleFilePath("str_sort.parquet"));
   auto rowType = ROW({"query_sig", "result_sig"}, {VARCHAR(), VARCHAR()});
   auto pool = memory::memoryManager()->addLeafPool();
   facebook::velox::dwio::common::ReaderOptions readerOptions{pool.get()};
-  facebook::velox::parquet::ParquetReader reader =
-      createReader(sample, readerOptions);
+  auto reader =
+      getReaderFactory(facebook::velox::dwio::common::FileFormat::PARQUET)
+          ->createReader(
+              std::make_unique<facebook::velox::dwio::common::BufferedInput>(
+                  std::make_shared<LocalReadFile>(sample),
+                  readerOptions.memoryPool()),
+              readerOptions);
   auto rowReaderOpts = getReaderOpts(rowType);
   auto scanSpec = makeScanSpec(rowType);
   rowReaderOpts.setScanSpec(scanSpec);
-  auto rowReader = reader.createRowReader(rowReaderOpts);
+  auto rowReader = reader->createRowReader(rowReaderOpts);
   auto data = BaseVector::create(rowType, 50000, pool.get());
   rowReader->next(50000, data);
   auto querySigCol =
@@ -236,6 +234,7 @@ int main(int argc, char** argv) {
   folly::Init init{&argc, &argv};
   facebook::velox::memory::MemoryManager::initialize(
       facebook::velox::memory::MemoryManager::Options{});
+  facebook::velox::dwio::registerReaderFactories();
   folly::runBenchmarks();
   return 0;
 }
