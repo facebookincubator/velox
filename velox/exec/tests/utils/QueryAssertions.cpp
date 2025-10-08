@@ -18,6 +18,7 @@
 #include <chrono>
 
 #include "duckdb/common/types.hpp" // @manual
+#include "velox/common/Casts.h"
 #include "velox/duckdb/conversion/DuckConversion.h"
 #include "velox/exec/Cursor.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
@@ -349,7 +350,7 @@ variant rowVariantAt(const ::duckdb::Value& vector, const TypePtr& rowType) {
 variant mapVariantAt(const ::duckdb::Value& vector, const TypePtr& mapType) {
   std::map<variant, variant> map;
 
-  auto mapTypePtr = dynamic_cast<const MapType*>(mapType.get());
+  auto mapTypePtr = checked_pointer_cast<const MapType>(mapType.get());
   auto keyType = mapTypePtr->keyType();
   auto valueType = mapTypePtr->valueType();
 
@@ -384,7 +385,7 @@ variant arrayVariantAt(
 
   const auto& elementList = ::duckdb::ListValue::GetChildren(vector);
 
-  auto arrayTypePtr = dynamic_cast<const ArrayType*>(arrayType.get());
+  auto arrayTypePtr = checked_pointer_cast<const ArrayType>(arrayType.get());
   auto elementType = arrayTypePtr->elementType();
   for (int i = 0; i < elementList.size(); i++) {
     // TODO: Add support for MAP and ROW element types.
