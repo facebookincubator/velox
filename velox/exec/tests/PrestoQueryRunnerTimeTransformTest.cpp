@@ -14,35 +14,17 @@
  * limitations under the License.
  */
 
-#include "velox/exec/fuzzer/PrestoQueryRunnerIntermediateTypeTransforms.h"
 #include "velox/exec/tests/PrestoQueryRunnerIntermediateTypeTransformTestBase.h"
 
 namespace facebook::velox::exec::test {
 namespace {
 
 class PrestoQueryRunnerTimeTransformTest
-    : public PrestoQueryRunnerIntermediateTypeTransformTestBase {
- public:
-  VectorPtr createTimeVector(const vector_size_t size) {
-    std::vector<std::optional<int64_t>> values;
-    values.reserve(size);
-
-    for (vector_size_t i = 0; i < size; ++i) {
-      if (i % 10 == 0) {
-        values.push_back(std::nullopt); // Some nulls for testing
-      } else {
-        // Create realistic TIME values: 0 to 86399999 (23:59:59.999)
-        values.push_back((i * 3661000 + 123) % 86400000);
-      }
-    }
-
-    return makeNullableFlatVector(values, TIME());
-  }
-};
+    : public PrestoQueryRunnerIntermediateTypeTransformTestBase {};
 
 // Test that TIME is recognized as an intermediate type that needs
 // transformation
-TEST_F(PrestoQueryRunnerTimeTransformTest, DISABLED_isIntermediateOnlyType) {
+TEST_F(PrestoQueryRunnerTimeTransformTest, isIntermediateOnlyType) {
   // Core test: TIME should be an intermediate type
   ASSERT_TRUE(isIntermediateOnlyType(TIME()));
 
@@ -53,61 +35,78 @@ TEST_F(PrestoQueryRunnerTimeTransformTest, DISABLED_isIntermediateOnlyType) {
   ASSERT_TRUE(isIntermediateOnlyType(ROW({TIME(), BIGINT()})));
 }
 
-// Test that TIME vectors can be transformed for fuzzer persistence/testing
-TEST_F(PrestoQueryRunnerTimeTransformTest, DISABLED_transformTimeVector) {
-  // Core test: verify TIME vector can be transformed (TIME -> BIGINT)
-  auto timeVector = createTimeVector(100);
-  test(timeVector); // This tests the TIME->BIGINT transform works
+TEST_F(PrestoQueryRunnerTimeTransformTest, roundTrip) {
+  // Test basic TIME values (no nulls, some nulls, all nulls)
+  std::vector<std::optional<int64_t>> no_nulls{0, 3661000, 43200000, 86399999};
+  test(makeNullableFlatVector(no_nulls, TIME()));
+
+  std::vector<std::optional<int64_t>> some_nulls{
+      0, 3661000, std::nullopt, 86399999};
+  test(makeNullableFlatVector(some_nulls, TIME()));
+
+  std::vector<std::optional<int64_t>> all_nulls{
+      std::nullopt, std::nullopt, std::nullopt};
+  test(makeNullableFlatVector(all_nulls, TIME()));
 }
 
-// Test TIME with all encodings: flat, dictionary, and constant
-// Dictionary encodings: 3 variants (no nulls, some nulls, all nulls)
-// Constant encodings: 2 variants (non-null constant, null constant)
-TEST_F(PrestoQueryRunnerTimeTransformTest, DISABLED_transformTimeEncodings) {
-  test(TIME());
+TEST_F(PrestoQueryRunnerTimeTransformTest, transformArray) {
+  auto input = makeNullableFlatVector(
+      std::vector<std::optional<int64_t>>{
+          0, // 00:00:00.000
+          1000, // 00:00:01.000
+          3661000, // 01:01:01.000
+          43200000, // 12:00:00.000 (noon)
+          86399999, // 23:59:59.999
+          3723456, // 01:02:03.456
+          45678901, // 12:41:18.901
+          std::nullopt,
+          72000000, // 20:00:00.000
+          36000000 // 10:00:00.000
+      },
+      TIME());
+  testArray(input);
 }
 
-// Test TIME in arrays with dictionary and constant encodings
-// Dictionary encoded arrays: wraps array in dict with various null patterns
-// Constant encoded arrays: wraps array as constant vector
-TEST_F(PrestoQueryRunnerTimeTransformTest, DISABLED_transformTimeArray) {
-  auto timeVector = createTimeVector(100);
-  testArray(timeVector); // internally calls testDictionary() and testConstant()
+TEST_F(PrestoQueryRunnerTimeTransformTest, transformMap) {
+  // keys can't be null for maps
+  auto keys = makeNullableFlatVector(
+      std::vector<std::optional<int64_t>>{
+          0, // 00:00:00.000
+          3661000, // 01:01:01.000
+          43200000, // 12:00:00.000
+          86399999, // 23:59:59.999
+          36000000, // 10:00:00.000
+          72000000, // 20:00:00.000
+          1800000, // 00:30:00.000
+          7200000, // 02:00:00.000
+          64800000, // 18:00:00.000
+          32400000 // 09:00:00.000
+      },
+      TIME());
+
+  auto values = makeNullableFlatVector<int64_t>(
+      {100, 200, std::nullopt, 400, 500, std::nullopt, 700, 800, 900, 1000},
+      BIGINT());
+
+  testMap(keys, values);
 }
 
-// Test TIME in maps with dictionary and constant encodings
-// Dictionary encoded maps: wraps map in dict with various null patterns
-// Constant encoded maps: wraps map as constant vector
-TEST_F(PrestoQueryRunnerTimeTransformTest, transformTimeMap) {
-  // create TIME keys without nulls since map keys can't be null
-  std::vector<std::optional<int64_t>> keyValues;
-  keyValues.reserve(100);
-  for (vector_size_t i = 0; i < 100; ++i) {
-    keyValues.push_back((i * 3661000 + 123) % 86400000);
-  }
-  auto keys = makeNullableFlatVector(keyValues, TIME());
-
-  std::vector<std::optional<int64_t>> valueValues;
-  valueValues.reserve(100);
-  for (vector_size_t i = 0; i < 100; ++i) {
-    if (i % 7 == 2) {
-      valueValues.push_back(std::nullopt); // Some nulls for testing
-    } else {
-      valueValues.push_back(1000 + i * 101 + 1);
-    }
-  }
-  auto values = makeNullableFlatVector(valueValues, BIGINT());
-  testMap(keys, values); // internally calls testDictionary() and testConstant()
-}
-
-// Test TIME in rows with dictionary and constant encodings
-// Dictionary encoded rows: wraps row in dict with various null patterns
-// Constant encoded rows: wraps row as constant vector
-TEST_F(PrestoQueryRunnerTimeTransformTest, transformTimeRow) {
-  auto timeVector = createTimeVector(100);
-  testRow(
-      {timeVector},
-      {"time_field"}); // internally calls testDictionary() and testConstant()
+TEST_F(PrestoQueryRunnerTimeTransformTest, transformRow) {
+  auto input = makeNullableFlatVector(
+      std::vector<std::optional<int64_t>>{
+          0, // 00:00:00.000
+          3661000, // 01:01:01.000
+          43200000, // 12:00:00.000
+          86399999, // 23:59:59.999
+          std::nullopt,
+          36000000, // 10:00:00.000
+          72000000, // 20:00:00.000
+          1800000, // 00:30:00.000
+          7200000, // 02:00:00.000
+          64800000 // 18:00:00.000
+      },
+      TIME());
+  testRow({input}, {"time_col"});
 }
 
 } // namespace

@@ -338,10 +338,6 @@ bool PrestoQueryRunner::isSupported(const exec::FunctionSignature& signature) {
   //   - Under development in Presto
   //   - Cannot be used as constant literals
   //   - Expected differences between Presto Java and Velox C++ implementations
-  //
-  // time:
-  //   - Not supported by Fuzzer, will enable after intermediate type support
-  //   - Cannot be used as input/output types in Presto SQL
   return !(
       usesTypeName(signature, "interval year to month") ||
       usesTypeName(signature, "hugeint") ||

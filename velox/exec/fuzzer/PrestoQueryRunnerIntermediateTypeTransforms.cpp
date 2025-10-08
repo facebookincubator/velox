@@ -66,9 +66,9 @@ intermediateTypeTransforms() {
            std::make_shared<IntermediateTypeTransformUsingCast>(
                SFMSKETCH(), VARBINARY())},
           {JSON(), std::make_shared<JsonTransform>()},
-          // {TIME(),
-          //  std::make_shared<IntermediateTypeTransformUsingCast>(
-          //      TIME(), BIGINT())},  // Disabled
+          {TIME(),
+           std::make_shared<IntermediateTypeTransformUsingCast>(
+               TIME(), VARCHAR())},
           {BINGTILE(),
            std::make_shared<IntermediateTypeTransformUsingCast>(
                BINGTILE(), BIGINT())},
