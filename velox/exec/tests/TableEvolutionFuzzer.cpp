@@ -15,6 +15,7 @@
  */
 
 #include "velox/exec/tests/TableEvolutionFuzzer.h"
+#include "velox/common/Casts.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/dwio/common/tests/utils/FilterGenerator.h"
 #include "velox/dwio/dwrf/common/Config.h"
@@ -249,8 +250,8 @@ void buildScanSplitFromTableWriteResult(
     return;
   }
   VELOX_CHECK_EQ(writeResult.size(), 1);
-  auto* fragments =
-      writeResult[0]->childAt(1)->asChecked<SimpleVector<StringView>>();
+  auto fragments = checked_pointer_cast<SimpleVector<StringView>>(
+      writeResult[0]->childAt(1));
   for (int i = 1; i < writeResult[0]->size(); ++i) {
     auto fragment = folly::parseJson(fragments->valueAt(i));
     auto fileName = fragment["fileWriteInfos"][0]["writeFileName"].asString();
@@ -408,7 +409,7 @@ VectorPtr TableEvolutionFuzzer::liftToType(
     const TypePtr& type) {
   switch (input->typeKind()) {
     case TypeKind::TINYINT: {
-      auto* typed = input->asChecked<FlatVector<int8_t>>();
+      auto* typed = checked_pointer_cast<FlatVector<int8_t>>(input).get();
       switch (type->kind()) {
         case TypeKind::TINYINT:
           return input;
@@ -423,7 +424,7 @@ VectorPtr TableEvolutionFuzzer::liftToType(
       }
     }
     case TypeKind::SMALLINT: {
-      auto* typed = input->asChecked<FlatVector<int16_t>>();
+      auto* typed = checked_pointer_cast<FlatVector<int16_t>>(input).get();
       switch (type->kind()) {
         case TypeKind::SMALLINT:
           return input;
@@ -436,7 +437,7 @@ VectorPtr TableEvolutionFuzzer::liftToType(
       }
     }
     case TypeKind::INTEGER: {
-      auto* typed = input->asChecked<FlatVector<int32_t>>();
+      auto* typed = checked_pointer_cast<FlatVector<int32_t>>(input).get();
       switch (type->kind()) {
         case TypeKind::INTEGER:
           return input;
@@ -447,7 +448,7 @@ VectorPtr TableEvolutionFuzzer::liftToType(
       }
     }
     case TypeKind::REAL: {
-      auto* typed = input->asChecked<FlatVector<float>>();
+      auto* typed = checked_pointer_cast<FlatVector<float>>(input).get();
       switch (type->kind()) {
         case TypeKind::REAL:
           return input;
@@ -459,7 +460,7 @@ VectorPtr TableEvolutionFuzzer::liftToType(
     }
     case TypeKind::ARRAY: {
       VELOX_CHECK_EQ(type->kind(), TypeKind::ARRAY);
-      auto* array = input->asChecked<ArrayVector>();
+      auto* array = checked_pointer_cast<ArrayVector>(input).get();
       return std::make_shared<ArrayVector>(
           config_.pool,
           type,
@@ -472,7 +473,7 @@ VectorPtr TableEvolutionFuzzer::liftToType(
     case TypeKind::MAP: {
       VELOX_CHECK_EQ(type->kind(), TypeKind::MAP);
       auto& mapType = type->asMap();
-      auto* map = input->asChecked<MapVector>();
+      auto* map = checked_pointer_cast<MapVector>(input).get();
       return std::make_shared<MapVector>(
           config_.pool,
           type,
@@ -486,7 +487,7 @@ VectorPtr TableEvolutionFuzzer::liftToType(
     case TypeKind::ROW: {
       VELOX_CHECK_EQ(type->kind(), TypeKind::ROW);
       auto& rowType = type->asRow();
-      auto* row = input->asChecked<RowVector>();
+      auto* row = checked_pointer_cast<RowVector>(input).get();
       auto children = row->children();
       for (int i = 0; i < rowType.size(); ++i) {
         auto& childType = rowType.childAt(i);
