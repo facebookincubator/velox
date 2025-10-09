@@ -68,11 +68,11 @@ class Exchange : public SourceOperator {
   virtual VectorSerde* getSerde();
 
  private:
-  // When 'estimatedCompactRowSize_' is unset, meaning we haven't materialized
+  // When 'estimatedRowSize_' is unset, meaning we haven't materialized
   // and returned any output from this exchange operator, we return this
   // conservative number of output rows, to make sure memory does not grow too
   // much.
-  static constexpr uint64_t kInitialOutputCompactRows = 64;
+  static constexpr uint64_t kInitialOutputRows = 64;
 
   // Invoked to create exchange client for remote tasks. The function shuffles
   // the source task ids first to randomize the source tasks we fetch data from.
@@ -94,9 +94,7 @@ class Exchange : public SourceOperator {
 
   void recordInputStats(uint64_t rawInputBytes);
 
-  RowVectorPtr getOutputFromCompactRows(VectorSerde* serde);
-
-  RowVectorPtr getOutputFromUnsafeRows(VectorSerde* serde);
+  RowVectorPtr getOutputFromRows(VectorSerde* serde);
 
   const uint64_t preferredOutputBatchBytes_;
 
@@ -125,15 +123,15 @@ class Exchange : public SourceOperator {
   bool atEnd_{false};
   std::default_random_engine rng_{std::random_device{}()};
 
-  // Memory holders needed by compact row serde to perform cursor like reads
-  // across 'getOutputFromCompactRows' calls.
-  std::unique_ptr<SerializedPage> compactRowPages_;
-  std::unique_ptr<ByteInputStream> compactRowInputStream_;
-  std::unique_ptr<RowIterator> compactRowIterator_;
+  // Memory holders needed by row serde to perform cursor like reads
+  // across 'getOutputFromRows' calls.
+  std::unique_ptr<SerializedPage> rowPages_;
+  std::unique_ptr<ByteInputStream> rowInputStream_;
+  std::unique_ptr<RowIterator> rowIterator_;
 
   // The estimated bytes per row of the output of this exchange operator
   // computed from the last processed output.
-  std::optional<uint64_t> estimatedCompactRowSize_;
+  std::optional<uint64_t> estimatedRowSize_;
 };
 
 } // namespace facebook::velox::exec
