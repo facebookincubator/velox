@@ -1950,6 +1950,15 @@ TEST_F(VectorCreateConstantTest, complex) {
   testComplexConstant<TypeKind::ROW>(
       ROW({{"c0", INTEGER()}}),
       makeRowVector({makeFlatVector<int32_t>(1, [](auto i) { return i; })}));
+
+  testComplexConstant<TypeKind::ROW>(
+      ROW({}),
+      std::make_shared<RowVector>(
+          pool_.get(),
+          ROW({}),
+          BufferPtr(nullptr),
+          1,
+          std::vector<VectorPtr>{}));
 }
 
 TEST_F(VectorCreateConstantTest, null) {
