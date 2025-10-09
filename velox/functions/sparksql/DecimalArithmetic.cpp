@@ -511,8 +511,8 @@ struct DecimalIntegralDivideBase {
 
   // Computes the quotient of 'a' and 'b' and stores it in 'out'. Returns false
   // if the result exceeds rPrecision_ or if overflow occurs during scaling.
-  // Following Spark's behavior, the result is truncated to int64_t and may be
-  // inaccurate if it exceeds int64_t range.
+  // Following Spark's behavior, the result is truncated to int64_t if it
+  // exceeds int64_t range.
   template <typename A, typename B>
   bool computeQuotient(int64_t& out, const A& a, const B& b) {
     // Determine sign and convert to absolute values.
@@ -521,7 +521,8 @@ struct DecimalIntegralDivideBase {
     int128_t absB = static_cast<int128_t>(b < 0 ? -b : b);
 
     // Scale values, checking for overflow.
-    int128_t scaledA, scaledB;
+    int128_t scaledA;
+    int128_t scaledB;
     if (__builtin_mul_overflow(
             absA, velox::DecimalUtil::kPowersOfTen[aRescale_], &scaledA) ||
         __builtin_mul_overflow(
@@ -563,7 +564,7 @@ struct DecimalIntegralDivideBase {
 // Decimal integral divide function that returns null on division by zero or
 // overflow.
 template <typename TExec>
-struct DecimalIntegeralDivideFunction : DecimalIntegralDivideBase {
+struct DecimalIntegralDivideFunction : DecimalIntegralDivideBase {
   template <typename A, typename B>
   void initialize(
       const std::vector<TypePtr>& inputTypes,
@@ -585,7 +586,7 @@ struct DecimalIntegeralDivideFunction : DecimalIntegralDivideBase {
 // Decimal integral divide function that returns error on division by zero or
 // overflow.
 template <typename TExec>
-struct CheckedDecimalIntegeralDivideFunction : DecimalIntegralDivideBase {
+struct CheckedDecimalIntegralDivideFunction : DecimalIntegralDivideBase {
   template <typename A, typename B>
   void initialize(
       const std::vector<TypePtr>& inputTypes,
@@ -840,9 +841,9 @@ void registerDecimalDivide(const std::string& prefix) {
       getDivideConstraintsDenyPrecisionLoss());
 }
 
-void registerDecimalIntegeralDivide(const std::string& prefix) {
-  registerIntegralDecimalDivide<DecimalIntegeralDivideFunction>(prefix + "div");
-  registerIntegralDecimalDivide<CheckedDecimalIntegeralDivideFunction>(
+void registerDecimalIntegralDivide(const std::string& prefix) {
+  registerIntegralDecimalDivide<DecimalIntegralDivideFunction>(prefix + "div");
+  registerIntegralDecimalDivide<CheckedDecimalIntegralDivideFunction>(
       prefix + "checked_div");
 }
 } // namespace facebook::velox::functions::sparksql
