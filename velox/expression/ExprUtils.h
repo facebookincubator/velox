@@ -15,13 +15,29 @@
  */
 #pragma once
 
-#include "velox/expression/Expr.h"
+#include "velox/core/Expressions.h"
 
 namespace facebook::velox::expression::utils {
+
+/// Indicates the type of inputs of an expression.
+/// kAllConstant: All inputs are of constant kind.
+/// kAllField: All inputs are of field kind.
+/// kConstantOrField: All inputs are of either constant or field kind.
+/// kDefault: At least one input is not of constant or field kind.
+enum ExprInputsKind { kAllConstant = 0, kAllField, kConstantOrField, kDefault };
+
+/// Helper function to get ExprInputsKind for an expression.
+ExprInputsKind getExprInputsKind(const core::TypedExprPtr& expr);
 
 /// Returns true if expr is of type CallTypedExpr and the expr name matches
 /// the passed name. Otherwise, returns false.
 bool isCall(const core::TypedExprPtr& expr, const std::string& name);
+
+/// Returns true when call expression contains an associative operator like and,
+/// or, plus, multiply. The call expression name is checked to determine the
+/// operator it represents, fully qualified names with a prefix of format
+/// 'catalog.schema.' are handled.
+bool isAssociativeOperator(const core::CallTypedExpr* call);
 
 /// Utility method to check eligibility for flattening. Returns true if all
 /// inputs to expr have the same type.
