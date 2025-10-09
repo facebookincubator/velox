@@ -882,24 +882,34 @@ TEST_F(PlanNodeBuilderTest, spatialJoinNode) {
   const auto joinType = JoinType::kInner;
   const auto joinCondition =
       std::make_shared<ConstantTypedExpr>(BOOLEAN(), variant(true));
-  const auto left =
-      ValuesNode::Builder()
-          .id("values_node_id_1")
-          .values({makeRowVector(
-              {"c0"}, {makeFlatVector<int64_t>(std::vector<int64_t>{1})})})
-          .build();
-  const auto right =
-      ValuesNode::Builder()
-          .id("values_node_id_2")
-          .values({makeRowVector(
-              {"c1"}, {makeFlatVector<int64_t>(std::vector<int64_t>{2})})})
-          .build();
+  const auto left = ValuesNode::Builder()
+                        .id("values_node_id_1")
+                        .values({makeRowVector(
+                            {"c0", "g0"},
+                            {makeFlatVector<int64_t>(std::vector<int64_t>{1}),
+                             makeFlatVector<std::string>(
+                                 std::vector<std::string>{"POINT(0 0)"})})})
+                        .build();
+  const auto right = ValuesNode::Builder()
+                         .id("values_node_id_2")
+                         .values({makeRowVector(
+                             {"c1", "g1"},
+                             {makeFlatVector<int64_t>(std::vector<int64_t>{2}),
+                              makeFlatVector<std::string>(
+                                  std::vector<std::string>{"POINT(0 0)"})})})
+                         .build();
   const auto outputType = ROW({"c0"}, {BIGINT()});
+  const auto probeGeom =
+      std::make_shared<FieldAccessTypedExpr>(VARCHAR(), "g0");
+  const auto buildGeom =
+      std::make_shared<FieldAccessTypedExpr>(VARCHAR(), "g1");
 
   const auto verify = [&](const std::shared_ptr<const SpatialJoinNode>& node) {
     EXPECT_EQ(node->id(), id);
     EXPECT_EQ(node->joinType(), joinType);
     EXPECT_EQ(node->joinCondition(), joinCondition);
+    EXPECT_EQ(node->probeGeometry(), probeGeom);
+    EXPECT_EQ(node->buildGeometry(), buildGeom);
     EXPECT_EQ(node->sources()[0], left);
     EXPECT_EQ(node->sources()[1], right);
     EXPECT_EQ(node->outputType(), outputType);
@@ -911,6 +921,8 @@ TEST_F(PlanNodeBuilderTest, spatialJoinNode) {
                         .joinCondition(joinCondition)
                         .left(left)
                         .right(right)
+                        .probeGeometry(probeGeom)
+                        .buildGeometry(buildGeom)
                         .outputType(outputType)
                         .build();
   verify(node);
