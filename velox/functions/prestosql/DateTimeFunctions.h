@@ -832,6 +832,14 @@ struct HourFunction : public InitSessionTimezone<T>,
     auto timestamp = this->toTimestamp(timestampWithTimezone);
     result = getDateTime(timestamp, nullptr).tm_hour;
   }
+
+  FOLLY_ALWAYS_INLINE void call(int64_t& result, const arg_type<Time>& time) {
+    VELOX_USER_CHECK(
+        time >= 0 && time < kMillisInDay,
+        "TIME value {} is out of range [0, 86400000)",
+        time);
+    result = time / kMillisInHour;
+  }
 };
 
 template <typename T>
