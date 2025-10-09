@@ -23,6 +23,7 @@
 namespace facebook::velox::config {
 
 class IConfig;
+using ConfigPtr = std::shared_ptr<const IConfig>;
 
 } // namespace facebook::velox::config
 
