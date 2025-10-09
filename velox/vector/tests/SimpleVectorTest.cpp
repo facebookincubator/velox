@@ -747,6 +747,7 @@ TYPED_TEST(SimpleVectorCompareTest, compareDescNullsLast) {
   this->runTest({/*nullsFirst=*/false, /*ascending=*/false});
 }
 
+#ifdef VELOX_ENABLE_LOAD_SIMD_VALUE_BUFFER
 template <typename T, int32_t offset>
 inline T simd256_extract_value(xsimd::batch<T> simdValue) {
   if constexpr (std::is_same_v<T, bool>) {
@@ -925,6 +926,7 @@ TYPED_TEST(SimpleVectorSimdTypedTest, flatVectorTest) {
 TYPED_TEST(SimpleVectorSimdTypedTest, sequenceVectorTest) {
   this->template runTest<VectorEncoding::Simple::SEQUENCE>();
 }
+#endif
 
 // See instructions in SimpleVectorTestHelper.h. By implementing this, a bunch
 // of SimpleVector test cases will be run.
