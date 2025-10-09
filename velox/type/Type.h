@@ -1528,7 +1528,7 @@ class DateType final : public IntegerType {
   /// as an ISO 8601-formatted string.
   static std::string toIso8601(int32_t days);
 
-  int32_t toDays(folly::StringPiece in) const;
+  int32_t toDays(std::string_view in) const;
 
   int32_t toDays(const char* in, size_t len) const;
 
