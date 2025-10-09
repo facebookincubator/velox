@@ -1973,6 +1973,7 @@ TEST_F(VectorCreateConstantTest, null) {
   testNullConstant<TypeKind::VARBINARY>(VARBINARY());
 
   testNullConstant<TypeKind::ROW>(ROW({BIGINT(), REAL()}));
+  testNullConstant<TypeKind::ROW>(ROW({}));
   testNullConstant<TypeKind::ARRAY>(ARRAY(DOUBLE()));
   testNullConstant<TypeKind::MAP>(MAP(INTEGER(), DOUBLE()));
 }

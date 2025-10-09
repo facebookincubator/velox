@@ -1626,4 +1626,12 @@ TEST_F(DecodedVectorTest, toString) {
   }
 }
 
+TEST_F(DecodedVectorTest, emptyStruct) {
+  auto vector = makeRowVector({});
+  DecodedVector decoded;
+  decoded.decode(*vector);
+  EXPECT_EQ(decoded.base(), vector.get());
+  EXPECT_EQ(decoded.size(), 0);
+}
+
 } // namespace facebook::velox::test
