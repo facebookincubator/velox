@@ -521,7 +521,6 @@ void* MemoryPoolImpl::allocate(
           alignment_);
     }
   }
-
   CHECK_AND_INC_MEM_OP_STATS(this, Allocs);
   const auto alignedSize = sizeAlign(size);
   reserve(alignedSize);
@@ -537,6 +536,12 @@ void* MemoryPoolImpl::allocate(
   }
   DEBUG_RECORD_ALLOC(this, buffer, size);
   return buffer;
+}
+
+void MemoryPoolImpl::reportAllocation(int64_t size) {
+  CHECK_AND_INC_MEM_OP_STATS(Allocs);
+  const auto alignedSize = sizeAlign(size);
+  reserve(alignedSize);
 }
 
 void* MemoryPoolImpl::allocateZeroFilled(int64_t numEntries, int64_t sizeEach) {
@@ -591,6 +596,11 @@ void MemoryPoolImpl::free(void* p, int64_t size) {
   release(alignedSize);
 }
 
+void MemoryPoolImpl::reportFree(int64_t size) {
+  CHECK_AND_INC_MEM_OP_STATS(Frees);
+  const auto alignedSize = sizeAlign(size);
+  release(alignedSize);
+}
 bool MemoryPoolImpl::transferTo(MemoryPool* dest, void* buffer, uint64_t size) {
   if (!isLeaf() || !dest->isLeaf()) {
     return false;
