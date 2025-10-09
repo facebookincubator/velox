@@ -1117,6 +1117,186 @@ TEST_F(DateTimeFunctionsTest, minusTimestamp) {
       "Could not convert Timestamp(-9223372036854776, 0) to milliseconds");
 }
 
+TEST_F(DateTimeFunctionsTest, timePlusInterval) {
+  // Test TIME + IntervalDayTime arithmetic using proper vector construction
+
+  const auto plus = [&](int64_t time,
+                        int64_t interval) -> std::optional<int64_t> {
+    return evaluateOnce<int64_t>(
+        "plus(c0, c1)",
+        makeRowVector({
+            makeNullableFlatVector<int64_t>({time}, TIME()),
+            makeNullableFlatVector<int64_t>({interval}, INTERVAL_DAY_TIME()),
+        }));
+  };
+
+  // Basic hour addition: 03:04:05.321 + 3 hours = 06:04:05.321
+  // 03:04:05.321 = (3*3600 + 4*60 + 5)*1000 + 321 = 11045321 ms
+  // 3 hours = 3*60*60*1000 = 10800000 ms
+  // 06:04:05.321 = (6*3600 + 4*60 + 5)*1000 + 321 = 21845321 ms
+  const int64_t time1 = 11045321; // 03:04:05.321
+  const int64_t threeHours = 3 * kMillisInHour; // 3 hours
+  EXPECT_EQ(21845321, plus(time1, threeHours));
+
+  // Test 24-hour wraparound: 22:00:00 + 3 hours = 01:00:00
+  // 22:00:00 = 22*3600*1000 = 79200000 ms
+  // 01:00:00 = 1*3600*1000 = 3600000 ms
+  const int64_t time2 = 22 * kMillisInHour; // 22:00:00
+  EXPECT_EQ(3600000, plus(time2, threeHours));
+
+  // Test minute addition: 03:04:05.321 + 90 minutes = 04:34:05.321
+  // 90 minutes = 90*60*1000 = 5400000 ms
+  // 04:34:05.321 = (4*3600 + 34*60 + 5)*1000 + 321 = 16445321 ms
+  const int64_t ninetyMinutes = 90 * kMillisInMinute;
+  EXPECT_EQ(16445321, plus(time1, ninetyMinutes));
+
+  // Test negative intervals: 03:04:05.321 - 2 hours = 01:04:05.321
+  // 01:04:05.321 = (1*3600 + 4*60 + 5)*1000 + 321 = 3845321 ms
+  const int64_t twoHours = 2 * kMillisInHour;
+  EXPECT_EQ(3845321, plus(time1, -twoHours));
+
+  // Test negative wraparound: 01:00:00 - 3 hours = 22:00:00 (previous day)
+  // 01:00:00 = 1*3600*1000 = 3600000 ms
+  const int64_t time3 = kMillisInHour; // 01:00:00
+  EXPECT_EQ(79200000, plus(time3, -threeHours));
+
+  // Test millisecond precision: 03:04:05.321 + 679 milliseconds = 03:04:06.000
+  EXPECT_EQ(11046000, plus(time1, 679));
+
+  // Test day intervals (should not change time of day per Presto behavior)
+  // 12:30:45.123 = (12*3600 + 30*60 + 45)*1000 + 123 = 45045123 ms
+  const int64_t time4 = 45045123; // 12:30:45.123
+  const int64_t oneDay = kMillisInDay;
+  EXPECT_EQ(45045123, plus(time4, oneDay));
+}
+
+// Comprehensive tests for TimePlusIntervalYearMonthVectorFunction optimizations
+TEST_F(DateTimeFunctionsTest, timePlusIntervalYearMonthVectorOptimizations) {
+  // Helper to create interval year-month values (in months)
+  auto months = [](int32_t value) { return value; };
+
+  // Helper to create time values (milliseconds since midnight)
+  auto timeMs = [](int32_t hours,
+                   int32_t minutes = 0,
+                   int32_t seconds = 0,
+                   int32_t millis = 0) {
+    return static_cast<int64_t>(hours) * 3600000 +
+        static_cast<int64_t>(minutes) * 60000 +
+        static_cast<int64_t>(seconds) * 1000 + static_cast<int64_t>(millis);
+  };
+
+  // Helper to verify time + interval results (should be identity function)
+  auto testTimePlusIntervalYearMonth = [&](const VectorPtr& timeVector,
+                                           const VectorPtr& intervalVector,
+                                           const VectorPtr& expectedResult) {
+    auto result =
+        evaluate("plus(c0, c1)", makeRowVector({timeVector, intervalVector}));
+
+    assertEqualVectors(expectedResult, result);
+  };
+
+  // TEST 1: Constant Vector Optimization - Non-null constant
+  {
+    const auto timeValue = timeMs(14, 30, 15, 123); // 14:30:15.123
+    const auto intervalValue = months(6); // 6 months
+
+    // Create constant vectors
+    auto constantTime =
+        BaseVector::createConstant(TIME(), timeValue, 1000, pool());
+    auto constantInterval = BaseVector::createConstant(
+        INTERVAL_YEAR_MONTH(), intervalValue, 1000, pool());
+
+    // Expected result should be same constant time (identity function)
+    auto expectedResult =
+        BaseVector::createConstant(TIME(), timeValue, 1000, pool());
+
+    testTimePlusIntervalYearMonth(
+        constantTime, constantInterval, expectedResult);
+
+    // Verify the result is also constant encoded for efficiency
+    auto result = evaluate(
+        "plus(c0, c1)", makeRowVector({constantTime, constantInterval}));
+
+    EXPECT_TRUE(result->isConstantEncoding());
+    EXPECT_EQ(result->size(), 1000);
+    EXPECT_EQ(result->as<ConstantVector<int64_t>>()->valueAt(0), timeValue);
+  }
+
+  // TEST 2: Constant Vector Optimization - mixed null and non-null values
+  {
+    const auto intervalValue = months(12); // 12 months
+
+    // Create time vector with mixed null and non-null values to test null
+    // handling
+    auto timeVector = makeNullableFlatVector<int64_t>(
+        {std::nullopt, timeMs(17, 30, 0), std::nullopt}, TIME());
+
+    auto intervalVector = makeFlatVector<int32_t>(
+        {intervalValue, intervalValue, intervalValue}, INTERVAL_YEAR_MONTH());
+
+    // Expected result: null, non-null, null
+    auto expectedResult = makeNullableFlatVector<int64_t>(
+        {std::nullopt, timeMs(17, 30, 0), std::nullopt}, TIME());
+
+    testTimePlusIntervalYearMonth(timeVector, intervalVector, expectedResult);
+  }
+
+  // TEST 3: Flat Vector with Nulls
+  {
+    const std::vector<std::optional<int64_t>> timeValues = {
+        timeMs(10, 30, 0), // 10:30:00
+        std::nullopt, // null
+        timeMs(16, 45, 30), // 16:45:30
+        std::nullopt, // null
+        timeMs(20, 0, 0) // 20:00:00
+    };
+
+    const std::vector<int32_t> intervalValues = {
+        months(3), months(6), months(9), months(12), months(18)};
+
+    auto timeVector = makeNullableFlatVector<int64_t>(timeValues, TIME());
+    auto intervalVector =
+        makeFlatVector<int32_t>(intervalValues, INTERVAL_YEAR_MONTH());
+
+    // Expected result should preserve nulls and non-null values identically
+    auto expectedResult = makeNullableFlatVector<int64_t>(timeValues, TIME());
+
+    testTimePlusIntervalYearMonth(timeVector, intervalVector, expectedResult);
+  }
+
+  // TEST 4: Dictionary Vector (Fallback Path)
+  {
+    // Create base values for dictionary
+    const std::vector<int64_t> baseTimeValues = {
+        timeMs(9, 0, 0), // 09:00:00
+        timeMs(17, 30, 0), // 17:30:00
+        timeMs(12, 0, 0) // 12:00:00
+    };
+
+    // Create indices that repeat base values
+    const std::vector<vector_size_t> indices = {0, 1, 2, 0, 1, 2, 1, 0};
+
+    auto baseVector = makeFlatVector<int64_t>(baseTimeValues, TIME());
+
+    auto dictionaryTimeVector = wrapInDictionary(
+        makeIndices(indices), (vector_size_t)indices.size(), baseVector);
+
+    auto intervalVector = makeFlatVector<int32_t>(
+        std::vector<int32_t>(indices.size(), months(6)), INTERVAL_YEAR_MONTH());
+
+    // Expected result should decode dictionary and preserve values
+    std::vector<int64_t> expectedValues;
+    expectedValues.reserve(indices.size());
+    for (auto idx : indices) {
+      expectedValues.push_back(baseTimeValues[idx]);
+    }
+    auto expectedResult = makeFlatVector<int64_t>(expectedValues, TIME());
+
+    testTimePlusIntervalYearMonth(
+        dictionaryTimeVector, intervalVector, expectedResult);
+  }
+}
+
 TEST_F(DateTimeFunctionsTest, minusTimestampWithTimezone) {
   auto minus = [&](const std::string& a, const std::string& b) {
     const auto sql =
