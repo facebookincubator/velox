@@ -200,8 +200,6 @@ class WindowRegionSortBenchmark : public HiveConnectorTestBase {
           Task::ExecutionMode::kSerial);
 
     } else {
-      // const std::unordered_map<std::string, std::string> queryConfigMap(
-      //     {{core::QueryConfig::kPrefixSortNormalizedKeyMaxBytes, "0"}});
       return exec::Task::create(
           "t",
           std::move(plan),
@@ -213,8 +211,9 @@ class WindowRegionSortBenchmark : public HiveConnectorTestBase {
 
   void report() {
     std::cout << "WindowNanos: " << windowNanos_.toString()
-              << " WindowPeakMem(MB): "
-              << windowMems_.peakTotalMemoryReservation / 1024 / 1024 << "\n";
+              << " WindowPeakMem: "
+              << windowMems_.peakTotalMemoryReservation / 1024 / 1024
+              << " MB\n";
   }
 
  private:
