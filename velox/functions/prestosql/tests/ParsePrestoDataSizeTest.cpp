@@ -34,12 +34,15 @@ class ParsePrestoDataSizeTest : public FunctionBaseTest {
     test::assertEqualVectors(expected, result);
   }
 
-  void assertSize(std::string input, const std::string& outputStr) {
+  void assertSize(const std::string& input, const std::string& outputStr) {
     auto op = makeNullableFlatVector<std::string>({input});
+    auto opWithVarcharN =
+        makeNullableFlatVector<std::string>({input}, VARCHAR(input.size()));
     int128_t outputInt = facebook::velox::HugeInt::parse(outputStr);
     auto expected =
         makeNullableFlatVector<int128_t>({outputInt}, DECIMAL(38, 0));
     assertVectors("parse_presto_data_size(c0)", op, expected);
+    assertVectors("parse_presto_data_size(c0)", opWithVarcharN, expected);
   }
 
   template <typename T, typename U = T, typename V = T>
