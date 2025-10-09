@@ -188,6 +188,23 @@ TEST_F(SpatialJoinTest, testSimpleSpatialLeftJoin) {
       {"POINT (1 1)", std::nullopt});
 }
 
+TEST_F(SpatialJoinTest, testSpatialJoinNullRows) {
+  runTest(
+      {"POINT (0 0)", std::nullopt, "POINT (1 1)", std::nullopt},
+      {"POINT (0 0)", "POINT (1 1)", std::nullopt, std::nullopt},
+      "ST_Intersects(left_g, right_g)",
+      core::JoinType::kInner,
+      {"POINT (0 0)", "POINT (1 1)"},
+      {"POINT (0 0)", "POINT (1 1)"});
+  runTest(
+      {"POINT (0 0)", std::nullopt, "POINT (2 2)", std::nullopt},
+      {"POINT (0 0)", "POINT (1 1)", std::nullopt, std::nullopt},
+      "ST_Intersects(left_g, right_g)",
+      core::JoinType::kLeft,
+      {"POINT (0 0)", "POINT (2 2)", std::nullopt, std::nullopt},
+      {"POINT (0 0)", std::nullopt, std::nullopt, std::nullopt});
+}
+
 // Test geometries that don't intersect but their envelopes do.
 // Important to test spatial index
 TEST_F(SpatialJoinTest, simpleSpatialJoinEnvelopes) {
