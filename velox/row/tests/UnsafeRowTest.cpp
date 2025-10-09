@@ -217,8 +217,8 @@ TEST_F(UnsafeRowTest, nestedMaps) {
 }
 
 TEST_F(UnsafeRowTest, constantVector) {
-  auto data = makeRowVector(
-      {BaseVector::createNullConstant(ROW({}, {}), 1, pool_.get())});
+  auto data =
+      makeRowVector({BaseVector::createNullConstant(ROW({}), 1, pool_.get())});
   testRoundTrip(data);
 }
 

@@ -1627,8 +1627,7 @@ TEST_F(DecodedVectorTest, toString) {
 }
 
 TEST_F(DecodedVectorTest, emptyStruct) {
-  auto vector = std::make_shared<RowVector>(
-      pool_.get(), ROW({}), BufferPtr(nullptr), 1, std::vector<VectorPtr>{});
+  auto vector = makeRowVector(ROW({}), 1);
   DecodedVector decoded;
   decoded.decode(*vector);
   EXPECT_EQ(decoded.base(), vector.get());
