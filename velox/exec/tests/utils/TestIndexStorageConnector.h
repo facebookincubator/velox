@@ -317,7 +317,7 @@ class TestIndexConnector : public connector::Connector {
  public:
   TestIndexConnector(
       const std::string& id,
-      std::shared_ptr<const config::IConfig> config,
+      config::ConfigPtr config,
       folly::Executor* executor);
 
   bool supportsIndexLookup() const override {
@@ -360,7 +360,7 @@ class TestIndexConnectorFactory : public connector::ConnectorFactory {
 
   std::shared_ptr<connector::Connector> newConnector(
       const std::string& id,
-      std::shared_ptr<const config::IConfig> properties,
+      config::ConfigPtr properties,
       folly::Executor* /*unused*/,
       folly::Executor* cpuExecutor) override {
     return std::make_shared<TestIndexConnector>(id, properties, cpuExecutor);

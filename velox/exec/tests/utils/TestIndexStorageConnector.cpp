@@ -540,7 +540,7 @@ RowVectorPtr TestIndexSource::ResultIterator::createConditionInput() {
 
 TestIndexConnector::TestIndexConnector(
     const std::string& id,
-    std::shared_ptr<const config::IConfig> /*unused*/,
+    config::ConfigPtr /*unused*/,
     folly::Executor* executor)
     : Connector(id), executor_(executor) {}
 

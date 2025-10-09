@@ -34,7 +34,7 @@ class HiveConnectorTestBase : public OperatorTestBase {
   void SetUp() override;
   void TearDown() override;
 
-  void resetHiveConnector(const std::shared_ptr<const config::IConfig>& config);
+  void resetHiveConnector(const config::ConfigPtr& config);
 
   void writeToFiles(
       const std::vector<std::string>& filePaths,

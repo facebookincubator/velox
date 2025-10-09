@@ -30,8 +30,7 @@ class Config;
 
 namespace facebook::velox::core {
 
-using ConnectorConfigs =
-    std::unordered_map<std::string, std::shared_ptr<const config::IConfig>>;
+using ConnectorConfigs = std::unordered_map<std::string, config::ConfigPtr>;
 
 class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
  public:

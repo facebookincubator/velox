@@ -23,7 +23,7 @@ namespace facebook::velox::filesystems {
 
 std::string S3Config::cacheKey(
     std::string_view bucket,
-    const std::shared_ptr<const config::IConfig>& config) {
+    const config::ConfigPtr& config) {
   auto bucketEndpoint = bucketConfigKey(Keys::kEndpoint, bucket);
   if (auto value = config->get<std::string>(bucketEndpoint)) {
     return fmt::format("{}-{}", *value, bucket);
@@ -35,9 +35,7 @@ std::string S3Config::cacheKey(
   return std::string(bucket);
 }
 
-S3Config::S3Config(
-    std::string_view bucket,
-    const std::shared_ptr<const config::IConfig>& properties)
+S3Config::S3Config(std::string_view bucket, const config::ConfigPtr& properties)
     : bucket_(bucket) {
   for (int key = static_cast<int>(Keys::kBegin);
        key < static_cast<int>(Keys::kEnd);

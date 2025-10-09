@@ -31,8 +31,8 @@ class IConfig;
 
 namespace facebook::velox::filesystems {
 
-using CacheKeyFn = std::function<
-    std::string(std::shared_ptr<const config::IConfig>, std::string_view)>;
+using CacheKeyFn =
+    std::function<std::string(config::ConfigPtr, std::string_view)>;
 
 // Register the S3 filesystem.
 void registerS3FileSystem(CacheKeyFn cacheKeyFunc = nullptr);

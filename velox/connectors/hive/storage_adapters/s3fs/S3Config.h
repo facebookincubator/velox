@@ -118,16 +118,14 @@ class S3Config {
     return config;
   }
 
-  S3Config(
-      std::string_view bucket,
-      const std::shared_ptr<const config::IConfig>& config);
+  S3Config(std::string_view bucket, const config::ConfigPtr& config);
 
   /// cacheKey is used as a key for the S3FileSystem instance map.
   /// This will be the bucket endpoint or the base endpoint if they exist plus
   /// bucket name.
   static std::string cacheKey(
       std::string_view bucket,
-      const std::shared_ptr<const config::IConfig>& config);
+      const config::ConfigPtr& config);
 
   /// Return the base config for the input Key.
   static std::string baseConfigKey(Keys key) {

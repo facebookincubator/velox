@@ -292,9 +292,7 @@ AssertQueryBuilder::readCursor() {
       params_.queryCtx = core::QueryCtx::create(
           executor_.get(),
           core::QueryConfig({}),
-          std::unordered_map<
-              std::string,
-              std::shared_ptr<const config::IConfig>>{},
+          std::unordered_map<std::string, config::ConfigPtr>{},
           cache::AsyncDataCache::getInstance(),
           std::move(queryPool),
           nullptr,
