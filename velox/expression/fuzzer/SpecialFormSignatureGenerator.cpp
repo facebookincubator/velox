@@ -195,6 +195,9 @@ SpecialFormSignatureGenerator::getSignaturesForCast() const {
   addCastFromVarcharSignature("date", signatures);
   addCastFromTimestampSignature("date", signatures);
 
+  // To time type.
+  addCastFromVarcharSignature("time", signatures);
+
   // For each supported translation pair T --> U, add signatures of array(T) -->
   // array(U), map(varchar, T) --> map(varchar, U), row(T) --> row(U).
   auto size = signatures.size();

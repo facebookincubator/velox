@@ -1530,6 +1530,145 @@ StringView TimeType::valueToString(int64_t value, char* const startPos) const {
   return StringView{startPos, kTimeToVarcharRowSize};
 }
 
+int64_t TimeType::valueToTime(const StringView& timeStr) const {
+  size_t pos = 0;
+  int32_t hour = 0, minute = 0, second = 0, millis = 0;
+  const char* data = timeStr.data();
+
+  // Helper function to parse a number from a string at a given position
+  auto parseNumber =
+      [&](int32_t& result, int32_t minDigits, int32_t maxDigits) -> bool {
+    result = 0;
+    int32_t digitCount = 0;
+
+    while (pos < timeStr.size() && digitCount < maxDigits) {
+      char c = data[pos];
+      if (!std::isdigit(c)) {
+        break;
+      }
+      result = result * 10 + (c - '0');
+      pos++;
+      digitCount++;
+    }
+
+    return digitCount >= minDigits;
+  };
+
+  // Parse hour (1-2 digits)
+  VELOX_USER_CHECK(
+      parseNumber(hour, 1, 2), "Failed to parse hour in time string");
+
+  // Expect ':'
+  if (pos < timeStr.size() && data[pos] == ':') {
+    pos++;
+  }
+
+  // Parse minute (1-2 digits)
+  VELOX_USER_CHECK(
+      parseNumber(minute, 1, 2), "Failed to parse minute in time string");
+
+  // Expect ':'
+  if (pos < timeStr.size() && data[pos] == ':') {
+    pos++;
+  }
+
+  // Parse second (1-2 digits)
+  VELOX_USER_CHECK(
+      parseNumber(second, 1, 2), "Failed to parse second in time string");
+
+  // Parse optional fractional seconds
+  if (pos < timeStr.size() && data[pos] == '.') {
+    pos++;
+    int32_t fractionalPart = 0;
+    int32_t fractionalDigits = 0;
+
+    // Parse fractional seconds - only accept up to 3 digits (milliseconds)
+    while (pos < timeStr.size() && std::isdigit(data[pos]) &&
+           fractionalDigits < 6) {
+      fractionalPart = fractionalPart * 10 + (data[pos] - '0');
+      pos++;
+      fractionalDigits++;
+    }
+
+    // Only support exactly milliseconds, not microseconds
+    VELOX_USER_CHECK(
+        fractionalDigits <= 3,
+        "Value cannot be cast to time. Microseconds precision not supported");
+
+    // Convert to milliseconds (pad with zeros if needed)
+    while (fractionalDigits < 3) {
+      fractionalPart *= 10;
+      fractionalDigits++;
+    }
+
+    millis = fractionalPart;
+  }
+
+  // Check for trailing characters (should fail if there are any)
+  VELOX_USER_CHECK(
+      pos >= timeStr.size(),
+      "Unexpected trailing characters in time string at position {}",
+      pos);
+
+  // Validate parsed components
+  VELOX_USER_CHECK(!(hour < 0 || hour > 23), "Invalid hour value: {}", hour);
+  VELOX_USER_CHECK(
+      !(minute < 0 || minute > 59), "Invalid minute value: {}", minute);
+  VELOX_USER_CHECK(
+      !(second < 0 || second > 59), "Invalid second value: {}", second);
+
+  // Convert to milliseconds since midnight
+  int64_t result = static_cast<int64_t>(hour) * 3600000 +
+      static_cast<int64_t>(minute) * 60000 +
+      static_cast<int64_t>(second) * 1000 + static_cast<int64_t>(millis);
+
+  // Validate time range (0 to 86399999 ms in a day)
+  VELOX_USER_CHECK(
+      !(result < 0 || result >= 86400000),
+      "Time value {} is out of range [0, 86400000)",
+      result);
+
+  return result;
+}
+
+int64_t TimeType::valueToTime(
+    const StringView& timeStr,
+    const tz::TimeZone* timeZone,
+    int64_t sessionStartTimeMs) const {
+  // First parse the time string normally to get local time
+  int64_t parsedTimeMillis = valueToTime(timeStr);
+
+  // Apply timezone conversion if provided
+  if (timeZone) {
+    // Get the day boundary from session start time
+    auto sessionStartTime = std::chrono::milliseconds{sessionStartTimeMs};
+    auto systemDayStart =
+        std::chrono::duration_cast<std::chrono::days>(sessionStartTime);
+
+    // Create a local timestamp for the current day with the parsed time
+    auto localSystemTime =
+        std::chrono::duration_cast<std::chrono::milliseconds>(systemDayStart)
+            .count() +
+        parsedTimeMillis;
+
+    // Convert from local time to UTC
+    auto utcTime = timeZone->to_sys(std::chrono::milliseconds{localSystemTime});
+    int64_t adjustedTime =
+        (utcTime % std::chrono::milliseconds{kMillisInDay}).count();
+
+    // Handle day wrapping
+    if (adjustedTime < 0) {
+      adjustedTime += kMillisInDay;
+    } else if (adjustedTime >= kMillisInDay) {
+      adjustedTime -= kMillisInDay;
+    }
+
+    return adjustedTime;
+  }
+
+  return parsedTimeMillis;
+}
+
 std::string stringifyTruncatedElementList(
     size_t size,
     const std::function<void(std::stringstream&, size_t)>& stringifyElement,

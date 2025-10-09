@@ -44,6 +44,7 @@
 #include "velox/type/StringView.h"
 #include "velox/type/Timestamp.h"
 #include "velox/type/Tree.h"
+#include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox {
 
@@ -1585,6 +1586,22 @@ class TimeType final : public BigintType {
   /// It is the callers responsiblity to ensure that the value is in range
   /// and converted to the right time zone.
   StringView valueToString(int64_t value, char* const startPos) const;
+
+  /// Parses a time string in HH:MM:SS[.sss] format and returns milliseconds
+  /// since midnight. It is the caller's responsibility to ensure that the
+  /// input string is valid and handle error conditions as needed.
+  int64_t valueToTime(const StringView& timeStr) const;
+
+  /// Parses a time string in HH:MM:SS[.sss] format and returns milliseconds
+  /// since midnight, applying timezone conversion if provided.
+  /// @param timeStr The time string to parse
+  /// @param timeZone Optional timezone for conversion
+  /// @param sessionStartTimeMs Session start time in milliseconds for timezone
+  /// calculations
+  int64_t valueToTime(
+      const StringView& timeStr,
+      const tz::TimeZone* timeZone,
+      int64_t sessionStartTimeMs) const;
 
   folly::dynamic serialize() const override;
 
