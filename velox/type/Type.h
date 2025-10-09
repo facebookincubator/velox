@@ -1154,7 +1154,7 @@ class RowType : public TypeBase<TypeKind::ROW> {
 
   /// Returns type of the first child with matching name. Throws if child with
   /// this name doesn't exist.
-  const TypePtr& findChild(folly::StringPiece name) const;
+  const TypePtr& findChild(std::string_view name) const;
 
   /// Returns true if child with specified name exists.
   bool containsChild(std::string_view name) const;

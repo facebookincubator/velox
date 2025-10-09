@@ -484,7 +484,7 @@ std::string makeFieldNotFoundErrorMessage(
 }
 } // namespace
 
-const TypePtr& RowType::findChild(folly::StringPiece name) const {
+const TypePtr& RowType::findChild(std::string_view name) const {
   if (auto i = getChildIdxIfExists(name)) {
     return children_[*i];
   }
