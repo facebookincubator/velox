@@ -656,7 +656,7 @@ bool applyPartitionFilter(
     if (isPartitionDateDaysSinceEpoch) {
       result = folly::to<int32_t>(partitionValue);
     } else {
-      result = DATE()->toDays(static_cast<folly::StringPiece>(partitionValue));
+      result = DATE()->toDays(partitionValue);
     }
     return applyFilter(*filter, result);
   }
@@ -917,17 +917,23 @@ core::TypedExprPtr extractFiltersFromRemainingFilter(
 
   if ((call->name() == expression::kAnd && !negated) ||
       (call->name() == expression::kOr && negated)) {
-    auto lhs = extractFiltersFromRemainingFilter(
-        call->inputs()[0], evaluator, negated, filters, sampleRate);
-    auto rhs = extractFiltersFromRemainingFilter(
-        call->inputs()[1], evaluator, negated, filters, sampleRate);
-    if (!lhs) {
-      return rhs;
+    std::vector<core::TypedExprPtr> args;
+    args.reserve(call->inputs().size());
+    for (const auto& input : call->inputs()) {
+      if (auto arg = extractFiltersFromRemainingFilter(
+              input, evaluator, negated, filters, sampleRate)) {
+        args.push_back(std::move(arg));
+      }
+      // If extractFiltersFromRemainingFilter returns nullptr, it means
+      // everything in input is converted to filters.
     }
-    if (!rhs) {
-      return lhs;
+    if (args.empty()) {
+      return nullptr;
     }
-    return replaceInputs(call, {lhs, rhs});
+    if (args.size() == 1) {
+      return std::move(args[0]);
+    }
+    return replaceInputs(call, std::move(args));
   }
   if (!negated) {
     double rate = getPrestoSampleRate(expr, call, evaluator);

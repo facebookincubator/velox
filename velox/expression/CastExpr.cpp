@@ -278,6 +278,31 @@ VectorPtr CastExpr::castFromTime(
       buffer->setSize(rawBuffer - buffer->asMutable<char>());
       return castResult;
     }
+    case TypeKind::BIGINT: {
+      // if input is constant, create a constant output vector
+      if (input.isConstantEncoding()) {
+        auto constantInput = input.as<ConstantVector<int64_t>>();
+        if (constantInput->isNullAt(0)) {
+          return BaseVector::createNullConstant(
+              toType, rows.end(), context.pool());
+        } else {
+          auto constantValue = constantInput->valueAt(0);
+          return std::make_shared<ConstantVector<int64_t>>(
+              context.pool(),
+              rows.end(),
+              false, // isNull
+              toType,
+              std::move(constantValue));
+        }
+      }
+
+      // fallback to element-wise copy for non-constant inputs
+      auto* resultFlatVector = castResult->as<FlatVector<int64_t>>();
+      applyToSelectedNoThrowLocal(context, rows, castResult, [&](int row) {
+        resultFlatVector->set(row, inputFlatVector->valueAt(row));
+      });
+      return castResult;
+    }
     default:
       VELOX_UNSUPPORTED(
           "Cast from TIME to {} is not supported", toType->toString());

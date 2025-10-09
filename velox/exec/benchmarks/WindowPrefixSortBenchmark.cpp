@@ -192,7 +192,8 @@ class WindowPrefixSortBenchmark : public HiveConnectorTestBase {
           std::move(plan),
           0,
           core::QueryCtx::create(executor_.get()),
-          Task::ExecutionMode::kSerial);
+          Task::ExecutionMode::kSerial,
+          exec::Consumer{});
     } else {
       const std::unordered_map<std::string, std::string> queryConfigMap(
           {{core::QueryConfig::kPrefixSortNormalizedKeyMaxBytes, "0"}});
@@ -202,7 +203,8 @@ class WindowPrefixSortBenchmark : public HiveConnectorTestBase {
           0,
           core::QueryCtx::create(
               executor_.get(), core::QueryConfig(queryConfigMap)),
-          Task::ExecutionMode::kSerial);
+          Task::ExecutionMode::kSerial,
+          exec::Consumer{});
     }
   }
 

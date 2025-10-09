@@ -114,7 +114,8 @@ class PartitionedOutputReplayerTest
               std::to_string(8UL << 20)},
              {core::QueryConfig::kMaxOutputBufferSize,
               std::to_string(8UL << 20)}}),
-        Task::ExecutionMode::kParallel);
+        Task::ExecutionMode::kParallel,
+        exec::Consumer{});
     return task;
   }
 

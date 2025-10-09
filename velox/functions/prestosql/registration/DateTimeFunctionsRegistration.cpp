@@ -16,6 +16,7 @@
 
 #include "velox/functions/Registerer.h"
 #include "velox/functions/prestosql/DateTimeFunctions.h"
+#include "velox/functions/prestosql/types/TimeWithTimezoneRegistration.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneRegistration.h"
 
 namespace facebook::velox::functions {
@@ -145,6 +146,17 @@ void registerSimpleFunctions(const std::string& prefix) {
   registerTimestampMinusInterval<Timestamp>({prefix + "minus"});
   registerTimestampPlusInterval<TimestampWithTimezone>({prefix + "plus"});
   registerTimestampMinusInterval<TimestampWithTimezone>({prefix + "minus"});
+
+  // Register Time + Interval and Interval + Time functions
+  registerFunction<TimePlusInterval, Time, Time, IntervalDayTime>(
+      {prefix + "plus"});
+
+  // Use optimized vector function for Time + IntervalYearMonth (identity
+  // function)
+  exec::registerVectorFunction(
+      prefix + "plus",
+      TimePlusIntervalYearMonthVectorFunction::signatures(),
+      std::make_unique<TimePlusIntervalYearMonthVectorFunction>());
 
   registerFunction<
       TimestampMinusFunction,
@@ -298,7 +310,7 @@ void registerSimpleFunctions(const std::string& prefix) {
 
 void registerDateTimeFunctions(const std::string& prefix) {
   registerTimestampWithTimeZoneType();
-
+  registerTimeWithTimezoneType();
   registerSimpleFunctions(prefix);
 }
 } // namespace facebook::velox::functions

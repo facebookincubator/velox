@@ -266,7 +266,15 @@ class DataSource {
   /// Returns the number of input rows processed so far.
   virtual uint64_t getCompletedRows() = 0;
 
-  virtual std::unordered_map<std::string, RuntimeCounter> runtimeStats() = 0;
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+  virtual std::unordered_map<std::string, RuntimeCounter> runtimeStats() {
+    return {};
+  }
+#endif
+
+  virtual std::unordered_map<std::string, RuntimeMetric> getRuntimeStats() {
+    return {};
+  }
 
   /// Returns true if 'this' has initiated all the prefetch this will initiate.
   /// This means that the caller should schedule next splits to prefetch in the
@@ -695,8 +703,6 @@ class ConnectorFactory {
   const std::string name_;
 };
 
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-
 namespace detail {
 inline std::unordered_map<std::string, std::shared_ptr<ConnectorFactory>>&
 connectorFactories() {
@@ -747,8 +753,6 @@ inline std::shared_ptr<ConnectorFactory> getConnectorFactory(
       connectorName);
   return it->second;
 }
-
-#endif
 
 /// Adds connector instance to the registry using connector ID as the key.
 /// Throws if connector with the same ID is already present. Always returns

@@ -86,6 +86,10 @@ maintainers of that component.
 * Deepak Majeti - [majetideepak](https://github.com/majetideepak) / deepak.majeti@ibm.com
 * Ke Jia - [JkSelf](https://github.com/jkself) / ke.a.jia@intel.com
 
+### LibcuDF Bindings
+
+* Karthikeyan Natarajan - [karthikeyann](https://github.com/karthikeyann) / knataraj@nvidia.com
+
 ### Builds and CI
 
 * Christian Zentgraf - [czentgr](https://github.com/czentgr) / czentgr@us.ibm.com

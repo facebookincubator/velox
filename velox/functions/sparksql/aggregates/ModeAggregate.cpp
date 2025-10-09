@@ -586,7 +586,7 @@ void registerModeAggregate(
                 inputType->toString());
         }
       },
-      {false /*orderSensitive*/},
+      {.orderSensitive = false},
       withCompanionFunctions,
       overwrite);
 }

@@ -35,6 +35,7 @@
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 
+#include <gflags/gflags.h>
 #include <re2/re2.h>
 
 #include <string>
@@ -54,6 +55,8 @@ using namespace facebook::velox::cudf_velox::exec;
 using namespace facebook::velox::cudf_velox::exec::test;
 
 constexpr uint64_t kQueryMemoryCapacity = 512 * MB;
+
+DEFINE_bool(velox_cudf_debug, false, "Enable debug printing");
 
 namespace {
 
@@ -154,7 +157,7 @@ class TableWriteTest : public CudfHiveConnectorTestBase {
         commitStrategy_(testParam_.commitStrategy()),
         compressionKind_(testParam_.compressionKind()) {
     LOG(INFO) << testParam_.toString();
-    if (cudfDebugEnabled()) {
+    if (FLAGS_velox_cudf_debug) {
       std::cout << testParam_.toString() << std::endl;
     }
 

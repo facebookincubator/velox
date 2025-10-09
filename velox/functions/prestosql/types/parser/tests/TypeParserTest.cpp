@@ -46,6 +46,11 @@ static const TypePtr& TIMESTAMP_WITH_TIME_ZONE() {
   return instance;
 }
 
+static const TypePtr& TIME_WITH_TIME_ZONE() {
+  static const TypePtr instance{new CustomType()};
+  return instance;
+}
+
 class TypeFactory : public CustomTypeFactory {
  public:
   TypeFactory(const TypePtr& type) : type_(type) {}
@@ -76,6 +81,9 @@ class TypeParserTest : public ::testing::Test {
     registerCustomType(
         "timestamp with time zone",
         std::make_unique<const TypeFactory>(TIMESTAMP_WITH_TIME_ZONE()));
+    registerCustomType(
+        "time with time zone",
+        std::make_unique<const TypeFactory>(TIME_WITH_TIME_ZONE()));
   }
 };
 
@@ -104,6 +112,10 @@ TEST_F(TypeParserTest, varbinary) {
 
 TEST_F(TypeParserTest, time) {
   ASSERT_EQ(*parseType("time"), *TIME());
+}
+
+TEST_F(TypeParserTest, timeWithTimeZoneType) {
+  ASSERT_EQ(*parseType("time with time zone"), *TIME_WITH_TIME_ZONE());
 }
 
 TEST_F(TypeParserTest, arrayType) {
@@ -269,11 +281,6 @@ TEST_F(TypeParserTest, rowType) {
 }
 
 TEST_F(TypeParserTest, typesWithSpaces) {
-  // Type is not registered.
-  VELOX_ASSERT_UNSUPPORTED_THROW(
-      parseType("row(time time with time zone)"),
-      "Failed to parse type [time with time zone]. Type not registered.");
-
   ASSERT_EQ(
       *parseType("timestamp with time zone"), *TIMESTAMP_WITH_TIME_ZONE());
 
@@ -284,10 +291,6 @@ TEST_F(TypeParserTest, typesWithSpaces) {
 
   ASSERT_EQ(
       *parseType("row(double double precision)"), *ROW({"double"}, {DOUBLE()}));
-
-  VELOX_ASSERT_THROW(
-      parseType("row(time with time zone)"),
-      "Failed to parse type [with time zone]");
 
   ASSERT_EQ(*parseType("row(double precision)"), *ROW({DOUBLE()}));
 

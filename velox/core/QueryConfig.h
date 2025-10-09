@@ -21,16 +21,21 @@
 
 namespace facebook::velox::core {
 
-/// A simple wrapper around velox::ConfigBase. Defines constants for query
+/// A simple wrapper around velox::IConfig. Defines constants for query
 /// config properties and accessor methods.
 /// Create per query context. Does not have a singleton instance.
 /// Does not allow altering properties on the fly. Only at creation time.
 class QueryConfig {
  public:
-  explicit QueryConfig(
-      const std::unordered_map<std::string, std::string>& values);
+  explicit QueryConfig(std::unordered_map<std::string, std::string> values);
 
-  explicit QueryConfig(std::unordered_map<std::string, std::string>&& values);
+  // This is needed only to resolve correct ctor for cases like
+  // QueryConfig{{}} or QueryConfig({}).
+  struct ConfigTag {};
+
+  explicit QueryConfig(
+      ConfigTag /*tag*/,
+      std::shared_ptr<const config::IConfig> config);
 
   /// Maximum memory that a query can use on a single host.
   static constexpr const char* kQueryMaxMemoryPerNode =
@@ -68,6 +73,19 @@ class QueryConfig {
   /// small batches, e.g. < 10K rows.
   static constexpr const char* kExprTrackCpuUsage =
       "expression.track_cpu_usage";
+
+  /// Controls whether non-deterministic expressions are deduplicated during
+  /// compilation. This is intended for testing and debugging purposes. By
+  /// default, this is set to true to preserve standard behavior. If set to
+  /// false, non-deterministic functions (such as rand()) will not be
+  /// deduplicated. Since non-deterministic functions may yield different
+  /// outputs on each call, disabling deduplication guarantees that the function
+  /// is executed only when the original expression is evaluated, rather than
+  /// being triggered for every deduplicated instance. This ensures each
+  /// invocation corresponds directly to the actual expression, maintaining
+  /// independent behavior for each call.
+  static constexpr const char* kExprDedupNonDeterministic =
+      "expression.dedup_non_deterministic";
 
   /// Whether to track CPU usage for stages of individual operators. True by
   /// default. Can be expensive when processing small batches, e.g. < 10K rows.
@@ -1121,6 +1139,10 @@ class QueryConfig {
     return get<bool>(kExprTrackCpuUsage, false);
   }
 
+  bool exprDedupNonDeterministic() const {
+    return get<bool>(kExprDedupNonDeterministic, true);
+  }
+
   bool operatorTrackCpuUsage() const {
     return get<bool>(kOperatorTrackCpuUsage, true);
   }
@@ -1278,9 +1300,14 @@ class QueryConfig {
   T get(const std::string& key, const T& defaultValue) const {
     return config_->get<T>(key, defaultValue);
   }
+
   template <typename T>
   std::optional<T> get(const std::string& key) const {
-    return std::optional<T>(config_->get<T>(key));
+    return config_->get<T>(key);
+  }
+
+  const std::shared_ptr<const config::IConfig>& config() const {
+    return config_;
   }
 
   /// Test-only method to override the current query config properties.
@@ -1293,6 +1320,6 @@ class QueryConfig {
  private:
   void validateConfig();
 
-  std::unique_ptr<velox::config::ConfigBase> config_;
+  std::shared_ptr<const config::IConfig> config_;
 };
 } // namespace facebook::velox::core

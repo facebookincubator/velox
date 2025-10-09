@@ -375,14 +375,14 @@ void CudfHiveDataSource::resetSplit() {
   columnNames_.clear();
 }
 
-std::unordered_map<std::string, RuntimeCounter>
-CudfHiveDataSource::runtimeStats() {
-  auto res = runtimeStats_.toMap();
+std::unordered_map<std::string, RuntimeMetric>
+CudfHiveDataSource::getRuntimeStats() {
+  auto res = runtimeStats_.toRuntimeMetricMap();
   res.insert({
       {"totalScanTime",
-       RuntimeCounter(ioStats_->totalScanTime(), RuntimeCounter::Unit::kNanos)},
+       RuntimeMetric(ioStats_->totalScanTime(), RuntimeCounter::Unit::kNanos)},
       {"totalRemainingFilterTime",
-       RuntimeCounter(
+       RuntimeMetric(
            totalRemainingFilterTime_.load(std::memory_order_relaxed),
            RuntimeCounter::Unit::kNanos)},
   });

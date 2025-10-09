@@ -19,14 +19,14 @@ velox_add_library(
   AggregateCompanionSignatures.cpp
   AggregateFunctionRegistry.cpp
   AggregateInfo.cpp
-  AggregationMasks.cpp
   AggregateWindow.cpp
+  AggregationMasks.cpp
   ArrowStream.cpp
   AssignUniqueId.cpp
   BlockingReason.cpp
   CallbackSink.cpp
-  ContainerRowSerde.cpp
   ColumnStatsCollector.cpp
+  ContainerRowSerde.cpp
   DistinctAggregations.cpp
   Driver.cpp
   EnforceSingleRow.cpp
@@ -56,36 +56,31 @@ velox_add_library(
   MergeSource.cpp
   NestedLoopJoinBuild.cpp
   NestedLoopJoinProbe.cpp
-  SpatialJoinBuild.cpp
-  SpatialJoinProbe.cpp
   Operator.cpp
+  OperatorTraceReader.cpp
+  OperatorTraceScan.cpp
+  OperatorTraceWriter.cpp
   OperatorUtils.cpp
   OrderBy.cpp
   OutputBuffer.cpp
   OutputBufferManager.cpp
-  OperatorTraceReader.cpp
-  OperatorTraceScan.cpp
-  OperatorTraceWriter.cpp
   ParallelProject.cpp
-  TaskStructs.cpp
-  TaskTraceReader.cpp
-  TaskTraceWriter.cpp
-  Trace.cpp
-  TraceUtil.cpp
-  PartitionedOutput.cpp
   PartitionFunction.cpp
   PartitionStreamingWindowBuild.cpp
+  PartitionedOutput.cpp
   PlanNodeStats.cpp
   PrefixSort.cpp
   ProbeOperatorState.cpp
-  RowsStreamingWindowBuild.cpp
   RowContainer.cpp
   RowNumber.cpp
-  ScaledScanController.cpp
+  RowsStreamingWindowBuild.cpp
   ScaleWriterLocalPartition.cpp
+  ScaledScanController.cpp
   SortBuffer.cpp
-  SortedAggregations.cpp
   SortWindowBuild.cpp
+  SortedAggregations.cpp
+  SpatialJoinBuild.cpp
+  SpatialJoinProbe.cpp
   Spill.cpp
   SpillFile.cpp
   Spiller.cpp
@@ -95,8 +90,13 @@ velox_add_library(
   TableWriteMerge.cpp
   TableWriter.cpp
   Task.cpp
+  TaskStructs.cpp
+  TaskTraceReader.cpp
+  TaskTraceWriter.cpp
   TopN.cpp
   TopNRowNumber.cpp
+  Trace.cpp
+  TraceUtil.cpp
   Unnest.cpp
   Values.cpp
   VectorHasher.cpp
@@ -108,16 +108,17 @@ velox_add_library(
 
 velox_link_libraries(
   velox_exec
-  velox_file
+  velox_arrow_bridge
+  velox_common_base
+  velox_common_compression
   velox_core
-  velox_vector
   velox_connector
   velox_expression
+  velox_file
+  velox_presto_serializer
   velox_time
-  velox_common_base
   velox_test_util
-  velox_arrow_bridge
-  velox_common_compression
+  velox_vector
 )
 
 velox_add_library(velox_cursor Cursor.cpp)

@@ -312,6 +312,7 @@ void registerSetAggAggregate(
                 "Unexpected type {}", mapTypeKindToName(typeKind));
         }
       },
+      {.ignoreDuplicates = true},
       withCompanionFunctions,
       overwrite);
 }
@@ -342,6 +343,7 @@ void registerSetUnionAggregate(
 
         return create<SetUnionAggregate>(argTypes[0]->childAt(0), resultType);
       },
+      {.ignoreDuplicates = true},
       withCompanionFunctions,
       overwrite);
 }

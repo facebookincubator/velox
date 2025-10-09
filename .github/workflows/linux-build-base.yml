@@ -134,6 +134,8 @@ jobs:
             source "/opt/miniforge/etc/profile.d/conda.sh"
             conda activate adapters
           fi
+          # Needed for HADOOP 3.3.6 minicluster. Can remove after updating to 3.4.2.
+          wget https://repo1.maven.org/maven2/org/mockito/mockito-core/2.23.4/mockito-core-2.23.4.jar -O /usr/local/hadoop/share/hadoop/mapreduce/mockito-core-2.23.4.jar
 
           export CLASSPATH=`/usr/local/hadoop/bin/hdfs classpath --glob`
           ctest -j 8 --label-exclude cuda_driver --output-on-failure --no-tests=error

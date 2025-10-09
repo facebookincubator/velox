@@ -16,30 +16,31 @@
 
 #pragma once
 
-#include <folly/SocketAddress.h>
-#include "velox/expression/VectorFunction.h"
-#include "velox/functions/remote/if/gen-cpp2/RemoteFunction_types.h"
+#include "velox/functions/remote/client/RemoteVectorFunction.h"
 
 namespace facebook::velox::functions {
 
-struct RemoteVectorFunctionMetadata : public exec::VectorFunctionMetadata {
-  /// Network address of the servr to communicate with. Note that this can hold
-  /// a network location (ip/port pair) or a unix domain socket path (see
-  /// SocketAddress::makeFromPath()).
-  folly::SocketAddress location;
-
-  /// The serialization format to be used
-  remote::PageFormat serdeFormat{remote::PageFormat::PRESTO_PAGE};
+struct RemoteThriftVectorFunctionMetadata
+    : public RemoteVectorFunctionMetadata {
+  // TODO: Move `folly::SocketAddress location` and other thrift options here
+  // once call sites are updated.
 };
 
 /// Registers a new remote function. It will use the meatadata defined in
-/// `RemoteVectorFunctionMetadata` to control the serialization format and
-/// remote server address.
+/// `RemoteThriftVectorFunctionMetadata` to control the serialization format,
+/// remote server address, and communicate with it using a thrift client.
 //
 /// Remote functions are registered as regular statufull functions (using the
 /// same internal catalog), and hence conflict if there already exists a
 /// (non-remote) function registered with the same name. The `overwrite` flag
 /// controls whether to overwrite in these cases.
+void registerRemoteFunction(
+    const std::string& name,
+    std::vector<exec::FunctionSignaturePtr> signatures,
+    const RemoteThriftVectorFunctionMetadata& metadata = {},
+    bool overwrite = true);
+
+// TODO: Remove once call sites are updated.
 void registerRemoteFunction(
     const std::string& name,
     std::vector<exec::FunctionSignaturePtr> signatures,

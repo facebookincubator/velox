@@ -1096,7 +1096,9 @@ void TextRowReader::readElement(
     case TypeKind::BIGINT:
       if (reqT->isShortDecimal()) {
         const std::string& str = getString(*this, isNull, delim);
-        auto [precision, scale] = getDecimalPrecisionScale(*reqT);
+        auto decimalParams = getDecimalPrecisionScale(*reqT);
+        const auto precision = decimalParams.first;
+        const auto scale = decimalParams.second;
         setValueFromString<int64_t>(
             str,
             data,
@@ -1119,7 +1121,9 @@ void TextRowReader::readElement(
     case TypeKind::HUGEINT: {
       const std::string& str = getString(*this, isNull, delim);
       if (reqT->isLongDecimal()) {
-        auto [precision, scale] = getDecimalPrecisionScale(*reqT);
+        auto decimalParams = getDecimalPrecisionScale(*reqT);
+        const auto precision = decimalParams.first;
+        const auto scale = decimalParams.second;
         setValueFromString<int128_t>(
             str,
             data,
