@@ -48,7 +48,7 @@ struct HdfsServiceEndpoint {
 class HdfsFileSystem : public FileSystem {
  public:
   explicit HdfsFileSystem(
-      const std::shared_ptr<const config::IConfig>& config,
+      const config::ConfigPtr& config,
       const HdfsServiceEndpoint& endpoint);
 
   std::string name() const override;

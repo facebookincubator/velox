@@ -304,19 +304,19 @@ class HiveConfig {
   /// Schema of the query. Used for storage logging.
   std::string schema(const config::IConfig* session) const;
 
-  HiveConfig(std::shared_ptr<const config::IConfig> config) {
+  HiveConfig(config::ConfigPtr config) {
     VELOX_CHECK_NOT_NULL(
         config, "Config is null for HiveConfig initialization");
     config_ = std::move(config);
     // TODO: add sanity check
   }
 
-  const std::shared_ptr<const config::IConfig>& config() const {
+  const config::ConfigPtr& config() const {
     return config_;
   }
 
  private:
-  std::shared_ptr<const config::IConfig> config_;
+  config::ConfigPtr config_;
 };
 
 } // namespace facebook::velox::connector::hive

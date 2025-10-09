@@ -153,7 +153,7 @@ class GcsFileSystem::Impl {
 
 GcsFileSystem::GcsFileSystem(
     const std::string& bucket,
-    std::shared_ptr<const config::IConfig> config)
+    config::ConfigPtr config)
     : FileSystem(config) {
   impl_ = std::make_shared<Impl>(bucket, config.get());
 }

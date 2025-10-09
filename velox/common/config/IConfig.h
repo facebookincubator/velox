@@ -65,4 +65,6 @@ class IConfig {
   virtual std::optional<std::string> access(const std::string& key) const = 0;
 };
 
+using ConfigPtr = std::shared_ptr<const IConfig>;
+
 } // namespace facebook::velox::config

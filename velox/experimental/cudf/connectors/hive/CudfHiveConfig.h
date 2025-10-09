@@ -109,13 +109,13 @@ class CudfHiveConfig {
   static constexpr const char* kWritev2PageHeadersSession =
       "parquet.writer.write_v2_page_headers";
 
-  CudfHiveConfig(std::shared_ptr<const config::IConfig> config) {
+  CudfHiveConfig(config::ConfigPtr config) {
     VELOX_CHECK_NOT_NULL(
         config, "Config is null for CudfHiveConfig initialization");
     config_ = std::move(config);
   }
 
-  const std::shared_ptr<const config::IConfig>& config() const {
+  const config::ConfigPtr& config() const {
     return config_;
   }
 
@@ -160,6 +160,6 @@ class CudfHiveConfig {
   bool writev2PageHeadersSession(const config::IConfig* session) const;
 
  private:
-  std::shared_ptr<const config::IConfig> config_;
+  config::ConfigPtr config_;
 };
 } // namespace facebook::velox::cudf_velox::connector::hive

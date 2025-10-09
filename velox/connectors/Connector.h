@@ -574,9 +574,7 @@ class ConnectorFactory {
 
 class Connector {
  public:
-  explicit Connector(
-      const std::string& id,
-      std::shared_ptr<const config::IConfig> config = nullptr)
+  explicit Connector(const std::string& id, config::ConfigPtr config = nullptr)
       : id_(id), config_(std::move(config)) {}
 
   virtual ~Connector() = default;
@@ -585,7 +583,7 @@ class Connector {
     return id_;
   }
 
-  const std::shared_ptr<const config::IConfig>& connectorConfig() const {
+  const config::ConfigPtr& connectorConfig() const {
     return config_;
   }
 
@@ -698,7 +696,7 @@ class Connector {
   static void unregisterTracker(cache::ScanTracker* tracker);
 
   const std::string id_;
-  const std::shared_ptr<const config::IConfig> config_;
+  const config::ConfigPtr config_;
 
   static folly::Synchronized<
       std::unordered_map<std::string_view, std::weak_ptr<cache::ScanTracker>>>

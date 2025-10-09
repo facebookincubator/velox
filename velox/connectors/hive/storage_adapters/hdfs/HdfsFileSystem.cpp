@@ -97,7 +97,7 @@ class HdfsFileSystem::Impl {
 };
 
 HdfsFileSystem::HdfsFileSystem(
-    const std::shared_ptr<const config::IConfig>& config,
+    const config::ConfigPtr& config,
     const HdfsServiceEndpoint& endpoint)
     : FileSystem(config) {
   impl_ = std::make_shared<Impl>(config.get(), endpoint);
