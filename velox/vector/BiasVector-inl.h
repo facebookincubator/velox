@@ -13,10 +13,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#pragma once
 
 #include <type_traits>
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/vector/BiasVector.h"
 #include "velox/vector/BuilderTypeUtils.h"
 #include "velox/vector/FlatVector.h"
 #include "velox/vector/TypeAliases.h"
