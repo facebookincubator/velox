@@ -122,6 +122,12 @@ Decimal Functions
 
         SELECT ceil(cast(1.23 as DECIMAL(3, 2))); -- 2 // Output type: decimal(2,0)
 
+.. spark:function:: checked_div(x: decimal(p1, s1), y: decimal(p2, s2)) -> bigint (ANSI compliant)
+
+    Returns the result of integer division of x by y, truncating toward zero.
+    Truncation occurs if the result is within the precision(p1-s1+s2) but exceeds the BIGINT range.
+    Division by zero or overflow results in an error. Corresponds to Spark's operator ``div`` with ``failOnError`` as true.
+
 .. spark:function:: decimal_equalto(x, y) -> boolean
 
     Returns true if x is equal to y. Supports decimal types with different precisions and scales.
@@ -151,6 +157,17 @@ Decimal Functions
 
     Returns true if x is not equal to y. Supports decimal types with different precisions and scales.
     Corresponds to Spark's operator ``!=``.
+
+.. spark:function:: div(x: decimal(p1, s1), y: decimal(p2, s2)) -> bigint
+
+    Returns the results of dividing x by y. Performs the integer division truncates toward zero.
+    Truncation occurs if the result is within the precision(p1-s1+s2) but exceeds the BIGINT range.
+    Division by zero or overflow results in null. ::
+
+        SELECT CAST(1 as DECIMAL(17, 3)) div CAST(2 as DECIMAL(17, 3)); -- 0
+        SELECT CAST(21 as DECIMAL(20, 3)) div CAST(20 as DECIMAL(20, 2)); -- 1
+        SELECT CAST(1 as DECIMAL(20, 3)) div CAST(0 as DECIMAL(20, 3)); -- NULL
+        SELECT CAST(99999999999999999999999999999999999 as DECIMAL(38, 1)) div CAST(0.001 as DECIMAL(7, 4)); -- 687399551400672280 // Result is truncated to int64_t.
 
 .. spark:function:: floor(x: decimal(p, s)) -> r: decimal(pr, 0)
 

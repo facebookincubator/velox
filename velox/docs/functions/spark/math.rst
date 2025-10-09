@@ -86,12 +86,10 @@ Mathematical Functions
 .. function:: checked_div(x, y) -> bigint (ANSI compliant)
 
     Returns the result of integer division of x by y, truncating toward zero.
-    Supported types are DECIMAL and integral types. For DECIMAL types, x and y can have different precision and scale.
-    For integral types, x and y must have the same type.
-    For decimal types, truncation occurs if the result is within the precision(p1-s1+s2) but exceeds the BIGINT range.
+    Supported types are integral types, x and y must have the same type.
     Division by zero or overflow results in an error. Corresponds to Spark's operator ``div`` with ``failOnError`` as true.
 
-.. function:: checked_divide(x, y) -> [same as x]
+.. spark:function:: checked_divide(x, y) -> [same as x]
 
     Returns the results of dividing x by y. The types of x and y must be the same.
     Division by zero results in an error. Corresponds to Spark's operator ``/`` with ``failOnError`` as true.
@@ -126,21 +124,15 @@ Mathematical Functions
 
     Converts angle x in radians to degrees.
 
-.. function:: div(x, y) -> bigint
+.. spark:function:: div(x, y) -> bigint
 
     Returns the results of dividing x by y. Performs the integer division truncates toward zero.
-    Supported types are DECIMAL and integral types. For DECIMAL types, x and y can have different precision and scale.
-    For integral types, x and y must have the same type.
-    For decimal types, truncation occurs if the result is within the precision(p1-s1+s2) but exceeds the BIGINT range.
+    Supported types are integral types, x and y must have the same type.
     Division by zero or overflow results in null. ::
 
         SELECT 3 div 2; -- 1
         SELECT 1L div 2L; -- 0
         SELECT 3 div 0; -- NULL
-        SELECT CAST(1 as DECIMAL(17, 3)) div CAST(2 as DECIMAL(17, 3)); -- 0
-        SELECT CAST(21 as DECIMAL(20, 3)) div CAST(20 as DECIMAL(20, 2)); -- 1
-        SELECT CAST(1 as DECIMAL(20, 3)) div CAST(0 as DECIMAL(20, 3)); -- NULL
-        SELECT CAST(99999999999999999999999999999999999 as DECIMAL(38, 1)) div CAST(0.001 as DECIMAL(7, 4)); -- 687399551400672280
 
 .. spark:function:: divide(x, y) -> double
 
