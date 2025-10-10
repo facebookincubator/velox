@@ -84,13 +84,8 @@ class CastHooks {
       int32_t scale,
       int32_t maxSize,
       char* const startPosition) const {
-    if constexpr (std::is_same_v<FromNativeType, int64_t>) {
-      return applyCastFromDecimalToString(
-          static_cast<int64_t>(unscaledValue), scale, maxSize, startPosition);
-    } else {
-      return applyCastFromDecimalToString(
-          static_cast<int128_t>(unscaledValue), scale, maxSize, startPosition);
-    }
+    return applyCastFromDecimalToString(
+        unscaledValue, scale, maxSize, startPosition);
   };
 
  protected:
