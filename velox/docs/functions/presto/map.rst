@@ -94,6 +94,16 @@ Map Functions
         SELECT map_remove_null_values(MAP(ARRAY[1, 2, 3], ARRAY[3, 4, NULL])); -- {1=3, 2=4}
         SELECT map_remove_null_values(NULL); -- NULL
 
+.. function:: remap_keys(map(K,V), array(K), array(K)) -> map(K,V)
+
+      Returns a map with keys remapped according to the oldKeys and newKeys arrays.
+      Unmapped keys remain unchanged. Values are preserved. Null keys are ignored. ::
+
+          SELECT remap_keys(MAP(ARRAY[1, 2, 3], ARRAY[10, 20, 30]), ARRAY[1, 3], ARRAY[100, 300]); -- {100 -> 10, 2 -> 20, 300 -> 30}
+          SELECT remap_keys(MAP(ARRAY['a', 'b', 'c'], ARRAY[1, 2, 3]), ARRAY['a', 'c'], ARRAY['alpha', 'charlie']); -- {alpha -> 1, b -> 2, charlie -> 3}
+          SELECT remap_keys(MAP(ARRAY[1, 2, 3], ARRAY[10, null, 30]), ARRAY[1, 2], ARRAY[100, 200]); -- {100 -> 10, 200 -> null, 3 -> 30}
+          SELECT remap_keys(MAP(ARRAY[1, 2], ARRAY[10, 20]), ARRAY[], ARRAY[]); -- {1 -> 10, 2 -> 20}
+
 .. function:: map_subset(map(K,V), array(k)) -> map(K,V)
 
     Constructs a map from those entries of ``map`` for which the key is in the array given
