@@ -374,7 +374,7 @@ class DecimalUtil {
         if (adjusted < -6) {
           // Use scientific notation if the absolute value is less than 1e-6.
           // This is consistent with Spark's behavior.
-          auto coeffBuf = std::unique_ptr<char[]>(new char[digits]);
+          auto coeffBuf = std::make_unique<char[]>(digits);
           auto [coeffEnd, coeffEc] = std::to_chars(
               coeffBuf.get(), coeffBuf.get() + digits, unscaledValue);
           VELOX_DCHECK_EQ(
