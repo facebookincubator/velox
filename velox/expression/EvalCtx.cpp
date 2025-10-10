@@ -192,6 +192,25 @@ void EvalCtx::setStatus(vector_size_t index, const Status& status) {
   }
 }
 
+void EvalCtx::setStatuses(const SelectivityVector& rows, const Status& status) {
+  VELOX_CHECK(!status.ok(), "Status must be an error");
+  if (status.isUserError()) {
+    if (throwOnError_) {
+      VELOX_USER_FAIL(status.message());
+    }
+
+    if (captureErrorDetails_) {
+      auto veloxException = toVeloxUserError(status.message());
+      rows.applyToSelected(
+          [&](auto row) { addError(row, veloxException, errors_); });
+    } else {
+      rows.applyToSelected([&](auto row) { addError(row, errors_); });
+    }
+  } else {
+    VELOX_FAIL(status.message());
+  }
+}
+
 void EvalCtx::setError(
     vector_size_t index,
     const std::exception_ptr& exceptionPtr) {

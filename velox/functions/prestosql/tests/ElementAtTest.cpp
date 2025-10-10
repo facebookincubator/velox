@@ -295,33 +295,44 @@ TEST_F(ElementAtTest, constantInputArray) {
 // #2 - allow out of bounds access for array and map.
 // #3 - allow negative indices.
 TEST_F(ElementAtTest, allFlavors1) {
-  // Case 1: Simple arrays and maps
-  auto arrayVector = makeArrayVector<int64_t>({{10, 11, 12}});
-  auto mapVector = getSimpleMapVector();
+  // Case 1: Simple arrays and maps (also test constant inputs)
+  auto simpleArray = makeArrayVector<int64_t>({{10, 11, 12}});
+  auto simpleMap = getSimpleMapVector();
 
-  // #1
-  VELOX_ASSERT_THROW(
-      elementAtSimple("element_at(C0, 0)", {arrayVector}),
-      "SQL array indices start at 1");
+  for (bool wrapInConstant : {false, true}) {
+    auto arrayVector = wrapInConstant
+        ? BaseVector::wrapInConstant(1, 0, simpleArray)
+        : simpleArray;
+    auto mapVector = wrapInConstant
+        ? BaseVector::wrapInConstant(1, 0, simpleMap)
+        : simpleMap;
+    // #1
+    VELOX_ASSERT_THROW(
+        elementAtSimple("element_at(C0, 0)", {arrayVector}),
+        "SQL array indices start at 1. Got 0.");
 
-  EXPECT_EQ(
-      elementAtSimple("try(element_at(C0, 0))", {arrayVector}), std::nullopt);
+    EXPECT_EQ(
+        elementAtSimple("try(element_at(C0, 0))", {arrayVector}), std::nullopt);
 
-  EXPECT_EQ(elementAtSimple("element_at(C0, 1)", {arrayVector}), 10);
-  EXPECT_EQ(elementAtSimple("element_at(C0, 2)", {arrayVector}), 11);
-  EXPECT_EQ(elementAtSimple("element_at(C0, 3)", {arrayVector}), 12);
+    EXPECT_EQ(elementAtSimple("element_at(C0, 1)", {arrayVector}), 10);
+    EXPECT_EQ(elementAtSimple("element_at(C0, 2)", {arrayVector}), 11);
+    EXPECT_EQ(elementAtSimple("element_at(C0, 3)", {arrayVector}), 12);
 
-  // #2
-  EXPECT_EQ(elementAtSimple("element_at(C0, 4)", {arrayVector}), std::nullopt);
-  EXPECT_EQ(elementAtSimple("element_at(C0, 5)", {arrayVector}), std::nullopt);
-  EXPECT_EQ(elementAtSimple("element_at(C0, 1001)", {mapVector}), std::nullopt);
+    // #2
+    EXPECT_EQ(
+        elementAtSimple("element_at(C0, 4)", {arrayVector}), std::nullopt);
+    EXPECT_EQ(
+        elementAtSimple("element_at(C0, 5)", {arrayVector}), std::nullopt);
+    EXPECT_EQ(
+        elementAtSimple("element_at(C0, 1001)", {mapVector}), std::nullopt);
 
-  // #3
-  EXPECT_EQ(elementAtSimple("element_at(C0, -1)", {arrayVector}), 12);
-  EXPECT_EQ(elementAtSimple("element_at(C0, -2)", {arrayVector}), 11);
-  EXPECT_EQ(elementAtSimple("element_at(C0, -3)", {arrayVector}), 10);
-  EXPECT_EQ(elementAtSimple("element_at(C0, -4)", {arrayVector}), std::nullopt);
-
+    // #3
+    EXPECT_EQ(elementAtSimple("element_at(C0, -1)", {arrayVector}), 12);
+    EXPECT_EQ(elementAtSimple("element_at(C0, -2)", {arrayVector}), 11);
+    EXPECT_EQ(elementAtSimple("element_at(C0, -3)", {arrayVector}), 10);
+    EXPECT_EQ(
+        elementAtSimple("element_at(C0, -4)", {arrayVector}), std::nullopt);
+  }
   // Case 2: Empty values vector
   auto emptyValues = makeFlatVector<int64_t>({});
   auto emptyKeys = makeFlatVector<int64_t>(std::vector<int64_t>{1});
@@ -341,7 +352,7 @@ TEST_F(ElementAtTest, allFlavors1) {
   // #1
   VELOX_ASSERT_THROW(
       elementAtSimple("element_at(C0, 0)", {emptyValuesArray}),
-      "SQL array indices start at 1");
+      "SQL array indices start at 1. Got 0.");
 
   // #2
   EXPECT_EQ(
@@ -371,7 +382,7 @@ TEST_F(ElementAtTest, allFlavors1) {
   // #1
   VELOX_ASSERT_THROW(
       elementAtSimple("element_at(C0, 0)", {emptyContainerNonEmptyValuesArray}),
-      "SQL array indices start at 1");
+      "SQL array indices start at 1. Got 0.");
 
   // #2
   EXPECT_EQ(
@@ -418,7 +429,7 @@ TEST_F(ElementAtTest, allFlavors1) {
           makeRowVector({partiallyEmptyArray}),
           rows,
           result),
-      "SQL array indices start at 1");
+      "SQL array indices start at 1. Got 0.");
 
   // #2
   auto expected = makeNullConstant(TypeKind::BIGINT, 1);
@@ -441,42 +452,52 @@ TEST_F(ElementAtTest, allFlavors1) {
 // #2 - do not allow out of bounds access for arrays.
 // #3 - do not allow negative indices.
 TEST_F(ElementAtTest, allFlavors2) {
-  // Case 1: Simple arrays and maps
-  auto arrayVector = makeArrayVector<int64_t>({{10, 11, 12}});
-  auto mapVector = getSimpleMapVector();
+  // Case 1: Simple arrays and maps (also test constant inputs)
+  auto simpleArray = makeArrayVector<int64_t>({{10, 11, 12}});
+  auto simpleMap = getSimpleMapVector();
+  for (bool wrapInConstant : {false, true}) {
+    auto arrayVector = wrapInConstant
+        ? BaseVector::wrapInConstant(1, 0, simpleArray)
+        : simpleArray;
+    auto mapVector = wrapInConstant
+        ? BaseVector::wrapInConstant(1, 0, simpleMap)
+        : simpleMap;
+    // #1
+    VELOX_ASSERT_THROW(
+        elementAtSimple("C0[0]", {arrayVector}),
+        "SQL array indices start at 1. Got 0.");
 
-  // #1
-  VELOX_ASSERT_THROW(
-      elementAtSimple("C0[0]", {arrayVector}), "SQL array indices start at 1");
+    EXPECT_EQ(elementAtSimple("try(C0[0])", {arrayVector}), std::nullopt);
 
-  EXPECT_EQ(elementAtSimple("try(C0[0])", {arrayVector}), std::nullopt);
+    EXPECT_EQ(elementAtSimple("C0[1]", {arrayVector}), 10);
+    EXPECT_EQ(elementAtSimple("C0[2]", {arrayVector}), 11);
+    EXPECT_EQ(elementAtSimple("C0[3]", {arrayVector}), 12);
 
-  EXPECT_EQ(elementAtSimple("C0[1]", {arrayVector}), 10);
-  EXPECT_EQ(elementAtSimple("C0[2]", {arrayVector}), 11);
-  EXPECT_EQ(elementAtSimple("C0[3]", {arrayVector}), 12);
+    // #2
+    VELOX_ASSERT_THROW(
+        elementAtSimple("C0[4]", {arrayVector}),
+        "Array subscript index out of bounds, Index: 4 Array size: 3");
+    VELOX_ASSERT_THROW(
+        elementAtSimple("C0[5]", {arrayVector}),
+        "Array subscript index out of bounds, Index: 5 Array size: 3");
 
-  // #2
-  VELOX_ASSERT_THROW(
-      elementAtSimple("C0[4]", {arrayVector}),
-      "Array subscript out of bounds.");
-  VELOX_ASSERT_THROW(
-      elementAtSimple("C0[5]", {arrayVector}),
-      "Array subscript out of bounds.");
+    EXPECT_EQ(elementAtSimple("try(C0[4])", {arrayVector}), std::nullopt);
+    EXPECT_EQ(elementAtSimple("try(C0[5])", {arrayVector}), std::nullopt);
 
-  EXPECT_EQ(elementAtSimple("try(C0[4])", {arrayVector}), std::nullopt);
-  EXPECT_EQ(elementAtSimple("try(C0[5])", {arrayVector}), std::nullopt);
+    // Maps are ok.
+    EXPECT_EQ(elementAtSimple("C0[1001]", {mapVector}), std::nullopt);
 
-  // Maps are ok.
-  EXPECT_EQ(elementAtSimple("C0[1001]", {mapVector}), std::nullopt);
+    // #3
+    VELOX_ASSERT_THROW(
+        elementAtSimple("C0[-1]", {arrayVector}),
+        "Array subscript index cannot be negative, Index: -1");
+    VELOX_ASSERT_THROW(
+        elementAtSimple("C0[-4]", {arrayVector}),
+        "Array subscript index cannot be negative, Index: -4");
 
-  // #3
-  VELOX_ASSERT_THROW(
-      elementAtSimple("C0[-1]", {arrayVector}), "Array subscript is negative.");
-  VELOX_ASSERT_THROW(
-      elementAtSimple("C0[-4]", {arrayVector}), "Array subscript is negative.");
-
-  EXPECT_EQ(elementAtSimple("try(C0[-1])", {arrayVector}), std::nullopt);
-  EXPECT_EQ(elementAtSimple("try(C0[-4])", {arrayVector}), std::nullopt);
+    EXPECT_EQ(elementAtSimple("try(C0[-1])", {arrayVector}), std::nullopt);
+    EXPECT_EQ(elementAtSimple("try(C0[-4])", {arrayVector}), std::nullopt);
+  }
 
   // Case 2: Empty values vector
   auto emptyValues = makeFlatVector<int64_t>({});
@@ -497,19 +518,20 @@ TEST_F(ElementAtTest, allFlavors2) {
   // #1
   VELOX_ASSERT_THROW(
       elementAtSimple("C0[0]", {emptyValuesArray}),
-      "SQL array indices start at 1");
+      "SQL array indices start at 1. Got 0.");
 
   // #2
   VELOX_ASSERT_THROW(
-      elementAtSimple("C0[4]", {arrayVector}),
-      "Array subscript out of bounds.");
+      elementAtSimple("C0[4]", {emptyValuesArray}),
+      "Array subscript index out of bounds, Index: 4 Array size: 0");
   EXPECT_EQ(elementAtSimple("try(C0[4])", {emptyValuesArray}), std::nullopt);
   // Maps are ok.
   EXPECT_EQ(elementAtSimple("C0[1001]", {emptyValuesMap}), std::nullopt);
 
   // #3
   VELOX_ASSERT_THROW(
-      elementAtSimple("C0[-1]", {arrayVector}), "Array subscript is negative.");
+      elementAtSimple("C0[-1]", {emptyValuesArray}),
+      "Array subscript index cannot be negative, Index: -1");
 
   // Case 3: Empty individual arrays/maps and non-empty values vector
   auto nonEmptyValues = makeFlatVector<int64_t>(std::vector<int64_t>{2});
@@ -529,12 +551,12 @@ TEST_F(ElementAtTest, allFlavors2) {
   // #1
   VELOX_ASSERT_THROW(
       elementAtSimple("C0[0]", {emptyContainerNonEmptyValuesArray}),
-      "SQL array indices start at 1");
+      "SQL array indices start at 1. Got 0.");
 
   // #2
   VELOX_ASSERT_THROW(
       elementAtSimple("C0[4]", {emptyContainerNonEmptyValuesArray}),
-      "Array subscript out of bounds.");
+      "Array subscript index out of bounds, Index: 4 Array size: 0");
   EXPECT_EQ(
       elementAtSimple("try(C0[4])", {emptyContainerNonEmptyValuesArray}),
       std::nullopt);
@@ -546,7 +568,7 @@ TEST_F(ElementAtTest, allFlavors2) {
   // #3
   VELOX_ASSERT_THROW(
       elementAtSimple("C0[-1]", {emptyContainerNonEmptyValuesArray}),
-      "Array subscript is negative.");
+      "Array subscript index cannot be negative, Index: -1");
 
   // Case 4: Intermittently empty individual arrays/maps and non-empty values
   // vector
@@ -576,13 +598,13 @@ TEST_F(ElementAtTest, allFlavors2) {
   VELOX_ASSERT_THROW(
       evaluate<SimpleVector<int64_t>>(
           "C0[0]", makeRowVector({partiallyEmptyArray}), rows, result),
-      "SQL array indices start at 1");
+      "SQL array indices start at 1. Got 0.");
 
   // #2
   VELOX_ASSERT_THROW(
       evaluate<SimpleVector<int64_t>>(
           "C0[4]", makeRowVector({partiallyEmptyArray}), rows, result),
-      "Array subscript out of bounds.");
+      "Array subscript index out of bounds, Index: 4 Array size: 0");
   auto expected = makeNullConstant(TypeKind::BIGINT, 1);
   evaluate<SimpleVector<int64_t>>(
       "try(C0[4])", makeRowVector({partiallyEmptyArray}), rows, result);
@@ -596,7 +618,7 @@ TEST_F(ElementAtTest, allFlavors2) {
   VELOX_ASSERT_THROW(
       evaluate<SimpleVector<int64_t>>(
           "C0[-1]", makeRowVector({partiallyEmptyArray}), rows, result),
-      "Array subscript is negative.");
+      "Array subscript index cannot be negative, Index: -1");
 }
 
 // Third flavor:
@@ -604,41 +626,49 @@ TEST_F(ElementAtTest, allFlavors2) {
 // #2 - do not allow out of bound access for arrays (throw).
 // #3 - null on negative indices.
 TEST_F(ElementAtTest, allFlavors3) {
-  auto arrayVector = makeArrayVector<int64_t>({{10, 11, 12}});
-  auto mapVector = getSimpleMapVector();
+  auto simpleArray = makeArrayVector<int64_t>({{10, 11, 12}});
+  auto simpleMap = getSimpleMapVector();
 
   exec::registerVectorFunction(
       "__f2",
       SubscriptImpl<false, true, false, false>::signatures(),
       std::make_unique<SubscriptImpl<false, true, false, false>>(false));
+  for (bool wrapInConstant : {false, true}) {
+    auto arrayVector = wrapInConstant
+        ? BaseVector::wrapInConstant(1, 0, simpleArray)
+        : simpleArray;
+    auto mapVector = wrapInConstant
+        ? BaseVector::wrapInConstant(1, 0, simpleMap)
+        : simpleMap;
+    // #1
+    EXPECT_EQ(elementAtSimple("__f2(C0, 0)", {arrayVector}), 10);
+    EXPECT_EQ(elementAtSimple("__f2(C0, 1)", {arrayVector}), 11);
+    EXPECT_EQ(elementAtSimple("__f2(C0, 2)", {arrayVector}), 12);
 
-  // #1
-  EXPECT_EQ(elementAtSimple("__f2(C0, 0)", {arrayVector}), 10);
-  EXPECT_EQ(elementAtSimple("__f2(C0, 1)", {arrayVector}), 11);
-  EXPECT_EQ(elementAtSimple("__f2(C0, 2)", {arrayVector}), 12);
+    // #2
+    VELOX_ASSERT_THROW(
+        elementAtSimple("__f2(C0, 3)", {arrayVector}),
+        "Array subscript index out of bounds, Index: 3 Array size: 3");
+    VELOX_ASSERT_THROW(
+        elementAtSimple("__f2(C0, 4)", {arrayVector}),
+        "Array subscript index out of bounds, Index: 4 Array size: 3");
+    VELOX_ASSERT_THROW(
+        elementAtSimple("__f2(C0, 100)", {arrayVector}),
+        "Array subscript index out of bounds, Index: 100 Array size: 3");
 
-  // #2
-  VELOX_ASSERT_THROW(
-      elementAtSimple("__f2(C0, 3)", {arrayVector}),
-      "Array subscript out of bounds.");
-  VELOX_ASSERT_THROW(
-      elementAtSimple("__f2(C0, 4)", {arrayVector}),
-      "Array subscript out of bounds.");
-  VELOX_ASSERT_THROW(
-      elementAtSimple("__f2(C0, 100)", {arrayVector}),
-      "Array subscript out of bounds.");
+    EXPECT_EQ(elementAtSimple("try(__f2(C0, 3))", {arrayVector}), std::nullopt);
+    EXPECT_EQ(elementAtSimple("try(__f2(C0, 4))", {arrayVector}), std::nullopt);
+    EXPECT_EQ(
+        elementAtSimple("try(__f2(C0, 100))", {arrayVector}), std::nullopt);
 
-  EXPECT_EQ(elementAtSimple("try(__f2(C0, 3))", {arrayVector}), std::nullopt);
-  EXPECT_EQ(elementAtSimple("try(__f2(C0, 4))", {arrayVector}), std::nullopt);
-  EXPECT_EQ(elementAtSimple("try(__f2(C0, 100))", {arrayVector}), std::nullopt);
+    // We still allow non-existent map keys, even if out of bounds is disabled
+    // for arrays.
+    EXPECT_EQ(elementAtSimple("__f2(C0, 1001)", {mapVector}), std::nullopt);
 
-  // We still allow non-existent map keys, even if out of bounds is disabled for
-  // arrays.
-  EXPECT_EQ(elementAtSimple("__f2(C0, 1001)", {mapVector}), std::nullopt);
-
-  // #3
-  EXPECT_EQ(elementAtSimple("__f2(C0, -1)", {mapVector}), std::nullopt);
-  EXPECT_EQ(elementAtSimple("__f2(C0, -5)", {mapVector}), std::nullopt);
+    // #3
+    EXPECT_EQ(elementAtSimple("__f2(C0, -1)", {mapVector}), std::nullopt);
+    EXPECT_EQ(elementAtSimple("__f2(C0, -5)", {mapVector}), std::nullopt);
+  }
 }
 
 // Fourth flavor:
@@ -646,25 +676,32 @@ TEST_F(ElementAtTest, allFlavors3) {
 // #2 - allow out of bound access (throw).
 // #3 - allow negative indices.
 TEST_F(ElementAtTest, allFlavors4) {
-  auto arrayVector = makeArrayVector<int64_t>({{10, 11, 12}});
-  auto mapVector = getSimpleMapVector();
+  auto simpleArray = makeArrayVector<int64_t>({{10, 11, 12}});
+  auto simpleMap = getSimpleMapVector();
 
   exec::registerVectorFunction(
       "__f3",
       SubscriptImpl<true, false, true, false>::signatures(),
       std::make_unique<SubscriptImpl<true, false, true, false>>(false));
+  for (bool wrapInConstant : {false, true}) {
+    auto arrayVector = wrapInConstant
+        ? BaseVector::wrapInConstant(1, 0, simpleArray)
+        : simpleArray;
+    auto mapVector = wrapInConstant
+        ? BaseVector::wrapInConstant(1, 0, simpleMap)
+        : simpleMap;
+    EXPECT_EQ(elementAtSimple("__f3(C0, 0)", {arrayVector}), 10);
+    EXPECT_EQ(elementAtSimple("__f3(C0, 1)", {arrayVector}), 11);
+    EXPECT_EQ(elementAtSimple("__f3(C0, 2)", {arrayVector}), 12);
+    EXPECT_EQ(elementAtSimple("__f3(C0, 3)", {arrayVector}), std::nullopt);
+    EXPECT_EQ(elementAtSimple("__f3(C0, 4)", {arrayVector}), std::nullopt);
+    EXPECT_EQ(elementAtSimple("__f3(C0, -1)", {arrayVector}), 12);
+    EXPECT_EQ(elementAtSimple("__f3(C0, -2)", {arrayVector}), 11);
+    EXPECT_EQ(elementAtSimple("__f3(C0, -3)", {arrayVector}), 10);
+    EXPECT_EQ(elementAtSimple("__f3(C0, -4)", {arrayVector}), std::nullopt);
 
-  EXPECT_EQ(elementAtSimple("__f3(C0, 0)", {arrayVector}), 10);
-  EXPECT_EQ(elementAtSimple("__f3(C0, 1)", {arrayVector}), 11);
-  EXPECT_EQ(elementAtSimple("__f3(C0, 2)", {arrayVector}), 12);
-  EXPECT_EQ(elementAtSimple("__f3(C0, 3)", {arrayVector}), std::nullopt);
-  EXPECT_EQ(elementAtSimple("__f3(C0, 4)", {arrayVector}), std::nullopt);
-  EXPECT_EQ(elementAtSimple("__f3(C0, -1)", {arrayVector}), 12);
-  EXPECT_EQ(elementAtSimple("__f3(C0, -2)", {arrayVector}), 11);
-  EXPECT_EQ(elementAtSimple("__f3(C0, -3)", {arrayVector}), 10);
-  EXPECT_EQ(elementAtSimple("__f3(C0, -4)", {arrayVector}), std::nullopt);
-
-  EXPECT_EQ(elementAtSimple("__f3(C0, 1001)", {mapVector}), std::nullopt);
+    EXPECT_EQ(elementAtSimple("__f3(C0, 1001)", {mapVector}), std::nullopt);
+  }
 }
 
 TEST_F(ElementAtTest, constantInputMap) {
@@ -1023,7 +1060,7 @@ TEST_F(ElementAtTest, errorStatesArray) {
   VELOX_ASSERT_THROW(
       testElementAt<int64_t>(
           "element_at(C0, C1)", {arrayVector, indicesVector}, expectedValueAt),
-      "SQL array indices start at 1");
+      "SQL array indices start at 1. Got 0.");
 
   testElementAt<int64_t>(
       "try(element_at(C0, C1))",
