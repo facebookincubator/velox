@@ -34,7 +34,7 @@
 }
 
 %token               LPAREN RPAREN COMMA PERIOD COLON ARRAY MAP ROW FUNCTION DECIMAL LBRACE RBRACE
-%token <std::string> WORD VARIABLE QUOTED_ID WORD_WITH_PERIODS
+%token <std::string> WORD VARIABLE QUOTED_ID WORD_WITH_SPECIAL_CHAR
 %token <long long>   NUMBER SIGNED_INT
 %token YYEOF         0
 
@@ -181,8 +181,7 @@ enum_kind : WORD { if ($1 != "BigintEnum" && $1 != "VarcharEnum" )
                 $$ = $1; }
                 ;
 
-enum_name : WORD_WITH_PERIODS { $$ = $1; }
-          | WORD { $$ = $1; }
+enum_name : WORD_WITH_SPECIAL_CHAR { $$ = $1; }
           ;
 
 enum_type : enum_name COLON enum_kind LPAREN enum_name enum_map_entries_json RPAREN
