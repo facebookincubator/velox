@@ -253,7 +253,7 @@ Accessors
    Returns an array of points in a geometry. Empty or null inputs
    return null.
 
-.. function:: ST_NumPoints(geometry: Geometry) -> points: integer
+.. function:: ST_NumPoints(geometry: Geometry) -> points: bigint
 
    Returns the number of points in a geometry. This is an extension
    to the SQL/MM ``ST_NumPoints`` function which only applies to
