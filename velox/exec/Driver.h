@@ -798,6 +798,23 @@ struct DriverFactory {
     return false;
   }
 
+  /// Returns true if the pipeline has local exchange followed by non-global
+  /// final aggregation that can be replaced with exchange aggregation
+  /// operators. The function sets these final aggregation plan nodes in
+  /// `nodes`. This method should be called only if
+  /// QueryConfig::kUseExchangeAggregation is enabled.
+  bool needsExchangeAggregation(
+      std::vector<core::AggregationNodePtr>& nodes) const {
+    VELOX_CHECK(!planNodes.empty());
+    for (auto& node : planNodes) {
+      if (core::isFinalAggregationFollowLocalExchange(node)) {
+        nodes.push_back(
+            std::dynamic_pointer_cast<const core::AggregationNode>(node));
+      }
+    }
+    return !nodes.empty();
+  }
+
   /// Returns true if the pipeline gets data from a table scan. The function
   /// sets plan node id in 'planNodeId'.
   bool needsTableScan(core::PlanNodeId& planNodeId) const {
