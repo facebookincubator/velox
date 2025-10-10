@@ -551,9 +551,10 @@ struct TimePlusInterval {
 };
 
 // Optimized vector function for Time + IntervalYearMonth
+// And IntervalYearMonth + Time
 // This case is special because result = time (identity function), allowing
 // for significant optimizations
-class TimePlusIntervalYearMonthVectorFunction : public exec::VectorFunction {
+class TimeIntervalYearMonthVectorFunction : public exec::VectorFunction {
  public:
   void apply(
       const SelectivityVector& rows,
@@ -561,7 +562,7 @@ class TimePlusIntervalYearMonthVectorFunction : public exec::VectorFunction {
       const TypePtr& outputType,
       exec::EvalCtx& context,
       VectorPtr& result) const override {
-    auto& timeVector = args[0];
+    VectorPtr& timeVector = args[0]->type()->isTime() ? args[0] : args[1];
 
     // Constant vector case
     // If time input is constant, create constant result - no iteration!
@@ -593,11 +594,31 @@ class TimePlusIntervalYearMonthVectorFunction : public exec::VectorFunction {
   }
 
   static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
-    return {exec::FunctionSignatureBuilder()
+    return {// Signature 1: (time, interval year to month) -> time
+            exec::FunctionSignatureBuilder()
                 .returnType("time")
                 .argumentType("time")
                 .argumentType("interval year to month")
-                .build()};
+                .build(),
+            // Signature 2: (interval year to month, time) -> time
+            exec::FunctionSignatureBuilder()
+                .returnType("time")
+                .argumentType("interval year to month")
+                .argumentType("time")
+                .build()
+
+    };
+  }
+};
+
+template <typename T>
+struct IntervalPlusTime {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Time>& result,
+      const arg_type<IntervalDayTime>& interval,
+      const arg_type<Time>& time) {
+    result = addToTime(time, interval);
   }
 };
 
