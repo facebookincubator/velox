@@ -265,7 +265,7 @@ class RowSerializer : public IterativeVectorSerializer {
 /// Usage:
 /// RowIteratorImpl iterator(source, endOffset);
 /// while (iterator.hasNext()) {
-///   auto next = iterator.next();
+///   auto next = iterator.nextRow();
 ///   ...Process the data in next...
 /// }
 class RowIteratorImpl : public velox::RowIterator {
@@ -281,7 +281,11 @@ class RowIteratorImpl : public velox::RowIterator {
 
   bool hasNext() const override;
 
-  std::unique_ptr<std::string> next() override;
+  std::unique_ptr<std::string> nextRow() override;
+
+  std::vector<std::string_view> nextBatch(size_t maxRows) override {
+    VELOX_UNSUPPORTED("nextBatch is not supported");
+  }
 
  private:
   TRowSize readRowSize();
@@ -318,7 +322,7 @@ class RowDeserializer {
       std::unique_ptr<velox::RowIterator> rowIterator =
           createNextRowIter(source, options, rowIteratorFactory);
       while (rowIterator->hasNext()) {
-        serializedBuffers.emplace_back(rowIterator->next());
+        serializedBuffers.emplace_back(rowIterator->nextRow());
         if constexpr (std::is_same_v<SerializeView, std::string_view>) {
           serializedRows.push_back(std::string_view(
               serializedBuffers.back()->data(),
@@ -354,7 +358,7 @@ class RowDeserializer {
     }
     while (remainingRows > 0) {
       while (sourceRowIterator->hasNext()) {
-        serializedBuffers.emplace_back(sourceRowIterator->next());
+        serializedBuffers.emplace_back(sourceRowIterator->nextRow());
         if constexpr (std::is_same_v<SerializeView, std::string_view>) {
           serializedRows.push_back(std::string_view(
               serializedBuffers.back()->data(),
