@@ -82,11 +82,8 @@ class Exchange : public SourceOperator {
 
   // Fetches splits from the task until there are no more splits or task returns
   // a future that will be complete when more splits arrive. Adds splits to
-  // exchangeClient_. Returns true if received a future from the task and sets
-  // the 'future' parameter. Returns false if fetched all splits or if this
-  // operator is not the first operator in the pipeline and therefore is not
-  // responsible for fetching splits and adding them to the exchangeClient_.
-  bool getSplits(ContinueFuture* future);
+  // exchangeClient_.
+  void getSplits(ContinueFuture* future);
 
   // Fetches runtime stats from ExchangeClient and replaces these in this
   // operator's stats.
