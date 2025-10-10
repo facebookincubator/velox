@@ -16,6 +16,7 @@
 # shellcheck source-path=SCRIPT_DIR
 
 SCRIPT_DIR=$(dirname "${BASH_SOURCE[0]}")
+ABSOLUTE_SCRIPTDIR=$(realpath "$SCRIPT_DIR")
 source "$SCRIPT_DIR"/setup-helper-functions.sh
 source "$SCRIPT_DIR"/setup-versions.sh
 
@@ -193,7 +194,6 @@ function install_arrow {
     # Can be removed after an upgrade to Arrow 20.0.0
     if [ -z "$VELOX_ARROW_CMAKE_PATCH" ]; then
       # We need to set a different path when building the Dockerfile.
-      ABSOLUTE_SCRIPTDIR=$(realpath "$SCRIPT_DIR")
       VELOX_ARROW_CMAKE_PATCH="$ABSOLUTE_SCRIPTDIR/../CMake/resolve_dependency_modules/arrow/cmake-compatibility.patch"
     fi
 
