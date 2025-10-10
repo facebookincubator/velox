@@ -981,6 +981,28 @@ inline std::optional<DateTimeUnit> getTimestampUnit(
   return unit;
 }
 
+inline std::optional<DateTimeUnit> getTimeUnit(
+    const StringView& unitString,
+    bool throwIfInvalid = true) {
+  std::optional<DateTimeUnit> unit =
+      fromDateTimeUnitString(unitString, /*throwIfInvalid=*/false);
+
+  if (unit.has_value()) {
+    // Only allow time-related units for TIME type
+    if (unit.value() == DateTimeUnit::kMillisecond ||
+        unit.value() == DateTimeUnit::kSecond ||
+        unit.value() == DateTimeUnit::kMinute ||
+        unit.value() == DateTimeUnit::kHour) {
+      return unit;
+    }
+  }
+
+  if (throwIfInvalid) {
+    VELOX_USER_FAIL("{} is not a valid TIME field", unitString);
+  }
+  return std::nullopt;
+}
+
 } // namespace
 
 template <typename T>
@@ -1225,6 +1247,24 @@ struct DateDiffFunction : public TimestampWithTimezoneSupport<T> {
     }
   }
 
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& /*config*/,
+      const arg_type<Varchar>* unitString,
+      const arg_type<Time>* /*time1*/,
+      const arg_type<Time>* /*time2*/) {
+    if (unitString != nullptr) {
+      auto unit = fromDateTimeUnitString(*unitString, /*throwIfInvalid=*/false);
+      if (unit.has_value() &&
+          (unit.value() == DateTimeUnit::kMillisecond ||
+           unit.value() == DateTimeUnit::kSecond ||
+           unit.value() == DateTimeUnit::kMinute ||
+           unit.value() == DateTimeUnit::kHour)) {
+        unit_ = unit;
+      }
+    }
+  }
+
   FOLLY_ALWAYS_INLINE void call(
       int64_t& result,
       const arg_type<Varchar>& unitString,
@@ -1264,6 +1304,36 @@ struct DateDiffFunction : public TimestampWithTimezoneSupport<T> {
         unit,
         *timestampWithTz1,
         pack(unpackMillisUtc(*timestampWithTz2), timeZoneId));
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      int64_t& result,
+      const arg_type<Varchar>& unitString,
+      const arg_type<Time>& time1,
+      const arg_type<Time>& time2) {
+    DateTimeUnit unit;
+    if (unit_.has_value()) {
+      unit = unit_.value();
+    } else {
+      // First check if it's a valid unit string at all
+      auto unitOpt =
+          fromDateTimeUnitString(unitString, /*throwIfInvalid=*/false);
+      if (!unitOpt.has_value()) {
+        VELOX_USER_FAIL("{} is not a valid TIME field", unitString);
+      }
+
+      // Then check if it's valid for TIME type
+      if (!(unitOpt.value() == DateTimeUnit::kMillisecond ||
+            unitOpt.value() == DateTimeUnit::kSecond ||
+            unitOpt.value() == DateTimeUnit::kMinute ||
+            unitOpt.value() == DateTimeUnit::kHour)) {
+        VELOX_USER_FAIL("{} is not a valid TIME field", unitString);
+      }
+
+      unit = unitOpt.value();
+    }
+
+    result = diffTime(unit, time1, time2);
   }
 };
 
