@@ -33,9 +33,9 @@ class StringToMapTest : public SparkFunctionBaseTest {
       const std::vector<StringView>& inputs,
       const std::vector<std::pair<StringView, std::optional<StringView>>>&
           expect) {
-    auto result = evaluateStringToMap(inputs);
+    auto actualVector = evaluateStringToMap(inputs);
     auto expectVector = makeMapVector<StringView, StringView>({expect});
-    assertEqualVectors(result, expectVector);
+    assertEqualVectors(expectVector, actualVector);
   }
 };
 
