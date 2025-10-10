@@ -91,6 +91,9 @@ class SpecialFormSignatureGenerator {
   virtual std::vector<exec::FunctionSignaturePtr> getSignaturesForSwitch()
       const;
 
+  // Returns the common signatures for the 'cast' special form.
+  std::vector<exec::FunctionSignaturePtr> getCommonSignaturesForCast() const;
+
   // Returns the signatures for the 'cast' special form.
   virtual std::vector<exec::FunctionSignaturePtr> getSignaturesForCast() const;
 
