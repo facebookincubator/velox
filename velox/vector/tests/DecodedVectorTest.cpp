@@ -477,16 +477,15 @@ class DecodedVectorTest : public testing::Test, public VectorTestBase {
 
 template <>
 void DecodedVectorTest::testConstant<StringView>(const StringView& value) {
-  auto val = value.getString();
-  auto constantVector = BaseVector::createConstant(
-      VARCHAR(), folly::StringPiece{val}, 100, pool_.get());
+  auto constantVector =
+      BaseVector::createConstant(VARCHAR(), value, 100, pool_.get());
 
   auto check = [&](auto& decoded) {
     EXPECT_TRUE(decoded.isConstantMapping());
     EXPECT_FALSE(decoded.isIdentityMapping());
     for (int32_t i = 0; i < 100; i++) {
       EXPECT_FALSE(decoded.isNullAt(i));
-      EXPECT_EQ(decoded.template valueAt<StringView>(i).getString(), val);
+      EXPECT_EQ(decoded.template valueAt<StringView>(i).getString(), value);
     }
   };
 
