@@ -16,7 +16,7 @@
 #pragma once
 
 #define XXH_INLINE_ALL
-#include <boost/regex.hpp>
+#include <re2/re2.h>
 #include <xxhash.h>
 #include <string_view>
 #include "velox/expression/DecodedArgs.h"
@@ -1760,42 +1760,36 @@ template <typename T>
 struct ParseDurationFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  std::unique_ptr<boost::regex> durationRegex_;
+  std::unique_ptr<RE2> durationRegex_;
 
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& /*config*/,
       const arg_type<Varchar>* /*amountUnit*/) {
-    durationRegex_ = std::make_unique<boost::regex>(
-        "^\\s*(\\d+(?:\\.\\d+)?)\\s*([a-zA-Z]+)\\s*$");
+    durationRegex_ =
+        std::make_unique<RE2>("^\\s*(\\d+(?:\\.\\d+)?)\\s*([a-zA-Z]+)\\s*$");
   }
 
   FOLLY_ALWAYS_INLINE void call(
       out_type<IntervalDayTime>& result,
       const arg_type<Varchar>& amountUnit) {
-    std::string strAmountUnit = (std::string)amountUnit;
-    boost::smatch match;
-    bool isMatch = boost::regex_search(strAmountUnit, match, *durationRegex_);
+    std::string value_str;
+    std::string unit;
+    re2::StringPiece input(amountUnit.data(), amountUnit.size());
+    bool isMatch = RE2::FullMatch(input, *durationRegex_, &value_str, &unit);
     if (!isMatch) {
       VELOX_USER_FAIL(
           "Input duration is not a valid data duration string: {}", amountUnit);
     }
-    VELOX_USER_CHECK_EQ(
-        match.size(),
-        3,
-        "Input duration does not have value and unit components only: {}",
-        amountUnit);
     try {
-      double value = std::stod(match[1].str());
-      std::string unit = match[2].str();
+      double value = std::stod(value_str);
       result = valueOfTimeUnitToMillis(value, unit);
     } catch (std::out_of_range&) {
       VELOX_USER_FAIL(
-          "Input duration value is out of range for double: {}",
-          match[1].str());
+          "Input duration value is out of range for double: {}", value_str);
     } catch (std::invalid_argument&) {
       VELOX_USER_FAIL(
-          "Input duration value is not a valid number: {}", match[1].str());
+          "Input duration value is not a valid number: {}", value_str);
     }
   }
 };
