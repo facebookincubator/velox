@@ -22,6 +22,7 @@
 #include "velox/common/memory/MemoryPool.h"
 #include "velox/functions/lib/SubscriptUtil.h"
 #include "velox/type/Type.h"
+#include "velox/vector/FlatMapVector.h"
 #include "velox/vector/TypeAliases.h"
 
 namespace facebook::velox::functions {
@@ -186,6 +187,77 @@ VectorPtr applyMapTyped(
       true /*flattenIfRedundant*/);
 }
 
+/// Applies logic to vectors of FlatMapVector encoding. The implementation is
+/// far simpler than the regular map encoding because FlatMapVector already
+/// supports feature projection. This implementation will serve as a fast-path
+/// execution for now-wrapped vectors.
+VectorPtr applyFlatMap(
+    const SelectivityVector& rows,
+    const DecodedVector& decodedMap,
+    const VectorPtr& elementAt,
+    exec::EvalCtx& context) {
+  // Decode input flat map vector.
+  auto flatMap = decodedMap.base()->as<FlatMapVector>();
+
+  // Decode input elementAt vector.
+  exec::LocalDecodedVector elementAtDecoder(context, *elementAt, rows);
+  auto decodedElementAt = elementAtDecoder.get();
+
+  // Optimal use case: unwrapped vector and constant key. We can simply project
+  // the feature using the first value in the arg vector.
+  if (decodedMap.isIdentityMapping() && decodedElementAt->isConstantMapping()) {
+    if (auto projection = flatMap->projectKey(elementAt, 0)) {
+      return flatMap->projectKey(elementAt, 0);
+    }
+  }
+
+  // Next base case: wrapped vector and constant key. In this scenario we just
+  // need to decode and simply project onto the first index again.
+  else if (decodedElementAt->isConstantMapping()) {
+    // Define nulls and indices buffers.
+    BufferPtr indices =
+        AlignedBuffer::allocate<vector_size_t>(rows.size(), flatMap->pool());
+    BufferPtr nulls = allocateNulls(rows.size(), flatMap->pool());
+    auto mutableIndices = indices->asMutable<vector_size_t>();
+    auto rawNulls = nulls->asMutable<uint64_t>();
+    for (int i = 0; i < decodedMap.size(); i++) {
+      mutableIndices[i] = decodedMap.indices()[i];
+      if (decodedMap.isNullAt(i)) {
+        bits::setNull(rawNulls, i, true);
+      }
+    }
+
+    if (auto projection = flatMap->projectKey(elementAt, 0)) {
+      // Wrap underlying projected feature stream. This will also help with
+      // memory pressure for large feature element vectors.
+      return BaseVector::wrapInDictionary(
+          std::move(nulls),
+          indices,
+          rows.end(),
+          flatMap->projectKey(elementAt, 0));
+    }
+  }
+
+  // In the case that elementAt is not constant, we will need to stitch together
+  // projected values from across our mapValues list.
+  else {
+    auto result =
+        BaseVector::create(flatMap->valueType(), rows.size(), context.pool());
+    rows.applyToSelected([&](vector_size_t row) {
+      if (auto projection = flatMap->projectKey(elementAt, row)) {
+        result->copy(projection.get(), row, decodedMap.indices()[row], 1);
+      } else {
+        result->setNull(row, true);
+      }
+    });
+    return result;
+  }
+
+  // Key doesn't exist, return null constant vector.
+  return BaseVector::createNullConstant(
+      flatMap->valueType(), rows.end(), context.pool());
+}
+
 VectorPtr applyMapComplexType(
     const SelectivityVector& rows,
     const VectorPtr& mapArg,
@@ -330,6 +402,16 @@ VectorPtr MapSubscript::applyMap(
   // Ensure map key type and second argument are the same.
   VELOX_CHECK(mapArg->type()->childAt(0)->equivalent(*indexArg->type()));
 
+  // Short-circuit for FlatMapVector encoding. FlatMapVector doesn't need to
+  // distinguish between primitive and complex types (where the former requires
+  // a type dispatch).
+  exec::LocalDecodedVector mapDecoder(context, *mapArg, rows);
+  auto decodedMap = mapDecoder.get();
+  if (decodedMap->base()->encoding() == VectorEncoding::Simple::FLAT_MAP) {
+    return applyFlatMap(rows, *decodedMap, indexArg, context);
+  }
+
+  // Regular map encoding with two paths for complex and primitive types.
   bool triggerCaching = shouldTriggerCaching(mapArg);
   if (indexArg->type()->isPrimitiveType() &&
       !indexArg->type()->providesCustomComparison()) {

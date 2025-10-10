@@ -204,6 +204,15 @@ class FlatMapVector : public BaseVector {
     return nullptr;
   }
 
+  /// Same as above but allows for `keysVector` at index `index` (similar
+  /// distinction between getKeyChannel we see above).
+  VectorPtr projectKey(const VectorPtr& keysVector, vector_size_t index) const {
+    if (auto channel = getKeyChannel(keysVector, index)) {
+      return mapValues_[channel.value()];
+    }
+    return nullptr;
+  }
+
   /// Returns the size for the map at position `index`. Size means the number of
   /// logical key value pairs in the map. Note that this is not a particularly
   /// efficient operation in flat maps as it requires accessing the inMap bitmap
