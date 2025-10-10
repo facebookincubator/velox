@@ -15,6 +15,7 @@
  */
 #include "velox/exec/Exchange.h"
 
+#include "velox/common/Casts.h"
 #include "velox/common/serialization/Serializable.h"
 #include "velox/exec/Task.h"
 #include "velox/serializers/CompactRowSerializer.h"
@@ -99,42 +100,42 @@ void Exchange::addRemoteTaskIds(std::vector<std::string>& remoteTaskIds) {
   stats_.wlock()->numSplits += remoteTaskIds.size();
 }
 
-bool Exchange::getSplits(ContinueFuture* future) {
+void Exchange::getSplits(ContinueFuture* future) {
   if (!processSplits_) {
-    return false;
+    return;
   }
   if (noMoreSplits_) {
-    return false;
+    return;
   }
   std::vector<std::string> remoteTaskIds;
   for (;;) {
     exec::Split split;
-    auto reason = operatorCtx_->task()->getSplitOrFuture(
+    const auto reason = operatorCtx_->task()->getSplitOrFuture(
         operatorCtx_->driverCtx()->splitGroupId, planNodeId(), split, *future);
-    if (reason == BlockingReason::kNotBlocked) {
-      if (split.hasConnectorSplit()) {
-        auto remoteSplit = std::dynamic_pointer_cast<RemoteConnectorSplit>(
-            split.connectorSplit);
-        VELOX_CHECK_NOT_NULL(remoteSplit, "Wrong type of split");
-        if (FOLLY_UNLIKELY(splitTracer_ != nullptr)) {
-          splitTracer_->write(split);
-        }
-        remoteTaskIds.push_back(remoteSplit->taskId);
-      } else {
-        addRemoteTaskIds(remoteTaskIds);
-        exchangeClient_->noMoreRemoteTasks();
-        noMoreSplits_ = true;
-        if (atEnd_) {
-          operatorCtx_->task()->multipleSplitsFinished(
-              false, stats_.rlock()->numSplits, 0);
-          recordExchangeClientStats();
-        }
-        return false;
-      }
-    } else {
+    if (reason != BlockingReason::kNotBlocked) {
       addRemoteTaskIds(remoteTaskIds);
-      return true;
+      return;
     }
+
+    if (split.hasConnectorSplit()) {
+      auto remoteSplit =
+          checked_pointer_cast<RemoteConnectorSplit>(split.connectorSplit);
+      if (FOLLY_UNLIKELY(splitTracer_ != nullptr)) {
+        splitTracer_->write(split);
+      }
+      remoteTaskIds.push_back(remoteSplit->taskId);
+      continue;
+    }
+
+    addRemoteTaskIds(remoteTaskIds);
+    exchangeClient_->noMoreRemoteTasks();
+    noMoreSplits_ = true;
+    if (atEnd_) {
+      operatorCtx_->task()->multipleSplitsFinished(
+          false, stats_.rlock()->numSplits, 0);
+      recordExchangeClientStats();
+    }
+    return;
   }
 }
 
@@ -172,6 +173,7 @@ BlockingReason Exchange::isBlocked(ContinueFuture* future) {
   }
 
   // Block until data becomes available.
+  VELOX_CHECK(dataFuture.valid());
   *future = std::move(dataFuture);
   return BlockingReason::kWaitForProducer;
 }
@@ -308,7 +310,7 @@ void Exchange::recordExchangeClientStats() {
     lockedStats->runtimeStats.insert({name, value});
   }
 
-  auto backgroundCpuTimeMs =
+  const auto backgroundCpuTimeMs =
       exchangeClientStats.find(ExchangeClient::kBackgroundCpuTimeMs);
   if (backgroundCpuTimeMs != exchangeClientStats.end()) {
     const CpuWallTiming backgroundTiming{
