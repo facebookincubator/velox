@@ -341,11 +341,22 @@ class DecimalUtil {
       T unscaledValue,
       int32_t scale,
       int32_t maxSize,
-      char* const startPosition) {
+      char* const startPosition,
+      bool sci = false) {
     char* writePosition = startPosition;
     if (unscaledValue == 0) {
       *writePosition++ = '0';
-      if (scale > 0) {
+      if (sci && scale > 6) {
+        *writePosition++ = 'E';
+        auto exp =
+            std::to_chars(writePosition, writePosition + maxSize - 2, -scale);
+        VELOX_DCHECK_EQ(
+            exp.ec,
+            std::errc(),
+            "Failed to cast exponent value to varchar: {}",
+            std::make_error_code(exp.ec).message());
+        writePosition = exp.ptr;
+      } else if (scale > 0) {
         *writePosition++ = '.';
         // Append trailing zeros.
         std::memset(writePosition, '0', scale);
@@ -355,6 +366,41 @@ class DecimalUtil {
       if (unscaledValue < 0) {
         *writePosition++ = '-';
         unscaledValue = -unscaledValue;
+      }
+      int32_t adjusted = 0;
+      if (sci) {
+        int digits = countDigits(unscaledValue);
+        adjusted = digits - 1 - scale;
+        if (adjusted < -6) {
+          // Use scientific notation if the absolute value is less than 1e-6.
+          // This is consistent with Spark's behavior.
+          auto coeffBuf = std::unique_ptr<char[]>(new char[digits]);
+          auto [coeffEnd, coeffEc] = std::to_chars(
+              coeffBuf.get(), coeffBuf.get() + digits, unscaledValue);
+          VELOX_DCHECK_EQ(
+              coeffEc,
+              std::errc(),
+              "Failed to cast coeff to varchar: {}",
+              std::make_error_code(coeffEc).message());
+          int coeffLen = coeffEnd - coeffBuf.get();
+          *writePosition++ = coeffBuf[0];
+          if (coeffLen > 1) {
+            *writePosition++ = '.';
+            size_t toCopy = coeffLen - 1;
+            std::memcpy(writePosition, coeffBuf.get() + 1, toCopy);
+            writePosition += toCopy;
+          }
+          *writePosition++ = 'E';
+          auto exp = std::to_chars(
+              writePosition, writePosition + maxSize - coeffLen - 2, adjusted);
+          VELOX_DCHECK_EQ(
+              exp.ec,
+              std::errc(),
+              "Failed to cast exponent value to varchar: {}",
+              std::make_error_code(exp.ec).message());
+          writePosition = exp.ptr;
+          return writePosition - startPosition;
+        }
       }
       auto [position, errorCode] = std::to_chars(
           writePosition,
