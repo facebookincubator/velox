@@ -5083,13 +5083,13 @@ TEST_F(ExprTest, disabledeferredLazyLoading) {
 TEST_F(ExprTest, evaluateConstantExpression) {
   auto eval = [&](const std::string& sql) {
     auto expr = parseExpression(sql, ROW({"a"}, {BIGINT()}));
-    return exec::tryEvaluateConstantExpression(expr, pool(), queryCtx_);
+    return exec::tryEvaluateConstantExpression(expr, pool(), queryCtx_.get());
   };
 
   auto evalNoThrow = [&](const std::string& sql) {
     auto expr = parseExpression(sql, ROW({"a"}, {BIGINT()}));
     return exec::tryEvaluateConstantExpression(
-        expr, pool(), queryCtx_, true /* supressEvaluationFailures */);
+        expr, pool(), queryCtx_.get(), true /* supressEvaluationFailures */);
   };
 
   assertEqualVectors(eval("1 + 2"), makeConstant<int64_t>(3, 1));
