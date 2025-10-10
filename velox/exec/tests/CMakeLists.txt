@@ -49,6 +49,7 @@ add_executable(
   ColumnStatsCollectorTest.cpp
   CustomJoinTest.cpp
   EnforceSingleRowTest.cpp
+  ExchangeAggregationTest.cpp
   ExchangeClientTest.cpp
   ExpandTest.cpp
   FilterProjectTest.cpp

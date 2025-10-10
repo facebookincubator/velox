@@ -31,6 +31,7 @@ velox_add_library(
   Driver.cpp
   EnforceSingleRow.cpp
   Exchange.cpp
+  ExchangeAggregation.cpp
   ExchangeClient.cpp
   ExchangeQueue.cpp
   ExchangeSource.cpp
