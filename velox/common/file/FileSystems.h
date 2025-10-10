@@ -28,7 +28,7 @@ namespace facebook::velox {
 namespace config {
 class IConfig;
 using ConfigPtr = std::shared_ptr<const IConfig>;
-}
+} // namespace config
 class ReadFile;
 class WriteFile;
 namespace filesystems::File {

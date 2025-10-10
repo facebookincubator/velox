@@ -25,7 +25,7 @@
 namespace facebook::velox::config {
 class IConfig;
 using ConfigPtr = std::shared_ptr<const IConfig>;
-}
+} // namespace facebook::velox::config
 
 namespace facebook::velox::cudf_velox::connector::hive {
 
