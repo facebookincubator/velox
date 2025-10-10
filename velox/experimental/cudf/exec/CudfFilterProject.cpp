@@ -75,14 +75,25 @@ CudfFilterProject::CudfFilterProject(
       debugPrintTree(expr);
     }
   }
-  std::vector<std::shared_ptr<velox::exec::Expr>> projectExprs;
   if (hasFilter_) {
     // First expr is Filter, rest are Project
-    filterEvaluator_ = ExpressionEvaluator({info.exprs->exprs()[0]}, inputType);
-    projectExprs = {info.exprs->exprs().begin() + 1, info.exprs->exprs().end()};
+    filterEvaluator_ = createCudfExpression(info.exprs->exprs()[0], inputType);
+    std::transform(
+        info.exprs->exprs().begin() + 1,
+        info.exprs->exprs().end(),
+        std::back_inserter(projectEvaluators_),
+        [inputType](const auto& expr) {
+          return createCudfExpression(expr, inputType);
+        });
+  } else {
+    std::transform(
+        info.exprs->exprs().begin(),
+        info.exprs->exprs().end(),
+        std::back_inserter(projectEvaluators_),
+        [inputType](const auto& expr) {
+          return createCudfExpression(expr, inputType);
+        });
   }
-  projectEvaluator_ = ExpressionEvaluator(
-      hasFilter_ ? projectExprs : info.exprs->exprs(), inputType);
 }
 
 void CudfFilterProject::addInput(RowVectorPtr input) {
@@ -132,9 +143,9 @@ void CudfFilterProject::filter(
     std::vector<std::unique_ptr<cudf::column>>& inputTableColumns,
     rmm::cuda_stream_view stream) {
   // Evaluate the Filter
-  auto filterColumns = filterEvaluator_.compute(
+  auto filterColumns = filterEvaluator_->eval(
       inputTableColumns, stream, cudf::get_current_device_resource_ref());
-  auto filterColumn = filterColumns[0]->view();
+  auto filterColumn = asView(filterColumns);
   // is all true in filter_column
   auto isAllTrue = cudf::reduce(
       filterColumn,
@@ -158,15 +169,28 @@ void CudfFilterProject::filter(
 std::vector<std::unique_ptr<cudf::column>> CudfFilterProject::project(
     std::vector<std::unique_ptr<cudf::column>>& inputTableColumns,
     rmm::cuda_stream_view stream) {
-  auto columns = projectEvaluator_.compute(
-      inputTableColumns, stream, cudf::get_current_device_resource_ref());
+  std::vector<ColumnOrView> columns;
+  for (auto& projectEvaluator : projectEvaluators_) {
+    columns.push_back(projectEvaluator->eval(
+        inputTableColumns, stream, cudf::get_current_device_resource_ref()));
+  }
 
   // Rearrange columns to match outputType_
   std::vector<std::unique_ptr<cudf::column>> outputColumns(outputType_->size());
   // computed resultProjections
   for (int i = 0; i < resultProjections_.size(); i++) {
-    VELOX_CHECK_NOT_NULL(columns[i]);
-    outputColumns[resultProjections_[i].outputChannel] = std::move(columns[i]);
+    auto& columnOrView = columns[i];
+    if (std::holds_alternative<std::unique_ptr<cudf::column>>(columnOrView)) {
+      // Move the owned column
+      outputColumns[resultProjections_[i].outputChannel] =
+          std::move(std::get<std::unique_ptr<cudf::column>>(columnOrView));
+    } else {
+      // Materialize the column_view into an owned column
+      auto view = std::get<cudf::column_view>(columnOrView);
+      outputColumns[resultProjections_[i].outputChannel] =
+          std::make_unique<cudf::column>(
+              view, stream, cudf::get_current_device_resource_ref());
+    }
   }
 
   // Count occurrences of each inputChannel, and move columns if they occur only

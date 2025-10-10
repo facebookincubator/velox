@@ -291,6 +291,8 @@ const std::unordered_set<std::string> supportedOps = {
 
 namespace detail {
 
+// TODO (dm): Make this AST specific and only checking top level. doesn't have
+// to go all deep
 bool canBeEvaluated(const std::shared_ptr<velox::exec::Expr>& expr) {
   const auto name =
       stripPrefix(expr->name(), CudfOptions::getInstance().prefix());
@@ -302,6 +304,8 @@ bool canBeEvaluated(const std::shared_ptr<velox::exec::Expr>& expr) {
   return std::dynamic_pointer_cast<velox::exec::FieldReference>(expr) !=
       nullptr;
 }
+// TODO (dm): For purpose of replacing filterproject in tocudf, we need a new
+// function that encompasses all operations across evaluator types
 
 } // namespace detail
 
@@ -321,12 +325,12 @@ struct AstContext {
       size_t columnIndex,
       std::string const& instruction,
       std::string const& fieldName,
-      const std::shared_ptr<CudfExpressionNode>& node = nullptr);
+      const std::shared_ptr<FunctionExpression>& node = nullptr);
   cudf::ast::expression const& addPrecomputeInstruction(
       std::string const& name,
       std::string const& instruction,
       std::string const& fieldName = {},
-      const std::shared_ptr<CudfExpressionNode>& node = nullptr);
+      const std::shared_ptr<FunctionExpression>& node = nullptr);
   cudf::ast::expression const& multipleInputsToPairWise(
       const std::shared_ptr<velox::exec::Expr>& expr);
   static bool canBeEvaluated(const std::shared_ptr<velox::exec::Expr>& expr);
@@ -380,7 +384,7 @@ cudf::ast::expression const& AstContext::addPrecomputeInstructionOnSide(
     size_t columnIndex,
     std::string const& instruction,
     std::string const& fieldName,
-    const std::shared_ptr<CudfExpressionNode>& node) {
+    const std::shared_ptr<FunctionExpression>& node) {
   auto newColumnIndex = inputRowSchema[sideIdx].get()->size() +
       precomputeInstructions[sideIdx].get().size();
   if (fieldName.empty()) {
@@ -401,7 +405,7 @@ cudf::ast::expression const& AstContext::addPrecomputeInstruction(
     std::string const& name,
     std::string const& instruction,
     std::string const& fieldName,
-    const std::shared_ptr<CudfExpressionNode>& node) {
+    const std::shared_ptr<FunctionExpression>& node) {
   for (size_t sideIdx = 0; sideIdx < inputRowSchema.size(); ++sideIdx) {
     if (inputRowSchema[sideIdx].get()->containsChild(name)) {
       auto columnIndex = inputRowSchema[sideIdx].get()->getChildIdx(name);
@@ -575,7 +579,9 @@ cudf::ast::expression const& AstContext::pushExprToTree(
       VELOX_NYI("Unsupported switch complex operation " + expr->toString());
     }
   } else if (getCudfFunctionRegistry().contains(name)) {
-    auto node = CudfExpressionNode::create(expr);
+    // TODO (dm): Convert this to CudfExpression::create which will decide who
+    // to delegate to
+    auto node = FunctionExpression::create(expr, inputRowSchema[0]);
     return addPrecomputeInstructionOnSide(0, 0, name, "", node);
   } else if (auto fieldExpr = std::dynamic_pointer_cast<FieldReference>(expr)) {
     // Refer to the appropriate side
@@ -1008,18 +1014,21 @@ bool registerBuiltinFunctions(const std::string& prefix) {
   return true;
 }
 
-std::shared_ptr<CudfExpressionNode> CudfExpressionNode::create(
-    const std::shared_ptr<velox::exec::Expr>& expr) {
-  auto node = std::make_shared<CudfExpressionNode>();
-  node->expr = expr;
+std::shared_ptr<FunctionExpression> FunctionExpression::create(
+    const std::shared_ptr<velox::exec::Expr>& expr,
+    const RowTypePtr& inputRowSchema) {
+  auto node = std::make_shared<FunctionExpression>();
+  node->expr_ = expr;
+  node->inputRowSchema_ = inputRowSchema;
 
   auto name = expr->name();
-  node->function = createCudfFunction(name, expr);
+  node->function_ = createCudfFunction(name, expr);
 
-  if (node->function) {
+  if (node->function_) {
     for (const auto& input : expr->inputs()) {
       if (input->name() != "literal") {
-        node->subexpressions.push_back(CudfExpressionNode::create(input));
+        node->subexpressions_.push_back(
+            createCudfExpression(input, inputRowSchema));
       }
     }
   }
@@ -1027,34 +1036,32 @@ std::shared_ptr<CudfExpressionNode> CudfExpressionNode::create(
   return node;
 }
 
-ColumnOrView CudfExpressionNode::eval(
+ColumnOrView FunctionExpression::eval(
     std::vector<std::unique_ptr<cudf::column>>& inputTableColumns,
-    const RowTypePtr& inputRowSchema,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr,
     bool finalize) {
   using velox::exec::FieldReference;
 
-  if (auto fieldExpr = std::dynamic_pointer_cast<FieldReference>(expr)) {
+  if (auto fieldExpr = std::dynamic_pointer_cast<FieldReference>(expr_)) {
     auto name = fieldExpr->name();
-    auto columnIndex = inputRowSchema->getChildIdx(name);
+    auto columnIndex = inputRowSchema_->getChildIdx(name);
     return inputTableColumns[columnIndex]->view();
   }
 
-  if (function) {
+  if (function_) {
     std::vector<ColumnOrView> inputColumns;
-    inputColumns.reserve(subexpressions.size());
+    inputColumns.reserve(subexpressions_.size());
 
-    for (const auto& subexpr : subexpressions) {
-      inputColumns.push_back(
-          subexpr->eval(inputTableColumns, inputRowSchema, stream, mr));
+    for (const auto& subexpr : subexpressions_) {
+      inputColumns.push_back(subexpr->eval(inputTableColumns, stream, mr));
     }
 
-    auto result = function->eval(inputColumns, stream, mr);
+    auto result = function_->eval(inputColumns, stream, mr);
     if (finalize &&
         std::holds_alternative<std::unique_ptr<cudf::column>>(result)) {
       const auto requestedType =
-          cudf::data_type(cudf_velox::veloxToCudfTypeId(expr->type()));
+          cudf::data_type(cudf_velox::veloxToCudfTypeId(expr_->type()));
       auto& owned = std::get<std::unique_ptr<cudf::column>>(result);
       if (owned->type() != requestedType) {
         owned = cudf::cast(*owned, requestedType, stream, mr);
@@ -1064,40 +1071,39 @@ ColumnOrView CudfExpressionNode::eval(
   }
 
   VELOX_FAIL(
-      "Unsupported expression for recursive evaluation: " + expr->name());
+      "Unsupported expression for recursive evaluation: " + expr_->name());
 }
 
-void addPrecomputedColumns(
+void FunctionExpression::close() {
+  function_.reset();
+  subexpressions_.clear();
+}
+
+std::vector<ColumnOrView> precomputeSubexpressions(
     std::vector<std::unique_ptr<cudf::column>>& inputTableColumns,
     const std::vector<PrecomputeInstruction>& precomputeInstructions,
     const std::vector<std::unique_ptr<cudf::scalar>>& scalars,
     const RowTypePtr& inputRowSchema,
     rmm::cuda_stream_view stream) {
+  std::vector<ColumnOrView> precomputedColumns;
+  precomputedColumns.reserve(precomputeInstructions.size());
+
   for (const auto& instruction : precomputeInstructions) {
     auto
         [dependent_column_index,
          ins_name,
          new_column_index,
          nested_dependent_column_indices,
-         cudf_node] = instruction;
+         cudf_expression] = instruction;
 
     // If a compiled cudf node is available, evaluate it directly.
-    if (cudf_node) {
-      auto result = cudf_node->eval(
+    if (cudf_expression) {
+      auto result = cudf_expression->eval(
           inputTableColumns,
-          inputRowSchema,
           stream,
           cudf::get_current_device_resource_ref(),
           /*finalize=*/true);
-      if (std::holds_alternative<cudf::column_view>(result)) {
-        inputTableColumns.emplace_back(std::make_unique<cudf::column>(
-            std::get<cudf::column_view>(result),
-            stream,
-            cudf::get_current_device_resource_ref()));
-      } else {
-        inputTableColumns.emplace_back(
-            std::move(std::get<std::unique_ptr<cudf::column>>(result)));
-      }
+      precomputedColumns.push_back(std::move(result));
       continue;
     }
     if (ins_name.rfind("fill", 0) == 0) {
@@ -1108,74 +1114,88 @@ void addPrecomputedColumns(
           inputTableColumns[dependent_column_index]->size(),
           stream,
           cudf::get_current_device_resource_ref());
-      inputTableColumns.emplace_back(std::move(newColumn));
+      precomputedColumns.push_back(std::move(newColumn));
     } else if (ins_name == "nested_column") {
-      auto newColumn = std::make_unique<cudf::column>(
-          inputTableColumns[dependent_column_index]->view().child(
-              nested_dependent_column_indices[0]),
-          stream,
-          cudf::get_current_device_resource_ref());
-      inputTableColumns.emplace_back(std::move(newColumn));
+      // Nested column already exists in input. Don't materialize.
+      auto view = inputTableColumns[dependent_column_index]->view().child(
+          nested_dependent_column_indices[0]);
+      precomputedColumns.push_back(view);
     } else {
       VELOX_FAIL("Unsupported precompute operation " + ins_name);
     }
   }
+
+  return precomputedColumns;
 }
 
-ExpressionEvaluator::ExpressionEvaluator(
-    const std::vector<std::shared_ptr<velox::exec::Expr>>& exprs,
+ASTExpression::ASTExpression(
+    std::shared_ptr<velox::exec::Expr> expr,
     const RowTypePtr& inputRowSchema)
     : inputRowSchema_(inputRowSchema) {
-  exprAst_.reserve(exprs.size());
-  for (const auto& expr : exprs) {
-    cudf::ast::tree tree;
-    createAstTree(
-        expr, tree, scalars_, inputRowSchema, precomputeInstructions_);
-    exprAst_.emplace_back(std::move(tree));
-  }
+  createAstTree(
+      expr, cudfTree_, scalars_, inputRowSchema, precomputeInstructions_);
 }
 
-void ExpressionEvaluator::close() {
-  exprAst_.clear();
+void ASTExpression::close() {
+  cudfTree_ = {};
   scalars_.clear();
   precomputeInstructions_.clear();
 }
 
-std::vector<std::unique_ptr<cudf::column>> ExpressionEvaluator::compute(
+ColumnOrView ASTExpression::eval(
     std::vector<std::unique_ptr<cudf::column>>& inputTableColumns,
     rmm::cuda_stream_view stream,
-    rmm::device_async_resource_ref mr) {
-  auto numColumns = inputTableColumns.size();
-  addPrecomputedColumns(
+    rmm::device_async_resource_ref mr,
+    bool finalize) {
+  auto precomputedColumns = precomputeSubexpressions(
       inputTableColumns,
       precomputeInstructions_,
       scalars_,
       inputRowSchema_,
       stream);
-  auto astInputTable =
-      std::make_unique<cudf::table>(std::move(inputTableColumns));
-  auto astInputTableView = astInputTable->view();
-  std::vector<std::unique_ptr<cudf::column>> columns;
-  for (auto& tree : exprAst_) {
-    if (auto colRefPtr =
-            dynamic_cast<cudf::ast::column_reference const*>(&tree.back())) {
-      auto col = std::make_unique<cudf::column>(
-          astInputTableView.column(colRefPtr->get_column_index()), stream, mr);
-      columns.emplace_back(std::move(col));
-    } else {
-      auto col =
-          cudf::compute_column(astInputTableView, tree.back(), stream, mr);
-      columns.emplace_back(std::move(col));
-    }
+
+  // Make table_view from input columns and precomputed columns
+  std::vector<cudf::column_view> allColumnViews;
+  allColumnViews.reserve(inputTableColumns.size() + precomputedColumns.size());
+
+  for (const auto& col : inputTableColumns) {
+    allColumnViews.push_back(col->view());
   }
-  inputTableColumns = astInputTable->release();
-  inputTableColumns.resize(numColumns);
-  return columns;
+
+  for (auto& precomputedCol : precomputedColumns) {
+    allColumnViews.push_back(asView(precomputedCol));
+  }
+
+  cudf::table_view astInputTableView(allColumnViews);
+
+  if (auto colRefPtr =
+          dynamic_cast<cudf::ast::column_reference const*>(&cudfTree_.back())) {
+    auto columnIndex = colRefPtr->get_column_index();
+    if (columnIndex < inputTableColumns.size()) {
+      return inputTableColumns[columnIndex]->view();
+    } else {
+      // Referencing a precomputed column return as it is (view or owned)
+      return std::move(
+          precomputedColumns[columnIndex - inputTableColumns.size()]);
+    }
+  } else {
+    return cudf::compute_column(
+        astInputTableView, cudfTree_.back(), stream, mr);
+  }
 }
 
-bool ExpressionEvaluator::canBeEvaluated(
-    const std::vector<std::shared_ptr<velox::exec::Expr>>& exprs) {
-  return std::all_of(exprs.begin(), exprs.end(), detail::canBeEvaluated);
+bool ASTExpression::canBeEvaluated(std::shared_ptr<velox::exec::Expr> expr) {
+  return detail::canBeEvaluated(expr);
+}
+
+std::shared_ptr<CudfExpression> createCudfExpression(
+    std::shared_ptr<velox::exec::Expr> expr,
+    const RowTypePtr& inputRowSchema) {
+  if (ASTExpression::canBeEvaluated(expr)) {
+    return std::make_shared<ASTExpression>(expr, inputRowSchema);
+  } else {
+    return FunctionExpression::create(expr, inputRowSchema);
+  }
 }
 
 namespace {

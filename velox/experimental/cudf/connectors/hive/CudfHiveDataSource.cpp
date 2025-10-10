@@ -130,8 +130,8 @@ CudfHiveDataSource::CudfHiveDataSource(
       }
     }();
 
-    cudfExpressionEvaluator_ = velox::cudf_velox::ExpressionEvaluator(
-        remainingFilterExprSet_->exprs(), remainingFilterType_);
+    cudfExpressionEvaluator_ = velox::cudf_velox::createCudfExpression(
+        remainingFilterExprSet_->exprs()[0], remainingFilterType_);
     // TODO(kn): Get column names and subfields from remaining filter and add to
     // readColumnNames_
   }
@@ -180,7 +180,7 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
     const auto originalNumColumns = cudfTableColumns.size();
     // Filter may need addtional computed columns which are added to
     // cudfTableColumns
-    auto filterResult = cudfExpressionEvaluator_.compute(
+    auto filterResult = cudfExpressionEvaluator_->eval(
         cudfTableColumns, stream_, cudf::get_current_device_resource_ref());
     // discard computed columns
     std::vector<std::unique_ptr<cudf::column>> originalColumns;
@@ -194,7 +194,7 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
     // Keep only rows where the filter is true
     cudfTable = cudf::apply_boolean_mask(
         *originalTable,
-        *filterResult[0],
+        asView(filterResult),
         stream_,
         cudf::get_current_device_resource_ref());
   }

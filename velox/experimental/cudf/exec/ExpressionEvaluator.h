@@ -32,7 +32,7 @@
 namespace facebook::velox::cudf_velox {
 
 // Forward declaration to allow usage in PrecomputeInstruction
-struct CudfExpressionNode;
+struct CudfExpression;
 
 // Pre-compute instructions for the expression,
 // for ops that are not supported by cudf::ast
@@ -41,19 +41,18 @@ struct PrecomputeInstruction {
   std::string ins_name;
   int new_column_index;
   std::vector<int> nested_dependent_column_indices;
-  // Optional: compiled cudf expression node for recursive/non-AST eval
-  std::shared_ptr<CudfExpressionNode> cudf_node;
+  std::shared_ptr<CudfExpression> cudf_expression;
 
   // Constructor to initialize the struct with values
   PrecomputeInstruction(
       int depIndex,
       const std::string& name,
       int newIndex,
-      const std::shared_ptr<CudfExpressionNode>& node = nullptr)
+      const std::shared_ptr<CudfExpression>& node = nullptr)
       : dependent_column_index(depIndex),
         ins_name(name),
         new_column_index(newIndex),
-        cudf_node(node) {}
+        cudf_expression(node) {}
 
   // TODO (dm): This two ctor situation is crazy.
   PrecomputeInstruction(
@@ -61,12 +60,12 @@ struct PrecomputeInstruction {
       const std::string& name,
       int newIndex,
       const std::vector<int>& nestedIndices,
-      const std::shared_ptr<CudfExpressionNode>& node = nullptr)
+      const std::shared_ptr<CudfExpression>& node = nullptr)
       : dependent_column_index(depIndex),
         ins_name(name),
         new_column_index(newIndex),
         nested_dependent_column_indices(nestedIndices),
-        cudf_node(node) {}
+        cudf_expression(node) {}
 };
 
 // Holds either a non-owning cudf::column_view (zero-copy) or an owning
@@ -108,23 +107,43 @@ bool registerCudfFunction(
 
 bool registerBuiltinFunctions(const std::string& prefix);
 
-struct CudfExpressionNode {
-  std::shared_ptr<velox::exec::Expr> expr;
-  std::shared_ptr<CudfFunction> function;
-  std::vector<std::shared_ptr<CudfExpressionNode>> subexpressions;
+class CudfExpression {
+ public:
+  virtual ~CudfExpression() = default;
+  virtual void close() = 0;
 
-  static std::shared_ptr<CudfExpressionNode> create(
-      const std::shared_ptr<velox::exec::Expr>& expr);
+  virtual ColumnOrView eval(
+      std::vector<std::unique_ptr<cudf::column>>& inputTableColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr,
+      bool finalize = false) = 0;
+};
+
+using CudfExpressionPtr = std::shared_ptr<CudfExpression>;
+
+class FunctionExpression : public CudfExpression {
+ public:
+  static std::shared_ptr<FunctionExpression> create(
+      const std::shared_ptr<velox::exec::Expr>& expr,
+      const RowTypePtr& inputRowSchema);
 
   // TODO (dm): A storage for keeping results in case this is a multiply
   // referenced subexpression (to do CSE)
 
   ColumnOrView eval(
       std::vector<std::unique_ptr<cudf::column>>& inputTableColumns,
-      const RowTypePtr& inputRowSchema,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr,
-      bool finalize = false);
+      bool finalize = false) override;
+
+  void close() override;
+
+ private:
+  std::shared_ptr<velox::exec::Expr> expr_;
+  std::shared_ptr<CudfFunction> function_;
+  std::vector<std::shared_ptr<CudfExpression>> subexpressions_;
+
+  RowTypePtr inputRowSchema_;
 };
 
 cudf::ast::expression const& createAstTree(
@@ -142,12 +161,6 @@ cudf::ast::expression const& createAstTree(
     const RowTypePtr& rightRowSchema,
     std::vector<PrecomputeInstruction>& leftPrecomputeInstructions,
     std::vector<PrecomputeInstruction>& rightPrecomputeInstructions);
-
-void addPrecomputedColumns(
-    std::vector<std::unique_ptr<cudf::column>>& inputTableColumns,
-    const std::vector<PrecomputeInstruction>& precomputeInstructions,
-    const std::vector<std::unique_ptr<cudf::scalar>>& scalars,
-    rmm::cuda_stream_view stream);
 
 // Convert subfield filters to cudf AST
 cudf::ast::expression const& createAstFromSubfieldFilter(
@@ -167,28 +180,28 @@ cudf::ast::expression const& createAstFromSubfieldFilters(
     const RowTypePtr& inputRowSchema);
 
 // Evaluates the expression tree
-class ExpressionEvaluator {
+class ASTExpression : public CudfExpression {
  public:
-  ExpressionEvaluator() = default;
+  ASTExpression() = default;
   // Converts velox expressions to cudf::ast::tree, scalars and
   // precompute instructions and stores them
-  ExpressionEvaluator(
-      const std::vector<std::shared_ptr<velox::exec::Expr>>& exprs,
+  ASTExpression(
+      std::shared_ptr<velox::exec::Expr> expr,
       const RowTypePtr& inputRowSchema);
 
   // Evaluates the expression tree for the given input columns
-  std::vector<std::unique_ptr<cudf::column>> compute(
+  ColumnOrView eval(
       std::vector<std::unique_ptr<cudf::column>>& inputTableColumns,
       rmm::cuda_stream_view stream,
-      rmm::device_async_resource_ref mr);
+      rmm::device_async_resource_ref mr,
+      bool finalize = false) override;
 
-  void close();
+  void close() override;
 
-  static bool canBeEvaluated(
-      const std::vector<std::shared_ptr<velox::exec::Expr>>& exprs);
+  static bool canBeEvaluated(std::shared_ptr<velox::exec::Expr> expr);
 
  private:
-  std::vector<cudf::ast::tree> exprAst_;
+  cudf::ast::tree cudfTree_;
   std::vector<std::unique_ptr<cudf::scalar>> scalars_;
   // instruction on dependent column to get new column index on non-ast
   // supported operations in expressions
@@ -196,5 +209,9 @@ class ExpressionEvaluator {
   std::vector<PrecomputeInstruction> precomputeInstructions_;
   RowTypePtr inputRowSchema_;
 };
+
+std::shared_ptr<CudfExpression> createCudfExpression(
+    std::shared_ptr<velox::exec::Expr> expr,
+    const RowTypePtr& inputRowSchema);
 
 } // namespace facebook::velox::cudf_velox

@@ -128,7 +128,7 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   // Expression evaluator for remaining filter.
   core::ExpressionEvaluator* const expressionEvaluator_;
   std::unique_ptr<exec::ExprSet> remainingFilterExprSet_;
-  velox::cudf_velox::ExpressionEvaluator cudfExpressionEvaluator_;
+  std::shared_ptr<velox::cudf_velox::CudfExpression> cudfExpressionEvaluator_;
 
   // Expression evaluator for subfield filter.
   std::vector<std::unique_ptr<cudf::scalar>> subfieldScalars_;

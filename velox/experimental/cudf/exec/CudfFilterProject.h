@@ -62,8 +62,8 @@ class CudfFilterProject : public exec::Operator, public NvtxHelper {
 
   void close() override {
     Operator::close();
-    projectEvaluator_.close();
-    filterEvaluator_.close();
+    projectEvaluators_.clear();
+    filterEvaluator_.reset();
   }
 
  private:
@@ -74,8 +74,8 @@ class CudfFilterProject : public exec::Operator, public NvtxHelper {
   // initialization, they will be reset, and initialized_ will be set to true.
   std::shared_ptr<const core::ProjectNode> project_;
   std::shared_ptr<const core::FilterNode> filter_;
-  ExpressionEvaluator projectEvaluator_;
-  ExpressionEvaluator filterEvaluator_;
+  std::vector<CudfExpressionPtr> projectEvaluators_;
+  CudfExpressionPtr filterEvaluator_;
 
   std::vector<velox::exec::IdentityProjection> resultProjections_;
   std::vector<velox::exec::IdentityProjection> identityProjections_;
