@@ -64,15 +64,15 @@ class Buffer {
   virtual ~Buffer() {}
 
   void addRef() {
-    referenceCount_.fetch_add(1);
+    referenceCount_.fetch_add(1, std::memory_order_acq_rel);
   }
 
   int refCount() const {
-    return referenceCount_;
+    return referenceCount_.load(std::memory_order_acquire);
   }
 
   void release() {
-    if (referenceCount_.fetch_sub(1) == 1) {
+    if (referenceCount_.fetch_sub(1, std::memory_order_acq_rel) == 1) {
       releaseResources();
       if (pool_) {
         freeToPool();
