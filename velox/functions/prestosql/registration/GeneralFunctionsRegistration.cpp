@@ -39,10 +39,10 @@ void registerFailFunction(const std::vector<std::string>& names) {
 template <typename T>
 void registerGreatestLeastFunction(const std::string& prefix) {
   registerFunction<ParameterBinder<GreatestFunction, T>, T, T, Variadic<T>>(
-      {prefix + "greatest"});
+      {prefix + "greatest", prefix + "max"});
 
   registerFunction<ParameterBinder<LeastFunction, T>, T, T, Variadic<T>>(
-      {prefix + "least"});
+      {prefix + "least", prefix + "min"});
 }
 
 void registerAllGreatestLeastFunctions(const std::string& prefix) {

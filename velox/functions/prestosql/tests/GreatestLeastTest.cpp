@@ -439,3 +439,27 @@ TEST_F(GreatestLeastTest, boolean) {
       {true, true, true, false, std::nullopt, std::nullopt});
   test::assertEqualVectors(expected, result);
 }
+
+TEST_F(GreatestLeastTest, maxMinAliases) {
+  // Test max and min alias to greatest and least for types TINYINT, VARCHAR,
+  // TIMESTAMP.
+
+  runTest<int8_t>("max(c0, c1)", {{0, 1, -1}, {100, -100, 0}}, {100, 1, 0});
+  runTest<int8_t>("min(c0, c1)", {{0, 1, -1}, {100, -100, 0}}, {0, -100, -1});
+
+  runTest<StringView>(
+      "max(c0, c1)", {{"a"_sv, "b"_sv}, {"z"_sv, "a"_sv}}, {"z"_sv, "b"_sv});
+  runTest<StringView>(
+      "min(c0, c1)", {{"a"_sv, "b"_sv}, {"z"_sv, "a"_sv}}, {"a"_sv, "a"_sv});
+
+  runTest<Timestamp>(
+      "max(c0, c1)",
+      {{Timestamp(0, 0), Timestamp(10, 100)},
+       {Timestamp(1, 0), Timestamp(10, 1)}},
+      {Timestamp(1, 0), Timestamp(10, 100)});
+  runTest<Timestamp>(
+      "min(c0, c1)",
+      {{Timestamp(0, 0), Timestamp(10, 100)},
+       {Timestamp(1, 0), Timestamp(10, 1)}},
+      {Timestamp(0, 0), Timestamp(10, 1)});
+}
