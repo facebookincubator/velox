@@ -88,6 +88,7 @@ add_executable(
   ScaledScanControllerTest.cpp
   ScaleWriterLocalPartitionTest.cpp
   SortBufferTest.cpp
+  SpatialIndexTest.cpp
   SpillerTest.cpp
   SpillTest.cpp
   SplitListenerTest.cpp
