@@ -402,12 +402,23 @@ TEST_F(TypeParserTest, bigintEnumBasic) {
           "test.enum.mood:BigintEnum(test.enum.mood{\"CURIOUS\":-2, \"HAPPY\":106071912278278})"),
       *BIGINT_ENUM(moodWithLargeValue));
 
-  // Enum name that is not in the form catalog.namespace.enum_name.
-  LongEnumParameter otherEnumInfo(
-      "someEnumType", {{"CURIOUS", 2}, {"HAPPY", 0}});
+  // Enum name with special characters.
+  LongEnumParameter enumInfoWithSpecialChar(
+      "test.en\\um.\"mood", {{"CURIOUS", 2}, {"HAPPY", 0}});
+  auto enumWithSpecialCharString =
+      "test.en\\um.\"mood:BigintEnum(test.en\\um.\"mood{\"CURIOUS\": 2, \"HAPPY\": 0})";
+  ASSERT_EQ(
+      *parseType(enumWithSpecialCharString),
+      *BIGINT_ENUM(enumInfoWithSpecialChar));
+
+  // Enum names should be in the format catalog.namespace.enum_name. This is
+  // because enum types are part of a UserDefinedType, which has a
+  // 3-part QualifiedObjectName as the type name.
   auto otherEnumString =
       "someEnumType:BigintEnum(someEnumType{\"CURIOUS\": 2, \"HAPPY\": 0})";
-  ASSERT_EQ(*parseType(otherEnumString), *BIGINT_ENUM(otherEnumInfo));
+  VELOX_ASSERT_THROW(
+      parseType(otherEnumString),
+      "Failed to parse type [someEnumType:BigintEnum(someEnumType{\"CURIOUS\": 2, \"HAPPY\": 0})]. syntax error, unexpected COLON, expecting WORD");
 
   // Array type with enum values.
   ASSERT_EQ(
@@ -493,19 +504,29 @@ TEST_F(TypeParserTest, varcharEnumBasic) {
           "test.enum.mood:VarcharEnum(test.enum.mood{\"CURIOUS\":\"ONXW2ZKWMFWHKZI=\", \"HAPPY\":\"ONXW2ZJAOZQWY5LF\" , \"SAD\":\"KNHU2RJAKZAUYVKF\"})"),
       *VARCHAR_ENUM(moodInfo));
 
-  // Enum name that is not in the form catalog.namespace.enum_name.
-  VarcharEnumParameter otherEnumInfo(
-      "someEnumType",
+  auto sameEnumDiffOrderMap =
+      "test.enum.mood:VarcharEnum(test.enum.mood{\"HAPPY\":\"ONXW2ZJAOZQWY5LF\" , \"CURIOUS\":\"ONXW2ZKWMFWHKZI=\", \"SAD\":\"KNHU2RJAKZAUYVKF\"})";
+  ASSERT_EQ(*parseType(sameEnumDiffOrderMap), *VARCHAR_ENUM(moodInfo));
+
+  // Enum name with special characters.
+  VarcharEnumParameter moodInfoSpecialChars(
+      "test.enum.\"mood/someMood\"",
       {{"CURIOUS", "someValue"},
        {"HAPPY", "some value"},
        {"SAD", "SOME VALUE"}});
+  ASSERT_EQ(
+      *parseType(
+          "test.enum.\"mood/someMood\":VarcharEnum(test.enum.\"mood/someMood\"{\"CURIOUS\":\"ONXW2ZKWMFWHKZI=\", \"HAPPY\":\"ONXW2ZJAOZQWY5LF\" , \"SAD\":\"KNHU2RJAKZAUYVKF\"})"),
+      *VARCHAR_ENUM(moodInfoSpecialChars));
+
+  // Enum names should be in the format catalog.namespace.enum_name. This is
+  // because enum types are part of a UserDefinedType, which has a
+  // 3-part QualifiedObjectName as the type name.
   auto otherEnumString =
       "someEnumType:VarcharEnum(someEnumType{\"CURIOUS\":\"ONXW2ZKWMFWHKZI=\", \"HAPPY\":\"ONXW2ZJAOZQWY5LF\" , \"SAD\":\"KNHU2RJAKZAUYVKF\"})";
-  ASSERT_EQ(*parseType(otherEnumString), *VARCHAR_ENUM(otherEnumInfo));
-
-  auto sameEnumDiffOrderMap =
-      "someEnumType:VarcharEnum(someEnumType{\"HAPPY\":\"ONXW2ZJAOZQWY5LF\" , \"CURIOUS\":\"ONXW2ZKWMFWHKZI=\", \"SAD\":\"KNHU2RJAKZAUYVKF\"})";
-  ASSERT_EQ(*parseType(sameEnumDiffOrderMap), *VARCHAR_ENUM(otherEnumInfo));
+  VELOX_ASSERT_THROW(
+      parseType(otherEnumString),
+      "Failed to parse type [someEnumType:VarcharEnum(someEnumType{\"CURIOUS\":\"ONXW2ZKWMFWHKZI=\", \"HAPPY\":\"ONXW2ZJAOZQWY5LF\" , \"SAD\":\"KNHU2RJAKZAUYVKF\"})]. syntax error, unexpected COLON, expecting WORD");
 
   // Array type with enum values.
   ASSERT_EQ(
@@ -567,7 +588,7 @@ TEST_F(TypeParserTest, invalidVarcharEnums) {
   VELOX_ASSERT_THROW(
       parseType(
           "test.enum.mood:VarcharEnum(test.enum.mood\"CURIOUS\":\"2\", \"HAPPY\":\"happy\"})"),
-      "Failed to parse type [test.enum.mood:VarcharEnum(test.enum.mood\"CURIOUS\":\"2\", \"HAPPY\":\"happy\"})]. syntax error, unexpected QUOTED_ID, expecting LBRACE");
+      "Failed to parse type [test.enum.mood:VarcharEnum(test.enum.mood\"CURIOUS\":\"2\", \"HAPPY\":\"happy\"})]. syntax error, unexpected COLON, expecting LBRACE");
 
   // Invalid enum type with values of different types.
   VELOX_ASSERT_THROW(
