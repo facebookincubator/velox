@@ -149,8 +149,8 @@ struct WriterOptions : public dwio::common::WriterOptions {
 
   // Process hive connector and session configs.
   void processConfigs(
-      const config::ConfigBase& connectorConfig,
-      const config::ConfigBase& session) override;
+      const config::IConfig& connectorConfig,
+      const config::IConfig& session) override;
 };
 
 // Writes Velox vectors into  a DataSink using Arrow Parquet writer.

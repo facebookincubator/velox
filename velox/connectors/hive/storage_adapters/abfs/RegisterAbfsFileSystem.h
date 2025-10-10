@@ -22,7 +22,8 @@
 
 namespace facebook::velox::config {
 
-class ConfigBase;
+class IConfig;
+using ConfigPtr = std::shared_ptr<const IConfig>;
 
 } // namespace facebook::velox::config
 
@@ -40,7 +41,7 @@ void registerAbfsFileSystem();
 
 /// Register the AzureClientProvider implementation in `AzureClientProviders`
 /// based on the configuration.
-void registerAzureClientProvider(const config::ConfigBase& config);
+void registerAzureClientProvider(const config::IConfig& config);
 
 /// Registers a factory for creating AzureClientProvider instances.
 /// Any existing factory registered for the specified account will be
