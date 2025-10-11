@@ -67,6 +67,10 @@ class Window : public Operator {
   void reclaim(uint64_t targetBytes, memory::MemoryReclaimer::Stats& stats)
       override;
 
+  /// Window operator's read partition batch num.
+  static inline const std::string kSpillWindowReadBatchNums{
+    "spillWindowReadBatchNums"};
+
  private:
   // Used for k preceding/following frames. Index is the column index if k is a
   // column. value is used to read column values from the column index when k

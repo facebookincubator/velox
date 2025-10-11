@@ -64,6 +64,7 @@ Window::Window(
             driverCtx->queryConfig().prefixSortMaxStringPrefixLength()},
         spillConfig,
         &nonReclaimableSection_,
+        &stats_,
         spillStats_.get());
   }
 }

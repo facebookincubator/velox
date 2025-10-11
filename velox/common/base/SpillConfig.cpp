@@ -35,7 +35,8 @@ SpillConfig::SpillConfig(
     uint64_t _writerFlushThresholdSize,
     const std::string& _compressionKind,
     std::optional<PrefixSortConfig> _prefixSortConfig,
-    const std::string& _fileCreateConfig)
+    const std::string& _fileCreateConfig,
+    uint32_t _windowMinReadBatchRows)
     : getSpillDirPathCb(std::move(_getSpillDirPathCb)),
       updateAndCheckSpillLimitCb(std::move(_updateAndCheckSpillLimitCb)),
       fileNamePrefix(std::move(_fileNamePrefix)),
@@ -54,7 +55,8 @@ SpillConfig::SpillConfig(
       writerFlushThresholdSize(_writerFlushThresholdSize),
       compressionKind(common::stringToCompressionKind(_compressionKind)),
       prefixSortConfig(_prefixSortConfig),
-      fileCreateConfig(_fileCreateConfig) {
+      fileCreateConfig(_fileCreateConfig),
+      windowMinReadBatchRows(_windowMinReadBatchRows){
   VELOX_USER_CHECK_GE(
       spillableReservationGrowthPct,
       minSpillableReservationPct,
