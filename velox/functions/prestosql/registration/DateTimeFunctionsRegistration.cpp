@@ -212,6 +212,7 @@ void registerSimpleFunctions(const std::string& prefix) {
   registerFunction<MinuteFunction, int64_t, Date>({prefix + "minute"});
   registerFunction<MinuteFunction, int64_t, TimestampWithTimezone>(
       {prefix + "minute"});
+  registerFunction<MinuteFunction, int64_t, Time>({prefix + "minute"});
   registerFunction<MinuteFromIntervalFunction, int64_t, IntervalDayTime>(
       {prefix + "minute"});
 
