@@ -17,6 +17,7 @@ velox_add_library(
   IcebergDataSink.cpp
   IcebergSplitReader.cpp
   IcebergSplit.cpp
+  PartitionSpec.cpp
   PositionalDeleteFileReader.cpp
 )
 
