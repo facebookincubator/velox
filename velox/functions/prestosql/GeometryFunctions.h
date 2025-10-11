@@ -1375,7 +1375,7 @@ struct StNumPointsFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE void call(
-      out_type<int32_t>& result,
+      out_type<int64_t>& result,
       const arg_type<Geometry>& geometry) {
     auto geosGeometry = geospatial::GeometryDeserializer::deserialize(geometry);
 
