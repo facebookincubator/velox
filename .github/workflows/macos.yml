@@ -22,6 +22,9 @@ on:
       - CMakeLists.txt
       - CMake/**
       - scripts/setup-macos.sh
+      - scripts/setup-common.sh
+      - scripts/setup-versions.sh
+      - scripts/setup-helper-functions.sh
       - .github/workflows/macos.yml
 
   pull_request:
@@ -31,6 +34,9 @@ on:
       - CMakeLists.txt
       - CMake/**
       - scripts/setup-macos.sh
+      - scripts/setup-common.sh
+      - scripts/setup-versions.sh
+      - scripts/setup-helper-functions.sh
       - .github/workflows/macos.yml
 
 permissions:
