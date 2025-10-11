@@ -129,7 +129,7 @@ struct GetJsonObjectFunction {
     }
     // Use re2 regex to find and remove spaces after dots
     // Pattern: "dot + one or more spaces" -> "dot"
-    static const LazyRE2 kDotSpaceRegex{R"(\.\s+)"};
+    static const LazyRE2 kDotSpaceRegex = {R"(\.\s+)"};
     RE2::GlobalReplace(&path, *kDotSpaceRegex, ".");
     return path;
   }

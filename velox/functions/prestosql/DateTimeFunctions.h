@@ -1784,7 +1784,7 @@ struct ParseDurationFunction {
   FOLLY_ALWAYS_INLINE void call(
       out_type<IntervalDayTime>& result,
       const arg_type<Varchar>& amountUnit) {
-    static const LazyRE2 kDurationRegex{
+    static const LazyRE2 kDurationRegex = {
         R"(^\s*(\d+(?:\.\d+)?)\s*([a-zA-Z]+)\s*$)"};
     std::string_view valueStr;
     std::string_view unit;
