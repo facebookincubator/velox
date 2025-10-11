@@ -142,8 +142,17 @@ function install_ranges_v3 {
 }
 
 function install_abseil {
-  github_checkout abseil/abseil-cpp "${ABSEIL_VERSION}" --depth 1
-  cmake_install \
+  wget_and_untar https://github.com/abseil/abseil-cpp/archive/refs/tags/"${ABSEIL_VERSION}".tar.gz abseil-cpp
+  local OS
+  OS=$(uname)
+  if [[ $OS == "Darwin" ]]; then
+    ABSOLUTE_SCRIPTDIR=$(realpath "$SCRIPT_DIR")
+    (
+      cd "${DEPENDENCY_DIR}/abseil-cpp" || exit 1
+      git apply $ABSOLUTE_SCRIPTDIR/../CMake/resolve_dependency_modules/absl/absl-macos.patch
+    )
+  fi
+  cmake_install_dir abseil-cpp \
     -DABSL_BUILD_TESTING=OFF \
     -DCMAKE_CXX_STANDARD=17 \
     -DABSL_PROPAGATE_CXX_STD=ON \
