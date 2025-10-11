@@ -15,13 +15,6 @@ include_guard(GLOBAL)
 
 add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/boost)
 
-if(ICU_SOURCE)
-  if(${ICU_SOURCE} STREQUAL "BUNDLED")
-    # ensure ICU is built before Boost
-    add_dependencies(boost_regex ICU ICU::i18n)
-  endif()
-endif()
-
 # This prevents system boost from leaking in
 set(Boost_NO_SYSTEM_PATHS ON)
 # We have to keep the FindBoost.cmake in an subfolder to prevent it from
