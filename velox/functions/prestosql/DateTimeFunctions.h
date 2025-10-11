@@ -866,6 +866,16 @@ struct MinuteFunction : public InitSessionTimezone<T>,
     auto timestamp = this->toTimestamp(timestampWithTimezone);
     result = getDateTime(timestamp, nullptr).tm_min;
   }
+
+  FOLLY_ALWAYS_INLINE void call(int64_t& result, const arg_type<Time>& time) {
+    VELOX_USER_CHECK(
+        time >= 0 && time < kMillisInDay,
+        "TIME value {} is out of valid range [0, 86399999]",
+        time);
+    auto duration = std::chrono::milliseconds(time);
+    auto minutes = std::chrono::duration_cast<std::chrono::minutes>(duration);
+    result = minutes.count() % kMinutesInHour;
+  }
 };
 
 template <typename T>

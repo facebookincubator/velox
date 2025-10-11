@@ -1653,6 +1653,127 @@ TEST_F(DateTimeFunctionsTest, minuteTimestampWithTimezone) {
       29, minuteTimestampWithTimezone(TimestampWithTimezone(-1000, "+05:30")));
 }
 
+TEST_F(DateTimeFunctionsTest, minuteTime) {
+  const auto minute = [&](std::optional<int64_t> time) {
+    return evaluateOnce<int64_t>(
+        "minute(c0)",
+        makeRowVector({makeNullableFlatVector<int64_t>({time}, TIME())}));
+  };
+
+  // null handling
+  EXPECT_EQ(std::nullopt, minute(std::nullopt));
+
+  // edge cases: beginning and end of valid range
+  EXPECT_EQ(0, minute(0)); // 00:00:00.000
+  EXPECT_EQ(59, minute(86399999)); // 23:59:59.999
+
+  // boundary values for optimization testing
+  EXPECT_EQ(0, minute(59999)); // 00:00:59.999 - last second of first minute
+  EXPECT_EQ(1, minute(60000)); // 00:01:00.000 - first second of second minute
+  EXPECT_EQ(59, minute(3599999)); // 00:59:59.999 - last second of first hour
+  EXPECT_EQ(0, minute(3600000)); // 01:00:00.000 - first second of second hour
+
+  // time values spanning different hours to test optimization
+  EXPECT_EQ(
+      15,
+      minute(
+          15 * kMillisInMinute + 30 * kMillisInSecond + 123)); // 00:15:30.123
+  EXPECT_EQ(
+      30,
+      minute(5 * kMillisInHour + 30 * kMillisInMinute + 45000)); // 05:30:45.000
+  EXPECT_EQ(
+      45, minute(12 * kMillisInHour + 45 * kMillisInMinute)); // 12:45:00.000
+  EXPECT_EQ(0, minute(23 * kMillisInHour)); // 23:00:00.000
+
+  // comprehensive minute coverage for edge case testing
+  for (int m = 0; m < 60; ++m) {
+    EXPECT_EQ(m, minute(m * kMillisInMinute)); // exact minute boundaries
+    EXPECT_EQ(m, minute(m * kMillisInMinute + 500)); // mid-second
+    EXPECT_EQ(m, minute(m * kMillisInMinute + 59999)); // end of minute
+  }
+
+  // hour boundaries with different minute values
+  for (int h = 0; h < 24; ++h) {
+    EXPECT_EQ(0, minute(h * kMillisInHour)); // start of each hour
+    EXPECT_EQ(
+        30,
+        minute(
+            h * kMillisInHour + 30 * kMillisInMinute)); // 30 minutes into hour
+    EXPECT_EQ(
+        59,
+        minute(
+            h * kMillisInHour + 59 * kMillisInMinute +
+            59999)); // last moment of hour
+  }
+
+  // comprehensive data type coverage - test various millisecond precision
+  // values
+  EXPECT_EQ(
+      42,
+      minute(13 * kMillisInHour + 42 * kMillisInMinute + 1)); // precision: 1ms
+  EXPECT_EQ(
+      42,
+      minute(
+          13 * kMillisInHour + 42 * kMillisInMinute + 10)); // precision: 10ms
+  EXPECT_EQ(
+      42,
+      minute(
+          13 * kMillisInHour + 42 * kMillisInMinute + 100)); // precision: 100ms
+  EXPECT_EQ(
+      42,
+      minute(
+          13 * kMillisInHour + 42 * kMillisInMinute + 999)); // precision: 999ms
+
+  // performance critical values for optimization validation
+  int64_t performanceTestValues[] = {
+      0, // midnight
+      kMillisInHour / 2, // 30 minutes
+      kMillisInHour - 1, // 59:59.999
+      kMillisInHour, // 01:00:00.000
+      12 * kMillisInHour + 30 * kMillisInMinute, // 12:30:00.000 (noon+)
+      86399999 // 23:59:59.999 (end of day)
+  };
+
+  int64_t expectedMinutes[] = {0, 30, 59, 0, 30, 59};
+
+  for (size_t i = 0;
+       i < sizeof(performanceTestValues) / sizeof(performanceTestValues[0]);
+       ++i) {
+    EXPECT_EQ(expectedMinutes[i], minute(performanceTestValues[i]));
+  }
+}
+
+TEST_F(DateTimeFunctionsTest, minuteTimeInvalidRange) {
+  const auto minute = [&](int64_t time) {
+    return evaluateOnce<int64_t>(
+        "minute(c0)", makeRowVector({makeFlatVector<int64_t>({time}, TIME())}));
+  };
+
+  // test out-of-range values that should throw errors
+  VELOX_ASSERT_THROW(
+      minute(-1), "TIME value -1 is out of valid range [0, 86399999]");
+
+  VELOX_ASSERT_THROW(
+      minute(86400000),
+      "TIME value 86400000 is out of valid range [0, 86399999]");
+
+  VELOX_ASSERT_THROW(
+      minute(-86400000),
+      "TIME value -86400000 is out of valid range [0, 86399999]");
+
+  VELOX_ASSERT_THROW(
+      minute(std::numeric_limits<int64_t>::max()),
+      fmt::format(
+          "TIME value {} is out of valid range [0, 86399999]",
+          std::numeric_limits<int64_t>::max()));
+
+  VELOX_ASSERT_THROW(
+      minute(std::numeric_limits<int64_t>::min()),
+      fmt::format(
+          "TIME value {} is out of valid range [0, 86399999]",
+          std::numeric_limits<int64_t>::min()));
+}
+
 TEST_F(DateTimeFunctionsTest, second) {
   const auto second = [&](std::optional<Timestamp> timestamp) {
     return evaluateOnce<int64_t>("second(c0)", timestamp);
