@@ -55,10 +55,21 @@ jobs:
     steps:
       - name: Free Disk Space
         run: |
-          # 15G
-          sudo rm -rf /usr/local/lib/android || :
-          # 5.3GB
-          sudo rm -rf /opt/hostedtoolcache/CodeQL || :
+          # Re-used from free-disk-space github action.
+          getAvailableSpace() { echo $(df -a $1 | awk 'NR > 1 {avail+=$4} END {print avail}'); }
+          # Show before
+          echo "Original available disk space: " $(getAvailableSpace)
+          # Remove DotNet.
+          sudo rm -rf /usr/share/dotnet || true
+          # Remove android
+          sudo rm -rf /usr/local/lib/android || true
+          # Remove CodeQL
+          sudo rm -rf /opt/hostedtoolcache/CodeQL || true
+          # Remove Haskell
+          sudo rm -rf /opt/ghc || true
+          sudo rm -rf /usr/local/.ghcup || true
+          # Show after
+          echo "New available disk space: " $(getAvailableSpace)
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
