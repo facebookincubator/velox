@@ -75,11 +75,9 @@ class HiveConfig {
       "hive.gcs.auth.access-token-provider";
 
   /// Maps table field names to file field names using names, not indices.
-  // TODO: remove hive_orc_use_column_names since it doesn't exist in presto,
-  // right now this is only used for testing.
   static constexpr const char* kOrcUseColumnNames = "hive.orc.use-column-names";
   static constexpr const char* kOrcUseColumnNamesSession =
-      "hive_orc_use_column_names";
+      "orc_use_column_names";
 
   /// Maps table field names to file field names using names, not indices.
   static constexpr const char* kParquetUseColumnNames =
