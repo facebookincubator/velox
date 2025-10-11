@@ -572,6 +572,7 @@ TEST_F(DecodedVectorTest, constantNull) {
   testConstantNull(ARRAY(INTEGER()));
   testConstantNull(MAP(INTEGER(), INTEGER()));
   testConstantNull(ROW({INTEGER()}));
+  testConstantNull(ROW({}));
 }
 
 TEST_F(DecodedVectorTest, constantComplexType) {
@@ -1622,6 +1623,15 @@ TEST_F(DecodedVectorTest, toString) {
     EXPECT_EQ("null", decoded.toString(2));
     EXPECT_EQ("1", decoded.toString(3));
   }
+}
+
+TEST_F(DecodedVectorTest, emptyStruct) {
+  auto vector = makeRowVector(ROW({}), 1);
+  DecodedVector decoded;
+  decoded.decode(*vector);
+  EXPECT_EQ(decoded.base(), vector.get());
+  EXPECT_EQ(decoded.size(), 1);
+  EXPECT_FALSE(decoded.isNullAt(0));
 }
 
 } // namespace facebook::velox::test
