@@ -72,8 +72,7 @@ std::string_view toString(FileFormat fmt) {
 
 ColumnReaderOptions makeColumnReaderOptions(const ReaderOptions& options) {
   ColumnReaderOptions columnReaderOptions;
-  columnReaderOptions.useColumnNamesForColumnMapping_ =
-      options.useColumnNamesForColumnMapping();
+  columnReaderOptions.columnMappingMode = options.columnMappingMode();
   return columnReaderOptions;
 }
 

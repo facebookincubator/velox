@@ -319,11 +319,21 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
   }
 
   auto name = schemaElement.name;
+  if (options_.columnMappingMode() ==
+      dwio::common::ColumnMappingMode::kFieldId) {
+    // When column-mapping mode is kFieldId, we don't need to check
+    // schemaElement.__isset.field_id explicitly. If a file column has no
+    // field_id, it won't match any requested field ID and the requested column
+    // is materialized as NULL.
+    name = std::to_string(schemaElement.field_id);
+  }
+
   if (isFileColumnNamesReadAsLowerCase()) {
     name = functions::stringImpl::utf8StrToLowerCopy(name);
   }
 
-  if ((!options_.useColumnNamesForColumnMapping()) &&
+  if ((options_.columnMappingMode() !=
+       dwio::common::ColumnMappingMode::kName) &&
       (options_.fileSchema() != nullptr)) {
     if (isParquetReservedKeyword(name, parentSchemaIdx, curSchemaIdx)) {
       columnNames.push_back(name);
@@ -346,6 +356,14 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
     for (int32_t i = 0; i < schemaElement.num_children; i++) {
       ++schemaIdx;
       auto childName = schema[schemaIdx].name;
+      if (options_.columnMappingMode() ==
+          dwio::common::ColumnMappingMode::kFieldId) {
+        // When column-mapping mode is kFieldId, we don't need to check
+        // schemaElement.__isset.field_id explicitly. If a file column has no
+        // field_id, it won't match any requested field ID and the requested
+        // column is materialized as NULL.
+        childName = std::to_string(schema[schemaIdx].field_id);
+      }
       if (isFileColumnNamesReadAsLowerCase()) {
         childName = functions::stringImpl::utf8StrToLowerCopy(childName);
       }
