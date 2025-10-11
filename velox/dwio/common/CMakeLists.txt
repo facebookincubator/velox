@@ -82,7 +82,6 @@ velox_link_libraries(
   velox_expression
   velox_memory
   velox_type_tz
-  Boost::regex
   Folly::folly
   glog::glog
   protobuf::libprotobuf

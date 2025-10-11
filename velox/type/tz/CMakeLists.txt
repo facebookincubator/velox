@@ -28,7 +28,6 @@ velox_link_libraries(
   velox_type_tz
   velox_exception
   velox_external_tzdb
-  Boost::regex
   fmt::fmt
   Folly::folly
 )

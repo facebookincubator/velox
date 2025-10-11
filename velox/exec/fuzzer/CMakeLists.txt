@@ -36,7 +36,6 @@ target_link_libraries(
   velox_expression_functions
   velox_presto_types
   cpr::cpr
-  Boost::regex
   velox_presto_type_parser
   Folly::folly
   velox_hive_connector
