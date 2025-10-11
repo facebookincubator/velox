@@ -361,6 +361,7 @@ function install_azure-storage-sdk-cpp {
   export AZURE_SDK_DISABLE_AUTO_VCPKG=ON
   vcpkg_commit_id=7a6f366cefd27210f6a8309aed10c31104436509
   github_checkout azure/azure-sdk-for-cpp azure-storage-files-datalake_"${AZURE_SDK_VERSION}"
+  pushd azure-sdk-for-cpp
   sed -i='' "s/set(VCPKG_COMMIT_STRING .*)/set(VCPKG_COMMIT_STRING $vcpkg_commit_id)/" cmake-modules/AzureVcpkg.cmake
 
   azure_core_dir="sdk/core/azure-core"
@@ -397,6 +398,7 @@ function install_azure-storage-sdk-cpp {
     cd sdk/storage/azure-storage-files-datalake || exit
     cmake_install -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}" -DBUILD_SHARED_LIBS=OFF
   )
+  popd
 }
 
 function install_hdfs_deps {
