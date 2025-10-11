@@ -26,7 +26,6 @@ target_link_libraries(
   velox_dwio_common_test_utils
   velox_vector_fuzzer
   velox_caching
-  Boost::regex
   velox_link_libs
   Folly::folly
   ${TEST_LINK_LIBS}
@@ -49,7 +48,6 @@ target_link_libraries(
   velox_dwio_common_test_utils
   velox_caching
   velox_link_libs
-  Boost::regex
   Folly::folly
   ${TEST_LINK_LIBS}
   GTest::gtest

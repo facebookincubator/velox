@@ -16,7 +16,7 @@
 #pragma once
 
 #define XXH_INLINE_ALL
-#include <boost/regex.hpp>
+#include <re2/re2.h>
 #include <xxhash.h>
 #include <string_view>
 #include "velox/expression/DecodedArgs.h"
@@ -1781,43 +1781,28 @@ template <typename T>
 struct ParseDurationFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  std::unique_ptr<boost::regex> durationRegex_;
-
-  FOLLY_ALWAYS_INLINE void initialize(
-      const std::vector<TypePtr>& /*inputTypes*/,
-      const core::QueryConfig& /*config*/,
-      const arg_type<Varchar>* /*amountUnit*/) {
-    durationRegex_ = std::make_unique<boost::regex>(
-        "^\\s*(\\d+(?:\\.\\d+)?)\\s*([a-zA-Z]+)\\s*$");
-  }
-
   FOLLY_ALWAYS_INLINE void call(
       out_type<IntervalDayTime>& result,
       const arg_type<Varchar>& amountUnit) {
-    std::string strAmountUnit = (std::string)amountUnit;
-    boost::smatch match;
-    bool isMatch = boost::regex_search(strAmountUnit, match, *durationRegex_);
-    if (!isMatch) {
+    static const LazyRE2 kDurationRegex = {
+        R"(^\s*(\d+(?:\.\d+)?)\s*([a-zA-Z]+)\s*$)"};
+    std::string_view valueStr;
+    std::string_view unit;
+    if (!RE2::FullMatch(
+            std::string_view{amountUnit}, *kDurationRegex, &valueStr, &unit)) {
       VELOX_USER_FAIL(
           "Input duration is not a valid data duration string: {}", amountUnit);
     }
-    VELOX_USER_CHECK_EQ(
-        match.size(),
-        3,
-        "Input duration does not have value and unit components only: {}",
-        amountUnit);
-    try {
-      double value = std::stod(match[1].str());
-      std::string unit = match[2].str();
-      result = valueOfTimeUnitToMillis(value, unit);
-    } catch (std::out_of_range&) {
+
+    double value{};
+    auto [_, error] = std::from_chars(
+        valueStr.data(), valueStr.data() + valueStr.size(), value);
+    if (error != std::errc{}) {
       VELOX_USER_FAIL(
-          "Input duration value is out of range for double: {}",
-          match[1].str());
-    } catch (std::invalid_argument&) {
-      VELOX_USER_FAIL(
-          "Input duration value is not a valid number: {}", match[1].str());
+          "Input duration value is not a valid number: {}", valueStr);
     }
+
+    result = valueOfTimeUnitToMillis(value, unit);
   }
 };
 

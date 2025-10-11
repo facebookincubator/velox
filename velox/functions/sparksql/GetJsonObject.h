@@ -16,7 +16,8 @@
 
 #pragma once
 
-#include <boost/regex.hpp>
+#include <re2/re2.h>
+#include "velox/core/QueryConfig.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/lib/JsonUtil.h"
 #include "velox/functions/prestosql/json/SIMDJsonUtil.h"
@@ -89,10 +90,7 @@ struct GetJsonObjectFunction {
  private:
   FOLLY_ALWAYS_INLINE bool checkJsonPath(StringView jsonPath) {
     // Spark requires the first char in jsonPath is '$'.
-    if (jsonPath.empty() || jsonPath.data()[0] != '$') {
-      return false;
-    }
-    return true;
+    return std::string_view{jsonPath}.starts_with('$');
   }
 
   // Spark's json path requires field name surrounded by single quotes if it is
@@ -108,7 +106,7 @@ struct GetJsonObjectFunction {
       if (pairBegin == std::string::npos) {
         break;
       }
-      pairEnd = result.find("]", pairBegin);
+      pairEnd = result.find(']', pairBegin);
       // If expected pattern, like ['a'], is not found.
       if (pairEnd == std::string::npos || result[pairEnd - 1] != '\'') {
         return "-1";
@@ -125,15 +123,15 @@ struct GetJsonObjectFunction {
   // - Removes spaces after dots (e.g., "$. a" -> "$.a")
   std::string normalizeJsonPath(StringView jsonPath) {
     // First, remove single quotes for bracket notation
-    const std::string& path = removeSingleQuotes(jsonPath);
+    auto path = removeSingleQuotes(jsonPath);
     if (path == "-1") {
       return path;
     }
-
-    // Use Boost regex to find and remove spaces after dots
+    // Use re2 regex to find and remove spaces after dots
     // Pattern: "dot + one or more spaces" -> "dot"
-    static const boost::regex dotSpaceRegex("\\.\\s+");
-    return boost::regex_replace(path, dotSpaceRegex, ".");
+    static const LazyRE2 kDotSpaceRegex = {R"(\.\s+)"};
+    RE2::GlobalReplace(&path, *kDotSpaceRegex, ".");
+    return path;
   }
 
   // Extracts a string representation from a simdjson result. Handles various
@@ -190,13 +188,9 @@ struct GetJsonObjectFunction {
         }
         return false;
       }
-      case simdjson::ondemand::json_type::object: {
-        // For nested case, e.g., for "{"my": {"hello": 10}}", "$.my" will
-        // return an object type.
-        ss << rawResult;
-        result.append(ss.str());
-        return true;
-      }
+      // For nested case, e.g., for "{"my": {"hello": 10}}",
+      // "$.my" will return an object type.
+      case simdjson::ondemand::json_type::object:
       case simdjson::ondemand::json_type::array: {
         ss << rawResult;
         result.append(ss.str());
