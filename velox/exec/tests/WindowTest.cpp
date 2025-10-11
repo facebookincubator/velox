@@ -230,9 +230,9 @@ TEST_F(WindowTest, rowBasedStreamingWindowOOM) {
   CursorParameters params;
   auto queryCtx = core::QueryCtx::create(executor_.get());
   queryCtx->testingOverrideMemoryPool(memory::memoryManager()->addRootPool(
-          queryCtx->queryId(),
-          8'388'608 /* 8MB */,
-          exec::MemoryReclaimer::create()));
+      queryCtx->queryId(),
+      8'388'608 /* 8MB */,
+      exec::MemoryReclaimer::create()));
 
   params.queryCtx = queryCtx;
 
