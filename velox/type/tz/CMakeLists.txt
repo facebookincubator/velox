@@ -24,10 +24,4 @@ velox_add_library(
   TimeZoneNames.cpp
 )
 
-velox_link_libraries(
-  velox_type_tz
-  velox_exception
-  velox_external_tzdb
-  fmt::fmt
-  Folly::folly
-)
+velox_link_libraries(velox_type_tz velox_exception velox_external_tzdb fmt::fmt Folly::folly)
