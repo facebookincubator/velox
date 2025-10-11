@@ -33,7 +33,7 @@
     entry.line = __LINE__;                                                     \
     auto res =                                                                 \
         ::snprintf(entry.label, entry.kLabelCapacity, _format, ##__VA_ARGS__); \
-    if (FOLLY_UNLIKELY(res < 0)) {                                             \
+    if (res < 0) [[unlikely]] {                                             \
       entry.label[0] = '\0';                                                   \
     }                                                                          \
   })

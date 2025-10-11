@@ -55,8 +55,8 @@ class BigintIdMap {
       xsimd::batch<int64_t> x,
       uint8_t mask = kAllSet) {
     xsimd::batch_bool<int64_t> activeLanes;
-    if (FOLLY_UNLIKELY(mask != kAllSet)) {
-      if (FOLLY_UNLIKELY(!mask)) {
+    if (mask != kAllSet) [[unlikely]] {
+      if (!mask) [[unlikely]] {
         return xsimd::broadcast<int64_t>(0);
       }
       activeLanes = simd::fromBitMask<int64_t, int64_t>(mask);
@@ -68,7 +68,7 @@ class BigintIdMap {
 
     auto emptyMarkerVector = x == xsimd::broadcast<int64_t>(kEmptyMarker);
     auto emptyMarkerMask = simd::toBitMask(emptyMarkerVector);
-    if (FOLLY_UNLIKELY(emptyMarkerMask)) {
+    if (emptyMarkerMask) [[unlikely]] {
       if (!emptyId_ && (emptyMarkerMask & mask)) {
         // Assign an id to kEmptyMarker when it first occurs on an active lane.
         emptyId_ = ++lastId_;
@@ -77,7 +77,7 @@ class BigintIdMap {
       ready =
           xsimd::select(emptyMarkerVector & activeLanes, emptyBatch_, ready);
       activeLanes = activeLanes & ~emptyMarkerVector;
-      if (FOLLY_UNLIKELY(!simd::toBitMask(activeLanes))) {
+      if (!simd::toBitMask(activeLanes)) [[unlikely]] {
         return ready;
       }
     }
@@ -141,8 +141,8 @@ class BigintIdMap {
       xsimd::batch<int64_t> x,
       uint8_t mask = kAllSet) {
     xsimd::batch_bool<int64_t> activeLanes;
-    if (FOLLY_UNLIKELY(mask != kAllSet)) {
-      if (FOLLY_UNLIKELY(!mask)) {
+    if (mask != kAllSet) [[unlikely]] {
+      if (!mask) [[unlikely]] {
         return xsimd::broadcast<int64_t>(0);
       }
       activeLanes = simd::fromBitMask<int64_t, int64_t>(mask);
@@ -154,11 +154,11 @@ class BigintIdMap {
     xsimd::batch_bool<int64_t> emptyMarkerVector =
         x == xsimd::broadcast<int64_t>(kEmptyMarker);
     auto emptyMarkerMask = simd::toBitMask(emptyMarkerVector);
-    if (FOLLY_UNLIKELY(emptyMarkerMask)) {
+    if (emptyMarkerMask) [[unlikely]] {
       ready =
           xsimd::select(emptyMarkerVector & activeLanes, emptyBatch_, ready);
       activeLanes = activeLanes & ~emptyMarkerVector;
-      if (FOLLY_UNLIKELY(!simd::toBitMask(activeLanes))) {
+      if (!simd::toBitMask(activeLanes)) [[unlikely]] {
         return ready;
       }
     }

@@ -199,7 +199,7 @@ CoalesceIoStats SsdFile::load(
   for (auto i = 0; i < pins.size(); ++i) {
     const auto runSize = ssdPins[i].run().size();
     auto* entry = pins[i].checkedEntry();
-    if (FOLLY_UNLIKELY(runSize < entry->size())) {
+    if (runSize < entry->size()) [[unlikely]] {
       ++stats_.readSsdErrors;
       VELOX_FAIL(
           "IOERR: SSD cache cache entry {} short than requested range {}",
