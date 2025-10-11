@@ -19,6 +19,8 @@
 #include <iomanip>
 
 #include <boost/intrusive_ptr.hpp>
+#include <fmt/format.h>
+#include <utility>
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/CheckedArithmetic.h"
 #include "velox/common/base/Exceptions.h"
@@ -61,7 +63,26 @@ class Buffer {
   static inline constexpr bool is_pod_like_v =
       std::is_trivially_destructible_v<T> && std::is_trivially_copyable_v<T>;
 
-  virtual ~Buffer() {}
+  virtual ~Buffer() = default;
+
+  inline static constexpr uint8_t kPODBit = 0;
+  inline static constexpr uint8_t kPODMask = 1 << kPODBit;
+  inline static constexpr uint8_t kViewBit = 1;
+  inline static constexpr uint8_t kViewMask = 1 << kViewBit;
+  static_assert(kPODBit != kViewBit);
+
+  enum class Type : uint8_t {
+    kNonPOD = 0 << kPODBit | 0 << kViewBit,
+    kPOD = 1 << kPODBit | 0 << kViewBit,
+    kNonPODView = 0 << kPODBit | 1 << kViewBit,
+    kPODView = 1 << kPODBit | 1 << kViewBit,
+  };
+
+  static std::string typeString(Type type);
+
+  Type type() const {
+    return type_;
+  }
 
   void addRef() {
     referenceCount_.fetch_add(1, std::memory_order_acq_rel);
@@ -86,7 +107,7 @@ class Buffer {
   const T* as() const {
     // We can't check actual types, but we can sanity-check POD/non-POD
     // conversion. `void` is special as it's used in type-erased contexts
-    VELOX_DCHECK((std::is_same_v<T, void>) || podType_ == is_pod_like_v<T>);
+    VELOX_DCHECK((std::is_same_v<T, void>) || isPOD() == is_pod_like_v<T>);
     return reinterpret_cast<const T*>(data_);
   }
 
@@ -102,7 +123,7 @@ class Buffer {
     VELOX_CHECK(!isView());
     // We can't check actual types, but we can sanity-check POD/non-POD
     // conversion. `void` is special as it's used in type-erased contexts
-    VELOX_DCHECK((std::is_same_v<T, void>) || podType_ == is_pod_like_v<T>);
+    VELOX_DCHECK((std::is_same_v<T, void>) || isPOD() == is_pod_like_v<T>);
     return reinterpret_cast<T*>(data_);
   }
 
@@ -142,8 +163,12 @@ class Buffer {
     return !isView() && unique();
   }
 
-  virtual bool isView() const {
-    return false;
+  bool isView() const {
+    return (static_cast<uint8_t>(type_) & kViewMask) != 0;
+  }
+
+  bool isPOD() const {
+    return (static_cast<uint8_t>(type_) & kPODMask) != 0;
   }
 
   friend std::ostream& operator<<(std::ostream& os, const Buffer& buffer) {
@@ -245,7 +270,7 @@ class Buffer {
   virtual void copyFrom(const Buffer* other, size_t bytes) {
     VELOX_CHECK(!isView());
     VELOX_CHECK_GE(capacity_, bytes);
-    VELOX_CHECK(podType_);
+    VELOX_CHECK_EQ(type_, Type::kPOD);
     memcpy(data_, other->data_, bytes);
   }
 
@@ -256,27 +281,28 @@ class Buffer {
   }
 
   Buffer(
-      velox::memory::MemoryPool* pool,
+      Type type,
       uint8_t* data,
       size_t capacity,
-      bool podType)
+      velox::memory::MemoryPool* pool)
       : pool_(pool),
         data_(data),
         capacity_(capacity),
         referenceCount_(0),
-        podType_(podType) {}
+        type_(type) {}
 
   velox::memory::MemoryPool* const pool_;
   uint8_t* const data_;
-  uint64_t size_ = 0;
-  uint64_t capacity_ = 0;
-  std::atomic<int32_t> referenceCount_;
-  bool podType_ = true;
+
+  uint64_t size_{0};
+  uint64_t capacity_{0};
+  std::atomic_int32_t referenceCount_{0};
+
+  const Type type_{Type::kPOD};
+
   // Pad to 64 bytes. If using as int32_t[], guarantee that value at index -1 ==
   // -1.
   uint64_t padding_[2] = {static_cast<uint64_t>(-1), static_cast<uint64_t>(-1)};
-  // Needs to use setCapacity() from static method reallocate().
-  friend class AlignedBuffer;
 
  private:
   static BufferPtr sliceBufferZeroCopy(
@@ -285,6 +311,9 @@ class Buffer {
       const BufferPtr& buffer,
       size_t offset,
       size_t length);
+
+  // Needs to use setCapacity() from static method reallocate().
+  friend class AlignedBuffer;
 };
 
 static_assert(
@@ -496,7 +525,7 @@ class AlignedBuffer : public Buffer {
     }
 
     VELOX_CHECK(
-        bufferPtr->podType_, "Support for non POD types not implemented yet");
+        bufferPtr->isPOD(), "Support for non POD types not implemented yet");
 
     // The reason we use uint8_t is because mutableNulls()->size() will return
     // in byte count. We also don't bother initializing since copyFrom will be
@@ -547,10 +576,10 @@ class AlignedBuffer : public Buffer {
  protected:
   AlignedBuffer(velox::memory::MemoryPool* pool, size_t capacity)
       : Buffer(
-            pool,
+            Type::kPOD,
             reinterpret_cast<uint8_t*>(this) + sizeof(*this),
             capacity,
-            true /*podType*/) {
+            pool) {
     static_assert(sizeof(*this) == kAlignment);
     static_assert(sizeof(*this) == kSizeofAlignedBuffer);
     setEndGuard();
@@ -675,10 +704,10 @@ class NonPODAlignedBuffer : public Buffer {
  protected:
   NonPODAlignedBuffer(velox::memory::MemoryPool* pool, size_t capacity)
       : Buffer(
-            pool,
+            Type::kNonPOD,
             reinterpret_cast<uint8_t*>(this) + sizeof(*this),
             capacity,
-            false /*podType*/) {
+            pool) {
     static_assert(sizeof(*this) == AlignedBuffer::kAlignment);
     static_assert(sizeof(*this) == sizeof(AlignedBuffer));
   }
@@ -772,10 +801,6 @@ class BufferView : public Buffer {
     releaser_.release();
   }
 
-  bool isView() const override {
-    return true;
-  }
-
   bool transferTo(velox::memory::MemoryPool* pool) override {
     if (pool_ == pool) {
       return true;
@@ -790,7 +815,11 @@ class BufferView : public Buffer {
       // when returning the pointer. We cast away the const here to
       // avoid a separate code path for const and non-const Buffer
       // payloads.
-      : Buffer(nullptr, const_cast<uint8_t*>(data), size, podType),
+      : Buffer(
+            podType ? Type::kPODView : Type::kNonPODView,
+            const_cast<uint8_t*>(data),
+            size,
+            nullptr),
         releaser_(releaser) {
     size_ = size;
     capacity_ = size;
@@ -799,6 +828,14 @@ class BufferView : public Buffer {
 
   Releaser const releaser_;
 };
-
 } // namespace velox
 } // namespace facebook
+
+// fmt formatter specialization for Buffer::Type
+template <>
+struct fmt::formatter<facebook::velox::Buffer::Type> : formatter<std::string> {
+  auto format(facebook::velox::Buffer::Type s, format_context& ctx) const {
+    return formatter<std::string>::format(
+        facebook::velox::Buffer::typeString(s), ctx);
+  }
+};
