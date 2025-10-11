@@ -69,7 +69,7 @@ class Window : public Operator {
 
   /// Window operator's read partition batch num.
   static inline const std::string kSpillWindowReadBatchNums{
-    "spillWindowReadBatchNums"};
+      "spillWindowReadBatchNums"};
 
  private:
   // Used for k preceding/following frames. Index is the column index if k is a

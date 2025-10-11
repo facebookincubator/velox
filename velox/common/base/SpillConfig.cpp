@@ -56,7 +56,7 @@ SpillConfig::SpillConfig(
       compressionKind(common::stringToCompressionKind(_compressionKind)),
       prefixSortConfig(_prefixSortConfig),
       fileCreateConfig(_fileCreateConfig),
-      windowMinReadBatchRows(_windowMinReadBatchRows){
+      windowMinReadBatchRows(_windowMinReadBatchRows) {
   VELOX_USER_CHECK_GE(
       spillableReservationGrowthPct,
       minSpillableReservationPct,
