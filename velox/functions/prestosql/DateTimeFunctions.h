@@ -1923,53 +1923,28 @@ template <typename T>
 struct ParseDurationFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  std::unique_ptr<RE2> durationRegex_;
-
-  FOLLY_ALWAYS_INLINE void initialize(
-      const std::vector<TypePtr>& /*inputTypes*/,
-      const core::QueryConfig& /*config*/,
-      const arg_type<Varchar>* /*amountUnit*/) {
-    durationRegex_ =
-        std::make_unique<RE2>(R"(^\s*(\d+(?:\.\d+)?)\s*([a-zA-Z]+)\s*$)");
-  }
-
   FOLLY_ALWAYS_INLINE void call(
       out_type<IntervalDayTime>& result,
       const arg_type<Varchar>& amountUnit) {
-    re2::StringPiece valueStr;
-    re2::StringPiece unit;
+    static const LazyRE2 kDurationRegex{
+        R"(^\s*(\d+(?:\.\d+)?)\s*([a-zA-Z]+)\s*$)"};
+    std::string_view valueStr;
+    std::string_view unit;
     if (!RE2::FullMatch(
-            re2::StringPiece(amountUnit.data(), amountUnit.size()),
-            *durationRegex_,
-            &valueStr,
-            &unit)) {
+            std::string_view{amountUnit}, *kDurationRegex, &valueStr, &unit)) {
       VELOX_USER_FAIL(
           "Input duration is not a valid data duration string: {}", amountUnit);
     }
 
     double value{};
-    try {
-      size_t pos = 0;
-      // Create temporary string from re2::StringPiece for stod
-      std::string valueString(valueStr.data(), valueStr.size());
-      value = std::stod(valueString, &pos);
-      if (pos != valueString.size()) {
-        VELOX_USER_FAIL(
-            "Input duration value is not a valid number: {}",
-            std::string_view(valueStr.data(), valueStr.size()));
-      }
-    } catch (const std::out_of_range&) {
+    auto [_, error] = std::from_chars(
+        valueStr.data(), valueStr.data() + valueStr.size(), value);
+    if (error != std::errc{}) {
       VELOX_USER_FAIL(
-          "Input duration value is out of range for double: {}",
-          std::string_view(valueStr.data(), valueStr.size()));
-    } catch (const std::exception&) {
-      VELOX_USER_FAIL(
-          "Input duration value is not a valid number: {}",
-          std::string_view(valueStr.data(), valueStr.size()));
+          "Input duration value is not a valid number: {}", valueStr);
     }
 
-    result = valueOfTimeUnitToMillis(
-        value, std::string_view(unit.data(), unit.size()));
+    result = valueOfTimeUnitToMillis(value, unit);
   }
 };
 
