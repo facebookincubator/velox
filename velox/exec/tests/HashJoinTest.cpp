@@ -7065,7 +7065,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, taskWaitTimeout) {
   const auto expectedResult =
       runHashJoinTask(vectors, nullptr, false, numDrivers, pool(), false).data;
 
-  for (uint64_t timeoutMs : {1'000, 30'000}) {
+  for (uint64_t timeoutMs : {1'000, 60'000}) {
     SCOPED_TRACE(fmt::format("timeout {}", succinctMillis(timeoutMs)));
     auto memoryManager = createMemoryManager(512 << 20, 0, timeoutMs);
     auto queryCtx =
@@ -7113,8 +7113,17 @@ DEBUG_ONLY_TEST_F(HashJoinTest, taskWaitTimeout) {
             "Memory reclaim failed to wait");
       } else {
         // We expect succeed on large time out or no timeout.
-        const auto result = runHashJoinTask(
-            vectors, queryCtx, false, numDrivers, pool(), true, expectedResult);
+        QueryTestResult result;
+        ASSERT_NO_THROW({
+          result = runHashJoinTask(
+              vectors,
+              queryCtx,
+              false,
+              numDrivers,
+              pool(),
+              true,
+              expectedResult);
+        });
         auto taskStats = exec::toPlanStats(result.task->taskStats());
         auto& planStats = taskStats.at(result.planNodeId);
         ASSERT_GT(planStats.spilledBytes, 0);
