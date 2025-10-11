@@ -145,7 +145,8 @@ std::optional<common::SpillConfig> DriverCtx::makeSpillConfig(
       queryConfig.spillPrefixSortEnabled()
           ? std::optional<common::PrefixSortConfig>(prefixSortConfig())
           : std::nullopt,
-      queryConfig.spillFileCreateConfig());
+      queryConfig.spillFileCreateConfig(),
+      queryConfig.windowSpillMinReadBatchRows());
 }
 
 std::atomic_uint64_t BlockingState::numBlockedDrivers_{0};

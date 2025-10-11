@@ -115,6 +115,55 @@ TEST_F(WindowTest, spill) {
   ASSERT_GT(stats.spilledPartitions, 0);
 }
 
+TEST_F(WindowTest, spillBatchRead) {
+  const vector_size_t size = 1'000;
+  const uint32_t minReadBatchRows = 100;
+  auto data = makeRowVector(
+      {"d", "p", "s"},
+      {
+          // Payload.
+          makeFlatVector<int64_t>(size, [](auto row) { return row; }),
+          // Partition key.
+          makeFlatVector<int16_t>(size, [](auto row) { return row; }),
+          // Sorting key.
+          makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+      });
+
+  createDuckDbTable({data});
+
+  core::PlanNodeId windowId;
+  auto plan = PlanBuilder()
+                  .values(split(data, 10))
+                  .window({"row_number() over (partition by p order by s)"})
+                  .capturePlanNodeId(windowId)
+                  .planNode();
+
+  auto spillDirectory = TempDirectoryPath::create();
+  TestScopedSpillInjection scopedSpillInjection(100);
+  auto task =
+      AssertQueryBuilder(plan, duckDbQueryRunner_)
+          .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+          .config(core::QueryConfig::kSpillEnabled, "true")
+          .config(core::QueryConfig::kWindowSpillEnabled, "true")
+          .config(
+              core::QueryConfig::kWindowSpillMinReadBatchRows, minReadBatchRows)
+          .spillDirectory(spillDirectory->getPath())
+          .assertResults(
+              "SELECT *, row_number() over (partition by p order by s) FROM tmp");
+
+  auto taskStats = exec::toPlanStats(task->taskStats());
+  const auto& stats = taskStats.at(windowId);
+
+  ASSERT_GT(stats.spilledBytes, 0);
+  ASSERT_GT(stats.spilledRows, 0);
+  ASSERT_GT(stats.spilledFiles, 0);
+  ASSERT_GT(stats.spilledPartitions, 0);
+  auto opStats = toOperatorStats(task->taskStats());
+  ASSERT_LE(
+      opStats.at("Window").runtimeStats[Window::kSpillWindowReadBatchNums].sum,
+      size / minReadBatchRows);
+}
+
 TEST_F(WindowTest, spillUnsupported) {
   const vector_size_t size = 1'000;
   auto data = makeRowVector(
@@ -658,12 +707,14 @@ DEBUG_ONLY_TEST_F(WindowTest, reserveMemorySort) {
     velox::common::PrefixSortConfig prefixSortConfig =
         velox::common::PrefixSortConfig{
             std::numeric_limits<int32_t>::max(), 130, 12};
+    folly::Synchronized<OperatorStats> opStats;
     auto sortWindowBuild = std::make_unique<SortWindowBuild>(
         plan,
         pool_.get(),
         std::move(prefixSortConfig),
         spillEnabled ? &spillConfig : nullptr,
         &nonReclaimableSection_,
+        &opStats,
         &spillStats);
 
     TestScopedSpillInjection scopedSpillInjection(0);
