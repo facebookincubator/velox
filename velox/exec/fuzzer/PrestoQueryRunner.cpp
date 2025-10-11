@@ -427,7 +427,7 @@ PrestoQueryRunner::executeAndReturnVector(const core::PlanNodePtr& plan) {
       }
 
       // Run the query. If successful, delete the table.
-      auto result = execute(*sql);
+      auto result = execute(*sql, "legacy_timestamp=false");
       for (const auto& [tableName, _] : inputMap) {
         cleanUp(tableName);
       }
