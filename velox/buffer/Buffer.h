@@ -88,7 +88,7 @@ class Buffer {
   }
 
   int refCount() const noexcept {
-    return referenceCount_.load();
+    return referenceCount_.load(std::memory_order_acquire);
   }
 
   void release() {
@@ -284,20 +284,20 @@ class Buffer {
       uint8_t* data,
       size_t capacity,
       velox::memory::MemoryPool* pool)
-      : pool_(pool), data_(data), capacity_(capacity), type_(type) {}
+      : pool_{pool}, data_{data}, capacity_{capacity}, type_{type} {}
 
   velox::memory::MemoryPool* const pool_;
   uint8_t* const data_;
 
   uint64_t size_{0};
-  uint64_t capacity_{0};
+  uint64_t capacity_;
   std::atomic_int32_t referenceCount_{0};
 
-  const Type type_{Type::kPOD};
+  const Type type_;
 
-  // Pad to 64 bytes. If using as int32_t[], guarantee that value at index -1 ==
-  // -1.
-  uint64_t padding_[2] = {static_cast<uint64_t>(-1), static_cast<uint64_t>(-1)};
+  // Pad to 64 bytes.
+  // If using as int32_t[], guarantee that value at index -1 == -1.
+  uint64_t padding_[2]{static_cast<uint64_t>(-1), static_cast<uint64_t>(-1)};
 
  private:
   static BufferPtr sliceBufferZeroCopy(
@@ -780,8 +780,7 @@ class BufferView : public Buffer {
     return result;
   }
 
-  // Helper method to create a buffer view referencing another existing
-  // Buffer.
+  // Helper method to create a buffer view referencing another existing Buffer.
   template <typename R = Releaser>
   static BufferPtr
   create(const BufferPtr& innerBuffer, R&& releaser, bool podType = true) {
@@ -811,11 +810,7 @@ class BufferView : public Buffer {
       // when returning the pointer. We cast away the const here to
       // avoid a separate code path for const and non-const Buffer
       // payloads.
-      : Buffer(
-            podType ? Type::kPODView : Type::kNonPODView,
-            const_cast<uint8_t*>(data),
-            size,
-            nullptr),
+      : Buffer{podType ? Type::kPODView : Type::kNonPODView, const_cast<uint8_t*>(data), size, nullptr},
         releaser_{std::forward<R>(releaser)} {
     size_ = size;
     releaser_.addRef();
@@ -823,6 +818,7 @@ class BufferView : public Buffer {
 
   [[no_unique_address]] const Releaser releaser_;
 };
+
 } // namespace facebook::velox
 
 // fmt formatter specialization for Buffer::Type
