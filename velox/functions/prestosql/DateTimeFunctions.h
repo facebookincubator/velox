@@ -16,6 +16,7 @@
 #pragma once
 
 #define XXH_INLINE_ALL
+#include <fast_float/fast_float.h>
 #include <re2/re2.h>
 #include <xxhash.h>
 #include <string_view>
@@ -1928,23 +1929,31 @@ struct ParseDurationFunction {
       const arg_type<Varchar>& amountUnit) {
     static const LazyRE2 kDurationRegex{
         R"(^\s*(\d+(?:\.\d+)?)\s*([a-zA-Z]+)\s*$)"};
-    std::string_view valueStr;
-    std::string_view unit;
-    if (!RE2::FullMatch(
-            std::string_view{amountUnit}, *kDurationRegex, &valueStr, &unit)) {
+    // TODO: Remove re2::StringPiece != std::string_view hacks.
+    // It's needed because system is old, update please.
+    re2::StringPiece valueStr;
+    re2::StringPiece unitStr;
+    re2::StringPiece amountUnitStr{amountUnit.data(), amountUnit.size()};
+    if (!RE2::FullMatch(amountUnitStr, *kDurationRegex, &valueStr, &unitStr)) {
       VELOX_USER_FAIL(
-          "Input duration is not a valid data duration string: {}", amountUnit);
+          "Input duration is not a valid data duration string: {}",
+          std::string_view(amountUnitStr.data(), amountUnitStr.size()));
     }
 
     double value{};
-    auto [_, error] = std::from_chars(
+    auto [_, error] = fast_float::from_chars(
         valueStr.data(), valueStr.data() + valueStr.size(), value);
-    if (error != std::errc{}) {
+    if (error == std::errc::result_out_of_range) {
       VELOX_USER_FAIL(
-          "Input duration value is not a valid number: {}", valueStr);
+          "Input duration value is out of range for double: {}",
+          std::string_view(valueStr.data(), valueStr.size()));
+    } else if (error != std::errc{}) {
+      VELOX_USER_FAIL(
+          "Input duration value is not a valid number: {}",
+          std::string_view(valueStr.data(), valueStr.size()));
     }
 
-    result = valueOfTimeUnitToMillis(value, unit);
+    result = valueOfTimeUnitToMillis(value, {unitStr.data(), unitStr.size()});
   }
 };
 
