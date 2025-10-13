@@ -131,6 +131,72 @@ std::string stripPrefix(const std::string& input, const std::string& prefix) {
 }
 } // namespace
 
+// ------------------------ CudfExpression Evaluator Registry -----------------
+
+struct CudfExpressionEvaluatorEntry {
+  int priority;
+  CudfExpressionEvaluatorCanEvaluate canEvaluate;
+  CudfExpressionEvaluatorCreate create;
+};
+
+static std::unordered_map<std::string, CudfExpressionEvaluatorEntry>&
+getCudfExpressionEvaluatorRegistry() {
+  static std::unordered_map<std::string, CudfExpressionEvaluatorEntry> registry;
+  return registry;
+}
+
+static void ensureBuiltinExpressionEvaluatorsRegistered() {
+  static bool registered = false;
+  if (registered) {
+    return;
+  }
+
+  // Default priorities: AST > Function, preserving existing selection behavior.
+  const int kAstPriority = 100;
+  const int kFunctionPriority = 50;
+
+  // AST evaluator
+  registerCudfExpressionEvaluator(
+      "ast",
+      kAstPriority,
+      [](std::shared_ptr<velox::exec::Expr> expr) {
+        return ASTExpression::canBeEvaluated(expr);
+      },
+      [](std::shared_ptr<velox::exec::Expr> expr, const RowTypePtr& row) {
+        return std::make_shared<ASTExpression>(std::move(expr), row);
+      },
+      /*overwrite=*/false);
+
+  // Function evaluator
+  registerCudfExpressionEvaluator(
+      "function",
+      kFunctionPriority,
+      [](std::shared_ptr<velox::exec::Expr> expr) {
+        return FunctionExpression::canBeEvaluated(std::move(expr));
+      },
+      [](std::shared_ptr<velox::exec::Expr> expr, const RowTypePtr& row) {
+        return FunctionExpression::create(std::move(expr), row);
+      },
+      /*overwrite=*/false);
+
+  registered = true;
+}
+
+bool registerCudfExpressionEvaluator(
+    const std::string& name,
+    int priority,
+    CudfExpressionEvaluatorCanEvaluate canEvaluate,
+    CudfExpressionEvaluatorCreate create,
+    bool overwrite) {
+  auto& registry = getCudfExpressionEvaluatorRegistry();
+  if (!overwrite && registry.find(name) != registry.end()) {
+    return false;
+  }
+  registry[name] = CudfExpressionEvaluatorEntry{
+      priority, std::move(canEvaluate), std::move(create)};
+  return true;
+}
+
 std::unordered_map<std::string, CudfFunctionFactory>&
 getCudfFunctionRegistry() {
   static std::unordered_map<std::string, CudfFunctionFactory> registry;
@@ -1084,8 +1150,17 @@ bool ASTExpression::canBeEvaluated(std::shared_ptr<velox::exec::Expr> expr) {
 }
 
 bool canBeEvaluatedByCudf(std::shared_ptr<velox::exec::Expr> expr, bool deep) {
-  if (!(ASTExpression::canBeEvaluated(expr) ||
-        FunctionExpression::canBeEvaluated(expr))) {
+  ensureBuiltinExpressionEvaluatorsRegistered();
+  const auto& registry = getCudfExpressionEvaluatorRegistry();
+
+  bool supported = false;
+  for (const auto& [name, entry] : registry) {
+    if (entry.canEvaluate && entry.canEvaluate(expr)) {
+      supported = true;
+      break;
+    }
+  }
+  if (!supported) {
     return false;
   }
 
@@ -1103,11 +1178,23 @@ bool canBeEvaluatedByCudf(std::shared_ptr<velox::exec::Expr> expr, bool deep) {
 std::shared_ptr<CudfExpression> createCudfExpression(
     std::shared_ptr<velox::exec::Expr> expr,
     const RowTypePtr& inputRowSchema) {
-  if (ASTExpression::canBeEvaluated(expr)) {
-    return std::make_shared<ASTExpression>(expr, inputRowSchema);
-  } else {
-    return FunctionExpression::create(expr, inputRowSchema);
+  ensureBuiltinExpressionEvaluatorsRegistered();
+  const auto& registry = getCudfExpressionEvaluatorRegistry();
+
+  const CudfExpressionEvaluatorEntry* best = nullptr;
+  for (const auto& [name, entry] : registry) {
+    if (entry.canEvaluate && entry.canEvaluate(expr)) {
+      if (best == nullptr || entry.priority > best->priority) {
+        best = &entry;
+      }
+    }
   }
+
+  if (best != nullptr) {
+    return best->create(expr, inputRowSchema);
+  }
+
+  return FunctionExpression::create(expr, inputRowSchema);
 }
 
 } // namespace facebook::velox::cudf_velox

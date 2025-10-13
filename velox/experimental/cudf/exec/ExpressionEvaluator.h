@@ -22,6 +22,7 @@
 #include <cudf/ast/expressions.hpp>
 #include <cudf/column/column.hpp>
 
+#include <functional>
 #include <memory>
 #include <string>
 #include <variant>
@@ -118,6 +119,26 @@ class CudfExpression {
 };
 
 using CudfExpressionPtr = std::shared_ptr<CudfExpression>;
+
+using CudfExpressionEvaluatorCanEvaluate =
+    std::function<bool(std::shared_ptr<velox::exec::Expr> expr)>;
+using CudfExpressionEvaluatorCreate =
+    std::function<std::shared_ptr<CudfExpression>(
+        std::shared_ptr<velox::exec::Expr> expr,
+        const RowTypePtr& inputRowSchema)>;
+
+// Register a CudfExpression evaluator.
+// - name: unique identifier (e.g., "ast", "function", "my_custom").
+// - priority: higher number = higher priority.
+// - canEvaluate: shallow check whether evaluator can handle current expr root.
+// - create: factory to build the evaluator node.
+// - overwrite: replace existing registration with the same name if true.
+bool registerCudfExpressionEvaluator(
+    const std::string& name,
+    int priority,
+    CudfExpressionEvaluatorCanEvaluate canEvaluate,
+    CudfExpressionEvaluatorCreate create,
+    bool overwrite = true);
 
 class FunctionExpression : public CudfExpression {
  public:
