@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/exec/AstExpression.h"
 #include "velox/experimental/cudf/exec/CudfHashJoin.h"
 #include "velox/experimental/cudf/exec/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"

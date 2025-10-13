@@ -14,6 +14,7 @@
 
 add_library(
   velox_cudf_exec
+  AstExpression.cpp
   CudfConversion.cpp
   CudfFilterProject.cpp
   CudfHashAggregation.cpp
