@@ -18,14 +18,12 @@
 #include "velox/functions/lib/string/StringCore.h"
 
 namespace facebook::velox::functions::sparksql {
-
-using namespace stringCore;
 namespace {
 
+using namespace stringCore;
+
 template <bool isAscii>
-int32_t instr(
-    const folly::StringPiece haystack,
-    const folly::StringPiece needle) {
+int32_t instr(const std::string_view haystack, const std::string_view needle) {
   int32_t offset = haystack.find(needle);
   if constexpr (isAscii) {
     return offset + 1;
@@ -58,13 +56,18 @@ class Instr : public exec::VectorFunction {
       selected.applyToSelected([&](vector_size_t row) {
         auto h = haystack->valueAt<StringView>(row);
         auto n = needle->valueAt<StringView>(row);
-        output->set(row, instr<true>(h, n));
+
+        // TODO: Remove explicit std::string_view cast.
+        output->set(row, instr<true>(std::string_view(h), std::string_view(n)));
       });
     } else {
       selected.applyToSelected([&](vector_size_t row) {
         auto h = haystack->valueAt<StringView>(row);
         auto n = needle->valueAt<StringView>(row);
-        output->set(row, instr<false>(h, n));
+
+        // TODO: Remove explicit std::string_view cast.
+        output->set(
+            row, instr<false>(std::string_view(h), std::string_view(n)));
       });
     }
   }
