@@ -23,6 +23,7 @@ add_library(
   CudfOrderBy.cpp
   DebugUtil.cpp
   ExpressionEvaluator.cpp
+  SubfieldFiltersToAst.cpp
   ToCudf.cpp
   Utilities.cpp
   VeloxCudfInterop.cpp
