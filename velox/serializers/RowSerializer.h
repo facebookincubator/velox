@@ -303,6 +303,7 @@ class RowIteratorImpl : public velox::RowIterator {
   const std::unique_ptr<folly::IOBuf> bufHolder_;
 };
 
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
 using RowIteratorFactory = std::function<std::unique_ptr<RowIterator>(
     ByteInputStream*,
     std::unique_ptr<BufferInputStream>,
@@ -418,4 +419,82 @@ class RowDeserializer {
         header.uncompressedSize + initialSize);
   }
 };
+#else
+using RowIteratorFactory = std::function<std::unique_ptr<RowIterator>(
+    ByteInputStream*,
+    const VectorSerde::Options*)>;
+
+template <typename SerializeView>
+class RowDeserializer {
+ public:
+  static void deserialize(
+      ByteInputStream* source,
+      std::vector<SerializeView>& serializedRows,
+      std::vector<std::unique_ptr<std::string>>& serializedBuffers,
+      const RowIteratorFactory& rowIteratorFactory,
+      const VectorSerde::Options* options) {
+    while (!source->atEnd()) {
+      std::unique_ptr<velox::RowIterator> rowIterator =
+          rowIteratorFactory(source, options);
+      while (rowIterator->hasNext()) {
+        serializedBuffers.emplace_back(rowIterator->nextRow());
+        if constexpr (std::is_same_v<SerializeView, std::string_view>) {
+          serializedRows.push_back(std::string_view(
+              serializedBuffers.back()->data(),
+              serializedBuffers.back()->size()));
+        } else {
+          serializedRows.push_back(serializedBuffers.back()->data());
+        }
+      }
+    }
+  }
+
+  /// @param maxRows Max number of rows to deserialize
+  /// @param sourceRowIterator The iterator used to start deserializing. If
+  /// nullptr, the method will start to deserialize from 'source'. After
+  /// deserialization, the method will set the iterator ready for the next call
+  /// to continue to iterate. If no more data to deserialize, it will be set to
+  /// nullptr.
+  /// @param rowIteratorFactory A factory to create a row iterator from owned or
+  /// non-owned sources.
+  static uint64_t deserialize(
+      ByteInputStream* source,
+      uint64_t maxRows,
+      std::unique_ptr<velox::RowIterator>& sourceRowIterator,
+      std::vector<SerializeView>& serializedRows,
+      std::vector<std::unique_ptr<std::string>>& serializedBuffers,
+      const RowIteratorFactory& rowIteratorFactory,
+      const VectorSerde::Options* options) {
+    auto remainingRows = maxRows;
+    if (sourceRowIterator == nullptr) {
+      VELOX_CHECK(!source->atEnd());
+      sourceRowIterator = rowIteratorFactory(source, options);
+    }
+    while (remainingRows > 0) {
+      while (sourceRowIterator->hasNext()) {
+        serializedBuffers.emplace_back(sourceRowIterator->nextRow());
+        if constexpr (std::is_same_v<SerializeView, std::string_view>) {
+          serializedRows.push_back(std::string_view(
+              serializedBuffers.back()->data(),
+              serializedBuffers.back()->size()));
+        } else {
+          serializedRows.push_back(serializedBuffers.back()->data());
+        }
+        if (--remainingRows == 0) {
+          break;
+        }
+      }
+      if (!sourceRowIterator->hasNext()) {
+        if (source->atEnd()) {
+          // No more data to read.
+          sourceRowIterator.reset();
+          break;
+        }
+        sourceRowIterator = rowIteratorFactory(source, options);
+      }
+    }
+    return maxRows - remainingRows;
+  }
+};
+#endif
 } // namespace facebook::velox::serializer

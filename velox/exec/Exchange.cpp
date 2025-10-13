@@ -209,14 +209,7 @@ RowVectorPtr Exchange::getOutput() {
     recordInputStats(rawInputBytes);
     return result_;
   }
-  if (serde->kind() == VectorSerde::Kind::kCompactRow) {
-    return getOutputFromRows(serde);
-  }
-  if (serde->kind() == VectorSerde::Kind::kUnsafeRow) {
-    return getOutputFromRows(serde);
-  }
-  VELOX_UNREACHABLE(
-      "Unsupported serde kind: {}", VectorSerde::kindName(serde->kind()));
+  return getOutputFromRows(serde);
 }
 
 RowVectorPtr Exchange::getOutputFromRows(VectorSerde* serde) {
