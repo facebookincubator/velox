@@ -204,8 +204,8 @@ dimension, but are not completely contained by each other.</p>
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="ST_Relat">
-<span class="sig-name descname"><span class="pre">ST_Relat</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry1</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">geometry2</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">relation</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">varchar</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#ST_Relat" title="Link to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="ST_Relate">
+<span class="sig-name descname"><span class="pre">ST_Relate</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry1</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">geometry2</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">relation</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">varchar</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#ST_Relate" title="Link to this definition">¶</a></dt>
 <dd><p>Returns true if first geometry is spatially related to second geometry as
 described by the relation.  The relation is a string like <code class="docutils literal notranslate"><span class="pre">'&quot;1*T***T**'</span></code>:
 please see the description of DM-9IM for more details.</p>
@@ -774,7 +774,7 @@ the dissolved covering would be [“0”, “10”]. Zoom levels from 0 to 23 ar
 <li><a class="reference internal" href="#ST_Equals"><code class="docutils literal notranslate"><span class="pre">ST_Equals()</span></code></a></li>
 <li><a class="reference internal" href="#ST_Intersects"><code class="docutils literal notranslate"><span class="pre">ST_Intersects()</span></code></a></li>
 <li><a class="reference internal" href="#ST_Overlaps"><code class="docutils literal notranslate"><span class="pre">ST_Overlaps()</span></code></a></li>
-<li><a class="reference internal" href="#ST_Relat"><code class="docutils literal notranslate"><span class="pre">ST_Relat()</span></code></a></li>
+<li><a class="reference internal" href="#ST_Relate"><code class="docutils literal notranslate"><span class="pre">ST_Relate()</span></code></a></li>
 <li><a class="reference internal" href="#ST_Touches"><code class="docutils literal notranslate"><span class="pre">ST_Touches()</span></code></a></li>
 <li><a class="reference internal" href="#ST_Within"><code class="docutils literal notranslate"><span class="pre">ST_Within()</span></code></a></li>
 </ul>

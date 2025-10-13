@@ -136,7 +136,7 @@ function you are using.
     Returns ``true`` if the given geometries share space, are of the same
     dimension, but are not completely contained by each other.
 
-.. function:: ST_Relat(geometry1: Geometry, geometry2: Geometry, relation: varchar) -> boolean
+.. function:: ST_Relate(geometry1: Geometry, geometry2: Geometry, relation: varchar) -> boolean
 
     Returns true if first geometry is spatially related to second geometry as
     described by the relation.  The relation is a string like ``'"1*T***T**'``:
