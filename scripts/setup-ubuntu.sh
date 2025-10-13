@@ -246,6 +246,7 @@ function install_velox_deps {
   run_and_time install_xsimd
   run_and_time install_simdjson
   run_and_time install_geos
+  run_and_time install_proj
   run_and_time install_faiss
 }
 

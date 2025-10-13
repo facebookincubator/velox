@@ -193,6 +193,7 @@ function install_velox_deps {
   run_and_time install_arrow
   run_and_time install_duckdb_clang
   run_and_time install_geos
+  run_and_time install_proj
   run_and_time install_faiss
 }
 
