@@ -24,9 +24,9 @@
 #include "velox/experimental/cudf/exec/CudfLimit.h"
 #include "velox/experimental/cudf/exec/CudfLocalPartition.h"
 #include "velox/experimental/cudf/exec/CudfOrderBy.h"
-#include "velox/experimental/cudf/exec/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
+#include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
 #include "folly/Conv.h"
 #include "velox/connectors/hive/HiveConnector.h"

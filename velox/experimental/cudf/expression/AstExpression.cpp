@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 #include "velox/experimental/cudf/CudfConfig.h"
-#include "velox/experimental/cudf/exec/AstExpression.h"
-#include "velox/experimental/cudf/exec/AstUtils.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/expression/AstExpression.h"
+#include "velox/experimental/cudf/expression/AstUtils.h"
 
 #include "velox/expression/ConstantExpr.h"
 #include "velox/expression/FieldReference.h"

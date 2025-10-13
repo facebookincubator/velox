@@ -18,8 +18,8 @@
 
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnectorSplit.h"
-#include "velox/experimental/cudf/exec/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
+#include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
 #include "velox/common/base/RandomUtil.h"
 #include "velox/common/io/IoStatistics.h"

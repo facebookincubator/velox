@@ -13,8 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/experimental/cudf/exec/AstUtils.h"
-#include "velox/experimental/cudf/exec/SubfieldFiltersToAst.h"
+#include "velox/experimental/cudf/expression/AstUtils.h"
+#include "velox/experimental/cudf/expression/SubfieldFiltersToAst.h"
 
 #include "velox/common/base/Exceptions.h"
 

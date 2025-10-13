@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 #include "velox/experimental/cudf/CudfConfig.h"
-#include "velox/experimental/cudf/exec/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
+#include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
 #include "velox/expression/ConstantExpr.h"
 #include "velox/expression/FieldReference.h"

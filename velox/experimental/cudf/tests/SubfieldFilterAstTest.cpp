@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 
-#include "velox/experimental/cudf/exec/SubfieldFiltersToAst.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
+#include "velox/experimental/cudf/expression/SubfieldFiltersToAst.h"
 
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"

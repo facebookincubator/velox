@@ -15,7 +15,7 @@
  */
 #pragma once
 
-#include "velox/experimental/cudf/exec/ExpressionEvaluator.h"
+#include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
 #include <cudf/ast/expressions.hpp>
 

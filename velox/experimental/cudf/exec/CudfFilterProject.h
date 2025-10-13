@@ -16,8 +16,8 @@
 
 #pragma once
 
-#include "velox/experimental/cudf/exec/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
+#include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
 #include "velox/core/Expressions.h"
 #include "velox/core/PlanNode.h"

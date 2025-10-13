@@ -13,32 +13,20 @@
 # limitations under the License.
 
 add_library(
-  velox_cudf_exec
-  CudfConversion.cpp
-  CudfFilterProject.cpp
-  CudfHashAggregation.cpp
-  CudfHashJoin.cpp
-  CudfLimit.cpp
-  CudfLocalPartition.cpp
-  CudfOrderBy.cpp
-  DebugUtil.cpp
-  ToCudf.cpp
-  Utilities.cpp
-  VeloxCudfInterop.cpp
+  velox_cudf_expression
+  AstExpression.cpp
+  ExpressionEvaluator.cpp
+  SubfieldFiltersToAst.cpp
 )
 
 target_link_libraries(
-  velox_cudf_exec
+  velox_cudf_expression
   PUBLIC cudf::cudf
   PRIVATE
     arrow
-    velox_arrow_bridge
     velox_exception
     velox_common_base
     velox_cudf_vector
-    velox_exec
-    velox_cudf_hive_connector
-    velox_cudf_expression
 )
 
-target_compile_options(velox_cudf_exec PRIVATE -Wno-missing-field-initializers)
+target_compile_options(velox_cudf_expression PRIVATE -Wno-missing-field-initializers)
