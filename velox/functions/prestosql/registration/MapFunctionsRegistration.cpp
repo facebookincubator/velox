@@ -18,6 +18,7 @@
 #include "velox/functions/Registerer.h"
 #include "velox/functions/lib/MapConcat.h"
 #include "velox/functions/prestosql/Map.h"
+#include "velox/functions/prestosql/MapExcept.h"
 #include "velox/functions/prestosql/MapFunctions.h"
 #include "velox/functions/prestosql/MapKeysByTopNValues.h"
 #include "velox/functions/prestosql/MapNormalize.h"
@@ -62,6 +63,39 @@ void registerMapSubset(const std::string& prefix) {
       Map<Generic<T1>, Generic<T2>>,
       Map<Generic<T1>, Generic<T2>>,
       Array<Generic<T1>>>({prefix + "map_subset"});
+}
+
+template <typename T>
+void registerMapExceptPrimitive(const std::string& prefix) {
+  registerFunction<
+      ParameterBinder<MapExceptPrimitiveFunction, T>,
+      Map<T, Generic<T1>>,
+      Map<T, Generic<T1>>,
+      Array<T>>({prefix + "map_except"});
+}
+
+void registerMapExcept(const std::string& prefix) {
+  registerMapExceptPrimitive<bool>(prefix);
+  registerMapExceptPrimitive<int8_t>(prefix);
+  registerMapExceptPrimitive<int16_t>(prefix);
+  registerMapExceptPrimitive<int32_t>(prefix);
+  registerMapExceptPrimitive<int64_t>(prefix);
+  registerMapExceptPrimitive<float>(prefix);
+  registerMapExceptPrimitive<double>(prefix);
+  registerMapExceptPrimitive<Timestamp>(prefix);
+  registerMapExceptPrimitive<Date>(prefix);
+
+  registerFunction<
+      MapExceptVarcharFunction,
+      Map<Varchar, Generic<T1>>,
+      Map<Varchar, Generic<T1>>,
+      Array<Varchar>>({prefix + "map_except"});
+
+  registerFunction<
+      MapExceptFunction,
+      Map<Generic<T1>, Generic<T2>>,
+      Map<Generic<T1>, Generic<T2>>,
+      Array<Generic<T1>>>({prefix + "map_except"});
 }
 
 void registerMapRemoveNullValues(const std::string& prefix) {
@@ -135,6 +169,8 @@ void registerMapFunctions(const std::string& prefix) {
       int64_t>({prefix + "map_top_n_values"});
 
   registerMapSubset(prefix);
+
+  registerMapExcept(prefix);
 
   registerMapRemoveNullValues(prefix);
 
