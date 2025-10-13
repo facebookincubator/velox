@@ -212,6 +212,22 @@ CachePin CacheShard::findOrCreate(
       entryMap_.erase(it);
     }
 
+    // Check entry count limit before creating a new entry
+    if (maxEntries_ > 0 && entryMap_.size() >= maxEntries_) {
+      // Attempt eviction to make room for the new entry
+      const uint64_t bytesToEvict = std::max<uint64_t>(size, kMinBytesToEvict);
+      memory::Allocation unused;
+      evictLockedWithoutSaveToSsd(bytesToEvict, false, 0, unused);
+
+      // Check if we're still at the limit after eviction
+      if (entryMap_.size() >= maxEntries_) {
+        // If we couldn't evict enough entries, fail the request
+        VELOX_CACHE_ERROR(fmt::format(
+            "Cache entry limit reached: {} entries, cannot create new entry",
+            maxEntries_));
+      }
+    }
+
     auto newEntry = getFreeEntry();
     // Initialize the members that must be set inside 'mutex_'.
     newEntry->numPins_ = AsyncDataCacheEntry::kExclusive;
@@ -475,6 +491,91 @@ uint64_t CacheShard::evict(
   return largeEvicted + tinyEvicted;
 }
 
+uint64_t CacheShard::evictLockedWithoutSaveToSsd(
+    uint64_t bytesToFree,
+    bool evictAllUnpinned,
+    MachinePageCount pagesToAcquire,
+    memory::Allocation& acquired) {
+  auto now = accessTime();
+  std::vector<memory::Allocation> toFree;
+  int64_t tinyEvicted = 0;
+  int64_t largeEvicted = 0;
+  const size_t size = entries_.size();
+  if (size == 0) {
+    return 0;
+  }
+  int32_t counter = 0;
+  int32_t numChecked = 0;
+  auto entryIndex = (clockHand_ % size);
+  auto iter = entries_.begin() + entryIndex;
+  while (++counter <= size) {
+    if (++iter == entries_.end()) {
+      iter = entries_.begin();
+      entryIndex = 0;
+    } else {
+      ++entryIndex;
+    }
+
+    ++numEvictChecks_;
+    ++clockHand_;
+    auto candidate = iter->get();
+    if (candidate == nullptr) {
+      continue;
+    }
+
+    ++numChecked;
+    if (evictionThreshold_ == kNoThreshold ||
+        eventCounter_ > entries_.size() / 4 ||
+        numChecked > entries_.size() / 8) {
+      now = accessTime();
+      calibrateThreshold();
+      numChecked = 0;
+      eventCounter_ = 0;
+    }
+
+    int32_t score = 0;
+    if (candidate->numPins_ == 0 &&
+        (!candidate->key_.fileNum.hasValue() || evictAllUnpinned ||
+         (score = candidate->score(now)) >= evictionThreshold_)) {
+      if (candidate->ssdSaveable()) {
+        ++numSavableEvict_;
+      }
+      largeEvicted += candidate->data_.byteSize();
+      if (pagesToAcquire > 0) {
+        const auto candidatePages = candidate->data().numPages();
+        pagesToAcquire = candidatePages > pagesToAcquire
+            ? 0
+            : pagesToAcquire - candidatePages;
+        acquired.appendMove(candidate->data());
+        VELOX_CHECK(candidate->data().empty());
+      } else {
+        toFree.push_back(std::move(candidate->data()));
+      }
+      tinyEvicted += candidate->tinyData_.size();
+      candidate->tinyData_.clear();
+      candidate->tinyData_.shrink_to_fit();
+      candidate->size_ = 0;
+
+      removeEntryLocked(candidate);
+      emptySlots_.push_back(entryIndex);
+      tryAddFreeEntry(std::move(*iter));
+      ++numEvict_;
+      if (score > 0) {
+        sumEvictScore_ += score;
+      }
+      if (largeEvicted + tinyEvicted > bytesToFree) {
+        break;
+      }
+    }
+  }
+
+  ClockTimer t(allocClocks_);
+  freeAllocations(toFree);
+  cache_->incrementCachedPages(
+      -memory::AllocationTraits::numPages(largeEvicted));
+  return largeEvicted + tinyEvicted;
+}
+
 void CacheShard::tryAddFreeEntry(std::unique_ptr<AsyncDataCacheEntry>&& entry) {
   freeEntries_.push_back(std::move(entry));
   // If we have too many free entries, we free up half of them to save space.
@@ -672,8 +773,13 @@ AsyncDataCache::AsyncDataCache(
       allocator_(allocator),
       ssdCache_(std::move(ssdCache)),
       cachedPages_(0) {
+  // Distribute maxEntries across shards
+  const uint32_t maxEntriesPerShard = opts_.maxEntries == 0
+      ? 0
+      : (opts_.maxEntries + kNumShards - 1) / kNumShards;
   for (auto i = 0; i < kNumShards; ++i) {
-    shards_.push_back(std::make_unique<CacheShard>(this, opts_.maxWriteRatio));
+    shards_.push_back(std::make_unique<CacheShard>(
+        this, opts_.maxWriteRatio, maxEntriesPerShard));
   }
 }
 
@@ -839,7 +945,6 @@ uint64_t AsyncDataCache::shrink(uint64_t targetBytes) {
   LOG(INFO) << "Try to shrink cache to free up "
             << velox::succinctBytes(targetBytes) << "  memory";
 
-  const uint64_t minBytesToEvict = 8UL << 20;
   uint64_t evictedBytes{0};
   uint64_t shrinkTimeUs{0};
   {
@@ -847,7 +952,8 @@ uint64_t AsyncDataCache::shrink(uint64_t targetBytes) {
     for (int shard = 0; shard < shards_.size(); ++shard) {
       memory::Allocation unused;
       evictedBytes += shards_[shardCounter_++ & (kShardMask)]->evict(
-          std::max<uint64_t>(minBytesToEvict, targetBytes - evictedBytes),
+          std::max<uint64_t>(
+              CacheShard::kMinBytesToEvict, targetBytes - evictedBytes),
           // Cache shrink is triggered when server is under low memory pressure
           // so need to free up memory as soon as possible. So we always avoid
           // triggering ssd save to accelerate the cache evictions.

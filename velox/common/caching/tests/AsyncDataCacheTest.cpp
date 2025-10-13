@@ -1570,6 +1570,47 @@ TEST_P(AsyncDataCacheTest, checkpoint) {
   ASSERT_EQ(stats.ssdStats->checkpointsWritten, kNumSsdShards);
 }
 
+TEST_P(AsyncDataCacheTest, maxEntriesLimit) {
+  constexpr int64_t kMaxBytes = 64 << 20;
+  constexpr uint32_t kMaxEntries = 10;
+  constexpr int32_t kSize = 16 << 10;
+
+  AsyncDataCache::Options options;
+  options.maxEntries = kMaxEntries;
+  initializeCache(kMaxBytes, 0, 0, false, options);
+
+  std::vector<CachePin> pins;
+  for (uint32_t i = 0; i < kMaxEntries; ++i) {
+    auto pin = newEntry(i * kSize, kSize);
+    EXPECT_FALSE(pin.empty());
+    pin.entry()->setExclusiveToShared();
+    pins.push_back(std::move(pin));
+  }
+
+  auto stats = cache_->refreshStats();
+  EXPECT_EQ(stats.numEntries, kMaxEntries);
+
+  // Try to create one more entry - should fail since all entries are pinned.
+  auto pin = newEntry(kMaxEntries * kSize, kSize);
+  EXPECT_TRUE(pin.empty());
+
+  stats = cache_->refreshStats();
+  EXPECT_EQ(stats.numEntries, kMaxEntries);
+
+  // Release all pins to make entries evictable.
+  pins.clear();
+
+  // Create one more entry - should trigger eviction.
+  pin = newEntry(kMaxEntries * kSize, kSize);
+  EXPECT_FALSE(pin.empty());
+  pin.entry()->setExclusiveToShared();
+
+  // The number of entries should still be at the limit
+  stats = cache_->refreshStats();
+  EXPECT_LE(stats.numEntries, kMaxEntries);
+  EXPECT_GT(stats.numEvict, 0);
+}
+
 // TODO: add concurrent fuzzer test.
 
 INSTANTIATE_TEST_SUITE_P(
