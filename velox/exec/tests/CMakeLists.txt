@@ -76,6 +76,7 @@ add_executable(
   ParallelProjectTest.cpp
   PartitionedOutputTest.cpp
   PlanNodeSerdeTest.cpp
+  PlanNodeStatsTest.cpp
   PlanNodeToStringTest.cpp
   PlanNodeToSummaryStringTest.cpp
   PrefixSortTest.cpp
