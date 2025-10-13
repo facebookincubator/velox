@@ -273,39 +273,20 @@ const std::unordered_map<std::string, Op> binaryOps = [] {
 
 const std::map<std::string, Op> unaryOps = {{"not", Op::NOT}};
 
-const std::unordered_set<std::string> supportedOps = {
-    "literal",
-    "between",
-    "in",
-    "cast",
-    "switch",
-    "year",
-    "length",
-    "substr",
-    "like",
-    "cardinality",
-    "split",
-    "lower",
-    "round",
-    "hash_with_seed"};
+const std::unordered_set<std::string> astSupportedOps =
+    {"literal", "between", "in", "cast", "switch"};
 
 namespace detail {
 
-// TODO (dm): Make this AST specific and only checking top level. doesn't have
-// to go all deep
-bool canBeEvaluated(const std::shared_ptr<velox::exec::Expr>& expr) {
+// Check if this specific operation is supported by AST (shallow check only)
+bool isAstSupported(const std::shared_ptr<velox::exec::Expr>& expr) {
   const auto name =
       stripPrefix(expr->name(), CudfOptions::getInstance().prefix());
-  if (supportedOps.count(name) || binaryOps.count(name) ||
-      unaryOps.count(name)) {
-    return std::all_of(
-        expr->inputs().begin(), expr->inputs().end(), canBeEvaluated);
-  }
-  return std::dynamic_pointer_cast<velox::exec::FieldReference>(expr) !=
-      nullptr;
+
+  return astSupportedOps.count(name) || binaryOps.count(name) ||
+      unaryOps.count(name) ||
+      std::dynamic_pointer_cast<velox::exec::FieldReference>(expr) != nullptr;
 }
-// TODO (dm): For purpose of replacing filterproject in tocudf, we need a new
-// function that encompasses all operations across evaluator types
 
 } // namespace detail
 
@@ -325,12 +306,12 @@ struct AstContext {
       size_t columnIndex,
       std::string const& instruction,
       std::string const& fieldName,
-      const std::shared_ptr<FunctionExpression>& node = nullptr);
+      const std::shared_ptr<CudfExpression>& node = nullptr);
   cudf::ast::expression const& addPrecomputeInstruction(
       std::string const& name,
       std::string const& instruction,
       std::string const& fieldName = {},
-      const std::shared_ptr<FunctionExpression>& node = nullptr);
+      const std::shared_ptr<CudfExpression>& node = nullptr);
   cudf::ast::expression const& multipleInputsToPairWise(
       const std::shared_ptr<velox::exec::Expr>& expr);
   static bool canBeEvaluated(const std::shared_ptr<velox::exec::Expr>& expr);
@@ -384,7 +365,7 @@ cudf::ast::expression const& AstContext::addPrecomputeInstructionOnSide(
     size_t columnIndex,
     std::string const& instruction,
     std::string const& fieldName,
-    const std::shared_ptr<FunctionExpression>& node) {
+    const std::shared_ptr<CudfExpression>& node) {
   auto newColumnIndex = inputRowSchema[sideIdx].get()->size() +
       precomputeInstructions[sideIdx].get().size();
   if (fieldName.empty()) {
@@ -405,7 +386,7 @@ cudf::ast::expression const& AstContext::addPrecomputeInstruction(
     std::string const& name,
     std::string const& instruction,
     std::string const& fieldName,
-    const std::shared_ptr<FunctionExpression>& node) {
+    const std::shared_ptr<CudfExpression>& node) {
   for (size_t sideIdx = 0; sideIdx < inputRowSchema.size(); ++sideIdx) {
     if (inputRowSchema[sideIdx].get()->containsChild(name)) {
       auto columnIndex = inputRowSchema[sideIdx].get()->getChildIdx(name);
@@ -578,11 +559,6 @@ cudf::ast::expression const& AstContext::pushExprToTree(
     } else {
       VELOX_NYI("Unsupported switch complex operation " + expr->toString());
     }
-  } else if (getCudfFunctionRegistry().contains(name)) {
-    // TODO (dm): Convert this to CudfExpression::create which will decide who
-    // to delegate to
-    auto node = FunctionExpression::create(expr, inputRowSchema[0]);
-    return addPrecomputeInstructionOnSide(0, 0, name, "", node);
   } else if (auto fieldExpr = std::dynamic_pointer_cast<FieldReference>(expr)) {
     // Refer to the appropriate side
     const auto fieldName =
@@ -603,6 +579,11 @@ cudf::ast::expression const& AstContext::pushExprToTree(
       }
     }
     VELOX_FAIL("Field not found, " + name);
+  } else if (canBeEvaluatedByCudf(expr, /*deep=*/false)) {
+    // Shallow check: only verify this operation is supported
+    // Children will be recursively handled by createCudfExpression
+    auto node = createCudfExpression(expr, inputRowSchema[0]);
+    return addPrecomputeInstructionOnSide(0, 0, name, "", node);
   } else {
     VELOX_FAIL("Unsupported expression: " + name);
   }
@@ -1079,6 +1060,17 @@ void FunctionExpression::close() {
   subexpressions_.clear();
 }
 
+bool FunctionExpression::canBeEvaluated(
+    std::shared_ptr<velox::exec::Expr> expr) {
+  using velox::exec::FieldReference;
+
+  if (std::dynamic_pointer_cast<FieldReference>(expr)) {
+    return true;
+  }
+
+  return getCudfFunctionRegistry().contains(expr->name());
+}
+
 std::vector<ColumnOrView> precomputeSubexpressions(
     std::vector<std::unique_ptr<cudf::column>>& inputTableColumns,
     const std::vector<PrecomputeInstruction>& precomputeInstructions,
@@ -1185,7 +1177,24 @@ ColumnOrView ASTExpression::eval(
 }
 
 bool ASTExpression::canBeEvaluated(std::shared_ptr<velox::exec::Expr> expr) {
-  return detail::canBeEvaluated(expr);
+  return detail::isAstSupported(expr);
+}
+
+bool canBeEvaluatedByCudf(std::shared_ptr<velox::exec::Expr> expr, bool deep) {
+  if (!(ASTExpression::canBeEvaluated(expr) ||
+        FunctionExpression::canBeEvaluated(expr))) {
+    return false;
+  }
+
+  if (deep) {
+    for (const auto& input : expr->inputs()) {
+      if (input->name() != "literal" && !canBeEvaluatedByCudf(input, true)) {
+        return false;
+      }
+    }
+  }
+
+  return true;
 }
 
 std::shared_ptr<CudfExpression> createCudfExpression(

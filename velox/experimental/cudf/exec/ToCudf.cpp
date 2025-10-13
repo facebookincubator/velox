@@ -116,9 +116,10 @@ bool CompileState::compile(bool force_replace) {
   auto isFilterProjectSupported = [](const exec::Operator* op) {
     if (auto filterProjectOp = dynamic_cast<const exec::FilterProject*>(op)) {
       auto info = filterProjectOp->exprsAndProjection();
-      // TODO (dm): ASTExpression has been changed to handle only one
-      // expression. Add another class that works on vector of cudf expressions
-      return ASTExpression::canBeEvaluated(info.exprs->exprs()[0]);
+      return std::all_of(
+          info.exprs->exprs().begin(),
+          info.exprs->exprs().end(),
+          [](const auto& expr) { return canBeEvaluatedByCudf(expr); });
     }
     return false;
   };

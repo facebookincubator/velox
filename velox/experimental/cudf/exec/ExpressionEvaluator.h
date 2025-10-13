@@ -138,6 +138,10 @@ class FunctionExpression : public CudfExpression {
 
   void close() override;
 
+  // Check if this specific operation can be evaluated by FunctionExpression
+  // (does not recursively check children)
+  static bool canBeEvaluated(std::shared_ptr<velox::exec::Expr> expr);
+
  private:
   std::shared_ptr<velox::exec::Expr> expr_;
   std::shared_ptr<CudfFunction> function_;
@@ -198,6 +202,8 @@ class ASTExpression : public CudfExpression {
 
   void close() override;
 
+  // Check if this specific operation can be evaluated by ASTExpression
+  // (does not recursively check children)
   static bool canBeEvaluated(std::shared_ptr<velox::exec::Expr> expr);
 
  private:
@@ -213,5 +219,15 @@ class ASTExpression : public CudfExpression {
 std::shared_ptr<CudfExpression> createCudfExpression(
     std::shared_ptr<velox::exec::Expr> expr,
     const RowTypePtr& inputRowSchema);
+
+/// Lightweight check if an expression tree is supported by any CUDF evaluator
+/// without initializing CudfExpression objects.
+/// \param expr Expression to check
+/// \param deep If true, recursively check all children in the expression tree;
+///             if false, only check if the top-level operation is supported
+///             (useful when delegating to subexpressions)
+bool canBeEvaluatedByCudf(
+    std::shared_ptr<velox::exec::Expr> expr,
+    bool deep = true);
 
 } // namespace facebook::velox::cudf_velox

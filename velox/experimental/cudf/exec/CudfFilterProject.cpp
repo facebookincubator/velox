@@ -144,7 +144,7 @@ void CudfFilterProject::filter(
     rmm::cuda_stream_view stream) {
   // Evaluate the Filter
   auto filterColumns = filterEvaluator_->eval(
-      inputTableColumns, stream, cudf::get_current_device_resource_ref());
+      inputTableColumns, stream, cudf::get_current_device_resource_ref(), true);
   auto filterColumn = asView(filterColumns);
   // is all true in filter_column
   auto isAllTrue = cudf::reduce(
@@ -172,7 +172,10 @@ std::vector<std::unique_ptr<cudf::column>> CudfFilterProject::project(
   std::vector<ColumnOrView> columns;
   for (auto& projectEvaluator : projectEvaluators_) {
     columns.push_back(projectEvaluator->eval(
-        inputTableColumns, stream, cudf::get_current_device_resource_ref()));
+        inputTableColumns,
+        stream,
+        cudf::get_current_device_resource_ref(),
+        true));
   }
 
   // Rearrange columns to match outputType_
