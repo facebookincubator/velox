@@ -16,6 +16,7 @@
 #include "velox/expression/ExprRewriteRegistry.h"
 #include "velox/functions/Registerer.h"
 #include "velox/functions/lib/Re2Functions.h"
+#include "velox/functions/prestosql/MyanmarFunctions.h"
 #include "velox/functions/prestosql/RegexpReplace.h"
 #include "velox/functions/prestosql/RegexpSplit.h"
 #include "velox/functions/prestosql/SplitPart.h"
@@ -241,5 +242,9 @@ void registerStringFunctions(const std::string& prefix) {
   registerFunction<WordStemFunction, Varchar, Varchar>({prefix + "word_stem"});
   registerFunction<WordStemFunction, Varchar, Varchar, Varchar>(
       {prefix + "word_stem"});
+
+  // Myanmar functions
+  registerMyanmarFontEncoding(prefix + "myanmar_font_encoding");
+  registerMyanmarNormalizeUnicode(prefix + "myanmar_normalize_unicode");
 }
 } // namespace facebook::velox::functions
