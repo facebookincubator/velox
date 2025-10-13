@@ -624,6 +624,31 @@ class TraceScanNode final : public PlanNode {
 
 using TraceScanNodePtr = std::shared_ptr<const TraceScanNode>;
 
+class VectorGroupingNode : public PlanNode {
+ public:
+  VectorGroupingNode(
+      const PlanNodeId& id,
+      PlanNodePtr source,
+      const std::vector<FieldAccessTypedExprPtr>& keys)
+      : PlanNode(id), sources_{std::move(source)}, keys_(keys) {}
+
+  const RowTypePtr& outputType() const override {
+    return sources_[0]->outputType();
+  }
+
+  const std::vector<PlanNodePtr>& sources() const override {
+    return sources_;
+  }
+
+  const std::vector<FieldAccessTypedExprPtr>& keys() const {
+    return keys_;
+  }
+
+ private:
+  const std::vector<PlanNodePtr> sources_;
+  const std::vector<FieldAccessTypedExprPtr> keys_;
+};
+
 class FilterNode : public PlanNode {
  public:
   FilterNode(const PlanNodeId& id, TypedExprPtr filter, PlanNodePtr source)

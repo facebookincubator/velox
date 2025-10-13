@@ -2504,6 +2504,26 @@ TEST_F(VectorTest, mapCanonicalize) {
       {},
   });
 
+  auto slice = mapVector->slice(1, 1);
+  LOG(ERROR) << slice->toString(0, 1);
+  auto mapVector1 = makeMapVector<int64_t, int64_t>({
+      {{4, 40}, {3, 30}, {2, 20}, {5, 50}, {1, 10}},
+      {{4, 41}},
+      {},
+  });
+
+  auto slice2 = mapVector->slice(0, 1);
+
+  slice->append(slice2.get());
+
+  LOG(ERROR) << slice->toString(0, slice->size());
+
+  mapVector.reset();
+
+  LOG(ERROR) << slice->toString(0, slice->size());
+
+  LOG(ERROR) << slice2->toString(0, slice2->size());
+
   EXPECT_FALSE(mapVector->hasSortedKeys());
 
   test::assertEqualVectors(
