@@ -1181,6 +1181,67 @@ TEST_F(DateTimeFunctionsTest, timeIntervalDayTime) {
   EXPECT_EQ(45045123, testTimePlusIntervalCommutative(time4, oneDay));
 }
 
+TEST_F(DateTimeFunctionsTest, timeMinusIntervalDayTime) {
+  // Test TIME - IntervalDayTime arithmetic (does not support Interval - Time)
+
+  const auto timeMinusInterval =
+      [&](int64_t time, int64_t interval) -> std::optional<int64_t> {
+    return evaluateOnce<int64_t>(
+        "minus(c0, c1)",
+        makeRowVector({
+            makeNullableFlatVector<int64_t>({time}, TIME()),
+            makeNullableFlatVector<int64_t>({interval}, INTERVAL_DAY_TIME()),
+        }));
+  };
+
+  // Basic hour subtraction: 06:04:05.321 - 3 hours = 03:04:05.321
+  // 06:04:05.321 = (6*3600 + 4*60 + 5)*1000 + 321 = 21845321 ms
+  // 3 hours = 3*60*60*1000 = 10800000 ms
+  // 03:04:05.321 = (3*3600 + 4*60 + 5)*1000 + 321 = 11045321 ms
+  const int64_t time1 = 21845321; // 06:04:05.321
+  const int64_t threeHours = 3 * kMillisInHour;
+  EXPECT_EQ(11045321, timeMinusInterval(time1, threeHours));
+
+  // Test 24-hour wraparound: 01:00:00 - 3 hours = 22:00:00 (previous day)
+  // 01:00:00 = 1*3600*1000 = 3600000 ms
+  // 22:00:00 = 22*3600*1000 = 79200000 ms
+  const int64_t time2 = kMillisInHour; // 01:00:00
+  EXPECT_EQ(79200000, timeMinusInterval(time2, threeHours));
+
+  // Test minute subtraction: 04:34:05.321 - 90 minutes = 03:04:05.321
+  // 04:34:05.321 = (4*3600 + 34*60 + 5)*1000 + 321 = 16445321 ms
+  // 90 minutes = 90*60*1000 = 5400000 ms
+  // 03:04:05.321 = (3*3600 + 4*60 + 5)*1000 + 321 = 11045321 ms
+  const int64_t time3 = 16445321; // 04:34:05.321
+  const int64_t ninetyMinutes = 90 * kMillisInMinute;
+  EXPECT_EQ(11045321, timeMinusInterval(time3, ninetyMinutes));
+
+  // Test millisecond precision: 03:04:06.000 - 679 milliseconds = 03:04:05.321
+  // 03:04:06.000 = (3*3600 + 4*60 + 6)*1000 = 11046000 ms
+  // 03:04:05.321 = (3*3600 + 4*60 + 5)*1000 + 321 = 11045321 ms
+  const int64_t time4 = 11046000; // 03:04:06.000
+  EXPECT_EQ(11045321, timeMinusInterval(time4, 679));
+
+  // Test day intervals (should not change time of day per Presto behavior)
+  // 12:30:45.123 = (12*3600 + 30*60 + 45)*1000 + 123 = 45045123 ms
+  const int64_t time5 = 45045123; // 12:30:45.123
+  const int64_t oneDay = kMillisInDay;
+  EXPECT_EQ(45045123, timeMinusInterval(time5, oneDay));
+
+  // Test subtracting negative intervals (double negative = addition)
+  // 03:04:05.321 - (-3 hours) = 03:04:05.321 + 3 hours = 06:04:05.321
+  // 03:04:05.321 = (3*3600 + 4*60 + 5)*1000 + 321 = 11045321 ms
+  // 06:04:05.321 = (6*3600 + 4*60 + 5)*1000 + 321 = 21845321 ms
+  const int64_t time6 = 11045321; // 03:04:05.321
+  EXPECT_EQ(21845321, timeMinusInterval(time6, -threeHours));
+
+  // Test negative interval with wraparound: 22:00:00 - (-3 hours) = 01:00:00
+  // 22:00:00 = 22*3600*1000 = 79200000 ms
+  // 01:00:00 = 1*3600*1000 = 3600000 ms
+  const int64_t time7 = 22 * kMillisInHour; // 22:00:00
+  EXPECT_EQ(3600000, timeMinusInterval(time7, -threeHours));
+}
+
 // Comprehensive tests for TimePlusIntervalYearMonthVectorFunction optimizations
 // and IntervalYearMonthPlusTimeVectorFunction optimizations
 TEST_F(DateTimeFunctionsTest, timeIntervalYearMonthVectorOptimizations) {
@@ -1197,25 +1258,28 @@ TEST_F(DateTimeFunctionsTest, timeIntervalYearMonthVectorOptimizations) {
         static_cast<int64_t>(seconds) * 1000 + static_cast<int64_t>(millis);
   };
 
-  // Helper to verify time + interval results (should be identity function)
-  auto testTimePlusIntervalYearMonth = [&](const VectorPtr& timeVector,
-                                           const VectorPtr& intervalVector,
-                                           const VectorPtr& expectedResult) {
-    auto result =
-        evaluate("plus(c0, c1)", makeRowVector({timeVector, intervalVector}));
+  // Helper to verify time +/- interval results (should be identity function)
+  // Tests commutativity for plus: interval + time gives the same result
+  // Tests minus: time - interval (only this ordering supported for minus)
+  auto testTimePlusMinusIntervalYearMonth =
+      [&](const VectorPtr& timeVector,
+          const VectorPtr& intervalVector,
+          const VectorPtr& expectedResult) {
+        // Test: Time + Interval
+        auto resultPlus1 = evaluate(
+            "plus(c0, c1)", makeRowVector({timeVector, intervalVector}));
+        assertEqualVectors(expectedResult, resultPlus1);
 
-    assertEqualVectors(expectedResult, result);
-  };
+        // Test: Interval + Time (commutative for plus)
+        auto resultPlus2 = evaluate(
+            "plus(c0, c1)", makeRowVector({intervalVector, timeVector}));
+        assertEqualVectors(expectedResult, resultPlus2);
 
-  // Helper to verify interval + time results (should also be identity function)
-  auto testIntervalYearMonthPlusTime = [&](const VectorPtr& intervalVector,
-                                           const VectorPtr& timeVector,
-                                           const VectorPtr& expectedResult) {
-    auto result =
-        evaluate("plus(c0, c1)", makeRowVector({intervalVector, timeVector}));
-
-    assertEqualVectors(expectedResult, result);
-  };
+        // Test: Time - Interval (identity function, only this ordering)
+        auto resultMinus = evaluate(
+            "minus(c0, c1)", makeRowVector({timeVector, intervalVector}));
+        assertEqualVectors(expectedResult, resultMinus);
+      };
 
   // TEST 1: Constant Vector Optimization - Non-null constant
   {
@@ -1232,25 +1296,13 @@ TEST_F(DateTimeFunctionsTest, timeIntervalYearMonthVectorOptimizations) {
     auto expectedResult =
         BaseVector::createConstant(TIME(), timeValue, 1000, pool());
 
-    // Test: Time + Interval
-    testTimePlusIntervalYearMonth(
+    // Test: Time + Interval, Interval + Time, and Time - Interval
+    testTimePlusMinusIntervalYearMonth(
         constantTime, constantInterval, expectedResult);
 
     // Verify the result is also constant encoded for efficiency
     auto result = evaluate(
         "plus(c0, c1)", makeRowVector({constantTime, constantInterval}));
-
-    EXPECT_TRUE(result->isConstantEncoding());
-    EXPECT_EQ(result->size(), 1000);
-    EXPECT_EQ(result->as<ConstantVector<int64_t>>()->valueAt(0), timeValue);
-
-    // Test: Interval + Time (commutative)
-    testIntervalYearMonthPlusTime(
-        constantInterval, constantTime, expectedResult);
-
-    // Verify the result is also constant encoded for efficiency
-    result = evaluate(
-        "plus(c0, c1)", makeRowVector({constantInterval, constantTime}));
 
     EXPECT_TRUE(result->isConstantEncoding());
     EXPECT_EQ(result->size(), 1000);
@@ -1273,11 +1325,9 @@ TEST_F(DateTimeFunctionsTest, timeIntervalYearMonthVectorOptimizations) {
     auto expectedResult = makeNullableFlatVector<int64_t>(
         {std::nullopt, timeMs(17, 30, 0), std::nullopt}, TIME());
 
-    // Test: Time + Interval
-    testTimePlusIntervalYearMonth(timeVector, intervalVector, expectedResult);
-
-    // Test: Interval + Time (commutative)
-    testIntervalYearMonthPlusTime(intervalVector, timeVector, expectedResult);
+    // Test: Time + Interval, Interval + Time, and Time - Interval
+    testTimePlusMinusIntervalYearMonth(
+        timeVector, intervalVector, expectedResult);
   }
 
   // TEST 3: Flat Vector with Nulls
@@ -1300,11 +1350,9 @@ TEST_F(DateTimeFunctionsTest, timeIntervalYearMonthVectorOptimizations) {
     // Expected result should preserve nulls and non-null values identically
     auto expectedResult = makeNullableFlatVector<int64_t>(timeValues, TIME());
 
-    // Test: Time + Interval
-    testTimePlusIntervalYearMonth(timeVector, intervalVector, expectedResult);
-
-    // Test: Interval + Time (commutative)
-    testIntervalYearMonthPlusTime(intervalVector, timeVector, expectedResult);
+    // Test: Time + Interval, Interval + Time, and Time - Interval
+    testTimePlusMinusIntervalYearMonth(
+        timeVector, intervalVector, expectedResult);
   }
 
   // TEST 4: Dictionary Vector (Fallback Path)
@@ -1335,13 +1383,9 @@ TEST_F(DateTimeFunctionsTest, timeIntervalYearMonthVectorOptimizations) {
     }
     auto expectedResult = makeFlatVector<int64_t>(expectedValues, TIME());
 
-    // Test: Time + Interval
-    testTimePlusIntervalYearMonth(
+    // Test: Time + Interval, Interval + Time, and Time - Interval
+    testTimePlusMinusIntervalYearMonth(
         dictionaryTimeVector, intervalVector, expectedResult);
-
-    // Test: Interval + Time (commutative)
-    testIntervalYearMonthPlusTime(
-        intervalVector, dictionaryTimeVector, expectedResult);
   }
 }
 

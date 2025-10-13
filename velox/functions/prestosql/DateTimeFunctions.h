@@ -550,10 +550,23 @@ struct TimePlusInterval {
   }
 };
 
-// Optimized vector function for Time + IntervalYearMonth
-// And IntervalYearMonth + Time
+template <typename T>
+struct TimeMinusInterval {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Time>& result,
+      const arg_type<Time>& time,
+      const arg_type<IntervalDayTime>& interval) {
+    result = addToTime(time, -interval);
+  }
+};
+
+// Optimized vector function for Time +/- IntervalYearMonth
 // This case is special because result = time (identity function), allowing
-// for significant optimizations
+// for significant optimizations.
+// For plus: supports both (time, interval) and (interval, time)
+// For minus: only supports (time, interval) - not (interval, time)
 class TimeIntervalYearMonthVectorFunction : public exec::VectorFunction {
  public:
   void apply(
@@ -593,7 +606,8 @@ class TimeIntervalYearMonthVectorFunction : public exec::VectorFunction {
     flatResult->copy(timeVector.get(), rows, nullptr);
   }
 
-  static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
+  static std::vector<std::shared_ptr<exec::FunctionSignature>>
+  signaturesPlus() {
     return {// Signature 1: (time, interval year to month) -> time
             exec::FunctionSignatureBuilder()
                 .returnType("time")
@@ -605,9 +619,17 @@ class TimeIntervalYearMonthVectorFunction : public exec::VectorFunction {
                 .returnType("time")
                 .argumentType("interval year to month")
                 .argumentType("time")
-                .build()
+                .build()};
+  }
 
-    };
+  static std::vector<std::shared_ptr<exec::FunctionSignature>>
+  signaturesMinus() {
+    return {// Only support: (time, interval year to month) -> time
+            exec::FunctionSignatureBuilder()
+                .returnType("time")
+                .argumentType("time")
+                .argumentType("interval year to month")
+                .build()};
   }
 };
 

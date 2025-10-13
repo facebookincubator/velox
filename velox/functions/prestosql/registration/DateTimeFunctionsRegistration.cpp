@@ -154,11 +154,22 @@ void registerSimpleFunctions(const std::string& prefix) {
   registerFunction<IntervalPlusTime, Time, IntervalDayTime, Time>(
       {prefix + "plus"});
 
+  // Register Time - Interval function
+  registerFunction<TimeMinusInterval, Time, Time, IntervalDayTime>(
+      {prefix + "minus"});
+
   // Use optimized vector function for Time + IntervalYearMonth (identity
   // function)
   exec::registerVectorFunction(
       prefix + "plus",
-      TimeIntervalYearMonthVectorFunction::signatures(),
+      TimeIntervalYearMonthVectorFunction::signaturesPlus(),
+      std::make_unique<TimeIntervalYearMonthVectorFunction>());
+
+  // Use optimized vector function for Time - IntervalYearMonth (identity
+  // function). Only supports (time, interval), not (interval, time).
+  exec::registerVectorFunction(
+      prefix + "minus",
+      TimeIntervalYearMonthVectorFunction::signaturesMinus(),
       std::make_unique<TimeIntervalYearMonthVectorFunction>());
 
   registerFunction<
