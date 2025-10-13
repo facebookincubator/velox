@@ -65,7 +65,7 @@ static void ensureBuiltinExpressionEvaluatorsRegistered() {
       "function",
       kFunctionPriority,
       [](std::shared_ptr<velox::exec::Expr> expr) {
-        return FunctionExpression::canBeEvaluated(std::move(expr));
+        return FunctionExpression::canEvaluate(std::move(expr));
       },
       [](std::shared_ptr<velox::exec::Expr> expr, const RowTypePtr& row) {
         return FunctionExpression::create(std::move(expr), row);
@@ -569,8 +569,7 @@ void FunctionExpression::close() {
   subexpressions_.clear();
 }
 
-bool FunctionExpression::canBeEvaluated(
-    std::shared_ptr<velox::exec::Expr> expr) {
+bool FunctionExpression::canEvaluate(std::shared_ptr<velox::exec::Expr> expr) {
   using velox::exec::FieldReference;
 
   if (std::dynamic_pointer_cast<FieldReference>(expr)) {

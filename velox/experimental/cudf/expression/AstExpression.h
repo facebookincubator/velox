@@ -92,7 +92,7 @@ class ASTExpression : public CudfExpression {
 
   // Check if this specific operation can be evaluated by ASTExpression
   // (does not recursively check children)
-  static bool canBeEvaluated(std::shared_ptr<velox::exec::Expr> expr);
+  static bool canEvaluate(std::shared_ptr<velox::exec::Expr> expr);
 
  private:
   cudf::ast::tree cudfTree_;
@@ -103,5 +103,7 @@ class ASTExpression : public CudfExpression {
   std::vector<PrecomputeInstruction> precomputeInstructions_;
   RowTypePtr inputRowSchema_;
 };
+
+void registerAstEvaluator(int priority);
 
 } // namespace facebook::velox::cudf_velox

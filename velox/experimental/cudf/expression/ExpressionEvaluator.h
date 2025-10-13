@@ -121,7 +121,7 @@ class FunctionExpression : public CudfExpression {
 
   // Check if this specific operation can be evaluated by FunctionExpression
   // (does not recursively check children)
-  static bool canBeEvaluated(std::shared_ptr<velox::exec::Expr> expr);
+  static bool canEvaluate(std::shared_ptr<velox::exec::Expr> expr);
 
  private:
   std::shared_ptr<velox::exec::Expr> expr_;

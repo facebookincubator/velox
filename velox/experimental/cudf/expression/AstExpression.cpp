@@ -580,29 +580,21 @@ ColumnOrView ASTExpression::eval(
   }
 }
 
-bool ASTExpression::canBeEvaluated(std::shared_ptr<velox::exec::Expr> expr) {
+bool ASTExpression::canEvaluate(std::shared_ptr<velox::exec::Expr> expr) {
   return detail::isAstSupported(expr);
 }
 
-// Register AST evaluator at static initialization time
-namespace {
-struct AstEvaluatorRegistration {
-  AstEvaluatorRegistration() {
-    const int kAstPriority = 100;
-    registerCudfExpressionEvaluator(
-        "ast",
-        kAstPriority,
-        [](std::shared_ptr<velox::exec::Expr> expr) {
-          return ASTExpression::canBeEvaluated(expr);
-        },
-        [](std::shared_ptr<velox::exec::Expr> expr, const RowTypePtr& row) {
-          return std::make_shared<ASTExpression>(std::move(expr), row);
-        },
-        /*overwrite=*/false);
-  }
-};
-
-static AstEvaluatorRegistration astRegistration;
-} // namespace
+void registerAstEvaluator(int priority) {
+  registerCudfExpressionEvaluator(
+      "ast",
+      priority,
+      [](std::shared_ptr<velox::exec::Expr> expr) {
+        return ASTExpression::canEvaluate(expr);
+      },
+      [](std::shared_ptr<velox::exec::Expr> expr, const RowTypePtr& row) {
+        return std::make_shared<ASTExpression>(std::move(expr), row);
+      },
+      /*overwrite=*/false);
+}
 
 } // namespace facebook::velox::cudf_velox
