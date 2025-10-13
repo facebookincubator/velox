@@ -656,7 +656,7 @@ bool applyPartitionFilter(
     if (isPartitionDateDaysSinceEpoch) {
       result = folly::to<int32_t>(partitionValue);
     } else {
-      result = DATE()->toDays(static_cast<folly::StringPiece>(partitionValue));
+      result = DATE()->toDays(partitionValue);
     }
     return applyFilter(*filter, result);
   }

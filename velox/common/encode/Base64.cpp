@@ -187,14 +187,13 @@ size_t Base64::calculateEncodedSize(size_t inputSize, bool withPadding) {
 
 // static
 void Base64::encode(const char* input, size_t inputSize, char* output) {
-  encodeImpl(
-      folly::StringPiece(input, inputSize), kBase64Charset, true, output);
+  encodeImpl(std::string_view(input, inputSize), kBase64Charset, true, output);
 }
 
 // static
 void Base64::encodeUrl(const char* input, size_t inputSize, char* output) {
   encodeImpl(
-      folly::StringPiece(input, inputSize), kBase64UrlCharset, true, output);
+      std::string_view(input, inputSize), kBase64UrlCharset, true, output);
 }
 
 // static
@@ -249,13 +248,13 @@ void Base64::encodeImpl(
 }
 
 // static
-std::string Base64::encode(folly::StringPiece text) {
+std::string Base64::encode(std::string_view text) {
   return encodeImpl(text, kBase64Charset, true);
 }
 
 // static
 std::string Base64::encode(const char* input, size_t inputSize) {
-  return encode(folly::StringPiece(input, inputSize));
+  return encode(std::string_view(input, inputSize));
 }
 
 namespace {
@@ -308,7 +307,7 @@ std::string Base64::encode(const folly::IOBuf* inputBuffer) {
 }
 
 // static
-std::string Base64::decode(folly::StringPiece encodedText) {
+std::string Base64::decode(std::string_view encodedText) {
   std::string decodedResult;
   decode(std::make_pair(encodedText.data(), encodedText.size()), decodedResult);
   return decodedResult;
@@ -492,13 +491,13 @@ Expected<size_t> Base64::decodeImpl(
 }
 
 // static
-std::string Base64::encodeUrl(folly::StringPiece text) {
+std::string Base64::encodeUrl(std::string_view text) {
   return encodeImpl(text, kBase64UrlCharset, false);
 }
 
 // static
 std::string Base64::encodeUrl(const char* input, size_t inputSize) {
-  return encodeUrl(folly::StringPiece(input, inputSize));
+  return encodeUrl(std::string_view(input, inputSize));
 }
 
 // static
@@ -521,7 +520,7 @@ Status Base64::decodeUrl(
 }
 
 // static
-std::string Base64::decodeUrl(folly::StringPiece encodedText) {
+std::string Base64::decodeUrl(std::string_view encodedText) {
   std::string decodedOutput;
   decodeUrl(
       std::make_pair(encodedText.data(), encodedText.size()), decodedOutput);

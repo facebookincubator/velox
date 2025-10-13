@@ -97,16 +97,6 @@ class Task : public std::enable_shared_from_this<Task> {
       ExecutionMode mode,
       ConsumerSupplier consumerSupplier,
       int32_t memoryArbitrationPriority = 0,
-      std::function<void(std::exception_ptr)> onError = nullptr);
-
-  static std::shared_ptr<Task> create(
-      const std::string& taskId,
-      core::PlanFragment planFragment,
-      int destination,
-      std::shared_ptr<core::QueryCtx> queryCtx,
-      ExecutionMode mode,
-      ConsumerSupplier consumerSupplier,
-      int32_t memoryArbitrationPriority = 0,
       std::optional<common::SpillDiskOptions> spillDiskOpts = std::nullopt,
       std::function<void(std::exception_ptr)> onError = nullptr);
 
@@ -115,24 +105,6 @@ class Task : public std::enable_shared_from_this<Task> {
   static std::string shortId(const std::string& id);
 
   ~Task();
-
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  /// Specify directory to which data will be spilled if spilling is enabled and
-  /// required. Set 'alreadyCreated' to true if the directory has already been
-  /// created by the caller.
-  void setSpillDirectory(
-      const std::string& spillDirectory,
-      bool alreadyCreated = true) {
-    spillDirectory_ = spillDirectory;
-    spillDirectoryCreated_ = alreadyCreated;
-  }
-
-  void setCreateSpillDirectoryCb(
-      std::function<std::string()> spillDirectoryCallback) {
-    VELOX_CHECK_NULL(spillDirectoryCallback_);
-    spillDirectoryCallback_ = std::move(spillDirectoryCallback);
-  }
-#endif
 
   /// Returns human-friendly representation of the plan augmented with runtime
   /// statistics. The implementation invokes exec::printPlanWithStats().

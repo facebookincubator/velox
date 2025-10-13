@@ -109,20 +109,20 @@ class Varint {
     char buf[kMaxSize64];
     char* p = buf;
     encode(val, &p);
-    sink->append(folly::StringPiece(buf, p - buf));
+    sink->append(std::string_view(buf, p - buf));
   }
 
   static void encode128ToByteSink(UInt128 val, strings::ByteSink* sink) {
     char buf[kMaxSize128];
     char* p = buf;
     encode128(val, &p);
-    sink->append(folly::StringPiece(buf, p - buf));
+    sink->append(std::string_view(buf, p - buf));
   }
 
   // Returns true if decode can be called without causing a CHECK failure.
   // The pointers are not adjusted at all
-  static bool canDecode(folly::StringPiece src) {
-    src = src.subpiece(0, kMaxSize64);
+  static bool canDecode(std::string_view src) {
+    src = src.substr(0, kMaxSize64);
     return std::any_of(
         src.begin(), src.end(), [](char v) { return ~v & 0x80; });
   }
@@ -187,18 +187,18 @@ class Varint {
     return val;
   }
 
-  // Decode a value from a StringPiece, and advance the StringPiece.
-  static uint64_t decode(folly::StringPiece* data) {
-    const char* p = data->start();
+  // Decode a value from a string_view, and advance it.
+  static uint64_t decode(std::string_view* data) {
+    const char* p = data->data();
     uint64_t val = decode(&p, data->size());
-    data->advance(p - data->start());
+    data->remove_prefix(p - data->data());
     return val;
   }
 
-  static UInt128 decode128(folly::StringPiece* data) {
-    const char* p = data->start();
+  static UInt128 decode128(std::string_view* data) {
+    const char* p = data->data();
     UInt128 val = decode128(&p, data->size());
-    data->advance(p - data->start());
+    data->remove_prefix(p - data->data());
     return val;
   }
 
@@ -207,13 +207,13 @@ class Varint {
     uint64_t val = 0;
     int32_t shift = 0;
     int32_t max_size = kMaxSize64;
-    folly::StringPiece chunk;
+    std::string_view chunk;
     int32_t remaining = 0;
     const char* p = nullptr;
     for (;;) {
       if (remaining == 0) {
         CHECK(src->next(&chunk));
-        p = chunk.start();
+        p = chunk.data();
         remaining = chunk.size();
         DCHECK_GT(remaining, 0);
       }
@@ -238,13 +238,13 @@ class Varint {
     UInt128 val = 0;
     int32_t shift = 0;
     int32_t max_size = kMaxSize128;
-    folly::StringPiece chunk;
+    std::string_view chunk;
     int32_t remaining = 0;
     const char* p = nullptr;
     for (;;) {
       if (remaining == 0) {
         CHECK(src->next(&chunk));
-        p = chunk.start();
+        p = chunk.data();
         remaining = chunk.size();
         DCHECK_GT(remaining, 0);
       }
@@ -292,7 +292,7 @@ namespace detail {
 class ByteSinkAppender {
  public:
   /* implicit */ ByteSinkAppender(strings::ByteSink* out) : out_(out) {}
-  void operator()(folly::StringPiece sp) {
+  void operator()(std::string_view sp) {
     out_->append(sp.data(), sp.size());
   }
 

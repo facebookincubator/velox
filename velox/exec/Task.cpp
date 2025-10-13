@@ -344,28 +344,6 @@ std::shared_ptr<Task> Task::create(
     ExecutionMode mode,
     ConsumerSupplier consumerSupplier,
     int32_t memoryArbitrationPriority,
-    std::function<void(std::exception_ptr)> onError) {
-  return Task::create(
-      taskId,
-      std::move(planFragment),
-      destination,
-      std::move(queryCtx),
-      mode,
-      std::move(consumerSupplier),
-      memoryArbitrationPriority,
-      /*spillDiskOpts=*/std::nullopt,
-      std::move(onError));
-}
-
-// static
-std::shared_ptr<Task> Task::create(
-    const std::string& taskId,
-    core::PlanFragment planFragment,
-    int destination,
-    std::shared_ptr<core::QueryCtx> queryCtx,
-    ExecutionMode mode,
-    ConsumerSupplier consumerSupplier,
-    int32_t memoryArbitrationPriority,
     std::optional<common::SpillDiskOptions> spillDiskOpts,
     std::function<void(std::exception_ptr)> onError) {
   VELOX_CHECK_NOT_NULL(planFragment.planNode);

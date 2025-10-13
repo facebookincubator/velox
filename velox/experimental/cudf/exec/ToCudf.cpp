@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnector.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveDataSource.h"
 #include "velox/experimental/cudf/exec/CudfConversion.h"
@@ -27,6 +28,7 @@
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 
+#include "folly/Conv.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/exec/Driver.h"
@@ -45,9 +47,7 @@
 
 #include <iostream>
 
-DEFINE_bool(velox_cudf_enabled, true, "Enable cuDF-Velox acceleration");
-DEFINE_string(velox_cudf_memory_resource, "async", "Memory resource for cuDF");
-DEFINE_bool(velox_cudf_debug, false, "Enable debug printing");
+static const std::string kCudfAdapterName = "cuDF";
 
 namespace facebook::velox::cudf_velox {
 
@@ -63,7 +63,7 @@ bool isAnyOf(const Base* p) {
 bool CompileState::compile(bool force_replace) {
   auto operators = driver_.operators();
 
-  if (FLAGS_velox_cudf_debug) {
+  if (CudfConfig::getInstance().debugEnabled) {
     std::cout << "Operators before adapting for cuDF: count ["
               << operators.size() << "]" << std::endl;
     for (auto& op : operators) {
@@ -311,7 +311,7 @@ bool CompileState::compile(bool force_replace) {
     }
 
     if (force_replace) {
-      if (FLAGS_velox_cudf_debug) {
+      if (CudfConfig::getInstance().debugEnabled) {
         std::printf(
             "Operator: ID %d: %s, keepOperator = %d, replaceOp.size() = %ld\n",
             oper->operatorId(),
@@ -351,7 +351,7 @@ bool CompileState::compile(bool force_replace) {
     }
   }
 
-  if (FLAGS_velox_cudf_debug) {
+  if (CudfConfig::getInstance().debugEnabled) {
     operators = driver_.operators();
     std::cout << "Operators after adapting for cuDF: count ["
               << operators.size() << "]" << std::endl;
@@ -373,7 +373,8 @@ struct CudfDriverAdapter {
 
   // Call operator needed by DriverAdapter
   bool operator()(const exec::DriverFactory& factory, exec::Driver& driver) {
-    if (!driver.driverCtx()->queryConfig().get<bool>(kCudfEnabled, true)) {
+    if (!driver.driverCtx()->queryConfig().get<bool>(
+            CudfConfig::kCudfEnabled, CudfConfig::getInstance().enabled)) {
       return false;
     }
     auto state = CompileState(factory, driver);
@@ -384,27 +385,29 @@ struct CudfDriverAdapter {
 
 static bool isCudfRegistered = false;
 
-void registerCudf(const CudfOptions& options) {
+bool cudfIsRegistered() {
+  return isCudfRegistered;
+}
+
+void registerCudf() {
   if (cudfIsRegistered()) {
     return;
   }
-  if (!options.cudfEnabled) {
-    return;
-  }
 
-  registerBuiltinFunctions(options.prefix());
+  registerBuiltinFunctions(CudfConfig::getInstance().functionNamePrefix);
 
   CUDF_FUNC_RANGE();
   cudaFree(nullptr); // Initialize CUDA context at startup
 
-  const std::string mrMode = options.cudfMemoryResource;
-  auto mr = cudf_velox::createMemoryResource(mrMode, options.memoryPercent);
+  const std::string mrMode = CudfConfig::getInstance().memoryResource;
+  auto mr = cudf_velox::createMemoryResource(
+      mrMode, CudfConfig::getInstance().memoryPercent);
   cudf::set_current_device_resource(mr.get());
   mr_ = mr;
 
   exec::Operator::registerOperator(
       std::make_unique<CudfHashJoinBridgeTranslator>());
-  CudfDriverAdapter cda{options.force_replace};
+  CudfDriverAdapter cda{CudfConfig::getInstance().forceReplace};
   exec::DriverAdapter cudfAdapter{kCudfAdapterName, {}, cda};
   exec::DriverFactory::registerAdapter(cudfAdapter);
   isCudfRegistered = true;
@@ -424,12 +427,31 @@ void unregisterCudf() {
   isCudfRegistered = false;
 }
 
-bool cudfIsRegistered() {
-  return isCudfRegistered;
+CudfConfig& CudfConfig::getInstance() {
+  static CudfConfig instance;
+  return instance;
 }
 
-bool cudfDebugEnabled() {
-  return FLAGS_velox_cudf_debug;
+void CudfConfig::initialize(
+    std::unordered_map<std::string, std::string>&& config) {
+  if (config.find(kCudfEnabled) != config.end()) {
+    enabled = folly::to<bool>(config[kCudfEnabled]);
+  }
+  if (config.find(kCudfDebugEnabled) != config.end()) {
+    debugEnabled = folly::to<bool>(config[kCudfDebugEnabled]);
+  }
+  if (config.find(kCudfMemoryResource) != config.end()) {
+    memoryResource = config[kCudfMemoryResource];
+  }
+  if (config.find(kCudfMemoryPercent) != config.end()) {
+    memoryPercent = folly::to<int32_t>(config[kCudfMemoryPercent]);
+  }
+  if (config.find(kCudfFunctionNamePrefix) != config.end()) {
+    functionNamePrefix = config[kCudfFunctionNamePrefix];
+  }
+  if (config.find(kCudfForceReplace) != config.end()) {
+    forceReplace = folly::to<bool>(config[kCudfForceReplace]);
+  }
 }
 
 } // namespace facebook::velox::cudf_velox

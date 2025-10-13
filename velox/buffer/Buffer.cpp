@@ -18,9 +18,24 @@
 
 namespace facebook::velox {
 
+std::string Buffer::typeString(Type type) {
+  switch (type) {
+    case Type::kPOD:
+      return "kPOD";
+    case Type::kNonPOD:
+      return "kNonPOD";
+    case Type::kPODView:
+      return "kPODView";
+    case Type::kNonPODView:
+      return "kNonPODView";
+    default:
+      return fmt::format("Unknown({})", static_cast<int>(type));
+  }
+}
+
 namespace {
 struct BufferReleaser {
-  explicit BufferReleaser(const BufferPtr& parent) : parent_(parent) {}
+  explicit BufferReleaser(BufferPtr parent) : parent_{std::move(parent)} {}
   void addRef() const {}
   void release() const {}
 

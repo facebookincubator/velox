@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/AstExpression.h"
 #include "velox/experimental/cudf/exec/AstUtils.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
@@ -164,7 +165,7 @@ namespace detail {
 // Check if this specific operation is supported by AST (shallow check only)
 bool isAstSupported(const std::shared_ptr<velox::exec::Expr>& expr) {
   const auto name =
-      stripPrefix(expr->name(), CudfOptions::getInstance().prefix());
+      stripPrefix(expr->name(), CudfConfig::getInstance().functionNamePrefix);
 
   return astSupportedOps.count(name) || binaryOps.count(name) ||
       unaryOps.count(name) ||
@@ -261,7 +262,7 @@ cudf::ast::expression const& AstContext::multipleInputsToPairWise(
   using Operation = cudf::ast::operation;
 
   const auto name =
-      stripPrefix(expr->name(), CudfOptions::getInstance().prefix());
+      stripPrefix(expr->name(), CudfConfig::getInstance().functionNamePrefix);
   auto len = expr->inputs().size();
   // Create a simple chain of operations
   auto result = &pushExprToTree(expr->inputs()[0]);
@@ -287,7 +288,7 @@ cudf::ast::expression const& AstContext::pushExprToTree(
   using velox::exec::FieldReference;
 
   const auto name =
-      stripPrefix(expr->name(), CudfOptions::getInstance().prefix());
+      stripPrefix(expr->name(), CudfConfig::getInstance().functionNamePrefix);
   auto len = expr->inputs().size();
   auto& type = expr->type();
 
