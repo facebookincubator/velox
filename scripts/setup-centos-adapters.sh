@@ -52,14 +52,14 @@ function install_cuda {
   dnf config-manager --add-repo "$repo_url"
   local dashed
   dashed="$(echo "$version" | tr '.' '-')"
-  dnf_install --repo cuda-rhel9-"$arch" \
+  dnf_install \
     cuda-compat-"$dashed" \
     cuda-driver-devel-"$dashed" \
     cuda-minimal-build-"$dashed" \
     cuda-nvrtc-devel-"$dashed" \
     libcufile-devel-"$dashed" \
-    libnvjitlink-devel-"$dashed"
-  dnf_install numactl-libs
+    libnvjitlink-devel-"$dashed" \
+    numactl-libs
 }
 
 function install_adapters_deps_from_dnf {
