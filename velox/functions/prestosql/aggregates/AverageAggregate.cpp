@@ -156,7 +156,7 @@ void registerAverageAggregate(
           }
         }
       },
-      {false /*orderSensitive*/, false /*companionFunction*/},
+      {.orderSensitive = false},
       withCompanionFunctions,
       overwrite);
 }

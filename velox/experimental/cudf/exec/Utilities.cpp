@@ -52,9 +52,8 @@ namespace {
       makeCudaMr(), rmm::percent_of_free_device_memory(percent));
 }
 
-[[nodiscard]] auto makeAsyncMr(int percent) {
-  return std::make_shared<rmm::mr::cuda_async_memory_resource>(
-      rmm::percent_of_free_device_memory(percent));
+[[nodiscard]] auto makeAsyncMr() {
+  return std::make_shared<rmm::mr::cuda_async_memory_resource>();
 }
 
 [[nodiscard]] auto makeManagedMr() {
@@ -101,7 +100,7 @@ std::shared_ptr<rmm::mr::device_memory_resource> createMemoryResource(
   if (mode == "pool")
     return makePoolMr(percent);
   if (mode == "async")
-    return makeAsyncMr(percent);
+    return makeAsyncMr();
   if (mode == "arena")
     return makeArenaMr(percent);
   if (mode == "managed")

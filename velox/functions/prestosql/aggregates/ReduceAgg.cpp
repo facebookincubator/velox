@@ -818,7 +818,7 @@ void registerReduceAgg(
           const core::QueryConfig& config) -> std::unique_ptr<exec::Aggregate> {
         return std::make_unique<ReduceAgg>(resultType);
       },
-      {false /*orderSensitive*/, false /*companionFunction*/},
+      {.orderSensitive = false},
       withCompanionFunctions,
       overwrite);
 }

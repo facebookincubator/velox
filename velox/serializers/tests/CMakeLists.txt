@@ -16,6 +16,7 @@ add_executable(
   CompactRowSerializerTest.cpp
   PrestoOutputStreamListenerTest.cpp
   PrestoSerializerTest.cpp
+  SerializedPageFileTest.cpp
   UnsafeRowSerializerTest.cpp
 )
 
@@ -23,6 +24,7 @@ add_test(velox_serializer_test velox_serializer_test)
 
 target_link_libraries(
   velox_serializer_test
+  velox_expression_test_utility
   velox_presto_serializer
   velox_vector_test_lib
   velox_vector_fuzzer

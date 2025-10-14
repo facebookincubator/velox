@@ -96,8 +96,6 @@ void CudfHiveConnectorTestBase::TearDown() {
   // connector.
   ioExecutor_.reset();
   facebook::velox::connector::unregisterConnector(kCudfHiveConnectorId);
-  facebook::velox::connector::unregisterConnectorFactory(
-      HiveConnectorFactory::kHiveConnectorName);
   facebook::velox::cudf_velox::unregisterCudf();
   OperatorTestBase::TearDown();
 }

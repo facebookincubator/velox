@@ -103,11 +103,6 @@ class FlatVector final : public SimpleVector<T> {
       // immutable Buffer.
       values_->setSize(byteSize);
     }
-
-    BaseVector::inMemoryBytes_ += values_->capacity();
-    for (const auto& stringBuffer : stringBuffers_) {
-      BaseVector::inMemoryBytes_ += stringBuffer->capacity();
-    }
   }
 
   virtual ~FlatVector() override = default;
@@ -287,6 +282,24 @@ class FlatVector final : public SimpleVector<T> {
         SimpleVector<T>::isSorted_,
         BaseVector::representedByteCount_,
         BaseVector::storageByteCount_);
+  }
+
+  void transferOrCopyTo(velox::memory::MemoryPool* pool) override {
+    BaseVector::transferOrCopyTo(pool);
+    if (values_ && !values_->transferTo(pool)) {
+      values_ = AlignedBuffer::copy<T>(values_, pool);
+      rawValues_ = const_cast<T*>(values_->as<T>());
+    }
+    for (auto& buffer : stringBuffers_) {
+      if (!buffer->transferTo(pool)) {
+        VELOX_CHECK_NE(
+            stringBufferSet_.erase(buffer.get()),
+            0,
+            "Easure of existing string buffer should always succeed.");
+        buffer = AlignedBuffer::copy<char>(buffer, pool);
+        VELOX_CHECK(stringBufferSet_.insert(buffer.get()).second);
+      }
+    }
   }
 
   void resize(vector_size_t newSize, bool setNotNull = true) override;

@@ -634,6 +634,32 @@ TEST_F(CudfFilterProjectTest, mixedInOperation) {
   testMixedInOperation(vectors);
 }
 
+TEST_F(CudfFilterProjectTest, round) {
+  auto data = makeRowVector({makeFlatVector<int64_t>({4123, 456789098})});
+  parse::ParseOptions options;
+  options.parseIntegerAsBigint = false;
+  auto plan = PlanBuilder()
+                  .setParseOptions(options)
+                  .values({data})
+                  .project({"round(c0, 2) as c1"})
+                  .planNode();
+  AssertQueryBuilder(plan).assertResults(data);
+  plan = PlanBuilder()
+             .setParseOptions(options)
+             .values({data})
+             .project({"round(c0) as c1"})
+             .planNode();
+  AssertQueryBuilder(plan).assertResults(data);
+
+  plan = PlanBuilder()
+             .setParseOptions(options)
+             .values({data})
+             .project({"round(c0, -3) as c1"})
+             .planNode();
+  auto expected = makeRowVector({makeFlatVector<int64_t>({4000, 456789000})});
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
 TEST_F(CudfFilterProjectTest, simpleFilter) {
   vector_size_t batchSize = 1000;
   auto vectors = makeVectors(rowType_, 2, batchSize);

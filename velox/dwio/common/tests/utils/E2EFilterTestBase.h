@@ -336,6 +336,14 @@ class E2EFilterTestBase : public testing::Test {
       const std::string& remainingFilter,
       std::function<bool(int64_t a, int64_t c)> validationFilter);
 
+  void testMetadataFilterImpl(
+      const std::vector<RowVectorPtr>& batches,
+      common::Subfield filterField,
+      std::unique_ptr<common::Filter> filter,
+      core::ExpressionEvaluator* evaluator,
+      core::TypedExprPtr typedExpr,
+      std::function<bool(int64_t, int64_t)> validationFilter);
+
  protected:
   void testMetadataFilter();
 

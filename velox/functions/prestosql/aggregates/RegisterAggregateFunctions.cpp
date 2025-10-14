@@ -189,10 +189,7 @@ extern void registerVarianceAggregates(
     const std::string& prefix,
     bool withCompanionFunctions,
     bool overwrite);
-extern void registerTDigestAggregate(
-    const std::string& prefix,
-    bool withCompanionFunctions,
-    bool overwrite);
+extern void registerTDigestAggregate(const std::string& prefix, bool overwrite);
 
 void registerAllAggregateFunctions(
     const std::string& prefix,
@@ -246,7 +243,7 @@ void registerAllAggregateFunctions(
   registerSetUnionAggregate(prefix, withCompanionFunctions, overwrite);
   registerSumAggregate(prefix, withCompanionFunctions, overwrite);
   registerVarianceAggregates(prefix, withCompanionFunctions, overwrite);
-  registerTDigestAggregate(prefix, withCompanionFunctions, overwrite);
+  registerTDigestAggregate(prefix, overwrite);
   registerNoisyApproxSfmAggregate(prefix, withCompanionFunctions, overwrite);
   registerNumericHistogramAggregate(prefix, withCompanionFunctions, overwrite);
 }

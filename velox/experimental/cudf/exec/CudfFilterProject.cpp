@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/CudfFilterProject.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
@@ -68,7 +69,7 @@ CudfFilterProject::CudfFilterProject(
                                   : filter_->sources()[0]->outputType();
 
   // convert to AST
-  if (cudfDebugEnabled()) {
+  if (CudfConfig::getInstance().debugEnabled) {
     int i = 0;
     for (auto expr : info.exprs->exprs()) {
       std::cout << "expr[" << i++ << "] " << expr->toString() << std::endl;
@@ -114,7 +115,7 @@ RowVectorPtr CudfFilterProject::getOutput() {
   stream.synchronize();
   auto const numColumns = outputTable->num_columns();
   auto const size = outputTable->num_rows();
-  if (cudfDebugEnabled()) {
+  if (CudfConfig::getInstance().debugEnabled) {
     std::cout << "cudfProject Output: " << size << " rows, " << numColumns
               << " columns " << std::endl;
   }

@@ -1,3 +1,4 @@
+%option 8bit
 %{
 #include <vector>
 #include <memory>
@@ -31,7 +32,7 @@ std::string unescape_doublequote(const char* yytext) {
 }
 %}
 
-%option c++ noyywrap noyylineno nodefault caseless
+%option c++ noyywrap noyylineno nodefault caseless 8bit
 
 A   [A|a]
 B   [B|b]
@@ -66,6 +67,7 @@ ROW               (ROW|STRUCT)
 "("                return Parser::token::LPAREN;
 ")"                return Parser::token::RPAREN;
 ","                return Parser::token::COMMA;
+"..."              return Parser::token::ELLIPSIS;
 (ARRAY)            return Parser::token::ARRAY;
 (MAP)              return Parser::token::MAP;
 (FUNCTION)         return Parser::token::FUNCTION;

@@ -1732,4 +1732,24 @@ struct ParseDurationFunction {
   }
 };
 
+template <typename T>
+struct LocalTimeFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config) {
+    auto sessionStartTimeMs = config.sessionStartTimeMs();
+    localTimeSinceMidnight_ = sessionStartTimeMs % kMillisInDay;
+  }
+
+  // LocalTime just returns the time from midnight in UTC.
+  FOLLY_ALWAYS_INLINE void call(out_type<Time>& result) {
+    result = localTimeSinceMidnight_;
+  }
+
+ private:
+  int64_t localTimeSinceMidnight_;
+};
+
 } // namespace facebook::velox::functions

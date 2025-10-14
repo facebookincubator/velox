@@ -182,7 +182,7 @@ Config::Entry<const std::vector<std::vector<std::string>>>
 
 Config::Entry<uint32_t> Config::MAP_FLAT_MAX_KEYS(
     "orc.map.flat.max.keys",
-    20000);
+    30000);
 
 Config::Entry<uint64_t> Config::MAX_DICTIONARY_SIZE(
     "hive.exec.orc.max.dictionary.size",

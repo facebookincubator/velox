@@ -65,6 +65,12 @@ using ContinuePromise = VeloxPromise<folly::Unit>;
 using ContinueFuture = folly::SemiFuture<folly::Unit>;
 
 /// Equivalent of folly's makePromiseContract for VeloxPromise.
+///
+/// NOTE: When you already have a valid promise, just call
+/// Promise::getSemiFuture() on it to get the future, instead of using this
+/// function to overwrite the promise.  Overwriting valid promise would cause
+/// exception throwing and stack unwinding thus performance issue.  See
+/// https://github.com/prestodb/presto/issues/26094 for details.
 static inline std::pair<ContinuePromise, ContinueFuture>
 makeVeloxContinuePromiseContract(const std::string& promiseContext = "") {
   auto p = ContinuePromise(promiseContext);

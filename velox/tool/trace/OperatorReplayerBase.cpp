@@ -94,9 +94,8 @@ RowVectorPtr OperatorReplayerBase::run(bool copyResults) {
 }
 
 core::PlanNodePtr OperatorReplayerBase::createPlan() {
-  const auto* replayNode = core::PlanNode::findFirstNode(
-      planFragment_.get(),
-      [this](const core::PlanNode* node) { return node->id() == nodeId_; });
+  const auto* replayNode =
+      core::PlanNode::findNodeById(planFragment_.get(), nodeId_);
 
   if (replayNode->sources().empty()) {
     return exec::test::PlanBuilder()

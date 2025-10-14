@@ -90,6 +90,29 @@ void TableScan::updateStats(
   }
 }
 
+void TableScan::updateStats(
+    std::unordered_map<std::string, RuntimeMetric> connectorStats,
+    WaveSplitReader* splitReader) {
+  auto lockedStats = stats().wlock();
+  if (splitReader) {
+    lockedStats->rawInputPositions = splitReader->getCompletedRows();
+    lockedStats->rawInputBytes = splitReader->getCompletedBytes();
+  }
+  for (const auto& [name, metric] : connectorStats) {
+    if (name == "ioWaitNanos") {
+      ioWaitNanos_ += metric.sum - lastIoWaitNanos_;
+      lastIoWaitNanos_ = metric.sum;
+    }
+    if (UNLIKELY(lockedStats->runtimeStats.count(name) == 0)) {
+      lockedStats->runtimeStats.insert(
+          std::make_pair(name, RuntimeMetric(metric.unit)));
+    } else {
+      VELOX_CHECK_EQ(lockedStats->runtimeStats.at(name).unit, metric.unit);
+    }
+    lockedStats->runtimeStats.at(name).merge(metric);
+  }
+}
+
 BlockingReason TableScan::nextSplit(ContinueFuture* future) {
   exec::Split split;
   blockingReason_ = driverCtx_->task->getSplitOrFuture(
@@ -106,7 +129,7 @@ BlockingReason TableScan::nextSplit(ContinueFuture* future) {
   if (!split.hasConnectorSplit()) {
     noMoreSplits_ = true;
     if (dataSource_) {
-      updateStats(dataSource_->runtimeStats());
+      updateStats(dataSource_->getRuntimeStats());
     }
     return BlockingReason::kNotBlocked;
   }

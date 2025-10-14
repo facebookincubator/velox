@@ -13,8 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/ExpressionEvaluator.h"
-#include "velox/experimental/cudf/exec/ToCudf.h"
 
 #include "velox/expression/ConstantExpr.h"
 #include "velox/expression/FieldReference.h"
@@ -29,6 +29,7 @@
 #include <cudf/hashing.hpp>
 #include <cudf/lists/count_elements.hpp>
 #include <cudf/replace.hpp>
+#include <cudf/round.hpp>
 #include <cudf/strings/attributes.hpp>
 #include <cudf/strings/case.hpp>
 #include <cudf/strings/contains.hpp>
@@ -271,17 +272,18 @@ const std::map<std::string, Op> unaryOps = {
     {"is_null", Op::IS_NULL}};
 
 const std::unordered_set<std::string> supportedOps = {
-    "literal",     "between",  "in",       "cast",      "try_cast",
-    "switch",      "year",     "length",   "substr",    "substring",
-    "startswith",  "endswith", "contains", "isnotnull", "like",
-    "cardinality", "split",    "coalesce", "lower",     "hash_with_seed",
+    "literal",        "between",  "in",       "cast",      "try_cast",
+    "switch",         "year",     "length",   "substr",    "substring",
+    "startswith",     "endswith", "contains", "isnotnull", "like",
+    "cardinality",    "split",    "coalesce", "lower",     "round",
+    "hash_with_seed",
 };
 
 namespace detail {
 
 bool canBeEvaluated(const std::shared_ptr<velox::exec::Expr>& expr) {
   const auto name =
-      stripPrefix(expr->name(), CudfOptions::getInstance().prefix());
+      stripPrefix(expr->name(), CudfConfig::getInstance().functionNamePrefix);
   if (supportedOps.count(name) || binaryOps.count(name) ||
       unaryOps.count(name)) {
     return std::all_of(
@@ -411,7 +413,7 @@ cudf::ast::expression const& AstContext::multipleInputsToPairWise(
   using Operation = cudf::ast::operation;
 
   const auto name =
-      stripPrefix(expr->name(), CudfOptions::getInstance().prefix());
+      stripPrefix(expr->name(), CudfConfig::getInstance().functionNamePrefix);
   auto len = expr->inputs().size();
   // Create a simple chain of operations
   auto result = &pushExprToTree(expr->inputs()[0]);
@@ -437,7 +439,7 @@ cudf::ast::expression const& AstContext::pushExprToTree(
   using velox::exec::FieldReference;
 
   const auto name =
-      stripPrefix(expr->name(), CudfOptions::getInstance().prefix());
+      stripPrefix(expr->name(), CudfConfig::getInstance().functionNamePrefix);
   auto len = expr->inputs().size();
   auto& type = expr->type();
 
@@ -682,6 +684,9 @@ cudf::ast::expression const& AstContext::pushExprToTree(
         addPrecomputeInstructionOnSide(0, 0, "cardinality", "", node);
 
     return tree.push(Operation{Op::CAST_TO_INT64, colRef});
+  } else if (name == "round") {
+    auto node = CudfExpressionNode::create(expr);
+    return addPrecomputeInstructionOnSide(0, 0, "round", "", node);
   } else if (name == "split") {
     VELOX_CHECK_EQ(len, 3);
     auto node = CudfExpressionNode::create(expr);
@@ -771,6 +776,39 @@ class CardinalityFunction : public CudfFunction {
     auto inputCol = asView(inputColumns[0]);
     return cudf::lists::count_elements(inputCol, stream, mr);
   }
+};
+
+class RoundFunction : public CudfFunction {
+ public:
+  explicit RoundFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+    const auto argSize = expr->inputs().size();
+    VELOX_CHECK(argSize >= 1 && argSize <= 2, "round expects 1 or 2 inputs");
+    VELOX_CHECK_NULL(
+        std::dynamic_pointer_cast<exec::ConstantExpr>(expr->inputs()[0]),
+        "round expects first column is not literal");
+    if (argSize == 2) {
+      auto scaleExpr =
+          std::dynamic_pointer_cast<exec::ConstantExpr>(expr->inputs()[1]);
+      VELOX_CHECK_NOT_NULL(scaleExpr, "round scale must be a constant");
+      scale_ = scaleExpr->value()->as<SimpleVector<int32_t>>()->valueAt(0);
+    }
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    return cudf::round_decimal(
+        asView(inputColumns[0]),
+        scale_,
+        cudf::rounding_method::HALF_UP,
+        stream,
+        mr);
+    ;
+  }
+
+ private:
+  int32_t scale_ = 0;
 };
 
 class SubstrFunction : public CudfFunction {
@@ -1025,6 +1063,12 @@ bool registerBuiltinFunctions(const std::string& prefix) {
       "hash_with_seed",
       [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
         return std::make_shared<HashFunction>(expr);
+      });
+
+  registerCudfFunction(
+      prefix + "round",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<RoundFunction>(expr);
       });
 
   return true;
