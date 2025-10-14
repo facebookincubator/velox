@@ -250,7 +250,7 @@ class QueryConfig {
   /// Window spilling flag, only applies if "spill_enabled" flag is set.
   static constexpr const char* kWindowSpillEnabled = "window_spill_enabled";
 
-  /// When Window spills, control the minimum #rows of a reading batch.
+  /// When Window spills, control the minimum number rows of a reading batch.
   static constexpr const char* kWindowSpillMinReadBatchRows =
       "window_spill_min_read_batch_rows";
 
