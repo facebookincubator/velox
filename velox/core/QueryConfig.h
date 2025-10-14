@@ -111,6 +111,16 @@ class QueryConfig {
   static constexpr const char* kExprMaxCompiledRegexes =
       "expression.max_compiled_regexes";
 
+  /// Whether to replace local exchange followed by non-global final aggregation
+  /// with an ExchangeAggregation operator. False by default.
+  static constexpr const char* kUseExchangeAggregation =
+      "use_exchange_aggregation";
+
+  /// If use_exchange_aggregation is true, controls the number of slots in the
+  /// bucket of an ExchangeAggregation operator.
+  static constexpr const char* kMaxExchangeAggregationBucketSize =
+      "max_exchange_aggregation_bucket_size";
+
   /// Used for backpressure to block local exchange producers when the local
   /// exchange buffer reaches or exceeds this size.
   static constexpr const char* kMaxLocalExchangeBufferSize =
@@ -822,6 +832,16 @@ class QueryConfig {
   uint64_t maxOutputBufferSize() const {
     static constexpr uint64_t kDefault = 32UL << 20;
     return get<uint64_t>(kMaxOutputBufferSize, kDefault);
+  }
+
+  bool useExchangeAggregation() const {
+    static constexpr bool kDefault = false;
+    return get<bool>(kUseExchangeAggregation, kDefault);
+  }
+
+  uint64_t maxExchangeAggregationBucketSize() const {
+    static constexpr uint64_t kDefault = 360;
+    return get<uint64_t>(kMaxExchangeAggregationBucketSize, kDefault);
   }
 
   uint64_t maxLocalExchangeBufferSize() const {

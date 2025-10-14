@@ -3843,4 +3843,28 @@ void EqualIndexLookupCondition::validate() const {
       key->type()->toString(),
       value->type()->toString());
 }
+
+bool isFinalAggregationFollowLocalExchange(const core::PlanNodePtr& node) {
+  const auto& aggregation =
+      std::dynamic_pointer_cast<const core::AggregationNode>(node);
+  if (!aggregation ||
+      aggregation->step() != core::AggregationNode::Step::kFinal) {
+    return false;
+  }
+  // TODO: support distinct aggregation.
+  if (aggregation->aggregates().empty()) {
+    return false;
+  }
+  const auto& localExchange =
+      std::dynamic_pointer_cast<const core::LocalPartitionNode>(
+          node->sources()[0]);
+  if (!localExchange) {
+    return false;
+  }
+  // Don't use ExchangeAggregation for global aggregation.
+  if (localExchange->type() == core::LocalPartitionNode::Type::kGather) {
+    return false;
+  }
+  return true;
+}
 } // namespace facebook::velox::core

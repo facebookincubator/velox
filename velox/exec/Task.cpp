@@ -427,6 +427,10 @@ Task::~Task() {
   clearStage = "removeSpillDirectoryIfExists";
   removeSpillDirectoryIfExists();
 
+  for (auto& [_, splitGroupState] : splitGroupStates_) {
+    splitGroupState.clear();
+  }
+
   // TODO(spershin): Temporary code designed to reveal what causes SIGABRT in
   // jemalloc when destroying some Tasks.
 #define CLEAR(_action_)   \
@@ -1285,6 +1289,13 @@ void Task::createSplitGroupStateLocked(uint32_t splitGroupId) {
       VELOX_CHECK_NOT_NULL(partitionNode);
       createLocalExchangeQueuesLocked(
           splitGroupId, partitionNode, factory->numDrivers);
+    }
+    std::vector<core::AggregationNodePtr> exchangeAggregationNodes;
+    if (queryCtx_->queryConfig().useExchangeAggregation() &&
+        factory->needsExchangeAggregation(exchangeAggregationNodes)) {
+      VELOX_CHECK(!exchangeAggregationNodes.empty());
+      createExchangeAggregationBucketsLocked(
+          splitGroupId, exchangeAggregationNodes, factory->numDrivers);
     }
     addHashJoinBridgesLocked(splitGroupId, factory->needsHashJoinBridges());
     addNestedLoopJoinBridgesLocked(
@@ -2510,7 +2521,7 @@ ContinueFuture Task::terminate(TaskState terminalState) {
 
   std::vector<ContinuePromise> splitPromises;
   std::vector<std::shared_ptr<JoinBridge>> oldBridges;
-  std::vector<SplitGroupState> splitGroupStates;
+  std::vector<BarrierState> barriers;
   std::
       unordered_map<core::PlanNodeId, std::pair<std::vector<exec::Split>, bool>>
           remainingRemoteSplits;
@@ -2524,7 +2535,9 @@ ContinueFuture Task::terminate(TaskState terminalState) {
       for (auto& pair : splitGroupState.second.customBridges) {
         oldBridges.emplace_back(std::move(pair.second));
       }
-      splitGroupStates.push_back(std::move(splitGroupState.second));
+      for (auto& pair : splitGroupState.second.barriers) {
+        barriers.emplace_back(std::move(pair.second));
+      }
     }
 
     // Collect all outstanding split promises from all splits state structures.
@@ -2572,8 +2585,8 @@ ContinueFuture Task::terminate(TaskState terminalState) {
     }
   }
 
-  for (auto& splitGroupState : splitGroupStates) {
-    splitGroupState.clear();
+  for (auto& barrier : barriers) {
+    barrier.clear();
   }
 
   for (auto& promise : splitPromises) {
@@ -3013,6 +3026,37 @@ std::shared_ptr<MergeJoinSource> Task::getMergeJoinSource(
   return it->second;
 }
 
+void Task::createExchangeAggregationBucketsLocked(
+    uint32_t splitGroupId,
+    const std::vector<core::AggregationNodePtr>& planNodes,
+    int numDrivers) {
+  auto& splitGroupState = splitGroupStates_[splitGroupId];
+  for (const auto& planNode : planNodes) {
+    const auto& planNodeId = planNode->id();
+    VELOX_CHECK(
+        splitGroupState.exchangeAggregations.find(planNodeId) ==
+            splitGroupState.exchangeAggregations.end(),
+        "Exchange aggregation already exists: {}",
+        planNodeId);
+
+    ExchangeAggregationState state;
+    const auto& localExchangeNode =
+        std::dynamic_pointer_cast<const core::LocalPartitionNode>(
+            planNode->sources()[0]);
+    VELOX_CHECK_NOT_NULL(localExchangeNode);
+    VELOX_CHECK(
+        localExchangeNode->type() != core::LocalPartitionNode::Type::kGather);
+    // Every driver is both producer and consumer, so the number of partitions
+    // equals to the number of drivers.
+    for (auto i = 0; i < numDrivers; ++i) {
+      state.buckets.emplace_back(std::make_shared<PartitionBucket>(
+          queryCtx_->queryConfig().maxExchangeAggregationBucketSize(),
+          numDrivers));
+    }
+    splitGroupState.exchangeAggregations.insert({planNodeId, std::move(state)});
+  }
+}
+
 void Task::createLocalExchangeQueuesLocked(
     uint32_t splitGroupId,
     const core::PlanNodePtr& planNode,
@@ -3064,6 +3108,22 @@ void Task::noMoreLocalExchangeProducers(uint32_t splitGroupId) {
       queue->noMoreProducers();
     }
   }
+}
+
+const std::vector<std::shared_ptr<PartitionBucket>>&
+Task::getExchangeAggregationBuckets(
+    uint32_t splitGroupId,
+    const core::PlanNodeId& planNodeId) {
+  auto& splitGroupState = splitGroupStates_[splitGroupId];
+
+  auto it = splitGroupState.exchangeAggregations.find(planNodeId);
+  VELOX_CHECK(
+      it != splitGroupState.exchangeAggregations.end(),
+      "Incorrect exchange aggregation ID {} for group {}, task {}",
+      planNodeId,
+      splitGroupId,
+      taskId());
+  return it->second.buckets;
 }
 
 std::shared_ptr<LocalExchangeQueue> Task::getLocalExchangeQueue(

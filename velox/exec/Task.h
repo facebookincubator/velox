@@ -22,6 +22,7 @@
 #include "velox/core/PlanFragment.h"
 #include "velox/core/QueryCtx.h"
 #include "velox/exec/Driver.h"
+#include "velox/exec/ExchangeAggregation.h"
 #include "velox/exec/LocalPartition.h"
 #include "velox/exec/MemoryReclaimer.h"
 #include "velox/exec/MergeSource.h"
@@ -479,6 +480,11 @@ class Task : public std::enable_shared_from_this<Task> {
       uint32_t splitGroupId,
       const core::PlanNodeId& planNodeId);
 
+  void createExchangeAggregationBucketsLocked(
+      uint32_t splitGroupId,
+      const std::vector<core::AggregationNodePtr>& planNodes,
+      int numDrivers);
+
   void createLocalExchangeQueuesLocked(
       uint32_t splitGroupId,
       const core::PlanNodePtr& planNode,
@@ -490,6 +496,11 @@ class Task : public std::enable_shared_from_this<Task> {
       uint32_t splitGroupId,
       const core::PlanNodeId& planNodeId,
       int partition);
+
+  const std::vector<std::shared_ptr<PartitionBucket>>&
+  getExchangeAggregationBuckets(
+      uint32_t splitGroupId,
+      const core::PlanNodeId& planNodeId);
 
   const std::vector<std::shared_ptr<LocalExchangeQueue>>&
   getLocalExchangeQueues(
