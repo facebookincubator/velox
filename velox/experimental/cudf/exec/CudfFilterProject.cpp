@@ -131,35 +131,6 @@ CudfFilterProject::CudfFilterProject(
 }
 
 void CudfFilterProject::initialize() {
-  initializeFilterProject();
-
-  auto info = exprsAndProjection();
-  const auto inputType = project_ ? project_->sources()[0]->outputType()
-                                  : filter_->sources()[0]->outputType();
-
-  // convert to AST
-  if (CudfConfig::getInstance().debugEnabled) {
-    int i = 0;
-    for (const auto& expr : info.exprs->exprs()) {
-      std::cout << "expr[" << i++ << "] " << expr->toString() << std::endl;
-      debugPrintTree(expr);
-      ++i;
-    }
-  }
-  std::vector<std::shared_ptr<velox::exec::Expr>> projectExprs;
-  if (hasFilter_) {
-    filterEvaluator_ = ExpressionEvaluator({info.exprs->exprs()[0]}, inputType);
-    projectExprs = {info.exprs->exprs().begin() + 1, info.exprs->exprs().end()};
-  }
-
-  projectEvaluator_ = ExpressionEvaluator(
-      hasFilter_ ? projectExprs : info.exprs->exprs(), inputType);
-
-  filter_.reset();
-  project_.reset();
-}
-
-void CudfFilterProject::initializeFilterProject() {
   Operator::initialize();
 
   std::vector<core::TypedExprPtr> allExprs;
@@ -187,12 +158,10 @@ void CudfFilterProject::initializeFilterProject() {
     isIdentityProjection_ = true;
   }
 
-  numExprs_ = allExprs.size();
-
   exprs_ = exec::makeExprSetFromFlag(
       std::move(allExprs), operatorCtx_->execCtx(), lazyDereference_);
 
-  if (numExprs_ > 0 && !identityProjections_.empty()) {
+  if (allExprs.size() > 0 && !identityProjections_.empty()) {
     const auto inputType = project_ ? project_->sources()[0]->outputType()
                                     : filter_->sources()[0]->outputType();
     std::unordered_set<uint32_t> distinctFieldIndices;
@@ -210,8 +179,29 @@ void CudfFilterProject::initializeFilterProject() {
     }
   }
 
-  // remove filter_ and project_ reset because it needs to be used in cudf
-  // initialize.
+  const auto inputType = project_ ? project_->sources()[0]->outputType()
+                                  : filter_->sources()[0]->outputType();
+
+  // convert to AST
+  if (CudfConfig::getInstance().debugEnabled) {
+    int i = 0;
+    for (const auto& expr : exprs_->exprs()) {
+      std::cout << "expr[" << i++ << "] " << expr->toString() << std::endl;
+      debugPrintTree(expr);
+      ++i;
+    }
+  }
+  std::vector<std::shared_ptr<velox::exec::Expr>> projectExprs;
+  if (hasFilter_) {
+    filterEvaluator_ = ExpressionEvaluator({exprs_->exprs()[0]}, inputType);
+    projectExprs = {exprs_->exprs().begin() + 1, exprs_->exprs().end()};
+  }
+
+  projectEvaluator_ = ExpressionEvaluator(
+      hasFilter_ ? projectExprs : exprs_->exprs(), inputType);
+
+  filter_.reset();
+  project_.reset();
 }
 
 void CudfFilterProject::addInput(RowVectorPtr input) {

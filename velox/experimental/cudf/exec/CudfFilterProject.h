@@ -36,6 +36,7 @@ class CudfFilterProject : public exec::Operator, public NvtxHelper {
       const std::shared_ptr<const core::FilterNode>& filter,
       const std::shared_ptr<const core::ProjectNode>& project);
 
+  // Some is copied from operator FilterProject.
   void initialize() override;
 
   bool needsInput() const override {
@@ -67,19 +68,6 @@ class CudfFilterProject : public exec::Operator, public NvtxHelper {
   }
 
  private:
-  // Copied from operator FilterProject.
-  void initializeFilterProject();
-
-  /// Data for accelerator conversion.
-  struct Export {
-    const exec::ExprSet* exprs;
-    bool hasFilter;
-    const std::vector<exec::IdentityProjection>* resultProjections;
-  };
-
-  Export exprsAndProjection() const {
-    return Export{exprs_.get(), hasFilter_, &resultProjections_};
-  }
 
   bool allInputProcessed();
 
@@ -88,7 +76,6 @@ class CudfFilterProject : public exec::Operator, public NvtxHelper {
   const bool lazyDereference_;
 
   std::unique_ptr<exec::ExprSet> exprs_;
-  int32_t numExprs_;
 
   // Cached filter and project node for lazy initialization. After
   // initialization, they will be reset, and initialized_ will be set to true.
@@ -100,16 +87,6 @@ class CudfFilterProject : public exec::Operator, public NvtxHelper {
 
   std::vector<velox::exec::IdentityProjection> resultProjections_;
   std::vector<velox::exec::IdentityProjection> identityProjections_;
-
-  // Indices for fields/input columns that are both an identity projection and
-  // are referenced by either a filter or project expression. This is used to
-  // identify fields that need to be preloaded before evaluating filters or
-  // projections.
-  // Consider projection with 2 expressions: f(c0) AND g(c1), c1
-  // If c1 is a LazyVector and f(c0) AND g(c1) expression is evaluated first, it
-  // will load c1 only for rows where f(c0) is true. However, c1 identity
-  // projection needs all rows.
-  std::vector<column_index_t> multiplyReferencedFieldIndices_;
 };
 
 } // namespace facebook::velox::cudf_velox

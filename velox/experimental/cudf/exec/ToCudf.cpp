@@ -58,23 +58,6 @@ bool isAnyOf(const Base* p) {
   return ((dynamic_cast<const Deriveds*>(p) != nullptr) || ...);
 }
 
-std::vector<core::TypedExprPtr> exprsAndProjection(
-    const exec::FilterProject& op,
-    const std::shared_ptr<const core::ProjectNode>& project) {
-  std::vector<core::TypedExprPtr> allExprs;
-  if (op.filterNode()) {
-    allExprs.push_back(op.filterNode()->filter());
-  }
-  // identityProjections is always supported in cudf, so it is safe to add it to
-  // allExprs.
-  if (project) {
-    for (const auto& proj : project->projections()) {
-      allExprs.push_back(proj);
-    }
-  }
-  return allExprs;
-}
-
 } // namespace
 
 bool CompileState::compile(bool force_replace) {
@@ -130,8 +113,15 @@ bool CompileState::compile(bool force_replace) {
     if (auto filterProjectOp = dynamic_cast<const exec::FilterProject*>(op)) {
       auto projectPlanNode = std::dynamic_pointer_cast<const core::ProjectNode>(
           getPlanNode(filterProjectOp->planNodeId()));
-      const auto exprs = exprsAndProjection(*filterProjectOp, projectPlanNode);
-      return ExpressionEvaluator::canBeEvaluated(exprs);
+      auto filterNode = filterProjectOp->filterNode();
+      bool canBeEvaluated = true;
+      if (projectPlanNode && !ExpressionEvaluator::canBeEvaluated(projectPlanNode->projections())) {
+        canBeEvaluated = false;
+      }
+      if (canBeEvaluated && filterNode && !ExpressionEvaluator::canBeEvaluated(filterNode->filter())) {
+        canBeEvaluated = false;
+      }
+      return canBeEvaluated;
     }
     return false;
   };
