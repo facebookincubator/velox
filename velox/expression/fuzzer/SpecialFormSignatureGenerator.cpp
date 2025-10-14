@@ -191,6 +191,9 @@ SpecialFormSignatureGenerator::getSignaturesForCast() const {
   addCastFromVarcharSignature("timestamp", signatures);
   addCastFromDateSignature("timestamp", signatures);
 
+  // To time type.
+  addCastFromVarcharSignature("time", signatures);
+
   // To date type.
   addCastFromVarcharSignature("date", signatures);
   addCastFromTimestampSignature("date", signatures);
