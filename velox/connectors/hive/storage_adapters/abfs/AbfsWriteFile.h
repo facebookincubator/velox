@@ -19,8 +19,9 @@
 #include "velox/connectors/hive/storage_adapters/abfs/AzureDataLakeFileClient.h"
 
 namespace facebook::velox::config {
-class ConfigBase;
-}
+class IConfig;
+using ConfigPtr = std::shared_ptr<const IConfig>;
+} // namespace facebook::velox::config
 
 namespace facebook::velox::filesystems {
 
@@ -39,7 +40,7 @@ class AbfsWriteFile : public WriteFile {
 
   /// @param path The file path to write.
   /// @param connectStr The connection string used to auth the storage account.
-  AbfsWriteFile(std::string_view path, const config::ConfigBase& config);
+  AbfsWriteFile(std::string_view path, const config::IConfig& config);
 
   /// @param path The file path to write.
   /// @param client The AdlsFileClient.

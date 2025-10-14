@@ -25,8 +25,7 @@ namespace facebook::velox::core {
 std::shared_ptr<QueryCtx> QueryCtx::create(
     folly::Executor* executor,
     QueryConfig&& queryConfig,
-    std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>
-        connectorConfigs,
+    ConnectorConfigs connectorConfigs,
     cache::AsyncDataCache* cache,
     std::shared_ptr<memory::MemoryPool> pool,
     folly::Executor* spillExecutor,
@@ -45,11 +44,38 @@ std::shared_ptr<QueryCtx> QueryCtx::create(
   return queryCtx;
 }
 
-QueryCtx::QueryCtx(
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+std::shared_ptr<QueryCtx> QueryCtx::create(
     folly::Executor* executor,
     QueryConfig&& queryConfig,
     std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>
-        connectorSessionProperties,
+        connectorConfigsOld,
+    cache::AsyncDataCache* cache,
+    std::shared_ptr<memory::MemoryPool> pool,
+    folly::Executor* spillExecutor,
+    const std::string& queryId,
+    std::shared_ptr<filesystems::TokenProvider> tokenProvider) {
+  ConnectorConfigs connectorConfigs;
+  connectorConfigs.reserve(connectorConfigsOld.size());
+  for (auto& entry : connectorConfigsOld) {
+    connectorConfigs.emplace(entry.first, std::move(entry.second));
+  }
+  return create(
+      executor,
+      std::move(queryConfig),
+      std::move(connectorConfigs),
+      cache,
+      std::move(pool),
+      spillExecutor,
+      queryId,
+      std::move(tokenProvider));
+}
+#endif
+
+QueryCtx::QueryCtx(
+    folly::Executor* executor,
+    QueryConfig&& queryConfig,
+    ConnectorConfigs&& connectorSessionProperties,
     cache::AsyncDataCache* cache,
     std::shared_ptr<memory::MemoryPool> pool,
     folly::Executor* spillExecutor,
@@ -59,7 +85,7 @@ QueryCtx::QueryCtx(
       executor_(executor),
       spillExecutor_(spillExecutor),
       cache_(cache),
-      connectorSessionProperties_(connectorSessionProperties),
+      connectorSessionProperties_(std::move(connectorSessionProperties)),
       pool_(std::move(pool)),
       queryConfig_{std::move(queryConfig)},
       fsTokenProvider_(std::move(tokenProvider)) {

@@ -48,7 +48,7 @@ struct HdfsServiceEndpoint {
 class HdfsFileSystem : public FileSystem {
  public:
   explicit HdfsFileSystem(
-      const std::shared_ptr<const config::ConfigBase>& config,
+      const config::ConfigPtr& config,
       const HdfsServiceEndpoint& endpoint);
 
   std::string name() const override;
@@ -88,7 +88,7 @@ class HdfsFileSystem : public FileSystem {
   /// will be used.
   static HdfsServiceEndpoint getServiceEndpoint(
       const std::string_view filePath,
-      const config::ConfigBase* config);
+      const config::IConfig* config);
 
   static std::string_view kScheme;
 

@@ -51,7 +51,7 @@ class AzuriteServer {
     return file_;
   }
 
-  std::shared_ptr<const config::ConfigBase> hiveConfig(
+  config::ConfigPtr hiveConfig(
       const std::unordered_map<std::string, std::string> configOverride = {})
       const;
 
