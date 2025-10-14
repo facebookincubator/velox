@@ -2485,9 +2485,9 @@ TEST_F(GeometryFunctionsTest, testStEnvelopeAsPts) {
 
 TEST_F(GeometryFunctionsTest, testStNumPoints) {
   const auto testStNumPointsFunc = [&](const std::optional<std::string>& wkt,
-                                       const std::optional<int32_t>& expected) {
-    std::optional<int32_t> result =
-        evaluateOnce<int32_t>("ST_NumPoints(ST_GeometryFromText(c0))", wkt);
+                                       const std::optional<int64_t>& expected) {
+    std::optional<int64_t> result =
+        evaluateOnce<int64_t>("ST_NumPoints(ST_GeometryFromText(c0))", wkt);
 
     if (expected.has_value()) {
       ASSERT_TRUE(result.has_value());
