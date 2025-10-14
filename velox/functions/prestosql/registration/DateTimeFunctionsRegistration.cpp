@@ -231,6 +231,7 @@ void registerSimpleFunctions(const std::string& prefix) {
   registerFunction<SecondFunction, int64_t, Date>({prefix + "second"});
   registerFunction<SecondFunction, int64_t, TimestampWithTimezone>(
       {prefix + "second"});
+  registerFunction<SecondFunction, int64_t, Time>({prefix + "second"});
   registerFunction<SecondFromIntervalFunction, int64_t, IntervalDayTime>(
       {prefix + "second"});
 
