@@ -62,12 +62,12 @@ struct DaysFunction {
   VELOX_DEFINE_FUNCTION_TYPES(TExec);
 
   FOLLY_ALWAYS_INLINE void call(
-      int32_t& result,
+      out_type<Date>& result,
       const arg_type<Timestamp>& timestamp) {
     result = epochDay(timestamp);
   }
 
-  FOLLY_ALWAYS_INLINE void call(int32_t& result, const arg_type<Date>& date) {
+  FOLLY_ALWAYS_INLINE void call(out_type<Date>& result, const arg_type<Date>& date) {
     result = date;
   }
 };
@@ -90,8 +90,8 @@ void registerDateTimeFunctions(const std::string& prefix) {
   registerFunction<YearsFunction, int32_t, Date>({prefix + "years"});
   registerFunction<MonthsFunction, int32_t, Timestamp>({prefix + "months"});
   registerFunction<MonthsFunction, int32_t, Date>({prefix + "months"});
-  registerFunction<DaysFunction, int32_t, Timestamp>({prefix + "days"});
-  registerFunction<DaysFunction, int32_t, Date>({prefix + "days"});
+  registerFunction<DaysFunction, Date, Timestamp>({prefix + "days"});
+  registerFunction<DaysFunction, Date, Date>({prefix + "days"});
   registerFunction<HoursFunction, int32_t, Timestamp>({prefix + "hours"});
 }
 

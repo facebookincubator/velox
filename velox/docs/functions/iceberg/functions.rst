@@ -23,25 +23,30 @@ Refer to `Iceberg documenation <https://iceberg.apache.org/spec/#partition-trans
        SELECT bucket(128, 'abcd'); -- 4
        SELECT bucket(100, 34L); -- 79
 
-.. iceberg:function:: days(input) -> integer
+.. iceberg:function:: days(input) -> date
 
-   Returns the day of the month from a date or timestamp ``input``, as days from 1970-01-01. ::
+   Returns the date. ::
 
-       SELECT days(DATE '2017-12-01'); -- 17501
-       SELECT days(TIMESTAMP '2017-12-01 10:12:55.038194'); -- 17501
+       SELECT days(DATE '2017-12-01'); -- 2017-12-01
+       SELECT days(TIMESTAMP '2017-12-01 10:12:55.038194'); -- 2017-12-01
+       SELECT days(DATE '1969-12-31'); -- 1969-12-31
 
 .. iceberg:function:: hours(input) -> integer
 
-   Returns the hour from a timestamp ``input``, as hours from 1970-01-01 00:00:00. ::
+   Returns the number of hours since epoch (1970-01-01 00:00:00). Returns 0 for '1970-01-01 00:00:00' timestamp.
+   Returns negative value for timestamps before '1970-01-01 00:00:00'. ::
 
        SELECT hours(TIMESTAMP '2017-12-01 10:12:55.038194'); -- 420034
+       SELECT hours(TIMESTAMP '1969-12-31 23:59:58.999999'); -- -1
 
 .. iceberg:function:: months(input) -> integer
 
-   Returns the month from a date or timestamp ``input``, as months from 1970-01-01. ::
+   Returns the number of months since epoch (1970-01-01). Returns 0 for '1970-01-01' date and timestamp.
+   Returns negative value for dates and timestamps before '1970-01-01'.  ::
 
        SELECT months(DATE '2017-12-01'); -- 575
        SELECT months(TIMESTAMP '2017-12-01 10:12:55.038194'); -- 575
+       SELECT months(DATE '1960-01-01'); -- -120
 
 .. iceberg:function:: truncate(width, input) -> same type as input
 
@@ -66,7 +71,9 @@ Refer to `Iceberg documenation <https://iceberg.apache.org/spec/#partition-trans
 
 .. iceberg:function:: years(input) -> integer
 
-   Returns the year from a date or timestamp ``input``, as years from 1970. ::
+   Returns the number of years since epoch (1970-01-01). Returns 0 for '1970-01-01' date and timestamp.
+   Returns negative value for dates and timestamps before '1970-01-01'.  ::
 
        SELECT years(DATE '2017-12-01'); -- 47
        SELECT years(TIMESTAMP '2017-12-01 10:12:55.038194'); -- 47
+       SELECT years(DATE '1960-01-01'); -- -10
