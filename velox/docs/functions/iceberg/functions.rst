@@ -33,7 +33,7 @@ Refer to `Iceberg documenation <https://iceberg.apache.org/spec/#partition-trans
 
 .. iceberg:function:: hours(input) -> integer
 
-   Returns the number of hours since epoch (1970-01-01 00:00:00). Returns 0 for '1970-01-01 00:00:00' timestamp.
+   Returns the number of hours since epoch (1970-01-01 00:00:00). Returns 0 for '1970-01-01 00:00:00' timestamps.
    Returns negative value for timestamps before '1970-01-01 00:00:00'. ::
 
        SELECT hours(TIMESTAMP '2017-12-01 10:12:55.038194'); -- 420034
@@ -41,7 +41,7 @@ Refer to `Iceberg documenation <https://iceberg.apache.org/spec/#partition-trans
 
 .. iceberg:function:: months(input) -> integer
 
-   Returns the number of months since epoch (1970-01-01). Returns 0 for '1970-01-01' date and timestamp.
+   Returns the number of months since epoch (1970-01-01). Returns 0 for '1970-01-01' date and timestamps.
    Returns negative value for dates and timestamps before '1970-01-01'.  ::
 
        SELECT months(DATE '2017-12-01'); -- 575
@@ -71,7 +71,7 @@ Refer to `Iceberg documenation <https://iceberg.apache.org/spec/#partition-trans
 
 .. iceberg:function:: years(input) -> integer
 
-   Returns the number of years since epoch (1970-01-01). Returns 0 for '1970-01-01' date and timestamp.
+   Returns the number of years since epoch (1970-01-01). Returns 0 for '1970-01-01' date and timestamps.
    Returns negative value for dates and timestamps before '1970-01-01'.  ::
 
        SELECT years(DATE '2017-12-01'); -- 47
