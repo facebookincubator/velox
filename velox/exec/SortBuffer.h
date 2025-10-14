@@ -110,6 +110,7 @@ class SortBuffer {
   bool hasSpilled() const;
 
   const RowTypePtr input_;
+  std::vector<RowVectorPtr> inputs_;
 
   const std::vector<CompareFlags> sortCompareFlags_;
 
@@ -130,6 +131,8 @@ class SortBuffer {
   // The column projection map between 'input_' and 'spillerStoreType_' as sort
   // buffer stores the sort columns first in 'data_'.
   std::vector<IdentityProjection> columnMap_;
+
+  std::vector<IdentityProjection> indexColumnMap_;
 
   // Indicates no more input. Once it is set, addInput() can't be called on this
   // sort buffer object.
@@ -163,6 +166,7 @@ class SortBuffer {
 
   // Reusable output vector.
   RowVectorPtr output_;
+  RowVectorPtr indexOutput_;
 
   // Estimated size of a single output row by using the max
   // 'data_->estimateRowSize()' across all accumulated data set.
