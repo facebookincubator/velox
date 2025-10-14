@@ -22,19 +22,34 @@ namespace facebook::velox::serializer::spark {
 namespace {
 std::unique_ptr<RowIterator> unsafeRowIteratorFactory(
     ByteInputStream* source,
-    std::unique_ptr<BufferInputStream> uncompressedStream,
-    std::unique_ptr<folly::IOBuf> uncompressedBuf,
-    size_t endOffset) {
-  if (source != nullptr) {
-    VELOX_CHECK_NULL(uncompressedStream);
-    VELOX_CHECK_NULL(uncompressedBuf);
-    return std::make_unique<RowIteratorImpl>(source, endOffset);
-  } else {
-    VELOX_CHECK_NOT_NULL(uncompressedStream);
-    VELOX_CHECK_NOT_NULL(uncompressedBuf);
+    const VectorSerde::Options* options) {
+  const auto header = detail::RowGroupHeader::read(source);
+  if (!header.compressed) {
     return std::make_unique<RowIteratorImpl>(
-        std::move(uncompressedStream), std::move(uncompressedBuf), endOffset);
+        source, header.uncompressedSize + source->tellp());
   }
+
+  const auto compressionKind = options == nullptr
+      ? VectorSerde::Options().compressionKind
+      : options->compressionKind;
+  VELOX_DCHECK_NE(
+      compressionKind, common::CompressionKind::CompressionKind_NONE);
+  auto compressBuf = folly::IOBuf::create(header.compressedSize);
+  source->readBytes(compressBuf->writableData(), header.compressedSize);
+  compressBuf->append(header.compressedSize);
+
+  // Process chained uncompressed results IOBufs.
+  const auto codec = common::compressionKindToCodec(compressionKind);
+  auto uncompressedBuf =
+      codec->uncompress(compressBuf.get(), header.uncompressedSize);
+
+  auto uncompressedStream = std::make_unique<BufferInputStream>(
+      byteRangesFromIOBuf(uncompressedBuf.get()));
+  const std::streampos initialSize = uncompressedStream->tellp();
+  return std::make_unique<RowIteratorImpl>(
+      std::move(uncompressedStream),
+      std::move(uncompressedBuf),
+      header.uncompressedSize + initialSize);
 }
 } // namespace
 
