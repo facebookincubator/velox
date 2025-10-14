@@ -34,6 +34,7 @@ Array Functions
     Returns the average of all non-null elements of the array. If there are no non-null elements, returns null.
 
 .. function:: array_cum_sum(array(T)) -> array(T)
+
     Returns the array whose elements are the cumulative sum of the input array, i.e. result[i] = input[1] + input[2] +
     … + input[i]. If there there is null elements in the array, the cumulative sum at and after the element is null.
     The following types are supported: int8_t, int16_t, int32_t, int64_t, int128_t, float, double, ShortDecimal,
@@ -209,7 +210,7 @@ Array Functions
         SELECT array_sort(ARRAY [ARRAY [1, 2], ARRAY [1, null]]); -- failed: Ordering nulls is not supported
 
 .. function:: array_sort_desc(array(T), function(T,U)) -> array(T)
-    :noindex:
+      :noindex:
 
     Returns the array sorted by values computed using specified lambda in descending
     order. U must be an orderable type. Null elements will be placed at the end of
@@ -217,7 +218,20 @@ Array Functions
     nested nulls. Throws if deciding the order of elements would require comparing nested
     null values. ::
 
-        SELECT array_sort_desc(ARRAY ['cat', 'leopard', 'mouse'], x -> length(x)); -- ['leopard', 'mouse', 'cat']
+          SELECT array_sort_desc(ARRAY ['cat', 'leopard', 'mouse'], x -> length(x)); -- ['leopard', 'mouse', 'cat']
+
+.. function:: array_subset(array(T), array(int)) -> array(T)
+
+    Returns an array containing elements from the input array at the specified 1-based indices.
+    Indices must be positive integers. Invalid indices (out of bounds, zero, or negative) are ignored.
+    Null elements at valid indices are preserved in the output. Duplicate indices result in duplicate elements in the output.
+    The output maintains the order of the indices array. ::
+
+          SELECT array_subset(ARRAY[1, 2, 3, 4, 5], ARRAY[1, 3, 5]); -- [1, 3, 5]
+          SELECT array_subset(ARRAY['a', 'b', 'c'], ARRAY[3, 1, 2]); -- ['c', 'a', 'b']
+          SELECT array_subset(ARRAY[1, NULL, 3], ARRAY[2]); -- [NULL]
+          SELECT array_subset(ARRAY[1, 2, 3], ARRAY[1, 1, 2]); -- [1, 1, 2]
+          SELECT array_subset(ARRAY[1, 2, 3], ARRAY[5, 0, -1]); -- []
 
 .. function:: array_sum(array(T)) -> bigint/double
 

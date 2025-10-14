@@ -221,6 +221,11 @@ bool waitForTaskStateChange(
 /// during this wait call. This is for testing purpose for now.
 void waitForAllTasksToBeDeleted(uint64_t maxWaitUs = 3'000'000);
 
+/// Cancels all currently running tasks across all available task managers.
+/// This is primarily used in testing scenarios to clean up active tasks
+/// and ensure test isolation between test cases.
+void cancelAllTasks();
+
 std::shared_ptr<Task> assertQuery(
     const core::PlanNodePtr& plan,
     const std::string& duckDbSql,

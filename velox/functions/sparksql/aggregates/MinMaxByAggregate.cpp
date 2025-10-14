@@ -136,6 +136,7 @@ exec::AggregateRegistrationResult registerMinMaxBy(
               resultType, valueType, compareType, errorMessage);
         }
       },
+      {.ignoreDuplicates = true},
       withCompanionFunctions,
       overwrite);
 }

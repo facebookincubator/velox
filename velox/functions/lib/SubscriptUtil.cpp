@@ -352,47 +352,6 @@ VectorPtr MapSubscript::applyMap(
         rows, mapArg, indexArg, context, triggerCaching, lookupTable_);
   }
 }
-
-namespace {
-std::exception_ptr makeZeroSubscriptError() {
-  try {
-    VELOX_USER_FAIL("SQL array indices start at 1");
-  } catch (const std::exception&) {
-    return std::current_exception();
-  }
-}
-
-std::exception_ptr makeBadSubscriptError() {
-  try {
-    VELOX_USER_FAIL("Array subscript out of bounds.");
-  } catch (const std::exception&) {
-    return std::current_exception();
-  }
-}
-
-std::exception_ptr makeNegativeSubscriptError() {
-  try {
-    VELOX_USER_FAIL("Array subscript is negative.");
-  } catch (const std::exception&) {
-    return std::current_exception();
-  }
-}
-} // namespace
-
-const std::exception_ptr& zeroSubscriptError() {
-  static std::exception_ptr error = makeZeroSubscriptError();
-  return error;
-}
-
-const std::exception_ptr& badSubscriptError() {
-  static std::exception_ptr error = makeBadSubscriptError();
-  return error;
-}
-
-const std::exception_ptr& negativeSubscriptError() {
-  static std::exception_ptr error = makeNegativeSubscriptError();
-  return error;
-}
 } // namespace detail
 
 } // namespace facebook::velox::functions

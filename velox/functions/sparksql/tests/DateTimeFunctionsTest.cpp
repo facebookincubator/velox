@@ -42,10 +42,6 @@ class DateTimeFunctionsTest : public SparkFunctionBaseTest {
   static constexpr int8_t kMaxTinyint = std::numeric_limits<int8_t>::max();
   static constexpr int64_t kMinBigint = std::numeric_limits<int64_t>::min();
   static constexpr int64_t kMaxBigint = std::numeric_limits<int64_t>::max();
-  static constexpr float kLowestFloat = std::numeric_limits<float>::lowest();
-  static constexpr float kMaxFloat = std::numeric_limits<float>::max();
-  static constexpr double kLowestDouble = std::numeric_limits<double>::lowest();
-  static constexpr double kMaxDouble = std::numeric_limits<double>::max();
 
  protected:
   void setQueryTimeZone(const std::string& timeZone) {
@@ -1208,11 +1204,17 @@ TEST_F(DateTimeFunctionsTest, secondsToTimestamp) {
       secondsToTimestamp<float>(1.1234567),
       parseTimestamp("1970-01-01 00:00:01.123456"));
   EXPECT_EQ(
-      secondsToTimestamp<float>(kMaxFloat),
+      secondsToTimestamp<float>(std::numeric_limits<float>::max()),
       parseTimestamp("+294247-01-10 04:00:54.775807"));
   EXPECT_EQ(
-      secondsToTimestamp<float>(kLowestFloat),
+      secondsToTimestamp<float>(std::numeric_limits<float>::lowest()),
       parseTimestamp("-290308-12-21 19:59:05.224192"));
+  EXPECT_EQ(
+      secondsToTimestamp<float>(std::numeric_limits<float>::quiet_NaN()),
+      std::nullopt);
+  EXPECT_EQ(
+      secondsToTimestamp<float>(std::numeric_limits<float>::infinity()),
+      std::nullopt);
 
   // Tests using double seconds as input.
   EXPECT_EQ(
@@ -1249,11 +1251,17 @@ TEST_F(DateTimeFunctionsTest, secondsToTimestamp) {
       secondsToTimestamp<double>(1.1234567),
       parseTimestamp("1970-01-01 00:00:01.123456"));
   EXPECT_EQ(
-      secondsToTimestamp<double>(kLowestDouble),
+      secondsToTimestamp<double>(std::numeric_limits<double>::lowest()),
       parseTimestamp("-290308-12-21 19:59:05.224192"));
   EXPECT_EQ(
-      secondsToTimestamp<double>(kMaxDouble),
+      secondsToTimestamp<double>(std::numeric_limits<double>::max()),
       parseTimestamp("+294247-01-10 04:00:54.775807"));
+  EXPECT_EQ(
+      secondsToTimestamp<double>(std::numeric_limits<double>::quiet_NaN()),
+      std::nullopt);
+  EXPECT_EQ(
+      secondsToTimestamp<double>(std::numeric_limits<double>::infinity()),
+      std::nullopt);
 }
 
 TEST_F(DateTimeFunctionsTest, timestampToMicros) {
@@ -1795,6 +1803,60 @@ TEST_F(DateTimeFunctionsTest, timestampadd) {
           "year",
           10,
           Timestamp(1582970400, 500'999'999) /*2020-02-29 10:00:00.500*/));
+}
+
+TEST_F(DateTimeFunctionsTest, monthsBetween) {
+  const auto monthsBetween = [&](std::optional<Timestamp> timestamp1,
+                                 std::optional<Timestamp> timestamp2,
+                                 std::optional<bool> roundOff) {
+    return evaluateOnce<double>(
+        "months_between(c0, c1, c2)", timestamp1, timestamp2, roundOff);
+  };
+
+  EXPECT_EQ(
+      3.94959677,
+      monthsBetween(
+          parseTimestamp("1997-02-28 10:30:00"),
+          parseTimestamp("1996-10-30"),
+          true));
+  EXPECT_EQ(
+      3.9495967741935485,
+      monthsBetween(
+          parseTimestamp("1997-02-28 10:30:00"),
+          parseTimestamp("1996-10-30"),
+          false));
+  EXPECT_EQ(
+      3.9495949074074073,
+      monthsBetween(
+          parseTimestamp("1997-02-28 10:30:00"),
+          parseTimestamp("1996-10-30 00:00:05"),
+          false));
+  EXPECT_EQ(
+      -3.9495949074074073,
+      monthsBetween(
+          parseTimestamp("1996-10-30 00:00:05"),
+          parseTimestamp("1997-02-28 10:30:00"),
+          false));
+  // `timestamp1` and `timestamp2` both are the last day of month.
+  EXPECT_EQ(
+      11,
+      monthsBetween(
+          parseTimestamp("1997-02-28 10:30:00"),
+          parseTimestamp("1996-03-31 11:00:00"),
+          true));
+  // `timestamp1` and `timestamp2` are on the same day of month.
+  EXPECT_EQ(
+      11,
+      monthsBetween(
+          parseTimestamp("1997-02-28 10:30:00"),
+          parseTimestamp("1996-03-28 11:00:00"),
+          true));
+  EXPECT_EQ(
+      11,
+      monthsBetween(
+          parseTimestamp("1997-02-21 10:30:00"),
+          parseTimestamp("1996-03-21 11:00:00"),
+          true));
 }
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test

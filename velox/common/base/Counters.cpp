@@ -107,8 +107,13 @@ void registerVeloxMetrics() {
   // was opened to load the cache.
   DEFINE_METRIC(kMetricCacheMaxAgeSecs, facebook::velox::StatType::AVG);
 
-  // Total number of cache entries.
-  DEFINE_METRIC(kMetricMemoryCacheNumEntries, facebook::velox::StatType::AVG);
+  // Total number of tiny cache entries.
+  DEFINE_METRIC(
+      kMetricMemoryCacheNumTinyEntries, facebook::velox::StatType::AVG);
+
+  // Total number of large cache entries.
+  DEFINE_METRIC(
+      kMetricMemoryCacheNumLargeEntries, facebook::velox::StatType::AVG);
 
   // Total number of cache entries that do not cache anything.
   DEFINE_METRIC(

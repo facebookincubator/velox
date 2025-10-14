@@ -55,6 +55,35 @@ function install_build_prerequisites {
   fi
 }
 
+function install_velox_deps_from_dnf {
+  dnf_install \
+    bison boost-devel c-ares-devel curl-devel double-conversion-devel \
+    elfutils-libelf-devel flex fmt-devel gflags-devel glog-devel gmock-devel \
+    gtest-devel libdwarf-devel libevent-devel libicu-devel \
+    libsodium-devel libzstd-devel lz4-devel openssl-devel-engine \
+    re2-devel snappy-devel thrift-devel xxhash-devel zlib-devel grpc-devel grpc-plugins
+
+  install_faiss_deps
+}
+
+function install_velox_deps {
+  run_and_time install_velox_deps_from_dnf
+  run_and_time install_gcs-sdk-cpp #grpc, abseil, protobuf
+  run_and_time install_fast_float
+  run_and_time install_folly
+  run_and_time install_fizz
+  run_and_time install_wangle
+  run_and_time install_mvfst
+  run_and_time install_fbthrift
+  run_and_time install_duckdb
+  run_and_time install_stemmer
+  run_and_time install_arrow
+  run_and_time install_xsimd    # to new in fedora repos
+  run_and_time install_simdjson # to new in fedora repos
+  run_and_time install_geos     # to new in fedora repos
+  run_and_time install_faiss
+}
+
 (return 2>/dev/null) && return # If script was sourced, don't run commands.
 
 (
@@ -90,6 +119,8 @@ function install_build_prerequisites {
       set -u
     fi
     install_velox_deps
+    # BUILD_TESTING requires grpc
+    dnf_install grpc
     echo "All dependencies for Velox installed!"
     if [[ ${USE_CLANG} != "false" ]]; then
       echo "To use clang for the Velox build set the CC and CXX environment variables in your session."

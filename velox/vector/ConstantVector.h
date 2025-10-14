@@ -70,7 +70,7 @@ class ConstantVector final : public SimpleVector<T> {
         initialized_(true) {
     makeNullsBuffer();
     // Special handling for complex types
-    if (type->size() > 0) {
+    if (type->size() > 0 || type->kind() == TypeKind::ROW) {
       // Only allow null constants to be created through this interface.
       VELOX_CHECK(isNull_);
       valueVector_ = BaseVector::create(type, 1, pool);
@@ -396,6 +396,16 @@ class ConstantVector final : public SimpleVector<T> {
         BaseVector::storageByteCount_);
   }
 
+  void transferOrCopyTo(velox::memory::MemoryPool* pool) override {
+    BaseVector::transferOrCopyTo(pool);
+    if (valueVector_) {
+      valueVector_->transferOrCopyTo(pool);
+    }
+    if (stringBuffer_ && !stringBuffer_->transferTo(pool)) {
+      stringBuffer_ = AlignedBuffer::copy<char>(stringBuffer_, pool);
+    }
+  }
+
  protected:
   std::string toSummaryString() const override {
     std::stringstream out;
@@ -447,7 +457,6 @@ class ConstantVector final : public SimpleVector<T> {
   }
 
   void setValue(const std::string& string) {
-    BaseVector::inMemoryBytes_ += string.size();
     value_ = velox::to<decltype(value_)>(string);
     if constexpr (can_simd) {
       valueBuffer_ = simd::setAll(value_);

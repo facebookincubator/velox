@@ -42,6 +42,104 @@ std::vector<IdentityProjection> extractProjections(
 
 } // namespace
 
+//////////////////
+// OUTPUT BUILDER
+
+void SpatialJoinOutputBuilder::initializeOutput(
+    const RowVectorPtr& input,
+    memory::MemoryPool* pool) {
+  if (output_ == nullptr) {
+    output_ =
+        BaseVector::create<RowVector>(outputType_, outputBatchSize_, pool);
+  } else {
+    VectorPtr outputVector = std::move(output_);
+    BaseVector::prepareForReuse(outputVector, outputBatchSize_);
+    output_ = std::static_pointer_cast<RowVector>(outputVector);
+  }
+  probeOutputIndices_ = allocateIndices(outputBatchSize_, pool);
+  rawProbeOutputIndices_ = probeOutputIndices_->asMutable<vector_size_t>();
+
+  // Add probe side projections as dictionary vectors
+  for (const auto& projection : probeProjections_) {
+    output_->childAt(projection.outputChannel) = wrapChild(
+        outputBatchSize_,
+        probeOutputIndices_,
+        input->childAt(projection.inputChannel));
+  }
+
+  // Add build side projections as uninitialized vectors
+  for (const auto& projection : buildProjections_) {
+    auto child = output_->childAt(projection.outputChannel);
+    if (child == nullptr) {
+      child = BaseVector::create(
+          outputType_->childAt(projection.outputChannel),
+          outputBatchSize_,
+          operatorCtx_.pool());
+    }
+  }
+}
+
+void SpatialJoinOutputBuilder::addOutputRow(
+    vector_size_t probeRow,
+    vector_size_t buildRow) {
+  VELOX_CHECK_NOT_NULL(probeOutputIndices_);
+  // Probe side is always a dictionary; just populate the index.
+  rawProbeOutputIndices_[outputRow_] = probeRow;
+
+  // For the build side, we accumulate the ranges to copy, then copy all of
+  // them at once. Consecutive records are copied in one memcpy.
+  if (!buildCopyRanges_.empty() &&
+      (buildCopyRanges_.back().sourceIndex + buildCopyRanges_.back().count) ==
+          buildRow) {
+    ++buildCopyRanges_.back().count;
+  } else {
+    buildCopyRanges_.push_back({buildRow, outputRow_, 1});
+  }
+  ++outputRow_;
+}
+
+void SpatialJoinOutputBuilder::copyBuildValues(
+    const RowVectorPtr& buildVector) {
+  if (buildCopyRanges_.empty()) {
+    return;
+  }
+
+  VELOX_CHECK_NOT_NULL(output_);
+
+  for (const auto& projection : buildProjections_) {
+    const auto& buildChild = buildVector->childAt(projection.inputChannel);
+    const auto& outputChild = output_->childAt(projection.outputChannel);
+    outputChild->copyRanges(buildChild.get(), buildCopyRanges_);
+  }
+  buildCopyRanges_.clear();
+}
+
+void SpatialJoinOutputBuilder::addProbeMismatchRow(vector_size_t probeRow) {
+  VELOX_CHECK_NOT_NULL(output_);
+
+  // Probe side is always a dictionary; just populate the index.
+  rawProbeOutputIndices_[outputRow_] = probeRow;
+
+  // Null out build projections.
+  for (const auto& projection : buildProjections_) {
+    const auto& outputChild = output_->childAt(projection.outputChannel);
+    outputChild->setNull(outputRow_, true);
+  }
+  ++outputRow_;
+}
+
+RowVectorPtr SpatialJoinOutputBuilder::takeOutput() {
+  VELOX_CHECK(buildCopyRanges_.empty());
+  if (outputRow_ == 0 || !output_) {
+    return nullptr;
+  }
+  RowVectorPtr output = std::move(output_);
+  output->resize(outputRow_);
+  output_ = nullptr;
+  outputRow_ = 0;
+  return output;
+}
+
 SpatialJoinProbe::SpatialJoinProbe(
     int32_t operatorId,
     DriverCtx* driverCtx,
@@ -54,17 +152,29 @@ SpatialJoinProbe::SpatialJoinProbe(
           "SpatialJoinProbe"),
       joinType_(joinNode->joinType()),
       outputBatchSize_{outputBatchRows()},
-      joinNode_(joinNode) {
-  auto probeType = joinNode_->sources()[0]->outputType();
-  auto buildType = joinNode_->sources()[1]->outputType();
-  identityProjections_ = extractProjections(probeType, outputType_);
-  buildProjections_ = extractProjections(buildType, outputType_);
+      joinNode_(joinNode),
+      buildProjections_(extractProjections(
+          joinNode_->sources()[1]->outputType(),
+          outputType_)),
+      outputBuilder_{
+          outputBatchSize_,
+          outputType_,
+          extractProjections(
+              joinNode_->sources()[0]->outputType(),
+              outputType_), // these are the identity Projections
+          buildProjections_,
+          *operatorCtx_} {
+  identityProjections_ =
+      extractProjections(joinNode_->sources()[0]->outputType(), outputType_);
 }
+
+/////////
+// SETUP
 
 void SpatialJoinProbe::initialize() {
   Operator::initialize();
 
-  VELOX_CHECK(joinNode_ != nullptr);
+  VELOX_CHECK_NOT_NULL(joinNode_);
   if (joinNode_->joinCondition() != nullptr) {
     initializeFilter(
         joinNode_->joinCondition(),
@@ -154,29 +264,11 @@ void SpatialJoinProbe::close() {
   Operator::close();
 }
 
-void SpatialJoinProbe::addInput(RowVectorPtr input) {
-  VELOX_CHECK_NULL(input_);
-
-  // In getOutput(), we are going to wrap input in dictionaries a few rows at a
-  // time. Since lazy vectors cannot be wrapped in different dictionaries, we
-  // are going to load them here.
-  for (auto& child : input->children()) {
-    child->loadedVector();
-  }
-  input_ = std::move(input);
-  if (input_->size() > 0) {
-    probeSideEmpty_ = false;
-  }
-  VELOX_CHECK_EQ(buildIndex_, 0);
-}
-
 void SpatialJoinProbe::noMoreInput() {
   Operator::noMoreInput();
-  if (state_ != ProbeOperatorState::kRunning || input_ != nullptr) {
-    return;
+  if (state_ == ProbeOperatorState::kRunning && input_ == nullptr) {
+    setState(ProbeOperatorState::kFinish);
   }
-  setState(ProbeOperatorState::kFinish);
-  return;
 }
 
 bool SpatialJoinProbe::getBuildData(ContinueFuture* future) {
@@ -195,11 +287,49 @@ bool SpatialJoinProbe::getBuildData(ContinueFuture* future) {
   return true;
 }
 
+void SpatialJoinProbe::checkStateTransition(ProbeOperatorState state) {
+  VELOX_CHECK_NE(state_, state);
+  switch (state) {
+    case ProbeOperatorState::kRunning:
+      VELOX_CHECK_EQ(state_, ProbeOperatorState::kWaitForBuild);
+      break;
+    case ProbeOperatorState::kWaitForBuild:
+      [[fallthrough]];
+    case ProbeOperatorState::kFinish:
+      VELOX_CHECK_EQ(state_, ProbeOperatorState::kRunning);
+      break;
+    default:
+      VELOX_UNREACHABLE(probeOperatorStateName(state_));
+      break;
+  }
+}
+
+////////////////
+// INPUT/OUTPUT
+
+void SpatialJoinProbe::addInput(RowVectorPtr input) {
+  VELOX_CHECK_NULL(input_);
+  VELOX_CHECK_EQ(probeRow_, 0);
+  VELOX_CHECK(!probeHasMatch_);
+  VELOX_CHECK_EQ(buildIndex_, 0);
+  VELOX_CHECK_EQ(buildRow_, 0);
+
+  // In getOutput(), we are going to wrap input in dictionaries a few rows at a
+  // time. Since lazy vectors cannot be wrapped in different dictionaries, we
+  // are going to load them here.
+  for (auto& child : input->children()) {
+    child->loadedVector();
+  }
+  input_ = std::move(input);
+  ++probeCount_;
+}
+
 RowVectorPtr SpatialJoinProbe::getOutput() {
   if (state_ == ProbeOperatorState::kFinish ||
       state_ == ProbeOperatorState::kWaitForPeers) {
     return nullptr;
   }
+
   RowVectorPtr output{nullptr};
   while (output == nullptr) {
     // Need more input.
@@ -207,151 +337,102 @@ RowVectorPtr SpatialJoinProbe::getOutput() {
       break;
     }
 
+    // If the task owning this operator isn't running, there is no point
+    // to continue executing this procedure, which may be long in degenerate
+    // cases. Exit the working loop and let the Driver handle exiting
+    // gracefully in its own loop.
+    if (!operatorCtx_->task()->isRunning()) {
+      break;
+    }
+
+    if (shouldYield()) {
+      break;
+    }
+
     // Generate actual join output by processing probe and build matches, and
     // probe mismaches (for left joins).
     output = generateOutput();
+  }
+
+  if (output != nullptr) {
+    ++outputCount_;
   }
   return output;
 }
 
 RowVectorPtr SpatialJoinProbe::generateOutput() {
-  // If addToOutput() returns false, output_ is filled. Need to produce it.
-  if (!addToOutput()) {
-    VELOX_CHECK_GT(output_->size(), 0);
-    return std::move(output_);
-  }
-
-  // Try to advance the probe cursor; call finish if no more probe input.
-  if (advanceProbe()) {
-    finishProbeInput();
-    if (numOutputRows_ == 0) {
-      // output_ can only be re-used across probe rows within the same input_.
-      // Here we have to abandon the emtpy non-null output_ before we advance to
-      // the next probe input.
-      output_ = nullptr;
-    }
-  }
-
-  if (!readyToProduceOutput()) {
-    return nullptr;
-  }
-
-  output_->resize(numOutputRows_);
-  return std::move(output_);
-}
-
-bool SpatialJoinProbe::readyToProduceOutput() {
-  if (!output_ || numOutputRows_ == 0) {
-    return false;
-  }
-
-  // If the input_ has no remaining rows or the output_ is fully filled,
-  // it's right time for output.
-  return !input_ || numOutputRows_ >= outputBatchSize_;
-}
-
-bool SpatialJoinProbe::advanceProbe() {
-  if (hasProbedAllBuildData()) {
-    probeRow_ += 1;
-    probeRowHasMatch_ = false;
-    buildIndex_ = 0;
-
-    // If we finished processing the probe side.
-    if (probeRow_ >= input_->size()) {
-      return true;
-    }
-  }
-  return false;
-}
-
-bool SpatialJoinProbe::addToOutput() {
   VELOX_CHECK_NOT_NULL(input_);
-  prepareOutput();
+  VELOX_CHECK_GT(input_->size(), probeRow_);
+  outputBuilder_.initializeOutput(input_, pool());
 
-  while (!hasProbedAllBuildData()) {
-    const auto& currentBuild = buildVectors_.value()[buildIndex_];
-
-    // Empty build vector; move to the next.
-    if (currentBuild->size() == 0) {
-      ++buildIndex_;
-      buildRow_ = 0;
-      continue;
-    }
-
-    // Only re-calculate the filter if we have a new build vector.
-    if (buildRow_ == 0) {
-      evaluateSpatialJoinFilter(currentBuild);
-    }
-
-    // Iterate over the filter results. For each match, add an output record.
-    for (vector_size_t i = buildRow_; i < decodedFilterResult_.size(); ++i) {
-      if (!isSpatialJoinConditionMatch(i)) {
-        continue;
-      }
-
-      addOutputRow(i);
-      ++numOutputRows_;
-      probeRowHasMatch_ = true;
-
-      // If the buffer is full, save state and produce it as output.
-      if (numOutputRows_ == outputBatchSize_) {
-        buildRow_ = i + 1;
-        copyBuildValues(currentBuild);
-        return false;
-      }
-    }
-
-    // Before moving to the next build vector, copy the needed ranges.
-    copyBuildValues(currentBuild);
-    ++buildIndex_;
-    buildRow_ = 0;
+  while (!isOutputDone()) {
+    // Fill output_ with the results from one row.  This may produce too
+    // much output and only partially complete.  If so, the next time we
+    // call this we'll get the next chunk.
+    //
+    // addProbeRowOutput is responsible for advancing probeRow_.
+    addProbeRowOutput();
   }
 
-  // Check if the current probed row needs to be added as a mismatch (for left
-  // and full outer joins).
-  checkProbeMismatchRow();
+  // If we've exhausted the input, release it.
+  if (probeRow_ >= input_->size()) {
+    finishProbeInput();
+  }
 
-  // Signals that all input has been generated for the probeRow and build
-  // vectors; safe to move to the next probe record.
-  return true;
+  return outputBuilder_.takeOutput();
 }
 
-void SpatialJoinProbe::prepareOutput() {
-  if (output_ != nullptr) {
-    return;
+// Return true if adding output stops early because output is full.
+void SpatialJoinProbe::addProbeRowOutput() {
+  VELOX_CHECK(buildVectors_.has_value());
+  VELOX_CHECK(!outputBuilder_.isOutputFull());
+
+  while (!isProbeRowDone()) {
+    addBuildVectorOutput(buildVectors_.value()[buildIndex_]);
+    if (outputBuilder_.isOutputFull()) {
+      // If full, don't advance buildIndex_ because we may not have exhausted
+      // the current vector.  Return instead of breaking so that we can add a
+      // mismatch row later if necessary.
+      return;
+    }
+    advanceBuildVector();
   }
 
-  std::vector<VectorPtr> localColumns(outputType_->size());
-
-  probeOutputIndices_ = allocateIndices(outputBatchSize_, pool());
-  rawProbeOutputIndices_ = probeOutputIndices_->asMutable<vector_size_t>();
-
-  for (const auto& projection : identityProjections_) {
-    localColumns[projection.outputChannel] = BaseVector::wrapInDictionary(
-        {},
-        probeOutputIndices_,
-        outputBatchSize_,
-        input_->childAt(projection.inputChannel));
+  // Now that we have finished the probe row, check if we need to add a probe
+  // mismatch record.
+  if (!probeHasMatch_ && needsProbeMismatch(joinType_)) {
+    outputBuilder_.addProbeMismatchRow(probeRow_);
   }
-
-  // For other join types, add build side projections
-  for (const auto& projection : buildProjections_) {
-    localColumns[projection.outputChannel] = BaseVector::create(
-        outputType_->childAt(projection.outputChannel),
-        outputBatchSize_,
-        operatorCtx_->pool());
-  }
-
-  numOutputRows_ = 0;
-  output_ = std::make_shared<RowVector>(
-      pool(), outputType_, nullptr, outputBatchSize_, std::move(localColumns));
+  // Advance here instead of the loop in generateOutput so that early return on
+  // full doesn't advance the probe.
+  advanceProbeRow();
 }
 
-void SpatialJoinProbe::evaluateSpatialJoinFilter(
-    const RowVectorPtr& buildVector) {
+void SpatialJoinProbe::addBuildVectorOutput(const RowVectorPtr& buildVector) {
+  if (FOLLY_UNLIKELY(buildRow_ == 0)) {
+    // Evaluate join filter for the whole vector just once.
+    evaluateJoinFilter(buildVector);
+  }
+
+  // Start where we left off: after the last buildRow_ that was processed.
+  while (!isBuildVectorDone(buildVector)) {
+    if (isJoinConditionMatch(buildRow_)) {
+      outputBuilder_.addOutputRow(probeRow_, buildRow_);
+      probeHasMatch_ = true;
+    }
+
+    // Advance buildRow_ even if full, since we're finished with this row.
+    ++buildRow_;
+  }
+
+  // Since we are copying from the current buildVector, we must copy here.
+  outputBuilder_.copyBuildValues(buildVector);
+}
+
+void SpatialJoinProbe::evaluateJoinFilter(const RowVectorPtr& buildVector) {
   // First step to process is to get a batch so we can evaluate the join
   // filter.
-  auto filterInput = getNextCrossProductBatch(
+  auto filterInput = getNextJoinBatch(
       buildVector,
       filterInputType_,
       filterProbeProjections_,
@@ -371,22 +452,13 @@ void SpatialJoinProbe::evaluateSpatialJoinFilter(
   decodedFilterResult_.decode(*filterOutput_, filterInputRows_);
 }
 
-RowVectorPtr SpatialJoinProbe::getNextCrossProductBatch(
+RowVectorPtr SpatialJoinProbe::getNextJoinBatch(
     const RowVectorPtr& buildVector,
     const RowTypePtr& outputType,
     const std::vector<IdentityProjection>& probeProjections,
-    const std::vector<IdentityProjection>& buildProjections) {
+    const std::vector<IdentityProjection>& buildProjections) const {
   VELOX_CHECK_GT(buildVector->size(), 0);
 
-  return genCrossProductMultipleBuildVectors(
-      buildVector, outputType, probeProjections, buildProjections);
-}
-
-RowVectorPtr SpatialJoinProbe::genCrossProductMultipleBuildVectors(
-    const RowVectorPtr& buildVector,
-    const RowTypePtr& outputType,
-    const std::vector<IdentityProjection>& probeProjections,
-    const std::vector<IdentityProjection>& buildProjections) {
   std::vector<VectorPtr> projectedChildren(outputType->size());
   const vector_size_t numOutputRows = buildVector->size();
 
@@ -404,68 +476,14 @@ RowVectorPtr SpatialJoinProbe::genCrossProductMultipleBuildVectors(
       pool(), outputType, nullptr, numOutputRows, std::move(projectedChildren));
 }
 
-void SpatialJoinProbe::addOutputRow(vector_size_t buildRow) {
-  // Probe side is always a dictionary; just populate the index.
-  rawProbeOutputIndices_[numOutputRows_] = probeRow_;
-
-  // For the build side, we accumulate the ranges to copy, then copy all of them
-  // at once. If records are consecutive and can have a single copy range run.
-  if (!buildCopyRanges_.empty() &&
-      (buildCopyRanges_.back().sourceIndex + buildCopyRanges_.back().count) ==
-          buildRow) {
-    ++buildCopyRanges_.back().count;
-  } else {
-    buildCopyRanges_.push_back({buildRow, numOutputRows_, 1});
-  }
-}
-
-void SpatialJoinProbe::copyBuildValues(const RowVectorPtr& buildVector) {
-  if (buildCopyRanges_.empty() || isLeftSemiProjectJoin(joinType_)) {
-    return;
-  }
-
-  for (const auto& projection : buildProjections_) {
-    const auto& buildChild = buildVector->childAt(projection.inputChannel);
-    const auto& outputChild = output_->childAt(projection.outputChannel);
-    outputChild->copyRanges(buildChild.get(), buildCopyRanges_);
-  }
-  buildCopyRanges_.clear();
-}
-
-void SpatialJoinProbe::checkProbeMismatchRow() {
-  // If we are processing the last batch of the build side, check if we need
-  // to add a probe mismatch record.
-  if (needsProbeMismatch(joinType_) && hasProbedAllBuildData() &&
-      !probeRowHasMatch_) {
-    prepareOutput();
-    addProbeMismatchRow();
-    ++numOutputRows_;
-  }
-}
-
-void SpatialJoinProbe::addProbeMismatchRow() {
-  // Probe side is always a dictionary; just populate the index.
-  rawProbeOutputIndices_[numOutputRows_] = probeRow_;
-
-  // Null out build projections.
-  for (const auto& projection : buildProjections_) {
-    const auto& outputChild = output_->childAt(projection.outputChannel);
-    outputChild->setNull(numOutputRows_, true);
-  }
-}
-
 void SpatialJoinProbe::finishProbeInput() {
   VELOX_CHECK_NOT_NULL(input_);
   input_.reset();
-  buildIndex_ = 0;
   probeRow_ = 0;
 
-  if (!noMoreInput_) {
-    return;
+  if (noMoreInput_) {
+    setState(ProbeOperatorState::kFinish);
   }
-
-  setState(ProbeOperatorState::kFinish);
-  return;
 }
 
 } // namespace facebook::velox::exec

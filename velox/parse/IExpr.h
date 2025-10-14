@@ -82,7 +82,11 @@ class IExpr {
 
   virtual std::string toString() const = 0;
 
+  /// Returns a copy of this expression with the given inputs.
   virtual ExprPtr replaceInputs(std::vector<ExprPtr> newInputs) const = 0;
+
+  /// Returns a copy of this expression with the alias removed.
+  virtual ExprPtr dropAlias() const = 0;
 
   size_t hash() const {
     size_t hash = localHash();

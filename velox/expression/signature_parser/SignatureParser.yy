@@ -27,13 +27,15 @@
     #define yylex(x) scanner->lex(x)
 }
 
-%token               LPAREN RPAREN COMMA ARRAY MAP ROW FUNCTION
+%token               LPAREN RPAREN COMMA ARRAY MAP ROW FUNCTION ELLIPSIS
 %token <std::string> WORD VARIABLE QUOTED_ID DECIMAL
 %token YYEOF         0
 
+%expect 0
+
 %nterm <std::shared_ptr<exec::TypeSignature>> special_type function_type decimal_type row_type array_type map_type
-%nterm <std::shared_ptr<exec::TypeSignature>> type named_type
-%nterm <std::vector<exec::TypeSignature>> type_list type_list_opt_names
+%nterm <std::shared_ptr<exec::TypeSignature>> type named_type row_field
+%nterm <std::vector<exec::TypeSignature>> type_list row_field_list
 %nterm <std::vector<std::string>> type_with_spaces
 
 %%
@@ -71,14 +73,24 @@ type_list : type                   { $$.push_back(*($1)); }
           | type_list COMMA type   { $1.push_back(*($3)); $$ = std::move($1); }
           ;
 
-type_list_opt_names : named_type                           { $$.push_back(*($1)); }
-                    | type_list_opt_names COMMA named_type { $1.push_back(*($3)); $$ = std::move($1); }
-                    | type                                 { $$.push_back(*($1)); }
-                    | type_list_opt_names COMMA type       { $1.push_back(*($3)); $$ = std::move($1); }
-                    ;
+row_field : named_type { $$ = $1; }
+          | type       { $$ = $1; }
+          ;
 
-row_type : ROW LPAREN type_list_opt_names RPAREN  { $$ = std::make_shared<exec::TypeSignature>("row", $3); }
-         ;
+row_field_list : row_field { $$.push_back(*($1)); }
+               | row_field_list COMMA row_field { $1.push_back(*($3)); $$ = std::move($1); }
+               ;
+
+row_type
+    : ROW LPAREN row_field RPAREN
+        { std::vector<exec::TypeSignature> params; params.push_back(*($3)); $$ = std::make_shared<exec::TypeSignature>("row", params); }
+    | ROW LPAREN row_field COMMA ELLIPSIS RPAREN
+        { if ($3->rowFieldName().has_value()) { VELOX_FAIL("Homogeneous row cannot have a field name"); } std::vector<exec::TypeSignature> params; params.push_back(*($3)); $$ = std::make_shared<exec::TypeSignature>("row", params, std::nullopt, true); }
+    | ROW LPAREN row_field COMMA row_field_list RPAREN
+        { std::vector<exec::TypeSignature> params; params.push_back(*($3)); for (auto& f : $5) { params.push_back(f); } $$ = std::make_shared<exec::TypeSignature>("row", params); }
+    ;
+
+// Homogeneous rows use only the explicit pattern: row(T, ...)
 
 array_type : ARRAY LPAREN type RPAREN             { $$ = std::make_shared<exec::TypeSignature>(exec::TypeSignature("array", { *($3) })); }
            | ARRAY LPAREN type_with_spaces RPAREN { $$ = std::make_shared<exec::TypeSignature>(exec::TypeSignature("array", { *inferTypeWithSpaces($3) })); }

@@ -99,7 +99,11 @@ class NoopArbitrator : public MemoryArbitrator {
   }
 
   void removePool(MemoryPool* pool) override {
-    VELOX_CHECK_EQ(pool->reservedBytes(), 0);
+    VELOX_CHECK_EQ(
+        pool->reservedBytes(),
+        0,
+        "Memory pool has unexpected reserved bytes on removal: {}",
+        pool->name());
   }
 
   // Noop arbitrator has no memory capacity limit so no operation needed for

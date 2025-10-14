@@ -144,6 +144,9 @@ class SpatialJoinTest : public OperatorTestBase {
                     .localPartition({})
                     .planNode(),
                 predicate,
+                "left_g",
+                "right_g",
+                std::nullopt,
                 {"left_g", "right_g"},
                 joinType)
             .project(
@@ -186,6 +189,23 @@ TEST_F(SpatialJoinTest, testSimpleSpatialLeftJoin) {
       core::JoinType::kLeft,
       {"POINT (1 1)", "POINT (1 2)"},
       {"POINT (1 1)", std::nullopt});
+}
+
+TEST_F(SpatialJoinTest, testSpatialJoinNullRows) {
+  runTest(
+      {"POINT (0 0)", std::nullopt, "POINT (1 1)", std::nullopt},
+      {"POINT (0 0)", "POINT (1 1)", std::nullopt, std::nullopt},
+      "ST_Intersects(left_g, right_g)",
+      core::JoinType::kInner,
+      {"POINT (0 0)", "POINT (1 1)"},
+      {"POINT (0 0)", "POINT (1 1)"});
+  runTest(
+      {"POINT (0 0)", std::nullopt, "POINT (2 2)", std::nullopt},
+      {"POINT (0 0)", "POINT (1 1)", std::nullopt, std::nullopt},
+      "ST_Intersects(left_g, right_g)",
+      core::JoinType::kLeft,
+      {"POINT (0 0)", "POINT (2 2)", std::nullopt, std::nullopt},
+      {"POINT (0 0)", std::nullopt, std::nullopt, std::nullopt});
 }
 
 // Test geometries that don't intersect but their envelopes do.
@@ -338,6 +358,9 @@ TEST_F(SpatialJoinTest, failOnGroupedExecution) {
                   .localPartition({})
                   .planNode(),
               "ST_Intersects(left_g, right_g)",
+              "left_g",
+              "right_g",
+              std::nullopt,
               {"left_g", "right_g"},
               core::JoinType::kInner)
           .project(

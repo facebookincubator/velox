@@ -70,6 +70,14 @@ VectorFuzzer::Options makeVectorFuzzerOptions() {
   return options;
 }
 
+template <typename T>
+void removeFromVector(std::vector<T>& vec, const T& value) {
+  auto it = std::find(vec.begin(), vec.end(), value);
+  if (it != vec.end()) {
+    vec.erase(it);
+  }
+}
+
 bool hasUnsupportedMapKey(const TypePtr& type) {
   switch (type->kind()) {
     case TypeKind::MAP: {
@@ -219,6 +227,7 @@ std::vector<std::vector<RowVectorPtr>> runTaskCursors(
   }
   std::vector<std::vector<RowVectorPtr>> results;
   constexpr std::chrono::seconds kTaskTimeout(10);
+  results.reserve(futures.size());
   for (auto& future : futures) {
     results.push_back(std::move(future).get(kTaskTimeout));
   }
@@ -559,12 +568,17 @@ void TableEvolutionFuzzer::run() {
       2 * config_.evolutionCount - 1);
   RowVectorPtr finalExpectedData;
 
+  folly::F14FastMap<int, folly::F14FastSet<std::string>> globalMapColumnKeys;
+  std::vector<int> globallyConsistentColumnIndexVector;
+
   createWriteTasks(
       testSetups,
       bucketColumnIndices,
       tableOutputRootDir->getPath(),
       writeTasks,
-      finalExpectedData);
+      finalExpectedData,
+      globalMapColumnKeys,
+      globallyConsistentColumnIndexVector);
 
   auto executor = folly::getGlobalCPUExecutor();
   auto writeResults = runTaskCursors(writeTasks, *executor);
@@ -618,10 +632,20 @@ void TableEvolutionFuzzer::run() {
   }
 
   std::vector<std::shared_ptr<TaskCursor>> scanTasks(2);
-  scanTasks[0] =
-      makeScanTask(rowType, std::move(actualSplits), pushownConfig, false);
-  scanTasks[1] =
-      makeScanTask(rowType, std::move(expectedSplits), pushownConfig, true);
+  scanTasks[0] = makeScanTask(
+      rowType,
+      std::move(actualSplits),
+      pushownConfig,
+      false,
+      globalMapColumnKeys,
+      globallyConsistentColumnIndexVector);
+  scanTasks[1] = makeScanTask(
+      rowType,
+      std::move(expectedSplits),
+      pushownConfig,
+      true,
+      globalMapColumnKeys,
+      globallyConsistentColumnIndexVector);
 
   ScopedOOMInjector oomInjectorReadPath(
       [this]() -> bool { return folly::Random::oneIn(10, rng_); },
@@ -799,7 +823,9 @@ std::unique_ptr<TaskCursor> TableEvolutionFuzzer::makeWriteTask(
     const std::string& outputDir,
     const std::vector<column_index_t>& bucketColumnIndices,
     FuzzerGenerator& rng,
-    bool enableFlatMap) {
+    bool enableFlatMap,
+    folly::F14FastMap<int, folly::F14FastSet<std::string>>& globalMapColumnKeys,
+    std::vector<int>& globallyCompatibleFlatmapColumns) {
   auto builder = PlanBuilder().values({data});
 
   // Create serdeParameters using proper dwrf::Config for flatmap configuration
@@ -813,6 +839,7 @@ std::unique_ptr<TaskCursor> TableEvolutionFuzzer::makeWriteTask(
       if (setup.schema->childAt(i)->isMap()) {
         // Check if this specific map column has any empty elements
         if (hasEmptyElement(data, i)) {
+          removeFromVector(globallyCompatibleFlatmapColumns, i);
           continue;
         }
 
@@ -822,7 +849,76 @@ std::unique_ptr<TaskCursor> TableEvolutionFuzzer::makeWriteTask(
             supportedMapColumnIndices.push_back(static_cast<uint32_t>(i));
             VLOG(1) << "Write column " << setup.schema->nameOf(i)
                     << " as flatmap";
+
+            // Extract actual keys from the map data and collect directly into
+            // global set
+            SelectivityVector allRows(data->childAt(i)->size());
+            DecodedVector decodedMap(*data->childAt(i), allRows);
+            auto* mapVector = decodedMap.base()->asChecked<MapVector>();
+            if (mapVector->size() > 0) {
+              auto keys = mapVector->mapKeys();
+
+              if (keys) {
+                // Collect keys directly into the global set
+                auto& uniqueKeys = globalMapColumnKeys[static_cast<int>(i)];
+
+                // Iterate through the decoded rows, not the raw mapVector
+                // indices
+                for (vector_size_t row = 0; row < data->childAt(i)->size();
+                     ++row) {
+                  auto decodedIndex = decodedMap.index(row);
+                  if (!decodedMap.isNullAt(row) &&
+                      !mapVector->isNullAt(decodedIndex)) {
+                    // Get the map entry for this decoded row
+                    auto mapOffset = mapVector->offsetAt(decodedIndex);
+                    auto mapSize = mapVector->sizeAt(decodedIndex);
+
+                    // Process all keys in this map entry
+                    for (vector_size_t keyIdx = 0; keyIdx < mapSize; ++keyIdx) {
+                      auto keyPosition = mapOffset + keyIdx;
+                      if (!keys->isNullAt(keyPosition)) {
+                        std::string keyStr;
+                        if (keys->type()->isVarchar() ||
+                            keys->type()->isVarbinary()) {
+                          auto* keyVector = keys->asFlatVector<StringView>();
+                          auto keyView = keyVector->valueAt(keyPosition);
+                          keyStr = std::string(keyView);
+                        } else if (keys->type()->isInteger()) {
+                          auto* keyVector = keys->asFlatVector<int32_t>();
+                          auto keyVal = keyVector->valueAt(keyPosition);
+                          keyStr = std::to_string(keyVal);
+                        } else if (keys->type()->isBigint()) {
+                          auto* keyVector = keys->asFlatVector<int64_t>();
+                          auto keyVal = keyVector->valueAt(keyPosition);
+                          keyStr = std::to_string(keyVal);
+                        } else if (keys->type()->isSmallint()) {
+                          auto* keyVector = keys->asFlatVector<int16_t>();
+                          auto keyVal = keyVector->valueAt(keyPosition);
+                          keyStr = std::to_string(keyVal);
+                        } else if (keys->type()->isTinyint()) {
+                          auto* keyVector = keys->asFlatVector<int8_t>();
+                          auto keyVal = keyVector->valueAt(keyPosition);
+                          keyStr = std::to_string(keyVal);
+                        } else {
+                          // This should not be reached since
+                          // hasUnsupportedMapKey filters out unsupported types
+                          VELOX_UNREACHABLE(
+                              "Unsupported map key type: {}",
+                              keys->type()->toString());
+                        }
+                        uniqueKeys.insert(keyStr);
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          } else {
+            // Remove this column from globallyCompatibleFlatmapColumns
+            removeFromVector(globallyCompatibleFlatmapColumns, i);
           }
+        } else {
+          removeFromVector(globallyCompatibleFlatmapColumns, i);
         }
       }
     }
@@ -906,22 +1002,79 @@ VectorPtr TableEvolutionFuzzer::liftToPrimitiveType(
       std::vector<BufferPtr>({}));
 }
 
+RowTypePtr TableEvolutionFuzzer::buildFlatmapAsStructSchema(
+    const RowTypePtr& tableSchema,
+    const folly::F14FastMap<int, folly::F14FastSet<std::string>>&
+        globalMapColumnKeys,
+    const std::vector<int>& globallyCompatibleFlatmapColumns) {
+  if (globallyCompatibleFlatmapColumns.empty()) {
+    return tableSchema;
+  }
+
+  VLOG(1) << "Setting up struct reading for "
+          << globallyCompatibleFlatmapColumns.size()
+          << " flatmap columns with real keys";
+
+  auto names = tableSchema->names();
+  auto types = tableSchema->children();
+
+  // Filter globalMapColumnKeys to only include globally compatible columns
+  std::unordered_map<int, folly::F14FastSet<std::string>> filteredMapColumnKeys;
+  for (int mapColumnIndex : globallyCompatibleFlatmapColumns) {
+    if (globalMapColumnKeys.find(mapColumnIndex) != globalMapColumnKeys.end()) {
+      // Add 50% probability to include this column in filteredMapColumnKeys
+      if (folly::Random::oneIn(2, rng_)) {
+        filteredMapColumnKeys[mapColumnIndex] =
+            globalMapColumnKeys.at(mapColumnIndex);
+      }
+    }
+  }
+
+  // Use the filteredMapColumnKeys for struct reading
+  for (const auto& [mapColumnIndex, keysSet] : filteredMapColumnKeys) {
+    // Convert map type to struct type for struct reading
+    auto finalMapType = types[mapColumnIndex]->asMap();
+    auto finalValueType = finalMapType.valueType();
+    // Convert F14FastSet to vector for ROW constructor
+    std::vector<std::string> keys(keysSet.begin(), keysSet.end());
+    // Construct struct schema with real keys from write time + final value
+    // type
+    std::vector<TypePtr> finalStructFieldTypes(keys.size(), finalValueType);
+    auto finalStructSchema = ROW(keys, finalStructFieldTypes);
+
+    // Replace the map type with struct type in the schema
+    types[mapColumnIndex] = finalStructSchema;
+  }
+
+  // Build new schema using struct reading for flatmap columns
+  return ROW(names, types);
+}
+
 std::unique_ptr<TaskCursor> TableEvolutionFuzzer::makeScanTask(
     const RowTypePtr& tableSchema,
     std::vector<Split> splits,
     const PushdownConfig& pushdownConfig,
-    bool useFiltersAsNode) {
+    bool useFiltersAsNode,
+    const folly::F14FastMap<int, folly::F14FastSet<std::string>>&
+        globalMapColumnKeys,
+    const std::vector<int>& globallyCompatibleFlatmapColumns) {
+  // Build schema for flatmap as struct reading
+  RowTypePtr newSchemaUsingStructReadingFlatMap = buildFlatmapAsStructSchema(
+      tableSchema, globalMapColumnKeys, globallyCompatibleFlatmapColumns);
+
   CursorParameters params;
   params.serialExecution = true;
   // TODO: Mix in filter and aggregate pushdowns.
-  params.planNode = PlanBuilder()
-                        .filtersAsNode(useFiltersAsNode)
-                        .tableScanWithPushDown(
-                            tableSchema,
-                            /*pushdownConfig=*/pushdownConfig,
-                            tableSchema,
-                            {})
-                        .planNode();
+  params.planNode =
+      PlanBuilder()
+          .filtersAsNode(useFiltersAsNode)
+          .tableScanWithPushDown(
+              newSchemaUsingStructReadingFlatMap, // Use struct schema for
+                                                  // flatmap reading
+              /*pushdownConfig=*/pushdownConfig,
+              tableSchema, // Original schema as dataColumns
+              {})
+          .planNode();
   auto cursor = TaskCursor::create(params);
   for (auto& split : splits) {
     cursor->task()->addSplit("0", std::move(split));
@@ -986,16 +1139,41 @@ void TableEvolutionFuzzer::createWriteTasks(
     const std::vector<column_index_t>& bucketColumnIndices,
     const std::string& tableOutputRootDirPath,
     std::vector<std::shared_ptr<TaskCursor>>& writeTasks,
-    RowVectorPtr& finalExpectedData) {
+    RowVectorPtr& finalExpectedData,
+    folly::F14FastMap<int, folly::F14FastSet<std::string>>& globalMapColumnKeys,
+    std::vector<int>& globallyConsistentColumnIndexVector) {
+  // Initialize globallyConsistentColumnIndexVector with all map column indices
+  // from the first schema, then filter out incompatible ones during processing
+  if (hasMapColumns(testSetups[0].schema)) {
+    for (int j = 0; j < testSetups[0].schema->size(); ++j) {
+      if (testSetups[0].schema->childAt(j)->isMap() &&
+          !hasUnsupportedMapKey(testSetups[0].schema->childAt(j))) {
+        globallyConsistentColumnIndexVector.push_back(j);
+      }
+    }
+  }
+
+  // Generate data and create write tasks in a single loop
   for (int i = 0; i < config_.evolutionCount; ++i) {
+    // Generate fresh data for each evolution step independently
     auto data = vectorFuzzer_.fuzzRow(testSetups[i].schema, kVectorSize, false);
     for (auto& child : data->children()) {
       BaseVector::flattenVector(child);
     }
+
     auto actualDir = fmt::format("{}/actual_{}", tableOutputRootDirPath, i);
     VELOX_CHECK(std::filesystem::create_directory(actualDir));
+
+    // Pass globally consistent columns to restrict flatmap usage
     writeTasks[2 * i] = makeWriteTask(
-        testSetups[i], data, actualDir, bucketColumnIndices, rng_, true);
+        testSetups[i],
+        data,
+        actualDir,
+        bucketColumnIndices,
+        rng_,
+        true,
+        globalMapColumnKeys,
+        globallyConsistentColumnIndexVector);
 
     if (i == config_.evolutionCount - 1) {
       finalExpectedData = std::move(data);
@@ -1012,7 +1190,9 @@ void TableEvolutionFuzzer::createWriteTasks(
         expectedDir,
         bucketColumnIndices,
         rng_,
-        true);
+        true,
+        globalMapColumnKeys,
+        globallyConsistentColumnIndexVector);
   }
 }
 

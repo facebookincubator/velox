@@ -13,10 +13,10 @@
 # limitations under the License.
 include_guard(GLOBAL)
 
-set(VELOX_SIMDJSON_VERSION 3.9.3)
+set(VELOX_SIMDJSON_VERSION 3.13.0)
 set(
   VELOX_SIMDJSON_BUILD_SHA256_CHECKSUM
-  2e3d10abcde543d3dd8eba9297522cafdcebdd1db4f51b28f3bc95bf1d6ad23c
+  07a1bb3587aac18fd6a10a83fe4ab09f1100ab39f0cb73baea1317826b9f9e0d
 )
 set(
   VELOX_SIMDJSON_SOURCE_URL

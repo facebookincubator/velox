@@ -60,7 +60,7 @@ function install_build_prerequisites {
     ninja-build python3-pip python3-devel wget which
 
   install_uv
-  uv_install cmake
+  uv_install cmake@3.31.1
 
   if [[ ${USE_CLANG} != "false" ]]; then
     install_clang15

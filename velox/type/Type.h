@@ -44,6 +44,7 @@
 #include "velox/type/StringView.h"
 #include "velox/type/Timestamp.h"
 #include "velox/type/Tree.h"
+#include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox {
 
@@ -1154,7 +1155,7 @@ class RowType : public TypeBase<TypeKind::ROW> {
 
   /// Returns type of the first child with matching name. Throws if child with
   /// this name doesn't exist.
-  const TypePtr& findChild(folly::StringPiece name) const;
+  const TypePtr& findChild(std::string_view name) const;
 
   /// Returns true if child with specified name exists.
   bool containsChild(std::string_view name) const;
@@ -1528,7 +1529,7 @@ class DateType final : public IntegerType {
   /// as an ISO 8601-formatted string.
   static std::string toIso8601(int32_t days);
 
-  int32_t toDays(folly::StringPiece in) const;
+  int32_t toDays(std::string_view in) const;
 
   int32_t toDays(const char* in, size_t len) const;
 
@@ -1580,6 +1581,28 @@ class TimeType final : public BigintType {
     return name();
   }
 
+  /// Returns the time 'value' (milliseconds since midnight) formatted as
+  /// HH:MM:SS.mmm .
+  /// It is the callers responsiblity to ensure that the value is in range
+  /// and converted to the right time zone.
+  StringView valueToString(int64_t value, char* const startPos) const;
+
+  /// Parses a time string in HH:MM:SS[.sss] format and returns milliseconds
+  /// since midnight. It is the caller's responsibility to ensure that the
+  /// input string is valid and handle error conditions as needed.
+  int64_t valueToTime(const StringView& timeStr) const;
+
+  /// Parses a time string in HH:MM:SS[.sss] format and returns milliseconds
+  /// since midnight, applying timezone conversion if provided.
+  /// @param timeStr The time string to parse
+  /// @param timeZone Optional timezone for conversion
+  /// @param sessionStartTimeMs Session start time in milliseconds for timezone
+  /// calculations
+  int64_t valueToTime(
+      const StringView& timeStr,
+      const tz::TimeZone* timeZone,
+      int64_t sessionStartTimeMs) const;
+
   folly::dynamic serialize() const override;
 
   static TypePtr deserialize(const folly::dynamic& /*obj*/) {
@@ -1593,6 +1616,10 @@ class TimeType final : public BigintType {
   bool isComparable() const override {
     return true;
   }
+
+  // When casting from TIME to varchar , the resultant varchar will always
+  // be 12 bytes long (HH:MM:SS.mmm).
+  static const size_t kTimeToVarcharRowSize = 12;
 };
 
 using TimeTypePtr = std::shared_ptr<const TimeType>;

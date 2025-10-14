@@ -675,16 +675,25 @@ DEBUG_ONLY_TEST_F(
           }
         }));
 
+    const auto spillDirectory = exec::test::TempDirectoryPath::create();
+    std::optional<common::SpillDiskOptions> spillOpts;
+    if (testData.enableSpill) {
+      spillOpts = common::SpillDiskOptions{
+          .spillDirPath = spillDirectory->getPath(),
+          .spillDirCreated = true,
+          .spillDirCreateCb = nullptr};
+    }
+
     auto task = exec::Task::create(
         "0",
         std::move(planFragment),
         0,
         std::move(queryCtx),
-        Task::ExecutionMode::kParallel);
-    const auto spillDirectory = exec::test::TempDirectoryPath::create();
-    if (testData.enableSpill) {
-      task->setSpillDirectory(spillDirectory->getPath());
-    }
+        Task::ExecutionMode::kParallel,
+        /*consumer=*/Consumer{},
+        /*memoryArbitrationPriority=*/0,
+        spillOpts,
+        /*onError=*/nullptr);
 
     // 'numDriversPerGroup' drivers max to execute one group at a time.
     task->start(numDriversPerGroup, testData.groupConcurrency);
@@ -817,15 +826,21 @@ DEBUG_ONLY_TEST_F(
         memory::testingRunArbitration(op->pool());
       }));
 
+  const auto spillDirectory = exec::test::TempDirectoryPath::create();
+  common::SpillDiskOptions spillOpts{
+      .spillDirPath = spillDirectory->getPath(),
+      .spillDirCreated = true,
+      .spillDirCreateCb = nullptr};
+
   auto task = exec::Task::create(
       "0",
       std::move(planFragment),
       0,
       std::move(queryCtx),
-      Task::ExecutionMode::kParallel);
-  const auto spillDirectory = exec::test::TempDirectoryPath::create();
-
-  task->setSpillDirectory(spillDirectory->getPath());
+      Task::ExecutionMode::kParallel,
+      Consumer{},
+      /*memoryArbitrationPriority=*/0,
+      spillOpts);
 
   // 'numDriversPerGroup' drivers max to execute one group at a time.
   task->start(numDriversPerGroup, 1);
@@ -848,8 +863,8 @@ DEBUG_ONLY_TEST_F(
   }
 
   // Total drivers should be numDriversPerGroup * (numGroups + 1), but since
-  // probe does not receive termination signal, it cannot signal the build side
-  // to finish. we expect only build's numDriversPerGroup finished.
+  // probe does not receive termination signal, it cannot signal the build
+  // side to finish. we expect only build's numDriversPerGroup finished.
   waitForFinishedDrivers(task, numDriversPerGroup);
 
   // 'Delete results' from output buffer triggers 'set all output consumed',

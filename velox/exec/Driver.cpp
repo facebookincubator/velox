@@ -443,8 +443,10 @@ inline void addInput(Operator* op, const RowVectorPtr& input) {
 }
 
 inline void getOutput(Operator* op, RowVectorPtr& result) {
-  result = op->getOutput();
-  if (FOLLY_UNLIKELY(op->shouldDropOutput())) {
+  auto output = op->getOutput();
+  if (FOLLY_LIKELY(!op->shouldDropOutput())) {
+    result = std::move(output); // Use move semantics to avoid ref counting
+  } else {
     result = nullptr;
   }
 }
@@ -1102,9 +1104,13 @@ std::string Driver::toString() const {
   }
 
   out << "{Operators: ";
-  for (auto& op : operators_) {
-    out << op->toString() << ", ";
-  }
+  std::vector<std::string> opStrs;
+  opStrs.reserve(operators_.size());
+  std::ranges::transform(
+      operators_, std::back_inserter(opStrs), [](const auto& op) {
+        return op->toString();
+      });
+  out << folly::join(", ", opStrs);
   out << "}";
   const auto ocs = opCallStatus();
   if (!ocs.empty()) {

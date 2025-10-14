@@ -48,7 +48,7 @@ VectorPtr newConstantFromString(
     if (isPartitionDateDaysSinceEpoch) {
       days = folly::to<int32_t>(value.value());
     } else {
-      days = DATE()->toDays(static_cast<folly::StringPiece>(value.value()));
+      days = DATE()->toDays(value.value());
     }
     return std::make_shared<ConstantVector<int32_t>>(
         pool, size, false, type, std::move(days));

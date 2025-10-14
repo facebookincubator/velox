@@ -412,7 +412,8 @@ TEST_F(PeriodicStatsReporterTest, basic) {
     ASSERT_EQ(counterMap.count(kMetricArbitratorFreeCapacityBytes.str()), 1);
     ASSERT_EQ(
         counterMap.count(kMetricArbitratorFreeReservedCapacityBytes.str()), 1);
-    ASSERT_EQ(counterMap.count(kMetricMemoryCacheNumEntries.str()), 1);
+    ASSERT_EQ(counterMap.count(kMetricMemoryCacheNumTinyEntries.str()), 1);
+    ASSERT_EQ(counterMap.count(kMetricMemoryCacheNumLargeEntries.str()), 1);
     ASSERT_EQ(counterMap.count(kMetricMemoryCacheNumEmptyEntries.str()), 1);
     ASSERT_EQ(counterMap.count(kMetricMemoryCacheNumSharedEntries.str()), 1);
     ASSERT_EQ(counterMap.count(kMetricMemoryCacheNumExclusiveEntries.str()), 1);
@@ -471,7 +472,7 @@ TEST_F(PeriodicStatsReporterTest, basic) {
     ASSERT_EQ(counterMap.count(kMetricSsdCacheAgedOutRegions.str()), 0);
     ASSERT_EQ(counterMap.count(kMetricSsdCacheRecoveredEntries.str()), 0);
     ASSERT_EQ(counterMap.count(kMetricSsdCacheReadWithoutChecksum.str()), 0);
-    ASSERT_EQ(counterMap.size(), 23);
+    ASSERT_EQ(counterMap.size(), 24);
   }
 
   // Update stats
@@ -554,7 +555,7 @@ TEST_F(PeriodicStatsReporterTest, basic) {
     ASSERT_EQ(counterMap.count(kMetricSsdCacheAgedOutRegions.str()), 1);
     ASSERT_EQ(counterMap.count(kMetricSsdCacheRecoveredEntries.str()), 1);
     ASSERT_EQ(counterMap.count(kMetricSsdCacheReadWithoutChecksum.str()), 1);
-    ASSERT_EQ(counterMap.size(), 55);
+    ASSERT_EQ(counterMap.size(), 56);
   }
 }
 

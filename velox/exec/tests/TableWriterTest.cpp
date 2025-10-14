@@ -1822,7 +1822,7 @@ TEST_P(AllTableWriterTest, tableWriteOutputCheck) {
         ASSERT_EQ(writeFileName, targetFileName);
       } else {
         const std::string kParquetSuffix = ".parquet";
-        if (folly::StringPiece(targetFileName).endsWith(kParquetSuffix)) {
+        if (targetFileName.ends_with(kParquetSuffix)) {
           // Remove the .parquet suffix.
           auto trimmedFilename = targetFileName.substr(
               0, targetFileName.size() - kParquetSuffix.size());

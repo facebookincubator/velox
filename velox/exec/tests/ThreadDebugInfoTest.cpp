@@ -63,6 +63,7 @@ template <typename T>
 struct InduceSegFaultFunction {
   template <typename TResult, typename TInput>
   void call(TResult& out, const TInput& in) {
+    LOG(ERROR) << "error";
     int* nullpointer = nullptr;
     *nullpointer = 6;
   }
@@ -117,9 +118,10 @@ DEBUG_ONLY_TEST_F(ThreadDebugInfoDeathTest, withinTheCallingThread) {
 
 #ifndef IS_BUILDING_WITH_SAN
   ASSERT_DEATH(
-      (task->next()),
+      task->next(),
       ".*Fatal signal handler. Query Id= TaskCursorQuery_0 Task Id= single.execution.task.0.*");
 #endif
+  task->requestCancel();
 }
 
 DEBUG_ONLY_TEST_F(ThreadDebugInfoDeathTest, noThreadContextSet) {

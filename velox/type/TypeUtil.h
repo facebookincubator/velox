@@ -22,7 +22,11 @@
 
 namespace facebook::velox::type {
 
-velox::RowTypePtr concatRowTypes(
-    const std::vector<velox::RowTypePtr>& rowTypes);
+RowTypePtr concatRowTypes(const std::vector<RowTypePtr>& rowTypes);
+
+/// Returns the common child type if 'type' is a Row where all children are
+/// the same. Returns nullptr otherwise. Empty row returns nullptr.
+/// @pre 'type' must not be null.
+TypePtr tryGetHomogeneousRowChild(const TypePtr& type);
 
 } // namespace facebook::velox::type

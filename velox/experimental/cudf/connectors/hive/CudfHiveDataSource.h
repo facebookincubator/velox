@@ -71,7 +71,7 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
     return completedBytes_;
   }
 
-  std::unordered_map<std::string, RuntimeCounter> runtimeStats() override;
+  std::unordered_map<std::string, RuntimeMetric> getRuntimeStats() override;
 
  private:
   // Create a cudf::io::chunked_parquet_reader with the given split.

@@ -72,10 +72,6 @@ static void cleanup_dist(distribution* target) {
     }
     free(target->list);
   }
-  /* Allocated from permute_dist */
-  if (target->permute) {
-    free(target->permute);
-  }
 }
 
 void cleanup_dists(void) {

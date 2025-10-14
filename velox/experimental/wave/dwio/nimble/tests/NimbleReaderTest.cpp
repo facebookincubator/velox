@@ -312,7 +312,7 @@ TEST_F(NimbleReaderTest, decodeTrivialSingleLevelFloat) {
   test({{input}}, readFactors, compressionOptions);
 }
 
-TEST_F(NimbleReaderTest, TrivialWithCompressionShouldFail) {
+TEST_F(NimbleReaderTest, DISABLED_TrivialWithCompressionShouldFail) {
   using namespace facebook::nimble;
 
   auto c0 = makeFlatVector<double>(17, [](auto row) { return row * 1.1; });

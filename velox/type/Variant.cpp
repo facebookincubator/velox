@@ -23,7 +23,6 @@
 #include "velox/type/FloatingPointUtil.h"
 
 namespace facebook::velox {
-
 namespace {
 
 bool dispatchDynamicVariantEquality(
@@ -162,6 +161,7 @@ bool dispatchDynamicVariantEquality(
   return VELOX_DYNAMIC_TYPE_DISPATCH_METHOD(
       VariantEquality, equals<false>, a.kind(), a, b);
 }
+
 } // namespace
 
 std::string encloseWithQuote(std::string str) {
@@ -343,6 +343,11 @@ const folly::json::serialization_opts& getOpts() {
 } // namespace
 
 std::string Variant::toJson(const TypePtr& type) const {
+  VELOX_CHECK(type);
+  return toJson(*type);
+}
+
+std::string Variant::toJson(const Type& type) const {
   // todo(youknowjack): consistent story around std::stringifying, converting,
   // and other basic operations. Stringification logic should not be specific
   // to variants; it should be consistent for all map representations
@@ -351,9 +356,7 @@ std::string Variant::toJson(const TypePtr& type) const {
     return "null";
   }
 
-  VELOX_CHECK(type);
-
-  VELOX_CHECK_EQ(this->kind(), type->kind(), "Wrong type in Variant::toJson");
+  VELOX_CHECK_EQ(this->kind(), type.kind(), "Wrong type in Variant::toJson");
 
   switch (kind_) {
     case TypeKind::MAP: {
@@ -366,9 +369,9 @@ std::string Variant::toJson(const TypePtr& type) const {
           b += ",";
         }
         b += "{\"key\":";
-        b += pair.first.toJson(type->childAt(0));
+        b += pair.first.toJson(type.childAt(0));
         b += ",\"value\":";
-        b += pair.second.toJson(type->childAt(1));
+        b += pair.second.toJson(type.childAt(1));
         b += "}";
         first = false;
       }
@@ -383,13 +386,13 @@ std::string Variant::toJson(const TypePtr& type) const {
       uint32_t idx = 0;
       VELOX_CHECK_EQ(
           row.size(),
-          type->size(),
+          type.size(),
           "Wrong number of fields in a struct in Variant::toJson");
       for (auto& v : row) {
         if (!first) {
           b += ",";
         }
-        b += v.toJson(type->childAt(idx++));
+        b += v.toJson(type.childAt(idx++));
         first = false;
       }
       b += "]";
@@ -400,7 +403,7 @@ std::string Variant::toJson(const TypePtr& type) const {
       std::string b{};
       b += "[";
       bool first = true;
-      auto arrayElementType = type->childAt(0);
+      auto arrayElementType = type.childAt(0);
       for (auto& v : array) {
         if (!first) {
           b += ",";
@@ -423,7 +426,7 @@ std::string Variant::toJson(const TypePtr& type) const {
       return target;
     }
     case TypeKind::HUGEINT: {
-      VELOX_CHECK(type->isLongDecimal());
+      VELOX_CHECK(type.isLongDecimal());
       return DecimalUtil::toString(value<TypeKind::HUGEINT>(), type);
     }
     case TypeKind::TINYINT:
@@ -431,12 +434,12 @@ std::string Variant::toJson(const TypePtr& type) const {
     case TypeKind::SMALLINT:
       [[fallthrough]];
     case TypeKind::INTEGER:
-      if (type->isDate()) {
+      if (type.isDate()) {
         return '"' + DATE()->toString(value<TypeKind::INTEGER>()) + '"';
       }
       [[fallthrough]];
     case TypeKind::BIGINT:
-      if (type->isShortDecimal()) {
+      if (type.isShortDecimal()) {
         return DecimalUtil::toString(value<TypeKind::BIGINT>(), type);
       }
       [[fallthrough]];

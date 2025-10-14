@@ -325,6 +325,14 @@ TEST_P(CompactRowSerializerTest, fuzz) {
 VELOX_INSTANTIATE_TEST_SUITE_P(
     CompactRowSerializerTest,
     CompactRowSerializerTest,
-    testing::ValuesIn(CompactRowSerializerTest::getTestParams()));
+    testing::ValuesIn(CompactRowSerializerTest::getTestParams()),
+    [](const testing::TestParamInfo<TestParam>& info) {
+      return fmt::format(
+          "{}_{}_{}",
+          compressionKindToString(info.param.compressionKind),
+          info.param.appendRow ? "append" : "batch",
+          info.param.microBatchDeserialize ? "rowDeserialize"
+                                           : "batchDeserialize");
+    });
 } // namespace
 } // namespace facebook::velox::serializer

@@ -22,7 +22,6 @@
 #include <string>
 #include <vector>
 
-#include <folly/Range.h>
 #include "velox/type/Type.h"
 
 namespace facebook::velox::type::fbhive {
@@ -77,7 +76,7 @@ struct TokenMetadata {
 
 struct Token {
   TokenMetadata* metadata;
-  folly::StringPiece value;
+  std::string_view value;
 
   TokenType tokenType() const;
 
@@ -93,7 +92,7 @@ struct Token {
 };
 
 struct TokenAndRemaining : public Token {
-  folly::StringPiece remaining;
+  std::string_view remaining;
 };
 
 struct Result {
@@ -109,7 +108,7 @@ class HiveTypeParser {
  public:
   HiveTypeParser();
 
-  TypePtr parse(const std::string& ser);
+  TypePtr parse(std::string_view input);
 
  private:
   int8_t makeTokenId(TokenType tokenType) const;
@@ -125,12 +124,12 @@ class HiveTypeParser {
   Token nextToken(bool ignorePredefined = false);
 
   TokenAndRemaining nextToken(
-      folly::StringPiece sp,
+      std::string_view sv,
       bool ignorePredefined = false) const;
 
   TokenAndRemaining makeExtendedToken(
       TokenMetadata* tokenMetadata,
-      folly::StringPiece sp,
+      std::string_view sv,
       size_t len) const;
 
   template <TokenType KIND, velox::TypeKind TYPEKIND>
@@ -149,7 +148,7 @@ class HiveTypeParser {
   TokenMetadata* getMetadata(TokenType type) const;
 
   std::vector<std::unique_ptr<TokenMetadata>> metadata_;
-  folly::StringPiece remaining_;
+  std::string_view remaining_;
 };
 
 } // namespace facebook::velox::type::fbhive

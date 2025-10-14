@@ -16,11 +16,13 @@
 
 #pragma once
 
+#include <geos/geom/CoordinateArraySequence.h>
 #include <geos/geom/Geometry.h>
 #include <geos/geom/GeometryFactory.h>
 
 #include "velox/common/base/IOUtils.h"
 #include "velox/common/geospatial/GeometryConstants.h"
+#include "velox/expression/ComplexViewTypes.h"
 #include "velox/functions/prestosql/geospatial/GeometryUtils.h"
 #include "velox/type/StringView.h"
 
@@ -348,6 +350,56 @@ class GeometryDeserializer {
 
   static const std::unique_ptr<geos::geom::Envelope> deserializeEnvelope(
       const StringView& geometry);
+
+  template <typename T>
+  static std::unique_ptr<geos::geom::CoordinateArraySequence>
+  deserializePointsToCoordinate(
+      const exec::ArrayView<true, T>& input,
+      const std::string& functionName,
+      bool forbidDuplicates) {
+    std::unique_ptr<geos::geom::CoordinateArraySequence> coords =
+        std::make_unique<geos::geom::CoordinateArraySequence>(input.size(), 2);
+
+    double lastX = std::numeric_limits<double>::signaling_NaN();
+    double lastY = std::numeric_limits<double>::signaling_NaN();
+    for (int i = 0; i < input.size(); i++) {
+      if (!input[i].has_value()) {
+        VELOX_USER_FAIL(fmt::format(
+            "Invalid input to {}: input array contains null at index {}.",
+            functionName,
+            i));
+      }
+
+      StringView view = *input[i];
+
+      velox::common::InputByteStream inputStream(view.data());
+      auto geometryType =
+          inputStream.read<common::geospatial::GeometrySerializationType>();
+      if (geometryType !=
+          common::geospatial::GeometrySerializationType::POINT) {
+        VELOX_USER_FAIL(fmt::format(
+            "Non-point geometry in {} input at index {}.", functionName, i));
+      }
+      auto x = inputStream.read<double>();
+      auto y = inputStream.read<double>();
+      if (std::isnan(x) || std::isnan(y)) {
+        VELOX_USER_FAIL(fmt::format(
+            "Empty point in {} input at index {}.", functionName, i));
+      }
+      if (forbidDuplicates && x == lastX && y == lastY) {
+        VELOX_USER_FAIL(fmt::format(
+            "Repeated point sequence in {}: point {},{} at index {}.",
+            functionName,
+            x,
+            y,
+            i));
+      }
+      lastX = x;
+      lastY = y;
+      coords->setAt({x, y}, i);
+    }
+    return coords;
+  }
 
  private:
   static std::unique_ptr<geos::geom::Geometry> readGeometry(

@@ -56,7 +56,8 @@ std::unique_ptr<dwio::common::FormatData> ParquetParams::toFormatData(
     const std::shared_ptr<const dwio::common::TypeWithId>& type,
     const common::ScanSpec& /*scanSpec*/) {
   auto parquetData =
-      std::make_unique<ParquetData>(type, metaData_, pool(), sessionTimezone_);
+      std::make_unique<ParquetData>(
+  type, metaData_, pool(), runtimeStatistics(), sessionTimezone_);
   // Set the BufferedInput if available
   if (bufferedInput_) {
     parquetData->setBufferedInput(bufferedInput_);
@@ -179,6 +180,7 @@ dwio::common::PositionProvider ParquetData::seekToRowGroup(int64_t index) {
       type_,
       metadata.compression(),
       metadata.totalCompressedSize(),
+      stats_,
       sessionTimezone_);
   return dwio::common::PositionProvider(empty);
 }

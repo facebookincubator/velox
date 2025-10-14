@@ -216,5 +216,11 @@ TEST_F(UnsafeRowTest, nestedMaps) {
   testRoundTrip(data);
 }
 
+TEST_F(UnsafeRowTest, constantVector) {
+  auto data =
+      makeRowVector({BaseVector::createNullConstant(ROW({}), 1, pool_.get())});
+  testRoundTrip(data);
+}
+
 } // namespace
 } // namespace facebook::velox::row

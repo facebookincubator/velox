@@ -328,6 +328,8 @@ class FlatMapVector : public BaseVector {
   /// testing/validation purposes, and not for performance critical paths.
   MapVectorPtr toMapVector() const;
 
+  void transferOrCopyTo(velox::memory::MemoryPool* pool) override;
+
  private:
   void setDistinctKeysImpl(VectorPtr distinctKeys) {
     VELOX_CHECK(distinctKeys != nullptr);

@@ -30,7 +30,11 @@ std::string TypeSignature::toString() const {
   }
   out << baseName_;
   if (!parameters_.empty()) {
-    out << "(" << folly::join(",", parameters_) << ")";
+    if (isHomogeneousRow()) {
+      out << "(" << parameters_[0].toString() << ", ..." << ")";
+    } else {
+      out << "(" << folly::join(",", parameters_) << ")";
+    }
   }
   return out.str();
 }

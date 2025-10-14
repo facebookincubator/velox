@@ -252,6 +252,13 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   /// Frees an allocated buffer.
   virtual void free(void* p, int64_t size) = 0;
 
+  /// Transfer the ownership of memory at 'buffer' for 'size' bytes to the
+  /// memory pool 'dest'. Returns true if the transfer succeeds.
+  virtual bool
+  transferTo(MemoryPool* /*dest*/, void* /*buffer*/, uint64_t /*size*/) {
+    return false;
+  }
+
   /// Allocates one or more runs that add up to at least 'numPages', with the
   /// smallest run being at least 'minSizeClass' pages. 'minSizeClass' must be
   /// <= the size of the largest size class. The new memory is returned in 'out'
@@ -616,6 +623,8 @@ class MemoryPoolImpl : public MemoryPool {
 
   void free(void* p, int64_t size) override;
 
+  bool transferTo(MemoryPool* dest, void* buffer, uint64_t size) override;
+
   void allocateNonContiguous(
       MachinePageCount numPages,
       Allocation& out,
@@ -679,17 +688,7 @@ class MemoryPoolImpl : public MemoryPool {
 
   void setDestructionCallback(const DestructionCallback& callback);
 
-  std::string toString(bool detail = false) const override {
-    std::string result;
-    {
-      std::lock_guard<std::mutex> l(mutex_);
-      result = toStringLocked();
-    }
-    if (detail) {
-      result += "\n" + treeMemoryUsage();
-    }
-    return result;
-  }
+  std::string toString(bool detail = false) const override;
 
   /// Detailed debug pool state printout by traversing the pool structure from
   /// the root memory pool.
@@ -1011,7 +1010,12 @@ class MemoryPoolImpl : public MemoryPool {
 
   // Dump the recorded call sites of the memory allocations in
   // 'debugAllocRecords_' to the string.
-  std::string dumpRecordsDbg();
+  std::string dumpRecordsDbgLocked() const;
+
+  std::string dumpRecordsDbg() const {
+    std::lock_guard<std::mutex> l(debugAllocMutex_);
+    return dumpRecordsDbgLocked();
+  }
 
   void handleAllocationFailure(const std::string& failureMessage);
 
@@ -1076,7 +1080,7 @@ class MemoryPoolImpl : public MemoryPool {
   std::atomic_uint64_t numCapacityGrowths_{0};
 
   // Mutex for 'debugAllocRecords_'.
-  std::mutex debugAllocMutex_;
+  mutable std::mutex debugAllocMutex_;
 
   // Map from address to 'AllocationRecord'.
   std::unordered_map<uint64_t, AllocationRecord> debugAllocRecords_;

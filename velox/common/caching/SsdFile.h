@@ -32,16 +32,18 @@ class SsdFileTestHelper;
 class SsdCacheTestHelper;
 } // namespace test
 
-/// A 64 bit word describing a SSD cache entry in an SsdFile. The low 23 bits
-/// are the size, for a maximum entry size of 8MB. The high bits are the offset.
+/// The 'fileBits_' field is a 64 bit word describing a SSD cache entry in an
+/// SsdFile. The low 23 bits are the size, for a maximum entry size of 8MB. The
+/// high 41 bits are the offset. The 'checksum_' field is optional and is used
+/// only when the checksum feature is enabled, otherwise, its value is always 0.
 class SsdRun {
  public:
   static constexpr int32_t kSizeBits = 23;
 
-  SsdRun() : fileBits_(0) {}
+  SsdRun() = default;
 
   SsdRun(uint64_t offset, uint32_t size, uint32_t checksum)
-      : fileBits_((offset << kSizeBits) | ((size - 1))), checksum_(checksum) {
+      : fileBits_((offset << kSizeBits) | (size - 1)), checksum_(checksum) {
     VELOX_CHECK_LT(offset, 1L << (64 - kSizeBits));
     VELOX_CHECK_NE(size, 0);
     VELOX_CHECK_LE(size, 1 << kSizeBits);
@@ -58,9 +60,11 @@ class SsdRun {
     checksum_ = other.checksum_;
   }
 
-  void operator=(SsdRun&& other) {
+  void operator=(SsdRun&& other) noexcept {
     fileBits_ = other.fileBits_;
     checksum_ = other.checksum_;
+    other.fileBits_ = 0;
+    other.checksum_ = 0;
   }
 
   uint64_t offset() const {
@@ -83,8 +87,8 @@ class SsdRun {
 
  private:
   // Contains the file offset and size.
-  uint64_t fileBits_;
-  uint32_t checksum_;
+  uint64_t fileBits_{0};
+  uint32_t checksum_{0};
 };
 
 /// Represents an SsdFile entry that is planned for load or being loaded. This

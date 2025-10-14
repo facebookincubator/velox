@@ -63,6 +63,12 @@ void SpecialFormSignatureGenerator::addCastFromTimestampSignature(
   signatures.push_back(makeCastSignature("timestamp", toType));
 }
 
+void SpecialFormSignatureGenerator::addCastFromTimeSignature(
+    const std::string& toType,
+    std::vector<exec::FunctionSignaturePtr>& signatures) const {
+  signatures.push_back(makeCastSignature("time", toType));
+}
+
 void SpecialFormSignatureGenerator::addCastFromDateSignature(
     const std::string& toType,
     std::vector<exec::FunctionSignaturePtr>& signatures) const {
@@ -179,10 +185,14 @@ SpecialFormSignatureGenerator::getSignaturesForCast() const {
   addCastFromVarcharSignature("varchar", signatures);
   addCastFromDateSignature("varchar", signatures);
   addCastFromTimestampSignature("varchar", signatures);
+  addCastFromTimeSignature("varchar", signatures);
 
   // To timestamp type.
   addCastFromVarcharSignature("timestamp", signatures);
   addCastFromDateSignature("timestamp", signatures);
+
+  // To time type.
+  addCastFromVarcharSignature("time", signatures);
 
   // To date type.
   addCastFromVarcharSignature("date", signatures);

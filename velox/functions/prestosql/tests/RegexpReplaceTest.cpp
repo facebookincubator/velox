@@ -157,7 +157,7 @@ TEST_F(RegexpReplaceTest, lambda) {
       (evaluate(
           "regexp_replace(c0, '\\w(\\w*)', x -> (concat(upper(x[1]), lower(x[2]))))",
           input)),
-      "Array subscript out of bounds");
+      "Array subscript index out of bounds, Index: 2 Array size: 1");
 
   result = evaluate(
       "regexp_replace(c0, '\\w(\\w*)', x -> try(concat(upper(x[1]), lower(x[2]))))",
@@ -211,7 +211,7 @@ TEST_F(RegexpReplaceTest, lambda) {
       (evaluate(
           "regexp_replace(c0, '(\\w)(\\w*)', x -> if (x[1] = 's', x[10], concat(upper(x[1]), lower(x[2]))))",
           input)),
-      "Array subscript out of bounds");
+      "Array subscript index out of bounds, Index: 10 Array size: 2");
 
   result = evaluate(
       "regexp_replace(c0, '(\\w)(\\w*)', x -> try(if (x[1] = 's', x[10], concat(upper(x[1]), lower(x[2])))))",

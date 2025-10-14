@@ -13,10 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-/**
- * This file tests the performance of each JsonXXXFunction.call() with
- * expression framework and Velox vectors.
- */
+
 #include <folly/Benchmark.h>
 #include <folly/init/Init.h>
 #include "velox/functions/Registerer.h"
@@ -26,10 +23,15 @@
 #include "velox/functions/prestosql/types/JsonRegistration.h"
 #include "velox/functions/prestosql/types/JsonType.h"
 
+/// This file tests the performance of each JsonXXXFunction.call() with
+/// expression framework and Velox vectors.
+
 namespace facebook::velox::functions {
+
 void registerJsonVectorFunctions() {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_json_extract, "json_extract");
 }
+
 } // namespace facebook::velox::functions
 
 namespace facebook::velox::functions::prestosql {
@@ -59,10 +61,9 @@ struct FollyJsonExtractScalarFunction {
       out_type<Varchar>& result,
       const arg_type<Json>& json,
       const arg_type<Varchar>& jsonPath) {
-    const folly::StringPiece& jsonStringPiece = json;
-    const folly::StringPiece& jsonPathStringPiece = jsonPath;
+    // TODO: Remove explicit std::string_view cast.
     auto extractResult =
-        jsonExtractScalar(jsonStringPiece, jsonPathStringPiece);
+        jsonExtractScalar(std::string_view(json), std::string_view(jsonPath));
     if (extractResult.has_value()) {
       UDFOutputString::assign(result, *extractResult);
       return true;
@@ -80,8 +81,9 @@ struct FollyJsonExtractFunction {
       out_type<Json>& result,
       const arg_type<Json>& json,
       const arg_type<Varchar>& jsonPath) {
+    // TODO: Remove explicit std::string_view cast.
     auto extractResult =
-        jsonExtract(folly::StringPiece(json), folly::StringPiece(jsonPath));
+        jsonExtract(std::string_view(json), std::string_view(jsonPath));
     if (!extractResult.has_value() || extractResult.value().isNull()) {
       return false;
     }
@@ -159,9 +161,9 @@ struct FollyJsonSizeFunction {
       int64_t& result,
       const arg_type<Json>& json,
       const arg_type<Varchar>& jsonPath) {
-    const folly::StringPiece& jsonStringPiece = json;
-    const folly::StringPiece& jsonPathStringPiece = jsonPath;
-    auto extractResult = jsonExtract(jsonStringPiece, jsonPathStringPiece);
+    // TODO: Remove explicit std::string_view cast.
+    auto extractResult =
+        jsonExtract(std::string_view(json), std::string_view(jsonPath));
     if (!extractResult.has_value()) {
       return false;
     }

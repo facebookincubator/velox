@@ -221,10 +221,8 @@ RowTypePtr getDataType(
     const core::PlanNodePtr& tracedPlan,
     const std::string& tracedNodeId,
     size_t sourceIndex) {
-  const auto* traceNode = core::PlanNode::findFirstNode(
-      tracedPlan.get(), [&tracedNodeId](const core::PlanNode* node) {
-        return node->id() == tracedNodeId;
-      });
+  const auto* traceNode =
+      core::PlanNode::findNodeById(tracedPlan.get(), tracedNodeId);
   VELOX_CHECK_NOT_NULL(
       traceNode,
       "traced node id {} not found in the traced plan",
@@ -306,9 +304,7 @@ bool canTrace(const std::string& operatorType) {
 core::PlanNodePtr getTraceNode(
     const core::PlanNodePtr& plan,
     core::PlanNodeId nodeId) {
-  const auto* traceNode = core::PlanNode::findFirstNode(
-      plan.get(),
-      [&nodeId](const core::PlanNode* node) { return node->id() == nodeId; });
+  const auto* traceNode = core::PlanNode::findNodeById(plan.get(), nodeId);
   VELOX_CHECK_NOT_NULL(traceNode, "Failed to find node with id {}", nodeId);
   if (const auto* hashJoinNode =
           dynamic_cast<const core::HashJoinNode*>(traceNode)) {

@@ -26,9 +26,15 @@ using namespace facebook::velox;
 struct TestParam {
   common::CompressionKind compressionKind;
   bool appendRow;
+  bool microBatchDeserialize;
 
-  TestParam(common::CompressionKind _compressionKind, bool _appendRow)
-      : compressionKind(_compressionKind), appendRow(_appendRow) {}
+  TestParam(
+      common::CompressionKind _compressionKind,
+      bool _appendRow,
+      bool _microBatchDeserialize)
+      : compressionKind(_compressionKind),
+        appendRow(_appendRow),
+        microBatchDeserialize(_microBatchDeserialize) {}
 };
 
 class UnsafeRowSerializerTest : public ::testing::Test,
@@ -37,12 +43,18 @@ class UnsafeRowSerializerTest : public ::testing::Test,
  public:
   static std::vector<TestParam> getTestParams() {
     static std::vector<TestParam> testParams = {
-        {common::CompressionKind::CompressionKind_NONE, false},
-        {common::CompressionKind::CompressionKind_ZLIB, true},
-        {common::CompressionKind::CompressionKind_SNAPPY, false},
-        {common::CompressionKind::CompressionKind_ZSTD, true},
-        {common::CompressionKind::CompressionKind_LZ4, false},
-        {common::CompressionKind::CompressionKind_GZIP, true}};
+        {common::CompressionKind::CompressionKind_NONE, false, false},
+        {common::CompressionKind::CompressionKind_NONE, false, true},
+        {common::CompressionKind::CompressionKind_ZLIB, true, false},
+        {common::CompressionKind::CompressionKind_ZLIB, true, true},
+        {common::CompressionKind::CompressionKind_SNAPPY, false, false},
+        {common::CompressionKind::CompressionKind_SNAPPY, false, true},
+        {common::CompressionKind::CompressionKind_ZSTD, true, false},
+        {common::CompressionKind::CompressionKind_ZSTD, true, true},
+        {common::CompressionKind::CompressionKind_LZ4, false, false},
+        {common::CompressionKind::CompressionKind_LZ4, false, true},
+        {common::CompressionKind::CompressionKind_GZIP, true, false},
+        {common::CompressionKind::CompressionKind_GZIP, true, true}};
     return testParams;
   }
 
@@ -63,6 +75,7 @@ class UnsafeRowSerializerTest : public ::testing::Test,
         VectorSerde::Kind::kUnsafeRow);
     appendRow_ = GetParam().appendRow;
     compressionKind_ = GetParam().compressionKind;
+    microBatchDeserialize_ = GetParam().microBatchDeserialize;
     options_ = std::make_unique<VectorSerde::Options>(compressionKind_, 0.8);
   }
 
@@ -131,14 +144,121 @@ class UnsafeRowSerializerTest : public ::testing::Test,
     return std::make_unique<BufferInputStream>(std::move(ranges));
   }
 
+  std::unique_ptr<ByteInputStream> toByteStream(
+      const std::string_view& input,
+      size_t pageSize = 32) {
+    auto rawBytes = reinterpret_cast<uint8_t*>(const_cast<char*>(input.data()));
+    size_t offset = 0;
+    std::vector<ByteRange> ranges;
+
+    // Split the input buffer into many different pages.
+    while (offset < input.length()) {
+      ranges.push_back({
+          rawBytes + offset,
+          std::min<int32_t>(pageSize, input.length() - offset),
+          0,
+      });
+      offset += pageSize;
+    }
+
+    return std::make_unique<BufferInputStream>(std::move(ranges));
+  }
+
+  RowVectorPtr concatenateRowVectors(
+      const std::vector<RowVectorPtr>& rowVectors,
+      velox::memory::MemoryPool* pool) {
+    if (rowVectors.empty()) {
+      return nullptr;
+    }
+
+    // Ensure all RowVectors have the same schema.
+    auto rowType = rowVectors.front()->type();
+    for (const auto& rowVector : rowVectors) {
+      VELOX_CHECK(
+          rowVector->type()->equivalent(*rowType),
+          "RowVectors must have the same schema");
+    }
+
+    // Calculate total size.
+    vector_size_t totalSize = 0;
+    for (const auto& rowVector : rowVectors) {
+      totalSize += rowVector->size();
+    }
+
+    // Create nulls buffer if any input has nulls
+    BufferPtr nulls = nullptr;
+    for (const auto& rowVector : rowVectors) {
+      if (rowVector->nulls()) {
+        nulls = AlignedBuffer::allocate<bool>(totalSize, pool, bits::kNotNull);
+        break;
+      }
+    }
+
+    // Concatenate child vectors.
+    std::vector<VectorPtr> concatenatedChildren;
+    for (size_t i = 0; i < rowType->size(); ++i) {
+      std::vector<VectorPtr> childVectors;
+      for (const auto& rowVector : rowVectors) {
+        childVectors.push_back(rowVector->childAt(i));
+      }
+      concatenatedChildren.push_back(
+          BaseVector::create(rowType->childAt(i), totalSize, pool));
+      vector_size_t offset = 0;
+      for (const auto& childVector : childVectors) {
+        concatenatedChildren.back()->copy(
+            childVector.get(), offset, 0, childVector->size());
+        offset += childVector->size();
+      }
+    }
+
+    // Copy nulls if needed
+    if (nulls != nullptr) {
+      auto rawNulls = nulls->asMutable<uint64_t>();
+      vector_size_t offset = 0;
+      for (const auto& rowVector : rowVectors) {
+        if (rowVector->nulls()) {
+          bits::copyBits(
+              rowVector->nulls()->as<uint64_t>(),
+              0,
+              rawNulls,
+              offset,
+              rowVector->size());
+        }
+        offset += rowVector->size();
+      }
+    }
+
+    return std::make_shared<RowVector>(
+        pool, rowType, nulls, totalSize, std::move(concatenatedChildren));
+  }
+
   RowVectorPtr deserialize(
       std::shared_ptr<const RowType> rowType,
       const std::vector<std::string_view>& input) {
     auto byteStream = toByteStream(input);
-
     RowVectorPtr result;
-    getVectorSerde()->deserialize(
-        byteStream.get(), pool_.get(), rowType, &result, options_.get());
+    if (microBatchDeserialize_) {
+      static constexpr int32_t kBatchSize = 3;
+      std::unique_ptr<RowIterator> rowIterator;
+      std::vector<RowVectorPtr> results;
+      while (!byteStream->atEnd() ||
+             (rowIterator != nullptr && rowIterator->hasNext())) {
+        results.emplace_back();
+        dynamic_cast<serializer::spark::UnsafeRowVectorSerde*>(getVectorSerde())
+            ->deserialize(
+                byteStream.get(),
+                rowIterator,
+                kBatchSize,
+                rowType,
+                &results.back(),
+                pool_.get(),
+                options_.get());
+      }
+      result = concatenateRowVectors(results, pool_.get());
+    } else {
+      getVectorSerde()->deserialize(
+          byteStream.get(), pool_.get(), rowType, &result, options_.get());
+    }
     return result;
   }
 
@@ -206,6 +326,7 @@ class UnsafeRowSerializerTest : public ::testing::Test,
   common::CompressionKind compressionKind_;
   std::unique_ptr<VectorSerde::Options> options_;
   bool appendRow_;
+  bool microBatchDeserialize_;
 };
 
 // These expected binary buffers were samples taken using Spark's java code.
@@ -512,4 +633,12 @@ TEST_P(UnsafeRowSerializerTest, multiPage) {
 VELOX_INSTANTIATE_TEST_SUITE_P(
     UnsafeRowSerializerTest,
     UnsafeRowSerializerTest,
-    testing::ValuesIn(UnsafeRowSerializerTest::getTestParams()));
+    testing::ValuesIn(UnsafeRowSerializerTest::getTestParams()),
+    [](const testing::TestParamInfo<TestParam>& info) {
+      return fmt::format(
+          "{}_{}_{}",
+          compressionKindToString(info.param.compressionKind),
+          info.param.appendRow ? "append" : "batch",
+          info.param.microBatchDeserialize ? "rowDeserialize"
+                                           : "batchDeserialize");
+    });
