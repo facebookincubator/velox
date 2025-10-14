@@ -29,6 +29,8 @@ struct CpuWallTiming {
   uint64_t wallNanos = 0;
   uint64_t cpuNanos = 0;
 
+  auto operator<=>(const CpuWallTiming&) const = default;
+
   void add(const CpuWallTiming& other) {
     count += other.count;
     cpuNanos += other.cpuNanos;

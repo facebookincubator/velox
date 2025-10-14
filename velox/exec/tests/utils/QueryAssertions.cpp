@@ -1444,7 +1444,7 @@ void waitForAllTasksToBeDeleted(uint64_t maxWaitUs) {
 void cancelAllTasks() {
   std::vector<std::shared_ptr<Task>> pendingTasks = Task::getRunningTasks();
   for (const auto& task : pendingTasks) {
-    if (!task->isRunning()) {
+    if (task->isRunning()) {
       task->requestCancel();
     }
   }

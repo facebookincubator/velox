@@ -443,8 +443,10 @@ inline void addInput(Operator* op, const RowVectorPtr& input) {
 }
 
 inline void getOutput(Operator* op, RowVectorPtr& result) {
-  result = op->getOutput();
-  if (FOLLY_UNLIKELY(op->shouldDropOutput())) {
+  auto output = op->getOutput();
+  if (FOLLY_LIKELY(!op->shouldDropOutput())) {
+    result = std::move(output); // Use move semantics to avoid ref counting
+  } else {
     result = nullptr;
   }
 }

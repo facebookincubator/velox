@@ -2925,8 +2925,8 @@ TEST_P(MultiFragmentTest, mergeSmallBatchesInExchange) {
   } else {
     test(1, 1'000);
     test(1'000, 72);
-    test(10'000, 7);
-    test(100'000, 1);
+    test(10'000, 8);
+    test(100'000, 2);
   }
 }
 

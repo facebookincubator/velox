@@ -15,6 +15,7 @@
  */
 #include "velox/exec/Exchange.h"
 
+#include "velox/common/Casts.h"
 #include "velox/common/serialization/Serializable.h"
 #include "velox/exec/Task.h"
 #include "velox/serializers/CompactRowSerializer.h"
@@ -53,6 +54,20 @@ std::unique_ptr<VectorSerde::Options> getVectorSerdeOptions(
       common::stringToCompressionKind(queryConfig.shuffleCompressionKind());
   return options;
 }
+
+std::unique_ptr<folly::IOBuf> mergePages(
+    std::vector<std::unique_ptr<SerializedPage>>& pages) {
+  VELOX_CHECK(!pages.empty());
+  std::unique_ptr<folly::IOBuf> mergedBufs;
+  for (const auto& page : pages) {
+    if (mergedBufs == nullptr) {
+      mergedBufs = page->getIOBuf();
+    } else {
+      mergedBufs->appendToChain(page->getIOBuf());
+    }
+  }
+  return mergedBufs;
+}
 } // namespace
 
 Exchange::Exchange(
@@ -85,42 +100,42 @@ void Exchange::addRemoteTaskIds(std::vector<std::string>& remoteTaskIds) {
   stats_.wlock()->numSplits += remoteTaskIds.size();
 }
 
-bool Exchange::getSplits(ContinueFuture* future) {
+void Exchange::getSplits(ContinueFuture* future) {
   if (!processSplits_) {
-    return false;
+    return;
   }
   if (noMoreSplits_) {
-    return false;
+    return;
   }
   std::vector<std::string> remoteTaskIds;
   for (;;) {
     exec::Split split;
-    auto reason = operatorCtx_->task()->getSplitOrFuture(
+    const auto reason = operatorCtx_->task()->getSplitOrFuture(
         operatorCtx_->driverCtx()->splitGroupId, planNodeId(), split, *future);
-    if (reason == BlockingReason::kNotBlocked) {
-      if (split.hasConnectorSplit()) {
-        auto remoteSplit = std::dynamic_pointer_cast<RemoteConnectorSplit>(
-            split.connectorSplit);
-        VELOX_CHECK_NOT_NULL(remoteSplit, "Wrong type of split");
-        if (FOLLY_UNLIKELY(splitTracer_ != nullptr)) {
-          splitTracer_->write(split);
-        }
-        remoteTaskIds.push_back(remoteSplit->taskId);
-      } else {
-        addRemoteTaskIds(remoteTaskIds);
-        exchangeClient_->noMoreRemoteTasks();
-        noMoreSplits_ = true;
-        if (atEnd_) {
-          operatorCtx_->task()->multipleSplitsFinished(
-              false, stats_.rlock()->numSplits, 0);
-          recordExchangeClientStats();
-        }
-        return false;
-      }
-    } else {
+    if (reason != BlockingReason::kNotBlocked) {
       addRemoteTaskIds(remoteTaskIds);
-      return true;
+      return;
     }
+
+    if (split.hasConnectorSplit()) {
+      auto remoteSplit =
+          checked_pointer_cast<RemoteConnectorSplit>(split.connectorSplit);
+      if (FOLLY_UNLIKELY(splitTracer_ != nullptr)) {
+        splitTracer_->write(split);
+      }
+      remoteTaskIds.push_back(remoteSplit->taskId);
+      continue;
+    }
+
+    addRemoteTaskIds(remoteTaskIds);
+    exchangeClient_->noMoreRemoteTasks();
+    noMoreSplits_ = true;
+    if (atEnd_) {
+      operatorCtx_->task()->multipleSplitsFinished(
+          false, stats_.rlock()->numSplits, 0);
+      recordExchangeClientStats();
+    }
+    return;
   }
 }
 
@@ -130,7 +145,6 @@ BlockingReason Exchange::isBlocked(ContinueFuture* future) {
   }
 
   // Start fetching data right away. Do not wait for all splits to be available.
-
   if (!splitFuture_.valid()) {
     getSplits(&splitFuture_);
   }
@@ -159,6 +173,7 @@ BlockingReason Exchange::isBlocked(ContinueFuture* future) {
   }
 
   // Block until data becomes available.
+  VELOX_CHECK(dataFuture.valid());
   *future = std::move(dataFuture);
   return BlockingReason::kWaitForProducer;
 }
@@ -166,22 +181,6 @@ BlockingReason Exchange::isBlocked(ContinueFuture* future) {
 bool Exchange::isFinished() {
   return atEnd_ && currentPages_.empty();
 }
-
-namespace {
-std::unique_ptr<folly::IOBuf> mergePages(
-    std::vector<std::unique_ptr<SerializedPage>>& pages) {
-  VELOX_CHECK(!pages.empty());
-  std::unique_ptr<folly::IOBuf> mergedBufs;
-  for (const auto& page : pages) {
-    if (mergedBufs == nullptr) {
-      mergedBufs = page->getIOBuf();
-    } else {
-      mergedBufs->appendToChain(page->getIOBuf());
-    }
-  }
-  return mergedBufs;
-}
-} // namespace
 
 RowVectorPtr Exchange::getOutput() {
   auto* serde = getSerde();
@@ -210,78 +209,57 @@ RowVectorPtr Exchange::getOutput() {
     recordInputStats(rawInputBytes);
     return result_;
   }
-  if (serde->kind() == VectorSerde::Kind::kCompactRow) {
-    return getOutputFromCompactRows(serde);
-  }
-  if (serde->kind() == VectorSerde::Kind::kUnsafeRow) {
-    return getOutputFromUnsafeRows(serde);
-  }
-  VELOX_UNREACHABLE(
-      "Unsupported serde kind: {}", VectorSerde::kindName(serde->kind()));
+  return getOutputFromRows(serde);
 }
 
-RowVectorPtr Exchange::getOutputFromCompactRows(VectorSerde* serde) {
+RowVectorPtr Exchange::getOutputFromRows(VectorSerde* serde) {
   uint64_t rawInputBytes{0};
   if (currentPages_.empty()) {
-    VELOX_CHECK_NULL(compactRowInputStream_);
-    VELOX_CHECK_NULL(compactRowIterator_);
+    VELOX_CHECK_NULL(rowInputStream_);
+    VELOX_CHECK_NULL(rowIterator_);
     return nullptr;
   }
 
-  if (compactRowInputStream_ == nullptr) {
+  if (rowInputStream_ == nullptr) {
     std::unique_ptr<folly::IOBuf> mergedBufs = mergePages(currentPages_);
     rawInputBytes += mergedBufs->computeChainDataLength();
-    compactRowPages_ = std::make_unique<SerializedPage>(std::move(mergedBufs));
-    compactRowInputStream_ = compactRowPages_->prepareStreamForDeserialize();
+    rowPages_ = std::make_unique<SerializedPage>(std::move(mergedBufs));
+    rowInputStream_ = rowPages_->prepareStreamForDeserialize();
   }
 
-  auto numRows = kInitialOutputCompactRows;
-  if (estimatedCompactRowSize_.has_value()) {
+  auto numRows = kInitialOutputRows;
+  if (estimatedRowSize_.has_value()) {
     numRows = std::max(
-        (preferredOutputBatchBytes_ / estimatedCompactRowSize_.value()),
-        kInitialOutputCompactRows);
+        (preferredOutputBatchBytes_ / estimatedRowSize_.value()),
+        kInitialOutputRows);
   }
 
+  // Check if the serde supports batched deserialization
   serde->deserialize(
-      compactRowInputStream_.get(),
-      compactRowIterator_,
+      rowInputStream_.get(),
+      rowIterator_,
       numRows,
       outputType_,
       &result_,
       pool(),
       serdeOptions_.get());
+
   const auto numOutputRows = result_->size();
   VELOX_CHECK_GT(numOutputRows, 0);
 
-  estimatedCompactRowSize_ = std::max(
+  estimatedRowSize_ = std::max(
       result_->estimateFlatSize() / numOutputRows,
-      estimatedCompactRowSize_.value_or(1L));
+      estimatedRowSize_.value_or(1L));
 
-  if (compactRowInputStream_->atEnd() && compactRowIterator_ == nullptr) {
+  if (rowInputStream_->atEnd() && rowIterator_ == nullptr) {
     // only clear the input stream if we have reached the end of the row
     // iterator because row iterator may depend on input stream if serialized
     // rows are not compressed.
-    compactRowInputStream_ = nullptr;
-    compactRowPages_ = nullptr;
+    rowInputStream_ = nullptr;
+    rowPages_ = nullptr;
     currentPages_.clear();
   }
 
-  recordInputStats(rawInputBytes);
-  return result_;
-}
-
-RowVectorPtr Exchange::getOutputFromUnsafeRows(VectorSerde* serde) {
-  uint64_t rawInputBytes{0};
-  if (currentPages_.empty()) {
-    return nullptr;
-  }
-  std::unique_ptr<folly::IOBuf> mergedBufs = mergePages(currentPages_);
-  rawInputBytes += mergedBufs->computeChainDataLength();
-  auto mergedPages = std::make_unique<SerializedPage>(std::move(mergedBufs));
-  auto source = mergedPages->prepareStreamForDeserialize();
-  serde->deserialize(
-      source.get(), pool(), outputType_, &result_, serdeOptions_.get());
-  currentPages_.clear();
   recordInputStats(rawInputBytes);
   return result_;
 }
@@ -325,7 +303,7 @@ void Exchange::recordExchangeClientStats() {
     lockedStats->runtimeStats.insert({name, value});
   }
 
-  auto backgroundCpuTimeMs =
+  const auto backgroundCpuTimeMs =
       exchangeClientStats.find(ExchangeClient::kBackgroundCpuTimeMs);
   if (backgroundCpuTimeMs != exchangeClientStats.end()) {
     const CpuWallTiming backgroundTiming{

@@ -76,6 +76,7 @@ add_executable(
   ParallelProjectTest.cpp
   PartitionedOutputTest.cpp
   PlanNodeSerdeTest.cpp
+  PlanNodeStatsTest.cpp
   PlanNodeToStringTest.cpp
   PlanNodeToSummaryStringTest.cpp
   PrefixSortTest.cpp
@@ -88,6 +89,7 @@ add_executable(
   ScaledScanControllerTest.cpp
   ScaleWriterLocalPartitionTest.cpp
   SortBufferTest.cpp
+  SpatialIndexTest.cpp
   SpillerTest.cpp
   SpillTest.cpp
   SplitListenerTest.cpp
