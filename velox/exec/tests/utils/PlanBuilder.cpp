@@ -1771,20 +1771,35 @@ PlanBuilder& PlanBuilder::nestedLoopJoin(
 PlanBuilder& PlanBuilder::spatialJoin(
     const core::PlanNodePtr& right,
     const std::string& joinCondition,
+    const std::string& probeGeometry,
+    const std::string& buildGeometry,
+    const std::optional<std::string>& radius,
     const std::vector<std::string>& outputLayout,
     core::JoinType joinType) {
   VELOX_CHECK_NOT_NULL(planNode_, "SpatialJoin cannot be the source node");
-  auto resultType = concat(planNode_->outputType(), right->outputType());
+  auto probeType = planNode_->outputType();
+  auto buildType = right->outputType();
+  auto resultType = concat(probeType, buildType);
   auto outputType = extract(resultType, outputLayout);
 
   VELOX_CHECK(!joinCondition.empty(), "SpatialJoin condition cannot be empty");
   core::TypedExprPtr joinConditionExpr =
       parseExpr(joinCondition, resultType, options_, pool_);
 
+  auto probeGeometryField = field(probeType, probeGeometry);
+  auto buildGeometryField = field(buildType, buildGeometry);
+  std::optional<core::FieldAccessTypedExprPtr> radiusField;
+  if (radius.has_value()) {
+    radiusField = field(buildType, radius.value());
+  }
+
   planNode_ = std::make_shared<core::SpatialJoinNode>(
       nextPlanNodeId(),
       joinType,
       std::move(joinConditionExpr),
+      std::move(probeGeometryField),
+      std::move(buildGeometryField),
+      std::move(radiusField),
       std::move(planNode_),
       right,
       outputType);

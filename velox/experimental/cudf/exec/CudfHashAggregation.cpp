@@ -469,7 +469,7 @@ core::AggregationNode::Step getCompanionStep(
     std::string const& kind,
     core::AggregationNode::Step step) {
   for (const auto& [k, v] : companionStep) {
-    if (folly::StringPiece(kind).endsWith(k)) {
+    if (kind.ends_with(k)) {
       step = v;
       break;
     }
@@ -479,7 +479,7 @@ core::AggregationNode::Step getCompanionStep(
 
 std::string getOriginalName(std::string const& kind) {
   for (const auto& [k, v] : companionStep) {
-    if (folly::StringPiece(kind).endsWith(k)) {
+    if (kind.ends_with(k)) {
       return kind.substr(0, kind.length() - k.length());
     }
   }
@@ -489,7 +489,7 @@ std::string getOriginalName(std::string const& kind) {
 bool hasFinalAggs(
     std::vector<core::AggregationNode::Aggregate> const& aggregates) {
   return std::any_of(aggregates.begin(), aggregates.end(), [](auto const& agg) {
-    return folly::StringPiece(agg.call->name()).endsWith("_merge_extract");
+    return agg.call->name().ends_with("_merge_extract");
   });
 }
 

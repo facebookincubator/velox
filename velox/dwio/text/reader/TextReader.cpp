@@ -39,6 +39,7 @@ constexpr const char* kTextfileCompressionExtensionZst = ".zst";
 static std::string emptyString = std::string();
 
 namespace {
+constexpr const int32_t kDecompressionBufferFactor = 3;
 
 void resizeVector(
     BaseVector* FOLLY_NULLABLE data,
@@ -191,34 +192,15 @@ TextRowReader::TextRowReader(
     }
     limit_ = std::numeric_limits<uint64_t>::max();
 
-    /**
-     * The output buffer for decompression is allocated based on the
-     * uncompressed length of the stream.
-     *
-     * For decompressors other than ZlibDecompressor, the uncompressed length is
-     * obtained via getDecompressedLength, and blockSize serves only as a
-     * fallbak when getDecompressedLength fails to return a valid length.
-     *
-     * ZlibDecompressor does not implement getDecompressedLength because the
-     * DEFLATE algorithm used by zlib does not inherently includes the
-     * uncompressed length in the compressed stream. As a result, blockSize is
-     * used to set z_stream.avail_out during decompression to ensure enough
-     * buffer allocated for the output. Since zlib requires avail_out to be a
-     * uInt (unsigned int), blockSize is set to std::numeric_limits<unsigned
-     * int>::max() for full compatibility.
-     */
-    const auto blockSize =
-        (contents_->compression == CompressionKind::CompressionKind_ZLIB ||
-         contents_->compression == CompressionKind::CompressionKind_GZIP)
-        ? std::numeric_limits<unsigned int>::max()
-        : std::numeric_limits<uint64_t>::max();
-
     contents_->inputStream = contents_->input->loadCompleteFile();
     auto name = contents_->inputStream->getName();
     contents_->decompressedInputStream = createDecompressor(
         contents_->compression,
         std::move(contents_->inputStream),
-        blockSize,
+        // An estimated value used as the output buffer size for the zlib
+        // decompressor, and as the fallback value of the decompressed length
+        // for other decompressors.
+        kDecompressionBufferFactor * contents_->fileLength,
         contents_->pool,
         contents_->compressionOptions,
         fmt::format("Text Reader: Stream {}", name),
@@ -1717,19 +1699,6 @@ std::unique_ptr<RowReader> TextReader::createRowReader(
 
 uint64_t TextReader::getFileLength() const {
   return contents_->fileLength;
-}
-
-uint64_t TextReader::getMemoryUse() {
-  uint64_t memory = std::min(
-      uint64_t(contents_->fileLength),
-      contents_->input->getInputStream()->getNaturalReadSize());
-
-  // Decompressor needs a buffer.
-  if (contents_->compression != CompressionKind::CompressionKind_NONE) {
-    memory *= 3;
-  }
-
-  return memory;
 }
 
 } // namespace facebook::velox::text

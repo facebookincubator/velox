@@ -68,7 +68,7 @@ intermediateTypeTransforms() {
           {JSON(), std::make_shared<JsonTransform>()},
           {TIME(),
            std::make_shared<IntermediateTypeTransformUsingCast>(
-               TIME(), BIGINT())},
+               TIME(), VARCHAR())},
           {BINGTILE(),
            std::make_shared<IntermediateTypeTransformUsingCast>(
                BINGTILE(), BIGINT())},

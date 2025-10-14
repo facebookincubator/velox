@@ -1117,6 +1117,278 @@ TEST_F(DateTimeFunctionsTest, minusTimestamp) {
       "Could not convert Timestamp(-9223372036854776, 0) to milliseconds");
 }
 
+TEST_F(DateTimeFunctionsTest, timeIntervalDayTime) {
+  // Test TIME + IntervalDayTime and IntervalDayTime + TIME arithmetic
+
+  // Helper for Time + IntervalDayTime (also tests commutativity)
+  const auto testTimePlusIntervalCommutative =
+      [&](int64_t time, int64_t interval) -> std::optional<int64_t> {
+    auto result1 = evaluateOnce<int64_t>(
+        "plus(c0, c1)",
+        makeRowVector({
+            makeNullableFlatVector<int64_t>({time}, TIME()),
+            makeNullableFlatVector<int64_t>({interval}, INTERVAL_DAY_TIME()),
+        }));
+
+    auto result2 = evaluateOnce<int64_t>(
+        "plus(c0, c1)",
+        makeRowVector({
+            makeNullableFlatVector<int64_t>({interval}, INTERVAL_DAY_TIME()),
+            makeNullableFlatVector<int64_t>({time}, TIME()),
+        }));
+
+    EXPECT_EQ(result1, result2);
+    return result1;
+  };
+
+  // Basic hour addition: 03:04:05.321 + 3 hours = 06:04:05.321
+  // 03:04:05.321 = (3*3600 + 4*60 + 5)*1000 + 321 = 11045321 ms
+  // 3 hours = 3*60*60*1000 = 10800000 ms
+  // 06:04:05.321 = (6*3600 + 4*60 + 5)*1000 + 321 = 21845321 ms
+  const int64_t time1 = 11045321; // 03:04:05.321
+  const int64_t threeHours = 3 * kMillisInHour; // 3 hours
+  EXPECT_EQ(21845321, testTimePlusIntervalCommutative(time1, threeHours));
+
+  // Test 24-hour wraparound: 22:00:00 + 3 hours = 01:00:00
+  // 22:00:00 = 22*3600*1000 = 79200000 ms
+  // 01:00:00 = 1*3600*1000 = 3600000 ms
+  const int64_t time2 = 22 * kMillisInHour; // 22:00:00
+  EXPECT_EQ(3600000, testTimePlusIntervalCommutative(time2, threeHours));
+
+  // Test minute addition: 03:04:05.321 + 90 minutes = 04:34:05.321
+  // 90 minutes = 90*60*1000 = 5400000 ms
+  // 04:34:05.321 = (4*3600 + 34*60 + 5)*1000 + 321 = 16445321 ms
+  const int64_t ninetyMinutes = 90 * kMillisInMinute;
+  EXPECT_EQ(16445321, testTimePlusIntervalCommutative(time1, ninetyMinutes));
+
+  // Test negative intervals: 03:04:05.321 - 2 hours = 01:04:05.321
+  // 01:04:05.321 = (1*3600 + 4*60 + 5)*1000 + 321 = 3845321 ms
+  const int64_t twoHours = 2 * kMillisInHour;
+  EXPECT_EQ(3845321, testTimePlusIntervalCommutative(time1, -twoHours));
+
+  // Test negative wraparound: 01:00:00 - 3 hours = 22:00:00 (previous day)
+  // 01:00:00 = 1*3600*1000 = 3600000 ms
+  const int64_t time3 = kMillisInHour; // 01:00:00
+  EXPECT_EQ(79200000, testTimePlusIntervalCommutative(time3, -threeHours));
+
+  // Test millisecond precision: 03:04:05.321 + 679 milliseconds = 03:04:06.000
+  EXPECT_EQ(11046000, testTimePlusIntervalCommutative(time1, 679));
+
+  // Test day intervals (should not change time of day per Presto behavior)
+  // 12:30:45.123 = (12*3600 + 30*60 + 45)*1000 + 123 = 45045123 ms
+  const int64_t time4 = 45045123; // 12:30:45.123
+  const int64_t oneDay = kMillisInDay;
+  EXPECT_EQ(45045123, testTimePlusIntervalCommutative(time4, oneDay));
+}
+
+TEST_F(DateTimeFunctionsTest, timeMinusIntervalDayTime) {
+  // Test TIME - IntervalDayTime arithmetic (does not support Interval - Time)
+
+  const auto timeMinusInterval =
+      [&](int64_t time, int64_t interval) -> std::optional<int64_t> {
+    return evaluateOnce<int64_t>(
+        "minus(c0, c1)",
+        makeRowVector({
+            makeNullableFlatVector<int64_t>({time}, TIME()),
+            makeNullableFlatVector<int64_t>({interval}, INTERVAL_DAY_TIME()),
+        }));
+  };
+
+  // Basic hour subtraction: 06:04:05.321 - 3 hours = 03:04:05.321
+  // 06:04:05.321 = (6*3600 + 4*60 + 5)*1000 + 321 = 21845321 ms
+  // 3 hours = 3*60*60*1000 = 10800000 ms
+  // 03:04:05.321 = (3*3600 + 4*60 + 5)*1000 + 321 = 11045321 ms
+  const int64_t time1 = 21845321; // 06:04:05.321
+  const int64_t threeHours = 3 * kMillisInHour;
+  EXPECT_EQ(11045321, timeMinusInterval(time1, threeHours));
+
+  // Test 24-hour wraparound: 01:00:00 - 3 hours = 22:00:00 (previous day)
+  // 01:00:00 = 1*3600*1000 = 3600000 ms
+  // 22:00:00 = 22*3600*1000 = 79200000 ms
+  const int64_t time2 = kMillisInHour; // 01:00:00
+  EXPECT_EQ(79200000, timeMinusInterval(time2, threeHours));
+
+  // Test minute subtraction: 04:34:05.321 - 90 minutes = 03:04:05.321
+  // 04:34:05.321 = (4*3600 + 34*60 + 5)*1000 + 321 = 16445321 ms
+  // 90 minutes = 90*60*1000 = 5400000 ms
+  // 03:04:05.321 = (3*3600 + 4*60 + 5)*1000 + 321 = 11045321 ms
+  const int64_t time3 = 16445321; // 04:34:05.321
+  const int64_t ninetyMinutes = 90 * kMillisInMinute;
+  EXPECT_EQ(11045321, timeMinusInterval(time3, ninetyMinutes));
+
+  // Test millisecond precision: 03:04:06.000 - 679 milliseconds = 03:04:05.321
+  // 03:04:06.000 = (3*3600 + 4*60 + 6)*1000 = 11046000 ms
+  // 03:04:05.321 = (3*3600 + 4*60 + 5)*1000 + 321 = 11045321 ms
+  const int64_t time4 = 11046000; // 03:04:06.000
+  EXPECT_EQ(11045321, timeMinusInterval(time4, 679));
+
+  // Test day intervals (should not change time of day per Presto behavior)
+  // 12:30:45.123 = (12*3600 + 30*60 + 45)*1000 + 123 = 45045123 ms
+  const int64_t time5 = 45045123; // 12:30:45.123
+  const int64_t oneDay = kMillisInDay;
+  EXPECT_EQ(45045123, timeMinusInterval(time5, oneDay));
+
+  // Test subtracting negative intervals (double negative = addition)
+  // 03:04:05.321 - (-3 hours) = 03:04:05.321 + 3 hours = 06:04:05.321
+  // 03:04:05.321 = (3*3600 + 4*60 + 5)*1000 + 321 = 11045321 ms
+  // 06:04:05.321 = (6*3600 + 4*60 + 5)*1000 + 321 = 21845321 ms
+  const int64_t time6 = 11045321; // 03:04:05.321
+  EXPECT_EQ(21845321, timeMinusInterval(time6, -threeHours));
+
+  // Test negative interval with wraparound: 22:00:00 - (-3 hours) = 01:00:00
+  // 22:00:00 = 22*3600*1000 = 79200000 ms
+  // 01:00:00 = 1*3600*1000 = 3600000 ms
+  const int64_t time7 = 22 * kMillisInHour; // 22:00:00
+  EXPECT_EQ(3600000, timeMinusInterval(time7, -threeHours));
+}
+
+// Comprehensive tests for TimePlusIntervalYearMonthVectorFunction optimizations
+// and IntervalYearMonthPlusTimeVectorFunction optimizations
+TEST_F(DateTimeFunctionsTest, timeIntervalYearMonthVectorOptimizations) {
+  // Helper to create interval year-month values (in months)
+  auto months = [](int32_t value) { return value; };
+
+  // Helper to create time values (milliseconds since midnight)
+  auto timeMs = [](int32_t hours,
+                   int32_t minutes = 0,
+                   int32_t seconds = 0,
+                   int32_t millis = 0) {
+    return static_cast<int64_t>(hours) * 3600000 +
+        static_cast<int64_t>(minutes) * 60000 +
+        static_cast<int64_t>(seconds) * 1000 + static_cast<int64_t>(millis);
+  };
+
+  // Helper to verify time +/- interval results (should be identity function)
+  // Tests commutativity for plus: interval + time gives the same result
+  // Tests minus: time - interval (only this ordering supported for minus)
+  auto testTimePlusMinusIntervalYearMonth =
+      [&](const VectorPtr& timeVector,
+          const VectorPtr& intervalVector,
+          const VectorPtr& expectedResult) {
+        // Test: Time + Interval
+        auto resultPlus1 = evaluate(
+            "plus(c0, c1)", makeRowVector({timeVector, intervalVector}));
+        assertEqualVectors(expectedResult, resultPlus1);
+
+        // Test: Interval + Time (commutative for plus)
+        auto resultPlus2 = evaluate(
+            "plus(c0, c1)", makeRowVector({intervalVector, timeVector}));
+        assertEqualVectors(expectedResult, resultPlus2);
+
+        // Test: Time - Interval (identity function, only this ordering)
+        auto resultMinus = evaluate(
+            "minus(c0, c1)", makeRowVector({timeVector, intervalVector}));
+        assertEqualVectors(expectedResult, resultMinus);
+      };
+
+  // TEST 1: Constant Vector Optimization - Non-null constant
+  {
+    const auto timeValue = timeMs(14, 30, 15, 123); // 14:30:15.123
+    const auto intervalValue = months(6); // 6 months
+
+    // Create constant vectors
+    auto constantTime =
+        BaseVector::createConstant(TIME(), timeValue, 1000, pool());
+    auto constantInterval = BaseVector::createConstant(
+        INTERVAL_YEAR_MONTH(), intervalValue, 1000, pool());
+
+    // Expected result should be same constant time (identity function)
+    auto expectedResult =
+        BaseVector::createConstant(TIME(), timeValue, 1000, pool());
+
+    // Test: Time + Interval, Interval + Time, and Time - Interval
+    testTimePlusMinusIntervalYearMonth(
+        constantTime, constantInterval, expectedResult);
+
+    // Verify the result is also constant encoded for efficiency
+    auto result = evaluate(
+        "plus(c0, c1)", makeRowVector({constantTime, constantInterval}));
+
+    EXPECT_TRUE(result->isConstantEncoding());
+    EXPECT_EQ(result->size(), 1000);
+    EXPECT_EQ(result->as<ConstantVector<int64_t>>()->valueAt(0), timeValue);
+  }
+
+  // TEST 2: Constant Vector Optimization - mixed null and non-null values
+  {
+    const auto intervalValue = months(12); // 12 months
+
+    // Create time vector with mixed null and non-null values to test null
+    // handling
+    auto timeVector = makeNullableFlatVector<int64_t>(
+        {std::nullopt, timeMs(17, 30, 0), std::nullopt}, TIME());
+
+    auto intervalVector = makeFlatVector<int32_t>(
+        {intervalValue, intervalValue, intervalValue}, INTERVAL_YEAR_MONTH());
+
+    // Expected result: null, non-null, null
+    auto expectedResult = makeNullableFlatVector<int64_t>(
+        {std::nullopt, timeMs(17, 30, 0), std::nullopt}, TIME());
+
+    // Test: Time + Interval, Interval + Time, and Time - Interval
+    testTimePlusMinusIntervalYearMonth(
+        timeVector, intervalVector, expectedResult);
+  }
+
+  // TEST 3: Flat Vector with Nulls
+  {
+    const std::vector<std::optional<int64_t>> timeValues = {
+        timeMs(10, 30, 0), // 10:30:00
+        std::nullopt, // null
+        timeMs(16, 45, 30), // 16:45:30
+        std::nullopt, // null
+        timeMs(20, 0, 0) // 20:00:00
+    };
+
+    const std::vector<int32_t> intervalValues = {
+        months(3), months(6), months(9), months(12), months(18)};
+
+    auto timeVector = makeNullableFlatVector<int64_t>(timeValues, TIME());
+    auto intervalVector =
+        makeFlatVector<int32_t>(intervalValues, INTERVAL_YEAR_MONTH());
+
+    // Expected result should preserve nulls and non-null values identically
+    auto expectedResult = makeNullableFlatVector<int64_t>(timeValues, TIME());
+
+    // Test: Time + Interval, Interval + Time, and Time - Interval
+    testTimePlusMinusIntervalYearMonth(
+        timeVector, intervalVector, expectedResult);
+  }
+
+  // TEST 4: Dictionary Vector (Fallback Path)
+  {
+    // Create base values for dictionary
+    const std::vector<int64_t> baseTimeValues = {
+        timeMs(9, 0, 0), // 09:00:00
+        timeMs(17, 30, 0), // 17:30:00
+        timeMs(12, 0, 0) // 12:00:00
+    };
+
+    // Create indices that repeat base values
+    const std::vector<vector_size_t> indices = {0, 1, 2, 0, 1, 2, 1, 0};
+
+    auto baseVector = makeFlatVector<int64_t>(baseTimeValues, TIME());
+
+    auto dictionaryTimeVector = wrapInDictionary(
+        makeIndices(indices), (vector_size_t)indices.size(), baseVector);
+
+    auto intervalVector = makeFlatVector<int32_t>(
+        std::vector<int32_t>(indices.size(), months(6)), INTERVAL_YEAR_MONTH());
+
+    // Expected result should decode dictionary and preserve values
+    std::vector<int64_t> expectedValues;
+    expectedValues.reserve(indices.size());
+    for (auto idx : indices) {
+      expectedValues.push_back(baseTimeValues[idx]);
+    }
+    auto expectedResult = makeFlatVector<int64_t>(expectedValues, TIME());
+
+    // Test: Time + Interval, Interval + Time, and Time - Interval
+    testTimePlusMinusIntervalYearMonth(
+        dictionaryTimeVector, intervalVector, expectedResult);
+  }
+}
+
 TEST_F(DateTimeFunctionsTest, minusTimestampWithTimezone) {
   auto minus = [&](const std::string& a, const std::string& b) {
     const auto sql =
@@ -1471,6 +1743,127 @@ TEST_F(DateTimeFunctionsTest, minuteTimestampWithTimezone) {
       59, minuteTimestampWithTimezone(TimestampWithTimezone(-1000, "+00:00")));
   EXPECT_EQ(
       29, minuteTimestampWithTimezone(TimestampWithTimezone(-1000, "+05:30")));
+}
+
+TEST_F(DateTimeFunctionsTest, minuteTime) {
+  const auto minute = [&](std::optional<int64_t> time) {
+    return evaluateOnce<int64_t>(
+        "minute(c0)",
+        makeRowVector({makeNullableFlatVector<int64_t>({time}, TIME())}));
+  };
+
+  // null handling
+  EXPECT_EQ(std::nullopt, minute(std::nullopt));
+
+  // edge cases: beginning and end of valid range
+  EXPECT_EQ(0, minute(0)); // 00:00:00.000
+  EXPECT_EQ(59, minute(86399999)); // 23:59:59.999
+
+  // boundary values for optimization testing
+  EXPECT_EQ(0, minute(59999)); // 00:00:59.999 - last second of first minute
+  EXPECT_EQ(1, minute(60000)); // 00:01:00.000 - first second of second minute
+  EXPECT_EQ(59, minute(3599999)); // 00:59:59.999 - last second of first hour
+  EXPECT_EQ(0, minute(3600000)); // 01:00:00.000 - first second of second hour
+
+  // time values spanning different hours to test optimization
+  EXPECT_EQ(
+      15,
+      minute(
+          15 * kMillisInMinute + 30 * kMillisInSecond + 123)); // 00:15:30.123
+  EXPECT_EQ(
+      30,
+      minute(5 * kMillisInHour + 30 * kMillisInMinute + 45000)); // 05:30:45.000
+  EXPECT_EQ(
+      45, minute(12 * kMillisInHour + 45 * kMillisInMinute)); // 12:45:00.000
+  EXPECT_EQ(0, minute(23 * kMillisInHour)); // 23:00:00.000
+
+  // comprehensive minute coverage for edge case testing
+  for (int m = 0; m < 60; ++m) {
+    EXPECT_EQ(m, minute(m * kMillisInMinute)); // exact minute boundaries
+    EXPECT_EQ(m, minute(m * kMillisInMinute + 500)); // mid-second
+    EXPECT_EQ(m, minute(m * kMillisInMinute + 59999)); // end of minute
+  }
+
+  // hour boundaries with different minute values
+  for (int h = 0; h < 24; ++h) {
+    EXPECT_EQ(0, minute(h * kMillisInHour)); // start of each hour
+    EXPECT_EQ(
+        30,
+        minute(
+            h * kMillisInHour + 30 * kMillisInMinute)); // 30 minutes into hour
+    EXPECT_EQ(
+        59,
+        minute(
+            h * kMillisInHour + 59 * kMillisInMinute +
+            59999)); // last moment of hour
+  }
+
+  // comprehensive data type coverage - test various millisecond precision
+  // values
+  EXPECT_EQ(
+      42,
+      minute(13 * kMillisInHour + 42 * kMillisInMinute + 1)); // precision: 1ms
+  EXPECT_EQ(
+      42,
+      minute(
+          13 * kMillisInHour + 42 * kMillisInMinute + 10)); // precision: 10ms
+  EXPECT_EQ(
+      42,
+      minute(
+          13 * kMillisInHour + 42 * kMillisInMinute + 100)); // precision: 100ms
+  EXPECT_EQ(
+      42,
+      minute(
+          13 * kMillisInHour + 42 * kMillisInMinute + 999)); // precision: 999ms
+
+  // performance critical values for optimization validation
+  int64_t performanceTestValues[] = {
+      0, // midnight
+      kMillisInHour / 2, // 30 minutes
+      kMillisInHour - 1, // 59:59.999
+      kMillisInHour, // 01:00:00.000
+      12 * kMillisInHour + 30 * kMillisInMinute, // 12:30:00.000 (noon+)
+      86399999 // 23:59:59.999 (end of day)
+  };
+
+  int64_t expectedMinutes[] = {0, 30, 59, 0, 30, 59};
+
+  for (size_t i = 0;
+       i < sizeof(performanceTestValues) / sizeof(performanceTestValues[0]);
+       ++i) {
+    EXPECT_EQ(expectedMinutes[i], minute(performanceTestValues[i]));
+  }
+}
+
+TEST_F(DateTimeFunctionsTest, minuteTimeInvalidRange) {
+  const auto minute = [&](int64_t time) {
+    return evaluateOnce<int64_t>(
+        "minute(c0)", makeRowVector({makeFlatVector<int64_t>({time}, TIME())}));
+  };
+
+  // test out-of-range values that should throw errors
+  VELOX_ASSERT_THROW(
+      minute(-1), "TIME value -1 is out of valid range [0, 86399999]");
+
+  VELOX_ASSERT_THROW(
+      minute(86400000),
+      "TIME value 86400000 is out of valid range [0, 86399999]");
+
+  VELOX_ASSERT_THROW(
+      minute(-86400000),
+      "TIME value -86400000 is out of valid range [0, 86399999]");
+
+  VELOX_ASSERT_THROW(
+      minute(std::numeric_limits<int64_t>::max()),
+      fmt::format(
+          "TIME value {} is out of valid range [0, 86399999]",
+          std::numeric_limits<int64_t>::max()));
+
+  VELOX_ASSERT_THROW(
+      minute(std::numeric_limits<int64_t>::min()),
+      fmt::format(
+          "TIME value {} is out of valid range [0, 86399999]",
+          std::numeric_limits<int64_t>::min()));
 }
 
 TEST_F(DateTimeFunctionsTest, second) {

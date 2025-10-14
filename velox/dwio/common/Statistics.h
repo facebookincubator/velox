@@ -537,6 +537,9 @@ struct ColumnReaderStatistics {
   // Number of rows returned by string dictionary reader that is flattened
   // instead of keeping dictionary encoding.
   int64_t flattenStringDictionaryValues{0};
+
+  // Total time spent in loading pages, in nanoseconds.
+  uint64_t pageLoadTimeNs{0};
 };
 
 struct RuntimeStatistics {
@@ -596,6 +599,11 @@ struct RuntimeStatistics {
       result.emplace(
           "flattenStringDictionaryValues",
           RuntimeMetric(columnReaderStatistics.flattenStringDictionaryValues));
+    }
+    if (columnReaderStatistics.pageLoadTimeNs > 0) {
+      result.emplace(
+          "pageLoadTimeNs",
+          RuntimeMetric(columnReaderStatistics.pageLoadTimeNs));
     }
     return result;
   }

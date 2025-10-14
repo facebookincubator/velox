@@ -190,7 +190,13 @@ class RowIterator {
 
   virtual bool hasNext() const = 0;
 
-  virtual std::unique_ptr<std::string> next() = 0;
+  virtual std::unique_ptr<std::string> nextRow() = 0;
+
+  /// Returns a batch of serialized rows as string views. Reads up to maxRows
+  /// from the source stream. The returned views are valid until the next call
+  /// to nextBatch or object destruction. This method provides better
+  /// performance for bulk operations compared to repeated nextRow() calls.
+  virtual std::vector<std::string_view> nextBatch(size_t maxRows) = 0;
 
  protected:
   ByteInputStream* const source_;

@@ -1067,7 +1067,7 @@ void encodedVectorCopy(
     VELOX_CHECK(source->pool() == options.pool);
   }
   if (target) {
-    VELOX_CHECK(*target->type() == *source->type());
+    VELOX_CHECK(target->type()->equivalent(*source->type()));
     VELOX_CHECK(target->pool() == options.pool);
   }
   VELOX_CHECK(

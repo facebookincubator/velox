@@ -3968,6 +3968,30 @@ class SpatialJoinNode : public PlanNode {
           right_.has_value(), "SpatialJoinNode right source is not set");
       VELOX_USER_CHECK(
           outputType_.has_value(), "SpatialJoinNode outputType is not set");
+      VELOX_USER_CHECK(
+          probeGeometry_.has_value(),
+          "SpatialJoinNode probe geometry is not set");
+      VELOX_USER_CHECK(
+          buildGeometry_.has_value(),
+          "SpatialJoinNode build geometry is not set");
+
+      VELOX_USER_CHECK(
+          (probeGeometry_.has_value() && buildGeometry_.has_value()) ||
+              (!probeGeometry_.has_value() && !buildGeometry_.has_value()),
+          "Either probe and build geometry must both be set, or neither");
+
+      if (probeGeometry_.has_value() && buildGeometry_.has_value()) {
+        return std::make_shared<SpatialJoinNode>(
+            id_.value(),
+            joinType_,
+            joinCondition_,
+            probeGeometry_.value(),
+            buildGeometry_.value(),
+            radius_,
+            left_.value(),
+            right_.value(),
+            outputType_.value());
+      }
 
       VELOX_USER_CHECK(
           (probeGeometry_.has_value() && buildGeometry_.has_value()) ||
@@ -3991,6 +4015,9 @@ class SpatialJoinNode : public PlanNode {
           id_.value(),
           joinType_,
           joinCondition_,
+          probeGeometry_.value(),
+          buildGeometry_.value(),
+          radius_,
           left_.value(),
           right_.value(),
           outputType_.value());
@@ -4027,11 +4054,11 @@ class SpatialJoinNode : public PlanNode {
     return joinCondition_;
   }
 
-  const std::optional<FieldAccessTypedExprPtr>& probeGeometry() const {
+  const FieldAccessTypedExprPtr& probeGeometry() const {
     return probeGeometry_;
   }
 
-  const std::optional<FieldAccessTypedExprPtr>& buildGeometry() const {
+  const FieldAccessTypedExprPtr& buildGeometry() const {
     return buildGeometry_;
   }
 
@@ -4057,8 +4084,8 @@ class SpatialJoinNode : public PlanNode {
 
   const JoinType joinType_;
   const TypedExprPtr joinCondition_;
-  const std::optional<FieldAccessTypedExprPtr> probeGeometry_;
-  const std::optional<FieldAccessTypedExprPtr> buildGeometry_;
+  const FieldAccessTypedExprPtr probeGeometry_;
+  const FieldAccessTypedExprPtr buildGeometry_;
   const std::optional<FieldAccessTypedExprPtr> radius_;
   const std::vector<PlanNodePtr> sources_;
   const RowTypePtr outputType_;

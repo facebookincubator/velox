@@ -21,9 +21,62 @@
 
 namespace facebook::velox::exec {
 
+class SpatialJoinOutputBuilder {
+ public:
+  SpatialJoinOutputBuilder(
+      vector_size_t outputBatchSize,
+      RowTypePtr outputType,
+      std::vector<IdentityProjection> probeProjections,
+      std::vector<IdentityProjection> buildProjections,
+      const OperatorCtx& operatorCtx)
+      : outputBatchSize_{outputBatchSize},
+        outputType_{std::move(outputType)},
+        probeProjections_{std::move(probeProjections)},
+        buildProjections_{std::move(buildProjections)},
+        operatorCtx_{operatorCtx} {
+    VELOX_CHECK_GT(outputBatchSize_, 0);
+  }
+
+  void initializeOutput(const RowVectorPtr& input, memory::MemoryPool* pool);
+
+  bool isOutputFull() const {
+    return outputRow_ >= outputBatchSize_;
+  }
+
+  void addOutputRow(vector_size_t probeRow, vector_size_t buildRow);
+
+  /// Checks if it is required to add a probe mismatch row, and does it if
+  /// needed. The caller needs to ensure there is available space in `output_`
+  /// for the new record, which has nulled out build projections.
+  void addProbeMismatchRow(vector_size_t probeRow);
+
+  void copyBuildValues(const RowVectorPtr& buildVector);
+
+  RowVectorPtr takeOutput();
+
+ private:
+  // Initialization parameters
+  const vector_size_t outputBatchSize_;
+  const RowTypePtr outputType_;
+  const std::vector<IdentityProjection> probeProjections_;
+  const std::vector<IdentityProjection> buildProjections_;
+  const OperatorCtx& operatorCtx_;
+
+  // Output state
+  RowVectorPtr output_;
+  vector_size_t outputRow_{0};
+  // Dictionary indices for probe columns for output vector.
+  BufferPtr probeOutputIndices_;
+  // Mutable pointer to probeOutputIndices_
+  vector_size_t* rawProbeOutputIndices_{};
+
+  // Stores the ranges of build values to be copied to the output vector (we
+  // batch them and copy once, instead of copying them row-by-row).
+  std::vector<BaseVector::CopyRange> buildCopyRanges_{};
+};
+
 /// Implements a Spatial Join between records from the probe (input_)
-/// and build (SpatialJoinBridge) sides. It supports inner, left, right and
-/// full outer joins.
+/// and build (SpatialJoinBridge) sides. It supports inner and left joins.
 ///
 /// This class is designed to evaluate spatial join conditions (e.g.
 /// ST_INTERSECTS, ST_CONTAINS, ST_WITHIN) between geometric data types. It can
@@ -79,6 +132,13 @@ class SpatialJoinProbe : public Operator {
   void close() override;
 
  private:
+  void checkStateTransition(ProbeOperatorState state);
+
+  void setState(ProbeOperatorState state) {
+    checkStateTransition(state);
+    state_ = state;
+  }
+
   // Initialize spatial filter for evaluating spatial join conditions.
   void initializeFilter(
       const core::TypedExprPtr& filter,
@@ -91,93 +151,13 @@ class SpatialJoinProbe : public Operator {
   // `buildVectors_` before it can produce output.
   bool getBuildData(ContinueFuture* future);
 
-  // Generates output from spatial join matches between probe and build sides,
-  // as well as probe mismatches (for left and full outer joins). As much as
-  // possible, generates outputs `outputBatchSize_` records at a time, but
-  // batches may be smaller in some cases - outputs follow the probe side buffer
-  // boundaries.
+  // Produce as much output as possible for the current input.
   RowVectorPtr generateOutput();
 
-  // For non cross-join mode, the `output_` can be reused across multiple probe
-  // rows. If the input_ has remaining rows and the output_ is not fully filled,
-  // it returns false here.
-  bool readyToProduceOutput();
-
-  // Fill in joined output to `output_` by matching the current probeRow_ and
-  // successive build vectors (using getNextCrossProductBatch()). Stops when
-  // either all build vectors were matched for the current probeRow (returns
-  // true), or if the output is full (returns false). If it returns false, a
-  // valid vector with more than zero records will be available at `output_`;
-  // if it returns true, either nullptr or zero records may be placed at
-  // `output_`. Also if it returns true, it's the caller's responsibility to
-  // decide when to set `output_` size.
-  //
-  // Also updates `buildMatched_` if the build records that received a match, so
-  // that they can be used to implement right and full outer join semantic once
-  // all probe data has been processed.
-  bool addToOutput();
-
-  // Advances 'probeRow_' and resets required state information. Returns true
-  // if there is no more probe data to be processed in the current `input_`
-  // (and hence a new probe input is required). False otherwise.
-  bool advanceProbe();
-
-  // Ensures a new batch of records is available at `output_` and ready to
-  // receive rows. Batches have space for `outputBatchSize_`.
-  void prepareOutput();
-
-  // Evaluates the spatial joinCondition for a given build vector. This method
-  // sets `filterOutput_` and `decodedFilterResult_`, which will be ready to be
-  // used by `isSpatialJoinConditionMatch(buildRow)` below.
-  void evaluateSpatialJoinFilter(const RowVectorPtr& buildVector);
-
-  // Checks if the spatial join condition matched for a particular row.
-  bool isSpatialJoinConditionMatch(vector_size_t i) const {
-    return (
-        !decodedFilterResult_.isNullAt(i) &&
-        decodedFilterResult_.valueAt<bool>(i));
+  // Returns true if the input is exhausted or the output is full.
+  bool isOutputDone() const {
+    return probeRow_ >= input_->size() || outputBuilder_.isOutputFull();
   }
-
-  // Generates the next batch of a cross product between probe and build. It
-  // should be used as the entry point, and will internally delegate to one of
-  // the three functions below.
-  //
-  // Output projections can be specified so that this function can be used to
-  // generate both filter input and actual output (in case there is no join
-  // filter - cross join).
-  RowVectorPtr getNextCrossProductBatch(
-      const RowVectorPtr& buildVector,
-      const RowTypePtr& outputType,
-      const std::vector<IdentityProjection>& probeProjections,
-      const std::vector<IdentityProjection>& buildProjections);
-
-  // As a fallback, process the current probe row to as much build data as
-  // possible (probe row as constant, and flat copied data for build records).
-  RowVectorPtr genCrossProductMultipleBuildVectors(
-      const RowVectorPtr& buildVector,
-      const RowTypePtr& outputType,
-      const std::vector<IdentityProjection>& probeProjections,
-      const std::vector<IdentityProjection>& buildProjections);
-
-  // Add a single record to `output_` based on buildRow from buildVector, and
-  // the current probeRow and probe vector (input_). Probe side projections are
-  // zero-copy (dictionary indices), and build side projections are marked to be
-  // copied using `buildCopyRanges_`; they will be copied later on by
-  // `copyBuildValues()`.
-  void addOutputRow(vector_size_t buildRow);
-
-  // Copies the ranges from buildVector specified by `buildCopyRanges_` to
-  // `output_`, one projected column at a time. Clears buildCopyRanges_.
-  void copyBuildValues(const RowVectorPtr& buildVector);
-
-  // Checks if it is required to add a probe mismatch row, and does it if
-  // needed. The caller needs to ensure there is available space in `output_`
-  // for the new record, which has nulled out build projections.
-  void checkProbeMismatchRow();
-
-  // Add a probe mismatch (only for left/full outer joins). The record is based
-  // on the current probeRow and vector (input_) and build projections are null.
-  void addProbeMismatchRow();
 
   // Called when we are done processing the current probe batch, to signal we
   // are ready for the next one.
@@ -186,106 +166,79 @@ class SpatialJoinProbe : public Operator {
   // change the operator state to signal peers.
   void finishProbeInput();
 
-  // Whether we have processed all build data for the current probe row (based
-  // on buildIndex_'s value).
-  bool hasProbedAllBuildData() const {
-    return (buildIndex_ >= buildVectors_.value().size());
+  // Add the output for a single probe row.  This will return early if the
+  // output vector is full.
+  void addProbeRowOutput();
+
+  // Returns true if all output for the current probe row has been produced.
+  bool isProbeRowDone() const {
+    return buildIndex_ >= buildVectors_.value().size();
   }
 
-  // If build has a single vector, we can wrap probe and build batches into
-  // dictionaries and produce as many combinations of probe and build rows,
-  // until `numOutputRows_` is filled.
-  bool isSingleBuildVector() const {
-    return buildVectors_->size() == 1;
+  // Increment probeRow_ and reset associated fields
+  void advanceProbeRow() {
+    ++probeRow_;
+    probeHasMatch_ = false;
+    buildIndex_ = 0;
+    buildRow_ = 0;
   }
 
-  // If there are no incoming records in the build side.
-  bool isBuildSideEmpty() const {
-    return buildVectors_->empty();
+  // Add the output for a single build vector for a single probe row.  This will
+  // return early if the output vector is full.
+  void addBuildVectorOutput(const RowVectorPtr& buildVector);
+
+  // Returns true if all the rows for the current build vector have been
+  // processed, or the output is full.
+  bool isBuildVectorDone(const RowVectorPtr& buildVector) const {
+    return buildRow_ >= buildVector->size() || outputBuilder_.isOutputFull();
   }
 
-  // If build has a single row, we can simply add it as a constant to probe
-  // batches.
-  bool isSingleBuildRow() const {
-    return isSingleBuildVector() && buildVectors_->front()->size() == 1;
+  // Increment buildIndex_ and reset associated fields
+  void advanceBuildVector() {
+    ++buildIndex_;
+    buildRow_ = 0;
   }
 
-  // TODO: Add state transition check.
-  void setState(ProbeOperatorState state) {
-    state_ = state;
+  // Evaluates the spatial joinCondition for a given build vector. This method
+  // sets `filterOutput_` and `decodedFilterResult_`, which will be ready to be
+  // used by `isSpatialJoinConditionMatch(buildRow)` below.
+  void evaluateJoinFilter(const RowVectorPtr& buildVector);
+
+  // Checks if the spatial join condition matched for a particular row.
+  bool isJoinConditionMatch(vector_size_t i) const {
+    return (
+        !decodedFilterResult_.isNullAt(i) &&
+        decodedFilterResult_.valueAt<bool>(i));
   }
+
+  // Generates the next batch of a cross product between probe and build using
+  // the supplied projections. It uses the current probe row as constant, and
+  // flat copied data for build records.
+  RowVectorPtr getNextJoinBatch(
+      const RowVectorPtr& buildVector,
+      const RowTypePtr& outputType,
+      const std::vector<IdentityProjection>& probeProjections,
+      const std::vector<IdentityProjection>& buildProjections) const;
+
+  /////////
+  // SETUP
+  // Variables set during operator setup that are used during execution.
+  // These should not be modified after the operator is initialized.
 
   const core::JoinType joinType_;
-
-  // Output buffer members.
 
   // Maximum number of rows in the output batch.
   const vector_size_t outputBatchSize_;
 
-  // The current output batch being populated.
-  RowVectorPtr output_;
-
-  // Number of output rows in the current output batch.
-  vector_size_t numOutputRows_{0};
-
-  // Dictionary indices for probe columns used to generate cross-product.
-  BufferPtr probeIndices_;
-
-  // Dictionary indices for probe columns for output vector.
-  BufferPtr probeOutputIndices_;
-  vector_size_t* rawProbeOutputIndices_{};
-
-  // Dictionary indices for build columns.
-  BufferPtr buildIndices_;
+  // Join metadata and state.
+  std::shared_ptr<const core::SpatialJoinNode> joinNode_;
 
   // Spatial join condition expression.
-
   // Must not be null
   std::unique_ptr<ExprSet> joinCondition_;
 
   // Input type for the spatial join condition expression.
   RowTypePtr filterInputType_;
-
-  // Spatial join condition evaluation state that need to persisted across the
-  // generation of successive output buffers.
-  SelectivityVector filterInputRows_;
-  VectorPtr filterOutput_;
-  DecodedVector decodedFilterResult_;
-
-  // Join metadata and state.
-  std::shared_ptr<const core::SpatialJoinNode> joinNode_;
-
-  ProbeOperatorState state_{ProbeOperatorState::kWaitForBuild};
-  ContinueFuture future_{ContinueFuture::makeEmpty()};
-
-  // Probe side state.
-
-  // Probe row being currently processed (related to `input_`).
-  vector_size_t probeRow_{0};
-
-  // Whether the current probeRow_ has produces a match. Used for left and full
-  // outer joins.
-  bool probeRowHasMatch_{false};
-
-  // Indicate if the probe side has empty input or not. For the last probe,
-  // this indicates if all the probe sides are empty or not. This flag is used
-  // for mismatched output producing.
-  bool probeSideEmpty_{true};
-
-  // Build side state.
-
-  // Stores the data for build vectors (right side of the join).
-  std::optional<std::vector<RowVectorPtr>> buildVectors_;
-
-  // Index into `buildVectors_` for the build vector being currently processed.
-  size_t buildIndex_{0};
-
-  // Row being currently processed from `buildVectors_[buildIndex_]`.
-  vector_size_t buildRow_{0};
-
-  // Stores the ranges of build values to be copied to the output vector (we
-  // batch them and copy once, instead of copying them row-by-row).
-  std::vector<BaseVector::CopyRange> buildCopyRanges_;
 
   // List of output projections from the build side. Note that the list of
   // projections from the probe side is available at `identityProjections_`.
@@ -297,7 +250,54 @@ class SpatialJoinProbe : public Operator {
   std::vector<IdentityProjection> filterProbeProjections_;
   std::vector<IdentityProjection> filterBuildProjections_;
 
-  BufferPtr buildOutMapping_;
+  // Stores the data for build vectors (right side of the join).
+  std::optional<std::vector<RowVectorPtr>> buildVectors_;
+
+  //////////////////
+  // OPERATOR STATE
+  // Variables used to track the general operator state during exection.
+  // These will change throughout setup and execution.
+
+  ProbeOperatorState state_{ProbeOperatorState::kWaitForBuild};
+  ContinueFuture future_{ContinueFuture::makeEmpty()};
+
+  // The information needed to produce an output RowVectorPtr.  It is stored
+  // for all execution, but is reset on each output batch.
+  SpatialJoinOutputBuilder outputBuilder_;
+
+  // Count of output batches produced (1-indexed).  Primarily for debugging.
+  size_t outputCount_{0};
+
+  // Spatial join condition evaluation state that need to persisted across the
+  // generation of successive output buffers.
+  SelectivityVector filterInputRows_;
+  VectorPtr filterOutput_;
+  DecodedVector decodedFilterResult_;
+
+  ///////////////
+  // PROBE STATE
+  // Variables used to track the probe-side state state during exection.
+  // These will change throughout setup and execution.
+
+  // Count of probe batches added (1-indexed). Primarily for debugging.
+  size_t probeCount_{0};
+
+  // Probe row being currently processed (related to `input_`).
+  vector_size_t probeRow_{0};
+
+  // Whether the current probeRow_ has found a match.  Needed for left join.
+  bool probeHasMatch_{false};
+
+  ///////////////
+  // BUILD STATE
+  // Variables used to track the build-side state state during exection.
+  // These will change throughout setup and execution.
+
+  // Index into `buildVectors_` for the build vector being currently processed.
+  size_t buildIndex_{0};
+
+  // Row being currently processed from `buildVectors_[buildIndex_]`.
+  vector_size_t buildRow_{0};
 };
 
 } // namespace facebook::velox::exec
