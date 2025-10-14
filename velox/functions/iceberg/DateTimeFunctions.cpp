@@ -67,7 +67,9 @@ struct DaysFunction {
     result = epochDay(timestamp);
   }
 
-  FOLLY_ALWAYS_INLINE void call(out_type<Date>& result, const arg_type<Date>& date) {
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Date>& result,
+      const arg_type<Date>& date) {
     result = date;
   }
 };
