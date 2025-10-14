@@ -219,6 +219,21 @@ ColumnChunkMetaDataPtr::getColumnStatistics(
       thriftColumnChunkPtr(ptr_)->meta_data.statistics, *type, numRows);
 };
 
+bool ColumnChunkMetaDataPtr::hasEncodingStats() const {
+  return hasMetadata() &&
+      thriftColumnChunkPtr(ptr_)->meta_data.__isset.encoding_stats;
+}
+
+const std::vector<thrift::PageEncodingStats>&
+ColumnChunkMetaDataPtr::getEncodingStats() const {
+  return thriftColumnChunkPtr(ptr_)->meta_data.encoding_stats;
+}
+
+const std::vector<thrift::Encoding::type>&
+ColumnChunkMetaDataPtr::getEncodings() const {
+  return thriftColumnChunkPtr(ptr_)->meta_data.encodings;
+}
+
 std::string ColumnChunkMetaDataPtr::getColumnMetadataStatsMinValue() {
   VELOX_CHECK(hasStatistics());
   return thriftColumnChunkPtr(ptr_)->meta_data.statistics.min_value;

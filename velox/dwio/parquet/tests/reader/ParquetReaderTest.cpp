@@ -14,9 +14,21 @@
  * limitations under the License.
  */
 
+#include <execinfo.h>
+#include <glog/logging.h>
+#include <csignal>
+#include <cstdlib>
+#include "common/encode/Base64.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/core/Expressions.h"
+#include "velox/dwio/common/MetadataFilter.h"
 #include "velox/dwio/parquet/tests/ParquetTestBase.h"
+#include "velox/expression/Expr.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
+#include "velox/functions/prestosql/registration/RegistrationFunctions.h"
+#include "velox/parse/Expressions.h"
+#include "velox/parse/ExpressionsParser.h"
+#include "velox/parse/TypeResolver.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
 
 using namespace facebook::velox;
@@ -1755,5 +1767,93 @@ TEST_F(ParquetReaderTest, fileColumnVarcharToMetadataColumnMismatchTest) {
 
   for (const auto& type : types) {
     runVarcharColTest(type);
+  }
+}
+
+TEST_F(ParquetReaderTest, dictionaryEncodedComplexFilter) {
+  // Test using pre-created dictionary_rowgroup_skipping.parquet
+  // This file has 3 row groups with dictionary-encoded region and product
+  // columns: Row group 0: primarily "us-east" region Row group 1: primarily
+  // "us-west" region Row group 2: primarily "eu-central" region All row groups
+  // have all 4 products (productA, productB, productC, productD) This file has
+  // total 3000 rows
+
+  const std::string sample(
+      getExampleFilePath("dictionary_rowgroup_skipping.parquet"));
+  auto rowType =
+      ROW({"id", "region", "product", "amount"},
+          {BIGINT(), VARCHAR(), VARCHAR(), DOUBLE()});
+
+  // Helper function to read all rows and return total count
+  auto readAllRows = [&](auto& rowReader) -> uint64_t {
+    VectorPtr result = BaseVector::create(rowType, 0, leafPool_.get());
+    uint64_t totalRows = 0;
+    while (true) {
+      uint64_t rows = rowReader->next(1000, result);
+      if (rows == 0)
+        break;
+      totalRows += rows;
+    }
+    return totalRows;
+  };
+
+  // Test 1: Region filter
+  {
+    dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+    auto reader = createReader(sample, readerOptions);
+
+    auto scanSpec = makeScanSpec(rowType);
+    scanSpec->getOrCreateChild(common::Subfield("region"))
+        ->setFilter(std::make_unique<common::BytesRange>(
+            "us-east", false, false, "us-east", false, false, false));
+
+    RowReaderOptions rowReaderOpts;
+    rowReaderOpts.setScanSpec(scanSpec);
+    auto rowReader = reader->createRowReader(rowReaderOpts);
+
+    // Rowgroup skipped
+    EXPECT_EQ(readAllRows(rowReader), 2000);
+  }
+
+  // Test 2: Product filter
+  {
+    dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+    auto reader = createReader(sample, readerOptions);
+
+    auto scanSpec = makeScanSpec(rowType);
+    scanSpec->getOrCreateChild(common::Subfield("product"))
+        ->setFilter(std::make_unique<common::BytesRange>(
+            "productA", false, false, "productA", false, false, false));
+
+    RowReaderOptions rowReaderOpts;
+    rowReaderOpts.setScanSpec(scanSpec);
+    auto rowReader = reader->createRowReader(rowReaderOpts);
+
+    // Should find matches across all row groups - NO row group skipping should
+    // occur
+    EXPECT_EQ(readAllRows(rowReader), 3000);
+  }
+
+  // Test 3: Filter that matches no regions
+  {
+    dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+    auto reader = createReader(sample, readerOptions);
+
+    auto scanSpec = makeScanSpec(rowType);
+    scanSpec->getOrCreateChild(common::Subfield("region"))
+        ->setFilter(std::make_unique<common::BytesRange>(
+            "nonexistent-region",
+            false,
+            false,
+            "nonexistent-region",
+            false,
+            false,
+            false));
+
+    RowReaderOptions rowReaderOpts;
+    rowReaderOpts.setScanSpec(scanSpec);
+    auto rowReader = reader->createRowReader(rowReaderOpts);
+
+    EXPECT_EQ(readAllRows(rowReader), 0);
   }
 }
