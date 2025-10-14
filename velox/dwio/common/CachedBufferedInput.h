@@ -27,8 +27,6 @@
 #include "velox/dwio/common/CacheInputStream.h"
 #include "velox/dwio/common/InputStream.h"
 
-DECLARE_int32(cache_load_quantum);
-
 namespace facebook::velox::dwio::common {
 
 struct CacheRequest {
