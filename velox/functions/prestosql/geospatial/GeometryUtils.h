@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <fmt/ranges.h>
 #include <geos/geom/Geometry.h>
 #include <geos/io/WKTReader.h>
 
