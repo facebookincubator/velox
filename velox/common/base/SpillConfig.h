@@ -159,7 +159,7 @@ struct SpillConfig {
   /// Custom options passed to velox::FileSystem to create spill WriteFile.
   std::string fileCreateConfig;
 
-  /// The minimum #rows of a reading batch for window spilling.
+  /// The minimum number of rows to read when processing spilled window data.
   uint32_t windowMinReadBatchRows;
 };
 } // namespace facebook::velox::common
