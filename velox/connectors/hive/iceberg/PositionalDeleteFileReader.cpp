@@ -137,6 +137,7 @@ PositionalDeleteFileReader::PositionalDeleteFileReader(
       deleteSplit_,
       nullptr,
       nullptr,
+      nullptr,
       deleteRowReaderOpts);
 
   deleteRowReader_.reset();

@@ -126,7 +126,7 @@ class TestDataSource : public connector::DataSource {
     return 0;
   }
 
-  std::unordered_map<std::string, RuntimeCounter> runtimeStats() override {
+  std::unordered_map<std::string, RuntimeMetric> getRuntimeStats() override {
     return {};
   }
 

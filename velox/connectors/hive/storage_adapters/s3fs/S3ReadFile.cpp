@@ -79,13 +79,17 @@ class S3ReadFile ::Impl {
       uint64_t offset,
       uint64_t length,
       void* buffer,
-      File::IoStats* stats) const {
+      File::IoStats* stats,
+      const folly::F14FastMap<std::string, std::string>& fileReadOps) const {
     preadInternal(offset, length, static_cast<char*>(buffer));
     return {static_cast<char*>(buffer), length};
   }
 
-  std::string pread(uint64_t offset, uint64_t length, File::IoStats* stats)
-      const {
+  std::string pread(
+      uint64_t offset,
+      uint64_t length,
+      File::IoStats* stats,
+      const folly::F14FastMap<std::string, std::string>& fileReadOps) const {
     std::string result(length, 0);
     char* position = result.data();
     preadInternal(offset, length, position);
@@ -95,7 +99,8 @@ class S3ReadFile ::Impl {
   uint64_t preadv(
       uint64_t offset,
       const std::vector<folly::Range<char*>>& buffers,
-      File::IoStats* stats) const {
+      File::IoStats* stats,
+      const folly::F14FastMap<std::string, std::string>& fileReadOps) const {
     // 'buffers' contains Ranges(data, size)  with some gaps (data = nullptr) in
     // between. This call must populate the ranges (except gap ranges)
     // sequentially starting from 'offset'. AWS S3 GetObject does not support
@@ -183,22 +188,25 @@ std::string_view S3ReadFile::pread(
     uint64_t offset,
     uint64_t length,
     void* buf,
-    filesystems::File::IoStats* stats) const {
-  return impl_->pread(offset, length, buf, stats);
+    filesystems::File::IoStats* stats,
+    const folly::F14FastMap<std::string, std::string>& fileReadOps) const {
+  return impl_->pread(offset, length, buf, stats, {});
 }
 
 std::string S3ReadFile::pread(
     uint64_t offset,
     uint64_t length,
-    filesystems::File::IoStats* stats) const {
-  return impl_->pread(offset, length, stats);
+    filesystems::File::IoStats* stats,
+    const folly::F14FastMap<std::string, std::string>& fileReadOps) const {
+  return impl_->pread(offset, length, stats, {});
 }
 
 uint64_t S3ReadFile::preadv(
     uint64_t offset,
     const std::vector<folly::Range<char*>>& buffers,
-    filesystems::File::IoStats* stats) const {
-  return impl_->preadv(offset, buffers, stats);
+    filesystems::File::IoStats* stats,
+    const folly::F14FastMap<std::string, std::string>& fileReadOps) const {
+  return impl_->preadv(offset, buffers, stats, {});
 }
 
 uint64_t S3ReadFile::size() const {

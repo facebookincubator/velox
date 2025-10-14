@@ -28,7 +28,7 @@ class InputTypedExpr : public ITypedExpr {
       : ITypedExpr{ExprKind::kInput, std::move(type)} {}
 
   bool operator==(const ITypedExpr& other) const final {
-    return is_instance_of<InputTypedExpr>(&other);
+    return other.isInputKind();
   }
 
   std::string toString() const override {
@@ -268,7 +268,7 @@ class FieldAccessTypedExpr : public ITypedExpr {
   FieldAccessTypedExpr(TypePtr type, TypedExprPtr input, std::string name)
       : ITypedExpr{ExprKind::kFieldAccess, std::move(type), {std::move(input)}},
         name_(std::move(name)),
-        isInputColumn_(is_instance_of<InputTypedExpr>(inputs()[0].get())) {}
+        isInputColumn_(inputs()[0]->isInputKind()) {}
 
   const std::string& name() const {
     return name_;
@@ -338,7 +338,7 @@ class DereferenceTypedExpr : public ITypedExpr {
         index_(index) {
     // Make sure this isn't being used to access a top level column.
     VELOX_USER_CHECK(
-        !is_instance_of<InputTypedExpr>(inputs()[0]),
+        !inputs()[0]->isInputKind(),
         "DereferenceTypedExpr select a subfeild cannot be used to access a top level column");
   }
 
@@ -591,7 +591,7 @@ class TypedExprs {
  public:
   /// Returns true if 'expr' is a field access expression.
   static bool isFieldAccess(const TypedExprPtr& expr) {
-    return is_instance_of<FieldAccessTypedExpr>(expr);
+    return expr->isFieldAccessKind();
   }
 
   /// Returns 'expr' as FieldAccessTypedExprPtr or null if not field access
@@ -602,7 +602,7 @@ class TypedExprs {
 
   /// Returns true if 'expr' is a constant expression.
   static bool isConstant(const TypedExprPtr& expr) {
-    return is_instance_of<ConstantTypedExpr>(expr);
+    return expr->isConstantKind();
   }
 
   /// Returns 'expr' as ConstantTypedExprPtr or null if not a constant
@@ -613,7 +613,7 @@ class TypedExprs {
 
   /// Returns true if 'expr' is a lambda expression.
   static bool isLambda(const TypedExprPtr& expr) {
-    return is_instance_of<LambdaTypedExpr>(expr);
+    return expr->isLambdaKind();
   }
 
   /// Returns 'expr' as LambdaTypedExprPtr or null if not a lambda expression.

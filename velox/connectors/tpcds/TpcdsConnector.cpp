@@ -65,7 +65,7 @@ TpcdsDataSource::TpcdsDataSource(
         handle,
         "ColumnHandle must be an instance of TpcdsColumnHandle "
         "for '{}' on table '{}'",
-        handle->name(),
+        it->second->name(),
         toTableName(table_));
 
     auto idx = tpcdsTableSchema->getChildIdxIfExists(handle->name());

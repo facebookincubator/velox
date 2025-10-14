@@ -195,8 +195,11 @@ constexpr folly::StringPiece kMetricMmapAllocatorDelegatedAllocatedBytes{
 
 constexpr folly::StringPiece kMetricCacheMaxAgeSecs{"velox.cache_max_age_secs"};
 
-constexpr folly::StringPiece kMetricMemoryCacheNumEntries{
-    "velox.memory_cache_num_entries"};
+constexpr folly::StringPiece kMetricMemoryCacheNumTinyEntries{
+    "velox.memory_cache_num_tiny_entries"};
+
+constexpr folly::StringPiece kMetricMemoryCacheNumLargeEntries{
+    "velox.memory_cache_num_large_entries"};
 
 constexpr folly::StringPiece kMetricMemoryCacheNumEmptyEntries{
     "velox.memory_cache_num_empty_entries"};

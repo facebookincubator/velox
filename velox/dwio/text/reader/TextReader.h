@@ -206,6 +206,13 @@ class TextRowReader : public dwio::common::RowReader {
       vector_size_t insertionRow,
       DelimType& delim);
 
+  template <class T>
+  void setValueFromString(
+      const std::string& str,
+      BaseVector* FOLLY_NULLABLE data,
+      vector_size_t insertionRow,
+      std::function<std::optional<T>(const std::string&)> convert);
+
   const std::shared_ptr<FileContents> contents_;
   const std::shared_ptr<const TypeWithId> schemaWithId_;
   const std::shared_ptr<velox::common::ScanSpec>& scanSpec_;

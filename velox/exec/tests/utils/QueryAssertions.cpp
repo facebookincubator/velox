@@ -1441,6 +1441,15 @@ void waitForAllTasksToBeDeleted(uint64_t maxWaitUs) {
       folly::join("\n", pendingTaskStats));
 }
 
+void cancelAllTasks() {
+  std::vector<std::shared_ptr<Task>> pendingTasks = Task::getRunningTasks();
+  for (const auto& task : pendingTasks) {
+    if (!task->isRunning()) {
+      task->requestCancel();
+    }
+  }
+}
+
 std::shared_ptr<Task> assertQuery(
     const core::PlanNodePtr& plan,
     std::function<void(exec::TaskCursor*)> addSplits,

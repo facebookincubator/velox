@@ -720,6 +720,11 @@ TEST_F(VectorHasherTest, merge) {
   EXPECT_EQ(numDistinct - 1, ids.size());
 }
 
+TEST_F(VectorHasherTest, computeValueIdsHugeInt) {
+  testComputeValueIds<int128_t>(false);
+  testComputeValueIds<int128_t>(true);
+}
+
 TEST_F(VectorHasherTest, computeValueIdsBigint) {
   testComputeValueIds<int64_t>(false);
   testComputeValueIds<int64_t>(true);
