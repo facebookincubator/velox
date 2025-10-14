@@ -67,7 +67,7 @@ class SortingWriterTest : public testing::Test,
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
   }
 
-  std::unique_ptr<SortBuffer> createSortBuffer() {
+  std::unique_ptr<MaterializedSortBuffer> createSortBuffer() {
     const RowTypePtr inputType =
         ROW({{"c0", BIGINT()}, {"c1", INTEGER()}, {"c2", VARCHAR()}});
 
@@ -80,7 +80,7 @@ class SortingWriterTest : public testing::Test,
         std::numeric_limits<uint32_t>::max(),
         12};
 
-    return std::make_unique<SortBuffer>(
+    return std::make_unique<MaterializedSortBuffer>(
         inputType,
         sortColumnIndices,
         sortCompareFlags,

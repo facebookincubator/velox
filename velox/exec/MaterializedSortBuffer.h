@@ -21,6 +21,7 @@
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/PrefixSort.h"
 #include "velox/exec/RowContainer.h"
+#include "velox/exec/SortBufferBase.h"
 #include "velox/vector/BaseVector.h"
 
 namespace facebook::velox::exec {
@@ -30,10 +31,10 @@ class SortOutputSpiller;
 /// A utility class to accumulate data inside and output the sorted result.
 /// Spilling would be triggered if spilling is enabled and memory usage exceeds
 /// limit.
-class SortBuffer {
+class MaterializedSortBuffer final : public SortBufferBase {
  public:
-  SortBuffer(
-      const RowTypePtr& input,
+  MaterializedSortBuffer(
+      const RowTypePtr& inputType,
       const std::vector<column_index_t>& sortColumnIndices,
       const std::vector<CompareFlags>& sortCompareFlags,
       velox::memory::MemoryPool* pool,
@@ -42,41 +43,19 @@ class SortBuffer {
       const common::SpillConfig* spillConfig = nullptr,
       folly::Synchronized<velox::common::SpillStats>* spillStats = nullptr);
 
-  ~SortBuffer();
+  ~MaterializedSortBuffer() override;
 
-  void addInput(const VectorPtr& input);
+  void addInput(const VectorPtr& input) override;
 
   /// Indicates no more input and triggers either of:
   ///  - In-memory sorting on rows stored in 'data_' if spilling is not enabled.
   ///  - Finish spilling and setup the sort merge reader for the un-spilling
   ///  processing for the output.
-  void noMoreInput();
+  void noMoreInput() override;
 
-  /// Returns the sorted output rows in batch.
-  RowVectorPtr getOutput(vector_size_t maxOutputRows);
-
-  /// Indicates if this sort buffer can spill or not.
-  bool canSpill() const {
-    return spillConfig_ != nullptr;
-  }
-
-  /// Invoked to spill all the rows from 'data_'.
-  void spill();
-
-  memory::MemoryPool* pool() const {
-    return pool_;
-  }
-
-  std::optional<uint64_t> estimateOutputRowSize() const;
+  std::optional<uint64_t> estimateOutputRowSize() const override;
 
  private:
-  // Ensures there is sufficient memory reserved to process 'input'.
-  void ensureInputFits(const VectorPtr& input);
-
-  // Reserves memory for output processing. If reservation cannot be increased,
-  // spills enough to make output fit.
-  void ensureOutputFits(vector_size_t outputBatchSize);
-
   // Reserves memory for sort. If reservation cannot be increased, spills enough
   // to make output fit.
   void ensureSortFits();
@@ -84,21 +63,21 @@ class SortBuffer {
   void updateEstimatedOutputRowSize();
 
   // Invoked to initialize or reset the reusable output buffer to get output.
-  void prepareOutput(vector_size_t outputBatchSize);
+  void prepareOutput(vector_size_t outputBatchSize) override;
 
   // Invoked to initialize reader to read the spilled data from storage for
   // output processing.
   void prepareOutputWithSpill();
 
-  void getOutputWithoutSpill();
+  void getOutputWithoutSpill() override;
 
-  void getOutputWithSpill();
+  void getOutputWithSpill() override;
 
   // Spill during input stage.
-  void spillInput();
+  void spillInput() override;
 
   // Spill during output stage.
-  void spillOutput();
+  void spillOutput() override;
 
   // Finish spill, and we shouldn't get any rows from non-spilled partition as
   // there is only one hash partition for SortBuffer.
@@ -107,41 +86,14 @@ class SortBuffer {
   // Returns true if the sort buffer has spilled, regardless of during input or
   // output processing. If spilled() is true, it means the sort buffer is in
   // minimal memory mode and could not be spilled further.
-  bool hasSpilled() const;
+  bool hasSpilled() const override;
 
-  const RowTypePtr input_;
+  int64_t estimateFlatInputBytes(const VectorPtr& input) const override;
 
-  const std::vector<CompareFlags> sortCompareFlags_;
-
-  velox::memory::MemoryPool* const pool_;
-
-  // The flag is passed from the associated operator such as OrderBy or
-  // TableWriter to indicate if this sort buffer object is under non-reclaimable
-  // execution section or not.
-  tsan_atomic<bool>* const nonReclaimableSection_;
-
-  // Configuration settings for prefix-sort.
-  const common::PrefixSortConfig prefixSortConfig_;
-
-  const common::SpillConfig* const spillConfig_;
-
-  folly::Synchronized<common::SpillStats>* const spillStats_;
-
-  // The column projection map between 'input_' and 'spillerStoreType_' as sort
-  // buffer stores the sort columns first in 'data_'.
-  std::vector<IdentityProjection> columnMap_;
-
-  // Indicates no more input. Once it is set, addInput() can't be called on this
-  // sort buffer object.
-  bool noMoreInput_ = false;
-
-  // The number of received input rows.
-  uint64_t numInputRows_ = 0;
-
-  // Used to store the input data in row format.
-  std::unique_ptr<RowContainer> data_;
-
-  std::vector<char*, memory::StlAllocator<char*>> sortedRows_;
+  int64_t estimateIncrementalBytes(
+      const VectorPtr& input,
+      uint64_t outOfLineBytes,
+      int64_t flatInputBytes) const override;
 
   // The data type of the rows stored in 'data_' and spilled on disk. The
   // sort key columns are stored first then the non-sorted data columns.
@@ -152,23 +104,5 @@ class SortBuffer {
   std::unique_ptr<SortOutputSpiller> outputSpiller_;
 
   SpillPartitionSet spillPartitionSet_;
-
-  // Used to merge the sorted runs from in-memory rows and spilled rows on disk.
-  std::unique_ptr<TreeOfLosers<SpillMergeStream>> spillMerger_;
-
-  // Records the source rows to copy to 'output_' in order.
-  std::vector<const RowVector*> spillSources_;
-
-  std::vector<vector_size_t> spillSourceRows_;
-
-  // Reusable output vector.
-  RowVectorPtr output_;
-
-  // Estimated size of a single output row by using the max
-  // 'data_->estimateRowSize()' across all accumulated data set.
-  std::optional<uint64_t> estimatedOutputRowSize_{};
-
-  // The number of rows that has been returned.
-  uint64_t numOutputRows_{0};
 };
 } // namespace facebook::velox::exec

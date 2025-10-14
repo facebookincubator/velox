@@ -190,7 +190,19 @@ class OrderByTest : public OperatorTestBase {
       const std::vector<uint32_t>& sortingKeys) {
     {
       SCOPED_TRACE("run without spilling");
-      assertQueryOrdered(planNode, duckDbSql, sortingKeys);
+      for (const auto materializedSortBufferEnabled : {"true", "false"}) {
+        auto queryCtx = core::QueryCtx::create(executor_.get());
+        queryCtx->testingOverrideConfigUnsafe({
+            {core::QueryConfig::kSpillEnabled, "false"},
+            {core::QueryConfig::kOrderBySpillEnabled, "false"},
+            {core::QueryConfig::kMaterializedSortBufferEnabled,
+             materializedSortBufferEnabled},
+        });
+        CursorParameters params;
+        params.planNode = planNode;
+        params.queryCtx = queryCtx;
+        assertQueryOrdered(params, duckDbSql, sortingKeys);
+      }
     }
     {
       SCOPED_TRACE("run with spilling");

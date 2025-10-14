@@ -50,12 +50,15 @@ velox_add_library(
   LocalPartition.cpp
   LocalPlanner.cpp
   MarkDistinct.cpp
+  MaterializedSortBuffer.cpp
   MemoryReclaimer.cpp
   Merge.cpp
   MergeJoin.cpp
   MergeSource.cpp
   NestedLoopJoinBuild.cpp
   NestedLoopJoinProbe.cpp
+  NonMaterializedSortBuffer.cpp
+  SortBufferBase.cpp
   SpatialIndex.cpp
   SpatialJoinBuild.cpp
   SpatialJoinProbe.cpp
@@ -79,7 +82,6 @@ velox_add_library(
   RowsStreamingWindowBuild.cpp
   ScaleWriterLocalPartition.cpp
   ScaledScanController.cpp
-  SortBuffer.cpp
   SortWindowBuild.cpp
   SortedAggregations.cpp
   SpatialJoinBuild.cpp

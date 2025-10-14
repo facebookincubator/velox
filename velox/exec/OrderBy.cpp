@@ -59,15 +59,30 @@ OrderBy::OrderBy(
     sortCompareFlags.push_back(
         fromSortOrderToCompareFlags(orderByNode->sortingOrders()[i]));
   }
-  sortBuffer_ = std::make_unique<SortBuffer>(
-      outputType_,
-      sortColumnIndices,
-      sortCompareFlags,
-      pool(),
-      &nonReclaimableSection_,
-      driverCtx->prefixSortConfig(),
-      spillConfig_.has_value() ? &(spillConfig_.value()) : nullptr,
-      spillStats_.get());
+
+  const auto materializedSortBufferEnabled =
+      driverCtx->queryConfig().materializedSortBufferEnabled();
+  if (materializedSortBufferEnabled) {
+    sortBuffer_ = std::make_unique<MaterializedSortBuffer>(
+        outputType_,
+        sortColumnIndices,
+        sortCompareFlags,
+        pool(),
+        &nonReclaimableSection_,
+        driverCtx->prefixSortConfig(),
+        spillConfig_.has_value() ? &(spillConfig_.value()) : nullptr,
+        spillStats_.get());
+  } else {
+    sortBuffer_ = std::make_unique<NonMaterializedSortBuffer>(
+        outputType_,
+        sortColumnIndices,
+        sortCompareFlags,
+        pool(),
+        &nonReclaimableSection_,
+        driverCtx->prefixSortConfig(),
+        spillConfig_.has_value() ? &(spillConfig_.value()) : nullptr,
+        spillStats_.get());
+  }
 }
 
 void OrderBy::addInput(RowVectorPtr input) {

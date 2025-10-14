@@ -26,8 +26,8 @@
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/SortingWriter.h"
+#include "velox/exec/MaterializedSortBuffer.h"
 #include "velox/exec/OperatorUtils.h"
-#include "velox/exec/SortBuffer.h"
 
 #include <boost/lexical_cast.hpp>
 #include <boost/uuid/uuid_generators.hpp>
@@ -872,7 +872,7 @@ HiveDataSink::maybeCreateBucketSortWriter(
   }
   auto* sortPool = writerInfo_.back()->sortPool.get();
   VELOX_CHECK_NOT_NULL(sortPool);
-  auto sortBuffer = std::make_unique<exec::SortBuffer>(
+  auto sortBuffer = std::make_unique<exec::MaterializedSortBuffer>(
       getNonPartitionTypes(dataChannels_, inputType_),
       sortColumnIndices_,
       sortCompareFlags_,
