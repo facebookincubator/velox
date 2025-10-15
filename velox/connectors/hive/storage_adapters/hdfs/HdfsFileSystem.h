@@ -15,13 +15,16 @@
  */
 #include "velox/common/file/FileSystems.h"
 
+#include <set>
+
 namespace facebook::velox::filesystems {
 
 struct HdfsServiceEndpoint {
   HdfsServiceEndpoint(
       const std::string& hdfsHost,
       const std::string& hdfsPort,
-      bool isViewfs = false)
+      bool isViewfs = false,
+      bool isViewExtraSupportedFs = false)
       : host(hdfsHost), port(hdfsPort), isViewfs(isViewfs) {}
 
   /// In HDFS HA mode, the identity is a nameservice ID with no port, e.g.,
@@ -90,9 +93,16 @@ class HdfsFileSystem : public FileSystem {
       const std::string_view filePath,
       const config::ConfigBase* config);
 
+  static bool isExtraSupportedFile(std::string_view filename);
+
+  // Set extra supported schemes for HDFS FileSystem, multiple values separated by commas.
+  static void setExtraSupportedSchemes(std::string_view schemesStr);
+
   static std::string_view kScheme;
 
   static std::string_view kViewfsScheme;
+
+  static std::set<std::string_view> extraSupportedSchemes;
 
  protected:
   class Impl;
