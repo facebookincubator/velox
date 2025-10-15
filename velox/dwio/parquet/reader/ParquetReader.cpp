@@ -362,12 +362,22 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
             requestedRowType =
                 std::dynamic_pointer_cast<const velox::RowType>(requestedType);
           } else if (
-              requestedType->isArray() && isRepeated &&
+              requestedType->isArray() &&
               requestedType->asArray().elementType()->isRow()) {
-            // Handle the case of unannotated array of structs (repeated group
-            // without LIST annotation).
-            requestedRowType = std::dynamic_pointer_cast<const velox::RowType>(
-                requestedType->asArray().elementType());
+            if (isRepeated) {
+              // Handle the case of unannotated array of structs (repeated group
+              // without LIST annotation).
+              requestedRowType =
+                  std::dynamic_pointer_cast<const velox::RowType>(
+                      requestedType->asArray().elementType());
+            } else if (
+                !schemaElement.logicalType.__isset.LIST &&
+                schema[schemaIdx].repetition_type ==
+                    thrift::FieldRepetitionType::REPEATED) {
+              // If this is not a LIST element layer, unwrap one level of
+              // array for repeated child of struct.
+              childRequestedType = requestedType->asArray().elementType();
+            }
           }
         }
 
