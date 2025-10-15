@@ -289,7 +289,6 @@ jobs:
         env:
           VELOX_DEPENDENCY_SOURCE: SYSTEM
           faiss_SOURCE: BUNDLED
-          fmt_SOURCE: BUNDLED
           simdjson_SOURCE: BUNDLED
           gRPC_SOURCE: SYSTEM
           MAKEFLAGS: NUM_THREADS=4 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=3
