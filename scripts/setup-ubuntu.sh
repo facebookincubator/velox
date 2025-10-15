@@ -189,6 +189,7 @@ function install_cuda {
     cuda-minimal-build-"$dashed" \
     cuda-nvrtc-dev-"$dashed" \
     libcufile-dev-"$dashed" \
+    libnvjitlink-devel-"$dashed" \
     libnuma1
 }
 
