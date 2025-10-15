@@ -54,6 +54,8 @@ namespace facebook::velox {
 #endif
 
 /// tsan_atomic is relaxed atomic without use rmw operations.
+/// For an example instead of fetch_add it does load, add, store.
+/// This is not atomic operation, but it is ok for our use cases.
 /// This allows declaring variables like statistics counters that do not have to
 /// be exact nor have synchronized semantics.
 /// TODO: Use different name.
@@ -72,46 +74,34 @@ class tsan_atomic : protected std::atomic<T> {
   }
 
   T operator+=(T v) noexcept {
-    const auto oldValue = this->load(std::memory_order_relaxed);
-    const auto newValue = oldValue + v;
-    this->store(newValue, std::memory_order_relaxed);
-    return newValue;
+    const auto newValue = *this + v;
+    return *this = newValue;
   }
   T operator-=(T v) noexcept {
-    const auto oldValue = this->load(std::memory_order_relaxed);
-    const auto newValue = oldValue - v;
-    this->store(newValue, std::memory_order_relaxed);
-    return newValue;
+    const auto newValue = *this - v;
+    return *this = newValue;
   }
   T operator&=(T v) noexcept {
-    const auto oldValue = this->load(std::memory_order_relaxed);
-    const auto newValue = oldValue & v;
-    this->store(newValue, std::memory_order_relaxed);
-    return newValue;
+    const auto newValue = *this & v;
+    return *this = newValue;
   }
   T operator|=(T v) noexcept {
-    const auto oldValue = this->load(std::memory_order_relaxed);
-    const auto newValue = oldValue | v;
-    this->store(newValue, std::memory_order_relaxed);
-    return newValue;
+    const auto newValue = *this | v;
+    return *this = newValue;
   }
   T operator^=(T v) noexcept {
-    const auto oldValue = this->load(std::memory_order_relaxed);
-    const auto newValue = oldValue ^ v;
-    this->store(newValue, std::memory_order_relaxed);
-    return newValue;
+    const auto newValue = *this ^ v;
+    return *this = newValue;
   }
 
   T operator++(int) noexcept {
-    const auto oldValue = this->load(std::memory_order_relaxed);
-    const auto newValue = oldValue + T(1);
-    this->store(newValue, std::memory_order_relaxed);
+    const T oldValue = *this;
+    *this = oldValue + T(1);
     return oldValue;
   }
   T operator--(int) noexcept {
-    const auto oldValue = this->load(std::memory_order_relaxed);
-    const auto newValue = oldValue - T(1);
-    this->store(newValue, std::memory_order_relaxed);
+    const T oldValue = *this;
+    *this = oldValue - T(1);
     return oldValue;
   }
 
