@@ -1413,6 +1413,32 @@ TEST_F(ParquetTableScanTest, shortAndLongDecimalReadWithLargerPrecision) {
   assertEqualVectors(expectedDecimalVectors->childAt(1), rows->childAt(1));
 }
 
+TEST_F(ParquetTableScanTest, inFilter) {
+  auto vectors = {makeRowVector(
+      {"name"},
+      {
+          makeNullableFlatVector<std::string>(
+              {"mary", "martin", "lucy", "alex", std::nullopt, "mary", "dan"}),
+      })};
+  auto filePath = TempFilePath::create();
+  WriterOptions options;
+  writeToParquetFile(filePath->getPath(), vectors, options);
+  createDuckDbTable(vectors);
+
+  auto plan = PlanBuilder(pool_.get())
+                  .tableScan(
+                      ROW({"name"}, {VARCHAR()}),
+                      {},
+                      "name in ('alex', 'leo', 'mary', null, 'victor')")
+                  .planNode();
+  auto split = makeSplit(filePath->getPath());
+
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .split(split)
+      .assertResults(
+          "SELECT name FROM tmp where name in ('alex', 'leo', 'mary', null, 'victor')");
+}
+
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);
   folly::Init init{&argc, &argv, false};
