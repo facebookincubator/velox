@@ -387,6 +387,15 @@ bool registerCudfFunction(
   return true;
 }
 
+void registerCudfFunctions(
+    std::vector<std::string> aliases,
+    CudfFunctionFactory factory,
+    bool overwrite) {
+  for (const auto& name : aliases) {
+    registerCudfFunction(name, factory, overwrite);
+  }
+}
+
 std::shared_ptr<CudfFunction> createCudfFunction(
     const std::string& name,
     const std::shared_ptr<velox::exec::Expr>& expr) {
@@ -400,21 +409,9 @@ std::shared_ptr<CudfFunction> createCudfFunction(
 
 bool registerBuiltinFunctions(const std::string& prefix) {
   registerCudfFunction(
-      "split",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<SplitFunction>(expr);
-      });
-
-  registerCudfFunction(
       prefix + "split",
       [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
         return std::make_shared<SplitFunction>(expr);
-      });
-
-  registerCudfFunction(
-      "cardinality",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<CardinalityFunction>(expr);
       });
 
   registerCudfFunction(
@@ -423,14 +420,8 @@ bool registerBuiltinFunctions(const std::string& prefix) {
         return std::make_shared<CardinalityFunction>(expr);
       });
 
-  registerCudfFunction(
-      "substr",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<SubstrFunction>(expr);
-      });
-
-  registerCudfFunction(
-      prefix + "substr",
+  registerCudfFunctions(
+      {prefix + "substr", prefix + "substring"},
       [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
         return std::make_shared<SubstrFunction>(expr);
       });
@@ -442,21 +433,9 @@ bool registerBuiltinFunctions(const std::string& prefix) {
       });
 
   registerCudfFunction(
-      "hash_with_seed",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<HashFunction>(expr);
-      });
-
-  registerCudfFunction(
       prefix + "round",
       [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
         return std::make_shared<RoundFunction>(expr);
-      });
-
-  registerCudfFunction(
-      "year",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<YearFunction>(expr);
       });
 
   registerCudfFunction(
@@ -466,33 +445,15 @@ bool registerBuiltinFunctions(const std::string& prefix) {
       });
 
   registerCudfFunction(
-      "length",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<LengthFunction>(expr);
-      });
-
-  registerCudfFunction(
       prefix + "length",
       [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
         return std::make_shared<LengthFunction>(expr);
       });
 
   registerCudfFunction(
-      "lower",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<LowerFunction>(expr);
-      });
-
-  registerCudfFunction(
       prefix + "lower",
       [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
         return std::make_shared<LowerFunction>(expr);
-      });
-
-  registerCudfFunction(
-      "like",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<LikeFunction>(expr);
       });
 
   registerCudfFunction(

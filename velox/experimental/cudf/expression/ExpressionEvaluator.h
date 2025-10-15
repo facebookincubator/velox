@@ -66,6 +66,11 @@ bool registerCudfFunction(
     CudfFunctionFactory factory,
     bool overwrite = true);
 
+void registerCudfFunctions(
+    std::vector<std::string> aliases,
+    CudfFunctionFactory factory,
+    bool overwrite = true);
+
 bool registerBuiltinFunctions(const std::string& prefix);
 
 class CudfExpression {
