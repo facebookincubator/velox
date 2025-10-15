@@ -62,10 +62,12 @@ class IndexLookupJoin : public Operator {
   /// from remote storage.
   static inline const std::string kClientLookupWaitWallTime{
       "clientlookupWaitWallNanos"};
-  /// The number of split requests sent to remote storage for a client lookup
-  /// request.
-  static inline const std::string kClientNumStorageRequests{
-      "clientNumStorageRequests"};
+  /// The number of multi scan lookup requests sent to remote storage.
+  static inline const std::string kClientNumStorageRequestsForScan{
+      "clientNumStorageRequestsForScan"};
+  /// The number of multi get lookup requests sent to remote storage.
+  static inline const std::string kClientNumStorageRequestsForGet{
+      "clientNumStorageRequestsForGet"};
   /// The cpu time in nanoseconds that the storage client process response from
   /// remote storage lookup such as decoding the response data into velox
   /// vectors.
@@ -78,6 +80,12 @@ class IndexLookupJoin : public Operator {
   /// the raw data received from the remote storage lookup.
   static inline const std::string kClientLookupResultSize{
       "clientLookupResultSize"};
+  /// The number of multi scan results received from remote storage with error.
+  static inline const std::string kClientNumErrorResultsForScan{
+      "clientNumErrorResultsForScan"};
+  /// The number of multi get results received from remote storage with error.
+  static inline const std::string kClientNumErrorResultsForGet{
+      "clientNumErrorResultsForGet"};
 
  private:
   using LookupResultIter = connector::IndexSource::LookupResultIterator;
