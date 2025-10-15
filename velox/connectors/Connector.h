@@ -550,6 +550,81 @@ class ConnectorQueryCtx {
   bool rowSizeTrackingEnabled_{true};
 };
 
+class Connector;
+
+class ConnectorFactory {
+ public:
+  explicit ConnectorFactory(const char* name) : name_(name) {}
+
+  virtual ~ConnectorFactory() = default;
+
+  const std::string& connectorName() const {
+    return name_;
+  }
+
+  virtual std::shared_ptr<Connector> newConnector(
+      const std::string& id,
+      std::shared_ptr<const config::ConfigBase> config,
+      folly::Executor* ioExecutor = nullptr,
+      folly::Executor* cpuExecutor = nullptr) = 0;
+
+ private:
+  const std::string name_;
+};
+
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+namespace detail {
+inline std::unordered_map<std::string, std::shared_ptr<ConnectorFactory>>&
+connectorFactories() {
+  static std::unordered_map<std::string, std::shared_ptr<ConnectorFactory>>
+      factories;
+  return factories;
+}
+} // namespace detail
+
+/// Adds a factory for creating connectors to the registry using connector
+/// name as the key. Throws if factor with the same name is already present.
+/// Always returns true. The return value makes it easy to use with
+/// FB_ANONYMOUS_VARIABLE.
+inline bool registerConnectorFactory(
+    std::shared_ptr<ConnectorFactory> factory) {
+  bool ok = detail::connectorFactories()
+                .insert({factory->connectorName(), factory})
+                .second;
+  VELOX_CHECK(
+      ok,
+      "ConnectorFactory with name '{}' is already registered",
+      factory->connectorName());
+  return true;
+}
+
+/// Returns true if a connector with the specified name has been registered,
+/// false otherwise.
+inline bool hasConnectorFactory(const std::string& connectorName) {
+  return detail::connectorFactories().count(connectorName) == 1;
+}
+
+/// Unregister a connector factory by name.
+/// Returns true if a connector with the specified name has been
+/// unregistered, false otherwise.
+inline bool unregisterConnectorFactory(const std::string& connectorName) {
+  auto count = detail::connectorFactories().erase(connectorName);
+  return count == 1;
+}
+
+/// Returns a factory for creating connectors with the specified name.
+/// Throws if factory doesn't exist.
+inline std::shared_ptr<ConnectorFactory> getConnectorFactory(
+    const std::string& connectorName) {
+  auto it = detail::connectorFactories().find(connectorName);
+  VELOX_CHECK(
+      it != detail::connectorFactories().end(),
+      "ConnectorFactory with name '{}' not registered",
+      connectorName);
+  return it->second;
+}
+#endif
+
 class Connector {
  public:
   explicit Connector(
@@ -682,77 +757,6 @@ class Connector {
       std::unordered_map<std::string_view, std::weak_ptr<cache::ScanTracker>>>
       trackers_;
 };
-
-class ConnectorFactory {
- public:
-  explicit ConnectorFactory(const char* name) : name_(name) {}
-
-  virtual ~ConnectorFactory() = default;
-
-  const std::string& connectorName() const {
-    return name_;
-  }
-
-  virtual std::shared_ptr<Connector> newConnector(
-      const std::string& id,
-      std::shared_ptr<const config::ConfigBase> config,
-      folly::Executor* ioExecutor = nullptr,
-      folly::Executor* cpuExecutor = nullptr) = 0;
-
- private:
-  const std::string name_;
-};
-
-namespace detail {
-inline std::unordered_map<std::string, std::shared_ptr<ConnectorFactory>>&
-connectorFactories() {
-  static std::unordered_map<std::string, std::shared_ptr<ConnectorFactory>>
-      factories;
-  return factories;
-}
-} // namespace detail
-
-/// Adds a factory for creating connectors to the registry using connector
-/// name as the key. Throws if factor with the same name is already present.
-/// Always returns true. The return value makes it easy to use with
-/// FB_ANONYMOUS_VARIABLE.
-inline bool registerConnectorFactory(
-    std::shared_ptr<ConnectorFactory> factory) {
-  bool ok = detail::connectorFactories()
-                .insert({factory->connectorName(), factory})
-                .second;
-  VELOX_CHECK(
-      ok,
-      "ConnectorFactory with name '{}' is already registered",
-      factory->connectorName());
-  return true;
-}
-
-/// Returns true if a connector with the specified name has been registered,
-/// false otherwise.
-inline bool hasConnectorFactory(const std::string& connectorName) {
-  return detail::connectorFactories().count(connectorName) == 1;
-}
-
-/// Unregister a connector factory by name.
-/// Returns true if a connector with the specified name has been
-/// unregistered, false otherwise.
-inline bool unregisterConnectorFactory(const std::string& connectorName) {
-  auto count = detail::connectorFactories().erase(connectorName);
-  return count == 1;
-}
-
-/// Returns a factory for creating connectors with the specified name.
-/// Throws if factory doesn't exist.
-inline std::shared_ptr<ConnectorFactory> getConnectorFactory(
-    const std::string& connectorName) {
-  auto it = detail::connectorFactories().find(connectorName);
-  VELOX_CHECK(
-      it != detail::connectorFactories().end(),
-      "ConnectorFactory with name '{}' not registered",
-      connectorName);
-  return it->second;
-}
 
 /// Adds connector instance to the registry using connector ID as the key.
 /// Throws if connector with the same ID is already present. Always returns
