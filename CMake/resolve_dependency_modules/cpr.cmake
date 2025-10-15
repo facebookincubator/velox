@@ -43,7 +43,7 @@ set(BUILD_SHARED_LIBS ${VELOX_BUILD_SHARED})
 set(CPR_USE_SYSTEM_CURL OFF)
 # ZLIB has already been found by find_package(ZLIB, REQUIRED), set CURL_ZLIB=OFF
 # to save compile time.
-set(CURL_ZLIB OFF)
+set(CURL_ZLIB "OFF" CACHE STRING "Enable or disable ZLIB support")
 FetchContent_MakeAvailable(cpr)
 # libcpr in its CMakeLists.txt file disables the BUILD_TESTING globally when
 # CPR_USE_SYSTEM_CURL=OFF. unset BUILD_TESTING here.
