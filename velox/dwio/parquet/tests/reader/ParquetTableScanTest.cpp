@@ -787,6 +787,64 @@ TEST_F(ParquetTableScanTest, array) {
       .assertResults(expected);
 }
 
+TEST_F(ParquetTableScanTest, legacyThriftListOfRow) {
+  // In parquet-thrift-compat.parquet, complexColumn is a MAP whose value is a
+  // legacy two-level LIST. Its two-field repeated group "value_tuple" is the
+  // list element, so it reads as ARRAY<ROW>.
+  const auto rowType =
+      ROW("complexColumn",
+          MAP(INTEGER(),
+              ARRAY(ROW({
+                  {"nestedIntsColumn", ARRAY(INTEGER())},
+                  {"nestedStringColumn", VARCHAR()},
+              }))));
+  auto plan = PlanBuilder(pool_.get())
+                  .tableScan(rowType, {}, "", rowType, {})
+                  .planNode();
+
+  auto genOffsets = [](vector_size_t size) {
+    std::vector<vector_size_t> offsets;
+    for (auto i = 0; i < size; ++i) {
+      if (i % 3 == 0) {
+        offsets.emplace_back(i);
+      }
+    }
+    return offsets;
+  };
+
+  const vector_size_t size = 10;
+  auto arrayOfInts = makeArrayVector(
+      genOffsets(size * 27), makeFlatVector<int32_t>(size * 27, [](auto row) {
+        return row / 27 + (row % 9) / 3 + row % 3;
+      }));
+  auto rowOfArray = makeRowVector(
+      {"nestedIntsColumn", "nestedStringColumn"},
+      {
+          arrayOfInts,
+          makeFlatVector<std::string>(
+              size * 9,
+              [](auto row) {
+                return "val_" + std::to_string(row / 9 + row % 3);
+              }),
+      });
+  auto arrayOfRow = makeArrayVector(genOffsets(size * 9), rowOfArray);
+  auto expected = makeRowVector(
+      rowType->names(),
+      {
+          makeMapVector(
+              genOffsets(size * 3),
+              makeFlatVector<int32_t>(
+                  size * 3, [](auto row) { return row / 3 + row % 3; }),
+              arrayOfRow),
+      });
+
+  AssertQueryBuilder(plan)
+      .connectorSessionProperty(
+          kHiveConnectorId, FileConfig::kUseColumnNamesSession, "true")
+      .splits({makeSplit(getExampleFilePath("parquet-thrift-compat.parquet"))})
+      .assertResults(expected);
+}
+
 TEST_F(ParquetTableScanTest, legacyArrayOfStructOfArray) {
   // Legacy format with Array of Struct of Array
   // ARRAY<STRUCT<ads_id: BIGINT, shop_id: BIGINT, streamer_cat_ids:

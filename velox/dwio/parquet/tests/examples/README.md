@@ -575,6 +575,38 @@ annotation, definition level, repetition level, and compression when useful.
 - Purpose: Legacy LIST fixture whose repeated `array` node has more than one
   child. Velox must interpret array elements as rows.
 
+### `parquet-thrift-compat.parquet`
+
+- Metadata: `created_by=parquet-mr (build
+  32c46643845ea8a705c35d4ec8fc654cc8ff816d)`, 10 rows, 1 row group, 25 leaf
+  columns, Snappy, format version 1.0. Besides `complexColumn`, it has 18
+  required and optional scalar columns, the legacy `_tuple` LISTs
+  `stringsColumn` and `intSetColumn`, and the map `intToStringColumn`.
+- Parquet schema of `complexColumn`:
+
+  ```text
+  required group complexColumn (MAP) {
+    repeated group map (MAP_KEY_VALUE) {
+      required int32 key;
+      optional group value (LIST) {
+        repeated group value_tuple {
+          required group nestedIntsColumn (LIST) {
+            repeated int32 nestedIntsColumn_tuple;
+          }
+          required binary nestedStringColumn (STRING);
+        }
+      }
+    }
+  }
+  ```
+
+- Purpose: Copied from Apache Spark's
+  `sql/core/src/test/resources/test-data/parquet-thrift-compat.snappy.parquet`.
+  Legacy two-level LIST of rows written by parquet-thrift. The two-field
+  repeated group `value_tuple` is the list element, not a wrapper, so
+  `complexColumn` must be read as
+  `MAP<INTEGER, ARRAY<ROW<nestedIntsColumn, nestedStringColumn>>>`.
+
 ### `parse_empty_nested_list.parquet`
 
 - Metadata: `created_by=parquet-cpp-arrow version 19.0.1`, 1000 rows, 1 row
