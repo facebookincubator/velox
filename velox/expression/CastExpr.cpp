@@ -304,6 +304,32 @@ VectorPtr CastExpr::castFromTime(
       });
       return castResult;
     }
+    case TypeKind::TIMESTAMP: {
+      // if input is constant, create a constant output vector
+      if (input.isConstantEncoding()) {
+        auto constantInput = input.as<ConstantVector<int64_t>>();
+        if (constantInput->isNullAt(0)) {
+          return BaseVector::createNullConstant(
+              toType, rows.end(), context.pool());
+        } else {
+          auto timeMillis = constantInput->valueAt(0);
+          return std::make_shared<ConstantVector<Timestamp>>(
+              context.pool(),
+              rows.end(),
+              false, // isNull
+              toType,
+              Timestamp::fromMillis(timeMillis));
+        }
+      }
+
+      // fallback to element-wise copy for non-constant inputs
+      auto* resultFlatVector = castResult->as<FlatVector<Timestamp>>();
+      applyToSelectedNoThrowLocal(context, rows, castResult, [&](int row) {
+        auto timeMillis = inputFlatVector->valueAt(row);
+        resultFlatVector->set(row, Timestamp::fromMillis(timeMillis));
+      });
+      return castResult;
+    }
     default:
       VELOX_UNSUPPORTED(
           "Cast from TIME to {} is not supported", toType->toString());
