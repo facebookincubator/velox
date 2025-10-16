@@ -3898,6 +3898,14 @@ class SpatialJoinNode : public PlanNode {
       PlanNodePtr right,
       RowTypePtr outputType);
 
+  PlanNodePtr leftNode() const {
+    return sources()[0];
+  }
+
+  PlanNodePtr rightNode() const {
+    return sources()[1];
+  }
+
   class Builder {
    public:
     Builder() = default;
