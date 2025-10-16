@@ -154,18 +154,18 @@ SpatialJoinProbe::SpatialJoinProbe(
       outputBatchSize_{outputBatchRows()},
       joinNode_(joinNode),
       buildProjections_(extractProjections(
-          joinNode_->sources()[1]->outputType(),
+          joinNode_->rightNode()->outputType(),
           outputType_)),
       outputBuilder_{
           outputBatchSize_,
           outputType_,
           extractProjections(
-              joinNode_->sources()[0]->outputType(),
+              joinNode_->leftNode()->outputType(),
               outputType_), // these are the identity Projections
           buildProjections_,
           *operatorCtx_} {
   identityProjections_ =
-      extractProjections(joinNode_->sources()[0]->outputType(), outputType_);
+      extractProjections(joinNode_->leftNode()->outputType(), outputType_);
 }
 
 /////////
@@ -178,8 +178,8 @@ void SpatialJoinProbe::initialize() {
   if (joinNode_->joinCondition() != nullptr) {
     initializeFilter(
         joinNode_->joinCondition(),
-        joinNode_->sources()[0]->outputType(),
-        joinNode_->sources()[1]->outputType());
+        joinNode_->leftNode()->outputType(),
+        joinNode_->rightNode()->outputType());
   }
 
   joinNode_.reset();

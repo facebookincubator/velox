@@ -117,6 +117,7 @@ std::unique_ptr<SimpleVector<uint64_t>> SequenceVector<T>::hashAll() const {
       0 /* nullSequenceCount */);
 }
 
+#ifdef VELOX_ENABLE_LOAD_SIMD_VALUE_BUFFER
 template <typename T>
 xsimd::batch<T> SequenceVector<T>::loadSIMDValueBufferAt(
     size_t byteOffset) const {
@@ -136,6 +137,7 @@ xsimd::batch<T> SequenceVector<T>::loadSIMDValueBufferAt(
     return xsimd::load_aligned(tmp);
   }
 }
+#endif
 
 template <typename T>
 bool SequenceVector<T>::checkLoadRange(size_t index, size_t count) const {

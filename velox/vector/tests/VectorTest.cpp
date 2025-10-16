@@ -2722,24 +2722,43 @@ TEST_F(VectorTest, flattenVector) {
 
   VectorPtr lazy = std::make_shared<LazyVector>(
       pool(), INTEGER(), flat->size(), std::make_unique<TestingLoader>(flat));
-  test(lazy, true);
+  test(lazy, false);
 
-  // Constant
+  // Constant.
   VectorPtr constant = BaseVector::wrapInConstant(100, 1, flat);
   test(constant, false);
   EXPECT_TRUE(constant->isFlatEncoding());
 
-  // Dictionary
+  // Dictionary.
   VectorPtr dictionary = BaseVector::wrapInDictionary(
       nullptr, makeIndices(100, [](auto row) { return row % 2; }), 100, flat);
   test(dictionary, false);
   EXPECT_TRUE(dictionary->isFlatEncoding());
 
+  // Lazy dictionary.
   VectorPtr lazyDictionary =
       wrapInLazyDictionary(makeFlatVector<int32_t>({1, 2, 3}));
-  test(lazyDictionary, true);
-  EXPECT_TRUE(lazyDictionary->isLazy());
-  EXPECT_TRUE(lazyDictionary->loadedVector()->isFlatEncoding());
+  test(lazyDictionary, false);
+  EXPECT_TRUE(lazyDictionary->isFlatEncoding());
+
+  // Lazy dictionary row, where children are also lazy dictionaries.
+  VectorPtr rowWithLazyDictionaryChildren = wrapInLazyDictionary(makeRowVector(
+      {wrapInLazyDictionary(makeFlatVector<int32_t>({1, 2, 3})),
+       wrapInLazyDictionary(array),
+       wrapInLazyDictionary(map)}));
+  test(rowWithLazyDictionaryChildren, false);
+  EXPECT_EQ(
+      rowWithLazyDictionaryChildren->encoding(), VectorEncoding::Simple::ROW);
+  RowVector* rowWithLazyDictionaryChildrenRowVector =
+      rowWithLazyDictionaryChildren->as<RowVector>();
+  EXPECT_TRUE(
+      rowWithLazyDictionaryChildrenRowVector->childAt(0)->isFlatEncoding());
+  EXPECT_EQ(
+      rowWithLazyDictionaryChildrenRowVector->childAt(1)->encoding(),
+      VectorEncoding::Simple::ARRAY);
+  EXPECT_EQ(
+      rowWithLazyDictionaryChildrenRowVector->childAt(2)->encoding(),
+      VectorEncoding::Simple::MAP);
 
   // Array with constant elements.
   auto* arrayVector = array->as<ArrayVector>();

@@ -3898,6 +3898,14 @@ class SpatialJoinNode : public PlanNode {
       PlanNodePtr right,
       RowTypePtr outputType);
 
+  PlanNodePtr leftNode() const {
+    return sources()[0];
+  }
+
+  PlanNodePtr rightNode() const {
+    return sources()[1];
+  }
+
   class Builder {
    public:
     Builder() = default;
@@ -3974,24 +3982,6 @@ class SpatialJoinNode : public PlanNode {
       VELOX_USER_CHECK(
           buildGeometry_.has_value(),
           "SpatialJoinNode build geometry is not set");
-
-      VELOX_USER_CHECK(
-          (probeGeometry_.has_value() && buildGeometry_.has_value()) ||
-              (!probeGeometry_.has_value() && !buildGeometry_.has_value()),
-          "Either probe and build geometry must both be set, or neither");
-
-      if (probeGeometry_.has_value() && buildGeometry_.has_value()) {
-        return std::make_shared<SpatialJoinNode>(
-            id_.value(),
-            joinType_,
-            joinCondition_,
-            probeGeometry_.value(),
-            buildGeometry_.value(),
-            radius_,
-            left_.value(),
-            right_.value(),
-            outputType_.value());
-      }
 
       VELOX_USER_CHECK(
           (probeGeometry_.has_value() && buildGeometry_.has_value()) ||

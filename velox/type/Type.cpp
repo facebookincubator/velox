@@ -1701,7 +1701,7 @@ int64_t TimeType::valueToTime(
     utcTime = timeZone->to_sys(
         std::chrono::milliseconds{localSystemTime},
         tz::TimeZone::TChoose::kEarliest);
-  } catch (const facebook::velox::tzdb::nonexistent_local_time& error) {
+  } catch (const facebook::velox::tzdb::nonexistent_local_time&) {
     // If the time does not exist during DST spring-forward, fail the
     // conversion.
     VELOX_USER_FAIL(

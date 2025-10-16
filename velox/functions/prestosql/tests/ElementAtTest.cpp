@@ -232,6 +232,248 @@ TEST_F(ElementAtTest, mapWithDictionaryKeys) {
   }
 }
 
+TEST_F(ElementAtTest, flatMapTest) {
+  // Null map.
+  test::assertEqualVectors(
+      makeNullableFlatVector<int32_t>({std::nullopt}),
+      evaluate(
+          "element_at(c0, 1)",
+          makeRowVector(
+              {makeFlatMapVectorFromJson<int64_t, int32_t>({"null"})})));
+
+  // Empty map.
+  test::assertEqualVectors(
+      makeNullableFlatVector<int32_t>({std::nullopt}),
+      evaluate(
+          "element_at(c0, 1)",
+          makeRowVector(
+              {makeFlatMapVectorFromJson<int64_t, int32_t>({"{}"})})));
+
+  // Single row.
+  test::assertEqualVectors(
+      makeFlatVector<int32_t>({10}),
+      evaluate(
+          "element_at(c0, 1)",
+          makeRowVector({makeFlatMapVectorFromJson<int64_t, int32_t>(
+              {"{1:10, 2:20, 4:40, 5:50, 6:60}"})})));
+
+  // Multiple rows.
+  auto input = makeFlatMapVectorFromJson<int64_t, int32_t>({
+      "{1:10, 2:20, 4:40, 5:50}",
+      "{1:11, 4:41}",
+      "{}",
+      "{2:23, 4:43}",
+  });
+  test::assertEqualVectors(
+      makeNullableFlatVector<int32_t>({10, 11, std::nullopt, std::nullopt}),
+      evaluate("element_at(c0, 1)", makeRowVector({input})));
+  test::assertEqualVectors(
+      makeNullableFlatVector<int32_t>({40, 41, std::nullopt, 43}),
+      evaluate("element_at(c0, 4)", makeRowVector({input})));
+  test::assertEqualVectors(
+      makeNullableFlatVector<int32_t>(
+          {50, std::nullopt, std::nullopt, std::nullopt}),
+      evaluate("element_at(c0, 5)", makeRowVector({input})));
+  // Key doesn't exist
+  test::assertEqualVectors(
+      makeNullableFlatVector<int32_t>(
+          {std::nullopt, std::nullopt, std::nullopt, std::nullopt}),
+      evaluate("element_at(c0, 7)", makeRowVector({input})));
+  // Column elementAt
+  test::assertEqualVectors(
+      makeNullableFlatVector<int32_t>({10, 11, std::nullopt, std::nullopt}),
+      evaluate(
+          "element_at(c0, c1)",
+          makeRowVector({input, makeConstant<int32_t>(1, 4)})));
+  test::assertEqualVectors(
+      makeNullableFlatVector<int32_t>({20, 11, std::nullopt, 43}),
+      evaluate(
+          "element_at(c0, c1)",
+          makeRowVector({input, makeFlatVector<int32_t>({2, 1, 1, 4})})));
+  test::assertEqualVectors(
+      makeNullableFlatVector<int32_t>({10, 11, std::nullopt, std::nullopt}),
+      evaluate(
+          "element_at(c0, c1)",
+          makeRowVector(
+              {input,
+               BaseVector::wrapInConstant(
+                   4, 0, makeFlatVector<int32_t>({1, 2, 3, 4}))})));
+  test::assertEqualVectors(
+      makeNullableFlatVector<int32_t>({20, std::nullopt, std::nullopt, 23}),
+      evaluate(
+          "element_at(c0, c1)",
+          makeRowVector(
+              {input,
+               BaseVector::wrapInConstant(
+                   4, 1, makeFlatVector<int32_t>({1, 2, 3, 4}))})));
+  test::assertEqualVectors(
+      makeNullableFlatVector<int32_t>(
+          {std::nullopt, std::nullopt, std::nullopt, std::nullopt}),
+      evaluate(
+          "element_at(c0, c1)",
+          makeRowVector(
+              {input,
+               BaseVector::wrapInConstant(
+                   4, 2, makeFlatVector<int32_t>({1, 2, 3, 4}))})));
+  test::assertEqualVectors(
+      makeNullableFlatVector<int32_t>({40, 41, std::nullopt, 43}),
+      evaluate(
+          "element_at(c0, c1)",
+          makeRowVector(
+              {input,
+               BaseVector::wrapInConstant(
+                   4, 3, makeFlatVector<int32_t>({1, 2, 3, 4}))})));
+}
+
+TEST_F(ElementAtTest, flatMapTestDictionaryWrapped) {
+  vector_size_t size = 4, halved = 2;
+
+  auto base = makeFlatMapVectorFromJson<int64_t, int32_t>({
+      "{1:10, 2:20, 4:40, 5:50}",
+      "{1:11, 4:41}",
+      "{}",
+      "{2:23, 4:43}",
+  });
+
+  auto same = [](vector_size_t row) { return row; };
+  auto shifted = [](auto row) { return (row + 2) % 4; };
+
+  // Same size between base vector and wrapped dictionary vector.
+  test::assertEqualVectors(
+      makeNullableFlatVector<int32_t>({10, 11, std::nullopt, std::nullopt}),
+      evaluate(
+          "element_at(c0, 1)",
+          makeRowVector(
+              {wrapInDictionary(makeIndices(size, same), size, base)})));
+  test::assertEqualVectors(
+      makeNullableFlatVector<int32_t>({std::nullopt, std::nullopt, 10, 11}),
+      evaluate(
+          "element_at(c0, 1)",
+          makeRowVector(
+              {wrapInDictionary(makeIndices(size, shifted), size, base)})));
+
+  // Cardinality mismatch between wrapped vector and base.
+  test::assertEqualVectors(
+      makeNullableFlatVector<int32_t>({10, 11}),
+      evaluate(
+          "element_at(c0, 1)",
+          makeRowVector(
+              {wrapInDictionary(makeIndices(halved, same), halved, base)})));
+  test::assertEqualVectors(
+      makeNullableFlatVector<int32_t>({std::nullopt, std::nullopt}),
+      evaluate(
+          "element_at(c0, 1)",
+          makeRowVector(
+              {wrapInDictionary(makeIndices(halved, shifted), halved, base)})));
+
+  // Column elementAt
+  test::assertEqualVectors(
+      makeNullableFlatVector<int32_t>({10, 11, std::nullopt, std::nullopt}),
+      evaluate(
+          "element_at(c0, c1)",
+          makeRowVector(
+              {wrapInDictionary(makeIndices(size, same), size, base),
+               makeConstant<int32_t>(1, size)})));
+  test::assertEqualVectors(
+      makeNullableFlatVector<int32_t>({10, std::nullopt, std::nullopt, 43}),
+      evaluate(
+          "element_at(c0, c1)",
+          makeRowVector(
+              {wrapInDictionary(makeIndices(size, same), size, base),
+               makeFlatVector<int32_t>({1, 2, 3, 4})})));
+  test::assertEqualVectors(
+      makeNullableFlatVector<int32_t>({std::nullopt, std::nullopt, 10, 11}),
+      evaluate(
+          "element_at(c0, c1)",
+          makeRowVector(
+              {wrapInDictionary(makeIndices(size, shifted), size, base),
+               makeConstant<int32_t>(1, size)})));
+  test::assertEqualVectors(
+      makeNullableFlatVector<int32_t>({std::nullopt, 23, std::nullopt, 41}),
+      evaluate(
+          "element_at(c0, c1)",
+          makeRowVector(
+              {wrapInDictionary(makeIndices(size, shifted), size, base),
+               makeFlatVector<int32_t>({1, 2, 3, 4})})));
+  test::assertEqualVectors(
+      makeNullableFlatVector<int32_t>({10, 11}),
+      evaluate(
+          "element_at(c0, c1)",
+          makeRowVector(
+              {wrapInDictionary(makeIndices(halved, same), halved, base),
+               makeConstant<int32_t>(1, halved)})));
+  test::assertEqualVectors(
+      makeNullableFlatVector<int32_t>({10, std::nullopt}),
+      evaluate(
+          "element_at(c0, c1)",
+          makeRowVector(
+              {wrapInDictionary(makeIndices(halved, same), halved, base),
+               makeFlatVector<int32_t>({1, 2})})));
+  test::assertEqualVectors(
+      makeNullableFlatVector<int32_t>({std::nullopt, std::nullopt}),
+      evaluate(
+          "element_at(c0, c1)",
+          makeRowVector(
+              {wrapInDictionary(makeIndices(halved, shifted), halved, base),
+               makeConstant<int32_t>(1, halved)})));
+  test::assertEqualVectors(
+      makeNullableFlatVector<int32_t>({std::nullopt, 23}),
+      evaluate(
+          "element_at(c0, c1)",
+          makeRowVector(
+              {wrapInDictionary(makeIndices(halved, shifted), halved, base),
+               makeFlatVector<int32_t>({1, 2})})));
+}
+
+TEST_F(ElementAtTest, flatMapTestConstantWrapped) {
+  auto base = makeFlatMapVectorFromJson<int64_t, int32_t>({
+      "{1:10, 2:20, 4:40, 5:50}",
+      "{1:11, 4:41}",
+      "{}",
+      "{2:23, 4:43}",
+  });
+  test::assertEqualVectors(
+      makeConstant<int32_t>(10, 10),
+      evaluate(
+          "element_at(c0, 1)",
+          makeRowVector({BaseVector::wrapInConstant(10, 0, base)})));
+  test::assertEqualVectors(
+      makeConstant<int32_t>(11, 10),
+      evaluate(
+          "element_at(c0, 1)",
+          makeRowVector({BaseVector::wrapInConstant(10, 1, base)})));
+  test::assertEqualVectors(
+      makeConstant<int32_t>(10, 10),
+      evaluate(
+          "element_at(c0, c1)",
+          makeRowVector(
+              {BaseVector::wrapInConstant(10, 0, base),
+               makeConstant<int32_t>(1, 10)})));
+  test::assertEqualVectors(
+      makeConstant<int32_t>(10, 10),
+      evaluate(
+          "element_at(c0, c1)",
+          makeRowVector(
+              {BaseVector::wrapInConstant(10, 0, base),
+               BaseVector::wrapInConstant(
+                   10, 0, makeFlatVector<int32_t>({1, 2}))})));
+  test::assertEqualVectors(
+      makeConstant<int32_t>(20, 10),
+      evaluate(
+          "element_at(c0, c1)",
+          makeRowVector(
+              {BaseVector::wrapInConstant(10, 0, base),
+               BaseVector::wrapInConstant(
+                   10, 1, makeFlatVector<int32_t>({1, 2}))})));
+  test::assertEqualVectors(
+      makeFlatVector<int32_t>({10, 20}),
+      evaluate(
+          "element_at(c0, c1)",
+          makeRowVector(
+              {BaseVector::wrapInConstant(2, 0, base),
+               makeFlatVector<int32_t>({1, 2})})));
+}
+
 TEST_F(ElementAtTest, arrayWithDictionaryElements) {
   {
     auto elementsIndices = makeIndices({6, 5, 4, 3, 2, 1, 0});

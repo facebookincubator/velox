@@ -24,7 +24,11 @@ namespace facebook::velox::dwio::common::flatmap {
 namespace detail {
 
 // Reset vector with the desired size/hasNulls properties
-void reset(VectorPtr& vector, vector_size_t size, bool hasNulls);
+void reset(
+    VectorPtr& vector,
+    VectorEncoding::Simple desiredEncoding,
+    vector_size_t size,
+    bool hasNulls);
 
 // Reset vector smart pointer if any of the buffers is not single referenced.
 template <typename... T>
@@ -63,7 +67,7 @@ void initializeFlatVector(
     vector_size_t size,
     bool hasNulls,
     std::vector<BufferPtr>&& stringBuffers = {}) {
-  detail::reset(vector, size, hasNulls);
+  detail::reset(vector, VectorEncoding::Simple::FLAT, size, hasNulls);
   if (vector) {
     auto& flatVector = dynamic_cast<FlatVector<T>&>(*vector);
     detail::resetIfNotWritable(vector, flatVector.nulls(), flatVector.values());
