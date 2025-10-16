@@ -716,17 +716,36 @@ class QueryConfig {
   /// username.
   static constexpr const char* kClientTags = "client_tags";
 
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
   /// Enable (reader) row size tracker as a fallback to file level row size
   /// estimates.
   static constexpr const char* kRowSizeTrackingEnabled =
       "row_size_tracking_enabled";
+#endif
+
+  /// Enable (reader) row size tracker as a fallback to file level row size
+  /// estimates.
+  static constexpr const char* kRowSizeTrackingMode = "row_size_tracking_mode";
+
+  enum class RowSizeTrackingMode {
+    DISABLED = 0,
+    EXCLUDE_DELTA_SPLITS = 1,
+    ENABLED_FOR_ALL = 2,
+  };
 
   bool selectiveNimbleReaderEnabled() const {
     return get<bool>(kSelectiveNimbleReaderEnabled, false);
   }
 
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
   bool rowSizeTrackingEnabled() const {
     return get<bool>(kRowSizeTrackingEnabled, true);
+  }
+#endif
+
+  RowSizeTrackingMode rowSizeTrackingMode() const {
+    return get<RowSizeTrackingMode>(
+        kRowSizeTrackingMode, RowSizeTrackingMode::ENABLED_FOR_ALL);
   }
 
   bool debugDisableExpressionsWithPeeling() const {
