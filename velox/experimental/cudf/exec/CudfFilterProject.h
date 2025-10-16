@@ -73,9 +73,6 @@ class CudfFilterProject : public exec::Operator, public NvtxHelper {
 
   // If true exprs_[0] is a filter and the other expressions are projections
   const bool hasFilter_{false};
-  const bool lazyDereference_;
-
-  std::unique_ptr<exec::ExprSet> exprs_;
 
   // Cached filter and project node for lazy initialization. After
   // initialization, they will be reset, and initialized_ will be set to true.

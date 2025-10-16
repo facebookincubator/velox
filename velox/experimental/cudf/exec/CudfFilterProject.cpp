@@ -113,12 +113,8 @@ CudfFilterProject::CudfFilterProject(
           operatorId,
           fmt::format("[{}]", project ? project->id() : filter->id())),
       hasFilter_(filter != nullptr),
-      lazyDereference_(
-          dynamic_cast<const core::LazyDereferenceNode*>(project.get()) !=
-          nullptr),
       project_(project),
       filter_(filter) {
-  VELOX_CHECK(!(lazyDereference_ && filter));
   if (filter_ != nullptr && project_ != nullptr) {
     folly::Synchronized<exec::OperatorStats>& opStats = Operator::stats();
     opStats.withWLock([&](auto& stats) {
@@ -158,8 +154,11 @@ void CudfFilterProject::initialize() {
     isIdentityProjection_ = true;
   }
 
-  exprs_ = exec::makeExprSetFromFlag(
-      std::move(allExprs), operatorCtx_->execCtx(), lazyDereference_);
+  auto lazyDereference = (dynamic_cast<const core::LazyDereferenceNode*>(project_.get()) !=
+          nullptr);
+  VELOX_CHECK(!(lazyDereference && filter_));
+  auto expr = exec::makeExprSetFromFlag(
+      std::move(allExprs), operatorCtx_->execCtx(), lazyDereference);
 
   const auto inputType = project_ ? project_->sources()[0]->outputType()
                                   : filter_->sources()[0]->outputType();
@@ -167,7 +166,7 @@ void CudfFilterProject::initialize() {
   // convert to AST
   if (CudfConfig::getInstance().debugEnabled) {
     int i = 0;
-    for (const auto& expr : exprs_->exprs()) {
+    for (const auto& expr : expr->exprs()) {
       std::cout << "expr[" << i++ << "] " << expr->toString() << std::endl;
       debugPrintTree(expr);
       ++i;
@@ -175,12 +174,12 @@ void CudfFilterProject::initialize() {
   }
   std::vector<std::shared_ptr<velox::exec::Expr>> projectExprs;
   if (hasFilter_) {
-    filterEvaluator_ = ExpressionEvaluator({exprs_->exprs()[0]}, inputType);
-    projectExprs = {exprs_->exprs().begin() + 1, exprs_->exprs().end()};
+    filterEvaluator_ = ExpressionEvaluator({expr->exprs()[0]}, inputType);
+    projectExprs = {expr->exprs().begin() + 1, expr->exprs().end()};
   }
 
   projectEvaluator_ = ExpressionEvaluator(
-      hasFilter_ ? projectExprs : exprs_->exprs(), inputType);
+      hasFilter_ ? projectExprs : expr->exprs(), inputType);
 
   filter_.reset();
   project_.reset();
