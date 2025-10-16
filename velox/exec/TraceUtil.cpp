@@ -38,47 +38,6 @@ std::string findLastPathNode(const std::string& path) {
   return pathNodes.back();
 }
 
-const std::vector<core::PlanNodePtr> kEmptySources;
-
-class DummySourceNode final : public core::PlanNode {
- public:
-  explicit DummySourceNode(RowTypePtr outputType)
-      : PlanNode(""), outputType_(std::move(outputType)) {}
-
-  const RowTypePtr& outputType() const override {
-    return outputType_;
-  }
-
-  const std::vector<core::PlanNodePtr>& sources() const override {
-    return kEmptySources;
-  }
-
-  std::string_view name() const override {
-    return "DummySource";
-  }
-
-  folly::dynamic serialize() const override {
-    folly::dynamic obj = folly::dynamic::object;
-    obj["name"] = "DummySource";
-    obj["outputType"] = outputType_->serialize();
-    return obj;
-  }
-
-  static core::PlanNodePtr create(const folly::dynamic& obj, void* context) {
-    return std::make_shared<DummySourceNode>(
-        ISerializable::deserialize<RowType>(obj["outputType"]));
-  }
-
- private:
-  void addDetails(std::stringstream& stream) const override {
-    // Nothing to add.
-  }
-
-  const RowTypePtr outputType_;
-};
-
-void registerDummySourceSerDe();
-
 std::unordered_map<std::string, TraceNodeFactory>& traceNodeRegistry() {
   static std::unordered_map<std::string, TraceNodeFactory> registry;
   return registry;
