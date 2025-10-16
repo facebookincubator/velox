@@ -80,8 +80,8 @@ class CudfTpchBenchmark : public TpchBenchmark {
       cudf_velox::connector::hive::CudfHiveConnectorFactory CudfHiveFactory;
       auto cudfHiveConnector = CudfHiveFactory.newConnector(
           facebook::velox::exec::test::kHiveConnectorId,
-                  cudfHiveProperties,
-                  ioExecutor_.get());
+          cudfHiveProperties,
+          ioExecutor_.get());
       connector::registerConnector(cudfHiveConnector);
     }
 
