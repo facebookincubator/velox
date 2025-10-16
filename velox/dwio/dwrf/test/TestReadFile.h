@@ -42,17 +42,15 @@ class TestReadFile : public velox::ReadFile {
       uint64_t offset,
       uint64_t length,
       void* buffer,
-      filesystems::File::IoStats* stats = nullptr,
-      const folly::F14FastMap<std::string, std::string>& fileReadOps = {})
-      const override {
+      const FileStorageContext& fileStorageContext = {}) const override {
     const uint64_t content = offset + seed_;
     const uint64_t available = std::min(length_ - offset, length);
     int fill;
     for (fill = 0; fill < available; ++fill) {
       reinterpret_cast<char*>(buffer)[fill] = content + fill;
     }
-    if (stats) {
-      stats->addCounter(
+    if (fileStorageContext.ioStats) {
+      fileStorageContext.ioStats->addCounter(
           "read", RuntimeCounter(fill, RuntimeCounter::Unit::kBytes));
     }
     return std::string_view(static_cast<const char*>(buffer), fill);
@@ -61,12 +59,10 @@ class TestReadFile : public velox::ReadFile {
   uint64_t preadv(
       uint64_t offset,
       const std::vector<folly::Range<char*>>& buffers,
-      filesystems::File::IoStats* stats = nullptr,
-      const folly::F14FastMap<std::string, std::string>& fileReadOps = {})
-      const override {
-    auto res = ReadFile::preadv(offset, buffers, stats, fileReadOps);
-    if (stats) {
-      stats->addCounter(
+      const FileStorageContext& fileStorageContext = {}) const override {
+    auto res = ReadFile::preadv(offset, buffers, fileStorageContext);
+    if (fileStorageContext.ioStats) {
+      fileStorageContext.ioStats->addCounter(
           "read",
           RuntimeCounter(
               static_cast<int64_t>(res), RuntimeCounter::Unit::kBytes));
