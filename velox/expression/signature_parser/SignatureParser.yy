@@ -33,7 +33,7 @@
 
 %nterm <std::shared_ptr<exec::TypeSignature>> special_type function_type decimal_type row_type array_type map_type varchar_type varbinary_type
 %nterm <std::shared_ptr<exec::TypeSignature>> type named_type row_field
-%nterm <std::vector<exec::TypeSignature>> type_list type_list_opt_names row_field_list
+%nterm <std::vector<exec::TypeSignature>> type_list row_field_list
 %nterm <std::vector<std::string>> type_with_spaces
 
 %%

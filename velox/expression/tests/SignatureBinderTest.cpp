@@ -1267,6 +1267,8 @@ TEST(SignatureBinderTest, homogeneousRow) {
 
     assertCannotResolve(signature, {ARRAY(ROW({}))});
   }
+}
+
 TEST(SignatureBinderTest, varcharN) {
   // varchar(x) -> varchar(x).
   auto signature = exec::FunctionSignatureBuilder()
