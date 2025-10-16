@@ -209,6 +209,7 @@ void registerSimpleFunctions(const std::string& prefix) {
   registerFunction<HourFunction, int64_t, Date>({prefix + "hour"});
   registerFunction<HourFunction, int64_t, TimestampWithTimezone>(
       {prefix + "hour"});
+  registerFunction<HourFunction, int64_t, Time>({prefix + "hour"});
   registerFunction<HourFromIntervalFunction, int64_t, IntervalDayTime>(
       {prefix + "hour"});
 
