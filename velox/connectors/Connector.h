@@ -81,7 +81,11 @@ struct ConnectorSplit : public ISerializable {
     return 0;
   }
 
-  virtual ~ConnectorSplit() {}
+  virtual ~ConnectorSplit() {
+    if (dataSource) {
+      dataSource->close();
+    }
+  }
 
   virtual std::string toString() const {
     return fmt::format(
