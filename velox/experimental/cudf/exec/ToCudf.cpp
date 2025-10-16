@@ -115,10 +115,13 @@ bool CompileState::compile(bool force_replace) {
           getPlanNode(filterProjectOp->planNodeId()));
       auto filterNode = filterProjectOp->filterNode();
       bool canBeEvaluated = true;
-      if (projectPlanNode && !ExpressionEvaluator::canBeEvaluated(projectPlanNode->projections())) {
+      if (projectPlanNode &&
+          !ExpressionEvaluator::canBeEvaluated(
+              projectPlanNode->projections())) {
         canBeEvaluated = false;
       }
-      if (canBeEvaluated && filterNode && !ExpressionEvaluator::canBeEvaluated({filterNode->filter()})) {
+      if (canBeEvaluated && filterNode &&
+          !ExpressionEvaluator::canBeEvaluated({filterNode->filter()})) {
         canBeEvaluated = false;
       }
       return canBeEvaluated;

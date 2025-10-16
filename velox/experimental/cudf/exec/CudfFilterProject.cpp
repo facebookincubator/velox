@@ -154,8 +154,9 @@ void CudfFilterProject::initialize() {
     isIdentityProjection_ = true;
   }
 
-  auto lazyDereference = (dynamic_cast<const core::LazyDereferenceNode*>(project_.get()) !=
-          nullptr);
+  auto lazyDereference =
+      (dynamic_cast<const core::LazyDereferenceNode*>(project_.get()) !=
+       nullptr);
   VELOX_CHECK(!(lazyDereference && filter_));
   auto expr = exec::makeExprSetFromFlag(
       std::move(allExprs), operatorCtx_->execCtx(), lazyDereference);
@@ -178,8 +179,8 @@ void CudfFilterProject::initialize() {
     projectExprs = {expr->exprs().begin() + 1, expr->exprs().end()};
   }
 
-  projectEvaluator_ = ExpressionEvaluator(
-      hasFilter_ ? projectExprs : expr->exprs(), inputType);
+  projectEvaluator_ =
+      ExpressionEvaluator(hasFilter_ ? projectExprs : expr->exprs(), inputType);
 
   filter_.reset();
   project_.reset();

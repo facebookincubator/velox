@@ -68,7 +68,6 @@ class CudfFilterProject : public exec::Operator, public NvtxHelper {
   }
 
  private:
-
   bool allInputProcessed();
 
   // If true exprs_[0] is a filter and the other expressions are projections

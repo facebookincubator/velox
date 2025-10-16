@@ -296,8 +296,8 @@ bool canBeEvaluated(const core::TypedExprPtr& expr) {
 
     case core::ExprKind::kCall: {
       const auto* call = expr->asUnchecked<core::CallTypedExpr>();
-      const auto name =
-          stripPrefix(call->name(), CudfConfig::getInstance().functionNamePrefix);
+      const auto name = stripPrefix(
+          call->name(), CudfConfig::getInstance().functionNamePrefix);
       if (supportedOps.count(name) || binaryOps.count(name) ||
           unaryOps.count(name)) {
         return std::all_of(
