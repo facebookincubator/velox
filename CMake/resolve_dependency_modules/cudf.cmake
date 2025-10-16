@@ -20,33 +20,33 @@ cmake_minimum_required(VERSION 3.30.4)
 set(VELOX_rapids_cmake_VERSION 25.10)
 set(
   VELOX_rapids_cmake_BUILD_SHA256_CHECKSUM
-  2acb16519b146021e230875ca13fcae96cbc77d5c27f9550cec64e69a63c16b5
+  635aff67e017c64021bf3d225d31f843e9541f3bf9c3d07bac72466dc57c917b
 )
 set(
   VELOX_rapids_cmake_SOURCE_URL
-  "https://github.com/rapidsai/rapids-cmake/archive/84f8cf8386ac56e3f4f9400f44e752345d8c2997.tar.gz"
+  "https://github.com/rapidsai/rapids-cmake/archive/0b111489d1e6f8400e1fc88297623a2a9915fa77.tar.gz"
 )
 velox_resolve_dependency_url(rapids_cmake)
 
 set(VELOX_rmm_VERSION 25.10)
 set(
   VELOX_rmm_BUILD_SHA256_CHECKSUM
-  c1aab4e77e6a161c8d6a4afad0013f71dad1fdc0f4f866c29c67d54b4339d2bb
+  72dd6a26a1a75e193723571ec7ba8bcb040ea9a38592eb0809e64ebdbf291d76
 )
 set(
   VELOX_rmm_SOURCE_URL
-  "https://github.com/rapidsai/rmm/archive/271346cb2d20a425735cd02b5d11c36c82615815.tar.gz"
+  "https://github.com/rapidsai/rmm/archive/7cef2f5f30e962e9f3b27a3a3f2753a40277c093.tar.gz"
 )
 velox_resolve_dependency_url(rmm)
 
 set(VELOX_kvikio_VERSION 25.10)
 set(
   VELOX_kvikio_BUILD_SHA256_CHECKSUM
-  c63c076d724a5f0f9c17cda86a413f7b339132afcb164aba31bcbfa3dd7a7605
+  76c217bd925f7665246135311697393b5118185d4bdd4291e8ff4506e4feb6af
 )
 set(
   VELOX_kvikio_SOURCE_URL
-  "https://github.com/rapidsai/kvikio/archive/9ac0c317a352315bc82d925e09a6c82684ce3695.tar.gz"
+  "https://github.com/rapidsai/kvikio/archive/6efd22dc6ae3389caea7d3e736c7f954b9db0619.tar.gz"
 )
 velox_resolve_dependency_url(kvikio)
 
@@ -54,11 +54,11 @@ set(VELOX_cudf_VERSION 25.10 CACHE STRING "cudf version")
 
 set(
   VELOX_cudf_BUILD_SHA256_CHECKSUM
-  cf28398a3f397ddab7cec8711d960e549b04f7f423b832ca4dea155a68a7184a
+  c7dfb333ee0cb9f86d5ee94aaa34985ae6cf45d4ed8658d850707cc8e0db8e16
 )
 set(
   VELOX_cudf_SOURCE_URL
-  "https://github.com/rapidsai/cudf/archive/43505bb975f46ce4e140fdaf55192611d6e231ac.tar.gz"
+  "https://github.com/rapidsai/cudf/archive/2bfd896b4e0c1f0b66402c1e067b4904dbd15c5e.tar.gz"
 )
 velox_resolve_dependency_url(cudf)
 
