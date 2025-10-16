@@ -988,6 +988,15 @@ struct MillisecondFunction : public TimestampWithTimezoneSupport<T> {
     auto timestamp = this->toTimestamp(timestampWithTimezone);
     result = timestamp.getNanos() / Timestamp::kNanosecondsInMillisecond;
   }
+
+  FOLLY_ALWAYS_INLINE void call(int64_t& result, const arg_type<Time>& time) {
+    VELOX_USER_CHECK(
+        time >= 0 && time < kMillisInDay,
+        "TIME value {} is out of range [0, 86400000)",
+        time);
+    auto time_duration = std::chrono::milliseconds(time);
+    result = (time_duration % std::chrono::seconds(1)).count();
+  }
 };
 
 template <typename T>

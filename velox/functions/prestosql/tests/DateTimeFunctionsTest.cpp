@@ -1968,6 +1968,111 @@ TEST_F(DateTimeFunctionsTest, millisecondTimestampWithTimezone) {
       millisecondTimestampWithTimezone(TimestampWithTimezone(-980, "+05:30")));
 }
 
+TEST_F(DateTimeFunctionsTest, millisecondTime) {
+  const auto millisecond = [&](std::optional<int64_t> time) {
+    return evaluateOnce<int64_t>("millisecond(c0)", TIME(), time);
+  };
+
+  // Null handling
+  EXPECT_EQ(std::nullopt, millisecond(std::nullopt));
+
+  // Basic cases
+  EXPECT_EQ(0, millisecond(0)); // 00:00:00.000
+  EXPECT_EQ(0, millisecond(1000)); // 00:00:01.000
+  EXPECT_EQ(123, millisecond(1123)); // 00:00:01.123
+  EXPECT_EQ(456, millisecond(2456)); // 00:00:02.456
+  EXPECT_EQ(999, millisecond(999)); // 00:00:00.999
+  EXPECT_EQ(123, millisecond(3661123)); // 01:01:01.123
+
+  // Boundary values
+  EXPECT_EQ(0, millisecond(86399000)); // 23:59:59.000
+  EXPECT_EQ(999, millisecond(86399999)); // 23:59:59.999 (max valid TIME)
+
+  // Different time components to verify only millisecond part matters
+  EXPECT_EQ(500, millisecond(3600500)); // 01:00:00.500
+  EXPECT_EQ(500, millisecond(7200500)); // 02:00:00.500
+  EXPECT_EQ(500, millisecond(43200500)); // 12:00:00.500
+
+  // Second boundaries
+  EXPECT_EQ(0, millisecond(60000)); // 00:01:00.000
+  EXPECT_EQ(999, millisecond(60999)); // 00:01:00.999
+  EXPECT_EQ(1, millisecond(60001)); // 00:01:00.001
+
+  // Comprehensive modulo testing - verify millisecond() == time % 1000
+  for (int64_t base : {0, 1000, 60000, 3600000, 86399000}) {
+    for (int64_t ms = 0; ms < 1000; ms += 100) {
+      int64_t timeValue = base + ms;
+      if (timeValue <= 86399999) { // Ensure within valid range
+        EXPECT_EQ(ms, millisecond(timeValue));
+      }
+    }
+  }
+
+  // Test all possible millisecond values (0-999) in first second
+  for (int64_t ms = 0; ms < 1000; ++ms) {
+    EXPECT_EQ(ms, millisecond(ms));
+  }
+
+  // Test across all hours to ensure hour component doesn't affect result
+  for (int hour = 0; hour < 24; ++hour) {
+    int64_t baseTime = hour * 3600000; // Convert hour to milliseconds
+    EXPECT_EQ(0, millisecond(baseTime)); // .000
+    EXPECT_EQ(1, millisecond(baseTime + 1)); // .001
+    EXPECT_EQ(500, millisecond(baseTime + 500)); // .500
+    EXPECT_EQ(999, millisecond(baseTime + 999)); // .999
+  }
+
+  // Test edge cases just before and after boundaries
+  EXPECT_EQ(998, millisecond(86399998)); // 23:59:59.998
+  EXPECT_EQ(1, millisecond(1001)); // 00:00:01.001
+  EXPECT_EQ(999, millisecond(1999)); // 00:00:01.999
+  EXPECT_EQ(0, millisecond(2000)); // 00:00:02.000
+
+  // Error cases - values outside valid TIME range [0, 86399999]
+  VELOX_ASSERT_THROW(
+      millisecond(-1), "TIME value -1 is out of range [0, 86400000)");
+  VELOX_ASSERT_THROW(
+      millisecond(-1000), "TIME value -1000 is out of range [0, 86400000)");
+  VELOX_ASSERT_THROW(
+      millisecond(86400000),
+      "TIME value 86400000 is out of range [0, 86400000)");
+  VELOX_ASSERT_THROW(
+      millisecond(100000000),
+      "TIME value 100000000 is out of range [0, 86400000)");
+
+  // Test vectorized execution with mixed valid values
+  auto timeVector = makeFlatVector<int64_t>(
+      {0, // 00:00:00.000
+       1123, // 00:00:01.123
+       60999, // 00:01:00.999
+       3661456, // 01:01:01.456
+       43200789, // 12:00:00.789
+       86399999}, // 23:59:59.999
+      TIME());
+
+  auto result = evaluate<FlatVector<int64_t>>(
+      "millisecond(c0)", makeRowVector({timeVector}));
+
+  auto expected = makeFlatVector<int64_t>({0, 123, 999, 456, 789, 999});
+  assertEqualVectors(expected, result);
+
+  // Test vectorized execution with nulls
+  auto timeVectorWithNulls = makeNullableFlatVector<int64_t>(
+      {0, // 00:00:00.000
+       std::nullopt, // null
+       1123, // 00:00:01.123
+       std::nullopt, // null
+       86399999}, // 23:59:59.999
+      TIME());
+
+  auto resultWithNulls = evaluate<FlatVector<int64_t>>(
+      "millisecond(c0)", makeRowVector({timeVectorWithNulls}));
+
+  auto expectedWithNulls = makeNullableFlatVector<int64_t>(
+      {0, std::nullopt, 123, std::nullopt, 999});
+  assertEqualVectors(expectedWithNulls, resultWithNulls);
+}
+
 TEST_F(DateTimeFunctionsTest, extractFromIntervalDayTime) {
   const auto millis = 5 * kMillisInDay + 7 * kMillisInHour +
       11 * kMillisInMinute + 13 * kMillisInSecond + 17;
