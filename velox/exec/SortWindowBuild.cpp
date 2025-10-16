@@ -365,13 +365,8 @@ void SortWindowBuild::loadNextPartitionBatchFromSpill() {
     numSpillReadBatches_--;
 
     auto lockedOpStats = opStats_->wlock();
-    auto pair = lockedOpStats->runtimeStats.try_emplace(
-        Window::kSpillWindowReadBatchNums, RuntimeMetric(numSpillReadBatches_));
-    if (!pair.second) {
-      lockedOpStats->runtimeStats[Window::kSpillWindowReadBatchNums].addValue(
-          numSpillReadBatches_);
-    }
-    numSpillReadBatches_ = 0;
+    lockedOpStats->runtimeStats[Window::kWindowSpillReadNumBatches] =
+        RuntimeMetric(numSpillReadBatches_);
   }
 }
 

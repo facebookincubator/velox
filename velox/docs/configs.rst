@@ -331,6 +331,12 @@ Spilling
      - boolean
      - true
      - When `spill_enabled` is true, determines whether Window operator can spill to disk under memory pressure.
+   * - window_spill_min_read_batch_rows
+     - integer
+     - 1000
+     - When processing spilled window data, read batches of whole partitions having at least that many rows. Set to 1 to
+       read one whole partition at a time. Each driver processing the Window operator will process that much data at
+       once.
    * - row_number_spill_enabled
      - boolean
      - true

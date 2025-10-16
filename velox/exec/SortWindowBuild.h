@@ -76,8 +76,9 @@ class SortWindowBuild : public WindowBuild {
   // Find the next partition start row from start.
   vector_size_t findNextPartitionStartRow(vector_size_t start);
 
-  // Reads next partition batch from spilled data into 'data_' and
-  // 'sortedRows_'.
+  // Load the next partition batch if needed. If current partition batch is not
+  // entirely consumed, return directly. Otherwise, read next partition batch
+  // from spilled data into 'data_' and set pointers in 'sortedRows_'.
   void loadNextPartitionBatchFromSpill();
 
   const size_t numPartitionKeys_;
@@ -126,7 +127,7 @@ class SortWindowBuild : public WindowBuild {
   // Used to sort-merge spilled data.
   std::unique_ptr<TreeOfLosers<SpillMergeStream>> merge_;
 
-  // Num of spill read partition batches.
+  // Number of batches of whole partitions read from spilled data.
   uint64_t numSpillReadBatches_ = 0;
 };
 } // namespace facebook::velox::exec
