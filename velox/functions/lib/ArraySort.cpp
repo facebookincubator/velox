@@ -450,7 +450,7 @@ std::vector<std::shared_ptr<exec::FunctionSignature>> signatures(
             .typeVariable("T")
             .returnType("array(T)")
             .argumentType("array(T)")
-            .constantArgumentType("function(T,T,bigint)")
+            .constantArgumentType("function(T,T,integer)")
             .build());
   }
   return signatures;
