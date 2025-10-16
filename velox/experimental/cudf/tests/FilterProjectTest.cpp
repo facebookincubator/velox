@@ -518,7 +518,6 @@ TEST_F(CudfFilterProjectTest, yearFunction) {
 TEST_F(CudfFilterProjectTest, caseWhenOperation) {
   vector_size_t batchSize = 1000;
   auto vectors = makeVectors(rowType_, 2, batchSize);
-  // failing because switch copies nulls too.
   createDuckDbTable(vectors);
 
   testCaseWhenOperation(vectors);
