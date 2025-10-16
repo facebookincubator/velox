@@ -118,7 +118,7 @@ bool CompileState::compile(bool force_replace) {
       if (projectPlanNode && !ExpressionEvaluator::canBeEvaluated(projectPlanNode->projections())) {
         canBeEvaluated = false;
       }
-      if (canBeEvaluated && filterNode && !ExpressionEvaluator::canBeEvaluated(filterNode->filter())) {
+      if (canBeEvaluated && filterNode && !ExpressionEvaluator::canBeEvaluated({filterNode->filter()})) {
         canBeEvaluated = false;
       }
       return canBeEvaluated;

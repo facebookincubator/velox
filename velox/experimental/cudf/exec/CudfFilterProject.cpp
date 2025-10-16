@@ -161,24 +161,6 @@ void CudfFilterProject::initialize() {
   exprs_ = exec::makeExprSetFromFlag(
       std::move(allExprs), operatorCtx_->execCtx(), lazyDereference_);
 
-  if (allExprs.size() > 0 && !identityProjections_.empty()) {
-    const auto inputType = project_ ? project_->sources()[0]->outputType()
-                                    : filter_->sources()[0]->outputType();
-    std::unordered_set<uint32_t> distinctFieldIndices;
-
-    for (auto& field : exprs_->distinctFields()) {
-      auto fieldIndex = inputType->getChildIdx(field->name());
-      distinctFieldIndices.insert(fieldIndex);
-    }
-
-    for (auto& identityField : identityProjections_) {
-      if (distinctFieldIndices.find(identityField.inputChannel) !=
-          distinctFieldIndices.end()) {
-        multiplyReferencedFieldIndices_.push_back(identityField.inputChannel);
-      }
-    }
-  }
-
   const auto inputType = project_ ? project_->sources()[0]->outputType()
                                   : filter_->sources()[0]->outputType();
 

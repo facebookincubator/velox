@@ -16,6 +16,7 @@
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/ExpressionEvaluator.h"
 
+#include "velox/core/Expression.h"
 #include "velox/expression/ConstantExpr.h"
 #include "velox/expression/FieldReference.h"
 #include "velox/type/Type.h"
@@ -296,7 +297,7 @@ bool canBeEvaluated(const core::TypedExprPtr& expr) {
     case core::ExprKind::kCall: {
       const auto* call = expr->asUnchecked<core::CallTypedExpr>();
       const auto name =
-          stripPrefix(call->name(), CudfOptions::getInstance().prefix());
+          stripPrefix(call->name(), CudfConfig::getInstance().functionNamePrefix);
       if (supportedOps.count(name) || binaryOps.count(name) ||
           unaryOps.count(name)) {
         return std::all_of(
