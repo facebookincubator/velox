@@ -1027,7 +1027,6 @@ TEST_F(CudfFilterProjectTest, switchExpr) {
           .project(
               {"CASE WHEN c0 > 0.0 THEN c0 / c1 ELSE cast(null as double) END AS result"})
           .planNode();
-  // Disabled because pool memory reservation in generating operator.
   auto result = AssertQueryBuilder(plan).copyResults(pool());
 
   auto expected = makeRowVector({
