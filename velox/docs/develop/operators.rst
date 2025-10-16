@@ -947,7 +947,7 @@ results available before seeing all input.
 TopNRowNumberNode
 ~~~~~~~~~~~~~~~~~
 
-An optimized version of a WindowNode with a single row_number function and a
+An optimized version of a WindowNode with a single row_number, rank or dense_rank function and a
 limit over sorted partitions.
 
 Partitions the input using specified partitioning keys and maintains up to
@@ -955,11 +955,11 @@ a 'limit' number of top rows for each partition. After receiving all input,
 assigns row numbers within each partition starting from 1.
 
 This operator accumulates state: a hash table mapping partition keys to a list
-of top 'limit' rows within that partition.  Returning the row numbers as
+of top 'limit' rows within that partition.  Returning the row number or rank as
 a column in the output is optional. This operator supports spilling as well.
 
 This operator is logically equivalent to a WindowNode followed by
-FilterNode(row_number <= limit), but it uses less memory and CPU.
+FilterNode(rank/row_number <= limit), but it uses less memory and CPU.
 
 .. list-table::
   :widths: 10 30
