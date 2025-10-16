@@ -20,6 +20,7 @@
 #include "velox/functions/prestosql/types/GeometryType.h"
 #include "velox/functions/prestosql/types/HyperLogLogType.h"
 #include "velox/functions/prestosql/types/JsonType.h"
+#include "velox/functions/prestosql/types/KHyperLogLogType.h"
 #include "velox/functions/prestosql/types/P4HyperLogLogType.h"
 #include "velox/functions/prestosql/types/QDigestType.h"
 #include "velox/functions/prestosql/types/TDigestType.h"
@@ -81,6 +82,7 @@ TEST_F(TypeOfTest, customTypes) {
   EXPECT_EQ("json", typeOf(JSON()));
 
   EXPECT_EQ("HyperLogLog", typeOf(HYPERLOGLOG()));
+  EXPECT_EQ("KHyperLogLog", typeOf(KHYPERLOGLOG()));
   EXPECT_EQ("P4HyperLogLog", typeOf(P4HYPERLOGLOG()));
 
   EXPECT_EQ("tdigest(double)", typeOf(TDIGEST(DOUBLE())));
