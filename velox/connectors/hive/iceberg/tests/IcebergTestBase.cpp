@@ -119,6 +119,7 @@ IcebergInsertTableHandlePtr IcebergTestBase::createIcebergInsertTableHandle(
       columnHandles,
       locationHandle,
       fileFormat_,
+      nullptr,
       common::CompressionKind::CompressionKind_ZSTD);
 }
 
