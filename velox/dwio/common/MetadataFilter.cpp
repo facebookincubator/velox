@@ -26,7 +26,10 @@ namespace facebook::velox::common {
 namespace {
 using LeafResults =
     folly::F14FastMap<const MetadataFilter::LeafNode*, std::vector<uint64_t>*>;
-}
+
+using LeafRangeResults = folly::
+    F14FastMap<const MetadataFilter::LeafNode*, dwio::common::RowRanges*>;
+} // namespace
 
 struct MetadataFilter::Node {
   static std::unique_ptr<Node> fromExpression(
@@ -36,6 +39,8 @@ struct MetadataFilter::Node {
   virtual ~Node() = default;
   virtual void addToScanSpec(ScanSpec&) const = 0;
   virtual uint64_t* eval(LeafResults&, int size) const = 0;
+  virtual dwio::common::RowRanges* evalRowRanges(
+      LeafRangeResults& leafResults) const = 0;
   virtual std::string toString() const = 0;
 };
 
@@ -51,6 +56,14 @@ class MetadataFilter::LeafNode : public Node {
   uint64_t* eval(LeafResults& leafResults, int) const override {
     if (auto it = leafResults.find(this); it != leafResults.end()) {
       return it->second->data();
+    }
+    return nullptr;
+  }
+
+  dwio::common::RowRanges* evalRowRanges(
+      LeafRangeResults& leafResults) const override {
+    if (auto it = leafResults.find(this); it != leafResults.end()) {
+      return it->second;
     }
     return nullptr;
   }
@@ -136,6 +149,23 @@ struct MetadataFilter::AndNode final : ConditionNode {
     return result;
   }
 
+  dwio::common::RowRanges* evalRowRanges(
+      LeafRangeResults& leafResults) const override {
+    dwio::common::RowRanges* result = nullptr;
+    for (const auto& arg : args_) {
+      auto* a = arg->evalRowRanges(leafResults);
+      if (!a) {
+        continue;
+      }
+      if (!result) {
+        result = a;
+      } else {
+        result->unionWith(*a);
+      }
+    }
+    return result;
+  }
+
   std::string toString() const final {
     return ToStringImpl("and(");
   }
@@ -155,6 +185,23 @@ struct MetadataFilter::OrNode final : ConditionNode {
         result = a;
       } else {
         bits::andBits(result, a, 0, size);
+      }
+    }
+    return result;
+  }
+
+  dwio::common::RowRanges* evalRowRanges(
+      LeafRangeResults& leafResults) const override {
+    dwio::common::RowRanges* result = nullptr;
+    for (const auto& arg : args_) {
+      auto* a = arg->evalRowRanges(leafResults);
+      if (!a) {
+        return nullptr;
+      }
+      if (!result) {
+        result = a;
+      } else {
+        result->intersectWith(*a);
       }
     }
     return result;
@@ -260,6 +307,26 @@ void MetadataFilter::eval(
   const auto bitCount = finalResult.size() * 64;
   if (auto* combined = root_->eval(leafResults, bitCount)) {
     bits::orBits(finalResult.data(), combined, 0, bitCount);
+  }
+}
+
+void MetadataFilter::evalRowRanges(
+    std::vector<std::pair<const LeafNode*, dwio::common::RowRanges>>&
+        leafNodeResults,
+    dwio::common::RowRanges& finalResult) {
+  if (!root_) {
+    return;
+  }
+
+  LeafRangeResults leafResults;
+  for (auto& [leaf, result] : leafNodeResults) {
+    VELOX_CHECK(
+        leafResults.emplace(leaf, &result).second,
+        "Duplicate results: {}",
+        leaf->field().toString());
+  }
+  if (auto* combined = root_->evalRowRanges(leafResults)) {
+    finalResult = dwio::common::RowRanges::unionWith(finalResult, *combined);
   }
 }
 
