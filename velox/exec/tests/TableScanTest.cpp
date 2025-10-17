@@ -36,6 +36,7 @@
 #include "velox/connectors/hive/HiveDataSource.h"
 #include "velox/connectors/hive/HivePartitionFunction.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h"
+#include "velox/dwio/orc/reader/OrcReader.h"
 #include "velox/exec/Cursor.h"
 #include "velox/exec/Exchange.h"
 #include "velox/exec/PlanNodeStats.h"
@@ -46,6 +47,7 @@
 #include "velox/exec/tests/utils/TableScanTestBase.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
+#include "velox/functions/lib/IsNull.h"
 #include "velox/type/Timestamp.h"
 #include "velox/type/Type.h"
 #include "velox/type/tests/SubfieldFiltersBuilder.h"
@@ -72,7 +74,12 @@ void verifyCacheStats(
   EXPECT_EQ(cacheStats.numLookups, numLookups);
 }
 
-class TableScanTest : public TableScanTestBase {};
+class TableScanTest : public TableScanTestBase {
+  void SetUp() override {
+    TableScanTestBase::SetUp();
+    orc::registerOrcReaderFactory();
+  }
+};
 
 TEST_F(TableScanTest, allColumns) {
   auto vectors = makeVectors(10, 1'000);
@@ -6289,6 +6296,152 @@ TEST_F(TableScanTest, columnPostProcessorWithSubfieldFilters) {
     auto split = makeHiveConnectorSplit(file->getPath());
     AssertQueryBuilder(plan).split(split).assertResults(expected);
   }
+}
+
+TEST_F(TableScanTest, shortDecimalFilter) {
+  functions::registerIsNotNullFunction("isnotnull");
+
+  std::vector<std::optional<int64_t>> values = {
+      123456789123456789L,
+      987654321123456L,
+      std::nullopt,
+      2000000000000000L,
+      5000000000000000L,
+      987654321987654321L,
+      100000000000000L,
+      1230000000123456L,
+      120000000123456L,
+      std::nullopt};
+  auto rowVector = makeRowVector(
+      {"a"},
+      {
+          makeNullableFlatVector<int64_t>(values, DECIMAL(18, 6)),
+      });
+  createDuckDbTable({rowVector});
+
+  auto filePath = facebook::velox::test::getDataFilePath(
+      "velox/exec/tests", "data/decimal.orc");
+  auto split = exec::test::HiveConnectorSplitBuilder(filePath)
+                   .start(0)
+                   .length(fs::file_size(filePath))
+                   .fileFormat(dwio::common::FileFormat::ORC)
+                   .build();
+
+  auto rowType = rowVector->rowType();
+  // Is not null.
+  auto op =
+      PlanBuilder().tableScan(rowType, {}, "isnotnull(a)", rowType).planNode();
+  assertQuery(op, split, "SELECT a FROM tmp where a is not null");
+
+  // Is null.
+  op = PlanBuilder().tableScan(rowType, {}, "is_null(a)", rowType).planNode();
+  assertQuery(op, split, "SELECT a FROM tmp where a is null");
+
+  // BigintRange.
+  op =
+      PlanBuilder()
+          .tableScan(
+              rowType,
+              {},
+              "a > 2000000000.0::DECIMAL(18, 6) and a < 6000000000.0::DECIMAL(18, 6)",
+              rowType)
+          .planNode();
+  assertQuery(
+      op,
+      split,
+      "SELECT a FROM tmp where a > 2000000000.0 and a < 6000000000.0");
+
+  // NegatedBigintRange.
+  op =
+      PlanBuilder()
+          .tableScan(
+              rowType,
+              {},
+              "not(a between 2000000000.0::DECIMAL(18, 6) and 6000000000.0::DECIMAL(18, 6))",
+              rowType)
+          .planNode();
+  assertQuery(
+      op,
+      split,
+      "SELECT a FROM tmp where a < 2000000000.0 or a > 6000000000.0");
+}
+
+TEST_F(TableScanTest, longDecimalFilter) {
+  functions::registerIsNotNullFunction("isnotnull");
+
+  std::vector<std::optional<int64_t>> shortValues = {
+      123456789123456789L,
+      987654321123456L,
+      std::nullopt,
+      2000000000000000L,
+      5000000000000000L,
+      987654321987654321L,
+      100000000000000L,
+      1230000000123456L,
+      120000000123456L,
+      std::nullopt};
+
+  std::vector<std::optional<int128_t>> longValues = {
+      HugeInt::parse("123456789123456789123456789" + std::string(9, '0')),
+      HugeInt::parse("987654321123456789" + std::string(9, '0')),
+      std::nullopt,
+      HugeInt::parse("2" + std::string(37, '0')),
+      HugeInt::parse("5" + std::string(37, '0')),
+      HugeInt::parse("987654321987654321987654321" + std::string(9, '0')),
+      HugeInt::parse("1" + std::string(26, '0')),
+      HugeInt::parse("123000000012345678" + std::string(10, '0')),
+      HugeInt::parse("120000000123456789" + std::string(9, '0')),
+      HugeInt::parse("9" + std::string(37, '0'))};
+
+  auto rowVector = makeRowVector(
+      {"a", "b"},
+      {
+          makeNullableFlatVector<int64_t>(shortValues, DECIMAL(18, 6)),
+          makeNullableFlatVector<int128_t>(longValues, DECIMAL(38, 18)),
+      });
+  createDuckDbTable({rowVector});
+
+  auto filePath = facebook::velox::test::getDataFilePath(
+      "velox/exec/tests", "data/decimal.orc");
+  auto split = exec::test::HiveConnectorSplitBuilder(filePath)
+                   .start(0)
+                   .length(fs::file_size(filePath))
+                   .fileFormat(dwio::common::FileFormat::ORC)
+                   .build();
+
+  auto outputType = ROW({"b"}, {DECIMAL(38, 18)});
+  auto dataColumns = rowVector->rowType();
+
+  auto op = PlanBuilder()
+                .tableScan(outputType, {}, "isnotnull(b)", dataColumns)
+                .planNode();
+  assertQuery(op, split, "SELECT b FROM tmp where b is not null");
+
+  // Is null.
+  op = PlanBuilder()
+           .tableScan(outputType, {}, "is_null(b)", dataColumns)
+           .planNode();
+  assertQuery(op, split, "SELECT b FROM tmp where b is null");
+
+  // HugeintRange.
+  op =
+      PlanBuilder()
+          .tableScan(
+              outputType,
+              {},
+              "b > 2000000000.0::DECIMAL(38, 18) and b < 6000000000.0::DECIMAL(38, 18)",
+              dataColumns)
+          .planNode();
+  assertQuery(
+      op,
+      split,
+      "SELECT b FROM tmp where b > 2000000000.0 and b < 6000000000.0");
+
+  // Test filter column not being projected out.
+  op = PlanBuilder()
+           .tableScan(outputType, {}, "a is null", dataColumns)
+           .planNode();
+  assertQuery(op, split, "SELECT b FROM tmp WHERE a is null");
 }
 
 } // namespace
