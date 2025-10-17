@@ -49,7 +49,24 @@ class SelectiveDecimalColumnReader : public SelectiveColumnReader {
 
  private:
   template <bool kDense>
-  void readHelper(RowSet rows);
+  void readHelper(const common::Filter* filter, RowSet rows);
+
+  // Process IsNull and IsNotNull filters.
+  void processNulls(bool isNull, const RowSet& rows, const uint64_t* rawNulls);
+
+  // Process filters on decimal values.
+  void processFilter(
+      const common::Filter* filter,
+      const RowSet& rows,
+      const uint64_t* rawNulls);
+
+  // Dispatch to the respective filter processing based on the filter type.
+  void process(
+      const common::Filter* filter,
+      const RowSet& rows,
+      const uint64_t* rawNulls);
+
+  void fillDecimals();
 
   std::unique_ptr<IntDecoder<true>> valueDecoder_;
   std::unique_ptr<IntDecoder<true>> scaleDecoder_;
