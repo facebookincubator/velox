@@ -200,12 +200,7 @@ Writer::Writer(
   }
 
   if (options.columnWriterFactory == nullptr) {
-    writer_ = BaseColumnWriter::create(
-        writerBase_->getContext(),
-        *schema_,
-        /*sequence=*/0,
-        /*onRecordPosition=*/nullptr,
-        options.format);
+    writer_ = BaseColumnWriter::create(writerBase_->getContext(), *schema_);
   } else {
     writer_ = options.columnWriterFactory(writerBase_->getContext(), *schema_);
   }

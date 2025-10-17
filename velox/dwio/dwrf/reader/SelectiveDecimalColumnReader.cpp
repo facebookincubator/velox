@@ -228,37 +228,8 @@ void SelectiveDecimalColumnReader<DataT>::process(
     case common::FilterKind::kIsNotNull:
       processNulls(false, rows, rawNulls);
       break;
-    case common::FilterKind::kBigintRange:
-    case common::FilterKind::kBigintValuesUsingHashTable:
-    case common::FilterKind::kBigintValuesUsingBitmask:
-    case common::FilterKind::kNegatedBigintRange:
-    case common::FilterKind::kNegatedBigintValuesUsingHashTable:
-    case common::FilterKind::kNegatedBigintValuesUsingBitmask:
-    case common::FilterKind::kBigintMultiRange: {
-      if constexpr (std::is_same_v<DataT, int64_t>) {
-        processFilter(filter, rows, rawNulls);
-      } else {
-        const auto actualType = CppToType<DataT>::create();
-        VELOX_NYI(
-            "Expected type BIGINT, but found file type {}.",
-            actualType->toString());
-      }
-      break;
-    }
-    case common::FilterKind::kHugeintValuesUsingHashTable:
-    case common::FilterKind::kHugeintRange: {
-      if constexpr (std::is_same_v<DataT, int128_t>) {
-        processFilter(filter, rows, rawNulls);
-      } else {
-        const auto actualType = CppToType<DataT>::create();
-        VELOX_NYI(
-            "Expected type HUGEINT, but found file type {}.",
-            actualType->toString());
-      }
-      break;
-    }
     default:
-      VELOX_NYI("Unsupported filter: {}.", static_cast<int>(filterKind));
+      processFilter(filter, rows, rawNulls);
   }
 }
 
@@ -276,6 +247,7 @@ void SelectiveDecimalColumnReader<DataT>::read(
     resultNulls_ = AlignedBuffer::allocate<bool>(rows.size(), memoryPool_);
     rawResultNulls_ = resultNulls_->asMutable<uint64_t>();
   }
+  rawValues_ = values_->asMutable<char>();
   bool isDense = rows.back() == rows.size() - 1;
   if (isDense) {
     readHelper<true>(scanSpec_->filter(), rows);
@@ -288,7 +260,6 @@ template <typename DataT>
 void SelectiveDecimalColumnReader<DataT>::getValues(
     const RowSet& rows,
     VectorPtr* result) {
-  rawValues_ = values_->asMutable<char>();
   getIntValues(rows, requestedType_, result);
 }
 

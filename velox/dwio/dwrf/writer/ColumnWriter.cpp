@@ -2183,12 +2183,7 @@ std::unique_ptr<BaseColumnWriter> BaseColumnWriter::create(
           context, type, sequence, onRecordPosition);
       ret->children_.reserve(type.size());
       for (int32_t i = 0; i < type.size(); ++i) {
-        ret->children_.push_back(create(
-            context,
-            *type.childAt(i),
-            sequence,
-            /*onRecordPosition=*/nullptr,
-            format));
+        ret->children_.push_back(create(context, *type.childAt(i), sequence));
       }
       return ret;
     }
@@ -2204,30 +2199,15 @@ std::unique_ptr<BaseColumnWriter> BaseColumnWriter::create(
       }
       auto ret = std::make_unique<MapColumnWriter>(
           context, type, sequence, onRecordPosition);
-      ret->children_.push_back(create(
-          context,
-          *type.childAt(0),
-          sequence,
-          /*onRecordPosition=*/nullptr,
-          format));
-      ret->children_.push_back(create(
-          context,
-          *type.childAt(1),
-          sequence,
-          /*onRecordPosition=*/nullptr,
-          format));
+      ret->children_.push_back(create(context, *type.childAt(0), sequence));
+      ret->children_.push_back(create(context, *type.childAt(1), sequence));
       return ret;
     }
     case TypeKind::ARRAY: {
       VELOX_CHECK_EQ(type.size(), 1, "Array should have exactly one child");
       auto ret = std::make_unique<ListColumnWriter>(
           context, type, sequence, onRecordPosition);
-      ret->children_.push_back(create(
-          context,
-          *type.childAt(0),
-          sequence,
-          /*onRecordPosition=*/nullptr,
-          format));
+      ret->children_.push_back(create(context, *type.childAt(0), sequence));
       return ret;
     }
     default:
