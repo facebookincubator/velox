@@ -131,7 +131,7 @@ typedef struct DIST_T {
   std::vector<std::vector<int32_t>> value_sets;
   std::vector<char> strings;
   std::vector<char> names;
-  int size;
+  int size = 0;
 } dist_t;
 
 struct DBGEN_VERSION_TBL {
@@ -142,17 +142,17 @@ struct DBGEN_VERSION_TBL {
 };
 
 typedef struct D_IDX_T {
-  char name[D_NAME_LEN + 1];
-  int index;
-  int nAllocatedLength;
-  int nRemainingStrSpace;
-  int offset;
-  int str_space;
-  int name_space;
-  int length;
-  int w_width;
-  int v_width;
-  int flags;
+  char name[D_NAME_LEN + 1] = {'\0'};
+  int index = 0;
+  int nAllocatedLength = 0;
+  int nRemainingStrSpace = 0;
+  int offset = 0;
+  int str_space = 0;
+  int name_space = 0;
+  int length = 0;
+  int w_width = 0;
+  int v_width = 0;
+  int flags = 0;
   dist_t dist;
 } d_idx_t;
 
