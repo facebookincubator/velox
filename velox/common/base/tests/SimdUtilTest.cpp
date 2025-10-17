@@ -126,6 +126,7 @@ class SimdUtilTest : public testing::Test {
   folly::Random::DefaultGenerator rng_;
 };
 
+#ifdef VELOX_ENABLE_LOAD_SIMD_VALUE_BUFFER
 TEST_F(SimdUtilTest, setAll) {
   auto bits = simd::setAll(true);
   auto words = reinterpret_cast<int64_t*>(&bits);
@@ -133,6 +134,7 @@ TEST_F(SimdUtilTest, setAll) {
     EXPECT_EQ(words[i], -1ll);
   }
 }
+#endif
 
 TEST_F(SimdUtilTest, bitIndices) {
   testIndices(1);

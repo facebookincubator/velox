@@ -63,7 +63,7 @@ enum class StatType {
   HISTOGRAM,
 };
 
-inline std::string statTypeString(StatType stat) {
+inline std::string_view statTypeString(StatType stat) {
   switch (stat) {
     case StatType::AVG:
       return "Avg";
@@ -75,8 +75,6 @@ inline std::string statTypeString(StatType stat) {
       return "Count";
     case StatType::HISTOGRAM:
       return "Histogram";
-    default:
-      return fmt::format("UNKNOWN: {}", static_cast<int>(stat));
   }
 }
 
@@ -84,17 +82,17 @@ inline std::string statTypeString(StatType stat) {
 /// different implementations.
 class BaseStatsReporter {
  public:
-  virtual ~BaseStatsReporter() {}
+  virtual ~BaseStatsReporter() = default;
 
   /// Register a stat of the given stat type.
   /// @param key The key to identify the stat.
   /// @param statType How the stat is aggregated.
   virtual void registerMetricExportType(const char* key, StatType statType)
-      const = 0;
+      const {}
 
   virtual void registerMetricExportType(
       folly::StringPiece key,
-      StatType statType) const = 0;
+      StatType statType) const {}
 
   /// Register a histogram with a list of percentiles defined.
   /// @param key The key to identify the histogram.
@@ -107,14 +105,14 @@ class BaseStatsReporter {
       int64_t bucketWidth,
       int64_t min,
       int64_t max,
-      const std::vector<int32_t>& pcts) const = 0;
+      const std::vector<int32_t>& pcts) const {}
 
   virtual void registerHistogramMetricExportType(
       folly::StringPiece key,
       int64_t bucketWidth,
       int64_t min,
       int64_t max,
-      const std::vector<int32_t>& pcts) const = 0;
+      const std::vector<int32_t>& pcts) const {}
 
   /// Register a quantile metric for quantile stats with export types,
   /// quantiles, and sliding window periods.
@@ -127,13 +125,13 @@ class BaseStatsReporter {
       const char* key,
       const std::vector<StatType>& statTypes,
       const std::vector<double>& pcts,
-      const std::vector<size_t>& slidingWindowsSeconds = {60}) const = 0;
+      const std::vector<size_t>& slidingWindowsSeconds = {60}) const {}
 
   virtual void registerQuantileMetricExportType(
       folly::StringPiece key,
       const std::vector<StatType>& statTypes,
       const std::vector<double>& pcts,
-      const std::vector<size_t>& slidingWindowsSeconds = {60}) const = 0;
+      const std::vector<size_t>& slidingWindowsSeconds = {60}) const {}
 
   /// Register a dynamic quantile metric with a template key pattern that
   /// supports runtime substitution.
@@ -145,60 +143,60 @@ class BaseStatsReporter {
       const char* keyPattern,
       const std::vector<StatType>& statTypes,
       const std::vector<double>& pcts,
-      const std::vector<size_t>& slidingWindowsSeconds = {60}) const = 0;
+      const std::vector<size_t>& slidingWindowsSeconds = {60}) const {}
 
   virtual void registerDynamicQuantileMetricExportType(
       folly::StringPiece keyPattern,
       const std::vector<StatType>& statTypes,
       const std::vector<double>& pcts,
-      const std::vector<size_t>& slidingWindowsSeconds = {60}) const = 0;
+      const std::vector<size_t>& slidingWindowsSeconds = {60}) const {}
 
   /// Add the given value to the stat.
-  virtual void addMetricValue(const std::string& key, size_t value = 1)
-      const = 0;
+  virtual void addMetricValue(const std::string& key, size_t value = 1) const {}
 
-  virtual void addMetricValue(const char* key, size_t value = 1) const = 0;
+  virtual void addMetricValue(const char* key, size_t value = 1) const {}
 
-  virtual void addMetricValue(folly::StringPiece key, size_t value = 1)
-      const = 0;
+  virtual void addMetricValue(folly::StringPiece key, size_t value = 1) const {}
 
   /// Add the given value to the histogram.
   virtual void addHistogramMetricValue(const std::string& key, size_t value)
-      const = 0;
+      const {}
 
-  virtual void addHistogramMetricValue(const char* key, size_t value) const = 0;
+  virtual void addHistogramMetricValue(const char* key, size_t value) const {}
 
   virtual void addHistogramMetricValue(folly::StringPiece key, size_t value)
-      const = 0;
+      const {}
 
   /// Add the given value to a quantile metric.
   virtual void addQuantileMetricValue(const std::string& key, size_t value = 1)
-      const = 0;
+      const {}
 
-  virtual void addQuantileMetricValue(const char* key, size_t value = 1)
-      const = 0;
+  virtual void addQuantileMetricValue(const char* key, size_t value = 1) const {
+  }
 
   virtual void addQuantileMetricValue(folly::StringPiece key, size_t value = 1)
-      const = 0;
+      const {}
 
   /// Add the given value to a quantile metric.
   virtual void addDynamicQuantileMetricValue(
       const std::string& key,
       folly::Range<const folly::StringPiece*> subkeys,
-      size_t value = 1) const = 0;
+      size_t value = 1) const {}
 
   virtual void addDynamicQuantileMetricValue(
       const char* key,
       folly::Range<const folly::StringPiece*> subkeys,
-      size_t value = 1) const = 0;
+      size_t value = 1) const {}
 
   virtual void addDynamicQuantileMetricValue(
       folly::StringPiece key,
       folly::Range<const folly::StringPiece*> subkeys,
-      size_t value = 1) const = 0;
+      size_t value = 1) const {}
 
   /// Return the aggregated metrics in a serialized string format.
-  virtual std::string fetchMetrics() = 0;
+  virtual std::string fetchMetrics() {
+    return "";
+  }
 
   static bool registered;
 };
