@@ -61,7 +61,13 @@ class ConstantTypedExpr : public ITypedExpr {
   // Variant::null() value is supported.
   ConstantTypedExpr(TypePtr type, Variant value)
       : ITypedExpr{ExprKind::kConstant, std::move(type)},
-        value_{std::move(value)} {}
+        value_{std::move(value)} {
+    VELOX_CHECK(
+        value_.isTypeCompatible(ITypedExpr::type()),
+        "Expression type {} does not match variant type {}",
+        ITypedExpr::type()->toString(),
+        value_.inferType()->toString());
+  }
 
   // Creates constant expression of scalar or complex type. The value comes from
   // index zero.

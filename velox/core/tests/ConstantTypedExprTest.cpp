@@ -15,6 +15,7 @@
  */
 #include <gtest/gtest.h>
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/core/Expressions.h"
 #include "velox/functions/prestosql/types/HyperLogLogType.h"
@@ -74,11 +75,10 @@ class ConstantTypedExprTest : public ::testing::Test,
   }
 
   // Helper functions
-  template <typename T>
   std::shared_ptr<ConstantTypedExpr> createVariantExpr(
       const TypePtr& type,
-      const T& value) {
-    return std::make_shared<ConstantTypedExpr>(type, variant(value));
+      const Variant& value) {
+    return std::make_shared<ConstantTypedExpr>(type, value);
   }
 
   std::shared_ptr<ConstantTypedExpr> createNullVariantExpr(
@@ -577,6 +577,40 @@ TEST_F(ConstantTypedExprTest, toStringComplexTypes) {
       BaseVector::createConstant(opaqueType, opaqueVariant, 1, pool_.get()));
   EXPECT_EQ(opaqueVariantExpr->toString(), opaqueVectorExpr->toString())
       << "toString mismatch for OPAQUE variant vs vector";
+}
+
+TEST_F(ConstantTypedExprTest, variantTypeCheck) {
+  auto testVariantExpr = [&](const Variant& value,
+                             const TypePtr& type,
+                             const TypePtr& expectedType) {
+    VELOX_ASSERT_THROW(
+        createVariantExpr(type, value),
+        fmt::format(
+            "Expression type {} does not match variant type {}",
+            type->toString(),
+            expectedType->toString()));
+    if (type->isPrimitiveType()) {
+      VELOX_ASSERT_THROW(
+          createVariantExpr(type, Variant::null(expectedType->kind())),
+          fmt::format(
+              "Expression type {} does not match variant type {}",
+              type->toString(),
+              expectedType->toString()));
+    } else {
+      ASSERT_NO_THROW(
+          createVariantExpr(type, Variant::null(expectedType->kind())));
+    }
+  };
+
+  testVariantExpr("abc", INTEGER(), VARCHAR());
+  testVariantExpr(variant(123LL), INTEGER(), BIGINT());
+  testVariantExpr(2.0, BIGINT(), DOUBLE());
+  testVariantExpr(
+      variant::array({1, 2, 3}), ARRAY(VARCHAR()), ARRAY(INTEGER()));
+  testVariantExpr(
+      variant::map({{2.0, "xyz"}}),
+      MAP(INTEGER(), VARCHAR()),
+      MAP(DOUBLE(), VARCHAR()));
 }
 
 } // namespace facebook::velox::core::test
