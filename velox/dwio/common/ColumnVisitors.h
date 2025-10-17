@@ -1419,7 +1419,7 @@ class StringDictionaryColumnVisitor
     }
   }
 
-  folly::StringPiece valueInDictionary(int64_t index) {
+  StringView valueInDictionary(int64_t index) {
     auto stripeDictSize = DictSuper::state_.dictionary.numValues;
     if (index < stripeDictSize) {
       return reinterpret_cast<const StringView*>(
