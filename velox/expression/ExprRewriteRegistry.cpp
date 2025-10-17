@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 #include "velox/expression/ExprRewriteRegistry.h"
-#include "velox/expression/FunctionSignature.h"
 
 namespace facebook::velox::expression {
 
