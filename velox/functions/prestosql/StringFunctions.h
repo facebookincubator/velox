@@ -672,4 +672,93 @@ struct XxHash64StringFunction {
   }
 };
 
+/// longest_common_prefix(string1, string2) → varchar
+/// Returns the longest common prefix between two strings.
+template <typename T>
+struct LongestCommonPrefixFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  // Results refer to strings in the first argument.
+  static constexpr int32_t reuse_strings_from_arg = 0;
+
+  // ASCII input always produces ASCII result.
+  static constexpr bool is_default_ascii_behavior = true;
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& left,
+      const arg_type<Varchar>& right) {
+    doCall<false>(result, left, right);
+  }
+
+  FOLLY_ALWAYS_INLINE void callAscii(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& left,
+      const arg_type<Varchar>& right) {
+    doCall<true>(result, left, right);
+  }
+
+ private:
+  template <bool isAscii>
+  FOLLY_ALWAYS_INLINE void doCall(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& left,
+      const arg_type<Varchar>& right) {
+    if constexpr (isAscii) {
+      size_t minLength = std::min(left.size(), right.size());
+      const char* leftData = left.data();
+      const char* rightData = right.data();
+
+      size_t commonPrefixLength = 0;
+      for (size_t i = 0; i < minLength; ++i) {
+        if (leftData[i] != rightData[i]) {
+          break;
+        }
+        commonPrefixLength++;
+      }
+
+      if (commonPrefixLength == 0) {
+        result.setEmpty();
+      } else {
+        result.setNoCopy(StringView(leftData, commonPrefixLength));
+      }
+    } else {
+      const char* leftData = left.data();
+      const char* rightData = right.data();
+      size_t leftSize = left.size();
+      size_t rightSize = right.size();
+
+      size_t leftPos = 0, rightPos = 0;
+      size_t commonByteLength = 0;
+
+      while (leftPos < leftSize && rightPos < rightSize) {
+        int leftCharBytes = 0, rightCharBytes = 0;
+
+        auto leftCodePoint = utf8proc_codepoint(
+            leftData + leftPos, leftData + leftSize, leftCharBytes);
+        auto rightCodePoint = utf8proc_codepoint(
+            rightData + rightPos, rightData + rightSize, rightCharBytes);
+
+        if (leftCharBytes <= 0 || rightCharBytes <= 0) {
+          VELOX_USER_FAIL("Invalid UTF-8 encoding in input string");
+        }
+
+        if (leftCodePoint != rightCodePoint) {
+          break;
+        }
+
+        leftPos += leftCharBytes;
+        rightPos += rightCharBytes;
+        commonByteLength = leftPos;
+      }
+
+      if (commonByteLength == 0) {
+        result.setEmpty();
+      } else {
+        result.setNoCopy(StringView(leftData, commonByteLength));
+      }
+    }
+  }
+};
+
 } // namespace facebook::velox::functions
