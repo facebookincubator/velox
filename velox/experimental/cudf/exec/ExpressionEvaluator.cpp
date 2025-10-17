@@ -126,7 +126,9 @@ makeScalarFromValue(const TypePtr& type, T value, bool isNull) {
           value, !isNull, stream, mr);
     }
     VELOX_FAIL("Unsupported fixed-width scalar type");
-  } else if constexpr (std::is_same_v<T, StringView> || std::is_same_v<T, std::string_view> || std::is_same_v<T, std::string>) {
+  } else if constexpr (
+      std::is_same_v<T, StringView> || std::is_same_v<T, std::string_view> ||
+      std::is_same_v<T, std::string>) {
     return std::make_unique<cudf::string_scalar>(
         std::string_view(value.data(), value.size()), !isNull, stream, mr);
   }
