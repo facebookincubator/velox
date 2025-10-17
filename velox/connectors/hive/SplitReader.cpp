@@ -303,11 +303,13 @@ void SplitReader::createReader(
   FileHandleKey fileHandleKey{
       .filename = hiveSplit_->filePath,
       .tokenProvider = connectorQueryCtx_->fsTokenProvider()};
+
+  auto fileProperties = hiveSplit_->properties.value_or(FileProperties{});
+  fileProperties.fileReadOps = fileReadOps;
+
   try {
     fileHandleCachePtr = fileHandleFactory_->generate(
-        fileHandleKey,
-        hiveSplit_->properties.has_value() ? &*hiveSplit_->properties : nullptr,
-        fsStats_ ? fsStats_.get() : nullptr);
+        fileHandleKey, &fileProperties, fsStats_ ? fsStats_.get() : nullptr);
     VELOX_CHECK_NOT_NULL(fileHandleCachePtr.get());
   } catch (const VeloxRuntimeError& e) {
     if (e.errorCode() == error_code::kFileNotFound &&
@@ -399,7 +401,8 @@ void SplitReader::createRowReader(
   baseRowReaderOpts_.setTrackRowSize(
       rowSizeTrackingEnabled.has_value()
           ? *rowSizeTrackingEnabled
-          : connectorQueryCtx_->rowSizeTrackingEnabled());
+          : connectorQueryCtx_->rowSizeTrackingMode() !=
+              core::QueryConfig::RowSizeTrackingMode::DISABLED);
   baseRowReader_ = baseReader_->createRowReader(baseRowReaderOpts_);
 }
 

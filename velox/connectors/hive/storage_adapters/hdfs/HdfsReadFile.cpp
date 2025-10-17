@@ -107,7 +107,7 @@ class HdfsReadFile::Impl {
       uint64_t offset,
       uint64_t length,
       void* buf,
-      const folly::F14FastMap<std::string, std::string>& fileReadOps) const {
+      const FileStorageContext& fileStorageContext) const {
     preadInternal(offset, length, static_cast<char*>(buf));
     return {static_cast<char*>(buf), length};
   }
@@ -115,7 +115,7 @@ class HdfsReadFile::Impl {
   std::string pread(
       uint64_t offset,
       uint64_t length,
-      const folly::F14FastMap<std::string, std::string>& fileReadOps) const {
+      const FileStorageContext& fileStorageContext) const {
     std::string result(length, 0);
     char* pos = result.data();
     preadInternal(offset, length, pos);
@@ -170,17 +170,15 @@ std::string_view HdfsReadFile::pread(
     uint64_t offset,
     uint64_t length,
     void* buf,
-    filesystems::File::IoStats* stats,
-    const folly::F14FastMap<std::string, std::string>& fileReadOps) const {
-  return pImpl->pread(offset, length, buf, fileReadOps);
+    const FileStorageContext& fileStorageContext) const {
+  return pImpl->pread(offset, length, buf, fileStorageContext);
 }
 
 std::string HdfsReadFile::pread(
     uint64_t offset,
     uint64_t length,
-    filesystems::File::IoStats* stats,
-    const folly::F14FastMap<std::string, std::string>& fileReadOps) const {
-  return pImpl->pread(offset, length, fileReadOps);
+    const FileStorageContext& fileStorageContext) const {
+  return pImpl->pread(offset, length, fileStorageContext);
 }
 
 uint64_t HdfsReadFile::size() const {

@@ -35,8 +35,7 @@ class ReadFileMock : public ::facebook::velox::ReadFile {
       (uint64_t offset,
        uint64_t length,
        void* buf,
-       facebook::velox::filesystems::File::IoStats* stats,
-       (const folly::F14FastMap<std::string, std::string>&)fileReadOps),
+       (const facebook::velox::FileStorageContext&)fileStorageContext),
       (const, override));
 
   MOCK_METHOD(bool, shouldCoalesce, (), (const, override));
@@ -49,8 +48,7 @@ class ReadFileMock : public ::facebook::velox::ReadFile {
       preadv,
       (folly::Range<const Region*> regions,
        folly::Range<folly::IOBuf*> iobufs,
-       facebook::velox::filesystems::File::IoStats* stats,
-       (const folly::F14FastMap<std::string, std::string>&)fileReadOps),
+       (const facebook::velox::FileStorageContext&)fileStorageContext),
       (const, override));
 };
 
@@ -62,15 +60,14 @@ void expectPreads(
   EXPECT_CALL(file, size()).WillRepeatedly(Return(content.size()));
   for (auto& read : reads) {
     ASSERT_GE(content.size(), read.offset + read.length);
-    EXPECT_CALL(file, pread(read.offset, read.length, _, nullptr, _))
+    EXPECT_CALL(file, pread(read.offset, read.length, _, _))
         .Times(1)
         .WillOnce(
             [content](
                 uint64_t offset,
                 uint64_t length,
                 void* buf,
-                facebook::velox::filesystems::File::IoStats* stats,
-                const folly::F14FastMap<std::string, std::string>& fileReadOps)
+                const facebook::velox::FileStorageContext& fileStorageContext)
                 -> std::string_view {
               memcpy(buf, content.data() + offset, length);
               return {content.data() + offset, length};
@@ -84,14 +81,13 @@ void expectPreadvs(
     std::vector<Region> reads) {
   EXPECT_CALL(file, getName()).WillRepeatedly(Return("mock_name"));
   EXPECT_CALL(file, size()).WillRepeatedly(Return(content.size()));
-  EXPECT_CALL(file, preadv(_, _, nullptr, _))
+  EXPECT_CALL(file, preadv(_, _, _))
       .Times(1)
       .WillOnce(
           [content, reads](
               folly::Range<const Region*> regions,
               folly::Range<folly::IOBuf*> iobufs,
-              facebook::velox::filesystems::File::IoStats* stats,
-              const folly::F14FastMap<std::string, std::string>& fileReadOps)
+              const facebook::velox::FileStorageContext& fileStorageContext)
               -> uint64_t {
             EXPECT_EQ(regions.size(), reads.size());
             uint64_t length = 0;

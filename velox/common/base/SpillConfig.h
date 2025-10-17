@@ -79,7 +79,8 @@ struct SpillConfig {
       uint64_t _writerFlushThresholdSize,
       const std::string& _compressionKind,
       std::optional<PrefixSortConfig> _prefixSortConfig = std::nullopt,
-      const std::string& _fileCreateConfig = {});
+      const std::string& _fileCreateConfig = {},
+      uint32_t _windowMinReadBatchRows = 1'000);
 
   /// Returns the spilling level with given 'startBitOffset' and
   /// 'numPartitionBits'.
@@ -164,5 +165,8 @@ struct SpillConfig {
 
   /// Custom options passed to velox::FileSystem to create spill WriteFile.
   std::string fileCreateConfig;
+
+  /// The minimum number of rows to read when processing spilled window data.
+  uint32_t windowMinReadBatchRows;
 };
 } // namespace facebook::velox::common

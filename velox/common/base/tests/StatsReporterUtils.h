@@ -26,13 +26,11 @@
 #include <vector>
 #include "velox/common/base/StatsReporter.h"
 
-namespace facebook::velox {
+namespace facebook::velox::test {
 
-/**
- * A test implementation of BaseStatsReporter for use in unit tests.
- * This class provides a mock implementation that captures all metric
- * registrations and values for verification in tests.
- */
+/// A test implementation of BaseStatsReporter for use in unit tests.
+/// This class provides a mock implementation that captures all metric
+/// registrations and values for verification in tests.
 class TestReporter : public BaseStatsReporter {
  public:
   mutable std::mutex m;
@@ -239,10 +237,8 @@ class TestReporter : public BaseStatsReporter {
     return ss.str();
   }
 
-  /**
-   * Get the current counter value for a specific key.
-   * Returns 0 if the key doesn't exist.
-   */
+  // Get the current counter value for a specific key.
+  // Returns 0 if the key doesn't exist.
   size_t getCounterValue(const std::string& key) const {
     std::lock_guard<std::mutex> l(m);
     auto it = counterMap.find(key);
@@ -250,4 +246,4 @@ class TestReporter : public BaseStatsReporter {
   }
 };
 
-} // namespace facebook::velox
+} // namespace facebook::velox::test

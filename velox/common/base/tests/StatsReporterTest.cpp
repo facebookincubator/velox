@@ -28,7 +28,7 @@
 #include "velox/common/caching/SsdCache.h"
 #include "velox/common/memory/MmapAllocator.h"
 
-namespace facebook::velox {
+namespace facebook::velox::test {
 
 struct QuantileConfig {
   std::vector<StatType> statTypes;
@@ -904,7 +904,7 @@ folly::Singleton<BaseStatsReporter> reporter([]() {
   return new TestReporter();
 });
 
-} // namespace facebook::velox
+} // namespace facebook::velox::test
 
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);

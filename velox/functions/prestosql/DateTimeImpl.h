@@ -61,9 +61,7 @@ FOLLY_ALWAYS_INLINE Timestamp fromUnixtime(double unixtime) {
       seconds, milliseconds * Timestamp::kNanosecondsInMillisecond);
 }
 
-FOLLY_ALWAYS_INLINE boost::int64_t fromUnixtime(
-    double unixtime,
-    int16_t timeZoneId) {
+FOLLY_ALWAYS_INLINE int64_t fromUnixtime(double unixtime, int16_t timeZoneId) {
   if (FOLLY_UNLIKELY(std::isnan(unixtime))) {
     return pack(0, timeZoneId);
   }
@@ -200,6 +198,42 @@ int64_t diffDate(
       // prevent overflow
       Timestamp((int64_t)fromDate * util::kSecsPerDay, 0),
       Timestamp((int64_t)toDate * util::kSecsPerDay, 0));
+}
+
+FOLLY_ALWAYS_INLINE
+int64_t diffTime(
+    const DateTimeUnit unit,
+    const int64_t fromTime,
+    const int64_t toTime) {
+  // Validate time inputs are in valid range [0, 86400000)
+  VELOX_USER_CHECK(
+      fromTime >= 0 && fromTime < kMillisInDay,
+      "from TIME value {} is out of range [0, 86400000)",
+      fromTime);
+  VELOX_USER_CHECK(
+      toTime >= 0 && toTime < kMillisInDay,
+      "to TIME value {} is out of range [0, 86400000)",
+      toTime);
+
+  if (fromTime == toTime) {
+    return 0;
+  }
+
+  // TIME values are milliseconds since midnight
+  int64_t diffMillis = toTime - fromTime;
+
+  switch (unit) {
+    case DateTimeUnit::kMillisecond:
+      return diffMillis;
+    case DateTimeUnit::kSecond:
+      return diffMillis / kMillisInSecond;
+    case DateTimeUnit::kMinute:
+      return diffMillis / kMillisInMinute;
+    case DateTimeUnit::kHour:
+      return diffMillis / kMillisInHour;
+    default:
+      VELOX_USER_FAIL("Unsupported time unit for TIME type");
+  }
 }
 
 FOLLY_ALWAYS_INLINE int64_t

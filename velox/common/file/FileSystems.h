@@ -88,6 +88,10 @@ struct FileOptions {
 
   /// A token provider that can be used to get tokens for accessing the file.
   std::shared_ptr<TokenProvider> tokenProvider{nullptr};
+
+  /// File read operations metadata that can be passed to the underlying file
+  /// system for tracking and logging purposes.
+  folly::F14FastMap<std::string, std::string> fileReadOps{};
 };
 
 /// Defines directory options

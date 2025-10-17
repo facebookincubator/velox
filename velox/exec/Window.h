@@ -67,6 +67,11 @@ class Window : public Operator {
   void reclaim(uint64_t targetBytes, memory::MemoryReclaimer::Stats& stats)
       override;
 
+  /// Runtime statistics holding total number of batches read from spilled data.
+  /// 0 if no spilling occurred.
+  static inline const std::string kWindowSpillReadNumBatches{
+      "windowSpillReadNumBatches"};
+
  private:
   // Used for k preceding/following frames. Index is the column index if k is a
   // column. value is used to read column values from the column index when k

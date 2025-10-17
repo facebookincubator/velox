@@ -181,7 +181,7 @@ class ReadFileInputStream final : public InputStream {
   }
 
  private:
-  const folly::F14FastMap<std::string, std::string> fileReadOps_;
+  FileStorageContext fileStorageContext_;
   std::shared_ptr<velox::ReadFile> readFile_;
 };
 

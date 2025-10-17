@@ -16,7 +16,6 @@
 
 #pragma once
 
-#include <folly/SocketAddress.h>
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/remote/if/gen-cpp2/RemoteFunction_types.h"
 #include "velox/vector/VectorStream.h"
@@ -27,14 +26,6 @@ struct RemoteVectorFunctionMetadata : public exec::VectorFunctionMetadata {
   /// The serialization format to be used to send batches of data to the remote
   /// process.
   remote::PageFormat serdeFormat{remote::PageFormat::PRESTO_PAGE};
-
-  /// Network address of the server to communicate with using a thrift client.
-  /// Note that this can hold a network location (ip/port pair) or a unix domain
-  /// socket path (see SocketAddress::makeFromPath()).
-  ///
-  /// TODO: Move this to `RemoteThriftVectorFunctionMetadata` once call sites
-  /// are updated.
-  folly::SocketAddress location;
 };
 
 /// Main vector function logic. Needs to be extended with the transport-specific

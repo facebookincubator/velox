@@ -278,6 +278,13 @@ class QueryConfig {
   /// Window spilling flag, only applies if "spill_enabled" flag is set.
   static constexpr const char* kWindowSpillEnabled = "window_spill_enabled";
 
+  /// When processing spilled window data, read batches of whole partitions
+  /// having at least that many rows. Set to 1 to read one whole partition at a
+  /// time. Each driver processing the Window operator will process that much
+  /// data at once.
+  static constexpr const char* kWindowSpillMinReadBatchRows =
+      "window_spill_min_read_batch_rows";
+
   /// If true, the memory arbitrator will reclaim memory from table writer by
   /// flushing its buffered data to disk. only applies if "spill_enabled" flag
   /// is set.
@@ -716,17 +723,36 @@ class QueryConfig {
   /// username.
   static constexpr const char* kClientTags = "client_tags";
 
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
   /// Enable (reader) row size tracker as a fallback to file level row size
   /// estimates.
   static constexpr const char* kRowSizeTrackingEnabled =
       "row_size_tracking_enabled";
+#endif
+
+  /// Enable (reader) row size tracker as a fallback to file level row size
+  /// estimates.
+  static constexpr const char* kRowSizeTrackingMode = "row_size_tracking_mode";
+
+  enum class RowSizeTrackingMode {
+    DISABLED = 0,
+    EXCLUDE_DELTA_SPLITS = 1,
+    ENABLED_FOR_ALL = 2,
+  };
 
   bool selectiveNimbleReaderEnabled() const {
     return get<bool>(kSelectiveNimbleReaderEnabled, false);
   }
 
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
   bool rowSizeTrackingEnabled() const {
     return get<bool>(kRowSizeTrackingEnabled, true);
+  }
+#endif
+
+  RowSizeTrackingMode rowSizeTrackingMode() const {
+    return get<RowSizeTrackingMode>(
+        kRowSizeTrackingMode, RowSizeTrackingMode::ENABLED_FOR_ALL);
   }
 
   bool debugDisableExpressionsWithPeeling() const {
@@ -971,6 +997,10 @@ class QueryConfig {
 
   bool windowSpillEnabled() const {
     return get<bool>(kWindowSpillEnabled, true);
+  }
+
+  uint32_t windowSpillMinReadBatchRows() const {
+    return get<uint32_t>(kWindowSpillMinReadBatchRows, 1'000);
   }
 
   bool writerSpillEnabled() const {

@@ -16,14 +16,17 @@
 
 #pragma once
 
+#include <folly/SocketAddress.h>
 #include "velox/functions/remote/client/RemoteVectorFunction.h"
 
 namespace facebook::velox::functions {
 
 struct RemoteThriftVectorFunctionMetadata
     : public RemoteVectorFunctionMetadata {
-  // TODO: Move `folly::SocketAddress location` and other thrift options here
-  // once call sites are updated.
+  /// Network address of the server to communicate with using a thrift client.
+  /// Note that this can hold a network location (ip/port pair) or a unix domain
+  /// socket path (see SocketAddress::makeFromPath()).
+  folly::SocketAddress location;
 };
 
 /// Registers a new remote function. It will use the meatadata defined in
@@ -38,13 +41,6 @@ void registerRemoteFunction(
     const std::string& name,
     std::vector<exec::FunctionSignaturePtr> signatures,
     const RemoteThriftVectorFunctionMetadata& metadata = {},
-    bool overwrite = true);
-
-// TODO: Remove once call sites are updated.
-void registerRemoteFunction(
-    const std::string& name,
-    std::vector<exec::FunctionSignaturePtr> signatures,
-    const RemoteVectorFunctionMetadata& metadata = {},
     bool overwrite = true);
 
 } // namespace facebook::velox::functions

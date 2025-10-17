@@ -128,7 +128,7 @@ void ExchangeQueue::addPromiseLocked(
     *stalePromise = std::move(it->second);
     it->second = std::move(promise);
   } else {
-    promises_[consumerId] = std::move(promise);
+    promises_.emplace(consumerId, std::move(promise));
   }
   VELOX_CHECK_LE(promises_.size(), numberOfConsumers_);
 }

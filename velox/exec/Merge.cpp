@@ -18,24 +18,12 @@
 #include <folly/Traits.h>
 #include <exception>
 #include "velox/common/testutil/TestValue.h"
+#include "velox/exec/OperatorUtils.h"
 #include "velox/exec/Task.h"
 
 using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::exec {
-namespace {
-std::unique_ptr<VectorSerde::Options> getVectorSerdeOptions(
-    const core::QueryConfig& queryConfig,
-    VectorSerde::Kind kind) {
-  std::unique_ptr<VectorSerde::Options> options =
-      kind == VectorSerde::Kind::kPresto
-      ? std::make_unique<serializer::presto::PrestoVectorSerde::PrestoOptions>()
-      : std::make_unique<VectorSerde::Options>();
-  options->compressionKind =
-      common::stringToCompressionKind(queryConfig.shuffleCompressionKind());
-  return options;
-}
-} // namespace
 
 Merge::Merge(
     int32_t operatorId,
@@ -769,7 +757,8 @@ MergeExchange::MergeExchange(
           "MergeExchange"),
       serde_(getNamedVectorSerde(mergeExchangeNode->serdeKind())),
       serdeOptions_(getVectorSerdeOptions(
-          driverCtx->queryConfig(),
+          common::stringToCompressionKind(
+              driverCtx->queryConfig().shuffleCompressionKind()),
           mergeExchangeNode->serdeKind())) {}
 
 BlockingReason MergeExchange::addMergeSources(ContinueFuture* future) {

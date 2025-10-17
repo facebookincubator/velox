@@ -3874,5 +3874,124 @@ TEST_F(CastExprTest, varcharToTimeDSTGapHandling) {
     ASSERT_NO_THROW(evaluate(castExpr, makeRowVector({ambiguousTimeVector})));
   }
 }
+
+TEST_F(CastExprTest, timeToTimestampCast) {
+  {
+    // Test casting TIME to TIMESTAMP
+    // TIME values represent milliseconds since midnight
+    // When cast to TIMESTAMP, they should become milliseconds since epoch
+
+    // Test various TIME values (milliseconds since midnight)
+    // 0 = 00:00:00.000
+    // 3661000 = 01:01:01.000
+    // 43200000 = 12:00:00.000 (noon)
+    // 86399999 = 23:59:59.999
+    auto timeVector =
+        makeFlatVector<int64_t>({0, 3661000, 43200000, 86399999}, TIME());
+
+    auto result = evaluate<FlatVector<Timestamp>>(
+        "cast(c0 as timestamp)", makeRowVector({timeVector}));
+
+    auto expected = makeFlatVector<Timestamp>({
+        Timestamp::fromMillis(0),
+        Timestamp::fromMillis(3661000),
+        Timestamp::fromMillis(43200000),
+        Timestamp::fromMillis(86399999),
+    });
+
+    assertEqualVectors(expected, result);
+  }
+
+  {
+    // Test casting TIME to TIMESTAMP with nulls
+    auto timeVector = makeNullableFlatVector<int64_t>(
+        {0, std::nullopt, 43200000, std::nullopt}, TIME());
+
+    auto result = evaluate<FlatVector<Timestamp>>(
+        "cast(c0 as timestamp)", makeRowVector({timeVector}));
+
+    auto expected = makeNullableFlatVector<Timestamp>({
+        Timestamp::fromMillis(0),
+        std::nullopt,
+        Timestamp::fromMillis(43200000),
+        std::nullopt,
+    });
+
+    assertEqualVectors(expected, result);
+  }
+
+  {
+    // Test try_cast for TIME to TIMESTAMP
+    auto timeVector = makeFlatVector<int64_t>({0, 43200000}, TIME());
+
+    auto result = evaluate<FlatVector<Timestamp>>(
+        "try_cast(c0 as timestamp)", makeRowVector({timeVector}));
+
+    auto expected = makeFlatVector<Timestamp>({
+        Timestamp::fromMillis(0),
+        Timestamp::fromMillis(43200000),
+    });
+
+    assertEqualVectors(expected, result);
+  }
+
+  {
+    // Test constant TIME vector cast to TIMESTAMP (non-null)
+    auto constantTimeVector = BaseVector::wrapInConstant(
+        1000, 0, makeFlatVector<int64_t>({43200000}, TIME()));
+
+    auto result =
+        evaluate("cast(c0 as timestamp)", makeRowVector({constantTimeVector}));
+
+    // Should return a constant vector with the same value
+    auto expected = BaseVector::wrapInConstant(
+        1000, 0, makeFlatVector<Timestamp>({Timestamp::fromMillis(43200000)}));
+
+    assertEqualVectors(expected, result);
+    // Verify the result is actually constant-encoded - optimization
+    ASSERT_TRUE(result->isConstantEncoding());
+  }
+
+  {
+    // Test constant TIME vector cast to TIMESTAMP (null)
+    auto nullTimeVector = BaseVector::createNullConstant(TIME(), 500, pool());
+
+    auto result =
+        evaluate("cast(c0 as timestamp)", makeRowVector({nullTimeVector}));
+
+    // Should return a null constant vector
+    auto expected = BaseVector::createNullConstant(TIMESTAMP(), 500, pool());
+
+    assertEqualVectors(expected, result);
+  }
+
+  {
+    // Test TIME to TIMESTAMP cast with various edge cases
+    auto timeVector = makeFlatVector<int64_t>(
+        {
+            1, // 1 millisecond after midnight
+            1000, // 1 second after midnight
+            60000, // 1 minute after midnight
+            3600000, // 1 hour after midnight
+            86399000, // 1 second before midnight
+            86399990, // 10 milliseconds before midnight
+        },
+        TIME());
+
+    auto result = evaluate<FlatVector<Timestamp>>(
+        "cast(c0 as timestamp)", makeRowVector({timeVector}));
+
+    auto expected = makeFlatVector<Timestamp>({
+        Timestamp::fromMillis(1),
+        Timestamp::fromMillis(1000),
+        Timestamp::fromMillis(60000),
+        Timestamp::fromMillis(3600000),
+        Timestamp::fromMillis(86399000),
+        Timestamp::fromMillis(86399990),
+    });
+
+    assertEqualVectors(expected, result);
+  }
+}
 } // namespace
 } // namespace facebook::velox::test

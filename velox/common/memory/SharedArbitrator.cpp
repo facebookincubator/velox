@@ -539,14 +539,14 @@ void SharedArbitrator::addPool(const std::shared_ptr<MemoryPool>& pool) {
 }
 
 void SharedArbitrator::removePool(MemoryPool* pool) {
-  VELOX_CHECK_EQ(pool->reservedBytes(), 0);
+  VELOX_CHECK_EQ(pool->reservedBytes(), 0, "{}", pool->name());
   const uint64_t freedBytes = shrinkPool(pool, 0);
-  VELOX_CHECK_EQ(pool->capacity(), 0);
+  VELOX_CHECK_EQ(pool->capacity(), 0, "{}", pool->name());
   freeCapacity(freedBytes);
 
   std::unique_lock guard{participantLock_};
   const auto ret = participants_.erase(pool->name());
-  VELOX_CHECK_EQ(ret, 1);
+  VELOX_CHECK_EQ(ret, 1, "{}", pool->name());
 }
 
 std::vector<ArbitrationCandidate> SharedArbitrator::getCandidates(

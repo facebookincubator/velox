@@ -16,6 +16,7 @@
 
 #include "velox/exec/SortWindowBuild.h"
 #include "velox/exec/MemoryReclaimer.h"
+#include "velox/exec/Window.h"
 
 namespace facebook::velox::exec {
 
@@ -45,16 +46,19 @@ SortWindowBuild::SortWindowBuild(
     common::PrefixSortConfig&& prefixSortConfig,
     const common::SpillConfig* spillConfig,
     tsan_atomic<bool>* nonReclaimableSection,
+    folly::Synchronized<OperatorStats>* opStats,
     folly::Synchronized<common::SpillStats>* spillStats)
     : WindowBuild(node, pool, spillConfig, nonReclaimableSection),
       numPartitionKeys_{node->partitionKeys().size()},
       compareFlags_{makeCompareFlags(numPartitionKeys_, node->sortingOrders())},
       pool_(pool),
       prefixSortConfig_(prefixSortConfig),
+      opStats_(opStats),
       spillStats_(spillStats),
       sortedRows_(0, memory::StlAllocator<char*>(*pool)),
       partitionStartRows_(0, memory::StlAllocator<char*>(*pool)) {
   VELOX_CHECK_NOT_NULL(pool_);
+  VELOX_CHECK_NOT_NULL(opStats_);
   allKeyInfo_.reserve(partitionKeyInfo_.size() + sortKeyInfo_.size());
   allKeyInfo_.insert(
       allKeyInfo_.cend(), partitionKeyInfo_.begin(), partitionKeyInfo_.end());
@@ -294,14 +298,31 @@ void SortWindowBuild::noMoreInput() {
   pool_->release();
 }
 
-void SortWindowBuild::loadNextPartitionFromSpill() {
-  sortedRows_.clear();
-  sortedRows_.shrink_to_fit();
-  data_->clear();
+void SortWindowBuild::loadNextPartitionBatchFromSpill() {
+  // Check if current partition batch still has available partitions. If so,
+  // return directly.
+  if (currentPartition_ < static_cast<int>(partitionStartRows_.size() - 2)) {
+    return;
+  }
 
+  const int minReadBatchRows = spillConfig_->windowMinReadBatchRows;
+  sortedRows_.clear();
+  sortedRows_.reserve(minReadBatchRows);
+  data_->clear();
+  partitionStartRows_.clear();
+  partitionStartRows_.reserve(minReadBatchRows);
+  partitionStartRows_.push_back(0);
+  currentPartition_ = -1;
+  numSpillReadBatches_++;
+
+  // Load at least #minReadBatchRows rows and a complete partition. The rows
+  // might contain multiple partitions. Record the partition boundaries as
+  // inMemory case. In this way, the logic of getting window partitions would be
+  // identical between inMemory and spill.
   for (;;) {
     auto next = merge_->next();
     if (next == nullptr) {
+      partitionStartRows_.push_back(sortedRows_.size());
       break;
     }
 
@@ -324,7 +345,10 @@ void SortWindowBuild::loadNextPartitionFromSpill() {
     }
 
     if (newPartition) {
-      break;
+      partitionStartRows_.push_back(sortedRows_.size());
+      if (sortedRows_.size() >= minReadBatchRows) {
+        break;
+      }
     }
 
     auto* newRow = data_->newRow();
@@ -334,16 +358,19 @@ void SortWindowBuild::loadNextPartitionFromSpill() {
     sortedRows_.push_back(newRow);
     next->pop();
   }
+
+  // No more partition batches. All data is consumed.
+  if (sortedRows_.empty()) {
+    partitionStartRows_.clear();
+    numSpillReadBatches_--;
+
+    auto lockedOpStats = opStats_->wlock();
+    lockedOpStats->runtimeStats[Window::kWindowSpillReadNumBatches] =
+        RuntimeMetric(numSpillReadBatches_);
+  }
 }
 
 std::shared_ptr<WindowPartition> SortWindowBuild::nextPartition() {
-  if (merge_ != nullptr) {
-    VELOX_CHECK(!sortedRows_.empty(), "No window partitions available");
-    auto partition = folly::Range(sortedRows_.data(), sortedRows_.size());
-    return std::make_shared<WindowPartition>(
-        data_.get(), partition, inversedInputChannels_, sortKeyInfo_);
-  }
-
   VELOX_CHECK(!partitionStartRows_.empty(), "No window partitions available");
 
   currentPartition_++;
@@ -364,8 +391,7 @@ std::shared_ptr<WindowPartition> SortWindowBuild::nextPartition() {
 
 bool SortWindowBuild::hasNextPartition() {
   if (merge_ != nullptr) {
-    loadNextPartitionFromSpill();
-    return !sortedRows_.empty();
+    loadNextPartitionBatchFromSpill();
   }
 
   return partitionStartRows_.size() > 0 &&

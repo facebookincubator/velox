@@ -30,7 +30,7 @@ class RemoteThriftFunction : public RemoteVectorFunction {
   RemoteThriftFunction(
       const std::string& functionName,
       const std::vector<exec::VectorFunctionArg>& inputArgs,
-      const RemoteVectorFunctionMetadata& metadata)
+      const RemoteThriftVectorFunctionMetadata& metadata)
       : RemoteVectorFunction(functionName, inputArgs, metadata),
         location_(metadata.location),
         thriftClient_(getThriftClient(location_, &eventBase_)) {}
@@ -57,7 +57,7 @@ std::shared_ptr<exec::VectorFunction> createRemoteFunction(
     const std::string& name,
     const std::vector<exec::VectorFunctionArg>& inputArgs,
     const core::QueryConfig& /*config*/,
-    const RemoteVectorFunctionMetadata& metadata) {
+    const RemoteThriftVectorFunctionMetadata& metadata) {
   return std::make_unique<RemoteThriftFunction>(name, inputArgs, metadata);
 }
 
@@ -67,24 +67,6 @@ void registerRemoteFunction(
     const std::string& name,
     std::vector<exec::FunctionSignaturePtr> signatures,
     const RemoteThriftVectorFunctionMetadata& metadata,
-    bool overwrite) {
-  exec::registerStatefulVectorFunction(
-      name,
-      signatures,
-      std::bind(
-          createRemoteFunction,
-          std::placeholders::_1,
-          std::placeholders::_2,
-          std::placeholders::_3,
-          metadata),
-      metadata,
-      overwrite);
-}
-
-void registerRemoteFunction(
-    const std::string& name,
-    std::vector<exec::FunctionSignaturePtr> signatures,
-    const RemoteVectorFunctionMetadata& metadata,
     bool overwrite) {
   exec::registerStatefulVectorFunction(
       name,

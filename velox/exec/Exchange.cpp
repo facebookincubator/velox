@@ -17,6 +17,7 @@
 
 #include "velox/common/Casts.h"
 #include "velox/common/serialization/Serializable.h"
+#include "velox/exec/OperatorUtils.h"
 #include "velox/exec/Task.h"
 #include "velox/serializers/CompactRowSerializer.h"
 
@@ -43,18 +44,6 @@ void RemoteConnectorSplit::registerSerDe() {
 }
 
 namespace {
-std::unique_ptr<VectorSerde::Options> getVectorSerdeOptions(
-    const core::QueryConfig& queryConfig,
-    VectorSerde::Kind kind) {
-  std::unique_ptr<VectorSerde::Options> options =
-      kind == VectorSerde::Kind::kPresto
-      ? std::make_unique<serializer::presto::PrestoVectorSerde::PrestoOptions>()
-      : std::make_unique<VectorSerde::Options>();
-  options->compressionKind =
-      common::stringToCompressionKind(queryConfig.shuffleCompressionKind());
-  return options;
-}
-
 std::unique_ptr<folly::IOBuf> mergePages(
     std::vector<std::unique_ptr<SerializedPage>>& pages) {
   VELOX_CHECK(!pages.empty());
@@ -86,7 +75,9 @@ Exchange::Exchange(
           driverCtx->queryConfig().preferredOutputBatchBytes()},
       serdeKind_{exchangeNode->serdeKind()},
       serdeOptions_{getVectorSerdeOptions(
-          operatorCtx_->driverCtx()->queryConfig(),
+          common::stringToCompressionKind(operatorCtx_->driverCtx()
+                                              ->queryConfig()
+                                              .shuffleCompressionKind()),
           serdeKind_)},
       processSplits_{operatorCtx_->driverCtx()->driverId == 0},
       driverId_{driverCtx->driverId},
