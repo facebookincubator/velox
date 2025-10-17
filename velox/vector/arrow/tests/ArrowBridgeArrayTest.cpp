@@ -1062,6 +1062,538 @@ TEST_F(ArrowBridgeArrayExportTest, constantCrossValidate) {
   EXPECT_EQ(runEndsArray.Value(0), 100);
 }
 
+// Test for the original null string bug: ensures null count consistency
+// when exporting string vectors with mixed null/non-null data
+TEST_F(ArrowBridgeArrayExportTest, nullStringConsistency) {
+  // Create a vector with mixed null and non-null strings to test
+  // the scenario that could trigger inconsistent null counting
+  std::vector<std::optional<std::string>> inputData = {
+      "hello", // 0: non-null
+      std::nullopt, // 1: null
+      "", // 2: empty string (not null)
+      std::nullopt, // 3: null
+      "world", // 4: non-null
+      std::nullopt, // 5: null
+      "test", // 6: non-null
+      std::nullopt, // 7: null
+      "", // 8: empty string (not null)
+      "end" // 9: non-null
+  };
+
+  auto flatVector = vectorMaker_.flatVectorNullable(inputData, VARCHAR());
+
+  // Verify vector properties before export
+  EXPECT_EQ(flatVector->size(), 10);
+  EXPECT_EQ(
+      flatVector->getNullCount().value_or(0), 4); // nulls at indices 1,3,5,7
+
+  // Export to Arrow and verify consistency
+  ArrowArray arrowArray;
+  ArrowSchema arrowSchema;
+  velox::exportToArrow(flatVector, arrowArray, pool_.get(), options_);
+  velox::exportToArrow(flatVector, arrowSchema, options_);
+
+  // The key test: null_count should match the actual number of nulls
+  // Before the fix, this could be inconsistent due to cached vs fresh counting
+  EXPECT_EQ(arrowArray.null_count, 4); // Should have exactly 4 nulls
+  EXPECT_EQ(arrowArray.length, 10);
+
+  // Verify that we can convert back to Arrow and read the data correctly
+  auto importedVector =
+      importFromArrowAsViewer(arrowSchema, arrowArray, pool_.get());
+
+  // Check that null values are preserved correctly (not converted to empty
+  // strings)
+  for (int i = 0; i < 10; ++i) {
+    bool expectedNull = (i == 1 || i == 3 || i == 5 || i == 7);
+    EXPECT_EQ(importedVector->isNullAt(i), expectedNull)
+        << "Mismatch at index " << i;
+
+    if (!expectedNull) {
+      if (i == 2 || i == 8) {
+        // Empty strings should remain empty strings, not become nulls
+        auto stringVector =
+            std::dynamic_pointer_cast<FlatVector<StringView>>(importedVector);
+        EXPECT_EQ(stringVector->valueAt(i).str(), "");
+      }
+    }
+  }
+
+  arrowArray.release(&arrowArray);
+  arrowSchema.release(&arrowSchema);
+}
+
+// Comprehensive test for the original Parquet null string bug that occurred
+// with large datasets and batched processing
+TEST_F(ArrowBridgeArrayExportTest, nullStringConsistencyComprehensive) {
+  // Test multiple scenarios that could trigger the original bug:
+  // 1. Large vectors with nulls concentrated at the beginning
+  // 2. Different batch sizes that would cause selection mismatches
+  // 3. Various null distributions that could confuse cached vs fresh counting
+
+  struct TestScenario {
+    std::string name;
+    size_t vectorSize;
+    std::function<bool(size_t)>
+        isNullAt; // Function to determine if index should be null
+    size_t expectedNullCount;
+  };
+
+  std::vector<TestScenario> scenarios = {
+      {"Nulls concentrated at beginning",
+       10000,
+       [](size_t i) {
+         return i < 2500 && i % 3 == 0;
+       }, // indices 0,3,6,...,2499 = 834 nulls
+       834},
+      {"Nulls clustered in middle",
+       8000,
+       [](size_t i) {
+         return i >= 3000 && i < 5000 && i % 2 == 0;
+       }, // 1000 nulls in middle section
+       1000},
+      {"Nulls at end only",
+       6000,
+       [](size_t i) { return i >= 4500; }, // 1500 nulls at the end
+       1500},
+      {"Sparse nulls throughout",
+       12000,
+       [](size_t i) {
+         return i % 37 == 0;
+       }, // indices 0,37,74,...,11989 = 325 nulls
+       325},
+      {"Heavy null concentration",
+       5000,
+       [](size_t i) { return i < 1000; }, // First 1000 elements are all null
+       1000}};
+
+  for (const auto& scenario : scenarios) {
+    SCOPED_TRACE("Testing scenario: " + scenario.name);
+
+    // Create test data with specific null distribution
+    std::vector<std::optional<std::string>> inputData;
+    inputData.reserve(scenario.vectorSize);
+
+    size_t actualNullCount = 0;
+    for (size_t i = 0; i < scenario.vectorSize; ++i) {
+      if (scenario.isNullAt(i)) {
+        inputData.push_back(std::nullopt);
+        actualNullCount++;
+      } else if (i % 7 == 0) {
+        // Some empty strings mixed in
+        inputData.push_back("");
+      } else {
+        inputData.push_back("value_" + std::to_string(i));
+      }
+    }
+
+    // Verify our test setup is correct
+    EXPECT_EQ(actualNullCount, scenario.expectedNullCount)
+        << "Test setup error in scenario: " << scenario.name;
+
+    auto flatVector = vectorMaker_.flatVectorNullable(inputData, VARCHAR());
+
+    // Test full vector export
+    {
+      ArrowArray arrowArray;
+      velox::exportToArrow(flatVector, arrowArray, pool_.get(), options_);
+
+      // This is the core test: null_count should exactly match actual nulls
+      EXPECT_EQ(arrowArray.null_count, scenario.expectedNullCount)
+          << "Full vector export failed for scenario: " << scenario.name;
+      EXPECT_EQ(arrowArray.length, scenario.vectorSize);
+
+      arrowArray.release(&arrowArray);
+    }
+
+    // Test multiple batch sizes that could trigger the original bug
+    std::vector<size_t> batchSizes = {500, 1000, 1500, 2000, 3000};
+
+    for (size_t batchSize : batchSizes) {
+      if (batchSize >= scenario.vectorSize)
+        continue;
+
+      SCOPED_TRACE("Testing batch size: " + std::to_string(batchSize));
+
+      // Test different starting positions within the vector
+      for (size_t startPos = 0; startPos + batchSize <= scenario.vectorSize;
+           startPos += batchSize) {
+        // Calculate expected nulls in this batch
+        size_t expectedBatchNulls = 0;
+        for (size_t i = startPos; i < startPos + batchSize; ++i) {
+          if (scenario.isNullAt(i)) {
+            expectedBatchNulls++;
+          }
+        }
+
+        // Create a slice of the vector (simulates batched processing)
+        auto slicedVector = flatVector->slice(startPos, batchSize);
+
+        ArrowArray arrowArray;
+        velox::exportToArrow(slicedVector, arrowArray, pool_.get(), options_);
+
+        // The bug would cause this to be inconsistent - cached count vs actual
+        EXPECT_EQ(arrowArray.null_count, expectedBatchNulls)
+            << "Batch export failed for scenario: " << scenario.name
+            << ", batch size: " << batchSize
+            << ", start position: " << startPos;
+        EXPECT_EQ(arrowArray.length, batchSize);
+
+        arrowArray.release(&arrowArray);
+      }
+    }
+  }
+}
+
+// Test for null BIGINT consistency: ensures null count consistency
+// when exporting BIGINT vectors with mixed null/non-null data
+TEST_F(ArrowBridgeArrayExportTest, nullBigintConsistency) {
+  // Create a vector with mixed null and non-null BIGINTs to test
+  // the scenario that could trigger inconsistent null counting
+  std::vector<std::optional<int64_t>> inputData = {
+      42, // 0: non-null
+      std::nullopt, // 1: null
+      0, // 2: zero (not null)
+      std::nullopt, // 3: null
+      -123, // 4: non-null
+      std::nullopt, // 5: null
+      999999, // 6: non-null
+      std::nullopt, // 7: null
+      -1, // 8: negative (not null)
+      2048 // 9: non-null
+  };
+
+  auto flatVector = vectorMaker_.flatVectorNullable(inputData, BIGINT());
+
+  // Verify vector properties before export
+  EXPECT_EQ(flatVector->size(), 10);
+  EXPECT_EQ(
+      flatVector->getNullCount().value_or(0), 4); // nulls at indices 1,3,5,7
+
+  // Export to Arrow and verify null count consistency
+  ArrowArray arrowArray;
+  ArrowSchema arrowSchema;
+  velox::exportToArrow(flatVector, arrowArray, pool_.get(), options_);
+  velox::exportToArrow(flatVector, arrowSchema, options_);
+
+  // Critical check: exported null count must match actual null count
+  EXPECT_EQ(arrowArray.null_count, 4)
+      << "Arrow export null count inconsistent with actual null count for BIGINT vector";
+  EXPECT_EQ(arrowArray.length, 10);
+
+  // Verify data integrity: nulls remain null, non-nulls remain non-null
+  auto* validity = static_cast<const uint8_t*>(arrowArray.buffers[0]);
+  auto* values = static_cast<const int64_t*>(arrowArray.buffers[1]);
+
+  for (size_t i = 0; i < inputData.size(); ++i) {
+    bool isValid = validity ? bits::isBitSet(validity, i) : true;
+
+    if (inputData[i].has_value()) {
+      EXPECT_TRUE(isValid) << "Non-null BIGINT became null at index " << i;
+      if (isValid) {
+        EXPECT_EQ(values[i], inputData[i].value())
+            << "BIGINT value corrupted at index " << i;
+      }
+    } else {
+      EXPECT_FALSE(isValid) << "Null BIGINT became non-null at index " << i;
+    }
+  }
+
+  arrowArray.release(&arrowArray);
+  arrowSchema.release(&arrowSchema);
+}
+
+// Test for null DOUBLE consistency: ensures null count consistency
+// when exporting DOUBLE vectors with mixed null/non-null data
+TEST_F(ArrowBridgeArrayExportTest, nullDoubleConsistency) {
+  // Create a vector with mixed null and non-null DOUBLEs to test
+  // the scenario that could trigger inconsistent null counting
+  std::vector<std::optional<double>> inputData = {
+      3.14159, // 0: non-null
+      std::nullopt, // 1: null
+      0.0, // 2: zero (not null)
+      std::nullopt, // 3: null
+      -2.718, // 4: non-null
+      std::nullopt, // 5: null
+      1.0, // 6: non-null
+      std::nullopt, // 7: null
+      -0.0, // 8: negative zero (not null)
+      42.5 // 9: non-null
+  };
+
+  auto flatVector = vectorMaker_.flatVectorNullable(inputData, DOUBLE());
+
+  // Verify vector properties before export
+  EXPECT_EQ(flatVector->size(), 10);
+  EXPECT_EQ(
+      flatVector->getNullCount().value_or(0), 4); // nulls at indices 1,3,5,7
+
+  // Export to Arrow and verify null count consistency
+  ArrowArray arrowArray;
+  ArrowSchema arrowSchema;
+  velox::exportToArrow(flatVector, arrowArray, pool_.get(), options_);
+  velox::exportToArrow(flatVector, arrowSchema, options_);
+
+  // Critical check: exported null count must match actual null count
+  EXPECT_EQ(arrowArray.null_count, 4)
+      << "Arrow export null count inconsistent with actual null count for DOUBLE vector";
+  EXPECT_EQ(arrowArray.length, 10);
+
+  // Verify data integrity: nulls remain null, non-nulls remain non-null
+  auto* validity = static_cast<const uint8_t*>(arrowArray.buffers[0]);
+  auto* values = static_cast<const double*>(arrowArray.buffers[1]);
+
+  for (size_t i = 0; i < inputData.size(); ++i) {
+    bool isValid = validity ? bits::isBitSet(validity, i) : true;
+
+    if (inputData[i].has_value()) {
+      EXPECT_TRUE(isValid) << "Non-null DOUBLE became null at index " << i;
+      if (isValid) {
+        EXPECT_DOUBLE_EQ(values[i], inputData[i].value())
+            << "DOUBLE value corrupted at index " << i;
+      }
+    } else {
+      EXPECT_FALSE(isValid) << "Null DOUBLE became non-null at index " << i;
+    }
+  }
+
+  arrowArray.release(&arrowArray);
+  arrowSchema.release(&arrowSchema);
+}
+
+// Comprehensive test for null count consistency with BIGINT vectors
+// that exercises the conditions that caused the original intermittent bug
+TEST_F(ArrowBridgeArrayExportTest, nullBigintConsistencyComprehensive) {
+  struct TestScenario {
+    std::string name;
+    size_t vectorSize;
+    std::function<bool(size_t)> isNullAt;
+    size_t expectedNullCount;
+  };
+
+  std::vector<TestScenario> scenarios = {
+      {"BIGINT nulls concentrated at beginning",
+       10000,
+       [](size_t i) {
+         return i < 2500 && i % 3 == 0;
+       }, // indices 0,3,6,...,2499 = 834 nulls
+       834},
+      {"BIGINT nulls clustered in middle",
+       8000,
+       [](size_t i) {
+         return i >= 3000 && i < 5000 && i % 2 == 0;
+       }, // 1000 nulls in middle section
+       1000},
+      {"BIGINT nulls at end only",
+       6000,
+       [](size_t i) { return i >= 4500; }, // 1500 nulls at the end
+       1500},
+      {"BIGINT sparse nulls throughout",
+       12000,
+       [](size_t i) {
+         return i % 37 == 0;
+       }, // indices 0,37,74,...,11989 = 325 nulls
+       325},
+      {"BIGINT heavy null concentration",
+       5000,
+       [](size_t i) { return i < 1000; }, // First 1000 elements are all null
+       1000}};
+
+  for (const auto& scenario : scenarios) {
+    SCOPED_TRACE("Testing BIGINT scenario: " + scenario.name);
+
+    // Create test data with specific null distribution
+    std::vector<std::optional<int64_t>> inputData;
+    inputData.reserve(scenario.vectorSize);
+
+    size_t actualNullCount = 0;
+    for (size_t i = 0; i < scenario.vectorSize; ++i) {
+      if (scenario.isNullAt(i)) {
+        inputData.push_back(std::nullopt);
+        actualNullCount++;
+      } else {
+        // Generate diverse BIGINT values
+        int64_t value = static_cast<int64_t>(i * 1000 + (i % 2 == 0 ? i : -i));
+        inputData.push_back(value);
+      }
+    }
+
+    // Verify our test setup is correct
+    EXPECT_EQ(actualNullCount, scenario.expectedNullCount)
+        << "Test setup error in BIGINT scenario: " << scenario.name;
+
+    auto flatVector = vectorMaker_.flatVectorNullable(inputData, BIGINT());
+
+    // Test full vector export
+    {
+      ArrowArray arrowArray;
+      velox::exportToArrow(flatVector, arrowArray, pool_.get(), options_);
+
+      EXPECT_EQ(
+          arrowArray.null_count,
+          static_cast<int64_t>(scenario.expectedNullCount))
+          << "Full vector export null count mismatch in scenario: "
+          << scenario.name;
+
+      arrowArray.release(&arrowArray);
+    }
+
+    // Test batched exports with different slice sizes that could trigger the
+    // original bug
+    std::vector<size_t> batchSizes = {500, 1000, 1500, 2000, 3000};
+
+    for (size_t batchSize : batchSizes) {
+      SCOPED_TRACE("BIGINT batch size: " + std::to_string(batchSize));
+
+      for (size_t startIdx = 0; startIdx < scenario.vectorSize;
+           startIdx += batchSize) {
+        size_t endIdx = std::min(startIdx + batchSize, scenario.vectorSize);
+        size_t sliceSize = endIdx - startIdx;
+
+        if (sliceSize == 0)
+          break;
+
+        // Create vector slice and count expected nulls in this slice
+        auto slicedVector = flatVector->slice(startIdx, sliceSize);
+        size_t expectedNullsInSlice = 0;
+        for (size_t i = startIdx; i < endIdx; ++i) {
+          if (scenario.isNullAt(i)) {
+            expectedNullsInSlice++;
+          }
+        }
+
+        ArrowArray arrowArray;
+        velox::exportToArrow(slicedVector, arrowArray, pool_.get(), options_);
+
+        EXPECT_EQ(
+            arrowArray.null_count, static_cast<int64_t>(expectedNullsInSlice))
+            << "Sliced export null count mismatch in scenario: "
+            << scenario.name << ", batch size: " << batchSize << ", slice ["
+            << startIdx << "," << endIdx << ")";
+
+        arrowArray.release(&arrowArray);
+      }
+    }
+  }
+}
+
+// Comprehensive test for null count consistency with DOUBLE vectors
+// that exercises the conditions that caused the original intermittent bug
+TEST_F(ArrowBridgeArrayExportTest, nullDoubleConsistencyComprehensive) {
+  struct TestScenario {
+    std::string name;
+    size_t vectorSize;
+    std::function<bool(size_t)> isNullAt;
+    size_t expectedNullCount;
+  };
+
+  std::vector<TestScenario> scenarios = {
+      {"DOUBLE nulls concentrated at beginning",
+       10000,
+       [](size_t i) {
+         return i < 2500 && i % 3 == 0;
+       }, // indices 0,3,6,...,2499 = 834 nulls
+       834},
+      {"DOUBLE nulls clustered in middle",
+       8000,
+       [](size_t i) {
+         return i >= 3000 && i < 5000 && i % 2 == 0;
+       }, // 1000 nulls in middle section
+       1000},
+      {"DOUBLE nulls at end only",
+       6000,
+       [](size_t i) { return i >= 4500; }, // 1500 nulls at the end
+       1500},
+      {"DOUBLE sparse nulls throughout",
+       12000,
+       [](size_t i) {
+         return i % 37 == 0;
+       }, // indices 0,37,74,...,11989 = 325 nulls
+       325},
+      {"DOUBLE heavy null concentration",
+       5000,
+       [](size_t i) { return i < 1000; }, // First 1000 elements are all null
+       1000}};
+
+  for (const auto& scenario : scenarios) {
+    SCOPED_TRACE("Testing DOUBLE scenario: " + scenario.name);
+
+    // Create test data with specific null distribution
+    std::vector<std::optional<double>> inputData;
+    inputData.reserve(scenario.vectorSize);
+
+    size_t actualNullCount = 0;
+    for (size_t i = 0; i < scenario.vectorSize; ++i) {
+      if (scenario.isNullAt(i)) {
+        inputData.push_back(std::nullopt);
+        actualNullCount++;
+      } else {
+        // Generate diverse DOUBLE values including edge cases
+        double value =
+            static_cast<double>(i) * 3.14159 + (i % 2 == 0 ? 0.5 : -0.5);
+        inputData.push_back(value);
+      }
+    }
+
+    // Verify our test setup is correct
+    EXPECT_EQ(actualNullCount, scenario.expectedNullCount)
+        << "Test setup error in DOUBLE scenario: " << scenario.name;
+
+    auto flatVector = vectorMaker_.flatVectorNullable(inputData, DOUBLE());
+
+    // Test full vector export
+    {
+      ArrowArray arrowArray;
+      velox::exportToArrow(flatVector, arrowArray, pool_.get(), options_);
+
+      EXPECT_EQ(
+          arrowArray.null_count,
+          static_cast<int64_t>(scenario.expectedNullCount))
+          << "Full vector export null count mismatch in scenario: "
+          << scenario.name;
+
+      arrowArray.release(&arrowArray);
+    }
+
+    // Test batched exports with different slice sizes that could trigger the
+    // original bug
+    std::vector<size_t> batchSizes = {500, 1000, 1500, 2000, 3000};
+
+    for (size_t batchSize : batchSizes) {
+      SCOPED_TRACE("DOUBLE batch size: " + std::to_string(batchSize));
+
+      for (size_t startIdx = 0; startIdx < scenario.vectorSize;
+           startIdx += batchSize) {
+        size_t endIdx = std::min(startIdx + batchSize, scenario.vectorSize);
+        size_t sliceSize = endIdx - startIdx;
+
+        if (sliceSize == 0)
+          break;
+
+        // Create vector slice and count expected nulls in this slice
+        auto slicedVector = flatVector->slice(startIdx, sliceSize);
+        size_t expectedNullsInSlice = 0;
+        for (size_t i = startIdx; i < endIdx; ++i) {
+          if (scenario.isNullAt(i)) {
+            expectedNullsInSlice++;
+          }
+        }
+
+        ArrowArray arrowArray;
+        velox::exportToArrow(slicedVector, arrowArray, pool_.get(), options_);
+
+        EXPECT_EQ(
+            arrowArray.null_count, static_cast<int64_t>(expectedNullsInSlice))
+            << "Sliced export null count mismatch in scenario: "
+            << scenario.name << ", batch size: " << batchSize << ", slice ["
+            << startIdx << "," << endIdx << ")";
+
+        arrowArray.release(&arrowArray);
+      }
+    }
+  }
+}
+
 class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
  protected:
   // Used by this base test class to import Arrow data and create Velox Vector.
