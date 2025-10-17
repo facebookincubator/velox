@@ -24,9 +24,10 @@
 #include "velox/experimental/cudf/exec/CudfLimit.h"
 #include "velox/experimental/cudf/exec/CudfLocalPartition.h"
 #include "velox/experimental/cudf/exec/CudfOrderBy.h"
-#include "velox/experimental/cudf/exec/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
+#include "velox/experimental/cudf/expression/AstExpression.h"
+#include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
 #include "folly/Conv.h"
 #include "velox/connectors/hive/HiveConnector.h"
@@ -116,7 +117,10 @@ bool CompileState::compile(bool force_replace) {
   auto isFilterProjectSupported = [](const exec::Operator* op) {
     if (auto filterProjectOp = dynamic_cast<const exec::FilterProject*>(op)) {
       auto info = filterProjectOp->exprsAndProjection();
-      return ExpressionEvaluator::canBeEvaluated(info.exprs->exprs());
+      return std::all_of(
+          info.exprs->exprs().begin(),
+          info.exprs->exprs().end(),
+          [](const auto& expr) { return canBeEvaluatedByCudf(expr); });
     }
     return false;
   };
@@ -407,6 +411,11 @@ void registerCudf() {
   CudfDriverAdapter cda{CudfConfig::getInstance().forceReplace};
   exec::DriverAdapter cudfAdapter{kCudfAdapterName, {}, cda};
   exec::DriverFactory::registerAdapter(cudfAdapter);
+
+  if (CudfConfig::getInstance().astExpressionEnabled) {
+    registerAstEvaluator(CudfConfig::getInstance().astExpressionPriority);
+  }
+
   isCudfRegistered = true;
 }
 
