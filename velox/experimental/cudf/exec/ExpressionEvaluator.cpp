@@ -16,6 +16,7 @@
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/ExpressionEvaluator.h"
 
+#include "velox/core/Expressions.h"
 #include "velox/expression/ConstantExpr.h"
 #include "velox/expression/FieldReference.h"
 #include "velox/type/Type.h"
@@ -283,16 +284,39 @@ const std::unordered_set<std::string> supportedOps = {
 
 namespace detail {
 
-bool canBeEvaluated(const std::shared_ptr<velox::exec::Expr>& expr) {
-  const auto name =
-      stripPrefix(expr->name(), CudfConfig::getInstance().functionNamePrefix);
-  if (supportedOps.count(name) || binaryOps.count(name) ||
-      unaryOps.count(name)) {
-    return std::all_of(
-        expr->inputs().begin(), expr->inputs().end(), canBeEvaluated);
+bool canBeEvaluated(const core::TypedExprPtr& expr) {
+  switch (expr->kind()) {
+    case core::ExprKind::kCast: {
+      const auto* cast = expr->asUnchecked<core::CastTypedExpr>();
+      if (cast->isTryCast()) {
+        return false;
+      }
+      return canBeEvaluated(cast->inputs()[0]);
+    }
+
+    case core::ExprKind::kCall: {
+      const auto* call = expr->asUnchecked<core::CallTypedExpr>();
+      const auto name = stripPrefix(
+          call->name(), CudfConfig::getInstance().functionNamePrefix);
+      if (supportedOps.count(name) || binaryOps.count(name) ||
+          unaryOps.count(name)) {
+        return std::all_of(
+            call->inputs().begin(), call->inputs().end(), canBeEvaluated);
+      }
+      return false;
+    }
+
+    case core::ExprKind::kFieldAccess:
+    case core::ExprKind::kDereference:
+    case core::ExprKind::kConstant:
+      return true;
+
+    case core::ExprKind::kInput:
+    case core::ExprKind::kConcat:
+    case core::ExprKind::kLambda:
+    default:
+      return false;
   }
-  return std::dynamic_pointer_cast<velox::exec::FieldReference>(expr) !=
-      nullptr;
 }
 
 } // namespace detail
@@ -321,7 +345,6 @@ struct AstContext {
       const std::shared_ptr<CudfExpressionNode>& node = nullptr);
   cudf::ast::expression const& multipleInputsToPairWise(
       const std::shared_ptr<velox::exec::Expr>& expr);
-  static bool canBeEvaluated(const std::shared_ptr<velox::exec::Expr>& expr);
 };
 
 // Create tree from Expr
@@ -1127,7 +1150,7 @@ std::vector<std::unique_ptr<cudf::column>> ExpressionEvaluator::compute(
 }
 
 bool ExpressionEvaluator::canBeEvaluated(
-    const std::vector<std::shared_ptr<velox::exec::Expr>>& exprs) {
+    const std::vector<core::TypedExprPtr>& exprs) {
   return std::all_of(exprs.begin(), exprs.end(), detail::canBeEvaluated);
 }
 
