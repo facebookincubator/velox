@@ -18,6 +18,8 @@
 
 #include "velox/dwio/common/Statistics.h"
 #include "velox/dwio/common/compression/Compression.h"
+#include "velox/dwio/parquet/crypto/ColumnPath.h"
+#include "velox/dwio/parquet/thrift/ParquetThriftTypes.h"
 
 namespace facebook::velox::parquet {
 
@@ -31,11 +33,26 @@ class ColumnChunkMetaDataPtr {
   /// Check the presence of ColumnChunk metadata.
   bool hasMetadata() const;
 
+  /// Check the presence of ColumnChunk Crypto metadata.
+  bool hasCryptoMetadata() const;
+
+  /// Check the presence of ColumnChunk Encrypted column metadata.
+  bool hasEncryptedColumnMetadata() const;
+
   /// Check the presence of statistics in the ColumnChunk metadata.
   bool hasStatistics() const;
 
   /// Check the presence of the dictionary page offset in ColumnChunk metadata.
   bool hasDictionaryPageOffset() const;
+
+  /// Check the presence of the encoding stats in ColumnChunk metadata.
+  bool hasEncodingStats() const;
+
+  /// Return the ColumnChunk encoding stats
+  const std::vector<thrift::PageEncodingStats>& getEncodingStats() const;
+
+  /// Return the ColumnChunk encoding
+  const std::vector<thrift::Encoding::type>& getEncoding() const;
 
   /// Return the ColumnChunk statistics.
   std::unique_ptr<dwio::common::ColumnStatistics> getColumnStatistics(
@@ -73,6 +90,9 @@ class ColumnChunkMetaDataPtr {
   /// column data in this row group.
   /// This information is optional and may be 0 if omitted.
   int64_t totalUncompressedSize() const;
+
+  /// The column path
+  ColumnPath getColumnPath() const;
 
  private:
   const void* ptr_;

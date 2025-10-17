@@ -13,14 +13,29 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 #pragma once
+
+#include <string>
 
 namespace facebook::velox::parquet {
 
-void registerParquetReaderFactory();
-void registerParquetReaderFactory(bool clacEnabled);
+struct KeyMetadata {
+  std::string name;
+  std::string iv;
+  int version;
+  std::string eek;
 
-void unregisterParquetReaderFactory();
+  KeyMetadata(
+      const std::string& name,
+      const std::string& iv,
+      const int version,
+      const std::string& eek)
+      : name(name), iv(iv), version(version), eek(eek) {}
+};
+
+class KeyMetadataAssembler {
+ public:
+  static KeyMetadata unAssembly(const std::string& keyMetadata);
+};
 
 } // namespace facebook::velox::parquet
