@@ -13,10 +13,10 @@
 # limitations under the License.
 include_guard(GLOBAL)
 
-set(VELOX_FMT_VERSION 10.1.1)
+set(VELOX_FMT_VERSION 11.2.0)
 set(
   VELOX_FMT_BUILD_SHA256_CHECKSUM
-  78b8c0a72b1c35e4443a7e308df52498252d1cefc2b08c9a97bc9ee6cfe61f8b
+  bc23066d87ab3168f27cef3e97d545fa63314f5c79df5ea444d41d56f962c6af
 )
 set(VELOX_FMT_SOURCE_URL "https://github.com/fmtlib/fmt/archive/${VELOX_FMT_VERSION}.tar.gz")
 

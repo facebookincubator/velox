@@ -17,6 +17,7 @@
 #pragma once
 
 #include <boost/algorithm/string/join.hpp>
+#include <fmt/ranges.h>
 #include <cstdint>
 #include <string>
 #include "velox/core/PlanNode.h"
