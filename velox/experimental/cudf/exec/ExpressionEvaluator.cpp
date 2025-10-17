@@ -793,7 +793,7 @@ class RoundFunction : public CudfFunction {
 
  private:
   int32_t scale_ = 0;
-}
+};
 
 class BinaryFunction : public CudfFunction {
  public:
