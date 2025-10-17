@@ -30,7 +30,10 @@ struct Base64Function {
       out_type<Varchar>& result,
       const arg_type<Varbinary>& input) {
     result.resize(encoding::Base64::calculateMimeEncodedSize(input.size()));
-    encoding::Base64::encodeMime(input.data(), input.size(), result.data());
+    std::string encodedStr;
+    encoding::Base64::encodeMime(
+        std::string_view(input.data(), input.size()), encodedStr);
+    std::memcpy(result.data(), encodedStr.data(), encodedStr.size());
   }
 };
 } // namespace facebook::velox::functions::sparksql
