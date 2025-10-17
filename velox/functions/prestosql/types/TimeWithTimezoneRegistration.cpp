@@ -16,7 +16,10 @@
 
 #include "velox/functions/prestosql/types/TimeWithTimezoneType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
+
+#include "velox/expression/CastExpr.h"
 #include "velox/type/Type.h"
+#include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox {
 
@@ -83,6 +86,150 @@ std::string TimeWithTimezoneType::valueToString(int64_t value) const {
 
 namespace {
 
+const tz::TimeZone* getTimeZoneFromConfig(const core::QueryConfig& config) {
+  const auto sessionTzName = config.sessionTimezone();
+
+  if (!sessionTzName.empty()) {
+    return tz::locateZone(sessionTzName);
+  }
+
+  return tz::locateZone(0); // GMT
+}
+
+// Pack time (in milliseconds since midnight) and timezone offset minutes
+inline int64_t packTimeWithTimeZone(
+    int64_t timeMillis,
+    int16_t timezoneOffsetMinutes) {
+  auto encodedOffset = TimeWithTimezoneType::biasEncode(timezoneOffsetMinutes);
+  return pack(timeMillis, encodedOffset);
+}
+
+void castFromTime(
+    const SimpleVector<int64_t>& inputVector,
+    exec::EvalCtx& context,
+    const SelectivityVector& rows,
+    int64_t* rawResults) {
+  const auto& config = context.execCtx()->queryCtx()->queryConfig();
+  const auto* sessionTimeZone = getTimeZoneFromConfig(config);
+
+  const auto adjustTimestampToTimezone = config.adjustTimestampToTimezone();
+
+  context.applyToSelectedNoThrow(rows, [&](auto row) {
+    const auto timeMillis = inputVector.valueAt(row);
+
+    int16_t offsetMinutes = 0;
+
+    if (adjustTimestampToTimezone) {
+      // Get the offset for the session timezone at epoch (1970-01-01)
+      // We use epoch to get a consistent offset (ignoring DST variations)
+      // toGMT converts FROM local time TO GMT, so the offset is negative of the
+      // result
+      auto ts = Timestamp::fromMillis(0);
+      ts.toGMT(*sessionTimeZone);
+      int64_t offsetMillis = ts.toMillis();
+      // The offset is negative because toGMT added the offset to convert to GMT
+      offsetMinutes = static_cast<int16_t>(-offsetMillis / (60 * 1000));
+    }
+
+    rawResults[row] = packTimeWithTimeZone(timeMillis, offsetMinutes);
+  });
+}
+
+class TimeWithTimeZoneCastOperator final : public exec::CastOperator {
+  TimeWithTimeZoneCastOperator() = default;
+
+ public:
+  static std::shared_ptr<const CastOperator> get() {
+    VELOX_CONSTEXPR_SINGLETON TimeWithTimeZoneCastOperator kInstance;
+    return {std::shared_ptr<const CastOperator>{}, &kInstance};
+  }
+
+  bool isSupportedFromType(const TypePtr& other) const override {
+    switch (other->kind()) {
+      case TypeKind::BIGINT:
+        return other->isTime();
+      default:
+        return false;
+    }
+  }
+
+  bool isSupportedToType(const TypePtr& other) const override {
+    // Currently no casting from TIME WITH TIME ZONE to other types
+    return false;
+  }
+
+  void castTo(
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const SelectivityVector& rows,
+      const TypePtr& resultType,
+      VectorPtr& result) const override {
+    context.ensureWritable(rows, resultType, result);
+
+    // Optimization for constant TIME input vectors
+    if (input.typeKind() == TypeKind::BIGINT && input.type()->isTime() &&
+        input.isConstantEncoding()) {
+      auto constantInput = input.as<ConstantVector<int64_t>>();
+      if (constantInput->isNullAt(0)) {
+        result = BaseVector::createNullConstant(
+            resultType, rows.end(), context.pool());
+        return;
+      }
+
+      const auto& config = context.execCtx()->queryCtx()->queryConfig();
+      const auto* sessionTimeZone = getTimeZoneFromConfig(config);
+      const auto adjustTimestampToTimezone = config.adjustTimestampToTimezone();
+
+      const auto timeMillis = constantInput->valueAt(0);
+
+      int16_t offsetMinutes = 0;
+
+      if (adjustTimestampToTimezone) {
+        auto ts = Timestamp::fromMillis(0);
+        ts.toGMT(*sessionTimeZone);
+        int64_t offsetMillis = ts.toMillis();
+        offsetMinutes = static_cast<int16_t>(-offsetMillis / (60 * 1000));
+      }
+
+      auto packedValue = packTimeWithTimeZone(timeMillis, offsetMinutes);
+
+      result = std::make_shared<ConstantVector<int64_t>>(
+          context.pool(),
+          rows.end(),
+          false, // isNull
+          resultType,
+          std::move(packedValue));
+      return;
+    }
+
+    auto* timeWithTzResult = result->asFlatVector<int64_t>();
+    timeWithTzResult->clearNulls(rows);
+
+    auto* rawResults = timeWithTzResult->mutableRawValues();
+
+    if (input.typeKind() == TypeKind::BIGINT) {
+      VELOX_CHECK(input.type()->isTime());
+      const auto inputVector = input.as<SimpleVector<int64_t>>();
+      castFromTime(*inputVector, context, rows, rawResults);
+    } else {
+      VELOX_UNSUPPORTED(
+          "Cast from {} to TIME WITH TIME ZONE not yet supported",
+          input.type()->toString());
+    }
+  }
+
+  void castFrom(
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const SelectivityVector& rows,
+      const TypePtr& resultType,
+      VectorPtr& result) const override {
+    VELOX_UNSUPPORTED(
+        "Cast from TIME WITH TIME ZONE to {} not yet supported",
+        resultType->toString());
+  }
+};
+
 class TimeWithTimezoneTypeFactory : public CustomTypeFactory {
  public:
   TimeWithTimezoneTypeFactory() = default;
@@ -92,9 +239,8 @@ class TimeWithTimezoneTypeFactory : public CustomTypeFactory {
     return TIME_WITH_TIME_ZONE();
   }
 
-  // Type casting from and to TimestampWithTimezone is not supported yet.
   exec::CastOperatorPtr getCastOperator() const override {
-    return nullptr;
+    return TimeWithTimeZoneCastOperator::get();
   }
 
   AbstractInputGeneratorPtr getInputGenerator(
@@ -102,6 +248,7 @@ class TimeWithTimezoneTypeFactory : public CustomTypeFactory {
     return nullptr;
   }
 };
+
 } // namespace
 
 void registerTimeWithTimezoneType() {
