@@ -2595,8 +2595,8 @@ TEST_P(ParameterizedExprTest, constantToString) {
 
 TEST_F(ExprTest, constantEqualsNullConsistency) {
   // Constant expr created using variant
-  auto nullVariantToExpr =
-      std::make_shared<core::ConstantTypedExpr>(VARCHAR(), Variant{});
+  auto nullVariantToExpr = std::make_shared<core::ConstantTypedExpr>(
+      VARCHAR(), variant::null(TypeKind::VARCHAR));
   auto nonNullVariantToExpr =
       std::make_shared<core::ConstantTypedExpr>(VARCHAR(), Variant{"test"});
 
