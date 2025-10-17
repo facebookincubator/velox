@@ -276,6 +276,8 @@ void registerSimpleFunctions(const std::string& prefix) {
       Varchar,
       TimestampWithTimezone,
       TimestampWithTimezone>({prefix + "date_diff"});
+  registerFunction<DateDiffFunction, int64_t, Varchar, Time, Time>(
+      {prefix + "date_diff"});
   registerFunction<DateFormatFunction, Varchar, Timestamp, Varchar>(
       {prefix + "date_format"});
   registerFunction<DateFormatFunction, Varchar, TimestampWithTimezone, Varchar>(

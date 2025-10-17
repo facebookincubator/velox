@@ -6109,3 +6109,265 @@ TEST_F(DateTimeFunctionsTest, localtime) {
   localVal = localtime(1710061200000, "America/Los_Angeles");
   EXPECT_EQ(localVal, 32400000); // 9 AM UTC
 }
+
+TEST_F(DateTimeFunctionsTest, dateDiffTime) {
+  const auto dateDiff = [&](const std::string& unit,
+                            std::optional<int64_t> time1,
+                            std::optional<int64_t> time2) {
+    return evaluateOnce<int64_t>(
+        fmt::format("date_diff('{}', c0, c1)", unit),
+        {TIME(), TIME()},
+        time1,
+        time2);
+  };
+
+  // Basic time differences - following Presto's date_diff(unit, x1, x2) = x2 -
+  // x1 pattern
+
+  // Test millisecond differences
+  EXPECT_EQ(
+      1000, dateDiff("millisecond", 0, 1000)); // 00:00:00.000 to 00:00:01.000
+  EXPECT_EQ(
+      -1000,
+      dateDiff(
+          "millisecond", 1000, 0)); // 00:00:01.000 to 00:00:00.000 (negative)
+  EXPECT_EQ(0, dateDiff("millisecond", 1000, 1000)); // Same time
+  EXPECT_EQ(
+      500, dateDiff("millisecond", 500, 1000)); // 00:00:00.500 to 00:00:01.000
+
+  // Test second differences
+  EXPECT_EQ(1, dateDiff("second", 0, 1000)); // 1 second difference
+  EXPECT_EQ(-1, dateDiff("second", 1000, 0)); // Negative 1 second
+  EXPECT_EQ(0, dateDiff("second", 1000, 1000)); // Same time
+  EXPECT_EQ(30, dateDiff("second", 15000, 45000)); // 30 seconds (15s to 45s)
+  EXPECT_EQ(3661, dateDiff("second", 0, 3661000)); // 1 hour 1 minute 1 second
+
+  // Test minute differences
+  EXPECT_EQ(1, dateDiff("minute", 0, 60000)); // 1 minute (00:00 to 00:01)
+  EXPECT_EQ(-1, dateDiff("minute", 60000, 0)); // Negative 1 minute
+  EXPECT_EQ(0, dateDiff("minute", 60000, 60000)); // Same time
+  EXPECT_EQ(5, dateDiff("minute", 0, 300000)); // 5 minutes (00:00 to 00:05)
+  EXPECT_EQ(61, dateDiff("minute", 0, 3660000)); // 1 hour 1 minute
+
+  // Test hour differences
+  EXPECT_EQ(1, dateDiff("hour", 0, 3600000)); // 1 hour (00:00 to 01:00)
+  EXPECT_EQ(-1, dateDiff("hour", 3600000, 0)); // Negative 1 hour
+  EXPECT_EQ(0, dateDiff("hour", 3600000, 3600000)); // Same time
+  EXPECT_EQ(12, dateDiff("hour", 0, 43200000)); // 12 hours (00:00 to 12:00)
+  EXPECT_EQ(23, dateDiff("hour", 0, 82800000)); // 23 hours (00:00 to 23:00)
+
+  // Test boundary values for TIME type (0 to 86399999 ms in a day)
+  EXPECT_EQ(0, dateDiff("millisecond", 0, 0)); // 00:00:00.000 to 00:00:00.000
+  EXPECT_EQ(
+      86399999,
+      dateDiff("millisecond", 0, 86399999)); // 00:00:00.000 to 23:59:59.999
+  EXPECT_EQ(
+      -86399999,
+      dateDiff("millisecond", 86399999, 0)); // 23:59:59.999 to 00:00:00.000
+  EXPECT_EQ(
+      86399, dateDiff("second", 0, 86399999)); // Full day minus 1ms in seconds
+  EXPECT_EQ(
+      1439, dateDiff("minute", 0, 86399999)); // Full day minus 1ms in minutes
+  EXPECT_EQ(23, dateDiff("hour", 0, 86399999)); // Full day minus 1ms in hours
+
+  // Test fractional truncation behavior (consistent with Presto integer
+  // division)
+  EXPECT_EQ(0, dateDiff("second", 0, 999)); // 999ms < 1000ms, truncates to 0
+  EXPECT_EQ(
+      59, dateDiff("minute", 0, 3599999)); // 59.99999 minutes truncates to 59
+  EXPECT_EQ(0, dateDiff("hour", 0, 3599999)); // 0.99999 hours truncates to 0
+
+  // Test real-world scenario: 09:30:15.500 to 14:45:30.750
+  int64_t morning = 9 * 3600000 + 30 * 60000 + 15 * 1000 + 500; // 34215500ms
+  int64_t afternoon = 14 * 3600000 + 45 * 60000 + 30 * 1000 + 750; // 53130750ms
+
+  EXPECT_EQ(18915250, dateDiff("millisecond", morning, afternoon));
+  EXPECT_EQ(
+      18915,
+      dateDiff("second", morning, afternoon)); // 18915.25s truncated to 18915
+  EXPECT_EQ(
+      315,
+      dateDiff(
+          "minute", morning, afternoon)); // 315.254... minutes truncated to 315
+  EXPECT_EQ(
+      5, dateDiff("hour", morning, afternoon)); // 5.254... hours truncated to 5
+  EXPECT_EQ(
+      315,
+      dateDiff(
+          "minute", morning, afternoon)); // 315.254... minutes truncated to 315
+  EXPECT_EQ(
+      5, dateDiff("hour", morning, afternoon)); // 5.254... hours truncated to 5
+
+  // Test null handling (consistent with Presto null propagation)
+  EXPECT_EQ(std::nullopt, dateDiff("second", 1000, std::nullopt));
+  EXPECT_EQ(std::nullopt, dateDiff("second", std::nullopt, 1000));
+  EXPECT_EQ(std::nullopt, dateDiff("second", std::nullopt, std::nullopt));
+
+  // Test invalid units (TIME only supports time-related units, not
+  // date-related)
+  VELOX_ASSERT_THROW(dateDiff("day", 0, 1000), "day is not a valid TIME field");
+  VELOX_ASSERT_THROW(
+      dateDiff("week", 0, 1000), "week is not a valid TIME field");
+  VELOX_ASSERT_THROW(
+      dateDiff("month", 0, 1000), "month is not a valid TIME field");
+  VELOX_ASSERT_THROW(
+      dateDiff("quarter", 0, 1000), "quarter is not a valid TIME field");
+  VELOX_ASSERT_THROW(
+      dateDiff("year", 0, 1000), "year is not a valid TIME field");
+  VELOX_ASSERT_THROW(
+      dateDiff("invalid", 0, 1000), "invalid is not a valid TIME field");
+
+  // Additional edge cases
+  // Note: This represents going from 23:59:59.999 to 00:00:00.000 of next day,
+  // but since TIME type represents time within a single day, this results in
+  // negative difference
+  EXPECT_EQ(
+      -86399999,
+      dateDiff(
+          "millisecond",
+          86399999,
+          0)); // 23:59:59.999 to 00:00:00.000 (negative)
+}
+
+TEST_F(DateTimeFunctionsTest, dateDiffTimeVariableUnit) {
+  // This test validates that when the unit parameter is variable (passed as a
+  // column with different values per row), the function correctly processes
+  // each row with its own unit value rather than incorrectly caching a single
+  // unit. This tests batch processing with varying units in a single
+  // evaluation.
+  auto data = makeRowVector({
+      makeFlatVector<std::string>(
+          {"millisecond", "second", "minute", "hour", "millisecond"}),
+      makeFlatVector<int64_t>({0, 0, 0, 0, 1000}, TIME()),
+      makeFlatVector<int64_t>({1000, 1000, 60000, 3600000, 2000}, TIME()),
+  });
+
+  auto result = evaluate("date_diff(c0, c1, c2)", data);
+  auto expected = makeFlatVector<int64_t>({
+      1000, // millisecond: 0 to 1000
+      1, // second: 0 to 1000
+      1, // minute: 0 to 60000
+      1, // hour: 0 to 3600000
+      1000, // millisecond: 1000 to 2000
+  });
+
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(DateTimeFunctionsTest, dateTruncTimestampVariableUnit) {
+  // This test validates that when the unit parameter is variable (passed as a
+  // column with different values per row), date_trunc correctly processes each
+  // row with its own unit value rather than incorrectly caching a single unit.
+  auto timestamps = makeFlatVector<Timestamp>({
+      Timestamp(998474645, 321001234), // 2001-08-22 03:04:05.321001234
+      Timestamp(998474645, 321001234), // 2001-08-22 03:04:05.321001234
+      Timestamp(998474645, 321001234), // 2001-08-22 03:04:05.321001234
+      Timestamp(998474645, 321001234), // 2001-08-22 03:04:05.321001234
+      Timestamp(998474645, 321001234), // 2001-08-22 03:04:05.321001234
+  });
+
+  auto data = makeRowVector({
+      makeFlatVector<std::string>({"second", "minute", "hour", "day", "month"}),
+      timestamps,
+  });
+
+  auto result = evaluate("date_trunc(c0, c1)", data);
+
+  auto expected = makeFlatVector<Timestamp>({
+      Timestamp(998474645, 0), // second: 2001-08-22 03:04:05.000
+      Timestamp(998474640, 0), // minute: 2001-08-22 03:04:00.000
+      Timestamp(998474400, 0), // hour: 2001-08-22 03:00:00.000
+      Timestamp(998438400, 0), // day: 2001-08-22 00:00:00.000
+      Timestamp(996624000, 0), // month: 2001-08-01 00:00:00.000
+  });
+
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(DateTimeFunctionsTest, dateTruncDateVariableUnit) {
+  // This test validates that when the unit parameter is variable (passed as a
+  // column with different values per row), date_trunc correctly processes each
+  // row with its own unit value for DATE type.
+  auto dates = makeFlatVector<int32_t>(
+      {parseDate("2020-02-29"),
+       parseDate("2020-02-29"),
+       parseDate("2020-02-29"),
+       parseDate("2020-02-29")},
+      DATE());
+
+  auto data = makeRowVector({
+      makeFlatVector<std::string>({"day", "week", "month", "quarter"}),
+      dates,
+  });
+
+  auto result = evaluate("date_trunc(c0, c1)", data);
+
+  auto expected = makeFlatVector<int32_t>(
+      {parseDate("2020-02-29"), // day: same
+       parseDate("2020-02-24"), // week: Monday of that week
+       parseDate("2020-02-01"), // month: first day of month
+       parseDate("2020-01-01")}, // quarter: first day of quarter
+      DATE());
+
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(DateTimeFunctionsTest, dateAddTimestampVariableUnit) {
+  // This test validates that when the unit parameter is variable (passed as a
+  // column with different values per row), date_add correctly processes each
+  // row with its own unit value.
+  auto timestamps = makeFlatVector<Timestamp>({
+      Timestamp(0, 0), // 1970-01-01 00:00:00.000
+      Timestamp(0, 0), // 1970-01-01 00:00:00.000
+      Timestamp(0, 0), // 1970-01-01 00:00:00.000
+      Timestamp(0, 0), // 1970-01-01 00:00:00.000
+      Timestamp(0, 0), // 1970-01-01 00:00:00.000
+  });
+
+  auto data = makeRowVector({
+      makeFlatVector<std::string>({"second", "minute", "hour", "day", "month"}),
+      makeFlatVector<int64_t>({1, 1, 1, 1, 1}),
+      timestamps,
+  });
+
+  auto result = evaluate("date_add(c0, c1, c2)", data);
+
+  auto expected = makeFlatVector<Timestamp>({
+      Timestamp(1, 0), // second: 1970-01-01 00:00:01.000
+      Timestamp(60, 0), // minute: 1970-01-01 00:01:00.000
+      Timestamp(3600, 0), // hour: 1970-01-01 01:00:00.000
+      Timestamp(86400, 0), // day: 1970-01-02 00:00:00.000
+      Timestamp(2678400, 0), // month: 1970-02-01 00:00:00.000
+  });
+
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(DateTimeFunctionsTest, dateAddDateVariableUnit) {
+  // This test validates that when the unit parameter is variable (passed as a
+  // column with different values per row), date_add correctly processes each
+  // row with its own unit value for DATE type.
+  auto dates = makeFlatVector<int32_t>(
+      {parseDate("2020-01-31"),
+       parseDate("2020-01-31"),
+       parseDate("2020-01-31"),
+       parseDate("2020-01-31")},
+      DATE());
+
+  auto data = makeRowVector({
+      makeFlatVector<std::string>({"day", "week", "month", "year"}),
+      makeFlatVector<int64_t>({1, 1, 1, 1}),
+      dates,
+  });
+
+  auto result = evaluate("date_add(c0, c1, c2)", data);
+
+  auto expected = makeFlatVector<int32_t>(
+      {parseDate("2020-02-01"), // day: 2020-01-31 + 1 day
+       parseDate("2020-02-07"), // week: 2020-01-31 + 7 days
+       parseDate("2020-02-29"), // month: 2020-01-31 + 1 month (leap year)
+       parseDate("2021-01-31")}, // year: 2020-01-31 + 1 year
+      DATE());
+
+  assertEqualVectors(expected, result);
+}
