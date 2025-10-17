@@ -71,6 +71,7 @@ function install_velox_deps_from_dnf {
     openssl-devel re2-devel libzstd-devel lz4-devel double-conversion-devel \
     libdwarf-devel elfutils-libelf-devel curl-devel libicu-devel bison flex \
     libsodium-devel zlib-devel gtest-devel gmock-devel xxhash-devel
+  install_curl
 }
 
 function install_conda {

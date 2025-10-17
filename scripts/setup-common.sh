@@ -171,6 +171,17 @@ function install_glog {
   cmake_install_dir glog -DBUILD_SHARED_LIBS=ON
 }
 
+function install_curl {
+  CURL_VERSION_UNDERSCORES="${CURL_VERSION//./_}"
+  wget_and_untar "https://github.com/curl/curl/releases/download/curl-${CURL_VERSION_UNDERSCORES}/curl-${CURL_VERSION}.tar.gz" curl
+  (
+    cd "${DEPENDENCY_DIR}"/curl || exit
+    ./configure --with-openssl --prefix=/usr --libdir=/usr/lib64
+    make "-j${NPROC}"
+    ${SUDO} make install
+  )
+}
+
 function install_lzo {
   wget_and_untar http://www.oberhumer.com/opensource/lzo/download/lzo-"${LZO_VERSION}".tar.gz lzo
   (
