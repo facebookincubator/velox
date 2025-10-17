@@ -24,6 +24,7 @@ VELOX_ARROW_CMAKE_PATCH=${VELOX_ARROW_CMAKE_PATCH:-""} # avoid error due to +u
 CMAKE_BUILD_TYPE="${BUILD_TYPE:-Release}"
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
 BUILD_GEOS="${BUILD_GEOS:-true}"
+BUILD_PROJ="${BUILD_PROJ:-true}"
 BUILD_FAISS="${BUILD_FAISS:-true}"
 BUILD_DUCKDB="${BUILD_DUCKDB:-true}"
 EXTRA_ARROW_OPTIONS=${EXTRA_ARROW_OPTIONS:-""}
@@ -271,6 +272,13 @@ function install_geos {
   if [[ $BUILD_GEOS == "true" ]]; then
     wget_and_untar https://github.com/libgeos/geos/archive/"${GEOS_VERSION}".tar.gz geos
     cmake_install_dir geos -DBUILD_TESTING=OFF
+  fi
+}
+
+function install_proj {
+  if [[ $BUILD_PROJ == "true" ]]; then
+    wget_and_untar https://github.com/OSGeo/PROJ/archive/refs/tags/"${PROJ_VERSION}".tar.gz proj
+    cmake_install_dir proj -DBUILD_TESTING=OFF -DENABLE_TIFF=OFF -DENABLE_CURL=OFF -DBUILD_APPS=OFF
   fi
 }
 
