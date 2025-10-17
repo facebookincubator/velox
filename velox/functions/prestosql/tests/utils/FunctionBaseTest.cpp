@@ -16,6 +16,7 @@
 #include "FunctionBaseTest.h"
 #include "velox/functions/FunctionRegistry.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
+#include "velox/functions/prestosql/types/KHyperLogLogRegistration.h"
 #include "velox/functions/prestosql/types/P4HyperLogLogRegistration.h"
 #include "velox/parse/TypeResolver.h"
 
@@ -26,6 +27,7 @@ void FunctionBaseTest::SetUpTestCase() {
   // TODO: remove the registration of P4HyperLogLog here once it is registered
   // through
   // registerAllScalarFunctions().
+  registerKHyperLogLogType();
   registerP4HyperLogLogType();
   functions::prestosql::registerAllScalarFunctions();
   memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
