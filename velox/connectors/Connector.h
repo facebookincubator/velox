@@ -27,6 +27,7 @@
 #include "velox/common/file/TokenProvider.h"
 #include "velox/common/future/VeloxPromise.h"
 #include "velox/core/ExpressionEvaluator.h"
+#include "velox/core/QueryConfig.h"
 #include "velox/type/Filter.h"
 #include "velox/vector/ComplexVector.h"
 
@@ -517,11 +518,11 @@ class ConnectorQueryCtx {
     selectiveNimbleReaderEnabled_ = value;
   }
 
-  bool rowSizeTrackingEnabled() const {
+  core::QueryConfig::RowSizeTrackingMode rowSizeTrackingMode() const {
     return rowSizeTrackingEnabled_;
   }
 
-  void setRowSizeTrackingEnabled(bool value) {
+  void setRowSizeTrackingMode(core::QueryConfig::RowSizeTrackingMode value) {
     rowSizeTrackingEnabled_ = value;
   }
 
@@ -547,7 +548,8 @@ class ConnectorQueryCtx {
   const folly::CancellationToken cancellationToken_;
   const std::shared_ptr<filesystems::TokenProvider> fsTokenProvider_;
   bool selectiveNimbleReaderEnabled_{false};
-  bool rowSizeTrackingEnabled_{true};
+  core::QueryConfig::RowSizeTrackingMode rowSizeTrackingEnabled_{
+      core::QueryConfig::RowSizeTrackingMode::ENABLED_FOR_ALL};
 };
 
 class Connector;

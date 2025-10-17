@@ -401,7 +401,8 @@ void SplitReader::createRowReader(
   baseRowReaderOpts_.setTrackRowSize(
       rowSizeTrackingEnabled.has_value()
           ? *rowSizeTrackingEnabled
-          : connectorQueryCtx_->rowSizeTrackingEnabled());
+          : connectorQueryCtx_->rowSizeTrackingMode() !=
+              core::QueryConfig::RowSizeTrackingMode::DISABLED);
   baseRowReader_ = baseReader_->createRowReader(baseRowReaderOpts_);
 }
 
