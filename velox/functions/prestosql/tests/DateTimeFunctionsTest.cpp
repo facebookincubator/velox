@@ -752,6 +752,42 @@ TEST_F(DateTimeFunctionsTest, hourDate) {
   EXPECT_EQ(0, hour(-18262));
 }
 
+TEST_F(DateTimeFunctionsTest, hourTime) {
+  const auto hour = [&](std::optional<int64_t> time) {
+    return evaluateOnce<int64_t>("hour(c0)", TIME(), time);
+  };
+
+  // null handling
+  EXPECT_EQ(std::nullopt, hour(std::nullopt));
+
+  // boundary tests - core optimization: simple integer division by
+  // kMillisInHour (3600000) lower boundary: 0 <= time < 86400000
+  EXPECT_EQ(0, hour(0)); // exactly midnight
+  EXPECT_EQ(0, hour(3599999)); // 00:59:59.999 - last millisecond of hour 0
+  EXPECT_EQ(1, hour(3600000)); // 01:00:00.000 - first millisecond of hour 1
+  EXPECT_EQ(23, hour(82800000)); // 23:00:00.000 - first millisecond of hour 23
+  EXPECT_EQ(23, hour(86399999)); // 23:59:59.999 - upper boundary exclusive
+
+  // representative samples across all hours
+  EXPECT_EQ(12, hour(43200000)); // noon exactly
+  EXPECT_EQ(18, hour(64800000)); // 18:00:00.000
+
+  // verify optimization correctness: hour = time / kMillisInHour
+  // random test cases to ensure division behaves correctly
+  EXPECT_EQ(5, hour(19800000)); // 05:30:00.000
+  EXPECT_EQ(10, hour(37800000)); // 10:30:00.000
+  EXPECT_EQ(15, hour(54000000)); // 15:00:00.000
+
+  // error conditions - invalid range validation
+  EXPECT_THROW(hour(-1), VeloxUserError); // negative time
+  EXPECT_THROW(
+      hour(86400000),
+      VeloxUserError); // exactly 24:00:00.000 (exclusive upper bound)
+  EXPECT_THROW(
+      hour(std::numeric_limits<int64_t>::max()),
+      VeloxUserError); // overflow case
+}
+
 TEST_F(DateTimeFunctionsTest, dayOfMonth) {
   const auto day = [&](std::optional<Timestamp> date) {
     return evaluateOnce<int64_t>("day_of_month(c0)", date);
@@ -1915,6 +1951,52 @@ TEST_F(DateTimeFunctionsTest, secondTimestampWithTimezone) {
       59, secondTimestampWithTimezone(TimestampWithTimezone(-1000, "+05:30")));
 }
 
+TEST_F(DateTimeFunctionsTest, secondTime) {
+  const auto second = [&](std::optional<int64_t> time) {
+    return evaluateOnce<int64_t>("second(c0)", TIME(), time);
+  };
+
+  // null handling
+  EXPECT_EQ(std::nullopt, second(std::nullopt));
+
+  // boundary tests - optimization: (time / 1000) % 60
+  // lower boundary: 0 <= time < 86400000
+  EXPECT_EQ(0, second(0)); // exactly midnight - 00:00:00.000
+  EXPECT_EQ(0, second(999)); // 00:00:00.999 - last millisecond of second 0
+  EXPECT_EQ(1, second(1000)); // 00:00:01.000 - first millisecond of second 1
+  EXPECT_EQ(59, second(59000)); // 00:00:59.000 - first millisecond of second 59
+  EXPECT_EQ(0, second(60000)); // 00:01:00.000 - first second of next minute
+  EXPECT_EQ(59, second(86399000)); // 23:59:59.000
+  EXPECT_EQ(59, second(86399999)); // 23:59:59.999 - upper boundary exclusive
+
+  // representative test cases across different times
+  EXPECT_EQ(30, second(30000)); // 00:00:30.000
+  EXPECT_EQ(15, second(75000)); // 00:01:15.000
+  // 01:01:25 = 3600000 + 60000 + 25000 = 3685000
+  EXPECT_EQ(25, second(3685000)); // 01:01:25.000
+  EXPECT_EQ(3, second(3723123)); // 01:02:03.123
+
+  // verify optimization correctness with modulo boundary conditions
+  // seconds should cycle every 60 seconds regardless of hours/minutes
+  EXPECT_EQ(0, second(3600000)); // 01:00:00.000
+  EXPECT_EQ(30, second(3630000)); // 01:00:30.000
+  EXPECT_EQ(0, second(7200000)); // 02:00:00.000
+  EXPECT_EQ(45, second(43245000)); // 12:00:45.000
+
+  // test millisecond precision is correctly truncated
+  EXPECT_EQ(15, second(15123)); // 00:00:15.123
+  EXPECT_EQ(15, second(15999)); // 00:00:15.999
+
+  // error conditions - invalid range validation
+  EXPECT_THROW(second(-1), VeloxUserError); // negative time
+  EXPECT_THROW(
+      second(86400000),
+      VeloxUserError); // exactly 24:00:00.000 (exclusive upper bound)
+  EXPECT_THROW(
+      second(std::numeric_limits<int64_t>::max()),
+      VeloxUserError); // overflow case
+}
+
 TEST_F(DateTimeFunctionsTest, millisecond) {
   const auto millisecond = [&](std::optional<Timestamp> timestamp) {
     return evaluateOnce<int64_t>("millisecond(c0)", timestamp);
@@ -1966,6 +2048,111 @@ TEST_F(DateTimeFunctionsTest, millisecondTimestampWithTimezone) {
   EXPECT_EQ(
       20,
       millisecondTimestampWithTimezone(TimestampWithTimezone(-980, "+05:30")));
+}
+
+TEST_F(DateTimeFunctionsTest, millisecondTime) {
+  const auto millisecond = [&](std::optional<int64_t> time) {
+    return evaluateOnce<int64_t>("millisecond(c0)", TIME(), time);
+  };
+
+  // Null handling
+  EXPECT_EQ(std::nullopt, millisecond(std::nullopt));
+
+  // Basic cases
+  EXPECT_EQ(0, millisecond(0)); // 00:00:00.000
+  EXPECT_EQ(0, millisecond(1000)); // 00:00:01.000
+  EXPECT_EQ(123, millisecond(1123)); // 00:00:01.123
+  EXPECT_EQ(456, millisecond(2456)); // 00:00:02.456
+  EXPECT_EQ(999, millisecond(999)); // 00:00:00.999
+  EXPECT_EQ(123, millisecond(3661123)); // 01:01:01.123
+
+  // Boundary values
+  EXPECT_EQ(0, millisecond(86399000)); // 23:59:59.000
+  EXPECT_EQ(999, millisecond(86399999)); // 23:59:59.999 (max valid TIME)
+
+  // Different time components to verify only millisecond part matters
+  EXPECT_EQ(500, millisecond(3600500)); // 01:00:00.500
+  EXPECT_EQ(500, millisecond(7200500)); // 02:00:00.500
+  EXPECT_EQ(500, millisecond(43200500)); // 12:00:00.500
+
+  // Second boundaries
+  EXPECT_EQ(0, millisecond(60000)); // 00:01:00.000
+  EXPECT_EQ(999, millisecond(60999)); // 00:01:00.999
+  EXPECT_EQ(1, millisecond(60001)); // 00:01:00.001
+
+  // Comprehensive modulo testing - verify millisecond() == time % 1000
+  for (int64_t base : {0, 1000, 60000, 3600000, 86399000}) {
+    for (int64_t ms = 0; ms < 1000; ms += 100) {
+      int64_t timeValue = base + ms;
+      if (timeValue <= 86399999) { // Ensure within valid range
+        EXPECT_EQ(ms, millisecond(timeValue));
+      }
+    }
+  }
+
+  // Test all possible millisecond values (0-999) in first second
+  for (int64_t ms = 0; ms < 1000; ++ms) {
+    EXPECT_EQ(ms, millisecond(ms));
+  }
+
+  // Test across all hours to ensure hour component doesn't affect result
+  for (int hour = 0; hour < 24; ++hour) {
+    int64_t baseTime = hour * 3600000; // Convert hour to milliseconds
+    EXPECT_EQ(0, millisecond(baseTime)); // .000
+    EXPECT_EQ(1, millisecond(baseTime + 1)); // .001
+    EXPECT_EQ(500, millisecond(baseTime + 500)); // .500
+    EXPECT_EQ(999, millisecond(baseTime + 999)); // .999
+  }
+
+  // Test edge cases just before and after boundaries
+  EXPECT_EQ(998, millisecond(86399998)); // 23:59:59.998
+  EXPECT_EQ(1, millisecond(1001)); // 00:00:01.001
+  EXPECT_EQ(999, millisecond(1999)); // 00:00:01.999
+  EXPECT_EQ(0, millisecond(2000)); // 00:00:02.000
+
+  // Error cases - values outside valid TIME range [0, 86399999]
+  VELOX_ASSERT_THROW(
+      millisecond(-1), "TIME value -1 is out of range [0, 86400000)");
+  VELOX_ASSERT_THROW(
+      millisecond(-1000), "TIME value -1000 is out of range [0, 86400000)");
+  VELOX_ASSERT_THROW(
+      millisecond(86400000),
+      "TIME value 86400000 is out of range [0, 86400000)");
+  VELOX_ASSERT_THROW(
+      millisecond(100000000),
+      "TIME value 100000000 is out of range [0, 86400000)");
+
+  // Test vectorized execution with mixed valid values
+  auto timeVector = makeFlatVector<int64_t>(
+      {0, // 00:00:00.000
+       1123, // 00:00:01.123
+       60999, // 00:01:00.999
+       3661456, // 01:01:01.456
+       43200789, // 12:00:00.789
+       86399999}, // 23:59:59.999
+      TIME());
+
+  auto result = evaluate<FlatVector<int64_t>>(
+      "millisecond(c0)", makeRowVector({timeVector}));
+
+  auto expected = makeFlatVector<int64_t>({0, 123, 999, 456, 789, 999});
+  assertEqualVectors(expected, result);
+
+  // Test vectorized execution with nulls
+  auto timeVectorWithNulls = makeNullableFlatVector<int64_t>(
+      {0, // 00:00:00.000
+       std::nullopt, // null
+       1123, // 00:00:01.123
+       std::nullopt, // null
+       86399999}, // 23:59:59.999
+      TIME());
+
+  auto resultWithNulls = evaluate<FlatVector<int64_t>>(
+      "millisecond(c0)", makeRowVector({timeVectorWithNulls}));
+
+  auto expectedWithNulls = makeNullableFlatVector<int64_t>(
+      {0, std::nullopt, 123, std::nullopt, 999});
+  assertEqualVectors(expectedWithNulls, resultWithNulls);
 }
 
 TEST_F(DateTimeFunctionsTest, extractFromIntervalDayTime) {

@@ -278,6 +278,13 @@ class QueryConfig {
   /// Window spilling flag, only applies if "spill_enabled" flag is set.
   static constexpr const char* kWindowSpillEnabled = "window_spill_enabled";
 
+  /// When processing spilled window data, read batches of whole partitions
+  /// having at least that many rows. Set to 1 to read one whole partition at a
+  /// time. Each driver processing the Window operator will process that much
+  /// data at once.
+  static constexpr const char* kWindowSpillMinReadBatchRows =
+      "window_spill_min_read_batch_rows";
+
   /// If true, the memory arbitrator will reclaim memory from table writer by
   /// flushing its buffered data to disk. only applies if "spill_enabled" flag
   /// is set.
@@ -971,6 +978,10 @@ class QueryConfig {
 
   bool windowSpillEnabled() const {
     return get<bool>(kWindowSpillEnabled, true);
+  }
+
+  uint32_t windowSpillMinReadBatchRows() const {
+    return get<uint32_t>(kWindowSpillMinReadBatchRows, 1'000);
   }
 
   bool writerSpillEnabled() const {
