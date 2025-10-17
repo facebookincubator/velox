@@ -31,6 +31,7 @@ class TimeWithTimezoneType final : public BigintType {
  public:
   static constexpr int16_t kTimeZoneBias = 840;
   static constexpr int16_t kMinutesInHour = 60;
+  static constexpr int16_t kTimeWithTimezoneToVarcharRowSize = 18;
 
   static std::shared_ptr<const TimeWithTimezoneType> get() {
     VELOX_CONSTEXPR_SINGLETON TimeWithTimezoneType kInstance;
@@ -52,7 +53,7 @@ class TimeWithTimezoneType final : public BigintType {
 
   /// Returns the time with timezone 'value' formatted as HH:MM:SS.mmmZZ
   /// where the timezone offset is included in the representation.
-  std::string valueToString(int64_t value) const;
+  StringView valueToString(int64_t value, char* const startPos) const;
 
   folly::dynamic serialize() const override;
 
