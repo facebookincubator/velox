@@ -302,10 +302,6 @@ if(VELOX_ENABLE_S3)
   endif()
   find_package(AWSSDK REQUIRED COMPONENTS s3;identity-management)
   add_definitions(-DVELOX_ENABLE_S3)
-  get_target_property(override_curl_lib aws-cpp-sdk-core INTERFACE_LINK_LIBRARIES)
-  list(REMOVE_ITEM override_curl_lib "/usr/lib64/libcurl.so")
-  list(APPEND override_curl_lib "\$<LINK_ONLY:CURL::libcurl>")
-  set_target_properties(aws-cpp-sdk-core PROPERTIES INTERFACE_LINK_LIBRARIES "${override_curl_lib}")
 endif()
 
 if(VELOX_ENABLE_ABFS)
@@ -490,6 +486,16 @@ if(VELOX_ENABLE_WAVE OR VELOX_ENABLE_CUDF)
     set(VELOX_ENABLE_ARROW ON)
     velox_set_source(cudf)
     velox_resolve_dependency(cudf)
+    if(TARGET aws-cpp-sdk-core)
+      # Fix for AWS SDK CPP using hardcoded system curl instead of soft link to curl
+      get_target_property(override_curl_lib aws-cpp-sdk-core INTERFACE_LINK_LIBRARIES)
+      list(REMOVE_ITEM override_curl_lib "/usr/lib64/libcurl.so")
+      list(APPEND override_curl_lib "\$<LINK_ONLY:CURL::libcurl>")
+      set_target_properties(
+        aws-cpp-sdk-core
+        PROPERTIES INTERFACE_LINK_LIBRARIES "${override_curl_lib}"
+      )
+    endif()
   endif()
 endif()
 
