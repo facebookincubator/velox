@@ -36,6 +36,8 @@ class Scanner : public yyFlexLexer {
       : yyFlexLexer(&arg_yyin, &arg_yyout),
         outputType_(outputType),
         input_(input) {}
+  ~Scanner(){};
+
   int lex(Parser::semantic_type* yylval);
 
   void setTypeSignature(TypeSignaturePtr type) {
