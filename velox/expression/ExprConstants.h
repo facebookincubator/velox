@@ -19,6 +19,8 @@ namespace facebook::velox::expression {
 
 inline constexpr const char* kAnd = "and";
 inline constexpr const char* kOr = "or";
+inline constexpr const char* kPlus = "plus";
+inline constexpr const char* kMultiply = "multiply";
 inline constexpr const char* kSwitch = "switch";
 inline constexpr const char* kIf = "if";
 inline constexpr const char* kCoalesce = "coalesce";
@@ -26,5 +28,7 @@ inline constexpr const char* kCast = "cast";
 inline constexpr const char* kTryCast = "try_cast";
 inline constexpr const char* kTry = "try";
 inline constexpr const char* kRowConstructor = "row_constructor";
+inline constexpr const char* kFail = "fail";
+inline constexpr const char* kIn = "in";
 
 } // namespace facebook::velox::expression

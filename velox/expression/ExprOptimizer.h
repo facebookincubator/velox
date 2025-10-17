@@ -13,31 +13,20 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/expression/ExprRewriteRegistry.h"
+#include "velox/core/Expressions.h"
+#include "velox/core/QueryCtx.h"
 
 namespace facebook::velox::expression {
 
-void ExprRewriteRegistry::registerRewrite(ExpressionRewrite rewrite) {
-  registry_.withWLock([&](auto& list) { list.push_back(std::move(rewrite)); });
-}
-
-void ExprRewriteRegistry::clear() {
-  registry_.withWLock([&](auto& list) { list.clear(); });
-}
-
-core::TypedExprPtr ExprRewriteRegistry::rewrite(
-    const core::TypedExprPtr& expr) {
-  core::TypedExprPtr result = expr;
-  registry_.withRLock([&](const auto& list) {
-    for (const auto& rewrite : list) {
-      VELOX_CHECK_NOT_NULL(rewrite);
-      if (auto rewritten = (rewrite)(expr)) {
-        result = rewritten;
-        break;
-      }
-    }
-  });
-
-  return result;
-}
+/// Optimizes expression through a combination of constant folding and rewrites.
+/// Constant folds all possible subtrees of the expression and the expression
+/// itself, if possible, then rewrites the folded expression. If an exception
+/// (i.e VeloxUserError) is encountered during constant folding, a fail
+/// expression with the error message will be returned instead of the original
+/// expression when 'replaceEvalErrorWithFailExpr' is set to 'true'.
+core::TypedExprPtr optimize(
+    const core::TypedExprPtr& expr,
+    core::QueryCtx* queryCtx,
+    memory::MemoryPool* pool,
+    bool replaceEvalErrorWithFailExpr);
 } // namespace facebook::velox::expression
