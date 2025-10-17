@@ -140,6 +140,9 @@ RowVectorPtr SpatialJoinOutputBuilder::takeOutput() {
   return output;
 }
 
+////////////////////
+// SpatialJoinProbe
+
 SpatialJoinProbe::SpatialJoinProbe(
     int32_t operatorId,
     DriverCtx* driverCtx,
@@ -164,8 +167,13 @@ SpatialJoinProbe::SpatialJoinProbe(
               outputType_), // these are the identity Projections
           buildProjections_,
           *operatorCtx_} {
-  identityProjections_ =
-      extractProjections(joinNode_->leftNode()->outputType(), outputType_);
+  auto probeType = joinNode_->leftNode()->outputType();
+  identityProjections_ = extractProjections(probeType, outputType_);
+  probeGeometryChannel_ =
+      probeType->getChildIdx(joinNode_->probeGeometry()->name());
+  VELOX_CHECK_EQ(
+      probeType->childAt(probeGeometryChannel_),
+      joinNode_->probeGeometry()->type());
 }
 
 /////////
@@ -261,6 +269,7 @@ void SpatialJoinProbe::close() {
     joinCondition_->clear();
   }
   buildVectors_.reset();
+  spatialIndex_.reset();
   Operator::close();
 }
 
@@ -283,7 +292,8 @@ bool SpatialJoinProbe::getBuildData(ContinueFuture* future) {
     return false;
   }
 
-  buildVectors_ = std::move(buildData);
+  buildVectors_ = buildData.value().buildVectors;
+  spatialIndex_ = buildData.value().spatialIndex;
   return true;
 }
 
@@ -312,7 +322,7 @@ void SpatialJoinProbe::addInput(RowVectorPtr input) {
   VELOX_CHECK_EQ(probeRow_, 0);
   VELOX_CHECK(!probeHasMatch_);
   VELOX_CHECK_EQ(buildIndex_, 0);
-  VELOX_CHECK_EQ(buildRow_, 0);
+  VELOX_CHECK_EQ(candidateIndex_, 0);
 
   // In getOutput(), we are going to wrap input in dictionaries a few rows at a
   // time. Since lazy vectors cannot be wrapped in different dictionaries, we
@@ -321,6 +331,8 @@ void SpatialJoinProbe::addInput(RowVectorPtr input) {
     child->loadedVector();
   }
   input_ = std::move(input);
+  decodedGeometryCol_.decode(*input_->childAt(probeGeometryChannel_)
+                                  ->asChecked<SimpleVector<StringView>>());
   ++probeCount_;
 }
 
@@ -387,6 +399,12 @@ void SpatialJoinProbe::addProbeRowOutput() {
   VELOX_CHECK(buildVectors_.has_value());
   VELOX_CHECK(!outputBuilder_.isOutputFull());
 
+  // Find the candidates for each probe row from the spatial index.  Only do
+  // this at the start for each row.
+  if (buildIndex_ == 0 && candidateIndex_ == 0) {
+    candidateBuildRows_ = querySpatialIndex();
+  }
+
   while (!isProbeRowDone()) {
     addBuildVectorOutput(buildVectors_.value()[buildIndex_]);
     if (outputBuilder_.isOutputFull()) {
@@ -409,34 +427,77 @@ void SpatialJoinProbe::addProbeRowOutput() {
 }
 
 void SpatialJoinProbe::addBuildVectorOutput(const RowVectorPtr& buildVector) {
-  if (FOLLY_UNLIKELY(buildRow_ == 0)) {
+  if (FOLLY_UNLIKELY(needsFilterEvaluated_)) {
     // Evaluate join filter for the whole vector just once.
     evaluateJoinFilter(buildVector);
+    needsFilterEvaluated_ = false;
   }
 
   // Start where we left off: after the last buildRow_ that was processed.
   while (!isBuildVectorDone(buildVector)) {
-    if (isJoinConditionMatch(buildRow_)) {
-      outputBuilder_.addOutputRow(probeRow_, buildRow_);
+    vector_size_t buildRow = relativeBuildRow(candidateIndex_);
+    if (isJoinConditionMatch(candidateIndex_)) {
+      outputBuilder_.addOutputRow(probeRow_, buildRow);
       probeHasMatch_ = true;
     }
 
-    // Advance buildRow_ even if full, since we're finished with this row.
-    ++buildRow_;
+    // Advance candidateIndex_ even if full, since we're finished with this row.
+    ++candidateIndex_;
   }
 
   // Since we are copying from the current buildVector, we must copy here.
   outputBuilder_.copyBuildValues(buildVector);
 }
 
+std::vector<int32_t> SpatialJoinProbe::querySpatialIndex() {
+  VELOX_CHECK(spatialIndex_.has_value());
+  VELOX_CHECK_NOT_NULL(spatialIndex_.value());
+
+  if (decodedGeometryCol_.isNullAt(probeRow_)) {
+    return std::vector<int32_t>{};
+  }
+
+  // Always apply radius to build side, not probe side.
+  Envelope envelope = SpatialJoinBuild::readEnvelope(
+      decodedGeometryCol_.valueAt<StringView>(probeRow_), 0 /* radius */);
+  std::vector<int32_t> candidates = spatialIndex_.value()->query(envelope);
+  std::sort(candidates.begin(), candidates.end());
+
+  return candidates;
+}
+
+// Returns nullopt is there are no matching indices
+BufferPtr SpatialJoinProbe::makeBuildVectorIndices(vector_size_t vectorSize) {
+  // Find the slice of candidates that are in this build vector.
+  size_t endIndex = candidateIndex_;
+  for (; endIndex < candidateBuildRows_.size(); ++endIndex) {
+    if (relativeBuildRow(endIndex) >= vectorSize) {
+      break;
+    }
+  }
+
+  vector_size_t indexCount =
+      static_cast<vector_size_t>(endIndex - candidateIndex_);
+  auto rowIndices = allocateIndices(indexCount, operatorCtx_->pool());
+  auto rawIndices = rowIndices->asMutable<vector_size_t>();
+  for (size_t idx = candidateIndex_; idx < endIndex; ++idx) {
+    rawIndices[idx] = relativeBuildRow(idx);
+  }
+
+  return rowIndices;
+}
+
 void SpatialJoinProbe::evaluateJoinFilter(const RowVectorPtr& buildVector) {
-  // First step to process is to get a batch so we can evaluate the join
-  // filter.
+  // Get the indices of the rows in the build vector that are candidates.
+  auto candidateRowsBuffer = makeBuildVectorIndices(buildVector->size());
+
+  // Now get the input for the spatial join filter, one row per candidate.
   auto filterInput = getNextJoinBatch(
       buildVector,
       filterInputType_,
       filterProbeProjections_,
-      filterBuildProjections_);
+      filterBuildProjections_,
+      candidateRowsBuffer);
 
   if (filterInputRows_.size() != filterInput->size()) {
     filterInputRows_.resizeFill(filterInput->size(), true);
@@ -456,15 +517,24 @@ RowVectorPtr SpatialJoinProbe::getNextJoinBatch(
     const RowVectorPtr& buildVector,
     const RowTypePtr& outputType,
     const std::vector<IdentityProjection>& probeProjections,
-    const std::vector<IdentityProjection>& buildProjections) const {
+    const std::vector<IdentityProjection>& buildProjections,
+    BufferPtr candidateRows) const {
   VELOX_CHECK_GT(buildVector->size(), 0);
+  // candidateRows is a buffer of vector_size_t indices into buildVector
+  const vector_size_t numOutputRows =
+      candidateRows->size() / sizeof(vector_size_t);
+  if (numOutputRows == 0) {
+    return RowVector::createEmpty(outputType, pool());
+  }
 
   std::vector<VectorPtr> projectedChildren(outputType->size());
-  const vector_size_t numOutputRows = buildVector->size();
-
   // Project columns from the build side.
   projectChildren(
-      projectedChildren, buildVector, buildProjections, numOutputRows, nullptr);
+      projectedChildren,
+      buildVector,
+      buildProjections,
+      numOutputRows,
+      candidateRows);
 
   // Wrap projections from the probe side as constants.
   for (const auto [inputChannel, outputChannel] : probeProjections) {
