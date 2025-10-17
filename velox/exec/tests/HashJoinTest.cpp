@@ -8152,5 +8152,105 @@ DEBUG_ONLY_TEST_F(HashJoinTest, hashTableCleanupAfterProbeFinish) {
   ASSERT_TRUE(tableEmpty);
 }
 
+TEST_F(HashJoinTest, innerJoinForTypeWithCustomComparisonAndSmallVector) {
+  // This test corresponds to the SQL query:
+  // SELECT
+  //   LEFT_TABLE.ip_addr as ip_left_string,
+  //   RIGHT_TABLE.ip_addr as ip_right_string,
+  //   CAST(LEFT_TABLE.ip_addr AS IPADDRESS) as ip_left_ip_address_type,
+  //   CAST(RIGHT_TABLE.ip_addr AS IPADDRESS) as ip_right_ip_address_type,
+  //   CAST(LEFT_TABLE.ip_addr AS IPADDRESS) = CAST(RIGHT_TABLE.ip_addr AS
+  //   IPADDRESS) as are_equal_as_ip_address_type
+  // FROM
+  //   (VALUES ('2620:10d:c0a8:f0::37'), ('2620:10d:c053:33::37')) AS
+  //   LEFT_TABLE(ip_addr) INNER JOIN (VALUES ('2620:10d:c0a8:f0::37')) AS
+  //   RIGHT_TABLE(ip_addr) ON CAST(LEFT_TABLE.ip_addr AS IPADDRESS) =
+  //   CAST(RIGHT_TABLE.ip_addr AS IPADDRESS)
+  // LIMIT 1000
+
+  auto leftVectors = makeRowVector({makeFlatVector<StringView>(
+      {StringView("2620:10d:c0a8:f0::37"),
+       StringView("2620:10d:c053:33::37")})});
+
+  auto rightVectors = makeRowVector(
+      {makeFlatVector<StringView>({StringView("2620:10d:c0a8:f0::37")})});
+  createDuckDbTable("t", {leftVectors});
+  createDuckDbTable("u", {rightVectors});
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+
+  auto rightPlan = PlanBuilder(planNodeIdGenerator)
+                       .values({rightVectors})
+                       .project(
+                           {"c0 AS ip_addr_right",
+                            "CAST(c0 AS IPADDRESS) AS ip_addr_cast_right"})
+                       .planNode();
+
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .values({leftVectors})
+          .project({"c0 AS ip_addr", "CAST(c0 AS IPADDRESS) AS ip_addr_cast"})
+          .hashJoin(
+              {"ip_addr_cast"},
+              {"ip_addr_cast_right"},
+              rightPlan,
+              "",
+              {"ip_addr", "ip_addr_cast"},
+              core::JoinType::kInner)
+          .limit(0, 1000, false)
+          .planNode();
+
+  auto result = AssertQueryBuilder(plan).copyResults(pool());
+
+  ASSERT_EQ(result->size(), 1);
+  auto ipAddr = result->childAt(0)->as<SimpleVector<StringView>>();
+
+  // We expect 1 row (only the matching IPv6 address: 2620:10d:c0a8:f0::37)
+  ASSERT_EQ(ipAddr->valueAt(0), StringView("2620:10d:c0a8:f0::37"));
+
+  // Test that different IPADDRESS values correctly don't match in hash join.
+  leftVectors = makeRowVector({
+      makeFlatVector<StringView>({
+          "2620:10d:c053:33::37"_sv,
+      }),
+  });
+
+  rightVectors = makeRowVector({
+      makeFlatVector<StringView>({
+          "2620:10d:c0a8:f0::37"_sv,
+      }),
+  });
+
+  planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+
+  rightPlan = PlanBuilder(planNodeIdGenerator)
+                  .values({rightVectors})
+                  .project(
+                      {"c0 AS ip_addr_right",
+                       "CAST(c0 AS IPADDRESS) AS ip_addr_cast_right"})
+                  .planNode();
+
+  plan = PlanBuilder(planNodeIdGenerator)
+             .values({leftVectors})
+             .project(
+                 {"c0 AS ip_left",
+                  "CAST(c0 AS IPADDRESS) AS ip_left_cast",
+                  "CAST(c0 AS VARCHAR) AS ip_left_string"})
+             .hashJoin(
+                 {"ip_left_cast"},
+                 {"ip_addr_cast_right"},
+                 rightPlan,
+                 "",
+                 {"ip_left_cast", "ip_addr_cast_right", "ip_addr_right"},
+                 core::JoinType::kInner)
+             .planNode();
+
+  // Result should be empty since the IP addresses are different
+  result = AssertQueryBuilder(plan).copyResults(pool());
+  ASSERT_EQ(result->size(), 0)
+      << "Expected no matches between different IP addresses, but got "
+      << result->size() << " rows";
+}
+
 } // namespace
 } // namespace facebook::velox::exec
