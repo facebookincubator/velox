@@ -314,5 +314,253 @@ TEST_F(TimestampWithTimeZoneCastTest, fromDate) {
   test::assertEqualVectors(expected, result);
 }
 
+TEST_F(TimestampWithTimeZoneCastTest, fromTime) {
+  {
+    // Test casting TIME to TIMESTAMP WITH TIME ZONE with various times
+    // TIME values represent time since midnight (in milliseconds)
+    auto input = makeFlatVector<int64_t>(
+        {
+            0, // 00:00:00.000 (midnight)
+            3 * kMillisInHour + 4 * kMillisInMinute + 5 * kMillisInSecond +
+                321, // 03:04:05.321
+            12 * kMillisInHour, // 12:00:00.000 (noon)
+            23 * kMillisInHour + 59 * kMillisInMinute + 59 * kMillisInSecond +
+                999, // 23:59:59.999 (end of day)
+        },
+        TIME());
+
+    setQueryTimeZone("America/Los_Angeles");
+
+    auto tzId = tz::getTimeZoneID("America/Los_Angeles");
+    // LA is -8 hours from UTC (PST), so 00:00:00 PST = 08:00:00 UTC
+    auto expected = makeFlatVector<int64_t>(
+        {
+            pack(8 * kMillisInHour, tzId), // 00:00:00.000 PST -> 08:00:00 UTC
+            pack(
+                3 * kMillisInHour + 4 * kMillisInMinute + 5 * kMillisInSecond +
+                    321 + 8 * kMillisInHour,
+                tzId), // 03:04:05.321 PST -> 11:04:05.321 UTC
+            pack(
+                12 * kMillisInHour + 8 * kMillisInHour,
+                tzId), // 12:00:00.000 PST -> 20:00:00 UTC
+            pack(
+                23 * kMillisInHour + 59 * kMillisInMinute +
+                    59 * kMillisInSecond + 999 + 8 * kMillisInHour,
+                tzId), // 23:59:59.999 PST -> 07:59:59.999 UTC (next day)
+        },
+        TIMESTAMP_WITH_TIME_ZONE());
+
+    auto result = evaluate(
+        "cast(c0 as timestamp with time zone)", makeRowVector({input}));
+    test::assertEqualVectors(expected, result);
+  }
+
+  {
+    // Test with nulls
+    auto input = makeNullableFlatVector<int64_t>(
+        {0,
+         std::nullopt,
+         12 * kMillisInHour,
+         std::nullopt,
+         23 * kMillisInHour + 59 * kMillisInMinute + 59 * kMillisInSecond +
+             999},
+        TIME());
+
+    setQueryTimeZone("America/Los_Angeles");
+
+    auto tzId = tz::getTimeZoneID("America/Los_Angeles");
+    auto expected = makeNullableFlatVector<int64_t>(
+        {pack(8 * kMillisInHour, tzId),
+         std::nullopt,
+         pack(12 * kMillisInHour + 8 * kMillisInHour, tzId),
+         std::nullopt,
+         pack(
+             23 * kMillisInHour + 59 * kMillisInMinute + 59 * kMillisInSecond +
+                 999 + 8 * kMillisInHour,
+             tzId)},
+        TIMESTAMP_WITH_TIME_ZONE());
+
+    auto result = evaluate(
+        "cast(c0 as timestamp with time zone)", makeRowVector({input}));
+    test::assertEqualVectors(expected, result);
+  }
+
+  {
+    // Test with different timezone (Asia/Shanghai, +8 hours from UTC)
+    auto input = makeFlatVector<int64_t>(
+        {
+            0,
+            12 * kMillisInHour,
+            23 * kMillisInHour + 59 * kMillisInMinute + 59 * kMillisInSecond +
+                999,
+        },
+        TIME());
+
+    setQueryTimeZone("Asia/Shanghai");
+
+    auto tzId = tz::getTimeZoneID("Asia/Shanghai");
+    // Shanghai is +8 hours from UTC, so 00:00:00 Shanghai = 16:00:00 UTC (prev
+    // day)
+    auto expected = makeFlatVector<int64_t>(
+        {
+            pack(
+                -8 * kMillisInHour,
+                tzId), // 00:00:00 CST -> 16:00:00 UTC (prev day)
+            pack(
+                12 * kMillisInHour - 8 * kMillisInHour,
+                tzId), // 12:00:00 CST -> 04:00:00 UTC
+            pack(
+                23 * kMillisInHour + 59 * kMillisInMinute +
+                    59 * kMillisInSecond + 999 - 8 * kMillisInHour,
+                tzId), // 23:59:59.999 CST -> 15:59:59.999 UTC
+        },
+        TIMESTAMP_WITH_TIME_ZONE());
+
+    auto result = evaluate(
+        "cast(c0 as timestamp with time zone)", makeRowVector({input}));
+    test::assertEqualVectors(expected, result);
+  }
+
+  {
+    // Test with adjustTimestampToTimezone disabled
+    // When disabled, TIME values are treated as already in UTC
+    auto input = makeFlatVector<int64_t>(
+        {
+            0,
+            3 * kMillisInHour + 4 * kMillisInMinute + 5 * kMillisInSecond + 321,
+            12 * kMillisInHour,
+        },
+        TIME());
+
+    setQueryTimeZone("Asia/Shanghai");
+    disableAdjustTimestampToTimezone();
+
+    auto tzId = tz::getTimeZoneID("Asia/Shanghai");
+    auto expected = makeFlatVector<int64_t>(
+        {
+            pack(0, tzId),
+            pack(
+                3 * kMillisInHour + 4 * kMillisInMinute + 5 * kMillisInSecond +
+                    321,
+                tzId),
+            pack(12 * kMillisInHour, tzId),
+        },
+        TIMESTAMP_WITH_TIME_ZONE());
+
+    auto result = evaluate(
+        "cast(c0 as timestamp with time zone)", makeRowVector({input}));
+    test::assertEqualVectors(expected, result);
+  }
+
+  {
+    // Test constant TIME vector cast to TIMESTAMP WITH TIME ZONE (non-null)
+    // This tests the optimization path for constant vectors
+    auto constantTimeVector = BaseVector::wrapInConstant(
+        1000, 0, makeFlatVector<int64_t>({12 * kMillisInHour}, TIME()));
+
+    setQueryTimeZone("America/New_York");
+
+    auto tzId = tz::getTimeZoneID("America/New_York");
+    // NY is -5 hours from UTC (EST), so 12:00:00 EST = 17:00:00 UTC
+
+    auto result = evaluate(
+        "cast(c0 as timestamp with time zone)",
+        makeRowVector({constantTimeVector}));
+
+    // Should return a constant vector with the adjusted value
+    auto expected = BaseVector::wrapInConstant(
+        1000,
+        0,
+        makeFlatVector<int64_t>(
+            {pack(12 * kMillisInHour + 5 * kMillisInHour, tzId)},
+            TIMESTAMP_WITH_TIME_ZONE()));
+
+    test::assertEqualVectors(expected, result);
+    // Verify the result is actually constant-encoded (optimization worked)
+    ASSERT_TRUE(result->isConstantEncoding());
+  }
+
+  {
+    // Test constant TIME vector cast to TIMESTAMP WITH TIME ZONE (null)
+    // This tests the optimization path for null constant vectors
+    auto nullTimeVector = BaseVector::createNullConstant(TIME(), 500, pool());
+
+    setQueryTimeZone("America/Los_Angeles");
+
+    auto result = evaluate(
+        "cast(c0 as timestamp with time zone)",
+        makeRowVector({nullTimeVector}));
+
+    // Should return a null constant vector
+    auto expected =
+        BaseVector::createNullConstant(TIMESTAMP_WITH_TIME_ZONE(), 500, pool());
+
+    test::assertEqualVectors(expected, result);
+    // Verify the result is actually constant-encoded (optimization worked)
+    ASSERT_TRUE(result->isConstantEncoding());
+    ASSERT_TRUE(result->isNullAt(0));
+  }
+
+  {
+    // Test constant TIME vector with different sizes
+    // This ensures the optimization correctly handles different vector sizes
+    setQueryTimeZone("America/Los_Angeles");
+    auto tzId = tz::getTimeZoneID("America/Los_Angeles");
+
+    for (auto size : {1, 10, 100, 1000}) {
+      auto constantTimeVector = BaseVector::wrapInConstant(
+          size,
+          0,
+          makeFlatVector<int64_t>(
+              {3 * kMillisInHour + 4 * kMillisInMinute + 5 * kMillisInSecond +
+               321},
+              TIME()));
+
+      auto result = evaluate(
+          "cast(c0 as timestamp with time zone)",
+          makeRowVector({constantTimeVector}));
+
+      auto expected = BaseVector::wrapInConstant(
+          size,
+          0,
+          makeFlatVector<int64_t>(
+              {pack(
+                  3 * kMillisInHour + 4 * kMillisInMinute +
+                      5 * kMillisInSecond + 321 + 8 * kMillisInHour,
+                  tzId)},
+              TIMESTAMP_WITH_TIME_ZONE()));
+
+      test::assertEqualVectors(expected, result);
+      ASSERT_TRUE(result->isConstantEncoding());
+      ASSERT_EQ(result->size(), size);
+    }
+  }
+
+  {
+    // Test try_cast for TIME to TIMESTAMP WITH TIME ZONE
+    auto input =
+        makeFlatVector<int64_t>({0, 12 * kMillisInHour, 86399999}, TIME());
+
+    setQueryTimeZone("America/Los_Angeles");
+
+    auto tzId = tz::getTimeZoneID("America/Los_Angeles");
+    auto expected = makeFlatVector<int64_t>(
+        {
+            pack(8 * kMillisInHour, tzId), // 00:00:00 PST -> 08:00:00 UTC
+            pack(
+                12 * kMillisInHour + 8 * kMillisInHour,
+                tzId), // 12:00:00 PST -> 20:00:00 UTC
+            pack(
+                86399999 + 8 * kMillisInHour,
+                tzId), // 23:59:59.999 PST -> 07:59:59.999 UTC (next day)
+        },
+        TIMESTAMP_WITH_TIME_ZONE());
+
+    auto result = evaluate(
+        "try_cast(c0 as timestamp with time zone)", makeRowVector({input}));
+    test::assertEqualVectors(expected, result);
+  }
+}
+
 } // namespace
 } // namespace facebook::velox

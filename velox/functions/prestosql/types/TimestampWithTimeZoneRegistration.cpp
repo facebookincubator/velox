@@ -76,6 +76,33 @@ void castFromDate(
   });
 }
 
+void castFromTime(
+    const SimpleVector<int64_t>& inputVector,
+    exec::EvalCtx& context,
+    const SelectivityVector& rows,
+    int64_t* rawResults) {
+  const auto& config = context.execCtx()->queryCtx()->queryConfig();
+  const auto* sessionTimeZone = getTimeZoneFromConfig(config);
+
+  const auto adjustTimestampToTimezone = config.adjustTimestampToTimezone();
+
+  context.applyToSelectedNoThrow(rows, [&](auto row) {
+    const auto timeMillis = inputVector.valueAt(row);
+
+    // Create a timestamp at epoch (1970-01-01) with the time portion
+    Timestamp ts = Timestamp::fromMillis(timeMillis);
+
+    if (adjustTimestampToTimezone) {
+      // Treat TIME as wall time in session time zone. This means that in
+      // order to get its UTC representation we need to shift the value by the
+      // offset of the time zone.
+      ts.toGMT(*sessionTimeZone);
+    }
+
+    rawResults[row] = pack(ts.toMillis(), sessionTimeZone->id());
+  });
+}
+
 void castFromString(
     const SimpleVector<StringView>& inputVector,
     exec::EvalCtx& context,
@@ -201,6 +228,8 @@ class TimestampWithTimeZoneCastOperator final : public exec::CastOperator {
         return true;
       case TypeKind::INTEGER:
         return other->isDate();
+      case TypeKind::BIGINT:
+        return other->isTime();
       default:
         return false;
     }
@@ -227,6 +256,37 @@ class TimestampWithTimeZoneCastOperator final : public exec::CastOperator {
       VectorPtr& result) const override {
     context.ensureWritable(rows, resultType, result);
 
+    // Optimization for constant TIME input vectors
+    if (input.typeKind() == TypeKind::BIGINT && input.type()->isTime() &&
+        input.isConstantEncoding()) {
+      auto constantInput = input.as<ConstantVector<int64_t>>();
+      if (constantInput->isNullAt(0)) {
+        result = BaseVector::createNullConstant(
+            resultType, rows.end(), context.pool());
+        return;
+      }
+
+      const auto& config = context.execCtx()->queryCtx()->queryConfig();
+      const auto* sessionTimeZone = getTimeZoneFromConfig(config);
+      const auto adjustTimestampToTimezone = config.adjustTimestampToTimezone();
+
+      const auto timeMillis = constantInput->valueAt(0);
+      Timestamp ts = Timestamp::fromMillis(timeMillis);
+
+      if (adjustTimestampToTimezone) {
+        ts.toGMT(*sessionTimeZone);
+      }
+
+      auto packedValue = pack(ts.toMillis(), sessionTimeZone->id());
+      result = std::make_shared<ConstantVector<int64_t>>(
+          context.pool(),
+          rows.end(),
+          false, // isNull
+          resultType,
+          std::move(packedValue));
+      return;
+    }
+
     auto* timestampWithTzResult = result->asFlatVector<int64_t>();
     timestampWithTzResult->clearNulls(rows);
 
@@ -242,6 +302,10 @@ class TimestampWithTimeZoneCastOperator final : public exec::CastOperator {
       VELOX_CHECK(input.type()->isDate());
       const auto inputVector = input.as<SimpleVector<int32_t>>();
       castFromDate(*inputVector, context, rows, rawResults);
+    } else if (input.typeKind() == TypeKind::BIGINT) {
+      VELOX_CHECK(input.type()->isTime());
+      const auto inputVector = input.as<SimpleVector<int64_t>>();
+      castFromTime(*inputVector, context, rows, rawResults);
     } else {
       VELOX_UNSUPPORTED(
           "Cast from {} to TIMESTAMP WITH TIME ZONE not yet supported",
