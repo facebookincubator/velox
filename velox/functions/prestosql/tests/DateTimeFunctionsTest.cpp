@@ -3195,6 +3195,113 @@ TEST_F(DateTimeFunctionsTest, dateAddTimestampWithTimeZone) {
           "day", -45, "2023-04-26 02:30:00.000 America/Los_Angeles"));
 }
 
+TEST_F(DateTimeFunctionsTest, dateAddTime) {
+  const auto dateAdd = [&](const std::string& unit,
+                           std::optional<int32_t> value,
+                           std::optional<int64_t> time) {
+    return evaluateOnce<int64_t>(
+        fmt::format("date_add('{}', c0, c1)", unit),
+        {INTEGER(), TIME()},
+        value,
+        time);
+  };
+
+  // basic time additions
+  // add milliseconds
+  EXPECT_EQ(1000, dateAdd("millisecond", 1000, 0)); // 00:00:00.000 + 1s
+  EXPECT_EQ(500, dateAdd("millisecond", -500, 1000)); // 00:00:01.000 - 500ms
+  EXPECT_EQ(2000, dateAdd("millisecond", 1000, 1000)); // 00:00:01.000 + 1s
+
+  // add seconds
+  EXPECT_EQ(1000, dateAdd("second", 1, 0)); // 00:00:00 + 1s
+  EXPECT_EQ(0, dateAdd("second", -1, 1000)); // 00:00:01 - 1s
+  EXPECT_EQ(3661000, dateAdd("second", 3661, 0)); // 1 hour 1 minute 1 second
+
+  // add minutes
+  EXPECT_EQ(60000, dateAdd("minute", 1, 0)); // 00:00:00 + 1 minute
+  EXPECT_EQ(0, dateAdd("minute", -1, 60000)); // 00:01:00 - 1 minute
+  EXPECT_EQ(300000, dateAdd("minute", 5, 0)); // 00:00:00 + 5 minutes
+
+  // add hours
+  EXPECT_EQ(3600000, dateAdd("hour", 1, 0)); // 00:00:00 + 1 hour
+  EXPECT_EQ(0, dateAdd("hour", -1, 3600000)); // 01:00:00 - 1 hour
+  EXPECT_EQ(43200000, dateAdd("hour", 12, 0)); // 00:00:00 + 12 hours
+
+  // test wraparound behavior (24-hour modulo)
+  EXPECT_EQ(
+      3600000,
+      dateAdd("hour", 25, 0)); // 00:00:00 + 25 hours = 01:00:00 (wraps)
+  EXPECT_EQ(
+      82800000, dateAdd("hour", -1, 0)); // 00:00:00 - 1 hour = 23:00:00 (wraps)
+  EXPECT_EQ(
+      0, dateAdd("hour", 24, 0)); // 00:00:00 + 24 hours = 00:00:00 (wraps)
+  EXPECT_EQ(
+      0, dateAdd("hour", -24, 0)); // 00:00:00 - 24 hours = 00:00:00 (wraps)
+
+  // test real-world scenario: 09:30:15.500 + various units
+  int64_t morning = 9 * 3600000 + 30 * 60000 + 15 * 1000 + 500; // 34215500ms
+  EXPECT_EQ(34215750, dateAdd("millisecond", 250, morning)); // +250ms
+  EXPECT_EQ(34245500, dateAdd("second", 30, morning)); // +30s
+  EXPECT_EQ(35415500, dateAdd("minute", 20, morning)); // +20 minutes
+  EXPECT_EQ(48615500, dateAdd("hour", 4, morning)); // +4 hours
+
+  // test boundary values for TIME type (0 to 86399999 ms in a day)
+  EXPECT_EQ(0, dateAdd("millisecond", 0, 0)); // 00:00:00.000 + 0ms
+  EXPECT_EQ(
+      86399999, dateAdd("millisecond", 86399999, 0)); // 00:00:00.000 + max time
+  EXPECT_EQ(
+      0, dateAdd("millisecond", -86399999, 86399999)); // max time - max time
+
+  // test wraparound with large values
+  EXPECT_EQ(
+      1000,
+      dateAdd(
+          "millisecond",
+          86401000,
+          0)); // 00:00:00 + (24h + 1s) wraps to 00:00:01
+  EXPECT_EQ(
+      86398000,
+      dateAdd(
+          "millisecond",
+          -2000,
+          0)); // 00:00:00 - 2s wraps to 23:59:58
+
+  // negative additions
+  EXPECT_EQ(0, dateAdd("second", -60, 60000)); // 00:01:00 - 60s
+  EXPECT_EQ(0, dateAdd("minute", -60, 3600000)); // 01:00:00 - 60min
+  EXPECT_EQ(75600000, dateAdd("hour", -2, 82800000)); // 23:00:00 - 2h = 21:00
+
+  // test null handling
+  EXPECT_EQ(std::nullopt, dateAdd("second", 1, std::nullopt));
+  EXPECT_EQ(std::nullopt, dateAdd("second", std::nullopt, 1000));
+  EXPECT_EQ(std::nullopt, dateAdd("second", std::nullopt, std::nullopt));
+
+  // test invalid units (TIME only supports time-related units, not
+  // date-related)
+  VELOX_ASSERT_THROW(dateAdd("day", 1, 0), "day is not a valid TIME field");
+  VELOX_ASSERT_THROW(dateAdd("week", 1, 0), "week is not a valid TIME field");
+  VELOX_ASSERT_THROW(dateAdd("month", 1, 0), "month is not a valid TIME field");
+  VELOX_ASSERT_THROW(
+      dateAdd("quarter", 1, 0), "quarter is not a valid TIME field");
+  VELOX_ASSERT_THROW(dateAdd("year", 1, 0), "year is not a valid TIME field");
+  VELOX_ASSERT_THROW(
+      dateAdd("invalid", 1, 0), "invalid is not a valid TIME field");
+
+  // edge cases: multiple full day additions
+  EXPECT_EQ(
+      7200000,
+      dateAdd("hour", 50, 0)); // 00:00:00 + 50 hours = 02:00:00 (wraps twice)
+  EXPECT_EQ(
+      0,
+      dateAdd("hour", 72, 0)); // 00:00:00 + 72 hours = 00:00:00 (wraps 3 times)
+
+  // test midnight transitions
+  EXPECT_EQ(
+      1000, dateAdd("millisecond", 2000, 86399000)); // 23:59:59 + 2s wraps
+  EXPECT_EQ(
+      86399000, dateAdd("millisecond", -1000, 0)); // 00:00:00 - 1s = 23:59:59
+}
+
 TEST_F(DateTimeFunctionsTest, dateDiffDate) {
   const auto dateDiff = [&](const std::string& unit,
                             std::optional<int32_t> date1,
