@@ -75,7 +75,6 @@ function install_velox_deps_from_dnf {
     libsodium-devel zlib-devel gtest-devel gmock-devel xxhash-devel
 
   install_faiss_deps
-  install_curl
 }
 
 function install_conda {

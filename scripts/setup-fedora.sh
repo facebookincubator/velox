@@ -64,7 +64,6 @@ function install_velox_deps_from_dnf {
     re2-devel snappy-devel thrift-devel xxhash-devel zlib-devel grpc-devel grpc-plugins
 
   install_faiss_deps
-  install_curl
 }
 
 function install_velox_deps {
