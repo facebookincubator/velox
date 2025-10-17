@@ -622,6 +622,9 @@ Index Join
      - The distribution of index lookup result bytes in range of [0, 128MB] with
        128 buckets. It is configured to report the capacity at P50, P90, P99, and
        P100 percentiles.
+   * - index_lookup_error_result_count
+     - Count
+     - The number of results with error.
 
 Table Scan
 ----------

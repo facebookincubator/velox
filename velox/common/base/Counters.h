@@ -384,6 +384,9 @@ constexpr folly::StringPiece kMetricIndexLookupWaitTimeMs{
 constexpr folly::StringPiece kMetricIndexLookupBlockedWaitTimeMs{
     "velox.index_lookup_blocked_wait_time_ms"};
 
+constexpr folly::StringPiece kMetricIndexLookupErrorResultCount{
+    "velox.index_lookup_error_result_count"};
+
 constexpr folly::StringPiece kMetricTableScanBatchProcessTimeMs{
     "velox.table_scan_batch_process_time_ms"};
 

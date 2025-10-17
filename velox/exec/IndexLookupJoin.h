@@ -78,6 +78,9 @@ class IndexLookupJoin : public Operator {
   /// the raw data received from the remote storage lookup.
   static inline const std::string kClientLookupResultSize{
       "clientLookupResultSize"};
+  /// The number of lookup results received from remote storage with error.
+  static inline const std::string kClientNumErrorResults{
+      "clientNumErrorResults"};
 
  private:
   using LookupResultIter = connector::IndexSource::LookupResultIterator;
