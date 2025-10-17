@@ -109,7 +109,7 @@ class StatisticsBuilder : public virtual dwio::common::ColumnStatistics {
  public:
   /// Constructs with 'options'.
   explicit StatisticsBuilder(const StatisticsBuilderOptions& options)
-      : options_{options} {
+      : options_{options}, arena_(std::make_unique<google::protobuf::Arena>()) {
     init();
   }
 
@@ -177,7 +177,7 @@ class StatisticsBuilder : public virtual dwio::common::ColumnStatistics {
   /*
    * Write stats to proto
    */
-  virtual void toProto(proto::ColumnStatistics& stats) const;
+  virtual void toProto(ColumnStatisticsWriteWrapper& stats) const;
 
   std::unique_ptr<dwio::common::ColumnStatistics> build() const;
 
@@ -205,6 +205,7 @@ class StatisticsBuilder : public virtual dwio::common::ColumnStatistics {
  protected:
   StatisticsBuilderOptions options_;
   std::shared_ptr<common::hll::SparseHll<>> hll_;
+  std::unique_ptr<google::protobuf::Arena> arena_;
 };
 
 class BooleanStatisticsBuilder : public StatisticsBuilder,
@@ -233,7 +234,7 @@ class BooleanStatisticsBuilder : public StatisticsBuilder,
     init();
   }
 
-  void toProto(proto::ColumnStatistics& stats) const override;
+  void toProto(ColumnStatisticsWriteWrapper& stats) const override;
 
  private:
   void init() {
@@ -272,7 +273,7 @@ class IntegerStatisticsBuilder : public StatisticsBuilder,
     init();
   }
 
-  void toProto(proto::ColumnStatistics& stats) const override;
+  void toProto(ColumnStatisticsWriteWrapper& stats) const override;
 
  private:
   void init() {
@@ -332,7 +333,7 @@ class DoubleStatisticsBuilder : public StatisticsBuilder,
     init();
   }
 
-  void toProto(proto::ColumnStatistics& stats) const override;
+  void toProto(ColumnStatisticsWriteWrapper& stats) const override;
 
  private:
   void init() {
@@ -389,7 +390,7 @@ class StringStatisticsBuilder : public StatisticsBuilder,
     init();
   }
 
-  void toProto(proto::ColumnStatistics& stats) const override;
+  void toProto(ColumnStatisticsWriteWrapper& stats) const override;
 
  private:
   uint32_t lengthLimit_;
@@ -429,7 +430,7 @@ class BinaryStatisticsBuilder : public StatisticsBuilder,
     init();
   }
 
-  void toProto(proto::ColumnStatistics& stats) const override;
+  void toProto(ColumnStatisticsWriteWrapper& stats) const override;
 
  private:
   void init() {
@@ -477,7 +478,7 @@ class MapStatisticsBuilder : public StatisticsBuilder,
     init();
   }
 
-  void toProto(proto::ColumnStatistics& stats) const override;
+  void toProto(ColumnStatisticsWriteWrapper& stats) const override;
 
  private:
   void init() {
