@@ -1486,6 +1486,16 @@ void HashTable<ignoreNullKeys>::decideHashMode(
     // The option is already set and no new rows are added. Return.
     return;
   }
+
+  // Types with custom comparison functions must use HashMode::kHash to ensure
+  // their custom hash() and equals() methods are always invoked.
+  for (const auto& hasher : hashers_) {
+    if (hasher->type()->providesCustomComparison()) {
+      setHashMode(HashMode::kHash, numNew, spillInputStartPartitionBit);
+      return;
+    }
+  }
+
   disableRangeArrayHash_ |= disableRangeArrayHash;
   if (numDistinct_ && !isJoinBuild_) {
     if (!analyze()) {
