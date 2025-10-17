@@ -54,7 +54,7 @@ jobs:
         working-directory: velox
     steps:
 
-      - uses: actions/checkout@v5.0.0
+      - uses: actions/checkout@v5
         with:
           path: velox
           persist-credentials: false
@@ -95,7 +95,7 @@ jobs:
         working-directory: velox
     steps:
 
-      - uses: actions/checkout@v5.0.0
+      - uses: actions/checkout@v5
         with:
           path: velox
           persist-credentials: false
