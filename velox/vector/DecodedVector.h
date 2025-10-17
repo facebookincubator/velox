@@ -84,6 +84,7 @@ class DecodedVector {
 
   /// Allow std::move.
   DecodedVector(DecodedVector&& other) = default;
+  DecodedVector& operator=(DecodedVector&& other) = default;
 
   /// Decodes 'vector' for 'rows'.
   ///

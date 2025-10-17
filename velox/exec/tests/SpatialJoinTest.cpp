@@ -68,6 +68,7 @@ class SpatialJoinTest : public OperatorTestBase {
   void runTest(
       const std::vector<std::optional<std::string_view>>& probeWkts,
       const std::vector<std::optional<std::string_view>>& buildWkts,
+      const std::optional<const std::vector<std::optional<double>>>& radiiOpt,
       const std::string& predicate,
       core::JoinType joinType,
       const std::vector<std::optional<std::string_view>>& expectedLeftWkts,
@@ -78,6 +79,7 @@ class SpatialJoinTest : public OperatorTestBase {
           runTestWithConfig(
               probeWkts,
               buildWkts,
+              radiiOpt,
               predicate,
               joinType,
               expectedLeftWkts,
@@ -93,6 +95,7 @@ class SpatialJoinTest : public OperatorTestBase {
   void runTestWithConfig(
       const std::vector<std::optional<std::string_view>>& probeWkts,
       const std::vector<std::optional<std::string_view>>& buildWkts,
+      const std::optional<const std::vector<std::optional<double>>>& radiiOpt,
       const std::string& predicate,
       core::JoinType joinType,
       const std::vector<std::optional<std::string_view>>& expectedLeftWkts,
@@ -108,6 +111,13 @@ class SpatialJoinTest : public OperatorTestBase {
         expectedLeftWkts.begin(), expectedLeftWkts.end());
     std::vector<std::optional<std::string>> expectedRightWktsStr(
         expectedRightWkts.begin(), expectedRightWkts.end());
+    auto radii = radiiOpt.value_or(
+        std::vector<std::optional<double>>(buildWkts.size(), std::nullopt));
+    VELOX_CHECK_EQ(radii.size(), buildWkts.size());
+    std::optional<std::string> radiusVariable = std::nullopt;
+    if (radiiOpt.has_value()) {
+      radiusVariable = "radius";
+    }
 
     std::vector<RowVectorPtr> probeBatches;
     std::vector<RowVectorPtr> buildBatches;
@@ -116,15 +126,20 @@ class SpatialJoinTest : public OperatorTestBase {
         probeBatches.push_back(makeRowVector(
             {"left_g"}, {makeNullableFlatVector<std::string>({wkt})}));
       }
-      for (const auto& wkt : buildWktsStr) {
+      for (size_t idx = 0; idx < buildWktsStr.size(); ++idx) {
+        auto& wkt = buildWktsStr[idx];
         buildBatches.push_back(makeRowVector(
-            {"right_g"}, {makeNullableFlatVector<std::string>({wkt})}));
+            {"right_g", "radius"},
+            {makeNullableFlatVector<std::string>({wkt}),
+             makeNullableFlatVector<double>({radii[idx]})}));
       }
     } else {
       probeBatches.push_back(makeRowVector(
           {"left_g"}, {makeNullableFlatVector<std::string>(probeWktsStr)}));
       buildBatches.push_back(makeRowVector(
-          {"right_g"}, {makeNullableFlatVector<std::string>(buildWktsStr)}));
+          {"right_g", "radius"},
+          {makeNullableFlatVector<std::string>(buildWktsStr),
+           makeNullableFlatVector<double>(radii)}));
     }
     auto expectedRows = makeRowVector(
         {"left_g", "right_g"},
@@ -140,13 +155,14 @@ class SpatialJoinTest : public OperatorTestBase {
             .spatialJoin(
                 PlanBuilder(planNodeIdGenerator)
                     .values(buildBatches)
-                    .project({"ST_GeometryFromText(right_g) AS right_g"})
+                    .project(
+                        {"ST_GeometryFromText(right_g) AS right_g", "radius"})
                     .localPartition({})
                     .planNode(),
                 predicate,
                 "left_g",
                 "right_g",
-                std::nullopt,
+                radiusVariable,
                 {"left_g", "right_g"},
                 joinType)
             .project(
@@ -165,6 +181,7 @@ TEST_F(SpatialJoinTest, testTrivialSpatialJoin) {
   runTest(
       {"POINT (1 1)"},
       {"POINT (1 1)"},
+      std::nullopt,
       "ST_Intersects(left_g, right_g)",
       core::JoinType::kInner,
       {"POINT (1 1)"},
@@ -175,6 +192,7 @@ TEST_F(SpatialJoinTest, testSimpleSpatialInnerJoin) {
   runTest(
       {"POINT (1 1)", "POINT (1 2)"},
       {"POINT (1 1)", "POINT (2 1)"},
+      std::nullopt,
       "ST_Intersects(left_g, right_g)",
       core::JoinType::kInner,
       {"POINT (1 1)"},
@@ -185,6 +203,7 @@ TEST_F(SpatialJoinTest, testSimpleSpatialLeftJoin) {
   runTest(
       {"POINT (1 1)", "POINT (1 2)"},
       {"POINT (1 1)", "POINT (2 1)"},
+      std::nullopt,
       "ST_Intersects(left_g, right_g)",
       core::JoinType::kLeft,
       {"POINT (1 1)", "POINT (1 2)"},
@@ -195,6 +214,7 @@ TEST_F(SpatialJoinTest, testSpatialJoinNullRows) {
   runTest(
       {"POINT (0 0)", std::nullopt, "POINT (1 1)", std::nullopt},
       {"POINT (0 0)", "POINT (1 1)", std::nullopt, std::nullopt},
+      std::nullopt,
       "ST_Intersects(left_g, right_g)",
       core::JoinType::kInner,
       {"POINT (0 0)", "POINT (1 1)"},
@@ -202,6 +222,7 @@ TEST_F(SpatialJoinTest, testSpatialJoinNullRows) {
   runTest(
       {"POINT (0 0)", std::nullopt, "POINT (2 2)", std::nullopt},
       {"POINT (0 0)", "POINT (1 1)", std::nullopt, std::nullopt},
+      std::nullopt,
       "ST_Intersects(left_g, right_g)",
       core::JoinType::kLeft,
       {"POINT (0 0)", "POINT (2 2)", std::nullopt, std::nullopt},
@@ -214,6 +235,7 @@ TEST_F(SpatialJoinTest, simpleSpatialJoinEnvelopes) {
   runTest(
       {"POINT (0.5 0.6)", "POINT (0.5 0.5)", "LINESTRING (0 0.1, 0.9 1)"},
       {"POLYGON ((0 0, 1 1, 1 0, 0 0))"},
+      std::nullopt,
       "ST_Intersects(left_g, right_g)",
       core::JoinType::kInner,
       {"POINT (0.5 0.5)"},
@@ -231,6 +253,7 @@ TEST_F(SpatialJoinTest, testSelfSpatialJoin) {
   runTest(
       inputWkts,
       inputWkts,
+      std::nullopt,
       "ST_Intersects(left_g, right_g)",
       core::JoinType::kInner,
       leftOutputWkts,
@@ -239,6 +262,7 @@ TEST_F(SpatialJoinTest, testSelfSpatialJoin) {
   runTest(
       inputWkts,
       inputWkts,
+      std::nullopt,
       "ST_Intersects(left_g, right_g)",
       core::JoinType::kLeft,
       leftOutputWkts,
@@ -247,6 +271,7 @@ TEST_F(SpatialJoinTest, testSelfSpatialJoin) {
   runTest(
       inputWkts,
       inputWkts,
+      std::nullopt,
       "ST_Overlaps(left_g, right_g)",
       core::JoinType::kInner,
       {kPolygonA, kPolygonB},
@@ -255,6 +280,7 @@ TEST_F(SpatialJoinTest, testSelfSpatialJoin) {
   runTest(
       inputWkts,
       inputWkts,
+      std::nullopt,
       "ST_Intersects(left_g, right_g) AND ST_Overlaps(left_g, right_g)",
       core::JoinType::kInner,
       {kPolygonA, kPolygonB},
@@ -263,6 +289,7 @@ TEST_F(SpatialJoinTest, testSelfSpatialJoin) {
   runTest(
       inputWkts,
       inputWkts,
+      std::nullopt,
       "ST_Overlaps(left_g, right_g)",
       core::JoinType::kLeft,
       {kPolygonA, kPolygonB, kPolygonC, kPolygonD},
@@ -271,6 +298,7 @@ TEST_F(SpatialJoinTest, testSelfSpatialJoin) {
   runTest(
       inputWkts,
       inputWkts,
+      std::nullopt,
       "ST_Equals(left_g, right_g)",
       core::JoinType::kInner,
       inputWkts,
@@ -279,6 +307,7 @@ TEST_F(SpatialJoinTest, testSelfSpatialJoin) {
   runTest(
       inputWkts,
       inputWkts,
+      std::nullopt,
       "ST_Equals(left_g, right_g)",
       core::JoinType::kLeft,
       inputWkts,
@@ -325,20 +354,47 @@ TEST_F(SpatialJoinTest, pointPolygonSpatialJoin) {
   runTest(
       pointWkts,
       polygonWkts,
+      std::nullopt,
       "ST_Intersects(left_g, right_g)",
       core::JoinType::kInner,
       pointOutputWkts,
       polygonOutputWkts);
 }
 
-TEST_F(SpatialJoinTest, simpleNullRowsJoin) {
+TEST_F(SpatialJoinTest, testSimpleNullRowsJoin) {
   runTest(
       {"POINT (1 1)", std::nullopt, "POINT (1 2)"},
       {"POINT (1 1)", "POINT (2 1)", std::nullopt},
+      std::nullopt,
       "ST_Intersects(left_g, right_g)",
       core::JoinType::kInner,
       {"POINT (1 1)"},
       {"POINT (1 1)"});
+}
+
+TEST_F(SpatialJoinTest, testDistanceJoin) {
+  runTest(
+      {"POINT (1 2)", "POLYGON ((1 2, 2 2, 2 3, 1 3, 1 2))", std::nullopt},
+      {"POINT (2 2)",
+       "POINT (1 1)",
+       std::nullopt,
+       "POINT (1 2)",
+       "POLYGON ((1 1, 1 0, 0 0, 0 1, 1 1))"},
+      std::vector<std::optional<double>>{std::nullopt, 1.0, 0.0, 0.0, 1.0},
+      "ST_Distance(left_g, right_g) <= radius",
+      core::JoinType::kInner,
+      {"POINT (1 2)",
+       "POLYGON ((1 2, 1 3, 2 3, 2 2, 1 2))",
+       "POINT (1 2)",
+       "POLYGON ((1 2, 1 3, 2 3, 2 2, 1 2))",
+       "POINT (1 2)",
+       "POLYGON ((1 2, 1 3, 2 3, 2 2, 1 2))"},
+      {"POINT (1 1)",
+       "POINT (1 1)",
+       "POINT (1 2)",
+       "POINT (1 2)",
+       "POLYGON ((1 1, 1 0, 0 0, 0 1, 1 1))",
+       "POLYGON ((1 1, 1 0, 0 0, 0 1, 1 1))"});
 }
 
 TEST_F(SpatialJoinTest, failOnGroupedExecution) {
