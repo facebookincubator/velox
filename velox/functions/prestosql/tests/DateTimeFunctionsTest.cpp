@@ -5623,6 +5623,81 @@ TEST_F(DateTimeFunctionsTest, timestampWithTimezoneComparisons) {
   runAndCompare("c0 between c0 and c1", inputs, expectedBetween);
 }
 
+TEST_F(DateTimeFunctionsTest, timeComparisons) {
+  const auto eq = [&](std::optional<int64_t> a, std::optional<int64_t> b) {
+    return evaluateOnce<bool>("c0 = c1", {TIME(), TIME()}, a, b);
+  };
+  const auto neq = [&](std::optional<int64_t> a, std::optional<int64_t> b) {
+    return evaluateOnce<bool>("c0 != c1", {TIME(), TIME()}, a, b);
+  };
+  const auto lt = [&](std::optional<int64_t> a, std::optional<int64_t> b) {
+    return evaluateOnce<bool>("c0 < c1", {TIME(), TIME()}, a, b);
+  };
+  const auto lte = [&](std::optional<int64_t> a, std::optional<int64_t> b) {
+    return evaluateOnce<bool>("c0 <= c1", {TIME(), TIME()}, a, b);
+  };
+  const auto gt = [&](std::optional<int64_t> a, std::optional<int64_t> b) {
+    return evaluateOnce<bool>("c0 > c1", {TIME(), TIME()}, a, b);
+  };
+  const auto gte = [&](std::optional<int64_t> a, std::optional<int64_t> b) {
+    return evaluateOnce<bool>("c0 >= c1", {TIME(), TIME()}, a, b);
+  };
+  const auto between = [&](std::optional<int64_t> value,
+                           std::optional<int64_t> lower,
+                           std::optional<int64_t> upper) {
+    return evaluateOnce<bool>(
+        "c0 between c1 and c2", {TIME(), TIME(), TIME()}, value, lower, upper);
+  };
+
+  // test equality
+  EXPECT_EQ(true, eq(0, 0));
+  EXPECT_EQ(false, eq(0, 1000));
+  EXPECT_EQ(true, eq(3600000, 3600000)); // 01:00:00
+  EXPECT_EQ(std::nullopt, eq(std::nullopt, 0));
+  EXPECT_EQ(std::nullopt, eq(0, std::nullopt));
+
+  // test inequality
+  EXPECT_EQ(false, neq(0, 0));
+  EXPECT_EQ(true, neq(0, 1000));
+  EXPECT_EQ(false, neq(3600000, 3600000));
+
+  // test less than
+  EXPECT_EQ(false, lt(0, 0));
+  EXPECT_EQ(true, lt(0, 1000));
+  EXPECT_EQ(false, lt(1000, 0));
+  EXPECT_EQ(true, lt(3600000, 7200000)); // 01:00:00 < 02:00:00
+
+  // test less than or equal
+  EXPECT_EQ(true, lte(0, 0));
+  EXPECT_EQ(true, lte(0, 1000));
+  EXPECT_EQ(false, lte(1000, 0));
+
+  // test greater than
+  EXPECT_EQ(false, gt(0, 0));
+  EXPECT_EQ(false, gt(0, 1000));
+  EXPECT_EQ(true, gt(1000, 0));
+  EXPECT_EQ(true, gt(7200000, 3600000)); // 02:00:00 > 01:00:00
+
+  // test greater than or equal
+  EXPECT_EQ(true, gte(0, 0));
+  EXPECT_EQ(false, gte(0, 1000));
+  EXPECT_EQ(true, gte(1000, 0));
+
+  // test between
+  EXPECT_EQ(true, between(1000, 0, 2000));
+  EXPECT_EQ(true, between(0, 0, 2000)); // inclusive lower
+  EXPECT_EQ(true, between(2000, 0, 2000)); // inclusive upper
+  EXPECT_EQ(false, between(3000, 0, 2000));
+  EXPECT_EQ(false, between(0, 1000, 2000));
+  EXPECT_EQ(
+      true,
+      between(
+          3600000, 3600000, 7200000)); // 01:00:00 between 01:00:00 and 02:00:00
+  EXPECT_EQ(std::nullopt, between(std::nullopt, 0, 1000));
+  EXPECT_EQ(std::nullopt, between(500, std::nullopt, 1000));
+  EXPECT_EQ(std::nullopt, between(500, 0, std::nullopt));
+}
+
 TEST_F(DateTimeFunctionsTest, castDateToTimestamp) {
   const int64_t kSecondsInDay = kMillisInDay / 1'000;
   const auto castDateToTimestamp = [&](const std::optional<int32_t> date) {
