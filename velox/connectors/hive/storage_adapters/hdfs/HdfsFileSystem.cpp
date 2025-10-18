@@ -24,6 +24,8 @@ std::string_view HdfsFileSystem::kScheme("hdfs://");
 
 std::string_view HdfsFileSystem::kViewfsScheme("viewfs://");
 
+std::set<std::string_view> HdfsFileSystem::extraSupportedSchemes = {};
+
 class HdfsFileSystem::Impl {
  public:
   // Keep config here for possible use in the future.
@@ -133,7 +135,19 @@ void HdfsFileSystem::close() {
 }
 
 bool HdfsFileSystem::isHdfsFile(const std::string_view filePath) {
-  return (filePath.find(kScheme) == 0) || (filePath.find(kViewfsScheme) == 0);
+  return (filePath.find(kScheme) == 0) || (filePath.find(kViewfsScheme) == 0)
+      || isExtraSupportedFile(filePath);
+}
+
+bool HdfsFileSystem::isExtraSupportedFile(const std::string_view path) {
+  auto pos = path.find("://");
+  std::string_view scheme;
+  if (pos == std::string_view::npos) {
+    scheme = path;
+  } else {
+    scheme = path.substr(0, pos);
+  }
+  return extraSupportedSchemes.contains(scheme);
 }
 
 /// Gets hdfs endpoint from a given file path. If not found, fall back to get a
@@ -141,37 +155,53 @@ bool HdfsFileSystem::isHdfsFile(const std::string_view filePath) {
 HdfsServiceEndpoint HdfsFileSystem::getServiceEndpoint(
     const std::string_view filePath,
     const config::ConfigBase* config) {
+  // For viewfs scheme
   if (filePath.find(kViewfsScheme) == 0) {
     return HdfsServiceEndpoint{"viewfs", "", true};
   }
 
-  auto endOfIdentityInfo = filePath.find('/', kScheme.size());
-  std::string hdfsIdentity{
-      filePath.data(), kScheme.size(), endOfIdentityInfo - kScheme.size()};
-  if (hdfsIdentity.empty()) {
-    // Fall back to get a fixed endpoint from config.
-    auto hdfsHost = config->get<std::string>("hive.hdfs.host");
-    VELOX_CHECK(
-        hdfsHost.has_value(),
-        "hdfsHost is empty, configuration missing for hdfs host");
-    auto hdfsPort = config->get<std::string>("hive.hdfs.port");
-    VELOX_CHECK(
-        hdfsPort.has_value(),
-        "hdfsPort is empty, configuration missing for hdfs port");
-    return HdfsServiceEndpoint{*hdfsHost, *hdfsPort};
+
+  if (filePath.find(kScheme) == 0) {
+    // For hdfs scheme
+    auto endOfIdentityInfo = filePath.find('/', kScheme.size());
+    std::string hdfsIdentity{
+        filePath.data(), kScheme.size(), endOfIdentityInfo - kScheme.size()};
+    if (!hdfsIdentity.empty()) {
+      auto hostAndPortSeparator = hdfsIdentity.find(':', 0);
+      // In HDFS HA mode, the hdfsIdentity is a nameservice ID with no port.
+      if (hostAndPortSeparator == std::string::npos) {
+        return HdfsServiceEndpoint{hdfsIdentity, ""};
+      }
+      std::string host{hdfsIdentity.data(), 0, hostAndPortSeparator};
+      std::string port{
+          hdfsIdentity.data(),
+          hostAndPortSeparator + 1,
+          hdfsIdentity.size() - hostAndPortSeparator - 1};
+      return HdfsServiceEndpoint{host, port};
+    }
+  } else if (isExtraSupportedFile(filePath)) {
+    // For extra supported scheme, we set 'scheme://authority' to nn.
+    // See: https://github.com/facebookincubator/velox/blob/main/velox/external/hdfs/hdfs.h#L298
+    auto endOfScheme = filePath.find("://");
+    if (endOfScheme ==  std::string::npos) {
+      return HdfsServiceEndpoint{filePath.data(), ""};
+    } else {
+      auto endOfIdentityInfo = filePath.find('/', endOfScheme + 3);
+      std::string hdfsIdentity{filePath.data(), 0, endOfIdentityInfo};
+      return HdfsServiceEndpoint{hdfsIdentity, ""};
+    }
   }
 
-  auto hostAndPortSeparator = hdfsIdentity.find(':', 0);
-  // In HDFS HA mode, the hdfsIdentity is a nameservice ID with no port.
-  if (hostAndPortSeparator == std::string::npos) {
-    return HdfsServiceEndpoint{hdfsIdentity, ""};
-  }
-  std::string host{hdfsIdentity.data(), 0, hostAndPortSeparator};
-  std::string port{
-      hdfsIdentity.data(),
-      hostAndPortSeparator + 1,
-      hdfsIdentity.size() - hostAndPortSeparator - 1};
-  return HdfsServiceEndpoint{host, port};
+  // For others, fall back to get a fixed endpoint from config.
+  auto hdfsHost = config->get<std::string>("hive.hdfs.host");
+  VELOX_CHECK(
+      hdfsHost.has_value(),
+      "hdfsHost is empty, configuration missing for hdfs host");
+  auto hdfsPort = config->get<std::string>("hive.hdfs.port");
+  VELOX_CHECK(
+      hdfsPort.has_value(),
+      "hdfsPort is empty, configuration missing for hdfs port");
+  return HdfsServiceEndpoint{*hdfsHost, *hdfsPort};
 }
 
 void HdfsFileSystem::remove(std::string_view path) {
@@ -300,6 +330,23 @@ void HdfsFileSystem::rmdir(std::string_view path) {
       "Cannot remove directory {} recursively in HDFS, error is : {}",
       path,
       impl_->hdfsShim()->GetLastExceptionRootCause());
+}
+
+void HdfsFileSystem::setExtraSupportedSchemes(std::string_view schemesStr) {
+  extraSupportedSchemes.clear();
+  size_t start = 0;
+  while (schemesStr.size() > start) {
+    size_t end = schemesStr.find(',', start);
+    if (end == std::string_view::npos) {
+      end = schemesStr.size();
+    }
+
+    auto token = schemesStr.substr(start, end - start);
+    if (!token.empty()) {
+      extraSupportedSchemes.insert(token);
+    }
+    start = end + 1;
+  }
 }
 
 } // namespace facebook::velox::filesystems

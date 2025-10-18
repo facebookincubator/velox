@@ -106,4 +106,10 @@ void registerHdfsFileSystem() {
 #endif
 }
 
+void setHdfsExtraSupportedSchemes(std::string_view schemesStr) {
+#ifdef VELOX_ENABLE_HDFS
+  HdfsFileSystem::setExtraSupportedSchemes(schemesStr);
+#endif
+}
+
 } // namespace facebook::velox::filesystems
