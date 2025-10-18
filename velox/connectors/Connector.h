@@ -267,12 +267,6 @@ class DataSource {
   /// Returns the number of input rows processed so far.
   virtual uint64_t getCompletedRows() = 0;
 
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  virtual std::unordered_map<std::string, RuntimeCounter> runtimeStats() {
-    return {};
-  }
-#endif
-
   virtual std::unordered_map<std::string, RuntimeMetric> getRuntimeStats() {
     return {};
   }
@@ -573,59 +567,6 @@ class ConnectorFactory {
  private:
   const std::string name_;
 };
-
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-namespace detail {
-inline std::unordered_map<std::string, std::shared_ptr<ConnectorFactory>>&
-connectorFactories() {
-  static std::unordered_map<std::string, std::shared_ptr<ConnectorFactory>>
-      factories;
-  return factories;
-}
-} // namespace detail
-
-/// Adds a factory for creating connectors to the registry using connector
-/// name as the key. Throws if factor with the same name is already present.
-/// Always returns true. The return value makes it easy to use with
-/// FB_ANONYMOUS_VARIABLE.
-inline bool registerConnectorFactory(
-    std::shared_ptr<ConnectorFactory> factory) {
-  bool ok = detail::connectorFactories()
-                .insert({factory->connectorName(), factory})
-                .second;
-  VELOX_CHECK(
-      ok,
-      "ConnectorFactory with name '{}' is already registered",
-      factory->connectorName());
-  return true;
-}
-
-/// Returns true if a connector with the specified name has been registered,
-/// false otherwise.
-inline bool hasConnectorFactory(const std::string& connectorName) {
-  return detail::connectorFactories().count(connectorName) == 1;
-}
-
-/// Unregister a connector factory by name.
-/// Returns true if a connector with the specified name has been
-/// unregistered, false otherwise.
-inline bool unregisterConnectorFactory(const std::string& connectorName) {
-  auto count = detail::connectorFactories().erase(connectorName);
-  return count == 1;
-}
-
-/// Returns a factory for creating connectors with the specified name.
-/// Throws if factory doesn't exist.
-inline std::shared_ptr<ConnectorFactory> getConnectorFactory(
-    const std::string& connectorName) {
-  auto it = detail::connectorFactories().find(connectorName);
-  VELOX_CHECK(
-      it != detail::connectorFactories().end(),
-      "ConnectorFactory with name '{}' not registered",
-      connectorName);
-  return it->second;
-}
-#endif
 
 class Connector {
  public:
