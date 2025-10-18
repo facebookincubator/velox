@@ -233,9 +233,9 @@ class TableWriter : public Operator {
   const connector::ConnectorInsertTableHandlePtr insertTableHandle_;
   const connector::CommitStrategy commitStrategy_;
   // Records the writer operator creation time in ns. This is used to record
-  // the running wall time of a writer operator. This can helps to detect the
+  // the running wall time of a writer operator. This can help to detect the
   // slow scaled writer scheduling in Prestissimo.
-  const uint64_t createTimeUs_{0};
+  const uint64_t createTimeNs_{0};
 
   std::unique_ptr<ColumnStatsCollector> statsCollector_;
   std::shared_ptr<connector::Connector> connector_;
