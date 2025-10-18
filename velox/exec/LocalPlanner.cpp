@@ -20,6 +20,7 @@
 #include "velox/exec/CallbackSink.h"
 #include "velox/exec/EnforceSingleRow.h"
 #include "velox/exec/Exchange.h"
+#include "velox/exec/ExchangeAggregation.h"
 #include "velox/exec/Expand.h"
 #include "velox/exec/FilterProject.h"
 #include "velox/exec/GroupId.h"
@@ -73,6 +74,31 @@ bool eagerFlush(const core::PlanNode& node) {
 } // namespace
 
 namespace detail {
+
+bool isFinalAggregationFollowLocalExchange(
+    const core::PlanNodePtr& child,
+    const core::PlanNodePtr& parent) {
+  const auto& aggregation =
+      std::dynamic_pointer_cast<const core::AggregationNode>(parent);
+  if (!aggregation ||
+      aggregation->step() != core::AggregationNode::Step::kFinal) {
+    return false;
+  }
+  // TODO: support distinct aggregation.
+  if (aggregation->aggregates().empty()) {
+    return false;
+  }
+  const auto& localExchange =
+      std::dynamic_pointer_cast<const core::LocalPartitionNode>(child);
+  if (!localExchange) {
+    return false;
+  }
+  // Don't use ExchangeAggregation for global aggregation.
+  if (localExchange->type() == core::LocalPartitionNode::Type::kGather) {
+    return false;
+  }
+  return true;
+}
 
 /// Returns true if source nodes must run in a separate pipeline.
 bool mustStartNewPipeline(
@@ -215,7 +241,8 @@ void plan(
     std::vector<std::shared_ptr<const core::PlanNode>>* currentPlanNodes,
     const std::shared_ptr<const core::PlanNode>& consumerNode,
     OperatorSupplier operatorSupplier,
-    std::vector<std::unique_ptr<DriverFactory>>* driverFactories) {
+    std::vector<std::unique_ptr<DriverFactory>>* driverFactories,
+    const core::QueryConfig& queryConfig) {
   if (!currentPlanNodes) {
     auto driverFactory = std::make_unique<DriverFactory>();
     currentPlanNodes = &driverFactory->planNodes;
@@ -227,6 +254,20 @@ void plan(
   const auto& sources = planNode->sources();
   if (sources.empty()) {
     driverFactories->back()->inputDriver = true;
+  } else if (
+      queryConfig.useExchangeAggregation() &&
+      isFinalAggregationFollowLocalExchange(planNode)) {
+    // Do not create a new pipeline at local exchange if use exchange
+    // aggregation.
+    const auto& nextSources = sources[0]->sources();
+    plan(
+        nextSources[0],
+        currentPlanNodes,
+        planNode,
+        nullptr,
+        driverFactories,
+        queryConfig);
+    currentPlanNodes->push_back(sources[0]);
   } else {
     const auto numSourcesToPlan =
         isIndexLookupJoin(planNode.get()) ? 1 : sources.size();
@@ -236,7 +277,8 @@ void plan(
           mustStartNewPipeline(planNode, i) ? nullptr : currentPlanNodes,
           planNode,
           makeOperatorSupplier(planNode),
-          driverFactories);
+          driverFactories,
+          queryConfig);
     }
   }
 
@@ -260,7 +302,8 @@ uint32_t maxDrivers(
   if (count == 1) {
     return count;
   }
-  for (auto& node : driverFactory.planNodes) {
+  for (auto i = 0; i < driverFactory.planNodes.size(); ++i) {
+    const auto& node = driverFactory.planNodes[i];
     if (auto topN = std::dynamic_pointer_cast<const core::TopNNode>(node)) {
       if (!topN->isPartial()) {
         // final topN must run single-threaded
@@ -291,6 +334,14 @@ uint32_t maxDrivers(
     } else if (
         auto localExchange =
             std::dynamic_pointer_cast<const core::LocalPartitionNode>(node)) {
+      if (queryConfig.useExchangeAggregation() &&
+          i + 1 < driverFactory.planNodes.size() &&
+          isFinalAggregationFollowLocalExchange(
+              localExchange, driverFactory.planNodes[i + 1])) {
+        // If use exchange aggregation, always use the max number of drivers,
+        // even for global aggregation.
+        return count;
+      }
       // Local gather must run single-threaded.
       switch (localExchange->type()) {
         case core::LocalPartitionNode::Type::kGather:
@@ -366,7 +417,8 @@ void LocalPlanner::plan(
       nullptr,
       nullptr,
       detail::makeOperatorSupplier(std::move(consumerSupplier)),
-      driverFactories);
+      driverFactories,
+      queryConfig);
 
   (*driverFactories)[0]->outputDriver = true;
 
@@ -653,6 +705,25 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
         auto localPartitionNode =
             std::dynamic_pointer_cast<const core::LocalPartitionNode>(
                 planNode)) {
+      auto useExchangeAggregation = ctx->queryConfig().useExchangeAggregation();
+      if (useExchangeAggregation && i + 1 < planNodes.size() &&
+          detail::isFinalAggregationFollowLocalExchange(
+              planNode, planNodes[i + 1])) {
+        const auto& finalAggregation =
+            std::dynamic_pointer_cast<const core::AggregationNode>(
+                planNodes[i + 1]);
+        VELOX_CHECK_NOT_NULL(finalAggregation);
+        auto localExchange = const_pointer_cast<core::LocalPartitionNode>(
+            std::dynamic_pointer_cast<const core::LocalPartitionNode>(
+                planNode));
+        operators.push_back(std::make_unique<ExchangeAggregation>(
+            id,
+            ctx.get(),
+            localExchange->partitionFunctionSpecPtr(),
+            finalAggregation));
+        i++;
+        continue;
+      }
       operators.push_back(std::make_unique<LocalExchange>(
           id,
           ctx.get(),
