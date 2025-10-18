@@ -42,7 +42,7 @@ TableWriter::TableWriter(
       insertTableHandle_(
           tableWriteNode->insertTableHandle()->connectorInsertTableHandle()),
       commitStrategy_(tableWriteNode->commitStrategy()),
-      createTimeUs_(getCurrentTimeNano()) {
+      createTimeNs_(getCurrentTimeNano()) {
   setConnectorMemoryReclaimer();
   if (tableWriteNode->outputType()->size() == 1) {
     VELOX_USER_CHECK(!tableWriteNode->columnStatsSpec().has_value());
@@ -280,7 +280,7 @@ std::string TableWriter::createTableCommitContext(bool lastOutput) {
 
 void TableWriter::updateStats(const connector::DataSink::Stats& stats) {
   const auto currentTimeNs = getCurrentTimeNano();
-  VELOX_CHECK_GE(currentTimeNs, createTimeUs_);
+  VELOX_CHECK_GE(currentTimeNs, createTimeNs_);
   {
     auto lockedStats = stats_.wlock();
     lockedStats->physicalWrittenBytes = stats.numWrittenBytes;
@@ -314,7 +314,7 @@ void TableWriter::updateStats(const connector::DataSink::Stats& stats) {
     lockedStats->addRuntimeStat(
         kRunningWallNanos,
         RuntimeCounter(
-            currentTimeNs - createTimeUs_, RuntimeCounter::Unit::kNanos));
+            currentTimeNs - createTimeNs_, RuntimeCounter::Unit::kNanos));
   }
   if (!stats.spillStats.empty()) {
     *spillStats_->wlock() += stats.spillStats;
