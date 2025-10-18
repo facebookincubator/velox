@@ -437,7 +437,7 @@ void* MmapAllocator::allocateBytesWithoutRetry(
   if (useMalloc(bytes)) {
     auto* result = alignment > kMinAlignment ? ::aligned_alloc(alignment, bytes)
                                              : ::malloc(bytes);
-    if (FOLLY_UNLIKELY(result == nullptr)) {
+    if (result == nullptr) [[unlikely]] {
       VELOX_MEM_LOG(ERROR) << "Failed to allocateBytes " << bytes
                            << " bytes with " << alignment << " alignment";
     } else {
@@ -883,7 +883,7 @@ MachinePageCount MmapAllocator::SizeClass::free(Allocation& allocation) {
     const int firstBit =
         (runAddress - address_) / (AllocationTraits::kPageSize * unitSize_);
     for (auto page = firstBit; page < firstBit + numPages; ++page) {
-      if (FOLLY_UNLIKELY(!bits::isBitSet(pageAllocated_.data(), page))) {
+      if (!bits::isBitSet(pageAllocated_.data(), page)) [[unlikely]] {
         VELOX_MEM_LOG(ERROR)
             << "Double free: page = " << page << " sizeclass = " << unitSize_;
         RECORD_METRIC_VALUE(kMetricMemoryAllocatorDoubleFreeCount);
