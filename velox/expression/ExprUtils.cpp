@@ -15,7 +15,8 @@
  */
 
 #include "velox/expression/ExprUtils.h"
-#include "velox/core/Expressions.h"
+#include "velox/expression/ExprConstants.h"
+#include "velox/expression/FunctionSignature.h"
 
 namespace facebook::velox::expression::utils {
 
@@ -24,6 +25,24 @@ bool isCall(const core::TypedExprPtr& expr, const std::string& name) {
     return expr->asUnchecked<core::CallTypedExpr>()->name() == name;
   }
   return false;
+}
+
+ExprInputsKind getExprInputsKind(const core::TypedExprPtr& expr) {
+  bool allConst = true;
+  bool allField = true;
+  for (const auto& input : expr->inputs()) {
+    if (!input->isConstantKind() && !input->isFieldAccessKind()) {
+      return ExprInputsKind::kAny;
+    }
+    allConst = allConst && input->isConstantKind();
+    allField = allField && input->isFieldAccessKind();
+  }
+
+  if (allConst) {
+    return ExprInputsKind::kAllConstant;
+  }
+  return allField ? ExprInputsKind::kAllField
+                  : ExprInputsKind::kConstantOrField;
 }
 
 void flattenInput(
