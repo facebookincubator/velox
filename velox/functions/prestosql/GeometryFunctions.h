@@ -1161,12 +1161,12 @@ class StCoordDimFunction : public facebook::velox::exec::VectorFunction {
     // Create a constant vector of value 2, with size equal to the number of
     // rows
     result = facebook::velox::BaseVector::createConstant(
-        outputType, 2, rows.size(), context.pool());
+        outputType, static_cast<int8_t>(2), rows.size(), context.pool());
   }
   static std::vector<std::shared_ptr<facebook::velox::exec::FunctionSignature>>
   signatures() {
     return {facebook::velox::exec::FunctionSignatureBuilder()
-                .returnType("integer")
+                .returnType("tinyint")
                 .argumentType("geometry")
                 .build()};
   }
