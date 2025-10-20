@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/exec/LocalPlanner.h"
+
 #include "velox/core/PlanFragment.h"
 #include "velox/exec/ArrowStream.h"
 #include "velox/exec/AssignUniqueId.h"
@@ -29,6 +30,7 @@
 #include "velox/exec/IndexLookupJoin.h"
 #include "velox/exec/Limit.h"
 #include "velox/exec/MarkDistinct.h"
+#include "velox/exec/MemorySource.h"
 #include "velox/exec/Merge.h"
 #include "velox/exec/MergeJoin.h"
 #include "velox/exec/NestedLoopJoinBuild.h"
@@ -684,6 +686,11 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
             std::dynamic_pointer_cast<const core::TraceScanNode>(planNode)) {
       operators.push_back(std::make_unique<trace::OperatorTraceScan>(
           id, ctx.get(), traceScanNode));
+    } else if (
+        const auto memorySourceNode =
+            std::dynamic_pointer_cast<const core::MemorySourceNode>(planNode)) {
+      operators.push_back(
+          std::make_unique<MemorySource>(id, ctx.get(), memorySourceNode));
     } else {
       std::unique_ptr<Operator> extended;
       if (planNode->requiresExchangeClient()) {
