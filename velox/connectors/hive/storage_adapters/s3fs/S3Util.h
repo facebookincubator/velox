@@ -237,7 +237,7 @@ class StringViewStream : Aws::Utils::Stream::PreallocatedStreamBuf,
 
 template <>
 struct fmt::formatter<Aws::Http::HttpResponseCode> : formatter<int> {
-  auto format(Aws::Http::HttpResponseCode s, format_context& ctx) {
+  auto format(Aws::Http::HttpResponseCode s, format_context& ctx) const {
     return formatter<int>::format(static_cast<int>(s), ctx);
   }
 };
