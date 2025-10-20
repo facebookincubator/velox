@@ -1230,10 +1230,12 @@ uint64_t StringColumnWriter::writeDict(
   size_t strideIndex = strideOffsets_.size() - 1;
   uint64_t rawSize = 0;
   auto processRow = [&](size_t pos) {
-    auto sp = decodedVector.valueAt<StringView>(pos);
-    rows_.unsafeAppend(dictEncoder_.addKey(sp, strideIndex));
-    statsBuilder.addValues(sp);
-    rawSize += sp.size();
+    auto sv = decodedVector.valueAt<StringView>(pos);
+    // TODO: Remove explicit std::string_view cast.
+    rows_.unsafeAppend(dictEncoder_.addKey(std::string_view(sv), strideIndex));
+    // TODO: Remove explicit std::string_view cast.
+    statsBuilder.addValues(std::string_view(sv));
+    rawSize += sv.size();
   };
 
   uint64_t nullCount = 0;
@@ -1274,10 +1276,11 @@ uint64_t StringColumnWriter::writeDirect(
 
   uint64_t rawSize = 0;
   auto processRow = [&](size_t pos) {
-    auto sp = decodedVector.valueAt<StringView>(pos);
-    auto size = sp.size();
-    dataDirect_->write(sp.data(), size);
-    statsBuilder.addValues(sp);
+    auto sv = decodedVector.valueAt<StringView>(pos);
+    auto size = sv.size();
+    dataDirect_->write(sv.data(), size);
+    // TODO: Remove explicit std::string_view cast.
+    statsBuilder.addValues(std::string_view(sv));
     rawSize += size;
     lengths.unsafeAppend(size);
   };

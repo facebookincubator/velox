@@ -3524,7 +3524,7 @@ struct StringColumnWriterTestCase {
         postProcess{postProcess},
         repetitionCount{repetitionCount},
         flushCount{flushCount},
-        type{CppToType<folly::StringPiece>::create()} {}
+        type{CppToType<std::string_view>::create()} {}
 
   virtual ~StringColumnWriterTestCase() = default;
 
