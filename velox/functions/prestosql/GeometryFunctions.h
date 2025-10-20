@@ -1100,7 +1100,7 @@ struct StNumInteriorRingFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE bool call(
-      out_type<int32_t>& result,
+      out_type<int64_t>& result,
       const arg_type<Geometry>& geometry) {
     std::unique_ptr<geos::geom::Geometry> geosGeometry =
         geospatial::GeometryDeserializer::deserialize(geometry);
@@ -1125,7 +1125,7 @@ struct StNumInteriorRingFunction {
       VELOX_USER_FAIL(
           "Number of interior rings exceeds the maximum value of int32");
     }
-    result = static_cast<int32_t>(numInteriorRings);
+    result = static_cast<int64_t>(numInteriorRings);
     return true;
   }
 };
