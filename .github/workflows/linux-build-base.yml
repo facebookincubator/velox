@@ -41,7 +41,7 @@ jobs:
       faiss_SOURCE: BUNDLED
       USE_CLANG: "${{ inputs.use-clang && 'true' || 'false' }}"
     steps:
-      - uses: actions/checkout@v5.0.0
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 2
           persist-credentials: false
@@ -164,7 +164,7 @@ jobs:
         run: |
           mkdir -p "$CCACHE_DIR"
 
-      - uses: actions/checkout@v5.0.0
+      - uses: actions/checkout@v5
         with:
           path: velox
           persist-credentials: false
@@ -232,7 +232,7 @@ jobs:
         run: |
           mkdir -p "$CCACHE_DIR"
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           path: velox
           persist-credentials: false
