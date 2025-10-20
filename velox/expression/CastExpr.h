@@ -314,6 +314,12 @@ class CastExpr : public SpecialForm {
       exec::EvalCtx& context,
       const BaseVector& input);
 
+  VectorPtr applyIntegerToBigintCast(
+      const SelectivityVector& rows,
+      const TypePtr& toType,
+      exec::EvalCtx& context,
+      const BaseVector& input);
+
   bool isTryCast() const {
     return isTryCast_;
   }

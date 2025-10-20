@@ -36,6 +36,8 @@ target_link_libraries(
   GTest::gtest_main
 )
 
+file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/data DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
+
 add_executable(
   velox_exec_test
   AddressableNonNullValueListTest.cpp

@@ -22,6 +22,8 @@
 #include <folly/synchronization/Latch.h>
 #include <filesystem>
 
+#include <iostream>
+
 #include "velox/common/base/Fs.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/caching/AsyncDataCache.h"
@@ -6144,5 +6146,102 @@ TEST_F(TableScanTest, parallelUnitLoader) {
   ASSERT_GT(stats.count("waitForUnitReadyNanos"), 0);
 }
 
+TEST_F(TableScanTest, result) {
+  auto input = makeFlatVector<int32_t>(
+      1'000,
+      [](auto i) { return 1 + 2 * i; },
+      [](auto i) { return i % 2 == 0; });
+  auto vector = makeRowVector({input});
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), {vector});
+  createDuckDbTable({vector});
+
+  auto op = PlanBuilder()
+                .tableScan(ROW({"c0"}, {INTEGER()}))
+                .project({"CAST(c0 AS BIGINT)"})
+                .planNode();
+  assertQuery(op, {filePath}, "SELECT c0 FROM tmp");
+}
+
+/*
+TEST_F(TableScanTest, scan) {
+  CursorParameters params;
+  params.planNode = tableScanNode(ROW({"c0"}, {INTEGER()}));
+  params.copyResult = false;
+  auto cursor = TaskCursor::create(params);
+  int64_t numRows = 0;
+  uint64_t readUs{0};
+
+  auto filePath = facebook::velox::test::getDataFilePath(
+      "velox/exec/tests", "data/scan.dwrf");
+  {
+    MicrosecondTimer timer(&readUs);
+    cursor->task()->addSplit("0", makeHiveSplit(filePath));
+    cursor->task()->noMoreSplits("0");
+    while (cursor->moveNext()) {
+      auto& vector = cursor->current();
+      numRows += vector->size();
+    }
+  }
+  std::cout << "Scan integer column: " << readUs << " us" << std::endl;
+  ASSERT_EQ(numRows, 300'000'000);
+}
+
+TEST_F(TableScanTest, castAsBigint) {
+  CursorParameters params;
+  params.planNode = PlanBuilder()
+                        .tableScan(ROW({"c0"}, {INTEGER()}))
+                        .project({"c0", "c0 + 10", "c0 * 3"})
+                        .filter("p1 > 100")
+                        .singleAggregation({"c0"}, {"sum(p1)", "min(p2)"})
+                        .project({"CAST(c0 AS BIGINT)"})
+                        .planNode();
+
+  params.copyResult = false;
+  auto cursor = TaskCursor::create(params);
+  int64_t numRows = 0;
+  uint64_t readUs{0};
+  auto filePath = facebook::velox::test::getDataFilePath(
+      "velox/exec/tests", "data/scan.dwrf");
+  {
+    MicrosecondTimer timer(&readUs);
+    cursor->task()->addSplit("0", makeHiveSplit(filePath));
+    cursor->task()->noMoreSplits("0");
+    while (cursor->moveNext()) {
+      auto& vector = cursor->current();
+      numRows += vector->size();
+    }
+  }
+  // ASSERT_EQ(numRows, 300'000'000);
+  std::cout << "Scan and cast integer as bigint: " << readUs << " us"
+            << std::endl;
+}
+
+TEST_F(TableScanTest, castAsDecimal) {
+  CursorParameters params;
+  params.planNode = PlanBuilder()
+                        .tableScan(ROW({"c0"}, {INTEGER()}))
+                        .project({"CAST(c0 AS DECIMAL(38, 0))"})
+                        .planNode();
+  params.copyResult = false;
+  auto cursor = TaskCursor::create(params);
+  int64_t numRows = 0;
+  uint64_t readUs{0};
+  auto filePath = facebook::velox::test::getDataFilePath(
+      "velox/exec/tests", "data/scan.dwrf");
+  {
+    MicrosecondTimer timer(&readUs);
+    cursor->task()->addSplit("0", makeHiveSplit(filePath));
+    cursor->task()->noMoreSplits("0");
+    while (cursor->moveNext()) {
+      auto& vector = cursor->current();
+      numRows += vector->size();
+    }
+  }
+  ASSERT_EQ(numRows, 300'000'000);
+  std::cout << "Scan and cast integer as decimal: " << readUs << " us"
+            << std::endl;
+}
+*/
 } // namespace
 } // namespace facebook::velox::exec

@@ -3993,5 +3993,23 @@ TEST_F(CastExprTest, timeToTimestampCast) {
     assertEqualVectors(expected, result);
   }
 }
+
+TEST_F(CastExprTest, integerToBigintCast) {
+  std::vector<core::TypedExprPtr> inputs = {
+      std::make_shared<const core::FieldAccessTypedExpr>(INTEGER(), "c0")};
+  auto castExpr =
+      std::make_shared<core::CallTypedExpr>(BIGINT(), inputs, "cast");
+
+  testEncodings(
+      castExpr,
+      {makeFlatVector<int32_t>(
+          1'000,
+          [](auto i) { return 1 + 2 * i; },
+          [](auto i) { return i % 2 == 0; })},
+      makeFlatVector<int64_t>(
+          1'000,
+          [](auto i) { return 1 + 2 * i; },
+          [](auto i) { return i % 2 == 0; }));
+}
 } // namespace
 } // namespace facebook::velox::test
