@@ -17,11 +17,7 @@
 #include "velox/dwio/common/exception/Exception.h"
 #include "velox/common/base/Exceptions.h"
 
-namespace facebook {
-namespace velox {
-namespace dwio {
-namespace common {
-namespace exception {
+namespace facebook::velox::dwio::common::exception {
 
 std::unique_ptr<ExceptionLogger>& exceptionLogger() {
   static std::unique_ptr<ExceptionLogger> logger(nullptr);
@@ -40,8 +36,4 @@ ExceptionLogger* getExceptionLogger() {
   return exceptionLogger().get();
 }
 
-} // namespace exception
-} // namespace common
-} // namespace dwio
-} // namespace velox
-} // namespace facebook
+} // namespace facebook::velox::dwio::common::exception
