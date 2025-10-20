@@ -89,42 +89,39 @@ ScalarValue getScalarValue(const VectorPtr& vector, vector_size_t rowIdx) {
 
   switch (vector->typeKind()) {
     case TypeKind::BOOLEAN:
-      scalar.boolValue_ref() =
-          vector->as<SimpleVector<bool>>()->valueAt(rowIdx);
+      scalar.boolValue() = vector->as<SimpleVector<bool>>()->valueAt(rowIdx);
       break;
     case TypeKind::TINYINT:
-      scalar.tinyintValue_ref() =
+      scalar.tinyintValue() =
           vector->as<SimpleVector<int8_t>>()->valueAt(rowIdx);
       break;
     case TypeKind::SMALLINT:
-      scalar.smallintValue_ref() =
+      scalar.smallintValue() =
           vector->as<SimpleVector<int16_t>>()->valueAt(rowIdx);
       break;
     case TypeKind::INTEGER:
-      scalar.integerValue_ref() =
+      scalar.integerValue() =
           vector->as<SimpleVector<int32_t>>()->valueAt(rowIdx);
       break;
     case TypeKind::BIGINT:
-      scalar.bigintValue_ref() =
+      scalar.bigintValue() =
           vector->as<SimpleVector<int64_t>>()->valueAt(rowIdx);
       break;
     case TypeKind::REAL:
-      scalar.realValue_ref() =
-          vector->as<SimpleVector<float>>()->valueAt(rowIdx);
+      scalar.realValue() = vector->as<SimpleVector<float>>()->valueAt(rowIdx);
       break;
     case TypeKind::DOUBLE:
-      scalar.doubleValue_ref() =
+      scalar.doubleValue() =
           vector->as<SimpleVector<double>>()->valueAt(rowIdx);
       break;
     case TypeKind::VARCHAR:
-      scalar.varcharValue_ref() =
+      scalar.varcharValue() =
           vector->as<SimpleVector<StringView>>()->valueAt(rowIdx).str();
       break;
     case TypeKind::VARBINARY: {
       const auto& binValue =
           vector->as<SimpleVector<StringView>>()->valueAt(rowIdx);
-      scalar.varbinaryValue_ref() =
-          std::string(binValue.data(), binValue.size());
+      scalar.varbinaryValue() = std::string(binValue.data(), binValue.size());
       break;
     }
     case TypeKind::TIMESTAMP: {
@@ -132,19 +129,19 @@ ScalarValue getScalarValue(const VectorPtr& vector, vector_size_t rowIdx) {
           vector->as<SimpleVector<facebook::velox::Timestamp>>()->valueAt(
               rowIdx);
       facebook::velox::runner::Timestamp timestampValue;
-      timestampValue.seconds_ref() = ts.getSeconds();
-      timestampValue.nanos_ref() = ts.getNanos();
-      scalar.timestampValue_ref() = std::move(timestampValue);
+      timestampValue.seconds() = ts.getSeconds();
+      timestampValue.nanos() = ts.getNanos();
+      scalar.timestampValue() = std::move(timestampValue);
       break;
     }
     case TypeKind::HUGEINT: {
       const auto& hugeint =
           vector->as<SimpleVector<int128_t>>()->valueAt(rowIdx);
       facebook::velox::runner::i128 hugeintValue;
-      hugeintValue.msb_ref() = static_cast<int64_t>(hugeint >> 64);
-      hugeintValue.lsb_ref() =
+      hugeintValue.msb() = static_cast<int64_t>(hugeint >> 64);
+      hugeintValue.lsb() =
           static_cast<int64_t>(hugeint & 0xFFFFFFFFFFFFFFFFULL);
-      scalar.hugeintValue_ref() = std::move(hugeintValue);
+      scalar.hugeintValue() = std::move(hugeintValue);
       break;
     }
     default:
@@ -186,7 +183,7 @@ ComplexValue getComplexValue(
         arrayValue.values()->push_back(std::move(elementValue));
       }
 
-      complex.arrayValue_ref() = std::move(arrayValue);
+      complex.arrayValue() = std::move(arrayValue);
       break;
     }
     case TypeKind::MAP: {
@@ -211,7 +208,7 @@ ComplexValue getComplexValue(
         (*mapValue.values())[std::move(keyValue)] = std::move(valueValue);
       }
 
-      complex.mapValue_ref() = std::move(mapValue);
+      complex.mapValue() = std::move(mapValue);
       break;
     }
     case TypeKind::ROW: {
@@ -230,7 +227,7 @@ ComplexValue getComplexValue(
         rowValue.fieldValues()->push_back(std::move(fieldValue));
       }
 
-      complex.rowValue_ref() = std::move(rowValue);
+      complex.rowValue() = std::move(rowValue);
       break;
     }
     default:
@@ -261,12 +258,12 @@ Value convertValue(
       case TypeKind::VARBINARY:
       case TypeKind::TIMESTAMP:
       case TypeKind::HUGEINT:
-        value.scalarValue_ref() = getScalarValue(vector, rowIdx);
+        value.scalarValue() = getScalarValue(vector, rowIdx);
         break;
       case TypeKind::ARRAY:
       case TypeKind::MAP:
       case TypeKind::ROW:
-        value.complexValue_ref() = getComplexValue(vector, rowIdx, evalCtx);
+        value.complexValue() = getComplexValue(vector, rowIdx, evalCtx);
         break;
       default:
         VELOX_FAIL(fmt::format("Unsupported type: {}", vector->type()));
