@@ -23,6 +23,8 @@
 #include "velox/dwio/common/FileSink.h"
 #endif
 
+#include <string_view>
+
 namespace facebook::velox::filesystems {
 
 #ifdef VELOX_ENABLE_HDFS
