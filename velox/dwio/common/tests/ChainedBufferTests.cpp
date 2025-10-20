@@ -23,10 +23,7 @@
 
 using namespace ::testing;
 
-namespace facebook {
-namespace velox {
-namespace dwio {
-namespace common {
+namespace facebook::velox::dwio::common {
 
 class ChainedBufferTests : public Test {
  protected:
@@ -321,7 +318,5 @@ TEST_F(ChainedBufferTests, testClearAll) {
     ASSERT_EQ(buf.pages_.size(), 9);
   }
 }
-} // namespace common
-} // namespace dwio
-} // namespace velox
-} // namespace facebook
+
+} // namespace facebook::velox::dwio::common
