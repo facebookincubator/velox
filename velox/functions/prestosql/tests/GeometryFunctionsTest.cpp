@@ -2010,8 +2010,8 @@ TEST_F(GeometryFunctionsTest, testStInteriorRingN) {
 TEST_F(GeometryFunctionsTest, testStNumInteriorRing) {
   const auto testStNumInteriorRingFunc =
       [&](const std::optional<std::string>& wkt,
-          const std::optional<int32_t>& expected) {
-        std::optional<int32_t> result = evaluateOnce<int32_t>(
+          const std::optional<int64_t>& expected) {
+        std::optional<int64_t> result = evaluateOnce<int64_t>(
             "ST_NumInteriorRing(ST_GeometryFromText(c0))", wkt);
 
         if (expected.has_value()) {
