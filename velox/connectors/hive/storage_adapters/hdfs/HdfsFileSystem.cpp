@@ -135,8 +135,8 @@ void HdfsFileSystem::close() {
 }
 
 bool HdfsFileSystem::isHdfsFile(const std::string_view filePath) {
-  return (filePath.find(kScheme) == 0) || (filePath.find(kViewfsScheme) == 0)
-      || isExtraSupportedFile(filePath);
+  return (filePath.find(kScheme) == 0) || (filePath.find(kViewfsScheme) == 0) ||
+      isExtraSupportedFile(filePath);
 }
 
 bool HdfsFileSystem::isExtraSupportedFile(const std::string_view path) {
@@ -160,7 +160,6 @@ HdfsServiceEndpoint HdfsFileSystem::getServiceEndpoint(
     return HdfsServiceEndpoint{"viewfs", "", true};
   }
 
-
   if (filePath.find(kScheme) == 0) {
     // For hdfs scheme
     auto endOfIdentityInfo = filePath.find('/', kScheme.size());
@@ -181,9 +180,10 @@ HdfsServiceEndpoint HdfsFileSystem::getServiceEndpoint(
     }
   } else if (isExtraSupportedFile(filePath)) {
     // For extra supported scheme, we set 'scheme://authority' to nn.
-    // See: https://github.com/facebookincubator/velox/blob/main/velox/external/hdfs/hdfs.h#L298
+    // See:
+    // https://github.com/facebookincubator/velox/blob/main/velox/external/hdfs/hdfs.h#L298
     auto endOfScheme = filePath.find("://");
-    if (endOfScheme ==  std::string::npos) {
+    if (endOfScheme == std::string::npos) {
       return HdfsServiceEndpoint{filePath.data(), ""};
     } else {
       auto endOfIdentityInfo = filePath.find('/', endOfScheme + 3);

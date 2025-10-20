@@ -95,7 +95,8 @@ class HdfsFileSystem : public FileSystem {
 
   static bool isExtraSupportedFile(std::string_view filename);
 
-  // Set extra supported schemes for HDFS FileSystem, multiple values separated by commas.
+  // Set extra supported schemes for HDFS FileSystem, multiple values separated
+  // by commas.
   static void setExtraSupportedSchemes(std::string_view schemesStr);
 
   static std::string_view kScheme;

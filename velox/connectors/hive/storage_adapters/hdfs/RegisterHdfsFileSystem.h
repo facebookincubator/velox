@@ -18,6 +18,8 @@
 
 #include "folly/concurrency/ConcurrentHashMap.h"
 
+#include <string_view>
+
 namespace facebook::velox::filesystems {
 
 class HdfsFileSystem;
@@ -28,7 +30,8 @@ extern folly::ConcurrentHashMap<std::string, std::shared_ptr<HdfsFileSystem>>
 // Register the HDFS.
 void registerHdfsFileSystem();
 
-// Set extra supported schemes for HDFS FileSystem, multiple values separated by commas.
+// Set extra supported schemes for HDFS FileSystem, multiple values separated
+// by commas.
 void setHdfsExtraSupportedSchemes(std::string_view schemesStr);
 
 } // namespace facebook::velox::filesystems
