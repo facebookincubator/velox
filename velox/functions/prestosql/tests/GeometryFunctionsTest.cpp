@@ -2171,9 +2171,9 @@ TEST_F(GeometryFunctionsTest, testStConvexHull) {
 
 TEST_F(GeometryFunctionsTest, testStCoordDim) {
   const auto testStCoordDimFunc = [&](const std::optional<std::string>& wkt,
-                                      const std::optional<int32_t>& expected) {
-    std::optional<int32_t> result =
-        evaluateOnce<int32_t>("ST_CoordDim(ST_GeometryFromText(c0))", wkt);
+                                      const std::optional<int8_t>& expected) {
+    std::optional<int8_t> result =
+        evaluateOnce<int8_t>("ST_CoordDim(ST_GeometryFromText(c0))", wkt);
 
     if (expected.has_value()) {
       ASSERT_TRUE(result.has_value());
