@@ -17,6 +17,7 @@
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnector.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveDataSource.h"
+#include "velox/experimental/cudf/exec/CudfAssignUniqueId.h"
 #include "velox/experimental/cudf/exec/CudfConversion.h"
 #include "velox/experimental/cudf/exec/CudfFilterProject.h"
 #include "velox/experimental/cudf/exec/CudfHashAggregation.h"
@@ -31,6 +32,7 @@
 #include "folly/Conv.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/TableHandle.h"
+#include "velox/exec/AssignUniqueId.h"
 #include "velox/exec/Driver.h"
 #include "velox/exec/FilterProject.h"
 #include "velox/exec/HashAggregation.h"
@@ -72,10 +74,6 @@ bool CompileState::compile(bool force_replace) {
     }
   }
 
-  // Make sure operator states are initialized.  We will need to inspect some of
-  // them during the transformation.
-  driver_.initializeOperators();
-
   bool replacementsMade = false;
   auto ctx = driver_.driverCtx();
 
@@ -113,10 +111,22 @@ bool CompileState::compile(bool force_replace) {
     return true;
   };
 
-  auto isFilterProjectSupported = [](const exec::Operator* op) {
+  auto isFilterProjectSupported = [getPlanNode](const exec::Operator* op) {
     if (auto filterProjectOp = dynamic_cast<const exec::FilterProject*>(op)) {
-      auto info = filterProjectOp->exprsAndProjection();
-      return ExpressionEvaluator::canBeEvaluated(info.exprs->exprs());
+      auto projectPlanNode = std::dynamic_pointer_cast<const core::ProjectNode>(
+          getPlanNode(filterProjectOp->planNodeId()));
+      auto filterNode = filterProjectOp->filterNode();
+      bool canBeEvaluated = true;
+      if (projectPlanNode &&
+          !ExpressionEvaluator::canBeEvaluated(
+              projectPlanNode->projections())) {
+        canBeEvaluated = false;
+      }
+      if (canBeEvaluated && filterNode &&
+          !ExpressionEvaluator::canBeEvaluated({filterNode->filter()})) {
+        canBeEvaluated = false;
+      }
+      return canBeEvaluated;
     }
     return false;
   };
@@ -149,7 +159,8 @@ bool CompileState::compile(bool force_replace) {
                    exec::HashAggregation,
                    exec::Limit,
                    exec::LocalPartition,
-                   exec::LocalExchange>(op) ||
+                   exec::LocalExchange,
+                   exec::AssignUniqueId>(op) ||
             isFilterProjectSupported(op) || isJoinSupported(op) ||
             isTableScanSupported(op);
       };
@@ -166,7 +177,8 @@ bool CompileState::compile(bool force_replace) {
                exec::OrderBy,
                exec::HashAggregation,
                exec::Limit,
-               exec::LocalPartition>(op) ||
+               exec::LocalPartition,
+               exec::AssignUniqueId>(op) ||
         isFilterProjectSupported(op) || isJoinSupported(op);
   };
   auto producesGpuOutput = [isFilterProjectSupported,
@@ -176,7 +188,8 @@ bool CompileState::compile(bool force_replace) {
                exec::OrderBy,
                exec::HashAggregation,
                exec::Limit,
-               exec::LocalExchange>(op) ||
+               exec::LocalExchange,
+               exec::AssignUniqueId>(op) ||
         isFilterProjectSupported(op) ||
         (isAnyOf<exec::HashProbe>(op) && isJoinSupported(op)) ||
         (isTableScanSupported(op));
@@ -204,7 +217,6 @@ bool CompileState::compile(bool force_replace) {
       auto planNode = getPlanNode(oper->planNodeId());
       replaceOp.push_back(std::make_unique<CudfFromVelox>(
           id, planNode->outputType(), ctx, planNode->id() + "-from-velox"));
-      replaceOp.back()->initialize();
     }
     if (not replaceOp.empty()) {
       // from-velox only, because need to inserted before current operator.
@@ -235,7 +247,6 @@ bool CompileState::compile(bool force_replace) {
         // From-Velox (optional)
         replaceOp.push_back(
             std::make_unique<CudfHashJoinBuild>(id, ctx, planNode));
-        replaceOp.back()->initialize();
       } else if (auto joinProbeOp = dynamic_cast<exec::HashProbe*>(oper)) {
         auto planNode = std::dynamic_pointer_cast<const core::HashJoinNode>(
             getPlanNode(joinProbeOp->planNodeId()));
@@ -243,7 +254,6 @@ bool CompileState::compile(bool force_replace) {
         // From-Velox (optional)
         replaceOp.push_back(
             std::make_unique<CudfHashJoinProbe>(id, ctx, planNode));
-        replaceOp.back()->initialize();
         // To-Velox (optional)
       }
     } else if (auto orderByOp = dynamic_cast<exec::OrderBy*>(oper)) {
@@ -252,34 +262,27 @@ bool CompileState::compile(bool force_replace) {
           getPlanNode(orderByOp->planNodeId()));
       VELOX_CHECK(planNode != nullptr);
       replaceOp.push_back(std::make_unique<CudfOrderBy>(id, ctx, planNode));
-      replaceOp.back()->initialize();
     } else if (auto hashAggOp = dynamic_cast<exec::HashAggregation*>(oper)) {
       auto planNode = std::dynamic_pointer_cast<const core::AggregationNode>(
           getPlanNode(hashAggOp->planNodeId()));
       VELOX_CHECK(planNode != nullptr);
       replaceOp.push_back(
           std::make_unique<CudfHashAggregation>(id, ctx, planNode));
-      replaceOp.back()->initialize();
     } else if (isFilterProjectSupported(oper)) {
       auto filterProjectOp = dynamic_cast<exec::FilterProject*>(oper);
-      auto info = filterProjectOp->exprsAndProjection();
-      auto& idProjections = filterProjectOp->identityProjections();
       auto projectPlanNode = std::dynamic_pointer_cast<const core::ProjectNode>(
           getPlanNode(filterProjectOp->planNodeId()));
-      auto filterPlanNode = std::dynamic_pointer_cast<const core::FilterNode>(
-          getPlanNode(filterProjectOp->planNodeId()));
-      // If filter only, filter node only exists.
-      // If project only, or filter and project, project node only exists.
+      // When filter and project both exist, the FilterProject planNodeId id is
+      // project node id, so we need FilterProject to report the FilterNode.
+      auto filterPlanNode = filterProjectOp->filterNode();
       VELOX_CHECK(projectPlanNode != nullptr or filterPlanNode != nullptr);
       replaceOp.push_back(std::make_unique<CudfFilterProject>(
-          id, ctx, info, idProjections, filterPlanNode, projectPlanNode));
-      replaceOp.back()->initialize();
+          id, ctx, filterPlanNode, projectPlanNode));
     } else if (auto limitOp = dynamic_cast<exec::Limit*>(oper)) {
       auto planNode = std::dynamic_pointer_cast<const core::LimitNode>(
           getPlanNode(limitOp->planNodeId()));
       VELOX_CHECK(planNode != nullptr);
       replaceOp.push_back(std::make_unique<CudfLimit>(id, ctx, planNode));
-      replaceOp.back()->initialize();
     } else if (
         auto localPartitionOp = dynamic_cast<exec::LocalPartition*>(oper)) {
       auto planNode = std::dynamic_pointer_cast<const core::LocalPartitionNode>(
@@ -297,6 +300,18 @@ bool CompileState::compile(bool force_replace) {
     } else if (
         auto localExchangeOp = dynamic_cast<exec::LocalExchange*>(oper)) {
       keepOperator = 1;
+    } else if (
+        auto assignUniqueIdOp = dynamic_cast<exec::AssignUniqueId*>(oper)) {
+      auto planNode = std::dynamic_pointer_cast<const core::AssignUniqueIdNode>(
+          getPlanNode(assignUniqueIdOp->planNodeId()));
+      VELOX_CHECK(planNode != nullptr);
+      replaceOp.push_back(std::make_unique<CudfAssignUniqueId>(
+          id,
+          ctx,
+          planNode,
+          planNode->taskUniqueId(),
+          planNode->uniqueIdCounter()));
+      replaceOp.back()->initialize();
     }
 
     if (producesGpuOutput(oper) and
@@ -304,7 +319,6 @@ bool CompileState::compile(bool force_replace) {
       auto planNode = getPlanNode(oper->planNodeId());
       replaceOp.push_back(std::make_unique<CudfToVelox>(
           id, planNode->outputType(), ctx, planNode->id() + "-to-velox"));
-      replaceOp.back()->initialize();
     }
 
     if (force_replace) {

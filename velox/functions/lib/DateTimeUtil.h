@@ -379,8 +379,10 @@ FOLLY_ALWAYS_INLINE Timestamp addToTimestamp(
 /// For units < DAY, the time of day changes.
 /// For units >= DAY, the time of day doesn't change.
 FOLLY_ALWAYS_INLINE int64_t addToTime(int64_t time, int64_t valueInMillis) {
-  VELOX_USER_CHECK_GE(time, 0, "TIME value must be positive");
-  VELOX_USER_CHECK_LT(time, kMillisInDay, "TIME value must be less than 24h");
+  VELOX_USER_CHECK(
+      time >= 0 && time < kMillisInDay,
+      "TIME value {} is out of range [0, 86400000)",
+      time);
 
   if (FOLLY_UNLIKELY(valueInMillis == 0)) {
     return time;

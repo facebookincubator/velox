@@ -257,5 +257,53 @@ TEST_F(HyperLogLogFunctionsTest, mergeHllDenseFirstThenSparse) {
   EXPECT_EQ(2035, cardinality);
 }
 
+TEST_F(HyperLogLogFunctionsTest, mergeHllDictionaryEncoded) {
+  // Test merge_hll can handle encoded array elements.
+  const int8_t indexBitLength = 12;
+
+  auto baseElements = makeFlatVector(
+      {createSparse(indexBitLength, 0, 10),
+       createSparse(indexBitLength, 10, 20)},
+      HYPERLOGLOG());
+
+  struct TestCase {
+    std::vector<vector_size_t> indices;
+    std::optional<std::vector<bool>> nulls;
+    int64_t expectedCardinality;
+  };
+
+  std::vector<TestCase> testCases = {
+      // Dictionary indices without nulls.
+      {{0, 1}, std::nullopt, 20},
+      {{1, 0}, std::nullopt, 20},
+      {{1, 1, 1}, std::nullopt, 10},
+      {{0, 0, 0, 0}, std::nullopt, 10},
+      {{1, 1, 0, 0, 1, 0}, std::nullopt, 20},
+      // Dictionary adds nulls: [1, null]
+      {{1, 0}, {{false, true}}, 10},
+      // Dictionary adds nulls: [null, 0, null]
+      {{0, 0, 0}, {{true, false, true}}, 10},
+      // Dictionary adds nulls: [null, null, 1, 1, null, 0]
+      {{0, 0, 1, 1, 0, 0}, {{true, true, false, false, true, false}}, 20},
+  };
+
+  for (const auto& testCase : testCases) {
+    auto indices = makeIndices(testCase.indices);
+    VectorPtr encodedElements;
+    if (testCase.nulls.has_value()) {
+      auto nulls = makeNulls(testCase.nulls.value());
+      encodedElements = BaseVector::wrapInDictionary(
+          nulls, indices, testCase.indices.size(), baseElements);
+    } else {
+      encodedElements = wrapInDictionary(indices, baseElements);
+    }
+    auto arrayVector = makeArrayVector(
+        {0, static_cast<int>(testCase.indices.size())}, encodedElements);
+    auto cardinality = evaluateOnce<int64_t>(
+        "cardinality(merge_hll(c0))", makeRowVector({arrayVector}));
+    EXPECT_EQ(testCase.expectedCardinality, cardinality);
+  }
+}
+
 } // namespace
 } // namespace facebook::velox

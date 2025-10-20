@@ -15,24 +15,11 @@
  */
 
 #include "velox/exec/PartitionedOutput.h"
+#include "velox/exec/OperatorUtils.h"
 #include "velox/exec/OutputBufferManager.h"
 #include "velox/exec/Task.h"
 
 namespace facebook::velox::exec {
-namespace {
-std::unique_ptr<VectorSerde::Options> getVectorSerdeOptions(
-    const core::QueryConfig& queryConfig,
-    VectorSerde::Kind kind) {
-  std::unique_ptr<VectorSerde::Options> options =
-      kind == VectorSerde::Kind::kPresto
-      ? std::make_unique<serializer::presto::PrestoVectorSerde::PrestoOptions>()
-      : std::make_unique<VectorSerde::Options>();
-  options->compressionKind =
-      common::stringToCompressionKind(queryConfig.shuffleCompressionKind());
-  options->minCompressionRatio = PartitionedOutput::minCompressionRatio();
-  return options;
-}
-} // namespace
 
 namespace detail {
 Destination::Destination(
@@ -203,8 +190,11 @@ PartitionedOutput::PartitionedOutput(
       eagerFlush_(eagerFlush),
       serde_(getNamedVectorSerde(planNode->serdeKind())),
       serdeOptions_(getVectorSerdeOptions(
-          operatorCtx_->driverCtx()->queryConfig(),
-          planNode->serdeKind())) {
+          common::stringToCompressionKind(operatorCtx_->driverCtx()
+                                              ->queryConfig()
+                                              .shuffleCompressionKind()),
+          planNode->serdeKind(),
+          PartitionedOutput::minCompressionRatio())) {
   if (!planNode->isPartitioned()) {
     VELOX_USER_CHECK_EQ(numDestinations_, 1);
   }

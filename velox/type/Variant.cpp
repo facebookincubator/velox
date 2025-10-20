@@ -23,7 +23,6 @@
 #include "velox/type/FloatingPointUtil.h"
 
 namespace facebook::velox {
-
 namespace {
 
 bool dispatchDynamicVariantEquality(
@@ -162,6 +161,7 @@ bool dispatchDynamicVariantEquality(
   return VELOX_DYNAMIC_TYPE_DISPATCH_METHOD(
       VariantEquality, equals<false>, a.kind(), a, b);
 }
+
 } // namespace
 
 std::string encloseWithQuote(std::string str) {
