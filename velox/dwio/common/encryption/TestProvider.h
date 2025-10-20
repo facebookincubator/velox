@@ -20,12 +20,7 @@
 #include "velox/dwio/common/encryption/Encryption.h"
 #include "velox/dwio/common/exception/Exception.h"
 
-namespace facebook {
-namespace velox {
-namespace dwio {
-namespace common {
-namespace encryption {
-namespace test {
+namespace facebook::velox::dwio::common::encryption::test {
 
 class TestEncryption {
  public:
@@ -144,9 +139,4 @@ class TestDecrypterFactory : public DecrypterFactory {
   }
 };
 
-} // namespace test
-} // namespace encryption
-} // namespace common
-} // namespace dwio
-} // namespace velox
-} // namespace facebook
+} // namespace facebook::velox::dwio::common::encryption::test
