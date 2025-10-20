@@ -18,6 +18,7 @@
 #include "velox/common/base/SkewedPartitionBalancer.h"
 #include "velox/common/future/VeloxPromise.h"
 #include "velox/connectors/Connector.h"
+#include "velox/exec/ExchangeAggregation.h"
 #include "velox/exec/LocalPartition.h"
 #include "velox/exec/ScaledScanController.h"
 #include "velox/exec/Split.h"
@@ -66,6 +67,11 @@ struct BarrierState {
   /// operator does that). After the last drier done its work, the promises are
   /// fulfilled and the non-last drivers can continue.
   std::vector<ContinuePromise> allPeersFinishedPromises;
+
+  void clear() {
+    drivers.clear();
+    allPeersFinishedPromises.clear();
+  }
 };
 
 using ConnectorSplitPreloadFunc =
@@ -183,6 +189,24 @@ struct LocalExchangeState {
       scaleWriterPartitionBalancer;
 };
 
+struct ExchangeAggregationState {
+  std::vector<std::shared_ptr<PartitionBucket>> buckets;
+
+  void clear() {
+    // Remember the pointers that has been deleted to avoid double deletion.
+    std::unordered_set<Partitioned*> deleted;
+    for (auto& bucket : buckets) {
+      for (auto i = 0; i < bucket->bucketSize(); ++i) {
+        auto partition = bucket->getSlotAt(i);
+        if (partition != nullptr && deleted.count(partition) == 0) {
+          deleted.insert(partition);
+          delete partition;
+        }
+      }
+    }
+  }
+};
+
 /// Stores inter-operator state (exchange, bridges) for split groups.
 struct SplitGroupState {
   /// Map from the plan node id of the join to the corresponding JoinBridge.
@@ -205,6 +229,10 @@ struct SplitGroupState {
 
   /// Map of local exchanges keyed on LocalPartition plan node ID.
   std::unordered_map<core::PlanNodeId, LocalExchangeState> localExchanges;
+
+  /// Map of exchange aggregations keyed on the aggregation plan node ID.
+  std::unordered_map<core::PlanNodeId, ExchangeAggregationState>
+      exchangeAggregations;
 
   /// Map of scaled scan controllers keyed on TableScan plan node ID.
   std::unordered_map<core::PlanNodeId, std::shared_ptr<ScaledScanController>>
@@ -236,6 +264,10 @@ struct SplitGroupState {
     localMergeSources.clear();
     mergeJoinSources.clear();
     localExchanges.clear();
+
+    for (auto& [_, state] : exchangeAggregations) {
+      state.clear();
+    }
   }
 };
 
