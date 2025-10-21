@@ -77,10 +77,6 @@ bool CompileState::compile(bool force_replace) {
     }
   }
 
-  // Make sure operator states are initialized.  We will need to inspect some of
-  // them during the transformation.
-  driver_.initializeOperators();
-
   bool replacementsMade = false;
   auto ctx = driver_.driverCtx();
 
@@ -118,10 +114,22 @@ bool CompileState::compile(bool force_replace) {
     return true;
   };
 
-  auto isFilterProjectSupported = [](const exec::Operator* op) {
+  auto isFilterProjectSupported = [getPlanNode](const exec::Operator* op) {
     if (auto filterProjectOp = dynamic_cast<const exec::FilterProject*>(op)) {
-      auto info = filterProjectOp->exprsAndProjection();
-      return ExpressionEvaluator::canBeEvaluated(info.exprs->exprs());
+      auto projectPlanNode = std::dynamic_pointer_cast<const core::ProjectNode>(
+          getPlanNode(filterProjectOp->planNodeId()));
+      auto filterNode = filterProjectOp->filterNode();
+      bool canBeEvaluated = true;
+      if (projectPlanNode &&
+          !ExpressionEvaluator::canBeEvaluated(
+              projectPlanNode->projections())) {
+        canBeEvaluated = false;
+      }
+      if (canBeEvaluated && filterNode &&
+          !ExpressionEvaluator::canBeEvaluated({filterNode->filter()})) {
+        canBeEvaluated = false;
+      }
+      return canBeEvaluated;
     }
     return false;
   };
@@ -218,7 +226,6 @@ bool CompileState::compile(bool force_replace) {
       auto planNode = getPlanNode(oper->planNodeId());
       replaceOp.push_back(std::make_unique<CudfFromVelox>(
           id, planNode->outputType(), ctx, planNode->id() + "-from-velox"));
-      replaceOp.back()->initialize();
     }
     if (not replaceOp.empty()) {
       // from-velox only, because need to inserted before current operator.
@@ -240,18 +247,11 @@ bool CompileState::compile(bool force_replace) {
       auto planNode = std::dynamic_pointer_cast<const core::TableScanNode>(
           getPlanNode(oper->planNodeId()));
       VELOX_CHECK(planNode != nullptr);
-      auto scanOp = dynamic_cast<exec::TableScan*>(oper);
       keepOperator = 1;
       // We don't make a new type of table scan operator but use the existing
       // type. But we need to update the connector so we'll make a new plan node
       // from the old one and use that to construct the new operator of the same
       // type but with the updated connector
-      // auto newPlanNode = core::TableScanNode::Builder(*planNode)
-      //                        .id(planNode->id() + "-cudf")
-      //                        .build();
-      // replaceOp.push_back(
-      //     std::make_unique<exec::TableScan>(id, ctx, newPlanNode, "cudf"));
-      // replaceOp.back()->initialize();
     } else if (isJoinSupported(oper)) {
       if (auto joinBuildOp = dynamic_cast<exec::HashBuild*>(oper)) {
         auto planNode = std::dynamic_pointer_cast<const core::HashJoinNode>(
@@ -260,7 +260,6 @@ bool CompileState::compile(bool force_replace) {
         // From-Velox (optional)
         replaceOp.push_back(
             std::make_unique<CudfHashJoinBuild>(id, ctx, planNode));
-        replaceOp.back()->initialize();
       } else if (auto joinProbeOp = dynamic_cast<exec::HashProbe*>(oper)) {
         auto planNode = std::dynamic_pointer_cast<const core::HashJoinNode>(
             getPlanNode(joinProbeOp->planNodeId()));
@@ -268,7 +267,6 @@ bool CompileState::compile(bool force_replace) {
         // From-Velox (optional)
         replaceOp.push_back(
             std::make_unique<CudfHashJoinProbe>(id, ctx, planNode));
-        replaceOp.back()->initialize();
         // To-Velox (optional)
       }
     } else if (auto orderByOp = dynamic_cast<exec::OrderBy*>(oper)) {
@@ -277,13 +275,11 @@ bool CompileState::compile(bool force_replace) {
           getPlanNode(orderByOp->planNodeId()));
       VELOX_CHECK(planNode != nullptr);
       replaceOp.push_back(std::make_unique<CudfOrderBy>(id, ctx, planNode));
-      replaceOp.back()->initialize();
     } else if (auto topNOp = dynamic_cast<exec::TopN*>(oper)) {
       auto planNode = std::dynamic_pointer_cast<const core::TopNNode>(
           getPlanNode(topNOp->planNodeId()));
       VELOX_CHECK(planNode != nullptr);
       replaceOp.push_back(std::make_unique<CudfTopN>(id, ctx, planNode));
-      replaceOp.back()->initialize();
     } else if (
         dynamic_cast<exec::HashAggregation*>(oper) or
         dynamic_cast<exec::StreamingAggregation*>(oper)) {
@@ -292,27 +288,21 @@ bool CompileState::compile(bool force_replace) {
       VELOX_CHECK(planNode != nullptr);
       replaceOp.push_back(
           std::make_unique<CudfHashAggregation>(id, ctx, planNode));
-      replaceOp.back()->initialize();
     } else if (isFilterProjectSupported(oper)) {
       auto filterProjectOp = dynamic_cast<exec::FilterProject*>(oper);
-      auto info = filterProjectOp->exprsAndProjection();
-      auto& idProjections = filterProjectOp->identityProjections();
       auto projectPlanNode = std::dynamic_pointer_cast<const core::ProjectNode>(
           getPlanNode(filterProjectOp->planNodeId()));
-      auto filterPlanNode = std::dynamic_pointer_cast<const core::FilterNode>(
-          getPlanNode(filterProjectOp->planNodeId()));
-      // If filter only, filter node only exists.
-      // If project only, or filter and project, project node only exists.
+      // When filter and project both exist, the FilterProject planNodeId id is
+      // project node id, so we need FilterProject to report the FilterNode.
+      auto filterPlanNode = filterProjectOp->filterNode();
       VELOX_CHECK(projectPlanNode != nullptr or filterPlanNode != nullptr);
       replaceOp.push_back(std::make_unique<CudfFilterProject>(
-          id, ctx, info, idProjections, filterPlanNode, projectPlanNode));
-      replaceOp.back()->initialize();
+          id, ctx, filterPlanNode, projectPlanNode));
     } else if (auto limitOp = dynamic_cast<exec::Limit*>(oper)) {
       auto planNode = std::dynamic_pointer_cast<const core::LimitNode>(
           getPlanNode(limitOp->planNodeId()));
       VELOX_CHECK(planNode != nullptr);
       replaceOp.push_back(std::make_unique<CudfLimit>(id, ctx, planNode));
-      replaceOp.back()->initialize();
     } else if (
         auto localPartitionOp = dynamic_cast<exec::LocalPartition*>(oper)) {
       auto planNode = std::dynamic_pointer_cast<const core::LocalPartitionNode>(
@@ -321,7 +311,6 @@ bool CompileState::compile(bool force_replace) {
       if (CudfLocalPartition::shouldReplace(planNode)) {
         replaceOp.push_back(
             std::make_unique<CudfLocalPartition>(id, ctx, planNode));
-        replaceOp.back()->initialize();
       } else {
         // Round Robin batch-wise Partitioning is supported by CPU operator with
         // GPU Vector.
@@ -341,7 +330,6 @@ bool CompileState::compile(bool force_replace) {
           planNode,
           planNode->taskUniqueId(),
           planNode->uniqueIdCounter()));
-      replaceOp.back()->initialize();
     }
 
     if (producesGpuOutput(oper) and
@@ -349,7 +337,6 @@ bool CompileState::compile(bool force_replace) {
       auto planNode = getPlanNode(oper->planNodeId());
       replaceOp.push_back(std::make_unique<CudfToVelox>(
           id, planNode->outputType(), ctx, planNode->id() + "-to-velox"));
-      replaceOp.back()->initialize();
     }
 
     if (force_replace) {

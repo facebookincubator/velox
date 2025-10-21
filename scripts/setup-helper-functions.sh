@@ -49,6 +49,7 @@ function prompt {
     done
   ) 2>/dev/null
 }
+
 function github_checkout {
   local REPO=$1
   shift
@@ -69,7 +70,6 @@ function github_checkout {
   if [ ! -d "${DIRNAME}" ]; then
     git clone -q -b "$VERSION" "${GIT_CLONE_PARAMS[@]}" "https://github.com/${REPO}.git"
   fi
-  cd "${DIRNAME}" || exit
 }
 
 # get_cxx_flags [$CPU_ARCH]
