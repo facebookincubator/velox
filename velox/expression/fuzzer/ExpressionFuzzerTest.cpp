@@ -52,6 +52,24 @@ DEFINE_uint32(
     "Timeout in milliseconds for HTTP requests made to reference DB, "
     "such as Presto. Example: --req_timeout_ms=2000");
 
+DEFINE_bool(
+    enable_legacy_timestamp,
+    true,
+    "When true, uses legacy timestamp behavior and disables TIME type functions. "
+    "Both legacy_timestamp and adjust_timestamp_to_session_timezone will be set to this value. "
+    "Set to false to enable TIME type functions. "
+    "Accepts: true/false, 1/0, yes/no, on/off. "
+    "Example: --enable_legacy_timestamp=false or --enable_legacy_timestamp=0");
+
+// Shortcut alias for enable_legacy_timestamp
+DEFINE_bool(
+    lts,
+    true,
+    "Shortcut for --enable_legacy_timestamp. When true, uses legacy timestamp behavior "
+    "and disables TIME type functions. "
+    "Accepts: true/false, 1/0, yes/no, on/off. "
+    "Example: -lts=0 or -lts=false");
+
 using namespace facebook::velox::exec::test;
 using facebook::velox::exec::test::PrestoQueryRunner;
 using facebook::velox::fuzzer::ArgTypesGenerator;
@@ -434,6 +452,43 @@ int main(int argc, char** argv) {
       facebook::velox::memory::memoryManager()->addRootPool()};
   std::shared_ptr<ReferenceQueryRunner> referenceQueryRunner{nullptr};
 
+  // Session properties configuration:
+  // - session_timezone: Sets the session timezone for timestamp operations
+  // - adjust_timestamp_to_session_timezone: Controls timestamp timezone
+  //   adjustment
+  // - legacy_timestamp: When true (default), uses legacy timestamp behavior
+  //
+  // IMPORTANT: legacy_timestamp and adjust_timestamp_to_session_timezone MUST
+  // always have the same value to maintain consistent behavior. When both are
+  // true (default), TIME type functions are disabled to avoid behavioral
+  // differences between Velox and Presto.
+  //
+  // Use the --enable_legacy_timestamp or -lts flag to control this behavior:
+  //   --enable_legacy_timestamp=true  (default, TIME disabled)
+  //   --enable_legacy_timestamp=false (TIME enabled)
+  //   -lts=false (shortcut, TIME enabled)
+  //
+  // Priority: If FLAGS_lts differs from default, use it; otherwise use
+  // FLAGS_enable_legacy_timestamp
+  bool useLegacyTimestamp = FLAGS_enable_legacy_timestamp;
+
+  // If lts flag was explicitly set (differs from default), use it
+  if (FLAGS_lts != FLAGS_enable_legacy_timestamp) {
+    useLegacyTimestamp = FLAGS_lts;
+    LOG(INFO) << "Using -lts flag value: " << (FLAGS_lts ? "true" : "false");
+  }
+
+  std::string timestampConfigValue = useLegacyTimestamp ? "true" : "false";
+  std::unordered_map<std::string, std::string> queryConfigs = {
+      {"session_timezone", "America/Los_Angeles"},
+      {"adjust_timestamp_to_session_timezone", timestampConfigValue},
+      {"legacy_timestamp", timestampConfigValue}};
+
+  LOG(INFO) << "Timestamp config: legacy_timestamp=" << timestampConfigValue
+            << ", adjust_timestamp_to_session_timezone=" << timestampConfigValue
+            << " (TIME functions "
+            << (useLegacyTimestamp ? "disabled" : "enabled") << ")";
+
   if (!FLAGS_presto_url.empty()) {
     // Add additional functions to skip since we are now querying Presto
     // directly and are aware of certain failures.
@@ -443,15 +498,16 @@ int main(int argc, char** argv) {
         rootPool.get(),
         FLAGS_presto_url,
         "expression_fuzzer",
-        static_cast<std::chrono::milliseconds>(FLAGS_req_timeout_ms));
+        static_cast<std::chrono::milliseconds>(FLAGS_req_timeout_ms),
+        queryConfigs);
     LOG(INFO) << "Using Presto as the reference DB.";
   }
+
   FuzzerRunner::runFromGtest(
       initialSeed,
       skipFunctions,
       exprTransformers,
-      {{"session_timezone", "America/Los_Angeles"},
-       {"adjust_timestamp_to_session_timezone", "true"}},
+      queryConfigs,
       argTypesGenerators,
       argValuesGenerators,
       referenceQueryRunner,

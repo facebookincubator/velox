@@ -154,17 +154,48 @@ class ServerResponse {
   folly::dynamic response_;
 };
 
+// Helper function to check if a session property key is valid for Presto.
+// Returns true if the property should be sent to Presto, false if it's
+// Velox-only.
+bool isValidPrestoSessionProperty(const std::string& key) {
+  // List of Velox-only configs that should not be passed to Presto
+  static const std::unordered_set<std::string> kVeloxOnlyProperties = {
+      "adjust_timestamp_to_session_timezone",
+      "session_timezone",
+  };
+
+  return kVeloxOnlyProperties.find(key) == kVeloxOnlyProperties.end();
+}
+
 } // namespace
 
 PrestoQueryRunner::PrestoQueryRunner(
     memory::MemoryPool* pool,
     std::string coordinatorUri,
     std::string user,
-    std::chrono::milliseconds timeout)
+    std::chrono::milliseconds timeout,
+    std::unordered_map<std::string, std::string> sessionProperties)
     : ReferenceQueryRunner(pool),
       coordinatorUri_{std::move(coordinatorUri)},
       user_{std::move(user)},
-      timeout_(timeout) {
+      timeout_(timeout),
+      sessionProperties_{std::move(sessionProperties)} {
+  // Validate that legacy_timestamp and adjust_timestamp_to_session_timezone
+  // have the same value if both are present
+  auto legacyIt = sessionProperties_.find("legacy_timestamp");
+  auto adjustIt =
+      sessionProperties_.find("adjust_timestamp_to_session_timezone");
+  if (legacyIt != sessionProperties_.end() &&
+      adjustIt != sessionProperties_.end()) {
+    VELOX_CHECK_EQ(
+        legacyIt->second,
+        adjustIt->second,
+        "legacy_timestamp and adjust_timestamp_to_session_timezone must have "
+        "the same value. Got legacy_timestamp={}, adjust_timestamp_to_session_timezone={}",
+        legacyIt->second,
+        adjustIt->second);
+  }
+
   eventBaseThread_.start("PrestoQueryRunner");
   pool_ = aggregatePool()->addLeafChild("leaf");
   queryRunnerContext_ = std::make_shared<QueryRunnerContext>();
@@ -342,10 +373,24 @@ bool PrestoQueryRunner::isSupported(const exec::FunctionSignature& signature) {
   // p4hyperloglog:
   //   - Not a native type in Presto
   //   - Cannot create HIVE columns of these types
+  //
+  // time:
+  //   - Disabled when legacy_timestamp is true to avoid behavioral differences
+  //     between Velox and Presto. When legacy_timestamp is false, TIME
+  //     functions work correctly.
+
+  // Check if TIME should be disabled based on legacy_timestamp config
+  bool skipTime = false;
+  auto it = sessionProperties_.find("legacy_timestamp");
+  if (it != sessionProperties_.end() && it->second == "true") {
+    skipTime = true;
+  }
+
   return !(
       usesTypeName(signature, "interval year to month") ||
       usesTypeName(signature, "hugeint") ||
-      usesTypeName(signature, "geometry") || usesTypeName(signature, "time") ||
+      usesTypeName(signature, "geometry") ||
+      (skipTime && usesTypeName(signature, "time")) ||
       usesTypeName(signature, "p4hyperloglog") ||
       usesInputTypeName(signature, "ipaddress") ||
       usesInputTypeName(signature, "ipprefix") ||
@@ -459,14 +504,49 @@ PrestoQueryRunner::executeAndReturnVector(const core::PlanNodePtr& plan) {
 }
 
 std::vector<RowVectorPtr> PrestoQueryRunner::execute(const std::string& sql) {
-  return execute(sql, "");
+  // Build session property string from stored properties
+  // Only pass properties that are valid Presto session properties
+  // (e.g., legacy_timestamp is valid, but adjust_timestamp_to_session_timezone
+  // is Velox-only)
+  std::vector<std::string> sessionProps;
+  for (const auto& [key, value] : sessionProperties_) {
+    if (!isValidPrestoSessionProperty(key)) {
+      continue;
+    }
+    sessionProps.push_back(fmt::format("{}={}", key, value));
+  }
+  std::string sessionPropertyStr = folly::join(",", sessionProps);
+  return execute(sql, sessionPropertyStr);
 }
 
 std::vector<RowVectorPtr> PrestoQueryRunner::execute(
     const std::string& sql,
     const std::string& sessionProperty) {
   LOG(INFO) << "Execute presto sql: " << sql;
-  auto response = ServerResponse(startQuery(sql, sessionProperty));
+  // If additional session properties are provided, merge them with stored ones
+  // Skip Velox-only configs that aren't valid Presto session properties
+  std::string finalSessionProperty = sessionProperty;
+  if (!sessionProperties_.empty() && sessionProperty.empty()) {
+    std::vector<std::string> sessionProps;
+    for (const auto& [key, value] : sessionProperties_) {
+      if (!isValidPrestoSessionProperty(key)) {
+        continue;
+      }
+      sessionProps.push_back(fmt::format("{}={}", key, value));
+    }
+    finalSessionProperty = folly::join(",", sessionProps);
+  } else if (!sessionProperties_.empty() && !sessionProperty.empty()) {
+    std::vector<std::string> sessionProps;
+    for (const auto& [key, value] : sessionProperties_) {
+      if (!isValidPrestoSessionProperty(key)) {
+        continue;
+      }
+      sessionProps.push_back(fmt::format("{}={}", key, value));
+    }
+    finalSessionProperty =
+        folly::join(",", sessionProps) + "," + sessionProperty;
+  }
+  auto response = ServerResponse(startQuery(sql, finalSessionProperty));
   response.throwIfFailed();
 
   std::vector<RowVectorPtr> queryResults;
