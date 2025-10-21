@@ -808,10 +808,11 @@ uint32_t HiveDataSink::appendWriter(const HiveWriterId& id) {
     options->spillConfig = spillConfig_;
   }
 
-  if (options->nonReclaimableSection == nullptr) {
-    options->nonReclaimableSection =
-        writerInfo_.back()->nonReclaimableSectionHolder.get();
-  }
+  // Always set nonReclaimableSection to the current writer's holder.
+  // Since insertTableHandle_->writerOptions() returns a shared_ptr, we need
+  // to ensure each writer has its own nonReclaimableSection pointer.
+  options->nonReclaimableSection =
+      writerInfo_.back()->nonReclaimableSectionHolder.get();
 
   if (options->memoryReclaimerFactory == nullptr ||
       options->memoryReclaimerFactory() == nullptr) {

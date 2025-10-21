@@ -17,6 +17,7 @@
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
+#include "velox/core/Expressions.h"
 #include "velox/expression/ConstantExpr.h"
 #include "velox/expression/FieldReference.h"
 #include "velox/type/Type.h"
@@ -42,6 +43,7 @@ namespace {
 struct CudfExpressionEvaluatorEntry {
   int priority;
   CudfExpressionEvaluatorCanEvaluate canEvaluate;
+  CudfExpressionEvaluatorCanEvaluateCompiled canEvaluateCompiled;
   CudfExpressionEvaluatorCreate create;
 };
 
@@ -64,6 +66,9 @@ static void ensureBuiltinExpressionEvaluatorsRegistered() {
   registerCudfExpressionEvaluator(
       "function",
       kFunctionPriority,
+      [](const core::TypedExprPtr& typed) {
+        return FunctionExpression::canEvaluate(typed);
+      },
       [](std::shared_ptr<velox::exec::Expr> expr) {
         return FunctionExpression::canEvaluate(std::move(expr));
       },
@@ -81,6 +86,7 @@ bool registerCudfExpressionEvaluator(
     const std::string& name,
     int priority,
     CudfExpressionEvaluatorCanEvaluate canEvaluate,
+    CudfExpressionEvaluatorCanEvaluateCompiled canEvaluateCompiled,
     CudfExpressionEvaluatorCreate create,
     bool overwrite) {
   auto& registry = getCudfExpressionEvaluatorRegistry();
@@ -88,7 +94,10 @@ bool registerCudfExpressionEvaluator(
     return false;
   }
   registry[name] = CudfExpressionEvaluatorEntry{
-      priority, std::move(canEvaluate), std::move(create)};
+      priority,
+      std::move(canEvaluate),
+      std::move(canEvaluateCompiled),
+      std::move(create)};
   return true;
 }
 
@@ -540,13 +549,27 @@ bool FunctionExpression::canEvaluate(std::shared_ptr<velox::exec::Expr> expr) {
   return getCudfFunctionRegistry().contains(expr->name());
 }
 
+bool FunctionExpression::canEvaluate(const core::TypedExprPtr& expr) {
+  using core::ExprKind;
+  if (expr->kind() == ExprKind::kFieldAccess ||
+      expr->kind() == ExprKind::kDereference ||
+      expr->kind() == ExprKind::kInput || expr->kind() == ExprKind::kConstant) {
+    return true;
+  }
+  if (expr->kind() != ExprKind::kCall) {
+    return false;
+  }
+  const auto* call = expr->asUnchecked<core::CallTypedExpr>();
+  return getCudfFunctionRegistry().contains(call->name());
+}
+
 bool canBeEvaluatedByCudf(std::shared_ptr<velox::exec::Expr> expr, bool deep) {
   ensureBuiltinExpressionEvaluatorsRegistered();
   const auto& registry = getCudfExpressionEvaluatorRegistry();
 
   bool supported = false;
   for (const auto& [name, entry] : registry) {
-    if (entry.canEvaluate && entry.canEvaluate(expr)) {
+    if (entry.canEvaluateCompiled && entry.canEvaluateCompiled(expr)) {
       supported = true;
       break;
     }
@@ -566,6 +589,36 @@ bool canBeEvaluatedByCudf(std::shared_ptr<velox::exec::Expr> expr, bool deep) {
   return true;
 }
 
+bool canBeEvaluatedByCudf(const core::TypedExprPtr& expr) {
+  ensureBuiltinExpressionEvaluatorsRegistered();
+  const auto& registry = getCudfExpressionEvaluatorRegistry();
+
+  bool currentRootSupported = [&]() {
+    for (const auto& [name, entry] : registry) {
+      if (entry.canEvaluate && entry.canEvaluate(expr)) {
+        return true;
+      }
+    }
+    return false;
+  }();
+
+  if (!currentRootSupported) {
+    return false;
+  }
+
+  return canBeEvaluatedByCudf(expr->inputs());
+}
+
+bool canBeEvaluatedByCudf(const std::vector<core::TypedExprPtr>& exprs) {
+  ensureBuiltinExpressionEvaluatorsRegistered();
+  for (const auto& e : exprs) {
+    if (!canBeEvaluatedByCudf(e)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 std::shared_ptr<CudfExpression> createCudfExpression(
     std::shared_ptr<velox::exec::Expr> expr,
     const RowTypePtr& inputRowSchema) {
@@ -574,7 +627,7 @@ std::shared_ptr<CudfExpression> createCudfExpression(
 
   const CudfExpressionEvaluatorEntry* best = nullptr;
   for (const auto& [name, entry] : registry) {
-    if (entry.canEvaluate && entry.canEvaluate(expr)) {
+    if (entry.canEvaluateCompiled && entry.canEvaluateCompiled(expr)) {
       if (best == nullptr || entry.priority > best->priority) {
         best = &entry;
       }

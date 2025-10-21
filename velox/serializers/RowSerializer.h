@@ -305,9 +305,7 @@ class RowIteratorImpl : public velox::RowIterator {
 
 using RowIteratorFactory = std::function<std::unique_ptr<RowIterator>(
     ByteInputStream*,
-    std::unique_ptr<BufferInputStream>,
-    std::unique_ptr<folly::IOBuf>,
-    size_t)>;
+    const VectorSerde::Options*)>;
 
 template <typename SerializeView>
 class RowDeserializer {
@@ -316,11 +314,11 @@ class RowDeserializer {
       ByteInputStream* source,
       std::vector<SerializeView>& serializedRows,
       std::vector<std::unique_ptr<std::string>>& serializedBuffers,
-      RowIteratorFactory rowIteratorFactory,
+      const RowIteratorFactory& rowIteratorFactory,
       const VectorSerde::Options* options) {
     while (!source->atEnd()) {
       std::unique_ptr<velox::RowIterator> rowIterator =
-          createNextRowIter(source, options, rowIteratorFactory);
+          rowIteratorFactory(source, options);
       while (rowIterator->hasNext()) {
         serializedBuffers.emplace_back(rowIterator->nextRow());
         if constexpr (std::is_same_v<SerializeView, std::string_view>) {
@@ -348,13 +346,12 @@ class RowDeserializer {
       std::unique_ptr<velox::RowIterator>& sourceRowIterator,
       std::vector<SerializeView>& serializedRows,
       std::vector<std::unique_ptr<std::string>>& serializedBuffers,
-      RowIteratorFactory rowIteratorFactory,
+      const RowIteratorFactory& rowIteratorFactory,
       const VectorSerde::Options* options) {
     auto remainingRows = maxRows;
     if (sourceRowIterator == nullptr) {
       VELOX_CHECK(!source->atEnd());
-      sourceRowIterator =
-          createNextRowIter(source, options, rowIteratorFactory);
+      sourceRowIterator = rowIteratorFactory(source, options);
     }
     while (remainingRows > 0) {
       while (sourceRowIterator->hasNext()) {
@@ -376,46 +373,10 @@ class RowDeserializer {
           sourceRowIterator.reset();
           break;
         }
-        sourceRowIterator =
-            createNextRowIter(source, options, rowIteratorFactory);
+        sourceRowIterator = rowIteratorFactory(source, options);
       }
     }
     return maxRows - remainingRows;
-  }
-
- private:
-  static std::unique_ptr<velox::RowIterator> createNextRowIter(
-      ByteInputStream* source,
-      const VectorSerde::Options* options,
-      RowIteratorFactory& rowIteratorFactory) {
-    const auto header = detail::RowGroupHeader::read(source);
-    if (!header.compressed) {
-      return rowIteratorFactory(
-          source, nullptr, nullptr, header.uncompressedSize + source->tellp());
-    }
-
-    const auto compressionKind = options == nullptr
-        ? VectorSerde::Options().compressionKind
-        : options->compressionKind;
-    VELOX_DCHECK_NE(
-        compressionKind, common::CompressionKind::CompressionKind_NONE);
-    auto compressBuf = folly::IOBuf::create(header.compressedSize);
-    source->readBytes(compressBuf->writableData(), header.compressedSize);
-    compressBuf->append(header.compressedSize);
-
-    // Process chained uncompressed results IOBufs.
-    const auto codec = common::compressionKindToCodec(compressionKind);
-    auto uncompressedBuf =
-        codec->uncompress(compressBuf.get(), header.uncompressedSize);
-
-    auto uncompressedStream = std::make_unique<BufferInputStream>(
-        byteRangesFromIOBuf(uncompressedBuf.get()));
-    const std::streampos initialSize = uncompressedStream->tellp();
-    return rowIteratorFactory(
-        nullptr,
-        std::move(uncompressedStream),
-        std::move(uncompressedBuf),
-        header.uncompressedSize + initialSize);
   }
 };
 } // namespace facebook::velox::serializer

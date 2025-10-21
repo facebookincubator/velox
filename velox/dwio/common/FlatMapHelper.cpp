@@ -21,8 +21,17 @@
 namespace facebook::velox::dwio::common::flatmap {
 namespace detail {
 
-void reset(VectorPtr& vector, vector_size_t size, bool hasNulls) {
+void reset(
+    VectorPtr& vector,
+    VectorEncoding::Simple desiredEncoding,
+    vector_size_t size,
+    bool hasNulls) {
   if (!vector) {
+    return;
+  }
+
+  if (vector->encoding() != desiredEncoding) {
+    vector.reset();
     return;
   }
 
@@ -162,7 +171,7 @@ void initializeVectorImpl<TypeKind::ARRAY>(
     }
   }
 
-  detail::reset(vector, size, hasNulls);
+  detail::reset(vector, VectorEncoding::Simple::ARRAY, size, hasNulls);
   VectorPtr origElementsVector;
   if (vector) {
     auto& arrayVector = dynamic_cast<ArrayVector&>(*vector);
@@ -226,7 +235,7 @@ void initializeMapVector(
     size = sizeOverride.value();
   }
 
-  detail::reset(vector, size, hasNulls);
+  detail::reset(vector, VectorEncoding::Simple::MAP, size, hasNulls);
   VectorPtr origKeysVector;
   VectorPtr origValuesVector;
   if (vector) {
@@ -298,7 +307,7 @@ void initializeVectorImpl<TypeKind::ROW>(
     }
   }
 
-  detail::reset(vector, size, hasNulls);
+  detail::reset(vector, VectorEncoding::Simple::ROW, size, hasNulls);
   std::vector<VectorPtr> origChildren;
   if (vector) {
     auto& rowVector = dynamic_cast<RowVector&>(*vector);

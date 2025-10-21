@@ -90,9 +90,11 @@ class ASTExpression : public CudfExpression {
 
   void close() override;
 
-  // Check if this specific operation can be evaluated by ASTExpression
-  // (does not recursively check children)
+  // Check if this specific operation (not its children) can be evaluated by
+  // ASTExpression
   static bool canEvaluate(std::shared_ptr<velox::exec::Expr> expr);
+  // Used for checking before compiling to exec::Expr like in ToCudf.
+  static bool canEvaluate(const core::TypedExprPtr& expr);
 
  private:
   cudf::ast::tree cudfTree_;

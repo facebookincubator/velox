@@ -21,6 +21,7 @@
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include "velox/expression/Expr.h"
+#include "velox/expression/FieldReference.h"
 
 #include <cudf/aggregation.hpp>
 #include <cudf/reduction.hpp>
@@ -41,13 +42,64 @@ void debugPrintTree(
     debugPrintTree(input, indent + 2);
   }
 }
+
+bool checkAddIdentityProjection(
+    const core::TypedExprPtr& projection,
+    const RowTypePtr& inputType,
+    column_index_t outputChannel,
+    std::vector<exec::IdentityProjection>& identityProjections) {
+  if (auto field = core::TypedExprs::asFieldAccess(projection)) {
+    const auto& inputs = field->inputs();
+    if (inputs.empty() ||
+        (inputs.size() == 1 &&
+         dynamic_cast<const core::InputTypedExpr*>(inputs[0].get()))) {
+      const auto inputChannel = inputType->getChildIdx(field->name());
+      identityProjections.emplace_back(inputChannel, outputChannel);
+      return true;
+    }
+  }
+
+  return false;
+}
+
+// Split stats to attrbitute cardinality reduction to the Filter node.
+std::vector<exec::OperatorStats> splitStats(
+    const exec::OperatorStats& combinedStats,
+    const core::PlanNodeId& filterNodeId) {
+  exec::OperatorStats filterStats;
+
+  filterStats.operatorId = combinedStats.operatorId;
+  filterStats.pipelineId = combinedStats.pipelineId;
+  filterStats.planNodeId = filterNodeId;
+  filterStats.operatorType = combinedStats.operatorType;
+  filterStats.numDrivers = combinedStats.numDrivers;
+
+  filterStats.inputBytes = combinedStats.inputBytes;
+  filterStats.inputPositions = combinedStats.inputPositions;
+  filterStats.inputVectors = combinedStats.inputVectors;
+
+  // Estimate Filter's output bytes based on cardinality change.
+  const double filterRate = combinedStats.inputPositions > 0
+      ? (combinedStats.outputPositions * 1.0 / combinedStats.inputPositions)
+      : 1.0;
+
+  filterStats.outputBytes = (uint64_t)(filterStats.inputBytes * filterRate);
+  filterStats.outputPositions = combinedStats.outputPositions;
+  filterStats.outputVectors = combinedStats.outputVectors;
+
+  auto projectStats = combinedStats;
+  projectStats.inputBytes = filterStats.outputBytes;
+  projectStats.inputPositions = filterStats.outputPositions;
+  projectStats.inputVectors = filterStats.outputVectors;
+
+  return {std::move(projectStats), std::move(filterStats)};
+}
+
 } // namespace
 
 CudfFilterProject::CudfFilterProject(
     int32_t operatorId,
     velox::exec::DriverCtx* driverCtx,
-    const velox::exec::FilterProject::Export& info,
-    std::vector<velox::exec::IdentityProjection> identityProjections,
     const std::shared_ptr<const core::FilterNode>& filter,
     const std::shared_ptr<const core::ProjectNode>& project)
     : Operator(
@@ -60,41 +112,89 @@ CudfFilterProject::CudfFilterProject(
           nvtx3::rgb{220, 20, 60}, // Crimson
           operatorId,
           fmt::format("[{}]", project ? project->id() : filter->id())),
-      hasFilter_(info.hasFilter),
+      hasFilter_(filter != nullptr),
       project_(project),
       filter_(filter) {
-  resultProjections_ = *(info.resultProjections);
-  identityProjections_ = std::move(identityProjections);
+  if (filter_ != nullptr && project_ != nullptr) {
+    folly::Synchronized<exec::OperatorStats>& opStats = Operator::stats();
+    opStats.withWLock([&](auto& stats) {
+      stats.setStatSplitter(
+          [filterId = filter_->id()](const auto& combinedStats) {
+            return splitStats(combinedStats, filterId);
+          });
+    });
+  }
+}
+
+void CudfFilterProject::initialize() {
+  Operator::initialize();
+
+  std::vector<core::TypedExprPtr> allExprs;
+  if (hasFilter_) {
+    VELOX_CHECK_NOT_NULL(filter_);
+    allExprs.push_back(filter_->filter());
+  }
+
+  if (project_) {
+    const auto& inputType = project_->sources()[0]->outputType();
+
+    for (column_index_t i = 0; i < project_->projections().size(); i++) {
+      auto& projection = project_->projections()[i];
+      bool identityProjection = checkAddIdentityProjection(
+          projection, inputType, i, identityProjections_);
+      if (!identityProjection) {
+        allExprs.push_back(projection);
+        resultProjections_.emplace_back(allExprs.size() - 1, i);
+      }
+    }
+  } else {
+    for (column_index_t i = 0; i < outputType_->size(); ++i) {
+      identityProjections_.emplace_back(i, i);
+    }
+    isIdentityProjection_ = true;
+  }
+
+  auto lazyDereference =
+      (dynamic_cast<const core::LazyDereferenceNode*>(project_.get()) !=
+       nullptr);
+  VELOX_CHECK(!(lazyDereference && filter_));
+  auto expr = exec::makeExprSetFromFlag(
+      std::move(allExprs), operatorCtx_->execCtx(), lazyDereference);
+
   const auto inputType = project_ ? project_->sources()[0]->outputType()
                                   : filter_->sources()[0]->outputType();
 
   // convert to AST
   if (CudfConfig::getInstance().debugEnabled) {
     int i = 0;
-    for (auto expr : info.exprs->exprs()) {
+    for (const auto& expr : expr->exprs()) {
       std::cout << "expr[" << i++ << "] " << expr->toString() << std::endl;
       debugPrintTree(expr);
+      ++i;
     }
   }
   if (hasFilter_) {
     // First expr is Filter, rest are Project
-    filterEvaluator_ = createCudfExpression(info.exprs->exprs()[0], inputType);
+    filterEvaluator_ = createCudfExpression(expr->exprs()[0], inputType);
     std::transform(
-        info.exprs->exprs().begin() + 1,
-        info.exprs->exprs().end(),
+        expr->exprs().begin() + 1,
+        expr->exprs().end(),
         std::back_inserter(projectEvaluators_),
         [inputType](const auto& expr) {
           return createCudfExpression(expr, inputType);
         });
   } else {
     std::transform(
-        info.exprs->exprs().begin(),
-        info.exprs->exprs().end(),
+        expr->exprs().begin(),
+        expr->exprs().end(),
         std::back_inserter(projectEvaluators_),
         [inputType](const auto& expr) {
           return createCudfExpression(expr, inputType);
         });
   }
+
+  filter_.reset();
+  project_.reset();
 }
 
 void CudfFilterProject::addInput(RowVectorPtr input) {

@@ -14,10 +14,10 @@
  * limitations under the License.
  */
 #include "velox/experimental/cudf/CudfConfig.h"
-#include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/expression/AstExpression.h"
 #include "velox/experimental/cudf/expression/AstUtils.h"
 
+#include "velox/core/Expressions.h"
 #include "velox/expression/ConstantExpr.h"
 #include "velox/expression/FieldReference.h"
 #include "velox/vector/ComplexVector.h"
@@ -163,13 +163,12 @@ const std::unordered_set<std::string> astSupportedOps =
 namespace detail {
 
 // Check if this specific operation is supported by AST (shallow check only)
-bool isAstSupported(const std::shared_ptr<velox::exec::Expr>& expr) {
+bool isAstSupported(const std::string& exprName) {
   const auto name =
-      stripPrefix(expr->name(), CudfConfig::getInstance().functionNamePrefix);
+      stripPrefix(exprName, CudfConfig::getInstance().functionNamePrefix);
 
   return astSupportedOps.count(name) || binaryOps.count(name) ||
-      unaryOps.count(name) ||
-      std::dynamic_pointer_cast<velox::exec::FieldReference>(expr) != nullptr;
+      unaryOps.count(name);
 }
 
 } // namespace detail
@@ -581,13 +580,43 @@ ColumnOrView ASTExpression::eval(
 }
 
 bool ASTExpression::canEvaluate(std::shared_ptr<velox::exec::Expr> expr) {
-  return detail::isAstSupported(expr);
+  return detail::isAstSupported(expr->name()) ||
+      std::dynamic_pointer_cast<velox::exec::FieldReference>(expr) != nullptr;
+}
+
+bool ASTExpression::canEvaluate(const core::TypedExprPtr& expr) {
+  using core::ExprKind;
+  switch (expr->kind()) {
+    case ExprKind::kFieldAccess:
+    case ExprKind::kDereference:
+    case ExprKind::kConstant:
+    case ExprKind::kInput:
+      return true;
+    case ExprKind::kCall: {
+      const auto* call =
+          expr->asUnchecked<facebook::velox::core::CallTypedExpr>();
+      return detail::isAstSupported(call->name());
+    }
+    case core::ExprKind::kCast: {
+      const auto* cast = expr->asUnchecked<core::CastTypedExpr>();
+      if (cast->isTryCast()) {
+        return false;
+      }
+      return true;
+    }
+
+    default:
+      return false;
+  }
 }
 
 void registerAstEvaluator(int priority) {
   registerCudfExpressionEvaluator(
       "ast",
       priority,
+      [](const core::TypedExprPtr& typed) {
+        return ASTExpression::canEvaluate(typed);
+      },
       [](std::shared_ptr<velox::exec::Expr> expr) {
         return ASTExpression::canEvaluate(expr);
       },

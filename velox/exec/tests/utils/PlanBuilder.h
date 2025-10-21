@@ -1317,6 +1317,9 @@ class PlanBuilder {
   PlanBuilder& spatialJoin(
       const core::PlanNodePtr& right,
       const std::string& joinCondition,
+      const std::string& probeGeometry,
+      const std::string& buildGeometry,
+      const std::optional<std::string>& radius,
       const std::vector<std::string>& outputLayout,
       core::JoinType joinType = core::JoinType::kInner);
 

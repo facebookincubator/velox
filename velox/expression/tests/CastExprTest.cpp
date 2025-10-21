@@ -3269,5 +3269,729 @@ TEST_F(CastExprTest, timeToBigintCast) {
   }
 }
 
+TEST_F(CastExprTest, varcharToTimeCast) {
+  // Set session time zone to UTC before running the tests
+  setTimezone("UTC");
+
+  {
+    // Test casting VARCHAR to TIME with valid time strings
+    auto varcharVector = makeFlatVector<StringView>(
+        {"00:00:00.000",
+         "01:01:01.000",
+         "12:00:00.000",
+         "23:59:59.999",
+         "09:30:15.123",
+         "18:45:30.500"});
+
+    // Use makeCastExpr directly to avoid DuckDB parser issues
+    auto inputField =
+        std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c0");
+    auto castExpr = makeCastExpr(inputField, TIME(), false);
+    auto result = evaluate(castExpr, makeRowVector({varcharVector}));
+
+    // TIME is milliseconds since midnight
+    auto expected = makeFlatVector<int64_t>(
+        {
+            0, // 00:00:00.000
+            3661000, // 01:01:01.000 = 3600*1000 + 60*1000 + 1*1000
+            43200000, // 12:00:00.000 = 12*3600*1000
+            86399999, // 23:59:59.999 = 23*3600*1000 + 59*60*1000 + 59*1000 +
+                      // 999
+            34215123, // 09:30:15.123 = 9*3600*1000 + 30*60*1000 + 15*1000 + 123
+            67530500 // 18:45:30.500 = 18*3600*1000 + 45*60*1000 + 30*1000 + 500
+        },
+        TIME());
+
+    assertEqualVectors(expected, result);
+  }
+
+  {
+    // Test casting VARCHAR to TIME with nulls
+    auto varcharVector = makeNullableFlatVector<StringView>(
+        {"00:00:00.000", std::nullopt, "12:00:00.000", std::nullopt});
+
+    auto inputField =
+        std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c0");
+    auto castExpr = makeCastExpr(inputField, TIME(), false);
+    auto result = evaluate(castExpr, makeRowVector({varcharVector}));
+
+    auto expected = makeNullableFlatVector<int64_t>(
+        {0, std::nullopt, 43200000, std::nullopt}, TIME());
+
+    assertEqualVectors(expected, result);
+  }
+
+  {
+    // Test time formats without milliseconds
+    auto varcharVector =
+        makeFlatVector<StringView>({"00:00:00", "12:30:45", "23:59:59"});
+
+    auto inputField =
+        std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c0");
+    auto castExpr = makeCastExpr(inputField, TIME(), false);
+    auto result = evaluate(castExpr, makeRowVector({varcharVector}));
+
+    auto expected = makeFlatVector<int64_t>(
+        {
+            0, // 00:00:00
+            45045000, // 12:30:45 = 12*3600*1000 + 30*60*1000 + 45*1000
+            86399000 // 23:59:59 = 23*3600*1000 + 59*60*1000 + 59*1000
+        },
+        TIME());
+
+    assertEqualVectors(expected, result);
+  }
+
+  {
+    // Test try_cast with invalid formats
+    auto varcharVector = makeFlatVector<StringView>({
+        "00:00:00.000", // valid
+        "25:00:00.000", // invalid hour
+        "12:60:00.000", // invalid minute
+        "12:30:60.000", // invalid second
+        "invalid", // completely invalid
+        "12:30" // missing seconds
+    });
+
+    auto inputField =
+        std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c0");
+    auto tryCastExpr = makeCastExpr(inputField, TIME(), true);
+    auto result = evaluate(tryCastExpr, makeRowVector({varcharVector}));
+
+    auto expected = makeNullableFlatVector<int64_t>(
+        {
+            0, // valid
+            std::nullopt, // invalid hour
+            std::nullopt, // invalid minute
+            std::nullopt, // invalid second
+            std::nullopt, // completely invalid
+            std::nullopt // missing seconds
+        },
+        TIME());
+
+    assertEqualVectors(expected, result);
+  }
+
+  {
+    // Test edge cases with leading/trailing spaces (should NOT be handled -
+    // should fail like Presto)
+    auto varcharVector = makeFlatVector<StringView>({
+        " 12:30:45.123 ", // spaces should cause failure
+        "12:30:45.123", // no spaces - should succeed
+        " 09:15:30.456", // leading space - should fail
+        "14:22:33.789 ", // trailing space - should fail
+    });
+
+    auto inputField =
+        std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c0");
+    auto tryCastExpr = makeCastExpr(inputField, TIME(), true);
+    auto result = evaluate(tryCastExpr, makeRowVector({varcharVector}));
+
+    auto expected = makeNullableFlatVector<int64_t>(
+        {
+            std::nullopt, // spaces cause failure
+            45045123, // 12:30:45.123 without spaces succeeds
+            std::nullopt, // leading space causes failure
+            std::nullopt, // trailing space causes failure
+        },
+        TIME());
+
+    assertEqualVectors(expected, result);
+  }
+
+  {
+    // Test that Unicode digits are rejected (not converted)
+    auto varcharVector = makeFlatVector<StringView>({
+        "1٢:30:45.123", // Arabic digit in hour should throw error
+        "12:٣٠:45.123", // Arabic digits in minute should throw error
+        "12:30:٤٥.123", // Arabic digits in second should throw error
+        "12:30:45.١٢٣", // Arabic digits in millisecond should throw error
+    });
+
+    auto inputField =
+        std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c0");
+    auto castExpr = makeCastExpr(inputField, TIME(), false);
+
+    // Should throw error for Unicode digits
+    VELOX_ASSERT_THROW(
+        evaluate(castExpr, makeRowVector({varcharVector})),
+        "Failed to parse minute in time string");
+
+    // Test with try_cast - should return null for Unicode digits
+    auto tryCastExpr = makeCastExpr(inputField, TIME(), true);
+    auto result = evaluate(tryCastExpr, makeRowVector({varcharVector}));
+
+    auto expected = makeNullableFlatVector<int64_t>(
+        {std::nullopt, std::nullopt, std::nullopt, std::nullopt}, TIME());
+
+    assertEqualVectors(expected, result);
+  }
+
+  {
+    // Test that microsecond precision should throw an error (not truncate)
+    auto varcharVector = makeFlatVector<StringView>({
+        "12:30:45.123456", // microseconds should throw error
+        "12:30:45.123999", // microseconds should throw error
+    });
+
+    auto inputField =
+        std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c0");
+    auto castExpr = makeCastExpr(inputField, TIME(), false);
+
+    // Should throw error for microseconds
+    VELOX_ASSERT_THROW(
+        evaluate(castExpr, makeRowVector({varcharVector})),
+        "Microsecond precision not supported");
+
+    // Test with try_cast - should return null for microseconds
+    auto tryCastExpr = makeCastExpr(inputField, TIME(), true);
+    auto result = evaluate(tryCastExpr, makeRowVector({varcharVector}));
+
+    auto expected =
+        makeNullableFlatVector<int64_t>({std::nullopt, std::nullopt}, TIME());
+
+    assertEqualVectors(expected, result);
+
+    // Test that exact milliseconds still work
+    auto validVector = makeFlatVector<StringView>({"12:30:45.123"});
+    auto validResult = evaluate(
+        makeCastExpr(
+            std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c0"),
+            TIME(),
+            false),
+        makeRowVector({validVector}));
+
+    auto validExpected = makeFlatVector<int64_t>({45045123}, TIME());
+    assertEqualVectors(validExpected, validResult);
+  }
+
+  {
+    // Test timezone-aware VARCHAR to TIME casting with America/Los_Angeles
+    // timezone When casting VARCHAR to TIME, the string is interpreted as local
+    // time and converted to UTC (the reverse of TIME to VARCHAR)
+    setSessionStartTimeAndTimeZone(
+        1756710000000, "America/Los_Angeles"); // 2025-09-01T00:00:00.000 (DST)
+
+    auto varcharVector = makeFlatVector<StringView>({
+        "00:00:00.000", // Midnight local time
+        "07:00:00.000", // 7 AM local time
+        "12:00:00.000", // Noon local time
+        "23:59:59.999" // Just before midnight local time
+    });
+
+    auto inputField =
+        std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c0");
+    auto castExpr = makeCastExpr(inputField, TIME(), false);
+    auto result = evaluate(castExpr, makeRowVector({varcharVector}));
+
+    // During DST, LA is UTC-7, so local times are converted to UTC by adding 7
+    // hours
+    auto expected = makeFlatVector<int64_t>(
+        {
+            25200000, // 00:00:00.000 + 7 hours = 07:00:00.000 UTC
+            50400000, // 07:00:00.000 + 7 hours = 14:00:00.000 UTC
+            68400000, // 12:00:00.000 + 7 hours = 19:00:00.000 UTC
+            25199999, // 23:59:59.999 + 7 hours = 06:59:59.999 UTC (next day)
+        },
+        TIME());
+
+    assertEqualVectors(expected, result);
+  }
+
+  {
+    // Test with different timezone settings - during standard time (not DST)
+    setSessionStartTimeAndTimeZone(
+        1762761600000,
+        "America/Los_Angeles"); // 2025-11-10T00:00:00.000 (Standard Time)
+
+    auto varcharVector = makeFlatVector<StringView>({
+        "00:00:00.000", // Midnight local time
+        "08:00:00.000", // 8 AM local time
+        "12:00:00.000", // Noon local time
+        "23:59:59.999" // Just before midnight local time
+    });
+
+    auto inputField =
+        std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c0");
+    auto castExpr = makeCastExpr(inputField, TIME(), false);
+    auto result = evaluate(castExpr, makeRowVector({varcharVector}));
+
+    // During standard time, LA is UTC-8, so local times are converted to UTC by
+    // adding 8 hours
+    auto expected = makeFlatVector<int64_t>(
+        {
+            28800000, // 00:00:00.000 + 8 hours = 08:00:00.000 UTC
+            57600000, // 08:00:00.000 + 8 hours = 16:00:00.000 UTC
+            72000000, // 12:00:00.000 + 8 hours = 20:00:00.000 UTC
+            28799999, // 23:59:59.999 + 8 hours = 07:59:59.999 UTC (next day)
+        },
+        TIME());
+
+    assertEqualVectors(expected, result);
+  }
+
+  {
+    // Test with Australia/Perth timezone
+    setTimezone("Australia/Perth");
+
+    auto varcharVector = makeFlatVector<StringView>({
+        "00:00:00.000", // Midnight local time
+        "06:00:00.000", // 6 AM local time
+        "12:00:00.000", // Noon local time
+        "18:00:00.000" // 6 PM local time
+    });
+
+    auto inputField =
+        std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c0");
+    auto castExpr = makeCastExpr(inputField, TIME(), false);
+    auto result = evaluate(castExpr, makeRowVector({varcharVector}));
+
+    // Perth is UTC+8, so local times are converted to UTC by subtracting 8
+    // hours
+    auto expected = makeFlatVector<int64_t>(
+        {
+            57600000, // 00:00:00.000 - 8 hours = 16:00:00.000 UTC (previous
+                      // day)
+            79200000, // 06:00:00.000 - 8 hours = 22:00:00.000 UTC (previous
+                      // day)
+            14400000, // 12:00:00.000 - 8 hours = 04:00:00.000 UTC
+            36000000 // 18:00:00.000 - 8 hours = 10:00:00.000 UTC
+        },
+        TIME());
+
+    assertEqualVectors(expected, result);
+  }
+}
+
+TEST_F(CastExprTest, varcharToTimeDSTGapHandling) {
+  // Test DST gap handling for VARCHAR to TIME conversion during spring-forward
+  // transition in America/Los_Angeles on March 10, 2024
+  setSessionStartTimeAndTimeZone(
+      1710064800000, "America/Los_Angeles"); // March 10, 2024 01:00:00 UTC
+
+  {
+    // Test normal times outside DST gaps work correctly
+    auto varcharVector = makeFlatVector<StringView>({
+        "01:30:00.000", // Before DST gap
+        "03:30:00.000", // After DST gap
+        "05:00:00.000", // Well after DST gap
+    });
+
+    auto inputField =
+        std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c0");
+    auto castExpr = makeCastExpr(inputField, TIME(), false);
+    auto timeResult = evaluate(castExpr, makeRowVector({varcharVector}));
+
+    ASSERT_TRUE(timeResult != nullptr);
+    ASSERT_EQ(timeResult->size(), 3);
+
+    for (int i = 0; i < 3; i++) {
+      EXPECT_FALSE(timeResult->isNullAt(i))
+          << "Valid time at index " << i << " should not be null";
+    }
+  }
+
+  {
+    // Test round-trip conversion for valid times
+    auto varcharVector = makeFlatVector<StringView>({
+        "01:30:00.000", // Before DST gap
+        "03:30:00.000", // After DST gap
+    });
+
+    auto inputField =
+        std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c0");
+    auto castExpr = makeCastExpr(inputField, TIME(), false);
+    auto timeResult = evaluate(castExpr, makeRowVector({varcharVector}));
+
+    auto timeToVarcharExpr = makeCastExpr(
+        std::make_shared<core::FieldAccessTypedExpr>(TIME(), "c0"),
+        VARCHAR(),
+        false);
+    auto varcharResult =
+        evaluate(timeToVarcharExpr, makeRowVector({timeResult}));
+
+    auto result =
+        std::dynamic_pointer_cast<FlatVector<StringView>>(varcharResult);
+    ASSERT_TRUE(result != nullptr);
+
+    // Times outside the DST gap should round-trip correctly
+    EXPECT_EQ(result->valueAt(0), "01:30:00.000");
+    EXPECT_EQ(result->valueAt(1), "03:30:00.000");
+  }
+
+  {
+    // Test DST gap times with try_cast - gap times should return null
+    auto varcharVector = makeFlatVector<StringView>({
+        "01:30:00.000", // Before gap - should work
+        "02:01:00.000", // In the gap - should return null
+        "02:30:00.000", // In the gap - should return null
+        "03:30:00.000", // After gap - should work
+    });
+
+    auto inputField =
+        std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c0");
+    auto tryCastExpr = makeCastExpr(inputField, TIME(), true);
+    auto result = evaluate(tryCastExpr, makeRowVector({varcharVector}));
+
+    ASSERT_TRUE(result != nullptr);
+    ASSERT_EQ(result->size(), 4);
+
+    // Times before and after the gap should work
+    EXPECT_FALSE(result->isNullAt(0)) << "Time before DST gap should work";
+    EXPECT_FALSE(result->isNullAt(3)) << "Time after DST gap should work";
+
+    // Gap times should return null
+    EXPECT_TRUE(result->isNullAt(1)) << "Gap time 02:01:00 should return null";
+    EXPECT_TRUE(result->isNullAt(2)) << "Gap time 02:30:00 should return null";
+  }
+
+  {
+    // Test DST fall-back transition (November - when times are ambiguous)
+    setSessionStartTimeAndTimeZone(
+        1730620800000, "America/Los_Angeles"); // November 3, 2024 DST end
+
+    auto ambiguousTimeVector = makeFlatVector<StringView>({
+        "00:30:00.000", // Before fall-back - should work
+        "01:30:00.000", // Ambiguous time - occurs twice during fall-back
+        "02:30:00.000", // After fall-back - should work
+    });
+
+    auto inputField =
+        std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c0");
+    auto tryCastExpr = makeCastExpr(inputField, TIME(), true);
+    auto result = evaluate(tryCastExpr, makeRowVector({ambiguousTimeVector}));
+
+    ASSERT_TRUE(result != nullptr);
+    ASSERT_EQ(result->size(), 3);
+
+    // All times should work during fall-back (no gaps, just ambiguity)
+    EXPECT_FALSE(result->isNullAt(0)) << "Time before fall-back should work";
+    EXPECT_FALSE(result->isNullAt(2)) << "Time after fall-back should work";
+  }
+
+  {
+    // Test that ambiguous times during DST fall-back pick the earlier
+    // occurrence (like Presto does). During fall-back, clocks go from 2:00 AM
+    // to 1:00 AM, so times like 1:30 AM occur twice - we should pick the first
+    // occurrence.
+    setSessionStartTimeAndTimeZone(
+        1730620800000, "America/Los_Angeles"); // November 3, 2024 DST end
+
+    auto ambiguousTimeVector = makeFlatVector<StringView>({
+        "01:00:00.000", // Occurs twice: once before fall-back, once after
+        "01:15:00.000", // Occurs twice during the ambiguous hour
+        "01:30:00.000", // Occurs twice during the ambiguous hour
+        "01:45:00.000", // Occurs twice during the ambiguous hour
+        "01:59:59.999", // Last ambiguous time before 2:00 AM
+    });
+
+    auto inputField =
+        std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c0");
+    auto castExpr = makeCastExpr(inputField, TIME(), false);
+    auto result = evaluate(castExpr, makeRowVector({ambiguousTimeVector}));
+
+    // Convert back to VARCHAR to see which time was chosen
+    auto timeToVarcharExpr = makeCastExpr(
+        std::make_shared<core::FieldAccessTypedExpr>(TIME(), "c0"),
+        VARCHAR(),
+        false);
+    auto varcharResult = evaluate(timeToVarcharExpr, makeRowVector({result}));
+
+    auto resultVector =
+        std::dynamic_pointer_cast<FlatVector<StringView>>(varcharResult);
+    ASSERT_TRUE(resultVector != nullptr);
+
+    // During fall-back in LA, we expect the earlier occurrence to be chosen.
+    // The earlier occurrence is when LA is still in PDT (UTC-7).
+    // Times should round-trip correctly since we picked a valid occurrence.
+    EXPECT_EQ(resultVector->valueAt(0), "01:00:00.000");
+    EXPECT_EQ(resultVector->valueAt(1), "01:15:00.000");
+    EXPECT_EQ(resultVector->valueAt(2), "01:30:00.000");
+    EXPECT_EQ(resultVector->valueAt(3), "01:45:00.000");
+    EXPECT_EQ(resultVector->valueAt(4), "01:59:59.999");
+
+    // Verify that we get consistent behavior: casting the same ambiguous time
+    // multiple times should always give the same result (earlier occurrence)
+    auto singleAmbiguousTime = makeFlatVector<StringView>({"01:30:00.000"});
+    auto result1 = evaluate(castExpr, makeRowVector({singleAmbiguousTime}));
+    auto result2 = evaluate(castExpr, makeRowVector({singleAmbiguousTime}));
+
+    // Both results should be identical (picking the same occurrence)
+    assertEqualVectors(result1, result2);
+
+    // Convert both results back to varchar to verify consistency
+    auto varchar1 = evaluate(timeToVarcharExpr, makeRowVector({result1}));
+    auto varchar2 = evaluate(timeToVarcharExpr, makeRowVector({result2}));
+    assertEqualVectors(varchar1, varchar2);
+  }
+
+  {
+    // Test ambiguous time behavior across different DST transitions
+    // to ensure consistent "pick earlier occurrence" behavior
+
+    // Test with a different year's fall-back transition
+    setSessionStartTimeAndTimeZone(
+        1699761600000, "America/Los_Angeles"); // November 5, 2023 DST end
+
+    auto ambiguousTime2023 = makeFlatVector<StringView>({"01:30:00.000"});
+    auto inputField =
+        std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c0");
+    auto castExpr = makeCastExpr(inputField, TIME(), false);
+    auto result2023 = evaluate(castExpr, makeRowVector({ambiguousTime2023}));
+
+    // Convert back to verify round-trip
+    auto timeToVarcharExpr = makeCastExpr(
+        std::make_shared<core::FieldAccessTypedExpr>(TIME(), "c0"),
+        VARCHAR(),
+        false);
+    auto varchar2023 = evaluate(timeToVarcharExpr, makeRowVector({result2023}));
+
+    auto resultVector2023 =
+        std::dynamic_pointer_cast<FlatVector<StringView>>(varchar2023);
+    ASSERT_TRUE(resultVector2023 != nullptr);
+
+    // Should round-trip correctly, confirming we picked a valid occurrence
+    EXPECT_EQ(resultVector2023->valueAt(0), "01:30:00.000");
+
+    // Test with 2025 fall-back transition
+    setSessionStartTimeAndTimeZone(
+        1762160400000, "America/Los_Angeles"); // November 2, 2025 DST end
+
+    auto ambiguousTime2025 = makeFlatVector<StringView>({"01:30:00.000"});
+    auto result2025 = evaluate(castExpr, makeRowVector({ambiguousTime2025}));
+    auto varchar2025 = evaluate(timeToVarcharExpr, makeRowVector({result2025}));
+
+    auto resultVector2025 =
+        std::dynamic_pointer_cast<FlatVector<StringView>>(varchar2025);
+    ASSERT_TRUE(resultVector2025 != nullptr);
+
+    // Should round-trip correctly across different years
+    EXPECT_EQ(resultVector2025->valueAt(0), "01:30:00.000");
+  }
+
+  {
+    // Test that gap times don't round-trip to original values
+    setSessionStartTimeAndTimeZone(
+        1710064800000, "America/Los_Angeles"); // Back to March 10, 2024
+
+    auto gapTimeVector = makeFlatVector<StringView>({
+        "02:01:00.000", // Gap time example
+    });
+
+    auto inputField =
+        std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c0");
+    auto tryCastExpr = makeCastExpr(inputField, TIME(), true);
+    auto timeResult = evaluate(tryCastExpr, makeRowVector({gapTimeVector}));
+
+    // Gap time should return null, confirming it doesn't round-trip
+    EXPECT_TRUE(timeResult->isNullAt(0))
+        << "Gap time 02:01:00 should return null during DST spring-forward";
+  }
+
+  {
+    // Test that regular cast (not try_cast) throws exceptions for gap times
+    setSessionStartTimeAndTimeZone(
+        1710064800000, "America/Los_Angeles"); // March 10, 2024 DST transition
+
+    auto gapTimeVector = makeFlatVector<StringView>({
+        "02:01:00.000", // Gap time - should throw exception
+    });
+
+    auto inputField =
+        std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c0");
+    auto castExpr =
+        makeCastExpr(inputField, TIME(), false); // regular cast, not try_cast
+
+    // Regular cast should throw exception for gap times
+    VELOX_ASSERT_THROW(
+        evaluate(castExpr, makeRowVector({gapTimeVector})),
+        "Cannot cast VARCHAR '02:01:00.000' to TIME. Time does not exist due to DST gap");
+  }
+
+  {
+    // Test multiple gap times all throw exceptions
+    setSessionStartTimeAndTimeZone(
+        1710064800000, "America/Los_Angeles"); // March 10, 2024 DST transition
+
+    // Test different gap times individually since one exception will stop
+    // evaluation
+    std::vector<std::string> gapTimes = {
+        "02:00:00.000", // Start of gap
+        "02:15:00.000", // Middle of gap
+        "02:30:00.000", // Middle of gap
+        "02:45:00.000", // Near end of gap
+        "02:59:59.999", // End of gap
+    };
+
+    auto inputField =
+        std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c0");
+    auto castExpr = makeCastExpr(inputField, TIME(), false);
+
+    for (const auto& gapTime : gapTimes) {
+      auto gapTimeVector = makeFlatVector<StringView>({StringView(gapTime)});
+
+      // Each gap time should throw an exception
+      VELOX_ASSERT_THROW(
+          evaluate(castExpr, makeRowVector({gapTimeVector})),
+          "Cannot cast VARCHAR '" + gapTime +
+              "' to TIME. Time does not exist due to DST gap");
+    }
+  }
+
+  {
+    // Test that times right before and after gap work with regular cast
+    setSessionStartTimeAndTimeZone(
+        1710064800000, "America/Los_Angeles"); // March 10, 2024 DST transition
+
+    auto validTimeVector = makeFlatVector<StringView>({
+        "01:59:59.999", // Just before gap - should work
+        "03:00:00.000", // Just after gap - should work
+    });
+
+    auto inputField =
+        std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c0");
+    auto castExpr = makeCastExpr(inputField, TIME(), false);
+
+    // These should not throw exceptions
+    ASSERT_NO_THROW(evaluate(castExpr, makeRowVector({validTimeVector})));
+  }
+
+  {
+    // Test exception throwing during fall-back transition (November)
+    // Fall-back doesn't have gaps, so all times should work
+    setSessionStartTimeAndTimeZone(
+        1730620800000, "America/Los_Angeles"); // November 3, 2024 DST end
+
+    auto ambiguousTimeVector = makeFlatVector<StringView>({
+        "01:30:00.000", // Ambiguous time - occurs twice during fall-back
+    });
+
+    auto inputField =
+        std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c0");
+    auto castExpr = makeCastExpr(inputField, TIME(), false);
+
+    // Fall-back times should not throw exceptions (just ambiguous, not gaps)
+    ASSERT_NO_THROW(evaluate(castExpr, makeRowVector({ambiguousTimeVector})));
+  }
+}
+
+TEST_F(CastExprTest, timeToTimestampCast) {
+  {
+    // Test casting TIME to TIMESTAMP
+    // TIME values represent milliseconds since midnight
+    // When cast to TIMESTAMP, they should become milliseconds since epoch
+
+    // Test various TIME values (milliseconds since midnight)
+    // 0 = 00:00:00.000
+    // 3661000 = 01:01:01.000
+    // 43200000 = 12:00:00.000 (noon)
+    // 86399999 = 23:59:59.999
+    auto timeVector =
+        makeFlatVector<int64_t>({0, 3661000, 43200000, 86399999}, TIME());
+
+    auto result = evaluate<FlatVector<Timestamp>>(
+        "cast(c0 as timestamp)", makeRowVector({timeVector}));
+
+    auto expected = makeFlatVector<Timestamp>({
+        Timestamp::fromMillis(0),
+        Timestamp::fromMillis(3661000),
+        Timestamp::fromMillis(43200000),
+        Timestamp::fromMillis(86399999),
+    });
+
+    assertEqualVectors(expected, result);
+  }
+
+  {
+    // Test casting TIME to TIMESTAMP with nulls
+    auto timeVector = makeNullableFlatVector<int64_t>(
+        {0, std::nullopt, 43200000, std::nullopt}, TIME());
+
+    auto result = evaluate<FlatVector<Timestamp>>(
+        "cast(c0 as timestamp)", makeRowVector({timeVector}));
+
+    auto expected = makeNullableFlatVector<Timestamp>({
+        Timestamp::fromMillis(0),
+        std::nullopt,
+        Timestamp::fromMillis(43200000),
+        std::nullopt,
+    });
+
+    assertEqualVectors(expected, result);
+  }
+
+  {
+    // Test try_cast for TIME to TIMESTAMP
+    auto timeVector = makeFlatVector<int64_t>({0, 43200000}, TIME());
+
+    auto result = evaluate<FlatVector<Timestamp>>(
+        "try_cast(c0 as timestamp)", makeRowVector({timeVector}));
+
+    auto expected = makeFlatVector<Timestamp>({
+        Timestamp::fromMillis(0),
+        Timestamp::fromMillis(43200000),
+    });
+
+    assertEqualVectors(expected, result);
+  }
+
+  {
+    // Test constant TIME vector cast to TIMESTAMP (non-null)
+    auto constantTimeVector = BaseVector::wrapInConstant(
+        1000, 0, makeFlatVector<int64_t>({43200000}, TIME()));
+
+    auto result =
+        evaluate("cast(c0 as timestamp)", makeRowVector({constantTimeVector}));
+
+    // Should return a constant vector with the same value
+    auto expected = BaseVector::wrapInConstant(
+        1000, 0, makeFlatVector<Timestamp>({Timestamp::fromMillis(43200000)}));
+
+    assertEqualVectors(expected, result);
+    // Verify the result is actually constant-encoded - optimization
+    ASSERT_TRUE(result->isConstantEncoding());
+  }
+
+  {
+    // Test constant TIME vector cast to TIMESTAMP (null)
+    auto nullTimeVector = BaseVector::createNullConstant(TIME(), 500, pool());
+
+    auto result =
+        evaluate("cast(c0 as timestamp)", makeRowVector({nullTimeVector}));
+
+    // Should return a null constant vector
+    auto expected = BaseVector::createNullConstant(TIMESTAMP(), 500, pool());
+
+    assertEqualVectors(expected, result);
+  }
+
+  {
+    // Test TIME to TIMESTAMP cast with various edge cases
+    auto timeVector = makeFlatVector<int64_t>(
+        {
+            1, // 1 millisecond after midnight
+            1000, // 1 second after midnight
+            60000, // 1 minute after midnight
+            3600000, // 1 hour after midnight
+            86399000, // 1 second before midnight
+            86399990, // 10 milliseconds before midnight
+        },
+        TIME());
+
+    auto result = evaluate<FlatVector<Timestamp>>(
+        "cast(c0 as timestamp)", makeRowVector({timeVector}));
+
+    auto expected = makeFlatVector<Timestamp>({
+        Timestamp::fromMillis(1),
+        Timestamp::fromMillis(1000),
+        Timestamp::fromMillis(60000),
+        Timestamp::fromMillis(3600000),
+        Timestamp::fromMillis(86399000),
+        Timestamp::fromMillis(86399990),
+    });
+
+    assertEqualVectors(expected, result);
+  }
+}
 } // namespace
 } // namespace facebook::velox::test

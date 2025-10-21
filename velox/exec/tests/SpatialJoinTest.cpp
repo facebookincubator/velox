@@ -144,6 +144,9 @@ class SpatialJoinTest : public OperatorTestBase {
                     .localPartition({})
                     .planNode(),
                 predicate,
+                "left_g",
+                "right_g",
+                std::nullopt,
                 {"left_g", "right_g"},
                 joinType)
             .project(
@@ -355,6 +358,9 @@ TEST_F(SpatialJoinTest, failOnGroupedExecution) {
                   .localPartition({})
                   .planNode(),
               "ST_Intersects(left_g, right_g)",
+              "left_g",
+              "right_g",
+              std::nullopt,
               {"left_g", "right_g"},
               core::JoinType::kInner)
           .project(

@@ -67,7 +67,6 @@ class Exchange : public SourceOperator {
  protected:
   virtual VectorSerde* getSerde();
 
- private:
   // When 'estimatedRowSize_' is unset, meaning we haven't materialized
   // and returned any output from this exchange operator, we return this
   // conservative number of output rows, to make sure memory does not grow too
