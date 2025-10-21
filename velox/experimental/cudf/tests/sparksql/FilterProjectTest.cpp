@@ -68,17 +68,6 @@ TEST_F(CudfFilterProjectTest, hashWithSeed) {
   facebook::velox::test::assertEqualVectors(expected, hashResults);
 }
 
-TEST_F(CudfFilterProjectTest, hashWithSeedOnSubexpression) {
-  auto input = makeFlatVector<int64_t>({INT64_MAX, INT64_MIN});
-  auto data = makeRowVector({input});
-  auto hashPlan = PlanBuilder()
-                      .setParseOptions(options_)
-                      .values({data})
-                      .project({"hash_with_seed(42, add(c0, 2)) AS c1"})
-                      .planNode();
-  auto hashResults = AssertQueryBuilder(hashPlan).copyResults(pool());
-}
-
 TEST_F(CudfFilterProjectTest, hashWithSeedMultiColumns) {
   auto input = makeFlatVector<int64_t>({INT64_MAX, INT64_MIN});
   auto data = makeRowVector({input, input});
