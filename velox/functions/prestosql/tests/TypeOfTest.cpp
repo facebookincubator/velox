@@ -19,6 +19,7 @@
 #include "velox/functions/prestosql/types/BingTileType.h"
 #include "velox/functions/prestosql/types/GeometryType.h"
 #include "velox/functions/prestosql/types/HyperLogLogType.h"
+#include "velox/functions/prestosql/types/IPPrefixType.h"
 #include "velox/functions/prestosql/types/JsonType.h"
 #include "velox/functions/prestosql/types/P4HyperLogLogType.h"
 #include "velox/functions/prestosql/types/QDigestType.h"
@@ -105,6 +106,8 @@ TEST_F(TypeOfTest, customTypes) {
   VarcharEnumParameter otherColorInfo("someColorType", varcharEnumMap);
   EXPECT_EQ("test.enum.color", typeOf(VARCHAR_ENUM(colorInfo)));
   EXPECT_EQ("someColorType", typeOf(VARCHAR_ENUM(otherColorInfo)));
+
+  EXPECT_EQ("ipprefix", typeOf(IPPREFIX()));
 }
 } // namespace
 } // namespace facebook::velox::functions
