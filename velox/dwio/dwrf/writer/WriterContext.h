@@ -30,6 +30,7 @@
 #include "velox/vector/DecodedVector.h"
 
 namespace facebook::velox::dwrf {
+
 using dwio::common::BufferedOutputStream;
 using dwio::common::DataBufferHolder;
 using dwio::common::compression::CompressionBufferPool;
@@ -57,9 +58,7 @@ class WriterContext : public CompressionBufferPool {
     return streams_.at(stream);
   }
 
-  void addBuffer(
-      const DwrfStreamIdentifier& stream,
-      folly::StringPiece buffer) {
+  void addBuffer(const DwrfStreamIdentifier& stream, std::string_view buffer) {
     streams_.at(stream).take(buffer);
   }
 

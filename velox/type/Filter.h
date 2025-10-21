@@ -2250,7 +2250,7 @@ static inline bool applyFilter(TFilter& filter, const std::string& value) {
 }
 
 template <typename TFilter>
-static inline bool applyFilter(TFilter& filter, folly::StringPiece value) {
+static inline bool applyFilter(TFilter& filter, std::string_view value) {
   return filter.testBytes(value.data(), value.size());
 }
 
