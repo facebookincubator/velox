@@ -18,6 +18,7 @@
 #include "velox/core/PlanNode.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/ProbeOperatorState.h"
+#include "velox/exec/SpatialIndex.h"
 
 namespace facebook::velox::exec {
 
@@ -79,8 +80,9 @@ class SpatialJoinOutputBuilder {
 /// and build (SpatialJoinBridge) sides. It supports inner and left joins.
 ///
 /// This class is designed to evaluate spatial join conditions (e.g.
-/// ST_INTERSECTS, ST_CONTAINS, ST_WITHIN) between geometric data types. It can
-/// also implement spatial cross-join semantics if joinCondition is nullptr.
+/// ST_INTERSECTS, ST_CONTAINS, ST_WITHIN) between geometric data types. It
+/// can also implement spatial cross-join semantics if joinCondition is
+/// nullptr.
 ///
 /// The output follows the order of the probe side rows (for inner and left
 /// joins). All build vectors are materialized upfront (check buildVectors_),
@@ -92,11 +94,14 @@ class SpatialJoinOutputBuilder {
 /// 1. Materialize a cross-product batch across probe and build.
 /// 2. Evaluate the spatial join condition.
 /// 3. Add spatial matches to the output.
-/// 4. Once all build vectors are processed for a particular probe row, check if
+/// 4. Once all build vectors are processed for a particular probe row, check
+/// if
 ///    a probe mismatch is needed (only for left and full outer joins).
-/// 5. Once all probe and build inputs are processed, check if build mismatches
+/// 5. Once all probe and build inputs are processed, check if build
+/// mismatches
 ///    are needed (only for right and full outer joins).
-/// 6. If so, signal other peer operators; only a single operator instance will
+/// 6. If so, signal other peer operators; only a single operator instance
+/// will
 ///    collect all build matches at the end, and emit any records that haven't
 ///    been matched by any of the peers.
 ///
@@ -172,7 +177,8 @@ class SpatialJoinProbe : public Operator {
 
   // Returns true if all output for the current probe row has been produced.
   bool isProbeRowDone() const {
-    return buildIndex_ >= buildVectors_.value().size();
+    return candidateIndex_ >= candidateBuildRows_.size() ||
+        buildIndex_ >= buildVectors_.value().size();
   }
 
   // Increment probeRow_ and reset associated fields
@@ -180,7 +186,9 @@ class SpatialJoinProbe : public Operator {
     ++probeRow_;
     probeHasMatch_ = false;
     buildIndex_ = 0;
-    buildRow_ = 0;
+    candidateIndex_ = 0;
+    buildRowOffset_ = 0;
+    needsFilterEvaluated_ = true;
   }
 
   // Add the output for a single build vector for a single probe row.  This will
@@ -190,18 +198,32 @@ class SpatialJoinProbe : public Operator {
   // Returns true if all the rows for the current build vector have been
   // processed, or the output is full.
   bool isBuildVectorDone(const RowVectorPtr& buildVector) const {
-    return buildRow_ >= buildVector->size() || outputBuilder_.isOutputFull();
+    // Note that candidateBuildRows_ entries are row numbers across
+    // all build vectors.
+    return candidateIndex_ >= candidateBuildRows_.size() ||
+        relativeBuildRow(candidateIndex_) >= buildVector->size() ||
+        outputBuilder_.isOutputFull();
   }
 
   // Increment buildIndex_ and reset associated fields
   void advanceBuildVector() {
+    VELOX_CHECK(buildVectors_.has_value());
+
+    buildRowOffset_ += buildVectors_.value()[buildIndex_]->size();
     ++buildIndex_;
-    buildRow_ = 0;
+    needsFilterEvaluated_ = true;
   }
 
+  // Calculate candidate build rows from spatialIndex_ for the current probe
+  // row. This should be done each time the probe is advanced.
+  std::vector<int32_t> querySpatialIndex();
+
   // Evaluates the spatial joinCondition for a given build vector. This method
-  // sets `filterOutput_` and `decodedFilterResult_`, which will be ready to be
-  // used by `isSpatialJoinConditionMatch(buildRow)` below.
+  // sets `filterOutput_` and `decodedFilterResult_`, which will be ready to
+  // be used by `isSpatialJoinConditionMatch()` below.
+  // This only evaluates rows that are in the candidateBuildRows_, restricted to
+  // those in the current build vector. Thus we must index into this with
+  // candidateIndex_.
   void evaluateJoinFilter(const RowVectorPtr& buildVector);
 
   // Checks if the spatial join condition matched for a particular row.
@@ -218,7 +240,20 @@ class SpatialJoinProbe : public Operator {
       const RowVectorPtr& buildVector,
       const RowTypePtr& outputType,
       const std::vector<IdentityProjection>& probeProjections,
-      const std::vector<IdentityProjection>& buildProjections) const;
+      const std::vector<IdentityProjection>& buildProjections,
+      BufferPtr candidateRows) const;
+
+  // Given a candidate index, return the row index into the current build
+  // vector.  For example, if we have candidates [2, 50, 81] and have processed
+  // two build vectors with size 30 and 40, then `relativeBuildRow(2) == 11`
+  // (81 - (30 + 40)).
+  vector_size_t relativeBuildRow(vector_size_t candidateRow) const {
+    return candidateBuildRows_[candidateRow] - buildRowOffset_;
+  }
+
+  // Make the indices of build vector candidates suitable for creating a
+  // DictionaryVector.
+  BufferPtr makeBuildVectorIndices(vector_size_t vectorSize);
 
   /////////
   // SETUP
@@ -244,14 +279,19 @@ class SpatialJoinProbe : public Operator {
   // projections from the probe side is available at `identityProjections_`.
   std::vector<IdentityProjection> buildProjections_;
 
-  // Projections needed as input to the filter to evaluation spatial join filter
-  // conditions. Note that if this is a cross-join, filter projections are the
-  // same as output projections.
+  // Projections needed as input to the filter to evaluation spatial join
+  // filter conditions. Note that if this is a cross-join, filter projections
+  // are the same as output projections.
   std::vector<IdentityProjection> filterProbeProjections_;
   std::vector<IdentityProjection> filterBuildProjections_;
 
+  // Stores the build spatial index for the join
+  std::optional<std::shared_ptr<SpatialIndex>> spatialIndex_;
   // Stores the data for build vectors (right side of the join).
   std::optional<std::vector<RowVectorPtr>> buildVectors_;
+
+  // Channel of geometry variable used to probe spatial index
+  column_index_t probeGeometryChannel_;
 
   //////////////////
   // OPERATOR STATE
@@ -261,18 +301,26 @@ class SpatialJoinProbe : public Operator {
   ProbeOperatorState state_{ProbeOperatorState::kWaitForBuild};
   ContinueFuture future_{ContinueFuture::makeEmpty()};
 
-  // The information needed to produce an output RowVectorPtr.  It is stored
+  // The information needed to produce an output RowVectorPtr. It is stored
   // for all execution, but is reset on each output batch.
   SpatialJoinOutputBuilder outputBuilder_;
 
-  // Count of output batches produced (1-indexed).  Primarily for debugging.
+  // Count of output batches produced (1-indexed). Primarily for debugging.
   size_t outputCount_{0};
 
-  // Spatial join condition evaluation state that need to persisted across the
-  // generation of successive output buffers.
+  // This is always set to all true, but we need it for eval/etc. Reuse between
+  // evaluations.
   SelectivityVector filterInputRows_;
+  // The output result of the join condition evaluation.  This is only performed
+  // those in the current build vector. Thus we must index into this with
+  // candidateIndex_.
   VectorPtr filterOutput_;
+  // Decoded filterOutput: remove recursive dictionary/etc encodings.
   DecodedVector decodedFilterResult_;
+
+  // Decoded geometry vector.  Must be reset whenever input_ is changed (it
+  // maintains a pointer to input_).
+  DecodedVector decodedGeometryCol_{};
 
   ///////////////
   // PROBE STATE
@@ -288,16 +336,33 @@ class SpatialJoinProbe : public Operator {
   // Whether the current probeRow_ has found a match.  Needed for left join.
   bool probeHasMatch_{false};
 
+  // Build rows returned from the spatial index.
+  // The value is the row number over all build vectors, so if the have two
+  // build vectors of size 100 and 200, candidate row 50 is the 50th entry of
+  // the first vector, and 101 is the 2nd entry of the second vector.
+  std::vector<vector_size_t> candidateBuildRows_{};
+
   ///////////////
   // BUILD STATE
   // Variables used to track the build-side state state during exection.
   // These will change throughout setup and execution.
 
-  // Index into `buildVectors_` for the build vector being currently processed.
+  // Index into `buildVectors_` for the build vector being currently
+  // processed.
   size_t buildIndex_{0};
 
-  // Row being currently processed from `buildVectors_[buildIndex_]`.
-  vector_size_t buildRow_{0};
+  // Whether we need to evaluate the join filter on this build vector.  It
+  // should be done once per build vector/probe row pair.
+  bool needsFilterEvaluated_{true};
+
+  // Index of candidate currently being processed from
+  // `buildVectors_[buildIndex_]`.
+  vector_size_t candidateIndex_{0};
+
+  // Keep track of how many build rows we've traversed in previous build
+  // RowVectors. Subtract this from the current element in candidateBuildRows_
+  // to index into the current build RowVector.
+  vector_size_t buildRowOffset_{0};
 };
 
 } // namespace facebook::velox::exec
