@@ -75,6 +75,8 @@ inline std::string_view statTypeString(StatType stat) {
       return "Count";
     case StatType::HISTOGRAM:
       return "Histogram";
+    default:
+      return "Unknown";
   }
 }
 

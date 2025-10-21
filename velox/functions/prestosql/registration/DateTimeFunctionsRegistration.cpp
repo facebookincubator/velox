@@ -242,6 +242,8 @@ void registerSimpleFunctions(const std::string& prefix) {
       {prefix + "millisecond"});
   registerFunction<MillisecondFunction, int64_t, TimestampWithTimezone>(
       {prefix + "millisecond"});
+  registerFunction<MillisecondFunction, int64_t, Time>(
+      {prefix + "millisecond"});
   registerFunction<MillisecondFromIntervalFunction, int64_t, IntervalDayTime>(
       {prefix + "millisecond"});
 
@@ -264,6 +266,8 @@ void registerSimpleFunctions(const std::string& prefix) {
       Varchar,
       int64_t,
       TimestampWithTimezone>({prefix + "date_add"});
+  registerFunction<DateAddFunction, Time, Varchar, int64_t, Time>(
+      {prefix + "date_add"});
   registerFunction<DateDiffFunction, int64_t, Varchar, Date, Date>(
       {prefix + "date_diff"});
   registerFunction<DateDiffFunction, int64_t, Varchar, Timestamp, Timestamp>(
@@ -274,6 +278,8 @@ void registerSimpleFunctions(const std::string& prefix) {
       Varchar,
       TimestampWithTimezone,
       TimestampWithTimezone>({prefix + "date_diff"});
+  registerFunction<DateDiffFunction, int64_t, Varchar, Time, Time>(
+      {prefix + "date_diff"});
   registerFunction<DateFormatFunction, Varchar, Timestamp, Varchar>(
       {prefix + "date_format"});
   registerFunction<DateFormatFunction, Varchar, TimestampWithTimezone, Varchar>(

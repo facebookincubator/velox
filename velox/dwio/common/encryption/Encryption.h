@@ -20,11 +20,7 @@
 #include "folly/io/IOBuf.h"
 #include "velox/dwio/common/exception/Exception.h"
 
-namespace facebook {
-namespace velox {
-namespace dwio {
-namespace common {
-namespace encryption {
+namespace facebook::velox::dwio::common::encryption {
 
 enum class EncryptionProvider { Unknown = 0, CryptoService };
 
@@ -127,8 +123,4 @@ class DummyDecrypterFactory : public DecrypterFactory {
   }
 };
 
-} // namespace encryption
-} // namespace common
-} // namespace dwio
-} // namespace velox
-} // namespace facebook
+} // namespace facebook::velox::dwio::common::encryption

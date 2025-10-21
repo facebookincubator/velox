@@ -26,6 +26,7 @@ columnTypeNames() {
       {HiveColumnHandle::ColumnType::kRegular, "Regular"},
       {HiveColumnHandle::ColumnType::kSynthesized, "Synthesized"},
       {HiveColumnHandle::ColumnType::kRowIndex, "RowIndex"},
+      {HiveColumnHandle::ColumnType::kRowId, "RowId"},
   };
 }
 
