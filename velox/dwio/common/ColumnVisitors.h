@@ -1576,7 +1576,7 @@ class StringColumnReadWithVisitorHelper {
       ExtractValues extractValues,
       F readWithVisitor) {
     readWithVisitor(
-        ColumnVisitor<folly::StringPiece, TFilter, ExtractValues, kIsDense>(
+        ColumnVisitor<std::string_view, TFilter, ExtractValues, kIsDense>(
             *static_cast<const TFilter*>(filter),
             &reader_,
             rows_,

@@ -78,7 +78,7 @@ class ValueHook {
     VELOX_UNSUPPORTED();
   }
 
-  virtual void addValue(vector_size_t /*row*/, folly::StringPiece /*value*/) {
+  virtual void addValue(vector_size_t /*row*/, std::string_view /*value*/) {
     VELOX_UNSUPPORTED();
   }
 
@@ -159,7 +159,8 @@ class ValueHook {
       const StringView* values,
       vector_size_t size) {
     for (auto i = 0; i < size; ++i) {
-      addValue(rows[i], values[i]);
+      // TODO: Remove explicit std::string_view cast.
+      addValue(rows[i], std::string_view(values[i]));
     }
   }
 
@@ -167,6 +168,9 @@ class ValueHook {
   void addValueTyped(vector_size_t row, T value) {
     if constexpr (std::is_integral_v<T> && sizeof(T) < sizeof(int64_t)) {
       addValue(row, static_cast<int64_t>(value));
+    } else if constexpr (std::is_same_v<T, StringView>) {
+      // TODO: Remove explicit std::string_view cast.
+      addValue(row, std::string_view(value));
     } else {
       addValue(row, value);
     }
