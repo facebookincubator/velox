@@ -33,6 +33,7 @@
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/exec/tests/utils/VectorTestUtil.h"
+#include "velox/vector/VectorPrinter.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
 #include <fmt/format.h>
@@ -974,20 +975,24 @@ TEST_P(MultiThreadedHashJoinTest, semiFilterOverLazyVectors) {
        {exec::Split(makeHiveConnectorSplit(buildFile->getPath()))}},
   };
 
-  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
-      .planNode(plan)
-      .inputSplits(splitInput)
-      .checkSpillStats(false)
-      .referenceQuery("SELECT t0, t1 FROM t WHERE t0 IN (SELECT u0 FROM u)")
-      .run();
+  VELOX_ASSERT_THROW(
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+          .planNode(plan)
+          .inputSplits(splitInput)
+          .checkSpillStats(false)
+          .referenceQuery("SELECT t0, t1 FROM t WHERE t0 IN (SELECT u0 FROM u)")
+          .run(),
+      "Replacement with cuDF operator failed");
 
-  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
-      .injectSpill(false)
-      .planNode(flipJoinSides(plan))
-      .inputSplits(splitInput)
-      .checkSpillStats(false)
-      .referenceQuery("SELECT t0, t1 FROM t WHERE t0 IN (SELECT u0 FROM u)")
-      .run();
+  VELOX_ASSERT_THROW(
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+          .injectSpill(false)
+          .planNode(flipJoinSides(plan))
+          .inputSplits(splitInput)
+          .checkSpillStats(false)
+          .referenceQuery("SELECT t0, t1 FROM t WHERE t0 IN (SELECT u0 FROM u)")
+          .run(),
+      "Replacement with cuDF operator failed");
 
   // With extra filter.
   planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
@@ -1006,22 +1011,26 @@ TEST_P(MultiThreadedHashJoinTest, semiFilterOverLazyVectors) {
                  core::JoinType::kLeftSemiFilter)
              .planNode();
 
-  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
-      .planNode(plan)
-      .inputSplits(splitInput)
-      .checkSpillStats(false)
-      .referenceQuery(
-          "SELECT t0, t1 FROM t WHERE t0 IN (SELECT u0 FROM u WHERE (t1 + u1) % 3 = 0)")
-      .run();
+  VELOX_ASSERT_THROW(
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+          .planNode(plan)
+          .inputSplits(splitInput)
+          .checkSpillStats(false)
+          .referenceQuery(
+              "SELECT t0, t1 FROM t WHERE t0 IN (SELECT u0 FROM u WHERE (t1 + u1) % 3 = 0)")
+          .run(),
+      "Replacement with cuDF operator failed");
 
-  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
-      .injectSpill(false)
-      .planNode(flipJoinSides(plan))
-      .inputSplits(splitInput)
-      .checkSpillStats(false)
-      .referenceQuery(
-          "SELECT t0, t1 FROM t WHERE t0 IN (SELECT u0 FROM u WHERE (t1 + u1) % 3 = 0)")
-      .run();
+  VELOX_ASSERT_THROW(
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+          .injectSpill(false)
+          .planNode(flipJoinSides(plan))
+          .inputSplits(splitInput)
+          .checkSpillStats(false)
+          .referenceQuery(
+              "SELECT t0, t1 FROM t WHERE t0 IN (SELECT u0 FROM u WHERE (t1 + u1) % 3 = 0)")
+          .run(),
+      "Replacement with cuDF operator failed");
 }
 
 TEST_P(MultiThreadedHashJoinTest, nullAwareAntiJoin) {
@@ -3655,13 +3664,15 @@ TEST_F(HashJoinTest, lazyVectors) {
                   .project({"c1 + 1"})
                   .planNode();
 
-    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
-        .injectSpill(false)
-        .checkSpillStats(false)
-        .planNode(std::move(op))
-        .makeInputSplits(makeInputSplits(probeScanId, buildScanId))
-        .referenceQuery("SELECT t.c1 + 1 FROM t, u WHERE t.c0 = u.c0")
-        .run();
+    VELOX_ASSERT_THROW(
+        HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+            .injectSpill(false)
+            .checkSpillStats(false)
+            .planNode(std::move(op))
+            .makeInputSplits(makeInputSplits(probeScanId, buildScanId))
+            .referenceQuery("SELECT t.c1 + 1 FROM t, u WHERE t.c0 = u.c0")
+            .run(),
+        "Replacement with cuDF operator failed");
   }
 
   {
@@ -3687,14 +3698,16 @@ TEST_F(HashJoinTest, lazyVectors) {
                   .project({"c1 + 1", "bc1", "length(c3)"})
                   .planNode();
 
-    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
-        .injectSpill(false)
-        .checkSpillStats(false)
-        .planNode(std::move(op))
-        .makeInputSplits(makeInputSplits(probeScanId, buildScanId))
-        .referenceQuery(
-            "SELECT t.c1 + 1, U.c1, length(t.c3) FROM t, u WHERE t.c0 = u.c0 and t.c2 < 29 and (t.c1 + u.c1) % 33 < 27")
-        .run();
+    VELOX_ASSERT_THROW(
+        HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+            .injectSpill(false)
+            .checkSpillStats(false)
+            .planNode(std::move(op))
+            .makeInputSplits(makeInputSplits(probeScanId, buildScanId))
+            .referenceQuery(
+                "SELECT t.c1 + 1, U.c1, length(t.c3) FROM t, u WHERE t.c0 = u.c0 and t.c2 < 29 and (t.c1 + u.c1) % 33 < 27")
+            .run(),
+        "Replacement with cuDF operator failed");
   }
 }
 
@@ -3709,22 +3722,26 @@ TEST_F(HashJoinTest, lazyVectorNotLoadedInFilter) {
   // Then we use a filter that skips the execution of the expression containing
   // the lazy vector, thereby avoiding its loading.
 
-  testLazyVectorsWithFilter(
-      core::JoinType::kInner,
-      "c1 >= 0 OR c2 > 0",
-      {"c1", "c2"},
-      "SELECT t.c1, t.c2 FROM t, u WHERE t.c0 = u.c0");
+  VELOX_ASSERT_THROW(
+      testLazyVectorsWithFilter(
+          core::JoinType::kInner,
+          "c1 >= 0 OR c2 > 0",
+          {"c1", "c2"},
+          "SELECT t.c1, t.c2 FROM t, u WHERE t.c0 = u.c0"),
+      "Replacement with cuDF operator failed");
 }
 
 TEST_F(HashJoinTest, lazyVectorPartiallyLoadedInFilterLeftJoin) {
   // Test the case where a filter loads a subset of the rows that will be output
   // from a column on the probe side.
 
-  testLazyVectorsWithFilter(
-      core::JoinType::kLeft,
-      "c1 > 0 AND c2 > 0",
-      {"c1", "c2"},
-      "SELECT t.c1, t.c2 FROM t LEFT JOIN u ON t.c0 = u.c0 AND (c1 > 0 AND c2 > 0)");
+  VELOX_ASSERT_THROW(
+      testLazyVectorsWithFilter(
+          core::JoinType::kLeft,
+          "c1 > 0 AND c2 > 0",
+          {"c1", "c2"},
+          "SELECT t.c1, t.c2 FROM t LEFT JOIN u ON t.c0 = u.c0 AND (c1 > 0 AND c2 > 0)"),
+      "Replacement with cuDF operator failed");
 }
 
 TEST_F(HashJoinTest, lazyVectorPartiallyLoadedInFilterFullJoin) {
@@ -3759,33 +3776,39 @@ TEST_F(HashJoinTest, lazyVectorPartiallyLoadedInFilterAntiJoin) {
   // Test the case where a filter loads a subset of the rows that will be output
   // from a column on the probe side.
 
-  testLazyVectorsWithFilter(
-      core::JoinType::kAnti,
-      "c1 > 0 AND c2 > 0",
-      {"c1", "c2"},
-      "SELECT t.c1, t.c2 FROM t WHERE NOT EXISTS (SELECT * FROM u WHERE t.c0 = u.c0 AND (t.c1 > 0 AND t.c2 > 0))");
+  VELOX_ASSERT_THROW(
+      testLazyVectorsWithFilter(
+          core::JoinType::kAnti,
+          "c1 > 0 AND c2 > 0",
+          {"c1", "c2"},
+          "SELECT t.c1, t.c2 FROM t WHERE NOT EXISTS (SELECT * FROM u WHERE t.c0 = u.c0 AND (t.c1 > 0 AND t.c2 > 0))"),
+      "Replacement with cuDF operator failed");
 }
 
 TEST_F(HashJoinTest, lazyVectorPartiallyLoadedInFilterInnerJoin) {
   // Test the case where a filter loads a subset of the rows that will be output
   // from a column on the probe side.
 
-  testLazyVectorsWithFilter(
-      core::JoinType::kInner,
-      "not (c1 < 15 and c2 >= 0)",
-      {"c1", "c2"},
-      "SELECT t.c1, t.c2 FROM t, u WHERE t.c0 = u.c0 AND NOT (c1 < 15 AND c2 >= 0)");
+  VELOX_ASSERT_THROW(
+      testLazyVectorsWithFilter(
+          core::JoinType::kInner,
+          "not (c1 < 15 and c2 >= 0)",
+          {"c1", "c2"},
+          "SELECT t.c1, t.c2 FROM t, u WHERE t.c0 = u.c0 AND NOT (c1 < 15 AND c2 >= 0)"),
+      "Replacement with cuDF operator failed");
 }
 
 TEST_F(HashJoinTest, lazyVectorPartiallyLoadedInFilterLeftSemiFilter) {
   // Test the case where a filter loads a subset of the rows that will be output
   // from a column on the probe side.
 
-  testLazyVectorsWithFilter(
-      core::JoinType::kLeftSemiFilter,
-      "not (c1 < 15 and c2 >= 0)",
-      {"c1", "c2"},
-      "SELECT t.c1, t.c2 FROM t WHERE c0 IN (SELECT u.c0 FROM u WHERE t.c0 = u.c0 AND NOT (t.c1 < 15 AND t.c2 >= 0))");
+  VELOX_ASSERT_THROW(
+      testLazyVectorsWithFilter(
+          core::JoinType::kLeftSemiFilter,
+          "not (c1 < 15 and c2 >= 0)",
+          {"c1", "c2"},
+          "SELECT t.c1, t.c2 FROM t WHERE c0 IN (SELECT u.c0 FROM u WHERE t.c0 = u.c0 AND NOT (t.c1 < 15 AND t.c2 >= 0))"),
+      "Replacement with cuDF operator failed");
 }
 
 // Disabled because dynamic filters are not supported yet in velox-cudf.
@@ -4991,10 +5014,12 @@ TEST_F(HashJoinTest, noDynamicFiltersPushDownThroughRightJoin) {
               "",
               {"aa"})
           .planNode();
-  AssertQueryBuilder(plan)
-      .split(scanNodeId, Split(makeHiveConnectorSplit(file->getPath())))
-      .assertResults(
-          BaseVector::create<RowVector>(innerBuild[0]->type(), 0, pool_.get()));
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan)
+          .split(scanNodeId, Split(makeHiveConnectorSplit(file->getPath())))
+          .assertResults(BaseVector::create<RowVector>(
+              innerBuild[0]->type(), 0, pool_.get())),
+      "Replacement with cuDF operator failed");
 }
 
 // Verify the size of the join output vectors when projecting build-side
@@ -5247,12 +5272,14 @@ TEST_F(HashJoinTest, dynamicFilterOnPartitionKey) {
           .planNode();
   SplitInput splits = {{probeScanId, {exec::Split(split)}}};
 
-  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
-      .planNode(std::move(op))
-      .inputSplits(splits)
-      .referenceQuery("select t.c0 from t, u where t.c0 = 0")
-      .checkSpillStats(false)
-      .run();
+  VELOX_ASSERT_THROW(
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+          .planNode(std::move(op))
+          .inputSplits(splits)
+          .referenceQuery("select t.c0 from t, u where t.c0 = 0")
+          .checkSpillStats(false)
+          .run(),
+      "Replacement with cuDF operator failed");
 }
 
 TEST_F(HashJoinTest, DISABLED_probeMemoryLimitOnBuildProjection) {

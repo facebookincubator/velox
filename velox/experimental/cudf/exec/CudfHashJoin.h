@@ -19,29 +19,47 @@
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
-#include "velox/core/Expressions.h"
 #include "velox/core/PlanNode.h"
 #include "velox/exec/JoinBridge.h"
 #include "velox/exec/Operator.h"
 #include "velox/vector/ComplexVector.h"
 
 #include <cudf/ast/expressions.hpp>
+#include <cudf/column/column.hpp>
+#include <cudf/copying.hpp>
 #include <cudf/join/hash_join.hpp>
 #include <cudf/table/table.hpp>
 
+#include <rmm/cuda_stream_view.hpp>
+
+#include <memory>
+
 namespace facebook::velox::cudf_velox {
+
+class CudaEvent;
 
 class CudfHashJoinBridge : public exec::JoinBridge {
  public:
-  using hash_type =
-      std::pair<std::shared_ptr<cudf::table>, std::shared_ptr<cudf::hash_join>>;
+  /*
+ using hash_type =
+     std::pair<std::shared_ptr<cudf::table>, std::shared_ptr<cudf::hash_join>>;
+     */
+  using hash_type = std::pair<
+      std::vector<std::shared_ptr<cudf::table>>,
+      std::vector<std::shared_ptr<cudf::hash_join>>>;
 
   void setHashTable(std::optional<hash_type> hashObject);
 
   std::optional<hash_type> hashOrFuture(ContinueFuture* future);
 
+  // Store and retrieve the CUDA stream used for building the hash join.
+  void setBuildStream(rmm::cuda_stream_view buildStream);
+
+  std::optional<rmm::cuda_stream_view> getBuildStream();
+
  private:
   std::optional<hash_type> hashObject_;
+  std::optional<rmm::cuda_stream_view> buildStream_;
 };
 
 class CudfHashJoinBuild : public exec::Operator, public NvtxHelper {
@@ -131,6 +149,53 @@ class CudfHashJoinProbe : public exec::Operator, public NvtxHelper {
   // probe input from the sources have been processed. It prevents the exchange
   // hanging problem at the producer side caused by the early query finish.
   bool skipInput_{false};
+
+  std::optional<rmm::cuda_stream_view> buildStream_;
+  std::unique_ptr<CudaEvent> cudaEvent_;
+
+  // Streaming right join state
+  // Per-build-table flags indicating whether a build row has had at least one
+  // left match.
+  std::vector<std::unique_ptr<cudf::column>> rightMatchedFlags_;
+
+  // For Right joins, only one driver collects the unmatched rows mask and
+  // emits. This value is set true only for that driver. See noMoreInput
+  bool isLastDriver_{false};
+
+  static constexpr auto oobPolicy = cudf::out_of_bounds_policy::NULLIFY;
+  std::vector<std::unique_ptr<cudf::table>> innerJoin(
+      std::unique_ptr<cudf::table> const& leftTable,
+      rmm::cuda_stream_view stream);
+  std::vector<std::unique_ptr<cudf::table>> leftJoin(
+      std::unique_ptr<cudf::table> const& leftTable,
+      rmm::cuda_stream_view stream);
+  std::vector<std::unique_ptr<cudf::table>> rightJoin(
+      std::unique_ptr<cudf::table> const& leftTable,
+      rmm::cuda_stream_view stream);
+  std::vector<std::unique_ptr<cudf::table>> leftSemiFilterJoin(
+      std::unique_ptr<cudf::table> const& leftTable,
+      rmm::cuda_stream_view stream);
+  std::vector<std::unique_ptr<cudf::table>> rightSemiFilterJoin(
+      std::unique_ptr<cudf::table> const& leftTable,
+      rmm::cuda_stream_view stream);
+  std::vector<std::unique_ptr<cudf::table>> antiJoin(
+      std::unique_ptr<cudf::table>&& leftTable,
+      rmm::cuda_stream_view stream);
+  std::unique_ptr<cudf::table> unfilteredOutput(
+      cudf::table_view leftTableView,
+      cudf::column_view leftIndicesCol,
+      cudf::table_view rightTableView,
+      cudf::column_view rightIndicesCol,
+      rmm::cuda_stream_view stream);
+  std::unique_ptr<cudf::table> filteredOutput(
+      cudf::table_view leftTableView,
+      cudf::column_view leftIndicesCol,
+      cudf::table_view rightTableView,
+      cudf::column_view rightIndicesCol,
+      std::function<std::vector<std::unique_ptr<cudf::column>>(
+          std::vector<std::unique_ptr<cudf::column>>&&,
+          cudf::mutable_column_view)> func,
+      rmm::cuda_stream_view stream);
 };
 
 class CudfHashJoinBridgeTranslator : public exec::Operator::PlanNodeTranslator {
