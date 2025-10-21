@@ -111,6 +111,16 @@ ReaderBase::ReaderBase(
       fileLength_(input_->getReadFile()->size()),
       arena_(std::make_unique<google::protobuf::Arena>()) {
   process::TraceContext trace("ReaderBase::ReaderBase");
+
+  // Attach the path to VeloxException if an exception is thrown in the
+  // constructor.
+  auto exceptionContextMsg =
+      fmt::format("Reader path {}", input_->getReadFile()->getName());
+  ExceptionContextSetter exceptionContext(
+      {[](VeloxException::Type /*exceptionType*/, auto* debugString) {
+         return *static_cast<std::string*>(debugString);
+       },
+       &exceptionContextMsg});
   // TODO: make a config
   DWIO_ENSURE(fileLength_ > 0, "ORC file is empty");
   VELOX_CHECK_GE(fileLength_, 4, "File size too small");
