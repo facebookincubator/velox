@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include "velox/common/base/CheckedArithmetic.h"
 #include "velox/common/base/Doubles.h"
 #include "velox/functions/lib/DateTimeFormatter.h"
 #include "velox/functions/lib/DateTimeUtil.h"
@@ -234,6 +235,33 @@ int64_t diffTime(
     default:
       VELOX_USER_FAIL("Unsupported time unit for TIME type");
   }
+}
+
+FOLLY_ALWAYS_INLINE int64_t
+addToTime(const DateTimeUnit unit, const int32_t value, const int64_t time) {
+  if (value == 0) {
+    return time;
+  }
+
+  int64_t valueInMillis;
+  switch (unit) {
+    case DateTimeUnit::kMillisecond:
+      valueInMillis = value;
+      break;
+    case DateTimeUnit::kSecond:
+      valueInMillis = checkedMultiply<int64_t>(value, kMillisInSecond);
+      break;
+    case DateTimeUnit::kMinute:
+      valueInMillis = checkedMultiply<int64_t>(value, kMillisInMinute);
+      break;
+    case DateTimeUnit::kHour:
+      valueInMillis = checkedMultiply<int64_t>(value, kMillisInHour);
+      break;
+    default:
+      VELOX_USER_FAIL("Unsupported time unit for TIME type");
+  }
+
+  return addToTime(time, valueInMillis);
 }
 
 FOLLY_ALWAYS_INLINE int64_t

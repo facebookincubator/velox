@@ -1085,6 +1085,15 @@ inline std::optional<DateTimeUnit> getTimeUnit(
   return std::nullopt;
 }
 
+inline void checkValueInInt32Range(int64_t value) {
+  if (value != static_cast<int32_t>(value)) {
+    VELOX_UNSUPPORTED(
+        "Value should be in range [{}, {}]",
+        std::numeric_limits<int32_t>::min(),
+        std::numeric_limits<int32_t>::max());
+  }
+}
+
 } // namespace
 
 template <typename T>
@@ -1239,6 +1248,17 @@ struct DateAddFunction : public TimestampWithTimezoneSupport<T> {
     }
   }
 
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& /*config*/,
+      const arg_type<Varchar>* unitString,
+      const int64_t* /*value*/,
+      const arg_type<Time>* /*time*/) {
+    if (unitString != nullptr) {
+      unit_ = getTimeUnit(*unitString, /*throwIfInvalid=*/true);
+    }
+  }
+
   FOLLY_ALWAYS_INLINE void call(
       out_type<Timestamp>& result,
       const arg_type<Varchar>& unitString,
@@ -1248,10 +1268,9 @@ struct DateAddFunction : public TimestampWithTimezoneSupport<T> {
         ? unit_.value()
         : fromDateTimeUnitString(unitString, /*throwIfInvalid=*/true).value();
 
-    if (value != (int32_t)value) {
-      VELOX_UNSUPPORTED("integer overflow");
-    }
-    result = addToTimestamp(unit, (int32_t)value, timestamp, sessionTimeZone_);
+    checkValueInInt32Range(value);
+    result = addToTimestamp(
+        unit, static_cast<int32_t>(value), timestamp, sessionTimeZone_);
   }
 
   FOLLY_ALWAYS_INLINE void call(
@@ -1262,12 +1281,10 @@ struct DateAddFunction : public TimestampWithTimezoneSupport<T> {
     const auto unit = unit_.value_or(
         fromDateTimeUnitString(unitString, /*throwIfInvalid=*/true).value());
 
-    if (value != (int32_t)value) {
-      VELOX_UNSUPPORTED("integer overflow");
-    }
+    checkValueInInt32Range(value);
 
     result = addToTimestampWithTimezone(
-        *timestampWithTimezone, unit, (int32_t)value);
+        *timestampWithTimezone, unit, static_cast<int32_t>(value));
   }
 
   FOLLY_ALWAYS_INLINE void call(
@@ -1279,11 +1296,26 @@ struct DateAddFunction : public TimestampWithTimezoneSupport<T> {
         ? unit_.value()
         : getDateUnit(unitString, true).value();
 
-    if (value != (int32_t)value) {
-      VELOX_UNSUPPORTED("integer overflow");
+    checkValueInInt32Range(value);
+
+    result = addToDate(date, unit, static_cast<int32_t>(value));
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Time>& result,
+      const arg_type<Varchar>& unitString,
+      const int64_t value,
+      const arg_type<Time>& time) {
+    DateTimeUnit unit;
+    if (unit_.has_value()) {
+      unit = unit_.value();
+    } else {
+      unit = getTimeUnit(unitString, /*throwIfInvalid=*/true).value();
     }
 
-    result = addToDate(date, unit, (int32_t)value);
+    checkValueInInt32Range(value);
+
+    result = addToTime(unit, static_cast<int32_t>(value), time);
   }
 };
 
