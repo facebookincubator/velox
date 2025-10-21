@@ -252,7 +252,8 @@ class MergeJoin : public Operator {
       const RowVectorPtr& leftBatch,
       vector_size_t leftRow,
       const RowVectorPtr& rightBatch,
-      vector_size_t rightRow);
+      vector_size_t rightRow,
+      bool isRightJoinForFullOuter = false);
 
   // If the right side projected columns in the current output vector happen to
   // span more than one vector from the right side, they cannot be simply
@@ -402,6 +403,11 @@ class MergeJoin : public Operator {
         : matchingRows_{numRows, false} {
       leftRowNumbers_ = AlignedBuffer::allocate<vector_size_t>(numRows, pool);
       rawLeftRowNumbers_ = leftRowNumbers_->asMutable<vector_size_t>();
+
+      rightJoinRows_ = AlignedBuffer::allocate<vector_size_t>(numRows, pool);
+      rawRightJoinRows_ = rightJoinRows_->asMutable<bool>();
+
+      auto tmp = AlignedBuffer::allocate<vector_size_t*>(numRows, pool);
     }
 
     // Records a row of output that corresponds to a match between a left-side
@@ -412,7 +418,8 @@ class MergeJoin : public Operator {
     void addMatch(
         const VectorPtr& vector,
         vector_size_t row,
-        vector_size_t outputIndex) {
+        vector_size_t outputIndex,
+        bool rightJoinForFullOuter = false) {
       matchingRows_.setValid(outputIndex, true);
 
       if (lastVector_ != vector || lastIndex_ != row) {
@@ -423,6 +430,7 @@ class MergeJoin : public Operator {
       }
 
       rawLeftRowNumbers_[outputIndex] = lastLeftRowNumber_;
+      rawRightJoinRows_[outputIndex] = rightJoinForFullOuter;
     }
 
     // Returns a subset of "match" rows in [0, numRows) range that were
@@ -465,7 +473,7 @@ class MergeJoin : public Operator {
       const auto rowNumber = rawLeftRowNumbers_[outputIndex];
       if (currentLeftRowNumber_ != rowNumber) {
         if (currentRow_ != -1 && !currentRowPassed_) {
-          onMiss(currentRow_);
+          onMiss(currentRow_, rawRightJoinRows_[currentRow_]);
         }
         currentRow_ = outputIndex;
         currentLeftRowNumber_ = rowNumber;
@@ -492,8 +500,8 @@ class MergeJoin : public Operator {
     // filter failed for all matches of that row.
     template <typename TOnMiss>
     void noMoreFilterResults(TOnMiss onMiss) {
-      if (!currentRowPassed_) {
-        onMiss(currentRow_);
+      if (!currentRowPassed_ && currentRow_ >= 0) {
+        onMiss(currentRow_, rawRightJoinRows_[currentRow_]);
       }
 
       currentRow_ = -1;
@@ -501,6 +509,10 @@ class MergeJoin : public Operator {
     }
 
     void reset();
+
+    bool isRightJoinForFullOuter(vector_size_t row) {
+      return rawRightJoinRows_[row];
+    }
 
    private:
     // A subset of output rows where left side matched right side on the join
@@ -520,6 +532,9 @@ class MergeJoin : public Operator {
     // not defined.
     BufferPtr leftRowNumbers_;
     vector_size_t* rawLeftRowNumbers_;
+
+    BufferPtr rightJoinRows_;
+    bool* rawRightJoinRows_;
 
     // Synthetic number assigned to the last added "match" row or zero if no row
     // has been added yet.
@@ -632,5 +647,10 @@ class MergeJoin : public Operator {
 
   bool leftHasDrained_{false};
   bool rightHasDrained_{false};
+
+  bool leftJoinForFullFinished_{false};
+  bool rightJoinForFullFinished_{false};
+  std::optional<Match> leftForRightJoinMatch_;
+  std::optional<Match> rightForRightJoinMatch_;
 };
 } // namespace facebook::velox::exec
