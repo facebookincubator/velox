@@ -283,7 +283,7 @@ bool SpatialJoinProbe::getBuildData(ContinueFuture* future) {
     return false;
   }
 
-  buildVectors_ = std::move(buildData);
+  buildVectors_ = buildData.value().buildVectors;
   return true;
 }
 
