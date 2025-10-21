@@ -63,6 +63,40 @@ Supported types for <code class="docutils literal notranslate"><span class="pre"
 </dd></dl>
 
 <dl class="iceberg function">
+<dt class="sig sig-object iceberg" id="days">
+<span class="sig-name descname"><span class="pre">days</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">date</span></span></span><a class="headerlink" href="#days" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the date.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">days</span><span class="p">(</span><span class="n">DATE</span> <span class="s1">&#39;2017-12-01&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="mi">2017</span><span class="o">-</span><span class="mi">12</span><span class="o">-</span><span class="mi">01</span>
+<span class="n">SELECT</span> <span class="n">days</span><span class="p">(</span><span class="n">TIMESTAMP</span> <span class="s1">&#39;2017-12-01 10:12:55.038194&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="mi">2017</span><span class="o">-</span><span class="mi">12</span><span class="o">-</span><span class="mi">01</span>
+<span class="n">SELECT</span> <span class="n">days</span><span class="p">(</span><span class="n">DATE</span> <span class="s1">&#39;1969-12-31&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1969</span><span class="o">-</span><span class="mi">12</span><span class="o">-</span><span class="mi">31</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="iceberg function">
+<dt class="sig sig-object iceberg" id="hours">
+<span class="sig-name descname"><span class="pre">hours</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#hours" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the number of hours since epoch (1970-01-01 00:00:00). Returns 0 for ‘1970-01-01 00:00:00’ timestamps.
+Returns negative value for timestamps before ‘1970-01-01 00:00:00’.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">hours</span><span class="p">(</span><span class="n">TIMESTAMP</span> <span class="s1">&#39;2017-12-01 10:12:55.038194&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="mi">420034</span>
+<span class="n">SELECT</span> <span class="n">hours</span><span class="p">(</span><span class="n">TIMESTAMP</span> <span class="s1">&#39;1969-12-31 23:59:58.999999&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="o">-</span><span class="mi">1</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="iceberg function">
+<dt class="sig sig-object iceberg" id="months">
+<span class="sig-name descname"><span class="pre">months</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#months" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the number of months since epoch (1970-01-01). Returns 0 for ‘1970-01-01’ date and timestamps.
+Returns negative value for dates and timestamps before ‘1970-01-01’.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">months</span><span class="p">(</span><span class="n">DATE</span> <span class="s1">&#39;2017-12-01&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="mi">575</span>
+<span class="n">SELECT</span> <span class="n">months</span><span class="p">(</span><span class="n">TIMESTAMP</span> <span class="s1">&#39;2017-12-01 10:12:55.038194&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="mi">575</span>
+<span class="n">SELECT</span> <span class="n">months</span><span class="p">(</span><span class="n">DATE</span> <span class="s1">&#39;1960-01-01&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="o">-</span><span class="mi">120</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="iceberg function">
 <dt class="sig sig-object iceberg" id="truncate">
 <span class="sig-name descname"><span class="pre">truncate</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">width</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">input</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">same</span> <span class="pre">type</span> <span class="pre">as</span> <span class="pre">input</span></span></span><a class="headerlink" href="#truncate" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the truncated value of the input based on the specified width.
@@ -85,6 +119,18 @@ Supported types for <code class="docutils literal notranslate"><span class="pre"
 </div>
 </dd></dl>
 
+<dl class="iceberg function">
+<dt class="sig sig-object iceberg" id="years">
+<span class="sig-name descname"><span class="pre">years</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#years" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the number of years since epoch (1970-01-01). Returns 0 for ‘1970-01-01’ date and timestamps.
+Returns negative value for dates and timestamps before ‘1970-01-01’.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">years</span><span class="p">(</span><span class="n">DATE</span> <span class="s1">&#39;2017-12-01&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="mi">47</span>
+<span class="n">SELECT</span> <span class="n">years</span><span class="p">(</span><span class="n">TIMESTAMP</span> <span class="s1">&#39;2017-12-01 10:12:55.038194&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="mi">47</span>
+<span class="n">SELECT</span> <span class="n">years</span><span class="p">(</span><span class="n">DATE</span> <span class="s1">&#39;1960-01-01&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="o">-</span><span class="mi">10</span>
+</pre></div>
+</div>
+</dd></dl>
+
 </section>
 
 
@@ -99,7 +145,11 @@ Supported types for <code class="docutils literal notranslate"><span class="pre"
     <ul>
 <li><a class="reference internal" href="#">Iceberg Functions</a><ul>
 <li><a class="reference internal" href="#bucket"><code class="docutils literal notranslate"><span class="pre">bucket()</span></code></a></li>
+<li><a class="reference internal" href="#days"><code class="docutils literal notranslate"><span class="pre">days()</span></code></a></li>
+<li><a class="reference internal" href="#hours"><code class="docutils literal notranslate"><span class="pre">hours()</span></code></a></li>
+<li><a class="reference internal" href="#months"><code class="docutils literal notranslate"><span class="pre">months()</span></code></a></li>
 <li><a class="reference internal" href="#truncate"><code class="docutils literal notranslate"><span class="pre">truncate()</span></code></a></li>
+<li><a class="reference internal" href="#years"><code class="docutils literal notranslate"><span class="pre">years()</span></code></a></li>
 </ul>
 </li>
 </ul>
