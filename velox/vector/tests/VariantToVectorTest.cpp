@@ -18,6 +18,7 @@
 #include <gtest/gtest.h>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/type/Variant.h"
+#include "velox/vector/BaseVector.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 namespace facebook::velox {
@@ -30,7 +31,8 @@ class VariantToVectorTest : public testing::Test, public test::VectorTestBase {
   }
 
   void testNull(const TypePtr& type) const {
-    auto vector = variantToVector(type, Variant::null(type->kind()), pool());
+    auto vector = BaseVector::createConstant(
+        type, Variant::null(type->kind()), 1, pool());
 
     EXPECT_TRUE(vector->isConstantEncoding());
     EXPECT_EQ(vector->type()->toString(), type->toString());
@@ -45,7 +47,7 @@ class VariantToVectorTest : public testing::Test, public test::VectorTestBase {
       const TypePtr& type,
       const Variant& value,
       const VectorPtr& expected) {
-    auto vector = variantToVector(type, value, pool());
+    auto vector = BaseVector::createConstant(type, value, 1, pool());
 
     EXPECT_TRUE(vector->isConstantEncoding());
     EXPECT_EQ(vector->type()->toString(), type->toString());
@@ -83,7 +85,7 @@ TEST_F(VariantToVectorTest, decimal) {
   Variant arrayInput = Variant::array(arrayInputData);
 
   VELOX_ASSERT_THROW(
-      variantToVector(ARRAY(type), arrayInput, pool()),
+      BaseVector::createConstant(ARRAY(type), arrayInput, 1, pool()),
       "Type not supported: DECIMAL(20, 3)");
 }
 
