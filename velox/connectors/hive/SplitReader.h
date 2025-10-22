@@ -66,7 +66,7 @@ class SplitReader {
       const std::shared_ptr<io::IoStatistics>& ioStats,
       const std::shared_ptr<filesystems::File::IoStats>& fsStats,
       FileHandleFactory* fileHandleFactory,
-      folly::Executor* executor,
+      folly::Executor* ioExecutor,
       const std::shared_ptr<common::ScanSpec>& scanSpec);
 
   virtual ~SplitReader() = default;
@@ -80,7 +80,8 @@ class SplitReader {
   /// would be called only once per incoming split
   virtual void prepareSplit(
       std::shared_ptr<common::MetadataFilter> metadataFilter,
-      dwio::common::RuntimeStatistics& runtimeStats);
+      dwio::common::RuntimeStatistics& runtimeStats,
+      const folly::F14FastMap<std::string, std::string>& fileReadOps = {});
 
   virtual uint64_t next(uint64_t size, VectorPtr& output);
 
@@ -124,7 +125,8 @@ class SplitReader {
 
   /// Create the dwio::common::Reader object baseReader_, which will be used to
   /// read the data file's metadata and schema
-  void createReader();
+  void createReader(
+      const folly::F14FastMap<std::string, std::string>& fileReadOps = {});
 
   // Adjust the scan spec according to the current split, then return the
   // adapted row type.
@@ -147,7 +149,8 @@ class SplitReader {
   /// ColumnReaders that will be used to read the data
   void createRowReader(
       std::shared_ptr<common::MetadataFilter> metadataFilter,
-      RowTypePtr rowType);
+      RowTypePtr rowType,
+      std::optional<bool> rowSizeTrackingEnabled);
 
   const folly::F14FastSet<column_index_t>& bucketChannels() const {
     return bucketChannels_;
@@ -185,7 +188,7 @@ class SplitReader {
   const std::shared_ptr<io::IoStatistics> ioStats_;
   const std::shared_ptr<filesystems::File::IoStats> fsStats_;
   FileHandleFactory* const fileHandleFactory_;
-  folly::Executor* const executor_;
+  folly::Executor* const ioExecutor_;
   memory::MemoryPool* const pool_;
 
   std::shared_ptr<common::ScanSpec> scanSpec_;

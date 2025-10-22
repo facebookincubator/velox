@@ -20,43 +20,43 @@
 #include "gtest/gtest.h"
 #include "velox/common/base/VeloxException.h"
 
-using facebook::velox::VeloxUserError;
-using facebook::velox::functions::jsonExtract;
-using facebook::velox::functions::jsonExtractScalar;
 using folly::json::parse_error;
 using namespace std::string_literals;
 
 #define EXPECT_SCALAR_VALUE_EQ(json, path, ret) \
   {                                             \
     auto val = jsonExtractScalar(json, path);   \
-    EXPECT_TRUE(val.hasValue());                \
+    EXPECT_TRUE(val.has_value());               \
     EXPECT_EQ(val.value(), ret);                \
   }
 
 #define EXPECT_SCALAR_VALUE_NULL(json, path) \
-  EXPECT_FALSE(jsonExtractScalar(json, path).hasValue())
+  EXPECT_FALSE(jsonExtractScalar(json, path).has_value())
 
-#define EXPECT_JSON_VALUE_EQ(json, path, ret)        \
-  {                                                  \
-    auto val = json_format(jsonExtract(json, path)); \
-    EXPECT_TRUE(val.hasValue());                     \
-    EXPECT_EQ(val.value(), ret);                     \
+#define EXPECT_JSON_VALUE_EQ(json, path, ret)       \
+  {                                                 \
+    auto val = jsonFormat(jsonExtract(json, path)); \
+    EXPECT_TRUE(val.has_value());                   \
+    EXPECT_EQ(val.value(), ret);                    \
   }
 
 #define EXPECT_JSON_VALUE_NULL(json, path) \
-  EXPECT_FALSE(json_format(jsonExtract(json, path)).hasValue())
+  EXPECT_FALSE(jsonFormat(jsonExtract(json, path)).has_value())
 
 #define EXPECT_THROW_INVALID_ARGUMENT(json, path) \
   EXPECT_THROW(jsonExtract(json, path), VeloxUserError)
 
+namespace facebook::velox::functions::test {
 namespace {
-folly::Optional<std::string> json_format(
-    const folly::Optional<folly::dynamic>& json) {
+
+std::optional<std::string> jsonFormat(
+    const std::optional<folly::dynamic>& json) {
   if (json.has_value()) {
     return folly::toJson(json.value());
   }
-  return folly::none;
+  return std::nullopt;
 }
+
 } // namespace
 
 TEST(JsonExtractorTest, generalJsonTest) {
@@ -92,60 +92,60 @@ TEST(JsonExtractorTest, generalJsonTest) {
         "owner":"amy"})DELIM";
   // clang-format on
   std::replace(json.begin(), json.end(), '\'', '\"');
-  auto res = json_format(jsonExtract(json, "$.store.fruit[0].weight"s));
+  auto res = jsonFormat(jsonExtract(json, "$.store.fruit[0].weight"s));
   EXPECT_TRUE(res.has_value());
   EXPECT_EQ("8", res.value());
-  res = json_format(jsonExtract(json, "$.store.fruit[1].weight"s));
+  res = jsonFormat(jsonExtract(json, "$.store.fruit[1].weight"s));
   EXPECT_TRUE(res.has_value());
   EXPECT_EQ("9", res.value());
   EXPECT_FALSE(
-      json_format(jsonExtract(json, "$.store.fruit[2].weight"s)).has_value());
-  res = json_format(jsonExtract(json, "$.store.fruit[*].weight"s));
+      jsonFormat(jsonExtract(json, "$.store.fruit[2].weight"s)).has_value());
+  res = jsonFormat(jsonExtract(json, "$.store.fruit[*].weight"s));
   EXPECT_TRUE(res.has_value());
   EXPECT_EQ("[8,9]", res.value());
-  res = json_format(jsonExtract(json, "$.store.fruit[*].type"s));
+  res = jsonFormat(jsonExtract(json, "$.store.fruit[*].type"s));
   EXPECT_TRUE(res.has_value());
   EXPECT_EQ("[\"apple\",\"pear\"]", res.value());
-  res = json_format(jsonExtract(json, "$.store.book[0].price"s));
+  res = jsonFormat(jsonExtract(json, "$.store.book[0].price"s));
   EXPECT_TRUE(res.has_value());
   EXPECT_EQ("8.95", res.value());
-  res = json_format(jsonExtract(json, "$.store.book[2].category"s));
+  res = jsonFormat(jsonExtract(json, "$.store.book[2].category"s));
   EXPECT_TRUE(res.has_value());
   EXPECT_EQ("\"fiction\"", res.value());
-  res = json_format(jsonExtract(json, "$.store.basket[1]"s));
+  res = jsonFormat(jsonExtract(json, "$.store.basket[1]"s));
   EXPECT_TRUE(res.has_value());
   EXPECT_EQ("[3,4]", res.value());
-  res = json_format(jsonExtract(json, "$.store.basket[0]"s));
+  res = jsonFormat(jsonExtract(json, "$.store.basket[0]"s));
   EXPECT_TRUE(res.has_value());
   EXPECT_EQ(
       folly::parseJson("[1,2,{\"a\":\"x\",\"b\":\"y\"}]"),
       folly::parseJson(res.value()));
   EXPECT_FALSE(
-      json_format(jsonExtract(json, "$.store.baskets[1]"s)).has_value());
-  res = json_format(jsonExtract(json, "$[\"e mail\"]"s));
+      jsonFormat(jsonExtract(json, "$.store.baskets[1]"s)).has_value());
+  res = jsonFormat(jsonExtract(json, "$[\"e mail\"]"s));
   EXPECT_TRUE(res.has_value());
   EXPECT_EQ("\"amy@only_for_json_udf_test.net\"", res.value());
-  res = json_format(jsonExtract(json, "$.owner"s));
+  res = jsonFormat(jsonExtract(json, "$.owner"s));
   EXPECT_TRUE(res.has_value());
   EXPECT_EQ("\"amy\"", res.value());
-  res = json_format(
+  res = jsonFormat(
       jsonExtract("[[1.1,[2.1,2.2]],2,{\"a\":\"b\"}]"s, "$[0][1][1]"s));
   EXPECT_TRUE(res.has_value());
   EXPECT_EQ("2.2", res.value());
-  res = json_format(jsonExtract("[1,2,{\"a\":\"b\"}]"s, "$[1]"s));
+  res = jsonFormat(jsonExtract("[1,2,{\"a\":\"b\"}]"s, "$[1]"s));
   EXPECT_TRUE(res.has_value());
   EXPECT_EQ("2", res.value());
-  res = json_format(jsonExtract("[1,2,{\"a\":\"b\"}]"s, "$[2]"s));
+  res = jsonFormat(jsonExtract("[1,2,{\"a\":\"b\"}]"s, "$[2]"s));
   EXPECT_TRUE(res.has_value());
   EXPECT_EQ("{\"a\":\"b\"}", res.value());
   EXPECT_FALSE(
-      json_format(jsonExtract("[1,2,{\"a\":\"b\"}]"s, "$[3]"s)).has_value());
-  res = json_format(jsonExtract("[{\"a\":\"b\"}]"s, "$[0]"s));
+      jsonFormat(jsonExtract("[1,2,{\"a\":\"b\"}]"s, "$[3]"s)).has_value());
+  res = jsonFormat(jsonExtract("[{\"a\":\"b\"}]"s, "$[0]"s));
   EXPECT_TRUE(res.has_value());
   EXPECT_EQ("{\"a\":\"b\"}", res.value());
   EXPECT_FALSE(
-      json_format(jsonExtract("[{\"a\":\"b\"}]"s, "$[2]"s)).has_value());
-  res = json_format(jsonExtract("{\"a\":\"b\"}"s, " $ "s));
+      jsonFormat(jsonExtract("[{\"a\":\"b\"}]"s, "$[2]"s)).has_value());
+  res = jsonFormat(jsonExtract("{\"a\":\"b\"}"s, " $ "s));
   EXPECT_TRUE(res.has_value());
   EXPECT_EQ("{\"a\":\"b\"}", res.value());
 
@@ -161,7 +161,7 @@ TEST(JsonExtractorTest, generalJsonTest) {
   expected.append("[{\"key\":3,\"value\":6},{\"key\":4,\"value\":8},")
       .append("{\"key\":5,\"value\":10}]]");
   auto expectedJson = folly::parseJson(expected);
-  res = json_format(jsonExtract(json2, "$[*]"s));
+  res = jsonFormat(jsonExtract(json2, "$[*]"s));
   EXPECT_TRUE(res.has_value());
   EXPECT_EQ(expectedJson, folly::parseJson(res.value()));
 
@@ -170,31 +170,31 @@ TEST(JsonExtractorTest, generalJsonTest) {
       .append("{\"key\":3,\"value\":6},")
       .append("{\"key\":4,\"value\":8},{\"value\":10,\"key\":5}]");
   expectedJson = folly::parseJson(expected);
-  res = json_format(jsonExtract(json2, "$[*][*]"s));
+  res = jsonFormat(jsonExtract(json2, "$[*][*]"s));
   EXPECT_TRUE(res.has_value());
   EXPECT_EQ(expectedJson, folly::parseJson(res.value()));
 
-  res = json_format(jsonExtract(json2, "$[*][*].key"s));
+  res = jsonFormat(jsonExtract(json2, "$[*][*].key"s));
   EXPECT_TRUE(res.has_value());
   EXPECT_EQ("[1,2,3,4,5]", res.value());
 
   expected = "[{\"key\":1,\"value\":2},{\"key\":3,\"value\":6}]";
   expectedJson = folly::parseJson(expected);
-  res = json_format(jsonExtract(json2, "$[*][0]"s));
+  res = jsonFormat(jsonExtract(json2, "$[*][0]"s));
   EXPECT_TRUE(res.has_value());
   EXPECT_EQ(expectedJson, folly::parseJson(res.value()));
 
   expected = "{\"key\":5,\"value\":10}";
   expectedJson = folly::parseJson(expected);
-  res = json_format(jsonExtract(json2, "$[*][2]"s));
+  res = jsonFormat(jsonExtract(json2, "$[*][2]"s));
   EXPECT_TRUE(res.has_value());
   EXPECT_EQ(expectedJson, folly::parseJson(res.value()));
 
   // TEST WiteSpaces in Path and Json
-  res = json_format(jsonExtract(json2, "$[*][*].key"s));
+  res = jsonFormat(jsonExtract(json2, "$[*][*].key"s));
   EXPECT_TRUE(res.has_value());
   EXPECT_EQ("[1,2,3,4,5]", res.value());
-  res = json_format(
+  res = jsonFormat(
       jsonExtract(" [ [1.1,[2.1,2.2]],2, {\"a\": \"b\"}]"s, " $[0][1][1]"s));
   EXPECT_TRUE(res.has_value());
   EXPECT_EQ("2.2", res.value());
@@ -476,10 +476,13 @@ TEST(JsonExtractorTest, reextractJsonTest) {
         "e mail":"amy@only_for_json_udf_test.net",
         "owner":"amy"})DELIM";
   auto originalJsonObj = jsonExtract(json, "$");
-  // extract the same json json by giving the root path
-  auto reExtractedJsonObj = jsonExtract(originalJsonObj.value(), "$");
-  ASSERT_TRUE(reExtractedJsonObj.hasValue());
-  // expect the re-extracted json object to be the same as the original jsonObj
+
+  // Extract the same json json by giving the root path.
+  auto reExtractedJsonObj =
+      jsonExtractFromDynamic(originalJsonObj.value(), "$");
+  ASSERT_TRUE(reExtractedJsonObj.has_value());
+
+  // Expect the re-extracted json object to be the same as the original jsonObj.
   EXPECT_EQ(originalJsonObj.value(), reExtractedJsonObj.value());
 }
 
@@ -514,8 +517,10 @@ TEST(JsonExtractorTest, jsonMultipleExtractsTest) {
         "e mail":"amy@only_for_json_udf_test.net",
         "owner":"amy"})DELIM";
   auto extract1 = jsonExtract(json, "$.store");
-  ASSERT_TRUE(extract1.hasValue());
-  auto extract2 = jsonExtract(extract1.value(), "$.fruit");
-  ASSERT_TRUE(extract2.hasValue());
+  ASSERT_TRUE(extract1.has_value());
+  auto extract2 = jsonExtractFromDynamic(extract1.value(), "$.fruit");
+  ASSERT_TRUE(extract2.has_value());
   EXPECT_EQ(jsonExtract(json, "$.store.fruit").value(), extract2.value());
 }
+
+} // namespace facebook::velox::functions::test

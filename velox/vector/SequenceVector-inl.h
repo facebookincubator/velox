@@ -23,7 +23,7 @@ namespace facebook::velox {
 template <typename T>
 SequenceVector<T>::SequenceVector(
     velox::memory::MemoryPool* pool,
-    size_t length,
+    vector_size_t length,
     VectorPtr sequenceValues,
     BufferPtr sequenceLengths,
     const SimpleVectorStats<T>& stats,
@@ -62,8 +62,6 @@ void SequenceVector<T>::setInternalState() {
   }
   lengths_ = sequenceLengths_->as<vector_size_t>();
   lastIndexRangeEnd_ = lengths_[0];
-  BaseVector::inMemoryBytes_ += sequenceValues_->inMemoryBytes();
-  BaseVector::inMemoryBytes_ += sequenceLengths_->capacity();
 }
 
 template <typename T>
@@ -119,6 +117,7 @@ std::unique_ptr<SimpleVector<uint64_t>> SequenceVector<T>::hashAll() const {
       0 /* nullSequenceCount */);
 }
 
+#ifdef VELOX_ENABLE_LOAD_SIMD_VALUE_BUFFER
 template <typename T>
 xsimd::batch<T> SequenceVector<T>::loadSIMDValueBufferAt(
     size_t byteOffset) const {
@@ -138,6 +137,7 @@ xsimd::batch<T> SequenceVector<T>::loadSIMDValueBufferAt(
     return xsimd::load_aligned(tmp);
   }
 }
+#endif
 
 template <typename T>
 bool SequenceVector<T>::checkLoadRange(size_t index, size_t count) const {

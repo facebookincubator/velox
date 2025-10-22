@@ -21,11 +21,11 @@
 #include <re2/re2.h>
 #include "velox/common/base/SpillConfig.h"
 #include "velox/common/base/SpillStats.h"
+#include "velox/common/base/TreeOfLosers.h"
 #include "velox/common/compression/Compression.h"
 #include "velox/common/file/File.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/exec/SpillFile.h"
-#include "velox/exec/TreeOfLosers.h"
 #include "velox/exec/UnorderedStreamReader.h"
 #include "velox/exec/VectorHasher.h"
 #include "velox/vector/ComplexVector.h"
@@ -266,9 +266,7 @@ class SpillPartitionId {
   /// Constructs a child spill level id, descending from provided 'parent'.
   SpillPartitionId(SpillPartitionId parent, uint32_t partitionNumber);
 
-  bool operator==(const SpillPartitionId& other) const;
-
-  bool operator!=(const SpillPartitionId& other) const;
+  bool operator==(const SpillPartitionId& other) const = default;
 
   /// Customize the compare operator for recursive spilling control. It
   /// ensures the order such that:
@@ -289,7 +287,7 @@ class SpillPartitionId {
   bool operator<(const SpillPartitionId& other) const;
 
   bool operator>(const SpillPartitionId& other) const {
-    return (*this != other) && !(*this < other);
+    return other < *this;
   }
 
   std::string toString() const;

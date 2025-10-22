@@ -29,6 +29,10 @@ namespace facebook::velox::tpch {
 enum class Table : uint8_t;
 }
 
+namespace facebook::velox::tpcds {
+enum class Table : uint8_t;
+}
+
 namespace facebook::velox::exec::test {
 
 struct PushdownConfig {
@@ -113,6 +117,8 @@ class PlanBuilder {
 
   static constexpr const std::string_view kHiveDefaultConnectorId{"test-hive"};
   static constexpr const std::string_view kTpchDefaultConnectorId{"test-tpch"};
+  static constexpr const std::string_view kTpcdsDefaultConnectorId{
+      "test-tpcds"};
 
   ///
   /// TableScan
@@ -200,6 +206,19 @@ class PlanBuilder {
       double scaleFactor = 1,
       std::string_view connectorId = kTpchDefaultConnectorId,
       const std::string& filter = "");
+
+  /// Add a TableScanNode to scan a TPC-DS table.
+  ///
+  /// @param tpcdsTableHandle The handle that specifies the target TPC-DS table
+  /// and scale factor.
+  /// @param columnNames The columns to be returned from that table.
+  /// @param scaleFactor The TPC-DS scale factor.
+  /// @param connectorId The TPC-DS connector id.
+  PlanBuilder& tpcdsTableScan(
+      tpcds::Table table,
+      std::vector<std::string> columnNames,
+      double scaleFactor = 0.01,
+      std::string_view connectorId = kTpcdsDefaultConnectorId);
 
   /// Helper class to build a custom TableScanNode.
   /// Uses a planBuilder instance to get the next plan id, memory pool, and
@@ -340,6 +359,91 @@ class PlanBuilder {
   TableScanBuilder& startTableScan() {
     tableScanBuilder_.reset(new TableScanBuilder(*this));
     return *tableScanBuilder_;
+  }
+
+  /// Helper class to build a custom IndexLookupJoinNode.
+  class IndexLookupJoinBuilder {
+   public:
+    explicit IndexLookupJoinBuilder(PlanBuilder& builder)
+        : planBuilder_(builder) {}
+
+    /// @param leftKeys Join keys from the table scan side, the preceding plan
+    /// node. Cannot be empty.
+    IndexLookupJoinBuilder& leftKeys(std::vector<std::string> leftKeys) {
+      leftKeys_ = std::move(leftKeys);
+      return *this;
+    }
+
+    /// @param rightKeys Join keys from the index lookup side, the plan node
+    /// specified in 'right' parameter. The number and types of left and right
+    /// keys must be the same.
+    IndexLookupJoinBuilder& rightKeys(std::vector<std::string> rightKeys) {
+      rightKeys_ = std::move(rightKeys);
+      return *this;
+    }
+
+    /// @param indexSource The right input source with index lookup support.
+    IndexLookupJoinBuilder& indexSource(
+        const core::TableScanNodePtr& indexSource) {
+      indexSource_ = indexSource;
+      return *this;
+    }
+
+    IndexLookupJoinBuilder& joinConditions(
+        std::vector<std::string> joinConditions) {
+      joinConditions_ = std::move(joinConditions);
+      return *this;
+    }
+
+    IndexLookupJoinBuilder& hasMarker(bool hasMarker) {
+      hasMarker_ = hasMarker;
+      return *this;
+    }
+
+    IndexLookupJoinBuilder& outputLayout(
+        std::vector<std::string> outputLayout) {
+      outputLayout_ = std::move(outputLayout);
+      return *this;
+    }
+
+    /// @param filter SQL expression for the additional join filter. Can
+    /// use columns from both probe and build sides of the join.
+    IndexLookupJoinBuilder& filter(std::string filter) {
+      filter_ = std::move(filter);
+      return *this;
+    }
+
+    /// @param joinType Type of the join supported: inner, left.
+    IndexLookupJoinBuilder& joinType(core::JoinType joinType) {
+      joinType_ = joinType;
+      return *this;
+    }
+
+    /// Stop the IndexLookupJoinBuilder.
+    PlanBuilder& endIndexLookupJoin() {
+      planBuilder_.planNode_ = build(planBuilder_.nextPlanNodeId());
+      return planBuilder_;
+    }
+
+   private:
+    /// Build the plan node IndexLookupJoinNode.
+    core::PlanNodePtr build(const core::PlanNodeId& id);
+
+    PlanBuilder& planBuilder_;
+    std::vector<std::string> leftKeys_;
+    std::vector<std::string> rightKeys_;
+    core::TableScanNodePtr indexSource_;
+    std::vector<std::string> joinConditions_;
+    std::string filter_;
+    bool hasMarker_{false};
+    std::vector<std::string> outputLayout_;
+    core::JoinType joinType_{core::JoinType::kInner};
+  };
+
+  /// Start an IndexLookupJoinBuilder.
+  IndexLookupJoinBuilder& startIndexLookupJoin() {
+    indexLookupJoinBuilder_.reset(new IndexLookupJoinBuilder(*this));
+    return *indexLookupJoinBuilder_;
   }
 
   ///
@@ -602,6 +706,11 @@ class PlanBuilder {
       const std::vector<std::vector<std::string>>& projectionGroups,
       const std::vector<std::string>& noLoadColumns = {});
 
+  /// Add a LazyDereferenceNode to the plan.
+  /// @param projections Same format as in `project`, but can only contain
+  /// field/subfield accesses.
+  PlanBuilder& lazyDereference(const std::vector<std::string>& projections);
+
   /// Add a ProjectNode to keep all existing columns and append more columns
   /// using specified expressions.
   /// @param newColumns A list of one or more expressions to use for computing
@@ -716,6 +825,12 @@ class PlanBuilder {
   /// output of the previous operator.
   /// @param ensureFiles When this option is set the HiveDataSink will always
   /// create a file even if there is no data.
+  /// @param commitStrategy The commit strategy to use for the table write
+  /// operation, default is kNoCommit.
+  /// @param insertTableHandle Encapsulates information needed to write data
+  /// to a table through a connector. If not specified, tableWrite will build
+  /// a HiveInsertTableHandle with columnHandles, bucketProperty and
+  /// locationHandle.
   PlanBuilder& tableWrite(
       const std::string& outputDirectoryPath,
       const std::vector<std::string>& partitionBy,
@@ -734,19 +849,19 @@ class PlanBuilder {
       const RowTypePtr& schema = nullptr,
       const bool ensureFiles = false,
       const connector::CommitStrategy commitStrategy =
-          connector::CommitStrategy::kNoCommit);
+          connector::CommitStrategy::kNoCommit,
+      std::shared_ptr<core::InsertTableHandle> insertTableHandle = nullptr);
 
   /// Add a TableWriteMergeNode.
-  PlanBuilder& tableWriteMerge(
-      const core::AggregationNodePtr& aggregationNode = nullptr);
+  PlanBuilder& tableWriteMerge();
 
   /// Add an AggregationNode representing partial aggregation with the
   /// specified grouping keys, aggregates and optional masks.
   ///
-  /// Aggregates are specified as function calls over unmodified input columns,
-  /// e.g. sum(a), avg(b), min(c). SQL statement AS can be used to specify names
-  /// for the aggregation result columns. In the absence of AS statement, result
-  /// columns are named a0, a1, a2, etc.
+  /// Aggregates are specified as function calls over unmodified input
+  /// columns, e.g. sum(a), avg(b), min(c). SQL statement AS can be used to
+  /// specify names for the aggregation result columns. In the absence of AS
+  /// statement, result columns are named a0, a1, a2, etc.
   ///
   /// For example,
   ///
@@ -756,8 +871,8 @@ class PlanBuilder {
   ///
   ///     partialAggregation({"k1", "k2"}, {"min(a) AS min_a", "max(b)"})
   ///
-  /// will produce output columns k1, k2, min_a and a1, assuming the names of
-  /// the first two input columns are k1 and k2.
+  /// will produce output columns k1, k2, min_a and a1, assuming the names
+  /// of the first two input columns are k1 and k2.
   PlanBuilder& partialAggregation(
       const std::vector<std::string>& groupingKeys,
       const std::vector<std::string>& aggregates,
@@ -1190,6 +1305,24 @@ class PlanBuilder {
       const std::vector<std::string>& outputLayout,
       core::JoinType joinType = core::JoinType::kInner);
 
+  /// Add a SpatialJoinNode to join two inputs using spatial join condition.
+  ///
+  /// @param right Right-side input. Typically, to reduce memory usage, the
+  /// smaller input is placed on the right-side.
+  /// @param joinCondition SQL expression as the spatial join condition. Can
+  /// use columns from both probe and build sides of the join.
+  /// @param outputLayout Output layout consisting of columns from probe and
+  /// build sides.
+  /// @param joinType Type of the join: inner (only one supported for now
+  PlanBuilder& spatialJoin(
+      const core::PlanNodePtr& right,
+      const std::string& joinCondition,
+      const std::string& probeGeometry,
+      const std::string& buildGeometry,
+      const std::optional<std::string>& radius,
+      const std::vector<std::string>& outputLayout,
+      core::JoinType joinType = core::JoinType::kInner);
+
   static core::IndexLookupConditionPtr parseIndexJoinCondition(
       const std::string& joinCondition,
       const RowTypePtr& rowType,
@@ -1200,6 +1333,11 @@ class PlanBuilder {
   /// node. Second input is specified in 'right' parameter and must be a
   /// table source with the connector table handle with index lookup support.
   ///
+  /// @param leftKeys Join keys from the probe side, the preceding plan node.
+  /// Cannot be empty.
+  /// @param rightKeys Join keys from the index lookup side, the plan node
+  /// specified in 'right' parameter. The number and types of left and right
+  /// keys must be the same.
   /// @param right The right input source with index lookup support.
   /// @param joinConditions SQL expressions as the join conditions. Each join
   /// condition must use columns from both sides. For the right side, it can
@@ -1212,14 +1350,23 @@ class PlanBuilder {
   /// where "a" is the index column from right side and "b", "c" are either
   /// condition column from left side or a constant but at least one of them
   /// must not be constant. They all have the same type.
+  /// @param filter SQL expression for the additional join filter to apply on
+  /// join results. This supports filters that can't be converted into join
+  /// conditions or lookup conditions. Can be an empty string if no additional
+  /// filter is needed.
+  /// @param hasMarker if true, 'outputLayout' should include a boolean
+  /// column at the end to indicate if a join output row has a match or not.
+  /// This only applies for left join.
+  /// @param outputLayout Output layout consisting of columns from probe and
+  /// build sides.
   /// @param joinType Type of the join supported: inner, left.
-  ///
-  /// See hashJoin method for the description of the other parameters.
   PlanBuilder& indexLookupJoin(
       const std::vector<std::string>& leftKeys,
       const std::vector<std::string>& rightKeys,
       const core::TableScanNodePtr& right,
       const std::vector<std::string>& joinConditions,
+      const std::string& filter,
+      bool hasMarker,
       const std::vector<std::string>& outputLayout,
       core::JoinType joinType = core::JoinType::kInner);
 
@@ -1241,16 +1388,16 @@ class PlanBuilder {
   /// @param ordinalColumn An optional name for the 'ordinal' column to produce.
   /// This column contains the index of the element of the unnested array or
   /// map. If not specified, the output will not contain this column.
-  /// @param emptyUnnestValueName An optional name for the
-  /// 'emptyUnnestValue' column to produce. This column contains a boolean
-  /// indicating if the output row has empty unnest value or not. If not
-  /// specified, the output will not contain this column and the unnest operator
-  /// also skips producing output rows with empty unnest value.
+  /// @param markerName An optional name for the marker column to produce.
+  /// This column contains a boolean indicating whether the output row has
+  /// non-empty unnested value. If not specified, the output will not contain
+  /// this column and the unnest operator also skips producing output rows
+  /// with empty unnest value.
   PlanBuilder& unnest(
       const std::vector<std::string>& replicateColumns,
       const std::vector<std::string>& unnestColumns,
       const std::optional<std::string>& ordinalColumn = std::nullopt,
-      const std::optional<std::string>& emptyUnnestValueName = std::nullopt);
+      const std::optional<std::string>& markerName = std::nullopt);
 
   /// Add a WindowNode to compute one or more windowFunctions.
   /// @param windowFunctions A list of one or more window function SQL like
@@ -1482,6 +1629,7 @@ class PlanBuilder {
   core::PlanNodePtr planNode_;
   parse::ParseOptions options_;
   std::shared_ptr<TableScanBuilder> tableScanBuilder_;
+  std::shared_ptr<IndexLookupJoinBuilder> indexLookupJoinBuilder_;
   std::shared_ptr<TableWriterBuilder> tableWriterBuilder_;
 
  private:

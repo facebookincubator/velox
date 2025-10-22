@@ -24,7 +24,6 @@
 #include "velox/connectors/hive/HiveConnectorUtil.h"
 #include "velox/connectors/hive/HivePartitionFunction.h"
 #include "velox/connectors/hive/TableHandle.h"
-#include "velox/core/ITypedExpr.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/SortingWriter.h"
 #include "velox/exec/OperatorUtils.h"
@@ -423,6 +422,7 @@ HiveDataSink::HiveDataSink(
           hiveConfig_,
           connectorQueryCtx->sessionProperties())),
       fileNameGenerator_(insertTableHandle_->fileNameGenerator()) {
+  fileSystemStats_ = std::make_unique<filesystems::File::IoStats>();
   if (isBucketed()) {
     VELOX_USER_CHECK_LT(
         bucketCount_,
@@ -433,7 +433,7 @@ HiveDataSink::HiveDataSink(
       (commitStrategy_ == CommitStrategy::kNoCommit) ||
           (commitStrategy_ == CommitStrategy::kTaskCommit),
       "Unsupported commit strategy: {}",
-      commitStrategyToString(commitStrategy_));
+      CommitStrategyName::toName(commitStrategy_));
 
   if (insertTableHandle_->ensureFiles()) {
     VELOX_CHECK(
@@ -468,7 +468,8 @@ HiveDataSink::HiveDataSink(
 bool HiveDataSink::canReclaim() const {
   // Currently, we only support memory reclaim on dwrf file writer.
   return (spillConfig_ != nullptr) &&
-      (insertTableHandle_->storageFormat() == dwio::common::FileFormat::DWRF);
+      (insertTableHandle_->storageFormat() == dwio::common::FileFormat::DWRF ||
+       insertTableHandle_->storageFormat() == dwio::common::FileFormat::NIMBLE);
 }
 
 void HiveDataSink::appendData(RowVectorPtr input) {
@@ -591,6 +592,19 @@ DataSink::Stats HiveDataSink::stats() const {
   return stats;
 }
 
+std::unordered_map<std::string, RuntimeCounter> HiveDataSink::runtimeStats()
+    const {
+  std::unordered_map<std::string, RuntimeCounter> runtimeStats;
+
+  const auto fsStatsMap = fileSystemStats_->stats();
+  for (const auto& [statName, statValue] : fsStatsMap) {
+    runtimeStats.emplace(
+        statName, RuntimeCounter(statValue.sum, statValue.unit));
+  }
+
+  return runtimeStats;
+}
+
 std::shared_ptr<memory::MemoryPool> HiveDataSink::createWriterPool(
     const HiveWriterId& writerId) {
   auto* connectorPool = connectorQueryCtx_->connectorMemoryPool();
@@ -668,7 +682,10 @@ bool HiveDataSink::finish() {
 std::vector<std::string> HiveDataSink::close() {
   setState(State::kClosed);
   closeInternal();
+  return commitMessage();
+}
 
+std::vector<std::string> HiveDataSink::commitMessage() const {
   std::vector<std::string> partitionUpdates;
   partitionUpdates.reserve(writerInfo_.size());
   for (int i = 0; i < writerInfo_.size(); ++i) {
@@ -760,7 +777,8 @@ uint32_t HiveDataSink::appendWriter(const HiveWriterId& id) {
       std::move(writerPool),
       std::move(sinkPool),
       std::move(sortPool)));
-  ioStats_.emplace_back(std::make_shared<io::IoStatistics>());
+  ioStats_.emplace_back(std::make_unique<io::IoStatistics>());
+
   setMemoryReclaimers(writerInfo_.back().get(), ioStats_.back().get());
 
   // Take the writer options provided by the user as a starting point, or
@@ -790,10 +808,11 @@ uint32_t HiveDataSink::appendWriter(const HiveWriterId& id) {
     options->spillConfig = spillConfig_;
   }
 
-  if (options->nonReclaimableSection == nullptr) {
-    options->nonReclaimableSection =
-        writerInfo_.back()->nonReclaimableSectionHolder.get();
-  }
+  // Always set nonReclaimableSection to the current writer's holder.
+  // Since insertTableHandle_->writerOptions() returns a shared_ptr, we need
+  // to ensure each writer has its own nonReclaimableSection pointer.
+  options->nonReclaimableSection =
+      writerInfo_.back()->nonReclaimableSectionHolder.get();
 
   if (options->memoryReclaimerFactory == nullptr ||
       options->memoryReclaimerFactory() == nullptr) {
@@ -825,10 +844,16 @@ uint32_t HiveDataSink::appendWriter(const HiveWriterId& id) {
               .pool = writerInfo_.back()->sinkPool.get(),
               .metricLogger = dwio::common::MetricsLog::voidLog(),
               .stats = ioStats_.back().get(),
+              .fileSystemStats = fileSystemStats_.get(),
           }),
       options);
   writer = maybeCreateBucketSortWriter(std::move(writer));
   writers_.emplace_back(std::move(writer));
+  addThreadLocalRuntimeStat(
+      fmt::format(
+          "{}WriterCount",
+          dwio::common::toString(insertTableHandle_->storageFormat())),
+      RuntimeCounter(1));
   // Extends the buffer used for partition rows calculations.
   partitionSizes_.emplace_back(0);
   partitionRows_.emplace_back(nullptr);

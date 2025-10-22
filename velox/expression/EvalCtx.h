@@ -218,7 +218,11 @@ using EvalErrorsPtr = std::shared_ptr<EvalErrors>;
 // flags for Expr interpreter.
 class EvalCtx {
  public:
-  EvalCtx(core::ExecCtx* execCtx, ExprSet* exprSet, const RowVector* row);
+  EvalCtx(
+      core::ExecCtx* execCtx,
+      ExprSet* exprSet,
+      const RowVector* row,
+      bool lazyDereference = false);
 
   /// For testing only.
   explicit EvalCtx(core::ExecCtx* execCtx);
@@ -262,6 +266,7 @@ class EvalCtx {
 
   // @param status Must indicate an error. Cannot be "ok".
   void setStatus(vector_size_t index, const Status& status);
+  void setStatuses(const SelectivityVector& rows, const Status& status);
 
   // If exceptionPtr is known to be a VeloxException use setVeloxExceptionError
   // instead.
@@ -441,6 +446,15 @@ class EvalCtx {
     return exprSet_;
   }
 
+  /// By default (when this is false), lazy vectors are all loaded at beginning
+  /// of evaluation.  When this is true, the evalution should contain only field
+  /// references, and we only load the lazy vector when we take a child from it,
+  /// and we keep the output child lazy as well.  This is used to maximize
+  /// parallelism in ParallelProject.
+  bool lazyDereference() const {
+    return lazyDereference_;
+  }
+
   VectorEncoding::Simple wrapEncoding() const;
 
   void setPeeledEncoding(std::shared_ptr<PeeledEncoding>& peel) {
@@ -566,6 +580,7 @@ class EvalCtx {
   core::ExecCtx* const execCtx_;
   ExprSet* const exprSet_;
   const RowVector* row_;
+  const bool lazyDereference_;
   bool inputFlatNoNulls_;
 
   // Corresponds 1:1 to children of 'row_'. Set to an inner vector
@@ -768,40 +783,40 @@ class LocalSelectivityVector {
 
 class LocalDecodedVector {
  public:
-  explicit LocalDecodedVector(core::ExecCtx& context) : context_(context) {}
+  explicit LocalDecodedVector(core::ExecCtx& context) : context_(&context) {}
 
-  explicit LocalDecodedVector(EvalCtx& context)
-      : context_(*context.execCtx()) {}
+  explicit LocalDecodedVector(EvalCtx& evalCtx) : context_(evalCtx.execCtx()) {}
 
-  explicit LocalDecodedVector(EvalCtx* context)
-      : LocalDecodedVector(*context) {}
+  explicit LocalDecodedVector(EvalCtx* evalCtx)
+      : context_(evalCtx ? evalCtx->execCtx() : nullptr) {}
 
   LocalDecodedVector(
       const EvalCtx& context,
       const BaseVector& vector,
       const SelectivityVector& rows,
       bool loadLazy = true)
-      : context_(*context.execCtx()) {
+      : context_(context.execCtx()) {
     get()->decode(vector, rows, loadLazy);
   }
 
   LocalDecodedVector(LocalDecodedVector&& other) noexcept
       : context_{other.context_}, vector_{std::move(other.vector_)} {}
 
-  void operator=(LocalDecodedVector&& other) {
+  void operator=(LocalDecodedVector&& other) noexcept {
     context_ = other.context_;
     vector_ = std::move(other.vector_);
   }
 
   ~LocalDecodedVector() {
-    if (vector_) {
-      context_.get().releaseDecodedVector(std::move(vector_));
+    if (vector_ && context_) {
+      context_->releaseDecodedVector(std::move(vector_));
     }
   }
 
   DecodedVector* get() {
     if (!vector_) {
-      vector_ = context_.get().getDecodedVector();
+      vector_ = context_ ? context_->getDecodedVector()
+                         : std::make_unique<DecodedVector>();
     }
     return vector_.get();
   }
@@ -828,7 +843,7 @@ class LocalDecodedVector {
   }
 
  private:
-  std::reference_wrapper<core::ExecCtx> context_;
+  core::ExecCtx* context_;
   std::unique_ptr<DecodedVector> vector_;
 };
 

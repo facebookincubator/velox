@@ -25,6 +25,8 @@ namespace facebook::velox::connector::hive {
 
 class HiveColumnHandle : public ColumnHandle {
  public:
+  /// NOTE: Make sure to update the mapping in columnTypeNames() when modifying
+  /// this.
   enum class ColumnType {
     kPartitionKey,
     kRegular,
@@ -110,7 +112,7 @@ class HiveColumnHandle : public ColumnHandle {
         ColumnParseParameters::kDaysSinceEpoch;
   }
 
-  std::string toString() const;
+  std::string toString() const override;
 
   folly::dynamic serialize() const override;
 

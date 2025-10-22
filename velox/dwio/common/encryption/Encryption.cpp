@@ -16,19 +16,11 @@
 
 #include "velox/dwio/common/encryption/Encryption.h"
 
-namespace facebook {
-namespace velox {
-namespace dwio {
-namespace common {
-namespace encryption {
+namespace facebook::velox::dwio::common::encryption {
 
 bool operator==(const EncryptionProperties& a, const EncryptionProperties& b) {
   return std::addressof(a) == std::addressof(b) ||
       (typeid(a) == typeid(b) && a.equals(b));
 }
 
-} // namespace encryption
-} // namespace common
-} // namespace dwio
-} // namespace velox
-} // namespace facebook
+} // namespace facebook::velox::dwio::common::encryption

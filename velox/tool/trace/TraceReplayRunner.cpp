@@ -289,24 +289,11 @@ void TraceReplayRunner::init() {
     serializer::spark::UnsafeRowVectorSerde::registerNamedVectorSerde();
   }
 
-  connector::ConnectorTableHandle::registerSerDe();
-  connector::hive::HiveTableHandle::registerSerDe();
-  connector::hive::LocationHandle::registerSerDe();
-  connector::hive::HiveColumnHandle::registerSerDe();
-  connector::hive::HiveInsertTableHandle::registerSerDe();
-  connector::hive::HiveInsertFileNameGenerator::registerSerDe();
-  connector::hive::HiveConnectorSplit::registerSerDe();
-  connector::hive::registerHivePartitionFunctionSerDe();
-  connector::hive::HiveBucketProperty::registerSerDe();
+  connector::hive::HiveConnector::registerSerDe();
 
   functions::prestosql::registerAllScalarFunctions(FLAGS_function_prefix);
   aggregate::prestosql::registerAllAggregateFunctions(FLAGS_function_prefix);
   parse::registerTypeResolver();
-
-  if (!facebook::velox::connector::hasConnectorFactory("hive")) {
-    connector::registerConnectorFactory(
-        std::make_shared<connector::hive::HiveConnectorFactory>());
-  }
 
   fs_ = filesystems::getFileSystem(FLAGS_root_dir, nullptr);
   const auto taskTraceDir = exec::trace::getTaskTraceDirectory(
@@ -363,14 +350,13 @@ TraceReplayRunner::createReplayer() const {
         taskTraceMetadataReader_->connectorId(FLAGS_node_id);
     VELOX_CHECK(connectorId.has_value());
 
-    if (const auto& collectors = connector::getAllConnectors();
-        collectors.find(connectorId.value()) == collectors.end()) {
-      const auto hiveConnector =
-          connector::getConnectorFactory("hive")->newConnector(
-              connectorId.value(),
-              std::make_shared<config::ConfigBase>(
-                  std::unordered_map<std::string, std::string>()),
-              ioExecutor_.get());
+    if (!connector::hasConnector(connectorId.value())) {
+      connector::hive::HiveConnectorFactory factory;
+      const auto hiveConnector = factory.newConnector(
+          connectorId.value(),
+          std::make_shared<config::ConfigBase>(
+              std::unordered_map<std::string, std::string>()),
+          ioExecutor_.get());
       connector::registerConnector(hiveConnector);
     }
     replayer = std::make_unique<tool::trace::TableScanReplayer>(

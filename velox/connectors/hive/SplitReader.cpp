@@ -48,10 +48,22 @@ VectorPtr newConstantFromString(
     if (isPartitionDateDaysSinceEpoch) {
       days = folly::to<int32_t>(value.value());
     } else {
-      days = DATE()->toDays(static_cast<folly::StringPiece>(value.value()));
+      days = DATE()->toDays(value.value());
     }
     return std::make_shared<ConstantVector<int32_t>>(
         pool, size, false, type, std::move(days));
+  }
+
+  if constexpr (std::is_same_v<T, int64_t> || std::is_same_v<T, int128_t>) {
+    if (type->isDecimal()) {
+      auto [precision, scale] = getDecimalPrecisionScale(*type);
+      T result;
+      const auto status = DecimalUtil::castFromString<T>(
+          StringView(value.value()), precision, scale, result);
+      VELOX_USER_CHECK(status.ok(), status.message());
+      return std::make_shared<ConstantVector<T>>(
+          pool, size, false, type, std::move(result));
+    }
   }
 
   if constexpr (std::is_same_v<T, StringView>) {
@@ -83,7 +95,7 @@ std::unique_ptr<SplitReader> SplitReader::create(
     const std::shared_ptr<io::IoStatistics>& ioStats,
     const std::shared_ptr<filesystems::File::IoStats>& fsStats,
     FileHandleFactory* fileHandleFactory,
-    folly::Executor* executor,
+    folly::Executor* ioExecutor,
     const std::shared_ptr<common::ScanSpec>& scanSpec) {
   //  Create the SplitReader based on hiveSplit->customSplitInfo["table_format"]
   if (hiveSplit->customSplitInfo.count("table_format") > 0 &&
@@ -98,7 +110,7 @@ std::unique_ptr<SplitReader> SplitReader::create(
         ioStats,
         fsStats,
         fileHandleFactory,
-        executor,
+        ioExecutor,
         scanSpec);
   } else {
     return std::unique_ptr<SplitReader>(new SplitReader(
@@ -111,7 +123,7 @@ std::unique_ptr<SplitReader> SplitReader::create(
         ioStats,
         fsStats,
         fileHandleFactory,
-        executor,
+        ioExecutor,
         scanSpec));
   }
 }
@@ -126,7 +138,7 @@ SplitReader::SplitReader(
     const std::shared_ptr<io::IoStatistics>& ioStats,
     const std::shared_ptr<filesystems::File::IoStats>& fsStats,
     FileHandleFactory* fileHandleFactory,
-    folly::Executor* executor,
+    folly::Executor* ioExecutor,
     const std::shared_ptr<common::ScanSpec>& scanSpec)
     : hiveSplit_(hiveSplit),
       hiveTableHandle_(hiveTableHandle),
@@ -137,7 +149,7 @@ SplitReader::SplitReader(
       ioStats_(ioStats),
       fsStats_(fsStats),
       fileHandleFactory_(fileHandleFactory),
-      executor_(executor),
+      ioExecutor_(ioExecutor),
       pool_(connectorQueryCtx->memoryPool()),
       scanSpec_(scanSpec),
       baseReaderOpts_(connectorQueryCtx->memoryPool()),
@@ -158,8 +170,9 @@ void SplitReader::configureReaderOptions(
 
 void SplitReader::prepareSplit(
     std::shared_ptr<common::MetadataFilter> metadataFilter,
-    dwio::common::RuntimeStatistics& runtimeStats) {
-  createReader();
+    dwio::common::RuntimeStatistics& runtimeStats,
+    const folly::F14FastMap<std::string, std::string>& fileReadOps) {
+  createReader(fileReadOps);
   if (emptySplit_) {
     return;
   }
@@ -170,7 +183,7 @@ void SplitReader::prepareSplit(
     return;
   }
 
-  createRowReader(std::move(metadataFilter), std::move(rowType));
+  createRowReader(std::move(metadataFilter), std::move(rowType), std::nullopt);
 }
 
 void SplitReader::setBucketConversion(
@@ -281,7 +294,8 @@ std::string SplitReader::toString() const {
       static_cast<const void*>(baseRowReader_.get()));
 }
 
-void SplitReader::createReader() {
+void SplitReader::createReader(
+    const folly::F14FastMap<std::string, std::string>& fileReadOps) {
   VELOX_CHECK_NE(
       baseReaderOpts_.fileFormat(), dwio::common::FileFormat::UNKNOWN);
 
@@ -289,11 +303,13 @@ void SplitReader::createReader() {
   FileHandleKey fileHandleKey{
       .filename = hiveSplit_->filePath,
       .tokenProvider = connectorQueryCtx_->fsTokenProvider()};
+
+  auto fileProperties = hiveSplit_->properties.value_or(FileProperties{});
+  fileProperties.fileReadOps = fileReadOps;
+
   try {
     fileHandleCachePtr = fileHandleFactory_->generate(
-        fileHandleKey,
-        hiveSplit_->properties.has_value() ? &*hiveSplit_->properties : nullptr,
-        fsStats_ ? fsStats_.get() : nullptr);
+        fileHandleKey, &fileProperties, fsStats_ ? fsStats_.get() : nullptr);
     VELOX_CHECK_NOT_NULL(fileHandleCachePtr.get());
   } catch (const VeloxRuntimeError& e) {
     if (e.errorCode() == error_code::kFileNotFound &&
@@ -318,7 +334,8 @@ void SplitReader::createReader() {
       connectorQueryCtx_,
       ioStats_,
       fsStats_,
-      executor_);
+      ioExecutor_,
+      fileReadOps);
 
   baseReader_ = dwio::common::getReaderFactory(baseReaderOpts_.fileFormat())
                     ->createReader(std::move(baseFileInput), baseReaderOpts_);
@@ -368,7 +385,8 @@ bool SplitReader::checkIfSplitIsEmpty(
 
 void SplitReader::createRowReader(
     std::shared_ptr<common::MetadataFilter> metadataFilter,
-    RowTypePtr rowType) {
+    RowTypePtr rowType,
+    std::optional<bool> rowSizeTrackingEnabled) {
   VELOX_CHECK_NULL(baseRowReader_);
   configureRowReaderOptions(
       hiveTableHandle_->tableParameters(),
@@ -378,7 +396,13 @@ void SplitReader::createRowReader(
       hiveSplit_,
       hiveConfig_,
       connectorQueryCtx_->sessionProperties(),
+      ioExecutor_,
       baseRowReaderOpts_);
+  baseRowReaderOpts_.setTrackRowSize(
+      rowSizeTrackingEnabled.has_value()
+          ? *rowSizeTrackingEnabled
+          : connectorQueryCtx_->rowSizeTrackingMode() !=
+              core::QueryConfig::RowSizeTrackingMode::DISABLED);
   baseRowReader_ = baseReader_->createRowReader(baseRowReaderOpts_);
 }
 

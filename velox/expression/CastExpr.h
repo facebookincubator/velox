@@ -17,13 +17,11 @@
 #pragma once
 
 #include "velox/expression/CastHooks.h"
+#include "velox/expression/ExprConstants.h"
 #include "velox/expression/FunctionCallToSpecialForm.h"
 #include "velox/expression/SpecialForm.h"
 
 namespace facebook::velox::exec {
-
-constexpr folly::StringPiece kCast = "cast";
-constexpr folly::StringPiece kTryCast = "try_cast";
 
 /// Custom operator for casts from and to custom types.
 class CastOperator {
@@ -93,7 +91,7 @@ class CastExpr : public SpecialForm {
             SpecialFormKind::kCast,
             type,
             std::vector<ExprPtr>({expr}),
-            isTryCast ? kTryCast.data() : kCast.data(),
+            isTryCast ? expression::kTryCast : expression::kCast,
             false /* supportsFlatNoNullsFastPath */,
             trackCpuUsage),
         isTryCast_(isTryCast),
@@ -206,6 +204,18 @@ class CastExpr : public SpecialForm {
       exec::EvalCtx& context,
       const TypePtr& toType);
 
+  VectorPtr castFromTime(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& toType);
+
+  VectorPtr castToTime(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& fromType);
+
   template <typename TInput, typename TOutput>
   void applyDecimalCastKernel(
       const SelectivityVector& rows,
@@ -309,7 +319,7 @@ class CastExpr : public SpecialForm {
   }
 
   bool setNullInResultAtError() const {
-    return isTryCast() && inTopLevel;
+    return isTryCast() && (inTopLevel || hooks_->applyTryCastRecursively());
   }
 
   CastOperatorPtr getCastOperator(const TypePtr& type);

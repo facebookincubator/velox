@@ -31,6 +31,13 @@ struct RemoteConnectorSplit : public connector::ConnectorSplit {
   explicit RemoteConnectorSplit(const std::string& remoteTaskId)
       : ConnectorSplit(""), taskId(remoteTaskId) {}
 
+  static std::shared_ptr<RemoteConnectorSplit> create(
+      const folly::dynamic& obj);
+
+  static void registerSerDe();
+
+  folly::dynamic serialize() const override;
+
   std::string toString() const override {
     return fmt::format("Remote: {}", taskId);
   }
@@ -60,12 +67,11 @@ class Exchange : public SourceOperator {
  protected:
   virtual VectorSerde* getSerde();
 
- private:
-  // When 'estimatedCompactRowSize_' is unset, meaning we haven't materialized
+  // When 'estimatedRowSize_' is unset, meaning we haven't materialized
   // and returned any output from this exchange operator, we return this
   // conservative number of output rows, to make sure memory does not grow too
   // much.
-  static constexpr uint64_t kInitialOutputCompactRows = 64;
+  static constexpr uint64_t kInitialOutputRows = 64;
 
   // Invoked to create exchange client for remote tasks. The function shuffles
   // the source task ids first to randomize the source tasks we fetch data from.
@@ -75,11 +81,8 @@ class Exchange : public SourceOperator {
 
   // Fetches splits from the task until there are no more splits or task returns
   // a future that will be complete when more splits arrive. Adds splits to
-  // exchangeClient_. Returns true if received a future from the task and sets
-  // the 'future' parameter. Returns false if fetched all splits or if this
-  // operator is not the first operator in the pipeline and therefore is not
-  // responsible for fetching splits and adding them to the exchangeClient_.
-  bool getSplits(ContinueFuture* future);
+  // exchangeClient_.
+  void getSplits(ContinueFuture* future);
 
   // Fetches runtime stats from ExchangeClient and replaces these in this
   // operator's stats.
@@ -87,9 +90,7 @@ class Exchange : public SourceOperator {
 
   void recordInputStats(uint64_t rawInputBytes);
 
-  RowVectorPtr getOutputFromCompactRows(VectorSerde* serde);
-
-  RowVectorPtr getOutputFromUnsafeRows(VectorSerde* serde);
+  RowVectorPtr getOutputFromRows(VectorSerde* serde);
 
   const uint64_t preferredOutputBatchBytes_;
 
@@ -118,15 +119,15 @@ class Exchange : public SourceOperator {
   bool atEnd_{false};
   std::default_random_engine rng_{std::random_device{}()};
 
-  // Memory holders needed by compact row serde to perform cursor like reads
-  // across 'getOutputFromCompactRows' calls.
-  std::unique_ptr<SerializedPage> compactRowPages_;
-  std::unique_ptr<ByteInputStream> compactRowInputStream_;
-  std::unique_ptr<RowIterator> compactRowIterator_;
+  // Memory holders needed by row serde to perform cursor like reads
+  // across 'getOutputFromRows' calls.
+  std::unique_ptr<SerializedPage> rowPages_;
+  std::unique_ptr<ByteInputStream> rowInputStream_;
+  std::unique_ptr<RowIterator> rowIterator_;
 
   // The estimated bytes per row of the output of this exchange operator
   // computed from the last processed output.
-  std::optional<uint64_t> estimatedCompactRowSize_;
+  std::optional<uint64_t> estimatedRowSize_;
 };
 
 } // namespace facebook::velox::exec

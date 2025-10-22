@@ -16,6 +16,7 @@
 #include "velox/exec/fuzzer/WriterFuzzer.h"
 
 #include <boost/random/uniform_int_distribution.hpp>
+#include <fmt/ranges.h>
 
 #include <re2/re2.h>
 #include <algorithm>

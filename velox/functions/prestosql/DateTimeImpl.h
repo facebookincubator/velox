@@ -15,11 +15,8 @@
  */
 #pragma once
 
-#include <boost/numeric/conversion/cast.hpp>
-#include <chrono>
-#include <optional>
+#include "velox/common/base/CheckedArithmetic.h"
 #include "velox/common/base/Doubles.h"
-#include "velox/external/date/date.h"
 #include "velox/functions/lib/DateTimeFormatter.h"
 #include "velox/functions/lib/DateTimeUtil.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
@@ -28,15 +25,11 @@
 #include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox::functions {
-namespace {
-constexpr double kNanosecondsInSecond = 1'000'000'000;
-constexpr int64_t kNanosecondsInMillisecond = 1'000'000;
-constexpr int64_t kMillisecondsInSecond = 1'000;
-} // namespace
 
 FOLLY_ALWAYS_INLINE double toUnixtime(const Timestamp& timestamp) {
   double result = timestamp.getSeconds();
-  result += static_cast<double>(timestamp.getNanos()) / kNanosecondsInSecond;
+  result +=
+      static_cast<double>(timestamp.getNanos()) / Timestamp::kNanosInSecond;
   return result;
 }
 
@@ -65,12 +58,11 @@ FOLLY_ALWAYS_INLINE Timestamp fromUnixtime(double unixtime) {
     ++seconds;
     milliseconds = 0;
   }
-  return Timestamp(seconds, milliseconds * kNanosecondsInMillisecond);
+  return Timestamp(
+      seconds, milliseconds * Timestamp::kNanosecondsInMillisecond);
 }
 
-FOLLY_ALWAYS_INLINE boost::int64_t fromUnixtime(
-    double unixtime,
-    int16_t timeZoneId) {
+FOLLY_ALWAYS_INLINE int64_t fromUnixtime(double unixtime, int16_t timeZoneId) {
   if (FOLLY_UNLIKELY(std::isnan(unixtime))) {
     return pack(0, timeZoneId);
   }
@@ -90,127 +82,8 @@ FOLLY_ALWAYS_INLINE boost::int64_t fromUnixtime(
                         : pack(std::numeric_limits<int64_t>::max(), timeZoneId);
   }
 
-  return pack(std::llround(unixtime * kMillisecondsInSecond), timeZoneId);
-}
-
-// Year, quarter or month are not uniformly incremented. Months have different
-// total days, and leap years have more days than the rest. If the new year,
-// quarter or month has less total days than the given one, it will be coerced
-// to use the valid last day of the new month. This could result in weird
-// arithmetic behavior. For example,
-//
-// 2022-01-30 + (1 month) = 2022-02-28
-// 2022-02-28 - (1 month) = 2022-01-28
-//
-// 2022-08-31 + (1 quarter) = 2022-11-30
-// 2022-11-30 - (1 quarter) = 2022-08-30
-//
-// 2020-02-29 + (1 year) = 2021-02-28
-// 2021-02-28 - (1 year) = 2020-02-28
-FOLLY_ALWAYS_INLINE
-int32_t
-addToDate(const int32_t input, const DateTimeUnit unit, const int32_t value) {
-  // TODO(gaoge): Handle overflow and underflow with 64-bit representation
-  if (value == 0) {
-    return input;
-  }
-
-  const std::chrono::time_point<std::chrono::system_clock, date::days> inDate{
-      date::days(input)};
-  std::chrono::time_point<std::chrono::system_clock, date::days> outDate;
-
-  if (unit == DateTimeUnit::kDay) {
-    outDate = inDate + date::days(value);
-  } else if (unit == DateTimeUnit::kWeek) {
-    outDate = inDate + date::days(value * 7);
-  } else {
-    const date::year_month_day inCalDate(inDate);
-    date::year_month_day outCalDate;
-
-    if (unit == DateTimeUnit::kMonth) {
-      outCalDate = inCalDate + date::months(value);
-    } else if (unit == DateTimeUnit::kQuarter) {
-      outCalDate = inCalDate + date::months(3 * value);
-    } else if (unit == DateTimeUnit::kYear) {
-      outCalDate = inCalDate + date::years(value);
-    } else {
-      VELOX_UNREACHABLE();
-    }
-
-    if (!outCalDate.ok()) {
-      outCalDate = outCalDate.year() / outCalDate.month() / date::last;
-    }
-    outDate = date::sys_days{outCalDate};
-  }
-
-  return outDate.time_since_epoch().count();
-}
-
-FOLLY_ALWAYS_INLINE Timestamp addToTimestamp(
-    const Timestamp& timestamp,
-    const DateTimeUnit unit,
-    const int32_t value) {
-  // TODO(gaoge): Handle overflow and underflow with 64-bit representation
-  if (value == 0) {
-    return timestamp;
-  }
-
-  const std::chrono::
-      time_point<std::chrono::system_clock, std::chrono::milliseconds>
-          inTimestamp(std::chrono::milliseconds(timestamp.toMillis()));
-  std::chrono::time_point<std::chrono::system_clock, std::chrono::milliseconds>
-      outTimestamp;
-
-  switch (unit) {
-    // Year, quarter or month are not uniformly incremented in terms of number
-    // of days. So we treat them differently.
-    case DateTimeUnit::kYear:
-    case DateTimeUnit::kQuarter:
-    case DateTimeUnit::kMonth:
-    case DateTimeUnit::kDay: {
-      const int32_t inDate =
-          std::chrono::duration_cast<date::days>(inTimestamp.time_since_epoch())
-              .count();
-      const int32_t outDate = addToDate(inDate, unit, value);
-      outTimestamp =
-          inTimestamp + date::days(checkedMinus<int32_t>(outDate, inDate));
-      break;
-    }
-    case DateTimeUnit::kHour: {
-      outTimestamp = inTimestamp + std::chrono::hours(value);
-      break;
-    }
-    case DateTimeUnit::kMinute: {
-      outTimestamp = inTimestamp + std::chrono::minutes(value);
-      break;
-    }
-    case DateTimeUnit::kSecond: {
-      outTimestamp = inTimestamp + std::chrono::seconds(value);
-      break;
-    }
-    case DateTimeUnit::kMillisecond: {
-      outTimestamp = inTimestamp + std::chrono::milliseconds(value);
-      break;
-    }
-    case DateTimeUnit::kWeek: {
-      const int32_t inDate =
-          std::chrono::duration_cast<date::days>(inTimestamp.time_since_epoch())
-              .count();
-      const int32_t outDate = addToDate(inDate, DateTimeUnit::kDay, 7 * value);
-
-      outTimestamp = inTimestamp + date::days(outDate - inDate);
-      break;
-    }
-    default:
-      VELOX_UNREACHABLE("Unsupported datetime unit");
-  }
-
-  Timestamp milliTimestamp =
-      Timestamp::fromMillis(outTimestamp.time_since_epoch().count());
-  return Timestamp(
-      milliTimestamp.getSeconds(),
-      milliTimestamp.getNanos() +
-          timestamp.getNanos() % kNanosecondsInMillisecond);
+  return pack(
+      std::llround(unixtime * Timestamp::kMillisecondsInSecond), timeZoneId);
 }
 
 // If time zone is provided, use it for the arithmetic operation (convert to it,
@@ -328,6 +201,69 @@ int64_t diffDate(
       Timestamp((int64_t)toDate * util::kSecsPerDay, 0));
 }
 
+FOLLY_ALWAYS_INLINE
+int64_t diffTime(
+    const DateTimeUnit unit,
+    const int64_t fromTime,
+    const int64_t toTime) {
+  // Validate time inputs are in valid range [0, 86400000)
+  VELOX_USER_CHECK(
+      fromTime >= 0 && fromTime < kMillisInDay,
+      "from TIME value {} is out of range [0, 86400000)",
+      fromTime);
+  VELOX_USER_CHECK(
+      toTime >= 0 && toTime < kMillisInDay,
+      "to TIME value {} is out of range [0, 86400000)",
+      toTime);
+
+  if (fromTime == toTime) {
+    return 0;
+  }
+
+  // TIME values are milliseconds since midnight
+  int64_t diffMillis = toTime - fromTime;
+
+  switch (unit) {
+    case DateTimeUnit::kMillisecond:
+      return diffMillis;
+    case DateTimeUnit::kSecond:
+      return diffMillis / kMillisInSecond;
+    case DateTimeUnit::kMinute:
+      return diffMillis / kMillisInMinute;
+    case DateTimeUnit::kHour:
+      return diffMillis / kMillisInHour;
+    default:
+      VELOX_USER_FAIL("Unsupported time unit for TIME type");
+  }
+}
+
+FOLLY_ALWAYS_INLINE int64_t
+addToTime(const DateTimeUnit unit, const int32_t value, const int64_t time) {
+  if (value == 0) {
+    return time;
+  }
+
+  int64_t valueInMillis;
+  switch (unit) {
+    case DateTimeUnit::kMillisecond:
+      valueInMillis = value;
+      break;
+    case DateTimeUnit::kSecond:
+      valueInMillis = checkedMultiply<int64_t>(value, kMillisInSecond);
+      break;
+    case DateTimeUnit::kMinute:
+      valueInMillis = checkedMultiply<int64_t>(value, kMillisInMinute);
+      break;
+    case DateTimeUnit::kHour:
+      valueInMillis = checkedMultiply<int64_t>(value, kMillisInHour);
+      break;
+    default:
+      VELOX_USER_FAIL("Unsupported time unit for TIME type");
+  }
+
+  return addToTime(time, valueInMillis);
+}
+
 FOLLY_ALWAYS_INLINE int64_t
 valueOfTimeUnitToMillis(const double value, std::string_view unit) {
   double convertedValue = value;
@@ -347,15 +283,14 @@ valueOfTimeUnitToMillis(const double value, std::string_view unit) {
   } else {
     VELOX_USER_FAIL("Unknown time unit: {}", unit);
   }
-  try {
-    return boost::numeric_cast<int64_t>(std::round(convertedValue));
-  } catch (const boost::bad_numeric_cast&) {
-    VELOX_USER_FAIL(
-        "Value in {} unit is too large to be represented in ms unit as an int64_t",
-        unit,
-        value);
+
+  auto result = folly::tryTo<int64_t>(std::round(convertedValue));
+  if (result.hasValue()) {
+    return result.value();
   }
-  VELOX_UNREACHABLE();
+  VELOX_USER_FAIL(
+      "Value in {} unit is too large to be represented in ms unit as an int64_t",
+      unit);
 }
 
 } // namespace facebook::velox::functions

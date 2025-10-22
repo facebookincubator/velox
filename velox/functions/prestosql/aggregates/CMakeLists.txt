@@ -56,7 +56,8 @@ velox_add_library(
   SumAggregate.cpp
   SumDataSizeForStatsAggregate.cpp
   TDigestAggregate.cpp
-  VarianceAggregates.cpp)
+  VarianceAggregates.cpp
+)
 
 velox_link_libraries(
   velox_aggregates
@@ -69,10 +70,9 @@ velox_link_libraries(
   velox_functions_lib
   velox_functions_util
   velox_presto_types
-  velox_functions_prestosql_aggregates_sfm
-  Folly::folly)
-
-add_subdirectory(sfm)
+  velox_functions_sfm
+  Folly::folly
+)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)

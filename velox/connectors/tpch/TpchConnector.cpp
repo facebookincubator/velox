@@ -23,32 +23,11 @@ namespace facebook::velox::connector::tpch {
 
 using facebook::velox::tpch::Table;
 
-namespace {
-std::vector<std::unique_ptr<TpchConnectorMetadataFactory>>&
-tpchConnectorMetadataFactories() {
-  static std::vector<std::unique_ptr<TpchConnectorMetadataFactory>> factories;
-  return factories;
-}
-} // namespace
-
 TpchConnector::TpchConnector(
     const std::string& id,
     std::shared_ptr<const config::ConfigBase> config,
     folly::Executor* /*executor*/)
-    : Connector(id) {
-  for (auto& factory : tpchConnectorMetadataFactories()) {
-    metadata_ = factory->create(this);
-    if (metadata_ != nullptr) {
-      break;
-    }
-  }
-}
-
-bool registerTpchConnectorMetadataFactory(
-    std::unique_ptr<TpchConnectorMetadataFactory> factory) {
-  tpchConnectorMetadataFactories().push_back(std::move(factory));
-  return true;
-}
+    : Connector(id, std::move(config)) {}
 
 namespace {
 
@@ -82,8 +61,12 @@ RowVectorPtr getTpchData(
 } // namespace
 
 std::string TpchTableHandle::toString() const {
-  return fmt::format(
-      "table: {}, scale factor: {}", toTableName(table_), scaleFactor_);
+  std::stringstream out;
+  out << "table: " << toTableName(table_) << ", scale factor: " << scaleFactor_;
+  if (filterExpression_ != nullptr) {
+    out << ", filter: " << filterExpression_->toString();
+  }
+  return out.str();
 }
 
 TpchDataSource::TpchDataSource(

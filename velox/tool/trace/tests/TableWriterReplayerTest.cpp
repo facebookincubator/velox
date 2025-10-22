@@ -23,7 +23,7 @@
 #include "folly/dynamic.h"
 #include "velox/common/base/Fs.h"
 #include "velox/common/file/FileSystems.h"
-#include "velox/common/hyperloglog/SparseHll.h"
+#include "velox/connectors/hive/HiveConnector.h"
 #include "velox/exec/OperatorTraceReader.h"
 #include "velox/exec/PartitionFunction.h"
 #include "velox/exec/TableWriter.h"
@@ -60,11 +60,7 @@ class TableWriterReplayerTest : public HiveConnectorTestBase {
     }
     Type::registerSerDe();
     common::Filter::registerSerDe();
-    connector::hive::HiveTableHandle::registerSerDe();
-    connector::hive::LocationHandle::registerSerDe();
-    connector::hive::HiveColumnHandle::registerSerDe();
-    connector::hive::HiveInsertTableHandle::registerSerDe();
-    connector::hive::HiveInsertFileNameGenerator::registerSerDe();
+    connector::hive::HiveConnector::registerSerDe();
     core::PlanNode::registerSerDe();
     velox::exec::trace::registerDummySourceSerDe();
     core::ITypedExpr::registerSerDe();
@@ -127,12 +123,12 @@ class TableWriterReplayerTest : public HiveConnectorTestBase {
           connector::hive::LocationHandle::TableType::kNew,
       const CommitStrategy& outputCommitStrategy = CommitStrategy::kNoCommit,
       bool aggregateResult = true,
-      std::shared_ptr<core::AggregationNode> aggregationNode = nullptr) {
+      const std::optional<ColumnStatsSpec> statsSpec = std::nullopt) {
     auto insertPlan = inputPlan
                           .addNode(addTableWriter(
                               inputRowType,
                               tableRowType->names(),
-                              aggregationNode,
+                              statsSpec,
                               createInsertTableHandle(
                                   tableRowType,
                                   outputTableType,
@@ -155,29 +151,21 @@ class TableWriterReplayerTest : public HiveConnectorTestBase {
   std::function<PlanNodePtr(std::string, PlanNodePtr)> addTableWriter(
       const RowTypePtr& inputColumns,
       const std::vector<std::string>& tableColumnNames,
-      const std::shared_ptr<core::AggregationNode>& aggregationNode,
+      const std::optional<ColumnStatsSpec>& statsSpec,
       const std::shared_ptr<core::InsertTableHandle>& insertHandle,
       bool hasPartitioningScheme,
       connector::CommitStrategy commitStrategy =
           connector::CommitStrategy::kNoCommit) {
     return [=](core::PlanNodeId nodeId,
                core::PlanNodePtr source) -> core::PlanNodePtr {
-      std::shared_ptr<core::AggregationNode> aggNode = nullptr;
-      if (aggregationNode == nullptr) {
-        aggNode = generateAggregationNode(
-            "c0", nodeId, {}, core::AggregationNode::Step::kPartial, source);
-      } else {
-        aggNode = aggregationNode;
-      }
-
       return std::make_shared<core::TableWriteNode>(
           nodeId,
           inputColumns,
           tableColumnNames,
-          aggNode,
+          statsSpec,
           insertHandle,
           hasPartitioningScheme,
-          TableWriteTraits::outputType(aggNode),
+          TableWriteTraits::outputType(statsSpec),
           commitStrategy,
           source);
     };
@@ -238,7 +226,7 @@ class TableWriterReplayerTest : public HiveConnectorTestBase {
     }
   }
 
-  static std::shared_ptr<core::AggregationNode> generateAggregationNode(
+  static std::shared_ptr<core::AggregationNode> generateColumnStatsSpec(
       const std::string& name,
       const core::PlanNodeId nodeId,
       const std::vector<core::FieldAccessTypedExprPtr>& groupingKeys,
@@ -247,7 +235,7 @@ class TableWriterReplayerTest : public HiveConnectorTestBase {
     core::TypedExprPtr inputField =
         std::make_shared<const core::FieldAccessTypedExpr>(BIGINT(), name);
     auto callExpr = std::make_shared<const core::CallTypedExpr>(
-        BIGINT(), std::vector<core::TypedExprPtr>{inputField}, "min");
+        BIGINT(), "min", inputField);
     std::vector<std::string> aggregateNames = {"min"};
     std::vector<core::AggregationNode::Aggregate> aggregates = {
         core::AggregationNode::Aggregate{

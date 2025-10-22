@@ -42,6 +42,7 @@ class PageReader {
       ParquetTypeWithIdPtr fileType,
       common::CompressionKind codec,
       int64_t chunkSize,
+      dwio::common::ColumnReaderStatistics& stats,
       const tz::TimeZone* sessionTimezone)
       : pool_(pool),
         inputStream_(std::move(stream)),
@@ -52,6 +53,7 @@ class PageReader {
         codec_(codec),
         chunkSize_(chunkSize),
         nullConcatenation_(pool_),
+        stats_(stats),
         sessionTimezone_(sessionTimezone) {
     type_->makeLevelInfo(leafInfo_);
   }
@@ -62,6 +64,7 @@ class PageReader {
       memory::MemoryPool& pool,
       common::CompressionKind codec,
       int64_t chunkSize,
+      dwio::common::ColumnReaderStatistics& stats,
       const tz::TimeZone* sessionTimezone = nullptr)
       : pool_(pool),
         inputStream_(std::move(stream)),
@@ -71,6 +74,7 @@ class PageReader {
         codec_(codec),
         chunkSize_(chunkSize),
         nullConcatenation_(pool_),
+        stats_(stats),
         sessionTimezone_(sessionTimezone) {}
 
   /// Advances 'numRows' top level rows.
@@ -264,7 +268,7 @@ class PageReader {
   template <
       typename Visitor,
       typename std::enable_if<
-          !std::is_same_v<typename Visitor::DataType, folly::StringPiece> &&
+          !std::is_same_v<typename Visitor::DataType, std::string_view> &&
               !std::is_same_v<typename Visitor::DataType, int8_t>,
           int>::type = 0>
   void
@@ -300,7 +304,7 @@ class PageReader {
   template <
       typename Visitor,
       typename std::enable_if<
-          std::is_same_v<typename Visitor::DataType, folly::StringPiece>,
+          std::is_same_v<typename Visitor::DataType, std::string_view>,
           int>::type = 0>
   void
   callDecoder(const uint64_t* nulls, bool& nullsFromFastPath, Visitor visitor) {
@@ -501,6 +505,8 @@ class PageReader {
 
   // Base values of dictionary when reading a string dictionary.
   VectorPtr dictionaryValues_;
+
+  dwio::common::ColumnReaderStatistics& stats_;
 
   const tz::TimeZone* sessionTimezone_{nullptr};
 

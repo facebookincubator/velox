@@ -488,6 +488,21 @@ TEST(TypeTest, row) {
   testTypeSerde(rowInner);
 }
 
+TEST(TypeTest, wideRow) {
+  std::vector<std::string> names;
+  names.reserve(1'000);
+  for (auto i = 0; i < 1'000; ++i) {
+    names.push_back(fmt::format("c{}", i));
+  }
+
+  auto rowType = ROW(std::move(names), BIGINT());
+
+  ASSERT_EQ(rowType->findChild("c17")->toString(), "BIGINT");
+  VELOX_ASSERT_THROW(
+      rowType->findChild("blah"),
+      "Field not found: blah. Available fields are: c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15, c16, c17, c18, c19, c20, c21, c22, c23, c24, c25, c26, c27, c28, c29, c30, c31, c32, c33, c34, c35, c36, c37, c38, c39, c40, c41, c42, c43, c44, c45, c46, c47, c48, c49, ...950 more");
+}
+
 TEST(TypeTest, serdeCache) {
   std::vector<std::string> names;
   names.reserve(100);
@@ -530,6 +545,26 @@ TEST(TypeTest, serdeCache) {
 TEST(TypeTest, emptyRow) {
   auto row = ROW({});
   testTypeSerde(row);
+}
+
+TEST(TypeTest, singleFieldRow) {
+  auto rowType = ROW("a", REAL());
+  testTypeSerde(rowType);
+
+  auto equivalentRowType = ROW({{"a", REAL()}});
+  ASSERT_EQ(*rowType, *equivalentRowType);
+  testTypeSerde(equivalentRowType);
+
+  equivalentRowType = ROW({"a"}, {REAL()});
+  ASSERT_EQ(*rowType, *equivalentRowType);
+  testTypeSerde(equivalentRowType);
+}
+
+TEST(TypeTest, homogenousRow) {
+  auto rowType = ROW({"a", "b", "c"}, REAL());
+  auto equivalentRowType = ROW({"a", "b", "c"}, {REAL(), REAL(), REAL()});
+  ASSERT_EQ(*rowType, *equivalentRowType);
+  testTypeSerde(rowType);
 }
 
 TEST(TypeTest, rowParametersMultiThreaded) {
@@ -674,7 +709,7 @@ TEST(TypeTest, opaqueWithMetadata) {
   auto type = std::make_shared<OpaqueWithMetadataType>(123);
   auto type2 = std::make_shared<OpaqueWithMetadataType>(123);
   auto other = std::make_shared<OpaqueWithMetadataType>(234);
-  EXPECT_TRUE(def->operator!=(*type));
+  EXPECT_TRUE(*def != *type);
   EXPECT_EQ(*type, *type2);
   EXPECT_NE(*type, *other);
 
@@ -1128,10 +1163,6 @@ TEST(TypeTest, providesCustomComparison) {
   EXPECT_THROW(
       test::BIGINT_TYPE_WITH_INVALID_CUSTOM_COMPARISON()->hash(0),
       VeloxRuntimeError);
-
-  // We do not support variable width custom comparison for variable width
-  // types, so attempting to instantiate one should fail.
-  EXPECT_THROW(test::VARCHAR_TYPE_WITH_CUSTOM_COMPARISON(), VeloxRuntimeError);
 }
 
 TEST(TypeTest, toSummaryString) {
@@ -1169,4 +1200,27 @@ TEST(TypeTest, toSummaryString) {
   EXPECT_EQ(
       "ROW(BOOLEAN, INTEGER, VARCHAR, ARRAY, MAP, ROW)",
       rowType->toSummaryString({.maxChildren = 10}));
+}
+
+TEST(TypeTest, time) {
+  const auto timeType = TIME();
+  ASSERT_EQ(timeType->toString(), "TIME");
+  ASSERT_EQ(timeType->size(), 0);
+  VELOX_ASSERT_THROW(timeType->childAt(0), "scalar type has no children");
+  ASSERT_EQ(timeType->kind(), TypeKind::BIGINT); // Physical type
+  EXPECT_STREQ(timeType->kindName(), "BIGINT"); // Physical kind name
+  ASSERT_EQ(timeType->begin(), timeType->end());
+  ASSERT_EQ(approximateTypeEncodingwidth(timeType), 1);
+
+  // Test logical vs physical type behavior (similar to DATE test)
+  ASSERT_TRUE(timeType->kindEquals(BIGINT())); // Same physical kind
+  ASSERT_NE(*timeType, *BIGINT()); // Different logical types
+  ASSERT_FALSE(timeType->equivalent(*BIGINT())); // Not equivalent
+  ASSERT_FALSE(BIGINT()->equivalent(*timeType)); // Not equivalent reverse
+
+  // Test orderability and comparability
+  ASSERT_TRUE(timeType->isOrderable());
+  ASSERT_TRUE(timeType->isComparable());
+
+  testTypeSerde(timeType);
 }

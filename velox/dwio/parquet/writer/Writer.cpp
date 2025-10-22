@@ -350,6 +350,7 @@ Writer::Writer(
       getArrowParquetWriterOptions(options, flushPolicy_);
   setMemoryReclaimers();
   writeInt96AsTimestamp_ = options.writeInt96AsTimestamp;
+  arrowMemoryPool_ = options.arrowMemoryPool;
 }
 
 Writer::Writer(
@@ -376,7 +377,7 @@ void Writer::flush() {
           arrowContext_->writer,
           FileWriter::Open(
               *arrowContext_->schema.get(),
-              ::arrow::default_memory_pool(),
+              arrowMemoryPool_.get(),
               stream_,
               arrowContext_->properties,
               arrowProperties));
@@ -563,7 +564,8 @@ void WriterOptions::processConfigs(
     parquetWriteTimestampUnit =
         getTimestampUnit(session, kParquetSessionWriteTimestampUnit).has_value()
         ? getTimestampUnit(session, kParquetSessionWriteTimestampUnit)
-        : getTimestampUnit(connectorConfig, kParquetSessionWriteTimestampUnit);
+        : getTimestampUnit(
+              connectorConfig, kParquetHiveConnectorWriteTimestampUnit);
   }
   if (!parquetWriteTimestampTimeZone) {
     parquetWriteTimestampTimeZone = parquetWriterOptions->sessionTimezoneName;

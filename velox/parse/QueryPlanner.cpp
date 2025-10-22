@@ -16,7 +16,6 @@
 
 #include "velox/parse/QueryPlanner.h"
 #include "velox/duckdb/conversion/DuckConversion.h"
-#include "velox/expression/ScopedVarSetter.h"
 #include "velox/parse/DuckLogicalOperator.h"
 
 #include <duckdb.hpp> // @manual
@@ -315,8 +314,7 @@ TypedExprPtr toVeloxExpression(
           std::move(children),
           name);
       if (negate) {
-        return std::make_shared<CallTypedExpr>(
-            BOOLEAN(), std::vector<TypedExprPtr>{call}, "not");
+        return std::make_shared<CallTypedExpr>(BOOLEAN(), "not", call);
       }
       return call;
     }
@@ -361,7 +359,7 @@ PlanNodePtr toVeloxPlan(
       veloxFilter = conjunct;
     } else {
       veloxFilter = std::make_shared<CallTypedExpr>(
-          BOOLEAN(), std::vector<TypedExprPtr>{veloxFilter, conjunct}, "and");
+          BOOLEAN(), "and", veloxFilter, conjunct);
     }
   }
   return std::make_shared<FilterNode>(
@@ -710,8 +708,6 @@ PlanNodePtr toVeloxPlan(
     QueryContext& queryContext) {
   std::vector<PlanNodePtr> sources;
 
-  ScopedVarSetter isDelim(
-      &queryContext.isInDelimJoin, queryContext.isInDelimJoin);
   if (plan.type == ::duckdb::LogicalOperatorType::LOGICAL_DELIM_JOIN) {
     queryContext.isInDelimJoin = true;
   }
@@ -860,7 +856,7 @@ PlanNodePtr processDelimGetJoin(
       veloxFilter = conjunct;
     } else {
       veloxFilter = std::make_shared<CallTypedExpr>(
-          BOOLEAN(), std::vector<TypedExprPtr>{veloxFilter, conjunct}, "and");
+          BOOLEAN(), "and", veloxFilter, conjunct);
     }
   }
   return std::make_shared<FilterNode>(

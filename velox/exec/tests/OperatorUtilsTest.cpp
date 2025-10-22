@@ -48,7 +48,8 @@ class OperatorUtilsTest : public OperatorTestBase {
         std::move(planFragment),
         0,
         core::QueryCtx::create(executor_.get()),
-        Task::ExecutionMode::kParallel);
+        Task::ExecutionMode::kParallel,
+        exec::Consumer{});
     driver_ = Driver::testingCreate();
     driverCtx_ = std::make_unique<DriverCtx>(task_, 0, 0, 0, 0);
     driverCtx_->driver = driver_.get();
@@ -448,6 +449,36 @@ TEST_F(OperatorUtilsTest, addOperatorRuntimeStats) {
   ASSERT_EQ(stats[statsName].min, 100);
 }
 
+TEST_F(OperatorUtilsTest, setOperatorRuntimeStats) {
+  std::unordered_map<std::string, RuntimeMetric> stats;
+  const std::string statsName("stats");
+  const RuntimeCounter minStatsValue(100, RuntimeCounter::Unit::kBytes);
+  const RuntimeCounter maxStatsValue(200, RuntimeCounter::Unit::kBytes);
+  setOperatorRuntimeStats(statsName, minStatsValue, stats);
+  ASSERT_EQ(stats[statsName].count, 1);
+  ASSERT_EQ(stats[statsName].sum, 100);
+  ASSERT_EQ(stats[statsName].max, 100);
+  ASSERT_EQ(stats[statsName].min, 100);
+
+  setOperatorRuntimeStats(statsName, maxStatsValue, stats);
+  ASSERT_EQ(stats[statsName].count, 1);
+  ASSERT_EQ(stats[statsName].sum, 200);
+  ASSERT_EQ(stats[statsName].max, 200);
+  ASSERT_EQ(stats[statsName].min, 200);
+
+  addOperatorRuntimeStats(statsName, maxStatsValue, stats);
+  ASSERT_EQ(stats[statsName].count, 2);
+  ASSERT_EQ(stats[statsName].sum, 400);
+  ASSERT_EQ(stats[statsName].max, 200);
+  ASSERT_EQ(stats[statsName].min, 200);
+
+  setOperatorRuntimeStats(statsName, minStatsValue, stats);
+  ASSERT_EQ(stats[statsName].count, 1);
+  ASSERT_EQ(stats[statsName].sum, 100);
+  ASSERT_EQ(stats[statsName].max, 100);
+  ASSERT_EQ(stats[statsName].min, 100);
+}
+
 TEST_F(OperatorUtilsTest, initializeRowNumberMapping) {
   BufferPtr mapping;
   auto rawMapping = initializeRowNumberMapping(mapping, 10, pool());
@@ -527,6 +558,52 @@ TEST_F(OperatorUtilsTest, projectChildren) {
       ASSERT_EQ(
           projectedChildren[projection.outputChannel].get(),
           srcRowVector->childAt(projection.inputChannel).get());
+    }
+  }
+}
+
+TEST_F(OperatorUtilsTest, projectDuplicateChildren) {
+  // Test wrapping an unloaded lazy vector in dictionary vector multiple
+  // times.
+  auto flatVector = makeNullableFlatVector<int64_t>(
+      std::vector<std::optional<int64_t>>{1, std::nullopt, 3, 4, 5});
+  const auto size = flatVector->size();
+
+  auto lazyVector = std::make_shared<LazyVector>(
+      pool(),
+      BIGINT(),
+      size,
+      std::make_unique<SimpleVectorLoader>([&](RowSet /*rows*/) {
+        return makeFlatVector<int64_t>(
+            size,
+            [&](vector_size_t row) { return flatVector->valueAt(row); },
+            [&](vector_size_t row) { return flatVector->isNullAt(row); });
+      }));
+
+  std::vector<VectorPtr> children = {lazyVector};
+  auto rowVector = makeRowVector(std::move(children));
+
+  std::vector<IdentityProjection> identityProjections;
+  identityProjections.emplace_back(0, 0);
+  identityProjections.emplace_back(0, 1);
+
+  auto mapping = makeIndices(size, [](auto row) { return row % 3; });
+
+  std::vector<VectorPtr> projectedChildren(2);
+  projectChildren(
+      projectedChildren, rowVector, identityProjections, size, mapping);
+
+  for (const auto& projection : identityProjections) {
+    auto* result = projectedChildren[projection.outputChannel].get();
+    result->loadedVector();
+    auto* source = rowVector->childAt(projection.inputChannel).get();
+    for (auto i = 0; i < size; ++i) {
+      auto srcIndex = mapping->as<vector_size_t>()[i];
+      if (result->isNullAt(i)) {
+        ASSERT_TRUE(source->isNullAt(srcIndex));
+      } else {
+        ASSERT_TRUE(result->equalValueAt(source, i, srcIndex));
+      }
     }
   }
 }

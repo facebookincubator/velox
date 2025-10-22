@@ -25,6 +25,7 @@
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/exec/Cursor.h"
+#include "velox/exec/HashAggregation.h"
 #include "velox/exec/OutputBufferManager.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/Values.h"
@@ -459,6 +460,55 @@ class TestBadMemoryTranslator : public exec::Operator::PlanNodeTranslator {
     return nullptr;
   }
 };
+
+// Test operator that calls the protected shouldYield() method to verify it
+// correctly delegates to the driver's shouldYield() implementation and
+// respects CPU time slice limits.
+class TestShouldYieldOperator : public exec::Operator {
+ public:
+  TestShouldYieldOperator(
+      int32_t operatorId,
+      exec::DriverCtx* driverCtx,
+      const RowTypePtr& outputType,
+      const std::string& nodeId)
+      : Operator(driverCtx, outputType, operatorId, nodeId, "TestShouldYield") {
+  }
+
+  bool needsInput() const override {
+    return !noMoreInput_ && !input_;
+  }
+
+  void addInput(RowVectorPtr input) override {
+    input_ = std::move(input);
+  }
+
+  RowVectorPtr getOutput() override {
+    if (!input_) {
+      return nullptr;
+    }
+
+    // Test the protected shouldYield() method
+    shouldYieldResult_ = shouldYield();
+
+    return input_;
+  }
+
+  exec::BlockingReason isBlocked(ContinueFuture* /*unused*/) override {
+    return exec::BlockingReason::kNotBlocked;
+  }
+
+  bool isFinished() override {
+    return noMoreInput_ && !input_;
+  }
+
+  bool getShouldYieldResult() const {
+    return shouldYieldResult_;
+  }
+
+ private:
+  RowVectorPtr input_;
+  bool shouldYieldResult_{false};
+};
 } // namespace
 
 class TaskTest : public HiveConnectorTestBase {
@@ -474,7 +524,8 @@ class TaskTest : public HiveConnectorTestBase {
         plan,
         0,
         core::QueryCtx::create(),
-        Task::ExecutionMode::kSerial);
+        Task::ExecutionMode::kSerial,
+        exec::Consumer{});
 
     for (const auto& [nodeId, paths] : filePaths) {
       for (const auto& path : paths) {
@@ -523,7 +574,8 @@ TEST_F(TaskTest, toJson) {
       std::move(plan),
       0,
       core::QueryCtx::create(driverExecutor_.get()),
-      Task::ExecutionMode::kParallel);
+      Task::ExecutionMode::kParallel,
+      exec::Consumer{});
 
   ASSERT_EQ(
       task->toString(),
@@ -588,7 +640,8 @@ TEST_F(TaskTest, wrongPlanNodeForSplit) {
       std::move(plan),
       0,
       core::QueryCtx::create(driverExecutor_.get()),
-      Task::ExecutionMode::kParallel);
+      Task::ExecutionMode::kParallel,
+      exec::Consumer{});
 
   // Add split for the source node.
   task->addSplit("0", exec::Split(folly::copy(connectorSplit)));
@@ -644,7 +697,8 @@ TEST_F(TaskTest, wrongPlanNodeForSplit) {
       std::move(plan),
       0,
       core::QueryCtx::create(driverExecutor_.get()),
-      Task::ExecutionMode::kParallel);
+      Task::ExecutionMode::kParallel,
+      exec::Consumer{});
   errorMessage =
       "Splits can be associated only with leaf plan nodes which require splits. Plan node ID 0 doesn't refer to such plan node.";
   VELOX_ASSERT_THROW(
@@ -671,7 +725,8 @@ TEST_F(TaskTest, duplicatePlanNodeIds) {
           std::move(plan),
           0,
           core::QueryCtx::create(driverExecutor_.get()),
-          Task::ExecutionMode::kParallel),
+          Task::ExecutionMode::kParallel,
+          exec::Consumer{}),
       "Plan node IDs must be unique. Found duplicate ID: 0.")
 }
 
@@ -1178,7 +1233,8 @@ TEST_F(TaskTest, serialExecutionExternalBlockable) {
       plan,
       0,
       core::QueryCtx::create(),
-      Task::ExecutionMode::kSerial);
+      Task::ExecutionMode::kSerial,
+      exec::Consumer{});
   std::vector<RowVectorPtr> results;
   for (;;) {
     auto result = nonBlockingTask->next(&continueFuture);
@@ -1204,7 +1260,8 @@ TEST_F(TaskTest, serialExecutionExternalBlockable) {
       plan,
       0,
       core::QueryCtx::create(),
-      Task::ExecutionMode::kSerial);
+      Task::ExecutionMode::kSerial,
+      exec::Consumer{});
   // Before we block, we expect `next` to get data normally.
   results.push_back(blockingTask->next(&continueFuture));
   EXPECT_TRUE(results.back() != nullptr);
@@ -1241,16 +1298,17 @@ TEST_F(TaskTest, supportSerialExecutionMode) {
                   .project({"c0 % 10"})
                   .partitionedOutput({}, 1, std::vector<std::string>{"p0"})
                   .planFragment();
-  auto task = Task::create(
-      "single.execution.task.0",
-      plan,
-      0,
-      core::QueryCtx::create(),
-      Task::ExecutionMode::kSerial);
-
   // PartitionedOutput does not support serial execution mode, therefore the
   // task doesn't support it either.
-  ASSERT_FALSE(task->supportSerialExecutionMode());
+  VELOX_ASSERT_THROW(
+      Task::create(
+          "single.execution.task.0",
+          plan,
+          0,
+          core::QueryCtx::create(),
+          Task::ExecutionMode::kSerial,
+          exec::Consumer{}),
+      "");
 }
 
 TEST_F(TaskTest, updateBroadCastOutputBuffers) {
@@ -1266,7 +1324,8 @@ TEST_F(TaskTest, updateBroadCastOutputBuffers) {
         plan,
         0,
         core::QueryCtx::create(driverExecutor_.get()),
-        Task::ExecutionMode::kParallel);
+        Task::ExecutionMode::kParallel,
+        exec::Consumer{});
 
     task->start(1, 1);
 
@@ -1284,7 +1343,8 @@ TEST_F(TaskTest, updateBroadCastOutputBuffers) {
         plan,
         0,
         core::QueryCtx::create(driverExecutor_.get()),
-        Task::ExecutionMode::kParallel);
+        Task::ExecutionMode::kParallel,
+        exec::Consumer{});
 
     task->start(1, 1);
 
@@ -1572,8 +1632,13 @@ DEBUG_ONLY_TEST_F(TaskTest, inconsistentExecutionMode) {
     auto plan =
         PlanBuilder().values({data, data, data}).project({"c0"}).planFragment();
     auto queryCtx = core::QueryCtx::create(driverExecutor_.get());
-    auto task =
-        Task::create("task.0", plan, 0, queryCtx, Task::ExecutionMode::kSerial);
+    auto task = Task::create(
+        "task.0",
+        plan,
+        0,
+        queryCtx,
+        Task::ExecutionMode::kSerial,
+        exec::Consumer{});
 
     task->next();
     VELOX_ASSERT_THROW(task->start(4, 1), "Inconsistent task execution mode.");
@@ -1907,17 +1972,24 @@ TEST_F(TaskTest, driverCreationMemoryAllocationCheck) {
           .planFragment();
   for (bool singleThreadExecution : {false, true}) {
     SCOPED_TRACE(fmt::format("singleThreadExecution: ", singleThreadExecution));
-    auto badTask = Task::create(
-        "driverCreationMemoryAllocationCheck",
-        plan,
-        0,
-        core::QueryCtx::create(
-            singleThreadExecution ? nullptr : driverExecutor_.get()),
-        singleThreadExecution ? Task::ExecutionMode::kSerial
-                              : Task::ExecutionMode::kParallel);
     if (singleThreadExecution) {
-      VELOX_ASSERT_THROW(badTask->next(), "Unexpected memory pool allocations");
+      VELOX_ASSERT_THROW(
+          Task::create(
+              "driverCreationMemoryAllocationCheck",
+              plan,
+              0,
+              core::QueryCtx::create(nullptr),
+              Task::ExecutionMode::kSerial,
+              exec::Consumer{}),
+          "Unexpected memory pool allocations");
     } else {
+      auto badTask = Task::create(
+          "driverCreationMemoryAllocationCheck",
+          plan,
+          0,
+          core::QueryCtx::create(driverExecutor_.get()),
+          Task::ExecutionMode::kParallel,
+          exec::Consumer{});
       VELOX_ASSERT_THROW(
           badTask->start(1), "Unexpected memory pool allocations");
     }
@@ -1944,36 +2016,34 @@ TEST_F(TaskTest, spillDirectoryCallback) {
       {{core::QueryConfig::kSpillEnabled, "true"},
        {core::QueryConfig::kAggregationSpillEnabled, "true"}});
   params.maxDrivers = 1;
-
-  auto cursor = TaskCursor::create(params);
-
-  std::shared_ptr<Task> task = cursor->task();
-  auto tmpRootDir = exec::test::TempDirectoryPath::create();
-  auto tmpParentSpillDir = fmt::format(
+  auto spillRootDir = exec::test::TempDirectoryPath::create();
+  auto spillParentDir = fmt::format(
       "{}{}/parent_spill/",
       tests::utils::FaultyFileSystem::scheme(),
-      tmpRootDir->getPath());
-  auto tmpSpillDir = fmt::format(
+      spillRootDir->getPath());
+  auto spillDir = fmt::format(
       "{}{}/parent_spill/spill/",
       tests::utils::FaultyFileSystem::scheme(),
-      tmpRootDir->getPath());
+      spillRootDir->getPath());
 
-  EXPECT_FALSE(task->hasCreateSpillDirectoryCb());
-
-  task->setCreateSpillDirectoryCb([tmpParentSpillDir, tmpSpillDir]() {
-    auto filesystem = filesystems::getFileSystem(tmpParentSpillDir, nullptr);
+  params.spillDirectory = spillDir;
+  params.spillDirectoryCallback = [spillParentDir, spillDir]() {
+    auto filesystem = filesystems::getFileSystem(spillParentDir, nullptr);
     filesystems::DirectoryOptions options;
     options.values.emplace(
         filesystems::DirectoryOptions::kMakeDirectoryConfig.toString(),
         "dummy.config=123");
-    filesystem->mkdir(tmpParentSpillDir, options);
-    filesystem->mkdir(tmpSpillDir);
-    return tmpSpillDir;
-  });
+    filesystem->mkdir(spillParentDir, options);
+    filesystem->mkdir(spillDir);
+    return spillDir;
+  };
 
+  auto cursor = TaskCursor::create(params);
+  std::shared_ptr<Task> task = cursor->task();
   EXPECT_TRUE(task->hasCreateSpillDirectoryCb());
+
   auto fs = std::dynamic_pointer_cast<tests::utils::FaultyFileSystem>(
-      filesystems::getFileSystem(tmpParentSpillDir, nullptr));
+      filesystems::getFileSystem(spillParentDir, nullptr));
 
   fs->setFileSystemInjectionError(
       std::make_exception_ptr(std::runtime_error("test exception")),
@@ -1989,7 +2059,7 @@ TEST_F(TaskTest, spillDirectoryCallback) {
     auto mkdirOp =
         static_cast<tests::utils::FaultFileSystemMkdirOperation*>(op);
     if (mkdirOp->path ==
-        fmt::format("{}/parent_spill/", tmpRootDir->getPath())) {
+        fmt::format("{}/parent_spill/", spillRootDir->getPath())) {
       parentDirectoryCreated = true;
       auto it = mkdirOp->options.values.find(
           filesystems::DirectoryOptions::kMakeDirectoryConfig.toString());
@@ -1997,7 +2067,7 @@ TEST_F(TaskTest, spillDirectoryCallback) {
       EXPECT_EQ(it->second, "dummy.config=123");
     }
     if (mkdirOp->path ==
-        fmt::format("{}/parent_spill/spill/", tmpRootDir->getPath())) {
+        fmt::format("{}/parent_spill/spill/", spillRootDir->getPath())) {
       spillDirectoryCreated = true;
     }
     return;
@@ -2042,13 +2112,13 @@ TEST_F(TaskTest, spillDirectoryLifecycleManagement) {
       {{core::QueryConfig::kSpillEnabled, "true"},
        {core::QueryConfig::kAggregationSpillEnabled, "true"}});
   params.maxDrivers = 1;
+  const auto rootTempDir = exec::test::TempDirectoryPath::create();
+  const auto tmpDirectoryPath =
+      rootTempDir->getPath() + "/spillDirectoryLifecycleManagement";
+  params.spillDirectory = tmpDirectoryPath;
 
   auto cursor = TaskCursor::create(params);
   std::shared_ptr<Task> task = cursor->task();
-  auto rootTempDir = exec::test::TempDirectoryPath::create();
-  auto tmpDirectoryPath =
-      rootTempDir->getPath() + "/spillDirectoryLifecycleManagement";
-  task->setSpillDirectory(tmpDirectoryPath, false);
 
   TestScopedSpillInjection scopedSpillInjection(100);
   while (cursor->moveNext()) {
@@ -2104,7 +2174,6 @@ TEST_F(TaskTest, spillDirNotCreated) {
   auto* task = cursor->task().get();
   auto rootTempDir = exec::test::TempDirectoryPath::create();
   auto tmpDirectoryPath = rootTempDir->getPath() + "/spillDirNotCreated";
-  task->setSpillDirectory(tmpDirectoryPath, false);
 
   while (cursor->moveNext()) {
   }
@@ -2150,7 +2219,8 @@ DEBUG_ONLY_TEST_F(TaskTest, resumeAfterTaskFinish) {
       std::move(plan),
       0,
       core::QueryCtx::create(driverExecutor_.get()),
-      Task::ExecutionMode::kParallel);
+      Task::ExecutionMode::kParallel,
+      exec::Consumer{});
   task->start(4, 1);
 
   // Request pause and then unblock operators to proceed.
@@ -2181,7 +2251,12 @@ DEBUG_ONLY_TEST_F(TaskTest, serialLongRunningOperatorInTaskReclaimerAbort) {
   auto queryCtx = core::QueryCtx::create(driverExecutor_.get());
 
   auto blockingTask = Task::create(
-      "blocking.task.0", plan, 0, queryCtx, Task::ExecutionMode::kSerial);
+      "blocking.task.0",
+      plan,
+      0,
+      queryCtx,
+      Task::ExecutionMode::kSerial,
+      exec::Consumer{});
 
   // Before we block, we expect `next` to get data normally.
   EXPECT_NE(nullptr, blockingTask->next());
@@ -2256,7 +2331,12 @@ DEBUG_ONLY_TEST_F(TaskTest, longRunningOperatorInTaskReclaimerAbort) {
   auto queryCtx = core::QueryCtx::create(driverExecutor_.get());
 
   auto blockingTask = Task::create(
-      "blocking.task.0", plan, 0, queryCtx, Task::ExecutionMode::kParallel);
+      "blocking.task.0",
+      plan,
+      0,
+      queryCtx,
+      Task::ExecutionMode::kParallel,
+      exec::Consumer{});
 
   blockingTask->start(4, 1);
   const std::string abortErrorMessage("Synthetic Exception");
@@ -2322,7 +2402,8 @@ DEBUG_ONLY_TEST_F(TaskTest, taskReclaimStats) {
       std::move(plan),
       0,
       std::move(queryCtx),
-      Task::ExecutionMode::kParallel);
+      Task::ExecutionMode::kParallel,
+      exec::Consumer{});
   task->start(4, 1);
 
   const int numReclaims{10};
@@ -2396,7 +2477,8 @@ DEBUG_ONLY_TEST_F(TaskTest, taskPauseTime) {
       std::move(plan),
       0,
       std::move(queryCtx),
-      Task::ExecutionMode::kParallel);
+      Task::ExecutionMode::kParallel,
+      exec::Consumer{});
   task->start(4, 1);
 
   // Wait for the task driver starts to run.
@@ -2445,7 +2527,8 @@ TEST_F(TaskTest, updateStatsWhileCloseOffThreadDriver) {
       std::move(plan),
       0,
       core::QueryCtx::create(driverExecutor_.get()),
-      Task::ExecutionMode::kParallel);
+      Task::ExecutionMode::kParallel,
+      exec::Consumer{});
   task->start(4, 1);
   std::this_thread::sleep_for(std::chrono::milliseconds(100));
   task->testingVisitDrivers(
@@ -2490,7 +2573,8 @@ DEBUG_ONLY_TEST_F(TaskTest, driverEnqueAfterFailedAndPausedTask) {
       std::move(plan),
       0,
       core::QueryCtx::create(driverExecutor_.get()),
-      Task::ExecutionMode::kParallel);
+      Task::ExecutionMode::kParallel,
+      exec::Consumer{});
   task->start(4, 1);
 
   // Request pause.
@@ -2610,7 +2694,8 @@ DEBUG_ONLY_TEST_F(TaskTest, taskCancellation) {
       std::move(plan),
       0,
       core::QueryCtx::create(driverExecutor_.get()),
-      Task::ExecutionMode::kParallel);
+      Task::ExecutionMode::kParallel,
+      exec::Consumer{});
   task->start(4, 1);
   auto cancellationToken = task->getCancellationToken();
   ASSERT_FALSE(cancellationToken.isCancellationRequested());
@@ -2685,6 +2770,9 @@ TEST_F(TaskTest, invalidPlanNodeForBarrier) {
   VELOX_ASSERT_THROW(
       task->requestBarrier(),
       "Name of the first node that doesn't support barriered execution:");
+  while (auto next = task->next()) {
+  }
+  ASSERT_TRUE(task->isFinished());
 }
 
 TEST_F(TaskTest, barrierAfterNoMoreSplits) {
@@ -2719,6 +2807,9 @@ TEST_F(TaskTest, barrierAfterNoMoreSplits) {
   VELOX_ASSERT_THROW(
       task->requestBarrier(),
       "Can't start barrier on task which has already received no more splits");
+  while (auto next = task->next()) {
+  }
+  ASSERT_TRUE(task->isFinished());
 }
 
 TEST_F(TaskTest, invalidTaskModeForBarrier) {
@@ -3221,6 +3312,111 @@ TEST_F(TaskTest, expressionStatsInBetweenBarriers) {
   taskStats = task->taskStats();
   ASSERT_EQ(taskStats.numFinishedSplits, 2);
   verifyExpressionStats(taskStats, 20);
+}
+
+DEBUG_ONLY_TEST_F(TaskTest, taskExecutionEndTime) {
+  std::vector<RowVectorPtr> vectors;
+  std::vector<std::shared_ptr<TempFilePath>> tempFiles;
+  const int numSplits{5};
+  const int numRowsPerSplit{1'000};
+  for (int32_t i = 0; i < numSplits; ++i) {
+    vectors.push_back(makeRowVector(
+        {makeFlatVector<int32_t>(numRowsPerSplit, [](auto row) { return row; }),
+         makeFlatVector<int32_t>(
+             numRowsPerSplit, [](auto row) { return row * 2; })}));
+    tempFiles.push_back(TempFilePath::create());
+  }
+  writeToFiles(toFilePaths(tempFiles), vectors);
+  createDuckDbTable(vectors);
+
+  const int injectedDelaySecs{2};
+  std::atomic_bool injectDelayOnce{true};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Driver::runInternal::getOutput",
+      std::function<void(const velox::exec::Operator*)>(
+          ([&](const velox::exec::Operator* op) {
+            if (op->operatorCtx()->operatorType() == "HashAggregation") {
+              return;
+            }
+            auto task = op->operatorCtx()->task();
+            if (!task->testingAllSplitsFinished()) {
+              return;
+            }
+            if (!injectDelayOnce.exchange(false)) {
+              return;
+            }
+            std::this_thread::sleep_for(
+                std::chrono::seconds(injectedDelaySecs)); // No Lint.
+          })));
+
+  core::PlanNodeId tableScanNodeId;
+  auto plan = test::PlanBuilder()
+                  .tableScan(asRowType(vectors.back()->type()))
+                  .capturePlanNodeId(tableScanNodeId)
+                  .singleAggregation({"c0"}, {"sum(c1)"})
+                  .planNode();
+  auto task = AssertQueryBuilder(plan, duckDbQueryRunner_)
+                  .splits(tableScanNodeId, makeHiveConnectorSplits(tempFiles))
+                  .assertResults("SELECT c0, sum(c1) FROM tmp GROUP BY c0");
+  const auto taskStats = task->taskStats();
+  ASSERT_GE(
+      taskStats.executionEndTimeMs - taskStats.executionStartTimeMs,
+      injectedDelaySecs * 1'000);
+}
+
+DEBUG_ONLY_TEST_F(TaskTest, operatorShouldYieldMethod) {
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  const auto data = makeRowVector({
+      makeFlatVector<int64_t>(3, [](auto row) { return row; }),
+  });
+  const uint64_t kDriverCpuTimeSliceLimitMs = 100;
+
+  struct {
+    bool hasDelay;
+    std::string debugString() const {
+      return fmt::format("hasDelay: {}", hasDelay);
+    }
+  } testSetting[]{{true}, {false}};
+
+  for (const auto& testData : testSetting) {
+    SCOPED_TRACE(testData.debugString());
+    std::atomic<bool> shouldYieldResult{false};
+
+    SCOPED_TESTVALUE_SET(
+        "facebook::velox::exec::Values::getOutput",
+        std::function<void(const exec::Values*)>(
+            [&](const exec::Values* values) {
+              auto testShouldYieldOp =
+                  std::make_unique<TestShouldYieldOperator>(
+                      0,
+                      values->operatorCtx()->driverCtx(),
+                      ROW({"c0"}, {BIGINT()}),
+                      planNodeIdGenerator->next());
+
+              testShouldYieldOp->addInput(
+                  makeRowVector({makeFlatVector<int64_t>({1})}));
+              if (testData.hasDelay) {
+                std::this_thread::sleep_for(
+                    std::chrono::milliseconds(2 * kDriverCpuTimeSliceLimitMs));
+              }
+
+              // This will test shouldYield() internally
+              testShouldYieldOp->getOutput();
+              shouldYieldResult = testShouldYieldOp->getShouldYieldResult();
+            }));
+
+    auto queryCtx = core::QueryCtx::create(
+        executor_.get(),
+        core::QueryConfig({
+            {core::QueryConfig::kDriverCpuTimeSliceLimitMs,
+             folly::to<std::string>(kDriverCpuTimeSliceLimitMs)},
+        }));
+
+    auto plan = PlanBuilder(planNodeIdGenerator).values({data}).planNode();
+    AssertQueryBuilder(plan).queryCtx(queryCtx).copyResults(pool());
+
+    ASSERT_EQ(testData.hasDelay, shouldYieldResult.load());
+  }
 }
 
 } // namespace facebook::velox::exec::test

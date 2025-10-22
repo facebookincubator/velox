@@ -337,9 +337,11 @@ class HiveInsertTableHandle : public ConnectorInsertTableHandle {
 
   std::string toString() const override;
 
- private:
+ protected:
   const std::vector<std::shared_ptr<const HiveColumnHandle>> inputColumns_;
   const std::shared_ptr<const LocationHandle> locationHandle_;
+
+ private:
   const dwio::common::FileFormat storageFormat_;
   const std::shared_ptr<const HiveBucketProperty> bucketProperty_;
   const std::optional<common::CompressionKind> compressionKind_;
@@ -536,16 +538,26 @@ class HiveDataSink : public DataSink {
 
   Stats stats() const override;
 
+  std::unordered_map<std::string, RuntimeCounter> runtimeStats() const override;
+
   std::vector<std::string> close() override;
 
   void abort() override;
 
   bool canReclaim() const;
 
- private:
+ protected:
   // Validates the state transition from 'oldState' to 'newState'.
   void checkStateTransition(State oldState, State newState);
   void setState(State newState);
+
+  // Generates commit messages for all writers containing metadata about written
+  // files. Creates a JSON object for each writer with partition name,
+  // file paths, file names, data sizes, and row counts. This metadata is used
+  // by the coordinator to commit the transaction and update the metastore.
+  //
+  // @return Vector of JSON strings, one per writer.
+  virtual std::vector<std::string> commitMessage() const;
 
   class WriterReclaimer : public exec::MemoryReclaimer {
    public:
@@ -658,6 +670,15 @@ class HiveDataSink : public DataSink {
 
   void closeInternal();
 
+  // IMPORTANT NOTE: these are passed to writers as raw pointers. HiveDataSink
+  // owns the lifetime of these objects, and therefore must destroy them last.
+  // Additionally, we must assume that no objects which hold a reference to
+  // these stats will outlive the HiveDataSink instance. This is a reasonable
+  // assumption given the semantics of these stats objects.
+  std::vector<std::unique_ptr<io::IoStatistics>> ioStats_;
+  // Generic filesystem stats, exposed as RuntimeStats
+  std::unique_ptr<filesystems::File::IoStats> fileSystemStats_;
+
   const RowTypePtr inputType_;
   const std::shared_ptr<const HiveInsertTableHandle> insertTableHandle_;
   const ConnectorQueryCtx* const connectorQueryCtx_;
@@ -690,8 +711,6 @@ class HiveDataSink : public DataSink {
   // writers_ are both indexed by partitionId.
   std::vector<std::shared_ptr<HiveWriterInfo>> writerInfo_;
   std::vector<std::unique_ptr<dwio::common::Writer>> writers_;
-  // IO statistics collected for each writer.
-  std::vector<std::shared_ptr<io::IoStatistics>> ioStats_;
 
   // Below are structures updated when processing current input. partitionIds_
   // are indexed by the row of input_. partitionRows_, rawPartitionRows_ and

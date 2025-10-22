@@ -60,7 +60,7 @@ class HiveDataSource : public DataSource {
     return completedRows_;
   }
 
-  std::unordered_map<std::string, RuntimeCounter> runtimeStats() override;
+  std::unordered_map<std::string, RuntimeMetric> getRuntimeStats() override;
 
   bool allPrefetchIssued() const override {
     return splitReader_ && splitReader_->allPrefetchIssued();
@@ -102,7 +102,7 @@ class HiveDataSource : public DataSource {
   virtual std::unique_ptr<SplitReader> createSplitReader();
 
   FileHandleFactory* const fileHandleFactory_;
-  folly::Executor* const executor_;
+  folly::Executor* const ioExecutor_;
   const ConnectorQueryCtx* const connectorQueryCtx_;
   const std::shared_ptr<HiveConfig> hiveConfig_;
   memory::MemoryPool* const pool_;

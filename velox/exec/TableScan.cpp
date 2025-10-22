@@ -180,15 +180,16 @@ RowVectorPtr TableScan::getOutput() {
         }
         continue;
       }
-      const auto estimatedRowSize = dataSource_->estimatedRowSize();
-      readBatchSize_ =
-          estimatedRowSize == connector::DataSource::kUnknownRowSize
-          ? outputBatchRows()
-          : outputBatchRows(estimatedRowSize);
     }
     VELOX_CHECK(!needNewSplit_);
     VELOX_CHECK(!hasDrained());
 
+    const auto estimatedRowSize = dataSource_->estimatedRowSize();
+    // TODO: Expose this to operator stats.
+    VLOG(1) << "estimatedRowSize = " << estimatedRowSize;
+    readBatchSize_ = estimatedRowSize == connector::DataSource::kUnknownRowSize
+        ? outputBatchRows()
+        : outputBatchRows(estimatedRowSize);
     int32_t readBatchSize = readBatchSize_;
     if (maxFilteringRatio_ > 0) {
       readBatchSize = std::min(
@@ -303,15 +304,15 @@ bool TableScan::getSplit() {
   if (!split.hasConnectorSplit()) {
     noMoreSplits_ = true;
     if (dataSource_) {
-      const auto connectorStats = dataSource_->runtimeStats();
+      const auto connectorStats = dataSource_->getRuntimeStats();
       auto lockedStats = stats_.wlock();
-      for (const auto& [name, counter] : connectorStats) {
+      for (const auto& [name, metric] : connectorStats) {
         if (FOLLY_UNLIKELY(lockedStats->runtimeStats.count(name) == 0)) {
-          lockedStats->runtimeStats.emplace(name, RuntimeMetric(counter.unit));
+          lockedStats->runtimeStats.emplace(name, RuntimeMetric(metric.unit));
         } else {
-          VELOX_CHECK_EQ(lockedStats->runtimeStats.at(name).unit, counter.unit);
+          VELOX_CHECK_EQ(lockedStats->runtimeStats.at(name).unit, metric.unit);
         }
-        lockedStats->runtimeStats.at(name).addValue(counter.value);
+        lockedStats->runtimeStats.at(name).merge(metric);
       }
     }
     return false;
@@ -364,9 +365,17 @@ bool TableScan::getSplit() {
     // The AsyncSource returns a unique_ptr to a shared_ptr. The unique_ptr
     // will be nullptr if there was a cancellation.
     numReadyPreloadedSplits_ += connectorSplit->dataSource->hasValue();
+    auto startTimeNs = getCurrentTimeNano();
     auto preparedDataSource = connectorSplit->dataSource->move();
-    stats_.wlock()->getOutputTiming.add(
-        connectorSplit->dataSource->prepareTiming());
+    auto endTimeNs = getCurrentTimeNano();
+    stats_.wlock()->addRuntimeStat(
+        "waitForPreloadSplitNanos",
+        RuntimeCounter(endTimeNs - startTimeNs, RuntimeCounter::Unit::kNanos));
+    stats_.wlock()->addRuntimeStat(
+        "preloadSplitPrepareTimeNanos",
+        RuntimeCounter(
+            connectorSplit->dataSource->prepareTiming().wallNanos,
+            RuntimeCounter::Unit::kNanos));
     if (!preparedDataSource) {
       // There must be a cancellation.
       VELOX_CHECK(operatorCtx_->task()->isCancelled());
@@ -458,8 +467,8 @@ void TableScan::preload(
 }
 
 void TableScan::checkPreload() {
-  auto* executor = connector_->executor();
-  if (maxSplitPreloadPerDriver_ == 0 || !executor ||
+  auto* ioExecutor = connector_->ioExecutor();
+  if (maxSplitPreloadPerDriver_ == 0 || !ioExecutor ||
       !connector_->supportsSplitPreload()) {
     return;
   }
@@ -468,11 +477,11 @@ void TableScan::checkPreload() {
         maxSplitPreloadPerDriver_;
     if (!splitPreloader_) {
       splitPreloader_ =
-          [executor,
+          [ioExecutor,
            this](const std::shared_ptr<connector::ConnectorSplit>& split) {
             preload(split);
 
-            executor->add([connectorSplit = split]() mutable {
+            ioExecutor->add([connectorSplit = split]() mutable {
               connectorSplit->dataSource->prepare();
               connectorSplit.reset();
             });

@@ -17,13 +17,18 @@
 #include "velox/exec/tests/TableEvolutionFuzzer.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/dwio/common/tests/utils/FilterGenerator.h"
+#include "velox/dwio/dwrf/common/Config.h"
 #include "velox/exec/Cursor.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
+#include "velox/expression/fuzzer/ExpressionFuzzer.h"
+#include "velox/functions/FunctionRegistry.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
 #include <filesystem>
+
+#include <re2/re2.h>
 
 DEFINE_bool(
     enable_oom_injection_write_path,
@@ -63,6 +68,70 @@ VectorFuzzer::Options makeVectorFuzzerOptions() {
   options.vectorSize = kVectorSize;
   options.allowSlice = false;
   return options;
+}
+
+template <typename T>
+void removeFromVector(std::vector<T>& vec, const T& value) {
+  auto it = std::find(vec.begin(), vec.end(), value);
+  if (it != vec.end()) {
+    vec.erase(it);
+  }
+}
+
+bool hasUnsupportedMapKey(const TypePtr& type) {
+  switch (type->kind()) {
+    case TypeKind::MAP: {
+      auto mapType = type->asMap();
+      // FlatMapColumnWriter only supports TINYINT, SMALLINT, INTEGER, BIGINT,
+      // VARCHAR, VARBINARY as KeyType
+      auto keyKind = mapType.keyType()->kind();
+      if (keyKind != TypeKind::TINYINT && keyKind != TypeKind::SMALLINT &&
+          keyKind != TypeKind::INTEGER && keyKind != TypeKind::BIGINT &&
+          keyKind != TypeKind::VARCHAR && keyKind != TypeKind::VARBINARY) {
+        return true;
+      }
+      return hasUnsupportedMapKey(mapType.valueType());
+    }
+    case TypeKind::ARRAY:
+      return hasUnsupportedMapKey(type->asArray().elementType());
+    case TypeKind::ROW: {
+      auto& rowType = type->asRow();
+      for (int i = 0; i < rowType.size(); ++i) {
+        if (hasUnsupportedMapKey(rowType.childAt(i))) {
+          return true;
+        }
+      }
+      return false;
+    }
+    default:
+      return false;
+  }
+}
+
+bool hasMapColumns(const RowTypePtr& schema) {
+  VLOG(1) << "Checking if schema has map columns";
+  for (int i = 0; i < schema->size(); ++i) {
+    if (schema->childAt(i)->isMap()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool hasEmptyElement(const RowVectorPtr& data, int columnIndex) {
+  auto mapVector = data->childAt(columnIndex)->as<MapVector>();
+  if (!mapVector) {
+    return true;
+  }
+
+  // Check if any map entry is empty (null or size = 0)
+  auto sizes = mapVector->sizes();
+  for (int j = 0; j < mapVector->size(); ++j) {
+    if (mapVector->isNullAt(j) || sizes->as<vector_size_t>()[j] == 0) {
+      return true; // Found an empty map
+    }
+  }
+  return false; // No empty maps found
 }
 
 } // namespace
@@ -158,6 +227,7 @@ std::vector<std::vector<RowVectorPtr>> runTaskCursors(
   }
   std::vector<std::vector<RowVectorPtr>> results;
   constexpr std::chrono::seconds kTaskTimeout(10);
+  results.reserve(futures.size());
   for (auto& future : futures) {
     results.push_back(std::move(future).get(kTaskTimeout));
   }
@@ -235,8 +305,18 @@ void checkResultsEqual(
       expectedRowIndex = 0;
       continue;
     }
-    VELOX_CHECK(actual[actualVectorIndex]->equalValueAt(
-        expected[expectedVectorIndex].get(), actualRowIndex, expectedRowIndex));
+    VELOX_CHECK(
+        actual[actualVectorIndex]->equalValueAt(
+            expected[expectedVectorIndex].get(),
+            actualRowIndex,
+            expectedRowIndex),
+        "actualVectorIndex={} actualRowIndex={} expectedVectorIndex={} expectedRowIndex={}\nactual={}\nexpected={}",
+        actualVectorIndex,
+        actualRowIndex,
+        expectedVectorIndex,
+        expectedRowIndex,
+        actual[actualVectorIndex]->toString(actualRowIndex),
+        expected[expectedVectorIndex]->toString(expectedRowIndex));
     ++actualRowIndex;
     ++expectedRowIndex;
   }
@@ -270,6 +350,55 @@ common::SubfieldFilters generateSubfieldFilters(
 
   return filterGenerator->makeSubfieldFilters(
       filterSpecs, {finalExpectedData}, &mutations, hitRows);
+}
+
+fuzzer::ExpressionFuzzer::FuzzedExpressionData generateRemainingFilters(
+    const TableEvolutionFuzzer::Config& config,
+    unsigned currentSeed) {
+  // Use ExpressionFuzzer to generate complex expressions, but use the actual
+  // data types from finalExpectedData
+  // Configure ExpressionFuzzer to generate simpler expressions suitable for
+  // filters
+  fuzzer::ExpressionFuzzer::Options options;
+  options.enableComplexTypes = false; // Disable complex types to avoid issues
+  options.enableDecimalType = false; // Disable decimal types
+  options.maxLevelOfNesting = 3; // Reduce nesting to avoid complexity
+  options.nullRatio = 0.0; // No null values to avoid type resolution issues
+  // Only use simple comparison and logical functions suitable for filters
+  options.useOnlyFunctions = "eq,neq,lt,lte,gt,gte,and,or,not";
+  options.specialForms = "and,or"; // Only simple special forms
+
+  // Skip complex functions that generate unparseable expressions
+  options.skipFunctions = {
+      "regexp_like",
+      "regexp_extract",
+      "replace",
+      "replace_first",
+      "json_format",
+      "json_extract",
+      "json_parse",
+      "from_utf8",
+      "to_utf8",
+      "reverse",
+      "upper",
+      "lower",
+      "st_coorddim",
+      "is_null",
+      "is_not_null"};
+
+  auto signatureMap = getVectorFunctionSignatures();
+
+  // Configure VectorFuzzer to avoid null values and use the actual data types
+  VectorFuzzer::Options vectorFuzzerOptions;
+  vectorFuzzerOptions.nullRatio = 0.0; // No nulls
+  vectorFuzzerOptions.vectorSize = 100;
+  auto vectorFuzzer =
+      std::make_shared<VectorFuzzer>(vectorFuzzerOptions, config.pool);
+
+  fuzzer::ExpressionFuzzer expressionFuzzer(
+      signatureMap, currentSeed, vectorFuzzer, options);
+
+  return expressionFuzzer.fuzzExpressions(1);
 }
 
 } // namespace
@@ -378,33 +507,83 @@ VectorPtr TableEvolutionFuzzer::liftToType(
 
 void TableEvolutionFuzzer::run() {
   ScopedOOMInjector oomInjectorWritePath(
-      []() -> bool { return folly::Random::oneIn(10); },
+      [this]() -> bool { return folly::Random::oneIn(10, rng_); },
       10); // Check the condition every 10 ms.
   if (FLAGS_enable_oom_injection_write_path) {
     oomInjectorWritePath.enable();
   }
 
-  // Step 1: Test setup and bucketColumnIndices generation
-  auto bucketColumnIndices = generateBucketColumnIndices();
-  auto testSetups = makeSetups(bucketColumnIndices);
+  // Step 1: Randomly decide whether to generate remaining filters (50% chance)
+  bool shouldGenerateRemainingFilters = folly::Random::oneIn(2, rng_);
 
-  // Step 2: Create and execute write tasks
+  fuzzer::ExpressionFuzzer::FuzzedExpressionData generatedRemainingFilters;
+  std::vector<std::string> additionalColumnNames;
+  std::vector<TypePtr> additionalColumnTypes;
+
+  if (shouldGenerateRemainingFilters) {
+    // Generate remaining filters and extract new columns
+    generatedRemainingFilters = generateRemainingFilters(config_, currentSeed_);
+
+    VLOG(1) << "Generated remaining filters from expression fuzzer: "
+            << generatedRemainingFilters.expressions[0]->toString();
+
+    // Extract all columns from generatedRemainingFilters.inputType
+    if (generatedRemainingFilters.inputType) {
+      for (int i = 0; i < generatedRemainingFilters.inputType->size(); ++i) {
+        const auto& columnName = generatedRemainingFilters.inputType->nameOf(i);
+        additionalColumnNames.push_back(columnName);
+        additionalColumnTypes.push_back(
+            generatedRemainingFilters.inputType->childAt(i));
+      }
+    }
+
+    if (!additionalColumnNames.empty()) {
+      VLOG(1)
+          << "Found " << additionalColumnNames.size()
+          << " columns from generateRemainingFilters, will add to schema evolution";
+    }
+  } else {
+    VLOG(1) << "Skipping remaining filter generation (50% randomization)";
+  }
+
+  // Step 2: Test setup and bucketColumnIndices generation with additional
+  // columns
+  auto bucketColumnIndices = generateBucketColumnIndices();
+
+  // Track column name mappings during evolution
+  std::unordered_map<std::string, std::string> columnNameMapping;
+  for (const auto& columnName : additionalColumnNames) {
+    columnNameMapping[columnName] = columnName; // Initially map to itself
+  }
+
+  auto testSetups = makeSetups(
+      bucketColumnIndices,
+      additionalColumnNames,
+      additionalColumnTypes,
+      &columnNameMapping);
+
+  // Step 3: Create and execute write tasks
   auto tableOutputRootDir = TempDirectoryPath::create();
   std::vector<std::shared_ptr<TaskCursor>> writeTasks(
       2 * config_.evolutionCount - 1);
   RowVectorPtr finalExpectedData;
+
+  folly::F14FastMap<int, folly::F14FastSet<std::string>> globalMapColumnKeys;
+  std::vector<int> globallyConsistentColumnIndexVector;
 
   createWriteTasks(
       testSetups,
       bucketColumnIndices,
       tableOutputRootDir->getPath(),
       writeTasks,
-      finalExpectedData);
+      finalExpectedData,
+      globalMapColumnKeys,
+      globallyConsistentColumnIndexVector);
 
   auto executor = folly::getGlobalCPUExecutor();
   auto writeResults = runTaskCursors(writeTasks, *executor);
 
-  // Step 3: Create scan splits from write results
+  // Step 4: Create scan splits from write results
   std::optional<int32_t> selectedBucket;
   if (!bucketColumnIndices.empty()) {
     selectedBucket =
@@ -419,26 +598,63 @@ void TableEvolutionFuzzer::run() {
       selectedBucket,
       finalExpectedData);
 
-  // Step 4: Setup scan tasks with filters
+  // Step 5: Setup scan tasks with filters
   auto rowType = testSetups.back().schema;
-  PushdownConfig subfieldFilterConfig;
-  subfieldFilterConfig.subfieldFiltersMap =
+  PushdownConfig pushownConfig;
+
+  // Generate subfield filters first
+  pushownConfig.subfieldFiltersMap =
       generateSubfieldFilters(rowType, finalExpectedData);
+
+  // Extract field names used by subfield filters to avoid conflicts
+  std::unordered_set<std::string> subfieldFilteredFields;
+  for (const auto& [subfield, filter] : pushownConfig.subfieldFiltersMap) {
+    auto fieldName = subfield.toString();
+    VLOG(1) << "Raw subfield: " << fieldName << ' ' << filter->toString();
+    // Extract the root field name (before any nested access)
+    const size_t dotPos = fieldName.find('.');
+    if (dotPos != std::string::npos) {
+      fieldName = fieldName.substr(0, dotPos);
+      VLOG(1) << "Subfield filter targets field: " << fieldName;
+    }
+    subfieldFilteredFields.insert(fieldName);
+  }
+
+  // Apply generated remaining filters with updated column names, avoiding
+  // conflicts
+  if (shouldGenerateRemainingFilters) {
+    // Apply generated remaining filters
+    applyRemainingFilters(
+        generatedRemainingFilters,
+        columnNameMapping,
+        pushownConfig,
+        subfieldFilteredFields);
+  }
 
   std::vector<std::shared_ptr<TaskCursor>> scanTasks(2);
   scanTasks[0] = makeScanTask(
-      rowType, std::move(actualSplits), subfieldFilterConfig, false);
+      rowType,
+      std::move(actualSplits),
+      pushownConfig,
+      false,
+      globalMapColumnKeys,
+      globallyConsistentColumnIndexVector);
   scanTasks[1] = makeScanTask(
-      rowType, std::move(expectedSplits), subfieldFilterConfig, true);
+      rowType,
+      std::move(expectedSplits),
+      pushownConfig,
+      true,
+      globalMapColumnKeys,
+      globallyConsistentColumnIndexVector);
 
   ScopedOOMInjector oomInjectorReadPath(
-      []() -> bool { return folly::Random::oneIn(10); },
+      [this]() -> bool { return folly::Random::oneIn(10, rng_); },
       10); // Check the condition every 10 ms.
   if (FLAGS_enable_oom_injection_read_path) {
     oomInjectorReadPath.enable();
   }
 
-  // Step 5: Execute scan tasks and verify results
+  // Step 6: Execute scan tasks and verify results
   auto scanResults = runTaskCursors(scanTasks, *executor);
 
   // Skip result verification when OOM injection is enabled
@@ -472,13 +688,25 @@ TypePtr TableEvolutionFuzzer::makeNewType(int maxDepth) {
   return vectorFuzzer_.randType(scalarTypes, maxDepth);
 }
 
-RowTypePtr TableEvolutionFuzzer::makeInitialSchema() {
+RowTypePtr TableEvolutionFuzzer::makeInitialSchema(
+    const std::vector<std::string>& additionalColumnNames,
+    const std::vector<TypePtr>& additionalColumnTypes) {
   std::vector<std::string> names(config_.columnCount);
   std::vector<TypePtr> types(config_.columnCount);
   for (int i = 0; i < config_.columnCount; ++i) {
     names[i] = makeNewName();
     types[i] = makeNewType(3);
   }
+
+  // Add additional columns from generateRemainingFilters
+  for (int i = 0; i < additionalColumnNames.size(); ++i) {
+    names.push_back(additionalColumnNames[i]);
+    types.push_back(additionalColumnTypes[i]);
+    VLOG(1) << "Adding additional column to initial schema: "
+            << additionalColumnNames[i] << " of type "
+            << additionalColumnTypes[i]->toString();
+  }
+
   return ROW(std::move(names), std::move(types));
 }
 
@@ -505,6 +733,10 @@ TypePtr TableEvolutionFuzzer::evolveType(const TypePtr& old) {
     case TypeKind::SMALLINT:
       return INTEGER();
     case TypeKind::INTEGER:
+      // Don't evolve DATE type to BIGINT
+      if (old->isDate()) {
+        return old;
+      }
       return BIGINT();
     case TypeKind::REAL:
       return DOUBLE();
@@ -515,7 +747,8 @@ TypePtr TableEvolutionFuzzer::evolveType(const TypePtr& old) {
 
 RowTypePtr TableEvolutionFuzzer::evolveRowType(
     const RowType& old,
-    const std::vector<column_index_t>& bucketColumnIndices) {
+    const std::vector<column_index_t>& bucketColumnIndices,
+    std::unordered_map<std::string, std::string>* columnNameMapping) {
   auto names = old.names();
   auto types = old.children();
   for (int i = 0, j = 0; i < old.size(); ++i) {
@@ -527,7 +760,22 @@ RowTypePtr TableEvolutionFuzzer::evolveRowType(
       continue;
     }
     if (folly::Random::oneIn(4, rng_)) {
-      names[i] = makeNewName();
+      auto oldName = names[i];
+      auto newName = makeNewName();
+      names[i] = newName;
+
+      // Update column name mapping if provided
+      if (columnNameMapping) {
+        // Find if this column was originally from generateRemainingFilters
+        for (auto& [originalName, currentName] : *columnNameMapping) {
+          if (currentName == oldName) {
+            currentName = newName;
+            VLOG(1) << "Updated column name mapping: " << originalName << " -> "
+                    << newName;
+            break;
+          }
+        }
+      }
     }
     types[i] = evolveType(types[i]);
   }
@@ -539,14 +787,18 @@ RowTypePtr TableEvolutionFuzzer::evolveRowType(
 }
 
 std::vector<TableEvolutionFuzzer::Setup> TableEvolutionFuzzer::makeSetups(
-    const std::vector<column_index_t>& bucketColumnIndices) {
+    const std::vector<column_index_t>& bucketColumnIndices,
+    const std::vector<std::string>& additionalColumnNames,
+    const std::vector<TypePtr>& additionalColumnTypes,
+    std::unordered_map<std::string, std::string>* columnNameMapping) {
   std::vector<Setup> setups(config_.evolutionCount);
   for (int i = 0; i < config_.evolutionCount; ++i) {
     if (i == 0) {
-      setups[i].schema = makeInitialSchema();
-    } else {
       setups[i].schema =
-          evolveRowType(*setups[i - 1].schema, bucketColumnIndices);
+          makeInitialSchema(additionalColumnNames, additionalColumnTypes);
+    } else {
+      setups[i].schema = evolveRowType(
+          *setups[i - 1].schema, bucketColumnIndices, columnNameMapping);
     }
     if (!bucketColumnIndices.empty()) {
       if (i == 0) {
@@ -569,22 +821,161 @@ std::unique_ptr<TaskCursor> TableEvolutionFuzzer::makeWriteTask(
     const Setup& setup,
     const RowVectorPtr& data,
     const std::string& outputDir,
-    const std::vector<column_index_t>& bucketColumnIndices) {
+    const std::vector<column_index_t>& bucketColumnIndices,
+    FuzzerGenerator& rng,
+    bool enableFlatMap,
+    folly::F14FastMap<int, folly::F14FastSet<std::string>>& globalMapColumnKeys,
+    std::vector<int>& globallyCompatibleFlatmapColumns) {
   auto builder = PlanBuilder().values({data});
+
+  // Create serdeParameters using proper dwrf::Config for flatmap configuration
+  std::unordered_map<std::string, std::string> serdeParameters;
+
+  if (hasMapColumns(setup.schema)) {
+    // Find all top-level map column indices that support flatmap
+    std::vector<uint32_t> supportedMapColumnIndices;
+
+    for (int i = 0; i < setup.schema->size(); ++i) {
+      if (setup.schema->childAt(i)->isMap()) {
+        // Check if this specific map column has any empty elements
+        if (hasEmptyElement(data, i)) {
+          removeFromVector(globallyCompatibleFlatmapColumns, i);
+          continue;
+        }
+
+        if (!hasUnsupportedMapKey(setup.schema->childAt(i))) {
+          // %50 chance to enable flatmap for this map column.
+          if (enableFlatMap && folly::Random::oneIn(2, rng)) {
+            supportedMapColumnIndices.push_back(static_cast<uint32_t>(i));
+            VLOG(1) << "Write column " << setup.schema->nameOf(i)
+                    << " as flatmap";
+
+            // Extract actual keys from the map data and collect directly into
+            // global set
+            SelectivityVector allRows(data->childAt(i)->size());
+            DecodedVector decodedMap(*data->childAt(i), allRows);
+            auto* mapVector = decodedMap.base()->asChecked<MapVector>();
+            if (mapVector->size() > 0) {
+              auto keys = mapVector->mapKeys();
+
+              if (keys) {
+                // Collect keys directly into the global set
+                auto& uniqueKeys = globalMapColumnKeys[static_cast<int>(i)];
+
+                // Iterate through the decoded rows, not the raw mapVector
+                // indices
+                for (vector_size_t row = 0; row < data->childAt(i)->size();
+                     ++row) {
+                  auto decodedIndex = decodedMap.index(row);
+                  if (!decodedMap.isNullAt(row) &&
+                      !mapVector->isNullAt(decodedIndex)) {
+                    // Get the map entry for this decoded row
+                    auto mapOffset = mapVector->offsetAt(decodedIndex);
+                    auto mapSize = mapVector->sizeAt(decodedIndex);
+
+                    // Process all keys in this map entry
+                    for (vector_size_t keyIdx = 0; keyIdx < mapSize; ++keyIdx) {
+                      auto keyPosition = mapOffset + keyIdx;
+                      if (!keys->isNullAt(keyPosition)) {
+                        std::string keyStr;
+                        if (keys->type()->isVarchar() ||
+                            keys->type()->isVarbinary()) {
+                          auto* keyVector = keys->asFlatVector<StringView>();
+                          auto keyView = keyVector->valueAt(keyPosition);
+                          keyStr = std::string(keyView);
+                        } else if (keys->type()->isInteger()) {
+                          auto* keyVector = keys->asFlatVector<int32_t>();
+                          auto keyVal = keyVector->valueAt(keyPosition);
+                          keyStr = std::to_string(keyVal);
+                        } else if (keys->type()->isBigint()) {
+                          auto* keyVector = keys->asFlatVector<int64_t>();
+                          auto keyVal = keyVector->valueAt(keyPosition);
+                          keyStr = std::to_string(keyVal);
+                        } else if (keys->type()->isSmallint()) {
+                          auto* keyVector = keys->asFlatVector<int16_t>();
+                          auto keyVal = keyVector->valueAt(keyPosition);
+                          keyStr = std::to_string(keyVal);
+                        } else if (keys->type()->isTinyint()) {
+                          auto* keyVector = keys->asFlatVector<int8_t>();
+                          auto keyVal = keyVector->valueAt(keyPosition);
+                          keyStr = std::to_string(keyVal);
+                        } else {
+                          // This should not be reached since
+                          // hasUnsupportedMapKey filters out unsupported types
+                          VELOX_UNREACHABLE(
+                              "Unsupported map key type: {}",
+                              keys->type()->toString());
+                        }
+                        uniqueKeys.insert(keyStr);
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          } else {
+            // Remove this column from globallyCompatibleFlatmapColumns
+            removeFromVector(globallyCompatibleFlatmapColumns, i);
+          }
+        } else {
+          removeFromVector(globallyCompatibleFlatmapColumns, i);
+        }
+      }
+    }
+
+    if (!supportedMapColumnIndices.empty()) {
+      auto config = std::make_shared<dwrf::Config>();
+      config->set(dwrf::Config::FLATTEN_MAP, true);
+      config->set<const std::vector<uint32_t>>(
+          dwrf::Config::MAP_FLAT_COLS, supportedMapColumnIndices);
+
+      // Convert to serdeParameters
+      auto configParams = config->toSerdeParams();
+      serdeParameters.insert(configParams.begin(), configParams.end());
+    }
+  }
+
   if (bucketColumnIndices.empty()) {
-    builder.tableWrite(outputDir, setup.fileFormat);
+    if (!serdeParameters.empty()) {
+      builder.tableWrite(
+          outputDir,
+          /*partitionBy=*/{},
+          /*bucketCount=*/0,
+          /*bucketedBy=*/{},
+          /*sortBy=*/{},
+          setup.fileFormat,
+          /*aggregates=*/{},
+          /*connectorId=*/PlanBuilder::kHiveDefaultConnectorId,
+          serdeParameters);
+    } else {
+      builder.tableWrite(outputDir, setup.fileFormat);
+    }
   } else {
     std::vector<std::string> bucketColumnNames;
     bucketColumnNames.reserve(bucketColumnIndices.size());
     for (auto i : bucketColumnIndices) {
       bucketColumnNames.push_back(setup.schema->nameOf(i));
     }
-    builder.tableWrite(
-        outputDir,
-        /*partitionBy=*/{},
-        setup.bucketCount(),
-        bucketColumnNames,
-        setup.fileFormat);
+    if (!serdeParameters.empty()) {
+      builder.tableWrite(
+          outputDir,
+          /*partitionBy=*/{},
+          setup.bucketCount(),
+          bucketColumnNames,
+          /*sortBy=*/{},
+          setup.fileFormat,
+          /*aggregates=*/{},
+          /*connectorId=*/PlanBuilder::kHiveDefaultConnectorId,
+          serdeParameters);
+    } else {
+      builder.tableWrite(
+          outputDir,
+          /*partitionBy=*/{},
+          setup.bucketCount(),
+          bucketColumnNames,
+          /*sortBy=*/{},
+          setup.fileFormat);
+    }
   }
   CursorParameters params;
   params.serialExecution = true;
@@ -611,22 +1002,79 @@ VectorPtr TableEvolutionFuzzer::liftToPrimitiveType(
       std::vector<BufferPtr>({}));
 }
 
+RowTypePtr TableEvolutionFuzzer::buildFlatmapAsStructSchema(
+    const RowTypePtr& tableSchema,
+    const folly::F14FastMap<int, folly::F14FastSet<std::string>>&
+        globalMapColumnKeys,
+    const std::vector<int>& globallyCompatibleFlatmapColumns) {
+  if (globallyCompatibleFlatmapColumns.empty()) {
+    return tableSchema;
+  }
+
+  VLOG(1) << "Setting up struct reading for "
+          << globallyCompatibleFlatmapColumns.size()
+          << " flatmap columns with real keys";
+
+  auto names = tableSchema->names();
+  auto types = tableSchema->children();
+
+  // Filter globalMapColumnKeys to only include globally compatible columns
+  std::unordered_map<int, folly::F14FastSet<std::string>> filteredMapColumnKeys;
+  for (int mapColumnIndex : globallyCompatibleFlatmapColumns) {
+    if (globalMapColumnKeys.find(mapColumnIndex) != globalMapColumnKeys.end()) {
+      // Add 50% probability to include this column in filteredMapColumnKeys
+      if (folly::Random::oneIn(2, rng_)) {
+        filteredMapColumnKeys[mapColumnIndex] =
+            globalMapColumnKeys.at(mapColumnIndex);
+      }
+    }
+  }
+
+  // Use the filteredMapColumnKeys for struct reading
+  for (const auto& [mapColumnIndex, keysSet] : filteredMapColumnKeys) {
+    // Convert map type to struct type for struct reading
+    auto finalMapType = types[mapColumnIndex]->asMap();
+    auto finalValueType = finalMapType.valueType();
+    // Convert F14FastSet to vector for ROW constructor
+    std::vector<std::string> keys(keysSet.begin(), keysSet.end());
+    // Construct struct schema with real keys from write time + final value
+    // type
+    std::vector<TypePtr> finalStructFieldTypes(keys.size(), finalValueType);
+    auto finalStructSchema = ROW(keys, finalStructFieldTypes);
+
+    // Replace the map type with struct type in the schema
+    types[mapColumnIndex] = finalStructSchema;
+  }
+
+  // Build new schema using struct reading for flatmap columns
+  return ROW(names, types);
+}
+
 std::unique_ptr<TaskCursor> TableEvolutionFuzzer::makeScanTask(
     const RowTypePtr& tableSchema,
     std::vector<Split> splits,
     const PushdownConfig& pushdownConfig,
-    bool useFiltersAsNode) {
+    bool useFiltersAsNode,
+    const folly::F14FastMap<int, folly::F14FastSet<std::string>>&
+        globalMapColumnKeys,
+    const std::vector<int>& globallyCompatibleFlatmapColumns) {
+  // Build schema for flatmap as struct reading
+  RowTypePtr newSchemaUsingStructReadingFlatMap = buildFlatmapAsStructSchema(
+      tableSchema, globalMapColumnKeys, globallyCompatibleFlatmapColumns);
+
   CursorParameters params;
   params.serialExecution = true;
   // TODO: Mix in filter and aggregate pushdowns.
-  params.planNode = PlanBuilder()
-                        .filtersAsNode(useFiltersAsNode)
-                        .tableScanWithPushDown(
-                            tableSchema,
-                            /*pushdownConfig=*/pushdownConfig,
-                            tableSchema,
-                            {})
-                        .planNode();
+  params.planNode =
+      PlanBuilder()
+          .filtersAsNode(useFiltersAsNode)
+          .tableScanWithPushDown(
+              newSchemaUsingStructReadingFlatMap, // Use struct schema for
+                                                  // flatmap reading
+              /*pushdownConfig=*/pushdownConfig,
+              tableSchema, // Original schema as dataColumns
+              {})
+          .planNode();
   auto cursor = TaskCursor::create(params);
   for (auto& split : splits) {
     cursor->task()->addSplit("0", std::move(split));
@@ -691,16 +1139,41 @@ void TableEvolutionFuzzer::createWriteTasks(
     const std::vector<column_index_t>& bucketColumnIndices,
     const std::string& tableOutputRootDirPath,
     std::vector<std::shared_ptr<TaskCursor>>& writeTasks,
-    RowVectorPtr& finalExpectedData) {
+    RowVectorPtr& finalExpectedData,
+    folly::F14FastMap<int, folly::F14FastSet<std::string>>& globalMapColumnKeys,
+    std::vector<int>& globallyConsistentColumnIndexVector) {
+  // Initialize globallyConsistentColumnIndexVector with all map column indices
+  // from the first schema, then filter out incompatible ones during processing
+  if (hasMapColumns(testSetups[0].schema)) {
+    for (int j = 0; j < testSetups[0].schema->size(); ++j) {
+      if (testSetups[0].schema->childAt(j)->isMap() &&
+          !hasUnsupportedMapKey(testSetups[0].schema->childAt(j))) {
+        globallyConsistentColumnIndexVector.push_back(j);
+      }
+    }
+  }
+
+  // Generate data and create write tasks in a single loop
   for (int i = 0; i < config_.evolutionCount; ++i) {
+    // Generate fresh data for each evolution step independently
     auto data = vectorFuzzer_.fuzzRow(testSetups[i].schema, kVectorSize, false);
     for (auto& child : data->children()) {
       BaseVector::flattenVector(child);
     }
+
     auto actualDir = fmt::format("{}/actual_{}", tableOutputRootDirPath, i);
     VELOX_CHECK(std::filesystem::create_directory(actualDir));
-    writeTasks[2 * i] =
-        makeWriteTask(testSetups[i], data, actualDir, bucketColumnIndices);
+
+    // Pass globally consistent columns to restrict flatmap usage
+    writeTasks[2 * i] = makeWriteTask(
+        testSetups[i],
+        data,
+        actualDir,
+        bucketColumnIndices,
+        rng_,
+        true,
+        globalMapColumnKeys,
+        globallyConsistentColumnIndexVector);
 
     if (i == config_.evolutionCount - 1) {
       finalExpectedData = std::move(data);
@@ -712,7 +1185,121 @@ void TableEvolutionFuzzer::createWriteTasks(
         liftToType(data, testSetups.back().schema));
 
     writeTasks[2 * i + 1] = makeWriteTask(
-        testSetups.back(), expectedData, expectedDir, bucketColumnIndices);
+        testSetups.back(),
+        expectedData,
+        expectedDir,
+        bucketColumnIndices,
+        rng_,
+        true,
+        globalMapColumnKeys,
+        globallyConsistentColumnIndexVector);
+  }
+}
+
+void TableEvolutionFuzzer::applyRemainingFilters(
+    const fuzzer::ExpressionFuzzer::FuzzedExpressionData&
+        generatedRemainingFilters,
+    const std::unordered_map<std::string, std::string>& columnNameMapping,
+    PushdownConfig& pushownConfig,
+    const std::unordered_set<std::string>& subfieldFilteredFields) {
+  if (generatedRemainingFilters.expressions.empty() ||
+      columnNameMapping.empty()) {
+    return;
+  }
+
+  std::vector<std::string> filterStrings;
+  for (const auto& expr : generatedRemainingFilters.expressions) {
+    auto filterString = expr->toString();
+    VLOG(1) << "Processing remaining filter expression: " << filterString;
+
+    // First, update column names in the filter string using columnNameMapping
+    for (const auto& [originalName, currentName] : columnNameMapping) {
+      // Simple string replacement - this is a basic approach
+      // In a more robust implementation, we would parse the expression tree
+      size_t pos = 0;
+      while ((pos = filterString.find(originalName, pos)) !=
+             std::string::npos) {
+        // Check if this is a complete word (not part of another identifier)
+        bool isCompleteWord = true;
+        if (pos > 0 &&
+            (std::isalnum(filterString[pos - 1]) ||
+             filterString[pos - 1] == '_')) {
+          isCompleteWord = false;
+        }
+        if (pos + originalName.length() < filterString.length() &&
+            (std::isalnum(filterString[pos + originalName.length()]) ||
+             filterString[pos + originalName.length()] == '_')) {
+          isCompleteWord = false;
+        }
+
+        if (isCompleteWord) {
+          filterString.replace(pos, originalName.length(), currentName);
+          pos += currentName.length();
+        } else {
+          pos += originalName.length();
+        }
+      }
+    }
+
+    VLOG(1) << "After column name mapping: " << filterString;
+
+    // Now check if this filter expression conflicts with subfield filters
+    bool hasConflict = false;
+    for (const auto& subfieldField : subfieldFilteredFields) {
+      // Check if the filter string contains references to fields that are
+      // already filtered by subfield filters
+      size_t pos = 0;
+      while ((pos = filterString.find(subfieldField, pos)) !=
+             std::string::npos) {
+        // Check if this is a complete word (not part of another identifier)
+        bool isCompleteWord = true;
+        if (pos > 0 &&
+            (std::isalnum(filterString[pos - 1]) ||
+             filterString[pos - 1] == '_')) {
+          isCompleteWord = false;
+        }
+        if (pos + subfieldField.length() < filterString.length() &&
+            (std::isalnum(filterString[pos + subfieldField.length()]) ||
+             filterString[pos + subfieldField.length()] == '_')) {
+          isCompleteWord = false;
+        }
+
+        if (isCompleteWord) {
+          hasConflict = true;
+          VLOG(1)
+              << "CONFLICT DETECTED! Skipping remaining filter due to conflict with subfield filter on field: "
+              << subfieldField << ", filter: " << filterString;
+          break;
+        }
+        pos += subfieldField.length();
+      }
+      if (hasConflict) {
+        break;
+      }
+    }
+
+    // Skip this filter if it conflicts with subfield filters
+    if (hasConflict) {
+      VLOG(1) << "Skipping filter due to conflict: " << filterString;
+      continue;
+    }
+
+    VLOG(1) << "No conflict detected, proceeding with filter: " << filterString;
+
+    // Fix DATE literal format: convert bare date to DATE literal format
+    // to prevent DuckDB parser from interpreting it as arithmetic expression
+    RE2 datePattern(R"(\b(\d{4}-\d{2}-\d{2})\b)");
+    RE2::GlobalReplace(&filterString, datePattern, "DATE '\\1'");
+
+    filterStrings.push_back(filterString);
+    VLOG(1) << "Updated filter expression: " << filterString;
+  }
+
+  if (filterStrings.size() == 1) {
+    pushownConfig.remainingFilter = filterStrings[0];
+  } else if (filterStrings.size() > 1) {
+    pushownConfig.remainingFilter =
+        "(" + folly::join(") AND (", filterStrings) + ")";
   }
 }
 

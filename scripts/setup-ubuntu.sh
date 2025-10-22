@@ -46,6 +46,10 @@ if [[ ${VERSION} =~ "20.04" ]]; then
   export CXX=/usr/bin/g++-11
 fi
 
+if lscpu | grep -q "sve"; then
+  $SUDO apt install -y gcc-12 g++-12
+fi
+
 function install_clang15 {
   if [[ ! ${VERSION} =~ "22.04" && ! ${VERSION} =~ "24.04" ]]; then
     echo "Warning: using the Clang configuration is for Ubuntu 22.04 and 24.04. Errors might occur."
@@ -54,7 +58,7 @@ function install_clang15 {
   if [[ ${VERSION} =~ "22.04" ]]; then
     CLANG_PACKAGE_LIST="${CLANG_PACKAGE_LIST} gcc-12 g++-12 libc++-12-dev"
   fi
-  ${SUDO} apt install "${CLANG_PACKAGE_LIST}" -y
+  ${SUDO} apt install ${CLANG_PACKAGE_LIST} -y
 }
 
 # For Ubuntu 20.04 we need add the toolchain PPA to get access to gcc11.
@@ -197,18 +201,18 @@ function install_s3 {
 
 function install_gcs {
   # Dependencies of GCS, probably a workaround until the docker image is rebuilt
-  apt install -y --no-install-recommends libc-ares-dev libcurl4-openssl-dev
+  ${SUDO} apt install -y --no-install-recommends libc-ares-dev libcurl4-openssl-dev
   install_gcs-sdk-cpp
 }
 
 function install_abfs {
   # Dependencies of Azure Storage Blob cpp
-  apt install -y openssl libxml2-dev
+  ${SUDO} apt install -y openssl libxml2-dev
   install_azure-storage-sdk-cpp
 }
 
 function install_hdfs {
-  apt install -y --no-install-recommends libxml2-dev libgsasl7-dev uuid-dev openjdk-8-jdk
+  ${SUDO} apt install -y --no-install-recommends libxml2-dev libgsasl7-dev uuid-dev openjdk-8-jdk
   install_hdfs_deps
 }
 
@@ -220,7 +224,7 @@ function install_adapters {
 }
 
 function install_faiss_deps {
-  sudo apt-get install -y libopenblas-dev libomp-dev
+  ${SUDO} apt-get install -y libopenblas-dev libomp-dev
 }
 
 function install_velox_deps {

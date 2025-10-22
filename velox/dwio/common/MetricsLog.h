@@ -19,15 +19,12 @@
 #include "velox/dwio/common/FilterNode.h"
 #include "velox/dwio/common/exception/Exception.h"
 
-namespace facebook {
-namespace velox {
-namespace dwio {
-namespace common {
+namespace facebook::velox::dwio::common {
 
 class MetricsLog {
  public:
   static constexpr std::string_view LIB_VERSION_STRING{"1.1"};
-  static constexpr folly::StringPiece WRITE_OPERATION{"WRITE"};
+  static constexpr std::string_view WRITE_OPERATION{"WRITE"};
 
   enum class MetricsType {
     HEADER,
@@ -128,8 +125,8 @@ class MetricsLog {
   virtual void logFileClose(const FileCloseMetrics& /* metrics */) const {}
 
   static std::shared_ptr<const MetricsLog> voidLog() {
-    static std::shared_ptr<const MetricsLog> log{new MetricsLog("")};
-    return log;
+    static const MetricsLog kInstance{{}};
+    return {std::shared_ptr<const MetricsLog>{}, &kInstance};
   }
 
  protected:
@@ -178,7 +175,4 @@ void registerMetricsLogFactory(std::shared_ptr<DwioMetricsLogFactory> factory);
 
 DwioMetricsLogFactory& getMetricsLogFactory();
 
-} // namespace common
-} // namespace dwio
-} // namespace velox
-} // namespace facebook
+} // namespace facebook::velox::dwio::common

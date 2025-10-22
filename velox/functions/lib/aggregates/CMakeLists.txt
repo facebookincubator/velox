@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+add_subdirectory(noisy_aggregation)
+
 velox_add_library(
   velox_functions_aggregates
   AverageAggregateBase.cpp
@@ -22,10 +24,10 @@ velox_add_library(
   SingleValueAccumulator.cpp
   ValueList.cpp
   ValueSet.cpp
-  VarianceAggregatesBase.cpp)
+  VarianceAggregatesBase.cpp
+)
 
-velox_link_libraries(velox_functions_aggregates velox_exec
-                     velox_presto_serializer Folly::folly)
+velox_link_libraries(velox_functions_aggregates velox_exec velox_presto_serializer Folly::folly)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)

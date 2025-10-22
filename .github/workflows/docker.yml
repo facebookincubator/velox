@@ -50,21 +50,32 @@ jobs:
         os:
           - {runner: ubuntu-24.04-arm, platform: arm64}
           - {runner: ubuntu-24.04, platform: amd64}
-        target: [ci, pyvelox, ubuntu]
+        target: [ci, pyvelox, ubuntu, fedora]
 
     steps:
       - name: Free Disk Space
         run: |
-          # 15G
-          sudo rm -rf /usr/local/lib/android || :
-          # 5.3GB
-          sudo rm -rf /opt/hostedtoolcache/CodeQL || :
+          # Re-used from free-disk-space github action.
+          getAvailableSpace() { echo $(df -a $1 | awk 'NR > 1 {avail+=$4} END {print avail}'); }
+          # Show before
+          echo "Original available disk space: " $(getAvailableSpace)
+          # Remove DotNet.
+          sudo rm -rf /usr/share/dotnet || true
+          # Remove android
+          sudo rm -rf /usr/local/lib/android || true
+          # Remove CodeQL
+          sudo rm -rf /opt/hostedtoolcache/CodeQL || true
+          # Remove Haskell
+          sudo rm -rf /opt/ghc || true
+          sudo rm -rf /usr/local/.ghcup || true
+          # Show after
+          echo "New available disk space: " $(getAvailableSpace)
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
+        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -72,7 +83,7 @@ jobs:
 
       - name: Bake Images
         id: bake
-        uses: docker/bake-action@37816e747588cb137173af99ab33873600c46ea8 # v6.8.0
+        uses: docker/bake-action@3acf805d94d93a86cce4ca44798a76464a75b88c # v6.9.0
         env:
           DOCKER_UPLOAD_CACHE: ${{ github.repository == 'facebookincubator/velox' && github.event_name != 'pull_request'}}
         with:
@@ -107,7 +118,7 @@ jobs:
           cd "$DIGEST_DIR" || exit 1
           # Add the target for any images that shouldn't be build as multi-platform
           # into the skip list
-          echo "$METADATA" | jq -r 'def skip: ["ubuntu"];
+          echo "$METADATA" | jq -r 'def skip: ["ubuntu", "fedora"];
             . | to_entries[] | .key | split("-")[0] |
             if . as $name | skip | index($name) != null then empty else . end' | \
             while read -r image_name; do
@@ -130,14 +141,14 @@ jobs:
       packages: write
     steps:
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
+        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Download digests
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
         with:
           path: ${{ runner.temp }}/digests
           pattern: digests-*
@@ -168,7 +179,7 @@ jobs:
         target: [java]
     steps:
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
+        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -182,7 +193,7 @@ jobs:
 
       - name: Download Base Image
         if: ${{ github.event_name == 'pull_request' }}
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
         with:
           pattern: centos9-amd64
           path: /tmp
@@ -190,12 +201,12 @@ jobs:
       - name: Load Base Image
         if: ${{ github.event_name == 'pull_request' }}
         run: |
-          docker load -i /tmp/centos9-amd64/centos9.tar
+          docker load -i /tmp/centos9.tar
           docker images
-          rm /tmp/centos9-amd64/centos9.tar
+          rm /tmp/centos9.tar
 
       - name: Build and Push
-        uses: docker/bake-action@37816e747588cb137173af99ab33873600c46ea8 # v6.8.0
+        uses: docker/bake-action@3acf805d94d93a86cce4ca44798a76464a75b88c # v6.9.0
         with:
           targets: ${{ matrix.target }}
           push: ${{ github.repository == 'facebookincubator/velox' && github.event_name != 'pull_request'}}

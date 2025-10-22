@@ -331,12 +331,18 @@ TypePtr sanitizeTryResolveType(
     const exec::TypeSignature& typeSignature,
     const std::unordered_map<std::string, SignatureVariable>& variables,
     const std::unordered_map<std::string, TypePtr>& typeVariablesBindings,
-    std::unordered_map<std::string, int>& integerVariablesBindings) {
+    std::unordered_map<std::string, int>& integerVariablesBindings,
+    const std::unordered_map<std::string, LongEnumParameter>&
+        longEnumParameterVariablesBindings,
+    const std::unordered_map<std::string, VarcharEnumParameter>&
+        varcharEnumParameterVariablesBindings) {
   return sanitize(SignatureBinder::tryResolveType(
       typeSignature,
       variables,
       typeVariablesBindings,
-      integerVariablesBindings));
+      integerVariablesBindings,
+      longEnumParameterVariablesBindings,
+      varcharEnumParameterVariablesBindings));
 }
 
 void setupMemory(
@@ -367,17 +373,11 @@ void registerHiveConnector(
   auto configs = hiveConfigs;
   // Make sure not to run out of open file descriptors.
   configs[connector::hive::HiveConfig::kNumCacheFileHandles] = "1000";
-  if (!connector::hasConnectorFactory(
-          connector::hive::HiveConnectorFactory::kHiveConnectorName)) {
-    connector::registerConnectorFactory(
-        std::make_shared<connector::hive::HiveConnectorFactory>());
-  }
-  auto hiveConnector =
-      connector::getConnectorFactory(
-          connector::hive::HiveConnectorFactory::kHiveConnectorName)
-          ->newConnector(
-              kHiveConnectorId,
-              std::make_shared<config::ConfigBase>(std::move(configs)));
+
+  connector::hive::HiveConnectorFactory factory;
+  auto hiveConnector = factory.newConnector(
+      kHiveConnectorId,
+      std::make_shared<config::ConfigBase>(std::move(configs)));
   connector::registerConnector(hiveConnector);
 }
 

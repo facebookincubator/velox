@@ -140,11 +140,12 @@ uint64_t WaveHiveDataSource::getCompletedRows() {
   return completedRows_;
 }
 
-std::unordered_map<std::string, RuntimeCounter>
-WaveHiveDataSource::runtimeStats() {
-  auto map = runtimeStats_.toMap();
+std::unordered_map<std::string, RuntimeMetric>
+WaveHiveDataSource::getRuntimeStats() {
+  auto map = runtimeStats_.toRuntimeMetricMap();
   for (const auto& [name, counter] : splitReaderStats_) {
-    map.insert(std::make_pair(name, counter));
+    map.insert(
+        std::make_pair(name, RuntimeMetric(counter.value, counter.unit)));
   }
   return map;
 }
@@ -160,10 +161,8 @@ void WaveHiveDataSource::registerConnector() {
       std::unordered_map<std::string, std::string>());
 
   // Create hive connector with config...
-  auto hiveConnector =
-      connector::getConnectorFactory(
-          connector::hive::HiveConnectorFactory::kHiveConnectorName)
-          ->newConnector("wavemock", config, nullptr);
+  connector::hive::HiveConnectorFactory factory;
+  auto hiveConnector = factory.newConnector("wavemock", config, nullptr);
   connector::registerConnector(hiveConnector);
   connector::hive::HiveDataSource::registerWaveDelegateHook(
       [](const HiveTableHandlePtr& hiveTableHandle,

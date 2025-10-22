@@ -56,11 +56,29 @@ class HdfsFileSystem::Impl {
   }
 
   ~Impl() {
-    LOG(INFO) << "Disconnecting HDFS file system";
-    int disconnectResult = driver_->Disconnect(hdfsClient_);
-    if (disconnectResult != 0) {
-      LOG(WARNING) << "hdfs disconnect failure in HdfsReadFile close: "
-                   << errno;
+    if (!closed_) {
+      LOG(WARNING)
+          << "The HdfsFileSystem instance is not closed upon destruction. You must explicitly call the close() API before JVM termination to ensure proper disconnection.";
+    }
+  }
+
+  // The HdfsFileSystem::Disconnect operation requires the JVM method
+  // definitions to be loaded within an active JVM process.
+  // Therefore, it must be invoked before the JVM shuts down.
+
+  // To address this, we’ve introduced a new close() API that performs the
+  // disconnect operation. Third-party applications can call this close() method
+  // prior to JVM termination to ensure proper cleanup.
+  void close() {
+    if (!closed_) {
+      LOG(WARNING) << "Disconnecting HDFS file system";
+      int disconnectResult = driver_->Disconnect(hdfsClient_);
+      if (disconnectResult != 0) {
+        LOG(WARNING) << "hdfs disconnect failure in HdfsReadFile close: "
+                     << errno;
+      }
+
+      closed_ = true;
     }
   }
 
@@ -75,6 +93,7 @@ class HdfsFileSystem::Impl {
  private:
   hdfsFS hdfsClient_;
   filesystems::arrow::io::internal::LibHdfsShim* driver_;
+  bool closed_ = false;
 };
 
 HdfsFileSystem::HdfsFileSystem(
@@ -109,6 +128,10 @@ std::unique_ptr<WriteFile> HdfsFileSystem::openFileForWrite(
       impl_->hdfsShim(), impl_->hdfsClient(), path);
 }
 
+void HdfsFileSystem::close() {
+  impl_->close();
+}
+
 bool HdfsFileSystem::isHdfsFile(const std::string_view filePath) {
   return (filePath.find(kScheme) == 0) || (filePath.find(kViewfsScheme) == 0);
 }
@@ -129,11 +152,11 @@ HdfsServiceEndpoint HdfsFileSystem::getServiceEndpoint(
     // Fall back to get a fixed endpoint from config.
     auto hdfsHost = config->get<std::string>("hive.hdfs.host");
     VELOX_CHECK(
-        hdfsHost.hasValue(),
+        hdfsHost.has_value(),
         "hdfsHost is empty, configuration missing for hdfs host");
     auto hdfsPort = config->get<std::string>("hive.hdfs.port");
     VELOX_CHECK(
-        hdfsPort.hasValue(),
+        hdfsPort.has_value(),
         "hdfsPort is empty, configuration missing for hdfs port");
     return HdfsServiceEndpoint{*hdfsHost, *hdfsPort};
   }

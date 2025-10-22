@@ -17,10 +17,10 @@ add_executable(velox_cudf_spark_aggregates_test AggregationTest.cpp Main.cpp)
 add_test(
   NAME velox_cudf_spark_aggregates_test
   COMMAND velox_cudf_spark_aggregates_test
-  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
 
-set_tests_properties(velox_cudf_spark_aggregates_test
-                     PROPERTIES LABELS cuda_driver TIMEOUT 3000)
+set_tests_properties(velox_cudf_spark_aggregates_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
 
 target_link_libraries(
   velox_cudf_spark_aggregates_test
@@ -34,4 +34,30 @@ target_link_libraries(
   velox_vector_fuzzer
   gflags::gflags
   GTest::gtest
-  GTest::gtest_main)
+  GTest::gtest_main
+)
+
+add_executable(velox_cudf_spark_filter_project_test FilterProjectTest.cpp Main.cpp)
+
+add_test(
+  NAME velox_cudf_spark_filter_project_test
+  COMMAND velox_cudf_spark_filter_project_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+set_tests_properties(
+  velox_cudf_spark_filter_project_test
+  PROPERTIES LABELS cuda_driver TIMEOUT 3000
+)
+
+target_link_libraries(
+  velox_cudf_spark_filter_project_test
+  velox_cudf_exec
+  velox_exec_test_lib
+  velox_vector_test_lib
+  velox_functions_spark
+  velox_vector_fuzzer
+  gflags::gflags
+  GTest::gtest
+  GTest::gtest_main
+)

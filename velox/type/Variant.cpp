@@ -17,12 +17,12 @@
 #include "velox/type/Variant.h"
 #include <cfloat>
 #include "folly/json.h"
+#include "velox/common/base/BitUtil.h"
 #include "velox/common/encode/Base64.h"
 #include "velox/type/DecimalUtil.h"
 #include "velox/type/FloatingPointUtil.h"
 
 namespace facebook::velox {
-
 namespace {
 
 bool dispatchDynamicVariantEquality(
@@ -161,6 +161,7 @@ bool dispatchDynamicVariantEquality(
   return VELOX_DYNAMIC_TYPE_DISPATCH_METHOD(
       VariantEquality, equals<false>, a.kind(), a, b);
 }
+
 } // namespace
 
 std::string encloseWithQuote(std::string str) {
@@ -342,6 +343,11 @@ const folly::json::serialization_opts& getOpts() {
 } // namespace
 
 std::string Variant::toJson(const TypePtr& type) const {
+  VELOX_CHECK(type);
+  return toJson(*type);
+}
+
+std::string Variant::toJson(const Type& type) const {
   // todo(youknowjack): consistent story around std::stringifying, converting,
   // and other basic operations. Stringification logic should not be specific
   // to variants; it should be consistent for all map representations
@@ -350,9 +356,7 @@ std::string Variant::toJson(const TypePtr& type) const {
     return "null";
   }
 
-  VELOX_CHECK(type);
-
-  VELOX_CHECK_EQ(this->kind(), type->kind(), "Wrong type in Variant::toJson");
+  VELOX_CHECK_EQ(this->kind(), type.kind(), "Wrong type in Variant::toJson");
 
   switch (kind_) {
     case TypeKind::MAP: {
@@ -365,9 +369,9 @@ std::string Variant::toJson(const TypePtr& type) const {
           b += ",";
         }
         b += "{\"key\":";
-        b += pair.first.toJson(type->childAt(0));
+        b += pair.first.toJson(type.childAt(0));
         b += ",\"value\":";
-        b += pair.second.toJson(type->childAt(1));
+        b += pair.second.toJson(type.childAt(1));
         b += "}";
         first = false;
       }
@@ -382,13 +386,13 @@ std::string Variant::toJson(const TypePtr& type) const {
       uint32_t idx = 0;
       VELOX_CHECK_EQ(
           row.size(),
-          type->size(),
+          type.size(),
           "Wrong number of fields in a struct in Variant::toJson");
       for (auto& v : row) {
         if (!first) {
           b += ",";
         }
-        b += v.toJson(type->childAt(idx++));
+        b += v.toJson(type.childAt(idx++));
         first = false;
       }
       b += "]";
@@ -399,7 +403,7 @@ std::string Variant::toJson(const TypePtr& type) const {
       std::string b{};
       b += "[";
       bool first = true;
-      auto arrayElementType = type->childAt(0);
+      auto arrayElementType = type.childAt(0);
       for (auto& v : array) {
         if (!first) {
           b += ",";
@@ -422,7 +426,7 @@ std::string Variant::toJson(const TypePtr& type) const {
       return target;
     }
     case TypeKind::HUGEINT: {
-      VELOX_CHECK(type->isLongDecimal());
+      VELOX_CHECK(type.isLongDecimal());
       return DecimalUtil::toString(value<TypeKind::HUGEINT>(), type);
     }
     case TypeKind::TINYINT:
@@ -430,12 +434,12 @@ std::string Variant::toJson(const TypePtr& type) const {
     case TypeKind::SMALLINT:
       [[fallthrough]];
     case TypeKind::INTEGER:
-      if (type->isDate()) {
+      if (type.isDate()) {
         return '"' + DATE()->toString(value<TypeKind::INTEGER>()) + '"';
       }
       [[fallthrough]];
     case TypeKind::BIGINT:
-      if (type->isShortDecimal()) {
+      if (type.isShortDecimal()) {
         return DecimalUtil::toString(value<TypeKind::BIGINT>(), type);
       }
       [[fallthrough]];
@@ -900,24 +904,21 @@ uint64_t Variant::hash() const {
 
 template <>
 uint64_t Variant::hash<TypeKind::ARRAY>() const {
-  auto& arrayVariant = value<TypeKind::ARRAY>();
-  auto hasher = folly::Hash{};
-  uint64_t hash = 0;
-  for (int32_t i = 0; i < arrayVariant.size(); i++) {
-    hash =
-        folly::hash::hash_combine_generic(hasher, hash, arrayVariant[i].hash());
+  const auto& arrayVariant = value<TypeKind::ARRAY>();
+  uint64_t hash = bits::kNullHash;
+  for (int32_t i = 0; i < arrayVariant.size(); ++i) {
+    hash = bits::hashMix(hash, arrayVariant[i].hash());
   }
   return hash;
 }
 
 template <>
 uint64_t Variant::hash<TypeKind::ROW>() const {
-  auto hasher = folly::Hash{};
-  uint64_t hash = 0;
-  auto& rowVariant = value<TypeKind::ROW>();
-  for (int32_t i = 0; i < rowVariant.size(); i++) {
-    hash =
-        folly::hash::hash_combine_generic(hasher, hash, rowVariant[i].hash());
+  const auto& rowVariant = value<TypeKind::ROW>();
+  uint64_t hash = bits::kNullHash;
+  for (int32_t i = 0; i < rowVariant.size(); ++i) {
+    const auto childHash = rowVariant[i].hash();
+    hash = (i == 0 ? childHash : bits::hashMix(hash, childHash));
   }
   return hash;
 }
@@ -930,23 +931,18 @@ uint64_t Variant::hash<TypeKind::TIMESTAMP>() const {
 
 template <>
 uint64_t Variant::hash<TypeKind::MAP>() const {
-  auto hasher = folly::Hash{};
-
   const auto& mapVariant = value<TypeKind::MAP>();
-
-  // Map is already sorted by key.
-  uint64_t hash = 0;
+  uint64_t hash = bits::kNullHash;
   for (const auto& [key, value] : mapVariant) {
-    hash = folly::hash::hash_combine_generic(hasher, hash, key.hash());
-    hash = folly::hash::hash_combine_generic(hasher, hash, value.hash());
+    const auto elementHash = bits::hashMix(key.hash(), value.hash());
+    hash = bits::commutativeHashMix(hash, elementHash);
   }
-
   return hash;
 }
 
 uint64_t Variant::hash() const {
   if (isNull()) {
-    return folly::Hash{}(static_cast<int32_t>(kind_));
+    return bits::kNullHash;
   }
 
   return VELOX_DYNAMIC_TYPE_DISPATCH_ALL(hash, kind_);

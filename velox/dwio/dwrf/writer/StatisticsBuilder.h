@@ -198,13 +198,13 @@ class StatisticsBuilder : public virtual dwio::common::ColumnStatistics {
     rawSize_ = 0;
     size_ = options_.initialSize;
     if (options_.countDistincts) {
-      hll_ = std::make_shared<common::hll::SparseHll>(options_.allocator);
+      hll_ = std::make_shared<common::hll::SparseHll<>>(options_.allocator);
     }
   }
 
  protected:
   StatisticsBuilderOptions options_;
-  std::shared_ptr<common::hll::SparseHll> hll_;
+  std::shared_ptr<common::hll::SparseHll<>> hll_;
 };
 
 class BooleanStatisticsBuilder : public StatisticsBuilder,
@@ -358,7 +358,7 @@ class StringStatisticsBuilder : public StatisticsBuilder,
 
   ~StringStatisticsBuilder() override = default;
 
-  void addValues(folly::StringPiece value, uint64_t count = 1) {
+  void addValues(std::string_view value, uint64_t count = 1) {
     // min_/max_ is not initialized with default that can be compared against
     // easily. So we need to capture whether self is empty and handle
     // differently.
@@ -368,10 +368,10 @@ class StringStatisticsBuilder : public StatisticsBuilder,
       min_ = value;
       max_ = value;
     } else {
-      if (min_.has_value() && value < folly::StringPiece{min_.value()}) {
+      if (min_.has_value() && value < std::string_view{min_.value()}) {
         min_ = value;
       }
-      if (max_.has_value() && value > folly::StringPiece{max_.value()}) {
+      if (max_.has_value() && value > std::string_view{max_.value()}) {
         max_ = value;
       }
     }

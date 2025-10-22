@@ -17,6 +17,7 @@
 #include <folly/executors/IOThreadPoolExecutor.h>
 #include <atomic>
 #include "velox/common/testutil/TestValue.h"
+#include "velox/exec/ExchangeClient.h"
 #include "velox/exec/OutputBufferManager.h"
 
 namespace facebook::velox::exec::test {
@@ -270,7 +271,7 @@ class LocalExchangeSource : public exec::ExchangeSource {
   }
 
   bool checkSetRequestPromise() {
-    VeloxPromise<Response> promise;
+    VeloxPromise<Response> promise{VeloxPromise<Response>::makeEmpty()};
     {
       std::lock_guard<std::mutex> l(queue_->mutex());
       promise = std::move(promise_);

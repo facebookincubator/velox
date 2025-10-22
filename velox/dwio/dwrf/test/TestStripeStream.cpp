@@ -42,8 +42,8 @@ class RecordingInputStream : public facebook::velox::InMemoryReadFile {
       uint64_t offset,
       uint64_t length,
       void* buf,
-      facebook::velox::filesystems::File::IoStats* stats =
-          nullptr) const override {
+      const facebook::velox::FileStorageContext& fileStorageContext = {})
+      const override {
     reads_.push_back({offset, length});
     return {static_cast<char*>(buf), length};
   }

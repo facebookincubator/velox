@@ -15,5 +15,25 @@
 add_executable(presto_sql_test PrestoSqlTest.cpp)
 add_test(presto_sql_test presto_sql_test)
 
-target_link_libraries(
-  presto_sql_test velox_fuzzer_util velox_presto_types)
+target_link_libraries(presto_sql_test velox_fuzzer_util velox_presto_types)
+
+# LocalRunnerService Test (requires FBThrift support)
+if(VELOX_ENABLE_REMOTE_FUNCTIONS)
+  add_executable(local_runner_service_test LocalRunnerServiceTest.cpp)
+  add_test(local_runner_service_test local_runner_service_test)
+
+  target_link_libraries(
+    local_runner_service_test
+    velox_local_runner_service_lib
+    local_runner_service_thrift
+    velox_core
+    velox_type
+    velox_functions_prestosql
+    velox_functions_test_lib
+    velox_vector_test_lib
+    velox_common_base
+    Folly::folly
+    gtest
+    gtest_main
+  )
+endif()

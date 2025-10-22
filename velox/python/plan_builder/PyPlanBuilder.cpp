@@ -39,14 +39,13 @@ PyPlanNode::PyPlanNode(
   }
 }
 
-PyPlanBuilder::PyPlanBuilder(const std::shared_ptr<PyPlanContext>& planContext)
-    : planContext_(
-          planContext ? planContext : std::make_shared<PyPlanContext>()) {
-  rootPool_ = memory::memoryManager()->addRootPool();
-  leafPool_ = rootPool_->addLeafChild("py_plan_builder_pool");
-  planBuilder_ = exec::test::PlanBuilder(
-      planContext_->planNodeIdGenerator, leafPool_.get());
-}
+PyPlanBuilder::PyPlanBuilder(
+    const std::shared_ptr<memory::MemoryPool>& pool,
+    const std::shared_ptr<PyPlanContext>& planContext)
+    : pool_(pool),
+      planContext_(
+          planContext ? planContext : std::make_shared<PyPlanContext>()),
+      planBuilder_{planContext_->planNodeIdGenerator, pool_.get()} {}
 
 std::optional<PyPlanNode> PyPlanBuilder::planNode() const {
   if (planBuilder_.planNode() != nullptr) {
@@ -234,6 +233,18 @@ PyPlanBuilder& PyPlanBuilder::aggregate(
   return *this;
 }
 
+PyPlanBuilder& PyPlanBuilder::streamingAggregate(
+    const std::vector<std::string>& groupingKeys,
+    const std::vector<std::string>& aggregations) {
+  planBuilder_.streamingAggregation(
+      groupingKeys,
+      aggregations,
+      {},
+      core::AggregationNode::Step::kSingle,
+      false);
+  return *this;
+}
+
 PyPlanBuilder& PyPlanBuilder::orderBy(
     const std::vector<std::string>& keys,
     bool isPartial) {
@@ -291,11 +302,28 @@ PyPlanBuilder& PyPlanBuilder::indexLookupJoin(
           std::dynamic_pointer_cast<const core::TableScanNode>(
               indexPlanSubtree.planNode())) {
     planBuilder_.indexLookupJoin(
-        leftKeys, rightKeys, tableScanNode, {}, output, joinType);
+        leftKeys,
+        rightKeys,
+        tableScanNode,
+        {},
+        /*filter=*/"",
+        /*hasMarker=*/false,
+        output,
+        joinType);
   } else {
     throw std::runtime_error(
         "Index Loop Join subtree must be a single TableScanNode.");
   }
+  return *this;
+}
+
+PyPlanBuilder& PyPlanBuilder::unnest(
+    const std::vector<std::string>& unnestColumns,
+    const std::vector<std::string>& replicateColumns,
+    const std::optional<std::string>& ordinalColumn,
+    const std::optional<std::string>& emptyUnnestValueName) {
+  planBuilder_.unnest(
+      replicateColumns, unnestColumns, ordinalColumn, emptyUnnestValueName);
   return *this;
 }
 

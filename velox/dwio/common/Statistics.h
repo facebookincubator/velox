@@ -18,6 +18,7 @@
 
 #include <folly/Hash.h>
 #include <folly/container/F14Map.h>
+#include "velox/dwio/common/UnitLoader.h"
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/RuntimeMetrics.h"
@@ -536,6 +537,9 @@ struct ColumnReaderStatistics {
   // Number of rows returned by string dictionary reader that is flattened
   // instead of keeping dictionary encoding.
   int64_t flattenStringDictionaryValues{0};
+
+  // Total time spent in loading pages, in nanoseconds.
+  uint64_t pageLoadTimeNs{0};
 };
 
 struct RuntimeStatistics {
@@ -558,39 +562,48 @@ struct RuntimeStatistics {
 
   int64_t numStripes{0};
 
+  UnitLoaderStats unitLoaderStats;
   ColumnReaderStatistics columnReaderStatistics;
 
-  std::unordered_map<std::string, RuntimeCounter> toMap() {
-    std::unordered_map<std::string, RuntimeCounter> result;
+  std::unordered_map<std::string, RuntimeMetric> toRuntimeMetricMap() {
+    std::unordered_map<std::string, RuntimeMetric> result;
+    for (const auto& [name, metric] : unitLoaderStats.stats()) {
+      result.emplace(name, RuntimeMetric(metric.sum, metric.unit));
+    }
     if (skippedSplits > 0) {
-      result.emplace("skippedSplits", RuntimeCounter(skippedSplits));
+      result.emplace("skippedSplits", RuntimeMetric(skippedSplits));
     }
     if (processedSplits > 0) {
-      result.emplace("processedSplits", RuntimeCounter(processedSplits));
+      result.emplace("processedSplits", RuntimeMetric(processedSplits));
     }
     if (skippedSplitBytes > 0) {
       result.emplace(
           "skippedSplitBytes",
-          RuntimeCounter(skippedSplitBytes, RuntimeCounter::Unit::kBytes));
+          RuntimeMetric(skippedSplitBytes, RuntimeCounter::Unit::kBytes));
     }
     if (skippedStrides > 0) {
-      result.emplace("skippedStrides", RuntimeCounter(skippedStrides));
+      result.emplace("skippedStrides", RuntimeMetric(skippedStrides));
     }
     if (processedStrides > 0) {
-      result.emplace("processedStrides", RuntimeCounter(processedStrides));
+      result.emplace("processedStrides", RuntimeMetric(processedStrides));
     }
     if (footerBufferOverread > 0) {
       result.emplace(
           "footerBufferOverread",
-          RuntimeCounter(footerBufferOverread, RuntimeCounter::Unit::kBytes));
+          RuntimeMetric(footerBufferOverread, RuntimeCounter::Unit::kBytes));
     }
     if (numStripes > 0) {
-      result.emplace("numStripes", RuntimeCounter(numStripes));
+      result.emplace("numStripes", RuntimeMetric(numStripes));
     }
     if (columnReaderStatistics.flattenStringDictionaryValues > 0) {
       result.emplace(
           "flattenStringDictionaryValues",
-          RuntimeCounter(columnReaderStatistics.flattenStringDictionaryValues));
+          RuntimeMetric(columnReaderStatistics.flattenStringDictionaryValues));
+    }
+    if (columnReaderStatistics.pageLoadTimeNs > 0) {
+      result.emplace(
+          "pageLoadTimeNs",
+          RuntimeMetric(columnReaderStatistics.pageLoadTimeNs));
     }
     return result;
   }

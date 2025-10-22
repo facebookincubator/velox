@@ -36,7 +36,7 @@ int main(int argc, char** argv) {
   memory::MemoryManager::initialize(memory::MemoryManager::Options{});
 
   auto param = startLocalThriftServiceAndGetParams();
-  RemoteVectorFunctionMetadata metadata;
+  RemoteThriftVectorFunctionMetadata metadata;
   metadata.location = param.serverAddress;
 
   // Register the remote adapter for PlusFunction

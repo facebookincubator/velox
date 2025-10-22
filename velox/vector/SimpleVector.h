@@ -113,7 +113,7 @@ class SimpleVector : public BaseVector {
       TypePtr type,
       VectorEncoding::Simple encoding,
       BufferPtr nulls,
-      size_t length,
+      vector_size_t length,
       const SimpleVectorStats<T>& stats,
       std::optional<vector_size_t> distinctValueCount,
       std::optional<vector_size_t> nullCount,
@@ -134,7 +134,7 @@ class SimpleVector : public BaseVector {
         elementSize_(sizeof(T)),
         stats_(stats) {}
 
-  virtual ~SimpleVector() override {}
+  ~SimpleVector() override = default;
 
   SimpleVectorStats<T> getStats() const {
     return stats_;
@@ -538,8 +538,10 @@ inline std::optional<int32_t> SimpleVector<ComplexType>::compare(
   other = other->loadedVector();
   auto wrapped = wrappedVector();
   auto otherWrapped = other->wrappedVector();
-  DCHECK(wrapped->encoding() == otherWrapped->encoding())
-      << "Attempting to compare vectors not of the same type";
+  VELOX_DCHECK_EQ(
+      wrapped->typeKind(),
+      otherWrapped->typeKind(),
+      "Attempting to compare vectors not of the same type");
 
   bool otherNull = other->isNullAt(otherIndex);
   bool isNull = isNullAt(index);

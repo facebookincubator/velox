@@ -14,15 +14,20 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/CudfHashJoin.h"
 #include "velox/experimental/cudf/exec/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
+#include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
 #include "velox/exec/Task.h"
 
 #include <cudf/copying.hpp>
-#include <cudf/join.hpp>
+#include <cudf/join/join.hpp>
+#include <cudf/join/mixed_join.hpp>
+#include <cudf/null_mask.hpp>
+#include <cudf/stream_compaction.hpp>
 
 #include <nvtx3/nvtx3.hpp>
 
@@ -30,7 +35,7 @@ namespace facebook::velox::cudf_velox {
 
 void CudfHashJoinBridge::setHashTable(
     std::optional<CudfHashJoinBridge::hash_type> hashObject) {
-  if (cudfDebugEnabled()) {
+  if (CudfConfig::getInstance().debugEnabled) {
     std::cout << "Calling CudfHashJoinBridge::setHashTable" << std::endl;
   }
   std::vector<ContinuePromise> promises;
@@ -47,24 +52,24 @@ void CudfHashJoinBridge::setHashTable(
 
 std::optional<CudfHashJoinBridge::hash_type> CudfHashJoinBridge::hashOrFuture(
     ContinueFuture* future) {
-  if (cudfDebugEnabled()) {
+  if (CudfConfig::getInstance().debugEnabled) {
     std::cout << "Calling CudfHashJoinBridge::hashOrFuture" << std::endl;
   }
   std::lock_guard<std::mutex> l(mutex_);
   if (hashObject_.has_value()) {
     return hashObject_;
   }
-  if (cudfDebugEnabled()) {
+  if (CudfConfig::getInstance().debugEnabled) {
     std::cout << "Calling CudfHashJoinBridge::hashOrFuture constructing promise"
               << std::endl;
   }
   promises_.emplace_back("CudfHashJoinBridge::hashOrFuture");
-  if (cudfDebugEnabled()) {
+  if (CudfConfig::getInstance().debugEnabled) {
     std::cout << "Calling CudfHashJoinBridge::hashOrFuture getSemiFuture"
               << std::endl;
   }
   *future = promises_.back().getSemiFuture();
-  if (cudfDebugEnabled()) {
+  if (CudfConfig::getInstance().debugEnabled) {
     std::cout << "Calling CudfHashJoinBridge::hashOrFuture returning nullopt"
               << std::endl;
   }
@@ -87,25 +92,35 @@ CudfHashJoinBuild::CudfHashJoinBuild(
           operatorId,
           fmt::format("[{}]", joinNode->id())),
       joinNode_(joinNode) {
-  if (cudfDebugEnabled()) {
+  if (CudfConfig::getInstance().debugEnabled) {
     std::cout << "CudfHashJoinBuild constructor" << std::endl;
   }
 }
 
 void CudfHashJoinBuild::addInput(RowVectorPtr input) {
-  if (cudfDebugEnabled()) {
+  if (CudfConfig::getInstance().debugEnabled) {
     std::cout << "Calling CudfHashJoinBuild::addInput" << std::endl;
   }
   // Queue inputs, process all at once.
   if (input->size() > 0) {
     auto cudfInput = std::dynamic_pointer_cast<CudfVector>(input);
     VELOX_CHECK_NOT_NULL(cudfInput);
+    // Count nulls in join key columns
+    auto [_, null_count] = cudf::bitmask_and(
+        cudfInput->getTableView(),
+        cudfInput->stream(),
+        cudf::get_current_device_resource_ref());
+    {
+      // Update statistics for null keys in join operator.
+      auto lockedStats = stats_.wlock();
+      lockedStats->numNullKeys += null_count;
+    }
     inputs_.push_back(std::move(cudfInput));
   }
 }
 
 bool CudfHashJoinBuild::needsInput() const {
-  if (cudfDebugEnabled()) {
+  if (CudfConfig::getInstance().debugEnabled) {
     std::cout << "Calling CudfHashJoinBuild::needsInput" << std::endl;
   }
   return !noMoreInput_;
@@ -116,7 +131,7 @@ RowVectorPtr CudfHashJoinBuild::getOutput() {
 }
 
 void CudfHashJoinBuild::noMoreInput() {
-  if (cudfDebugEnabled()) {
+  if (CudfConfig::getInstance().debugEnabled) {
     std::cout << "Calling CudfHashJoinBuild::noMoreInput" << std::endl;
   }
   VELOX_NVTX_OPERATOR_FUNC_RANGE();
@@ -146,14 +161,15 @@ void CudfHashJoinBuild::noMoreInput() {
   };
 
   auto stream = cudfGlobalStreamPool().get_stream();
-  auto tbl = getConcatenatedTable(inputs_, stream);
+  auto tbl = getConcatenatedTable(
+      inputs_, joinNode_->sources()[1]->outputType(), stream);
 
   // Release input data after synchronizing
   stream.synchronize();
   inputs_.clear();
 
   VELOX_CHECK_NOT_NULL(tbl);
-  if (cudfDebugEnabled()) {
+  if (CudfConfig::getInstance().debugEnabled) {
     std::cout << "Build table number of columns: " << tbl->num_columns()
               << std::endl;
     std::cout << "Build table number of rows: " << tbl->num_rows() << std::endl;
@@ -175,14 +191,14 @@ void CudfHashJoinBuild::noMoreInput() {
       !joinNode_->filter();
   auto hashObject = (buildHashJoin) ? std::make_shared<cudf::hash_join>(
                                           tbl->view().select(buildKeyIndices),
-                                          cudf::null_equality::EQUAL,
+                                          cudf::null_equality::UNEQUAL,
                                           stream)
                                     : nullptr;
   if (buildHashJoin) {
     VELOX_CHECK_NOT_NULL(hashObject);
   }
 
-  if (cudfDebugEnabled()) {
+  if (CudfConfig::getInstance().debugEnabled) {
     if (hashObject != nullptr) {
       printf("hashObject is not nullptr %p\n", hashObject.get());
     } else {
@@ -226,7 +242,7 @@ CudfHashJoinProbe::CudfHashJoinProbe(
           operatorId,
           fmt::format("[{}]", joinNode->id())),
       joinNode_(joinNode) {
-  if (cudfDebugEnabled()) {
+  if (CudfConfig::getInstance().debugEnabled) {
     std::cout << "CudfHashJoinProbe constructor" << std::endl;
   }
   auto probeType = joinNode_->sources()[0]->outputType();
@@ -234,7 +250,7 @@ CudfHashJoinProbe::CudfHashJoinProbe(
   auto const& leftKeys = joinNode_->leftKeys(); // probe keys
   auto const& rightKeys = joinNode_->rightKeys(); // build keys
 
-  if (cudfDebugEnabled()) {
+  if (CudfConfig::getInstance().debugEnabled) {
     for (int i = 0; i < probeType->names().size(); i++) {
       std::cout << "Left column " << i << ": " << probeType->names()[i]
                 << std::endl;
@@ -278,7 +294,7 @@ CudfHashJoinProbe::CudfHashJoinProbe(
   rightColumnOutputIndices_ = std::vector<size_t>();
   for (int i = 0; i < outputType->names().size(); i++) {
     auto const outputName = outputType->names()[i];
-    if (cudfDebugEnabled()) {
+    if (CudfConfig::getInstance().debugEnabled) {
       std::cout << "Output column " << i << ": " << outputName << std::endl;
     }
     auto channel = probeType->getChildIdxIfExists(outputName);
@@ -299,7 +315,7 @@ CudfHashJoinProbe::CudfHashJoinProbe(
         "Join field {} not in probe or build input", outputType->children()[i]);
   }
 
-  if (cudfDebugEnabled()) {
+  if (CudfConfig::getInstance().debugEnabled) {
     for (int i = 0; i < leftColumnIndicesToGather_.size(); i++) {
       std::cout << "Left index to gather " << i << ": "
                 << leftColumnIndicesToGather_[i] << std::endl;
@@ -353,30 +369,120 @@ CudfHashJoinProbe::CudfHashJoinProbe(
 }
 
 bool CudfHashJoinProbe::needsInput() const {
-  return !finished_ && input_ == nullptr;
+  if (CudfConfig::getInstance().debugEnabled) {
+    std::cout << "Calling CudfHashJoinProbe::needsInput" << std::endl;
+  }
+  if (joinNode_->isRightJoin() || joinNode_->isRightSemiFilterJoin()) {
+    return !noMoreInput_;
+  }
+  return !noMoreInput_ && !finished_ && input_ == nullptr;
 }
 
 void CudfHashJoinProbe::addInput(RowVectorPtr input) {
-  input_ = std::move(input);
+  if (skipInput_) {
+    VELOX_CHECK_NULL(input_);
+    return;
+  }
+  auto cudfInput = std::dynamic_pointer_cast<CudfVector>(input);
+  VELOX_CHECK_NOT_NULL(cudfInput);
+  // Count nulls in join key columns
+  auto [_, null_count] = cudf::bitmask_and(
+      cudfInput->getTableView(),
+      cudfInput->stream(),
+      cudf::get_current_device_resource_ref());
+  {
+    // Update statistics for null keys in join operator.
+    auto lockedStats = stats_.wlock();
+    lockedStats->numNullKeys += null_count;
+  }
+  if (!joinNode_->isRightJoin() && !joinNode_->isRightSemiFilterJoin()) {
+    input_ = std::move(input);
+    return;
+  }
+
+  // Queue inputs and process all at once
+  if (input->size() > 0) {
+    inputs_.push_back(std::move(cudfInput));
+  }
+}
+
+void CudfHashJoinProbe::noMoreInput() {
+  if (CudfConfig::getInstance().debugEnabled) {
+    std::cout << "Calling CudfHashJoinProbe::noMoreInput" << std::endl;
+  }
+  VELOX_NVTX_OPERATOR_FUNC_RANGE();
+  Operator::noMoreInput();
+  if (!joinNode_->isRightJoin() && !joinNode_->isRightSemiFilterJoin()) {
+    return;
+  }
+  std::vector<ContinuePromise> promises;
+  std::vector<std::shared_ptr<exec::Driver>> peers;
+  // Only last driver collects all answers
+  if (!operatorCtx_->task()->allPeersFinished(
+          planNodeId(), operatorCtx_->driver(), &future_, promises, peers)) {
+    return;
+  }
+  // Collect results from peers
+  for (auto& peer : peers) {
+    auto op = peer->findOperator(planNodeId());
+    auto* probe = dynamic_cast<CudfHashJoinProbe*>(op);
+    VELOX_CHECK_NOT_NULL(probe);
+    inputs_.insert(inputs_.end(), probe->inputs_.begin(), probe->inputs_.end());
+  }
+
+  SCOPE_EXIT {
+    // Realize the promises so that the other Drivers (which were not
+    // the last to finish) can continue from the barrier and finish.
+    peers.clear();
+    for (auto& promise : promises) {
+      promise.setValue();
+    }
+  };
+
+  auto stream = cudfGlobalStreamPool().get_stream();
+  auto tbl = getConcatenatedTable(
+      inputs_, joinNode_->sources()[1]->outputType(), stream);
+
+  // Release input data after synchronizing
+  stream.synchronize();
+
+  VELOX_CHECK_NOT_NULL(tbl);
+
+  if (CudfConfig::getInstance().debugEnabled) {
+    std::cout << "Probe table number of columns: " << tbl->num_columns()
+              << std::endl;
+    std::cout << "Probe table number of rows: " << tbl->num_rows() << std::endl;
+  }
+
+  // Store the concatenated table in input_
+  input_ = std::make_shared<CudfVector>(
+      operatorCtx_->pool(),
+      joinNode_->outputType(),
+      tbl->num_rows(),
+      std::move(tbl),
+      stream);
+
+  inputs_.clear();
 }
 
 RowVectorPtr CudfHashJoinProbe::getOutput() {
-  if (cudfDebugEnabled()) {
+  if (CudfConfig::getInstance().debugEnabled) {
     std::cout << "Calling CudfHashJoinProbe::getOutput" << std::endl;
   }
   VELOX_NVTX_OPERATOR_FUNC_RANGE();
 
-  if (!input_) {
+  if (finished_ or !hashObject_.has_value()) {
     return nullptr;
   }
-  if (!hashObject_.has_value()) {
+
+  if (!input_) {
     return nullptr;
   }
   auto cudfInput = std::dynamic_pointer_cast<CudfVector>(input_);
   VELOX_CHECK_NOT_NULL(cudfInput);
   auto stream = cudfInput->stream();
   auto leftTable = cudfInput->release(); // probe table
-  if (cudfDebugEnabled()) {
+  if (CudfConfig::getInstance().debugEnabled) {
     std::cout << "Probe table number of columns: " << leftTable->num_columns()
               << std::endl;
     std::cout << "Probe table number of rows: " << leftTable->num_rows()
@@ -389,7 +495,7 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
   auto& rightTable = hashObject_.value().first;
   auto& hb = hashObject_.value().second;
   VELOX_CHECK_NOT_NULL(rightTable);
-  if (cudfDebugEnabled()) {
+  if (CudfConfig::getInstance().debugEnabled) {
     if (rightTable != nullptr)
       printf(
           "right_table is not nullptr %p hasValue(%d)\n",
@@ -400,6 +506,24 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
           "hb is not nullptr %p hasValue(%d)\n",
           hb.get(),
           hashObject_.has_value());
+  }
+
+  // Special case for null-aware anti join where
+  // build table is not empty, no nulls, and probe table has nulls
+  if (joinNode_->isNullAware() and !joinNode_->filter()) {
+    auto const rightTableHasNulls =
+        cudf::has_nulls(rightTable->view().select(rightKeyIndices_));
+    auto const leftTableHasNulls =
+        cudf::has_nulls(leftTable->view().select(leftKeyIndices_));
+    if (rightTable->num_rows() > 0 and !rightTableHasNulls and
+        leftTableHasNulls) {
+      // drop nulls on probe table
+      leftTable = cudf::drop_nulls(
+          leftTable->view(),
+          leftKeyIndices_,
+          stream,
+          cudf::get_current_device_resource_ref());
+    }
   }
 
   std::unique_ptr<rmm::device_uvector<cudf::size_type>> leftJoinIndices;
@@ -417,7 +541,7 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
           leftTableView,
           rightTableView,
           tree_.back(),
-          cudf::null_equality::EQUAL,
+          cudf::null_equality::UNEQUAL,
           std::nullopt,
           stream);
     } else {
@@ -433,7 +557,7 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
           leftTableView,
           rightTableView,
           tree_.back(),
-          cudf::null_equality::EQUAL,
+          cudf::null_equality::UNEQUAL,
           std::nullopt,
           stream);
     } else {
@@ -449,14 +573,14 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
           rightTableView,
           leftTableView,
           tree_.back(),
-          cudf::null_equality::EQUAL,
+          cudf::null_equality::UNEQUAL,
           std::nullopt,
           stream);
     } else {
       std::tie(rightJoinIndices, leftJoinIndices) = cudf::left_join(
           rightTableView.select(rightKeyIndices_),
           leftTableView.select(leftKeyIndices_),
-          cudf::null_equality::EQUAL,
+          cudf::null_equality::UNEQUAL,
           stream,
           cudf::get_current_device_resource_ref());
     }
@@ -468,16 +592,25 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
           leftTableView,
           rightTableView,
           tree_.back(),
-          cudf::null_equality::EQUAL,
+          cudf::null_equality::UNEQUAL,
           stream,
           cudf::get_current_device_resource_ref());
     } else {
-      leftJoinIndices = cudf::left_anti_join(
-          leftTableView.select(leftKeyIndices_),
-          rightTableView.select(rightKeyIndices_),
-          cudf::null_equality::EQUAL,
-          stream,
-          cudf::get_current_device_resource_ref());
+      auto const rightTableHasNulls =
+          cudf::has_nulls(rightTableView.select(rightKeyIndices_));
+      if (joinNode_->isNullAware() and rightTableHasNulls) {
+        // empty result
+        leftJoinIndices =
+            std::make_unique<rmm::device_uvector<cudf::size_type>>(
+                0, stream, cudf::get_current_device_resource_ref());
+      } else {
+        leftJoinIndices = cudf::left_anti_join(
+            leftTableView.select(leftKeyIndices_),
+            rightTableView.select(rightKeyIndices_),
+            cudf::null_equality::UNEQUAL,
+            stream,
+            cudf::get_current_device_resource_ref());
+      }
     }
   } else if (joinNode_->isLeftSemiFilterJoin()) {
     if (joinNode_->filter()) {
@@ -487,14 +620,14 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
           leftTableView,
           rightTableView,
           tree_.back(),
-          cudf::null_equality::EQUAL,
+          cudf::null_equality::UNEQUAL,
           stream,
           cudf::get_current_device_resource_ref());
     } else {
       leftJoinIndices = cudf::left_semi_join(
           leftTableView.select(leftKeyIndices_),
           rightTableView.select(rightKeyIndices_),
-          cudf::null_equality::EQUAL,
+          cudf::null_equality::UNEQUAL,
           stream,
           cudf::get_current_device_resource_ref());
     }
@@ -506,14 +639,14 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
           rightTableView,
           leftTableView,
           tree_.back(),
-          cudf::null_equality::EQUAL,
+          cudf::null_equality::UNEQUAL,
           stream,
           cudf::get_current_device_resource_ref());
     } else {
       rightJoinIndices = cudf::left_semi_join(
           rightTableView.select(rightKeyIndices_),
           leftTableView.select(leftKeyIndices_),
-          cudf::null_equality::EQUAL,
+          cudf::null_equality::UNEQUAL,
           stream,
           cudf::get_current_device_resource_ref());
     }
@@ -537,7 +670,7 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
   auto rightResult =
       cudf::gather(rightInput, rightIndicesCol, oobPolicy, stream);
 
-  if (cudfDebugEnabled()) {
+  if (CudfConfig::getInstance().debugEnabled) {
     std::cout << "Left result number of columns: " << leftResult->num_columns()
               << std::endl;
     std::cout << "Right result number of columns: "
@@ -568,7 +701,23 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
       pool(), outputType_, size, std::move(cudfOutput), stream);
 }
 
+bool CudfHashJoinProbe::skipProbeOnEmptyBuild() const {
+  auto const joinType = joinNode_->joinType();
+  return isInnerJoin(joinType) || isLeftSemiFilterJoin(joinType) ||
+      isRightJoin(joinType) || isRightSemiFilterJoin(joinType) ||
+      isRightSemiProjectJoin(joinType);
+}
+
 exec::BlockingReason CudfHashJoinProbe::isBlocked(ContinueFuture* future) {
+  if ((joinNode_->isRightJoin() || joinNode_->isRightSemiFilterJoin()) &&
+      hashObject_.has_value()) {
+    if (!future_.valid()) {
+      return exec::BlockingReason::kNotBlocked;
+    }
+    *future = std::move(future_);
+    return exec::BlockingReason::kWaitForJoinProbe;
+  }
+
   if (hashObject_.has_value()) {
     return exec::BlockingReason::kNotBlocked;
   }
@@ -582,7 +731,7 @@ exec::BlockingReason CudfHashJoinProbe::isBlocked(ContinueFuture* future) {
   auto hashObject = cudfJoinBridge->hashOrFuture(future);
 
   if (!hashObject.has_value()) {
-    if (cudfDebugEnabled()) {
+    if (CudfConfig::getInstance().debugEnabled) {
       std::cout << "CudfHashJoinProbe is blocked, waiting for join build"
                 << std::endl;
     }
@@ -590,6 +739,25 @@ exec::BlockingReason CudfHashJoinProbe::isBlocked(ContinueFuture* future) {
   }
   hashObject_ = std::move(hashObject);
 
+  auto& rightTable = hashObject_.value().first;
+  // should be rightTable->numDistinct() but it needs compute,
+  // so we use num_rows()
+  if (rightTable->num_rows() == 0) {
+    if (skipProbeOnEmptyBuild()) {
+      if (operatorCtx_->driverCtx()
+              ->queryConfig()
+              .hashProbeFinishEarlyOnEmptyBuild()) {
+        noMoreInput();
+      } else {
+        skipInput_ = true;
+      }
+    }
+  }
+  if ((joinNode_->isRightJoin() || joinNode_->isRightSemiFilterJoin()) &&
+      future_.valid()) {
+    *future = std::move(future_);
+    return exec::BlockingReason::kWaitForJoinProbe;
+  }
   return exec::BlockingReason::kNotBlocked;
 }
 
@@ -607,7 +775,7 @@ std::unique_ptr<exec::Operator> CudfHashJoinBridgeTranslator::toOperator(
     exec::DriverCtx* ctx,
     int32_t id,
     const core::PlanNodePtr& node) {
-  if (cudfDebugEnabled()) {
+  if (CudfConfig::getInstance().debugEnabled) {
     std::cout << "Calling CudfHashJoinBridgeTranslator::toOperator"
               << std::endl;
   }
@@ -620,7 +788,7 @@ std::unique_ptr<exec::Operator> CudfHashJoinBridgeTranslator::toOperator(
 
 std::unique_ptr<exec::JoinBridge> CudfHashJoinBridgeTranslator::toJoinBridge(
     const core::PlanNodePtr& node) {
-  if (cudfDebugEnabled()) {
+  if (CudfConfig::getInstance().debugEnabled) {
     std::cout << "Calling CudfHashJoinBridgeTranslator::toJoinBridge"
               << std::endl;
   }
@@ -634,7 +802,7 @@ std::unique_ptr<exec::JoinBridge> CudfHashJoinBridgeTranslator::toJoinBridge(
 
 exec::OperatorSupplier CudfHashJoinBridgeTranslator::toOperatorSupplier(
     const core::PlanNodePtr& node) {
-  if (cudfDebugEnabled()) {
+  if (CudfConfig::getInstance().debugEnabled) {
     std::cout << "Calling CudfHashJoinBridgeTranslator::toOperatorSupplier"
               << std::endl;
   }

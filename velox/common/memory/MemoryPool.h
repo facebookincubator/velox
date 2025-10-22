@@ -42,6 +42,9 @@ class MemoryManager;
 
 constexpr int64_t kMaxMemory = std::numeric_limits<int64_t>::max();
 
+template <typename T>
+class StlAllocator;
+
 /// This class provides the memory allocation interfaces for a query execution.
 /// Each query execution entity creates a dedicated memory pool object. The
 /// memory pool objects from a query are organized as a tree with four levels
@@ -91,6 +94,9 @@ constexpr int64_t kMaxMemory = std::numeric_limits<int64_t>::max();
 /// also provides memory usage accounting.
 class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
  public:
+  template <typename T>
+  using TStlAllocator = StlAllocator<T>;
+
   /// Defines the kinds of a memory pool.
   enum class Kind {
     /// The leaf memory pool is used for memory allocation. User can allocate
@@ -112,6 +118,12 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
     /// memory pools whose name matches the specified regular expression. Empty
     /// string means no match for all.
     std::string debugPoolNameRegex;
+
+    /// Warning threshold in bytes for debug memory pools. When set to a
+    /// non-zero value, a warning will be logged once per memory pool when
+    /// allocations cause the pool to exceed this threshold. A value of
+    /// 0 means no warning threshold is enforced.
+    uint64_t debugPoolWarnThresholdBytes{0};
   };
 
   struct Options {
@@ -239,6 +251,13 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
 
   /// Frees an allocated buffer.
   virtual void free(void* p, int64_t size) = 0;
+
+  /// Transfer the ownership of memory at 'buffer' for 'size' bytes to the
+  /// memory pool 'dest'. Returns true if the transfer succeeds.
+  virtual bool
+  transferTo(MemoryPool* /*dest*/, void* /*buffer*/, uint64_t /*size*/) {
+    return false;
+  }
 
   /// Allocates one or more runs that add up to at least 'numPages', with the
   /// smallest run being at least 'minSizeClass' pages. 'minSizeClass' must be
@@ -604,6 +623,8 @@ class MemoryPoolImpl : public MemoryPool {
 
   void free(void* p, int64_t size) override;
 
+  bool transferTo(MemoryPool* dest, void* buffer, uint64_t size) override;
+
   void allocateNonContiguous(
       MachinePageCount numPages,
       Allocation& out,
@@ -667,17 +688,7 @@ class MemoryPoolImpl : public MemoryPool {
 
   void setDestructionCallback(const DestructionCallback& callback);
 
-  std::string toString(bool detail = false) const override {
-    std::string result;
-    {
-      std::lock_guard<std::mutex> l(mutex_);
-      result = toStringLocked();
-    }
-    if (detail) {
-      result += "\n" + treeMemoryUsage();
-    }
-    return result;
-  }
+  std::string toString(bool detail = false) const override;
 
   /// Detailed debug pool state printout by traversing the pool structure from
   /// the root memory pool.
@@ -997,6 +1008,15 @@ class MemoryPoolImpl : public MemoryPool {
   // pool is enabled.
   void leakCheckDbg();
 
+  // Dump the recorded call sites of the memory allocations in
+  // 'debugAllocRecords_' to the string.
+  std::string dumpRecordsDbgLocked() const;
+
+  std::string dumpRecordsDbg() const {
+    std::lock_guard<std::mutex> l(debugAllocMutex_);
+    return dumpRecordsDbgLocked();
+  }
+
   void handleAllocationFailure(const std::string& failureMessage);
 
   MemoryManager* const manager_;
@@ -1060,10 +1080,13 @@ class MemoryPoolImpl : public MemoryPool {
   std::atomic_uint64_t numCapacityGrowths_{0};
 
   // Mutex for 'debugAllocRecords_'.
-  std::mutex debugAllocMutex_;
+  mutable std::mutex debugAllocMutex_;
 
   // Map from address to 'AllocationRecord'.
   std::unordered_map<uint64_t, AllocationRecord> debugAllocRecords_;
+
+  // Flag to track if warning threshold has been exceeded once for this pool.
+  bool debugWarnThresholdExceeded_{false};
 };
 
 /// An Allocator backed by a memory pool for STL containers.
@@ -1074,6 +1097,8 @@ class StlAllocator {
   MemoryPool& pool;
 
   /* implicit */ StlAllocator(MemoryPool& pool) : pool{pool} {}
+
+  explicit StlAllocator(MemoryPool* pool) : pool{*pool} {}
 
   template <typename U>
   /* implicit */ StlAllocator(const StlAllocator<U>& a) : pool{a.pool} {}
@@ -1092,11 +1117,6 @@ class StlAllocator {
       return &this->pool == &rhs.pool;
     }
     return false;
-  }
-
-  template <typename T1>
-  bool operator!=(const StlAllocator<T1>& rhs) const {
-    return !(*this == rhs);
   }
 };
 } // namespace facebook::velox::memory

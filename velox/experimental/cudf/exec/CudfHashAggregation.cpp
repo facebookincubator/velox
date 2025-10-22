@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/CudfHashAggregation.h"
-#include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
@@ -426,7 +426,7 @@ std::unique_ptr<cudf_velox::CudfHashAggregation::Aggregator> createAggregator(
     VectorPtr constant,
     bool isGlobal,
     const TypePtr& resultType) {
-  auto prefix = cudf_velox::CudfOptions::getInstance().prefix();
+  auto prefix = cudf_velox::CudfConfig::getInstance().functionNamePrefix;
   if (kind.rfind(prefix + "sum", 0) == 0) {
     return std::make_unique<SumAggregator>(
         step, inputIndex, constant, isGlobal, resultType);
@@ -465,7 +465,7 @@ core::AggregationNode::Step getCompanionStep(
     std::string const& kind,
     core::AggregationNode::Step step) {
   for (const auto& [k, v] : companionStep) {
-    if (folly::StringPiece(kind).endsWith(k)) {
+    if (kind.ends_with(k)) {
       step = v;
       break;
     }
@@ -475,7 +475,7 @@ core::AggregationNode::Step getCompanionStep(
 
 std::string getOriginalName(std::string const& kind) {
   for (const auto& [k, v] : companionStep) {
-    if (folly::StringPiece(kind).endsWith(k)) {
+    if (kind.ends_with(k)) {
       return kind.substr(0, kind.length() - k.length());
     }
   }
@@ -485,7 +485,7 @@ std::string getOriginalName(std::string const& kind) {
 bool hasFinalAggs(
     std::vector<core::AggregationNode::Aggregate> const& aggregates) {
   return std::any_of(aggregates.begin(), aggregates.end(), [](auto const& agg) {
-    return folly::StringPiece(agg.call->name()).endsWith("_merge_extract");
+    return agg.call->name().ends_with("_merge_extract");
   });
 }
 
@@ -577,16 +577,6 @@ auto toIntermediateAggregators(
     }
   }
   return aggregators;
-}
-
-std::unique_ptr<cudf::table> makeEmptyTable(TypePtr const& inputType) {
-  std::vector<std::unique_ptr<cudf::column>> emptyColumns;
-  for (size_t i = 0; i < inputType->size(); ++i) {
-    auto emptyColumn = cudf::make_empty_column(
-        cudf_velox::veloxToCudfTypeId(inputType->childAt(i)));
-    emptyColumns.push_back(std::move(emptyColumn));
-  }
-  return std::make_unique<cudf::table>(std::move(emptyColumns));
 }
 
 } // namespace
@@ -938,8 +928,7 @@ RowVectorPtr CudfHashAggregation::getOutput() {
 
   auto stream = cudfGlobalStreamPool().get_stream();
 
-  auto tbl = inputs_.empty() ? makeEmptyTable(inputType_)
-                             : getConcatenatedTable(inputs_, stream);
+  auto tbl = getConcatenatedTable(inputs_, inputType_, stream);
 
   // Release input data after synchronizing.
   stream.synchronize();

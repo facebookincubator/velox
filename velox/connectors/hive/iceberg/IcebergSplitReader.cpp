@@ -54,7 +54,8 @@ IcebergSplitReader::IcebergSplitReader(
 
 void IcebergSplitReader::prepareSplit(
     std::shared_ptr<common::MetadataFilter> metadataFilter,
-    dwio::common::RuntimeStatistics& runtimeStats) {
+    dwio::common::RuntimeStatistics& runtimeStats,
+    const folly::F14FastMap<std::string, std::string>& fileReadOps) {
   createReader();
   if (emptySplit_) {
     return;
@@ -66,7 +67,7 @@ void IcebergSplitReader::prepareSplit(
     return;
   }
 
-  createRowReader(std::move(metadataFilter), std::move(rowType));
+  createRowReader(std::move(metadataFilter), std::move(rowType), std::nullopt);
 
   std::shared_ptr<const HiveIcebergSplit> icebergSplit =
       std::dynamic_pointer_cast<const HiveIcebergSplit>(hiveSplit_);
@@ -84,7 +85,7 @@ void IcebergSplitReader::prepareSplit(
                 hiveSplit_->filePath,
                 fileHandleFactory_,
                 connectorQueryCtx_,
-                executor_,
+                ioExecutor_,
                 hiveConfig_,
                 ioStats_,
                 fsStats_,
@@ -109,7 +110,7 @@ uint64_t IcebergSplitReader::next(uint64_t size, VectorPtr& output) {
   }
 
   const auto actualSize = baseRowReader_->nextReadSize(size);
-
+  baseReadOffset_ = baseRowReader_->nextRowNumber() - splitOffset_;
   if (actualSize == dwio::common::RowReader::kAtEnd) {
     return 0;
   }
@@ -136,7 +137,6 @@ uint64_t IcebergSplitReader::next(uint64_t size, VectorPtr& output) {
       : nullptr;
 
   auto rowsScanned = baseRowReader_->next(actualSize, output, &mutation);
-  baseReadOffset_ += rowsScanned;
 
   return rowsScanned;
 }

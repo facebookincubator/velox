@@ -21,16 +21,21 @@
 
 namespace facebook::velox::core {
 
-/// A simple wrapper around velox::ConfigBase. Defines constants for query
+/// A simple wrapper around velox::IConfig. Defines constants for query
 /// config properties and accessor methods.
 /// Create per query context. Does not have a singleton instance.
 /// Does not allow altering properties on the fly. Only at creation time.
 class QueryConfig {
  public:
-  explicit QueryConfig(
-      const std::unordered_map<std::string, std::string>& values);
+  explicit QueryConfig(std::unordered_map<std::string, std::string> values);
 
-  explicit QueryConfig(std::unordered_map<std::string, std::string>&& values);
+  // This is needed only to resolve correct ctor for cases like
+  // QueryConfig{{}} or QueryConfig({}).
+  struct ConfigTag {};
+
+  explicit QueryConfig(
+      ConfigTag /*tag*/,
+      std::shared_ptr<const config::IConfig> config);
 
   /// Maximum memory that a query can use on a single host.
   static constexpr const char* kQueryMaxMemoryPerNode =
@@ -39,6 +44,11 @@ class QueryConfig {
   /// User provided session timezone. Stores a string with the actual timezone
   /// name, e.g: "America/Los_Angeles".
   static constexpr const char* kSessionTimezone = "session_timezone";
+
+  /// Session start time in milliseconds since Unix epoch. This represents when
+  /// the query session began execution. Used for functions that need to know
+  /// the session start time (e.g., current_date, localtime).
+  static constexpr const char* kSessionStartTime = "start_time";
 
   /// If true, timezone-less timestamp conversions (e.g. string to timestamp,
   /// when the string does not specify a timezone) will be adjusted to the user
@@ -63,6 +73,19 @@ class QueryConfig {
   /// small batches, e.g. < 10K rows.
   static constexpr const char* kExprTrackCpuUsage =
       "expression.track_cpu_usage";
+
+  /// Controls whether non-deterministic expressions are deduplicated during
+  /// compilation. This is intended for testing and debugging purposes. By
+  /// default, this is set to true to preserve standard behavior. If set to
+  /// false, non-deterministic functions (such as rand()) will not be
+  /// deduplicated. Since non-deterministic functions may yield different
+  /// outputs on each call, disabling deduplication guarantees that the function
+  /// is executed only when the original expression is evaluated, rather than
+  /// being triggered for every deduplicated instance. This ensures each
+  /// invocation corresponds directly to the actual expression, maintaining
+  /// independent behavior for each call.
+  static constexpr const char* kExprDedupNonDeterministic =
+      "expression.dedup_non_deterministic";
 
   /// Whether to track CPU usage for stages of individual operators. True by
   /// default. Can be expensive when processing small batches, e.g. < 10K rows.
@@ -138,6 +161,11 @@ class QueryConfig {
   /// buffer.
   static constexpr const char* kLocalExchangePartitionBufferPreserveEncoding =
       "local_exchange_partition_buffer_preserve_encoding";
+
+  /// Maximum number of vectors buffered in each local merge source before
+  /// blocking to wait for consumers.
+  static constexpr const char* kLocalMergeSourceQueueSize =
+      "local_merge_source_queue_size";
 
   /// Maximum size in bytes to accumulate in ExchangeQueue. Enforced
   /// approximately, not strictly.
@@ -250,6 +278,13 @@ class QueryConfig {
   /// Window spilling flag, only applies if "spill_enabled" flag is set.
   static constexpr const char* kWindowSpillEnabled = "window_spill_enabled";
 
+  /// When processing spilled window data, read batches of whole partitions
+  /// having at least that many rows. Set to 1 to read one whole partition at a
+  /// time. Each driver processing the Window operator will process that much
+  /// data at once.
+  static constexpr const char* kWindowSpillMinReadBatchRows =
+      "window_spill_min_read_batch_rows";
+
   /// If true, the memory arbitrator will reclaim memory from table writer by
   /// flushing its buffered data to disk. only applies if "spill_enabled" flag
   /// is set.
@@ -264,7 +299,8 @@ class QueryConfig {
       "topn_row_number_spill_enabled";
 
   /// LocalMerge spilling flag, only applies if "spill_enabled" flag is set.
-  static constexpr const char* kLocalMergeSpillEnabled = "local_merge_enabled";
+  static constexpr const char* kLocalMergeSpillEnabled =
+      "local_merge_spill_enabled";
 
   /// Specify the max number of local sources to merge at a time.
   static constexpr const char* kLocalMergeMaxNumMergeSources =
@@ -362,6 +398,14 @@ class QueryConfig {
   /// If true, array_agg() aggregation function will ignore nulls in the input.
   static constexpr const char* kPrestoArrayAggIgnoreNulls =
       "presto.array_agg.ignore_nulls";
+
+  /// If true, Spark function's behavior is ANSI-compliant, e.g. throws runtime
+  /// exception instead of returning null on invalid inputs. It affects only
+  /// functions explicitly marked as "ANSI compliant".
+  /// Note: This feature is still under development to achieve full ANSI
+  /// compliance. Users can refer to the Spark function documentation to verify
+  /// the current support status of a specific function.
+  static constexpr const char* kSparkAnsiEnabled = "spark.ansi_enabled";
 
   /// The default number of expected items for the bloomfilter.
   static constexpr const char* kSparkBloomFilterExpectedNumItems =
@@ -466,11 +510,6 @@ class QueryConfig {
   /// Base dir of a query to store tracing data.
   static constexpr const char* kQueryTraceDir = "query_trace_dir";
 
-  /// @Deprecated. Do not use. Remove once existing call sites are updated.
-  /// The plan node id whose input data will be traced.
-  /// Empty string if only want to trace the query metadata.
-  static constexpr const char* kQueryTraceNodeIds = "query_trace_node_id";
-
   /// The plan node id whose input data will be traced.
   /// Empty string if only want to trace the query metadata.
   static constexpr const char* kQueryTraceNodeId = "query_trace_node_id";
@@ -527,9 +566,18 @@ class QueryConfig {
   static constexpr const char* kDebugMemoryPoolNameRegex =
       "debug_memory_pool_name_regex";
 
+  /// Warning threshold in bytes for debug memory pools. When set to a
+  /// non-zero value, a warning will be logged once per memory pool when
+  /// allocations cause the pool to exceed this threshold. This is useful for
+  /// identifying memory usage patterns during debugging. Requires allocation
+  /// tracking to be enabled via `debug_memory_pool_name_regex` for the pool. A
+  /// value of 0 means no warning threshold is enforced.
+  static constexpr const char* kDebugMemoryPoolWarnThresholdBytes =
+      "debug_memory_pool_warn_threshold_bytes";
+
   /// Some lambda functions over arrays and maps are evaluated in batches of the
   /// underlying elements that comprise the arrays/maps. This is done to make
-  /// the batch size managable as array vectors can have thousands of elements
+  /// the batch size manageable as array vectors can have thousands of elements
   /// each and hit scaling limits as implementations typically expect
   /// BaseVectors to a couple of thousand entries. This lets up tune those batch
   /// sizes.
@@ -668,8 +716,43 @@ class QueryConfig {
   static constexpr const char* kMaxNumSplitsListenedTo =
       "max_num_splits_listened_to";
 
+  /// Source of the query. Used by Presto to identify the file system username.
+  static constexpr const char* kSource = "source";
+
+  /// Client tags of the query. Used by Presto to identify the file system
+  /// username.
+  static constexpr const char* kClientTags = "client_tags";
+
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+  /// Enable (reader) row size tracker as a fallback to file level row size
+  /// estimates.
+  static constexpr const char* kRowSizeTrackingEnabled =
+      "row_size_tracking_enabled";
+#endif
+
+  /// Enable (reader) row size tracker as a fallback to file level row size
+  /// estimates.
+  static constexpr const char* kRowSizeTrackingMode = "row_size_tracking_mode";
+
+  enum class RowSizeTrackingMode {
+    DISABLED = 0,
+    EXCLUDE_DELTA_SPLITS = 1,
+    ENABLED_FOR_ALL = 2,
+  };
+
   bool selectiveNimbleReaderEnabled() const {
     return get<bool>(kSelectiveNimbleReaderEnabled, false);
+  }
+
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+  bool rowSizeTrackingEnabled() const {
+    return get<bool>(kRowSizeTrackingEnabled, true);
+  }
+#endif
+
+  RowSizeTrackingMode rowSizeTrackingMode() const {
+    return get<RowSizeTrackingMode>(
+        kRowSizeTrackingMode, RowSizeTrackingMode::ENABLED_FOR_ALL);
   }
 
   bool debugDisableExpressionsWithPeeling() const {
@@ -690,6 +773,12 @@ class QueryConfig {
 
   std::string debugMemoryPoolNameRegex() const {
     return get<std::string>(kDebugMemoryPoolNameRegex, "");
+  }
+
+  uint64_t debugMemoryPoolWarnThresholdBytes() const {
+    return config::toCapacity(
+        get<std::string>(kDebugMemoryPoolWarnThresholdBytes, "0B"),
+        config::CapacityUnit::BYTE);
   }
 
   std::optional<uint32_t> debugAggregationApproxPercentileFixedRandomSeed()
@@ -793,6 +882,10 @@ class QueryConfig {
     return get<bool>(kLocalExchangePartitionBufferPreserveEncoding, false);
   }
 
+  uint32_t localMergeSourceQueueSize() const {
+    return get<uint32_t>(kLocalMergeSourceQueueSize, 2);
+  }
+
   uint64_t maxExchangeBufferSize() const {
     static constexpr uint64_t kDefault = 32UL << 20;
     return get<uint64_t>(kMaxExchangeBufferSize, kDefault);
@@ -872,6 +965,12 @@ class QueryConfig {
     return get<std::string>(kSessionTimezone, "");
   }
 
+  /// Returns the session start time in milliseconds since Unix epoch.
+  /// If not set, returns 0 (or epoch).
+  int64_t sessionStartTimeMs() const {
+    return get<int64_t>(kSessionStartTime, 0);
+  }
+
   bool exprEvalSimplified() const {
     return get<bool>(kExprEvalSimplified, false);
   }
@@ -898,6 +997,10 @@ class QueryConfig {
 
   bool windowSpillEnabled() const {
     return get<bool>(kWindowSpillEnabled, true);
+  }
+
+  uint32_t windowSpillMinReadBatchRows() const {
+    return get<uint32_t>(kWindowSpillMinReadBatchRows, 1'000);
   }
 
   bool writerSpillEnabled() const {
@@ -989,12 +1092,6 @@ class QueryConfig {
     return get<std::string>(kQueryTraceDir, "");
   }
 
-  /// @Deprecated. Do not use. Remove once existing call sites are updated.
-  std::string queryTraceNodeIds() const {
-    // Use the new config kQueryTraceNodeId.
-    return get<std::string>(kQueryTraceNodeId, "");
-  }
-
   std::string queryTraceNodeId() const {
     // The default query trace node ID, empty by default.
     return get<std::string>(kQueryTraceNodeId, "");
@@ -1019,6 +1116,10 @@ class QueryConfig {
 
   bool prestoArrayAggIgnoreNulls() const {
     return get<bool>(kPrestoArrayAggIgnoreNulls, false);
+  }
+
+  bool sparkAnsiEnabled() const {
+    return get<bool>(kSparkAnsiEnabled, false);
   }
 
   int64_t sparkBloomFilterExpectedNumItems() const {
@@ -1066,6 +1167,10 @@ class QueryConfig {
 
   bool exprTrackCpuUsage() const {
     return get<bool>(kExprTrackCpuUsage, false);
+  }
+
+  bool exprDedupNonDeterministic() const {
+    return get<bool>(kExprDedupNonDeterministic, true);
   }
 
   bool operatorTrackCpuUsage() const {
@@ -1213,13 +1318,26 @@ class QueryConfig {
     return get<int32_t>(kMaxNumSplitsListenedTo, 0);
   }
 
+  std::string source() const {
+    return get<std::string>(kSource, "");
+  }
+
+  std::string clientTags() const {
+    return get<std::string>(kClientTags, "");
+  }
+
   template <typename T>
   T get(const std::string& key, const T& defaultValue) const {
     return config_->get<T>(key, defaultValue);
   }
+
   template <typename T>
   std::optional<T> get(const std::string& key) const {
-    return std::optional<T>(config_->get<T>(key));
+    return config_->get<T>(key);
+  }
+
+  const std::shared_ptr<const config::IConfig>& config() const {
+    return config_;
   }
 
   /// Test-only method to override the current query config properties.
@@ -1232,6 +1350,6 @@ class QueryConfig {
  private:
   void validateConfig();
 
-  std::unique_ptr<velox::config::ConfigBase> config_;
+  std::shared_ptr<const config::IConfig> config_;
 };
 } // namespace facebook::velox::core

@@ -339,7 +339,7 @@ void registerNoisySumGaussianAggregate(
         }
         return std::make_unique<NoisySumGaussianAggregate>(DOUBLE());
       },
-      {false /*orderSensitive*/, false /*companionFunction*/},
+      {.orderSensitive = false},
       withCompanionFunctions,
       overwrite);
 }

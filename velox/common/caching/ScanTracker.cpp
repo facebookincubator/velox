@@ -21,6 +21,20 @@
 
 namespace facebook::velox::cache {
 
+namespace {
+template <typename K, typename V, typename U>
+void update(folly::ConcurrentHashMap<K, V>& map, const K& key, U update) {
+  while (true) {
+    auto prev = map[key];
+    auto updated = prev;
+    update(updated);
+    if (map.assign_if_equal(key, prev, updated)) {
+      break;
+    }
+  }
+}
+} // namespace
+
 // Marks that 'bytes' worth of data may be accessed in the future. See
 // TrackingData for meaning of quantum.
 void ScanTracker::recordReference(
@@ -31,11 +45,10 @@ void ScanTracker::recordReference(
   if (fileGroupStats_) {
     fileGroupStats_->recordReference(fileId, groupId, id, bytes);
   }
-  std::lock_guard<std::mutex> l(mutex_);
-  auto& data = data_[id];
-  data.referencedBytes += bytes;
-  data.lastReferencedBytes = bytes;
-  sum_.referencedBytes += bytes;
+  update(data_, id, [&](auto& value) {
+    value.referencedBytes += bytes;
+    value.lastReferencedBytes = bytes;
+  });
 }
 
 void ScanTracker::recordRead(
@@ -46,10 +59,7 @@ void ScanTracker::recordRead(
   if (fileGroupStats_) {
     fileGroupStats_->recordRead(fileId, groupId, id, bytes);
   }
-  std::lock_guard<std::mutex> l(mutex_);
-  auto& data = data_[id];
-  data.readBytes += bytes;
-  sum_.readBytes += bytes;
+  update(data_, id, [&](auto& value) { value.readBytes += bytes; });
 }
 
 std::string ScanTracker::toString() const {

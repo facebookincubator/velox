@@ -21,7 +21,6 @@
 #include "velox/duckdb/conversion/DuckConversion.h"
 #include "velox/exec/Cursor.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
-#include "velox/vector/VariantToVector.h"
 #include "velox/vector/VectorTypeUtils.h"
 
 using facebook::velox::duckdb::duckdbTimestampToVelox;
@@ -811,7 +810,7 @@ std::vector<MaterializedRow> materialize(const RowVectorPtr& vector) {
     MaterializedRow row;
     row.reserve(numColumns);
     for (size_t j = 0; j < numColumns; ++j) {
-      row.push_back(vectorToVariant(simpleVectors[j], i));
+      row.push_back(simpleVectors[j]->variantAt(i));
     }
     rows.push_back(row);
   }
@@ -1420,7 +1419,7 @@ bool waitForTaskStateChange(
 void waitForAllTasksToBeDeleted(uint64_t maxWaitUs) {
   uint64_t waitUs = 0;
   while (Task::numRunningTasks() != 0) {
-    constexpr uint64_t kWaitInternalUs = 1'000;
+    constexpr uint64_t kWaitInternalUs = 50'000;
     std::this_thread::sleep_for(std::chrono::microseconds(kWaitInternalUs));
     waitUs += kWaitInternalUs;
     if (waitUs >= maxWaitUs) {
@@ -1440,6 +1439,15 @@ void waitForAllTasksToBeDeleted(uint64_t maxWaitUs) {
       "{} pending tasks\n{}",
       pendingTasks.size(),
       folly::join("\n", pendingTaskStats));
+}
+
+void cancelAllTasks() {
+  std::vector<std::shared_ptr<Task>> pendingTasks = Task::getRunningTasks();
+  for (const auto& task : pendingTasks) {
+    if (task->isRunning()) {
+      task->requestCancel();
+    }
+  }
 }
 
 std::shared_ptr<Task> assertQuery(

@@ -19,6 +19,7 @@
 #include "velox/expression/SignatureBinder.h"
 #include "velox/expression/type_calculation/TypeCalculation.h"
 #include "velox/type/Type.h"
+#include "velox/type/TypeUtil.h"
 
 namespace facebook::velox::exec {
 namespace {
@@ -70,6 +71,28 @@ std::optional<int> tryResolveLongLiteral(
       "Variable {} calculation failed.",
       variable);
   return integerVariablesBindings.at(variable);
+}
+
+std::optional<LongEnumParameter> tryResolveLongEnumLiteral(
+    const TypeSignature& parameter,
+    const std::unordered_map<std::string, LongEnumParameter>&
+        longEnumParameterVariableBindings) {
+  auto it = longEnumParameterVariableBindings.find(parameter.baseName());
+  if (it != longEnumParameterVariableBindings.end()) {
+    return it->second;
+  }
+  return std::nullopt;
+}
+
+std::optional<VarcharEnumParameter> tryResolveVarcharEnumLiteral(
+    const TypeSignature& parameter,
+    const std::unordered_map<std::string, VarcharEnumParameter>&
+        varcharEnumParameterVariableBindings) {
+  auto it = varcharEnumParameterVariableBindings.find(parameter.baseName());
+  if (it != varcharEnumParameterVariableBindings.end()) {
+    return it->second;
+  }
+  return std::nullopt;
 }
 
 // If the parameter is a named field from a row, ensure the names are
@@ -149,6 +172,32 @@ bool SignatureBinder::tryBind(
     }
   }
 
+  return true;
+}
+
+bool SignatureBinderBase::checkOrSetLongEnumParameter(
+    const std::string& parameterName,
+    const LongEnumParameter& params) {
+  auto it = longEnumVariablesBindings_.find(parameterName);
+  if (it != longEnumVariablesBindings_.end()) {
+    if (longEnumVariablesBindings_[parameterName] != params) {
+      return false;
+    }
+  }
+  longEnumVariablesBindings_[parameterName] = params;
+  return true;
+}
+
+bool SignatureBinderBase::checkOrSetVarcharEnumParameter(
+    const std::string& parameterName,
+    const VarcharEnumParameter& params) {
+  auto it = varcharEnumVariablesBindings_.find(parameterName);
+  if (it != varcharEnumVariablesBindings_.end()) {
+    if (varcharEnumVariablesBindings_[parameterName] != params) {
+      return false;
+    }
+  }
+  varcharEnumVariablesBindings_[parameterName] = params;
   return true;
 }
 
@@ -253,6 +302,45 @@ bool SignatureBinderBase::tryBind(
   }
 
   const auto& params = typeSignature.parameters();
+
+  // Handle homogeneous row case: row(T, ...)
+  if (typeSignature.isHomogeneousRow()) {
+    VELOX_CHECK_EQ(
+        params.size(), 1, "Homogeneous row must have exactly one parameter");
+
+    if (actualType->kind() != TypeKind::ROW) {
+      return false;
+    }
+
+    if (actualType->size() == 0) {
+      // Empty row is always compatible with homogeneous row.
+      return true;
+    }
+
+    // All children must unify to the same type variable T
+    const auto& typeParam = params[0];
+    const auto& paramBaseName = typeParam.baseName();
+
+    // First, check and extract the common child type if homogeneous.
+    const auto actualChildType =
+        velox::type::tryGetHomogeneousRowChild(actualType);
+    if (!actualChildType) {
+      return false;
+    }
+
+    if (variables().count(paramBaseName)) {
+      auto it = typeVariablesBindings_.find(paramBaseName);
+      if (it != typeVariablesBindings_.end()) {
+        return it->second->equivalent(*actualChildType);
+      } else {
+        typeVariablesBindings_[paramBaseName] = actualChildType;
+        return true;
+      }
+    } else {
+      return tryBind(typeParam, actualChildType);
+    }
+  }
+
   // Type Parameters can recurse.
   if (params.size() != actualType->parameters().size()) {
     return false;
@@ -264,6 +352,20 @@ bool SignatureBinderBase::tryBind(
       case TypeParameterKind::kLongLiteral:
         if (!checkOrSetIntegerParameter(
                 params[i].baseName(), actualParameter.longLiteral.value())) {
+          return false;
+        }
+        break;
+      case TypeParameterKind::kLongEnumLiteral:
+        if (!checkOrSetLongEnumParameter(
+                params[i].baseName(),
+                actualParameter.longEnumLiteral.value())) {
+          return false;
+        }
+        break;
+      case TypeParameterKind::kVarcharEnumLiteral:
+        if (!checkOrSetVarcharEnumParameter(
+                params[i].baseName(),
+                actualParameter.varcharEnumLiteral.value())) {
           return false;
         }
         break;
@@ -286,7 +388,11 @@ TypePtr SignatureBinder::tryResolveType(
     const exec::TypeSignature& typeSignature,
     const std::unordered_map<std::string, SignatureVariable>& variables,
     const std::unordered_map<std::string, TypePtr>& typeVariablesBindings,
-    std::unordered_map<std::string, int>& integerVariablesBindings) {
+    std::unordered_map<std::string, int>& integerVariablesBindings,
+    const std::unordered_map<std::string, LongEnumParameter>&
+        longEnumParameterVariableBindings,
+    const std::unordered_map<std::string, VarcharEnumParameter>&
+        varcharEnumParameterVariableBindings) {
   const auto& baseName = typeSignature.baseName();
 
   if (variables.count(baseName)) {
@@ -310,9 +416,26 @@ TypePtr SignatureBinder::tryResolveType(
       typeParameters.emplace_back(literal.value());
       continue;
     }
+    auto longEnumParameterliteral =
+        tryResolveLongEnumLiteral(param, longEnumParameterVariableBindings);
+    if (longEnumParameterliteral.has_value()) {
+      typeParameters.emplace_back(longEnumParameterliteral.value());
+      continue;
+    }
+    auto varcharEnumParameterliteral = tryResolveVarcharEnumLiteral(
+        param, varcharEnumParameterVariableBindings);
+    if (varcharEnumParameterliteral.has_value()) {
+      typeParameters.emplace_back(varcharEnumParameterliteral.value());
+      continue;
+    }
 
     auto type = tryResolveType(
-        param, variables, typeVariablesBindings, integerVariablesBindings);
+        param,
+        variables,
+        typeVariablesBindings,
+        integerVariablesBindings,
+        longEnumParameterVariableBindings,
+        varcharEnumParameterVariableBindings);
     if (!type) {
       return nullptr;
     }

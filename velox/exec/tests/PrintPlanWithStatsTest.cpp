@@ -48,6 +48,12 @@ void compareOutputs(
   for (; std::getline(iss, line);) {
     lineCount++;
     std::vector<std::string> potentialLines;
+    if (expectedLineIndex >= expectedRegex.size()) {
+      ASSERT_FALSE(true) << "Output has more lines than expected."
+                         << "\n  Source: " << testName
+                         << "\n  Line number: " << lineCount
+                         << "\n  Unexpected Line: " << line;
+    }
     auto expectedLine = expectedRegex.at(expectedLineIndex++);
     while (!RE2::FullMatch(line, expectedLine.line)) {
       potentialLines.push_back(expectedLine.line);
@@ -59,11 +65,18 @@ void compareOutputs(
                            << "\n  Expected Line one of: "
                            << folly::join(",", potentialLines);
       }
+      if (expectedLineIndex >= expectedRegex.size()) {
+        ASSERT_FALSE(true)
+            << "Output did not match and no more patterns to check."
+            << "\n  Source: " << testName << "\n  Line number: " << lineCount
+            << "\n  Line: " << line
+            << "\n  Expected Line one of: " << folly::join(",", potentialLines);
+      }
       expectedLine = expectedRegex.at(expectedLineIndex++);
     }
   }
   for (int i = expectedLineIndex; i < expectedRegex.size(); i++) {
-    ASSERT_TRUE(expectedRegex[expectedLineIndex].optional);
+    ASSERT_TRUE(expectedRegex[i].optional);
   }
 }
 
@@ -204,10 +217,12 @@ TEST_F(PrintPlanWithStatsTest, innerJoinWithTableScan) {
        {"          numStripes[ ]* sum: .+, count: 1, min: .+, max: .+"},
        {"          overreadBytes[ ]* sum: 0B, count: 1, min: 0B, max: 0B, avg: 0B"},
        {"          prefetchBytes       [ ]* sum: .+, count: 1, min: .+, max: .+"},
+       {"          preloadSplitPrepareTimeNanos[ ]* sum: .+, count: .+, min: .+, max: .+, avg: .+"},
        {"          preloadedSplits[ ]+sum: .+, count: .+, min: .+, max: .+",
         true},
        {"          processedSplits[ ]+sum: 20, count: 1, min: 20, max: 20, avg: 20"},
        {"          processedStrides[ ]+sum: 20, count: 1, min: 20, max: 20, avg: 20"},
+       {"          processedUnits      [ ]* sum: .+, count: .+, min: .+, max: .+"},
        {"          ramReadBytes        [ ]* sum: .+, count: 1, min: .+, max: .+"},
        {"          readyPreloadedSplits[ ]+sum: .+, count: .+, min: .+, max: .+",
         true},
@@ -215,8 +230,10 @@ TEST_F(PrintPlanWithStatsTest, innerJoinWithTableScan) {
        {"          runningFinishWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
        {"          runningGetOutputWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
        {"          storageReadBytes    [ ]* sum: .+, count: 1, min: .+, max: .+"},
-       {"          totalRemainingFilterTime\\s+sum: .+, count: .+, min: .+, max: .+"},
+       {"          totalRemainingFilterWallNanos\\s+sum: .+, count: .+, min: .+, max: .+"},
        {"          totalScanTime       [ ]* sum: .+, count: .+, min: .+, max: .+"},
+       {"          unitLoadNanos[ ]* sum: .+, count: .+, min: .+, max: .+, avg: .+"},
+       {"          waitForPreloadSplitNanos[ ]* sum: .+, count: .+, min: .+, max: .+, avg: .+"},
        {"    -- Project\\[1\\]\\[expressions: \\(u_c0:INTEGER, ROW\\[\"c0\"\\]\\), \\(u_c1:BIGINT, ROW\\[\"c1\"\\]\\)\\] -> u_c0:INTEGER, u_c1:BIGINT"},
        {"       Output: 100 rows \\(.+\\), Cpu time: .+, Blocked wall time: .+, Peak memory: 0B, Memory allocations: .+, Threads: 1, CPU breakdown: B/I/O/F (.+/.+/.+/.+)"},
        {"          runningAddInputWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
@@ -301,6 +318,7 @@ TEST_F(PrintPlanWithStatsTest, partialAggregateWithTableScan) {
          {"        prefetchBytes    [ ]* sum: .+, count: 1, min: .+, max: .+"},
          {"        processedSplits  [ ]* sum: 1, count: 1, min: 1, max: 1, avg: 1"},
          {"        processedStrides [ ]* sum: 1, count: 1, min: 1, max: 1, avg: 1"},
+         {"        processedUnits   [ ]* sum: .+, count: .+, min: .+, max: .+"},
          {"        preloadedSplits[ ]+sum: .+, count: .+, min: .+, max: .+",
           true},
          {"        ramReadBytes     [ ]* sum: .+, count: 1, min: .+, max: .+"},
@@ -310,8 +328,9 @@ TEST_F(PrintPlanWithStatsTest, partialAggregateWithTableScan) {
          {"        runningFinishWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
          {"        runningGetOutputWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
          {"        storageReadBytes [ ]* sum: .+, count: 1, min: .+, max: .+"},
-         {"        totalRemainingFilterTime\\s+sum: .+, count: .+, min: .+, max: .+"},
-         {"        totalScanTime    [ ]* sum: .+, count: .+, min: .+, max: .+"}});
+         {"        totalRemainingFilterWallNanos\\s+sum: .+, count: .+, min: .+, max: .+"},
+         {"        totalScanTime    [ ]* sum: .+, count: .+, min: .+, max: .+"},
+         {"        unitLoadNanos[ ]* sum: .+, count: .+, min: .+, max: .+, avg: .+"}});
   }
 }
 
@@ -351,13 +370,14 @@ TEST_F(PrintPlanWithStatsTest, tableWriterWithTableScan) {
        {"      dataSourceLazyCpuNanos\\s+sum: .+, count: .+, min: .+, max: .+"},
        {"      dataSourceLazyInputBytes\\s+sum: .+, count: .+, min: .+, max: .+"},
        {"      dataSourceLazyWallNanos\\s+sum: .+, count: .+, min: .+, max: .+"},
+       {"      dwrfWriterCount\\s+sum: .+, count: 1, min: .+, max: .+"},
        {"      numWrittenFiles\\s+sum: .+, count: 1, min: .+, max: .+"},
        {"      runningAddInputWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
        {"      runningFinishWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
        {"      runningGetOutputWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
        {"      runningWallNanos\\s+sum: .+, count: 1, min: .+, max: .+, avg: .+"},
        {"      stripeSize\\s+sum: .+, count: 1, min: .+, max: .+"},
-       {"      writeIOWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
+       {"      writeIOWallNanos\\s+sum: .+, count: 1, min: .+, max: .+, avg: .+"},
        {R"(  -- TableScan\[0\]\[table: hive_table\] -> c0:BIGINT, c1:INTEGER, c2:SMALLINT, c3:REAL, c4:DOUBLE, c5:VARCHAR)"},
        {R"(     Input: 100 rows \(.+\), Output: 100 rows \(.+\), Cpu time: .+, Blocked wall time: .+, Peak memory: .+, Memory allocations: .+, Threads: 1, Splits: 1, CPU breakdown: B/I/O/F (.+/.+/.+/.+))"},
        {"        connectorSplitSize[ ]* sum: .+, count: .+, min: .+, max: .+"},
@@ -375,6 +395,7 @@ TEST_F(PrintPlanWithStatsTest, tableWriterWithTableScan) {
        {"        prefetchBytes    [ ]* sum: .+, count: 1, min: .+, max: .+"},
        {"        processedSplits  [ ]* sum: 1, count: 1, min: 1, max: 1, avg: 1"},
        {"        processedStrides [ ]* sum: 1, count: 1, min: 1, max: 1, avg: 1"},
+       {"        processedUnits   [ ]* sum: .+, count: .+, min: .+, max: .+"},
        {"        preloadedSplits[ ]+sum: .+, count: .+, min: .+, max: .+",
         true},
        {"        ramReadBytes     [ ]* sum: .+, count: 1, min: .+, max: .+"},
@@ -384,8 +405,9 @@ TEST_F(PrintPlanWithStatsTest, tableWriterWithTableScan) {
        {"        runningFinishWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
        {"        runningGetOutputWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
        {"        storageReadBytes [ ]* sum: .+, count: 1, min: .+, max: .+"},
-       {"        totalRemainingFilterTime\\s+sum: .+, count: .+, min: .+, max: .+"},
-       {"        totalScanTime    [ ]* sum: .+, count: .+, min: .+, max: .+"}});
+       {"        totalRemainingFilterWallNanos\\s+sum: .+, count: .+, min: .+, max: .+"},
+       {"        totalScanTime    [ ]* sum: .+, count: .+, min: .+, max: .+"},
+       {"        unitLoadNanos[ ]* sum: .+, count: .+, min: .+, max: .+, avg: .+"}});
 }
 
 TEST_F(PrintPlanWithStatsTest, taskAPI) {

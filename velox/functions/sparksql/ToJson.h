@@ -13,7 +13,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#pragma once
 
+#include <vector>
 #include "velox/expression/ComplexViewTypes.h"
 #include "velox/functions/lib/DateTimeFormatter.h"
 #include "velox/functions/lib/TimeUtils.h"
@@ -44,9 +46,9 @@ template <typename T>
 void appendDecimal(T value, const Type& type, std::string& result) {
   auto [precision, scale] = getDecimalPrecisionScale(type);
   const size_t maxSize = DecimalUtil::maxStringViewSize(precision, scale);
-  char buffer[maxSize];
-  size_t len = DecimalUtil::castToString(value, scale, maxSize, buffer);
-  result.append(buffer, len);
+  std::vector<char> buffer(maxSize);
+  size_t len = DecimalUtil::castToString(value, scale, maxSize, buffer.data());
+  result.append(buffer.data(), len);
 }
 
 // Forward declarations for explicit specializations.
@@ -90,7 +92,7 @@ void toJson(
 
 // Convert primitive-type input to Json string.
 template <>
-void toJson<TypeKind::BOOLEAN>(
+inline void toJson<TypeKind::BOOLEAN>(
     const exec::GenericView& input,
     std::string& result,
     const JsonOptions& /*options*/,
@@ -102,7 +104,7 @@ void toJson<TypeKind::BOOLEAN>(
 }
 
 template <>
-void toJson<TypeKind::TINYINT>(
+inline void toJson<TypeKind::TINYINT>(
     const exec::GenericView& input,
     std::string& result,
     const JsonOptions& /*options*/,
@@ -112,7 +114,7 @@ void toJson<TypeKind::TINYINT>(
 }
 
 template <>
-void toJson<TypeKind::SMALLINT>(
+inline void toJson<TypeKind::SMALLINT>(
     const exec::GenericView& input,
     std::string& result,
     const JsonOptions& /*options*/,
@@ -122,7 +124,7 @@ void toJson<TypeKind::SMALLINT>(
 }
 
 template <>
-void toJson<TypeKind::INTEGER>(
+inline void toJson<TypeKind::INTEGER>(
     const exec::GenericView& input,
     std::string& result,
     const JsonOptions& /*options*/,
@@ -136,7 +138,7 @@ void toJson<TypeKind::INTEGER>(
 }
 
 template <>
-void toJson<TypeKind::BIGINT>(
+inline void toJson<TypeKind::BIGINT>(
     const exec::GenericView& input,
     std::string& result,
     const JsonOptions& /*options*/,
@@ -150,7 +152,7 @@ void toJson<TypeKind::BIGINT>(
 }
 
 template <>
-void toJson<TypeKind::HUGEINT>(
+inline void toJson<TypeKind::HUGEINT>(
     const exec::GenericView& input,
     std::string& result,
     const JsonOptions& /*options*/,
@@ -161,7 +163,7 @@ void toJson<TypeKind::HUGEINT>(
 }
 
 template <>
-void toJson<TypeKind::REAL>(
+inline void toJson<TypeKind::REAL>(
     const exec::GenericView& input,
     std::string& result,
     const JsonOptions& /*options*/,
@@ -171,7 +173,7 @@ void toJson<TypeKind::REAL>(
 }
 
 template <>
-void toJson<TypeKind::DOUBLE>(
+inline void toJson<TypeKind::DOUBLE>(
     const exec::GenericView& input,
     std::string& result,
     const JsonOptions& /*options*/,
@@ -181,7 +183,7 @@ void toJson<TypeKind::DOUBLE>(
 }
 
 template <>
-void toJson<TypeKind::VARCHAR>(
+inline void toJson<TypeKind::VARCHAR>(
     const exec::GenericView& input,
     std::string& result,
     const JsonOptions& /*options*/,
@@ -200,7 +202,7 @@ void toJson<TypeKind::VARCHAR>(
 }
 
 template <>
-void toJson<TypeKind::TIMESTAMP>(
+inline void toJson<TypeKind::TIMESTAMP>(
     const exec::GenericView& input,
     std::string& result,
     const JsonOptions& options,
@@ -214,16 +216,16 @@ void toJson<TypeKind::TIMESTAMP>(
         functions::buildJodaDateTimeFormatter("yyyy-MM-dd'T'HH:mm:ss.SSSZZ")
             .value();
     const auto maxSize = formatter->maxResultSize(options.timeZone);
-    char buffer[maxSize];
-    auto size =
-        formatter->format(value, options.timeZone, maxSize, buffer, false, "Z");
-    result.append("\"").append(buffer, size).append("\"");
+    std::vector<char> buffer(maxSize);
+    auto size = formatter->format(
+        value, options.timeZone, maxSize, buffer.data(), false, "Z");
+    result.append("\"").append(buffer.data(), size).append("\"");
   }
 }
 
 // Convert complex-type input to Json string.
 template <>
-void toJson<TypeKind::ROW>(
+inline void toJson<TypeKind::ROW>(
     const exec::GenericView& input,
     std::string& result,
     const JsonOptions& options,
@@ -271,7 +273,7 @@ void toJson<TypeKind::ROW>(
 }
 
 template <>
-void toJson<TypeKind::ARRAY>(
+inline void toJson<TypeKind::ARRAY>(
     const exec::GenericView& input,
     std::string& result,
     const JsonOptions& options,
@@ -294,7 +296,7 @@ void toJson<TypeKind::ARRAY>(
 }
 
 template <>
-void toJson<TypeKind::MAP>(
+inline void toJson<TypeKind::MAP>(
     const exec::GenericView& input,
     std::string& result,
     const JsonOptions& options,

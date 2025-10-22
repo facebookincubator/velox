@@ -1338,6 +1338,18 @@ TEST_F(TableScanTest, batchSize) {
     EXPECT_GT(opStats.outputPositions / opStats.outputVectors, 1);
     EXPECT_LT(opStats.outputPositions / opStats.outputVectors, numRows);
   }
+  {
+    SCOPED_TRACE("Projection");
+    plan = PlanBuilder().tableScan(ROW({}, {}), {}, "", rowType).planNode();
+    auto task = AssertQueryBuilder(plan)
+                    .splits(makeHiveConnectorSplits({filePath}))
+                    .config(
+                        QueryConfig::kPreferredOutputBatchBytes,
+                        std::to_string(1 + numRows / 8))
+                    .assertResults(makeRowVector(ROW({}, {}), numRows));
+    const auto opStats = task->taskStats().pipelineStats[0].operatorStats[0];
+    EXPECT_EQ(opStats.outputVectors, 1);
+  }
 }
 
 // Test that adding the same split with the same sequence id does not cause
@@ -1856,6 +1868,15 @@ TEST_F(TableScanTest, partitionedTableDoubleKey) {
   writeToFile(filePath->getPath(), vectors);
   createDuckDbTable(vectors);
   testPartitionedTable(filePath->getPath(), DOUBLE(), "3.5");
+}
+
+TEST_F(TableScanTest, partitionedTableDecimalKey) {
+  auto rowType = ROW({"c0", "c1"}, {BIGINT(), DOUBLE()});
+  auto vectors = makeVectors(10, 1'000, rowType);
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), vectors);
+  createDuckDbTable(vectors);
+  testPartitionedTable(filePath->getPath(), DECIMAL(20, 4), "3.5123");
 }
 
 TEST_F(TableScanTest, partitionedTableDateKey) {
@@ -5092,6 +5113,88 @@ TEST_F(TableScanTest, flatMapReadOffset) {
       .assertResults(expected);
 }
 
+TEST_F(TableScanTest, flatMapKeyTypeEvolution) {
+  auto vector =
+      makeRowVector({makeMapVector<int32_t, int64_t>({{{1, 2}, {3, 4}}})});
+  auto config = std::make_shared<dwrf::Config>();
+  config->set(dwrf::Config::FLATTEN_MAP, true);
+  config->set<const std::vector<uint32_t>>(dwrf::Config::MAP_FLAT_COLS, {0});
+  auto file = TempFilePath::create();
+  writeToFile(file->getPath(), {vector}, config);
+  auto split = makeHiveConnectorSplit(file->getPath());
+  auto schema = ROW({"c0"}, {MAP(BIGINT(), BIGINT())});
+  {
+    SCOPED_TRACE("Read as map");
+    auto plan = PlanBuilder().tableScan(schema).planNode();
+    auto expected =
+        makeRowVector({makeMapVector<int64_t, int64_t>({{{1, 2}, {3, 4}}})});
+    AssertQueryBuilder(plan).split(split).assertResults(expected);
+  }
+  {
+    SCOPED_TRACE("Read as struct");
+    auto readSchema = ROW({"c0"}, {ROW({"1", "3"}, {BIGINT(), BIGINT()})});
+    auto plan = PlanBuilder().tableScan(readSchema, {}, "", schema).planNode();
+    auto expected = makeRowVector({makeRowVector(
+        {"1", "3"},
+        {makeConstant<int64_t>(2, 1), makeConstant<int64_t>(4, 1)})});
+    AssertQueryBuilder(plan).split(split).assertResults(expected);
+  }
+}
+
+TEST_F(TableScanTest, flatMapLazyRowValue) {
+  auto c0 = makeMapVector(
+      {0, 2},
+      makeFlatVector<int64_t>({1, 2, 1, 2}),
+      makeRowVector({
+          makeFlatVector<int64_t>({3, 4, 5, 6}),
+          makeFlatVector<int64_t>({7, 8, 9, 10}),
+      }));
+  auto vector = makeRowVector({c0, makeFlatVector<bool>({false, true})});
+  auto config = std::make_shared<dwrf::Config>();
+  config->set(dwrf::Config::FLATTEN_MAP, true);
+  config->set<const std::vector<uint32_t>>(dwrf::Config::MAP_FLAT_COLS, {0});
+  auto file = TempFilePath::create();
+  writeToFile(file->getPath(), {vector}, config);
+  auto split = makeHiveConnectorSplit(file->getPath());
+  {
+    SCOPED_TRACE("Read as map");
+    auto plan = PlanBuilder()
+                    .tableScan(
+                        ROW("c0", c0->type()),
+                        {"c0 is not null", "c1 = true"},
+                        "",
+                        vector->rowType())
+                    .planNode();
+    auto expected = makeRowVector({wrapInDictionary(makeIndices({1}), c0)});
+    AssertQueryBuilder(plan).split(split).assertResults(expected);
+  }
+  {
+    SCOPED_TRACE("Read as struct");
+    auto valueType = ROW({"c0", "c1"}, {BIGINT(), BIGINT()});
+    auto readSchema = ROW("c0", ROW({"1", "2"}, valueType));
+    auto plan = PlanBuilder()
+                    .tableScan(
+                        readSchema,
+                        {"c0 is not null", "c1 = true"},
+                        "",
+                        vector->rowType())
+                    .planNode();
+    auto expected = makeRowVector({makeRowVector(
+        {"1", "2"},
+        {
+            makeRowVector({
+                makeConstant<int64_t>(5, 1),
+                makeConstant<int64_t>(9, 1),
+            }),
+            makeRowVector({
+                makeConstant<int64_t>(6, 1),
+                makeConstant<int64_t>(10, 1),
+            }),
+        })});
+    AssertQueryBuilder(plan).split(split).assertResults(expected);
+  }
+}
+
 TEST_F(TableScanTest, dynamicFilters) {
   // Make sure filters on same column from multiple downstream operators are
   // merged properly without overwriting each other.
@@ -5993,6 +6096,52 @@ TEST_F(TableScanTest, textfileLarge) {
   ASSERT_EQ(rawInputBytes, loadQuantum);
   ASSERT_GT(getTableScanRuntimeStats(task)["totalScanTime"].sum, 0);
   ASSERT_GT(getTableScanRuntimeStats(task)["ioWaitWallNanos"].sum, 0);
+}
+
+TEST_F(TableScanTest, duplicateFieldProject) {
+  auto vector = makeRowVector(
+      {"id", "name"},
+      {
+          makeFlatVector<int32_t>({1, 2}),
+          makeFlatVector<std::string>({"Alice", "John"}),
+      });
+
+  auto file = TempFilePath::create();
+  writeToFile(file->getPath(), vector);
+  createDuckDbTable({vector});
+
+  auto plan = PlanBuilder()
+                  .tableScan(vector->rowType())
+                  .filter("name = 'John'")
+                  .project({"id AS t0", "id AS t1"})
+                  .planNode();
+
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .split(makeHiveConnectorSplit(file->getPath()))
+      .assertResults("SELECT id, id FROM tmp WHERE name = 'John'");
+}
+
+TEST_F(TableScanTest, parallelUnitLoader) {
+  auto vectors = makeVectors(10, 1'000);
+  auto filePath = TempFilePath::create();
+  writeToFile(
+      filePath->getPath(),
+      vectors,
+      std::make_shared<facebook::velox::dwrf::Config>(),
+      []() { return std::make_unique<dwrf::DefaultFlushPolicy>(1000, 0); });
+  createDuckDbTable(vectors);
+  auto plan = tableScanNode();
+  auto task =
+      AssertQueryBuilder(plan)
+          .splits(makeHiveConnectorSplits({filePath}))
+          .connectorSessionProperty(
+              kHiveConnectorId,
+              connector::hive::HiveConfig::kParallelUnitLoadCountSession,
+              std::to_string(3))
+          .assertTypeAndNumRows(rowType_, 10'000);
+  auto stats = getTableScanRuntimeStats(task);
+  // Verify that parallel unit loader is enabled.
+  ASSERT_GT(stats.count("waitForUnitReadyNanos"), 0);
 }
 
 } // namespace

@@ -53,23 +53,21 @@ tryGetIPv6asInt128FromString(const std::string& ipAddressStr) {
 }
 } // namespace ipaddress
 
-class IPAddressType : public HugeintType {
-  IPAddressType() : HugeintType(/*providesCustomComparison*/ true) {}
+class IPAddressType final : public HugeintType {
+  constexpr IPAddressType() : HugeintType{ProvideCustomComparison{}} {}
 
  public:
-  static const std::shared_ptr<const IPAddressType>& get() {
-    static const std::shared_ptr<const IPAddressType> instance{
-        new IPAddressType()};
-
-    return instance;
+  static std::shared_ptr<const IPAddressType> get() {
+    VELOX_CONSTEXPR_SINGLETON IPAddressType kInstance;
+    return {std::shared_ptr<const IPAddressType>{}, &kInstance};
   }
 
   int32_t compare(const int128_t& left, const int128_t& right) const override {
     const auto leftAddrBytes = ipaddress::toIPv6ByteArray(left);
     const auto rightAddrBytes = ipaddress::toIPv6ByteArray(right);
     return memcmp(
-        leftAddrBytes.begin(),
-        rightAddrBytes.begin(),
+        leftAddrBytes.data(),
+        rightAddrBytes.data(),
         ipaddress::kIPAddressBytes);
   }
 

@@ -2726,12 +2726,23 @@ TEST(MemoryPoolTest, debugMode) {
                   ->addLeafChild("child");
   const auto& allocRecords = std::dynamic_pointer_cast<MemoryPoolImpl>(pool)
                                  ->testingDebugAllocRecords();
+
   std::vector<void*> smallAllocs;
+  smallAllocs.reserve(kNumIterations);
   for (int32_t i = 0; i < kNumIterations; i++) {
     smallAllocs.push_back(pool->allocate(kAllocSizes[0]));
   }
   EXPECT_EQ(allocRecords.size(), kNumIterations);
   checkAllocs(allocRecords, kAllocSizes[0]);
+
+  // Check toString() works with debug mode enabled
+  const auto poolString = pool->toString();
+  EXPECT_FALSE(poolString.empty());
+  EXPECT_TRUE(
+      poolString.find(
+          "======== 100 allocations of 12.50KB total size ========") !=
+      std::string::npos);
+
   for (int32_t i = 0; i < kNumIterations; i++) {
     pool->free(smallAllocs[i], kAllocSizes[0]);
   }
@@ -4035,6 +4046,213 @@ TEST_P(MemoryPoolTest, allocationWithCoveredCollateral) {
   pool->allocateContiguous(50, contiguousAllocation);
   ASSERT_LT(pool->usedBytes(), prevReservedBytes);
   pool->freeContiguous(contiguousAllocation);
+}
+
+TEST_P(MemoryPoolTest, transferTo) {
+  MemoryManager::Options options;
+  options.alignment = MemoryAllocator::kMinAlignment;
+  options.allocatorCapacity = kDefaultCapacity;
+  setupMemory(options);
+  auto manager = getMemoryManager();
+
+  auto largestSizeClass = manager->allocator()->largestSizeClass();
+  std::vector<MachinePageCount> pageCounts{
+      largestSizeClass,
+      largestSizeClass + 1,
+      largestSizeClass / 10,
+      1,
+      largestSizeClass * 2,
+      largestSizeClass * 3 + 1};
+
+  auto assertEqualBytes = [](const memory::MemoryPool* pool,
+                             int64_t usedBytes,
+                             int64_t peakBytes,
+                             int64_t reservedBytes) {
+    EXPECT_EQ(pool->usedBytes(), usedBytes);
+    EXPECT_EQ(pool->peakBytes(), peakBytes);
+    EXPECT_EQ(pool->reservedBytes(), reservedBytes);
+  };
+
+  auto assertZeroByte = [](const memory::MemoryPool* pool) {
+    EXPECT_EQ(pool->usedBytes(), 0);
+    EXPECT_EQ(pool->reservedBytes(), 0);
+  };
+
+  auto getMemoryBytes = [](const memory::MemoryPool* pool) {
+    return std::make_tuple(
+        pool->usedBytes(), pool->peakBytes(), pool->reservedBytes());
+  };
+
+  auto createPools = [&manager](bool betweenDifferentRoots) {
+    auto root1 = manager->addRootPool("root1");
+    auto root2 = manager->addRootPool("root2");
+    std::shared_ptr<MemoryPool> from;
+    std::shared_ptr<MemoryPool> to;
+    if (betweenDifferentRoots) {
+      from = root1->addLeafChild("from");
+      to = root2->addLeafChild("to");
+    } else {
+      from = root1->addLeafChild("from");
+      to = root1->addLeafChild("to");
+    }
+    return std::make_tuple(root1, root2, from, to);
+  };
+
+  auto testTransferAllocate = [&assertZeroByte,
+                               &assertEqualBytes,
+                               &getMemoryBytes,
+                               &createPools](bool betweenDifferentRoots) {
+    auto [root1, root2, from, to] = createPools(betweenDifferentRoots);
+    assertZeroByte(from.get());
+    assertZeroByte(to.get());
+    assertZeroByte(from->root());
+    assertZeroByte(to->root());
+
+    const auto kSize = 1024;
+    int64_t usedBytes, rootUsedBytes;
+    int64_t peakBytes, rootPeakBytes;
+    int64_t reservedBytes, rootReservedBytes;
+    auto buffer = from->allocate(kSize);
+    // Transferring between non-leaf pools is not allowed.
+    EXPECT_FALSE(from->root()->transferTo(to.get(), buffer, kSize));
+    EXPECT_FALSE(from->transferTo(to->root(), buffer, kSize));
+
+    std::tie(usedBytes, peakBytes, reservedBytes) = getMemoryBytes(from.get());
+    std::tie(rootUsedBytes, rootPeakBytes, rootReservedBytes) =
+        getMemoryBytes(from->root());
+    from->transferTo(to.get(), buffer, kSize);
+    assertEqualBytes(to.get(), usedBytes, peakBytes, reservedBytes);
+    if (from->root() == to->root()) {
+      rootPeakBytes *= 2;
+    }
+    assertEqualBytes(
+        to->root(), rootUsedBytes, rootPeakBytes, rootReservedBytes);
+    to->free(buffer, kSize);
+    assertZeroByte(from.get());
+    assertZeroByte(to.get());
+    assertZeroByte(from->root());
+    assertZeroByte(to->root());
+  };
+
+  auto testTransferAllocateZeroFilled =
+      [&assertZeroByte, &assertEqualBytes, &getMemoryBytes, &createPools](
+          bool betweenDifferentRoots) {
+        auto [root1, root2, from, to] = createPools(betweenDifferentRoots);
+        assertZeroByte(from.get());
+        assertZeroByte(to.get());
+        assertZeroByte(from->root());
+        assertZeroByte(to->root());
+
+        const auto kSize = 1024;
+        int64_t usedBytes, rootUsedBytes;
+        int64_t peakBytes, rootPeakBytes;
+        int64_t reservedBytes, rootReservedBytes;
+        auto buffer = from->allocateZeroFilled(8, kSize / 8);
+        std::tie(usedBytes, peakBytes, reservedBytes) =
+            getMemoryBytes(from.get());
+        std::tie(rootUsedBytes, rootPeakBytes, rootReservedBytes) =
+            getMemoryBytes(from->root());
+        from->transferTo(to.get(), buffer, kSize);
+        assertEqualBytes(to.get(), usedBytes, peakBytes, reservedBytes);
+        if (from->root() == to->root()) {
+          rootPeakBytes *= 2;
+        }
+        assertEqualBytes(
+            to->root(), rootUsedBytes, rootPeakBytes, rootReservedBytes);
+        to->free(buffer, kSize);
+        assertZeroByte(from.get());
+        assertZeroByte(to.get());
+        assertZeroByte(from->root());
+        assertZeroByte(to->root());
+      };
+
+  auto testTransferAllocateContiguous =
+      [&assertZeroByte, &assertEqualBytes, &getMemoryBytes, &createPools](
+          uint64_t pageCount, bool betweenDifferentRoots) {
+        auto [root1, root2, from, to] = createPools(betweenDifferentRoots);
+        assertZeroByte(from.get());
+        assertZeroByte(to.get());
+        assertZeroByte(from->root());
+        assertZeroByte(to->root());
+
+        int64_t usedBytes, rootUsedBytes;
+        int64_t peakBytes, rootPeakBytes;
+        int64_t reservedBytes, rootReservedBytes;
+        ContiguousAllocation out;
+        from->allocateContiguous(pageCount, out);
+        std::tie(usedBytes, peakBytes, reservedBytes) =
+            getMemoryBytes(from.get());
+        std::tie(rootUsedBytes, rootPeakBytes, rootReservedBytes) =
+            getMemoryBytes(from->root());
+        from->transferTo(to.get(), out.data(), out.size());
+        assertEqualBytes(to.get(), usedBytes, peakBytes, reservedBytes);
+        if (from->root() == to->root()) {
+          rootPeakBytes *= 2;
+        }
+        assertEqualBytes(
+            to->root(), rootUsedBytes, rootPeakBytes, rootReservedBytes);
+        to->freeContiguous(out);
+        assertZeroByte(from.get());
+        assertZeroByte(to.get());
+        assertZeroByte(from->root());
+        assertZeroByte(to->root());
+      };
+
+  auto testTransferAllocateNonContiguous =
+      [&assertZeroByte, &assertEqualBytes, &getMemoryBytes, &createPools](
+          uint64_t pageCount, bool betweenDifferentRoots) {
+        auto [root1, root2, from, to] = createPools(betweenDifferentRoots);
+        assertZeroByte(from.get());
+        assertZeroByte(to.get());
+        assertZeroByte(from->root());
+        assertZeroByte(to->root());
+
+        int64_t usedBytes, rootUsedBytes;
+        int64_t peakBytes, rootPeakBytes;
+        int64_t reservedBytes, rootReservedBytes;
+        Allocation out;
+        from->allocateNonContiguous(pageCount, out);
+        std::tie(usedBytes, peakBytes, reservedBytes) =
+            getMemoryBytes(from.get());
+        std::tie(rootUsedBytes, rootPeakBytes, rootReservedBytes) =
+            getMemoryBytes(from->root());
+        for (auto i = 0; i < out.numRuns(); ++i) {
+          const auto& run = out.runAt(i);
+          from->transferTo(to.get(), run.data(), run.numBytes());
+        }
+        assertEqualBytes(to.get(), usedBytes, peakBytes, reservedBytes);
+        if (from->root() == to->root()) {
+          EXPECT_EQ(to->root()->usedBytes(), rootUsedBytes);
+          // We reserve and release memory run-by-run, so the peak bytes would
+          // be no greater than twice of the original peak bytes.
+          EXPECT_LE(to->root()->peakBytes(), rootPeakBytes * 2);
+          EXPECT_EQ(to->root()->reservedBytes(), rootReservedBytes);
+        } else {
+          assertEqualBytes(
+              to->root(), rootUsedBytes, rootPeakBytes, rootReservedBytes);
+        }
+        to->freeNonContiguous(out);
+        assertZeroByte(from.get());
+        assertZeroByte(to.get());
+        assertZeroByte(from->root());
+        assertZeroByte(to->root());
+      };
+
+  // Test transfer between siblings of the same root pool.
+  testTransferAllocate(false);
+  testTransferAllocateZeroFilled(false);
+  for (auto pageCount : pageCounts) {
+    testTransferAllocateContiguous(pageCount, false);
+    testTransferAllocateNonContiguous(pageCount, false);
+  }
+
+  // Test transfer between different root pools.
+  testTransferAllocate(true);
+  testTransferAllocateZeroFilled(true);
+  for (auto pageCount : pageCounts) {
+    testTransferAllocateContiguous(pageCount, true);
+    testTransferAllocateNonContiguous(pageCount, true);
+  }
 }
 
 VELOX_INSTANTIATE_TEST_SUITE_P(

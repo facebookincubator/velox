@@ -86,8 +86,6 @@ ExpressionFuzzerVerifier::ExpressionFuzzerVerifier(
           options_.expressionFuzzerOptions.referenceQueryRunner} {
   parse::registerTypeResolver();
   filesystems::registerLocalFileSystem();
-  connector::registerConnectorFactory(
-      std::make_shared<connector::hive::HiveConnectorFactory>());
   exec::test::registerHiveConnector({});
   dwrf::registerDwrfWriterFactory();
 
@@ -290,8 +288,8 @@ void ExpressionFuzzerVerifier::retryWithTry(
   // Wrap each expression tree with 'try'.
   std::vector<core::TypedExprPtr> tryPlans;
   for (auto& plan : plans) {
-    tryPlans.push_back(std::make_shared<core::CallTypedExpr>(
-        plan->type(), std::vector<core::TypedExprPtr>{plan}, "try"));
+    tryPlans.push_back(
+        std::make_shared<core::CallTypedExpr>(plan->type(), "try", plan));
   }
 
   std::vector<ResultOrError> tryResults;

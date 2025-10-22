@@ -68,9 +68,12 @@ OperatorCtx::createConnectorQueryCtx(
       driverCtx_->driverId,
       driverCtx_->queryConfig().sessionTimezone(),
       driverCtx_->queryConfig().adjustTimestampToTimezone(),
-      task->getCancellationToken());
+      task->getCancellationToken(),
+      task->queryCtx()->fsTokenProvider());
   connectorQueryCtx->setSelectiveNimbleReaderEnabled(
       driverCtx_->queryConfig().selectiveNimbleReaderEnabled());
+  connectorQueryCtx->setRowSizeTrackingMode(
+      driverCtx_->queryConfig().rowSizeTrackingMode());
   return connectorQueryCtx;
 }
 
@@ -144,7 +147,7 @@ void Operator::maybeSetTracer() {
       opTraceDirPath,
       operatorCtx_->driverCtx()->queryConfig().opTraceDirectoryCreateConfig());
 
-  if (operatorType() == "TableScan") {
+  if (dynamic_cast<SourceOperator*>(this) != nullptr) {
     setupSplitTracer(opTraceDirPath);
   } else {
     setupInputTracer(opTraceDirPath);
@@ -378,7 +381,7 @@ void Operator::recordBlockingTime(uint64_t start, BlockingReason reason) {
           std::chrono::high_resolution_clock::now().time_since_epoch())
           .count();
   const auto wallNanos = (now - start) * 1000;
-  const auto blockReason = blockingReasonToString(reason).substr(1);
+  const auto blockReason = BlockingReasonName::toName(reason).substr(1);
 
   auto lockedStats = stats_.wlock();
   lockedStats->blockedWallNanos += wallNanos;

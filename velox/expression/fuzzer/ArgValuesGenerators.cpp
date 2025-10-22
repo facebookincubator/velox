@@ -320,12 +320,13 @@ std::vector<core::TypedExprPtr> QDigestArgValuesGenerator::generate(
   const auto seed = rand<uint32_t>(rng);
   const auto nullRatio = options.nullRatio;
   std::vector<core::TypedExprPtr> inputExpressions;
-  VELOX_CHECK_EQ(signature.args.size(), 2);
+  VELOX_CHECK_GE(signature.args.size(), 2);
   const std::vector<std::string> functionNames = {
       "value_at_quantile",
       "values_at_quantiles",
       "quantile_at_value",
-      "scale_qdigest"};
+      "scale_qdigest",
+      "fb_truncated_mean"};
   if (std::find(functionNames.begin(), functionNames.end(), functionName_) ==
       functionNames.end()) {
     return inputExpressions;
@@ -476,6 +477,62 @@ std::vector<core::TypedExprPtr> UnifiedDigestArgValuesGenerator::generate(
   }
 
   VELOX_UNREACHABLE("Unsupported digest type");
+}
+
+std::vector<core::TypedExprPtr>
+FbDedupNormalizeTextArgValuesGenerator::generate(
+    const CallableSignature& signature,
+    const VectorFuzzer::Options& options,
+    FuzzerGenerator& rng,
+    ExpressionFuzzerState& state) {
+  VELOX_CHECK_LE(signature.args.size(), 2);
+  populateInputTypesAndNames(signature, state);
+
+  const auto seed = static_cast<size_t>(rand<uint32_t>(rng));
+  const auto nullRatio = options.nullRatio;
+
+  // Add custom input generator for the first argument (text)
+  state.customInputGenerators_.emplace_back(
+      std::make_shared<RandomInputGenerator<StringView>>(
+          seed,
+          signature.args[0],
+          nullRatio,
+          20,
+          std::vector<UTF8CharList>{
+              UTF8CharList::ASCII,
+              UTF8CharList::UNICODE_CASE_SENSITIVE,
+              UTF8CharList::EXTENDED_UNICODE,
+              UTF8CharList::MATHEMATICAL_SYMBOLS},
+          RandomStrVariationOptions{
+              /*controlCharacterProbability=*/0.5,
+              /*escapeStringProbability=*/0.5,
+              /*truncateProbability=*/0.2,
+          }));
+
+  // Populate inputExpressions_ for the argument that requires custom
+  // generation. A nullptr should be added at inputExpressions[i] if the i-th
+  // argument does not require custom input generation.
+  std::vector<core::TypedExprPtr> inputExpressions{
+      signature.args.size(), nullptr};
+
+  // First argument (text) - use FieldAccessTypedExpr
+  inputExpressions[0] = std::make_shared<core::FieldAccessTypedExpr>(
+      signature.args[0], state.inputRowNames_.back());
+
+  // Second argument (normalization form) - Add an INVALID form
+  if (signature.args.size() > 1) {
+    // Add null generator for second argument if it exists
+    state.customInputGenerators_.emplace_back(nullptr);
+
+    static const std::vector<std::string> testForms = {
+        "NFC", "NFD", "NFKC", "NFKD", "INVALID"};
+
+    auto index = rand<uint64_t>(rng, 0, testForms.size() - 1);
+    inputExpressions[1] = std::make_shared<core::ConstantTypedExpr>(
+        VARCHAR(), variant(testForms[index]));
+  }
+
+  return inputExpressions;
 }
 
 } // namespace facebook::velox::fuzzer

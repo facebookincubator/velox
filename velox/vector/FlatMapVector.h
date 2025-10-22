@@ -89,9 +89,9 @@ class FlatMapVector : public BaseVector {
   // in-map buffers may not be present).
   FlatMapVector(
       velox::memory::MemoryPool* pool,
-      std::shared_ptr<const Type> type,
+      const TypePtr& type,
       BufferPtr nulls,
-      size_t length,
+      vector_size_t length,
       VectorPtr distinctKeys,
       std::vector<VectorPtr> mapValues,
       std::vector<BufferPtr> inMaps,
@@ -101,7 +101,7 @@ class FlatMapVector : public BaseVector {
             pool,
             type,
             VectorEncoding::Simple::FLAT_MAP,
-            nulls,
+            std::move(nulls),
             length,
             std::nullopt,
             nullCount),
@@ -121,7 +121,7 @@ class FlatMapVector : public BaseVector {
         inMaps_.size(), numDistinctKeys(), "Wrong number of in map buffers.");
   }
 
-  virtual ~FlatMapVector() override {}
+  ~FlatMapVector() override = default;
 
   /// Overwrites the existing distinct keys vector, resizing map values and
   /// clearing in-map buffers.
@@ -204,6 +204,15 @@ class FlatMapVector : public BaseVector {
     return nullptr;
   }
 
+  /// Same as above but allows for `keysVector` at index `index` (similar
+  /// distinction between getKeyChannel we see above).
+  VectorPtr projectKey(const VectorPtr& keysVector, vector_size_t index) const {
+    if (auto channel = getKeyChannel(keysVector, index)) {
+      return mapValues_[channel.value()];
+    }
+    return nullptr;
+  }
+
   /// Returns the size for the map at position `index`. Size means the number of
   /// logical key value pairs in the map. Note that this is not a particularly
   /// efficient operation in flat maps as it requires accessing the inMap bitmap
@@ -214,8 +223,12 @@ class FlatMapVector : public BaseVector {
     if (inMaps_.size() <= keyChannel) {
       return true;
     }
-    auto* inMap = inMapsAt(keyChannel)->asMutable<uint64_t>();
-    return inMap ? bits::isBitSet(inMap, index) : true;
+    if (auto& inMap = inMapsAt(keyChannel)) {
+      return bits::isBitSet(inMap->as<uint64_t>(), index);
+    } else {
+      // If inMap is null, key is present in all rows.
+      return true;
+    }
   }
 
   /// Get the map values vector at a given a map key channel.
@@ -324,6 +337,8 @@ class FlatMapVector : public BaseVector {
   /// testing/validation purposes, and not for performance critical paths.
   MapVectorPtr toMapVector() const;
 
+  void transferOrCopyTo(velox::memory::MemoryPool* pool) override;
+
  private:
   void setDistinctKeysImpl(VectorPtr distinctKeys) {
     VELOX_CHECK(distinctKeys != nullptr);
@@ -332,11 +347,11 @@ class FlatMapVector : public BaseVector {
         "Unexpected key type: {}",
         distinctKeys->type()->toString());
 
-    distinctKeys_ = distinctKeys;
+    distinctKeys_ = std::move(distinctKeys);
     keyToChannel_.clear();
 
     for (vector_size_t i = 0; i < numDistinctKeys(); i++) {
-      keyToChannel_.insert({distinctKeys->hashValueAt(i), i});
+      keyToChannel_.insert({distinctKeys_->hashValueAt(i), i});
     }
   }
 

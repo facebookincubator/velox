@@ -52,7 +52,7 @@ ScanSpec* ScanSpec::getOrCreateChild(const Subfield& subfield) {
   const auto& path = subfield.path();
   for (size_t depth = 0; depth < path.size(); ++depth) {
     const auto element = path[depth].get();
-    VELOX_CHECK_EQ(element->kind(), kNestedField);
+    VELOX_CHECK_EQ(element->kind(), SubfieldKind::kNestedField);
     auto* nestedField = static_cast<const Subfield::NestedField*>(element);
     container = container->getOrCreateChild(nestedField->name());
   }
@@ -586,11 +586,27 @@ void ScanSpec::applyFilter(
     // of the result.
     return;
   }
+
   auto& rowType = vector.type()->asRow();
-  auto* rowVector = vector.asChecked<RowVector>();
-  for (int i = 0; i < rowType.size(); ++i) {
-    if (auto* child = childByName(rowType.nameOf(i))) {
-      child->applyFilter(*rowVector->childAt(i), size, result);
+  if (vector.encoding() == VectorEncoding::Simple::ROW) {
+    auto rowVector = vector.asUnchecked<RowVector>();
+    for (int i = 0; i < rowType.size(); ++i) {
+      if (auto* child = childByName(rowType.nameOf(i))) {
+        child->applyFilter(*rowVector->childAt(i), size, result);
+      }
+    }
+  } else {
+    DecodedVector decoded{vector};
+    auto rowVector = decoded.base()->asUnchecked<RowVector>();
+
+    for (int i = 0; i < rowType.size(); ++i) {
+      if (auto* child = childByName(rowType.nameOf(i))) {
+        child->applyFilter(
+            *(decoded.wrap(
+                rowVector->childAt(i), *vector.pool(), vector.size())),
+            size,
+            result);
+      }
     }
   }
 }

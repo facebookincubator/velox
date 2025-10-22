@@ -64,7 +64,7 @@ Generic Configuration
      - bool
      - true
      - If true, the driver will collect the operator's input/output batch size through vector flat size estimation, otherwise not.
-     - We might turn this off in use cases which have very wide column width and batch size estimation has non-trivial cpu cost.
+       We might turn this off in use cases which have very wide column width and batch size estimation has non-trivial cpu cost.
    * - hash_adaptivity_enabled
      - bool
      - true
@@ -106,6 +106,10 @@ Generic Configuration
        client. Enforced approximately, not strictly. A larger size can increase network throughput
        for larger clusters and thus decrease query processing time at the expense of reducing the
        amount of memory available for other usage.
+   * - local_merge_source_queue_size
+     - integer
+     - 2
+     - Maximum number of vectors buffered in each local merge source before blocking to wait for consumers.
    * - max_page_partitioning_buffer_size
      - integer
      - 32MB
@@ -196,7 +200,6 @@ Generic Configuration
        be expensive (especially if operator stats are retrieved frequently) and this allows the user to
        explicitly enable it.
 
-.. _expression-evaluation-conf:
 
 Expression Evaluation Configuration
 -----------------------------------
@@ -315,7 +318,7 @@ Spilling
      - boolean
      - true
      - When `spill_enabled` is true, determines whether HashBuild and HashProbe operators can spill to disk under memory pressure.
-   * - local_merge_enabled
+   * - local_merge_spill_enabled
      - boolean
      - false
      - When `spill_enabled` is true, determines whether LocalMerge operators can spill to disk to cap memory usage.
@@ -331,6 +334,12 @@ Spilling
      - boolean
      - true
      - When `spill_enabled` is true, determines whether Window operator can spill to disk under memory pressure.
+   * - window_spill_min_read_batch_rows
+     - integer
+     - 1000
+     - When processing spilled window data, read batches of whole partitions having at least that many rows. Set to 1 to
+       read one whole partition at a time. Each driver processing the Window operator will process that much data at
+       once.
    * - row_number_spill_enabled
      - boolean
      - true
@@ -544,6 +553,31 @@ Table Writer
      - Minimum amount of data processed by all the logical table partitions to
        trigger skewed partition rebalancing by scale writer exchange.
 
+Connector Config
+----------------
+Connector config is initialized on velox runtime startup and is shared among queries as the default config across all connectors.
+Each query can override the config by setting corresponding query session properties such as in Prestissimo.
+
+.. list-table::
+   :widths: 20 20 10 10 70
+   :header-rows: 1
+
+   * - user
+     -
+     - string
+     - ""
+     - The user of the query. Used for storage logging.
+   * - source
+     -
+     - string
+     - ""
+     - The source of the query. Used for storage access and logging.
+   * - schema
+     -
+     - string
+     - ""
+     - The schema of the query. Used for storage logging.
+
 Hive Connector
 --------------
 Hive Connector config is initialized on velox runtime startup and is shared among queries as the default config.
@@ -676,6 +710,11 @@ Each query can override the config by setting corresponding query session proper
      - bool
      - true
      - Reads timestamp partition value as local time if true. Otherwise, reads as UTC.
+   * - hive.preserve-flat-maps-in-memory
+     - hive.preserve_flat_maps_in_memory
+     - bool
+     - false
+     - Whether to preserve flat maps in memory as FlatMapVectors instead of converting them to MapVectors. This is only applied during data reading inside the DWRF and Nimble readers, not during downstream processing like expression evaluation etc.
 
 ``ORC File Format Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -904,6 +943,12 @@ These semantics are similar to the `Apache Hadoop-Aws module <https://hadoop.apa
      - string
      -
      - The GCS maximum time allowed to retry transient errors.
+   * - hive.gcs.auth.access-token-provider
+     - string
+     -
+     - A custom OAuth credential provider, if specified, will be used to create the client in favor of other
+       authentication mechanisms.
+       The provider must be registered using "registerGcsOAuthCredentialsProvider" before it can be used.
 
 ``Azure Blob Storage Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -917,12 +962,15 @@ These semantics are similar to the `Apache Hadoop-Aws module <https://hadoop.apa
      - Description
    * - fs.azure.account.auth.type.<storage-account>.dfs.core.windows.net
      - string
-     - SharedKey
+     -
      - Specifies the authentication mechanism to use for Azure storage accounts.
        **Allowed values:** "SharedKey", "OAuth", "SAS".
        "SharedKey": Uses the storage account name and key for authentication.
        "OAuth": Utilizes OAuth tokens for secure authentication.
        "SAS": Employs Shared Access Signatures for granular access control.
+       To create Azure clients with the configured authentication type, the caller must
+       register the corresponding Azure client provider from the configuration by calling
+       `registerAzureClientProvider`.
    * - fs.azure.account.key.<storage-account>.dfs.core.windows.net
      - string
      -
@@ -951,6 +999,12 @@ These semantics are similar to the `Apache Hadoop-Aws module <https://hadoop.apa
      - Specifies the OAuth 2.0 token endpoint URL for the Azure AD application.
        This endpoint is used to acquire access tokens for authenticating with Azure storage.
        The URL follows the format: `https://login.microsoftonline.com/<tenant-id>/oauth2/token`.
+   * - fs.azure.sas.token.renew.period.for.streams
+     - string
+     - 120
+     - Specifies the period in seconds to re-use SAS tokens until the expiry is within this number of seconds.
+       This configuration is used together with `registerSasTokenProvider` for dynamic SAS token renewal.
+       When a SAS token is close to expiry, it will be renewed by getting a new token from the provider.
 
 Presto-specific Configuration
 -----------------------------
@@ -977,6 +1031,14 @@ Spark-specific Configuration
      - Type
      - Default Value
      - Description
+   * - spark.ansi_enabled
+     - bool
+     - false
+     - If true, Spark function's behavior is ANSI-compliant, e.g. throws runtime exception instead
+       of returning null on invalid inputs. It affects only functions explicitly marked as "ANSI compliant".
+       Note: This feature is still under development to achieve full ANSI compliance. Users can
+       refer to the Spark function documentation to verify the current support status of a specific
+       function.
    * - spark.legacy_size_of_null
      - bool
      - true

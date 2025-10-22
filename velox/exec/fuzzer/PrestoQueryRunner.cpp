@@ -43,8 +43,8 @@
 #include "velox/functions/prestosql/types/TDigestType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/functions/prestosql/types/UuidType.h"
+#include "velox/functions/prestosql/types/parser/TypeParser.h"
 #include "velox/serializers/PrestoSerializer.h"
-#include "velox/type/parser/TypeParser.h"
 
 using namespace facebook::velox;
 
@@ -132,7 +132,8 @@ class ServerResponse {
     std::vector<TypePtr> types;
     for (const auto& column : response_["columns"]) {
       names.push_back(column["name"].asString());
-      types.push_back(parseType(column["type"].asString()));
+      types.push_back(facebook::velox::functions::prestosql::parseType(
+          column["type"].asString()));
     }
 
     auto rowType = ROW(std::move(names), std::move(types));
@@ -317,17 +318,35 @@ bool PrestoQueryRunner::isConstantExprSupported(
 }
 
 bool PrestoQueryRunner::isSupported(const exec::FunctionSignature& signature) {
-  // TODO: support queries with these types. Among the types below, hugeint is
-  // not a native type in Presto, so fuzzer should not use it as the type of
-  // cast-to or constant literals. Hyperloglog and TDigest can only be casted
-  // from varbinary and cannot be used as the type of constant literals.
-  // Interval year to month can only be casted from NULL and cannot be used as
-  // the type of constant literals. Json, Ipaddress, Ipprefix, and UUID require
-  // special handling, because Presto requires literals of these types to be
-  // valid, and doesn't allow creating HIVE columns of these types.
+  // TODO: support queries with these types.
+  // Types not supported by PrestoQueryRunner and their reasons:
+  //
+  // hugeint:
+  //   - Not a native type in Presto
+  //   - Fuzzer should not use it for cast-to or constant literals
+  //
+  // interval year to month:
+  //   - Can only be casted from NULL
+  //   - Cannot be used as constant literal types
+  //
+  // ipaddress, ipprefix, uuid:
+  //   - Require special handling in Presto
+  //   - Presto requires literals of these types to be valid
+  //   - Cannot create HIVE columns of these types
+  //
+  // geometry:
+  //   - Under development in Presto
+  //   - Cannot be used as constant literals
+  //   - Expected differences between Presto Java and Velox C++ implementations
+  //
+  // p4hyperloglog:
+  //   - Not a native type in Presto
+  //   - Cannot create HIVE columns of these types
   return !(
       usesTypeName(signature, "interval year to month") ||
       usesTypeName(signature, "hugeint") ||
+      usesTypeName(signature, "geometry") || usesTypeName(signature, "time") ||
+      usesTypeName(signature, "p4hyperloglog") ||
       usesInputTypeName(signature, "ipaddress") ||
       usesInputTypeName(signature, "ipprefix") ||
       usesInputTypeName(signature, "uuid"));

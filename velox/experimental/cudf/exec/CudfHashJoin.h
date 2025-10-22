@@ -26,7 +26,7 @@
 #include "velox/vector/ComplexVector.h"
 
 #include <cudf/ast/expressions.hpp>
-#include <cudf/join.hpp>
+#include <cudf/join/hash_join.hpp>
 #include <cudf/table/table.hpp>
 
 namespace facebook::velox::cudf_velox {
@@ -82,16 +82,20 @@ class CudfHashJoinProbe : public exec::Operator, public NvtxHelper {
 
   void addInput(RowVectorPtr input) override;
 
+  void noMoreInput() override;
+
   RowVectorPtr getOutput() override;
+
+  bool skipProbeOnEmptyBuild() const;
 
   exec::BlockingReason isBlocked(ContinueFuture* future) override;
 
   static bool isSupportedJoinType(core::JoinType joinType) {
     return joinType == core::JoinType::kInner ||
         joinType == core::JoinType::kLeft ||
-        joinType == core::JoinType::kRight ||
         joinType == core::JoinType::kAnti ||
         joinType == core::JoinType::kLeftSemiFilter ||
+        joinType == core::JoinType::kRight ||
         joinType == core::JoinType::kRightSemiFilter;
   }
 
@@ -107,6 +111,10 @@ class CudfHashJoinProbe : public exec::Operator, public NvtxHelper {
 
   bool rightPrecomputed_{false};
 
+  // Batched probe inputs needed for right join
+  std::vector<CudfVectorPtr> inputs_;
+  ContinueFuture future_{ContinueFuture::makeEmpty()};
+
   std::vector<cudf::size_type> leftKeyIndices_;
   std::vector<cudf::size_type> rightKeyIndices_;
   std::vector<cudf::size_type> leftColumnIndicesToGather_;
@@ -114,6 +122,15 @@ class CudfHashJoinProbe : public exec::Operator, public NvtxHelper {
   std::vector<size_t> leftColumnOutputIndices_;
   std::vector<size_t> rightColumnOutputIndices_;
   bool finished_{false};
+
+  // Copied from HashProbe.h
+  // Indicates whether to skip probe input data processing or not. It only
+  // applies for a specific set of join types (see skipProbeOnEmptyBuild()), and
+  // the build table is empty and the probe input is read from non-spilled
+  // source. This ensures the hash probe operator keeps running until all the
+  // probe input from the sources have been processed. It prevents the exchange
+  // hanging problem at the producer side caused by the early query finish.
+  bool skipInput_{false};
 };
 
 class CudfHashJoinBridgeTranslator : public exec::Operator::PlanNodeTranslator {

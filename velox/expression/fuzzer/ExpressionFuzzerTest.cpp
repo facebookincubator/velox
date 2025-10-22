@@ -129,6 +129,8 @@ std::unordered_set<std::string> skipFunctions = {
     "merge_sfm", // Fuzzer can generate sketches of different sizes.
     "element_at",
     "width_bucket",
+    // Varbinary output can't be compared exactly with Java.
+    "merge_hll",
     // Fuzzer and the underlying engine are confused about TDigest functions
     // (since TDigest is a user defined type), and tries to pass a
     // VARBINARY (since TDigest's implementation uses an
@@ -213,6 +215,8 @@ std::unordered_set<std::string> skipFunctions = {
     "st_union",
     "st_point",
     "st_points",
+    "st_interiorrings",
+    "st_geometries",
     "st_x",
     "st_y",
     "st_isvalid",
@@ -232,6 +236,9 @@ std::unordered_set<std::string> skipFunctions = {
     "st_envelope",
     "ST_EnvelopeAsPts",
     "st_buffer",
+    "st_linestring",
+    "st_linefromtext",
+    "st_multipoint",
     "geometry_invalid_reason",
     "geometry_nearest_points",
     "simplify_geometry",
@@ -241,9 +248,21 @@ std::unordered_set<std::string> skipFunctions = {
     "st_ymin",
     "line_locate_point",
     "line_interpolate_point",
+    "flatten_geometry_collections",
+    "expand_envelope",
+    "bing_tile_polygon",
+    "geometry_as_geojson",
+    "geometry_from_geojson",
+    "great_circle_distance",
+    "geometry_to_bing_tiles",
+    "geometry_to_dissolved_bing_tiles",
+    "geometry_union",
+    "localtime",
 };
 
 std::unordered_set<std::string> skipFunctionsSOT = {
+    "array_subset", // Velox-only function, not available in Presto
+    "remap_keys", // Velox-only function, not available in Presto
     "noisy_empty_approx_set_sfm", // non-deterministic because of privacy.
     // https://github.com/facebookincubator/velox/issues/11034
     "cast(real) -> varchar",
@@ -254,6 +273,9 @@ std::unordered_set<std::string> skipFunctionsSOT = {
     "cast(array(real)) -> array(varchar)",
     "cast(map(varchar,double)) -> map(varchar,varchar)",
     "cast(map(varchar,real)) -> map(varchar,varchar)",
+    // Velox and Presto may not match with regards to sparse vs. dense HLL
+    "cast(hyperloglog) -> p4hyperloglog",
+    "cast(p4hyperloglog) -> hyperloglog",
     "round", // https://github.com/facebookincubator/velox/issues/10634
     "bitwise_right_shift_arithmetic", // https://github.com/facebookincubator/velox/issues/10841
     "map_size_with", // https://github.com/facebookincubator/velox/issues/10964
@@ -314,6 +336,7 @@ std::unordered_set<std::string> skipFunctionsSOT = {
     "escape", // https://github.com/facebookincubator/velox/issues/12558
     "from_base64url", // https://github.com/facebookincubator/velox/issues/12562
     "array_top_n", // https://github.com/prestodb/presto/issues/24700
+    "array_subset",
     "codepoint", // https://github.com/facebookincubator/velox/issues/12598
     "in", // https://github.com/facebookincubator/velox/issues/12597
     "multimap_from_entries", // https://github.com/facebookincubator/velox/issues/12628
@@ -378,13 +401,17 @@ std::unordered_set<std::string> skipFunctionsSOT = {
     "inverse_chi_squared_cdf", // https://github.com/facebookincubator/velox/issues/13788
     "bing_tile_children", // Velox limits the max zoom shift
                           // https://github.com/facebookincubator/velox/pull/13604
+    "enum_key", // Requires a custom input generator
     // Not registered
     "array_sum_propagate_element_null",
     // Skipping until the new signature is merged and released in Presto:
     // https://github.com/prestodb/presto/pull/25521
     "xxhash64(varbinary,bigint) -> varbinary",
+    "map_keys_by_top_n_values", // https://github.com/facebookincubator/velox/issues/14374
     "$internal$canonicalize",
     "$internal$contains",
+    "localtime", // localtime cannot be called with paranthesis:
+                 // https://github.com/facebookincubator/velox/issues/14937
 };
 
 int main(int argc, char** argv) {

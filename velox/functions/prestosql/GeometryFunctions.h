@@ -17,7 +17,11 @@
 #pragma once
 
 #include <geos/geom/Coordinate.h>
+#include <geos/geom/CoordinateArraySequence.h>
 #include <geos/geom/Envelope.h>
+#include <geos/io/GeoJSON.h>
+#include <geos/io/GeoJSONReader.h>
+#include <geos/io/GeoJSONWriter.h>
 #include <geos/io/WKBReader.h>
 #include <geos/io/WKBWriter.h>
 #include <geos/io/WKTReader.h>
@@ -33,6 +37,7 @@
 #include "velox/functions/Macros.h"
 #include "velox/functions/prestosql/geospatial/GeometrySerde.h"
 #include "velox/functions/prestosql/geospatial/GeometryUtils.h"
+#include "velox/functions/prestosql/types/BingTileType.h"
 #include "velox/functions/prestosql/types/GeometryType.h"
 #include "velox/type/Variant.h"
 
@@ -747,7 +752,12 @@ struct StGeometryTypeFunction {
     std::unique_ptr<geos::geom::Geometry> geosGeometry =
         geospatial::GeometryDeserializer::deserialize(input);
 
-    result = geosGeometry->getGeometryType();
+    if (geosGeometry->getGeometryTypeId() ==
+        geos::geom::GeometryTypeId::GEOS_GEOMETRYCOLLECTION) {
+      result = "ST_GeomCollection";
+    } else {
+      result = "ST_" + geosGeometry->getGeometryType();
+    }
 
     return Status::OK();
   }
@@ -1090,7 +1100,7 @@ struct StNumInteriorRingFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE bool call(
-      out_type<int32_t>& result,
+      out_type<int64_t>& result,
       const arg_type<Geometry>& geometry) {
     std::unique_ptr<geos::geom::Geometry> geosGeometry =
         geospatial::GeometryDeserializer::deserialize(geometry);
@@ -1115,7 +1125,7 @@ struct StNumInteriorRingFunction {
       VELOX_USER_FAIL(
           "Number of interior rings exceeds the maximum value of int32");
     }
-    result = static_cast<int32_t>(numInteriorRings);
+    result = static_cast<int64_t>(numInteriorRings);
     return true;
   }
 };
@@ -1151,12 +1161,12 @@ class StCoordDimFunction : public facebook::velox::exec::VectorFunction {
     // Create a constant vector of value 2, with size equal to the number of
     // rows
     result = facebook::velox::BaseVector::createConstant(
-        outputType, 2, rows.size(), context.pool());
+        outputType, static_cast<int8_t>(2), rows.size(), context.pool());
   }
   static std::vector<std::shared_ptr<facebook::velox::exec::FunctionSignature>>
   signatures() {
     return {facebook::velox::exec::FunctionSignatureBuilder()
-                .returnType("integer")
+                .returnType("tinyint")
                 .argumentType("geometry")
                 .build()};
   }
@@ -1365,7 +1375,7 @@ struct StNumPointsFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE void call(
-      out_type<int32_t>& result,
+      out_type<int64_t>& result,
       const arg_type<Geometry>& geometry) {
     auto geosGeometry = geospatial::GeometryDeserializer::deserialize(geometry);
 
@@ -1536,6 +1546,427 @@ struct LineInterpolatePointFunction {
     geospatial::GeometrySerializer::serialize(*resultPoint, result);
 
     return validate;
+  }
+
+ private:
+  geos::geom::GeometryFactory::Ptr factory_;
+};
+
+template <typename T>
+struct StInteriorRingsFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<Array<Geometry>>& result,
+      const arg_type<Geometry>& geometry) {
+    std::unique_ptr<geos::geom::Geometry> geosGeometry =
+        geospatial::GeometryDeserializer::deserialize(geometry);
+
+    auto validate = geospatial::validateType(
+        *geosGeometry,
+        {geos::geom::GeometryTypeId::GEOS_POLYGON},
+        "ST_InteriorRings");
+
+    if (!validate.ok()) {
+      VELOX_USER_FAIL(validate.message());
+    }
+    if (geosGeometry->isEmpty()) {
+      return false;
+    }
+
+    geos::geom::Polygon* polygon =
+        dynamic_cast<geos::geom::Polygon*>(geosGeometry.get());
+    VELOX_CHECK_NOT_NULL(
+        polygon, "Validation passed but type not recognized as Polygon");
+
+    auto numInteriorRings = polygon->getNumInteriorRing();
+    result.reserve(static_cast<int32_t>(numInteriorRings));
+
+    for (int i = 0; i < numInteriorRings; i++) {
+      geospatial::GeometrySerializer::serialize(
+          *(polygon->getInteriorRingN(i)), result.add_item());
+    }
+
+    return true;
+  }
+};
+
+template <typename T>
+struct StGeometriesFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<Array<Geometry>>& result,
+      const arg_type<Geometry>& geometry) {
+    std::unique_ptr<geos::geom::Geometry> geosGeometry =
+        geospatial::GeometryDeserializer::deserialize(geometry);
+
+    if (geosGeometry->isEmpty()) {
+      return false;
+    }
+
+    if (!geospatial::isMultiType(*geosGeometry)) {
+      result.reserve(1);
+      geospatial::GeometrySerializer::serialize(
+          *(geosGeometry), result.add_item());
+      return true;
+    }
+
+    geos::geom::GeometryCollection* geomCollection =
+        dynamic_cast<geos::geom::GeometryCollection*>(geosGeometry.get());
+
+    VELOX_CHECK_NOT_NULL(
+        geomCollection,
+        "Failure in ST_Geometries: geometry should be multi type but cast to GeometryCollection failed");
+
+    int32_t numGeometries =
+        static_cast<int32_t>(geomCollection->getNumGeometries());
+    result.reserve(numGeometries);
+
+    for (int i = 0; i < numGeometries; i++) {
+      geospatial::GeometrySerializer::serialize(
+          *(geomCollection->getGeometryN(i)), result.add_item());
+    }
+
+    return true;
+  }
+};
+
+template <typename T>
+struct FlattenGeometryCollectionsFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE Status
+  call(out_type<Array<Geometry>>& result, const arg_type<Geometry>& geometry) {
+    std::unique_ptr<geos::geom::Geometry> geosGeometry =
+        geospatial::GeometryDeserializer::deserialize(geometry);
+
+    geospatial::GeometryCollectionIterator it(geosGeometry.get());
+    while (it.hasNext()) {
+      geospatial::GeometrySerializer::serialize(
+          *(it.next()), result.add_item());
+    }
+
+    return Status::OK();
+  }
+};
+
+template <typename T>
+struct ExpandEnvelopeFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  ExpandEnvelopeFunction() {
+    factory_ = geos::geom::GeometryFactory::create();
+  }
+
+  FOLLY_ALWAYS_INLINE Status call(
+      out_type<Geometry>& result,
+      const arg_type<Geometry>& geometry,
+      const arg_type<double>& distance) {
+    if (std::isnan(distance)) {
+      return Status::UserError("Distance must be a non-NaN number");
+    }
+    if (distance < 0) {
+      return Status::UserError("Distance must be a non-negative number");
+    }
+    if (distance == std::numeric_limits<double>::infinity()) {
+      geospatial::GeometrySerializer::serialize(
+          *factory_->createPolygon(), result);
+      return Status::OK();
+    }
+
+    const std::unique_ptr<geos::geom::Envelope> envelope =
+        geospatial::GeometryDeserializer::deserializeEnvelope(geometry);
+    if (envelope->isNull()) {
+      geospatial::GeometrySerializer::serializeEnvelope(*envelope, result);
+      return Status::OK();
+    }
+
+    envelope->expandBy(distance);
+    geospatial::GeometrySerializer::serializeEnvelope(*envelope, result);
+
+    return Status::OK();
+  }
+
+ private:
+  geos::geom::GeometryFactory::Ptr factory_;
+};
+
+template <typename T>
+struct BingTilePolygonFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Geometry>& result,
+      const arg_type<BingTile>& tile) {
+    auto x = BingTileType::bingTileX(tile);
+    auto y = BingTileType::bingTileY(tile);
+    auto zoom = BingTileType::bingTileZoom(tile);
+
+    double minX = BingTileType::tileXToLongitude(x, zoom);
+    double maxX = BingTileType::tileXToLongitude(x + 1, zoom);
+    double minY = BingTileType::tileYToLatitude(y, zoom);
+    double maxY = BingTileType::tileYToLatitude(y + 1, zoom);
+
+    geospatial::GeometrySerializer::serializeEnvelope(
+        minX, minY, maxX, maxY, result);
+  }
+};
+
+template <typename T>
+struct GeometryAsGeoJsonFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<Varchar>& result,
+      const arg_type<Geometry>& geometry) {
+    std::unique_ptr<geos::geom::Geometry> geosGeometry =
+        geospatial::GeometryDeserializer::deserialize(geometry);
+    if (geospatial::isAtomicType(*geosGeometry) && geosGeometry->isEmpty()) {
+      return false;
+    }
+
+    auto writer = geos::io::GeoJSONWriter();
+    result = writer.write(geosGeometry.get());
+    return true;
+  }
+};
+
+template <typename T>
+struct GeometryFromGeoJsonFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Geometry>& result,
+      const arg_type<Varchar>& geometry) {
+    auto reader = geos::io::GeoJSONReader();
+    auto geosGeometry = reader.read(geometry);
+    geospatial::GeometrySerializer::serialize(*geosGeometry, result);
+  }
+};
+
+template <typename T>
+struct GreatCircleDistanceFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE Status call(
+      out_type<double>& result,
+      const arg_type<double>& lat1,
+      const arg_type<double>& long1,
+      const arg_type<double>& lat2,
+      const arg_type<double>& long2) {
+    Status status = geospatial::validateLatitudeLongitude(lat1, long1);
+    if (FOLLY_UNLIKELY(!status.ok())) {
+      return status;
+    }
+
+    status = geospatial::validateLatitudeLongitude(lat2, long2);
+    if (FOLLY_UNLIKELY(!status.ok())) {
+      return status;
+    }
+
+    result = BingTileType::greatCircleDistance(lat1, long1, lat2, long2);
+    return status;
+  }
+};
+
+template <typename T>
+struct GeometryToBingTilesFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  uint8_t maxZoomShift = 5;
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /* inputTypes */,
+      const core::QueryConfig& config,
+      const arg_type<Geometry>* /* geometry */,
+      const arg_type<int32_t>* /* zoom */) {
+    maxZoomShift =
+        std::max<uint8_t>(config.debugBingTileChildrenMaxZoomShift(), 1);
+  }
+
+  FOLLY_ALWAYS_INLINE Status call(
+      out_type<Array<BingTile>>& result,
+      const arg_type<Geometry>& geometry,
+      const arg_type<int32_t>& zoom) {
+    if (zoom < 0 || zoom > 23) {
+      return Status::UserError("Zoom level must be between 0 and 23");
+    }
+    auto envelope =
+        geospatial::GeometryDeserializer::deserializeEnvelope(geometry);
+    if (envelope->isNull()) {
+      return Status::OK();
+    }
+
+    std::vector<int64_t> covering;
+    auto geom = geospatial::GeometryDeserializer::deserialize(geometry);
+
+    if (geom->getGeometryTypeId() == geos::geom::GeometryTypeId::GEOS_POINT) {
+      covering = geospatial::getMinimalTilesCoveringGeometry(*envelope, zoom);
+    } else {
+      if (geospatial::isPointOrRectangle(*geom)) {
+        covering = geospatial::getMinimalTilesCoveringGeometry(*envelope, zoom);
+      } else {
+        covering = geospatial::getMinimalTilesCoveringGeometry(
+            *geom, zoom, maxZoomShift);
+      }
+    }
+
+    result.add_items(covering);
+    return Status::OK();
+  }
+};
+
+template <typename T>
+struct GeometryToDissolvedBingTilesFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE Status call(
+      out_type<Array<BingTile>>& result,
+      const arg_type<Geometry>& geometry,
+      const arg_type<int32_t>& zoom) {
+    if (zoom < 0 || zoom > 23) {
+      return Status::UserError("Zoom level must be between 0 and 23");
+    }
+    auto geom = geospatial::GeometryDeserializer::deserialize(geometry);
+    if (geom->isEmpty()) {
+      return Status::OK();
+    }
+
+    std::vector<int64_t> covering =
+        geospatial::getDissolvedTilesCoveringGeometry(*geom, zoom);
+
+    result.add_items(covering);
+    return Status::OK();
+  }
+};
+
+template <typename T>
+struct GeometryUnionFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+  GeometryUnionFunction() {
+    factory_ = geos::geom::GeometryFactory::create();
+  }
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<Geometry>& result,
+      const arg_type<Array<Geometry>>& geometries) {
+    std::vector<std::unique_ptr<geos::geom::Geometry>> geometryVector;
+    if (geometries.size() == 0) {
+      return false;
+    }
+    // There seems to be a bug in the current version of geos where union with
+    // all empty geometries is returning incorrect results or even crashing.
+    // The isCompletelyEmpty check is a hack to avoid this case.
+    bool isCompletelyEmpty = true;
+
+    for (int i = 0; i < geometries.size(); i++) {
+      // Ignore null inputs
+      if (!geometries[i].has_value()) {
+        continue;
+      }
+      std::unique_ptr<geos::geom::Geometry> geosGeometry =
+          geospatial::GeometryDeserializer::deserialize(*geometries[i]);
+      if (!geosGeometry->isEmpty()) {
+        isCompletelyEmpty = false;
+      }
+      geometryVector.push_back(std::move(geosGeometry));
+    }
+
+    if (FOLLY_UNLIKELY(isCompletelyEmpty)) {
+      auto emptyCollection = factory_->createPolygon();
+      geospatial::GeometrySerializer::serialize(*emptyCollection, result);
+      return true;
+    }
+
+    std::unique_ptr<geos::geom::Geometry> collection(
+        factory_->createGeometryCollection(std::move(geometryVector)));
+
+    // If geometry is not completely empty, we can proceed with union.
+    std::unique_ptr<geos::geom::Geometry> geomUnion = collection->Union();
+    geospatial::GeometrySerializer::serialize(*geomUnion, result);
+    return true;
+  }
+
+ private:
+  geos::geom::GeometryFactory::Ptr factory_;
+};
+
+template <typename T>
+struct StLineFromTextFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE Status
+  call(out_type<Geometry>& result, const arg_type<Varchar>& wkt) {
+    std::unique_ptr<geos::geom::Geometry> geosGeometry;
+    GEOS_TRY(
+        {
+          geos::io::WKTReader reader;
+          geosGeometry = reader.read(wkt);
+        },
+        "Failed to parse WKT");
+    auto validate = geospatial::validateType(
+        *geosGeometry,
+        {geos::geom::GeometryTypeId::GEOS_LINESTRING},
+        "ST_LineFromText");
+
+    if (validate.ok()) {
+      geospatial::GeometrySerializer::serialize(*geosGeometry, result);
+    }
+
+    return validate;
+  }
+};
+
+template <typename T>
+struct StLineStringFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+  StLineStringFunction() {
+    factory_ = geos::geom::GeometryFactory::create();
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Geometry>& result,
+      const arg_type<Array<Geometry>>& input) {
+    std::unique_ptr<geos::geom::CoordinateArraySequence> coords =
+        geospatial::GeometryDeserializer::deserializePointsToCoordinate<
+            Geometry>(input, "ST_LineString", true);
+
+    std::unique_ptr<geos::geom::LineString> lineString;
+    if (input.size() < 2) {
+      lineString = factory_->createLineString();
+    } else {
+      lineString = factory_->createLineString(std::move(coords));
+    }
+    geospatial::GeometrySerializer::serialize(*lineString, result);
+  }
+
+ private:
+  geos::geom::GeometryFactory::Ptr factory_;
+};
+
+template <typename T>
+struct StMultiPointFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+  StMultiPointFunction() {
+    factory_ = geos::geom::GeometryFactory::create();
+  }
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<Geometry>& result,
+      const arg_type<Array<Geometry>>& input) {
+    std::unique_ptr<geos::geom::CoordinateArraySequence> coords =
+        geospatial::GeometryDeserializer::deserializePointsToCoordinate<
+            Geometry>(input, "ST_MultiPoint", false);
+
+    if (coords->size() == 0) {
+      return false;
+    }
+
+    auto multiPoint = std::unique_ptr<geos::geom::MultiPoint>(
+        factory_->createMultiPoint(*coords));
+    geospatial::GeometrySerializer::serialize(*multiPoint, result);
+    return true;
   }
 
  private:

@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/exec/ExchangeClient.h"
 #include <folly/ScopeGuard.h>
 #include <gtest/gtest.h>
 #include <atomic>
@@ -90,7 +91,8 @@ class ExchangeClientTest
         core::PlanFragment{plan},
         0,
         std::move(queryCtx),
-        Task::ExecutionMode::kParallel);
+        Task::ExecutionMode::kParallel,
+        exec::Consumer{});
   }
 
   int32_t enqueue(

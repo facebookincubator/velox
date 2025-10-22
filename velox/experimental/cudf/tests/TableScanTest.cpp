@@ -14,18 +14,20 @@
  * limitations under the License.
  */
 
-#include "velox/experimental/cudf/connectors/parquet/ParquetConfig.h"
-#include "velox/experimental/cudf/connectors/parquet/ParquetConnector.h"
-#include "velox/experimental/cudf/connectors/parquet/ParquetConnectorSplit.h"
-#include "velox/experimental/cudf/connectors/parquet/ParquetDataSource.h"
-#include "velox/experimental/cudf/connectors/parquet/ParquetTableHandle.h"
-#include "velox/experimental/cudf/tests/utils/ParquetConnectorTestBase.h"
+#include "velox/experimental/cudf/connectors/hive/CudfHiveConfig.h"
+#include "velox/experimental/cudf/connectors/hive/CudfHiveConnector.h"
+#include "velox/experimental/cudf/connectors/hive/CudfHiveConnectorSplit.h"
+#include "velox/experimental/cudf/connectors/hive/CudfHiveDataSource.h"
+#include "velox/experimental/cudf/connectors/hive/CudfHiveTableHandle.h"
+#include "velox/experimental/cudf/tests/utils/CudfHiveConnectorTestBase.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/tests/FaultyFile.h"
 #include "velox/common/file/tests/FaultyFileSystem.h"
 #include "velox/common/memory/MemoryArbitrator.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/connectors/hive/HiveConnector.h"
+#include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/exec/Exchange.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/TableScan.h"
@@ -36,10 +38,12 @@
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/type/Type.h"
+#include "velox/type/tests/SubfieldFiltersBuilder.h"
 
 #include <fmt/ranges.h>
 
 using namespace facebook::velox;
+using namespace facebook::velox::connector;
 using namespace facebook::velox::core;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
@@ -49,16 +53,16 @@ using namespace facebook::velox::cudf_velox;
 using namespace facebook::velox::cudf_velox::exec;
 using namespace facebook::velox::cudf_velox::exec::test;
 
-class TableScanTest : public virtual ParquetConnectorTestBase {
+class TableScanTest : public virtual CudfHiveConnectorTestBase {
  protected:
   void SetUp() override {
-    ParquetConnectorTestBase::SetUp();
+    CudfHiveConnectorTestBase::SetUp();
     ExchangeSource::factories().clear();
     ExchangeSource::registerFactory(createLocalExchangeSource);
   }
 
   static void SetUpTestCase() {
-    ParquetConnectorTestBase::SetUpTestCase();
+    CudfHiveConnectorTestBase::SetUpTestCase();
   }
 
   std::vector<RowVectorPtr> makeVectors(
@@ -66,11 +70,11 @@ class TableScanTest : public virtual ParquetConnectorTestBase {
       int32_t rowsPerVector,
       const RowTypePtr& rowType = nullptr) {
     auto inputs = rowType ? rowType : rowType_;
-    return ParquetConnectorTestBase::makeVectors(inputs, count, rowsPerVector);
+    return CudfHiveConnectorTestBase::makeVectors(inputs, count, rowsPerVector);
   }
 
-  Split makeParquetSplit(std::string path, int64_t splitWeight = 0) {
-    return Split(makeParquetConnectorSplit(std::move(path), splitWeight));
+  Split makeCudfHiveSplit(std::string path, int64_t splitWeight = 0) {
+    return Split(makeCudfHiveConnectorSplit(std::move(path), splitWeight));
   }
 
   std::shared_ptr<Task> assertQuery(
@@ -92,7 +96,7 @@ class TableScanTest : public virtual ParquetConnectorTestBase {
       const PlanNodePtr& plan,
       const std::vector<std::shared_ptr<TempFilePath>>& filePaths,
       const std::string& duckDbSql) {
-    return ParquetConnectorTestBase::assertQuery(plan, filePaths, duckDbSql);
+    return CudfHiveConnectorTestBase::assertQuery(plan, filePaths, duckDbSql);
   }
 
   // Run query with spill enabled.
@@ -105,7 +109,7 @@ class TableScanTest : public virtual ParquetConnectorTestBase {
         .spillDirectory(spillDirectory)
         .config(core::QueryConfig::kSpillEnabled, false)
         .config(core::QueryConfig::kAggregationSpillEnabled, false)
-        .splits(makeParquetConnectorSplits(filePaths))
+        .splits(makeCudfHiveConnectorSplits(filePaths))
         .assertResults(duckDbSql);
   }
 
@@ -130,17 +134,20 @@ class TableScanTest : public virtual ParquetConnectorTestBase {
 
   static std::unordered_map<std::string, RuntimeMetric>
   getTableScanRuntimeStats(const std::shared_ptr<Task>& task) {
-    VELOX_NYI("RuntimeStats not yet implemented for the cudf ParquetConnector");
+    VELOX_NYI(
+        "RuntimeStats not yet implemented for the cudf CudfHiveConnector");
     // return task->taskStats().pipelineStats[0].operatorStats[0].runtimeStats;
   }
 
   static int64_t getSkippedStridesStat(const std::shared_ptr<Task>& task) {
-    VELOX_NYI("RuntimeStats not yet implemented for the cudf ParquetConnector");
+    VELOX_NYI(
+        "RuntimeStats not yet implemented for the cudf CudfHiveConnector");
     // return getTableScanRuntimeStats(task)["skippedStrides"].sum;
   }
 
   static int64_t getSkippedSplitsStat(const std::shared_ptr<Task>& task) {
-    VELOX_NYI("RuntimeStats not yet implemented for the cudf ParquetConnector");
+    VELOX_NYI(
+        "RuntimeStats not yet implemented for the cudf CudfHiveConnector");
     // return getTableScanRuntimeStats(task)["skippedSplits"].sum;
   }
 
@@ -175,21 +182,63 @@ TEST_F(TableScanTest, allColumns) {
 
   createDuckDbTable(vectors);
   auto plan = tableScanNode();
-  auto task = assertQuery(plan, {filePath}, "SELECT * FROM tmp");
 
-  // A quick sanity check for memory usage reporting. Check that peak total
-  // memory usage for the project node is > 0.
-  auto planStats = toPlanStats(task->taskStats());
-  auto scanNodeId = plan->id();
-  auto it = planStats.find(scanNodeId);
-  ASSERT_TRUE(it != planStats.end());
-  ASSERT_TRUE(it->second.peakMemoryBytes > 0);
+  const std::string duckDbSql = "SELECT * FROM tmp";
 
-  //  Verifies there is no dynamic filter stats.
-  ASSERT_TRUE(it->second.dynamicFilterStats.empty());
+  // Helper to test scan all columns for the given splits
+  auto testScanAllColumns =
+      [&](const std::vector<std::shared_ptr<
+              facebook::velox::connector::ConnectorSplit>>& splits) {
+        auto task = AssertQueryBuilder(duckDbQueryRunner_)
+                        .plan(plan)
+                        .splits(splits)
+                        .assertResults(duckDbSql);
 
-  // TODO: We are not writing any customStats yet so disable this check
-  // ASSERT_LT(0, it->second.customStats.at("ioWaitWallNanos").sum);
+        // A quick sanity check for memory usage reporting. Check that peak
+        // total memory usage for the project node is > 0.
+        auto planStats = toPlanStats(task->taskStats());
+        auto scanNodeId = plan->id();
+        auto it = planStats.find(scanNodeId);
+        ASSERT_TRUE(it != planStats.end());
+        // TODO (dm): enable this test once we start to track gpu memory
+        // ASSERT_TRUE(it->second.peakMemoryBytes > 0);
+
+        //  Verifies there is no dynamic filter stats.
+        ASSERT_TRUE(it->second.dynamicFilterStats.empty());
+
+        // TODO: We are not writing any customStats yet so disable this check
+        // ASSERT_LT(0, it->second.customStats.at("ioWaitWallNanos").sum);
+      };
+
+  // Test scan all columns with CudfHiveConnectorSplits
+  {
+    auto splits = makeCudfHiveConnectorSplits({filePath});
+    testScanAllColumns(splits);
+  }
+
+  // Test scan all columns with HiveConnectorSplits
+  {
+    // Lambda to create HiveConnectorSplits from file paths
+    auto makeHiveConnectorSplits =
+        [&](const std::vector<std::shared_ptr<
+                facebook::velox::exec::test::TempFilePath>>& filePaths) {
+          std::vector<
+              std::shared_ptr<facebook::velox::connector::ConnectorSplit>>
+              splits;
+          for (const auto& filePath : filePaths) {
+            splits.push_back(
+                facebook::velox::connector::hive::HiveConnectorSplitBuilder(
+                    filePath->getPath())
+                    .connectorId(kCudfHiveConnectorId)
+                    .fileFormat(dwio::common::FileFormat::PARQUET)
+                    .build());
+          }
+          return splits;
+        };
+
+    auto splits = makeHiveConnectorSplits({filePath});
+    testScanAllColumns(splits);
+  }
 }
 
 TEST_F(TableScanTest, directBufferInputRawInputBytes) {
@@ -222,7 +271,7 @@ TEST_F(TableScanTest, directBufferInputRawInputBytes) {
 
   auto task = AssertQueryBuilder(duckDbQueryRunner_)
                   .plan(plan)
-                  .splits(makeParquetConnectorSplits({filePath}))
+                  .splits(makeCudfHiveConnectorSplits({filePath}))
                   .queryCtx(queryCtx)
                   .assertResults("SELECT c0, c2 FROM tmp");
 
@@ -233,11 +282,11 @@ TEST_F(TableScanTest, directBufferInputRawInputBytes) {
   auto it = planStats.find(scanNodeId);
   ASSERT_TRUE(it != planStats.end());
   auto rawInputBytes = it->second.rawInputBytes;
-  // Reduced from 500 to 400 as cudf Parquet writer seems to be writing smaller
+  // Reduced from 500 to 400 as cudf CudfHive writer seems to be writing smaller
   // files.
   ASSERT_GE(rawInputBytes, 400);
 
-  // TableScan runtime stats not available with Parquet connector yet
+  // TableScan runtime stats not available with CudfHive connector yet
 #if 0
   auto overreadBytes =
   getTableScanRuntimeStats(task).at("overreadBytes").sum;
@@ -282,38 +331,17 @@ TEST_F(TableScanTest, filterPushdown) {
   createDuckDbTable(vectors);
 
   // c1 >= 0 or null and c3 is true
-  // common::SubfieldFilters subfieldFilters =
-  //     SubfieldFiltersBuilder()
-  //         .add("c1", greaterThanOrEqual(0, true))
-  //         .add("c3", std::make_unique<common::BoolValue>(true, false))
-  //         .build();
-  // convert subfieldFilters to a typed expression
-  // c1 >= 0 or null and c3 is true
-  auto c1Expr = std::make_shared<core::CallTypedExpr>(
-      BOOLEAN(),
-      std::vector<core::TypedExprPtr>{
-          std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "c1"),
-          std::make_shared<core::ConstantTypedExpr>(BIGINT(), int64_t(0)),
-      },
-      "gte");
+  common::SubfieldFilters subfieldFilters =
+      common::test::SubfieldFiltersBuilder()
+          .add(
+              "c1",
+              std::make_unique<common::BigintRange>(
+                  int64_t(0), std::numeric_limits<int64_t>::max(), true))
+          .add("c3", std::make_unique<common::BoolValue>(true, false))
+          .build();
 
-  auto c3Expr = std::make_shared<core::CallTypedExpr>(
-      BOOLEAN(),
-      std::vector<core::TypedExprPtr>{
-          std::make_shared<core::FieldAccessTypedExpr>(BOOLEAN(), "c3"),
-          std::make_shared<core::ConstantTypedExpr>(BOOLEAN(), true),
-      },
-      "eq");
-
-  auto subfieldFilterExpr = std::make_shared<core::CallTypedExpr>(
-      BOOLEAN(),
-      std::vector<core::TypedExprPtr>{
-          c1Expr,
-          c3Expr,
-      },
-      "and");
   auto tableHandle = makeTableHandle(
-      "parquet_table", rowType, true, std::move(subfieldFilterExpr), nullptr);
+      "parquet_table", rowType, true, std::move(subfieldFilters), nullptr);
 
   auto assignments =
       facebook::velox::exec::test::HiveConnectorTestBase::allRegularColumns(
@@ -388,4 +416,26 @@ TEST_F(TableScanTest, filterPushdown) {
       filePaths,
       "SELECT count(*) FROM tmp");
 #endif
+}
+
+TEST_F(TableScanTest, splitOffset) {
+  auto vectors = makeVectors(1, 10);
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), vectors);
+
+  auto plan = tableScanNode();
+
+  auto split = facebook::velox::connector::hive::HiveConnectorSplitBuilder(
+                   filePath->getPath())
+                   .connectorId(kCudfHiveConnectorId)
+                   .start(1)
+                   .fileFormat(dwio::common::FileFormat::PARQUET)
+                   .build();
+
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(duckDbQueryRunner_)
+          .plan(plan)
+          .splits({split})
+          .assertEmptyResults(),
+      "CudfHiveDataSource cannot process splits with non-zero offset");
 }

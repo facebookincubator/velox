@@ -436,6 +436,8 @@ std::unique_ptr<BatchStream> ConcatFilesSpillBatchStream::create(
 }
 
 bool ConcatFilesSpillBatchStream::nextBatch(RowVectorPtr& batch) {
+  TestValue::adjust(
+      "facebook::velox::exec::ConcatFilesSpillBatchStream::nextBatch", nullptr);
   VELOX_CHECK_NULL(batch);
   VELOX_CHECK(!atEnd_);
   for (; fileIndex_ < spillFiles_.size(); ++fileIndex_) {
@@ -481,15 +483,10 @@ SpillPartitionId::SpillPartitionId(
   encodedId_ |= partitionNumber << (kNumPartitionBits * childSpillLevel);
 }
 
-bool SpillPartitionId::operator==(const SpillPartitionId& other) const {
-  return encodedId_ == other.encodedId_;
-}
-
-bool SpillPartitionId::operator!=(const SpillPartitionId& other) const {
-  return !(*this == other);
-}
-
 bool SpillPartitionId::operator<(const SpillPartitionId& other) const {
+  if (*this == other) {
+    return false;
+  }
   for (auto i = 0; i <= std::min(spillLevel(), other.spillLevel()); ++i) {
     const auto selfPartitionNum = partitionNumber(i);
     const auto otherPartitionNum = other.partitionNumber(i);

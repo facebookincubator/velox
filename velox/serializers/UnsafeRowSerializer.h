@@ -44,6 +44,15 @@ class UnsafeRowVectorSerde : public VectorSerde {
       RowVectorPtr* result,
       const Options* options) override;
 
+  void deserialize(
+      ByteInputStream* source,
+      std::unique_ptr<RowIterator>& sourceRowIterator,
+      uint64_t maxRows,
+      RowTypePtr type,
+      RowVectorPtr* result,
+      velox::memory::MemoryPool* pool,
+      const Options* options = nullptr) override;
+
   static void registerVectorSerde();
   static void registerNamedVectorSerde();
 };

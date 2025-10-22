@@ -64,6 +64,7 @@ Window::Window(
             driverCtx->queryConfig().prefixSortMaxStringPrefixLength()},
         spillConfig,
         &nonReclaimableSection_,
+        &stats_,
         spillStats_.get());
   }
 }
@@ -686,6 +687,9 @@ RowVectorPtr Window::getOutput() {
 
   const auto numRowsLeft = numRows_ - numProcessedRows_;
   if (numRowsLeft == 0) {
+    if (windowBuild_ != nullptr) {
+      windowBuild_->release();
+    }
     return nullptr;
   }
 

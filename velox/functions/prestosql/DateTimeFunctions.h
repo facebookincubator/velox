@@ -16,10 +16,10 @@
 #pragma once
 
 #define XXH_INLINE_ALL
-#include <boost/regex.hpp>
+#include <re2/re2.h>
 #include <xxhash.h>
 #include <string_view>
-#include "velox/expression/ComplexViewTypes.h"
+#include "velox/expression/VectorFunction.h"
 #include "velox/functions/lib/DateTimeFormatter.h"
 #include "velox/functions/lib/TimeUtils.h"
 #include "velox/functions/prestosql/DateTimeImpl.h"
@@ -27,6 +27,9 @@
 #include "velox/type/TimestampConversion.h"
 #include "velox/type/Type.h"
 #include "velox/type/tz/TimeZoneMap.h"
+#include "velox/vector/BaseVector.h"
+#include "velox/vector/ConstantVector.h"
+#include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::functions {
 
@@ -44,7 +47,7 @@ struct ToUnixtimeFunction {
       double& result,
       const arg_type<TimestampWithTimezone>& timestampWithTimezone) {
     const auto milliseconds = unpackMillisUtc(*timestampWithTimezone);
-    result = (double)milliseconds / kMillisecondsInSecond;
+    result = (double)milliseconds / Timestamp::kMillisecondsInSecond;
   }
 };
 
@@ -535,6 +538,112 @@ struct TimestampPlusInterval {
 };
 
 template <typename T>
+struct TimePlusInterval {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Time>& result,
+      const arg_type<Time>& time,
+      const arg_type<IntervalDayTime>& interval) {
+    result = addToTime(time, interval);
+  }
+};
+
+template <typename T>
+struct TimeMinusInterval {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Time>& result,
+      const arg_type<Time>& time,
+      const arg_type<IntervalDayTime>& interval) {
+    result = addToTime(time, -interval);
+  }
+};
+
+// Optimized vector function for Time +/- IntervalYearMonth
+// This case is special because result = time (identity function), allowing
+// for significant optimizations.
+// For plus: supports both (time, interval) and (interval, time)
+// For minus: only supports (time, interval) - not (interval, time)
+class TimeIntervalYearMonthVectorFunction : public exec::VectorFunction {
+ public:
+  void apply(
+      const SelectivityVector& rows,
+      std::vector<VectorPtr>& args,
+      const TypePtr& outputType,
+      exec::EvalCtx& context,
+      VectorPtr& result) const override {
+    VectorPtr& timeVector = args[0]->type()->isTime() ? args[0] : args[1];
+
+    // Constant vector case
+    // If time input is constant, create constant result - no iteration!
+    if (timeVector->isConstantEncoding()) {
+      auto constantTime = timeVector->as<ConstantVector<int64_t>>();
+      if (constantTime->isNullAt(0)) {
+        result = BaseVector::createNullConstant(
+            outputType, rows.size(), context.pool());
+      } else {
+        auto value = constantTime->valueAt(0);
+        result = BaseVector::createConstant(
+            outputType, value, rows.size(), context.pool());
+      }
+      return;
+    }
+
+    // Single reference case
+    // If input vector is singly referenced, reuse it directly - zero copy!
+    if (!result && BaseVector::isVectorWritable(timeVector)) {
+      result = std::move(timeVector); // Move input to result - zero copy!
+      return;
+    }
+
+    // FALLBACK: Standard processing for other cases
+    context.ensureWritable(rows, outputType, result);
+    auto* flatResult = result->asFlatVector<int64_t>();
+    // Fast path for flat vectors - use FlatVector::copy for efficient copying
+    flatResult->copy(timeVector.get(), rows, nullptr);
+  }
+
+  static std::vector<std::shared_ptr<exec::FunctionSignature>>
+  signaturesPlus() {
+    return {// Signature 1: (time, interval year to month) -> time
+            exec::FunctionSignatureBuilder()
+                .returnType("time")
+                .argumentType("time")
+                .argumentType("interval year to month")
+                .build(),
+            // Signature 2: (interval year to month, time) -> time
+            exec::FunctionSignatureBuilder()
+                .returnType("time")
+                .argumentType("interval year to month")
+                .argumentType("time")
+                .build()};
+  }
+
+  static std::vector<std::shared_ptr<exec::FunctionSignature>>
+  signaturesMinus() {
+    return {// Only support: (time, interval year to month) -> time
+            exec::FunctionSignatureBuilder()
+                .returnType("time")
+                .argumentType("time")
+                .argumentType("interval year to month")
+                .build()};
+  }
+};
+
+template <typename T>
+struct IntervalPlusTime {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Time>& result,
+      const arg_type<IntervalDayTime>& interval,
+      const arg_type<Time>& time) {
+    result = addToTime(time, interval);
+  }
+};
+
+template <typename T>
 struct IntervalPlusTimestamp {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
@@ -765,6 +874,16 @@ struct HourFunction : public InitSessionTimezone<T>,
     auto timestamp = this->toTimestamp(timestampWithTimezone);
     result = getDateTime(timestamp, nullptr).tm_hour;
   }
+
+  FOLLY_ALWAYS_INLINE void call(int64_t& result, const arg_type<Time>& time) {
+    VELOX_USER_CHECK(
+        time >= 0 && time < kMillisInDay,
+        "TIME value {} is out of range [0, 86400000)",
+        time);
+    result = std::chrono::duration_cast<std::chrono::hours>(
+                 std::chrono::milliseconds(time))
+                 .count();
+  }
 };
 
 template <typename T>
@@ -799,6 +918,16 @@ struct MinuteFunction : public InitSessionTimezone<T>,
     auto timestamp = this->toTimestamp(timestampWithTimezone);
     result = getDateTime(timestamp, nullptr).tm_min;
   }
+
+  FOLLY_ALWAYS_INLINE void call(int64_t& result, const arg_type<Time>& time) {
+    VELOX_USER_CHECK(
+        time >= 0 && time < kMillisInDay,
+        "TIME value {} is out of valid range [0, 86399999]",
+        time);
+    auto duration = std::chrono::milliseconds(time);
+    auto minutes = std::chrono::duration_cast<std::chrono::minutes>(duration);
+    result = minutes.count() % kMinutesInHour;
+  }
 };
 
 template <typename T>
@@ -832,6 +961,16 @@ struct SecondFunction : public TimestampWithTimezoneSupport<T> {
     auto timestamp = this->toTimestamp(timestampWithTimezone);
     result = getDateTime(timestamp, nullptr).tm_sec;
   }
+
+  FOLLY_ALWAYS_INLINE void call(int64_t& result, const arg_type<Time>& time) {
+    VELOX_USER_CHECK(
+        time >= 0 && time < kMillisInDay,
+        "TIME value {} is out of range [0, 86400000)",
+        time);
+    auto duration = std::chrono::milliseconds(time);
+    auto seconds = std::chrono::duration_cast<std::chrono::seconds>(duration);
+    result = seconds.count() % kSecondsInMinute;
+  }
 };
 
 template <typename T>
@@ -852,7 +991,7 @@ struct MillisecondFunction : public TimestampWithTimezoneSupport<T> {
   FOLLY_ALWAYS_INLINE void call(
       int64_t& result,
       const arg_type<Timestamp>& timestamp) {
-    result = timestamp.getNanos() / kNanosecondsInMillisecond;
+    result = timestamp.getNanos() / Timestamp::kNanosecondsInMillisecond;
   }
 
   FOLLY_ALWAYS_INLINE void call(
@@ -866,7 +1005,16 @@ struct MillisecondFunction : public TimestampWithTimezoneSupport<T> {
       int64_t& result,
       const arg_type<TimestampWithTimezone>& timestampWithTimezone) {
     auto timestamp = this->toTimestamp(timestampWithTimezone);
-    result = timestamp.getNanos() / kNanosecondsInMillisecond;
+    result = timestamp.getNanos() / Timestamp::kNanosecondsInMillisecond;
+  }
+
+  FOLLY_ALWAYS_INLINE void call(int64_t& result, const arg_type<Time>& time) {
+    VELOX_USER_CHECK(
+        time >= 0 && time < kMillisInDay,
+        "TIME value {} is out of range [0, 86400000)",
+        time);
+    auto time_duration = std::chrono::milliseconds(time);
+    result = (time_duration % std::chrono::seconds(1)).count();
   }
 };
 
@@ -877,7 +1025,7 @@ struct MillisecondFromIntervalFunction {
   FOLLY_ALWAYS_INLINE void call(
       int64_t& result,
       const arg_type<IntervalDayTime>& millis) {
-    result = millis % kMillisecondsInSecond;
+    result = millis % Timestamp::kMillisecondsInSecond;
   }
 };
 
@@ -912,6 +1060,37 @@ inline std::optional<DateTimeUnit> getTimestampUnit(
       unitString);
 
   return unit;
+}
+
+inline std::optional<DateTimeUnit> getTimeUnit(
+    const StringView& unitString,
+    bool throwIfInvalid = true) {
+  std::optional<DateTimeUnit> unit =
+      fromDateTimeUnitString(unitString, /*throwIfInvalid=*/false);
+
+  if (unit.has_value()) {
+    // Only allow time-related units for TIME type
+    if (unit.value() == DateTimeUnit::kMillisecond ||
+        unit.value() == DateTimeUnit::kSecond ||
+        unit.value() == DateTimeUnit::kMinute ||
+        unit.value() == DateTimeUnit::kHour) {
+      return unit;
+    }
+  }
+
+  if (throwIfInvalid) {
+    VELOX_USER_FAIL("{} is not a valid TIME field", unitString);
+  }
+  return std::nullopt;
+}
+
+inline void checkValueInInt32Range(int64_t value) {
+  if (value != static_cast<int32_t>(value)) {
+    VELOX_UNSUPPORTED(
+        "Value should be in range [{}, {}]",
+        std::numeric_limits<int32_t>::min(),
+        std::numeric_limits<int32_t>::max());
+  }
 }
 
 } // namespace
@@ -1053,7 +1232,7 @@ struct DateAddFunction : public TimestampWithTimezoneSupport<T> {
       const arg_type<Timestamp>* /*timestamp*/) {
     sessionTimeZone_ = getTimeZoneFromConfig(config);
     if (unitString != nullptr) {
-      unit_ = fromDateTimeUnitString(*unitString, /*throwIfInvalid=*/false);
+      unit_ = fromDateTimeUnitString(*unitString, /*throwIfInvalid=*/true);
     }
   }
 
@@ -1068,6 +1247,17 @@ struct DateAddFunction : public TimestampWithTimezoneSupport<T> {
     }
   }
 
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& /*config*/,
+      const arg_type<Varchar>* unitString,
+      const int64_t* /*value*/,
+      const arg_type<Time>* /*time*/) {
+    if (unitString != nullptr) {
+      unit_ = getTimeUnit(*unitString, /*throwIfInvalid=*/true);
+    }
+  }
+
   FOLLY_ALWAYS_INLINE void call(
       out_type<Timestamp>& result,
       const arg_type<Varchar>& unitString,
@@ -1077,36 +1267,9 @@ struct DateAddFunction : public TimestampWithTimezoneSupport<T> {
         ? unit_.value()
         : fromDateTimeUnitString(unitString, /*throwIfInvalid=*/true).value();
 
-    if (value != (int32_t)value) {
-      VELOX_UNSUPPORTED("integer overflow");
-    }
-
-    if (LIKELY(sessionTimeZone_ != nullptr)) {
-      // sessionTimeZone not null means that the config
-      // adjust_timestamp_to_timezone is on.
-      Timestamp zonedTimestamp = timestamp;
-      zonedTimestamp.toTimezone(*sessionTimeZone_);
-
-      Timestamp resultTimestamp =
-          addToTimestamp(zonedTimestamp, unit, (int32_t)value);
-
-      if (isTimeUnit(unit)) {
-        const int64_t offset = static_cast<Timestamp>(timestamp).getSeconds() -
-            zonedTimestamp.getSeconds();
-        result = Timestamp(
-            resultTimestamp.getSeconds() + offset, resultTimestamp.getNanos());
-      } else {
-        result = Timestamp(
-            sessionTimeZone_
-                ->correct_nonexistent_time(
-                    std::chrono::seconds(resultTimestamp.getSeconds()))
-                .count(),
-            resultTimestamp.getNanos());
-        result.toGMT(*sessionTimeZone_);
-      }
-    } else {
-      result = addToTimestamp(timestamp, unit, (int32_t)value);
-    }
+    checkValueInInt32Range(value);
+    result = addToTimestamp(
+        unit, static_cast<int32_t>(value), timestamp, sessionTimeZone_);
   }
 
   FOLLY_ALWAYS_INLINE void call(
@@ -1117,12 +1280,10 @@ struct DateAddFunction : public TimestampWithTimezoneSupport<T> {
     const auto unit = unit_.value_or(
         fromDateTimeUnitString(unitString, /*throwIfInvalid=*/true).value());
 
-    if (value != (int32_t)value) {
-      VELOX_UNSUPPORTED("integer overflow");
-    }
+    checkValueInInt32Range(value);
 
     result = addToTimestampWithTimezone(
-        *timestampWithTimezone, unit, (int32_t)value);
+        *timestampWithTimezone, unit, static_cast<int32_t>(value));
   }
 
   FOLLY_ALWAYS_INLINE void call(
@@ -1134,11 +1295,26 @@ struct DateAddFunction : public TimestampWithTimezoneSupport<T> {
         ? unit_.value()
         : getDateUnit(unitString, true).value();
 
-    if (value != (int32_t)value) {
-      VELOX_UNSUPPORTED("integer overflow");
+    checkValueInInt32Range(value);
+
+    result = addToDate(date, unit, static_cast<int32_t>(value));
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Time>& result,
+      const arg_type<Varchar>& unitString,
+      const int64_t value,
+      const arg_type<Time>& time) {
+    DateTimeUnit unit;
+    if (unit_.has_value()) {
+      unit = unit_.value();
+    } else {
+      unit = getTimeUnit(unitString, /*throwIfInvalid=*/true).value();
     }
 
-    result = addToDate(date, unit, (int32_t)value);
+    checkValueInInt32Range(value);
+
+    result = addToTime(unit, static_cast<int32_t>(value), time);
   }
 };
 
@@ -1156,7 +1332,7 @@ struct DateDiffFunction : public TimestampWithTimezoneSupport<T> {
       const arg_type<Timestamp>* /*timestamp1*/,
       const arg_type<Timestamp>* /*timestamp2*/) {
     if (unitString != nullptr) {
-      unit_ = fromDateTimeUnitString(*unitString, /*throwIfInvalid=*/false);
+      unit_ = fromDateTimeUnitString(*unitString, /*throwIfInvalid=*/true);
     }
 
     sessionTimeZone_ = getTimeZoneFromConfig(config);
@@ -1180,7 +1356,18 @@ struct DateDiffFunction : public TimestampWithTimezoneSupport<T> {
       const arg_type<TimestampWithTimezone>* /*timestampWithTimezone1*/,
       const arg_type<TimestampWithTimezone>* /*timestampWithTimezone2*/) {
     if (unitString != nullptr) {
-      unit_ = fromDateTimeUnitString(*unitString, /*throwIfInvalid=*/false);
+      unit_ = fromDateTimeUnitString(*unitString, /*throwIfInvalid=*/true);
+    }
+  }
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& /*config*/,
+      const arg_type<Varchar>* unitString,
+      const arg_type<Time>* /*time1*/,
+      const arg_type<Time>* /*time2*/) {
+    if (unitString != nullptr) {
+      unit_ = getTimeUnit(*unitString, /*throwIfInvalid=*/true);
     }
   }
 
@@ -1223,6 +1410,21 @@ struct DateDiffFunction : public TimestampWithTimezoneSupport<T> {
         unit,
         *timestampWithTz1,
         pack(unpackMillisUtc(*timestampWithTz2), timeZoneId));
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      int64_t& result,
+      const arg_type<Varchar>& unitString,
+      const arg_type<Time>& time1,
+      const arg_type<Time>& time2) {
+    DateTimeUnit unit;
+    if (unit_.has_value()) {
+      unit = unit_.value();
+    } else {
+      unit = getTimeUnit(unitString, /*throwIfInvalid=*/true).value();
+    }
+
+    result = diffTime(unit, time1, time2);
   }
 };
 
@@ -1719,44 +1921,71 @@ template <typename T>
 struct ParseDurationFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  std::unique_ptr<boost::regex> durationRegex_;
+  std::unique_ptr<RE2> durationRegex_;
 
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& /*config*/,
       const arg_type<Varchar>* /*amountUnit*/) {
-    durationRegex_ = std::make_unique<boost::regex>(
-        "^\\s*(\\d+(?:\\.\\d+)?)\\s*([a-zA-Z]+)\\s*$");
+    durationRegex_ =
+        std::make_unique<RE2>(R"(^\s*(\d+(?:\.\d+)?)\s*([a-zA-Z]+)\s*$)");
   }
 
   FOLLY_ALWAYS_INLINE void call(
       out_type<IntervalDayTime>& result,
       const arg_type<Varchar>& amountUnit) {
-    std::string strAmountUnit = (std::string)amountUnit;
-    boost::smatch match;
-    bool isMatch = boost::regex_search(strAmountUnit, match, *durationRegex_);
-    if (!isMatch) {
+    re2::StringPiece valueStr;
+    re2::StringPiece unit;
+    if (!RE2::FullMatch(
+            std::string_view{amountUnit}, *durationRegex_, &valueStr, &unit)) {
       VELOX_USER_FAIL(
           "Input duration is not a valid data duration string: {}", amountUnit);
     }
-    VELOX_USER_CHECK_EQ(
-        match.size(),
-        3,
-        "Input duration does not have value and unit components only: {}",
-        amountUnit);
+
+    double value{};
     try {
-      double value = std::stod(match[1].str());
-      std::string unit = match[2].str();
-      result = valueOfTimeUnitToMillis(value, unit);
-    } catch (std::out_of_range&) {
+      size_t pos = 0;
+      // Create temporary string from StringPiece for stod
+      std::string valueString(valueStr.data(), valueStr.size());
+      value = std::stod(valueString, &pos);
+      if (pos != valueString.size()) {
+        VELOX_USER_FAIL(
+            "Input duration value is not a valid number: {}",
+            std::string_view(valueStr.data(), valueStr.size()));
+      }
+    } catch (const std::out_of_range&) {
       VELOX_USER_FAIL(
           "Input duration value is out of range for double: {}",
-          match[1].str());
-    } catch (std::invalid_argument&) {
+          std::string_view(valueStr.data(), valueStr.size()));
+    } catch (const std::exception&) {
       VELOX_USER_FAIL(
-          "Input duration value is not a valid number: {}", match[1].str());
+          "Input duration value is not a valid number: {}",
+          std::string_view(valueStr.data(), valueStr.size()));
     }
+
+    result = valueOfTimeUnitToMillis(
+        value, std::string_view(unit.data(), unit.size()));
   }
+};
+
+template <typename T>
+struct LocalTimeFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config) {
+    auto sessionStartTimeMs = config.sessionStartTimeMs();
+    localTimeSinceMidnight_ = sessionStartTimeMs % kMillisInDay;
+  }
+
+  // LocalTime just returns the time from midnight in UTC.
+  FOLLY_ALWAYS_INLINE void call(out_type<Time>& result) {
+    result = localTimeSinceMidnight_;
+  }
+
+ private:
+  int64_t localTimeSinceMidnight_;
 };
 
 } // namespace facebook::velox::functions

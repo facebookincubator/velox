@@ -22,15 +22,11 @@
 
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/hive/HiveConfig.h"
-#include "velox/dwio/common/ReaderFactory.h"
 #include "velox/expression/FieldReference.h"
 
 using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::connector::hive {
-
-class HiveTableHandle;
-class HiveColumnHandle;
 
 namespace {
 
@@ -61,11 +57,11 @@ HiveDataSource::HiveDataSource(
     const connector::ConnectorTableHandlePtr& tableHandle,
     const connector::ColumnHandleMap& columnHandles,
     FileHandleFactory* fileHandleFactory,
-    folly::Executor* executor,
+    folly::Executor* ioExecutor,
     const ConnectorQueryCtx* connectorQueryCtx,
     const std::shared_ptr<HiveConfig>& hiveConfig)
     : fileHandleFactory_(fileHandleFactory),
-      executor_(executor),
+      ioExecutor_(ioExecutor),
       connectorQueryCtx_(connectorQueryCtx),
       hiveConfig_(hiveConfig),
       pool_(connectorQueryCtx->memoryPool()),
@@ -217,7 +213,7 @@ std::unique_ptr<SplitReader> HiveDataSource::createSplitReader() {
       ioStats_,
       fsStats_,
       fileHandleFactory_,
-      executor_,
+      ioExecutor_,
       scanSpec_);
 }
 
@@ -422,60 +418,58 @@ void HiveDataSource::addDynamicFilter(
   }
 }
 
-std::unordered_map<std::string, RuntimeCounter> HiveDataSource::runtimeStats() {
-  auto res = runtimeStats_.toMap();
+std::unordered_map<std::string, RuntimeMetric>
+HiveDataSource::getRuntimeStats() {
+  auto res = runtimeStats_.toRuntimeMetricMap();
   res.insert(
-      {{"numPrefetch", RuntimeCounter(ioStats_->prefetch().count())},
+      {{"numPrefetch", RuntimeMetric(ioStats_->prefetch().count())},
        {"prefetchBytes",
-        RuntimeCounter(
+        RuntimeMetric(
             ioStats_->prefetch().sum(), RuntimeCounter::Unit::kBytes)},
        {"totalScanTime",
-        RuntimeCounter(
-            ioStats_->totalScanTime(), RuntimeCounter::Unit::kNanos)},
-       {"totalRemainingFilterTime",
-        RuntimeCounter(
+        RuntimeMetric(ioStats_->totalScanTime(), RuntimeCounter::Unit::kNanos)},
+       {Connector::kTotalRemainingFilterTime,
+        RuntimeMetric(
             totalRemainingFilterTime_.load(std::memory_order_relaxed),
             RuntimeCounter::Unit::kNanos)},
        {"ioWaitWallNanos",
-        RuntimeCounter(
+        RuntimeMetric(
             ioStats_->queryThreadIoLatency().sum() * 1000,
             RuntimeCounter::Unit::kNanos)},
        {"maxSingleIoWaitWallNanos",
-        RuntimeCounter(
+        RuntimeMetric(
             ioStats_->queryThreadIoLatency().max() * 1000,
             RuntimeCounter::Unit::kNanos)},
        {"overreadBytes",
-        RuntimeCounter(
+        RuntimeMetric(
             ioStats_->rawOverreadBytes(), RuntimeCounter::Unit::kBytes)}});
   if (ioStats_->read().count() > 0) {
-    res.insert({"numStorageRead", RuntimeCounter(ioStats_->read().count())});
+    res.insert({"numStorageRead", RuntimeMetric(ioStats_->read().count())});
     res.insert(
         {"storageReadBytes",
-         RuntimeCounter(ioStats_->read().sum(), RuntimeCounter::Unit::kBytes)});
+         RuntimeMetric(ioStats_->read().sum(), RuntimeCounter::Unit::kBytes)});
   }
   if (ioStats_->ssdRead().count() > 0) {
-    res.insert({"numLocalRead", RuntimeCounter(ioStats_->ssdRead().count())});
+    res.insert({"numLocalRead", RuntimeMetric(ioStats_->ssdRead().count())});
     res.insert(
         {"localReadBytes",
-         RuntimeCounter(
+         RuntimeMetric(
              ioStats_->ssdRead().sum(), RuntimeCounter::Unit::kBytes)});
   }
   if (ioStats_->ramHit().count() > 0) {
-    res.insert({"numRamRead", RuntimeCounter(ioStats_->ramHit().count())});
+    res.insert({"numRamRead", RuntimeMetric(ioStats_->ramHit().count())});
     res.insert(
         {"ramReadBytes",
-         RuntimeCounter(
+         RuntimeMetric(
              ioStats_->ramHit().sum(), RuntimeCounter::Unit::kBytes)});
   }
   if (numBucketConversion_ > 0) {
-    res.insert({"numBucketConversion", RuntimeCounter(numBucketConversion_)});
+    res.insert({"numBucketConversion", RuntimeMetric(numBucketConversion_)});
   }
 
   const auto fsStats = fsStats_->stats();
   for (const auto& storageStats : fsStats) {
-    res.emplace(
-        storageStats.first,
-        RuntimeCounter(storageStats.second.sum, storageStats.second.unit));
+    res.emplace(storageStats.first, storageStats.second);
   }
   return res;
 }
@@ -550,7 +544,7 @@ std::shared_ptr<wave::WaveDataSource> HiveDataSource::toWaveDataSource() {
         readerOutputType_,
         &partitionKeys_,
         fileHandleFactory_,
-        executor_,
+        ioExecutor_,
         connectorQueryCtx_,
         hiveConfig_,
         ioStats_,

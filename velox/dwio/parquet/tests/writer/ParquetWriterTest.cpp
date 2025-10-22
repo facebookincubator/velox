@@ -46,15 +46,11 @@ class ParquetWriterTest : public ParquetTestBase {
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
     testutil::TestValue::enable();
     filesystems::registerLocalFileSystem();
-    connector::registerConnectorFactory(
-        std::make_shared<connector::hive::HiveConnectorFactory>());
-    auto hiveConnector =
-        connector::getConnectorFactory(
-            connector::hive::HiveConnectorFactory::kHiveConnectorName)
-            ->newConnector(
-                kHiveConnectorId,
-                std::make_shared<config::ConfigBase>(
-                    std::unordered_map<std::string, std::string>()));
+    connector::hive::HiveConnectorFactory factory;
+    auto hiveConnector = factory.newConnector(
+        kHiveConnectorId,
+        std::make_shared<config::ConfigBase>(
+            std::unordered_map<std::string, std::string>()));
     connector::registerConnector(hiveConnector);
     parquet::registerParquetWriterFactory();
   }
@@ -81,6 +77,66 @@ class ParquetWriterTest : public ParquetTestBase {
   };
 
   inline static const std::string kHiveConnectorId = "test-hive";
+  dwio::common::ColumnReaderStatistics stats;
+};
+
+class ArrowMemoryPool final : public ::arrow::MemoryPool {
+ public:
+  explicit ArrowMemoryPool() : allocated_(0) {}
+
+  ~ArrowMemoryPool() = default;
+
+  ::arrow::Status Allocate(int64_t size, int64_t alignment, uint8_t** out)
+      override {
+    *out = reinterpret_cast<uint8_t*>(malloc(size));
+    VELOX_CHECK_NOT_NULL(*out, "Failed to allocate memory in ArrowMemoryPool.");
+
+    allocated_ += size;
+    return ::arrow::Status::OK();
+  }
+
+  ::arrow::Status Reallocate(
+      int64_t oldSize,
+      int64_t newSize,
+      int64_t alignment,
+      uint8_t** ptr) override {
+    uint8_t* newBuffer = reinterpret_cast<uint8_t*>(realloc(*ptr, newSize));
+    VELOX_CHECK_NOT_NULL(
+        newBuffer, "Failed to reallocate memory in ArrowMemoryPool.");
+
+    *ptr = newBuffer;
+    allocated_ = allocated_ - oldSize + newSize;
+    return ::arrow::Status::OK();
+  }
+
+  void Free(uint8_t* buffer, int64_t size, int64_t alignment) override {
+    free(buffer);
+    allocated_ -= size;
+  }
+
+  int64_t bytes_allocated() const override {
+    return allocated_;
+    ;
+  }
+
+  int64_t max_memory() const override {
+    VELOX_UNSUPPORTED("ArrowMemoryPool#max_memory() unsupported");
+  }
+
+  int64_t total_bytes_allocated() const override {
+    VELOX_UNSUPPORTED("ArrowMemoryPool#total_bytes_allocated() unsupported");
+  }
+
+  int64_t num_allocations() const override {
+    VELOX_UNSUPPORTED("ArrowMemoryPool#num_allocations() unsupported");
+  }
+
+  std::string backend_name() const override {
+    return "arrow memory pool";
+  }
+
+ private:
+  int64_t allocated_;
 };
 
 std::vector<CompressionKind> params = {
@@ -144,7 +200,8 @@ TEST_F(ParquetWriterTest, dictionaryEncodingWithDictionaryPageSize) {
               std::move(inputStream),
               *leafPool_,
               colChunkPtr.compression(),
-              colChunkPtr.totalCompressedSize());
+              colChunkPtr.totalCompressedSize(),
+              stats);
           return pageReader->readPageHeader();
         }
         constexpr int64_t kFirstDataPageCompressedSize = 1291;
@@ -160,7 +217,8 @@ TEST_F(ParquetWriterTest, dictionaryEncodingWithDictionaryPageSize) {
             std::move(inputStream),
             *leafPool_,
             colChunkPtr.compression(),
-            colChunkPtr.totalCompressedSize());
+            colChunkPtr.totalCompressedSize(),
+            stats);
         return pageReader->readPageHeader();
       };
 
@@ -312,7 +370,8 @@ TEST_F(ParquetWriterTest, dictionaryEncodingOff) {
             std::move(inputStream),
             *leafPool_,
             colChunkPtr.compression(),
-            colChunkPtr.totalCompressedSize());
+            colChunkPtr.totalCompressedSize(),
+            stats);
         return pageReader->readPageHeader();
       };
 
@@ -479,7 +538,8 @@ TEST_F(ParquetWriterTest, testPageSizeAndBatchSizeConfiguration) {
             std::move(inputStream),
             *leafPool_,
             colChunkPtr.compression(),
-            colChunkPtr.totalCompressedSize());
+            colChunkPtr.totalCompressedSize(),
+            stats);
         return pageReader->readPageHeader();
       };
 
@@ -626,7 +686,8 @@ TEST_F(ParquetWriterTest, toggleDataPageVersion) {
             std::move(inputStream),
             *leafPool_,
             colChunkPtr.compression(),
-            colChunkPtr.totalCompressedSize());
+            colChunkPtr.totalCompressedSize(),
+            stats);
 
         return pageReader->readPageHeader().type;
       };
@@ -720,7 +781,7 @@ DEBUG_ONLY_TEST_F(ParquetWriterTest, unitFromWriterOptions) {
   writer->close();
 };
 
-TEST_F(ParquetWriterTest, parquetWriteTimestampTimeZoneWithDefault) {
+DEBUG_ONLY_TEST_F(ParquetWriterTest, parquetWriteTimestampTimeZoneWithDefault) {
   SCOPED_TESTVALUE_SET(
       "facebook::velox::parquet::Writer::write",
       std::function<void(const ::arrow::Schema*)>(
@@ -748,9 +809,26 @@ TEST_F(ParquetWriterTest, parquetWriteTimestampTimeZoneWithDefault) {
   writer->close();
 };
 
+TEST_F(ParquetWriterTest, parquetWriteWithArrowMemoryPool) {
+  const auto data = makeRowVector({makeFlatVector<Timestamp>(
+      10'000, [](auto row) { return Timestamp(row, row); })});
+  parquet::WriterOptions writerOptions;
+  writerOptions.memoryPool = leafPool_.get();
+  writerOptions.arrowMemoryPool = std::make_shared<ArrowMemoryPool>();
+
+  // Create an in-memory writer.
+  auto sink = std::make_unique<MemorySink>(
+      200 * 1024 * 1024,
+      dwio::common::FileSink::Options{.pool = leafPool_.get()});
+  auto writer = std::make_unique<parquet::Writer>(
+      std::move(sink), writerOptions, rootPool_, ROW({"c0"}, {TIMESTAMP()}));
+  writer->write(data);
+  writer->close();
+};
+
 TEST_F(ParquetWriterTest, updateWriterOptionsFromHiveConfig) {
   std::unordered_map<std::string, std::string> configFromFile = {
-      {parquet::WriterOptions::kParquetSessionWriteTimestampUnit, "3"}};
+      {parquet::WriterOptions::kParquetHiveConnectorWriteTimestampUnit, "3"}};
   const config::ConfigBase connectorConfig(std::move(configFromFile));
   const config::ConfigBase connectorSessionProperties({});
 
@@ -873,6 +951,44 @@ TEST_F(ParquetWriterTest, dictionaryEncodedVector) {
   EXPECT_FALSE(wrappedVector->wrappedVector()->isFlatEncoding());
 
   writeToFile(makeRowVector({wrappedVector}));
+}
+
+TEST_F(ParquetWriterTest, allNulls) {
+  auto schema = ROW({"c0"}, {INTEGER()});
+  const int64_t kRows = 4096;
+  // Create a column with all elements being null.
+  auto nulls = makeNulls(kRows, [](auto /*row*/) { return true; });
+  auto flatVector = std::make_shared<FlatVector<int32_t>>(
+      pool_.get(),
+      schema->childAt(0),
+      nulls,
+      kRows,
+      /*values=*/nullptr,
+      std::vector<BufferPtr>());
+  auto data = std::make_shared<RowVector>(
+      pool_.get(), schema, nullptr, kRows, std::vector<VectorPtr>{flatVector});
+
+  // Create an in-memory writer.
+  auto sink = std::make_unique<MemorySink>(
+      200 * 1024 * 1024,
+      dwio::common::FileSink::Options{.pool = leafPool_.get()});
+  auto sinkPtr = sink.get();
+  facebook::velox::parquet::WriterOptions writerOptions;
+  writerOptions.memoryPool = leafPool_.get();
+
+  auto writer = std::make_unique<facebook::velox::parquet::Writer>(
+      std::move(sink), writerOptions, rootPool_, schema);
+  writer->write(data);
+  writer->close();
+
+  dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+  auto reader = createReaderInMemory(*sinkPtr, readerOptions);
+
+  ASSERT_EQ(reader->numberOfRows(), kRows);
+  ASSERT_EQ(*reader->rowType(), *schema);
+
+  auto rowReader = createRowReaderWithSchema(std::move(reader), schema);
+  assertReadWithReaderAndExpected(schema, *rowReader, data, *leafPool_);
 };
 
 } // namespace

@@ -434,7 +434,7 @@ class Aggregate {
     if (isInitialized(group)) {
       auto accumulator = value<T>(group);
       std::destroy_at(accumulator);
-      ::memset(accumulator, 0, sizeof(T));
+      ::memset(static_cast<void*>(accumulator), 0, sizeof(T));
     }
   }
 
@@ -505,6 +505,10 @@ using AggregateFunctionFactory = std::function<std::unique_ptr<Aggregate>(
     const core::QueryConfig& config)>;
 
 struct AggregateFunctionMetadata {
+  /// True if results of the aggregation ignore duplicate values.
+  /// For example, min and max ignore duplicates while sum does not.
+  bool ignoreDuplicates{false};
+
   /// True if results of the aggregation depend on the order of inputs. For
   /// example, array_agg is order sensitive while count is not.
   bool orderSensitive{true};
