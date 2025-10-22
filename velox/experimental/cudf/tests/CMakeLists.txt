@@ -107,7 +107,10 @@ set_tests_properties(velox_cudf_table_scan_test PROPERTIES LABELS cuda_driver TI
 set_tests_properties(velox_cudf_filter_project_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
 set_tests_properties(velox_cudf_subfield_filter_ast_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
 set_tests_properties(velox_cudf_limit_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
-set_tests_properties(velox_cudf_expression_selection_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
+set_tests_properties(
+  velox_cudf_expression_selection_test
+  PROPERTIES LABELS cuda_driver TIMEOUT 3000
+)
 set_tests_properties(velox_cudf_config_test PROPERTIES LABELS cuda_driver TIMEOUT 300)
 set_tests_properties(velox_cudf_assign_unique_id_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
 
