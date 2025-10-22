@@ -944,5 +944,20 @@ TEST(VariantTest, nullableMapOfArraysGetter) {
        {"c", std::vector<std::optional<int64_t>>{3}}});
 }
 
+TEST(VariantTest, nullVariant) {
+  // Type of null variant is UNKNOWN and should be compatible with all types.
+  auto nullVariant = Variant{};
+  ASSERT_TRUE(nullVariant.isTypeCompatible(VARCHAR()));
+  ASSERT_TRUE(nullVariant.isTypeCompatible(INTEGER()));
+  ASSERT_TRUE(nullVariant.isTypeCompatible(BIGINT()));
+  ASSERT_TRUE(nullVariant.isTypeCompatible(DOUBLE()));
+  ASSERT_TRUE(nullVariant.isTypeCompatible(DATE()));
+  ASSERT_TRUE(nullVariant.isTypeCompatible(TIMESTAMP()));
+  ASSERT_TRUE(nullVariant.isTypeCompatible(MAP(BIGINT(), DOUBLE())));
+  ASSERT_TRUE(nullVariant.isTypeCompatible(ARRAY(DATE())));
+  ASSERT_TRUE(
+      nullVariant.isTypeCompatible(ROW({DATE(), BIGINT(), TIMESTAMP()})));
+}
+
 } // namespace
 } // namespace facebook::velox
