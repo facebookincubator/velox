@@ -599,8 +599,8 @@ bool registerBuiltinFunctions(const std::string& prefix) {
             expr, cudf::binary_operator::DIV);
       });
 
-  registerCudfFunction(
-      prefix + "switch",
+  registerCudfFunctions(
+      {prefix + "switch", prefix + "if"},
       [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
         return std::make_shared<SwitchFunction>(expr);
       });
@@ -755,12 +755,16 @@ bool canBeEvaluatedByCudf(const std::vector<core::TypedExprPtr>& exprs) {
 
 std::shared_ptr<CudfExpression> createCudfExpression(
     std::shared_ptr<velox::exec::Expr> expr,
-    const RowTypePtr& inputRowSchema) {
+    const RowTypePtr& inputRowSchema,
+    std::optional<std::string> except) {
   ensureBuiltinExpressionEvaluatorsRegistered();
   const auto& registry = getCudfExpressionEvaluatorRegistry();
 
   const CudfExpressionEvaluatorEntry* best = nullptr;
   for (const auto& [name, entry] : registry) {
+    if (except && name == *except) {
+      continue;
+    }
     if (entry.canEvaluateCompiled && entry.canEvaluateCompiled(expr)) {
       if (best == nullptr || entry.priority > best->priority) {
         best = &entry;

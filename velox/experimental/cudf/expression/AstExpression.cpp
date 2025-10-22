@@ -410,8 +410,13 @@ cudf::ast::expression const& AstContext::pushExprToTree(
         c2->toString() == "0:INTEGER") {
       return pushExprToTree(expr->inputs()[0]);
     } else {
-      auto node = createCudfExpression(expr, inputRowSchema[0]);
-      return addPrecomputeInstructionOnSide(0, 0, "switch", "", node);
+      // TODO (dm): This can be better handled by checking which function
+      // signatures are supported before dispatching. e.g. in this case, it
+      // would be better if ast never agreed to evaluate a top level switch on
+      // unsupported types
+      auto node =
+          createCudfExpression(expr, inputRowSchema[0], kAstEvaluatorName);
+      return addPrecomputeInstructionOnSide(0, 0, name, "", node);
     }
   } else if (auto fieldExpr = std::dynamic_pointer_cast<FieldReference>(expr)) {
     // Refer to the appropriate side
@@ -436,7 +441,8 @@ cudf::ast::expression const& AstContext::pushExprToTree(
   } else if (canBeEvaluatedByCudf(expr, /*deep=*/false)) {
     // Shallow check: only verify this operation is supported
     // Children will be recursively handled by createCudfExpression
-    auto node = createCudfExpression(expr, inputRowSchema[0]);
+    auto node =
+        createCudfExpression(expr, inputRowSchema[0], kAstEvaluatorName);
     return addPrecomputeInstructionOnSide(0, 0, name, "", node);
   } else {
     VELOX_FAIL("Unsupported expression: " + name);
@@ -613,7 +619,7 @@ bool ASTExpression::canEvaluate(const core::TypedExprPtr& expr) {
 
 void registerAstEvaluator(int priority) {
   registerCudfExpressionEvaluator(
-      "ast",
+      kAstEvaluatorName,
       priority,
       [](const core::TypedExprPtr& typed) {
         return ASTExpression::canEvaluate(typed);

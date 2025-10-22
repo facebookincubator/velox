@@ -21,6 +21,8 @@
 
 namespace facebook::velox::cudf_velox {
 
+const std::string kAstEvaluatorName = "ast";
+
 // Pre-compute instructions for the expression,
 // for ops that are not supported by cudf::ast
 struct PrecomputeInstruction {
