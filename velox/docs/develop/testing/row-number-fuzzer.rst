@@ -1,14 +1,15 @@
-================
-RowNumber Fuzzer
-================
+==================================
+RowNumber and TopNRowNumber Fuzzer
+==================================
 
-The RowNumberFuzzer is a testing tool that automatically generate equivalent query plans and then executes these plans
-to validate the consistency of the results. It works as follows:
+The RowNumberFuzzer and TopNRowNumberFuzzer are testing tools that automatically generate equivalent query plans that
+use the RowNumber and TopNRowNumber Velox plan nodes, and then executes these plans to validate the consistency of
+the results. They works as follows:
 
 1. Data Generation: It starts by generating a random set of input data, also known as a vector. This data can
    have a variety of encodings and data layouts to ensure thorough testing.
-2. Plan Generation: Generate two equivalent query plans, one is row-number over ValuesNode as the base plan.
-   and the other is over TableScanNode as the alter plan.
+2. Plan Generation: Generate two equivalent query plans: one is RowNumber (or TopNRowNumber) over ValuesNode as
+   the base plan and the other is over TableScanNode as the alter plan.
 3. Query Execution: Executes those equivalent query plans using the generated data and asserts that the results are
    consistent across different plans.
   i. Execute the base plan, compare the result with the reference (DuckDB or Presto) and use it as the expected result.
@@ -19,11 +20,13 @@ to validate the consistency of the results. It works as follows:
 How to run
 ----------
 
-Use velox_row_number_fuzzer binary to run rowNumber fuzzer:
+Use velox_row_number_fuzzer(or velox_topn_row_number_fuzzer) binary to run RowNumberFuzzer (or TopNRowNumberFuzzer)
+respectively :
 
 ::
 
     velox/exec/fuzzer/velox_row_number_fuzzer --seed 123 --duration_sec 60
+    velox/exec/fuzzer/velox_topn_row_number_fuzzer --seed 123 --duration_sec 60
 
 By default, the fuzzer will go through 10 iterations. Use --steps
 or --duration-sec flag to run fuzzer for longer. Use --seed to
