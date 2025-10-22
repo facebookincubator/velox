@@ -263,7 +263,7 @@ TEST_F(LocalRunnerServiceTest, ServiceHandlerMockRequestIntegration) {
   EXPECT_EQ(column.rows()->size(), 1);
   const auto& row = (*column.rows())[0];
   EXPECT_TRUE(*row.isNull());
-  EXPECT_FALSE(row.scalarValue_ref().has_value());
+  EXPECT_FALSE(row.scalarValue().has_value());
 }
 
 TEST_F(LocalRunnerServiceTest, ServiceHandlerMockRequestIntegrationFailure) {
