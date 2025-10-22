@@ -206,7 +206,7 @@ jobs:
 
       - name: Run Tests
         run: |
-          cd _build/debug && ctest -j 8 --output-on-failure --no-tests=error
+          cd _build/debug && ctest -j 8 --output-on-failure --no-tests=error -E "_deps/.*"
 
   fedora-debug:
     runs-on: 16-core-ubuntu

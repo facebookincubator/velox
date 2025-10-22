@@ -29,3 +29,12 @@ string(
 velox_resolve_dependency_url(CURL)
 
 FetchContent_Declare(curl URL ${VELOX_CURL_SOURCE_URL} URL_HASH ${VELOX_CURL_BUILD_SHA256_CHECKSUM})
+
+set(BUILD_SHARED_LIBS ${VELOX_BUILD_SHARED})
+# Curl logs too much. Limit to warnings and errors.
+set(CMAKE_MESSAGE_LOG_LEVEL WARNING)
+
+FetchContent_MakeAvailable(curl)
+
+unset(BUILD_SHARED_LIBS)
+unset(CMAKE_MESSAGE_LOG_LEVEL)

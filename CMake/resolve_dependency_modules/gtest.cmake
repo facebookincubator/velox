@@ -37,5 +37,12 @@ FetchContent_Declare(
 
 FetchContent_MakeAvailable(googletest)
 
+if(NOT TARGET GTest::gtest)
+  message(FATAL_ERROR "gtest not found")
+endif()
+if(NOT TARGET GTest::gmock)
+  message(FATAL_ERROR "gmock not found")
+endif()
+
 # Mask compilation warning in clang 16.
 target_compile_options(gtest PRIVATE -Wno-implicit-int-float-conversion)

@@ -228,7 +228,8 @@ target_link_libraries(
   gtest
   gtest_main
 )
-target_link_libraries(velox_cudf_config_test velox_cudf_exec gtest gtest_main)
+
+target_link_libraries(velox_cudf_config_test velox_cudf_exec velox_test_util gtest gtest_main)
 
 add_subdirectory(utils)
 
