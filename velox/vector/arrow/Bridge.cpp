@@ -1151,7 +1151,6 @@ void exportConstantValue(
     // export it to an ArrowArray.
     if (vec.typeKind() == TypeKind::UNKNOWN) {
       valuesVector = BaseVector::create(vec.type(), 1, pool);
-      valuesVector->setNull(0, true);
     } else {
       size_t bufferSize = (vec.type()->isVarchar() || vec.type()->isVarbinary())
           ? sizeof(StringView)
