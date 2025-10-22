@@ -110,6 +110,7 @@ add_executable(
   SplitToMultiMapTest.cpp
   StringFunctionsTest.cpp
   TimestampWithTimeZoneCastTest.cpp
+  TimeWithTimezoneCastTest.cpp
   TransformKeysTest.cpp
   TransformTest.cpp
   TransformValuesTest.cpp

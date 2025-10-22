@@ -16,10 +16,9 @@
 #pragma once
 
 #define XXH_INLINE_ALL
-#include <boost/regex.hpp>
+#include <re2/re2.h>
 #include <xxhash.h>
 #include <string_view>
-#include "velox/expression/DecodedArgs.h"
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/lib/DateTimeFormatter.h"
 #include "velox/functions/lib/TimeUtils.h"
@@ -1922,43 +1921,50 @@ template <typename T>
 struct ParseDurationFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  std::unique_ptr<boost::regex> durationRegex_;
+  std::unique_ptr<RE2> durationRegex_;
 
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& /*config*/,
       const arg_type<Varchar>* /*amountUnit*/) {
-    durationRegex_ = std::make_unique<boost::regex>(
-        "^\\s*(\\d+(?:\\.\\d+)?)\\s*([a-zA-Z]+)\\s*$");
+    durationRegex_ =
+        std::make_unique<RE2>(R"(^\s*(\d+(?:\.\d+)?)\s*([a-zA-Z]+)\s*$)");
   }
 
   FOLLY_ALWAYS_INLINE void call(
       out_type<IntervalDayTime>& result,
       const arg_type<Varchar>& amountUnit) {
-    std::string strAmountUnit = (std::string)amountUnit;
-    boost::smatch match;
-    bool isMatch = boost::regex_search(strAmountUnit, match, *durationRegex_);
-    if (!isMatch) {
+    re2::StringPiece valueStr;
+    re2::StringPiece unit;
+    if (!RE2::FullMatch(
+            std::string_view{amountUnit}, *durationRegex_, &valueStr, &unit)) {
       VELOX_USER_FAIL(
           "Input duration is not a valid data duration string: {}", amountUnit);
     }
-    VELOX_USER_CHECK_EQ(
-        match.size(),
-        3,
-        "Input duration does not have value and unit components only: {}",
-        amountUnit);
+
+    double value{};
     try {
-      double value = std::stod(match[1].str());
-      std::string unit = match[2].str();
-      result = valueOfTimeUnitToMillis(value, unit);
-    } catch (std::out_of_range&) {
+      size_t pos = 0;
+      // Create temporary string from StringPiece for stod
+      std::string valueString(valueStr.data(), valueStr.size());
+      value = std::stod(valueString, &pos);
+      if (pos != valueString.size()) {
+        VELOX_USER_FAIL(
+            "Input duration value is not a valid number: {}",
+            std::string_view(valueStr.data(), valueStr.size()));
+      }
+    } catch (const std::out_of_range&) {
       VELOX_USER_FAIL(
           "Input duration value is out of range for double: {}",
-          match[1].str());
-    } catch (std::invalid_argument&) {
+          std::string_view(valueStr.data(), valueStr.size()));
+    } catch (const std::exception&) {
       VELOX_USER_FAIL(
-          "Input duration value is not a valid number: {}", match[1].str());
+          "Input duration value is not a valid number: {}",
+          std::string_view(valueStr.data(), valueStr.size()));
     }
+
+    result = valueOfTimeUnitToMillis(
+        value, std::string_view(unit.data(), unit.size()));
   }
 };
 
