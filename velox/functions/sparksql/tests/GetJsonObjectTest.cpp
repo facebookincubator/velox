@@ -47,6 +47,9 @@ TEST_F(GetJsonObjectTest, basic) {
       getJsonObject(R"({"name": "Alice", "age": 5, "id": "001"})", "$"),
       R"({"name": "Alice", "age": 5, "id": "001"})");
   EXPECT_EQ(
+      getJsonObject(R"({"name": "Alice", "age": 5, "id": "001"})", "$  "),
+      R"({"name": "Alice", "age": 5, "id": "001"})");
+  EXPECT_EQ(
       getJsonObject(R"({"name": "Alice", "age": 5, "id": "001"})", "$.age"),
       "5");
   EXPECT_EQ(
