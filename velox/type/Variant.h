@@ -319,7 +319,7 @@ class Variant {
   }
 
   Variant()
-      : ptr_{nullptr}, kind_{TypeKind::INVALID}, usesCustomComparison_(false) {}
+      : ptr_{nullptr}, kind_{TypeKind::UNKNOWN}, usesCustomComparison_(false) {}
 
   /* implicit */ Variant(TypeKind kind)
       : ptr_{nullptr}, kind_{kind}, usesCustomComparison_(false) {}
