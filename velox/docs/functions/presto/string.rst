@@ -328,6 +328,37 @@ String Functions
     If the specified ``lang`` is not supported, this function throws a user error.
 
 
+Myanmar/Burmese Functions
+--------------------------
+
+.. note::
+
+    Text written in Myanmar uses primarily the Zawgyi font encoding, which is not
+    compatible with Unicode. These functions provide utilities for comparing content
+    in Myanmar despite the font encoding differences.
+
+    See http://www.unicode.org/faq/myanmar.html for more information.
+
+.. function:: myanmar_font_encoding(string) -> varchar
+
+    Returns the font encoding for ``string`` written in Myanmar. Returns one of the
+    following values:
+
+    - ``unicode`` if the string uses Unicode encoding
+    - ``zawgyi`` if the string uses Zawgyi encoding
+
+    Returns ``NULL`` if ``string`` is ``NULL``.
+
+.. function:: myanmar_normalize_unicode(string) -> varchar
+
+    Converts ``string`` written in Myanmar from Zawgyi encoding to Unicode encoding.
+    This function processes the input line-by-line, converting only the lines that
+    are detected as Zawgyi-encoded while preserving Unicode lines unchanged. This allows
+    handling of mixed-encoding content.
+
+    Returns ``NULL`` if ``string`` is ``NULL``.
+
+
 Unicode Functions
 -----------------
 

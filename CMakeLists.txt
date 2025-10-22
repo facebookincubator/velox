@@ -696,6 +696,9 @@ velox_resolve_dependency(xsimd 10.0.0)
 velox_set_source(stemmer)
 velox_resolve_dependency(stemmer)
 
+velox_set_source(myanmartools)
+velox_resolve_dependency(myanmartools)
+
 if(VELOX_BUILD_TESTING)
   set(BUILD_TESTING ON)
   include(CTest) # include after project() but before add_subdirectory()

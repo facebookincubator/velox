@@ -41,6 +41,7 @@ velox_add_library(
   MapFromEntries.cpp
   MapKeysAndValues.cpp
   MapZipWith.cpp
+  MyanmarFunctions.cpp
   Not.cpp
   Reduce.cpp
   Reverse.cpp
@@ -76,6 +77,7 @@ velox_link_libraries(
   velox_functions_util
   Folly::folly
   stemmer::stemmer
+  myanmartools::myanmartools
 )
 
 if(VELOX_ENABLE_FAISS)
