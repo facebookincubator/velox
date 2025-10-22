@@ -2128,13 +2128,16 @@ core::ExecCtx* SimpleExpressionEvaluator::ensureExecCtx() {
   return execCtx_.get();
 }
 
-VectorPtr tryEvaluateConstantExpression(
+namespace {
+VectorPtr tryEvaluateConstantExpressionInternal(
     const core::TypedExprPtr& expr,
     memory::MemoryPool* pool,
-    const std::shared_ptr<core::QueryCtx>& queryCtx,
+    core::ExecCtx* execCtx,
     bool suppressEvaluationFailures) {
-  velox::core::ExecCtx execCtx{pool, queryCtx.get()};
-  velox::exec::ExprSet exprSet({expr}, &execCtx);
+  // Constant folding should explicitly be disabled in exprSet here to avoid an
+  // infinite loop between ExprOptimizer and ExprCompiler.
+  velox::exec::ExprSet exprSet(
+      {expr}, execCtx, /*enableConstantFolding*/ false);
 
   // The construction of ExprSet involves compiling and constant folding the
   // expression. If constant folding succeeded, then we get a ConstantExpr.
@@ -2147,7 +2150,7 @@ VectorPtr tryEvaluateConstantExpression(
 
   if (doEvaluate) {
     auto data = BaseVector::create<RowVector>(ROW({}), 1, pool);
-    velox::exec::EvalCtx evalCtx(&execCtx, &exprSet, data.get());
+    velox::exec::EvalCtx evalCtx(execCtx, &exprSet, data.get());
     velox::SelectivityVector singleRow(1);
     std::vector<velox::VectorPtr> results(1);
     exprSet.eval(singleRow, evalCtx, results);
@@ -2155,6 +2158,27 @@ VectorPtr tryEvaluateConstantExpression(
   }
 
   return nullptr;
+}
+} // namespace
+
+VectorPtr tryEvaluateConstantExpression(
+    const core::TypedExprPtr& expr,
+    memory::MemoryPool* pool,
+    const std::shared_ptr<core::QueryCtx>& queryCtx,
+    bool suppressEvaluationFailures) {
+  velox::core::ExecCtx execCtx{pool, queryCtx.get()};
+  return tryEvaluateConstantExpressionInternal(
+      expr, pool, &execCtx, suppressEvaluationFailures);
+}
+
+VectorPtr tryEvaluateConstantExpression(
+    const core::TypedExprPtr& expr,
+    memory::MemoryPool* pool,
+    core::QueryCtx* queryCtx,
+    bool suppressEvaluationFailures) {
+  velox::core::ExecCtx execCtx{pool, queryCtx};
+  return tryEvaluateConstantExpressionInternal(
+      expr, pool, &execCtx, suppressEvaluationFailures);
 }
 
 } // namespace facebook::velox::exec
