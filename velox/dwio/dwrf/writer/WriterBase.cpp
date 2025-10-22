@@ -80,10 +80,10 @@ void WriterBase::writeFooter(const Type& type) {
 
 void WriterBase::writeUserMetadata(uint32_t writerVersion) {
   // add writer version
-  userMetadata_[std::string{WRITER_NAME_KEY}] = kDwioWriter;
-  userMetadata_[std::string{WRITER_VERSION_KEY}] =
+  userMetadata_[std::string{kWriterNameKey}] = kDwioWriter;
+  userMetadata_[std::string{kWriterVersionKey}] =
       folly::to<std::string>(writerVersion);
-  userMetadata_[std::string{WRITER_HOSTNAME_KEY}] = process::getHostName();
+  userMetadata_[std::string{kWriterHostnameKey}] = process::getHostName();
   std::for_each(userMetadata_.begin(), userMetadata_.end(), [&](auto& pair) {
     auto item = footer_.add_metadata();
     item->set_name(pair.first);
