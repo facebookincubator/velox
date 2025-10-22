@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/expression/CastExpr.h"
 #include "velox/functions/prestosql/types/TimeWithTimezoneType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/Type.h"
@@ -27,7 +28,9 @@ folly::dynamic TimeWithTimezoneType::serialize() const {
   return obj;
 }
 
-std::string TimeWithTimezoneType::valueToString(int64_t value) const {
+StringView TimeWithTimezoneType::valueToString(
+    int64_t value,
+    char* const startPos) const {
   // TIME WITH TIME ZONE is encoded similarly to TIMESTAMP WITH TIME ZONE
   // with the most significnat 52 bits representing the time component and the
   // least 12 bits representing the timezone minutes. This is different from
@@ -70,7 +73,9 @@ std::string TimeWithTimezoneType::valueToString(int64_t value) const {
   int16_t offsetHours = decodedMinutes / kMinutesInHour;
   int16_t remainingOffsetMinutes = decodedMinutes % kMinutesInHour;
 
-  return fmt::format(
+  fmt::format_to_n(
+      startPos,
+      kTimeWithTimezoneToVarcharRowSize,
       "{:02d}:{:02d}:{:02d}.{:03d}{}{:02d}:{:02d}",
       hours,
       minutes,
@@ -79,9 +84,87 @@ std::string TimeWithTimezoneType::valueToString(int64_t value) const {
       isBehindUTCString,
       offsetHours,
       remainingOffsetMinutes);
+  return StringView{startPos, kTimeWithTimezoneToVarcharRowSize};
 }
 
 namespace {
+
+void castToString(
+    const BaseVector& input,
+    exec::EvalCtx& context,
+    const SelectivityVector& rows,
+    BaseVector& result) {
+  auto* flatResult = result.asFlatVector<StringView>();
+  DecodedVector decoded(input, rows);
+  Buffer* buffer = flatResult->getBufferWithSpace(
+      rows.countSelected() *
+          TimeWithTimezoneType::kTimeWithTimezoneToVarcharRowSize,
+      true /*exactSize*/);
+  char* rawBuffer = buffer->asMutable<char>() + buffer->size();
+  context.applyToSelectedNoThrow(rows, [&](vector_size_t row) {
+    const auto timeWithTimezone = decoded.valueAt<int64_t>(row);
+    auto output =
+        TIME_WITH_TIME_ZONE()->valueToString(timeWithTimezone, rawBuffer);
+    flatResult->setNoCopy(row, output);
+    rawBuffer += output.size();
+  });
+  buffer->setSize(rawBuffer - buffer->asMutable<char>());
+}
+
+class TimeWithTimeZoneCastOperator final : public exec::CastOperator {
+  TimeWithTimeZoneCastOperator() = default;
+
+ public:
+  static std::shared_ptr<const exec::CastOperator> get() {
+    VELOX_CONSTEXPR_SINGLETON TimeWithTimeZoneCastOperator kInstance;
+    return {std::shared_ptr<const exec::CastOperator>{}, &kInstance};
+  }
+
+  bool isSupportedToType(const TypePtr& other) const override {
+    switch (other->kind()) {
+      case TypeKind::VARCHAR:
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  bool isSupportedFromType(const TypePtr& other) const override {
+    switch (other->kind()) {
+      default:
+        return false;
+    }
+  }
+
+  void castTo(
+      const BaseVector& /*input*/,
+      exec::EvalCtx& /*context*/,
+      const SelectivityVector& /*rows*/,
+      const TypePtr& resultType,
+      VectorPtr& /*result*/) const override {
+    VELOX_NYI(
+        "Cast to TIME WITH TIME ZONE from {} not yet supported",
+        resultType->toString());
+  }
+
+  void castFrom(
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const SelectivityVector& rows,
+      const TypePtr& resultType,
+      VectorPtr& result) const override {
+    context.ensureWritable(rows, resultType, result);
+    switch (resultType->kind()) {
+      case TypeKind::VARCHAR:
+        castToString(input, context, rows, *result);
+        break;
+      default:
+        VELOX_UNREACHABLE(
+            "Cast from TIME WITH TIME ZONE to {} not yet supported",
+            resultType->toString());
+    }
+  }
+};
 
 class TimeWithTimezoneTypeFactory : public CustomTypeFactory {
  public:
@@ -94,7 +177,7 @@ class TimeWithTimezoneTypeFactory : public CustomTypeFactory {
 
   // Type casting from and to TimestampWithTimezone is not supported yet.
   exec::CastOperatorPtr getCastOperator() const override {
-    return nullptr;
+    return TimeWithTimeZoneCastOperator::get();
   }
 
   AbstractInputGeneratorPtr getInputGenerator(
