@@ -13,8 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
+#include "velox/experimental/cudf/expression/AstUtils.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
 #include "velox/core/Expressions.h"
@@ -23,7 +23,9 @@
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
 
+#include <cudf/binaryop.hpp>
 #include <cudf/column/column_factories.hpp>
+#include <cudf/copying.hpp>
 #include <cudf/datetime.hpp>
 #include <cudf/hashing.hpp>
 #include <cudf/lists/count_elements.hpp>
@@ -194,6 +196,118 @@ class RoundFunction : public CudfFunction {
 
  private:
   int32_t scale_ = 0;
+};
+
+class BinaryFunction : public CudfFunction {
+ public:
+  BinaryFunction(
+      const std::shared_ptr<velox::exec::Expr>& expr,
+      cudf::binary_operator op)
+      : op_(op),
+        type_(cudf::data_type(cudf_velox::veloxToCudfTypeId(expr->type()))) {
+    VELOX_CHECK_EQ(
+        expr->inputs().size(), 2, "binary function expects exactly 2 inputs");
+    if (auto constExpr = std::dynamic_pointer_cast<velox::exec::ConstantExpr>(
+            expr->inputs()[0])) {
+      auto constValue = constExpr->value();
+      left_ = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+          createCudfScalar, constValue->typeKind(), constValue);
+    } else if (
+        auto constExpr = std::dynamic_pointer_cast<velox::exec::ConstantExpr>(
+            expr->inputs()[1])) {
+      auto constValue = constExpr->value();
+      right_ = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+          createCudfScalar, constValue->typeKind(), constValue);
+    }
+
+    VELOX_CHECK(
+        !(left_ != nullptr && right_ != nullptr),
+        "Not support both left and right are literals");
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    if (left_ == nullptr && right_ == nullptr) {
+      return cudf::binary_operation(
+          asView(inputColumns[0]),
+          asView(inputColumns[1]),
+          op_,
+          type_,
+          stream,
+          mr);
+    } else if (left_ == nullptr) {
+      return cudf::binary_operation(
+          asView(inputColumns[0]), *right_, op_, type_, stream, mr);
+    }
+    return cudf::binary_operation(
+        *left_, asView(inputColumns[0]), op_, type_, stream, mr);
+  }
+
+ private:
+  const cudf::binary_operator op_;
+  const cudf::data_type type_;
+  std::unique_ptr<cudf::scalar> left_;
+  std::unique_ptr<cudf::scalar> right_;
+};
+
+class SwitchFunction : public CudfFunction {
+ public:
+  SwitchFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+    VELOX_CHECK_EQ(
+        expr->inputs().size(), 3, "case when expects exactly 3 inputs");
+    VELOX_CHECK_EQ(
+        expr->inputs()[0]->type()->kind(),
+        TypeKind::BOOLEAN,
+        "The switch condition result type should be boolean");
+    VELOX_CHECK_NULL(
+        std::dynamic_pointer_cast<velox::exec::ConstantExpr>(expr),
+        "The condition should not be constant");
+    if (auto constExpr = std::dynamic_pointer_cast<velox::exec::ConstantExpr>(
+            expr->inputs()[1])) {
+      auto constValue = constExpr->value();
+      left_ = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+          createCudfScalar, constValue->typeKind(), constValue);
+    } else if (
+        auto constExpr = std::dynamic_pointer_cast<velox::exec::ConstantExpr>(
+            expr->inputs()[2])) {
+      auto constValue = constExpr->value();
+      right_ = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+          createCudfScalar, constValue->typeKind(), constValue);
+    }
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    if (left_ == nullptr && right_ == nullptr) {
+      return cudf::copy_if_else(
+          asView(inputColumns[1]),
+          asView(inputColumns[2]),
+          asView(inputColumns[0]),
+          stream,
+          mr);
+    } else if (left_ == nullptr) {
+      return cudf::copy_if_else(
+          asView(inputColumns[1]),
+          *right_,
+          asView(inputColumns[0]),
+          stream,
+          mr);
+    } else if (right_ == nullptr) {
+      return cudf::copy_if_else(
+          *left_, asView(inputColumns[1]), asView(inputColumns[0]), stream, mr);
+    }
+    // right != null and left != null
+    return cudf::copy_if_else(
+        *left_, *right_, asView(inputColumns[0]), stream, mr);
+  }
+
+ private:
+  std::unique_ptr<cudf::scalar> left_;
+  std::unique_ptr<cudf::scalar> right_;
 };
 
 class SubstrFunction : public CudfFunction {
@@ -469,6 +583,26 @@ bool registerBuiltinFunctions(const std::string& prefix) {
       prefix + "like",
       [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
         return std::make_shared<LikeFunction>(expr);
+      });
+
+  registerCudfFunctions(
+      {prefix + "greaterthan", prefix + "gt"},
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<BinaryFunction>(
+            expr, cudf::binary_operator::GREATER);
+      });
+
+  registerCudfFunction(
+      prefix + "divide",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<BinaryFunction>(
+            expr, cudf::binary_operator::DIV);
+      });
+
+  registerCudfFunction(
+      prefix + "switch",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<SwitchFunction>(expr);
       });
 
   return true;

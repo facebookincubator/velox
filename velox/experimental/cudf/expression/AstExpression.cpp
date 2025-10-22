@@ -158,7 +158,7 @@ const std::unordered_map<std::string, Op> binaryOps = [] {
 const std::map<std::string, Op> unaryOps = {{"not", Op::NOT}};
 
 const std::unordered_set<std::string> astSupportedOps =
-    {"literal", "between", "in", "cast", "switch"};
+    {"literal", "between", "in", "cast", "switch", "if"};
 
 namespace detail {
 
@@ -388,7 +388,7 @@ cudf::ast::expression const& AstContext::pushExprToTree(
     } else {
       VELOX_FAIL("Unsupported type for cast operation");
     }
-  } else if (name == "switch") {
+  } else if (name == "switch" || name == "if") {
     VELOX_CHECK_EQ(len, 3);
     // check if input[1], input[2] are literals 1 and 0.
     // then simplify as typecast bool to int
@@ -410,7 +410,8 @@ cudf::ast::expression const& AstContext::pushExprToTree(
         c2->toString() == "0:INTEGER") {
       return pushExprToTree(expr->inputs()[0]);
     } else {
-      VELOX_NYI("Unsupported switch complex operation " + expr->toString());
+      auto node = createCudfExpression(expr, inputRowSchema[0]);
+      return addPrecomputeInstructionOnSide(0, 0, "switch", "", node);
     }
   } else if (auto fieldExpr = std::dynamic_pointer_cast<FieldReference>(expr)) {
     // Refer to the appropriate side

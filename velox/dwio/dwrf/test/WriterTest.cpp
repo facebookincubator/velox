@@ -262,11 +262,11 @@ TEST_P(SupportedCompressionTest, WriteFooter) {
   ASSERT_EQ(footer.metadataSize(), 5);
   for (size_t i = 0; i < 4; ++i) {
     auto item = footer.metadata(i);
-    if (item.name() == WRITER_NAME_KEY) {
+    if (item.name() == kWriterNameKey) {
       ASSERT_EQ(item.value(), kDwioWriter);
-    } else if (item.name() == WRITER_VERSION_KEY) {
+    } else if (item.name() == kWriterVersionKey) {
       ASSERT_EQ(item.value(), folly::to<std::string>(reader->writerVersion()));
-    } else if (item.name() == WRITER_HOSTNAME_KEY) {
+    } else if (item.name() == kWriterHostnameKey) {
       ASSERT_EQ(item.value(), process::getHostName());
     } else {
       ASSERT_EQ(

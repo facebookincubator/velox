@@ -14,13 +14,12 @@
  * limitations under the License.
  */
 
-#include "velox/dwio/common/encryption/Encryption.h"
+#pragma once
 
-namespace facebook::velox::dwio::common::encryption {
+#include <string>
 
-bool operator==(const EncryptionProperties& a, const EncryptionProperties& b) {
-  return std::addressof(a) == std::addressof(b) ||
-      (typeid(a) == typeid(b) && a.equals(b));
-}
+namespace facebook::velox::functions::iceberg {
 
-} // namespace facebook::velox::dwio::common::encryption
+void registerDateTimeFunctions(const std::string& prefix);
+
+} // namespace facebook::velox::functions::iceberg
