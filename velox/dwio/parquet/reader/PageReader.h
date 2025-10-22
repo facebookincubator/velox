@@ -268,7 +268,7 @@ class PageReader {
   template <
       typename Visitor,
       typename std::enable_if<
-          !std::is_same_v<typename Visitor::DataType, folly::StringPiece> &&
+          !std::is_same_v<typename Visitor::DataType, std::string_view> &&
               !std::is_same_v<typename Visitor::DataType, int8_t>,
           int>::type = 0>
   void
@@ -304,7 +304,7 @@ class PageReader {
   template <
       typename Visitor,
       typename std::enable_if<
-          std::is_same_v<typename Visitor::DataType, folly::StringPiece>,
+          std::is_same_v<typename Visitor::DataType, std::string_view>,
           int>::type = 0>
   void
   callDecoder(const uint64_t* nulls, bool& nullsFromFastPath, Visitor visitor) {
