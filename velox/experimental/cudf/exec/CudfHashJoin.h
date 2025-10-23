@@ -25,8 +25,6 @@
 #include "velox/vector/ComplexVector.h"
 
 #include <cudf/ast/expressions.hpp>
-#include <cudf/column/column.hpp>
-#include <cudf/copying.hpp>
 #include <cudf/join/hash_join.hpp>
 #include <cudf/table/table.hpp>
 
@@ -40,10 +38,8 @@ class CudaEvent;
 
 class CudfHashJoinBridge : public exec::JoinBridge {
  public:
-  /*
- using hash_type =
-     std::pair<std::shared_ptr<cudf::table>, std::shared_ptr<cudf::hash_join>>;
-     */
+  // The bridge transfers all build side batches and the hash join objects
+  // constructed from them to the probe operator
   using hash_type = std::pair<
       std::vector<std::shared_ptr<cudf::table>>,
       std::vector<std::shared_ptr<cudf::hash_join>>>;
