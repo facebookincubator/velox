@@ -18,8 +18,8 @@
 #include "velox/common/base/SimdUtil.h"
 
 namespace facebook::velox {
-
 namespace {
+
 int32_t linearSearchSimple(
     StringView key,
     const StringView* strings,
