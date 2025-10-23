@@ -16,31 +16,32 @@
 
 #include "velox/experimental/cudf/exec/CudfFilterProject.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/tests/CudfFunctionBaseTest.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
+#include "velox/functions/sparksql/registration/Register.h"
+#include "velox/parse/TypeResolver.h"
 
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox;
 
+namespace facebook::velox::cudf_velox {
 namespace {
 
-class CudfFilterProjectTest
-    : public facebook::velox::functions::sparksql::test::SparkFunctionBaseTest {
+class CudfFilterProjectTest : public CudfFunctionBaseTest {
  protected:
   static void SetUpTestCase() {
-    facebook::velox::functions::sparksql::test::SparkFunctionBaseTest::
-        SetUpTestCase();
+    parse::registerTypeResolver();
+    functions::sparksql::registerFunctions("");
+    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
     cudf_velox::registerCudf();
   }
 
   static void TearDownTestCase() {
-    facebook::velox::functions::sparksql::test::SparkFunctionBaseTest::
-        TearDownTestCase();
     cudf_velox::unregisterCudf();
   }
 
@@ -86,4 +87,23 @@ TEST_F(CudfFilterProjectTest, hashWithSeedMultiColumns) {
   });
   facebook::velox::test::assertEqualVectors(expected, hashResults);
 }
+
+TEST_F(CudfFilterProjectTest, dateAdd) {
+  const auto dateAdd = [&](const std::string& dateStr, int32_t value) {
+    return evaluateOnce<int32_t>(
+        fmt::format("date_add(c0, {})", value),
+        {DATE()},
+        std::optional<int32_t>(parseDate(dateStr)));
+  };
+
+  // Check simple tests.
+  EXPECT_EQ(parseDate("2019-03-01"), dateAdd("2019-03-01", 0));
+  EXPECT_EQ(parseDate("2019-03-01"), dateAdd("2019-02-28", 1));
+
+  // Account for the last day of a year-month
+  EXPECT_EQ(parseDate("2020-02-29"), dateAdd("2019-01-30", 395));
+  EXPECT_EQ(parseDate("2020-02-29"), dateAdd("2019-01-30", 395));
+}
+
 } // namespace
+} // namespace facebook::velox::cudf_velox
