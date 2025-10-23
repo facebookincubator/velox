@@ -1939,7 +1939,9 @@ struct ParseDurationFunction {
     re2::StringPiece valueStr;
     re2::StringPiece unit;
     if (!RE2::FullMatch(
-            absl::string_view(amountUnit.data(), amountUnit.size()),
+            // We can use absl::string_view() once we require RE2
+            // 2023-06-01 or later.
+            re2::StringPiece(amountUnit.data(), amountUnit.size()),
             *durationRegex_,
             &valueStr,
             &unit)) {
