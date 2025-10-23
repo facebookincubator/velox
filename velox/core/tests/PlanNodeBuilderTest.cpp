@@ -756,8 +756,8 @@ TEST_F(PlanNodeBuilderTest, indexLookupJoinNode) {
   const std::vector<IndexLookupConditionPtr> joinConditions{
       std::make_shared<BetweenIndexLookupCondition>(
           std::make_shared<FieldAccessTypedExpr>(BIGINT(), "c0"),
-          std::make_shared<ConstantTypedExpr>(BIGINT(), variant(1)),
-          std::make_shared<ConstantTypedExpr>(BIGINT(), variant(2)))};
+          std::make_shared<ConstantTypedExpr>(BIGINT(), Variant(1LL)),
+          std::make_shared<ConstantTypedExpr>(BIGINT(), Variant(2LL)))};
   const auto left =
       ValuesNode::Builder()
           .id("values_node_id_1")
@@ -809,7 +809,7 @@ TEST_F(PlanNodeBuilderTest, nestedLoopJoinNode) {
   const PlanNodeId id = "nested_loop_join_node_id";
   const auto joinType = JoinType::kLeft;
   const auto joinCondition =
-      std::make_shared<ConstantTypedExpr>(BOOLEAN(), variant(true));
+      std::make_shared<ConstantTypedExpr>(BOOLEAN(), Variant(true));
   const auto left =
       ValuesNode::Builder()
           .id("values_node_id_1")
@@ -881,7 +881,7 @@ TEST_F(PlanNodeBuilderTest, spatialJoinNode) {
   const PlanNodeId id = "spatial_join_node_id";
   const auto joinType = JoinType::kInner;
   const auto joinCondition =
-      std::make_shared<ConstantTypedExpr>(BOOLEAN(), variant(true));
+      std::make_shared<ConstantTypedExpr>(BOOLEAN(), Variant(true));
   const auto left = ValuesNode::Builder()
                         .id("values_node_id_1")
                         .values({makeRowVector(
