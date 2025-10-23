@@ -33,6 +33,10 @@ struct IndexRange {
   vector_size_t size;
 };
 
+namespace serializer::presto {
+class VectorStream;
+}
+
 namespace row {
 class CompactRow;
 class UnsafeRowFast;
@@ -80,6 +84,14 @@ class IterativeVectorSerializer {
       const RowVectorPtr& vector,
       const folly::Range<const vector_size_t*>& rows,
       Scratch& scratch) {
+    VELOX_UNSUPPORTED("{}", __FUNCTION__);
+  }
+
+  virtual serializer::presto::VectorStream* getStream(vector_size_t i) {
+    VELOX_UNSUPPORTED("{}", __FUNCTION__);
+  }
+
+  virtual void appendNumRows(int32_t numRows) {
     VELOX_UNSUPPORTED("{}", __FUNCTION__);
   }
 
@@ -449,6 +461,14 @@ class VectorStreamGroup : public StreamArena {
       Scratch& scratch);
 
   void append(const RowVectorPtr& vector);
+
+  serializer::presto::VectorStream* streamAt(vector_size_t i) {
+    return serializer_->getStream(i);
+  }
+
+  void appendNumRows(int32_t numRows) {
+    serializer_->appendNumRows(numRows);
+  }
 
   void append(
       const row::CompactRow& compactRow,

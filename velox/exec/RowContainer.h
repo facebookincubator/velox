@@ -325,6 +325,11 @@ class RowContainer {
              : 0);
   }
 
+  bool supportSerializeRows() {
+    // Accumulators must be extracted to spill.
+    return accumulators().empty() && probedFlagOffset_ == 0;
+  }
+
   /// Sets all fields, aggregates, keys and dependents to null. Used when making
   /// a row with uninitialized keys for aggregates with no-op partial
   /// aggregation.
@@ -419,6 +424,21 @@ class RowContainer {
       vector_size_t resultOffset,
       const VectorPtr& result);
 
+  /// Appends the values at 'column' into 'stream' for the 'numRows' rows
+  /// pointed to by 'rows'. If a 'row' is null, appends null to corresponding
+  /// row in 'stream'.
+  /// @param columnHasNulls indicates whether the 'col' column contains null
+  /// values. If 'columnHasNulls' is false, a null-free optimization will be
+  /// applied. It is the caller's responsibility to ensure this flag is set
+  /// correctly.
+  static void extractColumn(
+      const char* const* rows,
+      int32_t numRows,
+      RowColumn column,
+      bool columnHasNulls,
+      TypePtr type,
+      serializer::presto::VectorStream* stream);
+
   /// Copies the values at 'col' into 'result' for the 'numRows' rows pointed to
   /// by 'rows'. If an entry in 'rows' is null, sets corresponding row in
   /// 'result' to null.
@@ -475,6 +495,21 @@ class RowContainer {
         columnAt(columnIndex),
         columnHasNulls(columnIndex),
         result);
+  }
+
+  void extractColumn(
+      const char* const* rows,
+      int32_t numRows,
+      int32_t columnIndex,
+      TypePtr type,
+      serializer::presto::VectorStream* stream) const {
+    extractColumn(
+        rows,
+        numRows,
+        columnAt(columnIndex),
+        columnHasNulls(columnIndex),
+        type,
+        stream);
   }
 
   /// Copies the values at 'columnIndex' into 'result' (starting at
@@ -990,6 +1025,31 @@ class RowContainer {
     }
   }
 
+  template <TypeKind Kind>
+  static void extractColumnTyped(
+      const char* const* rows,
+      int32_t numRows,
+      RowColumn column,
+      bool columnHasNulls,
+      TypePtr type,
+      serializer::presto::VectorStream* stream) {
+    if constexpr (
+        Kind == TypeKind::ROW || Kind == TypeKind::ARRAY ||
+        Kind == TypeKind::MAP) {
+      extractComplexType(rows, numRows, column, type, stream);
+      return;
+    }
+    using T = typename KindToFlatVector<Kind>::HashRowType;
+    auto nullMask = column.nullMask();
+    auto offset = column.offset();
+    if (!nullMask || !columnHasNulls) {
+      extractValuesNoNulls<Kind>(rows, numRows, offset, stream);
+    } else {
+      extractValuesWithNulls<Kind>(
+          rows, numRows, offset, column.nullByte(), nullMask, stream);
+    }
+  }
+
   /// Removes or updates the column stats of a given row by updating each column
   /// stats.
   /// @param row - Points to the row to be removed or updated.
@@ -1147,6 +1207,54 @@ class RowContainer {
           extractString(valueAt<StringView>(row, offset), result, resultIndex);
         } else {
           values[resultIndex] = valueAt<T>(row, offset);
+        }
+      }
+    }
+  }
+
+  template <TypeKind Kind>
+  static void extractValuesWithNulls(
+      const char* const* rows,
+      int32_t numRows,
+      int32_t offset,
+      int32_t nullByte,
+      uint8_t nullMask,
+      serializer::presto::VectorStream* stream) {
+    VELOX_DCHECK(Kind != TypeKind::OPAQUE);
+    using T = typename KindToFlatVector<Kind>::HashRowType;
+    for (int32_t i = 0; i < numRows; ++i) {
+      const char* row = rows[i];
+      if (row == nullptr || isNullAt(row, nullByte, nullMask)) {
+        stream->appendNull();
+      } else {
+        stream->appendNonNull();
+        if constexpr (std::is_same_v<T, bool>) {
+          stream->appendOne<uint8_t>(valueAt<T>(row, offset) ? 1 : 0);
+        } else {
+          stream->appendOne(valueAt<T>(row, offset));
+        }
+      }
+    }
+  }
+
+  template <TypeKind Kind>
+  static void extractValuesNoNulls(
+      const char* const* rows,
+      int32_t numRows,
+      int32_t offset,
+      serializer::presto::VectorStream* stream) {
+    VELOX_DCHECK(Kind != TypeKind::OPAQUE);
+    using T = typename KindToFlatVector<Kind>::HashRowType;
+    for (int32_t i = 0; i < numRows; ++i) {
+      const char* row = rows[i];
+      if (row == nullptr) {
+        stream->appendNull();
+      } else {
+        stream->appendNonNull();
+        if constexpr (std::is_same_v<T, bool>) {
+          stream->appendOne<uint8_t>(valueAt<T>(row, offset) ? 1 : 0);
+        } else {
+          stream->appendOne(valueAt<T>(row, offset));
         }
       }
     }
@@ -1384,6 +1492,27 @@ class RowContainer {
       } else {
         auto stream = prepareRead(row, offset);
         ContainerRowSerde::deserialize(stream, resultIndex, result.get());
+      }
+    }
+  }
+
+  static void extractComplexType(
+      const char* const* rows,
+      int32_t numRows,
+      RowColumn column,
+      TypePtr type,
+      serializer::presto::VectorStream* stream) {
+    auto nullByte = column.nullByte();
+    auto nullMask = column.nullMask();
+    auto offset = column.offset();
+
+    for (int i = 0; i < numRows; ++i) {
+      const char* row = rows[i];
+      if (!row || isNullAt(row, nullByte, nullMask)) {
+        stream->appendNull();
+      } else {
+        auto inputStream = prepareRead(row, offset);
+        ContainerRowSerde::deserialize(inputStream, stream, type);
       }
     }
   }
@@ -1666,6 +1795,17 @@ inline void RowContainer::extractColumnTyped<TypeKind::OPAQUE>(
   VELOX_UNSUPPORTED("RowContainer doesn't support values of type OPAQUE");
 }
 
+template <>
+inline void RowContainer::extractColumnTyped<TypeKind::OPAQUE>(
+    const char* const*,
+    int32_t,
+    RowColumn,
+    bool,
+    TypePtr,
+    serializer::presto::VectorStream*) {
+  VELOX_UNSUPPORTED("RowContainer doesn't support values of type OPAQUE");
+}
+
 inline void RowContainer::extractColumn(
     const char* const* rows,
     int32_t numRows,
@@ -1683,6 +1823,24 @@ inline void RowContainer::extractColumn(
       columnHasNulls,
       resultOffset,
       result);
+}
+
+inline void RowContainer::extractColumn(
+    const char* const* rows,
+    int32_t numRows,
+    RowColumn column,
+    bool columnHasNulls,
+    TypePtr type,
+    serializer::presto::VectorStream* stream) {
+  VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
+      extractColumnTyped,
+      type->kind(),
+      rows,
+      numRows,
+      column,
+      columnHasNulls,
+      type,
+      stream);
 }
 
 inline void RowContainer::extractColumn(

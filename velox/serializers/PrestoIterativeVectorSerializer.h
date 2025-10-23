@@ -39,6 +39,14 @@ class PrestoIterativeVectorSerializer : public IterativeVectorSerializer {
       const folly::Range<const vector_size_t*>& rows,
       Scratch& scratch) override;
 
+  VectorStream* getStream(vector_size_t i) override {
+    return &streams_[i];
+  }
+
+  void appendNumRows(int32_t numRows) {
+    numRows_ += numRows;
+  }
+
   size_t maxSerializedSize() const override;
 
   // The SerializedPage layout is:

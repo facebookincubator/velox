@@ -156,6 +156,8 @@ class SpillerBase {
   // that one can start reading these back.
   bool finalized_{false};
 
+  bool serializeRowContainer_{false};
+
   SpillState state_;
 
   // Collects the rows to spill for each partition.
@@ -190,6 +192,13 @@ class SpillerBase {
       int32_t maxRows,
       int64_t maxBytes,
       RowVectorPtr& spillVector,
+      size_t& nextBatchIndex);
+
+  int64_t extractSpillRows(
+      SpillRows& rows,
+      int32_t maxRows,
+      int64_t maxBytes,
+      SpillRows& spillRows,
       size_t& nextBatchIndex);
 
   // Invoked to finalize the spiller and flush any buffered spill to disk.

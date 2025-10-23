@@ -33,6 +33,7 @@
 
 namespace facebook::velox::exec {
 using SpillSortKey = std::pair<column_index_t, CompareFlags>;
+class RowContainer;
 
 /// Records info of a finished spill file which is used for read.
 struct SpillFileInfo {
@@ -79,6 +80,13 @@ class SpillWriter : public serializer::SerializedPageFileWriter {
   ///
   /// NOTE: we don't allow write to a spill writer after finish
   SpillFiles finish();
+
+  using serializer::SerializedPageFileWriter::write;
+
+  using SpillRows = std::vector<char*, memory::StlAllocator<char*>>;
+  uint64_t write(
+      const SpillRows& rows,
+      RowContainer* container);
 
   std::vector<std::string> testingSpilledFilePaths() const;
 

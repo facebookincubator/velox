@@ -237,7 +237,7 @@ void PrestoVectorSerde::serializeSingleColumn(
 
   const IndexRange range{0, vector->size()};
   const auto arena = std::make_unique<StreamArena>(pool);
-  auto stream = std::make_unique<detail::VectorStream>(
+  auto stream = std::make_unique<VectorStream>(
       vector->type(),
       std::nullopt,
       std::nullopt,
@@ -245,7 +245,7 @@ void PrestoVectorSerde::serializeSingleColumn(
       vector->size(),
       prestoOptions);
   Scratch scratch;
-  serializeColumn(vector, folly::Range(&range, 1), stream.get(), scratch);
+  detail::serializeColumn(vector, folly::Range(&range, 1), stream.get(), scratch);
 
   PrestoOutputStreamListener listener;
   OStreamOutputStream outputStream(output, &listener);

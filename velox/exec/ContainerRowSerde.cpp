@@ -18,6 +18,7 @@
 #include "velox/type/FloatingPointUtil.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/FlatVector.h"
+#include "velox/common/memory/HashStringAllocator.h"
 
 namespace facebook::velox::exec {
 
@@ -205,6 +206,11 @@ void deserializeSwitch(
     vector_size_t index,
     BaseVector& result);
 
+void deserializeSwitch(
+    ByteInputStream& in,
+    serializer::presto::VectorStream* out,
+    TypePtr type);
+
 template <TypeKind Kind>
 void deserializeOne(
     ByteInputStream& in,
@@ -215,6 +221,24 @@ void deserializeOne(
   VELOX_CHECK_EQ(result.encoding(), VectorEncoding::Simple::FLAT);
   auto values = result.asUnchecked<FlatVector<T>>();
   values->set(index, in.read<T>());
+}
+
+template <TypeKind Kind>
+void deserializeOne(
+    ByteInputStream& in,
+    serializer::presto::VectorStream* out,
+    TypePtr type) {
+  using T = typename TypeTraits<Kind>::NativeType;
+  out->appendOne(in.read<T>());
+}
+
+template <>
+void deserializeOne<TypeKind::BOOLEAN>(
+    ByteInputStream& in,
+    serializer::presto::VectorStream* out,
+    TypePtr type) {
+  using T = typename TypeTraits<TypeKind::BOOLEAN>::NativeType;
+  out->appendOne<uint8_t>(in.read<T>() ? 1 : 0);
 }
 
 void deserializeString(
@@ -237,6 +261,17 @@ void deserializeString(
   }
 }
 
+void deserializeString(
+    ByteInputStream& in,
+    serializer::presto::VectorStream* out) {
+  auto size = in.read<int32_t>();
+  out->appendLength(size);
+  auto& hashStringStream =
+      dynamic_cast<HashStringAllocator::InputStream&>(in);
+  // No intermediate copy.
+  hashStringStream.readBytes(out->getValueSteam(), size);
+}
+
 template <>
 void deserializeOne<TypeKind::VARCHAR>(
     ByteInputStream& in,
@@ -251,6 +286,22 @@ void deserializeOne<TypeKind::VARBINARY>(
     vector_size_t index,
     BaseVector& result) {
   deserializeString(in, index, result);
+}
+
+template <>
+void deserializeOne<TypeKind::VARCHAR>(
+    ByteInputStream& in,
+    serializer::presto::VectorStream* out,
+    TypePtr type) {
+  deserializeString(in, out);
+}
+
+template <>
+void deserializeOne<TypeKind::VARBINARY>(
+    ByteInputStream& in,
+    serializer::presto::VectorStream* out,
+    TypePtr type) {
+  deserializeString(in, out);
 }
 
 class NullsReader {
@@ -312,6 +363,25 @@ void deserializeOne<TypeKind::ROW>(
   result.setNull(index, false);
 }
 
+template <>
+void deserializeOne<TypeKind::ROW>(
+    ByteInputStream& in,
+    serializer::presto::VectorStream* out,
+    TypePtr type) {
+  auto childrenSize = type->size();
+  NullsReader nulls(in, childrenSize);
+  // Only one row.
+  out->appendLength(1);
+  for (auto i = 0; i < childrenSize; ++i) {
+    auto childStream = out->childAt(i);
+    if (bits::isBitSet(nulls.data(), i)) {
+      childStream->appendNull();
+    } else {
+      deserializeSwitch(in, childStream, type->childAt(i));
+    }
+  }
+}
+
 // Reads the size, null flags and deserializes from 'in', appending to
 // the end of 'elements'. Returns the number of added elements and
 // sets 'offset' to the index of the first added element.
@@ -350,6 +420,27 @@ void deserializeOne<TypeKind::ARRAY>(
 }
 
 template <>
+void deserializeOne<TypeKind::ARRAY>(
+    ByteInputStream& in,
+    serializer::presto::VectorStream* out,
+    TypePtr type) {
+  const auto arrayType =
+      std::dynamic_pointer_cast<const ArrayType>(type);
+  auto elementType = arrayType->elementType();
+  auto size = in.read<int32_t>();
+  out->appendLength(size);
+  NullsReader nulls(in, size);
+  auto elementStream = out->childAt(0);
+  for (auto i = 0; i < size; ++i) {
+    if (bits::isBitSet(nulls.data(), i)) {
+      elementStream->appendNull();
+    } else {
+      deserializeSwitch(in, elementStream, elementType);
+    }
+  }
+}
+
+template <>
 void deserializeOne<TypeKind::MAP>(
     ByteInputStream& in,
     vector_size_t index,
@@ -369,12 +460,55 @@ void deserializeOne<TypeKind::MAP>(
   result.setNull(index, false);
 }
 
+template <>
+void deserializeOne<TypeKind::MAP>(
+    ByteInputStream& in,
+    serializer::presto::VectorStream* out,
+    TypePtr type) {
+  const auto mapType =
+      std::dynamic_pointer_cast<const MapType>(type);
+  auto keyType = mapType->keyType();
+  auto valueType = mapType->valueType();
+  auto keySize = in.read<int32_t>();
+  out->appendLength(keySize);
+  NullsReader keyNulls(in, keySize);
+  auto keyStream = out->childAt(0);
+  for (auto i = 0; i < keySize; ++i) {
+    if (bits::isBitSet(keyNulls.data(), i)) {
+      keyStream->appendNull();
+    } else {
+      deserializeSwitch(in, keyStream, keyType);
+    }
+  }
+
+  auto valueSize = in.read<int32_t>();
+  VELOX_CHECK_EQ(keySize, valueSize);
+  NullsReader valueNulls(in, keySize);
+  auto valueStream = out->childAt(1);
+  for (auto i = 0; i < valueSize; ++i) {
+    if (bits::isBitSet(valueNulls.data(), i)) {
+      valueStream->appendNull();
+    } else {
+      deserializeSwitch(in, valueStream, valueType);
+    }
+  }
+}
+
 void deserializeSwitch(
     ByteInputStream& in,
     vector_size_t index,
     BaseVector& result) {
   VELOX_DYNAMIC_TYPE_DISPATCH(
       deserializeOne, result.typeKind(), in, index, result);
+}
+
+void deserializeSwitch(
+    ByteInputStream& in,
+    serializer::presto::VectorStream* out,
+    TypePtr type) {
+  // Append non-null first, since value must be non-null.
+  out->appendNonNull();
+  VELOX_DYNAMIC_TYPE_DISPATCH(deserializeOne, type->kind(), in, out, type);
 }
 
 // Comparison of serialization and vector.
@@ -1070,6 +1204,14 @@ void ContainerRowSerde::deserialize(
     vector_size_t index,
     BaseVector* result) {
   deserializeSwitch(in, index, *result);
+}
+
+// static
+void ContainerRowSerde::deserialize(
+    ByteInputStream& in,
+    serializer::presto::VectorStream* out,
+    TypePtr type) {
+  deserializeSwitch(in, out, type);
 }
 
 // static

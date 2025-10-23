@@ -18,6 +18,7 @@
 #include "velox/common/base/RuntimeMetrics.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/exec/RowContainer.h"
 #include "velox/serializers/PrestoSerializer.h"
 
 using facebook::velox::common::testutil::TestValue;
@@ -61,6 +62,7 @@ void SpillMergeStream::close() {
 }
 
 SpillState::SpillState(
+    RowTypePtr type,
     const common::GetSpillDirectoryPathCB& getSpillDirPathCb,
     const common::UpdateAndCheckSpillLimitCB& updateAndCheckSpillLimitCb,
     const std::string& fileNamePrefix,
@@ -72,7 +74,8 @@ SpillState::SpillState(
     memory::MemoryPool* pool,
     folly::Synchronized<common::SpillStats>* stats,
     const std::string& fileCreateConfig)
-    : getSpillDirPathCb_(getSpillDirPathCb),
+    : type_(type),
+      getSpillDirPathCb_(getSpillDirPathCb),
       updateAndCheckSpillLimitCb_(updateAndCheckSpillLimitCb),
       fileNamePrefix_(fileNamePrefix),
       sortingKeys_(sortingKeys),
@@ -133,15 +136,7 @@ void SpillState::updateSpilledInputBytes(uint64_t bytes) {
   common::updateGlobalSpillMemoryBytes(bytes);
 }
 
-uint64_t SpillState::appendToPartition(
-    const SpillPartitionId& id,
-    const RowVectorPtr& rows) {
-  VELOX_CHECK(
-      isPartitionSpilled(id), "Partition {} is not spilled", id.toString());
-
-  TestValue::adjust(
-      "facebook::velox::exec::SpillState::appendToPartition", this);
-
+void SpillState::initPartitionWriter(const SpillPartitionId& id) {
   VELOX_CHECK_NOT_NULL(
       getSpillDirPathCb_, "Spill directory callback not specified.");
   auto spillDir = getSpillDirPathCb_();
@@ -153,7 +148,7 @@ uint64_t SpillState::appendToPartition(
       lockedWriters.emplace(
           id,
           std::make_unique<SpillWriter>(
-              std::static_pointer_cast<const RowType>(rows->type()),
+              std::static_pointer_cast<const RowType>(type_),
               sortingKeys_,
               compressionKind_,
               fmt::format(
@@ -166,6 +161,18 @@ uint64_t SpillState::appendToPartition(
               stats_));
     }
   });
+}
+
+uint64_t SpillState::appendToPartition(
+    const SpillPartitionId& id,
+    const RowVectorPtr& rows) {
+  VELOX_CHECK(
+      isPartitionSpilled(id), "Partition {} is not spilled", id.toString());
+
+  TestValue::adjust(
+      "facebook::velox::exec::SpillState::appendToPartition", this);
+
+  initPartitionWriter(id);
 
   const uint64_t bytes = rows->estimateFlatSize();
   validateSpillBytesSize(bytes);
@@ -173,6 +180,28 @@ uint64_t SpillState::appendToPartition(
 
   IndexRange range{0, rows->size()};
   return partitionWriter(id)->write(rows, folly::Range<IndexRange*>(&range, 1));
+}
+
+uint64_t SpillState::appendToPartition(
+    const SpillPartitionId& id,
+    const SpillRows& rows,
+    RowContainer* rowContainer) {
+  VELOX_CHECK(
+      isPartitionSpilled(id), "Partition {} is not spilled", id.toString());
+
+  TestValue::adjust(
+      "facebook::velox::exec::SpillState::appendToPartition", this);
+
+  initPartitionWriter(id);
+
+  uint64_t bytes = 0;
+  for (const auto& row : rows) {
+    bytes += rowContainer->rowSize(row);
+  }
+  validateSpillBytesSize(bytes);
+  updateSpilledInputBytes(bytes);
+
+  return partitionWriter(id)->write(rows, rowContainer);
 }
 
 SpillWriter* SpillState::partitionWriter(const SpillPartitionId& id) const {

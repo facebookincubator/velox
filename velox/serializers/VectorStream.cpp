@@ -21,7 +21,7 @@
 #include "velox/functions/prestosql/types/UuidType.h"
 #include "velox/serializers/PrestoSerializerSerializationUtils.h"
 
-namespace facebook::velox::serializer::presto::detail {
+namespace facebook::velox::serializer::presto {
 namespace {
 class CountingOutputStream : public OutputStream {
  public:
@@ -77,7 +77,7 @@ VectorStream::VectorStream(
       values_(streamArena),
       children_(memory::StlAllocator<VectorStream>(*streamArena->pool())) {
   if (initialNumRows == 0) {
-    initializeHeader(typeToEncodingName(type), *streamArena);
+    initializeHeader(detail::typeToEncodingName(type), *streamArena);
     if (type_->size() > 0 && !isIpPrefix_) {
       hasLengths_ = true;
       children_.reserve(type_->size());
@@ -103,7 +103,7 @@ VectorStream::VectorStream(
   if (encoding_.has_value()) {
     switch (encoding_.value()) {
       case VectorEncoding::Simple::CONSTANT: {
-        initializeHeader(kRLE, *streamArena);
+        initializeHeader(detail::kRLE, *streamArena);
         isConstantStream_ = true;
         children_.emplace_back(
             type_,
@@ -124,7 +124,7 @@ VectorStream::VectorStream(
           break;
         }
 
-        initializeHeader(kDictionary, *streamArena);
+        initializeHeader(detail::kDictionary, *streamArena);
         values_.startWrite(initialNumRows * 4);
         isDictionaryStream_ = true;
         children_.emplace_back(
@@ -211,20 +211,20 @@ void VectorStream::flush(OutputStream* out) {
   if (encoding_.has_value()) {
     switch (encoding_.value()) {
       case VectorEncoding::Simple::CONSTANT: {
-        writeInt32(out, nonNullCount_);
+        detail::writeInt32(out, nonNullCount_);
         children_[0].flush(out);
         return;
       }
       case VectorEncoding::Simple::DICTIONARY: {
-        writeInt32(out, nonNullCount_);
+        detail::writeInt32(out, nonNullCount_);
         children_[0].flush(out);
         values_.flush(out);
 
         // Write 24 bytes of 'instance id'.
         int64_t unused{0};
-        writeInt64(out, unused);
-        writeInt64(out, unused);
-        writeInt64(out, unused);
+        detail::writeInt64(out, unused);
+        detail::writeInt64(out, unused);
+        detail::writeInt64(out, unused);
         return;
       }
       default:
@@ -235,25 +235,25 @@ void VectorStream::flush(OutputStream* out) {
   switch (type_->kind()) {
     case TypeKind::ROW:
       if (isIPPrefixType(type_)) {
-        writeInt32(out, nullCount_ + nonNullCount_);
+        detail::writeInt32(out, nullCount_ + nonNullCount_);
         lengths_.flush(out);
         flushNulls(out);
-        writeInt32(out, values_.size());
+        detail::writeInt32(out, values_.size());
         values_.flush(out);
         break;
       }
 
       if (opts_.nullsFirst) {
-        writeInt32(out, nullCount_ + nonNullCount_);
+        detail::writeInt32(out, nullCount_ + nonNullCount_);
         flushNulls(out);
       }
 
-      writeInt32(out, children_.size());
+      detail::writeInt32(out, children_.size());
       for (auto& child : children_) {
         child.flush(out);
       }
       if (!opts_.nullsFirst) {
-        writeInt32(out, nullCount_ + nonNullCount_);
+        detail::writeInt32(out, nullCount_ + nonNullCount_);
         lengths_.flush(out);
         flushNulls(out);
       }
@@ -261,7 +261,7 @@ void VectorStream::flush(OutputStream* out) {
 
     case TypeKind::ARRAY:
       children_[0].flush(out);
-      writeInt32(out, nullCount_ + nonNullCount_);
+      detail::writeInt32(out, nullCount_ + nonNullCount_);
       lengths_.flush(out);
       flushNulls(out);
       return;
@@ -270,8 +270,8 @@ void VectorStream::flush(OutputStream* out) {
       children_[0].flush(out);
       children_[1].flush(out);
       // hash table size. -1 means not included in serialization.
-      writeInt32(out, -1);
-      writeInt32(out, nullCount_ + nonNullCount_);
+      detail::writeInt32(out, -1);
+      detail::writeInt32(out, nullCount_ + nonNullCount_);
 
       lengths_.flush(out);
       flushNulls(out);
@@ -281,15 +281,15 @@ void VectorStream::flush(OutputStream* out) {
     case TypeKind::VARCHAR:
     case TypeKind::VARBINARY:
     case TypeKind::OPAQUE:
-      writeInt32(out, nullCount_ + nonNullCount_);
+      detail::writeInt32(out, nullCount_ + nonNullCount_);
       lengths_.flush(out);
       flushNulls(out);
-      writeInt32(out, values_.size());
+      detail::writeInt32(out, values_.size());
       values_.flush(out);
       return;
 
     default:
-      writeInt32(out, nullCount_ + nonNullCount_);
+      detail::writeInt32(out, nullCount_ + nonNullCount_);
       flushNulls(out);
       values_.flush(out);
   }
@@ -308,7 +308,7 @@ void VectorStream::flushNulls(OutputStream* out) {
 
 void VectorStream::clear() {
   encoding_ = std::nullopt;
-  initializeHeader(typeToEncodingName(type_), *streamArena_);
+  initializeHeader(detail::typeToEncodingName(type_), *streamArena_);
   nonNullCount_ = 0;
   nullCount_ = 0;
   totalLength_ = 0;
@@ -363,11 +363,11 @@ void VectorStream::append(folly::Range<const int128_t*> values) {
   for (auto& value : values) {
     int128_t val = value;
     if (isLongDecimal_) {
-      val = toJavaDecimalValue(value);
+      val = detail::toJavaDecimalValue(value);
     } else if (isUuid_) {
-      val = toJavaUuidValue(value);
+      val = detail::toJavaUuidValue(value);
     } else if (isIpAddress_) {
-      val = reverseIpAddressByteOrder(value);
+      val = detail::reverseIpAddressByteOrder(value);
     }
     values_.append<int128_t>(folly::Range(&val, 1));
   }
@@ -376,7 +376,7 @@ void VectorStream::append(folly::Range<const int128_t*> values) {
 void VectorStream::initializeFlatStream(
     std::optional<VectorPtr> vector,
     vector_size_t initialNumRows) {
-  initializeHeader(typeToEncodingName(type_), *streamArena_);
+  initializeHeader(detail::typeToEncodingName(type_), *streamArena_);
   nulls_.startWrite(0);
 
   switch (type_->kind()) {
@@ -430,4 +430,4 @@ void VectorStream::initializeFlatStream(
       break;
   }
 }
-} // namespace facebook::velox::serializer::presto::detail
+} // namespace facebook::velox::serializer::presto

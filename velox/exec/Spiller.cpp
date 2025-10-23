@@ -54,6 +54,7 @@ SpillerBase::SpillerBase(
         return compareFlags;
       }()),
       state_(
+          rowType_,
           spillConfig->getSpillDirPathCb,
           spillConfig->updateAndCheckSpillLimitCb,
           spillConfig->fileNamePrefix,
@@ -66,6 +67,9 @@ SpillerBase::SpillerBase(
           spillStats,
           spillConfig->fileCreateConfig) {
   TestValue::adjust("facebook::velox::exec::SpillerBase", this);
+
+  serializeRowContainer_ =
+      spillConfig->serializeRowContainer && container_->supportSerializeRows();
 }
 
 void SpillerBase::spill(const RowContainerIterator* startRowIter) {
@@ -203,14 +207,26 @@ std::unique_ptr<SpillerBase::SpillStatus> SpillerBase::writeSpill(
   constexpr int32_t kTargetBatchRows = 64;
 
   RowVectorPtr spillVector;
+  SpillRows spillRows(*memory::spillMemoryPool());
   auto& run = spillRuns_.at(id);
   try {
     ensureSorted(run);
     size_t written = 0;
     while (written < run.rows.size()) {
-      extractSpillVector(
-          run.rows, kTargetBatchRows, kTargetBatchBytes, spillVector, written);
-      state_.appendToPartition(id, spillVector);
+      if (serializeRowContainer_) {
+        extractSpillRows(
+            run.rows, kTargetBatchRows, kTargetBatchBytes, spillRows, written);
+        state_.appendToPartition(id, spillRows, container_);
+        spillRows.clear();
+      } else {
+        extractSpillVector(
+            run.rows,
+            kTargetBatchRows,
+            kTargetBatchBytes,
+            spillVector,
+            written);
+        state_.appendToPartition(id, spillVector);
+      }
     }
     return std::make_unique<SpillStatus>(id, written, nullptr);
   } catch (const std::exception&) {
@@ -277,6 +293,38 @@ int64_t SpillerBase::extractSpillVector(
       }
     }
     extractSpill(folly::Range(&rows[nextBatchIndex], numRows), spillVector);
+    nextBatchIndex += numRows;
+  }
+  updateSpillExtractVectorTime(extractNs);
+  return bytes;
+}
+
+int64_t SpillerBase::extractSpillRows(
+    SpillRows& rows,
+    int32_t maxRows,
+    int64_t maxBytes,
+    SpillRows& spillRows,
+    size_t& nextBatchIndex) {
+  uint64_t extractNs{0};
+  auto limit = std::min<size_t>(rows.size() - nextBatchIndex, maxRows);
+  VELOX_CHECK(!rows.empty());
+  int32_t numRows = 0;
+  int64_t bytes = 0;
+  {
+    NanosecondTimer timer(&extractNs);
+    for (; numRows < limit; ++numRows) {
+      bytes += container_->rowSize(rows[nextBatchIndex + numRows]);
+      if (bytes > maxBytes) {
+        // Increment because the row that went over the limit is part
+        // of the result. We must spill at least one row.
+        ++numRows;
+        break;
+      }
+    }
+    spillRows.insert(
+        spillRows.end(),
+        rows.begin() + nextBatchIndex,
+        rows.begin() + nextBatchIndex + numRows);
     nextBatchIndex += numRows;
   }
   updateSpillExtractVectorTime(extractNs);

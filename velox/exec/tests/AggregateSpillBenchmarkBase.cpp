@@ -58,8 +58,8 @@ std::unique_ptr<RowContainer> setupSpillContainer(
 }
 } // namespace
 
-void AggregateSpillBenchmarkBase::setUp() {
-  SpillerBenchmarkBase::setUp();
+void AggregateSpillBenchmarkBase::setUp(RowTypePtr rowType, int32_t stringMaxLength) {
+  SpillerBenchmarkBase::setUp(rowType, stringMaxLength);
 
   rowContainer_ = setupSpillContainer(
       rowType_, FLAGS_spiller_benchmark_num_key_columns, pool_);

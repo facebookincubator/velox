@@ -16,7 +16,9 @@
 
 #include "velox/exec/SpillFile.h"
 #include "velox/common/base/RuntimeMetrics.h"
+#include "velox/exec/RowContainer.h"
 #include "velox/serializers/SerializedPageFile.h"
+#include "velox/vector/VectorStream.h"
 
 namespace facebook::velox::exec {
 namespace {
@@ -104,6 +106,37 @@ SpillFiles SpillWriter::finish() {
             .compressionKind = serdeOptions_->compressionKind});
   }
   return spillFiles;
+}
+
+uint64_t SpillWriter::write(
+    const SpillRows& rows,
+    RowContainer* container) {
+  if (rows.size() == 0) {
+    return 0;
+  }
+
+  checkNotFinished();
+
+  uint64_t timeNs{0};
+  {
+    if (batch_ == nullptr) {
+      batch_ = std::make_unique<VectorStreamGroup>(pool_, serde_);
+      batch_->createStreamTree(
+          std::static_pointer_cast<const RowType>(type_),
+          1'000,
+          serdeOptions_.get());
+    }
+    batch_->appendNumRows(rows.size());
+    const auto& types = container->columnTypes();
+    for (auto i = 0; i < types.size(); ++i) {
+      container->extractColumn(rows.data(),rows.size(), i, types[i], batch_->streamAt(i));
+    }
+  }
+  updateAppendStats(rows.size(), timeNs);
+  if (batch_->size() < writeBufferSize_) {
+    return 0;
+  }
+  return flush();
 }
 
 std::vector<std::string> SpillWriter::testingSpilledFilePaths() const {

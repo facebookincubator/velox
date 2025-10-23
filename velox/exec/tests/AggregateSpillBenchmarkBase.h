@@ -23,7 +23,7 @@ class AggregateSpillBenchmarkBase : public SpillerBenchmarkBase {
       : spillerType_(spillerType) {};
 
   /// Sets up the test.
-  void setUp() override;
+  void setUp(RowTypePtr rowType, int32_t stringMaxLength) override;
 
   /// Runs the test.
   void run() override;
