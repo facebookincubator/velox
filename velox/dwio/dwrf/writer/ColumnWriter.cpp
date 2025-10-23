@@ -2122,7 +2122,7 @@ std::unique_ptr<BaseColumnWriter> BaseColumnWriter::create(
           "MAP_FLAT_COLS contains column {}, but the root type of this column is {}."
           " Column root types must be of type MAP",
           type.column(),
-          mapTypeKindToName(type.type()->kind()));
+          TypeKindName::toName(type.type()->kind()));
     }
     const auto structColumnKeys =
         context.getConfig(Config::MAP_FLAT_COLS_STRUCT_KEYS);
@@ -2215,7 +2215,7 @@ std::unique_ptr<BaseColumnWriter> BaseColumnWriter::create(
     }
     default:
       VELOX_FAIL(
-          "not supported yet: {}", mapTypeKindToName(type.type()->kind()));
+          "not supported yet: {}", TypeKindName::toName(type.type()->kind()));
   }
 }
 } // namespace facebook::velox::dwrf
