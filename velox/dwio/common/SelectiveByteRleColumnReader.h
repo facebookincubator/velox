@@ -147,11 +147,11 @@ void SelectiveByteRleColumnReader::processValueHook(
   switch (hook->kind()) {
     case aggregate::AggregationHook::kBigintSum:
       readHelper<Reader, velox::common::AlwaysTrue, isDense>(
-          &alwaysTrue(), rows, ExtractToHook<SumHook<int64_t>>(this, hook));
+          &alwaysTrue(), rows, ExtractToHook<SumHook<int64_t>>(hook));
       break;
     default:
       readHelper<Reader, velox::common::AlwaysTrue, isDense>(
-          &alwaysTrue(), rows, ExtractToGenericHook(this, hook));
+          &alwaysTrue(), rows, ExtractToGenericHook(hook));
   }
 }
 
