@@ -213,7 +213,7 @@ std::unique_ptr<exec::Aggregate> create(
       return std::make_unique<Aggregate<UnknownValue>>(resultType);
     default:
       VELOX_UNREACHABLE(
-          "Unexpected type {}", mapTypeKindToName(inputType->kind()));
+          "Unexpected type {}", TypeKindName::toName(inputType->kind()));
   }
 }
 
@@ -309,7 +309,7 @@ void registerSetAggAggregate(
             return std::make_unique<SetAggAggregate<UnknownValue>>(resultType);
           default:
             VELOX_UNREACHABLE(
-                "Unexpected type {}", mapTypeKindToName(typeKind));
+                "Unexpected type {}", TypeKindName::toName(typeKind));
         }
       },
       {.ignoreDuplicates = true},
@@ -429,7 +429,7 @@ void registerCountDistinctAggregate(
                 resultType, argTypes[0]);
           default:
             VELOX_UNREACHABLE(
-                "Unexpected type {}", mapTypeKindToName(typeKind));
+                "Unexpected type {}", TypeKindName::toName(typeKind));
         }
       },
       withCompanionFunctions,

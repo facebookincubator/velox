@@ -28,7 +28,7 @@ int32_t compare(
       result.has_value(),
       fmt::format(
           "{} comparison not supported for values that contain nulls",
-          mapTypeKindToName(decoded.base()->typeKind())));
+          TypeKindName::toName(decoded.base()->typeKind())));
   return result.value();
 }
 } // namespace facebook::velox::functions::aggregate

@@ -19,24 +19,24 @@
 
 namespace facebook::velox::connector::hive {
 
-#define PARTITION_TYPE_DISPATCH(TEMPLATE_FUNC, typeKind, ...)               \
-  [&]() {                                                                   \
-    switch (typeKind) {                                                     \
-      case TypeKind::BOOLEAN:                                               \
-      case TypeKind::TINYINT:                                               \
-      case TypeKind::SMALLINT:                                              \
-      case TypeKind::INTEGER:                                               \
-      case TypeKind::BIGINT:                                                \
-      case TypeKind::HUGEINT:                                               \
-      case TypeKind::VARCHAR:                                               \
-      case TypeKind::VARBINARY:                                             \
-      case TypeKind::TIMESTAMP:                                             \
-        return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(                          \
-            TEMPLATE_FUNC, typeKind, __VA_ARGS__);                          \
-      default:                                                              \
-        VELOX_UNSUPPORTED(                                                  \
-            "Unsupported partition type: {}", mapTypeKindToName(typeKind)); \
-    }                                                                       \
+#define PARTITION_TYPE_DISPATCH(TEMPLATE_FUNC, typeKind, ...)                  \
+  [&]() {                                                                      \
+    switch (typeKind) {                                                        \
+      case TypeKind::BOOLEAN:                                                  \
+      case TypeKind::TINYINT:                                                  \
+      case TypeKind::SMALLINT:                                                 \
+      case TypeKind::INTEGER:                                                  \
+      case TypeKind::BIGINT:                                                   \
+      case TypeKind::HUGEINT:                                                  \
+      case TypeKind::VARCHAR:                                                  \
+      case TypeKind::VARBINARY:                                                \
+      case TypeKind::TIMESTAMP:                                                \
+        return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(                             \
+            TEMPLATE_FUNC, typeKind, __VA_ARGS__);                             \
+      default:                                                                 \
+        VELOX_UNSUPPORTED(                                                     \
+            "Unsupported partition type: {}", TypeKindName::toName(typeKind)); \
+    }                                                                          \
   }()
 
 namespace {

@@ -101,7 +101,7 @@ FOLLY_ALWAYS_INLINE void extractRowColumnToPrefix(
     default:
       VELOX_UNSUPPORTED(
           "prefix-sort does not support type kind: {}",
-          mapTypeKindToName(typeKind));
+          TypeKindName::toName(typeKind));
   }
 }
 

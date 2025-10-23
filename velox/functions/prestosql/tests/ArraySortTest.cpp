@@ -224,7 +224,8 @@ class ArraySortTest : public FunctionBaseTest,
         break;
       default:
         VELOX_FAIL(
-            "Unsupported data type of sort_array: {}", mapTypeKindToName(kind));
+            "Unsupported data type of sort_array: {}",
+            TypeKindName::toName(kind));
     }
   }
 
@@ -367,7 +368,8 @@ void ArraySortTest::SetUp() {
         break;
       default:
         VELOX_FAIL(
-            "Unsupported data type of sort_array: {}", mapTypeKindToName(type));
+            "Unsupported data type of sort_array: {}",
+            TypeKindName::toName(type));
     }
   }
   ASSERT_LE(dataVectorsByType_.size(), kSupportedTypes.size());

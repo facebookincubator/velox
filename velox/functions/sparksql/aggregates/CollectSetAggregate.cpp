@@ -103,7 +103,7 @@ void registerCollectSetAggAggregate(
                 resultType);
           default:
             VELOX_UNSUPPORTED(
-                "Unsupported type {}", mapTypeKindToName(typeKind));
+                "Unsupported type {}", TypeKindName::toName(typeKind));
         }
       },
       {.ignoreDuplicates = true},
