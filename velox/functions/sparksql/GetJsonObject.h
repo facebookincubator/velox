@@ -136,7 +136,11 @@ struct GetJsonObjectFunction {
       return "-1";
     }
 
-    enum class State { kAfterDollar, kAfterDot, kToken } state = State::kAfterDollar;
+    enum class State {
+      kAfterDollar,
+      kAfterDot,
+      kToken
+    } state = State::kAfterDollar;
 
     std::string normalized;
     normalized.reserve(path.size() - 1);
