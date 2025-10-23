@@ -134,7 +134,7 @@ TEST_F(VariantToVectorTest, saveVarcharArrayVector) {
   auto type = ARRAY(VARCHAR());
   auto variant =
       Variant::array({"a", "b", Variant::null(TypeKind::VARCHAR), "d"});
-  auto vectorWithNulls = variantToVector(type, variant, pool());
+  auto vectorWithNulls = BaseVector::createConstant(type, variant, 1, pool());
   std::ostringstream out;
   saveVector(*vectorWithNulls, out);
   std::istringstream in(out.str());
