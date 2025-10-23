@@ -136,7 +136,7 @@ struct GetJsonObjectFunction {
       return "-1";
     }
 
-    enum State { kAfterDollar, kAfterDot, kToken } state = kAfterDollar;
+    enum class State { kAfterDollar, kAfterDot, kToken } state = State::kAfterDollar;
 
     std::string normalized;
     normalized.reserve(path.size() - 1);
@@ -144,16 +144,16 @@ struct GetJsonObjectFunction {
     for (size_t i = 1; i < path.size(); ++i) {
       const char c = path[i];
       if (c == ' ') {
-        if (state == kToken) {
+        if (state == State::kToken) {
           // Spaces within tokens are preserved.
           normalized.push_back(c);
         }
         continue;
       }
       switch (state) {
-        case kAfterDollar: {
+        case State::kAfterDollar: {
           if (c == '.') {
-            state = kAfterDot;
+            state = State::kAfterDot;
             if (path[i - 1] == ' ') {
               // Spaces between '$' and '.' are invalid.
               return "-1";
@@ -162,19 +162,19 @@ struct GetJsonObjectFunction {
           normalized.push_back(c);
           break;
         }
-        case kAfterDot: {
+        case State::kAfterDot: {
           if (c == '.') {
             // Consecutive dots are invalid.
             return "-1";
           }
           normalized.push_back(c);
-          state = kToken;
+          state = State::kToken;
           break;
         }
-        case kToken: {
+        case State::kToken: {
           if (c == '.') {
             normalized.push_back(c);
-            state = kAfterDot;
+            state = State::kAfterDot;
           } else {
             normalized.push_back(c);
           }
@@ -183,7 +183,7 @@ struct GetJsonObjectFunction {
       }
     }
 
-    if (state == kAfterDot) {
+    if (state == State::kAfterDot) {
       // Trailing dot is invalid.
       return "-1";
     }
