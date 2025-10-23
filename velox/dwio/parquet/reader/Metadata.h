@@ -22,6 +22,37 @@
 
 namespace facebook::velox::parquet {
 
+/// Parquet encoding types abstracted from thrift
+enum class EncodingType {
+  PLAIN = 0,
+  PLAIN_DICTIONARY = 2,
+  RLE = 3,
+  BIT_PACKED = 4,
+  DELTA_BINARY_PACKED = 5,
+  DELTA_LENGTH_BYTE_ARRAY = 6,
+  DELTA_BYTE_ARRAY = 7,
+  RLE_DICTIONARY = 8,
+  BYTE_STREAM_SPLIT = 9
+};
+
+/// Parquet page types abstracted from thrift
+enum class PageType {
+  DATA_PAGE = 0,
+  INDEX_PAGE = 1,
+  DICTIONARY_PAGE = 2,
+  DATA_PAGE_V2 = 3
+};
+
+/// Page encoding statistics abstracted from thrift
+struct PageEncodingStats {
+  PageType pageType;
+  EncodingType encoding;
+  int32_t count;
+
+  PageEncodingStats(PageType pt, EncodingType enc, int32_t cnt)
+      : pageType(pt), encoding(enc), count(cnt) {}
+};
+
 /// ColumnChunkMetaDataPtr is a proxy around pointer to thrift::ColumnChunk.
 class ColumnChunkMetaDataPtr {
  public:
@@ -40,9 +71,9 @@ class ColumnChunkMetaDataPtr {
 
   bool hasEncodingStats() const;
 
-  const std::vector<thrift::PageEncodingStats>& getEncodingStats() const;
+  std::vector<PageEncodingStats> getEncodingStats() const;
 
-  const std::vector<thrift::Encoding::type>& getEncodings() const;
+  std::vector<EncodingType> getEncodings() const;
 
   /// Return the ColumnChunk statistics.
   std::unique_ptr<dwio::common::ColumnStatistics> getColumnStatistics(

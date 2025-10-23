@@ -8061,8 +8061,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, probeReclaimedMemoryReport) {
     HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .numDrivers(1)
         .planNode(plan)
-        .queryPool(std::move(queryPool))
-        .injectSpill(false)
+        .queryPool(std::move(queryPool)) P.injectSpill(false)
         .spillDirectory(tempDirectory->getPath())
         .referenceQuery(
             "SELECT t_k1, t_k2, t_v1, u_k1, u_k2, u_v1 FROM t, u WHERE t.t_k1 = u.u_k1")

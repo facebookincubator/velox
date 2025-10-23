@@ -255,9 +255,6 @@ class ParquetData : public dwio::common::FormatData {
   const uint32_t maxRepeat_;
   int64_t rowsInRowGroup_;
   const tz::TimeZone* sessionTimezone_;
-
-  // Track current row group for shadow mode validation
-  mutable int64_t currentRowGroupId_{-1};
   std::unique_ptr<PageReader> reader_;
 
   // Nulls derived from leaf repdefs for non-leaf readers.

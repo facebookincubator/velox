@@ -26,23 +26,22 @@ namespace facebook::velox::parquet {
 namespace {
 
 // Helper methods for EncodingStats analysis (like Java Presto)
-bool hasDictionaryPages(const std::vector<thrift::PageEncodingStats>& stats) {
+bool hasDictionaryPages(const std::vector<PageEncodingStats>& stats) {
   for (const auto& pageStats : stats) {
-    if (pageStats.page_type == thrift::PageType::DICTIONARY_PAGE) {
+    if (pageStats.pageType == PageType::DICTIONARY_PAGE) {
       return true;
     }
   }
   return false;
 }
 
-bool hasNonDictionaryEncodedPages(
-    const std::vector<thrift::PageEncodingStats>& stats) {
+bool hasNonDictionaryEncodedPages(const std::vector<PageEncodingStats>& stats) {
   for (const auto& pageStats : stats) {
-    if (pageStats.page_type == thrift::PageType::DATA_PAGE ||
-        pageStats.page_type == thrift::PageType::DATA_PAGE_V2) {
+    if (pageStats.pageType == PageType::DATA_PAGE ||
+        pageStats.pageType == PageType::DATA_PAGE_V2) {
       // Check if this data page uses non-dictionary encoding
-      if (pageStats.encoding != thrift::Encoding::PLAIN_DICTIONARY &&
-          pageStats.encoding != thrift::Encoding::RLE_DICTIONARY) {
+      if (pageStats.encoding != EncodingType::PLAIN_DICTIONARY &&
+          pageStats.encoding != EncodingType::RLE_DICTIONARY) {
         return true;
       }
     }
@@ -216,18 +215,17 @@ bool ParquetData::isOnlyDictionaryEncodingPagesImpl(
 
   // Fallback to v1 logic
   auto encodings = columnChunk.getEncodings();
-  std::set<thrift::Encoding::type> encodingSet(
-      encodings.begin(), encodings.end());
+  std::set<EncodingType> encodingSet(encodings.begin(), encodings.end());
 
-  if (encodingSet.count(thrift::Encoding::PLAIN_DICTIONARY)) {
+  if (encodingSet.count(EncodingType::PLAIN_DICTIONARY)) {
     // PLAIN_DICTIONARY was present, which means at least one page was
     // dictionary-encoded and 1.0 encodings are used
     // The only other allowed encodings are RLE and BIT_PACKED which are used
     // for repetition or definition levels
-    std::set<thrift::Encoding::type> allowedEncodings = {
-        thrift::Encoding::PLAIN_DICTIONARY,
-        thrift::Encoding::RLE, // For repetition/definition levels
-        thrift::Encoding::BIT_PACKED // For repetition/definition levels
+    std::set<EncodingType> allowedEncodings = {
+        EncodingType::PLAIN_DICTIONARY,
+        EncodingType::RLE, // For repetition/definition levels
+        EncodingType::BIT_PACKED // For repetition/definition levels
     };
 
     // Check if there are any disallowed encodings (equivalent to
@@ -317,12 +315,14 @@ ParquetData::readDictionaryPageForFiltering(
   // Read the first page header to trigger dictionary loading
   auto pageHeader = pageReader->readPageHeader();
 
-  // If it's a dictionary page, prepare it
-  if (pageHeader.type == thrift::PageType::DICTIONARY_PAGE) {
-    pageReader->prepareDictionary(pageHeader);
-  } else {
-    return std::make_unique<dwio::common::DictionaryValues>();
-  }
+  // Check that we have a dictionary page as expected
+  VELOX_CHECK_EQ(
+      pageHeader.type,
+      thrift::PageType::DICTIONARY_PAGE,
+      "Expected dictionary page but found page type: {}",
+      static_cast<int>(pageHeader.type));
+
+  pageReader->prepareDictionary(pageHeader);
   const auto& dict = pageReader->dictionary();
   return std::make_unique<dwio::common::DictionaryValues>(dict);
 }
@@ -330,11 +330,6 @@ ParquetData::readDictionaryPageForFiltering(
 std::unique_ptr<dwio::common::SeekableInputStream> ParquetData::getInputStream(
     uint32_t rowGroupId,
     const ColumnChunkMetaDataPtr& columnChunk) {
-  // Create new stream using the same logic as enqueueRowGroup
-  if (!bufferedInput_) {
-    return nullptr;
-  }
-
   // Calculate read parameters (same as enqueueRowGroup)
   uint64_t chunkReadOffset = columnChunk.dataPageOffset();
   if (columnChunk.hasDictionaryPageOffset() &&

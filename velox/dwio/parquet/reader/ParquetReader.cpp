@@ -16,7 +16,6 @@
 
 #include "velox/dwio/parquet/reader/ParquetReader.h"
 
-#include <boost/algorithm/string.hpp>
 #include <glog/logging.h>
 #include <thrift/TApplicationException.h>
 #include <thrift/protocol/TCompactProtocol.h> //@manual
