@@ -99,10 +99,7 @@ function.</p>
 <dt class="sig sig-object spark" id="get_json_object">
 <span class="sig-name descname"><span class="pre">get_json_object</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">jsonString</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">path</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#get_json_object" title="Link to this definition">¶</a></dt>
 <dd><p>Returns a json object, represented by VARCHAR, from <code class="docutils literal notranslate"><span class="pre">jsonString</span></code> by searching <code class="docutils literal notranslate"><span class="pre">path</span></code>.
-Valid <code class="docutils literal notranslate"><span class="pre">path</span></code> should start with ‘$’ and then contain “[index]”, “[‘field’]” or “.field”
-to define a JSON path. Here are some examples: “$.a” “$.a.b”, “$[0][‘a’].b”. Returns
-<code class="docutils literal notranslate"><span class="pre">jsonString</span></code> if <code class="docutils literal notranslate"><span class="pre">path</span></code> is “$”. Returns NULL if <code class="docutils literal notranslate"><span class="pre">jsonString</span></code> or <code class="docutils literal notranslate"><span class="pre">path</span></code> is malformed.
-Returns NULL if <code class="docutils literal notranslate"><span class="pre">path</span></code> does not exist.</p>
+Returns NULL if <code class="docutils literal notranslate"><span class="pre">jsonString</span></code> or <code class="docutils literal notranslate"><span class="pre">path</span></code> is malformed or <code class="docutils literal notranslate"><span class="pre">path</span></code> does not exist.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>SELECT get_json_object(&#39;{&quot;a&quot;:&quot;b&quot;}&#39;, &#39;$.a&#39;); -- &#39;b&#39;
 SELECT get_json_object(&#39;{&quot;a&quot;:{&quot;b&quot;:&quot;c&quot;}}&#39;, &#39;$.a&#39;); -- &#39;{&quot;b&quot;:&quot;c&quot;}&#39;
 SELECT get_json_object(&#39;{&quot;a&quot;:3}&#39;, &#39;$.b&#39;); -- NULL (unexisting field)
@@ -110,6 +107,15 @@ SELECT get_json_object(&#39;{&quot;a&quot;-3}&#39;&#39;, &#39;$.a&#39;); -- NULL
 SELECT get_json_object(&#39;{&quot;a&quot;:3}&#39;&#39;, &#39;.a&#39;); -- NULL (malformed JSON path)
 </pre></div>
 </div>
+<dl class="simple">
+<dt>Valid <code class="docutils literal notranslate"><span class="pre">path</span></code> syntax:</dt><dd><ul class="simple">
+<li><p>Must start with ‘$’.</p></li>
+<li><p>Using “[index]”, “[‘field’]” or “.field” to navigate to the desired JSON object.</p></li>
+<li><p>Whitespace is allowed <strong>after the dot</strong> and <strong>before the field name</strong>, e.g., “$.  field”.</p></li>
+<li><p>Trailing whitespace after ‘$’ is allowed, e.g., “$   “.</p></li>
+</ul>
+</dd>
+</dl>
 </dd></dl>
 
 <dl class="spark function">
