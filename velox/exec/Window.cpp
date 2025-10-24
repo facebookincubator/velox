@@ -56,8 +56,9 @@ Window::Window(
           windowNode, pool(), spillConfig, &nonReclaimableSection_);
     }
   } else {
-    auto regionNum = operatorCtx_->driverCtx()->queryConfig().windowRegionNum();
-    if (regionNum > 1) {
+    if (auto regionNum =
+            operatorCtx_->driverCtx()->queryConfig().windowRegionNum();
+        regionNum > 1) {
       windowBuild_ = std::make_unique<RegionSortWindowBuild>(
           windowNode,
           regionNum,
