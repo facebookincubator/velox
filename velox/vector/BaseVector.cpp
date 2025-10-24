@@ -832,7 +832,14 @@ struct VariantToVector<
     using T = typename TypeTraits<KIND>::NativeType;
 
     const vector_size_t dataSize = data.size();
-    BufferPtr valuesBuffer = AlignedBuffer::allocate<T>(dataSize, pool);
+    BufferPtr valuesBuffer;
+    if constexpr (std::is_same_v<T, StringView>) {
+      // Make sure to initialize StringView values so they can be safely
+      // accessed.
+      valuesBuffer = AlignedBuffer::allocate<T>(dataSize, pool, T());
+    } else {
+      valuesBuffer = AlignedBuffer::allocate<T>(dataSize, pool);
+    }
     BufferPtr nulls = allocateNulls(dataSize, pool, bits::kNull);
 
     auto values = std::make_shared<FlatVector<T>>(
