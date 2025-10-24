@@ -29,7 +29,7 @@ struct CudfConfig {
   static constexpr const char* kCudfMemoryPercent{"cudf.memory_percent"};
   static constexpr const char* kCudfFunctionNamePrefix{
       "cudf.function_name_prefix"};
-  static constexpr const char* kCudfForceReplace{"cudf.force_replace"};
+  static constexpr const char* kCudfAllowCpuFallback{"cudf.allow_cpu_fallback"};
 
   /// Singleton CudfConfig instance.
   /// Clients must set the configs below before invoking registerCudf().
@@ -57,7 +57,7 @@ struct CudfConfig {
   std::string functionNamePrefix;
 
   /// Force replacement of operators. Throws an error if a replacement fails.
-  bool forceReplace{false};
+  bool allowCpuFallback{true};
 };
 
 } // namespace facebook::velox::cudf_velox

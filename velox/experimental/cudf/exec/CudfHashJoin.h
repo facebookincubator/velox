@@ -25,6 +25,7 @@
 #include "velox/vector/ComplexVector.h"
 
 #include <cudf/ast/expressions.hpp>
+#include <cudf/copying.hpp>
 #include <cudf/join/hash_join.hpp>
 #include <cudf/table/table.hpp>
 
