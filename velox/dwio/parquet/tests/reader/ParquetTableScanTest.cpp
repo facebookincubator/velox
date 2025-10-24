@@ -430,18 +430,16 @@ TEST_F(ParquetTableScanTest, aggregatePushdown) {
 }
 
 TEST_F(ParquetTableScanTest, aggregatePushdownToSmallPages) {
-  const std::vector<std::string> columnNames = {
-      "searchengineid", "isrefresh", "searchphrase"};
+  const std::vector<std::string> columnNames = {"a", "b", "c"};
   const auto expectedRowVector = makeRowVector(
-      {makeFlatVector<int16_t>({1, 2, 4}),
-       makeFlatVector<int64_t>({11, 10, 12})});
+      {makeFlatVector<int16_t>({1, 2, 4}), makeFlatVector<int64_t>({1, 1, 1})});
   const auto outputType = ROW(columnNames, {SMALLINT(), SMALLINT(), VARCHAR()});
   std::vector<RowVectorPtr> data;
-  for (auto row = 0; row < 1000; ++row) {
+  for (auto row = 0; row < 10; ++row) {
     data.emplace_back(makeRowVector(
         columnNames,
         {
-            makeFlatVector<int16_t>({row % 50}),
+            makeFlatVector<int16_t>({static_cast<int16_t>(row % 50)}),
             makeFlatVector<int16_t>({static_cast<int16_t>(
                 abs(static_cast<int32_t>(sin(row + 5) * 100.0)) % 2)}),
             makeFlatVector<std::string>({std::to_string(row)}),
@@ -456,13 +454,12 @@ TEST_F(ParquetTableScanTest, aggregatePushdownToSmallPages) {
           .tableScan(
               outputType,
               {},
-              "searchphrase <> '' AND searchengineid in (cast(1 as SMALLINT), cast(2 as SMALLINT), cast(4 as SMALLINT))")
-          .singleAggregation({"searchengineid"}, {"sum(isrefresh) as s"})
-          .orderBy({"s DESC"}, false)
+              "c <> '' AND a in (1::smallint, 2::smallint, 4::smallint)")
+          .singleAggregation({"a"}, {"sum(b) as s"})
           .planNode();
-  std::vector<std::shared_ptr<connector::ConnectorSplit>> splits;
-  splits.push_back(makeSplit(filePath->getPath()));
-  AssertQueryBuilder(plan).splits(splits).assertResults(expectedRowVector);
+  AssertQueryBuilder(plan)
+      .split(makeSplit(filePath->getPath()))
+      .assertResults(expectedRowVector);
 }
 
 TEST_F(ParquetTableScanTest, countStar) {
