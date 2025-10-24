@@ -18,14 +18,13 @@
 #include <folly/json.h>
 #include <gtest/gtest.h>
 
-#include "velox/common/memory/Memory.h"
 #include "velox/core/PlanNode.h"
 #include "velox/exec/fuzzer/LocalRunnerService.h"
 #include "velox/exec/fuzzer/if/gen-cpp2/LocalRunnerService.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/serializers/PrestoSerializer.h"
 #include "velox/type/Type.h"
-#include "velox/vector/tests/utils/VectorTestBase.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::runner;
@@ -159,80 +158,45 @@ class LocalRunnerServiceTest : public functions::test::FunctionBaseTest {
   RowVectorPtr testRowVectorWrapped_;
 };
 
-TEST_F(LocalRunnerServiceTest, ConvertToBatches) {
-  auto queryCtx = core::QueryCtx::create();
-  core::ExecCtx execCtx(rootPool_.get(), queryCtx.get());
-  exec::EvalCtx evalCtx(&execCtx);
-  auto result =
-      facebook::velox::runner::convertToBatches({testRowVector_}, evalCtx);
-
-  ASSERT_EQ(result.size(), 1);
-  ASSERT_EQ(result[0].columnNames()->size(), 7);
-  ASSERT_EQ(result[0].columnTypes()->size(), 7);
-  ASSERT_EQ(result[0].numRows(), 10);
-  ASSERT_EQ(result[0].columns()->size(), 7);
-  ASSERT_EQ(result[0].columns()[0].rows()->size(), 10);
-  ASSERT_EQ(result[0].columns()[1].rows()->size(), 10);
-  ASSERT_EQ(result[0].columns()[2].rows()->size(), 10);
-  ASSERT_EQ(result[0].columns()[3].rows()->size(), 10);
-  ASSERT_EQ(result[0].columns()[4].rows()->size(), 10);
-  ASSERT_EQ(result[0].columns()[5].rows()->size(), 10);
-}
-
-TEST_F(LocalRunnerServiceTest, ConvertToBatchesWrapped) {
-  auto queryCtx = core::QueryCtx::create();
-  core::ExecCtx execCtx(rootPool_.get(), queryCtx.get());
-  exec::EvalCtx evalCtx(&execCtx);
+TEST_F(LocalRunnerServiceTest, ConvertToBatchesRoundTrip) {
   auto result = facebook::velox::runner::convertToBatches(
-      {testRowVectorWrapped_}, evalCtx);
+      {testRowVector_}, rootPool_.get());
 
   ASSERT_EQ(result.size(), 1);
   ASSERT_EQ(result[0].columnNames()->size(), 7);
   ASSERT_EQ(result[0].columnTypes()->size(), 7);
-  ASSERT_EQ(result[0].numRows(), 5);
-  ASSERT_EQ(result[0].columns()->size(), 7);
-  ASSERT_EQ(result[0].columns()[0].rows()->size(), 5);
-  ASSERT_EQ(result[0].columns()[1].rows()->size(), 5);
-  ASSERT_EQ(result[0].columns()[2].rows()->size(), 5);
-  ASSERT_EQ(result[0].columns()[3].rows()->size(), 5);
-  ASSERT_EQ(result[0].columns()[4].rows()->size(), 5);
-  ASSERT_EQ(result[0].columns()[5].rows()->size(), 5);
 
-  auto kWrappedConstantIndex = 2;
-  ASSERT_EQ(
-      result[0].columns()[kWrappedConstantIndex].rows()[0],
-      result[0].columns()[kWrappedConstantIndex].rows()[1]);
-  ASSERT_EQ(
-      result[0].columns()[kWrappedConstantIndex].rows()[0],
-      result[0].columns()[kWrappedConstantIndex].rows()[2]);
-  ASSERT_EQ(
-      result[0].columns()[kWrappedConstantIndex].rows()[0],
-      result[0].columns()[kWrappedConstantIndex].rows()[3]);
-  ASSERT_EQ(
-      result[0].columns()[kWrappedConstantIndex].rows()[0],
-      result[0].columns()[kWrappedConstantIndex].rows()[4]);
+  // Verify serializedData is present
+  ASSERT_GT(result[0].serializedData()->size(), 0);
 
-  auto reference =
-      facebook::velox::runner::convertToBatches({testRowVector_}, evalCtx);
-  auto kWrappedDictionaryIndex = 1;
-  ASSERT_EQ(
-      result[0].columns()[kWrappedDictionaryIndex].rows()[0],
-      reference[0].columns()[kWrappedDictionaryIndex].rows()[3]);
-  ASSERT_EQ(
-      result[0].columns()[kWrappedDictionaryIndex].rows()[1],
-      reference[0].columns()[kWrappedDictionaryIndex].rows()[0]);
-  ASSERT_EQ(
-      result[0].columns()[kWrappedDictionaryIndex].rows()[2],
-      reference[0].columns()[kWrappedDictionaryIndex].rows()[7]);
-  ASSERT_EQ(
-      result[0].columns()[kWrappedDictionaryIndex].rows()[3],
-      reference[0].columns()[kWrappedDictionaryIndex].rows()[4]);
-  ASSERT_EQ(
-      result[0].columns()[kWrappedDictionaryIndex].rows()[4],
-      reference[0].columns()[kWrappedDictionaryIndex].rows()[1]);
-  ASSERT_NE(
-      result[0].columns()[kWrappedDictionaryIndex].rows()[0],
-      reference[0].columns()[kWrappedDictionaryIndex].rows()[1]);
+  // Deserialize and verify
+  auto leafPool = rootPool_->addLeafChild("deserialize");
+  auto serde = std::make_unique<
+      facebook::velox::serializer::presto::PrestoVectorSerde>();
+  facebook::velox::serializer::presto::PrestoVectorSerde::PrestoOptions options;
+
+  const auto& serializedData = *result[0].serializedData();
+  ByteRange byteRange{
+      reinterpret_cast<uint8_t*>(const_cast<char*>(serializedData.data())),
+      static_cast<int32_t>(serializedData.length()),
+      0};
+  auto byteStream = std::make_unique<facebook::velox::BufferInputStream>(
+      std::vector<ByteRange>{{byteRange}});
+
+  RowVectorPtr deserialized;
+  serde->deserialize(
+      byteStream.get(),
+      leafPool.get(),
+      asRowType(testRowVector_->type()),
+      &deserialized,
+      0,
+      &options);
+
+  ASSERT_NE(deserialized, nullptr);
+  ASSERT_EQ(deserialized->size(), testRowVector_->size());
+  ASSERT_EQ(deserialized->childrenSize(), testRowVector_->childrenSize());
+
+  assertEqualVectors(deserialized, testRowVector_);
 }
 
 TEST_F(LocalRunnerServiceTest, ServiceHandlerMockRequestIntegration) {
@@ -256,14 +220,7 @@ TEST_F(LocalRunnerServiceTest, ServiceHandlerMockRequestIntegration) {
   EXPECT_EQ((*batch.columnNames())[0], "p0");
   EXPECT_EQ(batch.columnTypes()->size(), 2);
   EXPECT_EQ((*batch.columnTypes())[0], "DOUBLE");
-  EXPECT_EQ(batch.numRows(), 1);
-  EXPECT_EQ(batch.columns()->size(), 2);
-
-  const auto& column = (*batch.columns())[0];
-  EXPECT_EQ(column.rows()->size(), 1);
-  const auto& row = (*column.rows())[0];
-  EXPECT_TRUE(*row.isNull());
-  EXPECT_FALSE(row.scalarValue_ref().has_value());
+  EXPECT_GT(batch.serializedData()->size(), 0);
 }
 
 TEST_F(LocalRunnerServiceTest, ServiceHandlerMockRequestIntegrationFailure) {
