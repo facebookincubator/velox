@@ -77,7 +77,6 @@ class WindowBuild {
   /// Releases the memory held by the window build. This is called by the
   /// window operator when all rows have been processed.
   void release() {
-    // todo: why this..?
     if (data_) {
       data_->clear();
     }
