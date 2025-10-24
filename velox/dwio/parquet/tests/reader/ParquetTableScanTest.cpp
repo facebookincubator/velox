@@ -447,10 +447,7 @@ TEST_F(ParquetTableScanTest, aggregatePushdownToSmallPages) {
   std::vector<std::shared_ptr<connector::ConnectorSplit>> splits;
   splits.push_back(makeSplit(
       getExampleFilePath("clickbench-refreshes-pagesize-128.parquet")));
-  auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
-  ASSERT_EQ(result->size(), 3);
-  ASSERT_EQ(result->childrenSize(), 2);
-  assertEqualVectors(expectedRowVector, result);
+  AssertQueryBuilder(plan).splits(splits).assertResults(expectedRowVector);
 }
 
 TEST_F(ParquetTableScanTest, countStar) {
