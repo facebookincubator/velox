@@ -1413,6 +1413,82 @@ TEST_F(ParquetTableScanTest, shortAndLongDecimalReadWithLargerPrecision) {
   assertEqualVectors(expectedDecimalVectors->childAt(1), rows->childAt(1));
 }
 
+TEST_F(ParquetTableScanTest, correctColumnSkipping) {
+  const std::string filePath =
+      getExampleFilePath("channel_with_filter.parquet");
+  std::ifstream file(filePath);
+  if (!file.good()) {
+    GTEST_SKIP() << "Test file not found at: " << filePath
+                 << ". Run generate_cost_category_test.py to create it.";
+  }
+
+  // File schema: cost_category (VARCHAR), monthstr (VARCHAR),
+  // forecast_capacity_cost (DOUBLE) This is the physical schema in the Parquet
+  // file
+  auto dataColumns =
+      ROW({"cost_category", "monthstr", "forecast_capacity_cost"},
+          {VARCHAR(), VARCHAR(), DOUBLE()});
+
+  // Output schema: forecast_capacity_cost (DOUBLE), monthstr (VARCHAR),
+  // report_month (VARCHAR) Note: cost_category is NOT in output but IS used in
+  // filter Note: report_month is a PARTITION column, NOT in the file!
+  auto outputType =
+      ROW({"forecast_capacity_cost", "monthstr", "report_month"},
+          {DOUBLE(), VARCHAR(), VARCHAR()});
+
+  connector::ColumnHandleMap assignments;
+
+  assignments["forecast_capacity_cost"] =
+      std::make_shared<connector::hive::HiveColumnHandle>(
+          "forecast_capacity_cost",
+          connector::hive::HiveColumnHandle::ColumnType::kRegular,
+          DOUBLE(),
+          DOUBLE());
+  assignments["monthstr"] = std::make_shared<connector::hive::HiveColumnHandle>(
+      "monthstr",
+      connector::hive::HiveColumnHandle::ColumnType::kRegular,
+      VARCHAR(),
+      VARCHAR());
+  assignments["report_month"] =
+      std::make_shared<connector::hive::HiveColumnHandle>(
+          "report_month",
+          connector::hive::HiveColumnHandle::ColumnType::kPartitionKey,
+          VARCHAR(),
+          VARCHAR());
+  auto plan = PlanBuilder(pool_.get())
+                  .startTableScan()
+                  .outputType(outputType)
+                  .remainingFilter("cost_category LIKE '%Cloud%'")
+                  .dataColumns(dataColumns)
+                  .assignments(assignments)
+                  .endTableScan()
+                  .planNode();
+
+  // Create split with partition key report_month='2025-09'
+  std::unordered_map<std::string, std::optional<std::string>> partitionKeys;
+  partitionKeys["report_month"] = "2025-09";
+  auto split = makeHiveConnectorSplits(
+      filePath, 1, dwio::common::FileFormat::PARQUET, partitionKeys)[0];
+  auto result = AssertQueryBuilder(plan).split(split).copyResults(pool());
+  ASSERT_EQ(result->size(), 104)
+      << "Should return exactly 104 rows where cost_category contains 'Cloud'";
+  ASSERT_EQ(result->childrenSize(), 3) << "Output should have 3 columns";
+
+  // Verify column types
+  EXPECT_EQ(
+      result->childAt(0)->typeKind(),
+      TypeKind::DOUBLE); // forecast_capacity_cost
+  EXPECT_EQ(result->childAt(1)->typeKind(), TypeKind::VARCHAR); // monthstr
+  EXPECT_EQ(result->childAt(2)->typeKind(), TypeKind::VARCHAR); // report_month
+
+  // Verify partition column value
+  auto reportMonthColumn = result->childAt(2)->asFlatVector<StringView>();
+  for (int i = 0; i < std::min(5, (int)result->size()); i++) {
+    ASSERT_FALSE(reportMonthColumn->isNullAt(i));
+    EXPECT_EQ(reportMonthColumn->valueAt(i).str(), "2025-09");
+  }
+}
+
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);
   folly::Init init{&argc, &argv, false};
