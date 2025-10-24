@@ -20,7 +20,7 @@ the results. They works as follows:
 How to run
 ----------
 
-Use velox_row_number_fuzzer(or velox_topn_row_number_fuzzer) binary to run RowNumberFuzzer (or TopNRowNumberFuzzer)
+Use velox_row_number_fuzzer (or velox_topn_row_number_fuzzer) binary to run RowNumberFuzzer (or TopNRowNumberFuzzer)
 respectively :
 
 ::
