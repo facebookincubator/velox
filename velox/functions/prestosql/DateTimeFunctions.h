@@ -1936,8 +1936,8 @@ struct ParseDurationFunction {
   FOLLY_ALWAYS_INLINE void call(
       out_type<IntervalDayTime>& result,
       const arg_type<Varchar>& amountUnit) {
-    re2::StringPiece valueStr;
-    re2::StringPiece unit;
+    absl::string_view valueStr;
+    absl::string_view unit;
     if (!RE2::FullMatch(
             absl::string_view(amountUnit.data(), amountUnit.size()),
             *durationRegex_,
@@ -1950,7 +1950,7 @@ struct ParseDurationFunction {
     double value{};
     try {
       size_t pos = 0;
-      // Create temporary string from StringPiece for stod
+      // Create temporary string from absl::string_view for stod
       std::string valueString(valueStr.data(), valueStr.size());
       value = std::stod(valueString, &pos);
       if (pos != valueString.size()) {
