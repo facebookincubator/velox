@@ -437,7 +437,7 @@ TEST_F(ParquetTableScanTest, aggregatePushdownToSmallPages) {
        makeFlatVector<int64_t>({11, 10, 12})});
   const auto outputType = ROW(columnNames, {SMALLINT(), SMALLINT(), VARCHAR()});
   std::vector<RowVectorPtr> data;
-  for (int32_t row = 0; row < 1000; ++row) {
+  for (auto row = 0; row < 1000; ++row) {
     data.emplace_back(makeRowVector(
         columnNames,
         {
