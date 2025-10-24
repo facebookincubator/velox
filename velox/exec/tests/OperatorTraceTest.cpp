@@ -1124,7 +1124,7 @@ TEST_F(OperatorTraceTest, canTrace) {
       {"IndexLookupJoin", true},
       {"Unnest", true},
       {"RowNumber", false},
-      {"OrderBy", false},
+      {"OrderBy", true},
       {"PartialAggregation", true},
       {"Aggregation", true},
       {"TableWrite", true},

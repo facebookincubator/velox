@@ -248,11 +248,12 @@ bool canTrace(const std::string& operatorType) {
       "HashBuild",
       "HashProbe",
       "IndexLookupJoin",
-      "Unnest",
+      "OrderBy",
       "PartialAggregation",
       "PartitionedOutput",
       "TableScan",
-      "TableWrite"};
+      "TableWrite",
+      "Unnest"};
   if (kSupportedOperatorTypes.count(operatorType) > 0 ||
       traceNodeRegistry().count(operatorType) > 0) {
     return true;
@@ -405,6 +406,17 @@ core::PlanNodePtr getTraceNode(
         unnestNode->markerName(),
         std::make_shared<DummySourceNode>(
             unnestNode->sources().front()->outputType()));
+  }
+
+  if (const auto* orderByNode =
+          dynamic_cast<const core::OrderByNode*>(traceNode)) {
+    return std::make_shared<core::OrderByNode>(
+        nodeId,
+        orderByNode->sortingKeys(),
+        orderByNode->sortingOrders(),
+        orderByNode->isPartial(),
+        std::make_shared<DummySourceNode>(
+            orderByNode->sources().front()->outputType()));
   }
 
   for (const auto& factory : traceNodeRegistry()) {
