@@ -442,8 +442,8 @@ TEST_F(ParquetTableScanTest, aggregatePushdownToSmallPages) {
         columnNames,
         {
             makeFlatVector<int16_t>({row % 50}),
-            makeFlatVector<int16_t>(
-                {abs(static_cast<int32_t>(sin(row + 5) * 100.0)) % 2}),
+            makeFlatVector<int16_t>({static_cast<int16_t>(
+                abs(static_cast<int32_t>(sin(row + 5) * 100.0)) % 2)}),
             makeFlatVector<std::string>({std::to_string(row)}),
         }));
   }
