@@ -277,22 +277,25 @@ The table below shows the supported Presto types.</p>
 <tr class="row-odd"><td><p>IPPREFIX</p></td>
 <td><p>ROW(HUGEINT,TINYINT)</p></td>
 </tr>
-<tr class="row-even"><td><p>GEOMETRY</p></td>
-<td><p>VARBINARY</p></td>
-</tr>
-<tr class="row-odd"><td><p>TDIGEST</p></td>
-<td><p>VARBINARY</p></td>
-</tr>
-<tr class="row-even"><td><p>QDIGEST</p></td>
-<td><p>VARBINARY</p></td>
-</tr>
-<tr class="row-odd"><td><p>BIGINT_ENUM</p></td>
+<tr class="row-even"><td><p>BINGTILE</p></td>
 <td><p>BIGINT</p></td>
 </tr>
-<tr class="row-even"><td><p>VARCHAR_ENUM</p></td>
+<tr class="row-odd"><td><p>GEOMETRY</p></td>
+<td><p>VARBINARY</p></td>
+</tr>
+<tr class="row-even"><td><p>TDIGEST</p></td>
+<td><p>VARBINARY</p></td>
+</tr>
+<tr class="row-odd"><td><p>QDIGEST</p></td>
+<td><p>VARBINARY</p></td>
+</tr>
+<tr class="row-even"><td><p>BIGINT_ENUM</p></td>
+<td><p>BIGINT</p></td>
+</tr>
+<tr class="row-odd"><td><p>VARCHAR_ENUM</p></td>
 <td><p>VARCHAR</p></td>
 </tr>
-<tr class="row-odd"><td><p>TIME WITH TIME ZONE</p></td>
+<tr class="row-even"><td><p>TIME WITH TIME ZONE</p></td>
 <td><p>BIGINT</p></td>
 </tr>
 </tbody>
@@ -354,6 +357,12 @@ Comparison operations are only allowed between values of the same enum type.</p>
 Its physical type is BIGINT. The high 52 bits of bigint store signed integer for milliseconds in UTC.
 The lower 12 bits store the time zone offsets minutes. This allows the time to be converted at any point of
 time without ambiguity of daylight savings time. Time zone offsets range from -14:00 hours to +14:00 hours.</p>
+<p>BINGTILE represents a <a class="reference external" href="https://learn.microsoft.com/en-us/bingmaps/articles/bing-maps-tile-system">Bing tile</a>.
+It is a quadtree in the Web Mercator projection, where each tile is 256x256 pixels. Its physical type is BIGINT.</p>
+<p>GEOMETRY represents a geometry as defined in <a class="reference external" href="https://en.wikipedia.org/wiki/Simple_Features">Simple Feature Access</a>.
+Subtypes include Point, MultiPoint, LineString, MultiLineString, Polygon, MultiPolygon, and GeometryCollection. They
+are often stored as <a class="reference external" href="https://en.wikipedia.org/wiki/Well-known_text_representation_of_geometry">Well-Known Text</a> or
+<a class="reference external" href="https://en.wikipedia.org/wiki/Well-known_binary">Well-Known Binary</a>.</p>
 </section>
 <section id="spark-types">
 <h2>Spark Types<a class="headerlink" href="#spark-types" title="Link to this heading">¶</a></h2>
