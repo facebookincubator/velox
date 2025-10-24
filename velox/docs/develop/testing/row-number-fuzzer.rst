@@ -3,13 +3,14 @@ RowNumber and TopNRowNumber Fuzzer
 ==================================
 
 The RowNumberFuzzer and TopNRowNumberFuzzer are testing tools that automatically generate equivalent query plans that
-use the RowNumber and TopNRowNumber Velox plan nodes, and then executes these plans to validate the consistency of
+use the RowNumber and TopNRowNumber Velox plan nodes, and then execute these plans to validate the consistency of
 the results. They works as follows:
 
-1. Data Generation: It starts by generating a random set of input data, also known as a vector. This data can
+1. Data Generation: Generate a random set of input data, also known as a vector. This data can
    have a variety of encodings and data layouts to ensure thorough testing.
-2. Plan Generation: Generate two equivalent query plans: one is RowNumber (or TopNRowNumber) over ValuesNode as
-   the base plan and the other is over TableScanNode as the alter plan.
+2. Plan Generation: Generate two equivalent query plans: one is RowNumber over ValuesNode as
+   the base plan and the other is over TableScanNode as the alternative plan. The TopNRowNumberFuzzer generates similar
+   plans with TopNRowNumber node instead.
 3. Query Execution: Executes those equivalent query plans using the generated data and asserts that the results are
    consistent across different plans.
   i. Execute the base plan, compare the result with the reference (DuckDB or Presto) and use it as the expected result.
@@ -20,12 +21,14 @@ the results. They works as follows:
 How to run
 ----------
 
-Use velox_row_number_fuzzer (or velox_topn_row_number_fuzzer) binary to run RowNumberFuzzer (or TopNRowNumberFuzzer)
-respectively :
-
+Use velox_row_number_fuzzer to run RowNumberFuzzer
 ::
 
     velox/exec/fuzzer/velox_row_number_fuzzer --seed 123 --duration_sec 60
+
+Similarly, use velox_topn_row_number_fuzzer to run TopNRowNumberFuzzer
+::
+
     velox/exec/fuzzer/velox_topn_row_number_fuzzer --seed 123 --duration_sec 60
 
 By default, the fuzzer will go through 10 iterations. Use --steps
