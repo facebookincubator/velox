@@ -1043,28 +1043,6 @@ TEST_P(MultiThreadedHashJoinTest, nullAwareAntiJoin) {
         });
       });
 
-  // Removing this test since GPU FilterProject is not supported for this
-  // expression
-  /*
-  {
-    auto testProbeVectors = probeVectors;
-    auto testBuildVectors = buildVectors;
-        HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
-            .numDrivers(numDrivers_)
-            .probeKeys({"c0"})
-            .probeVectors(std::move(testProbeVectors))
-            .buildKeys({"c0"})
-            .buildVectors(std::move(testBuildVectors))
-            .buildFilter("c0 IS NOT NULL")
-            .joinType(core::JoinType::kAnti)
-            .nullAware(true)
-            .joinOutputLayout({"c1"})
-            .referenceQuery(
-                "SELECT t.c1 FROM t WHERE t.c0 NOT IN (SELECT c0 FROM u WHERE c0
-  IS NOT NULL)") .checkSpillStats(false) .run();
-  }
-  */
-
   // Empty build side.
   {
     auto testProbeVectors = probeVectors;
