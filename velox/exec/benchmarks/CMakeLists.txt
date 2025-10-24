@@ -139,15 +139,15 @@ target_link_libraries(
 add_executable(velox_window_regionsort_benchmark WindowRegionSortBenchmark.cpp)
 
 target_link_libraries(
-        velox_window_regionsort_benchmark
-        velox_aggregates
-        velox_exec
-        velox_exec_test_lib
-        velox_hive_connector
-        velox_vector_fuzzer
-        velox_vector_test_lib
-        velox_window
-        Folly::follybenchmark
+  velox_window_regionsort_benchmark
+  velox_aggregates
+  velox_exec
+  velox_exec_test_lib
+  velox_hive_connector
+  velox_vector_fuzzer
+  velox_vector_test_lib
+  velox_window
+  Folly::follybenchmark
 )
 
 add_executable(velox_streaming_aggregation_benchmark StreamingAggregationBenchmark.cpp)
