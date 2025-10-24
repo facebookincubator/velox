@@ -15,7 +15,6 @@
  */
 
 #include <folly/init/Init.h>
-#include <cmath>
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h" // @manual
@@ -432,16 +431,16 @@ TEST_F(ParquetTableScanTest, aggregatePushdown) {
 TEST_F(ParquetTableScanTest, aggregatePushdownToSmallPages) {
   const std::vector<std::string> columnNames = {"a", "b", "c"};
   const auto expectedRowVector = makeRowVector(
-      {makeFlatVector<int16_t>({1, 2, 4}), makeFlatVector<int64_t>({1, 1, 1})});
+      {makeFlatVector<int16_t>({1, 2, 4}),
+       makeFlatVector<int64_t>({7, 9, 13})});
   const auto outputType = ROW(columnNames, {SMALLINT(), SMALLINT(), VARCHAR()});
   std::vector<RowVectorPtr> data;
   for (auto row = 0; row < 10; ++row) {
     data.emplace_back(makeRowVector(
         columnNames,
         {
-            makeFlatVector<int16_t>({static_cast<int16_t>(row % 50)}),
-            makeFlatVector<int16_t>({static_cast<int16_t>(
-                abs(static_cast<int32_t>(sin(row + 5) * 100.0)) % 2)}),
+            makeFlatVector<int16_t>({static_cast<int16_t>(row % 5)}),
+            makeFlatVector<int16_t>({static_cast<int16_t>(row)}),
             makeFlatVector<std::string>({std::to_string(row)}),
         }));
   }
