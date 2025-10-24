@@ -15,6 +15,7 @@
  */
 
 #include <folly/init/Init.h>
+#include <cmath>
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h" // @manual
@@ -429,13 +430,28 @@ TEST_F(ParquetTableScanTest, aggregatePushdown) {
 }
 
 TEST_F(ParquetTableScanTest, aggregatePushdownToSmallPages) {
-  auto expectedRowVector = makeRowVector(
-      {makeFlatVector<int16_t>({2, 4, 1}),
-       makeFlatVector<int64_t>({35, 3, 1})});
-  auto outputType =
-      ROW({"searchengineid", "isrefresh", "searchphrase"},
-          {SMALLINT(), SMALLINT(), VARCHAR()});
-  auto plan =
+  const std::vector<std::string> columnNames = {
+      "searchengineid", "isrefresh", "searchphrase"};
+  const auto expectedRowVector = makeRowVector(
+      {makeFlatVector<int16_t>({1, 2, 4}),
+       makeFlatVector<int64_t>({11, 10, 12})});
+  const auto outputType = ROW(columnNames, {SMALLINT(), SMALLINT(), VARCHAR()});
+  std::vector<RowVectorPtr> data;
+  for (int32_t row = 0; row < 1000; ++row) {
+    data.emplace_back(makeRowVector(
+        columnNames,
+        {
+            makeFlatVector<int16_t>({row % 50}),
+            makeFlatVector<int16_t>(
+                {abs(static_cast<int32_t>(sin(row + 5) * 100.0)) % 2}),
+            makeFlatVector<std::string>({std::to_string(row)}),
+        }));
+  }
+  const auto filePath = TempFilePath::create();
+  WriterOptions options;
+  options.dataPageSize = 1;
+  writeToParquetFile(filePath->getPath(), data, options);
+  const auto plan =
       PlanBuilder(pool())
           .tableScan(
               outputType,
@@ -445,8 +461,7 @@ TEST_F(ParquetTableScanTest, aggregatePushdownToSmallPages) {
           .orderBy({"s DESC"}, false)
           .planNode();
   std::vector<std::shared_ptr<connector::ConnectorSplit>> splits;
-  splits.push_back(makeSplit(
-      getExampleFilePath("clickbench-refreshes-pagesize-128.parquet")));
+  splits.push_back(makeSplit(filePath->getPath()));
   AssertQueryBuilder(plan).splits(splits).assertResults(expectedRowVector);
 }
 
