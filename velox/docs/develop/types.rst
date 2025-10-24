@@ -177,6 +177,7 @@ TIMESTAMP WITH TIME ZONE  BIGINT
 UUID                      HUGEINT
 IPADDRESS                 HUGEINT
 IPPREFIX                  ROW(HUGEINT,TINYINT)
+BINGTILE                  BIGINT
 GEOMETRY                  VARBINARY
 TDIGEST                   VARBINARY
 QDIGEST                   VARBINARY
@@ -253,6 +254,13 @@ Its physical type is BIGINT. The high 52 bits of bigint store signed integer for
 The lower 12 bits store the time zone offsets minutes. This allows the time to be converted at any point of
 time without ambiguity of daylight savings time. Time zone offsets range from -14:00 hours to +14:00 hours.
 
+BINGTILE represents a `Bing tile <https://learn.microsoft.com/en-us/bingmaps/articles/bing-maps-tile-system>`_.
+It is a quadtree in the Web Mercator projection, where each tile is 256x256 pixels. Its physical type is BIGINT.
+
+GEOMETRY represents a geometry as defined in `Simple Feature Access <https://en.wikipedia.org/wiki/Simple_Features>`_.
+Subtypes include Point, MultiPoint, LineString, MultiLineString, Polygon, MultiPolygon, and GeometryCollection. They
+are often stored as `Well-Known Text <https://en.wikipedia.org/wiki/Well-known_text_representation_of_geometry>`_ or
+`Well-Known Binary <https://en.wikipedia.org/wiki/Well-known_binary>`_.
 
 Spark Types
 ~~~~~~~~~~~~
