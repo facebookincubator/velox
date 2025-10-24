@@ -967,6 +967,86 @@ class LazyDereferenceNode : public core::ProjectNode {
 
 using ParallelProjectNodePtr = std::shared_ptr<const ParallelProjectNode>;
 
+class MemorySourceNode : public PlanNode {
+ public:
+  MemorySourceNode(
+      const PlanNodeId& id,
+      RowTypePtr outputType,
+      std::uintptr_t handler)
+      : PlanNode(id), outputType_(std::move(outputType)), handler_(handler) {}
+
+  class Builder {
+   public:
+    Builder() = default;
+
+    explicit Builder(const MemorySourceNode& other) {
+      id_ = other.id();
+      outputType_ = other.outputType();
+      handler_ = other.handler();
+    }
+
+    Builder& id(PlanNodeId id) {
+      id_ = std::move(id);
+      return *this;
+    }
+
+    Builder& outputType(RowTypePtr outputType) {
+      outputType_ = std::move(outputType);
+      return *this;
+    }
+
+    Builder& handler(std::uintptr_t handler) {
+      handler_ = handler;
+      return *this;
+    }
+
+    std::shared_ptr<MemorySourceNode> build() const {
+      VELOX_USER_CHECK(id_.has_value(), "MemorySourceNode id is not set");
+      VELOX_USER_CHECK(
+          outputType_.has_value(), "MemorySourceNode outputType is not set");
+      VELOX_USER_CHECK(
+          outputType_.has_value(), "MemorySourceNode handler is not set");
+
+      return std::make_shared<MemorySourceNode>(
+          id_.value(), outputType_.value(), handler_.value());
+    }
+
+   private:
+    std::optional<PlanNodeId> id_;
+    std::optional<RowTypePtr> outputType_;
+    std::optional<std::uintptr_t> handler_;
+  };
+
+  const RowTypePtr& outputType() const override {
+    return outputType_;
+  }
+
+  const std::uintptr_t handler() const {
+    return handler_;
+  }
+
+  bool supportsBarrier() const override {
+    return true;
+  }
+
+  const std::vector<PlanNodePtr>& sources() const override;
+
+  bool requiresSplits() const override {
+    return true;
+  }
+  std::string_view name() const override {
+    return "MemorySource";
+  }
+
+ private:
+  void addDetails(std::stringstream& stream) const override {
+    // Nothing to add.
+  }
+
+  const RowTypePtr outputType_;
+  const std::uintptr_t handler_;
+};
+
 class TableScanNode : public PlanNode {
  public:
   TableScanNode(

@@ -1247,6 +1247,10 @@ PlanNodePtr LazyDereferenceNode::create(
       std::move(source));
 }
 
+const std::vector<PlanNodePtr>& MemorySourceNode::sources() const {
+  return kEmptySources;
+}
+
 const std::vector<PlanNodePtr>& TableScanNode::sources() const {
   return kEmptySources;
 }

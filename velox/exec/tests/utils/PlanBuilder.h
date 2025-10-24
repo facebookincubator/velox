@@ -635,6 +635,14 @@ class PlanBuilder {
     return *this;
   }
 
+  /// Add a MemorySourceNode to fetch RowVectors from a RowVectorSource.
+  ///
+  /// @param outputType List of column names and types to read from the source.
+  /// @param handler A handler can be cast to a RowVectorSource raw pointer.
+  PlanBuilder& memorySource(
+      const RowTypePtr& outputType,
+      std::uintptr_t handler);
+
   /// Adds a QueryReplayNode for query tracing.
   ///
   /// @param traceNodeDir The trace directory for a given plan node.

@@ -416,6 +416,15 @@ core::PlanNodePtr PlanBuilder::TableWriterBuilder::build(core::PlanNodeId id) {
   return writeNode;
 }
 
+PlanBuilder& PlanBuilder::memorySource(
+    const RowTypePtr& outputType,
+    std::uintptr_t handler) {
+  VELOX_CHECK_NULL(planNode_, "MemorySource must be the source node");
+  planNode_ = std::make_shared<core::MemorySourceNode>(
+      nextPlanNodeId(), outputType, handler);
+  return *this;
+}
+
 PlanBuilder& PlanBuilder::values(
     const std::vector<RowVectorPtr>& values,
     bool parallelizable,

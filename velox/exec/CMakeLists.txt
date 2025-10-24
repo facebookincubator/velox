@@ -51,6 +51,8 @@ velox_add_library(
   LocalPlanner.cpp
   MarkDistinct.cpp
   MemoryReclaimer.cpp
+  MemorySource.cpp
+  RowVectorSource.cpp
   Merge.cpp
   MergeJoin.cpp
   MergeSource.cpp
