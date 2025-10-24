@@ -31,13 +31,14 @@ DECLARE_bool(velox_enable_memory_usage_track_in_default_memory_pool);
 using namespace ::testing;
 
 namespace facebook::velox::memory {
-
 namespace {
-constexpr folly::StringPiece kSysRootName{"__sys_root__"};
+
+constexpr std::string_view kSysRootName{"__sys_root__"};
 
 MemoryManager& toMemoryManager(MemoryManager& manager) {
   return *static_cast<MemoryManager*>(&manager);
 }
+
 } // namespace
 
 class MemoryManagerTest : public testing::Test {
@@ -487,7 +488,7 @@ TEST_F(MemoryManagerTest, globalMemoryManager) {
     auto childII = manager->addLeafPool("another_child");
     ASSERT_EQ(childII->kind(), MemoryPool::Kind::kLeaf);
     ASSERT_EQ(rootI.getChildCount(), kSharedPoolCount + 2);
-    ASSERT_EQ(childII->parent()->name(), kSysRootName.str());
+    ASSERT_EQ(childII->parent()->name(), kSysRootName);
     childII.reset();
     ASSERT_EQ(rootI.getChildCount(), kSharedPoolCount + 1);
     ASSERT_EQ(rootII.getChildCount(), kSharedPoolCount + 1);
