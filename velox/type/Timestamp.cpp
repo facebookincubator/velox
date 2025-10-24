@@ -332,26 +332,6 @@ StringView Timestamp::tsToStringView(
   return tmToStringView(tmValue, nanos, options, startPosition);
 }
 
-std::string::size_type getMaxStringLength(
-    const TimestampToStringOptions& options) {
-  const auto precisionWidth = static_cast<int8_t>(options.precision);
-  switch (options.mode) {
-    case TimestampToStringOptions::Mode::kDateOnly:
-      // Date format is %y-mm-dd, where y has 10 digits at maximum for int32.
-      // Possible sign is considered.
-      return 17;
-    case TimestampToStringOptions::Mode::kTimeOnly:
-      // hh:mm:ss.precision
-      return 9 + precisionWidth;
-    case TimestampToStringOptions::Mode::kFull:
-      // Timestamp format is %y-%m-%dT%h:%m:%s.precision, where y has 10 digits
-      // at maximum for int32. Possible sign is considered.
-      return 27 + precisionWidth;
-    default:
-      VELOX_UNREACHABLE();
-  }
-}
-
 void parseTo(folly::StringPiece in, ::facebook::velox::Timestamp& out) {
   // TODO Implement
 }
