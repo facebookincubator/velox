@@ -409,7 +409,8 @@ std::shared_ptr<rmm::mr::device_memory_resource> mr_;
 struct CudfDriverAdapter {
   bool allow_cpu_fallback_;
 
-  CudfDriverAdapter(bool allow_cpu_fallback) : allow_cpu_fallback_{allow_cpu_fallback} {}
+  CudfDriverAdapter(bool allow_cpu_fallback)
+      : allow_cpu_fallback_{allow_cpu_fallback} {}
 
   // Call operator needed by DriverAdapter
   bool operator()(const exec::DriverFactory& factory, exec::Driver& driver) {

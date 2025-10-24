@@ -1043,7 +1043,8 @@ TEST_P(MultiThreadedHashJoinTest, nullAwareAntiJoin) {
         });
       });
 
-  // Removing this test since GPU FilterProject is not supported for this expression
+  // Removing this test since GPU FilterProject is not supported for this
+  // expression
   /*
   {
     auto testProbeVectors = probeVectors;
@@ -1059,9 +1060,8 @@ TEST_P(MultiThreadedHashJoinTest, nullAwareAntiJoin) {
             .nullAware(true)
             .joinOutputLayout({"c1"})
             .referenceQuery(
-                "SELECT t.c1 FROM t WHERE t.c0 NOT IN (SELECT c0 FROM u WHERE c0 IS NOT NULL)")
-            .checkSpillStats(false)
-            .run();
+                "SELECT t.c1 FROM t WHERE t.c0 NOT IN (SELECT c0 FROM u WHERE c0
+  IS NOT NULL)") .checkSpillStats(false) .run();
   }
   */
 
@@ -1069,39 +1069,39 @@ TEST_P(MultiThreadedHashJoinTest, nullAwareAntiJoin) {
   {
     auto testProbeVectors = probeVectors;
     auto testBuildVectors = buildVectors;
-        HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
-            .numDrivers(numDrivers_)
-            .probeKeys({"c0"})
-            .probeVectors(std::move(testProbeVectors))
-            .buildKeys({"c0"})
-            .buildVectors(std::move(testBuildVectors))
-            .buildFilter("c0 < 0")
-            .joinType(core::JoinType::kAnti)
-            .nullAware(true)
-            .joinOutputLayout({"c1"})
-            .referenceQuery(
-                "SELECT t.c1 FROM t WHERE t.c0 NOT IN (SELECT c0 FROM u WHERE c0 < 0)")
-            .checkSpillStats(false)
-            .run();
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        .numDrivers(numDrivers_)
+        .probeKeys({"c0"})
+        .probeVectors(std::move(testProbeVectors))
+        .buildKeys({"c0"})
+        .buildVectors(std::move(testBuildVectors))
+        .buildFilter("c0 < 0")
+        .joinType(core::JoinType::kAnti)
+        .nullAware(true)
+        .joinOutputLayout({"c1"})
+        .referenceQuery(
+            "SELECT t.c1 FROM t WHERE t.c0 NOT IN (SELECT c0 FROM u WHERE c0 < 0)")
+        .checkSpillStats(false)
+        .run();
   }
 
   // Build side with nulls. Null-aware Anti join always returns nothing.
   {
     auto testProbeVectors = probeVectors;
     auto testBuildVectors = buildVectors;
-        HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
-            .numDrivers(numDrivers_)
-            .probeKeys({"c0"})
-            .probeVectors(std::move(testProbeVectors))
-            .buildKeys({"c0"})
-            .buildVectors(std::move(testBuildVectors))
-            .joinType(core::JoinType::kAnti)
-            .nullAware(true)
-            .joinOutputLayout({"c1"})
-            .referenceQuery(
-                "SELECT t.c1 FROM t WHERE t.c0 NOT IN (SELECT c0 FROM u)")
-            .checkSpillStats(false)
-            .run();
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        .numDrivers(numDrivers_)
+        .probeKeys({"c0"})
+        .probeVectors(std::move(testProbeVectors))
+        .buildKeys({"c0"})
+        .buildVectors(std::move(testBuildVectors))
+        .joinType(core::JoinType::kAnti)
+        .nullAware(true)
+        .joinOutputLayout({"c1"})
+        .referenceQuery(
+            "SELECT t.c1 FROM t WHERE t.c0 NOT IN (SELECT c0 FROM u)")
+        .checkSpillStats(false)
+        .run();
   }
 }
 
@@ -3752,10 +3752,10 @@ TEST_F(HashJoinTest, lazyVectorPartiallyLoadedInFilterLeftSemiProject) {
   // left semi project not supported
   VELOX_ASSERT_THROW(
       testLazyVectorsWithFilter(
-        core::JoinType::kLeftSemiProject,
-        "c1 > 0 AND c2 > 0",
-        {"c1", "c2", "match"},
-        "SELECT t.c1, t.c2, EXISTS (SELECT * FROM u WHERE t.c0 = u.c0 AND (t.c1 > 0 AND t.c2 > 0)) FROM t"),
+          core::JoinType::kLeftSemiProject,
+          "c1 > 0 AND c2 > 0",
+          {"c1", "c2", "match"},
+          "SELECT t.c1, t.c2, EXISTS (SELECT * FROM u WHERE t.c0 = u.c0 AND (t.c1 > 0 AND t.c2 > 0)) FROM t"),
       "Replacement with cuDF operator failed");
 }
 
@@ -4997,8 +4997,8 @@ TEST_F(HashJoinTest, noDynamicFiltersPushDownThroughRightJoin) {
           .planNode();
   AssertQueryBuilder(plan)
       .split(scanNodeId, Split(makeHiveConnectorSplit(file->getPath())))
-      .assertResults(BaseVector::create<RowVector>(
-          innerBuild[0]->type(), 0, pool_.get()));
+      .assertResults(
+          BaseVector::create<RowVector>(innerBuild[0]->type(), 0, pool_.get()));
 }
 
 // Verify the size of the join output vectors when projecting build-side
