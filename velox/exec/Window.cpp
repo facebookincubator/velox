@@ -68,6 +68,7 @@ Window::Window(
               driverCtx->queryConfig().prefixSortMaxStringPrefixLength()},
           spillConfig,
           &nonReclaimableSection_,
+          &stats_,
           spillStats_.get());
     } else {
       windowBuild_ = std::make_unique<SortWindowBuild>(

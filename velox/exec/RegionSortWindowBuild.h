@@ -23,20 +23,19 @@
 #include "velox/exec/WindowBuild.h"
 
 namespace facebook::velox::exec {
-// todo: rewrite the annos
-// Sorts input data of the Window by {partition keys, sort keys}
-// to identify window partitions. This sort fully orders
-// rows as needed for window function computation.
+// Divides the input data into several regions by partition keys, then sorts
+// input data of the Window by {partition keys, sort keys} to identify window
+// partitions with SortWindowBuild.
 class RegionSortWindowBuild : public WindowBuild {
  public:
   RegionSortWindowBuild(
       const std::shared_ptr<const core::WindowNode>& node,
-      // todo: change to uint32_t
-      int numRegions,
+      int32_t numRegions,
       velox::memory::MemoryPool* pool,
       common::PrefixSortConfig&& prefixSortConfig,
       const common::SpillConfig* spillConfig,
       tsan_atomic<bool>* nonReclaimableSection,
+      folly::Synchronized<OperatorStats>* opStats,
       folly::Synchronized<common::SpillStats>* spillStats);
 
   ~RegionSortWindowBuild() override {
@@ -44,8 +43,7 @@ class RegionSortWindowBuild : public WindowBuild {
   }
 
   bool needsInput() override {
-    // todo: should we change this?
-    // No partitions are available yet, so can consume input rows.
+    // No regions are available yet, so can consume input rows.
     return currentRegion_ < 0;
   }
 
@@ -61,25 +59,14 @@ class RegionSortWindowBuild : public WindowBuild {
 
   std::shared_ptr<WindowPartition> nextPartition() override;
 
-  // todo: this must be taken good care of...
-  std::optional<int64_t> estimateRowSize() override {
-    LOG(WARNING) << "CALL";
-    auto region = std::max(currentRegion_, 0);
-    if (region >= numRegions_) {
-      return std::nullopt;
-    }
-    if (windowBuilds_[region]) {
-      return windowBuilds_[region]->estimateRowSize();
-    }
-    return std::nullopt;
-  }
+  std::optional<int64_t> estimateRowSize() override;
 
  private:
   bool switchToNextRegion();
 
   void ensureInputFits(const RowVectorPtr& input);
 
-  const int numRegions_;
+  const int32_t numRegions_;
 
   const size_t numPartitionKeys_;
 
@@ -91,14 +78,7 @@ class RegionSortWindowBuild : public WindowBuild {
 
   std::vector<uint32_t> regionIdsBuffer_;
 
-  int currentRegion_ = -1;
-
-  // Compare flags for partition and sorting keys. Compare flags for partition
-  // keys are set to default values. Compare flags for sorting keys match
-  // sorting order specified in the plan node.
-  //
-  // Used to sort 'data_' while spilling and in Prefix sort.
-  const std::vector<CompareFlags> compareFlags_;
+  int32_t currentRegion_ = -1;
 
   memory::MemoryPool* const pool_;
 

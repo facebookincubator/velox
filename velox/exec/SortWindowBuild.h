@@ -46,7 +46,6 @@ class SortWindowBuild : public WindowBuild {
 
   void addInput(RowVectorPtr input) override;
 
-  // todo: eliminate colNum?
   void addInputRow(
       std::vector<DecodedVector>& decodedInputVectors,
       size_t row,
@@ -62,7 +61,6 @@ class SortWindowBuild : public WindowBuild {
 
   std::shared_ptr<WindowPartition> nextPartition() override;
 
-  // todo: move this to public, or use friend class?
   void ensureInputFits(const RowVectorPtr& input);
 
  private:

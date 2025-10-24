@@ -19,39 +19,18 @@
 
 namespace facebook::velox::exec {
 
-namespace {
-// todo: eliminate this. this is not used.
-std::vector<CompareFlags> makeCompareFlags(
-    int32_t numPartitionKeys,
-    const std::vector<core::SortOrder>& sortingOrders) {
-  std::vector<CompareFlags> compareFlags;
-  compareFlags.reserve(numPartitionKeys + sortingOrders.size());
-
-  for (auto i = 0; i < numPartitionKeys; ++i) {
-    compareFlags.push_back({});
-  }
-
-  for (const auto& order : sortingOrders) {
-    compareFlags.push_back(
-        {order.isNullsFirst(), order.isAscending(), false /*equalsOnly*/});
-  }
-
-  return compareFlags;
-}
-} // namespace
-
 RegionSortWindowBuild::RegionSortWindowBuild(
     const std::shared_ptr<const core::WindowNode>& node,
-    int numRegions,
+    int32_t numRegions,
     velox::memory::MemoryPool* pool,
     common::PrefixSortConfig&& prefixSortConfig,
     const common::SpillConfig* spillConfig,
     tsan_atomic<bool>* nonReclaimableSection,
+    folly::Synchronized<OperatorStats>* opStats,
     folly::Synchronized<common::SpillStats>* spillStats)
     : WindowBuild(node, pool, spillConfig, nonReclaimableSection),
       numRegions_(numRegions),
       numPartitionKeys_{node->partitionKeys().size()},
-      compareFlags_{makeCompareFlags(numPartitionKeys_, node->sortingOrders())},
       pool_(pool),
       prefixSortConfig_(prefixSortConfig),
       spillStats_(spillStats) {
@@ -69,10 +48,9 @@ RegionSortWindowBuild::RegionSortWindowBuild(
         prefixSortConfig_,
         spillConfig,
         nonReclaimableSection,
+        opStats,
         spillStats);
   }
-  // todo: to make sure we won't use incorrect data, release the original
-  // data container...
   data_.reset();
   VELOX_CHECK_NOT_NULL(pool_);
 }
@@ -140,7 +118,6 @@ void RegionSortWindowBuild::ensureInputFits(const RowVectorPtr& input) {
 void RegionSortWindowBuild::spill() {
   VELOX_CHECK_LT(currentRegion_, 0);
   for (auto& windowBuild : windowBuilds_) {
-    // todo: check npe?
     windowBuild->spill();
   }
   spilled_ = true;
@@ -154,7 +131,6 @@ std::optional<common::SpillStats> RegionSortWindowBuild::spilledStats() const {
 }
 
 void RegionSortWindowBuild::noMoreInput() {
-  // LOG(WARNING) << "CALL";
   if (numRows_ == 0) {
     return;
   }
@@ -168,9 +144,6 @@ void RegionSortWindowBuild::noMoreInput() {
   switchToNextRegion();
 
   VELOX_CHECK_EQ(currentRegion_, 0);
-
-  // todo: would using the same pool cause any troule when calling
-  // pool_->release()?
 }
 
 std::shared_ptr<WindowPartition> RegionSortWindowBuild::nextPartition() {
@@ -178,6 +151,17 @@ std::shared_ptr<WindowPartition> RegionSortWindowBuild::nextPartition() {
   VELOX_CHECK_LT(currentRegion_, numRegions_);
   VELOX_CHECK_NOT_NULL(windowBuilds_[currentRegion_]);
   return windowBuilds_[currentRegion_]->nextPartition();
+}
+
+std::optional<int64_t> RegionSortWindowBuild::estimateRowSize() {
+  auto region = std::max(currentRegion_, 0);
+  if (region >= numRegions_) {
+    return std::nullopt;
+  }
+  if (windowBuilds_[region]) {
+    return windowBuilds_[region]->estimateRowSize();
+  }
+  return std::nullopt;
 }
 
 bool RegionSortWindowBuild::hasNextPartition() {
