@@ -405,7 +405,7 @@ Accessors
     GEOMETRYCOLLECTION (POINT (0 0), GEOMETRYCOLLECTION (POINT (1 1))) ->
     [POINT (0 0), POINT (1 1)], GEOMETRYCOLLECTION EMPTY -> [].
 
-.. function:: ST_NumInteriorRing(geometry: Geometry) -> output: integer
+.. function:: ST_NumInteriorRing(geometry: Geometry) -> output: bigint
 
     Returns the cardinality of the collection of interior rings of a polygon.
 
@@ -413,7 +413,7 @@ Accessors
 
     Returns the minimum convex geometry that encloses all input geometries.
 
-.. function:: ST_CoordDim(geometry: Geometry) -> output: integer
+.. function:: ST_CoordDim(geometry: Geometry) -> output: tinyint
 
     Return the coordinate dimension of the geometry.
 

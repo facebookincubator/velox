@@ -81,18 +81,18 @@ void StatisticsBuilderUtils::addValues(
     const VectorPtr& vector,
     const common::Ranges& ranges) {
   auto nulls = vector->rawNulls();
-  auto data = vector->asFlatVector<StringView>()->rawValues();
+  auto* data = vector->asFlatVector<StringView>()->rawValues();
   if (vector->mayHaveNulls()) {
     for (auto& pos : ranges) {
       if (bits::isBitNull(nulls, pos)) {
         builder.setHasNull();
       } else {
-        builder.addValues(folly::StringPiece{data[pos]});
+        builder.addValues(std::string_view{data[pos]});
       }
     }
   } else {
     for (auto& pos : ranges) {
-      builder.addValues(folly::StringPiece{data[pos]});
+      builder.addValues(std::string_view{data[pos]});
     }
   }
 }

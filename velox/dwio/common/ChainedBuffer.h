@@ -20,10 +20,7 @@
 #include "velox/common/base/GTestMacros.h"
 #include "velox/dwio/common/DataBuffer.h"
 
-namespace facebook {
-namespace velox {
-namespace dwio {
-namespace common {
+namespace facebook::velox::dwio::common {
 
 namespace {
 
@@ -228,7 +225,4 @@ class ChainedBuffer {
   VELOX_FRIEND_TEST(ChainedBufferTests, testClearAll);
 };
 
-} // namespace common
-} // namespace dwio
-} // namespace velox
-} // namespace facebook
+} // namespace facebook::velox::dwio::common

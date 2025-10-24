@@ -1419,7 +1419,7 @@ class StringDictionaryColumnVisitor
     }
   }
 
-  folly::StringPiece valueInDictionary(int64_t index) {
+  StringView valueInDictionary(int64_t index) {
     auto stripeDictSize = DictSuper::state_.dictionary.numValues;
     if (index < stripeDictSize) {
       return reinterpret_cast<const StringView*>(
@@ -1576,7 +1576,7 @@ class StringColumnReadWithVisitorHelper {
       ExtractValues extractValues,
       F readWithVisitor) {
     readWithVisitor(
-        ColumnVisitor<folly::StringPiece, TFilter, ExtractValues, kIsDense>(
+        ColumnVisitor<std::string_view, TFilter, ExtractValues, kIsDense>(
             *static_cast<const TFilter*>(filter),
             &reader_,
             rows_,
