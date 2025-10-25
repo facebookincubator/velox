@@ -38,6 +38,48 @@ jobs:
       - uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
       - uses: pre-commit/action@2c7b3805fd2a0fd8c1884dcaebf91fc102a13ecd # v3.0.1
 
+  clang-tidy:
+    runs-on: ubuntu-latest
+    container: ghcr.io/facebookincubator/velox-dev:adapters
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+
+      - run: uv tool install clang-tidy==18.1.8
+      - name: Install Dependencies
+        run: |
+          source scripts/setup-centos9.sh && install_faiss_deps
+
+      - name: Configure Maximal Build
+        env:
+          CUDA_VERSION: '12.8'
+          CUDA_ARCHITECTURES: 70
+          CUDA_COMPILER: /usr/local/cuda-${CUDA_VERSION}/bin/nvcc
+          # Set compiler to GCC 12
+          CUDA_FLAGS: -ccbin /opt/rh/gcc-toolset-12/root/usr/bin
+          EXTRA_CMAKE_FLAGS: >-
+            -DVELOX_ENABLE_BENCHMARKS=ON
+            -DVELOX_ENABLE_EXAMPLES=ON
+            -DVELOX_ENABLE_ARROW=ON
+            -DVELOX_ENABLE_GEO=ON
+            -DVELOX_ENABLE_PARQUET=ON
+            -DVELOX_ENABLE_HDFS=ON
+            -DVELOX_ENABLE_S3=ON
+            -DVELOX_ENABLE_GCS=ON
+            -DVELOX_ENABLE_ABFS=ON
+            -DVELOX_ENABLE_WAVE=ON
+            -DVELOX_MONO_LIBRARY=ON
+            -DVELOX_BUILD_SHARED=ON
+            -DVELOX_ENABLE_CUDF=ON
+            -DVELOX_ENABLE_FAISS=ON
+            -DVELOX_ENABLE_REMOTE_FUNCTIONS=ON
+        run: |
+          make cmake BUILD_DIR=release BUILD_TYPE=Release
+
+      - name: Run clang-tidy
+        run: clang-tidy -p=_build/release/ --format-style=file -header-filter='.*' velox/exec/Task.h
+
   title-check:
     name: PR Title Format
     runs-on: ubuntu-latest
