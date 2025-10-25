@@ -113,6 +113,7 @@ class ArrowBridgeArrayExportTest : public testing::Test {
       const ArrowArray& arrowArray) {
     const bool isString =
         std::is_same_v<T, StringView> or std::is_same_v<T, std::string>;
+    const bool isUnknownType = std::is_same_v<T, UnknownValue>;
 
     EXPECT_EQ(inputData.size(), arrowArray.length);
     EXPECT_EQ(0, arrowArray.offset);
@@ -127,9 +128,15 @@ class ArrowBridgeArrayExportTest : public testing::Test {
     // Validate array contents.
     if constexpr (isString) {
       validateStringArray(inputData, arrowArray);
+    } else if constexpr (isUnknownType) {
+      validateNullArray(arrowArray);
     } else {
       validateNumericalArray(inputData, arrowArray);
     }
+  }
+
+  void validateNullArray(const ArrowArray& arrowArray) {
+    ASSERT_EQ(0, arrowArray.n_buffers);
   }
 
   template <typename T>
@@ -231,6 +238,7 @@ class ArrowBridgeArrayExportTest : public testing::Test {
       const ArrowArray& arrowArray) {
     const bool isString =
         std::is_same_v<T, StringView> or std::is_same_v<T, std::string>;
+    const bool isUnknownType = std::is_same_v<T, UnknownValue>;
 
     EXPECT_EQ(inputData.size(), arrowArray.length);
     EXPECT_EQ(0, arrowArray.offset);
@@ -266,6 +274,8 @@ class ArrowBridgeArrayExportTest : public testing::Test {
 
     if constexpr (isString) {
       validateStringArray(flattenedData, *childArray);
+    } else if constexpr (isUnknownType) {
+      validateNullArray(*childArray);
     } else {
       validateNumericalArray(flattenedData, *childArray);
     }
@@ -1047,6 +1057,13 @@ TEST_F(ArrowBridgeArrayExportTest, dictionaryNested) {
   EXPECT_EQ(values.Value(0), 1);
   EXPECT_EQ(values.Value(1), 2);
   EXPECT_EQ(values.Value(2), 3);
+}
+
+TEST_F(ArrowBridgeArrayExportTest, unknownType) {
+  VectorPtr vector =
+      BaseVector::createNullConstant(UNKNOWN(), 2048, pool_.get());
+  testConstantVector<true, UnknownValue>(
+      vector, std::vector<std::optional<UnknownValue>>{std::nullopt});
 }
 
 TEST_F(ArrowBridgeArrayExportTest, constants) {

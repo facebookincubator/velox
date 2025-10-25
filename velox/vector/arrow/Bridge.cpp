@@ -906,8 +906,10 @@ void exportFlat(
     case TypeKind::REAL:
     case TypeKind::DOUBLE:
     case TypeKind::TIMESTAMP:
-    case TypeKind::UNKNOWN:
       exportValues(vec, rows, options, out, pool, holder);
+      break;
+    case TypeKind::UNKNOWN:
+      // Keep out.n_children = 0 for UNKNOWN type.
       break;
     case TypeKind::VARCHAR:
     case TypeKind::VARBINARY:
@@ -1147,19 +1149,23 @@ void exportConstantValue(
     // If this is a scalar type, then ConstantVector does not have a vector
     // inside. Wrap the single value in a flat vector with a single element to
     // export it to an ArrowArray.
-    size_t bufferSize = (vec.type()->isVarchar() || vec.type()->isVarbinary())
-        ? sizeof(StringView)
-        : vec.type()->cppSizeInBytes();
+    if (vec.typeKind() == TypeKind::UNKNOWN) {
+      valuesVector = BaseVector::create(vec.type(), 1, pool);
+    } else {
+      size_t bufferSize = (vec.type()->isVarchar() || vec.type()->isVarbinary())
+          ? sizeof(StringView)
+          : vec.type()->cppSizeInBytes();
 
-    valuesVector = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-        createFlatVector,
-        vec.typeKind(),
-        pool,
-        vec.type(),
-        vec.nulls(),
-        1,
-        wrapInBufferViewAsViewer(vec.valuesAsVoid(), bufferSize),
-        vec.mayHaveNulls() ? 1 : 0);
+      valuesVector = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+          createFlatVector,
+          vec.typeKind(),
+          pool,
+          vec.type(),
+          vec.nulls(),
+          1,
+          wrapInBufferViewAsViewer(vec.valuesAsVoid(), bufferSize),
+          vec.mayHaveNulls() ? 1 : 0);
+    }
   }
   exportToArrowImpl(*valuesVector, selection, options, out, pool);
 }
