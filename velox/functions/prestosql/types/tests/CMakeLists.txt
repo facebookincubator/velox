@@ -21,6 +21,7 @@ add_executable(
   TimeWithTimezoneTypeTest.cpp
   TDigestTypeTest.cpp
   QDigestTypeTest.cpp
+  SetDigestTypeTest.cpp
   TypeTestBase.cpp
   UuidTypeTest.cpp
   IPAddressTypeTest.cpp
