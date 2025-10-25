@@ -19,6 +19,7 @@
 #include "velox/functions/prestosql/types/IPPrefixType.h"
 #include "velox/functions/prestosql/types/P4HyperLogLogType.h"
 #include "velox/functions/prestosql/types/QDigestType.h"
+#include "velox/functions/prestosql/types/SetDigestType.h"
 #include "velox/functions/prestosql/types/TDigestType.h"
 #include "velox/functions/prestosql/types/VarcharEnumType.h"
 
@@ -82,6 +83,11 @@ std::string typeName(const TypePtr& type) {
   }
   if (isP4HyperLogLogType(type)) {
     return "P4HyperLogLog";
+  }
+
+  // Handle SetDigest types
+  if (isSetDigestType(type)) {
+    return "SetDigest";
   }
 
   // Handle special digest types that need parameter formatting

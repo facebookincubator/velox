@@ -236,6 +236,7 @@ TEST_F(CustomTypeTest, getCustomTypeNames) {
       "BINGTILE",
       "TDIGEST",
       "QDIGEST",
+      "SETDIGEST",
       "SFMSKETCH",
       "BIGINT_ENUM",
       "VARCHAR_ENUM",

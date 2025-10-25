@@ -70,6 +70,7 @@ add_executable(
   HyperLogLogCastTest.cpp
   HyperLogLogFunctionsTest.cpp
   P4HyperLogLogCastTest.cpp
+  SetDigestCastTest.cpp
   InPredicateTest.cpp
   IntegerFunctionsTest.cpp
   IPAddressCastTest.cpp
