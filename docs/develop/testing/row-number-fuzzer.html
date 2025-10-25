@@ -5,7 +5,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>RowNumber Fuzzer &#8212; Velox  documentation</title>
+    <title>RowNumber and TopNRowNumber Fuzzer &#8212; Velox  documentation</title>
     <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=8f2a1f02" />
     <link rel="stylesheet" type="text/css" href="../../_static/nature.css?v=0f882399" />
     <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
@@ -31,7 +31,7 @@
         <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
           <li class="nav-item nav-item-1"><a href="../../develop.html" >Developer Guide</a> &#187;</li>
           <li class="nav-item nav-item-2"><a href="../testing.html" accesskey="U">Testing Tools</a> &#187;</li>
-        <li class="nav-item nav-item-this"><a href="">RowNumber Fuzzer</a></li> 
+        <li class="nav-item nav-item-this"><a href="">RowNumber and TopNRowNumber Fuzzer</a></li> 
       </ul>
     </div>  
 
@@ -40,15 +40,17 @@
         <div class="bodywrapper">
           <div class="body" role="main">
             
-  <section id="rownumber-fuzzer">
-<h1>RowNumber Fuzzer<a class="headerlink" href="#rownumber-fuzzer" title="Link to this heading">¶</a></h1>
-<p>The RowNumberFuzzer is a testing tool that automatically generate equivalent query plans and then executes these plans
-to validate the consistency of the results. It works as follows:</p>
+  <section id="rownumber-and-topnrownumber-fuzzer">
+<h1>RowNumber and TopNRowNumber Fuzzer<a class="headerlink" href="#rownumber-and-topnrownumber-fuzzer" title="Link to this heading">¶</a></h1>
+<p>The RowNumberFuzzer and TopNRowNumberFuzzer are testing tools that automatically generate equivalent query plans that
+use the RowNumber and TopNRowNumber Velox plan nodes, and then execute these plans to validate the consistency of
+the results. They works as follows:</p>
 <ol class="arabic simple">
-<li><p>Data Generation: It starts by generating a random set of input data, also known as a vector. This data can
+<li><p>Data Generation: Generate a random set of input data, also known as a vector. This data can
 have a variety of encodings and data layouts to ensure thorough testing.</p></li>
-<li><p>Plan Generation: Generate two equivalent query plans, one is row-number over ValuesNode as the base plan.
-and the other is over TableScanNode as the alter plan.</p></li>
+<li><p>Plan Generation: Generate two equivalent query plans: one is RowNumber over ValuesNode as
+the base plan and the other is over TableScanNode as the alternative plan. The TopNRowNumberFuzzer generates similar
+plans with TopNRowNumber node instead.</p></li>
 <li><p>Query Execution: Executes those equivalent query plans using the generated data and asserts that the results are
 consistent across different plans.</p></li>
 </ol>
@@ -64,8 +66,12 @@ expected result.</p></li>
 </ol>
 <section id="how-to-run">
 <h2>How to run<a class="headerlink" href="#how-to-run" title="Link to this heading">¶</a></h2>
-<p>Use velox_row_number_fuzzer binary to run rowNumber fuzzer:</p>
+<p>Use velox_row_number_fuzzer to run RowNumberFuzzer</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">velox</span><span class="o">/</span><span class="n">exec</span><span class="o">/</span><span class="n">fuzzer</span><span class="o">/</span><span class="n">velox_row_number_fuzzer</span> <span class="o">--</span><span class="n">seed</span> <span class="mi">123</span> <span class="o">--</span><span class="n">duration_sec</span> <span class="mi">60</span>
+</pre></div>
+</div>
+<p>Similarly, use velox_topn_row_number_fuzzer to run TopNRowNumberFuzzer</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">velox</span><span class="o">/</span><span class="n">exec</span><span class="o">/</span><span class="n">fuzzer</span><span class="o">/</span><span class="n">velox_topn_row_number_fuzzer</span> <span class="o">--</span><span class="n">seed</span> <span class="mi">123</span> <span class="o">--</span><span class="n">duration_sec</span> <span class="mi">60</span>
 </pre></div>
 </div>
 <p>By default, the fuzzer will go through 10 iterations. Use –steps
@@ -102,7 +108,7 @@ generate. Default is 5.</p></li>
   <div>
     <h3><a href="../../index.html">Table of Contents</a></h3>
     <ul>
-<li><a class="reference internal" href="#">RowNumber Fuzzer</a><ul>
+<li><a class="reference internal" href="#">RowNumber and TopNRowNumber Fuzzer</a><ul>
 <li><a class="reference internal" href="#how-to-run">How to run</a></li>
 </ul>
 </li>
@@ -155,7 +161,7 @@ generate. Default is 5.</p></li>
         <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
           <li class="nav-item nav-item-1"><a href="../../develop.html" >Developer Guide</a> &#187;</li>
           <li class="nav-item nav-item-2"><a href="../testing.html" >Testing Tools</a> &#187;</li>
-        <li class="nav-item nav-item-this"><a href="">RowNumber Fuzzer</a></li> 
+        <li class="nav-item nav-item-this"><a href="">RowNumber and TopNRowNumber Fuzzer</a></li> 
       </ul>
     </div>
     <div class="footer" role="contentinfo">
