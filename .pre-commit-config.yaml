@@ -40,7 +40,7 @@ repos:
         description: Run clang-tidy on C/C++ files
         stages:
           - manual # Needs compile_commands.json
-        entry: clang-tidy
+        entry: ./scripts/checks/run-clang-tidy.py
         language: python
         types_or: [c++, c]
         additional_dependencies: [clang-tidy==18.1.8]
