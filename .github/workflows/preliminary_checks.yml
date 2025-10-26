@@ -140,6 +140,7 @@ jobs:
 
       - name: Run clang-tidy
         run: |
+          echo "::add-matcher::.github/matchers/clang-tidy.json"
           clang-tidy -p=_build/release/ \
             --format-style=file \
             -header-filter='.*' \
