@@ -31,10 +31,8 @@
 namespace facebook::velox::functions {
 
 namespace detail {
-// Below functions return a stock instance of each of the possible errors in
-// SubscriptImpl
-const std::exception_ptr& zeroSubscriptError();
-const std::exception_ptr& badSubscriptError();
+constexpr static inline std::string_view kZeroSubscriptErrorMsg =
+    "SQL array indices start at 1. Got 0.";
 const std::exception_ptr& negativeSubscriptError();
 
 // A flat vector of map keys, an index into that vector and an index into
@@ -277,7 +275,7 @@ class SubscriptImpl : public exec::Subscript {
       default:
         VELOX_UNSUPPORTED(
             "Unsupported type for element_at index {}",
-            mapTypeKindToName(indexArg->typeKind()));
+            TypeKindName::toName(indexArg->typeKind()));
     }
   }
 
@@ -336,17 +334,25 @@ class SubscriptImpl : public exec::Subscript {
       bool allFailed = false;
       // If index is invalid, capture the error and mark all rows as failed.
       bool isZeroSubscriptError = false;
+      const I originalIndex = decodedIndices->valueAt<I>(0);
       const auto adjustedIndex =
-          adjustIndex(decodedIndices->valueAt<I>(0), isZeroSubscriptError);
+          adjustIndex(originalIndex, isZeroSubscriptError);
       if (isZeroSubscriptError) {
-        context.setErrors(rows, detail::zeroSubscriptError());
+        context.setStatuses(
+            rows, Status::UserError(detail::kZeroSubscriptErrorMsg));
         allFailed = true;
       }
 
       if (!allFailed) {
         rows.applyToSelected([&](auto row) {
           const auto elementIndex = getIndex(
-              adjustedIndex, row, rawSizes, rawOffsets, arrayIndices, context);
+              originalIndex,
+              adjustedIndex,
+              row,
+              rawSizes,
+              rawOffsets,
+              arrayIndices,
+              context);
           rawIndices[row] = elementIndex;
           if (elementIndex == -1) {
             nullsBuilder.setNull(row);
@@ -355,16 +361,23 @@ class SubscriptImpl : public exec::Subscript {
       }
     } else {
       rows.applyToSelected([&](auto row) {
-        const auto originalIndex = decodedIndices->valueAt<I>(row);
+        const I originalIndex = decodedIndices->valueAt<I>(row);
         bool isZeroSubscriptError = false;
         const auto adjustedIndex =
             adjustIndex(originalIndex, isZeroSubscriptError);
         if (isZeroSubscriptError) {
-          context.setVeloxExceptionError(row, detail::zeroSubscriptError());
+          context.setStatus(
+              row, Status::UserError(detail::kZeroSubscriptErrorMsg));
           return;
         }
         const auto elementIndex = getIndex(
-            adjustedIndex, row, rawSizes, rawOffsets, arrayIndices, context);
+            originalIndex,
+            adjustedIndex,
+            row,
+            rawSizes,
+            rawOffsets,
+            arrayIndices,
+            context);
         rawIndices[row] = elementIndex;
         if (elementIndex == -1) {
           nullsBuilder.setNull(row);
@@ -416,7 +429,8 @@ class SubscriptImpl : public exec::Subscript {
   // above).
   template <typename I>
   vector_size_t getIndex(
-      I index,
+      I originalIndex,
+      vector_size_t index,
       vector_size_t row,
       const vector_size_t* rawSizes,
       const vector_size_t* rawOffsets,
@@ -433,7 +447,11 @@ class SubscriptImpl : public exec::Subscript {
           index += arraySize;
         }
       } else {
-        context.setVeloxExceptionError(row, detail::negativeSubscriptError());
+        context.setStatus(
+            row,
+            Status::UserError(
+                "Array subscript index cannot be negative, Index: {}",
+                originalIndex));
         return -1;
       }
     }
@@ -444,7 +462,12 @@ class SubscriptImpl : public exec::Subscript {
       if constexpr (allowOutOfBound) {
         return -1;
       } else {
-        context.setVeloxExceptionError(row, detail::badSubscriptError());
+        context.setStatus(
+            row,
+            Status::UserError(
+                "Array subscript index out of bounds, Index: {} Array size: {}",
+                originalIndex,
+                arraySize));
         return -1;
       }
     }

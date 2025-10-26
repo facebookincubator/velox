@@ -15,6 +15,8 @@
  */
 #include "velox/connectors/hive/HivePartitionFunction.h"
 
+#include <utility>
+
 namespace facebook::velox::connector::hive {
 
 namespace {
@@ -24,6 +26,46 @@ void mergeHash(bool mix, uint32_t oneHash, uint32_t& aggregateHash) {
 
 int32_t hashInt64(int64_t value) {
   return ((*reinterpret_cast<uint64_t*>(&value)) >> 32) ^ value;
+}
+
+template <typename T>
+inline int32_t hashDecimal(T value, uint8_t scale) {
+  bool isNegative = value < 0;
+  uint64_t absValue =
+      isNegative ? -static_cast<uint64_t>(value) : static_cast<uint64_t>(value);
+
+  uint32_t high = absValue >> 32;
+  uint32_t low = absValue;
+
+  uint32_t hash = 31 * high + low;
+  if (isNegative) {
+    hash = -hash;
+  }
+
+  return 31 * hash + scale;
+}
+
+// Simulates Hive's hashing function from Hive v1.2.1
+// org.apache.hadoop.hive.serde2.objectinspector.ObjectInspectorUtils#hashcode()
+// Returns java BigDecimal#hashCode()
+template <>
+inline int32_t hashDecimal<int128_t>(int128_t value, uint8_t scale) {
+  uint32_t words[4];
+  bool isNegative = value < 0;
+  uint128_t absValue = isNegative ? -value : value;
+  words[0] = absValue >> 96;
+  words[1] = absValue >> 64;
+  words[2] = absValue >> 32;
+  words[3] = absValue;
+
+  uint32_t hash = 0;
+  for (auto i = 0; i < 4; i++) {
+    hash = 31 * hash + words[i];
+  }
+  if (isNegative) {
+    hash = -hash;
+  }
+  return hash * 31 + scale;
 }
 
 #if defined(__has_feature)
@@ -114,6 +156,34 @@ void hashPrimitive(
     const SelectivityVector& rows,
     bool mix,
     std::vector<uint32_t>& hashes) {
+  const auto& type = values.base()->type();
+  if constexpr (kind == TypeKind::BIGINT || kind == TypeKind::HUGEINT) {
+    if (type->isDecimal()) {
+      const auto scale = getDecimalPrecisionScale(*type).second;
+      if (rows.isAllSelected()) {
+        vector_size_t numRows = rows.size();
+        for (auto i = 0; i < numRows; ++i) {
+          const uint32_t hash = values.isNullAt(i)
+              ? 0
+              : hashDecimal(
+                    values.valueAt<typename TypeTraits<kind>::NativeType>(i),
+                    scale);
+          mergeHash(mix, hash, hashes[i]);
+        }
+      } else {
+        rows.applyToSelected([&](auto row) INLINE_LAMBDA {
+          const uint32_t hash = values.isNullAt(row)
+              ? 0
+              : hashDecimal(
+                    values.valueAt<typename TypeTraits<kind>::NativeType>(row),
+                    scale);
+          mergeHash(mix, hash, hashes[row]);
+        });
+      }
+      return;
+    }
+  }
+
   if (rows.isAllSelected()) {
     // The compiler seems to be a little fickle with optimizations.
     // Although rows.applyToSelected should do roughly the same thing, doing
@@ -208,6 +278,16 @@ void HivePartitionFunction::hashTyped<TypeKind::BIGINT>(
     std::vector<uint32_t>& hashes,
     size_t /* poolIndex */) {
   hashPrimitive<TypeKind::BIGINT>(values, rows, mix, hashes);
+}
+
+template <>
+void HivePartitionFunction::hashTyped<TypeKind::HUGEINT>(
+    const DecodedVector& values,
+    const SelectivityVector& rows,
+    bool mix,
+    std::vector<uint32_t>& hashes,
+    size_t /* poolIndex */) {
+  hashPrimitive<TypeKind::HUGEINT>(values, rows, mix, hashes);
 }
 
 template <>
@@ -461,7 +541,7 @@ HivePartitionFunction::HivePartitionFunction(
     std::vector<column_index_t> keyChannels,
     const std::vector<VectorPtr>& constValues)
     : numBuckets_{numBuckets},
-      bucketToPartition_{bucketToPartition},
+      bucketToPartition_{std::move(bucketToPartition)},
       keyChannels_{std::move(keyChannels)} {
   precomputedHashes_.resize(keyChannels_.size());
   size_t constChannel{0};
@@ -495,7 +575,7 @@ std::optional<uint32_t> HivePartitionFunction::partition(
     }
   }
 
-  static const int32_t kInt32Max = std::numeric_limits<int32_t>::max();
+  static constexpr int32_t kInt32Max = std::numeric_limits<int32_t>::max();
 
   if (bucketToPartition_.empty()) {
     // NOTE: if bucket to partition mapping is empty, then we do

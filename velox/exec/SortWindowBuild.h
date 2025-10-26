@@ -32,6 +32,7 @@ class SortWindowBuild : public WindowBuild {
       common::PrefixSortConfig&& prefixSortConfig,
       const common::SpillConfig* spillConfig,
       tsan_atomic<bool>* nonReclaimableSection,
+      folly::Synchronized<OperatorStats>* opStats,
       folly::Synchronized<common::SpillStats>* spillStats);
 
   ~SortWindowBuild() override {
@@ -75,8 +76,10 @@ class SortWindowBuild : public WindowBuild {
   // Find the next partition start row from start.
   vector_size_t findNextPartitionStartRow(vector_size_t start);
 
-  // Reads next partition from spilled data into 'data_' and 'sortedRows_'.
-  void loadNextPartitionFromSpill();
+  // Load the next partition batch if needed. If current partition batch is not
+  // entirely consumed, return directly. Otherwise, read next partition batch
+  // from spilled data into 'data_' and set pointers in 'sortedRows_'.
+  void loadNextPartitionBatchFromSpill();
 
   const size_t numPartitionKeys_;
 
@@ -91,6 +94,8 @@ class SortWindowBuild : public WindowBuild {
 
   // Config for Prefix-sort.
   const common::PrefixSortConfig prefixSortConfig_;
+
+  folly::Synchronized<OperatorStats>* const opStats_;
 
   folly::Synchronized<common::SpillStats>* const spillStats_;
 
@@ -121,5 +126,8 @@ class SortWindowBuild : public WindowBuild {
 
   // Used to sort-merge spilled data.
   std::unique_ptr<TreeOfLosers<SpillMergeStream>> merge_;
+
+  // Number of batches of whole partitions read from spilled data.
+  uint64_t numSpillReadBatches_ = 0;
 };
 } // namespace facebook::velox::exec

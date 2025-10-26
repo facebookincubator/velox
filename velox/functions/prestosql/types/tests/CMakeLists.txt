@@ -18,8 +18,10 @@ add_executable(
   HyperLogLogTypeTest.cpp
   JsonTypeTest.cpp
   TimestampWithTimeZoneTypeTest.cpp
+  TimeWithTimezoneTypeTest.cpp
   TDigestTypeTest.cpp
   QDigestTypeTest.cpp
+  SetDigestTypeTest.cpp
   TypeTestBase.cpp
   UuidTypeTest.cpp
   IPAddressTypeTest.cpp

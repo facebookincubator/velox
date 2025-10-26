@@ -113,6 +113,7 @@ class ArrowBridgeArrayExportTest : public testing::Test {
       const ArrowArray& arrowArray) {
     const bool isString =
         std::is_same_v<T, StringView> or std::is_same_v<T, std::string>;
+    const bool isUnknownType = std::is_same_v<T, UnknownValue>;
 
     EXPECT_EQ(inputData.size(), arrowArray.length);
     EXPECT_EQ(0, arrowArray.offset);
@@ -127,9 +128,15 @@ class ArrowBridgeArrayExportTest : public testing::Test {
     // Validate array contents.
     if constexpr (isString) {
       validateStringArray(inputData, arrowArray);
+    } else if constexpr (isUnknownType) {
+      validateNullArray(arrowArray);
     } else {
       validateNumericalArray(inputData, arrowArray);
     }
+  }
+
+  void validateNullArray(const ArrowArray& arrowArray) {
+    ASSERT_EQ(0, arrowArray.n_buffers);
   }
 
   template <typename T>
@@ -231,6 +238,7 @@ class ArrowBridgeArrayExportTest : public testing::Test {
       const ArrowArray& arrowArray) {
     const bool isString =
         std::is_same_v<T, StringView> or std::is_same_v<T, std::string>;
+    const bool isUnknownType = std::is_same_v<T, UnknownValue>;
 
     EXPECT_EQ(inputData.size(), arrowArray.length);
     EXPECT_EQ(0, arrowArray.offset);
@@ -266,6 +274,8 @@ class ArrowBridgeArrayExportTest : public testing::Test {
 
     if constexpr (isString) {
       validateStringArray(flattenedData, *childArray);
+    } else if constexpr (isUnknownType) {
+      validateNullArray(*childArray);
     } else {
       validateNumericalArray(flattenedData, *childArray);
     }
@@ -545,6 +555,48 @@ TEST_F(ArrowBridgeArrayExportTest, flatTimestamp) {
   EXPECT_THROW(
       testFlatVector<Timestamp>({Timestamp(9246211200, 0)}, TIMESTAMP()),
       VeloxUserError);
+}
+
+TEST_F(ArrowBridgeArrayExportTest, flatTime) {
+  std::vector<std::optional<int64_t>> inputData = {
+      0L,
+      std::nullopt,
+      1'000L,
+      60'000L,
+      3'600'000L,
+      std::nullopt,
+      50'402'000L,
+      86'399'999L,
+      std::nullopt};
+
+  auto flatVector = vectorMaker_.flatVectorNullable(inputData, TIME());
+  ArrowArray arrowArray;
+  ArrowSchema arrowSchema;
+  velox::exportToArrow(flatVector, arrowArray, pool_.get(), options_);
+  velox::exportToArrow(flatVector, arrowSchema, options_);
+
+  EXPECT_STREQ(arrowSchema.format, "ttm"); // time32 milliseconds.
+  EXPECT_EQ(arrowArray.length, inputData.size());
+  EXPECT_EQ(arrowArray.n_buffers, 2);
+
+  const uint64_t* nulls = static_cast<const uint64_t*>(arrowArray.buffers[0]);
+  const int32_t* values = static_cast<const int32_t*>(arrowArray.buffers[1]);
+
+  ASSERT_NE(nulls, nullptr);
+
+  for (auto i = 0; i < inputData.size(); ++i) {
+    if (inputData[i] == std::nullopt) {
+      EXPECT_TRUE(bits::isBitNull(nulls, i));
+    } else {
+      EXPECT_FALSE(bits::isBitNull(nulls, i));
+      // Velox milliseconds exported as Arrow time32 milliseconds (int32).
+      EXPECT_EQ(static_cast<int32_t>(inputData[i].value()), values[i])
+          << "mismatch at index " << i;
+    }
+  }
+
+  arrowArray.release(&arrowArray);
+  arrowSchema.release(&arrowSchema);
 }
 
 TEST_F(ArrowBridgeArrayExportTest, flatString) {
@@ -1007,6 +1059,13 @@ TEST_F(ArrowBridgeArrayExportTest, dictionaryNested) {
   EXPECT_EQ(values.Value(2), 3);
 }
 
+TEST_F(ArrowBridgeArrayExportTest, unknownType) {
+  VectorPtr vector =
+      BaseVector::createNullConstant(UNKNOWN(), 2048, pool_.get());
+  testConstantVector<true, UnknownValue>(
+      vector, std::vector<std::optional<UnknownValue>>{std::nullopt});
+}
+
 TEST_F(ArrowBridgeArrayExportTest, constants) {
   testConstant((int64_t)987654321);
   testConstant((int32_t)1234);
@@ -1203,6 +1262,18 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
         std::is_same_v<TInput, int128_t> && std::is_same_v<TOutput, int64_t>) {
       assertShortDecimalVectorContent(
           inputValues, output, arrowArray.null_count);
+    } else if constexpr (
+        std::is_same_v<TOutput, int64_t> &&
+        (std::is_same_v<TInput, int32_t> || std::is_same_v<TInput, int64_t>)) {
+      // TIME: Arrow time32 (int32) or time64 (int64) to Velox TIME (int64
+      // millis) Check if format starts with "tt" to distinguish from regular
+      // int32/int64.
+      if (format[0] == 't' && format[1] == 't') {
+        assertTimeVectorContent(
+            inputValues, output, arrowArray.null_count, format);
+      } else {
+        assertVectorContent(inputValues, output, arrowArray.null_count);
+      }
     } else {
       assertVectorContent(inputValues, output, arrowArray.null_count);
     }
@@ -1287,6 +1358,29 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
           tsString, {0, std::nullopt, Timestamp::kMaxSeconds});
     }
 
+    testArrowImport<int64_t, int32_t>(
+        "tts", {0, std::nullopt, 1, 60, 3600, 50402, 86399});
+    testArrowImport<int64_t, int32_t>(
+        "ttm", {0, std::nullopt, 1000, 60000, 3600000, 50402000, 86399999});
+    testArrowImport<int64_t, int64_t>(
+        "ttu",
+        {0,
+         std::nullopt,
+         1'000'000,
+         60'000'000,
+         3'600'000'000,
+         50'402'000'000,
+         86'399'999'000});
+    testArrowImport<int64_t, int64_t>(
+        "ttn",
+        {0,
+         std::nullopt,
+         1'000'000'000,
+         60'000'000'000,
+         3'600'000'000'000,
+         50'402'000'000'000,
+         86'399'999'000'000});
+
     testArrowImport<int64_t, int128_t>(
         "d:5,2", {1, -1, 0, 12345, -12345, std::nullopt});
     testArrowImport<int128_t, int128_t>(
@@ -1323,6 +1417,17 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
         std::is_same_v<TInput, int64_t> && std::is_same_v<TOutput, Timestamp>) {
       assertTimestampVectorContent(
           inputValues, output, arrowArray1.null_count, format);
+    } else if constexpr (
+        std::is_same_v<TOutput, int64_t> &&
+        (std::is_same_v<TInput, int32_t> || std::is_same_v<TInput, int64_t>)) {
+      // TIME: Arrow time32 (int32) or time64 (int64) to Velox TIME (int64
+      // millis).
+      if (format[0] == 't' && format[1] == 't') {
+        assertTimeVectorContent(
+            inputValues, output, arrowArray1.null_count, format);
+      } else {
+        assertVectorContent(inputValues, output, arrowArray1.null_count);
+      }
     } else {
       assertVectorContent(inputValues, output, arrowArray1.null_count);
     }
@@ -1424,6 +1529,47 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
       }
     }
     assertVectorContent(decValues, actual, nullCount);
+  }
+
+  // Creates TIME from int32/int64 and asserts the content of actual vector with
+  // the expected TIME values (in milliseconds).
+  template <typename TInput>
+  void assertTimeVectorContent(
+      const std::vector<std::optional<TInput>>& expectedValues,
+      const VectorPtr& actual,
+      size_t nullCount,
+      const char* format) {
+    VELOX_USER_CHECK_GE(
+        strlen(format), 3, "At least three characters are expected.");
+    std::vector<std::optional<int64_t>> timeValues;
+    timeValues.reserve(expectedValues.size());
+    for (const auto& value : expectedValues) {
+      if (!value.has_value()) {
+        timeValues.emplace_back(std::nullopt);
+      } else {
+        int64_t millis;
+        // Convert from Arrow time unit to Velox TIME (milliseconds).
+        switch (format[2]) {
+          case 's':
+            millis = static_cast<int64_t>(value.value()) * 1'000;
+            break;
+          case 'm':
+            millis = static_cast<int64_t>(value.value());
+            break;
+          case 'u':
+            millis = static_cast<int64_t>(value.value()) / 1'000;
+            break;
+          case 'n':
+            millis = static_cast<int64_t>(value.value()) / 1'000'000;
+            break;
+          default:
+            VELOX_UNREACHABLE();
+        }
+        timeValues.emplace_back(millis);
+      }
+    }
+    auto expected = vectorMaker_.flatVectorNullable(timeValues, TIME());
+    assertVectorContent(timeValues, actual, nullCount);
   }
 
   // Creates timestamp from bigint and asserts the content of actual vector with

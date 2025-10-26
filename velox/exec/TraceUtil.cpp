@@ -38,47 +38,6 @@ std::string findLastPathNode(const std::string& path) {
   return pathNodes.back();
 }
 
-const std::vector<core::PlanNodePtr> kEmptySources;
-
-class DummySourceNode final : public core::PlanNode {
- public:
-  explicit DummySourceNode(RowTypePtr outputType)
-      : PlanNode(""), outputType_(std::move(outputType)) {}
-
-  const RowTypePtr& outputType() const override {
-    return outputType_;
-  }
-
-  const std::vector<core::PlanNodePtr>& sources() const override {
-    return kEmptySources;
-  }
-
-  std::string_view name() const override {
-    return "DummySource";
-  }
-
-  folly::dynamic serialize() const override {
-    folly::dynamic obj = folly::dynamic::object;
-    obj["name"] = "DummySource";
-    obj["outputType"] = outputType_->serialize();
-    return obj;
-  }
-
-  static core::PlanNodePtr create(const folly::dynamic& obj, void* context) {
-    return std::make_shared<DummySourceNode>(
-        ISerializable::deserialize<RowType>(obj["outputType"]));
-  }
-
- private:
-  void addDetails(std::stringstream& stream) const override {
-    // Nothing to add.
-  }
-
-  const RowTypePtr outputType_;
-};
-
-void registerDummySourceSerDe();
-
 std::unordered_map<std::string, TraceNodeFactory>& traceNodeRegistry() {
   static std::unordered_map<std::string, TraceNodeFactory> registry;
   return registry;
@@ -221,10 +180,8 @@ RowTypePtr getDataType(
     const core::PlanNodePtr& tracedPlan,
     const std::string& tracedNodeId,
     size_t sourceIndex) {
-  const auto* traceNode = core::PlanNode::findFirstNode(
-      tracedPlan.get(), [&tracedNodeId](const core::PlanNode* node) {
-        return node->id() == tracedNodeId;
-      });
+  const auto* traceNode =
+      core::PlanNode::findNodeById(tracedPlan.get(), tracedNodeId);
   VELOX_CHECK_NOT_NULL(
       traceNode,
       "traced node id {} not found in the traced plan",
@@ -291,11 +248,12 @@ bool canTrace(const std::string& operatorType) {
       "HashBuild",
       "HashProbe",
       "IndexLookupJoin",
-      "Unnest",
+      "OrderBy",
       "PartialAggregation",
       "PartitionedOutput",
       "TableScan",
-      "TableWrite"};
+      "TableWrite",
+      "Unnest"};
   if (kSupportedOperatorTypes.count(operatorType) > 0 ||
       traceNodeRegistry().count(operatorType) > 0) {
     return true;
@@ -306,9 +264,7 @@ bool canTrace(const std::string& operatorType) {
 core::PlanNodePtr getTraceNode(
     const core::PlanNodePtr& plan,
     core::PlanNodeId nodeId) {
-  const auto* traceNode = core::PlanNode::findFirstNode(
-      plan.get(),
-      [&nodeId](const core::PlanNode* node) { return node->id() == nodeId; });
+  const auto* traceNode = core::PlanNode::findNodeById(plan.get(), nodeId);
   VELOX_CHECK_NOT_NULL(traceNode, "Failed to find node with id {}", nodeId);
   if (const auto* hashJoinNode =
           dynamic_cast<const core::HashJoinNode*>(traceNode)) {
@@ -450,6 +406,17 @@ core::PlanNodePtr getTraceNode(
         unnestNode->markerName(),
         std::make_shared<DummySourceNode>(
             unnestNode->sources().front()->outputType()));
+  }
+
+  if (const auto* orderByNode =
+          dynamic_cast<const core::OrderByNode*>(traceNode)) {
+    return std::make_shared<core::OrderByNode>(
+        nodeId,
+        orderByNode->sortingKeys(),
+        orderByNode->sortingOrders(),
+        orderByNode->isPartial(),
+        std::make_shared<DummySourceNode>(
+            orderByNode->sources().front()->outputType()));
   }
 
   for (const auto& factory : traceNodeRegistry()) {

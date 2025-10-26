@@ -50,9 +50,8 @@ namespace {
       makeCudaMr(), rmm::percent_of_free_device_memory(percent));
 }
 
-[[nodiscard]] auto makeAsyncMr(int percent) {
-  return std::make_shared<rmm::mr::cuda_async_memory_resource>(
-      rmm::percent_of_free_device_memory(percent));
+[[nodiscard]] auto makeAsyncMr() {
+  return std::make_shared<rmm::mr::cuda_async_memory_resource>();
 }
 
 [[nodiscard]] auto makeManagedMr() {
@@ -78,7 +77,7 @@ std::shared_ptr<rmm::mr::device_memory_resource> createMemoryResource(
   if (mode == "pool")
     return makePoolMr(percent);
   if (mode == "async")
-    return makeAsyncMr(percent);
+    return makeAsyncMr();
   if (mode == "arena")
     return makeArenaMr(percent);
   if (mode == "managed")
@@ -117,9 +116,22 @@ std::unique_ptr<cudf::table> concatenateTables(
 std::unique_ptr<cudf::table> makeEmptyTable(TypePtr const& inputType) {
   std::vector<std::unique_ptr<cudf::column>> emptyColumns;
   for (size_t i = 0; i < inputType->size(); ++i) {
-    auto emptyColumn = cudf::make_empty_column(
-        cudf_velox::veloxToCudfTypeId(inputType->childAt(i)));
-    emptyColumns.push_back(std::move(emptyColumn));
+    if (auto const& childType = inputType->childAt(i);
+        childType->kind() == TypeKind::ROW) {
+      auto tbl = makeEmptyTable(childType);
+      auto structColumn = std::make_unique<cudf::column>(
+          cudf::data_type(cudf::type_id::STRUCT),
+          0,
+          rmm::device_buffer(),
+          rmm::device_buffer(),
+          0,
+          tbl->release());
+      emptyColumns.push_back(std::move(structColumn));
+    } else {
+      auto emptyColumn = cudf::make_empty_column(
+          cudf_velox::veloxToCudfTypeId(inputType->childAt(i)));
+      emptyColumns.push_back(std::move(emptyColumn));
+    }
   }
   return std::make_unique<cudf::table>(std::move(emptyColumns));
 }

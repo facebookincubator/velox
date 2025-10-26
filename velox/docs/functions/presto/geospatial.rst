@@ -73,6 +73,28 @@ Geometry Constructors
 
     Returns a geometry type polygon object from WKT representation.
 
+.. function:: ST_LineFromText(wkt: varchar) -> linestring: Geometry
+
+    Returns a geometry type linestring object from WKT representation.
+    An error is returned if the input WKT represents a valid non-LineString
+    geometry. Null input returns null output.
+
+.. function:: ST_LineString(points: array(Geometry)) -> linestring: Geometry
+
+    Returns a LineString formed from an array of points. If there are fewer
+    than two non-empty points in the input array, an empty LineString will
+    be returned. Throws an exception if any element in the array is null or
+    empty or same as the previous one. The returned geometry may not be simple,
+    e.g. may self-intersect or may contain duplicate vertexes depending on the
+    input.
+
+.. function:: ST_MultiPoint(points: array(Geometry)) -> multipoint: Geometry
+
+    Returns a MultiPoint geometry object formed from the specified points.
+    Return null if input array is empty. Throws an exception if any element
+    in the array is null or empty. The returned geometry may not be simple
+    and may contain duplicate points if input array has duplicates.
+
 Spatial Predicates
 ------------------
 
@@ -114,7 +136,7 @@ function you are using.
     Returns ``true`` if the given geometries share space, are of the same
     dimension, but are not completely contained by each other.
 
-.. function:: ST_Relat(geometry1: Geometry, geometry2: Geometry, relation: varchar) -> boolean
+.. function:: ST_Relate(geometry1: Geometry, geometry2: Geometry, relation: varchar) -> boolean
 
     Returns true if first geometry is spatially related to second geometry as
     described by the relation.  The relation is a string like ``'"1*T***T**'``:
@@ -231,7 +253,7 @@ Accessors
    Returns an array of points in a geometry. Empty or null inputs
    return null.
 
-.. function:: ST_NumPoints(geometry: Geometry) -> points: integer
+.. function:: ST_NumPoints(geometry: Geometry) -> points: bigint
 
    Returns the number of points in a geometry. This is an extension
    to the SQL/MM ``ST_NumPoints`` function which only applies to
@@ -383,7 +405,7 @@ Accessors
     GEOMETRYCOLLECTION (POINT (0 0), GEOMETRYCOLLECTION (POINT (1 1))) ->
     [POINT (0 0), POINT (1 1)], GEOMETRYCOLLECTION EMPTY -> [].
 
-.. function:: ST_NumInteriorRing(geometry: Geometry) -> output: integer
+.. function:: ST_NumInteriorRing(geometry: Geometry) -> output: bigint
 
     Returns the cardinality of the collection of interior rings of a polygon.
 
@@ -391,7 +413,7 @@ Accessors
 
     Returns the minimum convex geometry that encloses all input geometries.
 
-.. function:: ST_CoordDim(geometry: Geometry) -> output: integer
+.. function:: ST_CoordDim(geometry: Geometry) -> output: tinyint
 
     Return the coordinate dimension of the geometry.
 

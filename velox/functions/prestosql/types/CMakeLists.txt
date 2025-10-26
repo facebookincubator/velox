@@ -30,6 +30,8 @@ velox_add_library(
   SfmSketchRegistration.cpp
   TDigestRegistration.cpp
   TimestampWithTimeZoneRegistration.cpp
+  TimeWithTimezoneRegistration.cpp
+  SetDigestRegistration.cpp
   UuidRegistration.cpp
   VarcharEnumRegistration.cpp
   VarcharEnumType.cpp

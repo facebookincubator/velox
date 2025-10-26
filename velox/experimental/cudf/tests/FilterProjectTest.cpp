@@ -515,10 +515,10 @@ TEST_F(CudfFilterProjectTest, yearFunction) {
   testYearFunction(vectors);
 }
 
+// The result mismatches.
 TEST_F(CudfFilterProjectTest, DISABLED_caseWhenOperation) {
   vector_size_t batchSize = 1000;
   auto vectors = makeVectors(rowType_, 2, batchSize);
-  // failing because switch copies nulls too.
   createDuckDbTable(vectors);
 
   testCaseWhenOperation(vectors);
@@ -634,6 +634,32 @@ TEST_F(CudfFilterProjectTest, mixedInOperation) {
   createDuckDbTable(vectors);
 
   testMixedInOperation(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, round) {
+  auto data = makeRowVector({makeFlatVector<int64_t>({4123, 456789098})});
+  parse::ParseOptions options;
+  options.parseIntegerAsBigint = false;
+  auto plan = PlanBuilder()
+                  .setParseOptions(options)
+                  .values({data})
+                  .project({"round(c0, 2) as c1"})
+                  .planNode();
+  AssertQueryBuilder(plan).assertResults(data);
+  plan = PlanBuilder()
+             .setParseOptions(options)
+             .values({data})
+             .project({"round(c0) as c1"})
+             .planNode();
+  AssertQueryBuilder(plan).assertResults(data);
+
+  plan = PlanBuilder()
+             .setParseOptions(options)
+             .values({data})
+             .project({"round(c0, -3) as c1"})
+             .planNode();
+  auto expected = makeRowVector({makeFlatVector<int64_t>({4000, 456789000})});
+  AssertQueryBuilder(plan).assertResults(expected);
 }
 
 TEST_F(CudfFilterProjectTest, simpleFilter) {
@@ -990,6 +1016,25 @@ TEST_F(CudfFilterProjectTest, substrWithLength) {
   });
   facebook::velox::test::assertEqualVectors(
       SubstrResults, calculatedSubstrResults);
+}
+
+TEST_F(CudfFilterProjectTest, switchExpr) {
+  auto data = makeRowVector(
+      {makeFlatVector<double>({45676567.78, 6789098767.90876, -2.34}),
+       makeFlatVector<double>({123.4, 124.5, 1678})});
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .project(
+              {"CASE WHEN c0 > 0.0 THEN c0 / c1 ELSE cast(null as double) END AS result"})
+          .planNode();
+  auto result = AssertQueryBuilder(plan).copyResults(pool());
+
+  auto expected = makeRowVector({
+      makeNullableFlatVector<double>(
+          {45676567.78 / 123.4, 6789098767.90876 / 124.5, std::nullopt}),
+  });
+  facebook::velox::test::assertEqualVectors(expected, result);
 }
 
 } // namespace

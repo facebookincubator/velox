@@ -1230,10 +1230,12 @@ uint64_t StringColumnWriter::writeDict(
   size_t strideIndex = strideOffsets_.size() - 1;
   uint64_t rawSize = 0;
   auto processRow = [&](size_t pos) {
-    auto sp = decodedVector.valueAt<StringView>(pos);
-    rows_.unsafeAppend(dictEncoder_.addKey(sp, strideIndex));
-    statsBuilder.addValues(sp);
-    rawSize += sp.size();
+    auto sv = decodedVector.valueAt<StringView>(pos);
+    // TODO: Remove explicit std::string_view cast.
+    rows_.unsafeAppend(dictEncoder_.addKey(std::string_view(sv), strideIndex));
+    // TODO: Remove explicit std::string_view cast.
+    statsBuilder.addValues(std::string_view(sv));
+    rawSize += sv.size();
   };
 
   uint64_t nullCount = 0;
@@ -1274,10 +1276,11 @@ uint64_t StringColumnWriter::writeDirect(
 
   uint64_t rawSize = 0;
   auto processRow = [&](size_t pos) {
-    auto sp = decodedVector.valueAt<StringView>(pos);
-    auto size = sp.size();
-    dataDirect_->write(sp.data(), size);
-    statsBuilder.addValues(sp);
+    auto sv = decodedVector.valueAt<StringView>(pos);
+    auto size = sv.size();
+    dataDirect_->write(sv.data(), size);
+    // TODO: Remove explicit std::string_view cast.
+    statsBuilder.addValues(std::string_view(sv));
     rawSize += size;
     lengths.unsafeAppend(size);
   };
@@ -2119,7 +2122,7 @@ std::unique_ptr<BaseColumnWriter> BaseColumnWriter::create(
           "MAP_FLAT_COLS contains column {}, but the root type of this column is {}."
           " Column root types must be of type MAP",
           type.column(),
-          mapTypeKindToName(type.type()->kind()));
+          TypeKindName::toName(type.type()->kind()));
     }
     const auto structColumnKeys =
         context.getConfig(Config::MAP_FLAT_COLS_STRUCT_KEYS);
@@ -2212,7 +2215,7 @@ std::unique_ptr<BaseColumnWriter> BaseColumnWriter::create(
     }
     default:
       VELOX_FAIL(
-          "not supported yet: {}", mapTypeKindToName(type.type()->kind()));
+          "not supported yet: {}", TypeKindName::toName(type.type()->kind()));
   }
 }
 } // namespace facebook::velox::dwrf

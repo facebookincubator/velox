@@ -106,6 +106,11 @@ bool registerCudfFunction(
     CudfFunctionFactory factory,
     bool overwrite = true);
 
+void registerCudfFunctions(
+    std::vector<std::string> aliases,
+    CudfFunctionFactory factory,
+    bool overwrite = true);
+
 bool registerBuiltinFunctions(const std::string& prefix);
 
 struct CudfExpressionNode {
@@ -183,8 +188,7 @@ class ExpressionEvaluator {
 
   void close();
 
-  static bool canBeEvaluated(
-      const std::vector<std::shared_ptr<velox::exec::Expr>>& exprs);
+  static bool canBeEvaluated(const std::vector<core::TypedExprPtr>& exprs);
 
  private:
   std::vector<cudf::ast::tree> exprAst_;

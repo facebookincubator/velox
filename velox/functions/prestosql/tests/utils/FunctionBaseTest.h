@@ -61,6 +61,17 @@ class FunctionBaseTest : public testing::Test,
     });
   }
 
+  void setSessionStartTimeAndTimeZone(
+      const int64_t sessionStartTimeMs,
+      const std::string& timeZoneName) {
+    queryCtx_->testingOverrideConfigUnsafe({
+        {core::QueryConfig::kSessionStartTime,
+         std::to_string(sessionStartTimeMs)},
+        {core::QueryConfig::kSessionTimezone, timeZoneName},
+        {core::QueryConfig::kAdjustTimestampToTimezone, "true"},
+    });
+  }
+
  protected:
   static void SetUpTestCase();
 

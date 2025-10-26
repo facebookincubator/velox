@@ -17,6 +17,7 @@
 #pragma once
 
 #include <geos/geom/Coordinate.h>
+#include <geos/geom/CoordinateArraySequence.h>
 #include <geos/geom/Envelope.h>
 #include <geos/io/GeoJSON.h>
 #include <geos/io/GeoJSONReader.h>
@@ -1099,7 +1100,7 @@ struct StNumInteriorRingFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE bool call(
-      out_type<int32_t>& result,
+      out_type<int64_t>& result,
       const arg_type<Geometry>& geometry) {
     std::unique_ptr<geos::geom::Geometry> geosGeometry =
         geospatial::GeometryDeserializer::deserialize(geometry);
@@ -1124,7 +1125,7 @@ struct StNumInteriorRingFunction {
       VELOX_USER_FAIL(
           "Number of interior rings exceeds the maximum value of int32");
     }
-    result = static_cast<int32_t>(numInteriorRings);
+    result = static_cast<int64_t>(numInteriorRings);
     return true;
   }
 };
@@ -1160,12 +1161,12 @@ class StCoordDimFunction : public facebook::velox::exec::VectorFunction {
     // Create a constant vector of value 2, with size equal to the number of
     // rows
     result = facebook::velox::BaseVector::createConstant(
-        outputType, 2, rows.size(), context.pool());
+        outputType, static_cast<int8_t>(2), rows.size(), context.pool());
   }
   static std::vector<std::shared_ptr<facebook::velox::exec::FunctionSignature>>
   signatures() {
     return {facebook::velox::exec::FunctionSignatureBuilder()
-                .returnType("integer")
+                .returnType("tinyint")
                 .argumentType("geometry")
                 .build()};
   }
@@ -1374,7 +1375,7 @@ struct StNumPointsFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE void call(
-      out_type<int32_t>& result,
+      out_type<int64_t>& result,
       const arg_type<Geometry>& geometry) {
     auto geosGeometry = geospatial::GeometryDeserializer::deserialize(geometry);
 
@@ -1884,6 +1885,87 @@ struct GeometryUnionFunction {
     // If geometry is not completely empty, we can proceed with union.
     std::unique_ptr<geos::geom::Geometry> geomUnion = collection->Union();
     geospatial::GeometrySerializer::serialize(*geomUnion, result);
+    return true;
+  }
+
+ private:
+  geos::geom::GeometryFactory::Ptr factory_;
+};
+
+template <typename T>
+struct StLineFromTextFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE Status
+  call(out_type<Geometry>& result, const arg_type<Varchar>& wkt) {
+    std::unique_ptr<geos::geom::Geometry> geosGeometry;
+    GEOS_TRY(
+        {
+          geos::io::WKTReader reader;
+          geosGeometry = reader.read(wkt);
+        },
+        "Failed to parse WKT");
+    auto validate = geospatial::validateType(
+        *geosGeometry,
+        {geos::geom::GeometryTypeId::GEOS_LINESTRING},
+        "ST_LineFromText");
+
+    if (validate.ok()) {
+      geospatial::GeometrySerializer::serialize(*geosGeometry, result);
+    }
+
+    return validate;
+  }
+};
+
+template <typename T>
+struct StLineStringFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+  StLineStringFunction() {
+    factory_ = geos::geom::GeometryFactory::create();
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Geometry>& result,
+      const arg_type<Array<Geometry>>& input) {
+    std::unique_ptr<geos::geom::CoordinateArraySequence> coords =
+        geospatial::GeometryDeserializer::deserializePointsToCoordinate<
+            Geometry>(input, "ST_LineString", true);
+
+    std::unique_ptr<geos::geom::LineString> lineString;
+    if (input.size() < 2) {
+      lineString = factory_->createLineString();
+    } else {
+      lineString = factory_->createLineString(std::move(coords));
+    }
+    geospatial::GeometrySerializer::serialize(*lineString, result);
+  }
+
+ private:
+  geos::geom::GeometryFactory::Ptr factory_;
+};
+
+template <typename T>
+struct StMultiPointFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+  StMultiPointFunction() {
+    factory_ = geos::geom::GeometryFactory::create();
+  }
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<Geometry>& result,
+      const arg_type<Array<Geometry>>& input) {
+    std::unique_ptr<geos::geom::CoordinateArraySequence> coords =
+        geospatial::GeometryDeserializer::deserializePointsToCoordinate<
+            Geometry>(input, "ST_MultiPoint", false);
+
+    if (coords->size() == 0) {
+      return false;
+    }
+
+    auto multiPoint = std::unique_ptr<geos::geom::MultiPoint>(
+        factory_->createMultiPoint(*coords));
+    geospatial::GeometrySerializer::serialize(*multiPoint, result);
     return true;
   }
 

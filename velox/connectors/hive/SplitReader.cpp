@@ -28,50 +28,76 @@ namespace facebook::velox::connector::hive {
 namespace {
 
 template <TypeKind kind>
-VectorPtr newConstantFromString(
+VectorPtr newConstantFromStringImpl(
     const TypePtr& type,
     const std::optional<std::string>& value,
-    vector_size_t size,
     velox::memory::MemoryPool* pool,
-    const std::string& sessionTimezone,
-    bool asLocalTime,
-    bool isPartitionDateDaysSinceEpoch = false) {
+    bool isLocalTimestamp,
+    bool isDaysSinceEpoch) {
   using T = typename TypeTraits<kind>::NativeType;
   if (!value.has_value()) {
-    return std::make_shared<ConstantVector<T>>(pool, size, true, type, T());
+    return std::make_shared<ConstantVector<T>>(pool, 1, true, type, T());
   }
 
   if (type->isDate()) {
     int32_t days = 0;
     // For Iceberg, the date partition values are already in daysSinceEpoch
     // form.
-    if (isPartitionDateDaysSinceEpoch) {
+    if (isDaysSinceEpoch) {
       days = folly::to<int32_t>(value.value());
     } else {
-      days = DATE()->toDays(static_cast<folly::StringPiece>(value.value()));
+      days = DATE()->toDays(value.value());
     }
     return std::make_shared<ConstantVector<int32_t>>(
-        pool, size, false, type, std::move(days));
+        pool, 1, false, type, std::move(days));
+  }
+
+  if constexpr (std::is_same_v<T, int64_t> || std::is_same_v<T, int128_t>) {
+    if (type->isDecimal()) {
+      auto [precision, scale] = getDecimalPrecisionScale(*type);
+      T result;
+      const auto status = DecimalUtil::castFromString<T>(
+          StringView(value.value()), precision, scale, result);
+      VELOX_USER_CHECK(status.ok(), status.message());
+      return std::make_shared<ConstantVector<T>>(
+          pool, 1, false, type, std::move(result));
+    }
   }
 
   if constexpr (std::is_same_v<T, StringView>) {
     return std::make_shared<ConstantVector<StringView>>(
-        pool, size, false, type, StringView(value.value()));
+        pool, 1, false, type, StringView(value.value()));
   } else {
     auto copy = velox::util::Converter<kind>::tryCast(value.value())
                     .thenOrThrow(folly::identity, [&](const Status& status) {
                       VELOX_USER_FAIL("{}", status.message());
                     });
     if constexpr (kind == TypeKind::TIMESTAMP) {
-      if (asLocalTime) {
+      if (isLocalTimestamp) {
         copy.toGMT(Timestamp::defaultTimezone());
       }
     }
     return std::make_shared<ConstantVector<T>>(
-        pool, size, false, type, std::move(copy));
+        pool, 1, false, type, std::move(copy));
   }
 }
 } // namespace
+
+VectorPtr newConstantFromString(
+    const TypePtr& type,
+    const std::optional<std::string>& value,
+    velox::memory::MemoryPool* pool,
+    bool isLocalTimestamp,
+    bool isDaysSinceEpoch) {
+  return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
+      newConstantFromStringImpl,
+      type->kind(),
+      type,
+      value,
+      pool,
+      isLocalTimestamp,
+      isDaysSinceEpoch);
+}
 
 std::unique_ptr<SplitReader> SplitReader::create(
     const std::shared_ptr<hive::HiveConnectorSplit>& hiveSplit,
@@ -158,8 +184,9 @@ void SplitReader::configureReaderOptions(
 
 void SplitReader::prepareSplit(
     std::shared_ptr<common::MetadataFilter> metadataFilter,
-    dwio::common::RuntimeStatistics& runtimeStats) {
-  createReader();
+    dwio::common::RuntimeStatistics& runtimeStats,
+    const folly::F14FastMap<std::string, std::string>& fileReadOps) {
+  createReader(fileReadOps);
   if (emptySplit_) {
     return;
   }
@@ -281,7 +308,8 @@ std::string SplitReader::toString() const {
       static_cast<const void*>(baseRowReader_.get()));
 }
 
-void SplitReader::createReader() {
+void SplitReader::createReader(
+    const folly::F14FastMap<std::string, std::string>& fileReadOps) {
   VELOX_CHECK_NE(
       baseReaderOpts_.fileFormat(), dwio::common::FileFormat::UNKNOWN);
 
@@ -289,11 +317,13 @@ void SplitReader::createReader() {
   FileHandleKey fileHandleKey{
       .filename = hiveSplit_->filePath,
       .tokenProvider = connectorQueryCtx_->fsTokenProvider()};
+
+  auto fileProperties = hiveSplit_->properties.value_or(FileProperties{});
+  fileProperties.fileReadOps = fileReadOps;
+
   try {
     fileHandleCachePtr = fileHandleFactory_->generate(
-        fileHandleKey,
-        hiveSplit_->properties.has_value() ? &*hiveSplit_->properties : nullptr,
-        fsStats_ ? fsStats_.get() : nullptr);
+        fileHandleKey, &fileProperties, fsStats_ ? fsStats_.get() : nullptr);
     VELOX_CHECK_NOT_NULL(fileHandleCachePtr.get());
   } catch (const VeloxRuntimeError& e) {
     if (e.errorCode() == error_code::kFileNotFound &&
@@ -318,7 +348,8 @@ void SplitReader::createReader() {
       connectorQueryCtx_,
       ioStats_,
       fsStats_,
-      ioExecutor_);
+      ioExecutor_,
+      fileReadOps);
 
   baseReader_ = dwio::common::getReaderFactory(baseReaderOpts_.fileFormat())
                     ->createReader(std::move(baseFileInput), baseReaderOpts_);
@@ -379,11 +410,13 @@ void SplitReader::createRowReader(
       hiveSplit_,
       hiveConfig_,
       connectorQueryCtx_->sessionProperties(),
+      ioExecutor_,
       baseRowReaderOpts_);
   baseRowReaderOpts_.setTrackRowSize(
       rowSizeTrackingEnabled.has_value()
           ? *rowSizeTrackingEnabled
-          : connectorQueryCtx_->rowSizeTrackingEnabled());
+          : connectorQueryCtx_->rowSizeTrackingMode() !=
+              core::QueryConfig::RowSizeTrackingMode::DISABLED);
   baseRowReader_ = baseReader_->createRowReader(baseRowReaderOpts_);
 }
 
@@ -405,16 +438,13 @@ std::vector<TypePtr> SplitReader::adaptColumns(
                iter != hiveSplit_->infoColumns.end()) {
       auto infoColumnType =
           readerOutputType_->childAt(readerOutputType_->getChildIdx(fieldName));
-      auto constant = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
-          newConstantFromString,
-          infoColumnType->kind(),
+      auto constant = newConstantFromString(
           infoColumnType,
           iter->second,
-          1,
           connectorQueryCtx_->memoryPool(),
-          connectorQueryCtx_->sessionTimezone(),
           hiveConfig_->readTimestampPartitionValueAsLocalTime(
-              connectorQueryCtx_->sessionProperties()));
+              connectorQueryCtx_->sessionProperties()),
+          false);
       childSpec->setConstantValue(constant);
     } else if (
         childSpec->columnType() == common::ScanSpec::ColumnType::kRegular) {
@@ -461,14 +491,10 @@ void SplitReader::setPartitionValue(
       "ColumnHandle is missing for partition key {}",
       partitionKey);
   auto type = it->second->dataType();
-  auto constant = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
-      newConstantFromString,
-      type->kind(),
+  auto constant = newConstantFromString(
       type,
       value,
-      1,
       connectorQueryCtx_->memoryPool(),
-      connectorQueryCtx_->sessionTimezone(),
       hiveConfig_->readTimestampPartitionValueAsLocalTime(
           connectorQueryCtx_->sessionProperties()),
       it->second->isPartitionDateValueDaysSinceEpoch());

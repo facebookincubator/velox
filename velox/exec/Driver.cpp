@@ -145,7 +145,8 @@ std::optional<common::SpillConfig> DriverCtx::makeSpillConfig(
       queryConfig.spillPrefixSortEnabled()
           ? std::optional<common::PrefixSortConfig>(prefixSortConfig())
           : std::nullopt,
-      queryConfig.spillFileCreateConfig());
+      queryConfig.spillFileCreateConfig(),
+      queryConfig.windowSpillMinReadBatchRows());
 }
 
 std::atomic_uint64_t BlockingState::numBlockedDrivers_{0};
@@ -1102,9 +1103,13 @@ std::string Driver::toString() const {
   }
 
   out << "{Operators: ";
-  for (auto& op : operators_) {
-    out << op->toString() << ", ";
-  }
+  std::vector<std::string> opStrs;
+  opStrs.reserve(operators_.size());
+  std::ranges::transform(
+      operators_, std::back_inserter(opStrs), [](const auto& op) {
+        return op->toString();
+      });
+  out << folly::join(", ", opStrs);
   out << "}";
   const auto ocs = opCallStatus();
   if (!ocs.empty()) {

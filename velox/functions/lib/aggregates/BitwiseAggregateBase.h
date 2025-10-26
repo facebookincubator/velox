@@ -72,6 +72,7 @@ class BitwiseAggregateBase : public SimpleNumericAggregate<T, T, T> {
 template <template <typename U> class T>
 exec::AggregateRegistrationResult registerBitwise(
     const std::string& name,
+    bool ignoreDuplicates,
     bool withCompanionFunctions,
     bool onlyPrestoSignatures,
     bool overwrite) {
@@ -114,7 +115,7 @@ exec::AggregateRegistrationResult registerBitwise(
                 inputType->kindName());
         }
       },
-      {false /*orderSensitive*/, false /*companionFunction*/},
+      {.ignoreDuplicates = ignoreDuplicates, .orderSensitive = false},
       withCompanionFunctions,
       overwrite);
 }

@@ -44,7 +44,24 @@
 #include "velox/common/file/Region.h"
 #include "velox/common/io/IoStatistics.h"
 
+#include <folly/container/F14Map.h>
+
 namespace facebook::velox {
+
+struct FileStorageContext {
+  /// Stats for IO operations
+  filesystems::File::IoStats* ioStats{nullptr};
+
+  /// Options for file read operations
+  folly::F14FastMap<std::string, std::string> fileReadOps;
+
+  FileStorageContext() = default;
+
+  FileStorageContext(
+      filesystems::File::IoStats* stats,
+      folly::F14FastMap<std::string, std::string> fileReadOps = {})
+      : ioStats(stats), fileReadOps(std::move(fileReadOps)) {}
+};
 
 // A read-only file.  All methods in this object should be thread safe.
 class ReadFile {
@@ -53,16 +70,12 @@ class ReadFile {
 
   // Reads the data at [offset, offset + length) into the provided pre-allocated
   // buffer 'buf'. The bytes are returned as a string_view pointing to 'buf'.
-  //
-  // 'stats' is an IoStatistics pointer passed in by the caller to collect stats
-  // for this read operation.
-  //
   // This method should be thread safe.
   virtual std::string_view pread(
       uint64_t offset,
       uint64_t length,
       void* buf,
-      filesystems::File::IoStats* stats = nullptr) const = 0;
+      const FileStorageContext& fileStorageContext = {}) const = 0;
 
   // Same as above, but returns owned data directly.
   //
@@ -70,20 +83,16 @@ class ReadFile {
   virtual std::string pread(
       uint64_t offset,
       uint64_t length,
-      filesystems::File::IoStats* stats = nullptr) const;
+      const FileStorageContext& fileStorageContext = {}) const;
 
   // Reads starting at 'offset' into the memory referenced by the
   // Ranges in 'buffers'. The buffers are filled left to right. A
   // buffer with nullptr data will cause its size worth of bytes to be skipped.
-  //
-  // 'stats' is an IoStatistics pointer passed in by the caller to collect stats
-  // for this read operation.
-  //
   // This method should be thread safe.
   virtual uint64_t preadv(
       uint64_t /*offset*/,
       const std::vector<folly::Range<char*>>& /*buffers*/,
-      filesystems::File::IoStats* stats = nullptr) const;
+      const FileStorageContext& fileStorageContext = {}) const;
 
   // Vectorized read API. Implementations can coalesce and parallelize.
   // The offsets don't need to be sorted.
@@ -94,30 +103,23 @@ class ReadFile {
   // by the preadv.
   // Returns the total number of bytes read, which might be different than the
   // sum of all buffer sizes (for example, if coalescing was used).
-  //
-  // 'stats' is an IoStatistics pointer passed in by the caller to collect stats
-  // for this read operation.
-  //
   // This method should be thread safe.
   virtual uint64_t preadv(
       folly::Range<const common::Region*> regions,
       folly::Range<folly::IOBuf*> iobufs,
-      filesystems::File::IoStats* stats = nullptr) const;
+      const FileStorageContext& fileStorageContext = {}) const;
 
   /// Like preadv but may execute asynchronously and returns the read size or
   /// exception via SemiFuture. Use hasPreadvAsync() to check if the
   /// implementation is in fact asynchronous.
-  ///
-  /// 'stats' is an IoStatistics pointer passed in by the caller to collect
-  /// stats for this read operation.
-  ///
   /// This method should be thread safe.
   virtual folly::SemiFuture<uint64_t> preadvAsync(
       uint64_t offset,
       const std::vector<folly::Range<char*>>& buffers,
-      filesystems::File::IoStats* stats = nullptr) const {
+      const FileStorageContext& fileStorageContext = {}) const {
     try {
-      return folly::SemiFuture<uint64_t>(preadv(offset, buffers, stats));
+      return folly::SemiFuture<uint64_t>(
+          preadv(offset, buffers, fileStorageContext));
     } catch (const std::exception& e) {
       return folly::makeSemiFuture<uint64_t>(e);
     }
@@ -241,12 +243,12 @@ class InMemoryReadFile : public ReadFile {
       uint64_t offset,
       uint64_t length,
       void* buf,
-      filesystems::File::IoStats* stats = nullptr) const override;
+      const FileStorageContext& fileStorageContext = {}) const override;
 
   std::string pread(
       uint64_t offset,
       uint64_t length,
-      filesystems::File::IoStats* stats) const override;
+      const FileStorageContext& fileStorageContext = {}) const override;
 
   uint64_t size() const final {
     return file_.size();
@@ -312,19 +314,19 @@ class LocalReadFile final : public ReadFile {
       uint64_t offset,
       uint64_t length,
       void* buf,
-      filesystems::File::IoStats* stats = nullptr) const final;
+      const FileStorageContext& fileStorageContext = {}) const final;
 
   uint64_t size() const final;
 
   uint64_t preadv(
       uint64_t offset,
       const std::vector<folly::Range<char*>>& buffers,
-      filesystems::File::IoStats* stats = nullptr) const final;
+      const FileStorageContext& fileStorageContext = {}) const final;
 
   folly::SemiFuture<uint64_t> preadvAsync(
       uint64_t offset,
       const std::vector<folly::Range<char*>>& buffers,
-      filesystems::File::IoStats* stats = nullptr) const override;
+      const FileStorageContext& fileStorageContext = {}) const override;
 
   bool hasPreadvAsync() const override {
     return executor_ != nullptr;

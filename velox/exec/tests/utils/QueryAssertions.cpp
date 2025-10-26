@@ -21,6 +21,8 @@
 #include "velox/duckdb/conversion/DuckConversion.h"
 #include "velox/exec/Cursor.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
+#include "velox/type/Type.h"
+#include "velox/vector/VariantToVector.h"
 #include "velox/vector/VectorTypeUtils.h"
 
 using facebook::velox::duckdb::duckdbTimestampToVelox;
@@ -708,7 +710,7 @@ std::string toTypeString(const MaterializedRow& row) {
     if (i > 0) {
       out << ", ";
     }
-    out << mapTypeKindToName(row[i].kind());
+    out << TypeKindName::toName(row[i].kind());
   }
   out << ")";
   return out.str();
@@ -1439,6 +1441,15 @@ void waitForAllTasksToBeDeleted(uint64_t maxWaitUs) {
       "{} pending tasks\n{}",
       pendingTasks.size(),
       folly::join("\n", pendingTaskStats));
+}
+
+void cancelAllTasks() {
+  std::vector<std::shared_ptr<Task>> pendingTasks = Task::getRunningTasks();
+  for (const auto& task : pendingTasks) {
+    if (task->isRunning()) {
+      task->requestCancel();
+    }
+  }
 }
 
 std::shared_ptr<Task> assertQuery(

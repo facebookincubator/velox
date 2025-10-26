@@ -19,6 +19,7 @@
 #include <chrono>
 
 #include "velox/dwio/common/OnDemandUnitLoader.h"
+#include "velox/dwio/common/ParallelUnitLoader.h"
 #include "velox/dwio/common/TypeUtils.h"
 #include "velox/dwio/common/exception/Exception.h"
 #include "velox/dwio/dwrf/reader/ColumnReader.h"
@@ -341,9 +342,16 @@ std::unique_ptr<dwio::common::UnitLoader> DwrfRowReader::getUnitLoader() {
   std::shared_ptr<UnitLoaderFactory> unitLoaderFactory =
       options_.unitLoaderFactory();
   if (!unitLoaderFactory) {
-    unitLoaderFactory =
-        std::make_shared<dwio::common::OnDemandUnitLoaderFactory>(
-            options_.blockedOnIoCallback());
+    if (loadUnits.size() > 1 && options_.parallelUnitLoadCount() > 1 &&
+        options_.ioExecutor() != nullptr) {
+      unitLoaderFactory =
+          std::make_shared<dwio::common::ParallelUnitLoaderFactory>(
+              options_.ioExecutor(), options_.parallelUnitLoadCount());
+    } else {
+      unitLoaderFactory =
+          std::make_shared<dwio::common::OnDemandUnitLoaderFactory>(
+              options_.blockedOnIoCallback());
+    }
   }
   return unitLoaderFactory->create(std::move(loadUnits), 0);
 }
@@ -632,6 +640,8 @@ uint64_t DwrfRowReader::next(
     } else {
       previousRow_ = 0;
     }
+    // Collect unit loader stats at the end.
+    unitLoadStats_ = unitLoader_->stats();
     return 0;
   }
 

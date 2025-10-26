@@ -15,12 +15,12 @@
  */
 
 #include "velox/dwio/common/OnDemandUnitLoader.h"
+#include "velox/common/time/Timer.h"
 
 #include <numeric>
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/dwio/common/MeasureTime.h"
-#include "velox/dwio/common/UnitLoaderTools.h"
 
 using facebook::velox::dwio::common::measureTimeIfCallback;
 
@@ -42,6 +42,7 @@ class OnDemandUnitLoader : public UnitLoader {
   LoadUnit& getLoadedUnit(uint32_t unit) override {
     VELOX_CHECK_LT(unit, loadUnits_.size(), "Unit out of range");
 
+    processedUnits_.insert(unit);
     if (loadedUnit_.has_value()) {
       if (loadedUnit_.value() == unit) {
         return *loadUnits_[unit];
@@ -51,11 +52,14 @@ class OnDemandUnitLoader : public UnitLoader {
       loadedUnit_.reset();
     }
 
+    uint64_t unitLoadNanos{0};
     {
+      NanosecondTimer timer{&unitLoadNanos};
       auto measure = measureTimeIfCallback(blockedOnIoCallback_);
       loadUnits_[unit]->load();
     }
     loadedUnit_ = unit;
+    unitLoadNanos_ += unitLoadNanos;
 
     return *loadUnits_[unit];
   }
@@ -73,11 +77,28 @@ class OnDemandUnitLoader : public UnitLoader {
         rowOffsetInUnit, loadUnits_[unit]->getNumRows(), "Row out of range");
   }
 
+  UnitLoaderStats stats() override {
+    UnitLoaderStats stats;
+    stats.addCounter("processedUnits", RuntimeCounter(processedUnits_.size()));
+    stats.addCounter(
+        "unitLoadNanos",
+        RuntimeCounter(
+            unitLoadNanos_ > std::numeric_limits<int64_t>::max()
+                ? std::numeric_limits<int64_t>::max()
+                : unitLoadNanos_,
+            RuntimeCounter::Unit::kNanos));
+    return stats;
+  }
+
  private:
   const std::vector<std::unique_ptr<LoadUnit>> loadUnits_;
   const std::function<void(std::chrono::high_resolution_clock::duration)>
       blockedOnIoCallback_;
   std::optional<uint32_t> loadedUnit_;
+
+  // Stats
+  std::unordered_set<uint32_t> processedUnits_;
+  uint64_t unitLoadNanos_{0};
 };
 
 } // namespace

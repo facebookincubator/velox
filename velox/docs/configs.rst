@@ -64,7 +64,7 @@ Generic Configuration
      - bool
      - true
      - If true, the driver will collect the operator's input/output batch size through vector flat size estimation, otherwise not.
-     - We might turn this off in use cases which have very wide column width and batch size estimation has non-trivial cpu cost.
+       We might turn this off in use cases which have very wide column width and batch size estimation has non-trivial cpu cost.
    * - hash_adaptivity_enabled
      - bool
      - true
@@ -200,7 +200,6 @@ Generic Configuration
        be expensive (especially if operator stats are retrieved frequently) and this allows the user to
        explicitly enable it.
 
-.. _expression-evaluation-conf:
 
 Expression Evaluation Configuration
 -----------------------------------
@@ -335,6 +334,12 @@ Spilling
      - boolean
      - true
      - When `spill_enabled` is true, determines whether Window operator can spill to disk under memory pressure.
+   * - window_spill_min_read_batch_rows
+     - integer
+     - 1000
+     - When processing spilled window data, read batches of whole partitions having at least that many rows. Set to 1 to
+       read one whole partition at a time. Each driver processing the Window operator will process that much data at
+       once.
    * - row_number_spill_enabled
      - boolean
      - true
@@ -548,6 +553,31 @@ Table Writer
      - Minimum amount of data processed by all the logical table partitions to
        trigger skewed partition rebalancing by scale writer exchange.
 
+Connector Config
+----------------
+Connector config is initialized on velox runtime startup and is shared among queries as the default config across all connectors.
+Each query can override the config by setting corresponding query session properties such as in Prestissimo.
+
+.. list-table::
+   :widths: 20 20 10 10 70
+   :header-rows: 1
+
+   * - user
+     -
+     - string
+     - ""
+     - The user of the query. Used for storage logging.
+   * - source
+     -
+     - string
+     - ""
+     - The source of the query. Used for storage access and logging.
+   * - schema
+     -
+     - string
+     - ""
+     - The schema of the query. Used for storage logging.
+
 Hive Connector
 --------------
 Hive Connector config is initialized on velox runtime startup and is shared among queries as the default config.
@@ -685,7 +715,6 @@ Each query can override the config by setting corresponding query session proper
      - bool
      - false
      - Whether to preserve flat maps in memory as FlatMapVectors instead of converting them to MapVectors. This is only applied during data reading inside the DWRF and Nimble readers, not during downstream processing like expression evaluation etc.
-
 
 ``ORC File Format Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -34,7 +34,7 @@ bool checkNestedNulls(
     VELOX_USER_CHECK(
         !decoded.base()->containsNullAt(indices[index]),
         "{} comparison not supported for values that contain nulls",
-        mapTypeKindToName(decoded.base()->typeKind()));
+        TypeKindName::toName(decoded.base()->typeKind()));
   }
 
   return false;

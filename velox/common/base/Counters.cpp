@@ -107,8 +107,13 @@ void registerVeloxMetrics() {
   // was opened to load the cache.
   DEFINE_METRIC(kMetricCacheMaxAgeSecs, facebook::velox::StatType::AVG);
 
-  // Total number of cache entries.
-  DEFINE_METRIC(kMetricMemoryCacheNumEntries, facebook::velox::StatType::AVG);
+  // Total number of tiny cache entries.
+  DEFINE_METRIC(
+      kMetricMemoryCacheNumTinyEntries, facebook::velox::StatType::AVG);
+
+  // Total number of large cache entries.
+  DEFINE_METRIC(
+      kMetricMemoryCacheNumLargeEntries, facebook::velox::StatType::AVG);
 
   // Total number of cache entries that do not cache anything.
   DEFINE_METRIC(
@@ -643,6 +648,10 @@ void registerVeloxMetrics() {
   // of [0, 16s] with 512 buckets and reports P50, P90, P99, and P100.
   DEFINE_HISTOGRAM_METRIC(
       kMetricIndexLookupBlockedWaitTimeMs, 32, 0, 16L << 10, 50, 90, 99, 100);
+
+  // The number of index lookup results with error.
+  DEFINE_METRIC(
+      kMetricIndexLookupErrorResultCount, facebook::velox::StatType::COUNT);
 
   /// ================== Table Scan Counters =================
   // Tracks the averaged table scan batch processing time in milliseconds.

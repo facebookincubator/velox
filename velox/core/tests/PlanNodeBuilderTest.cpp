@@ -756,8 +756,8 @@ TEST_F(PlanNodeBuilderTest, indexLookupJoinNode) {
   const std::vector<IndexLookupConditionPtr> joinConditions{
       std::make_shared<BetweenIndexLookupCondition>(
           std::make_shared<FieldAccessTypedExpr>(BIGINT(), "c0"),
-          std::make_shared<ConstantTypedExpr>(BIGINT(), variant(1)),
-          std::make_shared<ConstantTypedExpr>(BIGINT(), variant(2)))};
+          std::make_shared<ConstantTypedExpr>(BIGINT(), Variant(1LL)),
+          std::make_shared<ConstantTypedExpr>(BIGINT(), Variant(2LL)))};
   const auto left =
       ValuesNode::Builder()
           .id("values_node_id_1")
@@ -809,7 +809,7 @@ TEST_F(PlanNodeBuilderTest, nestedLoopJoinNode) {
   const PlanNodeId id = "nested_loop_join_node_id";
   const auto joinType = JoinType::kLeft;
   const auto joinCondition =
-      std::make_shared<ConstantTypedExpr>(BOOLEAN(), variant(true));
+      std::make_shared<ConstantTypedExpr>(BOOLEAN(), Variant(true));
   const auto left =
       ValuesNode::Builder()
           .id("values_node_id_1")
@@ -881,25 +881,35 @@ TEST_F(PlanNodeBuilderTest, spatialJoinNode) {
   const PlanNodeId id = "spatial_join_node_id";
   const auto joinType = JoinType::kInner;
   const auto joinCondition =
-      std::make_shared<ConstantTypedExpr>(BOOLEAN(), variant(true));
-  const auto left =
-      ValuesNode::Builder()
-          .id("values_node_id_1")
-          .values({makeRowVector(
-              {"c0"}, {makeFlatVector<int64_t>(std::vector<int64_t>{1})})})
-          .build();
-  const auto right =
-      ValuesNode::Builder()
-          .id("values_node_id_2")
-          .values({makeRowVector(
-              {"c1"}, {makeFlatVector<int64_t>(std::vector<int64_t>{2})})})
-          .build();
+      std::make_shared<ConstantTypedExpr>(BOOLEAN(), Variant(true));
+  const auto left = ValuesNode::Builder()
+                        .id("values_node_id_1")
+                        .values({makeRowVector(
+                            {"c0", "g0"},
+                            {makeFlatVector<int64_t>(std::vector<int64_t>{1}),
+                             makeFlatVector<std::string>(
+                                 std::vector<std::string>{"POINT(0 0)"})})})
+                        .build();
+  const auto right = ValuesNode::Builder()
+                         .id("values_node_id_2")
+                         .values({makeRowVector(
+                             {"c1", "g1"},
+                             {makeFlatVector<int64_t>(std::vector<int64_t>{2}),
+                              makeFlatVector<std::string>(
+                                  std::vector<std::string>{"POINT(0 0)"})})})
+                         .build();
   const auto outputType = ROW({"c0"}, {BIGINT()});
+  const auto probeGeom =
+      std::make_shared<FieldAccessTypedExpr>(VARCHAR(), "g0");
+  const auto buildGeom =
+      std::make_shared<FieldAccessTypedExpr>(VARCHAR(), "g1");
 
   const auto verify = [&](const std::shared_ptr<const SpatialJoinNode>& node) {
     EXPECT_EQ(node->id(), id);
     EXPECT_EQ(node->joinType(), joinType);
     EXPECT_EQ(node->joinCondition(), joinCondition);
+    EXPECT_EQ(node->probeGeometry(), probeGeom);
+    EXPECT_EQ(node->buildGeometry(), buildGeom);
     EXPECT_EQ(node->sources()[0], left);
     EXPECT_EQ(node->sources()[1], right);
     EXPECT_EQ(node->outputType(), outputType);
@@ -911,6 +921,8 @@ TEST_F(PlanNodeBuilderTest, spatialJoinNode) {
                         .joinCondition(joinCondition)
                         .left(left)
                         .right(right)
+                        .probeGeometry(probeGeom)
+                        .buildGeometry(buildGeom)
                         .outputType(outputType)
                         .build();
   verify(node);

@@ -65,7 +65,7 @@ void verifyVeloxException(
     std::function<void()> f,
     const std::string& messagePrefix) {
   verifyException<VeloxException>(f, [&messagePrefix](const auto& e) {
-    EXPECT_TRUE(folly::StringPiece{e.what()}.startsWith(messagePrefix))
+    EXPECT_TRUE(std::string_view{e.what()}.starts_with(messagePrefix))
         << "\nException message prefix mismatch.\n\nExpected prefix: "
         << messagePrefix << "\n\nActual message: " << e.what();
   });
@@ -1015,6 +1015,6 @@ TEST(ExceptionTest, exceptionMacroInlining) {
   try {
     VELOX_USER_FAIL(errorStr, "definitely");
   } catch (const std::exception& e) {
-    ASSERT_TRUE(folly::StringPiece{e.what()}.startsWith("argument not found"));
+    ASSERT_TRUE(std::string_view{e.what()}.starts_with("argument not found"));
   }
 }

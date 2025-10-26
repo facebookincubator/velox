@@ -39,7 +39,7 @@ QUOTED_ID         (['"']([^"\n]|"")*['"'])
 NUMBER            ([[:digit:]]+)
 SIGNED_INT        (-?[[:digit:]]+)
 VARIABLE          (VARCHAR|VARBINARY)
-WORD_WITH_PERIODS ([[:alpha:]_][[:alnum:]_]*)(\.([[:alpha:]_][[:alnum:]_]*))*
+WORD_WITH_SPECIAL_CHAR ([^:({ ,]+)(\.([^:({ ,]+))(\.([^:({ ,]+))
 
 %%
 
@@ -59,7 +59,7 @@ WORD_WITH_PERIODS ([[:alpha:]_][[:alnum:]_]*)(\.([[:alpha:]_][[:alnum:]_]*))*
 {NUMBER}           yylval->build<long long>(folly::to<long long>(YYText())); return Parser::token::NUMBER;
 {SIGNED_INT}       yylval->build<long long>(folly::to<long long>(YYText())); return Parser::token::SIGNED_INT;
 {WORD}             yylval->build<std::string>(YYText()); return Parser::token::WORD;
-{WORD_WITH_PERIODS}             yylval->build<std::string>(YYText()); return Parser::token::WORD_WITH_PERIODS;
+{WORD_WITH_SPECIAL_CHAR}             yylval->build<std::string>(YYText()); return Parser::token::WORD_WITH_SPECIAL_CHAR;
 {QUOTED_ID}        yylval->build<std::string>(YYText()); return Parser::token::QUOTED_ID;
 <<EOF>>            return Parser::token::YYEOF;
 .               /* no action on unmatched input */

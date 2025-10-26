@@ -84,6 +84,11 @@ maintainers of that component.
 ### Storage Adapters (S3/HDFS/GCS/ABFS)
 
 * Deepak Majeti - [majetideepak](https://github.com/majetideepak) / deepak.majeti@ibm.com
+* Ke Jia - [JkSelf](https://github.com/jkself) / ke.a.jia@intel.com
+
+### LibcuDF Bindings
+
+* Karthikeyan Natarajan - [karthikeyann](https://github.com/karthikeyann) / knataraj@nvidia.com
 
 ### Builds and CI
 

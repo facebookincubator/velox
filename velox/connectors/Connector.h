@@ -27,6 +27,7 @@
 #include "velox/common/file/TokenProvider.h"
 #include "velox/common/future/VeloxPromise.h"
 #include "velox/core/ExpressionEvaluator.h"
+#include "velox/core/QueryConfig.h"
 #include "velox/type/Filter.h"
 #include "velox/vector/ComplexVector.h"
 
@@ -80,7 +81,11 @@ struct ConnectorSplit : public ISerializable {
     return 0;
   }
 
-  virtual ~ConnectorSplit() {}
+  virtual ~ConnectorSplit() {
+    if (dataSource) {
+      dataSource->close();
+    }
+  }
 
   virtual std::string toString() const {
     return fmt::format(
@@ -266,7 +271,9 @@ class DataSource {
   /// Returns the number of input rows processed so far.
   virtual uint64_t getCompletedRows() = 0;
 
-  virtual std::unordered_map<std::string, RuntimeCounter> runtimeStats() = 0;
+  virtual std::unordered_map<std::string, RuntimeMetric> getRuntimeStats() {
+    return {};
+  }
 
   /// Returns true if 'this' has initiated all the prefetch this will initiate.
   /// This means that the caller should schedule next splits to prefetch in the
@@ -509,11 +516,11 @@ class ConnectorQueryCtx {
     selectiveNimbleReaderEnabled_ = value;
   }
 
-  bool rowSizeTrackingEnabled() const {
+  core::QueryConfig::RowSizeTrackingMode rowSizeTrackingMode() const {
     return rowSizeTrackingEnabled_;
   }
 
-  void setRowSizeTrackingEnabled(bool value) {
+  void setRowSizeTrackingMode(core::QueryConfig::RowSizeTrackingMode value) {
     rowSizeTrackingEnabled_ = value;
   }
 
@@ -539,7 +546,30 @@ class ConnectorQueryCtx {
   const folly::CancellationToken cancellationToken_;
   const std::shared_ptr<filesystems::TokenProvider> fsTokenProvider_;
   bool selectiveNimbleReaderEnabled_{false};
-  bool rowSizeTrackingEnabled_{true};
+  core::QueryConfig::RowSizeTrackingMode rowSizeTrackingEnabled_{
+      core::QueryConfig::RowSizeTrackingMode::ENABLED_FOR_ALL};
+};
+
+class Connector;
+
+class ConnectorFactory {
+ public:
+  explicit ConnectorFactory(const char* name) : name_(name) {}
+
+  virtual ~ConnectorFactory() = default;
+
+  const std::string& connectorName() const {
+    return name_;
+  }
+
+  virtual std::shared_ptr<Connector> newConnector(
+      const std::string& id,
+      std::shared_ptr<const config::ConfigBase> config,
+      folly::Executor* ioExecutor = nullptr,
+      folly::Executor* cpuExecutor = nullptr) = 0;
+
+ private:
+  const std::string name_;
 };
 
 class Connector {
@@ -575,15 +605,9 @@ class Connector {
   /// ConnectorSplit in addSplit(). If so, TableScan can preload splits
   /// so that file opening and metadata operations are off the Driver'
   /// thread.
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  virtual bool supportsSplitPreload() {
-    return false;
-  }
-#else
   virtual bool supportsSplitPreload() const {
     return false;
   }
-#endif
 
   /// Returns true if the connector supports index lookup, otherwise false.
   virtual bool supportsIndexLookup() const {
@@ -680,46 +704,6 @@ class Connector {
       std::unordered_map<std::string_view, std::weak_ptr<cache::ScanTracker>>>
       trackers_;
 };
-
-class ConnectorFactory {
- public:
-  explicit ConnectorFactory(const char* name) : name_(name) {}
-
-  virtual ~ConnectorFactory() = default;
-
-  const std::string& connectorName() const {
-    return name_;
-  }
-
-  virtual std::shared_ptr<Connector> newConnector(
-      const std::string& id,
-      std::shared_ptr<const config::ConfigBase> config,
-      folly::Executor* ioExecutor = nullptr,
-      folly::Executor* cpuExecutor = nullptr) = 0;
-
- private:
-  const std::string name_;
-};
-
-/// Adds a factory for creating connectors to the registry using connector
-/// name as the key. Throws if factor with the same name is already present.
-/// Always returns true. The return value makes it easy to use with
-/// FB_ANONYMOUS_VARIABLE.
-bool registerConnectorFactory(std::shared_ptr<ConnectorFactory> factory);
-
-/// Returns true if a connector with the specified name has been registered,
-/// false otherwise.
-bool hasConnectorFactory(const std::string& connectorName);
-
-/// Unregister a connector factory by name.
-/// Returns true if a connector with the specified name has been
-/// unregistered, false otherwise.
-bool unregisterConnectorFactory(const std::string& connectorName);
-
-/// Returns a factory for creating connectors with the specified name.
-/// Throws if factory doesn't exist.
-std::shared_ptr<ConnectorFactory> getConnectorFactory(
-    const std::string& connectorName);
 
 /// Adds connector instance to the registry using connector ID as the key.
 /// Throws if connector with the same ID is already present. Always returns

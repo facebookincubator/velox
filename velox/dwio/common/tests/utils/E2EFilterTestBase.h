@@ -64,7 +64,7 @@ class TestingHook : public ValueHook {
     }
   }
 
-  void addValue(vector_size_t row, folly::StringPiece value) override {
+  void addValue(vector_size_t row, std::string_view value) override {
     if constexpr (std::is_same_v<T, StringView>) {
       result_->set(row, StringView(value));
     } else {
@@ -335,6 +335,14 @@ class E2EFilterTestBase : public testing::Test {
       core::ExpressionEvaluator*,
       const std::string& remainingFilter,
       std::function<bool(int64_t a, int64_t c)> validationFilter);
+
+  void testMetadataFilterImpl(
+      const std::vector<RowVectorPtr>& batches,
+      common::Subfield filterField,
+      std::unique_ptr<common::Filter> filter,
+      core::ExpressionEvaluator* evaluator,
+      core::TypedExprPtr typedExpr,
+      std::function<bool(int64_t, int64_t)> validationFilter);
 
  protected:
   void testMetadataFilter();

@@ -85,6 +85,55 @@ TEST_F(PlanNodeTest, findFirstNode) {
       }));
 }
 
+TEST_F(PlanNodeTest, findNodeById) {
+  auto values = std::make_shared<ValuesNode>("1", std::vector<RowVectorPtr>{});
+  auto project = std::make_shared<ProjectNode>(
+      "2",
+      std::vector<std::string>{"a", "b"},
+      std::vector<TypedExprPtr>{
+          std::make_shared<CallTypedExpr>(DOUBLE(), "rand"),
+          std::make_shared<CallTypedExpr>(DOUBLE(), "rand"),
+      },
+      values);
+
+  auto filter = std::make_shared<FilterNode>(
+      "3",
+      std::make_shared<CallTypedExpr>(
+          BOOLEAN(),
+          "gt",
+          std::make_shared<FieldAccessTypedExpr>(DOUBLE(), "a"),
+          std::make_shared<ConstantTypedExpr>(DOUBLE(), 0.5)),
+      project);
+
+  auto limit = std::make_shared<LimitNode>("4", 0, 10, false, filter);
+
+  ASSERT_EQ(PlanNode::findNodeById(limit.get(), "1"), values.get());
+  ASSERT_EQ(PlanNode::findNodeById(limit.get(), "2"), project.get());
+  ASSERT_EQ(PlanNode::findNodeById(limit.get(), "3"), filter.get());
+  ASSERT_EQ(PlanNode::findNodeById(limit.get(), "4"), limit.get());
+
+  ASSERT_EQ(PlanNode::findNodeById(limit.get(), "5"), nullptr);
+  ASSERT_EQ(PlanNode::findNodeById(project.get(), "4"), nullptr);
+}
+
+TEST_F(PlanNodeTest, is) {
+  auto values = std::make_shared<ValuesNode>("1", std::vector<RowVectorPtr>{});
+  auto project = std::make_shared<ProjectNode>(
+      "2",
+      std::vector<std::string>{"a", "b"},
+      std::vector<TypedExprPtr>{
+          std::make_shared<CallTypedExpr>(DOUBLE(), "rand"),
+          std::make_shared<CallTypedExpr>(DOUBLE(), "rand"),
+      },
+      values);
+
+  ASSERT_TRUE(values->is<ValuesNode>());
+  ASSERT_FALSE(values->is<ProjectNode>());
+
+  ASSERT_FALSE(project->is<ValuesNode>());
+  ASSERT_TRUE(project->is<ProjectNode>());
+}
+
 TEST_F(PlanNodeTest, sortOrder) {
   struct {
     SortOrder order1;
@@ -132,6 +181,7 @@ TEST_F(PlanNodeTest, duplicateSortKeys) {
           "orderBy", sortingKeys, sortingOrders, false, nullptr),
       "Duplicate sorting keys are not allowed: c0");
 }
+
 class TestIndexTableHandle : public connector::ConnectorTableHandle {
  public:
   TestIndexTableHandle()

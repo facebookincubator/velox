@@ -232,7 +232,7 @@ std::unique_ptr<exec::Aggregate> createMapAggregate(const TypePtr& resultType) {
     case TypeKind::UNKNOWN:
       return std::make_unique<TAggregate<int32_t>>(resultType);
     default:
-      VELOX_UNREACHABLE("Unexpected type {}", mapTypeKindToName(typeKind));
+      VELOX_UNREACHABLE("Unexpected type {}", TypeKindName::toName(typeKind));
   }
 }
 

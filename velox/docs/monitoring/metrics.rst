@@ -292,9 +292,12 @@ Cache
      - Avg
      - Max possible age of AsyncDataCache and SsdCache entries since the raw file
        was opened to load the cache.
-   * - memory_cache_num_entries
+   * - memory_cache_num_large_entries
      - Avg
-     - Total number of cache entries.
+     - Total number of large cache entries.
+   * - memory_cache_num_tiny_entries
+     - Avg
+     - Total number of tiny cache entries.
    * - memory_cache_num_empty_entries
      - Avg
      - Total number of cache entries that do not cache anything.
@@ -619,6 +622,9 @@ Index Join
      - The distribution of index lookup result bytes in range of [0, 128MB] with
        128 buckets. It is configured to report the capacity at P50, P90, P99, and
        P100 percentiles.
+   * - index_lookup_error_result_count
+     - Count
+     - The number of results with error.
 
 Table Scan
 ----------

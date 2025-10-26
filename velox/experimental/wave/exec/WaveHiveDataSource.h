@@ -59,7 +59,7 @@ class WaveHiveDataSource : public WaveDataSource {
 
   uint64_t getCompletedRows() override;
 
-  std::unordered_map<std::string, RuntimeCounter> runtimeStats() override;
+  std::unordered_map<std::string, RuntimeMetric> getRuntimeStats() override;
 
   static void registerConnector();
 

@@ -410,7 +410,7 @@ void SelectiveColumnReader::compactScalarValues<bool, bool>(
   values_->setSize(bits::nbytes(numValues_));
 }
 
-char* SelectiveColumnReader::copyStringValue(folly::StringPiece value) {
+char* SelectiveColumnReader::copyStringValue(std::string_view value) {
   uint64_t size = value.size();
   if (stringBuffers_.empty() || rawStringUsed_ + size > rawStringSize_) {
     auto bytes = std::max(size, kStringBufferSize);
@@ -431,7 +431,7 @@ char* SelectiveColumnReader::copyStringValue(folly::StringPiece value) {
   return rawStringBuffer_ + start;
 }
 
-void SelectiveColumnReader::addStringValue(folly::StringPiece value) {
+void SelectiveColumnReader::addStringValue(std::string_view value) {
   auto copy = copyStringValue(value);
   reinterpret_cast<StringView*>(rawValues_)[numValues_++] =
       StringView(copy, value.size());
