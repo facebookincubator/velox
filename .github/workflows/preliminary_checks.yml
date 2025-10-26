@@ -38,7 +38,70 @@ jobs:
       - uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
       - uses: pre-commit/action@2c7b3805fd2a0fd8c1884dcaebf91fc102a13ecd # v3.0.1
 
+  get-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      run-clang-tidy: ${{ steps.changes.outputs.run_clang_tidy }}
+      changed-lines: ${{ steps.changes.outputs.all_lines }}
+      cpp-lines: ${{ steps.changes.outputs.cpp_lines}}
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Get changed files and lines
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        id: changes
+        run: |
+          git diff --name-only "$BASE_SHA" "$HEAD_SHA" >> changed_files.txt
+
+          git diff --unified=0 --no-color "$BASE_SHA" "$HEAD_SHA" \
+            | awk '
+              BEGIN { file="" }
+              /^diff --git a\// {
+                # parse file name
+                match($0, /^diff --git a\/([^ ]+)/, m)
+                file = m[1]
+              }
+               /^@@/ {
+                # Extract line info from hunk header: @@ -a,b +c,d @@
+                match($0, /\+([0-9]+)(,([0-9]+))?/, m)
+                start = m[1]
+                len = (m[3] ? m[3] : 1)
+                printf "%s:+%s-%s\n", file, start, start+len-1
+              }
+            ' > changed_lines.txt || true
+
+            cpp_lines='.+\.(c|cc|cp|cpp|cxx|h|hh|hpp|hxx|inl|ipp|tpp):.+$'
+
+            {
+              echo 'files<<EOF'
+              cat changed_files.txt
+              echo 'EOF'
+            } >> "$GITHUB_OUTPUT"
+
+            {
+              echo 'all_lines<<EOF'
+              cat changed_lines.txt
+              echo 'EOF'
+            } >> "$GITHUB_OUTPUT"
+
+            {
+              echo 'cpp_lines<<EOF'
+              grep -E $cpp_lines changed_lines.txt
+              echo 'EOF'
+            } >> "$GITHUB_OUTPUT"
+
+            if grep -qE $cpp_lines changed_lines.txt; then
+              echo "run_clang_tidy=true" >> "$GITHUB_OUTPUT"
+            fi
+
   clang-tidy:
+    needs: get-changes
+    if: ${{ needs.get-changes.outputs.run-clang-tidy == 'true' }}
     runs-on: ubuntu-latest
     container: ghcr.io/facebookincubator/velox-dev:adapters
     steps:
@@ -47,17 +110,15 @@ jobs:
           persist-credentials: false
 
       - run: uv tool install clang-tidy==18.1.8
-      - name: Install Dependencies
-        run: |
-          source scripts/setup-centos9.sh && install_faiss_deps
 
       - name: Configure Maximal Build
         env:
-          CUDA_VERSION: '12.8'
+          CUDA_VERSION: "12.8"
           CUDA_ARCHITECTURES: 70
           CUDA_COMPILER: /usr/local/cuda-${CUDA_VERSION}/bin/nvcc
           # Set compiler to GCC 12
           CUDA_FLAGS: -ccbin /opt/rh/gcc-toolset-12/root/usr/bin
+          faiss_SOURCE: BUNDLED
           EXTRA_CMAKE_FLAGS: >-
             -DVELOX_ENABLE_BENCHMARKS=ON
             -DVELOX_ENABLE_EXAMPLES=ON
@@ -78,7 +139,12 @@ jobs:
           make cmake BUILD_DIR=release BUILD_TYPE=Release
 
       - name: Run clang-tidy
-        run: clang-tidy -p=_build/release/ --format-style=file -header-filter='.*' velox/exec/Task.h
+        run: |
+          clang-tidy -p=_build/release/ \
+            --format-style=file \
+            -header-filter='.*' \
+            -extra-arg=-Wno-unknown-warning-option \
+            velox/exec/Task.h
 
   title-check:
     name: PR Title Format
@@ -86,7 +152,7 @@ jobs:
     steps:
       - shell: python
         env:
-          title: '${{ github.event.pull_request.title }}'
+          title: "${{ github.event.pull_request.title }}"
         run: |
           import re
           import os
