@@ -297,8 +297,9 @@ class FlatMapColumnWriter : public BaseColumnWriter {
 
   void reset() override;
 
-  uint64_t writeFileStats(std::function<proto::ColumnStatistics&(uint32_t)>
-                              statsFactory) const override;
+  uint64_t writeFileStats(
+      std::function<proto::ColumnStatistics&(uint32_t)> statsFactory)
+      const override;
 
  private:
   using KeyType = typename TypeTraits<K>::NativeType;

@@ -36,9 +36,15 @@ TEST_F(DataBufferHolderTest, InputCheck) {
   VELOX_ASSERT_THROW((DataBufferHolder{*pool_, 1024, 2048}), "");
   VELOX_ASSERT_THROW((DataBufferHolder{*pool_, 1024, 1024, 1.1f}), "");
 
-  { DataBufferHolder holder{*pool_, 1024}; }
-  { DataBufferHolder holder{*pool_, 1024, 512}; }
-  { DataBufferHolder holder{*pool_, 1024, 512, 3.0f}; }
+  {
+    DataBufferHolder holder{*pool_, 1024};
+  }
+  {
+    DataBufferHolder holder{*pool_, 1024, 512};
+  }
+  {
+    DataBufferHolder holder{*pool_, 1024, 512, 3.0f};
+  }
 }
 
 TEST_F(DataBufferHolderTest, TakeAndGetBuffer) {

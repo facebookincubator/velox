@@ -221,14 +221,18 @@ TEST_F(MemoryManagerTest, addPool) {
   auto rootPool = manager.addRootPool("duplicateRootPool", kMaxMemory);
   ASSERT_EQ(rootPool->capacity(), kMaxMemory);
   ASSERT_EQ(rootPool->maxCapacity(), kMaxMemory);
-  { ASSERT_ANY_THROW(manager.addRootPool("duplicateRootPool", kMaxMemory)); }
+  {
+    ASSERT_ANY_THROW(manager.addRootPool("duplicateRootPool", kMaxMemory));
+  }
   auto threadSafeLeafPool = manager.addLeafPool("leafPool", true);
   ASSERT_EQ(threadSafeLeafPool->capacity(), kMaxMemory);
   ASSERT_EQ(threadSafeLeafPool->maxCapacity(), kMaxMemory);
   auto nonThreadSafeLeafPool = manager.addLeafPool("duplicateLeafPool", true);
   ASSERT_EQ(nonThreadSafeLeafPool->capacity(), kMaxMemory);
   ASSERT_EQ(nonThreadSafeLeafPool->maxCapacity(), kMaxMemory);
-  { ASSERT_ANY_THROW(manager.addLeafPool("duplicateLeafPool")); }
+  {
+    ASSERT_ANY_THROW(manager.addLeafPool("duplicateLeafPool"));
+  }
   const int64_t poolCapacity = 1 << 20;
   auto rootPoolWithMaxCapacity =
       manager.addRootPool("rootPoolWithCapacity", poolCapacity);
@@ -273,7 +277,9 @@ TEST_F(MemoryManagerTest, addPoolWithArbitrator) {
   auto nonThreadSafeLeafPool = manager.addLeafPool("duplicateLeafPool", true);
   ASSERT_EQ(nonThreadSafeLeafPool->capacity(), kMaxMemory);
   ASSERT_EQ(nonThreadSafeLeafPool->maxCapacity(), kMaxMemory);
-  { ASSERT_ANY_THROW(manager.addLeafPool("duplicateLeafPool")); }
+  {
+    ASSERT_ANY_THROW(manager.addLeafPool("duplicateLeafPool"));
+  }
   const int64_t poolCapacity = 1 << 30;
   auto rootPoolWithMaxCapacity = manager.addRootPool(
       "rootPoolWithCapacity", poolCapacity, MemoryReclaimer::create());
@@ -346,8 +352,9 @@ TEST_F(MemoryManagerTest, defaultMemoryManager) {
   for (int i = 0; i < 32; ++i) {
     ASSERT_THAT(
         managerA.toString(true),
-        testing::HasSubstr(fmt::format(
-            "__sys_shared_leaf__{} usage 0B reserved 0B peak 0B\n", i)));
+        testing::HasSubstr(
+            fmt::format(
+                "__sys_shared_leaf__{} usage 0B reserved 0B peak 0B\n", i)));
   }
 }
 

@@ -199,11 +199,12 @@ ValueWriter& FlatMapColumnWriter<K>::getValueWriter(
   }
 
   if (valueWriters_.size() >= maxKeyCount_) {
-    DWIO_RAISE(fmt::format(
-        "Too many map keys requested in (node {}, column {}). Allowed: {}",
-        id_,
-        type_.column(),
-        maxKeyCount_));
+    DWIO_RAISE(
+        fmt::format(
+            "Too many map keys requested in (node {}, column {}). Allowed: {}",
+            id_,
+            type_.column(),
+            maxKeyCount_));
   }
 
   auto keyInfo = getKeyInfo(key);

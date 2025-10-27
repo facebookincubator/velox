@@ -160,38 +160,37 @@ MultiLevelTestData TriplyNestedList() {
   // [[[]], [[], [1, 2]], null, [[3]]],
   // null,
   // []
-  return MultiLevelTestData{
-      /*defLevels=*/std::vector<int16_t>{
-          2,
-          7,
-          6,
-          7,
-          5,
-          3, // first row
-          5,
-          5,
-          7,
-          7,
-          2,
-          7, // second row
-          0, // third row
-          1},
-      /*repLevels=*/
-      std::vector<int16_t>{
-          0,
-          1,
-          3,
-          3,
-          2,
-          1, // first row
-          0,
-          1,
-          2,
-          3,
-          1,
-          1, // second row
-          0,
-          0}};
+  return MultiLevelTestData{/*defLevels=*/std::vector<int16_t>{
+                                2,
+                                7,
+                                6,
+                                7,
+                                5,
+                                3, // first row
+                                5,
+                                5,
+                                7,
+                                7,
+                                2,
+                                7, // second row
+                                0, // third row
+                                1},
+                            /*repLevels=*/
+                            std::vector<int16_t>{
+                                0,
+                                1,
+                                3,
+                                3,
+                                2,
+                                1, // first row
+                                0,
+                                1,
+                                2,
+                                3,
+                                1,
+                                1, // second row
+                                0,
+                                0}};
 }
 
 template <typename ConverterType>

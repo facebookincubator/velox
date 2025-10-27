@@ -154,12 +154,13 @@ class DateTimeFunctionsTest : public functions::test::FunctionBaseTest {
   }
 
   int32_t getCurrentDate(const std::optional<std::string>& timeZone) {
-    return parseDate(date::format(
-        "%Y-%m-%d",
-        timeZone.has_value()
-            ? tzdb::zoned_time(
-                  timeZone.value(), std::chrono::system_clock::now())
-            : tzdb::zoned_time(std::chrono::system_clock::now())));
+    return parseDate(
+        date::format(
+            "%Y-%m-%d",
+            timeZone.has_value()
+                ? tzdb::zoned_time(
+                      timeZone.value(), std::chrono::system_clock::now())
+                : tzdb::zoned_time(std::chrono::system_clock::now())));
   }
 };
 
@@ -276,8 +277,9 @@ TEST_F(DateTimeFunctionsTest, fromUnixtimeRountTrip) {
 TEST_F(DateTimeFunctionsTest, fromUnixtimeWithTimeZone) {
   const auto fromUnixtime = [&](std::optional<double> timestamp,
                                 std::optional<std::string> timezoneName) {
-    return TimestampWithTimezone::unpack(evaluateOnce<int64_t>(
-        "from_unixtime(c0, c1)", timestamp, timezoneName));
+    return TimestampWithTimezone::unpack(
+        evaluateOnce<int64_t>(
+            "from_unixtime(c0, c1)", timestamp, timezoneName));
   };
 
   // Check null behavior.

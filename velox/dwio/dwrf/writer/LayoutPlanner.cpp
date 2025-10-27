@@ -22,8 +22,9 @@ StreamList getStreamList(WriterContext& context) {
   StreamList streams;
   streams.reserve(context.getStreamCount());
   context.iterateUnSuppressedStreams([&](auto& pair) {
-    streams.push_back(std::make_pair(
-        std::addressof(pair.first), std::addressof(pair.second)));
+    streams.push_back(
+        std::make_pair(
+            std::addressof(pair.first), std::addressof(pair.second)));
   });
   return streams;
 }

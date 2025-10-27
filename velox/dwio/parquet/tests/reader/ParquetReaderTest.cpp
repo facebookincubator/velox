@@ -595,8 +595,9 @@ TEST_F(ParquetReaderTest, parseUnsignedInt1) {
           {TINYINT(), SMALLINT(), INTEGER(), BIGINT()});
 
   RowReaderOptions rowReaderOpts;
-  rowReaderOpts.select(std::make_shared<dwio::common::ColumnSelector>(
-      rowType, rowType->names()));
+  rowReaderOpts.select(
+      std::make_shared<dwio::common::ColumnSelector>(
+          rowType, rowType->names()));
   rowReaderOpts.setScanSpec(makeScanSpec(rowType));
   auto rowReader = reader->createRowReader(rowReaderOpts);
 

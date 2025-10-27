@@ -180,8 +180,9 @@ class ReadBenchmark {
             } else {
               std::vector<folly::Range<char*>> ranges;
               for (auto start = 0; start < rangeSize; start += size + gap) {
-                ranges.push_back(folly::Range<char*>(
-                    globalScratch.buffer.data() + start, size));
+                ranges.push_back(
+                    folly::Range<char*>(
+                        globalScratch.buffer.data() + start, size));
                 if (gap && start + gap < rangeSize) {
                   ranges.push_back(folly::Range<char*>(nullptr, gap));
                 }

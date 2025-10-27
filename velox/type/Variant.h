@@ -366,9 +366,9 @@ class Variant {
   }
 
   template <typename T>
-  static Variant create(const typename detail::VariantTypeTraits<
-                        CppToType<T>::typeKind,
-                        false>::value_type& v) {
+  static Variant create(
+      const typename detail::VariantTypeTraits<CppToType<T>::typeKind, false>::
+          value_type& v) {
     return create<CppToType<T>::typeKind>(v);
   }
 

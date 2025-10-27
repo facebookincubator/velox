@@ -72,8 +72,9 @@ class GcsFileSystem::Impl {
  public:
   Impl(const std::string& bucket, const config::ConfigBase* config)
       : bucket_(bucket),
-        hiveConfig_(std::make_shared<HiveConfig>(
-            std::make_shared<config::ConfigBase>(config->rawConfigsCopy()))) {}
+        hiveConfig_(
+            std::make_shared<HiveConfig>(std::make_shared<config::ConfigBase>(
+                config->rawConfigsCopy()))) {}
 
   ~Impl() = default;
 

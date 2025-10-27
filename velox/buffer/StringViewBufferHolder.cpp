@@ -26,8 +26,9 @@ StringView StringViewBufferHolder::getOwnedStringView(
   if (stringBuffers_.empty() ||
       stringBuffers_.back()->size() + size >
           stringBuffers_.back()->capacity()) {
-    stringBuffers_.push_back(AlignedBuffer::allocate<char>(
-        std::max(size, kInitialStringReservation), pool_));
+    stringBuffers_.push_back(
+        AlignedBuffer::allocate<char>(
+            std::max(size, kInitialStringReservation), pool_));
     stringBuffers_.back()->setSize(0);
   }
   auto stringBuffer = stringBuffers_.back().get();

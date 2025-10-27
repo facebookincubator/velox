@@ -119,8 +119,9 @@ class BaseColumnWriter : public ColumnWriter {
     indexBuilder_->flush();
   }
 
-  uint64_t writeFileStats(std::function<proto::ColumnStatistics&(uint32_t)>
-                              statsFactory) const override {
+  uint64_t writeFileStats(
+      std::function<proto::ColumnStatistics&(uint32_t)> statsFactory)
+      const override {
     auto& stats = statsFactory(id_);
     fileStatsBuilder_->toProto(stats);
     const uint64_t size = context_.getPhysicalSizeAggregator(id_).getResult();

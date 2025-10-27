@@ -195,9 +195,10 @@ TYPED_TEST(ArrayMaxFloatingPointTest, basic) {
   EXPECT_FLOAT_EQ(
       this->template arrayMax<T>({-0.00001, -0.0002, 0.0001}).value(), 0.0001);
 
-  EXPECT_TRUE(std::isnan(
-      this->template arrayMax<T>({kMin, -0.0001, -0.0002, -0.0003, kMax, kNaN})
-          .value()));
+  EXPECT_TRUE(
+      std::isnan(this->template arrayMax<T>(
+                         {kMin, -0.0001, -0.0002, -0.0003, kMax, kNaN})
+                     .value()));
 }
 
 } // namespace

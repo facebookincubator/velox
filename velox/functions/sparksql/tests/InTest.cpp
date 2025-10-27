@@ -83,8 +83,9 @@ class InTest : public SparkFunctionBaseTest {
         rhsArrayVector = wrapInDictionary(indices, rhs.size(), rhsArrayVector);
       }
 
-      args.push_back(std::make_shared<core::ConstantTypedExpr>(
-          BaseVector::wrapInConstant(1, 0, rhsArrayVector)));
+      args.push_back(
+          std::make_shared<core::ConstantTypedExpr>(
+              BaseVector::wrapInConstant(1, 0, rhsArrayVector)));
       return exec::ExprSet(
           {std::make_shared<core::CallTypedExpr>(BOOLEAN(), args, "in")},
           &execCtx_);

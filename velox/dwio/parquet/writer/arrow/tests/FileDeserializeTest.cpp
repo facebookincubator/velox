@@ -57,8 +57,9 @@ AddDummyStats(int stat_size, H& header, bool fill_all_stats = false) {
       std::string(reinterpret_cast<const char*>(stat_bytes.data()), stat_size));
 
   if (fill_all_stats) {
-    header.statistics.__set_min(std::string(
-        reinterpret_cast<const char*>(stat_bytes.data()), stat_size));
+    header.statistics.__set_min(
+        std::string(
+            reinterpret_cast<const char*>(stat_bytes.data()), stat_size));
     header.statistics.__set_null_count(42);
     header.statistics.__set_distinct_count(1);
   }

@@ -1440,9 +1440,10 @@ TEST_P(MultiThreadedHashJoinTest, antiJoin) {
         .joinType(core::JoinType::kAnti)
         .joinFilter(filter)
         .joinOutputLayout({"t0", "t1"})
-        .referenceQuery(fmt::format(
-            "SELECT t.* FROM t WHERE NOT EXISTS (SELECT * FROM u WHERE u.u0 = t.t0 AND {})",
-            filter))
+        .referenceQuery(
+            fmt::format(
+                "SELECT t.* FROM t WHERE NOT EXISTS (SELECT * FROM u WHERE u.u0 = t.t0 AND {})",
+                filter))
         .run();
   }
 }
@@ -2965,8 +2966,10 @@ TEST_F(HashJoinTest, semiProjectWithFilter) {
 
     HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .planNode(plan)
-        .referenceQuery(fmt::format(
-            "SELECT t0, t1, t0 IN (SELECT u0 FROM u WHERE {}) FROM t", filter))
+        .referenceQuery(
+            fmt::format(
+                "SELECT t0, t1, t0 IN (SELECT u0 FROM u WHERE {}) FROM t",
+                filter))
         .injectSpill(false)
         .run();
 
@@ -2976,9 +2979,10 @@ TEST_F(HashJoinTest, semiProjectWithFilter) {
     // these values.
     HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .planNode(plan)
-        .referenceQuery(fmt::format(
-            "SELECT t0, t1, EXISTS (SELECT * FROM u WHERE (u0 is not null OR t0 is not null) AND u0 = t0 AND {}) FROM t",
-            filter))
+        .referenceQuery(
+            fmt::format(
+                "SELECT t0, t1, EXISTS (SELECT * FROM u WHERE (u0 is not null OR t0 is not null) AND u0 = t0 AND {}) FROM t",
+                filter))
         .injectSpill(false)
         .run();
   }
@@ -3322,8 +3326,9 @@ TEST_F(HashJoinTest, lazyVectors) {
       }
       std::vector<exec::Split> buildSplits;
       for (int i = 0; i < buildVectors.size(); ++i) {
-        buildSplits.push_back(exec::Split(makeHiveConnectorSplit(
-            tempFiles[probeSplits.size() + i]->getPath())));
+        buildSplits.push_back(
+            exec::Split(makeHiveConnectorSplit(
+                tempFiles[probeSplits.size() + i]->getPath())));
       }
       SplitInput splits;
       splits.emplace(probeScanId, probeSplits);
@@ -6082,9 +6087,10 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
         .numDrivers(1)
         .config(
             core::QueryConfig::kPreferredOutputBatchRows, std::to_string(10))
-        .referenceQuery(fmt::format(
-            "SELECT t_k1, u_k1 from t left join u on t_k1 = u_k1 and {}",
-            filter))
+        .referenceQuery(
+            fmt::format(
+                "SELECT t_k1, u_k1 from t left join u on t_k1 = u_k1 and {}",
+                filter))
         .run();
   };
 
@@ -6133,9 +6139,10 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatchMultipleBuildMatches) {
         .numDrivers(1)
         .config(
             core::QueryConfig::kPreferredOutputBatchRows, std::to_string(10))
-        .referenceQuery(fmt::format(
-            "SELECT t_k1, u_k1 from t left join u on t_k1 = u_k1 and {}",
-            filter))
+        .referenceQuery(
+            fmt::format(
+                "SELECT t_k1, u_k1 from t left join u on t_k1 = u_k1 and {}",
+                filter))
         .run();
   };
 
@@ -6220,8 +6227,9 @@ DEBUG_ONLY_TEST_F(HashJoinTest, minSpillableMemoryReservation) {
                   .planNode();
 
   for (int32_t minSpillableReservationPct : {5, 50, 100}) {
-    SCOPED_TRACE(fmt::format(
-        "minSpillableReservationPct: {}", minSpillableReservationPct));
+    SCOPED_TRACE(
+        fmt::format(
+            "minSpillableReservationPct: {}", minSpillableReservationPct));
 
     SCOPED_TESTVALUE_SET(
         "facebook::velox::exec::HashBuild::addInput",

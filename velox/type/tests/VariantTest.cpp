@@ -182,7 +182,9 @@ TEST(VariantTest, opaque) {
     EXPECT_EQ(2, foo.use_count());
     Variant vv = v;
     EXPECT_EQ(3, foo.use_count());
-    { Variant tmp = std::move(vv); }
+    {
+      Variant tmp = std::move(vv);
+    }
     EXPECT_EQ(2, foo.use_count());
     v = 0;
     EXPECT_EQ(1, foo.use_count());

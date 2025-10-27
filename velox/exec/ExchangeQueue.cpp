@@ -33,10 +33,11 @@ SerializedPage::SerializedPage(
   VELOX_CHECK_NOT_NULL(iobuf_);
   for (auto& buf : *iobuf_) {
     int32_t bufSize = buf.size();
-    ranges_.push_back(ByteRange{
-        const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(buf.data())),
-        bufSize,
-        0});
+    ranges_.push_back(
+        ByteRange{
+            const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(buf.data())),
+            bufSize,
+            0});
   }
 }
 

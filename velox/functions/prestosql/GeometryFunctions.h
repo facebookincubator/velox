@@ -134,8 +134,9 @@ struct StPointFunction {
       const arg_type<double>& x,
       const arg_type<double>& y) {
     if (!std::isfinite(x) || !std::isfinite(y)) {
-      return Status::UserError(fmt::format(
-          "ST_Point requires finite coordinates, got x={} y={}", x, y));
+      return Status::UserError(
+          fmt::format(
+              "ST_Point requires finite coordinates, got x={} y={}", x, y));
     }
     GEOS_TRY(
         {
@@ -190,8 +191,9 @@ struct StRelateFunction {
         geospatial::GeometryDeserializer::deserialize(leftGeometry);
     std::unique_ptr<geos::geom::Geometry> rightGeosGeometry =
         geospatial::GeometryDeserializer::deserialize(rightGeometry);
-    GEOS_TRY(result = leftGeosGeometry->relate(*rightGeosGeometry, relation);
-             , "Failed to check geometry relation");
+    GEOS_TRY(
+        result = leftGeosGeometry->relate(*rightGeosGeometry, relation);
+        , "Failed to check geometry relation");
 
     return Status::OK();
   }
@@ -210,8 +212,9 @@ struct StContainsFunction {
         geospatial::GeometryDeserializer::deserialize(leftGeometry);
     std::unique_ptr<geos::geom::Geometry> rightGeosGeometry =
         geospatial::GeometryDeserializer::deserialize(rightGeometry);
-    GEOS_TRY(result = leftGeosGeometry->contains(&*rightGeosGeometry);
-             , "Failed to check geometry contains");
+    GEOS_TRY(
+        result = leftGeosGeometry->contains(&*rightGeosGeometry);
+        , "Failed to check geometry contains");
 
     return Status::OK();
   }
@@ -230,8 +233,9 @@ struct StCrossesFunction {
         geospatial::GeometryDeserializer::deserialize(leftGeometry);
     std::unique_ptr<geos::geom::Geometry> rightGeosGeometry =
         geospatial::GeometryDeserializer::deserialize(rightGeometry);
-    GEOS_TRY(result = leftGeosGeometry->crosses(&*rightGeosGeometry);
-             , "Failed to check geometry crosses");
+    GEOS_TRY(
+        result = leftGeosGeometry->crosses(&*rightGeosGeometry);
+        , "Failed to check geometry crosses");
 
     return Status::OK();
   }
@@ -250,8 +254,9 @@ struct StDisjointFunction {
         geospatial::GeometryDeserializer::deserialize(leftGeometry);
     std::unique_ptr<geos::geom::Geometry> rightGeosGeometry =
         geospatial::GeometryDeserializer::deserialize(rightGeometry);
-    GEOS_TRY(result = leftGeosGeometry->disjoint(&*rightGeosGeometry);
-             , "Failed to check geometry disjoint");
+    GEOS_TRY(
+        result = leftGeosGeometry->disjoint(&*rightGeosGeometry);
+        , "Failed to check geometry disjoint");
 
     return Status::OK();
   }
@@ -270,8 +275,9 @@ struct StEqualsFunction {
         geospatial::GeometryDeserializer::deserialize(leftGeometry);
     std::unique_ptr<geos::geom::Geometry> rightGeosGeometry =
         geospatial::GeometryDeserializer::deserialize(rightGeometry);
-    GEOS_TRY(result = leftGeosGeometry->equals(&*rightGeosGeometry);
-             , "Failed to check geometry equals");
+    GEOS_TRY(
+        result = leftGeosGeometry->equals(&*rightGeosGeometry);
+        , "Failed to check geometry equals");
 
     return Status::OK();
   }
@@ -290,8 +296,9 @@ struct StIntersectsFunction {
         geospatial::GeometryDeserializer::deserialize(leftGeometry);
     std::unique_ptr<geos::geom::Geometry> rightGeosGeometry =
         geospatial::GeometryDeserializer::deserialize(rightGeometry);
-    GEOS_TRY(result = leftGeosGeometry->intersects(&*rightGeosGeometry);
-             , "Failed to check geometry intersects");
+    GEOS_TRY(
+        result = leftGeosGeometry->intersects(&*rightGeosGeometry);
+        , "Failed to check geometry intersects");
 
     return Status::OK();
   }
@@ -310,8 +317,9 @@ struct StOverlapsFunction {
         geospatial::GeometryDeserializer::deserialize(leftGeometry);
     std::unique_ptr<geos::geom::Geometry> rightGeosGeometry =
         geospatial::GeometryDeserializer::deserialize(rightGeometry);
-    GEOS_TRY(result = leftGeosGeometry->overlaps(&*rightGeosGeometry);
-             , "Failed to check geometry overlaps");
+    GEOS_TRY(
+        result = leftGeosGeometry->overlaps(&*rightGeosGeometry);
+        , "Failed to check geometry overlaps");
 
     return Status::OK();
   }
@@ -330,8 +338,9 @@ struct StTouchesFunction {
         geospatial::GeometryDeserializer::deserialize(leftGeometry);
     std::unique_ptr<geos::geom::Geometry> rightGeosGeometry =
         geospatial::GeometryDeserializer::deserialize(rightGeometry);
-    GEOS_TRY(result = leftGeosGeometry->touches(&*rightGeosGeometry);
-             , "Failed to check geometry touches");
+    GEOS_TRY(
+        result = leftGeosGeometry->touches(&*rightGeosGeometry);
+        , "Failed to check geometry touches");
 
     return Status::OK();
   }
@@ -350,8 +359,9 @@ struct StWithinFunction {
         geospatial::GeometryDeserializer::deserialize(leftGeometry);
     std::unique_ptr<geos::geom::Geometry> rightGeosGeometry =
         geospatial::GeometryDeserializer::deserialize(rightGeometry);
-    GEOS_TRY(result = leftGeosGeometry->within(&*rightGeosGeometry);
-             , "Failed to check geometry within");
+    GEOS_TRY(
+        result = leftGeosGeometry->within(&*rightGeosGeometry);
+        , "Failed to check geometry within");
 
     return Status::OK();
   }
@@ -375,8 +385,9 @@ struct StDifferenceFunction {
         geospatial::GeometryDeserializer::deserialize(rightGeometry);
 
     std::unique_ptr<geos::geom::Geometry> outputGeometry;
-    GEOS_TRY(outputGeometry = leftGeosGeometry->difference(&*rightGeosGeometry);
-             , "Failed to compute geometry difference");
+    GEOS_TRY(
+        outputGeometry = leftGeosGeometry->difference(&*rightGeosGeometry);
+        , "Failed to compute geometry difference");
 
     geospatial::GeometrySerializer::serialize(*outputGeometry, result);
     return Status::OK();
@@ -394,9 +405,10 @@ struct StBoundaryFunction {
 
     std::unique_ptr<geos::geom::Geometry> outputGeometry;
 
-    GEOS_TRY(geospatial::GeometrySerializer::serialize(
-                 *geosGeometry->getBoundary(), result);
-             , "Failed to compute geometry boundary");
+    GEOS_TRY(
+        geospatial::GeometrySerializer::serialize(
+            *geosGeometry->getBoundary(), result);
+        , "Failed to compute geometry boundary");
 
     return Status::OK();
   }
@@ -468,8 +480,9 @@ struct StUnionFunction {
         geospatial::GeometryDeserializer::deserialize(rightGeometry);
 
     std::unique_ptr<geos::geom::Geometry> outputGeometry;
-    GEOS_TRY(outputGeometry = leftGeosGeometry->Union(&*rightGeosGeometry);
-             , "Failed to compute geometry union");
+    GEOS_TRY(
+        outputGeometry = leftGeosGeometry->Union(&*rightGeosGeometry);
+        , "Failed to compute geometry union");
 
     geospatial::GeometrySerializer::serialize(*outputGeometry, result);
     return Status::OK();
@@ -487,8 +500,8 @@ struct StIsValidFunction {
     std::unique_ptr<geos::geom::Geometry> geosGeometry =
         geospatial::GeometryDeserializer::deserialize(input);
 
-    GEOS_TRY(result = geosGeometry->isValid();
-             , "Failed to check geometry isValid");
+    GEOS_TRY(
+        result = geosGeometry->isValid();, "Failed to check geometry isValid");
 
     return Status::OK();
   }
@@ -503,8 +516,9 @@ struct StIsSimpleFunction {
     std::unique_ptr<geos::geom::Geometry> geosGeometry =
         geospatial::GeometryDeserializer::deserialize(input);
 
-    GEOS_TRY(result = geosGeometry->isSimple();
-             , "Failed to check geometry isSimple");
+    GEOS_TRY(
+        result = geosGeometry->isSimple();
+        , "Failed to check geometry isSimple");
 
     return Status::OK();
   }
@@ -541,8 +555,8 @@ struct StAreaFunction {
 
     std::unique_ptr<geos::geom::Geometry> outputGeometry;
 
-    GEOS_TRY(result = geosGeometry->getArea();
-             , "Failed to compute geometry area");
+    GEOS_TRY(
+        result = geosGeometry->getArea();, "Failed to compute geometry area");
 
     return Status::OK();
   }
@@ -607,9 +621,10 @@ struct StXFunction {
         geospatial::GeometryDeserializer::deserialize(geometry);
     if (geosGeometry->getGeometryTypeId() !=
         geos::geom::GeometryTypeId::GEOS_POINT) {
-      VELOX_USER_FAIL(fmt::format(
-          "ST_X requires a Point geometry, found {}",
-          geosGeometry->getGeometryType()));
+      VELOX_USER_FAIL(
+          fmt::format(
+              "ST_X requires a Point geometry, found {}",
+              geosGeometry->getGeometryType()));
     }
     if (geosGeometry->isEmpty()) {
       return false;
@@ -631,9 +646,10 @@ struct StYFunction {
         geospatial::GeometryDeserializer::deserialize(geometry);
     if (geosGeometry->getGeometryTypeId() !=
         geos::geom::GeometryTypeId::GEOS_POINT) {
-      VELOX_USER_FAIL(fmt::format(
-          "ST_Y requires a Point geometry, found {}",
-          geosGeometry->getGeometryType()));
+      VELOX_USER_FAIL(
+          fmt::format(
+              "ST_Y requires a Point geometry, found {}",
+              geosGeometry->getGeometryType()));
     }
     if (geosGeometry->isEmpty()) {
       return false;
@@ -777,18 +793,20 @@ struct StDistanceFunction {
         geospatial::GeometryDeserializer::deserialize(geometry2);
 
     if (geosGeometry1->getSRID() != geosGeometry2->getSRID()) {
-      VELOX_USER_FAIL(fmt::format(
-          "Input geometries must have the same spatial reference, found {} and {}",
-          geosGeometry1->getSRID(),
-          geosGeometry2->getSRID()));
+      VELOX_USER_FAIL(
+          fmt::format(
+              "Input geometries must have the same spatial reference, found {} and {}",
+              geosGeometry1->getSRID(),
+              geosGeometry2->getSRID()));
     }
 
     if (geosGeometry1->isEmpty() || geosGeometry2->isEmpty()) {
       return false;
     }
 
-    GEOS_RETHROW(result = geosGeometry1->distance(geosGeometry2.get());
-                 , "Failed to calculate geometry distance");
+    GEOS_RETHROW(
+        result = geosGeometry1->distance(geosGeometry2.get());
+        , "Failed to calculate geometry distance");
 
     return true;
   }
@@ -1264,9 +1282,10 @@ struct StBufferFunction {
       const arg_type<Geometry>& geometry,
       const arg_type<double>& distance) {
     if (distance < 0) {
-      VELOX_USER_FAIL(fmt::format(
-          "Provided distance must not be negative. Provided distance: {}",
-          distance));
+      VELOX_USER_FAIL(
+          fmt::format(
+              "Provided distance must not be negative. Provided distance: {}",
+              distance));
     }
     if (distance == 0) {
       result = geometry;
@@ -1416,9 +1435,10 @@ struct StNumPointsFunction {
       }
       return static_cast<int32_t>(polygonPointCount);
     }
-    VELOX_FAIL(fmt::format(
-        "Unexpected failure in ST_NumPoints: geometry type {}",
-        geometry.getGeometryType()));
+    VELOX_FAIL(
+        fmt::format(
+            "Unexpected failure in ST_NumPoints: geometry type {}",
+            geometry.getGeometryType()));
   }
 };
 
@@ -1485,16 +1505,18 @@ struct LineLocatePointFunction {
     auto lineType = line->getGeometryTypeId();
     if (lineType != geos::geom::GeometryTypeId::GEOS_LINESTRING &&
         lineType != geos::geom::GeometryTypeId::GEOS_MULTILINESTRING) {
-      VELOX_USER_FAIL(fmt::format(
-          "First argument to line_locate_point must be a LineString or a MultiLineString. Got: {}",
-          line->getGeometryType()));
+      VELOX_USER_FAIL(
+          fmt::format(
+              "First argument to line_locate_point must be a LineString or a MultiLineString. Got: {}",
+              line->getGeometryType()));
     }
 
     auto pointType = point->getGeometryTypeId();
     if (pointType != geos::geom::GeometryTypeId::GEOS_POINT) {
-      VELOX_USER_FAIL(fmt::format(
-          "Second argument to line_locate_point must be a Point. Got: {}",
-          point->getGeometryType()));
+      VELOX_USER_FAIL(
+          fmt::format(
+              "Second argument to line_locate_point must be a Point. Got: {}",
+              point->getGeometryType()));
     }
 
     result = geos::linearref::LengthIndexedLine(line.get())
@@ -1517,9 +1539,10 @@ struct LineInterpolatePointFunction {
       const arg_type<Geometry>& inputLine,
       const arg_type<double>& fraction) {
     if (!(0.0 <= fraction && fraction <= 1.0)) {
-      return Status::UserError(fmt::format(
-          "line_interpolate_point: Fraction must be between 0 and 1, but is {}",
-          fraction));
+      return Status::UserError(
+          fmt::format(
+              "line_interpolate_point: Fraction must be between 0 and 1, but is {}",
+              fraction));
     }
     auto line = geospatial::GeometryDeserializer::deserialize(inputLine);
     Status validate = Status::OK();
