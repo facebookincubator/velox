@@ -25,13 +25,12 @@ exec::AggregateRegistrationResult registerMin(
     bool withCompanionFunctions,
     bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
-  signatures.push_back(
-      exec::AggregateFunctionSignatureBuilder()
-          .orderableTypeVariable("T")
-          .returnType("T")
-          .intermediateType("T")
-          .argumentType("T")
-          .build());
+  signatures.push_back(exec::AggregateFunctionSignatureBuilder()
+                           .orderableTypeVariable("T")
+                           .returnType("T")
+                           .intermediateType("T")
+                           .argumentType("T")
+                           .build());
   return exec::registerAggregateFunction(
       name,
       std::move(signatures),
@@ -56,13 +55,12 @@ exec::AggregateRegistrationResult registerMax(
     bool withCompanionFunctions,
     bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
-  signatures.push_back(
-      exec::AggregateFunctionSignatureBuilder()
-          .orderableTypeVariable("T")
-          .returnType("T")
-          .intermediateType("T")
-          .argumentType("T")
-          .build());
+  signatures.push_back(exec::AggregateFunctionSignatureBuilder()
+                           .orderableTypeVariable("T")
+                           .returnType("T")
+                           .intermediateType("T")
+                           .argumentType("T")
+                           .build());
   return exec::registerAggregateFunction(
       name,
       std::move(signatures),

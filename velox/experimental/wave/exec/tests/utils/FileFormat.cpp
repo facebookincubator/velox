@@ -383,11 +383,8 @@ void Writer::finishStripe() {
     columns.push_back(encoder->toColumn());
   }
   int32_t numRows = columns[0]->numValues;
-  stripes_.push_back(
-      std::make_unique<Stripe>(
-          std::move(columns),
-          dwio::common::TypeWithId::create(type_),
-          numRows));
+  stripes_.push_back(std::make_unique<Stripe>(
+      std::move(columns), dwio::common::TypeWithId::create(type_), numRows));
   encoders_.clear();
   rowsInStripe_ = 0;
 }
@@ -620,9 +617,8 @@ void Table::fromFile(
       int32_t numRows;
       readNumber(footerStream, numRows);
       auto columns = readColumns(footerStream);
-      stripes.push_back(
-          std::make_unique<Stripe>(
-              std::move(columns), typeWithId, numRows, path));
+      stripes.push_back(std::make_unique<Stripe>(
+          std::move(columns), typeWithId, numRows, path));
     }
   }
   addStripes(std::move(stripes), nullptr);

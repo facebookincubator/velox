@@ -270,11 +270,10 @@ TEST(PageIndex, WriteOffsetIndex) {
   auto sink = CreateOutputStream();
   builder->WriteTo(sink.get());
   PARQUET_ASSIGN_OR_THROW(auto buffer, sink->Finish());
-  offset_indexes.emplace_back(
-      OffsetIndex::Make(
-          buffer->data(),
-          static_cast<uint32_t>(buffer->size()),
-          default_reader_properties()));
+  offset_indexes.emplace_back(OffsetIndex::Make(
+      buffer->data(),
+      static_cast<uint32_t>(buffer->size()),
+      default_reader_properties()));
 
   /// Verify the data of the offset index.
   for (const auto& offset_index : offset_indexes) {
@@ -310,12 +309,11 @@ void TestWriteTypedColumnIndex(
   auto sink = CreateOutputStream();
   builder->WriteTo(sink.get());
   PARQUET_ASSIGN_OR_THROW(auto buffer, sink->Finish());
-  column_indexes.emplace_back(
-      ColumnIndex::Make(
-          *descr,
-          buffer->data(),
-          static_cast<uint32_t>(buffer->size()),
-          default_reader_properties()));
+  column_indexes.emplace_back(ColumnIndex::Make(
+      *descr,
+      buffer->data(),
+      static_cast<uint32_t>(buffer->size()),
+      default_reader_properties()));
 
   /// Verify the data of the column index.
   for (const auto& column_index : column_indexes) {
@@ -668,9 +666,10 @@ TEST_F(PageIndexBuilderTest, SingleRowGroup) {
        EncodedStatistics().set_null_count(0).set_min("A").set_max("B")}};
   const std::vector<std::vector<PageLocation>> page_locations = {
       /*row_group_id=0*/
-      {/*column_id=0*/ {/*offset=*/128,
-                        /*compressed_page_size=*/512,
-                        /*first_row_index=*/0},
+      {/*column_id=0*/ {
+           /*offset=*/128,
+           /*compressed_page_size=*/512,
+           /*first_row_index=*/0},
        /*column_id=1*/
        {/*offset=*/1024,
         /*compressed_page_size=*/512,
@@ -714,17 +713,19 @@ TEST_F(PageIndexBuilderTest, TwoRowGroups) {
        EncodedStatistics().set_null_count(0).set_min("bar").set_max("foo")}};
   const std::vector<std::vector<PageLocation>> page_locations = {
       /*row_group_id=0*/
-      {/*column_id=0*/ {/*offset=*/128,
-                        /*compressed_page_size=*/512,
-                        /*first_row_index=*/0},
+      {/*column_id=0*/ {
+           /*offset=*/128,
+           /*compressed_page_size=*/512,
+           /*first_row_index=*/0},
        /*column_id=1*/
        {/*offset=*/1024,
         /*compressed_page_size=*/512,
         /*first_row_index=*/0}},
       /*row_group_id=0*/
-      {/*column_id=0*/ {/*offset=*/128,
-                        /*compressed_page_size=*/512,
-                        /*first_row_index=*/0},
+      {/*column_id=0*/ {
+           /*offset=*/128,
+           /*compressed_page_size=*/512,
+           /*first_row_index=*/0},
        /*column_id=1*/
        {/*offset=*/1024,
         /*compressed_page_size=*/512,

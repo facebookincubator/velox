@@ -248,11 +248,10 @@ class ConstantVector final : public SimpleVector<T> {
     static const DummyReleaser kDummy;
     auto* wrapInfo = wrapInfo_.load();
     if (FOLLY_UNLIKELY(!wrapInfo)) {
-      wrapInfo = new BufferPtr(
-          BufferView<DummyReleaser>::create(
-              reinterpret_cast<const uint8_t*>(&index_),
-              sizeof(vector_size_t),
-              kDummy));
+      wrapInfo = new BufferPtr(BufferView<DummyReleaser>::create(
+          reinterpret_cast<const uint8_t*>(&index_),
+          sizeof(vector_size_t),
+          kDummy));
       BufferPtr* oldWrapInfo = nullptr;
       if (!wrapInfo_.compare_exchange_strong(oldWrapInfo, wrapInfo)) {
         delete wrapInfo;

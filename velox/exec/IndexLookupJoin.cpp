@@ -86,9 +86,8 @@ bool addBetweenConditionBound(
         lookupInputChannels,
         lookupInputNameSet);
   } else {
-    VELOX_USER_CHECK(
-        core::TypedExprs::asConstant(typeExpr)->type()->equivalent(
-            *indexKeyType));
+    VELOX_USER_CHECK(core::TypedExprs::asConstant(typeExpr)->type()->equivalent(
+        *indexKeyType));
   }
   return isConstant;
 }
@@ -311,10 +310,9 @@ void IndexLookupJoin::initLookupInput() {
           core::TypedExprs::isConstant(equalCondition->value),
           "Equal condition value must be constant: {}",
           equalCondition->toString());
-      VELOX_USER_CHECK(
-          core::TypedExprs::asConstant(equalCondition->value)
-              ->type()
-              ->equivalent(*indexKeyType));
+      VELOX_USER_CHECK(core::TypedExprs::asConstant(equalCondition->value)
+                           ->type()
+                           ->equivalent(*indexKeyType));
     }
   }
 }

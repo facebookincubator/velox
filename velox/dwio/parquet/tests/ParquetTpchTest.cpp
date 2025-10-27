@@ -94,8 +94,8 @@ class ParquetTpchTest : public testing::Test {
       auto plan = PlanBuilder()
                       .tpchTableScan(table, std::move(columnNames), 0.01)
                       .planNode();
-      auto split = exec::Split(
-          std::make_shared<connector::tpch::TpchConnectorSplit>(
+      auto split =
+          exec::Split(std::make_shared<connector::tpch::TpchConnectorSplit>(
               kTpchConnectorId, /*cacheable=*/true, 1, 0));
 
       auto rows =

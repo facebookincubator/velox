@@ -94,14 +94,13 @@ SpillFiles SpillWriter::finish() {
   SpillFiles spillFiles;
   spillFiles.reserve(serializedPageFiles.size());
   for (const auto& fileInfo : serializedPageFiles) {
-    spillFiles.push_back(
-        SpillFileInfo{
-            .id = fileInfo.id,
-            .type = type_,
-            .path = fileInfo.path,
-            .size = fileInfo.size,
-            .sortingKeys = sortingKeys_,
-            .compressionKind = serdeOptions_->compressionKind});
+    spillFiles.push_back(SpillFileInfo{
+        .id = fileInfo.id,
+        .type = type_,
+        .path = fileInfo.path,
+        .size = fileInfo.size,
+        .sortingKeys = sortingKeys_,
+        .compressionKind = serdeOptions_->compressionKind});
   }
   return spillFiles;
 }

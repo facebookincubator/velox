@@ -78,7 +78,8 @@ struct MetalPlatform {
     MetalSpecialization::atomic_store<SliceT, T>(address, value);
   }
   template <template <breeze::utils::AddressSpace,
-                      breeze::utils::DataArrangement, typename> class SliceT>
+                      breeze::utils::DataArrangement, typename>
+            class SliceT>
   inline uint atomic_cas(
       SliceT<breeze::utils::GLOBAL, breeze::utils::BLOCKED, uint> address,
       uint expected, uint desired) {
@@ -94,7 +95,8 @@ struct MetalPlatform {
     return current;
   }
   template <template <breeze::utils::AddressSpace,
-                      breeze::utils::DataArrangement, typename> class SliceT>
+                      breeze::utils::DataArrangement, typename>
+            class SliceT>
   inline bool atomic_cas(
       SliceT<breeze::utils::SHARED, breeze::utils::BLOCKED, uint> address,
       uint expected, uint desired) {
@@ -110,7 +112,8 @@ struct MetalPlatform {
     return current;
   }
   template <template <breeze::utils::AddressSpace,
-                      breeze::utils::DataArrangement, typename> class SliceT>
+                      breeze::utils::DataArrangement, typename>
+            class SliceT>
   inline int atomic_add(
       SliceT<breeze::utils::GLOBAL, breeze::utils::BLOCKED, int> address,
       int value) {
@@ -119,7 +122,8 @@ struct MetalPlatform {
                                             value, metal::memory_order_relaxed);
   }
   template <template <breeze::utils::AddressSpace,
-                      breeze::utils::DataArrangement, typename> class SliceT>
+                      breeze::utils::DataArrangement, typename>
+            class SliceT>
   inline int atomic_add(
       SliceT<breeze::utils::SHARED, breeze::utils::BLOCKED, int> address,
       int value) {
@@ -128,7 +132,8 @@ struct MetalPlatform {
                                             value, metal::memory_order_relaxed);
   }
   template <template <breeze::utils::AddressSpace,
-                      breeze::utils::DataArrangement, typename> class SliceT>
+                      breeze::utils::DataArrangement, typename>
+            class SliceT>
   inline uint atomic_add(
       SliceT<breeze::utils::GLOBAL, breeze::utils::BLOCKED, uint> address,
       uint value) {
@@ -137,7 +142,8 @@ struct MetalPlatform {
                                             value, metal::memory_order_relaxed);
   }
   template <template <breeze::utils::AddressSpace,
-                      breeze::utils::DataArrangement, typename> class SliceT>
+                      breeze::utils::DataArrangement, typename>
+            class SliceT>
   inline uint atomic_add(
       SliceT<breeze::utils::SHARED, breeze::utils::BLOCKED, uint> address,
       uint value) {
@@ -147,7 +153,8 @@ struct MetalPlatform {
         metal::memory_order_relaxed);
   }
   template <template <breeze::utils::AddressSpace,
-                      breeze::utils::DataArrangement, typename> class SliceT>
+                      breeze::utils::DataArrangement, typename>
+            class SliceT>
   inline void atomic_min(
       SliceT<breeze::utils::GLOBAL, breeze::utils::BLOCKED, int> address,
       int value) {
@@ -163,7 +170,8 @@ struct MetalPlatform {
     }
   }
   template <template <breeze::utils::AddressSpace,
-                      breeze::utils::DataArrangement, typename> class SliceT>
+                      breeze::utils::DataArrangement, typename>
+            class SliceT>
   inline void atomic_min(
       SliceT<breeze::utils::GLOBAL, breeze::utils::BLOCKED, uint> address,
       uint value) {
@@ -179,7 +187,8 @@ struct MetalPlatform {
     }
   }
   template <template <breeze::utils::AddressSpace,
-                      breeze::utils::DataArrangement, typename> class SliceT>
+                      breeze::utils::DataArrangement, typename>
+            class SliceT>
   inline void atomic_max(
       SliceT<breeze::utils::GLOBAL, breeze::utils::BLOCKED, int> address,
       int value) {
@@ -195,7 +204,8 @@ struct MetalPlatform {
     }
   }
   template <template <breeze::utils::AddressSpace,
-                      breeze::utils::DataArrangement, typename> class SliceT>
+                      breeze::utils::DataArrangement, typename>
+            class SliceT>
   inline void atomic_max(
       SliceT<breeze::utils::GLOBAL, breeze::utils::BLOCKED, uint> address,
       uint value) {

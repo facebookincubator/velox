@@ -300,9 +300,8 @@ class PARQUET_EXPORT FileDecryptionProperties {
     /// invocation of the retriever callback.
     /// If an explicit key is available for a footer or a column,
     /// its key metadata will be ignored.
-    Builder* column_keys(
-        const ColumnPathToDecryptionPropertiesMap&
-            column_decryption_properties);
+    Builder* column_keys(const ColumnPathToDecryptionPropertiesMap&
+                             column_decryption_properties);
 
     /// Set a key retriever callback. Its also possible to
     /// set explicit footer or column keys on this file property object.

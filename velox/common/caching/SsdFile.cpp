@@ -711,10 +711,9 @@ void SsdFile::maybeFlushCheckpointBuffer(uint32_t appendBytes, bool force) {
       (force ||
        checkpointBufferedDataSize_ + appendBytes >= kCheckpointBufferSize)) {
     VELOX_CHECK_NOT_NULL(checkpointBuffer_);
-    checkpointWriteFile_->append(
-        std::string_view(
-            static_cast<const char*>(checkpointBuffer_),
-            checkpointBufferedDataSize_));
+    checkpointWriteFile_->append(std::string_view(
+        static_cast<const char*>(checkpointBuffer_),
+        checkpointBufferedDataSize_));
     checkpointBufferedDataSize_ = 0;
   }
 }

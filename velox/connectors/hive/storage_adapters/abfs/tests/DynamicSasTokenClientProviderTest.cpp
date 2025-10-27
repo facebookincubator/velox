@@ -52,8 +52,8 @@ class MyDynamicAbfsSasTokenProvider : public SasTokenProvider {
         Azure::Storage::Sas::BlobSasPermissions::Read &
         Azure::Storage::Sas::BlobSasPermissions::Write);
 
-    std::string sasToken = sasBuilder.GenerateSasToken(
-        Azure::Storage::StorageSharedKeyCredential(
+    std::string sasToken =
+        sasBuilder.GenerateSasToken(Azure::Storage::StorageSharedKeyCredential(
             "test",
             "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw=="));
 

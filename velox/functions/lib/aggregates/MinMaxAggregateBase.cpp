@@ -574,9 +574,10 @@ class MinAggregate : public MinMaxAggregateBase {
 };
 
 template <
-    template <typename T> class TSimpleNumericAggregate,
-    template <
-        CompareFlags::NullHandlingMode nullHandlingMode> typename TAggregate>
+    template <typename T>
+    class TSimpleNumericAggregate,
+    template <CompareFlags::NullHandlingMode nullHandlingMode>
+    typename TAggregate>
 exec::AggregateFunctionFactory getMinMaxFunctionFactoryInternal(
     const std::string& name,
     CompareFlags::NullHandlingMode nullHandlingMode,

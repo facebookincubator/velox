@@ -106,12 +106,11 @@ void testExceptionTraceCollectionControl(bool userException, bool enabled) {
           false);
     }
   } catch (VeloxException& e) {
-    SCOPED_TRACE(
-        fmt::format(
-            "enabled: {}, user flag: {}, sys flag: {}",
-            enabled,
-            FLAGS_velox_exception_user_stacktrace_enabled,
-            FLAGS_velox_exception_system_stacktrace_enabled));
+    SCOPED_TRACE(fmt::format(
+        "enabled: {}, user flag: {}, sys flag: {}",
+        enabled,
+        FLAGS_velox_exception_user_stacktrace_enabled,
+        FLAGS_velox_exception_system_stacktrace_enabled));
     ASSERT_EQ(userException, e.exceptionType() == VeloxException::Type::kUser);
     ASSERT_EQ(enabled, e.stackTrace() != nullptr);
   }
@@ -171,13 +170,12 @@ void testExceptionTraceCollectionRateControl(
             false);
       }
     } catch (VeloxException& e) {
-      SCOPED_TRACE(
-          fmt::format(
-              "userException: {}, hasRateLimit: {}, user limit: {}ms, sys limit: {}ms",
-              userException,
-              hasRateLimit,
-              FLAGS_velox_exception_user_stacktrace_rate_limit_ms,
-              FLAGS_velox_exception_system_stacktrace_rate_limit_ms));
+      SCOPED_TRACE(fmt::format(
+          "userException: {}, hasRateLimit: {}, user limit: {}ms, sys limit: {}ms",
+          userException,
+          hasRateLimit,
+          FLAGS_velox_exception_user_stacktrace_rate_limit_ms,
+          FLAGS_velox_exception_system_stacktrace_rate_limit_ms));
       ASSERT_EQ(
           userException, e.exceptionType() == VeloxException::Type::kUser);
       ASSERT_EQ(!hasRateLimit || ((iter % 2) == 0), e.stackTrace() != nullptr);

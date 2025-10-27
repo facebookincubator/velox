@@ -870,9 +870,8 @@ class LikeWithRe2 final : public exec::VectorFunction {
     VELOX_CHECK(args.size() == 2 || args.size() == 3);
 
     if (!validPattern_) {
-      auto error = std::make_exception_ptr(
-          std::invalid_argument(
-              "Escape character must be followed by '%', '_' or the escape character itself"));
+      auto error = std::make_exception_ptr(std::invalid_argument(
+          "Escape character must be followed by '%', '_' or the escape character itself"));
       context.setErrors(rows, error);
       return;
     }
@@ -2161,18 +2160,16 @@ PatternMetadata determinePatternKind(
           return PatternMetadata::prefix(
               std::string(unescapedPattern, 0, firstSubPatternLength));
         } else if (lastSubPatternKind == SubPatternKind::kLiteralString) {
-          return PatternMetadata::suffix(
-              std::string(
-                  unescapedPattern, lastSubPatternStart, lastSubPatternLength));
+          return PatternMetadata::suffix(std::string(
+              unescapedPattern, lastSubPatternStart, lastSubPatternLength));
         } else if (
             numSubPatterns == 3 &&
             firstSubPatternKind == SubPatternKind::kAnyCharsWildcard &&
             lastSubPatternKind == SubPatternKind::kAnyCharsWildcard) {
-          return PatternMetadata::substring(
-              std::string(
-                  unescapedPattern,
-                  subPatternRanges[1].first,
-                  subPatternRanges[1].second));
+          return PatternMetadata::substring(std::string(
+              unescapedPattern,
+              subPatternRanges[1].first,
+              subPatternRanges[1].second));
         }
       }
 

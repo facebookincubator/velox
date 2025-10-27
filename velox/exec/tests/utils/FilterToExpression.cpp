@@ -146,9 +146,8 @@ core::TypedExprPtr filterToExpr(
               subfieldType,
               variant(static_cast<int32_t>(rangeFilter->lower())));
 
-          conditions.push_back(
-              std::make_shared<CallTypedExpr>(
-                  BOOLEAN(), "gte", subfieldExpr, lower));
+          conditions.push_back(std::make_shared<CallTypedExpr>(
+              BOOLEAN(), "gte", subfieldExpr, lower));
         }
 
         if (rangeFilter->upper() < kMaxInt64) {
@@ -156,9 +155,8 @@ core::TypedExprPtr filterToExpr(
               subfieldType,
               variant(static_cast<int32_t>(rangeFilter->upper())));
 
-          conditions.push_back(
-              std::make_shared<CallTypedExpr>(
-                  BOOLEAN(), "lte", subfieldExpr, upper));
+          conditions.push_back(std::make_shared<CallTypedExpr>(
+              BOOLEAN(), "lte", subfieldExpr, upper));
         }
 
         auto rangeExpr = createBooleanExpr(conditions);
@@ -260,13 +258,11 @@ core::TypedExprPtr filterToExpr(
         }
 
         if (doubleFilter->lowerExclusive()) {
-          conditions.push_back(
-              std::make_shared<CallTypedExpr>(
-                  BOOLEAN(), "gt", subfieldExpr, lower));
+          conditions.push_back(std::make_shared<CallTypedExpr>(
+              BOOLEAN(), "gt", subfieldExpr, lower));
         } else {
-          conditions.push_back(
-              std::make_shared<CallTypedExpr>(
-                  BOOLEAN(), "gte", subfieldExpr, lower));
+          conditions.push_back(std::make_shared<CallTypedExpr>(
+              BOOLEAN(), "gte", subfieldExpr, lower));
         }
       }
 
@@ -287,13 +283,11 @@ core::TypedExprPtr filterToExpr(
         }
 
         if (doubleFilter->upperExclusive()) {
-          conditions.push_back(
-              std::make_shared<CallTypedExpr>(
-                  BOOLEAN(), "lt", subfieldExpr, upper));
+          conditions.push_back(std::make_shared<CallTypedExpr>(
+              BOOLEAN(), "lt", subfieldExpr, upper));
         } else {
-          conditions.push_back(
-              std::make_shared<CallTypedExpr>(
-                  BOOLEAN(), "lte", subfieldExpr, upper));
+          conditions.push_back(std::make_shared<CallTypedExpr>(
+              BOOLEAN(), "lte", subfieldExpr, upper));
         }
       }
 
@@ -314,13 +308,11 @@ core::TypedExprPtr filterToExpr(
             subfieldType, variant(static_cast<float>(lowerValue)));
 
         if (floatFilter->lowerExclusive()) {
-          conditions.push_back(
-              std::make_shared<CallTypedExpr>(
-                  BOOLEAN(), "gt", subfieldExpr, lower));
+          conditions.push_back(std::make_shared<CallTypedExpr>(
+              BOOLEAN(), "gt", subfieldExpr, lower));
         } else {
-          conditions.push_back(
-              std::make_shared<CallTypedExpr>(
-                  BOOLEAN(), "gte", subfieldExpr, lower));
+          conditions.push_back(std::make_shared<CallTypedExpr>(
+              BOOLEAN(), "gte", subfieldExpr, lower));
         }
       }
 
@@ -330,13 +322,11 @@ core::TypedExprPtr filterToExpr(
             subfieldType, variant(static_cast<float>(upperValue)));
 
         if (floatFilter->upperExclusive()) {
-          conditions.push_back(
-              std::make_shared<CallTypedExpr>(
-                  BOOLEAN(), "lt", subfieldExpr, upper));
+          conditions.push_back(std::make_shared<CallTypedExpr>(
+              BOOLEAN(), "lt", subfieldExpr, upper));
         } else {
-          conditions.push_back(
-              std::make_shared<CallTypedExpr>(
-                  BOOLEAN(), "lte", subfieldExpr, upper));
+          conditions.push_back(std::make_shared<CallTypedExpr>(
+              BOOLEAN(), "lte", subfieldExpr, upper));
         }
       }
 
@@ -356,13 +346,11 @@ core::TypedExprPtr filterToExpr(
             subfieldType, variant(bytesFilter->lower()));
 
         if (bytesFilter->isLowerExclusive()) {
-          conditions.push_back(
-              std::make_shared<CallTypedExpr>(
-                  BOOLEAN(), "gt", subfieldExpr, lower));
+          conditions.push_back(std::make_shared<CallTypedExpr>(
+              BOOLEAN(), "gt", subfieldExpr, lower));
         } else {
-          conditions.push_back(
-              std::make_shared<CallTypedExpr>(
-                  BOOLEAN(), "gte", subfieldExpr, lower));
+          conditions.push_back(std::make_shared<CallTypedExpr>(
+              BOOLEAN(), "gte", subfieldExpr, lower));
         }
       }
 
@@ -371,13 +359,11 @@ core::TypedExprPtr filterToExpr(
             subfieldType, variant(bytesFilter->upper()));
 
         if (bytesFilter->isUpperExclusive()) {
-          conditions.push_back(
-              std::make_shared<CallTypedExpr>(
-                  BOOLEAN(), "lt", subfieldExpr, upper));
+          conditions.push_back(std::make_shared<CallTypedExpr>(
+              BOOLEAN(), "lt", subfieldExpr, upper));
         } else {
-          conditions.push_back(
-              std::make_shared<CallTypedExpr>(
-                  BOOLEAN(), "lte", subfieldExpr, upper));
+          conditions.push_back(std::make_shared<CallTypedExpr>(
+              BOOLEAN(), "lte", subfieldExpr, upper));
         }
       }
 
@@ -415,25 +401,21 @@ core::TypedExprPtr filterToExpr(
       for (const auto& value : values) {
         switch (subfieldType->kind()) {
           case TypeKind::TINYINT:
-            valueExprs.push_back(
-                std::make_shared<ConstantTypedExpr>(
-                    subfieldType, variant(static_cast<int8_t>(value))));
+            valueExprs.push_back(std::make_shared<ConstantTypedExpr>(
+                subfieldType, variant(static_cast<int8_t>(value))));
             break;
           case TypeKind::SMALLINT:
-            valueExprs.push_back(
-                std::make_shared<ConstantTypedExpr>(
-                    subfieldType, variant(static_cast<int16_t>(value))));
+            valueExprs.push_back(std::make_shared<ConstantTypedExpr>(
+                subfieldType, variant(static_cast<int16_t>(value))));
             break;
           case TypeKind::INTEGER:
-            valueExprs.push_back(
-                std::make_shared<ConstantTypedExpr>(
-                    subfieldType, variant(static_cast<int32_t>(value))));
+            valueExprs.push_back(std::make_shared<ConstantTypedExpr>(
+                subfieldType, variant(static_cast<int32_t>(value))));
             break;
           case TypeKind::BIGINT:
           default:
-            valueExprs.push_back(
-                std::make_shared<ConstantTypedExpr>(
-                    subfieldType, variant(value)));
+            valueExprs.push_back(std::make_shared<ConstantTypedExpr>(
+                subfieldType, variant(value)));
             break;
         }
       }

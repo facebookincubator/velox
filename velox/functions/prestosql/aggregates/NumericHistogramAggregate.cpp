@@ -485,22 +485,20 @@ void registerNumericHistogramAggregate(
   const auto weightTypes = {"real", "double"};
   for (const auto& valueType : valueTypes) {
     const auto returnType = fmt::format("map({}, {})", valueType, valueType);
-    signatures.push_back(
-        exec::AggregateFunctionSignatureBuilder()
-            .returnType(returnType)
-            .intermediateType("varbinary")
-            .argumentType("bigint")
-            .argumentType(valueType)
-            .build());
+    signatures.push_back(exec::AggregateFunctionSignatureBuilder()
+                             .returnType(returnType)
+                             .intermediateType("varbinary")
+                             .argumentType("bigint")
+                             .argumentType(valueType)
+                             .build());
     for (const auto& weightType : weightTypes) {
-      signatures.push_back(
-          exec::AggregateFunctionSignatureBuilder()
-              .returnType(returnType)
-              .intermediateType("varbinary")
-              .argumentType("bigint")
-              .argumentType(valueType)
-              .argumentType(weightType)
-              .build());
+      signatures.push_back(exec::AggregateFunctionSignatureBuilder()
+                               .returnType(returnType)
+                               .intermediateType("varbinary")
+                               .argumentType("bigint")
+                               .argumentType(valueType)
+                               .argumentType(weightType)
+                               .build());
     }
   }
   auto name = prefix + kNumericHistogram;

@@ -92,22 +92,20 @@ exec::AggregateRegistrationResult registerAverage(
 
   for (const auto& inputType :
        {"smallint", "integer", "bigint", "real", "double"}) {
-    signatures.push_back(
-        exec::AggregateFunctionSignatureBuilder()
-            .returnType("double")
-            .intermediateType("row(double,bigint)")
-            .argumentType(inputType)
-            .build());
+    signatures.push_back(exec::AggregateFunctionSignatureBuilder()
+                             .returnType("double")
+                             .intermediateType("row(double,bigint)")
+                             .argumentType(inputType)
+                             .build());
   }
 
-  signatures.push_back(
-      exec::AggregateFunctionSignatureBuilder()
-          .integerVariable("a_precision")
-          .integerVariable("a_scale")
-          .argumentType("DECIMAL(a_precision, a_scale)")
-          .intermediateType("varbinary")
-          .returnType("DECIMAL(a_precision, a_scale)")
-          .build());
+  signatures.push_back(exec::AggregateFunctionSignatureBuilder()
+                           .integerVariable("a_precision")
+                           .integerVariable("a_scale")
+                           .argumentType("DECIMAL(a_precision, a_scale)")
+                           .intermediateType("varbinary")
+                           .returnType("DECIMAL(a_precision, a_scale)")
+                           .build());
 
   return exec::registerAggregateFunction(
       name,

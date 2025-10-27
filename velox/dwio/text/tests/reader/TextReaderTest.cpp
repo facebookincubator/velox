@@ -491,9 +491,8 @@ TEST_F(TextReaderTest, projectComplexTypesWithCustomDelimiters) {
 
   dwio::common::RowReaderOptions rowOptions;
   rowOptions.setScanSpec(spec);
-  rowOptions.select(
-      std::make_shared<dwio::common::ColumnSelector>(
-          type, std::vector<std::string>({"col_string", "col_map"})));
+  rowOptions.select(std::make_shared<dwio::common::ColumnSelector>(
+      type, std::vector<std::string>({"col_string", "col_map"})));
   auto rowReader = reader->createRowReader(rowOptions);
 
   VectorPtr result;
@@ -592,10 +591,8 @@ TEST_F(TextReaderTest, projectPrimitiveTypes) {
 
   dwio::common::RowReaderOptions rowOptions;
   rowOptions.setScanSpec(spec);
-  rowOptions.select(
-      std::make_shared<dwio::common::ColumnSelector>(
-          type,
-          std::vector<std::string>({"col_tiny", "col_int", "col_double"})));
+  rowOptions.select(std::make_shared<dwio::common::ColumnSelector>(
+      type, std::vector<std::string>({"col_tiny", "col_int", "col_double"})));
   auto rowReader = reader->createRowReader(rowOptions);
 
   VectorPtr result;
@@ -657,9 +654,8 @@ TEST_F(TextReaderTest, projectColumns) {
   spec->addField("col_float", 1);
   dwio::common::RowReaderOptions rowOptions;
   rowOptions.setScanSpec(spec);
-  rowOptions.select(
-      std::make_shared<dwio::common::ColumnSelector>(
-          type, std::vector<std::string>({"col_float"})));
+  rowOptions.select(std::make_shared<dwio::common::ColumnSelector>(
+      type, std::vector<std::string>({"col_float"})));
   auto rowReader = reader->createRowReader(rowOptions);
   VectorPtr result;
   ASSERT_EQ(rowReader->next(10, result), 10);
@@ -777,9 +773,8 @@ TEST_F(TextReaderTest, compressedFilter) {
       BaseVector::createConstant(VARCHAR(), "2023-07-18", 1, pool()));
   spec->addField("col_int", 1);
   spec->getOrCreateChild(common::Subfield("col_string"))
-      ->setFilter(
-          std::make_unique<common::BytesValues>(
-              std::vector<std::string>({"BAR"}), false));
+      ->setFilter(std::make_unique<common::BytesValues>(
+          std::vector<std::string>({"BAR"}), false));
   dwio::common::RowReaderOptions rowOptions;
   rowOptions.setScanSpec(spec);
   rowOptions.select(
@@ -823,9 +818,8 @@ TEST_F(TextReaderTest, filter) {
       BaseVector::createConstant(VARCHAR(), "2023-07-18", 1, pool()));
   spec->addField("col_big_int", 1);
   spec->getOrCreateChild(common::Subfield("col_string"))
-      ->setFilter(
-          std::make_unique<common::BytesValues>(
-              std::vector<std::string>({"BAR", "BAZ"}), false));
+      ->setFilter(std::make_unique<common::BytesValues>(
+          std::vector<std::string>({"BAR", "BAZ"}), false));
 
   dwio::common::RowReaderOptions rowOptions;
   rowOptions.setScanSpec(spec);

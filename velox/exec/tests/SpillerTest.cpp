@@ -331,14 +331,13 @@ class SpillerTest : public exec::test::RowContainerTestBase {
       bool ascending = true,
       bool makeError = false,
       uint64_t readBufferSize = 1 << 20) {
-    SCOPED_TRACE(
-        fmt::format(
-            "spillType: {} numDuplicates: {} outputBatchSize: {} ascending: {} makeError: {}",
-            typeName(type_),
-            numDuplicates,
-            outputBatchSize,
-            ascending,
-            makeError));
+    SCOPED_TRACE(fmt::format(
+        "spillType: {} numDuplicates: {} outputBatchSize: {} ascending: {} makeError: {}",
+        typeName(type_),
+        numDuplicates,
+        outputBatchSize,
+        ascending,
+        makeError));
     constexpr int32_t kNumRows = 5'000;
     const auto prevGStats = common::globalSpillStats();
 
@@ -866,15 +865,14 @@ class SpillerTest : public exec::test::RowContainerTestBase {
       ss << partitionId.toString() << " ";
     }
     ss << "]";
-    SCOPED_TRACE(
-        fmt::format(
-            "Param: {}, numSpillers: {}, numBatchRows: {}, numAppendBatches: {}, targetFileSize: {}, spillPartitionIdSet: {}",
-            param_.toString(),
-            numSpillers,
-            numBatchRows,
-            numAppendBatches,
-            targetFileSize,
-            ss.str()));
+    SCOPED_TRACE(fmt::format(
+        "Param: {}, numSpillers: {}, numBatchRows: {}, numAppendBatches: {}, targetFileSize: {}, spillPartitionIdSet: {}",
+        param_.toString(),
+        numSpillers,
+        numBatchRows,
+        numAppendBatches,
+        targetFileSize,
+        ss.str()));
 
     std::vector<std::vector<RowVectorPtr>> inputsByPartition(numPartitions_);
 

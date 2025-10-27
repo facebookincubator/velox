@@ -219,9 +219,8 @@ class MakeRowFromMap {
     auto vectorPool = evalCtx ? evalCtx->vectorPool() : nullptr;
     for (size_t i = 0; i < keyToIndex_.size(); ++i) {
       if (replaceNulls_) {
-        children.push_back(
-            MakeRowFromMapDefaults::createFlat(
-                valueType, outputSize, *mapBase->pool(), vectorPool));
+        children.push_back(MakeRowFromMapDefaults::createFlat(
+            valueType, outputSize, *mapBase->pool(), vectorPool));
       } else {
         children.push_back(
             vectorPool

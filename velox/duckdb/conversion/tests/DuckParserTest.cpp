@@ -653,9 +653,8 @@ TEST(DuckParserTest, window) {
   EXPECT_EQ(
       "row_number() OVER (PARTITION BY \"a\" ORDER BY \"b\" ASC NULLS LAST "
       "ROWS BETWEEN plus(\"a\",10) PRECEDING AND 10 FOLLOWING)",
-      parseWindow(
-          "row_number() over (partition by a order by b "
-          "rows between a + 10 preceding and 10 following)"));
+      parseWindow("row_number() over (partition by a order by b "
+                  "rows between a + 10 preceding and 10 following)"));
   EXPECT_EQ(
       "row_number() OVER (PARTITION BY \"a\" ORDER BY \"b\" DESC NULLS FIRST "
       "ROWS BETWEEN plus(\"a\",10) PRECEDING AND 10 FOLLOWING)",

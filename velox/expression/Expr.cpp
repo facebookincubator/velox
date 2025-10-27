@@ -1749,29 +1749,24 @@ common::Subfield extractSubfield(
     }
     switch (index->value()->typeKind()) {
       case TypeKind::TINYINT:
-        path.push_back(
-            std::make_unique<common::Subfield::LongSubscript>(
-                index->value()->as<ConstantVector<int8_t>>()->value()));
+        path.push_back(std::make_unique<common::Subfield::LongSubscript>(
+            index->value()->as<ConstantVector<int8_t>>()->value()));
         break;
       case TypeKind::SMALLINT:
-        path.push_back(
-            std::make_unique<common::Subfield::LongSubscript>(
-                index->value()->as<ConstantVector<int16_t>>()->value()));
+        path.push_back(std::make_unique<common::Subfield::LongSubscript>(
+            index->value()->as<ConstantVector<int16_t>>()->value()));
         break;
       case TypeKind::INTEGER:
-        path.push_back(
-            std::make_unique<common::Subfield::LongSubscript>(
-                index->value()->as<ConstantVector<int32_t>>()->value()));
+        path.push_back(std::make_unique<common::Subfield::LongSubscript>(
+            index->value()->as<ConstantVector<int32_t>>()->value()));
         break;
       case TypeKind::BIGINT:
-        path.push_back(
-            std::make_unique<common::Subfield::LongSubscript>(
-                index->value()->as<ConstantVector<int64_t>>()->value()));
+        path.push_back(std::make_unique<common::Subfield::LongSubscript>(
+            index->value()->as<ConstantVector<int64_t>>()->value()));
         break;
       case TypeKind::VARCHAR:
-        path.push_back(
-            std::make_unique<common::Subfield::StringSubscript>(
-                index->value()->as<ConstantVector<StringView>>()->value()));
+        path.push_back(std::make_unique<common::Subfield::StringSubscript>(
+            index->value()->as<ConstantVector<StringView>>()->value()));
         break;
       default:
         return {};

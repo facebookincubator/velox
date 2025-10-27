@@ -113,9 +113,8 @@ TEST_P(MemoryCapExceededTest, singleDriver) {
                   .orderBy({"c0"}, false)
                   .planNode();
   auto queryCtx = core::QueryCtx::create(executor_.get());
-  queryCtx->testingOverrideMemoryPool(
-      memory::memoryManager()->addRootPool(
-          queryCtx->queryId(), kMaxBytes, exec::MemoryReclaimer::create()));
+  queryCtx->testingOverrideMemoryPool(memory::memoryManager()->addRootPool(
+      queryCtx->queryId(), kMaxBytes, exec::MemoryReclaimer::create()));
   CursorParameters params;
   params.planNode = plan;
   params.queryCtx = queryCtx;
@@ -172,9 +171,8 @@ TEST_P(MemoryCapExceededTest, multipleDrivers) {
                   .singleAggregation({"c0"}, {"sum(c1)"})
                   .planNode();
   auto queryCtx = core::QueryCtx::create(executor_.get());
-  queryCtx->testingOverrideMemoryPool(
-      memory::memoryManager()->addRootPool(
-          queryCtx->queryId(), kMaxBytes, exec::MemoryReclaimer::create()));
+  queryCtx->testingOverrideMemoryPool(memory::memoryManager()->addRootPool(
+      queryCtx->queryId(), kMaxBytes, exec::MemoryReclaimer::create()));
 
   const int32_t numDrivers = 10;
   CursorParameters params;

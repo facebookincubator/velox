@@ -462,15 +462,14 @@ TEST_F(VectorHasherTest, stringDistinctOverflow) {
   for (auto i = 0; i < 7; ++i) {
     auto& stringVec = strings[i];
     stringVec.resize(numRows);
-    batches.emplace_back(
-        makeFlatVector<StringView>(
-            numRows, [&i, &stringVec, numRows](vector_size_t row) {
-              const auto num = numRows * i + row;
-              stringVec[row] = (row != 0)
-                  ? fmt::format("abcdefghijabcdefghij{}", num)
-                  : fmt::format("s{}", num);
-              return StringView(stringVec[row]);
-            }));
+    batches.emplace_back(makeFlatVector<StringView>(
+        numRows, [&i, &stringVec, numRows](vector_size_t row) {
+          const auto num = numRows * i + row;
+          stringVec[row] = (row != 0)
+              ? fmt::format("abcdefghijabcdefghij{}", num)
+              : fmt::format("s{}", num);
+          return StringView(stringVec[row]);
+        }));
   }
 
   SelectivityVector rows(numRows, true);

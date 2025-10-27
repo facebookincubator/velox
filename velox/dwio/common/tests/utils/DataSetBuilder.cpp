@@ -47,9 +47,8 @@ DataSetBuilder& DataSetBuilder::makeDataset(
 
   for (size_t i = 0; i < batchCount; ++i) {
     if (withRecursiveNulls) {
-      batches_->push_back(
-          std::static_pointer_cast<RowVector>(
-              BatchMaker::createBatch(rowType, numRows, pool_, nullptr, i)));
+      batches_->push_back(std::static_pointer_cast<RowVector>(
+          BatchMaker::createBatch(rowType, numRows, pool_, nullptr, i)));
     } else {
       batches_->push_back(
           std::static_pointer_cast<RowVector>(BatchMaker::createBatch(

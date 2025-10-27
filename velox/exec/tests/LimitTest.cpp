@@ -315,11 +315,10 @@ TEST_F(LimitTest, barrier) {
                     .splits(makeHiveConnectorSplits(tempFiles))
                     .serialExecution(true)
                     .barrierExecution(testData.barrierExecution)
-                    .assertResults(
-                        fmt::format(
-                            "SELECT * FROM tmp LIMIT {} OFFSET {}",
-                            testData.limit,
-                            testData.offset));
+                    .assertResults(fmt::format(
+                        "SELECT * FROM tmp LIMIT {} OFFSET {}",
+                        testData.limit,
+                        testData.offset));
     const auto taskStats = task->taskStats();
     ASSERT_EQ(taskStats.numBarriers, testData.numExpectedBarriers);
     ASSERT_EQ(taskStats.numFinishedSplits, testData.numExpectedFinishedSplits);

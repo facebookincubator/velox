@@ -780,11 +780,10 @@ TEST_F(BinaryFunctionsTest, fromIEEE754Bits32) {
       std::isnan(fromIEEE754Bits32(
                      toIEEE754Bits32(std::numeric_limits<float>::quiet_NaN()))
                      .value()));
-  EXPECT_TRUE(
-      std::isnan(
-          fromIEEE754Bits32(
-              toIEEE754Bits32(std::numeric_limits<float>::signaling_NaN()))
-              .value()));
+  EXPECT_TRUE(std::isnan(
+      fromIEEE754Bits32(
+          toIEEE754Bits32(std::numeric_limits<float>::signaling_NaN()))
+          .value()));
   EXPECT_TRUE(
       std::isnan(fromIEEE754Bits32(toIEEE754Bits32(std::nan("nan"))).value()));
   VELOX_ASSERT_THROW(

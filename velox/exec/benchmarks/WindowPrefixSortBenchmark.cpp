@@ -72,9 +72,8 @@ class WindowPrefixSortBenchmark : public HiveConnectorTestBase {
 
       // Generate key with a small number of unique values from a small range
       // (0-16).
-      children.emplace_back(
-          makeFlatVector<int32_t>(
-              kRowsPerVector, [](auto row) { return row % 17; }));
+      children.emplace_back(makeFlatVector<int32_t>(
+          kRowsPerVector, [](auto row) { return row % 17; }));
 
       // Generate key with a small number of unique values from a large range
       // (300 total values).
@@ -95,9 +94,8 @@ class WindowPrefixSortBenchmark : public HiveConnectorTestBase {
 
       // Generate a column with increasing values to get a deterministic sort
       // order.
-      children.emplace_back(
-          makeFlatVector<int32_t>(
-              kRowsPerVector, [](auto row) { return row; }));
+      children.emplace_back(makeFlatVector<int32_t>(
+          kRowsPerVector, [](auto row) { return row; }));
 
       // Generate random values without nulls.
       children.emplace_back(fuzzer.fuzzFlat(INTEGER()));

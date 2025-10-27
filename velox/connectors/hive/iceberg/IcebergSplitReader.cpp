@@ -179,11 +179,10 @@ std::vector<TypePtr> IcebergSplitReader::adaptColumns(
             it != hiveSplit_->partitionKeys.end()) {
           setPartitionValue(childSpec.get(), fieldName, it->second);
         } else {
-          childSpec->setConstantValue(
-              BaseVector::createNullConstant(
-                  tableSchema->findChild(fieldName),
-                  1,
-                  connectorQueryCtx_->memoryPool()));
+          childSpec->setConstantValue(BaseVector::createNullConstant(
+              tableSchema->findChild(fieldName),
+              1,
+              connectorQueryCtx_->memoryPool()));
         }
       }
     }

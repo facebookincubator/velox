@@ -195,9 +195,8 @@ struct IPPrefixCollapseFunction {
 
     for (const auto& ipPrefix : ipPrefixes) {
       if (ipPrefix.has_value()) {
-        prefixes.push_back(
-            std::make_tuple(
-                *ipPrefix->template at<0>(), *ipPrefix->template at<1>()));
+        prefixes.push_back(std::make_tuple(
+            *ipPrefix->template at<0>(), *ipPrefix->template at<1>()));
       } else {
         // ip_prefix_collapse does not support null elements. Thus we throw here
         // with the same error message as Presto java.
@@ -424,11 +423,10 @@ struct IPPrefixSubnetsFunction {
 
     if (newPrefixLength < 0 || (inputIsIpV4 && newPrefixLength > 32) ||
         (!inputIsIpV4 && newPrefixLength > 128)) {
-      VELOX_USER_FAIL(
-          fmt::format(
-              "Invalid prefix length for IPv{}: {}",
-              inputIsIpV4 ? 4 : 6,
-              newPrefixLength));
+      VELOX_USER_FAIL(fmt::format(
+          "Invalid prefix length for IPv{}: {}",
+          inputIsIpV4 ? 4 : 6,
+          newPrefixLength));
     }
 
     int8_t inputPrefixLength = *prefix.template at<1>();

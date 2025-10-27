@@ -2166,9 +2166,7 @@ TEST_F(ArrowBridgeArrayImportAsOwnerTest, releaseCalled) {
 
   // Create a Velox Vector from Arrow and then destruct it to trigger the
   // release callback calling
-  {
-    auto _ = importFromArrowAsOwner(arrowSchema, arrowArray, pool_.get());
-  }
+  { auto _ = importFromArrowAsOwner(arrowSchema, arrowArray, pool_.get()); }
 
   EXPECT_TRUE(TestReleaseCalled::schemaReleaseCalled);
   EXPECT_TRUE(TestReleaseCalled::arrayReleaseCalled);

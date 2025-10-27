@@ -31,9 +31,8 @@ class DataBuffer {
   explicit DataBuffer(velox::memory::MemoryPool& pool, uint64_t size = 0)
       : pool_(&pool),
         // Initial allocation uses calloc, to avoid memset.
-        buf_(
-            reinterpret_cast<T*>(
-                pool_->allocateZeroFilled(1, sizeInBytes(size)))),
+        buf_(reinterpret_cast<T*>(
+            pool_->allocateZeroFilled(1, sizeInBytes(size)))),
         size_(size),
         capacity_(size) {
     VELOX_CHECK(buf_ != nullptr || size_ == 0);

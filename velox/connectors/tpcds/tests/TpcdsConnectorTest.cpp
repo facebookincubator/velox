@@ -45,9 +45,8 @@ class TpcdsConnectorTest : public exec::test::OperatorTestBase {
 
   exec::Split makeTpcdsSplit(size_t totalParts = 1, size_t partNumber = 0)
       const {
-    return exec::Split(
-        std::make_shared<TpcdsConnectorSplit>(
-            kTpcdsConnectorId, /*cacheable=*/true, totalParts, partNumber));
+    return exec::Split(std::make_shared<TpcdsConnectorSplit>(
+        kTpcdsConnectorId, /*cacheable=*/true, totalParts, partNumber));
   }
 
   RowVectorPtr getResults(
@@ -119,9 +118,8 @@ TEST_F(TpcdsConnectorTest, singleColumnWithAlias) {
   auto plan = exec::test::PlanBuilder()
                   .startTableScan()
                   .outputType(outputType)
-                  .tableHandle(
-                      std::make_shared<TpcdsTableHandle>(
-                          kTpcdsConnectorId, velox::tpcds::Table::TBL_ITEM))
+                  .tableHandle(std::make_shared<TpcdsTableHandle>(
+                      kTpcdsConnectorId, velox::tpcds::Table::TBL_ITEM))
                   .assignments({
                       {aliasedName,
                        std::make_shared<TpcdsColumnHandle>("i_product_name")},

@@ -323,9 +323,8 @@ TypePtr sanitizeTryResolveType(
     const exec::TypeSignature& typeSignature,
     const std::unordered_map<std::string, SignatureVariable>& variables,
     const std::unordered_map<std::string, TypePtr>& resolvedTypeVariables) {
-  return sanitize(
-      SignatureBinder::tryResolveType(
-          typeSignature, variables, resolvedTypeVariables));
+  return sanitize(SignatureBinder::tryResolveType(
+      typeSignature, variables, resolvedTypeVariables));
 }
 
 TypePtr sanitizeTryResolveType(
@@ -337,14 +336,13 @@ TypePtr sanitizeTryResolveType(
         longEnumParameterVariablesBindings,
     const std::unordered_map<std::string, VarcharEnumParameter>&
         varcharEnumParameterVariablesBindings) {
-  return sanitize(
-      SignatureBinder::tryResolveType(
-          typeSignature,
-          variables,
-          typeVariablesBindings,
-          integerVariablesBindings,
-          longEnumParameterVariablesBindings,
-          varcharEnumParameterVariablesBindings));
+  return sanitize(SignatureBinder::tryResolveType(
+      typeSignature,
+      variables,
+      typeVariablesBindings,
+      integerVariablesBindings,
+      longEnumParameterVariablesBindings,
+      varcharEnumParameterVariablesBindings));
 }
 
 void setupMemory(
@@ -361,13 +359,11 @@ void setupMemory(
   options.checkUsageLeak = true;
   options.arbitrationStateCheckCb = memoryArbitrationStateCheck;
   options.extraArbitratorConfigs = {
-      {std::string(
-           velox::memory::SharedArbitrator::ExtraConfig::
-               kGlobalArbitrationEnabled),
+      {std::string(velox::memory::SharedArbitrator::ExtraConfig::
+                       kGlobalArbitrationEnabled),
        enableGlobalArbitration ? "true" : "false"},
-      {std::string(
-           velox::memory::SharedArbitrator::ExtraConfig::
-               kMemoryPoolMinReclaimBytes),
+      {std::string(velox::memory::SharedArbitrator::ExtraConfig::
+                       kMemoryPoolMinReclaimBytes),
        "0B"}};
   facebook::velox::memory::MemoryManager::initialize(options);
 }

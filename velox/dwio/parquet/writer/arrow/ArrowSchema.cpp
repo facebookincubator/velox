@@ -1155,9 +1155,8 @@ Result<bool> ApplyOriginalStorageMetadata(
     // so no need to recurse on value types.
     const auto& dict_origin_type =
         checked_cast<const ::arrow::DictionaryType&>(*origin_type);
-    inferred->field = inferred->field->WithType(
-        ::arrow::dictionary(
-            ::arrow::int32(), inferred_type, dict_origin_type.ordered()));
+    inferred->field = inferred->field->WithType(::arrow::dictionary(
+        ::arrow::int32(), inferred_type, dict_origin_type.ordered()));
     modified = true;
   }
 

@@ -768,9 +768,8 @@ TEST_F(PlanNodeBuilderTest, indexLookupJoinNode) {
       TableScanNode::Builder()
           .id("values_node_id_2")
           .outputType(ROW({"c1"}, {VARCHAR()}))
-          .tableHandle(
-              std::make_shared<TestConnectorTableHandleForLookupJoin>(
-                  "connector_id"))
+          .tableHandle(std::make_shared<TestConnectorTableHandleForLookupJoin>(
+              "connector_id"))
           .assignments({{"c1", std::make_shared<DummyColumnHandle>()}})
           .build();
   const auto outputType = ROW({"c0"}, {BIGINT()});

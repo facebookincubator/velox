@@ -409,9 +409,8 @@ TEST_F(SkewedPartitionRebalancerTest, concurrentFuzz) {
         threads.emplace_back([&]() {
           std::mt19937 localRng{200};
           for (int iteration = 0; iteration < 1'000; ++iteration) {
-            SCOPED_TRACE(
-                fmt::format(
-                    "taskCount {}, iteration {}", taskCount, iteration));
+            SCOPED_TRACE(fmt::format(
+                "taskCount {}, iteration {}", taskCount, iteration));
             const uint64_t processedBytes =
                 1 + folly::Random::rand32(512, localRng);
             balancer->addProcessedBytes(processedBytes);

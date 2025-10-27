@@ -1972,10 +1972,8 @@ TEST_F(TableScanTest, partitionedTableTimestampKey) {
                   kReadTimestampPartitionValueAsLocalTimeSession,
               asLocalTime ? "true" : "false")
           .splits({split})
-          .assertResults(
-              fmt::format(
-                  "SELECT {}, * FROM tmp",
-                  asLocalTime ? tsValueAsLocal : tsValue));
+          .assertResults(fmt::format(
+              "SELECT {}, * FROM tmp", asLocalTime ? tsValueAsLocal : tsValue));
     };
 
     expect(true);
@@ -2001,10 +1999,9 @@ TEST_F(TableScanTest, partitionedTableTimestampKey) {
                   kReadTimestampPartitionValueAsLocalTimeSession,
               asLocalTime ? "true" : "false")
           .splits({split})
-          .assertResults(
-              fmt::format(
-                  "SELECT c0, {}, c1 FROM tmp",
-                  asLocalTime ? tsValueAsLocal : tsValue));
+          .assertResults(fmt::format(
+              "SELECT c0, {}, c1 FROM tmp",
+              asLocalTime ? tsValueAsLocal : tsValue));
     };
     expect(true);
     expect(false);
@@ -2029,10 +2026,9 @@ TEST_F(TableScanTest, partitionedTableTimestampKey) {
                   kReadTimestampPartitionValueAsLocalTimeSession,
               asLocalTime ? "true" : "false")
           .splits({split})
-          .assertResults(
-              fmt::format(
-                  "SELECT c0, c1, {} FROM tmp",
-                  asLocalTime ? tsValueAsLocal : tsValue));
+          .assertResults(fmt::format(
+              "SELECT c0, c1, {} FROM tmp",
+              asLocalTime ? tsValueAsLocal : tsValue));
     };
     expect(true);
     expect(false);
@@ -2057,10 +2053,8 @@ TEST_F(TableScanTest, partitionedTableTimestampKey) {
                   kReadTimestampPartitionValueAsLocalTimeSession,
               asLocalTime ? "true" : "false")
           .splits({split})
-          .assertResults(
-              fmt::format(
-                  "SELECT {} FROM tmp",
-                  asLocalTime ? tsValueAsLocal : tsValue));
+          .assertResults(fmt::format(
+              "SELECT {} FROM tmp", asLocalTime ? tsValueAsLocal : tsValue));
     };
     expect(true);
     expect(false);
@@ -2107,10 +2101,8 @@ TEST_F(TableScanTest, partitionedTableTimestampKey) {
                   kReadTimestampPartitionValueAsLocalTimeSession,
               asLocalTime ? "true" : "false")
           .splits({split})
-          .assertResults(
-              fmt::format(
-                  "SELECT {}, * FROM tmp",
-                  asLocalTime ? tsValueAsLocal : tsValue));
+          .assertResults(fmt::format(
+              "SELECT {}, * FROM tmp", asLocalTime ? tsValueAsLocal : tsValue));
     };
     expect(true);
     expect(false);

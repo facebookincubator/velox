@@ -345,10 +345,9 @@ Expected<uint8_t> Base64::base64ReverseLookup(
     const ReverseIndex& reverseIndex) {
   auto reverseLookupValue = reverseIndex[static_cast<uint8_t>(encodedChar)];
   if (reverseLookupValue >= 0x40) {
-    return folly::makeUnexpected(
-        Status::UserError(
-            "decode() - invalid input string: invalid character '{}'",
-            encodedChar));
+    return folly::makeUnexpected(Status::UserError(
+        "decode() - invalid input string: invalid character '{}'",
+        encodedChar));
   }
   return reverseLookupValue;
 }
@@ -381,9 +380,8 @@ Expected<size_t> Base64::calculateDecodedSize(
     // block size
     if (inputSize % kEncodedBlockByteSize != 0) {
       return folly::makeUnexpected(
-          Status::UserError(
-              "Base64::decode() - invalid input string: "
-              "string length is not a multiple of 4."));
+          Status::UserError("Base64::decode() - invalid input string: "
+                            "string length is not a multiple of 4."));
     }
 
     auto decodedSize =
@@ -404,10 +402,9 @@ Expected<size_t> Base64::calculateDecodedSize(
   // Adjust the needed size for extra bytes, if present
   if (extraBytes) {
     if (extraBytes == 1) {
-      return folly::makeUnexpected(
-          Status::UserError(
-              "Base64::decode() - invalid input string: "
-              "string length cannot be 1 more than a multiple of 4."));
+      return folly::makeUnexpected(Status::UserError(
+          "Base64::decode() - invalid input string: "
+          "string length cannot be 1 more than a multiple of 4."));
     }
     decodedSize += (extraBytes * kBinaryBlockByteSize) / kEncodedBlockByteSize;
   }
@@ -433,9 +430,8 @@ Expected<size_t> Base64::decodeImpl(
 
   if (outputSize < decodedSize.value()) {
     return folly::makeUnexpected(
-        Status::UserError(
-            "Base64::decode() - invalid output string: "
-            "output string is too small."));
+        Status::UserError("Base64::decode() - invalid output string: "
+                          "output string is too small."));
   }
   outputSize = decodedSize.value();
 
@@ -631,9 +627,8 @@ Expected<size_t> Base64::calculateMimeDecodedSize(
     if (kBase64ReverseIndexTable[static_cast<uint8_t>(input[0])] >= 0x40) {
       return 0;
     }
-    return folly::makeUnexpected(
-        Status::UserError(
-            "Input should at least have 2 bytes for base64 bytes."));
+    return folly::makeUnexpected(Status::UserError(
+        "Input should at least have 2 bytes for base64 bytes."));
   }
   auto decodedSize = inputSize;
   // Compute how many true Base64 chars.

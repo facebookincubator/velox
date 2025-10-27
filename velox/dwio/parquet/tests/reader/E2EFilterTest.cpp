@@ -99,9 +99,8 @@ class E2EFilterTest : public E2EFilterTestBase,
 TEST_F(E2EFilterTest, writerMagic) {
   rowType_ = ROW({"c0"}, {INTEGER()});
   std::vector<RowVectorPtr> batches;
-  batches.push_back(
-      std::static_pointer_cast<RowVector>(test::BatchMaker::createBatch(
-          rowType_, 20000, *leafPool_, nullptr, 0)));
+  batches.push_back(std::static_pointer_cast<RowVector>(
+      test::BatchMaker::createBatch(rowType_, 20000, *leafPool_, nullptr, 0)));
   writeToMemory(rowType_, batches, false);
   auto data = sinkData_.data();
   auto size = sinkData_.size();
@@ -658,9 +657,8 @@ TEST_F(E2EFilterTest, largeMetadata) {
 
   rowType_ = ROW({"c0"}, {INTEGER()});
   std::vector<RowVectorPtr> batches;
-  batches.push_back(
-      std::static_pointer_cast<RowVector>(test::BatchMaker::createBatch(
-          rowType_, 1000, *leafPool_, nullptr, 0)));
+  batches.push_back(std::static_pointer_cast<RowVector>(
+      test::BatchMaker::createBatch(rowType_, 1000, *leafPool_, nullptr, 0)));
   writeToMemory(rowType_, batches, false);
   dwio::common::ReaderOptions readerOpts{leafPool_.get()};
   readerOpts.setFooterEstimatedSize(1024);
@@ -696,9 +694,8 @@ TEST_F(E2EFilterTest, combineRowGroup) {
   rowType_ = ROW({"c0"}, {INTEGER()});
   std::vector<RowVectorPtr> batches;
   for (int i = 0; i < 5; i++) {
-    batches.push_back(
-        std::static_pointer_cast<RowVector>(test::BatchMaker::createBatch(
-            rowType_, 1, *leafPool_, nullptr, 0)));
+    batches.push_back(std::static_pointer_cast<RowVector>(
+        test::BatchMaker::createBatch(rowType_, 1, *leafPool_, nullptr, 0)));
   }
   writeToMemory(rowType_, batches, false);
   dwio::common::ReaderOptions readerOpts{leafPool_.get()};

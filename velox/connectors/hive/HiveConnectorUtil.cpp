@@ -74,15 +74,14 @@ std::unique_ptr<common::Filter> makeFloatingPointMapKeyFilter(
     if (lowerUnbounded && upperUnbounded) {
       continue;
     }
-    filters.push_back(
-        std::make_unique<common::FloatingPointRange<T>>(
-            lower,
-            lowerUnbounded,
-            lowerExclusive,
-            upper,
-            upperUnbounded,
-            upperExclusive,
-            false));
+    filters.push_back(std::make_unique<common::FloatingPointRange<T>>(
+        lower,
+        lowerUnbounded,
+        lowerExclusive,
+        upper,
+        upperUnbounded,
+        upperExclusive,
+        false));
   }
   if (filters.size() == 1) {
     return std::move(filters[0]);
@@ -627,9 +626,8 @@ void configureRowReaderOptions(
   rowReaderOptions.setRequestedType(rowType);
   rowReaderOptions.range(hiveSplit->start, hiveSplit->length);
   if (hiveConfig && sessionProperties) {
-    rowReaderOptions.setTimestampPrecision(
-        static_cast<TimestampPrecision>(
-            hiveConfig->readTimestampUnit(sessionProperties)));
+    rowReaderOptions.setTimestampPrecision(static_cast<TimestampPrecision>(
+        hiveConfig->readTimestampUnit(sessionProperties)));
     rowReaderOptions.setPreserveFlatMapsInMemory(
         hiveConfig->preserveFlatMapsInMemory(sessionProperties));
     rowReaderOptions.setParallelUnitLoadCount(

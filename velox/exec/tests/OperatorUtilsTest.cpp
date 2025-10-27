@@ -66,9 +66,8 @@ class OperatorUtilsTest : public OperatorTestBase {
     // Build source vectors with nulls.
     std::vector<RowVectorPtr> sources;
     for (int i = 0; i < numSources; ++i) {
-      sources.push_back(
-          std::static_pointer_cast<RowVector>(
-              BatchMaker::createBatch(sourceType, kNumRows, *pool_)));
+      sources.push_back(std::static_pointer_cast<RowVector>(
+          BatchMaker::createBatch(sourceType, kNumRows, *pool_)));
       for (int j = 0; j < kNumColumns; ++j) {
         auto vector = sources.back()->childAt(j);
         int nullRow = (folly::Random::rand32() % kNumRows) / 4;

@@ -1155,9 +1155,8 @@ TEST(TypeTest, providesCustomComparison) {
 
   // This type claims it providesCustomComparison but does not implement the
   // compare and hash functions so invoking them should still fail.
-  EXPECT_TRUE(
-      test::BIGINT_TYPE_WITH_INVALID_CUSTOM_COMPARISON()
-          ->providesCustomComparison());
+  EXPECT_TRUE(test::BIGINT_TYPE_WITH_INVALID_CUSTOM_COMPARISON()
+                  ->providesCustomComparison());
   EXPECT_THROW(
       test::BIGINT_TYPE_WITH_INVALID_CUSTOM_COMPARISON()->compare(0, 0),
       VeloxRuntimeError);

@@ -255,10 +255,9 @@ class FunctionBaseTest : public testing::Test,
       std::optional<TArgs>... args) {
     return evaluateOnce<TReturn>(
         expr,
-        makeRowVector(
-            unpackEvaluateParams<std::optional<TArgs>...>(
-                std::vector<TypePtr>{types},
-                std::forward<std::optional<TArgs>>(std::move(args))...)));
+        makeRowVector(unpackEvaluateParams<std::optional<TArgs>...>(
+            std::vector<TypePtr>{types},
+            std::forward<std::optional<TArgs>>(std::move(args))...)));
   }
 
   template <typename TReturn, typename... TArgs>
@@ -267,9 +266,8 @@ class FunctionBaseTest : public testing::Test,
       std::optional<TArgs>... args) {
     return evaluateOnce<TReturn>(
         expr,
-        makeRowVector(
-            unpackEvaluateParams<std::optional<TArgs>...>(
-                {}, std::forward<std::optional<TArgs>>(std::move(args))...)));
+        makeRowVector(unpackEvaluateParams<std::optional<TArgs>...>(
+            {}, std::forward<std::optional<TArgs>>(std::move(args))...)));
   }
 
   // Convenience version to allow API users to specify a single type for
@@ -291,10 +289,8 @@ class FunctionBaseTest : public testing::Test,
       std::optional<TArgs>... args) {
     return evaluateOnce<TReturn>(
         expr,
-        makeRowVector(
-            unpackEvaluateParams<std::optional<TArgs>...>(
-                {type},
-                std::forward<std::optional<TArgs>>(std::move(args))...)));
+        makeRowVector(unpackEvaluateParams<std::optional<TArgs>...>(
+            {type}, std::forward<std::optional<TArgs>>(std::move(args))...)));
   }
 
   template <typename TReturn>

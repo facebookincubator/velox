@@ -164,9 +164,8 @@ void saveSystemHeaders(std::map<std::string, std::string>& map) {
         << pair.second;
   }
   out.close();
-  system(
-      fmt::format(" mv /tmp/h.{} /tmp/wavesystemheaders.txt", getpid())
-          .c_str());
+  system(fmt::format(" mv /tmp/h.{} /tmp/wavesystemheaders.txt", getpid())
+             .c_str());
 }
 
 // Adds a trailing zero to make the string.data() a C char*.
@@ -254,9 +253,8 @@ void ensureInit() {
     }
   }
   if (!hasArch) {
-    waveNvrtcFlags.push_back(
-        fmt::format(
-            "--gpu-architecture=compute_{}{}", device->major, device->minor));
+    waveNvrtcFlags.push_back(fmt::format(
+        "--gpu-architecture=compute_{}{}", device->major, device->minor));
   }
   ::jitify::detail::detect_and_add_cuda_arch(waveNvrtcFlags);
   std::map<std::string, std::string> headers;

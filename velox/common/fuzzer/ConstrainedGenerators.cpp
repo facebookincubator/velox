@@ -586,10 +586,9 @@ std::string CastVarcharInputGenerator::generateValidPrimitiveAsString() {
     }
     default:
       // cast from varchar doesn't support complex types
-      VELOX_FAIL_UNSUPPORTED_INPUT_UNCATCHABLE(
-          fmt::format(
-              "Type `{}` not supported for cast varchar custom generator",
-              castToType_->kind()));
+      VELOX_FAIL_UNSUPPORTED_INPUT_UNCATCHABLE(fmt::format(
+          "Type `{}` not supported for cast varchar custom generator",
+          castToType_->kind()));
   }
 }
 

@@ -23,9 +23,10 @@ namespace {
 class RegrReplacementAggregate {
  public:
   using InputType = Row<double>;
-  using IntermediateType = Row</*n*/ double,
-                               /*avg*/ double,
-                               /*m2*/ double>;
+  using IntermediateType =
+      Row</*n*/ double,
+          /*avg*/ double,
+          /*m2*/ double>;
   using OutputType = double;
 
   static bool toIntermediate(

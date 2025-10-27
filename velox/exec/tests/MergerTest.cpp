@@ -101,12 +101,11 @@ class MergerTest : public OperatorTestBase {
       std::vector<std::unique_ptr<SpillReadFile>> spillReadFiles;
       spillReadFiles.reserve(spillFiles.size());
       for (const auto& spillFile : spillFiles) {
-        spillReadFiles.emplace_back(
-            SpillReadFile::create(
-                spillFile,
-                spillConfig_.readBufferSize,
-                pool_.get(),
-                spillStats_.get()));
+        spillReadFiles.emplace_back(SpillReadFile::create(
+            spillFile,
+            spillConfig_.readBufferSize,
+            pool_.get(),
+            spillStats_.get()));
       }
       spillReadFilesGroups.emplace_back(std::move(spillReadFiles));
     }
@@ -150,9 +149,8 @@ class MergerTest : public OperatorTestBase {
       uint64_t outputBatchBytes) const {
     std::vector<std::unique_ptr<SourceStream>> sourceStreams;
     for (const auto& source : sources) {
-      sourceStreams.push_back(
-          std::make_unique<SourceStream>(
-              source.get(), sortingKeys_, outputBatchRows));
+      sourceStreams.push_back(std::make_unique<SourceStream>(
+          source.get(), sortingKeys_, outputBatchRows));
     }
     return std::make_unique<SourceMerger>(
         inputType_,

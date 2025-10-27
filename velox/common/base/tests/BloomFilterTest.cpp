@@ -75,9 +75,8 @@ TEST_F(BloomFilterTest, staticMayContain) {
   bloom.serialize(serializedBloom.data());
   int32_t numFalsePositives = 0;
   for (auto i = 0; i < kSize; ++i) {
-    EXPECT_TRUE(
-        BloomFilter<>::mayContain(
-            serializedBloom.data(), folly::hasher<int32_t>()(i)));
+    EXPECT_TRUE(BloomFilter<>::mayContain(
+        serializedBloom.data(), folly::hasher<int32_t>()(i)));
 
     const uint64_t smallValueHash = folly::hasher<int32_t>()(i + kSize);
     const bool isFalsePositiveForSmallValue =

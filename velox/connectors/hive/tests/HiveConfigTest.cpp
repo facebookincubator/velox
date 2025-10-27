@@ -23,9 +23,8 @@ using namespace facebook::velox::connector::hive;
 using facebook::velox::connector::hive::HiveConfig;
 
 TEST(HiveConfigTest, defaultConfig) {
-  HiveConfig hiveConfig(
-      std::make_shared<config::ConfigBase>(
-          std::unordered_map<std::string, std::string>()));
+  HiveConfig hiveConfig(std::make_shared<config::ConfigBase>(
+      std::unordered_map<std::string, std::string>()));
   const auto emptySession = std::make_unique<config::ConfigBase>(
       std::unordered_map<std::string, std::string>());
   ASSERT_EQ(
@@ -113,9 +112,8 @@ TEST(HiveConfigTest, overrideConfig) {
 }
 
 TEST(HiveConfigTest, overrideSession) {
-  HiveConfig hiveConfig(
-      std::make_shared<config::ConfigBase>(
-          std::unordered_map<std::string, std::string>()));
+  HiveConfig hiveConfig(std::make_shared<config::ConfigBase>(
+      std::unordered_map<std::string, std::string>()));
   std::unordered_map<std::string, std::string> sessionOverride = {
       {HiveConfig::kInsertExistingPartitionsBehaviorSession, "OVERWRITE"},
       {HiveConfig::kOrcUseColumnNamesSession, "true"},

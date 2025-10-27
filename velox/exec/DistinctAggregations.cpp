@@ -32,10 +32,9 @@ class TypedDistinctAggregations : public DistinctAggregations {
       : pool_{pool},
         aggregates_{std::move(aggregates)},
         inputs_{aggregates_[0]->inputs},
-        inputType_(
-            TypedDistinctAggregations::makeInputTypeForAccumulator(
-                inputType,
-                inputs_)) {}
+        inputType_(TypedDistinctAggregations::makeInputTypeForAccumulator(
+            inputType,
+            inputs_)) {}
 
   /// Returns metadata about the accumulator used to store unique inputs.
   Accumulator accumulator() const override {

@@ -153,14 +153,12 @@ std::vector<RowVectorPtr> TopNRowNumberFuzzer::generateInput(
         // values. This is done to introduce some repetition of key values for
         // windowing.
         auto baseVector = vectorFuzzer_.fuzz(keyTypes[i], numPartitions);
-        children.push_back(
-            BaseVector::wrapInDictionary(
-                partitionNulls, partitionIndices, size, baseVector));
+        children.push_back(BaseVector::wrapInDictionary(
+            partitionNulls, partitionIndices, size, baseVector));
       } else if (sortingKeySet.find(keyNames[i]) != sortingKeySet.end()) {
         auto baseVector = vectorFuzzer_.fuzz(keyTypes[i], numPeerGroups);
-        children.push_back(
-            BaseVector::wrapInDictionary(
-                sortingNulls, sortingIndices, size, baseVector));
+        children.push_back(BaseVector::wrapInDictionary(
+            sortingNulls, sortingIndices, size, baseVector));
       } else {
         children.push_back(vectorFuzzer_.fuzz(keyTypes[i], size));
       }

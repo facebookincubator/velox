@@ -285,9 +285,8 @@ class Table {
     SplitVector result;
     std::lock_guard<std::mutex> l(mutex_);
     for (auto& stripe : stripes_) {
-      result.push_back(
-          std::make_shared<connector::hive::HiveConnectorSplit>(
-              "test-hive", stripe->name, dwio::common::FileFormat::UNKNOWN));
+      result.push_back(std::make_shared<connector::hive::HiveConnectorSplit>(
+          "test-hive", stripe->name, dwio::common::FileFormat::UNKNOWN));
     }
     return result;
   }

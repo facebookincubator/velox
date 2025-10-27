@@ -160,10 +160,9 @@ BlockingState::BlockingState(
       future_(std::move(future)),
       operator_(op),
       reason_(reason),
-      sinceUs_(
-          std::chrono::duration_cast<std::chrono::microseconds>(
-              std::chrono::high_resolution_clock::now().time_since_epoch())
-              .count()) {
+      sinceUs_(std::chrono::duration_cast<std::chrono::microseconds>(
+                   std::chrono::high_resolution_clock::now().time_since_epoch())
+                   .count()) {
   // Set before leaving the thread.
   driver_->state().hasBlockingFuture = true;
   numBlockedDrivers_++;
@@ -412,12 +411,11 @@ CpuWallTiming Driver::processLazyIoStats(
   cpuDelta = std::min<int64_t>(cpuDelta, timing.cpuNanos);
   wallDelta = std::min<int64_t>(wallDelta, timing.wallNanos);
   lockStats = operators_[0]->stats().wlock();
-  lockStats->getOutputTiming.add(
-      CpuWallTiming{
-          1,
-          static_cast<uint64_t>(wallDelta),
-          static_cast<uint64_t>(cpuDelta),
-      });
+  lockStats->getOutputTiming.add(CpuWallTiming{
+      1,
+      static_cast<uint64_t>(wallDelta),
+      static_cast<uint64_t>(cpuDelta),
+  });
   lockStats->inputBytes += inputBytesDelta;
   lockStats->outputBytes += inputBytesDelta;
   return CpuWallTiming{

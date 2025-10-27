@@ -327,11 +327,10 @@ Writer::Writer(
     RowTypePtr schema)
     : pool_(std::move(pool)),
       generalPool_{pool_->addLeafChild(".general")},
-      stream_(
-          std::make_shared<ArrowDataBufferSink>(
-              std::move(sink),
-              *generalPool_,
-              options.bufferGrowRatio)),
+      stream_(std::make_shared<ArrowDataBufferSink>(
+          std::move(sink),
+          *generalPool_,
+          options.bufferGrowRatio)),
       arrowContext_(std::make_shared<ArrowContext>()),
       schema_(std::move(schema)) {
   validateSchemaRecursive(schema_);
@@ -361,10 +360,9 @@ Writer::Writer(
     : Writer{
           std::move(sink),
           options,
-          options.memoryPool->addAggregateChild(
-              fmt::format(
-                  "writer_node_{}",
-                  folly::to<std::string>(folly::Random::rand64()))),
+          options.memoryPool->addAggregateChild(fmt::format(
+              "writer_node_{}",
+              folly::to<std::string>(folly::Random::rand64()))),
           std::move(schema)} {}
 
 void Writer::flush() {

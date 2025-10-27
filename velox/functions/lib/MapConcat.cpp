@@ -186,8 +186,9 @@ class MapConcatFunction : public exec::VectorFunction {
 void registerMapConcatFunction(const std::string& name) {
   exec::registerVectorFunction(
       name,
-      MapConcatFunction</*EmptyForNull=*/false,
-                        /*AllowSingleArg=*/false>::signatures(),
+      MapConcatFunction<
+          /*EmptyForNull=*/false,
+          /*AllowSingleArg=*/false>::signatures(),
       std::make_unique<MapConcatFunction<
           /*EmptyForNull=*/false,
           /*AllowSingleArg=*/false>>());
@@ -196,8 +197,9 @@ void registerMapConcatFunction(const std::string& name) {
 void registerMapConcatAllowSingleArg(const std::string& name) {
   exec::registerVectorFunction(
       name,
-      MapConcatFunction</*EmptyForNull=*/false,
-                        /*AllowSingleArg=*/true>::signatures(),
+      MapConcatFunction<
+          /*EmptyForNull=*/false,
+          /*AllowSingleArg=*/true>::signatures(),
       std::make_unique<MapConcatFunction<
           /*EmptyForNull=*/false,
           /*AllowSingleArg=*/true>>());
@@ -206,8 +208,9 @@ void registerMapConcatAllowSingleArg(const std::string& name) {
 void registerMapConcatEmptyNullsFunction(const std::string& name) {
   exec::registerVectorFunction(
       name,
-      MapConcatFunction</*EmptyForNull=*/true,
-                        /*AllowSingleArg=*/false>::signatures(),
+      MapConcatFunction<
+          /*EmptyForNull=*/true,
+          /*AllowSingleArg=*/false>::signatures(),
       std::make_unique<MapConcatFunction<
           /*EmptyForNull=*/true,
           /*AllowSingleArg=*/false>>(),

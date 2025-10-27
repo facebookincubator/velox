@@ -44,11 +44,9 @@ class SparkQueryRunner : public velox::exec::test::ReferenceQueryRunner {
         userId_(userId),
         userName_(userName),
         sessionId_(generateUUID()),
-        stub_(
-            spark::connect::SparkConnectService::NewStub(
-                grpc::CreateChannel(
-                    coordinatorUri,
-                    grpc::InsecureChannelCredentials()))) {
+        stub_(spark::connect::SparkConnectService::NewStub(grpc::CreateChannel(
+            coordinatorUri,
+            grpc::InsecureChannelCredentials()))) {
     pool_ = aggregatePool()->addLeafChild("leaf");
     copyPool_ = aggregatePool()->addLeafChild("copy");
   };

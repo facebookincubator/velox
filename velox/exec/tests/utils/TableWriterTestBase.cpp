@@ -399,9 +399,8 @@ TableWriterTestBase::makeHiveConnectorSplits(const std::string& directoryPath) {
   std::vector<std::shared_ptr<connector::ConnectorSplit>> splits;
   for (auto& path : fs::recursive_directory_iterator(directoryPath)) {
     if (path.is_regular_file()) {
-      splits.push_back(
-          HiveConnectorTestBase::makeHiveConnectorSplits(
-              path.path().string(), 1, fileFormat_)[0]);
+      splits.push_back(HiveConnectorTestBase::makeHiveConnectorSplits(
+          path.path().string(), 1, fileFormat_)[0]);
     }
   }
   return splits;
@@ -427,9 +426,8 @@ TableWriterTestBase::makeHiveConnectorSplits(
     const std::vector<std::filesystem::path>& filePaths) {
   std::vector<std::shared_ptr<connector::ConnectorSplit>> splits;
   for (const auto& filePath : filePaths) {
-    splits.push_back(
-        HiveConnectorTestBase::makeHiveConnectorSplits(
-            filePath.string(), 1, fileFormat_)[0]);
+    splits.push_back(HiveConnectorTestBase::makeHiveConnectorSplits(
+        filePath.string(), 1, fileFormat_)[0]);
   }
   return splits;
 }
@@ -783,10 +781,9 @@ std::string TableWriterTestBase::partitionNameToPredicate(
   for (auto i = 0; i < partitionKeyValues.size(); ++i) {
     if (partitionTypes[i]->isVarchar() || partitionTypes[i]->isVarbinary() ||
         partitionTypes[i]->isDate()) {
-      conjuncts.push_back(
-          partitionKeyValues[i]
-              .replace(partitionKeyValues[i].find("="), 1, "='")
-              .append("'"));
+      conjuncts.push_back(partitionKeyValues[i]
+                              .replace(partitionKeyValues[i].find("="), 1, "='")
+                              .append("'"));
     } else {
       conjuncts.push_back(partitionKeyValues[i]);
     }
@@ -802,10 +799,9 @@ std::string TableWriterTestBase::partitionNameToPredicate(
   for (auto i = 0; i < partitionDirNames.size(); ++i) {
     if (partitionTypes_[i]->isVarchar() || partitionTypes_[i]->isVarbinary() ||
         partitionTypes_[i]->isDate()) {
-      conjuncts.push_back(
-          partitionKeyValues[i]
-              .replace(partitionKeyValues[i].find("="), 1, "='")
-              .append("'"));
+      conjuncts.push_back(partitionKeyValues[i]
+                              .replace(partitionKeyValues[i].find("="), 1, "='")
+                              .append("'"));
     } else {
       conjuncts.push_back(partitionDirNames[i]);
     }
@@ -818,22 +814,20 @@ void TableWriterTestBase::verifyUnbucketedFilePath(
     const std::string& targetDir) {
   ASSERT_EQ(filePath.parent_path().string(), targetDir);
   if (commitStrategy_ == CommitStrategy::kNoCommit) {
-    ASSERT_TRUE(
-        RE2::FullMatch(
-            filePath.filename().string(),
-            fmt::format(
-                "test_cursor.+_[0-{}]_{}_.+",
-                numTableWriterCount_ - 1,
-                tableWriteNodeId_)))
+    ASSERT_TRUE(RE2::FullMatch(
+        filePath.filename().string(),
+        fmt::format(
+            "test_cursor.+_[0-{}]_{}_.+",
+            numTableWriterCount_ - 1,
+            tableWriteNodeId_)))
         << filePath.filename().string();
   } else {
-    ASSERT_TRUE(
-        RE2::FullMatch(
-            filePath.filename().string(),
-            fmt::format(
-                ".tmp.velox.test_cursor.+_[0-{}]_{}_.+",
-                numTableWriterCount_ - 1,
-                tableWriteNodeId_)))
+    ASSERT_TRUE(RE2::FullMatch(
+        filePath.filename().string(),
+        fmt::format(
+            ".tmp.velox.test_cursor.+_[0-{}]_{}_.+",
+            numTableWriterCount_ - 1,
+            tableWriteNodeId_)))
         << filePath.filename().string();
   }
 }
@@ -849,29 +843,25 @@ void TableWriterTestBase::verifyBucketedFileName(
     const std::filesystem::path& filePath) {
   if (commitStrategy_ == CommitStrategy::kNoCommit) {
     if (fileFormat_ == FileFormat::PARQUET) {
-      ASSERT_TRUE(
-          RE2::FullMatch(
-              filePath.filename().string(),
-              "0[0-9]+_0_TaskCursorQuery_[0-9]+\\.parquet$"))
+      ASSERT_TRUE(RE2::FullMatch(
+          filePath.filename().string(),
+          "0[0-9]+_0_TaskCursorQuery_[0-9]+\\.parquet$"))
           << filePath.filename().string();
     } else {
-      ASSERT_TRUE(
-          RE2::FullMatch(
-              filePath.filename().string(), "0[0-9]+_0_TaskCursorQuery_[0-9]+"))
+      ASSERT_TRUE(RE2::FullMatch(
+          filePath.filename().string(), "0[0-9]+_0_TaskCursorQuery_[0-9]+"))
           << filePath.filename().string();
     }
   } else {
     if (fileFormat_ == FileFormat::PARQUET) {
-      ASSERT_TRUE(
-          RE2::FullMatch(
-              filePath.filename().string(),
-              ".tmp.velox.0[0-9]+_0_TaskCursorQuery_[0-9]+_.+\\.parquet$"))
+      ASSERT_TRUE(RE2::FullMatch(
+          filePath.filename().string(),
+          ".tmp.velox.0[0-9]+_0_TaskCursorQuery_[0-9]+_.+\\.parquet$"))
           << filePath.filename().string();
     } else {
-      ASSERT_TRUE(
-          RE2::FullMatch(
-              filePath.filename().string(),
-              ".tmp.velox.0[0-9]+_0_TaskCursorQuery_[0-9]+_.+"))
+      ASSERT_TRUE(RE2::FullMatch(
+          filePath.filename().string(),
+          ".tmp.velox.0[0-9]+_0_TaskCursorQuery_[0-9]+_.+"))
           << filePath.filename().string();
     }
   }

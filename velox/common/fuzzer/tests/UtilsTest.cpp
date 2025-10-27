@@ -26,25 +26,23 @@ namespace facebook::velox::fuzzer::test {
 class UtilsTest : public testing::Test {};
 
 TEST_F(UtilsTest, testRuleList) {
-  auto simple = RuleList(
-      std::vector<std::shared_ptr<Rule>>{
-          std::make_shared<ConstantRule>("Hello"),
-          std::make_shared<ConstantRule>(","),
-          std::make_shared<ConstantRule>(" "),
-          std::make_shared<ConstantRule>("world"),
-          std::make_shared<ConstantRule>("!"),
-      });
+  auto simple = RuleList(std::vector<std::shared_ptr<Rule>>{
+      std::make_shared<ConstantRule>("Hello"),
+      std::make_shared<ConstantRule>(","),
+      std::make_shared<ConstantRule>(" "),
+      std::make_shared<ConstantRule>("world"),
+      std::make_shared<ConstantRule>("!"),
+  });
   ASSERT_EQ(simple.generate(), "Hello, world!");
 
   FuzzerGenerator rng;
-  auto fuzz = RuleList(
-      std::vector<std::shared_ptr<Rule>>{
-          std::make_shared<ConstantRule>("Hello"),
-          std::make_shared<ConstantRule>(","),
-          std::make_shared<ConstantRule>(" "),
-          std::make_shared<WordRule>(rng),
-          std::make_shared<ConstantRule>("!"),
-      });
+  auto fuzz = RuleList(std::vector<std::shared_ptr<Rule>>{
+      std::make_shared<ConstantRule>("Hello"),
+      std::make_shared<ConstantRule>(","),
+      std::make_shared<ConstantRule>(" "),
+      std::make_shared<WordRule>(rng),
+      std::make_shared<ConstantRule>("!"),
+  });
   ASSERT_TRUE(
       std::regex_match(fuzz.generate(), std::regex("Hello, \\w{1,20}!")));
 }
@@ -85,43 +83,36 @@ TEST_F(UtilsTest, testConstantRule) {
   auto rule = std::make_shared<ConstantRule>("a");
   ASSERT_EQ(rule->generate(), "a");
 
-  auto rule_list = RuleList(
-      std::vector<std::shared_ptr<Rule>>{
-          std::make_shared<ConstantRule>("a"),
-          std::make_shared<ConstantRule>("b"),
-          std::make_shared<ConstantRule>("c")});
+  auto rule_list = RuleList(std::vector<std::shared_ptr<Rule>>{
+      std::make_shared<ConstantRule>("a"),
+      std::make_shared<ConstantRule>("b"),
+      std::make_shared<ConstantRule>("c")});
   ASSERT_EQ(rule_list.generate(), "abc");
 }
 
 TEST_F(UtilsTest, testStringRule) {
   FuzzerGenerator rng;
   auto simple = std::make_shared<StringRule>(rng);
-  ASSERT_TRUE(
-      std::regex_match(
-          simple->generate(), std::regex("^[\x21-\x7F]+$"))); // printable ascii
+  ASSERT_TRUE(std::regex_match(
+      simple->generate(), std::regex("^[\x21-\x7F]+$"))); // printable ascii
   ASSERT_FALSE(std::regex_match(simple->generate(), std::regex("^\\w+$")));
   ASSERT_FALSE(std::regex_match(simple->generate(), std::regex("^\\d+$")));
 
   auto specified_flexible = std::make_shared<StringRule>(
       rng, std::vector<UTF8CharList>{UTF8CharList::ASCII}, 3, 7, true);
-  ASSERT_TRUE(
-      std::regex_match(
-          specified_flexible->generate(), std::regex("^[\\x21-\\x7F]{3,7}$")));
-  ASSERT_FALSE(
-      std::regex_match(
-          specified_flexible->generate(), std::regex("^[\\x21-\\x7F]{0,2}$")));
-  ASSERT_FALSE(
-      std::regex_match(
-          specified_flexible->generate(), std::regex("^[\\x21-\\x7F]{8,}$")));
+  ASSERT_TRUE(std::regex_match(
+      specified_flexible->generate(), std::regex("^[\\x21-\\x7F]{3,7}$")));
+  ASSERT_FALSE(std::regex_match(
+      specified_flexible->generate(), std::regex("^[\\x21-\\x7F]{0,2}$")));
+  ASSERT_FALSE(std::regex_match(
+      specified_flexible->generate(), std::regex("^[\\x21-\\x7F]{8,}$")));
 
   auto specified_strict = std::make_shared<StringRule>(
       rng, std::vector<UTF8CharList>{UTF8CharList::ASCII}, 3, 7, false);
-  ASSERT_TRUE(
-      std::regex_match(
-          specified_strict->generate(), std::regex("^[\x21-\x7F]{7}$")));
-  ASSERT_FALSE(
-      std::regex_match(
-          specified_strict->generate(), std::regex("^[\x21-\x7F]{8}$")));
+  ASSERT_TRUE(std::regex_match(
+      specified_strict->generate(), std::regex("^[\x21-\x7F]{7}$")));
+  ASSERT_FALSE(std::regex_match(
+      specified_strict->generate(), std::regex("^[\x21-\x7F]{8}$")));
 }
 
 TEST_F(UtilsTest, testWordRule) {
@@ -133,21 +124,16 @@ TEST_F(UtilsTest, testWordRule) {
   ASSERT_FALSE(std::regex_match(simple->generate(), std::regex("^\\W+$")));
 
   auto specified_flexible = std::make_shared<WordRule>(rng, 3, 7, true);
-  ASSERT_TRUE(
-      std::regex_match(
-          specified_flexible->generate(), std::regex("^[a-zA-Z]{3,7}$")));
-  ASSERT_TRUE(
-      std::regex_match(
-          specified_flexible->generate(), std::regex("^\\w{3,7}$")));
-  ASSERT_FALSE(
-      std::regex_match(
-          specified_flexible->generate(), std::regex("^\\d{3,7}$")));
-  ASSERT_FALSE(
-      std::regex_match(
-          specified_flexible->generate(), std::regex("^\\w{0,2}$")));
-  ASSERT_FALSE(
-      std::regex_match(
-          specified_flexible->generate(), std::regex("^\\w{8,}$")));
+  ASSERT_TRUE(std::regex_match(
+      specified_flexible->generate(), std::regex("^[a-zA-Z]{3,7}$")));
+  ASSERT_TRUE(std::regex_match(
+      specified_flexible->generate(), std::regex("^\\w{3,7}$")));
+  ASSERT_FALSE(std::regex_match(
+      specified_flexible->generate(), std::regex("^\\d{3,7}$")));
+  ASSERT_FALSE(std::regex_match(
+      specified_flexible->generate(), std::regex("^\\w{0,2}$")));
+  ASSERT_FALSE(std::regex_match(
+      specified_flexible->generate(), std::regex("^\\w{8,}$")));
 
   auto specified_strict = std::make_shared<WordRule>(rng, 3, 7, false);
   ASSERT_TRUE(
@@ -163,21 +149,16 @@ TEST_F(UtilsTest, testNumRule) {
   ASSERT_FALSE(std::regex_match(simple->generate(), std::regex("^\\D+$")));
 
   auto specified_flexible = std::make_shared<NumRule>(rng, 3, 7, true);
-  ASSERT_TRUE(
-      std::regex_match(
-          specified_flexible->generate(), std::regex("^\\d{3,7}$")));
-  ASSERT_TRUE(
-      std::regex_match(
-          specified_flexible->generate(), std::regex("^\\w{3,7}$")));
-  ASSERT_FALSE(
-      std::regex_match(
-          specified_flexible->generate(), std::regex("^\\D{3,7}$")));
-  ASSERT_FALSE(
-      std::regex_match(
-          specified_flexible->generate(), std::regex("^\\d{0,2}$")));
-  ASSERT_FALSE(
-      std::regex_match(
-          specified_flexible->generate(), std::regex("^\\d{8,}$")));
+  ASSERT_TRUE(std::regex_match(
+      specified_flexible->generate(), std::regex("^\\d{3,7}$")));
+  ASSERT_TRUE(std::regex_match(
+      specified_flexible->generate(), std::regex("^\\w{3,7}$")));
+  ASSERT_FALSE(std::regex_match(
+      specified_flexible->generate(), std::regex("^\\D{3,7}$")));
+  ASSERT_FALSE(std::regex_match(
+      specified_flexible->generate(), std::regex("^\\d{0,2}$")));
+  ASSERT_FALSE(std::regex_match(
+      specified_flexible->generate(), std::regex("^\\d{8,}$")));
 
   auto specified_strict = std::make_shared<NumRule>(rng, 3, 7, false);
   ASSERT_TRUE(

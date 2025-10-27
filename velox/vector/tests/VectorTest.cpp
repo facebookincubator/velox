@@ -668,12 +668,11 @@ class VectorTest : public testing::Test, public velox::test::VectorTestBase {
       int level,
       vector_size_t offset,
       vector_size_t length) {
-    SCOPED_TRACE(
-        fmt::format(
-            "testSlice encoding={} offset={} length={}",
-            vec->encoding(),
-            offset,
-            length));
+    SCOPED_TRACE(fmt::format(
+        "testSlice encoding={} offset={} length={}",
+        vec->encoding(),
+        offset,
+        length));
     ASSERT_GE(vec->size(), offset + length);
     auto slice = vec->loadedVector()->slice(offset, length);
     ASSERT_EQ(slice->size(), length);
@@ -2232,9 +2231,8 @@ TEST_F(VectorTest, nestedLazy) {
 
   // Verify that the unloaded dictionary can be nested as long as it has one top
   // level vector.
-  EXPECT_NO_THROW(
-      BaseVector::wrapInDictionary(
-          nullptr, makeIndices(size, indexAt), size, dict));
+  EXPECT_NO_THROW(BaseVector::wrapInDictionary(
+      nullptr, makeIndices(size, indexAt), size, dict));
 
   // Limitation: Current checks cannot prevent existing references of the lazy
   // vector to load rows. For example, the following would succeed even though
@@ -2683,16 +2681,14 @@ TEST_F(VectorTest, testCopyWithZeroCount) {
   runTest(makeFlatVector<int32_t>({1, 2}));
 
   // Complex types.
-  runTest(
-      makeArrayVector<int32_t>(
-          1, [](auto) { return 10; }, [](auto i) { return i; }));
+  runTest(makeArrayVector<int32_t>(
+      1, [](auto) { return 10; }, [](auto i) { return i; }));
 
-  runTest(
-      makeMapVector<int32_t, float>(
-          1,
-          [](auto) { return 10; },
-          [](auto i) { return i; },
-          [](auto i) { return i; }));
+  runTest(makeMapVector<int32_t, float>(
+      1,
+      [](auto) { return 10; },
+      [](auto i) { return i; },
+      [](auto i) { return i; }));
 
   runTest(
       makeRowVector({makeFlatVector<int32_t>(1, [](auto i) { return i; })}));

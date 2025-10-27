@@ -204,9 +204,8 @@ TEST_F(TypeParserTest, rowType) {
       *ROW({"12 tb", "b", "c"}, {BIGINT(), BIGINT(), BIGINT()}));
 
   ASSERT_EQ(
-      *parseType(
-          "row(\"a\" bigint, \"b\" array(varchar), "
-          "\"c\" timestamp with time zone)"),
+      *parseType("row(\"a\" bigint, \"b\" array(varchar), "
+                 "\"c\" timestamp with time zone)"),
       *ROW(
           {"a", "b", "c"},
           {BIGINT(), ARRAY(VARCHAR()), TIMESTAMP_WITH_TIME_ZONE()}));
@@ -348,10 +347,9 @@ TEST_F(TypeParserTest, decimalType) {
 // Checks that type names can also be field names.
 TEST_F(TypeParserTest, fieldNames) {
   ASSERT_EQ(
-      *parseType(
-          "row(bigint bigint, map bigint, row bigint, array bigint, "
-          "decimal bigint, function bigint, struct bigint, "
-          "varchar map(bigint, tinyint), varbinary array(bigint))"),
+      *parseType("row(bigint bigint, map bigint, row bigint, array bigint, "
+                 "decimal bigint, function bigint, struct bigint, "
+                 "varchar map(bigint, tinyint), varbinary array(bigint))"),
       *ROW(
           {"bigint",
            "map",

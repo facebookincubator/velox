@@ -93,12 +93,10 @@ TEST_F(BasicTableWriterTestBase, roundTrip) {
   // Read from 'writeFileName' and verify the data matches the original.
   plan = PlanBuilder().tableScan(rowType).planNode();
 
-  auto copy =
-      AssertQueryBuilder(plan)
-          .split(makeHiveConnectorSplit(
-              fmt::format(
-                  "{}/{}", targetDirectoryPath->getPath(), writeFileName)))
-          .copyResults(pool());
+  auto copy = AssertQueryBuilder(plan)
+                  .split(makeHiveConnectorSplit(fmt::format(
+                      "{}/{}", targetDirectoryPath->getPath(), writeFileName)))
+                  .copyResults(pool());
   assertEqualResults({data}, {copy});
 }
 
@@ -207,72 +205,66 @@ class PartitionedTableWriterTest
     for (bool multiDrivers : multiDriverOptions) {
       for (FileFormat fileFormat : fileFormats) {
         for (bool scaleWriter : {false, true}) {
-          testParams.push_back(
-              TestParam{
-                  fileFormat,
-                  TestMode::kPartitioned,
-                  CommitStrategy::kNoCommit,
-                  HiveBucketProperty::Kind::kHiveCompatible,
-                  false,
-                  multiDrivers,
-                  CompressionKind_ZSTD,
-                  scaleWriter}
-                  .value);
-          testParams.push_back(
-              TestParam{
-                  fileFormat,
-                  TestMode::kPartitioned,
-                  CommitStrategy::kTaskCommit,
-                  HiveBucketProperty::Kind::kHiveCompatible,
-                  false,
-                  multiDrivers,
-                  CompressionKind_ZSTD,
-                  scaleWriter}
-                  .value);
-          testParams.push_back(
-              TestParam{
-                  fileFormat,
-                  TestMode::kBucketed,
-                  CommitStrategy::kNoCommit,
-                  HiveBucketProperty::Kind::kHiveCompatible,
-                  false,
-                  multiDrivers,
-                  CompressionKind_ZSTD,
-                  scaleWriter}
-                  .value);
-          testParams.push_back(
-              TestParam{
-                  fileFormat,
-                  TestMode::kBucketed,
-                  CommitStrategy::kTaskCommit,
-                  HiveBucketProperty::Kind::kHiveCompatible,
-                  false,
-                  multiDrivers,
-                  CompressionKind_ZSTD,
-                  scaleWriter}
-                  .value);
-          testParams.push_back(
-              TestParam{
-                  fileFormat,
-                  TestMode::kBucketed,
-                  CommitStrategy::kNoCommit,
-                  HiveBucketProperty::Kind::kPrestoNative,
-                  false,
-                  multiDrivers,
-                  CompressionKind_ZSTD,
-                  scaleWriter}
-                  .value);
-          testParams.push_back(
-              TestParam{
-                  fileFormat,
-                  TestMode::kBucketed,
-                  CommitStrategy::kTaskCommit,
-                  HiveBucketProperty::Kind::kPrestoNative,
-                  false,
-                  multiDrivers,
-                  CompressionKind_ZSTD,
-                  scaleWriter}
-                  .value);
+          testParams.push_back(TestParam{
+              fileFormat,
+              TestMode::kPartitioned,
+              CommitStrategy::kNoCommit,
+              HiveBucketProperty::Kind::kHiveCompatible,
+              false,
+              multiDrivers,
+              CompressionKind_ZSTD,
+              scaleWriter}
+                                   .value);
+          testParams.push_back(TestParam{
+              fileFormat,
+              TestMode::kPartitioned,
+              CommitStrategy::kTaskCommit,
+              HiveBucketProperty::Kind::kHiveCompatible,
+              false,
+              multiDrivers,
+              CompressionKind_ZSTD,
+              scaleWriter}
+                                   .value);
+          testParams.push_back(TestParam{
+              fileFormat,
+              TestMode::kBucketed,
+              CommitStrategy::kNoCommit,
+              HiveBucketProperty::Kind::kHiveCompatible,
+              false,
+              multiDrivers,
+              CompressionKind_ZSTD,
+              scaleWriter}
+                                   .value);
+          testParams.push_back(TestParam{
+              fileFormat,
+              TestMode::kBucketed,
+              CommitStrategy::kTaskCommit,
+              HiveBucketProperty::Kind::kHiveCompatible,
+              false,
+              multiDrivers,
+              CompressionKind_ZSTD,
+              scaleWriter}
+                                   .value);
+          testParams.push_back(TestParam{
+              fileFormat,
+              TestMode::kBucketed,
+              CommitStrategy::kNoCommit,
+              HiveBucketProperty::Kind::kPrestoNative,
+              false,
+              multiDrivers,
+              CompressionKind_ZSTD,
+              scaleWriter}
+                                   .value);
+          testParams.push_back(TestParam{
+              fileFormat,
+              TestMode::kBucketed,
+              CommitStrategy::kTaskCommit,
+              HiveBucketProperty::Kind::kPrestoNative,
+              false,
+              multiDrivers,
+              CompressionKind_ZSTD,
+              scaleWriter}
+                                   .value);
         }
       }
     }
@@ -296,28 +288,26 @@ class UnpartitionedTableWriterTest
     for (bool multiDrivers : multiDriverOptions) {
       for (FileFormat fileFormat : fileFormats) {
         for (bool scaleWriter : {false, true}) {
-          testParams.push_back(
-              TestParam{
-                  fileFormat,
-                  TestMode::kUnpartitioned,
-                  CommitStrategy::kNoCommit,
-                  HiveBucketProperty::Kind::kHiveCompatible,
-                  false,
-                  multiDrivers,
-                  CompressionKind_NONE,
-                  scaleWriter}
-                  .value);
-          testParams.push_back(
-              TestParam{
-                  fileFormat,
-                  TestMode::kUnpartitioned,
-                  CommitStrategy::kTaskCommit,
-                  HiveBucketProperty::Kind::kHiveCompatible,
-                  false,
-                  multiDrivers,
-                  CompressionKind_NONE,
-                  scaleWriter}
-                  .value);
+          testParams.push_back(TestParam{
+              fileFormat,
+              TestMode::kUnpartitioned,
+              CommitStrategy::kNoCommit,
+              HiveBucketProperty::Kind::kHiveCompatible,
+              false,
+              multiDrivers,
+              CompressionKind_NONE,
+              scaleWriter}
+                                   .value);
+          testParams.push_back(TestParam{
+              fileFormat,
+              TestMode::kUnpartitioned,
+              CommitStrategy::kTaskCommit,
+              HiveBucketProperty::Kind::kHiveCompatible,
+              false,
+              multiDrivers,
+              CompressionKind_NONE,
+              scaleWriter}
+                                   .value);
         }
       }
     }
@@ -341,28 +331,26 @@ class BucketedUnpartitionedTableWriterTest
     const std::vector<TestMode> bucketModes = {TestMode::kOnlyBucketed};
     for (bool multiDrivers : multiDriverOptions) {
       for (FileFormat fileFormat : fileFormats) {
-        testParams.push_back(
-            TestParam{
-                fileFormat,
-                TestMode::kOnlyBucketed,
-                CommitStrategy::kNoCommit,
-                HiveBucketProperty::Kind::kHiveCompatible,
-                true,
-                multiDrivers,
-                facebook::velox::common::CompressionKind_ZSTD,
-                /*scaleWriter=*/false}
-                .value);
-        testParams.push_back(
-            TestParam{
-                fileFormat,
-                TestMode::kOnlyBucketed,
-                CommitStrategy::kTaskCommit,
-                HiveBucketProperty::Kind::kHiveCompatible,
-                true,
-                multiDrivers,
-                facebook::velox::common::CompressionKind_NONE,
-                /*scaleWriter=*/false}
-                .value);
+        testParams.push_back(TestParam{
+            fileFormat,
+            TestMode::kOnlyBucketed,
+            CommitStrategy::kNoCommit,
+            HiveBucketProperty::Kind::kHiveCompatible,
+            true,
+            multiDrivers,
+            facebook::velox::common::CompressionKind_ZSTD,
+            /*scaleWriter=*/false}
+                                 .value);
+        testParams.push_back(TestParam{
+            fileFormat,
+            TestMode::kOnlyBucketed,
+            CommitStrategy::kTaskCommit,
+            HiveBucketProperty::Kind::kHiveCompatible,
+            true,
+            multiDrivers,
+            facebook::velox::common::CompressionKind_NONE,
+            /*scaleWriter=*/false}
+                                 .value);
       }
     }
     return testParams;
@@ -387,83 +375,76 @@ class BucketedTableOnlyWriteTest
     for (bool multiDrivers : multiDriverOptions) {
       for (FileFormat fileFormat : fileFormats) {
         for (auto bucketMode : bucketModes) {
-          testParams.push_back(
-              TestParam{
-                  fileFormat,
-                  bucketMode,
-                  CommitStrategy::kNoCommit,
-                  HiveBucketProperty::Kind::kHiveCompatible,
-                  false,
-                  multiDrivers,
-                  CompressionKind_ZSTD,
-                  /*scaleWriter=*/false}
-                  .value);
-          testParams.push_back(
-              TestParam{
-                  fileFormat,
-                  bucketMode,
-                  CommitStrategy::kNoCommit,
-                  HiveBucketProperty::Kind::kHiveCompatible,
-                  true,
-                  multiDrivers,
-                  CompressionKind_ZSTD,
-                  /*scaleWriter=*/false}
-                  .value);
-          testParams.push_back(
-              TestParam{
-                  fileFormat,
-                  bucketMode,
-                  CommitStrategy::kTaskCommit,
-                  HiveBucketProperty::Kind::kHiveCompatible,
-                  false,
-                  multiDrivers,
-                  CompressionKind_ZSTD,
-                  /*scaleWriter=*/false}
-                  .value);
-          testParams.push_back(
-              TestParam{
-                  fileFormat,
-                  bucketMode,
-                  CommitStrategy::kTaskCommit,
-                  HiveBucketProperty::Kind::kHiveCompatible,
-                  true,
-                  multiDrivers,
-                  CompressionKind_ZSTD,
-                  /*scaleWriter=*/false}
-                  .value);
-          testParams.push_back(
-              TestParam{
-                  fileFormat,
-                  bucketMode,
-                  CommitStrategy::kNoCommit,
-                  HiveBucketProperty::Kind::kPrestoNative,
-                  false,
-                  multiDrivers,
-                  CompressionKind_ZSTD,
-                  /*scaleWriter=*/false}
-                  .value);
-          testParams.push_back(
-              TestParam{
-                  fileFormat,
-                  bucketMode,
-                  CommitStrategy::kNoCommit,
-                  HiveBucketProperty::Kind::kPrestoNative,
-                  true,
-                  multiDrivers,
-                  CompressionKind_ZSTD,
-                  /*scaleWriter=*/false}
-                  .value);
-          testParams.push_back(
-              TestParam{
-                  fileFormat,
-                  bucketMode,
-                  CommitStrategy::kTaskCommit,
-                  HiveBucketProperty::Kind::kPrestoNative,
-                  false,
-                  multiDrivers,
-                  CompressionKind_ZSTD,
-                  /*scaleWriter=*/false}
-                  .value);
+          testParams.push_back(TestParam{
+              fileFormat,
+              bucketMode,
+              CommitStrategy::kNoCommit,
+              HiveBucketProperty::Kind::kHiveCompatible,
+              false,
+              multiDrivers,
+              CompressionKind_ZSTD,
+              /*scaleWriter=*/false}
+                                   .value);
+          testParams.push_back(TestParam{
+              fileFormat,
+              bucketMode,
+              CommitStrategy::kNoCommit,
+              HiveBucketProperty::Kind::kHiveCompatible,
+              true,
+              multiDrivers,
+              CompressionKind_ZSTD,
+              /*scaleWriter=*/false}
+                                   .value);
+          testParams.push_back(TestParam{
+              fileFormat,
+              bucketMode,
+              CommitStrategy::kTaskCommit,
+              HiveBucketProperty::Kind::kHiveCompatible,
+              false,
+              multiDrivers,
+              CompressionKind_ZSTD,
+              /*scaleWriter=*/false}
+                                   .value);
+          testParams.push_back(TestParam{
+              fileFormat,
+              bucketMode,
+              CommitStrategy::kTaskCommit,
+              HiveBucketProperty::Kind::kHiveCompatible,
+              true,
+              multiDrivers,
+              CompressionKind_ZSTD,
+              /*scaleWriter=*/false}
+                                   .value);
+          testParams.push_back(TestParam{
+              fileFormat,
+              bucketMode,
+              CommitStrategy::kNoCommit,
+              HiveBucketProperty::Kind::kPrestoNative,
+              false,
+              multiDrivers,
+              CompressionKind_ZSTD,
+              /*scaleWriter=*/false}
+                                   .value);
+          testParams.push_back(TestParam{
+              fileFormat,
+              bucketMode,
+              CommitStrategy::kNoCommit,
+              HiveBucketProperty::Kind::kPrestoNative,
+              true,
+              multiDrivers,
+              CompressionKind_ZSTD,
+              /*scaleWriter=*/false}
+                                   .value);
+          testParams.push_back(TestParam{
+              fileFormat,
+              bucketMode,
+              CommitStrategy::kTaskCommit,
+              HiveBucketProperty::Kind::kPrestoNative,
+              false,
+              multiDrivers,
+              CompressionKind_ZSTD,
+              /*scaleWriter=*/false}
+                                   .value);
         }
       }
     }
@@ -489,28 +470,26 @@ class BucketSortOnlyTableWriterTest
     for (bool multiDrivers : multiDriverOptions) {
       for (FileFormat fileFormat : fileFormats) {
         for (auto bucketMode : bucketModes) {
-          testParams.push_back(
-              TestParam{
-                  fileFormat,
-                  bucketMode,
-                  CommitStrategy::kNoCommit,
-                  HiveBucketProperty::Kind::kHiveCompatible,
-                  true,
-                  multiDrivers,
-                  facebook::velox::common::CompressionKind_ZSTD,
-                  /*scaleWriter=*/false}
-                  .value);
-          testParams.push_back(
-              TestParam{
-                  fileFormat,
-                  bucketMode,
-                  CommitStrategy::kTaskCommit,
-                  HiveBucketProperty::Kind::kHiveCompatible,
-                  true,
-                  multiDrivers,
-                  facebook::velox::common::CompressionKind_NONE,
-                  /*scaleWriter=*/false}
-                  .value);
+          testParams.push_back(TestParam{
+              fileFormat,
+              bucketMode,
+              CommitStrategy::kNoCommit,
+              HiveBucketProperty::Kind::kHiveCompatible,
+              true,
+              multiDrivers,
+              facebook::velox::common::CompressionKind_ZSTD,
+              /*scaleWriter=*/false}
+                                   .value);
+          testParams.push_back(TestParam{
+              fileFormat,
+              bucketMode,
+              CommitStrategy::kTaskCommit,
+              HiveBucketProperty::Kind::kHiveCompatible,
+              true,
+              multiDrivers,
+              facebook::velox::common::CompressionKind_NONE,
+              /*scaleWriter=*/false}
+                                   .value);
         }
       }
     }
@@ -534,28 +513,26 @@ class PartitionedWithoutBucketTableWriterTest
     for (bool multiDrivers : multiDriverOptions) {
       for (FileFormat fileFormat : fileFormats) {
         for (bool scaleWriter : {false, true}) {
-          testParams.push_back(
-              TestParam{
-                  fileFormat,
-                  TestMode::kPartitioned,
-                  CommitStrategy::kNoCommit,
-                  HiveBucketProperty::Kind::kHiveCompatible,
-                  false,
-                  multiDrivers,
-                  CompressionKind_ZSTD,
-                  scaleWriter}
-                  .value);
-          testParams.push_back(
-              TestParam{
-                  fileFormat,
-                  TestMode::kPartitioned,
-                  CommitStrategy::kTaskCommit,
-                  HiveBucketProperty::Kind::kHiveCompatible,
-                  false,
-                  multiDrivers,
-                  CompressionKind_ZSTD,
-                  scaleWriter}
-                  .value);
+          testParams.push_back(TestParam{
+              fileFormat,
+              TestMode::kPartitioned,
+              CommitStrategy::kNoCommit,
+              HiveBucketProperty::Kind::kHiveCompatible,
+              false,
+              multiDrivers,
+              CompressionKind_ZSTD,
+              scaleWriter}
+                                   .value);
+          testParams.push_back(TestParam{
+              fileFormat,
+              TestMode::kPartitioned,
+              CommitStrategy::kTaskCommit,
+              HiveBucketProperty::Kind::kHiveCompatible,
+              false,
+              multiDrivers,
+              CompressionKind_ZSTD,
+              scaleWriter}
+                                   .value);
         }
       }
     }
@@ -578,138 +555,126 @@ class AllTableWriterTest : public TableWriterTestBase,
     for (bool multiDrivers : multiDriverOptions) {
       for (FileFormat fileFormat : fileFormats) {
         for (bool scaleWriter : {false, true}) {
-          testParams.push_back(
-              TestParam{
-                  fileFormat,
-                  TestMode::kUnpartitioned,
-                  CommitStrategy::kNoCommit,
-                  HiveBucketProperty::Kind::kHiveCompatible,
-                  false,
-                  multiDrivers,
-                  CompressionKind_ZSTD,
-                  scaleWriter}
-                  .value);
-          testParams.push_back(
-              TestParam{
-                  fileFormat,
-                  TestMode::kUnpartitioned,
-                  CommitStrategy::kTaskCommit,
-                  HiveBucketProperty::Kind::kHiveCompatible,
-                  false,
-                  multiDrivers,
-                  CompressionKind_ZSTD,
-                  scaleWriter}
-                  .value);
-          testParams.push_back(
-              TestParam{
-                  fileFormat,
-                  TestMode::kPartitioned,
-                  CommitStrategy::kNoCommit,
-                  HiveBucketProperty::Kind::kHiveCompatible,
-                  false,
-                  multiDrivers,
-                  CompressionKind_ZSTD,
-                  scaleWriter}
-                  .value);
-          testParams.push_back(
-              TestParam{
-                  fileFormat,
-                  TestMode::kPartitioned,
-                  CommitStrategy::kTaskCommit,
-                  HiveBucketProperty::Kind::kHiveCompatible,
-                  false,
-                  multiDrivers,
-                  CompressionKind_ZSTD,
-                  scaleWriter}
-                  .value);
-          testParams.push_back(
-              TestParam{
-                  fileFormat,
-                  TestMode::kBucketed,
-                  CommitStrategy::kNoCommit,
-                  HiveBucketProperty::Kind::kHiveCompatible,
-                  false,
-                  multiDrivers,
-                  CompressionKind_ZSTD,
-                  scaleWriter}
-                  .value);
-          testParams.push_back(
-              TestParam{
-                  fileFormat,
-                  TestMode::kBucketed,
-                  CommitStrategy::kTaskCommit,
-                  HiveBucketProperty::Kind::kHiveCompatible,
-                  false,
-                  multiDrivers,
-                  CompressionKind_ZSTD,
-                  scaleWriter}
-                  .value);
-          testParams.push_back(
-              TestParam{
-                  fileFormat,
-                  TestMode::kBucketed,
-                  CommitStrategy::kNoCommit,
-                  HiveBucketProperty::Kind::kPrestoNative,
-                  false,
-                  multiDrivers,
-                  CompressionKind_ZSTD,
-                  scaleWriter}
-                  .value);
-          testParams.push_back(
-              TestParam{
-                  fileFormat,
-                  TestMode::kBucketed,
-                  CommitStrategy::kTaskCommit,
-                  HiveBucketProperty::Kind::kPrestoNative,
-                  false,
-                  multiDrivers,
-                  CompressionKind_ZSTD,
-                  scaleWriter}
-                  .value);
-          testParams.push_back(
-              TestParam{
-                  fileFormat,
-                  TestMode::kOnlyBucketed,
-                  CommitStrategy::kNoCommit,
-                  HiveBucketProperty::Kind::kHiveCompatible,
-                  false,
-                  multiDrivers,
-                  CompressionKind_ZSTD,
-                  scaleWriter}
-                  .value);
-          testParams.push_back(
-              TestParam{
-                  fileFormat,
-                  TestMode::kOnlyBucketed,
-                  CommitStrategy::kTaskCommit,
-                  HiveBucketProperty::Kind::kHiveCompatible,
-                  false,
-                  multiDrivers,
-                  CompressionKind_ZSTD,
-                  scaleWriter}
-                  .value);
-          testParams.push_back(
-              TestParam{
-                  fileFormat,
-                  TestMode::kOnlyBucketed,
-                  CommitStrategy::kNoCommit,
-                  HiveBucketProperty::Kind::kPrestoNative,
-                  false,
-                  multiDrivers,
-                  CompressionKind_ZSTD,
-                  scaleWriter}
-                  .value);
-          testParams.push_back(
-              TestParam{
-                  fileFormat,
-                  TestMode::kOnlyBucketed,
-                  CommitStrategy::kTaskCommit,
-                  HiveBucketProperty::Kind::kPrestoNative,
-                  false,
-                  multiDrivers,
-                  CompressionKind_ZSTD,
-                  scaleWriter}
-                  .value);
+          testParams.push_back(TestParam{
+              fileFormat,
+              TestMode::kUnpartitioned,
+              CommitStrategy::kNoCommit,
+              HiveBucketProperty::Kind::kHiveCompatible,
+              false,
+              multiDrivers,
+              CompressionKind_ZSTD,
+              scaleWriter}
+                                   .value);
+          testParams.push_back(TestParam{
+              fileFormat,
+              TestMode::kUnpartitioned,
+              CommitStrategy::kTaskCommit,
+              HiveBucketProperty::Kind::kHiveCompatible,
+              false,
+              multiDrivers,
+              CompressionKind_ZSTD,
+              scaleWriter}
+                                   .value);
+          testParams.push_back(TestParam{
+              fileFormat,
+              TestMode::kPartitioned,
+              CommitStrategy::kNoCommit,
+              HiveBucketProperty::Kind::kHiveCompatible,
+              false,
+              multiDrivers,
+              CompressionKind_ZSTD,
+              scaleWriter}
+                                   .value);
+          testParams.push_back(TestParam{
+              fileFormat,
+              TestMode::kPartitioned,
+              CommitStrategy::kTaskCommit,
+              HiveBucketProperty::Kind::kHiveCompatible,
+              false,
+              multiDrivers,
+              CompressionKind_ZSTD,
+              scaleWriter}
+                                   .value);
+          testParams.push_back(TestParam{
+              fileFormat,
+              TestMode::kBucketed,
+              CommitStrategy::kNoCommit,
+              HiveBucketProperty::Kind::kHiveCompatible,
+              false,
+              multiDrivers,
+              CompressionKind_ZSTD,
+              scaleWriter}
+                                   .value);
+          testParams.push_back(TestParam{
+              fileFormat,
+              TestMode::kBucketed,
+              CommitStrategy::kTaskCommit,
+              HiveBucketProperty::Kind::kHiveCompatible,
+              false,
+              multiDrivers,
+              CompressionKind_ZSTD,
+              scaleWriter}
+                                   .value);
+          testParams.push_back(TestParam{
+              fileFormat,
+              TestMode::kBucketed,
+              CommitStrategy::kNoCommit,
+              HiveBucketProperty::Kind::kPrestoNative,
+              false,
+              multiDrivers,
+              CompressionKind_ZSTD,
+              scaleWriter}
+                                   .value);
+          testParams.push_back(TestParam{
+              fileFormat,
+              TestMode::kBucketed,
+              CommitStrategy::kTaskCommit,
+              HiveBucketProperty::Kind::kPrestoNative,
+              false,
+              multiDrivers,
+              CompressionKind_ZSTD,
+              scaleWriter}
+                                   .value);
+          testParams.push_back(TestParam{
+              fileFormat,
+              TestMode::kOnlyBucketed,
+              CommitStrategy::kNoCommit,
+              HiveBucketProperty::Kind::kHiveCompatible,
+              false,
+              multiDrivers,
+              CompressionKind_ZSTD,
+              scaleWriter}
+                                   .value);
+          testParams.push_back(TestParam{
+              fileFormat,
+              TestMode::kOnlyBucketed,
+              CommitStrategy::kTaskCommit,
+              HiveBucketProperty::Kind::kHiveCompatible,
+              false,
+              multiDrivers,
+              CompressionKind_ZSTD,
+              scaleWriter}
+                                   .value);
+          testParams.push_back(TestParam{
+              fileFormat,
+              TestMode::kOnlyBucketed,
+              CommitStrategy::kNoCommit,
+              HiveBucketProperty::Kind::kPrestoNative,
+              false,
+              multiDrivers,
+              CompressionKind_ZSTD,
+              scaleWriter}
+                                   .value);
+          testParams.push_back(TestParam{
+              fileFormat,
+              TestMode::kOnlyBucketed,
+              CommitStrategy::kTaskCommit,
+              HiveBucketProperty::Kind::kPrestoNative,
+              false,
+              multiDrivers,
+              CompressionKind_ZSTD,
+              scaleWriter}
+                                   .value);
         }
       }
     }
@@ -1826,17 +1791,13 @@ TEST_P(AllTableWriterTest, tableWriteOutputCheck) {
         for (const auto& partitionBy : partitionedBy_) {
           partitionDirRe += fmt::format("/{}=.+", partitionBy);
         }
-        ASSERT_TRUE(
-            RE2::FullMatch(
-                obj["targetPath"].asString(),
-                fmt::format(
-                    "{}{}", outputDirectory->getPath(), partitionDirRe)))
+        ASSERT_TRUE(RE2::FullMatch(
+            obj["targetPath"].asString(),
+            fmt::format("{}{}", outputDirectory->getPath(), partitionDirRe)))
             << obj["targetPath"].asString();
-        ASSERT_TRUE(
-            RE2::FullMatch(
-                obj["writePath"].asString(),
-                fmt::format(
-                    "{}{}", outputDirectory->getPath(), partitionDirRe)))
+        ASSERT_TRUE(RE2::FullMatch(
+            obj["writePath"].asString(),
+            fmt::format("{}{}", outputDirectory->getPath(), partitionDirRe)))
             << obj["writePath"].asString();
       }
       numRows += obj["rowCount"].asInt();
@@ -1872,11 +1833,9 @@ TEST_P(AllTableWriterTest, tableWriteOutputCheck) {
       }
     }
     if (!commitContextVector->isNullAt(i)) {
-      ASSERT_TRUE(
-          RE2::FullMatch(
-              commitContextVector->valueAt(i).getString(),
-              fmt::format(
-                  ".*{}.*", CommitStrategyName::toName(commitStrategy_))))
+      ASSERT_TRUE(RE2::FullMatch(
+          commitContextVector->valueAt(i).getString(),
+          fmt::format(".*{}.*", CommitStrategyName::toName(commitStrategy_))))
           << commitContextVector->valueAt(i);
     }
   }
@@ -1945,9 +1904,8 @@ TEST_P(AllTableWriterTest, columnStatsDataTypes) {
   std::vector<FieldAccessTypedExprPtr> groupingKeyFields;
   groupingKeyFields.reserve(partitionedBy_.size());
   for (int i = 0; i < partitionedBy_.size(); ++i) {
-    groupingKeyFields.emplace_back(
-        std::make_shared<core::FieldAccessTypedExpr>(
-            partitionTypes_.at(i), partitionedBy_.at(i)));
+    groupingKeyFields.emplace_back(std::make_shared<core::FieldAccessTypedExpr>(
+        partitionTypes_.at(i), partitionedBy_.at(i)));
   }
 
   // aggregation node
@@ -2532,14 +2490,13 @@ DEBUG_ONLY_TEST_P(BucketSortOnlyTableWriterTest, outputBatchRows) {
           maxOutputBytes,
           expectedOutputCount);
     }
-  } testSettings[] = {
-      // we have 4 buckets thus 4 writers.
-      {10000, "1000kB", 4},
-      // when maxOutputRows = 1, 1000 rows triggers 1000 writes
-      {1, "1kB", 1000},
-      // estimatedRowSize is ~62bytes, when maxOutputSize = 62 *
-      // 100, 1000 rows triggers ~10 writes
-      {10000, "6200B", 12}};
+  } testSettings[] = {// we have 4 buckets thus 4 writers.
+                      {10000, "1000kB", 4},
+                      // when maxOutputRows = 1, 1000 rows triggers 1000 writes
+                      {1, "1kB", 1000},
+                      // estimatedRowSize is ~62bytes, when maxOutputSize = 62 *
+                      // 100, 1000 rows triggers ~10 writes
+                      {10000, "6200B", 12}};
 
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
@@ -3037,11 +2994,10 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, writerFlushThreshold) {
   const std::vector<TestParam> testParams{
       {0, 0}, {0, 1UL << 30}, {64UL << 20, 1UL << 30}};
   for (const auto& testParam : testParams) {
-    SCOPED_TRACE(
-        fmt::format(
-            "bytesToReserve: {}, writerFlushThreshold: {}",
-            succinctBytes(testParam.bytesToReserve),
-            succinctBytes(testParam.writerFlushThreshold)));
+    SCOPED_TRACE(fmt::format(
+        "bytesToReserve: {}, writerFlushThreshold: {}",
+        succinctBytes(testParam.bytesToReserve),
+        succinctBytes(testParam.writerFlushThreshold)));
 
     auto queryPool = memory::memoryManager()->addRootPool(
         "writerFlushThreshold", kQueryMemoryCapacity);

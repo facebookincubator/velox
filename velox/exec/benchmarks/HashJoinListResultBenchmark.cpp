@@ -280,11 +280,10 @@ class HashTableListJoinResultBenchmark : public VectorTestBase {
     std::vector<VectorPtr> children;
     children.push_back(makeFlatVector<int64_t>(data));
     for (int32_t i = 0; i < params_.numDependentFields; ++i) {
-      children.push_back(
-          makeFlatVector<int64_t>(
-              data.size(),
-              [&](vector_size_t row) { return row + maxKey; },
-              nullptr));
+      children.push_back(makeFlatVector<int64_t>(
+          data.size(),
+          [&](vector_size_t row) { return row + maxKey; },
+          nullptr));
     }
     return makeRowVector(children);
   }
@@ -312,16 +311,14 @@ class HashTableListJoinResultBenchmark : public VectorTestBase {
   RowVectorPtr
   makeProbeVector(int32_t size, int64_t hashTableSize, int64_t& sequence) {
     std::vector<VectorPtr> children;
-    children.push_back(
-        makeFlatVector<int64_t>(
-            size,
-            [&](vector_size_t row) { return (sequence + row) % hashTableSize; },
-            nullptr));
+    children.push_back(makeFlatVector<int64_t>(
+        size,
+        [&](vector_size_t row) { return (sequence + row) % hashTableSize; },
+        nullptr));
     sequence += size;
     for (int32_t i = 0; i < params_.numDependentFields; ++i) {
-      children.push_back(
-          makeFlatVector<int64_t>(
-              size, [&](vector_size_t row) { return row + size; }, nullptr));
+      children.push_back(makeFlatVector<int64_t>(
+          size, [&](vector_size_t row) { return row + size; }, nullptr));
     }
     return makeRowVector(children);
   }

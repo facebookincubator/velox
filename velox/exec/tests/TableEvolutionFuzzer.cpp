@@ -493,9 +493,8 @@ VectorPtr TableEvolutionFuzzer::liftToType(
         if (i < children.size()) {
           children[i] = liftToType(children[i], childType);
         } else {
-          children.push_back(
-              BaseVector::createNullConstant(
-                  childType, row->size(), config_.pool));
+          children.push_back(BaseVector::createNullConstant(
+              childType, row->size(), config_.pool));
         }
       }
       return std::make_shared<RowVector>(

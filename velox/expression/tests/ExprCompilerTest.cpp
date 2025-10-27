@@ -294,13 +294,12 @@ TEST_F(ExprCompilerTest, rewrites) {
   auto arraySortSql =
       "array_sort(c0, (x, y) -> if(length(x) < length(y), -1, if(length(x) > length(y), 1, 0)))";
 
-  ASSERT_NO_THROW(
-      std::make_unique<ExprSet>(
-          std::vector<core::TypedExprPtr>{
-              makeTypedExpr(arraySortSql, rowType),
-              makeTypedExpr("c1 + 5", rowType),
-          },
-          execCtx_.get()));
+  ASSERT_NO_THROW(std::make_unique<ExprSet>(
+      std::vector<core::TypedExprPtr>{
+          makeTypedExpr(arraySortSql, rowType),
+          makeTypedExpr("c1 + 5", rowType),
+      },
+      execCtx_.get()));
 
   auto exprSet = compile(makeTypedExpr(
       "reduce(c0, 1, (s, x) -> s + x * 2, s -> s)",

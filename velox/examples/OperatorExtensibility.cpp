@@ -124,9 +124,8 @@ class DuplicateRowOperator : public exec::Operator {
     outputChildren.reserve(input->childrenSize());
 
     for (const auto& child : input->children()) {
-      outputChildren.push_back(
-          BaseVector::wrapInDictionary(
-              BufferPtr(), indices, outputSize, child));
+      outputChildren.push_back(BaseVector::wrapInDictionary(
+          BufferPtr(), indices, outputSize, child));
     }
     return std::make_shared<RowVector>(
         pool(),

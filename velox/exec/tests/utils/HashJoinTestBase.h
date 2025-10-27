@@ -467,9 +467,8 @@ class HashJoinBuilder {
     }
 
     for (const auto& testData : testSettings) {
-      SCOPED_TRACE(
-          fmt::format(
-              "{} numDrivers: {}", testData.debugString(), numDrivers_));
+      SCOPED_TRACE(fmt::format(
+          "{} numDrivers: {}", testData.debugString(), numDrivers_));
       auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
       std::shared_ptr<const core::HashJoinNode> joinNode;
       auto planNode =

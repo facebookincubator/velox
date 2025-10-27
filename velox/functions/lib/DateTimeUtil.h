@@ -46,9 +46,8 @@ FOLLY_ALWAYS_INLINE int64_t diffTimestamp(
   // converting all timestamps to microseconds for each unit.
   if (unit == DateTimeUnit::kMicrosecond) {
     const std::chrono::time_point<std::chrono::system_clock>
-        fromMicrosecondpoint(
-            std::chrono::microseconds(
-                std::min(fromTimestamp, toTimestamp).toMicros()));
+        fromMicrosecondpoint(std::chrono::microseconds(
+            std::min(fromTimestamp, toTimestamp).toMicros()));
     const std::chrono::time_point<std::chrono::system_clock> toMicrosecondpoint(
         std::chrono::microseconds(
             std::max(fromTimestamp, toTimestamp).toMicros()));
@@ -61,14 +60,12 @@ FOLLY_ALWAYS_INLINE int64_t diffTimestamp(
   // fromTimepoint is less than or equal to toTimepoint.
   const std::chrono::
       time_point<std::chrono::system_clock, std::chrono::milliseconds>
-          fromTimepoint(
-              std::chrono::milliseconds(
-                  std::min(fromTimestamp, toTimestamp).toMillis()));
+          fromTimepoint(std::chrono::milliseconds(
+              std::min(fromTimestamp, toTimestamp).toMillis()));
   const std::chrono::
       time_point<std::chrono::system_clock, std::chrono::milliseconds>
-          toTimepoint(
-              std::chrono::milliseconds(
-                  std::max(fromTimestamp, toTimestamp).toMillis()));
+          toTimepoint(std::chrono::milliseconds(
+              std::max(fromTimestamp, toTimestamp).toMillis()));
 
   // Millisecond, second, minute, hour and day have fixed conversion ratio.
   switch (unit) {

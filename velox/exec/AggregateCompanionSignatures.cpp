@@ -109,14 +109,13 @@ CompanionSignatures::partialFunctionSignatures(
     usedTypes.push_back(signature->intermediateType());
     auto variables = usedTypeVariables(usedTypes, signature->variables());
 
-    partialSignatures.push_back(
-        std::make_shared<AggregateFunctionSignature>(
-            /*variables*/ variables,
-            /*returnType*/ signature->intermediateType(),
-            /*intermediateType*/ signature->intermediateType(),
-            /*argumentTypes*/ signature->argumentTypes(),
-            /*constantArguments*/ signature->constantArguments(),
-            /*variableArity*/ signature->variableArity()));
+    partialSignatures.push_back(std::make_shared<AggregateFunctionSignature>(
+        /*variables*/ variables,
+        /*returnType*/ signature->intermediateType(),
+        /*intermediateType*/ signature->intermediateType(),
+        /*argumentTypes*/ signature->argumentTypes(),
+        /*constantArguments*/ signature->constantArguments(),
+        /*variableArity*/ signature->variableArity()));
   }
   return partialSignatures;
 }

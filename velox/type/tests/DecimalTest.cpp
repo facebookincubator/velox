@@ -135,12 +135,11 @@ void testCastFromString(
     int toScale,
     const std::vector<T>& expectedUnscaleValues) {
   for (int i = 0; i < inputs.size(); ++i) {
-    SCOPED_TRACE(
-        fmt::format(
-            "Index: {}, input: {}, expectedUnscaleValue: {}.",
-            i,
-            inputs[i],
-            expectedUnscaleValues[i]));
+    SCOPED_TRACE(fmt::format(
+        "Index: {}, input: {}, expectedUnscaleValue: {}.",
+        i,
+        inputs[i],
+        expectedUnscaleValues[i]));
     T decimalValue;
     auto status = DecimalUtil::castFromString<T>(
         StringView(inputs[i]), toPrecision, toScale, decimalValue);
@@ -315,21 +314,16 @@ TEST(DecimalTest, valueInPrecisionRange) {
   ASSERT_TRUE(DecimalUtil::valueInPrecisionRange<int64_t>(999, 3));
   ASSERT_FALSE(DecimalUtil::valueInPrecisionRange<int64_t>(1000, 3));
   ASSERT_FALSE(DecimalUtil::valueInPrecisionRange<int64_t>(1234, 3));
-  ASSERT_TRUE(
-      DecimalUtil::valueInPrecisionRange<int64_t>(
-          DecimalUtil::kShortDecimalMax, ShortDecimalType::kMaxPrecision));
-  ASSERT_FALSE(
-      DecimalUtil::valueInPrecisionRange<int64_t>(
-          DecimalUtil::kShortDecimalMax + 1, ShortDecimalType::kMaxPrecision));
-  ASSERT_TRUE(
-      DecimalUtil::valueInPrecisionRange<int128_t>(
-          DecimalUtil::kLongDecimalMax, LongDecimalType::kMaxPrecision));
-  ASSERT_FALSE(
-      DecimalUtil::valueInPrecisionRange<int128_t>(
-          DecimalUtil::kLongDecimalMax + 1, LongDecimalType::kMaxPrecision));
-  ASSERT_FALSE(
-      DecimalUtil::valueInPrecisionRange<int128_t>(
-          DecimalUtil::kLongDecimalMin - 1, LongDecimalType::kMaxPrecision));
+  ASSERT_TRUE(DecimalUtil::valueInPrecisionRange<int64_t>(
+      DecimalUtil::kShortDecimalMax, ShortDecimalType::kMaxPrecision));
+  ASSERT_FALSE(DecimalUtil::valueInPrecisionRange<int64_t>(
+      DecimalUtil::kShortDecimalMax + 1, ShortDecimalType::kMaxPrecision));
+  ASSERT_TRUE(DecimalUtil::valueInPrecisionRange<int128_t>(
+      DecimalUtil::kLongDecimalMax, LongDecimalType::kMaxPrecision));
+  ASSERT_FALSE(DecimalUtil::valueInPrecisionRange<int128_t>(
+      DecimalUtil::kLongDecimalMax + 1, LongDecimalType::kMaxPrecision));
+  ASSERT_FALSE(DecimalUtil::valueInPrecisionRange<int128_t>(
+      DecimalUtil::kLongDecimalMin - 1, LongDecimalType::kMaxPrecision));
 }
 
 TEST(DecimalTest, computeAverage) {

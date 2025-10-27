@@ -186,12 +186,11 @@ std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
   std::vector<std::shared_ptr<exec::FunctionSignature>> signatures;
   for (auto type :
        {"tinyint", "smallint", "integer", "bigint", "real", "double"}) {
-    signatures.push_back(
-        exec::FunctionSignatureBuilder()
-            .returnType(type)
-            .argumentType(type)
-            .argumentType(type)
-            .build());
+    signatures.push_back(exec::FunctionSignatureBuilder()
+                             .returnType(type)
+                             .argumentType(type)
+                             .argumentType(type)
+                             .build());
   }
   return signatures;
 }

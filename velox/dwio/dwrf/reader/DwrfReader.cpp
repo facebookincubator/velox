@@ -329,16 +329,15 @@ std::unique_ptr<dwio::common::UnitLoader> DwrfRowReader::getUnitLoader() {
   std::vector<std::unique_ptr<LoadUnit>> loadUnits;
   loadUnits.reserve(stripeCeiling_ - firstStripe_);
   for (auto stripe = firstStripe_; stripe < stripeCeiling_; ++stripe) {
-    loadUnits.emplace_back(
-        std::make_unique<DwrfUnit>(
-            /*stripeReaderBase=*/*this,
-            /*strideIndexProvider=*/*this,
-            columnReaderStatistics_,
-            stripe,
-            columnSelector_,
-            projectedNodes_,
-            options_,
-            columnReaderOptions_));
+    loadUnits.emplace_back(std::make_unique<DwrfUnit>(
+        /*stripeReaderBase=*/*this,
+        /*strideIndexProvider=*/*this,
+        columnReaderStatistics_,
+        stripe,
+        columnSelector_,
+        projectedNodes_,
+        options_,
+        columnReaderOptions_));
   }
   std::shared_ptr<UnitLoaderFactory> unitLoaderFactory =
       options_.unitLoaderFactory();
@@ -839,9 +838,8 @@ DwrfReader::DwrfReader(
 void DwrfReader::updateColumnNamesFromTableSchema() {
   const auto& tableSchema = readerBase_->readerOptions().fileSchema();
   const auto& fileSchema = readerBase_->schema();
-  readerBase_->setSchema(
-      std::dynamic_pointer_cast<const RowType>(
-          updateColumnNames(fileSchema, tableSchema)));
+  readerBase_->setSchema(std::dynamic_pointer_cast<const RowType>(
+      updateColumnNames(fileSchema, tableSchema)));
 }
 
 std::unique_ptr<StripeInformation> DwrfReader::getStripe(

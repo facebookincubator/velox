@@ -530,9 +530,8 @@ void serializeIPPrefix(
       // the ipaddress porition as big endian whereas Velox stores it as little
       auto javaIPPrefix =
           toJavaIPPrefixType(ip->valueAt(rows[i]), prefix->valueAt(rows[i]));
-      stream->values().appendStringView(
-          std::string_view(
-              (const char*)javaIPPrefix.data(), javaIPPrefix.size()));
+      stream->values().appendStringView(std::string_view(
+          (const char*)javaIPPrefix.data(), javaIPPrefix.size()));
     }
     return;
   }

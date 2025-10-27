@@ -84,11 +84,10 @@ class NimbleReaderTest : public ::testing::Test,
 void compareEncodingTree(
     NimbleEncoding& encoding,
     EncodingLayout const& layout) {
-  SCOPED_TRACE(
-      fmt::format(
-          "Encoding: {}, #children: {}",
-          toString(layout.encodingType()),
-          encoding.childrenCount()));
+  SCOPED_TRACE(fmt::format(
+      "Encoding: {}, #children: {}",
+      toString(layout.encodingType()),
+      encoding.childrenCount()));
   EXPECT_EQ(encoding.childrenCount(), layout.childrenCount());
   ENCODING_TYPE_EXPECT_EQ(encoding.encodingType(), layout.encodingType());
   for (int i = 0; i < encoding.childrenCount(); i++) {

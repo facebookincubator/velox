@@ -310,11 +310,10 @@ parseFail(const std::string_view& input, const char* cur, const char* end) {
   if (threadSkipErrorDetails()) {
     return folly::makeUnexpected(Status::UserError());
   }
-  return folly::makeUnexpected(
-      Status::UserError(
-          "Invalid date format: '{}' is malformed at '{}'",
-          input,
-          std::string_view(cur, end - cur)));
+  return folly::makeUnexpected(Status::UserError(
+      "Invalid date format: '{}' is malformed at '{}'",
+      input,
+      std::string_view(cur, end - cur)));
 }
 
 // Joda only supports parsing a few three-letter prefixes. The list is available
@@ -1619,14 +1618,13 @@ Expected<DateTimeResult> DateTimeFormatter::parse(
       if (threadSkipErrorDetails()) {
         return folly::makeUnexpected(Status::UserError());
       }
-      return folly::makeUnexpected(
-          Status::UserError(
-              "Value {} for dayOfMonth must be in the range [1,{}] "
-              "for year {} and month {}.",
-              date.dayOfMonthValues[i],
-              util::getMaxDayOfMonth(date.year, date.month),
-              date.year,
-              date.month));
+      return folly::makeUnexpected(Status::UserError(
+          "Value {} for dayOfMonth must be in the range [1,{}] "
+          "for year {} and month {}.",
+          date.dayOfMonthValues[i],
+          util::getMaxDayOfMonth(date.year, date.month),
+          date.year,
+          date.month));
     }
   }
 
@@ -1636,14 +1634,13 @@ Expected<DateTimeResult> DateTimeFormatter::parse(
       if (threadSkipErrorDetails()) {
         return folly::makeUnexpected(Status::UserError());
       }
-      return folly::makeUnexpected(
-          Status::UserError(
-              "Value {} for dayOfMonth must be in the range [1,{}] "
-              "for year {} and month {}.",
-              date.dayOfYearValues[i],
-              util::isLeapYear(date.year) ? 366 : 365,
-              date.year,
-              date.month));
+      return folly::makeUnexpected(Status::UserError(
+          "Value {} for dayOfMonth must be in the range [1,{}] "
+          "for year {} and month {}.",
+          date.dayOfYearValues[i],
+          util::isLeapYear(date.year) ? 366 : 365,
+          date.year,
+          date.month));
     }
   }
 
@@ -1800,9 +1797,8 @@ Expected<std::shared_ptr<DateTimeFormatter>> buildMysqlDateTimeFormatter(
           if (threadSkipErrorDetails()) {
             return folly::makeUnexpected(Status::UserError());
           }
-          return folly::makeUnexpected(
-              Status::UserError(
-                  "Date format specifier is not supported: %{}", *tokenEnd));
+          return folly::makeUnexpected(Status::UserError(
+              "Date format specifier is not supported: %{}", *tokenEnd));
         default:
           builder.appendLiteral(tokenEnd, 1);
           break;
@@ -1940,9 +1936,8 @@ Expected<std::shared_ptr<DateTimeFormatter>> buildJodaDateTimeFormatter(
             if (threadSkipErrorDetails()) {
               return folly::makeUnexpected(Status::UserError());
             }
-            return folly::makeUnexpected(
-                Status::UserError(
-                    "Specifier {} is not supported.", *startTokenPtr));
+            return folly::makeUnexpected(Status::UserError(
+                "Specifier {} is not supported.", *startTokenPtr));
           } else {
             builder.appendLiteral(startTokenPtr, cur - startTokenPtr);
           }
@@ -2083,9 +2078,8 @@ Expected<std::shared_ptr<DateTimeFormatter>> buildSimpleDateTimeFormatter(
             if (threadSkipErrorDetails()) {
               return folly::makeUnexpected(Status::UserError());
             }
-            return folly::makeUnexpected(
-                Status::UserError(
-                    "Specifier {} is not supported.", *startTokenPtr));
+            return folly::makeUnexpected(Status::UserError(
+                "Specifier {} is not supported.", *startTokenPtr));
           } else {
             builder.appendLiteral(startTokenPtr, cur - startTokenPtr);
           }

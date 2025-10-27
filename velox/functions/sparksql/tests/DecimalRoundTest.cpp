@@ -35,16 +35,14 @@ class DecimalRoundTest : public SparkFunctionBaseTest {
       if (castScale) {
         // It is a common case in Spark for the second argument to be cast from
         // bigint to integer.
-        inputs.emplace_back(
-            std::make_shared<core::CastTypedExpr>(
-                INTEGER(),
-                std::make_shared<core::ConstantTypedExpr>(
-                    BIGINT(), variant((int64_t)scale)),
-                true /*nullOnFailure*/));
-      } else {
-        inputs.emplace_back(
+        inputs.emplace_back(std::make_shared<core::CastTypedExpr>(
+            INTEGER(),
             std::make_shared<core::ConstantTypedExpr>(
-                INTEGER(), variant(scale)));
+                BIGINT(), variant((int64_t)scale)),
+            true /*nullOnFailure*/));
+      } else {
+        inputs.emplace_back(std::make_shared<core::ConstantTypedExpr>(
+            INTEGER(), variant(scale)));
       }
     }
 

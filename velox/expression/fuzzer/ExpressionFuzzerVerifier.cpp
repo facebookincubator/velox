@@ -62,10 +62,9 @@ ExpressionFuzzerVerifier::ExpressionFuzzerVerifier(
     const std::unordered_map<std::string, std::shared_ptr<ArgValuesGenerator>>&
         argValuesGenerators)
     : options_(options),
-      queryCtx_(
-          core::QueryCtx::create(
-              nullptr,
-              core::QueryConfig(options_.queryConfigs))),
+      queryCtx_(core::QueryCtx::create(
+          nullptr,
+          core::QueryConfig(options_.queryConfigs))),
       execCtx_({pool_.get(), queryCtx_.get()}),
       verifier_(
           &execCtx_,
@@ -73,10 +72,9 @@ ExpressionFuzzerVerifier::ExpressionFuzzerVerifier(
            options_.reproPersistPath,
            options_.persistAndRunOnce},
           options_.expressionFuzzerOptions.referenceQueryRunner),
-      vectorFuzzer_(
-          std::make_shared<VectorFuzzer>(
-              options_.vectorFuzzerOptions,
-              execCtx_.pool())),
+      vectorFuzzer_(std::make_shared<VectorFuzzer>(
+          options_.vectorFuzzerOptions,
+          execCtx_.pool())),
       expressionFuzzer_(
           signatureMap,
           initialSeed,

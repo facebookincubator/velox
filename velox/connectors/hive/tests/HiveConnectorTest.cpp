@@ -93,10 +93,8 @@ TEST_F(HiveConnectorTest, makeScanSpecRequiredSubfieldsMultilevel) {
   auto rowType = ROW({{"c0", columnType}});
   auto subfields = makeSubfields({"c0.c0c1[3][\"foo\"].c0c1c0"});
   for (bool statsBasedFilterReorderDisabled : {false, true}) {
-    SCOPED_TRACE(
-        fmt::format(
-            "statsBasedFilterReorderDisabled {}",
-            statsBasedFilterReorderDisabled));
+    SCOPED_TRACE(fmt::format(
+        "statsBasedFilterReorderDisabled {}", statsBasedFilterReorderDisabled));
 
     auto scanSpec = makeScanSpec(
         rowType,

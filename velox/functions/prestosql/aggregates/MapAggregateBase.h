@@ -200,9 +200,8 @@ class MapAggregateBase : public exec::Aggregate {
   DecodedVector decodedMaps_;
 };
 
-template <template <
-    typename K,
-    typename Accumulator = MapAccumulator<K>> class TAggregate>
+template <template <typename K, typename Accumulator = MapAccumulator<K>>
+          class TAggregate>
 std::unique_ptr<exec::Aggregate> createMapAggregate(const TypePtr& resultType) {
   auto typeKind = resultType->childAt(0)->kind();
   switch (typeKind) {

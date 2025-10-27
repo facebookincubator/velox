@@ -720,11 +720,8 @@ DEBUG_ONLY_TEST_P(SortBufferTest, reserveMemorySort) {
   } testSettings[] = {{false, true}, {true, false}, {true, true}};
 
   for (const auto [usePrefixSort, spillEnabled] : testSettings) {
-    SCOPED_TRACE(
-        fmt::format(
-            "usePrefixSort: {}, spillEnabled: {}, ",
-            usePrefixSort,
-            spillEnabled));
+    SCOPED_TRACE(fmt::format(
+        "usePrefixSort: {}, spillEnabled: {}, ", usePrefixSort, spillEnabled));
     auto spillDirectory = exec::test::TempDirectoryPath::create();
     auto spillConfig = getSpillConfig(spillDirectory->getPath(), usePrefixSort);
     folly::Synchronized<common::SpillStats> spillStats;

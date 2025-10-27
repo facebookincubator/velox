@@ -366,9 +366,8 @@ class DataPageBuilder {
       ParquetException::NYI("only rle encoding currently implemented");
     }
 
-    std::vector<uint8_t> encode_buffer(
-        LevelEncoder::MaxBufferSize(
-            Encoding::RLE, max_level, static_cast<int>(levels.size())));
+    std::vector<uint8_t> encode_buffer(LevelEncoder::MaxBufferSize(
+        Encoding::RLE, max_level, static_cast<int>(levels.size())));
 
     // We encode into separate memory from the output stream because the
     // RLE-encoded bytes have to be preceded in the stream by their absolute
@@ -808,13 +807,12 @@ class PrimitiveTypedTest : public ::testing::Test {
 
     for (int i = 0; i < num_columns; ++i) {
       std::string name = TestColumnName(i);
-      fields.push_back(
-          schema::PrimitiveNode::Make(
-              name,
-              repetition,
-              TestType::type_num,
-              ConvertedType::NONE,
-              FLBA_LENGTH));
+      fields.push_back(schema::PrimitiveNode::Make(
+          name,
+          repetition,
+          TestType::type_num,
+          ConvertedType::NONE,
+          FLBA_LENGTH));
     }
     node_ = schema::GroupNode::Make("schema", Repetition::REQUIRED, fields);
     schema_.Init(node_);

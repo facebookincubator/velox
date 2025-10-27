@@ -81,9 +81,8 @@ void WaveTestSplitReader::schedule(WaveStream& waveStream, int32_t maxRows) {
   auto numRows = std::min<int32_t>(maxRows, available());
   scheduledRows_ = numRows;
   auto rowSet = folly::Range<const int32_t*>(iota(numRows, rows_), numRows);
-  std::unique_ptr<ReadStream> exe(
-      reinterpret_cast<ReadStream*>(
-          waveStream.recycleExecutable(nullptr, 0).release()));
+  std::unique_ptr<ReadStream> exe(reinterpret_cast<ReadStream*>(
+      waveStream.recycleExecutable(nullptr, 0).release()));
   if (exe) {
     VELOX_DCHECK_NOT_NULL(
         dynamic_cast<ReadStream*>(reinterpret_cast<Executable*>(exe.get())));

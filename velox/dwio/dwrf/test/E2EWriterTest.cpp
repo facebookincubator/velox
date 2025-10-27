@@ -2140,10 +2140,9 @@ DEBUG_ONLY_TEST_F(E2EWriterTest, memoryReclaimThreshold) {
   }
   const std::vector<uint64_t> writerFlushThresholdSizes = {0, 1L << 30};
   for (uint64_t writerFlushThresholdSize : writerFlushThresholdSizes) {
-    SCOPED_TRACE(
-        fmt::format(
-            "writerFlushThresholdSize {}",
-            succinctBytes(writerFlushThresholdSize)));
+    SCOPED_TRACE(fmt::format(
+        "writerFlushThresholdSize {}",
+        succinctBytes(writerFlushThresholdSize)));
 
     const common::SpillConfig spillConfig =
         getSpillConfig(10, 20, writerFlushThresholdSize);

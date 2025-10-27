@@ -113,12 +113,11 @@ FOLLY_ALWAYS_INLINE Status validateType(
     std::string callerFunctionName) {
   geos::geom::GeometryTypeId type = geometry.getGeometryTypeId();
   if (!std::count(validTypes.begin(), validTypes.end(), type)) {
-    return Status::UserError(
-        fmt::format(
-            "{} only applies to {}. Input type is: {}",
-            callerFunctionName,
-            fmt::join(getGeosTypeNames(validTypes), " or "),
-            getGeosTypeToStringIdentifier().at(type)));
+    return Status::UserError(fmt::format(
+        "{} only applies to {}. Input type is: {}",
+        callerFunctionName,
+        fmt::join(getGeosTypeNames(validTypes), " or "),
+        getGeosTypeToStringIdentifier().at(type)));
   }
   return Status::OK();
 }

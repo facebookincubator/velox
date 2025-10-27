@@ -102,12 +102,11 @@ class ApproxPercentileTest : public AggregationTestBase {
       double percentile,
       double accuracy,
       std::optional<T> expectedResult) {
-    SCOPED_TRACE(
-        fmt::format(
-            "weighted={} percentile={} accuracy={}",
-            weights != nullptr,
-            percentile,
-            accuracy));
+    SCOPED_TRACE(fmt::format(
+        "weighted={} percentile={} accuracy={}",
+        weights != nullptr,
+        percentile,
+        accuracy));
     auto rows =
         weights ? makeRowVector({values, weights}) : makeRowVector({values});
 

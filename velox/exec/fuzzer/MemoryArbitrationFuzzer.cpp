@@ -503,10 +503,9 @@ MemoryArbitrationFuzzer::hashJoinPlans(
                  joinType,
                  false)
              .planNode();
-  plans.push_back(
-      PlanWithSplits{
-          std::move(plan),
-          {{probeScanId, probeSplits}, {buildScanId, buildSplits}}});
+  plans.push_back(PlanWithSplits{
+      std::move(plan),
+      {{probeScanId, probeSplits}, {buildScanId, buildSplits}}});
   return plans;
 }
 

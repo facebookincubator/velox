@@ -248,11 +248,10 @@ TEST_F(ByteStreamTest, newRangeAllocation) {
     byteStream.startWrite(0);
     for (int i = 0; i < testData.newRangeSizes.size(); ++i) {
       const auto newRangeSize = testData.newRangeSizes[i];
-      SCOPED_TRACE(
-          fmt::format(
-              "iteration {} allocation size {}",
-              i,
-              succinctBytes(testData.newRangeSizes[i])));
+      SCOPED_TRACE(fmt::format(
+          "iteration {} allocation size {}",
+          i,
+          succinctBytes(testData.newRangeSizes[i])));
       std::string value(newRangeSize, 'a');
       byteStream.appendStringView(value);
       ASSERT_EQ(arena->size(), testData.expectedArenaAllocationSizes[i]);
@@ -471,9 +470,8 @@ class InputByteStreamTest : public ByteStreamTest,
           fmt::format("{}/{}", tempDirPath_->getPath(), fileId_++);
       auto writeFile = fs_->openFileForWrite(filePath);
       for (auto& byteRange : byteRanges) {
-        writeFile->append(
-            std::string_view(
-                reinterpret_cast<char*>(byteRange.buffer), byteRange.size));
+        writeFile->append(std::string_view(
+            reinterpret_cast<char*>(byteRange.buffer), byteRange.size));
       }
       writeFile->close();
       return std::make_unique<common::FileInputStream>(

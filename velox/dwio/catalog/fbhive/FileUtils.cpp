@@ -112,10 +112,9 @@ std::vector<std::pair<std::string, std::string>> extractPartitionKeyValues(
         std::vector<std::string> tokens;
         folly::split('=', partitionPart, tokens);
         if (tokens.size() == 2) {
-          parsedParts.emplace_back(
-              std::make_pair(
-                  FileUtils::unescapePathName(tokens[0]),
-                  FileUtils::unescapePathName(tokens[1])));
+          parsedParts.emplace_back(std::make_pair(
+              FileUtils::unescapePathName(tokens[0]),
+              FileUtils::unescapePathName(tokens[1])));
         }
       });
 }

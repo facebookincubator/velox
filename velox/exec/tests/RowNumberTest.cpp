@@ -218,12 +218,11 @@ TEST_F(RowNumberTest, spill) {
                 core::QueryConfig::kSpillNumPartitionBits,
                 testData.spillPartitionBits)
             .queryCtx(queryCtx)
-            .plan(
-                PlanBuilder()
-                    .values(vectors)
-                    .rowNumber({"c0"})
-                    .capturePlanNodeId(rowNumberPlanNodeId)
-                    .planNode())
+            .plan(PlanBuilder()
+                      .values(vectors)
+                      .rowNumber({"c0"})
+                      .capturePlanNodeId(rowNumberPlanNodeId)
+                      .planNode())
             .assertResults(
                 "SELECT *, row_number() over (partition by c0) FROM tmp");
     auto taskStats = toPlanStats(task->taskStats());
@@ -405,12 +404,11 @@ DEBUG_ONLY_TEST_F(RowNumberTest, spillOnlyDuringInputOrOutput) {
                 core::QueryConfig::kSpillNumPartitionBits,
                 testData.spillPartitionBits)
             .queryCtx(queryCtx)
-            .plan(
-                PlanBuilder()
-                    .values(vectors)
-                    .rowNumber({"c0"})
-                    .capturePlanNodeId(rowNumberPlanNodeId)
-                    .planNode())
+            .plan(PlanBuilder()
+                      .values(vectors)
+                      .rowNumber({"c0"})
+                      .capturePlanNodeId(rowNumberPlanNodeId)
+                      .planNode())
             .assertResults(
                 "SELECT *, row_number() over (partition by c0) FROM tmp");
     auto taskStats = toPlanStats(task->taskStats());
@@ -490,12 +488,11 @@ DEBUG_ONLY_TEST_F(RowNumberTest, recursiveSpill) {
             .config(
                 core::QueryConfig::kMaxSpillLevel, testData.maxSpillLevel - 1)
             .queryCtx(queryCtx)
-            .plan(
-                PlanBuilder()
-                    .values(vectors)
-                    .rowNumber({"c0"})
-                    .capturePlanNodeId(rowNumberPlanNodeId)
-                    .planNode())
+            .plan(PlanBuilder()
+                      .values(vectors)
+                      .rowNumber({"c0"})
+                      .capturePlanNodeId(rowNumberPlanNodeId)
+                      .planNode())
             .assertResults(
                 "SELECT *, row_number() over (partition by c0) FROM tmp");
     auto taskStats = toPlanStats(task->taskStats());
@@ -553,12 +550,11 @@ TEST_F(RowNumberTest, spillWithYield) {
                 core::QueryConfig::kDriverCpuTimeSliceLimitMs,
                 testData.cpuTimeSliceLimitMs)
             .queryCtx(queryCtx)
-            .plan(
-                PlanBuilder()
-                    .values(vectors)
-                    .rowNumber({"c0"})
-                    .capturePlanNodeId(rowNumberPlanNodeId)
-                    .planNode())
+            .plan(PlanBuilder()
+                      .values(vectors)
+                      .rowNumber({"c0"})
+                      .capturePlanNodeId(rowNumberPlanNodeId)
+                      .planNode())
             .assertResults(
                 "SELECT *, row_number() over (partition by c0) FROM tmp");
     auto taskStats = toPlanStats(task->taskStats());

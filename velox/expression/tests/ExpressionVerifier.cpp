@@ -194,14 +194,12 @@ void transformInputTestCases(
   const auto [transformedInputs, transformProjections] =
       referenceQueryRunner->inputProjections(input);
   for (const auto& expr : transformProjections) {
-    transformPlans.push_back(
-        core::Expressions::inferTypes(
-            expr, transformedInputs[0]->type(), pool));
+    transformPlans.push_back(core::Expressions::inferTypes(
+        expr, transformedInputs[0]->type(), pool));
   }
   for (int i = 0; i < transformedInputs.size(); ++i) {
-    transformedInputTestCases.push_back(
-        fuzzer::InputTestCase{
-            transformedInputs[i], inputTestCases[i].activeRows});
+    transformedInputTestCases.push_back(fuzzer::InputTestCase{
+        transformedInputs[i], inputTestCases[i].activeRows});
   }
 }
 

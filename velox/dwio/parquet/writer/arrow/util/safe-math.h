@@ -156,13 +156,13 @@
 
 #define PSNIP_SAFE_DEFINE_LARGER_BINARY_OP(T, name, op_name, op)             \
   PSNIP_SAFE__FUNCTION psnip_safe_##name##_larger                            \
-  psnip_safe_larger_##name##_##op_name(T a, T b) {                           \
+      psnip_safe_larger_##name##_##op_name(T a, T b) {                       \
     return ((psnip_safe_##name##_larger)a)op((psnip_safe_##name##_larger)b); \
   }
 
 #define PSNIP_SAFE_DEFINE_LARGER_UNARY_OP(T, name, op_name, op) \
   PSNIP_SAFE__FUNCTION psnip_safe_##name##_larger               \
-  psnip_safe_larger_##name##_##op_name(T value) {               \
+      psnip_safe_larger_##name##_##op_name(T value) {           \
     return (op((psnip_safe_##name##_larger)value));             \
   }
 

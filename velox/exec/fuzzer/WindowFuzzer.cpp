@@ -609,9 +609,8 @@ void WindowFuzzer::testAlternativePlans(
     allKeys.emplace_back(key + " NULLS FIRST");
   }
   for (const auto& keyAndOrder : sortingKeysAndOrders) {
-    allKeys.emplace_back(
-        fmt::format(
-            "{} {}", keyAndOrder.key_, keyAndOrder.sortOrder_.toString()));
+    allKeys.emplace_back(fmt::format(
+        "{} {}", keyAndOrder.key_, keyAndOrder.sortOrder_.toString()));
   }
 
   // Streaming window from values.

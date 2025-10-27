@@ -574,9 +574,8 @@ TEST_F(SimpleFunctionTest, defaultNullBehavior) {
 
   // Check that default null behavior functions don't get called on a null
   // input.
-  EXPECT_NO_THROW(
-      evaluate<SimpleVector<bool>>(
-          "default_null_behavior(c0)", makeRowVector({flatVector})));
+  EXPECT_NO_THROW(evaluate<SimpleVector<bool>>(
+      "default_null_behavior(c0)", makeRowVector({flatVector})));
 }
 
 // Test that function with non-default null behavior receives parameters as
@@ -1142,9 +1141,8 @@ TEST_F(SimpleFunctionTest, callAscii) {
   registerFunction<StringInputIntOutputFunction, int32_t, Varchar>(
       {"get_input_size"});
   auto asciiInput = makeFlatVector<std::string>({"abc123", "10% #\0"});
-  EXPECT_NO_THROW(
-      evaluate<SimpleVector<int32_t>>(
-          "get_input_size(c0)", makeRowVector({asciiInput})));
+  EXPECT_NO_THROW(evaluate<SimpleVector<int32_t>>(
+      "get_input_size(c0)", makeRowVector({asciiInput})));
 }
 
 // Return false always.

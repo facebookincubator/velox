@@ -54,9 +54,8 @@ core::PlanNodePtr TableScanReplayer::createPlanNode(
 std::vector<exec::Split> TableScanReplayer::getSplits() const {
   std::vector<std::string> splitInfoDirs;
   for (const auto driverId : driverIds_) {
-    splitInfoDirs.push_back(
-        exec::trace::getOpTraceDirectory(
-            nodeTraceDir_, pipelineIds_.front(), driverId));
+    splitInfoDirs.push_back(exec::trace::getOpTraceDirectory(
+        nodeTraceDir_, pipelineIds_.front(), driverId));
   }
   const auto splitStrs =
       exec::trace::OperatorTraceSplitReader(

@@ -351,9 +351,8 @@ uint32_t PrefixSort::maxRequiredBytes() const {
       memory::AllocationTraits::numPages(numRows * sortLayout_.entrySize);
   // Prefix data size + swap buffer size.
   return memory::AllocationTraits::pageBytes(numPages) +
-      pool_->preferredSize(
-          checkedPlus<size_t>(
-              sortLayout_.entrySize, AlignedBuffer::kPaddedSize)) +
+      pool_->preferredSize(checkedPlus<size_t>(
+          sortLayout_.entrySize, AlignedBuffer::kPaddedSize)) +
       2 * pool_->alignment();
 }
 

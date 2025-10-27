@@ -53,24 +53,23 @@ ParquetTypeWithId::moveChildren() const&& {
     auto precision = parquetChild->precision_;
     auto scale = parquetChild->scale_;
     auto typeLength = parquetChild->typeLength_;
-    children.push_back(
-        std::make_unique<ParquetTypeWithId>(
-            std::move(type),
-            std::move(*parquetChild).moveChildren(),
-            id,
-            maxId,
-            column,
-            std::move(name),
-            parquetType,
-            std::move(logicalType),
-            std::move(convertedType),
-            maxRepeat,
-            maxDefine,
-            isOptional,
-            isRepeated,
-            precision,
-            scale,
-            typeLength));
+    children.push_back(std::make_unique<ParquetTypeWithId>(
+        std::move(type),
+        std::move(*parquetChild).moveChildren(),
+        id,
+        maxId,
+        column,
+        std::move(name),
+        parquetType,
+        std::move(logicalType),
+        std::move(convertedType),
+        maxRepeat,
+        maxDefine,
+        isOptional,
+        isRepeated,
+        precision,
+        scale,
+        typeLength));
   }
   return children;
 }

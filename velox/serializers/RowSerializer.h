@@ -322,10 +322,9 @@ class RowDeserializer {
       while (rowIterator->hasNext()) {
         serializedBuffers.emplace_back(rowIterator->nextRow());
         if constexpr (std::is_same_v<SerializeView, std::string_view>) {
-          serializedRows.push_back(
-              std::string_view(
-                  serializedBuffers.back()->data(),
-                  serializedBuffers.back()->size()));
+          serializedRows.push_back(std::string_view(
+              serializedBuffers.back()->data(),
+              serializedBuffers.back()->size()));
         } else {
           serializedRows.push_back(serializedBuffers.back()->data());
         }
@@ -358,10 +357,9 @@ class RowDeserializer {
       while (sourceRowIterator->hasNext()) {
         serializedBuffers.emplace_back(sourceRowIterator->nextRow());
         if constexpr (std::is_same_v<SerializeView, std::string_view>) {
-          serializedRows.push_back(
-              std::string_view(
-                  serializedBuffers.back()->data(),
-                  serializedBuffers.back()->size()));
+          serializedRows.push_back(std::string_view(
+              serializedBuffers.back()->data(),
+              serializedBuffers.back()->size()));
         } else {
           serializedRows.push_back(serializedBuffers.back()->data());
         }

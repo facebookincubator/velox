@@ -415,9 +415,8 @@ void partitionKeys(
   computeHistogram<<<(size + kBlockSize - 1) / kBlockSize, kBlockSize>>>(
       keys, size, numPartitions - 1, hist);
   CUDA_CHECK_FATAL(cudaMemset(offsets, 0, sizeof(int64_t)));
-  CUDA_CHECK_FATAL(
-      cub::DeviceScan::InclusiveSum(
-          tmp, tmpSize, hist, offsets + 1, numPartitions));
+  CUDA_CHECK_FATAL(cub::DeviceScan::InclusiveSum(
+      tmp, tmpSize, hist, offsets + 1, numPartitions));
   CUDA_CHECK_FATAL(cudaMemcpy(
       hist,
       offsets,
@@ -666,9 +665,8 @@ void runPartitioned() {
   auto hist = allocateDeviceMemory<int64_t>(numPartitions);
   auto offsets = allocateDeviceMemory<int64_t>(numPartitions + 1);
   size_t tmpSize;
-  CUDA_CHECK_FATAL(
-      cub::DeviceScan::InclusiveSum(
-          nullptr, tmpSize, hist.get(), offsets.get(), numPartitions));
+  CUDA_CHECK_FATAL(cub::DeviceScan::InclusiveSum(
+      nullptr, tmpSize, hist.get(), offsets.get(), numPartitions));
   auto tmp = allocateDeviceMemory<char>(tmpSize);
   auto shuffledKeys = allocateDeviceMemory<uint64_t>(numKeys);
 

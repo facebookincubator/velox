@@ -467,11 +467,10 @@ class ArrayVector : public ArrayVectorBase {
             nullCount,
             std::move(offsets),
             std::move(lengths)),
-        elements_(
-            BaseVector::getOrCreateEmpty(
-                std::move(elements),
-                type->childAt(0),
-                pool)) {
+        elements_(BaseVector::getOrCreateEmpty(
+            std::move(elements),
+            type->childAt(0),
+            pool)) {
     VELOX_CHECK_EQ(type->kind(), TypeKind::ARRAY);
     VELOX_CHECK(
         elements_->type()->kindEquals(type->childAt(0)),
@@ -586,16 +585,14 @@ class MapVector : public ArrayVectorBase {
             nullCount,
             std::move(offsets),
             std::move(sizes)),
-        keys_(
-            BaseVector::getOrCreateEmpty(
-                std::move(keys),
-                type->childAt(0),
-                pool)),
-        values_(
-            BaseVector::getOrCreateEmpty(
-                std::move(values),
-                type->childAt(1),
-                pool)),
+        keys_(BaseVector::getOrCreateEmpty(
+            std::move(keys),
+            type->childAt(0),
+            pool)),
+        values_(BaseVector::getOrCreateEmpty(
+            std::move(values),
+            type->childAt(1),
+            pool)),
         sortedKeys_{sortedKeys} {
     VELOX_CHECK_EQ(type->kind(), TypeKind::MAP);
 

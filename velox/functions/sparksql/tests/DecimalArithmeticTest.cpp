@@ -44,9 +44,8 @@ class DecimalArithmeticTest : public SparkFunctionBaseTest {
         "At least one input vector is needed for arithmetic function test.");
     std::vector<core::TypedExprPtr> inputExprs;
     for (int i = 0; i < inputs.size(); ++i) {
-      inputExprs.emplace_back(
-          std::make_shared<core::FieldAccessTypedExpr>(
-              inputs[i]->type(), fmt::format("c{}", i)));
+      inputExprs.emplace_back(std::make_shared<core::FieldAccessTypedExpr>(
+          inputs[i]->type(), fmt::format("c{}", i)));
     }
     auto expr = std::make_shared<const core::CallTypedExpr>(
         expected->type(), std::move(inputExprs), functionName);

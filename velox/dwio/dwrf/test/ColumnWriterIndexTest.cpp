@@ -1208,7 +1208,7 @@ class ListColumnWriterEncodingIndexTest : public testing::Test,
                                           public WriterEncodingIndexTest2 {
  public:
   ListColumnWriterEncodingIndexTest()
-      : WriterEncodingIndexTest2(ARRAY(REAL())) {};
+      : WriterEncodingIndexTest2(ARRAY(REAL())){};
 
  protected:
   static void SetUpTestCase() {

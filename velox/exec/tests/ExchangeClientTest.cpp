@@ -610,11 +610,10 @@ TEST_P(ExchangeClientTest, acknowledge) {
     client->addRemoteTaskId(sourceTaskId);
     client->noMoreRemoteTasks();
 
-    ASSERT_TRUE(
-        std::move(future)
-            .via(executor())
-            .wait(std::chrono::seconds{10})
-            .isReady());
+    ASSERT_TRUE(std::move(future)
+                    .via(executor())
+                    .wait(std::chrono::seconds{10})
+                    .isReady());
 
 #ifndef NDEBUG
     // The client knew there is more data available but could not fetch any more
@@ -691,11 +690,10 @@ TEST_P(ExchangeClientTest, acknowledge) {
   pages = client->next(1, 1, &atEnd, &dequeueEndOfDataFuture);
   ASSERT_EQ(0, pages.size());
 
-  ASSERT_TRUE(
-      std::move(dequeueEndOfDataFuture)
-          .via(executor())
-          .wait(std::chrono::seconds{10})
-          .isReady());
+  ASSERT_TRUE(std::move(dequeueEndOfDataFuture)
+                  .via(executor())
+                  .wait(std::chrono::seconds{10})
+                  .isReady());
   pages = client->next(1, 1, &atEnd, &dequeueEndOfDataFuture);
   ASSERT_EQ(0, pages.size());
   ASSERT_TRUE(atEnd);

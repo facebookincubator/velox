@@ -702,9 +702,8 @@ void AggregationTestBase::testReadFromFiles(
     auto file = exec::test::TempFilePath::create();
     writeToFile(file->getPath(), vector, writerPool.get());
     files.push_back(file);
-    splits.emplace_back(
-        std::make_shared<connector::hive::HiveConnectorSplit>(
-            kHiveConnectorId, file->getPath(), dwio::common::FileFormat::DWRF));
+    splits.emplace_back(std::make_shared<connector::hive::HiveConnectorSplit>(
+        kHiveConnectorId, file->getPath(), dwio::common::FileFormat::DWRF));
   }
   // No need to test streaming as the streaming test generates its own inputs,
   // so it would be the same as the original test.

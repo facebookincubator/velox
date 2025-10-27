@@ -51,9 +51,8 @@ TEST_F(DefaultFlushPolicyTest, StripeProgressTest) {
         testCase.stripeSizeThreshold, /*dictionarySizeThreshold=*/0};
     EXPECT_EQ(
         testCase.shouldFlush,
-        policy.shouldFlush(
-            dwio::common::StripeProgress{
-                .stripeSizeEstimate = testCase.stripeSize}));
+        policy.shouldFlush(dwio::common::StripeProgress{
+            .stripeSizeEstimate = testCase.stripeSize}));
   }
 }
 
@@ -116,8 +115,8 @@ TEST_F(DefaultFlushPolicyTest, AdditionalCriteriaTest) {
           .dictionarySize = 42,
           .decision = FlushDecision::SKIP}};
   for (const auto& testCase : testCases) {
-    DefaultFlushPolicy policy{/*stripeSizeThreshold=*/1000,
-                              testCase.dictionarySizeThreshold};
+    DefaultFlushPolicy policy{
+        /*stripeSizeThreshold=*/1000, testCase.dictionarySizeThreshold};
     EXPECT_EQ(
         testCase.decision,
         policy.shouldFlushDictionary(

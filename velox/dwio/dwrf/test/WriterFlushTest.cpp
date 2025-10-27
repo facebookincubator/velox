@@ -146,9 +146,8 @@ class MockMemoryPool : public velox::memory::MemoryPool {
     VELOX_UNSUPPORTED("allocateContiguous unsupported");
   }
 
-  void freeContiguous(
-      velox::memory::ContiguousAllocation&
-      /*unused*/) override {
+  void freeContiguous(velox::memory::ContiguousAllocation&
+                      /*unused*/) override {
     VELOX_UNSUPPORTED("freeContiguous unsupported");
   }
 

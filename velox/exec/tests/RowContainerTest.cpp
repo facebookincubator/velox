@@ -484,12 +484,11 @@ class RowContainerTest : public exec::test::RowContainerTestBase {
       const VectorPtr& expected,
       std::optional<CompareFlags> flags) {
     // If no flags provided then it must be the default of {true, true}.
-    SCOPED_TRACE(
-        fmt::format(
-            "{}, ascending = {}, nullsFirst = {}",
-            type->toString(),
-            flags.has_value() ? flags.value().ascending : true,
-            flags.has_value() ? flags.value().nullsFirst : true));
+    SCOPED_TRACE(fmt::format(
+        "{}, ascending = {}, nullsFirst = {}",
+        type->toString(),
+        flags.has_value() ? flags.value().ascending : true,
+        flags.has_value() ? flags.value().nullsFirst : true));
 
     // Set 'isJoinBuild' to true to enable nullable sort key in test.
     auto rowContainer = makeRowContainer({type}, {type}, false);
@@ -1893,29 +1892,24 @@ TEST_F(RowContainerTest, unknown) {
   // Verify compare method with row and decoded vector as input
   // Sorting a NULL constant Vector doesn't change the Vector, so we just
   // validate that it runs without throwing an exception.
-  EXPECT_NO_THROW(
-      std::sort(
-          indexedRows.begin(),
-          indexedRows.end(),
-          [&](const std::pair<int, char*>& l, const std::pair<int, char*>& r) {
-            return rowContainer->compare(
-                       l.second,
-                       rowContainer->columnAt(0),
-                       decoded,
-                       r.first,
-                       {}) < 0;
-          }));
+  EXPECT_NO_THROW(std::sort(
+      indexedRows.begin(),
+      indexedRows.end(),
+      [&](const std::pair<int, char*>& l, const std::pair<int, char*>& r) {
+        return rowContainer->compare(
+                   l.second, rowContainer->columnAt(0), decoded, r.first, {}) <
+            0;
+      }));
 
   // Verify compareRows method with row as input.
   // Sorting a NULL constant Vector doesn't change the Vector, so we just
   // validate that it runs without throwing an exception.
-  EXPECT_NO_THROW(
-      std::sort(
-          indexedRows.begin(),
-          indexedRows.end(),
-          [&](const std::pair<int, char*>& l, const std::pair<int, char*>& r) {
-            return rowContainer->compareRows(l.second, r.second) < 0;
-          }));
+  EXPECT_NO_THROW(std::sort(
+      indexedRows.begin(),
+      indexedRows.end(),
+      [&](const std::pair<int, char*>& l, const std::pair<int, char*>& r) {
+        return rowContainer->compareRows(l.second, r.second) < 0;
+      }));
 }
 
 TEST_F(RowContainerTest, nans) {

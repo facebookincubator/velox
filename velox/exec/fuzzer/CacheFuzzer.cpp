@@ -380,18 +380,17 @@ void CacheFuzzer::initializeInputs() {
     // Initialize buffered input.
     auto readFile = fs_->openFileForRead(fileNames_[i]);
     auto const withExecutor = !folly::Random::oneIn(3, rng_);
-    inputs_.emplace_back(
-        std::make_unique<CachedBufferedInput>(
-            std::move(readFile),
-            MetricsLog::voidLog(),
-            fileIds_[i], // NOLINT
-            cache_.get(),
-            tracker,
-            fileIds_[i], // NOLINT
-            ioStats,
-            fsStats,
-            withExecutor ? executor_.get() : nullptr,
-            readOptions));
+    inputs_.emplace_back(std::make_unique<CachedBufferedInput>(
+        std::move(readFile),
+        MetricsLog::voidLog(),
+        fileIds_[i], // NOLINT
+        cache_.get(),
+        tracker,
+        fileIds_[i], // NOLINT
+        ioStats,
+        fsStats,
+        withExecutor ? executor_.get() : nullptr,
+        readOptions));
 
     // Divide file into fragments.
     std::vector<std::pair<int32_t, int32_t>> fragments;

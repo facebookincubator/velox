@@ -50,9 +50,8 @@ bool RowsStreamingWindowBuild::needsInput() {
 
 void RowsStreamingWindowBuild::ensureInputPartition() {
   if (windowPartitions_.empty() || windowPartitions_.back()->complete()) {
-    windowPartitions_.emplace_back(
-        std::make_shared<WindowPartition>(
-            data_.get(), inversedInputChannels_, sortKeyInfo_));
+    windowPartitions_.emplace_back(std::make_shared<WindowPartition>(
+        data_.get(), inversedInputChannels_, sortKeyInfo_));
   }
 }
 

@@ -64,24 +64,23 @@ class MapFromEntriesFunction : public exec::VectorFunction {
   }
 
   static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
-    return {
-        // unknown -> map(unknown, unknown)
-        exec::FunctionSignatureBuilder()
-            .returnType("map(unknown, unknown)")
-            .argumentType("unknown")
-            .build(),
-        // array(unknown) -> map(unknown, unknown)
-        exec::FunctionSignatureBuilder()
-            .returnType("map(unknown, unknown)")
-            .argumentType("array(unknown)")
-            .build(),
-        // array(row(K,V)) -> map(K,V)
-        exec::FunctionSignatureBuilder()
-            .typeVariable("K")
-            .typeVariable("V")
-            .returnType("map(K,V)")
-            .argumentType("array(row(K,V))")
-            .build()};
+    return {// unknown -> map(unknown, unknown)
+            exec::FunctionSignatureBuilder()
+                .returnType("map(unknown, unknown)")
+                .argumentType("unknown")
+                .build(),
+            // array(unknown) -> map(unknown, unknown)
+            exec::FunctionSignatureBuilder()
+                .returnType("map(unknown, unknown)")
+                .argumentType("array(unknown)")
+                .build(),
+            // array(row(K,V)) -> map(K,V)
+            exec::FunctionSignatureBuilder()
+                .typeVariable("K")
+                .typeVariable("V")
+                .returnType("map(K,V)")
+                .argumentType("array(row(K,V))")
+                .build()};
   }
 
  private:

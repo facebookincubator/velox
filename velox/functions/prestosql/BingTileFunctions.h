@@ -28,11 +28,10 @@ FOLLY_ALWAYS_INLINE Status checkBingTileZoom(int32_t zoom) {
         fmt::format("Bing tile zoom {} cannot be negative", zoom));
   }
   if (FOLLY_UNLIKELY(zoom > BingTileType::kBingTileMaxZoomLevel)) {
-    return Status::UserError(
-        fmt::format(
-            "Bing tile zoom {} cannot be greater than max zoom {}",
-            zoom,
-            BingTileType::kBingTileMaxZoomLevel));
+    return Status::UserError(fmt::format(
+        "Bing tile zoom {} cannot be greater than max zoom {}",
+        zoom,
+        BingTileType::kBingTileMaxZoomLevel));
   }
   return Status::OK();
 }
@@ -70,12 +69,11 @@ struct BingTileFunction {
       if (reason.has_value()) {
         return Status::UserError(reason.value());
       } else {
-        return Status::UnknownError(
-            fmt::format(
-                "Velox Error constructing BingTile from x {} y {} zoom {}; please report this.",
-                x,
-                y,
-                zoom));
+        return Status::UnknownError(fmt::format(
+            "Velox Error constructing BingTile from x {} y {} zoom {}; please report this.",
+            x,
+            y,
+            zoom));
       }
     }
     result = tile;
@@ -167,11 +165,10 @@ struct BingTileParentFunction {
       const arg_type<BingTile>& tile,
       const arg_type<int32_t>& parentZoom) {
     if (FOLLY_UNLIKELY(parentZoom > BingTileType::kBingTileMaxZoomLevel)) {
-      return Status::UserError(
-          fmt::format(
-              "newZoom {} is greater than max zoom {}",
-              parentZoom,
-              BingTileType::kBingTileMaxZoomLevel));
+      return Status::UserError(fmt::format(
+          "newZoom {} is greater than max zoom {}",
+          parentZoom,
+          BingTileType::kBingTileMaxZoomLevel));
     }
     return call(result, tile, static_cast<int8_t>(parentZoom));
   }

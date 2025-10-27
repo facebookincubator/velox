@@ -513,11 +513,10 @@ TEST_F(FunctionRegistryTest, companionFunction) {
       "array_agg_extract", "arbitrary_extract", "bitwise_and_agg_extract"};
 
   for (const auto& function : functions) {
-    ASSERT_FALSE(
-        exec::simpleFunctions()
-            .getFunctionSignaturesAndMetadata(function)
-            .front()
-            .first.companionFunction);
+    ASSERT_FALSE(exec::simpleFunctions()
+                     .getFunctionSignaturesAndMetadata(function)
+                     .front()
+                     .first.companionFunction);
   }
   for (const auto& function : companionFunctions) {
     ASSERT_TRUE(exec::getVectorFunctionMetadata(function)->companionFunction);

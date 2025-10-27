@@ -1502,9 +1502,8 @@ void GroupingSet::toIntermediate(
         &aggregateVector);
   }
   if (intermediateRows_) {
-    intermediateRows_->eraseRows(
-        folly::Range<char**>(
-            intermediateGroups_.data(), intermediateGroups_.size()));
+    intermediateRows_->eraseRows(folly::Range<char**>(
+        intermediateGroups_.data(), intermediateGroups_.size()));
   }
 
   // It's unnecessary to call function->clear() to reset the internal states of

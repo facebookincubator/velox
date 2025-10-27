@@ -177,9 +177,8 @@ std::unique_ptr<geos::geom::Geometry> GeometryDeserializer::readPolyline(
   std::vector<std::unique_ptr<geos::geom::LineString>> lineStrings;
   lineStrings.reserve(partCount);
   for (size_t i = 0; i < partCount; ++i) {
-    lineStrings.push_back(
-        getGeometryFactory()->createLineString(
-            readCoordinates(input, partLengths[i])));
+    lineStrings.push_back(getGeometryFactory()->createLineString(
+        readCoordinates(input, partLengths[i])));
   }
 
   if (multiType) {
@@ -234,9 +233,8 @@ std::unique_ptr<geos::geom::Geometry> GeometryDeserializer::readPolygon(
       if (shell) {
         // next polygon has started
         if (FOLLY_LIKELY(multiType)) {
-          polygons.push_back(
-              getGeometryFactory()->createPolygon(
-                  std::move(shell), std::move(holes)));
+          polygons.push_back(getGeometryFactory()->createPolygon(
+              std::move(shell), std::move(holes)));
           holes.clear();
         } else {
           // If this is not a MultiPolygon, we only have one shell so this

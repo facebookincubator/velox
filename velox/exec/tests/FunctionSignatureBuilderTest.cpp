@@ -45,12 +45,11 @@ TEST_F(FunctionSignatureBuilderTest, basicTypeTests) {
 
   // Integer variables do not have to be used in the inputs, but in that case
   // must appear in the return.
-  ASSERT_NO_THROW(
-      FunctionSignatureBuilder()
-          .integerVariable("a")
-          .returnType("DECIMAL(a, a)")
-          .argumentType("integer")
-          .build(););
+  ASSERT_NO_THROW(FunctionSignatureBuilder()
+                      .integerVariable("a")
+                      .returnType("DECIMAL(a, a)")
+                      .argumentType("integer")
+                      .build(););
 
   VELOX_ASSERT_THROW(
       FunctionSignatureBuilder()

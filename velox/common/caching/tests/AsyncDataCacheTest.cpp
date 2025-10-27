@@ -1402,10 +1402,9 @@ TEST_P(AsyncDataCacheTest, makeEvictable) {
       std::vector<RawFileCacheKey> keys;
       keys.reserve(cachePins.size());
       for (const auto& pin : cachePins) {
-        keys.push_back(
-            RawFileCacheKey{
-                pin.checkedEntry()->key().fileNum.id(),
-                pin.checkedEntry()->key().offset});
+        keys.push_back(RawFileCacheKey{
+            pin.checkedEntry()->key().fileNum.id(),
+            pin.checkedEntry()->key().offset});
       }
       cachePins.clear();
       for (const auto& key : keys) {

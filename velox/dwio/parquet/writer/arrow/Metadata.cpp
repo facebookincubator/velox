@@ -182,10 +182,10 @@ std::unique_ptr<ColumnCryptoMetaData> ColumnCryptoMetaData::Make(
 }
 
 ColumnCryptoMetaData::ColumnCryptoMetaData(const uint8_t* metadata)
-    : impl_(
-          std::make_unique<ColumnCryptoMetaDataImpl>(
-              reinterpret_cast<const facebook::velox::parquet::thrift::
-                                   ColumnCryptoMetaData*>(metadata))) {}
+    : impl_(std::make_unique<ColumnCryptoMetaDataImpl>(
+          reinterpret_cast<
+              const facebook::velox::parquet::thrift::ColumnCryptoMetaData*>(
+              metadata))) {}
 
 ColumnCryptoMetaData::~ColumnCryptoMetaData() = default;
 
@@ -1021,9 +1021,8 @@ class FileMetaData::FileMetaDataImpl {
     if (metadata_->schema.empty()) {
       throw ParquetException("Empty file schema (no root)");
     }
-    schema_.Init(
-        schema::Unflatten(
-            &metadata_->schema[0], static_cast<int>(metadata_->schema.size())));
+    schema_.Init(schema::Unflatten(
+        &metadata_->schema[0], static_cast<int>(metadata_->schema.size())));
   }
 
   void InitColumnOrders() {

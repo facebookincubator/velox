@@ -502,9 +502,8 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
         auto next = planNodes[i + 1];
         if (auto projectNode =
                 std::dynamic_pointer_cast<const core::ProjectNode>(next)) {
-          operators.push_back(
-              std::make_unique<FilterProject>(
-                  id, ctx.get(), filterNode, projectNode));
+          operators.push_back(std::make_unique<FilterProject>(
+              id, ctx.get(), filterNode, projectNode));
           i++;
           continue;
         }
@@ -545,9 +544,8 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
         auto tableWriteMergeNode =
             std::dynamic_pointer_cast<const core::TableWriteMergeNode>(
                 planNode)) {
-      operators.push_back(
-          std::make_unique<TableWriteMerge>(
-              id, ctx.get(), tableWriteMergeNode));
+      operators.push_back(std::make_unique<TableWriteMerge>(
+          id, ctx.get(), tableWriteMergeNode));
     } else if (
         auto mergeExchangeNode =
             std::dynamic_pointer_cast<const core::MergeExchangeNode>(
@@ -559,16 +557,14 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
             std::dynamic_pointer_cast<const core::ExchangeNode>(planNode)) {
       // NOTE: the exchange client can only be used by one operator in a driver.
       VELOX_CHECK_NOT_NULL(exchangeClient);
-      operators.push_back(
-          std::make_unique<Exchange>(
-              id, ctx.get(), exchangeNode, std::move(exchangeClient)));
+      operators.push_back(std::make_unique<Exchange>(
+          id, ctx.get(), exchangeNode, std::move(exchangeClient)));
     } else if (
         auto partitionedOutputNode =
             std::dynamic_pointer_cast<const core::PartitionedOutputNode>(
                 planNode)) {
-      operators.push_back(
-          std::make_unique<PartitionedOutput>(
-              id, ctx.get(), partitionedOutputNode, eagerFlush(*planNode)));
+      operators.push_back(std::make_unique<PartitionedOutput>(
+          id, ctx.get(), partitionedOutputNode, eagerFlush(*planNode)));
     } else if (
         auto joinNode =
             std::dynamic_pointer_cast<const core::HashJoinNode>(planNode)) {
@@ -594,9 +590,8 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
         auto aggregationNode =
             std::dynamic_pointer_cast<const core::AggregationNode>(planNode)) {
       if (aggregationNode->isPreGrouped()) {
-        operators.push_back(
-            std::make_unique<StreamingAggregation>(
-                id, ctx.get(), aggregationNode));
+        operators.push_back(std::make_unique<StreamingAggregation>(
+            id, ctx.get(), aggregationNode));
       } else {
         operators.push_back(
             std::make_unique<HashAggregation>(id, ctx.get(), aggregationNode));
@@ -659,13 +654,12 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
         auto localPartitionNode =
             std::dynamic_pointer_cast<const core::LocalPartitionNode>(
                 planNode)) {
-      operators.push_back(
-          std::make_unique<LocalExchange>(
-              id,
-              ctx.get(),
-              localPartitionNode->outputType(),
-              localPartitionNode->id(),
-              ctx->partitionId));
+      operators.push_back(std::make_unique<LocalExchange>(
+          id,
+          ctx.get(),
+          localPartitionNode->outputType(),
+          localPartitionNode->id(),
+          ctx->partitionId));
     } else if (
         auto unnest =
             std::dynamic_pointer_cast<const core::UnnestNode>(planNode)) {
@@ -680,19 +674,17 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
         auto assignUniqueIdNode =
             std::dynamic_pointer_cast<const core::AssignUniqueIdNode>(
                 planNode)) {
-      operators.push_back(
-          std::make_unique<AssignUniqueId>(
-              id,
-              ctx.get(),
-              assignUniqueIdNode,
-              assignUniqueIdNode->taskUniqueId(),
-              assignUniqueIdNode->uniqueIdCounter()));
+      operators.push_back(std::make_unique<AssignUniqueId>(
+          id,
+          ctx.get(),
+          assignUniqueIdNode,
+          assignUniqueIdNode->taskUniqueId(),
+          assignUniqueIdNode->uniqueIdCounter()));
     } else if (
         const auto traceScanNode =
             std::dynamic_pointer_cast<const core::TraceScanNode>(planNode)) {
-      operators.push_back(
-          std::make_unique<trace::OperatorTraceScan>(
-              id, ctx.get(), traceScanNode));
+      operators.push_back(std::make_unique<trace::OperatorTraceScan>(
+          id, ctx.get(), traceScanNode));
     } else {
       std::unique_ptr<Operator> extended;
       if (planNode->requiresExchangeClient()) {

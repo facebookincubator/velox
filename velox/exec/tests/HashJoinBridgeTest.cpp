@@ -670,16 +670,12 @@ TEST_P(HashJoinBridgeTest, hashJoinTableType) {
     std::vector<core::FieldAccessTypedExprPtr> buildKeys;
     std::vector<core::FieldAccessTypedExprPtr> probeKeys;
     for (uint32_t i = 0; i < testData.buildKeyType->size(); i++) {
-      buildKeys.push_back(
-          std::make_shared<core::FieldAccessTypedExpr>(
-              testData.buildKeyType->childAt(i),
-              testData.buildKeyType->nameOf(i)));
+      buildKeys.push_back(std::make_shared<core::FieldAccessTypedExpr>(
+          testData.buildKeyType->childAt(i), testData.buildKeyType->nameOf(i)));
     }
     for (uint32_t i = 0; i < testData.probeKeyType->size(); i++) {
-      probeKeys.push_back(
-          std::make_shared<core::FieldAccessTypedExpr>(
-              testData.probeKeyType->childAt(i),
-              testData.probeKeyType->nameOf(i)));
+      probeKeys.push_back(std::make_shared<core::FieldAccessTypedExpr>(
+          testData.probeKeyType->childAt(i), testData.probeKeyType->nameOf(i)));
     }
     const auto joinNode = std::make_shared<core::HashJoinNode>(
         "join-bridge-test",

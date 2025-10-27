@@ -206,15 +206,14 @@ struct DestructureTDigestFunction {
       count += tDigestWeights[i];
     }
     // Create the result row
-    result.copy_from(
-        std::make_tuple(
-            std::move(means),
-            std::move(weights),
-            compression,
-            min,
-            max,
-            sum,
-            count));
+    result.copy_from(std::make_tuple(
+        std::move(means),
+        std::move(weights),
+        compression,
+        min,
+        max,
+        sum,
+        count));
 
     return true;
   }

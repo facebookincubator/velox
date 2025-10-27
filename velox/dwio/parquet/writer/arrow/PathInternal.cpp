@@ -888,10 +888,10 @@ class PathBuilder {
     return VisitInline(*array.storage());
   }
 
-#define NOT_IMPLEMENTED_VISIT(ArrowTypePrefix)                          \
-  Status Visit(const ::arrow::ArrowTypePrefix##Array& array) {          \
-    return Status::NotImplemented(                                      \
-        "Level generation for " #ArrowTypePrefix " not supported yet"); \
+#define NOT_IMPLEMENTED_VISIT(ArrowTypePrefix)                             \
+  Status Visit(const ::arrow::ArrowTypePrefix##Array& array) {             \
+    return Status::NotImplemented("Level generation for " #ArrowTypePrefix \
+                                  " not supported yet");                   \
   }
 
   // Types not yet supported in Parquet.

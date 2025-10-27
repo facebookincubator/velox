@@ -733,9 +733,8 @@ struct VectorReader<DynamicRow> {
         vector_(detail::getDecoded<in_vector_t>(decoded_)),
         childrenDecoders_{vector_.childrenSize()} {
     for (int i = 0; i < vector_.childrenSize(); i++) {
-      childReaders_.push_back(
-          std::make_unique<VectorReader<Any>>(
-              detail::decode(childrenDecoders_[i], *vector_.childAt(i))));
+      childReaders_.push_back(std::make_unique<VectorReader<Any>>(
+          detail::decode(childrenDecoders_[i], *vector_.childAt(i))));
     }
   }
 

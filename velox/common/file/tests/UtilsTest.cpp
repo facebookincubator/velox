@@ -98,12 +98,11 @@ auto getReader(
           /* minTailRoom*/ 0);
 
       for (size_t i = 1; i < size; ++i) {
-        head->appendToChain(
-            folly::IOBuf::copyBuffer(
-                buf.data() + offset + i,
-                /* size */ 1,
-                /* headroom */ 0,
-                /* minTailRoom*/ 0));
+        head->appendToChain(folly::IOBuf::copyBuffer(
+            buf.data() + offset + i,
+            /* size */ 1,
+            /* headroom */ 0,
+            /* minTailRoom*/ 0));
       }
       return head;
     } else {

@@ -127,11 +127,10 @@ std::vector<CacheRequest*> makeRequestParts(
   std::vector<CacheRequest*> parts;
   for (uint64_t offset = 0; offset < request.size; offset += loadQuantum) {
     const int32_t size = std::min<int32_t>(loadQuantum, request.size - offset);
-    extraRequests.push_back(
-        std::make_unique<CacheRequest>(
-            RawFileCacheKey{request.key.fileNum, request.key.offset + offset},
-            size,
-            request.trackingId));
+    extraRequests.push_back(std::make_unique<CacheRequest>(
+        RawFileCacheKey{request.key.fileNum, request.key.offset + offset},
+        size,
+        request.trackingId));
     parts.push_back(extraRequests.back().get());
     parts.back()->coalesces = prefetch;
     if (prefetchOne) {

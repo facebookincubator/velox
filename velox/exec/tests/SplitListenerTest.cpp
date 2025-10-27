@@ -131,11 +131,10 @@ class SplitListenerTest : public HiveConnectorTestBase {
     std::vector<std::shared_ptr<connector::ConnectorSplit>> splits;
     splits.reserve(filePaths_.size());
     for (const auto& filePath : filePaths_) {
-      splits.emplace_back(
-          connector::hive::HiveConnectorSplitBuilder(filePath)
-              .connectorId(kHiveConnectorId)
-              .fileFormat(dwio::common::FileFormat::DWRF)
-              .build());
+      splits.emplace_back(connector::hive::HiveConnectorSplitBuilder(filePath)
+                              .connectorId(kHiveConnectorId)
+                              .fileFormat(dwio::common::FileFormat::DWRF)
+                              .build());
     }
     return splits;
   }

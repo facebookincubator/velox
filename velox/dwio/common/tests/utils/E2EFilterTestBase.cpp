@@ -597,13 +597,12 @@ void E2EFilterTestBase::testMetadataFilter() {
         nullptr,
         c->size(),
         std::vector<VectorPtr>({c}));
-    batches.push_back(
-        std::make_shared<RowVector>(
-            leafPool_.get(),
-            ROW({{"a", a->type()}, {"b", b->type()}}),
-            nullptr,
-            a->size(),
-            std::vector<VectorPtr>({a, b})));
+    batches.push_back(std::make_shared<RowVector>(
+        leafPool_.get(),
+        ROW({{"a", a->type()}, {"b", b->type()}}),
+        nullptr,
+        a->size(),
+        std::vector<VectorPtr>({a, b})));
   }
   writeToMemory(batches[0]->type(), batches, false);
 
