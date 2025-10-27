@@ -138,6 +138,10 @@ sequential task execution mode.</p></td>
 <td><p>Tracks task barrier execution time in range of [0, 30s] with 30 buckets
 and each bucket with time window of 1s. We report P50, P90, P99, and P100.</p></td>
 </tr>
+<tr class="row-odd"><td><p>task_splits_count</p></td>
+<td><p>Count</p></td>
+<td><p>The total number of splits received by all tasks.</p></td>
+</tr>
 </tbody>
 </table>
 </section>
@@ -217,11 +221,7 @@ and P100 percentiles.</p></td>
 <td><p>Count</p></td>
 <td><p>The number of times that the task memory reclaim wait timeouts.</p></td>
 </tr>
-<tr class="row-even"><td><p>task_splits_count</p></td>
-<td><p>Count</p></td>
-<td><p>The total number of splits received by all tasks.</p></td>
-</tr>
-<tr class="row-odd"><td><p>memory_non_reclaimable_count</p></td>
+<tr class="row-even"><td><p>memory_non_reclaimable_count</p></td>
 <td><p>Count</p></td>
 <td><p>The number of times that the memory reclaim fails because the operator is executing a
 non-reclaimable section where it is expected to have reserved enough memory to execute
@@ -230,18 +230,18 @@ is not sufficient. It excludes counting instances where the operator is in a
 non-reclaimable state due to currently being on-thread and running or being already
 cancelled.</p></td>
 </tr>
-<tr class="row-even"><td><p>arbitrator_requests_count</p></td>
+<tr class="row-odd"><td><p>arbitrator_requests_count</p></td>
 <td><p>Count</p></td>
 <td><p>The number of times a memory arbitration request was initiated by a
 memory pool attempting to grow its capacity.</p></td>
 </tr>
-<tr class="row-odd"><td><p>arbitrator_local_arbitration_count</p></td>
+<tr class="row-even"><td><p>arbitrator_local_arbitration_count</p></td>
 <td><p>Count</p></td>
 <td><p>The number of arbitration that reclaims the used memory from the query which initiates
 the memory arbitration request itself. It ensures the memory arbitration request won’t
 exceed its per-query memory capacity limit.</p></td>
 </tr>
-<tr class="row-even"><td><p>arbitrator_global_arbitration_count</p></td>
+<tr class="row-odd"><td><p>arbitrator_global_arbitration_count</p></td>
 <td><p>Count</p></td>
 <td><p>The number of arbitration which ensures the total allocated query capacity won’t exceed
 the arbitrator capacity limit. It may or may not reclaim memory from the query which
@@ -249,23 +249,23 @@ initiate the memory arbitration request. This indicates the velox runtime doesn�
 enough memory to run all the queries at their peak memory usage. We have to trigger
 spilling to let them run through completion.</p></td>
 </tr>
-<tr class="row-odd"><td><p>arbitrator_global_arbitration_num_reclaim_victims</p></td>
+<tr class="row-even"><td><p>arbitrator_global_arbitration_num_reclaim_victims</p></td>
 <td><p>Histogram</p></td>
 <td><p>The distribution of the number of query memory pools selected to reclaim memory by one
 global memory arbitration round in range of [0, 32] with 32 buckets. It is configured to
 report latency at P50, P90, P99, and P100 percentiles.</p></td>
 </tr>
-<tr class="row-even"><td><p>arbitrator_global_arbitration_failed_victim_count</p></td>
+<tr class="row-odd"><td><p>arbitrator_global_arbitration_failed_victim_count</p></td>
 <td><p>Count</p></td>
 <td><p>The number of victim query memory pool having nothing to spill.</p></td>
 </tr>
-<tr class="row-odd"><td><p>arbitrator_aborted_count</p></td>
+<tr class="row-even"><td><p>arbitrator_aborted_count</p></td>
 <td><p>Count</p></td>
 <td><p>The number of times a query level memory pool is aborted as a result of
 a memory arbitration process. The memory pool aborted will eventually
 result in a cancelling the original query.</p></td>
 </tr>
-<tr class="row-even"><td><p>arbitrator_failures_count</p></td>
+<tr class="row-odd"><td><p>arbitrator_failures_count</p></td>
 <td><p>Count</p></td>
 <td><p>The number of times a memory arbitration request failed. This may occur
 either because the requester was terminated during the processing of
@@ -273,86 +273,86 @@ its request, the arbitration request would surpass the maximum allowed
 capacity for the requester, or the arbitration process couldn’t release
 the requested amount of memory.</p></td>
 </tr>
-<tr class="row-odd"><td><p>arbitrator_global_arbitration_time_ms</p></td>
+<tr class="row-even"><td><p>arbitrator_global_arbitration_time_ms</p></td>
 <td><p>Histogram</p></td>
 <td><p>The time distribution of a global arbitration run [0, 600s] with 20 buckets.
 It is configured to report the latency at P50, P90, P99, and P100 percentiles.</p></td>
 </tr>
-<tr class="row-even"><td><p>arbitrator_global_arbitration_wait_count</p></td>
+<tr class="row-odd"><td><p>arbitrator_global_arbitration_wait_count</p></td>
 <td><p>Count</p></td>
 <td><p>The number of times that an arbitration operation wait for global
 arbitration to free up memory.</p></td>
 </tr>
-<tr class="row-odd"><td><p>arbitrator_global_arbitration_wait_time_ms</p></td>
+<tr class="row-even"><td><p>arbitrator_global_arbitration_wait_time_ms</p></td>
 <td><p>Histogram</p></td>
 <td><p>The time distribution of a global arbitration wait [0, 300s] with 20
 buckets. It is configured to report the latency at P50, P90, P99, and P100
 percentiles.</p></td>
 </tr>
-<tr class="row-even"><td><p>arbitrator_op_exec_time_ms</p></td>
+<tr class="row-odd"><td><p>arbitrator_op_exec_time_ms</p></td>
 <td><p>Histogram</p></td>
 <td><p>The distribution of the amount of time it take to complete a single
 arbitration operation in range of [0, 600s] with 20 buckets. It is configured
 to report the latency at P50, P90, P99 and P100 percentiles.</p></td>
 </tr>
-<tr class="row-odd"><td><p>arbitrator_free_capacity_bytes</p></td>
+<tr class="row-even"><td><p>arbitrator_free_capacity_bytes</p></td>
 <td><p>Average</p></td>
 <td><p>The average of total free memory capacity which is managed by the
 memory arbitrator.</p></td>
 </tr>
-<tr class="row-even"><td><p>arbitrator_free_reserved_capacity_bytes</p></td>
+<tr class="row-odd"><td><p>arbitrator_free_reserved_capacity_bytes</p></td>
 <td><p>Average</p></td>
 <td><p>The average of free memory capacity reserved to ensure each query has
 the minimal required capacity to run.</p></td>
 </tr>
-<tr class="row-odd"><td><p>memory_pool_initial_capacity_bytes</p></td>
+<tr class="row-even"><td><p>memory_pool_initial_capacity_bytes</p></td>
 <td><p>Histogram</p></td>
 <td><p>The distribution of a root memory pool’s initial capacity in range of [0 256MB]
 with 32 buckets. It is configured to report the capacity at P50, P90, P99,
 and P100 percentiles.</p></td>
 </tr>
-<tr class="row-even"><td><p>memory_pool_capacity_growth_count</p></td>
+<tr class="row-odd"><td><p>memory_pool_capacity_growth_count</p></td>
 <td><p>Histogram</p></td>
 <td><p>The distribution of a root memory pool cappacity growth attemps through
 memory arbitration in range of [0, 256] with 32 buckets. It is configured
 to report the count at P50, P90, P99, and P100 percentiles.</p></td>
 </tr>
-<tr class="row-odd"><td><p>memory_pool_usage_leak_bytes</p></td>
+<tr class="row-even"><td><p>memory_pool_usage_leak_bytes</p></td>
 <td><p>Sum</p></td>
 <td><p>The leaf memory pool usage leak in bytes.</p></td>
 </tr>
-<tr class="row-even"><td><p>memory_pool_reservation_leak_bytes</p></td>
+<tr class="row-odd"><td><p>memory_pool_reservation_leak_bytes</p></td>
 <td><p>Sum</p></td>
 <td><p>The leaf memory pool reservation leak in bytes.</p></td>
 </tr>
-<tr class="row-odd"><td><p>memory_pool_capacity_leak_bytes</p></td>
+<tr class="row-even"><td><p>memory_pool_capacity_leak_bytes</p></td>
 <td><p>Sum</p></td>
 <td><p>The root memory pool reservation leak in bytes.</p></td>
 </tr>
-<tr class="row-even"><td><p>memory_allocator_double_free_count</p></td>
+<tr class="row-odd"><td><p>memory_allocator_double_free_count</p></td>
 <td><p>Count</p></td>
 <td><p>Tracks the count of double frees in memory allocator, indicating the
 possibility of buffer ownership issues when a buffer is freed more
 than once.</p></td>
 </tr>
-<tr class="row-odd"><td><p>memory_allocator_mapped_bytes</p></td>
+<tr class="row-even"><td><p>memory_allocator_mapped_bytes</p></td>
 <td><p>Avg</p></td>
 <td><p>Number of bytes currently mapped in MemoryAllocator. These bytes represent
 the bytes that are either currently being allocated or were in the past
 allocated, not yet been returned back to the operating system, in the
 form of ‘Allocation’ or ‘ContiguousAllocation’.</p></td>
 </tr>
-<tr class="row-even"><td><p>memory_allocator_allocated_bytes</p></td>
+<tr class="row-odd"><td><p>memory_allocator_allocated_bytes</p></td>
 <td><p>Avg</p></td>
 <td><p>Number of bytes currently allocated (used) from MemoryAllocator in the form
 of ‘Allocation’ or ‘ContiguousAllocation’.</p></td>
 </tr>
-<tr class="row-odd"><td><p>memory_allocator_external_mapped_bytes</p></td>
+<tr class="row-even"><td><p>memory_allocator_external_mapped_bytes</p></td>
 <td><p>Avg</p></td>
 <td><p>Number of bytes currently mapped in MemoryAllocator, in the form of
 ‘ContiguousAllocation’.</p></td>
 </tr>
-<tr class="row-even"><td><p>mmap_allocator_delegated_alloc_bytes</p></td>
+<tr class="row-odd"><td><p>mmap_allocator_delegated_alloc_bytes</p></td>
 <td><p>Avg</p></td>
 <td><p>Number of bytes currently allocated from MmapAllocator directly from raw
 allocateBytes() interface, and internally allocated by malloc. Only small
